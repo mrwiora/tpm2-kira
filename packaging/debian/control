@@ -1,0 +1,42 @@
+Source: tpm2-kira
+Section: admin
+Priority: optional
+Maintainer: Matthias R. Wiora <matthias@wiora.io>
+Build-Depends: debhelper-compat (= 13),
+               golang-go (>= 2:1.19),
+               dh-golang,
+               git
+Standards-Version: 4.6.2
+Homepage: https://github.com/mrwiora/tpm2-kira
+Vcs-Git: https://github.com/mrwiora/tpm2-kira.git
+Vcs-Browser: https://github.com/mrwiora/tpm2-kira
+Rules-Requires-Root: no
+
+Package: tpm2-kira
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         tpm2-tools (>= 5.0),
+         libtss2-esys-3.0.2-0 | libtss2-esys0,
+         libtss2-fapi1 | libtss2-fapi0,
+         libtss2-tcti-device0,
+         libtss2-tcti-mssim0
+Recommends: initramfs-tools | dracut
+Suggests: cryptsetup-bin
+Description: TPM2-based TOTP authenticator with PCR policies
+ tpm2-kira is a command-line tool that provides TPM2-based TOTP (Time-based
+ One-Time Password) authentication with Platform Configuration Register (PCR)
+ policies for enhanced security.
+ .
+ The tool can seal TOTP secrets to the TPM using PCR policies, ensuring that
+ the secrets can only be accessed when the system is in a trusted state.
+ It supports fallback authentication via passwords and can be integrated
+ into the boot process for early authentication scenarios.
+ .
+ Key features:
+  * Seal TOTP secrets with TPM PCR policies
+  * Generate TOTP codes from sealed secrets
+  * Reseal secrets after system updates
+  * Integration with initramfs for early boot authentication
+  * Support for multiple PCR selections
+  * Fallback password authentication

@@ -1,0 +1,54 @@
+#!/usr/bin/make -f
+
+# Debian package build rules for tpm2-kira
+# This file controls how the package is built
+
+export DH_VERBOSE = 1
+export GO111MODULE = on
+export GOPROXY = direct
+
+# Get version from git or use default
+VERSION := $(shell git describe --tags --exact-match 2>/dev/null || echo "0.0.0")
+GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+# Build flags
+export LDFLAGS = -s -w -X main.Version=$(VERSION)
+
+%:
+	dh $@ --buildsystem=golang --with=golang
+
+override_dh_auto_configure:
+	# Download Go dependencies
+	go mod download
+	go mod tidy
+
+override_dh_auto_build:
+	# Build the binary with version info
+	go build -ldflags "$(LDFLAGS)" -o tpm2-kira -v .
+
+override_dh_auto_test:
+	# Run unit tests only (integration tests require special TPM setup)
+	go test -v -tags=unit ./cmd/...
+
+override_dh_auto_install:
+	# Install binary
+	install -D -m 755 tpm2-kira debian/tpm2-kira/usr/bin/tpm2-kira
+
+	# Install man page if it exists
+	if [ -f tpm2-kira.1 ]; then \
+		install -D -m 644 tpm2-kira.1 debian/tpm2-kira/usr/share/man/man1/tpm2-kira.1; \
+		gzip -9 debian/tpm2-kira/usr/share/man/man1/tpm2-kira.1; \
+	fi
+
+	# Install documentation
+	install -D -m 644 README.md debian/tpm2-kira/usr/share/doc/tpm2-kira/README.md
+	install -D -m 644 LICENSE debian/tpm2-kira/usr/share/doc/tpm2-kira/copyright
+
+	# Install initramfs hooks (Debian/Ubuntu style)
+	install -D -m 755 mkinitcpio/hooks/tpm2-kira debian/tpm2-kira/usr/share/initramfs-tools/hooks/tpm2-kira || true
+	install -D -m 755 mkinitcpio/install/tpm2-kira debian/tpm2-kira/usr/share/initramfs-tools/scripts/init-premount/tpm2-kira || true
+
+override_dh_auto_clean:
+	# Clean build artifacts
+	rm -f tpm2-kira
+	go clean

@@ -3,6 +3,7 @@
 ## Overview
 
 `tpm2-kira` is a TPM2-based TOTP authenticator that can be installed on:
+- **Debian 13** and derivatives (Ubuntu 22.04+, etc.)
 - **Arch Linux** and derivatives (Manjaro, EndeavourOS, etc.)
 
 It is the successor of tpm2-totp and currently in alpha phase. Please use with CAUTION!
@@ -90,10 +91,22 @@ tpm2-kira reveal
 
 For using tpm2-kira during early boot (e.g., for disk encryption):
 
+#### Debian/Ubuntu with initramfs-tools
+```bash
+# Check if initramfs integration is available
+ls /usr/share/initramfs-tools/hooks/tpm2-kira
+
+# Update initramfs
+sudo update-initramfs -u -k all
+```
+
 #### Arch Linux with mkinitcpio
 ```bash
 # Edit mkinitcpio configuration
 sudo nano /etc/mkinitcpio.conf
+
+# Add tpm2-kira to HOOKS before encrypt:
+# HOOKS=(base udev autodetect modconf block keyboard tpm2-kira encrypt filesystems fsck)
 
 # For systemd-based initramfs:
 # HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
@@ -195,6 +208,18 @@ sudo dmesg | grep -i tpm
 ```
 
 ## Uninstallation
+
+### Debian/Ubuntu
+```bash
+# Remove package (keeps configuration)
+sudo apt remove tpm2-kira
+
+# Remove package and configuration
+sudo apt purge tpm2-kira
+
+# Clean up TPM data (optional)
+tpm2-kira nvram delete  # Run before uninstalling
+```
 
 ### Arch Linux
 ```bash

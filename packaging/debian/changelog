@@ -1,0 +1,18 @@
+tpm2-kira (0.1.0-1) unstable; urgency=medium
+
+  * Initial release of tpm2-kira
+  * TPM2-based TOTP authenticator with PCR policies
+  * Support for sealing and unsealing TOTP secrets
+  * Integration with initramfs for early boot authentication
+  * Support for multiple PCR selections
+  * Fallback password authentication
+  * Commands: seal, reseal, reveal, info, nvram, version
+
+ -- Matthias R. Wiora <matthias@wiora.io>  Thu, 01 Jan 2024 12:00:00 +0000
+
+tpm2-kira (0.0.1-1) unstable; urgency=low
+
+  * Initial package structure
+  * Basic functionality implemented
+
+ -- Matthias R. Wiora <matthias@wiora.io>  Mon, 01 Jan 2024 10:00:00 +0000
