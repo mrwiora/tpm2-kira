@@ -1,0 +1,122 @@
+package cmd
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/tpm2/transport"
+)
+
+// InfoWithFormat displays information with optional JSON output
+func InfoWithFormat(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool, jsonOutput bool) error {
+	// Open TPM
+	tpmDev, err := transport.OpenTPM(tpmPath)
+	if err != nil {
+		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+	}
+	defer tpmDev.Close()
+
+	// Read NVRAM public area
+	nvIndex := tpm2.TPMHandle(nvramIndex)
+	readPublic := tpm2.NVReadPublic{
+		NVIndex: nvIndex,
+	}
+
+	readPublicResp, err := readPublic.Execute(tpmDev)
+	if err != nil {
+		return fmt.Errorf("failed to read NVRAM index 0x%08X (may not exist): %w", nvramIndex, err)
+	}
+
+	nvPublic, err := readPublicResp.NVPublic.Contents()
+	if err != nil {
+		return fmt.Errorf("failed to parse NVRAM public area: %w", err)
+	}
+
+	// Read sealed blob from NVRAM
+	sealedData, err := ReadFromNVRAM(tpmDev, nvramIndex)
+	if err != nil {
+		return fmt.Errorf("failed to read from NVRAM: %w", err)
+	}
+
+	// Unmarshal sealed blob
+	sealedBlob, err := UnmarshalSealedBlob(sealedData)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal sealed data: %w", err)
+	}
+
+	// Display information
+	if jsonOutput {
+		// Output the SealedBlob structure as JSON
+		output, err := json.MarshalIndent(sealedBlob, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal JSON: %w", err)
+		}
+		fmt.Println(string(output))
+	} else {
+		// Human-readable output
+		fmt.Printf("Sealed Blob Information:\n")
+		fmt.Printf("========================\n")
+		fmt.Printf("TPM NVRAM Index: 0x%08X\n", nvramIndex)
+		fmt.Printf("Total NVRAM Size: %d bytes\n\n", nvPublic.DataSize)
+
+		fmt.Printf("Blob Format:\n")
+		fmt.Printf("  Version: %d\n", sealedBlob.Version)
+		fmt.Printf("  App Version: %s\n\n", sealedBlob.AppVersion)
+
+		fmt.Printf("NVRAM Attributes:\n")
+		fmt.Printf("  Owner Write: %v\n", nvPublic.Attributes.OwnerWrite)
+		fmt.Printf("  Owner Read: %v\n", nvPublic.Attributes.OwnerRead)
+		fmt.Printf("  Auth Write: %v\n", nvPublic.Attributes.AuthWrite)
+		fmt.Printf("  Auth Read: %v\n", nvPublic.Attributes.AuthRead)
+		fmt.Printf("  Written: %v\n", nvPublic.Attributes.Written)
+		fmt.Printf("\n")
+
+		fmt.Printf("PCR Configuration:\n")
+		fmt.Printf("  PCR Indices: %v\n", sealedBlob.GetPCRIndices())
+		fmt.Printf("  Number of PCRs: %d\n\n", len(sealedBlob.PCRDigests))
+
+		fmt.Printf("PCR Descriptions:\n")
+		for _, pcrIndex := range sealedBlob.GetPCRIndices() {
+			fmt.Printf("  PCR%-2d: %s\n", pcrIndex, GetPCRDescription(pcrIndex))
+		}
+		fmt.Printf("\n")
+
+		fmt.Printf("Password Fallback:\n")
+		if sealedBlob.HasPassword {
+			fmt.Printf("  Enabled: Yes\n")
+			fmt.Printf("  Hash Algorithm: Argon2id\n")
+			fmt.Printf("  Hash Length: %d bytes\n", len(sealedBlob.PasswordHash))
+			fmt.Printf("  Salt Length: %d bytes\n", len(sealedBlob.PasswordSalt))
+			fmt.Printf("  Password Hash: %x...\n", sealedBlob.PasswordHash[:min(16, len(sealedBlob.PasswordHash))])
+			fmt.Printf("  Salt: %x...\n\n", sealedBlob.PasswordSalt[:min(8, len(sealedBlob.PasswordSalt))])
+		} else {
+			fmt.Printf("  Enabled: No\n\n")
+		}
+
+		fmt.Printf("TPM Objects:\n")
+		fmt.Printf("  Public Blob Size: %d bytes\n", len(sealedBlob.Public))
+		fmt.Printf("  Private Blob Size: %d bytes\n\n", len(sealedBlob.Private))
+
+		fmt.Printf("PCR Digest Values (at seal time):\n")
+		for _, pcrDigest := range sealedBlob.PCRDigests {
+			fmt.Printf("  PCR %d: (%d bytes)\n", pcrDigest.Index, len(pcrDigest.Digest.Buffer))
+			fmt.Printf("    Value: %x\n", pcrDigest.Digest.Buffer)
+		}
+
+		fmt.Println("\nSealed Data Content:")
+		fmt.Println("===================")
+		fmt.Println("Type: TOTP Secret")
+		fmt.Println("\nNote: For security reasons, the 'info' command does not display secrets.")
+		fmt.Println("Use 'tpm2-kira reveal' to generate TOTP codes.")
+	}
+
+	return nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

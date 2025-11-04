@@ -1,0 +1,104 @@
+# /etc/mkinitcpio.conf - Example configuration for tpm2-kira integration
+#
+# This is an example mkinitcpio configuration file showing how to integrate
+# tpm2-kira TPM2-based TOTP authentication into the early boot process.
+#
+# Copy the relevant HOOKS line to your /etc/mkinitcpio.conf and adjust as needed.
+
+# MODULES
+# The following modules are loaded before any boot hooks are run.
+MODULES=()
+
+# BINARIES
+# This setting includes any additional binaries a given user may wish into
+# the CPIO image.
+BINARIES=()
+
+# FILES
+# This setting is similar to BINARIES above, however, files are added as-is
+# and are not parsed in any way.
+FILES=()
+
+# HOOKS
+# This is the most important setting in this file. The HOOKS control the
+# modules and scripts added to the image, and what happens at boot time.
+# Order is important, and it is recommended that you do not change the order
+# in which HOOKS are added.
+
+# TRADITIONAL INITRAMFS WITH TPM2-KIRA AND ENCRYPTION
+# Use this HOOKS line for traditional (non-systemd) initramfs with encrypted root
+# The tpm2-kira hook should be placed before 'encrypt' to provide TOTP authentication
+HOOKS=(base udev autodetect modconf block keyboard tpm2-kira encrypt filesystems fsck)
+
+# SYSTEMD INITRAMFS WITH TPM2-KIRA AND ENCRYPTION
+# Use this HOOKS line for systemd-based initramfs with encrypted root
+# The sd-tpm2-kira hook should be placed before 'sd-encrypt' to provide TOTP authentication
+#HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
+
+# OTHER COMMON CONFIGURATIONS
+# Here are some other common HOOKS configurations that include tpm2-kira:
+
+# With LVM and encryption (traditional)
+#HOOKS=(base udev autodetect modconf block keyboard tpm2-kira encrypt lvm2 filesystems fsck)
+
+# With LVM and encryption (systemd)
+#HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt sd-lvm2 filesystems fsck)
+
+# With LUKS on LVM (traditional)
+#HOOKS=(base udev autodetect modconf block lvm2 keyboard tpm2-kira encrypt filesystems fsck)
+
+# With LUKS on LVM (systemd)
+#HOOKS=(base systemd autodetect modconf block sd-lvm2 keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
+
+# Multiple encrypted devices (traditional)
+#HOOKS=(base udev autodetect modconf block keyboard tpm2-kira encrypt encrypt filesystems fsck)
+
+# Multiple encrypted devices (systemd)
+#HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
+
+# COMPRESSION
+# Use this to compress the initramfs image. By default, gzip compression
+# is used. Use 'cat' to create an uncompressed image.
+#COMPRESSION="gzip"
+#COMPRESSION="bzip2"
+#COMPRESSION="lzma"
+#COMPRESSION="xz"
+#COMPRESSION="lzop"
+#COMPRESSION="lz4"
+#COMPRESSION="zstd"
+
+# COMPRESSION_OPTIONS
+# Additional options for the compressor
+#COMPRESSION_OPTIONS=()
+
+# IMPORTANT NOTES FOR TPM2-KIRA INTEGRATION:
+#
+# 1. Hook Placement:
+#    - Place tpm2-kira/sd-tpm2-kira BEFORE encrypt/sd-encrypt hooks
+#    - This provides TOTP authentication before disk decryption
+#    - Place after 'keyboard' to ensure input is available if needed
+#
+# 2. Use Case:
+#    - tpm2-kira hooks are primarily useful with encrypted filesystems
+#    - They provide TOTP codes during the boot process for authentication
+#    - Most useful when you need 2FA before unlocking encrypted drives
+#
+# 3. Prerequisites:
+#    - Install tpm2-kira binary: make install
+#    - Install hooks: make install-mkinitcpio
+#    - Seal TOTP secret: tpm2-kira seal --password "your-password"
+#
+# 4. Hook Behavior:
+#    - Both hooks automatically run 'tpm2-kira run' during boot
+#    - This provides continuous TOTP code display
+#    - No kernel parameters or manual intervention needed
+#
+# 5. Compatibility:
+#    - Traditional hook (tpm2-kira): Works with all initramfs types
+#    - Systemd hook (sd-tpm2-kira): Optimized for systemd-based initramfs
+#
+# 6. After Configuration:
+#    - Rebuild initramfs: sudo mkinitcpio -P
+#    - Reboot to test the integration
+#
+# For detailed documentation, see mkinitcpio/README.md

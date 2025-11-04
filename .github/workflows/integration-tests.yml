@@ -1,0 +1,43 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ "dev" ]
+  pull_request:
+    branches: [ "dev" ]
+
+jobs:
+  integration-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Install TPM simulator dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y swtpm swtpm-tools socat tpm2-tools
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run integration tests
+      run: go test -v -tags=integration -timeout 10m ./...
+      env:
+        CGO_ENABLED: 1

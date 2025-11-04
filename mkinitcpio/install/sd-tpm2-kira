@@ -1,0 +1,41 @@
+#!/bin/bash
+
+build() {
+    local mod
+
+    # Add tpm2-kira binary to initramfs
+    add_binary tpm2-kira
+
+    # Add required libraries for TPM operations
+    add_binary /usr/lib/libtss2-tcti-device.so.0
+
+    # Add systemd service dependency
+    add_systemd_unit tpm2-kira.service
+}
+
+help() {
+    cat <<HELPEOF
+This hook provides systemd-integrated TPM2-based TOTP authentication support
+in early boot using tpm2-kira. It runs 'tpm2-kira run' as a systemd service
+for continuous TOTP display.
+
+The hook will:
+- Install tpm2-kira binary and required TPM libraries
+- Create systemd service unit for tpm2-kira run
+- Start tpm2-kira in continuous run mode during boot
+
+Created systemd service:
+  tpm2-kira-run.service - Runs tpm2-kira in continuous TOTP mode
+
+Prerequisites:
+- systemd-based initramfs (mkinitcpio with systemd support)
+- tpm2-kira binary must be installed
+- TOTP secret must be sealed using 'tpm2-kira seal' command
+- TPM 2.0 hardware or firmware TPM must be available
+
+Usage in /etc/mkinitcpio.conf:
+  HOOKS=(... sd-tpm2-kira ...)
+
+For traditional initramfs, use tpm2-kira instead.
+HELPEOF
+}

@@ -1,0 +1,22 @@
+# Binaries for programs and plugins
+tpm2-kira
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+packaging/archlinux/pkg
+packaging/archlinux/src
+packaging/archlinux/tpm2-kira*
