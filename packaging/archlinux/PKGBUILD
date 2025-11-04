@@ -89,7 +89,7 @@ package() {
     # install systemd service
     install -Dm644 systemd/system/tpm2-kira.service "$pkgdir/usr/lib/systemd/system/tpm2-kira.service"
     mkdir -p "$pkgdir/usr/lib/systemd/system/sysinit.target.wants"
-    ln -s "$pkgdir/usr/lib/systemd/system/tpm2-kira.service" "$pkgdir/usr/lib/systemd/system/sysinit.target.wants/tpm2-kira.service"
+    ln -s "../tpm2-kira.service" "$pkgdir/usr/lib/systemd/system/sysinit.target.wants/tpm2-kira.service"
 
     # Install systemd initramfs hooks
     install -Dm644 mkinitcpio/install/sd-tpm2-kira "$pkgdir/usr/lib/initcpio/install/sd-tpm2-kira"
