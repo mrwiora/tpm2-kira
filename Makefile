@@ -15,15 +15,14 @@ GOVET=$(GOCMD) vet
 GOMOD=$(GOCMD) mod
 
 # Get version from git
-GIT_TAG := $(shell git describe --tags --exact-match 2>/dev/null)
-GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null)
+GIT_VERSION := $(shell git describe --tags 2>/dev/null)
 GIT_DIRTY := $(shell git diff --quiet 2>/dev/null || echo "-dirty")
 
 # Determine version
-ifeq ($(GIT_TAG),)
+ifeq ($(GIT_VERSION),)
     VERSION := 0.0.0
 else
-    VERSION := $(GIT_TAG)
+    VERSION := $(GIT_VERSION)
 endif
 
 # Append dirty state if working directory has changes
