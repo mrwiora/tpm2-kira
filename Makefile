@@ -1,4 +1,4 @@
-.PHONY: all build clean install uninstall install-mkinitcpio uninstall-mkinitcpio test test-unit test-integration test-all fmt vet help
+.PHONY: all build clean install uninstall install-mkinitcpio uninstall-mkinitcpio test test-unit test-integration test-all fmt vet pkgbuild help
 
 # Binary name
 BINARY_NAME=tpm2-kira
@@ -48,6 +48,7 @@ clean:
 	@echo "Cleaning..."
 	$(GOCLEAN)
 	rm -f $(BINARY_NAME)
+	rm -rf build/
 
 ## install: Install binary to system
 install: build-optimized
@@ -152,6 +153,25 @@ deps:
 	@echo "Downloading dependencies..."
 	$(GOMOD) download
 	$(GOMOD) tidy
+
+## pkgbuild: Build Arch Linux package
+pkgbuild:
+	@echo "Building Arch Linux package..."
+	@if ! command -v makepkg >/dev/null 2>&1; then \
+		echo "Error: makepkg not found. This target requires Arch Linux or an Arch-based distribution."; \
+		exit 1; \
+	fi
+	@echo "Copying PKGBUILD to build directory..."
+	@mkdir -p build/archlinux
+	@cp packaging/archlinux/PKGBUILD build/archlinux/
+	@cd build/archlinux && makepkg -f
+	@echo ""
+	@echo "Package built successfully!"
+	@echo "Package location: build/archlinux/"
+	@ls -lh build/archlinux/*.pkg.tar.zst 2>/dev/null || ls -lh build/archlinux/*.pkg.tar.* 2>/dev/null || true
+	@echo ""
+	@echo "To install the package, run:"
+	@echo "  sudo pacman -U build/archlinux/tpm2-kira-*.pkg.tar.zst"
 
 ## help: Show this help message
 help:

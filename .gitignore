@@ -20,3 +20,6 @@ go.work
 packaging/archlinux/pkg
 packaging/archlinux/src
 packaging/archlinux/tpm2-kira*
+
+# Build directory
+build/

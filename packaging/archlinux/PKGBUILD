@@ -13,7 +13,6 @@ optdepends=('mkinitcpio: for early boot integration'
             'systemd: for systemd-based initramfs')
 provides=('tpm2-kira')
 conflicts=('tpm2-kira-git')
-install=tpm2-kira.install
 source=("$pkgname::git+https://github.com/mrwiora/tpm2-kira.git")
 sha256sums=('SKIP')  # Replace with actual checksum when building from release
 
