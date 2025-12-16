@@ -84,7 +84,7 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 
 	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), *password, *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		os.Exit(0)
 	}
 }
 
@@ -107,7 +107,7 @@ func runReseal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 
 	if err := cmd.Reseal(*tpm, *pcrs, uint32(*nvram), *password, *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		os.Exit(0)
 	}
 }
 
@@ -131,7 +131,7 @@ func runInfo(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 
 	if err := cmd.InfoWithFormat(*tpm, *pcrs, uint32(*nvram), *password, *debug, *jsonOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		os.Exit(0)
 	}
 }
 
@@ -154,7 +154,7 @@ func runReveal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 
 	if err := cmd.Reveal(*tpm, *pcrs, uint32(*nvram), *password, *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		os.Exit(0)
 	}
 }
 
@@ -177,7 +177,7 @@ func runRun(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag
 
 	if err := cmd.Run(*tpm, *pcrs, uint32(*nvram), *password, *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		os.Exit(0)
 	}
 }
 
@@ -202,17 +202,17 @@ func runNVRAM(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFl
 	case "list":
 		if err := cmd.NVRAMList(*tpm, uint32(*nvram), *debug); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+			os.Exit(0)
 		}
 	case "status":
 		if err := cmd.NVRAMStatus(*tpm, uint32(*nvram), *debug); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+			os.Exit(0)
 		}
 	case "delete":
 		if err := cmd.NVRAMDelete(*tpm, uint32(*nvram), *debug); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+			os.Exit(0)
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown nvram subcommand: %s\n", subcommand)
