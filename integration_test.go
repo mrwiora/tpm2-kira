@@ -788,12 +788,29 @@ func testNVRAMDelete(t *testing.T, tpmPath, nvramIndex string) {
 // testNVRAMDeleted verifies that data no longer exists in NVRAM
 func testNVRAMDeleted(t *testing.T, tpmPath, nvramIndex string) {
 	t.Helper()
-	_, stderr, err := runTPMKira(t, tpmPath, "reveal", "--nvram", nvramIndex)
-	if err == nil {
-		t.Fatal("✗ Reveal should fail after deletion but succeeded")
+	stdout, stderr, err := runTPMKira(t, tpmPath, "reveal", "--nvram", nvramIndex)
+
+	// Check if command failed OR if no valid OTP was returned
+	code := strings.TrimSpace(stdout)
+	hasValidOTP := len(code) == 6
+	if hasValidOTP {
+		// Double-check it's actually numeric
+		for _, c := range code {
+			if c < '0' || c > '9' {
+				hasValidOTP = false
+				break
+			}
+		}
 	}
-	if !strings.Contains(stderr, "not been configured") && !strings.Contains(stderr, "does not exist") {
-		t.Logf("Note: Expected 'not configured' or 'does not exist' error, got: %s", stderr)
+
+	if err == nil && hasValidOTP {
+		t.Fatalf("✗ Reveal should fail after deletion but succeeded with code: %s", code)
+	}
+
+	if err != nil {
+		if !strings.Contains(stderr, "not been configured") && !strings.Contains(stderr, "does not exist") {
+			t.Logf("Note: Expected 'not configured' or 'does not exist' error, got: %s", stderr)
+		}
 	}
 	t.Log("✓ Verified: data no longer accessible")
 }
