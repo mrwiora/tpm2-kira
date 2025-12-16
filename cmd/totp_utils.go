@@ -6,6 +6,7 @@ import (
 	"encoding/base32"
 	"encoding/binary"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -62,7 +63,14 @@ func generateTOTPURI(secret, label, issuer string) string {
 // displayTOTPQRCode generates and displays a QR code for a TOTP secret
 // If qrencode is not available, displays installation instructions
 func displayTOTPQRCode(secret string) {
-	totpURI := generateTOTPURI(secret, "TPM2-KIRA", "TPM2-KIRA")
+	// Get hostname
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = "unknown"
+	}
+
+	label := fmt.Sprintf("TPM2-KIRA: %s", hostname)
+	totpURI := generateTOTPURI(secret, label, "TPM2-KIRA")
 
 	if err := generateQRCode(totpURI); err != nil {
 		fmt.Printf("   QR code could not be generated: %v\n", err)
