@@ -73,16 +73,16 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
-	password := fs.String("password", "", "Password for fallback access")
-	passwordShort := fs.String("p", "", "Password (short)")
-
 	fs.Parse(args)
 
-	if *passwordShort != "" {
-		*password = *passwordShort
+	// Read optional password from stdin
+	password, err := cmd.ReadOptionalPasswordFromStdin("fallback access")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading password: %v\n", err)
+		os.Exit(1)
 	}
 
-	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), *password, *debug); err != nil {
+	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), password, *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -96,16 +96,16 @@ func runReseal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
-	password := fs.String("password", "", "Password for fallback access")
-	passwordShort := fs.String("p", "", "Password (short)")
-
 	fs.Parse(args)
 
-	if *passwordShort != "" {
-		*password = *passwordShort
+	// Read required password from stdin for reseal
+	password, err := cmd.ReadRequiredPasswordFromStdin("resealing")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading password: %v\n", err)
+		os.Exit(1)
 	}
 
-	if err := cmd.Reseal(*tpm, *pcrs, uint32(*nvram), *password, *debug); err != nil {
+	if err := cmd.Reseal(*tpm, *pcrs, uint32(*nvram), password, *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -119,17 +119,14 @@ func runInfo(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
-	password := fs.String("password", "", "Password for fallback access")
-	passwordShort := fs.String("p", "", "Password (short)")
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 
 	fs.Parse(args)
 
-	if *passwordShort != "" {
-		*password = *passwordShort
-	}
+	// Try without password first, if that fails we'll be prompted for password
+	password := ""
 
-	if err := cmd.InfoWithFormat(*tpm, *pcrs, uint32(*nvram), *password, *debug, *jsonOutput); err != nil {
+	if err := cmd.InfoWithFormat(*tpm, *pcrs, uint32(*nvram), password, *debug, *jsonOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -138,21 +135,17 @@ func runInfo(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 func runReveal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("reveal", flag.ExitOnError)
 
-	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
+	tmp := fs.String("tpm", tpmPath, "Path to TPM device")
 	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
-	password := fs.String("password", "", "Password for fallback access")
-	passwordShort := fs.String("p", "", "Password (short)")
-
 	fs.Parse(args)
 
-	if *passwordShort != "" {
-		*password = *passwordShort
-	}
+	// Try without password first, if that fails we'll be prompted for password
+	password := ""
 
-	if err := cmd.Reveal(*tpm, *pcrs, uint32(*nvram), *password, *debug); err != nil {
+	if err := cmd.Reveal(*tmp, *pcrs, uint32(*nvram), password, *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -166,16 +159,12 @@ func runRun(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
-	password := fs.String("password", "", "Password for fallback access")
-	passwordShort := fs.String("p", "", "Password (short)")
-
 	fs.Parse(args)
 
-	if *passwordShort != "" {
-		*password = *passwordShort
-	}
+	// Try without password first, if that fails we'll be prompted for password
+	password := ""
 
-	if err := cmd.Run(*tpm, *pcrs, uint32(*nvram), *password, *debug); err != nil {
+	if err := cmd.Run(*tpm, *pcrs, uint32(*nvram), password, *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -244,15 +233,15 @@ GLOBAL OPTIONS:
 
 SEAL OPTIONS:
   --pcrs INDICES     PCR indices (default: 0,2,7)
-  -p, --password     Password for fallback (required for reseal)
+                     You will be prompted for an optional password
 
 RESEAL OPTIONS:
   --pcrs INDICES     New PCR indices (optional, preserves original if omitted)
-  -p, --password     Password (required)
+                     You will be prompted for the required password
 
 INFO OPTIONS:
-  -p, --password     Password (if PCRs changed)
   --json             Output as JSON
+                     Password will be prompted if PCRs changed
 
 NVRAM SUBCOMMANDS:
   list               List all NVRAM indices
@@ -260,11 +249,11 @@ NVRAM SUBCOMMANDS:
   delete             Delete NVRAM index
 
 EXAMPLES:
-  tpm2-kira seal --password "mypass"
+  tpm2-kira seal
   tpm2-kira reveal
   tpm2-kira run
-  tpm2-kira reseal --password "mypass"
-  tpm2-kira reseal --pcrs "0,2,4,7" --password "mypass"
+  tpm2-kira reseal
+  tpm2-kira reseal --pcrs "0,2,4,7"
   tpm2-kira info
   tpm2-kira nvram list
 

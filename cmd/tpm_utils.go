@@ -369,7 +369,13 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, password string, de
 			return nil, fmt.Errorf("PCR values have changed and no password fallback is available")
 		}
 		if password == "" {
-			return nil, fmt.Errorf("PCR values have changed - STOP or reseal")
+			// Prompt for password when PCRs don't match
+			fmt.Println("Password required for fallback authentication.")
+			inputPassword, err := ReadExistingPasswordFromStdin()
+			if err != nil {
+				return nil, fmt.Errorf("failed to read password: %w", err)
+			}
+			password = inputPassword
 		}
 		if !VerifyPasswordArgon2(password, sealedBlob.PasswordHash, sealedBlob.PasswordSalt) {
 			return nil, fmt.Errorf("incorrect password")
