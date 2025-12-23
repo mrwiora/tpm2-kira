@@ -268,7 +268,7 @@ func TestSealAndReveal(t *testing.T) {
 
 	// Reveal the TOTP code
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"reveal",
+		"reveal-plain",
 		"--nvram", testNVRAMIndex,
 	)
 
@@ -544,7 +544,7 @@ func TestSealTwiceOverwrites(t *testing.T) {
 
 	// Verify we can reveal with the new secret
 	stdout3, _, err := runTPMKira(t, tpmPath,
-		"reveal",
+		"reveal-plain",
 		"--nvram", testNVRAMIndex,
 	)
 
@@ -714,7 +714,7 @@ func testSeal(t *testing.T, tpmPath, nvramIndex, password string) {
 // testReveal performs a reveal operation and validates the TOTP code
 func testReveal(t *testing.T, tpmPath, nvramIndex string) string {
 	t.Helper()
-	stdout, stderr, err := runTPMKira(t, tpmPath, "reveal", "--nvram", nvramIndex)
+	stdout, stderr, err := runTPMKira(t, tpmPath, "reveal-plain", "--nvram", nvramIndex)
 	if err != nil {
 		t.Fatalf("✗ Reveal failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
 	}
