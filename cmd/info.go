@@ -9,7 +9,7 @@ import (
 )
 
 // InfoWithFormat displays information with optional JSON output
-func InfoWithFormat(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool, jsonOutput bool) error {
+func InfoWithFormat(tpmPath, pcrsStr string, nvramIndex uint32, debug bool, jsonOutput bool) error {
 	// Open TPM
 	tpmDev, err := transport.OpenTPM(tpmPath)
 	if err != nil {

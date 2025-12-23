@@ -7,7 +7,7 @@ import (
 )
 
 // Reveal unseals the TOTP secret from TPM NVRAM and generates a TOTP code
-func Reveal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool) error {
+func Reveal(tpmPath, pcrsStr string, nvramIndex uint32, debug bool) error {
 	// Open TPM
 	tpmDev, err := transport.OpenTPM(tpmPath)
 	if err != nil {
@@ -19,7 +19,7 @@ func Reveal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 	CleanupTPM(tpmDev, debug)
 
 	// Perform unsealing workflow
-	result, err := UnsealWorkflow(tpmDev, nvramIndex, password, debug)
+	result, err := UnsealWorkflow(tpmDev, nvramIndex, debug)
 	if err != nil {
 		return err
 	}
@@ -40,7 +40,7 @@ func Reveal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 }
 
 // RevealPlain unseals the TOTP secret from TPM NVRAM and generates a plain TOTP code
-func RevealPlain(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool) error {
+func RevealPlain(tpmPath, pcrsStr string, nvramIndex uint32, debug bool) error {
 	// Open TPM
 	tpmDev, err := transport.OpenTPM(tpmPath)
 	if err != nil {
@@ -52,7 +52,7 @@ func RevealPlain(tpmPath, pcrsStr string, nvramIndex uint32, password string, de
 	CleanupTPM(tpmDev, debug)
 
 	// Perform unsealing workflow
-	result, err := UnsealWorkflow(tpmDev, nvramIndex, password, debug)
+	result, err := UnsealWorkflow(tpmDev, nvramIndex, debug)
 	if err != nil {
 		return err
 	}

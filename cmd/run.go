@@ -9,7 +9,7 @@ import (
 
 // Run unseals the TOTP secret from TPM NVRAM and continuously generates TOTP codes
 // In case of errors, it retries every 30 seconds and displays error messages
-func Run(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool) error {
+func Run(tpmPath, pcrsStr string, nvramIndex uint32, debug bool) error {
 	var secret string
 	var lastCode string
 	var lastError error
@@ -40,7 +40,7 @@ func Run(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool
 			CleanupTPM(tpmDev, debug)
 
 			// Perform unsealing workflow
-			result, err := UnsealWorkflow(tpmDev, nvramIndex, password, debug)
+			result, err := UnsealWorkflow(tpmDev, nvramIndex, debug)
 			tpmDev.Close()
 
 			if err != nil {

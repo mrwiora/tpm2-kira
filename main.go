@@ -125,10 +125,7 @@ func runInfo(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 
 	fs.Parse(args)
 
-	// Try without password first, if that fails we'll be prompted for password
-	password := ""
-
-	if err := cmd.InfoWithFormat(*tpm, *pcrs, uint32(*nvram), password, *debug, *jsonOutput); err != nil {
+	if err := cmd.InfoWithFormat(*tpm, *pcrs, uint32(*nvram), *debug, *jsonOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -144,10 +141,7 @@ func runReveal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 
 	fs.Parse(args)
 
-	// Try without password first, if that fails we'll be prompted for password
-	password := ""
-
-	if err := cmd.Reveal(*tmp, *pcrs, uint32(*nvram), password, *debug); err != nil {
+	if err := cmd.Reveal(*tmp, *pcrs, uint32(*nvram), *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -163,10 +157,7 @@ func runRevealPlain(args []string, tpmPath, pcrsStr string, nvramIndex uint32, d
 
 	fs.Parse(args)
 
-	// Try without password first, if that fails we'll be prompted for password
-	password := ""
-
-	if err := cmd.RevealPlain(*tpm, *pcrs, uint32(*nvram), password, *debug); err != nil {
+	if err := cmd.RevealPlain(*tpm, *pcrs, uint32(*nvram), *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -182,10 +173,7 @@ func runRun(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag
 
 	fs.Parse(args)
 
-	// Try without password first, if that fails we'll be prompted for password
-	password := ""
-
-	if err := cmd.Run(*tpm, *pcrs, uint32(*nvram), password, *debug); err != nil {
+	if err := cmd.Run(*tpm, *pcrs, uint32(*nvram), *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
