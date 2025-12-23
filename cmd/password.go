@@ -3,12 +3,16 @@ package cmd
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"syscall"
 
 	"golang.org/x/term"
 )
+
+// stdinReader is a shared reader for non-terminal input to maintain buffer state
+var stdinReader *bufio.Reader
 
 // ReadPasswordFromStdin securely reads a password from stdin without echoing it to the terminal.
 // It prompts the user with the provided message and returns the password string.
@@ -17,9 +21,15 @@ func ReadPasswordFromStdin(prompt string) (string, error) {
 	if !term.IsTerminal(int(syscall.Stdin)) {
 		// Not a terminal, read from stdin normally (for scripts/pipes)
 		fmt.Fprint(os.Stderr, prompt)
-		reader := bufio.NewReader(os.Stdin)
-		password, err := reader.ReadString('\n')
+		if stdinReader == nil {
+			stdinReader = bufio.NewReader(os.Stdin)
+		}
+		password, err := stdinReader.ReadString('\n')
 		if err != nil {
+			// Handle EOF as empty input
+			if err == io.EOF {
+				return "", nil
+			}
 			return "", fmt.Errorf("failed to read password from stdin: %w", err)
 		}
 		return strings.TrimSpace(password), nil
@@ -88,6 +98,11 @@ func ReadExistingPasswordFromStdin() (string, error) {
 	password, err := ReadPasswordFromStdin("Enter password: ")
 	if err != nil {
 		return "", err
+	}
+
+	// If password is empty (EOF or just enter), treat as authentication failure
+	if password == "" {
+		return "", fmt.Errorf("password required but none provided")
 	}
 
 	return password, nil
