@@ -51,10 +51,24 @@ def calculate_all_pcrs(eventlog_file):
 
     # Group events by PCR index
     pcr_events = defaultdict(list)
+    pcr0_locality = None
+
     for event in eventlog["events"]:
         pcr_index = event.get("PCRIndex")
         if pcr_index is not None:
             pcr_events[pcr_index].append(event)
+
+        # Check for StartupLocality event (PCR0, EV_NO_ACTION with "StartupLocality" signature)
+        if (
+            pcr_index == 0
+            and event.get("EventType") == "EV_NO_ACTION"
+            and event.get("EventSize") == 17
+        ):
+            event_data = event.get("Event", "")
+            if event_data.startswith("537461727475704c6f63616c697479"):
+                # Extract locality byte (last byte of the 17-byte event)
+                pcr0_locality = int(event_data[-2:], 16)
+                print(f"Found StartupLocality event: locality = {pcr0_locality}")
 
     # Get sorted list of PCR indices
     pcr_indices = sorted(pcr_events.keys())
@@ -71,9 +85,13 @@ def calculate_all_pcrs(eventlog_file):
         print("=" * 70)
 
         # Initial PCR value (32 bytes of zeros for SHA256)
-        pcr = b"\x00" * 32
-
-        print(f"Initial PCR value (32 zeros):")
+        # PCR0 is special: it's initialized with the locality value in the last byte
+        if pcr_index == 0 and pcr0_locality is not None:
+            pcr = b"\x00" * 31 + bytes([pcr0_locality])
+            print(f"Initial PCR value (31 zeros + locality {pcr0_locality}):")
+        else:
+            pcr = b"\x00" * 32
+            print(f"Initial PCR value (32 zeros):")
         print(f"  {pcr.hex()}")
         print()
 
@@ -82,9 +100,19 @@ def calculate_all_pcrs(eventlog_file):
         print()
 
         # Process each event
-        for i, event in enumerate(events, 1):
+        extension_count = 0
+        for event in events:
             event_num = event.get("EventNum", "?")
             event_type = event.get("EventType", "Unknown")
+
+            # Skip EV_NO_ACTION events - they don't extend PCRs
+            if event_type == "EV_NO_ACTION":
+                print(
+                    f"  Event {event_num} ({event_type}): Skipped (informational only)"
+                )
+                continue
+
+            extension_count += 1
 
             # Extract the SHA256 digest
             digest = None
@@ -108,7 +136,7 @@ def calculate_all_pcrs(eventlog_file):
                 continue
 
             # Extend PCR: PCR = SHA256(PCR || digest)
-            print(f"Extension {i} (EventNum {event_num}, {event_type}):")
+            print(f"Extension {extension_count} (EventNum {event_num}, {event_type}):")
             print(f"  Digest:              {digest.hex()}")
             pcr = hashlib.sha256(pcr + digest).digest()
             print(f"  PCR after extension: {pcr.hex()}")
@@ -138,10 +166,30 @@ def calculate_single_pcr(eventlog_file, pcr_index):
     cleaned_yaml = preprocess_eventlog(eventlog_file)
     eventlog = yaml.safe_load(cleaned_yaml)
 
-    # Initial PCR value (32 bytes of zeros for SHA256)
-    pcr = b"\x00" * 32
+    # Check for StartupLocality event for PCR0
+    pcr0_locality = None
+    if pcr_index == 0:
+        for event in eventlog["events"]:
+            if (
+                event.get("PCRIndex") == 0
+                and event.get("EventType") == "EV_NO_ACTION"
+                and event.get("EventSize") == 17
+            ):
+                event_data = event.get("Event", "")
+                if event_data.startswith("537461727475704c6f63616c697479"):
+                    # Extract locality byte (last byte of the 17-byte event)
+                    pcr0_locality = int(event_data[-2:], 16)
+                    print(f"Found StartupLocality event: locality = {pcr0_locality}")
+                    break
 
-    print(f"Initial PCR value (32 zeros):")
+    # Initial PCR value (32 bytes of zeros for SHA256)
+    # PCR0 is special: it's initialized with the locality value in the last byte
+    if pcr_index == 0 and pcr0_locality is not None:
+        pcr = b"\x00" * 31 + bytes([pcr0_locality])
+        print(f"Initial PCR value (31 zeros + locality {pcr0_locality}):")
+    else:
+        pcr = b"\x00" * 32
+        print(f"Initial PCR value (32 zeros):")
     print(f"  {pcr.hex()}")
     print()
 
@@ -156,9 +204,17 @@ def calculate_single_pcr(eventlog_file, pcr_index):
     print()
 
     # Process each event
-    for i, event in enumerate(events, 1):
+    extension_count = 0
+    for event in events:
         event_num = event.get("EventNum", "?")
         event_type = event.get("EventType", "Unknown")
+
+        # Skip EV_NO_ACTION events - they don't extend PCRs
+        if event_type == "EV_NO_ACTION":
+            print(f"Event {event_num} ({event_type}): Skipped (informational only)")
+            continue
+
+        extension_count += 1
 
         # Extract the SHA256 digest
         digest = None
@@ -181,7 +237,7 @@ def calculate_single_pcr(eventlog_file, pcr_index):
             continue
 
         # Extend PCR: PCR = SHA256(PCR || digest)
-        print(f"Extension {i} (EventNum {event_num}, {event_type}):")
+        print(f"Extension {extension_count} (EventNum {event_num}, {event_type}):")
         print(f"  Digest:              {digest.hex()}")
         pcr = hashlib.sha256(pcr + digest).digest()
         print(f"  PCR after extension: {pcr.hex()}")
