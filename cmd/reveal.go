@@ -46,7 +46,7 @@ func RevealPlain(tpmPath, pcrsStr string, nvramIndex uint32, debug bool) {
 	// Open TPM
 	tpmDev, err := transport.OpenTPM(tpmPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to open TPM at %s: %v\n", tpmPath, err)
+		PrintKIRAError(fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err))
 		os.Exit(0)
 	}
 	defer tpmDev.Close()
@@ -57,7 +57,7 @@ func RevealPlain(tpmPath, pcrsStr string, nvramIndex uint32, debug bool) {
 	// Perform unsealing workflow
 	result, err := UnsealWorkflow(tpmDev, nvramIndex, debug)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		PrintKIRAError(err)
 		os.Exit(0)
 	}
 
@@ -67,7 +67,7 @@ func RevealPlain(tpmPath, pcrsStr string, nvramIndex uint32, debug bool) {
 	// Generate TOTP code
 	code, _, err := generateTOTPCode(secret)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to generate TOTP code (invalid TOTP secret): %v\n", err)
+		PrintKIRAError(fmt.Errorf("failed to generate TOTP code (invalid TOTP secret): %w", err))
 		os.Exit(0)
 	}
 

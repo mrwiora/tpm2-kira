@@ -78,6 +78,7 @@ func flushAllSessions(tpmDev transport.TPM) error {
 }
 
 // DisplayPCRMismatch shows the differences between expected and current PCR values
+// DisplayPCRMismatch is deprecated - use PrintKIRAError instead
 func DisplayPCRMismatch(pcrIndices []int, expectedDigests, currentDigests []tpm2.TPM2BDigest) {
 	if len(expectedDigests) != len(currentDigests) {
 		fmt.Printf("Error: PCR digest count mismatch (expected: %d, current: %d)\n", len(expectedDigests), len(currentDigests))
@@ -359,11 +360,24 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*Unsea
 	pcrMatch := VerifyPCRValues(sealedBlob.GetPCRDigestValues(), pcrReadResp.PCRValues.Digests)
 
 	if !pcrMatch {
-		// Display PCR mismatch information
-		fmt.Println("\n=== PCR Mismatch Detected ===")
-		DisplayPCRMismatch(sealedBlob.GetPCRIndices(), sealedBlob.GetPCRDigestValues(), pcrReadResp.PCRValues.Digests)
-		fmt.Println()
-		return nil, fmt.Errorf("PCR values have changed. Use 'reseal' command to update with current PCR values")
+		// Create structured PCR mismatch error with detailed information
+		expectedDigests := make([][]byte, len(sealedBlob.GetPCRDigestValues()))
+		for i, digest := range sealedBlob.GetPCRDigestValues() {
+			expectedDigests[i] = digest.Buffer
+		}
+
+		currentDigests := make([][]byte, len(pcrReadResp.PCRValues.Digests))
+		for i, digest := range pcrReadResp.PCRValues.Digests {
+			currentDigests[i] = digest.Buffer
+		}
+
+		pcrErr := &PCRMismatchError{
+			Message:         "PCR values have changed. Use 'reseal' command to update with current PCR values",
+			PCRIndices:      sealedBlob.GetPCRIndices(),
+			ExpectedDigests: expectedDigests,
+			CurrentDigests:  currentDigests,
+		}
+		return nil, pcrErr
 	}
 
 	// Create primary key

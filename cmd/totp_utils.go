@@ -39,8 +39,65 @@ func PrintKIRAOutput(code string) {
 }
 
 // PrintKIRAError prints an error with colored KIRA formatting
+// If the error is a PCRMismatchError, it includes detailed PCR information
 func PrintKIRAError(err error) {
-	fmt.Println(FormatKIRAError(err))
+	// Check if it's a PCR mismatch error for special formatting
+	if pcrErr, ok := err.(*PCRMismatchError); ok {
+		// Print KIRA error line first
+		fmt.Println(FormatKIRAError(pcrErr))
+		fmt.Println()
+
+		// Print detailed PCR mismatch information
+		fmt.Println("=== PCR Mismatch Detected ===")
+		fmt.Printf("PCRs used for sealing: %v\n", pcrErr.PCRIndices)
+		fmt.Println()
+
+		for i, pcrIndex := range pcrErr.PCRIndices {
+			if i >= len(pcrErr.ExpectedDigests) || i >= len(pcrErr.CurrentDigests) {
+				break
+			}
+
+			expected := pcrErr.ExpectedDigests[i]
+			current := pcrErr.CurrentDigests[i]
+
+			match := true
+			if len(expected) != len(current) {
+				match = false
+			} else {
+				for j := range expected {
+					if expected[j] != current[j] {
+						match = false
+						break
+					}
+				}
+			}
+
+			status := "✓ MATCH"
+			if !match {
+				status = "✗ CHANGED"
+			}
+
+			fmt.Printf("  PCR%-2d: %s - %s\n", pcrIndex, GetPCRDescription(pcrIndex), status)
+			if !match {
+				fmt.Printf("    Expected: %x\n", expected)
+				fmt.Printf("    Current:  %x\n", current)
+			}
+		}
+	} else {
+		fmt.Println(FormatKIRAError(err))
+	}
+}
+
+// PCRMismatchError represents a PCR mismatch error with detailed information
+type PCRMismatchError struct {
+	Message         string
+	PCRIndices      []int
+	ExpectedDigests [][]byte
+	CurrentDigests  [][]byte
+}
+
+func (e *PCRMismatchError) Error() string {
+	return e.Message
 }
 
 // isTOTPSecret checks if a string looks like a Base32-encoded TOTP secret
