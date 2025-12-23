@@ -184,6 +184,11 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download binary artifacts
         uses: actions/download-artifact@v4
         with:
@@ -211,21 +216,34 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           VERSION=${{ needs.build-binaries.outputs.version }}
           PACKAGE_FILE=${{ steps.package_info.outputs.PACKAGE_FILE }}
 
+          # Debug information
+          echo "Working directory: $(pwd)"
+          echo "Git status: $(git status --porcelain 2>/dev/null | wc -l) files"
+          echo "Git remote: $(git remote -v 2>/dev/null || echo 'No remotes')"
+          echo "GitHub repository: ${GH_REPO}"
+          echo "VERSION: ${VERSION}"
+          echo "PACKAGE_FILE: ${PACKAGE_FILE}"
+          echo "Available files in dist/:"
+          ls -la dist/ || echo "No dist directory"
+          echo "Available files in archlinux/:"
+          ls -la archlinux/ || echo "No archlinux directory"
+
           # Check if release exists
-          if gh release view ${VERSION} >/dev/null 2>&1; then
+          if gh release view ${VERSION} --repo ${GH_REPO} >/dev/null 2>&1; then
             echo "Release ${VERSION} exists, uploading all artifacts..."
 
             # Upload binary artifacts
-            gh release upload ${VERSION} dist/tpm2-kira-linux-amd64 --clobber
-            gh release upload ${VERSION} dist/checksums.txt --clobber
+            gh release upload ${VERSION} dist/tpm2-kira-linux-amd64 --clobber --repo ${GH_REPO}
+            gh release upload ${VERSION} dist/checksums.txt --clobber --repo ${GH_REPO}
 
             # Upload package artifacts
-            gh release upload ${VERSION} archlinux/${PACKAGE_FILE} --clobber
-            gh release upload ${VERSION} archlinux/package-checksums.txt --clobber
+            gh release upload ${VERSION} archlinux/${PACKAGE_FILE} --clobber --repo ${GH_REPO}
+            gh release upload ${VERSION} archlinux/package-checksums.txt --clobber --repo ${GH_REPO}
 
           else
             echo "Creating new release ${VERSION}..."
@@ -276,6 +294,9 @@ jobs:
             RELEASE_CMD="$RELEASE_CMD dist/checksums.txt"
             RELEASE_CMD="$RELEASE_CMD archlinux/${PACKAGE_FILE}"
             RELEASE_CMD="$RELEASE_CMD archlinux/package-checksums.txt"
+
+            # Add repository specification to command
+            RELEASE_CMD="$RELEASE_CMD --repo ${GH_REPO}"
 
             # Execute the command
             eval $RELEASE_CMD
