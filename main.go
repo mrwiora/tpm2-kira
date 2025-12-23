@@ -54,7 +54,7 @@ func main() {
 	case "pcrtips":
 		if err := cmd.PCRTips(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+			os.Exit(0)
 		}
 	case "version", "-v", "--version":
 		fmt.Printf("tpm2-kira version %s\n", Version)
@@ -63,7 +63,7 @@ func main() {
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", command)
 		printUsage()
-		os.Exit(1)
+		os.Exit(0)
 	}
 }
 
@@ -81,7 +81,7 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 	password, err := cmd.ReadOptionalPasswordFromStdin("fallback access")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error reading password: %v\n", err)
-		os.Exit(1)
+		os.Exit(0)
 	}
 
 	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), password, *debug); err != nil {
@@ -104,7 +104,7 @@ func runReseal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 	password, err := cmd.ReadRequiredPasswordFromStdin("resealing")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error reading password: %v\n", err)
-		os.Exit(1)
+		os.Exit(0)
 	}
 
 	if err := cmd.Reseal(*tpm, *pcrs, uint32(*nvram), password, *debug); err != nil {
@@ -134,17 +134,14 @@ func runInfo(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 func runReveal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("reveal", flag.ExitOnError)
 
-	tmp := fs.String("tpm", tpmPath, "Path to TPM device")
+	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
 
-	if err := cmd.Reveal(*tmp, *pcrs, uint32(*nvram), *debug); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(0)
-	}
+	cmd.Reveal(*tpm, *pcrs, uint32(*nvram), *debug)
 }
 
 func runRevealPlain(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
@@ -157,10 +154,7 @@ func runRevealPlain(args []string, tpmPath, pcrsStr string, nvramIndex uint32, d
 
 	fs.Parse(args)
 
-	if err := cmd.RevealPlain(*tpm, *pcrs, uint32(*nvram), *debug); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(0)
-	}
+	cmd.RevealPlain(*tpm, *pcrs, uint32(*nvram), *debug)
 }
 
 func runRun(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
@@ -173,16 +167,13 @@ func runRun(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag
 
 	fs.Parse(args)
 
-	if err := cmd.Run(*tpm, *pcrs, uint32(*nvram), *debug); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(0)
-	}
+	cmd.Run(*tpm, *pcrs, uint32(*nvram), *debug)
 }
 
 func runNVRAM(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
 	if len(args) == 0 {
 		fmt.Fprintf(os.Stderr, "Error: nvram command requires a subcommand (list, status, delete)\n")
-		os.Exit(1)
+		os.Exit(0)
 	}
 
 	subcommand := args[0]
@@ -214,7 +205,7 @@ func runNVRAM(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFl
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown nvram subcommand: %s\n", subcommand)
-		os.Exit(1)
+		os.Exit(0)
 	}
 }
 
