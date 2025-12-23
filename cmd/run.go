@@ -9,7 +9,7 @@ import (
 
 // Run unseals the TOTP secret from TPM NVRAM and continuously generates TOTP codes
 // In case of errors, it retries every 30 seconds and displays error messages
-func Run(tpmPath, pcrsStr string, nvramIndex uint32, debug bool) error {
+func Run(tpmPath, pcrsStr string, nvramIndex uint32, debug bool) {
 	var secret string
 	var lastCode string
 	var lastError error
