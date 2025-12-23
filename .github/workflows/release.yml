@@ -6,10 +6,14 @@ on:
       - "*"
 
 jobs:
-  release:
+  build-binaries:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
+    outputs:
+      version: ${{ steps.get_version.outputs.VERSION }}
+      version_clean: ${{ steps.get_version.outputs.VERSION_CLEAN }}
 
     steps:
       - name: Checkout code
@@ -39,7 +43,9 @@ jobs:
         id: get_version
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
+          VERSION_CLEAN=${VERSION#v}
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "VERSION_CLEAN=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
 
       - name: Build binaries for Linux platforms
         run: |
@@ -58,38 +64,220 @@ jobs:
           cd dist
           sha256sum * > checksums.txt
 
-      - name: Upload artifacts to existing release
+      - name: Upload binary artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: linux-binaries
+          path: |
+            dist/tpm2-kira-linux-amd64
+            dist/checksums.txt
+          retention-days: 1
+
+  build-archlinux:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Update system and install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git go namcap
+
+      - name: Validate Go version
+        run: |
+          GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
+          echo "Installed Go version: ${GO_VERSION}"
+          if ! go version | grep -qE 'go1\.(19|[2-9][0-9]|[3-9][0-9])\.' && ! go version | grep -qE 'go[2-9]\.' ; then
+            echo "ERROR: Go version 1.19 or higher required, found ${GO_VERSION}"
+            exit 1
+          fi
+
+      - name: Create build user
+        run: |
+          useradd -m -G wheel builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fix ownership for build user
+        run: |
+          chown -R builder:builder .
+
+      - name: Get version from tag
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION_CLEAN=${VERSION#v}
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "VERSION_CLEAN=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
+
+      - name: Update PKGBUILD version
+        run: |
+          cd packaging/archlinux
+          echo "Updating PKGBUILD version to ${{ steps.get_version.outputs.VERSION_CLEAN }}"
+          sed -i "s/pkgver=0.0.0/pkgver=${{ steps.get_version.outputs.VERSION_CLEAN }}/" PKGBUILD
+          if ! grep -q "pkgver=${{ steps.get_version.outputs.VERSION_CLEAN }}" PKGBUILD; then
+            echo "ERROR: Failed to update PKGBUILD version"
+            exit 1
+          fi
+
+      - name: Build package
+        run: |
+          cd packaging/archlinux
+          sudo -u builder makepkg --noconfirm --syncdeps --rmdeps --clean
+          if ! ls *.pkg.tar.zst >/dev/null 2>&1; then
+            echo "ERROR: No package file was created"
+            exit 1
+          fi
+
+      - name: Check package with namcap
+        run: |
+          cd packaging/archlinux
+          namcap *.pkg.tar.zst || echo "namcap warnings/errors detected (non-fatal)"
+
+      - name: Validate package contents
+        run: |
+          cd packaging/archlinux
+          mkdir -p /tmp/package-test
+          tar -xf *.pkg.tar.zst -C /tmp/package-test
+          if [[ ! -x "/tmp/package-test/usr/bin/tpm2-kira" ]]; then
+            echo "ERROR: tpm2-kira binary not found or not executable"
+            exit 1
+          fi
+
+      - name: Create package checksum
+        run: |
+          cd packaging/archlinux
+          sha256sum *.pkg.tar.zst > package-checksums.txt
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: archlinux-package
+          path: |
+            packaging/archlinux/*.pkg.tar.zst
+            packaging/archlinux/package-checksums.txt
+          retention-days: 1
+
+  release:
+    needs: [build-binaries, build-archlinux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: linux-binaries
+          path: dist/
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: archlinux-package
+          path: archlinux/
+
+      - name: Get package filename
+        id: package_info
+        run: |
+          PACKAGE_FILE=$(ls archlinux/*.pkg.tar.zst | head -1 | xargs basename)
+          echo "PACKAGE_FILE=${PACKAGE_FILE}" >> $GITHUB_OUTPUT
+
+      - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=${{ steps.get_version.outputs.VERSION }}
+          VERSION=${{ needs.build-binaries.outputs.version }}
+          PACKAGE_FILE=${{ steps.package_info.outputs.PACKAGE_FILE }}
 
           # Check if release exists
           if gh release view ${VERSION} >/dev/null 2>&1; then
-            echo "Release ${VERSION} exists, uploading artifacts..."
+            echo "Release ${VERSION} exists, uploading all artifacts..."
 
-            # Upload artifacts to existing release
+            # Upload binary artifacts
             gh release upload ${VERSION} dist/tpm2-kira-linux-amd64 --clobber
             gh release upload ${VERSION} dist/checksums.txt --clobber
 
-            echo "Artifacts uploaded to existing release ${VERSION}"
+            # Upload package artifacts
+            gh release upload ${VERSION} archlinux/${PACKAGE_FILE} --clobber
+            gh release upload ${VERSION} archlinux/package-checksums.txt --clobber
+
           else
-            echo "Release ${VERSION} does not exist, creating new release..."
+            echo "Creating new release ${VERSION}..."
+
+            # Create release notes
+            cat > release_notes.md <<EOF
+          ## Release ${VERSION}
+
+          ### Downloads
+
+          #### Linux Binary
+          - **Binary**: \`tpm2-kira-linux-amd64\`
+          - **Usage**: Download, make executable, and run
+
+          #### Arch Linux Package
+          - **Package**: \`${PACKAGE_FILE}\`
+          - **Installation**: \`sudo pacman -U ${PACKAGE_FILE}\`
+          - **Dependencies**: tpm2-tools>=5.0, tpm2-tss>=3.0.0
+
+          ### Installation
+
+          #### From Binary
+          \`\`\`bash
+          wget https://github.com/mrwiora/tpm2-kira/releases/download/${VERSION}/tpm2-kira-linux-amd64
+          chmod +x tpm2-kira-linux-amd64
+          sudo mv tpm2-kira-linux-amd64 /usr/local/bin/tpm2-kira
+          \`\`\`
+
+          #### Arch Linux
+          \`\`\`bash
+          wget https://github.com/mrwiora/tpm2-kira/releases/download/${VERSION}/${PACKAGE_FILE}
+          sudo pacman -U ${PACKAGE_FILE}
+          \`\`\`
+
+          For build from source instructions, see README.md.
+          EOF
 
             # Create release command
-            RELEASE_CMD="gh release create ${VERSION} --title \"Release ${VERSION}\""
+            RELEASE_CMD="gh release create ${VERSION} --title \"Release ${VERSION}\" --notes-file release_notes.md"
 
             # Add prerelease flag if version contains dash
             if [[ "$VERSION" == *"-"* ]]; then
               RELEASE_CMD="$RELEASE_CMD --prerelease"
             fi
 
-            # Add Linux binaries and checksums
+            # Add all artifacts
             RELEASE_CMD="$RELEASE_CMD dist/tpm2-kira-linux-amd64"
             RELEASE_CMD="$RELEASE_CMD dist/checksums.txt"
+            RELEASE_CMD="$RELEASE_CMD archlinux/${PACKAGE_FILE}"
+            RELEASE_CMD="$RELEASE_CMD archlinux/package-checksums.txt"
 
             # Execute the command
             eval $RELEASE_CMD
-
-            echo "New release ${VERSION} created with artifacts"
           fi
+
+      - name: Release Summary
+        run: |
+          VERSION=${{ needs.build-binaries.outputs.version }}
+          PACKAGE_FILE=${{ steps.package_info.outputs.PACKAGE_FILE }}
+
+          echo "🎉 Release ${VERSION} completed successfully!"
+          echo ""
+          echo "📦 Artifacts created:"
+          echo "  • Linux binary: tpm2-kira-linux-amd64"
+          echo "  • Binary checksums: checksums.txt"
+          echo "  • Arch Linux package: ${PACKAGE_FILE}"
+          echo "  • Package checksums: package-checksums.txt"
+          echo ""
+          echo "🔗 Release URL: https://github.com/mrwiora/tpm2-kira/releases/tag/${VERSION}"
+          echo ""
+          echo "📊 Artifact sizes:"
+          echo "  • Binary: $(du -h dist/tpm2-kira-linux-amd64 | cut -f1)"
+          echo "  • Package: $(du -h archlinux/${PACKAGE_FILE} | cut -f1)"
