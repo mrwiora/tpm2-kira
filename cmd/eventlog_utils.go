@@ -35,14 +35,19 @@ func NewEventlogPCRCalculator(tpmDev transport.TPM, pcrIndices []int, debug bool
 
 // CalculatePCRsFromEventlog calculates PCR values using go-attestation native eventlog parsing
 func (calc *EventlogPCRCalculator) CalculatePCRsFromEventlog() (map[int][]byte, *EventlogInfo, error) {
+	return calc.CalculatePCRsFromEventlogPath(DefaultEventlogPath)
+}
+
+// CalculatePCRsFromEventlogPath calculates PCR values from a specific eventlog file path
+func (calc *EventlogPCRCalculator) CalculatePCRsFromEventlogPath(eventlogPath string) (map[int][]byte, *EventlogInfo, error) {
 	if calc.Debug {
-		fmt.Printf("Calculating PCR values from TPM eventlog\n")
+		fmt.Printf("Calculating PCR values from TPM eventlog: %s\n", eventlogPath)
 		fmt.Printf("Target PCRs: %v\n", calc.PCRIndices)
 		fmt.Println()
 	}
 
 	// Read raw eventlog from file
-	rawEventlog, err := readRawEventLog()
+	rawEventlog, err := readRawEventLogFromPath(eventlogPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read eventlog: %w", err)
 	}
@@ -79,7 +84,7 @@ func (calc *EventlogPCRCalculator) CalculatePCRsFromEventlog() (map[int][]byte, 
 
 	// Create eventlog info
 	eventlogInfo := &EventlogInfo{
-		EventlogPath:    DefaultEventlogPath,
+		EventlogPath:    eventlogPath,
 		EventlogHash:    fmt.Sprintf("%x", eventlogHash),
 		CalculationTime: time.Now().UTC().Format(time.RFC3339),
 		TotalEvents:     totalEvents,
@@ -99,9 +104,14 @@ func (calc *EventlogPCRCalculator) CalculatePCRsFromEventlog() (map[int][]byte, 
 
 // readRawEventLog reads the raw binary eventlog from the default path
 func readRawEventLog() ([]byte, error) {
-	file, err := os.Open(DefaultEventlogPath)
+	return readRawEventLogFromPath(DefaultEventlogPath)
+}
+
+// readRawEventLogFromPath reads the raw binary eventlog from a specific path
+func readRawEventLogFromPath(path string) ([]byte, error) {
+	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open eventlog file %s: %w", DefaultEventlogPath, err)
+		return nil, fmt.Errorf("failed to open eventlog file %s: %w", path, err)
 	}
 	defer file.Close()
 
@@ -116,18 +126,30 @@ func (calc *EventlogPCRCalculator) replayEventLog(events []attest.Event) (map[in
 	// Initialize PCRs to zero (except PCR0 which may have locality)
 	for _, pcrIndex := range calc.PCRIndices {
 		if pcrIndex == 0 {
-			// PCR0 starts with locality value (typically 0x03 in last byte)
+			// PCR0 starts with locality value only if StartupLocality event exists
 			// This follows the same logic as calculate.py
 			pcr0 := make([]byte, 32)
 			// Look for StartupLocality event to determine initial value
-			locality := calc.findStartupLocality(events)
-			if locality != 0 {
+			locality, found := calc.findStartupLocality(events)
+			if found {
 				pcr0[31] = locality
+				if calc.Debug {
+					fmt.Printf("Found StartupLocality event: locality = 0x%02x\n", locality)
+					fmt.Printf("Initial PCR0 value (31 zeros + locality): %x\n", pcr0)
+				}
+			} else {
+				if calc.Debug {
+					fmt.Printf("No StartupLocality event found - PCR0 starts with all zeros\n")
+					fmt.Printf("Initial PCR0 value (32 zeros): %x\n", pcr0)
+				}
 			}
 			pcrs[pcrIndex] = pcr0
 		} else {
 			// Other PCRs start with all zeros
 			pcrs[pcrIndex] = make([]byte, 32)
+			if calc.Debug {
+				fmt.Printf("Initial PCR%d value (32 zeros): %x\n", pcrIndex, pcrs[pcrIndex])
+			}
 		}
 	}
 
@@ -139,7 +161,7 @@ func (calc *EventlogPCRCalculator) replayEventLog(events []attest.Event) (map[in
 		// Skip informational events that don't extend PCRs
 		if event.Type == 0x03 { // EV_NO_ACTION
 			if calc.Debug && event.Index < 10 { // Only show debug for first few PCRs
-				fmt.Printf("  Skipping EV_NO_ACTION event for PCR%d\n", event.Index)
+				fmt.Printf("  Skipping EV_NO_ACTION event for PCR%d (informational only)\n", event.Index)
 			}
 			continue
 		}
@@ -169,7 +191,7 @@ func (calc *EventlogPCRCalculator) replayEventLog(events []attest.Event) (map[in
 		processedEvents++
 
 		if calc.Debug && pcrIndex < 10 { // Limit debug output
-			fmt.Printf("  Extended PCR%d with digest %x\n", pcrIndex, digest[:8])
+			fmt.Printf("  Extended PCR%d with digest %x -> PCR now: %x\n", pcrIndex, digest[:8], pcrs[pcrIndex][:8])
 		}
 	}
 
@@ -177,21 +199,38 @@ func (calc *EventlogPCRCalculator) replayEventLog(events []attest.Event) (map[in
 }
 
 // findStartupLocality looks for the StartupLocality event to determine PCR0 initial value
-func (calc *EventlogPCRCalculator) findStartupLocality(events []attest.Event) byte {
-	for _, event := range events {
+// Returns (locality_value, found) where found indicates if the event was actually present
+func (calc *EventlogPCRCalculator) findStartupLocality(events []attest.Event) (byte, bool) {
+	if calc.Debug {
+		fmt.Printf("Searching for StartupLocality event in %d events...\n", len(events))
+	}
+
+	for i, event := range events {
 		if event.Index == 0 && event.Type == 0x03 { // EV_NO_ACTION
+			if calc.Debug {
+				fmt.Printf("  Event %d: PCR0 EV_NO_ACTION, data length: %d\n", i, len(event.Data))
+			}
 			// Look for StartupLocality signature in event data
 			if len(event.Data) >= 17 {
-				startupSig := "StartupLocality"
-				if string(event.Data[:15]) == startupSig {
-					// Return the locality byte (last byte)
-					return event.Data[16]
+				// Check if data starts with "StartupLocality" (hex: 537461727475704c6f63616c697479)
+				expectedSig := []byte("StartupLocality")
+				if len(event.Data) >= len(expectedSig) && string(event.Data[:len(expectedSig)]) == string(expectedSig) {
+					locality := event.Data[16]
+					if calc.Debug {
+						fmt.Printf("  Found StartupLocality event! Data: %x, Locality: 0x%02x\n", event.Data, locality)
+					}
+					return locality, true
+				} else if calc.Debug {
+					fmt.Printf("  Data does not match StartupLocality signature: %x\n", event.Data[:min(len(event.Data), 32)])
 				}
 			}
 		}
 	}
-	// Default locality if not found
-	return 0x03
+	if calc.Debug {
+		fmt.Printf("  No StartupLocality event found\n")
+	}
+	// Return 0 and false if not found - PCR0 should start with all zeros
+	return 0, false
 }
 
 // ValidateEventlogAccess checks if the eventlog can be accessed using go-attestation
