@@ -48,7 +48,16 @@ func Run(tpmPath, pcrsStr string, nvramIndex uint32, debug bool) {
 
 				// Show error message if it's new or 30 seconds have passed
 				if lastError == nil || lastError.Error() != err.Error() || currentTime.Sub(lastErrorTime) >= 30*time.Second {
-					PrintKIRAError(err)
+					// Check if it's a TPM policy failure and show PCR details if possible
+					tpmDev2, err2 := transport.OpenTPM(tpmPath)
+					if err2 == nil && HandleTPMPolicyFailureWithPCRDetails(err, tpmDev2, nvramIndex, debug) {
+						tpmDev2.Close()
+					} else {
+						if err2 == nil {
+							tpmDev2.Close()
+						}
+						PrintKIRAError(err)
+					}
 					lastError = err
 					lastErrorTime = currentTime
 				}

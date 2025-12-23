@@ -23,6 +23,10 @@ func Reveal(tpmPath, pcrsStr string, nvramIndex uint32, debug bool) {
 	// Perform unsealing workflow
 	result, err := UnsealWorkflow(tpmDev, nvramIndex, debug)
 	if err != nil {
+		// Check if it's a TPM policy failure and show PCR details if possible
+		if HandleTPMPolicyFailureWithPCRDetails(err, tpmDev, nvramIndex, debug) {
+			os.Exit(0)
+		}
 		PrintKIRAError(err)
 		os.Exit(0)
 	}
@@ -57,6 +61,10 @@ func RevealPlain(tpmPath, pcrsStr string, nvramIndex uint32, debug bool) {
 	// Perform unsealing workflow
 	result, err := UnsealWorkflow(tpmDev, nvramIndex, debug)
 	if err != nil {
+		// Check if it's a TPM policy failure and show PCR details if possible
+		if HandleTPMPolicyFailureWithPCRDetails(err, tpmDev, nvramIndex, debug) {
+			os.Exit(0)
+		}
 		PrintKIRAError(err)
 		os.Exit(0)
 	}

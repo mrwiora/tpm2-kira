@@ -324,6 +324,93 @@ func HandleNVRAMNotFoundError(err error, debug bool) error {
 	return err
 }
 
+// IsTPMPolicyFailure checks if an error is a TPM policy failure that can be recovered with password authentication
+func IsTPMPolicyFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+	return strings.Contains(errStr, "TPM_RC_POLICY_FAIL") ||
+		strings.Contains(errStr, "policy check failed") ||
+		strings.Contains(errStr, "failed to create PCR policy session") ||
+		strings.Contains(errStr, "session 1): a policy check failed")
+}
+
+// ShowPCRDetails attempts to show PCR comparison details for the given error
+// Returns true if PCR details were successfully shown, false otherwise
+func ShowPCRDetails(tpmDev transport.TPM, nvramIndex uint32, debug bool) bool {
+	// Try to show PCR details
+	sealedData, readErr := ReadFromNVRAM(tpmDev, nvramIndex)
+	if readErr == nil {
+		blob, unmarshalErr := UnmarshalSealedBlob(sealedData)
+		if unmarshalErr == nil {
+			currentPCRs, pcrErr := GetCurrentPCRValues(tpmDev, blob, debug)
+			if pcrErr == nil {
+				fmt.Println("=== PCR Mismatch Details ===")
+				DisplayPCRMismatch(blob.GetPCRIndices(), blob.GetPCRDigestValues(), currentPCRs)
+				fmt.Println()
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// HandleTPMPolicyFailureWithPCRDetails handles TPM policy failures by showing PCR details and guidance
+// Returns true if the error was handled (is a TPM policy failure), false otherwise
+func HandleTPMPolicyFailureWithPCRDetails(err error, tpmDev transport.TPM, nvramIndex uint32, debug bool) bool {
+	if !IsTPMPolicyFailure(err) {
+		return false
+	}
+
+	// Show the original error
+	fmt.Println(FormatKIRAError(err))
+	fmt.Println()
+
+	// Show PCR details
+	ShowPCRDetails(tpmDev, nvramIndex, debug)
+
+	// Show guidance
+	fmt.Println("To fix this, run: tpm2-kira reseal")
+	fmt.Println("(Make sure you have the password that was set during initial sealing)")
+
+	return true
+}
+
+// GetCurrentPCRValues retrieves current PCR values for comparison, handling both eventlog-based and direct TPM reads
+func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug bool) ([]tpm2.TPM2BDigest, error) {
+	var currentPCRValues []tpm2.TPM2BDigest
+
+	if sealedBlob.EventlogBased {
+		// Calculate current PCRs from eventlog
+		calc := NewEventlogPCRCalculator(tpmDev, sealedBlob.GetPCRIndices(), debug)
+		calculatedPCRs, _, err := calc.CalculatePCRsFromEventlog()
+		if err != nil {
+			return nil, fmt.Errorf("failed to calculate current PCRs from eventlog: %w", err)
+		}
+
+		// Convert to TPM2BDigest format
+		currentPCRValues = make([]tpm2.TPM2BDigest, len(sealedBlob.GetPCRIndices()))
+		for i, pcrIndex := range sealedBlob.GetPCRIndices() {
+			currentPCRValues[i] = tpm2.TPM2BDigest{Buffer: calculatedPCRs[pcrIndex]}
+		}
+	} else {
+		// Use current TPM PCR values
+		pcrRead := tpm2.PCRRead{
+			PCRSelectionIn: CreatePCRSelection(sealedBlob.GetPCRIndices()),
+		}
+
+		pcrReadResp, err := pcrRead.Execute(tpmDev)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read PCRs: %w", err)
+		}
+		currentPCRValues = pcrReadResp.PCRValues.Digests
+	}
+
+	return currentPCRValues, nil
+}
+
 // UnsealWorkflowResult contains the results of the unseal workflow
 type UnsealWorkflowResult struct {
 	UnsealedData []byte
@@ -346,18 +433,14 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*Unsea
 		return nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
 
-	// Read current PCR values
-	pcrRead := tpm2.PCRRead{
-		PCRSelectionIn: CreatePCRSelection(sealedBlob.GetPCRIndices()),
-	}
-
-	pcrReadResp, err := pcrRead.Execute(tpmDev)
+	// Get current PCR values for comparison
+	currentPCRValues, err := GetCurrentPCRValues(tpmDev, sealedBlob, debug)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read PCRs: %w", err)
+		return nil, err
 	}
 
 	// Check if PCR values match
-	pcrMatch := VerifyPCRValues(sealedBlob.GetPCRDigestValues(), pcrReadResp.PCRValues.Digests)
+	pcrMatch := VerifyPCRValues(sealedBlob.GetPCRDigestValues(), currentPCRValues)
 
 	if !pcrMatch {
 		// Create structured PCR mismatch error with detailed information
@@ -366,8 +449,8 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*Unsea
 			expectedDigests[i] = digest.Buffer
 		}
 
-		currentDigests := make([][]byte, len(pcrReadResp.PCRValues.Digests))
-		for i, digest := range pcrReadResp.PCRValues.Digests {
+		currentDigests := make([][]byte, len(currentPCRValues))
+		for i, digest := range currentPCRValues {
 			currentDigests[i] = digest.Buffer
 		}
 
