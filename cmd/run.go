@@ -26,8 +26,7 @@ func Run(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool
 
 				// Show error message if it's new or 30 seconds have passed
 				if lastError == nil || lastError.Error() != newError.Error() || currentTime.Sub(lastErrorTime) >= 30*time.Second {
-					timestamp := currentTime.UTC().Format("15:04:05")
-					fmt.Printf("[ \033[0;31mKIRA\033[0m ] %s ERROR: %v\n", timestamp, newError)
+					PrintKIRAError(newError)
 					lastError = newError
 					lastErrorTime = currentTime
 				}
@@ -49,8 +48,7 @@ func Run(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool
 
 				// Show error message if it's new or 30 seconds have passed
 				if lastError == nil || lastError.Error() != err.Error() || currentTime.Sub(lastErrorTime) >= 30*time.Second {
-					timestamp := currentTime.UTC().Format("15:04:05")
-					fmt.Printf("[ \033[0;31mKIRA\033[0m ] %s ERROR: %v\n", timestamp, err)
+					PrintKIRAError(err)
 					lastError = err
 					lastErrorTime = currentTime
 				}
@@ -71,8 +69,7 @@ func Run(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool
 
 				// Show error message if it's new or 30 seconds have passed
 				if lastError == nil || lastError.Error() != newError.Error() || currentTime.Sub(lastErrorTime) >= 30*time.Second {
-					timestamp := currentTime.UTC().Format("15:04:05")
-					fmt.Printf("[ \033[0;31mKIRA\033[0m ] %s ERROR: %v\n", timestamp, newError)
+					PrintKIRAError(newError)
 					lastError = newError
 					lastErrorTime = currentTime
 				}
@@ -95,8 +92,7 @@ func Run(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool
 
 			// Show error message if it's new or 30 seconds have passed
 			if lastError == nil || lastError.Error() != newError.Error() || currentTime.Sub(lastErrorTime) >= 30*time.Second {
-				timestamp := currentTime.UTC().Format("15:04:05")
-				fmt.Printf("[ \033[0;31mKIRA\033[0m ] %s ERROR: %v\n", timestamp, newError)
+				PrintKIRAError(newError)
 				lastError = newError
 				lastErrorTime = currentTime
 			}
@@ -111,12 +107,8 @@ func Run(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool
 
 		// Only print if the code has changed (new time window)
 		if code != lastCode {
-			// Get current time in UTC
-			now := time.Now().UTC()
-			timestamp := now.Format("15:04:05")
-
-			// Print in the format: KIRA HH:MM:SS XXXXXX
-			fmt.Printf("[ \033[1;33mKIRA\033[0m ] %s: %s\n", timestamp, code)
+			// Display with colored KIRA format
+			PrintKIRAOutput(code)
 			lastCode = code
 			lastError = nil // Clear any previous error since we're successful
 		}

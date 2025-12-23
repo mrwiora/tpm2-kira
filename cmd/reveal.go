@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/google/go-tpm/tpm2/transport"
 )
@@ -34,12 +33,8 @@ func Reveal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 		return fmt.Errorf("failed to generate TOTP code (invalid TOTP secret): %w", err)
 	}
 
-	// Get current time in UTC and display with colored KIRA format
-	now := time.Now().UTC()
-	timestamp := now.Format("15:04:05")
-
-	// Print in the format: KIRA HH:MM:SS XXXXXX
-	fmt.Printf("[ \033[1;33mKIRA\033[0m ] %s: %s\n", timestamp, code)
+	// Display with colored KIRA format
+	PrintKIRAOutput(code)
 
 	return nil
 }

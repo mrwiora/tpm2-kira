@@ -12,6 +12,37 @@ import (
 	"time"
 )
 
+// ANSI color codes for KIRA output
+const (
+	KIRASuccess = "\033[1;33mKIRA\033[0m" // Yellow KIRA for success
+	KIRAError   = "\033[0;31mKIRA\033[0m" // Red KIRA for errors
+	KIRANormal  = "KIRA"                  // Plain KIRA for no color
+)
+
+// FormatKIRAOutput formats output with colored KIRA prefix and timestamp
+func FormatKIRAOutput(code string) string {
+	now := time.Now().UTC()
+	timestamp := now.Format("15:04:05")
+	return fmt.Sprintf("[ %s ] %s: %s", KIRASuccess, timestamp, code)
+}
+
+// FormatKIRAError formats error output with red KIRA prefix and timestamp
+func FormatKIRAError(err error) string {
+	now := time.Now().UTC()
+	timestamp := now.Format("15:04:05")
+	return fmt.Sprintf("[ %s ] %s ERROR: %v", KIRAError, timestamp, err)
+}
+
+// PrintKIRAOutput prints a TOTP code with colored KIRA formatting
+func PrintKIRAOutput(code string) {
+	fmt.Println(FormatKIRAOutput(code))
+}
+
+// PrintKIRAError prints an error with colored KIRA formatting
+func PrintKIRAError(err error) {
+	fmt.Println(FormatKIRAError(err))
+}
+
 // isTOTPSecret checks if a string looks like a Base32-encoded TOTP secret
 func isTOTPSecret(s string) bool {
 	// Remove spaces and convert to uppercase
