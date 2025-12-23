@@ -122,6 +122,16 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 
 	fmt.Println("\nResealing data with current PCR values...")
 
+	// Show calculation method information
+	if sealedBlob.EventlogBased {
+		fmt.Printf("Using eventlog-based PCR calculation (preserving original method)\n")
+		if debug {
+			fmt.Printf("Original eventlog info: %+v\n", sealedBlob.EventlogInfo)
+		}
+	} else {
+		fmt.Printf("Using current TPM PCR values (preserving original method)\n")
+	}
+
 	// Determine which PCRs to use for resealing
 	var pcrsToUse []int
 	var pcrsStrToUse string
@@ -145,8 +155,8 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 		fmt.Printf("Preserving original PCR selection: %v\n", pcrsToUse)
 	}
 
-	// Reseal the data with current PCR values
-	if err := sealData(tpmPath, pcrsStrToUse, nvramIndex, unsealedData, password, debug); err != nil {
+	// Reseal the data with current PCR values, preserving the original calculation method
+	if err := sealDataWithMode(tpmPath, pcrsStrToUse, nvramIndex, unsealedData, password, debug, sealedBlob.EventlogBased); err != nil {
 		return fmt.Errorf("failed to reseal data: %w", err)
 	}
 
