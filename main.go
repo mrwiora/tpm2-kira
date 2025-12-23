@@ -241,6 +241,7 @@ SEAL OPTIONS:
 RESEAL OPTIONS:
   --pcrs INDICES     New PCR indices (optional, preserves original if omitted)
                      You will be prompted for the required password
+                     Eventlog-based calculation is automatically preserved from original sealing
 
 INFO OPTIONS:
   --json             Output as JSON

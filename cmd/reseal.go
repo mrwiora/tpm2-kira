@@ -8,6 +8,7 @@ import (
 )
 
 // Reseal unseals data from TPM NVRAM and reseals it with current PCR values
+// Automatically preserves eventlog-based PCR calculation if the original blob was eventlog-based
 func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool) error {
 	// Parse PCRs if provided (we'll use original PCRs if not explicitly overridden)
 	var userProvidedPCRs []int
@@ -120,16 +121,19 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 	// Close TPM device before calling sealData (which will open it again)
 	tpmDev.Close()
 
-	fmt.Println("\nResealing data with current PCR values...")
+	// Check if original blob was eventlog-based
+	useEventlog := sealedBlob.EventlogBased
 
-	// Show calculation method information
-	if sealedBlob.EventlogBased {
-		fmt.Printf("Using eventlog-based PCR calculation (preserving original method)\n")
-		if debug {
-			fmt.Printf("Original eventlog info: %+v\n", sealedBlob.EventlogInfo)
+	if useEventlog {
+		fmt.Println("\nResealing data with eventlog-based PCR calculation (preserving original mode)...")
+		if sealedBlob.EventlogInfo != nil {
+			fmt.Printf("Original eventlog info:\n")
+			fmt.Printf("  Eventlog path: %s\n", sealedBlob.EventlogInfo.EventlogPath)
+			fmt.Printf("  Sealed at: %s\n", sealedBlob.EventlogInfo.CalculationTime)
+			fmt.Printf("  Events processed: %d/%d\n", sealedBlob.EventlogInfo.ProcessedEvents, sealedBlob.EventlogInfo.TotalEvents)
 		}
 	} else {
-		fmt.Printf("Using current TPM PCR values (preserving original method)\n")
+		fmt.Println("\nResealing data with current PCR values...")
 	}
 
 	// Determine which PCRs to use for resealing
@@ -155,12 +159,23 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 		fmt.Printf("Preserving original PCR selection: %v\n", pcrsToUse)
 	}
 
-	// Reseal the data with current PCR values, preserving the original calculation method
-	if err := sealDataWithMode(tpmPath, pcrsStrToUse, nvramIndex, unsealedData, password, debug, sealedBlob.EventlogBased); err != nil {
+	if useEventlog {
+		fmt.Printf("PCR calculation mode: eventlog-based (automatically preserved)\n")
+		fmt.Printf("Note: Eventlog will be re-read to calculate current PCR values\n")
+	} else {
+		fmt.Printf("PCR calculation mode: current values\n")
+	}
+
+	// Reseal the data with appropriate mode (eventlog-based or current values)
+	if err := sealDataWithMode(tpmPath, pcrsStrToUse, nvramIndex, unsealedData, password, debug, useEventlog); err != nil {
 		return fmt.Errorf("failed to reseal data: %w", err)
 	}
 
-	fmt.Printf("\nSuccessfully resealed data with current PCRs: %v\n", pcrsToUse)
+	if useEventlog {
+		fmt.Printf("\nSuccessfully resealed data with eventlog-based PCRs: %v\n", pcrsToUse)
+	} else {
+		fmt.Printf("\nSuccessfully resealed data with current PCRs: %v\n", pcrsToUse)
+	}
 	fmt.Printf("Data size: %d bytes\n", len(unsealedData))
 
 	return nil
