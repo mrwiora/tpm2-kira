@@ -47,6 +47,8 @@ func main() {
 		runNVRAM(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
 	case "reveal":
 		runReveal(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
+	case "reveal-plain":
+		runRevealPlain(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
 	case "run":
 		runRun(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
 	case "pcrtips":
@@ -151,6 +153,25 @@ func runReveal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 	}
 }
 
+func runRevealPlain(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
+	fs := flag.NewFlagSet("reveal-plain", flag.ExitOnError)
+
+	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
+	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
+	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
+	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+
+	fs.Parse(args)
+
+	// Try without password first, if that fails we'll be prompted for password
+	password := ""
+
+	if err := cmd.RevealPlain(*tpm, *pcrs, uint32(*nvram), password, *debug); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(0)
+	}
+}
+
 func runRun(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 
@@ -218,7 +239,8 @@ USAGE:
 COMMANDS:
   seal        Generate and seal TOTP secret to TPM NVRAM
   reseal      Reseal secret with current PCR values
-  reveal      Generate TOTP code from sealed secret
+  reveal      Generate TOTP code with colored KIRA format
+  reveal-plain Generate TOTP code (plain output)
   run         Continuously display TOTP codes (runs until stopped)
   info        Display sealed secret information
   nvram       Manage TPM NVRAM (list, status, delete)
@@ -251,6 +273,7 @@ NVRAM SUBCOMMANDS:
 EXAMPLES:
   tpm2-kira seal
   tpm2-kira reveal
+  tpm2-kira reveal-plain
   tpm2-kira run
   tpm2-kira reseal
   tpm2-kira reseal --pcrs "0,2,4,7"
