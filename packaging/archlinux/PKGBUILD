@@ -5,16 +5,18 @@ pkgrel=1
 pkgdesc="TPM2-based TOTP authenticator with PCR policies"
 arch=('x86_64')
 url="https://github.com/mrwiora/tpm2-kira"
-license=('BSD-3-CLAUSE')
-depends=('tpm2-tools>=5.0' 'tpm2-tss>=3.0.0')
+license=('BSD-3-Clause')
+depends=('bash' 'tpm2-tools>=5.0' 'tpm2-tss>=3.0.0')
 makedepends=('go>=1.19' 'git')
 optdepends=('mkinitcpio: for early boot integration'
             'cryptsetup: for disk encryption integration'
             'systemd: for systemd-based initramfs')
+
 provides=('tpm2-kira')
 conflicts=('tpm2-kira-git')
 source=("$pkgname::git+https://github.com/mrwiora/tpm2-kira.git")
-sha256sums=('SKIP')  # Replace with actual checksum when building from release
+sha256sums=('SKIP')
+options=('!debug')
 
 pkgver() {
     cd "$pkgname"
@@ -49,7 +51,7 @@ build() {
     export CGO_CFLAGS="${CFLAGS}"
     export CGO_CXXFLAGS="${CXXFLAGS}"
     export CGO_LDFLAGS="${LDFLAGS}"
-    export GOFLAGS="-buildmode=pie -trimpath -ldflags=-linkmode=external -mod=readonly -modcacherw"
+    export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
 
     # Get version info
     local git_tag=$(git describe --tags --exact-match 2>/dev/null || echo "v$pkgver")
@@ -57,7 +59,7 @@ build() {
 
     # Build with version information
     go build \
-        -ldflags "-s -w -X main.Version=${git_tag#v} -linkmode=external -extldflags \"${LDFLAGS}\"" \
+        -ldflags "-s -w -X main.Version=${git_tag#v}" \
         -o $pkgname \
         .
 }
