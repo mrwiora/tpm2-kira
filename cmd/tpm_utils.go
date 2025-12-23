@@ -332,7 +332,7 @@ type UnsealWorkflowResult struct {
 
 // UnsealWorkflow performs the complete unsealing workflow
 // This consolidates the common pattern used in run, reveal, and reseal commands
-func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, password string, debug bool) (*UnsealWorkflowResult, error) {
+func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*UnsealWorkflowResult, error) {
 	// Read sealed blob from NVRAM
 	sealedData, err := ReadFromNVRAM(tpmDev, nvramIndex)
 	if err != nil {
@@ -355,32 +355,15 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, password string, de
 		return nil, fmt.Errorf("failed to read PCRs: %w", err)
 	}
 
-	// Determine which authentication method to use
+	// Check if PCR values match
 	pcrMatch := VerifyPCRValues(sealedBlob.GetPCRDigestValues(), pcrReadResp.PCRValues.Digests)
-	usePassword := false
 
 	if !pcrMatch {
-		// Display PCR mismatch information once
+		// Display PCR mismatch information
 		fmt.Println("\n=== PCR Mismatch Detected ===")
 		DisplayPCRMismatch(sealedBlob.GetPCRIndices(), sealedBlob.GetPCRDigestValues(), pcrReadResp.PCRValues.Digests)
 		fmt.Println()
-
-		if !sealedBlob.HasPassword {
-			return nil, fmt.Errorf("PCR values have changed and no password fallback is available")
-		}
-		if password == "" {
-			// Prompt for password when PCRs don't match
-			fmt.Println("Password required for fallback authentication.")
-			inputPassword, err := ReadExistingPasswordFromStdin()
-			if err != nil {
-				return nil, fmt.Errorf("failed to read password: %w", err)
-			}
-			password = inputPassword
-		}
-		if !VerifyPasswordArgon2(password, sealedBlob.PasswordHash, sealedBlob.PasswordSalt) {
-			return nil, fmt.Errorf("incorrect password")
-		}
-		usePassword = true
+		return nil, fmt.Errorf("PCR values have changed. Use 'reseal' command to update with current PCR values")
 	}
 
 	// Create primary key
@@ -397,9 +380,8 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, password string, de
 	}
 	defer FlushHandle(tpmDev, loadedObject.ObjectHandle)
 
-	// Unseal the data
-	usePCRPolicy := !usePassword
-	unsealedData, err := UnsealData(tpmDev, loadedObject, sealedBlob, password, usePCRPolicy)
+	// Unseal the data using PCR policy
+	unsealedData, err := UnsealData(tpmDev, loadedObject, sealedBlob, "", true)
 	if err != nil {
 		return nil, err
 	}
@@ -407,7 +389,7 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, password string, de
 	return &UnsealWorkflowResult{
 		UnsealedData: unsealedData,
 		SealedBlob:   sealedBlob,
-		UsedPassword: usePassword,
+		UsedPassword: false,
 	}, nil
 }
 
