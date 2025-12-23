@@ -83,6 +83,20 @@ func PrintKIRAError(err error) {
 				fmt.Printf("    Current:  %x\n", current)
 			}
 		}
+
+		fmt.Println()
+		fmt.Println("To fix this, run: tpm2-kira reseal")
+	} else if IsTPMPolicyFailure(err) {
+		// Handle TPM policy failures with helpful guidance
+		fmt.Println(FormatKIRAError(err))
+		fmt.Println()
+		fmt.Println("=== TPM Policy Failure ===")
+		fmt.Println("The TPM policy verification failed. This typically happens when:")
+		fmt.Println("- PCR values changed between checking and using them")
+		fmt.Println("- The system state has changed since sealing")
+		fmt.Println()
+		fmt.Println("To fix this, run: tpm2-kira reseal")
+		fmt.Println("(Make sure you have the password that was set during initial sealing)")
 	} else {
 		fmt.Println(FormatKIRAError(err))
 	}

@@ -324,6 +324,19 @@ func HandleNVRAMNotFoundError(err error, debug bool) error {
 	return err
 }
 
+// IsTPMPolicyFailure checks if an error is a TPM policy failure that can be recovered with password authentication
+func IsTPMPolicyFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+	return strings.Contains(errStr, "TPM_RC_POLICY_FAIL") ||
+		strings.Contains(errStr, "policy check failed") ||
+		strings.Contains(errStr, "failed to create PCR policy session") ||
+		strings.Contains(errStr, "session 1): a policy check failed")
+}
+
 // UnsealWorkflowResult contains the results of the unseal workflow
 type UnsealWorkflowResult struct {
 	UnsealedData []byte
