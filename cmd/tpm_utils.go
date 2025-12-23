@@ -337,30 +337,10 @@ func IsTPMPolicyFailure(err error) bool {
 		strings.Contains(errStr, "session 1): a policy check failed")
 }
 
-// UnsealWorkflowResult contains the results of the unseal workflow
-type UnsealWorkflowResult struct {
-	UnsealedData []byte
-	SealedBlob   *SealedBlob
-	UsedPassword bool
-}
-
-// UnsealWorkflow performs the complete unsealing workflow
-// This consolidates the common pattern used in run, reveal, and reseal commands
-func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*UnsealWorkflowResult, error) {
-	// Read sealed blob from NVRAM
-	sealedData, err := ReadFromNVRAM(tpmDev, nvramIndex)
-	if err != nil {
-		return nil, HandleNVRAMNotFoundError(err, debug)
-	}
-
-	// Unmarshal sealed blob
-	sealedBlob, err := UnmarshalSealedBlob(sealedData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
-	}
-
-	// Get current PCR values for comparison - use eventlog calculation if original was eventlog-based
+// GetCurrentPCRValues retrieves current PCR values for comparison, handling both eventlog-based and direct TPM reads
+func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug bool) ([]tpm2.TPM2BDigest, error) {
 	var currentPCRValues []tpm2.TPM2BDigest
+
 	if sealedBlob.EventlogBased {
 		// Calculate current PCRs from eventlog
 		calc := NewEventlogPCRCalculator(tpmDev, sealedBlob.GetPCRIndices(), debug)
@@ -385,6 +365,37 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*Unsea
 			return nil, fmt.Errorf("failed to read PCRs: %w", err)
 		}
 		currentPCRValues = pcrReadResp.PCRValues.Digests
+	}
+
+	return currentPCRValues, nil
+}
+
+// UnsealWorkflowResult contains the results of the unseal workflow
+type UnsealWorkflowResult struct {
+	UnsealedData []byte
+	SealedBlob   *SealedBlob
+	UsedPassword bool
+}
+
+// UnsealWorkflow performs the complete unsealing workflow
+// This consolidates the common pattern used in run, reveal, and reseal commands
+func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*UnsealWorkflowResult, error) {
+	// Read sealed blob from NVRAM
+	sealedData, err := ReadFromNVRAM(tpmDev, nvramIndex)
+	if err != nil {
+		return nil, HandleNVRAMNotFoundError(err, debug)
+	}
+
+	// Unmarshal sealed blob
+	sealedBlob, err := UnmarshalSealedBlob(sealedData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
+	}
+
+	// Get current PCR values for comparison
+	currentPCRValues, err := GetCurrentPCRValues(tpmDev, sealedBlob, debug)
+	if err != nil {
+		return nil, err
 	}
 
 	// Check if PCR values match

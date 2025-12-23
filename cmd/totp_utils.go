@@ -95,7 +95,8 @@ func PrintKIRAError(err error) {
 		fmt.Println("- PCR values changed between checking and using them")
 		fmt.Println("- The system state has changed since sealing")
 		fmt.Println()
-		fmt.Println("To fix this, run: tpm2-kira reseal")
+
+		fmt.Println("To see detailed PCR values and fix this, run: tpm2-kira reseal")
 		fmt.Println("(Make sure you have the password that was set during initial sealing)")
 	} else {
 		fmt.Println(FormatKIRAError(err))

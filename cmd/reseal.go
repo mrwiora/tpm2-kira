@@ -91,10 +91,20 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 				return fmt.Errorf("failed to unseal with password: %w", err)
 			}
 		} else if IsTPMPolicyFailure(err) {
-			// Check if it's a TPM policy failure - this can happen when PCR values
-			// changed between the time we checked them and when we tried to use the policy
+			// TPM policy failure - show PCR comparison and use password authentication
 			fmt.Printf("TPM policy verification failed - using password authentication\n")
 			fmt.Printf("This typically happens when PCR values change during the unsealing process\n")
+
+			// Get sealed blob data to show PCR comparison
+			sealedData, readErr := ReadFromNVRAM(tpmDev, nvramIndex)
+			if readErr == nil {
+				if blob, unmarshalErr := UnmarshalSealedBlob(sealedData); unmarshalErr == nil {
+					if currentPCRs, pcrErr := GetCurrentPCRValues(tpmDev, blob, debug); pcrErr == nil {
+						fmt.Println("\n=== PCR Mismatch Details ===")
+						DisplayPCRMismatch(blob.GetPCRIndices(), blob.GetPCRDigestValues(), currentPCRs)
+					}
+				}
+			}
 			fmt.Println()
 
 			// Use password authentication for unsealing

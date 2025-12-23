@@ -46,11 +46,58 @@ func Run(tpmPath, pcrsStr string, nvramIndex uint32, debug bool) {
 			if err != nil {
 				currentTime := time.Now()
 
-				// Show error message if it's new or 30 seconds have passed
-				if lastError == nil || lastError.Error() != err.Error() || currentTime.Sub(lastErrorTime) >= 30*time.Second {
-					PrintKIRAError(err)
-					lastError = err
-					lastErrorTime = currentTime
+				// Check if it's a TPM policy failure and show PCR details if possible
+				if IsTPMPolicyFailure(err) {
+					// Show error message if it's new or 30 seconds have passed
+					if lastError == nil || lastError.Error() != err.Error() || currentTime.Sub(lastErrorTime) >= 30*time.Second {
+						// Try to show PCR details for policy failures
+						tpmDev2, err2 := transport.OpenTPM(tpmPath)
+						if err2 == nil {
+							CleanupTPM(tpmDev2, debug)
+							if sealedData, readErr := ReadFromNVRAM(tpmDev2, nvramIndex); readErr == nil {
+								if blob, unmarshalErr := UnmarshalSealedBlob(sealedData); unmarshalErr == nil {
+									if currentPCRs, pcrErr := GetCurrentPCRValues(tpmDev2, blob, debug); pcrErr == nil {
+										fmt.Println(FormatKIRAError(err))
+										fmt.Println()
+										fmt.Println("=== PCR Mismatch Details ===")
+										DisplayPCRMismatch(blob.GetPCRIndices(), blob.GetPCRDigestValues(), currentPCRs)
+										fmt.Println()
+										fmt.Println("To fix this, run: tpm2-kira reseal")
+										fmt.Println("(Make sure you have the password that was set during initial sealing)")
+										tpmDev2.Close()
+										lastError = err
+										lastErrorTime = currentTime
+									} else {
+										tpmDev2.Close()
+										PrintKIRAError(err)
+										lastError = err
+										lastErrorTime = currentTime
+									}
+								} else {
+									tpmDev2.Close()
+									PrintKIRAError(err)
+									lastError = err
+									lastErrorTime = currentTime
+								}
+							} else {
+								tpmDev2.Close()
+								PrintKIRAError(err)
+								lastError = err
+								lastErrorTime = currentTime
+							}
+						} else {
+							PrintKIRAError(err)
+							lastError = err
+							lastErrorTime = currentTime
+						}
+					}
+				} else {
+					// Show error message if it's new or 30 seconds have passed
+					if lastError == nil || lastError.Error() != err.Error() || currentTime.Sub(lastErrorTime) >= 30*time.Second {
+						PrintKIRAError(err)
+						lastError = err
+						lastErrorTime = currentTime
+					}
 				}
 
 				// Wait 30 seconds before retrying
