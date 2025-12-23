@@ -346,18 +346,36 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*Unsea
 		return nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
 
-	// Read current PCR values
-	pcrRead := tpm2.PCRRead{
-		PCRSelectionIn: CreatePCRSelection(sealedBlob.GetPCRIndices()),
-	}
+	// Get current PCR values for comparison - use eventlog calculation if original was eventlog-based
+	var currentPCRValues []tpm2.TPM2BDigest
+	if sealedBlob.EventlogBased {
+		// Calculate current PCRs from eventlog
+		calc := NewEventlogPCRCalculator(tpmDev, sealedBlob.GetPCRIndices(), debug)
+		calculatedPCRs, _, err := calc.CalculatePCRsFromEventlog()
+		if err != nil {
+			return nil, fmt.Errorf("failed to calculate current PCRs from eventlog: %w", err)
+		}
 
-	pcrReadResp, err := pcrRead.Execute(tpmDev)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read PCRs: %w", err)
+		// Convert to TPM2BDigest format
+		currentPCRValues = make([]tpm2.TPM2BDigest, len(sealedBlob.GetPCRIndices()))
+		for i, pcrIndex := range sealedBlob.GetPCRIndices() {
+			currentPCRValues[i] = tpm2.TPM2BDigest{Buffer: calculatedPCRs[pcrIndex]}
+		}
+	} else {
+		// Use current TPM PCR values
+		pcrRead := tpm2.PCRRead{
+			PCRSelectionIn: CreatePCRSelection(sealedBlob.GetPCRIndices()),
+		}
+
+		pcrReadResp, err := pcrRead.Execute(tpmDev)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read PCRs: %w", err)
+		}
+		currentPCRValues = pcrReadResp.PCRValues.Digests
 	}
 
 	// Check if PCR values match
-	pcrMatch := VerifyPCRValues(sealedBlob.GetPCRDigestValues(), pcrReadResp.PCRValues.Digests)
+	pcrMatch := VerifyPCRValues(sealedBlob.GetPCRDigestValues(), currentPCRValues)
 
 	if !pcrMatch {
 		// Create structured PCR mismatch error with detailed information
@@ -366,8 +384,8 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*Unsea
 			expectedDigests[i] = digest.Buffer
 		}
 
-		currentDigests := make([][]byte, len(pcrReadResp.PCRValues.Digests))
-		for i, digest := range pcrReadResp.PCRValues.Digests {
+		currentDigests := make([][]byte, len(currentPCRValues))
+		for i, digest := range currentPCRValues {
 			currentDigests[i] = digest.Buffer
 		}
 

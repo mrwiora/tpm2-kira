@@ -46,17 +46,6 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 		return fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
 
-	// Read current PCR values
-	pcrRead := tpm2.PCRRead{
-		PCRSelectionIn: CreatePCRSelection(sealedBlob.GetPCRIndices()),
-	}
-
-	pcrReadResp, err := pcrRead.Execute(tpmDev)
-	if err != nil {
-		tpmDev.Close()
-		return fmt.Errorf("failed to read PCRs: %w", err)
-	}
-
 	// Resealing requires password for recovery
 	if !sealedBlob.HasPassword {
 		tpmDev.Close()
@@ -74,49 +63,41 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 		return fmt.Errorf("incorrect password")
 	}
 
-	// Determine which authentication method to use for unsealing
-	pcrMatch := VerifyPCRValues(sealedBlob.GetPCRDigestValues(), pcrReadResp.PCRValues.Digests)
-	usePassword := false
-
-	if !pcrMatch {
-		// PCRs don't match - use password authentication
-		usePassword = true
-		fmt.Printf("PCR values changed - using password authentication\n")
-
-		// Always display PCR mismatch information
-		fmt.Println("\n=== PCR Mismatch Details ===")
-		DisplayPCRMismatch(sealedBlob.GetPCRIndices(), sealedBlob.GetPCRDigestValues(), pcrReadResp.PCRValues.Digests)
-		fmt.Println()
-	}
-
-	// Create primary key
-	primaryKey, err := CreatePrimaryKey(tpmDev)
+	// Perform unsealing workflow using the same logic as reveal/run commands
+	result, err := UnsealWorkflow(tpmDev, nvramIndex, debug)
 	if err != nil {
-		tpmDev.Close()
-		return err
+		// Check if it's a PCR mismatch - we can handle this with password
+		if pcrErr, ok := err.(*PCRMismatchError); ok {
+			fmt.Printf("PCR values changed - using password authentication\n")
+			fmt.Println("\n=== PCR Mismatch Details ===")
+
+			// Convert byte slices to TPM2BDigest format
+			expectedDigests := make([]tpm2.TPM2BDigest, len(pcrErr.ExpectedDigests))
+			for i, digest := range pcrErr.ExpectedDigests {
+				expectedDigests[i] = tpm2.TPM2BDigest{Buffer: digest}
+			}
+			currentDigests := make([]tpm2.TPM2BDigest, len(pcrErr.CurrentDigests))
+			for i, digest := range pcrErr.CurrentDigests {
+				currentDigests[i] = tpm2.TPM2BDigest{Buffer: digest}
+			}
+
+			DisplayPCRMismatch(pcrErr.PCRIndices, expectedDigests, currentDigests)
+			fmt.Println()
+
+			// Use password authentication for unsealing
+			result, err = UnsealWithPassword(tpmDev, nvramIndex, password, debug)
+			if err != nil {
+				tpmDev.Close()
+				return fmt.Errorf("failed to unseal with password: %w", err)
+			}
+		} else {
+			tpmDev.Close()
+			return fmt.Errorf("failed to unseal data: %w", err)
+		}
 	}
 
-	// Load sealed object
-	loadedObject, err := LoadSealedObject(tpmDev, primaryKey, sealedBlob)
-	if err != nil {
-		FlushHandle(tpmDev, primaryKey.ObjectHandle)
-		tpmDev.Close()
-		return err
-	}
-
-	// Unseal the data
-	usePCRPolicy := !usePassword
-	unsealedData, err := UnsealData(tpmDev, loadedObject, sealedBlob, password, usePCRPolicy)
-	if err != nil {
-		FlushHandle(tpmDev, loadedObject.ObjectHandle)
-		FlushHandle(tpmDev, primaryKey.ObjectHandle)
-		tpmDev.Close()
-		return err
-	}
-
-	// Flush all handles to free TPM object memory before closing device
-	FlushHandle(tpmDev, loadedObject.ObjectHandle)
-	FlushHandle(tpmDev, primaryKey.ObjectHandle)
+	unsealedData := result.UnsealedData
+	sealedBlob = result.SealedBlob
 
 	// Close TPM device before calling sealData (which will open it again)
 	tpmDev.Close()
@@ -179,4 +160,50 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 	fmt.Printf("Data size: %d bytes\n", len(unsealedData))
 
 	return nil
+}
+
+// UnsealWithPassword performs unsealing using password authentication when PCRs don't match
+func UnsealWithPassword(tpmDev transport.TPM, nvramIndex uint32, password string, debug bool) (*UnsealWorkflowResult, error) {
+	// Read sealed blob from NVRAM
+	sealedData, err := ReadFromNVRAM(tpmDev, nvramIndex)
+	if err != nil {
+		return nil, HandleNVRAMNotFoundError(err, debug)
+	}
+
+	// Unmarshal sealed blob
+	sealedBlob, err := UnmarshalSealedBlob(sealedData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
+	}
+
+	// Verify password
+	if !VerifyPasswordArgon2(password, sealedBlob.PasswordHash, sealedBlob.PasswordSalt) {
+		return nil, fmt.Errorf("incorrect password")
+	}
+
+	// Create primary key
+	primaryKey, err := CreatePrimaryKey(tpmDev)
+	if err != nil {
+		return nil, err
+	}
+	defer FlushHandle(tpmDev, primaryKey.ObjectHandle)
+
+	// Load sealed object
+	loadedObject, err := LoadSealedObject(tpmDev, primaryKey, sealedBlob)
+	if err != nil {
+		return nil, err
+	}
+	defer FlushHandle(tpmDev, loadedObject.ObjectHandle)
+
+	// Unseal the data using password authentication (not PCR policy)
+	unsealedData, err := UnsealData(tpmDev, loadedObject, sealedBlob, password, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return &UnsealWorkflowResult{
+		UnsealedData: unsealedData,
+		SealedBlob:   sealedBlob,
+		UsedPassword: true,
+	}, nil
 }
