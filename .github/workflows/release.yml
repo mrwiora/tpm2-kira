@@ -144,8 +144,19 @@ jobs:
       - name: Validate package contents
         run: |
           cd packaging/archlinux
+
+          # Find the main package (not debug package)
+          MAIN_PACKAGE=$(ls tpm2-kira-*.pkg.tar.zst | grep -v debug | head -1)
+          if [[ -z "$MAIN_PACKAGE" ]]; then
+            echo "ERROR: No main package found"
+            ls -la *.pkg.tar.zst
+            exit 1
+          fi
+
+          echo "Validating package: $MAIN_PACKAGE"
           mkdir -p /tmp/package-test
-          tar -xf *.pkg.tar.zst -C /tmp/package-test
+          tar -xf "$MAIN_PACKAGE" -C /tmp/package-test
+
           if [[ ! -x "/tmp/package-test/usr/bin/tpm2-kira" ]]; then
             echo "ERROR: tpm2-kira binary not found or not executable"
             exit 1
@@ -154,14 +165,15 @@ jobs:
       - name: Create package checksum
         run: |
           cd packaging/archlinux
-          sha256sum *.pkg.tar.zst > package-checksums.txt
+          # Only checksum the main package, not debug packages
+          sha256sum tpm2-kira-*.pkg.tar.zst | grep -v debug > package-checksums.txt || sha256sum tpm2-kira-*.pkg.tar.zst > package-checksums.txt
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4
         with:
           name: archlinux-package
           path: |
-            packaging/archlinux/*.pkg.tar.zst
+            packaging/archlinux/tpm2-kira-[0-9]*.pkg.tar.zst
             packaging/archlinux/package-checksums.txt
           retention-days: 1
 
@@ -187,8 +199,14 @@ jobs:
       - name: Get package filename
         id: package_info
         run: |
-          PACKAGE_FILE=$(ls archlinux/*.pkg.tar.zst | head -1 | xargs basename)
+          # Get the main package filename (not debug package)
+          PACKAGE_FILE=$(ls archlinux/tpm2-kira-*.pkg.tar.zst | grep -v debug | head -1 | xargs basename)
+          if [[ -z "$PACKAGE_FILE" ]]; then
+            # Fallback if no debug filtering needed
+            PACKAGE_FILE=$(ls archlinux/tpm2-kira-*.pkg.tar.zst | head -1 | xargs basename)
+          fi
           echo "PACKAGE_FILE=${PACKAGE_FILE}" >> $GITHUB_OUTPUT
+          echo "Selected package: ${PACKAGE_FILE}"
 
       - name: Create release
         env:
