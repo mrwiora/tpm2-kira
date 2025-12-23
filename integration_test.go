@@ -126,6 +126,10 @@ func setupSoftwareTPM(t *testing.T) (tpmPath string, cleanup func()) {
 
 // runTPMKira executes the tpm2-kira binary with given arguments
 func runTPMKira(t *testing.T, tpmPath string, args ...string) (stdout, stderr string, err error) {
+	return runTPMKiraWithInput(t, tpmPath, "", args...)
+}
+
+func runTPMKiraWithInput(t *testing.T, tpmPath string, stdinInput string, args ...string) (stdout, stderr string, err error) {
 	// Build args: command comes first, then flags
 	// args[0] should be the command (seal, reveal, nvram, etc.)
 	allArgs := []string{}
@@ -173,6 +177,11 @@ func runTPMKira(t *testing.T, tpmPath string, args ...string) (stdout, stderr st
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
 
+	// If stdin input is provided, set it up
+	if stdinInput != "" {
+		cmd.Stdin = strings.NewReader(stdinInput)
+	}
+
 	err = cmd.Run()
 	stdout = outBuf.String()
 	stderr = errBuf.String()
@@ -191,12 +200,12 @@ func TestSealBasic(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
 
-	// Test seal with password
-	stdout, stderr, err := runTPMKira(t, tpmPath,
+	// Test seal with password - provide password via stdin with confirmation
+	stdinInput := testPassword + "\n" + testPassword + "\n"
+	stdout, stderr, err := runTPMKiraWithInput(t, tpmPath, stdinInput,
 		"seal",
 		"--nvram", testNVRAMIndex,
 		"--pcrs", testPCRs,
-		"--password", testPassword,
 	)
 
 	if err != nil {
@@ -218,8 +227,9 @@ func TestSealWithoutPassword(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
 
-	// Test seal without password
-	stdout, stderr, err := runTPMKira(t, tpmPath,
+	// Test seal without password - provide empty password (just press enter)
+	stdinInput := "\n"
+	stdout, stderr, err := runTPMKiraWithInput(t, tpmPath, stdinInput,
 		"seal",
 		"--nvram", testNVRAMIndex,
 		"--pcrs", testPCRs,
@@ -245,11 +255,11 @@ func TestSealAndReveal(t *testing.T) {
 	defer cleanup()
 
 	// Seal with password
-	_, _, err := runTPMKira(t, tpmPath,
+	stdinInput := testPassword + "\n" + testPassword + "\n"
+	_, _, err := runTPMKiraWithInput(t, tpmPath, stdinInput,
 		"seal",
 		"--nvram", testNVRAMIndex,
 		"--pcrs", testPCRs,
-		"--password", testPassword,
 	)
 
 	if err != nil {
@@ -302,11 +312,11 @@ func TestSealWithCustomPCRs(t *testing.T) {
 			// Use different NVRAM index for each test
 			nvramIndex := fmt.Sprintf("0x0180%04d", time.Now().UnixNano()%10000)
 
-			stdout, stderr, err := runTPMKira(t, tpmPath,
+			stdinInput := testPassword + "\n" + testPassword + "\n"
+			stdout, stderr, err := runTPMKiraWithInput(t, tpmPath, stdinInput,
 				"seal",
 				"--nvram", nvramIndex,
 				"--pcrs", tc.pcrs,
-				"--password", testPassword,
 			)
 
 			if err != nil {
@@ -331,11 +341,11 @@ func TestNVRAMDelete(t *testing.T) {
 	defer cleanup()
 
 	// First, seal some data
-	_, _, err := runTPMKira(t, tpmPath,
+	stdinInput := testPassword + "\n" + testPassword + "\n"
+	_, _, err := runTPMKiraWithInput(t, tpmPath, stdinInput,
 		"seal",
 		"--nvram", testNVRAMIndex,
 		"--pcrs", testPCRs,
-		"--password", testPassword,
 	)
 
 	if err != nil {
@@ -445,10 +455,10 @@ func TestNVRAMList(t *testing.T) {
 	}
 
 	// Seal some data
-	_, _, err = runTPMKira(t, tpmPath,
+	stdinInput := testPassword + "\n" + testPassword + "\n"
+	_, _, err = runTPMKiraWithInput(t, tpmPath, stdinInput,
 		"seal",
 		"--nvram", testNVRAMIndex,
-		"--password", testPassword,
 	)
 
 	if err != nil {
@@ -480,10 +490,10 @@ func TestSealTwiceOverwrites(t *testing.T) {
 	defer cleanup()
 
 	// First seal with password1
-	stdout1, _, err := runTPMKira(t, tpmPath,
+	stdinInput1 := "password1" + "\n" + "password1" + "\n"
+	stdout1, _, err := runTPMKiraWithInput(t, tpmPath, stdinInput1,
 		"seal",
 		"--nvram", testNVRAMIndex,
-		"--password", "password1",
 	)
 
 	if err != nil {
@@ -504,10 +514,10 @@ func TestSealTwiceOverwrites(t *testing.T) {
 	}
 
 	// Second seal with password2 - should succeed and overwrite
-	stdout2, _, err := runTPMKira(t, tpmPath,
+	stdinInput2 := "password2" + "\n" + "password2" + "\n"
+	stdout2, _, err := runTPMKiraWithInput(t, tpmPath, stdinInput2,
 		"seal",
 		"--nvram", testNVRAMIndex,
-		"--password", "password2",
 	)
 
 	if err != nil {
@@ -558,11 +568,11 @@ func TestInfo(t *testing.T) {
 	defer cleanup()
 
 	// Seal with password
-	_, _, err := runTPMKira(t, tpmPath,
+	stdinInput := testPassword + "\n" + testPassword + "\n"
+	_, _, err := runTPMKiraWithInput(t, tpmPath, stdinInput,
 		"seal",
 		"--nvram", testNVRAMIndex,
 		"--pcrs", testPCRs,
-		"--password", testPassword,
 	)
 
 	if err != nil {
@@ -602,10 +612,10 @@ func TestInfoJSON(t *testing.T) {
 	defer cleanup()
 
 	// Seal with password
-	_, _, err := runTPMKira(t, tpmPath,
+	stdinInput := testPassword + "\n" + testPassword + "\n"
+	_, _, err := runTPMKiraWithInput(t, tpmPath, stdinInput,
 		"seal",
 		"--nvram", testNVRAMIndex,
-		"--password", testPassword,
 	)
 
 	if err != nil {
@@ -652,10 +662,10 @@ func TestDebugFlag(t *testing.T) {
 	defer cleanup()
 
 	// Seal with debug flag
-	stdout, stderr, err := runTPMKira(t, tpmPath,
+	stdinInput := testPassword + "\n" + testPassword + "\n"
+	stdout, stderr, err := runTPMKiraWithInput(t, tpmPath, stdinInput,
 		"seal",
 		"--nvram", testNVRAMIndex,
-		"--password", testPassword,
 		"--debug",
 	)
 
@@ -678,11 +688,17 @@ func TestDebugFlag(t *testing.T) {
 func testSeal(t *testing.T, tpmPath, nvramIndex, password string) {
 	t.Helper()
 	args := []string{"seal", "--nvram", nvramIndex, "--pcrs", testPCRs}
+
+	var stdinInput string
 	if password != "" {
-		args = append(args, "--password", password)
+		// Provide password + confirmation
+		stdinInput = password + "\n" + password + "\n"
+	} else {
+		// Just press enter for no password
+		stdinInput = "\n"
 	}
 
-	stdout, stderr, err := runTPMKira(t, tpmPath, args...)
+	stdout, stderr, err := runTPMKiraWithInput(t, tpmPath, stdinInput, args...)
 	if err != nil {
 		t.Fatalf("✗ Seal failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
 	}
@@ -752,10 +768,10 @@ func testRun(t *testing.T, tpmPath, nvramIndex string, duration time.Duration) {
 // testResealSuccess performs a reseal operation that should succeed
 func testResealSuccess(t *testing.T, tpmPath, nvramIndex, password string) {
 	t.Helper()
-	stdout, stderr, err := runTPMKira(t, tpmPath,
+	stdinInput := password + "\n"
+	stdout, stderr, err := runTPMKiraWithInput(t, tpmPath, stdinInput,
 		"reseal",
 		"--nvram", nvramIndex,
-		"--password", password,
 	)
 	if err != nil {
 		t.Fatalf("✗ Reseal failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
@@ -770,11 +786,15 @@ func testResealSuccess(t *testing.T, tpmPath, nvramIndex, password string) {
 func testResealFailure(t *testing.T, tpmPath, nvramIndex, password, expectedError string) {
 	t.Helper()
 	args := []string{"reseal", "--nvram", nvramIndex}
+
+	var stdinInput string
 	if password != "" {
-		args = append(args, "--password", password)
+		stdinInput = password + "\n"
+	} else {
+		stdinInput = "\n"
 	}
 
-	stdout, stderr, err := runTPMKira(t, tpmPath, args...)
+	stdout, stderr, err := runTPMKiraWithInput(t, tpmPath, stdinInput, args...)
 	combinedOutput := stdout + stderr
 
 	// Check if command failed OR if the expected error message is present
@@ -936,11 +956,11 @@ func TestCompleteWorkflow(t *testing.T) {
 
 	// Seal with password and custom PCRs - must be successful
 	t.Log("Testing seal with password and PCR 0,23...")
-	stdout, stderr, err := runTPMKira(t, tpmPath,
+	stdinInput := testPassword + "\n" + testPassword + "\n"
+	stdout, stderr, err := runTPMKiraWithInput(t, tpmPath, stdinInput,
 		"seal",
 		"--nvram", nvramIndexPCR,
 		"--pcrs", customPCRs,
-		"--password", testPassword,
 	)
 	if err != nil {
 		t.Fatalf("✗ Seal with custom PCRs failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
@@ -965,7 +985,8 @@ func TestCompleteWorkflow(t *testing.T) {
 
 	// Reveal after PCR change - must fail
 	t.Log("Testing reveal after PCR extension (should fail)...")
-	stdout, stderr, err = runTPMKira(t, tpmPath,
+	// Provide empty stdin input so password prompt fails
+	stdout, stderr, err = runTPMKiraWithInput(t, tpmPath, "",
 		"reveal",
 		"--nvram", nvramIndexPCR,
 	)
@@ -1006,10 +1027,10 @@ func TestCompleteWorkflow(t *testing.T) {
 
 	// Reseal with wrong password - must fail
 	t.Log("Testing reseal with wrong password (should fail)...")
-	stdout, stderr, err = runTPMKira(t, tpmPath,
+	stdinInput = wrongPassword + "\n"
+	stdout, stderr, err = runTPMKiraWithInput(t, tpmPath, stdinInput,
 		"reseal",
 		"--nvram", nvramIndexPCR,
-		"--password", wrongPassword,
 	)
 
 	// Check if command failed OR if error message indicates wrong password
@@ -1028,10 +1049,10 @@ func TestCompleteWorkflow(t *testing.T) {
 
 	// Test reseal with correct password to verify PCR mismatch information is shown
 	t.Log("Testing reseal with correct password to verify PCR mismatch display...")
-	stdout, stderr, err = runTPMKira(t, tpmPath,
+	stdinInput = testPassword + "\n"
+	stdout, stderr, err = runTPMKiraWithInput(t, tpmPath, stdinInput,
 		"reseal",
 		"--nvram", nvramIndexPCR,
-		"--password", testPassword,
 	)
 	if err != nil {
 		t.Fatalf("✗ Reseal with correct password failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)

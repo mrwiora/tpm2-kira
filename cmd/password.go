@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"syscall"
@@ -20,6 +21,10 @@ func ReadPasswordFromStdin(prompt string) (string, error) {
 		reader := bufio.NewReader(os.Stdin)
 		password, err := reader.ReadString('\n')
 		if err != nil {
+			// Handle EOF as empty input
+			if err == io.EOF {
+				return "", nil
+			}
 			return "", fmt.Errorf("failed to read password from stdin: %w", err)
 		}
 		return strings.TrimSpace(password), nil
@@ -88,6 +93,11 @@ func ReadExistingPasswordFromStdin() (string, error) {
 	password, err := ReadPasswordFromStdin("Enter password: ")
 	if err != nil {
 		return "", err
+	}
+
+	// If password is empty (EOF or just enter), treat as authentication failure
+	if password == "" {
+		return "", fmt.Errorf("password required but none provided")
 	}
 
 	return password, nil
