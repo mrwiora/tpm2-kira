@@ -24,22 +24,8 @@ func Reveal(tpmPath, pcrsStr string, nvramIndex uint32, debug bool) {
 	result, err := UnsealWorkflow(tpmDev, nvramIndex, debug)
 	if err != nil {
 		// Check if it's a TPM policy failure and show PCR details if possible
-		if IsTPMPolicyFailure(err) {
-			// Read sealed blob to show PCR comparison
-			if sealedData, readErr := ReadFromNVRAM(tpmDev, nvramIndex); readErr == nil {
-				if blob, unmarshalErr := UnmarshalSealedBlob(sealedData); unmarshalErr == nil {
-					if currentPCRs, pcrErr := GetCurrentPCRValues(tpmDev, blob, debug); pcrErr == nil {
-						fmt.Println(FormatKIRAError(err))
-						fmt.Println()
-						fmt.Println("=== PCR Mismatch Details ===")
-						DisplayPCRMismatch(blob.GetPCRIndices(), blob.GetPCRDigestValues(), currentPCRs)
-						fmt.Println()
-						fmt.Println("To fix this, run: tpm2-kira reseal")
-						fmt.Println("(Make sure you have the password that was set during initial sealing)")
-						os.Exit(0)
-					}
-				}
-			}
+		if HandleTPMPolicyFailureWithPCRDetails(err, tpmDev, nvramIndex, debug) {
+			os.Exit(0)
 		}
 		PrintKIRAError(err)
 		os.Exit(0)
@@ -76,22 +62,8 @@ func RevealPlain(tpmPath, pcrsStr string, nvramIndex uint32, debug bool) {
 	result, err := UnsealWorkflow(tpmDev, nvramIndex, debug)
 	if err != nil {
 		// Check if it's a TPM policy failure and show PCR details if possible
-		if IsTPMPolicyFailure(err) {
-			// Read sealed blob to show PCR comparison
-			if sealedData, readErr := ReadFromNVRAM(tpmDev, nvramIndex); readErr == nil {
-				if blob, unmarshalErr := UnmarshalSealedBlob(sealedData); unmarshalErr == nil {
-					if currentPCRs, pcrErr := GetCurrentPCRValues(tpmDev, blob, debug); pcrErr == nil {
-						fmt.Println(FormatKIRAError(err))
-						fmt.Println()
-						fmt.Println("=== PCR Mismatch Details ===")
-						DisplayPCRMismatch(blob.GetPCRIndices(), blob.GetPCRDigestValues(), currentPCRs)
-						fmt.Println()
-						fmt.Println("To fix this, run: tpm2-kira reseal")
-						fmt.Println("(Make sure you have the password that was set during initial sealing)")
-						os.Exit(0)
-					}
-				}
-			}
+		if HandleTPMPolicyFailureWithPCRDetails(err, tpmDev, nvramIndex, debug) {
+			os.Exit(0)
 		}
 		PrintKIRAError(err)
 		os.Exit(0)

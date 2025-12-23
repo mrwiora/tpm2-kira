@@ -337,6 +337,47 @@ func IsTPMPolicyFailure(err error) bool {
 		strings.Contains(errStr, "session 1): a policy check failed")
 }
 
+// ShowPCRDetails attempts to show PCR comparison details for the given error
+// Returns true if PCR details were successfully shown, false otherwise
+func ShowPCRDetails(tpmDev transport.TPM, nvramIndex uint32, debug bool) bool {
+	// Try to show PCR details
+	sealedData, readErr := ReadFromNVRAM(tpmDev, nvramIndex)
+	if readErr == nil {
+		blob, unmarshalErr := UnmarshalSealedBlob(sealedData)
+		if unmarshalErr == nil {
+			currentPCRs, pcrErr := GetCurrentPCRValues(tpmDev, blob, debug)
+			if pcrErr == nil {
+				fmt.Println("=== PCR Mismatch Details ===")
+				DisplayPCRMismatch(blob.GetPCRIndices(), blob.GetPCRDigestValues(), currentPCRs)
+				fmt.Println()
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// HandleTPMPolicyFailureWithPCRDetails handles TPM policy failures by showing PCR details and guidance
+// Returns true if the error was handled (is a TPM policy failure), false otherwise
+func HandleTPMPolicyFailureWithPCRDetails(err error, tpmDev transport.TPM, nvramIndex uint32, debug bool) bool {
+	if !IsTPMPolicyFailure(err) {
+		return false
+	}
+
+	// Show the original error
+	fmt.Println(FormatKIRAError(err))
+	fmt.Println()
+
+	// Show PCR details
+	ShowPCRDetails(tpmDev, nvramIndex, debug)
+
+	// Show guidance
+	fmt.Println("To fix this, run: tpm2-kira reseal")
+	fmt.Println("(Make sure you have the password that was set during initial sealing)")
+
+	return true
+}
+
 // GetCurrentPCRValues retrieves current PCR values for comparison, handling both eventlog-based and direct TPM reads
 func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug bool) ([]tpm2.TPM2BDigest, error) {
 	var currentPCRValues []tpm2.TPM2BDigest
