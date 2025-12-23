@@ -74,6 +74,7 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	eventlogBased := fs.Bool("eventlog-based", false, "Calculate PCR values from eventlog instead of reading current values")
 
 	fs.Parse(args)
 
@@ -84,7 +85,7 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 		os.Exit(0)
 	}
 
-	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), password, *debug); err != nil {
+	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), password, *debug, *eventlogBased); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -234,6 +235,7 @@ GLOBAL OPTIONS:
 
 SEAL OPTIONS:
   --pcrs INDICES     PCR indices (default: 0,2,7)
+  --eventlog-based   Calculate PCR values from TPM eventlog instead of current values
                      You will be prompted for an optional password
 
 RESEAL OPTIONS:
@@ -251,6 +253,8 @@ NVRAM SUBCOMMANDS:
 
 EXAMPLES:
   tpm2-kira seal
+  tpm2-kira seal --eventlog-based
+  tpm2-kira seal --pcrs "0,2,4,7" --eventlog-based
   tpm2-kira reveal
   tpm2-kira reveal-plain
   tpm2-kira run
