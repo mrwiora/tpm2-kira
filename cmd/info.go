@@ -98,7 +98,22 @@ func InfoWithFormat(tpmPath, pcrsStr string, nvramIndex uint32, debug bool, json
 		fmt.Printf("  Public Blob Size: %d bytes\n", len(sealedBlob.Public))
 		fmt.Printf("  Private Blob Size: %d bytes\n\n", len(sealedBlob.Private))
 
-		fmt.Printf("PCR Digest Values (at seal time):\n")
+		fmt.Printf("PCR Calculation Method:\n")
+		if sealedBlob.EventlogBased {
+			fmt.Printf("  Method: Eventlog-based calculation\n")
+			if sealedBlob.EventlogInfo != nil {
+				fmt.Printf("  Eventlog Path: %s\n", sealedBlob.EventlogInfo.EventlogPath)
+				fmt.Printf("  Eventlog Hash: %s...\n", sealedBlob.EventlogInfo.EventlogHash[:min(16, len(sealedBlob.EventlogInfo.EventlogHash))])
+				fmt.Printf("  Calculation Time: %s\n", sealedBlob.EventlogInfo.CalculationTime)
+				fmt.Printf("  Total Events: %d\n", sealedBlob.EventlogInfo.TotalEvents)
+				fmt.Printf("  Processed Events: %d\n", sealedBlob.EventlogInfo.ProcessedEvents)
+			}
+		} else {
+			fmt.Printf("  Method: Current PCR values (at seal time)\n")
+		}
+		fmt.Printf("\n")
+
+		fmt.Printf("PCR Digest Values:\n")
 		for _, pcrDigest := range sealedBlob.PCRDigests {
 			fmt.Printf("  PCR %d: (%d bytes)\n", pcrDigest.Index, len(pcrDigest.Digest.Buffer))
 			fmt.Printf("    Value: %x\n", pcrDigest.Digest.Buffer)

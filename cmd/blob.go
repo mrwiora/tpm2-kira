@@ -19,16 +19,27 @@ type PCRDigestPair struct {
 	Digest tpm2.TPM2BDigest `json:"digest"` // PCR digest value at seal time
 }
 
+// EventlogInfo represents metadata about eventlog-based PCR calculation
+type EventlogInfo struct {
+	EventlogPath    string `json:"eventlog_path"`    // Path to eventlog file used
+	EventlogHash    string `json:"eventlog_hash"`    // SHA256 hash of eventlog file for verification
+	CalculationTime string `json:"calculation_time"` // When calculation was performed
+	TotalEvents     int    `json:"total_events"`     // Total number of events processed
+	ProcessedEvents int    `json:"processed_events"` // Number of events that extended PCRs
+}
+
 // SealedBlob represents the complete sealed data structure
 type SealedBlob struct {
-	Version      uint32          `json:"version"`       // Blob format version
-	AppVersion   string          `json:"app_version"`   // Application version that created this blob
-	Public       []byte          `json:"public"`        // TPM public key blob
-	Private      []byte          `json:"private"`       // TPM private key blob
-	PCRDigests   []PCRDigestPair `json:"pcr_digests"`   // PCR indices with their digest values
-	HasPassword  bool            `json:"has_password"`  // Whether password fallback is enabled
-	PasswordHash []byte          `json:"password_hash"` // Argon2id hash of password (for verification)
-	PasswordSalt []byte          `json:"password_salt"` // Salt for password hashing
+	Version       uint32          `json:"version"`        // Blob format version
+	AppVersion    string          `json:"app_version"`    // Application version that created this blob
+	Public        []byte          `json:"public"`         // TPM public key blob
+	Private       []byte          `json:"private"`        // TPM private key blob
+	PCRDigests    []PCRDigestPair `json:"pcr_digests"`    // PCR indices with their digest values
+	HasPassword   bool            `json:"has_password"`   // Whether password fallback is enabled
+	PasswordHash  []byte          `json:"password_hash"`  // Argon2id hash of password (for verification)
+	PasswordSalt  []byte          `json:"password_salt"`  // Salt for password hashing
+	EventlogBased bool            `json:"eventlog_based"` // Whether PCR values were calculated from eventlog
+	EventlogInfo  *EventlogInfo   `json:"eventlog_info"`  // Eventlog calculation metadata (if eventlog_based is true)
 }
 
 // GetPCRIndices returns a slice of PCR indices from the PCRDigests
@@ -62,12 +73,21 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 		4 + // number of PCR digests
 		1 + // hasPassword flag
 		4 + len(sb.PasswordHash) + // password hash length + hash
-		4 + len(sb.PasswordSalt) // password salt length + salt
+		4 + len(sb.PasswordSalt) + // password salt length + salt
+		1 // eventlogBased flag
 
 	// Calculate PCR digest pair size
 	for _, pcrDigest := range sb.PCRDigests {
 		size += 4 + // PCR index
 			2 + len(pcrDigest.Digest.Buffer) // 2 bytes for length + digest data
+	}
+
+	// Calculate eventlog info size (if present)
+	if sb.EventlogBased && sb.EventlogInfo != nil {
+		size += 4 + len(sb.EventlogInfo.EventlogPath) + // eventlog path
+			4 + len(sb.EventlogInfo.EventlogHash) + // eventlog hash
+			4 + len(sb.EventlogInfo.CalculationTime) + // calculation time
+			4 + 4 // total events + processed events (4 bytes each)
 	}
 
 	buf := make([]byte, size)
@@ -130,6 +150,41 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 	if len(sb.PasswordSalt) > 0 {
 		copy(buf[offset:], sb.PasswordSalt)
 		offset += len(sb.PasswordSalt)
+	}
+
+	// Eventlog information
+	if sb.EventlogBased {
+		buf[offset] = 1
+	} else {
+		buf[offset] = 0
+	}
+	offset++
+
+	// Eventlog metadata (only if eventlog-based and info is available)
+	if sb.EventlogBased && sb.EventlogInfo != nil {
+		// Eventlog path
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(sb.EventlogInfo.EventlogPath)))
+		offset += 4
+		copy(buf[offset:], sb.EventlogInfo.EventlogPath)
+		offset += len(sb.EventlogInfo.EventlogPath)
+
+		// Eventlog hash
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(sb.EventlogInfo.EventlogHash)))
+		offset += 4
+		copy(buf[offset:], sb.EventlogInfo.EventlogHash)
+		offset += len(sb.EventlogInfo.EventlogHash)
+
+		// Calculation time
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(sb.EventlogInfo.CalculationTime)))
+		offset += 4
+		copy(buf[offset:], sb.EventlogInfo.CalculationTime)
+		offset += len(sb.EventlogInfo.CalculationTime)
+
+		// Total events and processed events
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(sb.EventlogInfo.TotalEvents))
+		offset += 4
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(sb.EventlogInfo.ProcessedEvents))
+		offset += 4
 	}
 
 	return buf, nil
@@ -258,6 +313,62 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 		offset += int(passwordSaltLen)
 	}
 
+	// Eventlog information (if there's more data)
+	if offset < len(data) {
+		sb.EventlogBased = data[offset] == 1
+		offset++
+
+		// Read eventlog metadata if eventlog-based and there's more data
+		if sb.EventlogBased && offset < len(data) {
+			sb.EventlogInfo = &EventlogInfo{}
+
+			// Eventlog path
+			if offset+4 > len(data) {
+				return nil, fmt.Errorf("data too short for eventlog path length")
+			}
+			pathLen := binary.LittleEndian.Uint32(data[offset:])
+			offset += 4
+			if offset+int(pathLen) > len(data) {
+				return nil, fmt.Errorf("data too short for eventlog path")
+			}
+			sb.EventlogInfo.EventlogPath = string(data[offset : offset+int(pathLen)])
+			offset += int(pathLen)
+
+			// Eventlog hash
+			if offset+4 > len(data) {
+				return nil, fmt.Errorf("data too short for eventlog hash length")
+			}
+			hashLen := binary.LittleEndian.Uint32(data[offset:])
+			offset += 4
+			if offset+int(hashLen) > len(data) {
+				return nil, fmt.Errorf("data too short for eventlog hash")
+			}
+			sb.EventlogInfo.EventlogHash = string(data[offset : offset+int(hashLen)])
+			offset += int(hashLen)
+
+			// Calculation time
+			if offset+4 > len(data) {
+				return nil, fmt.Errorf("data too short for calculation time length")
+			}
+			timeLen := binary.LittleEndian.Uint32(data[offset:])
+			offset += 4
+			if offset+int(timeLen) > len(data) {
+				return nil, fmt.Errorf("data too short for calculation time")
+			}
+			sb.EventlogInfo.CalculationTime = string(data[offset : offset+int(timeLen)])
+			offset += int(timeLen)
+
+			// Total and processed events
+			if offset+8 > len(data) {
+				return nil, fmt.Errorf("data too short for event counts")
+			}
+			sb.EventlogInfo.TotalEvents = int(binary.LittleEndian.Uint32(data[offset:]))
+			offset += 4
+			sb.EventlogInfo.ProcessedEvents = int(binary.LittleEndian.Uint32(data[offset:]))
+			offset += 4
+		}
+	}
+
 	return sb, nil
 }
 
@@ -279,27 +390,31 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 
 	// Create a JSON-friendly structure
 	type SealedBlobJSON struct {
-		Version      uint32          `json:"version"`
-		AppVersion   string          `json:"app_version"`
-		Public       string          `json:"public_hex"`
-		PublicSize   int             `json:"public_size"`
-		Private      string          `json:"private_hex"`
-		PrivateSize  int             `json:"private_size"`
-		PCRDigests   []PCRDigestJSON `json:"pcr_digests"`
-		HasPassword  bool            `json:"has_password"`
-		PasswordHash string          `json:"password_hash_hex,omitempty"`
-		PasswordSalt string          `json:"password_salt_hex,omitempty"`
+		Version       uint32          `json:"version"`
+		AppVersion    string          `json:"app_version"`
+		Public        string          `json:"public_hex"`
+		PublicSize    int             `json:"public_size"`
+		Private       string          `json:"private_hex"`
+		PrivateSize   int             `json:"private_size"`
+		PCRDigests    []PCRDigestJSON `json:"pcr_digests"`
+		HasPassword   bool            `json:"has_password"`
+		PasswordHash  string          `json:"password_hash_hex,omitempty"`
+		PasswordSalt  string          `json:"password_salt_hex,omitempty"`
+		EventlogBased bool            `json:"eventlog_based"`
+		EventlogInfo  *EventlogInfo   `json:"eventlog_info,omitempty"`
 	}
 
 	jsonBlob := SealedBlobJSON{
-		Version:     sb.Version,
-		AppVersion:  sb.AppVersion,
-		Public:      hex.EncodeToString(sb.Public),
-		PublicSize:  len(sb.Public),
-		Private:     hex.EncodeToString(sb.Private),
-		PrivateSize: len(sb.Private),
-		PCRDigests:  pcrDigests,
-		HasPassword: sb.HasPassword,
+		Version:       sb.Version,
+		AppVersion:    sb.AppVersion,
+		Public:        hex.EncodeToString(sb.Public),
+		PublicSize:    len(sb.Public),
+		Private:       hex.EncodeToString(sb.Private),
+		PrivateSize:   len(sb.Private),
+		PCRDigests:    pcrDigests,
+		HasPassword:   sb.HasPassword,
+		EventlogBased: sb.EventlogBased,
+		EventlogInfo:  sb.EventlogInfo,
 	}
 
 	if len(sb.PasswordHash) > 0 {
