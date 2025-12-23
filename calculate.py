@@ -59,6 +59,13 @@ def calculate_all_pcrs(eventlog_file):
             pcr_events[pcr_index].append(event)
 
         # Check for StartupLocality event (PCR0, EV_NO_ACTION with "StartupLocality" signature)
+        # According to the TCG PC Client Platform Firmware Profile specification,
+        # PCR0 is initialized with a locality value instead of all zeros.
+        # The StartupLocality event is a special EV_NO_ACTION event that contains:
+        #   - 16 bytes: ASCII string "StartupLocality" (hex: 537461727475704c6f63616c697479)
+        #   - 1 byte: the locality value (typically 0x03)
+        # This event does NOT extend PCR0; it only sets the initial value.
+        # The initial PCR0 value becomes: 31 zero bytes + locality byte
         if (
             pcr_index == 0
             and event.get("EventType") == "EV_NO_ACTION"
@@ -85,7 +92,11 @@ def calculate_all_pcrs(eventlog_file):
         print("=" * 70)
 
         # Initial PCR value (32 bytes of zeros for SHA256)
-        # PCR0 is special: it's initialized with the locality value in the last byte
+        # IMPORTANT: PCR0 is special according to the TCG specification.
+        # Unlike other PCRs that start with all zeros, PCR0 starts with the locality
+        # value in the last byte. This locality value is obtained from the
+        # StartupLocality EV_NO_ACTION event in the event log.
+        # Reference: See pcr-oracle (github.com/okirch/pcr-oracle) eventlog.c and pcr.c
         if pcr_index == 0 and pcr0_locality is not None:
             pcr = b"\x00" * 31 + bytes([pcr0_locality])
             print(f"Initial PCR value (31 zeros + locality {pcr0_locality}):")
@@ -167,6 +178,12 @@ def calculate_single_pcr(eventlog_file, pcr_index):
     eventlog = yaml.safe_load(cleaned_yaml)
 
     # Check for StartupLocality event for PCR0
+    # According to the TCG PC Client Platform Firmware Profile specification,
+    # PCR0 is initialized with a locality value instead of all zeros.
+    # The StartupLocality event is a special EV_NO_ACTION event that contains:
+    #   - 16 bytes: ASCII string "StartupLocality" (hex: 537461727475704c6f63616c697479)
+    #   - 1 byte: the locality value (typically 0x03)
+    # This event does NOT extend PCR0; it only sets the initial value.
     pcr0_locality = None
     if pcr_index == 0:
         for event in eventlog["events"]:
@@ -183,7 +200,11 @@ def calculate_single_pcr(eventlog_file, pcr_index):
                     break
 
     # Initial PCR value (32 bytes of zeros for SHA256)
-    # PCR0 is special: it's initialized with the locality value in the last byte
+    # IMPORTANT: PCR0 is special according to the TCG specification.
+    # Unlike other PCRs that start with all zeros, PCR0 starts with the locality
+    # value in the last byte. This locality value is obtained from the
+    # StartupLocality EV_NO_ACTION event in the event log.
+    # Reference: See pcr-oracle (github.com/okirch/pcr-oracle) eventlog.c and pcr.c
     if pcr_index == 0 and pcr0_locality is not None:
         pcr = b"\x00" * 31 + bytes([pcr0_locality])
         print(f"Initial PCR value (31 zeros + locality {pcr0_locality}):")
