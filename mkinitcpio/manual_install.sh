@@ -141,7 +141,8 @@ show_instructions() {
     echo "   HOOKS=(base systemd autodetect modconf block filesystems keyboard fsck sd-tpm2-kira)"
     echo
     echo "2. Seal a TOTP secret (if not already done):"
-    echo "   tpm2-kira seal --password \"your-secure-password\""
+    echo "   tpm2-kira seal"
+    echo "   (You will be prompted to enter an optional password securely)"
     echo
     echo "3. Rebuild initramfs:"
     echo "   mkinitcpio -P"

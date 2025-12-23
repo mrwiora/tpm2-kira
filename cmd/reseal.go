@@ -64,7 +64,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 
 	if password == "" {
 		tpmDev.Close()
-		return fmt.Errorf("resealing requires --password flag to ensure recovery is possible after future PCR changes")
+		return fmt.Errorf("resealing requires a password to ensure recovery is possible after future PCR changes")
 	}
 
 	// Always verify the password for reseal operations

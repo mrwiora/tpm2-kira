@@ -86,7 +86,8 @@ HOOKS=(base udev autodetect modconf block keyboard tpm2-kira encrypt filesystems
 # 3. Prerequisites:
 #    - Install tpm2-kira binary: make install
 #    - Install hooks: make install-mkinitcpio
-#    - Seal TOTP secret: tpm2-kira seal --password "your-password"
+#    - Seal TOTP secret: tpm2-kira seal
+#      (You will be prompted to enter an optional password securely)
 #
 # 4. Hook Behavior:
 #    - Both hooks automatically run 'tpm2-kira run' during boot

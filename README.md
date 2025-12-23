@@ -74,8 +74,8 @@ tpm2-kira info
 
 ### 2. Initial Setup
 ```bash
-# Seal your first TOTP secret
-tpm2-kira seal --password "your-secure-password"
+# Seal your first TOTP secret (you'll be prompted for an optional password)
+tpm2-kira seal
 
 # The command will display a QR code and secret key
 # Add this to your authenticator app (Google Authenticator, Authy, etc.)
@@ -111,14 +111,14 @@ sudo mkinitcpio -P
 
 ### Custom Configuration
 ```bash
-# Use different TPM device
-tpm2-kira --tpm /dev/tpmrm0 seal --password "password"
+# Use different TPM device (you'll be prompted for password)
+tpm2-kira --tpm /dev/tpmrm0 seal
 
-# Use different NVRAM index
-tpm2-kira --nvram 0x01800001 seal --password "password"
+# Use different NVRAM index (you'll be prompted for password)
+tpm2-kira --nvram 0x01800001 seal
 
-# Use different PCRs
-tpm2-kira seal --pcrs "0,1,2,3,7" --password "password"
+# Use different PCRs (you'll be prompted for password)
+tpm2-kira seal --pcrs "0,1,2,3,7"
 ```
 
 ## Common Workflows
@@ -128,8 +128,8 @@ tpm2-kira seal --pcrs "0,1,2,3,7" --password "password"
 # Generate TOTP code
 tpm2-kira reveal
 
-# If PCRs changed (after system update):
-tpm2-kira reveal --password "your-password"
+# If PCRs changed (after system update), you'll be prompted for password:
+tpm2-kira reveal
 ```
 
 ### After System Updates
@@ -137,19 +137,19 @@ tpm2-kira reveal --password "your-password"
 # Check if reseal is needed
 tpm2-kira info
 
-# Reseal with current PCR values
-tpm2-kira reseal --password "your-password"
+# Reseal with current PCR values (you'll be prompted for password)
+tpm2-kira reseal
 ```
 
 ### Backup and Recovery
 ```bash
 # Display secret information for backup
-tpm2-kira info --password "your-password"
+tpm2-kira info
 
 # After hardware change or TPM reset:
 # 1. Import secret to new authenticator app
-# 2. Seal new secret:
-tpm2-kira seal --password "your-password"
+# 2. Seal new secret (you'll be prompted for password):
+tpm2-kira seal
 ```
 
 ## Troubleshooting
@@ -178,10 +178,10 @@ tpm2_getcap properties-fixed
 tpm2_pcrread
 
 # Compare with sealed values
-tpm2-kira info --password "your-password"
+tpm2-kira info
 
-# Reseal after updates
-tpm2-kira reseal --password "your-password"
+# Reseal after updates (you'll be prompted for password)
+tpm2-kira reseal
 ```
 
 ### General Debugging
