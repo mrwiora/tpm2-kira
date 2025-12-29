@@ -6,6 +6,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/google/go-tpm/tpm2"
@@ -105,7 +106,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		{
 			name: "Basic blob with password",
 			blob: &SealedBlob{
-				Version:    1,
+				Version:    2,
 				AppVersion: "test-1.0.0",
 				Public:     []byte("public-data-test"),
 				Private:    []byte("private-data-test"),
@@ -113,15 +114,13 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest0")}},
 					{Index: 2, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest2")}},
 				},
-				HasPassword:  true,
-				PasswordHash: []byte("hash-value"),
-				PasswordSalt: []byte("salt-value"),
+				HasPassword: true,
 			},
 		},
 		{
 			name: "Blob without password",
 			blob: &SealedBlob{
-				Version:    1,
+				Version:    2,
 				AppVersion: "test-0.0.0",
 				Public:     []byte("public"),
 				Private:    []byte("private"),
@@ -134,7 +133,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		{
 			name: "Blob with multiple PCRs",
 			blob: &SealedBlob{
-				Version:    1,
+				Version:    2,
 				AppVersion: "v2.0.0",
 				Public:     []byte("test-public-key-data"),
 				Private:    []byte("test-private-key-data"),
@@ -145,20 +144,39 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					{Index: 4, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				},
-				HasPassword:  true,
-				PasswordHash: make([]byte, 32),
-				PasswordSalt: make([]byte, 16),
+				HasPassword: true,
 			},
 		},
 		{
 			name: "Blob with empty PCR list",
 			blob: &SealedBlob{
-				Version:     1,
+				Version:     2,
 				AppVersion:  "test",
 				Public:      []byte("pub"),
 				Private:     []byte("priv"),
 				PCRDigests:  []PCRDigestPair{},
 				HasPassword: false,
+			},
+		},
+		{
+			name: "Blob with eventlog info",
+			blob: &SealedBlob{
+				Version:    2,
+				AppVersion: "test-eventlog",
+				Public:     []byte("public-data"),
+				Private:    []byte("private-data"),
+				PCRDigests: []PCRDigestPair{
+					{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				},
+				HasPassword:   true,
+				EventlogBased: true,
+				EventlogInfo: &EventlogInfo{
+					EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
+					EventlogHash:    "abc123def456",
+					CalculationTime: "2024-01-01T00:00:00Z",
+					TotalEvents:     100,
+					ProcessedEvents: 50,
+				},
 			},
 		},
 	}
@@ -178,8 +196,8 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			}
 
 			// Compare
-			if unmarshaled.Version != tt.blob.Version {
-				t.Errorf("Version mismatch: expected %d, got %d", tt.blob.Version, unmarshaled.Version)
+			if unmarshaled.Version != CurrentBlobVersion {
+				t.Errorf("Version should be %d, got %d", CurrentBlobVersion, unmarshaled.Version)
 			}
 
 			if unmarshaled.AppVersion != tt.blob.AppVersion {
@@ -213,12 +231,24 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 				t.Errorf("HasPassword mismatch: expected %v, got %v", tt.blob.HasPassword, unmarshaled.HasPassword)
 			}
 
-			if !bytes.Equal(unmarshaled.PasswordHash, tt.blob.PasswordHash) {
-				t.Errorf("PasswordHash mismatch")
+			if unmarshaled.EventlogBased != tt.blob.EventlogBased {
+				t.Errorf("EventlogBased mismatch: expected %v, got %v", tt.blob.EventlogBased, unmarshaled.EventlogBased)
 			}
 
-			if !bytes.Equal(unmarshaled.PasswordSalt, tt.blob.PasswordSalt) {
-				t.Errorf("PasswordSalt mismatch")
+			if tt.blob.EventlogInfo != nil {
+				if unmarshaled.EventlogInfo == nil {
+					t.Errorf("EventlogInfo should not be nil")
+				} else {
+					if unmarshaled.EventlogInfo.EventlogPath != tt.blob.EventlogInfo.EventlogPath {
+						t.Errorf("EventlogPath mismatch")
+					}
+					if unmarshaled.EventlogInfo.EventlogHash != tt.blob.EventlogInfo.EventlogHash {
+						t.Errorf("EventlogHash mismatch")
+					}
+					if unmarshaled.EventlogInfo.TotalEvents != tt.blob.EventlogInfo.TotalEvents {
+						t.Errorf("TotalEvents mismatch")
+					}
+				}
 			}
 		})
 	}
@@ -227,28 +257,43 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 // TestUnmarshalSealedBlobInvalid tests unmarshaling invalid data
 func TestUnmarshalSealedBlobInvalid(t *testing.T) {
 	tests := []struct {
-		name string
-		data []byte
+		name        string
+		data        []byte
+		errContains string
 	}{
 		{
-			name: "Too short",
-			data: []byte{0x01, 0x00},
+			name:        "Too short",
+			data:        []byte{0x01, 0x00},
+			errContains: "data too short",
 		},
 		{
-			name: "Invalid version",
+			name: "Version 1 incompatible",
 			data: func() []byte {
 				d := make([]byte, 20)
-				d[0] = 0xFF // invalid version
+				d[0] = 0x01 // version 1
 				return d
 			}(),
+			errContains: "restart sealing process due to incompatibility",
+		},
+		{
+			name: "Version 99 incompatible",
+			data: func() []byte {
+				d := make([]byte, 20)
+				d[0] = 0x63 // version 99
+				return d
+			}(),
+			errContains: "restart sealing process due to incompatibility",
 		},
 		{
 			name: "Truncated data",
 			data: []byte{
-				0x01, 0x00, 0x00, 0x00, // version 1
+				0x02, 0x00, 0x00, 0x00, // version 2
 				0x05, 0x00, 0x00, 0x00, // app version length 5
-				// missing app version data
+				0x00, 0x00, 0x00, 0x00, // padding to pass minimum length check
+				0x00, 0x00, 0x00, 0x00, // more padding
+				// missing app version data (only 0 bytes, need 5)
 			},
+			errContains: "data too short", // generic truncation error
 		},
 	}
 
@@ -257,8 +302,40 @@ func TestUnmarshalSealedBlobInvalid(t *testing.T) {
 			_, err := UnmarshalSealedBlob(tt.data)
 			if err == nil {
 				t.Errorf("Expected error unmarshaling invalid data, got nil")
+				return
+			}
+			if !strings.Contains(err.Error(), tt.errContains) {
+				t.Errorf("Expected error containing %q, got: %v", tt.errContains, err)
 			}
 		})
+	}
+}
+
+// TestUnmarshalIncompatibleVersion tests the specific incompatibility error message
+func TestUnmarshalIncompatibleVersion(t *testing.T) {
+	// Create data with version 1
+	data := make([]byte, 20)
+	data[0] = 0x01 // version 1
+	data[1] = 0x00
+	data[2] = 0x00
+	data[3] = 0x00
+
+	_, err := UnmarshalSealedBlob(data)
+	if err == nil {
+		t.Fatal("Expected error for incompatible version, got nil")
+	}
+
+	expectedMsg := "tpm2-kira: restart sealing process due to incompatibility"
+	if !strings.Contains(err.Error(), expectedMsg) {
+		t.Errorf("Expected error message to contain %q, got: %v", expectedMsg, err)
+	}
+
+	// Verify it mentions the version numbers
+	if !strings.Contains(err.Error(), "found version 1") {
+		t.Errorf("Expected error to mention found version 1, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "requires version 2") {
+		t.Errorf("Expected error to mention requires version 2, got: %v", err)
 	}
 }
 
@@ -406,16 +483,14 @@ func TestPcrsToBitmapBytes(t *testing.T) {
 // TestSealedBlobMarshalJSON tests JSON serialization
 func TestSealedBlobMarshalJSON(t *testing.T) {
 	blob := &SealedBlob{
-		Version:    1,
+		Version:    2,
 		AppVersion: "test-1.0.0",
 		Public:     []byte{0x01, 0x02, 0x03},
 		Private:    []byte{0x04, 0x05, 0x06},
 		PCRDigests: []PCRDigestPair{
 			{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA, 0xBB}}},
 		},
-		HasPassword:  true,
-		PasswordHash: []byte{0x11, 0x22},
-		PasswordSalt: []byte{0x33, 0x44},
+		HasPassword: true,
 	}
 
 	jsonData, err := blob.MarshalJSON()
@@ -433,13 +508,23 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 		`"private_hex"`,
 		`"pcr_digests"`,
 		`"has_password"`,
-		`"password_hash_hex"`,
-		`"password_salt_hex"`,
 	}
 
 	for _, field := range expectedFields {
 		if !bytes.Contains(jsonData, []byte(field)) {
 			t.Errorf("Expected JSON to contain %s, got: %s", field, jsonStr)
+		}
+	}
+
+	// Ensure password_hash_hex and password_salt_hex are NOT present
+	unexpectedFields := []string{
+		`"password_hash_hex"`,
+		`"password_salt_hex"`,
+	}
+
+	for _, field := range unexpectedFields {
+		if bytes.Contains(jsonData, []byte(field)) {
+			t.Errorf("JSON should NOT contain %s, got: %s", field, jsonStr)
 		}
 	}
 
@@ -450,64 +535,6 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 
 	if !bytes.Contains(jsonData, []byte("aabb")) { // PCR digest hex
 		t.Error("PCR digest not hex encoded correctly")
-	}
-}
-
-// TestHashPasswordArgon2 tests password hashing
-func TestHashPasswordArgon2(t *testing.T) {
-	password := "test-password-123"
-
-	hash1, salt1, err := HashPasswordArgon2(password)
-	if err != nil {
-		t.Fatalf("HashPasswordArgon2 failed: %v", err)
-	}
-
-	if len(hash1) == 0 {
-		t.Error("Hash should not be empty")
-	}
-
-	if len(salt1) == 0 {
-		t.Error("Salt should not be empty")
-	}
-
-	// Hash again - should get different salt and hash
-	hash2, salt2, err := HashPasswordArgon2(password)
-	if err != nil {
-		t.Fatalf("Second HashPasswordArgon2 failed: %v", err)
-	}
-
-	if bytes.Equal(salt1, salt2) {
-		t.Error("Salts should be different for each hash")
-	}
-
-	if bytes.Equal(hash1, hash2) {
-		t.Error("Hashes should be different with different salts")
-	}
-}
-
-// TestVerifyPasswordArgon2 tests password verification
-func TestVerifyPasswordArgon2(t *testing.T) {
-	password := "correct-password"
-	wrongPassword := "wrong-password"
-
-	hash, salt, err := HashPasswordArgon2(password)
-	if err != nil {
-		t.Fatalf("HashPasswordArgon2 failed: %v", err)
-	}
-
-	// Test correct password
-	if !VerifyPasswordArgon2(password, hash, salt) {
-		t.Error("Correct password should verify successfully")
-	}
-
-	// Test wrong password
-	if VerifyPasswordArgon2(wrongPassword, hash, salt) {
-		t.Error("Wrong password should not verify")
-	}
-
-	// Test empty password
-	if VerifyPasswordArgon2("", hash, salt) {
-		t.Error("Empty password should not verify")
 	}
 }
 
@@ -537,7 +564,7 @@ func TestCreatePCRSelection(t *testing.T) {
 func TestSealedBlobRoundTrip(t *testing.T) {
 	// Create a blob with realistic TPM data sizes
 	original := &SealedBlob{
-		Version:    1,
+		Version:    2,
 		AppVersion: "v1.2.3",
 		Public:     make([]byte, 100), // Typical public key size
 		Private:    make([]byte, 150), // Typical private key size
@@ -547,9 +574,7 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 			{Index: 4, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 		},
-		HasPassword:  true,
-		PasswordHash: make([]byte, 32),
-		PasswordSalt: make([]byte, 16),
+		HasPassword: true,
 	}
 
 	// Fill with test data
@@ -580,8 +605,8 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 	}
 
 	// Verify all fields match
-	if restored.Version != original.Version {
-		t.Error("Version mismatch")
+	if restored.Version != CurrentBlobVersion {
+		t.Errorf("Version should be %d, got %d", CurrentBlobVersion, restored.Version)
 	}
 	if restored.AppVersion != original.AppVersion {
 		t.Error("AppVersion mismatch")
@@ -595,4 +620,69 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 	if restored.HasPassword != original.HasPassword {
 		t.Error("HasPassword mismatch")
 	}
+}
+
+// TestIsTPMAuthError tests TPM authentication error detection
+func TestIsTPMAuthError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "TPM_RC_AUTH_FAIL",
+			err:      &testError{msg: "TPM returned: TPM_RC_AUTH_FAIL"},
+			expected: true,
+		},
+		{
+			name:     "TPM_RC_BAD_AUTH",
+			err:      &testError{msg: "error: TPM_RC_BAD_AUTH"},
+			expected: true,
+		},
+		{
+			name:     "authorization failure",
+			err:      &testError{msg: "authorization failure during unseal"},
+			expected: true,
+		},
+		{
+			name:     "unrelated error",
+			err:      &testError{msg: "failed to open TPM device"},
+			expected: false,
+		},
+		{
+			name:     "auth fail lowercase",
+			err:      &testError{msg: "auth fail"},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsTPMAuthError(tt.err)
+			if result != tt.expected {
+				t.Errorf("Expected %v, got %v for error: %v", tt.expected, result, tt.err)
+			}
+		})
+	}
+}
+
+// TestCurrentBlobVersion verifies the constant is set correctly
+func TestCurrentBlobVersion(t *testing.T) {
+	if CurrentBlobVersion != 2 {
+		t.Errorf("CurrentBlobVersion should be 2, got %d", CurrentBlobVersion)
+	}
+}
+
+// testError is a simple error type for testing
+type testError struct {
+	msg string
+}
+
+func (e *testError) Error() string {
+	return e.msg
 }

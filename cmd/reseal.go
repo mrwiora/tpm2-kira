@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -57,11 +58,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 		return fmt.Errorf("resealing requires a password to ensure recovery is possible after future PCR changes")
 	}
 
-	// Always verify the password for reseal operations
-	if !VerifyPasswordArgon2(password, sealedBlob.PasswordHash, sealedBlob.PasswordSalt) {
-		tpmDev.Close()
-		return fmt.Errorf("incorrect password")
-	}
+	// Password validation is now done by TPM during unseal (no more Argon2 pre-check)
 
 	// Perform unsealing workflow using the same logic as reveal/run commands
 	result, err := UnsealWorkflow(tpmDev, nvramIndex, debug)
@@ -84,10 +81,14 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 			DisplayPCRMismatch(pcrErr.PCRIndices, expectedDigests, currentDigests)
 			fmt.Println()
 
-			// Use password authentication for unsealing
+			// Use password authentication for unsealing (TPM validates the password)
 			result, err = UnsealWithPassword(tpmDev, nvramIndex, password, debug)
 			if err != nil {
 				tpmDev.Close()
+				// Convert TPM auth errors to user-friendly message
+				if IsTPMAuthError(err) {
+					return fmt.Errorf("incorrect password")
+				}
 				return fmt.Errorf("failed to unseal with password: %w", err)
 			}
 		} else if IsTPMPolicyFailure(err) {
@@ -99,10 +100,14 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 			// Show PCR details using centralized helper function
 			ShowPCRDetails(tpmDev, nvramIndex, debug)
 
-			// Use password authentication for unsealing
+			// Use password authentication for unsealing (TPM validates the password)
 			result, err = UnsealWithPassword(tpmDev, nvramIndex, password, debug)
 			if err != nil {
 				tpmDev.Close()
+				// Convert TPM auth errors to user-friendly message
+				if IsTPMAuthError(err) {
+					return fmt.Errorf("incorrect password")
+				}
 				return fmt.Errorf("failed to unseal with password: %w", err)
 			}
 		} else {
@@ -178,6 +183,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 }
 
 // UnsealWithPassword performs unsealing using password authentication when PCRs don't match
+// Password validation is done solely by the TPM - no software pre-validation
 func UnsealWithPassword(tpmDev transport.TPM, nvramIndex uint32, password string, debug bool) (*UnsealWorkflowResult, error) {
 	// Read sealed blob from NVRAM
 	sealedData, err := ReadFromNVRAM(tpmDev, nvramIndex)
@@ -191,9 +197,9 @@ func UnsealWithPassword(tpmDev transport.TPM, nvramIndex uint32, password string
 		return nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
 
-	// Verify password
-	if !VerifyPasswordArgon2(password, sealedBlob.PasswordHash, sealedBlob.PasswordSalt) {
-		return nil, fmt.Errorf("incorrect password")
+	// Check if password protection was enabled during sealing
+	if !sealedBlob.HasPassword {
+		return nil, fmt.Errorf("sealed data has no password fallback configured")
 	}
 
 	// Create primary key
@@ -211,8 +217,13 @@ func UnsealWithPassword(tpmDev transport.TPM, nvramIndex uint32, password string
 	defer FlushHandle(tpmDev, loadedObject.ObjectHandle)
 
 	// Unseal the data using password authentication (not PCR policy)
+	// The TPM validates the password directly - no software pre-validation needed
 	unsealedData, err := UnsealData(tpmDev, loadedObject, sealedBlob, password, false)
 	if err != nil {
+		// Check if this is an authentication error and provide clearer message
+		if IsTPMAuthError(err) {
+			return nil, fmt.Errorf("TPM rejected password: incorrect password")
+		}
 		return nil, err
 	}
 
@@ -221,4 +232,17 @@ func UnsealWithPassword(tpmDev transport.TPM, nvramIndex uint32, password string
 		SealedBlob:   sealedBlob,
 		UsedPassword: true,
 	}, nil
+}
+
+// IsTPMAuthError checks if an error is a TPM authentication/authorization failure
+func IsTPMAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "tpm_rc_auth_fail") ||
+		strings.Contains(errStr, "tpm_rc_bad_auth") ||
+		strings.Contains(errStr, "authorization failure") ||
+		strings.Contains(errStr, "auth fail") ||
+		strings.Contains(errStr, "bad auth")
 }

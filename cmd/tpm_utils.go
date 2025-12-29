@@ -1,14 +1,12 @@
 package cmd
 
 import (
-	"crypto/rand"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
-	"golang.org/x/crypto/argon2"
 )
 
 // CleanupTPM flushes all transient handles and sessions to free TPM memory
@@ -244,66 +242,6 @@ func ComputePolicyDigest(tpmDev transport.TPM, pcrs []int) (tpm2.TPM2BDigest, er
 	}
 
 	return pgd.PolicyDigest, nil
-}
-
-// HashPasswordArgon2 hashes a password using Argon2id
-func HashPasswordArgon2(password string) (hash []byte, salt []byte, err error) {
-	if password == "" {
-		return nil, nil, nil
-	}
-
-	// Generate a random salt
-	salt = make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, nil, fmt.Errorf("failed to generate salt: %w", err)
-	}
-
-	// Argon2id parameters (balanced security/performance)
-	const (
-		timeCost    = 3         // Number of iterations
-		memoryCost  = 64 * 1024 // 64 MB
-		parallelism = 4         // Number of threads
-		keyLength   = 32        // Output hash length
-	)
-
-	// Generate hash using Argon2id
-	hash = argon2.IDKey([]byte(password), salt, timeCost, memoryCost, parallelism, keyLength)
-
-	return hash, salt, nil
-}
-
-// VerifyPasswordArgon2 verifies a password against an Argon2id hash
-func VerifyPasswordArgon2(password string, hash []byte, salt []byte) bool {
-	if len(hash) == 0 {
-		return password == ""
-	}
-
-	if len(salt) == 0 {
-		return false
-	}
-
-	// Argon2id parameters (must match those used in HashPasswordArgon2)
-	const (
-		timeCost    = 3
-		memoryCost  = 64 * 1024
-		parallelism = 4
-		keyLength   = 32
-	)
-
-	// Compute hash with the same parameters
-	computed := argon2.IDKey([]byte(password), salt, timeCost, memoryCost, parallelism, keyLength)
-
-	// Constant-time comparison to prevent timing attacks
-	if len(computed) != len(hash) {
-		return false
-	}
-
-	var result byte
-	for i := range computed {
-		result |= computed[i] ^ hash[i]
-	}
-
-	return result == 0
 }
 
 // HandleNVRAMNotFoundError converts NVRAM errors to user-friendly messages
