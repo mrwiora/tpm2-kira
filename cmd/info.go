@@ -85,14 +85,11 @@ func InfoWithFormat(tpmPath, pcrsStr string, nvramIndex uint32, debug bool, json
 		fmt.Printf("Password Fallback:\n")
 		if sealedBlob.HasPassword {
 			fmt.Printf("  Enabled: Yes\n")
-			fmt.Printf("  Hash Algorithm: Argon2id\n")
-			fmt.Printf("  Hash Length: %d bytes\n", len(sealedBlob.PasswordHash))
-			fmt.Printf("  Salt Length: %d bytes\n", len(sealedBlob.PasswordSalt))
-			fmt.Printf("  Password Hash: %x...\n", sealedBlob.PasswordHash[:min(16, len(sealedBlob.PasswordHash))])
-			fmt.Printf("  Salt: %x...\n\n", sealedBlob.PasswordSalt[:min(8, len(sealedBlob.PasswordSalt))])
+			fmt.Printf("  Validation: TPM-based (no hash stored in NVRAM)\n")
 		} else {
-			fmt.Printf("  Enabled: No\n\n")
+			fmt.Printf("  Enabled: No\n")
 		}
+		fmt.Printf("\n")
 
 		fmt.Printf("TPM Objects:\n")
 		fmt.Printf("  Public Blob Size: %d bytes\n", len(sealedBlob.Public))

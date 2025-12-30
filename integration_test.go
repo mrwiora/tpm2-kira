@@ -926,10 +926,11 @@ func TestCompleteWorkflow(t *testing.T) {
 	t.Log("Testing reseal without password parameter (should fail)...")
 	testResealFailure(t, tpmPath, nvramIndexWithPassword, "", "password")
 
-	// Reseal with incorrect password - must fail
-	t.Log("Testing reseal with incorrect password (should fail)...")
+	// Reseal with incorrect password when PCRs match - succeeds because PCR policy is satisfied
+	t.Log("Testing reseal with incorrect password when PCRs match (should succeed - PCR policy satisfied)...")
 	wrongPassword := "wrong-password-123"
-	testResealFailure(t, tpmPath, nvramIndexWithPassword, wrongPassword, "incorrect password")
+	testResealSuccess(t, tpmPath, nvramIndexWithPassword, wrongPassword)
+	t.Log("✓ Reseal succeeded with wrong password because PCRs match (PCR policy satisfied)")
 
 	// Reseal with correct password - must be successful
 	t.Log("Testing reseal with correct password...")
@@ -1025,8 +1026,8 @@ func TestCompleteWorkflow(t *testing.T) {
 	}
 	t.Log("✓ PCR mismatch information correctly displayed")
 
-	// Reseal with wrong password - must fail
-	t.Log("Testing reseal with wrong password (should fail)...")
+	// Reseal with wrong password after PCR mismatch - must fail (password auth required)
+	t.Log("Testing reseal with wrong password after PCR extension (should fail - password auth required)...")
 	stdinInput = wrongPassword + "\n"
 	stdout, stderr, err = runTPMKiraWithInput(t, tpmPath, stdinInput,
 		"reseal",
@@ -1040,12 +1041,12 @@ func TestCompleteWorkflow(t *testing.T) {
 		strings.Contains(combinedOutput, "incorrect")
 
 	if err == nil && !hasPasswordError {
-		t.Fatalf("✗ Reseal with wrong password should have failed\nStdout: %s\nStderr: %s", stdout, stderr)
+		t.Fatalf("✗ Reseal with wrong password should have failed when PCRs don't match\nStdout: %s\nStderr: %s", stdout, stderr)
 	}
 	if !strings.Contains(stderr, "incorrect password") && !strings.Contains(stdout, "incorrect password") {
 		t.Logf("Expected 'incorrect password' error, got: %s", stderr)
 	}
-	t.Log("✓ Reseal correctly failed with wrong password")
+	t.Log("✓ Reseal correctly failed with wrong password when PCRs don't match")
 
 	// Test reseal with correct password to verify PCR mismatch information is shown
 	t.Log("Testing reseal with correct password to verify PCR mismatch display...")

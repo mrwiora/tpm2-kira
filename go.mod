@@ -5,7 +5,6 @@ go 1.25
 require (
 	github.com/google/go-attestation v0.6.0
 	github.com/google/go-tpm v0.9.7
-	golang.org/x/crypto v0.46.0
 	golang.org/x/term v0.38.0
 )
 

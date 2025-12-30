@@ -178,25 +178,14 @@ func sealDataWithMode(tpmPath, pcrsStr string, nvramIndex uint32, dataToSeal []b
 		return err
 	}
 
-	// Prepare sealed blob
-	var passwordHash, passwordSalt []byte
-	if password != "" {
-		var err error
-		passwordHash, passwordSalt, err = HashPasswordArgon2(password)
-		if err != nil {
-			return fmt.Errorf("failed to hash password: %w", err)
-		}
-	}
-
+	// Prepare sealed blob (Version 2: no password hash/salt stored)
 	sealedBlob := &SealedBlob{
-		Version:       1,
+		Version:       2,
 		AppVersion:    AppVersion,
 		Public:        createRsp.Public,
 		Private:       createRsp.Private,
 		PCRDigests:    pcrDigests,
 		HasPassword:   password != "",
-		PasswordHash:  passwordHash,
-		PasswordSalt:  passwordSalt,
 		EventlogBased: eventlogBased,
 		EventlogInfo:  eventlogInfo,
 	}
@@ -227,7 +216,7 @@ func sealDataWithMode(tpmPath, pcrsStr string, nvramIndex uint32, dataToSeal []b
 			fmt.Printf("PCR calculation: current values\n")
 		}
 		if password != "" {
-			fmt.Printf("Password fallback: enabled\n")
+			fmt.Printf("Password fallback: enabled (TPM-validated)\n")
 		} else {
 			fmt.Printf("Password fallback: disabled\n")
 		}
