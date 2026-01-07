@@ -136,39 +136,33 @@ func runReveal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 	fs := flag.NewFlagSet("reveal", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
-	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
 
-	cmd.Reveal(*tpm, *pcrs, uint32(*nvram), *debug)
+	cmd.RevealCommand(*tpm, *debug, false)
 }
 
 func runRevealPlain(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("reveal-plain", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
-	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
 
-	cmd.RevealPlain(*tpm, *pcrs, uint32(*nvram), *debug)
+	cmd.RevealCommand(*tpm, *debug, true)
 }
 
 func runRun(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
-	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
 
-	cmd.Run(*tpm, *pcrs, uint32(*nvram), *debug)
+	cmd.RunCommand(*tpm, *debug)
 }
 
 func runNVRAM(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
