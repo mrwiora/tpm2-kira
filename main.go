@@ -141,7 +141,22 @@ func runReveal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 
 	fs.Parse(args)
 
-	cmd.RevealCommand(*tpm, uint32(*nvram), *debug, false)
+	// Check if --nvram was explicitly provided
+	nvramProvided := false
+	for _, arg := range args {
+		if arg == "--nvram" || arg == "-nvram" {
+			nvramProvided = true
+			break
+		}
+	}
+
+	// Use special value 0 to indicate "scan all" when flag not provided
+	scanIndex := uint32(*nvram)
+	if !nvramProvided {
+		scanIndex = 0 // Signal to scan all slots
+	}
+
+	cmd.RevealCommand(*tpm, scanIndex, *debug, false)
 }
 
 func runRevealPlain(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
@@ -153,7 +168,22 @@ func runRevealPlain(args []string, tpmPath, pcrsStr string, nvramIndex uint32, d
 
 	fs.Parse(args)
 
-	cmd.RevealCommand(*tpm, uint32(*nvram), *debug, true)
+	// Check if --nvram was explicitly provided
+	nvramProvided := false
+	for _, arg := range args {
+		if arg == "--nvram" || arg == "-nvram" {
+			nvramProvided = true
+			break
+		}
+	}
+
+	// Use special value 0 to indicate "scan all" when flag not provided
+	scanIndex := uint32(*nvram)
+	if !nvramProvided {
+		scanIndex = 0 // Signal to scan all slots
+	}
+
+	cmd.RevealCommand(*tpm, scanIndex, *debug, true)
 }
 
 func runRun(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
@@ -165,7 +195,22 @@ func runRun(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag
 
 	fs.Parse(args)
 
-	cmd.RunCommand(*tpm, uint32(*nvram), *debug)
+	// Check if --nvram was explicitly provided
+	nvramProvided := false
+	for _, arg := range args {
+		if arg == "--nvram" || arg == "-nvram" {
+			nvramProvided = true
+			break
+		}
+	}
+
+	// Use special value 0 to indicate "scan all" when flag not provided
+	scanIndex := uint32(*nvram)
+	if !nvramProvided {
+		scanIndex = 0 // Signal to scan all slots
+	}
+
+	cmd.RunCommand(*tpm, scanIndex, *debug)
 }
 
 func runNVRAM(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
