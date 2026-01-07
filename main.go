@@ -20,7 +20,7 @@ func main() {
 	globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
 	tpmPath := globalFlags.String("tpm", "/dev/tpm0", "Path to TPM device")
 	pcrs := globalFlags.String("pcrs", "0,2,7", "PCR indices to use for policy (comma-separated)")
-	nvramIndex := globalFlags.Uint("nvram", 0x018094AF, "TPM NVRAM index to use for storage")
+	nvramIndex := globalFlags.Uint("nvram", 0x01803010, "TPM NVRAM index to use for storage")
 	debug := globalFlags.Bool("debug", false, "Enable debug output")
 
 	// Default to 'reveal' command if no arguments provided
@@ -136,39 +136,81 @@ func runReveal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 	fs := flag.NewFlagSet("reveal", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
 
-	cmd.Reveal(*tpm, *pcrs, uint32(*nvram), *debug)
+	// Check if --nvram was explicitly provided
+	nvramProvided := false
+	for _, arg := range args {
+		if arg == "--nvram" || arg == "-nvram" {
+			nvramProvided = true
+			break
+		}
+	}
+
+	// Use special value 0 to indicate "scan all" when flag not provided
+	scanIndex := uint32(*nvram)
+	if !nvramProvided {
+		scanIndex = 0 // Signal to scan all slots
+	}
+
+	cmd.RevealCommand(*tpm, scanIndex, *debug, false)
 }
 
 func runRevealPlain(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("reveal-plain", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
 
-	cmd.RevealPlain(*tpm, *pcrs, uint32(*nvram), *debug)
+	// Check if --nvram was explicitly provided
+	nvramProvided := false
+	for _, arg := range args {
+		if arg == "--nvram" || arg == "-nvram" {
+			nvramProvided = true
+			break
+		}
+	}
+
+	// Use special value 0 to indicate "scan all" when flag not provided
+	scanIndex := uint32(*nvram)
+	if !nvramProvided {
+		scanIndex = 0 // Signal to scan all slots
+	}
+
+	cmd.RevealCommand(*tpm, scanIndex, *debug, true)
 }
 
 func runRun(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
 
-	cmd.Run(*tpm, *pcrs, uint32(*nvram), *debug)
+	// Check if --nvram was explicitly provided
+	nvramProvided := false
+	for _, arg := range args {
+		if arg == "--nvram" || arg == "-nvram" {
+			nvramProvided = true
+			break
+		}
+	}
+
+	// Use special value 0 to indicate "scan all" when flag not provided
+	scanIndex := uint32(*nvram)
+	if !nvramProvided {
+		scanIndex = 0 // Signal to scan all slots
+	}
+
+	cmd.RunCommand(*tpm, scanIndex, *debug)
 }
 
 func runNVRAM(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
@@ -230,7 +272,7 @@ COMMANDS:
 
 GLOBAL OPTIONS:
   --tpm PATH      Path to TPM device (default: /dev/tpm0)
-  --nvram INDEX   NVRAM index in hex (default: 0x018094AF)
+  --nvram INDEX   NVRAM index in hex (default: 0x01803010)
   --debug         Enable debug output
 
 SEAL OPTIONS:

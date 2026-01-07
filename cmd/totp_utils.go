@@ -6,6 +6,7 @@ import (
 	"encoding/base32"
 	"encoding/binary"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -160,29 +161,40 @@ func generateTOTPURI(secret, label, issuer string) string {
 	if issuer == "" {
 		issuer = "TPM2-KIRA"
 	}
-	return fmt.Sprintf("otpauth://totp/%s?secret=%s&issuer=%s", label, secret, issuer)
+	// URL encode the label for proper formatting
+	encodedLabel := url.PathEscape(label)
+	return fmt.Sprintf("otpauth://totp/%s?secret=%s&issuer=%s", encodedLabel, secret, issuer)
 }
 
-// displayTOTPQRCode generates and displays a QR code for a TOTP secret
+// displayTOTPQRCode generates and displays a QR code for a TOTP secret with slot and PCR info
 // If qrencode is not available, displays installation instructions
-func displayTOTPQRCode(secret string) {
+func displayTOTPQRCode(secret string, nvramIndex uint32, pcrsStr string) {
 	// Get hostname
 	hostname, err := os.Hostname()
 	if err != nil || hostname == "" {
 		hostname = "unknown"
 	}
 
-	label := fmt.Sprintf("TPM2-KIRA: %s", hostname)
+	// Calculate slot number from NVRAM index
+	slotNumber := int(nvramIndex - 0x01803010)
+
+	// Create label with slot number and PCRs
+	label := fmt.Sprintf("TPM2-KIRA: %s, PCRs %s (#%d)", hostname, pcrsStr, slotNumber)
 	totpURI := generateTOTPURI(secret, label, "TPM2-KIRA")
 
+	// Try to generate and display QR code
 	if err := generateQRCode(totpURI); err != nil {
 		fmt.Printf("   QR code could not be generated: %v\n", err)
 		fmt.Println("   Install 'qrencode' package to enable QR code display")
 		fmt.Println("   Example: apt install qrencode  # Debian/Ubuntu")
 		fmt.Println("           dnf install qrencode  # Fedora")
 		fmt.Println("           pacman -S qrencode    # Arch Linux")
-		fmt.Printf("   Or manually generate from: %s\n", totpURI)
 	}
+
+	// Always display the URI for manual entry or backup
+	fmt.Println()
+	fmt.Println("TOTP URI (for manual entry):")
+	fmt.Printf("   %s\n", totpURI)
 }
 
 // generateTOTPCode generates a TOTP code from a Base32-encoded secret
