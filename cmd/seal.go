@@ -52,8 +52,8 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug boo
 	fmt.Println("Scan QR Code with authenticator app:")
 	fmt.Println()
 
-	// Display QR code
-	displayTOTPQRCode(totpSecret)
+	// Display QR code with slot and PCR information
+	displayTOTPQRCode(totpSecret, nvramIndex, pcrsStr)
 
 	fmt.Println()
 	fmt.Println("To generate TOTP codes:")
