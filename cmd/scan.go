@@ -330,6 +330,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, debug bool) {
 	var lastCodes map[int]string
 	var lastError error
 	var lastErrorTime time.Time
+	firstRun := true
 
 	lastCodes = make(map[int]string)
 
@@ -390,17 +391,21 @@ func RunCommand(tpmPath string, nvramIndex uint32, debug bool) {
 		// Generate TOTP codes for valid slots
 		newCodes, _ := GenerateTOTPCodesForSlots(slots)
 
-		// Check if any code has changed
-		hasNewCodes := len(lastCodes) == 0 // First iteration
-		for slotNum, code := range newCodes {
-			if lastCodes[slotNum] != code {
-				hasNewCodes = true
-				break
+		// Check if any code has changed or it's the first run
+		hasNewCodes := firstRun
+		if !firstRun {
+			for slotNum, code := range newCodes {
+				if lastCodes[slotNum] != code {
+					hasNewCodes = true
+					break
+				}
 			}
 		}
 
-		// Only print if at least one code has changed
-		if hasNewCodes {
+		// Always display: on first run, when codes change, or when we have slots (even with errors)
+		shouldDisplay := firstRun || hasNewCodes || len(slots) > 0
+
+		if shouldDisplay {
 			// Open TPM again for display (needed for PCR details)
 			tpmDev2, err := transport.OpenTPM(tpmPath)
 			if err == nil {
@@ -425,22 +430,23 @@ func RunCommand(tpmPath string, nvramIndex uint32, debug bool) {
 			// Update last codes
 			lastCodes = newCodes
 			lastError = nil // Clear any previous error since we're successful
+			firstRun = false
 		}
 
-		// Calculate time remaining until next TOTP window
-		// Use the first valid slot's secret to determine timing
-		timeRemaining := int64(1)
-		for _, slot := range slots {
-			if slot.Secret != "" && slot.Error == nil {
-				_, tr, err := generateTOTPCode(slot.Secret)
-				if err == nil {
-					timeRemaining = tr
-					break
-				}
-			}
+		// Calculate time to next TOTP window (30 second boundaries: :00 and :30)
+		now := time.Now()
+		currentSecond := now.Second()
+		var secondsToWait int
+
+		if currentSecond < 30 {
+			// Wait until :30
+			secondsToWait = 30 - currentSecond
+		} else {
+			// Wait until next :00
+			secondsToWait = 60 - currentSecond
 		}
 
-		// Sleep until the next time window
-		time.Sleep(time.Duration(timeRemaining) * time.Second)
+		// Sleep until the next TOTP window boundary
+		time.Sleep(time.Duration(secondsToWait) * time.Second)
 	}
 }
