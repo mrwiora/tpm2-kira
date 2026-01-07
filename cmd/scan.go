@@ -84,7 +84,14 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 	var slots []NVRAMSlot
 
 	for i := startIndex; i <= endIndex; i++ {
-		slotNumber := int(i - NVRAMSlotStart)
+		// Calculate slot number: if in default range, use offset from start
+		// For custom indices, use offset from startIndex (0 for single slot)
+		var slotNumber int
+		if i >= NVRAMSlotStart && i <= NVRAMSlotEnd {
+			slotNumber = int(i - NVRAMSlotStart)
+		} else {
+			slotNumber = int(i - startIndex)
+		}
 
 		if debug {
 			fmt.Printf("Scanning NVRAM slot %d (0x%08X)...\n", slotNumber, i)
@@ -234,6 +241,10 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 							}
 
 							fmt.Printf("  PCR%-2d: %s - %s\n", pcrIndex, GetPCRDescription(pcrIndex), status)
+							if !match {
+								fmt.Printf("    Expected: %x\n", expected)
+								fmt.Printf("    Current:  %x\n", current)
+							}
 						}
 					}
 				}
@@ -249,9 +260,15 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 func PrintPlainSlots(slots []NVRAMSlot, codes map[int]string) {
 	for _, slot := range slots {
 		if slot.Error != nil {
+			// For plain output with errors, show slot number
 			fmt.Printf("#%d: PCR Mismatch\n", slot.SlotNumber)
 		} else if code, exists := codes[slot.SlotNumber]; exists {
-			fmt.Printf("#%d: %s\n", slot.SlotNumber, code)
+			// For plain output with codes, only show the code without prefix if single slot
+			if len(slots) == 1 {
+				fmt.Printf("%s\n", code)
+			} else {
+				fmt.Printf("#%d: %s\n", slot.SlotNumber, code)
+			}
 		}
 	}
 }
