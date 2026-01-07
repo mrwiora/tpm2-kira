@@ -1127,3 +1127,153 @@ func TestQuickWorkflow(t *testing.T) {
 
 	t.Log("✓ Quick workflow completed successfully")
 }
+
+// TestExitCodes verifies that all commands return exit code 0 even with errors
+func TestExitCodes(t *testing.T) {
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+
+	nvramIndex := "0x01800010"
+
+	t.Log("=== Testing Exit Codes ===")
+
+	// Test 1: Reveal on non-existent NVRAM (should exit 0 with error message)
+	t.Log("Test 1: Reveal on non-existent NVRAM...")
+	cmd := exec.Command("./tpm2-kira", "reveal", "--tpm", tpmPath, "--nvram", nvramIndex)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		t.Errorf("✗ Reveal on non-existent NVRAM returned non-zero exit code: %v", err)
+	} else {
+		t.Log("✓ Reveal on non-existent NVRAM returned exit code 0")
+	}
+
+	// Test 2: Seal and then extend PCR to cause mismatch
+	t.Log("Test 2: Seal with PCR 0,23...")
+	stdinInput := testPassword + "\n" + testPassword + "\n"
+	_, _, err = runTPMKiraWithInput(t, tpmPath, stdinInput,
+		"seal",
+		"--nvram", nvramIndex,
+		"--pcrs", "0,23",
+	)
+	if err != nil {
+		t.Fatalf("Seal failed: %v", err)
+	}
+	t.Log("✓ Seal successful")
+
+	// Test 3: Reveal before PCR extension (should work)
+	t.Log("Test 3: Reveal before PCR extension...")
+	cmd = exec.Command("./tpm2-kira", "reveal", "--tpm", tpmPath, "--nvram", nvramIndex)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err != nil {
+		t.Errorf("✗ Reveal before PCR extension returned non-zero exit code: %v", err)
+	} else {
+		t.Log("✓ Reveal before PCR extension returned exit code 0")
+	}
+
+	// Test 4: Extend PCR 23
+	t.Log("Test 4: Extending PCR 23...")
+	extendCmd := exec.Command("tpm2_pcrextend", "23:sha256=0000000000000000000000000000000000000000000000000000000000000000")
+	extendCmd.Env = append(os.Environ(), "TPM2TOOLS_TCTI=swtpm:path="+tpmPath)
+	if output, err := extendCmd.CombinedOutput(); err != nil {
+		t.Fatalf("Failed to extend PCR: %v\nOutput: %s", err, output)
+	}
+	t.Log("✓ PCR 23 extended")
+
+	// Test 5: Reveal after PCR extension (should show mismatch but exit 0)
+	t.Log("Test 5: Reveal after PCR extension (with mismatch)...")
+	stdout.Reset()
+	stderr.Reset()
+	cmd = exec.Command("./tpm2-kira", "reveal", "--tpm", tpmPath, "--nvram", nvramIndex)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err != nil {
+		t.Errorf("✗ Reveal with PCR mismatch returned non-zero exit code: %v", err)
+	} else {
+		t.Log("✓ Reveal with PCR mismatch returned exit code 0")
+		// Verify PCR Mismatch is shown in output
+		if !strings.Contains(stdout.String(), "PCR Mismatch") {
+			t.Errorf("✗ PCR Mismatch not shown in output")
+		} else {
+			t.Log("✓ PCR Mismatch shown in output")
+		}
+	}
+
+	// Test 6: Reveal-plain with PCR mismatch
+	t.Log("Test 6: Reveal-plain after PCR extension (with mismatch)...")
+	stdout.Reset()
+	stderr.Reset()
+	cmd = exec.Command("./tpm2-kira", "reveal-plain", "--tpm", tpmPath, "--nvram", nvramIndex)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err != nil {
+		t.Errorf("✗ Reveal-plain with PCR mismatch returned non-zero exit code: %v", err)
+	} else {
+		t.Log("✓ Reveal-plain with PCR mismatch returned exit code 0")
+	}
+
+	// Test 7: Info command on slot with PCR mismatch
+	t.Log("Test 7: Info command with PCR mismatch...")
+	stdout.Reset()
+	stderr.Reset()
+	cmd = exec.Command("./tpm2-kira", "info", "--tpm", tpmPath, "--nvram", nvramIndex)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err != nil {
+		t.Errorf("✗ Info with PCR mismatch returned non-zero exit code: %v", err)
+	} else {
+		t.Log("✓ Info with PCR mismatch returned exit code 0")
+	}
+
+	// Test 8: Reseal without password (should fail password validation but exit 0)
+	t.Log("Test 8: Reseal without password (should show error but exit 0)...")
+	stdout.Reset()
+	stderr.Reset()
+	cmd = exec.Command("./tpm2-kira", "reseal", "--tpm", tpmPath, "--nvram", nvramIndex)
+	cmd.Stdin = strings.NewReader("\n") // Empty password
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err != nil {
+		t.Errorf("✗ Reseal without password returned non-zero exit code: %v", err)
+	} else {
+		t.Log("✓ Reseal without password returned exit code 0")
+	}
+
+	// Test 9: NVRAM status on non-existent index
+	t.Log("Test 9: NVRAM status on non-existent index...")
+	stdout.Reset()
+	stderr.Reset()
+	cmd = exec.Command("./tpm2-kira", "nvram", "status", "--tpm", tpmPath, "--nvram", "0x01800050")
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err != nil {
+		t.Errorf("✗ NVRAM status on non-existent index returned non-zero exit code: %v", err)
+	} else {
+		t.Log("✓ NVRAM status on non-existent index returned exit code 0")
+	}
+
+	// Test 10: Delete non-existent NVRAM index
+	t.Log("Test 10: NVRAM delete on non-existent index...")
+	stdout.Reset()
+	stderr.Reset()
+	cmd = exec.Command("./tpm2-kira", "nvram", "delete", "--tpm", tpmPath, "--nvram", "0x01800051")
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err != nil {
+		t.Errorf("✗ NVRAM delete on non-existent index returned non-zero exit code: %v", err)
+	} else {
+		t.Log("✓ NVRAM delete on non-existent index returned exit code 0")
+	}
+
+	t.Log("✓ All exit code tests passed")
+}
