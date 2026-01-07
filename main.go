@@ -20,7 +20,7 @@ func main() {
 	globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
 	tpmPath := globalFlags.String("tpm", "/dev/tpm0", "Path to TPM device")
 	pcrs := globalFlags.String("pcrs", "0,2,7", "PCR indices to use for policy (comma-separated)")
-	nvramIndex := globalFlags.Uint("nvram", 0x018094AF, "TPM NVRAM index to use for storage")
+	nvramIndex := globalFlags.Uint("nvram", 0x01803010, "TPM NVRAM index to use for storage")
 	debug := globalFlags.Bool("debug", false, "Enable debug output")
 
 	// Default to 'reveal' command if no arguments provided
@@ -230,7 +230,7 @@ COMMANDS:
 
 GLOBAL OPTIONS:
   --tpm PATH      Path to TPM device (default: /dev/tpm0)
-  --nvram INDEX   NVRAM index in hex (default: 0x018094AF)
+  --nvram INDEX   NVRAM index in hex (default: 0x01803010)
   --debug         Enable debug output
 
 SEAL OPTIONS:

@@ -106,7 +106,7 @@ sudo mkinitcpio -P
 
 ### Default Configuration
 - TPM Device: `/dev/tpm0`
-- NVRAM Index: `0x018094AF`
+- NVRAM Index: `0x01803010`
 - Default PCRs: `0,2,4,7` (firmware, boot config, bootloader, Secure Boot)
 
 ### Custom Configuration
