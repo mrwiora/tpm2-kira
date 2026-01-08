@@ -51,7 +51,7 @@ git clone https://github.com/mrwiora/tpm2-kira.git
 cd tpm2-kira
 
 # Build package
-cd packaging/archlinux
+cd packaging/aur
 makepkg
 
 # Install built package

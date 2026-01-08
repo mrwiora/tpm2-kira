@@ -163,16 +163,16 @@ pkgbuild:
 		exit 1; \
 	fi
 	@echo "Copying PKGBUILD to build directory..."
-	@mkdir -p build/archlinux
-	@cp packaging/archlinux/PKGBUILD build/archlinux/
-	@cd build/archlinux && makepkg -f
+	@mkdir -p build/aur
+	@cp packaging/aur/PKGBUILD build/aur/
+	@cd build/aur && makepkg -f
 	@echo ""
 	@echo "Package built successfully!"
-	@echo "Package location: build/archlinux/"
-	@ls -lh build/archlinux/*.pkg.tar.zst 2>/dev/null || ls -lh build/archlinux/*.pkg.tar.* 2>/dev/null || true
+	@echo "Package location: build/aur/"
+	@ls -lh build/aur/*.pkg.tar.zst 2>/dev/null || ls -lh build/aur/*.pkg.tar.* 2>/dev/null || true
 	@echo ""
 	@echo "To install the package, run:"
-	@echo "  sudo pacman -U build/archlinux/tpm2-kira-*.pkg.tar.zst"
+	@echo "  sudo pacman -U build/aur/tpm2-kira-*.pkg.tar.zst"
 
 ## help: Show this help message
 help:
