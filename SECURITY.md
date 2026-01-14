@@ -32,16 +32,17 @@ This project implements comprehensive automated security scanning using multiple
    - Uses rules from security-audit, golang, and secrets rulesets
    - AI-powered pattern matching for security issues
 
-5. **Nancy** - Sonatype OSS Index scanner
-   - Scans Go dependencies for known vulnerabilities
-   - Integrates with Sonatype's vulnerability database
-   - Note: May require authentication for full functionality
-
 ### Scan Schedule
 
-- **Push/Pull Request**: GoSec, Trivy, Semgrep, and Nancy run automatically
+- **Push/Pull Request**: GoSec, Trivy, and Semgrep run automatically
 - **CodeQL**: Runs automatically via GitHub default setup
 - **Daily Schedule**: Security scans run at 2 AM UTC for continuous monitoring
+- **Manual Trigger**: Can be triggered from Actions tab
+
+**Note**: Dependency vulnerability scanning is covered by:
+- **Trivy**: Scans for CVEs in Go modules and dependencies
+- **Dependency Review**: Checks dependency changes in pull requests
+- **CodeQL**: Detects vulnerable dependencies during code analysis
 - **Manual Trigger**: Security scans can be manually triggered via GitHub Actions
 
 ### Viewing Security Results

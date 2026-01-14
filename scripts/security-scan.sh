@@ -104,20 +104,6 @@ else
 fi
 echo ""
 
-# 7. Check Go dependencies with Nancy if available
-echo "Running Nancy dependency scanner..."
-if command -v nancy &> /dev/null; then
-    if go list -json -deps ./... | nancy sleuth --quiet 2>&1; then
-        print_status 0 "Nancy found no vulnerable dependencies"
-    else
-        print_status 1 "Nancy found vulnerable dependencies"
-    fi
-else
-    echo -e "${YELLOW}⚠${NC} Nancy not installed. Download from:"
-    echo "  https://github.com/sonatype-nexus-community/nancy/releases"
-fi
-echo ""
-
 # Summary
 echo "===================================="
 if [ $OVERALL_STATUS -eq 0 ]; then

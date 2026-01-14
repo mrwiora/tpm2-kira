@@ -18,7 +18,6 @@ This project uses **automated AI-powered security scanning** to ensure code qual
 - 🛡️ **GoSec** - Go-specific security vulnerability scanner  
 - 🔍 **Trivy** - Comprehensive dependency and vulnerability scanner
 - 🤖 **Semgrep** - AI-powered pattern-based security analysis
-- 📦 **Nancy** - Go dependency vulnerability checker
 
 Security scans run automatically on every push, pull request, and daily for continuous monitoring. View the [Security Policy](SECURITY.md) for more details.
 
@@ -233,10 +232,6 @@ This project implements comprehensive automated security scanning to ensure the 
    - Security-focused rule sets
    - Pattern matching for common vulnerabilities
 
-5. **Nancy** - OSS Index vulnerability scanner
-   - Checks Go dependencies against Sonatype's database
-   - Real-time vulnerability detection
-
 #### Viewing Security Reports
 
 - **Security Tab**: [View Findings](https://github.com/mrwiora/tpm2-kira/security)
@@ -262,6 +257,7 @@ go vet ./...
 gofmt -l .
 gosec ./...
 trivy fs .
+semgrep --config=auto .
 ```
 
 For more information about security practices and reporting vulnerabilities, see [SECURITY.md](SECURITY.md).

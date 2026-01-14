@@ -79,20 +79,7 @@ The tpm2-kira project uses a comprehensive suite of automated security scanning 
 
 **Output**: SARIF format for GitHub Security integration
 
-### 5. Nancy (Sonatype OSS Index)
-
-**Purpose**: Go dependency vulnerability scanner
-
-**What it does**:
-- Checks all Go dependencies against Sonatype OSS Index
-- Identifies known vulnerabilities in direct and transitive dependencies
-- Provides vulnerability details and remediation advice
-
-**Note**: May require authentication for full access to OSS Index. The scanner will run but may have limited functionality without credentials.
-
-**Database**: Sonatype OSS Index vulnerability database
-
-### 6. Dependency Review (Pull Requests Only)
+### 5. Dependency Review (Pull Requests Only)
 
 **Purpose**: Review dependency changes in pull requests
 
@@ -102,6 +89,8 @@ The tpm2-kira project uses a comprehensive suite of automated security scanning 
 - Denied licenses (GPL-3.0, AGPL-3.0)
 
 **Threshold**: Fails on moderate or higher severity vulnerabilities
+
+**Note on Nancy**: Nancy (Sonatype OSS Index scanner) has been removed from the workflow as it requires authentication credentials to access the OSS Index API. Dependency vulnerability scanning is adequately covered by Trivy, Dependency Review, and CodeQL.
 
 ## Workflow Architecture
 
@@ -116,7 +105,6 @@ Security Scan Workflow
 ├── GoSec Analysis
 ├── Trivy Scan
 ├── Semgrep Scan
-├── Nancy Scan
 └── Security Summary (aggregates results)
 ```
 
@@ -189,8 +177,8 @@ trivy fs .
 # Semgrep
 semgrep --config "p/security-audit" .
 
-# Nancy
-go list -json -deps ./... | nancy sleuth
+# Note: Nancy has been removed as it requires authentication.
+# Dependency scanning is covered by Trivy and Dependency Review.
 ```
 
 ## AI-Powered Features
