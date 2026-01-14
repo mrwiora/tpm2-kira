@@ -16,12 +16,16 @@ The tpm2-kira project uses a comprehensive suite of automated security scanning 
 - Deep semantic analysis of Go code
 - Identifies complex security vulnerabilities
 - Detects data flow issues (SQL injection, XSS, path traversal, etc.)
-- Uses both security-extended and quality queries
+
+**Configuration**:
+- Enabled via GitHub's default setup (native integration)
+- Automatically scans on every push and pull request
+- No manual workflow configuration required
 
 **When it runs**:
-- Every push to dev/main branches
+- Automatically via GitHub default setup
+- Every push to main/dev branches
 - Every pull request
-- Daily scheduled scan at 2 AM UTC
 
 **Results**: Available in GitHub Security tab under "Code scanning alerts"
 
@@ -66,7 +70,6 @@ The tpm2-kira project uses a comprehensive suite of automated security scanning 
 - `p/security-audit` - General security auditing rules
 - `p/golang` - Go-specific security patterns
 - `p/secrets` - Hardcoded secrets detection
-- `p/crypto` - Cryptographic implementation issues
 
 **Features**:
 - Pattern matching with semantic awareness
@@ -84,6 +87,8 @@ The tpm2-kira project uses a comprehensive suite of automated security scanning 
 - Checks all Go dependencies against Sonatype OSS Index
 - Identifies known vulnerabilities in direct and transitive dependencies
 - Provides vulnerability details and remediation advice
+
+**Note**: May require authentication for full access to OSS Index. The scanner will run but may have limited functionality without credentials.
 
 **Database**: Sonatype OSS Index vulnerability database
 
@@ -106,7 +111,7 @@ All scanning tools run in parallel as separate jobs to minimize execution time:
 
 ```
 Security Scan Workflow
-├── CodeQL Analysis (Go)
+├── CodeQL Analysis (GitHub default setup, runs automatically)
 ├── Dependency Review (PRs only)
 ├── GoSec Analysis
 ├── Trivy Scan

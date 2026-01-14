@@ -14,7 +14,7 @@ It is the successor of tpm2-totp and currently in alpha phase. Please use with C
 ### Security
 
 This project uses **automated AI-powered security scanning** to ensure code quality and security:
-- 🔒 **CodeQL** - Advanced semantic analysis for vulnerability detection
+- 🔒 **CodeQL** - GitHub's semantic analysis (enabled via default setup)
 - 🛡️ **GoSec** - Go-specific security vulnerability scanner  
 - 🔍 **Trivy** - Comprehensive dependency and vulnerability scanner
 - 🤖 **Semgrep** - AI-powered pattern-based security analysis
@@ -218,7 +218,7 @@ This project implements comprehensive automated security scanning to ensure the 
 #### Security Tools
 
 1. **CodeQL** - GitHub's semantic code analysis
-   - Scans for security vulnerabilities and code quality issues
+   - Enabled via GitHub default setup for automatic scanning
    - Runs on every commit and pull request
 
 2. **GoSec** - Go security checker

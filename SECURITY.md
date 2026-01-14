@@ -15,9 +15,9 @@ This project implements comprehensive automated security scanning using multiple
 ### Security Scanners
 
 1. **CodeQL** - GitHub's semantic code analysis engine
-   - Runs on every push and pull request
+   - Enabled via GitHub default setup for continuous scanning
    - Scans for security vulnerabilities and code quality issues
-   - Uses extended security queries for comprehensive coverage
+   - View results in the Security tab under Code Scanning
 
 2. **GoSec** - Go-specific security scanner
    - Identifies common security issues in Go code
@@ -29,16 +29,18 @@ This project implements comprehensive automated security scanning using multiple
    - Detects critical, high, and medium severity issues
 
 4. **Semgrep** - Pattern-based static analysis
-   - Uses rules from security-audit, golang, secrets, and crypto rulesets
+   - Uses rules from security-audit, golang, and secrets rulesets
    - AI-powered pattern matching for security issues
 
 5. **Nancy** - Sonatype OSS Index scanner
    - Scans Go dependencies for known vulnerabilities
    - Integrates with Sonatype's vulnerability database
+   - Note: May require authentication for full functionality
 
 ### Scan Schedule
 
-- **Push/Pull Request**: All scanners run automatically
+- **Push/Pull Request**: GoSec, Trivy, Semgrep, and Nancy run automatically
+- **CodeQL**: Runs automatically via GitHub default setup
 - **Daily Schedule**: Security scans run at 2 AM UTC for continuous monitoring
 - **Manual Trigger**: Security scans can be manually triggered via GitHub Actions
 
