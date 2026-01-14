@@ -1,11 +1,26 @@
 # Installation Guide for tpm2-kira
 
+[![Security Scanning](https://github.com/mrwiora/tpm2-kira/actions/workflows/security-scan.yml/badge.svg)](https://github.com/mrwiora/tpm2-kira/actions/workflows/security-scan.yml)
+[![Integration Tests](https://github.com/mrwiora/tpm2-kira/actions/workflows/integration-tests.yml/badge.svg)](https://github.com/mrwiora/tpm2-kira/actions/workflows/integration-tests.yml)
+[![Unit Tests](https://github.com/mrwiora/tpm2-kira/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/mrwiora/tpm2-kira/actions/workflows/unit-tests.yml)
+
 ## Overview
 
 `tpm2-kira` is a TPM2-based TOTP authenticator that can be installed on:
 - **Arch Linux** and derivatives (Manjaro, EndeavourOS, etc.)
 
 It is the successor of tpm2-totp and currently in alpha phase. Please use with CAUTION!
+
+### Security
+
+This project uses **automated AI-powered security scanning** to ensure code quality and security:
+- 🔒 **CodeQL** - Advanced semantic analysis for vulnerability detection
+- 🛡️ **GoSec** - Go-specific security vulnerability scanner  
+- 🔍 **Trivy** - Comprehensive dependency and vulnerability scanner
+- 🤖 **Semgrep** - AI-powered pattern-based security analysis
+- 📦 **Nancy** - Go dependency vulnerability checker
+
+Security scans run automatically on every push, pull request, and daily for continuous monitoring. View the [Security Policy](SECURITY.md) for more details.
 
 ## System Requirements
 
@@ -193,6 +208,48 @@ tpm2-kira --debug reveal
 journalctl -u tpm2-kira
 sudo dmesg | grep -i tpm
 ```
+
+## Security and Vulnerability Scanning
+
+### Automated Security Scanning
+
+This project implements comprehensive automated security scanning to ensure the highest security standards:
+
+#### Security Tools
+
+1. **CodeQL** - GitHub's semantic code analysis
+   - Scans for security vulnerabilities and code quality issues
+   - Runs on every commit and pull request
+
+2. **GoSec** - Go security checker
+   - Identifies common security problems in Go code
+   - Checks for SQL injection, hardcoded credentials, weak crypto, etc.
+
+3. **Trivy** - Vulnerability scanner
+   - Scans for CVEs in dependencies
+   - Checks for misconfigurations
+
+4. **Semgrep** - Static analysis with AI-powered patterns
+   - Security-focused rule sets
+   - Pattern matching for common vulnerabilities
+
+5. **Nancy** - OSS Index vulnerability scanner
+   - Checks Go dependencies against Sonatype's database
+   - Real-time vulnerability detection
+
+#### Viewing Security Reports
+
+- **Security Tab**: [View Findings](https://github.com/mrwiora/tpm2-kira/security)
+- **Security Policy**: See [SECURITY.md](SECURITY.md) for reporting vulnerabilities
+- **Workflow Status**: Check [Security Scanning Action](https://github.com/mrwiora/tpm2-kira/actions/workflows/security-scan.yml)
+
+#### Scan Schedule
+
+- **Automatic**: On every push and pull request
+- **Scheduled**: Daily at 2 AM UTC
+- **Manual**: Can be triggered from Actions tab
+
+For more information about security practices and reporting vulnerabilities, see [SECURITY.md](SECURITY.md).
 
 ## Uninstallation
 
