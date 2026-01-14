@@ -23,3 +23,6 @@ packaging/archlinux/tpm2-kira*
 
 # Build directory
 build/
+
+# Strix security scan results
+strix_runs/
