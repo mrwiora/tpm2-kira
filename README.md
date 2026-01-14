@@ -249,6 +249,21 @@ This project implements comprehensive automated security scanning to ensure the 
 - **Scheduled**: Daily at 2 AM UTC
 - **Manual**: Can be triggered from Actions tab
 
+#### Local Security Scanning
+
+Run security checks locally before pushing:
+
+```bash
+# Run all security scanners at once
+./scripts/security-scan.sh
+
+# Or run individual tools
+go vet ./...
+gofmt -l .
+gosec ./...
+trivy fs .
+```
+
 For more information about security practices and reporting vulnerabilities, see [SECURITY.md](SECURITY.md).
 
 ## Uninstallation
