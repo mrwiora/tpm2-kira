@@ -97,7 +97,14 @@ jobs:
       - name: Run Semgrep and generate SARIF
         run: |
           pip install semgrep
-          semgrep scan --config=p/security-audit --config=p/golang --config=p/secrets --sarif --output=semgrep.sarif || true
+          semgrep scan --config=p/security-audit --config=p/golang --config=p/secrets --sarif --output=semgrep.sarif
+          exit_code=$?
+          # Exit code 0 = no findings, exit code 1 = findings found, both are success
+          if [[ $exit_code -eq 0 || $exit_code -eq 1 ]]; then
+            exit 0
+          else
+            exit $exit_code
+          fi
 
       - name: Upload Semgrep results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
