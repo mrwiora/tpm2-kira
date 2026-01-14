@@ -43,7 +43,6 @@ This project implements comprehensive automated security scanning using multiple
 - **Trivy**: Scans for CVEs in Go modules and dependencies
 - **Dependency Review**: Checks dependency changes in pull requests
 - **CodeQL**: Detects vulnerable dependencies during code analysis
-- **Manual Trigger**: Security scans can be manually triggered via GitHub Actions
 
 ### Viewing Security Results
 
