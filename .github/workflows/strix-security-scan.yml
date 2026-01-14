@@ -1,3 +1,4 @@
+---
 name: Strix AI Penetration Test
 
 permissions:
@@ -5,7 +6,7 @@ permissions:
   pull-requests: write
   issues: write
 
-on:
+"on":
   pull_request:
     branches: ["*"]
   workflow_dispatch:
@@ -22,7 +23,7 @@ on:
 jobs:
   strix-security-scan:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -35,11 +36,16 @@ jobs:
           STRIX_LLM: ${{ secrets.STRIX_LLM }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
-          STRIX_REASONING_EFFORT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.scan_mode == 'full' && 'high' || 'medium' }}
+          STRIX_REASONING_EFFORT: >-
+            ${{
+              github.event_name == 'workflow_dispatch' &&
+              github.event.inputs.scan_mode == 'full' &&
+              'high' || 'medium'
+            }}
         run: |
           # Determine scan mode
           SCAN_MODE="${{ github.event.inputs.scan_mode || 'quick' }}"
-          
+
           # Run Strix in non-interactive mode
           strix -n -t ./ --scan-mode ${SCAN_MODE}
         continue-on-error: true
@@ -59,21 +65,28 @@ jobs:
           script: |
             const fs = require('fs');
             const path = require('path');
-            
+
             let comment = '## 🔒 Strix AI Penetration Test Results\n\n';
-            
+
             // Check if strix_runs directory exists
             const strixRunsPath = 'strix_runs';
             if (fs.existsSync(strixRunsPath)) {
-              comment += '✅ Security scan completed. Review the full report in the workflow artifacts.\n\n';
-              comment += '**Note:** The Strix scan has been executed. Please review the artifacts for detailed findings.\n';
+              comment += '✅ Security scan completed. ';
+              comment +=
+                'Review the full report in the workflow artifacts.\n\n';
+              comment += '**Note:** The Strix scan has been executed. ';
+              comment +=
+                'Please review the artifacts for detailed findings.\n';
             } else {
-              comment += '⚠️ Security scan completed but no results directory found. Check workflow logs for details.\n';
+              comment += '⚠️ Security scan completed but ';
+              comment += 'no results directory found. ';
+              comment += 'Check workflow logs for details.\n';
             }
-            
+
             comment += '\n---\n';
-            comment += '*Automated security testing powered by [Strix AI](https://strix.ai)*';
-            
+            comment += '*Automated security testing powered by ';
+            comment += '[Strix AI](https://strix.ai)*';
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
