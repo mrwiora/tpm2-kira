@@ -12,13 +12,14 @@ permissions:
   workflow_dispatch:
     inputs:
       scan_mode:
-        description: 'Scan mode (quick or full)'
+        description: 'Scan mode (quick, standard, or deep)'
         required: false
         default: 'quick'
         type: choice
         options:
           - quick
-          - full
+          - standard
+          - deep
 
 jobs:
   strix-security-scan:
@@ -29,7 +30,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Strix
-        run: curl -sSL https://strix.ai/install | bash
+        run: |
+          # Official Strix installation method from https://strix.ai/install
+          curl -sSL https://strix.ai/install | bash
 
       - name: Run Strix Security Scan
         env:
@@ -39,11 +42,11 @@ jobs:
           STRIX_REASONING_EFFORT: >-
             ${{
               github.event_name == 'workflow_dispatch' &&
-              github.event.inputs.scan_mode == 'full' &&
+              github.event.inputs.scan_mode == 'deep' &&
               'high' || 'medium'
             }}
         run: |
-          # Determine scan mode
+          # Determine scan mode (quick, standard, or deep)
           SCAN_MODE="${{ github.event.inputs.scan_mode || 'quick' }}"
 
           # Run Strix in non-interactive mode
