@@ -1,5 +1,7 @@
 # CodeQL Setup Instructions
 
+⚠️ **REQUIRED ACTION**: The repository administrator must complete these steps to fix the ongoing SARIF upload errors.
+
 ## Issue: SARIF Upload Error
 
 If you encounter the error:
@@ -44,5 +46,5 @@ Once you've switched to advanced setup or disabled the default setup:
 
 - Custom workflow file: `.github/workflows/codeql-security.yml`
 - Language analyzed: Go
-- Go version: 1.21
+- Go version: 1.25
 - Analysis includes: Security-extended and security-and-quality queries
