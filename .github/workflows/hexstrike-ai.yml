@@ -23,7 +23,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -115,14 +115,17 @@ jobs:
       - name: Generate security report
         if: always()
         run: |
+          # Get current date
+          REPORT_DATE=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
           # Create a comprehensive security report
-          cat > security-results/security-report.md <<'EOF'
+          cat > security-results/security-report.md <<EOF
           # HexStrike AI Security Framework Setup Report
           
           **Repository:** ${{ github.repository }}
           **Branch:** ${{ github.ref_name }}
           **Commit:** ${{ github.sha }}
-          **Scan Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          **Scan Date:** ${REPORT_DATE}
           **Workflow:** ${{ github.workflow }}
           **Run ID:** ${{ github.run_id }}
           
