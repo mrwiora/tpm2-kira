@@ -10,27 +10,35 @@ This project currently supports all versions with security updates.
 
 ## Automated Security Scanning
 
-This repository uses **HexStrike AI** for automated security scanning through GitHub Actions. The workflow:
+This repository includes a **HexStrike AI** security framework setup workflow through GitHub Actions. The workflow:
 
 - Runs on every push to `main` and `dev` branches
 - Executes on all pull requests
-- Performs daily scheduled scans at 2 AM UTC
+- Performs daily scheduled setup verification at 2 AM UTC
 - Can be manually triggered via workflow dispatch
 
 ### What is HexStrike AI?
 
-HexStrike AI is an advanced AI-driven cybersecurity automation platform that integrates 150+ security tools to perform comprehensive vulnerability scanning and security analysis. More information: [HexStrike AI Repository](https://github.com/0x4m4/hexstrike-ai)
+HexStrike AI is an advanced AI-driven cybersecurity automation platform that integrates 150+ security tools to perform comprehensive vulnerability scanning and security analysis. It operates as an MCP (Model Context Protocol) server that requires an AI client (Claude Desktop, VS Code Copilot, etc.) for interactive security testing. More information: [HexStrike AI Repository](https://github.com/0x4m4/hexstrike-ai)
 
-### Security Scan Coverage
+### Security Framework Setup
 
-The automated workflow includes:
-- Static code analysis
-- Dependency vulnerability scanning
-- Configuration security checks
-- Best practices validation
-- Security tool analysis (Nmap, Nikto, SQLMap, etc.)
+The automated workflow provides:
+- HexStrike AI framework installation and verification
+- Essential security tools setup (Nmap, Nikto, SQLMap, Gobuster, etc.)
+- Python environment configuration for security analysis
+- Infrastructure readiness validation
 
-Security scan reports are automatically generated and available as workflow artifacts.
+**Important:** This workflow sets up the security framework infrastructure but does not perform active vulnerability scanning. HexStrike AI requires an MCP client connection for interactive security analysis.
+
+### Additional Security Tools
+
+For automated security scanning in CI/CD, the repository also benefits from:
+- GitHub's built-in Dependabot for dependency vulnerability alerts
+- CodeQL for code security analysis (if enabled)
+- Regular security audits by maintainers
+
+Framework setup reports are automatically generated and available as workflow artifacts.
 
 ## Reporting a Vulnerability
 
