@@ -1,11 +1,15 @@
 # Installation Guide for tpm2-kira
 
+[![HexStrike AI Security](https://img.shields.io/badge/security-HexStrike%20AI-blue)](https://github.com/0x4m4/hexstrike-ai)
+
 ## Overview
 
 `tpm2-kira` is a TPM2-based TOTP authenticator that can be installed on:
 - **Arch Linux** and derivatives (Manjaro, EndeavourOS, etc.)
 
 It is the successor of tpm2-totp and currently in alpha phase. Please use with CAUTION!
+
+**Security Note:** This repository uses automated security scanning with [HexStrike AI](https://github.com/0x4m4/hexstrike-ai). See [SECURITY.md](SECURITY.md) for details.
 
 ## System Requirements
 
