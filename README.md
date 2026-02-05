@@ -7,6 +7,10 @@
 
 It is the successor of tpm2-totp and currently in alpha phase. Please use with CAUTION!
 
+## Security
+
+This project uses automated AI-powered penetration testing with [Strix](https://strix.ai) to identify and validate security vulnerabilities on pull requests from branches ending with "pentest". For more information, see our [Security Policy](SECURITY.md).
+
 ## System Requirements
 
 ### Hardware Requirements
