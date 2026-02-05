@@ -10,11 +10,13 @@ All versions of tpm2-kira are currently supported with security updates.
 
 ## Automated Security Testing
 
-This project uses [Strix AI](https://strix.ai) for automated penetration testing on every pull request. Strix is an autonomous AI security agent that:
+This project uses [Strix AI](https://strix.ai) for automated penetration testing on pull requests from branches ending with "pentest". Strix is an autonomous AI security agent that:
 
 - Dynamically tests code for vulnerabilities
 - Validates findings with real proof-of-concepts
 - Provides actionable security reports
+
+**Note:** The Strix security scan only runs automatically when the source branch name ends with "pentest" (e.g., `feature-xyz-pentest`, `bugfix-123-pentest`). This ensures comprehensive security testing is performed only when explicitly requested.
 
 ### Required GitHub Secrets
 

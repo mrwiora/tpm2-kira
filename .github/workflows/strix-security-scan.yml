@@ -24,6 +24,8 @@ permissions:
 jobs:
   strix-security-scan:
     runs-on: ubuntu-latest
+    # Only run when the branch name ends with 'pentest'
+    if: endsWith(github.head_ref, 'pentest')
 
     steps:
       - name: Checkout code
