@@ -20,7 +20,7 @@ const CurrentBlobVersion = 2
 // These limits are generous for legitimate use while blocking malicious allocations.
 const (
 	MaxBlobSize      = 10 * 1024 * 1024 // 10MB maximum total blob size
-	MaxAppVersionLen = 1024              // 1KB maximum app version string
+	MaxAppVersionLen = 1024             // 1KB maximum app version string
 	MaxPublicLen     = 2 * 1024 * 1024  // 2MB maximum public blob
 	MaxPrivateLen    = 2 * 1024 * 1024  // 2MB maximum private blob
 	MaxPCRDigests    = 100              // Maximum 100 PCR digest entries
