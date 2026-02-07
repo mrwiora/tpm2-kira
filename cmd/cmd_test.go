@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"strings"
 	"testing"
@@ -326,6 +327,185 @@ func TestUnmarshalSealedBlobInvalid(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.errContains) {
 				t.Errorf("Expected error containing %q, got: %v", tt.errContains, err)
+			}
+		})
+	}
+}
+
+func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
+	// Helper to build a minimal valid blob prefix up to a certain field,
+	// then inject an oversized length value.
+	makeBlob := func(appVersionLen, publicLen, privateLen, numPCRDigests uint32) []byte {
+		// Build a blob with controlled length fields
+		// We only need enough bytes to reach the field under test
+		buf := make([]byte, 0, 256)
+		b4 := make([]byte, 4)
+
+		// version
+		binary.LittleEndian.PutUint32(b4, 2)
+		buf = append(buf, b4...)
+
+		// appVersionLen
+		binary.LittleEndian.PutUint32(b4, appVersionLen)
+		buf = append(buf, b4...)
+		// appVersion data (fill with zeros)
+		buf = append(buf, make([]byte, appVersionLen)...)
+
+		// publicLen
+		binary.LittleEndian.PutUint32(b4, publicLen)
+		buf = append(buf, b4...)
+		// public data
+		buf = append(buf, make([]byte, publicLen)...)
+
+		// privateLen
+		binary.LittleEndian.PutUint32(b4, privateLen)
+		buf = append(buf, b4...)
+		// private data
+		buf = append(buf, make([]byte, privateLen)...)
+
+		// numPCRDigests
+		binary.LittleEndian.PutUint32(b4, numPCRDigests)
+		buf = append(buf, b4...)
+
+		// Pad to at least 16 bytes for minimum length check
+		for len(buf) < 16 {
+			buf = append(buf, 0)
+		}
+
+		return buf
+	}
+
+	tests := []struct {
+		name      string
+		blobMaker func() []byte
+		expectErr string
+	}{
+		{
+			name: "oversized app version length",
+			blobMaker: func() []byte {
+				blob := make([]byte, 16)
+				binary.LittleEndian.PutUint32(blob[0:4], 2)                  // version
+				binary.LittleEndian.PutUint32(blob[4:8], MaxAppVersionLen+1) // too large
+				binary.LittleEndian.PutUint32(blob[8:12], 0)
+				binary.LittleEndian.PutUint32(blob[12:16], 0)
+				return blob
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "oversized public blob length",
+			blobMaker: func() []byte {
+				blob := make([]byte, 16)
+				binary.LittleEndian.PutUint32(blob[0:4], 2)               // version
+				binary.LittleEndian.PutUint32(blob[4:8], 0)               // appVersionLen=0
+				binary.LittleEndian.PutUint32(blob[8:12], MaxPublicLen+1) // too large
+				binary.LittleEndian.PutUint32(blob[12:16], 0)
+				return blob
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "oversized private blob length",
+			blobMaker: func() []byte {
+				blob := make([]byte, 20)
+				binary.LittleEndian.PutUint32(blob[0:4], 2)                 // version
+				binary.LittleEndian.PutUint32(blob[4:8], 0)                 // appVersionLen=0
+				binary.LittleEndian.PutUint32(blob[8:12], 0)                // publicLen=0
+				binary.LittleEndian.PutUint32(blob[12:16], MaxPrivateLen+1) // too large
+				binary.LittleEndian.PutUint32(blob[16:20], 0)
+				return blob
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "oversized PCR digest count",
+			blobMaker: func() []byte {
+				return makeBlob(0, 0, 0, MaxPCRDigests+1)
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "extreme public blob 4GB",
+			blobMaker: func() []byte {
+				blob := make([]byte, 16)
+				binary.LittleEndian.PutUint32(blob[0:4], 2)
+				binary.LittleEndian.PutUint32(blob[4:8], 0)
+				binary.LittleEndian.PutUint32(blob[8:12], 0xFFFFFFFF) // ~4GB
+				binary.LittleEndian.PutUint32(blob[12:16], 0)
+				return blob
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "extreme private blob 4GB",
+			blobMaker: func() []byte {
+				blob := make([]byte, 20)
+				binary.LittleEndian.PutUint32(blob[0:4], 2)
+				binary.LittleEndian.PutUint32(blob[4:8], 0)
+				binary.LittleEndian.PutUint32(blob[8:12], 0)
+				binary.LittleEndian.PutUint32(blob[12:16], 0xFFFFFFFF) // ~4GB
+				binary.LittleEndian.PutUint32(blob[16:20], 0)
+				return blob
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "extreme PCR digest count 100 million",
+			blobMaker: func() []byte {
+				return makeBlob(0, 0, 0, 100_000_000)
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "oversized total blob",
+			blobMaker: func() []byte {
+				// Create a blob larger than MaxBlobSize
+				blob := make([]byte, MaxBlobSize+1)
+				binary.LittleEndian.PutUint32(blob[0:4], 2) // version
+				return blob
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "valid small blob still accepted",
+			blobMaker: func() []byte {
+				// Construct a minimal valid complete blob
+				sb := &SealedBlob{
+					Version:    CurrentBlobVersion,
+					AppVersion: "test",
+					Public:     []byte{1, 2, 3},
+					Private:    []byte{4, 5, 6},
+					PCRDigests: []PCRDigestPair{
+						{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					},
+					HasPassword:   false,
+					EventlogBased: false,
+				}
+				data, _ := sb.Marshal()
+				return data
+			},
+			expectErr: "", // no error expected
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blob := tt.blobMaker()
+			_, err := UnmarshalSealedBlob(blob)
+
+			if tt.expectErr == "" {
+				if err != nil {
+					t.Errorf("Expected no error, got: %v", err)
+				}
+				return
+			}
+
+			if err == nil {
+				t.Errorf("Expected error containing %q, got nil", tt.expectErr)
+				return
+			}
+			if !strings.Contains(err.Error(), tt.expectErr) {
+				t.Errorf("Expected error containing %q, got: %v", tt.expectErr, err)
 			}
 		})
 	}
