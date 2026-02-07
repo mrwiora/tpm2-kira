@@ -65,6 +65,26 @@ func TestParsePCRs(t *testing.T) {
 			input:    "7,2,0,4",
 			expected: []int{7, 2, 0, 4},
 		},
+		{
+			name:      "Duplicate PCR simple",
+			input:     "0,0",
+			shouldErr: true,
+		},
+		{
+			name:      "Duplicate PCR repeated many times",
+			input:     "0,0,0,0,0",
+			shouldErr: true,
+		},
+		{
+			name:      "Duplicate PCR non-adjacent",
+			input:     "0,2,7,2",
+			shouldErr: true,
+		},
+		{
+			name:      "Duplicate PCR mixed with valid",
+			input:     "0,2,4,7,4",
+			shouldErr: true,
+		},
 	}
 
 	for _, tt := range tests {

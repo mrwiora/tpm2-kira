@@ -191,6 +191,7 @@ func PcrsToBitmapBytes(pcrIndices []int) []byte {
 func ParsePCRs(pcrsStr string) ([]int, error) {
 	parts := strings.Split(pcrsStr, ",")
 	pcrs := make([]int, 0, len(parts))
+	seen := make(map[int]bool)
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
@@ -203,6 +204,10 @@ func ParsePCRs(pcrsStr string) ([]int, error) {
 		if pcr < 0 || pcr >= 24 {
 			return nil, fmt.Errorf("PCR value %d out of range (0-23)", pcr)
 		}
+		if seen[pcr] {
+			return nil, fmt.Errorf("duplicate PCR index %d specified - each PCR can only be used once (duplicates provide no additional security)", pcr)
+		}
+		seen[pcr] = true
 		pcrs = append(pcrs, pcr)
 	}
 	if len(pcrs) == 0 {
