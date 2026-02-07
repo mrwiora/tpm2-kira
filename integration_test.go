@@ -17,7 +17,7 @@ import (
 const (
 	// Test configuration
 	testTPMPath    = "/tmp/tpm2-kira-test-tpm"
-	testNVRAMIndex = "0x01800999"
+	testNVRAMIndex = "0x01803099"
 	testPassword   = "test-password-123"
 	testPCRs       = "0,2,4,7"
 )
@@ -310,7 +310,7 @@ func TestSealWithCustomPCRs(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Use different NVRAM index for each test
-			nvramIndex := fmt.Sprintf("0x0180%04d", time.Now().UnixNano()%10000)
+			nvramIndex := fmt.Sprintf("0x01803%03X", time.Now().UnixNano()%0xFFF)
 
 			stdinInput := testPassword + "\n" + testPassword + "\n"
 			stdout, stderr, err := runTPMKiraWithInput(t, tpmPath, stdinInput,
@@ -421,7 +421,7 @@ func TestNVRAMDeleteNonExistent(t *testing.T) {
 	_, stderr, err := runTPMKira(t, tpmPath,
 		"nvram",
 		"delete",
-		"--nvram", "0x01809999",
+		"--nvram", "0x01803999",
 	)
 
 	// Check if command failed OR if error message indicates non-existent index
@@ -883,8 +883,8 @@ func TestCompleteWorkflow(t *testing.T) {
 	t.Log("✓ Startup TPM2 successful")
 
 	// Use unique NVRAM indices for each phase to avoid conflicts
-	nvramIndexNoPassword := "0x01800001"
-	nvramIndexWithPassword := "0x01800002"
+	nvramIndexNoPassword := "0x01803001"
+	nvramIndexWithPassword := "0x01803002"
 
 	// ===================================================================
 	t.Log("\n=== TEST WITH NO PASSWORD ===")
@@ -952,7 +952,7 @@ func TestCompleteWorkflow(t *testing.T) {
 	t.Log("\n=== TEST WITH PCR EXTENSION ===")
 	// ===================================================================
 
-	nvramIndexPCR := "0x01800003"
+	nvramIndexPCR := "0x01803003"
 	customPCRs := "0,23"
 
 	// Seal with password and custom PCRs - must be successful
@@ -1104,7 +1104,7 @@ func TestQuickWorkflow(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
 
-	nvramIndex := "0x01800003"
+	nvramIndex := "0x01803003"
 
 	// Simple workflow: seal -> reveal -> delete
 	t.Log("Step 1: Seal with password")
@@ -1133,7 +1133,7 @@ func TestExitCodes(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
 
-	nvramIndex := "0x01800010"
+	nvramIndex := "0x01803010"
 
 	t.Log("=== Testing Exit Codes ===")
 
@@ -1251,7 +1251,7 @@ func TestExitCodes(t *testing.T) {
 	t.Log("Test 9: NVRAM status on non-existent index...")
 	stdout.Reset()
 	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "nvram", "status", "--tpm", tpmPath, "--nvram", "0x01800050")
+	cmd = exec.Command("./tpm2-kira", "nvram", "status", "--tpm", tpmPath, "--nvram", "0x01803050")
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
@@ -1265,7 +1265,7 @@ func TestExitCodes(t *testing.T) {
 	t.Log("Test 10: NVRAM delete on non-existent index...")
 	stdout.Reset()
 	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "nvram", "delete", "--tpm", tpmPath, "--nvram", "0x01800051")
+	cmd = exec.Command("./tpm2-kira", "nvram", "delete", "--tpm", tpmPath, "--nvram", "0x01803051")
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
