@@ -672,6 +672,107 @@ func TestIsTPMAuthError(t *testing.T) {
 }
 
 // TestCurrentBlobVersion verifies the constant is set correctly
+func TestValidateNVRAMIndex(t *testing.T) {
+	tests := []struct {
+		name      string
+		index     uint32
+		shouldErr bool
+	}{
+		{
+			name:      "Valid: default index 0x01803010",
+			index:     0x01803010,
+			shouldErr: false,
+		},
+		{
+			name:      "Valid: range start 0x01803000",
+			index:     AppNVRAMStart,
+			shouldErr: false,
+		},
+		{
+			name:      "Valid: range end 0x01803FFF",
+			index:     AppNVRAMEnd,
+			shouldErr: false,
+		},
+		{
+			name:      "Valid: slot end 0x0180301F",
+			index:     0x0180301F,
+			shouldErr: false,
+		},
+		{
+			name:      "Valid: mid-range 0x01803800",
+			index:     0x01803800,
+			shouldErr: false,
+		},
+		{
+			name:      "Rejected: just below range 0x01802FFF",
+			index:     AppNVRAMStart - 1,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: just above range 0x01804000",
+			index:     AppNVRAMEnd + 1,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: zero index",
+			index:     0x00000000,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: max uint32",
+			index:     0xFFFFFFFF,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: platform hierarchy 0x01C00002",
+			index:     0x01C00002,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: platform primary seed 0x01C0000B",
+			index:     0x01C0000B,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: owner hierarchy reserved 0x01400001",
+			index:     0x01400001,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: endorsement hierarchy 0x01800001",
+			index:     0x01800001,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: system reserved 0x01000000",
+			index:     0x01000000,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: firmware range 0x013FFFFF",
+			index:     0x013FFFFF,
+			shouldErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateNVRAMIndex(tt.index)
+
+			if tt.shouldErr {
+				if err == nil {
+					t.Errorf("Expected error for index 0x%08X, got nil", tt.index)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("Unexpected error for index 0x%08X: %v", tt.index, err)
+			}
+		})
+	}
+}
+
 func TestCurrentBlobVersion(t *testing.T) {
 	if CurrentBlobVersion != 2 {
 		t.Errorf("CurrentBlobVersion should be 2, got %d", CurrentBlobVersion)
