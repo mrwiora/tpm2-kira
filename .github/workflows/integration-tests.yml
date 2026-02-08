@@ -40,6 +40,11 @@ jobs:
         run: go mod download
 
       - name: Run integration tests
-        run: go test -v -tags=integration -timeout 10m ./...
+        run: go test -v -tags=integration -coverprofile=coverage.out -timeout 10m ./...
         env:
           CGO_ENABLED: 1
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
