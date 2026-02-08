@@ -758,8 +758,8 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 			blobMaker: func() []byte {
 				blob := make([]byte, 16)
 				binary.LittleEndian.PutUint32(blob[0:4], CurrentBlobVersion) // version
-				binary.LittleEndian.PutUint32(blob[4:8], 0)                 // appVersionLen=0
-				binary.LittleEndian.PutUint32(blob[8:12], MaxPublicLen+1)   // too large
+				binary.LittleEndian.PutUint32(blob[4:8], 0)                  // appVersionLen=0
+				binary.LittleEndian.PutUint32(blob[8:12], MaxPublicLen+1)    // too large
 				binary.LittleEndian.PutUint32(blob[12:16], 0)
 				return blob
 			},
@@ -770,8 +770,8 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 			blobMaker: func() []byte {
 				blob := make([]byte, 20)
 				binary.LittleEndian.PutUint32(blob[0:4], CurrentBlobVersion) // version
-				binary.LittleEndian.PutUint32(blob[4:8], 0)                 // appVersionLen=0
-				binary.LittleEndian.PutUint32(blob[8:12], 0)                // publicLen=0
+				binary.LittleEndian.PutUint32(blob[4:8], 0)                  // appVersionLen=0
+				binary.LittleEndian.PutUint32(blob[8:12], 0)                 // publicLen=0
 				binary.LittleEndian.PutUint32(blob[12:16], MaxPrivateLen+1)  // too large
 				binary.LittleEndian.PutUint32(blob[16:20], 0)
 				return blob
