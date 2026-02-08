@@ -839,8 +839,7 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 					PCRDigests: []PCRDigestPair{
 						{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
-					HasPassword:   false,
-					EventlogBased: false,
+					HasPassword: false,
 				}
 				data, _ := sb.Marshal()
 				return data
