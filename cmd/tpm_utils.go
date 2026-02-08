@@ -249,10 +249,7 @@ func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 		}
 		seen[pcr] = true
 
-		
-    
-    
-    = append(specs, PCRSpec{Index: pcr, Source: source})
+		specs = append(specs, PCRSpec{Index: pcr, Source: source})
 	}
 	if len(specs) == 0 {
 		return nil, fmt.Errorf("no PCRs specified")
