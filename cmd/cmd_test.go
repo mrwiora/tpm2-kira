@@ -1890,11 +1890,11 @@ func TestIsTOTPSecret(t *testing.T) {
 // TestGenerateTOTPURI tests TOTP URI generation
 func TestGenerateTOTPURI(t *testing.T) {
 	tests := []struct {
-		name           string
-		secret         string
-		label          string
-		issuer         string
-		wantContains   []string
+		name         string
+		secret       string
+		label        string
+		issuer       string
+		wantContains []string
 	}{
 		{
 			name:   "Custom values",
