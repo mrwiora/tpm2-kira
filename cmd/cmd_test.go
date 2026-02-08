@@ -6,6 +6,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -161,6 +162,21 @@ func TestParsePCRSpecs(t *testing.T) {
 		{
 			name:      "Negative PCR",
 			input:     "-1e",
+			shouldErr: true,
+		},
+		{
+			name:      "Duplicate PCR different sources",
+			input:     "0e,0r,7,9",
+			shouldErr: true,
+		},
+		{
+			name:      "Duplicate PCR same source",
+			input:     "0e,2,0e",
+			shouldErr: true,
+		},
+		{
+			name:      "Duplicate PCR no suffix",
+			input:     "0,2,7,0",
 			shouldErr: true,
 		},
 	}

@@ -77,6 +77,12 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 
 	fs.Parse(args)
 
+	// Validate PCR specs before prompting for password
+	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(0)
+	}
+
 	// Read optional password from stdin
 	password, err := cmd.ReadOptionalPasswordFromStdin("fallback access")
 	if err != nil {
@@ -99,6 +105,14 @@ func runReseal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
+
+	// Validate PCR specs before prompting for password (only if explicitly provided)
+	if *pcrs != "" {
+		if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(0)
+		}
+	}
 
 	// Read required password from stdin for reseal
 	password, err := cmd.ReadRequiredPasswordFromStdin("resealing")

@@ -199,6 +199,7 @@ type PCRSpec struct {
 func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 	parts := strings.Split(pcrsStr, ",")
 	specs := make([]PCRSpec, 0, len(parts))
+	seen := make(map[int]bool)
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
@@ -226,6 +227,10 @@ func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 		if source == PCRSourceEventlog && pcr > 7 {
 			return nil, fmt.Errorf("eventlog source (e suffix) is only valid for PCRs 0-7, got PCR %d", pcr)
 		}
+		if seen[pcr] {
+			return nil, fmt.Errorf("duplicate PCR %d specified (each PCR index can only appear once)", pcr)
+		}
+		seen[pcr] = true
 
 		specs = append(specs, PCRSpec{Index: pcr, Source: source})
 	}
