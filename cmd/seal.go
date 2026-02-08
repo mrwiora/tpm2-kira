@@ -10,24 +10,19 @@ import (
 )
 
 // Seal generates and seals a TOTP secret to TPM NVRAM with PCR policy and optional password
-func Seal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool, eventlogBased bool) error {
-	// Parse PCRs first to display them
-	pcrs, err := ParsePCRs(pcrsStr)
+func Seal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool) error {
+	// Parse PCR specs first to display them
+	specs, err := ParsePCRSpecs(pcrsStr)
 	if err != nil {
 		return fmt.Errorf("invalid PCRs: %w", err)
 	}
 
 	// Display which PCRs are being used
 	fmt.Println("=== Sealing Configuration ===")
-	fmt.Printf("PCRs used for sealing: %v\n", pcrs)
-	if eventlogBased {
-		fmt.Println("Mode: Eventlog-based PCR calculation")
-	} else {
-		fmt.Println("Mode: Current PCR values")
-	}
+	fmt.Printf("PCRs used for sealing: %s\n", PCRSpecsToString(specs))
 	fmt.Println()
-	for _, pcrIndex := range pcrs {
-		fmt.Printf("  PCR%-2d: %s\n", pcrIndex, GetPCRDescription(pcrIndex))
+	for _, spec := range specs {
+		fmt.Printf("  PCR%-2d (%s): %s\n", spec.Index, spec.Source.String(), GetPCRDescription(spec.Index))
 	}
 	fmt.Println()
 
@@ -39,7 +34,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug boo
 	}
 
 	// Seal the generated TOTP secret
-	if err := sealDataWithMode(tpmPath, pcrsStr, nvramIndex, dataToSeal, password, debug, eventlogBased); err != nil {
+	if err := sealDataWithSpecs(tpmPath, specs, nvramIndex, dataToSeal, password, debug); err != nil {
 		return err
 	}
 
@@ -53,7 +48,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug boo
 	fmt.Println()
 
 	// Display QR code with slot and PCR information
-	displayTOTPQRCode(totpSecret, nvramIndex, pcrsStr)
+	displayTOTPQRCode(totpSecret, nvramIndex, PCRSpecsToString(specs))
 
 	fmt.Println()
 	fmt.Println("To generate TOTP codes:")
@@ -67,18 +62,20 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug boo
 	return nil
 }
 
-// sealData seals the provided data to TPM NVRAM with PCR policy and password
-// This is an internal function used by both Seal and Reseal
+// sealData seals the provided data to TPM NVRAM with PCR policy and password.
+// Parses the pcrsStr to determine per-PCR sources (register vs eventlog).
 func sealData(tpmPath, pcrsStr string, nvramIndex uint32, dataToSeal []byte, password string, debug bool) error {
-	return sealDataWithMode(tpmPath, pcrsStr, nvramIndex, dataToSeal, password, debug, false)
-}
-
-// sealDataWithMode seals data with support for eventlog-based PCR calculation
-func sealDataWithMode(tpmPath, pcrsStr string, nvramIndex uint32, dataToSeal []byte, password string, debug bool, eventlogBased bool) error {
-	// Parse PCRs
-	pcrs, err := ParsePCRs(pcrsStr)
+	specs, err := ParsePCRSpecs(pcrsStr)
 	if err != nil {
 		return fmt.Errorf("invalid PCRs: %w", err)
+	}
+	return sealDataWithSpecs(tpmPath, specs, nvramIndex, dataToSeal, password, debug)
+}
+
+// sealDataWithSpecs seals data using explicit PCR specs with per-PCR source (register or eventlog)
+func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataToSeal []byte, password string, debug bool) error {
+	if len(specs) == 0 {
+		return fmt.Errorf("no PCRs specified")
 	}
 
 	if len(dataToSeal) == 0 {
@@ -95,13 +92,24 @@ func sealDataWithMode(tpmPath, pcrsStr string, nvramIndex uint32, dataToSeal []b
 	// Cleanup TPM memory
 	CleanupTPM(tpmDev, debug)
 
-	var policyDigest tpm2.TPM2BDigest
-	var pcrDigests []PCRDigestPair
+	// Separate PCRs by source
+	var eventlogPCRIndices []int
+	var registerPCRIndices []int
+	for _, spec := range specs {
+		if spec.Source == PCRSourceEventlog {
+			eventlogPCRIndices = append(eventlogPCRIndices, spec.Index)
+		} else {
+			registerPCRIndices = append(registerPCRIndices, spec.Index)
+		}
+	}
+
+	// Collect all PCR values from their respective sources
+	pcrValues := make(map[int][]byte)
 	var eventlogInfo *EventlogInfo
 
-	if eventlogBased {
-		// Use eventlog-based PCR calculation
-		calc := NewEventlogPCRCalculator(tpmDev, pcrs, debug)
+	// Calculate eventlog-based PCR values
+	if len(eventlogPCRIndices) > 0 {
+		calc := NewEventlogPCRCalculator(tpmDev, eventlogPCRIndices, debug)
 
 		// Validate eventlog access first
 		if err := ValidateEventlogAccess(tpmDev); err != nil {
@@ -115,33 +123,22 @@ func sealDataWithMode(tpmPath, pcrsStr string, nvramIndex uint32, dataToSeal []b
 		}
 		eventlogInfo = info
 
-		// Compute policy digest from calculated PCR values
-		policyDigest, err = ComputePolicyDigestFromPCRValues(tpmDev, pcrs, calculatedPCRs)
-		if err != nil {
-			return fmt.Errorf("failed to compute policy digest from calculated PCRs: %w", err)
-		}
-
-		// Create PCRDigestPair structures from calculated values
-		pcrDigests = make([]PCRDigestPair, len(pcrs))
-		for i, pcrIndex := range pcrs {
-			pcrDigests[i] = PCRDigestPair{
-				Index: pcrIndex,
-				Digest: tpm2.TPM2BDigest{
-					Buffer: calculatedPCRs[pcrIndex],
-				},
-			}
+		for idx, val := range calculatedPCRs {
+			pcrValues[idx] = val
 		}
 
 		if debug {
-			fmt.Println("Using eventlog-calculated PCR values:")
-			for _, pair := range pcrDigests {
-				fmt.Printf("  PCR%d: %x\n", pair.Index, pair.Digest.Buffer)
+			fmt.Println("Eventlog-calculated PCR values:")
+			for _, idx := range eventlogPCRIndices {
+				fmt.Printf("  PCR%d: %x\n", idx, pcrValues[idx])
 			}
 		}
-	} else {
-		// Use current PCR values (original behavior)
+	}
+
+	// Read register-based PCR values from TPM
+	if len(registerPCRIndices) > 0 {
 		pcrRead := tpm2.PCRRead{
-			PCRSelectionIn: CreatePCRSelection(pcrs),
+			PCRSelectionIn: CreatePCRSelection(registerPCRIndices),
 		}
 
 		pcrReadResp, err := pcrRead.Execute(tpmDev)
@@ -149,19 +146,36 @@ func sealDataWithMode(tpmPath, pcrsStr string, nvramIndex uint32, dataToSeal []b
 			return fmt.Errorf("failed to read PCRs: %w", err)
 		}
 
-		// Compute the policy digest
-		policyDigest, err = ComputePolicyDigest(tpmDev, pcrs)
-		if err != nil {
-			return fmt.Errorf("failed to compute policy digest: %w", err)
+		for i, pcrIndex := range registerPCRIndices {
+			pcrValues[pcrIndex] = pcrReadResp.PCRValues.Digests[i].Buffer
 		}
 
-		// Create PCRDigestPair structures from current values
-		pcrDigests = make([]PCRDigestPair, len(pcrs))
-		for i, pcrIndex := range pcrs {
-			pcrDigests[i] = PCRDigestPair{
-				Index:  pcrIndex,
-				Digest: pcrReadResp.PCRValues.Digests[i],
+		if debug {
+			fmt.Println("Register-read PCR values:")
+			for _, idx := range registerPCRIndices {
+				fmt.Printf("  PCR%d: %x\n", idx, pcrValues[idx])
 			}
+		}
+	}
+
+	// Build ordered list of all PCR indices (preserving spec order)
+	allPCRIndices := PCRSpecIndices(specs)
+
+	// Compute policy digest from all collected PCR values
+	policyDigest, err := ComputePolicyDigestFromPCRValues(tpmDev, allPCRIndices, pcrValues)
+	if err != nil {
+		return fmt.Errorf("failed to compute policy digest from PCR values: %w", err)
+	}
+
+	// Create PCRDigestPair structures with per-PCR source
+	pcrDigests := make([]PCRDigestPair, len(specs))
+	for i, spec := range specs {
+		pcrDigests[i] = PCRDigestPair{
+			Index:  spec.Index,
+			Source: spec.Source,
+			Digest: tpm2.TPM2BDigest{
+				Buffer: pcrValues[spec.Index],
+			},
 		}
 	}
 
@@ -178,16 +192,15 @@ func sealDataWithMode(tpmPath, pcrsStr string, nvramIndex uint32, dataToSeal []b
 		return err
 	}
 
-	// Prepare sealed blob (Version 2: no password hash/salt stored)
+	// Prepare sealed blob (Version 3: per-PCR source tracking)
 	sealedBlob := &SealedBlob{
-		Version:       2,
-		AppVersion:    AppVersion,
-		Public:        createRsp.Public,
-		Private:       createRsp.Private,
-		PCRDigests:    pcrDigests,
-		HasPassword:   password != "",
-		EventlogBased: eventlogBased,
-		EventlogInfo:  eventlogInfo,
+		Version:      3,
+		AppVersion:   AppVersion,
+		Public:       createRsp.Public,
+		Private:      createRsp.Private,
+		PCRDigests:   pcrDigests,
+		HasPassword:  password != "",
+		EventlogInfo: eventlogInfo,
 	}
 
 	// Marshal to bytes
@@ -203,17 +216,18 @@ func sealDataWithMode(tpmPath, pcrsStr string, nvramIndex uint32, dataToSeal []b
 
 	if debug {
 		fmt.Printf("Successfully sealed TOTP secret to TPM NVRAM index 0x%08X\n", nvramIndex)
-		fmt.Printf("PCRs used: %v\n", pcrs)
+		fmt.Printf("PCRs used: %s\n", PCRSpecsToString(specs))
 		fmt.Printf("Secret size: %d bytes\n", len(dataToSeal))
 		fmt.Printf("Total NVRAM size: %d bytes\n", len(data))
-		if eventlogBased {
-			fmt.Printf("PCR calculation: eventlog-based\n")
+		if len(eventlogPCRIndices) > 0 {
+			fmt.Printf("Eventlog PCRs: %v\n", eventlogPCRIndices)
 			if eventlogInfo != nil {
 				fmt.Printf("Eventlog path: %s\n", eventlogInfo.EventlogPath)
 				fmt.Printf("Total events: %d\n", eventlogInfo.TotalEvents)
 			}
-		} else {
-			fmt.Printf("PCR calculation: current values\n")
+		}
+		if len(registerPCRIndices) > 0 {
+			fmt.Printf("Register PCRs: %v\n", registerPCRIndices)
 		}
 		if password != "" {
 			fmt.Printf("Password fallback: enabled (TPM-validated)\n")

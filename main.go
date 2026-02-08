@@ -74,9 +74,14 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
-	eventlogBased := fs.Bool("eventlog-based", false, "Calculate PCR values from eventlog instead of reading current values")
 
 	fs.Parse(args)
+
+	// Validate PCR specs before prompting for password
+	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(0)
+	}
 
 	// Read optional password from stdin
 	password, err := cmd.ReadOptionalPasswordFromStdin("fallback access")
@@ -85,7 +90,7 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 		os.Exit(0)
 	}
 
-	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), password, *debug, *eventlogBased); err != nil {
+	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), password, *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -100,6 +105,14 @@ func runReseal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
+
+	// Validate PCR specs before prompting for password (only if explicitly provided)
+	if *pcrs != "" {
+		if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(0)
+		}
+	}
 
 	// Read required password from stdin for reseal
 	password, err := cmd.ReadRequiredPasswordFromStdin("resealing")
@@ -276,14 +289,17 @@ GLOBAL OPTIONS:
   --debug         Enable debug output
 
 SEAL OPTIONS:
-  --pcrs INDICES     PCR indices (default: 0,2,7)
-  --eventlog-based   Calculate PCR values from TPM eventlog instead of current values
+  --pcrs INDICES     PCR indices with optional source suffix (default: 0,2,7)
+                     Suffix 'r' = read from TPM registers (default if no suffix)
+                     Suffix 'e' = calculate from TPM eventlog (PCRs 0-7 only)
+                     Examples: "0,2,7" (all register), "0e,2e,7e" (all eventlog),
+                               "0e,2,7e" (mixed: 0 and 7 from eventlog, 2 from register)
                      You will be prompted for an optional password
 
 RESEAL OPTIONS:
-  --pcrs INDICES     New PCR indices (optional, preserves original if omitted)
+  --pcrs INDICES     New PCR indices with optional source suffix (optional,
+                     preserves original selection and per-PCR sources if omitted)
                      You will be prompted for the required password
-                     Eventlog-based calculation is automatically preserved from original sealing
 
 INFO OPTIONS:
   --json             Output as JSON
@@ -296,13 +312,13 @@ NVRAM SUBCOMMANDS:
 
 EXAMPLES:
   tpm2-kira seal
-  tpm2-kira seal --eventlog-based
-  tpm2-kira seal --pcrs "0,2,4,7" --eventlog-based
+  tpm2-kira seal --pcrs "0e,2e,7e"
+  tpm2-kira seal --pcrs "0e,2,4,7e"
   tpm2-kira reveal
   tpm2-kira reveal-plain
   tpm2-kira run
   tpm2-kira reseal
-  tpm2-kira reseal --pcrs "0,2,4,7"
+  tpm2-kira reseal --pcrs "0e,2,4,7e"
   tpm2-kira info
   tpm2-kira nvram list
 

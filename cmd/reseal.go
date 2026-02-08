@@ -9,14 +9,14 @@ import (
 )
 
 // Reseal unseals data from TPM NVRAM and reseals it with current PCR values
-// Automatically preserves eventlog-based PCR calculation if the original blob was eventlog-based
+// Automatically preserves per-PCR source modes (register vs eventlog) from the original blob
 func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool) error {
 	// Parse PCRs if provided (we'll use original PCRs if not explicitly overridden)
-	var userProvidedPCRs []int
+	var userProvidedSpecs []PCRSpec
 	var userSpecifiedPCRs bool
 	var err error
 	if pcrsStr != "" {
-		userProvidedPCRs, err = ParsePCRs(pcrsStr)
+		userProvidedSpecs, err = ParsePCRSpecs(pcrsStr)
 		if err != nil {
 			return fmt.Errorf("invalid PCRs: %w", err)
 		}
@@ -28,7 +28,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
-	// Note: No defer here - we'll close it manually before calling sealData
+	// Note: No defer here - we'll close it manually before calling sealDataWithSpecs
 
 	// Cleanup TPM memory
 	CleanupTPM(tpmDev, debug)
@@ -119,64 +119,61 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 	unsealedData := result.UnsealedData
 	sealedBlob = result.SealedBlob
 
-	// Close TPM device before calling sealData (which will open it again)
+	// Close TPM device before calling sealDataWithSpecs (which will open it again)
 	tpmDev.Close()
 
-	// Check if original blob was eventlog-based
-	useEventlog := sealedBlob.EventlogBased
+	// Determine which PCR specs to use for resealing
+	var specsToUse []PCRSpec
 
-	if useEventlog {
-		fmt.Println("\nResealing data with eventlog-based PCR calculation (preserving original mode)...")
+	if userSpecifiedPCRs {
+		// User explicitly provided PCRs - use those
+		specsToUse = userProvidedSpecs
+		fmt.Printf("\nResealing data with user-specified PCRs: %s\n", PCRSpecsToString(specsToUse))
+	} else {
+		// No PCRs specified - preserve original PCR selection and per-PCR sources
+		specsToUse = sealedBlob.GetPCRSpecs()
+		fmt.Printf("\nPreserving original PCR selection: %s\n", PCRSpecsToString(specsToUse))
+	}
+
+	// Display per-PCR source information
+	hasEventlog := false
+	hasRegister := false
+	for _, spec := range specsToUse {
+		if spec.Source == PCRSourceEventlog {
+			hasEventlog = true
+		} else {
+			hasRegister = true
+		}
+	}
+
+	if hasEventlog && hasRegister {
+		fmt.Println("PCR sources: mixed (some eventlog, some register)")
+	} else if hasEventlog {
+		fmt.Println("PCR sources: all eventlog-based")
+	} else {
+		fmt.Println("PCR sources: all register-based")
+	}
+
+	for _, spec := range specsToUse {
+		fmt.Printf("  PCR%-2d (%s): %s\n", spec.Index, spec.Source.String(), GetPCRDescription(spec.Index))
+	}
+
+	if hasEventlog {
+		fmt.Println("Note: Eventlog will be re-read to calculate current PCR values")
 		if sealedBlob.EventlogInfo != nil {
-			fmt.Printf("Original eventlog info:\n")
+			fmt.Printf("Previous eventlog info:\n")
 			fmt.Printf("  Eventlog path: %s\n", sealedBlob.EventlogInfo.EventlogPath)
 			fmt.Printf("  Sealed at: %s\n", sealedBlob.EventlogInfo.CalculationTime)
 			fmt.Printf("  Events processed: %d/%d\n", sealedBlob.EventlogInfo.ProcessedEvents, sealedBlob.EventlogInfo.TotalEvents)
 		}
-	} else {
-		fmt.Println("\nResealing data with current PCR values...")
 	}
 
-	// Determine which PCRs to use for resealing
-	var pcrsToUse []int
-	var pcrsStrToUse string
-
-	if userSpecifiedPCRs {
-		// User explicitly provided PCRs - use those
-		pcrsToUse = userProvidedPCRs
-		pcrsStrToUse = pcrsStr
-		fmt.Printf("Using user-specified PCRs: %v\n", pcrsToUse)
-	} else {
-		// No PCRs specified - preserve original PCR selection
-		pcrsToUse = sealedBlob.GetPCRIndices()
-		// Convert PCR slice to string format for sealData
-		pcrsStrToUse = ""
-		for i, pcr := range pcrsToUse {
-			if i > 0 {
-				pcrsStrToUse += ","
-			}
-			pcrsStrToUse += fmt.Sprintf("%d", pcr)
-		}
-		fmt.Printf("Preserving original PCR selection: %v\n", pcrsToUse)
-	}
-
-	if useEventlog {
-		fmt.Printf("PCR calculation mode: eventlog-based (automatically preserved)\n")
-		fmt.Printf("Note: Eventlog will be re-read to calculate current PCR values\n")
-	} else {
-		fmt.Printf("PCR calculation mode: current values\n")
-	}
-
-	// Reseal the data with appropriate mode (eventlog-based or current values)
-	if err := sealDataWithMode(tpmPath, pcrsStrToUse, nvramIndex, unsealedData, password, debug, useEventlog); err != nil {
+	// Reseal the data with the determined specs
+	if err := sealDataWithSpecs(tpmPath, specsToUse, nvramIndex, unsealedData, password, debug); err != nil {
 		return fmt.Errorf("failed to reseal data: %w", err)
 	}
 
-	if useEventlog {
-		fmt.Printf("\nSuccessfully resealed data with eventlog-based PCRs: %v\n", pcrsToUse)
-	} else {
-		fmt.Printf("\nSuccessfully resealed data with current PCRs: %v\n", pcrsToUse)
-	}
+	fmt.Printf("\nSuccessfully resealed data with PCRs: %s\n", PCRSpecsToString(specsToUse))
 	fmt.Printf("Data size: %d bytes\n", len(unsealedData))
 
 	return nil
