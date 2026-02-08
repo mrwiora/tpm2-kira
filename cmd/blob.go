@@ -105,7 +105,7 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 
 	peek.Version = binary.LittleEndian.Uint32(data[0:4])
 
-	// Try to read app version (same layout across v2 and v3: [version:4][appVersionLen:4][appVersion])
+	// Try to read app version (v3 layout: [version:4][appVersionLen:4][appVersion])
 	if len(data) >= 8 {
 		appVersionLen := binary.LittleEndian.Uint32(data[4:8])
 		if appVersionLen > 0 && appVersionLen < 256 && len(data) >= 8+int(appVersionLen) {
