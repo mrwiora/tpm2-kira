@@ -2034,6 +2034,7 @@ func TestIsTPMPolicyFailure(t *testing.T) {
 		{"Failed to create PCR policy session", fmt.Errorf("failed to create PCR policy session"), true},
 		{"Session policy check", fmt.Errorf("session 1): a policy check failed"), true},
 		{"Wrapped error", fmt.Errorf("error: %s", "TPM_RC_POLICY_FAIL occurred"), true},
+		{"Mid-string match", fmt.Errorf("TPM error: TPM_RC_POLICY_FAIL in session"), true},
 	}
 
 	for _, tt := range tests {
