@@ -60,9 +60,11 @@ func InfoWithFormat(tpmPath, pcrsStr string, nvramIndex uint32, debug bool, json
 		fmt.Printf("TPM NVRAM Index: 0x%08X\n", nvramIndex)
 		fmt.Printf("Total NVRAM Size: %d bytes\n\n", nvPublic.DataSize)
 
+		hashAlgo := sealedBlob.GetHashAlgo()
 		fmt.Printf("Blob Format:\n")
 		fmt.Printf("  Version: %d\n", sealedBlob.Version)
-		fmt.Printf("  App Version: %s\n\n", sealedBlob.AppVersion)
+		fmt.Printf("  App Version: %s\n", sealedBlob.AppVersion)
+		fmt.Printf("  Hash Algorithm: %s (%d-byte PCR digests)\n\n", hashAlgo.DisplayString(), hashAlgo.DigestSize())
 
 		fmt.Printf("NVRAM Attributes:\n")
 		fmt.Printf("  Owner Write: %v\n", nvPublic.Attributes.OwnerWrite)

@@ -1303,6 +1303,7 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 	expectedFields := []string{
 		`"version"`,
 		`"app_version"`,
+		`"hash_algorithm"`,
 		`"public_hex"`,
 		`"private_hex"`,
 		`"pcr_digests"`,
@@ -1388,7 +1389,9 @@ func TestSealedBlobMarshalJSONWithEventlogInfo(t *testing.T) {
 // TestCreatePCRSelection tests PCR selection creation
 func TestCreatePCRSelection(t *testing.T) {
 	pcrs := []int{0, 2, 4, 7}
-	selection := CreatePCRSelection(pcrs)
+
+	// Test SHA256 (default)
+	selection := CreatePCRSelection(pcrs, PCRHashAlgoSHA256)
 
 	if len(selection.PCRSelections) == 0 {
 		t.Fatal("Expected at least one PCR selection")
@@ -1404,6 +1407,116 @@ func TestCreatePCRSelection(t *testing.T) {
 	bitmap := PcrsToBitmapBytes(pcrs)
 	if !bytes.Equal(pcrSel.PCRSelect, bitmap) {
 		t.Error("PCR selection bitmap mismatch")
+	}
+
+	// Test SHA1
+	selectionSHA1 := CreatePCRSelection(pcrs, PCRHashAlgoSHA1)
+
+	if len(selectionSHA1.PCRSelections) == 0 {
+		t.Fatal("Expected at least one PCR selection for SHA1")
+	}
+
+	pcrSelSHA1 := selectionSHA1.PCRSelections[0]
+
+	if pcrSelSHA1.Hash != tpm2.TPMAlgSHA1 {
+		t.Errorf("Expected SHA1 hash algorithm, got %v", pcrSelSHA1.Hash)
+	}
+
+	if !bytes.Equal(pcrSelSHA1.PCRSelect, bitmap) {
+		t.Error("PCR selection bitmap mismatch for SHA1")
+	}
+}
+
+// TestGetHashAlgo tests hash algorithm detection from PCR digest sizes
+func TestGetHashAlgo(t *testing.T) {
+	tests := []struct {
+		name     string
+		blob     *SealedBlob
+		expected PCRHashAlgo
+	}{
+		{
+			name: "SHA256 digests (32 bytes)",
+			blob: &SealedBlob{
+				Version:    3,
+				AppVersion: "test",
+				PCRDigests: []PCRDigestPair{
+					{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				},
+			},
+			expected: PCRHashAlgoSHA256,
+		},
+		{
+			name: "SHA1 digests (20 bytes)",
+			blob: &SealedBlob{
+				Version:    3,
+				AppVersion: "test",
+				PCRDigests: []PCRDigestPair{
+					{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 20)}},
+					{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 20)}},
+				},
+			},
+			expected: PCRHashAlgoSHA1,
+		},
+		{
+			name: "Empty digests defaults to SHA256",
+			blob: &SealedBlob{
+				Version:    3,
+				AppVersion: "test",
+				PCRDigests: []PCRDigestPair{},
+			},
+			expected: PCRHashAlgoSHA256,
+		},
+		{
+			name: "No PCR digests defaults to SHA256",
+			blob: &SealedBlob{
+				Version:    3,
+				AppVersion: "test",
+			},
+			expected: PCRHashAlgoSHA256,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.blob.GetHashAlgo()
+			if got != tt.expected {
+				t.Errorf("GetHashAlgo() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestPCRHashAlgoMethods tests the PCRHashAlgo type methods
+func TestPCRHashAlgoMethods(t *testing.T) {
+	// SHA256
+	sha256 := PCRHashAlgoSHA256
+	if sha256.DigestSize() != 32 {
+		t.Errorf("SHA256 DigestSize() = %d, want 32", sha256.DigestSize())
+	}
+	if sha256.String() != "sha256" {
+		t.Errorf("SHA256 String() = %q, want \"sha256\"", sha256.String())
+	}
+	if sha256.DisplayString() != "SHA-256" {
+		t.Errorf("SHA256 DisplayString() = %q, want \"SHA-256\"", sha256.DisplayString())
+	}
+	if sha256.TPMAlg() != tpm2.TPMAlgSHA256 {
+		t.Errorf("SHA256 TPMAlg() mismatch")
+	}
+
+	// SHA1
+	sha1 := PCRHashAlgoSHA1
+	if sha1.DigestSize() != 20 {
+		t.Errorf("SHA1 DigestSize() = %d, want 20", sha1.DigestSize())
+	}
+	if sha1.String() != "sha1" {
+		t.Errorf("SHA1 String() = %q, want \"sha1\"", sha1.String())
+	}
+	if sha1.DisplayString() != "SHA-1" {
+		t.Errorf("SHA1 DisplayString() = %q, want \"SHA-1\"", sha1.DisplayString())
+	}
+	if sha1.TPMAlg() != tpm2.TPMAlgSHA1 {
+		t.Errorf("SHA1 TPMAlg() mismatch")
 	}
 }
 

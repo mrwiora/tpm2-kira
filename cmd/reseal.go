@@ -135,6 +135,10 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 		fmt.Printf("\nPreserving original PCR selection: %s\n", PCRSpecsToString(specsToUse))
 	}
 
+	// Detect hash algorithm from the original blob
+	hashAlgo := sealedBlob.GetHashAlgo()
+	fmt.Printf("Hash algorithm: %s (%d-byte PCR digests)\n", hashAlgo.DisplayString(), hashAlgo.DigestSize())
+
 	// Display per-PCR source information
 	hasEventlog := false
 	hasRegister := false
@@ -168,8 +172,8 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 		}
 	}
 
-	// Reseal the data with the determined specs
-	if err := sealDataWithSpecs(tpmPath, specsToUse, nvramIndex, unsealedData, password, debug); err != nil {
+	// Reseal the data with the determined specs, preserving the original hash algorithm
+	if err := sealDataWithSpecs(tpmPath, specsToUse, nvramIndex, unsealedData, password, debug, hashAlgo); err != nil {
 		return fmt.Errorf("failed to reseal data: %w", err)
 	}
 
