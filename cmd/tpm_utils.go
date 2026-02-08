@@ -9,6 +9,23 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
+const (
+	// AppNVRAMStart is the start of the safe NVRAM index range for application use
+	AppNVRAMStart = 0x01803000
+	// AppNVRAMEnd is the end of the safe NVRAM index range for application use
+	AppNVRAMEnd = 0x01803FFF
+)
+
+// ValidateNVRAMIndex checks that the given NVRAM index is within the safe application range.
+// Indices outside this range may belong to platform firmware, other applications, or
+// reserved TPM hierarchy ranges and must not be accessed to prevent data destruction.
+func ValidateNVRAMIndex(index uint32) error {
+	if index < AppNVRAMStart || index > AppNVRAMEnd {
+		return fmt.Errorf("NVRAM index 0x%08X is outside the safe application range (0x%08X-0x%08X)", index, AppNVRAMStart, AppNVRAMEnd)
+	}
+	return nil
+}
+
 // CleanupTPM flushes all transient handles and sessions to free TPM memory
 func CleanupTPM(tpmDev transport.TPM, debug bool) {
 	if err := flushAllTransientHandles(tpmDev); err != nil {
@@ -232,7 +249,10 @@ func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 		}
 		seen[pcr] = true
 
-		specs = append(specs, PCRSpec{Index: pcr, Source: source})
+		
+    
+    
+    = append(specs, PCRSpec{Index: pcr, Source: source})
 	}
 	if len(specs) == 0 {
 		return nil, fmt.Errorf("no PCRs specified")
@@ -567,6 +587,11 @@ func ReadFromNVRAM(tpmDev transport.TPM, index uint32) ([]byte, error) {
 
 // WriteToNVRAM writes data to a TPM NVRAM index
 func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte) error {
+	// Validate index is within the safe application range
+	if err := ValidateNVRAMIndex(index); err != nil {
+		return fmt.Errorf("invalid NVRAM index: %w", err)
+	}
+
 	nvIndex := tpm2.TPMHandle(index)
 
 	// Try to undefine existing NVRAM space (if it exists)
@@ -583,7 +608,9 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte) error {
 				Name:   readPubResp.NVName,
 			},
 		}
-		_, _ = undefine.Execute(tpmDev)
+		if _, err := undefine.Execute(tpmDev); err != nil {
+			return fmt.Errorf("failed to undefine existing NVRAM index 0x%08X: %w", index, err)
+		}
 	}
 	// If checkErr != nil, index doesn't exist, which is fine
 
@@ -938,6 +965,11 @@ func NVRAMList(tpmPath string, nvramIndex uint32, debug bool) error {
 
 // NVRAMDelete deletes the specified NVRAM index
 func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
+	// Validate index is within the safe application range
+	if err := ValidateNVRAMIndex(nvramIndex); err != nil {
+		return fmt.Errorf("invalid NVRAM index: %w", err)
+	}
+
 	// Open TPM
 	tpmDev, err := transport.OpenTPM(tpmPath)
 	if err != nil {

@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -271,6 +272,26 @@ func TestParsePCRs(t *testing.T) {
 			name:     "PCRs in random order",
 			input:    "7,2,0,4",
 			expected: []int{7, 2, 0, 4},
+		},
+		{
+			name:      "Duplicate PCR simple",
+			input:     "0,0",
+			shouldErr: true,
+		},
+		{
+			name:      "Duplicate PCR repeated many times",
+			input:     "0,0,0,0,0",
+			shouldErr: true,
+		},
+		{
+			name:      "Duplicate PCR non-adjacent",
+			input:     "0,2,7,2",
+			shouldErr: true,
+		},
+		{
+			name:      "Duplicate PCR mixed with valid",
+			input:     "0,2,4,7,4",
+			shouldErr: true,
 		},
 	}
 
@@ -672,6 +693,186 @@ func TestUnmarshalSealedBlobInvalid(t *testing.T) {
 }
 
 // TestUnmarshalIncompatibleVersion tests the specific incompatibility error message and BlobVersionError type
+func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
+	// Helper to build a minimal valid blob prefix up to a certain field,
+	// then inject an oversized length value.
+	makeBlob := func(appVersionLen, publicLen, privateLen, numPCRDigests uint32) []byte {
+		// Build a blob with controlled length fields
+		// We only need enough bytes to reach the field under test
+		buf := make([]byte, 0, 256)
+		b4 := make([]byte, 4)
+
+		// version
+		binary.LittleEndian.PutUint32(b4, 2)
+		buf = append(buf, b4...)
+
+		// appVersionLen
+		binary.LittleEndian.PutUint32(b4, appVersionLen)
+		buf = append(buf, b4...)
+		// appVersion data (fill with zeros)
+		buf = append(buf, make([]byte, appVersionLen)...)
+
+		// publicLen
+		binary.LittleEndian.PutUint32(b4, publicLen)
+		buf = append(buf, b4...)
+		// public data
+		buf = append(buf, make([]byte, publicLen)...)
+
+		// privateLen
+		binary.LittleEndian.PutUint32(b4, privateLen)
+		buf = append(buf, b4...)
+		// private data
+		buf = append(buf, make([]byte, privateLen)...)
+
+		// numPCRDigests
+		binary.LittleEndian.PutUint32(b4, numPCRDigests)
+		buf = append(buf, b4...)
+
+		// Pad to at least 16 bytes for minimum length check
+		for len(buf) < 16 {
+			buf = append(buf, 0)
+		}
+
+		return buf
+	}
+
+	tests := []struct {
+		name      string
+		blobMaker func() []byte
+		expectErr string
+	}{
+		{
+			name: "oversized app version length",
+			blobMaker: func() []byte {
+				blob := make([]byte, 16)
+				binary.LittleEndian.PutUint32(blob[0:4], 2)                  // version
+				binary.LittleEndian.PutUint32(blob[4:8], MaxAppVersionLen+1) // too large
+				binary.LittleEndian.PutUint32(blob[8:12], 0)
+				binary.LittleEndian.PutUint32(blob[12:16], 0)
+				return blob
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "oversized public blob length",
+			blobMaker: func() []byte {
+				blob := make([]byte, 16)
+				binary.LittleEndian.PutUint32(blob[0:4], 2)               // version
+				binary.LittleEndian.PutUint32(blob[4:8], 0)               // appVersionLen=0
+				binary.LittleEndian.PutUint32(blob[8:12], MaxPublicLen+1) // too large
+				binary.LittleEndian.PutUint32(blob[12:16], 0)
+				return blob
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "oversized private blob length",
+			blobMaker: func() []byte {
+				blob := make([]byte, 20)
+				binary.LittleEndian.PutUint32(blob[0:4], 2)                 // version
+				binary.LittleEndian.PutUint32(blob[4:8], 0)                 // appVersionLen=0
+				binary.LittleEndian.PutUint32(blob[8:12], 0)                // publicLen=0
+				binary.LittleEndian.PutUint32(blob[12:16], MaxPrivateLen+1) // too large
+				binary.LittleEndian.PutUint32(blob[16:20], 0)
+				return blob
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "oversized PCR digest count",
+			blobMaker: func() []byte {
+				return makeBlob(0, 0, 0, MaxPCRDigests+1)
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "extreme public blob 4GB",
+			blobMaker: func() []byte {
+				blob := make([]byte, 16)
+				binary.LittleEndian.PutUint32(blob[0:4], 2)
+				binary.LittleEndian.PutUint32(blob[4:8], 0)
+				binary.LittleEndian.PutUint32(blob[8:12], 0xFFFFFFFF) // ~4GB
+				binary.LittleEndian.PutUint32(blob[12:16], 0)
+				return blob
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "extreme private blob 4GB",
+			blobMaker: func() []byte {
+				blob := make([]byte, 20)
+				binary.LittleEndian.PutUint32(blob[0:4], 2)
+				binary.LittleEndian.PutUint32(blob[4:8], 0)
+				binary.LittleEndian.PutUint32(blob[8:12], 0)
+				binary.LittleEndian.PutUint32(blob[12:16], 0xFFFFFFFF) // ~4GB
+				binary.LittleEndian.PutUint32(blob[16:20], 0)
+				return blob
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "extreme PCR digest count 100 million",
+			blobMaker: func() []byte {
+				return makeBlob(0, 0, 0, 100_000_000)
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "oversized total blob",
+			blobMaker: func() []byte {
+				// Create a blob larger than MaxBlobSize
+				blob := make([]byte, MaxBlobSize+1)
+				binary.LittleEndian.PutUint32(blob[0:4], 2) // version
+				return blob
+			},
+			expectErr: "exceeds maximum",
+		},
+		{
+			name: "valid small blob still accepted",
+			blobMaker: func() []byte {
+				// Construct a minimal valid complete blob
+				sb := &SealedBlob{
+					Version:    CurrentBlobVersion,
+					AppVersion: "test",
+					Public:     []byte{1, 2, 3},
+					Private:    []byte{4, 5, 6},
+					PCRDigests: []PCRDigestPair{
+						{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					},
+					HasPassword:   false,
+					EventlogBased: false,
+				}
+				data, _ := sb.Marshal()
+				return data
+			},
+			expectErr: "", // no error expected
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blob := tt.blobMaker()
+			_, err := UnmarshalSealedBlob(blob)
+
+			if tt.expectErr == "" {
+				if err != nil {
+					t.Errorf("Expected no error, got: %v", err)
+				}
+				return
+			}
+
+			if err == nil {
+				t.Errorf("Expected error containing %q, got nil", tt.expectErr)
+				return
+			}
+			if !strings.Contains(err.Error(), tt.expectErr) {
+				t.Errorf("Expected error containing %q, got: %v", tt.expectErr, err)
+			}
+		})
+	}
+}
+
+// TestUnmarshalIncompatibleVersion tests the specific incompatibility error message
 func TestUnmarshalIncompatibleVersion(t *testing.T) {
 	// Create data with version 1
 	data := make([]byte, 20)
@@ -1385,6 +1586,107 @@ func TestIsTPMAuthError(t *testing.T) {
 }
 
 // TestCurrentBlobVersion verifies the constant is set correctly
+func TestValidateNVRAMIndex(t *testing.T) {
+	tests := []struct {
+		name      string
+		index     uint32
+		shouldErr bool
+	}{
+		{
+			name:      "Valid: default index 0x01803010",
+			index:     0x01803010,
+			shouldErr: false,
+		},
+		{
+			name:      "Valid: range start 0x01803000",
+			index:     AppNVRAMStart,
+			shouldErr: false,
+		},
+		{
+			name:      "Valid: range end 0x01803FFF",
+			index:     AppNVRAMEnd,
+			shouldErr: false,
+		},
+		{
+			name:      "Valid: slot end 0x0180301F",
+			index:     0x0180301F,
+			shouldErr: false,
+		},
+		{
+			name:      "Valid: mid-range 0x01803800",
+			index:     0x01803800,
+			shouldErr: false,
+		},
+		{
+			name:      "Rejected: just below range 0x01802FFF",
+			index:     AppNVRAMStart - 1,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: just above range 0x01804000",
+			index:     AppNVRAMEnd + 1,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: zero index",
+			index:     0x00000000,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: max uint32",
+			index:     0xFFFFFFFF,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: platform hierarchy 0x01C00002",
+			index:     0x01C00002,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: platform primary seed 0x01C0000B",
+			index:     0x01C0000B,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: owner hierarchy reserved 0x01400001",
+			index:     0x01400001,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: endorsement hierarchy 0x01800001",
+			index:     0x01800001,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: system reserved 0x01000000",
+			index:     0x01000000,
+			shouldErr: true,
+		},
+		{
+			name:      "Rejected: firmware range 0x013FFFFF",
+			index:     0x013FFFFF,
+			shouldErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateNVRAMIndex(tt.index)
+
+			if tt.shouldErr {
+				if err == nil {
+					t.Errorf("Expected error for index 0x%08X, got nil", tt.index)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("Unexpected error for index 0x%08X: %v", tt.index, err)
+			}
+		})
+	}
+}
+
 func TestCurrentBlobVersion(t *testing.T) {
 	if CurrentBlobVersion != 3 {
 		t.Errorf("CurrentBlobVersion should be 3, got %d", CurrentBlobVersion)

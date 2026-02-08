@@ -108,6 +108,21 @@ func (s PCRSource) Suffix() string {
 }
 
 // PCRDigestPair represents a PCR index paired with its source and digest value
+// Maximum size constraints for blob deserialization to prevent memory exhaustion.
+// These limits are generous for legitimate use while blocking malicious allocations.
+const (
+	MaxBlobSize      = 10 * 1024 * 1024 // 10MB maximum total blob size
+	MaxAppVersionLen = 1024             // 1KB maximum app version string
+	MaxPublicLen     = 2 * 1024 * 1024  // 2MB maximum public blob
+	MaxPrivateLen    = 2 * 1024 * 1024  // 2MB maximum private blob
+	MaxPCRDigests    = 100              // Maximum 100 PCR digest entries
+	MaxDigestSize    = 1024             // Maximum 1KB per individual digest
+	MaxEventlogPath  = 4096             // Maximum 4KB for eventlog path
+	MaxEventlogHash  = 128              // Maximum 128 bytes for hash string
+	MaxCalcTime      = 256              // Maximum 256 bytes for timestamp
+)
+
+// PCRDigestPair represents a PCR index paired with its digest value
 type PCRDigestPair struct {
 	Index  int              `json:"index"`  // PCR index
 	Source PCRSource        `json:"source"` // Where the PCR value was obtained from
@@ -317,6 +332,11 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 // UnmarshalSealedBlob parses bytes back into a SealedBlob
 // Only supports version 3 format
 func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
+	// Validate total blob size to prevent resource exhaustion
+	if len(data) > MaxBlobSize {
+		return nil, fmt.Errorf("blob size %d exceeds maximum allowed %d bytes", len(data), MaxBlobSize)
+	}
+
 	if len(data) < 16 {
 		return nil, fmt.Errorf("data too short to be a valid sealed blob")
 	}
@@ -340,6 +360,9 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 	}
 	appVersionLen := binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
+	if appVersionLen > MaxAppVersionLen {
+		return nil, fmt.Errorf("app version length %d exceeds maximum %d", appVersionLen, MaxAppVersionLen)
+	}
 	if offset+int(appVersionLen) > len(data) {
 		return nil, fmt.Errorf("invalid app version length")
 	}
@@ -352,6 +375,9 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 	}
 	publicLen := binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
+	if publicLen > MaxPublicLen {
+		return nil, fmt.Errorf("public blob length %d exceeds maximum %d", publicLen, MaxPublicLen)
+	}
 	if offset+int(publicLen) > len(data) {
 		return nil, fmt.Errorf("invalid public blob length")
 	}
@@ -365,6 +391,9 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 	}
 	privateLen := binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
+	if privateLen > MaxPrivateLen {
+		return nil, fmt.Errorf("private blob length %d exceeds maximum %d", privateLen, MaxPrivateLen)
+	}
 	if offset+int(privateLen) > len(data) {
 		return nil, fmt.Errorf("invalid private blob length")
 	}
@@ -378,6 +407,9 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 	}
 	numPCRDigests := binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
+	if numPCRDigests > MaxPCRDigests {
+		return nil, fmt.Errorf("PCR digest count %d exceeds maximum %d", numPCRDigests, MaxPCRDigests)
+	}
 	sb.PCRDigests = make([]PCRDigestPair, numPCRDigests)
 	for i := 0; i < int(numPCRDigests); i++ {
 		// PCR index
@@ -401,6 +433,9 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 		digestSize := int(binary.LittleEndian.Uint16(data[offset:]))
 		offset += 2
 
+		if digestSize > MaxDigestSize {
+			return nil, fmt.Errorf("digest size %d exceeds maximum %d", digestSize, MaxDigestSize)
+		}
 		if offset+digestSize > len(data) {
 			return nil, fmt.Errorf("data too short for digest buffer")
 		}
@@ -436,6 +471,9 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 		}
 		pathLen := binary.LittleEndian.Uint32(data[offset:])
 		offset += 4
+		if pathLen > MaxEventlogPath {
+			return nil, fmt.Errorf("eventlog path length %d exceeds maximum %d", pathLen, MaxEventlogPath)
+		}
 		if offset+int(pathLen) > len(data) {
 			return nil, fmt.Errorf("data too short for eventlog path")
 		}
@@ -448,6 +486,9 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 		}
 		hashLen := binary.LittleEndian.Uint32(data[offset:])
 		offset += 4
+		if hashLen > MaxEventlogHash {
+			return nil, fmt.Errorf("eventlog hash length %d exceeds maximum %d", hashLen, MaxEventlogHash)
+		}
 		if offset+int(hashLen) > len(data) {
 			return nil, fmt.Errorf("data too short for eventlog hash")
 		}
@@ -460,6 +501,9 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 		}
 		timeLen := binary.LittleEndian.Uint32(data[offset:])
 		offset += 4
+		if timeLen > MaxCalcTime {
+			return nil, fmt.Errorf("calculation time length %d exceeds maximum %d", timeLen, MaxCalcTime)
+		}
 		if offset+int(timeLen) > len(data) {
 			return nil, fmt.Errorf("data too short for calculation time")
 		}
