@@ -9,16 +9,108 @@ import (
 	"github.com/google/go-tpm/tpm2"
 )
 
+// BlobVersionError is returned when a sealed blob has an incompatible version
+type BlobVersionError struct {
+	FoundVersion    uint32
+	RequiredVersion uint32
+	DataSize        int
+}
+
+func (e *BlobVersionError) Error() string {
+	return fmt.Sprintf("tpm2-kira: incompatible blob version (found v%d, requires v%d). Re-seal with: tpm2-kira seal", e.FoundVersion, e.RequiredVersion)
+}
+
+// IsBlobVersionError checks if an error (or its wrapped chain) is a BlobVersionError
+func IsBlobVersionError(err error) (*BlobVersionError, bool) {
+	if err == nil {
+		return nil, false
+	}
+	// Check direct type
+	if bve, ok := err.(*BlobVersionError); ok {
+		return bve, true
+	}
+	// Check wrapped errors (fmt.Errorf %w)
+	if unwrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return IsBlobVersionError(unwrapped.Unwrap())
+	}
+	return nil, false
+}
+
+// BlobPeek contains basic information about a raw blob without full unmarshaling
+type BlobPeek struct {
+	DataSize   int
+	Version    uint32
+	AppVersion string // empty if version is too old or data too short to read
+}
+
+// PeekBlobVersion reads just the version and app version from raw blob data without full unmarshal
+func PeekBlobVersion(data []byte) *BlobPeek {
+	peek := &BlobPeek{
+		DataSize: len(data),
+	}
+
+	if len(data) < 4 {
+		return peek
+	}
+
+	peek.Version = binary.LittleEndian.Uint32(data[0:4])
+
+	// Try to read app version (same layout across v2 and v3: [version:4][appVersionLen:4][appVersion])
+	if len(data) >= 8 {
+		appVersionLen := binary.LittleEndian.Uint32(data[4:8])
+		if appVersionLen > 0 && appVersionLen < 256 && len(data) >= 8+int(appVersionLen) {
+			peek.AppVersion = string(data[8 : 8+appVersionLen])
+		}
+	}
+
+	return peek
+}
+
 // AppVersion is the version of the application that created the sealed blob
 // This should be set by the main package during initialization
 var AppVersion = "unknown"
 
 // CurrentBlobVersion is the only supported blob format version
-const CurrentBlobVersion = 2
+const CurrentBlobVersion = 3
 
-// PCRDigestPair represents a PCR index paired with its digest value
+// PCRSource indicates where a PCR value was obtained from
+type PCRSource byte
+
+const (
+	// PCRSourceRegister means the PCR value was read from TPM registers ('r' suffix or default)
+	PCRSourceRegister PCRSource = 0
+	// PCRSourceEventlog means the PCR value was calculated from the TPM eventlog ('e' suffix)
+	PCRSourceEventlog PCRSource = 1
+)
+
+// String returns a human-readable label for the PCR source
+func (s PCRSource) String() string {
+	switch s {
+	case PCRSourceEventlog:
+		return "eventlog"
+	case PCRSourceRegister:
+		return "register"
+	default:
+		return "unknown"
+	}
+}
+
+// Suffix returns the single-character suffix for the PCR source
+func (s PCRSource) Suffix() string {
+	switch s {
+	case PCRSourceEventlog:
+		return "e"
+	case PCRSourceRegister:
+		return ""
+	default:
+		return ""
+	}
+}
+
+// PCRDigestPair represents a PCR index paired with its source and digest value
 type PCRDigestPair struct {
 	Index  int              `json:"index"`  // PCR index
+	Source PCRSource        `json:"source"` // Where the PCR value was obtained from
 	Digest tpm2.TPM2BDigest `json:"digest"` // PCR digest value at seal time
 }
 
@@ -32,16 +124,15 @@ type EventlogInfo struct {
 }
 
 // SealedBlob represents the complete sealed data structure
-// Version 2: Password validation is done solely by TPM, no hash/salt stored
+// Version 3: Per-PCR source tracking (register vs eventlog), no global EventlogBased flag
 type SealedBlob struct {
-	Version       uint32          `json:"version"`        // Blob format version (must be 2)
-	AppVersion    string          `json:"app_version"`    // Application version that created this blob
-	Public        []byte          `json:"public"`         // TPM public key blob
-	Private       []byte          `json:"private"`        // TPM private key blob
-	PCRDigests    []PCRDigestPair `json:"pcr_digests"`    // PCR indices with their digest values
-	HasPassword   bool            `json:"has_password"`   // Whether password fallback is enabled
-	EventlogBased bool            `json:"eventlog_based"` // Whether PCR values were calculated from eventlog
-	EventlogInfo  *EventlogInfo   `json:"eventlog_info"`  // Eventlog calculation metadata (if eventlog_based is true)
+	Version      uint32          `json:"version"`       // Blob format version (must be 3)
+	AppVersion   string          `json:"app_version"`   // Application version that created this blob
+	Public       []byte          `json:"public"`        // TPM public key blob
+	Private      []byte          `json:"private"`       // TPM private key blob
+	PCRDigests   []PCRDigestPair `json:"pcr_digests"`   // PCR indices with their source and digest values
+	HasPassword  bool            `json:"has_password"`  // Whether password fallback is enabled
+	EventlogInfo *EventlogInfo   `json:"eventlog_info"` // Eventlog calculation metadata (if any PCR uses eventlog)
 }
 
 // GetPCRIndices returns a slice of PCR indices from the PCRDigests
@@ -62,11 +153,52 @@ func (sb *SealedBlob) GetPCRDigestValues() []tpm2.TPM2BDigest {
 	return digests
 }
 
-// Marshal converts the SealedBlob to bytes for storage (Version 2 format)
+// HasEventlogPCRs returns true if any PCR in this blob uses eventlog as its source
+func (sb *SealedBlob) HasEventlogPCRs() bool {
+	for _, pair := range sb.PCRDigests {
+		if pair.Source == PCRSourceEventlog {
+			return true
+		}
+	}
+	return false
+}
+
+// GetEventlogPCRIndices returns indices of PCRs that use eventlog as their source
+func (sb *SealedBlob) GetEventlogPCRIndices() []int {
+	var indices []int
+	for _, pair := range sb.PCRDigests {
+		if pair.Source == PCRSourceEventlog {
+			indices = append(indices, pair.Index)
+		}
+	}
+	return indices
+}
+
+// GetRegisterPCRIndices returns indices of PCRs that use TPM registers as their source
+func (sb *SealedBlob) GetRegisterPCRIndices() []int {
+	var indices []int
+	for _, pair := range sb.PCRDigests {
+		if pair.Source == PCRSourceRegister {
+			indices = append(indices, pair.Index)
+		}
+	}
+	return indices
+}
+
+// GetPCRSpecs reconstructs PCRSpec slice from the sealed blob's PCR digests
+func (sb *SealedBlob) GetPCRSpecs() []PCRSpec {
+	specs := make([]PCRSpec, len(sb.PCRDigests))
+	for i, pair := range sb.PCRDigests {
+		specs[i] = PCRSpec{Index: pair.Index, Source: pair.Source}
+	}
+	return specs
+}
+
+// Marshal converts the SealedBlob to bytes for storage (Version 3 format)
 func (sb *SealedBlob) Marshal() ([]byte, error) {
-	// Format v2: [version:4][appVersionLen:4][appVersion][publicLen:4][public][privateLen:4][private]
-	//            [numPCRDigests:4][pcrDigestPairs...][hasPassword:1][eventlogBased:1][eventlogInfo...]
-	// where pcrDigestPairs = [pcrIndex:4][digestLen:2][digest]... (repeated for each PCR)
+	// Format v3: [version:4][appVersionLen:4][appVersion][publicLen:4][public][privateLen:4][private]
+	//            [numPCRDigests:4][pcrDigestPairs...][hasPassword:1][hasEventlogInfo:1][eventlogInfo...]
+	// where pcrDigestPairs = [pcrIndex:4][source:1][digestLen:2][digest]... (repeated for each PCR)
 
 	size := 4 + // version (4 bytes for alignment and future compatibility)
 		4 + len(sb.AppVersion) + // app version length + string
@@ -74,16 +206,18 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 		4 + len(sb.Private) + // private blob
 		4 + // number of PCR digests
 		1 + // hasPassword flag
-		1 // eventlogBased flag
+		1 // hasEventlogInfo flag
 
 	// Calculate PCR digest pair size
 	for _, pcrDigest := range sb.PCRDigests {
 		size += 4 + // PCR index
+			1 + // source byte
 			2 + len(pcrDigest.Digest.Buffer) // 2 bytes for length + digest data
 	}
 
 	// Calculate eventlog info size (if present)
-	if sb.EventlogBased && sb.EventlogInfo != nil {
+	hasEventlogInfo := sb.HasEventlogPCRs() && sb.EventlogInfo != nil
+	if hasEventlogInfo {
 		size += 4 + len(sb.EventlogInfo.EventlogPath) + // eventlog path
 			4 + len(sb.EventlogInfo.EventlogHash) + // eventlog hash
 			4 + len(sb.EventlogInfo.CalculationTime) + // calculation time
@@ -93,7 +227,7 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 	buf := make([]byte, size)
 	offset := 0
 
-	// Version 2
+	// Version 3
 	binary.LittleEndian.PutUint32(buf[offset:], CurrentBlobVersion)
 	offset += 4
 
@@ -115,13 +249,17 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 	copy(buf[offset:], sb.Private)
 	offset += len(sb.Private)
 
-	// PCR digest pairs (index + digest together)
+	// PCR digest pairs (index + source + digest together)
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(sb.PCRDigests)))
 	offset += 4
 	for _, pcrDigest := range sb.PCRDigests {
 		// PCR index
 		binary.LittleEndian.PutUint32(buf[offset:], uint32(pcrDigest.Index))
 		offset += 4
+
+		// PCR source
+		buf[offset] = byte(pcrDigest.Source)
+		offset++
 
 		// PCR digest
 		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(pcrDigest.Digest.Buffer)))
@@ -130,7 +268,7 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 		offset += len(pcrDigest.Digest.Buffer)
 	}
 
-	// Password flag (no hash/salt in v2)
+	// Password flag (no hash/salt in v3)
 	if sb.HasPassword {
 		buf[offset] = 1
 	} else {
@@ -138,16 +276,16 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 	}
 	offset++
 
-	// Eventlog information
-	if sb.EventlogBased {
+	// Eventlog information flag
+	if hasEventlogInfo {
 		buf[offset] = 1
 	} else {
 		buf[offset] = 0
 	}
 	offset++
 
-	// Eventlog metadata (only if eventlog-based and info is available)
-	if sb.EventlogBased && sb.EventlogInfo != nil {
+	// Eventlog metadata (only if flag is set)
+	if hasEventlogInfo {
 		// Eventlog path
 		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(sb.EventlogInfo.EventlogPath)))
 		offset += 4
@@ -177,7 +315,7 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 }
 
 // UnmarshalSealedBlob parses bytes back into a SealedBlob
-// Only supports version 2 format
+// Only supports version 3 format
 func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 	if len(data) < 16 {
 		return nil, fmt.Errorf("data too short to be a valid sealed blob")
@@ -186,7 +324,11 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 	// Version check
 	version := binary.LittleEndian.Uint32(data[0:4])
 	if version != CurrentBlobVersion {
-		return nil, fmt.Errorf("tpm2-kira: restart sealing process due to incompatibility (found version %d, requires version %d)", version, CurrentBlobVersion)
+		return nil, &BlobVersionError{
+			FoundVersion:    version,
+			RequiredVersion: CurrentBlobVersion,
+			DataSize:        len(data),
+		}
 	}
 
 	offset := 4
@@ -245,6 +387,13 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 		sb.PCRDigests[i].Index = int(binary.LittleEndian.Uint32(data[offset:]))
 		offset += 4
 
+		// PCR source
+		if offset+1 > len(data) {
+			return nil, fmt.Errorf("data too short for PCR source")
+		}
+		sb.PCRDigests[i].Source = PCRSource(data[offset])
+		offset++
+
 		// PCR digest
 		if offset+2 > len(data) {
 			return nil, fmt.Errorf("data too short for digest size")
@@ -263,22 +412,22 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 		offset += digestSize
 	}
 
-	// Password flag (no hash/salt in v2)
+	// Password flag
 	if offset >= len(data) {
 		return nil, fmt.Errorf("data too short for password flag")
 	}
 	sb.HasPassword = data[offset] == 1
 	offset++
 
-	// Eventlog flag
+	// Eventlog info flag
 	if offset >= len(data) {
-		return nil, fmt.Errorf("data too short for eventlog flag")
+		return nil, fmt.Errorf("data too short for eventlog info flag")
 	}
-	sb.EventlogBased = data[offset] == 1
+	hasEventlogInfo := data[offset] == 1
 	offset++
 
-	// Read eventlog metadata if eventlog-based and there's more data
-	if sb.EventlogBased && offset < len(data) {
+	// Read eventlog metadata if flag is set and there's more data
+	if hasEventlogInfo && offset < len(data) {
 		sb.EventlogInfo = &EventlogInfo{}
 
 		// Eventlog path
@@ -335,6 +484,7 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 	// Convert PCR digest pairs to hex strings for readable JSON output
 	type PCRDigestJSON struct {
 		Index  int    `json:"index"`
+		Source string `json:"source"`
 		Digest string `json:"digest_hex"`
 	}
 
@@ -342,35 +492,34 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 	for i, pcrDigest := range sb.PCRDigests {
 		pcrDigests[i] = PCRDigestJSON{
 			Index:  pcrDigest.Index,
+			Source: pcrDigest.Source.String(),
 			Digest: hex.EncodeToString(pcrDigest.Digest.Buffer),
 		}
 	}
 
 	// Create a JSON-friendly structure
 	type SealedBlobJSON struct {
-		Version       uint32          `json:"version"`
-		AppVersion    string          `json:"app_version"`
-		Public        string          `json:"public_hex"`
-		PublicSize    int             `json:"public_size"`
-		Private       string          `json:"private_hex"`
-		PrivateSize   int             `json:"private_size"`
-		PCRDigests    []PCRDigestJSON `json:"pcr_digests"`
-		HasPassword   bool            `json:"has_password"`
-		EventlogBased bool            `json:"eventlog_based"`
-		EventlogInfo  *EventlogInfo   `json:"eventlog_info,omitempty"`
+		Version      uint32          `json:"version"`
+		AppVersion   string          `json:"app_version"`
+		Public       string          `json:"public_hex"`
+		PublicSize   int             `json:"public_size"`
+		Private      string          `json:"private_hex"`
+		PrivateSize  int             `json:"private_size"`
+		PCRDigests   []PCRDigestJSON `json:"pcr_digests"`
+		HasPassword  bool            `json:"has_password"`
+		EventlogInfo *EventlogInfo   `json:"eventlog_info,omitempty"`
 	}
 
 	jsonBlob := SealedBlobJSON{
-		Version:       sb.Version,
-		AppVersion:    sb.AppVersion,
-		Public:        hex.EncodeToString(sb.Public),
-		PublicSize:    len(sb.Public),
-		Private:       hex.EncodeToString(sb.Private),
-		PrivateSize:   len(sb.Private),
-		PCRDigests:    pcrDigests,
-		HasPassword:   sb.HasPassword,
-		EventlogBased: sb.EventlogBased,
-		EventlogInfo:  sb.EventlogInfo,
+		Version:      sb.Version,
+		AppVersion:   sb.AppVersion,
+		Public:       hex.EncodeToString(sb.Public),
+		PublicSize:   len(sb.Public),
+		Private:      hex.EncodeToString(sb.Private),
+		PrivateSize:  len(sb.Private),
+		PCRDigests:   pcrDigests,
+		HasPassword:  sb.HasPassword,
+		EventlogInfo: sb.EventlogInfo,
 	}
 
 	return json.Marshal(jsonBlob)

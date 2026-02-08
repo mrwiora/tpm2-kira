@@ -77,8 +77,8 @@ func InfoWithFormat(tpmPath, pcrsStr string, nvramIndex uint32, debug bool, json
 		fmt.Printf("  Number of PCRs: %d\n\n", len(sealedBlob.PCRDigests))
 
 		fmt.Printf("PCR Descriptions:\n")
-		for _, pcrIndex := range sealedBlob.GetPCRIndices() {
-			fmt.Printf("  PCR%-2d: %s\n", pcrIndex, GetPCRDescription(pcrIndex))
+		for _, pcrDigest := range sealedBlob.PCRDigests {
+			fmt.Printf("  PCR%-2d (%s): %s\n", pcrDigest.Index, pcrDigest.Source.String(), GetPCRDescription(pcrDigest.Index))
 		}
 		fmt.Printf("\n")
 
@@ -95,9 +95,9 @@ func InfoWithFormat(tpmPath, pcrsStr string, nvramIndex uint32, debug bool, json
 		fmt.Printf("  Public Blob Size: %d bytes\n", len(sealedBlob.Public))
 		fmt.Printf("  Private Blob Size: %d bytes\n\n", len(sealedBlob.Private))
 
-		fmt.Printf("PCR Calculation Method:\n")
-		if sealedBlob.EventlogBased {
-			fmt.Printf("  Method: Eventlog-based calculation\n")
+		fmt.Printf("Eventlog Information:\n")
+		if sealedBlob.HasEventlogPCRs() {
+			fmt.Printf("  Eventlog PCRs: %v\n", sealedBlob.GetEventlogPCRIndices())
 			if sealedBlob.EventlogInfo != nil {
 				fmt.Printf("  Eventlog Path: %s\n", sealedBlob.EventlogInfo.EventlogPath)
 				fmt.Printf("  Eventlog Hash: %s...\n", sealedBlob.EventlogInfo.EventlogHash[:min(16, len(sealedBlob.EventlogInfo.EventlogHash))])
@@ -106,13 +106,16 @@ func InfoWithFormat(tpmPath, pcrsStr string, nvramIndex uint32, debug bool, json
 				fmt.Printf("  Processed Events: %d\n", sealedBlob.EventlogInfo.ProcessedEvents)
 			}
 		} else {
-			fmt.Printf("  Method: Current PCR values (at seal time)\n")
+			fmt.Printf("  No eventlog-based PCRs (all from TPM registers)\n")
+		}
+		if len(sealedBlob.GetRegisterPCRIndices()) > 0 {
+			fmt.Printf("  Register PCRs: %v\n", sealedBlob.GetRegisterPCRIndices())
 		}
 		fmt.Printf("\n")
 
 		fmt.Printf("PCR Digest Values:\n")
 		for _, pcrDigest := range sealedBlob.PCRDigests {
-			fmt.Printf("  PCR %d: (%d bytes)\n", pcrDigest.Index, len(pcrDigest.Digest.Buffer))
+			fmt.Printf("  PCR %d (%s): (%d bytes)\n", pcrDigest.Index, pcrDigest.Source.String(), len(pcrDigest.Digest.Buffer))
 			fmt.Printf("    Value: %x\n", pcrDigest.Digest.Buffer)
 		}
 

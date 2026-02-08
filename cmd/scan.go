@@ -100,9 +100,42 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 		// Cleanup TPM state before each unseal attempt
 		CleanupTPM(tpmDev, debug)
 
+		// In debug mode, peek at the raw NVRAM data before attempting full unseal
+		if debug {
+			rawData, peekErr := ReadFromNVRAM(tpmDev, i)
+			if peekErr == nil {
+				peek := PeekBlobVersion(rawData)
+				fmt.Printf("  Slot %d: NVRAM data found (%d bytes), blob version: %d", slotNumber, peek.DataSize, peek.Version)
+				if peek.AppVersion != "" {
+					fmt.Printf(", app version: %s", peek.AppVersion)
+				}
+				fmt.Println()
+			} else if debug {
+				fmt.Printf("  Slot %d: no NVRAM data (%v)\n", slotNumber, peekErr)
+			}
+			// Re-cleanup after the peek read
+			CleanupTPM(tpmDev, debug)
+		}
+
 		// Try to unseal from this slot
 		result, err := UnsealWorkflow(tpmDev, i, debug)
 		if err != nil {
+			// Check if this is a blob version incompatibility (slot has data but wrong version)
+			if bve, ok := IsBlobVersionError(err); ok {
+				if debug {
+					fmt.Printf("  Slot %d: incompatible blob version (found v%d, requires v%d)\n", slotNumber, bve.FoundVersion, bve.RequiredVersion)
+				}
+
+				// Mark slot as available but with the version error
+				slots = append(slots, NVRAMSlot{
+					SlotNumber: slotNumber,
+					Index:      i,
+					Available:  true,
+					Error:      err,
+				})
+				continue
+			}
+
 			// Check if this is a PCR policy failure (slot exists but PCRs don't match)
 			if IsTPMPolicyFailure(err) {
 				if debug {
@@ -200,6 +233,12 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 
 	for _, slot := range slots {
 		if slot.Error != nil {
+			// Check if this is a version incompatibility error
+			if bve, ok := IsBlobVersionError(slot.Error); ok {
+				fmt.Printf("\033[0;31m#%d\033[0m: Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira seal\n", slot.SlotNumber, bve.FoundVersion, bve.RequiredVersion)
+				continue
+			}
+
 			// This slot has a PCR mismatch or policy failure - red slot number
 			fmt.Printf("\033[0;31m#%d\033[0m: PCR Mismatch\n", slot.SlotNumber)
 
@@ -240,7 +279,8 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 								status = "✗ CHANGED"
 							}
 
-							fmt.Printf("  PCR%-2d: %s - %s\n", pcrIndex, GetPCRDescription(pcrIndex), status)
+							source := sealedBlob.PCRDigests[idx].Source
+							fmt.Printf("  PCR%-2d (%s): %s - %s\n", pcrIndex, source.String(), GetPCRDescription(pcrIndex), status)
 							if !match {
 								fmt.Printf("    Expected: %x\n", expected)
 								fmt.Printf("    Current:  %x\n", current)
@@ -260,6 +300,11 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 func PrintPlainSlots(slots []NVRAMSlot, codes map[int]string) {
 	for _, slot := range slots {
 		if slot.Error != nil {
+			// Check if this is a version incompatibility error
+			if bve, ok := IsBlobVersionError(slot.Error); ok {
+				fmt.Printf("#%d: Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira seal\n", slot.SlotNumber, bve.FoundVersion, bve.RequiredVersion)
+				continue
+			}
 			// For plain output with errors, show slot number
 			fmt.Printf("#%d: PCR Mismatch\n", slot.SlotNumber)
 		} else if code, exists := codes[slot.SlotNumber]; exists {
@@ -417,7 +462,11 @@ func RunCommand(tpmPath string, nvramIndex uint32, debug bool) {
 				fmt.Printf("[ \033[1;33mKIRA\033[0m ] Time UTC %s\n", time.Now().UTC().Format("15:04:05"))
 				for _, slot := range slots {
 					if slot.Error != nil {
-						fmt.Printf("\033[0;31m#%d\033[0m: PCR Mismatch\n", slot.SlotNumber)
+						if bve, ok := IsBlobVersionError(slot.Error); ok {
+							fmt.Printf("\033[0;31m#%d\033[0m: Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira seal\n", slot.SlotNumber, bve.FoundVersion, bve.RequiredVersion)
+						} else {
+							fmt.Printf("\033[0;31m#%d\033[0m: PCR Mismatch\n", slot.SlotNumber)
+						}
 					} else if code, exists := newCodes[slot.SlotNumber]; exists {
 						fmt.Printf("\033[0;32m#%d\033[0m: %s\n", slot.SlotNumber, code)
 					}

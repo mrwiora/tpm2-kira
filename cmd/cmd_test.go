@@ -12,7 +12,193 @@ import (
 	"github.com/google/go-tpm/tpm2"
 )
 
-// TestParsePCRs tests PCR parsing from string format
+// TestParsePCRSpecs tests PCR spec parsing with source suffixes
+func TestParsePCRSpecs(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		expected  []PCRSpec
+		shouldErr bool
+	}{
+		{
+			name:  "Single PCR no suffix (default register)",
+			input: "0",
+			expected: []PCRSpec{
+				{Index: 0, Source: PCRSourceRegister},
+			},
+		},
+		{
+			name:  "Single PCR explicit register suffix",
+			input: "0r",
+			expected: []PCRSpec{
+				{Index: 0, Source: PCRSourceRegister},
+			},
+		},
+		{
+			name:  "Single PCR eventlog suffix",
+			input: "0e",
+			expected: []PCRSpec{
+				{Index: 0, Source: PCRSourceEventlog},
+			},
+		},
+		{
+			name:  "Multiple PCRs all register (no suffix)",
+			input: "0,2,4,7",
+			expected: []PCRSpec{
+				{Index: 0, Source: PCRSourceRegister},
+				{Index: 2, Source: PCRSourceRegister},
+				{Index: 4, Source: PCRSourceRegister},
+				{Index: 7, Source: PCRSourceRegister},
+			},
+		},
+		{
+			name:  "Multiple PCRs all eventlog",
+			input: "0e,2e,7e",
+			expected: []PCRSpec{
+				{Index: 0, Source: PCRSourceEventlog},
+				{Index: 2, Source: PCRSourceEventlog},
+				{Index: 7, Source: PCRSourceEventlog},
+			},
+		},
+		{
+			name:  "Mixed register and eventlog",
+			input: "0e,2,7e",
+			expected: []PCRSpec{
+				{Index: 0, Source: PCRSourceEventlog},
+				{Index: 2, Source: PCRSourceRegister},
+				{Index: 7, Source: PCRSourceEventlog},
+			},
+		},
+		{
+			name:  "Mixed with explicit r suffix",
+			input: "0e,2r,4r,7e",
+			expected: []PCRSpec{
+				{Index: 0, Source: PCRSourceEventlog},
+				{Index: 2, Source: PCRSourceRegister},
+				{Index: 4, Source: PCRSourceRegister},
+				{Index: 7, Source: PCRSourceEventlog},
+			},
+		},
+		{
+			name:  "PCRs with spaces",
+			input: "0e, 2, 7e",
+			expected: []PCRSpec{
+				{Index: 0, Source: PCRSourceEventlog},
+				{Index: 2, Source: PCRSourceRegister},
+				{Index: 7, Source: PCRSourceEventlog},
+			},
+		},
+		{
+			name:  "All firmware PCRs eventlog",
+			input: "0e,1e,2e,3e,4e,5e,6e,7e",
+			expected: []PCRSpec{
+				{Index: 0, Source: PCRSourceEventlog},
+				{Index: 1, Source: PCRSourceEventlog},
+				{Index: 2, Source: PCRSourceEventlog},
+				{Index: 3, Source: PCRSourceEventlog},
+				{Index: 4, Source: PCRSourceEventlog},
+				{Index: 5, Source: PCRSourceEventlog},
+				{Index: 6, Source: PCRSourceEventlog},
+				{Index: 7, Source: PCRSourceEventlog},
+			},
+		},
+		{
+			name:  "PCR 7 eventlog is allowed",
+			input: "7e",
+			expected: []PCRSpec{
+				{Index: 7, Source: PCRSourceEventlog},
+			},
+		},
+		{
+			name:      "PCR 8 eventlog is rejected",
+			input:     "8e",
+			shouldErr: true,
+		},
+		{
+			name:      "PCR 9 eventlog is rejected",
+			input:     "0e,9e",
+			shouldErr: true,
+		},
+		{
+			name:      "PCR 14 eventlog is rejected",
+			input:     "14e",
+			shouldErr: true,
+		},
+		{
+			name:      "PCR 23 eventlog is rejected",
+			input:     "23e",
+			shouldErr: true,
+		},
+		{
+			name:  "PCR 8 register is allowed",
+			input: "8",
+			expected: []PCRSpec{
+				{Index: 8, Source: PCRSourceRegister},
+			},
+		},
+		{
+			name:  "PCR 23 register is allowed",
+			input: "23r",
+			expected: []PCRSpec{
+				{Index: 23, Source: PCRSourceRegister},
+			},
+		},
+		{
+			name:      "Invalid PCR number",
+			input:     "0e,25",
+			shouldErr: true,
+		},
+		{
+			name:      "Non-numeric PCR",
+			input:     "0e,abc",
+			shouldErr: true,
+		},
+		{
+			name:      "Empty string",
+			input:     "",
+			shouldErr: true,
+		},
+		{
+			name:      "Negative PCR",
+			input:     "-1e",
+			shouldErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParsePCRSpecs(tt.input)
+
+			if tt.shouldErr {
+				if err == nil {
+					t.Errorf("Expected error for input %q, got nil", tt.input)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("Unexpected error for input %q: %v", tt.input, err)
+				return
+			}
+
+			if len(result) != len(tt.expected) {
+				t.Errorf("Expected %d specs, got %d", len(tt.expected), len(result))
+				return
+			}
+
+			for i, spec := range result {
+				if spec.Index != tt.expected[i].Index {
+					t.Errorf("Spec[%d].Index: expected %d, got %d", i, tt.expected[i].Index, spec.Index)
+				}
+				if spec.Source != tt.expected[i].Source {
+					t.Errorf("Spec[%d].Source: expected %v, got %v", i, tt.expected[i].Source, spec.Source)
+				}
+			}
+		})
+	}
+}
+
+// TestParsePCRs tests PCR parsing from string format (index-only convenience wrapper)
 func TestParsePCRs(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -39,6 +225,11 @@ func TestParsePCRs(t *testing.T) {
 			name:     "All common PCRs",
 			input:    "0,1,2,3,4,5,6,7",
 			expected: []int{0, 1, 2, 3, 4, 5, 6, 7},
+		},
+		{
+			name:     "PCRs with suffix stripped",
+			input:    "0e,2r,7e",
+			expected: []int{0, 2, 7},
 		},
 		{
 			name:      "Invalid PCR number",
@@ -97,22 +288,104 @@ func TestParsePCRs(t *testing.T) {
 	}
 }
 
-// TestSealedBlobMarshalUnmarshal tests blob serialization and deserialization
+// TestPCRSpecsToString tests converting PCR specs back to string format
+func TestPCRSpecsToString(t *testing.T) {
+	tests := []struct {
+		name     string
+		specs    []PCRSpec
+		expected string
+	}{
+		{
+			name:     "All register (no suffix)",
+			specs:    []PCRSpec{{Index: 0, Source: PCRSourceRegister}, {Index: 2, Source: PCRSourceRegister}, {Index: 7, Source: PCRSourceRegister}},
+			expected: "0,2,7",
+		},
+		{
+			name:     "All eventlog",
+			specs:    []PCRSpec{{Index: 0, Source: PCRSourceEventlog}, {Index: 2, Source: PCRSourceEventlog}, {Index: 7, Source: PCRSourceEventlog}},
+			expected: "0e,2e,7e",
+		},
+		{
+			name:     "Mixed sources",
+			specs:    []PCRSpec{{Index: 0, Source: PCRSourceEventlog}, {Index: 2, Source: PCRSourceRegister}, {Index: 7, Source: PCRSourceEventlog}},
+			expected: "0e,2,7e",
+		},
+		{
+			name:     "Single register",
+			specs:    []PCRSpec{{Index: 4, Source: PCRSourceRegister}},
+			expected: "4",
+		},
+		{
+			name:     "Single eventlog",
+			specs:    []PCRSpec{{Index: 0, Source: PCRSourceEventlog}},
+			expected: "0e",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := PCRSpecsToString(tt.specs)
+			if result != tt.expected {
+				t.Errorf("Expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+// TestPCRSourceString tests the String() method on PCRSource
+func TestPCRSourceString(t *testing.T) {
+	if PCRSourceRegister.String() != "register" {
+		t.Errorf("Expected 'register', got %q", PCRSourceRegister.String())
+	}
+	if PCRSourceEventlog.String() != "eventlog" {
+		t.Errorf("Expected 'eventlog', got %q", PCRSourceEventlog.String())
+	}
+}
+
+// TestPCRSourceSuffix tests the Suffix() method on PCRSource
+func TestPCRSourceSuffix(t *testing.T) {
+	if PCRSourceRegister.Suffix() != "" {
+		t.Errorf("Expected empty suffix for register, got %q", PCRSourceRegister.Suffix())
+	}
+	if PCRSourceEventlog.Suffix() != "e" {
+		t.Errorf("Expected 'e' suffix for eventlog, got %q", PCRSourceEventlog.Suffix())
+	}
+}
+
+// TestPCRSpecIndices tests extracting indices from specs
+func TestPCRSpecIndices(t *testing.T) {
+	specs := []PCRSpec{
+		{Index: 0, Source: PCRSourceEventlog},
+		{Index: 2, Source: PCRSourceRegister},
+		{Index: 7, Source: PCRSourceEventlog},
+	}
+	indices := PCRSpecIndices(specs)
+	expected := []int{0, 2, 7}
+	if len(indices) != len(expected) {
+		t.Fatalf("Expected %d indices, got %d", len(expected), len(indices))
+	}
+	for i, idx := range indices {
+		if idx != expected[i] {
+			t.Errorf("Index[%d]: expected %d, got %d", i, expected[i], idx)
+		}
+	}
+}
+
 func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 	tests := []struct {
 		name string
 		blob *SealedBlob
 	}{
 		{
-			name: "Basic blob with password",
+			name: "Basic blob with password (all register)",
 			blob: &SealedBlob{
-				Version:    2,
+				Version:    3,
 				AppVersion: "test-1.0.0",
 				Public:     []byte("public-data-test"),
 				Private:    []byte("private-data-test"),
 				PCRDigests: []PCRDigestPair{
-					{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest0")}},
-					{Index: 2, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest2")}},
+					{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest0")}},
+					{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest2")}},
 				},
 				HasPassword: true,
 			},
@@ -120,29 +393,29 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		{
 			name: "Blob without password",
 			blob: &SealedBlob{
-				Version:    2,
+				Version:    3,
 				AppVersion: "test-0.0.0",
 				Public:     []byte("public"),
 				Private:    []byte("private"),
 				PCRDigests: []PCRDigestPair{
-					{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest7")}},
+					{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest7")}},
 				},
 				HasPassword: false,
 			},
 		},
 		{
-			name: "Blob with multiple PCRs",
+			name: "Blob with multiple PCRs (all register)",
 			blob: &SealedBlob{
-				Version:    2,
+				Version:    3,
 				AppVersion: "v2.0.0",
 				Public:     []byte("test-public-key-data"),
 				Private:    []byte("test-private-key-data"),
 				PCRDigests: []PCRDigestPair{
-					{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-					{Index: 1, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-					{Index: 2, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-					{Index: 4, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-					{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					{Index: 1, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				},
 				HasPassword: true,
 			},
@@ -150,7 +423,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		{
 			name: "Blob with empty PCR list",
 			blob: &SealedBlob{
-				Version:     2,
+				Version:     3,
 				AppVersion:  "test",
 				Public:      []byte("pub"),
 				Private:     []byte("priv"),
@@ -159,23 +432,67 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			},
 		},
 		{
-			name: "Blob with eventlog info",
+			name: "Blob with all eventlog PCRs and eventlog info",
 			blob: &SealedBlob{
-				Version:    2,
+				Version:    3,
 				AppVersion: "test-eventlog",
 				Public:     []byte("public-data"),
 				Private:    []byte("private-data"),
 				PCRDigests: []PCRDigestPair{
-					{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					{Index: 2, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				},
-				HasPassword:   true,
-				EventlogBased: true,
+				HasPassword: true,
 				EventlogInfo: &EventlogInfo{
 					EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
 					EventlogHash:    "abc123def456",
 					CalculationTime: "2024-01-01T00:00:00Z",
 					TotalEvents:     100,
 					ProcessedEvents: 50,
+				},
+			},
+		},
+		{
+			name: "Blob with mixed register and eventlog PCRs",
+			blob: &SealedBlob{
+				Version:    3,
+				AppVersion: "test-mixed",
+				Public:     []byte("public-mixed"),
+				Private:    []byte("private-mixed"),
+				PCRDigests: []PCRDigestPair{
+					{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				},
+				HasPassword: true,
+				EventlogInfo: &EventlogInfo{
+					EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
+					EventlogHash:    "deadbeef",
+					CalculationTime: "2024-06-15T12:00:00Z",
+					TotalEvents:     200,
+					ProcessedEvents: 80,
+				},
+			},
+		},
+		{
+			name: "Blob with single eventlog PCR",
+			blob: &SealedBlob{
+				Version:    3,
+				AppVersion: "test-single-e",
+				Public:     []byte("pub"),
+				Private:    []byte("priv"),
+				PCRDigests: []PCRDigestPair{
+					{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				},
+				HasPassword: false,
+				EventlogInfo: &EventlogInfo{
+					EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
+					EventlogHash:    "cafebabe",
+					CalculationTime: "2024-03-01T00:00:00Z",
+					TotalEvents:     50,
+					ProcessedEvents: 20,
 				},
 			},
 		},
@@ -218,9 +535,16 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			}
 
 			for i := range tt.blob.PCRDigests {
+				if i >= len(unmarshaled.PCRDigests) {
+					break
+				}
 				if unmarshaled.PCRDigests[i].Index != tt.blob.PCRDigests[i].Index {
 					t.Errorf("PCR[%d] index mismatch: expected %d, got %d",
 						i, tt.blob.PCRDigests[i].Index, unmarshaled.PCRDigests[i].Index)
+				}
+				if unmarshaled.PCRDigests[i].Source != tt.blob.PCRDigests[i].Source {
+					t.Errorf("PCR[%d] source mismatch: expected %v, got %v",
+						i, tt.blob.PCRDigests[i].Source, unmarshaled.PCRDigests[i].Source)
 				}
 				if !bytes.Equal(unmarshaled.PCRDigests[i].Digest.Buffer, tt.blob.PCRDigests[i].Digest.Buffer) {
 					t.Errorf("PCR[%d] digest mismatch", i)
@@ -231,8 +555,10 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 				t.Errorf("HasPassword mismatch: expected %v, got %v", tt.blob.HasPassword, unmarshaled.HasPassword)
 			}
 
-			if unmarshaled.EventlogBased != tt.blob.EventlogBased {
-				t.Errorf("EventlogBased mismatch: expected %v, got %v", tt.blob.EventlogBased, unmarshaled.EventlogBased)
+			// Check HasEventlogPCRs derived method
+			expectedHasEventlog := tt.blob.HasEventlogPCRs()
+			if unmarshaled.HasEventlogPCRs() != expectedHasEventlog {
+				t.Errorf("HasEventlogPCRs mismatch: expected %v, got %v", expectedHasEventlog, unmarshaled.HasEventlogPCRs())
 			}
 
 			if tt.blob.EventlogInfo != nil {
@@ -245,16 +571,25 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					if unmarshaled.EventlogInfo.EventlogHash != tt.blob.EventlogInfo.EventlogHash {
 						t.Errorf("EventlogHash mismatch")
 					}
+					if unmarshaled.EventlogInfo.CalculationTime != tt.blob.EventlogInfo.CalculationTime {
+						t.Errorf("CalculationTime mismatch")
+					}
 					if unmarshaled.EventlogInfo.TotalEvents != tt.blob.EventlogInfo.TotalEvents {
 						t.Errorf("TotalEvents mismatch")
 					}
+					if unmarshaled.EventlogInfo.ProcessedEvents != tt.blob.EventlogInfo.ProcessedEvents {
+						t.Errorf("ProcessedEvents mismatch")
+					}
+				}
+			} else {
+				if unmarshaled.EventlogInfo != nil {
+					t.Errorf("EventlogInfo should be nil")
 				}
 			}
 		})
 	}
 }
 
-// TestUnmarshalSealedBlobInvalid tests unmarshaling invalid data
 func TestUnmarshalSealedBlobInvalid(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -273,7 +608,16 @@ func TestUnmarshalSealedBlobInvalid(t *testing.T) {
 				d[0] = 0x01 // version 1
 				return d
 			}(),
-			errContains: "restart sealing process due to incompatibility",
+			errContains: "incompatible blob version",
+		},
+		{
+			name: "Version 2 incompatible",
+			data: func() []byte {
+				d := make([]byte, 20)
+				d[0] = 0x02 // version 2
+				return d
+			}(),
+			errContains: "incompatible blob version",
 		},
 		{
 			name: "Version 99 incompatible",
@@ -282,12 +626,12 @@ func TestUnmarshalSealedBlobInvalid(t *testing.T) {
 				d[0] = 0x63 // version 99
 				return d
 			}(),
-			errContains: "restart sealing process due to incompatibility",
+			errContains: "incompatible blob version",
 		},
 		{
 			name: "Truncated data",
 			data: []byte{
-				0x02, 0x00, 0x00, 0x00, // version 2
+				0x03, 0x00, 0x00, 0x00, // version 3
 				0x05, 0x00, 0x00, 0x00, // app version length 5
 				0x00, 0x00, 0x00, 0x00, // padding to pass minimum length check
 				0x00, 0x00, 0x00, 0x00, // more padding
@@ -311,7 +655,7 @@ func TestUnmarshalSealedBlobInvalid(t *testing.T) {
 	}
 }
 
-// TestUnmarshalIncompatibleVersion tests the specific incompatibility error message
+// TestUnmarshalIncompatibleVersion tests the specific incompatibility error message and BlobVersionError type
 func TestUnmarshalIncompatibleVersion(t *testing.T) {
 	// Create data with version 1
 	data := make([]byte, 20)
@@ -325,17 +669,140 @@ func TestUnmarshalIncompatibleVersion(t *testing.T) {
 		t.Fatal("Expected error for incompatible version, got nil")
 	}
 
-	expectedMsg := "tpm2-kira: restart sealing process due to incompatibility"
-	if !strings.Contains(err.Error(), expectedMsg) {
-		t.Errorf("Expected error message to contain %q, got: %v", expectedMsg, err)
+	// Verify it's a BlobVersionError
+	bve, ok := IsBlobVersionError(err)
+	if !ok {
+		t.Fatalf("Expected BlobVersionError, got: %T: %v", err, err)
+	}
+	if bve.FoundVersion != 1 {
+		t.Errorf("Expected FoundVersion 1, got %d", bve.FoundVersion)
+	}
+	if bve.RequiredVersion != CurrentBlobVersion {
+		t.Errorf("Expected RequiredVersion %d, got %d", CurrentBlobVersion, bve.RequiredVersion)
 	}
 
-	// Verify it mentions the version numbers
-	if !strings.Contains(err.Error(), "found version 1") {
-		t.Errorf("Expected error to mention found version 1, got: %v", err)
+	// Verify error message contains useful info
+	if !strings.Contains(err.Error(), "incompatible blob version") {
+		t.Errorf("Expected error to mention 'incompatible blob version', got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "requires version 2") {
-		t.Errorf("Expected error to mention requires version 2, got: %v", err)
+	if !strings.Contains(err.Error(), "v1") {
+		t.Errorf("Expected error to mention found v1, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "v3") {
+		t.Errorf("Expected error to mention requires v3, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "tpm2-kira seal") {
+		t.Errorf("Expected error to suggest re-sealing, got: %v", err)
+	}
+}
+
+// TestBlobVersionErrorWrapped tests that IsBlobVersionError detects wrapped BlobVersionErrors
+func TestBlobVersionErrorWrapped(t *testing.T) {
+	original := &BlobVersionError{FoundVersion: 2, RequiredVersion: 3, DataSize: 500}
+	wrapped := fmt.Errorf("failed to unmarshal sealed data: %w", original)
+
+	bve, ok := IsBlobVersionError(wrapped)
+	if !ok {
+		t.Fatalf("Expected to detect wrapped BlobVersionError, got false")
+	}
+	if bve.FoundVersion != 2 {
+		t.Errorf("Expected FoundVersion 2, got %d", bve.FoundVersion)
+	}
+	if bve.RequiredVersion != 3 {
+		t.Errorf("Expected RequiredVersion 3, got %d", bve.RequiredVersion)
+	}
+	if bve.DataSize != 500 {
+		t.Errorf("Expected DataSize 500, got %d", bve.DataSize)
+	}
+}
+
+// TestBlobVersionErrorNotDetected tests that IsBlobVersionError returns false for non-version errors
+func TestBlobVersionErrorNotDetected(t *testing.T) {
+	_, ok := IsBlobVersionError(fmt.Errorf("some other error"))
+	if ok {
+		t.Error("Expected false for non-BlobVersionError")
+	}
+
+	_, ok = IsBlobVersionError(nil)
+	if ok {
+		t.Error("Expected false for nil error")
+	}
+}
+
+// TestPeekBlobVersion tests raw blob inspection without full unmarshal
+func TestPeekBlobVersion(t *testing.T) {
+	tests := []struct {
+		name               string
+		data               []byte
+		expectedVersion    uint32
+		expectedAppVersion string
+		expectedSize       int
+	}{
+		{
+			name:            "Too short for version",
+			data:            []byte{0x01, 0x02},
+			expectedVersion: 0,
+			expectedSize:    2,
+		},
+		{
+			name: "Version 2 blob (old format)",
+			data: func() []byte {
+				d := make([]byte, 20)
+				d[0] = 0x02 // version 2
+				d[4] = 0x05 // app version length = 5
+				copy(d[8:], "1.0.0")
+				return d
+			}(),
+			expectedVersion:    2,
+			expectedAppVersion: "1.0.0",
+			expectedSize:       20,
+		},
+		{
+			name: "Version 3 blob",
+			data: func() []byte {
+				d := make([]byte, 30)
+				d[0] = 0x03 // version 3
+				d[4] = 0x07 // app version length = 7
+				copy(d[8:], "v2.0.0a")
+				return d
+			}(),
+			expectedVersion:    3,
+			expectedAppVersion: "v2.0.0a",
+			expectedSize:       30,
+		},
+		{
+			name: "Version present but app version truncated",
+			data: func() []byte {
+				d := make([]byte, 8)
+				d[0] = 0x02
+				d[4] = 0xFF // app version length way too long
+				return d
+			}(),
+			expectedVersion:    2,
+			expectedAppVersion: "", // can't read app version
+			expectedSize:       8,
+		},
+		{
+			name:            "Exactly 4 bytes",
+			data:            []byte{0x01, 0x00, 0x00, 0x00},
+			expectedVersion: 1,
+			expectedSize:    4,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			peek := PeekBlobVersion(tt.data)
+			if peek.DataSize != tt.expectedSize {
+				t.Errorf("DataSize: expected %d, got %d", tt.expectedSize, peek.DataSize)
+			}
+			if peek.Version != tt.expectedVersion {
+				t.Errorf("Version: expected %d, got %d", tt.expectedVersion, peek.Version)
+			}
+			if peek.AppVersion != tt.expectedAppVersion {
+				t.Errorf("AppVersion: expected %q, got %q", tt.expectedAppVersion, peek.AppVersion)
+			}
+		})
 	}
 }
 
@@ -343,10 +810,10 @@ func TestUnmarshalIncompatibleVersion(t *testing.T) {
 func TestGetPCRIndices(t *testing.T) {
 	blob := &SealedBlob{
 		PCRDigests: []PCRDigestPair{
-			{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: []byte("d0")}},
-			{Index: 2, Digest: tpm2.TPM2BDigest{Buffer: []byte("d2")}},
-			{Index: 4, Digest: tpm2.TPM2BDigest{Buffer: []byte("d4")}},
-			{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: []byte("d7")}},
+			{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte("d0")}},
+			{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("d2")}},
+			{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("d4")}},
+			{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte("d7")}},
 		},
 	}
 
@@ -371,8 +838,8 @@ func TestGetPCRDigestValues(t *testing.T) {
 
 	blob := &SealedBlob{
 		PCRDigests: []PCRDigestPair{
-			{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: digest0}},
-			{Index: 2, Digest: tpm2.TPM2BDigest{Buffer: digest2}},
+			{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: digest0}},
+			{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: digest2}},
 		},
 	}
 
@@ -388,6 +855,121 @@ func TestGetPCRDigestValues(t *testing.T) {
 
 	if !bytes.Equal(digests[1].Buffer, digest2) {
 		t.Errorf("Digest[1] mismatch")
+	}
+}
+
+// TestHasEventlogPCRs tests the HasEventlogPCRs method
+func TestHasEventlogPCRs(t *testing.T) {
+	tests := []struct {
+		name     string
+		blob     *SealedBlob
+		expected bool
+	}{
+		{
+			name: "All register",
+			blob: &SealedBlob{
+				PCRDigests: []PCRDigestPair{
+					{Index: 0, Source: PCRSourceRegister},
+					{Index: 2, Source: PCRSourceRegister},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "All eventlog",
+			blob: &SealedBlob{
+				PCRDigests: []PCRDigestPair{
+					{Index: 0, Source: PCRSourceEventlog},
+					{Index: 2, Source: PCRSourceEventlog},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "Mixed",
+			blob: &SealedBlob{
+				PCRDigests: []PCRDigestPair{
+					{Index: 0, Source: PCRSourceEventlog},
+					{Index: 2, Source: PCRSourceRegister},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "Empty",
+			blob: &SealedBlob{
+				PCRDigests: []PCRDigestPair{},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.blob.HasEventlogPCRs()
+			if result != tt.expected {
+				t.Errorf("Expected %v, got %v", tt.expected, result)
+			}
+		})
+	}
+}
+
+// TestGetEventlogPCRIndices tests extracting eventlog PCR indices
+func TestGetEventlogPCRIndices(t *testing.T) {
+	blob := &SealedBlob{
+		PCRDigests: []PCRDigestPair{
+			{Index: 0, Source: PCRSourceEventlog},
+			{Index: 2, Source: PCRSourceRegister},
+			{Index: 4, Source: PCRSourceRegister},
+			{Index: 7, Source: PCRSourceEventlog},
+		},
+	}
+
+	eventlogIndices := blob.GetEventlogPCRIndices()
+	if len(eventlogIndices) != 2 {
+		t.Fatalf("Expected 2 eventlog indices, got %d", len(eventlogIndices))
+	}
+	if eventlogIndices[0] != 0 || eventlogIndices[1] != 7 {
+		t.Errorf("Expected [0, 7], got %v", eventlogIndices)
+	}
+
+	registerIndices := blob.GetRegisterPCRIndices()
+	if len(registerIndices) != 2 {
+		t.Fatalf("Expected 2 register indices, got %d", len(registerIndices))
+	}
+	if registerIndices[0] != 2 || registerIndices[1] != 4 {
+		t.Errorf("Expected [2, 4], got %v", registerIndices)
+	}
+}
+
+// TestGetPCRSpecs tests reconstructing PCRSpecs from a SealedBlob
+func TestGetPCRSpecs(t *testing.T) {
+	blob := &SealedBlob{
+		PCRDigests: []PCRDigestPair{
+			{Index: 0, Source: PCRSourceEventlog},
+			{Index: 2, Source: PCRSourceRegister},
+			{Index: 7, Source: PCRSourceEventlog},
+		},
+	}
+
+	specs := blob.GetPCRSpecs()
+	if len(specs) != 3 {
+		t.Fatalf("Expected 3 specs, got %d", len(specs))
+	}
+
+	expected := []PCRSpec{
+		{Index: 0, Source: PCRSourceEventlog},
+		{Index: 2, Source: PCRSourceRegister},
+		{Index: 7, Source: PCRSourceEventlog},
+	}
+
+	for i, spec := range specs {
+		if spec.Index != expected[i].Index {
+			t.Errorf("Spec[%d].Index: expected %d, got %d", i, expected[i].Index, spec.Index)
+		}
+		if spec.Source != expected[i].Source {
+			t.Errorf("Spec[%d].Source: expected %v, got %v", i, expected[i].Source, spec.Source)
+		}
 	}
 }
 
@@ -483,12 +1065,13 @@ func TestPcrsToBitmapBytes(t *testing.T) {
 // TestSealedBlobMarshalJSON tests JSON serialization
 func TestSealedBlobMarshalJSON(t *testing.T) {
 	blob := &SealedBlob{
-		Version:    2,
+		Version:    3,
 		AppVersion: "test-1.0.0",
 		Public:     []byte{0x01, 0x02, 0x03},
 		Private:    []byte{0x04, 0x05, 0x06},
 		PCRDigests: []PCRDigestPair{
-			{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA, 0xBB}}},
+			{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA, 0xBB}}},
+			{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xCC, 0xDD}}},
 		},
 		HasPassword: true,
 	}
@@ -508,12 +1091,26 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 		`"private_hex"`,
 		`"pcr_digests"`,
 		`"has_password"`,
+		`"source"`,
 	}
 
 	for _, field := range expectedFields {
 		if !bytes.Contains(jsonData, []byte(field)) {
 			t.Errorf("Expected JSON to contain %s, got: %s", field, jsonStr)
 		}
+	}
+
+	// Check for source values in JSON
+	if !bytes.Contains(jsonData, []byte(`"eventlog"`)) {
+		t.Errorf("Expected JSON to contain eventlog source, got: %s", jsonStr)
+	}
+	if !bytes.Contains(jsonData, []byte(`"register"`)) {
+		t.Errorf("Expected JSON to contain register source, got: %s", jsonStr)
+	}
+
+	// Ensure old eventlog_based field is NOT present
+	if bytes.Contains(jsonData, []byte(`"eventlog_based"`)) {
+		t.Errorf("JSON should NOT contain eventlog_based, got: %s", jsonStr)
 	}
 
 	// Ensure password_hash_hex and password_salt_hex are NOT present
@@ -535,6 +1132,40 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 
 	if !bytes.Contains(jsonData, []byte("aabb")) { // PCR digest hex
 		t.Error("PCR digest not hex encoded correctly")
+	}
+}
+
+// TestSealedBlobMarshalJSONWithEventlogInfo tests JSON serialization with eventlog info
+func TestSealedBlobMarshalJSONWithEventlogInfo(t *testing.T) {
+	blob := &SealedBlob{
+		Version:    3,
+		AppVersion: "test-1.0.0",
+		Public:     []byte{0x01},
+		Private:    []byte{0x02},
+		PCRDigests: []PCRDigestPair{
+			{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA}}},
+		},
+		HasPassword: false,
+		EventlogInfo: &EventlogInfo{
+			EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
+			EventlogHash:    "abc123",
+			CalculationTime: "2024-01-01T00:00:00Z",
+			TotalEvents:     100,
+			ProcessedEvents: 50,
+		},
+	}
+
+	jsonData, err := blob.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON failed: %v", err)
+	}
+
+	// Check eventlog_info is present
+	if !bytes.Contains(jsonData, []byte(`"eventlog_info"`)) {
+		t.Errorf("Expected JSON to contain eventlog_info")
+	}
+	if !bytes.Contains(jsonData, []byte(`"eventlog_path"`)) {
+		t.Errorf("Expected JSON to contain eventlog_path")
 	}
 }
 
@@ -562,19 +1193,26 @@ func TestCreatePCRSelection(t *testing.T) {
 
 // TestSealedBlobRoundTrip tests a complete round trip with realistic data
 func TestSealedBlobRoundTrip(t *testing.T) {
-	// Create a blob with realistic TPM data sizes
+	// Create a blob with realistic TPM data sizes and mixed sources
 	original := &SealedBlob{
-		Version:    2,
+		Version:    3,
 		AppVersion: "v1.2.3",
 		Public:     make([]byte, 100), // Typical public key size
 		Private:    make([]byte, 150), // Typical private key size
 		PCRDigests: []PCRDigestPair{
-			{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-			{Index: 2, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-			{Index: 4, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-			{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+			{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+			{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+			{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+			{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 		},
 		HasPassword: true,
+		EventlogInfo: &EventlogInfo{
+			EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
+			EventlogHash:    "abcdef1234567890",
+			CalculationTime: "2024-06-15T10:30:00Z",
+			TotalEvents:     150,
+			ProcessedEvents: 75,
+		},
 	}
 
 	// Fill with test data
@@ -619,6 +1257,65 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 	}
 	if restored.HasPassword != original.HasPassword {
 		t.Error("HasPassword mismatch")
+	}
+	// Verify per-PCR sources
+	for i := range original.PCRDigests {
+		if restored.PCRDigests[i].Source != original.PCRDigests[i].Source {
+			t.Errorf("PCR[%d] source mismatch: expected %v, got %v",
+				i, original.PCRDigests[i].Source, restored.PCRDigests[i].Source)
+		}
+	}
+	// Verify HasEventlogPCRs
+	if restored.HasEventlogPCRs() != original.HasEventlogPCRs() {
+		t.Error("HasEventlogPCRs mismatch")
+	}
+	// Verify eventlog info
+	if restored.EventlogInfo == nil {
+		t.Fatal("EventlogInfo should not be nil")
+	}
+	if restored.EventlogInfo.EventlogPath != original.EventlogInfo.EventlogPath {
+		t.Error("EventlogPath mismatch")
+	}
+	if restored.EventlogInfo.TotalEvents != original.EventlogInfo.TotalEvents {
+		t.Error("TotalEvents mismatch")
+	}
+}
+
+// TestSealedBlobRoundTripNoEventlog tests round trip with all-register PCRs (no eventlog info)
+func TestSealedBlobRoundTripNoEventlog(t *testing.T) {
+	original := &SealedBlob{
+		Version:    3,
+		AppVersion: "v1.0.0",
+		Public:     []byte("pub-data"),
+		Private:    []byte("priv-data"),
+		PCRDigests: []PCRDigestPair{
+			{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+			{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+			{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+		},
+		HasPassword: false,
+	}
+
+	data, err := original.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	restored, err := UnmarshalSealedBlob(data)
+	if err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if restored.HasEventlogPCRs() {
+		t.Error("Should not have eventlog PCRs")
+	}
+	if restored.EventlogInfo != nil {
+		t.Error("EventlogInfo should be nil for all-register blob")
+	}
+	for i, pair := range restored.PCRDigests {
+		if pair.Source != PCRSourceRegister {
+			t.Errorf("PCR[%d] should be register source, got %v", i, pair.Source)
+		}
 	}
 }
 
@@ -673,8 +1370,8 @@ func TestIsTPMAuthError(t *testing.T) {
 
 // TestCurrentBlobVersion verifies the constant is set correctly
 func TestCurrentBlobVersion(t *testing.T) {
-	if CurrentBlobVersion != 2 {
-		t.Errorf("CurrentBlobVersion should be 2, got %d", CurrentBlobVersion)
+	if CurrentBlobVersion != 3 {
+		t.Errorf("CurrentBlobVersion should be 3, got %d", CurrentBlobVersion)
 	}
 }
 

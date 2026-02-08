@@ -187,28 +187,86 @@ func PcrsToBitmapBytes(pcrIndices []int) []byte {
 	return bitmap
 }
 
-// ParsePCRs parses a comma-separated string of PCR indices
-func ParsePCRs(pcrsStr string) ([]int, error) {
+// PCRSpec represents a PCR index with its source (register or eventlog)
+type PCRSpec struct {
+	Index  int
+	Source PCRSource
+}
+
+// ParsePCRSpecs parses a comma-separated string of PCR indices with optional source suffixes.
+// Supported formats: "0" (register, default), "0r" (register, explicit), "0e" (eventlog).
+// The 'e' suffix is only valid for PCRs 0-7 (firmware PCRs present in the BIOS eventlog).
+func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 	parts := strings.Split(pcrsStr, ",")
-	pcrs := make([]int, 0, len(parts))
+	specs := make([]PCRSpec, 0, len(parts))
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		pcr, err := strconv.Atoi(part)
+
+		source := PCRSourceRegister
+		numStr := part
+
+		if strings.HasSuffix(part, "e") {
+			source = PCRSourceEventlog
+			numStr = part[:len(part)-1]
+		} else if strings.HasSuffix(part, "r") {
+			source = PCRSourceRegister
+			numStr = part[:len(part)-1]
+		}
+
+		pcr, err := strconv.Atoi(numStr)
 		if err != nil {
 			return nil, fmt.Errorf("invalid PCR value '%s': %w", part, err)
 		}
 		if pcr < 0 || pcr >= 24 {
 			return nil, fmt.Errorf("PCR value %d out of range (0-23)", pcr)
 		}
-		pcrs = append(pcrs, pcr)
+		if source == PCRSourceEventlog && pcr > 7 {
+			return nil, fmt.Errorf("eventlog source (e suffix) is only valid for PCRs 0-7, got PCR %d", pcr)
+		}
+
+		specs = append(specs, PCRSpec{Index: pcr, Source: source})
 	}
-	if len(pcrs) == 0 {
+	if len(specs) == 0 {
 		return nil, fmt.Errorf("no PCRs specified")
 	}
+	return specs, nil
+}
+
+// ParsePCRs parses a comma-separated string of PCR indices (with optional suffixes) and
+// returns only the indices. This is a convenience wrapper around ParsePCRSpecs for code
+// that only needs PCR indices without source information.
+func ParsePCRs(pcrsStr string) ([]int, error) {
+	specs, err := ParsePCRSpecs(pcrsStr)
+	if err != nil {
+		return nil, err
+	}
+	pcrs := make([]int, len(specs))
+	for i, spec := range specs {
+		pcrs[i] = spec.Index
+	}
 	return pcrs, nil
+}
+
+// PCRSpecsToString converts a slice of PCRSpec back to the comma-separated string format.
+// Register-source PCRs omit the suffix (e.g. "0"), eventlog-source PCRs use "e" (e.g. "0e").
+func PCRSpecsToString(specs []PCRSpec) string {
+	parts := make([]string, len(specs))
+	for i, spec := range specs {
+		parts[i] = fmt.Sprintf("%d%s", spec.Index, spec.Source.Suffix())
+	}
+	return strings.Join(parts, ",")
+}
+
+// PCRSpecIndices extracts just the PCR indices from a slice of PCRSpec
+func PCRSpecIndices(specs []PCRSpec) []int {
+	indices := make([]int, len(specs))
+	for i, spec := range specs {
+		indices[i] = spec.Index
+	}
+	return indices
 }
 
 // ComputePolicyDigest computes the policy digest for the given PCR indices
@@ -318,32 +376,48 @@ func HandleTPMPolicyFailureWithPCRDetails(err error, tpmDev transport.TPM, nvram
 
 // GetCurrentPCRValues retrieves current PCR values for comparison, handling both eventlog-based and direct TPM reads
 func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug bool) ([]tpm2.TPM2BDigest, error) {
-	var currentPCRValues []tpm2.TPM2BDigest
+	currentPCRValues := make([]tpm2.TPM2BDigest, len(sealedBlob.PCRDigests))
 
-	if sealedBlob.EventlogBased {
-		// Calculate current PCRs from eventlog
-		calc := NewEventlogPCRCalculator(tpmDev, sealedBlob.GetPCRIndices(), debug)
+	// Separate PCRs by source
+	eventlogPCRIndices := sealedBlob.GetEventlogPCRIndices()
+	registerPCRIndices := sealedBlob.GetRegisterPCRIndices()
+
+	// Calculate eventlog-based PCR values
+	if len(eventlogPCRIndices) > 0 {
+		calc := NewEventlogPCRCalculator(tpmDev, eventlogPCRIndices, debug)
 		calculatedPCRs, _, err := calc.CalculatePCRsFromEventlog()
 		if err != nil {
 			return nil, fmt.Errorf("failed to calculate current PCRs from eventlog: %w", err)
 		}
 
-		// Convert to TPM2BDigest format
-		currentPCRValues = make([]tpm2.TPM2BDigest, len(sealedBlob.GetPCRIndices()))
-		for i, pcrIndex := range sealedBlob.GetPCRIndices() {
-			currentPCRValues[i] = tpm2.TPM2BDigest{Buffer: calculatedPCRs[pcrIndex]}
+		for i, pair := range sealedBlob.PCRDigests {
+			if pair.Source == PCRSourceEventlog {
+				currentPCRValues[i] = tpm2.TPM2BDigest{Buffer: calculatedPCRs[pair.Index]}
+			}
 		}
-	} else {
-		// Use current TPM PCR values
+	}
+
+	// Read register-based PCR values from TPM
+	if len(registerPCRIndices) > 0 {
 		pcrRead := tpm2.PCRRead{
-			PCRSelectionIn: CreatePCRSelection(sealedBlob.GetPCRIndices()),
+			PCRSelectionIn: CreatePCRSelection(registerPCRIndices),
 		}
 
 		pcrReadResp, err := pcrRead.Execute(tpmDev)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read PCRs: %w", err)
 		}
-		currentPCRValues = pcrReadResp.PCRValues.Digests
+
+		// Map register read results back to the correct positions
+		regIdx := 0
+		for i, pair := range sealedBlob.PCRDigests {
+			if pair.Source == PCRSourceRegister {
+				if regIdx < len(pcrReadResp.PCRValues.Digests) {
+					currentPCRValues[i] = pcrReadResp.PCRValues.Digests[regIdx]
+					regIdx++
+				}
+			}
+		}
 	}
 
 	return currentPCRValues, nil
