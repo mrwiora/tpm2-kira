@@ -6,9 +6,11 @@ package cmd
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base32"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -2294,6 +2296,391 @@ func TestPCRHashAlgoUnknown(t *testing.T) {
 	if got := unknown.DisplayString(); got != "SHA-256" {
 		t.Errorf("PCRHashAlgo(unknown).DisplayString() = %q, want %q", got, "SHA-256")
 	}
+}
+
+// --- Tests for seal.go functions ---
+
+// TestGenerateTOTPSecret tests the TOTP secret generation function
+func TestGenerateTOTPSecret(t *testing.T) {
+	t.Run("Returns valid Base32 encoded secret", func(t *testing.T) {
+		secret, err := generateTOTPSecret()
+		if err != nil {
+			t.Fatalf("generateTOTPSecret() unexpected error: %v", err)
+		}
+
+		// Verify it's valid Base32 (no padding)
+		_, err = base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(string(secret))
+		if err != nil {
+			t.Errorf("generateTOTPSecret() returned invalid Base32: %v", err)
+		}
+	})
+
+	t.Run("Returns correct length", func(t *testing.T) {
+		secret, err := generateTOTPSecret()
+		if err != nil {
+			t.Fatalf("generateTOTPSecret() unexpected error: %v", err)
+		}
+
+		// 32 bytes of random data encoded as Base32 without padding
+		// Base32 encodes 5 bytes into 8 characters: 32 bytes -> ceil(32/5)*8 = 7*8 = 56 chars
+		// But actually: 32*8 = 256 bits / 5 = 51.2 -> 52 chars (no padding)
+		expectedLen := base32.StdEncoding.WithPadding(base32.NoPadding).EncodedLen(32)
+		if len(secret) != expectedLen {
+			t.Errorf("generateTOTPSecret() length = %d, want %d", len(secret), expectedLen)
+		}
+	})
+
+	t.Run("Is recognized as valid TOTP secret", func(t *testing.T) {
+		secret, err := generateTOTPSecret()
+		if err != nil {
+			t.Fatalf("generateTOTPSecret() unexpected error: %v", err)
+		}
+
+		if !isTOTPSecret(string(secret)) {
+			t.Errorf("generateTOTPSecret() result %q not recognized as valid TOTP secret", string(secret))
+		}
+	})
+
+	t.Run("Can generate valid TOTP codes", func(t *testing.T) {
+		secret, err := generateTOTPSecret()
+		if err != nil {
+			t.Fatalf("generateTOTPSecret() unexpected error: %v", err)
+		}
+
+		code, timeRemaining, err := generateTOTPCode(string(secret))
+		if err != nil {
+			t.Fatalf("generateTOTPCode() with generated secret failed: %v", err)
+		}
+		if len(code) != 6 {
+			t.Errorf("TOTP code length = %d, want 6", len(code))
+		}
+		if timeRemaining < 1 || timeRemaining > 30 {
+			t.Errorf("TOTP timeRemaining = %d, want 1-30", timeRemaining)
+		}
+	})
+
+	t.Run("Generates unique secrets", func(t *testing.T) {
+		secrets := make(map[string]bool)
+		for i := 0; i < 10; i++ {
+			secret, err := generateTOTPSecret()
+			if err != nil {
+				t.Fatalf("generateTOTPSecret() iteration %d failed: %v", i, err)
+			}
+			s := string(secret)
+			if secrets[s] {
+				t.Errorf("generateTOTPSecret() generated duplicate secret on iteration %d", i)
+			}
+			secrets[s] = true
+		}
+	})
+
+	t.Run("Decodes to 32 bytes of random data", func(t *testing.T) {
+		secret, err := generateTOTPSecret()
+		if err != nil {
+			t.Fatalf("generateTOTPSecret() unexpected error: %v", err)
+		}
+
+		decoded, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(string(secret))
+		if err != nil {
+			t.Fatalf("Failed to decode Base32 secret: %v", err)
+		}
+
+		if len(decoded) != 32 {
+			t.Errorf("Decoded secret length = %d bytes, want 32 bytes (256 bits)", len(decoded))
+		}
+	})
+
+	t.Run("Contains only valid Base32 characters", func(t *testing.T) {
+		secret, err := generateTOTPSecret()
+		if err != nil {
+			t.Fatalf("generateTOTPSecret() unexpected error: %v", err)
+		}
+
+		validChars := "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+		for _, c := range string(secret) {
+			if !strings.ContainsRune(validChars, c) {
+				t.Errorf("generateTOTPSecret() contains invalid Base32 character: %c", c)
+			}
+		}
+	})
+}
+
+// TestSealDataWithSpecsValidation tests input validation in sealDataWithSpecs
+func TestSealDataWithSpecsValidation(t *testing.T) {
+	t.Run("Rejects empty PCR specs", func(t *testing.T) {
+		err := sealDataWithSpecs("/dev/null", []PCRSpec{}, 0x01803010, []byte("data"), "", false, PCRHashAlgoSHA256)
+		if err == nil {
+			t.Error("sealDataWithSpecs() expected error for empty specs, got nil")
+		}
+		if !strings.Contains(err.Error(), "no PCRs specified") {
+			t.Errorf("sealDataWithSpecs() error = %q, want to contain 'no PCRs specified'", err.Error())
+		}
+	})
+
+	t.Run("Rejects empty data", func(t *testing.T) {
+		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
+		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte{}, "", false, PCRHashAlgoSHA256)
+		if err == nil {
+			t.Error("sealDataWithSpecs() expected error for empty data, got nil")
+		}
+		if !strings.Contains(err.Error(), "no data to seal") {
+			t.Errorf("sealDataWithSpecs() error = %q, want to contain 'no data to seal'", err.Error())
+		}
+	})
+
+	t.Run("Rejects nil data", func(t *testing.T) {
+		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
+		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, nil, "", false, PCRHashAlgoSHA256)
+		if err == nil {
+			t.Error("sealDataWithSpecs() expected error for nil data, got nil")
+		}
+		if !strings.Contains(err.Error(), "no data to seal") {
+			t.Errorf("sealDataWithSpecs() error = %q, want to contain 'no data to seal'", err.Error())
+		}
+	})
+
+	t.Run("Fails on invalid TPM path", func(t *testing.T) {
+		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
+		err := sealDataWithSpecs("/nonexistent/tpm/path", specs, 0x01803010, []byte("test-data"), "", false, PCRHashAlgoSHA256)
+		if err == nil {
+			t.Error("sealDataWithSpecs() expected error for invalid TPM path, got nil")
+		}
+		if !strings.Contains(err.Error(), "failed to open TPM") {
+			t.Errorf("sealDataWithSpecs() error = %q, want to contain 'failed to open TPM'", err.Error())
+		}
+	})
+}
+
+// --- Tests for password.go functions ---
+
+// setupStdinPipe replaces os.Stdin with a pipe containing the given input.
+// Returns a cleanup function that restores the original stdin and resets the shared reader.
+func setupStdinPipe(t *testing.T, input string) func() {
+	t.Helper()
+
+	oldStdin := os.Stdin
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("Failed to create pipe: %v", err)
+	}
+
+	_, err = w.WriteString(input)
+	if err != nil {
+		t.Fatalf("Failed to write to pipe: %v", err)
+	}
+	w.Close()
+
+	os.Stdin = r
+	stdinReader = nil // Reset the shared reader to pick up new stdin
+
+	return func() {
+		os.Stdin = oldStdin
+		stdinReader = nil
+		r.Close()
+	}
+}
+
+// TestReadPasswordFromStdin tests reading passwords from non-terminal stdin
+func TestReadPasswordFromStdin(t *testing.T) {
+	t.Run("Reads password from pipe", func(t *testing.T) {
+		cleanup := setupStdinPipe(t, "mypassword\n")
+		defer cleanup()
+
+		password, err := ReadPasswordFromStdin("Enter password: ")
+		if err != nil {
+			t.Fatalf("ReadPasswordFromStdin() unexpected error: %v", err)
+		}
+		if password != "mypassword" {
+			t.Errorf("ReadPasswordFromStdin() = %q, want %q", password, "mypassword")
+		}
+	})
+
+	t.Run("Trims whitespace", func(t *testing.T) {
+		cleanup := setupStdinPipe(t, "  password  \n")
+		defer cleanup()
+
+		password, err := ReadPasswordFromStdin("Enter password: ")
+		if err != nil {
+			t.Fatalf("ReadPasswordFromStdin() unexpected error: %v", err)
+		}
+		if password != "password" {
+			t.Errorf("ReadPasswordFromStdin() = %q, want %q", password, "password")
+		}
+	})
+
+	t.Run("Returns empty string on empty line", func(t *testing.T) {
+		cleanup := setupStdinPipe(t, "\n")
+		defer cleanup()
+
+		password, err := ReadPasswordFromStdin("Enter password: ")
+		if err != nil {
+			t.Fatalf("ReadPasswordFromStdin() unexpected error: %v", err)
+		}
+		if password != "" {
+			t.Errorf("ReadPasswordFromStdin() = %q, want empty string", password)
+		}
+	})
+
+	t.Run("Returns empty string on EOF", func(t *testing.T) {
+		cleanup := setupStdinPipe(t, "")
+		defer cleanup()
+
+		password, err := ReadPasswordFromStdin("Enter password: ")
+		if err != nil {
+			t.Fatalf("ReadPasswordFromStdin() unexpected error: %v", err)
+		}
+		if password != "" {
+			t.Errorf("ReadPasswordFromStdin() = %q, want empty string on EOF", password)
+		}
+	})
+
+	t.Run("Reads multiple passwords sequentially", func(t *testing.T) {
+		cleanup := setupStdinPipe(t, "first\nsecond\n")
+		defer cleanup()
+
+		password1, err := ReadPasswordFromStdin("First: ")
+		if err != nil {
+			t.Fatalf("First ReadPasswordFromStdin() unexpected error: %v", err)
+		}
+		if password1 != "first" {
+			t.Errorf("First ReadPasswordFromStdin() = %q, want %q", password1, "first")
+		}
+
+		password2, err := ReadPasswordFromStdin("Second: ")
+		if err != nil {
+			t.Fatalf("Second ReadPasswordFromStdin() unexpected error: %v", err)
+		}
+		if password2 != "second" {
+			t.Errorf("Second ReadPasswordFromStdin() = %q, want %q", password2, "second")
+		}
+	})
+}
+
+// TestReadOptionalPasswordFromStdin tests optional password reading
+func TestReadOptionalPasswordFromStdin(t *testing.T) {
+	t.Run("Returns empty for no password (enter pressed)", func(t *testing.T) {
+		cleanup := setupStdinPipe(t, "\n")
+		defer cleanup()
+
+		password, err := ReadOptionalPasswordFromStdin("sealing")
+		if err != nil {
+			t.Fatalf("ReadOptionalPasswordFromStdin() unexpected error: %v", err)
+		}
+		if password != "" {
+			t.Errorf("ReadOptionalPasswordFromStdin() = %q, want empty string", password)
+		}
+	})
+
+	t.Run("Returns password when confirmed", func(t *testing.T) {
+		cleanup := setupStdinPipe(t, "mypassword\nmypassword\n")
+		defer cleanup()
+
+		password, err := ReadOptionalPasswordFromStdin("sealing")
+		if err != nil {
+			t.Fatalf("ReadOptionalPasswordFromStdin() unexpected error: %v", err)
+		}
+		if password != "mypassword" {
+			t.Errorf("ReadOptionalPasswordFromStdin() = %q, want %q", password, "mypassword")
+		}
+	})
+
+	t.Run("Returns error on password mismatch", func(t *testing.T) {
+		cleanup := setupStdinPipe(t, "password1\npassword2\n")
+		defer cleanup()
+
+		_, err := ReadOptionalPasswordFromStdin("sealing")
+		if err == nil {
+			t.Error("ReadOptionalPasswordFromStdin() expected error for mismatched passwords, got nil")
+		}
+		if !strings.Contains(err.Error(), "passwords do not match") {
+			t.Errorf("ReadOptionalPasswordFromStdin() error = %q, want to contain 'passwords do not match'", err.Error())
+		}
+	})
+}
+
+// TestReadRequiredPasswordFromStdin tests required password reading
+func TestReadRequiredPasswordFromStdin(t *testing.T) {
+	t.Run("Returns password when provided", func(t *testing.T) {
+		cleanup := setupStdinPipe(t, "requiredpass\n")
+		defer cleanup()
+
+		password, err := ReadRequiredPasswordFromStdin("resealing")
+		if err != nil {
+			t.Fatalf("ReadRequiredPasswordFromStdin() unexpected error: %v", err)
+		}
+		if password != "requiredpass" {
+			t.Errorf("ReadRequiredPasswordFromStdin() = %q, want %q", password, "requiredpass")
+		}
+	})
+
+	t.Run("Returns error when empty", func(t *testing.T) {
+		cleanup := setupStdinPipe(t, "\n")
+		defer cleanup()
+
+		_, err := ReadRequiredPasswordFromStdin("resealing")
+		if err == nil {
+			t.Error("ReadRequiredPasswordFromStdin() expected error for empty password, got nil")
+		}
+		if !strings.Contains(err.Error(), "password cannot be empty") {
+			t.Errorf("ReadRequiredPasswordFromStdin() error = %q, want to contain 'password cannot be empty'", err.Error())
+		}
+	})
+
+	t.Run("Returns error on EOF", func(t *testing.T) {
+		cleanup := setupStdinPipe(t, "")
+		defer cleanup()
+
+		_, err := ReadRequiredPasswordFromStdin("resealing")
+		if err == nil {
+			t.Error("ReadRequiredPasswordFromStdin() expected error on EOF, got nil")
+		}
+		if !strings.Contains(err.Error(), "password cannot be empty") {
+			t.Errorf("ReadRequiredPasswordFromStdin() error = %q, want to contain 'password cannot be empty'", err.Error())
+		}
+	})
+}
+
+// TestReadExistingPasswordFromStdin tests existing password reading for authentication
+func TestReadExistingPasswordFromStdin(t *testing.T) {
+	t.Run("Returns password when provided", func(t *testing.T) {
+		cleanup := setupStdinPipe(t, "existingpass\n")
+		defer cleanup()
+
+		password, err := ReadExistingPasswordFromStdin()
+		if err != nil {
+			t.Fatalf("ReadExistingPasswordFromStdin() unexpected error: %v", err)
+		}
+		if password != "existingpass" {
+			t.Errorf("ReadExistingPasswordFromStdin() = %q, want %q", password, "existingpass")
+		}
+	})
+
+	t.Run("Returns error when empty", func(t *testing.T) {
+		cleanup := setupStdinPipe(t, "\n")
+		defer cleanup()
+
+		_, err := ReadExistingPasswordFromStdin()
+		if err == nil {
+			t.Error("ReadExistingPasswordFromStdin() expected error for empty password, got nil")
+		}
+		if !strings.Contains(err.Error(), "password required but none provided") {
+			t.Errorf("ReadExistingPasswordFromStdin() error = %q, want to contain 'password required but none provided'", err.Error())
+		}
+	})
+
+	t.Run("Returns error on EOF", func(t *testing.T) {
+		cleanup := setupStdinPipe(t, "")
+		defer cleanup()
+
+		_, err := ReadExistingPasswordFromStdin()
+		if err == nil {
+			t.Error("ReadExistingPasswordFromStdin() expected error on EOF, got nil")
+		}
+		if !strings.Contains(err.Error(), "password required but none provided") {
+			t.Errorf("ReadExistingPasswordFromStdin() error = %q, want to contain 'password required but none provided'", err.Error())
+		}
+	})
 }
 
 // testError is a simple error type for testing
