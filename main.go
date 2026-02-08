@@ -74,6 +74,7 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
 
 	fs.Parse(args)
 
@@ -90,7 +91,12 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 		os.Exit(0)
 	}
 
-	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), password, *debug); err != nil {
+	hashAlgo := cmd.PCRHashAlgoSHA256
+	if *useSHA1 {
+		hashAlgo = cmd.PCRHashAlgoSHA1
+	}
+
+	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), password, *debug, hashAlgo); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -295,6 +301,8 @@ SEAL OPTIONS:
                      Examples: "0,2,7" (all register), "0e,2e,7e" (all eventlog),
                                "0e,2,7e" (mixed: 0 and 7 from eventlog, 2 from register)
                      You will be prompted for an optional password
+  --sha1             Use SHA-1 PCR bank instead of SHA-256 (default: SHA-256)
+                     Use only if firmware eventlog does not provide SHA-256 digests
 
 RESEAL OPTIONS:
   --pcrs INDICES     New PCR indices with optional source suffix (optional,
@@ -313,6 +321,7 @@ NVRAM SUBCOMMANDS:
 EXAMPLES:
   tpm2-kira seal
   tpm2-kira seal --pcrs "0e,2e,7e"
+  tpm2-kira seal --sha1 --pcrs "0e,2e,7e"
   tpm2-kira seal --pcrs "0e,2,4,7e"
   tpm2-kira reveal
   tpm2-kira reveal-plain

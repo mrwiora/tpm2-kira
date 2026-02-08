@@ -154,20 +154,22 @@ func VerifyPCRValues(sealed, current []tpm2.TPM2BDigest) bool {
 	return true
 }
 
-// CreatePCRPolicySession creates a TPM policy session for PCR authentication
-func CreatePCRPolicySession(tpmDev transport.TPM, pcrIndices []int) (tpm2.Session, func() error, error) {
+// CreatePCRPolicySession creates a TPM policy session for PCR authentication.
+// The policy session always uses SHA256 for the policy digest, but the PCR bank
+// selection uses the specified hash algorithm.
+func CreatePCRPolicySession(tpmDev transport.TPM, pcrIndices []int, hashAlgo PCRHashAlgo) (tpm2.Session, func() error, error) {
 	sess, cleanup, err := tpm2.PolicySession(tpmDev, tpm2.TPMAlgSHA256, 16)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create policy session: %w", err)
 	}
 
-	// Apply PCR policy
+	// Apply PCR policy using the specified PCR bank hash algorithm
 	_, err = tpm2.PolicyPCR{
 		PolicySession: sess.Handle(),
 		Pcrs: tpm2.TPMLPCRSelection{
 			PCRSelections: []tpm2.TPMSPCRSelection{
 				{
-					Hash:      tpm2.TPMAlgSHA256,
+					Hash:      hashAlgo.TPMAlg(),
 					PCRSelect: PcrsToBitmapBytes(pcrIndices),
 				},
 			},
@@ -182,11 +184,12 @@ func CreatePCRPolicySession(tpmDev transport.TPM, pcrIndices []int) (tpm2.Sessio
 }
 
 // CreatePCRSelection creates a TPMLPCRSelection structure for the given PCR indices
-func CreatePCRSelection(pcrIndices []int) tpm2.TPMLPCRSelection {
+// using the specified hash algorithm for the PCR bank.
+func CreatePCRSelection(pcrIndices []int, hashAlgo PCRHashAlgo) tpm2.TPMLPCRSelection {
 	return tpm2.TPMLPCRSelection{
 		PCRSelections: []tpm2.TPMSPCRSelection{
 			{
-				Hash:      tpm2.TPMAlgSHA256,
+				Hash:      hashAlgo.TPMAlg(),
 				PCRSelect: PcrsToBitmapBytes(pcrIndices),
 			},
 		},
@@ -292,7 +295,8 @@ func PCRSpecIndices(specs []PCRSpec) []int {
 }
 
 // ComputePolicyDigest computes the policy digest for the given PCR indices
-func ComputePolicyDigest(tpmDev transport.TPM, pcrs []int) (tpm2.TPM2BDigest, error) {
+// using the specified hash algorithm for PCR bank selection.
+func ComputePolicyDigest(tpmDev transport.TPM, pcrs []int, hashAlgo PCRHashAlgo) (tpm2.TPM2BDigest, error) {
 	sess, cleanup, err := tpm2.PolicySession(tpmDev, tpm2.TPMAlgSHA256, 16)
 	if err != nil {
 		return tpm2.TPM2BDigest{}, fmt.Errorf("failed to create policy session: %w", err)
@@ -304,7 +308,7 @@ func ComputePolicyDigest(tpmDev transport.TPM, pcrs []int) (tpm2.TPM2BDigest, er
 		Pcrs: tpm2.TPMLPCRSelection{
 			PCRSelections: []tpm2.TPMSPCRSelection{
 				{
-					Hash:      tpm2.TPMAlgSHA256,
+					Hash:      hashAlgo.TPMAlg(),
 					PCRSelect: PcrsToBitmapBytes(pcrs),
 				},
 			},
@@ -396,25 +400,48 @@ func HandleTPMPolicyFailureWithPCRDetails(err error, tpmDev transport.TPM, nvram
 	return true
 }
 
-// GetCurrentPCRValues retrieves current PCR values for comparison, handling both eventlog-based and direct TPM reads
-func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug bool) ([]tpm2.TPM2BDigest, error) {
-	currentPCRValues := make([]tpm2.TPM2BDigest, len(sealedBlob.PCRDigests))
+// ReadPCRValuesResult holds the result of reading PCR values from all sources.
+type ReadPCRValuesResult struct {
+	Values       map[int][]byte // PCR index -> digest value
+	EventlogInfo *EventlogInfo  // eventlog metadata (nil when no eventlog PCRs)
+}
 
+// ReadPCRValues reads PCR values from their respective sources (eventlog and/or
+// TPM registers). This is the single shared implementation used by seal, unseal,
+// reveal and reseal paths.
+func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, debug bool) (*ReadPCRValuesResult, error) {
 	// Separate PCRs by source
-	eventlogPCRIndices := sealedBlob.GetEventlogPCRIndices()
-	registerPCRIndices := sealedBlob.GetRegisterPCRIndices()
+	var eventlogPCRIndices []int
+	var registerPCRIndices []int
+	for _, spec := range specs {
+		if spec.Source == PCRSourceEventlog {
+			eventlogPCRIndices = append(eventlogPCRIndices, spec.Index)
+		} else {
+			registerPCRIndices = append(registerPCRIndices, spec.Index)
+		}
+	}
+
+	result := &ReadPCRValuesResult{
+		Values: make(map[int][]byte),
+	}
 
 	// Calculate eventlog-based PCR values
 	if len(eventlogPCRIndices) > 0 {
-		calc := NewEventlogPCRCalculator(tpmDev, eventlogPCRIndices, debug)
-		calculatedPCRs, _, err := calc.CalculatePCRsFromEventlog()
+		calc := NewEventlogPCRCalculator(tpmDev, eventlogPCRIndices, hashAlgo, debug)
+		calculatedPCRs, info, err := calc.CalculatePCRsFromEventlog()
 		if err != nil {
-			return nil, fmt.Errorf("failed to calculate current PCRs from eventlog: %w", err)
+			return nil, fmt.Errorf("failed to calculate PCRs from eventlog: %w", err)
+		}
+		result.EventlogInfo = info
+
+		for idx, val := range calculatedPCRs {
+			result.Values[idx] = val
 		}
 
-		for i, pair := range sealedBlob.PCRDigests {
-			if pair.Source == PCRSourceEventlog {
-				currentPCRValues[i] = tpm2.TPM2BDigest{Buffer: calculatedPCRs[pair.Index]}
+		if debug {
+			fmt.Println("Eventlog-calculated PCR values:")
+			for _, idx := range eventlogPCRIndices {
+				fmt.Printf("  PCR%d: %x\n", idx, result.Values[idx])
 			}
 		}
 	}
@@ -422,23 +449,57 @@ func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug boo
 	// Read register-based PCR values from TPM
 	if len(registerPCRIndices) > 0 {
 		pcrRead := tpm2.PCRRead{
-			PCRSelectionIn: CreatePCRSelection(registerPCRIndices),
+			PCRSelectionIn: CreatePCRSelection(registerPCRIndices, hashAlgo),
 		}
 
 		pcrReadResp, err := pcrRead.Execute(tpmDev)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read PCRs: %w", err)
+			return nil, fmt.Errorf("failed to read PCRs from %s bank: %w", hashAlgo.DisplayString(), err)
 		}
 
-		// Map register read results back to the correct positions
-		regIdx := 0
-		for i, pair := range sealedBlob.PCRDigests {
-			if pair.Source == PCRSourceRegister {
-				if regIdx < len(pcrReadResp.PCRValues.Digests) {
-					currentPCRValues[i] = pcrReadResp.PCRValues.Digests[regIdx]
-					regIdx++
-				}
+		if len(pcrReadResp.PCRValues.Digests) < len(registerPCRIndices) {
+			return nil, fmt.Errorf(
+				"TPM did not return %s PCR values for register-based PCRs %v.\n"+
+					"The %s PCR bank may not be enabled on this system.\n"+
+					"Available digests: %d, expected: %d",
+				hashAlgo.DisplayString(), registerPCRIndices,
+				hashAlgo.DisplayString(),
+				len(pcrReadResp.PCRValues.Digests), len(registerPCRIndices))
+		}
+
+		for i, pcrIndex := range registerPCRIndices {
+			result.Values[pcrIndex] = pcrReadResp.PCRValues.Digests[i].Buffer
+		}
+
+		if debug {
+			fmt.Println("Register-read PCR values:")
+			for _, idx := range registerPCRIndices {
+				fmt.Printf("  PCR%d: %x\n", idx, result.Values[idx])
 			}
+		}
+	}
+
+	return result, nil
+}
+
+// GetCurrentPCRValues retrieves current PCR values for comparison, handling both
+// eventlog-based and direct TPM reads. The hash algorithm is automatically detected
+// from the sealed blob's digest sizes. Results are returned in the same order as the
+// blob's PCRDigests slice.
+func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug bool) ([]tpm2.TPM2BDigest, error) {
+	hashAlgo := sealedBlob.GetHashAlgo()
+	specs := sealedBlob.GetPCRSpecs()
+
+	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, debug)
+	if err != nil {
+		return nil, err
+	}
+
+	// Map results back to blob PCR digest order
+	currentPCRValues := make([]tpm2.TPM2BDigest, len(sealedBlob.PCRDigests))
+	for i, pair := range sealedBlob.PCRDigests {
+		if val, ok := readResult.Values[pair.Index]; ok {
+			currentPCRValues[i] = tpm2.TPM2BDigest{Buffer: val}
 		}
 	}
 
@@ -833,8 +894,9 @@ func UnsealData(tpmDev transport.TPM, loadedObject *LoadSealedObjectResponse, se
 	var authHandle tpm2.AuthHandle
 
 	if usePCRPolicy {
-		// Use PCR policy session
-		sess, cleanup, err := CreatePCRPolicySession(tpmDev, sealedBlob.GetPCRIndices())
+		// Use PCR policy session with the correct hash algorithm from the blob
+		hashAlgo := sealedBlob.GetHashAlgo()
+		sess, cleanup, err := CreatePCRPolicySession(tpmDev, sealedBlob.GetPCRIndices(), hashAlgo)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create PCR policy session: %w", err)
 		}

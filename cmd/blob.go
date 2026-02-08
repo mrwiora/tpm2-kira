@@ -9,6 +9,56 @@ import (
 	"github.com/google/go-tpm/tpm2"
 )
 
+// PCRHashAlgo represents the hash algorithm used for PCR bank selection
+type PCRHashAlgo string
+
+const (
+	// PCRHashAlgoSHA256 is the default SHA-256 hash algorithm (32-byte digests)
+	PCRHashAlgoSHA256 PCRHashAlgo = "sha256"
+	// PCRHashAlgoSHA1 is the legacy SHA-1 hash algorithm (20-byte digests)
+	PCRHashAlgoSHA1 PCRHashAlgo = "sha1"
+)
+
+// TPMAlg returns the corresponding TPM algorithm ID for this hash algorithm
+func (h PCRHashAlgo) TPMAlg() tpm2.TPMAlgID {
+	switch h {
+	case PCRHashAlgoSHA1:
+		return tpm2.TPMAlgSHA1
+	default:
+		return tpm2.TPMAlgSHA256
+	}
+}
+
+// DigestSize returns the digest size in bytes for this hash algorithm
+func (h PCRHashAlgo) DigestSize() int {
+	switch h {
+	case PCRHashAlgoSHA1:
+		return 20
+	default:
+		return 32
+	}
+}
+
+// String returns a short identifier for this hash algorithm (e.g. "sha256")
+func (h PCRHashAlgo) String() string {
+	switch h {
+	case PCRHashAlgoSHA1:
+		return "sha1"
+	default:
+		return "sha256"
+	}
+}
+
+// DisplayString returns a human-readable display name (e.g. "SHA-256")
+func (h PCRHashAlgo) DisplayString() string {
+	switch h {
+	case PCRHashAlgoSHA1:
+		return "SHA-1"
+	default:
+		return "SHA-256"
+	}
+}
+
 // BlobVersionError is returned when a sealed blob has an incompatible version
 type BlobVersionError struct {
 	FoundVersion    uint32
@@ -148,6 +198,22 @@ type SealedBlob struct {
 	PCRDigests   []PCRDigestPair `json:"pcr_digests"`   // PCR indices with their source and digest values
 	HasPassword  bool            `json:"has_password"`  // Whether password fallback is enabled
 	EventlogInfo *EventlogInfo   `json:"eventlog_info"` // Eventlog calculation metadata (if any PCR uses eventlog)
+}
+
+// GetHashAlgo infers the PCR hash algorithm from the stored digest sizes.
+// Returns SHA-256 by default, SHA-1 if all digests are 20 bytes.
+func (sb *SealedBlob) GetHashAlgo() PCRHashAlgo {
+	for _, pcrDigest := range sb.PCRDigests {
+		digestLen := len(pcrDigest.Digest.Buffer)
+		if digestLen == 20 {
+			return PCRHashAlgoSHA1
+		}
+		if digestLen == 32 {
+			return PCRHashAlgoSHA256
+		}
+	}
+	// Default to SHA256 if no digests or unrecognized sizes
+	return PCRHashAlgoSHA256
 }
 
 // GetPCRIndices returns a slice of PCR indices from the PCRDigests
@@ -543,27 +609,29 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 
 	// Create a JSON-friendly structure
 	type SealedBlobJSON struct {
-		Version      uint32          `json:"version"`
-		AppVersion   string          `json:"app_version"`
-		Public       string          `json:"public_hex"`
-		PublicSize   int             `json:"public_size"`
-		Private      string          `json:"private_hex"`
-		PrivateSize  int             `json:"private_size"`
-		PCRDigests   []PCRDigestJSON `json:"pcr_digests"`
-		HasPassword  bool            `json:"has_password"`
-		EventlogInfo *EventlogInfo   `json:"eventlog_info,omitempty"`
+		Version       uint32          `json:"version"`
+		AppVersion    string          `json:"app_version"`
+		HashAlgorithm string          `json:"hash_algorithm"`
+		Public        string          `json:"public_hex"`
+		PublicSize    int             `json:"public_size"`
+		Private       string          `json:"private_hex"`
+		PrivateSize   int             `json:"private_size"`
+		PCRDigests    []PCRDigestJSON `json:"pcr_digests"`
+		HasPassword   bool            `json:"has_password"`
+		EventlogInfo  *EventlogInfo   `json:"eventlog_info,omitempty"`
 	}
 
 	jsonBlob := SealedBlobJSON{
-		Version:      sb.Version,
-		AppVersion:   sb.AppVersion,
-		Public:       hex.EncodeToString(sb.Public),
-		PublicSize:   len(sb.Public),
-		Private:      hex.EncodeToString(sb.Private),
-		PrivateSize:  len(sb.Private),
-		PCRDigests:   pcrDigests,
-		HasPassword:  sb.HasPassword,
-		EventlogInfo: sb.EventlogInfo,
+		Version:       sb.Version,
+		AppVersion:    sb.AppVersion,
+		HashAlgorithm: sb.GetHashAlgo().String(),
+		Public:        hex.EncodeToString(sb.Public),
+		PublicSize:    len(sb.Public),
+		Private:       hex.EncodeToString(sb.Private),
+		PrivateSize:   len(sb.Private),
+		PCRDigests:    pcrDigests,
+		HasPassword:   sb.HasPassword,
+		EventlogInfo:  sb.EventlogInfo,
 	}
 
 	return json.Marshal(jsonBlob)
