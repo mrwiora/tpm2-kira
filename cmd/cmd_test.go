@@ -5,12 +5,14 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/google/go-attestation/attest"
 	"github.com/google/go-tpm/tpm2"
 )
 
@@ -1802,6 +1804,494 @@ func TestValidateNVRAMIndex(t *testing.T) {
 func TestCurrentBlobVersion(t *testing.T) {
 	if CurrentBlobVersion != 3 {
 		t.Errorf("CurrentBlobVersion should be 3, got %d", CurrentBlobVersion)
+	}
+}
+
+// TestGetPCRDescription tests PCR description lookup
+func TestGetPCRDescription(t *testing.T) {
+	definedPCRs := map[int]string{
+		0:  "Core System Firmware executable code (Firmware)",
+		1:  "Core System Firmware data (UEFI settings)",
+		2:  "Extended or pluggable executable code (OpROMs)",
+		3:  "Extended or pluggable firmware data",
+		4:  "Boot Manager Code and Boot Attempts",
+		5:  "Boot Manager Configuration and Data (GPT table)",
+		6:  "Resume from S4 and S5 Power State Events",
+		7:  "Secure Boot State (PK/KEK/db certificates)",
+		8:  "Hash of the kernel command line",
+		9:  "Hash of the initramfs and EFI Load Options",
+		10: "Reserved for Future Use",
+		11: "Hash of the Unified kernel image",
+		12: "Overridden kernel command line, Credentials",
+		13: "System Extensions",
+		14: "shim's MokList, MokListX, and MokSBState",
+		15: "Hash of the LUKS volume key",
+		16: "Debug (may be reset at any time)",
+		23: "Application Support (OS can set/reset)",
+	}
+
+	for idx, expectedDesc := range definedPCRs {
+		t.Run(fmt.Sprintf("PCR%d", idx), func(t *testing.T) {
+			got := GetPCRDescription(idx)
+			if got != expectedDesc {
+				t.Errorf("GetPCRDescription(%d) = %q, want %q", idx, got, expectedDesc)
+			}
+		})
+	}
+
+	unknownTests := []struct {
+		name  string
+		index int
+	}{
+		{"PCR17", 17},
+		{"PCR18", 18},
+		{"PCR24", 24},
+		{"Negative", -1},
+		{"Large", 100},
+	}
+	for _, tt := range unknownTests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := GetPCRDescription(tt.index)
+			if got != "Unknown PCR" {
+				t.Errorf("GetPCRDescription(%d) = %q, want %q", tt.index, got, "Unknown PCR")
+			}
+		})
+	}
+}
+
+// TestIsTOTPSecret tests Base32 TOTP secret validation
+func TestIsTOTPSecret(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{"Valid 16-char secret", "JBSWY3DPEHPK3PXP", true},
+		{"Valid 32-char secret", "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PX", true},
+		{"Valid with spaces", "JBSW Y3DP EHPK 3PXP", true},
+		{"Valid lowercase", "jbswy3dpehpk3pxp", true},
+		{"Too short", "JBSWY3D", false},
+		{"Too long", strings.Repeat("A", 129), false},
+		{"Exactly 128 chars", strings.Repeat("ABCDEFGH", 16), true},
+		{"Invalid Base32 chars", "JBSWY3DPEHPK3PX!", false},
+		{"Empty string", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isTOTPSecret(tt.input)
+			if got != tt.expected {
+				t.Errorf("isTOTPSecret(%q) = %v, want %v", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestGenerateTOTPURI tests TOTP URI generation
+func TestGenerateTOTPURI(t *testing.T) {
+	tests := []struct {
+		name           string
+		secret         string
+		label          string
+		issuer         string
+		wantContains   []string
+	}{
+		{
+			name:   "Custom values",
+			secret: "JBSWY3DPEHPK3PXP",
+			label:  "MyLabel",
+			issuer: "MyIssuer",
+			wantContains: []string{
+				"otpauth://totp/MyLabel",
+				"secret=JBSWY3DPEHPK3PXP",
+				"issuer=MyIssuer",
+			},
+		},
+		{
+			name:   "Empty label and issuer use defaults",
+			secret: "JBSWY3DPEHPK3PXP",
+			label:  "",
+			issuer: "",
+			wantContains: []string{
+				"otpauth://totp/TPM2-KIRA",
+				"secret=JBSWY3DPEHPK3PXP",
+				"issuer=TPM2-KIRA",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := generateTOTPURI(tt.secret, tt.label, tt.issuer)
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("generateTOTPURI() = %q, want to contain %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestGenerateHOTP tests HOTP code generation with RFC 4226 test vectors
+func TestGenerateHOTP(t *testing.T) {
+	key := []byte("12345678901234567890")
+	tests := []struct {
+		counter  int64
+		expected string
+	}{
+		{0, "755224"},
+		{1, "287082"},
+		{2, "359152"},
+		{3, "969429"},
+		{4, "338314"},
+		{5, "254676"},
+		{6, "287922"},
+		{7, "162583"},
+		{8, "399871"},
+		{9, "520489"},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("counter_%d", tt.counter), func(t *testing.T) {
+			got := generateHOTP(key, tt.counter)
+			if got != tt.expected {
+				t.Errorf("generateHOTP(key, %d) = %q, want %q", tt.counter, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestGenerateTOTPCode tests TOTP code generation
+func TestGenerateTOTPCode(t *testing.T) {
+	t.Run("Valid secret", func(t *testing.T) {
+		code, timeRemaining, err := generateTOTPCode("JBSWY3DPEHPK3PXP")
+		if err != nil {
+			t.Fatalf("generateTOTPCode() unexpected error: %v", err)
+		}
+		if len(code) != 6 {
+			t.Errorf("generateTOTPCode() code length = %d, want 6", len(code))
+		}
+		if timeRemaining < 1 || timeRemaining > 30 {
+			t.Errorf("generateTOTPCode() timeRemaining = %d, want 1-30", timeRemaining)
+		}
+	})
+
+	t.Run("Invalid Base32", func(t *testing.T) {
+		_, _, err := generateTOTPCode("!!!invalid!!!")
+		if err == nil {
+			t.Error("generateTOTPCode() expected error for invalid Base32, got nil")
+		}
+	})
+}
+
+// TestFormatKIRAOutput tests KIRA output formatting
+func TestFormatKIRAOutput(t *testing.T) {
+	got := FormatKIRAOutput("123456")
+	if !strings.Contains(got, "KIRA") {
+		t.Errorf("FormatKIRAOutput() = %q, want to contain KIRA", got)
+	}
+	if !strings.Contains(got, "123456") {
+		t.Errorf("FormatKIRAOutput() = %q, want to contain 123456", got)
+	}
+}
+
+// TestFormatKIRAError tests KIRA error formatting
+func TestFormatKIRAError(t *testing.T) {
+	got := FormatKIRAError(fmt.Errorf("test error"))
+	if !strings.Contains(got, "KIRA") {
+		t.Errorf("FormatKIRAError() = %q, want to contain KIRA", got)
+	}
+	if !strings.Contains(got, "ERROR") {
+		t.Errorf("FormatKIRAError() = %q, want to contain ERROR", got)
+	}
+	if !strings.Contains(got, "test error") {
+		t.Errorf("FormatKIRAError() = %q, want to contain 'test error'", got)
+	}
+}
+
+// TestPCRMismatchErrorError tests PCRMismatchError.Error()
+func TestPCRMismatchErrorError(t *testing.T) {
+	e := &PCRMismatchError{
+		Message:    "PCR values have changed",
+		PCRIndices: []int{0, 7},
+	}
+	if got := e.Error(); got != "PCR values have changed" {
+		t.Errorf("PCRMismatchError.Error() = %q, want %q", got, "PCR values have changed")
+	}
+}
+
+// TestIsTPMPolicyFailure tests TPM policy failure detection
+func TestIsTPMPolicyFailure(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{"Nil error", nil, false},
+		{"Unrelated error", fmt.Errorf("some random error"), false},
+		{"TPM_RC_POLICY_FAIL", fmt.Errorf("TPM_RC_POLICY_FAIL"), true},
+		{"Policy check failed", fmt.Errorf("policy check failed"), true},
+		{"Failed to create PCR policy session", fmt.Errorf("failed to create PCR policy session"), true},
+		{"Session policy check", fmt.Errorf("session 1): a policy check failed"), true},
+		{"Wrapped error", fmt.Errorf("error: %s", "TPM_RC_POLICY_FAIL occurred"), true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsTPMPolicyFailure(tt.err)
+			if got != tt.expected {
+				t.Errorf("IsTPMPolicyFailure(%v) = %v, want %v", tt.err, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestHandleNVRAMNotFoundError tests NVRAM error handling
+func TestHandleNVRAMNotFoundError(t *testing.T) {
+	tests := []struct {
+		name         string
+		err          error
+		debug        bool
+		expectNil    bool
+		wantContains string
+	}{
+		{"Nil error", nil, false, true, ""},
+		{"TPM_RC_HANDLE", fmt.Errorf("TPM_RC_HANDLE"), false, false, "has not been configured yet"},
+		{"Does not exist", fmt.Errorf("does not exist"), false, false, "has not been configured yet"},
+		{"TPM_RC_NV_UNINITIALIZED", fmt.Errorf("TPM_RC_NV_UNINITIALIZED"), false, false, "has not been configured yet"},
+		{"Debug mode", fmt.Errorf("TPM_RC_HANDLE"), true, false, "debug"},
+		{"Unrelated error", fmt.Errorf("some other error"), false, false, "some other error"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := HandleNVRAMNotFoundError(tt.err, tt.debug)
+			if tt.expectNil {
+				if got != nil {
+					t.Errorf("HandleNVRAMNotFoundError() = %v, want nil", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("HandleNVRAMNotFoundError() = nil, want error")
+			}
+			if tt.wantContains != "" && !strings.Contains(got.Error(), tt.wantContains) {
+				t.Errorf("HandleNVRAMNotFoundError() = %q, want to contain %q", got.Error(), tt.wantContains)
+			}
+		})
+	}
+}
+
+// TestHasValidSlots tests valid slot detection
+func TestHasValidSlots(t *testing.T) {
+	tests := []struct {
+		name     string
+		slots    []NVRAMSlot
+		expected bool
+	}{
+		{"Empty slice", []NVRAMSlot{}, false},
+		{"All errors", []NVRAMSlot{
+			{SlotNumber: 1, Error: fmt.Errorf("error"), Secret: "JBSWY3DPEHPK3PXP"},
+		}, false},
+		{"Empty secret", []NVRAMSlot{
+			{SlotNumber: 1, Error: nil, Secret: ""},
+		}, false},
+		{"Valid slot", []NVRAMSlot{
+			{SlotNumber: 1, Error: nil, Secret: "JBSWY3DPEHPK3PXP"},
+		}, true},
+		{"Mixed slots", []NVRAMSlot{
+			{SlotNumber: 1, Error: fmt.Errorf("error"), Secret: "JBSWY3DPEHPK3PXP"},
+			{SlotNumber: 2, Error: nil, Secret: "JBSWY3DPEHPK3PXP"},
+		}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := HasValidSlots(tt.slots)
+			if got != tt.expected {
+				t.Errorf("HasValidSlots() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestGenerateTOTPCodesForSlots tests TOTP code generation for slots
+func TestGenerateTOTPCodesForSlots(t *testing.T) {
+	t.Run("Skips error slots", func(t *testing.T) {
+		slots := []NVRAMSlot{
+			{SlotNumber: 1, Error: fmt.Errorf("PCR mismatch"), Secret: "JBSWY3DPEHPK3PXP"},
+			{SlotNumber: 2, Error: nil, Secret: "JBSWY3DPEHPK3PXP"},
+		}
+		codes, err := GenerateTOTPCodesForSlots(slots)
+		if err != nil {
+			t.Fatalf("GenerateTOTPCodesForSlots() unexpected error: %v", err)
+		}
+		if _, exists := codes[1]; exists {
+			t.Error("GenerateTOTPCodesForSlots() should skip slot 1 with error")
+		}
+		if code, exists := codes[2]; !exists || len(code) != 6 {
+			t.Errorf("GenerateTOTPCodesForSlots() slot 2 = %q, want 6-digit code", code)
+		}
+	})
+
+	t.Run("All error slots", func(t *testing.T) {
+		slots := []NVRAMSlot{
+			{SlotNumber: 1, Error: fmt.Errorf("error")},
+		}
+		codes, err := GenerateTOTPCodesForSlots(slots)
+		if err != nil {
+			t.Fatalf("GenerateTOTPCodesForSlots() unexpected error: %v", err)
+		}
+		if len(codes) != 0 {
+			t.Errorf("GenerateTOTPCodesForSlots() returned %d codes, want 0", len(codes))
+		}
+	})
+}
+
+// TestPcrIndicesToEventlogString tests PCR index formatting
+func TestPcrIndicesToEventlogString(t *testing.T) {
+	tests := []struct {
+		name     string
+		indices  []int
+		expected string
+	}{
+		{"Single index", []int{0}, "0e"},
+		{"Multiple indices", []int{0, 2, 7}, "0e,2e,7e"},
+		{"Empty", []int{}, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pcrIndicesToEventlogString(tt.indices)
+			if got != tt.expected {
+				t.Errorf("pcrIndicesToEventlogString(%v) = %q, want %q", tt.indices, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestBuildPCRDigest tests PCR digest building
+func TestBuildPCRDigest(t *testing.T) {
+	t.Run("SHA256 valid", func(t *testing.T) {
+		pcrValue0 := make([]byte, 32)
+		pcrValue7 := make([]byte, 32)
+		for i := range pcrValue0 {
+			pcrValue0[i] = 0xAA
+		}
+		for i := range pcrValue7 {
+			pcrValue7[i] = 0xBB
+		}
+
+		pcrValues := map[int][]byte{0: pcrValue0, 7: pcrValue7}
+		digest, err := buildPCRDigest([]int{0, 7}, pcrValues, PCRHashAlgoSHA256)
+		if err != nil {
+			t.Fatalf("buildPCRDigest() unexpected error: %v", err)
+		}
+
+		// Verify: digest should be SHA256 of concatenated PCR values
+		concatenated := append(pcrValue0, pcrValue7...)
+		expectedHash := sha256.Sum256(concatenated)
+		if !bytes.Equal(digest.Buffer, expectedHash[:]) {
+			t.Errorf("buildPCRDigest() digest mismatch")
+		}
+	})
+
+	t.Run("SHA1 valid", func(t *testing.T) {
+		pcrValue := make([]byte, 20)
+		pcrValues := map[int][]byte{0: pcrValue}
+		digest, err := buildPCRDigest([]int{0}, pcrValues, PCRHashAlgoSHA1)
+		if err != nil {
+			t.Fatalf("buildPCRDigest() unexpected error: %v", err)
+		}
+		if len(digest.Buffer) != 32 {
+			t.Errorf("buildPCRDigest() digest length = %d, want 32", len(digest.Buffer))
+		}
+	})
+
+	t.Run("Missing PCR value", func(t *testing.T) {
+		pcrValues := map[int][]byte{0: make([]byte, 32)}
+		_, err := buildPCRDigest([]int{0, 7}, pcrValues, PCRHashAlgoSHA256)
+		if err == nil {
+			t.Error("buildPCRDigest() expected error for missing PCR value")
+		}
+	})
+
+	t.Run("Wrong length", func(t *testing.T) {
+		pcrValues := map[int][]byte{0: make([]byte, 16)}
+		_, err := buildPCRDigest([]int{0}, pcrValues, PCRHashAlgoSHA256)
+		if err == nil {
+			t.Error("buildPCRDigest() expected error for wrong PCR value length")
+		}
+	})
+}
+
+// TestAttestHash tests PCRHashAlgo to attest.HashAlg conversion
+func TestAttestHash(t *testing.T) {
+	tests := []struct {
+		name     string
+		algo     PCRHashAlgo
+		expected attest.HashAlg
+	}{
+		{"SHA1", PCRHashAlgoSHA1, attest.HashSHA1},
+		{"SHA256", PCRHashAlgoSHA256, attest.HashSHA256},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := attestHash(tt.algo)
+			if got != tt.expected {
+				t.Errorf("attestHash(%v) = %v, want %v", tt.algo, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestMin tests the min helper function
+func TestMin(t *testing.T) {
+	tests := []struct {
+		a, b, expected int
+	}{
+		{1, 2, 1},
+		{2, 1, 1},
+		{0, 0, 0},
+		{-1, 1, -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("min(%d,%d)", tt.a, tt.b), func(t *testing.T) {
+			got := min(tt.a, tt.b)
+			if got != tt.expected {
+				t.Errorf("min(%d, %d) = %d, want %d", tt.a, tt.b, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestPCRSourceUnknown tests PCRSource with unknown value
+func TestPCRSourceUnknown(t *testing.T) {
+	unknown := PCRSource(99)
+	if got := unknown.String(); got != "unknown" {
+		t.Errorf("PCRSource(99).String() = %q, want %q", got, "unknown")
+	}
+	if got := unknown.Suffix(); got != "" {
+		t.Errorf("PCRSource(99).Suffix() = %q, want %q", got, "")
+	}
+}
+
+// TestPCRHashAlgoUnknown tests PCRHashAlgo with unknown value (defaults to SHA256)
+func TestPCRHashAlgoUnknown(t *testing.T) {
+	unknown := PCRHashAlgo("unknown")
+	if got := unknown.TPMAlg(); got != tpm2.TPMAlgSHA256 {
+		t.Errorf("PCRHashAlgo(unknown).TPMAlg() = %v, want TPMAlgSHA256", got)
+	}
+	if got := unknown.DigestSize(); got != 32 {
+		t.Errorf("PCRHashAlgo(unknown).DigestSize() = %d, want 32", got)
+	}
+	if got := unknown.String(); got != "sha256" {
+		t.Errorf("PCRHashAlgo(unknown).String() = %q, want %q", got, "sha256")
+	}
+	if got := unknown.DisplayString(); got != "SHA-256" {
+		t.Errorf("PCRHashAlgo(unknown).DisplayString() = %q, want %q", got, "SHA-256")
 	}
 }
 
