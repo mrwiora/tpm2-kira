@@ -79,9 +79,16 @@ func PrintKIRAError(err error) {
 			}
 
 			fmt.Printf("  PCR%-2d: %s - %s\n", pcrIndex, GetPCRDescription(pcrIndex), status)
-			if !match {
-				fmt.Printf("    Expected: %x\n", expected)
-				fmt.Printf("    Current:  %x\n", current)
+			fmt.Printf("    Expected (blob):        %x\n", expected)
+
+			// For eventlog PCRs, show both calculated and register values
+			if i < len(pcrErr.PCRSources) && pcrErr.PCRSources[i] == PCRSourceEventlog {
+				fmt.Printf("    Eventlog-Calculated:    %x\n", current)
+				if i < len(pcrErr.RegisterDigests) {
+					fmt.Printf("    Current (register):     %x\n", pcrErr.RegisterDigests[i])
+				}
+			} else {
+				fmt.Printf("    Current (register):     %x\n", current)
 			}
 		}
 
@@ -110,6 +117,8 @@ type PCRMismatchError struct {
 	PCRIndices      []int
 	ExpectedDigests [][]byte
 	CurrentDigests  [][]byte
+	RegisterDigests [][]byte    // Actual register values (always from TPM register)
+	PCRSources      []PCRSource // Source for each PCR (eventlog or register)
 }
 
 func (e *PCRMismatchError) Error() string {

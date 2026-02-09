@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
@@ -65,21 +64,10 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 	if err != nil {
 		// Check if it's a PCR mismatch - we can handle this with password
 		if pcrErr, ok := err.(*PCRMismatchError); ok {
-			fmt.Printf("PCR values changed - using password authentication\n")
-			fmt.Println("\n=== PCR Mismatch Details ===")
+			fmt.Printf("PCR values changed - using password authentication\n\n")
 
-			// Convert byte slices to TPM2BDigest format
-			expectedDigests := make([]tpm2.TPM2BDigest, len(pcrErr.ExpectedDigests))
-			for i, digest := range pcrErr.ExpectedDigests {
-				expectedDigests[i] = tpm2.TPM2BDigest{Buffer: digest}
-			}
-			currentDigests := make([]tpm2.TPM2BDigest, len(pcrErr.CurrentDigests))
-			for i, digest := range pcrErr.CurrentDigests {
-				currentDigests[i] = tpm2.TPM2BDigest{Buffer: digest}
-			}
-
-			DisplayPCRMismatch(pcrErr.PCRIndices, expectedDigests, currentDigests)
-			fmt.Println()
+			// Use PrintKIRAError for proper source labeling (eventlog vs register)
+			PrintKIRAError(pcrErr)
 
 			// Use password authentication for unsealing (TPM validates the password)
 			result, err = UnsealWithPassword(tpmDev, nvramIndex, password, debug)

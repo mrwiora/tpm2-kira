@@ -247,8 +247,8 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 			if err == nil {
 				sealedBlob, err := UnmarshalSealedBlob(sealedData)
 				if err == nil {
-					// Get current PCR values
-					currentPCRValues, err := GetCurrentPCRValues(tpmDev, sealedBlob, false)
+					// Get current PCR values (including register values)
+					readResult, currentPCRValues, err := GetCurrentPCRValuesWithRegister(tpmDev, sealedBlob, false)
 					if err == nil {
 						// Show PCR details
 						pcrIndices := sealedBlob.GetPCRIndices()
@@ -281,9 +281,16 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 
 							source := sealedBlob.PCRDigests[idx].Source
 							fmt.Printf("  PCR%-2d (%s): %s - %s\n", pcrIndex, source.String(), GetPCRDescription(pcrIndex), status)
-							if !match {
-								fmt.Printf("    Expected: %x\n", expected)
-								fmt.Printf("    Current:  %x\n", current)
+							fmt.Printf("    Expected (blob):        %x\n", expected)
+
+							// For eventlog PCRs, show both calculated and register values
+							if source == PCRSourceEventlog {
+								fmt.Printf("    Eventlog-Calculated:    %x\n", current)
+								if regVal, ok := readResult.RegisterValues[pcrIndex]; ok {
+									fmt.Printf("    Current (register):     %x\n", regVal)
+								}
+							} else {
+								fmt.Printf("    Current (register):     %x\n", current)
 							}
 						}
 					}
