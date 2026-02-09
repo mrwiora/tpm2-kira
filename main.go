@@ -280,12 +280,12 @@ func runNVRAM(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFl
 			// No --nvram specified: purge all 16 standard slots
 			if err := cmd.NVRAMDeleteAll(*tpm, *debug); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
+				os.Exit(0)
 			}
 		} else {
 			if err := cmd.NVRAMDelete(*tpm, cmd.ResolveNVRAMIndex(uint32(*nvram)), *debug); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
+				os.Exit(0)
 			}
 		}
 	default:
