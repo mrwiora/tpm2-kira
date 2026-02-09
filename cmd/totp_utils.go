@@ -115,8 +115,8 @@ func PrintKIRAError(err error) {
 type PCRMismatchError struct {
 	Message         string
 	PCRIndices      []int
-	ExpectedDigests [][]byte // Digest values stored in the sealed blob
-	CurrentDigests  [][]byte // Current TPM register values
+	ExpectedDigests [][]byte    // Digest values stored in the sealed blob
+	CurrentDigests  [][]byte    // Current TPM register values
 	PCRSources      []PCRSource // Original source used at seal time (informational)
 }
 

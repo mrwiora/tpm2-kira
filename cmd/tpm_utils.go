@@ -426,9 +426,9 @@ func HandleTPMPolicyFailureWithPCRDetails(err error, tpmDev transport.TPM, nvram
 
 // ReadPCRValuesResult holds the result of reading PCR values from all sources.
 type ReadPCRValuesResult struct {
-	Values        map[int][]byte // PCR index -> digest value (eventlog-calculated for eventlog PCRs, register value for register PCRs)
+	Values         map[int][]byte // PCR index -> digest value (eventlog-calculated for eventlog PCRs, register value for register PCRs)
 	RegisterValues map[int][]byte // PCR index -> actual register value (always from TPM register)
-	EventlogInfo  *EventlogInfo  // eventlog metadata (nil when no eventlog PCRs)
+	EventlogInfo   *EventlogInfo  // eventlog metadata (nil when no eventlog PCRs)
 }
 
 // ReadPCRRegisters reads PCR values directly from TPM registers for the given
