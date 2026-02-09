@@ -297,9 +297,12 @@ GLOBAL OPTIONS:
 SEAL OPTIONS:
   --pcrs INDICES     PCR indices with optional source suffix (default: 0,2,7)
                      Suffix 'r' = read from TPM registers (default if no suffix)
-                     Suffix 'e' = calculate from TPM eventlog (PCRs 0-7 only)
+                     Suffix 'e' = calculate from TPM eventlog (PCRs 0-12 only)
+                     Suffix 'p:CMD' = predict via external command (PCR 11 only)
+                       CMD must print a single hex digest line to stdout
                      Examples: "0,2,7" (all register), "0e,2e,7e" (all eventlog),
                                "0e,2,7e" (mixed: 0 and 7 from eventlog, 2 from register)
+                               "0e,2e,7e,11p:tpm2-pcr11predict" (eventlog + predicted PCR 11)
                      You will be prompted for an optional password
   --sha1             Use SHA-1 PCR bank instead of SHA-256 (default: SHA-256)
                      Use only if firmware eventlog does not provide SHA-256 digests
@@ -321,6 +324,7 @@ NVRAM SUBCOMMANDS:
 EXAMPLES:
   tpm2-kira seal
   tpm2-kira seal --pcrs "0e,2e,7e"
+  tpm2-kira seal --pcrs "0e,2e,7e,11p:tpm2-pcr11predict"
   tpm2-kira seal --sha1 --pcrs "0e,2e,7e"
   tpm2-kira seal --pcrs "0e,2,4,7e"
   tpm2-kira reveal

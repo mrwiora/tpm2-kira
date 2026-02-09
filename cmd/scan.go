@@ -168,8 +168,26 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 				continue
 			}
 
+			// Before dropping the slot, check whether NVRAM actually has data.
+			// If it does, the slot exists but unsealing failed for an
+			// unexpected reason (e.g. TPM resource exhaustion). We must still
+			// report it so the user sees all populated slots.
+			CleanupTPM(tpmDev, debug)
+			if rawData, peekErr := ReadFromNVRAM(tpmDev, i); peekErr == nil && len(rawData) > 0 {
+				if debug {
+					fmt.Printf("  Slot %d: NVRAM data present but unsealing failed (%v)\n", slotNumber, err)
+				}
+				slots = append(slots, NVRAMSlot{
+					SlotNumber: slotNumber,
+					Index:      i,
+					Available:  true,
+					Error:      err,
+				})
+				continue
+			}
+
 			if debug {
-				fmt.Printf("  Slot %d: not available or unsealing failed (%v)\n", slotNumber, err)
+				fmt.Printf("  Slot %d: not available (%v)\n", slotNumber, err)
 			}
 			continue
 		}
@@ -243,14 +261,15 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 			fmt.Printf("\033[0;31m#%d\033[0m: PCR Mismatch\n", slot.SlotNumber)
 
 			// Try to read the sealed blob to get PCR details
+			// Read the sealed blob and current register values for comparison
 			sealedData, err := ReadFromNVRAM(tpmDev, slot.Index)
 			if err == nil {
 				sealedBlob, err := UnmarshalSealedBlob(sealedData)
 				if err == nil {
-					// Get current PCR values
-					currentPCRValues, err := GetCurrentPCRValues(tpmDev, sealedBlob, false)
+					// Read current PCR values from TPM registers only
+					// (no eventlog or predict dependency)
+					currentPCRValues, err := GetCurrentPCRValuesFromRegisters(tpmDev, sealedBlob, false)
 					if err == nil {
-						// Show PCR details
 						pcrIndices := sealedBlob.GetPCRIndices()
 						expectedDigests := sealedBlob.GetPCRDigestValues()
 
@@ -281,10 +300,8 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 
 							source := sealedBlob.PCRDigests[idx].Source
 							fmt.Printf("  PCR%-2d (%s): %s - %s\n", pcrIndex, source.String(), GetPCRDescription(pcrIndex), status)
-							if !match {
-								fmt.Printf("    Expected: %x\n", expected)
-								fmt.Printf("    Current:  %x\n", current)
-							}
+							fmt.Printf("    Expected (blob):    %x\n", expected)
+							fmt.Printf("    Current (register): %x\n", current)
 						}
 					}
 				}

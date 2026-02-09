@@ -116,13 +116,67 @@ func TestParsePCRSpecs(t *testing.T) {
 			},
 		},
 		{
-			name:      "PCR 8 eventlog is rejected",
-			input:     "8e",
+			name:  "PCR 8 eventlog is allowed",
+			input: "8e",
+			expected: []PCRSpec{
+				{Index: 8, Source: PCRSourceEventlog},
+			},
+		},
+		{
+			name:  "PCR 12 eventlog is allowed",
+			input: "0e,12e",
+			expected: []PCRSpec{
+				{Index: 0, Source: PCRSourceEventlog},
+				{Index: 12, Source: PCRSourceEventlog},
+			},
+		},
+		{
+			name:  "PCR 11 predict with command",
+			input: "11p:tpm2-pcr11predict",
+			expected: []PCRSpec{
+				{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict"},
+			},
+		},
+		{
+			name:  "PCR 11 predict with absolute path command",
+			input: "11p:/usr/local/bin/tpm2-pcr11predict",
+			expected: []PCRSpec{
+				{Index: 11, Source: PCRSourcePredict, Command: "/usr/local/bin/tpm2-pcr11predict"},
+			},
+		},
+		{
+			name:  "Mixed eventlog register and predict",
+			input: "0e,2,7e,11p:my-predict",
+			expected: []PCRSpec{
+				{Index: 0, Source: PCRSourceEventlog},
+				{Index: 2, Source: PCRSourceRegister},
+				{Index: 7, Source: PCRSourceEventlog},
+				{Index: 11, Source: PCRSourcePredict, Command: "my-predict"},
+			},
+		},
+		{
+			name:      "Predict suffix rejected for PCR 0",
+			input:     "0p:cmd",
 			shouldErr: true,
 		},
 		{
-			name:      "PCR 9 eventlog is rejected",
-			input:     "0e,9e",
+			name:      "Predict suffix rejected for PCR 7",
+			input:     "7p:cmd",
+			shouldErr: true,
+		},
+		{
+			name:      "Predict suffix rejected for PCR 12",
+			input:     "12p:cmd",
+			shouldErr: true,
+		},
+		{
+			name:      "Predict suffix without command is rejected",
+			input:     "11p:",
+			shouldErr: true,
+		},
+		{
+			name:      "PCR 13 eventlog is rejected",
+			input:     "13e",
 			shouldErr: true,
 		},
 		{
@@ -361,6 +415,16 @@ func TestPCRSpecsToString(t *testing.T) {
 			specs:    []PCRSpec{{Index: 0, Source: PCRSourceEventlog}},
 			expected: "0e",
 		},
+		{
+			name:     "Single predict",
+			specs:    []PCRSpec{{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict"}},
+			expected: "11p:tpm2-pcr11predict",
+		},
+		{
+			name:     "Mixed with predict",
+			specs:    []PCRSpec{{Index: 0, Source: PCRSourceEventlog}, {Index: 2, Source: PCRSourceRegister}, {Index: 7, Source: PCRSourceEventlog}, {Index: 11, Source: PCRSourcePredict, Command: "my-cmd"}},
+			expected: "0e,2,7e,11p:my-cmd",
+		},
 	}
 
 	for _, tt := range tests {
@@ -381,6 +445,9 @@ func TestPCRSourceString(t *testing.T) {
 	if PCRSourceEventlog.String() != "eventlog" {
 		t.Errorf("Expected 'eventlog', got %q", PCRSourceEventlog.String())
 	}
+	if PCRSourcePredict.String() != "predict" {
+		t.Errorf("Expected 'predict', got %q", PCRSourcePredict.String())
+	}
 }
 
 // TestPCRSourceSuffix tests the Suffix() method on PCRSource
@@ -390,6 +457,9 @@ func TestPCRSourceSuffix(t *testing.T) {
 	}
 	if PCRSourceEventlog.Suffix() != "e" {
 		t.Errorf("Expected 'e' suffix for eventlog, got %q", PCRSourceEventlog.Suffix())
+	}
+	if PCRSourcePredict.Suffix() != "p" {
+		t.Errorf("Expected 'p' suffix for predict, got %q", PCRSourcePredict.Suffix())
 	}
 }
 
@@ -429,6 +499,29 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest2")}},
 				},
 				HasPassword: true,
+			},
+		},
+		{
+			name: "Blob with predict PCR source",
+			blob: &SealedBlob{
+				Version:    3,
+				AppVersion: "test-predict",
+				Public:     []byte("public-predict"),
+				Private:    []byte("private-predict"),
+				PCRDigests: []PCRDigestPair{
+					{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+					{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				},
+				HasPassword: true,
+				EventlogInfo: &EventlogInfo{
+					EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
+					EventlogHash:    "abc123",
+					CalculationTime: "2024-01-01T00:00:00Z",
+					TotalEvents:     100,
+					ProcessedEvents: 50,
+				},
 			},
 		},
 		{
@@ -1116,6 +1209,15 @@ func TestHasEventlogPCRs(t *testing.T) {
 			expected: true,
 		},
 		{
+			name: "Predict only does not count as eventlog",
+			blob: &SealedBlob{
+				PCRDigests: []PCRDigestPair{
+					{Index: 11, Source: PCRSourcePredict, Command: "cmd"},
+				},
+			},
+			expected: false,
+		},
+		{
 			name: "Empty",
 			blob: &SealedBlob{
 				PCRDigests: []PCRDigestPair{},
@@ -1127,6 +1229,71 @@ func TestHasEventlogPCRs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := tt.blob.HasEventlogPCRs()
+			if result != tt.expected {
+				t.Errorf("Expected %v, got %v", tt.expected, result)
+			}
+		})
+	}
+}
+
+// TestHasPredictPCRs tests the HasPredictPCRs method
+func TestHasPredictPCRs(t *testing.T) {
+	tests := []struct {
+		name     string
+		blob     *SealedBlob
+		expected bool
+	}{
+		{
+			name: "All register",
+			blob: &SealedBlob{
+				PCRDigests: []PCRDigestPair{
+					{Index: 0, Source: PCRSourceRegister},
+					{Index: 2, Source: PCRSourceRegister},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "All eventlog",
+			blob: &SealedBlob{
+				PCRDigests: []PCRDigestPair{
+					{Index: 0, Source: PCRSourceEventlog},
+					{Index: 2, Source: PCRSourceEventlog},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "Has predict",
+			blob: &SealedBlob{
+				PCRDigests: []PCRDigestPair{
+					{Index: 0, Source: PCRSourceEventlog},
+					{Index: 11, Source: PCRSourcePredict, Command: "cmd"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "Predict only",
+			blob: &SealedBlob{
+				PCRDigests: []PCRDigestPair{
+					{Index: 11, Source: PCRSourcePredict, Command: "cmd"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "Empty",
+			blob: &SealedBlob{
+				PCRDigests: []PCRDigestPair{},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.blob.HasPredictPCRs()
 			if result != tt.expected {
 				t.Errorf("Expected %v, got %v", tt.expected, result)
 			}
@@ -1162,6 +1329,39 @@ func TestGetEventlogPCRIndices(t *testing.T) {
 	}
 }
 
+// TestGetPredictPCRIndices tests extracting predict PCR indices
+func TestGetPredictPCRIndices(t *testing.T) {
+	blob := &SealedBlob{
+		PCRDigests: []PCRDigestPair{
+			{Index: 0, Source: PCRSourceEventlog},
+			{Index: 2, Source: PCRSourceRegister},
+			{Index: 7, Source: PCRSourceEventlog},
+			{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict"},
+		},
+	}
+
+	predictIndices := blob.GetPredictPCRIndices()
+	if len(predictIndices) != 1 {
+		t.Fatalf("Expected 1 predict index, got %d", len(predictIndices))
+	}
+	if predictIndices[0] != 11 {
+		t.Errorf("Expected [11], got %v", predictIndices)
+	}
+
+	eventlogIndices := blob.GetEventlogPCRIndices()
+	if len(eventlogIndices) != 2 {
+		t.Fatalf("Expected 2 eventlog indices, got %d", len(eventlogIndices))
+	}
+
+	registerIndices := blob.GetRegisterPCRIndices()
+	if len(registerIndices) != 1 {
+		t.Fatalf("Expected 1 register index, got %d", len(registerIndices))
+	}
+	if registerIndices[0] != 2 {
+		t.Errorf("Expected [2], got %v", registerIndices)
+	}
+}
+
 // TestGetPCRSpecs tests reconstructing PCRSpecs from a SealedBlob
 func TestGetPCRSpecs(t *testing.T) {
 	blob := &SealedBlob{
@@ -1169,18 +1369,20 @@ func TestGetPCRSpecs(t *testing.T) {
 			{Index: 0, Source: PCRSourceEventlog},
 			{Index: 2, Source: PCRSourceRegister},
 			{Index: 7, Source: PCRSourceEventlog},
+			{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict"},
 		},
 	}
 
 	specs := blob.GetPCRSpecs()
-	if len(specs) != 3 {
-		t.Fatalf("Expected 3 specs, got %d", len(specs))
+	if len(specs) != 4 {
+		t.Fatalf("Expected 4 specs, got %d", len(specs))
 	}
 
 	expected := []PCRSpec{
 		{Index: 0, Source: PCRSourceEventlog},
 		{Index: 2, Source: PCRSourceRegister},
 		{Index: 7, Source: PCRSourceEventlog},
+		{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict"},
 	}
 
 	for i, spec := range specs {
@@ -1189,6 +1391,9 @@ func TestGetPCRSpecs(t *testing.T) {
 		}
 		if spec.Source != expected[i].Source {
 			t.Errorf("Spec[%d].Source: expected %v, got %v", i, expected[i].Source, spec.Source)
+		}
+		if spec.Command != expected[i].Command {
+			t.Errorf("Spec[%d].Command: expected %q, got %q", i, expected[i].Command, spec.Command)
 		}
 	}
 }
@@ -2279,6 +2484,70 @@ func TestPCRSourceUnknown(t *testing.T) {
 	if got := unknown.Suffix(); got != "" {
 		t.Errorf("PCRSource(99).Suffix() = %q, want %q", got, "")
 	}
+}
+
+// TestPCRSourcePredict tests the predict PCR source value
+func TestPCRSourcePredict(t *testing.T) {
+	if PCRSourcePredict != PCRSource(2) {
+		t.Errorf("PCRSourcePredict should be 2, got %d", PCRSourcePredict)
+	}
+	if got := PCRSourcePredict.String(); got != "predict" {
+		t.Errorf("PCRSourcePredict.String() = %q, want %q", got, "predict")
+	}
+	if got := PCRSourcePredict.Suffix(); got != "p" {
+		t.Errorf("PCRSourcePredict.Suffix() = %q, want %q", got, "p")
+	}
+}
+
+// TestParsePCRSpecsPredictRoundTrip tests that predict specs round-trip through string conversion
+func TestParsePCRSpecsPredictRoundTrip(t *testing.T) {
+	input := "0e,2,7e,11p:tpm2-pcr11predict"
+	specs, err := ParsePCRSpecs(input)
+	if err != nil {
+		t.Fatalf("ParsePCRSpecs(%q) unexpected error: %v", input, err)
+	}
+	output := PCRSpecsToString(specs)
+	if output != input {
+		t.Errorf("Round-trip failed: input=%q, output=%q", input, output)
+	}
+}
+
+// TestParsePCRSpecsPredictAbsolutePath tests predict with an absolute path command
+func TestParsePCRSpecsPredictAbsolutePath(t *testing.T) {
+	input := "11p:/usr/local/bin/predict-pcr11"
+	specs, err := ParsePCRSpecs(input)
+	if err != nil {
+		t.Fatalf("ParsePCRSpecs(%q) unexpected error: %v", input, err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("Expected 1 spec, got %d", len(specs))
+	}
+	if specs[0].Index != 11 {
+		t.Errorf("Expected index 11, got %d", specs[0].Index)
+	}
+	if specs[0].Source != PCRSourcePredict {
+		t.Errorf("Expected PCRSourcePredict, got %v", specs[0].Source)
+	}
+	if specs[0].Command != "/usr/local/bin/predict-pcr11" {
+		t.Errorf("Expected command '/usr/local/bin/predict-pcr11', got %q", specs[0].Command)
+	}
+}
+
+// TestRunPredictCommand tests the external predict command runner
+func TestRunPredictCommand(t *testing.T) {
+	t.Run("Empty command is rejected", func(t *testing.T) {
+		_, err := RunPredictCommand("", 32, false)
+		if err == nil {
+			t.Error("Expected error for empty command, got nil")
+		}
+	})
+
+	t.Run("Non-existent command fails", func(t *testing.T) {
+		_, err := RunPredictCommand("/nonexistent/binary/that/does/not/exist", 32, false)
+		if err == nil {
+			t.Error("Expected error for non-existent command, got nil")
+		}
+	})
 }
 
 // TestPCRHashAlgoUnknown tests PCRHashAlgo with unknown value (defaults to SHA256)

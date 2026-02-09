@@ -129,10 +129,8 @@ func DisplayPCRMismatch(pcrIndices []int, expectedDigests, currentDigests []tpm2
 		}
 
 		fmt.Printf("  PCR%-2d: %s - %s\n", pcrIndex, GetPCRDescription(pcrIndex), status)
-		if !match {
-			fmt.Printf("    Expected: %x\n", expected)
-			fmt.Printf("    Current:  %x\n", current)
-		}
+		fmt.Printf("    Expected (blob):    %x\n", expected)
+		fmt.Printf("    Current (register): %x\n", current)
 	}
 }
 
@@ -209,13 +207,21 @@ func PcrsToBitmapBytes(pcrIndices []int) []byte {
 
 // PCRSpec represents a PCR index with its source (register or eventlog)
 type PCRSpec struct {
-	Index  int
-	Source PCRSource
+	Index   int
+	Source  PCRSource
+	Command string // External command for predict source (only when Source == PCRSourcePredict)
 }
 
 // ParsePCRSpecs parses a comma-separated string of PCR indices with optional source suffixes.
-// Supported formats: "0" (register, default), "0r" (register, explicit), "0e" (eventlog).
-// The 'e' suffix is only valid for PCRs 0-7 (firmware PCRs present in the BIOS eventlog).
+// Supported formats:
+//
+//	"0"              - register (default)
+//	"0r"             - register (explicit)
+//	"0e"             - eventlog (PCRs 0-12 only)
+//	"11p:COMMAND"    - predict via external command (PCR 11 only)
+//
+// The predict format requires a colon-separated command that will be executed to
+// obtain the expected PCR digest as a hex string on stdout.
 func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 	parts := strings.Split(pcrsStr, ",")
 	specs := make([]PCRSpec, 0, len(parts))
@@ -227,9 +233,15 @@ func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 		}
 
 		source := PCRSourceRegister
+		command := ""
 		numStr := part
 
-		if strings.HasSuffix(part, "e") {
+		// Check for predict format: "<pcr>p:<command>"
+		if pIdx := strings.Index(part, "p:"); pIdx > 0 {
+			source = PCRSourcePredict
+			command = part[pIdx+2:]
+			numStr = part[:pIdx]
+		} else if strings.HasSuffix(part, "e") {
 			source = PCRSourceEventlog
 			numStr = part[:len(part)-1]
 		} else if strings.HasSuffix(part, "r") {
@@ -244,15 +256,21 @@ func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 		if pcr < 0 || pcr >= 24 {
 			return nil, fmt.Errorf("PCR value %d out of range (0-23)", pcr)
 		}
-		if source == PCRSourceEventlog && pcr > 7 {
-			return nil, fmt.Errorf("eventlog source (e suffix) is only valid for PCRs 0-7, got PCR %d", pcr)
+		if source == PCRSourceEventlog && pcr > 12 {
+			return nil, fmt.Errorf("eventlog source (e suffix) is only valid for PCRs 0-12, got PCR %d", pcr)
+		}
+		if source == PCRSourcePredict && pcr != 11 {
+			return nil, fmt.Errorf("predict source (p suffix) is only valid for PCR 11, got PCR %d", pcr)
+		}
+		if source == PCRSourcePredict && command == "" {
+			return nil, fmt.Errorf("predict source for PCR %d requires a command (format: %dp:COMMAND)", pcr, pcr)
 		}
 		if seen[pcr] {
 			return nil, fmt.Errorf("duplicate PCR %d specified (each PCR index can only appear once)", pcr)
 		}
 		seen[pcr] = true
 
-		specs = append(specs, PCRSpec{Index: pcr, Source: source})
+		specs = append(specs, PCRSpec{Index: pcr, Source: source, Command: command})
 	}
 	if len(specs) == 0 {
 		return nil, fmt.Errorf("no PCRs specified")
@@ -276,11 +294,16 @@ func ParsePCRs(pcrsStr string) ([]int, error) {
 }
 
 // PCRSpecsToString converts a slice of PCRSpec back to the comma-separated string format.
-// Register-source PCRs omit the suffix (e.g. "0"), eventlog-source PCRs use "e" (e.g. "0e").
+// Register-source PCRs omit the suffix (e.g. "0"), eventlog-source PCRs use "e" (e.g. "0e"),
+// predict-source PCRs use "p:COMMAND" (e.g. "11p:tpm2-pcr11predict").
 func PCRSpecsToString(specs []PCRSpec) string {
 	parts := make([]string, len(specs))
 	for i, spec := range specs {
-		parts[i] = fmt.Sprintf("%d%s", spec.Index, spec.Source.Suffix())
+		if spec.Source == PCRSourcePredict {
+			parts[i] = fmt.Sprintf("%dp:%s", spec.Index, spec.Command)
+		} else {
+			parts[i] = fmt.Sprintf("%d%s", spec.Index, spec.Source.Suffix())
+		}
 	}
 	return strings.Join(parts, ",")
 }
@@ -359,15 +382,16 @@ func IsTPMPolicyFailure(err error) bool {
 		strings.Contains(errStr, "session 1): a policy check failed")
 }
 
-// ShowPCRDetails attempts to show PCR comparison details for the given error
-// Returns true if PCR details were successfully shown, false otherwise
+// ShowPCRDetails attempts to show PCR comparison details for the given error.
+// Reads current PCR values from TPM registers only (no eventlog/predict).
+// Returns true if PCR details were successfully shown, false otherwise.
 func ShowPCRDetails(tpmDev transport.TPM, nvramIndex uint32, debug bool) bool {
 	// Try to show PCR details
 	sealedData, readErr := ReadFromNVRAM(tpmDev, nvramIndex)
 	if readErr == nil {
 		blob, unmarshalErr := UnmarshalSealedBlob(sealedData)
 		if unmarshalErr == nil {
-			currentPCRs, pcrErr := GetCurrentPCRValues(tpmDev, blob, debug)
+			currentPCRs, pcrErr := GetCurrentPCRValuesFromRegisters(tpmDev, blob, debug)
 			if pcrErr == nil {
 				fmt.Println("=== PCR Mismatch Details ===")
 				DisplayPCRMismatch(blob.GetPCRIndices(), blob.GetPCRDigestValues(), currentPCRs)
@@ -402,27 +426,76 @@ func HandleTPMPolicyFailureWithPCRDetails(err error, tpmDev transport.TPM, nvram
 
 // ReadPCRValuesResult holds the result of reading PCR values from all sources.
 type ReadPCRValuesResult struct {
-	Values       map[int][]byte // PCR index -> digest value
-	EventlogInfo *EventlogInfo  // eventlog metadata (nil when no eventlog PCRs)
+	Values         map[int][]byte // PCR index -> digest value (eventlog-calculated for eventlog PCRs, register value for register PCRs)
+	RegisterValues map[int][]byte // PCR index -> actual register value (always from TPM register)
+	EventlogInfo   *EventlogInfo  // eventlog metadata (nil when no eventlog PCRs)
 }
 
-// ReadPCRValues reads PCR values from their respective sources (eventlog and/or
-// TPM registers). This is the single shared implementation used by seal, unseal,
-// reveal and reseal paths.
+// ReadPCRRegisters reads PCR values directly from TPM registers for the given
+// indices. This is used on the unseal/reveal/run path where neither eventlog
+// nor predict tools are available (e.g. early boot). The result maps each PCR
+// index to its current register digest.
+func ReadPCRRegisters(tpmDev transport.TPM, pcrIndices []int, hashAlgo PCRHashAlgo, debug bool) (map[int][]byte, error) {
+	if len(pcrIndices) == 0 {
+		return make(map[int][]byte), nil
+	}
+
+	pcrRead := tpm2.PCRRead{
+		PCRSelectionIn: CreatePCRSelection(pcrIndices, hashAlgo),
+	}
+
+	pcrReadResp, err := pcrRead.Execute(tpmDev)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read PCRs from %s bank: %w", hashAlgo.DisplayString(), err)
+	}
+
+	if len(pcrReadResp.PCRValues.Digests) < len(pcrIndices) {
+		return nil, fmt.Errorf(
+			"TPM did not return %s PCR values for PCRs %v.\n"+
+				"The %s PCR bank may not be enabled on this system.\n"+
+				"Available digests: %d, expected: %d",
+			hashAlgo.DisplayString(), pcrIndices,
+			hashAlgo.DisplayString(),
+			len(pcrReadResp.PCRValues.Digests), len(pcrIndices))
+	}
+
+	result := make(map[int][]byte, len(pcrIndices))
+	for i, pcrIndex := range pcrIndices {
+		result[pcrIndex] = pcrReadResp.PCRValues.Digests[i].Buffer
+	}
+
+	if debug {
+		fmt.Println("Register-read PCR values:")
+		for _, idx := range pcrIndices {
+			fmt.Printf("  PCR%d: %x\n", idx, result[idx])
+		}
+	}
+
+	return result, nil
+}
+
+// ReadPCRValues reads PCR values from their respective sources (eventlog, predict,
+// and/or TPM registers). This is the single shared implementation used by seal,
+// unseal, reveal and reseal paths.
 func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, debug bool) (*ReadPCRValuesResult, error) {
 	// Separate PCRs by source
 	var eventlogPCRIndices []int
+	var predictPCRIndices []int
 	var registerPCRIndices []int
 	for _, spec := range specs {
-		if spec.Source == PCRSourceEventlog {
+		switch spec.Source {
+		case PCRSourceEventlog:
 			eventlogPCRIndices = append(eventlogPCRIndices, spec.Index)
-		} else {
+		case PCRSourcePredict:
+			predictPCRIndices = append(predictPCRIndices, spec.Index)
+		default:
 			registerPCRIndices = append(registerPCRIndices, spec.Index)
 		}
 	}
 
 	result := &ReadPCRValuesResult{
-		Values: make(map[int][]byte),
+		Values:         make(map[int][]byte),
+		RegisterValues: make(map[int][]byte),
 	}
 
 	// Calculate eventlog-based PCR values
@@ -442,6 +515,79 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 			fmt.Println("Eventlog-calculated PCR values:")
 			for _, idx := range eventlogPCRIndices {
 				fmt.Printf("  PCR%d: %x\n", idx, result.Values[idx])
+			}
+		}
+
+		// Also read the actual register values for eventlog PCRs
+		pcrRead := tpm2.PCRRead{
+			PCRSelectionIn: CreatePCRSelection(eventlogPCRIndices, hashAlgo),
+		}
+
+		pcrReadResp, err := pcrRead.Execute(tpmDev)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read eventlog PCRs from register: %w", err)
+		}
+
+		for i, pcrIndex := range eventlogPCRIndices {
+			if i < len(pcrReadResp.PCRValues.Digests) {
+				result.RegisterValues[pcrIndex] = pcrReadResp.PCRValues.Digests[i].Buffer
+			}
+		}
+
+		if debug {
+			fmt.Println("Actual register values for eventlog PCRs:")
+			for _, idx := range eventlogPCRIndices {
+				fmt.Printf("  PCR%d: %x\n", idx, result.RegisterValues[idx])
+			}
+		}
+	}
+
+	// Calculate predict-based PCR values via external commands
+	if len(predictPCRIndices) > 0 {
+		// Build a map from PCR index to command
+		predictCommands := make(map[int]string)
+		for _, spec := range specs {
+			if spec.Source == PCRSourcePredict {
+				predictCommands[spec.Index] = spec.Command
+			}
+		}
+
+		for _, idx := range predictPCRIndices {
+			command := predictCommands[idx]
+			predictedDigest, err := RunPredictCommand(command, hashAlgo.DigestSize(), debug)
+			if err != nil {
+				return nil, fmt.Errorf("failed to predict PCR %d via command %q: %w", idx, command, err)
+			}
+			result.Values[idx] = predictedDigest
+		}
+
+		if debug {
+			fmt.Println("Predicted PCR values:")
+			for _, idx := range predictPCRIndices {
+				fmt.Printf("  PCR%d: %x\n", idx, result.Values[idx])
+			}
+		}
+
+		// Also read the actual register values for predict PCRs
+		pcrRead := tpm2.PCRRead{
+			PCRSelectionIn: CreatePCRSelection(predictPCRIndices, hashAlgo),
+		}
+
+		pcrReadResp, err := pcrRead.Execute(tpmDev)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read predict PCRs from register: %w", err)
+		}
+
+		for i, pcrIndex := range predictPCRIndices {
+			if i < len(pcrReadResp.PCRValues.Digests) {
+				result.RegisterValues[pcrIndex] = pcrReadResp.PCRValues.Digests[i].Buffer
+			}
+		}
+
+		if debug {
+			fmt.Println("Actual register values for predict PCRs:")
+			for _, idx := range predictPCRIndices {
+				fmt.Printf("  PCR%d: %x\n", idx, result.RegisterValues[idx])
 			}
 		}
 	}
@@ -469,6 +615,7 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 
 		for i, pcrIndex := range registerPCRIndices {
 			result.Values[pcrIndex] = pcrReadResp.PCRValues.Digests[i].Buffer
+			result.RegisterValues[pcrIndex] = pcrReadResp.PCRValues.Digests[i].Buffer
 		}
 
 		if debug {
@@ -482,10 +629,12 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 	return result, nil
 }
 
-// GetCurrentPCRValues retrieves current PCR values for comparison, handling both
-// eventlog-based and direct TPM reads. The hash algorithm is automatically detected
-// from the sealed blob's digest sizes. Results are returned in the same order as the
-// blob's PCRDigests slice.
+// GetCurrentPCRValues retrieves current PCR values for comparison, handling
+// eventlog-based, predict-based, and direct TPM reads. The hash algorithm is
+// automatically detected from the sealed blob's digest sizes. Results are
+// returned in the same order as the blob's PCR digests.
+// NOTE: This uses source-aware reading (eventlog/predict/register). For the
+// unseal/reveal/run path use GetCurrentPCRValuesFromRegisters instead.
 func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug bool) ([]tpm2.TPM2BDigest, error) {
 	hashAlgo := sealedBlob.GetHashAlgo()
 	specs := sealedBlob.GetPCRSpecs()
@@ -499,6 +648,31 @@ func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug boo
 	currentPCRValues := make([]tpm2.TPM2BDigest, len(sealedBlob.PCRDigests))
 	for i, pair := range sealedBlob.PCRDigests {
 		if val, ok := readResult.Values[pair.Index]; ok {
+			currentPCRValues[i] = tpm2.TPM2BDigest{Buffer: val}
+		}
+	}
+
+	return currentPCRValues, nil
+}
+
+// GetCurrentPCRValuesFromRegisters reads current PCR values directly from TPM
+// registers, regardless of the original PCR source stored in the blob. This is
+// used on the unseal/reveal/run path so that neither the eventlog file nor
+// external predict commands are required (critical for early-boot).
+// Results are returned in the same order as the blob's PCR digests.
+func GetCurrentPCRValuesFromRegisters(tpmDev transport.TPM, sealedBlob *SealedBlob, debug bool) ([]tpm2.TPM2BDigest, error) {
+	hashAlgo := sealedBlob.GetHashAlgo()
+	pcrIndices := sealedBlob.GetPCRIndices()
+
+	regValues, err := ReadPCRRegisters(tpmDev, pcrIndices, hashAlgo, debug)
+	if err != nil {
+		return nil, err
+	}
+
+	// Map results back to blob PCR digest order
+	currentPCRValues := make([]tpm2.TPM2BDigest, len(sealedBlob.PCRDigests))
+	for i, pair := range sealedBlob.PCRDigests {
+		if val, ok := regValues[pair.Index]; ok {
 			currentPCRValues[i] = tpm2.TPM2BDigest{Buffer: val}
 		}
 	}
@@ -528,8 +702,10 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*Unsea
 		return nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
 
-	// Get current PCR values for comparison
-	currentPCRValues, err := GetCurrentPCRValues(tpmDev, sealedBlob, debug)
+	// Read current PCR values directly from TPM registers. This avoids any
+	// dependency on the eventlog file or external predict commands, which may
+	// not be available during early boot.
+	currentPCRValues, err := GetCurrentPCRValuesFromRegisters(tpmDev, sealedBlob, debug)
 	if err != nil {
 		return nil, err
 	}
@@ -549,11 +725,17 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*Unsea
 			currentDigests[i] = digest.Buffer
 		}
 
+		pcrSources := make([]PCRSource, len(sealedBlob.PCRDigests))
+		for i, pcrDigest := range sealedBlob.PCRDigests {
+			pcrSources[i] = pcrDigest.Source
+		}
+
 		pcrErr := &PCRMismatchError{
 			Message:         "PCR values have changed. Use 'reseal' command to update with current PCR values",
 			PCRIndices:      sealedBlob.GetPCRIndices(),
 			ExpectedDigests: expectedDigests,
 			CurrentDigests:  currentDigests,
+			PCRSources:      pcrSources,
 		}
 		return nil, pcrErr
 	}

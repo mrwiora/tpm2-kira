@@ -98,12 +98,28 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 		return fmt.Errorf("failed to compute policy digest from PCR values: %w", err)
 	}
 
+	if debug {
+		fmt.Println("=== Policy Digest Details ===")
+		fmt.Printf("Policy digest: %x\n", policyDigest.Buffer)
+		fmt.Printf("PCR values used in policy:\n")
+		for _, spec := range specs {
+			val := readResult.Values[spec.Index]
+			sourceLabel := spec.Source.String()
+			if spec.Source == PCRSourcePredict {
+				sourceLabel = fmt.Sprintf("predict [%s]", spec.Command)
+			}
+			fmt.Printf("  PCR%-2d (%s): %x\n", spec.Index, sourceLabel, val)
+		}
+		fmt.Println()
+	}
+
 	// Create PCRDigestPair structures with per-PCR source
 	pcrDigests := make([]PCRDigestPair, len(specs))
 	for i, spec := range specs {
 		pcrDigests[i] = PCRDigestPair{
-			Index:  spec.Index,
-			Source: spec.Source,
+			Index:   spec.Index,
+			Source:  spec.Source,
+			Command: spec.Command,
 			Digest: tpm2.TPM2BDigest{
 				Buffer: readResult.Values[spec.Index],
 			},

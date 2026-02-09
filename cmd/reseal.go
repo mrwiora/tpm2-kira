@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
@@ -65,21 +64,10 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 	if err != nil {
 		// Check if it's a PCR mismatch - we can handle this with password
 		if pcrErr, ok := err.(*PCRMismatchError); ok {
-			fmt.Printf("PCR values changed - using password authentication\n")
-			fmt.Println("\n=== PCR Mismatch Details ===")
+			fmt.Printf("PCR values changed - using password authentication\n\n")
 
-			// Convert byte slices to TPM2BDigest format
-			expectedDigests := make([]tpm2.TPM2BDigest, len(pcrErr.ExpectedDigests))
-			for i, digest := range pcrErr.ExpectedDigests {
-				expectedDigests[i] = tpm2.TPM2BDigest{Buffer: digest}
-			}
-			currentDigests := make([]tpm2.TPM2BDigest, len(pcrErr.CurrentDigests))
-			for i, digest := range pcrErr.CurrentDigests {
-				currentDigests[i] = tpm2.TPM2BDigest{Buffer: digest}
-			}
-
-			DisplayPCRMismatch(pcrErr.PCRIndices, expectedDigests, currentDigests)
-			fmt.Println()
+			// Show PCR mismatch details (blob vs current register values)
+			PrintKIRAError(pcrErr)
 
 			// Use password authentication for unsealing (TPM validates the password)
 			result, err = UnsealWithPassword(tpmDev, nvramIndex, password, debug)
@@ -142,18 +130,35 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 	// Display per-PCR source information
 	hasEventlog := false
 	hasRegister := false
+	hasPredict := false
 	for _, spec := range specsToUse {
-		if spec.Source == PCRSourceEventlog {
+		switch spec.Source {
+		case PCRSourceEventlog:
 			hasEventlog = true
-		} else {
+		case PCRSourcePredict:
+			hasPredict = true
+		default:
 			hasRegister = true
 		}
 	}
 
-	if hasEventlog && hasRegister {
-		fmt.Println("PCR sources: mixed (some eventlog, some register)")
+	sourceCount := 0
+	if hasEventlog {
+		sourceCount++
+	}
+	if hasRegister {
+		sourceCount++
+	}
+	if hasPredict {
+		sourceCount++
+	}
+
+	if sourceCount > 1 {
+		fmt.Println("PCR sources: mixed (eventlog, predict, and/or register)")
 	} else if hasEventlog {
 		fmt.Println("PCR sources: all eventlog-based")
+	} else if hasPredict {
+		fmt.Println("PCR sources: all predict-based (external command)")
 	} else {
 		fmt.Println("PCR sources: all register-based")
 	}
@@ -169,6 +174,13 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 			fmt.Printf("  Eventlog path: %s\n", sealedBlob.EventlogInfo.EventlogPath)
 			fmt.Printf("  Sealed at: %s\n", sealedBlob.EventlogInfo.CalculationTime)
 			fmt.Printf("  Events processed: %d/%d\n", sealedBlob.EventlogInfo.ProcessedEvents, sealedBlob.EventlogInfo.TotalEvents)
+		}
+	}
+	if hasPredict {
+		for _, spec := range specsToUse {
+			if spec.Source == PCRSourcePredict {
+				fmt.Printf("Note: PCR %d will be re-predicted via command: %s\n", spec.Index, spec.Command)
+			}
 		}
 	}
 
