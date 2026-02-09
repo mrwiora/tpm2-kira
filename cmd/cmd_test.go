@@ -116,13 +116,23 @@ func TestParsePCRSpecs(t *testing.T) {
 			},
 		},
 		{
-			name:      "PCR 8 eventlog is rejected",
-			input:     "8e",
-			shouldErr: true,
+			name:  "PCR 8 eventlog is allowed",
+			input: "8e",
+			expected: []PCRSpec{
+				{Index: 8, Source: PCRSourceEventlog},
+			},
 		},
 		{
-			name:      "PCR 9 eventlog is rejected",
-			input:     "0e,9e",
+			name:  "PCR 12 eventlog is allowed",
+			input: "0e,12e",
+			expected: []PCRSpec{
+				{Index: 0, Source: PCRSourceEventlog},
+				{Index: 12, Source: PCRSourceEventlog},
+			},
+		},
+		{
+			name:      "PCR 13 eventlog is rejected",
+			input:     "13e",
 			shouldErr: true,
 		},
 		{

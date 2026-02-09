@@ -215,7 +215,7 @@ type PCRSpec struct {
 
 // ParsePCRSpecs parses a comma-separated string of PCR indices with optional source suffixes.
 // Supported formats: "0" (register, default), "0r" (register, explicit), "0e" (eventlog).
-// The 'e' suffix is only valid for PCRs 0-7 (firmware PCRs present in the BIOS eventlog).
+// The 'e' suffix is only valid for PCRs 0-12 (firmware PCRs present in the BIOS eventlog).
 func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 	parts := strings.Split(pcrsStr, ",")
 	specs := make([]PCRSpec, 0, len(parts))
@@ -244,8 +244,8 @@ func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 		if pcr < 0 || pcr >= 24 {
 			return nil, fmt.Errorf("PCR value %d out of range (0-23)", pcr)
 		}
-		if source == PCRSourceEventlog && pcr > 7 {
-			return nil, fmt.Errorf("eventlog source (e suffix) is only valid for PCRs 0-7, got PCR %d", pcr)
+		if source == PCRSourceEventlog && pcr > 12 {
+			return nil, fmt.Errorf("eventlog source (e suffix) is only valid for PCRs 0-12, got PCR %d", pcr)
 		}
 		if seen[pcr] {
 			return nil, fmt.Errorf("duplicate PCR %d specified (each PCR index can only appear once)", pcr)

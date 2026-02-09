@@ -297,7 +297,7 @@ GLOBAL OPTIONS:
 SEAL OPTIONS:
   --pcrs INDICES     PCR indices with optional source suffix (default: 0,2,7)
                      Suffix 'r' = read from TPM registers (default if no suffix)
-                     Suffix 'e' = calculate from TPM eventlog (PCRs 0-7 only)
+                     Suffix 'e' = calculate from TPM eventlog (PCRs 0-12 only)
                      Examples: "0,2,7" (all register), "0e,2e,7e" (all eventlog),
                                "0e,2,7e" (mixed: 0 and 7 from eventlog, 2 from register)
                      You will be prompted for an optional password
