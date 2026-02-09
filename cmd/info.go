@@ -97,7 +97,7 @@ func InfoWithFormat(tpmPath, pcrsStr string, nvramIndex uint32, debug bool, json
 		fmt.Printf("  Public Blob Size: %d bytes\n", len(sealedBlob.Public))
 		fmt.Printf("  Private Blob Size: %d bytes\n\n", len(sealedBlob.Private))
 
-		fmt.Printf("Eventlog Information:\n")
+		fmt.Printf("PCR Source Information:\n")
 		if sealedBlob.HasEventlogPCRs() {
 			fmt.Printf("  Eventlog PCRs: %v\n", sealedBlob.GetEventlogPCRIndices())
 			if sealedBlob.EventlogInfo != nil {
@@ -107,11 +107,20 @@ func InfoWithFormat(tpmPath, pcrsStr string, nvramIndex uint32, debug bool, json
 				fmt.Printf("  Total Events: %d\n", sealedBlob.EventlogInfo.TotalEvents)
 				fmt.Printf("  Processed Events: %d\n", sealedBlob.EventlogInfo.ProcessedEvents)
 			}
-		} else {
-			fmt.Printf("  No eventlog-based PCRs (all from TPM registers)\n")
+		}
+		if sealedBlob.HasPredictPCRs() {
+			fmt.Printf("  Predict PCRs: %v\n", sealedBlob.GetPredictPCRIndices())
+			for _, pair := range sealedBlob.PCRDigests {
+				if pair.Source == PCRSourcePredict {
+					fmt.Printf("    PCR %d command: %s\n", pair.Index, pair.Command)
+				}
+			}
 		}
 		if len(sealedBlob.GetRegisterPCRIndices()) > 0 {
 			fmt.Printf("  Register PCRs: %v\n", sealedBlob.GetRegisterPCRIndices())
+		}
+		if !sealedBlob.HasEventlogPCRs() && !sealedBlob.HasPredictPCRs() {
+			fmt.Printf("  No calculated PCRs (all from TPM registers)\n")
 		}
 		fmt.Printf("\n")
 

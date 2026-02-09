@@ -131,6 +131,8 @@ const (
 	PCRSourceRegister PCRSource = 0
 	// PCRSourceEventlog means the PCR value was calculated from the TPM eventlog ('e' suffix)
 	PCRSourceEventlog PCRSource = 1
+	// PCRSourcePredict means the PCR value was obtained by running an external command ('p' suffix)
+	PCRSourcePredict PCRSource = 2
 )
 
 // String returns a human-readable label for the PCR source
@@ -140,6 +142,8 @@ func (s PCRSource) String() string {
 		return "eventlog"
 	case PCRSourceRegister:
 		return "register"
+	case PCRSourcePredict:
+		return "predict"
 	default:
 		return "unknown"
 	}
@@ -150,6 +154,8 @@ func (s PCRSource) Suffix() string {
 	switch s {
 	case PCRSourceEventlog:
 		return "e"
+	case PCRSourcePredict:
+		return "p"
 	case PCRSourceRegister:
 		return ""
 	default:
@@ -167,6 +173,7 @@ const (
 	MaxPrivateLen    = 2 * 1024 * 1024  // 2MB maximum private blob
 	MaxPCRDigests    = 100              // Maximum 100 PCR digest entries
 	MaxDigestSize    = 1024             // Maximum 1KB per individual digest
+	MaxCommandLen    = 4096             // Maximum 4KB for predict command string
 	MaxEventlogPath  = 4096             // Maximum 4KB for eventlog path
 	MaxEventlogHash  = 128              // Maximum 128 bytes for hash string
 	MaxCalcTime      = 256              // Maximum 256 bytes for timestamp
@@ -174,9 +181,10 @@ const (
 
 // PCRDigestPair represents a PCR index paired with its digest value
 type PCRDigestPair struct {
-	Index  int              `json:"index"`  // PCR index
-	Source PCRSource        `json:"source"` // Where the PCR value was obtained from
-	Digest tpm2.TPM2BDigest `json:"digest"` // PCR digest value at seal time
+	Index   int              `json:"index"`             // PCR index
+	Source  PCRSource        `json:"source"`            // Where the PCR value was obtained from
+	Command string           `json:"command,omitempty"` // External command for predict source (only when Source == PCRSourcePredict)
+	Digest  tpm2.TPM2BDigest `json:"digest"`            // PCR digest value at seal time
 }
 
 // EventlogInfo represents metadata about eventlog-based PCR calculation
@@ -266,11 +274,32 @@ func (sb *SealedBlob) GetRegisterPCRIndices() []int {
 	return indices
 }
 
+// HasPredictPCRs returns true if any PCR in this blob uses predict as its source
+func (sb *SealedBlob) HasPredictPCRs() bool {
+	for _, pair := range sb.PCRDigests {
+		if pair.Source == PCRSourcePredict {
+			return true
+		}
+	}
+	return false
+}
+
+// GetPredictPCRIndices returns indices of PCRs that use prediction (external command) as their source
+func (sb *SealedBlob) GetPredictPCRIndices() []int {
+	var indices []int
+	for _, pair := range sb.PCRDigests {
+		if pair.Source == PCRSourcePredict {
+			indices = append(indices, pair.Index)
+		}
+	}
+	return indices
+}
+
 // GetPCRSpecs reconstructs PCRSpec slice from the sealed blob's PCR digests
 func (sb *SealedBlob) GetPCRSpecs() []PCRSpec {
 	specs := make([]PCRSpec, len(sb.PCRDigests))
 	for i, pair := range sb.PCRDigests {
-		specs[i] = PCRSpec{Index: pair.Index, Source: pair.Source}
+		specs[i] = PCRSpec{Index: pair.Index, Source: pair.Source, Command: pair.Command}
 	}
 	return specs
 }
@@ -279,7 +308,8 @@ func (sb *SealedBlob) GetPCRSpecs() []PCRSpec {
 func (sb *SealedBlob) Marshal() ([]byte, error) {
 	// Format v3: [version:4][appVersionLen:4][appVersion][publicLen:4][public][privateLen:4][private]
 	//            [numPCRDigests:4][pcrDigestPairs...][hasPassword:1][hasEventlogInfo:1][eventlogInfo...]
-	// where pcrDigestPairs = [pcrIndex:4][source:1][digestLen:2][digest]... (repeated for each PCR)
+	// where pcrDigestPairs = [pcrIndex:4][source:1][commandLen:2][command][digestLen:2][digest]...
+	//   (commandLen+command only present when source == PCRSourcePredict)
 
 	size := 4 + // version (4 bytes for alignment and future compatibility)
 		4 + len(sb.AppVersion) + // app version length + string
@@ -294,6 +324,9 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 		size += 4 + // PCR index
 			1 + // source byte
 			2 + len(pcrDigest.Digest.Buffer) // 2 bytes for length + digest data
+		if pcrDigest.Source == PCRSourcePredict {
+			size += 2 + len(pcrDigest.Command) // 2 bytes for command length + command string
+		}
 	}
 
 	// Calculate eventlog info size (if present)
@@ -341,6 +374,14 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 		// PCR source
 		buf[offset] = byte(pcrDigest.Source)
 		offset++
+
+		// Command string (only for predict source)
+		if pcrDigest.Source == PCRSourcePredict {
+			binary.LittleEndian.PutUint16(buf[offset:], uint16(len(pcrDigest.Command)))
+			offset += 2
+			copy(buf[offset:], pcrDigest.Command)
+			offset += len(pcrDigest.Command)
+		}
 
 		// PCR digest
 		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(pcrDigest.Digest.Buffer)))
@@ -492,6 +533,23 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 		sb.PCRDigests[i].Source = PCRSource(data[offset])
 		offset++
 
+		// Command string (only for predict source)
+		if sb.PCRDigests[i].Source == PCRSourcePredict {
+			if offset+2 > len(data) {
+				return nil, fmt.Errorf("data too short for predict command length")
+			}
+			commandLen := int(binary.LittleEndian.Uint16(data[offset:]))
+			offset += 2
+			if commandLen > MaxCommandLen {
+				return nil, fmt.Errorf("predict command length %d exceeds maximum %d", commandLen, MaxCommandLen)
+			}
+			if offset+commandLen > len(data) {
+				return nil, fmt.Errorf("data too short for predict command string")
+			}
+			sb.PCRDigests[i].Command = string(data[offset : offset+commandLen])
+			offset += commandLen
+		}
+
 		// PCR digest
 		if offset+2 > len(data) {
 			return nil, fmt.Errorf("data too short for digest size")
@@ -593,17 +651,19 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 	// Convert PCR digest pairs to hex strings for readable JSON output
 	type PCRDigestJSON struct {
-		Index  int    `json:"index"`
-		Source string `json:"source"`
-		Digest string `json:"digest_hex"`
+		Index   int    `json:"index"`
+		Source  string `json:"source"`
+		Command string `json:"command,omitempty"`
+		Digest  string `json:"digest_hex"`
 	}
 
 	pcrDigests := make([]PCRDigestJSON, len(sb.PCRDigests))
 	for i, pcrDigest := range sb.PCRDigests {
 		pcrDigests[i] = PCRDigestJSON{
-			Index:  pcrDigest.Index,
-			Source: pcrDigest.Source.String(),
-			Digest: hex.EncodeToString(pcrDigest.Digest.Buffer),
+			Index:   pcrDigest.Index,
+			Source:  pcrDigest.Source.String(),
+			Command: pcrDigest.Command,
+			Digest:  hex.EncodeToString(pcrDigest.Digest.Buffer),
 		}
 	}
 

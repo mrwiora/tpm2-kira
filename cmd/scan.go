@@ -283,9 +283,15 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 							fmt.Printf("  PCR%-2d (%s): %s - %s\n", pcrIndex, source.String(), GetPCRDescription(pcrIndex), status)
 							fmt.Printf("    Expected (blob):        %x\n", expected)
 
-							// For eventlog PCRs, show both calculated and register values
+							// For eventlog/predict PCRs, show both calculated and register values
 							if source == PCRSourceEventlog {
 								fmt.Printf("    Eventlog-Calculated:    %x\n", current)
+								if regVal, ok := readResult.RegisterValues[pcrIndex]; ok {
+									fmt.Printf("    Current (register):     %x\n", regVal)
+								}
+							} else if source == PCRSourcePredict {
+								predictCmd := sealedBlob.PCRDigests[idx].Command
+								fmt.Printf("    Predicted (%s):  %x\n", predictCmd, current)
 								if regVal, ok := readResult.RegisterValues[pcrIndex]; ok {
 									fmt.Printf("    Current (register):     %x\n", regVal)
 								}

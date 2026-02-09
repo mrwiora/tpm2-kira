@@ -130,18 +130,35 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 	// Display per-PCR source information
 	hasEventlog := false
 	hasRegister := false
+	hasPredict := false
 	for _, spec := range specsToUse {
-		if spec.Source == PCRSourceEventlog {
+		switch spec.Source {
+		case PCRSourceEventlog:
 			hasEventlog = true
-		} else {
+		case PCRSourcePredict:
+			hasPredict = true
+		default:
 			hasRegister = true
 		}
 	}
 
-	if hasEventlog && hasRegister {
-		fmt.Println("PCR sources: mixed (some eventlog, some register)")
+	sourceCount := 0
+	if hasEventlog {
+		sourceCount++
+	}
+	if hasRegister {
+		sourceCount++
+	}
+	if hasPredict {
+		sourceCount++
+	}
+
+	if sourceCount > 1 {
+		fmt.Println("PCR sources: mixed (eventlog, predict, and/or register)")
 	} else if hasEventlog {
 		fmt.Println("PCR sources: all eventlog-based")
+	} else if hasPredict {
+		fmt.Println("PCR sources: all predict-based (external command)")
 	} else {
 		fmt.Println("PCR sources: all register-based")
 	}
@@ -157,6 +174,13 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 			fmt.Printf("  Eventlog path: %s\n", sealedBlob.EventlogInfo.EventlogPath)
 			fmt.Printf("  Sealed at: %s\n", sealedBlob.EventlogInfo.CalculationTime)
 			fmt.Printf("  Events processed: %d/%d\n", sealedBlob.EventlogInfo.ProcessedEvents, sealedBlob.EventlogInfo.TotalEvents)
+		}
+	}
+	if hasPredict {
+		for _, spec := range specsToUse {
+			if spec.Source == PCRSourcePredict {
+				fmt.Printf("Note: PCR %d will be re-predicted via command: %s\n", spec.Index, spec.Command)
+			}
 		}
 	}
 

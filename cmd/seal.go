@@ -102,8 +102,9 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 	pcrDigests := make([]PCRDigestPair, len(specs))
 	for i, spec := range specs {
 		pcrDigests[i] = PCRDigestPair{
-			Index:  spec.Index,
-			Source: spec.Source,
+			Index:   spec.Index,
+			Source:  spec.Source,
+			Command: spec.Command,
 			Digest: tpm2.TPM2BDigest{
 				Buffer: readResult.Values[spec.Index],
 			},
