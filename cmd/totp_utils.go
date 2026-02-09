@@ -40,7 +40,9 @@ func PrintKIRAOutput(code string) {
 }
 
 // PrintKIRAError prints an error with colored KIRA formatting
-// If the error is a PCRMismatchError, it includes detailed PCR information
+// If the error is a PCRMismatchError, it includes detailed PCR information.
+// On the unseal path CurrentDigests always holds TPM register values; no
+// eventlog or predict output is shown.
 func PrintKIRAError(err error) {
 	// Check if it's a PCR mismatch error for special formatting
 	if pcrErr, ok := err.(*PCRMismatchError); ok {
@@ -78,18 +80,14 @@ func PrintKIRAError(err error) {
 				status = "✗ CHANGED"
 			}
 
-			fmt.Printf("  PCR%-2d: %s - %s\n", pcrIndex, GetPCRDescription(pcrIndex), status)
-			fmt.Printf("    Expected (blob):        %x\n", expected)
-
-			// For eventlog PCRs, show both calculated and register values
-			if i < len(pcrErr.PCRSources) && pcrErr.PCRSources[i] == PCRSourceEventlog {
-				fmt.Printf("    Eventlog-Calculated:    %x\n", current)
-				if i < len(pcrErr.RegisterDigests) {
-					fmt.Printf("    Current (register):     %x\n", pcrErr.RegisterDigests[i])
-				}
-			} else {
-				fmt.Printf("    Current (register):     %x\n", current)
+			source := ""
+			if i < len(pcrErr.PCRSources) {
+				source = pcrErr.PCRSources[i].String()
 			}
+
+			fmt.Printf("  PCR%-2d (%s): %s - %s\n", pcrIndex, source, GetPCRDescription(pcrIndex), status)
+			fmt.Printf("    Expected (blob):    %x\n", expected)
+			fmt.Printf("    Current (register): %x\n", current)
 		}
 
 		fmt.Println()
@@ -111,14 +109,15 @@ func PrintKIRAError(err error) {
 	}
 }
 
-// PCRMismatchError represents a PCR mismatch error with detailed information
+// PCRMismatchError represents a PCR mismatch error with detailed information.
+// CurrentDigests always contains values read from TPM registers (the unseal
+// path never uses eventlog or predict tools).
 type PCRMismatchError struct {
 	Message         string
 	PCRIndices      []int
-	ExpectedDigests [][]byte
-	CurrentDigests  [][]byte
-	RegisterDigests [][]byte    // Actual register values (always from TPM register)
-	PCRSources      []PCRSource // Source for each PCR (eventlog or register)
+	ExpectedDigests [][]byte // Digest values stored in the sealed blob
+	CurrentDigests  [][]byte // Current TPM register values
+	PCRSources      []PCRSource // Original source used at seal time (informational)
 }
 
 func (e *PCRMismatchError) Error() string {

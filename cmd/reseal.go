@@ -66,7 +66,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 		if pcrErr, ok := err.(*PCRMismatchError); ok {
 			fmt.Printf("PCR values changed - using password authentication\n\n")
 
-			// Use PrintKIRAError for proper source labeling (eventlog vs register)
+			// Show PCR mismatch details (blob vs current register values)
 			PrintKIRAError(pcrErr)
 
 			// Use password authentication for unsealing (TPM validates the password)
