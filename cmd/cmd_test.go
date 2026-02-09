@@ -1813,6 +1813,69 @@ func TestValidateNVRAMIndex(t *testing.T) {
 	}
 }
 
+func TestResolveNVRAMIndex(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    uint32
+		expected uint32
+	}{
+		{
+			name:     "Slot 0 maps to 0x01803010",
+			input:    0,
+			expected: 0x01803010,
+		},
+		{
+			name:     "Slot 1 maps to 0x01803011",
+			input:    1,
+			expected: 0x01803011,
+		},
+		{
+			name:     "Slot 7 maps to 0x01803017",
+			input:    7,
+			expected: 0x01803017,
+		},
+		{
+			name:     "Slot 15 maps to 0x0180301F",
+			input:    15,
+			expected: 0x0180301F,
+		},
+		{
+			name:     "Full hex 0x01803010 passes through unchanged",
+			input:    0x01803010,
+			expected: 0x01803010,
+		},
+		{
+			name:     "Full hex 0x0180301F passes through unchanged",
+			input:    0x0180301F,
+			expected: 0x0180301F,
+		},
+		{
+			name:     "Full hex 0x01803800 passes through unchanged",
+			input:    0x01803800,
+			expected: 0x01803800,
+		},
+		{
+			name:     "Value 16 passes through unchanged (outside slot range)",
+			input:    16,
+			expected: 16,
+		},
+		{
+			name:     "Large value passes through unchanged",
+			input:    0xFFFFFFFF,
+			expected: 0xFFFFFFFF,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ResolveNVRAMIndex(tt.input)
+			if result != tt.expected {
+				t.Errorf("ResolveNVRAMIndex(0x%08X) = 0x%08X, want 0x%08X", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestCurrentBlobVersion(t *testing.T) {
 	if CurrentBlobVersion != 3 {
 		t.Errorf("CurrentBlobVersion should be 3, got %d", CurrentBlobVersion)

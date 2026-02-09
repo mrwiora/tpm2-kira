@@ -11,7 +11,19 @@ const (
 	// NVRAM slot range for multi-slot support
 	NVRAMSlotStart = 0x01803010
 	NVRAMSlotEnd   = 0x0180301F
+	// NVRAMSlotCount is the number of standard NVRAM slots (0-15)
+	NVRAMSlotCount = NVRAMSlotEnd - NVRAMSlotStart + 1
 )
+
+// ResolveNVRAMIndex maps a short slot number (0-15) to its full NVRAM address
+// (0x01803010-0x0180301F). Values outside 0-15 are returned unchanged, allowing
+// callers to pass either a short slot number or a full address.
+func ResolveNVRAMIndex(index uint32) uint32 {
+	if index <= uint32(NVRAMSlotCount-1) {
+		return NVRAMSlotStart + index
+	}
+	return index
+}
 
 // NVRAMSlot represents a TOTP secret stored in an NVRAM slot
 type NVRAMSlot struct {

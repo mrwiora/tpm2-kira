@@ -96,7 +96,7 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 		hashAlgo = cmd.PCRHashAlgoSHA1
 	}
 
-	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), password, *debug, hashAlgo); err != nil {
+	if err := cmd.Seal(*tpm, *pcrs, cmd.ResolveNVRAMIndex(uint32(*nvram)), password, *debug, hashAlgo); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -127,7 +127,7 @@ func runReseal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 		os.Exit(0)
 	}
 
-	if err := cmd.Reseal(*tpm, *pcrs, uint32(*nvram), password, *debug); err != nil {
+	if err := cmd.Reseal(*tpm, *pcrs, cmd.ResolveNVRAMIndex(uint32(*nvram)), password, *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -145,7 +145,7 @@ func runInfo(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 
 	fs.Parse(args)
 
-	if err := cmd.InfoWithFormat(*tpm, *pcrs, uint32(*nvram), *debug, *jsonOutput); err != nil {
+	if err := cmd.InfoWithFormat(*tpm, *pcrs, cmd.ResolveNVRAMIndex(uint32(*nvram)), *debug, *jsonOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -173,6 +173,8 @@ func runReveal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 	scanIndex := uint32(*nvram)
 	if !nvramProvided {
 		scanIndex = 0 // Signal to scan all slots
+	} else {
+		scanIndex = cmd.ResolveNVRAMIndex(scanIndex)
 	}
 
 	cmd.RevealCommand(*tpm, scanIndex, *debug, false)
@@ -200,6 +202,8 @@ func runRevealPlain(args []string, tpmPath, pcrsStr string, nvramIndex uint32, d
 	scanIndex := uint32(*nvram)
 	if !nvramProvided {
 		scanIndex = 0 // Signal to scan all slots
+	} else {
+		scanIndex = cmd.ResolveNVRAMIndex(scanIndex)
 	}
 
 	cmd.RevealCommand(*tpm, scanIndex, *debug, true)
@@ -227,6 +231,8 @@ func runRun(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag
 	scanIndex := uint32(*nvram)
 	if !nvramProvided {
 		scanIndex = 0 // Signal to scan all slots
+	} else {
+		scanIndex = cmd.ResolveNVRAMIndex(scanIndex)
 	}
 
 	cmd.RunCommand(*tpm, scanIndex, *debug)
@@ -251,17 +257,17 @@ func runNVRAM(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFl
 
 	switch subcommand {
 	case "list":
-		if err := cmd.NVRAMList(*tpm, uint32(*nvram), *debug); err != nil {
+		if err := cmd.NVRAMList(*tpm, cmd.ResolveNVRAMIndex(uint32(*nvram)), *debug); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(0)
 		}
 	case "status":
-		if err := cmd.NVRAMStatus(*tpm, uint32(*nvram), *debug); err != nil {
+		if err := cmd.NVRAMStatus(*tpm, cmd.ResolveNVRAMIndex(uint32(*nvram)), *debug); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(0)
 		}
 	case "delete":
-		if err := cmd.NVRAMDelete(*tpm, uint32(*nvram), *debug); err != nil {
+		if err := cmd.NVRAMDelete(*tpm, cmd.ResolveNVRAMIndex(uint32(*nvram)), *debug); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(0)
 		}
@@ -291,7 +297,8 @@ COMMANDS:
 
 GLOBAL OPTIONS:
   --tpm PATH      Path to TPM device (default: /dev/tpm0)
-  --nvram INDEX   NVRAM index in hex (default: 0x01803010)
+  --nvram INDEX   NVRAM slot number 0-15 or full hex index (default: 0x01803010)
+                  Shorthand: 0 = 0x01803010, 1 = 0x01803011, ..., 15 = 0x0180301F
   --debug         Enable debug output
 
 SEAL OPTIONS:
