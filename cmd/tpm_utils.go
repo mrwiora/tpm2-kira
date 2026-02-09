@@ -1067,6 +1067,69 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 	return nil
 }
 
+// NVRAMDeleteAll purges all 16 standard NVRAM slots (0x01803010-0x0180301F),
+// silently skipping slots that do not exist. Returns an error if any defined
+// slot fails to be deleted.
+func NVRAMDeleteAll(tpmPath string, debug bool) error {
+	// Open TPM
+	tpmDev, err := transport.OpenTPM(tpmPath)
+	if err != nil {
+		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+	}
+	defer tpmDev.Close()
+
+	deleted := 0
+	var failures []string
+
+	for i := uint32(NVRAMSlotStart); i <= uint32(NVRAMSlotEnd); i++ {
+		slotNumber := int(i - NVRAMSlotStart)
+		nvIndex := tpm2.TPMHandle(i)
+
+		// Check if index exists
+		readPublic := tpm2.NVReadPublic{
+			NVIndex: nvIndex,
+		}
+
+		readPublicResp, err := readPublic.Execute(tpmDev)
+		if err != nil {
+			if debug {
+				fmt.Printf("Slot #%d (0x%08X): not defined, skipping\n", slotNumber, i)
+			}
+			continue
+		}
+
+		// Undefine NVRAM space
+		undefine := tpm2.NVUndefineSpace{
+			AuthHandle: tpm2.TPMRHOwner,
+			NVIndex: tpm2.NamedHandle{
+				Handle: nvIndex,
+				Name:   readPublicResp.NVName,
+			},
+		}
+
+		_, err = undefine.Execute(tpmDev)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("slot #%d (0x%08X): %v", slotNumber, i, err))
+			continue
+		}
+
+		fmt.Printf("Slot #%d (0x%08X): deleted\n", slotNumber, i)
+		deleted++
+	}
+
+	if len(failures) > 0 {
+		return fmt.Errorf("failed to delete %d slot(s): %s", len(failures), strings.Join(failures, "; "))
+	}
+
+	if deleted == 0 {
+		fmt.Println("No NVRAM slots found to delete")
+	} else {
+		fmt.Printf("Successfully deleted %d NVRAM slot(s)\n", deleted)
+	}
+
+	return nil
+}
+
 // NVRAMStatus shows detailed status of the specified NVRAM index
 func NVRAMStatus(tpmPath string, nvramIndex uint32, debug bool) error {
 	// Open TPM

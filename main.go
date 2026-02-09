@@ -255,6 +255,15 @@ func runNVRAM(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFl
 
 	fs.Parse(args)
 
+	// Check if --nvram was explicitly provided
+	nvramProvided := false
+	for _, arg := range args {
+		if arg == "--nvram" || arg == "-nvram" {
+			nvramProvided = true
+			break
+		}
+	}
+
 	switch subcommand {
 	case "list":
 		if err := cmd.NVRAMList(*tpm, cmd.ResolveNVRAMIndex(uint32(*nvram)), *debug); err != nil {
@@ -267,9 +276,17 @@ func runNVRAM(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFl
 			os.Exit(0)
 		}
 	case "delete":
-		if err := cmd.NVRAMDelete(*tpm, cmd.ResolveNVRAMIndex(uint32(*nvram)), *debug); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(0)
+		if !nvramProvided {
+			// No --nvram specified: purge all 16 standard slots
+			if err := cmd.NVRAMDeleteAll(*tpm, *debug); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+		} else {
+			if err := cmd.NVRAMDelete(*tpm, cmd.ResolveNVRAMIndex(uint32(*nvram)), *debug); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown nvram subcommand: %s\n", subcommand)
@@ -323,7 +340,7 @@ INFO OPTIONS:
 NVRAM SUBCOMMANDS:
   list               List all NVRAM indices
   status             Show NVRAM index status
-  delete             Delete NVRAM index
+  delete             Delete NVRAM index (all 16 slots if --nvram not specified)
 
 EXAMPLES:
   tpm2-kira seal
