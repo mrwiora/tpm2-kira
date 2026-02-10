@@ -326,6 +326,11 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 		1 + // hasEventlogInfo flag
 		1 // hasKeyPaths flag
 
+	// Guard against integer overflow and unreasonable allocations
+	if size < 0 || size > MaxBlobSize {
+		return nil, fmt.Errorf("sealed blob base size %d exceeds maximum allowed %d bytes", size, MaxBlobSize)
+	}
+
 	// Calculate PCR digest pair size
 	for _, pcrDigest := range sb.PCRDigests {
 		size += 4 + // PCR index
@@ -333,6 +338,9 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 			2 + len(pcrDigest.Digest.Buffer) // 2 bytes for length + digest data
 		if pcrDigest.Source == PCRSourcePredict {
 			size += 2 + len(pcrDigest.Command) // 2 bytes for command length + command string
+		}
+		if size < 0 || size > MaxBlobSize {
+			return nil, fmt.Errorf("sealed blob size %d exceeds maximum allowed %d bytes after PCR digests", size, MaxBlobSize)
 		}
 	}
 
@@ -343,6 +351,9 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 			4 + len(sb.EventlogInfo.EventlogHash) + // eventlog hash
 			4 + len(sb.EventlogInfo.CalculationTime) + // calculation time
 			4 + 4 // total events + processed events (4 bytes each)
+		if size < 0 || size > MaxBlobSize {
+			return nil, fmt.Errorf("sealed blob size %d exceeds maximum allowed %d bytes after eventlog info", size, MaxBlobSize)
+		}
 	}
 
 	// Calculate key paths size (if present)
@@ -350,6 +361,14 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 	if hasKeyPaths {
 		size += 2 + len(sb.PublicKeyPath) + // pubkey path length + string
 			2 + len(sb.PrivateKeyPath) // privkey path length + string
+		if size < 0 || size > MaxBlobSize {
+			return nil, fmt.Errorf("sealed blob size %d exceeds maximum allowed %d bytes after key paths", size, MaxBlobSize)
+		}
+	}
+
+	// Final sanity check before allocation
+	if size < 0 || size > MaxBlobSize {
+		return nil, fmt.Errorf("sealed blob total size %d exceeds maximum allowed %d bytes", size, MaxBlobSize)
 	}
 
 	buf := make([]byte, size)
