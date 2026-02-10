@@ -65,6 +65,19 @@ func FindPopulatedSlots(tpmDev transport.TPM, debug bool) []uint32 {
 	return FindPopulatedSlotsInRange(tpmDev, NVRAMSlotStart, NVRAMSlotEnd, debug)
 }
 
+// MaxSlotNumber is the highest valid slot shorthand (0-based).
+const MaxSlotNumber = NVRAMSlotEnd - NVRAMSlotStart // 15
+
+// ResolveNVRAMIndex translates a user-supplied --nvram value into a full
+// NVRAM index.  Values 0–15 are treated as slot shorthands and mapped to
+// NVRAMSlotStart + value.  Everything else is returned unchanged.
+func ResolveNVRAMIndex(value uint32) uint32 {
+	if value <= MaxSlotNumber {
+		return NVRAMSlotStart + value
+	}
+	return value
+}
+
 // SlotNumber returns a human-friendly slot number for the given NVRAM index.
 // Indices inside the default range are numbered as offsets from NVRAMSlotStart;
 // indices outside the range are returned as-is (cast to int).
