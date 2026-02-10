@@ -3,6 +3,7 @@ package cmd
 import (
 	"crypto"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/google/go-tpm/tpm2/transport"
@@ -122,6 +123,27 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		effectivePubKeyPath = sealedBlob.PublicKeyPath
 		if debug {
 			fmt.Printf("Using public key path from blob: %s\n", effectivePubKeyPath)
+		}
+	}
+
+	// Fallback: try the well-known default key paths if nothing was
+	// resolved from the CLI flags or the blob.  This covers the common
+	// case where a slot was sealed with only --pubkey (no --privkey) but
+	// the default key pair created by 'setup' is still on disk.
+	if effectivePrivKeyPath == "" {
+		if _, err := os.Stat(DefaultPrivateKeyPath); err == nil {
+			effectivePrivKeyPath = DefaultPrivateKeyPath
+			if debug {
+				fmt.Printf("Using default private key path: %s\n", effectivePrivKeyPath)
+			}
+		}
+	}
+	if effectivePubKeyPath == "" {
+		if _, err := os.Stat(DefaultPublicKeyPath); err == nil {
+			effectivePubKeyPath = DefaultPublicKeyPath
+			if debug {
+				fmt.Printf("Using default public key path: %s\n", effectivePubKeyPath)
+			}
 		}
 	}
 
