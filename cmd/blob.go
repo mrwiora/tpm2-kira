@@ -121,7 +121,7 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 var AppVersion = "unknown"
 
 // CurrentBlobVersion is the only supported blob format version
-const CurrentBlobVersion = 3
+const CurrentBlobVersion = 4
 
 // PCRSource indicates where a PCR value was obtained from
 type PCRSource byte
@@ -167,16 +167,17 @@ func (s PCRSource) Suffix() string {
 // Maximum size constraints for blob deserialization to prevent memory exhaustion.
 // These limits are generous for legitimate use while blocking malicious allocations.
 const (
-	MaxBlobSize      = 10 * 1024 * 1024 // 10MB maximum total blob size
-	MaxAppVersionLen = 1024             // 1KB maximum app version string
-	MaxPublicLen     = 2 * 1024 * 1024  // 2MB maximum public blob
-	MaxPrivateLen    = 2 * 1024 * 1024  // 2MB maximum private blob
-	MaxPCRDigests    = 100              // Maximum 100 PCR digest entries
-	MaxDigestSize    = 1024             // Maximum 1KB per individual digest
-	MaxCommandLen    = 4096             // Maximum 4KB for predict command string
-	MaxEventlogPath  = 4096             // Maximum 4KB for eventlog path
-	MaxEventlogHash  = 128              // Maximum 128 bytes for hash string
-	MaxCalcTime      = 256              // Maximum 256 bytes for timestamp
+	MaxBlobSize        = 10 * 1024 * 1024 // 10MB maximum total blob size
+	MaxAppVersionLen   = 1024             // 1KB maximum app version string
+	MaxPublicLen       = 2 * 1024 * 1024  // 2MB maximum public blob
+	MaxPrivateLen      = 2 * 1024 * 1024  // 2MB maximum private blob
+	MaxPCRDigests      = 100              // Maximum 100 PCR digest entries
+	MaxDigestSize      = 1024             // Maximum 1KB per individual digest
+	MaxCommandLen      = 4096             // Maximum 4KB for predict command string
+	MaxEventlogPath    = 4096             // Maximum 4KB for eventlog path
+	MaxEventlogHash    = 128              // Maximum 128 bytes for hash string
+	MaxCalcTime        = 256              // Maximum 256 bytes for timestamp
+	MaxSigningKeyPEM   = 64 * 1024       // 64KB maximum signing key PEM data
 )
 
 // PCRDigestPair represents a PCR index paired with its digest value
@@ -197,15 +198,15 @@ type EventlogInfo struct {
 }
 
 // SealedBlob represents the complete sealed data structure
-// Version 3: Per-PCR source tracking (register vs eventlog), no global EventlogBased flag
+// Version 4: PolicyOR-based authentication (PCR branch + PolicySigned branch), no password
 type SealedBlob struct {
-	Version      uint32          `json:"version"`       // Blob format version (must be 3)
-	AppVersion   string          `json:"app_version"`   // Application version that created this blob
-	Public       []byte          `json:"public"`        // TPM public key blob
-	Private      []byte          `json:"private"`       // TPM private key blob
-	PCRDigests   []PCRDigestPair `json:"pcr_digests"`   // PCR indices with their source and digest values
-	HasPassword  bool            `json:"has_password"`  // Whether password fallback is enabled
-	EventlogInfo *EventlogInfo   `json:"eventlog_info"` // Eventlog calculation metadata (if any PCR uses eventlog)
+	Version       uint32          `json:"version"`        // Blob format version (must be 4)
+	AppVersion    string          `json:"app_version"`    // Application version that created this blob
+	Public        []byte          `json:"public"`         // TPM public key blob
+	Private       []byte          `json:"private"`        // TPM private key blob
+	PCRDigests    []PCRDigestPair `json:"pcr_digests"`    // PCR indices with their source and digest values
+	SigningKeyPEM []byte          `json:"signing_key_pem"` // PEM-encoded public key used for PolicySigned branch
+	EventlogInfo  *EventlogInfo   `json:"eventlog_info"`  // Eventlog calculation metadata (if any PCR uses eventlog)
 }
 
 // GetHashAlgo infers the PCR hash algorithm from the stored digest sizes.
@@ -304,10 +305,11 @@ func (sb *SealedBlob) GetPCRSpecs() []PCRSpec {
 	return specs
 }
 
-// Marshal converts the SealedBlob to bytes for storage (Version 3 format)
+// Marshal converts the SealedBlob to bytes for storage (Version 4 format)
 func (sb *SealedBlob) Marshal() ([]byte, error) {
-	// Format v3: [version:4][appVersionLen:4][appVersion][publicLen:4][public][privateLen:4][private]
-	//            [numPCRDigests:4][pcrDigestPairs...][hasPassword:1][hasEventlogInfo:1][eventlogInfo...]
+	// Format v4: [version:4][appVersionLen:4][appVersion][publicLen:4][public][privateLen:4][private]
+	//            [numPCRDigests:4][pcrDigestPairs...][signingKeyPEMLen:4][signingKeyPEM]
+	//            [hasEventlogInfo:1][eventlogInfo...]
 	// where pcrDigestPairs = [pcrIndex:4][source:1][commandLen:2][command][digestLen:2][digest]...
 	//   (commandLen+command only present when source == PCRSourcePredict)
 
@@ -316,7 +318,7 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 		4 + len(sb.Public) + // public blob
 		4 + len(sb.Private) + // private blob
 		4 + // number of PCR digests
-		1 + // hasPassword flag
+		4 + len(sb.SigningKeyPEM) + // signing key PEM length + data
 		1 // hasEventlogInfo flag
 
 	// Calculate PCR digest pair size
@@ -341,7 +343,7 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 	buf := make([]byte, size)
 	offset := 0
 
-	// Version 3
+	// Version 4
 	binary.LittleEndian.PutUint32(buf[offset:], CurrentBlobVersion)
 	offset += 4
 
@@ -390,13 +392,11 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 		offset += len(pcrDigest.Digest.Buffer)
 	}
 
-	// Password flag (no hash/salt in v3)
-	if sb.HasPassword {
-		buf[offset] = 1
-	} else {
-		buf[offset] = 0
-	}
-	offset++
+	// Signing key PEM (v4: replaces hasPassword flag)
+	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(sb.SigningKeyPEM)))
+	offset += 4
+	copy(buf[offset:], sb.SigningKeyPEM)
+	offset += len(sb.SigningKeyPEM)
 
 	// Eventlog information flag
 	if hasEventlogInfo {
@@ -437,7 +437,7 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 }
 
 // UnmarshalSealedBlob parses bytes back into a SealedBlob
-// Only supports version 3 format
+// Only supports version 4 format
 func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 	// Validate total blob size to prevent resource exhaustion
 	if len(data) > MaxBlobSize {
@@ -447,6 +447,7 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 	if len(data) < 16 {
 		return nil, fmt.Errorf("data too short to be a valid sealed blob")
 	}
+
 
 	// Version check
 	version := binary.LittleEndian.Uint32(data[0:4])
@@ -571,12 +572,21 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 		offset += digestSize
 	}
 
-	// Password flag
-	if offset >= len(data) {
-		return nil, fmt.Errorf("data too short for password flag")
+	// Signing key PEM (v4)
+	if offset+4 > len(data) {
+		return nil, fmt.Errorf("data too short for signing key PEM length")
 	}
-	sb.HasPassword = data[offset] == 1
-	offset++
+	sigKeyLen := binary.LittleEndian.Uint32(data[offset:])
+	offset += 4
+	if sigKeyLen > MaxSigningKeyPEM {
+		return nil, fmt.Errorf("signing key PEM length %d exceeds maximum %d", sigKeyLen, MaxSigningKeyPEM)
+	}
+	if offset+int(sigKeyLen) > len(data) {
+		return nil, fmt.Errorf("data too short for signing key PEM data")
+	}
+	sb.SigningKeyPEM = make([]byte, sigKeyLen)
+	copy(sb.SigningKeyPEM, data[offset:offset+int(sigKeyLen)])
+	offset += int(sigKeyLen)
 
 	// Eventlog info flag
 	if offset >= len(data) {
@@ -667,31 +677,46 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	// Compute signing key fingerprint for display
+	signingKeyFingerprint := ""
+	signingKeyType := ""
+	if len(sb.SigningKeyPEM) > 0 {
+		pubKey, err := ParsePublicKeyFromPEM(sb.SigningKeyPEM)
+		if err == nil {
+			signingKeyFingerprint = PublicKeyFingerprint(pubKey)
+			signingKeyType = PublicKeyDescription(pubKey)
+		}
+	}
+
 	// Create a JSON-friendly structure
 	type SealedBlobJSON struct {
-		Version       uint32          `json:"version"`
-		AppVersion    string          `json:"app_version"`
-		HashAlgorithm string          `json:"hash_algorithm"`
-		Public        string          `json:"public_hex"`
-		PublicSize    int             `json:"public_size"`
-		Private       string          `json:"private_hex"`
-		PrivateSize   int             `json:"private_size"`
-		PCRDigests    []PCRDigestJSON `json:"pcr_digests"`
-		HasPassword   bool            `json:"has_password"`
-		EventlogInfo  *EventlogInfo   `json:"eventlog_info,omitempty"`
+		Version               uint32          `json:"version"`
+		AppVersion            string          `json:"app_version"`
+		HashAlgorithm         string          `json:"hash_algorithm"`
+		Public                string          `json:"public_hex"`
+		PublicSize            int             `json:"public_size"`
+		Private               string          `json:"private_hex"`
+		PrivateSize           int             `json:"private_size"`
+		PCRDigests            []PCRDigestJSON `json:"pcr_digests"`
+		SigningKeyType        string          `json:"signing_key_type"`
+		SigningKeyFingerprint string          `json:"signing_key_fingerprint"`
+		SigningKeyPEMSize     int             `json:"signing_key_pem_size"`
+		EventlogInfo          *EventlogInfo   `json:"eventlog_info,omitempty"`
 	}
 
 	jsonBlob := SealedBlobJSON{
-		Version:       sb.Version,
-		AppVersion:    sb.AppVersion,
-		HashAlgorithm: sb.GetHashAlgo().String(),
-		Public:        hex.EncodeToString(sb.Public),
-		PublicSize:    len(sb.Public),
-		Private:       hex.EncodeToString(sb.Private),
-		PrivateSize:   len(sb.Private),
-		PCRDigests:    pcrDigests,
-		HasPassword:   sb.HasPassword,
-		EventlogInfo:  sb.EventlogInfo,
+		Version:               sb.Version,
+		AppVersion:            sb.AppVersion,
+		HashAlgorithm:         sb.GetHashAlgo().String(),
+		Public:                hex.EncodeToString(sb.Public),
+		PublicSize:            len(sb.Public),
+		Private:               hex.EncodeToString(sb.Private),
+		PrivateSize:           len(sb.Private),
+		PCRDigests:            pcrDigests,
+		SigningKeyType:        signingKeyType,
+		SigningKeyFingerprint: signingKeyFingerprint,
+		SigningKeyPEMSize:     len(sb.SigningKeyPEM),
+		EventlogInfo:          sb.EventlogInfo,
 	}
 
 	return json.Marshal(jsonBlob)

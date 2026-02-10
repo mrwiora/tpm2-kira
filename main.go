@@ -75,19 +75,13 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
+	pubKeyPath := fs.String("pubkey", cmd.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
 
 	fs.Parse(args)
 
-	// Validate PCR specs before prompting for password
+	// Validate PCR specs before proceeding
 	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(0)
-	}
-
-	// Read optional password from stdin
-	password, err := cmd.ReadOptionalPasswordFromStdin("fallback access")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading password: %v\n", err)
 		os.Exit(0)
 	}
 
@@ -96,7 +90,7 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 		hashAlgo = cmd.PCRHashAlgoSHA1
 	}
 
-	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), password, *debug, hashAlgo); err != nil {
+	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), *pubKeyPath, *debug, hashAlgo); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -109,10 +103,12 @@ func runReseal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy (if not specified, preserves original selection)")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	pubKeyPath := fs.String("pubkey", cmd.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
+	privKeyPath := fs.String("privkey", cmd.DefaultPrivateKeyPath, "Path to signing private key PEM for PolicySigned recovery")
 
 	fs.Parse(args)
 
-	// Validate PCR specs before prompting for password (only if explicitly provided)
+	// Validate PCR specs before proceeding (only if explicitly provided)
 	if *pcrs != "" {
 		if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -120,14 +116,7 @@ func runReseal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 		}
 	}
 
-	// Read required password from stdin for reseal
-	password, err := cmd.ReadRequiredPasswordFromStdin("resealing")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading password: %v\n", err)
-		os.Exit(0)
-	}
-
-	if err := cmd.Reseal(*tpm, *pcrs, uint32(*nvram), password, *debug); err != nil {
+	if err := cmd.Reseal(*tpm, *pcrs, uint32(*nvram), *pubKeyPath, *privKeyPath, *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -279,7 +268,7 @@ USAGE:
 
 COMMANDS:
   seal        Generate and seal TOTP secret to TPM NVRAM
-  reseal      Reseal secret with current PCR values
+  reseal      Reseal secret with current PCR values (requires signing key)
   reveal      Generate TOTP code with colored KIRA format
   reveal-plain Generate TOTP code (plain output)
   run         Continuously display TOTP codes (runs until stopped)
@@ -303,28 +292,44 @@ SEAL OPTIONS:
                      Examples: "0,2,7" (all register), "0e,2e,7e" (all eventlog),
                                "0e,2,7e" (mixed: 0 and 7 from eventlog, 2 from register)
                                "0e,2e,7e,11p:tpm2-pcr11predict" (eventlog + predicted PCR 11)
-                     You will be prompted for an optional password
+  --pubkey PATH      Path to signing public key PEM for PolicySigned branch
+                     (default: %s)
+                     Accepts X.509 certificates or raw public keys (RSA, ECDSA)
   --sha1             Use SHA-1 PCR bank instead of SHA-256 (default: SHA-256)
                      Use only if firmware eventlog does not provide SHA-256 digests
 
 RESEAL OPTIONS:
   --pcrs INDICES     New PCR indices with optional source suffix (optional,
                      preserves original selection and per-PCR sources if omitted)
-                     You will be prompted for the required password
+  --pubkey PATH      Path to signing public key PEM (default: %s)
+  --privkey PATH     Path to signing private key PEM for PolicySigned recovery
+                     (default: %s)
+                     Required when PCR values have changed since last seal/reseal
 
 INFO OPTIONS:
   --json             Output as JSON
-                     Password will be prompted if PCRs changed
 
 NVRAM SUBCOMMANDS:
   list               List all NVRAM indices
   status             Show NVRAM index status
   delete             Delete NVRAM index
 
+AUTHENTICATION:
+  tpm2-kira uses TPM2 PolicyOR with two branches for access control:
+    Branch 1 (PCR):    Direct PCR policy - succeeds when PCR values match
+    Branch 2 (Signed): PolicySigned - requires signature from configured key
+
+  The signing key defaults to the sbctl secure boot DB key pair, allowing
+  automated resealing in conjunction with secure boot key management.
+
+  No password authentication is used. Recovery after PCR changes requires
+  the signing private key.
+
 EXAMPLES:
   tpm2-kira seal
   tpm2-kira seal --pcrs "0e,2e,7e"
   tpm2-kira seal --pcrs "0e,2e,7e,11p:tpm2-pcr11predict"
+  tpm2-kira seal --pubkey /path/to/my-key.pem
   tpm2-kira seal --sha1 --pcrs "0e,2e,7e"
   tpm2-kira seal --pcrs "0e,2,4,7e"
   tpm2-kira reveal
@@ -332,9 +337,10 @@ EXAMPLES:
   tpm2-kira run
   tpm2-kira reseal
   tpm2-kira reseal --pcrs "0e,2,4,7e"
+  tpm2-kira reseal --privkey /path/to/my-key.key
   tpm2-kira info
   tpm2-kira nvram list
 
 For detailed documentation, see README.md
-`)
+`, cmd.DefaultPublicKeyPath, cmd.DefaultPublicKeyPath, cmd.DefaultPrivateKeyPath)
 }

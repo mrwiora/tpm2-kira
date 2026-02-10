@@ -84,12 +84,16 @@ func InfoWithFormat(tpmPath, pcrsStr string, nvramIndex uint32, debug bool, json
 		}
 		fmt.Printf("\n")
 
-		fmt.Printf("Password Fallback:\n")
-		if sealedBlob.HasPassword {
-			fmt.Printf("  Enabled: Yes\n")
-			fmt.Printf("  Validation: TPM-based (no hash stored in NVRAM)\n")
+		fmt.Printf("Authentication: PolicyOR (PCR branch + PolicySigned branch)\n")
+		if len(sealedBlob.SigningKeyPEM) > 0 {
+			pubKey, err := ParsePublicKeyFromPEM(sealedBlob.SigningKeyPEM)
+			if err == nil {
+				fmt.Printf("  Signing Key Type: %s\n", PublicKeyDescription(pubKey))
+				fmt.Printf("  Signing Key Fingerprint: %s\n", PublicKeyFingerprint(pubKey))
+			}
+			fmt.Printf("  Signing Key PEM Size: %d bytes\n", len(sealedBlob.SigningKeyPEM))
 		} else {
-			fmt.Printf("  Enabled: No\n")
+			fmt.Printf("  Signing Key: not present (incompatible blob)\n")
 		}
 		fmt.Printf("\n")
 
