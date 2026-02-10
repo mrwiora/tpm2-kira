@@ -10,7 +10,7 @@ Time-Based One-Time-Password Tokens calculated on Secrets, that the TPM2 reveals
 **Successor/Extension to [tpm2-totp](https://github.com/tpm2-software/tpm2-totp).**
 
 > [!CAUTION]
-> tpm2-kira is currently in **alpha**. Expect breaking changes between versions. Back up your TOTP secrets before upgrading.
+> tpm2-kira is currently in **alpha**. Expect breaking changes between versions.
 
 ## How It Works
 
