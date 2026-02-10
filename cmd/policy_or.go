@@ -18,13 +18,6 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
-const (
-	// DefaultPublicKeyPath is the default path for the signing public key
-	DefaultPublicKeyPath = "/var/lib/tpm2-kira/keys/seal.pub"
-	// DefaultPrivateKeyPath is the default path for the signing private key
-	DefaultPrivateKeyPath = "/var/lib/tpm2-kira/keys/seal.key"
-)
-
 // SigningKeyType indicates the type of the signing key used for PolicySigned
 type SigningKeyType byte
 

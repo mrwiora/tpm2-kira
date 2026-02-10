@@ -8,12 +8,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"os"
-	"path/filepath"
-)
-
-const (
-	// SetupKeysDir is the directory where tpm2-kira stores its signing keys.
-	SetupKeysDir = "/var/lib/tpm2-kira/keys"
 )
 
 // Setup performs initial tpm2-kira configuration:
@@ -24,23 +18,23 @@ const (
 //  3. Calls the equivalent of "tpm2-kira seal --pcrs 0,7" using the freshly
 //     generated key pair.
 func Setup(tpmPath string, nvramIndex uint32, debug bool) error {
-	pubKeyPath := filepath.Join(SetupKeysDir, "seal.pub")
-	privKeyPath := filepath.Join(SetupKeysDir, "seal.key")
+	pubKeyPath := DefaultPublicKeyPath
+	privKeyPath := DefaultPrivateKeyPath
 
 	// ── Step 1: Check if keys directory already exists ──
-	if info, err := os.Stat(SetupKeysDir); err == nil && info.IsDir() {
+	if info, err := os.Stat(DefaultKeysDir); err == nil && info.IsDir() {
 		return fmt.Errorf(
 			"tpm2-kira has been already configured (directory %s exists).\n"+
 				"  Further configuration must be done manually.\n"+
 				"  Use 'tpm2-kira seal', 'tpm2-kira reseal', or edit the keys directly.",
-			SetupKeysDir,
+			DefaultKeysDir,
 		)
 	}
 
 	// ── Step 2: Create directory and generate P-256 key pair ──
-	fmt.Printf("Creating keys directory: %s\n", SetupKeysDir)
-	if err := os.MkdirAll(SetupKeysDir, 0700); err != nil {
-		return fmt.Errorf("failed to create keys directory %s: %w", SetupKeysDir, err)
+	fmt.Printf("Creating keys directory: %s\n", DefaultKeysDir)
+	if err := os.MkdirAll(DefaultKeysDir, 0700); err != nil {
+		return fmt.Errorf("failed to create keys directory %s: %w", DefaultKeysDir, err)
 	}
 
 	fmt.Println("Generating ECDSA P-256 signing key pair...")
@@ -91,7 +85,7 @@ func Setup(tpmPath string, nvramIndex uint32, debug bool) error {
 
 	fmt.Println()
 	fmt.Println("=== Setup Complete ===")
-	fmt.Printf("  Keys directory: %s\n", SetupKeysDir)
+	fmt.Printf("  Keys directory: %s\n", DefaultKeysDir)
 	fmt.Printf("  Public key:     %s\n", pubKeyPath)
 	fmt.Printf("  Private key:    %s\n", privKeyPath)
 	fmt.Printf("  PCRs sealed:    %s\n", pcrsStr)
