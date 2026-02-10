@@ -5,35 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 )
-
-// FindPopulatedSlots probes the default slot range and returns the NVRAM
-// indices that contain data.  The check is lightweight – it only reads the
-// NV public area (no unsealing).
-func FindPopulatedSlots(tpmDev transport.TPM, debug bool) []uint32 {
-	var populated []uint32
-	for idx := uint32(NVRAMSlotStart); idx <= uint32(NVRAMSlotEnd); idx++ {
-		readPublic := tpm2.NVReadPublic{
-			NVIndex: tpm2.TPMHandle(idx),
-		}
-		resp, err := readPublic.Execute(tpmDev)
-		if err != nil {
-			// Slot does not exist – skip
-			continue
-		}
-		nvPub, err := resp.NVPublic.Contents()
-		if err != nil || nvPub.DataSize == 0 {
-			continue
-		}
-		if debug {
-			fmt.Printf("Found populated slot 0x%08X (%d bytes)\n", idx, nvPub.DataSize)
-		}
-		populated = append(populated, idx)
-	}
-	return populated
-}
 
 // ResealCommand is the top-level entry point for the reseal CLI command.
 // When nvramIndex is 0 it scans every default slot and reseals each one;
@@ -60,7 +33,7 @@ func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privK
 
 	var failed []uint32
 	for i, slotIdx := range slots {
-		slotNum := int(slotIdx - NVRAMSlotStart)
+		slotNum := SlotNumber(slotIdx)
 		fmt.Printf("── Slot #%d (0x%08X) ─────────────────────────\n", slotNum, slotIdx)
 
 		if err := Reseal(tpmPath, pcrsStr, slotIdx, pubKeyPath, privKeyPath, debug); err != nil {

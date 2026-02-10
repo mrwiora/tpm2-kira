@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
@@ -21,6 +22,57 @@ type NVRAMSlot struct {
 	Secret     string
 	Error      error // Error encountered during unsealing (if any)
 	Available  bool  // Whether the slot has data (even if unsealing failed)
+}
+
+// NVRAMIndexExists performs a lightweight check whether the given NVRAM index
+// is defined and contains data.  It only reads the NV public area — no
+// unsealing or authorization is attempted.
+func NVRAMIndexExists(tpmDev transport.TPM, index uint32) bool {
+	readPublic := tpm2.NVReadPublic{
+		NVIndex: tpm2.TPMHandle(index),
+	}
+	resp, err := readPublic.Execute(tpmDev)
+	if err != nil {
+		return false
+	}
+	nvPub, err := resp.NVPublic.Contents()
+	if err != nil {
+		return false
+	}
+	return nvPub.DataSize > 0
+}
+
+// FindPopulatedSlotsInRange probes every index from startIndex to endIndex
+// (inclusive) and returns those that contain data.  The check is lightweight —
+// it only reads the NV public area (no unsealing).
+func FindPopulatedSlotsInRange(tpmDev transport.TPM, startIndex, endIndex uint32, debug bool) []uint32 {
+	var populated []uint32
+	for idx := startIndex; idx <= endIndex; idx++ {
+		if !NVRAMIndexExists(tpmDev, idx) {
+			continue
+		}
+		if debug {
+			fmt.Printf("Found populated slot #%d (0x%08X)\n", SlotNumber(idx), idx)
+		}
+		populated = append(populated, idx)
+	}
+	return populated
+}
+
+// FindPopulatedSlots is a convenience wrapper that scans the default slot
+// range (NVRAMSlotStart – NVRAMSlotEnd).
+func FindPopulatedSlots(tpmDev transport.TPM, debug bool) []uint32 {
+	return FindPopulatedSlotsInRange(tpmDev, NVRAMSlotStart, NVRAMSlotEnd, debug)
+}
+
+// SlotNumber returns a human-friendly slot number for the given NVRAM index.
+// Indices inside the default range are numbered as offsets from NVRAMSlotStart;
+// indices outside the range are returned as-is (cast to int).
+func SlotNumber(index uint32) int {
+	if index >= NVRAMSlotStart && index <= NVRAMSlotEnd {
+		return int(index - NVRAMSlotStart)
+	}
+	return int(index)
 }
 
 // ScanAndReveal scans NVRAM slots, displays PCR mismatches, and returns valid slots with codes
@@ -79,19 +131,20 @@ func ScanNVRAMSlot(tpmDev transport.TPM, nvramIndex uint32, debug bool) []NVRAMS
 }
 
 // ScanNVRAMSlotsRange scans NVRAM indices from startIndex to endIndex
-// and returns a list of slots containing valid TOTP secrets
+// and returns a list of slots containing valid TOTP secrets.
+// A lightweight existence check is performed first so that empty indices
+// are skipped without incurring the cost of a full unseal attempt.
 func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debug bool) []NVRAMSlot {
+	// Pre-filter: discover which indices actually hold data.
+	populated := FindPopulatedSlotsInRange(tpmDev, startIndex, endIndex, debug)
+	if len(populated) == 0 {
+		return nil
+	}
+
 	var slots []NVRAMSlot
 
-	for i := startIndex; i <= endIndex; i++ {
-		// Calculate slot number: if in default range, use offset from start
-		// For custom indices, use offset from startIndex (0 for single slot)
-		var slotNumber int
-		if i >= NVRAMSlotStart && i <= NVRAMSlotEnd {
-			slotNumber = int(i - NVRAMSlotStart)
-		} else {
-			slotNumber = int(i - startIndex)
-		}
+	for _, i := range populated {
+		slotNumber := SlotNumber(i)
 
 		if debug {
 			fmt.Printf("Scanning NVRAM slot %d (0x%08X)...\n", slotNumber, i)
@@ -168,27 +221,19 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 				continue
 			}
 
-			// Before dropping the slot, check whether NVRAM actually has data.
-			// If it does, the slot exists but unsealing failed for an
-			// unexpected reason (e.g. TPM resource exhaustion). We must still
-			// report it so the user sees all populated slots.
-			CleanupTPM(tpmDev, debug)
-			if rawData, peekErr := ReadFromNVRAM(tpmDev, i); peekErr == nil && len(rawData) > 0 {
-				if debug {
-					fmt.Printf("  Slot %d: NVRAM data present but unsealing failed (%v)\n", slotNumber, err)
-				}
-				slots = append(slots, NVRAMSlot{
-					SlotNumber: slotNumber,
-					Index:      i,
-					Available:  true,
-					Error:      err,
-				})
-				continue
-			}
-
+			// The slot was confirmed to exist by the pre-filter, but
+			// unsealing failed for an unexpected reason (e.g. TPM
+			// resource exhaustion).  Report it so the user sees all
+			// populated slots.
 			if debug {
-				fmt.Printf("  Slot %d: not available (%v)\n", slotNumber, err)
+				fmt.Printf("  Slot %d: NVRAM data present but unsealing failed (%v)\n", slotNumber, err)
 			}
+			slots = append(slots, NVRAMSlot{
+				SlotNumber: slotNumber,
+				Index:      i,
+				Available:  true,
+				Error:      err,
+			})
 			continue
 		}
 
