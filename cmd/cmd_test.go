@@ -2728,8 +2728,6 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 	})
 }
 
-
-
 // testError is a simple error type for testing
 type testError struct {
 	msg string

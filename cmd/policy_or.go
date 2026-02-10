@@ -1105,7 +1105,6 @@ func UnsealWithSignedBranchFromBlob(tpmDev transport.TPM, nvramIndex uint32, pri
 	return &UnsealWorkflowResult{
 		UnsealedData: unsealedData,
 		SealedBlob:   sealedBlob,
-
 	}, nil
 }
 
