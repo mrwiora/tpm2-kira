@@ -76,6 +76,7 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
 	pubKeyPath := fs.String("pubkey", cmd.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
+	privKeyPath := fs.String("privkey", "", "Path to signing private key PEM (stored in blob for reseal convenience)")
 
 	fs.Parse(args)
 
@@ -90,7 +91,7 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 		hashAlgo = cmd.PCRHashAlgoSHA1
 	}
 
-	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), *pubKeyPath, *debug, hashAlgo); err != nil {
+	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), *pubKeyPath, *privKeyPath, *debug, hashAlgo); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
@@ -295,6 +296,9 @@ SEAL OPTIONS:
   --pubkey PATH      Path to signing public key PEM for PolicySigned branch
                      (default: %s)
                      Accepts X.509 certificates or raw public keys (RSA, ECDSA)
+  --privkey PATH     Path to signing private key PEM (optional)
+                     Both key paths are stored in the blob so reseal can find
+                     them automatically without requiring --pubkey / --privkey
   --sha1             Use SHA-1 PCR bank instead of SHA-256 (default: SHA-256)
                      Use only if firmware eventlog does not provide SHA-256 digests
 

@@ -61,20 +61,31 @@ boot measurements.
 The NVRAM index (default `0x01803010`) stores a serialised `SealedBlob`
 (format version 4). It contains:
 
-| Field           | Content                                                        | Sensitive? |
-|-----------------|----------------------------------------------------------------|------------|
-| `Version`       | Blob format version (4)                                        | No         |
-| `AppVersion`    | tpm2-kira version that created the blob                        | No         |
-| `Public`        | TPM2B\_PUBLIC of the sealed object (object template)            | No         |
-| `Private`       | TPM2B\_PRIVATE of the sealed object (TPM-wrapped ciphertext)    | **Yes**¹   |
-| `PCRDigests`    | Per-PCR index, source (register/eventlog/predict), and digest  | No         |
-| `SigningKeyPEM` | PEM-encoded public key used for the PolicySigned branch        | No         |
-| `EventlogInfo`  | Metadata about eventlog calculation (path, hash, timestamps)   | No         |
+| Field            | Content                                                        | Sensitive? |
+|------------------|----------------------------------------------------------------|------------|
+| `Version`        | Blob format version (4)                                        | No         |
+| `AppVersion`     | tpm2-kira version that created the blob                        | No         |
+| `Public`         | TPM2B\_PUBLIC of the sealed object (object template)            | No         |
+| `Private`        | TPM2B\_PRIVATE of the sealed object (TPM-wrapped ciphertext)    | **Yes**¹   |
+| `PCRDigests`     | Per-PCR index, source (register/eventlog/predict), and digest  | No         |
+| `SigningKeyPEM`  | PEM-encoded public key used for the PolicySigned branch        | No         |
+| `EventlogInfo`   | Metadata about eventlog calculation (path, hash, timestamps)   | No         |
+| `PublicKeyPath`  | Filesystem path to the signing public key at seal time         | No²        |
+| `PrivateKeyPath` | Filesystem path to the signing private key at seal time        | No²        |
 
 ¹ The `Private` field is an opaque blob encrypted by the TPM's internal
 storage hierarchy key. It **cannot** be decrypted outside the specific TPM
 that created it. Possessing this blob alone is useless without the TPM and a
 valid policy session.
+
+² The key **paths** are stored purely for operational convenience so that
+`reseal` can locate the keys automatically. They contain no secret material —
+only filesystem paths (e.g. `/var/lib/sbctl/keys/db/db.key`). The paths are
+optional: old blobs without them still work, and CLI flags always override
+blob paths. Storing the path of the private key does **not** weaken security:
+the private key itself is never stored in the blob; the path merely tells
+reseal where to find it on the filesystem, and the TPM still performs the
+actual signature verification.
 
 The NVRAM index attributes are:
 
@@ -110,6 +121,11 @@ Secure Boot DB keys, but any supported key pair can be used.
 The private key should be protected by filesystem permissions (readable only
 by root). It is never sent to the TPM — tpm2-kira signs a nonce locally and
 sends the **signature** to the TPM for verification.
+
+When both `--pubkey` and `--privkey` are provided at seal time, their
+filesystem paths are stored in the blob. This allows `reseal` to locate the
+keys automatically without requiring the user to re-specify them every time.
+CLI flags always take priority over stored paths.
 
 ---
 
@@ -253,18 +269,38 @@ and signature between the TPM and the local signing operation.
 
 ```
 1.  Read blob from NVRAM, deserialise
-2.  Unseal via PCR branch (succeeds — PCRs match)
-3.  Re-seal with current PCR values
-    Signing key for the new blob:
-    a. --pubkey if provided (allows key rotation)
-    b. Derived from --privkey if provided
-    c. Preserved from the existing blob (default)
+2.  Resolve key paths: CLI flags override blob-stored paths
+3.  Unseal via PCR branch (succeeds — PCRs match)
+4.  Re-seal with current PCR values
+    Signing key for the new blob (in priority order):
+    a. --pubkey flag (explicit override)
+    b. Blob's stored PublicKeyPath (loaded from filesystem)
+    c. Derived from --privkey / blob's PrivateKeyPath
+    d. Preserved from the existing blob's SigningKeyPEM (last resort)
 ```
 
 When PCRs match, no private key is required. The TPM authorises the unseal
 through PCR verification alone. This is the expected path after a
 `tpm2-kira reseal` following a planned change where the user has already
 rebooted into the new configuration.
+
+### 5.5 Key path resolution in reseal
+
+Reseal resolves key paths with a two-tier fallback:
+
+```
+Effective privkey path = --privkey flag  →  blob.PrivateKeyPath  →  (empty)
+Effective pubkey path  = --pubkey flag   →  blob.PublicKeyPath   →  (empty)
+```
+
+If a path is resolved (from either source), the key is loaded from the
+**filesystem** — never from the blob. The blob only stores the path as a
+hint. If the file has been moved or deleted, the user must provide the new
+path via CLI flags.
+
+This means that after an initial `seal --pubkey /path/pub --privkey /path/priv`,
+subsequent `reseal` commands need no flags at all — the paths are remembered
+in the blob and the keys are read fresh from the filesystem each time.
 
 ---
 
@@ -436,7 +472,17 @@ Offset  Field                   Type        Notes
           CalcTime              string
           TotalEvents           uint32
           ProcessedEvents       uint32
+?       HasKeyPaths             uint8       0 or 1 (absent in older blobs)
+        If HasKeyPaths=1:
+          PubKeyPath length     uint16      ≤ 4096
+          PubKeyPath            string      Filesystem path to public key
+          PrivKeyPath length    uint16      ≤ 4096
+          PrivKeyPath           string      Filesystem path to private key
 ```
+
+The `HasKeyPaths` section is a trailing optional extension. Blobs written by
+older versions of tpm2-kira that lack this section are still valid — the paths
+default to empty strings, and the user must provide them via CLI flags.
 
 All multi-byte integers are big-endian. Strings are UTF-8 without null
 terminators.

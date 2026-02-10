@@ -178,6 +178,7 @@ const (
 	MaxEventlogHash    = 128              // Maximum 128 bytes for hash string
 	MaxCalcTime        = 256              // Maximum 256 bytes for timestamp
 	MaxSigningKeyPEM   = 64 * 1024       // 64KB maximum signing key PEM data
+	MaxKeyPathLen      = 4096            // 4KB maximum for key filesystem paths
 )
 
 // PCRDigestPair represents a PCR index paired with its digest value
@@ -200,13 +201,15 @@ type EventlogInfo struct {
 // SealedBlob represents the complete sealed data structure
 // Version 4: PolicyOR-based authentication (PCR branch + PolicySigned branch), no password
 type SealedBlob struct {
-	Version       uint32          `json:"version"`        // Blob format version (must be 4)
-	AppVersion    string          `json:"app_version"`    // Application version that created this blob
-	Public        []byte          `json:"public"`         // TPM public key blob
-	Private       []byte          `json:"private"`        // TPM private key blob
-	PCRDigests    []PCRDigestPair `json:"pcr_digests"`    // PCR indices with their source and digest values
-	SigningKeyPEM []byte          `json:"signing_key_pem"` // PEM-encoded public key used for PolicySigned branch
-	EventlogInfo  *EventlogInfo   `json:"eventlog_info"`  // Eventlog calculation metadata (if any PCR uses eventlog)
+	Version        uint32          `json:"version"`         // Blob format version (must be 4)
+	AppVersion     string          `json:"app_version"`     // Application version that created this blob
+	Public         []byte          `json:"public"`          // TPM public key blob
+	Private        []byte          `json:"private"`         // TPM private key blob
+	PCRDigests     []PCRDigestPair `json:"pcr_digests"`     // PCR indices with their source and digest values
+	SigningKeyPEM  []byte          `json:"signing_key_pem"` // PEM-encoded public key used for PolicySigned branch
+	EventlogInfo   *EventlogInfo   `json:"eventlog_info"`   // Eventlog calculation metadata (if any PCR uses eventlog)
+	PublicKeyPath  string          `json:"public_key_path,omitempty"`  // Filesystem path to signing public key (stored for reseal convenience)
+	PrivateKeyPath string          `json:"private_key_path,omitempty"` // Filesystem path to signing private key (stored for reseal convenience)
 }
 
 // GetHashAlgo infers the PCR hash algorithm from the stored digest sizes.
@@ -310,6 +313,7 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 	// Format v4: [version:4][appVersionLen:4][appVersion][publicLen:4][public][privateLen:4][private]
 	//            [numPCRDigests:4][pcrDigestPairs...][signingKeyPEMLen:4][signingKeyPEM]
 	//            [hasEventlogInfo:1][eventlogInfo...]
+	//            [hasKeyPaths:1][pubKeyPathLen:2][pubKeyPath][privKeyPathLen:2][privKeyPath]
 	// where pcrDigestPairs = [pcrIndex:4][source:1][commandLen:2][command][digestLen:2][digest]...
 	//   (commandLen+command only present when source == PCRSourcePredict)
 
@@ -319,7 +323,8 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 		4 + len(sb.Private) + // private blob
 		4 + // number of PCR digests
 		4 + len(sb.SigningKeyPEM) + // signing key PEM length + data
-		1 // hasEventlogInfo flag
+		1 + // hasEventlogInfo flag
+		1 // hasKeyPaths flag
 
 	// Calculate PCR digest pair size
 	for _, pcrDigest := range sb.PCRDigests {
@@ -338,6 +343,13 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 			4 + len(sb.EventlogInfo.EventlogHash) + // eventlog hash
 			4 + len(sb.EventlogInfo.CalculationTime) + // calculation time
 			4 + 4 // total events + processed events (4 bytes each)
+	}
+
+	// Calculate key paths size (if present)
+	hasKeyPaths := sb.PublicKeyPath != "" || sb.PrivateKeyPath != ""
+	if hasKeyPaths {
+		size += 2 + len(sb.PublicKeyPath) + // pubkey path length + string
+			2 + len(sb.PrivateKeyPath) // privkey path length + string
 	}
 
 	buf := make([]byte, size)
@@ -431,6 +443,27 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 		offset += 4
 		binary.LittleEndian.PutUint32(buf[offset:], uint32(sb.EventlogInfo.ProcessedEvents))
 		offset += 4
+	}
+
+	// Key paths flag and data
+	if hasKeyPaths {
+		buf[offset] = 1
+		offset++
+
+		// Public key path
+		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(sb.PublicKeyPath)))
+		offset += 2
+		copy(buf[offset:], sb.PublicKeyPath)
+		offset += len(sb.PublicKeyPath)
+
+		// Private key path
+		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(sb.PrivateKeyPath)))
+		offset += 2
+		copy(buf[offset:], sb.PrivateKeyPath)
+		offset += len(sb.PrivateKeyPath)
+	} else {
+		buf[offset] = 0
+		offset++
 	}
 
 	return buf, nil
@@ -654,6 +687,44 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 		offset += 4
 	}
 
+	// Key paths (trailing optional section — absent in older v4 blobs)
+	if offset < len(data) {
+		hasKeyPaths := data[offset] == 1
+		offset++
+
+		if hasKeyPaths && offset < len(data) {
+			// Public key path
+			if offset+2 > len(data) {
+				return nil, fmt.Errorf("data too short for public key path length")
+			}
+			pubPathLen := int(binary.LittleEndian.Uint16(data[offset:]))
+			offset += 2
+			if pubPathLen > MaxKeyPathLen {
+				return nil, fmt.Errorf("public key path length %d exceeds maximum %d", pubPathLen, MaxKeyPathLen)
+			}
+			if offset+pubPathLen > len(data) {
+				return nil, fmt.Errorf("data too short for public key path")
+			}
+			sb.PublicKeyPath = string(data[offset : offset+pubPathLen])
+			offset += pubPathLen
+
+			// Private key path
+			if offset+2 > len(data) {
+				return nil, fmt.Errorf("data too short for private key path length")
+			}
+			privPathLen := int(binary.LittleEndian.Uint16(data[offset:]))
+			offset += 2
+			if privPathLen > MaxKeyPathLen {
+				return nil, fmt.Errorf("private key path length %d exceeds maximum %d", privPathLen, MaxKeyPathLen)
+			}
+			if offset+privPathLen > len(data) {
+				return nil, fmt.Errorf("data too short for private key path")
+			}
+			sb.PrivateKeyPath = string(data[offset : offset+privPathLen])
+			offset += privPathLen
+		}
+	}
+
 	return sb, nil
 }
 
@@ -701,6 +772,8 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 		SigningKeyType        string          `json:"signing_key_type"`
 		SigningKeyFingerprint string          `json:"signing_key_fingerprint"`
 		SigningKeyPEMSize     int             `json:"signing_key_pem_size"`
+		PublicKeyPath         string          `json:"public_key_path,omitempty"`
+		PrivateKeyPath        string          `json:"private_key_path,omitempty"`
 		EventlogInfo          *EventlogInfo   `json:"eventlog_info,omitempty"`
 	}
 
@@ -716,6 +789,8 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 		SigningKeyType:        signingKeyType,
 		SigningKeyFingerprint: signingKeyFingerprint,
 		SigningKeyPEMSize:     len(sb.SigningKeyPEM),
+		PublicKeyPath:         sb.PublicKeyPath,
+		PrivateKeyPath:        sb.PrivateKeyPath,
 		EventlogInfo:          sb.EventlogInfo,
 	}
 

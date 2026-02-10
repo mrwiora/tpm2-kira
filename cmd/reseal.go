@@ -61,6 +61,25 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		return fmt.Errorf("sealed blob does not contain a signing key. Re-seal with current version: tpm2-kira seal")
 	}
 
+	// ── Resolve key paths: CLI flags take priority, then blob paths ──
+	// The blob stores the filesystem paths used at seal time so that reseal
+	// can locate the keys automatically when the user doesn't override them.
+	effectivePrivKeyPath := privKeyPath
+	effectivePubKeyPath := pubKeyPath
+
+	if effectivePrivKeyPath == "" && sealedBlob.PrivateKeyPath != "" {
+		effectivePrivKeyPath = sealedBlob.PrivateKeyPath
+		if debug {
+			fmt.Printf("Using private key path from blob: %s\n", effectivePrivKeyPath)
+		}
+	}
+	if effectivePubKeyPath == "" && sealedBlob.PublicKeyPath != "" {
+		effectivePubKeyPath = sealedBlob.PublicKeyPath
+		if debug {
+			fmt.Printf("Using public key path from blob: %s\n", effectivePubKeyPath)
+		}
+	}
+
 	// ── Unseal: let the TPM decide which branch to use ──
 	// Try the PCR branch first. If PCRs match, the TPM authorizes it directly.
 	// If PCRs changed, fall back to PolicySigned where the TPM verifies the signature.
@@ -74,14 +93,14 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 			PrintKIRAError(pcrErr)
 
 			// Private key is required for PolicySigned recovery
-			if privKeyPath == "" {
+			if effectivePrivKeyPath == "" {
 				tpmDev.Close()
 				return fmt.Errorf("PCR values have changed. The signing private key is required for recovery.\n" +
 					"  Provide it with --privkey <path>")
 			}
 
 			// Use PolicySigned branch for unsealing - the TPM verifies the signature
-			result, err = UnsealWithSignedBranchFromBlob(tpmDev, nvramIndex, privKeyPath, debug)
+			result, err = UnsealWithSignedBranchFromBlob(tpmDev, nvramIndex, effectivePrivKeyPath, debug)
 			if err != nil {
 				tpmDev.Close()
 				return fmt.Errorf("failed to unseal with signing key: %w", err)
@@ -96,14 +115,14 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 			ShowPCRDetails(tpmDev, nvramIndex, debug)
 
 			// Private key is required for PolicySigned recovery
-			if privKeyPath == "" {
+			if effectivePrivKeyPath == "" {
 				tpmDev.Close()
 				return fmt.Errorf("TPM policy verification failed. The signing private key is required for recovery.\n" +
 					"  Provide it with --privkey <path>")
 			}
 
 			// Use PolicySigned branch for unsealing - the TPM verifies the signature
-			result, err = UnsealWithSignedBranchFromBlob(tpmDev, nvramIndex, privKeyPath, debug)
+			result, err = UnsealWithSignedBranchFromBlob(tpmDev, nvramIndex, effectivePrivKeyPath, debug)
 			if err != nil {
 				tpmDev.Close()
 				return fmt.Errorf("failed to unseal with signing key: %w", err)
@@ -121,20 +140,23 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	tpmDev.Close()
 
 	// ── Determine the public key for re-sealing ──
-	// Priority: --pubkey > derived from --privkey > blob's stored key
+	// Priority: --pubkey > blob pubkey path > derived from --privkey > blob's stored PEM
 	var resealPubKeyPEM []byte
 	var resealPubKeySource string
+	var resealPubKeyPathForBlob string
+	var resealPrivKeyPathForBlob string
 
-	if pubKeyPath != "" {
-		// Explicit --pubkey: load from the filesystem
-		_, resealPubKeyPEM, err = LoadSigningPublicKeyFromPEM(pubKeyPath)
+	if effectivePubKeyPath != "" {
+		// Explicit --pubkey (or blob path): load from the filesystem
+		_, resealPubKeyPEM, err = LoadSigningPublicKeyFromPEM(effectivePubKeyPath)
 		if err != nil {
-			return fmt.Errorf("failed to load signing public key from %s: %w", pubKeyPath, err)
+			return fmt.Errorf("failed to load signing public key from %s: %w", effectivePubKeyPath, err)
 		}
-		resealPubKeySource = pubKeyPath
-	} else if privKeyPath != "" {
+		resealPubKeySource = effectivePubKeyPath
+		resealPubKeyPathForBlob = effectivePubKeyPath
+	} else if effectivePrivKeyPath != "" {
 		// No --pubkey but --privkey was given: derive public key from it
-		privKey, loadErr := LoadSigningPrivateKeyFromPEM(privKeyPath)
+		privKey, loadErr := LoadSigningPrivateKeyFromPEM(effectivePrivKeyPath)
 		if loadErr != nil {
 			return fmt.Errorf("failed to load private key to derive public key: %w", loadErr)
 		}
@@ -142,7 +164,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		if err != nil {
 			return fmt.Errorf("failed to encode public key as PEM: %w", err)
 		}
-		resealPubKeySource = fmt.Sprintf("(derived from %s)", privKeyPath)
+		resealPubKeySource = fmt.Sprintf("(derived from %s)", effectivePrivKeyPath)
 	} else {
 		// Neither --pubkey nor --privkey: preserve the blob's signing key
 		resealPubKeyPEM = sealedBlob.SigningKeyPEM
@@ -151,6 +173,11 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 			return fmt.Errorf("failed to parse signing key from blob: %w", parseErr)
 		}
 		resealPubKeySource = fmt.Sprintf("(preserved from blob, fingerprint: %s)", PublicKeyFingerprint(blobPubKey))
+	}
+
+	// Preserve the private key path for the new blob
+	if effectivePrivKeyPath != "" {
+		resealPrivKeyPathForBlob = effectivePrivKeyPath
 	}
 
 	// Parse the chosen public key for display and sealing
@@ -237,7 +264,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	fmt.Printf("Signing key: %s (%s, fingerprint: %s)\n", resealPubKeySource, PublicKeyDescription(resealPubKey), PublicKeyFingerprint(resealPubKey))
 
 	// Reseal the data with the determined specs, preserving the original hash algorithm
-	if err := sealDataWithSpecs(tpmPath, specsToUse, nvramIndex, unsealedData, resealPubKey, resealPubKeyPEM, debug, hashAlgo); err != nil {
+	if err := sealDataWithSpecs(tpmPath, specsToUse, nvramIndex, unsealedData, resealPubKey, resealPubKeyPEM, resealPubKeyPathForBlob, resealPrivKeyPathForBlob, debug, hashAlgo); err != nil {
 		return fmt.Errorf("failed to reseal data: %w", err)
 	}
 
