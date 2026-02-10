@@ -1,59 +1,53 @@
 # Security Policy
 
+## Reporting a Vulnerability
+
+If you discover a security vulnerability in tpm2-kira:
+
+1. **DO NOT** open a public GitHub issue.
+2. Email the maintainers directly (see [MAINTAINERS](MAINTAINERS)).
+3. Include:
+   - Description of the issue
+   - Steps to reproduce
+   - Potential impact
+   - Suggested fix (if you have one)
+
+We will acknowledge your report within 48 hours and keep you updated on our progress. If confirmed, we will coordinate a fix and disclosure timeline with you.
+
 ## Supported Versions
 
-All versions of tpm2-kira are currently supported with security updates.
+All versions of tpm2-kira receive security updates.
 
 | Version | Supported          |
 | ------- | ------------------ |
 | *       | :white_check_mark: |
 
-## Automated Security Testing
+## Automated Penetration Testing with Strix AI
 
-This project uses [Strix AI](https://strix.ai) for automated penetration testing on pull requests from branches ending with "pentest". Strix is an autonomous AI security agent that:
+This project uses [Strix AI](https://strix.ai) for automated penetration testing. Strix is an autonomous AI security agent that dynamically probes the codebase for vulnerabilities, validates findings with real proof-of-concepts, and produces actionable reports.
 
-- Dynamically tests code for vulnerabilities
-- Validates findings with real proof-of-concepts
-- Provides actionable security reports
+### How it's triggered
 
-**Note:** The Strix security scan only runs automatically when the source branch name ends with "pentest" (e.g., `feature-xyz-pentest`, `bugfix-123-pentest`). This ensures comprehensive security testing is performed only when explicitly requested.
+The Strix scan runs as a GitHub Actions workflow (`.github/workflows/strix-security-scan.yml`) on pull requests whose **source branch name ends with `pentest`** — for example `feature-xyz-pentest` or `bugfix-123-pentest`. This keeps the (relatively expensive) deep scan out of the normal CI path and runs it only when explicitly requested.
 
-### Required GitHub Secrets
+The workflow supports three scan modes via manual dispatch (`workflow_dispatch`):
 
-To enable Strix security scanning in CI/CD, the following secrets must be configured in the repository settings:
+| Mode | Description |
+|------|-------------|
+| `quick` | Fast surface-level check (default) |
+| `standard` | Broader coverage |
+| `deep` | Full deep scan with higher reasoning effort |
 
-1. **`STRIX_LLM`** - The LLM provider and model (e.g., `openai/gpt-5`, `anthropic/claude-sonnet-4-5`)
-2. **`LLM_API_KEY`** - API key for your chosen LLM provider
-3. **`PERPLEXITY_API_KEY`** (optional) - API key for enhanced search capabilities
+Results are uploaded as a GitHub Actions artifact (`strix-security-report`, retained for 30 days) and — for PRs — summarized in a comment on the pull request.
 
-### Running Strix Locally
+### Performed scans
 
-To run Strix security scans locally:
+| Date | Scope | Codebase state | Duration | Result | Link |
+|------|-------|----------------|----------|--------|------|
+| 2026-02-02 | Full scan | `dev` branch, between releases 0.0.12 and 0.0.13 (PR [#26](https://github.com/mrwiora/tpm2-kira/pull/26), branch `copilot/add-ai-pentest-scan-workflow`) | ~56 min | Completed, report artifact available | [Actions run](https://github.com/mrwiora/tpm2-kira/actions/runs/20994975512/job/62242599102) |
 
-```bash
-# Install Strix
-curl -sSL https://strix.ai/install | bash
+The scan report artifact (`strix-security-report`, 23.7 KB) is downloadable from the Actions run linked above.
 
-# Configure environment
-export STRIX_LLM="openai/gpt-5"
-export LLM_API_KEY="your-api-key"
+## Security Design
 
-# Run security assessment
-strix --target ./
-```
-
-For more information, see the [Strix documentation](https://docs.strix.ai).
-
-## Reporting a Vulnerability
-
-If you discover a security vulnerability in tpm2-kira, please report it by:
-
-1. **DO NOT** create a public GitHub issue for security vulnerabilities
-2. Email the maintainers directly (see MAINTAINERS file)
-3. Include detailed information about the vulnerability:
-   - Description of the issue
-   - Steps to reproduce
-   - Potential impact
-   - Suggested fix (if available)
-
-We will acknowledge receipt of your vulnerability report within 48 hours and will send you regular updates about our progress. If the vulnerability is accepted, we will work on a fix and coordinate disclosure timing with you.
+For an in-depth description of the cryptographic architecture, threat model, authentication model (PolicyOR with PCR + PolicySigned branches), blob format, and trust boundaries, see [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md).
