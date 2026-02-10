@@ -16,10 +16,9 @@ func main() {
 	// Set application version in cmd package
 	cmd.AppVersion = Version
 
-	// Global flags
+	// Global flags (shared across all commands)
 	globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
 	tpmPath := globalFlags.String("tpm", "/dev/tpm0", "Path to TPM device")
-	pcrs := globalFlags.String("pcrs", "0,2,7", "PCR indices to use for policy (comma-separated)")
 	nvramIndex := globalFlags.Uint("nvram", 0x01803010, "TPM NVRAM index to use for storage")
 	debug := globalFlags.Bool("debug", false, "Enable debug output")
 
@@ -38,19 +37,19 @@ func main() {
 
 	switch command {
 	case "seal":
-		runSeal(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
+		runSeal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "reseal":
-		runReseal(commandArgs, *tpmPath, "", uint32(*nvramIndex), *debug)
+		runReseal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "info":
-		runInfo(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
+		runInfo(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "nvram":
-		runNVRAM(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
+		runNVRAM(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "reveal":
-		runReveal(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
+		runReveal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "reveal-plain":
-		runRevealPlain(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
+		runRevealPlain(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "run":
-		runRun(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
+		runRun(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "pcrtips":
 		if err := cmd.PCRTips(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -67,11 +66,11 @@ func main() {
 	}
 }
 
-func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
+func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("seal", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
+	pcrs := fs.String("pcrs", "0,2,7", "PCR indices to use for policy")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
@@ -97,11 +96,11 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 	}
 }
 
-func runReseal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
+func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("reseal", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy (if not specified, preserves original selection)")
+	pcrs := fs.String("pcrs", "", "PCR indices to use for policy (if not specified, preserves original selection)")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	pubKeyPath := fs.String("pubkey", "", "Path to signing public key PEM (default: derived from --privkey, or preserved from blob)")
@@ -123,11 +122,10 @@ func runReseal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 	}
 }
 
-func runInfo(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
+func runInfo(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("info", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
@@ -135,13 +133,13 @@ func runInfo(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 
 	fs.Parse(args)
 
-	if err := cmd.InfoWithFormat(*tpm, *pcrs, uint32(*nvram), *debug, *jsonOutput); err != nil {
+	if err := cmd.InfoWithFormat(*tpm, uint32(*nvram), *debug, *jsonOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
 }
 
-func runReveal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
+func runReveal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("reveal", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
@@ -168,7 +166,7 @@ func runReveal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 	cmd.RevealCommand(*tpm, scanIndex, *debug, false)
 }
 
-func runRevealPlain(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
+func runRevealPlain(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("reveal-plain", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
@@ -195,7 +193,7 @@ func runRevealPlain(args []string, tpmPath, pcrsStr string, nvramIndex uint32, d
 	cmd.RevealCommand(*tpm, scanIndex, *debug, true)
 }
 
-func runRun(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
+func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
@@ -222,7 +220,7 @@ func runRun(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag
 	cmd.RunCommand(*tpm, scanIndex, *debug)
 }
 
-func runNVRAM(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
+func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	if len(args) == 0 {
 		fmt.Fprintf(os.Stderr, "Error: nvram command requires a subcommand (list, status, delete)\n")
 		os.Exit(0)
