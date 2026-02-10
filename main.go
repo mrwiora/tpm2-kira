@@ -267,6 +267,15 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 
 	fs.Parse(args)
 
+	// Check if --nvram was explicitly provided
+	nvramProvided := false
+	for _, arg := range args {
+		if arg == "--nvram" || arg == "-nvram" {
+			nvramProvided = true
+			break
+		}
+	}
+
 	switch subcommand {
 	case "list":
 		if err := cmd.NVRAMList(*tpm, uint32(*nvram), *debug); err != nil {
@@ -279,7 +288,12 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 			os.Exit(0)
 		}
 	case "delete":
-		if err := cmd.NVRAMDelete(*tpm, uint32(*nvram), *debug); err != nil {
+		// Use special value 0 to indicate "delete all" when --nvram not provided
+		deleteIndex := uint32(*nvram)
+		if !nvramProvided {
+			deleteIndex = 0
+		}
+		if err := cmd.NVRAMDeleteCommand(*tpm, deleteIndex, *debug); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(0)
 		}
@@ -309,7 +323,10 @@ COMMANDS:
 
 GLOBAL OPTIONS:
   --tpm PATH      Path to TPM device (default: /dev/tpm0)
-  --nvram INDEX   NVRAM index in hex (default: 0x01803010)
+  --nvram INDEX   NVRAM index in hex (default: auto-scan slots 0x01803010-0x0180301F)
+                  When omitted, commands automatically discover and operate on
+                  all populated slots in the default range.
+                  When specified, operates on only the given slot.
   --debug         Enable debug output
 
 SEAL OPTIONS:
@@ -346,7 +363,7 @@ INFO OPTIONS:
 NVRAM SUBCOMMANDS:
   list               List all NVRAM indices
   status             Show NVRAM index status
-  delete             Delete NVRAM index
+  delete             Delete NVRAM index (or all populated slots when --nvram is omitted)
 
 AUTHENTICATION:
   tpm2-kira uses TPM2 PolicyOR with two branches for access control:
@@ -373,7 +390,10 @@ EXAMPLES:
   tpm2-kira reseal --pcrs "0e,2,4,7e"
   tpm2-kira reseal --privkey /path/to/my-key.key
   tpm2-kira info
+  tpm2-kira info --nvram 0x01803010
   tpm2-kira nvram list
+  tpm2-kira nvram delete
+  tpm2-kira nvram delete --nvram 0x01803010
 
 For detailed documentation, see README.md
 `, cmd.DefaultPublicKeyPath)
