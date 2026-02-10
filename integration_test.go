@@ -712,7 +712,7 @@ func TestInfoJSON(t *testing.T) {
 	expectedFields := []string{
 		"\"version\"",
 		"\"pcr_digests\"",
-		"\"signing_key_pem_size\"",
+		"\"signed_branch_digest_hex\"",
 	}
 
 	for _, field := range expectedFields {

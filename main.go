@@ -306,10 +306,11 @@ RESEAL OPTIONS:
   --pcrs INDICES     New PCR indices with optional source suffix (optional,
                      preserves original selection and per-PCR sources if omitted)
   --pubkey PATH      Path to signing public key PEM for re-sealing (optional)
-                     Default: derived from --privkey, or preserved from blob
-                     Use this to change the signing key during reseal
+                     Default: derived from --privkey, or loaded from blob's
+                     stored key path. Use this to change the signing key.
   --privkey PATH     Path to signing private key PEM (required when PCRs changed)
-                     The TPM verifies the signature via PolicySigned
+                     The TPM verifies the signature via PolicySigned.
+                     Also used to derive the public key when --pubkey is omitted.
 
 INFO OPTIONS:
   --json             Output as JSON

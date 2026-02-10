@@ -85,15 +85,28 @@ func InfoWithFormat(tpmPath, pcrsStr string, nvramIndex uint32, debug bool, json
 		fmt.Printf("\n")
 
 		fmt.Printf("Authentication: PolicyOR (PCR branch + PolicySigned branch)\n")
-		if len(sealedBlob.SigningKeyPEM) > 0 {
-			pubKey, err := ParsePublicKeyFromPEM(sealedBlob.SigningKeyPEM)
-			if err == nil {
-				fmt.Printf("  Signing Key Type: %s\n", PublicKeyDescription(pubKey))
-				fmt.Printf("  Signing Key Fingerprint: %s\n", PublicKeyFingerprint(pubKey))
+		if len(sealedBlob.SignedBranchDigest) > 0 {
+			fmt.Printf("  Signed Branch Digest: %x\n", sealedBlob.SignedBranchDigest)
+			fmt.Printf("  Signed Branch Digest Size: %d bytes\n", len(sealedBlob.SignedBranchDigest))
+			// Try to load signing key from stored paths for additional info
+			if sealedBlob.PublicKeyPath != "" {
+				pubKey, _, keyErr := LoadSigningPublicKeyFromPEM(sealedBlob.PublicKeyPath)
+				if keyErr == nil {
+					fmt.Printf("  Signing Key Type: %s\n", PublicKeyDescription(pubKey))
+					fmt.Printf("  Signing Key Fingerprint: %s\n", PublicKeyFingerprint(pubKey))
+					fmt.Printf("  Signing Key Path: %s\n", sealedBlob.PublicKeyPath)
+				}
+			} else if sealedBlob.PrivateKeyPath != "" {
+				privKey, keyErr := LoadSigningPrivateKeyFromPEM(sealedBlob.PrivateKeyPath)
+				if keyErr == nil {
+					pubKey := privKey.Public()
+					fmt.Printf("  Signing Key Type: %s\n", PublicKeyDescription(pubKey))
+					fmt.Printf("  Signing Key Fingerprint: %s\n", PublicKeyFingerprint(pubKey))
+					fmt.Printf("  Signing Key Path: %s (derived from private key)\n", sealedBlob.PrivateKeyPath)
+				}
 			}
-			fmt.Printf("  Signing Key PEM Size: %d bytes\n", len(sealedBlob.SigningKeyPEM))
 		} else {
-			fmt.Printf("  Signing Key: not present (incompatible blob)\n")
+			fmt.Printf("  Signed Branch Digest: not present (incompatible blob)\n")
 		}
 		fmt.Printf("\n")
 

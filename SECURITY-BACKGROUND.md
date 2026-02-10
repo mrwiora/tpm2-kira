@@ -59,19 +59,19 @@ boot measurements.
 ### 3.1 TPM NVRAM (the "blob")
 
 The NVRAM index (default `0x01803010`) stores a serialised `SealedBlob`
-(format version 4). It contains:
+(format version 5). It contains:
 
-| Field            | Content                                                        | Sensitive? |
-|------------------|----------------------------------------------------------------|------------|
-| `Version`        | Blob format version (4)                                        | No         |
-| `AppVersion`     | tpm2-kira version that created the blob                        | No         |
-| `Public`         | TPM2B\_PUBLIC of the sealed object (object template)            | No         |
-| `Private`        | TPM2B\_PRIVATE of the sealed object (TPM-wrapped ciphertext)    | **Yes**¹   |
-| `PCRDigests`     | Per-PCR index, source (register/eventlog/predict), and digest  | No         |
-| `SigningKeyPEM`  | PEM-encoded public key used for the PolicySigned branch        | No         |
-| `EventlogInfo`   | Metadata about eventlog calculation (path, hash, timestamps)   | No         |
-| `PublicKeyPath`  | Filesystem path to the signing public key at seal time         | No²        |
-| `PrivateKeyPath` | Filesystem path to the signing private key at seal time        | No²        |
+| Field                | Content                                                        | Sensitive? |
+|----------------------|----------------------------------------------------------------|------------|
+| `Version`            | Blob format version (5)                                        | No         |
+| `AppVersion`         | tpm2-kira version that created the blob                        | No         |
+| `Public`             | TPM2B\_PUBLIC of the sealed object (object template)            | No         |
+| `Private`            | TPM2B\_PRIVATE of the sealed object (TPM-wrapped ciphertext)    | **Yes**¹   |
+| `PCRDigests`         | Per-PCR index, source (register/eventlog/predict), and digest  | No         |
+| `SignedBranchDigest` | Pre-computed PolicySigned branch digest (SHA-256, 32 bytes)    | No³        |
+| `EventlogInfo`       | Metadata about eventlog calculation (path, hash, timestamps)   | No         |
+| `PublicKeyPath`      | Filesystem path to the signing public key at seal time         | No²        |
+| `PrivateKeyPath`     | Filesystem path to the signing private key at seal time        | No²        |
 
 ¹ The `Private` field is an opaque blob encrypted by the TPM's internal
 storage hierarchy key. It **cannot** be decrypted outside the specific TPM
@@ -86,6 +86,14 @@ blob paths. Storing the path of the private key does **not** weaken security:
 the private key itself is never stored in the blob; the path merely tells
 reseal where to find it on the filesystem, and the TPM still performs the
 actual signature verification.
+
+³ The `SignedBranchDigest` is a 32-byte SHA-256 hash computed at seal time:
+`H(0…0 || TPM_CC_PolicySigned || keyName)`. It is the PolicySigned branch
+digest needed by `TPM2_PolicyOR` at unseal time. Storing only this digest
+(instead of the full public key PEM as in blob v4) avoids embedding
+unnecessary key material in the blob. The public key itself is not stored —
+it is loaded from the filesystem (via the stored paths) or derived from the
+private key when needed.
 
 The NVRAM index attributes are:
 
@@ -113,8 +121,8 @@ Secure Boot DB keys, but any supported key pair can be used.
 
 | File       | Purpose                                                    |
 |------------|------------------------------------------------------------|
-| Public key | Baked into the PolicyOR digest at seal time. Also stored   |
-| (`.pem`)   | in the blob so the policy can be reconstructed at unseal.  |
+| Public key | Baked into the PolicyOR digest at seal time. Its           |
+| (`.pem`)   | filesystem path is stored in the blob for reseal.          |
 | Private key| Required **only** for PolicySigned recovery when PCRs have |
 | (`.key`)   | changed. Never stored in the blob or in the TPM.           |
 
@@ -211,15 +219,15 @@ PolicyOR — either matching PCRs or a valid cryptographic signature.
 1.  Generate 256-bit random TOTP secret
 2.  Read PCR values from TPM registers (or eventlog/predict)
 3.  Compute Branch 1 digest: trial PolicyPCR with the read values
-4.  Compute Branch 2 digest: in software from the signing public key's
-    TPM Name (no TPM interaction needed)
+4.  Compute Branch 2 digest: trial PolicySigned with the signing public
+    key loaded into the TPM
 5.  Compute PolicyOR digest combining both branches (trial session)
-6.  Validate signing key can be loaded into the TPM (catch hw limits early)
-7.  TPM2_CreatePrimary → deterministic parent key
-8.  TPM2_Create → sealed object with authPolicy = PolicyOR digest
+6.  TPM2_CreatePrimary → deterministic parent key
+7.  TPM2_Create → sealed object with authPolicy = PolicyOR digest
     (UserWithAuth = false, no password)
-9.  Serialise SealedBlob (public, private, PCR digests, signing key PEM)
-10. Write blob to NVRAM
+8.  Serialise SealedBlob (public, private, PCR digests, signed branch
+    digest, key paths)
+9.  Write blob to NVRAM
 ```
 
 The TOTP secret exists in cleartext only briefly in step 1 and is displayed
@@ -237,6 +245,7 @@ to the user (QR code). After sealing, the cleartext is discarded.
     a. TPM2_PolicyPCR with the blob's PCR selection
        → TPM reads live registers, computes digest
     b. TPM2_PolicyOR with [PCR-branch-digest, signed-branch-digest]
+       (signed branch digest is read directly from the blob — no key loading needed)
 7.  TPM2_Unseal → TPM releases secret if policy satisfied
 8.  Compute TOTP code from secret, display it
 ```
@@ -250,13 +259,14 @@ No private key is needed. No password is needed. The TPM decides based on PCRs.
 2.  Attempt normal unseal via PCR branch
 3.  If PCR branch fails (values changed):
     a. Load signing private key from filesystem (--privkey)
-    b. Load signing public key from blob into TPM (TPM2_LoadExternal)
+    b. Derive public key from private key, load into TPM (TPM2_LoadExternal)
     c. Build policy session:
        i.   TPM generates nonceTPM
        ii.  tpm2-kira computes aHash = SHA-256(nonceTPM || 0x00000000)
        iii. tpm2-kira signs aHash with private key
        iv.  TPM2_PolicySigned — TPM verifies signature
        v.   TPM2_PolicyOR with both branch digests
+            (signed branch digest from blob, PCR branch digest recomputed from blob's PCR digests)
     d. TPM2_Unseal → TPM releases secret
 4.  Re-seal with current PCR values and chosen signing key
 ```
@@ -276,7 +286,6 @@ and signature between the TPM and the local signing operation.
     a. --pubkey flag (explicit override)
     b. Blob's stored PublicKeyPath (loaded from filesystem)
     c. Derived from --privkey / blob's PrivateKeyPath
-    d. Preserved from the existing blob's SigningKeyPEM (last resort)
 ```
 
 When PCRs match, no private key is required. The TPM authorises the unseal
@@ -437,31 +446,36 @@ of tpm2-kira's current design.
 
 ---
 
-## 10. Blob Format (Version 4)
+## 10. Blob Format (Version 5)
 
 The blob is a binary-serialised structure with explicit length prefixes and
 maximum size limits to prevent memory exhaustion during deserialisation.
 
+Version 5 replaces the `SigningKeyPEM` field from version 4 with the much
+smaller `SignedBranchDigest` (32 bytes). The public key is no longer stored
+in the blob — it is loaded from the filesystem or derived from the private
+key when needed.
+
 ```
 Offset  Field                   Type        Notes
 ─────────────────────────────────────────────────────────────
-0       Version                 uint32      Must be 4
-4       AppVersion length       uint16      ≤ 1024
-6       AppVersion              string
+0       Version                 uint32      Must be 5
+4       AppVersion length       uint32      ≤ 1024
+8       AppVersion              string
 ?       Public length           uint32      ≤ 2MB
 ?       Public                  []byte      TPM2B_PUBLIC
 ?       Private length          uint32      ≤ 2MB
 ?       Private                 []byte      TPM2B_PRIVATE
-?       PCR digest count        uint16      ≤ 100
+?       PCR digest count        uint32      ≤ 100
         For each PCR digest:
-          PCR index             uint8
+          PCR index             uint32
           PCR source            uint8       0=register, 1=eventlog, 2=predict
           Command length        uint16      Only if source=predict
           Command               string      Only if source=predict
           Digest length         uint16      ≤ 1024
           Digest                []byte
-?       SigningKeyPEM length    uint32      ≤ 64KB
-?       SigningKeyPEM           []byte      PEM-encoded public key
+?       SignedBranchDigest len  uint16      ≤ 64
+?       SignedBranchDigest      []byte      Pre-computed PolicySigned branch digest
 ?       HasEventlogInfo         uint8       0 or 1
         If HasEventlogInfo=1:
           EventlogPath length   uint16
@@ -483,6 +497,11 @@ Offset  Field                   Type        Notes
 The `HasKeyPaths` section is a trailing optional extension. Blobs written by
 older versions of tpm2-kira that lack this section are still valid — the paths
 default to empty strings, and the user must provide them via CLI flags.
+
+**Migration from version 4:** Blobs in the older v4 format (which stored the
+full signing public key PEM instead of the signed branch digest) are not
+compatible with version 5. Users must re-seal with `tpm2-kira seal` to create
+a v5 blob.
 
 All multi-byte integers are big-endian. Strings are UTF-8 without null
 terminators.

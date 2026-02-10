@@ -553,17 +553,12 @@ func UnsealWithPCRBranch(tpmDev transport.TPM, loadedObject *LoadSealedObjectRes
 	hashAlgo := sealedBlob.GetHashAlgo()
 	pcrIndices := sealedBlob.GetPCRIndices()
 
-	// We need to reconstruct the branch digests to call PolicyOR.
-	// Load the signing public key from the blob to compute the signed branch digest.
-	pubKey, err := ParsePublicKeyFromPEM(sealedBlob.SigningKeyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse signing public key from blob: %w", err)
+	// Use the pre-computed signed branch digest stored in the blob.
+	// This avoids loading the signing public key into the TPM on the normal boot path.
+	if len(sealedBlob.SignedBranchDigest) == 0 {
+		return nil, fmt.Errorf("sealed blob does not contain a signed branch digest (was sealed with an older version)")
 	}
-
-	signedBranchDigest, err := ComputeSignedBranchDigest(tpmDev, pubKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compute signed branch digest: %w", err)
-	}
+	signedBranchDigest := tpm2.TPM2BDigest{Buffer: sealedBlob.SignedBranchDigest}
 
 	// Build a Policy session via callback that satisfies:
 	//   1. PolicyPCR  (branch 1)
@@ -638,22 +633,15 @@ func UnsealWithPCRBranch(tpmDev transport.TPM, loadedObject *LoadSealedObjectRes
 // This is the recovery path when PCRs have changed, requiring the signing private key.
 // Uses tpm2.Policy() callback to build the full policy session just-in-time.
 func UnsealWithSignedBranch(tpmDev transport.TPM, loadedObject *LoadSealedObjectResponse, sealedBlob *SealedBlob, privateKeyPath string, debug bool) ([]byte, error) {
-	// Parse the signing public key from the blob
-	pubKey, err := ParsePublicKeyFromPEM(sealedBlob.SigningKeyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse signing public key from blob: %w", err)
-	}
-
-	// Load the private key for signing
+	// Load the private key for signing — the public key is derived from it.
+	// The blob no longer stores the public key PEM; only the signed branch digest.
 	privKey, err := LoadSigningPrivateKeyFromPEM(privateKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load private key: %w", err)
 	}
 
-	// Verify key pair matches
-	if err := verifyKeyPairMatch(pubKey, privKey); err != nil {
-		return nil, fmt.Errorf("key pair mismatch: %w", err)
-	}
+	// Derive the public key from the private key
+	pubKey := privKey.Public()
 
 	// Load the public key into TPM for PolicySigned verification.
 	// This must happen before the policy callback since the handle is captured.
@@ -664,19 +652,17 @@ func UnsealWithSignedBranch(tpmDev transport.TPM, loadedObject *LoadSealedObject
 	defer FlushHandle(tpmDev, loadRsp.ObjectHandle)
 
 	// We need BOTH branch digests for PolicyOR, and they must exactly match
-	// what was used at seal time. Recompute them now.
+	// what was used at seal time. Use the stored digests from the blob.
 	pcrBranchDigest, err := computePCRBranchDigestFromBlob(tpmDev, sealedBlob)
 	if err != nil {
 		return nil, fmt.Errorf("failed to recompute PCR branch digest: %w", err)
 	}
 
-	// Compute the signed branch digest via trial PolicySigned — this must
-	// match what was used at seal time (ComputeSignedBranchDigest).
-	// Reuse the already-loaded key handle to avoid TPM object memory exhaustion.
-	signedBranchDigestExpected, err := ComputeSignedBranchDigestWithHandle(tpmDev, loadRsp.ObjectHandle, loadRsp.Name, pubKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compute signed branch digest: %w", err)
+	// Use the pre-computed signed branch digest from the blob.
+	if len(sealedBlob.SignedBranchDigest) == 0 {
+		return nil, fmt.Errorf("sealed blob does not contain a signed branch digest (was sealed with an older version)")
 	}
+	signedBranchDigestExpected := tpm2.TPM2BDigest{Buffer: sealedBlob.SignedBranchDigest}
 
 	// Capture loaded key handle/name and private key for the closure
 	keyHandle := loadRsp.ObjectHandle
@@ -685,10 +671,7 @@ func UnsealWithSignedBranch(tpmDev transport.TPM, loadedObject *LoadSealedObject
 	if debug {
 		fmt.Printf("Unseal signed branch — TPM key name: %x\n", keyName.Buffer)
 		fmt.Printf("Unseal signed branch — PCR branch digest (recomputed from blob): %x\n", pcrBranchDigest.Buffer)
-		fmt.Printf("Unseal signed branch — signed branch digest (from trial PolicySigned): %x\n", signedBranchDigestExpected.Buffer)
-		// Also show what the old software-only computation would give, for diagnostics
-		swDigest := ComputeSignedBranchDigestFromName(keyName)
-		fmt.Printf("Unseal signed branch — signed branch digest (software-only, for comparison): %x\n", swDigest.Buffer)
+		fmt.Printf("Unseal signed branch — signed branch digest (from blob): %x\n", signedBranchDigestExpected.Buffer)
 	}
 
 	// Build a Policy session via callback that satisfies:
@@ -941,38 +924,6 @@ func PublicKeyDescription(pubKey crypto.PublicKey) string {
 	}
 }
 
-// VerifyPublicKeyMatch checks if the public key in a PEM file matches
-// the signing key stored in a sealed blob.
-func VerifyPublicKeyMatch(pemPath string, blobPEM []byte) error {
-	filePubKey, _, err := LoadSigningPublicKeyFromPEM(pemPath)
-	if err != nil {
-		return fmt.Errorf("failed to load public key from %s: %w", pemPath, err)
-	}
-
-	blobPubKey, err := ParsePublicKeyFromPEM(blobPEM)
-	if err != nil {
-		return fmt.Errorf("failed to parse blob signing key: %w", err)
-	}
-
-	match := false
-	switch fpk := filePubKey.(type) {
-	case *rsa.PublicKey:
-		if bpk, ok := blobPubKey.(*rsa.PublicKey); ok {
-			match = fpk.N.Cmp(bpk.N) == 0 && fpk.E == bpk.E
-		}
-	case *ecdsa.PublicKey:
-		if bpk, ok := blobPubKey.(*ecdsa.PublicKey); ok {
-			match = fpk.X.Cmp(bpk.X) == 0 && fpk.Y.Cmp(bpk.Y) == 0
-		}
-	}
-
-	if !match {
-		return fmt.Errorf("public key in %s does not match the signing key stored in the sealed blob", pemPath)
-	}
-
-	return nil
-}
-
 // extractPublicKeyFromSigner extracts the crypto.PublicKey from a crypto.Signer (private key).
 func extractPublicKeyFromSigner(privKey crypto.Signer) crypto.PublicKey {
 	return privKey.Public()
@@ -1077,9 +1028,9 @@ func UnsealWithSignedBranchFromBlob(tpmDev transport.TPM, nvramIndex uint32, pri
 		return nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
 
-	// Verify the blob has a signing key
-	if len(sealedBlob.SigningKeyPEM) == 0 {
-		return nil, fmt.Errorf("sealed blob does not contain a signing key (was sealed with an older version)")
+	// Verify the blob has a signed branch digest
+	if len(sealedBlob.SignedBranchDigest) == 0 {
+		return nil, fmt.Errorf("sealed blob does not contain a signed branch digest (was sealed with an older version)")
 	}
 
 	// Create primary key

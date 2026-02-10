@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/binary"
@@ -489,7 +490,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		{
 			name: "Basic blob (all register)",
 			blob: &SealedBlob{
-				Version:    4,
+				Version:    5,
 				AppVersion: "test-1.0.0",
 				Public:     []byte("public-data-test"),
 				Private:    []byte("private-data-test"),
@@ -497,13 +498,13 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest0")}},
 					{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest2")}},
 				},
-				SigningKeyPEM: []byte("test-signing-key-pem"),
+				SignedBranchDigest: make([]byte, 32),
 			},
 		},
 		{
 			name: "Blob with predict PCR source",
 			blob: &SealedBlob{
-				Version:    4,
+				Version:    5,
 				AppVersion: "test-predict",
 				Public:     []byte("public-predict"),
 				Private:    []byte("private-predict"),
@@ -513,7 +514,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				},
-				SigningKeyPEM: []byte("test-signing-key-pem"),
+				SignedBranchDigest: make([]byte, 32),
 				EventlogInfo: &EventlogInfo{
 					EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
 					EventlogHash:    "abc123",
@@ -524,9 +525,9 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			},
 		},
 		{
-			name: "Blob without signing key",
+			name: "Blob without signed branch digest",
 			blob: &SealedBlob{
-				Version:    4,
+				Version:    5,
 				AppVersion: "test-0.0.0",
 				Public:     []byte("public"),
 				Private:    []byte("private"),
@@ -538,7 +539,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		{
 			name: "Blob with multiple PCRs (all register)",
 			blob: &SealedBlob{
-				Version:    4,
+				Version:    5,
 				AppVersion: "v2.0.0",
 				Public:     []byte("test-public-key-data"),
 				Private:    []byte("test-private-key-data"),
@@ -549,13 +550,13 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				},
-				SigningKeyPEM: []byte("test-signing-key-pem"),
+				SignedBranchDigest: make([]byte, 32),
 			},
 		},
 		{
 			name: "Blob with empty PCR list",
 			blob: &SealedBlob{
-				Version:    4,
+				Version:    5,
 				AppVersion: "test",
 				Public:     []byte("pub"),
 				Private:    []byte("priv"),
@@ -565,7 +566,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		{
 			name: "Blob with all eventlog PCRs and eventlog info",
 			blob: &SealedBlob{
-				Version:    4,
+				Version:    5,
 				AppVersion: "test-eventlog",
 				Public:     []byte("public-data"),
 				Private:    []byte("private-data"),
@@ -574,7 +575,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					{Index: 2, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				},
-				SigningKeyPEM: []byte("test-signing-key-pem"),
+				SignedBranchDigest: make([]byte, 32),
 				EventlogInfo: &EventlogInfo{
 					EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
 					EventlogHash:    "abc123def456",
@@ -587,7 +588,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		{
 			name: "Blob with mixed register and eventlog PCRs",
 			blob: &SealedBlob{
-				Version:    4,
+				Version:    5,
 				AppVersion: "test-mixed",
 				Public:     []byte("public-mixed"),
 				Private:    []byte("private-mixed"),
@@ -597,7 +598,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				},
-				SigningKeyPEM: []byte("test-signing-key-pem"),
+				SignedBranchDigest: make([]byte, 32),
 				EventlogInfo: &EventlogInfo{
 					EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
 					EventlogHash:    "deadbeef",
@@ -610,7 +611,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		{
 			name: "Blob with single eventlog PCR",
 			blob: &SealedBlob{
-				Version:    4,
+				Version:    5,
 				AppVersion: "test-single-e",
 				Public:     []byte("pub"),
 				Private:    []byte("priv"),
@@ -681,8 +682,8 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 				}
 			}
 
-			if !bytes.Equal(unmarshaled.SigningKeyPEM, tt.blob.SigningKeyPEM) {
-				t.Errorf("SigningKeyPEM mismatch: expected %d bytes, got %d bytes", len(tt.blob.SigningKeyPEM), len(unmarshaled.SigningKeyPEM))
+			if !bytes.Equal(unmarshaled.SignedBranchDigest, tt.blob.SignedBranchDigest) {
+				t.Errorf("SignedBranchDigest mismatch: expected %d bytes, got %d bytes", len(tt.blob.SignedBranchDigest), len(unmarshaled.SignedBranchDigest))
 			}
 
 			// Check HasEventlogPCRs derived method
@@ -733,35 +734,44 @@ func TestUnmarshalSealedBlobInvalid(t *testing.T) {
 		},
 		{
 			name: "Version 1 incompatible",
-			data: func() []byte {
-				d := make([]byte, 20)
-				d[0] = 0x01 // version 1
-				return d
-			}(),
-			errContains: "incompatible blob version",
-		},
-		{
-			name: "Version 2 incompatible",
-			data: func() []byte {
-				d := make([]byte, 20)
-				d[0] = 0x02 // version 2
-				return d
-			}(),
-			errContains: "incompatible blob version",
-		},
-		{
-			name: "Version 99 incompatible",
-			data: func() []byte {
-				d := make([]byte, 20)
-				d[0] = 0x63 // version 99
-				return d
-			}(),
-			errContains: "incompatible blob version",
-		},
-		{
-			name: "Truncated data",
-			data: []byte{
-				0x04, 0x00, 0x00, 0x00, // version 4
+				data: func() []byte {
+					d := make([]byte, 20)
+					d[0] = 0x01 // version 1
+					return d
+				}(),
+				errContains: "incompatible blob version",
+			},
+			{
+				name: "Version 2 incompatible",
+				data: func() []byte {
+					d := make([]byte, 20)
+					d[0] = 0x02 // version 2
+					return d
+				}(),
+				errContains: "incompatible blob version",
+			},
+			{
+				name: "Version 4 incompatible",
+				data: func() []byte {
+					d := make([]byte, 20)
+					d[0] = 0x04 // version 4
+					return d
+				}(),
+				errContains: "incompatible blob version",
+			},
+			{
+				name: "Version 99 incompatible",
+				data: func() []byte {
+					d := make([]byte, 20)
+					d[0] = 0x63 // version 99
+					return d
+				}(),
+				errContains: "incompatible blob version",
+			},
+			{
+				name: "Truncated data",
+				data: []byte{
+					0x05, 0x00, 0x00, 0x00, // version 5
 				0x05, 0x00, 0x00, 0x00, // app version length 5
 				0x00, 0x00, 0x00, 0x00, // padding to pass minimum length check
 				0x00, 0x00, 0x00, 0x00, // more padding
@@ -996,8 +1006,8 @@ func TestUnmarshalIncompatibleVersion(t *testing.T) {
 	if !strings.Contains(err.Error(), "v1") {
 		t.Errorf("Expected error to mention found v1, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "v4") {
-		t.Errorf("Expected error to mention requires v4, got: %v", err)
+	if !strings.Contains(err.Error(), "v5") {
+		t.Errorf("Expected error to mention requires v5, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "tpm2-kira seal") {
 		t.Errorf("Expected error to suggest re-sealing, got: %v", err)
@@ -1485,7 +1495,7 @@ func TestPcrsToBitmapBytes(t *testing.T) {
 // TestSealedBlobMarshalJSON tests JSON serialization
 func TestSealedBlobMarshalJSON(t *testing.T) {
 	blob := &SealedBlob{
-		Version:    4,
+		Version:    5,
 		AppVersion: "test-1.0.0",
 		Public:     []byte{0x01, 0x02, 0x03},
 		Private:    []byte{0x04, 0x05, 0x06},
@@ -1493,7 +1503,7 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 			{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA, 0xBB}}},
 			{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xCC, 0xDD}}},
 		},
-		SigningKeyPEM: []byte("test-signing-key"),
+		SignedBranchDigest: []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20},
 	}
 
 	jsonData, err := blob.MarshalJSON()
@@ -1511,7 +1521,8 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 		`"public_hex"`,
 		`"private_hex"`,
 		`"pcr_digests"`,
-		`"signing_key_pem_size"`,
+		`"signed_branch_digest_hex"`,
+		`"signed_branch_digest_size"`,
 		`"source"`,
 	}
 
@@ -1534,11 +1545,14 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 		t.Errorf("JSON should NOT contain eventlog_based, got: %s", jsonStr)
 	}
 
-	// Ensure old password fields are NOT present
+	// Ensure old/removed fields are NOT present
 	unexpectedFields := []string{
 		`"password_hash_hex"`,
 		`"password_salt_hex"`,
 		`"has_password"`,
+		`"signing_key_pem_size"`,
+		`"signing_key_type"`,
+		`"signing_key_fingerprint"`,
 	}
 
 	for _, field := range unexpectedFields {
@@ -1560,13 +1574,14 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 // TestSealedBlobMarshalJSONWithEventlogInfo tests JSON serialization with eventlog info
 func TestSealedBlobMarshalJSONWithEventlogInfo(t *testing.T) {
 	blob := &SealedBlob{
-		Version:    4,
+		Version:    5,
 		AppVersion: "test-1.0.0",
 		Public:     []byte{0x01},
 		Private:    []byte{0x02},
 		PCRDigests: []PCRDigestPair{
 			{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA}}},
 		},
+		SignedBranchDigest: make([]byte, 32),
 		EventlogInfo: &EventlogInfo{
 			EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
 			EventlogHash:    "abc123",
@@ -1728,7 +1743,7 @@ func TestPCRHashAlgoMethods(t *testing.T) {
 func TestSealedBlobRoundTrip(t *testing.T) {
 	// Create a blob with realistic TPM data sizes and mixed sources
 	original := &SealedBlob{
-		Version:    4,
+		Version:    5,
 		AppVersion: "v1.2.3",
 		Public:     make([]byte, 100), // Typical public key size
 		Private:    make([]byte, 150), // Typical private key size
@@ -1738,7 +1753,7 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 			{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 		},
-		SigningKeyPEM: []byte("test-signing-key-round-trip"),
+		SignedBranchDigest: make([]byte, 32),
 		EventlogInfo: &EventlogInfo{
 			EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
 			EventlogHash:    "abcdef1234567890",
@@ -1788,8 +1803,8 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 	if !bytes.Equal(restored.Private, original.Private) {
 		t.Error("Private data mismatch")
 	}
-	if !bytes.Equal(restored.SigningKeyPEM, original.SigningKeyPEM) {
-		t.Error("SigningKeyPEM mismatch")
+	if !bytes.Equal(restored.SignedBranchDigest, original.SignedBranchDigest) {
+		t.Error("SignedBranchDigest mismatch")
 	}
 	// Verify per-PCR sources
 	for i := range original.PCRDigests {
@@ -1817,7 +1832,7 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 // TestSealedBlobRoundTripNoEventlog tests round trip with all-register PCRs (no eventlog info)
 func TestSealedBlobRoundTripNoEventlog(t *testing.T) {
 	original := &SealedBlob{
-		Version:    4,
+		Version:    5,
 		AppVersion: "v1.0.0",
 		Public:     []byte("pub-data"),
 		Private:    []byte("priv-data"),
@@ -2003,8 +2018,8 @@ func TestValidateNVRAMIndex(t *testing.T) {
 }
 
 func TestCurrentBlobVersion(t *testing.T) {
-	if CurrentBlobVersion != 4 {
-		t.Errorf("CurrentBlobVersion should be 4, got %d", CurrentBlobVersion)
+	if CurrentBlobVersion != 5 {
+		t.Errorf("CurrentBlobVersion should be 5, got %d", CurrentBlobVersion)
 	}
 }
 
@@ -2670,11 +2685,13 @@ func TestGenerateTOTPSecret(t *testing.T) {
 
 // TestSealDataWithSpecsValidation tests input validation in sealDataWithSpecs
 func TestSealDataWithSpecsValidation(t *testing.T) {
-	// Create a dummy public key and PEM for tests that need to reach later validations
-	dummyPubKeyPEM := []byte("dummy-pem-data")
+	// Create a dummy public key for tests that need to reach later validations
+	// (we use a non-nil interface value to pass the nil-check)
+	type dummyPubKey struct{}
+	var dummyKey crypto.PublicKey = &dummyPubKey{}
 
 	t.Run("Rejects empty PCR specs", func(t *testing.T) {
-		err := sealDataWithSpecs("/dev/null", []PCRSpec{}, 0x01803010, []byte("data"), nil, dummyPubKeyPEM, "", "", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/dev/null", []PCRSpec{}, 0x01803010, []byte("data"), nil, "", "", false, PCRHashAlgoSHA256)
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error for empty specs, got nil")
 		}
@@ -2685,7 +2702,7 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 
 	t.Run("Rejects empty data", func(t *testing.T) {
 		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
-		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte{}, nil, dummyPubKeyPEM, "", "", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte{}, dummyKey, "", "", false, PCRHashAlgoSHA256)
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error for empty data, got nil")
 		}
@@ -2696,7 +2713,7 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 
 	t.Run("Rejects nil data", func(t *testing.T) {
 		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
-		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, nil, nil, dummyPubKeyPEM, "", "", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, nil, dummyKey, "", "", false, PCRHashAlgoSHA256)
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error for nil data, got nil")
 		}
@@ -2705,11 +2722,11 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("Rejects empty signing key PEM", func(t *testing.T) {
+	t.Run("Rejects nil signing public key", func(t *testing.T) {
 		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
-		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte("test-data"), nil, []byte{}, "", "", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte("test-data"), nil, "", "", false, PCRHashAlgoSHA256)
 		if err == nil {
-			t.Error("sealDataWithSpecs() expected error for empty signing key, got nil")
+			t.Error("sealDataWithSpecs() expected error for nil signing key, got nil")
 		}
 		if !strings.Contains(err.Error(), "no signing public key provided") {
 			t.Errorf("sealDataWithSpecs() error = %q, want to contain 'no signing public key provided'", err.Error())
@@ -2718,7 +2735,7 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 
 	t.Run("Fails on invalid TPM path", func(t *testing.T) {
 		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
-		err := sealDataWithSpecs("/nonexistent/tpm/path", specs, 0x01803010, []byte("test-data"), nil, dummyPubKeyPEM, "", "", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/nonexistent/tpm/path", specs, 0x01803010, []byte("test-data"), dummyKey, "", "", false, PCRHashAlgoSHA256)
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error for invalid TPM path, got nil")
 		}

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"crypto"
 	"fmt"
 	"strings"
 
@@ -55,10 +56,10 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		return fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
 
-	// Verify the blob has a signing key (v4 format)
-	if len(sealedBlob.SigningKeyPEM) == 0 {
+	// Verify the blob has a signed branch digest (v5 format)
+	if len(sealedBlob.SignedBranchDigest) == 0 {
 		tpmDev.Close()
-		return fmt.Errorf("sealed blob does not contain a signing key. Re-seal with current version: tpm2-kira seal")
+		return fmt.Errorf("sealed blob does not contain a signed branch digest. Re-seal with current version: tpm2-kira seal")
 	}
 
 	// ── Resolve key paths: CLI flags take priority, then blob paths ──
@@ -140,18 +141,21 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	tpmDev.Close()
 
 	// ── Determine the public key for re-sealing ──
-	// Priority: --pubkey > blob pubkey path > derived from --privkey > blob's stored PEM
-	var resealPubKeyPEM []byte
+	// Priority: --pubkey > blob pubkey path > derived from --privkey > blob privkey path
+	// The blob no longer stores the public key PEM; a key source on the filesystem is required.
+	var resealPubKey crypto.PublicKey
 	var resealPubKeySource string
 	var resealPubKeyPathForBlob string
 	var resealPrivKeyPathForBlob string
 
 	if effectivePubKeyPath != "" {
 		// Explicit --pubkey (or blob path): load from the filesystem
-		_, resealPubKeyPEM, err = LoadSigningPublicKeyFromPEM(effectivePubKeyPath)
+		var loadedPubKey crypto.PublicKey
+		loadedPubKey, _, err = LoadSigningPublicKeyFromPEM(effectivePubKeyPath)
 		if err != nil {
 			return fmt.Errorf("failed to load signing public key from %s: %w", effectivePubKeyPath, err)
 		}
+		resealPubKey = loadedPubKey
 		resealPubKeySource = effectivePubKeyPath
 		resealPubKeyPathForBlob = effectivePubKeyPath
 	} else if effectivePrivKeyPath != "" {
@@ -160,30 +164,18 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		if loadErr != nil {
 			return fmt.Errorf("failed to load private key to derive public key: %w", loadErr)
 		}
-		resealPubKeyPEM, err = PublicKeyToPEM(privKey.Public())
-		if err != nil {
-			return fmt.Errorf("failed to encode public key as PEM: %w", err)
-		}
+		resealPubKey = privKey.Public()
 		resealPubKeySource = fmt.Sprintf("(derived from %s)", effectivePrivKeyPath)
 	} else {
-		// Neither --pubkey nor --privkey: preserve the blob's signing key
-		resealPubKeyPEM = sealedBlob.SigningKeyPEM
-		blobPubKey, parseErr := ParsePublicKeyFromPEM(sealedBlob.SigningKeyPEM)
-		if parseErr != nil {
-			return fmt.Errorf("failed to parse signing key from blob: %w", parseErr)
-		}
-		resealPubKeySource = fmt.Sprintf("(preserved from blob, fingerprint: %s)", PublicKeyFingerprint(blobPubKey))
+		// Neither --pubkey nor --privkey available: cannot reseal
+		return fmt.Errorf("cannot reseal: no signing key available.\n" +
+			"  Provide --pubkey <path> or --privkey <path>, or ensure the key paths\n" +
+			"  stored in the blob are accessible on the filesystem")
 	}
 
 	// Preserve the private key path for the new blob
 	if effectivePrivKeyPath != "" {
 		resealPrivKeyPathForBlob = effectivePrivKeyPath
-	}
-
-	// Parse the chosen public key for display and sealing
-	resealPubKey, err := ParsePublicKeyFromPEM(resealPubKeyPEM)
-	if err != nil {
-		return fmt.Errorf("failed to parse re-seal public key: %w", err)
 	}
 
 	// ── Display configuration and re-seal ──
@@ -264,7 +256,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	fmt.Printf("Signing key: %s (%s, fingerprint: %s)\n", resealPubKeySource, PublicKeyDescription(resealPubKey), PublicKeyFingerprint(resealPubKey))
 
 	// Reseal the data with the determined specs, preserving the original hash algorithm
-	if err := sealDataWithSpecs(tpmPath, specsToUse, nvramIndex, unsealedData, resealPubKey, resealPubKeyPEM, resealPubKeyPathForBlob, resealPrivKeyPathForBlob, debug, hashAlgo); err != nil {
+	if err := sealDataWithSpecs(tpmPath, specsToUse, nvramIndex, unsealedData, resealPubKey, resealPubKeyPathForBlob, resealPrivKeyPathForBlob, debug, hashAlgo); err != nil {
 		return fmt.Errorf("failed to reseal data: %w", err)
 	}
 

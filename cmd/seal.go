@@ -19,7 +19,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	}
 
 	// Load and validate the signing public key
-	pubKey, pubKeyPEM, err := LoadSigningPublicKeyFromPEM(pubKeyPath)
+	pubKey, _, err := LoadSigningPublicKeyFromPEM(pubKeyPath)
 	if err != nil {
 		return fmt.Errorf("failed to load signing public key: %w", err)
 	}
@@ -44,7 +44,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	}
 
 	// Seal the generated TOTP secret
-	if err := sealDataWithSpecs(tpmPath, specs, nvramIndex, dataToSeal, pubKey, pubKeyPEM, pubKeyPath, privKeyPath, debug, hashAlgo); err != nil {
+	if err := sealDataWithSpecs(tpmPath, specs, nvramIndex, dataToSeal, pubKey, pubKeyPath, privKeyPath, debug, hashAlgo); err != nil {
 		return err
 	}
 
@@ -69,7 +69,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 }
 
 // sealDataWithSpecs seals data using explicit PCR specs with PolicyOR (PCR + Signed branches)
-func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataToSeal []byte, pubKey crypto.PublicKey, pubKeyPEM []byte, pubKeyPath, privKeyPath string, debug bool, hashAlgo PCRHashAlgo) error {
+func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataToSeal []byte, pubKey crypto.PublicKey, pubKeyPath, privKeyPath string, debug bool, hashAlgo PCRHashAlgo) error {
 	if len(specs) == 0 {
 		return fmt.Errorf("no PCRs specified")
 	}
@@ -78,7 +78,7 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 		return fmt.Errorf("no data to seal")
 	}
 
-	if len(pubKeyPEM) == 0 {
+	if pubKey == nil {
 		return fmt.Errorf("no signing public key provided")
 	}
 
@@ -152,15 +152,15 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 
 	// Prepare sealed blob (Version 4: PolicyOR with signing key)
 	sealedBlob := &SealedBlob{
-		Version:        CurrentBlobVersion,
-		AppVersion:     AppVersion,
-		Public:         createRsp.Public,
-		Private:        createRsp.Private,
-		PCRDigests:     pcrDigests,
-		SigningKeyPEM:  pubKeyPEM,
-		EventlogInfo:   readResult.EventlogInfo,
-		PublicKeyPath:  pubKeyPath,
-		PrivateKeyPath: privKeyPath,
+		Version:            CurrentBlobVersion,
+		AppVersion:         AppVersion,
+		Public:             createRsp.Public,
+		Private:            createRsp.Private,
+		PCRDigests:         pcrDigests,
+		SignedBranchDigest: branches.SignedBranchDigest.Buffer,
+		EventlogInfo:       readResult.EventlogInfo,
+		PublicKeyPath:      pubKeyPath,
+		PrivateKeyPath:     privKeyPath,
 	}
 
 	// Marshal to bytes
