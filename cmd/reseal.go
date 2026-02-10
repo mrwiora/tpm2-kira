@@ -5,8 +5,79 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 )
+
+// FindPopulatedSlots probes the default slot range and returns the NVRAM
+// indices that contain data.  The check is lightweight – it only reads the
+// NV public area (no unsealing).
+func FindPopulatedSlots(tpmDev transport.TPM, debug bool) []uint32 {
+	var populated []uint32
+	for idx := uint32(NVRAMSlotStart); idx <= uint32(NVRAMSlotEnd); idx++ {
+		readPublic := tpm2.NVReadPublic{
+			NVIndex: tpm2.TPMHandle(idx),
+		}
+		resp, err := readPublic.Execute(tpmDev)
+		if err != nil {
+			// Slot does not exist – skip
+			continue
+		}
+		nvPub, err := resp.NVPublic.Contents()
+		if err != nil || nvPub.DataSize == 0 {
+			continue
+		}
+		if debug {
+			fmt.Printf("Found populated slot 0x%08X (%d bytes)\n", idx, nvPub.DataSize)
+		}
+		populated = append(populated, idx)
+	}
+	return populated
+}
+
+// ResealCommand is the top-level entry point for the reseal CLI command.
+// When nvramIndex is 0 it scans every default slot and reseals each one;
+// otherwise it reseals only the requested index.
+func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privKeyPath string, debug bool) error {
+	if nvramIndex != 0 {
+		// Single-slot mode – same behaviour as before
+		return Reseal(tpmPath, pcrsStr, nvramIndex, pubKeyPath, privKeyPath, debug)
+	}
+
+	// Multi-slot mode – discover populated slots, then reseal each one
+	tpmDev, err := transport.OpenTPM(tpmPath)
+	if err != nil {
+		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+	}
+	slots := FindPopulatedSlots(tpmDev, debug)
+	tpmDev.Close()
+
+	if len(slots) == 0 {
+		return fmt.Errorf("no sealed secrets found in NVRAM slots 0x%08X - 0x%08X", NVRAMSlotStart, NVRAMSlotEnd)
+	}
+
+	fmt.Printf("Found %d sealed slot(s) to reseal\n\n", len(slots))
+
+	var failed []uint32
+	for i, slotIdx := range slots {
+		slotNum := int(slotIdx - NVRAMSlotStart)
+		fmt.Printf("── Slot #%d (0x%08X) ─────────────────────────\n", slotNum, slotIdx)
+
+		if err := Reseal(tpmPath, pcrsStr, slotIdx, pubKeyPath, privKeyPath, debug); err != nil {
+			fmt.Printf("Error resealing slot #%d (0x%08X): %v\n", slotNum, slotIdx, err)
+			failed = append(failed, slotIdx)
+		}
+
+		if i < len(slots)-1 {
+			fmt.Println()
+		}
+	}
+
+	if len(failed) > 0 {
+		return fmt.Errorf("%d of %d slot(s) failed to reseal", len(failed), len(slots))
+	}
+	return nil
+}
 
 // Reseal unseals data from TPM NVRAM and reseals with current PCR values.
 //

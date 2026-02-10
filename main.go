@@ -116,7 +116,22 @@ func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 		}
 	}
 
-	if err := cmd.Reseal(*tpm, *pcrs, uint32(*nvram), *pubKeyPath, *privKeyPath, *debug); err != nil {
+	// Check if --nvram was explicitly provided
+	nvramProvided := false
+	for _, arg := range args {
+		if arg == "--nvram" || arg == "-nvram" {
+			nvramProvided = true
+			break
+		}
+	}
+
+	// Use special value 0 to indicate "scan all" when flag not provided
+	scanIndex := uint32(*nvram)
+	if !nvramProvided {
+		scanIndex = 0 // Signal to scan all slots
+	}
+
+	if err := cmd.ResealCommand(*tpm, scanIndex, *pcrs, *pubKeyPath, *privKeyPath, *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
