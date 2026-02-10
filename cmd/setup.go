@@ -12,7 +12,8 @@ import (
 
 // Setup performs initial tpm2-kira configuration:
 //  1. Checks whether the keys directory already exists.
-//     If it does, the system is considered already configured and setup aborts.
+//     If it does, the system is considered already configured — an
+//     informational message is printed and setup returns successfully (exit 0).
 //  2. Creates the directory (including parents) and generates a P-256 ECDSA
 //     key pair as seal.pub / seal.key.
 //  3. Calls the equivalent of "tpm2-kira seal --pcrs 0,7" using the freshly
@@ -23,12 +24,10 @@ func Setup(tpmPath string, nvramIndex uint32, debug bool) error {
 
 	// ── Step 1: Check if keys directory already exists ──
 	if info, err := os.Stat(DefaultKeysDir); err == nil && info.IsDir() {
-		return fmt.Errorf(
-			"tpm2-kira has been already configured (directory %s exists).\n"+
-				"  Further configuration must be done manually.\n"+
-				"  Use 'tpm2-kira seal', 'tpm2-kira reseal', or edit the keys directly.",
-			DefaultKeysDir,
-		)
+		fmt.Printf("tpm2-kira has been already configured (directory %s exists).\n", DefaultKeysDir)
+		fmt.Println("  Further configuration must be done manually.")
+		fmt.Println("  Use 'tpm2-kira seal', 'tpm2-kira reseal', or edit the keys directly.")
+		return nil
 	}
 
 	// ── Step 2: Create directory and generate P-256 key pair ──
