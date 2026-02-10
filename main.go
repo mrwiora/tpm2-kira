@@ -148,7 +148,22 @@ func runInfo(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 
 	fs.Parse(args)
 
-	if err := cmd.InfoWithFormat(*tpm, uint32(*nvram), *debug, *jsonOutput); err != nil {
+	// Check if --nvram was explicitly provided
+	nvramProvided := false
+	for _, arg := range args {
+		if arg == "--nvram" || arg == "-nvram" {
+			nvramProvided = true
+			break
+		}
+	}
+
+	// Use special value 0 to indicate "scan all" when flag not provided
+	scanIndex := uint32(*nvram)
+	if !nvramProvided {
+		scanIndex = 0 // Signal to scan all slots
+	}
+
+	if err := cmd.InfoCommand(*tpm, scanIndex, *debug, *jsonOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
