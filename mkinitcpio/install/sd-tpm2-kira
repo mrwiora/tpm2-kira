@@ -12,26 +12,9 @@ build() {
     # Add systemd service dependency
     add_systemd_unit tpm2-kira.service
 
-    # Run tpm2-kira setup to ensure keys exist and a secret is sealed.
-    # On first run this generates a P-256 key pair in /var/lib/tpm2-kira/keys/
-    # and seals a TOTP secret with PCRs 0,7.
-    # If already configured, setup exits with an informational message and we
-    # continue normally — the initramfs build is never blocked.
-    if command -v tpm2-kira &> /dev/null; then
-        if output=$(tpm2-kira setup 2>&1); then
-            echo "tpm2-kira: initial setup completed successfully"
-        else
-            if echo "$output" | grep -q "already configured"; then
-                echo "tpm2-kira: already configured, skipping setup"
-            else
-                warning "tpm2-kira setup failed: $output"
-                warning "You may need to run 'tpm2-kira setup' manually"
-            fi
-        fi
-    else
-        error "tpm2-kira binary not found — cannot perform setup"
-        return 1
-    fi
+    # Run tpm2-kira setup to fullfil initial setup or skip, as already configured
+    tpm2-kira setup
+
 }
 
 help() {
