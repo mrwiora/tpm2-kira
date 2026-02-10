@@ -103,8 +103,8 @@ func runReseal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy (if not specified, preserves original selection)")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
-	pubKeyPath := fs.String("pubkey", cmd.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
-	privKeyPath := fs.String("privkey", cmd.DefaultPrivateKeyPath, "Path to signing private key PEM for PolicySigned recovery")
+	pubKeyPath := fs.String("pubkey", "", "Path to signing public key PEM (default: derived from --privkey, or preserved from blob)")
+	privKeyPath := fs.String("privkey", "", "Path to signing private key PEM (required when PCR values have changed)")
 
 	fs.Parse(args)
 
@@ -301,10 +301,11 @@ SEAL OPTIONS:
 RESEAL OPTIONS:
   --pcrs INDICES     New PCR indices with optional source suffix (optional,
                      preserves original selection and per-PCR sources if omitted)
-  --pubkey PATH      Path to signing public key PEM (default: %s)
-  --privkey PATH     Path to signing private key PEM for PolicySigned recovery
-                     (default: %s)
-                     Required when PCR values have changed since last seal/reseal
+  --pubkey PATH      Path to signing public key PEM for re-sealing (optional)
+                     Default: derived from --privkey, or preserved from blob
+                     Use this to change the signing key during reseal
+  --privkey PATH     Path to signing private key PEM (required when PCRs changed)
+                     The TPM verifies the signature via PolicySigned
 
 INFO OPTIONS:
   --json             Output as JSON
@@ -342,5 +343,5 @@ EXAMPLES:
   tpm2-kira nvram list
 
 For detailed documentation, see README.md
-`, cmd.DefaultPublicKeyPath, cmd.DefaultPublicKeyPath, cmd.DefaultPrivateKeyPath)
+`, cmd.DefaultPublicKeyPath)
 }
