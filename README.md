@@ -1,210 +1,364 @@
-# Installation Guide for tpm2-kira
+# tpm2-kira
 
-## Overview
+A TPM 2.0-based TOTP authenticator that binds one-time passwords to your machine's boot state. If someone tampers with your firmware, bootloader, or Secure Boot configuration, the TPM refuses to release the TOTP secret — and you'll know something is wrong before you type your disk encryption passphrase.
 
-`tpm2-kira` is a TPM2-based TOTP authenticator that can be installed on:
-- **Arch Linux** and derivatives (Manjaro, EndeavourOS, etc.)
+**Successor to [tpm2-totp](https://github.com/tpm2-software/tpm2-totp).**
 
-It is the successor of tpm2-totp and currently in alpha phase. Please use with CAUTION!
+> [!CAUTION]
+> tpm2-kira is currently in **alpha**. Expect breaking changes between versions. Back up your TOTP secrets before upgrading.
 
-## Security
+## How It Works
 
-This project uses automated AI-powered penetration testing with [Strix](https://strix.ai) to identify and validate security vulnerabilities on pull requests from branches ending with "pentest". For more information, see our [Security Policy](SECURITY.md).
+tpm2-kira generates a TOTP secret and seals it inside TPM NVRAM, protected by a **PolicyOR** with two branches:
 
-## System Requirements
+| Branch | When it works | Purpose |
+|--------|--------------|---------|
+| **PCR** | Boot measurements match the values recorded at seal time | Normal daily use — no keys or passwords needed |
+| **PolicySigned** | You have the signing private key | Recovery after firmware/kernel/bootloader updates change PCR values |
 
-### Hardware Requirements
-- **TPM 2.0** chip (hardware TPM recommended, software TPM supported for testing)
-- x86_64, i686, aarch64, or armv7h architecture
+On every boot, tpm2-kira asks the TPM to unseal the secret. If PCRs still match, you get a valid TOTP code. Compare it with the code in your authenticator app — if they match, your boot chain is intact.
 
-### Software Requirements
-- Linux kernel with TPM 2.0 support
-- TPM 2.0 Software Stack (TSS 2.x)
-- TPM 2.0 tools
+When a system update changes PCR values (kernel update, initramfs rebuild, Secure Boot key rotation, etc.), the PCR branch fails. You use `reseal` with your signing key to re-seal the secret against the new PCR values.
 
-## Pre-Installation Setup
+For more details on the cryptographic design, see [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md).
 
-### 1. Enable TPM in BIOS/UEFI
-1. Boot into your system's BIOS/UEFI settings
-2. Navigate to Security settings
-3. Enable TPM 2.0 (may be called "Security Chip" or "fTPM")
-4. Save and reboot
+## Requirements
 
-### 2. Verify TPM Availability
+**Hardware:**
+- TPM 2.0 (discrete or firmware TPM)
+
+**Software:**
+- Linux with TPM 2.0 kernel support (`/dev/tpm0` or `/dev/tpmrm0`)
+- Go ≥ 1.25 (build only)
+
+**Supported architectures:** x86_64, aarch64
+
+## Quick Start
+
 ```bash
-# Check if TPM device exists
-ls /dev/tpm*
-
-# Should show: /dev/tpm0 and possibly /dev/tpmrm0
-
-# Check TPM version
-sudo dmesg | grep -i tpm
-```
-
-## Installation Methods
-
-### Arch Linux Installation
-
-#### Method 1: Build from Source
-```bash
-# Install build dependencies
-sudo pacman -S base-devel go git tpm2-tools tpm2-tss
-
-# Clone repository
+# Build
 git clone https://github.com/mrwiora/tpm2-kira.git
 cd tpm2-kira
+make build
 
-# Build package
-cd packaging/aur
-makepkg
+# Install
+sudo make install
 
-# Install built package
-sudo pacman -U tpm2-kira-*.pkg.tar.zst
-```
+# First-time setup: generates signing keys + seals a TOTP secret (PCRs 0,7)
+sudo tpm2-kira setup
 
-## Post-Installation Setup
-
-### 1. Verify Installation
-```bash
-# Check version
-tpm2-kira version
-
-# Test TPM access
-tpm2-kira nvram list
-
-# Check TPM status
-tpm2-kira info
-```
-
-### 2. Initial Setup
-```bash
-# Seal your first TOTP secret (you'll be prompted for an optional password)
-tpm2-kira seal
-
-# The command will display a QR code and secret key
-# Add this to your authenticator app (Google Authenticator, Authy, etc.)
-
-# Test TOTP generation
+# Show the current TOTP code
 tpm2-kira reveal
 ```
 
-## Integration Options
+`setup` creates an ECDSA P-256 key pair at `/var/lib/tpm2-kira/keys/` and seals a TOTP secret bound to PCRs 0 and 7. Scan the QR code it prints with your authenticator app.
 
-### Early Boot Integration (Optional)
+## Installation
 
-For using tpm2-kira during early boot (e.g., for disk encryption):
+### Build from Source
 
-#### Arch Linux with mkinitcpio
 ```bash
-# Edit mkinitcpio configuration
-sudo nano /etc/mkinitcpio.conf
+sudo pacman -S base-devel go git    # Arch
+# or
+sudo apt install build-essential golang git    # Debian/Ubuntu
 
-# For systemd-based initramfs:
-# HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
+git clone https://github.com/mrwiora/tpm2-kira.git
+cd tpm2-kira
+make build
+sudo make install
+```
 
-# Rebuild initramfs
+### Arch Linux (AUR)
+
+```bash
+cd packaging/aur
+makepkg -si
+```
+
+Or use your preferred AUR helper.
+
+### Verify
+
+```bash
+tpm2-kira version
+```
+
+## Commands
+
+If called without a command, tpm2-kira defaults to `reveal`.
+
+| Command | Description |
+|---------|-------------|
+| `setup` | One-time initial setup: generate signing keys + seal a secret (PCRs 0,7) |
+| `seal` | Generate and seal a new TOTP secret with custom PCR selection |
+| `reseal` | Re-seal the existing secret against current PCR values |
+| `reveal` | Show the current TOTP code (colored output) |
+| `reveal-plain` | Show the current TOTP code (plain text, for scripts) |
+| `run` | Continuously display TOTP codes (useful during boot) |
+| `info` | Display metadata about the sealed secret (`--json` for machine-readable output) |
+| `nvram list` | List NVRAM indices |
+| `nvram status` | Show NVRAM index status |
+| `nvram delete` | Delete sealed data from NVRAM |
+| `pcrtips` | PCR reference guide — what each register measures |
+| `version` | Print version |
+
+## Global Options
+
+```
+--tpm PATH       TPM device path (default: /dev/tpm0)
+--nvram INDEX    NVRAM slot: 0-15 maps to 0x01803010-0x0180301F,
+                 or specify a full hex index like 0x01803010.
+                 When omitted, commands auto-discover populated slots.
+--debug          Verbose output
+```
+
+## Sealing Secrets
+
+### Basic seal
+
+```bash
+# Uses default PCRs 0,2,7 read from TPM registers
+tpm2-kira seal
+```
+
+### Custom PCRs
+
+Each PCR index can have a **source suffix** that controls where the value comes from:
+
+| Suffix | Source | Example | Notes |
+|--------|--------|---------|-------|
+| *(none)* or `r` | TPM register | `0`, `7r` | Reads current live value from the TPM |
+| `e` | Eventlog | `0e`, `7e` | Calculates from `/sys/kernel/security/tpm0/binary_bios_measurements` (PCRs 0–12) |
+| `p:CMD` | External predictor | `11p:tpm2-pcr11predict` | Runs CMD, expects a hex digest on stdout (PCR 11 only) |
+
+You can mix sources freely:
+
+```bash
+# PCR 0 and 7 from eventlog, PCR 2 from register
+tpm2-kira seal --pcrs "0e,2,7e"
+
+# Add a predicted PCR 11
+tpm2-kira seal --pcrs "0e,2e,7e,11p:tpm2-pcr11predict"
+```
+
+### SHA-1 fallback
+
+If your firmware doesn't provide SHA-256 eventlog digests:
+
+```bash
+tpm2-kira seal --sha1 --pcrs "0e,2e,7e"
+```
+
+### Custom signing keys
+
+By default, `setup` generates keys at `/var/lib/tpm2-kira/keys/`. You can supply your own (RSA-2048, ECDSA P-256, or ECDSA P-384):
+
+```bash
+tpm2-kira seal --pubkey /path/to/key.pub --privkey /path/to/key.pem
+```
+
+Both key paths are stored in the sealed blob so that `reseal` can find them automatically.
+
+### Multiple slots
+
+tpm2-kira supports up to 16 NVRAM slots (0–15). Useful if you need separate secrets for different purposes:
+
+```bash
+tpm2-kira seal --nvram 0
+tpm2-kira seal --nvram 1 --pcrs "0e,2e,7e"
+
+tpm2-kira reveal --nvram 0
+tpm2-kira reveal --nvram 1
+```
+
+## Resealing After Updates
+
+When PCR values change (kernel update, initramfs rebuild, firmware update), the PCR branch will fail and `reveal` won't produce a valid code. Reseal to bind the secret to the new values:
+
+```bash
+# Auto-discovers the signing key from the stored blob metadata
+tpm2-kira reseal
+
+# Or specify the key explicitly
+tpm2-kira reseal --privkey /var/lib/tpm2-kira/keys/seal.key
+```
+
+You can also change the PCR selection during reseal:
+
+```bash
+tpm2-kira reseal --pcrs "0e,2,4,7e"
+```
+
+## Inspecting Sealed Data
+
+```bash
+tpm2-kira info
+tpm2-kira info --nvram 0
+tpm2-kira info --json          # machine-readable
+```
+
+## Deleting Sealed Data
+
+```bash
+tpm2-kira nvram delete              # deletes all populated slots
+tpm2-kira nvram delete --nvram 0    # deletes a specific slot
+```
+
+## Early Boot Integration (Arch Linux / mkinitcpio)
+
+tpm2-kira can display TOTP codes during early boot — before you enter your disk encryption passphrase. This way you can verify the system hasn't been tampered with before typing your LUKS password.
+
+### Install the hooks
+
+```bash
+sudo make install-mkinitcpio
+```
+
+This installs:
+- `sd-tpm2-kira` — mkinitcpio install hook (systemd-based initramfs)
+- A **post-generation hook** that automatically runs `tpm2-kira reseal` after every initramfs rebuild
+
+### Configure mkinitcpio
+
+Edit `/etc/mkinitcpio.conf` and add the hook **before** your encrypt hook:
+
+```bash
+# Systemd-based initramfs (recommended):
+HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
+```
+
+Then rebuild:
+
+```bash
 sudo mkinitcpio -P
 ```
 
-## Configuration
+The post-generation hook will automatically reseal so the next boot matches.
 
-### Default Configuration
-- TPM Device: `/dev/tpm0`
-- NVRAM Index: `0x01803010`
-- Default PCRs: `0,2,4,7` (firmware, boot config, bootloader, Secure Boot)
+### How it works at boot
 
-### Custom Configuration
+A systemd service (`tpm2-kira.service`) starts before the disk unlock prompt and runs `tpm2-kira run`, which continuously displays TOTP codes. Compare what's on screen with your authenticator app. If they match, your boot chain is clean — go ahead and type your LUKS passphrase.
+
+See [mkinitcpio/mkinitcpio.conf.example](mkinitcpio/mkinitcpio.conf.example) for more HOOKS configurations (LVM, multiple encrypted devices, etc.).
+
+## Eventlog PCR Calculator
+
+The included Python script `calculate.py` can independently calculate PCR values from a TPM eventlog YAML file. Useful for debugging PCR mismatches:
+
 ```bash
-# Use different TPM device (you'll be prompted for password)
-tpm2-kira --tpm /dev/tpmrm0 seal
+# Calculate all PCRs from an eventlog
+python3 calculate.py /path/to/eventlog.yaml
 
-# Use different NVRAM index (you'll be prompted for password)
-tpm2-kira --nvram 0x01800001 seal
-
-# Use different PCRs (you'll be prompted for password)
-tpm2-kira seal --pcrs "0,1,2,3,7"
+# Calculate a specific PCR
+python3 calculate.py /path/to/eventlog.yaml 7
 ```
 
-## Common Workflows
+Requires PyYAML (`pip install pyyaml`).
 
-### Daily Usage
+## Testing
+
 ```bash
-# Generate TOTP code
-tpm2-kira reveal
+# Unit tests (no TPM required)
+make test-unit
 
-# If PCRs changed (after system update), you'll be prompted for password:
-tpm2-kira reveal
-```
+# Integration tests (requires swtpm + socat)
+# Install: sudo apt install swtpm swtpm-tools socat
+#      or: sudo pacman -S swtpm socat
+make test-integration
 
-### After System Updates
-```bash
-# Check if reseal is needed
-tpm2-kira info
-
-# Reseal with current PCR values (you'll be prompted for password)
-tpm2-kira reseal
-```
-
-### Backup and Recovery
-```bash
-# Display secret information for backup
-tpm2-kira info
-
-# After hardware change or TPM reset:
-# 1. Import secret to new authenticator app
-# 2. Seal new secret (you'll be prompted for password):
-tpm2-kira seal
+# Everything
+make test-all
 ```
 
 ## Troubleshooting
 
-### Permission Issues
+**TPM device not found:**
 ```bash
-# Check TPM device permissions
 ls -la /dev/tpm*
-```
-
-### TPM Access Issues
-```bash
-# Test basic TPM functionality
-tpm2_getrandom 8
-
-# Check TPM ownership
-tpm2_getcap properties-fixed
-
-# Clear TPM if necessary (CAUTION: destroys all TPM data)
-# tpm2_clear
-```
-
-### PCR Issues
-```bash
-# Check current PCR values
-tpm2_pcrread
-
-# Compare with sealed values
-tpm2-kira info
-
-# Reseal after updates (you'll be prompted for password)
-tpm2-kira reseal
-```
-
-### General Debugging
-```bash
-# Enable debug output
-tpm2-kira --debug reveal
-
-# Check system logs
-journalctl -u tpm2-kira
 sudo dmesg | grep -i tpm
 ```
+Ensure TPM 2.0 is enabled in your BIOS/UEFI settings.
 
-## Uninstallation
-
-### Arch Linux
+**Permission denied on `/dev/tpm0`:**
 ```bash
-# Remove package
-sudo pacman -R tpm2-kira
+# Check current permissions
+ls -la /dev/tpm0
 
-# Clean up TPM data (optional)
-tpm2-kira nvram delete  # Run before uninstalling
+# Your user needs access — either run as root or add a udev rule
 ```
+
+**TOTP code doesn't match after update:**
+```bash
+tpm2-kira reseal
+```
+If reseal also fails, check `tpm2-kira info` to see which PCRs changed and verify you have the correct signing key available.
+
+**Debug output:**
+```bash
+tpm2-kira --debug reveal
+```
+
+**Check current PCR values vs. sealed values:**
+```bash
+tpm2-kira info            # shows what was sealed
+tpm2-kira pcrtips         # explains what each PCR measures
+```
+
+## Uninstall
+
+```bash
+# Remove sealed data first
+tpm2-kira nvram delete
+
+# Remove binary
+sudo make uninstall
+
+# Remove mkinitcpio hooks (if installed)
+sudo make uninstall-mkinitcpio
+sudo mkinitcpio -P
+
+# Optionally remove signing keys
+sudo rm -rf /var/lib/tpm2-kira
+```
+
+On Arch:
+```bash
+tpm2-kira nvram delete
+sudo pacman -R tpm2-kira
+```
+
+## Project Structure
+
+```
+├── main.go                  # CLI entrypoint and command routing
+├── cmd/                     # Command implementations
+│   ├── seal.go              # Seal TOTP secret into TPM
+│   ├── reseal.go            # Re-seal with new PCR values
+│   ├── setup.go             # First-time setup (keygen + seal)
+│   ├── info.go              # Inspect sealed blob metadata
+│   ├── scan.go              # Multi-slot NVRAM scanning
+│   ├── blob.go              # Sealed blob serialization format
+│   ├── policy_or.go         # PolicyOR digest computation
+│   ├── eventlog_utils.go    # TPM eventlog parsing
+│   ├── predict_utils.go     # External PCR prediction
+│   ├── totp_utils.go        # TOTP generation and display
+│   ├── tpm_utils.go         # Low-level TPM operations
+│   ├── pcrtips.go           # PCR reference information
+│   └── constants.go         # Default paths and constants
+├── calculate.py             # Standalone eventlog PCR calculator
+├── mkinitcpio/              # Early boot hooks for Arch Linux
+│   ├── install/sd-tpm2-kira # mkinitcpio install hook
+│   ├── post/sd-tpm2-kira    # Post-generation reseal hook
+│   └── mkinitcpio.conf.example
+├── systemd/system/          # systemd service for boot-time TOTP display
+├── packaging/aur/           # Arch Linux PKGBUILD
+└── Makefile
+```
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy and [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md) for an in-depth description of the cryptographic design, threat model, and trust boundaries.
+
+## License
+
+BSD 3-Clause — see [LICENSE](LICENSE).
