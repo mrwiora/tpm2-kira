@@ -36,6 +36,8 @@ func main() {
 	}
 
 	switch command {
+	case "setup":
+		runSetup(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "seal":
 		runSeal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "reseal":
@@ -84,6 +86,23 @@ func resolveOrScanAll(rawValue uint32, provided bool) uint32 {
 		return 0 // scan all slots
 	}
 	return cmd.ResolveNVRAMIndex(rawValue)
+}
+
+func runSetup(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
+	fs := flag.NewFlagSet("setup", flag.ExitOnError)
+
+	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
+	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
+	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+
+	fs.Parse(args)
+
+	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
+
+	if err := cmd.Setup(*tpm, sealIndex, *debug); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(0)
+	}
 }
 
 func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -258,6 +277,7 @@ USAGE:
   tpm2-kira <command> [options]
 
 COMMANDS:
+  setup       Initial setup: generate P-256 signing keys and seal (PCRs 0,7)
   seal        Generate and seal TOTP secret to TPM NVRAM
   reseal      Reseal secret with current PCR values (requires signing key)
   reveal      Generate TOTP code with colored KIRA format
@@ -325,7 +345,18 @@ AUTHENTICATION:
   No password authentication is used. Recovery after PCR changes requires
   the signing private key.
 
+SETUP OPTIONS:
+  --tpm PATH      Path to TPM device (default: /dev/tpm0)
+  --nvram INDEX   NVRAM slot number or full index (default: 0x01803010)
+  --debug         Enable debug output
+
+  Setup creates /var/lib/tpm2-kira/keys/ with a fresh ECDSA P-256 key pair
+  (seal.pub + seal.key) and seals a TOTP secret using PCRs 0,7.
+  If the keys directory already exists, setup aborts — further changes must
+  be made manually via 'seal' or 'reseal'.
+
 EXAMPLES:
+  tpm2-kira setup
   tpm2-kira seal
   tpm2-kira seal --nvram 0
   tpm2-kira seal --pcrs "0e,2e,7e"
