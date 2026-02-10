@@ -167,18 +167,18 @@ func (s PCRSource) Suffix() string {
 // Maximum size constraints for blob deserialization to prevent memory exhaustion.
 // These limits are generous for legitimate use while blocking malicious allocations.
 const (
-	MaxBlobSize      = 10 * 1024 * 1024 // 10MB maximum total blob size
-	MaxAppVersionLen = 1024             // 1KB maximum app version string
-	MaxPublicLen     = 2 * 1024 * 1024  // 2MB maximum public blob
-	MaxPrivateLen    = 2 * 1024 * 1024  // 2MB maximum private blob
-	MaxPCRDigests    = 100              // Maximum 100 PCR digest entries
-	MaxDigestSize    = 1024             // Maximum 1KB per individual digest
-	MaxCommandLen    = 4096             // Maximum 4KB for predict command string
-	MaxEventlogPath  = 4096             // Maximum 4KB for eventlog path
-	MaxEventlogHash  = 128              // Maximum 128 bytes for hash string
-	MaxCalcTime      = 256              // Maximum 256 bytes for timestamp
-	MaxSignedBranchDigest = 64          // Maximum 64 bytes for signed branch digest (SHA-256 = 32 bytes)
-	MaxKeyPathLen    = 4096             // 4KB maximum for key filesystem paths
+	MaxBlobSize           = 10 * 1024 * 1024 // 10MB maximum total blob size
+	MaxAppVersionLen      = 1024             // 1KB maximum app version string
+	MaxPublicLen          = 2 * 1024 * 1024  // 2MB maximum public blob
+	MaxPrivateLen         = 2 * 1024 * 1024  // 2MB maximum private blob
+	MaxPCRDigests         = 100              // Maximum 100 PCR digest entries
+	MaxDigestSize         = 1024             // Maximum 1KB per individual digest
+	MaxCommandLen         = 4096             // Maximum 4KB for predict command string
+	MaxEventlogPath       = 4096             // Maximum 4KB for eventlog path
+	MaxEventlogHash       = 128              // Maximum 128 bytes for hash string
+	MaxCalcTime           = 256              // Maximum 256 bytes for timestamp
+	MaxSignedBranchDigest = 64               // Maximum 64 bytes for signed branch digest (SHA-256 = 32 bytes)
+	MaxKeyPathLen         = 4096             // 4KB maximum for key filesystem paths
 )
 
 // PCRDigestPair represents a PCR index paired with its digest value
@@ -201,15 +201,15 @@ type EventlogInfo struct {
 // SealedBlob represents the complete sealed data structure
 // Version 5: PolicyOR-based authentication with signed branch digest instead of public key PEM
 type SealedBlob struct {
-	Version             uint32          `json:"version"`                    // Blob format version (must be 5)
-	AppVersion          string          `json:"app_version"`                // Application version that created this blob
-	Public              []byte          `json:"public"`                     // TPM public key blob
-	Private             []byte          `json:"private"`                    // TPM private key blob
-	PCRDigests          []PCRDigestPair `json:"pcr_digests"`                // PCR indices with their source and digest values
-	SignedBranchDigest  []byte          `json:"signed_branch_digest"`       // Pre-computed PolicySigned branch digest (SHA-256, 32 bytes)
-	EventlogInfo        *EventlogInfo   `json:"eventlog_info"`              // Eventlog calculation metadata (if any PCR uses eventlog)
-	PublicKeyPath       string          `json:"public_key_path,omitempty"`  // Filesystem path to signing public key (stored for reseal convenience)
-	PrivateKeyPath      string          `json:"private_key_path,omitempty"` // Filesystem path to signing private key (stored for reseal convenience)
+	Version            uint32          `json:"version"`                    // Blob format version (must be 5)
+	AppVersion         string          `json:"app_version"`                // Application version that created this blob
+	Public             []byte          `json:"public"`                     // TPM public key blob
+	Private            []byte          `json:"private"`                    // TPM private key blob
+	PCRDigests         []PCRDigestPair `json:"pcr_digests"`                // PCR indices with their source and digest values
+	SignedBranchDigest []byte          `json:"signed_branch_digest"`       // Pre-computed PolicySigned branch digest (SHA-256, 32 bytes)
+	EventlogInfo       *EventlogInfo   `json:"eventlog_info"`              // Eventlog calculation metadata (if any PCR uses eventlog)
+	PublicKeyPath      string          `json:"public_key_path,omitempty"`  // Filesystem path to signing public key (stored for reseal convenience)
+	PrivateKeyPath     string          `json:"private_key_path,omitempty"` // Filesystem path to signing private key (stored for reseal convenience)
 }
 
 // GetHashAlgo infers the PCR hash algorithm from the stored digest sizes.
@@ -749,19 +749,19 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 
 	// Create a JSON-friendly structure
 	type SealedBlobJSON struct {
-		Version              uint32          `json:"version"`
-		AppVersion           string          `json:"app_version"`
-		HashAlgorithm        string          `json:"hash_algorithm"`
-		Public               string          `json:"public_hex"`
-		PublicSize           int             `json:"public_size"`
-		Private              string          `json:"private_hex"`
-		PrivateSize          int             `json:"private_size"`
-		PCRDigests           []PCRDigestJSON `json:"pcr_digests"`
-		SignedBranchDigest   string          `json:"signed_branch_digest_hex"`
-		SignedBranchDigestSize int           `json:"signed_branch_digest_size"`
-		PublicKeyPath        string          `json:"public_key_path,omitempty"`
-		PrivateKeyPath       string          `json:"private_key_path,omitempty"`
-		EventlogInfo         *EventlogInfo   `json:"eventlog_info,omitempty"`
+		Version                uint32          `json:"version"`
+		AppVersion             string          `json:"app_version"`
+		HashAlgorithm          string          `json:"hash_algorithm"`
+		Public                 string          `json:"public_hex"`
+		PublicSize             int             `json:"public_size"`
+		Private                string          `json:"private_hex"`
+		PrivateSize            int             `json:"private_size"`
+		PCRDigests             []PCRDigestJSON `json:"pcr_digests"`
+		SignedBranchDigest     string          `json:"signed_branch_digest_hex"`
+		SignedBranchDigestSize int             `json:"signed_branch_digest_size"`
+		PublicKeyPath          string          `json:"public_key_path,omitempty"`
+		PrivateKeyPath         string          `json:"private_key_path,omitempty"`
+		EventlogInfo           *EventlogInfo   `json:"eventlog_info,omitempty"`
 	}
 
 	jsonBlob := SealedBlobJSON{

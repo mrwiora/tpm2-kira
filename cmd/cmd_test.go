@@ -734,44 +734,44 @@ func TestUnmarshalSealedBlobInvalid(t *testing.T) {
 		},
 		{
 			name: "Version 1 incompatible",
-				data: func() []byte {
-					d := make([]byte, 20)
-					d[0] = 0x01 // version 1
-					return d
-				}(),
-				errContains: "incompatible blob version",
-			},
-			{
-				name: "Version 2 incompatible",
-				data: func() []byte {
-					d := make([]byte, 20)
-					d[0] = 0x02 // version 2
-					return d
-				}(),
-				errContains: "incompatible blob version",
-			},
-			{
-				name: "Version 4 incompatible",
-				data: func() []byte {
-					d := make([]byte, 20)
-					d[0] = 0x04 // version 4
-					return d
-				}(),
-				errContains: "incompatible blob version",
-			},
-			{
-				name: "Version 99 incompatible",
-				data: func() []byte {
-					d := make([]byte, 20)
-					d[0] = 0x63 // version 99
-					return d
-				}(),
-				errContains: "incompatible blob version",
-			},
-			{
-				name: "Truncated data",
-				data: []byte{
-					0x05, 0x00, 0x00, 0x00, // version 5
+			data: func() []byte {
+				d := make([]byte, 20)
+				d[0] = 0x01 // version 1
+				return d
+			}(),
+			errContains: "incompatible blob version",
+		},
+		{
+			name: "Version 2 incompatible",
+			data: func() []byte {
+				d := make([]byte, 20)
+				d[0] = 0x02 // version 2
+				return d
+			}(),
+			errContains: "incompatible blob version",
+		},
+		{
+			name: "Version 4 incompatible",
+			data: func() []byte {
+				d := make([]byte, 20)
+				d[0] = 0x04 // version 4
+				return d
+			}(),
+			errContains: "incompatible blob version",
+		},
+		{
+			name: "Version 99 incompatible",
+			data: func() []byte {
+				d := make([]byte, 20)
+				d[0] = 0x63 // version 99
+				return d
+			}(),
+			errContains: "incompatible blob version",
+		},
+		{
+			name: "Truncated data",
+			data: []byte{
+				0x05, 0x00, 0x00, 0x00, // version 5
 				0x05, 0x00, 0x00, 0x00, // app version length 5
 				0x00, 0x00, 0x00, 0x00, // padding to pass minimum length check
 				0x00, 0x00, 0x00, 0x00, // more padding
