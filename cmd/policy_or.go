@@ -322,20 +322,32 @@ func ComputePCRBranchDigest(tpmDev transport.TPM, pcrIndices []int, pcrValues ma
 }
 
 // ComputeSignedBranchDigest computes the policy digest for the PolicySigned branch.
-// This is computed entirely in software using the TPM Name derived from the public key.
-// The TPM is not needed, which avoids LoadExternal key-size limitations and
-// the TPM_RC_SCHEME issue with trial-session PolicySigned.
+// This loads the public key into the TPM via LoadExternal to obtain the
+// canonical TPM Name, then computes the PolicySigned digest using that name.
+// Using the TPM-computed name (rather than a software derivation) guarantees
+// the digest matches what the TPM will produce during a real PolicySigned
+// session at unseal time.
 //
 // PolicySigned extends the digest as:
 //
 //	policyDigest = H(policyDigest || TPM_CC_PolicySigned || authName)
-func ComputeSignedBranchDigest(_ transport.TPM, pubKey crypto.PublicKey) (tpm2.TPM2BDigest, error) {
-	// Compute the key's TPM Name in software
-	keyName, err := ComputeKeyName(pubKey)
+func ComputeSignedBranchDigest(tpmDev transport.TPM, pubKey crypto.PublicKey) (tpm2.TPM2BDigest, error) {
+	// Load the key into the TPM to get the canonical Name.
+	// This is the same operation performed at unseal time, so the names
+	// are guaranteed to match.
+	loadRsp, err := LoadExternalPublicKey(tpmDev, pubKey)
 	if err != nil {
-		return tpm2.TPM2BDigest{}, fmt.Errorf("failed to compute key name: %w", err)
+		return tpm2.TPM2BDigest{}, fmt.Errorf("failed to load signing key into TPM for name computation: %w", err)
 	}
+	tpmKeyName := loadRsp.Name
+	FlushHandle(tpmDev, loadRsp.ObjectHandle)
 
+	return ComputeSignedBranchDigestFromName(tpmKeyName), nil
+}
+
+// ComputeSignedBranchDigestFromName computes the PolicySigned branch digest
+// from a pre-computed TPM key Name. This is a pure hash computation.
+func ComputeSignedBranchDigestFromName(keyName tpm2.TPM2BName) tpm2.TPM2BDigest {
 	// Start with an empty (zero) policy digest (SHA-256)
 	policyDigest := make([]byte, sha256.Size)
 
@@ -347,9 +359,8 @@ func ComputeSignedBranchDigest(_ transport.TPM, pubKey crypto.PublicKey) (tpm2.T
 	h.Write(policyDigest)
 	h.Write(ccBytes)
 	h.Write(keyName.Buffer)
-	policyDigest = h.Sum(nil)
 
-	return tpm2.TPM2BDigest{Buffer: policyDigest}, nil
+	return tpm2.TPM2BDigest{Buffer: h.Sum(nil)}
 }
 
 // ComputePolicyORDigest computes the final combined PolicyOR digest from two branches.
@@ -389,7 +400,34 @@ func ComputePolicyORDigest(tpmDev transport.TPM, branches PolicyORBranchDigests)
 
 // ComputeFullPolicyDigest computes the complete PolicyOR digest combining PCR and Signed branches.
 // This is the main entry point for computing the auth policy at seal time.
+//
+// The signing key is loaded into the TPM via LoadExternal to obtain its canonical Name.
+// This ensures the signed branch digest computed at seal time will match what the TPM
+// produces at unseal time (PolicySigned uses the TPM's internally-computed key name).
 func ComputeFullPolicyDigest(tpmDev transport.TPM, pcrIndices []int, pcrValues map[int][]byte, hashAlgo PCRHashAlgo, pubKey crypto.PublicKey, debug bool) (tpm2.TPM2BDigest, *PolicyORBranchDigests, error) {
+	// Load signing key into TPM to get canonical Name and validate compatibility.
+	// This replaces the separate ValidateKeyForTPM call and guarantees the Name
+	// used here matches what LoadExternal returns at unseal time.
+	loadRsp, err := LoadExternalPublicKey(tpmDev, pubKey)
+	if err != nil {
+		return tpm2.TPM2BDigest{}, nil, fmt.Errorf("signing key incompatible with this TPM: %w", err)
+	}
+	tpmKeyName := loadRsp.Name
+	FlushHandle(tpmDev, loadRsp.ObjectHandle)
+
+	if debug {
+		fmt.Printf("TPM key name (from LoadExternal): %x\n", tpmKeyName.Buffer)
+		// Compare with software-computed name for diagnostics
+		swName, swErr := ComputeKeyName(pubKey)
+		if swErr == nil {
+			if fmt.Sprintf("%x", swName.Buffer) == fmt.Sprintf("%x", tpmKeyName.Buffer) {
+				fmt.Printf("Software key name: %x (MATCHES TPM)\n", swName.Buffer)
+			} else {
+				fmt.Printf("Software key name: %x (DIFFERS from TPM — software computation is wrong)\n", swName.Buffer)
+			}
+		}
+	}
+
 	// Compute Branch 1: PolicyPCR
 	pcrBranchDigest, err := ComputePCRBranchDigest(tpmDev, pcrIndices, pcrValues, hashAlgo)
 	if err != nil {
@@ -400,11 +438,8 @@ func ComputeFullPolicyDigest(tpmDev transport.TPM, pcrIndices []int, pcrValues m
 		fmt.Printf("PolicyOR Branch 1 (PCR): %x\n", pcrBranchDigest.Buffer)
 	}
 
-	// Compute Branch 2: PolicySigned (software-only, no TPM needed)
-	signedBranchDigest, err := ComputeSignedBranchDigest(tpmDev, pubKey)
-	if err != nil {
-		return tpm2.TPM2BDigest{}, nil, fmt.Errorf("failed to compute signed branch digest: %w", err)
-	}
+	// Compute Branch 2: PolicySigned using TPM-canonical key Name
+	signedBranchDigest := ComputeSignedBranchDigestFromName(tpmKeyName)
 
 	if debug {
 		fmt.Printf("PolicyOR Branch 2 (Signed): %x\n", signedBranchDigest.Buffer)
@@ -423,13 +458,6 @@ func ComputeFullPolicyDigest(tpmDev transport.TPM, pcrIndices []int, pcrValues m
 
 	if debug {
 		fmt.Printf("PolicyOR Combined Digest: %x\n", combinedDigest.Buffer)
-	}
-
-	// Validate the signing key can actually be loaded into this TPM.
-	// This catches hardware limitations (e.g. RSA-4096 not supported) at seal time
-	// rather than failing later at unseal time.
-	if err := ValidateKeyForTPM(tpmDev, pubKey); err != nil {
-		return tpm2.TPM2BDigest{}, nil, fmt.Errorf("signing key incompatible with this TPM: %w", err)
 	}
 
 	return combinedDigest, branches, nil
@@ -562,6 +590,14 @@ func UnsealWithSignedBranch(tpmDev transport.TPM, loadedObject *LoadSealedObject
 	keyHandle := loadRsp.ObjectHandle
 	keyName := loadRsp.Name
 
+	if debug {
+		fmt.Printf("Unseal signed branch — TPM key name: %x\n", keyName.Buffer)
+		fmt.Printf("Unseal signed branch — PCR branch digest (recomputed from blob): %x\n", pcrBranchDigest.Buffer)
+		// Show what the expected signed branch digest should be (using TPM name)
+		expectedSigned := ComputeSignedBranchDigestFromName(keyName)
+		fmt.Printf("Unseal signed branch — expected signed branch digest: %x\n", expectedSigned.Buffer)
+	}
+
 	// Build a Policy session via callback that satisfies:
 	//   1. PolicySigned  (branch 2)
 	//   2. PolicyOR      (combine branches)
@@ -616,8 +652,8 @@ func UnsealWithSignedBranch(tpmDev transport.TPM, loadedObject *LoadSealedObject
 		signedBranchDigest := pgd.PolicyDigest
 
 		if debug {
-			fmt.Printf("Signed branch digest (live): %x\n", signedBranchDigest.Buffer)
-			fmt.Printf("PCR branch digest (recomputed): %x\n", pcrBranchDigest.Buffer)
+			fmt.Printf("Signed branch digest (live from TPM): %x\n", signedBranchDigest.Buffer)
+			fmt.Printf("PCR branch digest (recomputed from blob): %x\n", pcrBranchDigest.Buffer)
 		}
 
 		// Step 2: Execute PolicyOR to combine
