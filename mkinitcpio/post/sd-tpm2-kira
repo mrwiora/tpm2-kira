@@ -1,0 +1,35 @@
+#!/bin/bash
+# tpm2-kira post-generation hook for mkinitcpio
+#
+# This script is executed by mkinitcpio after a new initramfs image has been
+# successfully generated.  Because the initramfs content is measured into PCRs
+# at boot, every image rebuild potentially changes the expected PCR values.
+# We therefore reseal the TOTP secret against the current (post-build) state
+# so that the next boot can unseal it via the PCR branch.
+#
+# Arguments supplied by mkinitcpio:
+#   $1 — kernel version
+#   $2 — path to the generated initramfs image
+
+KIRA_KEYS_DIR="/var/lib/tpm2-kira/keys"
+
+# Only act when tpm2-kira is installed and has been set up.
+if ! command -v tpm2-kira &> /dev/null; then
+    exit 0
+fi
+
+if [[ ! -d "$KIRA_KEYS_DIR" ]]; then
+    # No keys directory means setup has not been run yet; nothing to reseal.
+    exit 0
+fi
+
+echo "tpm2-kira: resealing TOTP secret after initramfs rebuild..."
+
+if output=$(tpm2-kira reseal 2>&1); then
+    echo "tpm2-kira: reseal completed successfully"
+else
+    echo "tpm2-kira: WARNING — reseal failed:" >&2
+    echo "$output" >&2
+    echo "tpm2-kira: You may need to run 'tpm2-kira reseal' manually" >&2
+    # Do not fail the overall mkinitcpio run; the image was already written.
+fi

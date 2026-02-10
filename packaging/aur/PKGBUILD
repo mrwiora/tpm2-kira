@@ -95,6 +95,9 @@ package() {
     # Install systemd initramfs hooks
     install -Dm644 mkinitcpio/install/sd-tpm2-kira "$pkgdir/usr/lib/initcpio/install/sd-tpm2-kira"
 
+    # Install post-generation hook (runs 'tpm2-kira reseal' after initramfs rebuild)
+    install -Dm755 mkinitcpio/post/sd-tpm2-kira "$pkgdir/usr/lib/initcpio/post/sd-tpm2-kira"
+
     # Install example configuration
     install -Dm644 mkinitcpio/mkinitcpio.conf.example "$pkgdir/usr/share/doc/$pkgname/mkinitcpio.conf.example"
 

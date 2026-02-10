@@ -11,6 +11,27 @@ build() {
 
     # Add systemd service dependency
     add_systemd_unit tpm2-kira.service
+
+    # Run tpm2-kira setup to ensure keys exist and a secret is sealed.
+    # On first run this generates a P-256 key pair in /var/lib/tpm2-kira/keys/
+    # and seals a TOTP secret with PCRs 0,7.
+    # If already configured, setup exits with an informational message and we
+    # continue normally — the initramfs build is never blocked.
+    if command -v tpm2-kira &> /dev/null; then
+        if output=$(tpm2-kira setup 2>&1); then
+            echo "tpm2-kira: initial setup completed successfully"
+        else
+            if echo "$output" | grep -q "already configured"; then
+                echo "tpm2-kira: already configured, skipping setup"
+            else
+                warning "tpm2-kira setup failed: $output"
+                warning "You may need to run 'tpm2-kira setup' manually"
+            fi
+        fi
+    else
+        error "tpm2-kira binary not found — cannot perform setup"
+        return 1
+    fi
 }
 
 help() {
@@ -20,9 +41,17 @@ in early boot using tpm2-kira. It runs 'tpm2-kira run' as a systemd service
 for continuous TOTP display.
 
 The hook will:
+- Run 'tpm2-kira setup' to generate signing keys and seal a TOTP secret
+  (only on first install; skipped if already configured)
 - Install tpm2-kira binary and required TPM libraries
 - Create systemd service unit for tpm2-kira run
 - Start tpm2-kira in continuous run mode during boot
+
+Post-generation hook (sd-tpm2-kira in /usr/lib/initcpio/post/):
+  After the initramfs image is written, 'tpm2-kira reseal' is executed
+  automatically. This is necessary because the initramfs content is
+  measured into PCRs at boot — every rebuild may change the expected
+  values, so the sealed TOTP secret must be resealed to match.
 
 Created systemd service:
   tpm2-kira-run.service - Runs tpm2-kira in continuous TOTP mode
@@ -30,7 +59,6 @@ Created systemd service:
 Prerequisites:
 - systemd-based initramfs (mkinitcpio with systemd support)
 - tpm2-kira binary must be installed
-- TOTP secret must be sealed using 'tpm2-kira seal' command
 - TPM 2.0 hardware or firmware TPM must be available
 
 Usage in /etc/mkinitcpio.conf:
