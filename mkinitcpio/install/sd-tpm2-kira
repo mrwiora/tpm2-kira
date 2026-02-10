@@ -47,6 +47,12 @@ The hook will:
 - Create systemd service unit for tpm2-kira run
 - Start tpm2-kira in continuous run mode during boot
 
+Post-generation hook (sd-tpm2-kira in /usr/lib/initcpio/post/):
+  After the initramfs image is written, 'tpm2-kira reseal' is executed
+  automatically. This is necessary because the initramfs content is
+  measured into PCRs at boot — every rebuild may change the expected
+  values, so the sealed TOTP secret must be resealed to match.
+
 Created systemd service:
   tpm2-kira-run.service - Runs tpm2-kira in continuous TOTP mode
 

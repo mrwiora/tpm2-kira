@@ -77,13 +77,15 @@ install-mkinitcpio:
 		echo "Error: mkinitcpio not found. This system may not use mkinitcpio."; \
 		exit 1; \
 	fi
-	sudo mkdir -p /etc/initcpio/hooks /etc/initcpio/install
+	sudo mkdir -p /etc/initcpio/hooks /etc/initcpio/install /etc/initcpio/post
 	sudo cp mkinitcpio/hooks/tpm2-kira /etc/initcpio/hooks/
 	sudo cp mkinitcpio/install/tpm2-kira /etc/initcpio/install/
 	sudo cp mkinitcpio/hooks/sd-tpm2-kira /etc/initcpio/hooks/
 	sudo cp mkinitcpio/install/sd-tpm2-kira /etc/initcpio/install/
 	sudo chmod +x /etc/initcpio/hooks/tpm2-kira /etc/initcpio/install/tpm2-kira
 	sudo chmod +x /etc/initcpio/hooks/sd-tpm2-kira /etc/initcpio/install/sd-tpm2-kira
+	sudo cp mkinitcpio/post/sd-tpm2-kira /etc/initcpio/post/
+	sudo chmod +x /etc/initcpio/post/sd-tpm2-kira
 	sudo mkdir -p /usr/lib/systemd/system
 	@echo "Mkinitcpio hooks installed successfully!"
 	@echo ""
@@ -110,6 +112,7 @@ uninstall-mkinitcpio:
 	sudo rm -f /etc/initcpio/install/tpm2-kira
 	sudo rm -f /etc/initcpio/hooks/sd-tpm2-kira
 	sudo rm -f /etc/initcpio/install/sd-tpm2-kira
+	sudo rm -f /etc/initcpio/post/sd-tpm2-kira
 	@echo "Mkinitcpio hooks uninstalled!"
 	@echo "Note: You should rebuild your initramfs after removing hooks:"
 	@echo "      sudo mkinitcpio -P"
