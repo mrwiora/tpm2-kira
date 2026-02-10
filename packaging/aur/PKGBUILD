@@ -7,7 +7,7 @@ arch=('x86_64')
 url="https://github.com/mrwiora/tpm2-kira"
 license=('BSD-3-Clause')
 depends=('bash' 'tpm2-tss>=3.0.0' 'qrencode')
-makedepends=('go>=1.25' 'git')
+makedepends=('go>=1.26' 'git')
 optdepends=('mkinitcpio: for early boot integration'
             'cryptsetup: for disk encryption integration'
             'systemd: for systemd-based initramfs'
