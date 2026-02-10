@@ -1,8 +1,13 @@
 # tpm2-kira
 
-A TPM 2.0-based TOTP authenticator that binds one-time passwords to your machine's boot state. If someone tampers with your firmware, bootloader, or Secure Boot configuration, the TPM refuses to release the TOTP secret — and you'll know something is wrong before you type your disk encryption passphrase.
+A TPM2 based tool to recognize modifications on your device/system before entering passphrases.
+Time-Based One-Time-Password Tokens calculated on Secrets, that the TPM2 reveals only when the devices is in an unmodified state.
 
-**Successor to [tpm2-totp](https://github.com/tpm2-software/tpm2-totp).**
+<p align="center">
+  <img src=".github/ssh.gif" alt="tpm2-kira demo" />
+</p>
+
+**Successor/Extension to [tpm2-totp](https://github.com/tpm2-software/tpm2-totp).**
 
 > [!CAUTION]
 > tpm2-kira is currently in **alpha**. Expect breaking changes between versions. Back up your TOTP secrets before upgrading.
