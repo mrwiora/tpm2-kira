@@ -5,7 +5,7 @@ A TPM 2.0-based TOTP authenticator that binds one-time passwords to your machine
 **Successor to [tpm2-totp](https://github.com/tpm2-software/tpm2-totp).**
 
 > [!CAUTION]
-> tpm2-kira is currently in **alpha**. Expect breaking changes between versions. Back up your TOTP secrets before upgrading.
+> tpm2-kira is currently in **alpha**. Expect breaking changes between versions.
 
 ## How It Works
 
