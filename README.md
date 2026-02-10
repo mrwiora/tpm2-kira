@@ -1,7 +1,7 @@
-# tpm2-kira
+# tpm2-kira (Known Integrity Recognition Agent)
 
-A TPM2 based tool to recognize modifications on your device/system before entering passphrases.
-Time-Based One-Time-Password Tokens calculated on Secrets, that the TPM2 reveals only when the devices is in an unmodified state.
+A TPM2 based tool to recognize modifications on your system !before! entering passphrases to unlock your disk.
+Time-Based One-Time-Password Tokens calculated on Secrets, that the TPM2 reveals only when the device is in an unmodified state.
 
 <p align="center">
   <img src=".github/ssh.gif" alt="tpm2-kira demo" />
