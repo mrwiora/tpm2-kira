@@ -16,10 +16,9 @@ func main() {
 	// Set application version in cmd package
 	cmd.AppVersion = Version
 
-	// Global flags
+	// Global flags (shared across all commands)
 	globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
 	tpmPath := globalFlags.String("tpm", "/dev/tpm0", "Path to TPM device")
-	pcrs := globalFlags.String("pcrs", "0,2,7", "PCR indices to use for policy (comma-separated)")
 	nvramIndex := globalFlags.Uint("nvram", 0x01803010, "TPM NVRAM index to use for storage")
 	debug := globalFlags.Bool("debug", false, "Enable debug output")
 
@@ -38,19 +37,19 @@ func main() {
 
 	switch command {
 	case "seal":
-		runSeal(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
+		runSeal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "reseal":
-		runReseal(commandArgs, *tpmPath, "", uint32(*nvramIndex), *debug)
+		runReseal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "info":
-		runInfo(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
+		runInfo(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "nvram":
-		runNVRAM(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
+		runNVRAM(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "reveal":
-		runReveal(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
+		runReveal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "reveal-plain":
-		runRevealPlain(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
+		runRevealPlain(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "run":
-		runRun(commandArgs, *tpmPath, *pcrs, uint32(*nvramIndex), *debug)
+		runRun(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "pcrtips":
 		if err := cmd.PCRTips(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -67,11 +66,31 @@ func main() {
 	}
 }
 
-func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
+// nvramExplicit checks whether --nvram (or -nvram) appears in the argument
+// list.  This lets us distinguish "flag absent" from "flag set to default".
+func nvramExplicit(args []string) bool {
+	for _, arg := range args {
+		if arg == "--nvram" || arg == "-nvram" {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveOrScanAll returns the resolved NVRAM index when the user supplied
+// --nvram explicitly, or 0 (the "scan all slots" sentinel) when they did not.
+func resolveOrScanAll(rawValue uint32, provided bool) uint32 {
+	if !provided {
+		return 0 // scan all slots
+	}
+	return cmd.ResolveNVRAMIndex(rawValue)
+}
+
+func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("seal", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
+	pcrs := fs.String("pcrs", "0,2,7", "PCR indices to use for policy")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
@@ -91,17 +110,19 @@ func runSeal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 		hashAlgo = cmd.PCRHashAlgoSHA1
 	}
 
-	if err := cmd.Seal(*tpm, *pcrs, uint32(*nvram), *pubKeyPath, *privKeyPath, *debug, hashAlgo); err != nil {
+	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
+
+	if err := cmd.Seal(*tpm, *pcrs, sealIndex, *pubKeyPath, *privKeyPath, *debug, hashAlgo); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
 }
 
-func runReseal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
+func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("reseal", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy (if not specified, preserves original selection)")
+	pcrs := fs.String("pcrs", "", "PCR indices to use for policy (if not specified, preserves original selection)")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	pubKeyPath := fs.String("pubkey", "", "Path to signing public key PEM (default: derived from --privkey, or preserved from blob)")
@@ -117,17 +138,18 @@ func runReseal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 		}
 	}
 
-	if err := cmd.Reseal(*tpm, *pcrs, uint32(*nvram), *pubKeyPath, *privKeyPath, *debug); err != nil {
+	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
+
+	if err := cmd.ResealCommand(*tpm, scanIndex, *pcrs, *pubKeyPath, *privKeyPath, *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
 }
 
-func runInfo(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
+func runInfo(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("info", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	pcrs := fs.String("pcrs", pcrsStr, "PCR indices to use for policy")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
@@ -135,13 +157,15 @@ func runInfo(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFla
 
 	fs.Parse(args)
 
-	if err := cmd.InfoWithFormat(*tpm, *pcrs, uint32(*nvram), *debug, *jsonOutput); err != nil {
+	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
+
+	if err := cmd.InfoCommand(*tpm, scanIndex, *debug, *jsonOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}
 }
 
-func runReveal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
+func runReveal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("reveal", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
@@ -150,25 +174,12 @@ func runReveal(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugF
 
 	fs.Parse(args)
 
-	// Check if --nvram was explicitly provided
-	nvramProvided := false
-	for _, arg := range args {
-		if arg == "--nvram" || arg == "-nvram" {
-			nvramProvided = true
-			break
-		}
-	}
-
-	// Use special value 0 to indicate "scan all" when flag not provided
-	scanIndex := uint32(*nvram)
-	if !nvramProvided {
-		scanIndex = 0 // Signal to scan all slots
-	}
+	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
 	cmd.RevealCommand(*tpm, scanIndex, *debug, false)
 }
 
-func runRevealPlain(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
+func runRevealPlain(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("reveal-plain", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
@@ -177,25 +188,12 @@ func runRevealPlain(args []string, tpmPath, pcrsStr string, nvramIndex uint32, d
 
 	fs.Parse(args)
 
-	// Check if --nvram was explicitly provided
-	nvramProvided := false
-	for _, arg := range args {
-		if arg == "--nvram" || arg == "-nvram" {
-			nvramProvided = true
-			break
-		}
-	}
-
-	// Use special value 0 to indicate "scan all" when flag not provided
-	scanIndex := uint32(*nvram)
-	if !nvramProvided {
-		scanIndex = 0 // Signal to scan all slots
-	}
+	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
 	cmd.RevealCommand(*tpm, scanIndex, *debug, true)
 }
 
-func runRun(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
+func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
@@ -204,25 +202,12 @@ func runRun(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag
 
 	fs.Parse(args)
 
-	// Check if --nvram was explicitly provided
-	nvramProvided := false
-	for _, arg := range args {
-		if arg == "--nvram" || arg == "-nvram" {
-			nvramProvided = true
-			break
-		}
-	}
-
-	// Use special value 0 to indicate "scan all" when flag not provided
-	scanIndex := uint32(*nvram)
-	if !nvramProvided {
-		scanIndex = 0 // Signal to scan all slots
-	}
+	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
 	cmd.RunCommand(*tpm, scanIndex, *debug)
 }
 
-func runNVRAM(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFlag bool) {
+func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	if len(args) == 0 {
 		fmt.Fprintf(os.Stderr, "Error: nvram command requires a subcommand (list, status, delete)\n")
 		os.Exit(0)
@@ -239,19 +224,24 @@ func runNVRAM(args []string, tpmPath, pcrsStr string, nvramIndex uint32, debugFl
 
 	fs.Parse(args)
 
+	provided := nvramExplicit(args)
+
 	switch subcommand {
 	case "list":
-		if err := cmd.NVRAMList(*tpm, uint32(*nvram), *debug); err != nil {
+		listIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
+		if err := cmd.NVRAMList(*tpm, listIndex, *debug); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(0)
 		}
 	case "status":
-		if err := cmd.NVRAMStatus(*tpm, uint32(*nvram), *debug); err != nil {
+		statusIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
+		if err := cmd.NVRAMStatus(*tpm, statusIndex, *debug); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(0)
 		}
 	case "delete":
-		if err := cmd.NVRAMDelete(*tpm, uint32(*nvram), *debug); err != nil {
+		deleteIndex := resolveOrScanAll(uint32(*nvram), provided)
+		if err := cmd.NVRAMDeleteCommand(*tpm, deleteIndex, *debug); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(0)
 		}
@@ -281,7 +271,11 @@ COMMANDS:
 
 GLOBAL OPTIONS:
   --tpm PATH      Path to TPM device (default: /dev/tpm0)
-  --nvram INDEX   NVRAM index in hex (default: 0x01803010)
+  --nvram INDEX   NVRAM slot number or full index in hex
+                  Slot shorthand: 0-15 maps to 0x01803010-0x0180301F
+                  Full index:     any hex value like 0x01803010
+                  When omitted, commands automatically discover and operate on
+                  all populated slots in the default range.
   --debug         Enable debug output
 
 SEAL OPTIONS:
@@ -318,7 +312,7 @@ INFO OPTIONS:
 NVRAM SUBCOMMANDS:
   list               List all NVRAM indices
   status             Show NVRAM index status
-  delete             Delete NVRAM index
+  delete             Delete NVRAM index (or all populated slots when --nvram is omitted)
 
 AUTHENTICATION:
   tpm2-kira uses TPM2 PolicyOR with two branches for access control:
@@ -333,19 +327,27 @@ AUTHENTICATION:
 
 EXAMPLES:
   tpm2-kira seal
+  tpm2-kira seal --nvram 0
   tpm2-kira seal --pcrs "0e,2e,7e"
   tpm2-kira seal --pcrs "0e,2e,7e,11p:tpm2-pcr11predict"
   tpm2-kira seal --pubkey /path/to/my-key.pem
   tpm2-kira seal --sha1 --pcrs "0e,2e,7e"
   tpm2-kira seal --pcrs "0e,2,4,7e"
   tpm2-kira reveal
+  tpm2-kira reveal --nvram 3
   tpm2-kira reveal-plain
   tpm2-kira run
   tpm2-kira reseal
+  tpm2-kira reseal --nvram 0
   tpm2-kira reseal --pcrs "0e,2,4,7e"
   tpm2-kira reseal --privkey /path/to/my-key.key
   tpm2-kira info
+  tpm2-kira info --nvram 0
+  tpm2-kira info --nvram 0x01803010
   tpm2-kira nvram list
+  tpm2-kira nvram delete
+  tpm2-kira nvram delete --nvram 0
+  tpm2-kira nvram delete --nvram 0x01803010
 
 For detailed documentation, see README.md
 `, cmd.DefaultPublicKeyPath)

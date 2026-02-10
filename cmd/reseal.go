@@ -8,6 +8,50 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
+// ResealCommand is the top-level entry point for the reseal CLI command.
+// When nvramIndex is 0 it scans every default slot and reseals each one;
+// otherwise it reseals only the requested index.
+func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privKeyPath string, debug bool) error {
+	if nvramIndex != 0 {
+		// Single-slot mode – same behaviour as before
+		return Reseal(tpmPath, pcrsStr, nvramIndex, pubKeyPath, privKeyPath, debug)
+	}
+
+	// Multi-slot mode – discover populated slots, then reseal each one
+	tpmDev, err := transport.OpenTPM(tpmPath)
+	if err != nil {
+		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+	}
+	slots := FindPopulatedSlots(tpmDev, debug)
+	tpmDev.Close()
+
+	if len(slots) == 0 {
+		return fmt.Errorf("no sealed secrets found in NVRAM slots 0x%08X - 0x%08X", NVRAMSlotStart, NVRAMSlotEnd)
+	}
+
+	fmt.Printf("Found %d sealed slot(s) to reseal\n\n", len(slots))
+
+	var failed []uint32
+	for i, slotIdx := range slots {
+		slotNum := SlotNumber(slotIdx)
+		fmt.Printf("── Slot #%d (0x%08X) ─────────────────────────\n", slotNum, slotIdx)
+
+		if err := Reseal(tpmPath, pcrsStr, slotIdx, pubKeyPath, privKeyPath, debug); err != nil {
+			fmt.Printf("Error resealing slot #%d (0x%08X): %v\n", slotNum, slotIdx, err)
+			failed = append(failed, slotIdx)
+		}
+
+		if i < len(slots)-1 {
+			fmt.Println()
+		}
+	}
+
+	if len(failed) > 0 {
+		return fmt.Errorf("%d of %d slot(s) failed to reseal", len(failed), len(slots))
+	}
+	return nil
+}
+
 // Reseal unseals data from TPM NVRAM and reseals with current PCR values.
 //
 // Authentication is handled entirely by the TPM via PolicyOR:

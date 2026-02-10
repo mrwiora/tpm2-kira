@@ -1241,6 +1241,47 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 	return nil
 }
 
+// NVRAMDeleteCommand is the top-level entry point for the nvram delete CLI
+// command.  When nvramIndex is 0 it scans every default slot and deletes
+// each populated one; otherwise it deletes only the requested index.
+func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, debug bool) error {
+	if nvramIndex != 0 {
+		return NVRAMDelete(tpmPath, nvramIndex, debug)
+	}
+
+	// Multi-slot mode – discover populated slots, then delete each one.
+	tpmDev, err := transport.OpenTPM(tpmPath)
+	if err != nil {
+		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+	}
+	slots := FindPopulatedSlots(tpmDev, debug)
+	tpmDev.Close()
+
+	if len(slots) == 0 {
+		return fmt.Errorf("no sealed secrets found in NVRAM slots 0x%08X – 0x%08X", NVRAMSlotStart, NVRAMSlotEnd)
+	}
+
+	fmt.Printf("Found %d sealed slot(s) to delete\n\n", len(slots))
+
+	var failed []uint32
+	for _, slotIdx := range slots {
+		slotNum := SlotNumber(slotIdx)
+		fmt.Printf("Deleting slot #%d (0x%08X)... ", slotNum, slotIdx)
+
+		if err := NVRAMDelete(tpmPath, slotIdx, debug); err != nil {
+			fmt.Printf("FAILED: %v\n", err)
+			failed = append(failed, slotIdx)
+		}
+	}
+
+	fmt.Println()
+	if len(failed) > 0 {
+		return fmt.Errorf("%d of %d slot(s) failed to delete", len(failed), len(slots))
+	}
+	fmt.Printf("All %d slot(s) deleted successfully\n", len(slots))
+	return nil
+}
+
 // NVRAMStatus shows detailed status of the specified NVRAM index
 func NVRAMStatus(tpmPath string, nvramIndex uint32, debug bool) error {
 	// Open TPM

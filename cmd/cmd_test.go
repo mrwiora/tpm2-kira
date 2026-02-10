@@ -2745,6 +2745,63 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 	})
 }
 
+func TestResolveNVRAMIndex(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    uint32
+		expected uint32
+	}{
+		{"Slot 0", 0, NVRAMSlotStart},
+		{"Slot 1", 1, NVRAMSlotStart + 1},
+		{"Slot 15", 15, NVRAMSlotEnd},
+		{"Full index at slot start", NVRAMSlotStart, NVRAMSlotStart},
+		{"Full index at slot end", NVRAMSlotEnd, NVRAMSlotEnd},
+		{"Full index outside slot range", 0x01803020, 0x01803020},
+		{"Full index below slot range", 0x01803000, 0x01803000},
+		{"Value 16 passes through", 16, 16},
+		{"Large value passes through", 0x01803FFF, 0x01803FFF},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ResolveNVRAMIndex(tc.input)
+			if got != tc.expected {
+				t.Errorf("ResolveNVRAMIndex(%d/0x%08X) = 0x%08X, want 0x%08X",
+					tc.input, tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestSlotNumber(t *testing.T) {
+	tests := []struct {
+		name     string
+		index    uint32
+		expected int
+	}{
+		{"First default slot", NVRAMSlotStart, 0},
+		{"Last default slot", NVRAMSlotEnd, 15},
+		{"Middle default slot", NVRAMSlotStart + 5, 5},
+		{"Outside default range low", 0x01803000, 0x01803000},
+		{"Outside default range high", 0x01803020, 0x01803020},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SlotNumber(tc.index)
+			if got != tc.expected {
+				t.Errorf("SlotNumber(0x%08X) = %d, want %d", tc.index, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestMaxSlotNumber(t *testing.T) {
+	if MaxSlotNumber != 15 {
+		t.Errorf("MaxSlotNumber = %d, want 15", MaxSlotNumber)
+	}
+}
+
 // testError is a simple error type for testing
 type testError struct {
 	msg string
