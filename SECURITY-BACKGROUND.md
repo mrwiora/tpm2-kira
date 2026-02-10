@@ -43,8 +43,8 @@ boot measurements.
 ┌──────────────────────────────────────────────────────┐
 │                    Filesystem                        │
 │                                                      │
-│  /var/lib/sbctl/keys/db/db.pem   (signing pub key)  │
-│  /var/lib/sbctl/keys/db/db.key   (signing priv key) │
+│  /var/lib/tpm2-kira/keys/seal.pub   (signing pub key)  │
+│  /var/lib/tpm2-kira/keys/seal.key   (signing priv key) │
 │                                                      │
 │  These are the Secure Boot DB key pair managed by    │
 │  sbctl. Any RSA-2048 or ECC P-256/P-384 key pair    │

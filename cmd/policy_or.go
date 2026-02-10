@@ -19,10 +19,10 @@ import (
 )
 
 const (
-	// DefaultPublicKeyPath is the default path for the signing public key (sbctl secure boot DB cert)
-	DefaultPublicKeyPath = "/var/lib/sbctl/keys/db/db.pem"
-	// DefaultPrivateKeyPath is the default path for the signing private key (sbctl secure boot DB key)
-	DefaultPrivateKeyPath = "/var/lib/sbctl/keys/db/db.key"
+	// DefaultPublicKeyPath is the default path for the signing public key
+	DefaultPublicKeyPath = "/var/lib/tpm2-kira/keys/seal.pub"
+	// DefaultPrivateKeyPath is the default path for the signing private key
+	DefaultPrivateKeyPath = "/var/lib/tpm2-kira/keys/seal.key"
 )
 
 // SigningKeyType indicates the type of the signing key used for PolicySigned
