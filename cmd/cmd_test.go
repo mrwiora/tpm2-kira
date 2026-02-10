@@ -5,12 +5,12 @@ package cmd
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 
@@ -488,9 +488,9 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		blob *SealedBlob
 	}{
 		{
-			name: "Basic blob with password (all register)",
+			name: "Basic blob (all register)",
 			blob: &SealedBlob{
-				Version:    3,
+				Version:    5,
 				AppVersion: "test-1.0.0",
 				Public:     []byte("public-data-test"),
 				Private:    []byte("private-data-test"),
@@ -498,13 +498,13 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest0")}},
 					{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest2")}},
 				},
-				HasPassword: true,
+				SignedBranchDigest: make([]byte, 32),
 			},
 		},
 		{
 			name: "Blob with predict PCR source",
 			blob: &SealedBlob{
-				Version:    3,
+				Version:    5,
 				AppVersion: "test-predict",
 				Public:     []byte("public-predict"),
 				Private:    []byte("private-predict"),
@@ -514,7 +514,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				},
-				HasPassword: true,
+				SignedBranchDigest: make([]byte, 32),
 				EventlogInfo: &EventlogInfo{
 					EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
 					EventlogHash:    "abc123",
@@ -525,22 +525,21 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			},
 		},
 		{
-			name: "Blob without password",
+			name: "Blob without signed branch digest",
 			blob: &SealedBlob{
-				Version:    3,
+				Version:    5,
 				AppVersion: "test-0.0.0",
 				Public:     []byte("public"),
 				Private:    []byte("private"),
 				PCRDigests: []PCRDigestPair{
 					{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest7")}},
 				},
-				HasPassword: false,
 			},
 		},
 		{
 			name: "Blob with multiple PCRs (all register)",
 			blob: &SealedBlob{
-				Version:    3,
+				Version:    5,
 				AppVersion: "v2.0.0",
 				Public:     []byte("test-public-key-data"),
 				Private:    []byte("test-private-key-data"),
@@ -551,24 +550,23 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				},
-				HasPassword: true,
+				SignedBranchDigest: make([]byte, 32),
 			},
 		},
 		{
 			name: "Blob with empty PCR list",
 			blob: &SealedBlob{
-				Version:     3,
-				AppVersion:  "test",
-				Public:      []byte("pub"),
-				Private:     []byte("priv"),
-				PCRDigests:  []PCRDigestPair{},
-				HasPassword: false,
+				Version:    5,
+				AppVersion: "test",
+				Public:     []byte("pub"),
+				Private:    []byte("priv"),
+				PCRDigests: []PCRDigestPair{},
 			},
 		},
 		{
 			name: "Blob with all eventlog PCRs and eventlog info",
 			blob: &SealedBlob{
-				Version:    3,
+				Version:    5,
 				AppVersion: "test-eventlog",
 				Public:     []byte("public-data"),
 				Private:    []byte("private-data"),
@@ -577,7 +575,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					{Index: 2, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				},
-				HasPassword: true,
+				SignedBranchDigest: make([]byte, 32),
 				EventlogInfo: &EventlogInfo{
 					EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
 					EventlogHash:    "abc123def456",
@@ -590,7 +588,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		{
 			name: "Blob with mixed register and eventlog PCRs",
 			blob: &SealedBlob{
-				Version:    3,
+				Version:    5,
 				AppVersion: "test-mixed",
 				Public:     []byte("public-mixed"),
 				Private:    []byte("private-mixed"),
@@ -600,7 +598,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				},
-				HasPassword: true,
+				SignedBranchDigest: make([]byte, 32),
 				EventlogInfo: &EventlogInfo{
 					EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
 					EventlogHash:    "deadbeef",
@@ -613,14 +611,13 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		{
 			name: "Blob with single eventlog PCR",
 			blob: &SealedBlob{
-				Version:    3,
+				Version:    5,
 				AppVersion: "test-single-e",
 				Public:     []byte("pub"),
 				Private:    []byte("priv"),
 				PCRDigests: []PCRDigestPair{
 					{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				},
-				HasPassword: false,
 				EventlogInfo: &EventlogInfo{
 					EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
 					EventlogHash:    "cafebabe",
@@ -685,8 +682,8 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 				}
 			}
 
-			if unmarshaled.HasPassword != tt.blob.HasPassword {
-				t.Errorf("HasPassword mismatch: expected %v, got %v", tt.blob.HasPassword, unmarshaled.HasPassword)
+			if !bytes.Equal(unmarshaled.SignedBranchDigest, tt.blob.SignedBranchDigest) {
+				t.Errorf("SignedBranchDigest mismatch: expected %d bytes, got %d bytes", len(tt.blob.SignedBranchDigest), len(unmarshaled.SignedBranchDigest))
 			}
 
 			// Check HasEventlogPCRs derived method
@@ -754,6 +751,15 @@ func TestUnmarshalSealedBlobInvalid(t *testing.T) {
 			errContains: "incompatible blob version",
 		},
 		{
+			name: "Version 4 incompatible",
+			data: func() []byte {
+				d := make([]byte, 20)
+				d[0] = 0x04 // version 4
+				return d
+			}(),
+			errContains: "incompatible blob version",
+		},
+		{
 			name: "Version 99 incompatible",
 			data: func() []byte {
 				d := make([]byte, 20)
@@ -765,7 +771,7 @@ func TestUnmarshalSealedBlobInvalid(t *testing.T) {
 		{
 			name: "Truncated data",
 			data: []byte{
-				0x03, 0x00, 0x00, 0x00, // version 3
+				0x05, 0x00, 0x00, 0x00, // version 5
 				0x05, 0x00, 0x00, 0x00, // app version length 5
 				0x00, 0x00, 0x00, 0x00, // padding to pass minimum length check
 				0x00, 0x00, 0x00, 0x00, // more padding
@@ -936,7 +942,6 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 					PCRDigests: []PCRDigestPair{
 						{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
-					HasPassword: false,
 				}
 				data, _ := sb.Marshal()
 				return data
@@ -1001,8 +1006,8 @@ func TestUnmarshalIncompatibleVersion(t *testing.T) {
 	if !strings.Contains(err.Error(), "v1") {
 		t.Errorf("Expected error to mention found v1, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "v3") {
-		t.Errorf("Expected error to mention requires v3, got: %v", err)
+	if !strings.Contains(err.Error(), "v5") {
+		t.Errorf("Expected error to mention requires v5, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "tpm2-kira seal") {
 		t.Errorf("Expected error to suggest re-sealing, got: %v", err)
@@ -1490,7 +1495,7 @@ func TestPcrsToBitmapBytes(t *testing.T) {
 // TestSealedBlobMarshalJSON tests JSON serialization
 func TestSealedBlobMarshalJSON(t *testing.T) {
 	blob := &SealedBlob{
-		Version:    3,
+		Version:    5,
 		AppVersion: "test-1.0.0",
 		Public:     []byte{0x01, 0x02, 0x03},
 		Private:    []byte{0x04, 0x05, 0x06},
@@ -1498,7 +1503,7 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 			{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA, 0xBB}}},
 			{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xCC, 0xDD}}},
 		},
-		HasPassword: true,
+		SignedBranchDigest: []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20},
 	}
 
 	jsonData, err := blob.MarshalJSON()
@@ -1516,7 +1521,8 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 		`"public_hex"`,
 		`"private_hex"`,
 		`"pcr_digests"`,
-		`"has_password"`,
+		`"signed_branch_digest_hex"`,
+		`"signed_branch_digest_size"`,
 		`"source"`,
 	}
 
@@ -1539,10 +1545,14 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 		t.Errorf("JSON should NOT contain eventlog_based, got: %s", jsonStr)
 	}
 
-	// Ensure password_hash_hex and password_salt_hex are NOT present
+	// Ensure old/removed fields are NOT present
 	unexpectedFields := []string{
 		`"password_hash_hex"`,
 		`"password_salt_hex"`,
+		`"has_password"`,
+		`"signing_key_pem_size"`,
+		`"signing_key_type"`,
+		`"signing_key_fingerprint"`,
 	}
 
 	for _, field := range unexpectedFields {
@@ -1564,14 +1574,14 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 // TestSealedBlobMarshalJSONWithEventlogInfo tests JSON serialization with eventlog info
 func TestSealedBlobMarshalJSONWithEventlogInfo(t *testing.T) {
 	blob := &SealedBlob{
-		Version:    3,
+		Version:    5,
 		AppVersion: "test-1.0.0",
 		Public:     []byte{0x01},
 		Private:    []byte{0x02},
 		PCRDigests: []PCRDigestPair{
 			{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA}}},
 		},
-		HasPassword: false,
+		SignedBranchDigest: make([]byte, 32),
 		EventlogInfo: &EventlogInfo{
 			EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
 			EventlogHash:    "abc123",
@@ -1733,7 +1743,7 @@ func TestPCRHashAlgoMethods(t *testing.T) {
 func TestSealedBlobRoundTrip(t *testing.T) {
 	// Create a blob with realistic TPM data sizes and mixed sources
 	original := &SealedBlob{
-		Version:    3,
+		Version:    5,
 		AppVersion: "v1.2.3",
 		Public:     make([]byte, 100), // Typical public key size
 		Private:    make([]byte, 150), // Typical private key size
@@ -1743,7 +1753,7 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 			{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 		},
-		HasPassword: true,
+		SignedBranchDigest: make([]byte, 32),
 		EventlogInfo: &EventlogInfo{
 			EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
 			EventlogHash:    "abcdef1234567890",
@@ -1793,8 +1803,8 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 	if !bytes.Equal(restored.Private, original.Private) {
 		t.Error("Private data mismatch")
 	}
-	if restored.HasPassword != original.HasPassword {
-		t.Error("HasPassword mismatch")
+	if !bytes.Equal(restored.SignedBranchDigest, original.SignedBranchDigest) {
+		t.Error("SignedBranchDigest mismatch")
 	}
 	// Verify per-PCR sources
 	for i := range original.PCRDigests {
@@ -1822,7 +1832,7 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 // TestSealedBlobRoundTripNoEventlog tests round trip with all-register PCRs (no eventlog info)
 func TestSealedBlobRoundTripNoEventlog(t *testing.T) {
 	original := &SealedBlob{
-		Version:    3,
+		Version:    5,
 		AppVersion: "v1.0.0",
 		Public:     []byte("pub-data"),
 		Private:    []byte("priv-data"),
@@ -1831,7 +1841,6 @@ func TestSealedBlobRoundTripNoEventlog(t *testing.T) {
 			{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 		},
-		HasPassword: false,
 	}
 
 	data, err := original.Marshal()
@@ -2009,8 +2018,8 @@ func TestValidateNVRAMIndex(t *testing.T) {
 }
 
 func TestCurrentBlobVersion(t *testing.T) {
-	if CurrentBlobVersion != 3 {
-		t.Errorf("CurrentBlobVersion should be 3, got %d", CurrentBlobVersion)
+	if CurrentBlobVersion != 5 {
+		t.Errorf("CurrentBlobVersion should be 5, got %d", CurrentBlobVersion)
 	}
 }
 
@@ -2676,8 +2685,13 @@ func TestGenerateTOTPSecret(t *testing.T) {
 
 // TestSealDataWithSpecsValidation tests input validation in sealDataWithSpecs
 func TestSealDataWithSpecsValidation(t *testing.T) {
+	// Create a dummy public key for tests that need to reach later validations
+	// (we use a non-nil interface value to pass the nil-check)
+	type dummyPubKey struct{}
+	var dummyKey crypto.PublicKey = &dummyPubKey{}
+
 	t.Run("Rejects empty PCR specs", func(t *testing.T) {
-		err := sealDataWithSpecs("/dev/null", []PCRSpec{}, 0x01803010, []byte("data"), "", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/dev/null", []PCRSpec{}, 0x01803010, []byte("data"), nil, "", "", false, PCRHashAlgoSHA256)
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error for empty specs, got nil")
 		}
@@ -2688,7 +2702,7 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 
 	t.Run("Rejects empty data", func(t *testing.T) {
 		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
-		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte{}, "", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte{}, dummyKey, "", "", false, PCRHashAlgoSHA256)
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error for empty data, got nil")
 		}
@@ -2699,7 +2713,7 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 
 	t.Run("Rejects nil data", func(t *testing.T) {
 		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
-		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, nil, "", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, nil, dummyKey, "", "", false, PCRHashAlgoSHA256)
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error for nil data, got nil")
 		}
@@ -2708,246 +2722,25 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("Rejects nil signing public key", func(t *testing.T) {
+		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
+		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte("test-data"), nil, "", "", false, PCRHashAlgoSHA256)
+		if err == nil {
+			t.Error("sealDataWithSpecs() expected error for nil signing key, got nil")
+		}
+		if !strings.Contains(err.Error(), "no signing public key provided") {
+			t.Errorf("sealDataWithSpecs() error = %q, want to contain 'no signing public key provided'", err.Error())
+		}
+	})
+
 	t.Run("Fails on invalid TPM path", func(t *testing.T) {
 		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
-		err := sealDataWithSpecs("/nonexistent/tpm/path", specs, 0x01803010, []byte("test-data"), "", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/nonexistent/tpm/path", specs, 0x01803010, []byte("test-data"), dummyKey, "", "", false, PCRHashAlgoSHA256)
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error for invalid TPM path, got nil")
 		}
 		if !strings.Contains(err.Error(), "failed to open TPM") {
 			t.Errorf("sealDataWithSpecs() error = %q, want to contain 'failed to open TPM'", err.Error())
-		}
-	})
-}
-
-// --- Tests for password.go functions ---
-
-// setupStdinPipe replaces os.Stdin with a pipe containing the given input.
-// Returns a cleanup function that restores the original stdin and resets the shared reader.
-func setupStdinPipe(t *testing.T, input string) func() {
-	t.Helper()
-
-	oldStdin := os.Stdin
-
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("Failed to create pipe: %v", err)
-	}
-
-	_, err = w.WriteString(input)
-	if err != nil {
-		t.Fatalf("Failed to write to pipe: %v", err)
-	}
-	w.Close()
-
-	os.Stdin = r
-	stdinReader = nil // Reset the shared reader to pick up new stdin
-
-	return func() {
-		os.Stdin = oldStdin
-		stdinReader = nil
-		r.Close()
-	}
-}
-
-// TestReadPasswordFromStdin tests reading passwords from non-terminal stdin
-func TestReadPasswordFromStdin(t *testing.T) {
-	t.Run("Reads password from pipe", func(t *testing.T) {
-		cleanup := setupStdinPipe(t, "mypassword\n")
-		defer cleanup()
-
-		password, err := ReadPasswordFromStdin("Enter password: ")
-		if err != nil {
-			t.Fatalf("ReadPasswordFromStdin() unexpected error: %v", err)
-		}
-		if password != "mypassword" {
-			t.Errorf("ReadPasswordFromStdin() = %q, want %q", password, "mypassword")
-		}
-	})
-
-	t.Run("Trims whitespace", func(t *testing.T) {
-		cleanup := setupStdinPipe(t, "  password  \n")
-		defer cleanup()
-
-		password, err := ReadPasswordFromStdin("Enter password: ")
-		if err != nil {
-			t.Fatalf("ReadPasswordFromStdin() unexpected error: %v", err)
-		}
-		if password != "password" {
-			t.Errorf("ReadPasswordFromStdin() = %q, want %q", password, "password")
-		}
-	})
-
-	t.Run("Returns empty string on empty line", func(t *testing.T) {
-		cleanup := setupStdinPipe(t, "\n")
-		defer cleanup()
-
-		password, err := ReadPasswordFromStdin("Enter password: ")
-		if err != nil {
-			t.Fatalf("ReadPasswordFromStdin() unexpected error: %v", err)
-		}
-		if password != "" {
-			t.Errorf("ReadPasswordFromStdin() = %q, want empty string", password)
-		}
-	})
-
-	t.Run("Returns empty string on EOF", func(t *testing.T) {
-		cleanup := setupStdinPipe(t, "")
-		defer cleanup()
-
-		password, err := ReadPasswordFromStdin("Enter password: ")
-		if err != nil {
-			t.Fatalf("ReadPasswordFromStdin() unexpected error: %v", err)
-		}
-		if password != "" {
-			t.Errorf("ReadPasswordFromStdin() = %q, want empty string on EOF", password)
-		}
-	})
-
-	t.Run("Reads multiple passwords sequentially", func(t *testing.T) {
-		cleanup := setupStdinPipe(t, "first\nsecond\n")
-		defer cleanup()
-
-		password1, err := ReadPasswordFromStdin("First: ")
-		if err != nil {
-			t.Fatalf("First ReadPasswordFromStdin() unexpected error: %v", err)
-		}
-		if password1 != "first" {
-			t.Errorf("First ReadPasswordFromStdin() = %q, want %q", password1, "first")
-		}
-
-		password2, err := ReadPasswordFromStdin("Second: ")
-		if err != nil {
-			t.Fatalf("Second ReadPasswordFromStdin() unexpected error: %v", err)
-		}
-		if password2 != "second" {
-			t.Errorf("Second ReadPasswordFromStdin() = %q, want %q", password2, "second")
-		}
-	})
-}
-
-// TestReadOptionalPasswordFromStdin tests optional password reading
-func TestReadOptionalPasswordFromStdin(t *testing.T) {
-	t.Run("Returns empty for no password (enter pressed)", func(t *testing.T) {
-		cleanup := setupStdinPipe(t, "\n")
-		defer cleanup()
-
-		password, err := ReadOptionalPasswordFromStdin("sealing")
-		if err != nil {
-			t.Fatalf("ReadOptionalPasswordFromStdin() unexpected error: %v", err)
-		}
-		if password != "" {
-			t.Errorf("ReadOptionalPasswordFromStdin() = %q, want empty string", password)
-		}
-	})
-
-	t.Run("Returns password when confirmed", func(t *testing.T) {
-		cleanup := setupStdinPipe(t, "mypassword\nmypassword\n")
-		defer cleanup()
-
-		password, err := ReadOptionalPasswordFromStdin("sealing")
-		if err != nil {
-			t.Fatalf("ReadOptionalPasswordFromStdin() unexpected error: %v", err)
-		}
-		if password != "mypassword" {
-			t.Errorf("ReadOptionalPasswordFromStdin() = %q, want %q", password, "mypassword")
-		}
-	})
-
-	t.Run("Returns error on password mismatch", func(t *testing.T) {
-		cleanup := setupStdinPipe(t, "password1\npassword2\n")
-		defer cleanup()
-
-		_, err := ReadOptionalPasswordFromStdin("sealing")
-		if err == nil {
-			t.Error("ReadOptionalPasswordFromStdin() expected error for mismatched passwords, got nil")
-		}
-		if !strings.Contains(err.Error(), "passwords do not match") {
-			t.Errorf("ReadOptionalPasswordFromStdin() error = %q, want to contain 'passwords do not match'", err.Error())
-		}
-	})
-}
-
-// TestReadRequiredPasswordFromStdin tests required password reading
-func TestReadRequiredPasswordFromStdin(t *testing.T) {
-	t.Run("Returns password when provided", func(t *testing.T) {
-		cleanup := setupStdinPipe(t, "requiredpass\n")
-		defer cleanup()
-
-		password, err := ReadRequiredPasswordFromStdin("resealing")
-		if err != nil {
-			t.Fatalf("ReadRequiredPasswordFromStdin() unexpected error: %v", err)
-		}
-		if password != "requiredpass" {
-			t.Errorf("ReadRequiredPasswordFromStdin() = %q, want %q", password, "requiredpass")
-		}
-	})
-
-	t.Run("Returns error when empty", func(t *testing.T) {
-		cleanup := setupStdinPipe(t, "\n")
-		defer cleanup()
-
-		_, err := ReadRequiredPasswordFromStdin("resealing")
-		if err == nil {
-			t.Error("ReadRequiredPasswordFromStdin() expected error for empty password, got nil")
-		}
-		if !strings.Contains(err.Error(), "password cannot be empty") {
-			t.Errorf("ReadRequiredPasswordFromStdin() error = %q, want to contain 'password cannot be empty'", err.Error())
-		}
-	})
-
-	t.Run("Returns error on EOF", func(t *testing.T) {
-		cleanup := setupStdinPipe(t, "")
-		defer cleanup()
-
-		_, err := ReadRequiredPasswordFromStdin("resealing")
-		if err == nil {
-			t.Error("ReadRequiredPasswordFromStdin() expected error on EOF, got nil")
-		}
-		if !strings.Contains(err.Error(), "password cannot be empty") {
-			t.Errorf("ReadRequiredPasswordFromStdin() error = %q, want to contain 'password cannot be empty'", err.Error())
-		}
-	})
-}
-
-// TestReadExistingPasswordFromStdin tests existing password reading for authentication
-func TestReadExistingPasswordFromStdin(t *testing.T) {
-	t.Run("Returns password when provided", func(t *testing.T) {
-		cleanup := setupStdinPipe(t, "existingpass\n")
-		defer cleanup()
-
-		password, err := ReadExistingPasswordFromStdin()
-		if err != nil {
-			t.Fatalf("ReadExistingPasswordFromStdin() unexpected error: %v", err)
-		}
-		if password != "existingpass" {
-			t.Errorf("ReadExistingPasswordFromStdin() = %q, want %q", password, "existingpass")
-		}
-	})
-
-	t.Run("Returns error when empty", func(t *testing.T) {
-		cleanup := setupStdinPipe(t, "\n")
-		defer cleanup()
-
-		_, err := ReadExistingPasswordFromStdin()
-		if err == nil {
-			t.Error("ReadExistingPasswordFromStdin() expected error for empty password, got nil")
-		}
-		if !strings.Contains(err.Error(), "password required but none provided") {
-			t.Errorf("ReadExistingPasswordFromStdin() error = %q, want to contain 'password required but none provided'", err.Error())
-		}
-	})
-
-	t.Run("Returns error on EOF", func(t *testing.T) {
-		cleanup := setupStdinPipe(t, "")
-		defer cleanup()
-
-		_, err := ReadExistingPasswordFromStdin()
-		if err == nil {
-			t.Error("ReadExistingPasswordFromStdin() expected error on EOF, got nil")
-		}
-		if !strings.Contains(err.Error(), "password required but none provided") {
-			t.Errorf("ReadExistingPasswordFromStdin() error = %q, want to contain 'password required but none provided'", err.Error())
 		}
 	})
 }

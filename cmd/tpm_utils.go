@@ -418,8 +418,8 @@ func HandleTPMPolicyFailureWithPCRDetails(err error, tpmDev transport.TPM, nvram
 	ShowPCRDetails(tpmDev, nvramIndex, debug)
 
 	// Show guidance
-	fmt.Println("To fix this, run: tpm2-kira reseal")
-	fmt.Println("(Make sure you have the password that was set during initial sealing)")
+	fmt.Println("To fix this, run: tpm2-kira reseal --privkey /path/to/private.key")
+	fmt.Println("(Provide the signing private key that corresponds to the public key used during sealing)")
 
 	return true
 }
@@ -684,11 +684,12 @@ func GetCurrentPCRValuesFromRegisters(tpmDev transport.TPM, sealedBlob *SealedBl
 type UnsealWorkflowResult struct {
 	UnsealedData []byte
 	SealedBlob   *SealedBlob
-	UsedPassword bool
 }
 
-// UnsealWorkflow performs the complete unsealing workflow
-// This consolidates the common pattern used in run, reveal, and reseal commands
+// UnsealWorkflow performs the complete unsealing workflow using PolicyOR PCR branch.
+// This consolidates the common pattern used in run, reveal, and reseal commands.
+// When PCRs don't match, returns a PCRMismatchError so the caller can fall back
+// to the PolicySigned branch if a private key is available.
 func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*UnsealWorkflowResult, error) {
 	// Read sealed blob from NVRAM
 	sealedData, err := ReadFromNVRAM(tpmDev, nvramIndex)
@@ -731,7 +732,7 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*Unsea
 		}
 
 		pcrErr := &PCRMismatchError{
-			Message:         "PCR values have changed. Use 'reseal' command to update with current PCR values",
+			Message:         "PCR values have changed. Use 'reseal' command with signing key to update",
 			PCRIndices:      sealedBlob.GetPCRIndices(),
 			ExpectedDigests: expectedDigests,
 			CurrentDigests:  currentDigests,
@@ -754,8 +755,8 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*Unsea
 	}
 	defer FlushHandle(tpmDev, loadedObject.ObjectHandle)
 
-	// Unseal the data using PCR policy
-	unsealedData, err := UnsealData(tpmDev, loadedObject, sealedBlob, "", true)
+	// Unseal the data using PolicyOR PCR branch
+	unsealedData, err := UnsealWithPCRBranch(tpmDev, loadedObject, sealedBlob, debug)
 	if err != nil {
 		return nil, err
 	}
@@ -763,7 +764,6 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*Unsea
 	return &UnsealWorkflowResult{
 		UnsealedData: unsealedData,
 		SealedBlob:   sealedBlob,
-		UsedPassword: false,
 	}, nil
 }
 
@@ -985,8 +985,10 @@ type CreateSealedObjectResponse struct {
 	Private []byte
 }
 
-// CreateSealedObject creates a sealed object with the given data, PCR policy, and password
-func CreateSealedObject(tpmDev transport.TPM, primaryKey *PrimaryKeyResponse, dataToSeal []byte, policyDigest tpm2.TPM2BDigest, password string) (*CreateSealedObjectResponse, error) {
+// CreateSealedObject creates a sealed object with the given data and PCR policy.
+// Password auth has been removed; use CreateSealedObjectPolicyOR in policy_or.go
+// for PolicyOR-based sealing.
+func CreateSealedObject(tpmDev transport.TPM, primaryKey *PrimaryKeyResponse, dataToSeal []byte, policyDigest tpm2.TPM2BDigest) (*CreateSealedObjectResponse, error) {
 	createCmd := tpm2.Create{
 		ParentHandle: tpm2.AuthHandle{
 			Handle: primaryKey.ObjectHandle,
@@ -996,7 +998,7 @@ func CreateSealedObject(tpmDev transport.TPM, primaryKey *PrimaryKeyResponse, da
 		InSensitive: tpm2.TPM2BSensitiveCreate{
 			Sensitive: &tpm2.TPMSSensitiveCreate{
 				UserAuth: tpm2.TPM2BAuth{
-					Buffer: []byte(password),
+					Buffer: nil,
 				},
 				Data: tpm2.NewTPMUSensitiveCreate(&tpm2.TPM2BSensitiveData{
 					Buffer: dataToSeal,
@@ -1071,31 +1073,21 @@ func FlushHandle(tpmDev transport.TPM, handle tpm2.TPMHandle) {
 	_, _ = flushCmd.Execute(tpmDev)
 }
 
-// UnsealData unseals data from a loaded sealed object
-func UnsealData(tpmDev transport.TPM, loadedObject *LoadSealedObjectResponse, sealedBlob *SealedBlob, password string, usePCRPolicy bool) ([]byte, error) {
-	var authHandle tpm2.AuthHandle
+// UnsealData is kept for backward compatibility but now only supports PCR policy mode.
+// Password-based unsealing has been removed; use UnsealWithPCRBranch or UnsealWithSignedBranch instead.
+func UnsealData(tpmDev transport.TPM, loadedObject *LoadSealedObjectResponse, sealedBlob *SealedBlob) ([]byte, error) {
+	// Use PCR policy session with the correct hash algorithm from the blob
+	hashAlgo := sealedBlob.GetHashAlgo()
+	sess, cleanup, err := CreatePCRPolicySession(tpmDev, sealedBlob.GetPCRIndices(), hashAlgo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create PCR policy session: %w", err)
+	}
+	defer cleanup()
 
-	if usePCRPolicy {
-		// Use PCR policy session with the correct hash algorithm from the blob
-		hashAlgo := sealedBlob.GetHashAlgo()
-		sess, cleanup, err := CreatePCRPolicySession(tpmDev, sealedBlob.GetPCRIndices(), hashAlgo)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create PCR policy session: %w", err)
-		}
-		defer cleanup()
-
-		authHandle = tpm2.AuthHandle{
-			Handle: loadedObject.ObjectHandle,
-			Name:   loadedObject.Name,
-			Auth:   sess,
-		}
-	} else {
-		// Use password authentication
-		authHandle = tpm2.AuthHandle{
-			Handle: loadedObject.ObjectHandle,
-			Name:   loadedObject.Name,
-			Auth:   tpm2.PasswordAuth([]byte(password)),
-		}
+	authHandle := tpm2.AuthHandle{
+		Handle: loadedObject.ObjectHandle,
+		Name:   loadedObject.Name,
+		Auth:   sess,
 	}
 
 	// Unseal the data

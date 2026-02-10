@@ -121,7 +121,7 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 var AppVersion = "unknown"
 
 // CurrentBlobVersion is the only supported blob format version
-const CurrentBlobVersion = 3
+const CurrentBlobVersion = 5
 
 // PCRSource indicates where a PCR value was obtained from
 type PCRSource byte
@@ -167,16 +167,18 @@ func (s PCRSource) Suffix() string {
 // Maximum size constraints for blob deserialization to prevent memory exhaustion.
 // These limits are generous for legitimate use while blocking malicious allocations.
 const (
-	MaxBlobSize      = 10 * 1024 * 1024 // 10MB maximum total blob size
-	MaxAppVersionLen = 1024             // 1KB maximum app version string
-	MaxPublicLen     = 2 * 1024 * 1024  // 2MB maximum public blob
-	MaxPrivateLen    = 2 * 1024 * 1024  // 2MB maximum private blob
-	MaxPCRDigests    = 100              // Maximum 100 PCR digest entries
-	MaxDigestSize    = 1024             // Maximum 1KB per individual digest
-	MaxCommandLen    = 4096             // Maximum 4KB for predict command string
-	MaxEventlogPath  = 4096             // Maximum 4KB for eventlog path
-	MaxEventlogHash  = 128              // Maximum 128 bytes for hash string
-	MaxCalcTime      = 256              // Maximum 256 bytes for timestamp
+	MaxBlobSize           = 10 * 1024 * 1024 // 10MB maximum total blob size
+	MaxAppVersionLen      = 1024             // 1KB maximum app version string
+	MaxPublicLen          = 2 * 1024 * 1024  // 2MB maximum public blob
+	MaxPrivateLen         = 2 * 1024 * 1024  // 2MB maximum private blob
+	MaxPCRDigests         = 100              // Maximum 100 PCR digest entries
+	MaxDigestSize         = 1024             // Maximum 1KB per individual digest
+	MaxCommandLen         = 4096             // Maximum 4KB for predict command string
+	MaxEventlogPath       = 4096             // Maximum 4KB for eventlog path
+	MaxEventlogHash       = 128              // Maximum 128 bytes for hash string
+	MaxCalcTime           = 256              // Maximum 256 bytes for timestamp
+	MaxSignedBranchDigest = 64               // Maximum 64 bytes for signed branch digest (SHA-256 = 32 bytes)
+	MaxKeyPathLen         = 4096             // 4KB maximum for key filesystem paths
 )
 
 // PCRDigestPair represents a PCR index paired with its digest value
@@ -197,15 +199,17 @@ type EventlogInfo struct {
 }
 
 // SealedBlob represents the complete sealed data structure
-// Version 3: Per-PCR source tracking (register vs eventlog), no global EventlogBased flag
+// Version 5: PolicyOR-based authentication with signed branch digest instead of public key PEM
 type SealedBlob struct {
-	Version      uint32          `json:"version"`       // Blob format version (must be 3)
-	AppVersion   string          `json:"app_version"`   // Application version that created this blob
-	Public       []byte          `json:"public"`        // TPM public key blob
-	Private      []byte          `json:"private"`       // TPM private key blob
-	PCRDigests   []PCRDigestPair `json:"pcr_digests"`   // PCR indices with their source and digest values
-	HasPassword  bool            `json:"has_password"`  // Whether password fallback is enabled
-	EventlogInfo *EventlogInfo   `json:"eventlog_info"` // Eventlog calculation metadata (if any PCR uses eventlog)
+	Version            uint32          `json:"version"`                    // Blob format version (must be 5)
+	AppVersion         string          `json:"app_version"`                // Application version that created this blob
+	Public             []byte          `json:"public"`                     // TPM public key blob
+	Private            []byte          `json:"private"`                    // TPM private key blob
+	PCRDigests         []PCRDigestPair `json:"pcr_digests"`                // PCR indices with their source and digest values
+	SignedBranchDigest []byte          `json:"signed_branch_digest"`       // Pre-computed PolicySigned branch digest (SHA-256, 32 bytes)
+	EventlogInfo       *EventlogInfo   `json:"eventlog_info"`              // Eventlog calculation metadata (if any PCR uses eventlog)
+	PublicKeyPath      string          `json:"public_key_path,omitempty"`  // Filesystem path to signing public key (stored for reseal convenience)
+	PrivateKeyPath     string          `json:"private_key_path,omitempty"` // Filesystem path to signing private key (stored for reseal convenience)
 }
 
 // GetHashAlgo infers the PCR hash algorithm from the stored digest sizes.
@@ -304,10 +308,12 @@ func (sb *SealedBlob) GetPCRSpecs() []PCRSpec {
 	return specs
 }
 
-// Marshal converts the SealedBlob to bytes for storage (Version 3 format)
+// Marshal converts the SealedBlob to bytes for storage (Version 5 format)
 func (sb *SealedBlob) Marshal() ([]byte, error) {
-	// Format v3: [version:4][appVersionLen:4][appVersion][publicLen:4][public][privateLen:4][private]
-	//            [numPCRDigests:4][pcrDigestPairs...][hasPassword:1][hasEventlogInfo:1][eventlogInfo...]
+	// Format v5: [version:4][appVersionLen:4][appVersion][publicLen:4][public][privateLen:4][private]
+	//            [numPCRDigests:4][pcrDigestPairs...][signedBranchDigestLen:2][signedBranchDigest]
+	//            [hasEventlogInfo:1][eventlogInfo...]
+	//            [hasKeyPaths:1][pubKeyPathLen:2][pubKeyPath][privKeyPathLen:2][privKeyPath]
 	// where pcrDigestPairs = [pcrIndex:4][source:1][commandLen:2][command][digestLen:2][digest]...
 	//   (commandLen+command only present when source == PCRSourcePredict)
 
@@ -316,8 +322,14 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 		4 + len(sb.Public) + // public blob
 		4 + len(sb.Private) + // private blob
 		4 + // number of PCR digests
-		1 + // hasPassword flag
-		1 // hasEventlogInfo flag
+		2 + len(sb.SignedBranchDigest) + // signed branch digest length (2 bytes) + data
+		1 + // hasEventlogInfo flag
+		1 // hasKeyPaths flag
+
+	// Guard against integer overflow and unreasonable allocations
+	if size < 0 || size > MaxBlobSize {
+		return nil, fmt.Errorf("sealed blob base size %d exceeds maximum allowed %d bytes", size, MaxBlobSize)
+	}
 
 	// Calculate PCR digest pair size
 	for _, pcrDigest := range sb.PCRDigests {
@@ -326,6 +338,9 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 			2 + len(pcrDigest.Digest.Buffer) // 2 bytes for length + digest data
 		if pcrDigest.Source == PCRSourcePredict {
 			size += 2 + len(pcrDigest.Command) // 2 bytes for command length + command string
+		}
+		if size < 0 || size > MaxBlobSize {
+			return nil, fmt.Errorf("sealed blob size %d exceeds maximum allowed %d bytes after PCR digests", size, MaxBlobSize)
 		}
 	}
 
@@ -336,12 +351,30 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 			4 + len(sb.EventlogInfo.EventlogHash) + // eventlog hash
 			4 + len(sb.EventlogInfo.CalculationTime) + // calculation time
 			4 + 4 // total events + processed events (4 bytes each)
+		if size < 0 || size > MaxBlobSize {
+			return nil, fmt.Errorf("sealed blob size %d exceeds maximum allowed %d bytes after eventlog info", size, MaxBlobSize)
+		}
+	}
+
+	// Calculate key paths size (if present)
+	hasKeyPaths := sb.PublicKeyPath != "" || sb.PrivateKeyPath != ""
+	if hasKeyPaths {
+		size += 2 + len(sb.PublicKeyPath) + // pubkey path length + string
+			2 + len(sb.PrivateKeyPath) // privkey path length + string
+		if size < 0 || size > MaxBlobSize {
+			return nil, fmt.Errorf("sealed blob size %d exceeds maximum allowed %d bytes after key paths", size, MaxBlobSize)
+		}
+	}
+
+	// Final sanity check before allocation
+	if size < 0 || size > MaxBlobSize {
+		return nil, fmt.Errorf("sealed blob total size %d exceeds maximum allowed %d bytes", size, MaxBlobSize)
 	}
 
 	buf := make([]byte, size)
 	offset := 0
 
-	// Version 3
+	// Version 4
 	binary.LittleEndian.PutUint32(buf[offset:], CurrentBlobVersion)
 	offset += 4
 
@@ -390,13 +423,11 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 		offset += len(pcrDigest.Digest.Buffer)
 	}
 
-	// Password flag (no hash/salt in v3)
-	if sb.HasPassword {
-		buf[offset] = 1
-	} else {
-		buf[offset] = 0
-	}
-	offset++
+	// Signed branch digest (v5: replaces SigningKeyPEM from v4)
+	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(sb.SignedBranchDigest)))
+	offset += 2
+	copy(buf[offset:], sb.SignedBranchDigest)
+	offset += len(sb.SignedBranchDigest)
 
 	// Eventlog information flag
 	if hasEventlogInfo {
@@ -433,11 +464,32 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 		offset += 4
 	}
 
+	// Key paths flag and data
+	if hasKeyPaths {
+		buf[offset] = 1
+		offset++
+
+		// Public key path
+		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(sb.PublicKeyPath)))
+		offset += 2
+		copy(buf[offset:], sb.PublicKeyPath)
+		offset += len(sb.PublicKeyPath)
+
+		// Private key path
+		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(sb.PrivateKeyPath)))
+		offset += 2
+		copy(buf[offset:], sb.PrivateKeyPath)
+		offset += len(sb.PrivateKeyPath)
+	} else {
+		buf[offset] = 0
+		offset++
+	}
+
 	return buf, nil
 }
 
 // UnmarshalSealedBlob parses bytes back into a SealedBlob
-// Only supports version 3 format
+// Only supports version 4 format
 func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 	// Validate total blob size to prevent resource exhaustion
 	if len(data) > MaxBlobSize {
@@ -571,12 +623,21 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 		offset += digestSize
 	}
 
-	// Password flag
-	if offset >= len(data) {
-		return nil, fmt.Errorf("data too short for password flag")
+	// Signed branch digest (v5)
+	if offset+2 > len(data) {
+		return nil, fmt.Errorf("data too short for signed branch digest length")
 	}
-	sb.HasPassword = data[offset] == 1
-	offset++
+	digestLen := int(binary.LittleEndian.Uint16(data[offset:]))
+	offset += 2
+	if digestLen > MaxSignedBranchDigest {
+		return nil, fmt.Errorf("signed branch digest length %d exceeds maximum %d", digestLen, MaxSignedBranchDigest)
+	}
+	if offset+digestLen > len(data) {
+		return nil, fmt.Errorf("data too short for signed branch digest data")
+	}
+	sb.SignedBranchDigest = make([]byte, digestLen)
+	copy(sb.SignedBranchDigest, data[offset:offset+digestLen])
+	offset += digestLen
 
 	// Eventlog info flag
 	if offset >= len(data) {
@@ -644,6 +705,44 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 		offset += 4
 	}
 
+	// Key paths (trailing optional section — absent in older v4 blobs)
+	if offset < len(data) {
+		hasKeyPaths := data[offset] == 1
+		offset++
+
+		if hasKeyPaths && offset < len(data) {
+			// Public key path
+			if offset+2 > len(data) {
+				return nil, fmt.Errorf("data too short for public key path length")
+			}
+			pubPathLen := int(binary.LittleEndian.Uint16(data[offset:]))
+			offset += 2
+			if pubPathLen > MaxKeyPathLen {
+				return nil, fmt.Errorf("public key path length %d exceeds maximum %d", pubPathLen, MaxKeyPathLen)
+			}
+			if offset+pubPathLen > len(data) {
+				return nil, fmt.Errorf("data too short for public key path")
+			}
+			sb.PublicKeyPath = string(data[offset : offset+pubPathLen])
+			offset += pubPathLen
+
+			// Private key path
+			if offset+2 > len(data) {
+				return nil, fmt.Errorf("data too short for private key path length")
+			}
+			privPathLen := int(binary.LittleEndian.Uint16(data[offset:]))
+			offset += 2
+			if privPathLen > MaxKeyPathLen {
+				return nil, fmt.Errorf("private key path length %d exceeds maximum %d", privPathLen, MaxKeyPathLen)
+			}
+			if offset+privPathLen > len(data) {
+				return nil, fmt.Errorf("data too short for private key path")
+			}
+			sb.PrivateKeyPath = string(data[offset : offset+privPathLen])
+			offset += privPathLen
+		}
+	}
+
 	return sb, nil
 }
 
@@ -669,29 +768,35 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 
 	// Create a JSON-friendly structure
 	type SealedBlobJSON struct {
-		Version       uint32          `json:"version"`
-		AppVersion    string          `json:"app_version"`
-		HashAlgorithm string          `json:"hash_algorithm"`
-		Public        string          `json:"public_hex"`
-		PublicSize    int             `json:"public_size"`
-		Private       string          `json:"private_hex"`
-		PrivateSize   int             `json:"private_size"`
-		PCRDigests    []PCRDigestJSON `json:"pcr_digests"`
-		HasPassword   bool            `json:"has_password"`
-		EventlogInfo  *EventlogInfo   `json:"eventlog_info,omitempty"`
+		Version                uint32          `json:"version"`
+		AppVersion             string          `json:"app_version"`
+		HashAlgorithm          string          `json:"hash_algorithm"`
+		Public                 string          `json:"public_hex"`
+		PublicSize             int             `json:"public_size"`
+		Private                string          `json:"private_hex"`
+		PrivateSize            int             `json:"private_size"`
+		PCRDigests             []PCRDigestJSON `json:"pcr_digests"`
+		SignedBranchDigest     string          `json:"signed_branch_digest_hex"`
+		SignedBranchDigestSize int             `json:"signed_branch_digest_size"`
+		PublicKeyPath          string          `json:"public_key_path,omitempty"`
+		PrivateKeyPath         string          `json:"private_key_path,omitempty"`
+		EventlogInfo           *EventlogInfo   `json:"eventlog_info,omitempty"`
 	}
 
 	jsonBlob := SealedBlobJSON{
-		Version:       sb.Version,
-		AppVersion:    sb.AppVersion,
-		HashAlgorithm: sb.GetHashAlgo().String(),
-		Public:        hex.EncodeToString(sb.Public),
-		PublicSize:    len(sb.Public),
-		Private:       hex.EncodeToString(sb.Private),
-		PrivateSize:   len(sb.Private),
-		PCRDigests:    pcrDigests,
-		HasPassword:   sb.HasPassword,
-		EventlogInfo:  sb.EventlogInfo,
+		Version:                sb.Version,
+		AppVersion:             sb.AppVersion,
+		HashAlgorithm:          sb.GetHashAlgo().String(),
+		Public:                 hex.EncodeToString(sb.Public),
+		PublicSize:             len(sb.Public),
+		Private:                hex.EncodeToString(sb.Private),
+		PrivateSize:            len(sb.Private),
+		PCRDigests:             pcrDigests,
+		SignedBranchDigest:     hex.EncodeToString(sb.SignedBranchDigest),
+		SignedBranchDigestSize: len(sb.SignedBranchDigest),
+		PublicKeyPath:          sb.PublicKeyPath,
+		PrivateKeyPath:         sb.PrivateKeyPath,
+		EventlogInfo:           sb.EventlogInfo,
 	}
 
 	return json.Marshal(jsonBlob)

@@ -91,7 +91,7 @@ func PrintKIRAError(err error) {
 		}
 
 		fmt.Println()
-		fmt.Println("To fix this, run: tpm2-kira reseal")
+		fmt.Println("To fix this, run: tpm2-kira reseal --privkey /path/to/private.key")
 	} else if IsTPMPolicyFailure(err) {
 		// Handle TPM policy failures with helpful guidance
 		fmt.Println(FormatKIRAError(err))
@@ -102,8 +102,8 @@ func PrintKIRAError(err error) {
 		fmt.Println("- The system state has changed since sealing")
 		fmt.Println()
 
-		fmt.Println("To see detailed PCR values and fix this, run: tpm2-kira reseal")
-		fmt.Println("(Make sure you have the password that was set during initial sealing)")
+		fmt.Println("To see detailed PCR values and fix this, run: tpm2-kira reseal --privkey /path/to/private.key")
+		fmt.Println("(Provide the signing private key that corresponds to the public key used during sealing)")
 	} else {
 		fmt.Println(FormatKIRAError(err))
 	}

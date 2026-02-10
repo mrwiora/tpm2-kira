@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"crypto"
 	"crypto/rand"
 	"encoding/base32"
 	"fmt"
@@ -9,18 +10,26 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
-// Seal generates and seals a TOTP secret to TPM NVRAM with PCR policy and optional password
-func Seal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool, hashAlgo PCRHashAlgo) error {
+// Seal generates and seals a TOTP secret to TPM NVRAM with PolicyOR (PCR + Signed branches)
+func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath string, debug bool, hashAlgo PCRHashAlgo) error {
 	// Parse PCR specs first to display them
 	specs, err := ParsePCRSpecs(pcrsStr)
 	if err != nil {
 		return fmt.Errorf("invalid PCRs: %w", err)
 	}
 
+	// Load and validate the signing public key
+	pubKey, _, err := LoadSigningPublicKeyFromPEM(pubKeyPath)
+	if err != nil {
+		return fmt.Errorf("failed to load signing public key: %w", err)
+	}
+
 	// Display which PCRs are being used
 	fmt.Println("=== Sealing Configuration ===")
 	fmt.Printf("Hash Algorithm: %s (%d-byte PCR digests)\n", hashAlgo.DisplayString(), hashAlgo.DigestSize())
 	fmt.Printf("PCRs used for sealing: %s\n", PCRSpecsToString(specs))
+	fmt.Printf("Signing Key: %s (%s, fingerprint: %s)\n", pubKeyPath, PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
+	fmt.Printf("Authentication: PolicyOR (PCR branch + PolicySigned branch)\n")
 	fmt.Println()
 	for _, spec := range specs {
 		fmt.Printf("  PCR%-2d (%s): %s\n", spec.Index, spec.Source.String(), GetPCRDescription(spec.Index))
@@ -35,7 +44,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug boo
 	}
 
 	// Seal the generated TOTP secret
-	if err := sealDataWithSpecs(tpmPath, specs, nvramIndex, dataToSeal, password, debug, hashAlgo); err != nil {
+	if err := sealDataWithSpecs(tpmPath, specs, nvramIndex, dataToSeal, pubKey, pubKeyPath, privKeyPath, debug, hashAlgo); err != nil {
 		return err
 	}
 
@@ -54,23 +63,23 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug boo
 	fmt.Println()
 	fmt.Println("To generate TOTP codes:")
 	fmt.Printf("   tpm2-kira reveal --nvram 0x%08X\n", nvramIndex)
-	if password != "" {
-		fmt.Println("   (password fallback enabled for recovery)")
-	} else {
-		fmt.Println("   (WARNING: no password fallback - reseal will not be possible)")
-	}
+	fmt.Println("   (PolicyOR: PCR branch for normal access, PolicySigned for recovery)")
 
 	return nil
 }
 
-// sealDataWithSpecs seals data using explicit PCR specs with per-PCR source (register or eventlog)
-func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataToSeal []byte, password string, debug bool, hashAlgo PCRHashAlgo) error {
+// sealDataWithSpecs seals data using explicit PCR specs with PolicyOR (PCR + Signed branches)
+func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataToSeal []byte, pubKey crypto.PublicKey, pubKeyPath, privKeyPath string, debug bool, hashAlgo PCRHashAlgo) error {
 	if len(specs) == 0 {
 		return fmt.Errorf("no PCRs specified")
 	}
 
 	if len(dataToSeal) == 0 {
 		return fmt.Errorf("no data to seal")
+	}
+
+	if pubKey == nil {
+		return fmt.Errorf("no signing public key provided")
 	}
 
 	// Open TPM
@@ -92,15 +101,17 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 	// Build ordered list of all PCR indices (preserving spec order)
 	allPCRIndices := PCRSpecIndices(specs)
 
-	// Compute policy digest from all collected PCR values
-	policyDigest, err := ComputePolicyDigestFromPCRValues(tpmDev, allPCRIndices, readResult.Values, hashAlgo)
+	// Compute the full PolicyOR digest (PCR branch + Signed branch)
+	combinedDigest, branches, err := ComputeFullPolicyDigest(tpmDev, allPCRIndices, readResult.Values, hashAlgo, pubKey, debug)
 	if err != nil {
-		return fmt.Errorf("failed to compute policy digest from PCR values: %w", err)
+		return fmt.Errorf("failed to compute PolicyOR digest: %w", err)
 	}
 
 	if debug {
-		fmt.Println("=== Policy Digest Details ===")
-		fmt.Printf("Policy digest: %x\n", policyDigest.Buffer)
+		fmt.Println("=== PolicyOR Digest Details ===")
+		fmt.Printf("PCR branch digest: %x\n", branches.PCRBranchDigest.Buffer)
+		fmt.Printf("Signed branch digest: %x\n", branches.SignedBranchDigest.Buffer)
+		fmt.Printf("Combined PolicyOR digest: %x\n", combinedDigest.Buffer)
 		fmt.Printf("PCR values used in policy:\n")
 		for _, spec := range specs {
 			val := readResult.Values[spec.Index]
@@ -133,21 +144,23 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 	}
 	defer FlushHandle(tpmDev, primaryKey.ObjectHandle)
 
-	// Create sealed object
-	createRsp, err := CreateSealedObject(tpmDev, primaryKey, dataToSeal, policyDigest, password)
+	// Create sealed object with PolicyOR (no password)
+	createRsp, err := CreateSealedObjectPolicyOR(tpmDev, primaryKey, dataToSeal, combinedDigest)
 	if err != nil {
 		return err
 	}
 
-	// Prepare sealed blob (Version 3: per-PCR source tracking)
+	// Prepare sealed blob (Version 4: PolicyOR with signing key)
 	sealedBlob := &SealedBlob{
-		Version:      3,
-		AppVersion:   AppVersion,
-		Public:       createRsp.Public,
-		Private:      createRsp.Private,
-		PCRDigests:   pcrDigests,
-		HasPassword:  password != "",
-		EventlogInfo: readResult.EventlogInfo,
+		Version:            CurrentBlobVersion,
+		AppVersion:         AppVersion,
+		Public:             createRsp.Public,
+		Private:            createRsp.Private,
+		PCRDigests:         pcrDigests,
+		SignedBranchDigest: branches.SignedBranchDigest.Buffer,
+		EventlogInfo:       readResult.EventlogInfo,
+		PublicKeyPath:      pubKeyPath,
+		PrivateKeyPath:     privKeyPath,
 	}
 
 	// Marshal to bytes
@@ -171,11 +184,8 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 			fmt.Printf("Eventlog path: %s\n", readResult.EventlogInfo.EventlogPath)
 			fmt.Printf("Total events: %d\n", readResult.EventlogInfo.TotalEvents)
 		}
-		if password != "" {
-			fmt.Printf("Password fallback: enabled (TPM-validated)\n")
-		} else {
-			fmt.Printf("Password fallback: disabled\n")
-		}
+		fmt.Printf("Authentication: PolicyOR (PCR + PolicySigned)\n")
+		fmt.Printf("Signing key: %s (fingerprint: %s)\n", PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
 	}
 
 	return nil

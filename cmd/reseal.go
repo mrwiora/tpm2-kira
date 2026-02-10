@@ -1,15 +1,25 @@
 package cmd
 
 import (
+	"crypto"
 	"fmt"
 	"strings"
 
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
-// Reseal unseals data from TPM NVRAM and reseals it with current PCR values
-// Automatically preserves per-PCR source modes (register vs eventlog) from the original blob
-func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug bool) error {
+// Reseal unseals data from TPM NVRAM and reseals with current PCR values.
+//
+// Authentication is handled entirely by the TPM via PolicyOR:
+//   - If PCR values match: the TPM authorizes unseal via the PCR branch. No private key needed.
+//   - If PCR values changed: the TPM requires PolicySigned proof. The private key signs a
+//     nonce and the TPM verifies it against the public key baked into the policy.
+//
+// The signing public key for the NEW sealed blob is determined by:
+//  1. --pubkey flag (explicit override)
+//  2. Derived from --privkey (if provided)
+//  3. The public key stored in the existing blob (default, preserves key identity)
+func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath string, debug bool) error {
 	// Parse PCRs if provided (we'll use original PCRs if not explicitly overridden)
 	var userProvidedSpecs []PCRSpec
 	var userSpecifiedPCRs bool
@@ -46,57 +56,77 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 		return fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
 
-	// Resealing requires password for recovery
-	if !sealedBlob.HasPassword {
+	// Verify the blob has a signed branch digest (v5 format)
+	if len(sealedBlob.SignedBranchDigest) == 0 {
 		tpmDev.Close()
-		return fmt.Errorf("resealing requires a password for recovery. The sealed data was created without a password, so resealing would risk permanent lockout after future PCR changes. To reseal, first extract the data and seal it again with a password")
+		return fmt.Errorf("sealed blob does not contain a signed branch digest. Re-seal with current version: tpm2-kira seal")
 	}
 
-	if password == "" {
-		tpmDev.Close()
-		return fmt.Errorf("resealing requires a password to ensure recovery is possible after future PCR changes")
+	// ── Resolve key paths: CLI flags take priority, then blob paths ──
+	// The blob stores the filesystem paths used at seal time so that reseal
+	// can locate the keys automatically when the user doesn't override them.
+	effectivePrivKeyPath := privKeyPath
+	effectivePubKeyPath := pubKeyPath
+
+	if effectivePrivKeyPath == "" && sealedBlob.PrivateKeyPath != "" {
+		effectivePrivKeyPath = sealedBlob.PrivateKeyPath
+		if debug {
+			fmt.Printf("Using private key path from blob: %s\n", effectivePrivKeyPath)
+		}
+	}
+	if effectivePubKeyPath == "" && sealedBlob.PublicKeyPath != "" {
+		effectivePubKeyPath = sealedBlob.PublicKeyPath
+		if debug {
+			fmt.Printf("Using public key path from blob: %s\n", effectivePubKeyPath)
+		}
 	}
 
-	// Password validation is now done by TPM during unseal (no more Argon2 pre-check)
-
-	// Perform unsealing workflow using the same logic as reveal/run commands
+	// ── Unseal: let the TPM decide which branch to use ──
+	// Try the PCR branch first. If PCRs match, the TPM authorizes it directly.
+	// If PCRs changed, fall back to PolicySigned where the TPM verifies the signature.
 	result, err := UnsealWorkflow(tpmDev, nvramIndex, debug)
 	if err != nil {
-		// Check if it's a PCR mismatch - we can handle this with password
+		// Check if it's a PCR mismatch - we can handle this with PolicySigned recovery
 		if pcrErr, ok := err.(*PCRMismatchError); ok {
-			fmt.Printf("PCR values changed - using password authentication\n\n")
+			fmt.Printf("PCR values changed - using PolicySigned recovery (signing key authentication)\n\n")
 
 			// Show PCR mismatch details (blob vs current register values)
 			PrintKIRAError(pcrErr)
 
-			// Use password authentication for unsealing (TPM validates the password)
-			result, err = UnsealWithPassword(tpmDev, nvramIndex, password, debug)
+			// Private key is required for PolicySigned recovery
+			if effectivePrivKeyPath == "" {
+				tpmDev.Close()
+				return fmt.Errorf("PCR values have changed. The signing private key is required for recovery.\n" +
+					"  Provide it with --privkey <path>")
+			}
+
+			// Use PolicySigned branch for unsealing - the TPM verifies the signature
+			result, err = UnsealWithSignedBranchFromBlob(tpmDev, nvramIndex, effectivePrivKeyPath, debug)
 			if err != nil {
 				tpmDev.Close()
-				// Convert TPM auth errors to user-friendly message
-				if IsTPMAuthError(err) {
-					return fmt.Errorf("incorrect password")
-				}
-				return fmt.Errorf("failed to unseal with password: %w", err)
+				return fmt.Errorf("failed to unseal with signing key: %w", err)
 			}
 		} else if IsTPMPolicyFailure(err) {
-			// TPM policy failure - show PCR comparison and use password authentication
-			fmt.Printf("TPM policy verification failed - using password authentication\n")
+			// TPM policy failure - show PCR comparison and use PolicySigned recovery
+			fmt.Printf("TPM policy verification failed - using PolicySigned recovery\n")
 			fmt.Printf("This typically happens when PCR values change during the unsealing process\n")
 			fmt.Println()
 
 			// Show PCR details using centralized helper function
 			ShowPCRDetails(tpmDev, nvramIndex, debug)
 
-			// Use password authentication for unsealing (TPM validates the password)
-			result, err = UnsealWithPassword(tpmDev, nvramIndex, password, debug)
+			// Private key is required for PolicySigned recovery
+			if effectivePrivKeyPath == "" {
+				tpmDev.Close()
+				return fmt.Errorf("TPM policy verification failed. The signing private key is required for recovery.\n" +
+					"  Provide it with --privkey <path>")
+			}
+
+			// Use PolicySigned branch for unsealing - the TPM verifies the signature
+			result, err = UnsealWithSignedBranchFromBlob(tpmDev, nvramIndex, effectivePrivKeyPath, debug)
 			if err != nil {
 				tpmDev.Close()
-				// Convert TPM auth errors to user-friendly message
-				if IsTPMAuthError(err) {
-					return fmt.Errorf("incorrect password")
-				}
-				return fmt.Errorf("failed to unseal with password: %w", err)
+				return fmt.Errorf("failed to unseal with signing key: %w", err)
 			}
 		} else {
 			tpmDev.Close()
@@ -110,6 +140,45 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 	// Close TPM device before calling sealDataWithSpecs (which will open it again)
 	tpmDev.Close()
 
+	// ── Determine the public key for re-sealing ──
+	// Priority: --pubkey > blob pubkey path > derived from --privkey > blob privkey path
+	// The blob no longer stores the public key PEM; a key source on the filesystem is required.
+	var resealPubKey crypto.PublicKey
+	var resealPubKeySource string
+	var resealPubKeyPathForBlob string
+	var resealPrivKeyPathForBlob string
+
+	if effectivePubKeyPath != "" {
+		// Explicit --pubkey (or blob path): load from the filesystem
+		var loadedPubKey crypto.PublicKey
+		loadedPubKey, _, err = LoadSigningPublicKeyFromPEM(effectivePubKeyPath)
+		if err != nil {
+			return fmt.Errorf("failed to load signing public key from %s: %w", effectivePubKeyPath, err)
+		}
+		resealPubKey = loadedPubKey
+		resealPubKeySource = effectivePubKeyPath
+		resealPubKeyPathForBlob = effectivePubKeyPath
+	} else if effectivePrivKeyPath != "" {
+		// No --pubkey but --privkey was given: derive public key from it
+		privKey, loadErr := LoadSigningPrivateKeyFromPEM(effectivePrivKeyPath)
+		if loadErr != nil {
+			return fmt.Errorf("failed to load private key to derive public key: %w", loadErr)
+		}
+		resealPubKey = privKey.Public()
+		resealPubKeySource = fmt.Sprintf("(derived from %s)", effectivePrivKeyPath)
+	} else {
+		// Neither --pubkey nor --privkey available: cannot reseal
+		return fmt.Errorf("cannot reseal: no signing key available.\n" +
+			"  Provide --pubkey <path> or --privkey <path>, or ensure the key paths\n" +
+			"  stored in the blob are accessible on the filesystem")
+	}
+
+	// Preserve the private key path for the new blob
+	if effectivePrivKeyPath != "" {
+		resealPrivKeyPathForBlob = effectivePrivKeyPath
+	}
+
+	// ── Display configuration and re-seal ──
 	// Determine which PCR specs to use for resealing
 	var specsToUse []PCRSpec
 
@@ -184,67 +253,18 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, password string, debug b
 		}
 	}
 
+	fmt.Printf("Signing key: %s (%s, fingerprint: %s)\n", resealPubKeySource, PublicKeyDescription(resealPubKey), PublicKeyFingerprint(resealPubKey))
+
 	// Reseal the data with the determined specs, preserving the original hash algorithm
-	if err := sealDataWithSpecs(tpmPath, specsToUse, nvramIndex, unsealedData, password, debug, hashAlgo); err != nil {
+	if err := sealDataWithSpecs(tpmPath, specsToUse, nvramIndex, unsealedData, resealPubKey, resealPubKeyPathForBlob, resealPrivKeyPathForBlob, debug, hashAlgo); err != nil {
 		return fmt.Errorf("failed to reseal data: %w", err)
 	}
 
 	fmt.Printf("\nSuccessfully resealed data with PCRs: %s\n", PCRSpecsToString(specsToUse))
 	fmt.Printf("Data size: %d bytes\n", len(unsealedData))
+	fmt.Printf("Authentication: PolicyOR (PCR branch + PolicySigned branch)\n")
 
 	return nil
-}
-
-// UnsealWithPassword performs unsealing using password authentication when PCRs don't match
-// Password validation is done solely by the TPM - no software pre-validation
-func UnsealWithPassword(tpmDev transport.TPM, nvramIndex uint32, password string, debug bool) (*UnsealWorkflowResult, error) {
-	// Read sealed blob from NVRAM
-	sealedData, err := ReadFromNVRAM(tpmDev, nvramIndex)
-	if err != nil {
-		return nil, HandleNVRAMNotFoundError(err, debug)
-	}
-
-	// Unmarshal sealed blob
-	sealedBlob, err := UnmarshalSealedBlob(sealedData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
-	}
-
-	// Check if password protection was enabled during sealing
-	if !sealedBlob.HasPassword {
-		return nil, fmt.Errorf("sealed data has no password fallback configured")
-	}
-
-	// Create primary key
-	primaryKey, err := CreatePrimaryKey(tpmDev)
-	if err != nil {
-		return nil, err
-	}
-	defer FlushHandle(tpmDev, primaryKey.ObjectHandle)
-
-	// Load sealed object
-	loadedObject, err := LoadSealedObject(tpmDev, primaryKey, sealedBlob)
-	if err != nil {
-		return nil, err
-	}
-	defer FlushHandle(tpmDev, loadedObject.ObjectHandle)
-
-	// Unseal the data using password authentication (not PCR policy)
-	// The TPM validates the password directly - no software pre-validation needed
-	unsealedData, err := UnsealData(tpmDev, loadedObject, sealedBlob, password, false)
-	if err != nil {
-		// Check if this is an authentication error and provide clearer message
-		if IsTPMAuthError(err) {
-			return nil, fmt.Errorf("TPM rejected password: incorrect password")
-		}
-		return nil, err
-	}
-
-	return &UnsealWorkflowResult{
-		UnsealedData: unsealedData,
-		SealedBlob:   sealedBlob,
-		UsedPassword: true,
-	}, nil
 }
 
 // IsTPMAuthError checks if an error is a TPM authentication/authorization failure
