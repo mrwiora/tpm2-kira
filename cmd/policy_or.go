@@ -332,6 +332,28 @@ func ComputeSignedBranchDigest(tpmDev transport.TPM, pubKey crypto.PublicKey) (t
 	return ComputeSignedBranchDigestWithHandle(tpmDev, loadRsp.ObjectHandle, loadRsp.Name, pubKey)
 }
 
+// ComputeNVWritePolicyDigest computes the PolicySigned digest that will be set
+// as the AuthPolicy on an NV index to protect writes. Any entity that wants to
+// write to the NV index must satisfy a PolicySigned session proving possession
+// of the corresponding private key.
+//
+// This is structurally identical to ComputeSignedBranchDigest (same policy
+// command, same key) — the wrapper exists for naming clarity: the caller is
+// computing a policy for NV write authorization, not for an unseal branch.
+//
+// When the caller already holds a loaded key handle, use
+// ComputeNVWritePolicyDigestWithHandle to avoid a redundant LoadExternal.
+func ComputeNVWritePolicyDigest(tpmDev transport.TPM, pubKey crypto.PublicKey) (tpm2.TPM2BDigest, error) {
+	return ComputeSignedBranchDigest(tpmDev, pubKey)
+}
+
+// ComputeNVWritePolicyDigestWithHandle is the handle-reusing variant of
+// ComputeNVWritePolicyDigest. Use this when the signing public key is already
+// loaded into the TPM (avoids a second LoadExternal round-trip).
+func ComputeNVWritePolicyDigestWithHandle(tpmDev transport.TPM, keyHandle tpm2.TPMIDHObject, keyName tpm2.TPM2BName, pubKey crypto.PublicKey) (tpm2.TPM2BDigest, error) {
+	return ComputeSignedBranchDigestWithHandle(tpmDev, keyHandle, keyName, pubKey)
+}
+
 // ComputeSignedBranchDigestWithHandle computes the PolicySigned branch digest
 // reusing an already-loaded key handle. This avoids a second LoadExternal call
 // when the key is already loaded (e.g. during unseal).

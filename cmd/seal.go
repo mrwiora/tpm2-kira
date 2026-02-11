@@ -82,6 +82,10 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 		return fmt.Errorf("no signing public key provided")
 	}
 
+	if privKeyPath == "" {
+		return fmt.Errorf("signing private key path is required for NV write authorization")
+	}
+
 	// Open TPM
 	tpmDev, err := transport.OpenTPM(tpmPath)
 	if err != nil {
@@ -91,6 +95,14 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 
 	// Cleanup TPM memory
 	CleanupTPM(tpmDev, debug)
+
+	// Load the signing private key — required for PolicySigned NV writes.
+	// This is done after the TPM open so that simple input validations and
+	// the TPM availability check run first.
+	privKey, err := LoadSigningPrivateKeyFromPEM(privKeyPath)
+	if err != nil {
+		return fmt.Errorf("failed to load signing private key for NV write authorization: %w", err)
+	}
 
 	// Read all PCR values from their respective sources using the shared helper
 	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, debug)
@@ -169,8 +181,8 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 		return fmt.Errorf("failed to marshal sealed data: %w", err)
 	}
 
-	// Write to TPM NVRAM
-	if err := WriteToNVRAM(tpmDev, nvramIndex, data); err != nil {
+	// Write to TPM NVRAM with PolicySigned-protected writes
+	if err := WriteToNVRAM(tpmDev, nvramIndex, data, pubKey, privKey); err != nil {
 		return fmt.Errorf("failed to write to NVRAM: %w", err)
 	}
 

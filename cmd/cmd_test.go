@@ -2733,9 +2733,20 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("Rejects empty private key path", func(t *testing.T) {
+		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
+		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte("test-data"), dummyKey, "", "", false, PCRHashAlgoSHA256)
+		if err == nil {
+			t.Error("sealDataWithSpecs() expected error for empty privkey path, got nil")
+		}
+		if !strings.Contains(err.Error(), "signing private key path is required") {
+			t.Errorf("sealDataWithSpecs() error = %q, want to contain 'signing private key path is required'", err.Error())
+		}
+	})
+
 	t.Run("Fails on invalid TPM path", func(t *testing.T) {
 		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
-		err := sealDataWithSpecs("/nonexistent/tpm/path", specs, 0x01803010, []byte("test-data"), dummyKey, "", "", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/nonexistent/tpm/path", specs, 0x01803010, []byte("test-data"), dummyKey, "", "/dummy/privkey.pem", false, PCRHashAlgoSHA256)
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error for invalid TPM path, got nil")
 		}

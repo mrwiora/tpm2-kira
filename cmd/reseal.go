@@ -239,10 +239,17 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 			"  stored in the blob are accessible on the filesystem")
 	}
 
-	// Preserve the private key path for the new blob
-	if effectivePrivKeyPath != "" {
-		resealPrivKeyPathForBlob = effectivePrivKeyPath
+	// The private key is now required for re-sealing — PolicySigned NV
+	// writes demand proof of key possession for every write, not just for
+	// recovery-unseal.  Validate early with a helpful message.
+	if effectivePrivKeyPath == "" {
+		return fmt.Errorf("cannot reseal: signing private key is required for NV write authorization.\n" +
+			"  Provide --privkey <path>, or ensure the default key at " + DefaultPrivateKeyPath + " exists.\n" +
+			"  The key pair is normally created by 'tpm2-kira setup'")
 	}
+
+	// Preserve the private key path for the new blob
+	resealPrivKeyPathForBlob = effectivePrivKeyPath
 
 	// ── Display configuration and re-seal ──
 	// Determine which PCR specs to use for resealing

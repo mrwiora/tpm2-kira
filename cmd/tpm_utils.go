@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"crypto"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"strconv"
 	"strings"
@@ -826,16 +829,24 @@ func ReadFromNVRAM(tpmDev transport.TPM, index uint32) ([]byte, error) {
 }
 
 // WriteToNVRAM writes data to a TPM NVRAM index
-func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte) error {
+func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto.PublicKey, privKey crypto.Signer) error {
 	// Validate index is within the safe application range
 	if err := ValidateNVRAMIndex(index); err != nil {
 		return fmt.Errorf("invalid NVRAM index: %w", err)
 	}
 
+	if pubKey == nil {
+		return fmt.Errorf("signing public key is required for NV write authorization")
+	}
+	if privKey == nil {
+		return fmt.Errorf("signing private key is required for NV write authorization")
+	}
+
 	nvIndex := tpm2.TPMHandle(index)
 
 	// Try to undefine existing NVRAM space (if it exists)
-	// Need to read the name first for NVUndefineSpace
+	// NVUndefineSpace is an owner-hierarchy operation and works regardless
+	// of the NV index's read/write attributes.
 	readPub := tpm2.NVReadPublic{
 		NVIndex: nvIndex,
 	}
@@ -854,7 +865,36 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte) error {
 	}
 	// If checkErr != nil, index doesn't exist, which is fine
 
-	// Define NVRAM space
+	// Load the signing public key into the TPM once — the handle is reused
+	// for both the policy digest computation and the per-chunk PolicySigned
+	// sessions, avoiding redundant LoadExternal round-trips.
+	loadRsp, err := LoadExternalPublicKey(tpmDev, pubKey)
+	if err != nil {
+		return fmt.Errorf("failed to load signing key for NV write policy: %w", err)
+	}
+	defer FlushHandle(tpmDev, loadRsp.ObjectHandle)
+
+	keyHandle := loadRsp.ObjectHandle
+	keyName := loadRsp.Name
+
+	// Compute the PolicySigned digest that will be the AuthPolicy on this
+	// NV index.  Any future NVWrite must satisfy a PolicySigned session
+	// proving possession of the corresponding private key.
+	nvWritePolicy, err := ComputeNVWritePolicyDigestWithHandle(tpmDev, keyHandle, keyName, pubKey)
+	if err != nil {
+		return fmt.Errorf("failed to compute NV write policy digest: %w", err)
+	}
+
+	// Define NVRAM space with PolicySigned-protected writes.
+	//
+	// Key attribute changes vs. the old (vulnerable) definition:
+	//   OwnerWrite  true  -> false  (prevent owner-hierarchy bypass of policy)
+	//   AuthWrite   true  -> false  (remove unauthenticated write path)
+	//   PolicyWrite unset -> true   (require policy session for writes)
+	//   AuthPolicy  empty -> PolicySigned digest (bind writes to signing key)
+	//
+	// Read attributes are unchanged — reading the raw blob is harmless since
+	// the TPM still protects the actual secret via the sealed object policy.
 	define := tpm2.NVDefineSpace{
 		AuthHandle: tpm2.TPMRHOwner,
 		Auth: tpm2.TPM2BAuth{
@@ -864,30 +904,28 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte) error {
 			NVIndex: nvIndex,
 			NameAlg: tpm2.TPMAlgSHA256,
 			Attributes: tpm2.TPMANV{
-				OwnerWrite: true,
-				OwnerRead:  true,
-				AuthWrite:  true,
-				AuthRead:   true,
+				OwnerWrite:  false,
+				OwnerRead:   true,
+				PolicyWrite: true,
+				AuthRead:    true,
 			},
-			DataSize: uint16(len(data)),
+			AuthPolicy: nvWritePolicy,
+			DataSize:   uint16(len(data)),
 		}),
 	}
 
-	_, err := define.Execute(tpmDev)
+	_, err = define.Execute(tpmDev)
 	if err != nil {
 		return fmt.Errorf("failed to define NVRAM space: %w", err)
 	}
 
-	// Read the NV index public area to get its name
-	nvReadPub := tpm2.NVReadPublic{
-		NVIndex: nvIndex,
-	}
-	nvReadPubRsp, err := nvReadPub.Execute(tpmDev)
-	if err != nil {
-		return fmt.Errorf("failed to read NV public: %w", err)
-	}
-
-	// Write data to NVRAM in chunks
+	// Write data to NVRAM in chunks using PolicySigned sessions.
+	//
+	// Each chunk gets its own policy session because:
+	//   1. The TPM nonce changes per session, requiring a fresh signature.
+	//   2. After the first NVWrite the TPM sets TPMA_NV_WRITTEN which
+	//      changes the NV public area and therefore the NV Name.  We
+	//      re-read NVReadPublic before each chunk to pick up the new Name.
 	maxChunkSize := 1024
 	offset := 0
 
@@ -897,11 +935,64 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte) error {
 			chunkSize = len(data) - offset
 		}
 
+		// Re-read NV public area to get the current Name.
+		// The Name changes after the first write (TPMA_NV_WRITTEN is set).
+		nvReadPub := tpm2.NVReadPublic{
+			NVIndex: nvIndex,
+		}
+		nvReadPubRsp, err := nvReadPub.Execute(tpmDev)
+		if err != nil {
+			return fmt.Errorf("failed to read NV public: %w", err)
+		}
+
+		// Build a PolicySigned session for this chunk.  The callback is
+		// invoked by the go-tpm library when the session is first used as
+		// authorization; it signs the TPM-provided nonce to prove
+		// possession of the private key.
+		policySession := tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm transport.TPM, handle tpm2.TPMISHPolicy, nonceTPM tpm2.TPM2BNonce) error {
+			// aHash = SHA-256(nonceTPM || expiration(0))
+			// expiration is a 4-byte big-endian int32 = 0
+			// cpHashA and policyRef are empty (omitted per spec)
+			aHashInput := make([]byte, 0, len(nonceTPM.Buffer)+4)
+			aHashInput = append(aHashInput, nonceTPM.Buffer...)
+			expirationBytes := make([]byte, 4)
+			binary.BigEndian.PutUint32(expirationBytes, 0)
+			aHashInput = append(aHashInput, expirationBytes...)
+
+			aHash := sha256.Sum256(aHashInput)
+
+			// Sign the aHash with the private key
+			tpmSig, signErr := signForTPM(privKey, aHash[:])
+			if signErr != nil {
+				return fmt.Errorf("failed to sign NV write policy nonce: %w", signErr)
+			}
+
+			// Execute PolicySigned — the TPM verifies the signature
+			// against the loaded public key and extends the session
+			// digest with the key Name.
+			_, signedErr := tpm2.PolicySigned{
+				AuthObject: tpm2.NamedHandle{
+					Handle: keyHandle,
+					Name:   keyName,
+				},
+				PolicySession: handle,
+				NonceTPM:      nonceTPM,
+				Expiration:    0,
+				Auth:          tpmSig,
+			}.Execute(tpm)
+			if signedErr != nil {
+				return fmt.Errorf("failed to execute PolicySigned for NV write: %w", signedErr)
+			}
+
+			return nil
+		})
+
+		// Write the chunk using the satisfied policy session as authorization
 		write := tpm2.NVWrite{
 			AuthHandle: tpm2.AuthHandle{
 				Handle: nvIndex,
 				Name:   nvReadPubRsp.NVName,
-				Auth:   tpm2.PasswordAuth(nil),
+				Auth:   policySession,
 			},
 			NVIndex: tpm2.NamedHandle{
 				Handle: nvIndex,
@@ -913,7 +1004,7 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte) error {
 			Offset: uint16(offset),
 		}
 
-		_, err := write.Execute(tpmDev)
+		_, err = write.Execute(tpmDev)
 		if err != nil {
 			return fmt.Errorf("failed to write to NVRAM at offset %d: %w", offset, err)
 		}
