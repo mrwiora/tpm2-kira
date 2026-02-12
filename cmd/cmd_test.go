@@ -1044,7 +1044,7 @@ func TestPeekBlobVersion(t *testing.T) {
 			name: "Version 6 blob (v6 layout: appVersionLen at offset 8)",
 			data: func() []byte {
 				d := make([]byte, 30)
-				binary.LittleEndian.PutUint32(d[0:4], 6) // version 6
+				binary.LittleEndian.PutUint32(d[0:4], 6)  // version 6
 				binary.LittleEndian.PutUint32(d[4:8], 20) // payloadLen (doesn't matter for peek)
 				binary.LittleEndian.PutUint32(d[8:12], 5) // appVersionLen = 5
 				copy(d[12:], "3.0.0")
@@ -3121,7 +3121,7 @@ func TestSignBlobPayloadUnsupportedKeyType(t *testing.T) {
 	}
 
 	// RSA signature should be much larger than ECDSA
-	rsaSigOverhead := len(signedRSA) - len(unsigned) - 2  // subtract sigLen prefix
+	rsaSigOverhead := len(signedRSA) - len(unsigned) - 2 // subtract sigLen prefix
 	ecSigOverhead := len(signedEC) - len(unsigned) - 2
 	if rsaSigOverhead <= ecSigOverhead {
 		t.Errorf("RSA sig (%d bytes) should be larger than ECDSA sig (%d bytes)", rsaSigOverhead, ecSigOverhead)
