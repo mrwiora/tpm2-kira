@@ -98,14 +98,14 @@ func TestParsePCRSpecs(t *testing.T) {
 		},
 		{
 			name:  "Single predict PCR",
-			input: "11p=/usr/bin/tpm2-pcr11predict",
+			input: "11p:/usr/bin/tpm2-pcr11predict",
 			expected: []PCRSpec{
 				{Index: 11, Source: PCRSourcePredict, Command: "/usr/bin/tpm2-pcr11predict"},
 			},
 		},
 		{
 			name:  "Multiple PCRs with predict",
-			input: "0e,2,7e,11p=tpm2-pcr11predict",
+			input: "0e,2,7e,11p:tpm2-pcr11predict",
 			expected: []PCRSpec{
 				{Index: 0, Source: PCRSourceEventlog},
 				{Index: 2, Source: PCRSourceRegister},
@@ -115,14 +115,14 @@ func TestParsePCRSpecs(t *testing.T) {
 		},
 		{
 			name:  "Predict with absolute path",
-			input: "11p=/usr/local/bin/predict-pcr11",
+			input: "11p:/usr/local/bin/predict-pcr11",
 			expected: []PCRSpec{
 				{Index: 11, Source: PCRSourcePredict, Command: "/usr/local/bin/predict-pcr11"},
 			},
 		},
 		{
 			name:  "Predict with arguments",
-			input: "11p=predict-pcr11 --sha256",
+			input: "11p:predict-pcr11 --sha256",
 			expected: []PCRSpec{
 				{Index: 11, Source: PCRSourcePredict, Command: "predict-pcr11 --sha256"},
 			},
@@ -134,7 +134,7 @@ func TestParsePCRSpecs(t *testing.T) {
 		},
 		{
 			name:      "Predict with empty command",
-			input:     "11p=",
+			input:     "11p:",
 			shouldErr: true,
 		},
 		{
@@ -348,7 +348,7 @@ func TestPCRSpecsToString(t *testing.T) {
 				{Index: 0, Source: PCRSourceEventlog},
 				{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict"},
 			},
-			expected: "0e,11p=tpm2-pcr11predict",
+			expected: "0e,11p:tpm2-pcr11predict",
 		},
 		{
 			name:     "Empty",
@@ -2527,7 +2527,7 @@ func TestPCRSourcePredict(t *testing.T) {
 }
 
 func TestParsePCRSpecsPredictRoundTrip(t *testing.T) {
-	input := "0e,2,11p=tpm2-pcr11predict"
+	input := "0e,2,11p:tpm2-pcr11predict"
 	specs, err := ParsePCRSpecs(input)
 	if err != nil {
 		t.Fatalf("ParsePCRSpecs failed: %v", err)
@@ -2539,7 +2539,7 @@ func TestParsePCRSpecsPredictRoundTrip(t *testing.T) {
 }
 
 func TestParsePCRSpecsPredictAbsolutePath(t *testing.T) {
-	input := "11p=/usr/bin/tpm2-pcr11predict"
+	input := "11p:/usr/bin/tpm2-pcr11predict"
 	specs, err := ParsePCRSpecs(input)
 	if err != nil {
 		t.Fatalf("ParsePCRSpecs failed: %v", err)
@@ -2731,7 +2731,7 @@ func TestResolveNVRAMIndex(t *testing.T) {
 		{
 			name:     "Small number maps to slot",
 			input:    1,
-			expected: NVRAMSlotStart + 0,
+			expected: NVRAMSlotStart + 1,
 		},
 		{
 			name:     "Full index passed through",

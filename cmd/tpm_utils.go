@@ -380,6 +380,7 @@ func IsTPMPolicyFailure(err error) bool {
 
 	errStr := err.Error()
 	return strings.Contains(errStr, "TPM_RC_POLICY_FAIL") ||
+		strings.Contains(errStr, "TPM_RC_POLICY_CC") ||
 		strings.Contains(errStr, "policy check failed") ||
 		strings.Contains(errStr, "failed to create PCR policy session") ||
 		strings.Contains(errStr, "session 1): a policy check failed")
