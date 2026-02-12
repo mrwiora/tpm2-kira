@@ -332,6 +332,28 @@ func ComputeSignedBranchDigest(tpmDev transport.TPM, pubKey crypto.PublicKey) (t
 	return ComputeSignedBranchDigestWithHandle(tpmDev, loadRsp.ObjectHandle, loadRsp.Name, pubKey)
 }
 
+// ComputeNVWritePolicyDigest computes the PolicySigned digest that will be set
+// as the AuthPolicy on an NV index to protect writes. Any entity that wants to
+// write to the NV index must satisfy a PolicySigned session proving possession
+// of the corresponding private key.
+//
+// This is structurally identical to ComputeSignedBranchDigest (same policy
+// command, same key) — the wrapper exists for naming clarity: the caller is
+// computing a policy for NV write authorization, not for an unseal branch.
+//
+// When the caller already holds a loaded key handle, use
+// ComputeNVWritePolicyDigestWithHandle to avoid a redundant LoadExternal.
+func ComputeNVWritePolicyDigest(tpmDev transport.TPM, pubKey crypto.PublicKey) (tpm2.TPM2BDigest, error) {
+	return ComputeSignedBranchDigest(tpmDev, pubKey)
+}
+
+// ComputeNVWritePolicyDigestWithHandle is the handle-reusing variant of
+// ComputeNVWritePolicyDigest. Use this when the signing public key is already
+// loaded into the TPM (avoids a second LoadExternal round-trip).
+func ComputeNVWritePolicyDigestWithHandle(tpmDev transport.TPM, keyHandle tpm2.TPMIDHObject, keyName tpm2.TPM2BName, pubKey crypto.PublicKey) (tpm2.TPM2BDigest, error) {
+	return ComputeSignedBranchDigestWithHandle(tpmDev, keyHandle, keyName, pubKey)
+}
+
 // ComputeSignedBranchDigestWithHandle computes the PolicySigned branch digest
 // reusing an already-loaded key handle. This avoids a second LoadExternal call
 // when the key is already loaded (e.g. during unseal).
@@ -548,10 +570,10 @@ func UnsealWithPCRBranch(tpmDev transport.TPM, loadedObject *LoadSealedObjectRes
 
 	// Use the pre-computed signed branch digest stored in the blob.
 	// This avoids loading the signing public key into the TPM on the normal boot path.
-	if len(sealedBlob.SignedBranchDigest) == 0 {
+	if len(sealedBlob.Payload.SignedBranchDigest) == 0 {
 		return nil, fmt.Errorf("sealed blob does not contain a signed branch digest (was sealed with an older version)")
 	}
-	signedBranchDigest := tpm2.TPM2BDigest{Buffer: sealedBlob.SignedBranchDigest}
+	signedBranchDigest := tpm2.TPM2BDigest{Buffer: sealedBlob.Payload.SignedBranchDigest}
 
 	// Build a Policy session via callback that satisfies:
 	//   1. PolicyPCR  (branch 1)
@@ -652,10 +674,10 @@ func UnsealWithSignedBranch(tpmDev transport.TPM, loadedObject *LoadSealedObject
 	}
 
 	// Use the pre-computed signed branch digest from the blob.
-	if len(sealedBlob.SignedBranchDigest) == 0 {
+	if len(sealedBlob.Payload.SignedBranchDigest) == 0 {
 		return nil, fmt.Errorf("sealed blob does not contain a signed branch digest (was sealed with an older version)")
 	}
-	signedBranchDigestExpected := tpm2.TPM2BDigest{Buffer: sealedBlob.SignedBranchDigest}
+	signedBranchDigestExpected := tpm2.TPM2BDigest{Buffer: sealedBlob.Payload.SignedBranchDigest}
 
 	// Capture loaded key handle/name and private key for the closure
 	keyHandle := loadRsp.ObjectHandle
@@ -883,7 +905,7 @@ func computePCRBranchDigestFromBlob(tpmDev transport.TPM, sealedBlob *SealedBlob
 
 	// Build PCR values map from blob digests
 	pcrValues := make(map[int][]byte)
-	for _, pair := range sealedBlob.PCRDigests {
+	for _, pair := range sealedBlob.Payload.PCRDigests {
 		pcrValues[pair.Index] = pair.Digest.Buffer
 	}
 
@@ -1022,7 +1044,7 @@ func UnsealWithSignedBranchFromBlob(tpmDev transport.TPM, nvramIndex uint32, pri
 	}
 
 	// Verify the blob has a signed branch digest
-	if len(sealedBlob.SignedBranchDigest) == 0 {
+	if len(sealedBlob.Payload.SignedBranchDigest) == 0 {
 		return nil, fmt.Errorf("sealed blob does not contain a signed branch digest (was sealed with an older version)")
 	}
 

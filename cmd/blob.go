@@ -1,6 +1,11 @@
 package cmd
 
 import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -93,7 +98,9 @@ type BlobPeek struct {
 	AppVersion string // empty if version is too old or data too short to read
 }
 
-// PeekBlobVersion reads just the version and app version from raw blob data without full unmarshal
+// PeekBlobVersion reads just the version and app version from raw blob data without full unmarshal.
+// For v6 blobs the layout is: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
+// For older blobs the layout is: [version:4][appVersionLen:4][appVersion...]
 func PeekBlobVersion(data []byte) *BlobPeek {
 	peek := &BlobPeek{
 		DataSize: len(data),
@@ -105,11 +112,21 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 
 	peek.Version = binary.LittleEndian.Uint32(data[0:4])
 
-	// Try to read app version (v3 layout: [version:4][appVersionLen:4][appVersion])
-	if len(data) >= 8 {
-		appVersionLen := binary.LittleEndian.Uint32(data[4:8])
-		if appVersionLen > 0 && appVersionLen < 256 && len(data) >= 8+int(appVersionLen) {
-			peek.AppVersion = string(data[8 : 8+appVersionLen])
+	if peek.Version == CurrentBlobVersion {
+		// v6 layout: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
+		if len(data) >= 12 {
+			appVersionLen := binary.LittleEndian.Uint32(data[8:12])
+			if appVersionLen > 0 && appVersionLen < 256 && len(data) >= 12+int(appVersionLen) {
+				peek.AppVersion = string(data[12 : 12+appVersionLen])
+			}
+		}
+	} else {
+		// Legacy layout: [version:4][appVersionLen:4][appVersion...]
+		if len(data) >= 8 {
+			appVersionLen := binary.LittleEndian.Uint32(data[4:8])
+			if appVersionLen > 0 && appVersionLen < 256 && len(data) >= 8+int(appVersionLen) {
+				peek.AppVersion = string(data[8 : 8+appVersionLen])
+			}
 		}
 	}
 
@@ -121,7 +138,11 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 var AppVersion = "unknown"
 
 // CurrentBlobVersion is the only supported blob format version
-const CurrentBlobVersion = 5
+const CurrentBlobVersion = 6
+
+// MaxBlobSignatureLen is the maximum allowed signature size in bytes.
+// Generous: RSA-4096 PKCS#1 v1.5 = 512 bytes, ECDSA P-384 DER ≈ 104 bytes.
+const MaxBlobSignatureLen = 1024
 
 // PCRSource indicates where a PCR value was obtained from
 type PCRSource byte
@@ -198,10 +219,11 @@ type EventlogInfo struct {
 	ProcessedEvents int    `json:"processed_events"` // Number of events that extended PCRs
 }
 
-// SealedBlob represents the complete sealed data structure
-// Version 5: PolicyOR-based authentication with signed branch digest instead of public key PEM
-type SealedBlob struct {
-	Version            uint32          `json:"version"`                    // Blob format version (must be 5)
+// SealedBlobPayload contains every field that is covered by the blob
+// signature.  When adding new fields to the blob, add them HERE and
+// update MarshalPayload / UnmarshalPayload.  This guarantees that new
+// fields are automatically included in the signed region.
+type SealedBlobPayload struct {
 	AppVersion         string          `json:"app_version"`                // Application version that created this blob
 	Public             []byte          `json:"public"`                     // TPM public key blob
 	Private            []byte          `json:"private"`                    // TPM private key blob
@@ -212,10 +234,20 @@ type SealedBlob struct {
 	PrivateKeyPath     string          `json:"private_key_path,omitempty"` // Filesystem path to signing private key (stored for reseal convenience)
 }
 
+// SealedBlob is the top-level envelope: version, signed payload, and
+// detached signature.  Only BlobSignature lives outside the signed region.
+//
+// Version 6: Signed blob with SealedBlobPayload substructure.
+type SealedBlob struct {
+	Version       uint32            `json:"version"`                  // Blob format version (must be 6)
+	Payload       SealedBlobPayload `json:"payload"`                  // All authenticated content
+	BlobSignature []byte            `json:"blob_signature,omitempty"` // Signature over [version ‖ payloadLen ‖ payload bytes]
+}
+
 // GetHashAlgo infers the PCR hash algorithm from the stored digest sizes.
 // Returns SHA-256 by default, SHA-1 if all digests are 20 bytes.
 func (sb *SealedBlob) GetHashAlgo() PCRHashAlgo {
-	for _, pcrDigest := range sb.PCRDigests {
+	for _, pcrDigest := range sb.Payload.PCRDigests {
 		digestLen := len(pcrDigest.Digest.Buffer)
 		if digestLen == 20 {
 			return PCRHashAlgoSHA1
@@ -230,8 +262,8 @@ func (sb *SealedBlob) GetHashAlgo() PCRHashAlgo {
 
 // GetPCRIndices returns a slice of PCR indices from the PCRDigests
 func (sb *SealedBlob) GetPCRIndices() []int {
-	indices := make([]int, len(sb.PCRDigests))
-	for i, pcrDigest := range sb.PCRDigests {
+	indices := make([]int, len(sb.Payload.PCRDigests))
+	for i, pcrDigest := range sb.Payload.PCRDigests {
 		indices[i] = pcrDigest.Index
 	}
 	return indices
@@ -239,8 +271,8 @@ func (sb *SealedBlob) GetPCRIndices() []int {
 
 // GetPCRDigestValues returns a slice of digest values from the PCRDigests
 func (sb *SealedBlob) GetPCRDigestValues() []tpm2.TPM2BDigest {
-	digests := make([]tpm2.TPM2BDigest, len(sb.PCRDigests))
-	for i, pcrDigest := range sb.PCRDigests {
+	digests := make([]tpm2.TPM2BDigest, len(sb.Payload.PCRDigests))
+	for i, pcrDigest := range sb.Payload.PCRDigests {
 		digests[i] = pcrDigest.Digest
 	}
 	return digests
@@ -248,7 +280,7 @@ func (sb *SealedBlob) GetPCRDigestValues() []tpm2.TPM2BDigest {
 
 // HasEventlogPCRs returns true if any PCR in this blob uses eventlog as its source
 func (sb *SealedBlob) HasEventlogPCRs() bool {
-	for _, pair := range sb.PCRDigests {
+	for _, pair := range sb.Payload.PCRDigests {
 		if pair.Source == PCRSourceEventlog {
 			return true
 		}
@@ -259,7 +291,7 @@ func (sb *SealedBlob) HasEventlogPCRs() bool {
 // GetEventlogPCRIndices returns indices of PCRs that use eventlog as their source
 func (sb *SealedBlob) GetEventlogPCRIndices() []int {
 	var indices []int
-	for _, pair := range sb.PCRDigests {
+	for _, pair := range sb.Payload.PCRDigests {
 		if pair.Source == PCRSourceEventlog {
 			indices = append(indices, pair.Index)
 		}
@@ -270,7 +302,7 @@ func (sb *SealedBlob) GetEventlogPCRIndices() []int {
 // GetRegisterPCRIndices returns indices of PCRs that use TPM registers as their source
 func (sb *SealedBlob) GetRegisterPCRIndices() []int {
 	var indices []int
-	for _, pair := range sb.PCRDigests {
+	for _, pair := range sb.Payload.PCRDigests {
 		if pair.Source == PCRSourceRegister {
 			indices = append(indices, pair.Index)
 		}
@@ -280,7 +312,7 @@ func (sb *SealedBlob) GetRegisterPCRIndices() []int {
 
 // HasPredictPCRs returns true if any PCR in this blob uses predict as its source
 func (sb *SealedBlob) HasPredictPCRs() bool {
-	for _, pair := range sb.PCRDigests {
+	for _, pair := range sb.Payload.PCRDigests {
 		if pair.Source == PCRSourcePredict {
 			return true
 		}
@@ -291,7 +323,7 @@ func (sb *SealedBlob) HasPredictPCRs() bool {
 // GetPredictPCRIndices returns indices of PCRs that use prediction (external command) as their source
 func (sb *SealedBlob) GetPredictPCRIndices() []int {
 	var indices []int
-	for _, pair := range sb.PCRDigests {
+	for _, pair := range sb.Payload.PCRDigests {
 		if pair.Source == PCRSourcePredict {
 			indices = append(indices, pair.Index)
 		}
@@ -301,38 +333,51 @@ func (sb *SealedBlob) GetPredictPCRIndices() []int {
 
 // GetPCRSpecs reconstructs PCRSpec slice from the sealed blob's PCR digests
 func (sb *SealedBlob) GetPCRSpecs() []PCRSpec {
-	specs := make([]PCRSpec, len(sb.PCRDigests))
-	for i, pair := range sb.PCRDigests {
+	specs := make([]PCRSpec, len(sb.Payload.PCRDigests))
+	for i, pair := range sb.Payload.PCRDigests {
 		specs[i] = PCRSpec{Index: pair.Index, Source: pair.Source, Command: pair.Command}
 	}
 	return specs
 }
 
-// Marshal converts the SealedBlob to bytes for storage (Version 5 format)
-func (sb *SealedBlob) Marshal() ([]byte, error) {
-	// Format v5: [version:4][appVersionLen:4][appVersion][publicLen:4][public][privateLen:4][private]
-	//            [numPCRDigests:4][pcrDigestPairs...][signedBranchDigestLen:2][signedBranchDigest]
-	//            [hasEventlogInfo:1][eventlogInfo...]
-	//            [hasKeyPaths:1][pubKeyPathLen:2][pubKeyPath][privKeyPathLen:2][privKeyPath]
-	// where pcrDigestPairs = [pcrIndex:4][source:1][commandLen:2][command][digestLen:2][digest]...
-	//   (commandLen+command only present when source == PCRSourcePredict)
+// hasEventlogPCRsInPayload checks whether any PCR digest pair in the payload uses eventlog source.
+func hasEventlogPCRsInPayload(p *SealedBlobPayload) bool {
+	for _, pair := range p.PCRDigests {
+		if pair.Source == PCRSourceEventlog {
+			return true
+		}
+	}
+	return false
+}
 
-	size := 4 + // version (4 bytes for alignment and future compatibility)
-		4 + len(sb.AppVersion) + // app version length + string
-		4 + len(sb.Public) + // public blob
-		4 + len(sb.Private) + // private blob
+// MarshalPayload serialises the payload fields in the length-prefixed binary format.
+// The output does NOT include the version or signature — those belong to the outer envelope.
+//
+// Format:
+//
+//	[appVersionLen:4][appVersion]
+//	[publicLen:4][public]
+//	[privateLen:4][private]
+//	[numPCRDigests:4][pcrDigestPairs...]
+//	[signedBranchDigestLen:2][signedBranchDigest]
+//	[hasEventlogInfo:1][eventlogInfo...]
+//	[hasKeyPaths:1][pubKeyPathLen:2][pubKeyPath][privKeyPathLen:2][privKeyPath]
+func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
+	size := 4 + len(p.AppVersion) + // app version length + string
+		4 + len(p.Public) + // public blob
+		4 + len(p.Private) + // private blob
 		4 + // number of PCR digests
-		2 + len(sb.SignedBranchDigest) + // signed branch digest length (2 bytes) + data
+		2 + len(p.SignedBranchDigest) + // signed branch digest length (2 bytes) + data
 		1 + // hasEventlogInfo flag
 		1 // hasKeyPaths flag
 
 	// Guard against integer overflow and unreasonable allocations
 	if size < 0 || size > MaxBlobSize {
-		return nil, fmt.Errorf("sealed blob base size %d exceeds maximum allowed %d bytes", size, MaxBlobSize)
+		return nil, fmt.Errorf("sealed blob payload base size %d exceeds maximum allowed %d bytes", size, MaxBlobSize)
 	}
 
 	// Calculate PCR digest pair size
-	for _, pcrDigest := range sb.PCRDigests {
+	for _, pcrDigest := range p.PCRDigests {
 		size += 4 + // PCR index
 			1 + // source byte
 			2 + len(pcrDigest.Digest.Buffer) // 2 bytes for length + digest data
@@ -340,66 +385,62 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 			size += 2 + len(pcrDigest.Command) // 2 bytes for command length + command string
 		}
 		if size < 0 || size > MaxBlobSize {
-			return nil, fmt.Errorf("sealed blob size %d exceeds maximum allowed %d bytes after PCR digests", size, MaxBlobSize)
+			return nil, fmt.Errorf("sealed blob payload size %d exceeds maximum allowed %d bytes after PCR digests", size, MaxBlobSize)
 		}
 	}
 
 	// Calculate eventlog info size (if present)
-	hasEventlogInfo := sb.HasEventlogPCRs() && sb.EventlogInfo != nil
+	hasEventlogInfo := hasEventlogPCRsInPayload(p) && p.EventlogInfo != nil
 	if hasEventlogInfo {
-		size += 4 + len(sb.EventlogInfo.EventlogPath) + // eventlog path
-			4 + len(sb.EventlogInfo.EventlogHash) + // eventlog hash
-			4 + len(sb.EventlogInfo.CalculationTime) + // calculation time
+		size += 4 + len(p.EventlogInfo.EventlogPath) + // eventlog path
+			4 + len(p.EventlogInfo.EventlogHash) + // eventlog hash
+			4 + len(p.EventlogInfo.CalculationTime) + // calculation time
 			4 + 4 // total events + processed events (4 bytes each)
 		if size < 0 || size > MaxBlobSize {
-			return nil, fmt.Errorf("sealed blob size %d exceeds maximum allowed %d bytes after eventlog info", size, MaxBlobSize)
+			return nil, fmt.Errorf("sealed blob payload size %d exceeds maximum allowed %d bytes after eventlog info", size, MaxBlobSize)
 		}
 	}
 
 	// Calculate key paths size (if present)
-	hasKeyPaths := sb.PublicKeyPath != "" || sb.PrivateKeyPath != ""
+	hasKeyPaths := p.PublicKeyPath != "" || p.PrivateKeyPath != ""
 	if hasKeyPaths {
-		size += 2 + len(sb.PublicKeyPath) + // pubkey path length + string
-			2 + len(sb.PrivateKeyPath) // privkey path length + string
+		size += 2 + len(p.PublicKeyPath) + // pubkey path length + string
+			2 + len(p.PrivateKeyPath) // privkey path length + string
 		if size < 0 || size > MaxBlobSize {
-			return nil, fmt.Errorf("sealed blob size %d exceeds maximum allowed %d bytes after key paths", size, MaxBlobSize)
+			return nil, fmt.Errorf("sealed blob payload size %d exceeds maximum allowed %d bytes after key paths", size, MaxBlobSize)
 		}
 	}
 
 	// Final sanity check before allocation
 	if size < 0 || size > MaxBlobSize {
-		return nil, fmt.Errorf("sealed blob total size %d exceeds maximum allowed %d bytes", size, MaxBlobSize)
+		return nil, fmt.Errorf("sealed blob payload total size %d exceeds maximum allowed %d bytes", size, MaxBlobSize)
 	}
 
 	buf := make([]byte, size)
 	offset := 0
 
-	// Version 4
-	binary.LittleEndian.PutUint32(buf[offset:], CurrentBlobVersion)
-	offset += 4
-
 	// App version
-	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(sb.AppVersion)))
+	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(p.AppVersion)))
 	offset += 4
-	copy(buf[offset:], sb.AppVersion)
-	offset += len(sb.AppVersion)
+	copy(buf[offset:], p.AppVersion)
+	offset += len(p.AppVersion)
 
 	// Public blob
-	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(sb.Public)))
+	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(p.Public)))
 	offset += 4
-	copy(buf[offset:], sb.Public)
-	offset += len(sb.Public)
+	copy(buf[offset:], p.Public)
+	offset += len(p.Public)
 
 	// Private blob
-	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(sb.Private)))
+	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(p.Private)))
 	offset += 4
-	copy(buf[offset:], sb.Private)
-	offset += len(sb.Private)
+	copy(buf[offset:], p.Private)
+	offset += len(p.Private)
 
 	// PCR digest pairs (index + source + digest together)
-	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(sb.PCRDigests)))
+	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(p.PCRDigests)))
 	offset += 4
-	for _, pcrDigest := range sb.PCRDigests {
+	for _, pcrDigest := range p.PCRDigests {
 		// PCR index
 		binary.LittleEndian.PutUint32(buf[offset:], uint32(pcrDigest.Index))
 		offset += 4
@@ -423,11 +464,11 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 		offset += len(pcrDigest.Digest.Buffer)
 	}
 
-	// Signed branch digest (v5: replaces SigningKeyPEM from v4)
-	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(sb.SignedBranchDigest)))
+	// Signed branch digest
+	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(p.SignedBranchDigest)))
 	offset += 2
-	copy(buf[offset:], sb.SignedBranchDigest)
-	offset += len(sb.SignedBranchDigest)
+	copy(buf[offset:], p.SignedBranchDigest)
+	offset += len(p.SignedBranchDigest)
 
 	// Eventlog information flag
 	if hasEventlogInfo {
@@ -440,27 +481,27 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 	// Eventlog metadata (only if flag is set)
 	if hasEventlogInfo {
 		// Eventlog path
-		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(sb.EventlogInfo.EventlogPath)))
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(p.EventlogInfo.EventlogPath)))
 		offset += 4
-		copy(buf[offset:], sb.EventlogInfo.EventlogPath)
-		offset += len(sb.EventlogInfo.EventlogPath)
+		copy(buf[offset:], p.EventlogInfo.EventlogPath)
+		offset += len(p.EventlogInfo.EventlogPath)
 
 		// Eventlog hash
-		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(sb.EventlogInfo.EventlogHash)))
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(p.EventlogInfo.EventlogHash)))
 		offset += 4
-		copy(buf[offset:], sb.EventlogInfo.EventlogHash)
-		offset += len(sb.EventlogInfo.EventlogHash)
+		copy(buf[offset:], p.EventlogInfo.EventlogHash)
+		offset += len(p.EventlogInfo.EventlogHash)
 
 		// Calculation time
-		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(sb.EventlogInfo.CalculationTime)))
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(p.EventlogInfo.CalculationTime)))
 		offset += 4
-		copy(buf[offset:], sb.EventlogInfo.CalculationTime)
-		offset += len(sb.EventlogInfo.CalculationTime)
+		copy(buf[offset:], p.EventlogInfo.CalculationTime)
+		offset += len(p.EventlogInfo.CalculationTime)
 
 		// Total events and processed events
-		binary.LittleEndian.PutUint32(buf[offset:], uint32(sb.EventlogInfo.TotalEvents))
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(p.EventlogInfo.TotalEvents))
 		offset += 4
-		binary.LittleEndian.PutUint32(buf[offset:], uint32(sb.EventlogInfo.ProcessedEvents))
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(p.EventlogInfo.ProcessedEvents))
 		offset += 4
 	}
 
@@ -470,16 +511,16 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 		offset++
 
 		// Public key path
-		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(sb.PublicKeyPath)))
+		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(p.PublicKeyPath)))
 		offset += 2
-		copy(buf[offset:], sb.PublicKeyPath)
-		offset += len(sb.PublicKeyPath)
+		copy(buf[offset:], p.PublicKeyPath)
+		offset += len(p.PublicKeyPath)
 
 		// Private key path
-		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(sb.PrivateKeyPath)))
+		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(p.PrivateKeyPath)))
 		offset += 2
-		copy(buf[offset:], sb.PrivateKeyPath)
-		offset += len(sb.PrivateKeyPath)
+		copy(buf[offset:], p.PrivateKeyPath)
+		offset += len(p.PrivateKeyPath)
 	} else {
 		buf[offset] = 0
 		offset++
@@ -488,30 +529,15 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 	return buf, nil
 }
 
-// UnmarshalSealedBlob parses bytes back into a SealedBlob
-// Only supports version 4 format
-func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
-	// Validate total blob size to prevent resource exhaustion
+// UnmarshalPayload parses the payload bytes back into a SealedBlobPayload.
+// The input must NOT include the outer envelope (version, payloadLen, signature).
+func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 	if len(data) > MaxBlobSize {
-		return nil, fmt.Errorf("blob size %d exceeds maximum allowed %d bytes", len(data), MaxBlobSize)
+		return nil, fmt.Errorf("payload size %d exceeds maximum allowed %d bytes", len(data), MaxBlobSize)
 	}
 
-	if len(data) < 16 {
-		return nil, fmt.Errorf("data too short to be a valid sealed blob")
-	}
-
-	// Version check
-	version := binary.LittleEndian.Uint32(data[0:4])
-	if version != CurrentBlobVersion {
-		return nil, &BlobVersionError{
-			FoundVersion:    version,
-			RequiredVersion: CurrentBlobVersion,
-			DataSize:        len(data),
-		}
-	}
-
-	offset := 4
-	sb := &SealedBlob{Version: CurrentBlobVersion}
+	offset := 0
+	p := &SealedBlobPayload{}
 
 	// App version
 	if offset+4 > len(data) {
@@ -525,7 +551,7 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 	if offset+int(appVersionLen) > len(data) {
 		return nil, fmt.Errorf("invalid app version length")
 	}
-	sb.AppVersion = string(data[offset : offset+int(appVersionLen)])
+	p.AppVersion = string(data[offset : offset+int(appVersionLen)])
 	offset += int(appVersionLen)
 
 	// Public blob
@@ -540,8 +566,8 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 	if offset+int(publicLen) > len(data) {
 		return nil, fmt.Errorf("invalid public blob length")
 	}
-	sb.Public = make([]byte, publicLen)
-	copy(sb.Public, data[offset:offset+int(publicLen)])
+	p.Public = make([]byte, publicLen)
+	copy(p.Public, data[offset:offset+int(publicLen)])
 	offset += int(publicLen)
 
 	// Private blob
@@ -556,8 +582,8 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 	if offset+int(privateLen) > len(data) {
 		return nil, fmt.Errorf("invalid private blob length")
 	}
-	sb.Private = make([]byte, privateLen)
-	copy(sb.Private, data[offset:offset+int(privateLen)])
+	p.Private = make([]byte, privateLen)
+	copy(p.Private, data[offset:offset+int(privateLen)])
 	offset += int(privateLen)
 
 	// PCR digest pairs
@@ -569,24 +595,24 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 	if numPCRDigests > MaxPCRDigests {
 		return nil, fmt.Errorf("PCR digest count %d exceeds maximum %d", numPCRDigests, MaxPCRDigests)
 	}
-	sb.PCRDigests = make([]PCRDigestPair, numPCRDigests)
+	p.PCRDigests = make([]PCRDigestPair, numPCRDigests)
 	for i := 0; i < int(numPCRDigests); i++ {
 		// PCR index
 		if offset+4 > len(data) {
 			return nil, fmt.Errorf("data too short for PCR index")
 		}
-		sb.PCRDigests[i].Index = int(binary.LittleEndian.Uint32(data[offset:]))
+		p.PCRDigests[i].Index = int(binary.LittleEndian.Uint32(data[offset:]))
 		offset += 4
 
 		// PCR source
 		if offset+1 > len(data) {
 			return nil, fmt.Errorf("data too short for PCR source")
 		}
-		sb.PCRDigests[i].Source = PCRSource(data[offset])
+		p.PCRDigests[i].Source = PCRSource(data[offset])
 		offset++
 
 		// Command string (only for predict source)
-		if sb.PCRDigests[i].Source == PCRSourcePredict {
+		if p.PCRDigests[i].Source == PCRSourcePredict {
 			if offset+2 > len(data) {
 				return nil, fmt.Errorf("data too short for predict command length")
 			}
@@ -598,7 +624,7 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 			if offset+commandLen > len(data) {
 				return nil, fmt.Errorf("data too short for predict command string")
 			}
-			sb.PCRDigests[i].Command = string(data[offset : offset+commandLen])
+			p.PCRDigests[i].Command = string(data[offset : offset+commandLen])
 			offset += commandLen
 		}
 
@@ -616,14 +642,14 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 			return nil, fmt.Errorf("data too short for digest buffer")
 		}
 
-		sb.PCRDigests[i].Digest = tpm2.TPM2BDigest{
+		p.PCRDigests[i].Digest = tpm2.TPM2BDigest{
 			Buffer: make([]byte, digestSize),
 		}
-		copy(sb.PCRDigests[i].Digest.Buffer, data[offset:offset+digestSize])
+		copy(p.PCRDigests[i].Digest.Buffer, data[offset:offset+digestSize])
 		offset += digestSize
 	}
 
-	// Signed branch digest (v5)
+	// Signed branch digest
 	if offset+2 > len(data) {
 		return nil, fmt.Errorf("data too short for signed branch digest length")
 	}
@@ -635,8 +661,8 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 	if offset+digestLen > len(data) {
 		return nil, fmt.Errorf("data too short for signed branch digest data")
 	}
-	sb.SignedBranchDigest = make([]byte, digestLen)
-	copy(sb.SignedBranchDigest, data[offset:offset+digestLen])
+	p.SignedBranchDigest = make([]byte, digestLen)
+	copy(p.SignedBranchDigest, data[offset:offset+digestLen])
 	offset += digestLen
 
 	// Eventlog info flag
@@ -648,7 +674,7 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 
 	// Read eventlog metadata if flag is set and there's more data
 	if hasEventlogInfo && offset < len(data) {
-		sb.EventlogInfo = &EventlogInfo{}
+		p.EventlogInfo = &EventlogInfo{}
 
 		// Eventlog path
 		if offset+4 > len(data) {
@@ -662,7 +688,7 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 		if offset+int(pathLen) > len(data) {
 			return nil, fmt.Errorf("data too short for eventlog path")
 		}
-		sb.EventlogInfo.EventlogPath = string(data[offset : offset+int(pathLen)])
+		p.EventlogInfo.EventlogPath = string(data[offset : offset+int(pathLen)])
 		offset += int(pathLen)
 
 		// Eventlog hash
@@ -677,7 +703,7 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 		if offset+int(hashLen) > len(data) {
 			return nil, fmt.Errorf("data too short for eventlog hash")
 		}
-		sb.EventlogInfo.EventlogHash = string(data[offset : offset+int(hashLen)])
+		p.EventlogInfo.EventlogHash = string(data[offset : offset+int(hashLen)])
 		offset += int(hashLen)
 
 		// Calculation time
@@ -692,20 +718,20 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 		if offset+int(timeLen) > len(data) {
 			return nil, fmt.Errorf("data too short for calculation time")
 		}
-		sb.EventlogInfo.CalculationTime = string(data[offset : offset+int(timeLen)])
+		p.EventlogInfo.CalculationTime = string(data[offset : offset+int(timeLen)])
 		offset += int(timeLen)
 
 		// Total and processed events
 		if offset+8 > len(data) {
 			return nil, fmt.Errorf("data too short for event counts")
 		}
-		sb.EventlogInfo.TotalEvents = int(binary.LittleEndian.Uint32(data[offset:]))
+		p.EventlogInfo.TotalEvents = int(binary.LittleEndian.Uint32(data[offset:]))
 		offset += 4
-		sb.EventlogInfo.ProcessedEvents = int(binary.LittleEndian.Uint32(data[offset:]))
+		p.EventlogInfo.ProcessedEvents = int(binary.LittleEndian.Uint32(data[offset:]))
 		offset += 4
 	}
 
-	// Key paths (trailing optional section — absent in older v4 blobs)
+	// Key paths (trailing optional section)
 	if offset < len(data) {
 		hasKeyPaths := data[offset] == 1
 		offset++
@@ -723,7 +749,7 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 			if offset+pubPathLen > len(data) {
 				return nil, fmt.Errorf("data too short for public key path")
 			}
-			sb.PublicKeyPath = string(data[offset : offset+pubPathLen])
+			p.PublicKeyPath = string(data[offset : offset+pubPathLen])
 			offset += pubPathLen
 
 			// Private key path
@@ -738,12 +764,197 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 			if offset+privPathLen > len(data) {
 				return nil, fmt.Errorf("data too short for private key path")
 			}
-			sb.PrivateKeyPath = string(data[offset : offset+privPathLen])
+			p.PrivateKeyPath = string(data[offset : offset+privPathLen])
 			offset += privPathLen
 		}
 	}
 
+	return p, nil
+}
+
+// Marshal produces the unsigned outer envelope bytes.
+//
+// Wire format:
+//
+//	[version:4][payloadLen:4][payloadBytes...]
+//
+// The signature trailer is NOT included — call SignBlobPayload to append it.
+func (sb *SealedBlob) Marshal() ([]byte, error) {
+	payloadBytes, err := sb.Payload.MarshalPayload()
+	if err != nil {
+		return nil, err
+	}
+
+	// [version:4][payloadLen:4][payloadBytes...]
+	buf := make([]byte, 4+4+len(payloadBytes))
+	binary.LittleEndian.PutUint32(buf[0:], CurrentBlobVersion)
+	binary.LittleEndian.PutUint32(buf[4:], uint32(len(payloadBytes)))
+	copy(buf[8:], payloadBytes)
+	return buf, nil
+}
+
+// UnmarshalSealedBlob parses bytes back into a SealedBlob.
+// Only supports version 6 format.
+//
+// Wire format:
+//
+//	[version:4][payloadLen:4][payloadBytes...][sigLen:2][signatureBytes...]
+func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
+	// Validate total blob size to prevent resource exhaustion
+	if len(data) > MaxBlobSize {
+		return nil, fmt.Errorf("blob size %d exceeds maximum allowed %d bytes", len(data), MaxBlobSize)
+	}
+
+	if len(data) < 10 {
+		return nil, fmt.Errorf("data too short to be a valid sealed blob")
+	}
+
+	// Version check
+	version := binary.LittleEndian.Uint32(data[0:4])
+	if version != CurrentBlobVersion {
+		return nil, &BlobVersionError{
+			FoundVersion:    version,
+			RequiredVersion: CurrentBlobVersion,
+			DataSize:        len(data),
+		}
+	}
+
+	// Read payloadLen
+	payloadLen := binary.LittleEndian.Uint32(data[4:8])
+	if payloadLen > uint32(MaxBlobSize) {
+		return nil, fmt.Errorf("payload length %d exceeds maximum allowed %d bytes", payloadLen, MaxBlobSize)
+	}
+
+	payloadEnd := 8 + int(payloadLen)
+	if payloadEnd > len(data) {
+		return nil, fmt.Errorf("data too short for declared payload length (need %d, have %d)", payloadEnd, len(data))
+	}
+
+	// Parse payload
+	payloadBytes := data[8:payloadEnd]
+	payload, err := UnmarshalPayload(payloadBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
+	}
+
+	sb := &SealedBlob{
+		Version: CurrentBlobVersion,
+		Payload: *payload,
+	}
+
+	// Parse signature trailer: [sigLen:2][signatureBytes...]
+	sigOffset := payloadEnd
+	if sigOffset+2 > len(data) {
+		return nil, fmt.Errorf("data too short for blob signature length")
+	}
+	sigLen := int(binary.LittleEndian.Uint16(data[sigOffset:]))
+	sigOffset += 2
+
+	if sigLen > MaxBlobSignatureLen {
+		return nil, fmt.Errorf("blob signature length %d exceeds maximum %d", sigLen, MaxBlobSignatureLen)
+	}
+	if sigLen == 0 {
+		return nil, fmt.Errorf("blob signature is empty — unsigned blobs are not accepted")
+	}
+	if sigOffset+sigLen > len(data) {
+		return nil, fmt.Errorf("data too short for blob signature data")
+	}
+
+	sb.BlobSignature = make([]byte, sigLen)
+	copy(sb.BlobSignature, data[sigOffset:sigOffset+sigLen])
+
 	return sb, nil
+}
+
+// SignBlobPayload signs the unsigned blob bytes and appends the signature trailer.
+//
+// Input: the output of SealedBlob.Marshal() — [version:4][payloadLen:4][payload...]
+// Output: [version:4][payloadLen:4][payload...][sigLen:2][signature...]
+//
+// The signed region is the entire input (version + payloadLen + payload bytes).
+func SignBlobPayload(unsignedBlob []byte, privKey crypto.Signer) ([]byte, error) {
+	if len(unsignedBlob) < 8 {
+		return nil, fmt.Errorf("unsigned blob too short to sign")
+	}
+
+	// Compute SHA-256 digest of the entire unsigned blob (the signed region)
+	digest := sha256.Sum256(unsignedBlob)
+
+	// Sign based on key type
+	var signature []byte
+	var err error
+
+	switch key := privKey.(type) {
+	case *rsa.PrivateKey:
+		signature, err = rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
+		if err != nil {
+			return nil, fmt.Errorf("RSA blob signing failed: %w", err)
+		}
+	case *ecdsa.PrivateKey:
+		signature, err = ecdsa.SignASN1(rand.Reader, key, digest[:])
+		if err != nil {
+			return nil, fmt.Errorf("ECDSA blob signing failed: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported private key type %T for blob signing", privKey)
+	}
+
+	if len(signature) > MaxBlobSignatureLen {
+		return nil, fmt.Errorf("signature length %d exceeds maximum %d", len(signature), MaxBlobSignatureLen)
+	}
+
+	// Append trailer: [sigLen:2 LE][signature bytes]
+	trailer := make([]byte, 2+len(signature))
+	binary.LittleEndian.PutUint16(trailer[0:], uint16(len(signature)))
+	copy(trailer[2:], signature)
+
+	return append(unsignedBlob, trailer...), nil
+}
+
+// VerifyBlobSignature verifies the integrity signature on a signed blob.
+//
+// The signed region is extracted from the raw signedBlob bytes (not re-marshalled
+// from the parsed struct) to avoid any marshal/unmarshal round-trip fragility.
+//
+// signedBlob: the complete wire-format blob including signature trailer
+// blob: the parsed SealedBlob (used to read BlobSignature)
+// pubKey: the verification key (derived from the trust anchor, NOT from the blob)
+func VerifyBlobSignature(signedBlob []byte, blob *SealedBlob, pubKey crypto.PublicKey) error {
+	if len(signedBlob) < 10 {
+		return fmt.Errorf("signed blob too short for verification")
+	}
+
+	if len(blob.BlobSignature) == 0 {
+		return fmt.Errorf("blob has no signature")
+	}
+
+	// Extract the signed region: [version:4][payloadLen:4][payload bytes]
+	payloadLen := binary.LittleEndian.Uint32(signedBlob[4:8])
+	signedRegionEnd := 8 + int(payloadLen)
+	if signedRegionEnd > len(signedBlob) {
+		return fmt.Errorf("signed region extends beyond blob data")
+	}
+	signedRegion := signedBlob[:signedRegionEnd]
+
+	// Compute SHA-256 digest of the signed region
+	digest := sha256.Sum256(signedRegion)
+
+	// Verify based on key type
+	switch key := pubKey.(type) {
+	case *rsa.PublicKey:
+		err := rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], blob.BlobSignature)
+		if err != nil {
+			return fmt.Errorf("RSA blob signature verification failed: %w", err)
+		}
+		return nil
+	case *ecdsa.PublicKey:
+		if !ecdsa.VerifyASN1(key, digest[:], blob.BlobSignature) {
+			return fmt.Errorf("ECDSA blob signature verification failed")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported public key type %T for blob signature verification", pubKey)
+	}
 }
 
 // MarshalJSON provides custom JSON serialization for SealedBlob
@@ -756,8 +967,8 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 		Digest  string `json:"digest_hex"`
 	}
 
-	pcrDigests := make([]PCRDigestJSON, len(sb.PCRDigests))
-	for i, pcrDigest := range sb.PCRDigests {
+	pcrDigests := make([]PCRDigestJSON, len(sb.Payload.PCRDigests))
+	for i, pcrDigest := range sb.Payload.PCRDigests {
 		pcrDigests[i] = PCRDigestJSON{
 			Index:   pcrDigest.Index,
 			Source:  pcrDigest.Source.String(),
@@ -781,22 +992,26 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 		PublicKeyPath          string          `json:"public_key_path,omitempty"`
 		PrivateKeyPath         string          `json:"private_key_path,omitempty"`
 		EventlogInfo           *EventlogInfo   `json:"eventlog_info,omitempty"`
+		BlobSignature          string          `json:"blob_signature_hex,omitempty"`
+		BlobSignatureSize      int             `json:"blob_signature_size"`
 	}
 
 	jsonBlob := SealedBlobJSON{
 		Version:                sb.Version,
-		AppVersion:             sb.AppVersion,
+		AppVersion:             sb.Payload.AppVersion,
 		HashAlgorithm:          sb.GetHashAlgo().String(),
-		Public:                 hex.EncodeToString(sb.Public),
-		PublicSize:             len(sb.Public),
-		Private:                hex.EncodeToString(sb.Private),
-		PrivateSize:            len(sb.Private),
+		Public:                 hex.EncodeToString(sb.Payload.Public),
+		PublicSize:             len(sb.Payload.Public),
+		Private:                hex.EncodeToString(sb.Payload.Private),
+		PrivateSize:            len(sb.Payload.Private),
 		PCRDigests:             pcrDigests,
-		SignedBranchDigest:     hex.EncodeToString(sb.SignedBranchDigest),
-		SignedBranchDigestSize: len(sb.SignedBranchDigest),
-		PublicKeyPath:          sb.PublicKeyPath,
-		PrivateKeyPath:         sb.PrivateKeyPath,
-		EventlogInfo:           sb.EventlogInfo,
+		SignedBranchDigest:     hex.EncodeToString(sb.Payload.SignedBranchDigest),
+		SignedBranchDigestSize: len(sb.Payload.SignedBranchDigest),
+		PublicKeyPath:          sb.Payload.PublicKeyPath,
+		PrivateKeyPath:         sb.Payload.PrivateKeyPath,
+		EventlogInfo:           sb.Payload.EventlogInfo,
+		BlobSignature:          hex.EncodeToString(sb.BlobSignature),
+		BlobSignatureSize:      len(sb.BlobSignature),
 	}
 
 	return json.Marshal(jsonBlob)
