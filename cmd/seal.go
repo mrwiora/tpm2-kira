@@ -12,6 +12,14 @@ import (
 
 // Seal generates and seals a TOTP secret to TPM NVRAM with PolicyOR (PCR + Signed branches)
 func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath string, debug bool, hashAlgo PCRHashAlgo) error {
+	// Fall back to default key paths when not provided by the user
+	if pubKeyPath == "" {
+		pubKeyPath = DefaultPublicKeyPath
+	}
+	if privKeyPath == "" {
+		privKeyPath = DefaultPrivateKeyPath
+	}
+
 	// Parse PCR specs first to display them
 	specs, err := ParsePCRSpecs(pcrsStr)
 	if err != nil {
@@ -83,7 +91,7 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 	}
 
 	if privKeyPath == "" {
-		return fmt.Errorf("signing private key path is required for NV write authorization")
+		privKeyPath = DefaultPrivateKeyPath
 	}
 
 	// Open TPM

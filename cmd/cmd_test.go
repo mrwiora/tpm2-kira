@@ -2694,14 +2694,16 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("Rejects empty private key path", func(t *testing.T) {
+	t.Run("Empty private key path falls back to default", func(t *testing.T) {
 		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
 		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte("test-data"), dummyKey, "", "", false, PCRHashAlgoSHA256)
 		if err == nil {
-			t.Error("sealDataWithSpecs() expected error for empty privkey path, got nil")
+			t.Error("sealDataWithSpecs() expected error (TPM or key load), got nil")
 		}
-		if !strings.Contains(err.Error(), "signing private key path is required") {
-			t.Errorf("sealDataWithSpecs() error = %q, want to contain 'signing private key path is required'", err.Error())
+		// Empty privKeyPath should fall back to DefaultPrivateKeyPath and proceed
+		// past the empty-path check, failing later on TPM open or key load.
+		if strings.Contains(err.Error(), "signing private key path is required") {
+			t.Errorf("sealDataWithSpecs() should not reject empty privkey path (should fall back to default), got: %q", err.Error())
 		}
 	})
 
