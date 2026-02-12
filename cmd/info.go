@@ -210,7 +210,7 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 	fmt.Printf("%s%sBlob Format\n", prefix, branch(false))
 	sub := prefix + cont(false)
 	fmt.Printf("%s%sVersion: %d\n", sub, branch(false), blob.Version)
-	fmt.Printf("%s%sApp Version: %s\n", sub, branch(false), blob.AppVersion)
+	fmt.Printf("%s%sApp Version: %s\n", sub, branch(false), blob.Payload.AppVersion)
 	fmt.Printf("%s%sHash Algorithm: %s (%d-byte PCR digests)\n", sub, branch(true), hashAlgo.DisplayString(), hashAlgo.DigestSize())
 
 	// ── 2. NVRAM ────────────────────────────────────────────────────
@@ -225,17 +225,17 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 	fmt.Printf("%s%sPCR Configuration\n", prefix, branch(false))
 	sub = prefix + cont(false)
 	fmt.Printf("%s%sIndices: %v\n", sub, branch(false), blob.GetPCRIndices())
-	fmt.Printf("%s%sCount: %d\n", sub, branch(false), len(blob.PCRDigests))
-	for j, pd := range blob.PCRDigests {
-		isLast := j == len(blob.PCRDigests)-1
+	fmt.Printf("%s%sCount: %d\n", sub, branch(false), len(blob.Payload.PCRDigests))
+	for j, pd := range blob.Payload.PCRDigests {
+		isLast := j == len(blob.Payload.PCRDigests)-1
 		fmt.Printf("%s%sPCR %-2d (%s): %s\n", sub, branch(isLast), pd.Index, pd.Source.String(), GetPCRDescription(pd.Index))
 	}
 
 	// ── 4. Authentication ───────────────────────────────────────────
 	fmt.Printf("%s%sAuthentication: PolicyOR (PCR branch + PolicySigned branch)\n", prefix, branch(false))
 	sub = prefix + cont(false)
-	if len(blob.SignedBranchDigest) > 0 {
-		fmt.Printf("%s%sSigned Branch Digest: %x (%d bytes)\n", sub, branch(false), blob.SignedBranchDigest, len(blob.SignedBranchDigest))
+	if len(blob.Payload.SignedBranchDigest) > 0 {
+		fmt.Printf("%s%sSigned Branch Digest: %x (%d bytes)\n", sub, branch(false), blob.Payload.SignedBranchDigest, len(blob.Payload.SignedBranchDigest))
 		printSigningKeyInfo(sub, blob)
 	} else {
 		fmt.Printf("%s%sSigned Branch: not present (incompatible blob)\n", sub, branch(true))
@@ -244,8 +244,8 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 	// ── 5. TPM Objects ──────────────────────────────────────────────
 	fmt.Printf("%s%sTPM Objects\n", prefix, branch(false))
 	sub = prefix + cont(false)
-	fmt.Printf("%s%sPublic Blob: %d bytes\n", sub, branch(false), len(blob.Public))
-	fmt.Printf("%s%sPrivate Blob: %d bytes\n", sub, branch(true), len(blob.Private))
+	fmt.Printf("%s%sPublic Blob: %d bytes\n", sub, branch(false), len(blob.Payload.Public))
+	fmt.Printf("%s%sPrivate Blob: %d bytes\n", sub, branch(true), len(blob.Payload.Private))
 
 	// ── 6. PCR Sources ──────────────────────────────────────────────
 	fmt.Printf("%s%sPCR Sources\n", prefix, branch(false))
@@ -255,8 +255,8 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 	// ── 7. PCR Digests (last section) ───────────────────────────────
 	fmt.Printf("%s%sPCR Digests\n", prefix, branch(true))
 	sub = prefix + cont(true)
-	for j, pd := range blob.PCRDigests {
-		isLast := j == len(blob.PCRDigests)-1
+	for j, pd := range blob.Payload.PCRDigests {
+		isLast := j == len(blob.Payload.PCRDigests)-1
 		fmt.Printf("%s%sPCR %-2d (%s): %x (%d bytes)\n",
 			sub, branch(isLast), pd.Index, pd.Source.String(), pd.Digest.Buffer, len(pd.Digest.Buffer))
 	}
@@ -271,20 +271,20 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 // ── sub-section helpers ─────────────────────────────────────────────────
 
 func printSigningKeyInfo(sub string, blob *SealedBlob) {
-	if blob.PublicKeyPath != "" {
-		pubKey, _, keyErr := LoadSigningPublicKeyFromPEM(blob.PublicKeyPath)
+	if blob.Payload.PublicKeyPath != "" {
+		pubKey, _, keyErr := LoadSigningPublicKeyFromPEM(blob.Payload.PublicKeyPath)
 		if keyErr == nil {
 			fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
-			fmt.Printf("%s%sSigning Key Path: %s\n", sub, branch(true), blob.PublicKeyPath)
+			fmt.Printf("%s%sSigning Key Path: %s\n", sub, branch(true), blob.Payload.PublicKeyPath)
 			return
 		}
 	}
-	if blob.PrivateKeyPath != "" {
-		privKey, keyErr := LoadSigningPrivateKeyFromPEM(blob.PrivateKeyPath)
+	if blob.Payload.PrivateKeyPath != "" {
+		privKey, keyErr := LoadSigningPrivateKeyFromPEM(blob.Payload.PrivateKeyPath)
 		if keyErr == nil {
 			pubKey := privKey.Public()
 			fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
-			fmt.Printf("%s%sSigning Key Path: %s (derived from private key)\n", sub, branch(true), blob.PrivateKeyPath)
+			fmt.Printf("%s%sSigning Key Path: %s (derived from private key)\n", sub, branch(true), blob.Payload.PrivateKeyPath)
 			return
 		}
 	}
@@ -338,7 +338,7 @@ func printPCRSources(sub string, blob *SealedBlob) {
 		printed++
 		isLast := printed == remaining
 		fmt.Printf("%s%sEventlog PCRs: %v\n", sub, branch(isLast), blob.GetEventlogPCRIndices())
-		if blob.EventlogInfo != nil && !isLast {
+		if blob.Payload.EventlogInfo != nil && !isLast {
 			// Print eventlog details nested under eventlog line.
 			esub := sub + cont(isLast)
 			_ = esub // eventlog detail is shown inline to keep tree compact

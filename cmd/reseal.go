@@ -101,8 +101,8 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		return fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
 
-	// Verify the blob has a signed branch digest (v5 format)
-	if len(sealedBlob.SignedBranchDigest) == 0 {
+	// Verify the blob has a signed branch digest
+	if len(sealedBlob.Payload.SignedBranchDigest) == 0 {
 		tpmDev.Close()
 		return fmt.Errorf("sealed blob does not contain a signed branch digest. Re-seal with current version: tpm2-kira seal")
 	}
@@ -113,14 +113,14 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	effectivePrivKeyPath := privKeyPath
 	effectivePubKeyPath := pubKeyPath
 
-	if effectivePrivKeyPath == "" && sealedBlob.PrivateKeyPath != "" {
-		effectivePrivKeyPath = sealedBlob.PrivateKeyPath
+	if effectivePrivKeyPath == "" && sealedBlob.Payload.PrivateKeyPath != "" {
+		effectivePrivKeyPath = sealedBlob.Payload.PrivateKeyPath
 		if debug {
 			fmt.Printf("Using private key path from blob: %s\n", effectivePrivKeyPath)
 		}
 	}
-	if effectivePubKeyPath == "" && sealedBlob.PublicKeyPath != "" {
-		effectivePubKeyPath = sealedBlob.PublicKeyPath
+	if effectivePubKeyPath == "" && sealedBlob.Payload.PublicKeyPath != "" {
+		effectivePubKeyPath = sealedBlob.Payload.PublicKeyPath
 		if debug {
 			fmt.Printf("Using public key path from blob: %s\n", effectivePubKeyPath)
 		}
@@ -143,6 +143,26 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 			effectivePubKeyPath = DefaultPublicKeyPath
 			if debug {
 				fmt.Printf("Using default public key path: %s\n", effectivePubKeyPath)
+			}
+		}
+	}
+
+	// ── Verify blob integrity signature ──
+	// The signature MUST be verified BEFORE we touch any blob fields
+	// (particularly PCR specs with predict commands) to prevent execution
+	// of attacker-controlled commands from a tampered blob.
+	//
+	// Derive the verification key from the private key (the trust anchor).
+	// The blob's stored PublicKeyPath is NOT trusted for this purpose.
+	if effectivePrivKeyPath != "" {
+		verifyKey, loadErr := LoadSigningPrivateKeyFromPEM(effectivePrivKeyPath)
+		if loadErr == nil {
+			if sigErr := VerifyBlobSignature(sealedData, sealedBlob, verifyKey.Public()); sigErr != nil {
+				tpmDev.Close()
+				return fmt.Errorf("blob integrity check failed — the NVRAM blob may have been tampered with: %w", sigErr)
+			}
+			if debug {
+				fmt.Println("Blob signature verified successfully")
 			}
 		}
 	}
@@ -311,11 +331,11 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 
 	if hasEventlog {
 		fmt.Println("Note: Eventlog will be re-read to calculate current PCR values")
-		if sealedBlob.EventlogInfo != nil {
+		if sealedBlob.Payload.EventlogInfo != nil {
 			fmt.Printf("Previous eventlog info:\n")
-			fmt.Printf("  Eventlog path: %s\n", sealedBlob.EventlogInfo.EventlogPath)
-			fmt.Printf("  Sealed at: %s\n", sealedBlob.EventlogInfo.CalculationTime)
-			fmt.Printf("  Events processed: %d/%d\n", sealedBlob.EventlogInfo.ProcessedEvents, sealedBlob.EventlogInfo.TotalEvents)
+			fmt.Printf("  Eventlog path: %s\n", sealedBlob.Payload.EventlogInfo.EventlogPath)
+			fmt.Printf("  Sealed at: %s\n", sealedBlob.Payload.EventlogInfo.CalculationTime)
+			fmt.Printf("  Events processed: %d/%d\n", sealedBlob.Payload.EventlogInfo.ProcessedEvents, sealedBlob.Payload.EventlogInfo.TotalEvents)
 		}
 	}
 	if hasPredict {

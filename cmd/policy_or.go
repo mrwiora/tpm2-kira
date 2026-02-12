@@ -570,10 +570,10 @@ func UnsealWithPCRBranch(tpmDev transport.TPM, loadedObject *LoadSealedObjectRes
 
 	// Use the pre-computed signed branch digest stored in the blob.
 	// This avoids loading the signing public key into the TPM on the normal boot path.
-	if len(sealedBlob.SignedBranchDigest) == 0 {
+	if len(sealedBlob.Payload.SignedBranchDigest) == 0 {
 		return nil, fmt.Errorf("sealed blob does not contain a signed branch digest (was sealed with an older version)")
 	}
-	signedBranchDigest := tpm2.TPM2BDigest{Buffer: sealedBlob.SignedBranchDigest}
+	signedBranchDigest := tpm2.TPM2BDigest{Buffer: sealedBlob.Payload.SignedBranchDigest}
 
 	// Build a Policy session via callback that satisfies:
 	//   1. PolicyPCR  (branch 1)
@@ -674,10 +674,10 @@ func UnsealWithSignedBranch(tpmDev transport.TPM, loadedObject *LoadSealedObject
 	}
 
 	// Use the pre-computed signed branch digest from the blob.
-	if len(sealedBlob.SignedBranchDigest) == 0 {
+	if len(sealedBlob.Payload.SignedBranchDigest) == 0 {
 		return nil, fmt.Errorf("sealed blob does not contain a signed branch digest (was sealed with an older version)")
 	}
-	signedBranchDigestExpected := tpm2.TPM2BDigest{Buffer: sealedBlob.SignedBranchDigest}
+	signedBranchDigestExpected := tpm2.TPM2BDigest{Buffer: sealedBlob.Payload.SignedBranchDigest}
 
 	// Capture loaded key handle/name and private key for the closure
 	keyHandle := loadRsp.ObjectHandle
@@ -905,7 +905,7 @@ func computePCRBranchDigestFromBlob(tpmDev transport.TPM, sealedBlob *SealedBlob
 
 	// Build PCR values map from blob digests
 	pcrValues := make(map[int][]byte)
-	for _, pair := range sealedBlob.PCRDigests {
+	for _, pair := range sealedBlob.Payload.PCRDigests {
 		pcrValues[pair.Index] = pair.Digest.Buffer
 	}
 
@@ -1044,7 +1044,7 @@ func UnsealWithSignedBranchFromBlob(tpmDev transport.TPM, nvramIndex uint32, pri
 	}
 
 	// Verify the blob has a signed branch digest
-	if len(sealedBlob.SignedBranchDigest) == 0 {
+	if len(sealedBlob.Payload.SignedBranchDigest) == 0 {
 		return nil, fmt.Errorf("sealed blob does not contain a signed branch digest (was sealed with an older version)")
 	}
 

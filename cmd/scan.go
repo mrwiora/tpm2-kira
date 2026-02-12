@@ -356,7 +356,7 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 								status = "✗ CHANGED"
 							}
 
-							source := sealedBlob.PCRDigests[idx].Source
+							source := sealedBlob.Payload.PCRDigests[idx].Source
 							fmt.Printf("  PCR%-2d (%s): %s - %s\n", pcrIndex, source.String(), GetPCRDescription(pcrIndex), status)
 							fmt.Printf("    Expected (blob):    %x\n", expected)
 							fmt.Printf("    Current (register): %x\n", current)

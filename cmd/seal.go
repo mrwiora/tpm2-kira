@@ -162,23 +162,33 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 		return err
 	}
 
-	// Prepare sealed blob (Version 4: PolicyOR with signing key)
+	// Prepare sealed blob (Version 6: signed blob with payload substructure)
 	sealedBlob := &SealedBlob{
-		Version:            CurrentBlobVersion,
-		AppVersion:         AppVersion,
-		Public:             createRsp.Public,
-		Private:            createRsp.Private,
-		PCRDigests:         pcrDigests,
-		SignedBranchDigest: branches.SignedBranchDigest.Buffer,
-		EventlogInfo:       readResult.EventlogInfo,
-		PublicKeyPath:      pubKeyPath,
-		PrivateKeyPath:     privKeyPath,
+		Version: CurrentBlobVersion,
+		Payload: SealedBlobPayload{
+			AppVersion:         AppVersion,
+			Public:             createRsp.Public,
+			Private:            createRsp.Private,
+			PCRDigests:         pcrDigests,
+			SignedBranchDigest: branches.SignedBranchDigest.Buffer,
+			EventlogInfo:       readResult.EventlogInfo,
+			PublicKeyPath:      pubKeyPath,
+			PrivateKeyPath:     privKeyPath,
+		},
 	}
 
-	// Marshal to bytes
-	data, err := sealedBlob.Marshal()
+	// Marshal to bytes (unsigned envelope)
+	unsignedBlob, err := sealedBlob.Marshal()
 	if err != nil {
 		return fmt.Errorf("failed to marshal sealed data: %w", err)
+	}
+
+	// Sign the blob — the signature covers Version + PayloadLen + all
+	// payload fields.  Any future field added to SealedBlobPayload is
+	// automatically included.
+	data, err := SignBlobPayload(unsignedBlob, privKey)
+	if err != nil {
+		return fmt.Errorf("failed to sign sealed blob: %w", err)
 	}
 
 	// Write to TPM NVRAM with PolicySigned-protected writes

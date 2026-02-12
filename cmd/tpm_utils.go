@@ -648,8 +648,8 @@ func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug boo
 	}
 
 	// Map results back to blob PCR digest order
-	currentPCRValues := make([]tpm2.TPM2BDigest, len(sealedBlob.PCRDigests))
-	for i, pair := range sealedBlob.PCRDigests {
+	currentPCRValues := make([]tpm2.TPM2BDigest, len(sealedBlob.Payload.PCRDigests))
+	for i, pair := range sealedBlob.Payload.PCRDigests {
 		if val, ok := readResult.Values[pair.Index]; ok {
 			currentPCRValues[i] = tpm2.TPM2BDigest{Buffer: val}
 		}
@@ -673,8 +673,8 @@ func GetCurrentPCRValuesFromRegisters(tpmDev transport.TPM, sealedBlob *SealedBl
 	}
 
 	// Map results back to blob PCR digest order
-	currentPCRValues := make([]tpm2.TPM2BDigest, len(sealedBlob.PCRDigests))
-	for i, pair := range sealedBlob.PCRDigests {
+	currentPCRValues := make([]tpm2.TPM2BDigest, len(sealedBlob.Payload.PCRDigests))
+	for i, pair := range sealedBlob.Payload.PCRDigests {
 		if val, ok := regValues[pair.Index]; ok {
 			currentPCRValues[i] = tpm2.TPM2BDigest{Buffer: val}
 		}
@@ -729,8 +729,8 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*Unsea
 			currentDigests[i] = digest.Buffer
 		}
 
-		pcrSources := make([]PCRSource, len(sealedBlob.PCRDigests))
-		for i, pcrDigest := range sealedBlob.PCRDigests {
+		pcrSources := make([]PCRSource, len(sealedBlob.Payload.PCRDigests))
+		for i, pcrDigest := range sealedBlob.Payload.PCRDigests {
 			pcrSources[i] = pcrDigest.Source
 		}
 
@@ -1141,9 +1141,9 @@ func LoadSealedObject(tpmDev transport.TPM, primaryKey *PrimaryKeyResponse, seal
 			Name:   primaryKey.Name,
 			Auth:   tpm2.PasswordAuth(nil),
 		},
-		InPublic: tpm2.BytesAs2B[tpm2.TPMTPublic](sealedBlob.Public),
+		InPublic: tpm2.BytesAs2B[tpm2.TPMTPublic](sealedBlob.Payload.Public),
 		InPrivate: tpm2.TPM2BPrivate{
-			Buffer: sealedBlob.Private,
+			Buffer: sealedBlob.Payload.Private,
 		},
 	}
 
@@ -1431,9 +1431,9 @@ func NVRAMStatus(tpmPath string, nvramIndex uint32, debug bool) error {
 			if err == nil {
 				fmt.Printf("Contains Sealed Data:\n")
 				fmt.Printf("  PCR Indices: %v\n", blob.GetPCRIndices())
-				fmt.Printf("  Number of PCRs: %d\n", len(blob.PCRDigests))
-				fmt.Printf("  Public Blob Size: %d bytes\n", len(blob.Public))
-				fmt.Printf("  Private Blob Size: %d bytes\n", len(blob.Private))
+				fmt.Printf("  Number of PCRs: %d\n", len(blob.Payload.PCRDigests))
+				fmt.Printf("  Public Blob Size: %d bytes\n", len(blob.Payload.Public))
+				fmt.Printf("  Private Blob Size: %d bytes\n", len(blob.Payload.Private))
 			} else {
 				fmt.Printf("Data Format: Unknown (not a sealed blob)\n")
 			}
