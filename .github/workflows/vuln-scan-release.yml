@@ -1,17 +1,15 @@
-# .github/workflows/vuln-scan-release.yml
 name: Vulnerability Scan (Released Binary)
 
 on:
   schedule:
-    - cron: '0 4 * * *' 
-  workflow_dispatch:       # Allow manual trigger from GitHub UI
+    - cron: '0 4 * * *'  # Every day at 8:00 UTC
+  workflow_dispatch:
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write  # for SARIF upload to Security tab
 
     steps:
       - name: Setup Go
@@ -34,18 +32,5 @@ jobs:
       - name: Make binary executable
         run: chmod +x ./bin/tpm2-kira-linux-amd64
 
-      - name: Scan binary for vulnerabilities (SARIF)
-        run: |
-          govulncheck -mode binary -format sarif \
-            ./bin/tpm2-kira-linux-amd64 > govulncheck.sarif 2>&1 || true
-
-      - name: Upload SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: govulncheck.sarif
-          category: govulncheck-binary
-
-      - name: Scan binary (human-readable log)
-        run: |
-          govulncheck -mode binary ./bin/tpm2-kira-linux-amd64
-        continue-on-error: true
+      - name: Scan binary for vulnerabilities
+        run: govulncheck -mode binary ./bin/tpm2-kira-linux-amd64
