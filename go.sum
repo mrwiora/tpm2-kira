@@ -1,10 +1,10 @@
-github.com/google/go-attestation v0.6.0 h1:nVqsVA7Ka3024nBySlXfBa4dSwQHpylYyCiKUOcPkHA=
-github.com/google/go-attestation v0.6.0/go.mod h1:BcvuSzzGpsN3NDvngf9E4aWfAhOVYSYTdigzQHoWXhU=
+github.com/google/go-attestation v0.6.4 h1:FtzlaC+MNJuSjZzM3LREPIs1llTlIsfU/+d4Jsb/cW4=
+github.com/google/go-attestation v0.6.4/go.mod h1:ET/zuOTCIOxdpqep6KZ7kV614DmI41f8HWMYq8pEupc=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
 github.com/google/go-tpm v0.9.8 h1:slArAR9Ft+1ybZu0lBwpSmpwhRXaa85hWtMinMyRAWo=
 github.com/google/go-tpm v0.9.8/go.mod h1:h9jEsEECg7gtLis0upRBQU+GhYVH6jMjrFxI8u6bVUY=
-github.com/google/go-tpm-tools v0.4.6 h1:hwIwPG7w4z5eQEBq11gYw8YYr9xXLfBQ/0JsKyq5AJM=
-github.com/google/go-tpm-tools v0.4.6/go.mod h1:MsVQbJnRhKDfWwf5zgr3cDGpj13P1uLAFF0wMEP/n5w=
-golang.org/x/sys v0.39.0 h1:CvCKL8MeisomCi6qNZ+wbb0DN9E5AATixKsvNtMoMFk=
-golang.org/x/sys v0.39.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=
+github.com/google/go-tpm-tools v0.4.7 h1:J3ycC8umYxM9A4eF73EofRZu4BxY0jjQnUnkhIBbvws=
+github.com/google/go-tpm-tools v0.4.7/go.mod h1:gSyXTZHe3fgbzb6WEGd90QucmsnT1SRdlye82gH8QjQ=
+golang.org/x/sys v0.41.0 h1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=
+golang.org/x/sys v0.41.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=
