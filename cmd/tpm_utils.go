@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/sha256"
 	"encoding/binary"
@@ -98,7 +99,6 @@ func flushAllSessions(tpmDev transport.TPM) error {
 }
 
 // DisplayPCRMismatch shows the differences between expected and current PCR values
-// DisplayPCRMismatch is deprecated - use PrintKIRAError instead
 func DisplayPCRMismatch(pcrIndices []int, expectedDigests, currentDigests []tpm2.TPM2BDigest) {
 	if len(expectedDigests) != len(currentDigests) {
 		fmt.Printf("Error: PCR digest count mismatch (expected: %d, current: %d)\n", len(expectedDigests), len(currentDigests))
@@ -116,20 +116,8 @@ func DisplayPCRMismatch(pcrIndices []int, expectedDigests, currentDigests []tpm2
 		expected := expectedDigests[i].Buffer
 		current := currentDigests[i].Buffer
 
-		match := true
-		if len(expected) != len(current) {
-			match = false
-		} else {
-			for j := range expected {
-				if expected[j] != current[j] {
-					match = false
-					break
-				}
-			}
-		}
-
 		status := "✓ MATCH"
-		if !match {
+		if !bytes.Equal(expected, current) {
 			status = "✗ CHANGED"
 		}
 
@@ -145,45 +133,11 @@ func VerifyPCRValues(sealed, current []tpm2.TPM2BDigest) bool {
 		return false
 	}
 	for i := range sealed {
-		if len(sealed[i].Buffer) != len(current[i].Buffer) {
+		if !bytes.Equal(sealed[i].Buffer, current[i].Buffer) {
 			return false
-		}
-		for j := range sealed[i].Buffer {
-			if sealed[i].Buffer[j] != current[i].Buffer[j] {
-				return false
-			}
 		}
 	}
 	return true
-}
-
-// CreatePCRPolicySession creates a TPM policy session for PCR authentication.
-// The policy session always uses SHA256 for the policy digest, but the PCR bank
-// selection uses the specified hash algorithm.
-func CreatePCRPolicySession(tpmDev transport.TPM, pcrIndices []int, hashAlgo PCRHashAlgo) (tpm2.Session, func() error, error) {
-	sess, cleanup, err := tpm2.PolicySession(tpmDev, tpm2.TPMAlgSHA256, 16)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create policy session: %w", err)
-	}
-
-	// Apply PCR policy using the specified PCR bank hash algorithm
-	_, err = tpm2.PolicyPCR{
-		PolicySession: sess.Handle(),
-		Pcrs: tpm2.TPMLPCRSelection{
-			PCRSelections: []tpm2.TPMSPCRSelection{
-				{
-					Hash:      hashAlgo.TPMAlg(),
-					PCRSelect: PcrsToBitmapBytes(pcrIndices),
-				},
-			},
-		},
-	}.Execute(tpmDev)
-	if err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("failed to apply PCR policy: %w", err)
-	}
-
-	return sess, cleanup, nil
 }
 
 // CreatePCRSelection creates a TPMLPCRSelection structure for the given PCR indices
@@ -325,40 +279,6 @@ func PCRSpecIndices(specs []PCRSpec) []int {
 		indices[i] = spec.Index
 	}
 	return indices
-}
-
-// ComputePolicyDigest computes the policy digest for the given PCR indices
-// using the specified hash algorithm for PCR bank selection.
-func ComputePolicyDigest(tpmDev transport.TPM, pcrs []int, hashAlgo PCRHashAlgo) (tpm2.TPM2BDigest, error) {
-	sess, cleanup, err := tpm2.PolicySession(tpmDev, tpm2.TPMAlgSHA256, 16)
-	if err != nil {
-		return tpm2.TPM2BDigest{}, fmt.Errorf("failed to create policy session: %w", err)
-	}
-	defer cleanup()
-
-	_, err = tpm2.PolicyPCR{
-		PolicySession: sess.Handle(),
-		Pcrs: tpm2.TPMLPCRSelection{
-			PCRSelections: []tpm2.TPMSPCRSelection{
-				{
-					Hash:      hashAlgo.TPMAlg(),
-					PCRSelect: PcrsToBitmapBytes(pcrs),
-				},
-			},
-		},
-	}.Execute(tpmDev)
-	if err != nil {
-		return tpm2.TPM2BDigest{}, fmt.Errorf("failed to apply PCR policy: %w", err)
-	}
-
-	pgd, err := tpm2.PolicyGetDigest{
-		PolicySession: sess.Handle(),
-	}.Execute(tpmDev)
-	if err != nil {
-		return tpm2.TPM2BDigest{}, fmt.Errorf("failed to get policy digest: %w", err)
-	}
-
-	return pgd.PolicyDigest, nil
 }
 
 // HandleNVRAMNotFoundError converts NVRAM errors to user-friendly messages
@@ -1126,57 +1046,6 @@ type CreateSealedObjectResponse struct {
 	Private []byte
 }
 
-// CreateSealedObject creates a sealed object with the given data and PCR policy.
-// Password auth has been removed; use CreateSealedObjectPolicyOR in policy_or.go
-// for PolicyOR-based sealing.
-func CreateSealedObject(tpmDev transport.TPM, primaryKey *PrimaryKeyResponse, dataToSeal []byte, policyDigest tpm2.TPM2BDigest) (*CreateSealedObjectResponse, error) {
-	createCmd := tpm2.Create{
-		ParentHandle: tpm2.AuthHandle{
-			Handle: primaryKey.ObjectHandle,
-			Name:   primaryKey.Name,
-			Auth:   tpm2.PasswordAuth(nil),
-		},
-		InSensitive: tpm2.TPM2BSensitiveCreate{
-			Sensitive: &tpm2.TPMSSensitiveCreate{
-				UserAuth: tpm2.TPM2BAuth{
-					Buffer: nil,
-				},
-				Data: tpm2.NewTPMUSensitiveCreate(&tpm2.TPM2BSensitiveData{
-					Buffer: dataToSeal,
-				}),
-			},
-		},
-		InPublic: tpm2.New2B(tpm2.TPMTPublic{
-			Type:    tpm2.TPMAlgKeyedHash,
-			NameAlg: tpm2.TPMAlgSHA256,
-			ObjectAttributes: tpm2.TPMAObject{
-				FixedTPM:     true,
-				FixedParent:  true,
-				UserWithAuth: true,
-			},
-			AuthPolicy: policyDigest,
-			Parameters: tpm2.NewTPMUPublicParms(
-				tpm2.TPMAlgKeyedHash,
-				&tpm2.TPMSKeyedHashParms{
-					Scheme: tpm2.TPMTKeyedHashScheme{
-						Scheme: tpm2.TPMAlgNull,
-					},
-				},
-			),
-		}),
-	}
-
-	createRsp, err := createCmd.Execute(tpmDev)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create sealed object: %w", err)
-	}
-
-	return &CreateSealedObjectResponse{
-		Public:  createRsp.OutPublic.Bytes(),
-		Private: createRsp.OutPrivate.Buffer,
-	}, nil
-}
-
 // LoadSealedObjectResponse contains the result of loading a sealed object
 type LoadSealedObjectResponse struct {
 	ObjectHandle tpm2.TPMHandle
@@ -1212,36 +1081,6 @@ func LoadSealedObject(tpmDev transport.TPM, primaryKey *PrimaryKeyResponse, seal
 func FlushHandle(tpmDev transport.TPM, handle tpm2.TPMHandle) {
 	flushCmd := tpm2.FlushContext{FlushHandle: handle}
 	_, _ = flushCmd.Execute(tpmDev)
-}
-
-// UnsealData is kept for backward compatibility but now only supports PCR policy mode.
-// Password-based unsealing has been removed; use UnsealWithPCRBranch or UnsealWithSignedBranch instead.
-func UnsealData(tpmDev transport.TPM, loadedObject *LoadSealedObjectResponse, sealedBlob *SealedBlob) ([]byte, error) {
-	// Use PCR policy session with the correct hash algorithm from the blob
-	hashAlgo := sealedBlob.GetHashAlgo()
-	sess, cleanup, err := CreatePCRPolicySession(tpmDev, sealedBlob.GetPCRIndices(), hashAlgo)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create PCR policy session: %w", err)
-	}
-	defer cleanup()
-
-	authHandle := tpm2.AuthHandle{
-		Handle: loadedObject.ObjectHandle,
-		Name:   loadedObject.Name,
-		Auth:   sess,
-	}
-
-	// Unseal the data
-	unsealCmd := tpm2.Unseal{
-		ItemHandle: authHandle,
-	}
-
-	unsealRsp, err := unsealCmd.Execute(tpmDev)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unseal data: %w", err)
-	}
-
-	return unsealRsp.OutData.Buffer, nil
 }
 
 // NVRAMList lists all defined NVRAM indices in the TPM
