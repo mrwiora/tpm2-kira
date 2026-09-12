@@ -107,9 +107,6 @@ func (calc *EventlogPCRCalculator) CalculatePCRsFromEventlogPath(eventlogPath st
 		return nil, nil, fmt.Errorf("eventlog contains no %s events", calc.HashAlgo.DisplayString())
 	}
 
-	// Calculate eventlog hash for verification
-	eventlogHash := sha256.Sum256(rawEventlog)
-
 	// Calculate PCR values by replaying the eventlog
 	pcrValues, extendsPerPCR, totalEvents, processedEvents, err := calc.replayEventLog(events)
 	if err != nil {
@@ -137,7 +134,6 @@ func (calc *EventlogPCRCalculator) CalculatePCRsFromEventlogPath(eventlogPath st
 	// Create eventlog info
 	eventlogInfo := &EventlogInfo{
 		EventlogPath:    eventlogPath,
-		EventlogHash:    fmt.Sprintf("%x", eventlogHash),
 		CalculationTime: time.Now().UTC().Format(time.RFC3339),
 		TotalEvents:     totalEvents,
 		ProcessedEvents: processedEvents,

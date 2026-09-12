@@ -98,6 +98,14 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	sealedBlob, err := UnmarshalSealedBlob(sealedData)
 	if err != nil {
 		tpmDev.Close()
+		if bve, ok := IsBlobVersionError(err); ok {
+			return fmt.Errorf(
+				"cannot reseal: the stored blob is version %d but this build writes version %d.\n"+
+					"reseal preserves the existing blob, so it cannot upgrade the format.\n"+
+					"Seal again to replace it (this generates a NEW TOTP secret, so re-enrol your authenticator):\n"+
+					"    tpm2-kira seal --nvram 0x%08X",
+				bve.FoundVersion, bve.RequiredVersion, nvramIndex)
+		}
 		return fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
 

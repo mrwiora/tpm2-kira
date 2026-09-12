@@ -10,6 +10,20 @@ formats and CLI flags may change without migration paths.
 
 ## Blob format
 
+### Version 8 — dropped the unverified eventlog hash
+
+`EventlogInfo.EventlogHash` stored a SHA-256 of the event log file and was
+documented as being "for verification". Nothing ever read it. It could not have
+been a useful check either: the event log differs on every boot, so comparing a
+seal-time hash against the current one would fail on any legitimate reboot. It
+added nothing to blob integrity, since the whole payload is already covered by
+the blob signature. Removed along with `MaxEventlogHash`.
+
+`EventlogInfo.EventlogPath` is retained for provenance only. It is **never**
+reopened from the blob — reads always go through `DefaultEventlogPath` — and it
+must stay that way, since honouring a blob-supplied path would turn a stored
+string into a file-access vector.
+
 ### Version 7 — UKI source, measure-point metadata
 
 - Added the `u` PCR source (unified kernel image) and the `EventlogInfo` fields

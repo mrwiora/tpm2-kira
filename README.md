@@ -458,6 +458,27 @@ Two things to keep in mind while reading any PCR output:
 See [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md) §5.6–5.8 for the full
 reconstruction rules and constants.
 
+## Exit status
+
+**tpm2-kira always exits 0, including on failure.** This is deliberate: it is
+meant to be chainable in a boot sequence, so a TPM or NVRAM problem must not
+stop the commands after it.
+
+```bash
+tpm2-kira && cryptsetup open /dev/nvme0n1p2 cryptroot
+```
+
+Scripts must therefore judge success from the **output**, not the exit status.
+Failures are printed to stderr with a fixed marker:
+
+```
+tpm2-kira: FAILED: <reason>
+tpm2-kira: (exit status is 0 by design; this command did NOT succeed)
+```
+
+The mkinitcpio post hook does exactly this — it greps the output for the success
+line rather than testing `$?`.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy and [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md) for an in-depth description of the cryptographic design, threat model, and trust boundaries.

@@ -38,11 +38,14 @@ if [[ -r $MEASURE_POINT_STATE ]]; then
     esac
 fi
 
-if output=$(tpm2-kira reseal --measure-point="$measure_point" 2>&1); then
+# tpm2-kira exits 0 even on failure, by design, so that chained commands still
+# run. Success must therefore be judged from the output, not the exit status.
+output=$(tpm2-kira reseal --measure-point="$measure_point" 2>&1)
+if grep -q "Successfully resealed" <<< "$output"; then
     echo "tpm2-kira: reseal completed successfully (measure-point=$measure_point)"
 else
-    echo "tpm2-kira: WARNING — reseal failed:" >&2
+    echo "tpm2-kira: WARNING — reseal did NOT succeed:" >&2
     echo "$output" >&2
-    echo "tpm2-kira: You may need to run 'tpm2-kira reseal' manually" >&2
+    echo "tpm2-kira: the next boot will not be able to unseal; run 'tpm2-kira reseal' manually" >&2
     # Do not fail the overall mkinitcpio run; the image was already written.
 fi
