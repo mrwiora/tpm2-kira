@@ -151,10 +151,20 @@ systemd-stub measures: for each section, `H(name + NUL)` followed by
 `H(section bytes)`, then the `enter-initrd` boot phase. It needs neither
 `objcopy` nor `systemd-measure`, and nothing is executed as a subprocess.
 
-`seal` verifies that computation against the current boot's firmware event log
-and refuses to seal if they disagree, since that means PCR 11 would be bound to
-a value this machine has never produced. Pass `--verify-uki=false` when sealing
-against an image that is not the one currently booted.
+`seal` checks that computation against the current boot's firmware event log,
+measurement by measurement. What happens on a mismatch depends on what kind it
+is:
+
+| Mismatch | Meaning | Result |
+|---|---|---|
+| Section set or order differs | tpm2-kira models systemd-stub wrongly | **fails** |
+| Section content differs, image rebuilt after boot | cannot be checked yet | warns, proceeds |
+| Section content differs, image unchanged since boot | the computation is wrong | **fails** |
+
+The middle case is the normal one right after a kernel or initramfs update: the
+image on disk is not the one that booted, so there is nothing to verify against.
+PCR 11 becomes correct once you boot that image. Pass `--verify-uki=false` to
+skip the check entirely.
 
 ### The measure point
 

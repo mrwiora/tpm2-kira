@@ -121,7 +121,7 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 	// Reseal runs right after an initramfs rebuild, where the image on disk is
 	// expected to differ from the booted one, so only seal can check this.
 	if verifyUKI {
-		if err := VerifyUKISpecsAgainstEventlog(tpmDev, specs, hashAlgo, debug); err != nil {
+		if err := VerifyUKISpecsAgainstEventlog(specs, hashAlgo, debug); err != nil {
 			return err
 		}
 	}

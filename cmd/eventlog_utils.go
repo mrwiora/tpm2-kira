@@ -203,6 +203,28 @@ func (calc *EventlogPCRCalculator) bankError(eventLog *attest.EventLog, indices 
 	}
 }
 
+// EventDigestsForPCR returns, in order, the digests the firmware event log
+// records for one PCR in the given bank. Events that do not extend are skipped.
+func EventDigestsForPCR(eventlogPath string, pcr int, algo PCRHashAlgo) ([][]byte, error) {
+	raw, err := readRawEventLogFromPath(eventlogPath)
+	if err != nil {
+		return nil, err
+	}
+	eventLog, err := attest.ParseEventLog(raw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse eventlog: %w", err)
+	}
+
+	var digests [][]byte
+	for _, event := range eventLog.Events(attestHash(algo)) {
+		if int(event.Index) != pcr || event.Type == 0x03 || len(event.Digest) == 0 {
+			continue
+		}
+		digests = append(digests, event.Digest)
+	}
+	return digests, nil
+}
+
 // pcrIndicesToEventlogString formats PCR indices with 'e' suffix for error messages
 func pcrIndicesToEventlogString(indices []int) string {
 	result := ""
