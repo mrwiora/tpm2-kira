@@ -1,10 +1,8 @@
 package cmd
 
 import (
-	"crypto/sha1"
 	"crypto/sha256"
 	"fmt"
-	"hash"
 	"io"
 	"os"
 	"slices"
@@ -221,11 +219,6 @@ func pcrIndicesToEventlogString(indices []int) string {
 	return result
 }
 
-// readRawEventLog reads the raw binary eventlog from the default path
-func readRawEventLog() ([]byte, error) {
-	return readRawEventLogFromPath(DefaultEventlogPath)
-}
-
 // readRawEventLogFromPath reads the raw binary eventlog from a specific path
 func readRawEventLogFromPath(path string) ([]byte, error) {
 	file, err := os.Open(path)
@@ -237,26 +230,11 @@ func readRawEventLogFromPath(path string) ([]byte, error) {
 	return io.ReadAll(file)
 }
 
-// newHasher creates a new hash.Hash for the calculator's algorithm
-func (calc *EventlogPCRCalculator) newHasher() hash.Hash {
-	switch calc.HashAlgo {
-	case PCRHashAlgoSHA1:
-		return sha1.New()
-	default:
-		return sha256.New()
-	}
-}
-
-// digestSize returns the digest size for the calculator's algorithm
-func (calc *EventlogPCRCalculator) digestSize() int {
-	return calc.HashAlgo.DigestSize()
-}
-
 // replayEventLog replays the eventlog to calculate PCR values.
 // The returned map counts how many events actually extended each PCR, which
 // distinguishes "left at its reset value" from "no digests in this bank".
 func (calc *EventlogPCRCalculator) replayEventLog(events []attest.Event) (map[int][]byte, map[int]int, int, int, error) {
-	digestSize := calc.digestSize()
+	digestSize := calc.HashAlgo.DigestSize()
 
 	// Initialize PCR banks
 	pcrs := make(map[int][]byte)
@@ -321,10 +299,7 @@ func (calc *EventlogPCRCalculator) replayEventLog(events []attest.Event) (map[in
 		}
 
 		// Extend PCR: PCR = Hash(current_pcr || event_digest)
-		hasher := calc.newHasher()
-		hasher.Write(pcrs[pcrIndex])
-		hasher.Write(digest)
-		pcrs[pcrIndex] = hasher.Sum(nil)
+		pcrs[pcrIndex] = ExtendDigest(calc.HashAlgo, pcrs[pcrIndex], digest)
 
 		processedEvents++
 		extendsPerPCR[pcrIndex]++

@@ -11,7 +11,6 @@ import (
 	"encoding/binary"
 	"encoding/pem"
 	"fmt"
-	"math/big"
 	"os"
 
 	"github.com/google/go-tpm/tpm2"
@@ -1072,15 +1071,4 @@ func UnsealWithSignedBranchFromBlob(tpmDev transport.TPM, nvramIndex uint32, pri
 		UnsealedData: unsealedData,
 		SealedBlob:   sealedBlob,
 	}, nil
-}
-
-// Ensure our big number padding works for edge cases
-func padBigInt(b *big.Int, length int) []byte {
-	bytes := b.Bytes()
-	if len(bytes) >= length {
-		return bytes[:length]
-	}
-	padded := make([]byte, length)
-	copy(padded[length-len(bytes):], bytes)
-	return padded
 }

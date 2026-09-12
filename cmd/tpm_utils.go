@@ -598,19 +598,12 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 		}
 
 		// Also read the actual register values for eventlog PCRs
-		pcrRead := tpm2.PCRRead{
-			PCRSelectionIn: CreatePCRSelection(eventlogPCRIndices, hashAlgo),
-		}
-
-		pcrReadResp, err := pcrRead.Execute(tpmDev)
+		registers, err := ReadPCRRegisters(tpmDev, eventlogPCRIndices, hashAlgo, debug)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read eventlog PCRs from register: %w", err)
+			return nil, err
 		}
-
-		for i, pcrIndex := range eventlogPCRIndices {
-			if i < len(pcrReadResp.PCRValues.Digests) {
-				result.RegisterValues[pcrIndex] = pcrReadResp.PCRValues.Digests[i].Buffer
-			}
+		for idx, val := range registers {
+			result.RegisterValues[idx] = val
 		}
 
 		apply := mode == MeasurePointOn
@@ -658,17 +651,12 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 			result.Values[spec.Index] = value
 		}
 
-		pcrRead := tpm2.PCRRead{
-			PCRSelectionIn: CreatePCRSelection(ukiPCRIndices, hashAlgo),
-		}
-		pcrReadResp, err := pcrRead.Execute(tpmDev)
+		registers, err := ReadPCRRegisters(tpmDev, ukiPCRIndices, hashAlgo, debug)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read UKI PCRs from register: %w", err)
+			return nil, err
 		}
-		for i, pcrIndex := range ukiPCRIndices {
-			if i < len(pcrReadResp.PCRValues.Digests) {
-				result.RegisterValues[pcrIndex] = pcrReadResp.PCRValues.Digests[i].Buffer
-			}
+		for idx, val := range registers {
+			result.RegisterValues[idx] = val
 		}
 
 		if debug {
@@ -681,35 +669,13 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 
 	// Read register-based PCR values from TPM
 	if len(registerPCRIndices) > 0 {
-		pcrRead := tpm2.PCRRead{
-			PCRSelectionIn: CreatePCRSelection(registerPCRIndices, hashAlgo),
-		}
-
-		pcrReadResp, err := pcrRead.Execute(tpmDev)
+		registers, err := ReadPCRRegisters(tpmDev, registerPCRIndices, hashAlgo, debug)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read PCRs from %s bank: %w", hashAlgo.DisplayString(), err)
+			return nil, err
 		}
-
-		if len(pcrReadResp.PCRValues.Digests) < len(registerPCRIndices) {
-			return nil, fmt.Errorf(
-				"TPM did not return %s PCR values for register-based PCRs %v.\n"+
-					"The %s PCR bank may not be enabled on this system.\n"+
-					"Available digests: %d, expected: %d",
-				hashAlgo.DisplayString(), registerPCRIndices,
-				hashAlgo.DisplayString(),
-				len(pcrReadResp.PCRValues.Digests), len(registerPCRIndices))
-		}
-
-		for i, pcrIndex := range registerPCRIndices {
-			result.Values[pcrIndex] = pcrReadResp.PCRValues.Digests[i].Buffer
-			result.RegisterValues[pcrIndex] = pcrReadResp.PCRValues.Digests[i].Buffer
-		}
-
-		if debug {
-			fmt.Println("Register-read PCR values:")
-			for _, idx := range registerPCRIndices {
-				fmt.Printf("  PCR%d: %x\n", idx, result.Values[idx])
-			}
+		for idx, val := range registers {
+			result.Values[idx] = val
+			result.RegisterValues[idx] = val
 		}
 	}
 
