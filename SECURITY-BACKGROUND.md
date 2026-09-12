@@ -209,6 +209,53 @@ Setting `UserWithAuth = false` is essential. It means there is **no password
 bypass**. The only way to unseal is through a policy session that satisfies the
 PolicyOR — either matching PCRs or a valid cryptographic signature.
 
+### 4.5 Where the guarantee is enforced
+
+The release decision is made **inside the TPM**, not by tpm2-kira:
+
+| Step | Code | What the TPM does |
+|------|------|-------------------|
+| Object creation | `cmd/policy_or.go`, `CreateSealedObjectPolicyOR` | Stores `AuthPolicy: policyDigest`; `UserWithAuth` is deliberately left unset |
+| Normal boot unseal | `cmd/policy_or.go`, `UnsealWithPCRBranch` | `TPM2_PolicyPCR` reads the **live** registers and folds their composite digest into the session |
+| | | `TPM2_PolicyOr` then `TPM2_Unseal` |
+
+`TPM2_PolicyPCR` is issued **without** a caller-supplied `PcrDigest`, so the
+TPM derives the value from its own registers. If a single bit differs, the
+session digest no longer equals the object's `authPolicy` and `TPM2_Unseal`
+returns `TPM_RC_POLICY_FAIL`. The secret never crosses the chip boundary.
+A caller cannot assert "the PCRs matched"; it can only ask the TPM to try.
+
+Two distinctions worth being explicit about, because both are easy to misread:
+
+- **Trial sessions are never used to unseal.** `tpm2.PolicySession(..., tpm2.Trial())`
+  appears in `ComputeFullPolicyDigest` and friends purely to *calculate* digests
+  at seal time. A trial session can be driven to any digest and authorises
+  nothing. The unseal path uses a real `tpm2.Policy(...)` session.
+- **The software PCR comparison is advisory only.** §5.2 steps 2–3 compare the
+  blob's digests against live registers to produce a helpful error before
+  touching the TPM. It is a user-experience shortcut, not the gate — deleting
+  it would not weaken the guarantee by one bit, and patching it out does not
+  yield the secret.
+
+### 4.6 What this does *not* guarantee
+
+"Only when the PCRs match" is not the whole statement. PolicyOR has two doors,
+and the second one is intentional:
+
+> The TPM releases the secret when the PCRs match **or** when a valid signature
+> from the sealing key is presented.
+
+Anyone holding the signing private key can unseal regardless of PCR state —
+that is the recovery path, and it is why a kernel update does not lock you out.
+It also means the private key is as security-critical as the TPM policy itself.
+
+The mitigating property is *where* the key lives, not what the TPM enforces:
+`/var/lib/tpm2-kira/keys/seal.key` sits on the encrypted root filesystem, so at
+tpm2-kira's measure point in the initrd — before the disk is unlocked — it is
+not reachable. An attacker in that window has only the PCR door. Note this is a
+filesystem-layout property that a different deployment could undo, not a
+guarantee the TPM makes.
+
 ---
 
 ## 5. Operation Flows
@@ -237,8 +284,8 @@ to the user (QR code). After sealing, the cleartext is discarded.
 
 ```
 1.  Read blob from NVRAM, deserialise
-2.  Compare blob's PCR digests against live TPM register values
-3.  If mismatch → fail with PCR mismatch error
+2.  Compare blob's PCR digests against live TPM register values   (advisory)
+3.  If mismatch → fail early with a readable PCR mismatch error   (advisory)
 4.  TPM2_CreatePrimary → same parent key
 5.  TPM2_Load → load sealed object into TPM
 6.  Build policy session:
@@ -249,6 +296,9 @@ to the user (QR code). After sealing, the cleartext is discarded.
 7.  TPM2_Unseal → TPM releases secret if policy satisfied
 8.  Compute TOTP code from secret, display it
 ```
+
+Steps 2–3 only produce a better error message. The enforcement is steps 6–7,
+inside the TPM — see §4.5.
 
 No private key is needed. No password is needed. The TPM decides based on PCRs.
 
