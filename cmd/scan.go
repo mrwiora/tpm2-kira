@@ -85,7 +85,9 @@ func SlotNumber(index uint32) int {
 	if index >= NVRAMSlotStart && index <= NVRAMSlotEnd {
 		return int(index - NVRAMSlotStart)
 	}
-	return int(index)
+	// Outside the shorthand range there is no slot number; the raw index would
+	// be indistinguishable from a real one.
+	return -1
 }
 
 // ScanAndReveal scans NVRAM slots, displays PCR mismatches, and returns valid slots with codes

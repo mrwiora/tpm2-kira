@@ -2661,6 +2661,11 @@ func TestSlotNumber(t *testing.T) {
 			index:    NVRAMSlotEnd,
 			expected: int(NVRAMSlotEnd - NVRAMSlotStart),
 		},
+		{
+			name:     "Outside the shorthand range has no slot number",
+			index:    NVRAMSlotEnd + 1,
+			expected: -1,
+		},
 	}
 
 	for _, tt := range tests {
