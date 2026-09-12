@@ -151,6 +151,11 @@ systemd-stub measures: for each section, `H(name + NUL)` followed by
 `H(section bytes)`, then the `enter-initrd` boot phase. It needs neither
 `objcopy` nor `systemd-measure`, and nothing is executed as a subprocess.
 
+`seal` verifies that computation against the current boot's firmware event log
+and refuses to seal if they disagree, since that means PCR 11 would be bound to
+a value this machine has never produced. Pass `--verify-uki=false` when sealing
+against an image that is not the one currently booted.
+
 ### The measure point
 
 tpm2-kira reads PCRs in the initrd, *after* systemd has already extended some

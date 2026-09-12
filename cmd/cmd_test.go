@@ -2640,7 +2640,7 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 	var dummyKey crypto.PublicKey = &dummyPubKey{}
 
 	t.Run("Rejects empty PCR specs", func(t *testing.T) {
-		err := sealDataWithSpecs("/dev/null", []PCRSpec{}, 0x01803010, []byte("data"), nil, "", "", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/dev/null", []PCRSpec{}, 0x01803010, []byte("data"), nil, "", "", false, PCRHashAlgoSHA256, false)
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error for empty specs, got nil")
 		}
@@ -2651,7 +2651,7 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 
 	t.Run("Rejects empty data", func(t *testing.T) {
 		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
-		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte{}, dummyKey, "", "", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte{}, dummyKey, "", "", false, PCRHashAlgoSHA256, false)
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error for empty data, got nil")
 		}
@@ -2662,7 +2662,7 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 
 	t.Run("Rejects nil data", func(t *testing.T) {
 		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
-		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, nil, dummyKey, "", "", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, nil, dummyKey, "", "", false, PCRHashAlgoSHA256, false)
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error for nil data, got nil")
 		}
@@ -2673,7 +2673,7 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 
 	t.Run("Rejects nil signing public key", func(t *testing.T) {
 		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
-		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte("test-data"), nil, "", "", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte("test-data"), nil, "", "", false, PCRHashAlgoSHA256, false)
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error for nil signing key, got nil")
 		}
@@ -2684,7 +2684,7 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 
 	t.Run("Empty private key path falls back to default", func(t *testing.T) {
 		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
-		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte("test-data"), dummyKey, "", "", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/dev/null", specs, 0x01803010, []byte("test-data"), dummyKey, "", "", false, PCRHashAlgoSHA256, false)
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error (TPM or key load), got nil")
 		}
@@ -2697,7 +2697,7 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 
 	t.Run("Fails on invalid TPM path", func(t *testing.T) {
 		specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
-		err := sealDataWithSpecs("/nonexistent/tpm/path", specs, 0x01803010, []byte("test-data"), dummyKey, "", "/dummy/privkey.pem", false, PCRHashAlgoSHA256)
+		err := sealDataWithSpecs("/nonexistent/tpm/path", specs, 0x01803010, []byte("test-data"), dummyKey, "", "/dummy/privkey.pem", false, PCRHashAlgoSHA256, false)
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error for invalid TPM path, got nil")
 		}
