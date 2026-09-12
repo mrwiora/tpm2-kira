@@ -98,6 +98,14 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	sealedBlob, err := UnmarshalSealedBlob(sealedData)
 	if err != nil {
 		tpmDev.Close()
+		if bve, ok := IsBlobVersionError(err); ok {
+			return fmt.Errorf(
+				"cannot reseal: the stored blob is version %d but this build writes version %d.\n"+
+					"reseal preserves the existing blob, so it cannot upgrade the format.\n"+
+					"Seal again to replace it (this generates a NEW TOTP secret, so re-enrol your authenticator):\n"+
+					"    tpm2-kira seal --nvram 0x%08X",
+				bve.FoundVersion, bve.RequiredVersion, nvramIndex)
+		}
 		return fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
 
@@ -148,9 +156,8 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	}
 
 	// ── Verify blob integrity signature ──
-	// The signature MUST be verified BEFORE we touch any blob fields
-	// (particularly PCR specs with predict commands) to prevent execution
-	// of attacker-controlled commands from a tampered blob.
+	// The signature MUST be verified BEFORE any blob field is acted on, so a
+	// tampered blob cannot steer reseal via its stored PCR specs or key paths.
 	//
 	// Derive the verification key from the private key (the trust anchor).
 	// The blob's stored PublicKeyPath is NOT trusted for this purpose.
@@ -228,7 +235,8 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 
 	// ── Determine the public key for re-sealing ──
 	// Priority: --pubkey > blob pubkey path > derived from --privkey > blob privkey path
-	// The blob no longer stores the public key PEM; a key source on the filesystem is required.
+	// The signing public key must come from the filesystem; the blob stores only
+	// a path hint, which is not trusted.
 	var resealPubKey crypto.PublicKey
 	var resealPubKeySource string
 	var resealPubKeyPathForBlob string

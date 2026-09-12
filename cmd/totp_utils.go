@@ -42,7 +42,7 @@ func PrintKIRAOutput(code string) {
 // PrintKIRAError prints an error with colored KIRA formatting
 // If the error is a PCRMismatchError, it includes detailed PCR information.
 // On the unseal path CurrentDigests always holds TPM register values; no
-// eventlog or predict output is shown.
+// eventlog or UKI reconstruction is shown.
 func PrintKIRAError(err error) {
 	// Check if it's a PCR mismatch error for special formatting
 	if pcrErr, ok := err.(*PCRMismatchError); ok {
@@ -111,7 +111,7 @@ func PrintKIRAError(err error) {
 
 // PCRMismatchError represents a PCR mismatch error with detailed information.
 // CurrentDigests always contains values read from TPM registers (the unseal
-// path never uses eventlog or predict tools).
+// path never uses eventlog or UKI reconstruction).
 type PCRMismatchError struct {
 	Message         string
 	PCRIndices      []int

@@ -252,6 +252,10 @@ tpm2-kira info --nvram 0
 tpm2-kira info --json          # machine-readable
 ```
 
+`--json` always emits an array of slot objects, one per populated slot, even
+when there is only one. Each entry carries `slot_number`, `nvram_index` and the
+blob itself, so consumers never have to branch on the slot count.
+
 ## Deleting Sealed Data
 
 ```bash
@@ -298,17 +302,31 @@ See [mkinitcpio/mkinitcpio.conf.example](mkinitcpio/mkinitcpio.conf.example) for
 
 ## Eventlog PCR Calculator
 
-The included Python script `calculate.py` can independently calculate PCR values from a TPM eventlog YAML file. Useful for debugging PCR mismatches:
+`tools/pcrtool.py` independently reconstructs PCR values, which is the first
+thing to reach for when a sealed policy stops matching. It reads the live
+firmware event log directly, or a `tpm2_eventlog` YAML dump:
 
 ```bash
-# Calculate all PCRs from an eventlog
-python3 calculate.py /path/to/eventlog.yaml
+# All PCRs from the running system's event log
+sudo python3 tools/pcrtool.py replay
 
-# Calculate a specific PCR
-python3 calculate.py /path/to/eventlog.yaml 7
+# A specific PCR, showing every extension step
+sudo python3 tools/pcrtool.py replay --pcr 7 --verbose
+
+# From a dump, which needs neither root nor a TPM
+tpm2_eventlog /sys/kernel/security/tpm0/binary_bios_measurements > evlog.yaml
+python3 tools/pcrtool.py --eventlog evlog.yaml replay
+
+# The SHA-1 bank
+sudo python3 tools/pcrtool.py --bank sha1 replay
 ```
 
-Requires PyYAML (`pip install pyyaml`).
+The `extends` column counts how many events actually extended each PCR. A zero
+there means the log carries no digests for that PCR **in the selected bank**, so
+the value shown is only the reset value — the tool warns and exits non-zero
+rather than letting that pass as a measurement.
+
+Requires PyYAML (`pip install pyyaml`) and tpm2-tools.
 
 ## Testing
 
@@ -401,10 +419,9 @@ sudo pacman -R tpm2-kira
 │   ├── tpm_utils.go         # Low-level TPM operations
 │   ├── pcrtips.go           # PCR reference information
 │   └── constants.go         # Default paths and constants
-├── calculate.py             # Standalone eventlog PCR calculator
-├── verify_os_separator.py   # Reconstructs the full PCR chain for diagnosis
 ├── tools/
-│   └── tpm2-pcr11predict    # Independent cross-check of the built-in PCR 11 computation
+│   ├── pcrtool.py            # PCR replay and full-chain diagnosis
+│   └── tpm2-pcr11predict     # Independent cross-check of the built-in PCR 11 computation
 ├── mkinitcpio/              # Early boot hooks for Arch Linux
 │   ├── install/sd-tpm2-kira # mkinitcpio install hook
 │   ├── post/sd-tpm2-kira    # Post-generation reseal hook
@@ -422,7 +439,7 @@ chain before changing anything:
 ```bash
 # Replays the firmware event log AND systemd's own measurement log,
 # then explains every difference against the live registers.
-sudo python3 verify_os_separator.py
+sudo python3 tools/pcrtool.py verify
 ```
 
 Each PCR is reported as `unchanged since firmware`, `os-separator (x1)`,
@@ -441,9 +458,38 @@ Two things to keep in mind while reading any PCR output:
 See [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md) §5.6–5.8 for the full
 reconstruction rules and constants.
 
+## Exit status
+
+**tpm2-kira always exits 0, including on failure.** This is deliberate: it is
+meant to be chainable in a boot sequence, so a TPM or NVRAM problem must not
+stop the commands after it.
+
+```bash
+tpm2-kira && cryptsetup open /dev/nvme0n1p2 cryptroot
+```
+
+Scripts must therefore judge success from the **output**, not the exit status.
+Failures are printed to stderr with a fixed marker:
+
+```
+tpm2-kira: FAILED: <reason>
+tpm2-kira: (exit status is 0 by design; this command did NOT succeed)
+```
+
+The mkinitcpio post hook does exactly this — it greps the output for the success
+line rather than testing `$?`.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy and [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md) for an in-depth description of the cryptographic design, threat model, and trust boundaries.
+
+## History
+
+[HISTORY.md](HISTORY.md) records superseded formats, removed features and the
+reasoning behind them, so the source can describe what it is rather than what it
+used to be. This project is in development: **no backwards compatibility is
+maintained**, and blob formats, on-disk layouts and CLI flags may change without
+a migration path.
 
 ## License
 

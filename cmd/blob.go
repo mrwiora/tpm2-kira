@@ -101,6 +101,8 @@ type BlobPeek struct {
 // PeekBlobVersion reads just the version and app version from raw blob data without full unmarshal.
 // For current blobs the layout is: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
 // For older blobs the layout is: [version:4][appVersionLen:4][appVersion...]
+// PeekBlobVersion reads just the version and app version from raw blob data without full unmarshal.
+// Layout: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
 func PeekBlobVersion(data []byte) *BlobPeek {
 	peek := &BlobPeek{
 		DataSize: len(data),
@@ -112,21 +114,10 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 
 	peek.Version = binary.LittleEndian.Uint32(data[0:4])
 
-	if peek.Version == CurrentBlobVersion {
-		// Current layout: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
-		if len(data) >= 12 {
-			appVersionLen := binary.LittleEndian.Uint32(data[8:12])
-			if appVersionLen > 0 && appVersionLen < 256 && len(data) >= 12+int(appVersionLen) {
-				peek.AppVersion = string(data[12 : 12+appVersionLen])
-			}
-		}
-	} else {
-		// Legacy layout: [version:4][appVersionLen:4][appVersion...]
-		if len(data) >= 8 {
-			appVersionLen := binary.LittleEndian.Uint32(data[4:8])
-			if appVersionLen > 0 && appVersionLen < 256 && len(data) >= 8+int(appVersionLen) {
-				peek.AppVersion = string(data[8 : 8+appVersionLen])
-			}
+	if len(data) >= 12 {
+		appVersionLen := binary.LittleEndian.Uint32(data[8:12])
+		if appVersionLen > 0 && appVersionLen < 256 && len(data) >= 12+int(appVersionLen) {
+			peek.AppVersion = string(data[12 : 12+appVersionLen])
 		}
 	}
 
@@ -138,7 +129,7 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 var AppVersion = "unknown"
 
 // CurrentBlobVersion is the only supported blob format version
-const CurrentBlobVersion = 7
+const CurrentBlobVersion = 8
 
 // MaxBlobSignatureLen is the maximum allowed signature size in bytes.
 // Generous: RSA-4096 PKCS#1 v1.5 = 512 bytes, ECDSA P-384 DER ≈ 104 bytes.
@@ -152,7 +143,7 @@ const (
 	PCRSourceRegister PCRSource = 0
 	// PCRSourceEventlog means the PCR value was calculated from the TPM eventlog ('e' suffix)
 	PCRSourceEventlog PCRSource = 1
-	// Value 2 was the external predict command source, removed in blob version 7.
+	// Source byte 2 is retired and must not be reused; see HISTORY.md.
 	// PCRSourceUKI means the PCR value was computed from a unified kernel image ('u' suffix)
 	PCRSourceUKI PCRSource = 3
 )
@@ -197,7 +188,6 @@ const (
 	MaxDigestSize         = 1024             // Maximum 1KB per individual digest
 	MaxCommandLen         = 4096             // Maximum 4KB for the UKI path string
 	MaxEventlogPath       = 4096             // Maximum 4KB for eventlog path
-	MaxEventlogHash       = 128              // Maximum 128 bytes for hash string
 	MaxCalcTime           = 256              // Maximum 256 bytes for timestamp
 	MaxMeasurePointLen    = 512              // Maximum 512 bytes for the measure-point extend description
 	MaxSignedBranchDigest = 64               // Maximum 64 bytes for signed branch digest (SHA-256 = 32 bytes)
@@ -214,8 +204,7 @@ type PCRDigestPair struct {
 
 // EventlogInfo represents metadata about eventlog-based PCR calculation
 type EventlogInfo struct {
-	EventlogPath    string `json:"eventlog_path"`    // Path to eventlog file used
-	EventlogHash    string `json:"eventlog_hash"`    // SHA256 hash of eventlog file for verification
+	EventlogPath    string `json:"eventlog_path"`    // Path the eventlog was read from (never reopened from the blob)
 	CalculationTime string `json:"calculation_time"` // When calculation was performed
 	TotalEvents     int    `json:"total_events"`     // Total number of events processed
 	ProcessedEvents int    `json:"processed_events"` // Number of events that extended PCRs
@@ -409,7 +398,6 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 	hasEventlogInfo := hasEventlogPCRsInPayload(p) && p.EventlogInfo != nil
 	if hasEventlogInfo {
 		size += 4 + len(p.EventlogInfo.EventlogPath) + // eventlog path
-			4 + len(p.EventlogInfo.EventlogHash) + // eventlog hash
 			4 + len(p.EventlogInfo.CalculationTime) + // calculation time
 			4 + 4 + // total events + processed events (4 bytes each)
 			2 + len(p.EventlogInfo.MeasurePointExtends) + // measure-point extends
@@ -503,12 +491,6 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		offset += 4
 		copy(buf[offset:], p.EventlogInfo.EventlogPath)
 		offset += len(p.EventlogInfo.EventlogPath)
-
-		// Eventlog hash
-		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(p.EventlogInfo.EventlogHash)))
-		offset += 4
-		copy(buf[offset:], p.EventlogInfo.EventlogHash)
-		offset += len(p.EventlogInfo.EventlogHash)
 
 		// Calculation time
 		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(p.EventlogInfo.CalculationTime)))
@@ -648,10 +630,10 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 			commandLen := int(binary.LittleEndian.Uint16(data[offset:]))
 			offset += 2
 			if commandLen > MaxCommandLen {
-				return nil, fmt.Errorf("predict command length %d exceeds maximum %d", commandLen, MaxCommandLen)
+				return nil, fmt.Errorf("UKI path length %d exceeds maximum %d", commandLen, MaxCommandLen)
 			}
 			if offset+commandLen > len(data) {
-				return nil, fmt.Errorf("data too short for predict command string")
+				return nil, fmt.Errorf("data too short for UKI path string")
 			}
 			p.PCRDigests[i].Command = string(data[offset : offset+commandLen])
 			offset += commandLen
@@ -719,21 +701,6 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 		}
 		p.EventlogInfo.EventlogPath = string(data[offset : offset+int(pathLen)])
 		offset += int(pathLen)
-
-		// Eventlog hash
-		if offset+4 > len(data) {
-			return nil, fmt.Errorf("data too short for eventlog hash length")
-		}
-		hashLen := binary.LittleEndian.Uint32(data[offset:])
-		offset += 4
-		if hashLen > MaxEventlogHash {
-			return nil, fmt.Errorf("eventlog hash length %d exceeds maximum %d", hashLen, MaxEventlogHash)
-		}
-		if offset+int(hashLen) > len(data) {
-			return nil, fmt.Errorf("data too short for eventlog hash")
-		}
-		p.EventlogInfo.EventlogHash = string(data[offset : offset+int(hashLen)])
-		offset += int(hashLen)
 
 		// Calculation time
 		if offset+4 > len(data) {

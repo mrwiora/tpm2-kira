@@ -240,82 +240,6 @@ func TestParsePCRSpecs(t *testing.T) {
 	}
 }
 
-// TestParsePCRs tests backward-compatible PCR parsing
-func TestParsePCRs(t *testing.T) {
-	tests := []struct {
-		name      string
-		input     string
-		expected  []int
-		shouldErr bool
-	}{
-		{
-			name:     "Single PCR",
-			input:    "7",
-			expected: []int{7},
-		},
-		{
-			name:     "Multiple PCRs",
-			input:    "0,2,4,7",
-			expected: []int{0, 2, 4, 7},
-		},
-		{
-			name:     "PCR with register suffix",
-			input:    "7r",
-			expected: []int{7},
-		},
-		{
-			name:     "PCR with eventlog suffix",
-			input:    "7e",
-			expected: []int{7},
-		},
-		{
-			name:     "Mixed suffixes",
-			input:    "0e,2,7r",
-			expected: []int{0, 2, 7},
-		},
-		{
-			name:      "Invalid",
-			input:     "abc",
-			shouldErr: true,
-		},
-		{
-			name:      "Empty",
-			input:     "",
-			shouldErr: true,
-		},
-		{
-			name:      "Too high",
-			input:     "25",
-			shouldErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := ParsePCRs(tt.input)
-			if tt.shouldErr {
-				if err == nil {
-					t.Errorf("Expected error for input %q, got nil", tt.input)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("Unexpected error: %v", err)
-			}
-
-			if len(result) != len(tt.expected) {
-				t.Fatalf("Expected %d PCRs, got %d", len(tt.expected), len(result))
-			}
-
-			for i, pcr := range result {
-				if pcr != tt.expected[i] {
-					t.Errorf("PCR[%d]: expected %d, got %d", i, tt.expected[i], pcr)
-				}
-			}
-		})
-	}
-}
-
 // TestPCRSpecsToString tests PCR spec serialization
 func TestPCRSpecsToString(t *testing.T) {
 	tests := []struct {
@@ -458,7 +382,6 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					SignedBranchDigest: make([]byte, 32),
 					EventlogInfo: &EventlogInfo{
 						EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
-						EventlogHash:    "abc123",
 						CalculationTime: "2024-01-01T00:00:00Z",
 						TotalEvents:     100,
 						ProcessedEvents: 50,
@@ -527,7 +450,6 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					SignedBranchDigest: make([]byte, 32),
 					EventlogInfo: &EventlogInfo{
 						EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
-						EventlogHash:    "abc123def456",
 						CalculationTime: "2024-01-01T00:00:00Z",
 						TotalEvents:     100,
 						ProcessedEvents: 50,
@@ -552,7 +474,6 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					SignedBranchDigest: make([]byte, 32),
 					EventlogInfo: &EventlogInfo{
 						EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
-						EventlogHash:    "deadbeef",
 						CalculationTime: "2024-06-15T12:00:00Z",
 						TotalEvents:     200,
 						ProcessedEvents: 80,
@@ -573,7 +494,6 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					},
 					EventlogInfo: &EventlogInfo{
 						EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
-						EventlogHash:    "cafebabe",
 						CalculationTime: "2024-03-01T00:00:00Z",
 						TotalEvents:     50,
 						ProcessedEvents: 20,
@@ -666,9 +586,6 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 				} else {
 					if unmarshaled.Payload.EventlogInfo.EventlogPath != tt.blob.Payload.EventlogInfo.EventlogPath {
 						t.Errorf("EventlogPath mismatch")
-					}
-					if unmarshaled.Payload.EventlogInfo.EventlogHash != tt.blob.Payload.EventlogInfo.EventlogHash {
-						t.Errorf("EventlogHash mismatch")
 					}
 					if unmarshaled.Payload.EventlogInfo.CalculationTime != tt.blob.Payload.EventlogInfo.CalculationTime {
 						t.Errorf("CalculationTime mismatch")
@@ -956,8 +873,8 @@ func TestUnmarshalIncompatibleVersion(t *testing.T) {
 	if !strings.Contains(err.Error(), "v1") {
 		t.Errorf("Expected error to mention found v1, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "v7") {
-		t.Errorf("Expected error to mention requires v7, got: %v", err)
+	if !strings.Contains(err.Error(), "v8") {
+		t.Errorf("Expected error to mention requires v8, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "tpm2-kira seal") {
 		t.Errorf("Expected error to suggest re-sealing, got: %v", err)
@@ -1013,30 +930,15 @@ func TestPeekBlobVersion(t *testing.T) {
 			expectedSize:    2,
 		},
 		{
-			name: "Version 2 blob (old format — legacy layout)",
+			name: "Unsupported older version still reports its version",
 			data: func() []byte {
 				d := make([]byte, 20)
-				d[0] = 0x02 // version 2
-				d[4] = 0x05 // app version length = 5
-				copy(d[8:], "1.0.0")
+				binary.LittleEndian.PutUint32(d[0:4], 2)
 				return d
 			}(),
 			expectedVersion:    2,
-			expectedAppVersion: "1.0.0",
+			expectedAppVersion: "",
 			expectedSize:       20,
-		},
-		{
-			name: "Version 3 blob (legacy layout)",
-			data: func() []byte {
-				d := make([]byte, 30)
-				d[0] = 0x03 // version 3
-				d[4] = 0x07 // app version length = 7
-				copy(d[8:], "v2.0.0a")
-				return d
-			}(),
-			expectedVersion:    3,
-			expectedAppVersion: "v2.0.0a",
-			expectedSize:       30,
 		},
 		{
 			name: "Current version blob (appVersionLen at offset 8)",
@@ -1592,7 +1494,6 @@ func TestSealedBlobMarshalJSONWithEventlogInfo(t *testing.T) {
 			SignedBranchDigest: make([]byte, 32),
 			EventlogInfo: &EventlogInfo{
 				EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
-				EventlogHash:    "abc123",
 				CalculationTime: "2024-01-01T00:00:00Z",
 				TotalEvents:     100,
 				ProcessedEvents: 50,
@@ -1776,7 +1677,6 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 			SignedBranchDigest: make([]byte, 32),
 			EventlogInfo: &EventlogInfo{
 				EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
-				EventlogHash:    "abcdef1234567890",
 				CalculationTime: "2024-06-15T10:30:00Z",
 				TotalEvents:     150,
 				ProcessedEvents: 75,
@@ -2045,8 +1945,8 @@ func TestValidateNVRAMIndex(t *testing.T) {
 }
 
 func TestCurrentBlobVersion(t *testing.T) {
-	if CurrentBlobVersion != 7 {
-		t.Errorf("CurrentBlobVersion should be 7, got %d", CurrentBlobVersion)
+	if CurrentBlobVersion != 8 {
+		t.Errorf("CurrentBlobVersion should be 8, got %d", CurrentBlobVersion)
 	}
 }
 
@@ -2761,6 +2661,11 @@ func TestSlotNumber(t *testing.T) {
 			index:    NVRAMSlotEnd,
 			expected: int(NVRAMSlotEnd - NVRAMSlotStart),
 		},
+		{
+			name:     "Outside the shorthand range has no slot number",
+			index:    NVRAMSlotEnd + 1,
+			expected: -1,
+		},
 	}
 
 	for _, tt := range tests {
@@ -3163,7 +3068,6 @@ func TestMarshalPayloadUnmarshalPayloadRoundTrip(t *testing.T) {
 		SignedBranchDigest: make([]byte, 32),
 		EventlogInfo: &EventlogInfo{
 			EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
-			EventlogHash:    "abc123",
 			CalculationTime: "2024-01-01T00:00:00Z",
 			TotalEvents:     100,
 			ProcessedEvents: 50,

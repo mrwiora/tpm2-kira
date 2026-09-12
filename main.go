@@ -12,6 +12,16 @@ import (
 // Default is "dev" for development builds
 var Version = "dev"
 
+// fail reports a command failure and exits 0 on purpose: tpm2-kira is meant to
+// be chainable (`tpm2-kira && cryptsetup ...`), so a TPM or read failure must
+// not stop the commands after it. Scripts must therefore detect failure from
+// the output, not the exit status — grep for the FAILED marker below.
+func fail(err error) {
+	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: %v\n", err)
+	fmt.Fprintln(os.Stderr, "tpm2-kira: (exit status is 0 by design; this command did NOT succeed)")
+	os.Exit(0)
+}
+
 func main() {
 	// Set application version in cmd package
 	cmd.AppVersion = Version
@@ -54,8 +64,7 @@ func main() {
 		runRun(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "pcrtips":
 		if err := cmd.PCRTips(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(0)
+			fail(err)
 		}
 	case "version", "-v", "--version":
 		fmt.Printf("tpm2-kira version %s\n", Version)
@@ -64,7 +73,7 @@ func main() {
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", command)
 		printUsage()
-		os.Exit(0)
+		fail(fmt.Errorf("unknown command %q", command))
 	}
 }
 
@@ -100,8 +109,7 @@ func runSetup(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
 
 	if err := cmd.Setup(*tpm, sealIndex, *debug); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(0)
+		fail(err)
 	}
 }
 
@@ -122,15 +130,13 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 
 	mode, err := cmd.ParseMeasurePointMode(*measurePoint)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(0)
+		fail(err)
 	}
 	cmd.MeasurePointModeSetting = mode
 
 	// Validate PCR specs before proceeding
 	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(0)
+		fail(err)
 	}
 
 	hashAlgo := cmd.PCRHashAlgoSHA256
@@ -141,8 +147,7 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
 
 	if err := cmd.Seal(*tpm, *pcrs, sealIndex, *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(0)
+		fail(err)
 	}
 }
 
@@ -161,24 +166,21 @@ func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 
 	mode, err := cmd.ParseMeasurePointMode(*measurePoint)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(0)
+		fail(err)
 	}
 	cmd.MeasurePointModeSetting = mode
 
 	// Validate PCR specs before proceeding (only if explicitly provided)
 	if *pcrs != "" {
 		if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(0)
+			fail(err)
 		}
 	}
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
 	if err := cmd.ResealCommand(*tpm, scanIndex, *pcrs, *pubKeyPath, *privKeyPath, *debug); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(0)
+		fail(err)
 	}
 }
 
@@ -196,8 +198,7 @@ func runInfo(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
 	if err := cmd.InfoCommand(*tpm, scanIndex, *debug, *jsonOutput); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(0)
+		fail(err)
 	}
 }
 
@@ -245,8 +246,7 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 
 func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Error: nvram command requires a subcommand (list, status, delete)\n")
-		os.Exit(0)
+		fail(fmt.Errorf("nvram command requires a subcommand (list, status, delete)"))
 	}
 
 	subcommand := args[0]
@@ -266,24 +266,20 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	case "list":
 		listIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
 		if err := cmd.NVRAMList(*tpm, listIndex, *debug); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(0)
+			fail(err)
 		}
 	case "status":
 		statusIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
 		if err := cmd.NVRAMStatus(*tpm, statusIndex, *debug); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(0)
+			fail(err)
 		}
 	case "delete":
 		deleteIndex := resolveOrScanAll(uint32(*nvram), provided)
 		if err := cmd.NVRAMDeleteCommand(*tpm, deleteIndex, *debug); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(0)
+			fail(err)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown nvram subcommand: %s\n", subcommand)
-		os.Exit(0)
+		fail(fmt.Errorf("unknown nvram subcommand %q", subcommand))
 	}
 }
 

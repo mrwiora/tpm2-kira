@@ -85,7 +85,9 @@ func SlotNumber(index uint32) int {
 	if index >= NVRAMSlotStart && index <= NVRAMSlotEnd {
 		return int(index - NVRAMSlotStart)
 	}
-	return int(index)
+	// Outside the shorthand range there is no slot number; the raw index would
+	// be indistinguishable from a real one.
+	return -1
 }
 
 // ScanAndReveal scans NVRAM slots, displays PCR mismatches, and returns valid slots with codes
@@ -325,7 +327,7 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 				sealedBlob, err := UnmarshalSealedBlob(sealedData)
 				if err == nil {
 					// Read current PCR values from TPM registers only
-					// (no eventlog or predict dependency)
+					// (no eventlog or UKI dependency)
 					currentPCRValues, err := GetCurrentPCRValuesFromRegisters(tpmDev, sealedBlob, false)
 					if err == nil {
 						pcrIndices := sealedBlob.GetPCRIndices()

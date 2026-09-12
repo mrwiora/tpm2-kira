@@ -178,7 +178,7 @@ passphrase). Verify with:
     systemd-cryptenroll /dev/disk/by-uuid/<uuid>
     cryptsetup luksDump /dev/disk/by-uuid/<uuid> | grep -iA6 tokens
 
-### 7.3 PCR 9 and PCR 11 — two further findings from verify_os_separator.py
+### 7.3 PCR 9 and PCR 11 — two further findings from the full-chain check
 
 Running the full-chain check (firmware log + `/run/log/systemd/tpm2-measure.log`)
 on this host reconstructed every PCR and turned up two things the separator
@@ -271,6 +271,9 @@ Simple, but loses eventlog-based prediction for the affected indices.
     # systemd's own measurement log (where the separator IS recorded)
     jq . /run/log/systemd/tpm2-measure.log
 
+    # both of the above, replayed and reconciled against the live registers
+    sudo python3 tools/pcrtool.py verify
+
     # the unit and its effect
     cat /usr/lib/systemd/system/systemd-pcrosseparator.service
     journalctl -b -u systemd-pcrosseparator.service
@@ -309,7 +312,7 @@ Simple, but loses eventlog-based prediction for the affected indices.
 - The mkinitcpio install hook inspects `$BUILDROOT`, prints which measure-point
   units are active, and records the verdict for the post hook to pass to
   `reseal` — this is what makes the transition rebuild correct.
-- `verify_os_separator.py` reconstructs the full chain and is the tool that
+- `tools/pcrtool.py verify` reconstructs the full chain and is the tool that
   found the PCR 9 and PCR 11 behaviour.
 
 ## 11. Transferable lessons

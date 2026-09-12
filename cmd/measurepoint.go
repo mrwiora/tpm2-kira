@@ -176,7 +176,7 @@ func DetectMeasurePointExtends(replay, registers map[int][]byte, algo PCRHashAlg
 				"PCR %d cannot be reconstructed from the event log: the register matches "+
 					"neither the replay (%x) nor the replay plus %s (%x), it is %x.\n"+
 					"Sealing against PCR %de would bind to a value this system will not produce.\n"+
-					"Use the register source (%d) instead, or investigate with verify_os_separator.py",
+					"Use the register source (%d) instead, or investigate with tools/pcrtool.py verify",
 				pcr, replay[pcr], strings.Join(words, "+"), expected, register, pcr, pcr)
 		}
 		probed = append(probed, pcr)

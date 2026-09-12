@@ -57,8 +57,6 @@ func PCRTips() error {
 	fmt.Println("  'e'           - Calculate from TPM eventlog (PCRs 0-12 only)")
 	fmt.Println("  'u[:PATH]'    - Compute from a unified kernel image, built in (PCR 11 only)")
 	fmt.Println("                  Replays systemd-stub's section measurements; no external tools")
-	fmt.Println("  'p:COMMAND'   - Predict via external command (PCR 11 only)")
-	fmt.Println("                  The command must print a single hex digest line to stdout")
 	fmt.Println()
 	fmt.Println("Commonly used PCRs for sealing:")
 	fmt.Println("  0,2,7      - Recommended default (firmware + secure boot)")

@@ -99,11 +99,6 @@ func InfoCommand(tpmPath string, nvramIndex uint32, debug bool, jsonOutput bool)
 	return nil
 }
 
-// InfoWithFormat is the legacy entry point kept for backward compatibility.
-func InfoWithFormat(tpmPath string, nvramIndex uint32, debug bool, jsonOutput bool) error {
-	return InfoCommand(tpmPath, nvramIndex, debug, jsonOutput)
-}
-
 // ── reading a single slot ───────────────────────────────────────────────
 
 func readSlotInfo(tpmDev transport.TPM, nvramIndex uint32) (*slotInfo, error) {
@@ -139,18 +134,9 @@ func readSlotInfo(tpmDev transport.TPM, nvramIndex uint32) (*slotInfo, error) {
 // ── JSON output ─────────────────────────────────────────────────────────
 
 func printJSON(slots []slotInfo) error {
-	if len(slots) == 1 {
-		// Single slot – emit a plain object for backward compatibility.
-		out, err := json.MarshalIndent(slots[0].Blob, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal JSON: %w", err)
-		}
-		fmt.Println(string(out))
-		return nil
-	}
-
-	// Multiple slots – emit an array of annotated objects.
-	var items []SlotInfoJSON
+	// Always an array of annotated objects, so consumers never have to branch
+	// on the slot count.
+	items := make([]SlotInfoJSON, 0, len(slots))
 	for _, si := range slots {
 		raw, err := json.Marshal(si.Blob)
 		if err != nil {
@@ -294,7 +280,7 @@ func printSigningKeyInfo(sub string, blob *SealedBlob) {
 
 func printPCRSources(sub string, blob *SealedBlob) {
 	hasEventlog := blob.HasEventlogPCRs()
-	hasPredict := blob.HasUKIPCRs()
+	hasUKI := blob.HasUKIPCRs()
 	regPCRs := blob.GetRegisterPCRIndices()
 	hasRegister := len(regPCRs) > 0
 
@@ -307,18 +293,18 @@ func printPCRSources(sub string, blob *SealedBlob) {
 
 	// Summary line
 	switch {
-	case hasEventlog && hasPredict && hasRegister:
-		fmt.Printf("%s%sMode: mixed (eventlog, predict, register)\n", sub, branch(false))
-	case hasEventlog && hasPredict:
-		fmt.Printf("%s%sMode: mixed (eventlog, predict)\n", sub, branch(false))
+	case hasEventlog && hasUKI && hasRegister:
+		fmt.Printf("%s%sMode: mixed (eventlog, uki, register)\n", sub, branch(false))
+	case hasEventlog && hasUKI:
+		fmt.Printf("%s%sMode: mixed (eventlog, uki)\n", sub, branch(false))
 	case hasEventlog && hasRegister:
 		fmt.Printf("%s%sMode: mixed (eventlog, register)\n", sub, branch(false))
-	case hasPredict && hasRegister:
-		fmt.Printf("%s%sMode: mixed (predict, register)\n", sub, branch(false))
+	case hasUKI && hasRegister:
+		fmt.Printf("%s%sMode: mixed (uki, register)\n", sub, branch(false))
 	case hasEventlog:
 		fmt.Printf("%s%sMode: all eventlog-based\n", sub, branch(false))
-	case hasPredict:
-		fmt.Printf("%s%sMode: all predict-based\n", sub, branch(false))
+	case hasUKI:
+		fmt.Printf("%s%sMode: all uki-based\n", sub, branch(false))
 	default:
 		fmt.Printf("%s%sMode: all register-based\n", sub, branch(false))
 	}
@@ -328,13 +314,13 @@ func printPCRSources(sub string, blob *SealedBlob) {
 	if hasEventlog {
 		remaining++
 	}
-	if hasPredict {
+	if hasUKI {
 		remaining++
 	}
 	if hasRegister {
 		remaining++
 	}
-	if !hasEventlog && !hasPredict && !hasRegister {
+	if remaining == 0 {
 		// Already printed mode, nothing else.
 		return
 	}
@@ -343,24 +329,15 @@ func printPCRSources(sub string, blob *SealedBlob) {
 
 	if hasEventlog {
 		printed++
-		isLast := printed == remaining
-		fmt.Printf("%s%sEventlog PCRs: %v\n", sub, branch(isLast), blob.GetEventlogPCRIndices())
-		if blob.Payload.EventlogInfo != nil && !isLast {
-			// Print eventlog details nested under eventlog line.
-			esub := sub + cont(isLast)
-			_ = esub // eventlog detail is shown inline to keep tree compact
-		}
+		fmt.Printf("%s%sEventlog PCRs: %v\n", sub, branch(printed == remaining), blob.GetEventlogPCRIndices())
 	}
-	if hasPredict {
+	if hasUKI {
 		printed++
-		isLast := printed == remaining
-		indices := blob.GetUKIPCRIndices()
-		fmt.Printf("%s%sPredict PCRs: %v\n", sub, branch(isLast), indices)
+		fmt.Printf("%s%sUKI PCRs: %v\n", sub, branch(printed == remaining), blob.GetUKIPCRIndices())
 	}
 	if hasRegister {
 		printed++
-		isLast := printed == remaining
-		fmt.Printf("%s%sRegister PCRs: %v\n", sub, branch(isLast), regPCRs)
+		fmt.Printf("%s%sRegister PCRs: %v\n", sub, branch(printed == remaining), regPCRs)
 	}
 }
 

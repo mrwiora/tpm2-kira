@@ -9,6 +9,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"os"
@@ -703,10 +704,24 @@ func TestInfoJSON(t *testing.T) {
 		t.Fatalf("Info JSON command failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
 	}
 
-	// Verify it's valid JSON by checking for braces
+	// info --json always emits an array of slot objects, one per populated slot.
 	stdout = strings.TrimSpace(stdout)
-	if !strings.HasPrefix(stdout, "{") || !strings.HasSuffix(stdout, "}") {
-		t.Errorf("Expected JSON output, got: %s", stdout)
+	var slots []struct {
+		SlotNumber int             `json:"slot_number"`
+		NVRAMIndex string          `json:"nvram_index"`
+		Blob       json.RawMessage `json:"blob"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &slots); err != nil {
+		t.Fatalf("Expected a JSON array, got: %s\nError: %v", stdout, err)
+	}
+	if len(slots) != 1 {
+		t.Fatalf("Expected exactly 1 slot, got %d: %s", len(slots), stdout)
+	}
+	if slots[0].NVRAMIndex != testNVRAMIndex {
+		t.Errorf("nvram_index: expected %q, got %q", testNVRAMIndex, slots[0].NVRAMIndex)
+	}
+	if len(slots[0].Blob) == 0 {
+		t.Error("slot entry carries no blob object")
 	}
 
 	// Verify it contains expected JSON fields (updated for PolicyOR model)
