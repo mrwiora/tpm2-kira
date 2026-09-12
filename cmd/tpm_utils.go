@@ -4,7 +4,9 @@ import (
 	"crypto"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -483,6 +485,65 @@ func ReadPCRRegisters(tpmDev transport.TPM, pcrIndices []int, hashAlgo PCRHashAl
 	return result, nil
 }
 
+// TPMHasPCRBank reports whether the TPM exposes PCRs in the given bank.
+func TPMHasPCRBank(tpmDev transport.TPM, algo PCRHashAlgo) bool {
+	rsp, err := (tpm2.PCRRead{PCRSelectionIn: CreatePCRSelection([]int{0}, algo)}).Execute(tpmDev)
+	if err != nil || len(rsp.PCRValues.Digests) == 0 {
+		return false
+	}
+	return len(rsp.PCRValues.Digests[0].Buffer) == algo.DigestSize()
+}
+
+// registerFallbackSpecs returns the same selection with the given PCRs switched
+// from the eventlog source to the register source.
+func registerFallbackSpecs(specs []PCRSpec, indices []int) []PCRSpec {
+	fallback := make([]PCRSpec, len(specs))
+	copy(fallback, specs)
+	for i := range fallback {
+		if fallback[i].Source == PCRSourceEventlog && slices.Contains(indices, fallback[i].Index) {
+			fallback[i].Source = PCRSourceRegister
+		}
+	}
+	return fallback
+}
+
+// explainEventlogBankError turns a missing-bank condition into the concrete
+// command to run instead, preferring the register source and only falling back
+// to SHA-1 when the requested bank is unavailable on this TPM.
+func explainEventlogBankError(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, bankErr *EventlogBankError) error {
+	registerSpecs := registerFallbackSpecs(specs, bankErr.PCRIndices)
+
+	msg := fmt.Sprintf(
+		"cannot reconstruct PCR %s from the event log: %s.\n"+
+			"Replaying them would yield each PCR's all-zero reset value, which this\n"+
+			"system will never produce, so the sealed policy could never be satisfied.\n\n",
+		formatPCRList(bankErr.PCRIndices), bankErr.Error())
+
+	if TPMHasPCRBank(tpmDev, hashAlgo) {
+		return fmt.Errorf("%s"+
+			"PCRs 0-7 do not change between the measure point and seal time, so reading\n"+
+			"them from the TPM registers gives the same value and the same protection.\n\n"+
+			"Try instead:\n\n    tpm2-kira seal --pcrs \"%s\"\n",
+			msg, PCRSpecsToString(registerSpecs))
+	}
+
+	if bankErr.HasSHA1() && hashAlgo != PCRHashAlgoSHA1 {
+		return fmt.Errorf("%s"+
+			"This TPM has no %s PCR bank either, so the register source cannot be used.\n"+
+			"The only remaining option is the SHA-1 bank:\n\n"+
+			"    tpm2-kira seal --sha1 --pcrs \"%s\"\n\n"+
+			"WARNING: SHA-1 is broken against collision attacks and is deprecated for\n"+
+			"new deployments. Prefer firmware that provides a SHA-256 event log, or a\n"+
+			"TPM with a SHA-256 PCR bank, and treat this as a stopgap.\n",
+			msg, hashAlgo.DisplayString(), PCRSpecsToString(specs))
+	}
+
+	return fmt.Errorf("%s"+
+		"This TPM has no %s PCR bank either, and the event log offers no usable\n"+
+		"alternative, so these PCRs cannot be used for sealing on this machine.\n",
+		msg, hashAlgo.DisplayString())
+}
+
 // ReadPCRValues reads PCR values from their respective sources (eventlog, predict,
 // UKI and/or TPM registers). This is the single shared implementation used by seal,
 // unseal, reveal and reseal paths.
@@ -515,6 +576,10 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 		calc := NewEventlogPCRCalculator(tpmDev, eventlogPCRIndices, hashAlgo, debug)
 		calculatedPCRs, info, err := calc.CalculatePCRsFromEventlog()
 		if err != nil {
+			var bankErr *EventlogBankError
+			if errors.As(err, &bankErr) {
+				return nil, explainEventlogBankError(tpmDev, specs, hashAlgo, bankErr)
+			}
 			return nil, fmt.Errorf("failed to calculate PCRs from eventlog: %w", err)
 		}
 		result.EventlogInfo = info

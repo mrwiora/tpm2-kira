@@ -120,15 +120,20 @@ func (calc *EventlogPCRCalculator) CalculatePCRsFromEventlogPath(eventlogPath st
 
 	// Filter to only requested PCRs
 	filteredPCRs := make(map[int][]byte)
+	var missing []int
 	for _, pcrIndex := range calc.PCRIndices {
 		pcrValue, exists := pcrValues[pcrIndex]
 		if !exists {
 			return nil, nil, fmt.Errorf("PCR %d not found in eventlog calculations", pcrIndex)
 		}
 		if extendsPerPCR[pcrIndex] == 0 {
-			return nil, nil, calc.noDigestsError(eventLog, pcrIndex, eventlogPath)
+			missing = append(missing, pcrIndex)
+			continue
 		}
 		filteredPCRs[pcrIndex] = pcrValue
+	}
+	if len(missing) > 0 {
+		return nil, nil, calc.bankError(eventLog, missing, eventlogPath)
 	}
 
 	// Create eventlog info
@@ -151,40 +156,57 @@ func (calc *EventlogPCRCalculator) CalculatePCRsFromEventlogPath(eventlogPath st
 	return filteredPCRs, eventlogInfo, nil
 }
 
-// noDigestsError explains that a PCR received no extends because the event log
-// carries no digests for it in the selected bank, rather than letting the
-// all-zero replay reach the policy.
-func (calc *EventlogPCRCalculator) noDigestsError(eventLog *attest.EventLog, pcrIndex int, eventlogPath string) error {
+// EventlogBankError reports PCRs the event log carries no digests for in the
+// selected bank. Replaying those yields the PCR's reset value, which is a
+// well-formed digest the machine will never actually produce.
+type EventlogBankError struct {
+	PCRIndices   []int
+	Requested    PCRHashAlgo
+	Present      []string // hash algorithms the log does carry for these PCRs
+	EventlogPath string
+}
+
+func (e *EventlogBankError) Error() string {
+	present := "none"
+	if len(e.Present) > 0 {
+		present = strings.Join(e.Present, ", ")
+	}
+	return fmt.Sprintf("the event log %s carries no %s digests for PCR %s (it has: %s)",
+		e.EventlogPath, e.Requested.DisplayString(), formatPCRList(e.PCRIndices), present)
+}
+
+// HasSHA1 reports whether falling back to the SHA-1 bank could work.
+func (e *EventlogBankError) HasSHA1() bool {
+	return slices.Contains(e.Present, "SHA-1")
+}
+
+func formatPCRList(indices []int) string {
+	parts := make([]string, len(indices))
+	for i, idx := range indices {
+		parts[i] = fmt.Sprintf("%d", idx)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (calc *EventlogPCRCalculator) bankError(eventLog *attest.EventLog, indices []int, eventlogPath string) error {
 	var present []string
 	for _, candidate := range []struct {
 		name string
 		alg  attest.HashAlg
 	}{{"SHA-1", attest.HashSHA1}, {"SHA-256", attest.HashSHA256}} {
 		for _, event := range eventLog.Events(candidate.alg) {
-			if int(event.Index) == pcrIndex && len(event.Digest) > 0 {
+			if slices.Contains(indices, int(event.Index)) && len(event.Digest) > 0 {
 				present = append(present, candidate.name)
 				break
 			}
 		}
 	}
-
-	available := "none"
-	if len(present) > 0 {
-		available = strings.Join(present, ", ")
+	return &EventlogBankError{
+		PCRIndices:   indices,
+		Requested:    calc.HashAlgo,
+		Present:      present,
+		EventlogPath: eventlogPath,
 	}
-
-	advice := fmt.Sprintf("use the register source for it (\"%d\" instead of \"%de\")", pcrIndex, pcrIndex)
-	if slices.Contains(present, "SHA-1") && calc.HashAlgo != PCRHashAlgoSHA1 {
-		advice = fmt.Sprintf("re-run with --sha1 (requires a SHA-1 PCR bank on this TPM), or %s", advice)
-	}
-
-	return fmt.Errorf(
-		"PCR %d has no %s digests in the event log %s (digests present for this PCR: %s).\n"+
-			"Replaying it would yield an all-zero value that this system will never produce.\n"+
-			"To fix: %s.\n"+
-			"Note that PCRs which do not change between boot and seal time (0-7) are\n"+
-			"reconstructed identically by the register source, so nothing is lost there.",
-		pcrIndex, calc.HashAlgo.DisplayString(), eventlogPath, available, advice)
 }
 
 // pcrIndicesToEventlogString formats PCR indices with 'e' suffix for error messages
