@@ -99,7 +99,7 @@ type BlobPeek struct {
 }
 
 // PeekBlobVersion reads just the version and app version from raw blob data without full unmarshal.
-// For v6 blobs the layout is: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
+// For current blobs the layout is: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
 // For older blobs the layout is: [version:4][appVersionLen:4][appVersion...]
 func PeekBlobVersion(data []byte) *BlobPeek {
 	peek := &BlobPeek{
@@ -113,7 +113,7 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 	peek.Version = binary.LittleEndian.Uint32(data[0:4])
 
 	if peek.Version == CurrentBlobVersion {
-		// v6 layout: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
+		// Current layout: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
 		if len(data) >= 12 {
 			appVersionLen := binary.LittleEndian.Uint32(data[8:12])
 			if appVersionLen > 0 && appVersionLen < 256 && len(data) >= 12+int(appVersionLen) {
@@ -138,7 +138,7 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 var AppVersion = "unknown"
 
 // CurrentBlobVersion is the only supported blob format version
-const CurrentBlobVersion = 6
+const CurrentBlobVersion = 7
 
 // MaxBlobSignatureLen is the maximum allowed signature size in bytes.
 // Generous: RSA-4096 PKCS#1 v1.5 = 512 bytes, ECDSA P-384 DER ≈ 104 bytes.
@@ -152,8 +152,9 @@ const (
 	PCRSourceRegister PCRSource = 0
 	// PCRSourceEventlog means the PCR value was calculated from the TPM eventlog ('e' suffix)
 	PCRSourceEventlog PCRSource = 1
-	// PCRSourcePredict means the PCR value was obtained by running an external command ('p' suffix)
-	PCRSourcePredict PCRSource = 2
+	// Value 2 was the external predict command source, removed in blob version 7.
+	// PCRSourceUKI means the PCR value was computed from a unified kernel image ('u' suffix)
+	PCRSourceUKI PCRSource = 3
 )
 
 // String returns a human-readable label for the PCR source
@@ -163,8 +164,8 @@ func (s PCRSource) String() string {
 		return "eventlog"
 	case PCRSourceRegister:
 		return "register"
-	case PCRSourcePredict:
-		return "predict"
+	case PCRSourceUKI:
+		return "uki"
 	default:
 		return "unknown"
 	}
@@ -175,8 +176,8 @@ func (s PCRSource) Suffix() string {
 	switch s {
 	case PCRSourceEventlog:
 		return "e"
-	case PCRSourcePredict:
-		return "p"
+	case PCRSourceUKI:
+		return "u"
 	case PCRSourceRegister:
 		return ""
 	default:
@@ -194,10 +195,11 @@ const (
 	MaxPrivateLen         = 2 * 1024 * 1024  // 2MB maximum private blob
 	MaxPCRDigests         = 100              // Maximum 100 PCR digest entries
 	MaxDigestSize         = 1024             // Maximum 1KB per individual digest
-	MaxCommandLen         = 4096             // Maximum 4KB for predict command string
+	MaxCommandLen         = 4096             // Maximum 4KB for the UKI path string
 	MaxEventlogPath       = 4096             // Maximum 4KB for eventlog path
 	MaxEventlogHash       = 128              // Maximum 128 bytes for hash string
 	MaxCalcTime           = 256              // Maximum 256 bytes for timestamp
+	MaxMeasurePointLen    = 512              // Maximum 512 bytes for the measure-point extend description
 	MaxSignedBranchDigest = 64               // Maximum 64 bytes for signed branch digest (SHA-256 = 32 bytes)
 	MaxKeyPathLen         = 4096             // 4KB maximum for key filesystem paths
 )
@@ -206,7 +208,7 @@ const (
 type PCRDigestPair struct {
 	Index   int              `json:"index"`             // PCR index
 	Source  PCRSource        `json:"source"`            // Where the PCR value was obtained from
-	Command string           `json:"command,omitempty"` // External command for predict source (only when Source == PCRSourcePredict)
+	Command string           `json:"command,omitempty"` // Unified kernel image path (only when Source == PCRSourceUKI)
 	Digest  tpm2.TPM2BDigest `json:"digest"`            // PCR digest value at seal time
 }
 
@@ -217,6 +219,11 @@ type EventlogInfo struct {
 	CalculationTime string `json:"calculation_time"` // When calculation was performed
 	TotalEvents     int    `json:"total_events"`     // Total number of events processed
 	ProcessedEvents int    `json:"processed_events"` // Number of events that extended PCRs
+	// MeasurePointExtends records the userspace extends applied on top of the
+	// event log replay, as "word:pcr,pcr;word:pcr". Empty means none were applied.
+	MeasurePointExtends string `json:"measure_point_extends,omitempty"`
+	// MeasurePointDetection records how that decision was reached.
+	MeasurePointDetection string `json:"measure_point_detection,omitempty"`
 }
 
 // SealedBlobPayload contains every field that is covered by the blob
@@ -237,7 +244,7 @@ type SealedBlobPayload struct {
 // SealedBlob is the top-level envelope: version, signed payload, and
 // detached signature.  Only BlobSignature lives outside the signed region.
 //
-// Version 6: Signed blob with SealedBlobPayload substructure.
+// Version 7: UKI PCR source, measure-point metadata; external predict removed.
 type SealedBlob struct {
 	Version       uint32            `json:"version"`                  // Blob format version (must be 6)
 	Payload       SealedBlobPayload `json:"payload"`                  // All authenticated content
@@ -278,6 +285,15 @@ func (sb *SealedBlob) GetPCRDigestValues() []tpm2.TPM2BDigest {
 	return digests
 }
 
+// MeasurePointMode reproduces the measure-point handling this blob was sealed
+// with, so verification recomputes exactly the values the policy was bound to.
+func (sb *SealedBlob) MeasurePointMode() MeasurePointMode {
+	if info := sb.Payload.EventlogInfo; info != nil && info.MeasurePointExtends != "" {
+		return MeasurePointOn
+	}
+	return MeasurePointOff
+}
+
 // HasEventlogPCRs returns true if any PCR in this blob uses eventlog as its source
 func (sb *SealedBlob) HasEventlogPCRs() bool {
 	for _, pair := range sb.Payload.PCRDigests {
@@ -310,21 +326,21 @@ func (sb *SealedBlob) GetRegisterPCRIndices() []int {
 	return indices
 }
 
-// HasPredictPCRs returns true if any PCR in this blob uses predict as its source
-func (sb *SealedBlob) HasPredictPCRs() bool {
+// HasUKIPCRs returns true if any PCR in this blob is computed from a unified kernel image
+func (sb *SealedBlob) HasUKIPCRs() bool {
 	for _, pair := range sb.Payload.PCRDigests {
-		if pair.Source == PCRSourcePredict {
+		if pair.Source == PCRSourceUKI {
 			return true
 		}
 	}
 	return false
 }
 
-// GetPredictPCRIndices returns indices of PCRs that use prediction (external command) as their source
-func (sb *SealedBlob) GetPredictPCRIndices() []int {
+// GetUKIPCRIndices returns indices of PCRs computed from a unified kernel image
+func (sb *SealedBlob) GetUKIPCRIndices() []int {
 	var indices []int
 	for _, pair := range sb.Payload.PCRDigests {
-		if pair.Source == PCRSourcePredict {
+		if pair.Source == PCRSourceUKI {
 			indices = append(indices, pair.Index)
 		}
 	}
@@ -381,8 +397,8 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		size += 4 + // PCR index
 			1 + // source byte
 			2 + len(pcrDigest.Digest.Buffer) // 2 bytes for length + digest data
-		if pcrDigest.Source == PCRSourcePredict {
-			size += 2 + len(pcrDigest.Command) // 2 bytes for command length + command string
+		if pcrDigest.Source == PCRSourceUKI {
+			size += 2 + len(pcrDigest.Command) // 2 bytes for path length + path string
 		}
 		if size < 0 || size > MaxBlobSize {
 			return nil, fmt.Errorf("sealed blob payload size %d exceeds maximum allowed %d bytes after PCR digests", size, MaxBlobSize)
@@ -395,7 +411,9 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		size += 4 + len(p.EventlogInfo.EventlogPath) + // eventlog path
 			4 + len(p.EventlogInfo.EventlogHash) + // eventlog hash
 			4 + len(p.EventlogInfo.CalculationTime) + // calculation time
-			4 + 4 // total events + processed events (4 bytes each)
+			4 + 4 + // total events + processed events (4 bytes each)
+			2 + len(p.EventlogInfo.MeasurePointExtends) + // measure-point extends
+			2 + len(p.EventlogInfo.MeasurePointDetection) // measure-point detection
 		if size < 0 || size > MaxBlobSize {
 			return nil, fmt.Errorf("sealed blob payload size %d exceeds maximum allowed %d bytes after eventlog info", size, MaxBlobSize)
 		}
@@ -449,8 +467,8 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		buf[offset] = byte(pcrDigest.Source)
 		offset++
 
-		// Command string (only for predict source)
-		if pcrDigest.Source == PCRSourcePredict {
+		// Command string (only for UKI source)
+		if pcrDigest.Source == PCRSourceUKI {
 			binary.LittleEndian.PutUint16(buf[offset:], uint16(len(pcrDigest.Command)))
 			offset += 2
 			copy(buf[offset:], pcrDigest.Command)
@@ -503,6 +521,17 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		offset += 4
 		binary.LittleEndian.PutUint32(buf[offset:], uint32(p.EventlogInfo.ProcessedEvents))
 		offset += 4
+
+		// Measure-point extends applied on top of the replay
+		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(p.EventlogInfo.MeasurePointExtends)))
+		offset += 2
+		copy(buf[offset:], p.EventlogInfo.MeasurePointExtends)
+		offset += len(p.EventlogInfo.MeasurePointExtends)
+
+		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(p.EventlogInfo.MeasurePointDetection)))
+		offset += 2
+		copy(buf[offset:], p.EventlogInfo.MeasurePointDetection)
+		offset += len(p.EventlogInfo.MeasurePointDetection)
 	}
 
 	// Key paths flag and data
@@ -611,10 +640,10 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 		p.PCRDigests[i].Source = PCRSource(data[offset])
 		offset++
 
-		// Command string (only for predict source)
-		if p.PCRDigests[i].Source == PCRSourcePredict {
+		// Command string (only for UKI source)
+		if p.PCRDigests[i].Source == PCRSourceUKI {
 			if offset+2 > len(data) {
-				return nil, fmt.Errorf("data too short for predict command length")
+				return nil, fmt.Errorf("data too short for UKI path length")
 			}
 			commandLen := int(binary.LittleEndian.Uint16(data[offset:]))
 			offset += 2
@@ -729,6 +758,35 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 		offset += 4
 		p.EventlogInfo.ProcessedEvents = int(binary.LittleEndian.Uint32(data[offset:]))
 		offset += 4
+
+		// Measure-point extends
+		if offset+2 > len(data) {
+			return nil, fmt.Errorf("data too short for measure-point extends length")
+		}
+		extendsLen := binary.LittleEndian.Uint16(data[offset:])
+		offset += 2
+		if extendsLen > MaxMeasurePointLen {
+			return nil, fmt.Errorf("measure-point extends length %d exceeds maximum %d", extendsLen, MaxMeasurePointLen)
+		}
+		if offset+int(extendsLen) > len(data) {
+			return nil, fmt.Errorf("data too short for measure-point extends")
+		}
+		p.EventlogInfo.MeasurePointExtends = string(data[offset : offset+int(extendsLen)])
+		offset += int(extendsLen)
+
+		if offset+2 > len(data) {
+			return nil, fmt.Errorf("data too short for measure-point detection length")
+		}
+		detectionLen := binary.LittleEndian.Uint16(data[offset:])
+		offset += 2
+		if detectionLen > MaxMeasurePointLen {
+			return nil, fmt.Errorf("measure-point detection length %d exceeds maximum %d", detectionLen, MaxMeasurePointLen)
+		}
+		if offset+int(detectionLen) > len(data) {
+			return nil, fmt.Errorf("data too short for measure-point detection")
+		}
+		p.EventlogInfo.MeasurePointDetection = string(data[offset : offset+int(detectionLen)])
+		offset += int(detectionLen)
 	}
 
 	// Key paths (trailing optional section)

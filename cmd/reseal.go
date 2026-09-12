@@ -292,13 +292,13 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	// Display per-PCR source information
 	hasEventlog := false
 	hasRegister := false
-	hasPredict := false
+	hasUKI := false
 	for _, spec := range specsToUse {
 		switch spec.Source {
 		case PCRSourceEventlog:
 			hasEventlog = true
-		case PCRSourcePredict:
-			hasPredict = true
+		case PCRSourceUKI:
+			hasUKI = true
 		default:
 			hasRegister = true
 		}
@@ -311,16 +311,16 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	if hasRegister {
 		sourceCount++
 	}
-	if hasPredict {
+	if hasUKI {
 		sourceCount++
 	}
 
 	if sourceCount > 1 {
-		fmt.Println("PCR sources: mixed (eventlog, predict, and/or register)")
+		fmt.Println("PCR sources: mixed (eventlog, uki, and/or register)")
 	} else if hasEventlog {
 		fmt.Println("PCR sources: all eventlog-based")
-	} else if hasPredict {
-		fmt.Println("PCR sources: all predict-based (external command)")
+	} else if hasUKI {
+		fmt.Println("PCR sources: all computed from the unified kernel image")
 	} else {
 		fmt.Println("PCR sources: all register-based")
 	}
@@ -338,10 +338,10 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 			fmt.Printf("  Events processed: %d/%d\n", sealedBlob.Payload.EventlogInfo.ProcessedEvents, sealedBlob.Payload.EventlogInfo.TotalEvents)
 		}
 	}
-	if hasPredict {
+	if hasUKI {
 		for _, spec := range specsToUse {
-			if spec.Source == PCRSourcePredict {
-				fmt.Printf("Note: PCR %d will be re-predicted via command: %s\n", spec.Index, spec.Command)
+			if spec.Source == PCRSourceUKI {
+				fmt.Printf("Note: PCR %d will be recomputed from the unified kernel image: %s\n", spec.Index, spec.Command)
 			}
 		}
 	}

@@ -67,7 +67,7 @@ The NVRAM index (default `0x01803010`) stores a serialised `SealedBlob`
 | `AppVersion`         | tpm2-kira version that created the blob                        | No         |
 | `Public`             | TPM2B\_PUBLIC of the sealed object (object template)            | No         |
 | `Private`            | TPM2B\_PRIVATE of the sealed object (TPM-wrapped ciphertext)    | **Yes**¹   |
-| `PCRDigests`         | Per-PCR index, source (register/eventlog/predict), and digest  | No         |
+| `PCRDigests`         | Per-PCR index, source (register/eventlog/uki), and digest      | No         |
 | `SignedBranchDigest` | Pre-computed PolicySigned branch digest (SHA-256, 32 bytes)    | No³        |
 | `EventlogInfo`       | Metadata about eventlog calculation (path, hash, timestamps)   | No         |
 | `PublicKeyPath`      | Filesystem path to the signing public key at seal time         | No²        |
@@ -217,7 +217,7 @@ PolicyOR — either matching PCRs or a valid cryptographic signature.
 
 ```
 1.  Generate 256-bit random TOTP secret
-2.  Read PCR values from TPM registers (or eventlog/predict)
+2.  Read PCR values from TPM registers (or eventlog/uki)
 3.  Compute Branch 1 digest: trial PolicyPCR with the read values
 4.  Compute Branch 2 digest: trial PolicySigned with the signing public
     key loaded into the TPM

@@ -25,8 +25,21 @@ fi
 
 echo "tpm2-kira: resealing TOTP secret after initramfs rebuild..."
 
-if output=$(tpm2-kira reseal 2>&1); then
-    echo "tpm2-kira: reseal completed successfully"
+# The install hook inspected the image that was just built and recorded whether
+# systemd's pre-measure-point units are in it. That describes the NEXT boot,
+# which runtime probing cannot do on the boot where the units first appear.
+MEASURE_POINT_STATE=/run/tpm2-kira/measure-point.state
+measure_point=auto
+if [[ -r $MEASURE_POINT_STATE ]]; then
+    read -r measure_point < "$MEASURE_POINT_STATE"
+    case $measure_point in
+        on | off) ;;
+        *) measure_point=auto ;;
+    esac
+fi
+
+if output=$(tpm2-kira reseal --measure-point="$measure_point" 2>&1); then
+    echo "tpm2-kira: reseal completed successfully (measure-point=$measure_point)"
 else
     echo "tpm2-kira: WARNING — reseal failed:" >&2
     echo "$output" >&2

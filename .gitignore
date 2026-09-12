@@ -26,3 +26,6 @@ build/
 
 # Strix security scan results
 strix_runs/
+
+# pycache
+__pycache__/

@@ -115,8 +115,16 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
 	pubKeyPath := fs.String("pubkey", cmd.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
 	privKeyPath := fs.String("privkey", cmd.DefaultPrivateKeyPath, "Path to signing private key PEM (stored in blob for reseal convenience)")
+	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
 
 	fs.Parse(args)
+
+	mode, err := cmd.ParseMeasurePointMode(*measurePoint)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(0)
+	}
+	cmd.MeasurePointModeSetting = mode
 
 	// Validate PCR specs before proceeding
 	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
@@ -146,8 +154,16 @@ func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	pubKeyPath := fs.String("pubkey", "", "Path to signing public key PEM (default: derived from --privkey, or preserved from blob)")
 	privKeyPath := fs.String("privkey", "", "Path to signing private key PEM (required when PCR values have changed)")
+	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
 
 	fs.Parse(args)
+
+	mode, err := cmd.ParseMeasurePointMode(*measurePoint)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(0)
+	}
+	cmd.MeasurePointModeSetting = mode
 
 	// Validate PCR specs before proceeding (only if explicitly provided)
 	if *pcrs != "" {
@@ -302,11 +318,13 @@ SEAL OPTIONS:
   --pcrs INDICES     PCR indices with optional source suffix (default: 0,2,7)
                      Suffix 'r' = read from TPM registers (default if no suffix)
                      Suffix 'e' = calculate from TPM eventlog (PCRs 0-12 only)
-                     Suffix 'p:CMD' = predict via external command (PCR 11 only)
-                       CMD must print a single hex digest line to stdout
+                     Suffix 'u[:PATH]' = compute from a unified kernel image (PCR 11 only)
+                       Replays systemd-stub's section measurements internally
                      Examples: "0,2,7" (all register), "0e,2e,7e" (all eventlog),
                                "0e,2,7e" (mixed: 0 and 7 from eventlog, 2 from register)
-                               "0e,2e,7e,11p:tpm2-pcr11predict" (eventlog + predicted PCR 11)
+                               "0e,2e,7e,11u" (eventlog + UKI-computed PCR 11)
+  --measure-point M  Account for systemd's userspace PCR extends that happen
+                     before tpm2-kira runs: auto (default), on, off
   --pubkey PATH      Path to signing public key PEM for PolicySigned branch
                      (default: %s)
                      Accepts X.509 certificates or raw public keys (RSA, ECDSA)
@@ -360,7 +378,7 @@ EXAMPLES:
   tpm2-kira seal
   tpm2-kira seal --nvram 0
   tpm2-kira seal --pcrs "0e,2e,7e"
-  tpm2-kira seal --pcrs "0e,2e,7e,11p:tpm2-pcr11predict"
+  tpm2-kira seal --pcrs "0e,2e,7e,11u"
   tpm2-kira seal --pubkey /path/to/my-key.pem
   tpm2-kira seal --sha1 --pcrs "0e,2e,7e"
   tpm2-kira seal --pcrs "0e,2,4,7e"
