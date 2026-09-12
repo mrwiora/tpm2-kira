@@ -325,7 +325,7 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 				sealedBlob, err := UnmarshalSealedBlob(sealedData)
 				if err == nil {
 					// Read current PCR values from TPM registers only
-					// (no eventlog or predict dependency)
+					// (no eventlog or UKI dependency)
 					currentPCRValues, err := GetCurrentPCRValuesFromRegisters(tpmDev, sealedBlob, false)
 					if err == nil {
 						pcrIndices := sealedBlob.GetPCRIndices()

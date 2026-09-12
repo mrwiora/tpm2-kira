@@ -198,7 +198,7 @@ func PCRSpecIndices(specs []PCRSpec) []int {
 }
 
 // ShowPCRDetails attempts to show PCR comparison details for the given error.
-// Reads current PCR values from TPM registers only (no eventlog/predict).
+// Reads current PCR values from TPM registers only (no eventlog/uki reconstruction).
 // Returns true if PCR details were successfully shown, false otherwise.
 func ShowPCRDetails(tpmDev transport.TPM, nvramIndex uint32, debug bool) bool {
 	// Try to show PCR details
@@ -248,7 +248,7 @@ type ReadPCRValuesResult struct {
 
 // ReadPCRRegisters reads PCR values directly from TPM registers for the given
 // indices. This is used on the unseal/reveal/run path where neither eventlog
-// nor predict tools are available (e.g. early boot). The result maps each PCR
+// nor UKI files are available (e.g. early boot). The result maps each PCR
 // index to its current register digest.
 func ReadPCRRegisters(tpmDev transport.TPM, pcrIndices []int, hashAlgo PCRHashAlgo, debug bool) (map[int][]byte, error) {
 	if len(pcrIndices) == 0 {
@@ -348,7 +348,7 @@ func explainEventlogBankError(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PC
 		msg, hashAlgo.DisplayString())
 }
 
-// ReadPCRValues reads PCR values from their respective sources (eventlog, predict,
+// ReadPCRValues reads PCR values from their respective sources (eventlog, UKI
 // UKI and/or TPM registers). This is the single shared implementation used by seal,
 // unseal, reveal and reseal paths.
 //
@@ -487,10 +487,10 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 }
 
 // GetCurrentPCRValues retrieves current PCR values for comparison, handling
-// eventlog-based, predict-based, and direct TPM reads. The hash algorithm is
+// eventlog-based, UKI-based, and direct TPM reads. The hash algorithm is
 // automatically detected from the sealed blob's digest sizes. Results are
 // returned in the same order as the blob's PCR digests.
-// NOTE: This uses source-aware reading (eventlog/predict/register). For the
+// NOTE: This uses source-aware reading (eventlog/uki/register). For the
 // unseal/reveal/run path use GetCurrentPCRValuesFromRegisters instead.
 func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug bool) ([]tpm2.TPM2BDigest, error) {
 	hashAlgo := sealedBlob.GetHashAlgo()
@@ -515,7 +515,7 @@ func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug boo
 // GetCurrentPCRValuesFromRegisters reads current PCR values directly from TPM
 // registers, regardless of the original PCR source stored in the blob. This is
 // used on the unseal/reveal/run path so that neither the eventlog file nor
-// external predict commands are required (critical for early-boot).
+// the unified kernel image are required (critical for early-boot).
 // Results are returned in the same order as the blob's PCR digests.
 func GetCurrentPCRValuesFromRegisters(tpmDev transport.TPM, sealedBlob *SealedBlob, debug bool) ([]tpm2.TPM2BDigest, error) {
 	hashAlgo := sealedBlob.GetHashAlgo()

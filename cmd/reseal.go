@@ -148,9 +148,8 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	}
 
 	// ── Verify blob integrity signature ──
-	// The signature MUST be verified BEFORE we touch any blob fields
-	// (particularly PCR specs with predict commands) to prevent execution
-	// of attacker-controlled commands from a tampered blob.
+	// The signature MUST be verified BEFORE any blob field is acted on, so a
+	// tampered blob cannot steer reseal via its stored PCR specs or key paths.
 	//
 	// Derive the verification key from the private key (the trust anchor).
 	// The blob's stored PublicKeyPath is NOT trusted for this purpose.

@@ -648,10 +648,10 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 			commandLen := int(binary.LittleEndian.Uint16(data[offset:]))
 			offset += 2
 			if commandLen > MaxCommandLen {
-				return nil, fmt.Errorf("predict command length %d exceeds maximum %d", commandLen, MaxCommandLen)
+				return nil, fmt.Errorf("UKI path length %d exceeds maximum %d", commandLen, MaxCommandLen)
 			}
 			if offset+commandLen > len(data) {
-				return nil, fmt.Errorf("data too short for predict command string")
+				return nil, fmt.Errorf("data too short for UKI path string")
 			}
 			p.PCRDigests[i].Command = string(data[offset : offset+commandLen])
 			offset += commandLen

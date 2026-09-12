@@ -114,7 +114,7 @@ func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*Unsea
 	}
 
 	// Read current PCR values directly from TPM registers. This avoids any
-	// dependency on the eventlog file or external predict commands, which may
+	// dependency on the eventlog file or the unified kernel image, which may
 	// not be available during early boot.
 	currentPCRValues, err := GetCurrentPCRValuesFromRegisters(tpmDev, sealedBlob, debug)
 	if err != nil {

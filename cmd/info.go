@@ -99,11 +99,6 @@ func InfoCommand(tpmPath string, nvramIndex uint32, debug bool, jsonOutput bool)
 	return nil
 }
 
-// InfoWithFormat is the legacy entry point kept for backward compatibility.
-func InfoWithFormat(tpmPath string, nvramIndex uint32, debug bool, jsonOutput bool) error {
-	return InfoCommand(tpmPath, nvramIndex, debug, jsonOutput)
-}
-
 // ── reading a single slot ───────────────────────────────────────────────
 
 func readSlotInfo(tpmDev transport.TPM, nvramIndex uint32) (*slotInfo, error) {
