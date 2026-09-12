@@ -1,3 +1,17 @@
+// Reconstruction of PCR values at tpm2-kira's measure point.
+//
+// The policy is checked against live registers at one instant: when tpm2-kira
+// reads the TPM in the initrd, before the passphrase prompt. Neither reference
+// a caller might reach for describes that instant:
+//
+//   - the firmware event log stops at the end of firmware, before systemd's
+//     userspace extends (which systemd records in its own separate log);
+//   - the live register at seal time is already past the measure point for any
+//     PCR that keeps being extended afterwards (9, 11, 15).
+//
+// So eventlog-derived values get the userspace extends below folded in, and
+// only PCRs that stop changing at the measure point may be used to validate
+// that decision. See SECURITY-BACKGROUND.md sections 5.6-5.8.
 package cmd
 
 import (

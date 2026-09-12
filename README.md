@@ -370,12 +370,16 @@ sudo pacman -R tpm2-kira
 │   ├── blob.go              # Sealed blob serialization format
 │   ├── policy_or.go         # PolicyOR digest computation
 │   ├── eventlog_utils.go    # TPM eventlog parsing
-│   ├── predict_utils.go     # External PCR prediction
+│   ├── measurepoint.go      # Userspace extends before tpm2-kira reads PCRs
+│   ├── ukipredict.go        # Native PCR 11 computation from a UKI
 │   ├── totp_utils.go        # TOTP generation and display
 │   ├── tpm_utils.go         # Low-level TPM operations
 │   ├── pcrtips.go           # PCR reference information
 │   └── constants.go         # Default paths and constants
 ├── calculate.py             # Standalone eventlog PCR calculator
+├── verify_os_separator.py   # Reconstructs the full PCR chain for diagnosis
+├── tools/
+│   └── tpm2-pcr11predict    # Independent cross-check of the built-in PCR 11 computation
 ├── mkinitcpio/              # Early boot hooks for Arch Linux
 │   ├── install/sd-tpm2-kira # mkinitcpio install hook
 │   ├── post/sd-tpm2-kira    # Post-generation reseal hook
@@ -384,6 +388,33 @@ sudo pacman -R tpm2-kira
 ├── packaging/aur/           # Arch Linux PKGBUILD
 └── Makefile
 ```
+
+## Diagnosing PCR mismatches
+
+If the displayed PCR values differ from what was sealed, reconstruct the whole
+chain before changing anything:
+
+```bash
+# Replays the firmware event log AND systemd's own measurement log,
+# then explains every difference against the live registers.
+sudo python3 verify_os_separator.py
+```
+
+Each PCR is reported as `unchanged since firmware`, `os-separator (x1)`,
+`explained: <words>`, or `UNEXPLAINED`. Anything unexplained on a sealed PCR is
+a real finding.
+
+Two things to keep in mind while reading any PCR output:
+
+- `tpm2_eventlog`'s trailing `pcrs:` block is a **replay of the log**, not a
+  read of the TPM. Comparing it against `tpm2_pcrread` is comparing a
+  calculation against a measurement — and that difference is usually the answer.
+- The **post-boot register is not the measure-point value** for PCRs 9, 11 and
+  15. They keep being extended after the initrd, so a mismatch there is expected
+  and not evidence of tampering.
+
+See [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md) §5.6–5.8 for the full
+reconstruction rules and constants.
 
 ## Security
 

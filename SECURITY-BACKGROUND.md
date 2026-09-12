@@ -311,6 +311,149 @@ This means that after an initial `seal --pubkey /path/pub --privkey /path/priv`,
 subsequent `reseal` commands need no flags at all — the paths are remembered
 in the blob and the keys are read fresh from the filesystem each time.
 
+### 5.6 The measure point
+
+A PCR policy is checked against **live registers at the instant of unsealing**.
+For tpm2-kira that instant is one specific point in the boot: the moment
+`tpm2-kira run` reads the TPM in the initrd, before the LUKS passphrase prompt.
+Everything sealing does must answer one question:
+
+> What will PCR *i* be at the measure point of the *next* boot?
+
+That is neither "what the firmware log says" nor "what the running system
+shows". Both differ, in different directions:
+
+```mermaid
+sequenceDiagram
+    participant FW as Firmware
+    participant STUB as systemd-stub / EFI stub
+    participant SD as systemd (initrd)
+    participant KIRA as tpm2-kira
+    participant OS as systemd (real root)
+
+    FW->>FW: PCR 0-7 firmware events, then EV_SEPARATOR
+    STUB->>STUB: PCR 11 section pairs, PCR 9 LoadOptions + initrd, PCR 12
+    Note over FW,STUB: everything above appears in binary_bios_measurements
+
+    SD->>SD: os-separator into PCR 0-7, 9, 12, 13, 14
+    SD->>SD: enter-initrd into PCR 11
+    Note over SD,KIRA: not in the firmware log — systemd logs these separately
+
+    KIRA-->>KIRA: MEASURE POINT: PCRRead / TPM2_Unseal, policy checked here
+
+    OS->>OS: leave-initrd, sysinit, ready into PCR 11
+    OS->>OS: machine-id into PCR 15
+    OS->>OS: nvpcr-init x4 into PCR 9 (after the disk is unlocked)
+    Note over OS: these make the post-boot register useless as a reference
+```
+
+Two consequences follow, and both caused real breakage:
+
+1. **The firmware event log stops short of the measure point.** It describes
+   the end of firmware. The systemd extends that follow are recorded in
+   `/run/log/systemd/tpm2-measure.log`, a different file written by a
+   different producer. Replaying only the firmware log under-counts.
+2. **The live register at seal time is past the measure point** for any PCR
+   that keeps being extended afterwards. PCRs 9, 11 and 15 do; PCRs 0–7, 12,
+   13 and 14 stop, which is what makes them usable as a reference.
+
+### 5.7 Reconstructing each PCR
+
+```mermaid
+flowchart LR
+    A["firmware event log<br/>binary_bios_measurements"] -->|replay| B["end-of-firmware value"]
+    B -->|"+ H(os-separator) / H(enter-initrd)"| C["measure-point value"]
+    D["unified kernel image<br/>.linux .osrel .cmdline ..."] -->|"section pairs + phases"| C
+    E["live TPM register"] -->|"only if stable after<br/>the measure point"| C
+    C --> F["PolicyPCR digest"]
+    F --> G["sealed blob in NVRAM"]
+```
+
+Per source:
+
+| Source | Reconstruction | Valid for |
+|--------|----------------|-----------|
+| `r` register | read the register as-is | PCRs that stop changing at the measure point |
+| `e` eventlog | replay the firmware log, then apply the measure-point extends | PCRs 0–12 |
+| `u` uki | replay systemd-stub's section measurements from the image, then the boot phases | PCR 11 |
+
+**Measure-point extends** (systemd hashes the literal word: no NUL terminator,
+no machine-id, no salt, so these are universal constants, not per-host values):
+
+| Word | Extended into | Unit | `sha256` |
+|------|---------------|------|----------|
+| `os-separator` | PCR 0–7, 9, 12, 13, 14 | `systemd-pcrosseparator.service` | `ff5b9d73dad709633ae76adf444012b57e913a12ed7403c3931145862f35f841` |
+| `enter-initrd` | PCR 11 | `systemd-pcrphase-initrd.service` | `51e6b92f405d1f98d96e3de343d61d420ad6923b25de21d766f9298192f14fed` |
+
+Extended *after* the measure point, and therefore never part of a sealed
+policy: `leave-initrd`, `sysinit`, `ready` (PCR 11), `machine-id:<id>` (PCR 15),
+`nvpcr-init:<name>:...` (PCR 9).
+
+**UKI section measurement.** systemd-stub measures each present section twice,
+in its own fixed order (`.linux`, `.osrel`, `.cmdline`, `.initrd`, `.ucode`,
+`.splash`, `.dtb`, `.uname`, `.sbat`, `.pcrpkey`; `.pcrsig` is never measured
+because it carries the signature over these measurements):
+
+```
+PCR11 = Extend(PCR11, H(section_name + "\0"))    # NUL-terminated ASCII
+PCR11 = Extend(PCR11, H(section_bytes))
+```
+
+The firmware event log *renders* the name as UTF-16 (`".\0l\0i\0n\0u\0x\0\0\0"`),
+which is the event payload — but the measured digest is over the ASCII form.
+`H(".linux\0")` = `0da293e37ad5511c59be47993769aacb91b243f7d010288e118dc90e95aaef5a`.
+
+**Useful constants for diagnosis.** PCRs 2, 3 and 6 normally contain only the
+firmware `EV_SEPARATOR`, so their value is machine-independent:
+
+| State | sha256 |
+|-------|--------|
+| `EV_SEPARATOR` event digest | `df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119` |
+| zero PCR + separator (end of firmware) | `3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969` |
+| the same + `os-separator` (measure point) | `8d22c738fcd1730fb0789cb09c0f72a0012baa3ea867723b26772c9ca0ae6571` |
+
+If PCR 2/3/6 hold neither of the last two, something is performing extra
+extends — it is never a changed measurement.
+
+### 5.8 Making the seal match the measure point
+
+```mermaid
+flowchart TD
+    S["seal / reseal"] --> M{"--measure-point"}
+    M -->|on| AP["apply extends"]
+    M -->|off| SK["skip"]
+    M -->|auto| P["probe stable PCRs:<br/>register == replay?<br/>register == replay + words?"]
+    P -->|"matches replay"| SK
+    P -->|"matches replay + words"| AP
+    P -->|neither| ERR["ERROR naming the PCR — refuse to seal"]
+    AP --> POL["PolicyPCR digest over measure-point values"]
+    SK --> POL
+    POL --> BLOB["blob records measure_point_extends<br/>+ measure_point_detection"]
+    BLOB --> V["verification reproduces what the blob recorded,<br/>it does not re-detect"]
+```
+
+Three properties make this safe:
+
+- **Refusal beats guessing.** A PCR whose register matches neither branch is
+  not reconstructible on that host, and sealing would bind the policy to a
+  value the machine will never produce. That is a silent failure at the next
+  boot, so `auto` errors out instead.
+- **Build-time beats run-time for the transition.** The mkinitcpio install
+  hook inspects the image being built and records the verdict, because
+  probing the *current* boot cannot know what the *next* one will do — exactly
+  the case where these units first appear in the initramfs.
+- **The blob is self-describing.** What was applied is stored, so verification
+  recomputes the sealed values rather than re-deriving them from a system that
+  may have changed. `tpm2-kira info` shows it.
+
+Ordering is enforced so the measure point is deterministic:
+`tpm2-kira.service` declares `After=systemd-pcrosseparator.service` and
+`After=systemd-pcrphase-initrd.service`. Without those edges the measure point
+could land on either side of the extends, which would make an identical machine
+pass or fail across identical boots. `tpm2-kira run` re-checks the policy in a
+loop for the whole duration of the prompt, so the PCRs must be stable for its
+entire lifetime — that is why it runs *after* these units rather than before.
+
 ---
 
 ## 6. Signed Branch Digest: Software vs TPM Computation
@@ -446,22 +589,23 @@ of tpm2-kira's current design.
 
 ---
 
-## 10. Blob Format (Version 5)
+## 10. Blob Format (Version 7)
 
 The blob is a binary-serialised structure with explicit length prefixes and
 maximum size limits to prevent memory exhaustion during deserialisation.
 
-Version 5 replaces the `SigningKeyPEM` field from version 4 with the much
-smaller `SignedBranchDigest` (32 bytes). The public key is no longer stored
-in the blob — it is loaded from the filesystem or derived from the private
-key when needed.
+Version 7 adds the measure-point metadata and replaces the external predict
+source with the UKI source. The `p:COMMAND` source was removed outright: it
+stored a command string in the blob which `reseal` executed, so a planted blob
+meant arbitrary code execution as root. No command is ever executed now.
 
 ```
 Offset  Field                   Type        Notes
 ─────────────────────────────────────────────────────────────
-0       Version                 uint32      Must be 5
-4       AppVersion length       uint32      ≤ 1024
-8       AppVersion              string
+0       Version                 uint32      Must be 7
+4       Payload length          uint32      Signed region length
+8       AppVersion length       uint32      ≤ 1024
+?       AppVersion              string
 ?       Public length           uint32      ≤ 2MB
 ?       Public                  []byte      TPM2B_PUBLIC
 ?       Private length          uint32      ≤ 2MB
@@ -469,24 +613,30 @@ Offset  Field                   Type        Notes
 ?       PCR digest count        uint32      ≤ 100
         For each PCR digest:
           PCR index             uint32
-          PCR source            uint8       0=register, 1=eventlog, 2=predict
-          Command length        uint16      Only if source=predict
-          Command               string      Only if source=predict
+          PCR source            uint8       0=register, 1=eventlog, 3=uki
+                                            (2 was the removed predict source)
+          Path length           uint16      Only if source=uki
+          Path                  string      Only if source=uki (UKI location)
           Digest length         uint16      ≤ 1024
-          Digest                []byte
+          Digest                []byte      Value at the MEASURE POINT
 ?       SignedBranchDigest len  uint16      ≤ 64
 ?       SignedBranchDigest      []byte      Pre-computed PolicySigned branch digest
 ?       HasEventlogInfo         uint8       0 or 1
         If HasEventlogInfo=1:
-          EventlogPath length   uint16
+          EventlogPath length   uint32
           EventlogPath          string
-          EventlogHash length   uint16
+          EventlogHash length   uint32
           EventlogHash          string
-          CalcTime length       uint16
+          CalcTime length       uint32
           CalcTime              string
           TotalEvents           uint32
           ProcessedEvents       uint32
-?       HasKeyPaths             uint8       0 or 1 (absent in older blobs)
+          MeasurePointExt len   uint16      ≤ 512
+          MeasurePointExtends   string      "word:pcr,pcr;word:pcr" applied
+                                            on top of the eventlog replay
+          MeasurePointDet len   uint16      ≤ 512
+          MeasurePointDetection string      how that was decided
+?       HasKeyPaths             uint8       0 or 1
         If HasKeyPaths=1:
           PubKeyPath length     uint16      ≤ 4096
           PubKeyPath            string      Filesystem path to public key
@@ -494,9 +644,13 @@ Offset  Field                   Type        Notes
           PrivKeyPath           string      Filesystem path to private key
 ```
 
-The `HasKeyPaths` section is a trailing optional extension. Blobs written by
-older versions of tpm2-kira that lack this section are still valid — the paths
-default to empty strings, and the user must provide them via CLI flags.
+Everything except the trailing signature is covered by `SealedBlobPayload`, so
+any field added there is automatically inside the signed region.
+
+The stored PCR digests are **measure-point values**, not end-of-firmware values
+and not the values a running system would report. `MeasurePointExtends` records
+which userspace extends were folded in, so verification reproduces exactly what
+was sealed instead of re-deriving it — see §5.6–5.8.
 
 **Migration from version 4:** Blobs in the older v4 format (which stored the
 full signing public key PEM instead of the signed branch digest) are not
