@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-
-	"github.com/google/go-tpm/tpm2/transport"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // DefaultUKIPath is the conventional unified kernel image location.
@@ -37,13 +38,19 @@ var ukiMeasuredSections = []string{
 // cryptsetup-pre.target, and tpm2-kira orders itself after it.
 var MeasurePointPhases = []string{EnterInitrdWord}
 
-// PredictPCR11FromUKI computes the PCR 11 value that systemd-stub produces for
-// the given unified kernel image, followed by the given boot phases.
-//
-// systemd-stub measures each present section twice: first the NUL-terminated
-// ASCII section name, then the section content. The firmware event log renders
-// the name as UTF-16, but the digest is over the ASCII form.
-func PredictPCR11FromUKI(ukiPath string, phases []string, algo PCRHashAlgo, debug bool) ([]byte, error) {
+// ukiMeasurement is one digest systemd-stub extends into PCR 11, labelled by
+// what produced it so a mismatch can be attributed to a specific section.
+type ukiMeasurement struct {
+	Section string
+	Kind    string // "name" or "content"
+	Digest  []byte
+}
+
+// ukiSectionMeasurements returns, in order, the digests systemd-stub extends
+// for the given image: per present section the NUL-terminated ASCII name, then
+// the section content. The firmware event log renders the name as UTF-16, but
+// the digest is over the ASCII form.
+func ukiSectionMeasurements(ukiPath string, algo PCRHashAlgo) ([]ukiMeasurement, error) {
 	if _, err := os.Stat(ukiPath); err != nil {
 		return nil, fmt.Errorf("unified kernel image %s: %w", ukiPath, err)
 	}
@@ -54,9 +61,7 @@ func PredictPCR11FromUKI(ukiPath string, phases []string, algo PCRHashAlgo, debu
 	}
 	defer file.Close()
 
-	pcr := make([]byte, algo.DigestSize())
-	measured := 0
-
+	var measurements []ukiMeasurement
 	for _, name := range ukiMeasuredSections {
 		section := file.Section(name)
 		if section == nil {
@@ -72,23 +77,37 @@ func PredictPCR11FromUKI(ukiPath string, phases []string, algo PCRHashAlgo, debu
 			continue
 		}
 
-		pcr = ExtendDigest(algo, pcr, DigestOf(algo, append([]byte(name), 0)))
-
 		hasher := newHashFor(algo)
-		reader := section.Open()
-		if _, err := io.CopyN(hasher, reader, size); err != nil {
+		if _, err := io.CopyN(hasher, section.Open(), size); err != nil {
 			return nil, fmt.Errorf("failed to read section %s of %s: %w", name, ukiPath, err)
 		}
-		pcr = ExtendDigest(algo, pcr, hasher.Sum(nil))
-		measured++
 
-		if debug {
-			fmt.Printf("  measured %-9s (%d bytes) -> %x\n", name, section.Size, pcr)
-		}
+		measurements = append(measurements,
+			ukiMeasurement{Section: name, Kind: "name", Digest: DigestOf(algo, append([]byte(name), 0))},
+			ukiMeasurement{Section: name, Kind: "content", Digest: hasher.Sum(nil)},
+		)
 	}
 
-	if measured == 0 {
+	if len(measurements) == 0 {
 		return nil, fmt.Errorf("%s contains none of the sections systemd-stub measures; is it a unified kernel image?", ukiPath)
+	}
+	return measurements, nil
+}
+
+// PredictPCR11FromUKI computes the PCR 11 value that systemd-stub produces for
+// the given unified kernel image, followed by the given boot phases.
+func PredictPCR11FromUKI(ukiPath string, phases []string, algo PCRHashAlgo, debug bool) ([]byte, error) {
+	measurements, err := ukiSectionMeasurements(ukiPath, algo)
+	if err != nil {
+		return nil, err
+	}
+
+	pcr := make([]byte, algo.DigestSize())
+	for _, m := range measurements {
+		pcr = ExtendDigest(algo, pcr, m.Digest)
+		if debug && m.Kind == "content" {
+			fmt.Printf("  measured %-9s -> %x\n", m.Section, pcr)
+		}
 	}
 
 	for _, phase := range phases {
@@ -107,25 +126,92 @@ func PredictPCR11FromUKI(ukiPath string, phases []string, algo PCRHashAlgo, debu
 // systemd-stub actually did, before that scheme is trusted for a policy.
 //
 // replayPCR11 must be the bare event log replay, without measure-point extends.
-func VerifyUKIPredictionAgainstEventlog(ukiPath string, replayPCR11 []byte, algo PCRHashAlgo, debug bool) error {
-	predicted, err := PredictPCR11FromUKI(ukiPath, nil, algo, debug)
+// ukiChangedSinceBoot reports whether the image was written after this system
+// booted. If so it cannot be the image that booted, so a measurement mismatch
+// is expected rather than evidence of a wrong computation.
+func ukiChangedSinceBoot(ukiPath string) (bool, error) {
+	info, err := os.Stat(ukiPath)
+	if err != nil {
+		return false, err
+	}
+	raw, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return false, err
+	}
+	fields := strings.Fields(string(raw))
+	if len(fields) == 0 {
+		return false, fmt.Errorf("/proc/uptime is empty")
+	}
+	seconds, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return false, fmt.Errorf("could not parse /proc/uptime: %w", err)
+	}
+	bootTime := time.Now().Add(-time.Duration(seconds * float64(time.Second)))
+	return info.ModTime().After(bootTime), nil
+}
+
+// VerifyUKIPredictionAgainstEventlog checks tpm2-kira's UKI measurement against
+// what the running systemd-stub actually recorded, comparing measurement by
+// measurement so a mismatch can be attributed.
+//
+// A structural difference (section set or order) means the model is wrong and is
+// always fatal. A content difference for an image that was rebuilt after boot
+// only means the check is not applicable, and is reported as a warning.
+func VerifyUKIPredictionAgainstEventlog(ukiPath string, logDigests [][]byte, algo PCRHashAlgo, debug bool) error {
+	measurements, err := ukiSectionMeasurements(ukiPath, algo)
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(predicted, replayPCR11) {
-		return fmt.Errorf(
-			"UKI section measurement does not reproduce this boot's event log:\n"+
-				"  computed from %s : %x\n"+
-				"  event log replay      : %x\n"+
-				"Either the image on disk is not the one that booted (rebuild the\n"+
-				"initramfs, reboot, then seal), or tpm2-kira models systemd-stub's\n"+
-				"measurements incorrectly. Sealing now would bind PCR 11 to a value\n"+
-				"that cannot be checked against anything this machine has produced.\n"+
-				"Pass --verify-uki=false to seal anyway.",
-			ukiPath, predicted, replayPCR11)
+
+	rebuilt, mtimeErr := ukiChangedSinceBoot(ukiPath)
+	notApplicable := func(reason string) error {
+		if mtimeErr != nil {
+			return fmt.Errorf("%s\nCould not establish whether %s was rebuilt since boot (%v), so this\n"+
+				"cannot be distinguished from a wrong computation. Reboot into this image\n"+
+				"and seal again, or pass --verify-uki=false.", reason, ukiPath, mtimeErr)
+		}
+		if !rebuilt {
+			return fmt.Errorf("%s\n%s has NOT been modified since this system booted, so it should be the\n"+
+				"image that booted. tpm2-kira's model of systemd-stub's measurements is\n"+
+				"therefore wrong. Sealing would bind PCR 11 to a value this machine will\n"+
+				"never produce. Pass --verify-uki=false to seal anyway.", reason, ukiPath)
+		}
+		fmt.Printf("Note: %s\n", reason)
+		fmt.Printf("Note: %s was rebuilt after this boot, so it cannot be verified against the\n"+
+			"      current event log. PCR 11 will only be correct once you boot this image.\n", ukiPath)
+		return nil
 	}
+
+	for i, m := range measurements {
+		if i >= len(logDigests) {
+			return fmt.Errorf(
+				"this image produces %d PCR 11 measurements but this boot's event log has only %d;\n"+
+					"the first unmatched one is %s (%s). systemd-stub's section set or order differs\n"+
+					"from what tpm2-kira models. Pass --verify-uki=false to seal anyway.",
+				len(measurements), len(logDigests), m.Section, m.Kind)
+		}
+		if bytes.Equal(m.Digest, logDigests[i]) {
+			continue
+		}
+		if m.Kind == "name" {
+			return fmt.Errorf(
+				"PCR 11 measurement %d should be the name of section %s but the event log records\n"+
+					"a different digest. systemd-stub's section set or order differs from what\n"+
+					"tpm2-kira models. Pass --verify-uki=false to seal anyway.", i, m.Section)
+		}
+		return notApplicable(fmt.Sprintf(
+			"section %s of %s does not match what this boot measured", m.Section, ukiPath))
+	}
+
+	if len(logDigests) > len(measurements) {
+		return fmt.Errorf(
+			"this boot's event log has %d PCR 11 measurements but this image produces only %d;\n"+
+				"systemd-stub measured sections that tpm2-kira does not model.\n"+
+				"Pass --verify-uki=false to seal anyway.", len(logDigests), len(measurements))
+	}
+
 	if debug {
-		fmt.Printf("UKI computation verified against the event log for PCR 11 (%x)\n", predicted)
+		fmt.Printf("UKI computation verified against the event log across %d measurements\n", len(measurements))
 	}
 	return nil
 }
@@ -133,7 +219,7 @@ func VerifyUKIPredictionAgainstEventlog(ukiPath string, replayPCR11 []byte, algo
 // VerifyUKISpecsAgainstEventlog checks every UKI-source spec against the running
 // system's firmware event log. Skipped, with a notice, when the log cannot be
 // read — an unreadable log is not evidence of a wrong computation.
-func VerifyUKISpecsAgainstEventlog(tpmDev transport.TPM, specs []PCRSpec, algo PCRHashAlgo, debug bool) error {
+func VerifyUKISpecsAgainstEventlog(specs []PCRSpec, algo PCRHashAlgo, debug bool) error {
 	var ukiPaths []string
 	for _, spec := range specs {
 		if spec.Source == PCRSourceUKI {
@@ -144,23 +230,25 @@ func VerifyUKISpecsAgainstEventlog(tpmDev transport.TPM, specs []PCRSpec, algo P
 		return nil
 	}
 
-	calc := NewEventlogPCRCalculator(tpmDev, []int{TPM2PCRKernelBoot}, algo, debug)
-	values, _, err := calc.CalculatePCRsFromEventlog()
+	digests, err := EventDigestsForPCR(DefaultEventlogPath, TPM2PCRKernelBoot, algo)
 	if err != nil {
 		fmt.Printf("Note: cannot verify the UKI computation against the event log (%v); skipping\n", err)
 		return nil
 	}
-	replay, ok := values[TPM2PCRKernelBoot]
-	if !ok {
-		fmt.Println("Note: event log contains no PCR 11 events; skipping UKI verification")
+	if len(digests) == 0 {
+		fmt.Println("Note: event log contains no PCR 11 measurements; skipping UKI verification")
 		return nil
 	}
 
+	verified := 0
 	for _, path := range ukiPaths {
-		if err := VerifyUKIPredictionAgainstEventlog(path, replay, algo, debug); err != nil {
+		if err := VerifyUKIPredictionAgainstEventlog(path, digests, algo, debug); err != nil {
 			return err
 		}
+		verified++
 	}
-	fmt.Println("UKI PCR 11 computation verified against this boot's event log")
+	if verified > 0 {
+		fmt.Println("UKI PCR 11 computation checked against this boot's event log")
+	}
 	return nil
 }

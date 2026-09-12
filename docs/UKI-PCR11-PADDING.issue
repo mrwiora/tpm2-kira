@@ -74,12 +74,19 @@ data, which would otherwise read past the section.
   kernel image is present, and skips rather than passing vacuously if no
   measured section happens to be padded in that image.
 - `tpm2-kira seal` now runs `VerifyUKISpecsAgainstEventlog`, which recomputes
-  PCR 11 from the image and compares it against this boot's firmware event log.
-  This exact bug would have been caught at seal time instead of at the prompt.
+  PCR 11 from the image and compares it against this boot's firmware event log
+  measurement by measurement. This exact bug would have been caught at seal
+  time instead of at the prompt.
+  - A structural difference (section set or order) is always fatal: that is the
+    model being wrong.
+  - A content difference is only fatal when the image has **not** been modified
+    since boot (mtime vs `/proc/uptime`). If it was rebuilt after boot it cannot
+    be the booted image, so the check is not applicable and only warns — this is
+    the normal state right after a kernel or initramfs update.
   - `reseal` deliberately skips it: it runs right after an initramfs rebuild,
     where the image on disk is expected to differ from the booted one.
   - `setup` skips it: it runs from the mkinitcpio build hook, same reason.
-  - `--verify-uki=false` overrides it for sealing an image that is not booted.
+  - `--verify-uki=false` overrides it entirely.
   - An unreadable event log is a skip with a notice, not a failure — absence of
     evidence is not evidence of a wrong computation.
 
