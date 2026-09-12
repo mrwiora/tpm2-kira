@@ -349,7 +349,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	fmt.Printf("Signing key: %s (%s, fingerprint: %s)\n", resealPubKeySource, PublicKeyDescription(resealPubKey), PublicKeyFingerprint(resealPubKey))
 
 	// Reseal the data with the determined specs, preserving the original hash algorithm
-	if err := sealDataWithSpecs(tpmPath, specsToUse, nvramIndex, unsealedData, resealPubKey, resealPubKeyPathForBlob, resealPrivKeyPathForBlob, debug, hashAlgo); err != nil {
+	if err := sealDataWithSpecs(tpmPath, specsToUse, nvramIndex, unsealedData, resealPubKey, resealPubKeyPathForBlob, resealPrivKeyPathForBlob, debug, hashAlgo, false); err != nil {
 		return fmt.Errorf("failed to reseal data: %w", err)
 	}
 

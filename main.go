@@ -116,6 +116,7 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	pubKeyPath := fs.String("pubkey", cmd.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
 	privKeyPath := fs.String("privkey", cmd.DefaultPrivateKeyPath, "Path to signing private key PEM (stored in blob for reseal convenience)")
 	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
+	verifyUKI := fs.Bool("verify-uki", true, "Check the built-in PCR 11 computation against this boot's event log before sealing")
 
 	fs.Parse(args)
 
@@ -139,7 +140,7 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 
 	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
 
-	if err := cmd.Seal(*tpm, *pcrs, sealIndex, *pubKeyPath, *privKeyPath, *debug, hashAlgo); err != nil {
+	if err := cmd.Seal(*tpm, *pcrs, sealIndex, *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(0)
 	}

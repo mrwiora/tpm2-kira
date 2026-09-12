@@ -11,7 +11,7 @@ import (
 )
 
 // Seal generates and seals a TOTP secret to TPM NVRAM with PolicyOR (PCR + Signed branches)
-func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath string, debug bool, hashAlgo PCRHashAlgo) error {
+func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath string, debug bool, hashAlgo PCRHashAlgo, verifyUKI bool) error {
 	// Fall back to default key paths when not provided by the user
 	if pubKeyPath == "" {
 		pubKeyPath = DefaultPublicKeyPath
@@ -52,7 +52,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	}
 
 	// Seal the generated TOTP secret
-	if err := sealDataWithSpecs(tpmPath, specs, nvramIndex, dataToSeal, pubKey, pubKeyPath, privKeyPath, debug, hashAlgo); err != nil {
+	if err := sealDataWithSpecs(tpmPath, specs, nvramIndex, dataToSeal, pubKey, pubKeyPath, privKeyPath, debug, hashAlgo, verifyUKI); err != nil {
 		return err
 	}
 
@@ -77,7 +77,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 }
 
 // sealDataWithSpecs seals data using explicit PCR specs with PolicyOR (PCR + Signed branches)
-func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataToSeal []byte, pubKey crypto.PublicKey, pubKeyPath, privKeyPath string, debug bool, hashAlgo PCRHashAlgo) error {
+func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataToSeal []byte, pubKey crypto.PublicKey, pubKeyPath, privKeyPath string, debug bool, hashAlgo PCRHashAlgo, verifyUKI bool) error {
 	if len(specs) == 0 {
 		return fmt.Errorf("no PCRs specified")
 	}
@@ -116,6 +116,14 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, MeasurePointModeSetting, debug)
 	if err != nil {
 		return err
+	}
+
+	// Reseal runs right after an initramfs rebuild, where the image on disk is
+	// expected to differ from the booted one, so only seal can check this.
+	if verifyUKI {
+		if err := VerifyUKISpecsAgainstEventlog(tpmDev, specs, hashAlgo, debug); err != nil {
+			return err
+		}
 	}
 
 	// Build ordered list of all PCR indices (preserving spec order)

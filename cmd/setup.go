@@ -78,7 +78,9 @@ func Setup(tpmPath string, nvramIndex uint32, debug bool) error {
 	pcrsStr := "0,7"
 	hashAlgo := PCRHashAlgoSHA256
 
-	if err := Seal(tpmPath, pcrsStr, nvramIndex, pubKeyPath, privKeyPath, debug, hashAlgo); err != nil {
+	// No UKI verification: setup runs from the mkinitcpio build hook, where the
+	// image being built is not the one that booted. These PCRs do not use it anyway.
+	if err := Seal(tpmPath, pcrsStr, nvramIndex, pubKeyPath, privKeyPath, debug, hashAlgo, false); err != nil {
 		return fmt.Errorf("seal failed during setup: %w", err)
 	}
 

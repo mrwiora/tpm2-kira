@@ -1,0 +1,100 @@
+# UKI PCR 11 computed over padded sections (debug/pe Section.Size)
+
+Status: fixed, regression test added
+Date: 2026-09-12
+Affected: the `u` PCR source (`11u`) from its introduction until this fix
+Severity: sealed an unusable policy — PCR 11 never matched, unseal always failed
+
+---
+
+## 1. Symptom
+
+Sealing with `0e,2e,7e,11u` produced a PCR 11 mismatch at the boot prompt.
+`0e,2e,7e` alone worked flawlessly.
+
+    PCR11 expected (tpm2-kira) : 65e0e85d...
+    PCR11 register (at prompt) : e35c56c4...
+
+The register was correct. The prediction was wrong.
+
+## 2. Root cause
+
+In Go's `debug/pe`, `Section.Size` is **`SizeOfRawData`** — the section size
+padded up to the PE file alignment — not the virtual (actual content) size.
+That field is `Section.VirtualSize`.
+
+`PredictPCR11FromUKI` hashed `Section.Size` bytes per section, so every section
+was measured together with its zero padding. systemd-stub measures the
+unpadded contents.
+
+Measured on the affected host:
+
+| Section | VirtualSize | SizeOfRawData | bytes hashed (bug) |
+|---------|-------------|---------------|--------------------|
+| `.linux`   | 17232384 | 17232384 | 17232384 — correct by coincidence |
+| `.osrel`   | 407      | 512      | 512 |
+| `.cmdline` | 140      | 512      | 512 |
+| `.initrd`  | 33910713 | 33910784 | 33910784 |
+| `.uname`   | 13       | 512      | 512 |
+| `.sbat`    | 325      | 1024     | 1024 |
+
+## 3. Why it survived verification
+
+The algorithm *was* verified against the firmware event log before being
+implemented — but with `objcopy`, which emits unpadded section contents. All
+four small-section digests matched the log exactly, so the scheme was declared
+correct.
+
+The Go implementation was then written using a different size field, and its
+output was never re-checked against the event log. **The design was verified;
+the implementation inherited nothing.**
+
+`.linux` made it worse: it is the one section whose VirtualSize equals its
+SizeOfRawData, so the first and largest section anyone would spot-check looked
+right.
+
+## 4. Fix
+
+`cmd/ukipredict.go` hashes `min(VirtualSize, SizeOfRawData)`:
+
+```go
+size := int64(section.VirtualSize)
+if size == 0 || size > int64(section.Size) {
+    size = int64(section.Size)
+}
+```
+
+The clamp handles images where `VirtualSize` is unset (0) or exceeds the raw
+data, which would otherwise read past the section.
+
+## 5. Guards added
+
+- `cmd/ukipredict_test.go` computes both the padded and unpadded PCR 11 values
+  and fails if the predictor returns the padded one. It skips when no unified
+  kernel image is present, and skips rather than passing vacuously if no
+  measured section happens to be padded in that image.
+- `tpm2-kira seal` now runs `VerifyUKISpecsAgainstEventlog`, which recomputes
+  PCR 11 from the image and compares it against this boot's firmware event log.
+  This exact bug would have been caught at seal time instead of at the prompt.
+  - `reseal` deliberately skips it: it runs right after an initramfs rebuild,
+    where the image on disk is expected to differ from the booted one.
+  - `setup` skips it: it runs from the mkinitcpio build hook, same reason.
+  - `--verify-uki=false` overrides it for sealing an image that is not booted.
+  - An unreadable event log is a skip with a notice, not a failure — absence of
+    evidence is not evidence of a wrong computation.
+
+## 6. Lessons
+
+- **`debug/pe`'s `Section.Size` is `SizeOfRawData`, not the content size.**
+  `Section.Data()` and `Section.Open()` are bounded by it, so the padding is
+  silently included. Use `VirtualSize`, clamped.
+- **Verifying a design does not verify its implementation.** The check was run
+  against `objcopy` output, then the code was written against a different API
+  with different semantics. Re-run the verification against the actual code
+  path, not against the prototype that informed it.
+- **A cross-check tool is only worth anything if it is wired in.**
+  `VerifyUKIPredictionAgainstEventlog` existed, unused, while this shipped.
+  `tools/tpm2-pcr11predict` would also have exposed it in one command.
+- **Beware the sample that cannot distinguish.** Spot-checking `.linux` could
+  never have caught this, because it is the only unpadded section. Pick the
+  sample that discriminates between the hypotheses, or state that it does not.
