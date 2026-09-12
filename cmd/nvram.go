@@ -163,16 +163,10 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 		return fmt.Errorf("failed to compute NV write policy digest: %w", err)
 	}
 
-	// Define NVRAM space with PolicySigned-protected writes.
-	//
-	// Key attribute changes vs. the old (vulnerable) definition:
-	//   OwnerWrite  true  -> false  (prevent owner-hierarchy bypass of policy)
-	//   AuthWrite   true  -> false  (remove unauthenticated write path)
-	//   PolicyWrite unset -> true   (require policy session for writes)
-	//   AuthPolicy  empty -> PolicySigned digest (bind writes to signing key)
-	//
-	// Read attributes are unchanged — reading the raw blob is harmless since
-	// the TPM still protects the actual secret via the sealed object policy.
+	// Define NVRAM space with PolicySigned-protected writes: no owner or
+	// unauthenticated write path, so only a holder of the signing key can
+	// replace the blob. Reads stay open — the secret itself is protected by the
+	// sealed object's own policy, not by NV read control.
 	define := tpm2.NVDefineSpace{
 		AuthHandle: tpm2.TPMRHOwner,
 		Auth: tpm2.TPM2BAuth{

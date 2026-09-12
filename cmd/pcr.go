@@ -141,9 +141,6 @@ func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 		if source == PCRSourceUKI && command == "" {
 			return nil, fmt.Errorf("uki source for PCR %d requires a path (format: %du:/path/to/uki.efi)", pcr, pcr)
 		}
-		if strings.Contains(part, "p:") {
-			return nil, fmt.Errorf("the external predict source (p: suffix) has been removed; use %du or %du:/path/to/uki.efi instead", pcr, pcr)
-		}
 		if seen[pcr] {
 			return nil, fmt.Errorf("duplicate PCR %d specified (each PCR index can only appear once)", pcr)
 		}
@@ -155,21 +152,6 @@ func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 		return nil, fmt.Errorf("no PCRs specified")
 	}
 	return specs, nil
-}
-
-// ParsePCRs parses a comma-separated string of PCR indices (with optional suffixes) and
-// returns only the indices. This is a convenience wrapper around ParsePCRSpecs for code
-// that only needs PCR indices without source information.
-func ParsePCRs(pcrsStr string) ([]int, error) {
-	specs, err := ParsePCRSpecs(pcrsStr)
-	if err != nil {
-		return nil, err
-	}
-	pcrs := make([]int, len(specs))
-	for i, spec := range specs {
-		pcrs[i] = spec.Index
-	}
-	return pcrs, nil
 }
 
 // PCRSpecsToString converts a slice of PCRSpec back to the comma-separated string format.

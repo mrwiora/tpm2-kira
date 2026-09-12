@@ -240,82 +240,6 @@ func TestParsePCRSpecs(t *testing.T) {
 	}
 }
 
-// TestParsePCRs tests backward-compatible PCR parsing
-func TestParsePCRs(t *testing.T) {
-	tests := []struct {
-		name      string
-		input     string
-		expected  []int
-		shouldErr bool
-	}{
-		{
-			name:     "Single PCR",
-			input:    "7",
-			expected: []int{7},
-		},
-		{
-			name:     "Multiple PCRs",
-			input:    "0,2,4,7",
-			expected: []int{0, 2, 4, 7},
-		},
-		{
-			name:     "PCR with register suffix",
-			input:    "7r",
-			expected: []int{7},
-		},
-		{
-			name:     "PCR with eventlog suffix",
-			input:    "7e",
-			expected: []int{7},
-		},
-		{
-			name:     "Mixed suffixes",
-			input:    "0e,2,7r",
-			expected: []int{0, 2, 7},
-		},
-		{
-			name:      "Invalid",
-			input:     "abc",
-			shouldErr: true,
-		},
-		{
-			name:      "Empty",
-			input:     "",
-			shouldErr: true,
-		},
-		{
-			name:      "Too high",
-			input:     "25",
-			shouldErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := ParsePCRs(tt.input)
-			if tt.shouldErr {
-				if err == nil {
-					t.Errorf("Expected error for input %q, got nil", tt.input)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("Unexpected error: %v", err)
-			}
-
-			if len(result) != len(tt.expected) {
-				t.Fatalf("Expected %d PCRs, got %d", len(tt.expected), len(result))
-			}
-
-			for i, pcr := range result {
-				if pcr != tt.expected[i] {
-					t.Errorf("PCR[%d]: expected %d, got %d", i, tt.expected[i], pcr)
-				}
-			}
-		})
-	}
-}
-
 // TestPCRSpecsToString tests PCR spec serialization
 func TestPCRSpecsToString(t *testing.T) {
 	tests := []struct {
@@ -1013,30 +937,15 @@ func TestPeekBlobVersion(t *testing.T) {
 			expectedSize:    2,
 		},
 		{
-			name: "Version 2 blob (old format — legacy layout)",
+			name: "Unsupported older version still reports its version",
 			data: func() []byte {
 				d := make([]byte, 20)
-				d[0] = 0x02 // version 2
-				d[4] = 0x05 // app version length = 5
-				copy(d[8:], "1.0.0")
+				binary.LittleEndian.PutUint32(d[0:4], 2)
 				return d
 			}(),
 			expectedVersion:    2,
-			expectedAppVersion: "1.0.0",
+			expectedAppVersion: "",
 			expectedSize:       20,
-		},
-		{
-			name: "Version 3 blob (legacy layout)",
-			data: func() []byte {
-				d := make([]byte, 30)
-				d[0] = 0x03 // version 3
-				d[4] = 0x07 // app version length = 7
-				copy(d[8:], "v2.0.0a")
-				return d
-			}(),
-			expectedVersion:    3,
-			expectedAppVersion: "v2.0.0a",
-			expectedSize:       30,
 		},
 		{
 			name: "Current version blob (appVersionLen at offset 8)",

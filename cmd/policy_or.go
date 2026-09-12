@@ -648,7 +648,6 @@ func UnsealWithPCRBranch(tpmDev transport.TPM, loadedObject *LoadSealedObjectRes
 // Uses tpm2.Policy() callback to build the full policy session just-in-time.
 func UnsealWithSignedBranch(tpmDev transport.TPM, loadedObject *LoadSealedObjectResponse, sealedBlob *SealedBlob, privateKeyPath string, debug bool) ([]byte, error) {
 	// Load the private key for signing — the public key is derived from it.
-	// The blob no longer stores the public key PEM; only the signed branch digest.
 	privKey, err := LoadSigningPrivateKeyFromPEM(privateKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load private key: %w", err)

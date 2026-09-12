@@ -252,6 +252,10 @@ tpm2-kira info --nvram 0
 tpm2-kira info --json          # machine-readable
 ```
 
+`--json` always emits an array of slot objects, one per populated slot, even
+when there is only one. Each entry carries `slot_number`, `nvram_index` and the
+blob itself, so consumers never have to branch on the slot count.
+
 ## Deleting Sealed Data
 
 ```bash
@@ -457,6 +461,14 @@ reconstruction rules and constants.
 ## Security
 
 See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy and [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md) for an in-depth description of the cryptographic design, threat model, and trust boundaries.
+
+## History
+
+[HISTORY.md](HISTORY.md) records superseded formats, removed features and the
+reasoning behind them, so the source can describe what it is rather than what it
+used to be. This project is in development: **no backwards compatibility is
+maintained**, and blob formats, on-disk layouts and CLI flags may change without
+a migration path.
 
 ## License
 

@@ -227,7 +227,8 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 
 	// ── Determine the public key for re-sealing ──
 	// Priority: --pubkey > blob pubkey path > derived from --privkey > blob privkey path
-	// The blob no longer stores the public key PEM; a key source on the filesystem is required.
+	// The signing public key must come from the filesystem; the blob stores only
+	// a path hint, which is not trusted.
 	var resealPubKey crypto.PublicKey
 	var resealPubKeySource string
 	var resealPubKeyPathForBlob string

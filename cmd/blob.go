@@ -101,6 +101,8 @@ type BlobPeek struct {
 // PeekBlobVersion reads just the version and app version from raw blob data without full unmarshal.
 // For current blobs the layout is: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
 // For older blobs the layout is: [version:4][appVersionLen:4][appVersion...]
+// PeekBlobVersion reads just the version and app version from raw blob data without full unmarshal.
+// Layout: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
 func PeekBlobVersion(data []byte) *BlobPeek {
 	peek := &BlobPeek{
 		DataSize: len(data),
@@ -112,21 +114,10 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 
 	peek.Version = binary.LittleEndian.Uint32(data[0:4])
 
-	if peek.Version == CurrentBlobVersion {
-		// Current layout: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
-		if len(data) >= 12 {
-			appVersionLen := binary.LittleEndian.Uint32(data[8:12])
-			if appVersionLen > 0 && appVersionLen < 256 && len(data) >= 12+int(appVersionLen) {
-				peek.AppVersion = string(data[12 : 12+appVersionLen])
-			}
-		}
-	} else {
-		// Legacy layout: [version:4][appVersionLen:4][appVersion...]
-		if len(data) >= 8 {
-			appVersionLen := binary.LittleEndian.Uint32(data[4:8])
-			if appVersionLen > 0 && appVersionLen < 256 && len(data) >= 8+int(appVersionLen) {
-				peek.AppVersion = string(data[8 : 8+appVersionLen])
-			}
+	if len(data) >= 12 {
+		appVersionLen := binary.LittleEndian.Uint32(data[8:12])
+		if appVersionLen > 0 && appVersionLen < 256 && len(data) >= 12+int(appVersionLen) {
+			peek.AppVersion = string(data[12 : 12+appVersionLen])
 		}
 	}
 
@@ -152,7 +143,7 @@ const (
 	PCRSourceRegister PCRSource = 0
 	// PCRSourceEventlog means the PCR value was calculated from the TPM eventlog ('e' suffix)
 	PCRSourceEventlog PCRSource = 1
-	// Value 2 was the external predict command source, removed in blob version 7.
+	// Source byte 2 is retired and must not be reused; see HISTORY.md.
 	// PCRSourceUKI means the PCR value was computed from a unified kernel image ('u' suffix)
 	PCRSourceUKI PCRSource = 3
 )

@@ -134,18 +134,9 @@ func readSlotInfo(tpmDev transport.TPM, nvramIndex uint32) (*slotInfo, error) {
 // ── JSON output ─────────────────────────────────────────────────────────
 
 func printJSON(slots []slotInfo) error {
-	if len(slots) == 1 {
-		// Single slot – emit a plain object for backward compatibility.
-		out, err := json.MarshalIndent(slots[0].Blob, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal JSON: %w", err)
-		}
-		fmt.Println(string(out))
-		return nil
-	}
-
-	// Multiple slots – emit an array of annotated objects.
-	var items []SlotInfoJSON
+	// Always an array of annotated objects, so consumers never have to branch
+	// on the slot count.
+	items := make([]SlotInfoJSON, 0, len(slots))
 	for _, si := range slots {
 		raw, err := json.Marshal(si.Blob)
 		if err != nil {
