@@ -453,6 +453,17 @@ The firmware event log *renders* the name as UTF-16 (`".\0l\0i\0n\0u\0x\0\0\0"`)
 which is the event payload — but the measured digest is over the ASCII form.
 `H(".linux\0")` = `0da293e37ad5511c59be47993769aacb91b243f7d010288e118dc90e95aaef5a`.
 
+> **Trap:** `section_bytes` is the **unpadded** content. PE sections are padded
+> up to the file alignment, and Go's `debug/pe` exposes that padded length as
+> `Section.Size` (it is `SizeOfRawData`); the content length is
+> `Section.VirtualSize`. Measuring the padded length yields a PCR 11 value the
+> machine will never present. See `docs/UKI-PCR11-PADDING.issue`.
+
+`tpm2-kira seal` guards this by recomputing PCR 11 from the image and comparing
+it against the current boot's event log, refusing to seal on mismatch
+(`--verify-uki=false` overrides). `reseal` and `setup` skip the check because
+both run when the image on disk is legitimately not the one that booted.
+
 **Useful constants for diagnosis.** PCRs 2, 3 and 6 normally contain only the
 firmware `EV_SEPARATOR`, so their value is machine-independent:
 
