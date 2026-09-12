@@ -134,7 +134,7 @@ Each PCR index can have a **source suffix** that controls where the value comes 
 |--------|--------|---------|-------|
 | *(none)* or `r` | TPM register | `0`, `7r` | Reads current live value from the TPM |
 | `e` | Eventlog | `0e`, `7e` | Calculates from `/sys/kernel/security/tpm0/binary_bios_measurements` (PCRs 0–12) |
-| `p:CMD` | External predictor | `11p:tpm2-pcr11predict` | Runs CMD, expects a hex digest on stdout (PCR 11 only) |
+| `u[:PATH]` | Unified kernel image | `11u`, `11u:/boot/EFI/Linux/arch-linux.efi` | Replays systemd-stub's section measurements natively (PCR 11 only) |
 
 You can mix sources freely:
 
@@ -142,9 +142,34 @@ You can mix sources freely:
 # PCR 0 and 7 from eventlog, PCR 2 from register
 tpm2-kira seal --pcrs "0e,2,7e"
 
-# Add a predicted PCR 11
-tpm2-kira seal --pcrs "0e,2e,7e,11p:tpm2-pcr11predict"
+# Add a UKI-computed PCR 11
+tpm2-kira seal --pcrs "0e,2e,7e,11u"
 ```
+
+The `u` source parses the unified kernel image directly and reproduces what
+systemd-stub measures: for each section, `H(name + NUL)` followed by
+`H(section bytes)`, then the `enter-initrd` boot phase. It needs neither
+`objcopy` nor `systemd-measure`, and nothing is executed as a subprocess.
+
+### The measure point
+
+tpm2-kira reads PCRs in the initrd, *after* systemd has already extended some
+of them. `systemd-pcrosseparator.service` extends `os-separator` into PCRs
+0–7, 9, 12, 13, 14, and `systemd-pcrphase-initrd.service` extends
+`enter-initrd` into PCR 11 — both before `cryptsetup-pre.target`.
+
+Eventlog-derived values describe the *end of firmware*, so tpm2-kira adds those
+extends to reach the measure point. `--measure-point` controls this:
+
+| Value | Behaviour |
+|-------|-----------|
+| `auto` (default) | Probes stable PCRs against the TPM to decide, and refuses if the result is ambiguous |
+| `on` | Always apply |
+| `off` | Reconstruct end-of-firmware values only |
+
+The mkinitcpio install hook inspects the image being built and passes the right
+value to `reseal`, which is what makes the first rebuild after these units
+appear behave correctly.
 
 ### SHA-1 fallback
 

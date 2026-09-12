@@ -113,7 +113,7 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 	}
 
 	// Read all PCR values from their respective sources using the shared helper
-	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, debug)
+	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, MeasurePointModeSetting, debug)
 	if err != nil {
 		return err
 	}
@@ -136,8 +136,8 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 		for _, spec := range specs {
 			val := readResult.Values[spec.Index]
 			sourceLabel := spec.Source.String()
-			if spec.Source == PCRSourcePredict {
-				sourceLabel = fmt.Sprintf("predict [%s]", spec.Command)
+			if spec.Source == PCRSourceUKI {
+				sourceLabel = fmt.Sprintf("uki [%s]", spec.Command)
 			}
 			fmt.Printf("  PCR%-2d (%s): %x\n", spec.Index, sourceLabel, val)
 		}

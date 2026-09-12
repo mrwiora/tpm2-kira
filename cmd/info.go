@@ -294,9 +294,16 @@ func printSigningKeyInfo(sub string, blob *SealedBlob) {
 
 func printPCRSources(sub string, blob *SealedBlob) {
 	hasEventlog := blob.HasEventlogPCRs()
-	hasPredict := blob.HasPredictPCRs()
+	hasPredict := blob.HasUKIPCRs()
 	regPCRs := blob.GetRegisterPCRIndices()
 	hasRegister := len(regPCRs) > 0
+
+	if info := blob.Payload.EventlogInfo; info != nil && info.MeasurePointExtends != "" {
+		fmt.Printf("%s%sMeasure-point extends: %s\n", sub, branch(false), info.MeasurePointExtends)
+		if info.MeasurePointDetection != "" {
+			fmt.Printf("%s%s  detected via: %s\n", sub, branch(false), info.MeasurePointDetection)
+		}
+	}
 
 	// Summary line
 	switch {
@@ -347,7 +354,7 @@ func printPCRSources(sub string, blob *SealedBlob) {
 	if hasPredict {
 		printed++
 		isLast := printed == remaining
-		indices := blob.GetPredictPCRIndices()
+		indices := blob.GetUKIPCRIndices()
 		fmt.Printf("%s%sPredict PCRs: %v\n", sub, branch(isLast), indices)
 	}
 	if hasRegister {

@@ -2,6 +2,10 @@
 Description=Starting tpm2-kira
 Requires=dev-tpm0.device
 After=dev-tpm0.device
+# PCRs must stay stable for the whole run loop, so observe them after systemd's
+# userspace extends; ordering against a unit that never starts is a no-op.
+After=systemd-pcrosseparator.service
+After=systemd-pcrphase-initrd.service
 Before=systemd-ask-password-console.service
 Conflicts=multi-user.target
 DefaultDependencies=no

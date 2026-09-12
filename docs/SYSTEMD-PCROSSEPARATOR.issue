@@ -1,0 +1,331 @@
+# systemd-pcrosseparator.service breaks eventlog-based PCR prediction
+
+Status: root cause confirmed (arithmetically verified)
+Date: 2026-09-12
+Affected host: w-mrw (Arch Linux, systemd 261.3-1-arch, mkinitcpio 42-1)
+
+---
+
+## 1. Symptom
+
+After a routine `pacman -Syyu` on 2026-09-12, the PCR values displayed by the
+tpm2-kira pre-unlock measure point (initramfs, before LUKS unlock) no longer
+matched the expected/sealed values.
+
+    PCR0 expected (sealed blob / eventlog replay) : ca606bea...
+    PCR0 observed at the measure point            : b9f41487...
+
+The confusing part: `tpm2_eventlog /sys/kernel/security/tpm0/binary_bios_measurements`
+run from the booted system still produced the *expected* value `ca606bea...`.
+
+## 2. Why the first readings were misleading
+
+`tpm2_eventlog`'s trailing `pcrs:` block is a **replay of the firmware event
+log**, not a read of the TPM. Comparing it against a live `tpm2_pcrread` is
+comparing a calculation against a measurement. They diverged, and the
+divergence was the actual finding — not noise.
+
+## 3. Evidence gathered
+
+### 3.1 Live PCRs vs. firmware-log replay (MEASURED)
+
+| PCR | firmware log replay | live (`tpm2_pcrread`) | differs |
+|-----|---------------------|------------------------|---------|
+| 0   | `ca606bea...`       | `B9F41487...`          | yes |
+| 1   | `f36b663f...`       | `48E413CD...`          | yes |
+| 2   | `3d458cfe...`       | `8D22C738...`          | yes |
+| 3   | `3d458cfe...`       | `8D22C738...`          | yes |
+| 4   | `e20d688a...`       | `7AB51F7E...`          | yes |
+| 5   | `5dc591e2...`       | `BE489889...`          | yes |
+| 6   | `3d458cfe...`       | `8D22C738...`          | yes |
+| 7   | `55ebe40c...`       | `CCCC4514...`          | yes |
+| 8   | (untouched)         | `00000000...`          | no  |
+| 10  | (untouched)         | `00000000...`          | no  |
+| 13  | (no log events)     | `3345A4E7...`          | non-zero |
+| 14  | (no log events)     | `3345A4E7...`          | non-zero |
+
+Two observations did the real diagnostic work:
+
+- **PCRs 2, 3 and 6 changed.** Those hold *only* the firmware `EV_SEPARATOR`.
+  No OS-level package update can ever change them. So the cause had to be an
+  extra `TPM2_PCR_Extend`, not a changed measurement.
+- **PCRs 13 and 14 became non-zero and identical.** Both went from all-zero
+  through the *same* single extend.
+
+### 3.2 Hypotheses tested and rejected
+
+- **Firmware measured twice** (warm reset mid-boot, capsule update pass).
+  Rejected: replaying the event log 1x, 2x and 3x produced none of the live
+  values.
+- **Suspend/resume re-measurement.** Rejected: `0` suspend events this boot,
+  and the wrong values were already present in the initramfs.
+- **tpm2-kira extending PCRs itself.** Rejected: the only `tpm2_pcrextend`
+  calls in the tree are in `integration_test.go` against swtpm PCR 23.
+- **UKI rebuild changing measurements.** Rejected: explains PCR 4/11/12 at
+  most, cannot explain PCR 2/3/6/7.
+
+### 3.3 The finding
+
+`journalctl -k` showed a unit running in the initrd that does not run in the
+real root:
+
+    systemd[1]: Starting TPM PCR OS Separator...
+    systemd[1]: TPM PCR OS Separator skipped, unmet condition check
+                ConditionPathExists=/etc/initrd-release
+
+`/usr/lib/systemd/system/systemd-pcrosseparator.service`:
+
+    DefaultDependencies=no
+    After=tpm2.target
+    Before=sysinit.target shutdown.target initrd-switch-root.target \
+           cryptsetup-pre.target cryptsetup.target
+    ConditionPathExists=/etc/initrd-release
+    ConditionSecurity=measured-os
+    FailureAction=reboot-force
+
+    ExecStart=/usr/lib/systemd/systemd-pcrextend --graceful \
+            --pcr=0 --pcr=1 --pcr=2 --pcr=3 --pcr=4 --pcr=5 \
+            --pcr=6 --pcr=7 --pcr=9 --pcr=12 --pcr=13 --pcr=14 \
+            --event-type=os-separator \
+            os-separator
+
+Journal for the unit confirms all twelve extends executed in the sha256 bank.
+
+## 4. Root cause (VERIFIED)
+
+`systemd-pcrosseparator.service` extends PCRs **0-7, 9, 12, 13, 14** with
+
+    sha256("os-separator")
+    = ff5b9d73dad709633ae76adf444012b57e913a12ed7403c3931145862f35f841
+
+in early userspace, ordered **before `cryptsetup-pre.target`** — i.e. before
+the tpm2-kira measure point and before any LUKS unseal.
+
+Verified arithmetically (exact matches):
+
+| PCR   | base                        | `extend(base, sha256("os-separator"))` | live |
+|-------|-----------------------------|----------------------------------------|------|
+| 2/3/6 | `3d458cfe...` (log replay)  | `8d22c738fcd1730f...`                  | `8D22C738...` MATCH |
+| 13/14 | `0000...` (untouched)       | `3345a4e7857aa5ae...`                  | `3345A4E7...` MATCH |
+
+So `b9f41487... == extend(ca606bea..., ff5b9d73...)`.
+
+## 5. How it reached us without a systemd upgrade
+
+systemd 261.3 was already installed; the unit existed on disk beforehand. The
+triggering change was **`mkinitcpio 41.1-1 -> 42-1`**, which began pulling
+`systemd-pcrosseparator.service` into the generated initramfs. Hence a change
+attributed to mkinitcpio altered PCRs 0-7.
+
+**Lesson:** an initramfs generator upgrade can change the set of units that run
+in early boot, and therefore change PCR values, without any of the measured
+components changing.
+
+## 6. Why systemd introduced it
+
+From the systemd NEWS file shipped on this host:
+
+> A new service unit "systemd-pcrosseparator.service" will now measure a new
+> separator measurement during early userspace into PCRs 0-7, 9, 12-14, in
+> order to isolate firmware/pre-boot measurements from host measurements. This
+> is a safety concept to protect firmware measurements on systems where the
+> regular firmware separator measurement is missing. It's also useful in
+> environments where a software TPM is used, i.e. where TPM functionality is
+> only available starting with the OS, but not before. Note that this new
+> measurement has an effect on all indicated PCRs, hence might affect relevant
+> TPM policies.
+
+Background: a PCR is append-only, but nothing prevents *later* code from
+extending a PCR conceptually owned by an earlier boot stage. Firmware is
+supposed to close its phase with `EV_SEPARATOR` (digest `df3f6198...`), which
+turns the firmware's final value into a fixed point that later extends can only
+move away from. Without it, compromised OS code could keep extending PCR 0 with
+chosen values until it reproduces a known-good state and satisfies a policy it
+should not. systemd adds its own separator for the cases where that guarantee
+is absent — firmware that omits `EV_SEPARATOR`, and vTPM/confidential-computing
+setups where no pre-boot stage exists at all.
+
+**PCR 11 is deliberately excluded** from the list, so signed UKI policies
+(`systemd-measure`, `systemd-cryptenroll --tpm2-public-key`) are unaffected.
+
+## 7. Impact
+
+### 7.1 On tpm2-kira eventlog-source PCRs (`0e`, `7e`, ...) — STRUCTURAL
+
+The separator is **not** written to `/sys/kernel/security/tpm0/binary_bios_measurements`.
+That file is the firmware's TCG log; systemd records its own measurements in
+`/run/log/systemd/tpm2-measure.log`.
+
+Therefore any prediction that replays the firmware log is now permanently one
+extend short on PCRs 0-7, 9, 12, 13, 14. This does **not** self-heal with a
+reseal — the calculation method itself is now wrong.
+
+### 7.2 On register-source sealing / TPM2 LUKS auto-unlock — ONE-TIME
+
+Any policy bound to PCRs 0-7, 9, 12, 13, 14 that was enrolled *before* the
+change holds pre-separator values and will fail to unseal once.
+Re-enrolling/resealing from the running system captures post-separator values,
+which are what the next boot presents. `sha256("os-separator")` is a constant,
+not a per-boot value, so it is stable afterwards.
+
+PCR 11-based signed policies: unaffected.
+
+This host is currently **not** using TPM2 auto-unlock (kernel cmdline is bare
+`rd.luks.name=...` with no `tpm2-device=auto`; a ~20s gap between the separator
+finishing and `systemd-cryptsetup` setting the cipher indicates a typed
+passphrase). Verify with:
+
+    systemd-cryptenroll /dev/disk/by-uuid/<uuid>
+    cryptsetup luksDump /dev/disk/by-uuid/<uuid> | grep -iA6 tokens
+
+### 7.3 PCR 9 and PCR 11 — two further findings from verify_os_separator.py
+
+Running the full-chain check (firmware log + `/run/log/systemd/tpm2-measure.log`)
+on this host reconstructed every PCR and turned up two things the separator
+alone did not explain:
+
+- **PCR 9** is *not* explained by replay + one separator. It is
+  `replay + os-separator + 4x nvpcr-init:{verity,hardware,cryptsetup,login}`,
+  measured by `systemd-tpm2-setup` ("4 NvPCRs initialized"), which runs in the
+  real root **after the disk is unlocked**. So PCR 9 is correct at tpm2-kira's
+  measure point; it is the *post-boot register* that is polluted.
+  An earlier conclusion that "the event log does not describe PCR 9" was WRONG:
+  it compared a post-boot register against a measure-point prediction.
+- **PCR 11** receives `enter-initrd` from `systemd-pcrphase-initrd.service`
+  74 ms before tpm2-kira starts, so the measure point includes it too. This is
+  unrelated to the separator and predates it.
+
+Consequence: the live register at reseal time is a valid reference **only** for
+PCRs that stop changing at the measure point. PCRs 9, 11 and 15 do not, and
+cannot be used to validate a prediction.
+
+## 8. Decision
+
+**Chosen: keep the separator, order tpm2-kira after it, and model the extra
+extend in the eventlog/predict calculation.**
+
+`systemd-pcrosseparator.service` is `Type=oneshot` with `RemainAfterExit=yes`,
+so `After=` genuinely waits for completion, and once it is done nothing else
+extends PCRs 0-7, 9, 12-14 before switch-root.
+
+### Rejected: ordering tpm2-kira *before* the separator
+
+Tempting, because `e` and `p` already target end-of-firmware and would need no
+code change, and because it would decouple tpm2-kira from systemd's early-boot
+behaviour entirely. Rejected for two reasons:
+
+1. `tpm2-kira run` is a **continuous loop** (`cmd/scan.go`, `RunCommand`) that
+   re-evaluates the sealed slots against live PCRs on every iteration, for the
+   whole duration of the password prompt. The separator must fire before
+   `cryptsetup-pre.target`, i.e. *during* that loop. Sealed to pre-separator
+   values, the display would show a valid TOTP code and then flip to a PCR
+   mismatch while the user watches. A flapping security indicator is worse
+   than a wrong one.
+2. `Type=simple` means systemd considers the unit started the moment it forks,
+   so `Before=` would provide no real synchronisation anyway.
+
+It is also zero-sum on sources: it fixes `e` but breaks `r`, because reseal
+runs from the booted system where the registers are already post-separator.
+
+### Rejected: reseal against register-source PCRs only
+
+Simple, but loses eventlog-based prediction for the affected indices.
+
+## 8a. Implementation notes
+
+- Hardcode the **word**, not the digest: systemd extends into every enabled
+  bank, so a `--sha1` seal needs `sha1("os-separator")`.
+- Detection must not be "is the unit installed on the host". There are four
+  independent ways for the extend not to happen: unit absent from the image,
+  `ConditionSecurity=measured-os` false, `--graceful` with no usable TPM, and
+  the `efi_measured_os()` runtime skip in `pcrextend.c`.
+- Prefer `$BUILDROOT` inspection at initramfs build time (predicts the *next*
+  boot) over runtime probing (describes *this* boot). They disagree exactly on
+  the transition boot, which is the case that caused this issue.
+- A self-validating runtime probe is available and needs no systemd internals:
+  for a stable PCR, `live[i] == extend(replay[i], H("os-separator"))` proves
+  the separator ran and re-proves the constant. PCRs 2, 3, 6 are ideal probes.
+  Anything that matches neither branch must **fail loudly**, not guess.
+
+## 9. Caveats / traps
+
+- `ConditionSecurity=measured-os` — if false, the unit is **skipped** and no
+  separator is extended. Rescue images, live USBs, and initramfs images built
+  without the unit present pre-separator values, so a post-separator
+  enrollment will not unseal there. Always keep a recovery passphrase.
+- `--graceful` — exits successfully when no TPM2 device is found, again
+  producing no separator.
+- `FailureAction=reboot-force` — do not mask this unit casually. Any TPM2
+  enrollment made while it was active stops working if it is later disabled.
+- The unit only runs in the initrd (`ConditionPathExists=/etc/initrd-release`),
+  so the extends happen exactly once per boot.
+
+## 10. Diagnostic commands used
+
+    # live PCR state (ground truth)
+    tpm2_pcrread sha256
+
+    # firmware log replay (a calculation, NOT the TPM state)
+    tpm2_eventlog /sys/kernel/security/tpm0/binary_bios_measurements
+
+    # systemd's own measurement log (where the separator IS recorded)
+    jq . /run/log/systemd/tpm2-measure.log
+
+    # the unit and its effect
+    cat /usr/lib/systemd/system/systemd-pcrosseparator.service
+    journalctl -b -u systemd-pcrosseparator.service
+
+    # is the unit inside the UKI's initramfs?
+    lsinitcpio /boot/EFI/Linux/arch-linux.efi | grep -i pcrosseparator
+
+    # ordering relative to our own unit
+    journalctl -b -o short-precise \
+      -u systemd-pcrosseparator.service -u tpm2-kira.service
+
+## 10a. Resolution as implemented
+
+- `cmd/measurepoint.go` models the measure point: `os-separator` on PCRs
+  0-7, 9, 12, 13, 14 and `enter-initrd` on PCR 11, hashing the **word** per
+  bank. `DetectMeasurePointExtends` probes stable PCRs against the live
+  register and returns an error naming the PCR when it matches neither
+  branch. `--measure-point=auto|on|off` overrides it.
+- `cmd/ukipredict.go` computes PCR 11 natively from the unified kernel image:
+  per section `H(name + NUL)` then `H(section bytes)`, in systemd-stub's order,
+  then the boot phases. Verified against this host's event log: the section
+  replay reproduces `7a7a13a7...` exactly, `.osrel`, `.cmdline`, `.uname` and
+  `.sbat` content digests match, and the name digest is over the NUL-terminated
+  ASCII name (the event log merely *renders* it as UTF-16).
+- New `u` PCR source (`11u`, `11u:/path.efi`). The external `p:COMMAND` predict
+  source was **removed** — it is no longer needed, and removing it closes
+  `docs/pentest2/vuln-0001` (arbitrary command execution from a planted blob,
+  since the command string was stored in the blob and executed by `reseal`).
+- Blob version 7 records `measure_point_extends` and `measure_point_detection`,
+  so `tpm2-kira info` states what was applied, and verification reproduces the
+  sealed values rather than re-detecting.
+- `tpm2-kira.service` gained `After=systemd-pcrosseparator.service` and
+  `After=systemd-pcrphase-initrd.service`. Previously there was **no ordering
+  edge at all** between tpm2-kira and these units, so which side of the extends
+  the measure point landed on was non-deterministic.
+- The mkinitcpio install hook inspects `$BUILDROOT`, prints which measure-point
+  units are active, and records the verdict for the post hook to pass to
+  `reseal` — this is what makes the transition rebuild correct.
+- `verify_os_separator.py` reconstructs the full chain and is the tool that
+  found the PCR 9 and PCR 11 behaviour.
+
+## 11. Transferable lessons
+- `tpm2_eventlog`'s `pcrs:` block is a **replay**, not a read. Never treat it
+  as the TPM's state. Comparing replay against `tpm2_pcrread` is itself the
+  most useful diagnostic available.
+- **PCRs 2, 3 and 6 are the canary.** They contain only the firmware
+  separator, so their value is a machine-independent constant
+  (`3d458cfe...` for an empty-then-separator sha256 PCR). If they change,
+  something is doing extra extends — it is never a changed measurement.
+- Firmware PCRs are **not** frozen after `ExitBootServices`. The OS can and now
+  does extend them. "Only firmware touches PCR 0-7" is no longer true.
+- A measurement log and the PCRs it purports to describe come from **different
+  producers**. Firmware writes `binary_bios_measurements`; systemd writes
+  `/run/log/systemd/tpm2-measure.log`. Replaying only one will silently
+  under-count.
+- Distinguish "the value changed once" (re-enroll fixes it) from "the
+  prediction method is now wrong" (code fix required). They look identical at
+  the first failed boot.

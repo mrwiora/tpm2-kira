@@ -34,7 +34,7 @@ func PCRTips() error {
 		{"PCR8¹", "Hash of the kernel command line", "GRUB"},
 		{"PCR9¹", "Hash of the initramfs and EFI Load Options", "Linux"},
 		{"PCR10¹", "Reserved for Future Use", ""},
-		{"PCR11¹", "Hash of the Unified kernel image (supports 'p:cmd' for prediction)", "systemd-stub"},
+		{"PCR11¹", "Hash of the Unified kernel image (supports 'u' for direct computation)", "systemd-stub"},
 		{"PCR12¹", "Overridden kernel command line, Credentials", "systemd-stub"},
 		{"PCR13¹", "System Extensions", "systemd-stub"},
 		{"PCR14¹", "shim's MokList, MokListX, and MokSBState", "shim"},
@@ -55,6 +55,8 @@ func PCRTips() error {
 	fmt.Println("PCR source suffixes:")
 	fmt.Println("  (none) or 'r' - Read from TPM registers (default)")
 	fmt.Println("  'e'           - Calculate from TPM eventlog (PCRs 0-12 only)")
+	fmt.Println("  'u[:PATH]'    - Compute from a unified kernel image, built in (PCR 11 only)")
+	fmt.Println("                  Replays systemd-stub's section measurements; no external tools")
 	fmt.Println("  'p:COMMAND'   - Predict via external command (PCR 11 only)")
 	fmt.Println("                  The command must print a single hex digest line to stdout")
 	fmt.Println()
@@ -62,7 +64,7 @@ func PCRTips() error {
 	fmt.Println("  0,2,7      - Recommended default (firmware + secure boot)")
 	fmt.Println("  0,2,4,7    - Include boot manager (may change on boot attempts)")
 	fmt.Println("  0,2,7,9    - Include kernel/initramfs (if using systemd-based boot)")
-	fmt.Println("  0e,2e,7e,11p:tpm2-pcr11predict - Eventlog + predicted UKI")
+	fmt.Println("  0e,2e,7e,11u                   - Eventlog + built-in UKI computation (recommended)")
 	fmt.Println()
 	fmt.Println("Source: https://wiki.archlinux.org/title/Trusted_Platform_Module")
 

@@ -97,44 +97,42 @@ func TestParsePCRSpecs(t *testing.T) {
 			},
 		},
 		{
-			name:  "Single predict PCR",
-			input: "11p:/usr/bin/tpm2-pcr11predict",
+			name:  "Single UKI PCR with explicit path",
+			input: "11u:/boot/EFI/Linux/arch-linux.efi",
 			expected: []PCRSpec{
-				{Index: 11, Source: PCRSourcePredict, Command: "/usr/bin/tpm2-pcr11predict"},
+				{Index: 11, Source: PCRSourceUKI, Command: "/boot/EFI/Linux/arch-linux.efi"},
 			},
 		},
 		{
-			name:  "Multiple PCRs with predict",
-			input: "0e,2,7e,11p:tpm2-pcr11predict",
+			name:  "UKI PCR with default path",
+			input: "11u",
+			expected: []PCRSpec{
+				{Index: 11, Source: PCRSourceUKI, Command: DefaultUKIPath},
+			},
+		},
+		{
+			name:  "Multiple PCRs with UKI",
+			input: "0e,2,7e,11u",
 			expected: []PCRSpec{
 				{Index: 0, Source: PCRSourceEventlog},
 				{Index: 2, Source: PCRSourceRegister},
 				{Index: 7, Source: PCRSourceEventlog},
-				{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict"},
+				{Index: 11, Source: PCRSourceUKI, Command: DefaultUKIPath},
 			},
 		},
 		{
-			name:  "Predict with absolute path",
-			input: "11p:/usr/local/bin/predict-pcr11",
-			expected: []PCRSpec{
-				{Index: 11, Source: PCRSourcePredict, Command: "/usr/local/bin/predict-pcr11"},
-			},
-		},
-		{
-			name:  "Predict with arguments",
-			input: "11p:predict-pcr11 --sha256",
-			expected: []PCRSpec{
-				{Index: 11, Source: PCRSourcePredict, Command: "predict-pcr11 --sha256"},
-			},
-		},
-		{
-			name:      "Predict without command",
-			input:     "11p",
+			name:      "UKI source on a PCR other than 11",
+			input:     "7u",
 			shouldErr: true,
 		},
 		{
-			name:      "Predict with empty command",
-			input:     "11p:",
+			name:      "UKI with empty path",
+			input:     "11u:",
+			shouldErr: true,
+		},
+		{
+			name:      "Removed predict source is rejected",
+			input:     "11p:/usr/bin/tpm2-pcr11predict",
 			shouldErr: true,
 		},
 		{
@@ -343,12 +341,12 @@ func TestPCRSpecsToString(t *testing.T) {
 			expected: "0e,2,7e",
 		},
 		{
-			name: "With predict",
+			name: "With UKI",
 			specs: []PCRSpec{
 				{Index: 0, Source: PCRSourceEventlog},
-				{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict"},
+				{Index: 11, Source: PCRSourceUKI, Command: "/boot/EFI/Linux/arch-linux.efi"},
 			},
-			expected: "0e,11p:tpm2-pcr11predict",
+			expected: "0e,11u:/boot/EFI/Linux/arch-linux.efi",
 		},
 		{
 			name:     "Empty",
@@ -382,8 +380,8 @@ func TestPCRSourceString(t *testing.T) {
 	if PCRSourceEventlog.String() != "eventlog" {
 		t.Errorf("Eventlog String() = %q, want \"eventlog\"", PCRSourceEventlog.String())
 	}
-	if PCRSourcePredict.String() != "predict" {
-		t.Errorf("Predict String() = %q, want \"predict\"", PCRSourcePredict.String())
+	if PCRSourceUKI.String() != "uki" {
+		t.Errorf("UKI String() = %q, want \"uki\"", PCRSourceUKI.String())
 	}
 }
 
@@ -395,8 +393,8 @@ func TestPCRSourceSuffix(t *testing.T) {
 	if PCRSourceEventlog.Suffix() != "e" {
 		t.Errorf("Eventlog Suffix() = %q, want \"e\"", PCRSourceEventlog.Suffix())
 	}
-	if PCRSourcePredict.Suffix() != "p" {
-		t.Errorf("Predict Suffix() = %q, want \"p\"", PCRSourcePredict.Suffix())
+	if PCRSourceUKI.Suffix() != "u" {
+		t.Errorf("UKI Suffix() = %q, want \"u\"", PCRSourceUKI.Suffix())
 	}
 }
 
@@ -455,7 +453,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 						{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-						{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
 					SignedBranchDigest: make([]byte, 32),
 					EventlogInfo: &EventlogInfo{
@@ -958,8 +956,8 @@ func TestUnmarshalIncompatibleVersion(t *testing.T) {
 	if !strings.Contains(err.Error(), "v1") {
 		t.Errorf("Expected error to mention found v1, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "v6") {
-		t.Errorf("Expected error to mention requires v6, got: %v", err)
+	if !strings.Contains(err.Error(), "v7") {
+		t.Errorf("Expected error to mention requires v7, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "tpm2-kira seal") {
 		t.Errorf("Expected error to suggest re-sealing, got: %v", err)
@@ -1041,16 +1039,16 @@ func TestPeekBlobVersion(t *testing.T) {
 			expectedSize:       30,
 		},
 		{
-			name: "Version 6 blob (v6 layout: appVersionLen at offset 8)",
+			name: "Current version blob (appVersionLen at offset 8)",
 			data: func() []byte {
 				d := make([]byte, 30)
-				binary.LittleEndian.PutUint32(d[0:4], 6)  // version 6
+				binary.LittleEndian.PutUint32(d[0:4], CurrentBlobVersion)
 				binary.LittleEndian.PutUint32(d[4:8], 20) // payloadLen (doesn't matter for peek)
 				binary.LittleEndian.PutUint32(d[8:12], 5) // appVersionLen = 5
 				copy(d[12:], "3.0.0")
 				return d
 			}(),
-			expectedVersion:    6,
+			expectedVersion:    CurrentBlobVersion,
 			expectedAppVersion: "3.0.0",
 			expectedSize:       30,
 		},
@@ -1190,11 +1188,11 @@ func TestHasEventlogPCRs(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "Predict only does not count as eventlog",
+			name: "UKI only does not count as eventlog",
 			blob: &SealedBlob{
 				Payload: SealedBlobPayload{
 					PCRDigests: []PCRDigestPair{
-						{Index: 11, Source: PCRSourcePredict, Command: "cmd"},
+						{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi"},
 					},
 				},
 			},
@@ -1221,8 +1219,8 @@ func TestHasEventlogPCRs(t *testing.T) {
 	}
 }
 
-// TestHasPredictPCRs tests the HasPredictPCRs method
-func TestHasPredictPCRs(t *testing.T) {
+// TestHasUKIPCRs tests the HasUKIPCRs method
+func TestHasUKIPCRs(t *testing.T) {
 	tests := []struct {
 		name     string
 		blob     *SealedBlob
@@ -1253,23 +1251,23 @@ func TestHasPredictPCRs(t *testing.T) {
 			expected: false,
 		},
 		{
-			name: "Has predict",
+			name: "Has UKI",
 			blob: &SealedBlob{
 				Payload: SealedBlobPayload{
 					PCRDigests: []PCRDigestPair{
 						{Index: 0, Source: PCRSourceEventlog},
-						{Index: 11, Source: PCRSourcePredict, Command: "cmd"},
+						{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi"},
 					},
 				},
 			},
 			expected: true,
 		},
 		{
-			name: "Predict only",
+			name: "UKI only",
 			blob: &SealedBlob{
 				Payload: SealedBlobPayload{
 					PCRDigests: []PCRDigestPair{
-						{Index: 11, Source: PCRSourcePredict, Command: "cmd"},
+						{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi"},
 					},
 				},
 			},
@@ -1288,7 +1286,7 @@ func TestHasPredictPCRs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := tt.blob.HasPredictPCRs()
+			result := tt.blob.HasUKIPCRs()
 			if result != tt.expected {
 				t.Errorf("Expected %v, got %v", tt.expected, result)
 			}
@@ -1326,25 +1324,25 @@ func TestGetEventlogPCRIndices(t *testing.T) {
 	}
 }
 
-// TestGetPredictPCRIndices tests extracting predict PCR indices
-func TestGetPredictPCRIndices(t *testing.T) {
+// TestGetUKIPCRIndices tests extracting UKI PCR indices
+func TestGetUKIPCRIndices(t *testing.T) {
 	blob := &SealedBlob{
 		Payload: SealedBlobPayload{
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Source: PCRSourceEventlog},
 				{Index: 2, Source: PCRSourceRegister},
 				{Index: 7, Source: PCRSourceEventlog},
-				{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict"},
+				{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi"},
 			},
 		},
 	}
 
-	predictIndices := blob.GetPredictPCRIndices()
-	if len(predictIndices) != 1 {
-		t.Fatalf("Expected 1 predict index, got %d", len(predictIndices))
+	ukiIndices := blob.GetUKIPCRIndices()
+	if len(ukiIndices) != 1 {
+		t.Fatalf("Expected 1 uki index, got %d", len(ukiIndices))
 	}
-	if predictIndices[0] != 11 {
-		t.Errorf("Expected [11], got %v", predictIndices)
+	if ukiIndices[0] != 11 {
+		t.Errorf("Expected [11], got %v", ukiIndices)
 	}
 
 	eventlogIndices := blob.GetEventlogPCRIndices()
@@ -1369,7 +1367,7 @@ func TestGetPCRSpecs(t *testing.T) {
 				{Index: 0, Source: PCRSourceEventlog},
 				{Index: 2, Source: PCRSourceRegister},
 				{Index: 7, Source: PCRSourceEventlog},
-				{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict"},
+				{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi"},
 			},
 		},
 	}
@@ -1383,7 +1381,7 @@ func TestGetPCRSpecs(t *testing.T) {
 		{Index: 0, Source: PCRSourceEventlog},
 		{Index: 2, Source: PCRSourceRegister},
 		{Index: 7, Source: PCRSourceEventlog},
-		{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict"},
+		{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi"},
 	}
 
 	for i, spec := range specs {
@@ -2047,8 +2045,8 @@ func TestValidateNVRAMIndex(t *testing.T) {
 }
 
 func TestCurrentBlobVersion(t *testing.T) {
-	if CurrentBlobVersion != 6 {
-		t.Errorf("CurrentBlobVersion should be 6, got %d", CurrentBlobVersion)
+	if CurrentBlobVersion != 7 {
+		t.Errorf("CurrentBlobVersion should be 7, got %d", CurrentBlobVersion)
 	}
 }
 
@@ -2516,18 +2514,18 @@ func TestPCRSourceUnknown(t *testing.T) {
 	}
 }
 
-func TestPCRSourcePredict(t *testing.T) {
-	p := PCRSourcePredict
-	if p.String() != "predict" {
-		t.Errorf("Predict String() = %q, want \"predict\"", p.String())
+func TestPCRSourceUKI(t *testing.T) {
+	u := PCRSourceUKI
+	if u.String() != "uki" {
+		t.Errorf("UKI String() = %q, want \"uki\"", u.String())
 	}
-	if p.Suffix() != "p" {
-		t.Errorf("Predict Suffix() = %q, want \"p\"", p.Suffix())
+	if u.Suffix() != "u" {
+		t.Errorf("UKI Suffix() = %q, want \"u\"", u.Suffix())
 	}
 }
 
-func TestParsePCRSpecsPredictRoundTrip(t *testing.T) {
-	input := "0e,2,11p:tpm2-pcr11predict"
+func TestParsePCRSpecsUKIRoundTrip(t *testing.T) {
+	input := "0e,2,11u:/boot/EFI/Linux/arch-linux.efi"
 	specs, err := ParsePCRSpecs(input)
 	if err != nil {
 		t.Fatalf("ParsePCRSpecs failed: %v", err)
@@ -2538,8 +2536,8 @@ func TestParsePCRSpecsPredictRoundTrip(t *testing.T) {
 	}
 }
 
-func TestParsePCRSpecsPredictAbsolutePath(t *testing.T) {
-	input := "11p:/usr/bin/tpm2-pcr11predict"
+func TestParsePCRSpecsUKIAbsolutePath(t *testing.T) {
+	input := "11u:/boot/EFI/Linux/other.efi"
 	specs, err := ParsePCRSpecs(input)
 	if err != nil {
 		t.Fatalf("ParsePCRSpecs failed: %v", err)
@@ -2550,28 +2548,18 @@ func TestParsePCRSpecsPredictAbsolutePath(t *testing.T) {
 	if specs[0].Index != 11 {
 		t.Errorf("Index = %d, want 11", specs[0].Index)
 	}
-	if specs[0].Source != PCRSourcePredict {
-		t.Errorf("Source = %v, want predict", specs[0].Source)
+	if specs[0].Source != PCRSourceUKI {
+		t.Errorf("Source = %v, want uki", specs[0].Source)
 	}
-	if specs[0].Command != "/usr/bin/tpm2-pcr11predict" {
-		t.Errorf("Command = %q, want /usr/bin/tpm2-pcr11predict", specs[0].Command)
+	if specs[0].Command != "/boot/EFI/Linux/other.efi" {
+		t.Errorf("Command = %q, want /boot/EFI/Linux/other.efi", specs[0].Command)
 	}
 }
 
-func TestRunPredictCommand(t *testing.T) {
-	t.Run("Empty command is rejected", func(t *testing.T) {
-		_, err := RunPredictCommand("", 32, false)
-		if err == nil {
-			t.Error("Expected error for empty command, got nil")
-		}
-	})
-
-	t.Run("Non-existent command fails", func(t *testing.T) {
-		_, err := RunPredictCommand("/nonexistent/binary/that/does/not/exist", 32, false)
-		if err == nil {
-			t.Error("Expected error for non-existent command, got nil")
-		}
-	})
+func TestParsePCRSpecsRejectsRemovedPredictSource(t *testing.T) {
+	if _, err := ParsePCRSpecs("11p:/usr/bin/tpm2-pcr11predict"); err == nil {
+		t.Error("Expected the removed predict source to be rejected, got nil")
+	}
 }
 
 func TestPCRHashAlgoUnknown(t *testing.T) {
@@ -3170,7 +3158,7 @@ func TestMarshalPayloadUnmarshalPayloadRoundTrip(t *testing.T) {
 		PCRDigests: []PCRDigestPair{
 			{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-			{Index: 11, Source: PCRSourcePredict, Command: "tpm2-pcr11predict", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+			{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 		},
 		SignedBranchDigest: make([]byte, 32),
 		EventlogInfo: &EventlogInfo{

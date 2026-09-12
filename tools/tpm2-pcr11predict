@@ -1,0 +1,75 @@
+#!/bin/bash
+# Predict the PCR 11 value of a unified kernel image at tpm2-kira's measure point.
+#
+# tpm2-kira computes this internally via the 'u' PCR source ("11u", or
+# "11u:/path.efi"), which needs neither objcopy nor systemd-measure. This script
+# is kept as an INDEPENDENT CROSS-CHECK of that built-in implementation:
+#
+#   tpm2-pcr11predict                 # via systemd-measure
+#   tpm2-kira seal --pcrs 11u --debug # via the built-in implementation
+#
+# The two must agree. Override the defaults via the environment:
+#   UKI=/boot/EFI/Linux/other.efi tpm2-pcr11predict
+set -euo pipefail
+
+UKI="${UKI:-/boot/EFI/Linux/arch-linux.efi}"
+SYSTEMDMEASURE="${SYSTEMDMEASURE:-/usr/lib/systemd/systemd-measure}"
+# systemd-pcrphase-initrd extends this before tpm2-kira reads PCR 11.
+PHASE="${PHASE:-enter-initrd}"
+
+for tool in objcopy "$SYSTEMDMEASURE"; do
+    command -v "$tool" > /dev/null 2>&1 || {
+        echo "tpm2-pcr11predict: required tool not found: $tool" >&2
+        exit 1
+    }
+done
+
+[[ -r $UKI ]] || {
+    echo "tpm2-pcr11predict: cannot read unified kernel image: $UKI" >&2
+    exit 1
+}
+
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+# Extract every section that systemd-stub measures into PCR 11. Only sections
+# actually present in the UKI are extracted; missing ones are skipped and not
+# passed to systemd-measure.
+for section in .osrel .cmdline .initrd .splash .dtb .sbat .pcrpkey .uname .linux; do
+    objcopy -O binary --only-section="$section" "$UKI" "$tmpdir/$section" 2> /dev/null || true
+done
+
+# Build the systemd-measure argument list from whatever was extracted.
+# All flags take file paths (including --cmdline).
+args=()
+[[ -s $tmpdir/.linux ]] && args+=(--linux="$tmpdir/.linux")
+[[ -s $tmpdir/.osrel ]] && args+=(--osrel="$tmpdir/.osrel")
+[[ -s $tmpdir/.cmdline ]] && args+=(--cmdline="$tmpdir/.cmdline")
+[[ -s $tmpdir/.initrd ]] && args+=(--initrd="$tmpdir/.initrd")
+[[ -s $tmpdir/.splash ]] && args+=(--splash="$tmpdir/.splash")
+[[ -s $tmpdir/.dtb ]] && args+=(--dtb="$tmpdir/.dtb")
+[[ -s $tmpdir/.sbat ]] && args+=(--sbat="$tmpdir/.sbat")
+[[ -s $tmpdir/.pcrpkey ]] && args+=(--pcrpkey="$tmpdir/.pcrpkey")
+[[ -s $tmpdir/.uname ]] && args+=(--uname="$tmpdir/.uname")
+
+(( ${#args[@]} > 0 )) || {
+    echo "tpm2-pcr11predict: $UKI contains no measurable sections" >&2
+    exit 1
+}
+
+measurement=$("$SYSTEMDMEASURE" calculate "${args[@]}" --phase="$PHASE" --bank sha256 2>&1) || {
+    echo "tpm2-pcr11predict: systemd-measure failed:" >&2
+    echo "$measurement" >&2
+    exit 1
+}
+
+hash=$(grep -oP '(?<=sha256=)[0-9a-f]+' <<< "$measurement" | head -1)
+
+# An empty or short digest here would otherwise be sealed as a valid policy.
+[[ $hash =~ ^[0-9a-f]{64}$ ]] || {
+    echo "tpm2-pcr11predict: could not parse a sha256 digest from systemd-measure output:" >&2
+    echo "$measurement" >&2
+    exit 1
+}
+
+echo "$hash"

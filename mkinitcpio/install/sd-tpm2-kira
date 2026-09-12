@@ -1,5 +1,41 @@
 #!/bin/bash
 
+# Units that measure into PCRs before tpm2-kira runs. Their presence changes the
+# values tpm2-kira must seal against, so the verdict is reported and handed to
+# the post hook rather than being guessed at reseal time.
+MEASURE_POINT_STATE=/run/tpm2-kira/measure-point.state
+
+_unit_wired() {
+    local name=$1
+    compgen -G "$BUILDROOT/usr/lib/systemd/system/*.wants/$name" > /dev/null ||
+        compgen -G "$BUILDROOT/etc/systemd/system/*.wants/$name" > /dev/null
+}
+
+_report_measure_point() {
+    local -a active=()
+    local unit
+
+    for unit in systemd-pcrosseparator.service systemd-pcrphase-initrd.service; do
+        if [[ -e $BUILDROOT/usr/lib/systemd/system/$unit ]]; then
+            if _unit_wired "$unit"; then
+                active+=("$unit")
+            else
+                warning "tpm2-kira: $unit is present but not enabled in this initramfs"
+            fi
+        fi
+    done
+
+    mkdir -p "$(dirname "$MEASURE_POINT_STATE")"
+    if (( ${#active[@]} > 0 )); then
+        printf 'on\n' > "$MEASURE_POINT_STATE"
+        plain "tpm2-kira: measure-point units active: ${active[*]}"
+        plain "tpm2-kira:   sealing against post-extend PCR values (os-separator on PCRs 0-7,9,12-14; enter-initrd on PCR 11)"
+    else
+        printf 'off\n' > "$MEASURE_POINT_STATE"
+        plain "tpm2-kira: no systemd measure-point units in this initramfs; sealing against end-of-firmware values"
+    fi
+}
+
 build() {
     local mod
 
@@ -11,6 +47,8 @@ build() {
 
     # Add systemd service dependency
     add_systemd_unit tpm2-kira.service
+
+    _report_measure_point
 
     # Run tpm2-kira setup to fullfil initial setup or skip, as already configured
     tpm2-kira setup
