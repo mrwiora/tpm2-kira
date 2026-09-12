@@ -176,13 +176,33 @@ The mkinitcpio install hook inspects the image being built and passes the right
 value to `reseal`, which is what makes the first rebuild after these units
 appear behave correctly.
 
-### SHA-1 fallback
+### TPMs whose event log has no SHA-256 digests
 
-If your firmware doesn't provide SHA-256 eventlog digests:
+Some firmware writes a SHA-1-only event log even when the TPM has a SHA-256 PCR
+bank. The `e` source then has nothing to replay in the selected bank, and
+tpm2-kira refuses rather than sealing the resulting all-zero value:
+
+```
+Error: PCR 0 has no SHA-256 digests in the event log ... (digests present for this PCR: SHA-1).
+Replaying it would yield an all-zero value that this system will never produce.
+```
+
+Two ways forward:
 
 ```bash
-tpm2-kira seal --sha1 --pcrs "0e,2e,7e"
+# Preferred: keep SHA-256, drop eventlog reconstruction for these PCRs.
+# PCRs 0-7 do not change between the measure point and seal time, so the
+# register source produces exactly the same value.
+tpm2-kira seal --pcrs "0,7"
+
+# Or reconstruct from the SHA-1 log. Requires a SHA-1 PCR bank on the TPM,
+# and binds the policy to SHA-1 PCR values.
+tpm2-kira seal --sha1 --pcrs "0e,7e"
 ```
+
+The SHA-256 value cannot be derived from a SHA-1 log — different banks hold
+different values, and several event types have digests that are not a plain
+hash of the logged payload, so re-hashing the payloads would be wrong.
 
 ### Custom signing keys
 

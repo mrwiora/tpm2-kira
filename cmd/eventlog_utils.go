@@ -7,6 +7,8 @@ import (
 	"hash"
 	"io"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/go-attestation/attest"
@@ -111,19 +113,27 @@ func (calc *EventlogPCRCalculator) CalculatePCRsFromEventlogPath(eventlogPath st
 	eventlogHash := sha256.Sum256(rawEventlog)
 
 	// Calculate PCR values by replaying the eventlog
-	pcrValues, totalEvents, processedEvents, err := calc.replayEventLog(events)
+	pcrValues, extendsPerPCR, totalEvents, processedEvents, err := calc.replayEventLog(events)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to replay eventlog: %w", err)
 	}
 
 	// Filter to only requested PCRs
 	filteredPCRs := make(map[int][]byte)
+	var missing []int
 	for _, pcrIndex := range calc.PCRIndices {
-		if pcrValue, exists := pcrValues[pcrIndex]; exists {
-			filteredPCRs[pcrIndex] = pcrValue
-		} else {
+		pcrValue, exists := pcrValues[pcrIndex]
+		if !exists {
 			return nil, nil, fmt.Errorf("PCR %d not found in eventlog calculations", pcrIndex)
 		}
+		if extendsPerPCR[pcrIndex] == 0 {
+			missing = append(missing, pcrIndex)
+			continue
+		}
+		filteredPCRs[pcrIndex] = pcrValue
+	}
+	if len(missing) > 0 {
+		return nil, nil, calc.bankError(eventLog, missing, eventlogPath)
 	}
 
 	// Create eventlog info
@@ -144,6 +154,59 @@ func (calc *EventlogPCRCalculator) CalculatePCRsFromEventlogPath(eventlogPath st
 	}
 
 	return filteredPCRs, eventlogInfo, nil
+}
+
+// EventlogBankError reports PCRs the event log carries no digests for in the
+// selected bank. Replaying those yields the PCR's reset value, which is a
+// well-formed digest the machine will never actually produce.
+type EventlogBankError struct {
+	PCRIndices   []int
+	Requested    PCRHashAlgo
+	Present      []string // hash algorithms the log does carry for these PCRs
+	EventlogPath string
+}
+
+func (e *EventlogBankError) Error() string {
+	present := "none"
+	if len(e.Present) > 0 {
+		present = strings.Join(e.Present, ", ")
+	}
+	return fmt.Sprintf("the event log %s carries no %s digests for PCR %s (it has: %s)",
+		e.EventlogPath, e.Requested.DisplayString(), formatPCRList(e.PCRIndices), present)
+}
+
+// HasSHA1 reports whether falling back to the SHA-1 bank could work.
+func (e *EventlogBankError) HasSHA1() bool {
+	return slices.Contains(e.Present, "SHA-1")
+}
+
+func formatPCRList(indices []int) string {
+	parts := make([]string, len(indices))
+	for i, idx := range indices {
+		parts[i] = fmt.Sprintf("%d", idx)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (calc *EventlogPCRCalculator) bankError(eventLog *attest.EventLog, indices []int, eventlogPath string) error {
+	var present []string
+	for _, candidate := range []struct {
+		name string
+		alg  attest.HashAlg
+	}{{"SHA-1", attest.HashSHA1}, {"SHA-256", attest.HashSHA256}} {
+		for _, event := range eventLog.Events(candidate.alg) {
+			if slices.Contains(indices, int(event.Index)) && len(event.Digest) > 0 {
+				present = append(present, candidate.name)
+				break
+			}
+		}
+	}
+	return &EventlogBankError{
+		PCRIndices:   indices,
+		Requested:    calc.HashAlgo,
+		Present:      present,
+		EventlogPath: eventlogPath,
+	}
 }
 
 // pcrIndicesToEventlogString formats PCR indices with 'e' suffix for error messages
@@ -189,8 +252,10 @@ func (calc *EventlogPCRCalculator) digestSize() int {
 	return calc.HashAlgo.DigestSize()
 }
 
-// replayEventLog replays the eventlog to calculate PCR values
-func (calc *EventlogPCRCalculator) replayEventLog(events []attest.Event) (map[int][]byte, int, int, error) {
+// replayEventLog replays the eventlog to calculate PCR values.
+// The returned map counts how many events actually extended each PCR, which
+// distinguishes "left at its reset value" from "no digests in this bank".
+func (calc *EventlogPCRCalculator) replayEventLog(events []attest.Event) (map[int][]byte, map[int]int, int, int, error) {
 	digestSize := calc.digestSize()
 
 	// Initialize PCR banks
@@ -227,6 +292,7 @@ func (calc *EventlogPCRCalculator) replayEventLog(events []attest.Event) (map[in
 
 	totalEvents := len(events)
 	processedEvents := 0
+	extendsPerPCR := make(map[int]int, len(calc.PCRIndices))
 
 	// Replay events
 	for _, event := range events {
@@ -261,13 +327,14 @@ func (calc *EventlogPCRCalculator) replayEventLog(events []attest.Event) (map[in
 		pcrs[pcrIndex] = hasher.Sum(nil)
 
 		processedEvents++
+		extendsPerPCR[pcrIndex]++
 
 		if calc.Debug && pcrIndex < 10 { // Limit debug output
 			fmt.Printf("  Extended PCR%d with digest %x -> PCR now: %x\n", pcrIndex, digest[:min(8, len(digest))], pcrs[pcrIndex][:min(8, len(pcrs[pcrIndex]))])
 		}
 	}
 
-	return pcrs, totalEvents, processedEvents, nil
+	return pcrs, extendsPerPCR, totalEvents, processedEvents, nil
 }
 
 // findStartupLocality looks for the StartupLocality event to determine PCR0 initial value
