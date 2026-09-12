@@ -427,6 +427,21 @@ Per source:
 | `e` eventlog | replay the firmware log, then apply the measure-point extends | PCRs 0–12 |
 | `u` uki | replay systemd-stub's section measurements from the image, then the boot phases | PCR 11 |
 
+> **The event log and the TPM banks are independent.** A machine can have a
+> SHA-256 PCR bank but a firmware event log that only carries SHA-1 digests.
+> The `e` source then has nothing to replay in the selected bank, and a naive
+> replay returns the PCR's all-zero reset value — a plausible-looking digest
+> that the machine will never produce. tpm2-kira counts the extends applied per
+> PCR and refuses in that case rather than sealing it.
+>
+> The SHA-256 value cannot be derived from a SHA-1 log: PCR values in different
+> banks are different values, and several event types (`EV_EFI_VARIABLE_*`,
+> `EV_SEPARATOR`) have digests that are not simply a hash of the logged payload,
+> so re-hashing the payloads would be wrong. On such a machine either use
+> `--sha1` (needs a SHA-1 PCR bank on the TPM) or the register source. For
+> PCRs 0–7 the register source is equivalent — they do not change between the
+> measure point and seal time — so nothing is lost by using it there.
+
 **Measure-point extends** (systemd hashes the literal word: no NUL terminator,
 no machine-id, no salt, so these are universal constants, not per-host values):
 
