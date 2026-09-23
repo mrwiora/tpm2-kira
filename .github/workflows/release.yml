@@ -84,16 +84,7 @@ jobs:
       - name: Update system and install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel git go namcap
-
-      - name: Validate Go version
-        run: |
-          GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
-          echo "Installed Go version: ${GO_VERSION}"
-          if ! go version | grep -qE 'go1\.(19|[2-9][0-9]|[3-9][0-9])\.' && ! go version | grep -qE 'go[2-9]\.' ; then
-            echo "ERROR: Go version 1.19 or higher required, found ${GO_VERSION}"
-            exit 1
-          fi
+          pacman -S --noconfirm base-devel git go namcap pacman-contrib
 
       - name: Create build user
         run: |
@@ -114,18 +105,30 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
           VERSION_CLEAN=${VERSION#v}
+          # An Arch pkgver may not contain '-', but a prerelease tag can.
+          PKGVER=${VERSION_CLEAN//-/}
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
           echo "VERSION_CLEAN=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
+          echo "PKGVER=${PKGVER}" >> $GITHUB_OUTPUT
 
-      - name: Update PKGBUILD version
+      - name: Update PKGBUILD version and checksums
         run: |
           cd packaging/aur
-          echo "Updating PKGBUILD version to ${{ steps.get_version.outputs.VERSION_CLEAN }}"
-          sed -i "s/pkgver=0.0.0/pkgver=${{ steps.get_version.outputs.VERSION_CLEAN }}/" PKGBUILD
-          if ! grep -q "pkgver=${{ steps.get_version.outputs.VERSION_CLEAN }}" PKGBUILD; then
-            echo "ERROR: Failed to update PKGBUILD version"
-            exit 1
-          fi
+          PKGVER=${{ steps.get_version.outputs.PKGVER }}
+          TAG=${{ steps.get_version.outputs.VERSION }}
+
+          sed -i "s/^pkgver=.*/pkgver=${PKGVER}/" PKGBUILD
+          sed -i "s|^_tag=.*|_tag=${TAG}|" PKGBUILD
+
+          grep -q "^pkgver=${PKGVER}$" PKGBUILD || { echo "ERROR: pkgver not set"; exit 1; }
+          grep -q "^_tag=${TAG}$" PKGBUILD || { echo "ERROR: _tag not set"; exit 1; }
+
+          # Replaces the SKIP placeholder with the real tarball hash.
+          chown builder:builder .
+          sudo -u builder updpkgsums
+          grep -q "SKIP" PKGBUILD && { echo "ERROR: sha256sums still SKIP"; exit 1; }
+
+          cat PKGBUILD
 
       - name: Build package
         run: |
@@ -139,11 +142,16 @@ jobs:
       - name: Check package with namcap
         run: |
           cd packaging/aur
-          namcap *.pkg.tar.zst || echo "namcap warnings/errors detected (non-fatal)"
+          namcap PKGBUILD *.pkg.tar.zst | tee namcap.log
+          if grep -q '^.*E: ' namcap.log; then
+            echo "ERROR: namcap reported errors"
+            exit 1
+          fi
 
       - name: Validate package contents
         run: |
           cd packaging/aur
+          PKGVER=${{ steps.get_version.outputs.PKGVER }}
 
           # Find the main package (not debug package)
           MAIN_PACKAGE=$(ls tpm2-kira-*.pkg.tar.zst | grep -v debug | head -1)
@@ -153,14 +161,40 @@ jobs:
             exit 1
           fi
 
+          # The previous PKGBUILD could silently emit 0.0.0; never again.
+          case "$MAIN_PACKAGE" in
+            tpm2-kira-${PKGVER}-*) ;;
+            *) echo "ERROR: ${MAIN_PACKAGE} does not carry version ${PKGVER}"; exit 1 ;;
+          esac
+
           echo "Validating package: $MAIN_PACKAGE"
           mkdir -p /tmp/package-test
           tar -xf "$MAIN_PACKAGE" -C /tmp/package-test
 
+          for path in \
+            usr/bin/tpm2-kira \
+            usr/lib/systemd/system/tpm2-kira.service \
+            usr/lib/initcpio/install/sd-tpm2-kira \
+            usr/lib/initcpio/post/sd-tpm2-kira
+          do
+            if [[ ! -e "/tmp/package-test/${path}" ]]; then
+              echo "ERROR: ${path} missing from the package"
+              exit 1
+            fi
+          done
+
           if [[ ! -x "/tmp/package-test/usr/bin/tpm2-kira" ]]; then
-            echo "ERROR: tpm2-kira binary not found or not executable"
+            echo "ERROR: tpm2-kira binary not executable"
             exit 1
           fi
+
+          # The unit must NOT be enabled on the host; the hook enables it in the image.
+          if [[ -e "/tmp/package-test/usr/lib/systemd/system/sysinit.target.wants/tpm2-kira.service" ]]; then
+            echo "ERROR: package force-enables tpm2-kira.service on the host"
+            exit 1
+          fi
+
+          "/tmp/package-test/usr/bin/tpm2-kira" version
 
       - name: Create package checksum
         run: |
@@ -175,6 +209,7 @@ jobs:
           path: |
             packaging/aur/tpm2-kira-[0-9]*.pkg.tar.zst
             packaging/aur/package-checksums.txt
+            packaging/aur/PKGBUILD
           retention-days: 1
 
   build-debian:
@@ -292,6 +327,80 @@ jobs:
           name: debian-package
           path: debpkg/
           retention-days: 1
+
+  publish-aur:
+    needs: [build-archlinux, release]
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    permissions:
+      contents: read
+    # Prereleases stay off AUR; it carries one current version per package.
+    if: ${{ !contains(github.ref_name, '-') }}
+
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git openssh
+
+      - name: Download the PKGBUILD that was actually built
+        uses: actions/download-artifact@v4
+        with:
+          name: archlinux-package
+          path: built/
+
+      - name: Configure AUR SSH access
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "$AUR_SSH_PRIVATE_KEY" ]; then
+            echo "ERROR: AUR_SSH_PRIVATE_KEY secret is not set"
+            exit 1
+          fi
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan -t rsa,ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/aur
+            IdentitiesOnly yes
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Publish to AUR
+        run: |
+          useradd -m builder
+          TAG=${GITHUB_REF#refs/tags/}
+
+          git clone ssh://aur@aur.archlinux.org/tpm2-kira.git aur-repo
+          cd aur-repo
+
+          # An AUR repository holds only these two files.
+          cp ../built/PKGBUILD PKGBUILD
+          chown -R builder:builder .
+          sudo -u builder makepkg --printsrcinfo > .SRCINFO
+
+          PKGVER=$(awk -F' = ' '/^\tpkgver = /{print $2}' .SRCINFO)
+          if [ "v${PKGVER}" != "$TAG" ] && [ "${PKGVER}" != "${TAG#v}" ]; then
+            echo "ERROR: .SRCINFO pkgver '${PKGVER}' does not match tag '${TAG}'"
+            exit 1
+          fi
+
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+          git add PKGBUILD .SRCINFO
+
+          if git diff --cached --quiet; then
+            echo "AUR is already up to date for ${TAG}; nothing to push."
+            exit 0
+          fi
+
+          git commit -m "Update to ${TAG}"
+          git push origin master
+          echo "Published ${TAG} to AUR."
 
   release:
     needs: [build-binaries, build-archlinux, build-debian]
