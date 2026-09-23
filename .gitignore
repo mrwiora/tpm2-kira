@@ -26,6 +26,10 @@ debian/files
 debian/tpm2-kira/
 debian/*.substvars
 debian/*.debhelper.log
+debpkg/
+
+# Generated for offline/source builds, never committed
+vendor/
 *.swp
 *.swo
 *~

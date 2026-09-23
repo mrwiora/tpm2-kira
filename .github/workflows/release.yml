@@ -177,8 +177,122 @@ jobs:
             packaging/aur/package-checksums.txt
           retention-days: 1
 
+  build-debian:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:trixie
+    permissions:
+      contents: read
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential ca-certificates debhelper dpkg-dev git golang-go lintian xz-utils
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The package must build with the Go the distro actually ships, not a
+      # newer toolchain from setup-go, or CI proves nothing about installability.
+      - name: Record the distro toolchain
+        run: |
+          go version
+          dpkg-query -W -f='golang-go ${Version}\n' golang-go
+          echo "go directive in go.mod: $(awk '/^go /{print $2}' go.mod)"
+
+      - name: Set package version from tag
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION_CLEAN=${VERSION#v}
+          # A native package version may not contain '-'. '~' also sorts a
+          # prerelease BEFORE the final release, which is the intent.
+          VERSION_DEB=${VERSION_CLEAN//-/\~}
+
+          sed -i "1s/^tpm2-kira (.*)/tpm2-kira (${VERSION_DEB})/" debian/changelog
+          head -1 debian/changelog
+          grep -q "^tpm2-kira (${VERSION_DEB})" debian/changelog || {
+            echo "ERROR: could not set changelog version to ${VERSION_DEB}"
+            exit 1
+          }
+
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "VERSION_DEB=${VERSION_DEB}" >> $GITHUB_OUTPUT
+
+      # Vendoring here is what makes the emitted source package build offline.
+      - name: Vendor dependencies
+        run: |
+          go mod vendor
+          test -f vendor/modules.txt
+
+      - name: Build source and binary packages
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          dpkg-buildpackage -us -uc
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p debpkg
+          cp ../tpm2-kira_*.deb ../tpm2-kira_*.dsc ../tpm2-kira_*.tar.xz debpkg/
+          ls -la debpkg/
+
+      - name: Run lintian
+        run: |
+          lintian --no-tag-display-limit ../tpm2-kira_*.changes || \
+            echo "lintian findings above (non-fatal)"
+
+      - name: Validate package contents
+        run: |
+          DEB=$(ls debpkg/tpm2-kira_*.deb | head -1)
+          echo "Validating ${DEB}"
+          dpkg-deb -I "$DEB"
+          dpkg-deb -c "$DEB"
+
+          for path in \
+            ./usr/bin/tpm2-kira \
+            ./usr/share/initramfs-tools/hooks/tpm2-kira \
+            ./usr/share/initramfs-tools/scripts/init-premount/tpm2-kira \
+            ./etc/initramfs/post-update.d/tpm2-kira
+          do
+            dpkg-deb -c "$DEB" | awk '{print $NF}' | grep -qx "$path" || {
+              echo "ERROR: ${path} missing from the package"
+              exit 1
+            }
+          done
+
+          # The initramfs carries no libraries, so the binary must be static.
+          mkdir -p /tmp/debcheck
+          dpkg-deb -x "$DEB" /tmp/debcheck
+          file /tmp/debcheck/usr/bin/tpm2-kira
+          file /tmp/debcheck/usr/bin/tpm2-kira | grep -q "statically linked" || {
+            echo "ERROR: the packaged binary is not statically linked"
+            exit 1
+          }
+          test -x /tmp/debcheck/usr/share/initramfs-tools/hooks/tpm2-kira || {
+            echo "ERROR: initramfs hook is not executable"
+            exit 1
+          }
+          /tmp/debcheck/usr/bin/tpm2-kira version
+
+      - name: Create package checksums
+        run: |
+          cd debpkg
+          sha256sum tpm2-kira_* > debian-checksums.txt
+          cat debian-checksums.txt
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: debian-package
+          path: debpkg/
+          retention-days: 1
+
   release:
-    needs: [build-binaries, build-archlinux]
+    needs: [build-binaries, build-archlinux, build-debian]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -201,6 +315,13 @@ jobs:
           name: archlinux-package
           path: archlinux/
 
+      # Not 'debian/': that would collide with the packaging directory in the checkout.
+      - name: Download Debian package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: debian-package
+          path: debpkg/
+
       - name: Get package filename
         id: package_info
         run: |
@@ -213,6 +334,21 @@ jobs:
           echo "PACKAGE_FILE=${PACKAGE_FILE}" >> $GITHUB_OUTPUT
           echo "Selected package: ${PACKAGE_FILE}"
 
+          DEB_FILE=$(ls debpkg/tpm2-kira_*.deb | head -1 | xargs basename)
+          DSC_FILE=$(ls debpkg/tpm2-kira_*.dsc | head -1 | xargs basename)
+          SRC_FILE=$(ls debpkg/tpm2-kira_*.tar.xz | head -1 | xargs basename)
+          for f in "$DEB_FILE" "$DSC_FILE" "$SRC_FILE"; do
+            if [[ -z "$f" ]]; then
+              echo "ERROR: a Debian artifact is missing"
+              ls -la debpkg/
+              exit 1
+            fi
+          done
+          echo "DEB_FILE=${DEB_FILE}" >> $GITHUB_OUTPUT
+          echo "DSC_FILE=${DSC_FILE}" >> $GITHUB_OUTPUT
+          echo "SRC_FILE=${SRC_FILE}" >> $GITHUB_OUTPUT
+          echo "Selected Debian package: ${DEB_FILE}"
+
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -220,6 +356,9 @@ jobs:
         run: |
           VERSION=${{ needs.build-binaries.outputs.version }}
           PACKAGE_FILE=${{ steps.package_info.outputs.PACKAGE_FILE }}
+          DEB_FILE=${{ steps.package_info.outputs.DEB_FILE }}
+          DSC_FILE=${{ steps.package_info.outputs.DSC_FILE }}
+          SRC_FILE=${{ steps.package_info.outputs.SRC_FILE }}
 
           # Debug information
           echo "Working directory: $(pwd)"
@@ -232,6 +371,8 @@ jobs:
           ls -la dist/ || echo "No dist directory"
           echo "Available files in archlinux/:"
           ls -la archlinux/ || echo "No archlinux directory"
+          echo "Available files in debpkg/:"
+          ls -la debpkg/ || echo "No debpkg directory"
 
           # Check if release exists
           if gh release view ${VERSION} --repo ${GH_REPO} >/dev/null 2>&1; then
@@ -244,6 +385,12 @@ jobs:
             # Upload package artifacts
             gh release upload ${VERSION} archlinux/${PACKAGE_FILE} --clobber --repo ${GH_REPO}
             gh release upload ${VERSION} archlinux/package-checksums.txt --clobber --repo ${GH_REPO}
+
+            # Upload Debian artifacts
+            gh release upload ${VERSION} debpkg/${DEB_FILE} --clobber --repo ${GH_REPO}
+            gh release upload ${VERSION} debpkg/${DSC_FILE} --clobber --repo ${GH_REPO}
+            gh release upload ${VERSION} debpkg/${SRC_FILE} --clobber --repo ${GH_REPO}
+            gh release upload ${VERSION} debpkg/debian-checksums.txt --clobber --repo ${GH_REPO}
 
           else
             echo "Creating new release ${VERSION}..."
@@ -263,6 +410,11 @@ jobs:
           - **Installation**: \`sudo pacman -U ${PACKAGE_FILE}\`
           - **Dependencies**: tpm2-tools>=5.0, tpm2-tss>=3.0.0
 
+          #### Debian Package
+          - **Package**: \`${DEB_FILE}\` (built against Debian 13 "trixie")
+          - **Installation**: \`sudo apt install ./${DEB_FILE}\`
+          - **Source**: \`${DSC_FILE}\` + \`${SRC_FILE}\` (vendored, builds offline)
+
           ### Installation
 
           #### From Binary
@@ -276,6 +428,14 @@ jobs:
           \`\`\`bash
           wget https://github.com/mrwiora/tpm2-kira/releases/download/${VERSION}/${PACKAGE_FILE}
           sudo pacman -U ${PACKAGE_FILE}
+          \`\`\`
+
+          #### Debian 13
+          \`\`\`bash
+          wget https://github.com/mrwiora/tpm2-kira/releases/download/${VERSION}/${DEB_FILE}
+          sudo apt install ./${DEB_FILE}
+          sudo tpm2-kira setup
+          sudo update-initramfs -u
           \`\`\`
 
           For build from source instructions, see README.md.
@@ -294,6 +454,10 @@ jobs:
             RELEASE_CMD="$RELEASE_CMD dist/checksums.txt"
             RELEASE_CMD="$RELEASE_CMD archlinux/${PACKAGE_FILE}"
             RELEASE_CMD="$RELEASE_CMD archlinux/package-checksums.txt"
+            RELEASE_CMD="$RELEASE_CMD debpkg/${DEB_FILE}"
+            RELEASE_CMD="$RELEASE_CMD debpkg/${DSC_FILE}"
+            RELEASE_CMD="$RELEASE_CMD debpkg/${SRC_FILE}"
+            RELEASE_CMD="$RELEASE_CMD debpkg/debian-checksums.txt"
 
             # Add repository specification to command
             RELEASE_CMD="$RELEASE_CMD --repo ${GH_REPO}"
@@ -314,6 +478,8 @@ jobs:
           echo "  • Binary checksums: checksums.txt"
           echo "  • Arch Linux package: ${PACKAGE_FILE}"
           echo "  • Package checksums: package-checksums.txt"
+          echo "  • Debian package: ${{ steps.package_info.outputs.DEB_FILE }}"
+          echo "  • Debian source: ${{ steps.package_info.outputs.SRC_FILE }}"
           echo ""
           echo "🔗 Release URL: https://github.com/mrwiora/tpm2-kira/releases/tag/${VERSION}"
           echo ""
