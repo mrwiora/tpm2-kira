@@ -11,6 +11,9 @@
 # Go workspace file
 go.work
 
+# Python tooling
+tools/__pycache__/
+
 # IDE specific files
 .vscode/
 .idea/
