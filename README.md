@@ -357,16 +357,29 @@ does not apply. The `.deb` installs two scripts instead:
 | Path | Role |
 |---|---|
 | `/usr/share/initramfs-tools/hooks/tpm2-kira` | copies the binary into the image |
-| `/usr/share/initramfs-tools/scripts/init-premount/tpm2-kira` | prints the code at boot |
+| `/usr/share/initramfs-tools/scripts/init-premount/tpm2-kira` | starts the display at boot |
+| `/usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira` | stops it before the real root takes over |
+| `/etc/tpm2-kira/initramfs.conf` | display mode |
 
 `/init` runs `init-premount` before `local-top/cryptroot` asks for the
 passphrase, which is what puts the code on screen first.
 
-Unlike the Arch integration this prints the code **once** rather than looping.
-Nothing in this initramfs arbitrates the console between a background writer and
-cryptsetup's prompt, so a loop would interleave with it. TOTP codes roll every
-30 seconds; if the code has expired by the time you look, reboot or unlock and
-check with `tpm2-kira reveal`.
+### Display mode
+
+`/etc/tpm2-kira/initramfs.conf` selects what happens at boot:
+
+| `TPM2_KIRA_INITRAMFS_MODE` | Behaviour |
+|---|---|
+| `run` (default) | Keeps showing codes until the disk is unlocked |
+| `once` | Prints a single code and carries on booting |
+
+In `run` mode the display refreshes once per 30-second TOTP window, writing to
+the same console as the passphrase prompt. The prompt scrolls up as codes
+arrive; typing is unaffected, since the passphrase is not echoed anyway. The
+`init-bottom` script stops the process before `run-init` replaces the initramfs,
+so nothing is left holding it open.
+
+Edit the file and run `sudo update-initramfs -u` to apply a change.
 
 ### Choosing PCRs on Debian
 
@@ -559,8 +572,10 @@ in the TPM. Delete the slot first, then the directory.
 │   └── mkinitcpio.conf.example
 ├── initramfs-tools/         # Early boot scripts for Debian
 │   ├── hooks/tpm2-kira              # Copies the binary into the image
-│   ├── scripts/init-premount/tpm2-kira  # Prints the code before disk unlock
-│   └── post-update.d/tpm2-kira      # Reseal reminder after a rebuild
+│   ├── scripts/init-premount/tpm2-kira  # Starts the display before disk unlock
+│   ├── scripts/init-bottom/tpm2-kira    # Stops it before switching root
+│   ├── post-update.d/tpm2-kira      # Reseal reminder after a rebuild
+│   └── initramfs.conf               # Display mode (run / once)
 ├── systemd/system/          # systemd service for boot-time TOTP display
 ├── debian/                  # Debian package definition
 ├── packaging/aur/           # Arch Linux PKGBUILD

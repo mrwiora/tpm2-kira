@@ -39,7 +39,19 @@ if [ ! -c /dev/tpmrm0 ]; then
     exit 0
 fi
 
-# One shot, not the 'run' loop: nothing in this initramfs arbitrates the console
-# between a background writer and cryptsetup's passphrase prompt.
+mode=run
+[ -r /etc/tpm2-kira/initramfs.conf ] && . /etc/tpm2-kira/initramfs.conf
+mode=${TPM2_KIRA_INITRAMFS_MODE:-run}
+
 # Never allow a failure here to abort boot.
-/usr/bin/tpm2-kira reveal >/dev/console 2>&1 || true
+case "$mode" in
+once)
+    /usr/bin/tpm2-kira reveal >/dev/console 2>&1 || true
+    ;;
+*)
+    # Refreshes once per 30-second TOTP window, so it shares the console with
+    # cryptsetup's prompt without drowning it. init-bottom stops it again.
+    /usr/bin/tpm2-kira run >/dev/console 2>&1 &
+    echo $! > /run/tpm2-kira.pid
+    ;;
+esac

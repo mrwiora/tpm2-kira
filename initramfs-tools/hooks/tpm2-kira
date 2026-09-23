@@ -31,6 +31,10 @@ fi
 
 copy_exec "$kira" /usr/bin/tpm2-kira
 
+if [ -r /etc/tpm2-kira/initramfs.conf ]; then
+    copy_file config /etc/tpm2-kira/initramfs.conf /etc/tpm2-kira/initramfs.conf
+fi
+
 # Built in on most kernels, but a module on some machines.
 manual_add_modules tpm_tis
 manual_add_modules tpm_crb

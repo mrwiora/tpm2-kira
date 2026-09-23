@@ -256,7 +256,9 @@ jobs:
             ./usr/bin/tpm2-kira \
             ./usr/share/initramfs-tools/hooks/tpm2-kira \
             ./usr/share/initramfs-tools/scripts/init-premount/tpm2-kira \
-            ./etc/initramfs/post-update.d/tpm2-kira
+            ./usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira \
+            ./etc/initramfs/post-update.d/tpm2-kira \
+            ./etc/tpm2-kira/initramfs.conf
           do
             dpkg-deb -c "$DEB" | awk '{print $NF}' | grep -qx "$path" || {
               echo "ERROR: ${path} missing from the package"
