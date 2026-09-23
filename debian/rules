@@ -1,0 +1,33 @@
+#!/usr/bin/make -f
+
+export CGO_ENABLED = 0
+export GOCACHE = $(CURDIR)/debian/.gocache
+export GOFLAGS = -mod=readonly
+# Fail if go.mod outgrows the distro Go rather than silently fetching a toolchain.
+export GOTOOLCHAIN = local
+
+VERSION := $(shell dpkg-parsechangelog -SVersion)
+
+%:
+	dh $@
+
+# The repository Makefile is not this package's build system: its install target
+# calls sudo. Every dh_auto_* step is therefore stated explicitly.
+override_dh_auto_configure:
+
+override_dh_auto_build:
+	go build -ldflags "-s -w -X main.Version=$(VERSION)" -o tpm2-kira .
+
+override_dh_auto_test:
+	go test -tags=unit ./cmd/...
+
+override_dh_auto_install:
+
+override_dh_auto_clean:
+	rm -rf debian/.gocache tpm2-kira
+
+# Static Go binary, already stripped by -ldflags: dwz cannot process it and
+# there are no shared libraries to derive dependencies from.
+override_dh_dwz:
+
+override_dh_shlibdeps:

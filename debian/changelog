@@ -1,0 +1,7 @@
+tpm2-kira (0.2.3) unstable; urgency=medium
+
+  * Initial Debian packaging.
+  * Show TOTP codes from an initramfs-tools init-premount script, for GRUB
+    systems that have no systemd in the initramfs.
+
+ -- Matthias Robert Wiora <matthias@wiora.io>  Wed, 23 Sep 2026 23:45:00 +0000

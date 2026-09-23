@@ -14,6 +14,15 @@ go.work
 # IDE specific files
 .vscode/
 .idea/
+
+# Debian package build artifacts
+debian/.debhelper/
+debian/.gocache/
+debian/debhelper-build-stamp
+debian/files
+debian/tpm2-kira/
+debian/*.substvars
+debian/*.debhelper.log
 *.swp
 *.swo
 *~
