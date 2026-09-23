@@ -1,5 +1,6 @@
 # Binaries for programs and plugins
-tpm2-kira
+# Anchored: unanchored, this also swallows the initramfs scripts named tpm2-kira.
+/tpm2-kira
 
 # Test binary, built with `go test -c`
 *.test
