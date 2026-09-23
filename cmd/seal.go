@@ -44,6 +44,8 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	}
 	fmt.Println()
 
+	WarnAboutPCRSelection(specs)
+
 	// Generate TOTP secret
 	fmt.Println("Generating TOTP secret...")
 	dataToSeal, err := generateTOTPSecret()

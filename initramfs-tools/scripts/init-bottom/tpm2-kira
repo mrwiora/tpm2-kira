@@ -1,0 +1,31 @@
+#!/bin/sh
+# Stop the background TOTP display before the real root takes over.
+#
+# run-init wipes the initramfs, so a process still running from it has to go.
+
+set -e
+
+PREREQ=""
+
+prereqs() {
+    echo "$PREREQ"
+}
+
+case "$1" in
+prereqs)
+    prereqs
+    exit 0
+    ;;
+esac
+
+PIDFILE=/run/tpm2-kira.pid
+
+[ -r "$PIDFILE" ] || exit 0
+
+read -r pid < "$PIDFILE"
+rm -f "$PIDFILE"
+
+# Nothing to flush or save, so there is no reason to wait for a graceful exit.
+[ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
+
+exit 0

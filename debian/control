@@ -1,0 +1,30 @@
+Source: tpm2-kira
+Section: admin
+Priority: optional
+Maintainer: Matthias Robert Wiora <matthias@wiora.io>
+Build-Depends:
+ debhelper-compat (= 13),
+ golang-go (>= 2:1.24~),
+Standards-Version: 4.7.0
+Homepage: https://github.com/mrwiora/tpm2-kira
+Rules-Requires-Root: no
+
+Package: tpm2-kira
+Architecture: any
+Depends:
+ initramfs-tools,
+ ${misc:Depends},
+Suggests: tpm2-tools
+Description: TPM2-sealed TOTP codes shown before disk unlock
+ tpm2-kira seals a TOTP secret into TPM NVRAM under a PCR policy and prints the
+ current code from the initramfs, before the root filesystem passphrase is
+ requested. A code that appears proves the measured boot chain still matches the
+ state the secret was sealed against; a missing code means something in that
+ chain changed.
+ .
+ Recovery runs through a PolicyOR branch authorised by an ECDSA signing key, so
+ a legitimate firmware or bootloader update can be re-bound with
+ "tpm2-kira reseal" without re-enrolling the authenticator app.
+ .
+ On Debian the codes are shown from an initramfs-tools init-premount script, so
+ no systemd in the initramfs is required.

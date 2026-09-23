@@ -34,7 +34,7 @@ For more details on the cryptographic design, see [SECURITY-BACKGROUND.md](SECUR
 
 **Software:**
 - Linux with TPM 2.0 kernel support (`/dev/tpm0` or `/dev/tpmrm0`)
-- Go ≥ 1.25 (build only)
+- Go ≥ 1.24 (build only)
 
 **Supported architectures:** x86_64, aarch64
 
@@ -81,6 +81,26 @@ makepkg -si
 ```
 
 Or use your preferred AUR helper.
+
+### Debian / Ubuntu (.deb)
+
+```bash
+sudo apt install build-essential debhelper golang-go
+dpkg-buildpackage -us -uc -b
+sudo dpkg -i ../tpm2-kira_*_amd64.deb
+```
+
+The package installs the binary, the initramfs-tools hook and boot script, and
+rebuilds the initramfs. It does **not** run `setup`, because that generates a
+new TOTP secret and prints a QR code you need to scan:
+
+```bash
+sudo tpm2-kira setup
+sudo update-initramfs -u
+```
+
+The binary is built statically (`CGO_ENABLED=0`), so the initramfs needs no
+libraries and the package has no shared-library dependencies.
 
 ### Verify
 
@@ -165,6 +185,25 @@ The middle case is the normal one right after a kernel or initramfs update: the
 image on disk is not the one that booted, so there is nothing to verify against.
 PCR 11 becomes correct once you boot that image. Pass `--verify-uki=false` to
 skip the check entirely.
+
+### Warnings about weak selections
+
+`seal` and `reseal` report selections that attest less than they appear to.
+These are advisory — the secret is still sealed.
+
+**PCR 0 on its own** identifies a firmware *build*, not a machine. It measures
+firmware code only (configuration lives in PCR 1), so every device running the
+same firmware version holds the same value and an attacker can reproduce it on
+their own hardware.
+
+**PCR 7 while Secure Boot is off or the platform is in Setup Mode.** PCR 7
+records the Secure Boot state and policy. With Secure Boot disabled it faithfully
+records "disabled" and nothing verifies which bootloader or kernel runs, so a
+matching PCR 7 does not mean the boot chain was checked. In Setup Mode the keys
+can be replaced without physical presence, so the policy it attests is one any
+root user can rewrite. The state is read from
+`/sys/firmware/efi/efivars`; if that is unavailable, tpm2-kira says so rather
+than staying silent.
 
 ### The measure point
 
@@ -310,6 +349,88 @@ A systemd service (`tpm2-kira.service`) starts before the disk unlock prompt and
 
 See [mkinitcpio/mkinitcpio.conf.example](mkinitcpio/mkinitcpio.conf.example) for more HOOKS configurations (LVM, multiple encrypted devices, etc.).
 
+## Early Boot Integration (Debian / initramfs-tools)
+
+Debian's stock initramfs has no systemd in it, so the systemd unit used on Arch
+does not apply. The `.deb` installs two scripts instead:
+
+| Path | Role |
+|---|---|
+| `/usr/share/initramfs-tools/hooks/tpm2-kira` | copies the binary into the image |
+| `/usr/share/initramfs-tools/scripts/init-premount/tpm2-kira` | starts the display at boot |
+| `/usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira` | stops it before the real root takes over |
+| `/etc/tpm2-kira/initramfs.conf` | display mode |
+
+`/init` runs `init-premount` before `local-top/cryptroot` asks for the
+passphrase, which is what puts the code on screen first.
+
+### Display mode
+
+`/etc/tpm2-kira/initramfs.conf` selects what happens at boot:
+
+| `TPM2_KIRA_INITRAMFS_MODE` | Behaviour |
+|---|---|
+| `run` (default) | Keeps showing codes until the disk is unlocked |
+| `once` | Prints a single code and carries on booting |
+
+In `run` mode the display refreshes once per 30-second TOTP window, writing to
+the same console as the passphrase prompt. The prompt scrolls up as codes
+arrive; typing is unaffected, since the passphrase is not echoed anyway. The
+`init-bottom` script stops the process before `run-init` replaces the initramfs,
+so nothing is left holding it open.
+
+Edit the file and run `sudo update-initramfs -u` to apply a change.
+
+### Choosing PCRs on Debian
+
+There is no UKI, so PCR 11 is empty and the `11u` and `11e` sources do not
+apply. GRUB carries the equivalent measurements instead:
+
+| PCR | Measures | Changes when |
+|---|---|---|
+| 0, 2 | firmware code and option ROMs | firmware update |
+| 4 | the GRUB EFI binary the firmware loaded | `grub-install`, shim/GRUB package update |
+| 7 | Secure Boot state and policy | key rotation, enabling/disabling Secure Boot |
+| 8 | GRUB commands from `grub.cfg` | `update-grub`, kernel version change |
+| 9 | files GRUB loads (kernel, initrd) | **every kernel or initramfs update** |
+
+```bash
+# Stable across kernel updates - a good default
+tpm2-kira seal --pcrs "0e,2e,4e,7e"
+
+# Adds kernel and initrd integrity, at the cost of the workflow below
+tpm2-kira seal --pcrs "0e,2e,4e,7e,8e,9e"
+```
+
+### If you seal PCR 8 or 9: reseal *after* the reboot
+
+Every PCR source on Debian is read from the **running** system. `reseal` binds
+to the kernel and initrd you booted, so running it right after
+`update-initramfs` would bind to the image you are about to leave. Only a reseal
+after the next boot is correct:
+
+```
+update-initramfs / kernel update
+        |
+        v
+    reboot  ->  no TOTP code shown        <- expected, not a compromise
+        |
+        v
+  unlock with your passphrase as usual
+        |
+        v
+  sudo tpm2-kira reseal                    <- re-binds to the new state
+```
+
+`/etc/initramfs/post-update.d/tpm2-kira` prints this reminder after a rebuild,
+but only when the sealed policy actually contains PCR 8 or 9. It deliberately
+does **not** reseal.
+
+This is a genuine trade-off rather than an oversight. Auto-resealing on every
+boot would remove the churn, but it would also turn a tampered kernel into a
+trusted baseline after a single reboot: unlock once, and the new state is
+sealed. Keeping a human in the loop is the point.
+
 ## Eventlog PCR Calculator
 
 `tools/pcrtool.py` independently reconstructs PCR values, which is the first
@@ -410,6 +531,16 @@ tpm2-kira nvram delete
 sudo pacman -R tpm2-kira
 ```
 
+On Debian:
+```bash
+tpm2-kira nvram delete
+sudo apt remove tpm2-kira
+```
+
+Purging the Debian package deliberately leaves `/var/lib/tpm2-kira` in place:
+the signing key is the only recovery path for a secret that may still be sealed
+in the TPM. Delete the slot first, then the directory.
+
 ## Project Structure
 
 ```
@@ -425,6 +556,9 @@ sudo pacman -R tpm2-kira
 │   ├── eventlog_utils.go    # TPM eventlog parsing
 │   ├── measurepoint.go      # Userspace extends before tpm2-kira reads PCRs
 │   ├── ukipredict.go        # Native PCR 11 computation from a UKI
+│   ├── pcr.go               # PCR spec parsing, reading and comparison
+│   ├── pcrwarn.go           # Warnings for PCR selections that attest little
+│   ├── nvram.go             # NVRAM read/write/scan operations
 │   ├── totp_utils.go        # TOTP generation and display
 │   ├── tpm_utils.go         # Low-level TPM operations
 │   ├── pcrtips.go           # PCR reference information
@@ -436,7 +570,14 @@ sudo pacman -R tpm2-kira
 │   ├── install/sd-tpm2-kira # mkinitcpio install hook
 │   ├── post/sd-tpm2-kira    # Post-generation reseal hook
 │   └── mkinitcpio.conf.example
+├── initramfs-tools/         # Early boot scripts for Debian
+│   ├── hooks/tpm2-kira              # Copies the binary into the image
+│   ├── scripts/init-premount/tpm2-kira  # Starts the display before disk unlock
+│   ├── scripts/init-bottom/tpm2-kira    # Stops it before switching root
+│   ├── post-update.d/tpm2-kira      # Reseal reminder after a rebuild
+│   └── initramfs.conf               # Display mode (run / once)
 ├── systemd/system/          # systemd service for boot-time TOTP display
+├── debian/                  # Debian package definition
 ├── packaging/aur/           # Arch Linux PKGBUILD
 └── Makefile
 ```

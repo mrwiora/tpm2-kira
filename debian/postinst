@@ -1,0 +1,22 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+configure)
+    if [ ! -d /var/lib/tpm2-kira/keys ]; then
+        # Deliberately not automatic: setup generates a NEW TOTP secret and
+        # prints a QR code that has to be scanned interactively.
+        echo "tpm2-kira: not configured yet. Run 'sudo tpm2-kira setup' to create"
+        echo "tpm2-kira: signing keys and seal a TOTP secret, then rebuild the"
+        echo "tpm2-kira: initramfs with 'sudo update-initramfs -u'."
+    fi
+
+    if command -v update-initramfs >/dev/null 2>&1; then
+        update-initramfs -u
+    fi
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

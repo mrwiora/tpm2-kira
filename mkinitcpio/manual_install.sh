@@ -55,39 +55,18 @@ check_mkinitcpio() {
         exit 1
     fi
 
-    if [[ ! -d "/etc/initcpio/hooks" ]]; then
-        mkdir -p /etc/initcpio/hooks
-        print_info "Created /etc/initcpio/hooks directory"
-    fi
-
-    if [[ ! -d "/etc/initcpio/install" ]]; then
-        mkdir -p /etc/initcpio/install
-        print_info "Created /etc/initcpio/install directory"
-    fi
-}
-
-# Install traditional hook
-install_traditional_hook() {
-    print_info "Installing traditional mkinitcpio hook..."
-
-    cp hooks/tpm2-kira /etc/initcpio/hooks/
-    chmod +x /etc/initcpio/hooks/tpm2-kira
-
-    cp install/tpm2-kira /etc/initcpio/install/
-    chmod +x /etc/initcpio/install/tpm2-kira
-
-    print_success "Traditional hook installed (tpm2-kira)"
+    mkdir -p /etc/initcpio/install /etc/initcpio/post
 }
 
 # Install systemd hook
 install_systemd_hook() {
     print_info "Installing systemd mkinitcpio hook..."
 
-    cp hooks/sd-tpm2-kira /etc/initcpio/hooks/
-    chmod +x /etc/initcpio/hooks/sd-tpm2-kira
-
     cp install/sd-tpm2-kira /etc/initcpio/install/
     chmod +x /etc/initcpio/install/sd-tpm2-kira
+
+    cp post/sd-tpm2-kira /etc/initcpio/post/
+    chmod +x /etc/initcpio/post/sd-tpm2-kira
 
     print_success "Systemd hook installed (sd-tpm2-kira)"
 }
@@ -113,8 +92,7 @@ check_mkinitcpio_config() {
                 print_info "Systemd-based initramfs detected"
                 print_warning "Add 'sd-tpm2-kira' to your HOOKS array"
             else
-                print_info "Traditional initramfs detected"
-                print_warning "Add 'tpm2-kira' to your HOOKS array"
+                print_error "This initramfs is not systemd-based; sd-tpm2-kira requires 'systemd' in HOOKS"
             fi
         else
             print_warning "No HOOKS line found in /etc/mkinitcpio.conf"
@@ -130,15 +108,9 @@ show_instructions() {
     print_success "Installation completed!"
     echo
     print_info "Next steps:"
-    echo "1. Edit /etc/mkinitcpio.conf and add the appropriate hook:"
-    echo "   - For traditional initramfs: add 'tpm2-kira' to HOOKS"
-    echo "   - For systemd initramfs: add 'sd-tpm2-kira' to HOOKS"
+    echo "1. Edit /etc/mkinitcpio.conf and add 'sd-tpm2-kira' before 'sd-encrypt':"
     echo
-    echo "   Example traditional HOOKS line:"
-    echo "   HOOKS=(base udev autodetect modconf block filesystems keyboard fsck tpm2-kira)"
-    echo
-    echo "   Example systemd HOOKS line:"
-    echo "   HOOKS=(base systemd autodetect modconf block filesystems keyboard fsck sd-tpm2-kira)"
+    echo "   HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)"
     echo
     echo "2. Seal a TOTP secret (if not already done):"
     echo "   tpm2-kira seal"
@@ -167,7 +139,6 @@ main() {
     check_mkinitcpio
 
     # Install hooks
-    install_traditional_hook
     install_systemd_hook
     setup_systemd_services
 
@@ -185,28 +156,8 @@ case "${1:-}" in
         echo
         echo "Options:"
         echo "  --help, -h     Show this help message"
-        echo "  --traditional  Install only traditional hook"
-        echo "  --systemd      Install only systemd hook"
         echo
-        echo "With no options, installs both hooks."
         exit 0
-        ;;
-    --traditional)
-        cd "$(dirname "$0")"
-        check_root
-        check_tpm2_kira
-        check_mkinitcpio
-        install_traditional_hook
-        print_success "Traditional hook installed"
-        ;;
-    --systemd)
-        cd "$(dirname "$0")"
-        check_root
-        check_tpm2_kira
-        check_mkinitcpio
-        install_systemd_hook
-        setup_systemd_services
-        print_success "Systemd hook installed"
         ;;
     "")
         main

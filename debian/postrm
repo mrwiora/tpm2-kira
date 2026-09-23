@@ -1,0 +1,25 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+remove)
+    # The hook and boot script are gone by now; rebuild so the image drops them.
+    if command -v update-initramfs >/dev/null 2>&1; then
+        update-initramfs -u
+    fi
+    ;;
+purge)
+    # /var/lib/tpm2-kira/keys and the sealed NVRAM blob are left in place on
+    # purge: deleting the signing key destroys the only recovery path for a
+    # secret that may still be sealed in the TPM.
+    if [ -d /var/lib/tpm2-kira/keys ]; then
+        echo "tpm2-kira: keeping /var/lib/tpm2-kira (signing keys)." >&2
+        echo "tpm2-kira: remove it and any sealed slot ('tpm2-kira nvram delete')" >&2
+        echo "tpm2-kira: manually if you really want them gone." >&2
+    fi
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

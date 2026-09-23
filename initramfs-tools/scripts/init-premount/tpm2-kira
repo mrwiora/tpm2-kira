@@ -1,0 +1,57 @@
+#!/bin/sh
+# Show the TOTP code before the root filesystem is unlocked.
+#
+# init-premount runs from /init; local-top/cryptroot runs later, from mountroot.
+# That ordering is what puts this output ahead of the passphrase prompt.
+
+set -e
+
+PREREQ=""
+
+prereqs() {
+    echo "$PREREQ"
+}
+
+case "$1" in
+prereqs)
+    prereqs
+    exit 0
+    ;;
+esac
+
+. /scripts/functions
+
+[ -x /usr/bin/tpm2-kira ] || exit 0
+
+if command -v wait_for_udev >/dev/null 2>&1; then
+    wait_for_udev 10
+fi
+
+# go-tpm opens the resource-manager node directly; no tcti library involved.
+i=0
+while [ ! -c /dev/tpmrm0 ] && [ "$i" -lt 5 ]; do
+    sleep 1
+    i=$((i + 1))
+done
+
+if [ ! -c /dev/tpmrm0 ]; then
+    log_warning_msg "tpm2-kira: /dev/tpmrm0 did not appear; skipping TOTP display"
+    exit 0
+fi
+
+mode=run
+[ -r /etc/tpm2-kira/initramfs.conf ] && . /etc/tpm2-kira/initramfs.conf
+mode=${TPM2_KIRA_INITRAMFS_MODE:-run}
+
+# Never allow a failure here to abort boot.
+case "$mode" in
+once)
+    /usr/bin/tpm2-kira reveal >/dev/console 2>&1 || true
+    ;;
+*)
+    # Refreshes once per 30-second TOTP window, so it shares the console with
+    # cryptsetup's prompt without drowning it. init-bottom stops it again.
+    /usr/bin/tpm2-kira run >/dev/console 2>&1 &
+    echo $! > /run/tpm2-kira.pid
+    ;;
+esac

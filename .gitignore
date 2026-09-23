@@ -1,5 +1,6 @@
 # Binaries for programs and plugins
-tpm2-kira
+# Anchored: unanchored, this also swallows the initramfs scripts named tpm2-kira.
+/tpm2-kira
 
 # Test binary, built with `go test -c`
 *.test
@@ -10,9 +11,25 @@ tpm2-kira
 # Go workspace file
 go.work
 
+# Python tooling
+tools/__pycache__/
+
 # IDE specific files
 .vscode/
 .idea/
+
+# Debian package build artifacts
+debian/.debhelper/
+debian/.gocache/
+debian/debhelper-build-stamp
+debian/files
+debian/tpm2-kira/
+debian/*.substvars
+debian/*.debhelper.log
+debpkg/
+
+# Generated for offline/source builds, never committed
+vendor/
 *.swp
 *.swo
 *~

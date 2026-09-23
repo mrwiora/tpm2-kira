@@ -1,6 +1,6 @@
 module github.com/matthias/tpm2-kira
 
-go 1.26
+go 1.24.0
 
 require (
 	github.com/google/go-attestation v0.6.4
