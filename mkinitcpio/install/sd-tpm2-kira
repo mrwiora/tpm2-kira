@@ -42,9 +42,6 @@ build() {
     # Add tpm2-kira binary to initramfs
     add_binary tpm2-kira
 
-    # Add required libraries for TPM operations
-    add_binary /usr/lib/libtss2-tcti-device.so.0
-
     # Add systemd service dependency
     add_systemd_unit tpm2-kira.service
 
@@ -84,7 +81,5 @@ Prerequisites:
 
 Usage in /etc/mkinitcpio.conf:
   HOOKS=(... sd-tpm2-kira ...)
-
-For traditional initramfs, use tpm2-kira instead.
 HELPEOF
 }

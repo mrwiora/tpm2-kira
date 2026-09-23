@@ -84,10 +84,6 @@ package() {
     # Install license
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
-    # # Install udev mkinitcpio hooks
-    # install -Dm644 ../../mkinitcpio/hooks/tpm2-kira "$pkgdir/usr/lib/initcpio/hooks/tpm2-kira"
-    # install -Dm644 ../../mkinitcpio/install/tpm2-kira "$pkgdir/usr/lib/initcpio/install/tpm2-kira"
-
     # install systemd service
     install -Dm644 systemd/system/tpm2-kira.service "$pkgdir/usr/lib/systemd/system/tpm2-kira.service"
     mkdir -p "$pkgdir/usr/lib/systemd/system/sysinit.target.wants"

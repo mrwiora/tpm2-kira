@@ -1,4 +1,4 @@
-.PHONY: all build clean install uninstall install-mkinitcpio uninstall-mkinitcpio test test-unit test-integration test-all fmt vet pkgbuild help
+.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio test test-unit test-integration test-all fmt vet pkgbuild help
 
 # Binary name
 BINARY_NAME=tpm2-kira
@@ -40,6 +40,11 @@ build:
 	@echo "Building $(BINARY_NAME) version $(VERSION)..."
 	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v
 
+## build-static: Build a fully static binary (no libc, for initramfs images)
+build-static:
+	@echo "Building static $(BINARY_NAME) version $(VERSION)..."
+	CGO_ENABLED=0 $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v
+
 ## build-optimized: Build with optimizations (alias for build)
 build-optimized: build
 
@@ -77,25 +82,17 @@ install-mkinitcpio:
 		echo "Error: mkinitcpio not found. This system may not use mkinitcpio."; \
 		exit 1; \
 	fi
-	sudo mkdir -p /etc/initcpio/hooks /etc/initcpio/install /etc/initcpio/post
-	sudo cp mkinitcpio/hooks/tpm2-kira /etc/initcpio/hooks/
-	sudo cp mkinitcpio/install/tpm2-kira /etc/initcpio/install/
-	sudo cp mkinitcpio/hooks/sd-tpm2-kira /etc/initcpio/hooks/
+	sudo mkdir -p /etc/initcpio/install /etc/initcpio/post
 	sudo cp mkinitcpio/install/sd-tpm2-kira /etc/initcpio/install/
-	sudo chmod +x /etc/initcpio/hooks/tpm2-kira /etc/initcpio/install/tpm2-kira
-	sudo chmod +x /etc/initcpio/hooks/sd-tpm2-kira /etc/initcpio/install/sd-tpm2-kira
+	sudo chmod +x /etc/initcpio/install/sd-tpm2-kira
 	sudo cp mkinitcpio/post/sd-tpm2-kira /etc/initcpio/post/
 	sudo chmod +x /etc/initcpio/post/sd-tpm2-kira
 	sudo mkdir -p /usr/lib/systemd/system
 	@echo "Mkinitcpio hooks installed successfully!"
 	@echo ""
 	@echo "Next steps:"
-	@echo "1. Edit /etc/mkinitcpio.conf and add the appropriate hook BEFORE encrypt hooks:"
-	@echo "   - For traditional initramfs: add 'tpm2-kira' before 'encrypt'"
-	@echo "   - For systemd initramfs: add 'sd-tpm2-kira' before 'sd-encrypt'"
+	@echo "1. Edit /etc/mkinitcpio.conf and add the hook BEFORE sd-encrypt:"
 	@echo ""
-	@echo "   Example HOOKS lines (with encryption):"
-	@echo "   HOOKS=(base udev autodetect modconf block keyboard tpm2-kira encrypt filesystems fsck)"
 	@echo "   HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)"
 	@echo ""
 	@echo "2. Seal a TOTP secret (if not already done):"
@@ -108,9 +105,6 @@ install-mkinitcpio:
 ## uninstall-mkinitcpio: Remove mkinitcpio hooks
 uninstall-mkinitcpio:
 	@echo "Uninstalling mkinitcpio hooks..."
-	sudo rm -f /etc/initcpio/hooks/tpm2-kira
-	sudo rm -f /etc/initcpio/install/tpm2-kira
-	sudo rm -f /etc/initcpio/hooks/sd-tpm2-kira
 	sudo rm -f /etc/initcpio/install/sd-tpm2-kira
 	sudo rm -f /etc/initcpio/post/sd-tpm2-kira
 	@echo "Mkinitcpio hooks uninstalled!"

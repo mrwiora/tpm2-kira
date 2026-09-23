@@ -25,35 +25,21 @@ FILES=()
 # Order is important, and it is recommended that you do not change the order
 # in which HOOKS are added.
 
-# TRADITIONAL INITRAMFS WITH TPM2-KIRA AND ENCRYPTION
-# Use this HOOKS line for traditional (non-systemd) initramfs with encrypted root
-# The tpm2-kira hook should be placed before 'encrypt' to provide TOTP authentication
-HOOKS=(base udev autodetect modconf block keyboard tpm2-kira encrypt filesystems fsck)
-
 # SYSTEMD INITRAMFS WITH TPM2-KIRA AND ENCRYPTION
-# Use this HOOKS line for systemd-based initramfs with encrypted root
-# The sd-tpm2-kira hook should be placed before 'sd-encrypt' to provide TOTP authentication
-#HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
+# sd-tpm2-kira requires a systemd-based initramfs and must be placed before
+# 'sd-encrypt' so the TOTP code is shown before the passphrase is asked for.
+HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
 
 # OTHER COMMON CONFIGURATIONS
 # Here are some other common HOOKS configurations that include tpm2-kira:
 
-# With LVM and encryption (traditional)
-#HOOKS=(base udev autodetect modconf block keyboard tpm2-kira encrypt lvm2 filesystems fsck)
-
-# With LVM and encryption (systemd)
+# With LVM and encryption
 #HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt sd-lvm2 filesystems fsck)
 
-# With LUKS on LVM (traditional)
-#HOOKS=(base udev autodetect modconf block lvm2 keyboard tpm2-kira encrypt filesystems fsck)
-
-# With LUKS on LVM (systemd)
+# With LUKS on LVM
 #HOOKS=(base systemd autodetect modconf block sd-lvm2 keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
 
-# Multiple encrypted devices (traditional)
-#HOOKS=(base udev autodetect modconf block keyboard tpm2-kira encrypt encrypt filesystems fsck)
-
-# Multiple encrypted devices (systemd)
+# Multiple encrypted devices
 #HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
 
 # COMPRESSION
@@ -74,7 +60,7 @@ HOOKS=(base udev autodetect modconf block keyboard tpm2-kira encrypt filesystems
 # IMPORTANT NOTES FOR TPM2-KIRA INTEGRATION:
 #
 # 1. Hook Placement:
-#    - Place tpm2-kira/sd-tpm2-kira BEFORE encrypt/sd-encrypt hooks
+#    - Place sd-tpm2-kira BEFORE the sd-encrypt hook
 #    - This provides TOTP authentication before disk decryption
 #    - Place after 'keyboard' to ensure input is available if needed
 #
@@ -90,16 +76,15 @@ HOOKS=(base udev autodetect modconf block keyboard tpm2-kira encrypt filesystems
 #      (You will be prompted to enter an optional password securely)
 #
 # 4. Hook Behavior:
-#    - Both hooks automatically run 'tpm2-kira run' during boot
+#    - The hook installs a systemd unit that runs 'tpm2-kira run' during boot
 #    - This provides continuous TOTP code display
 #    - No kernel parameters or manual intervention needed
 #
 # 5. Compatibility:
-#    - Traditional hook (tpm2-kira): Works with all initramfs types
-#    - Systemd hook (sd-tpm2-kira): Optimized for systemd-based initramfs
+#    - sd-tpm2-kira requires a systemd-based initramfs ('systemd' in HOOKS)
 #
 # 6. After Configuration:
 #    - Rebuild initramfs: sudo mkinitcpio -P
 #    - Reboot to test the integration
 #
-# For detailed documentation, see mkinitcpio/README.md
+# For detailed documentation, see the project README.md
