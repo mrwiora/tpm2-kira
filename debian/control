@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: Matthias Robert Wiora <matthias@wiora.io>
 Build-Depends:
  debhelper-compat (= 13),
- golang-go (>= 2:1.24),
+ golang-go (>= 2:1.24~),
 Standards-Version: 4.7.0
 Homepage: https://github.com/mrwiora/tpm2-kira
 Rules-Requires-Root: no
