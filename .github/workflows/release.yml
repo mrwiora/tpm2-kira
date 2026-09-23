@@ -379,14 +379,25 @@ jobs:
           useradd -m builder
           TAG=${GITHUB_REF#refs/tags/}
 
-          export GIT_SSH_COMMAND="ssh -i /opt/aur-ssh/key -o IdentitiesOnly=yes \
-            -o UserKnownHostsFile=/opt/aur-ssh/known_hosts -o StrictHostKeyChecking=yes"
+          export GIT_SSH_COMMAND="ssh -i /opt/aur-ssh/key -o IdentitiesOnly=yes -o UserKnownHostsFile=/opt/aur-ssh/known_hosts -o StrictHostKeyChecking=yes"
 
-          git clone ssh://aur@aur.archlinux.org/tpm2-kira.git aur-repo
-          cd aur-repo
+          echo "::group::environment"
+          git --version; id; pwd
+          env | grep -iE '^(GIT|HOME)' || true
+          echo "::endgroup::"
+
+          # Clone outside the mounted workspace, and give git an unambiguous
+          # config home: it reads ~ from the passwd entry, as ssh does.
+          export HOME=/root
+          git config --global --add safe.directory '*'
+          git config --global init.defaultBranch master
+
+          rm -rf /tmp/aur-repo
+          git clone ssh://aur@aur.archlinux.org/tpm2-kira.git /tmp/aur-repo
+          cd /tmp/aur-repo
 
           # An AUR repository holds only these two files.
-          cp ../built/PKGBUILD PKGBUILD
+          cp "$GITHUB_WORKSPACE/built/PKGBUILD" PKGBUILD
           chown -R builder:builder .
           sudo -u builder makepkg --printsrcinfo > .SRCINFO
 
