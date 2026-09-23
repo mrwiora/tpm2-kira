@@ -1,4 +1,4 @@
-.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio test test-unit test-integration test-all fmt vet pkgbuild help
+.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio deb test test-unit test-integration test-all fmt vet pkgbuild help
 
 # Binary name
 BINARY_NAME=tpm2-kira
@@ -110,6 +110,21 @@ uninstall-mkinitcpio:
 	@echo "Mkinitcpio hooks uninstalled!"
 	@echo "Note: You should rebuild your initramfs after removing hooks:"
 	@echo "      sudo mkinitcpio -P"
+
+## deb: Build the Debian package (version derived from git describe)
+deb:
+	@command -v dpkg-buildpackage >/dev/null 2>&1 || { \
+		echo "Error: dpkg-buildpackage not found. Install dpkg-dev, debhelper and golang-go."; \
+		exit 1; \
+	}
+	@DEB_VERSION=$$(packaging/deb-version.sh); \
+	echo "Debian package version: $$DEB_VERSION"; \
+	BACKUP=$$(mktemp); \
+	cp debian/changelog "$$BACKUP"; \
+	sed -i "1s/^tpm2-kira (.*)/tpm2-kira ($$DEB_VERSION)/" debian/changelog; \
+	dpkg-buildpackage -us -uc; status=$$?; \
+	cp "$$BACKUP" debian/changelog; rm -f "$$BACKUP"; \
+	exit $$status
 
 ## test: Run unit tests (default)
 test: test-unit

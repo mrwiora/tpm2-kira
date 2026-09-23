@@ -207,11 +207,12 @@ jobs:
       - name: Set package version from tag
         id: get_version
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           VERSION=${GITHUB_REF#refs/tags/}
-          VERSION_CLEAN=${VERSION#v}
-          # A native package version may not contain '-'. '~' also sorts a
-          # prerelease BEFORE the final release, which is the intent.
-          VERSION_DEB=${VERSION_CLEAN//-/\~}
+
+          # Same mapping as a local 'make deb', so tagged and untagged builds
+          # cannot drift apart. On a tag this yields the bare version.
+          VERSION_DEB=$(packaging/deb-version.sh)
 
           sed -i "1s/^tpm2-kira (.*)/tpm2-kira (${VERSION_DEB})/" debian/changelog
           head -1 debian/changelog
@@ -231,7 +232,6 @@ jobs:
 
       - name: Build source and binary packages
         run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           dpkg-buildpackage -us -uc
 
       - name: Collect artifacts
