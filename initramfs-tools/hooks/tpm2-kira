@@ -1,0 +1,36 @@
+#!/bin/sh
+# initramfs-tools hook: place tpm2-kira into the initramfs image.
+#
+# No key material is copied. 'reveal' reads the sealed blob from TPM NVRAM and
+# unseals it via the PCR policy branch, so the signing keys stay on the
+# encrypted root where they belong.
+
+set -e
+
+PREREQ=""
+
+prereqs() {
+    echo "$PREREQ"
+}
+
+case "$1" in
+prereqs)
+    prereqs
+    exit 0
+    ;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+kira=$(command -v tpm2-kira || true)
+if [ -z "$kira" ]; then
+    echo "tpm2-kira: binary not found in PATH; refusing to build an initramfs" >&2
+    echo "tpm2-kira: that silently shows no TOTP code at boot" >&2
+    exit 1
+fi
+
+copy_exec "$kira" /usr/bin/tpm2-kira
+
+# Built in on most kernels, but a module on some machines.
+manual_add_modules tpm_tis
+manual_add_modules tpm_crb

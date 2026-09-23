@@ -1,0 +1,33 @@
+#!/bin/sh
+# Run by update-initramfs after a new image is written.
+#   $1 kernel version   $2 path to the generated initramfs
+#
+# This does NOT reseal. On Debian every PCR source is read from the running
+# system, so resealing here would bind to the kernel and initramfs you are
+# leaving, not the ones just written. Only a reseal after the next boot is
+# correct, so this hook just says so.
+
+set -e
+
+STAMP=/run/tpm2-kira/post-update.reminded
+
+command -v tpm2-kira >/dev/null 2>&1 || exit 0
+[ -d /var/lib/tpm2-kira/keys ] || exit 0
+
+# update-initramfs calls us once per kernel version; one reminder is enough.
+[ -e "$STAMP" ] && exit 0
+
+# PCRs 8 and 9 carry GRUB's grub.cfg commands and the kernel/initrd it loads,
+# so they are the only ones this rebuild can invalidate.
+info=$(tpm2-kira info --json 2>/dev/null) || exit 0
+echo "$info" | grep -qE '"index"[[:space:]]*:[[:space:]]*[89][,[:space:]]' || exit 0
+
+mkdir -p "$(dirname "$STAMP")" && : > "$STAMP"
+
+cat >&2 <<EOF
+tpm2-kira: initramfs rebuilt ($1); the sealed policy uses PCR 8/9.
+tpm2-kira: PCR 9 measures the initrd, so it will change on the next boot and
+tpm2-kira: no TOTP code will be shown. That is expected here, not a compromise.
+tpm2-kira: Unlock with your passphrase as usual, then re-bind to the new state:
+tpm2-kira:     sudo tpm2-kira reseal
+EOF
