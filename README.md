@@ -76,21 +76,33 @@ sudo make install
 ### Arch Linux (AUR)
 
 ```bash
-cd packaging/aur
-makepkg -si
+paru -S tpm2-kira      # or your preferred AUR helper
 ```
 
-Or use your preferred AUR helper.
+The PKGBUILD in [packaging/aur/](packaging/aur/) is a template: it builds a
+checksummed release tarball, and its `pkgver` is filled in at publish time, so
+it cannot be built straight from a clone. See
+[packaging/aur/README.md](packaging/aur/README.md) to build one locally.
+
+After installing, run setup once and rebuild the initramfs:
+
+```bash
+sudo tpm2-kira setup
+sudo mkinitcpio -P
+```
 
 ### Debian / Ubuntu (.deb)
 
 ```bash
-sudo apt install build-essential debhelper golang-go
-dpkg-buildpackage -us -uc -b
-sudo dpkg -i ../tpm2-kira_*_amd64.deb
+sudo apt install build-essential debhelper dpkg-dev golang-go
+make deb
+sudo apt install ../tpm2-kira_*_amd64.deb
 ```
 
-The package installs the binary, the initramfs-tools hook and boot script, and
+`make deb` derives the package version from `git describe`, so an untagged
+checkout produces something like `0.2.3+9.g9d32210`.
+
+The package installs the binary, the initramfs-tools hook and boot scripts, and
 rebuilds the initramfs. It does **not** run `setup`, because that generates a
 new TOTP secret and prints a QR code you need to scan:
 

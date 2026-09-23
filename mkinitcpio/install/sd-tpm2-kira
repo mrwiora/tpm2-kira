@@ -37,19 +37,22 @@ _report_measure_point() {
 }
 
 build() {
-    local mod
-
     # Add tpm2-kira binary to initramfs
     add_binary tpm2-kira
 
     # Add systemd service dependency
     add_systemd_unit tpm2-kira.service
 
+    # add_systemd_unit only carries over .wants symlinks that already exist on
+    # the host. Enabling the unit here keeps the host's own boot untouched.
+    add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira.service \
+        /usr/lib/systemd/system/tpm2-kira.service
+
     _report_measure_point
 
-    # Run tpm2-kira setup to fullfil initial setup or skip, as already configured
-    tpm2-kira setup
-
+    if [[ ! -d /var/lib/tpm2-kira/keys ]]; then
+        warning "tpm2-kira: not configured yet; run 'tpm2-kira setup' and rebuild"
+    fi
 }
 
 help() {
@@ -59,11 +62,13 @@ in early boot using tpm2-kira. It runs 'tpm2-kira run' as a systemd service
 for continuous TOTP display.
 
 The hook will:
-- Run 'tpm2-kira setup' to generate signing keys and seal a TOTP secret
-  (only on first install; skipped if already configured)
-- Install tpm2-kira binary and required TPM libraries
-- Create systemd service unit for tpm2-kira run
+- Install the tpm2-kira binary into the image
+- Add tpm2-kira.service and enable it inside the image only
 - Start tpm2-kira in continuous run mode during boot
+
+Setup is NOT run from here: it generates a new TOTP secret and writes to TPM
+NVRAM, which must not happen while merely building an image. Run
+'tpm2-kira setup' once by hand, then rebuild.
 
 Post-generation hook (sd-tpm2-kira in /usr/lib/initcpio/post/):
   After the initramfs image is written, 'tpm2-kira reseal' is executed
@@ -72,7 +77,7 @@ Post-generation hook (sd-tpm2-kira in /usr/lib/initcpio/post/):
   values, so the sealed TOTP secret must be resealed to match.
 
 Created systemd service:
-  tpm2-kira-run.service - Runs tpm2-kira in continuous TOTP mode
+  tpm2-kira.service - Runs tpm2-kira in continuous TOTP mode
 
 Prerequisites:
 - systemd-based initramfs (mkinitcpio with systemd support)

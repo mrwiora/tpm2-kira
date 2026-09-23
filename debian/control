@@ -14,7 +14,7 @@ Architecture: any
 Depends:
  initramfs-tools,
  ${misc:Depends},
-Suggests: tpm2-tools
+Suggests: qrencode, tpm2-tools
 Description: TPM2-sealed TOTP codes shown before disk unlock
  tpm2-kira seals a TOTP secret into TPM NVRAM under a PCR policy and prints the
  current code from the initramfs, before the root filesystem passphrase is
