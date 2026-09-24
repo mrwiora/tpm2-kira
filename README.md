@@ -1,7 +1,7 @@
 # tpm2-kira (Known Integrity Recognition Agent)
 
 <p align="center">
-  <img src=".github/tpm2-kira.png" alt="tpm2-kira logo" style="width: 55vw; min-width: 330px;" />
+  <img src=".github/tpm2-kira_300x300.png" alt="tpm2-kira logo" />
 </p>
 
 A TPM2 based tool to recognize modifications on your system !before! entering passphrases to unlock your disk.
