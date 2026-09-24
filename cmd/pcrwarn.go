@@ -40,6 +40,20 @@ func ReadSecureBootState() SecureBootState {
 	return SecureBootState{Enabled: enabled, SetupMode: setupMode, Known: true}
 }
 
+// WarnAboutHashAlgo reports a PCR bank that should not be used for new policies.
+func WarnAboutHashAlgo(hashAlgo PCRHashAlgo) {
+	if hashAlgo != PCRHashAlgoSHA1 {
+		return
+	}
+	fmt.Println("WARNING: sealing against the SHA-1 PCR bank.")
+	fmt.Println("  SHA-1 is broken against collision attacks and TPMs are not required to")
+	fmt.Println("  provide a SHA-1 bank at all, so this policy may become unsatisfiable on")
+	fmt.Println("  future hardware. Use it only where the firmware event log carries no")
+	fmt.Println("  SHA-256 digests, and prefer the register source instead where possible:")
+	fmt.Println("      tpm2-kira seal --pcrs \"0,7\"")
+	fmt.Println()
+}
+
 // WarnAboutPCRSelection reports selections that attest less than they appear
 // to. These are advisory: an unusual selection is still sealed.
 func WarnAboutPCRSelection(specs []PCRSpec) {
