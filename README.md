@@ -359,7 +359,7 @@ The post-generation hook will automatically reseal so the next boot matches.
 
 A systemd service (`tpm2-kira.service`) starts before the disk unlock prompt and runs `tpm2-kira run`, which continuously displays TOTP codes. Compare what's on screen with your authenticator app. If they match, your boot chain is clean — go ahead and type your LUKS passphrase.
 
-See [mkinitcpio/mkinitcpio.conf.example](mkinitcpio/mkinitcpio.conf.example) for more HOOKS configurations (LVM, multiple encrypted devices, etc.).
+See [initramfs/mkinitcpio/mkinitcpio.conf.example](initramfs/mkinitcpio/mkinitcpio.conf.example) for more HOOKS configurations (LVM, multiple encrypted devices, etc.).
 
 ## Early Boot Integration (Debian / initramfs-tools)
 
@@ -582,19 +582,22 @@ in the TPM. Delete the slot first, then the directory.
 │   ├── PLATFORM-OBSERVATIONS.md  # Measured facts about Arch and Debian boots
 │   ├── pentest1/, pentest2/      # Security review findings and mitigations
 │   └── *.issue                   # Write-ups of specific bugs
-├── mkinitcpio/              # Early boot hooks for Arch Linux
-│   ├── install/sd-tpm2-kira # mkinitcpio install hook
-│   ├── post/sd-tpm2-kira    # Post-generation reseal hook
-│   └── mkinitcpio.conf.example
-├── initramfs-tools/         # Early boot scripts for Debian
-│   ├── hooks/tpm2-kira              # Copies the binary into the image
-│   ├── scripts/init-premount/tpm2-kira  # Starts the display before disk unlock
-│   ├── scripts/init-bottom/tpm2-kira    # Stops it before switching root
-│   ├── post-update.d/tpm2-kira      # Reseal reminder after a rebuild
-│   └── initramfs.conf               # Display mode (run / once)
-├── systemd/system/          # systemd service for boot-time TOTP display
-├── debian/                  # Debian package definition
-├── packaging/aur/           # Arch Linux PKGBUILD
+├── initramfs/               # Everything that goes into, or builds, an initramfs
+│   ├── systemd/tpm2-kira.service   # Unit, pulled into systemd-based images
+│   ├── mkinitcpio/                 # Arch
+│   │   ├── install/sd-tpm2-kira    # Build hook: puts the binary in the image
+│   │   ├── post/sd-tpm2-kira       # Reseal after the image is written
+│   │   └── mkinitcpio.conf.example
+│   └── initramfs-tools/            # Debian
+│       ├── hooks/tpm2-kira         # Build hook: copies the static binary
+│       ├── scripts/init-premount/tpm2-kira  # Shows the code before unlock
+│       ├── scripts/init-bottom/tpm2-kira    # Stops it before switching root
+│       ├── post-update.d/tpm2-kira          # Reseal reminder
+│       └── initramfs.conf          # Display mode (run / once)
+├── debian/                  # Debian package definition (must sit at the root)
+├── packaging/
+│   ├── aur/                 # Arch Linux PKGBUILD
+│   └── deb-version.sh       # git describe -> a Debian-valid version
 └── Makefile
 ```
 

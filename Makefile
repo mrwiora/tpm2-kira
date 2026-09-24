@@ -83,9 +83,9 @@ install-mkinitcpio:
 		exit 1; \
 	fi
 	sudo mkdir -p /etc/initcpio/install /etc/initcpio/post
-	sudo cp mkinitcpio/install/sd-tpm2-kira /etc/initcpio/install/
+	sudo cp initramfs/mkinitcpio/install/sd-tpm2-kira /etc/initcpio/install/
 	sudo chmod +x /etc/initcpio/install/sd-tpm2-kira
-	sudo cp mkinitcpio/post/sd-tpm2-kira /etc/initcpio/post/
+	sudo cp initramfs/mkinitcpio/post/sd-tpm2-kira /etc/initcpio/post/
 	sudo chmod +x /etc/initcpio/post/sd-tpm2-kira
 	sudo mkdir -p /usr/lib/systemd/system
 	@echo "Mkinitcpio hooks installed successfully!"

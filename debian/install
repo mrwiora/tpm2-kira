@@ -1,6 +1,6 @@
-tpm2-kira                                        usr/bin
-initramfs-tools/hooks/tpm2-kira                  usr/share/initramfs-tools/hooks
-initramfs-tools/scripts/init-premount/tpm2-kira  usr/share/initramfs-tools/scripts/init-premount
-initramfs-tools/scripts/init-bottom/tpm2-kira    usr/share/initramfs-tools/scripts/init-bottom
-initramfs-tools/post-update.d/tpm2-kira          etc/initramfs/post-update.d
-initramfs-tools/initramfs.conf                   etc/tpm2-kira
+tpm2-kira                                                  usr/bin
+initramfs/initramfs-tools/hooks/tpm2-kira                  usr/share/initramfs-tools/hooks
+initramfs/initramfs-tools/scripts/init-premount/tpm2-kira  usr/share/initramfs-tools/scripts/init-premount
+initramfs/initramfs-tools/scripts/init-bottom/tpm2-kira    usr/share/initramfs-tools/scripts/init-bottom
+initramfs/initramfs-tools/post-update.d/tpm2-kira          etc/initramfs/post-update.d
+initramfs/initramfs-tools/initramfs.conf                   etc/tpm2-kira
