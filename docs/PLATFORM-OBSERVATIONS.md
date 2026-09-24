@@ -80,8 +80,9 @@ systemd or firmware update.
 
 Both read all zeros, which cross-checks two claims made on the Debian side:
 PCR 8 carries GRUB's commands and so stays at its reset value under a UKI, and
-PCR 10 is Linux IMA — absent here (`/sys/kernel/security/ima` does not exist),
-and correspondingly never extended.
+PCR 10 is the conventional Linux IMA index — IMA is absent here
+(`/sys/kernel/security/ima` does not exist), and the register is correspondingly
+never extended.
 
 ### mkinitcpio only honours .wants under /usr/lib
 
@@ -143,6 +144,10 @@ With no systemd in the initrd, none of the `os-separator` / `enter-initrd`
 units exist, so nothing extends PCRs between firmware and tpm2-kira.
 `--measure-point=auto` correctly resolves to `off`.
 
+This follows from initramfs-tools, not from Debian. A Debian system using
+dracut with systemd in the initrd would behave like the Arch case above, and
+`auto` should then resolve to `on`. That combination has not been tested.
+
 ```bash
 sudo python3 tools/pcrtool.py replay     # matches live PCRs 0-9 exactly
 ```
@@ -159,9 +164,11 @@ sudo tpm2_eventlog /sys/kernel/security/tpm0/binary_bios_measurements > /tmp/ev.
 | 9 | 12 × `EV_IPL` | `(hd0,gpt1)/EFI/debian/grub.cfg` |
 | 9 | 2 × `EV_EVENT_TAG` | `LOADED_IMAGE::LoadOptions` (26 bytes) |
 
-So PCR 8 is **every GRUB command**, not just the kernel command line, and PCR 9
-covers grub.cfg, GRUB's modules, the kernel and the initrd, plus the EFI load
-options.
+The counts are specific to this install — they follow from how many commands
+this grub.cfg runs and how many files it loads. The *kinds* of event are what
+generalise: PCR 8 is **every GRUB command**, not just the kernel command line,
+and PCR 9 covers grub.cfg, GRUB's modules, the kernel and the initrd, plus the
+EFI load options.
 
 ### PCR 9 digests cover file contents, not paths
 
@@ -206,9 +213,12 @@ seal target.
 
 ### Separator-only PCRs
 
-PCRs 3 and 6 hold only the firmware `EV_SEPARATOR`, so their value is
-machine-independent: `3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969`.
-Anything else there means extra extends, never a changed measurement.
+On both machines observed here, PCRs 3 and 6 received only the firmware
+`EV_SEPARATOR`, giving the machine-independent value
+`3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969`. That makes
+them a useful reference point — but it is a property of firmware that measures
+nothing else into them, not a guarantee. Firmware that does will produce a
+different value legitimately.
 
 ### post-update.d
 
@@ -222,9 +232,27 @@ grep -n post-update /usr/sbin/update-initramfs
 
 ---
 
-## Caveat on the VM
+## Caveat: what a system without Secure Boot can and cannot demonstrate
 
-SecureBoot is disabled and the platform is in Setup Mode, so **PCR 7 attests
-almost nothing there** and PCR 0/2 may be identical across every VM built from
-the same firmware image. The plumbing can be validated on that VM; the security
-property cannot. Real hardware with Secure Boot enabled is required for that.
+Two separate limitations are easy to conflate. Neither is about virtualisation.
+
+**Secure Boot disabled, or the platform in Setup Mode.** PCR 7 records the
+Secure Boot state and policy, so with Secure Boot off it faithfully records
+"disabled" and nothing verifies which bootloader or kernel ran — a matching
+PCR 7 does not mean the boot chain was checked. In Setup Mode the platform keys
+can be replaced without physical presence, so the policy PCR 7 attests is one
+any root user can rewrite. See SECURITY-BACKGROUND.md §8.
+
+**Firmware shared across many machines.** Where the same firmware image boots
+many hosts — VMs from one template, or identical hardware on the same version —
+PCR 0/2 do not distinguish one host from another. This is independent of Secure
+Boot, and applies equally to a rack of identical servers.
+
+A machine in either state is still useful, and validates most of this document:
+hook ordering, initramfs contents, what the bootloader measures into which PCR,
+and the reseal flow. What it cannot establish is the *security* property, which
+needs Secure Boot enabled with keys enrolled, and firmware not shared with
+everyone else.
+
+The Debian machine above happens to be in both states at once, which is why its
+observations are cited for mechanism and never for attestation strength.
