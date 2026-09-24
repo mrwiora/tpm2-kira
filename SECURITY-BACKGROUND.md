@@ -467,8 +467,9 @@ policy: `leave-initrd`, `sysinit`, `ready` (PCR 11), `machine-id:<id>` (PCR 15),
 > the units above exist, so the measure point *is* end-of-firmware and
 > `--measure-point=auto` resolves to `off`. There is also no UKI, so PCR 11 is
 > empty and the `u` source does not apply; GRUB's measurements land in PCR 8
-> (commands from `grub.cfg`) and PCR 9 (the kernel and initrd it loads)
-> instead.
+> (every command it runs, logged as `grub_cmd: ...`) and PCR 9 (the *contents*
+> of every file it reads — grub.cfg, modules, kernel, initrd — plus
+> `LOADED_IMAGE::LoadOptions`) instead.
 >
 > PCR 9 therefore changes on **every** kernel or initramfs update, and no
 > source can predict its next value the way `11u` predicts PCR 11 from a UKI on

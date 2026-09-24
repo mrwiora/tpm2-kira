@@ -403,8 +403,8 @@ apply. GRUB carries the equivalent measurements instead:
 | 0, 2 | firmware code and option ROMs | firmware update |
 | 4 | the GRUB EFI binary the firmware loaded | `grub-install`, shim/GRUB package update |
 | 7 | Secure Boot state and policy | key rotation, enabling/disabling Secure Boot |
-| 8 | GRUB commands from `grub.cfg` | `update-grub`, kernel version change |
-| 9 | files GRUB loads (kernel, initrd) | **every kernel or initramfs update** |
+| 8 | every command GRUB runs (`grub_cmd: ...`) | `update-grub`, kernel version change |
+| 9 | contents of every file GRUB reads (grub.cfg, modules, kernel, initrd) + EFI LoadOptions | **every kernel or initramfs update** |
 
 ```bash
 # Stable across kernel updates - a good default
@@ -578,6 +578,10 @@ in the TPM. Delete the slot first, then the directory.
 ├── tools/
 │   ├── pcrtool.py            # PCR replay and full-chain diagnosis
 │   └── tpm2-pcr11predict     # Independent cross-check of the built-in PCR 11 computation
+├── docs/
+│   ├── PLATFORM-OBSERVATIONS.md  # Measured facts about Arch and Debian boots
+│   ├── pentest1/, pentest2/      # Security review findings and mitigations
+│   └── *.issue                   # Write-ups of specific bugs
 ├── mkinitcpio/              # Early boot hooks for Arch Linux
 │   ├── install/sd-tpm2-kira # mkinitcpio install hook
 │   ├── post/sd-tpm2-kira    # Post-generation reseal hook

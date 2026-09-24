@@ -31,9 +31,12 @@ func PCRTips() error {
 		{"PCR6", "Resume from S4 and S5 Power State Events", "Firmware"},
 		{"PCR7", "Secure Boot State. Contains the full contents of PK/KEK/db, as", "Firmware, shim"},
 		{"", "well as the specific certificates used to validate each boot app.", ""},
-		{"PCR8¹", "Hash of the kernel command line", "GRUB"},
-		{"PCR9¹", "Hash of the initramfs and EFI Load Options", "Linux"},
-		{"PCR10¹", "Reserved for Future Use", ""},
+		{"PCR8¹", "GRUB: every command it ran, logged as 'grub_cmd: ...'. The", "GRUB"},
+		{"", "kernel cmdline is only one of them. Unused under a UKI.", ""},
+		{"PCR9¹", "GRUB: contents of every file it read - grub.cfg, modules,", "GRUB, systemd-stub"},
+		{"", "kernel, initrd - plus LOADED_IMAGE::LoadOptions.", ""},
+		{"PCR10¹", "Runtime file measurements, by convention Linux IMA. Never", "Linux IMA"},
+		{"", "appears in the firmware event log.", ""},
 		{"PCR11¹", "Hash of the Unified kernel image (supports 'u' for direct computation)", "systemd-stub"},
 		{"PCR12¹", "Overridden kernel command line, Credentials", "systemd-stub"},
 		{"PCR13¹", "System Extensions", "systemd-stub"},
@@ -59,12 +62,27 @@ func PCRTips() error {
 	fmt.Println("                  Replays systemd-stub's section measurements; no external tools")
 	fmt.Println()
 	fmt.Println("Commonly used PCRs for sealing:")
-	fmt.Println("  0,2,7      - Recommended default (firmware + secure boot)")
-	fmt.Println("  0,2,4,7    - Include boot manager (may change on boot attempts)")
-	fmt.Println("  0,2,7,9    - Include kernel/initramfs (if using systemd-based boot)")
-	fmt.Println("  0e,2e,7e,11u                   - Eventlog + built-in UKI computation (recommended)")
+	fmt.Println("  UKI + systemd initramfs (Arch):")
+	fmt.Println("    0e,2e,7e         - Firmware + secure boot state")
+	fmt.Println("    0e,2e,7e,11u     - Adds the unified kernel image (recommended)")
+	fmt.Println("  GRUB + non-systemd initramfs (Debian):")
+	fmt.Println("    0e,2e,4e,7e      - Stable across kernel updates (recommended)")
+	fmt.Println("    0e,2e,4e,7e,8e,9e - Adds grub.cfg, kernel and initramfs. PCR 9")
+	fmt.Println("                       changes on every kernel/initramfs update, and")
+	fmt.Println("                       cannot be predicted ahead of the reboot, so it")
+	fmt.Println("                       needs a reseal AFTER booting the new image.")
 	fmt.Println()
-	fmt.Println("Source: https://wiki.archlinux.org/title/Trusted_Platform_Module")
+	fmt.Println("Selections that attest less than they look like they do:")
+	fmt.Println("  PCR 0 alone   - Identifies the firmware BUILD, not this machine. Any")
+	fmt.Println("                  device on the same firmware version has the same value.")
+	fmt.Println("  PCR 7 without - PCR 7 records the secure boot state. With secure boot")
+	fmt.Println("  Secure Boot     off it records \"disabled\", and nothing verifies which")
+	fmt.Println("                  bootloader or kernel ran.")
+	fmt.Println()
+	fmt.Println("PCRs 9, 11 and 15 keep being extended after tpm2-kira reads them, so a")
+	fmt.Println("value read from the running system is NOT what the next boot will show.")
+	fmt.Println()
+	fmt.Println("Adapted from https://wiki.archlinux.org/title/Trusted_Platform_Module")
 
 	return nil
 }
@@ -80,9 +98,9 @@ func GetPCRDescription(pcrIndex int) string {
 		5:  "Boot Manager Configuration and Data (GPT table)",
 		6:  "Resume from S4 and S5 Power State Events",
 		7:  "Secure Boot State (PK/KEK/db certificates)",
-		8:  "Hash of the kernel command line",
-		9:  "Hash of the initramfs and EFI Load Options",
-		10: "Reserved for Future Use",
+		8:  "GRUB commands (logged as 'grub_cmd: ...')",
+		9:  "Contents of files GRUB read, plus EFI LoadOptions",
+		10: "Runtime measurements, by convention Linux IMA",
 		11: "Hash of the Unified kernel image",
 		12: "Overridden kernel command line, Credentials",
 		13: "System Extensions",
