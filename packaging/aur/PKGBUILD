@@ -56,15 +56,15 @@ package() {
 
     # Not enabled on the host: the mkinitcpio install hook enables it inside the
     # image, which is the only place it is meant to run.
-    install -Dm644 systemd/system/tpm2-kira.service \
+    install -Dm644 initramfs/systemd/tpm2-kira.service \
         "$pkgdir/usr/lib/systemd/system/tpm2-kira.service"
 
-    install -Dm644 mkinitcpio/install/sd-tpm2-kira \
+    install -Dm644 initramfs/mkinitcpio/install/sd-tpm2-kira \
         "$pkgdir/usr/lib/initcpio/install/sd-tpm2-kira"
-    install -Dm755 mkinitcpio/post/sd-tpm2-kira \
+    install -Dm755 initramfs/mkinitcpio/post/sd-tpm2-kira \
         "$pkgdir/usr/lib/initcpio/post/sd-tpm2-kira"
 
-    install -Dm644 mkinitcpio/mkinitcpio.conf.example \
+    install -Dm644 initramfs/mkinitcpio/mkinitcpio.conf.example \
         "$pkgdir/usr/share/doc/$pkgname/mkinitcpio.conf.example"
 }
 
