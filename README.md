@@ -578,6 +578,10 @@ in the TPM. Delete the slot first, then the directory.
 ├── tools/
 │   ├── pcrtool.py            # PCR replay and full-chain diagnosis
 │   └── tpm2-pcr11predict     # Independent cross-check of the built-in PCR 11 computation
+├── docs/
+│   ├── PLATFORM-OBSERVATIONS.md  # Measured facts about Arch and Debian boots
+│   ├── pentest1/, pentest2/      # Security review findings and mitigations
+│   └── *.issue                   # Write-ups of specific bugs
 ├── mkinitcpio/              # Early boot hooks for Arch Linux
 │   ├── install/sd-tpm2-kira # mkinitcpio install hook
 │   ├── post/sd-tpm2-kira    # Post-generation reseal hook
