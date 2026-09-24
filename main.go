@@ -330,10 +330,13 @@ SEAL OPTIONS:
                      them automatically without requiring --pubkey / --privkey
   --sha1             Use SHA-1 PCR bank instead of SHA-256 (default: SHA-256)
                      Use only if firmware eventlog does not provide SHA-256 digests
+  --verify-uki       Check the built-in PCR 11 computation against this boot's
+                     event log before sealing (default: true)
 
 RESEAL OPTIONS:
   --pcrs INDICES     New PCR indices with optional source suffix (optional,
                      preserves original selection and per-PCR sources if omitted)
+  --measure-point M  Same as for seal: auto (default), on, off
   --pubkey PATH      Path to signing public key PEM for re-sealing (optional)
                      Default: derived from --privkey, or loaded from blob's
                      stored key path. Use this to change the signing key.
@@ -354,8 +357,9 @@ AUTHENTICATION:
     Branch 1 (PCR):    Direct PCR policy - succeeds when PCR values match
     Branch 2 (Signed): PolicySigned - requires signature from configured key
 
-  The signing key defaults to the sbctl secure boot DB key pair, allowing
-  automated resealing in conjunction with secure boot key management.
+  The signing key defaults to a dedicated ECDSA P-256 pair created by 'setup'.
+  Point --privkey at the sbctl secure boot DB key instead to reseal with the
+  same key that signs your boot components.
 
   No password authentication is used. Recovery after PCR changes requires
   the signing private key.
