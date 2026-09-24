@@ -31,10 +31,10 @@ func PCRTips() error {
 		{"PCR6", "Resume from S4 and S5 Power State Events", "Firmware"},
 		{"PCR7", "Secure Boot State. Contains the full contents of PK/KEK/db, as", "Firmware, shim"},
 		{"", "well as the specific certificates used to validate each boot app.", ""},
-		{"PCR8¹", "GRUB: the commands it ran from grub.cfg (incl. the kernel", "GRUB"},
-		{"", "cmdline). Unused when booting a UKI via systemd-stub.", ""},
-		{"PCR9¹", "Files the boot loader loaded: kernel and initramfs, plus EFI", "GRUB, systemd-stub"},
-		{"", "Load Options. Changes on every kernel/initramfs update.", ""},
+		{"PCR8¹", "GRUB: every command it ran, logged as 'grub_cmd: ...'. The", "GRUB"},
+		{"", "kernel cmdline is only one of them. Unused under a UKI.", ""},
+		{"PCR9¹", "GRUB: contents of every file it read - grub.cfg, modules,", "GRUB, systemd-stub"},
+		{"", "kernel, initrd - plus LOADED_IMAGE::LoadOptions.", ""},
 		{"PCR10¹", "Runtime file measurements, by convention Linux IMA. Never", "Linux IMA"},
 		{"", "appears in the firmware event log.", ""},
 		{"PCR11¹", "Hash of the Unified kernel image (supports 'u' for direct computation)", "systemd-stub"},
@@ -82,7 +82,7 @@ func PCRTips() error {
 	fmt.Println("PCRs 9, 11 and 15 keep being extended after tpm2-kira reads them, so a")
 	fmt.Println("value read from the running system is NOT what the next boot will show.")
 	fmt.Println()
-	fmt.Println("Source: https://wiki.archlinux.org/title/Trusted_Platform_Module")
+	fmt.Println("Adapted from https://wiki.archlinux.org/title/Trusted_Platform_Module")
 
 	return nil
 }
@@ -98,8 +98,8 @@ func GetPCRDescription(pcrIndex int) string {
 		5:  "Boot Manager Configuration and Data (GPT table)",
 		6:  "Resume from S4 and S5 Power State Events",
 		7:  "Secure Boot State (PK/KEK/db certificates)",
-		8:  "GRUB commands from grub.cfg (incl. kernel cmdline)",
-		9:  "Kernel and initramfs loaded by the boot loader",
+		8:  "GRUB commands (logged as 'grub_cmd: ...')",
+		9:  "Contents of files GRUB read, plus EFI LoadOptions",
 		10: "Runtime measurements, by convention Linux IMA",
 		11: "Hash of the Unified kernel image",
 		12: "Overridden kernel command line, Credentials",

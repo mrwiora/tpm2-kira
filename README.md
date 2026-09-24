@@ -403,8 +403,8 @@ apply. GRUB carries the equivalent measurements instead:
 | 0, 2 | firmware code and option ROMs | firmware update |
 | 4 | the GRUB EFI binary the firmware loaded | `grub-install`, shim/GRUB package update |
 | 7 | Secure Boot state and policy | key rotation, enabling/disabling Secure Boot |
-| 8 | GRUB commands from `grub.cfg` | `update-grub`, kernel version change |
-| 9 | files GRUB loads (kernel, initrd) | **every kernel or initramfs update** |
+| 8 | every command GRUB runs (`grub_cmd: ...`) | `update-grub`, kernel version change |
+| 9 | contents of every file GRUB reads (grub.cfg, modules, kernel, initrd) + EFI LoadOptions | **every kernel or initramfs update** |
 
 ```bash
 # Stable across kernel updates - a good default
