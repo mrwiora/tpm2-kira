@@ -298,6 +298,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	fmt.Printf("Hash algorithm: %s (%d-byte PCR digests)\n", hashAlgo.DisplayString(), hashAlgo.DigestSize())
 
 	WarnAboutPCRSelection(specsToUse)
+	WarnAboutHashAlgo(hashAlgo)
 
 	// Display per-PCR source information
 	hasEventlog := false
