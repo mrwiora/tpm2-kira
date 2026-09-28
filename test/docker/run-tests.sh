@@ -37,5 +37,13 @@ echo
 
 echo "=== PC/SC tests (real pcscd, virtual reader) ==="
 go test -tags=pcsc -timeout 5m ./internal/pcsc/ || status=1
+echo
+
+# Both simulators at once: a software TPM and a virtual YubiKey. This is the
+# only pass that exercises the whole feature — key reference, PC/SC transport,
+# PIV APDUs, TPM2_PolicySigned and the NVRAM write — without hardware.
+echo "=== YubiKey end-to-end (software TPM + virtual PIV card) ==="
+go test -tags="integration pcsc" -timeout 10m -run TestYubiKey -v . 2>&1 |
+    grep -E "^(=== RUN|--- |ok|FAIL)|_test.go:" || status=1
 
 exit $status

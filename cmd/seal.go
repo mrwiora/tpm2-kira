@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"fmt"
+	"os"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -154,11 +155,17 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 	}
 
 	// The public key reference is only useful when it names a file that can
-	// be read back. A token reference would send reseal to the card for
-	// something it already has.
+	// be read back, and pubKeyPath carries a default that may not exist — a
+	// key held on a token needs no public key file at all. Recording a path
+	// that is not there would send the next reseal to a missing file for
+	// something it can read from the token.
 	var pubKeyRef KeyRef
 	if pubKeyPath != "" {
-		pubKeyRef = KeyRef{Kind: KeyRefFile, Path: pubKeyPath}
+		if _, statErr := os.Stat(pubKeyPath); statErr == nil {
+			pubKeyRef = KeyRef{Kind: KeyRefFile, Path: pubKeyPath}
+		} else if debug {
+			fmt.Printf("Not recording a public key path: %s is not readable\n", pubKeyPath)
+		}
 	}
 
 	// Read all PCR values from their respective sources using the shared helper

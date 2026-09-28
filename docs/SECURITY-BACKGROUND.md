@@ -761,8 +761,18 @@ no secret at all. Three things bound the exposure:
    TPM, all before the index is touched. It refuses to overwrite a different
    blob without `--force`, because that may be a newer secret.
 
-What this does *not* cover is power loss, where the stash file write does not
-happen either. There is no way to make the replacement atomic within TPM 2.0.
+**Power loss during the write is an accepted risk.** The stash in step 2 is
+written by the same process that is doing the NV write, so a machine that loses
+power mid-write does not get one. The sealed secret is then gone and the user
+must `seal` again and re-enrol their authenticator.
+
+This is accepted rather than mitigated, for two reasons. TPM 2.0 offers no
+atomic replace — an index whose size changes must be undefined first — so no
+amount of care in tpm2-kira closes the window. And a machine that loses power
+partway through a root-privileged write is likely to have a half-written
+initramfs or package transaction as well: the TOTP secret is not the only thing
+in an inconsistent state, and it is among the easiest to rebuild, since
+re-sealing costs one command and one QR code scan.
 
 Setting an owner-hierarchy password would close the delete path, but tpm2-kira
 currently always presents an empty owner auth value, so it would stop working

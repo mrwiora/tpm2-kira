@@ -446,6 +446,14 @@ that may be a newer secret you sealed in the meantime; `--force` overrides.
 The restored policy binds the PCR values from when the blob was written, so
 `reseal` afterwards if the current state has moved on.
 
+**Power loss during the write is an accepted risk, not a covered one.** The
+stash is written by the same process doing the NV write, so a machine that loses
+power mid-write does not get one, and the secret is gone — `seal` again and
+re-enrol your authenticator. TPM 2.0 has no atomic replace, so the window cannot
+be closed; and a machine that dies partway through a root-privileged write
+probably has a half-written initramfs too. The TOTP secret is among the easier
+things to rebuild.
+
 ## Deleting Sealed Data
 
 ```bash
@@ -614,11 +622,16 @@ make test-integration
 # Everything
 make test-all
 
-# Everything, plus a real pcscd and a virtual smart card, in a container.
+# Everything, plus a real pcscd and a virtual YubiKey, in a container.
+# This is the only way to exercise the token path end to end without hardware.
 # BASE selects the pcsc-lite generation: 2.x by default, 1.9.x for bookworm.
 make test-docker
 make test-docker-all
 ```
+
+`internal/virtualpiv` emulates a YubiKey PIV application and attaches to the
+vsmartcard virtual reader, so `pcscd` sees an ordinary card. See
+[docs/YUBIKEY.md](docs/YUBIKEY.md#testing-without-hardware).
 
 ## Troubleshooting
 
@@ -714,7 +727,8 @@ in the TPM. Delete the slot first, then the directory.
 │   └── constants.go         # Default paths and constants
 ├── internal/
 │   ├── pcsc/                # cgo-free pcscd client (Unix socket protocol)
-│   └── piv/                 # PIV applet: read a slot, verify a PIN, sign
+│   ├── piv/                 # PIV applet: read a slot, verify a PIN, sign
+│   └── virtualpiv/          # Virtual YubiKey for tests (never linked into the binary)
 ├── tools/
 │   ├── pcrtool.py            # PCR replay and full-chain diagnosis
 │   └── tpm2-pcr11predict     # Independent cross-check of the built-in PCR 11 computation

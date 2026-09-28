@@ -561,8 +561,11 @@ Anything that does not begin with `yubikey:` is a filesystem path, so existing
 
 ## Testing without hardware
 
-The card code is exercised end to end without a YubiKey, using the vsmartcard
-virtual reader:
+There is a virtual YubiKey. `internal/virtualpiv` emulates the PIV application
+— backed by a software key, honouring PIN and touch policy, answering GET SERIAL
+and GET METADATA — and attaches to the vsmartcard virtual reader, where `pcscd`
+sees it as an ordinary card. Paired with a software TPM it runs the entire
+feature with nothing plugged in:
 
 ```bash
 make test-docker                      # pcsc-lite 2.x   (protocol 4.5)
@@ -570,15 +573,37 @@ make test-docker BASE=debian:bookworm # pcsc-lite 1.9.x (protocol 4.4)
 make test-docker-all                  # both
 ```
 
-That runs the unit tests, the software-TPM integration suite, and the PC/SC
-tests: a virtual PIV card backed by a software key, reached through a real
-`pcscd`, driven by `internal/piv`. Both pcsc-lite generations are worth running,
-because `internal/pcsc` implements the wire format by hand and only a live
-daemon can tell whether it is right — the command enum being off by one was
-found exactly this way.
+That runs four passes:
 
-With a local `pcscd` and `vsmartcard-vpcd` installed, the PC/SC tests alone are:
+| Pass | Covers |
+|---|---|
+| unit | key references, blob v9, the DER-to-raw signature conversion, PIV APDUs against a mock |
+| integration | seal, reseal, reveal and NVRAM restore against a software TPM |
+| PC/SC | the hand-written pcscd wire format against a live daemon, and the PIV layer over it |
+| YubiKey end-to-end | **both simulators at once**: seal and reseal with a key that only exists on the virtual token |
+
+The last pass is the one that covers the feature as a user meets it: a key
+reference on the command line, a PIN from the environment, the PC/SC transport,
+PIV APDUs, `TPM2_PolicySigned`, and the NVRAM write. It also checks the
+behaviours that are awkward to test by hand — a slot with PIN policy `always`
+really is re-verified once per signature, a wrong PIN costs exactly one attempt
+and then stops, unplugging the token mid-workflow produces the `SKIPPED` report
+with the blob untouched, and swapping in a different token is diagnosed by name.
+
+Running both pcsc-lite generations matters because `internal/pcsc` implements
+the wire format by hand and only a live daemon can tell whether it is right —
+the command enum being off by one, and the protocol version differing between
+generations, were both found this way.
+
+With a local `pcscd` and `vsmartcard-vpcd` installed, the card passes alone are:
 
 ```bash
-make test-pcsc
+make test-pcsc                                          # transport and PIV layer
+go test -tags="integration pcsc" -run TestYubiKey -v .  # end to end
 ```
+
+What this does **not** cover is a real YubiKey. The emulator follows the specs
+tpm2-kira was written against, so anything where real firmware differs — timing,
+extended APDU support over its CCID interface, quirks in a particular firmware
+revision — still needs the hardware. `tpm2-kira yubikey list` with a token
+plugged in is the check.

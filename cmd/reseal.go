@@ -263,12 +263,26 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		var loadedPubKey crypto.PublicKey
 		loadedPubKey, _, err = LoadSigningPublicKeyFromPEM(effectivePubKeyPath)
 		if err != nil {
-			return fmt.Errorf("failed to load signing public key from %s: %w", effectivePubKeyPath, err)
+			if pubKeyPath != "" {
+				// The user named this file, so failing to read it is their
+				// error to see rather than something to work around.
+				return fmt.Errorf("failed to load signing public key from %s: %w", effectivePubKeyPath, err)
+			}
+
+			// The path came from the blob, where it is only a hint. The
+			// signing key already resolved above has the same public half,
+			// so a moved or missing file is not a reason to stop.
+			fmt.Printf("Note: the public key file recorded in the blob is unreadable (%v);\n", err)
+			fmt.Printf("      using the public half of the signing key instead.\n")
+			effectivePubKeyPath = ""
+		} else {
+			resealPubKey = loadedPubKey
+			resealPubKeySource = effectivePubKeyPath
+			resealPubKeyPathForBlob = effectivePubKeyPath
 		}
-		resealPubKey = loadedPubKey
-		resealPubKeySource = effectivePubKeyPath
-		resealPubKeyPathForBlob = effectivePubKeyPath
-	} else {
+	}
+
+	if resealPubKey == nil {
 		// The public half of the key already resolved above. No file to
 		// read and, for a token, no second card session.
 		resealPubKey = signingKey.Public()
