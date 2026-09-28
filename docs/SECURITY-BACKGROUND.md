@@ -104,9 +104,12 @@ itself does not authenticate, since only the `Private` area is TPM-protected.
 
 The NVRAM index attributes are:
 
-- `OwnerWrite`, `OwnerRead`, `AuthWrite`, `AuthRead`
-- No PCR-based NVRAM policy — access control is on the sealed **object** inside,
-  not on the NVRAM index itself.
+- `OwnerRead`, `AuthRead` — reads are open
+- `PolicyWrite` with a PolicySigned `AuthPolicy` — writes need the signing key;
+  `OwnerWrite` and `AuthWrite` are clear
+- No PCR-based NVRAM policy — the secret is protected by the sealed **object**
+  inside, not by the NVRAM index. See §9 for what the write policy does and
+  does not cover.
 
 ### 3.2 Inside the TPM (never leaves the chip)
 
@@ -622,7 +625,7 @@ unseal.
 | Boot chain tampering (evil maid)            | PCR values change → PCR branch fails → TOTP code absent → user detects compromise |
 | Software-only attack (malware in OS)        | Secret requires TPM policy session; malware would need to execute TPM commands with matching PCR state |
 | Blob tampering in NVRAM                     | `Private` area is integrity-protected by TPM; tampering causes `TPM2_Load` to fail |
-| Re-seal by unauthorised party (PCRs match)  | Requires access to the TPM device (`/dev/tpm0`, typically root-only) |
+| Re-seal by unauthorised party (PCRs match)  | Unsealing requires access to the TPM device (`/dev/tpm0`, typically root-only); writing the new blob back requires the signing key, or deleting and redefining the index (§9) |
 | Re-seal by unauthorised party (PCRs differ) | Requires possession of the signing private key on the filesystem |
 
 ### What the TPM does NOT protect against
@@ -677,26 +680,50 @@ be read at all, tpm2-kira says so rather than staying silent.
 
 ## 9. NVRAM Index Security
 
-The NVRAM index is defined with `OwnerRead | OwnerWrite | AuthRead | AuthWrite`
-and an empty auth value. This means:
+`WriteToNVRAM` (`cmd/nvram.go`) defines the index as follows:
 
-- Any process that can talk to the TPM can **read** the blob.
-- Any process that can talk to the TPM can **overwrite** the blob.
+| Attribute | Set | Effect |
+|---|---|---|
+| `OwnerRead`, `AuthRead` | yes | any process that can talk to the TPM can read the blob |
+| `OwnerWrite` | no | the owner hierarchy cannot write, even with owner auth |
+| `AuthWrite` | no | the index's own (empty) auth value cannot write |
+| `PolicyWrite` | yes | a write needs a policy session that satisfies `AuthPolicy` |
+| `AuthPolicy` | PolicySigned digest of the signing key | the same key, and the same digest, as the sealed object's PolicySigned branch (§4.2) |
 
-This is acceptable because:
+Every write is therefore authorised by a signature from the signing private key,
+verified by the TPM. The blob is written in 1024-byte chunks, each under a fresh
+PolicySigned session: every session has a new `nonceTPM` to sign, and the index
+Name changes after the first write sets `TPMA_NV_WRITTEN`, so it is re-read
+before each chunk. HISTORY.md records the earlier, unauthenticated definition.
+
+What this means in practice:
 
 1. **Reading the blob is harmless.** The `Private` field is TPM-encrypted and
    reveals nothing without a valid policy session. The `Public` field, PCR
    digests, and signing public key are not secret.
-2. **Overwriting the blob is a denial-of-service**, not a secret compromise.
-   An attacker who overwrites the NVRAM destroys the sealed secret but cannot
-   recover it. The user loses their TOTP enrollment and must re-seal.
-3. **The real access control is on the sealed object**, not the NVRAM index.
+2. **Overwriting the blob in place needs the signing private key.** Without it,
+   `TPM2_NV_Write` fails the policy check.
+3. **Deleting the index does not need the signing key.** `TPM2_NV_UndefineSpace`
+   is authorised by the owner hierarchy, not by the index's policy. tpm2-kira
+   uses the owner hierarchy with an empty auth value throughout — for
+   `TPM2_CreatePrimary`, for defining the index and for `nvram delete` — so on
+   a typical system any process with TPM access can delete a slot. That is a
+   denial of service: the sealed secret is gone, and the user must re-seal and
+   re-enrol the authenticator.
+4. **Delete-and-redefine lets an attacker plant a blob of their own**, under a
+   write policy of their choosing. The index definition therefore does not
+   authenticate the blob's content; the blob signature does (§3.1, note ⁴).
+   `reseal` verifies it before acting on any field. `reveal` does not verify it,
+   since the signing key is not available in the initrd, but a planted blob can
+   only contain a sealed object the attacker created, holding a TOTP secret the
+   attacker chose. Its codes do not match the user's authenticator, so the
+   substitution shows up as a failed comparison, not as a false pass.
+5. **The real access control is on the sealed object**, not the NVRAM index.
    The object's `authPolicy` (PolicyOR) is what prevents unauthorised unseal.
 
-If NVRAM write protection is desired, the index could be defined with
-platform-specific policies (e.g., owner auth), but this is outside the scope
-of tpm2-kira's current design.
+Setting an owner-hierarchy password would close the delete path, but tpm2-kira
+currently always presents an empty owner auth value, so it would stop working
+on such a system. Supporting owner auth is outside the current design.
 
 ---
 
