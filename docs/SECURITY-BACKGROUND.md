@@ -740,6 +740,30 @@ What this means in practice:
 5. **The real access control is on the sealed object**, not the NVRAM index.
    The object's `authPolicy` (PolicyOR) is what prevents unauthorised unseal.
 
+### 9.1 Replacing a blob is not atomic
+
+`WriteToNVRAM` must `TPM2_NV_UndefineSpace` before it can redefine an index with
+a new size, so between that call and the last chunk being written the slot holds
+no secret at all. Three things bound the exposure:
+
+1. **Everything that can fail non-destructively happens first.** The signing key
+   is loaded into the TPM, the write policy is computed, and the key is asked to
+   sign a dummy digest — so an unusable key, an absent token or a refused PIN is
+   discovered while the old blob is still intact.
+2. **The blob is stashed if a later step fails.** It goes to
+   `/var/lib/tpm2-kira/recovery/` (mode 0600). The `Private` area is wrapped by
+   the storage primary key, which `TPM2_CreatePrimary` re-derives
+   deterministically from the Storage Primary Seed, so the secret is recoverable
+   from those bytes on the same TPM — the NV index is only storage.
+3. **`nvram restore` writes it back**, and treats the file as untrusted input:
+   the blob signature is verified, the key fingerprint is checked against what
+   the blob records, and the sealed object is loaded to prove it belongs to this
+   TPM, all before the index is touched. It refuses to overwrite a different
+   blob without `--force`, because that may be a newer secret.
+
+What this does *not* cover is power loss, where the stash file write does not
+happen either. There is no way to make the replacement atomic within TPM 2.0.
+
 Setting an owner-hierarchy password would close the delete path, but tpm2-kira
 currently always presents an empty owner auth value, so it would stop working
 on such a system. Supporting owner auth is outside the current design.

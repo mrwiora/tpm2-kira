@@ -671,9 +671,11 @@ Ranked by how much I think they matter.
    sealed object's private area is wrapped by the TPM's deterministic primary
    key, so the secret survives in those bytes even though the index is gone.
 
-   Follow-up: a `tpm2-kira nvram restore --from <file>` command to write a
-   stashed blob back. Deferred deliberately — it needs the key resolution that
-   step 1 of §15 is about to rewrite.
+   Follow-up: ~~a `tpm2-kira nvram restore` command to write a stashed blob
+   back.~~ **Done.** Blob v9 made it small, since the file now names its own
+   signing key. It verifies the blob signature, checks the key fingerprint, and
+   loads the sealed object to prove the blob belongs to this TPM before touching
+   the index, and refuses to overwrite a different blob without `--force`.
 2. **`tpm2-kira info` should say whether the blob is stale.** The direct
    consequence of "reseal may legitimately be skipped" is that users need a way
    to ask "am I about to reboot into a mismatch?" that is not "reboot and see".
@@ -720,7 +722,7 @@ Ranked by how much I think they matter.
 1. `SigningKey` abstraction + refactor of the three signing call sites, file
    backend only. **No behaviour change**; the existing suite must pass untouched,
    plus the fake-token suite from §10.
-2. `nvram restore --from <file>`, completing the recovery path opened by step 0.
+2. ~~`nvram restore`, completing the recovery path opened by step 0.~~ **Done.**
 3. ~~Blob v9: typed key refs, fingerprint/serial pinning, `info --json` output.~~ **Done.**
 4. Degradation path, `SKIPPED:` marker, hook changes, `--require-key`,
    `info` staleness.

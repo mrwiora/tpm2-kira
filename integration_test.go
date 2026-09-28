@@ -18,6 +18,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-tpm/tpm2/transport"
+	kira "github.com/matthias/tpm2-kira/cmd"
 )
 
 const (
@@ -1349,4 +1352,215 @@ func TestResealWithStoredKeyPaths(t *testing.T) {
 
 	// Clean up
 	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", nvramIndex)
+}
+
+// readNVRAMBlob reads the raw sealed blob out of an index.
+//
+// Tests compare blobs rather than TOTP codes wherever they can: a blob is
+// deterministic, whereas two codes taken seconds apart differ whenever the
+// 30-second window turns over.
+func readNVRAMBlob(t *testing.T, tpmPath string, index uint32) []byte {
+	t.Helper()
+
+	tpmDev, err := transport.OpenTPM(tpmPath)
+	if err != nil {
+		t.Fatalf("failed to open the software TPM: %v", err)
+	}
+	defer tpmDev.Close()
+
+	data, err := kira.ReadFromNVRAM(tpmDev, index)
+	if err != nil {
+		t.Fatalf("failed to read NVRAM 0x%08X: %v", index, err)
+	}
+
+	return data
+}
+
+// TestNVRAMRestore covers the recovery path for a write that did not complete:
+// an NV index left empty with the blob saved to disk.
+//
+// WriteToNVRAM must undefine an index before redefining it, and TPM 2.0 has no
+// atomic replace, so a failure in between leaves the slot empty. The sealed
+// object's private area is wrapped by this TPM's deterministically re-derived
+// primary key, so the secret survives in the stashed bytes — this is what proves
+// they can be written back and used.
+func TestNVRAMRestore(t *testing.T) {
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+
+	const nvramIndex = "0x01803006"
+	const nvramIndexValue = 0x01803006
+
+	stdout, stderr, err := runTPMKira(t, tpmPath,
+		"seal",
+		"--nvram", nvramIndex,
+		"--pcrs", testPCRs,
+		"--pubkey", testPubKeyPath,
+		"--privkey", testPrivKeyPath,
+	)
+	if err != nil {
+		t.Fatalf("Seal failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
+	}
+
+	original := readNVRAMBlob(t, tpmPath, nvramIndexValue)
+	if len(original) == 0 {
+		t.Fatal("read an empty blob from NVRAM")
+	}
+	testReveal(t, tpmPath, nvramIndex)
+
+	stashDir := t.TempDir()
+	stashPath := filepath.Join(stashDir, "slot.blob")
+	if err := os.WriteFile(stashPath, original, 0o600); err != nil {
+		t.Fatalf("failed to write the stash file: %v", err)
+	}
+
+	// Stand in for the failed write: the index is gone, the bytes are on disk.
+	if _, _, err := runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", nvramIndex); err != nil {
+		t.Fatalf("NVRAM delete failed: %v", err)
+	}
+
+	stdout, _, _ = runTPMKira(t, tpmPath, "reveal-plain", "--nvram", nvramIndex)
+	if isTOTPCode(strings.TrimSpace(stdout)) {
+		t.Fatal("reveal produced a code after the index was deleted; the test proves nothing")
+	}
+
+	// ── A tampered stash must be refused ──
+	tamperedPath := filepath.Join(stashDir, "tampered.blob")
+	corrupt := append([]byte{}, original...)
+	corrupt[len(corrupt)/2] ^= 0xFF
+	if err := os.WriteFile(tamperedPath, corrupt, 0o600); err != nil {
+		t.Fatalf("failed to write the tampered file: %v", err)
+	}
+
+	stdout, stderr, _ = runTPMKira(t, tpmPath,
+		"nvram", "restore", "--nvram", nvramIndex,
+		"--from", tamperedPath, "--privkey", testPrivKeyPath)
+	if !strings.Contains(stdout+stderr, "refusing to restore") {
+		t.Errorf("a tampered stash should be refused, got:\n%s\n%s", stdout, stderr)
+	}
+
+	// ── The real restore ──
+	stdout, stderr, err = runTPMKira(t, tpmPath,
+		"nvram", "restore", "--nvram", nvramIndex,
+		"--from", stashPath, "--privkey", testPrivKeyPath)
+	if err != nil {
+		t.Fatalf("Restore failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Successfully restored") {
+		t.Fatalf("expected a success message, got:\n%s\n%s", stdout, stderr)
+	}
+	if !strings.Contains(stdout, "This TPM can load the sealed object") {
+		t.Errorf("expected the TPM load check to be reported, got:\n%s", stdout)
+	}
+
+	if restored := readNVRAMBlob(t, tpmPath, nvramIndexValue); !bytes.Equal(restored, original) {
+		t.Errorf("the restored blob differs from the stash: %d bytes vs %d", len(restored), len(original))
+	}
+
+	// The point of the whole exercise: the secret is usable again.
+	testReveal(t, tpmPath, nvramIndex)
+	t.Log("✓ restored and the sealed secret unseals again")
+
+	// ── Restoring the same bytes again is a no-op, not an error ──
+	stdout, stderr, err = runTPMKira(t, tpmPath,
+		"nvram", "restore", "--nvram", nvramIndex,
+		"--from", stashPath, "--privkey", testPrivKeyPath)
+	if err != nil {
+		t.Fatalf("Second restore failed: %v\n%s\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Nothing to do") {
+		t.Errorf("restoring an identical blob should be a no-op, got:\n%s", stdout)
+	}
+
+	// ── A newer blob must not be clobbered without --force ──
+	if _, _, err := runTPMKira(t, tpmPath,
+		"seal", "--nvram", nvramIndex, "--pcrs", testPCRs,
+		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
+		t.Fatalf("re-seal failed: %v", err)
+	}
+
+	newer := readNVRAMBlob(t, tpmPath, nvramIndexValue)
+	if bytes.Equal(newer, original) {
+		t.Fatal("re-sealing produced an identical blob; cannot test the clobber guard")
+	}
+
+	stdout, stderr, _ = runTPMKira(t, tpmPath,
+		"nvram", "restore", "--nvram", nvramIndex,
+		"--from", stashPath, "--privkey", testPrivKeyPath)
+	if !strings.Contains(stdout+stderr, "already holds a different blob") {
+		t.Errorf("expected a refusal to overwrite a newer blob, got:\n%s\n%s", stdout, stderr)
+	}
+	if got := readNVRAMBlob(t, tpmPath, nvramIndexValue); !bytes.Equal(got, newer) {
+		t.Error("the refused restore changed the index anyway")
+	}
+
+	// ── --force is the explicit override ──
+	stdout, stderr, err = runTPMKira(t, tpmPath,
+		"nvram", "restore", "--nvram", nvramIndex,
+		"--from", stashPath, "--privkey", testPrivKeyPath, "--force")
+	if err != nil {
+		t.Fatalf("forced restore failed: %v\n%s\n%s", err, stdout, stderr)
+	}
+	if got := readNVRAMBlob(t, tpmPath, nvramIndexValue); !bytes.Equal(got, original) {
+		t.Error("after --force the original blob should be back in the index")
+	}
+	testReveal(t, tpmPath, nvramIndex)
+
+	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", nvramIndex)
+}
+
+// TestNVRAMRestoreRejectsForeignTPM checks the guard that would otherwise let a
+// blob from another machine be written and only fail later, at reveal, when the
+// file that could have explained it is long gone.
+func TestNVRAMRestoreRejectsForeignTPM(t *testing.T) {
+	originTPM, cleanupOrigin := setupSoftwareTPM(t)
+	defer cleanupOrigin()
+
+	const nvramIndex = "0x01803007"
+	const nvramIndexValue = 0x01803007
+
+	if _, _, err := runTPMKira(t, originTPM,
+		"seal", "--nvram", nvramIndex, "--pcrs", testPCRs,
+		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
+		t.Fatalf("Seal on the origin TPM failed: %v", err)
+	}
+
+	blob := readNVRAMBlob(t, originTPM, nvramIndexValue)
+
+	stashPath := filepath.Join(t.TempDir(), "foreign.blob")
+	if err := os.WriteFile(stashPath, blob, 0o600); err != nil {
+		t.Fatalf("failed to write the stash file: %v", err)
+	}
+
+	// A second, independent software TPM: a different storage primary seed, so
+	// it cannot unwrap the sealed object's private area.
+	otherTPM, cleanupOther := setupSoftwareTPM(t)
+	defer cleanupOther()
+
+	stdout, stderr, _ := runTPMKira(t, otherTPM,
+		"nvram", "restore", "--nvram", nvramIndex,
+		"--from", stashPath, "--privkey", testPrivKeyPath)
+
+	if !strings.Contains(stdout+stderr, "cannot load the sealed object") {
+		t.Errorf("expected a refusal naming the TPM mismatch, got:\n%s\n%s", stdout, stderr)
+	}
+
+	// Most importantly, the refusal must come before anything is written.
+	stdout, _, _ = runTPMKira(t, otherTPM, "reveal-plain", "--nvram", nvramIndex)
+	if isTOTPCode(strings.TrimSpace(stdout)) {
+		t.Error("the foreign TPM should hold nothing at that index")
+	}
+}
+
+// isTOTPCode reports whether s is a six-digit TOTP code.
+func isTOTPCode(s string) bool {
+	if len(s) != 6 {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }

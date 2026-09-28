@@ -366,7 +366,7 @@ func stashUnwrittenBlob(index uint32, data []byte, cause error) error {
 		return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY and the blob could not be saved either (%v).\n  The sealed secret is lost; run 'tpm2-kira seal' and re-enrol your authenticator", cause, index, wrErr)
 	}
 
-	return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY. The blob that was about to be written has been saved to:\n      %s\n  Keep this file: it holds the sealed object and is the only remaining copy of the secret.\n  Fix the cause above, then write it back. If you discard it, the secret is gone and\n  you must run 'tpm2-kira seal' and re-enrol your authenticator", cause, index, path)
+	return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY. The blob that was about to be written has been saved to:\n      %s\n  Keep this file: it holds the sealed object and is the only remaining copy of the secret.\n  Fix the cause above, then write it back with:\n      sudo tpm2-kira nvram restore --nvram 0x%08X\n  If you discard it, the secret is gone and you must run 'tpm2-kira seal' and\n  re-enrol your authenticator", cause, index, path, index)
 }
 
 // NVRAMList lists all defined NVRAM indices in the TPM

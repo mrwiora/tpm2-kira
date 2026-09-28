@@ -267,8 +267,14 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	from := fs.String("from", "", "restore: stashed blob to write back (default: the newest for this slot)")
+	privKey := fs.String("privkey", "", "restore: signing key, if not the one recorded in the blob")
+	pinFile := fs.String("pin-file", "", "restore: file holding the YubiKey PIN (mode 0600)")
+	force := fs.Bool("force", false, "restore: overwrite a different blob already in the index")
 
 	fs.Parse(args)
+
+	cmd.PINFileSetting = *pinFile
 
 	provided := nvramExplicit(args)
 
@@ -286,6 +292,16 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	case "delete":
 		deleteIndex := resolveOrScanAll(uint32(*nvram), provided)
 		if err := cmd.NVRAMDeleteCommand(*tpm, deleteIndex, *debug); err != nil {
+			fail(err)
+		}
+	case "restore":
+		// Restoring writes one specific index, so there is nothing sensible
+		// to scan for: require it.
+		if !provided {
+			fail(fmt.Errorf("nvram restore needs --nvram to say which index to write"))
+		}
+		restoreIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
+		if err := cmd.NVRAMRestore(*tpm, restoreIndex, *from, *privKey, *force, *debug); err != nil {
 			fail(err)
 		}
 	default:
@@ -329,7 +345,7 @@ COMMANDS:
   reveal-plain Generate TOTP code (plain output)
   run         Continuously display TOTP codes (runs until stopped)
   info        Display sealed secret information
-  nvram       Manage TPM NVRAM (list, status, delete)
+  nvram       Manage TPM NVRAM (list, status, delete, restore)
   yubikey     Inspect a YubiKey PIV signing key (list, adopt, status,
               export-pubkey). Read-only: tpm2-kira never writes to a token.
   pcrtips     Show PCR (Platform Configuration Register) reference guide
@@ -446,6 +462,8 @@ EXAMPLES:
   tpm2-kira nvram delete
   tpm2-kira nvram delete --nvram 0
   tpm2-kira nvram delete --nvram 0x01803010
+  tpm2-kira nvram restore --nvram 0
+  tpm2-kira nvram restore --nvram 0 --from /var/lib/tpm2-kira/recovery/slot-0x01803010-1700000000.blob
 
 For detailed documentation, see README.md
 `, cmd.DefaultPublicKeyPath)

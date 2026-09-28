@@ -140,6 +140,7 @@ If called without a command, tpm2-kira defaults to `reveal`.
 | `nvram list` | List NVRAM indices |
 | `nvram status` | Show NVRAM index status |
 | `nvram delete` | Delete sealed data from NVRAM |
+| `nvram restore` | Write back a blob that a failed NVRAM write left on disk |
 | `yubikey list` | Show connected YubiKeys, their PIV slots and policies |
 | `yubikey adopt` | Register an existing PIV slot key and cache its public key |
 | `yubikey status` | Check whether the enrolled token is present |
@@ -416,6 +417,34 @@ tpm2-kira info --json          # machine-readable
 `--json` always emits an array of slot objects, one per populated slot, even
 when there is only one. Each entry carries `slot_number`, `nvram_index` and the
 blob itself, so consumers never have to branch on the slot count.
+
+## Recovering an interrupted NVRAM write
+
+Replacing an NVRAM index means undefining it first, and TPM 2.0 has no atomic
+replace. `seal` and `reseal` do everything that can fail *before* that point —
+loading the key, computing the write policy, and a test signature — so the window
+is narrow. But a TPM error, or a hardware token unplugged mid-write, can still
+leave the index empty.
+
+When that happens the blob is written to `/var/lib/tpm2-kira/recovery/` and the
+error says so. That file is not a consolation prize: the sealed object's private
+area is wrapped by this TPM's storage primary key, which is re-derived
+deterministically, so **the secret survives in those bytes**. Write them back:
+
+```bash
+sudo tpm2-kira nvram restore --nvram 0
+sudo tpm2-kira nvram restore --nvram 0 --from /var/lib/tpm2-kira/recovery/slot-0x01803010-1700000000.blob
+```
+
+Restore needs the signing key, because the index's write policy is PolicySigned —
+it uses the reference stored in the blob, so usually no flags are needed. Before
+writing anything it verifies the blob's signature, checks the key is the one the
+blob was sealed with, and loads the sealed object to confirm the blob belongs to
+this TPM. It refuses to overwrite a *different* blob already in the index, since
+that may be a newer secret you sealed in the meantime; `--force` overrides.
+
+The restored policy binds the PCR values from when the blob was written, so
+`reseal` afterwards if the current state has moved on.
 
 ## Deleting Sealed Data
 
