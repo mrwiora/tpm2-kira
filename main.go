@@ -56,6 +56,8 @@ func main() {
 		runInfo(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "nvram":
 		runNVRAM(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+	case "yubikey":
+		runYubiKey(commandArgs, *tpmPath, *debug)
 	case "reveal":
 		runReveal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "reveal-plain":
@@ -122,11 +124,14 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
 	pubKeyPath := fs.String("pubkey", cmd.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
-	privKeyPath := fs.String("privkey", cmd.DefaultPrivateKeyPath, "Path to signing private key PEM (stored in blob for reseal convenience)")
+	privKeyPath := fs.String("privkey", cmd.DefaultPrivateKeyPath, "Signing private key: a PEM path, or a YubiKey slot such as yubikey:serial=12345678;slot=9a")
+	pinFile := fs.String("pin-file", "", "File holding the YubiKey PIN (mode 0600); alternative to $TPM2_KIRA_PIN")
 	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
 	verifyUKI := fs.Bool("verify-uki", true, "Check the built-in PCR 11 computation against this boot's event log before sealing")
 
 	fs.Parse(args)
+
+	cmd.PINFileSetting = *pinFile
 
 	mode, err := cmd.ParseMeasurePointMode(*measurePoint)
 	if err != nil {
@@ -159,10 +164,15 @@ func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	pubKeyPath := fs.String("pubkey", "", "Path to signing public key PEM (default: derived from --privkey, or preserved from blob)")
-	privKeyPath := fs.String("privkey", "", "Path to signing private key PEM (required when PCR values have changed)")
+	privKeyPath := fs.String("privkey", "", "Signing private key: a PEM path, or a YubiKey slot such as yubikey:serial=12345678;slot=9a")
+	pinFile := fs.String("pin-file", "", "File holding the YubiKey PIN (mode 0600); alternative to $TPM2_KIRA_PIN")
+	requireKey := fs.Bool("require-key", false, "Fail instead of warning when the signing key is unavailable")
 	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
 
 	fs.Parse(args)
+
+	cmd.PINFileSetting = *pinFile
+	cmd.RequireKeySetting = *requireKey
 
 	mode, err := cmd.ParseMeasurePointMode(*measurePoint)
 	if err != nil {
@@ -283,6 +293,28 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	}
 }
 
+// runYubiKey handles the read-only token subcommands. tpm2-kira never writes
+// to a token; populating a slot is done with ykman.
+func runYubiKey(args []string, tpmPath string, debugFlag bool) {
+	if len(args) == 0 {
+		fail(fmt.Errorf("yubikey requires a subcommand (list, adopt, status, export-pubkey)"))
+	}
+
+	subcommand := args[0]
+
+	fs := flag.NewFlagSet("yubikey", flag.ExitOnError)
+	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
+	ref := fs.String("key", "", "Key reference, e.g. yubikey:serial=12345678;slot=9a")
+	out := fs.String("out", "", "Where to write the public key PEM")
+	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+
+	fs.Parse(args[1:])
+
+	if err := cmd.YubiKeyCommand(*tpm, []string{subcommand}, *ref, *out, *debug); err != nil {
+		fail(err)
+	}
+}
+
 func printUsage() {
 	fmt.Printf(`tpm2-kira - TPM2-based TOTP authenticator with PCR policies
 
@@ -298,9 +330,15 @@ COMMANDS:
   run         Continuously display TOTP codes (runs until stopped)
   info        Display sealed secret information
   nvram       Manage TPM NVRAM (list, status, delete)
+  yubikey     Inspect a YubiKey PIV signing key (list, adopt, status,
+              export-pubkey). Read-only: tpm2-kira never writes to a token.
   pcrtips     Show PCR (Platform Configuration Register) reference guide
   version     Show version information
   help        Show this help message
+
+ENVIRONMENT:
+  TPM2_KIRA_PIN   PIN for a signing key held in a YubiKey PIV slot. Only read
+                  when the key reference names a token.
 
 GLOBAL OPTIONS:
   --tpm PATH      Path to TPM device (default: /dev/tpm0)
@@ -325,9 +363,17 @@ SEAL OPTIONS:
   --pubkey PATH      Path to signing public key PEM for PolicySigned branch
                      (default: %s)
                      Accepts X.509 certificates or raw public keys (RSA, ECDSA)
-  --privkey PATH     Path to signing private key PEM (optional)
-                     Both key paths are stored in the blob so reseal can find
-                     them automatically without requiring --pubkey / --privkey
+  --privkey REF      Signing private key, stored in the blob so reseal can find
+                     it automatically. Either a path to a PEM file (the default)
+                     or a YubiKey PIV slot:
+                       /var/lib/tpm2-kira/keys/seal.key
+                       yubikey:serial=12345678;slot=9a
+  --pin-file PATH    File holding the YubiKey PIN, mode 0600.
+  --require-key      Fail instead of warning when the signing key is not
+                     available. Without it, a reseal that cannot reach the key
+                     prints a SKIPPED warning, changes nothing, and the next
+                     boot shows a PCR mismatch. Alternative to
+                     the TPM2_KIRA_PIN environment variable.
   --sha1             Use SHA-1 PCR bank instead of SHA-256 (default: SHA-256)
                      Use only if firmware eventlog does not provide SHA-256 digests
   --verify-uki       Check the built-in PCR 11 computation against this boot's
@@ -340,9 +386,11 @@ RESEAL OPTIONS:
   --pubkey PATH      Path to signing public key PEM for re-sealing (optional)
                      Default: derived from --privkey, or loaded from blob's
                      stored key path. Use this to change the signing key.
-  --privkey PATH     Path to signing private key PEM (required when PCRs changed)
-                     The TPM verifies the signature via PolicySigned.
+  --privkey REF      Signing private key: a PEM path or a yubikey: reference.
+                     Required for every reseal, because the NV write policy is
+                     PolicySigned. The TPM verifies the signature.
                      Also used to derive the public key when --pubkey is omitted.
+  --pin-file PATH    File holding the YubiKey PIN, mode 0600.
 
 INFO OPTIONS:
   --json             Output as JSON

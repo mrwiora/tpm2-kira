@@ -8,9 +8,11 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/binary"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"os"
 
 	"github.com/google/go-tpm/tpm2"
@@ -646,15 +648,15 @@ func UnsealWithPCRBranch(tpmDev transport.TPM, loadedObject *LoadSealedObjectRes
 // UnsealWithSignedBranch unseals data using the PolicySigned branch of PolicyOR.
 // This is the recovery path when PCRs have changed, requiring the signing private key.
 // Uses tpm2.Policy() callback to build the full policy session just-in-time.
-func UnsealWithSignedBranch(tpmDev transport.TPM, loadedObject *LoadSealedObjectResponse, sealedBlob *SealedBlob, privateKeyPath string, debug bool) ([]byte, error) {
-	// Load the private key for signing — the public key is derived from it.
-	privKey, err := LoadSigningPrivateKeyFromPEM(privateKeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load private key: %w", err)
+func UnsealWithSignedBranch(tpmDev transport.TPM, loadedObject *LoadSealedObjectResponse, sealedBlob *SealedBlob, privKey crypto.Signer, debug bool) ([]byte, error) {
+	if privKey == nil {
+		return nil, fmt.Errorf("a signing key is required for PolicySigned recovery")
 	}
 
-	// Derive the public key from the private key
+	// The public key comes from the signing key itself, which works whether
+	// the private half is a file or a slot on a token.
 	pubKey := privKey.Public()
+	var err error
 
 	// Load the public key into TPM for PolicySigned verification.
 	// This must happen before the policy callback since the handle is captured.
@@ -812,11 +814,23 @@ func ParsePublicKeyFromPEM(pemData []byte) (crypto.PublicKey, error) {
 	}
 }
 
-// signForTPM signs a digest with the private key and returns a TPM-compatible signature structure.
+// signForTPM signs a digest with the signing key and returns a TPM-compatible
+// signature structure.
+//
+// The dispatch is on the *public* key type and the signing goes through
+// crypto.Signer, because the key may live on a hardware token and therefore not
+// be an *ecdsa.PrivateKey or *rsa.PrivateKey at all.
+//
+// For ECDSA that distinction is load-bearing: crypto.Signer returns an ASN.1
+// DER SEQUENCE, while TPMS_SIGNATURE_ECC carries the raw r and s values, each
+// left-padded to the curve's byte length. Handing the DER bytes to the TPM
+// would produce a signature it rejects.
 func signForTPM(privKey crypto.Signer, digest []byte) (tpm2.TPMTSignature, error) {
-	switch key := privKey.(type) {
-	case *rsa.PrivateKey:
-		sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest)
+	switch pub := privKey.Public().(type) {
+	case *rsa.PublicKey:
+		// A crypto.Signer given a plain hash as its opts produces PKCS#1
+		// v1.5, which is what TPM_ALG_RSASSA denotes.
+		sig, err := privKey.Sign(rand.Reader, digest, crypto.SHA256)
 		if err != nil {
 			return tpm2.TPMTSignature{}, fmt.Errorf("RSA signing failed: %w", err)
 		}
@@ -832,26 +846,17 @@ func signForTPM(privKey crypto.Signer, digest []byte) (tpm2.TPMTSignature, error
 				},
 			),
 		}, nil
-	case *ecdsa.PrivateKey:
-		r, s, err := ecdsa.Sign(rand.Reader, key, digest)
+
+	case *ecdsa.PublicKey:
+		der, err := privKey.Sign(rand.Reader, digest, crypto.SHA256)
 		if err != nil {
 			return tpm2.TPMTSignature{}, fmt.Errorf("ECDSA signing failed: %w", err)
 		}
 
-		byteLen := (key.Curve.Params().BitSize + 7) / 8
-		rBytes := r.Bytes()
-		sBytes := s.Bytes()
-
-		// Pad to expected length
-		if len(rBytes) < byteLen {
-			padded := make([]byte, byteLen)
-			copy(padded[byteLen-len(rBytes):], rBytes)
-			rBytes = padded
-		}
-		if len(sBytes) < byteLen {
-			padded := make([]byte, byteLen)
-			copy(padded[byteLen-len(sBytes):], sBytes)
-			sBytes = padded
+		byteLen := (pub.Curve.Params().BitSize + 7) / 8
+		rBytes, sBytes, err := ecdsaSignatureToRawRS(der, byteLen)
+		if err != nil {
+			return tpm2.TPMTSignature{}, err
 		}
 
 		return tpm2.TPMTSignature{
@@ -865,29 +870,84 @@ func signForTPM(privKey crypto.Signer, digest []byte) (tpm2.TPMTSignature, error
 				},
 			),
 		}, nil
+
 	default:
-		return tpm2.TPMTSignature{}, fmt.Errorf("unsupported private key type %T for signing", key)
+		return tpm2.TPMTSignature{}, fmt.Errorf("unsupported signing key type %T for signing", pub)
 	}
 }
 
-// verifyKeyPairMatch checks that a public key and private key form a valid pair.
+// ecdsaDERSignature mirrors the SEQUENCE { INTEGER r, INTEGER s } that
+// crypto.Signer produces for an ECDSA key.
+type ecdsaDERSignature struct {
+	R, S *big.Int
+}
+
+// ecdsaSignatureToRawRS converts a DER-encoded ECDSA signature into the fixed
+// width r and s the TPM expects, left-padded with zeros to byteLen.
+func ecdsaSignatureToRawRS(der []byte, byteLen int) (r, s []byte, err error) {
+	var parsed ecdsaDERSignature
+
+	rest, err := asn1.Unmarshal(der, &parsed)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse ECDSA signature: %w", err)
+	}
+	if len(rest) != 0 {
+		return nil, nil, fmt.Errorf("ECDSA signature has %d trailing bytes", len(rest))
+	}
+	if parsed.R == nil || parsed.S == nil || parsed.R.Sign() <= 0 || parsed.S.Sign() <= 0 {
+		return nil, nil, fmt.Errorf("ECDSA signature has a non-positive r or s")
+	}
+
+	r, err = padToLength(parsed.R.Bytes(), byteLen)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ECDSA signature r: %w", err)
+	}
+	s, err = padToLength(parsed.S.Bytes(), byteLen)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ECDSA signature s: %w", err)
+	}
+
+	return r, s, nil
+}
+
+// padToLength left-pads value with zeros to exactly length bytes.
+func padToLength(value []byte, length int) ([]byte, error) {
+	if len(value) > length {
+		return nil, fmt.Errorf("value is %d bytes, which exceeds the %d-byte curve width", len(value), length)
+	}
+	if len(value) == length {
+		return value, nil
+	}
+
+	padded := make([]byte, length)
+	copy(padded[length-len(value):], value)
+	return padded, nil
+}
+
+// verifyKeyPairMatch checks that a public key and a signing key form a pair.
+//
+// It compares against signer.Public() rather than a concrete private key type,
+// so it works for a key held on a hardware token, whose private half is never
+// represented in the process at all.
 func verifyKeyPairMatch(pubKey crypto.PublicKey, privKey crypto.Signer) error {
+	signerPub := privKey.Public()
+
 	switch pub := pubKey.(type) {
 	case *rsa.PublicKey:
-		rsaPriv, ok := privKey.(*rsa.PrivateKey)
+		other, ok := signerPub.(*rsa.PublicKey)
 		if !ok {
-			return fmt.Errorf("public key is RSA but private key is %T", privKey)
+			return fmt.Errorf("public key is RSA but the signing key is %T", signerPub)
 		}
-		if pub.N.Cmp(rsaPriv.N) != 0 || pub.E != rsaPriv.E {
-			return fmt.Errorf("RSA public and private keys do not match")
+		if pub.N.Cmp(other.N) != 0 || pub.E != other.E {
+			return fmt.Errorf("RSA public key does not match the signing key")
 		}
 	case *ecdsa.PublicKey:
-		ecPriv, ok := privKey.(*ecdsa.PrivateKey)
+		other, ok := signerPub.(*ecdsa.PublicKey)
 		if !ok {
-			return fmt.Errorf("public key is ECDSA but private key is %T", privKey)
+			return fmt.Errorf("public key is ECDSA but the signing key is %T", signerPub)
 		}
-		if pub.X.Cmp(ecPriv.PublicKey.X) != 0 || pub.Y.Cmp(ecPriv.PublicKey.Y) != 0 {
-			return fmt.Errorf("ECDSA public and private keys do not match")
+		if pub.Curve != other.Curve || pub.X.Cmp(other.X) != 0 || pub.Y.Cmp(other.Y) != 0 {
+			return fmt.Errorf("ECDSA public key does not match the signing key")
 		}
 	default:
 		return fmt.Errorf("unsupported public key type %T", pubKey)
@@ -1028,7 +1088,7 @@ func CreateSealedObjectPolicyOR(tpmDev transport.TPM, primaryKey *PrimaryKeyResp
 
 // UnsealWithSignedBranchFromBlob is a high-level function that handles the entire
 // signed-branch unseal workflow including loading keys and the sealed object.
-func UnsealWithSignedBranchFromBlob(tpmDev transport.TPM, nvramIndex uint32, privateKeyPath string, debug bool) (*UnsealWorkflowResult, error) {
+func UnsealWithSignedBranchFromBlob(tpmDev transport.TPM, nvramIndex uint32, privKey crypto.Signer, debug bool) (*UnsealWorkflowResult, error) {
 	// Read sealed blob from NVRAM
 	sealedData, err := ReadFromNVRAM(tpmDev, nvramIndex)
 	if err != nil {
@@ -1061,7 +1121,7 @@ func UnsealWithSignedBranchFromBlob(tpmDev transport.TPM, nvramIndex uint32, pri
 	defer FlushHandle(tpmDev, loadedObject.ObjectHandle)
 
 	// Unseal using the signed branch
-	unsealedData, err := UnsealWithSignedBranch(tpmDev, loadedObject, sealedBlob, privateKeyPath, debug)
+	unsealedData, err := UnsealWithSignedBranch(tpmDev, loadedObject, sealedBlob, privKey, debug)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unseal with signed branch: %w", err)
 	}

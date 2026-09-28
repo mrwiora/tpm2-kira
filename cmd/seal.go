@@ -26,8 +26,17 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 		return fmt.Errorf("invalid PCRs: %w", err)
 	}
 
-	// Load and validate the signing public key
-	pubKey, _, err := LoadSigningPublicKeyFromPEM(pubKeyPath)
+	// Load and validate the signing public key.
+	//
+	// A cached PEM is preferred, so that nothing needs the token just to
+	// compute a policy digest. When there is none and the private key lives
+	// on a token, the public half is read from the slot.
+	privKeyRef, err := ParseKeyRef(privKeyPath)
+	if err != nil {
+		return err
+	}
+
+	pubKey, err := PublicKeyForRef(privKeyRef, pubKeyPath, debug)
 	if err != nil {
 		return fmt.Errorf("failed to load signing public key: %w", err)
 	}
@@ -36,7 +45,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	fmt.Println("=== Sealing Configuration ===")
 	fmt.Printf("Hash Algorithm: %s (%d-byte PCR digests)\n", hashAlgo.DisplayString(), hashAlgo.DigestSize())
 	fmt.Printf("PCRs used for sealing: %s\n", PCRSpecsToString(specs))
-	fmt.Printf("Signing Key: %s (%s, fingerprint: %s)\n", pubKeyPath, PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
+	fmt.Printf("Signing Key: %s (%s, fingerprint: %s)\n", privKeyRef, PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
 	fmt.Printf("Authentication: PolicyOR (PCR branch + PolicySigned branch)\n")
 	fmt.Println()
 	for _, spec := range specs {
@@ -55,7 +64,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	}
 
 	// Seal the generated TOTP secret
-	if err := sealDataWithSpecs(tpmPath, specs, nvramIndex, dataToSeal, pubKey, pubKeyPath, privKeyPath, debug, hashAlgo, verifyUKI); err != nil {
+	if err := sealDataWithSpecs(tpmPath, specs, nvramIndex, dataToSeal, pubKey, pubKeyPath, privKeyPath, debug, hashAlgo, verifyUKI, nil); err != nil {
 		return err
 	}
 
@@ -80,7 +89,12 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 }
 
 // sealDataWithSpecs seals data using explicit PCR specs with PolicyOR (PCR + Signed branches)
-func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataToSeal []byte, pubKey crypto.PublicKey, pubKeyPath, privKeyPath string, debug bool, hashAlgo PCRHashAlgo, verifyUKI bool) error {
+// sealDataWithSpecs seals dataToSeal against specs and writes the blob.
+//
+// preResolved may carry a signing key that the caller already opened — reseal
+// does, so that one card session and one PIN verification serve the whole
+// command. When it is nil the key is resolved from privKeyPath.
+func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataToSeal []byte, pubKey crypto.PublicKey, pubKeyPath, privKeyPath string, debug bool, hashAlgo PCRHashAlgo, verifyUKI bool, preResolved SigningKey) error {
 	if len(specs) == 0 {
 		return fmt.Errorf("no PCRs specified")
 	}
@@ -107,12 +121,29 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 	// Cleanup TPM memory
 	CleanupTPM(tpmDev, debug)
 
-	// Load the signing private key — required for PolicySigned NV writes.
+	// Resolve the signing key — required for PolicySigned NV writes.
 	// This is done after the TPM open so that simple input validations and
 	// the TPM availability check run first.
-	privKey, err := LoadSigningPrivateKeyFromPEM(privKeyPath)
-	if err != nil {
-		return fmt.Errorf("failed to load signing private key for NV write authorization: %w", err)
+	privKey := preResolved
+	if privKey == nil {
+		keyRef, refErr := ParseKeyRef(privKeyPath)
+		if refErr != nil {
+			return refErr
+		}
+
+		opened, openErr := OpenSigningKey(keyRef, NewPINProvider(PINFileSetting), debug)
+		if openErr != nil {
+			return fmt.Errorf("failed to resolve the signing key for NV write authorization: %w", openErr)
+		}
+		defer opened.Close()
+		privKey = opened
+	}
+
+	// A key that signs the blob but is not the one baked into the policy
+	// would produce a blob nothing can verify, so catch the mismatch here
+	// rather than at the next reseal.
+	if err := verifyKeyPairMatch(pubKey, privKey); err != nil {
+		return fmt.Errorf("the signing key does not match the public key being sealed against: %w", err)
 	}
 
 	// Read all PCR values from their respective sources using the shared helper

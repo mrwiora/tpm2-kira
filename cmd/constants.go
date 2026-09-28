@@ -10,3 +10,8 @@ const (
 	// DefaultPrivateKeyPath is the default path for the signing private key.
 	DefaultPrivateKeyPath = DefaultKeysDir + "/seal.key"
 )
+
+// PINFileSetting is the --pin-file value, used when a signing key lives on a
+// hardware token. It follows MeasurePointModeSetting in being a package
+// variable rather than another parameter on every command signature.
+var PINFileSetting string

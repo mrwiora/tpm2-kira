@@ -905,23 +905,22 @@ func SignBlobPayload(unsignedBlob []byte, privKey crypto.Signer) ([]byte, error)
 	// Compute SHA-256 digest of the entire unsigned blob (the signed region)
 	digest := sha256.Sum256(unsignedBlob)
 
-	// Sign based on key type
-	var signature []byte
-	var err error
-
-	switch key := privKey.(type) {
-	case *rsa.PrivateKey:
-		signature, err = rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
-		if err != nil {
-			return nil, fmt.Errorf("RSA blob signing failed: %w", err)
-		}
-	case *ecdsa.PrivateKey:
-		signature, err = ecdsa.SignASN1(rand.Reader, key, digest[:])
-		if err != nil {
-			return nil, fmt.Errorf("ECDSA blob signing failed: %w", err)
-		}
+	// Dispatch on the public key type, not the private one: the key may live
+	// on a hardware token and have no concrete private half in this process.
+	//
+	// crypto.Signer given crypto.SHA256 produces exactly what
+	// VerifyBlobSignature expects for both key types — PKCS#1 v1.5 for RSA,
+	// an ASN.1 DER SEQUENCE for ECDSA — so the two branches differ only in
+	// which key types are accepted.
+	switch pub := privKey.Public().(type) {
+	case *rsa.PublicKey, *ecdsa.PublicKey:
 	default:
-		return nil, fmt.Errorf("unsupported private key type %T for blob signing", privKey)
+		return nil, fmt.Errorf("unsupported signing key type %T for blob signing", pub)
+	}
+
+	signature, err := privKey.Sign(rand.Reader, digest[:], crypto.SHA256)
+	if err != nil {
+		return nil, fmt.Errorf("blob signing failed: %w", err)
 	}
 
 	if len(signature) > MaxBlobSignatureLen {

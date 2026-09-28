@@ -155,23 +155,41 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		}
 	}
 
+	// ── Resolve the signing key ──
+	// Every reseal needs it, not only a recovery: the NV index's write policy
+	// is PolicySigned, so even an unchanged-PCR reseal cannot write the new
+	// blob without a signature. Resolving it first means an absent token or a
+	// missing key file is reported before any work is done, and nothing in
+	// the TPM has been disturbed.
+	keyRef, err := ParseKeyRef(effectivePrivKeyPath)
+	if err != nil {
+		tpmDev.Close()
+		return err
+	}
+
+	signingKey, keyErr := OpenSigningKey(keyRef, NewPINProvider(PINFileSetting), debug)
+	if keyErr != nil {
+		tpmDev.Close()
+
+		if IsKeyUnavailable(keyErr) && !RequireKeySetting {
+			return reportResealSkipped(nvramIndex, keyRef, sealedBlob, keyErr)
+		}
+		return keyErr
+	}
+	defer signingKey.Close()
+
 	// ── Verify blob integrity signature ──
 	// The signature MUST be verified BEFORE any blob field is acted on, so a
-	// tampered blob cannot steer reseal via its stored PCR specs or key paths.
+	// tampered blob cannot steer reseal via its stored PCR specs or key refs.
 	//
-	// Derive the verification key from the private key (the trust anchor).
-	// The blob's stored PublicKeyPath is NOT trusted for this purpose.
-	if effectivePrivKeyPath != "" {
-		verifyKey, loadErr := LoadSigningPrivateKeyFromPEM(effectivePrivKeyPath)
-		if loadErr == nil {
-			if sigErr := VerifyBlobSignature(sealedData, sealedBlob, verifyKey.Public()); sigErr != nil {
-				tpmDev.Close()
-				return fmt.Errorf("blob integrity check failed — the NVRAM blob may have been tampered with: %w", sigErr)
-			}
-			if debug {
-				fmt.Println("Blob signature verified successfully")
-			}
-		}
+	// The verification key is the signing key's own public half — the trust
+	// anchor. The blob's stored PublicKeyPath is NOT trusted for this purpose.
+	if sigErr := VerifyBlobSignature(sealedData, sealedBlob, signingKey.Public()); sigErr != nil {
+		tpmDev.Close()
+		return fmt.Errorf("blob integrity check failed — the NVRAM blob may have been tampered with: %w", sigErr)
+	}
+	if debug {
+		fmt.Println("Blob signature verified successfully")
 	}
 
 	// ── Unseal: let the TPM decide which branch to use ──
@@ -186,15 +204,8 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 			// Show PCR mismatch details (blob vs current register values)
 			PrintKIRAError(pcrErr)
 
-			// Private key is required for PolicySigned recovery
-			if effectivePrivKeyPath == "" {
-				tpmDev.Close()
-				return fmt.Errorf("PCR values have changed. The signing private key is required for recovery.\n" +
-					"  Provide it with --privkey <path>")
-			}
-
 			// Use PolicySigned branch for unsealing - the TPM verifies the signature
-			result, err = UnsealWithSignedBranchFromBlob(tpmDev, nvramIndex, effectivePrivKeyPath, debug)
+			result, err = UnsealWithSignedBranchFromBlob(tpmDev, nvramIndex, signingKey, debug)
 			if err != nil {
 				tpmDev.Close()
 				return fmt.Errorf("failed to unseal with signing key: %w", err)
@@ -208,15 +219,8 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 			// Show PCR details using centralized helper function
 			ShowPCRDetails(tpmDev, nvramIndex, debug)
 
-			// Private key is required for PolicySigned recovery
-			if effectivePrivKeyPath == "" {
-				tpmDev.Close()
-				return fmt.Errorf("TPM policy verification failed. The signing private key is required for recovery.\n" +
-					"  Provide it with --privkey <path>")
-			}
-
 			// Use PolicySigned branch for unsealing - the TPM verifies the signature
-			result, err = UnsealWithSignedBranchFromBlob(tpmDev, nvramIndex, effectivePrivKeyPath, debug)
+			result, err = UnsealWithSignedBranchFromBlob(tpmDev, nvramIndex, signingKey, debug)
 			if err != nil {
 				tpmDev.Close()
 				return fmt.Errorf("failed to unseal with signing key: %w", err)
@@ -243,7 +247,8 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	var resealPrivKeyPathForBlob string
 
 	if effectivePubKeyPath != "" {
-		// Explicit --pubkey (or blob path): load from the filesystem
+		// Explicit --pubkey (or blob path): load from the filesystem. This is
+		// how the signing key is changed, so it takes priority.
 		var loadedPubKey crypto.PublicKey
 		loadedPubKey, _, err = LoadSigningPublicKeyFromPEM(effectivePubKeyPath)
 		if err != nil {
@@ -252,32 +257,15 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		resealPubKey = loadedPubKey
 		resealPubKeySource = effectivePubKeyPath
 		resealPubKeyPathForBlob = effectivePubKeyPath
-	} else if effectivePrivKeyPath != "" {
-		// No --pubkey but --privkey was given: derive public key from it
-		privKey, loadErr := LoadSigningPrivateKeyFromPEM(effectivePrivKeyPath)
-		if loadErr != nil {
-			return fmt.Errorf("failed to load private key to derive public key: %w", loadErr)
-		}
-		resealPubKey = privKey.Public()
-		resealPubKeySource = fmt.Sprintf("(derived from %s)", effectivePrivKeyPath)
 	} else {
-		// Neither --pubkey nor --privkey available: cannot reseal
-		return fmt.Errorf("cannot reseal: no signing key available.\n" +
-			"  Provide --pubkey <path> or --privkey <path>, or ensure the key paths\n" +
-			"  stored in the blob are accessible on the filesystem")
+		// The public half of the key already resolved above. No file to
+		// read and, for a token, no second card session.
+		resealPubKey = signingKey.Public()
+		resealPubKeySource = fmt.Sprintf("(from %s)", keyRef)
 	}
 
-	// The private key is now required for re-sealing — PolicySigned NV
-	// writes demand proof of key possession for every write, not just for
-	// recovery-unseal.  Validate early with a helpful message.
-	if effectivePrivKeyPath == "" {
-		return fmt.Errorf("cannot reseal: signing private key is required for NV write authorization.\n" +
-			"  Provide --privkey <path>, or ensure the default key at " + DefaultPrivateKeyPath + " exists.\n" +
-			"  The key pair is normally created by 'tpm2-kira setup'")
-	}
-
-	// Preserve the private key path for the new blob
-	resealPrivKeyPathForBlob = effectivePrivKeyPath
+	// Preserve the key reference for the new blob
+	resealPrivKeyPathForBlob = keyRef.String()
 
 	// ── Display configuration and re-seal ──
 	// Determine which PCR specs to use for resealing
@@ -360,7 +348,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	fmt.Printf("Signing key: %s (%s, fingerprint: %s)\n", resealPubKeySource, PublicKeyDescription(resealPubKey), PublicKeyFingerprint(resealPubKey))
 
 	// Reseal the data with the determined specs, preserving the original hash algorithm
-	if err := sealDataWithSpecs(tpmPath, specsToUse, nvramIndex, unsealedData, resealPubKey, resealPubKeyPathForBlob, resealPrivKeyPathForBlob, debug, hashAlgo, false); err != nil {
+	if err := sealDataWithSpecs(tpmPath, specsToUse, nvramIndex, unsealedData, resealPubKey, resealPubKeyPathForBlob, resealPrivKeyPathForBlob, debug, hashAlgo, false, signingKey); err != nil {
 		return fmt.Errorf("failed to reseal data: %w", err)
 	}
 
@@ -382,4 +370,75 @@ func IsTPMAuthError(err error) bool {
 		strings.Contains(errStr, "authorization failure") ||
 		strings.Contains(errStr, "auth fail") ||
 		strings.Contains(errStr, "bad auth")
+}
+
+// RequireKeySetting turns the graceful skip below into a hard failure. It is
+// set by --require-key, for callers that must not quietly do nothing.
+var RequireKeySetting bool
+
+// ResealSkippedMarker is the fixed prefix the initramfs hooks grep for. It is
+// deliberately distinct from both the success line and the FAILED marker: the
+// reseal did not happen, but nothing is broken and nothing was lost.
+const ResealSkippedMarker = "tpm2-kira: SKIPPED:"
+
+// reportResealSkipped explains that no reseal took place because the signing
+// key was not available, and what the user will see at the next boot.
+//
+// It returns nil. Nothing was attempted and nothing was damaged — the sealed
+// blob in NVRAM is exactly as it was — so this is not a failure. What it is
+// instead is a state the user has to know about, because the next boot will
+// show a PCR mismatch and no TOTP code.
+func reportResealSkipped(nvramIndex uint32, ref KeyRef, blob *SealedBlob, cause error) error {
+	reason := cause.Error()
+	hint := ""
+	if kue, ok := AsKeyUnavailable(cause); ok {
+		reason = kue.Reason
+		hint = kue.Hint
+	}
+
+	var out strings.Builder
+
+	fmt.Fprintf(&out, "\n%s resealing did not happen — the signing key was not available.\n", ResealSkippedMarker)
+	fmt.Fprintf(&out, "  NVRAM slot:    0x%08X (slot #%d)\n", nvramIndex, SlotNumber(nvramIndex))
+	if !ref.IsZero() {
+		fmt.Fprintf(&out, "  Key reference: %s\n", ref)
+	}
+	fmt.Fprintf(&out, "  Reason:        %s\n", reason)
+	fmt.Fprintf(&out, "  Consequence:   the sealed policy still binds the PCR values from before this\n")
+	fmt.Fprintf(&out, "                 change. At the next boot tpm2-kira will report a PCR MISMATCH\n")
+	fmt.Fprintf(&out, "                 and show no TOTP code. That is expected here — it is not\n")
+	fmt.Fprintf(&out, "                 evidence of tampering.\n")
+
+	if pcrs := describeSealedPCRs(blob); pcrs != "" {
+		fmt.Fprintf(&out, "  Affected PCRs: %s\n", pcrs)
+	}
+
+	fmt.Fprintf(&out, "  Nothing was changed: the sealed secret in NVRAM is untouched.\n")
+	fmt.Fprintf(&out, "  To fix:        make the key available and run:\n")
+	if ref.Kind == KeyRefYubiKey {
+		fmt.Fprintf(&out, "                     export %s=...\n", PINEnvVar)
+	}
+	fmt.Fprintf(&out, "                     sudo tpm2-kira reseal --nvram 0x%08X\n", nvramIndex)
+	if hint != "" {
+		fmt.Fprintf(&out, "  Hint:          %s\n", hint)
+	}
+
+	fmt.Fprint(os.Stderr, out.String())
+
+	return nil
+}
+
+// describeSealedPCRs lists the PCRs in the sealed policy, which are exactly the
+// ones that will be reported as mismatching.
+func describeSealedPCRs(blob *SealedBlob) string {
+	if blob == nil || len(blob.Payload.PCRDigests) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(blob.Payload.PCRDigests))
+	for _, pair := range blob.Payload.PCRDigests {
+		parts = append(parts, fmt.Sprintf("%d (%s)", pair.Index, pair.Source.String()))
+	}
+
+	return strings.Join(parts, ", ")
 }
