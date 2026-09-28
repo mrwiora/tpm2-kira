@@ -56,29 +56,54 @@ must be running when you seal or reseal; it is not needed at boot.
 
 ### pcsc-lite 2.x asks polkit first
 
-This one is worth setting up before you need it, because it fails in the least
-convenient place.
+Set this up before you need it, because it fails in the least convenient place.
 
-pcsc-lite 2.x (Arch, Debian trixie and newer) checks polkit before accepting any
-client, and the shipped policy is:
+pcsc-lite 2.x checks polkit before accepting **any** client, and refuses by
+closing the connection. The shipped policy
+(`/usr/share/polkit-1/actions/org.debian.pcsc-lite.policy`) is:
 
 ```xml
-<allow_any>no</allow_any>
-<allow_inactive>no</allow_inactive>
-<allow_active>yes</allow_active>
+<action id="org.debian.pcsc-lite.access_pcsc">   <!-- and .access_card -->
+  <defaults>
+    <allow_any>no</allow_any>
+    <allow_inactive>no</allow_inactive>
+    <allow_active>yes</allow_active>
+  </defaults>
+</action>
 ```
 
-There is no exemption for root. An interactive `sudo tpm2-kira reseal` normally
-still counts as an active session and works. A reseal that runs **unattended** —
-from the mkinitcpio post hook inside a pacman transaction, from a systemd unit,
-from cron or over ssh without a seat — has no active session, so pcscd refuses
-it and closes the connection.
+There is **no exemption for root**. Only a process in an *active* login session
+is allowed, which means:
 
-tpm2-kira reports that explicitly rather than as an unhelpful socket error, but
-the fix is a polkit rule:
+| How you run it | Works? |
+|---|---|
+| `sudo tpm2-kira reseal` from a terminal you are logged into | Yes — the session is active |
+| The reseal hook during `mkinitcpio -P` run from that terminal | Usually, it inherits the session |
+| `pacman -Syu` triggering the hook from a terminal | Usually |
+| A systemd service or timer | **No** — no session |
+| cron, or `ssh host tpm2-kira reseal` without a seat | **No** |
+| A rescue shell or a serial console | Often **no** |
+
+Which pcsc-lite you have decides whether this applies at all:
+
+```bash
+pcscd --version          # 2.x asks polkit; 1.9.x has no polkit support
+```
+
+Arch and Debian trixie ship 2.x. Debian bookworm ships 1.9.9 and needs none of
+this.
+
+#### The rule
+
+Both Arch (polkit 127) and Debian bookworm and newer (polkit 122+) use
+JavaScript rules in `/etc/polkit-1/rules.d/`, so the same file works on both:
 
 ```javascript
 // /etc/polkit-1/rules.d/50-tpm2-kira-pcsc.rules
+//
+// tpm2-kira reads a signing key from a YubiKey PIV slot when resealing. That
+// runs as root, often unattended from an initramfs hook, where there is no
+// active login session for polkit to authorise.
 polkit.addRule(function(action, subject) {
     if ((action.id == "org.debian.pcsc-lite.access_pcsc" ||
          action.id == "org.debian.pcsc-lite.access_card") &&
@@ -88,9 +113,47 @@ polkit.addRule(function(action, subject) {
 });
 ```
 
-That grants root access to the daemon, which is the same privilege level that
-already owns `/dev/tpm0` and the signing key, so it concedes nothing new. pcsc-lite
-1.9.x (Debian bookworm) has no polkit check and needs none of this.
+```bash
+sudo install -m 644 -o root -g root \
+    50-tpm2-kira-pcsc.rules /etc/polkit-1/rules.d/
+sudo systemctl restart polkit        # not always needed; polkit watches the dir
+```
+
+Verify it:
+
+```bash
+sudo systemd-run --pipe --wait tpm2-kira yubikey list
+```
+
+`systemd-run` deliberately creates a session-less context, which is the case
+that fails without the rule. If it lists your token, unattended reseals will
+work.
+
+**What this concedes:** root may talk to `pcscd` and to any card in a reader.
+Root already owns `/dev/tpm0` and, on a file-key install, the signing key
+itself — so on a single-user machine this grants nothing new. On a machine
+where other people's smart cards get plugged in, it does let root talk to them;
+narrow `subject.user` to a dedicated account if that matters.
+
+**If you would rather not grant it**, the alternatives are to reseal
+interactively (where an active session already authorises you) and let the
+unattended reseal print its `SKIPPED` warning, or to run `pcscd` with
+`--disable-polkit`, which turns the check off for every client rather than just
+for root — a broader concession than the rule above.
+
+#### Debian with polkit older than 0.106
+
+Debian bullseye and older use `.pkla` files instead, but they also ship
+pcsc-lite 1.9.x, which has no polkit check. If you meet a 2.x build with an old
+polkit, the equivalent is:
+
+```ini
+# /etc/polkit-1/localauthority/50-local.d/50-tpm2-kira-pcsc.pkla
+[tpm2-kira pcsc access]
+Identity=unix-user:root
+Action=org.debian.pcsc-lite.access_pcsc;org.debian.pcsc-lite.access_card
+ResultAny=yes
+```
 
 ---
 
@@ -243,29 +306,64 @@ the skip path below instead of hanging on a prompt nobody would see.
 
 The PIN never appears in output, including under `--debug`.
 
-### The PIN is not stored anywhere, and cannot be
+### The PIN for an unattended reseal
 
-There is no configuration file for it. The key *reference* lives in the sealed
-blob, so `reseal` finds the right slot with no flags — but the PIN cannot join
-it there. The NVRAM index is defined with open reads by design (the secret is
-protected by the sealed object's policy, not by read control), so anything in
-the blob can be read by any process that can reach the TPM, and by anyone who
-takes the disk. A PIN stored there would be handed to exactly the attacker the
-token defends against, collapsing two factors into one.
+The sealed blob records *which* key to use — the slot reference — but never the
+PIN. NVRAM reads are open by design (the secret is protected by the sealed
+object's policy, not by read control), so anything in the blob is readable by
+any process that can reach the TPM and by anyone who takes the disk.
 
-That matters for the reseal that runs automatically after an initramfs rebuild,
-which has no terminal to prompt at. The options, best first:
+That leaves the reseal that runs automatically after an initramfs rebuild, which
+has no terminal to prompt at.
+
+#### Arch: the mkinitcpio configuration
+
+```bash
+# /etc/mkinitcpio.conf.d/tpm2-kira.conf
+TPM2_KIRA_PIN=12345678
+```
+
+```bash
+sudo chmod 600 /etc/mkinitcpio.conf.d/tpm2-kira.conf
+```
+
+The reseal hook reads it from there. This is safe on Arch for one specific
+reason: mkinitcpio *sources* its configuration at build time and never copies
+it into the image, so the PIN stays on the encrypted root.
+
+**Use a drop-in, not `/etc/mkinitcpio.conf` itself.** The main file is mode 0644
+by default, which would let every local user on the machine read the PIN. A
+drop-in in `/etc/mkinitcpio.conf.d/` can be 0600, and mkinitcpio 42 and later
+concatenate those files into the configuration it sources. The hook warns if it
+finds the PIN in a file others can read.
+
+#### Debian: not in `initramfs.conf`
+
+There is no equivalent on Debian, and the obvious file is a trap.
+`mkinitramfs` copies `/etc/initramfs-tools/initramfs.conf` and `conf.d/*` **into
+the image**, and so does tpm2-kira's own hook for
+`/etc/tpm2-kira/initramfs.conf`. The image lives on `/boot`, which is not
+encrypted — that is the premise this whole project rests on. A PIN there would
+be written in cleartext to the one partition an evil-maid attacker can read.
+
+The build hook refuses to ship a config that sets `TPM2_KIRA_PIN`, rather than
+trusting a comment to prevent it.
+
+Debian's reseal hook does not reseal anyway (every PCR source is read from the
+running system, so it would bind to the image you are leaving), so this affects
+only a reseal you script yourself. Put the PIN in that script's environment, or
+in a root-only file it reads.
+
+#### Or avoid the question entirely
 
 1. **Use a slot whose PIN policy is `never`** — `ykman piv keys generate
-   --pin-policy NEVER`. The token being plugged in is then the authorisation,
-   which is a coherent model: possession of the token is the factor, and no
-   secret sits on disk at all.
+   --pin-policy NEVER`. The token being plugged in is then the authorisation.
+   That is a coherent model: possession of the token is the factor, and no
+   secret sits on disk at all. It is the best answer if you leave the token in
+   during updates.
 2. **Let the reseal be skipped** and run it by hand afterwards. This is the
-   default behaviour, and it matches what tpm2-kira already argues for PCR 8/9
-   on Debian — keeping a human in the loop is the point.
-3. **Set `TPM2_KIRA_PIN` in the hook's environment** if you want that. It is
-   your call to make; tpm2-kira will not make it for you by shipping a file to
-   put it in.
+   default, and it matches what tpm2-kira already argues for PCR 8/9 on Debian
+   — keeping a human in the loop is the point.
 
 ### What an environment variable costs
 

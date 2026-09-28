@@ -306,9 +306,14 @@ sudo systemctl enable --now pcscd
 ```
 
 On pcsc-lite 2.x (Arch, Debian trixie) `pcscd` asks polkit before accepting a
-client, and the shipped policy allows only active login sessions. Interactive
-`sudo` is fine; an unattended reseal from a package hook is not, and needs a
-polkit rule — see [docs/YUBIKEY.md](docs/YUBIKEY.md#pcsc-lite-2x-asks-polkit-first).
+client, and the shipped policy allows only active login sessions — with no
+exemption for root. Interactive `sudo` is fine; a systemd unit, a timer or cron
+is not. That needs a one-file polkit rule, and an unattended reseal needs the
+PIN somewhere the hook can read it. Both are covered in
+[docs/YUBIKEY.md](docs/YUBIKEY.md#pcsc-lite-2x-asks-polkit-first): on Arch the
+PIN goes in a 0600 drop-in under `/etc/mkinitcpio.conf.d/`, which mkinitcpio
+sources but never copies into the image. **Not** in Debian's `initramfs.conf`,
+which *is* copied into the image and so lands on unencrypted `/boot`.
 
 **Prepare the key.** tpm2-kira never writes to a token: it reads a slot's public
 key, verifies the PIN, and asks the card to sign. Creating the key is `ykman`'s
