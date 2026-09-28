@@ -31,7 +31,10 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -109,6 +112,7 @@ type Card struct {
 	opts   Options
 	closed chan struct{}
 
+	unlock      func()
 	pending     []byte
 	pinVerified bool
 	retries     int
@@ -183,15 +187,29 @@ func (c *Card) Counters() (verifications, signatures, touches int) {
 //
 // settle gives pcscd time to notice the card before the caller starts using it;
 // pcscd polls reader state rather than being told.
+//
+// The reader is a machine-wide resource, so Attach takes an exclusive lock on it
+// first — see LockReader. Without that, `go test ./...` runs the card tests and
+// the end-to-end tests as concurrent packages, and they steal each other's
+// cards: whichever process asks pcscd for the reader list picks up the other's
+// card and fails in a way that looks like a bug in the code under test.
 func (c *Card) Attach(addr string, settle time.Duration) error {
 	if addr == "" {
 		addr = DefaultAddr
 	}
 
+	unlock, err := LockReader(2 * time.Minute)
+	if err != nil {
+		return err
+	}
+
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
+		unlock()
 		return fmt.Errorf("cannot reach vpcd at %s: %w", addr, err)
 	}
+
+	c.unlock = unlock
 
 	go c.serve(conn)
 
@@ -199,12 +217,66 @@ func (c *Card) Attach(addr string, settle time.Duration) error {
 	return nil
 }
 
-// Close detaches the card.
+// Close detaches the card and releases the reader lock.
 func (c *Card) Close() {
 	select {
 	case <-c.closed:
+		return
 	default:
 		close(c.closed)
+	}
+
+	if c.unlock != nil {
+		c.unlock()
+		c.unlock = nil
+	}
+}
+
+// lockPath is the advisory lock serialising use of the virtual reader.
+func lockPath() string {
+	return filepath.Join(os.TempDir(), "tpm2-kira-vpcd.lock")
+}
+
+// LockReader takes an exclusive, machine-wide lock on the virtual reader and
+// returns the function that releases it.
+//
+// It is exported because tests that attach a card without this package's Card —
+// the raw transport tests use a trivial handler instead — need the same lock.
+//
+// The lock is advisory (flock), so it only coordinates processes that ask for
+// it. It is held on an open file description, which the kernel releases if the
+// process dies, so a crashed test cannot wedge the suite.
+func LockReader(timeout time.Duration) (func(), error) {
+	file, err := os.OpenFile(lockPath(), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open the reader lock %s: %w", lockPath(), err)
+	}
+
+	deadline := time.Now().Add(timeout)
+
+	for {
+		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return func() {
+				_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+				_ = file.Close()
+			}, nil
+		}
+
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			file.Close()
+			return nil, fmt.Errorf("cannot lock the virtual reader: %w", err)
+		}
+
+		if time.Now().After(deadline) {
+			file.Close()
+			return nil, fmt.Errorf(
+				"timed out after %s waiting for the virtual reader lock (%s).\n"+
+					"  Another test process is using it; if none is running, remove the file",
+				timeout, lockPath())
+		}
+
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

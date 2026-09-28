@@ -600,7 +600,15 @@ With a local `pcscd` and `vsmartcard-vpcd` installed, the card passes alone are:
 ```bash
 make test-pcsc                                          # transport and PIV layer
 go test -tags="integration pcsc" -run TestYubiKey -v .  # end to end
+go test -tags="integration pcsc" ./...                  # everything
 ```
+
+The virtual reader is a machine-wide resource and `go test ./...` runs packages
+concurrently, so the emulator takes an advisory lock (`flock` on
+`$TMPDIR/tpm2-kira-vpcd.lock`) for as long as a card is attached. Without it two
+test processes attach cards to the same reader and pick up each other's, which
+fails intermittently and looks like a bug in the code under test. The lock lives
+on an open file description, so a crashed test cannot wedge the suite.
 
 What this does **not** cover is a real YubiKey. The emulator follows the specs
 tpm2-kira was written against, so anything where real firmware differs — timing,

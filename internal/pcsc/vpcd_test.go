@@ -25,6 +25,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/matthias/tpm2-kira/internal/virtualpiv"
 )
 
 // vpcd's control bytes, from the vsmartcard protocol. A one-byte message is a
@@ -56,6 +58,15 @@ type virtualCard struct {
 // returned card is closed.
 func connectVirtualCard(t *testing.T, handler func(apdu []byte) []byte) *virtualCard {
 	t.Helper()
+
+	// The virtual reader is machine-wide, and `go test ./...` runs packages
+	// concurrently, so two test processes would otherwise attach cards to the
+	// same reader and pick up each other's.
+	unlock, err := virtualpiv.LockReader(2 * time.Minute)
+	if err != nil {
+		t.Fatalf("cannot lock the virtual reader: %v", err)
+	}
+	t.Cleanup(unlock)
 
 	conn, err := net.DialTimeout("tcp", vpcdAddr, 5*time.Second)
 	if err != nil {
