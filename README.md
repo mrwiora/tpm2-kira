@@ -428,6 +428,49 @@ Already have a key in a slot — the one sbctl uses to sign your Secure Boot
 components, say? Skip the generation step and `adopt` it directly. Any key the
 TPM can load works (ECC P-256/P-384, RSA-2048).
 
+**Variant: importing a key generated outside the YubiKey.** Use this when the
+key already exists — an RSA-2048 Secure Boot db key that sbctl keeps using from
+a file, for instance — or when you want an offline backup of the recovery key,
+which generating on the token cannot give you.
+
+```bash
+# An existing key, or a fresh one made off the token:
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out seal.key
+#   ...or reuse /var/lib/sbctl/keys/db/db.key, if it is RSA-2048
+
+# Import it, setting the policies at the same time.
+#   --password is needed if the key file is encrypted.
+ykman piv keys import --pin-policy ONCE --touch-policy NEVER 9a seal.key
+
+# PIV exposes a public key through the slot certificate, so the slot needs one.
+# Either import a certificate you already have, verifying it matches the key...
+ykman piv certificates import --verify 9a db.pem
+# ...or generate a self-signed one from the public half.
+openssl pkey -in seal.key -pubout -out seal.pub
+ykman piv certificates generate 9a seal.pub
+
+sudo tpm2-kira yubikey adopt --key 'yubikey:slot=9a'
+```
+
+`adopt` and `yubikey list` report `Origin: imported — this key has existed
+outside the token`, so the distinction stays visible later; `ykman piv keys info
+9a` says the same.
+
+Then decide what happens to the key file, because that is now where the security
+of the whole arrangement rests:
+
+- **Shred it** (`shred -u seal.key`) if the token is meant to be the only copy.
+  You get the same protection as an on-token key, minus the guarantee that it
+  never existed elsewhere — whether it reached a backup, a snapshot or an
+  unencrypted disk before you deleted it is a question only you can answer.
+- **Keep it offline** if you would rather have a backup. Losing the token
+  otherwise means losing the recovery key, and re-sealing with a new TOTP secret
+  and a fresh authenticator enrolment. An imported key is the straightforward
+  answer to that, at the cost of a file existing somewhere.
+
+Generating on the token (above) is still the better default when you have no
+reason to hold a copy.
+
 **Without the token, `reseal` warns and changes nothing:**
 
 ```

@@ -263,9 +263,61 @@ Once that succeeds, and only then, remove the old private key:
 sudo shred -u /var/lib/tpm2-kira/keys/seal.key
 ```
 
-There is no import path in tpm2-kira. A key that was imported has existed off
-the token, which defeats the point of moving it there; `yubikey list` reports
-imported keys as such.
+If you would rather keep a copy of the key, import it instead of generating a
+fresh one — see Option C below.
+
+### Option C — importing a key generated outside the token
+
+Generating on the token means the private key has never existed anywhere else,
+which is the strongest arrangement and the right default. There are two reasons
+to import instead, and both are legitimate:
+
+- **The key already exists.** An RSA-2048 Secure Boot db key, for example, which
+  sbctl goes on using from its file while tpm2-kira uses the copy on the token.
+- **You want a backup.** A key generated on the token cannot be extracted, so
+  losing the token loses the recovery key — see
+  [Backups](#backups-a-lost-token-is-a-lost-recovery-key). An imported key gives
+  you an offline copy by construction.
+
+```bash
+# An existing key, or a fresh one generated off the token.
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out seal.key
+
+# Import it. Policies are set at import time, exactly as for generation.
+# Add --password if the key file is encrypted.
+ykman piv keys import --pin-policy ONCE --touch-policy NEVER 9a seal.key
+
+# The slot still needs a certificate, because that is how PIV exposes a public
+# key. Import one you already have, with --verify to check it matches the key...
+ykman piv certificates import --verify 9a db.pem
+# ...or generate a self-signed one from the public half.
+openssl pkey -in seal.key -pubout -out seal.pub
+ykman piv certificates generate 9a seal.pub
+
+sudo tpm2-kira yubikey adopt --key 'yubikey:slot=9a'
+```
+
+An imported key is visible as such. PIV records the origin, `ykman piv keys info
+9a` reports it, and so do tpm2-kira's own commands:
+
+```
+  Origin:       imported — this key has existed outside the token
+```
+
+Nothing refuses an imported key. But once it has been imported, the security of
+the arrangement rests on how that file was handled rather than on the token:
+whether it ever reached a backup, a filesystem snapshot, an unencrypted disk or
+a clipboard is a question the token can no longer answer for you. Generating on
+the token makes that question moot; importing makes it yours.
+
+So finish deliberately, one way or the other:
+
+```bash
+shred -u seal.key seal.pub       # the token is the only copy
+```
+
+or move the file to offline storage and treat it as the backup recovery key it
+now is.
 
 ---
 
@@ -476,14 +528,26 @@ simply be added.
 
 The options are:
 
-1. **Keep an offline PEM backup key** and treat the token as the everyday key.
-   Switching to the backup is a reseal with `--pubkey`/`--privkey` pointing at
-   it. This partially gives back what the token removed — the key exists in a
-   file again — so keep that file offline.
-2. **Accept the loss.** If the token goes, `tpm2-kira seal` afresh and re-enrol
+1. **Import the key instead of generating it on the token**
+   ([Option C](#option-c--importing-a-key-generated-outside-the-token)), and keep
+   the file offline. The same key then exists in two places, so a lost token is
+   replaced by importing the file into a new one — no reseal, no re-enrolment,
+   and the sealed policy is untouched because the key is the same. This is the
+   cleanest answer, and it has to be chosen up front: a key generated on the
+   token can never be extracted afterwards.
+2. **Keep a *different* offline key** as a spare and treat the token as the
+   everyday one. Switching to the spare is a reseal with `--pubkey`/`--privkey`
+   pointing at it — which requires the *old* key to unseal, so it has to be done
+   while the token still works, or while the PCR branch still opens on its own.
+   That makes it a migration you plan, not a recovery you fall back on.
+3. **Accept the loss.** If the token goes, `tpm2-kira seal` afresh and re-enrol
    your authenticator app. The TOTP secret cannot be carried across.
 
-Decide which before you need it.
+Both (1) and (2) mean a copy of a signing key exists in a file, which is part of
+what moving to a token was meant to remove. (1) concedes less in practice: one
+key, one file, kept offline — rather than a second key that also has to stay
+usable. Decide before you need it, because only (1) can be chosen retroactively
+if the key was imported, and none of them can be if it was not.
 
 ---
 
