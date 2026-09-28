@@ -1,4 +1,4 @@
-.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio deb test test-unit test-integration test-all fmt vet pkgbuild help
+.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio deb test test-unit test-integration test-docker test-docker-all test-pcsc test-all fmt vet pkgbuild help
 
 # Binary name
 BINARY_NAME=tpm2-kira
@@ -133,6 +133,31 @@ test: test-unit
 test-unit:
 	@echo "Running unit tests..."
 	$(GOTEST) -v -tags=unit ./cmd/...
+
+## test-docker: Run unit, integration and PC/SC tests in a container
+##              BASE=debian:bookworm selects pcsc-lite 1.9.x instead of 2.x
+BASE ?= debian:trixie
+BASE_TAG = $(subst :,-,$(BASE))
+test-docker:
+	@echo "Building the test image from $(BASE)..."
+	@docker build -q --build-arg BASE=$(BASE) -t tpm2-kira-test:$(BASE_TAG) test/docker
+	@echo "Running tests in the container..."
+	@docker run --rm \
+		-v "$$(go env GOROOT)":/usr/local/go:ro \
+		-v "$$(pwd)":/src:ro \
+		-v "$$(go env GOMODCACHE)":/go/pkg/mod:ro \
+		tpm2-kira-test:$(BASE_TAG)
+
+## test-docker-all: Run the container tests against both pcsc-lite generations
+test-docker-all:
+	@$(MAKE) test-docker BASE=debian:trixie
+	@$(MAKE) test-docker BASE=debian:bookworm
+
+## test-pcsc: Run the PC/SC wire protocol tests against a local pcscd
+##            Needs pcscd running and vsmartcard-vpcd configured
+test-pcsc:
+	@echo "Running PC/SC tests (requires a running pcscd with a virtual reader)..."
+	$(GOTEST) -v -tags=pcsc -timeout 5m ./internal/pcsc/
 
 ## test-integration: Run integration tests with software TPM
 test-integration:

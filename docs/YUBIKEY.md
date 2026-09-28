@@ -54,6 +54,44 @@ tpm2-kira talks to `pcscd` over its socket and links no PC/SC library, so the
 binary stays statically linked and the initramfs needs nothing extra. `pcscd`
 must be running when you seal or reseal; it is not needed at boot.
 
+### pcsc-lite 2.x asks polkit first
+
+This one is worth setting up before you need it, because it fails in the least
+convenient place.
+
+pcsc-lite 2.x (Arch, Debian trixie and newer) checks polkit before accepting any
+client, and the shipped policy is:
+
+```xml
+<allow_any>no</allow_any>
+<allow_inactive>no</allow_inactive>
+<allow_active>yes</allow_active>
+```
+
+There is no exemption for root. An interactive `sudo tpm2-kira reseal` normally
+still counts as an active session and works. A reseal that runs **unattended** —
+from the mkinitcpio post hook inside a pacman transaction, from a systemd unit,
+from cron or over ssh without a seat — has no active session, so pcscd refuses
+it and closes the connection.
+
+tpm2-kira reports that explicitly rather than as an unhelpful socket error, but
+the fix is a polkit rule:
+
+```javascript
+// /etc/polkit-1/rules.d/50-tpm2-kira-pcsc.rules
+polkit.addRule(function(action, subject) {
+    if ((action.id == "org.debian.pcsc-lite.access_pcsc" ||
+         action.id == "org.debian.pcsc-lite.access_card") &&
+        subject.user == "root") {
+        return polkit.Result.YES;
+    }
+});
+```
+
+That grants root access to the daemon, which is the same privilege level that
+already owns `/dev/tpm0` and the signing key, so it concedes nothing new. pcsc-lite
+1.9.x (Debian bookworm) has no polkit check and needs none of this.
+
 ---
 
 ## Preparing a key
@@ -351,10 +389,20 @@ generate` step from Option A.
 **`the TPM cannot load this key`** — usually RSA-4096. Use ECC P-256 or
 RSA-2048.
 
-**`pcscd speaks protocol X.Y but this build implements 4.4`** — tpm2-kira
-refuses to guess at a message layout it was not written against, because
-misreading it could corrupt commands rather than fail cleanly. Please report it
-with your pcsc-lite version.
+**`pcscd closed the connection during the handshake`** — almost always polkit
+refusing an unattended client on pcsc-lite 2.x. Check the daemon log:
+
+```bash
+sudo journalctl -u pcscd | grep -i "unauthorized"
+```
+
+`Rejected unauthorized PC/SC client` confirms it; install the polkit rule from
+[pcsc-lite 2.x asks polkit first](#pcsc-lite-2x-asks-polkit-first).
+
+**`pcscd accepted none of the protocol versions this build implements`** —
+tpm2-kira speaks 4.5 (pcsc-lite 2.x) and 4.4 (1.9.x) and refuses to guess at a
+layout it was not written against, because misreading it would corrupt commands
+rather than fail cleanly. Please report it with `pcscd --version`.
 
 **Wrong PIN, and now only one attempt remains** — tpm2-kira will refuse to try
 again. Verify the PIN by hand:
@@ -385,3 +433,30 @@ yubikey:serial=12345678;slot=9a   that specific token
 
 Anything that does not begin with `yubikey:` is a filesystem path, so existing
 `--privkey /path/to/key.pem` invocations are unchanged.
+
+
+---
+
+## Testing without hardware
+
+The card code is exercised end to end without a YubiKey, using the vsmartcard
+virtual reader:
+
+```bash
+make test-docker                      # pcsc-lite 2.x   (protocol 4.5)
+make test-docker BASE=debian:bookworm # pcsc-lite 1.9.x (protocol 4.4)
+make test-docker-all                  # both
+```
+
+That runs the unit tests, the software-TPM integration suite, and the PC/SC
+tests: a virtual PIV card backed by a software key, reached through a real
+`pcscd`, driven by `internal/piv`. Both pcsc-lite generations are worth running,
+because `internal/pcsc` implements the wire format by hand and only a live
+daemon can tell whether it is right — the command enum being off by one was
+found exactly this way.
+
+With a local `pcscd` and `vsmartcard-vpcd` installed, the PC/SC tests alone are:
+
+```bash
+make test-pcsc
+```

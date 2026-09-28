@@ -305,6 +305,11 @@ sudo pacman -S pcsclite yubikey-manager     # or: apt install pcscd yubikey-mana
 sudo systemctl enable --now pcscd
 ```
 
+On pcsc-lite 2.x (Arch, Debian trixie) `pcscd` asks polkit before accepting a
+client, and the shipped policy allows only active login sessions. Interactive
+`sudo` is fine; an unattended reseal from a package hook is not, and needs a
+polkit rule — see [docs/YUBIKEY.md](docs/YUBIKEY.md#pcsc-lite-2x-asks-polkit-first).
+
 **Prepare the key.** tpm2-kira never writes to a token: it reads a slot's public
 key, verifies the PIN, and asks the card to sign. Creating the key is `ykman`'s
 job, which keeps tpm2-kira from being able to damage a key the slot may share
@@ -574,6 +579,11 @@ make test-integration
 
 # Everything
 make test-all
+
+# Everything, plus a real pcscd and a virtual smart card, in a container.
+# BASE selects the pcsc-lite generation: 2.x by default, 1.9.x for bookworm.
+make test-docker
+make test-docker-all
 ```
 
 ## Troubleshooting

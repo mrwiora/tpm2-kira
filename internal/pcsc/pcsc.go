@@ -36,16 +36,36 @@ import (
 	"net"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 )
 
-// Protocol version this client implements. pcsc-lite has used 4.4 since 1.9;
-// see the package comment for why a mismatch is fatal rather than tolerated.
-const (
-	protocolVersionMajor int32 = 4
-	protocolVersionMinor int32 = 4
-)
+// protocolVersion is one client/server protocol version this package knows.
+type protocolVersion struct {
+	major, minor int32
+}
+
+func (v protocolVersion) String() string { return fmt.Sprintf("%d.%d", v.major, v.minor) }
+
+// supportedProtocols are tried in order until the daemon accepts one.
+//
+// There is no negotiation in the protocol: the client states a version and the
+// daemon either accepts it or closes the connection. So the client has to guess
+// right, and the guess differs by pcsc-lite generation:
+//
+//	4.5  pcsc-lite 2.x   (verified against 2.3.3)
+//	4.4  pcsc-lite 1.9.x (verified against 1.9.9)
+//
+// Both are tried rather than assumed, and the message layouts this package uses
+// are the same across the two — which is what the tests under -tags=pcsc check
+// against a live daemon of each generation. A daemon that accepts neither is
+// reported rather than talked to, because misreading these structs would
+// corrupt commands instead of failing cleanly.
+var supportedProtocols = []protocolVersion{
+	{4, 5},
+	{4, 4},
+}
 
 // Socket locations, tried in order. The first is current; the second is where
 // older distributions put it.
@@ -55,14 +75,26 @@ var socketPaths = []string{
 }
 
 // Command identifiers, from enum pcsc_msg_commands.
+//
+// The full enum, so that the two values past SCARD_CANCEL are not miscounted
+// again — leaving SCARD_CANCEL out shifts everything above it by one, and the
+// daemon then reads CMD_VERSION as SCARD_SET_ATTRIB and drops the connection:
+//
+//	0x01 ESTABLISH_CONTEXT   0x08 END_TRANSACTION   0x0F GET_ATTRIB
+//	0x02 RELEASE_CONTEXT     0x09 TRANSMIT          0x10 SET_ATTRIB
+//	0x03 LIST_READERS        0x0A CONTROL           0x11 CMD_VERSION
+//	0x04 CONNECT             0x0B STATUS            0x12 CMD_GET_READERS_STATE
+//	0x05 RECONNECT           0x0C GET_STATUS_CHANGE 0x13 WAIT_READER_STATE_CHANGE
+//	0x06 DISCONNECT          0x0D CANCEL_TRANSACTION
+//	0x07 BEGIN_TRANSACTION   0x0E CANCEL
 const (
 	cmdEstablishContext uint32 = 0x01
 	cmdReleaseContext   uint32 = 0x02
 	cmdConnect          uint32 = 0x04
 	cmdDisconnect       uint32 = 0x06
 	cmdTransmit         uint32 = 0x09
-	cmdVersion          uint32 = 0x10
-	cmdGetReadersState  uint32 = 0x11
+	cmdVersion          uint32 = 0x11
+	cmdGetReadersState  uint32 = 0x12
 )
 
 // Constants mirrored from the installed PCSC/pcsclite.h.
@@ -121,24 +153,51 @@ func Connect() (*Client, error) {
 		return nil, fmt.Errorf("the pcscd protocol client only supports little-endian hosts")
 	}
 
-	conn, err := dialDaemon()
-	if err != nil {
-		return nil, err
+	var versionErrs []string
+
+	for _, version := range supportedProtocols {
+		// A rejected version leaves the daemon closing the connection, so
+		// each attempt needs a fresh one.
+		conn, err := dialDaemon()
+		if err != nil {
+			return nil, err
+		}
+
+		c := &Client{conn: conn}
+
+		if err := c.negotiateVersion(version); err != nil {
+			conn.Close()
+
+			if errors.Is(err, errVersionRejected) {
+				versionErrs = append(versionErrs, fmt.Sprintf("%s: %v", version, err))
+				continue
+			}
+			return nil, err
+		}
+
+		if err := c.establishContext(); err != nil {
+			conn.Close()
+			return nil, err
+		}
+
+		return c, nil
 	}
 
-	c := &Client{conn: conn}
+	return nil, fmt.Errorf(
+		"pcscd accepted none of the protocol versions this build implements (%s).\n"+
+			"  Details: %s\n"+
+			"  The message layout is not guaranteed across protocol versions, so talking to it\n"+
+			"  anyway could corrupt commands rather than fail cleanly. Please report this with\n"+
+			"  the output of 'pcscd --version'.",
+		joinVersions(supportedProtocols), strings.Join(versionErrs, "; "))
+}
 
-	if err := c.negotiateVersion(); err != nil {
-		conn.Close()
-		return nil, err
+func joinVersions(versions []protocolVersion) string {
+	parts := make([]string, 0, len(versions))
+	for _, v := range versions {
+		parts = append(parts, v.String())
 	}
-
-	if err := c.establishContext(); err != nil {
-		conn.Close()
-		return nil, err
-	}
-
-	return c, nil
+	return strings.Join(parts, ", ")
 }
 
 func dialDaemon() (net.Conn, error) {
@@ -162,41 +221,61 @@ func dialDaemon() (net.Conn, error) {
 		ErrDaemonUnavailable, strings.Join(socketPaths, ", "), lastErr)
 }
 
+// errVersionRejected means the daemon did not accept this protocol version, so
+// another candidate is worth trying.
+var errVersionRejected = errors.New("protocol version not accepted")
+
 // negotiateVersion exchanges version_struct { int32 major; int32 minor;
-// uint32 rv } and refuses any protocol this client was not written against.
-func (c *Client) negotiateVersion() error {
+// uint32 rv }.
+func (c *Client) negotiateVersion(version protocolVersion) error {
 	req := make([]byte, versionStructLen)
-	binary.LittleEndian.PutUint32(req[0:], uint32(protocolVersionMajor))
-	binary.LittleEndian.PutUint32(req[4:], uint32(protocolVersionMinor))
+	binary.LittleEndian.PutUint32(req[0:], uint32(version.major))
+	binary.LittleEndian.PutUint32(req[4:], uint32(version.minor))
 	binary.LittleEndian.PutUint32(req[8:], scardSuccess)
 
 	if err := c.send(cmdVersion, req); err != nil {
-		return err
+		return authorizationHint(err)
 	}
 
 	rsp, err := c.receive(versionStructLen)
 	if err != nil {
-		return err
+		return authorizationHint(err)
 	}
 
-	major := int32(binary.LittleEndian.Uint32(rsp[0:]))
-	minor := int32(binary.LittleEndian.Uint32(rsp[4:]))
-	rv := binary.LittleEndian.Uint32(rsp[8:])
-
-	if rv != scardSuccess {
-		return fmt.Errorf("pcscd rejected the version handshake (rv 0x%08X)", rv)
+	if rv := binary.LittleEndian.Uint32(rsp[8:]); rv != scardSuccess {
+		return fmt.Errorf("%w (daemon replied %s)", errVersionRejected, statusString(rv))
 	}
 
-	if major != protocolVersionMajor || minor != protocolVersionMinor {
-		return fmt.Errorf(
-			"pcscd speaks protocol %d.%d but this build implements %d.%d.\n"+
-				"  The message layout is not guaranteed across protocol versions, so talking to it\n"+
-				"  anyway could corrupt commands rather than fail cleanly. Please report this with\n"+
-				"  your pcsc-lite version so the client can be updated.",
-			major, minor, protocolVersionMajor, protocolVersionMinor)
+	if major := int32(binary.LittleEndian.Uint32(rsp[0:])); major != version.major {
+		return fmt.Errorf("%w (daemon echoed major version %d)", errVersionRejected, major)
 	}
 
 	return nil
+}
+
+// authorizationHint turns an abrupt disconnect during the handshake into an
+// explanation.
+//
+// pcsc-lite 2.x checks polkit before reading any message and simply closes the
+// connection on refusal, which otherwise surfaces as "connection reset by peer"
+// with nothing to act on. It is the likeliest cause of a failure this early,
+// and it bites exactly where it is least visible: an unattended reseal from a
+// package hook has no active login session for polkit to authorise.
+func authorizationHint(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) &&
+		!errors.Is(err, syscall.ECONNRESET) && !errors.Is(err, syscall.EPIPE) {
+		return err
+	}
+
+	return fmt.Errorf("pcscd closed the connection during the handshake: %w\n"+
+		"  pcsc-lite 2.x asks polkit before accepting a client, and refusals look exactly\n"+
+		"  like this. Check the daemon log for \"Rejected unauthorized PC/SC client\".\n"+
+		"  A reseal run from a package hook has no active session, so it may need a polkit\n"+
+		"  rule permitting root, or a pcscd started with --disable-polkit.", err)
 }
 
 // establishContext sends establish_struct { uint32 dwScope; uint32 hContext;

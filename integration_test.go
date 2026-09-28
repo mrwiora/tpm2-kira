@@ -34,14 +34,15 @@ var testKeyDir string
 
 // TestMain sets up and tears down the test environment
 func TestMain(m *testing.M) {
-	// Check if binary exists, if not build it
-	if _, err := os.Stat("./tpm2-kira"); os.IsNotExist(err) {
-		fmt.Println("Building tpm2-kira binary for testing...")
-		buildCmd := exec.Command("go", "build", "-o", "tpm2-kira")
-		if output, err := buildCmd.CombinedOutput(); err != nil {
-			fmt.Printf("Failed to build binary: %v\nOutput: %s\n", err, output)
-			os.Exit(1)
-		}
+	// Always rebuild. These tests exercise ./tpm2-kira as a subprocess, so a
+	// binary left over from an earlier build would have the suite silently
+	// reporting on code that is not in the working tree — passing or failing
+	// for reasons that have nothing to do with the current changes.
+	fmt.Println("Building tpm2-kira binary for testing...")
+	buildCmd := exec.Command("go", "build", "-o", "tpm2-kira")
+	if output, err := buildCmd.CombinedOutput(); err != nil {
+		fmt.Printf("Failed to build binary: %v\nOutput: %s\n", err, output)
+		os.Exit(1)
 	}
 
 	// Generate test signing keys
