@@ -257,25 +257,43 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 // ── sub-section helpers ─────────────────────────────────────────────────
 
 func printSigningKeyInfo(sub string, blob *SealedBlob) {
-	if blob.Payload.PublicKeyPath != "" {
-		pubKey, _, keyErr := LoadSigningPublicKeyFromPEM(blob.Payload.PublicKeyPath)
-		if keyErr == nil {
-			fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
-			fmt.Printf("%s%sSigning Key Path: %s\n", sub, branch(true), blob.Payload.PublicKeyPath)
-			return
+	ref := blob.Payload.PrivateKeyRef
+	if ref.IsZero() {
+		ref = blob.Payload.PublicKeyRef
+	}
+
+	// Everything shown here comes out of the blob itself, so info works with
+	// the token unplugged and never asks for a PIN.
+	fingerprint := blob.Payload.KeyFingerprint
+
+	description := ""
+	if blob.Payload.PublicKeyRef.Kind == KeyRefFile && blob.Payload.PublicKeyRef.Path != "" {
+		if pubKey, _, err := LoadSigningPublicKeyFromPEM(blob.Payload.PublicKeyRef.Path); err == nil {
+			description = PublicKeyDescription(pubKey)
+			if len(fingerprint) == 0 {
+				fingerprint, _ = KeyFingerprint(pubKey)
+			}
 		}
 	}
-	if blob.Payload.PrivateKeyPath != "" {
-		privKey, keyErr := LoadSigningPrivateKeyFromPEM(blob.Payload.PrivateKeyPath)
-		if keyErr == nil {
-			pubKey := privKey.Public()
-			fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
-			fmt.Printf("%s%sSigning Key Path: %s (derived from private key)\n", sub, branch(true), blob.Payload.PrivateKeyPath)
-			return
-		}
+
+	switch {
+	case description != "" && len(fingerprint) > 0:
+		fmt.Printf("%s%sSigning Key: %s (fingerprint: %x)\n", sub, branch(false), description, fingerprint[:8])
+	case len(fingerprint) > 0:
+		fmt.Printf("%s%sSigning Key: fingerprint %x\n", sub, branch(false), fingerprint[:8])
+	case ref.IsZero():
+		fmt.Printf("%s%sSigning Key: not recorded in this blob\n", sub, branch(true))
+		return
+	default:
+		fmt.Printf("%s%sSigning Key: not recorded in this blob\n", sub, branch(false))
 	}
-	// No key could be loaded – close the branch.
-	fmt.Printf("%s%sSigning Key: unavailable (key paths not accessible)\n", sub, branch(true))
+
+	last := blob.Payload.TokenSerial == 0
+	fmt.Printf("%s%sSigning Key Reference: %s\n", sub, branch(last), ref)
+
+	if blob.Payload.TokenSerial != 0 {
+		fmt.Printf("%s%sToken Serial: %d\n", sub, branch(true), blob.Payload.TokenSerial)
+	}
 }
 
 func printPCRSources(sub string, blob *SealedBlob) {

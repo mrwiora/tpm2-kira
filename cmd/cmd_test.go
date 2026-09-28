@@ -513,8 +513,8 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 						{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
 					SignedBranchDigest: make([]byte, 32),
-					PublicKeyPath:      "/var/lib/tpm2-kira/keys/seal.pub",
-					PrivateKeyPath:     "/var/lib/tpm2-kira/keys/seal.key",
+					PublicKeyRef:       KeyRef{Kind: KeyRefFile, Path: "/var/lib/tpm2-kira/keys/seal.pub"},
+					PrivateKeyRef:      KeyRef{Kind: KeyRefFile, Path: "/var/lib/tpm2-kira/keys/seal.key"},
 				},
 			},
 		},
@@ -604,11 +604,11 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			}
 
 			// Check key paths
-			if unmarshaled.Payload.PublicKeyPath != tt.blob.Payload.PublicKeyPath {
-				t.Errorf("PublicKeyPath mismatch: expected %q, got %q", tt.blob.Payload.PublicKeyPath, unmarshaled.Payload.PublicKeyPath)
+			if unmarshaled.Payload.PublicKeyRef != tt.blob.Payload.PublicKeyRef {
+				t.Errorf("PublicKeyRef mismatch: expected %+v, got %+v", tt.blob.Payload.PublicKeyRef, unmarshaled.Payload.PublicKeyRef)
 			}
-			if unmarshaled.Payload.PrivateKeyPath != tt.blob.Payload.PrivateKeyPath {
-				t.Errorf("PrivateKeyPath mismatch: expected %q, got %q", tt.blob.Payload.PrivateKeyPath, unmarshaled.Payload.PrivateKeyPath)
+			if unmarshaled.Payload.PrivateKeyRef != tt.blob.Payload.PrivateKeyRef {
+				t.Errorf("PrivateKeyRef mismatch: expected %+v, got %+v", tt.blob.Payload.PrivateKeyRef, unmarshaled.Payload.PrivateKeyRef)
 			}
 
 			// Check BlobSignature is populated
@@ -873,8 +873,8 @@ func TestUnmarshalIncompatibleVersion(t *testing.T) {
 	if !strings.Contains(err.Error(), "v1") {
 		t.Errorf("Expected error to mention found v1, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "v8") {
-		t.Errorf("Expected error to mention requires v8, got: %v", err)
+	if !strings.Contains(err.Error(), "v9") {
+		t.Errorf("Expected error to mention requires v9, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "tpm2-kira seal") {
 		t.Errorf("Expected error to suggest re-sealing, got: %v", err)
@@ -1945,8 +1945,8 @@ func TestValidateNVRAMIndex(t *testing.T) {
 }
 
 func TestCurrentBlobVersion(t *testing.T) {
-	if CurrentBlobVersion != 8 {
-		t.Errorf("CurrentBlobVersion should be 8, got %d", CurrentBlobVersion)
+	if CurrentBlobVersion != 9 {
+		t.Errorf("CurrentBlobVersion should be 9, got %d", CurrentBlobVersion)
 	}
 }
 
@@ -3072,8 +3072,10 @@ func TestMarshalPayloadUnmarshalPayloadRoundTrip(t *testing.T) {
 			TotalEvents:     100,
 			ProcessedEvents: 50,
 		},
-		PublicKeyPath:  "/var/lib/tpm2-kira/keys/seal.pub",
-		PrivateKeyPath: "/var/lib/tpm2-kira/keys/seal.key",
+		PublicKeyRef:   KeyRef{Kind: KeyRefFile, Path: "/var/lib/tpm2-kira/keys/seal.pub"},
+		PrivateKeyRef:  KeyRef{Kind: KeyRefYubiKey, Serial: 12345678, Slot: 0x9A},
+		KeyFingerprint: bytes.Repeat([]byte{0xAB}, 32),
+		TokenSerial:    12345678,
 	}
 
 	data, err := original.MarshalPayload()
@@ -3118,11 +3120,17 @@ func TestMarshalPayloadUnmarshalPayloadRoundTrip(t *testing.T) {
 	if restored.EventlogInfo.EventlogPath != original.EventlogInfo.EventlogPath {
 		t.Error("EventlogPath mismatch")
 	}
-	if restored.PublicKeyPath != original.PublicKeyPath {
-		t.Errorf("PublicKeyPath: %q vs %q", restored.PublicKeyPath, original.PublicKeyPath)
+	if restored.PublicKeyRef != original.PublicKeyRef {
+		t.Errorf("PublicKeyRef: %+v vs %+v", restored.PublicKeyRef, original.PublicKeyRef)
 	}
-	if restored.PrivateKeyPath != original.PrivateKeyPath {
-		t.Errorf("PrivateKeyPath: %q vs %q", restored.PrivateKeyPath, original.PrivateKeyPath)
+	if restored.PrivateKeyRef != original.PrivateKeyRef {
+		t.Errorf("PrivateKeyRef: %+v vs %+v", restored.PrivateKeyRef, original.PrivateKeyRef)
+	}
+	if !bytes.Equal(restored.KeyFingerprint, original.KeyFingerprint) {
+		t.Errorf("KeyFingerprint: %x vs %x", restored.KeyFingerprint, original.KeyFingerprint)
+	}
+	if restored.TokenSerial != original.TokenSerial {
+		t.Errorf("TokenSerial: %d vs %d", restored.TokenSerial, original.TokenSerial)
 	}
 }
 

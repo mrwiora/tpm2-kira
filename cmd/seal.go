@@ -146,6 +146,21 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 		return fmt.Errorf("the signing key does not match the public key being sealed against: %w", err)
 	}
 
+	// Record what identifies the key, so a later reseal can tell "wrong key"
+	// from "wrong PCRs" instead of both surfacing as a TPM policy failure.
+	keyFingerprint, err := KeyFingerprint(pubKey)
+	if err != nil {
+		return err
+	}
+
+	// The public key reference is only useful when it names a file that can
+	// be read back. A token reference would send reseal to the card for
+	// something it already has.
+	var pubKeyRef KeyRef
+	if pubKeyPath != "" {
+		pubKeyRef = KeyRef{Kind: KeyRefFile, Path: pubKeyPath}
+	}
+
 	// Read all PCR values from their respective sources using the shared helper
 	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, MeasurePointModeSetting, debug)
 	if err != nil {
@@ -222,8 +237,10 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 			PCRDigests:         pcrDigests,
 			SignedBranchDigest: branches.SignedBranchDigest.Buffer,
 			EventlogInfo:       readResult.EventlogInfo,
-			PublicKeyPath:      pubKeyPath,
-			PrivateKeyPath:     privKeyPath,
+			PublicKeyRef:       pubKeyRef,
+			PrivateKeyRef:      privKey.Ref(),
+			KeyFingerprint:     keyFingerprint,
+			TokenSerial:        tokenSerialOf(privKey),
 		},
 	}
 

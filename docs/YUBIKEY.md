@@ -243,6 +243,30 @@ the skip path below instead of hanging on a prompt nobody would see.
 
 The PIN never appears in output, including under `--debug`.
 
+### The PIN is not stored anywhere, and cannot be
+
+There is no configuration file for it. The key *reference* lives in the sealed
+blob, so `reseal` finds the right slot with no flags — but the PIN cannot join
+it there. The NVRAM index is defined with open reads by design (the secret is
+protected by the sealed object's policy, not by read control), so anything in
+the blob can be read by any process that can reach the TPM, and by anyone who
+takes the disk. A PIN stored there would be handed to exactly the attacker the
+token defends against, collapsing two factors into one.
+
+That matters for the reseal that runs automatically after an initramfs rebuild,
+which has no terminal to prompt at. The options, best first:
+
+1. **Use a slot whose PIN policy is `never`** — `ykman piv keys generate
+   --pin-policy NEVER`. The token being plugged in is then the authorisation,
+   which is a coherent model: possession of the token is the factor, and no
+   secret sits on disk at all.
+2. **Let the reseal be skipped** and run it by hand afterwards. This is the
+   default behaviour, and it matches what tpm2-kira already argues for PCR 8/9
+   on Debian — keeping a human in the loop is the point.
+3. **Set `TPM2_KIRA_PIN` in the hook's environment** if you want that. It is
+   your call to make; tpm2-kira will not make it for you by shipping a file to
+   put it in.
+
 ### What an environment variable costs
 
 `TPM2_KIRA_PIN` is visible in `/proc/<pid>/environ`, which is root-only — and

@@ -8,9 +8,12 @@ Decisions already taken (§15 records the rest):
 - **One binary.** No build-tag split, no second artifact. The PC/SC client is
   written in pure Go so `CGO_ENABLED=0` keeps working and the initramfs stays
   library-free.
-- **Blob format bumps to v9.** The project is in development and maintains no
-  backwards compatibility, so a typed key reference goes in properly rather
-  than being smuggled into a string field.
+- **Blob format bumps to v9.** Done. Typed key references, plus the key
+  fingerprint and token serial, so everything needed to find and identify the
+  signing key lives in the blob.
+- **No separate configuration file.** There is no `reseal.conf`. The key
+  reference is in the blob; the PIN is deliberately *not*, because NVRAM reads
+  are open (see §9.1).
 - **`TPM2_KIRA_PIN`** is the environment variable, matching the existing
   `TPM2_KIRA_INITRAMFS_MODE` convention.
 - **A key file on disk stays the default.** The YubiKey is opt-in. `setup`
@@ -458,72 +461,55 @@ Much smaller than it would have been with a split binary:
 | `debian/control` | `Recommends: pcscd` — a *runtime* suggestion, not a link-time dependency |
 | `packaging/aur/PKGBUILD` | `optdepends=('pcsclite: YubiKey signing key support')` |
 | `initramfs/*/hooks/*` | unchanged |
-| `initramfs/mkinitcpio/post/sd-tpm2-kira` | handle `SKIPPED:`; source `/etc/tpm2-kira/reseal.conf` for the PIN |
+| `initramfs/mkinitcpio/post/sd-tpm2-kira` | handle `SKIPPED:` |
 | `initramfs/initramfs-tools/post-update.d/tpm2-kira` | same |
-| `/etc/tpm2-kira/reseal.conf` (new, `0600 root:root`) | key selection and optional PIN for the unattended hooks — see §9.1 |
+| no new configuration file | the key reference is in the blob; the PIN is not — see §9.1 |
 
-### 9.1 Where the key configuration lives, and where it must not
+### 9.1 Configuration lives in the blob, and the PIN lives nowhere
 
-The reseal hooks run on the *running system*, not in the initramfs, and they
-currently take no configuration at all — the Arch post hook reads only
-`/run/tpm2-kira/measure-point.state`, and Debian's `initramfs.conf` carries a
-display mode. Selecting a key backend unattended needs somewhere to say so.
+The blob already carries everything needed to find the signing key: v9 stores a
+typed key reference, so `reseal` with no flags finds a token slot exactly as it
+used to find a key file. No configuration file is needed for that, and none is
+shipped.
 
-**New file `/etc/tpm2-kira/reseal.conf`, `0600 root:root`**, read by both the
-mkinitcpio post hook and Debian's `post-update.d` script:
+**The PIN cannot join it.** The NVRAM index is defined with `OwnerRead` and
+`AuthRead` set — reads are open by design, because the secret is protected by
+the sealed object's policy rather than by read control (SECURITY-BACKGROUND §9).
+Anything in the blob is therefore readable by any process that can reach the
+TPM, and by anyone who takes the disk. A PIN stored there would be published to
+exactly the attacker the token exists to defend against, turning two factors
+into one.
 
-```sh
-# Key used to authorise resealing. A path (the default) or a token reference.
-TPM2_KIRA_KEY=/var/lib/tpm2-kira/keys/seal.key
-#TPM2_KIRA_KEY=yubikey:serial=12345678;slot=9a
+So the PIN comes from `TPM2_KIRA_PIN`, from `--pin-file`, or from a terminal
+prompt, and nowhere else.
 
-# PIN, only meaningful for a token key. Optional; see the warnings in §6.
-#TPM2_KIRA_PIN=12345678
-```
+That leaves the unattended reseal after an initramfs rebuild, which has no
+terminal. Three honest options, in order of preference:
 
-tpm2-kira refuses to read the file if it is group- or world-readable, and the
-absence of the file means today's behaviour: the key path from the blob.
+1. **Use a slot whose PIN policy is `never`.** The token being physically
+   plugged in is then the authorisation. This is a coherent security model —
+   possession of the token is the factor — and it needs no secret on disk at
+   all. `ykman piv keys generate --pin-policy NEVER` sets it.
+2. **Let the reseal be skipped.** This is already the designed behaviour (§7):
+   the hook prints the `SKIPPED:` block, nothing is changed, and the user
+   reseals by hand. It matches what the project already argues for PCR 8/9 on
+   Debian — "Keeping a human in the loop is the point."
+3. **Set `TPM2_KIRA_PIN` in the hook's environment**, if a particular deployment
+   wants that. It is the deployer's choice and needs no support from us.
 
-**It must not go in `initramfs.conf`**, and this is the important part. Debian's
-hook copies that file *into the image*:
+**Nothing goes in `initramfs.conf` either**, and that is worth stating because
+it is the obvious place to reach for. Debian's hook copies that file *into the
+image*, and the image lives on unencrypted `/boot` — the premise of the whole
+project is that `/boot` is what an attacker gets to touch. It would also be
+pointless: the initramfs never uses the signing key.
 
-```
-copy_file config /etc/tpm2-kira/initramfs.conf /etc/tpm2-kira/initramfs.conf
-```
-
-The initramfs image lives on `/boot`, which is **not encrypted** — that is the
-whole premise of the project, since tpm2-kira exists to be trusted before the
-disk is unlocked. A PIN placed in `initramfs.conf` would be written in
-cleartext to an unencrypted partition readable by anyone with physical access,
-which is precisely the attacker the tool is meant to detect. It would also be
-pointless: the initramfs never uses the signing key, so nothing in the image
-has any use for it.
-
-Two guards follow from that, and both belong in the code rather than in a
-warning comment:
-
-- The hooks must **never** copy `reseal.conf` into the image. Worth an explicit
-  assertion in the build hooks, not just an omission.
-- tpm2-kira must **ignore** `TPM2_KIRA_PIN` and `TPM2_KIRA_KEY` if it finds
-  them in `initramfs.conf`, and say why. Someone will eventually put them
-  there.
-
-**What *would* belong in `initramfs.conf`** is a display concern, since that is
-what the file is for. Deferring a reseal now produces an expected PCR mismatch
-at the next boot (§7), and a blank screen is a bad way to communicate "this is
-the mismatch you chose". A variable such as
-`TPM2_KIRA_EXPLAIN_MISMATCH=yes|no` would let the boot-time display print one
-line distinguishing "no code because you skipped a reseal" from "no code, and
-you did not expect that". That is genuinely useful and carries no secret.
-
-Also worth noting: `initramfs.conf` is Debian-only today. If it grows this
-variable it should be read on Arch too, so the two platforms stop diverging.
-
-The PC/SC and PIV code adds on the order of 50–100 KB to the static binary,
-which also lands in the initramfs. That is negligible against the image size and
-is the price of keeping one artifact.
-
----
+What *would* belong there is a display concern. Deferring a reseal produces an
+expected PCR mismatch at the next boot (§7), and a blank screen is a poor way to
+say "this is the mismatch you chose". A variable such as
+`TPM2_KIRA_EXPLAIN_MISMATCH=yes|no` would let the boot display distinguish "no
+code because you skipped a reseal" from "no code, and you did not expect that".
+That carries no secret. Note `initramfs.conf` is Debian-only today; if it grows
+this, Arch should read it too.
 
 ## 10. Testing
 
@@ -655,9 +641,10 @@ Two consequences, one of them a genuine operational trap:
   inserted is in a different position than one facing a bare machine. Docs
   should say: remove the token when you are not resealing. That is the entire
   point of it being removable.
-- *PIN capture.* A root-level attacker on a machine where the PIN sits in
-  `/etc/tpm2-kira/reseal.conf` or a systemd environment file has the PIN. They
-  still need the token. This is a deliberate trade and should read as one.
+- *PIN capture.* A root-level attacker on a machine where the PIN is placed in
+  a systemd environment file or a hook's environment has the PIN. They still
+  need the token. This is a deliberate trade wherever a deployment makes it —
+  which is why tpm2-kira does not make it for them by shipping a PIN file.
 - *Loss of the token is loss of recovery.* A lost key file is restorable from a
   backup; a lost token is not, and the blob's own docs call the signing key "the
   recovery master key". SECURITY-BACKGROUND §12 must gain a paragraph: keep an
@@ -715,12 +702,12 @@ Ranked by how much I think they matter.
 | # | Decision | Status |
 |---|---|---|
 | 1 | Split binary vs. pure-Go PC/SC | **decided: pure Go, one binary** |
-| 2 | Blob key reference | **decided: bump to v9, typed field** |
+| 2 | Blob key reference | **done: v9, typed field, plus fingerprint and serial** |
 | 3 | Environment variable name | **decided: `TPM2_KIRA_PIN`** |
 | 4 | Token must be pre-populated | **decided: yes — tpm2-kira never writes to the token** |
 | 4a | Touch policy | detected, not dictated; `NEVER` recommended for a dedicated slot |
 | 5 | Backup for a lost token | proposed: PEM backup + switch procedure; three-branch PolicyOR is cheapest to add during the v9 bump if you want it |
-| 6 | Ship `/etc/tpm2-kira/reseal.conf` for unattended key selection and PIN | proposed yes, opt-in, `0600`, refuse on bad mode (§9.1) |
+| 6 | A configuration file for unattended key selection and PIN | **decided: no. The key reference is in the blob; the PIN cannot be (§9.1)** |
 | 8 | File-backed key remains the default | **decided: yes — the token is opt-in** |
 | 9 | `TPM2_KIRA_EXPLAIN_MISMATCH` in `initramfs.conf` | proposed; carries no secret, unlike the PIN |
 | 7 | Anything else to fold into the v9 bump | open — worth checking before cutting it |
@@ -734,7 +721,7 @@ Ranked by how much I think they matter.
    backend only. **No behaviour change**; the existing suite must pass untouched,
    plus the fake-token suite from §10.
 2. `nvram restore --from <file>`, completing the recovery path opened by step 0.
-3. Blob v9: typed key refs, fingerprint/serial pinning, `info --json` output.
+3. ~~Blob v9: typed key refs, fingerprint/serial pinning, `info --json` output.~~ **Done.**
 4. Degradation path, `SKIPPED:` marker, hook changes, `--require-key`,
    `info` staleness.
 5. `internal/pcsc` — the pure-Go pcscd client, with golden-vector tests.

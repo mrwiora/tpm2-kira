@@ -100,8 +100,10 @@ func (p *pinResolver) PIN() (string, error) {
 	return "", &KeyUnavailableError{
 		Reason: "no PIN available",
 		Hint: fmt.Sprintf("set %s, pass --pin-file <path>, or run this from a terminal.\n"+
-			"  For unattended reseals after an initramfs rebuild, put it in\n"+
-			"  /etc/tpm2-kira/reseal.conf (mode 0600, root-owned).", PINEnvVar),
+			"  A reseal that runs unattended after an initramfs rebuild has no terminal to\n"+
+			"  prompt at. Either use a slot whose PIN policy is 'never', so the token being\n"+
+			"  plugged in is the authorisation, or let the reseal be skipped and run it by\n"+
+			"  hand afterwards.", PINEnvVar),
 	}
 }
 

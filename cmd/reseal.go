@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bytes"
 	"crypto"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -121,14 +123,14 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	effectivePrivKeyPath := privKeyPath
 	effectivePubKeyPath := pubKeyPath
 
-	if effectivePrivKeyPath == "" && sealedBlob.Payload.PrivateKeyPath != "" {
-		effectivePrivKeyPath = sealedBlob.Payload.PrivateKeyPath
+	if effectivePrivKeyPath == "" && !sealedBlob.Payload.PrivateKeyRef.IsZero() {
+		effectivePrivKeyPath = sealedBlob.Payload.PrivateKeyRef.String()
 		if debug {
 			fmt.Printf("Using private key path from blob: %s\n", effectivePrivKeyPath)
 		}
 	}
-	if effectivePubKeyPath == "" && sealedBlob.Payload.PublicKeyPath != "" {
-		effectivePubKeyPath = sealedBlob.Payload.PublicKeyPath
+	if effectivePubKeyPath == "" && sealedBlob.Payload.PublicKeyRef.Kind == KeyRefFile && sealedBlob.Payload.PublicKeyRef.Path != "" {
+		effectivePubKeyPath = sealedBlob.Payload.PublicKeyRef.Path
 		if debug {
 			fmt.Printf("Using public key path from blob: %s\n", effectivePubKeyPath)
 		}
@@ -177,6 +179,15 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		return keyErr
 	}
 	defer signingKey.Close()
+
+	// ── Check the key is the one this blob was sealed against ──
+	// Advisory, but it turns the commonest mistake — the wrong token plugged
+	// in — into a sentence naming it, instead of a blob signature failure
+	// that reads like tampering.
+	if err := checkKeyIdentity(signingKey, sealedBlob); err != nil {
+		tpmDev.Close()
+		return err
+	}
 
 	// ── Verify blob integrity signature ──
 	// The signature MUST be verified BEFORE any blob field is acted on, so a
@@ -441,4 +452,42 @@ func describeSealedPCRs(blob *SealedBlob) string {
 	}
 
 	return strings.Join(parts, ", ")
+}
+
+// checkKeyIdentity compares the resolved signing key against what the blob
+// records about the key it was sealed with.
+//
+// The blob signature is the authoritative check and runs straight after this
+// one; the point here is only to produce a better sentence when the two differ
+// for an ordinary reason. A blob with nothing recorded — sealed by a build
+// before this was stored — is not an error.
+func checkKeyIdentity(key SigningKey, blob *SealedBlob) error {
+	if len(blob.Payload.KeyFingerprint) == 0 {
+		return nil
+	}
+
+	fingerprint, err := KeyFingerprint(key.Public())
+	if err != nil {
+		return err
+	}
+
+	if bytes.Equal(fingerprint, blob.Payload.KeyFingerprint) {
+		return nil
+	}
+
+	msg := fmt.Sprintf("the signing key is not the one this slot was sealed against.\n"+
+		"  Sealed with: fingerprint %x", blob.Payload.KeyFingerprint[:8])
+
+	if blob.Payload.TokenSerial != 0 {
+		msg += fmt.Sprintf(" on YubiKey %d", blob.Payload.TokenSerial)
+	}
+	if !blob.Payload.PrivateKeyRef.IsZero() {
+		msg += fmt.Sprintf(" (%s)", blob.Payload.PrivateKeyRef)
+	}
+
+	msg += fmt.Sprintf("\n  Offered:     fingerprint %x (%s)", fingerprint[:8], key.Description())
+	msg += "\n  Resealing with this key would fail inside the TPM: the sealed object's\n" +
+		"  PolicySigned branch is bound to the other key's name."
+
+	return errors.New(msg)
 }

@@ -10,6 +10,37 @@ formats and CLI flags may change without migration paths.
 
 ## Blob format
 
+### Version 9 — key references instead of key paths
+
+`PublicKeyPath` and `PrivateKeyPath` were plain strings holding filesystem
+paths. A signing key can now live in a YubiKey PIV slot, which a path cannot
+name, so both became typed `KeyRef` values carrying a kind byte alongside a
+canonical string (`yubikey:serial=12345678;slot=9a`). The two encode the same
+fact and are cross-checked on read; a blob whose kind byte contradicts its
+string is rejected rather than resolved one way or the other.
+
+The string alone would have been enough to distinguish the cases — a filesystem
+path cannot begin with `yubikey:` — and reusing the v8 field would have avoided
+forcing everyone to re-seal. The bump was taken deliberately instead: the
+project maintains no backwards compatibility, and a field documented as a path
+that sometimes holds a URI is the kind of thing that is correct for exactly as
+long as nobody looks at it.
+
+Added in the same version: `KeyFingerprint` (SHA-256 of the signing key's PKIX
+DER) and `TokenSerial`. They identify the signing key without being usable as
+one, so `reseal` can say "the key in slot 9a is not the one this slot was sealed
+against" instead of failing as an opaque TPM policy error, and `info` can
+describe the key with the token unplugged.
+
+The public key itself is still **not** stored, for the same reason it was
+dropped in v5: a blob carrying its own verification key is a circular trust
+anchor, since a planted blob would carry a matching one.
+
+The **PIN** is deliberately not stored either. NVRAM reads are open, so anything
+in the blob is readable by any process that can reach the TPM and by anyone who
+takes the disk — publishing the PIN to exactly the attacker the token defends
+against.
+
 ### Version 8 — dropped the unverified eventlog hash
 
 `EventlogInfo.EventlogHash` stored a SHA-256 of the event log file and was

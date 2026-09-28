@@ -129,7 +129,7 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 var AppVersion = "unknown"
 
 // CurrentBlobVersion is the only supported blob format version
-const CurrentBlobVersion = 8
+const CurrentBlobVersion = 9
 
 // MaxBlobSignatureLen is the maximum allowed signature size in bytes.
 // Generous: RSA-4096 PKCS#1 v1.5 = 512 bytes, ECDSA P-384 DER ≈ 104 bytes.
@@ -191,7 +191,8 @@ const (
 	MaxCalcTime           = 256              // Maximum 256 bytes for timestamp
 	MaxMeasurePointLen    = 512              // Maximum 512 bytes for the measure-point extend description
 	MaxSignedBranchDigest = 64               // Maximum 64 bytes for signed branch digest (SHA-256 = 32 bytes)
-	MaxKeyPathLen         = 4096             // 4KB maximum for key filesystem paths
+	MaxKeyPathLen         = 4096             // 4KB maximum for key references
+	MaxKeyFingerprintLen  = 64               // SHA-256 today; room for a longer hash
 )
 
 // PCRDigestPair represents a PCR index paired with its digest value
@@ -220,14 +221,24 @@ type EventlogInfo struct {
 // update MarshalPayload / UnmarshalPayload.  This guarantees that new
 // fields are automatically included in the signed region.
 type SealedBlobPayload struct {
-	AppVersion         string          `json:"app_version"`                // Application version that created this blob
-	Public             []byte          `json:"public"`                     // TPM public key blob
-	Private            []byte          `json:"private"`                    // TPM private key blob
-	PCRDigests         []PCRDigestPair `json:"pcr_digests"`                // PCR indices with their source and digest values
-	SignedBranchDigest []byte          `json:"signed_branch_digest"`       // Pre-computed PolicySigned branch digest (SHA-256, 32 bytes)
-	EventlogInfo       *EventlogInfo   `json:"eventlog_info"`              // Eventlog calculation metadata (if any PCR uses eventlog)
-	PublicKeyPath      string          `json:"public_key_path,omitempty"`  // Filesystem path to signing public key (stored for reseal convenience)
-	PrivateKeyPath     string          `json:"private_key_path,omitempty"` // Filesystem path to signing private key (stored for reseal convenience)
+	AppVersion         string          `json:"app_version"`          // Application version that created this blob
+	Public             []byte          `json:"public"`               // TPM public key blob
+	Private            []byte          `json:"private"`              // TPM private key blob
+	PCRDigests         []PCRDigestPair `json:"pcr_digests"`          // PCR indices with their source and digest values
+	SignedBranchDigest []byte          `json:"signed_branch_digest"` // Pre-computed PolicySigned branch digest (SHA-256, 32 bytes)
+	EventlogInfo       *EventlogInfo   `json:"eventlog_info"`        // Eventlog calculation metadata (if any PCR uses eventlog)
+	// PublicKeyRef and PrivateKeyRef locate the signing key at reseal time.
+	// They are references, not key material: a filesystem path, or a slot on
+	// a hardware token. The key itself is never stored.
+	PublicKeyRef  KeyRef `json:"public_key_ref,omitempty"`
+	PrivateKeyRef KeyRef `json:"private_key_ref,omitempty"`
+
+	// KeyFingerprint is the SHA-256 of the signing key's PKIX DER encoding,
+	// and TokenSerial the hardware token it was read from (zero for a file).
+	// Both identify the key without being usable as one, which lets reseal
+	// diagnose "this is the wrong key" instead of failing inside the TPM.
+	KeyFingerprint []byte `json:"key_fingerprint,omitempty"`
+	TokenSerial    uint32 `json:"token_serial,omitempty"`
 }
 
 // SealedBlob is the top-level envelope: version, signed payload, and
@@ -366,7 +377,8 @@ func hasEventlogPCRsInPayload(p *SealedBlobPayload) bool {
 //	[numPCRDigests:4][pcrDigestPairs...]
 //	[signedBranchDigestLen:2][signedBranchDigest]
 //	[hasEventlogInfo:1][eventlogInfo...]
-//	[hasKeyPaths:1][pubKeyPathLen:2][pubKeyPath][privKeyPathLen:2][privKeyPath]
+//	[hasKeyRefs:1][pubKind:1][pubRefLen:2][pubRef][privKind:1][privRefLen:2][privRef]
+//	[hasKeyIdentity:1][tokenSerial:4][fingerprintLen:1][fingerprint]
 func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 	size := 4 + len(p.AppVersion) + // app version length + string
 		4 + len(p.Public) + // public blob
@@ -374,7 +386,8 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		4 + // number of PCR digests
 		2 + len(p.SignedBranchDigest) + // signed branch digest length (2 bytes) + data
 		1 + // hasEventlogInfo flag
-		1 // hasKeyPaths flag
+		1 + // hasKeyRefs flag
+		1 // hasKeyIdentity flag
 
 	// Guard against integer overflow and unreasonable allocations
 	if size < 0 || size > MaxBlobSize {
@@ -407,13 +420,27 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		}
 	}
 
-	// Calculate key paths size (if present)
-	hasKeyPaths := p.PublicKeyPath != "" || p.PrivateKeyPath != ""
-	if hasKeyPaths {
-		size += 2 + len(p.PublicKeyPath) + // pubkey path length + string
-			2 + len(p.PrivateKeyPath) // privkey path length + string
+	// Calculate key reference size (if present)
+	pubRef := p.PublicKeyRef.String()
+	privRef := p.PrivateKeyRef.String()
+
+	hasKeyRefs := pubRef != "" || privRef != ""
+	if hasKeyRefs {
+		size += 1 + 2 + len(pubRef) + // pubkey kind + length + string
+			1 + 2 + len(privRef) // privkey kind + length + string
 		if size < 0 || size > MaxBlobSize {
-			return nil, fmt.Errorf("sealed blob payload size %d exceeds maximum allowed %d bytes after key paths", size, MaxBlobSize)
+			return nil, fmt.Errorf("sealed blob payload size %d exceeds maximum allowed %d bytes after key references", size, MaxBlobSize)
+		}
+	}
+
+	hasKeyIdentity := len(p.KeyFingerprint) > 0 || p.TokenSerial != 0
+	if hasKeyIdentity {
+		if len(p.KeyFingerprint) > MaxKeyFingerprintLen {
+			return nil, fmt.Errorf("key fingerprint length %d exceeds maximum %d", len(p.KeyFingerprint), MaxKeyFingerprintLen)
+		}
+		size += 4 + 1 + len(p.KeyFingerprint) // serial + fingerprint length + bytes
+		if size < 0 || size > MaxBlobSize {
+			return nil, fmt.Errorf("sealed blob payload size %d exceeds maximum allowed %d bytes after key identity", size, MaxBlobSize)
 		}
 	}
 
@@ -516,22 +543,43 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		offset += len(p.EventlogInfo.MeasurePointDetection)
 	}
 
-	// Key paths flag and data
-	if hasKeyPaths {
+	// Key reference flag and data
+	if hasKeyRefs {
 		buf[offset] = 1
 		offset++
 
-		// Public key path
-		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(p.PublicKeyPath)))
+		// Public key reference
+		buf[offset] = byte(p.PublicKeyRef.Kind)
+		offset++
+		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(pubRef)))
 		offset += 2
-		copy(buf[offset:], p.PublicKeyPath)
-		offset += len(p.PublicKeyPath)
+		copy(buf[offset:], pubRef)
+		offset += len(pubRef)
 
-		// Private key path
-		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(p.PrivateKeyPath)))
+		// Private key reference
+		buf[offset] = byte(p.PrivateKeyRef.Kind)
+		offset++
+		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(privRef)))
 		offset += 2
-		copy(buf[offset:], p.PrivateKeyPath)
-		offset += len(p.PrivateKeyPath)
+		copy(buf[offset:], privRef)
+		offset += len(privRef)
+	} else {
+		buf[offset] = 0
+		offset++
+	}
+
+	// Key identity flag and data
+	if hasKeyIdentity {
+		buf[offset] = 1
+		offset++
+
+		binary.LittleEndian.PutUint32(buf[offset:], p.TokenSerial)
+		offset += 4
+
+		buf[offset] = byte(len(p.KeyFingerprint))
+		offset++
+		copy(buf[offset:], p.KeyFingerprint)
+		offset += len(p.KeyFingerprint)
 	} else {
 		buf[offset] = 0
 		offset++
@@ -756,45 +804,103 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 		offset += int(detectionLen)
 	}
 
-	// Key paths (trailing optional section)
+	// Key references (trailing optional section)
 	if offset < len(data) {
-		hasKeyPaths := data[offset] == 1
+		hasKeyRefs := data[offset] == 1
 		offset++
 
-		if hasKeyPaths && offset < len(data) {
-			// Public key path
-			if offset+2 > len(data) {
-				return nil, fmt.Errorf("data too short for public key path length")
-			}
-			pubPathLen := int(binary.LittleEndian.Uint16(data[offset:]))
-			offset += 2
-			if pubPathLen > MaxKeyPathLen {
-				return nil, fmt.Errorf("public key path length %d exceeds maximum %d", pubPathLen, MaxKeyPathLen)
-			}
-			if offset+pubPathLen > len(data) {
-				return nil, fmt.Errorf("data too short for public key path")
-			}
-			p.PublicKeyPath = string(data[offset : offset+pubPathLen])
-			offset += pubPathLen
+		if hasKeyRefs && offset < len(data) {
+			var err error
 
-			// Private key path
-			if offset+2 > len(data) {
-				return nil, fmt.Errorf("data too short for private key path length")
+			p.PublicKeyRef, offset, err = unmarshalKeyRef(data, offset, "public")
+			if err != nil {
+				return nil, err
 			}
-			privPathLen := int(binary.LittleEndian.Uint16(data[offset:]))
-			offset += 2
-			if privPathLen > MaxKeyPathLen {
-				return nil, fmt.Errorf("private key path length %d exceeds maximum %d", privPathLen, MaxKeyPathLen)
+
+			p.PrivateKeyRef, offset, err = unmarshalKeyRef(data, offset, "private")
+			if err != nil {
+				return nil, err
 			}
-			if offset+privPathLen > len(data) {
-				return nil, fmt.Errorf("data too short for private key path")
+		}
+	}
+
+	// Key identity (trailing optional section)
+	if offset < len(data) {
+		hasKeyIdentity := data[offset] == 1
+		offset++
+
+		if hasKeyIdentity && offset < len(data) {
+			if offset+4 > len(data) {
+				return nil, fmt.Errorf("data too short for token serial")
 			}
-			p.PrivateKeyPath = string(data[offset : offset+privPathLen])
-			offset += privPathLen
+			p.TokenSerial = binary.LittleEndian.Uint32(data[offset:])
+			offset += 4
+
+			if offset >= len(data) {
+				return nil, fmt.Errorf("data too short for key fingerprint length")
+			}
+			fingerprintLen := int(data[offset])
+			offset++
+			if fingerprintLen > MaxKeyFingerprintLen {
+				return nil, fmt.Errorf("key fingerprint length %d exceeds maximum %d", fingerprintLen, MaxKeyFingerprintLen)
+			}
+			if offset+fingerprintLen > len(data) {
+				return nil, fmt.Errorf("data too short for key fingerprint")
+			}
+			p.KeyFingerprint = make([]byte, fingerprintLen)
+			copy(p.KeyFingerprint, data[offset:offset+fingerprintLen])
+			offset += fingerprintLen
 		}
 	}
 
 	return p, nil
+}
+
+// unmarshalKeyRef reads one [kind:1][len:2][ref] record.
+//
+// The kind byte and the reference string encode the same thing twice — a
+// "yubikey:" prefix implies the kind — so they are cross-checked. A blob whose
+// two disagree has been tampered with or written by something confused, and
+// either way is not worth acting on.
+func unmarshalKeyRef(data []byte, offset int, what string) (KeyRef, int, error) {
+	if offset >= len(data) {
+		return KeyRef{}, offset, fmt.Errorf("data too short for %s key reference kind", what)
+	}
+
+	kind := KeyRefKind(data[offset])
+	offset++
+
+	if offset+2 > len(data) {
+		return KeyRef{}, offset, fmt.Errorf("data too short for %s key reference length", what)
+	}
+	refLen := int(binary.LittleEndian.Uint16(data[offset:]))
+	offset += 2
+
+	if refLen > MaxKeyPathLen {
+		return KeyRef{}, offset, fmt.Errorf("%s key reference length %d exceeds maximum %d", what, refLen, MaxKeyPathLen)
+	}
+	if offset+refLen > len(data) {
+		return KeyRef{}, offset, fmt.Errorf("data too short for %s key reference", what)
+	}
+
+	raw := string(data[offset : offset+refLen])
+	offset += refLen
+
+	if raw == "" {
+		return KeyRef{}, offset, nil
+	}
+
+	ref, err := ParseKeyRef(raw)
+	if err != nil {
+		return KeyRef{}, offset, fmt.Errorf("invalid %s key reference in blob: %w", what, err)
+	}
+	if ref.Kind != kind {
+		return KeyRef{}, offset, fmt.Errorf(
+			"%s key reference in blob is inconsistent: kind byte says %d but %q parses as kind %d",
+			what, kind, raw, ref.Kind)
+	}
+
+	return ref, offset, nil
 }
 
 // Marshal produces the unsigned outer envelope bytes.
@@ -1013,8 +1119,10 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 		PCRDigests             []PCRDigestJSON `json:"pcr_digests"`
 		SignedBranchDigest     string          `json:"signed_branch_digest_hex"`
 		SignedBranchDigestSize int             `json:"signed_branch_digest_size"`
-		PublicKeyPath          string          `json:"public_key_path,omitempty"`
-		PrivateKeyPath         string          `json:"private_key_path,omitempty"`
+		PublicKeyRef           string          `json:"public_key_ref,omitempty"`
+		PrivateKeyRef          string          `json:"private_key_ref,omitempty"`
+		KeyFingerprint         string          `json:"key_fingerprint,omitempty"`
+		TokenSerial            uint32          `json:"token_serial,omitempty"`
 		EventlogInfo           *EventlogInfo   `json:"eventlog_info,omitempty"`
 		BlobSignature          string          `json:"blob_signature_hex,omitempty"`
 		BlobSignatureSize      int             `json:"blob_signature_size"`
@@ -1031,12 +1139,22 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 		PCRDigests:             pcrDigests,
 		SignedBranchDigest:     hex.EncodeToString(sb.Payload.SignedBranchDigest),
 		SignedBranchDigestSize: len(sb.Payload.SignedBranchDigest),
-		PublicKeyPath:          sb.Payload.PublicKeyPath,
-		PrivateKeyPath:         sb.Payload.PrivateKeyPath,
+		PublicKeyRef:           sb.Payload.PublicKeyRef.String(),
+		PrivateKeyRef:          sb.Payload.PrivateKeyRef.String(),
+		KeyFingerprint:         formatFingerprint(sb.Payload.KeyFingerprint),
+		TokenSerial:            sb.Payload.TokenSerial,
 		EventlogInfo:           sb.Payload.EventlogInfo,
 		BlobSignature:          hex.EncodeToString(sb.BlobSignature),
 		BlobSignatureSize:      len(sb.BlobSignature),
 	}
 
 	return json.Marshal(jsonBlob)
+}
+
+// formatFingerprint renders a key fingerprint as hex, or an empty string.
+func formatFingerprint(fingerprint []byte) string {
+	if len(fingerprint) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%x", fingerprint)
 }

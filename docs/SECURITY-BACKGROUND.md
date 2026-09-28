@@ -60,19 +60,21 @@ boot measurements.
 ### 3.1 TPM NVRAM (the "blob")
 
 The NVRAM index (default `0x01803010`) stores a serialised `SealedBlob`
-(format version 8). It contains:
+(format version 9). It contains:
 
 | Field                | Content                                                        | Sensitive? |
 |----------------------|----------------------------------------------------------------|------------|
-| `Version`            | Blob format version (8)                                        | No         |
+| `Version`            | Blob format version (9)                                        | No         |
 | `AppVersion`         | tpm2-kira version that created the blob                        | No         |
 | `Public`             | TPM2B\_PUBLIC of the sealed object (object template)            | No         |
 | `Private`            | TPM2B\_PRIVATE of the sealed object (TPM-wrapped ciphertext)    | **Yes**¹   |
 | `PCRDigests`         | Per-PCR index, source (register/eventlog/uki), and digest      | No         |
 | `SignedBranchDigest` | Pre-computed PolicySigned branch digest (SHA-256, 32 bytes)    | No³        |
 | `EventlogInfo`       | Metadata about eventlog calculation (path, timestamps, counts, measure-point verdict) | No |
-| `PublicKeyPath`      | Filesystem path to the signing public key at seal time         | No²        |
-| `PrivateKeyPath`     | Filesystem path to the signing private key at seal time        | No²        |
+| `PublicKeyRef`       | Where the signing public key was at seal time: a path, or a token slot | No²        |
+| `PrivateKeyRef`      | Where the signing private key was at seal time: a path, or a token slot | No²        |
+| `KeyFingerprint`     | SHA-256 of the signing key's PKIX DER encoding                 | No⁵        |
+| `TokenSerial`        | Hardware token the key was read from, 0 for a file             | No⁵        |
 | `BlobSignature`      | Signature over everything above, verified before the blob is trusted | No⁴  |
 
 ¹ The `Private` field is an opaque blob encrypted by the TPM's internal
@@ -80,14 +82,22 @@ storage hierarchy key. It **cannot** be decrypted outside the specific TPM
 that created it. Possessing this blob alone is useless without the TPM and a
 valid policy session.
 
-² The key **paths** are stored purely for operational convenience so that
+² The key **references** are stored purely for operational convenience so that
 `reseal` can locate the keys automatically. They contain no secret material —
-only filesystem paths (e.g. `/var/lib/sbctl/keys/db/db.key`). The paths are
-optional: old blobs without them still work, and CLI flags always override
-blob paths. Storing the path of the private key does **not** weaken security:
-the private key itself is never stored in the blob; the path merely tells
-reseal where to find it on the filesystem, and the TPM still performs the
-actual signature verification.
+either a filesystem path (e.g. `/var/lib/sbctl/keys/db/db.key`) or a token slot
+(`yubikey:serial=12345678;slot=9a`). They are optional, and CLI flags always
+override them. Storing the reference does **not** weaken security: the private
+key itself is never in the blob; the reference merely says where to look, and
+the TPM still performs the actual signature verification.
+
+A reference carries both a kind byte and a canonical string, which encode the
+same fact twice and are cross-checked on read. A blob whose two disagree is
+rejected rather than resolved one way or the other.
+
+**The PIN for a token-held key is deliberately not stored here.** NVRAM reads
+are open (§9), so anything in the blob is readable by any process that can talk
+to the TPM, and by anyone who takes the disk. A PIN there would be published to
+exactly the attacker the token defends against, collapsing two factors into one.
 
 ³ The `SignedBranchDigest` is a 32-byte SHA-256 hash computed at seal time:
 `H(0…0 || TPM_CC_PolicySigned || keyName)`. It is the PolicySigned branch
@@ -96,6 +106,15 @@ digest needed by `TPM2_PolicyOR` at unseal time. Storing only this digest
 unnecessary key material in the blob. The public key itself is not stored —
 it is loaded from the filesystem (via the stored paths) or derived from the
 private key when needed.
+
+⁵ The fingerprint and serial identify the signing key without being usable as
+one. They let `reseal` report "the key in slot 9a is not the one this slot was
+sealed against" instead of failing as an opaque TPM policy error, and they let
+`info` describe the key with the token unplugged. Storing the public key itself
+was considered and rejected: a blob that carries its own verification key is a
+circular trust anchor, since a planted blob would carry a matching one. The
+check is advisory — the blob signature, verified against the key the caller
+actually holds, is what decides.
 
 ⁴ The blob carries a detached signature over `[version ‖ payloadLen ‖ payload]`,
 made with the same signing key. Unsigned blobs are rejected outright. This
@@ -345,8 +364,8 @@ and signature between the TPM and the local signing operation.
 4.  Re-seal with current PCR values
     Signing key for the new blob (in priority order):
     a. --pubkey flag (explicit override)
-    b. Blob's stored PublicKeyPath (loaded from filesystem)
-    c. Derived from --privkey / blob's PrivateKeyPath
+    b. Blob's stored PublicKeyRef (loaded from filesystem)
+    c. The public half of the resolved signing key
 ```
 
 When PCRs match, no private key is required. The TPM authorises the unseal
@@ -359,8 +378,8 @@ rebooted into the new configuration.
 Reseal resolves key paths with a two-tier fallback:
 
 ```
-Effective privkey path = --privkey flag  →  blob.PrivateKeyPath  →  (empty)
-Effective pubkey path  = --pubkey flag   →  blob.PublicKeyPath   →  (empty)
+Effective privkey ref  = --privkey flag  →  blob.PrivateKeyRef  →  (empty)
+Effective pubkey path  = --pubkey flag   →  blob.PublicKeyRef    →  (empty)
 ```
 
 If a path is resolved (from either source), the key is loaded from the
@@ -727,7 +746,7 @@ on such a system. Supporting owner auth is outside the current design.
 
 ---
 
-## 10. Blob Format (Version 8)
+## 10. Blob Format (Version 9)
 
 The blob is a binary-serialised structure with explicit length prefixes and
 maximum size limits to prevent memory exhaustion during deserialisation.
@@ -738,11 +757,14 @@ stored a command string in the blob which `reseal` executed, so a planted blob
 meant arbitrary code execution as root. No command is ever executed now.
 Version 8 dropped the stored eventlog hash: it recorded the digest of a file
 that is never reopened from the blob, so it attested nothing.
+Version 9 replaced the two key **path** strings with typed key **references**,
+so that a signing key held in a hardware token slot can be named, and added the
+key fingerprint and token serial that let a wrong key be diagnosed by name.
 
 ```
 Offset  Field                   Type        Notes
 ─────────────────────────────────────────────────────────────
-0       Version                 uint32      Must be 8
+0       Version                 uint32      Must be 9
 4       Payload length          uint32      Signed region length
 8       AppVersion length       uint32      ≤ 1024
 ?       AppVersion              string
@@ -774,12 +796,19 @@ Offset  Field                   Type        Notes
                                             on top of the eventlog replay
           MeasurePointDet len   uint16      ≤ 512
           MeasurePointDetection string      how that was decided
-?       HasKeyPaths             uint8       0 or 1
-        If HasKeyPaths=1:
-          PubKeyPath length     uint16      ≤ 4096
-          PubKeyPath            string      Filesystem path to public key
-          PrivKeyPath length    uint16      ≤ 4096
-          PrivKeyPath           string      Filesystem path to private key
+?       HasKeyRefs              uint8       0 or 1
+        If HasKeyRefs=1:
+          PubKeyRef kind        uint8       0=file path, 1=yubikey slot
+          PubKeyRef length      uint16      ≤ 4096
+          PubKeyRef             string      Path, or "yubikey:serial=N;slot=9a"
+          PrivKeyRef kind       uint8       0=file path, 1=yubikey slot
+          PrivKeyRef length     uint16      ≤ 4096
+          PrivKeyRef            string      Path, or "yubikey:serial=N;slot=9a"
+?       HasKeyIdentity          uint8       0 or 1
+        If HasKeyIdentity=1:
+          TokenSerial           uint32      0 when the key is a file
+          KeyFingerprint len    uint8       ≤ 64
+          KeyFingerprint        []byte      SHA-256 of the key's PKIX DER
 ─────────────────────── end of signed region ───────────────────────
 ?       Signature length        uint16      ≤ 1024, must be non-zero
 ?       Signature               []byte      Over [version ‖ payloadLen ‖ payload]

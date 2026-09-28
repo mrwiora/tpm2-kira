@@ -972,17 +972,37 @@ func computePCRBranchDigestFromBlob(tpmDev transport.TPM, sealedBlob *SealedBlob
 
 // PublicKeyFingerprint computes a SHA-256 fingerprint of the public key for display purposes.
 func PublicKeyFingerprint(pubKey crypto.PublicKey) string {
-	var data []byte
-	switch key := pubKey.(type) {
-	case *rsa.PublicKey:
-		data = key.N.Bytes()
-	case *ecdsa.PublicKey:
-		data = elliptic.Marshal(key.Curve, key.X, key.Y)
-	default:
+	fingerprint, err := KeyFingerprint(pubKey)
+	if err != nil {
 		return "unknown"
 	}
-	hash := sha256.Sum256(data)
-	return fmt.Sprintf("%x", hash[:8])
+	return fmt.Sprintf("%x", fingerprint[:8])
+}
+
+// KeyFingerprint is the SHA-256 of a public key's PKIX DER encoding.
+//
+// It identifies a key without being usable as one: the sealed blob records it
+// so that reseal can say "the key in slot 9a is not the one this blob was
+// sealed against" instead of failing as an opaque TPM policy error. Storing the
+// key itself would invite using the blob as its own trust anchor, which is
+// circular — a planted blob would carry a matching key.
+//
+// PKIX DER covers the curve or modulus and the exponent, so two keys that
+// differ in any of those get different fingerprints.
+func KeyFingerprint(pubKey crypto.PublicKey) ([]byte, error) {
+	switch pubKey.(type) {
+	case *rsa.PublicKey, *ecdsa.PublicKey:
+	default:
+		return nil, fmt.Errorf("unsupported public key type %T", pubKey)
+	}
+
+	der, err := x509.MarshalPKIXPublicKey(pubKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode the public key: %w", err)
+	}
+
+	sum := sha256.Sum256(der)
+	return sum[:], nil
 }
 
 // PublicKeyDescription returns a human-readable description of the public key type and size.

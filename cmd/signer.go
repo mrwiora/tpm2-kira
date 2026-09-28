@@ -333,3 +333,13 @@ func PublicKeyForRef(ref KeyRef, cachedPubKeyPath string, debug bool) (crypto.Pu
 		return signer.Public(), nil
 	}
 }
+
+// tokenSerialOf reports the hardware token a key was read from, or zero when
+// the key is not on one. It is recorded in the blob so that plugging in the
+// wrong YubiKey gives a name rather than a policy failure.
+func tokenSerialOf(key SigningKey) uint32 {
+	if yk, ok := key.(*yubiKeySigningKey); ok {
+		return yk.serial
+	}
+	return 0
+}
