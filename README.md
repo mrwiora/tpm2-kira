@@ -283,13 +283,83 @@ hash of the logged payload, so re-hashing the payloads would be wrong.
 
 ### Custom signing keys
 
-By default, `setup` generates keys at `/var/lib/tpm2-kira/keys/`. You can supply your own (RSA-2048, ECDSA P-256, or ECDSA P-384):
+By default, `setup` generates keys at `/var/lib/tpm2-kira/keys/`. You can supply
+your own — **RSA-2048, ECDSA P-256 or ECDSA P-384**:
 
 ```bash
 tpm2-kira seal --pubkey /path/to/key.pub --privkey /path/to/key.pem
 ```
 
-Both key paths are stored in the sealed blob so that `reseal` can find them automatically.
+`--pubkey` accepts a raw public key or an X.509 certificate. Both paths are
+stored in the sealed blob, so later `reseal` calls need no flags.
+
+**RSA-4096 does not work.** The PolicySigned branch needs the public key loaded
+into the TPM with `TPM2_LoadExternal`, and TPMs reject 4096-bit RSA there — so
+does swtpm. tpm2-kira fails at seal time with a hint rather than leaving you to
+discover it during a recovery. Check a key before committing to it:
+
+```bash
+openssl rsa -in key.pem -noout -text | head -1     # "Private-Key: (2048 bit)"
+```
+
+### Sharing the signing key with sbctl (Secure Boot)
+
+The same key that signs your boot components can authorise TOTP resealing, so
+there is no second secret to manage. It needs one preparation step, because
+**sbctl's own keys cannot be used**: `sbctl create-keys` generates RSA-4096, and
+sbctl offers no option to change that.
+
+Check what you have:
+
+```bash
+sudo openssl rsa -in /var/lib/sbctl/keys/db/db.key -noout -text | head -1
+```
+
+If it says 4096, either keep a dedicated tpm2-kira key (the default, and the
+simplest choice) or create a Secure Boot db key that both tools can use. RSA-2048
+is the right size: it is what UEFI firmware expects for a db entry, and it is
+universally supported by TPMs.
+
+```bash
+# Generate an RSA-2048 db key and self-signed certificate.
+openssl req -new -x509 -newkey rsa:2048 -nodes -days 3650 \
+    -keyout db.key -out db.pem -subj "/CN=my Secure Boot db/"
+
+# Hand it to sbctl, which will use it to sign boot components.
+sudo sbctl import-keys --db-key db.key --db-cert db.pem
+# ...then enroll and sign as usual: sbctl enroll-keys, sbctl sign-all
+
+# Point tpm2-kira at the same key.
+sudo tpm2-kira seal --pcrs "0,7" \
+    --pubkey /var/lib/sbctl/keys/db/db.pem \
+    --privkey /var/lib/sbctl/keys/db/db.key
+```
+
+Two consequences worth knowing before you choose this:
+
+**One key now gates two things.** Compromise or loss costs both Secure Boot
+signing and TOTP recovery. That is the trade you are making for having one
+secret instead of two.
+
+**Rotating Secure Boot keys has a mandatory order.** Enrolling new keys moves
+PCR 7 *and* invalidates the PolicySigned branch, which is bound to the old key.
+Do both before resealing and nothing can unseal the blob. Reseal onto the new
+key while PCR 7 has not moved yet, so the PCR branch still opens on its own:
+
+```
+1. create the new key pair, and sbctl import-keys it
+2. sudo tpm2-kira reseal --pubkey <new db.pem> --privkey <new db.key>
+3. sudo sbctl enroll-keys        # PCR 7 moves now
+4. reboot, then sudo tpm2-kira reseal
+```
+
+Step 2 is the one that must not be skipped: it is the only moment when the blob
+can be re-pointed at the new key without needing the old one. Attempting it
+later fails cleanly — reseal checks that the key it was given matches the key
+being sealed against — but the blob is then only recoverable with the old key.
+
+A YubiKey avoids the size problem entirely, since an ECC P-256 slot key is
+universally supported: see [docs/YUBIKEY.md](docs/YUBIKEY.md).
 
 ### Signing key on a YubiKey
 

@@ -425,7 +425,11 @@ that must not silently skip.
 ## Sharing a slot with sbctl
 
 Using one key for both Secure Boot signing and TOTP resealing is a design
-tpm2-kira already endorses for file-based keys (see SECURITY-BACKGROUND.md §11):
+tpm2-kira already endorses (see SECURITY-BACKGROUND.md §11). On a token it is
+also easier than with files: a PIV slot can hold an ECC P-256 key, whereas
+sbctl's own generated keys are RSA-4096, which the TPM refuses to load — sharing
+a *file* key means creating an RSA-2048 pair by hand and importing it into
+sbctl. The README covers that case.
 the same key that signs your boot components authorises resealing, with no extra
 secret to manage. Moving it onto a token strengthens that, and tpm2-kira's
 read-only posture means it cannot damage the key it is borrowing.
