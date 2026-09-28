@@ -1,11 +1,14 @@
 package cmd
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -106,11 +109,39 @@ func ReadFromNVRAM(tpmDev transport.TPM, index uint32) ([]byte, error) {
 	return data, nil
 }
 
-// WriteToNVRAM writes data to a TPM NVRAM index
+// MaxNVRAMBlobSize is the largest blob an NV index can hold: TPMS_NV_PUBLIC
+// stores the size as a uint16, so anything larger would be silently truncated
+// by the conversion rather than rejected.
+const MaxNVRAMBlobSize = 65535
+
+// NVRAMRecoveryDir holds a blob that could not be written back after the index
+// had already been undefined.  See stashUnwrittenBlob.
+const NVRAMRecoveryDir = "/var/lib/tpm2-kira/recovery"
+
+// WriteToNVRAM writes data to a TPM NVRAM index.
+//
+// Replacing an index means undefining it first, and there is no atomic
+// replace in TPM 2.0: between the undefine and the last chunk being written,
+// the slot holds no secret at all.  Everything that can fail without touching
+// the TPM state is therefore done *before* the undefine — the key is loaded,
+// the write policy is computed, and the signer is exercised on a dummy digest
+// — so that an unusable key, an absent hardware token or a refused PIN is
+// discovered while the old blob is still intact.
+//
+// If a step after the undefine fails anyway, the blob is written to
+// NVRAMRecoveryDir: it carries the sealed object's public and private areas,
+// which the TPM can still load, so the secret is not lost with the index.
 func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto.PublicKey, privKey crypto.Signer) error {
 	// Validate index is within the safe application range
 	if err := ValidateNVRAMIndex(index); err != nil {
 		return fmt.Errorf("invalid NVRAM index: %w", err)
+	}
+
+	if len(data) == 0 {
+		return fmt.Errorf("refusing to write an empty blob to NVRAM index 0x%08X", index)
+	}
+	if len(data) > MaxNVRAMBlobSize {
+		return fmt.Errorf("blob is %d bytes, which exceeds the %d-byte maximum for an NV index", len(data), MaxNVRAMBlobSize)
 	}
 
 	if pubKey == nil {
@@ -122,7 +153,42 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 
 	nvIndex := tpm2.TPMHandle(index)
 
-	// Try to undefine existing NVRAM space (if it exists)
+	// ── Pre-flight: everything that can fail non-destructively ──
+
+	// Load the signing public key into the TPM once — the handle is reused
+	// for both the policy digest computation and the per-chunk PolicySigned
+	// sessions, avoiding redundant LoadExternal round-trips.  Some TPMs
+	// reject key sizes here (RSA-4096 in particular), and that must be
+	// found out before the existing index is destroyed.
+	loadRsp, err := LoadExternalPublicKey(tpmDev, pubKey)
+	if err != nil {
+		return fmt.Errorf("failed to load signing key for NV write policy: %w", err)
+	}
+	defer FlushHandle(tpmDev, loadRsp.ObjectHandle)
+
+	keyHandle := loadRsp.ObjectHandle
+	keyName := loadRsp.Name
+
+	// Compute the PolicySigned digest that will be the AuthPolicy on this
+	// NV index.  Any future NVWrite must satisfy a PolicySigned session
+	// proving possession of the corresponding private key.
+	nvWritePolicy, err := ComputeNVWritePolicyDigestWithHandle(tpmDev, keyHandle, keyName, pubKey)
+	if err != nil {
+		return fmt.Errorf("failed to compute NV write policy digest: %w", err)
+	}
+
+	// Exercise the signer before anything is destroyed.  Every chunk below
+	// needs a signature, and for a key held on a hardware token that means a
+	// present device, an unlocked PIN and — depending on the slot's touch
+	// policy — a user.  A failure here costs nothing; the same failure after
+	// the undefine costs the sealed secret.
+	if _, err := signForTPM(privKey, make([]byte, 32)); err != nil {
+		return fmt.Errorf("signing key is not usable for NV write authorization: %w", err)
+	}
+
+	// ── Point of no return: the index is replaced from here on ──
+
+	// Try to undefine existing NVRAM space (if it exists).
 	// NVUndefineSpace is an owner-hierarchy operation and works regardless
 	// of the NV index's read/write attributes.
 	readPub := tpm2.NVReadPublic{
@@ -142,26 +208,6 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 		}
 	}
 	// If checkErr != nil, index doesn't exist, which is fine
-
-	// Load the signing public key into the TPM once — the handle is reused
-	// for both the policy digest computation and the per-chunk PolicySigned
-	// sessions, avoiding redundant LoadExternal round-trips.
-	loadRsp, err := LoadExternalPublicKey(tpmDev, pubKey)
-	if err != nil {
-		return fmt.Errorf("failed to load signing key for NV write policy: %w", err)
-	}
-	defer FlushHandle(tpmDev, loadRsp.ObjectHandle)
-
-	keyHandle := loadRsp.ObjectHandle
-	keyName := loadRsp.Name
-
-	// Compute the PolicySigned digest that will be the AuthPolicy on this
-	// NV index.  Any future NVWrite must satisfy a PolicySigned session
-	// proving possession of the corresponding private key.
-	nvWritePolicy, err := ComputeNVWritePolicyDigestWithHandle(tpmDev, keyHandle, keyName, pubKey)
-	if err != nil {
-		return fmt.Errorf("failed to compute NV write policy digest: %w", err)
-	}
 
 	// Define NVRAM space with PolicySigned-protected writes: no owner or
 	// unauthenticated write path, so only a holder of the signing key can
@@ -186,9 +232,8 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 		}),
 	}
 
-	_, err = define.Execute(tpmDev)
-	if err != nil {
-		return fmt.Errorf("failed to define NVRAM space: %w", err)
+	if _, err = define.Execute(tpmDev); err != nil {
+		return stashUnwrittenBlob(index, data, fmt.Errorf("failed to define NVRAM space: %w", err))
 	}
 
 	// Write data to NVRAM in chunks using PolicySigned sessions.
@@ -214,7 +259,7 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 		}
 		nvReadPubRsp, err := nvReadPub.Execute(tpmDev)
 		if err != nil {
-			return fmt.Errorf("failed to read NV public: %w", err)
+			return stashUnwrittenBlob(index, data, fmt.Errorf("failed to read NV public: %w", err))
 		}
 
 		// Build a PolicySigned session for this chunk.  The callback is
@@ -278,13 +323,50 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 
 		_, err = write.Execute(tpmDev)
 		if err != nil {
-			return fmt.Errorf("failed to write to NVRAM at offset %d: %w", offset, err)
+			return stashUnwrittenBlob(index, data, fmt.Errorf("failed to write to NVRAM at offset %d: %w", offset, err))
 		}
 
 		offset += chunkSize
 	}
 
+	// Read the blob back and compare. The write is split across chunks and
+	// sized by a uint16 in the NV public area, so a size or offset mistake
+	// would otherwise surface as an unreadable blob at the next boot rather
+	// than here, where the bytes are still in hand.
+	written, err := ReadFromNVRAM(tpmDev, index)
+	if err != nil {
+		return stashUnwrittenBlob(index, data, fmt.Errorf("wrote the blob but could not read it back: %w", err))
+	}
+	if !bytes.Equal(written, data) {
+		return stashUnwrittenBlob(index, data, fmt.Errorf("blob read back from NVRAM index 0x%08X differs from what was written (%d bytes written, %d read)", index, len(data), len(written)))
+	}
+
 	return nil
+}
+
+// stashUnwrittenBlob saves a blob that could not be committed to NVRAM and
+// wraps err with where it went.
+//
+// It is only ever reached after the index has been undefined, so the slot is
+// empty at this point. The blob carries the sealed object's public and private
+// areas, and the private area is wrapped by this TPM's storage hierarchy, whose
+// primary key is re-derived deterministically — so the secret is recoverable
+// from this file even though the index is gone. Without it, the secret is lost
+// and the authenticator has to be re-enrolled.
+//
+// A failure to write the file is reported alongside the original error rather
+// than replacing it: the original is what the user has to act on.
+func stashUnwrittenBlob(index uint32, data []byte, cause error) error {
+	if mkErr := os.MkdirAll(NVRAMRecoveryDir, 0700); mkErr != nil {
+		return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY and the blob could not be saved either (%v).\n  The sealed secret is lost; run 'tpm2-kira seal' and re-enrol your authenticator", cause, index, mkErr)
+	}
+
+	path := fmt.Sprintf("%s/slot-0x%08X-%d.blob", NVRAMRecoveryDir, index, time.Now().Unix())
+	if wrErr := os.WriteFile(path, data, 0600); wrErr != nil {
+		return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY and the blob could not be saved either (%v).\n  The sealed secret is lost; run 'tpm2-kira seal' and re-enrol your authenticator", cause, index, wrErr)
+	}
+
+	return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY. The blob that was about to be written has been saved to:\n      %s\n  Keep this file: it holds the sealed object and is the only remaining copy of the secret.\n  Fix the cause above, then write it back. If you discard it, the secret is gone and\n  you must run 'tpm2-kira seal' and re-enrol your authenticator", cause, index, path)
 }
 
 // NVRAMList lists all defined NVRAM indices in the TPM
