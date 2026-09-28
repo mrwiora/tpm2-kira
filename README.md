@@ -140,6 +140,10 @@ If called without a command, tpm2-kira defaults to `reveal`.
 | `nvram list` | List NVRAM indices |
 | `nvram status` | Show NVRAM index status |
 | `nvram delete` | Delete sealed data from NVRAM |
+| `yubikey list` | Show connected YubiKeys, their PIV slots and policies |
+| `yubikey adopt` | Register an existing PIV slot key and cache its public key |
+| `yubikey status` | Check whether the enrolled token is present |
+| `yubikey export-pubkey` | Write a slot's public key to a PEM file |
 | `pcrtips` | PCR reference guide — what each register measures |
 | `version` | Print version |
 
@@ -151,6 +155,13 @@ If called without a command, tpm2-kira defaults to `reveal`.
                  or specify a full hex index like 0x01803010.
                  When omitted, commands auto-discover populated slots.
 --debug          Verbose output
+```
+
+Environment:
+
+```
+TPM2_KIRA_PIN    PIN for a signing key held in a YubiKey PIV slot.
+                 Only read when the key reference names a token.
 ```
 
 ## Sealing Secrets
@@ -278,6 +289,81 @@ tpm2-kira seal --pubkey /path/to/key.pub --privkey /path/to/key.pem
 ```
 
 Both key paths are stored in the sealed blob so that `reseal` can find them automatically.
+
+### Signing key on a YubiKey
+
+The signing key can live in a YubiKey PIV slot instead of a PEM file, so it is
+never readable and using it needs the physical token plus a PIN. A key file on
+disk stays the default; this is opt-in.
+
+The token is needed only for `seal`, `setup` and `reseal`. `reveal` and `run` —
+everything that happens at boot — never touch the signing key, so no token is
+needed to see a TOTP code.
+
+```bash
+sudo pacman -S pcsclite yubikey-manager     # or: apt install pcscd yubikey-manager
+sudo systemctl enable --now pcscd
+```
+
+**Prepare the key.** tpm2-kira never writes to a token: it reads a slot's public
+key, verifies the PIN, and asks the card to sign. Creating the key is `ykman`'s
+job, which keeps tpm2-kira from being able to damage a key the slot may share
+with something else.
+
+```bash
+# Generate an ECC P-256 key inside the token, in slot 9a.
+#   ONCE  — one PIN check covers a whole reseal
+#   NEVER — no touch required; the reseal after an initramfs rebuild is unattended
+ykman piv keys generate --algorithm ECCP256 \
+    --pin-policy ONCE --touch-policy NEVER 9a /tmp/seal.pub
+
+# PIV exposes a public key through the slot certificate, so give the slot one.
+ykman piv certificates generate --subject "CN=tpm2-kira" 9a /tmp/seal.pub
+rm /tmp/seal.pub
+
+ykman piv access change-pin                  # the factory default is 123456
+```
+
+**Register it.** `adopt` is read-only: it reports the slot's key and policies,
+checks that your TPM can load it for PolicySigned, and caches the public key so
+that later commands work with the token unplugged.
+
+```bash
+sudo tpm2-kira yubikey adopt --key 'yubikey:slot=9a'
+```
+
+**Seal against it.** The reference is stored in the blob, so later reseals need
+no flags.
+
+```bash
+export TPM2_KIRA_PIN=12345678
+
+sudo -E tpm2-kira seal --pcrs "0,7" \
+    --privkey 'yubikey:serial=12345678;slot=9a' \
+    --pubkey /var/lib/tpm2-kira/keys/seal.pub
+```
+
+Already have a key in a slot — the one sbctl uses to sign your Secure Boot
+components, say? Skip the generation step and `adopt` it directly. Any key the
+TPM can load works (ECC P-256/P-384, RSA-2048).
+
+**Without the token, `reseal` warns and changes nothing:**
+
+```
+tpm2-kira: SKIPPED: resealing did not happen — the signing key was not available.
+  Reason:        no YubiKey with serial 12345678 is present
+  Consequence:   ... at the next boot tpm2-kira will report a PCR MISMATCH
+                 and show no TOTP code. That is expected here — it is not
+                 evidence of tampering.
+  Affected PCRs: 0 (register), 7 (register)
+```
+
+The sealed secret is left untouched. Plug the token in, reseal, and the next boot
+shows a code again. `--require-key` turns the warning into a failure for scripts.
+
+See **[docs/YUBIKEY.md](docs/YUBIKEY.md)** for slot and policy trade-offs, PIN
+handling and lockout safety, the mandatory ordering when rotating a Secure Boot
+key that lives in the same slot, backup strategy, and troubleshooting.
 
 ### Multiple slots
 
@@ -575,14 +661,21 @@ in the TPM. Delete the slot first, then the directory.
 │   ├── pcr.go               # PCR spec parsing, reading and comparison
 │   ├── pcrwarn.go           # Warnings for PCR selections that attest little
 │   ├── nvram.go             # NVRAM read/write/scan operations
+│   ├── signer.go            # Key references and the SigningKey abstraction
+│   ├── yubikey.go           # YubiKey PIV signing backend and subcommands
+│   ├── pin.go               # PIN resolution for token-held keys
 │   ├── totp_utils.go        # TOTP generation and display
 │   ├── tpm_utils.go         # Low-level TPM operations
 │   ├── pcrtips.go           # PCR reference information
 │   └── constants.go         # Default paths and constants
+├── internal/
+│   ├── pcsc/                # cgo-free pcscd client (Unix socket protocol)
+│   └── piv/                 # PIV applet: read a slot, verify a PIN, sign
 ├── tools/
 │   ├── pcrtool.py            # PCR replay and full-chain diagnosis
 │   └── tpm2-pcr11predict     # Independent cross-check of the built-in PCR 11 computation
 ├── docs/
+│   ├── YUBIKEY.md                # Signing key on a YubiKey PIV slot
 │   ├── PLATFORM-OBSERVATIONS.md  # Measured facts about Arch and Debian boots
 │   ├── pentest1/, pentest2/      # Security review findings and mitigations
 │   └── *.issue                   # Write-ups of specific bugs
