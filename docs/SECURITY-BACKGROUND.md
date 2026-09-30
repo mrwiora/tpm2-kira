@@ -708,6 +708,17 @@ be read at all, tpm2-kira says so rather than staying silent.
 └─────────────────────────────────┘
 ```
 
+This boundary is a property of the system, not of tpm2-kira: the TPM device is
+root-only because anything that can open it can ask the TPM to unseal while the
+PCRs still match. Loosening those permissions — with a udev rule granting a group
+access, for instance — moves the boundary rather than working around it, and is
+not a supported configuration.
+
+tpm2-kira therefore requires root for every command that opens the TPM, including
+the read-only ones, and says so plainly instead of letting a syscall report
+`permission denied`. There is no read-only tier to exempt, because reading the
+sealed secret is exactly the capability the boundary protects.
+
 ---
 
 ## 9. NVRAM Index Security

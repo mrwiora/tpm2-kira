@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,11 +109,19 @@ func TestTPMPermissionMessage(t *testing.T) {
 	for _, want := range []string{
 		"permission denied",
 		"sudo tpm2-kira",
-		"udev rule",
 		"/dev/tpm0",
 	} {
 		if !strings.Contains(message, want) {
 			t.Errorf("the message should contain %q, got:\n%s", want, message)
+		}
+	}
+
+	// Loosening the device permissions is never the advice: anything that can
+	// reach the TPM can ask it to unseal, which is why the threat model puts
+	// non-root userspace outside the boundary.
+	for _, unwanted := range []string{"udev", "chmod", "GROUP="} {
+		if strings.Contains(message, unwanted) {
+			t.Errorf("the message must not suggest %q, got:\n%s", unwanted, message)
 		}
 	}
 
@@ -341,5 +350,117 @@ func TestOpenSigningKeyWarnsAboutMode(t *testing.T) {
 
 	if !strings.Contains(out, "WARNING") {
 		t.Errorf("opening a world-readable key should warn, got:\n%s", out)
+	}
+}
+
+// TestRequireTPMAccessGatesDeviceNotCommand is the regression guard for where
+// this check belongs. Root is required to open the TPM character device, and a
+// software TPM on a socket needs no privilege — keying the requirement off the
+// command name instead broke the whole integration suite for a non-root user.
+func TestRequireTPMAccessGatesDeviceNotCommand(t *testing.T) {
+	if IsRoot() {
+		t.Skip("running as root; nothing is refused")
+	}
+
+	t.Run("a socket is allowed", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "swtpm.sock")
+
+		listener, err := net.Listen("unix", path)
+		if err != nil {
+			t.Skipf("cannot create a unix socket here: %v", err)
+		}
+		defer listener.Close()
+
+		if err := RequireTPMAccess(path); err != nil {
+			t.Errorf("a software TPM socket this user owns must not be refused: %v", err)
+		}
+	})
+
+	t.Run("an absent path is allowed through to the open", func(t *testing.T) {
+		if err := RequireTPMAccess(filepath.Join(t.TempDir(), "nothing")); err != nil {
+			t.Errorf("a missing path should be reported by the open, not here: %v", err)
+		}
+	})
+
+	t.Run("a regular file is allowed through to the open", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "file")
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatalf("failed to write the test file: %v", err)
+		}
+		if err := RequireTPMAccess(path); err != nil {
+			t.Errorf("a regular file should be reported by the open, not here: %v", err)
+		}
+	})
+
+	t.Run("a character device is refused", func(t *testing.T) {
+		// /dev/null is a character device present everywhere, which is what
+		// this check keys off.
+		info, err := os.Stat("/dev/null")
+		if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+			t.Skip("/dev/null is not a character device here")
+		}
+
+		err = RequireTPMAccess("/dev/null")
+		if err == nil {
+			t.Fatal("a TPM character device must be refused for a non-root user")
+		}
+
+		message := err.Error()
+		for _, want := range []string{"only root may open", "sudo tpm2-kira", "/dev/null"} {
+			if !strings.Contains(message, want) {
+				t.Errorf("the message should contain %q, got:\n%s", want, message)
+			}
+		}
+		for _, unwanted := range []string{"udev", "chmod", "GROUP="} {
+			if strings.Contains(message, unwanted) {
+				t.Errorf("the message must not suggest %q, got:\n%s", unwanted, message)
+			}
+		}
+	})
+
+	t.Run("the message names the command when one is known", func(t *testing.T) {
+		info, err := os.Stat("/dev/null")
+		if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+			t.Skip("/dev/null is not a character device here")
+		}
+
+		previous := InvokedCommand
+		InvokedCommand = "reveal"
+		defer func() { InvokedCommand = previous }()
+
+		err = RequireTPMAccess("/dev/null")
+		if err == nil || !strings.Contains(err.Error(), "sudo tpm2-kira reveal") {
+			t.Errorf("expected the command to be named, got: %v", err)
+		}
+	})
+}
+
+// TestCheckPrivilegeGatesOnlyFilesystemCommands checks the small remaining
+// up-front gate: setup always writes under /var/lib, so it needs root whatever
+// its TPM path is, while the rest are decided at the device.
+func TestCheckPrivilegeGatesOnlyFilesystemCommands(t *testing.T) {
+	if IsRoot() {
+		t.Skip("running as root; nothing is refused")
+	}
+
+	if err := CheckPrivilege("setup", nil); err == nil {
+		t.Error("setup writes to /var/lib and must require root")
+	} else if !strings.Contains(err.Error(), "needs root") {
+		t.Errorf("expected a root explanation, got: %v", err)
+	}
+
+	// These may legitimately run without root against a software TPM, so they
+	// must not be refused before the device is even known.
+	for _, argv := range [][]string{
+		{"seal"}, {"reseal"}, {"reveal"}, {"reveal-plain"}, {"run"}, {"info"},
+		{"nvram", "list"}, {"nvram", "status"}, {"nvram", "delete"}, {"nvram", "restore"},
+		{"version"}, {"help"}, {"pcrtips"},
+		{"yubikey", "list"}, {"yubikey", "status"},
+	} {
+		if err := CheckPrivilege(argv[0], argv[1:]); err != nil {
+			t.Errorf("%q must not be refused before its TPM path is known: %v",
+				strings.Join(argv, " "), err)
+		}
 	}
 }

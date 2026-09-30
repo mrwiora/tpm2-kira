@@ -43,10 +43,16 @@ func RequireRoot(command, reason string) error {
 // OpenTPMDevice opens the TPM and explains why it could not be opened.
 //
 // Every command that touches the TPM goes through here, so the same explanation
-// appears wherever the device cannot be opened — including for the commands that
-// deliberately are not gated on root, since a udev rule can grant a group access
-// to /dev/tpm0 and those are the ones worth granting.
+// appears wherever the device cannot be opened. Commands are gated on root before
+// they get this far, so reaching the permission branch means either an unusual
+// device path or a system where root itself cannot open it.
 func OpenTPMDevice(tpmPath string) (transport.TPMCloser, error) {
+	// Refuse a root-only device before trying, so the message explains the
+	// requirement rather than relaying EACCES from three layers down.
+	if err := RequireTPMAccess(tpmPath); err != nil {
+		return nil, err
+	}
+
 	tpmDev, err := transport.OpenTPM(tpmPath)
 	if err == nil {
 		return tpmDev, nil
@@ -88,12 +94,11 @@ func tpmPermissionError(tpmPath string) error {
 	}
 
 	return fmt.Errorf("cannot open the TPM at %s: permission denied.\n"+
-		"  tpm2-kira talks to the TPM directly, and %s is normally root-only,\n"+
-		"  so most commands have to be run with sudo:\n"+
-		"      sudo tpm2-kira ...\n"+
-		"  A udev rule granting a group access to %s is the alternative if you\n"+
-		"  want read-only commands such as 'reveal' to work without root.%s",
-		tpmPath, tpmPath, tpmPath, suffix)
+		"  tpm2-kira talks to the TPM directly, and the TPM device is root-only —\n"+
+		"  deliberately, since anything that can reach it can ask the TPM to unseal.\n"+
+		"  Run the command with sudo:\n"+
+		"      sudo tpm2-kira ...%s",
+		tpmPath, suffix)
 }
 
 // tpmMissingError explains that there is no TPM device at the given path.
@@ -120,6 +125,69 @@ func isPermissionError(err error) bool {
 	return errors.Is(err, fs.ErrPermission) ||
 		errors.Is(err, syscall.EACCES) ||
 		errors.Is(err, syscall.EPERM)
+}
+
+// InvokedCommand is the subcommand being run, used only to make the privilege
+// message show a command worth re-running. main sets it; an empty value degrades
+// to generic advice rather than being wrong.
+var InvokedCommand string
+
+// rootFilesystemCommands need root whatever the TPM path is, because they write
+// under /var/lib/tpm2-kira. The reason completes "... needs root, because it ...".
+//
+// Commands that only reach the TPM are deliberately absent. Whether they need
+// root depends on the device, not on the verb: the TPM character device is
+// root-only, but a software TPM reached over a socket belongs to whoever owns the
+// socket. RequireTPMAccess makes that call at the moment of access, where the
+// path is known.
+var rootFilesystemCommands = map[string]string{
+	"setup": "writes the signing key to /var/lib/tpm2-kira",
+}
+
+// CheckPrivilege refuses a command that cannot work without root regardless of
+// where its TPM lives.
+func CheckPrivilege(command string, args []string) error {
+	if reason, ok := rootFilesystemCommands[command]; ok {
+		return RequireRoot(command, reason)
+	}
+	return nil
+}
+
+// RequireTPMAccess refuses to touch a root-only TPM device as an ordinary user.
+//
+// The check is on the device rather than on the command, because that is where
+// the requirement actually comes from. /dev/tpm0 is root-only by design: anything
+// able to open it can ask the TPM to unseal while the PCRs still match, which is
+// why the threat model places non-root userspace outside the trust boundary
+// (SECURITY-BACKGROUND §8). Loosening those permissions is not a supported
+// configuration.
+//
+// A path that is not a character device is left alone. A software TPM is reached
+// through a unix socket owned by whoever started it, and needs no privilege at
+// all — that is how the test suite runs, and refusing it would be refusing
+// something that works.
+func RequireTPMAccess(tpmPath string) error {
+	if IsRoot() {
+		return nil
+	}
+
+	info, err := os.Stat(tpmPath)
+	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		// Not a TPM device node: either absent, or a socket this user may well
+		// own. Let the open attempt speak for itself.
+		return nil
+	}
+
+	suffix := ""
+	if InvokedCommand != "" {
+		suffix = " " + InvokedCommand
+	}
+
+	return fmt.Errorf("%s is a TPM device, which only root may open.\n"+
+		"  Run the command with sudo:\n"+
+		"      sudo tpm2-kira%s ...\n"+
+		"  Current user has UID %d.",
+		tpmPath, suffix, os.Geteuid())
 }
 
 // ── Signing key file permissions ──────────────────────────────────────────
