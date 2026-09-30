@@ -187,8 +187,9 @@ func TestAdviseOptional(t *testing.T) {
 		if !strings.Contains(optional, "every kernel update") {
 			t.Errorf("the reseal cost should be stated, got:\n%s", optional)
 		}
-		if !strings.Contains(optional, "before the\n       reboot") {
-			t.Errorf("that a UKI reseal can precede the reboot should be stated, got:\n%s", optional)
+		// The way out of that cost is the hook, so the offer has to name it.
+		if !strings.Contains(optional, "install-mkinitcpio") {
+			t.Errorf("the offer should say how to automate the reseal, got:\n%s", optional)
 		}
 	})
 
@@ -299,4 +300,178 @@ func TestAdviseStatesUpkeepForSuggestedPCRs(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestAdviseRecommendsKernelPCRWhenResealIsAutomated is the case that prompted
+// this: Arch with Secure Boot enforcing and a UKI. PCRs 0 and 7 are already
+// sound there, so the question is whether measuring the kernel is worth a reseal
+// per kernel update — and it costs nothing when the mkinitcpio hook does that
+// reseal for you.
+func TestAdviseRecommendsKernelPCRWhenResealIsAutomated(t *testing.T) {
+	base := SystemProfile{
+		EFI:               true,
+		SecureBoot:        SecureBootState{Known: true, Enabled: true},
+		EventlogPresent:   true,
+		EventlogHasSHA256: true,
+		TPMHasSHA256:      true,
+		SourcesProbed:     true,
+		UKIPath:           "/boot/EFI/Linux/arch-linux.efi",
+	}
+
+	t.Run("hook installed: 11u is suggested and the reason says why", func(t *testing.T) {
+		p := base
+		p.ResealHookInstalled = true
+		advice := p.Advise()
+
+		if advice.PCRs != "0,7,11u" {
+			t.Errorf("suggested %q, want 0,7,11u", advice.PCRs)
+		}
+		because := joined(advice.Because)
+		if !strings.Contains(because, "reseal hook is installed") {
+			t.Errorf("the reason should name the hook, got:\n%s", because)
+		}
+		if strings.Contains(joined(advice.Optional), "11u") {
+			t.Error("11u is in the suggestion; it should not also be offered")
+		}
+		// The upkeep is automated, and saying so is the point.
+		if !strings.Contains(joined(advice.Risks), "does it for you") {
+			t.Errorf("the risk note should say the hook handles the reseal, got:\n%s", joined(advice.Risks))
+		}
+	})
+
+	t.Run("no hook: 11u is offered, not imposed", func(t *testing.T) {
+		advice := base.Advise()
+
+		if advice.PCRs != "0,7" {
+			t.Errorf("suggested %q, want 0,7 when the reseal would be manual", advice.PCRs)
+		}
+		if !strings.Contains(joined(advice.Optional), "11u") {
+			t.Errorf("11u should be offered, got:\n%s", joined(advice.Optional))
+		}
+		if !strings.Contains(joined(advice.Because), "survive kernel updates") {
+			t.Errorf("the reason should explain the stable default, got:\n%s", joined(advice.Because))
+		}
+	})
+}
+
+// TestAdviseExplainsItself checks that every shape of machine gets a reason, not
+// just a selection. The complaint that prompted this was as much about the
+// missing explanation as about the selection.
+func TestAdviseExplainsItself(t *testing.T) {
+	profiles := map[string]SystemProfile{
+		"arch, secure boot, uki": {
+			EFI: true, SecureBoot: SecureBootState{Known: true, Enabled: true},
+			EventlogPresent: true, EventlogHasSHA256: true, TPMHasSHA256: true,
+			SourcesProbed: true, UKIPath: "/boot/EFI/Linux/arch.efi", ResealHookInstalled: true,
+		},
+		"debian, secure boot, grub": {
+			EFI: true, SecureBoot: SecureBootState{Known: true, Enabled: true},
+			EventlogPresent: true, EventlogHasSHA256: true, TPMHasSHA256: true,
+			SourcesProbed: true, GRUB: true,
+		},
+		"debian, no secure boot, grub": {
+			EFI: true, SecureBoot: SecureBootState{Known: true},
+			EventlogPresent: true, EventlogHasSHA256: true, TPMHasSHA256: true,
+			SourcesProbed: true, GRUB: true,
+		},
+		"sha-1 only tpm": {
+			EFI: true, SecureBoot: SecureBootState{Known: true, Enabled: true},
+			EventlogPresent: true, EventlogHasSHA1: true, TPMHasSHA1: true,
+		},
+		"nothing known": {},
+	}
+
+	for name, p := range profiles {
+		t.Run(name, func(t *testing.T) {
+			advice := p.Advise()
+
+			if len(advice.Because) == 0 {
+				t.Error("every suggestion needs a reason")
+			}
+			for _, line := range advice.Because {
+				if strings.TrimSpace(line) == "" {
+					t.Error("empty reason line")
+				}
+			}
+			if _, err := ParsePCRSpecs(advice.PCRs); err != nil {
+				t.Errorf("suggestion %q does not parse: %v", advice.PCRs, err)
+			}
+			// The bank is always stated, because it decides what is possible.
+			if !strings.Contains(joined(advice.Facts), "TPM PCR banks:") {
+				t.Errorf("the banks should be reported, got:\n%s", joined(advice.Facts))
+			}
+		})
+	}
+}
+
+// TestAdviseSHA1Fallback covers a TPM with no SHA-256 bank: there is nothing to
+// seal against but SHA-1, and that has to be both chosen and warned about.
+func TestAdviseSHA1Fallback(t *testing.T) {
+	advice := SystemProfile{
+		EFI:             true,
+		SecureBoot:      SecureBootState{Known: true, Enabled: true},
+		EventlogPresent: true,
+		EventlogHasSHA1: true,
+		TPMHasSHA1:      true,
+	}.Advise()
+
+	if !advice.SHA1 {
+		t.Error("a TPM with no SHA-256 bank has to fall back to SHA-1")
+	}
+	if !strings.Contains(joined(advice.Facts), "SHA-1 only") {
+		t.Errorf("the missing bank should be reported, got:\n%s", joined(advice.Facts))
+	}
+	if !strings.Contains(joined(advice.Because), "--sha1") {
+		t.Errorf("the reason should name the flag, got:\n%s", joined(advice.Because))
+	}
+	if !strings.Contains(joined(advice.Risks), "broken against collision") {
+		t.Errorf("SHA-1 should carry its warning, got:\n%s", joined(advice.Risks))
+	}
+
+	// With a SHA-256 bank present, SHA-1 must not be chosen.
+	ok := SystemProfile{TPMHasSHA256: true, TPMHasSHA1: true}.Advise()
+	if ok.SHA1 {
+		t.Error("SHA-1 should not be used when the TPM has a SHA-256 bank")
+	}
+}
+
+// TestAdviseSourceConflictPrefersEventlog covers the case the user described:
+// something extends the registers after tpm2-kira reads them, so the live value
+// is not what the next boot reproduces and the reconstruction is the one to seal.
+func TestAdviseSourceConflictPrefersEventlog(t *testing.T) {
+	conflicted := SystemProfile{
+		EFI:               true,
+		SecureBoot:        SecureBootState{Known: true, Enabled: true},
+		EventlogPresent:   true,
+		EventlogHasSHA256: true,
+		TPMHasSHA256:      true,
+		SourcesProbed:     true,
+		SourceConflict:    "PCR 7 cannot be reconstructed from the event log: ...",
+	}
+
+	advice := conflicted.Advise()
+
+	if advice.PCRs != "0e,7e" {
+		t.Errorf("suggested %q, want the eventlog source 0e,7e", advice.PCRs)
+	}
+	if !strings.Contains(joined(advice.Facts), "DISAGREE") {
+		t.Errorf("the disagreement should be reported as a fact, got:\n%s", joined(advice.Facts))
+	}
+	if !strings.Contains(joined(advice.Because), "disagree") {
+		t.Errorf("the reason should explain the source choice, got:\n%s", joined(advice.Because))
+	}
+	risks := joined(advice.Risks)
+	if !strings.Contains(risks, "pcrtool.py verify") {
+		t.Errorf("the risk should point at the diagnostic, got:\n%s", risks)
+	}
+	if !strings.Contains(risks, "next boot does not reproduce") {
+		t.Errorf("the consequence of sealing the live value should be stated, got:\n%s", risks)
+	}
+
+	// Agreement means the register is the simpler choice.
+	agreed := conflicted
+	agreed.SourceConflict = ""
+	if got := agreed.Advise().PCRs; got != "0,7" {
+		t.Errorf("with the sources agreeing, suggested %q, want 0,7", got)
+	}
 }

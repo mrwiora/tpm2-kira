@@ -11,6 +11,33 @@ rules in full.
 
 ---
 
+## What `seal` works out for itself
+
+Run `tpm2-kira seal` with no `--pcrs` from a terminal and it probes the machine
+before suggesting anything, then explains the choice. What it establishes:
+
+| Probe | Decides |
+|---|---|
+| Secure Boot state, from efivars | whether PCR 7 attests a verified chain, and so whether anything else has to measure the kernel |
+| PCR banks the TPM provides | whether SHA-256 is available at all, or `--sha1` is forced |
+| Which banks the event log carries digests in | whether the `e` sources are usable |
+| Live registers **compared against an event log replay** | whether `r` and `e` actually agree on this machine |
+| A unified kernel image, or GRUB | which PCR measures the kernel here: `11u`, or `8,9`, or `4` |
+| Whether the mkinitcpio reseal hook is installed | whether a kernel-measuring PCR costs you a reseal per update, or none |
+
+The last two are why the same machine can get different advice than another with
+the same Secure Boot state. With Secure Boot enforcing, PCRs 0 and 7 are already a
+sound policy that survives kernel updates — so measuring the kernel as well is
+suggested only when the reseal it costs is automated. Without the hook it is
+offered rather than imposed.
+
+The register-versus-event-log comparison is the one that cannot be reasoned out in
+advance. The two are equivalent for PCRs 0–7 on a healthy machine, so the register
+wins by needing no event log. Where they disagree, something is extending those
+registers after the point tpm2-kira reads the TPM: sealing the live value would
+bind to something the next boot does not reproduce, so the reconstruction is the
+one to trust and `seal` switches to `0e,7e` and says why.
+
 ## Custom PCRs
 
 Each PCR index can have a **source suffix** that controls where the value comes from:

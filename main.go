@@ -184,6 +184,9 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 		}
 		*pcrs = plan.PCRs
 		sealIndex = plan.Index
+		if plan.SHA1 {
+			hashAlgo = kira.PCRHashAlgoSHA1
+		}
 	}
 
 	// Validate PCR specs before proceeding
