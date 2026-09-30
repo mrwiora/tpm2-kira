@@ -99,9 +99,9 @@ func NVRAMRestore(tpmPath string, index uint32, fromPath, keyRefStr string, forc
 	}
 	fmt.Println("Blob signature verified.")
 
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPMDevice(tpmPath)
 	if err != nil {
-		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+		return err
 	}
 	defer tpmDev.Close()
 

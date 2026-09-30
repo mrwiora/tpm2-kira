@@ -53,14 +53,28 @@ make build
 # Install
 sudo make install
 
-# First-time setup: generates signing keys + seals a TOTP secret (PCRs 0,7)
+# Create the signing key (one step)
 sudo tpm2-kira setup
+
+# Seal a TOTP secret against PCRs 0 and 7 (the other step)
+sudo tpm2-kira seal --pcrs "0,7"
 
 # Show the current TOTP code
 tpm2-kira reveal
 ```
 
-`setup` creates an ECDSA P-256 key pair at `/var/lib/tpm2-kira/keys/` and seals a TOTP secret bound to PCRs 0 and 7. Scan the QR code it prints with your authenticator app.
+`setup` creates an ECDSA P-256 key pair at `/var/lib/tpm2-kira/keys/` and stops
+there. `seal` generates the TOTP secret, binds it to the PCRs you name, and
+prints a QR code to scan with your authenticator app.
+
+The two are deliberately separate. Creating a key is cheap and repeatable;
+sealing writes to TPM NVRAM and mints a secret you have to enrol, and it is the
+step where the PCR choice is made. Keeping them apart means you can re-run
+either without having to think about the other.
+
+If a YubiKey is plugged in, `setup` notices and offers to put the signing key on
+it instead — a key file remains the default, so pressing Enter keeps the
+behaviour above. See [Signing key on a YubiKey](#signing-key-on-a-yubikey).
 
 ## Installation
 
@@ -88,10 +102,11 @@ checksummed release tarball, and its `pkgver` is filled in at publish time, so
 it cannot be built straight from a clone. See
 [packaging/aur/README.md](packaging/aur/README.md) to build one locally.
 
-After installing, run setup once and rebuild the initramfs:
+After installing, create the key, seal a secret, and rebuild the initramfs:
 
 ```bash
 sudo tpm2-kira setup
+sudo tpm2-kira seal --pcrs "0,7"
 sudo mkinitcpio -P
 ```
 
@@ -107,11 +122,13 @@ sudo apt install ../tpm2-kira_*_amd64.deb
 checkout produces something like `0.2.3+9.g9d32210`.
 
 The package installs the binary, the initramfs-tools hook and boot scripts, and
-rebuilds the initramfs. It does **not** run `setup`, because that generates a
-new TOTP secret and prints a QR code you need to scan:
+rebuilds the initramfs. It runs neither `setup` nor `seal`: sealing generates a
+new TOTP secret and prints a QR code you need to scan, which must not happen as
+a side effect of installing a package.
 
 ```bash
 sudo tpm2-kira setup
+sudo tpm2-kira seal --pcrs "0,7"
 sudo update-initramfs -u
 ```
 
@@ -169,10 +186,57 @@ TPM2_KIRA_PIN    PIN for a signing key held in a YubiKey PIV slot.
 
 ### Basic seal
 
+Run `seal` with no `--pcrs` from a terminal and it looks at the machine first,
+then suggests a selection to match:
+
 ```bash
-# Uses default PCRs 0,2,7 read from TPM registers
-tpm2-kira seal
+sudo tpm2-kira seal
 ```
+
+```
+What was found:
+  Firmware: UEFI
+  Secure Boot: enabled
+  Event log: present, with SHA-256 digests
+  Unified kernel image: /boot/EFI/Linux/arch-linux.efi
+
+Suggested NVRAM slot: #0 (0x01803010), which is free
+
+Suggested selection: 0,7
+  PCR 0  firmware code — changes when you update the firmware
+  PCR 7  Secure Boot policy — changes if the keys are rotated or Secure Boot is turned off
+
+Also possible here:
+  11u  the unified kernel image. The strongest measurement of the exact kernel that
+       will run, but it changes on every kernel update, so each one needs a reseal.
+  ...
+
+Worth knowing:
+  - PCR 0 on its own would identify a firmware build, not this machine — every device
+    running the same firmware version holds the same value. ...
+
+  [Enter]      seal slot #0 (0x01803010) with PCRs 0,7
+  <selection>  type your own, for example "0,2,7" or "0e,7e,11u"
+  [?]          show the full PCR reference and stop
+  [q]          quit without sealing
+```
+
+The advice tracks the machine rather than being boilerplate. With Secure Boot
+enabled, PCRs 0 and 7 are enough and need no reseal after a kernel update. With
+Secure Boot **off**, nothing verifies which kernel runs, so the suggestion adds
+whatever this system measures the boot components with — `11u` for a unified
+kernel image, `8,9` for GRUB, `4` otherwise — and says what that costs in
+resealing. A free NVRAM slot is suggested, and slots already in use are listed so
+an enrolled secret is not overwritten by accident.
+
+**Passing `--pcrs` skips all of it** and seals exactly what you asked for:
+
+```bash
+tpm2-kira seal --pcrs "0,2,7"
+```
+
+So does running without a terminal — a package hook or script gets the
+documented default (`0,2,7`) silently, with no prompt to hang on.
 
 ### Custom PCRs
 
@@ -293,6 +357,23 @@ tpm2-kira seal --pubkey /path/to/key.pub --privkey /path/to/key.pem
 `--pubkey` accepts a raw public key or an X.509 certificate. Both paths are
 stored in the sealed blob, so later `reseal` calls need no flags.
 
+**Keep the private key mode 0400, owned by root.** That is what `setup` writes,
+and whenever the key is opened for signing — `seal`, `reseal`, `nvram restore` —
+tpm2-kira checks it and reports anything looser:
+
+```
+WARNING: the signing key /var/lib/tpm2-kira/keys/seal.key is mode 0644.
+  Other accounts on this machine can read it. The signing key is the recovery
+  master key: whoever holds it can unseal the secret whatever the PCRs say, so
+  its only protection on disk is this mode.
+      sudo chmod 400 /var/lib/tpm2-kira/keys/seal.key
+```
+
+It is a warning rather than a refusal: a loose key still works, because being
+unable to reseal at the moment you need to would be worse. A key that is merely
+owner-writable (0600) gets a one-line note instead, since that exposes it to
+nobody.
+
 **RSA-4096 does not work.** The PolicySigned branch needs the public key loaded
 into the TPM with `TPM2_LoadExternal`, and TPMs reject 4096-bit RSA there — so
 does swtpm. tpm2-kira fails at seal time with a hint rather than leaving you to
@@ -405,24 +486,67 @@ rm /tmp/seal.pub
 ykman piv access change-pin                  # the factory default is 123456
 ```
 
-**Register it.** `adopt` is read-only: it reports the slot's key and policies,
-checks that your TPM can load it for PolicySigned, and caches the public key so
-that later commands work with the token unplugged.
+**Then just run setup.** On a terminal it looks for connected tokens, lists the
+keys it finds, and offers them — a key file stays the default, so pressing Enter
+gives you the behaviour from [Quick Start](#quick-start):
+
+```
+Looking for a hardware token that could hold the signing key...
+
+The signing key authorises resealing after a firmware or kernel update.
+It is only needed then — never at boot — so it can live on a token that
+you unplug the rest of the time.
+
+Found these keys on connected tokens:
+  1) YubiKey 12345678, slot 9a (PIV Authentication) — ECDSA-P-256
+       PIN once per session, touch never
+
+Where should the signing key live?
+  [Enter]  a key file at /var/lib/tpm2-kira/keys/seal.key  (default)
+  [1]      the token slot above
+
+Choice [Enter]:
+```
+
+Choosing the slot validates it, checks your TPM can load the key for
+PolicySigned, and caches the public key so later commands work with the token
+unplugged — no separate `adopt` step. Only the public key is written to disk.
+
+setup stops there and prints the `seal` command to run next, with the key
+reference already filled in. It needs no PIN, because reading a public key from
+a slot does not require one; sealing does.
+
+If a token is connected but none of its slots holds a key, setup prints the
+`ykman` commands above and lets you stop there to run them; nothing is created,
+so `setup` can simply be run again.
+
+Two flags skip the question, for scripts and for anyone who already knows:
+
+```bash
+sudo tpm2-kira setup --yubikey                  # first token found
+sudo tpm2-kira setup --yubikey 'yubikey:slot=9c'
+sudo tpm2-kira setup --local                    # a key file, no questions
+```
+
+Setup never asks when it is not run from a terminal — a package hook gets the
+key-file default silently, exactly as before.
+
+**Adopting a slot for an existing installation.** `setup` declines once
+`/var/lib/tpm2-kira/keys` exists, so to move an already-configured system onto a
+token, register the slot and reseal onto it:
 
 ```bash
 sudo tpm2-kira yubikey adopt --key 'yubikey:slot=9a'
-```
 
-**Seal against it.** The reference is stored in the blob, so later reseals need
-no flags.
-
-```bash
 export TPM2_KIRA_PIN=12345678
-
-sudo -E tpm2-kira seal --pcrs "0,7" \
+sudo -E tpm2-kira reseal \
     --privkey 'yubikey:serial=12345678;slot=9a' \
     --pubkey /var/lib/tpm2-kira/keys/seal.pub
 ```
+
+`adopt` is read-only: it reports the slot's key and policies, checks the TPM can
+load it, and caches the public key. Resealing preserves the TOTP secret, so your
+authenticator keeps working. Once it succeeds, shred the old key file.
 
 Already have a key in a slot — the one sbctl uses to sign your Secure Boot
 components, say? Skip the generation step and `adopt` it directly. Any key the
@@ -756,12 +880,42 @@ sudo dmesg | grep -i tpm
 Ensure TPM 2.0 is enabled in your BIOS/UEFI settings.
 
 **Permission denied on `/dev/tpm0`:**
+
+tpm2-kira talks to the TPM directly and keeps its signing key under
+`/var/lib/tpm2-kira`, both root-owned on a normal system, so most commands need
+`sudo`. Running one without it says so rather than reporting a bare syscall
+error:
+
+```
+tpm2-kira: FAILED: 'tpm2-kira seal' needs root, because it writes to TPM NVRAM
+  and reads the signing key from /var/lib/tpm2-kira.
+  Run it again with sudo:
+      sudo tpm2-kira seal ...
+  Current user has UID 1000.
+```
+
+| Needs root | Works without it |
+|---|---|
+| `setup`, `seal`, `reseal` | `version`, `help`, `pcrtips` |
+| `nvram delete`, `nvram restore` | `reveal`, `reveal-plain`, `run`, `info` |
+| `yubikey adopt` | `nvram list`, `nvram status` |
+| | `yubikey list`, `yubikey status`, `yubikey export-pubkey` |
+
+The commands in the right-hand column only read, so they are not refused
+outright — a udev rule granting a group access to `/dev/tpm0` lets them work for
+an ordinary user, which is worth setting up if you want `reveal` without `sudo`:
+
 ```bash
-# Check current permissions
 ls -la /dev/tpm0
 
-# Your user needs access — either run as root or add a udev rule
+# For example, in /etc/udev/rules.d/60-tpm.rules:
+#   KERNEL=="tpm0", MODE="0660", GROUP="tss"
+# then add your user to that group and replug or reboot.
 ```
+
+Without such a rule they report the same explanation instead of
+`permission denied`. As always, the exit status is 0 — judge success from the
+output.
 
 **TOTP code doesn't match after update:**
 ```bash
@@ -838,6 +992,9 @@ in the TPM. Delete the slot first, then the directory.
 │   ├── tpm_utils.go         # Low-level TPM operations
 │   ├── pcrtips.go           # PCR reference information
 │   └── constants.go         # Default paths and constants
+├── test/
+│   ├── integration/         # CLI tests driving the built binary (build-tagged)
+│   └── docker/              # Container with swtpm, pcscd and a virtual reader
 ├── internal/
 │   ├── pcsc/                # cgo-free pcscd client (Unix socket protocol)
 │   ├── piv/                 # PIV applet: read a slot, verify a PIN, sign
@@ -911,7 +1068,6 @@ Failures are printed to stderr with a fixed marker:
 
 ```
 tpm2-kira: FAILED: <reason>
-tpm2-kira: (exit status is 0 by design; this command did NOT succeed)
 ```
 
 The mkinitcpio post hook does exactly this — it greps the output for the success

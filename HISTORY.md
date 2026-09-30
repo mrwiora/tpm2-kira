@@ -8,6 +8,83 @@ formats and CLI flags may change without migration paths.
 
 ---
 
+## Commands
+
+### The failure marker no longer restates the exit status
+
+Failures printed a second line, `(exit status is 0 by design; this command did
+NOT succeed)`, after every `FAILED:` message. It was noise on every error, and it
+explained a design decision to the wrong audience: a script cannot act on it, and
+a person reading one error does not need the rationale repeated. The reasoning
+now lives next to the code that exits, and in the README's "Exit status" section.
+`tpm2-kira: FAILED:` remains the marker to grep for, and the exit status is still
+always 0.
+
+### The signing key is created 0400, and a looser mode is reported
+
+`setup` used to write the private key 0600. It is now 0400: the file is written
+once and only ever read, so dropping the write bit costs nothing and takes an
+accidental overwrite off the table.
+
+Whenever the key is opened for signing — seal, reseal, nvram restore — the mode
+is checked. Group or other access is a warning naming the risk and the fix,
+because that mode is the key's only protection on disk and a readable key undoes
+the PCR policy for whoever can read it. Owner-writable but otherwise private
+(0600) is a one-line note, since it exposes the key to nobody. The recommended
+mode says nothing at all.
+
+It warns rather than refuses. A reseal is what someone reaches for when their
+machine has stopped showing a code, and declining to use a working key at that
+moment would be worse than the exposure it is warning about. It also warns once
+per file per run, since a reseal with no --nvram opens the key once per populated
+slot.
+
+### seal guides the PCR selection when none is given
+
+`tpm2-kira seal` with no `--pcrs`, run from a terminal, now profiles the machine
+and suggests a selection instead of silently applying `0,2,7`. It reports the
+Secure Boot state, whether the event log carries SHA-256 digests, whether a
+unified kernel image or GRUB is present, and which NVRAM slots are already in use.
+
+The recommendation depends on those facts rather than being fixed advice. With
+Secure Boot verifying the boot chain, PCRs 0 and 7 are enough and survive kernel
+updates. With Secure Boot off — or in Setup Mode, or unreadable — nothing
+verifies which kernel runs, so the suggestion adds whatever this system measures
+the boot components with: `11u` for a unified kernel image, `8,9` for GRUB, `4`
+otherwise. Each of those needs resealing on updates, and the suggestion says so,
+including the rule that a GRUB reseal has to follow the reboot rather than
+precede it.
+
+An explicit `--pcrs` skips the whole thing and is used exactly as written, and so
+does running without a terminal, which keeps the default for hooks and scripts.
+Typing a selection at the prompt is validated before anything is sealed, so a
+typo is a question rather than a policy bound to the wrong registers.
+
+### setup no longer seals
+
+`tpm2-kira setup` used to create the signing key **and** seal a TOTP secret
+against PCRs 0 and 7. It now stops after the key and prints the `seal` command to
+run next.
+
+The two acts are different in kind. Creating a key is cheap, local and
+repeatable. Sealing mints a secret that has to be enrolled in an authenticator,
+writes to TPM NVRAM, and is where the PCR selection is chosen — so it is the step
+someone is most likely to want to redo with different arguments, and the one whose
+failure matters. Combining them meant `setup` could not be re-run to reason about
+keys alone, and that a key-related question was answered in the same breath as a
+policy one.
+
+It also removed a PIN from the flow: setup reads a token's public key, which needs
+no PIN, and now performs no signature, so `--pin-file` is gone from it.
+
+Nothing automated ever called `setup` — the initramfs hooks and the Debian
+postinst only ever advised a human to run it — so the split broke no callers. The
+mkinitcpio post hook did gain a case: signing keys can now exist with nothing
+sealed, which used to be impossible, and it reports that as a skip rather than a
+failed reseal.
+
+---
+
 ## Blob format
 
 ### Version 9 — key references instead of key paths

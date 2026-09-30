@@ -18,7 +18,11 @@ var Version = "dev"
 // the output, not the exit status — grep for the FAILED marker below.
 func fail(err error) {
 	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: %v\n", err)
-	fmt.Fprintln(os.Stderr, "tpm2-kira: (exit status is 0 by design; this command did NOT succeed)")
+
+	// Exit 0 deliberately: tpm2-kira is meant to be chainable in a boot
+	// sequence, so a TPM or NVRAM problem must not stop the commands after it.
+	// Callers judge success from the output, not the status — see the "Exit
+	// status" section of the README.
 	os.Exit(0)
 }
 
@@ -43,6 +47,12 @@ func main() {
 	var commandArgs []string
 	if len(os.Args) >= argsOffset {
 		commandArgs = os.Args[argsOffset:]
+	}
+
+	// Refuse early, with an explanation, rather than letting a syscall several
+	// layers down report a bare "permission denied".
+	if err := checkPrivilege(command, commandArgs); err != nil {
+		fail(err)
 	}
 
 	switch command {
@@ -103,14 +113,18 @@ func runSetup(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	fs := flag.NewFlagSet("setup", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	yubikey := fs.String("yubikey", "", "Use a YubiKey PIV slot for the signing key, e.g. 'yubikey:slot=9a' or just 'yubikey:'")
+	local := fs.Bool("local", false, "Use a signing key file without asking about a token")
 
 	fs.Parse(args)
 
-	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
+	choice := cmd.SetupKeyChoice{Local: *local, TokenRef: *yubikey}
+	if choice.Local && choice.TokenRef != "" {
+		fail(fmt.Errorf("--local and --yubikey ask for opposite things; pick one"))
+	}
 
-	if err := cmd.Setup(*tpm, sealIndex, *debug); err != nil {
+	if err := cmd.Setup(*tpm, choice, *debug); err != nil {
 		fail(err)
 	}
 }
@@ -133,16 +147,13 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 
 	cmd.PINFileSetting = *pinFile
 
+	given := flagsGiven(fs)
+
 	mode, err := cmd.ParseMeasurePointMode(*measurePoint)
 	if err != nil {
 		fail(err)
 	}
 	cmd.MeasurePointModeSetting = mode
-
-	// Validate PCR specs before proceeding
-	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
-		fail(err)
-	}
 
 	hashAlgo := cmd.PCRHashAlgoSHA256
 	if *useSHA1 {
@@ -151,9 +162,92 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 
 	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
 
+	// Choosing PCRs needs to know about this machine, so an unqualified
+	// "tpm2-kira seal" explains what it found and suggests a selection. An
+	// explicit --pcrs is used exactly as written — the person typing it may
+	// know something this code does not — and a hook or script, which has
+	// nobody to answer, gets the documented default silently.
+	if !given["pcrs"] && cmd.IsInteractive() {
+		plan, planErr := cmd.GuideSealSelection(*tpm, sealIndex, given["nvram"], *debug)
+		if planErr != nil {
+			fail(planErr)
+		}
+		if !plan.Proceed {
+			return
+		}
+		*pcrs = plan.PCRs
+		sealIndex = plan.Index
+	}
+
+	// Validate PCR specs before proceeding
+	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
+		fail(err)
+	}
+
 	if err := cmd.Seal(*tpm, *pcrs, sealIndex, *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
 		fail(err)
 	}
+}
+
+// rootCommands are the commands that cannot work without root, with the reason
+// completing "... needs root, because it ...".
+//
+// Commands that only read the TPM are deliberately absent: /dev/tpm0 can be
+// opened by a group through a udev rule, which the README documents, and
+// 'reveal' working for an ordinary user is the point of setting that up. Those
+// still get an explanation if the device turns out to be unreadable — see
+// cmd.OpenTPMDevice — rather than being refused before trying.
+var rootCommands = map[string]string{
+	"setup":  "writes the signing key to /var/lib/tpm2-kira",
+	"seal":   "writes to TPM NVRAM and reads the signing key from /var/lib/tpm2-kira",
+	"reseal": "writes to TPM NVRAM and reads the signing key from /var/lib/tpm2-kira",
+}
+
+// rootNVRAMSubcommands are the nvram subcommands that change NVRAM. Listing and
+// status only read it.
+var rootNVRAMSubcommands = map[string]string{
+	"delete":  "removes a sealed secret from TPM NVRAM",
+	"restore": "writes a sealed secret back to TPM NVRAM",
+}
+
+// rootYubiKeySubcommands are the yubikey subcommands that write to the
+// filesystem. Inspecting a token needs no privilege beyond reaching pcscd.
+var rootYubiKeySubcommands = map[string]string{
+	"adopt": "caches the public key under /var/lib/tpm2-kira",
+}
+
+// checkPrivilege refuses a command that cannot possibly work without root.
+func checkPrivilege(command string, args []string) error {
+	if reason, ok := rootCommands[command]; ok {
+		return cmd.RequireRoot(command, reason)
+	}
+
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+
+	switch command {
+	case "nvram":
+		if reason, ok := rootNVRAMSubcommands[sub]; ok {
+			return cmd.RequireRoot("nvram "+sub, reason)
+		}
+	case "yubikey":
+		if reason, ok := rootYubiKeySubcommands[sub]; ok {
+			return cmd.RequireRoot("yubikey "+sub, reason)
+		}
+	}
+
+	return nil
+}
+
+// flagsGiven reports which flags were named on the command line, as opposed to
+// left at their default. A default is a fallback; a flag someone typed is an
+// instruction, and the two deserve different treatment.
+func flagsGiven(fs *flag.FlagSet) map[string]bool {
+	given := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	return given
 }
 
 func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -338,8 +432,9 @@ USAGE:
   tpm2-kira <command> [options]
 
 COMMANDS:
-  setup       Initial setup: generate P-256 signing keys and seal (PCRs 0,7)
-  seal        Generate and seal TOTP secret to TPM NVRAM
+  setup       Create the signing keys. Does NOT seal — run 'seal' next.
+  seal        Generate and seal TOTP secret to TPM NVRAM. Run without --pcrs
+              on a terminal and it suggests a selection for this machine.
   reseal      Reseal secret with current PCR values (requires signing key)
   reveal      Generate TOTP code with colored KIRA format
   reveal-plain Generate TOTP code (plain output)
@@ -365,8 +460,25 @@ GLOBAL OPTIONS:
                   all populated slots in the default range.
   --debug         Enable debug output
 
+SETUP OPTIONS:
+  setup only prepares the signing key; it never writes to TPM NVRAM and never
+  needs a PIN. Run 'tpm2-kira seal' afterwards to create the TOTP secret.
+
+  --yubikey [REF]    Put the signing key on a YubiKey PIV slot instead of in a
+                     file. With no reference, the first token found is used.
+                     Without this flag, setup offers any connected token when
+                     run from a terminal, and defaults to a key file.
+  --local            Use a key file without asking about a token. This is what
+                     setup does anyway when it is not run from a terminal.
+
 SEAL OPTIONS:
-  --pcrs INDICES     PCR indices with optional source suffix (default: 0,2,7)
+  Run 'tpm2-kira seal' with no --pcrs from a terminal and it reports what it
+  found on this machine — Secure Boot state, event log, unified kernel image,
+  bootloader — suggests a selection to match, names the risks, and offers a free
+  NVRAM slot. Passing --pcrs skips all of it and uses exactly what you asked for.
+
+  --pcrs INDICES     PCR indices with optional source suffix (default: 0,2,7
+                     when not asked interactively)
                      Suffix 'r' = read from TPM registers (default if no suffix)
                      Suffix 'e' = calculate from TPM eventlog (PCRs 0-12 only)
                      Suffix 'u[:PATH]' = compute from a unified kernel image (PCR 11 only)

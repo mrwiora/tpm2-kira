@@ -8,7 +8,6 @@ import (
 	"os"
 
 	"github.com/google/go-tpm/tpm2"
-	"github.com/google/go-tpm/tpm2/transport"
 )
 
 // Seal generates and seals a TOTP secret to TPM NVRAM with PolicyOR (PCR + Signed branches)
@@ -113,9 +112,9 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 	}
 
 	// Open TPM
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPMDevice(tpmPath)
 	if err != nil {
-		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+		return err
 	}
 	defer tpmDev.Close()
 

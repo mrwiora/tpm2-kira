@@ -23,6 +23,10 @@ if [[ ! -d "$KIRA_KEYS_DIR" ]]; then
     exit 0
 fi
 
+# Keys can exist with nothing sealed: 'setup' creates the key and 'seal' is a
+# separate step. That is not a problem to warn about on every rebuild, so it is
+# handled as a skip further down rather than as a failed reseal.
+
 echo "tpm2-kira: resealing TOTP secret after initramfs rebuild..."
 
 # The install hook inspected the image that was just built and recorded whether
@@ -103,6 +107,10 @@ elif grep -q "tpm2-kira: SKIPPED:" <<< "$output"; then
     echo "  └────────────────────────────────────────────────────────────────────┘" >&2
     echo "$output" >&2
     echo "" >&2
+elif grep -q "has not been configured yet" <<< "$output"; then
+    # Signing keys exist but no secret has been sealed. Expected between
+    # 'tpm2-kira setup' and 'tpm2-kira seal', and not worth a warning.
+    echo "tpm2-kira: no sealed secret yet; run 'tpm2-kira seal' to create one"
 else
     echo "tpm2-kira: WARNING — reseal did NOT succeed:" >&2
     echo "$output" >&2

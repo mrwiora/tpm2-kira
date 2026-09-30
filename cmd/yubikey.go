@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/matthias/tpm2-kira/internal/pcsc"
 	"github.com/matthias/tpm2-kira/internal/piv"
 )
@@ -506,7 +505,7 @@ func YubiKeyAdopt(tpmPath, refStr, outPath string, debug bool) error {
 // An unreachable TPM is reported but not treated as a failure: adopt is useful
 // on a machine where the TPM is busy or absent.
 func validateAgainstTPM(tpmPath string, pub crypto.PublicKey, debug bool) error {
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPMDevice(tpmPath)
 	if err != nil {
 		fmt.Printf("\n  TPM check:   skipped, could not open %s (%v)\n", tpmPath, err)
 		return nil
@@ -655,4 +654,152 @@ func defaultRef(ref string) string {
 		return YubiKeyRefScheme
 	}
 	return ref
+}
+
+// ── Discovery, for guiding setup ──────────────────────────────────────────
+
+// TokenSlotInfo describes one populated PIV slot found on a connected token.
+type TokenSlotInfo struct {
+	Serial      uint32
+	Slot        byte
+	PublicKey   crypto.PublicKey
+	PINPolicy   byte
+	TouchPolicy byte
+	// HasPolicies is false on firmware that cannot report slot metadata, where
+	// the key was read from the slot certificate instead.
+	HasPolicies bool
+	// Imported reports a key that was generated off the token.
+	Imported bool
+}
+
+// Ref returns the key reference that selects this slot.
+func (t TokenSlotInfo) Ref() KeyRef {
+	return KeyRef{Kind: KeyRefYubiKey, Serial: t.Serial, Slot: t.Slot}
+}
+
+// TokenInfo is a connected token and whatever usable keys it holds.
+type TokenInfo struct {
+	Serial uint32
+	Reader string
+	Slots  []TokenSlotInfo
+}
+
+// DiscoverTokens lists connected tokens and their populated PIV slots.
+//
+// Absence is not an error: no daemon, no reader and no card all return an empty
+// list with a nil error, because the caller is offering the token as an option
+// rather than requiring one. Only a malfunction while talking to a card that is
+// present is worth reporting, and even then the caller may ignore it.
+func DiscoverTokens(debug bool) ([]TokenInfo, error) {
+	client, err := pcsc.Connect()
+	if err != nil {
+		if debug {
+			fmt.Printf("No PC/SC daemon: %v\n", err)
+		}
+		return nil, nil
+	}
+	defer client.Close()
+
+	readers, err := client.Readers(true)
+	if err != nil {
+		if debug {
+			fmt.Printf("Cannot list readers: %v\n", err)
+		}
+		return nil, nil
+	}
+
+	var tokens []TokenInfo
+
+	for _, reader := range readers {
+		card, err := client.ConnectCard(reader)
+		if err != nil {
+			if debug {
+				fmt.Printf("Cannot connect to %s: %v\n", reader, err)
+			}
+			continue
+		}
+
+		pivCard, err := piv.Open(card)
+		if err != nil {
+			// Not a PIV card; nothing to offer.
+			_ = card.Disconnect()
+			continue
+		}
+
+		serial, _ := pivCard.Serial()
+
+		token := TokenInfo{Serial: serial, Reader: reader}
+
+		for _, slot := range candidateSlots {
+			info, ok := inspectSlot(pivCard, serial, slot)
+			if ok {
+				token.Slots = append(token.Slots, info)
+			}
+		}
+
+		tokens = append(tokens, token)
+		_ = card.Disconnect()
+	}
+
+	return tokens, nil
+}
+
+// inspectSlot reads one slot, preferring metadata and falling back to the
+// certificate on firmware that cannot report it.
+func inspectSlot(pivCard *piv.Card, serial uint32, slot byte) (TokenSlotInfo, bool) {
+	md, err := pivCard.SlotMetadata(slot)
+	if err == nil {
+		return TokenSlotInfo{
+			Serial:      serial,
+			Slot:        slot,
+			PublicKey:   md.PublicKey,
+			PINPolicy:   md.PINPolicy,
+			TouchPolicy: md.TouchPolicy,
+			HasPolicies: true,
+			Imported:    md.Imported,
+		}, true
+	}
+
+	if !errors.Is(err, piv.ErrMetadataUnsupported) {
+		return TokenSlotInfo{}, false
+	}
+
+	pub, certErr := pivCard.PublicKey(slot)
+	if certErr != nil {
+		return TokenSlotInfo{}, false
+	}
+
+	return TokenSlotInfo{Serial: serial, Slot: slot, PublicKey: pub}, true
+}
+
+// Describe renders a slot for a menu, on one line.
+func (t TokenSlotInfo) Describe() string {
+	out := fmt.Sprintf("YubiKey %d, slot %s — %s",
+		t.Serial, PIVSlotName(t.Slot), PublicKeyDescription(t.PublicKey))
+	if t.Imported {
+		out += " (imported)"
+	}
+	return out
+}
+
+// DescribePolicies renders the PIN and touch policies, or an empty string when
+// the card cannot report them.
+func (t TokenSlotInfo) DescribePolicies() string {
+	if !t.HasPolicies {
+		return ""
+	}
+	return fmt.Sprintf("PIN %s, touch %s",
+		piv.PINPolicyName(t.PINPolicy), piv.TouchPolicyName(t.TouchPolicy))
+}
+
+// UnattendedWarning returns a caution for a slot whose policies make an
+// unattended reseal awkward, or an empty string.
+func (t TokenSlotInfo) UnattendedWarning() string {
+	if !t.HasPolicies {
+		return ""
+	}
+	if t.TouchPolicy == piv.TouchPolicyAlways {
+		return "needs a touch for every signature, so the automatic reseal after an initramfs rebuild will not complete"
+	}
+	return ""
 }

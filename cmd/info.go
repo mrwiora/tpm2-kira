@@ -57,9 +57,9 @@ type SlotInfoJSON struct {
 // When nvramIndex is 0 it scans every default slot; otherwise it shows
 // only the requested index.
 func InfoCommand(tpmPath string, nvramIndex uint32, debug bool, jsonOutput bool) error {
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPMDevice(tpmPath)
 	if err != nil {
-		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+		return err
 	}
 	defer tpmDev.Close()
 

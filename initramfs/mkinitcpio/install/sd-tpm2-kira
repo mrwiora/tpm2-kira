@@ -51,7 +51,8 @@ build() {
     _report_measure_point
 
     if [[ ! -d /var/lib/tpm2-kira/keys ]]; then
-        warning "tpm2-kira: not configured yet; run 'tpm2-kira setup' and rebuild"
+        warning "tpm2-kira: no signing key yet; run 'tpm2-kira setup', then"
+        warning "tpm2-kira:   'tpm2-kira seal' to create a secret, then rebuild"
     fi
 }
 
@@ -66,9 +67,10 @@ The hook will:
 - Add tpm2-kira.service and enable it inside the image only
 - Start tpm2-kira in continuous run mode during boot
 
-Setup is NOT run from here: it generates a new TOTP secret and writes to TPM
-NVRAM, which must not happen while merely building an image. Run
-'tpm2-kira setup' once by hand, then rebuild.
+Neither setup nor seal is run from here. Sealing generates a new TOTP secret
+and writes to TPM NVRAM, which must not happen while merely building an image.
+Run 'tpm2-kira setup' once to create the signing key, then 'tpm2-kira seal' to
+create the secret, then rebuild.
 
 Post-generation hook (sd-tpm2-kira in /usr/lib/initcpio/post/):
   After the initramfs image is written, 'tpm2-kira reseal' is executed

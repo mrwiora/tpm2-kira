@@ -28,22 +28,26 @@ echo
 status=0
 
 echo "=== unit tests ==="
-go test ./... || status=1
+go test -count=1 ./... || status=1
 echo
 
 echo "=== integration tests (software TPM) ==="
-go test -tags=integration -timeout 10m ./... || status=1
+go test -count=1 -tags=integration -timeout 10m ./... || status=1
 echo
 
 echo "=== PC/SC tests (real pcscd, virtual reader) ==="
-go test -tags=pcsc -timeout 5m ./internal/pcsc/ || status=1
+go test -count=1 -tags=pcsc -timeout 5m ./internal/pcsc/ || status=1
 echo
 
 # Both simulators at once: a software TPM and a virtual YubiKey. This is the
 # only pass that exercises the whole feature — key reference, PC/SC transport,
 # PIV APDUs, TPM2_PolicySigned and the NVRAM write — without hardware.
 echo "=== YubiKey end-to-end (software TPM + virtual PIV card) ==="
-go test -tags="integration pcsc" -timeout 10m -run TestYubiKey -v . 2>&1 |
+# Everything in the root package that needs both simulators. The reader lock in
+# internal/virtualpiv makes the whole-tree form safe too, but naming the tests
+# keeps this pass quick and its output readable.
+go test -count=1 -tags="integration pcsc" -timeout 10m -run "TestYubiKey|TestSetup" -v \
+    ./test/integration/ 2>&1 |
     grep -E "^(=== RUN|--- |ok|FAIL)|_test.go:" || status=1
 
 exit $status

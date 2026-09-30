@@ -372,9 +372,9 @@ func stashUnwrittenBlob(index uint32, data []byte, cause error) error {
 // NVRAMList lists all defined NVRAM indices in the TPM
 func NVRAMList(tpmPath string, nvramIndex uint32, debug bool) error {
 	// Open TPM
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPMDevice(tpmPath)
 	if err != nil {
-		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+		return err
 	}
 	defer tpmDev.Close()
 
@@ -475,9 +475,9 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 	}
 
 	// Open TPM
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPMDevice(tpmPath)
 	if err != nil {
-		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+		return err
 	}
 	defer tpmDev.Close()
 
@@ -528,9 +528,9 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, debug bool) error {
 	}
 
 	// Multi-slot mode – discover populated slots, then delete each one.
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPMDevice(tpmPath)
 	if err != nil {
-		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+		return err
 	}
 	slots := FindPopulatedSlots(tpmDev, debug)
 	tpmDev.Close()
@@ -563,9 +563,9 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, debug bool) error {
 // NVRAMStatus shows detailed status of the specified NVRAM index
 func NVRAMStatus(tpmPath string, nvramIndex uint32, debug bool) error {
 	// Open TPM
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPMDevice(tpmPath)
 	if err != nil {
-		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+		return err
 	}
 	defer tpmDev.Close()
 

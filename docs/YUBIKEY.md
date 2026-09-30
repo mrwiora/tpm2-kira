@@ -185,7 +185,20 @@ rm /tmp/seal.pub
 ykman piv access change-pin
 ```
 
-Then register it with tpm2-kira:
+Then let setup find it. On a terminal it lists the keys on any connected token
+and offers them, with a key file as the default:
+
+```bash
+sudo tpm2-kira setup
+```
+
+Choosing the slot does the validation and caching, then prints the `seal` command
+to run next with the key reference filled in. Setup never asks when it is not run
+from a terminal, and `--yubikey` / `--local` skip the question outright. It needs
+no PIN — reading a public key from a slot does not require one.
+
+For an installation that already has `/var/lib/tpm2-kira/keys`, setup declines,
+so register the slot by hand instead and then reseal onto it:
 
 ```bash
 sudo tpm2-kira yubikey adopt --key 'yubikey:slot=9a'
@@ -667,8 +680,9 @@ With a local `pcscd` and `vsmartcard-vpcd` installed, the card passes alone are:
 
 ```bash
 make test-pcsc                                          # transport and PIV layer
-go test -tags="integration pcsc" -run TestYubiKey -v .  # end to end
-go test -tags="integration pcsc" ./...                  # everything
+# End to end, in ./test/integration/
+go test -tags="integration pcsc" -run "TestYubiKey|TestSetup" -v ./test/integration/
+go test -tags="integration pcsc" ./...                   # everything
 ```
 
 The virtual reader is a machine-wide resource and `go test ./...` runs packages
