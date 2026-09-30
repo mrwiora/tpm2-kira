@@ -60,7 +60,13 @@ sudo tpm2-kira setup
 tpm2-kira reveal
 ```
 
-`setup` creates an ECDSA P-256 key pair at `/var/lib/tpm2-kira/keys/` and seals a TOTP secret bound to PCRs 0 and 7. Scan the QR code it prints with your authenticator app.
+`setup` creates an ECDSA P-256 key pair at `/var/lib/tpm2-kira/keys/` and seals a
+TOTP secret bound to PCRs 0 and 7. Scan the QR code it prints with your
+authenticator app.
+
+If a YubiKey is plugged in, `setup` notices and offers to put the signing key on
+it instead — a key file remains the default, so pressing Enter keeps the
+behaviour above. See [Signing key on a YubiKey](#signing-key-on-a-yubikey).
 
 ## Installation
 
@@ -405,24 +411,64 @@ rm /tmp/seal.pub
 ykman piv access change-pin                  # the factory default is 123456
 ```
 
-**Register it.** `adopt` is read-only: it reports the slot's key and policies,
-checks that your TPM can load it for PolicySigned, and caches the public key so
-that later commands work with the token unplugged.
+**Then just run setup.** On a terminal it looks for connected tokens, lists the
+keys it finds, and offers them — a key file stays the default, so pressing Enter
+gives you the behaviour from [Quick Start](#quick-start):
+
+```
+Looking for a hardware token that could hold the signing key...
+
+The signing key authorises resealing after a firmware or kernel update.
+It is only needed then — never at boot — so it can live on a token that
+you unplug the rest of the time.
+
+Found these keys on connected tokens:
+  1) YubiKey 12345678, slot 9a (PIV Authentication) — ECDSA-P-256
+       PIN once per session, touch never
+
+Where should the signing key live?
+  [Enter]  a key file at /var/lib/tpm2-kira/keys/seal.key  (default)
+  [1]      the token slot above
+
+Choice [Enter]:
+```
+
+Choosing the slot validates it, checks your TPM can load the key for
+PolicySigned, caches the public key so later commands work with the token
+unplugged, and seals — no separate `adopt` step. Only the public key is written
+to disk.
+
+If a token is connected but none of its slots holds a key, setup prints the
+`ykman` commands above and lets you stop there to run them; nothing is created,
+so `setup` can simply be run again.
+
+Two flags skip the question, for scripts and for anyone who already knows:
+
+```bash
+sudo tpm2-kira setup --yubikey                  # first token found
+sudo tpm2-kira setup --yubikey 'yubikey:slot=9c'
+sudo tpm2-kira setup --local                    # a key file, no questions
+```
+
+Setup never asks when it is not run from a terminal — a package hook gets the
+key-file default silently, exactly as before.
+
+**Adopting a slot for an existing installation.** `setup` declines once
+`/var/lib/tpm2-kira/keys` exists, so to move an already-configured system onto a
+token, register the slot and reseal onto it:
 
 ```bash
 sudo tpm2-kira yubikey adopt --key 'yubikey:slot=9a'
-```
 
-**Seal against it.** The reference is stored in the blob, so later reseals need
-no flags.
-
-```bash
 export TPM2_KIRA_PIN=12345678
-
-sudo -E tpm2-kira seal --pcrs "0,7" \
+sudo -E tpm2-kira reseal \
     --privkey 'yubikey:serial=12345678;slot=9a' \
     --pubkey /var/lib/tpm2-kira/keys/seal.pub
 ```
+
+`adopt` is read-only: it reports the slot's key and policies, checks the TPM can
+load it, and caches the public key. Resealing preserves the TOTP secret, so your
+authenticator keeps working. Once it succeeds, shred the old key file.
 
 Already have a key in a slot — the one sbctl uses to sign your Secure Boot
 components, say? Skip the generation step and `adopt` it directly. Any key the

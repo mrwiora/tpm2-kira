@@ -272,3 +272,89 @@ func TestYubiKeyWrongTokenIsNamed(t *testing.T) {
 
 	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", nvramIndex)
 }
+
+// TestSetupWithYubiKeyFlag covers guided setup taking the token route without a
+// prompt, which is what --yubikey is for and what the tests can drive.
+func TestSetupWithYubiKeyFlag(t *testing.T) {
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+
+	attachToken(t, virtualpiv.Options{Slot: 0x9A, Serial: 12345678})
+	setPIN(t, "123456")
+
+	// Setup writes to /var/lib/tpm2-kira/keys and refuses if it exists, so
+	// this only runs where that is disposable — the test container.
+	if _, err := os.Stat("/var/lib/tpm2-kira/keys"); err == nil {
+		t.Skip("/var/lib/tpm2-kira/keys already exists; setup would decline")
+	}
+	t.Cleanup(func() { os.RemoveAll("/var/lib/tpm2-kira") })
+
+	stdout, stderr, err := runTPMKira(t, tpmPath,
+		"setup", "--nvram", "0x0180300d", "--yubikey", "yubikey:serial=12345678;slot=9a")
+	if err != nil {
+		t.Fatalf("Setup failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
+	}
+
+	for _, want := range []string{
+		"Setup Complete",
+		"yubikey:serial=12345678;slot=9a",
+		"No private key is written",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("setup output should contain %q, got:\n%s", want, stdout)
+		}
+	}
+
+	// Only the public key belongs on disk; a private key file would mean the
+	// token was not actually used.
+	if _, err := os.Stat("/var/lib/tpm2-kira/keys/seal.pub"); err != nil {
+		t.Errorf("the public key should have been cached: %v", err)
+	}
+	if _, err := os.Stat("/var/lib/tpm2-kira/keys/seal.key"); err == nil {
+		t.Error("setup wrote a private key file even though the key is on the token")
+	}
+
+	testReveal(t, tpmPath, "0x0180300d")
+
+	// And the blob must point at the token, so a later reseal needs no flags.
+	stdout, _, err = runTPMKira(t, tpmPath, "info", "--nvram", "0x0180300d", "--json")
+	if err != nil {
+		t.Fatalf("info failed: %v", err)
+	}
+	if !strings.Contains(stdout, "yubikey:") {
+		t.Errorf("the blob should record a token reference, got:\n%s", stdout)
+	}
+
+	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", "0x0180300d")
+}
+
+// TestSetupLocalIgnoresAttachedToken checks that the default is unchanged: with
+// --local, and with no terminal to prompt at, a connected token is not used.
+func TestSetupLocalIgnoresAttachedToken(t *testing.T) {
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+
+	attachToken(t, virtualpiv.Options{Slot: 0x9A, Serial: 12345678})
+
+	if _, err := os.Stat("/var/lib/tpm2-kira/keys"); err == nil {
+		t.Skip("/var/lib/tpm2-kira/keys already exists; setup would decline")
+	}
+	t.Cleanup(func() { os.RemoveAll("/var/lib/tpm2-kira") })
+
+	stdout, stderr, err := runTPMKira(t, tpmPath,
+		"setup", "--nvram", "0x0180300e", "--local")
+	if err != nil {
+		t.Fatalf("Setup failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
+	}
+
+	if strings.Contains(stdout, "yubikey:") {
+		t.Errorf("--local should not have used the token, got:\n%s", stdout)
+	}
+	if _, err := os.Stat("/var/lib/tpm2-kira/keys/seal.key"); err != nil {
+		t.Errorf("a signing key file should have been generated: %v", err)
+	}
+
+	testReveal(t, tpmPath, "0x0180300e")
+
+	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", "0x0180300e")
+}

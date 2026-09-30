@@ -185,7 +185,19 @@ rm /tmp/seal.pub
 ykman piv access change-pin
 ```
 
-Then register it with tpm2-kira:
+Then let setup find it. On a terminal it lists the keys on any connected token
+and offers them, with a key file as the default:
+
+```bash
+sudo tpm2-kira setup
+```
+
+Choosing the slot does the validation, caching and sealing in one go. Setup never
+asks when it is not run from a terminal, and `--yubikey` / `--local` skip the
+question outright.
+
+For an installation that already has `/var/lib/tpm2-kira/keys`, setup declines,
+so register the slot by hand instead and then reseal onto it:
 
 ```bash
 sudo tpm2-kira yubikey adopt --key 'yubikey:slot=9a'

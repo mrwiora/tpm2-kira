@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -171,18 +172,42 @@ func promptForPIN() (string, error) {
 
 	fmt.Fprint(os.Stderr, "YubiKey PIN: ")
 
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	line, err := ReadLine()
 	if err != nil && line == "" {
 		return "", fmt.Errorf("failed to read PIN: %w", err)
 	}
 
-	pin := strings.TrimRight(line, "\r\n")
-	if pin == "" {
+	if line == "" {
 		return "", fmt.Errorf("no PIN entered")
 	}
 
-	return pin, nil
+	return line, nil
 }
+
+// stdinReader is shared by every prompt in the process.
+//
+// A bufio.Reader may read ahead, so a second one wrapping os.Stdin would start
+// after whatever the first had already buffered — losing input typed between
+// two prompts. Setup asks a question and then the PIN prompt asks another, so
+// they have to read through the same buffer.
+var (
+	stdinOnce   sync.Once
+	stdinBuffer *bufio.Reader
+)
+
+// ReadLine reads one line from standard input, without the line ending.
+func ReadLine() (string, error) {
+	stdinOnce.Do(func() {
+		stdinBuffer = bufio.NewReader(os.Stdin)
+	})
+
+	line, err := stdinBuffer.ReadString('\n')
+	return strings.TrimRight(line, "\r\n"), err
+}
+
+// IsInteractive reports whether standard input is a terminal, so a prompt has
+// somebody to answer it. A package hook has not.
+func IsInteractive() bool { return isTerminal(int(os.Stdin.Fd())) }
 
 func isTerminal(fd int) bool {
 	_, err := unix.IoctlGetTermios(fd, unix.TCGETS)

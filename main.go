@@ -105,12 +105,22 @@ func runSetup(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	yubikey := fs.String("yubikey", "", "Use a YubiKey PIV slot for the signing key, e.g. 'yubikey:slot=9a' or just 'yubikey:'")
+	local := fs.Bool("local", false, "Use a signing key file without asking about a token")
+	pinFile := fs.String("pin-file", "", "File holding the YubiKey PIN (mode 0600)")
 
 	fs.Parse(args)
 
+	cmd.PINFileSetting = *pinFile
+
 	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
 
-	if err := cmd.Setup(*tpm, sealIndex, *debug); err != nil {
+	choice := cmd.SetupKeyChoice{Local: *local, TokenRef: *yubikey}
+	if choice.Local && choice.TokenRef != "" {
+		fail(fmt.Errorf("--local and --yubikey ask for opposite things; pick one"))
+	}
+
+	if err := cmd.Setup(*tpm, sealIndex, choice, *debug); err != nil {
 		fail(err)
 	}
 }
@@ -364,6 +374,15 @@ GLOBAL OPTIONS:
                   When omitted, commands automatically discover and operate on
                   all populated slots in the default range.
   --debug         Enable debug output
+
+SETUP OPTIONS:
+  --yubikey [REF]    Put the signing key on a YubiKey PIV slot instead of in a
+                     file. With no reference, the first token found is used.
+                     Without this flag, setup offers any connected token when
+                     run from a terminal, and defaults to a key file.
+  --local            Use a key file without asking about a token. This is what
+                     setup does anyway when it is not run from a terminal.
+  --pin-file PATH    File holding the YubiKey PIN (mode 0600).
 
 SEAL OPTIONS:
   --pcrs INDICES     PCR indices with optional source suffix (default: 0,2,7)
