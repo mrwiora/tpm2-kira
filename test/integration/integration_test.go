@@ -1588,3 +1588,104 @@ func isTOTPCode(s string) bool {
 	}
 	return true
 }
+
+// TestNVRAMDeleteRejectsPositionalSlot is a regression test for a reported data
+// loss. "tpm2-kira nvram delete 0" reads as naming slot 0, but the flag package
+// left the 0 in Args() where it was discarded, --nvram went unset, and the
+// command fell through to deleting every populated slot.
+func TestNVRAMDeleteRejectsPositionalSlot(t *testing.T) {
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+
+	const first = "0x01803016"
+	const second = "0x01803017"
+
+	for _, index := range []string{first, second} {
+		if _, _, err := runTPMKira(t, tpmPath, "seal",
+			"--nvram", index, "--pcrs", testPCRs,
+			"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
+			t.Fatalf("Seal into %s failed: %v", index, err)
+		}
+	}
+
+	// The reported command. It must refuse, and change nothing.
+	stdout, stderr, err := runTPMKira(t, tpmPath, "nvram", "delete", "0")
+	if err != nil {
+		t.Fatalf("expected exit 0: %v", err)
+	}
+
+	combined := stdout + stderr
+	if !strings.Contains(combined, "does not take positional arguments") {
+		t.Errorf("a positional slot should be refused, got:\n%s", combined)
+	}
+	if !strings.Contains(combined, "--nvram 0") {
+		t.Errorf("the message should suggest the flag, got:\n%s", combined)
+	}
+
+	for _, index := range []string{first, second} {
+		if !slotExists(t, tpmPath, index) {
+			t.Errorf("%s was deleted by a command that should have been refused", index)
+		}
+	}
+
+	// Omitting --nvram entirely must not wipe everything either.
+	stdout, stderr, _ = runTPMKira(t, tpmPath, "nvram", "delete")
+	combined = stdout + stderr
+	if !strings.Contains(combined, "needs to know what to delete") {
+		t.Errorf("a bare delete should ask what to delete, got:\n%s", combined)
+	}
+	if !strings.Contains(combined, "--all") {
+		t.Errorf("the message should name --all, got:\n%s", combined)
+	}
+
+	for _, index := range []string{first, second} {
+		if !slotExists(t, tpmPath, index) {
+			t.Errorf("%s was deleted by a bare 'nvram delete'", index)
+		}
+	}
+
+	// Naming one slot deletes exactly that one.
+	if _, _, err := runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", first); err != nil {
+		t.Fatalf("deleting one slot failed: %v", err)
+	}
+	if slotExists(t, tpmPath, first) {
+		t.Errorf("%s should be gone", first)
+	}
+	if !slotExists(t, tpmPath, second) {
+		t.Errorf("%s should have been left alone", second)
+	}
+
+	// --all is the explicit way to wipe the rest. Not a terminal here, so no
+	// prompt: the flag is the opt-in.
+	if _, _, err := runTPMKira(t, tpmPath, "nvram", "delete", "--all"); err != nil {
+		t.Fatalf("--all failed: %v", err)
+	}
+	if slotExists(t, tpmPath, second) {
+		t.Errorf("%s should be gone after --all", second)
+	}
+}
+
+// slotExists reports whether an NVRAM index is defined.
+//
+// 'nvram status' prints a "Data Size:" line for a populated index and fails with
+// "does not exist" otherwise. The exit status is always 0, so the output is the
+// only signal.
+func slotExists(t *testing.T, tpmPath, index string) bool {
+	t.Helper()
+
+	stdout, stderr, err := runTPMKira(t, tpmPath, "nvram", "status", "--nvram", index)
+	if err != nil {
+		t.Fatalf("nvram status for %s could not run: %v", index, err)
+	}
+
+	combined := stdout + stderr
+	switch {
+	case strings.Contains(combined, "Data Size:"):
+		return true
+	case strings.Contains(combined, "does not exist"):
+		return false
+	default:
+		t.Fatalf("cannot tell whether %s exists from:\n%s", index, combined)
+		return false
+	}
+}

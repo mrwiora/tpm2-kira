@@ -8,6 +8,42 @@ formats and CLI flags may change without migration paths.
 
 ---
 
+## Documentation
+
+### The README defers to topic documents
+
+The README had grown to 1122 lines, more than half of it reference material: PCR
+sources and the measure point, the Arch and Debian early-boot procedures, custom
+signing keys and sbctl sharing, the eventlog calculator, the source tree. Anyone
+arriving at the project had to scroll past all of it to find out what tpm2-kira
+does.
+
+The reference material now lives beside the rest in `docs/`, with the README
+keeping the parts someone reads once — what it is, how it works, install, the
+commands, a basic seal — and pointing at the detail:
+
+    docs/PCR-SELECTION.md   choosing PCRs: sources, weak selections, the measure
+                            point, event logs without SHA-256 digests
+    docs/SIGNING-KEYS.md    using your own key, sharing one with sbctl, the token
+    docs/EARLY-BOOT.md      showing a code before unlock, on Arch and on Debian
+    docs/DIAGNOSTICS.md     PCR mismatches, the eventlog calculator, recovery
+    docs/CODE-LAYOUT.md     where things live in the source
+
+That took the README from 1122 lines to 505 without losing anything: every
+heading that disappeared is accounted for under a clearer name in one of the new
+documents.
+
+`PLAN-YUBIKEY.md` moved to `docs/` too, leaving the repository root to the files
+that belong there.
+
+Two things that had to follow. Links written relative to the repository root
+break when the text moves down a directory, so they were rewritten. And the
+packages shipped only `README.md` as documentation — now that it defers to the
+`docs/` tree, both the `.deb` and the AUR package install that tree as well,
+otherwise the links would dangle for anyone reading the installed copy.
+
+---
+
 ## Build
 
 ### Every build path is static, not just Debian's
@@ -60,6 +96,39 @@ interleaved with logic throughout. Splitting those by layer would need either a
 shared types package or the extraction of printing from nearly every file, for
 less benefit than it cost. The README states the rule so new files land in the
 right place.
+
+---
+
+## Commands
+
+### nvram delete no longer wipes every slot by default
+
+Reported after it destroyed two sealed secrets:
+
+    tpm2-kira nvram delete 0
+    Found 2 sealed slot(s) to delete
+    ...
+    All 2 slot(s) deleted successfully
+
+`0` was a positional argument. Go's flag package stops at the first non-flag and
+leaves the rest in `Args()`, which every command here discarded, so the `0` was
+dropped, `--nvram` went unset, and delete fell through to its every-slot path.
+The command read exactly as though it named slot 0.
+
+Two fixes, because there were two faults.
+
+Positional arguments are now refused rather than ignored, for every command. The
+message quotes the argument back and guesses the option — `--nvram` for something
+that looks like a slot or index, `--pcrs` for something that parses as a PCR
+selection — so `tpm2-kira seal 0,7` is corrected instead of silently sealing
+against the default PCRs, which was the same fault waiting to happen somewhere
+less visible.
+
+Deleting every slot is now something to ask for. `nvram delete` with neither
+`--nvram` nor `--all` refuses and shows both; `--all` lists the slots it is about
+to destroy and, when run from a terminal, requires typing `yes`. Deleting a sealed
+secret cannot be undone, so it should not have been what the command did when an
+option went missing.
 
 ---
 
