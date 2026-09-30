@@ -115,29 +115,15 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		return fmt.Errorf("sealed blob does not contain a signed branch digest. Re-seal with current version: tpm2-kira seal")
 	}
 
-	// ── Resolve key paths: CLI flags take priority, then blob paths ──
-	// The blob stores the filesystem paths used at seal time so that reseal
-	// can locate the keys automatically when the user doesn't override them.
+	// ── Resolve key paths: CLI flags, then the well-known paths ──
+	// The blob deliberately records no key location. It used to, and that copy
+	// was consulted before the one on disk, so moving a key to another token
+	// left reseal hunting for the old one with no local way to correct it. The
+	// well-known path is now the only stored answer, and it holds either the key
+	// or a reference naming the token — see docs/SIGNING-KEYS.md.
 	effectivePrivKeyPath := privKeyPath
 	effectivePubKeyPath := pubKeyPath
 
-	if effectivePrivKeyPath == "" && !sealedBlob.Payload.PrivateKeyRef.IsZero() {
-		effectivePrivKeyPath = sealedBlob.Payload.PrivateKeyRef.String()
-		if debug {
-			fmt.Printf("Using private key path from blob: %s\n", effectivePrivKeyPath)
-		}
-	}
-	if effectivePubKeyPath == "" && sealedBlob.Payload.PublicKeyRef.Kind == KeyRefFile && sealedBlob.Payload.PublicKeyRef.Path != "" {
-		effectivePubKeyPath = sealedBlob.Payload.PublicKeyRef.Path
-		if debug {
-			fmt.Printf("Using public key path from blob: %s\n", effectivePubKeyPath)
-		}
-	}
-
-	// Fallback: try the well-known default key paths if nothing was
-	// resolved from the CLI flags or the blob.  This covers the common
-	// case where a slot was sealed with only --pubkey (no --privkey) but
-	// the default key pair created by 'setup' is still on disk.
 	if effectivePrivKeyPath == "" {
 		if _, err := os.Stat(DefaultPrivateKeyPath); err == nil {
 			effectivePrivKeyPath = DefaultPrivateKeyPath
@@ -490,13 +476,10 @@ func checkKeyIdentity(key SigningKey, blob *SealedBlob) error {
 	msg := fmt.Sprintf("the signing key is not the one this slot was sealed against.\n"+
 		"  Sealed with: fingerprint %x", blob.Payload.KeyFingerprint[:8])
 
-	if blob.Payload.TokenSerial != 0 {
-		msg += fmt.Sprintf(" on YubiKey %d", blob.Payload.TokenSerial)
-	}
-	if !blob.Payload.PrivateKeyRef.IsZero() {
-		msg += fmt.Sprintf(" (%s)", blob.Payload.PrivateKeyRef)
-	}
-
+	// No token serial or slot to name: the blob no longer records where the key
+	// was, and saying where it is now would describe the wrong key. The
+	// fingerprints are the comparable thing, and 'yubikey list' prints the one
+	// on each connected token.
 	msg += fmt.Sprintf("\n  Offered:     fingerprint %x (%s)", fingerprint[:8], key.Description())
 	msg += "\n  Resealing with this key would fail inside the TPM: the sealed object's\n" +
 		"  PolicySigned branch is bound to the other key's name."

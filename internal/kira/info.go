@@ -1,6 +1,7 @@
 package kira
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -256,43 +257,42 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 
 // ── sub-section helpers ─────────────────────────────────────────────────
 
+// printSigningKeyInfo describes the signing key by identity alone.
+//
+// The blob records a fingerprint and nothing else about the key: not where it
+// was, not which token it came from. So there is no "reference" line to print
+// any more, and the fingerprint shown here is what 'yubikey list' prints for
+// each connected token — matching the two is how an operator confirms they are
+// holding the right one.
+//
+// The fingerprint comes out of the blob, so this works with the token unplugged
+// and never asks for a PIN. The cached public key is consulted only to name the
+// algorithm, which the blob does not carry.
 func printSigningKeyInfo(sub string, blob *SealedBlob) {
-	ref := blob.Payload.PrivateKeyRef
-	if ref.IsZero() {
-		ref = blob.Payload.PublicKeyRef
-	}
-
-	// Everything shown here comes out of the blob itself, so info works with
-	// the token unplugged and never asks for a PIN.
 	fingerprint := blob.Payload.KeyFingerprint
 
 	description := ""
-	if blob.Payload.PublicKeyRef.Kind == KeyRefFile && blob.Payload.PublicKeyRef.Path != "" {
-		if pubKey, _, err := LoadSigningPublicKeyFromPEM(blob.Payload.PublicKeyRef.Path); err == nil {
+	if pubKey, _, err := LoadSigningPublicKeyFromPEM(DefaultPublicKeyPath); err == nil {
+		cached, fpErr := KeyFingerprint(pubKey)
+
+		// Only describe the cached key when it is demonstrably the one this
+		// blob was sealed against. A key file replaced since sealing would
+		// otherwise have info label the wrong algorithm with a straight face.
+		if fpErr == nil && len(fingerprint) > 0 && bytes.Equal(cached, fingerprint) {
 			description = PublicKeyDescription(pubKey)
-			if len(fingerprint) == 0 {
-				fingerprint, _ = KeyFingerprint(pubKey)
-			}
+		} else if len(fingerprint) == 0 && fpErr == nil {
+			description = PublicKeyDescription(pubKey)
+			fingerprint = cached
 		}
 	}
 
 	switch {
 	case description != "" && len(fingerprint) > 0:
-		fmt.Printf("%s%sSigning Key: %s (fingerprint: %x)\n", sub, branch(false), description, fingerprint[:8])
+		fmt.Printf("%s%sSigning Key: %s (fingerprint: %x)\n", sub, branch(true), description, fingerprint[:8])
 	case len(fingerprint) > 0:
-		fmt.Printf("%s%sSigning Key: fingerprint %x\n", sub, branch(false), fingerprint[:8])
-	case ref.IsZero():
-		fmt.Printf("%s%sSigning Key: not recorded in this blob\n", sub, branch(true))
-		return
+		fmt.Printf("%s%sSigning Key: fingerprint %x\n", sub, branch(true), fingerprint[:8])
 	default:
-		fmt.Printf("%s%sSigning Key: not recorded in this blob\n", sub, branch(false))
-	}
-
-	last := blob.Payload.TokenSerial == 0
-	fmt.Printf("%s%sSigning Key Reference: %s\n", sub, branch(last), ref)
-
-	if blob.Payload.TokenSerial != 0 {
-		fmt.Printf("%s%sToken Serial: %d\n", sub, branch(true), blob.Payload.TokenSerial)
+		fmt.Printf("%s%sSigning Key: not recorded in this blob\n", sub, branch(true))
 	}
 }
 

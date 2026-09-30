@@ -1,6 +1,7 @@
 package kira
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -160,34 +161,108 @@ func TestInstallKeyReferenceRefusesToDestroyAKey(t *testing.T) {
 	}
 }
 
-func TestMarshalKeyReferenceRejectsAFilePath(t *testing.T) {
-	if _, err := MarshalKeyReference(KeyRef{Kind: KeyRefFile, Path: "/tmp/x.key"}); err == nil {
-		t.Error("a file reference was accepted; only a token can be pointed at")
+func TestMarshalKeyReferenceRejectsNothingToPointAt(t *testing.T) {
+	if _, err := MarshalKeyReference(KeyRef{}); err == nil {
+		t.Error("an empty reference was accepted")
+	}
+	if _, err := MarshalKeyReference(KeyRef{Kind: KeyRefFile}); err == nil {
+		t.Error("a file reference with no path was accepted")
 	}
 }
 
-// A reference file naming something other than a token would otherwise recurse
-// or resolve to itself.
-func TestReadKeyReferenceRejectsANonTokenTarget(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "seal.key")
+// A reference may name another file, which is what keeps the well-known path a
+// complete answer for a key shared with something else, such as sbctl.
+func TestKeyReferenceCanNameAFile(t *testing.T) {
+	dir := t.TempDir()
+	shared := filepath.Join(dir, "db.key")
+	writeRealKey(t, shared)
 
-	bad := pem.EncodeToMemory(&pem.Block{
+	refPath := filepath.Join(dir, "seal.key")
+	if err := InstallKeyReference(refPath, KeyRef{Kind: KeyRefFile, Path: shared}); err != nil {
+		t.Fatalf("InstallKeyReference failed: %v", err)
+	}
+
+	got, ok, err := ReadKeyReference(refPath)
+	if err != nil || !ok {
+		t.Fatalf("ReadKeyReference: ok=%v, err=%v", ok, err)
+	}
+	if got.Kind != KeyRefFile || got.Path != shared {
+		t.Errorf("read back %+v, want a file reference to %s", got, shared)
+	}
+
+	data, err := os.ReadFile(refPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), shared) {
+		t.Errorf("the file does not name the target readably:\n%s", data)
+	}
+
+	// Opening the well-known path must reach the shared key itself.
+	opened, err := OpenSigningKey(KeyRef{Kind: KeyRefFile, Path: refPath}, NewPINProvider(""), false)
+	if err != nil {
+		t.Fatalf("the reference was not followed to the key: %v", err)
+	}
+	defer opened.Close()
+
+	direct, err := LoadSigningPrivateKeyFromPEM(shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFP, _ := KeyFingerprint(direct.Public())
+	gotFP, _ := KeyFingerprint(opened.Public())
+	if !bytes.Equal(gotFP, wantFP) {
+		t.Error("the reference resolved to a different key than the one it names")
+	}
+}
+
+// A reference naming itself would recurse. Only one level is ever followed, so
+// the loop is refused where it can be seen.
+func TestReadKeyReferenceRejectsSelfReference(t *testing.T) {
+	dir := t.TempDir()
+	refPath := filepath.Join(dir, "seal.key")
+
+	if err := os.WriteFile(refPath, pem.EncodeToMemory(&pem.Block{
 		Type:  KeyReferencePEMType,
-		Bytes: []byte("/var/lib/tpm2-kira/keys/seal.key"),
-	})
-	if err := os.WriteFile(path, bad, 0o644); err != nil {
+		Bytes: []byte(refPath),
+	}), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	_, ok, err := ReadKeyReference(path)
+	_, ok, err := ReadKeyReference(refPath)
 	if err == nil {
-		t.Fatal("a reference to a file path was accepted")
+		t.Fatal("a self-reference was accepted")
 	}
 	if ok {
 		t.Error("ok should be false when the reference is unusable")
 	}
-	if !strings.Contains(err.Error(), "rather than a token slot") {
+	if !strings.Contains(err.Error(), "pointing at itself") {
 		t.Errorf("the error does not explain the problem: %v", err)
+	}
+}
+
+// A reference pointing at a second reference file resolves one level and then
+// treats the target as key material, so it fails on the target rather than
+// looping.
+func TestKeyReferenceFollowsOnlyOneLevel(t *testing.T) {
+	dir := t.TempDir()
+
+	second := filepath.Join(dir, "second.key")
+	if err := InstallKeyReference(second, tokenRef()); err != nil {
+		t.Fatal(err)
+	}
+
+	first := filepath.Join(dir, "seal.key")
+	if err := InstallKeyReference(first, KeyRef{Kind: KeyRefFile, Path: second}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := OpenSigningKey(KeyRef{Kind: KeyRefFile, Path: first}, NewPINProvider(""), false)
+	if err == nil {
+		t.Fatal("a chain of reference files should not resolve")
+	}
+	if !strings.Contains(err.Error(), second) {
+		t.Errorf("the error should name the target it gave up on, got: %v", err)
 	}
 }
 

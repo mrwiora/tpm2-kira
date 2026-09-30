@@ -58,16 +58,12 @@ func NVRAMRestore(tpmPath string, index uint32, fromPath, keyRefStr string, forc
 	}
 
 	// ── Resolve the signing key ──
-	// The write policy on the index is PolicySigned, so restoring needs the
-	// key just as sealing did. The blob names it, which is why v9 stores a
-	// reference rather than a bare path.
+	// The write policy on the index is PolicySigned, so restoring needs the key
+	// just as sealing did. The blob does not say where it is — restoring onto a
+	// rebuilt machine is exactly the case where a recorded path or token serial
+	// would be stale — so it comes from --privkey or the well-known path, and
+	// the fingerprint in the blob is what confirms it is the right key.
 	effectiveRef := keyRefStr
-	if effectiveRef == "" && !blob.Payload.PrivateKeyRef.IsZero() {
-		effectiveRef = blob.Payload.PrivateKeyRef.String()
-		if debug {
-			fmt.Printf("Using the key reference recorded in the blob: %s\n", effectiveRef)
-		}
-	}
 	if effectiveRef == "" {
 		if _, statErr := os.Stat(DefaultPrivateKeyPath); statErr == nil {
 			effectiveRef = DefaultPrivateKeyPath

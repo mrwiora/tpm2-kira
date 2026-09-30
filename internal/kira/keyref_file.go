@@ -35,6 +35,22 @@ var ErrRealKeyPresent = errors.New("a private key is already stored at this path
 // referenceFilePreamble explains the file to whoever cats it. pem.Decode skips
 // everything before the BEGIN line, so this is free.
 func referenceFilePreamble(ref KeyRef) string {
+	if ref.Kind == KeyRefFile {
+		return fmt.Sprintf(`# tpm2-kira signing key reference — this file is NOT a private key.
+#
+# The signing key is the file at:
+#
+#     %s
+#
+# It is pointed at from here so that commands which take no --privkey, such as
+# the reseal hook, still find it. That is the case when the key is shared with
+# something else, for example an sbctl Secure Boot key.
+#
+# Deleting this file loses only the pointer, not the key: pass the path above to
+# --privkey, or write this file again.
+`, ref.Path)
+	}
+
 	return fmt.Sprintf(`# tpm2-kira signing key reference — this file is NOT a private key.
 #
 # The signing key lives on a hardware token:
@@ -49,10 +65,22 @@ func referenceFilePreamble(ref KeyRef) string {
 `, ref)
 }
 
-// MarshalKeyReference encodes a token reference in PEM form.
+// MarshalKeyReference encodes a reference in PEM form.
+//
+// A token slot is the common case, but a filesystem path is allowed too, and it
+// is what makes the well-known path a complete answer: a key shared with sbctl
+// lives at /var/lib/sbctl/keys/db/db.key, and the reseal hook passes no
+// --privkey. Before this, such a setup depended on the location recorded in the
+// blob, which v10 removed for good reasons — so the local file has to be able to
+// express it.
 func MarshalKeyReference(ref KeyRef) ([]byte, error) {
-	if ref.Kind != KeyRefYubiKey {
-		return nil, fmt.Errorf("only a token-held key can be recorded as a reference, got %v", ref)
+	switch {
+	case ref.IsZero():
+		return nil, fmt.Errorf("cannot record an empty key reference")
+	case ref.Kind == KeyRefFile && ref.Path == "":
+		return nil, fmt.Errorf("cannot record a file reference with no path")
+	case ref.Kind != KeyRefYubiKey && ref.Kind != KeyRefFile:
+		return nil, fmt.Errorf("cannot record key reference kind %d", ref.Kind)
 	}
 
 	block := pem.EncodeToMemory(&pem.Block{
@@ -89,8 +117,16 @@ func ReadKeyReference(path string) (ref KeyRef, ok bool, err error) {
 		return KeyRef{}, false, fmt.Errorf("%s is a key reference file, but its contents are unusable: %w", path, parseErr)
 	}
 
-	if parsed.Kind != KeyRefYubiKey {
-		return KeyRef{}, false, fmt.Errorf("%s is a key reference file, but it names %q rather than a token slot", path, string(block.Bytes))
+	// A reference naming itself, or another reference file, would loop. Only one
+	// level is ever followed, and the obvious self-reference is caught here so
+	// the error names the real problem rather than a missing key.
+	if parsed.Kind == KeyRefFile {
+		if parsed.Path == "" {
+			return KeyRef{}, false, fmt.Errorf("%s is a key reference file, but it names no path", path)
+		}
+		if sameFile(parsed.Path, path) {
+			return KeyRef{}, false, fmt.Errorf("%s is a key reference file pointing at itself", path)
+		}
 	}
 
 	return parsed, true, nil
@@ -130,4 +166,20 @@ func InstallKeyReference(path string, ref KeyRef) error {
 	}
 
 	return nil
+}
+
+// sameFile reports whether two paths name the same file, resolving symlinks
+// where it can and falling back to a lexical comparison where it cannot.
+func sameFile(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+
+	infoA, errA := os.Stat(a)
+	infoB, errB := os.Stat(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+
+	return os.SameFile(infoA, infoB)
 }

@@ -1,6 +1,7 @@
 package kira
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -342,48 +343,28 @@ func hexString(b []byte) string {
 	return string(out)
 }
 
-// TestBlobKeyRefRoundTrip covers the v9 key reference fields, including a
-// token reference, which is the case the string-only v8 field could not hold.
-func TestBlobKeyRefRoundTrip(t *testing.T) {
+// TestBlobKeyIdentityRoundTrip covers what v10 records about the signing key:
+// a fingerprint, and nothing about where that key lives. The v9 reference and
+// serial fields are gone, along with the kind-byte cross-check they needed.
+func TestBlobKeyIdentityRoundTrip(t *testing.T) {
 	tests := []struct {
 		name    string
-		pub     KeyRef
-		priv    KeyRef
-		serial  uint32
 		fingerp []byte
 	}{
-		{
-			name: "file key, nothing recorded about identity",
-			pub:  KeyRef{Kind: KeyRefFile, Path: "/var/lib/tpm2-kira/keys/seal.pub"},
-			priv: KeyRef{Kind: KeyRefFile, Path: "/var/lib/tpm2-kira/keys/seal.key"},
-		},
-		{
-			name:    "token key with serial and fingerprint",
-			pub:     KeyRef{Kind: KeyRefFile, Path: "/var/lib/tpm2-kira/keys/seal.pub"},
-			priv:    KeyRef{Kind: KeyRefYubiKey, Serial: 12345678, Slot: 0x9C},
-			serial:  12345678,
-			fingerp: make([]byte, 32),
-		},
-		{
-			name: "token reference without a serial",
-			priv: KeyRef{Kind: KeyRefYubiKey, Slot: 0x9A},
-		},
-		{
-			name: "no references at all",
-		},
+		{name: "nothing recorded about identity"},
+		{name: "a full SHA-256 fingerprint", fingerp: bytes.Repeat([]byte{0x5A}, 32)},
+		{name: "a short fingerprint", fingerp: []byte{0x01, 0x02, 0x03}},
+		{name: "the longest fingerprint allowed", fingerp: bytes.Repeat([]byte{0xFF}, MaxKeyFingerprintLen)},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			payload := SealedBlobPayload{
-				AppVersion:         "v9-test",
+				AppVersion:         "v10-test",
 				Public:             []byte("pub"),
 				Private:            []byte("priv"),
 				PCRDigests:         []PCRDigestPair{{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}}},
 				SignedBranchDigest: make([]byte, 32),
-				PublicKeyRef:       tc.pub,
-				PrivateKeyRef:      tc.priv,
-				TokenSerial:        tc.serial,
 				KeyFingerprint:     tc.fingerp,
 			}
 
@@ -397,52 +378,57 @@ func TestBlobKeyRefRoundTrip(t *testing.T) {
 				t.Fatalf("UnmarshalPayload failed: %v", err)
 			}
 
-			if decoded.PublicKeyRef != tc.pub {
-				t.Errorf("PublicKeyRef = %+v, want %+v", decoded.PublicKeyRef, tc.pub)
-			}
-			if decoded.PrivateKeyRef != tc.priv {
-				t.Errorf("PrivateKeyRef = %+v, want %+v", decoded.PrivateKeyRef, tc.priv)
-			}
-			if decoded.TokenSerial != tc.serial {
-				t.Errorf("TokenSerial = %d, want %d", decoded.TokenSerial, tc.serial)
-			}
-			if len(decoded.KeyFingerprint) != len(tc.fingerp) {
-				t.Errorf("KeyFingerprint length = %d, want %d", len(decoded.KeyFingerprint), len(tc.fingerp))
+			if !bytes.Equal(decoded.KeyFingerprint, tc.fingerp) {
+				t.Errorf("KeyFingerprint = %x, want %x", decoded.KeyFingerprint, tc.fingerp)
 			}
 		})
 	}
 }
 
-// TestBlobRejectsInconsistentKeyRef checks the cross-validation between the
-// kind byte and the reference string. They encode the same fact twice, so a
-// disagreement means the blob was tampered with or written by something
-// confused — either way it must not be acted on.
-func TestBlobRejectsInconsistentKeyRef(t *testing.T) {
-	payload := SealedBlobPayload{
-		AppVersion:         "v9-test",
-		Public:             []byte("pub"),
-		Private:            []byte("priv"),
-		PCRDigests:         []PCRDigestPair{{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}}},
-		SignedBranchDigest: make([]byte, 32),
-		PrivateKeyRef:      KeyRef{Kind: KeyRefYubiKey, Slot: 0x9A},
-	}
-
-	encoded, err := payload.MarshalPayload()
+// TestBlobCarriesNoKeyLocation is the point of the v10 bump: sealing the same
+// key from a file and from a token must produce the same payload, because where
+// a key lives is local state and does not belong in a portable artifact.
+func TestBlobCarriesNoKeyLocation(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("MarshalPayload failed: %v", err)
+		t.Fatal(err)
+	}
+	fingerprint, err := KeyFingerprint(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	// Find the kind byte of the private reference and claim it is a file.
-	marker := []byte(YubiKeyRefScheme)
-	idx := indexOf(encoded, marker)
-	if idx < 3 {
-		t.Fatalf("could not locate the token reference in the encoded payload")
+	payload := func() SealedBlobPayload {
+		return SealedBlobPayload{
+			AppVersion:         "v10-test",
+			Public:             []byte("pub"),
+			Private:            []byte("priv"),
+			PCRDigests:         []PCRDigestPair{{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}}},
+			SignedBranchDigest: make([]byte, 32),
+			KeyFingerprint:     fingerprint,
+		}
 	}
-	tampered := append([]byte{}, encoded...)
-	tampered[idx-3] = byte(KeyRefFile)
 
-	if _, err := UnmarshalPayload(tampered); err == nil {
-		t.Error("expected a blob whose kind byte contradicts its reference string to be rejected")
+	// There is no field left to express "on a token" in, which is the
+	// invariant: the two encodings cannot differ.
+	filePayload := payload()
+	fromFile, err := filePayload.MarshalPayload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenPayload := payload()
+	fromToken, err := tokenPayload.MarshalPayload()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(fromFile, fromToken) {
+		t.Error("the payload differs by where the key is held; v10 is supposed to make that unrepresentable")
+	}
+
+	// And no encoded payload may contain a token reference scheme.
+	if indexOf(fromToken, []byte(YubiKeyRefScheme)) >= 0 {
+		t.Error("the payload contains a token reference, which v10 removed")
 	}
 }
 
@@ -479,11 +465,7 @@ func TestCheckKeyIdentity(t *testing.T) {
 		t.Fatalf("KeyFingerprint failed: %v", err)
 	}
 
-	blob := &SealedBlob{Payload: SealedBlobPayload{
-		KeyFingerprint: fingerprint,
-		TokenSerial:    12345678,
-		PrivateKeyRef:  KeyRef{Kind: KeyRefYubiKey, Serial: 12345678, Slot: 0x9A},
-	}}
+	blob := &SealedBlob{Payload: SealedBlobPayload{KeyFingerprint: fingerprint}}
 
 	if err := checkKeyIdentity(&fileSigningKey{signer: sealed}, blob); err != nil {
 		t.Errorf("the sealing key should be accepted: %v", err)
@@ -493,7 +475,8 @@ func TestCheckKeyIdentity(t *testing.T) {
 	if err == nil {
 		t.Fatal("a different key should be rejected")
 	}
-	for _, want := range []string{"12345678", "not the one this slot was sealed against"} {
+	// The message compares fingerprints; there is no serial to name any more.
+	for _, want := range []string{"not the one this slot was sealed against", hexString(fingerprint[:8])} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the message should mention %q, got: %v", want, err)
 		}

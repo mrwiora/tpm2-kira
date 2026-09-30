@@ -8,7 +8,8 @@ Decisions already taken (§15 records the rest):
 - **One binary.** No build-tag split, no second artifact. The PC/SC client is
   written in pure Go so `CGO_ENABLED=0` keeps working and the initramfs stays
   library-free.
-- **Blob format bumps to v9.** Done. Typed key references, plus the key
+- **Blob format bumps to v9, then v10.** Typed key references were added in v9
+  and taken back out in v10 (§16); what remains is the key
   fingerprint and token serial, so everything needed to find and identify the
   signing key lives in the blob.
 - **No separate configuration file.** There is no `reseal.conf`. The key
@@ -704,7 +705,7 @@ Ranked by how much I think they matter.
 | # | Decision | Status |
 |---|---|---|
 | 1 | Split binary vs. pure-Go PC/SC | **decided: pure Go, one binary** |
-| 2 | Blob key reference | **done: v9, typed field, plus fingerprint and serial** — but see §16: the reference and serial should now come back out |
+| 2 | Blob key reference | **resolved: added in v9, removed again in v10 — the blob records only a fingerprint. See §16.** |
 | 3 | Environment variable name | **decided: `TPM2_KIRA_PIN`** |
 | 4 | Token must be pre-populated | **decided: yes — tpm2-kira never writes to the token** |
 | 4a | Touch policy | detected, not dictated; `NEVER` recommended for a dedicated slot |
@@ -739,7 +740,27 @@ Step 5 is the one with schedule risk; it is deliberately isolated behind the
 
 ---
 
-## 16. Proposed: blob v10, identical whatever holds the key
+## 16. Done: blob v10, identical whatever holds the key
+
+**Implemented.** `CurrentBlobVersion` is 10; `PublicKeyRef`, `PrivateKeyRef` and
+`TokenSerial` are gone and `KeyFingerprint` remains. A v9 blob is rejected with
+the usual "re-seal with: tpm2-kira seal", as every earlier bump has been — the
+format has only ever supported one version at a time.
+
+Two things came out of the implementation that this section did not anticipate:
+
+- **The reference file had to learn file paths.** With no location in the blob, a
+  key kept outside the well-known path — an sbctl Secure Boot key, the case that
+  motivated sharing in the first place — could not be found by the initramfs
+  hook, which passes no `--privkey`. So a reference may now name another file as
+  well as a token slot, one level only. Without this, v10 would have been a
+  regression for exactly the setup §4 recommends.
+- **`TestResealWithStoredKeyPaths` was a test of the removed feature**, and
+  `TestYubiKeySealRevealReseal` relied on it implicitly. Both now name the key
+  explicitly, and `TestYubiKeyResealFollowsTheKeyToANewToken` covers the bug this
+  bump fixed: adopt a different token holding the same key, and reseal follows it.
+
+The original argument follows.
 
 Since `setup` and `yubikey adopt` write a reference file at the well-known
 private key path, the blob's own copy of "where the key lives" has become a

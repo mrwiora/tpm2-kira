@@ -278,17 +278,33 @@ func OpenSigningKey(ref KeyRef, pin PINProvider, debug bool) (SigningKey, error)
 		}
 
 		// The file may record where the key lives rather than hold it: that is
-		// how a token-held key keeps the well-known private key path working.
-		// Resolved before the PEM load so the reference never has to look like
-		// key material, and only one level deep, which a token reference is by
-		// construction — ReadKeyReference rejects anything else.
-		if tokenRef, isRef, refErr := ReadKeyReference(ref.Path); refErr != nil {
+		// how the well-known private key path keeps working for a key on a
+		// token, or one shared with something else at another path. Resolved
+		// before the PEM load so the reference never has to look like key
+		// material.
+		//
+		// Exactly one level is followed. A token reference is terminal by
+		// construction; a file reference is loaded as key material directly,
+		// rather than re-entering this branch, so a chain of reference files
+		// cannot form a loop.
+		if target, isRef, refErr := ReadKeyReference(ref.Path); refErr != nil {
 			return nil, refErr
 		} else if isRef {
 			if debug {
-				fmt.Printf("%s points at %s\n", ref.Path, tokenRef)
+				fmt.Printf("%s points at %s\n", ref.Path, target)
 			}
-			return openYubiKeySigningKey(tokenRef, pin, debug)
+
+			if target.Kind == KeyRefYubiKey {
+				return openYubiKeySigningKey(target, pin, debug)
+			}
+
+			signer, err := LoadSigningPrivateKeyFromPEM(target.Path)
+			if err != nil {
+				return nil, fmt.Errorf("%s points at %s, which is not usable: %w", ref.Path, target.Path, err)
+			}
+			WarnAboutKeyPermissions(target.Path)
+
+			return &fileSigningKey{signer: signer, ref: target}, nil
 		}
 
 		signer, err := LoadSigningPrivateKeyFromPEM(ref.Path)
@@ -345,10 +361,19 @@ func PublicKeyForRef(ref KeyRef, cachedPubKeyPath string, debug bool) (crypto.Pu
 		if ref.Path == "" {
 			return nil, fmt.Errorf("no public key available: no cached copy and no key reference")
 		}
-		if tokenRef, isRef, refErr := ReadKeyReference(ref.Path); refErr != nil {
+		// One level, as in OpenSigningKey: a token is read from its slot, a file
+		// is loaded as key material rather than resolved again.
+		if target, isRef, refErr := ReadKeyReference(ref.Path); refErr != nil {
 			return nil, refErr
 		} else if isRef {
-			return yubiKeyPublicKey(tokenRef, debug)
+			if target.Kind == KeyRefYubiKey {
+				return yubiKeyPublicKey(target, debug)
+			}
+			signer, err := LoadSigningPrivateKeyFromPEM(target.Path)
+			if err != nil {
+				return nil, fmt.Errorf("%s points at %s, which is not usable: %w", ref.Path, target.Path, err)
+			}
+			return signer.Public(), nil
 		}
 		signer, err := LoadSigningPrivateKeyFromPEM(ref.Path)
 		if err != nil {
@@ -356,14 +381,4 @@ func PublicKeyForRef(ref KeyRef, cachedPubKeyPath string, debug bool) (crypto.Pu
 		}
 		return signer.Public(), nil
 	}
-}
-
-// tokenSerialOf reports the hardware token a key was read from, or zero when
-// the key is not on one. It is recorded in the blob so that plugging in the
-// wrong YubiKey gives a name rather than a policy failure.
-func tokenSerialOf(key SigningKey) uint32 {
-	if yk, ok := key.(*yubiKeySigningKey); ok {
-		return yk.serial
-	}
-	return 0
 }

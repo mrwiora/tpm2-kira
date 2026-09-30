@@ -231,34 +231,47 @@ setup itself never asks for one.
 answers:
 
 1. **`--privkey` on the command line.** A flag someone typed is an instruction.
-2. **The reference stored in the sealed blob** (`private_key_ref`), recorded at
-   seal time.
-3. **`/var/lib/tpm2-kira/keys/seal.key`** — the key, or the reference naming a
-   token.
+2. **`/var/lib/tpm2-kira/keys/seal.key`** — which holds one of three things:
+   the key itself, a reference naming a token slot, or a reference naming another
+   file.
 
 Then, whichever key that yields, its public half is fingerprinted and compared
 with the one the blob records. A mismatch stops the operation before anything is
 written.
 
-> **Known wart: a stale blob reference outranks a corrected file.** Because step 2
-> comes before step 3, moving the key to a different token or slot is not enough
-> to fix resealing. `yubikey adopt` rewrites `seal.key` correctly, but the blob
-> still names the old token and the blob wins, so `reseal` reports
-> `no YubiKey with serial <old> is present` while the right token is plugged in
-> and the file names it. It degrades safely — resealing is skipped, nothing is
-> overwritten, and the next boot shows a PCR MISMATCH rather than losing the
-> secret — but the way out is not the `reseal --nvram <slot>` the message
-> suggests. Name the key once, explicitly:
->
-> ```bash
-> sudo -E tpm2-kira reseal --nvram 0x01803010 \
->     --privkey 'yubikey:serial=<new>;slot=9a'
-> ```
->
-> That re-records the reference in the blob, and later reseals need no flags
-> again. Removing the reference from the blob entirely is the better fix, since
-> where a key lives is local state and does not belong in a portable artifact;
-> see [PLAN-YUBIKEY.md](PLAN-YUBIKEY.md).
+The sealed blob is **not** in that list, by design. Up to v9 it recorded where
+the key had been, and that copy was consulted before the file on disk, so it
+outranked the authoritative answer: moving a key to another token left `reseal`
+hunting for the retired serial with no local way to correct it. Where a key lives
+is local, mutable state, and a blob is a portable artifact that `nvram restore`
+carries onto other machines — so v10 removed it. The blob still recognises its
+own key by fingerprint; it just no longer claims to know where it is.
+
+### Pointing at a key kept somewhere else
+
+The third form exists for a key shared with something else — most often an sbctl
+Secure Boot key, which lives at `/var/lib/sbctl/keys/db/db.key` and is managed by
+sbctl. The initramfs hook runs `tpm2-kira reseal` with no `--privkey`, so without
+a pointer it would not find such a key at all:
+
+```
+# /var/lib/tpm2-kira/keys/seal.key
+-----BEGIN TPM2-KIRA KEY REFERENCE-----
+L3Zhci9saWIvc2JjdGwva2V5cy9kYi9kYi5rZXk=
+-----END TPM2-KIRA KEY REFERENCE-----
+```
+
+The payload is the target path. `setup` and `yubikey adopt` only ever write the
+key itself or a token reference, so this form is written by hand.
+
+Exactly **one** level is followed. A reference naming a token is the end of the
+chain; a reference naming a file loads that file as key material and does not
+resolve it again, so a chain of reference files cannot form a loop. A reference
+naming itself is refused with a message saying so.
+
+A symlink at `seal.key` works too and needs no reference file. The reference is
+preferred because it is explicit: `cat` shows what it points at and why, whereas
+a symlink to a Secure Boot key looks like an accident.
 
 If a token is connected but none of its slots holds a key, setup prints the
 `ykman` commands above and lets you stop there to run them; nothing is created,
