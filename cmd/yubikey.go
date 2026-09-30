@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/matthias/tpm2-kira/internal/pcsc"
 	"github.com/matthias/tpm2-kira/internal/piv"
 )
@@ -506,7 +505,7 @@ func YubiKeyAdopt(tpmPath, refStr, outPath string, debug bool) error {
 // An unreachable TPM is reported but not treated as a failure: adopt is useful
 // on a machine where the TPM is busy or absent.
 func validateAgainstTPM(tpmPath string, pub crypto.PublicKey, debug bool) error {
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPMDevice(tpmPath)
 	if err != nil {
 		fmt.Printf("\n  TPM check:   skipped, could not open %s (%v)\n", tpmPath, err)
 		return nil

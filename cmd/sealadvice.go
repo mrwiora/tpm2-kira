@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-
-	"github.com/google/go-tpm/tpm2/transport"
 )
 
 // Guidance for a bare "tpm2-kira seal".
@@ -383,9 +381,9 @@ func GuideSealSelection(tpmPath string, requestedIndex uint32, requestedIndexGiv
 // asked would be destructive; the suggestion always moves to a free one and says
 // which are taken.
 func suggestFreeSlot(tpmPath string, debug bool) (uint32, error) {
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPMDevice(tpmPath)
 	if err != nil {
-		return 0, fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+		return 0, err
 	}
 	defer tpmDev.Close()
 

@@ -2601,8 +2601,10 @@ func TestSealDataWithSpecsValidation(t *testing.T) {
 		if err == nil {
 			t.Error("sealDataWithSpecs() expected error for invalid TPM path, got nil")
 		}
-		if !strings.Contains(err.Error(), "failed to open TPM") {
-			t.Errorf("sealDataWithSpecs() error = %q, want to contain 'failed to open TPM'", err.Error())
+		// The message says what is wrong and how to look, rather than
+		// relaying a syscall error.
+		if !strings.Contains(err.Error(), "no TPM device at /nonexistent/tpm/path") {
+			t.Errorf("sealDataWithSpecs() error = %q, want it to name the missing device", err.Error())
 		}
 	})
 }

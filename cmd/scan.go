@@ -95,9 +95,9 @@ func SlotNumber(index uint32) int {
 // Otherwise, scans only the specified nvramIndex
 func ScanAndReveal(tpmPath string, nvramIndex uint32, debug bool) ([]NVRAMSlot, map[int]string, error) {
 	// Open TPM
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPMDevice(tpmPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+		return nil, nil, err
 	}
 	defer tpmDev.Close()
 
@@ -408,9 +408,9 @@ func HasValidSlots(slots []NVRAMSlot) bool {
 // RevealCommand implements the reveal command functionality
 func RevealCommand(tpmPath string, nvramIndex uint32, debug bool, plain bool) {
 	// Open TPM
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPMDevice(tpmPath)
 	if err != nil {
-		PrintKIRAError(fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err))
+		PrintKIRAError(err)
 		return
 	}
 	defer tpmDev.Close()
@@ -458,10 +458,10 @@ func RunCommand(tpmPath string, nvramIndex uint32, debug bool) {
 
 	for {
 		// Open TPM
-		tpmDev, err := transport.OpenTPM(tpmPath)
+		tpmDev, err := OpenTPMDevice(tpmPath)
 		if err != nil {
 			currentTime := time.Now()
-			newError := fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+			newError := err
 
 			// Show error message if it's new or 30 seconds have passed
 			if lastError == nil || lastError.Error() != newError.Error() || currentTime.Sub(lastErrorTime) >= 30*time.Second {
@@ -529,7 +529,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, debug bool) {
 
 		if shouldDisplay {
 			// Open TPM again for display (needed for PCR details)
-			tpmDev2, err := transport.OpenTPM(tpmPath)
+			tpmDev2, err := OpenTPMDevice(tpmPath)
 			if err == nil {
 				// Display with colored KIRA format
 				PrintKIRASlots(tpmDev2, slots, newCodes)

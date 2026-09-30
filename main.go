@@ -45,6 +45,12 @@ func main() {
 		commandArgs = os.Args[argsOffset:]
 	}
 
+	// Refuse early, with an explanation, rather than letting a syscall several
+	// layers down report a bare "permission denied".
+	if err := checkPrivilege(command, commandArgs); err != nil {
+		fail(err)
+	}
+
 	switch command {
 	case "setup":
 		runSetup(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
@@ -177,6 +183,58 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	if err := cmd.Seal(*tpm, *pcrs, sealIndex, *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
 		fail(err)
 	}
+}
+
+// rootCommands are the commands that cannot work without root, with the reason
+// completing "... needs root, because it ...".
+//
+// Commands that only read the TPM are deliberately absent: /dev/tpm0 can be
+// opened by a group through a udev rule, which the README documents, and
+// 'reveal' working for an ordinary user is the point of setting that up. Those
+// still get an explanation if the device turns out to be unreadable — see
+// cmd.OpenTPMDevice — rather than being refused before trying.
+var rootCommands = map[string]string{
+	"setup":  "writes the signing key to /var/lib/tpm2-kira",
+	"seal":   "writes to TPM NVRAM and reads the signing key from /var/lib/tpm2-kira",
+	"reseal": "writes to TPM NVRAM and reads the signing key from /var/lib/tpm2-kira",
+}
+
+// rootNVRAMSubcommands are the nvram subcommands that change NVRAM. Listing and
+// status only read it.
+var rootNVRAMSubcommands = map[string]string{
+	"delete":  "removes a sealed secret from TPM NVRAM",
+	"restore": "writes a sealed secret back to TPM NVRAM",
+}
+
+// rootYubiKeySubcommands are the yubikey subcommands that write to the
+// filesystem. Inspecting a token needs no privilege beyond reaching pcscd.
+var rootYubiKeySubcommands = map[string]string{
+	"adopt": "caches the public key under /var/lib/tpm2-kira",
+}
+
+// checkPrivilege refuses a command that cannot possibly work without root.
+func checkPrivilege(command string, args []string) error {
+	if reason, ok := rootCommands[command]; ok {
+		return cmd.RequireRoot(command, reason)
+	}
+
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+
+	switch command {
+	case "nvram":
+		if reason, ok := rootNVRAMSubcommands[sub]; ok {
+			return cmd.RequireRoot("nvram "+sub, reason)
+		}
+	case "yubikey":
+		if reason, ok := rootYubiKeySubcommands[sub]; ok {
+			return cmd.RequireRoot("yubikey "+sub, reason)
+		}
+	}
+
+	return nil
 }
 
 // flagsGiven reports which flags were named on the command line, as opposed to

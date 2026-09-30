@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/google/go-tpm/tpm2/transport"
 )
 
 // ResealCommand is the top-level entry point for the reseal CLI command.
@@ -21,9 +19,9 @@ func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privK
 	}
 
 	// Multi-slot mode – discover populated slots, then reseal each one
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPMDevice(tpmPath)
 	if err != nil {
-		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+		return err
 	}
 	slots := FindPopulatedSlots(tpmDev, debug)
 	tpmDev.Close()
@@ -80,9 +78,9 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	}
 
 	// Open TPM
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPMDevice(tpmPath)
 	if err != nil {
-		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+		return err
 	}
 	// Note: No defer here - we'll close it manually before calling sealDataWithSpecs
 

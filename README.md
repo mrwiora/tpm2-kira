@@ -863,12 +863,42 @@ sudo dmesg | grep -i tpm
 Ensure TPM 2.0 is enabled in your BIOS/UEFI settings.
 
 **Permission denied on `/dev/tpm0`:**
+
+tpm2-kira talks to the TPM directly and keeps its signing key under
+`/var/lib/tpm2-kira`, both root-owned on a normal system, so most commands need
+`sudo`. Running one without it says so rather than reporting a bare syscall
+error:
+
+```
+tpm2-kira: FAILED: 'tpm2-kira seal' needs root, because it writes to TPM NVRAM
+  and reads the signing key from /var/lib/tpm2-kira.
+  Run it again with sudo:
+      sudo tpm2-kira seal ...
+  Current user has UID 1000.
+```
+
+| Needs root | Works without it |
+|---|---|
+| `setup`, `seal`, `reseal` | `version`, `help`, `pcrtips` |
+| `nvram delete`, `nvram restore` | `reveal`, `reveal-plain`, `run`, `info` |
+| `yubikey adopt` | `nvram list`, `nvram status` |
+| | `yubikey list`, `yubikey status`, `yubikey export-pubkey` |
+
+The commands in the right-hand column only read, so they are not refused
+outright — a udev rule granting a group access to `/dev/tpm0` lets them work for
+an ordinary user, which is worth setting up if you want `reveal` without `sudo`:
+
 ```bash
-# Check current permissions
 ls -la /dev/tpm0
 
-# Your user needs access — either run as root or add a udev rule
+# For example, in /etc/udev/rules.d/60-tpm.rules:
+#   KERNEL=="tpm0", MODE="0660", GROUP="tss"
+# then add your user to that group and replug or reboot.
 ```
+
+Without such a rule they report the same explanation instead of
+`permission denied`. As always, the exit status is 0 — judge success from the
+output.
 
 **TOTP code doesn't match after update:**
 ```bash
