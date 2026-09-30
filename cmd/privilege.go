@@ -184,9 +184,6 @@ func RequireTPMAccess(tpmPath string) error {
 	}
 
 	return fmt.Errorf("%s is a TPM device, which only root may open.\n"+
-		"  That is deliberate: anything able to reach the TPM can ask it to unseal the\n"+
-		"  secret while the PCR values still match, so the device is root-only and the\n"+
-		"  permissions on it should not be loosened.\n"+
 		"  Run the command with sudo:\n"+
 		"      sudo tpm2-kira%s ...\n"+
 		"  Current user has UID %d.",

@@ -893,9 +893,6 @@ reporting a bare syscall error:
 
 ```
 tpm2-kira: FAILED: /dev/tpm0 is a TPM device, which only root may open.
-  That is deliberate: anything able to reach the TPM can ask it to unseal the
-  secret while the PCR values still match, so the device is root-only and the
-  permissions on it should not be loosened.
   Run the command with sudo:
       sudo tpm2-kira reveal ...
   Current user has UID 1000.
