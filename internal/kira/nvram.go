@@ -539,7 +539,9 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, debug bool) error {
 		return fmt.Errorf("no sealed secrets found in NVRAM slots 0x%08X – 0x%08X", NVRAMSlotStart, NVRAMSlotEnd)
 	}
 
-	fmt.Printf("Found %d sealed slot(s) to delete\n\n", len(slots))
+	if err := confirmDeleteAll(tpmDev, slots); err != nil {
+		return err
+	}
 
 	var failed []uint32
 	for _, slotIdx := range slots {
@@ -640,6 +642,37 @@ func NVRAMStatus(tpmPath string, nvramIndex uint32, debug bool) error {
 		}
 	} else {
 		fmt.Printf("Status: Not yet written\n")
+	}
+
+	return nil
+}
+
+// confirmDeleteAll lists what a multi-slot delete is about to destroy and, when
+// there is somebody to ask, requires them to say so.
+//
+// Deleting a sealed secret is irreversible — the TOTP secret is gone and the
+// authenticator has to be re-enrolled — and the slots are not named on the
+// command line in this mode, so the last chance to notice a mistake is here.
+// A non-interactive caller passed --all deliberately and is not prompted.
+func confirmDeleteAll(tpmDev transport.TPM, slots []uint32) error {
+	fmt.Printf("About to delete %d sealed slot(s), which cannot be undone:\n", len(slots))
+	for _, index := range slots {
+		fmt.Printf("  slot #%d (0x%08X)\n", SlotNumber(index), index)
+	}
+	fmt.Println("The TOTP secrets are lost and the authenticator must be re-enrolled.")
+	fmt.Println()
+
+	if !IsInteractive() {
+		return nil
+	}
+
+	fmt.Print("Type 'yes' to delete them: ")
+
+	answer, _ := ReadLine()
+	fmt.Println()
+
+	if strings.TrimSpace(answer) != "yes" {
+		return fmt.Errorf("cancelled; nothing was deleted")
 	}
 
 	return nil

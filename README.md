@@ -160,7 +160,7 @@ If called without a command, tpm2-kira defaults to `reveal`.
 | `info` | Display metadata about the sealed secret (`--json` for machine-readable output) |
 | `nvram list` | List NVRAM indices |
 | `nvram status` | Show NVRAM index status |
-| `nvram delete` | Delete sealed data from NVRAM |
+| `nvram delete` | Delete sealed data from NVRAM (`--nvram N` or `--all`) |
 | `nvram restore` | Write back a blob that a failed NVRAM write left on disk |
 | `yubikey list` | Show connected YubiKeys, their PIV slots and policies |
 | `yubikey adopt` | Register an existing PIV slot key and cache its public key |
@@ -698,9 +698,19 @@ things to rebuild.
 ## Deleting Sealed Data
 
 ```bash
-tpm2-kira nvram delete              # deletes all populated slots
-tpm2-kira nvram delete --nvram 0    # deletes a specific slot
+sudo tpm2-kira nvram delete --nvram 0    # one slot
+sudo tpm2-kira nvram delete --all        # every populated slot
 ```
+
+Deleting a sealed secret cannot be undone: the secret is gone and the
+authenticator has to be re-enrolled. So there is no default — `nvram delete`
+with neither option refuses and shows both, and `--all` lists the slots and asks
+for confirmation when run from a terminal.
+
+Options are named, and a stray argument is refused rather than ignored.
+`tpm2-kira nvram delete 0` does **not** mean slot 0; it is rejected with a
+suggestion, because the flag package would otherwise drop the `0` and leave the
+command meaning "every slot".
 
 ## Early Boot Integration (Arch Linux / mkinitcpio)
 
@@ -933,7 +943,7 @@ tpm2-kira pcrtips         # explains what each PCR measures
 
 ```bash
 # Remove sealed data first
-tpm2-kira nvram delete
+sudo tpm2-kira nvram delete --all
 
 # Remove binary
 sudo make uninstall
@@ -948,13 +958,13 @@ sudo rm -rf /var/lib/tpm2-kira
 
 On Arch:
 ```bash
-tpm2-kira nvram delete
+sudo tpm2-kira nvram delete --all
 sudo pacman -R tpm2-kira
 ```
 
 On Debian:
 ```bash
-tpm2-kira nvram delete
+sudo tpm2-kira nvram delete --all
 sudo apt remove tpm2-kira
 ```
 

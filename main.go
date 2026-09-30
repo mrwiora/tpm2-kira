@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -122,6 +123,7 @@ func runSetup(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	local := fs.Bool("local", false, "Use a signing key file without asking about a token")
 
 	fs.Parse(args)
+	rejectPositional(fs, "setup")
 
 	choice := kira.SetupKeyChoice{Local: *local, TokenRef: *yubikey}
 	if choice.Local && choice.TokenRef != "" {
@@ -148,6 +150,7 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	verifyUKI := fs.Bool("verify-uki", true, "Check the built-in PCR 11 computation against this boot's event log before sealing")
 
 	fs.Parse(args)
+	rejectPositional(fs, "seal")
 
 	kira.PINFileSetting = *pinFile
 
@@ -193,6 +196,14 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	}
 }
 
+// rejectPositional stops a command that was given arguments it does not take.
+// The message is built in the kira package, where it can be tested.
+func rejectPositional(fs *flag.FlagSet, command string) {
+	if fs.NArg() > 0 {
+		fail(kira.PositionalArgError(command, fs.Args()))
+	}
+}
+
 // flagsGiven reports which flags were named on the command line, as opposed to
 // left at their default. A default is a fallback; a flag someone typed is an
 // instruction, and the two deserve different treatment.
@@ -216,6 +227,7 @@ func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
 
 	fs.Parse(args)
+	rejectPositional(fs, "reseal")
 
 	kira.PINFileSetting = *pinFile
 	kira.RequireKeySetting = *requireKey
@@ -250,6 +262,7 @@ func runInfo(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 
 	fs.Parse(args)
+	rejectPositional(fs, "info")
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
@@ -266,6 +279,7 @@ func runReveal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
+	rejectPositional(fs, "reveal")
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
@@ -280,6 +294,7 @@ func runRevealPlain(args []string, tpmPath string, nvramIndex uint32, debugFlag 
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
+	rejectPositional(fs, "reveal-plain")
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
@@ -294,6 +309,7 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
+	rejectPositional(fs, "run")
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
@@ -317,8 +333,10 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	privKey := fs.String("privkey", "", "restore: signing key, if not the one recorded in the blob")
 	pinFile := fs.String("pin-file", "", "restore: file holding the YubiKey PIN (mode 0600)")
 	force := fs.Bool("force", false, "restore: overwrite a different blob already in the index")
+	all := fs.Bool("all", false, "delete: every populated slot, not just one")
 
 	fs.Parse(args)
+	rejectPositional(fs, "nvram "+subcommand)
 
 	kira.PINFileSetting = *pinFile
 
@@ -336,6 +354,21 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 			fail(err)
 		}
 	case "delete":
+		// Deleting a sealed secret cannot be undone: the TOTP secret is gone
+		// and the authenticator has to be re-enrolled. Wiping every slot is
+		// therefore something to ask for rather than the default when --nvram
+		// happens to be missing.
+		if !provided && !*all {
+			fail(errors.New("'tpm2-kira nvram delete' needs to know what to delete.\n" +
+				"  One slot:    tpm2-kira nvram delete --nvram 0\n" +
+				"  Every slot:  tpm2-kira nvram delete --all\n" +
+				"  Deleting a sealed secret cannot be undone — the TOTP secret is gone and\n" +
+				"  the authenticator has to be re-enrolled, so --all is not the default."))
+		}
+		if provided && *all {
+			fail(errors.New("--nvram names one slot and --all means every slot; pick one"))
+		}
+
 		deleteIndex := resolveOrScanAll(uint32(*nvram), provided)
 		if err := kira.NVRAMDeleteCommand(*tpm, deleteIndex, *debug); err != nil {
 			fail(err)
@@ -371,6 +404,7 @@ func runYubiKey(args []string, tpmPath string, debugFlag bool) {
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args[1:])
+	rejectPositional(fs, "yubikey "+subcommand)
 
 	if err := kira.YubiKeyCommand(*tpm, []string{subcommand}, *ref, *out, *debug); err != nil {
 		fail(err)
@@ -523,9 +557,9 @@ EXAMPLES:
   tpm2-kira info --nvram 0
   tpm2-kira info --nvram 0x01803010
   tpm2-kira nvram list
-  tpm2-kira nvram delete
   tpm2-kira nvram delete --nvram 0
   tpm2-kira nvram delete --nvram 0x01803010
+  tpm2-kira nvram delete --all
   tpm2-kira nvram restore --nvram 0
   tpm2-kira nvram restore --nvram 0 --from /var/lib/tpm2-kira/recovery/slot-0x01803010-1700000000.blob
 

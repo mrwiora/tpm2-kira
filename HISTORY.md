@@ -65,6 +65,39 @@ right place.
 
 ## Commands
 
+### nvram delete no longer wipes every slot by default
+
+Reported after it destroyed two sealed secrets:
+
+    tpm2-kira nvram delete 0
+    Found 2 sealed slot(s) to delete
+    ...
+    All 2 slot(s) deleted successfully
+
+`0` was a positional argument. Go's flag package stops at the first non-flag and
+leaves the rest in `Args()`, which every command here discarded, so the `0` was
+dropped, `--nvram` went unset, and delete fell through to its every-slot path.
+The command read exactly as though it named slot 0.
+
+Two fixes, because there were two faults.
+
+Positional arguments are now refused rather than ignored, for every command. The
+message quotes the argument back and guesses the option — `--nvram` for something
+that looks like a slot or index, `--pcrs` for something that parses as a PCR
+selection — so `tpm2-kira seal 0,7` is corrected instead of silently sealing
+against the default PCRs, which was the same fault waiting to happen somewhere
+less visible.
+
+Deleting every slot is now something to ask for. `nvram delete` with neither
+`--nvram` nor `--all` refuses and shows both; `--all` lists the slots it is about
+to destroy and, when run from a terminal, requires typing `yes`. Deleting a sealed
+secret cannot be undone, so it should not have been what the command did when an
+option went missing.
+
+---
+
+## Commands
+
 ### The failure marker no longer restates the exit status
 
 Failures printed a second line, `(exit status is 0 by design; this command did
