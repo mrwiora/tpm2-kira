@@ -6,12 +6,10 @@
 # Copy the relevant HOOKS line to your /etc/mkinitcpio.conf and adjust as needed.
 
 # TPM2-KIRA SIGNING KEY ON A YUBIKEY
-# With 'tpm2-kira setup' on a YubiKey, the reseal that runs after every image
-# build signs on the token. To let it sign unattended, give it the PIN here.
-# 'export' is required: mkinitcpio passes only exported variables to its post
-# hooks. The PIN is not copied into the image, but this file is world-readable
-# by default, so restrict it:  chmod 600 /etc/mkinitcpio.conf
-#export TPM2_KIRA_PIN='123456'
+# The PIN for unattended resealing does not go in this file. It goes in the
+# drop-in /etc/mkinitcpio.conf.d/tpm2-kira.conf, mode 600, owned by root:
+#     export TPM2_KIRA_PIN='123456'
+# 'tpm2-kira setup' prints the commands to create it.
 
 # MODULES
 # The following modules are loaded before any boot hooks are run.
