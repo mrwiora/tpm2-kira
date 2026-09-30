@@ -137,16 +137,13 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 
 	cmd.PINFileSetting = *pinFile
 
+	given := flagsGiven(fs)
+
 	mode, err := cmd.ParseMeasurePointMode(*measurePoint)
 	if err != nil {
 		fail(err)
 	}
 	cmd.MeasurePointModeSetting = mode
-
-	// Validate PCR specs before proceeding
-	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
-		fail(err)
-	}
 
 	hashAlgo := cmd.PCRHashAlgoSHA256
 	if *useSHA1 {
@@ -155,9 +152,40 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 
 	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
 
+	// Choosing PCRs needs to know about this machine, so an unqualified
+	// "tpm2-kira seal" explains what it found and suggests a selection. An
+	// explicit --pcrs is used exactly as written — the person typing it may
+	// know something this code does not — and a hook or script, which has
+	// nobody to answer, gets the documented default silently.
+	if !given["pcrs"] && cmd.IsInteractive() {
+		plan, planErr := cmd.GuideSealSelection(*tpm, sealIndex, given["nvram"], *debug)
+		if planErr != nil {
+			fail(planErr)
+		}
+		if !plan.Proceed {
+			return
+		}
+		*pcrs = plan.PCRs
+		sealIndex = plan.Index
+	}
+
+	// Validate PCR specs before proceeding
+	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
+		fail(err)
+	}
+
 	if err := cmd.Seal(*tpm, *pcrs, sealIndex, *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
 		fail(err)
 	}
+}
+
+// flagsGiven reports which flags were named on the command line, as opposed to
+// left at their default. A default is a fallback; a flag someone typed is an
+// instruction, and the two deserve different treatment.
+func flagsGiven(fs *flag.FlagSet) map[string]bool {
+	given := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	return given
 }
 
 func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -343,7 +371,8 @@ USAGE:
 
 COMMANDS:
   setup       Create the signing keys. Does NOT seal — run 'seal' next.
-  seal        Generate and seal TOTP secret to TPM NVRAM
+  seal        Generate and seal TOTP secret to TPM NVRAM. Run without --pcrs
+              on a terminal and it suggests a selection for this machine.
   reseal      Reseal secret with current PCR values (requires signing key)
   reveal      Generate TOTP code with colored KIRA format
   reveal-plain Generate TOTP code (plain output)
@@ -381,7 +410,13 @@ SETUP OPTIONS:
                      setup does anyway when it is not run from a terminal.
 
 SEAL OPTIONS:
-  --pcrs INDICES     PCR indices with optional source suffix (default: 0,2,7)
+  Run 'tpm2-kira seal' with no --pcrs from a terminal and it reports what it
+  found on this machine — Secure Boot state, event log, unified kernel image,
+  bootloader — suggests a selection to match, names the risks, and offers a free
+  NVRAM slot. Passing --pcrs skips all of it and uses exactly what you asked for.
+
+  --pcrs INDICES     PCR indices with optional source suffix (default: 0,2,7
+                     when not asked interactively)
                      Suffix 'r' = read from TPM registers (default if no suffix)
                      Suffix 'e' = calculate from TPM eventlog (PCRs 0-12 only)
                      Suffix 'u[:PATH]' = compute from a unified kernel image (PCR 11 only)

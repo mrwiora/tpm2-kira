@@ -10,6 +10,27 @@ formats and CLI flags may change without migration paths.
 
 ## Commands
 
+### seal guides the PCR selection when none is given
+
+`tpm2-kira seal` with no `--pcrs`, run from a terminal, now profiles the machine
+and suggests a selection instead of silently applying `0,2,7`. It reports the
+Secure Boot state, whether the event log carries SHA-256 digests, whether a
+unified kernel image or GRUB is present, and which NVRAM slots are already in use.
+
+The recommendation depends on those facts rather than being fixed advice. With
+Secure Boot verifying the boot chain, PCRs 0 and 7 are enough and survive kernel
+updates. With Secure Boot off — or in Setup Mode, or unreadable — nothing
+verifies which kernel runs, so the suggestion adds whatever this system measures
+the boot components with: `11u` for a unified kernel image, `8,9` for GRUB, `4`
+otherwise. Each of those needs resealing on updates, and the suggestion says so,
+including the rule that a GRUB reseal has to follow the reboot rather than
+precede it.
+
+An explicit `--pcrs` skips the whole thing and is used exactly as written, and so
+does running without a terminal, which keeps the default for hooks and scripts.
+Typing a selection at the prompt is validated before anything is sealed, so a
+typo is a question rather than a policy bound to the wrong registers.
+
 ### setup no longer seals
 
 `tpm2-kira setup` used to create the signing key **and** seal a TOTP secret

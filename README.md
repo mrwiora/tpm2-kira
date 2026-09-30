@@ -186,10 +186,57 @@ TPM2_KIRA_PIN    PIN for a signing key held in a YubiKey PIV slot.
 
 ### Basic seal
 
+Run `seal` with no `--pcrs` from a terminal and it looks at the machine first,
+then suggests a selection to match:
+
 ```bash
-# Uses default PCRs 0,2,7 read from TPM registers
-tpm2-kira seal
+sudo tpm2-kira seal
 ```
+
+```
+What was found:
+  Firmware: UEFI
+  Secure Boot: enabled
+  Event log: present, with SHA-256 digests
+  Unified kernel image: /boot/EFI/Linux/arch-linux.efi
+
+Suggested NVRAM slot: #0 (0x01803010), which is free
+
+Suggested selection: 0,7
+  PCR 0  firmware code — changes when you update the firmware
+  PCR 7  Secure Boot policy — changes if the keys are rotated or Secure Boot is turned off
+
+Also possible here:
+  11u  the unified kernel image. The strongest measurement of the exact kernel that
+       will run, but it changes on every kernel update, so each one needs a reseal.
+  ...
+
+Worth knowing:
+  - PCR 0 on its own would identify a firmware build, not this machine — every device
+    running the same firmware version holds the same value. ...
+
+  [Enter]      seal slot #0 (0x01803010) with PCRs 0,7
+  <selection>  type your own, for example "0,2,7" or "0e,7e,11u"
+  [?]          show the full PCR reference and stop
+  [q]          quit without sealing
+```
+
+The advice tracks the machine rather than being boilerplate. With Secure Boot
+enabled, PCRs 0 and 7 are enough and need no reseal after a kernel update. With
+Secure Boot **off**, nothing verifies which kernel runs, so the suggestion adds
+whatever this system measures the boot components with — `11u` for a unified
+kernel image, `8,9` for GRUB, `4` otherwise — and says what that costs in
+resealing. A free NVRAM slot is suggested, and slots already in use are listed so
+an enrolled secret is not overwritten by accident.
+
+**Passing `--pcrs` skips all of it** and seals exactly what you asked for:
+
+```bash
+tpm2-kira seal --pcrs "0,2,7"
+```
+
+So does running without a terminal — a package hook or script gets the
+documented default (`0,2,7`) silently, with no prompt to hang on.
 
 ### Custom PCRs
 
