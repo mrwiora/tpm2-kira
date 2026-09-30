@@ -1,7 +1,7 @@
 //go:build integration
 // +build integration
 
-package main
+package integration
 
 import (
 	"bytes"
@@ -35,21 +35,43 @@ var testPubKeyPath string
 var testPrivKeyPath string
 var testKeyDir string
 
+// kiraBinary is the freshly built binary under test, addressed absolutely
+// because these tests do not run from the module root.
+var kiraBinary string
+
 // TestMain sets up and tears down the test environment
 func TestMain(m *testing.M) {
-	// Always rebuild. These tests exercise ./tpm2-kira as a subprocess, so a
-	// binary left over from an earlier build would have the suite silently
-	// reporting on code that is not in the working tree — passing or failing
-	// for reasons that have nothing to do with the current changes.
+	// Always rebuild. These tests exercise the binary as a subprocess, so one
+	// left over from an earlier build would have the suite silently reporting
+	// on code that is not in the working tree — passing or failing for reasons
+	// that have nothing to do with the current changes.
+	//
+	// The build goes to a temporary directory and is addressed absolutely,
+	// because the tests no longer run from the module root.
+	moduleRoot, err := filepath.Abs("../..")
+	if err != nil {
+		fmt.Printf("Failed to locate the module root: %v\n", err)
+		os.Exit(1)
+	}
+
+	binDir, err := os.MkdirTemp("", "tpm2-kira-bin-*")
+	if err != nil {
+		fmt.Printf("Failed to create a build directory: %v\n", err)
+		os.Exit(1)
+	}
+	defer os.RemoveAll(binDir)
+
+	kiraBinary = filepath.Join(binDir, "tpm2-kira")
+
 	fmt.Println("Building tpm2-kira binary for testing...")
-	buildCmd := exec.Command("go", "build", "-o", "tpm2-kira")
+	buildCmd := exec.Command("go", "build", "-o", kiraBinary, ".")
+	buildCmd.Dir = moduleRoot
 	if output, err := buildCmd.CombinedOutput(); err != nil {
 		fmt.Printf("Failed to build binary: %v\nOutput: %s\n", err, output)
 		os.Exit(1)
 	}
 
 	// Generate test signing keys
-	var err error
 	testKeyDir, err = os.MkdirTemp("", "tpm2-kira-test-keys-*")
 	if err != nil {
 		fmt.Printf("Failed to create temp dir for keys: %v\n", err)
@@ -237,7 +259,7 @@ func runTPMKiraWithInput(t *testing.T, tpmPath string, stdinInput string, args .
 		}
 	}
 
-	cmd := exec.Command("./tpm2-kira", allArgs...)
+	cmd := exec.Command(kiraBinary, allArgs...)
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
@@ -827,7 +849,7 @@ func testReveal(t *testing.T, tpmPath, nvramIndex string) string {
 // testRun executes the run command for a specified duration and then kills it
 func testRun(t *testing.T, tpmPath, nvramIndex string, duration time.Duration) {
 	t.Helper()
-	runCmd := exec.Command("./tpm2-kira", "run", "--tpm", tpmPath, "--nvram", nvramIndex)
+	runCmd := exec.Command(kiraBinary, "run", "--tpm", tpmPath, "--nvram", nvramIndex)
 	var runOut bytes.Buffer
 	runCmd.Stdout = &runOut
 	runCmd.Stderr = &runOut
@@ -1179,7 +1201,7 @@ func TestExitCodes(t *testing.T) {
 
 	// Test 1: Reveal on non-existent NVRAM (should exit 0 with error message)
 	t.Log("Test 1: Reveal on non-existent NVRAM...")
-	cmd := exec.Command("./tpm2-kira", "reveal", "--tpm", tpmPath, "--nvram", nvramIndex)
+	cmd := exec.Command(kiraBinary, "reveal", "--tpm", tpmPath, "--nvram", nvramIndex)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -1208,7 +1230,7 @@ func TestExitCodes(t *testing.T) {
 	t.Log("Test 3: Reveal before PCR extension...")
 	stdout.Reset()
 	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "reveal", "--tpm", tpmPath, "--nvram", nvramIndex)
+	cmd = exec.Command(kiraBinary, "reveal", "--tpm", tpmPath, "--nvram", nvramIndex)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
@@ -1231,7 +1253,7 @@ func TestExitCodes(t *testing.T) {
 	t.Log("Test 5: Reveal after PCR extension (with mismatch)...")
 	stdout.Reset()
 	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "reveal", "--tpm", tpmPath, "--nvram", nvramIndex)
+	cmd = exec.Command(kiraBinary, "reveal", "--tpm", tpmPath, "--nvram", nvramIndex)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
@@ -1245,7 +1267,7 @@ func TestExitCodes(t *testing.T) {
 	t.Log("Test 6: Reveal-plain after PCR extension (with mismatch)...")
 	stdout.Reset()
 	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "reveal-plain", "--tpm", tpmPath, "--nvram", nvramIndex)
+	cmd = exec.Command(kiraBinary, "reveal-plain", "--tpm", tpmPath, "--nvram", nvramIndex)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
@@ -1259,7 +1281,7 @@ func TestExitCodes(t *testing.T) {
 	t.Log("Test 7: Info command with PCR mismatch...")
 	stdout.Reset()
 	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "info", "--tpm", tpmPath, "--nvram", nvramIndex)
+	cmd = exec.Command(kiraBinary, "info", "--tpm", tpmPath, "--nvram", nvramIndex)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
@@ -1273,7 +1295,7 @@ func TestExitCodes(t *testing.T) {
 	t.Log("Test 8: Reseal without signing key when PCRs changed (should show error but exit 0)...")
 	stdout.Reset()
 	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "reseal", "--tpm", tpmPath, "--nvram", nvramIndex)
+	cmd = exec.Command(kiraBinary, "reseal", "--tpm", tpmPath, "--nvram", nvramIndex)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
@@ -1287,7 +1309,7 @@ func TestExitCodes(t *testing.T) {
 	t.Log("Test 9: NVRAM status on non-existent index...")
 	stdout.Reset()
 	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "nvram", "status", "--tpm", tpmPath, "--nvram", "0x01803050")
+	cmd = exec.Command(kiraBinary, "nvram", "status", "--tpm", tpmPath, "--nvram", "0x01803050")
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
@@ -1301,7 +1323,7 @@ func TestExitCodes(t *testing.T) {
 	t.Log("Test 10: NVRAM delete on non-existent index...")
 	stdout.Reset()
 	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "nvram", "delete", "--tpm", tpmPath, "--nvram", "0x01803051")
+	cmd = exec.Command(kiraBinary, "nvram", "delete", "--tpm", tpmPath, "--nvram", "0x01803051")
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()

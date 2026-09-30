@@ -679,8 +679,9 @@ With a local `pcscd` and `vsmartcard-vpcd` installed, the card passes alone are:
 
 ```bash
 make test-pcsc                                          # transport and PIV layer
-go test -tags="integration pcsc" -run TestYubiKey -v .  # end to end
-go test -tags="integration pcsc" ./...                  # everything
+# End to end, in ./test/integration/
+go test -tags="integration pcsc" -run "TestYubiKey|TestSetup" -v ./test/integration/
+go test -tags="integration pcsc" ./...                   # everything
 ```
 
 The virtual reader is a machine-wide resource and `go test ./...` runs packages

@@ -46,7 +46,8 @@ echo "=== YubiKey end-to-end (software TPM + virtual PIV card) ==="
 # Everything in the root package that needs both simulators. The reader lock in
 # internal/virtualpiv makes the whole-tree form safe too, but naming the tests
 # keeps this pass quick and its output readable.
-go test -tags="integration pcsc" -timeout 10m -run "TestYubiKey|TestSetup" -v . 2>&1 |
+go test -tags="integration pcsc" -timeout 10m -run "TestYubiKey|TestSetup" -v \
+    ./test/integration/ 2>&1 |
     grep -E "^(=== RUN|--- |ok|FAIL)|_test.go:" || status=1
 
 exit $status

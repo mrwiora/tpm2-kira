@@ -10,7 +10,7 @@
 //
 // They need both swtpm and a pcscd with vpcd configured, so they carry both
 // build tags. See test/docker/ for a container that has them.
-package main
+package integration
 
 import (
 	"os"

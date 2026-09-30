@@ -884,6 +884,9 @@ in the TPM. Delete the slot first, then the directory.
 │   ├── tpm_utils.go         # Low-level TPM operations
 │   ├── pcrtips.go           # PCR reference information
 │   └── constants.go         # Default paths and constants
+├── test/
+│   ├── integration/         # CLI tests driving the built binary (build-tagged)
+│   └── docker/              # Container with swtpm, pcscd and a virtual reader
 ├── internal/
 │   ├── pcsc/                # cgo-free pcscd client (Unix socket protocol)
 │   ├── piv/                 # PIV applet: read a slot, verify a PIN, sign
