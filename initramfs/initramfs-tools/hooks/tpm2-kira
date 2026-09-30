@@ -32,6 +32,22 @@ fi
 copy_exec "$kira" /usr/bin/tpm2-kira
 
 if [ -r /etc/tpm2-kira/initramfs.conf ]; then
+    # This file is copied INTO the image, and the image lives on /boot, which
+    # is not encrypted — that is the whole premise of tpm2-kira. A YubiKey PIN
+    # placed here would be written in cleartext to the one partition an
+    # evil-maid attacker can read, so refuse rather than ship it.
+    #
+    # There is no safe equivalent of Arch's mkinitcpio.conf on Debian:
+    # mkinitramfs copies /etc/initramfs-tools/initramfs.conf and conf.d/* into
+    # the image too. See docs/YUBIKEY.md.
+    if grep -qE '^[[:space:]]*(export[[:space:]]+)?TPM2_KIRA_PIN=' /etc/tpm2-kira/initramfs.conf; then
+        echo "tpm2-kira: /etc/tpm2-kira/initramfs.conf sets TPM2_KIRA_PIN." >&2
+        echo "tpm2-kira: That file is copied into the initramfs, which lives on unencrypted" >&2
+        echo "tpm2-kira: /boot — the PIN would be readable by anyone with physical access." >&2
+        echo "tpm2-kira: Remove it and see docs/YUBIKEY.md for where the PIN can go." >&2
+        exit 1
+    fi
+
     copy_file config /etc/tpm2-kira/initramfs.conf /etc/tpm2-kira/initramfs.conf
 fi
 

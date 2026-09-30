@@ -1,11 +1,12 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 
-	"github.com/matthias/tpm2-kira/cmd"
+	"github.com/matthias/tpm2-kira/internal/kira"
 )
 
 // Version is the application version, set by build flags
@@ -18,13 +19,17 @@ var Version = "dev"
 // the output, not the exit status — grep for the FAILED marker below.
 func fail(err error) {
 	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: %v\n", err)
-	fmt.Fprintln(os.Stderr, "tpm2-kira: (exit status is 0 by design; this command did NOT succeed)")
+
+	// Exit 0 deliberately: tpm2-kira is meant to be chainable in a boot
+	// sequence, so a TPM or NVRAM problem must not stop the commands after it.
+	// Callers judge success from the output, not the status — see the "Exit
+	// status" section of the README.
 	os.Exit(0)
 }
 
 func main() {
 	// Set application version in cmd package
-	cmd.AppVersion = Version
+	kira.AppVersion = Version
 
 	// Global flags (shared across all commands)
 	globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
@@ -45,6 +50,16 @@ func main() {
 		commandArgs = os.Args[argsOffset:]
 	}
 
+	// Named so that a privilege message can show a command worth re-running.
+	kira.InvokedCommand = command
+
+	// Commands that write under /var/lib need root whatever their TPM path is.
+	// The TPM itself is checked at the moment it is opened, because whether
+	// root is needed depends on the device rather than on the command.
+	if err := kira.CheckPrivilege(command, commandArgs); err != nil {
+		fail(err)
+	}
+
 	switch command {
 	case "setup":
 		runSetup(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
@@ -56,6 +71,8 @@ func main() {
 		runInfo(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "nvram":
 		runNVRAM(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+	case "yubikey":
+		runYubiKey(commandArgs, *tpmPath, *debug)
 	case "reveal":
 		runReveal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "reveal-plain":
@@ -63,7 +80,7 @@ func main() {
 	case "run":
 		runRun(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "pcrtips":
-		if err := cmd.PCRTips(); err != nil {
+		if err := kira.PCRTips(); err != nil {
 			fail(err)
 		}
 	case "version", "-v", "--version":
@@ -94,21 +111,26 @@ func resolveOrScanAll(rawValue uint32, provided bool) uint32 {
 	if !provided {
 		return 0 // scan all slots
 	}
-	return cmd.ResolveNVRAMIndex(rawValue)
+	return kira.ResolveNVRAMIndex(rawValue)
 }
 
 func runSetup(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("setup", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	yubikey := fs.String("yubikey", "", "Use a YubiKey PIV slot for the signing key, e.g. 'yubikey:slot=9a' or just 'yubikey:'")
+	local := fs.Bool("local", false, "Use a signing key file without asking about a token")
 
 	fs.Parse(args)
+	rejectPositional(fs, "setup")
 
-	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
+	choice := kira.SetupKeyChoice{Local: *local, TokenRef: *yubikey}
+	if choice.Local && choice.TokenRef != "" {
+		fail(fmt.Errorf("--local and --yubikey ask for opposite things; pick one"))
+	}
 
-	if err := cmd.Setup(*tpm, sealIndex, *debug); err != nil {
+	if err := kira.Setup(*tpm, choice, *debug); err != nil {
 		fail(err)
 	}
 }
@@ -121,34 +143,77 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
-	pubKeyPath := fs.String("pubkey", cmd.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
-	privKeyPath := fs.String("privkey", cmd.DefaultPrivateKeyPath, "Path to signing private key PEM (stored in blob for reseal convenience)")
+	pubKeyPath := fs.String("pubkey", kira.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
+	privKeyPath := fs.String("privkey", kira.DefaultPrivateKeyPath, "Signing private key: a PEM path, or a YubiKey slot such as yubikey:serial=12345678;slot=9a")
+	pinFile := fs.String("pin-file", "", "File holding the YubiKey PIN (mode 0600); alternative to $TPM2_KIRA_PIN")
 	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
 	verifyUKI := fs.Bool("verify-uki", true, "Check the built-in PCR 11 computation against this boot's event log before sealing")
 
 	fs.Parse(args)
+	rejectPositional(fs, "seal")
 
-	mode, err := cmd.ParseMeasurePointMode(*measurePoint)
+	kira.PINFileSetting = *pinFile
+
+	given := flagsGiven(fs)
+
+	mode, err := kira.ParseMeasurePointMode(*measurePoint)
 	if err != nil {
 		fail(err)
 	}
-	cmd.MeasurePointModeSetting = mode
+	kira.MeasurePointModeSetting = mode
+
+	hashAlgo := kira.PCRHashAlgoSHA256
+	if *useSHA1 {
+		hashAlgo = kira.PCRHashAlgoSHA1
+	}
+
+	sealIndex := kira.ResolveNVRAMIndex(uint32(*nvram))
+
+	// Choosing PCRs needs to know about this machine, so an unqualified
+	// "tpm2-kira seal" explains what it found and suggests a selection. An
+	// explicit --pcrs is used exactly as written — the person typing it may
+	// know something this code does not — and a hook or script, which has
+	// nobody to answer, gets the documented default silently.
+	if !given["pcrs"] && kira.IsInteractive() {
+		plan, planErr := kira.GuideSealSelection(*tpm, sealIndex, given["nvram"], *debug)
+		if planErr != nil {
+			fail(planErr)
+		}
+		if !plan.Proceed {
+			return
+		}
+		*pcrs = plan.PCRs
+		sealIndex = plan.Index
+		if plan.SHA1 {
+			hashAlgo = kira.PCRHashAlgoSHA1
+		}
+	}
 
 	// Validate PCR specs before proceeding
-	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
+	if _, err := kira.ParsePCRSpecs(*pcrs); err != nil {
 		fail(err)
 	}
 
-	hashAlgo := cmd.PCRHashAlgoSHA256
-	if *useSHA1 {
-		hashAlgo = cmd.PCRHashAlgoSHA1
-	}
-
-	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
-
-	if err := cmd.Seal(*tpm, *pcrs, sealIndex, *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
+	if err := kira.Seal(*tpm, *pcrs, sealIndex, *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
 		fail(err)
 	}
+}
+
+// rejectPositional stops a command that was given arguments it does not take.
+// The message is built in the kira package, where it can be tested.
+func rejectPositional(fs *flag.FlagSet, command string) {
+	if fs.NArg() > 0 {
+		fail(kira.PositionalArgError(command, fs.Args()))
+	}
+}
+
+// flagsGiven reports which flags were named on the command line, as opposed to
+// left at their default. A default is a fallback; a flag someone typed is an
+// instruction, and the two deserve different treatment.
+func flagsGiven(fs *flag.FlagSet) map[string]bool {
+	given := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	return given
 }
 
 func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -159,27 +224,33 @@ func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	pubKeyPath := fs.String("pubkey", "", "Path to signing public key PEM (default: derived from --privkey, or preserved from blob)")
-	privKeyPath := fs.String("privkey", "", "Path to signing private key PEM (required when PCR values have changed)")
+	privKeyPath := fs.String("privkey", "", "Signing private key: a PEM path, or a YubiKey slot such as yubikey:serial=12345678;slot=9a")
+	pinFile := fs.String("pin-file", "", "File holding the YubiKey PIN (mode 0600); alternative to $TPM2_KIRA_PIN")
+	requireKey := fs.Bool("require-key", false, "Fail instead of warning when the signing key is unavailable")
 	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
 
 	fs.Parse(args)
+	rejectPositional(fs, "reseal")
 
-	mode, err := cmd.ParseMeasurePointMode(*measurePoint)
+	kira.PINFileSetting = *pinFile
+	kira.RequireKeySetting = *requireKey
+
+	mode, err := kira.ParseMeasurePointMode(*measurePoint)
 	if err != nil {
 		fail(err)
 	}
-	cmd.MeasurePointModeSetting = mode
+	kira.MeasurePointModeSetting = mode
 
 	// Validate PCR specs before proceeding (only if explicitly provided)
 	if *pcrs != "" {
-		if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
+		if _, err := kira.ParsePCRSpecs(*pcrs); err != nil {
 			fail(err)
 		}
 	}
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	if err := cmd.ResealCommand(*tpm, scanIndex, *pcrs, *pubKeyPath, *privKeyPath, *debug); err != nil {
+	if err := kira.ResealCommand(*tpm, scanIndex, *pcrs, *pubKeyPath, *privKeyPath, *debug); err != nil {
 		fail(err)
 	}
 }
@@ -194,10 +265,11 @@ func runInfo(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 
 	fs.Parse(args)
+	rejectPositional(fs, "info")
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	if err := cmd.InfoCommand(*tpm, scanIndex, *debug, *jsonOutput); err != nil {
+	if err := kira.InfoCommand(*tpm, scanIndex, *debug, *jsonOutput); err != nil {
 		fail(err)
 	}
 }
@@ -210,10 +282,11 @@ func runReveal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
+	rejectPositional(fs, "reveal")
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	cmd.RevealCommand(*tpm, scanIndex, *debug, false)
+	kira.RevealCommand(*tpm, scanIndex, *debug, false)
 }
 
 func runRevealPlain(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -224,10 +297,11 @@ func runRevealPlain(args []string, tpmPath string, nvramIndex uint32, debugFlag 
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
+	rejectPositional(fs, "reveal-plain")
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	cmd.RevealCommand(*tpm, scanIndex, *debug, true)
+	kira.RevealCommand(*tpm, scanIndex, *debug, true)
 }
 
 func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -238,10 +312,11 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
+	rejectPositional(fs, "run")
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	cmd.RunCommand(*tpm, scanIndex, *debug)
+	kira.RunCommand(*tpm, scanIndex, *debug)
 }
 
 func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -257,29 +332,85 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	from := fs.String("from", "", "restore: stashed blob to write back (default: the newest for this slot)")
+	privKey := fs.String("privkey", "", "restore: signing key, if not the one recorded in the blob")
+	pinFile := fs.String("pin-file", "", "restore: file holding the YubiKey PIN (mode 0600)")
+	force := fs.Bool("force", false, "restore: overwrite a different blob already in the index")
+	all := fs.Bool("all", false, "delete: every populated slot, not just one")
 
 	fs.Parse(args)
+	rejectPositional(fs, "nvram "+subcommand)
+
+	kira.PINFileSetting = *pinFile
 
 	provided := nvramExplicit(args)
 
 	switch subcommand {
 	case "list":
-		listIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
-		if err := cmd.NVRAMList(*tpm, listIndex, *debug); err != nil {
+		listIndex := kira.ResolveNVRAMIndex(uint32(*nvram))
+		if err := kira.NVRAMList(*tpm, listIndex, *debug); err != nil {
 			fail(err)
 		}
 	case "status":
-		statusIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
-		if err := cmd.NVRAMStatus(*tpm, statusIndex, *debug); err != nil {
+		statusIndex := kira.ResolveNVRAMIndex(uint32(*nvram))
+		if err := kira.NVRAMStatus(*tpm, statusIndex, *debug); err != nil {
 			fail(err)
 		}
 	case "delete":
+		// Deleting a sealed secret cannot be undone: the TOTP secret is gone
+		// and the authenticator has to be re-enrolled. Wiping every slot is
+		// therefore something to ask for rather than the default when --nvram
+		// happens to be missing.
+		if !provided && !*all {
+			fail(errors.New("'tpm2-kira nvram delete' needs to know what to delete.\n" +
+				"  One slot:    tpm2-kira nvram delete --nvram 0\n" +
+				"  Every slot:  tpm2-kira nvram delete --all\n" +
+				"  Deleting a sealed secret cannot be undone — the TOTP secret is gone and\n" +
+				"  the authenticator has to be re-enrolled, so --all is not the default."))
+		}
+		if provided && *all {
+			fail(errors.New("--nvram names one slot and --all means every slot; pick one"))
+		}
+
 		deleteIndex := resolveOrScanAll(uint32(*nvram), provided)
-		if err := cmd.NVRAMDeleteCommand(*tpm, deleteIndex, *debug); err != nil {
+		if err := kira.NVRAMDeleteCommand(*tpm, deleteIndex, *debug); err != nil {
+			fail(err)
+		}
+	case "restore":
+		// Restoring writes one specific index, so there is nothing sensible
+		// to scan for: require it.
+		if !provided {
+			fail(fmt.Errorf("nvram restore needs --nvram to say which index to write"))
+		}
+		restoreIndex := kira.ResolveNVRAMIndex(uint32(*nvram))
+		if err := kira.NVRAMRestore(*tpm, restoreIndex, *from, *privKey, *force, *debug); err != nil {
 			fail(err)
 		}
 	default:
 		fail(fmt.Errorf("unknown nvram subcommand %q", subcommand))
+	}
+}
+
+// runYubiKey handles the read-only token subcommands. tpm2-kira never writes
+// to a token; populating a slot is done with ykman.
+func runYubiKey(args []string, tpmPath string, debugFlag bool) {
+	if len(args) == 0 {
+		fail(fmt.Errorf("yubikey requires a subcommand (list, adopt, status, export-pubkey)"))
+	}
+
+	subcommand := args[0]
+
+	fs := flag.NewFlagSet("yubikey", flag.ExitOnError)
+	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
+	ref := fs.String("key", "", "Key reference, e.g. yubikey:serial=12345678;slot=9a")
+	out := fs.String("out", "", "Where to write the public key PEM")
+	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+
+	fs.Parse(args[1:])
+	rejectPositional(fs, "yubikey "+subcommand)
+
+	if err := kira.YubiKeyCommand(*tpm, []string{subcommand}, *ref, *out, *debug); err != nil {
+		fail(err)
 	}
 }
 
@@ -290,17 +421,24 @@ USAGE:
   tpm2-kira <command> [options]
 
 COMMANDS:
-  setup       Initial setup: generate P-256 signing keys and seal (PCRs 0,7)
-  seal        Generate and seal TOTP secret to TPM NVRAM
+  setup       Create the signing keys. Does NOT seal — run 'seal' next.
+  seal        Generate and seal TOTP secret to TPM NVRAM. Run without --pcrs
+              on a terminal and it suggests a selection for this machine.
   reseal      Reseal secret with current PCR values (requires signing key)
   reveal      Generate TOTP code with colored KIRA format
   reveal-plain Generate TOTP code (plain output)
   run         Continuously display TOTP codes (runs until stopped)
   info        Display sealed secret information
-  nvram       Manage TPM NVRAM (list, status, delete)
+  nvram       Manage TPM NVRAM (list, status, delete, restore)
+  yubikey     Inspect a YubiKey PIV signing key (list, adopt, status,
+              export-pubkey). Read-only: tpm2-kira never writes to a token.
   pcrtips     Show PCR (Platform Configuration Register) reference guide
   version     Show version information
   help        Show this help message
+
+ENVIRONMENT:
+  TPM2_KIRA_PIN   PIN for a signing key held in a YubiKey PIV slot. Only read
+                  when the key reference names a token.
 
 GLOBAL OPTIONS:
   --tpm PATH      Path to TPM device (default: /dev/tpm0)
@@ -311,8 +449,25 @@ GLOBAL OPTIONS:
                   all populated slots in the default range.
   --debug         Enable debug output
 
+SETUP OPTIONS:
+  setup only prepares the signing key; it never writes to TPM NVRAM and never
+  needs a PIN. Run 'tpm2-kira seal' afterwards to create the TOTP secret.
+
+  --yubikey [REF]    Put the signing key on a YubiKey PIV slot instead of in a
+                     file. With no reference, the first token found is used.
+                     Without this flag, setup offers any connected token when
+                     run from a terminal, and defaults to a key file.
+  --local            Use a key file without asking about a token. This is what
+                     setup does anyway when it is not run from a terminal.
+
 SEAL OPTIONS:
-  --pcrs INDICES     PCR indices with optional source suffix (default: 0,2,7)
+  Run 'tpm2-kira seal' with no --pcrs from a terminal and it reports what it
+  found on this machine — Secure Boot state, event log, unified kernel image,
+  bootloader — suggests a selection to match, names the risks, and offers a free
+  NVRAM slot. Passing --pcrs skips all of it and uses exactly what you asked for.
+
+  --pcrs INDICES     PCR indices with optional source suffix (default: 0,2,7
+                     when not asked interactively)
                      Suffix 'r' = read from TPM registers (default if no suffix)
                      Suffix 'e' = calculate from TPM eventlog (PCRs 0-12 only)
                      Suffix 'u[:PATH]' = compute from a unified kernel image (PCR 11 only)
@@ -325,9 +480,17 @@ SEAL OPTIONS:
   --pubkey PATH      Path to signing public key PEM for PolicySigned branch
                      (default: %s)
                      Accepts X.509 certificates or raw public keys (RSA, ECDSA)
-  --privkey PATH     Path to signing private key PEM (optional)
-                     Both key paths are stored in the blob so reseal can find
-                     them automatically without requiring --pubkey / --privkey
+  --privkey REF      Signing private key, stored in the blob so reseal can find
+                     it automatically. Either a path to a PEM file (the default)
+                     or a YubiKey PIV slot:
+                       /var/lib/tpm2-kira/keys/seal.key
+                       yubikey:serial=12345678;slot=9a
+  --pin-file PATH    File holding the YubiKey PIN, mode 0600.
+  --require-key      Fail instead of warning when the signing key is not
+                     available. Without it, a reseal that cannot reach the key
+                     prints a SKIPPED warning, changes nothing, and the next
+                     boot shows a PCR mismatch. Alternative to
+                     the TPM2_KIRA_PIN environment variable.
   --sha1             Use SHA-1 PCR bank instead of SHA-256 (default: SHA-256)
                      Use only if firmware eventlog does not provide SHA-256 digests
   --verify-uki       Check the built-in PCR 11 computation against this boot's
@@ -340,9 +503,11 @@ RESEAL OPTIONS:
   --pubkey PATH      Path to signing public key PEM for re-sealing (optional)
                      Default: derived from --privkey, or loaded from blob's
                      stored key path. Use this to change the signing key.
-  --privkey PATH     Path to signing private key PEM (required when PCRs changed)
-                     The TPM verifies the signature via PolicySigned.
+  --privkey REF      Signing private key: a PEM path or a yubikey: reference.
+                     Required for every reseal, because the NV write policy is
+                     PolicySigned. The TPM verifies the signature.
                      Also used to derive the public key when --pubkey is omitted.
+  --pin-file PATH    File holding the YubiKey PIN, mode 0600.
 
 INFO OPTIONS:
   --json             Output as JSON
@@ -395,10 +560,12 @@ EXAMPLES:
   tpm2-kira info --nvram 0
   tpm2-kira info --nvram 0x01803010
   tpm2-kira nvram list
-  tpm2-kira nvram delete
   tpm2-kira nvram delete --nvram 0
   tpm2-kira nvram delete --nvram 0x01803010
+  tpm2-kira nvram delete --all
+  tpm2-kira nvram restore --nvram 0
+  tpm2-kira nvram restore --nvram 0 --from /var/lib/tpm2-kira/recovery/slot-0x01803010-1700000000.blob
 
 For detailed documentation, see README.md
-`, cmd.DefaultPublicKeyPath)
+`, kira.DefaultPublicKeyPath)
 }

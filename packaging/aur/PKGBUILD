@@ -32,19 +32,41 @@ prepare() {
 build() {
     cd "$_srcdir"
 
-    export CGO_CPPFLAGS="${CPPFLAGS}"
-    export CGO_CFLAGS="${CFLAGS}"
-    export CGO_CXXFLAGS="${CXXFLAGS}"
-    export CGO_LDFLAGS="${LDFLAGS}"
-    export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
+    # Deliberately not the usual Arch Go recipe. This binary is copied into the
+    # initramfs by the mkinitcpio install hook, which runs before any filesystem
+    # but the initramfs itself exists, so it must need neither a shared library
+    # nor the dynamic loader.
+    #
+    #   CGO_ENABLED=0   the standard library otherwise uses cgo for host lookups,
+    #                   and internal/pcsc imports net, so a machine with a C
+    #                   compiler would produce a binary linked against libc.
+    #   no -buildmode=pie  a static PIE has no NEEDED entries but still carries a
+    #                   PT_INTERP, so it depends on /lib64/ld-linux-x86-64.so.2
+    #                   being present in the image. The ASLR that buys is worth
+    #                   less here than not depending on the loader at all.
+    #
+    # The CGO_* flag exports the guidelines suggest are omitted for the same
+    # reason: there is no cgo to pass them to.
+    export CGO_ENABLED=0
+    export GOFLAGS="-trimpath -mod=readonly -modcacherw"
 
     go build -ldflags "-s -w -X main.Version=${pkgver}" -o "$pkgname" .
+
+    # The contract above is worth checking rather than assuming.
+    if readelf -d "$pkgname" | grep -q NEEDED; then
+        echo "PKGBUILD: $pkgname links shared libraries; it must be static" >&2
+        return 1
+    fi
+    if readelf -l "$pkgname" | grep -q interpreter; then
+        echo "PKGBUILD: $pkgname needs a dynamic loader; it must be static" >&2
+        return 1
+    fi
 }
 
 check() {
     cd "$_srcdir"
 
-    go test -tags=unit ./cmd/...
+    go test -tags=unit ./...
 }
 
 package() {
@@ -52,6 +74,11 @@ package() {
 
     install -Dm755 "$pkgname" "$pkgdir/usr/bin/$pkgname"
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+
+    # The README defers to these for the detail, so they have to travel with it.
+    install -dm755 "$pkgdir/usr/share/doc/$pkgname/docs"
+    install -Dm644 docs/*.md "$pkgdir/usr/share/doc/$pkgname/docs/"
+    install -Dm644 HISTORY.md "$pkgdir/usr/share/doc/$pkgname/HISTORY.md"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
     # Not enabled on the host: the mkinitcpio install hook enables it inside the

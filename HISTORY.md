@@ -8,7 +8,269 @@ formats and CLI flags may change without migration paths.
 
 ---
 
+## Documentation
+
+### The README defers to topic documents
+
+The README had grown to 1122 lines, more than half of it reference material: PCR
+sources and the measure point, the Arch and Debian early-boot procedures, custom
+signing keys and sbctl sharing, the eventlog calculator, the source tree. Anyone
+arriving at the project had to scroll past all of it to find out what tpm2-kira
+does.
+
+The reference material now lives beside the rest in `docs/`, with the README
+keeping the parts someone reads once — what it is, how it works, install, the
+commands, a basic seal — and pointing at the detail:
+
+    docs/PCR-SELECTION.md   choosing PCRs: sources, weak selections, the measure
+                            point, event logs without SHA-256 digests
+    docs/SIGNING-KEYS.md    using your own key, sharing one with sbctl, the token
+    docs/EARLY-BOOT.md      showing a code before unlock, on Arch and on Debian
+    docs/DIAGNOSTICS.md     PCR mismatches, the eventlog calculator, recovery
+    docs/CODE-LAYOUT.md     where things live in the source
+
+That took the README from 1122 lines to 505 without losing anything: every
+heading that disappeared is accounted for under a clearer name in one of the new
+documents.
+
+`PLAN-YUBIKEY.md` moved to `docs/` too, leaving the repository root to the files
+that belong there.
+
+Two things that had to follow. Links written relative to the repository root
+break when the text moves down a directory, so they were rewritten. And the
+packages shipped only `README.md` as documentation — now that it defers to the
+`docs/` tree, both the `.deb` and the AUR package install that tree as well,
+otherwise the links would dangle for anyone reading the installed copy.
+
+---
+
+## Build
+
+### Every build path is static, not just Debian's
+
+The README has always said the binary is built with `CGO_ENABLED=0` so that the
+initramfs needs no libraries. Only `debian/rules` actually set it. `make build` —
+which `make install` uses, and whose output the mkinitcpio hook copies into the
+image — left it to the default, so on any machine with a C compiler it produced a
+binary linked against libc. The standard library uses cgo for host lookups and
+`internal/pcsc` imports `net`, so that was not hypothetical: a default build had
+two `NEEDED` entries.
+
+The AUR PKGBUILD followed the usual Arch Go recipe, which exports the `CGO_*`
+flags and builds `-buildmode=pie`. A static PIE has no `NEEDED` entries but still
+carries a `PT_INTERP`, so it depends on the dynamic loader being present in the
+image. The package now drops PIE deliberately and says why: not depending on the
+loader is worth more here than the ASLR, because this binary runs inside an
+initramfs.
+
+The release workflow and the integration workflow were both unpinned too — the
+latter explicitly set `CGO_ENABLED=1`, so CI was testing a binary that differed
+from the one that ships.
+
+All four paths now pin `CGO_ENABLED=0`, and the claim is checked rather than
+repeated: `make verify-static`, a step in the release workflow, and a guard in the
+PKGBUILD all assert no `NEEDED` entries and no interpreter.
+
+---
+
+## Layout
+
+### cmd/ became internal/kira/
+
+The application lived in a package named `cmd`, imported by `main.go` at the
+repository root. In Go, `cmd/` conventionally holds *main* packages — one
+directory per binary — so a library package with that name reads as a binary
+directory that is not one, and it left `internal/` looking like the place a few
+things had been moved out to rather than where the code lives.
+
+`main.go` stays at the root and does what a command does: parse flags and
+dispatch. Everything else is under `internal/`, which also makes it
+non-importable from outside the module.
+
+The boundary inside `internal/` is by subsystem, not by layer. `pcsc`, `piv` and
+`virtualpiv` earn their own packages by being self-contained: each has its own
+vocabulary, depends on nothing else in the project, and is unit-testable alone.
+The rest is one `kira` package because the verbs and the mechanism they drive
+share a vocabulary — PCR specs, the blob, TPM handles — and because output is
+interleaved with logic throughout. Splitting those by layer would need either a
+shared types package or the extraction of printing from nearly every file, for
+less benefit than it cost. The README states the rule so new files land in the
+right place.
+
+---
+
+## Commands
+
+### nvram delete no longer wipes every slot by default
+
+Reported after it destroyed two sealed secrets:
+
+    tpm2-kira nvram delete 0
+    Found 2 sealed slot(s) to delete
+    ...
+    All 2 slot(s) deleted successfully
+
+`0` was a positional argument. Go's flag package stops at the first non-flag and
+leaves the rest in `Args()`, which every command here discarded, so the `0` was
+dropped, `--nvram` went unset, and delete fell through to its every-slot path.
+The command read exactly as though it named slot 0.
+
+Two fixes, because there were two faults.
+
+Positional arguments are now refused rather than ignored, for every command. The
+message quotes the argument back and guesses the option — `--nvram` for something
+that looks like a slot or index, `--pcrs` for something that parses as a PCR
+selection — so `tpm2-kira seal 0,7` is corrected instead of silently sealing
+against the default PCRs, which was the same fault waiting to happen somewhere
+less visible.
+
+Deleting every slot is now something to ask for. `nvram delete` with neither
+`--nvram` nor `--all` refuses and shows both; `--all` lists the slots it is about
+to destroy and, when run from a terminal, requires typing `yes`. Deleting a sealed
+secret cannot be undone, so it should not have been what the command did when an
+option went missing.
+
+---
+
+## Commands
+
+### The failure marker no longer restates the exit status
+
+Failures printed a second line, `(exit status is 0 by design; this command did
+NOT succeed)`, after every `FAILED:` message. It was noise on every error, and it
+explained a design decision to the wrong audience: a script cannot act on it, and
+a person reading one error does not need the rationale repeated. The reasoning
+now lives next to the code that exits, and in the README's "Exit status" section.
+`tpm2-kira: FAILED:` remains the marker to grep for, and the exit status is still
+always 0.
+
+### Opening the TPM requires root, and the check lives at the device
+
+The first version of this exempted the read-only commands — `reveal`, `info`,
+`nvram list` and friends — on the grounds that a udev rule could grant a group
+access to `/dev/tpm0`, and the error message offered that as an alternative to
+`sudo`.
+
+That was wrong, and it contradicted the project's own threat model: §8 already
+places non-root userspace outside the trust boundary precisely because *anything*
+that can open the TPM device can ask the TPM to unseal while the PCRs still match.
+Reading the sealed secret is the capability the boundary protects, so there is no
+read-only tier to exempt, and suggesting a udev rule was advice to move the
+boundary rather than to work within it.
+
+The replacement keyed the requirement off the **command name**, which was also
+wrong and broke more visibly: the integration suite drives a software TPM over a
+unix socket that the test user owns and which needs no privilege whatsoever, so
+every test failed for a non-root user. The container the suite normally runs in is
+root, which hid it.
+
+The check now lives where the requirement actually comes from — the moment the
+device is opened. A character device is refused for a non-root user; a socket, or
+a path that is not there, is left to the open attempt. That is simultaneously
+stricter about `/dev/tpm0`, which no command can now reach without root, and
+permissive about software TPMs, which never needed it. `setup` keeps an up-front
+requirement because it writes under `/var/lib/tpm2-kira` whatever its TPM path is.
+
+The container test runner gained an unprivileged pass, since running everything as
+root is what allowed a root-only assumption to go unnoticed.
+
+### The signing key is created 0400, and a looser mode is reported
+
+`setup` used to write the private key 0600. It is now 0400: the file is written
+once and only ever read, so dropping the write bit costs nothing and takes an
+accidental overwrite off the table.
+
+Whenever the key is opened for signing — seal, reseal, nvram restore — the mode
+is checked. Group or other access is a warning naming the risk and the fix,
+because that mode is the key's only protection on disk and a readable key undoes
+the PCR policy for whoever can read it. Owner-writable but otherwise private
+(0600) is a one-line note, since it exposes the key to nobody. The recommended
+mode says nothing at all.
+
+It warns rather than refuses. A reseal is what someone reaches for when their
+machine has stopped showing a code, and declining to use a working key at that
+moment would be worse than the exposure it is warning about. It also warns once
+per file per run, since a reseal with no --nvram opens the key once per populated
+slot.
+
+### seal guides the PCR selection when none is given
+
+`tpm2-kira seal` with no `--pcrs`, run from a terminal, now profiles the machine
+and suggests a selection instead of silently applying `0,2,7`. It reports the
+Secure Boot state, whether the event log carries SHA-256 digests, whether a
+unified kernel image or GRUB is present, and which NVRAM slots are already in use.
+
+The recommendation depends on those facts rather than being fixed advice. With
+Secure Boot verifying the boot chain, PCRs 0 and 7 are enough and survive kernel
+updates. With Secure Boot off — or in Setup Mode, or unreadable — nothing
+verifies which kernel runs, so the suggestion adds whatever this system measures
+the boot components with: `11u` for a unified kernel image, `8,9` for GRUB, `4`
+otherwise. Each of those needs resealing on updates, and the suggestion says so,
+including the rule that a GRUB reseal has to follow the reboot rather than
+precede it.
+
+An explicit `--pcrs` skips the whole thing and is used exactly as written, and so
+does running without a terminal, which keeps the default for hooks and scripts.
+Typing a selection at the prompt is validated before anything is sealed, so a
+typo is a question rather than a policy bound to the wrong registers.
+
+### setup no longer seals
+
+`tpm2-kira setup` used to create the signing key **and** seal a TOTP secret
+against PCRs 0 and 7. It now stops after the key and prints the `seal` command to
+run next.
+
+The two acts are different in kind. Creating a key is cheap, local and
+repeatable. Sealing mints a secret that has to be enrolled in an authenticator,
+writes to TPM NVRAM, and is where the PCR selection is chosen — so it is the step
+someone is most likely to want to redo with different arguments, and the one whose
+failure matters. Combining them meant `setup` could not be re-run to reason about
+keys alone, and that a key-related question was answered in the same breath as a
+policy one.
+
+It also removed a PIN from the flow: setup reads a token's public key, which needs
+no PIN, and now performs no signature, so `--pin-file` is gone from it.
+
+Nothing automated ever called `setup` — the initramfs hooks and the Debian
+postinst only ever advised a human to run it — so the split broke no callers. The
+mkinitcpio post hook did gain a case: signing keys can now exist with nothing
+sealed, which used to be impossible, and it reports that as a skip rather than a
+failed reseal.
+
+---
+
 ## Blob format
+
+### Version 9 — key references instead of key paths
+
+`PublicKeyPath` and `PrivateKeyPath` were plain strings holding filesystem
+paths. A signing key can now live in a YubiKey PIV slot, which a path cannot
+name, so both became typed `KeyRef` values carrying a kind byte alongside a
+canonical string (`yubikey:serial=12345678;slot=9a`). The two encode the same
+fact and are cross-checked on read; a blob whose kind byte contradicts its
+string is rejected rather than resolved one way or the other.
+
+The string alone would have been enough to distinguish the cases — a filesystem
+path cannot begin with `yubikey:` — and reusing the v8 field would have avoided
+forcing everyone to re-seal. The bump was taken deliberately instead: the
+project maintains no backwards compatibility, and a field documented as a path
+that sometimes holds a URI is the kind of thing that is correct for exactly as
+long as nobody looks at it.
+
+Added in the same version: `KeyFingerprint` (SHA-256 of the signing key's PKIX
+DER) and `TokenSerial`. They identify the signing key without being usable as
+one, so `reseal` can say "the key in slot 9a is not the one this slot was sealed
+against" instead of failing as an opaque TPM policy error, and `info` can
+describe the key with the token unplugged.
+
+The public key itself is still **not** stored, for the same reason it was
+dropped in v5: a blob carrying its own verification key is a circular trust
+anchor, since a planted blob would carry a matching one.
+
+The **PIN** is deliberately not stored either. NVRAM reads are open, so anything
+in the blob is readable by any process that can reach the TPM and by anyone who
+takes the disk — publishing the PIN to exactly the attacker the token defends
+against.
 
 ### Version 8 — dropped the unverified eventlog hash
 
@@ -31,7 +293,7 @@ string into a file-access vector.
 - **Removed the external predict source (`p:COMMAND`).** The blob used to store
   a command string that `reseal` executed, so a planted blob meant arbitrary
   code execution as root — `docs/pentest2/vulnerabilities/vuln-0001.md`.
-  PCR 11 is now computed in-process from the image (`cmd/ukipredict.go`).
+  PCR 11 is now computed in-process from the image (`internal/kira/ukipredict.go`).
 - Blob `PCRSource` byte **2** is retired and must not be reused; it identified
   the predict source. 0 = register, 1 = eventlog, 3 = uki.
 - `ParsePCRSpecs` carried an explicit rejection of the `p:` suffix with a
