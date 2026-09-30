@@ -225,6 +225,41 @@ reference is on disk, that command needs no key flags at all — only the PIN,
 since sealing signs. Reading a public key from a slot needs no PIN, which is why
 setup itself never asks for one.
 
+### Where the signing key is looked for, in order
+
+`reseal` and `nvram restore` resolve the key from the first of these that
+answers:
+
+1. **`--privkey` on the command line.** A flag someone typed is an instruction.
+2. **The reference stored in the sealed blob** (`private_key_ref`), recorded at
+   seal time.
+3. **`/var/lib/tpm2-kira/keys/seal.key`** — the key, or the reference naming a
+   token.
+
+Then, whichever key that yields, its public half is fingerprinted and compared
+with the one the blob records. A mismatch stops the operation before anything is
+written.
+
+> **Known wart: a stale blob reference outranks a corrected file.** Because step 2
+> comes before step 3, moving the key to a different token or slot is not enough
+> to fix resealing. `yubikey adopt` rewrites `seal.key` correctly, but the blob
+> still names the old token and the blob wins, so `reseal` reports
+> `no YubiKey with serial <old> is present` while the right token is plugged in
+> and the file names it. It degrades safely — resealing is skipped, nothing is
+> overwritten, and the next boot shows a PCR MISMATCH rather than losing the
+> secret — but the way out is not the `reseal --nvram <slot>` the message
+> suggests. Name the key once, explicitly:
+>
+> ```bash
+> sudo -E tpm2-kira reseal --nvram 0x01803010 \
+>     --privkey 'yubikey:serial=<new>;slot=9a'
+> ```
+>
+> That re-records the reference in the blob, and later reseals need no flags
+> again. Removing the reference from the blob entirely is the better fix, since
+> where a key lives is local state and does not belong in a portable artifact;
+> see [PLAN-YUBIKEY.md](PLAN-YUBIKEY.md).
+
 If a token is connected but none of its slots holds a key, setup prints the
 `ykman` commands above and lets you stop there to run them; nothing is created,
 so `setup` can simply be run again.

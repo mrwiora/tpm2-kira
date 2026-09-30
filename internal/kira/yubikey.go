@@ -224,7 +224,13 @@ func YubiKeyAdopt(tpmPath, refStr, outPath string, debug bool) error {
 	} else {
 		fmt.Printf("    sudo tpm2-kira seal --privkey '%s' --pubkey %s\n", effectiveRef, outPath)
 	}
-	fmt.Println("\nThe reference is stored in the sealed blob too, so later reseals need no flags.")
+	// Not "the blob remembers this too": if a slot was already sealed against a
+	// different token, the blob still names that one and outranks the file just
+	// written, so reseal has to be told once. Saying otherwise sends people to a
+	// command that fails the same way twice.
+	fmt.Println("\nIf a slot was already sealed against a different key, name this one once:")
+	fmt.Printf("    sudo -E tpm2-kira reseal --nvram <slot> --privkey '%s'\n", effectiveRef)
+	fmt.Println("That re-records it in the blob; reseals after it need no flags.")
 
 	return nil
 }

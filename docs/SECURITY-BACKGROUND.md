@@ -108,14 +108,34 @@ unnecessary key material in the blob. The public key itself is not stored —
 it is loaded from the filesystem (via the stored paths) or derived from the
 private key when needed.
 
-⁵ The fingerprint and serial identify the signing key without being usable as
-one. They let `reseal` report "the key in slot 9a is not the one this slot was
-sealed against" instead of failing as an opaque TPM policy error, and they let
-`info` describe the key with the token unplugged. Storing the public key itself
-was considered and rejected: a blob that carries its own verification key is a
-circular trust anchor, since a planted blob would carry a matching one. The
-check is advisory — the blob signature, verified against the key the caller
-actually holds, is what decides.
+⁵ The fingerprint and the serial are not the same kind of thing, and it matters
+which does what.
+
+**The fingerprint identifies the key.** `checkKeyIdentity` hashes the public half
+of whatever key was opened and compares it with `KeyFingerprint`; a mismatch
+*stops* `reseal` and `nvram restore` before anything is written. It is a gate,
+not only a nicety, and what it buys is a sentence — "the key in slot 9a is not
+the one this slot was sealed against" — where the TPM would otherwise produce an
+opaque policy failure. It also lets `info` describe the key with the token
+unplugged. Storing the public key itself was considered and rejected: a blob that
+carries its own verification key is a circular trust anchor, since a planted blob
+would carry a matching one. The blob signature, verified against the key the
+caller actually holds, remains the authoritative check; the fingerprint runs
+first because it can explain itself.
+
+**The serial is an address, never a gate.** `TokenSerial` is read and
+interpolated into that same error message and printed by `info`. It is never
+compared against anything. A reference's `serial=` is used one step earlier, to
+*choose* a device: `openTokenSession` walks the readers, asks each card for its
+serial, and skips the ones that do not match. A reference without `serial=`
+takes the first PIV card it finds. So a swapped token is not caught by its
+serial — it is caught by the fingerprint of the key inside it, which is the
+property worth pinning, because it survives the key being moved to another token
+or slot.
+
+The practical consequence: `yubikey list` shows each connected token's key
+fingerprint and `info` shows the sealed one, so matching those two is how you
+confirm you are holding the right token — not by reading serials.
 
 ⁴ The blob carries a detached signature over `[version ‖ payloadLen ‖ payload]`,
 made with the same signing key. Unsigned blobs are rejected outright. This
