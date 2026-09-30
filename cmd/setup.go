@@ -20,26 +20,37 @@ type SetupKeyChoice struct {
 	TokenRef string
 }
 
-// Setup performs initial tpm2-kira configuration:
-//  1. Checks whether the keys directory already exists.
-//     If it does, the system is considered already configured — an
-//     informational message is printed and setup returns successfully (exit 0).
+// Setup prepares the signing key and nothing else.
+//
+// It does not seal. Sealing generates a TOTP secret and prints a QR code that
+// has to be scanned, and it writes to TPM NVRAM — a different kind of act from
+// creating a key, with a different failure mode and a different moment to choose
+// PCRs at. Keeping them apart means setup can be re-run reasoning only about
+// keys, and 'seal' can be re-run without touching them.
+//
+// Steps:
+//  1. Declines if the keys directory already exists, since its job is done.
 //  2. Decides where the signing key lives. A key file is the default; when a
 //     hardware token is connected and someone is there to answer, setup offers
-//     it as an alternative rather than leaving the user to find 'yubikey adopt'
-//     on their own.
-//  3. Generates a P-256 ECDSA key pair as seal.pub / seal.key, or adopts the
+//     it rather than leaving the user to find 'yubikey adopt' on their own.
+//  3. Generates a P-256 ECDSA pair as seal.pub / seal.key, or registers the
 //     chosen token slot and caches only its public key.
-//  4. Calls the equivalent of "tpm2-kira seal --pcrs 0,7".
-func Setup(tpmPath string, nvramIndex uint32, choice SetupKeyChoice, debug bool) error {
+//  4. Prints the seal command to run next.
+//
+// No PIN is ever needed: reading a token's public key does not require one, and
+// setup performs no signature.
+func Setup(tpmPath string, choice SetupKeyChoice, debug bool) error {
 	pubKeyPath := DefaultPublicKeyPath
 	privKeyPath := DefaultPrivateKeyPath
 
 	// ── Step 1: Check if keys directory already exists ──
 	if info, err := os.Stat(DefaultKeysDir); err == nil && info.IsDir() {
-		fmt.Printf("tpm2-kira has been already configured (directory %s exists).\n", DefaultKeysDir)
-		fmt.Println("  Further configuration must be done manually.")
-		fmt.Println("  Use 'tpm2-kira seal', 'tpm2-kira reseal', or edit the keys directly.")
+		fmt.Printf("Signing keys already exist in %s.\n", DefaultKeysDir)
+		fmt.Println("  setup only creates keys, so there is nothing more for it to do.")
+		fmt.Println()
+		fmt.Println("  To seal a TOTP secret:            sudo tpm2-kira seal --pcrs \"0,7\"")
+		fmt.Println("  To see what is already sealed:    tpm2-kira info")
+		fmt.Println("  To move the key onto a YubiKey:   see docs/YUBIKEY.md")
 		return nil
 	}
 
@@ -53,7 +64,7 @@ func Setup(tpmPath string, nvramIndex uint32, choice SetupKeyChoice, debug bool)
 	}
 
 	if !tokenRef.IsZero() {
-		return setupWithToken(tpmPath, nvramIndex, tokenRef, debug)
+		return setupWithToken(tpmPath, tokenRef, debug)
 	}
 
 	// ── Step 3: Create directory and generate P-256 key pair ──
@@ -95,30 +106,38 @@ func Setup(tpmPath string, nvramIndex uint32, choice SetupKeyChoice, debug bool)
 		return fmt.Errorf("failed to write public key to %s: %w", pubKeyPath, err)
 	}
 	fmt.Printf("  Public key written to:  %s\n", pubKeyPath)
+
+	fmt.Println()
+	fmt.Println("=== Signing keys ready ===")
+	fmt.Printf("  Private key: %s\n", privKeyPath)
+	fmt.Printf("  Public key:  %s\n", pubKeyPath)
+	printSealNext(KeyRef{})
+
+	return nil
+}
+
+// printSealNext tells the user the command that actually seals a secret.
+//
+// setup deliberately stops short of it, so it has to hand over clearly — with
+// the key reference filled in, since a token needs one and there is no sealed
+// blob yet to remember it from.
+func printSealNext(ref KeyRef) {
+	fmt.Println()
+	fmt.Println("Nothing is sealed yet. Seal a TOTP secret next:")
 	fmt.Println()
 
-	// ── Step 4: Seal with PCRs 0,7 using the generated keys ──
-	fmt.Println("Proceeding to seal TOTP secret (equivalent to: tpm2-kira seal --pcrs 0,7)")
-	fmt.Println()
-
-	pcrsStr := "0,7"
-	hashAlgo := PCRHashAlgoSHA256
-
-	// No UKI verification: setup runs from the mkinitcpio build hook, where the
-	// image being built is not the one that booted. These PCRs do not use it anyway.
-	if err := Seal(tpmPath, pcrsStr, nvramIndex, pubKeyPath, privKeyPath, debug, hashAlgo, false); err != nil {
-		return fmt.Errorf("seal failed during setup: %w", err)
+	if ref.IsZero() {
+		fmt.Println("    sudo tpm2-kira seal --pcrs \"0,7\"")
+	} else {
+		fmt.Printf("    export %s=<your PIN>\n", PINEnvVar)
+		fmt.Println("    sudo -E tpm2-kira seal --pcrs \"0,7\" \\")
+		fmt.Printf("        --privkey '%s' \\\n", ref)
+		fmt.Printf("        --pubkey %s\n", DefaultPublicKeyPath)
 	}
 
 	fmt.Println()
-	fmt.Println("=== Setup Complete ===")
-	fmt.Printf("  Keys directory: %s\n", DefaultKeysDir)
-	fmt.Printf("  Public key:     %s\n", pubKeyPath)
-	fmt.Printf("  Private key:    %s\n", privKeyPath)
-	fmt.Printf("  PCRs sealed:    %s\n", pcrsStr)
-	fmt.Printf("  Hash algorithm: %s\n", hashAlgo.DisplayString())
-
-	return nil
+	fmt.Println("That generates the secret and prints a QR code to scan with your")
+	fmt.Println("authenticator app. 'tpm2-kira pcrtips' explains the PCR choice.")
 }
 
 // resolveSetupKeyLocation decides whether the signing key goes in a file or on a
@@ -294,11 +313,11 @@ func promptEmptyToken(tokens []TokenInfo) bool {
 	return false
 }
 
-// setupWithToken completes setup against a key held on a token.
+// setupWithToken registers a key held on a token, without sealing.
 //
 // Only the public key is written to disk. That is what lets reveal, info and the
-// blob signature check work with the token unplugged.
-func setupWithToken(tpmPath string, nvramIndex uint32, ref KeyRef, debug bool) error {
+// blob signature check work later with the token unplugged.
+func setupWithToken(tpmPath string, ref KeyRef, debug bool) error {
 	fmt.Printf("Using the signing key in %s.\n\n", ref)
 
 	pub, err := yubiKeyPublicKey(ref, debug)
@@ -326,30 +345,16 @@ func setupWithToken(tpmPath string, nvramIndex uint32, ref KeyRef, debug bool) e
 	if err := os.WriteFile(DefaultPublicKeyPath, pemBytes, 0644); err != nil {
 		return fmt.Errorf("failed to cache the public key at %s: %w", DefaultPublicKeyPath, err)
 	}
-	fmt.Printf("  Public key cached at: %s\n", DefaultPublicKeyPath)
+
+	fmt.Println()
+	fmt.Println("=== Signing key ready ===")
+	fmt.Printf("  Signing key: %s\n", ref)
+	fmt.Printf("  Public key:  %s  (cached)\n", DefaultPublicKeyPath)
 	fmt.Println("  No private key is written: it stays on the token.")
-	fmt.Println()
-
-	pcrsStr := "0,7"
-	hashAlgo := PCRHashAlgoSHA256
-
-	fmt.Println("Proceeding to seal TOTP secret (equivalent to: tpm2-kira seal --pcrs 0,7)")
-	fmt.Println()
-
-	if err := Seal(tpmPath, pcrsStr, nvramIndex, DefaultPublicKeyPath, ref.String(), debug, hashAlgo, false); err != nil {
-		return fmt.Errorf("seal failed during setup: %w", err)
-	}
+	printSealNext(ref)
 
 	fmt.Println()
-	fmt.Println("=== Setup Complete ===")
-	fmt.Printf("  Signing key:    %s\n", ref)
-	fmt.Printf("  Public key:     %s\n", DefaultPublicKeyPath)
-	fmt.Printf("  PCRs sealed:    %s\n", pcrsStr)
-	fmt.Printf("  Hash algorithm: %s\n", hashAlgo.DisplayString())
-	fmt.Println()
-	fmt.Println("The token is needed only to reseal after an update, never at boot.")
-	fmt.Printf("Set %s for unattended reseals, or let them be skipped and\n", PINEnvVar)
-	fmt.Println("run 'tpm2-kira reseal' by hand. See docs/YUBIKEY.md.")
+	fmt.Println("The token is needed to seal and to reseal after an update, never at boot.")
 
 	return nil
 }

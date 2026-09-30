@@ -192,9 +192,10 @@ and offers them, with a key file as the default:
 sudo tpm2-kira setup
 ```
 
-Choosing the slot does the validation, caching and sealing in one go. Setup never
-asks when it is not run from a terminal, and `--yubikey` / `--local` skip the
-question outright.
+Choosing the slot does the validation and caching, then prints the `seal` command
+to run next with the key reference filled in. Setup never asks when it is not run
+from a terminal, and `--yubikey` / `--local` skip the question outright. It needs
+no PIN — reading a public key from a slot does not require one.
 
 For an installation that already has `/var/lib/tpm2-kira/keys`, setup declines,
 so register the slot by hand instead and then reseal onto it:

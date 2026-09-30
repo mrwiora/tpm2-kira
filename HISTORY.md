@@ -8,6 +8,33 @@ formats and CLI flags may change without migration paths.
 
 ---
 
+## Commands
+
+### setup no longer seals
+
+`tpm2-kira setup` used to create the signing key **and** seal a TOTP secret
+against PCRs 0 and 7. It now stops after the key and prints the `seal` command to
+run next.
+
+The two acts are different in kind. Creating a key is cheap, local and
+repeatable. Sealing mints a secret that has to be enrolled in an authenticator,
+writes to TPM NVRAM, and is where the PCR selection is chosen — so it is the step
+someone is most likely to want to redo with different arguments, and the one whose
+failure matters. Combining them meant `setup` could not be re-run to reason about
+keys alone, and that a key-related question was answered in the same breath as a
+policy one.
+
+It also removed a PIN from the flow: setup reads a token's public key, which needs
+no PIN, and now performs no signature, so `--pin-file` is gone from it.
+
+Nothing automated ever called `setup` — the initramfs hooks and the Debian
+postinst only ever advised a human to run it — so the split broke no callers. The
+mkinitcpio post hook did gain a case: signing keys can now exist with nothing
+sealed, which used to be impossible, and it reports that as a skip rather than a
+failed reseal.
+
+---
+
 ## Blob format
 
 ### Version 9 — key references instead of key paths

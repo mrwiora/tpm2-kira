@@ -53,16 +53,24 @@ make build
 # Install
 sudo make install
 
-# First-time setup: generates signing keys + seals a TOTP secret (PCRs 0,7)
+# Create the signing key (one step)
 sudo tpm2-kira setup
+
+# Seal a TOTP secret against PCRs 0 and 7 (the other step)
+sudo tpm2-kira seal --pcrs "0,7"
 
 # Show the current TOTP code
 tpm2-kira reveal
 ```
 
-`setup` creates an ECDSA P-256 key pair at `/var/lib/tpm2-kira/keys/` and seals a
-TOTP secret bound to PCRs 0 and 7. Scan the QR code it prints with your
-authenticator app.
+`setup` creates an ECDSA P-256 key pair at `/var/lib/tpm2-kira/keys/` and stops
+there. `seal` generates the TOTP secret, binds it to the PCRs you name, and
+prints a QR code to scan with your authenticator app.
+
+The two are deliberately separate. Creating a key is cheap and repeatable;
+sealing writes to TPM NVRAM and mints a secret you have to enrol, and it is the
+step where the PCR choice is made. Keeping them apart means you can re-run
+either without having to think about the other.
 
 If a YubiKey is plugged in, `setup` notices and offers to put the signing key on
 it instead — a key file remains the default, so pressing Enter keeps the
@@ -94,10 +102,11 @@ checksummed release tarball, and its `pkgver` is filled in at publish time, so
 it cannot be built straight from a clone. See
 [packaging/aur/README.md](packaging/aur/README.md) to build one locally.
 
-After installing, run setup once and rebuild the initramfs:
+After installing, create the key, seal a secret, and rebuild the initramfs:
 
 ```bash
 sudo tpm2-kira setup
+sudo tpm2-kira seal --pcrs "0,7"
 sudo mkinitcpio -P
 ```
 
@@ -113,11 +122,13 @@ sudo apt install ../tpm2-kira_*_amd64.deb
 checkout produces something like `0.2.3+9.g9d32210`.
 
 The package installs the binary, the initramfs-tools hook and boot scripts, and
-rebuilds the initramfs. It does **not** run `setup`, because that generates a
-new TOTP secret and prints a QR code you need to scan:
+rebuilds the initramfs. It runs neither `setup` nor `seal`: sealing generates a
+new TOTP secret and prints a QR code you need to scan, which must not happen as
+a side effect of installing a package.
 
 ```bash
 sudo tpm2-kira setup
+sudo tpm2-kira seal --pcrs "0,7"
 sudo update-initramfs -u
 ```
 
@@ -434,9 +445,12 @@ Choice [Enter]:
 ```
 
 Choosing the slot validates it, checks your TPM can load the key for
-PolicySigned, caches the public key so later commands work with the token
-unplugged, and seals — no separate `adopt` step. Only the public key is written
-to disk.
+PolicySigned, and caches the public key so later commands work with the token
+unplugged — no separate `adopt` step. Only the public key is written to disk.
+
+setup stops there and prints the `seal` command to run next, with the key
+reference already filled in. It needs no PIN, because reading a public key from
+a slot does not require one; sealing does.
 
 If a token is connected but none of its slots holds a key, setup prints the
 `ykman` commands above and lets you stop there to run them; nothing is created,

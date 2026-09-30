@@ -103,24 +103,18 @@ func runSetup(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	fs := flag.NewFlagSet("setup", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	yubikey := fs.String("yubikey", "", "Use a YubiKey PIV slot for the signing key, e.g. 'yubikey:slot=9a' or just 'yubikey:'")
 	local := fs.Bool("local", false, "Use a signing key file without asking about a token")
-	pinFile := fs.String("pin-file", "", "File holding the YubiKey PIN (mode 0600)")
 
 	fs.Parse(args)
-
-	cmd.PINFileSetting = *pinFile
-
-	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
 
 	choice := cmd.SetupKeyChoice{Local: *local, TokenRef: *yubikey}
 	if choice.Local && choice.TokenRef != "" {
 		fail(fmt.Errorf("--local and --yubikey ask for opposite things; pick one"))
 	}
 
-	if err := cmd.Setup(*tpm, sealIndex, choice, *debug); err != nil {
+	if err := cmd.Setup(*tpm, choice, *debug); err != nil {
 		fail(err)
 	}
 }
@@ -348,7 +342,7 @@ USAGE:
   tpm2-kira <command> [options]
 
 COMMANDS:
-  setup       Initial setup: generate P-256 signing keys and seal (PCRs 0,7)
+  setup       Create the signing keys. Does NOT seal — run 'seal' next.
   seal        Generate and seal TOTP secret to TPM NVRAM
   reseal      Reseal secret with current PCR values (requires signing key)
   reveal      Generate TOTP code with colored KIRA format
@@ -376,13 +370,15 @@ GLOBAL OPTIONS:
   --debug         Enable debug output
 
 SETUP OPTIONS:
+  setup only prepares the signing key; it never writes to TPM NVRAM and never
+  needs a PIN. Run 'tpm2-kira seal' afterwards to create the TOTP secret.
+
   --yubikey [REF]    Put the signing key on a YubiKey PIV slot instead of in a
                      file. With no reference, the first token found is used.
                      Without this flag, setup offers any connected token when
                      run from a terminal, and defaults to a key file.
   --local            Use a key file without asking about a token. This is what
                      setup does anyway when it is not run from a terminal.
-  --pin-file PATH    File holding the YubiKey PIN (mode 0600).
 
 SEAL OPTIONS:
   --pcrs INDICES     PCR indices with optional source suffix (default: 0,2,7)
