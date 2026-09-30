@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"slices"
@@ -11,6 +12,168 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 )
+
+// ── PCR vocabulary ────────────────────────────────────────────────────────
+//
+// The hash algorithm and the per-PCR source describe a PCR selection, so they
+// belong here with the rest of that vocabulary. They used to be declared in
+// blob.go, which made the serialisation format the home of types the eventlog,
+// measure-point and UKI code all depend on.
+
+// PCRHashAlgo represents the hash algorithm used for PCR bank selection
+type PCRHashAlgo string
+
+const (
+	// PCRHashAlgoSHA256 is the default SHA-256 hash algorithm (32-byte digests)
+	PCRHashAlgoSHA256 PCRHashAlgo = "sha256"
+	// PCRHashAlgoSHA1 is the legacy SHA-1 hash algorithm (20-byte digests)
+	PCRHashAlgoSHA1 PCRHashAlgo = "sha1"
+)
+
+// TPMAlg returns the corresponding TPM algorithm ID for this hash algorithm
+func (h PCRHashAlgo) TPMAlg() tpm2.TPMAlgID {
+	switch h {
+	case PCRHashAlgoSHA1:
+		return tpm2.TPMAlgSHA1
+	default:
+		return tpm2.TPMAlgSHA256
+	}
+}
+
+// DigestSize returns the digest size in bytes for this hash algorithm
+func (h PCRHashAlgo) DigestSize() int {
+	switch h {
+	case PCRHashAlgoSHA1:
+		return 20
+	default:
+		return 32
+	}
+}
+
+// String returns a short identifier for this hash algorithm (e.g. "sha256")
+func (h PCRHashAlgo) String() string {
+	switch h {
+	case PCRHashAlgoSHA1:
+		return "sha1"
+	default:
+		return "sha256"
+	}
+}
+
+// DisplayString returns a human-readable display name (e.g. "SHA-256")
+func (h PCRHashAlgo) DisplayString() string {
+	switch h {
+	case PCRHashAlgoSHA1:
+		return "SHA-1"
+	default:
+		return "SHA-256"
+	}
+}
+
+// BlobVersionError is returned when a sealed blob has an incompatible version
+type BlobVersionError struct {
+	FoundVersion    uint32
+	RequiredVersion uint32
+	DataSize        int
+}
+
+func (e *BlobVersionError) Error() string {
+	return fmt.Sprintf("tpm2-kira: incompatible blob version (found v%d, requires v%d). Re-seal with: tpm2-kira seal", e.FoundVersion, e.RequiredVersion)
+}
+
+// IsBlobVersionError checks if an error (or its wrapped chain) is a BlobVersionError
+func IsBlobVersionError(err error) (*BlobVersionError, bool) {
+	if err == nil {
+		return nil, false
+	}
+	// Check direct type
+	if bve, ok := err.(*BlobVersionError); ok {
+		return bve, true
+	}
+	// Check wrapped errors (fmt.Errorf %w)
+	if unwrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return IsBlobVersionError(unwrapped.Unwrap())
+	}
+	return nil, false
+}
+
+// BlobPeek contains basic information about a raw blob without full unmarshaling
+type BlobPeek struct {
+	DataSize   int
+	Version    uint32
+	AppVersion string // empty if version is too old or data too short to read
+}
+
+// PeekBlobVersion reads just the version and app version from raw blob data without full unmarshal.
+// For current blobs the layout is: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
+// For older blobs the layout is: [version:4][appVersionLen:4][appVersion...]
+// PeekBlobVersion reads just the version and app version from raw blob data without full unmarshal.
+// Layout: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
+func PeekBlobVersion(data []byte) *BlobPeek {
+	peek := &BlobPeek{
+		DataSize: len(data),
+	}
+
+	if len(data) < 4 {
+		return peek
+	}
+
+	peek.Version = binary.LittleEndian.Uint32(data[0:4])
+
+	if len(data) >= 12 {
+		appVersionLen := binary.LittleEndian.Uint32(data[8:12])
+		if appVersionLen > 0 && appVersionLen < 256 && len(data) >= 12+int(appVersionLen) {
+			peek.AppVersion = string(data[12 : 12+appVersionLen])
+		}
+	}
+
+	return peek
+}
+
+// AppVersion is the version of the application that created the sealed blob
+// This should be set by the main package during initialization
+var AppVersion = "unknown"
+
+// PCRSource indicates where a PCR value was obtained from
+type PCRSource byte
+
+const (
+	// PCRSourceRegister means the PCR value was read from TPM registers ('r' suffix or default)
+	PCRSourceRegister PCRSource = 0
+	// PCRSourceEventlog means the PCR value was calculated from the TPM eventlog ('e' suffix)
+	PCRSourceEventlog PCRSource = 1
+	// Source byte 2 is retired and must not be reused; see HISTORY.md.
+	// PCRSourceUKI means the PCR value was computed from a unified kernel image ('u' suffix)
+	PCRSourceUKI PCRSource = 3
+)
+
+// String returns a human-readable label for the PCR source
+func (s PCRSource) String() string {
+	switch s {
+	case PCRSourceEventlog:
+		return "eventlog"
+	case PCRSourceRegister:
+		return "register"
+	case PCRSourceUKI:
+		return "uki"
+	default:
+		return "unknown"
+	}
+}
+
+// Suffix returns the single-character suffix for the PCR source
+func (s PCRSource) Suffix() string {
+	switch s {
+	case PCRSourceEventlog:
+		return "e"
+	case PCRSourceUKI:
+		return "u"
+	case PCRSourceRegister:
+		return ""
+	default:
+		return ""
+	}
+}
 
 // PCR selection, parsing, reading and comparison.
 

@@ -1,18 +1,15 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"strings"
-	"sync"
-
-	"golang.org/x/sys/unix"
 )
 
-// PIN resolution for hardware-token signing keys.
+// PIN resolution for a signing key held in a YubiKey PIV slot.
 //
-// The PIN never appears in output, including under --debug. Only its source is
+// The PIN never appears in output, including under --debug. Terminal reading
+// lives in prompt.go, which knows nothing about PINs. Only its source is
 // ever named.
 
 // PINEnvVar is the environment variable a token PIN is read from.
@@ -90,9 +87,12 @@ func (p *pinResolver) PIN() (string, error) {
 	}
 
 	if p.allowPrompt {
-		pin, err := promptForPIN()
-		if err != nil {
-			return "", err
+		pin, err := ReadSecret("YubiKey PIN: ")
+		if err != nil && pin == "" {
+			return "", fmt.Errorf("failed to read PIN: %w", err)
+		}
+		if pin == "" {
+			return "", fmt.Errorf("no PIN entered")
 		}
 		p.set(pin, "terminal prompt")
 		return p.pin, nil
@@ -147,69 +147,4 @@ func readPINFile(path string) (string, error) {
 	}
 
 	return pin, nil
-}
-
-// promptForPIN reads a PIN from the terminal with echo disabled.
-func promptForPIN() (string, error) {
-	fd := int(os.Stdin.Fd())
-
-	termios, err := unix.IoctlGetTermios(fd, unix.TCGETS)
-	if err != nil {
-		return "", fmt.Errorf("cannot read terminal settings to disable echo: %w", err)
-	}
-
-	noEcho := *termios
-	noEcho.Lflag &^= unix.ECHO
-	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &noEcho); err != nil {
-		return "", fmt.Errorf("cannot disable terminal echo: %w", err)
-	}
-	defer func() {
-		// Restoring matters more than the read succeeding: leaving the
-		// terminal without echo makes the shell unusable afterwards.
-		_ = unix.IoctlSetTermios(fd, unix.TCSETS, termios)
-		fmt.Fprintln(os.Stderr)
-	}()
-
-	fmt.Fprint(os.Stderr, "YubiKey PIN: ")
-
-	line, err := ReadLine()
-	if err != nil && line == "" {
-		return "", fmt.Errorf("failed to read PIN: %w", err)
-	}
-
-	if line == "" {
-		return "", fmt.Errorf("no PIN entered")
-	}
-
-	return line, nil
-}
-
-// stdinReader is shared by every prompt in the process.
-//
-// A bufio.Reader may read ahead, so a second one wrapping os.Stdin would start
-// after whatever the first had already buffered — losing input typed between
-// two prompts. Setup asks a question and then the PIN prompt asks another, so
-// they have to read through the same buffer.
-var (
-	stdinOnce   sync.Once
-	stdinBuffer *bufio.Reader
-)
-
-// ReadLine reads one line from standard input, without the line ending.
-func ReadLine() (string, error) {
-	stdinOnce.Do(func() {
-		stdinBuffer = bufio.NewReader(os.Stdin)
-	})
-
-	line, err := stdinBuffer.ReadString('\n')
-	return strings.TrimRight(line, "\r\n"), err
-}
-
-// IsInteractive reports whether standard input is a terminal, so a prompt has
-// somebody to answer it. A package hook has not.
-func IsInteractive() bool { return isTerminal(int(os.Stdin.Fd())) }
-
-func isTerminal(fd int) bool {
-	_, err := unix.IoctlGetTermios(fd, unix.TCGETS)
-	return err == nil
 }
