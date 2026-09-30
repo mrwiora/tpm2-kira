@@ -4,7 +4,10 @@ import (
 	"crypto"
 	"crypto/rand"
 	"encoding/base32"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -26,11 +29,26 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 		return fmt.Errorf("invalid PCRs: %w", err)
 	}
 
+	// The signing keys come from 'setup', which seal never runs on its own.
+	for _, keyPath := range []string{privKeyPath, pubKeyPath} {
+		if _, err := os.Stat(keyPath); errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("cannot seal: no signing key at %s.\n"+
+				"  Run 'tpm2-kira setup' first to create the signing keys,\n"+
+				"  or pass --privkey and --pubkey to use your own", keyPath)
+		}
+	}
+
 	// Both key files must be mode 0400 before either is loaded.
 	for _, keyPath := range []string{privKeyPath, pubKeyPath} {
 		if err := CheckSigningKeyFileMode(keyPath); err != nil {
 			return fmt.Errorf("cannot seal: %w", err)
 		}
+	}
+
+	// The private key must be usable before anything is generated or written:
+	// without it the PolicySigned NV write cannot be authorized.
+	if _, err := LoadSigningPrivateKeyFromPEM(privKeyPath); err != nil {
+		return fmt.Errorf("cannot seal: signing private key is not usable: %w", err)
 	}
 
 	// Load and validate the signing public key

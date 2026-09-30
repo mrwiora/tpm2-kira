@@ -51,7 +51,7 @@ build() {
     _report_measure_point
 
     if [[ ! -d /var/lib/tpm2-kira/keys ]]; then
-        warning "tpm2-kira: not configured yet; run 'tpm2-kira setup' and rebuild"
+        warning "tpm2-kira: not configured yet; run 'tpm2-kira setup', then 'tpm2-kira seal', and rebuild"
     fi
 }
 

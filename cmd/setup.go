@@ -10,15 +10,16 @@ import (
 	"os"
 )
 
-// Setup performs initial tpm2-kira configuration:
+// Setup performs initial tpm2-kira configuration: it creates the signing key
+// pair and nothing else. Sealing a TOTP secret is a separate step ('seal'),
+// which refuses to run until the keys exist.
+//
 //  1. Checks whether the keys directory already exists.
 //     If it does, the system is considered already configured — an
 //     informational message is printed and setup returns successfully (exit 0).
 //  2. Creates the directory (including parents) and generates a P-256 ECDSA
 //     key pair as seal.pub / seal.key.
-//  3. Calls the equivalent of "tpm2-kira seal --pcrs 0,7" using the freshly
-//     generated key pair.
-func Setup(tpmPath string, nvramIndex uint32, debug bool) error {
+func Setup() error {
 	pubKeyPath := DefaultPublicKeyPath
 	privKeyPath := DefaultPrivateKeyPath
 
@@ -69,28 +70,15 @@ func Setup(tpmPath string, nvramIndex uint32, debug bool) error {
 		return fmt.Errorf("failed to write public key to %s: %w", pubKeyPath, err)
 	}
 	fmt.Printf("  Public key written to:  %s\n", pubKeyPath)
-	fmt.Println()
-
-	// ── Step 3: Seal with PCRs 0,7 using the generated keys ──
-	fmt.Println("Proceeding to seal TOTP secret (equivalent to: tpm2-kira seal --pcrs 0,7)")
-	fmt.Println()
-
-	pcrsStr := "0,7"
-	hashAlgo := PCRHashAlgoSHA256
-
-	// No UKI verification: setup runs from the mkinitcpio build hook, where the
-	// image being built is not the one that booted. These PCRs do not use it anyway.
-	if err := Seal(tpmPath, pcrsStr, nvramIndex, pubKeyPath, privKeyPath, debug, hashAlgo, false); err != nil {
-		return fmt.Errorf("seal failed during setup: %w", err)
-	}
 
 	fmt.Println()
 	fmt.Println("=== Setup Complete ===")
 	fmt.Printf("  Keys directory: %s\n", DefaultKeysDir)
 	fmt.Printf("  Public key:     %s\n", pubKeyPath)
 	fmt.Printf("  Private key:    %s\n", privKeyPath)
-	fmt.Printf("  PCRs sealed:    %s\n", pcrsStr)
-	fmt.Printf("  Hash algorithm: %s\n", hashAlgo.DisplayString())
+	fmt.Println()
+	fmt.Println("Next, seal a TOTP secret and scan the QR code it prints:")
+	fmt.Println("   tpm2-kira seal --pcrs 0,7")
 
 	return nil
 }

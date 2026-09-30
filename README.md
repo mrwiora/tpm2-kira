@@ -53,14 +53,17 @@ make build
 # Install
 sudo make install
 
-# First-time setup: generates signing keys + seals a TOTP secret (PCRs 0,7)
+# First-time setup: generates the signing keys
 sudo tpm2-kira setup
+
+# Seal a TOTP secret bound to PCRs 0 and 7
+sudo tpm2-kira seal --pcrs 0,7
 
 # Show the current TOTP code
 tpm2-kira reveal
 ```
 
-`setup` creates an ECDSA P-256 key pair at `/var/lib/tpm2-kira/keys/` and seals a TOTP secret bound to PCRs 0 and 7. Scan the QR code it prints with your authenticator app.
+`setup` creates an ECDSA P-256 key pair at `/var/lib/tpm2-kira/keys/` and nothing else. `seal` generates a TOTP secret and seals it, here bound to PCRs 0 and 7; scan the QR code it prints with your authenticator app. `seal` refuses to run until `setup` has created the keys (or you pass your own with `--privkey` / `--pubkey`).
 
 ## Installation
 
@@ -88,10 +91,11 @@ checksummed release tarball, and its `pkgver` is filled in at publish time, so
 it cannot be built straight from a clone. See
 [packaging/aur/README.md](packaging/aur/README.md) to build one locally.
 
-After installing, run setup once and rebuild the initramfs:
+After installing, run setup and seal once, then rebuild the initramfs:
 
 ```bash
 sudo tpm2-kira setup
+sudo tpm2-kira seal --pcrs 0,7
 sudo mkinitcpio -P
 ```
 
@@ -107,11 +111,12 @@ sudo apt install ../tpm2-kira_*_amd64.deb
 checkout produces something like `0.2.3+9.g9d32210`.
 
 The package installs the binary, the initramfs-tools hook and boot scripts, and
-rebuilds the initramfs. It does **not** run `setup`, because that generates a
-new TOTP secret and prints a QR code you need to scan:
+rebuilds the initramfs. It does **not** run `setup` or `seal`, because sealing
+generates a new TOTP secret and prints a QR code you need to scan:
 
 ```bash
 sudo tpm2-kira setup
+sudo tpm2-kira seal --pcrs 0,7
 sudo update-initramfs -u
 ```
 
@@ -130,8 +135,8 @@ If called without a command, tpm2-kira defaults to `reveal`.
 
 | Command | Description |
 |---------|-------------|
-| `setup` | One-time initial setup: generate signing keys + seal a secret (PCRs 0,7) |
-| `seal` | Generate and seal a new TOTP secret with custom PCR selection |
+| `setup` | One-time initial setup: generate the signing keys (run before `seal`) |
+| `seal` | Generate and seal a new TOTP secret with custom PCR selection (requires `setup` or your own keys) |
 | `reseal` | Re-seal the existing secret against current PCR values |
 | `reveal` | Show the current TOTP code (colored output) |
 | `reveal-plain` | Show the current TOTP code (plain text, for scripts) |
@@ -564,7 +569,7 @@ in the TPM. Delete the slot first, then the directory.
 ├── cmd/                     # Command implementations
 │   ├── seal.go              # Seal TOTP secret into TPM
 │   ├── reseal.go            # Re-seal with new PCR values
-│   ├── setup.go             # First-time setup (keygen + seal)
+│   ├── setup.go             # First-time setup (keygen)
 │   ├── info.go              # Inspect sealed blob metadata
 │   ├── scan.go              # Multi-slot NVRAM scanning
 │   ├── blob.go              # Sealed blob serialization format

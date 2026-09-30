@@ -108,3 +108,32 @@ func TestSealRejectsKeyFileMode(t *testing.T) {
 		})
 	}
 }
+
+func TestSealRequiresUsableSigningKey(t *testing.T) {
+	t.Run("Missing private key asks for setup", func(t *testing.T) {
+		dir := t.TempDir()
+		pub := filepath.Join(dir, "seal.pub")
+		if err := WriteSigningKeyFile(pub, []byte("k")); err != nil {
+			t.Fatal(err)
+		}
+		err := Seal("/nonexistent/tpm", "0,7", NVRAMSlotStart, pub, filepath.Join(dir, "seal.key"), false, PCRHashAlgoSHA256, false)
+		if err == nil || !strings.Contains(err.Error(), "tpm2-kira setup") {
+			t.Errorf("Seal() error = %v, want it to ask for 'tpm2-kira setup'", err)
+		}
+	})
+
+	t.Run("Unparseable private key is rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		priv := filepath.Join(dir, "seal.key")
+		pub := filepath.Join(dir, "seal.pub")
+		for _, p := range []string{priv, pub} {
+			if err := WriteSigningKeyFile(p, []byte("not a key")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		err := Seal("/nonexistent/tpm", "0,7", NVRAMSlotStart, pub, priv, false, PCRHashAlgoSHA256, false)
+		if err == nil || !strings.Contains(err.Error(), "signing private key is not usable") {
+			t.Errorf("Seal() error = %v, want 'signing private key is not usable'", err)
+		}
+	})
+}

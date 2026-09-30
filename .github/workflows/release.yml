@@ -564,6 +564,7 @@ jobs:
           wget https://github.com/mrwiora/tpm2-kira/releases/download/${VERSION}/${DEB_FILE}
           sudo apt install ./${DEB_FILE}
           sudo tpm2-kira setup
+          sudo tpm2-kira seal --pcrs 0,7
           sudo update-initramfs -u
           \`\`\`
 

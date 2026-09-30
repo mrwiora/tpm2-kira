@@ -85,7 +85,6 @@ data, which would otherwise read past the section.
     the normal state right after a kernel or initramfs update.
   - `reseal` deliberately skips it: it runs right after an initramfs rebuild,
     where the image on disk is expected to differ from the booted one.
-  - `setup` skips it: it runs from the mkinitcpio build hook, same reason.
   - `--verify-uki=false` overrides it entirely.
   - An unreadable event log is a skip with a notice, not a failure — absence of
     evidence is not evidence of a wrong computation.

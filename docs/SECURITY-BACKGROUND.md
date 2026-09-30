@@ -506,8 +506,8 @@ which is the event payload — but the measured digest is over the ASCII form.
 
 `tpm2-kira seal` guards this by recomputing PCR 11 from the image and comparing
 it against the current boot's event log, refusing to seal on mismatch
-(`--verify-uki=false` overrides). `reseal` and `setup` skip the check because
-both run when the image on disk is legitimately not the one that booted.
+(`--verify-uki=false` overrides). `reseal` skips the check because it runs
+when the image on disk is legitimately not the one that booted.
 
 **Useful constants for diagnosis.** PCRs 2, 3 and 6 normally contain only the
 firmware `EV_SEPARATOR`, so their value is machine-independent:
