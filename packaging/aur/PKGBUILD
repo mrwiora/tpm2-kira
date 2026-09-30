@@ -44,7 +44,7 @@ build() {
 check() {
     cd "$_srcdir"
 
-    go test -tags=unit ./internal/kira/...
+    go test -tags=unit ./...
 }
 
 package() {
