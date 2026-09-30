@@ -922,7 +922,7 @@ Branch `feat/yubikey-v2`, 2026-09-30.
   transmit, transactions with a card present) has not run against real
   hardware. A hardware check (`yubikey list`, `setup`, `seal`, `reseal` with
   and without the token) is the next thing to do.
-- The swtpm integration suite cannot run on the development machine
-  (`tpm2-tools` is missing; it fails identically on the untouched `HEAD`), so
-  seal and reseal — including the `SKIPPED:` path inside a real reseal — have
-  not been run end to end with a token-backed key.
+- The swtpm integration suite runs with file-backed keys (all tests pass on
+  the development machine except the two that need `tpm2_pcrextend`), but no
+  test drives seal or reseal with a token-backed key, so the `SKIPPED:` path
+  inside a real reseal has not run end to end.
