@@ -8,7 +8,8 @@ pkgdesc="TPM2-based TOTP authenticator with PCR policies"
 arch=('x86_64')
 url="https://github.com/mrwiora/tpm2-kira"
 license=('BSD-3-Clause')
-depends=('glibc')
+# Statically linked, no cgo: the same binary runs in the initramfs.
+depends=()
 makedepends=('go>=1.24')
 optdepends=('mkinitcpio: for early boot integration'
             'cryptsetup: for disk encryption integration'
@@ -33,13 +34,16 @@ prepare() {
 build() {
     cd "$_srcdir"
 
-    export CGO_CPPFLAGS="${CPPFLAGS}"
-    export CGO_CFLAGS="${CFLAGS}"
-    export CGO_CXXFLAGS="${CXXFLAGS}"
-    export CGO_LDFLAGS="${LDFLAGS}"
-    export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
+    # The binary is copied into the initramfs, which has no libc, so it must
+    # be fully static. That rules out cgo, which Go enables by default when a
+    # C compiler is present (the net package alone then links glibc), and it
+    # rules out -buildmode=pie: even without cgo a PIE binary still needs
+    # glibc's program interpreter, /lib64/ld-linux-x86-64.so.2, to start.
+    export CGO_ENABLED=0
+    export GOFLAGS="-trimpath -mod=readonly -modcacherw"
 
     go build -ldflags "-s -w -X main.Version=${pkgver}" -o "$pkgname" .
+    go version -m "$pkgname" | grep -q 'CGO_ENABLED=0' || { echo "$pkgname was built with cgo" >&2; return 1; }
 }
 
 check() {

@@ -37,7 +37,9 @@ func TestMain(m *testing.M) {
 	// Check if binary exists, if not build it
 	if _, err := os.Stat("./tpm2-kira"); os.IsNotExist(err) {
 		fmt.Println("Building tpm2-kira binary for testing...")
+		// Built the way it ships: static and cgo-free.
 		buildCmd := exec.Command("go", "build", "-o", "tpm2-kira")
+		buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 		if output, err := buildCmd.CombinedOutput(); err != nil {
 			fmt.Printf("Failed to build binary: %v\nOutput: %s\n", err, output)
 			os.Exit(1)
