@@ -258,8 +258,8 @@ The release decision is made **inside the TPM**, not by tpm2-kira:
 
 | Step | Code | What the TPM does |
 |------|------|-------------------|
-| Object creation | `cmd/policy_or.go`, `CreateSealedObjectPolicyOR` | Stores `AuthPolicy: policyDigest`; `UserWithAuth` is deliberately left unset |
-| Normal boot unseal | `cmd/policy_or.go`, `UnsealWithPCRBranch` | `TPM2_PolicyPCR` reads the **live** registers and folds their composite digest into the session |
+| Object creation | `internal/kira/policy_or.go`, `CreateSealedObjectPolicyOR` | Stores `AuthPolicy: policyDigest`; `UserWithAuth` is deliberately left unset |
+| Normal boot unseal | `internal/kira/policy_or.go`, `UnsealWithPCRBranch` | `TPM2_PolicyPCR` reads the **live** registers and folds their composite digest into the session |
 | | | `TPM2_PolicyOr` then `TPM2_Unseal` |
 
 `TPM2_PolicyPCR` is issued **without** a caller-supplied `PcrDigest`, so the
@@ -723,7 +723,7 @@ sealed secret is exactly the capability the boundary protects.
 
 ## 9. NVRAM Index Security
 
-`WriteToNVRAM` (`cmd/nvram.go`) defines the index as follows:
+`WriteToNVRAM` (`internal/kira/nvram.go`) defines the index as follows:
 
 | Attribute | Set | Effect |
 |---|---|---|

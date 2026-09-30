@@ -8,6 +8,32 @@ formats and CLI flags may change without migration paths.
 
 ---
 
+## Layout
+
+### cmd/ became internal/kira/
+
+The application lived in a package named `cmd`, imported by `main.go` at the
+repository root. In Go, `cmd/` conventionally holds *main* packages — one
+directory per binary — so a library package with that name reads as a binary
+directory that is not one, and it left `internal/` looking like the place a few
+things had been moved out to rather than where the code lives.
+
+`main.go` stays at the root and does what a command does: parse flags and
+dispatch. Everything else is under `internal/`, which also makes it
+non-importable from outside the module.
+
+The boundary inside `internal/` is by subsystem, not by layer. `pcsc`, `piv` and
+`virtualpiv` earn their own packages by being self-contained: each has its own
+vocabulary, depends on nothing else in the project, and is unit-testable alone.
+The rest is one `kira` package because the verbs and the mechanism they drive
+share a vocabulary — PCR specs, the blob, TPM handles — and because output is
+interleaved with logic throughout. Splitting those by layer would need either a
+shared types package or the extraction of printing from nearly every file, for
+less benefit than it cost. The README states the rule so new files land in the
+right place.
+
+---
+
 ## Commands
 
 ### The failure marker no longer restates the exit status
@@ -169,7 +195,7 @@ string into a file-access vector.
 - **Removed the external predict source (`p:COMMAND`).** The blob used to store
   a command string that `reseal` executed, so a planted blob meant arbitrary
   code execution as root — `docs/pentest2/vulnerabilities/vuln-0001.md`.
-  PCR 11 is now computed in-process from the image (`cmd/ukipredict.go`).
+  PCR 11 is now computed in-process from the image (`internal/kira/ukipredict.go`).
 - Blob `PCRSource` byte **2** is retired and must not be reused; it identified
   the predict source. 0 = register, 1 = eventlog, 3 = uki.
 - `ParsePCRSpecs` carried an explicit rejection of the `p:` suffix with a

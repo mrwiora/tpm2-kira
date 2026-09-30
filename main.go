@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/matthias/tpm2-kira/cmd"
+	"github.com/matthias/tpm2-kira/internal/kira"
 )
 
 // Version is the application version, set by build flags
@@ -28,7 +28,7 @@ func fail(err error) {
 
 func main() {
 	// Set application version in cmd package
-	cmd.AppVersion = Version
+	kira.AppVersion = Version
 
 	// Global flags (shared across all commands)
 	globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
@@ -50,12 +50,12 @@ func main() {
 	}
 
 	// Named so that a privilege message can show a command worth re-running.
-	cmd.InvokedCommand = command
+	kira.InvokedCommand = command
 
 	// Commands that write under /var/lib need root whatever their TPM path is.
 	// The TPM itself is checked at the moment it is opened, because whether
 	// root is needed depends on the device rather than on the command.
-	if err := cmd.CheckPrivilege(command, commandArgs); err != nil {
+	if err := kira.CheckPrivilege(command, commandArgs); err != nil {
 		fail(err)
 	}
 
@@ -79,7 +79,7 @@ func main() {
 	case "run":
 		runRun(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "pcrtips":
-		if err := cmd.PCRTips(); err != nil {
+		if err := kira.PCRTips(); err != nil {
 			fail(err)
 		}
 	case "version", "-v", "--version":
@@ -110,7 +110,7 @@ func resolveOrScanAll(rawValue uint32, provided bool) uint32 {
 	if !provided {
 		return 0 // scan all slots
 	}
-	return cmd.ResolveNVRAMIndex(rawValue)
+	return kira.ResolveNVRAMIndex(rawValue)
 }
 
 func runSetup(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -123,12 +123,12 @@ func runSetup(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 
 	fs.Parse(args)
 
-	choice := cmd.SetupKeyChoice{Local: *local, TokenRef: *yubikey}
+	choice := kira.SetupKeyChoice{Local: *local, TokenRef: *yubikey}
 	if choice.Local && choice.TokenRef != "" {
 		fail(fmt.Errorf("--local and --yubikey ask for opposite things; pick one"))
 	}
 
-	if err := cmd.Setup(*tpm, choice, *debug); err != nil {
+	if err := kira.Setup(*tpm, choice, *debug); err != nil {
 		fail(err)
 	}
 }
@@ -141,38 +141,38 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
-	pubKeyPath := fs.String("pubkey", cmd.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
-	privKeyPath := fs.String("privkey", cmd.DefaultPrivateKeyPath, "Signing private key: a PEM path, or a YubiKey slot such as yubikey:serial=12345678;slot=9a")
+	pubKeyPath := fs.String("pubkey", kira.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
+	privKeyPath := fs.String("privkey", kira.DefaultPrivateKeyPath, "Signing private key: a PEM path, or a YubiKey slot such as yubikey:serial=12345678;slot=9a")
 	pinFile := fs.String("pin-file", "", "File holding the YubiKey PIN (mode 0600); alternative to $TPM2_KIRA_PIN")
 	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
 	verifyUKI := fs.Bool("verify-uki", true, "Check the built-in PCR 11 computation against this boot's event log before sealing")
 
 	fs.Parse(args)
 
-	cmd.PINFileSetting = *pinFile
+	kira.PINFileSetting = *pinFile
 
 	given := flagsGiven(fs)
 
-	mode, err := cmd.ParseMeasurePointMode(*measurePoint)
+	mode, err := kira.ParseMeasurePointMode(*measurePoint)
 	if err != nil {
 		fail(err)
 	}
-	cmd.MeasurePointModeSetting = mode
+	kira.MeasurePointModeSetting = mode
 
-	hashAlgo := cmd.PCRHashAlgoSHA256
+	hashAlgo := kira.PCRHashAlgoSHA256
 	if *useSHA1 {
-		hashAlgo = cmd.PCRHashAlgoSHA1
+		hashAlgo = kira.PCRHashAlgoSHA1
 	}
 
-	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
+	sealIndex := kira.ResolveNVRAMIndex(uint32(*nvram))
 
 	// Choosing PCRs needs to know about this machine, so an unqualified
 	// "tpm2-kira seal" explains what it found and suggests a selection. An
 	// explicit --pcrs is used exactly as written — the person typing it may
 	// know something this code does not — and a hook or script, which has
 	// nobody to answer, gets the documented default silently.
-	if !given["pcrs"] && cmd.IsInteractive() {
-		plan, planErr := cmd.GuideSealSelection(*tpm, sealIndex, given["nvram"], *debug)
+	if !given["pcrs"] && kira.IsInteractive() {
+		plan, planErr := kira.GuideSealSelection(*tpm, sealIndex, given["nvram"], *debug)
 		if planErr != nil {
 			fail(planErr)
 		}
@@ -184,11 +184,11 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	}
 
 	// Validate PCR specs before proceeding
-	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
+	if _, err := kira.ParsePCRSpecs(*pcrs); err != nil {
 		fail(err)
 	}
 
-	if err := cmd.Seal(*tpm, *pcrs, sealIndex, *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
+	if err := kira.Seal(*tpm, *pcrs, sealIndex, *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
 		fail(err)
 	}
 }
@@ -217,25 +217,25 @@ func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 
 	fs.Parse(args)
 
-	cmd.PINFileSetting = *pinFile
-	cmd.RequireKeySetting = *requireKey
+	kira.PINFileSetting = *pinFile
+	kira.RequireKeySetting = *requireKey
 
-	mode, err := cmd.ParseMeasurePointMode(*measurePoint)
+	mode, err := kira.ParseMeasurePointMode(*measurePoint)
 	if err != nil {
 		fail(err)
 	}
-	cmd.MeasurePointModeSetting = mode
+	kira.MeasurePointModeSetting = mode
 
 	// Validate PCR specs before proceeding (only if explicitly provided)
 	if *pcrs != "" {
-		if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
+		if _, err := kira.ParsePCRSpecs(*pcrs); err != nil {
 			fail(err)
 		}
 	}
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	if err := cmd.ResealCommand(*tpm, scanIndex, *pcrs, *pubKeyPath, *privKeyPath, *debug); err != nil {
+	if err := kira.ResealCommand(*tpm, scanIndex, *pcrs, *pubKeyPath, *privKeyPath, *debug); err != nil {
 		fail(err)
 	}
 }
@@ -253,7 +253,7 @@ func runInfo(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	if err := cmd.InfoCommand(*tpm, scanIndex, *debug, *jsonOutput); err != nil {
+	if err := kira.InfoCommand(*tpm, scanIndex, *debug, *jsonOutput); err != nil {
 		fail(err)
 	}
 }
@@ -269,7 +269,7 @@ func runReveal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	cmd.RevealCommand(*tpm, scanIndex, *debug, false)
+	kira.RevealCommand(*tpm, scanIndex, *debug, false)
 }
 
 func runRevealPlain(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -283,7 +283,7 @@ func runRevealPlain(args []string, tpmPath string, nvramIndex uint32, debugFlag 
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	cmd.RevealCommand(*tpm, scanIndex, *debug, true)
+	kira.RevealCommand(*tpm, scanIndex, *debug, true)
 }
 
 func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -297,7 +297,7 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	cmd.RunCommand(*tpm, scanIndex, *debug)
+	kira.RunCommand(*tpm, scanIndex, *debug)
 }
 
 func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -320,24 +320,24 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 
 	fs.Parse(args)
 
-	cmd.PINFileSetting = *pinFile
+	kira.PINFileSetting = *pinFile
 
 	provided := nvramExplicit(args)
 
 	switch subcommand {
 	case "list":
-		listIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
-		if err := cmd.NVRAMList(*tpm, listIndex, *debug); err != nil {
+		listIndex := kira.ResolveNVRAMIndex(uint32(*nvram))
+		if err := kira.NVRAMList(*tpm, listIndex, *debug); err != nil {
 			fail(err)
 		}
 	case "status":
-		statusIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
-		if err := cmd.NVRAMStatus(*tpm, statusIndex, *debug); err != nil {
+		statusIndex := kira.ResolveNVRAMIndex(uint32(*nvram))
+		if err := kira.NVRAMStatus(*tpm, statusIndex, *debug); err != nil {
 			fail(err)
 		}
 	case "delete":
 		deleteIndex := resolveOrScanAll(uint32(*nvram), provided)
-		if err := cmd.NVRAMDeleteCommand(*tpm, deleteIndex, *debug); err != nil {
+		if err := kira.NVRAMDeleteCommand(*tpm, deleteIndex, *debug); err != nil {
 			fail(err)
 		}
 	case "restore":
@@ -346,8 +346,8 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 		if !provided {
 			fail(fmt.Errorf("nvram restore needs --nvram to say which index to write"))
 		}
-		restoreIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
-		if err := cmd.NVRAMRestore(*tpm, restoreIndex, *from, *privKey, *force, *debug); err != nil {
+		restoreIndex := kira.ResolveNVRAMIndex(uint32(*nvram))
+		if err := kira.NVRAMRestore(*tpm, restoreIndex, *from, *privKey, *force, *debug); err != nil {
 			fail(err)
 		}
 	default:
@@ -372,7 +372,7 @@ func runYubiKey(args []string, tpmPath string, debugFlag bool) {
 
 	fs.Parse(args[1:])
 
-	if err := cmd.YubiKeyCommand(*tpm, []string{subcommand}, *ref, *out, *debug); err != nil {
+	if err := kira.YubiKeyCommand(*tpm, []string{subcommand}, *ref, *out, *debug); err != nil {
 		fail(err)
 	}
 }
@@ -530,5 +530,5 @@ EXAMPLES:
   tpm2-kira nvram restore --nvram 0 --from /var/lib/tpm2-kira/recovery/slot-0x01803010-1700000000.blob
 
 For detailed documentation, see README.md
-`, cmd.DefaultPublicKeyPath)
+`, kira.DefaultPublicKeyPath)
 }
