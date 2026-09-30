@@ -1,4 +1,4 @@
-.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio deb test test-unit test-integration test-docker test-docker-all test-pcsc test-all fmt vet pkgbuild help
+.PHONY: all build build-static verify-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio deb test test-unit test-integration test-docker test-docker-all test-pcsc test-all fmt vet pkgbuild help
 
 # Binary name
 BINARY_NAME=tpm2-kira
@@ -36,17 +36,35 @@ LDFLAGS=-ldflags "-s -w -X main.Version=$(VERSION)"
 all: build
 
 ## build: Build the binary
+# CGO_ENABLED=0 is not an optimisation, it is the contract. This binary is
+# installed and then copied into an initramfs by the mkinitcpio and
+# initramfs-tools hooks, where no libc and no dynamic loader can be relied on.
+# Left to the default, a machine with a C compiler produces a binary linked
+# against libc, because the standard library uses cgo for host lookups and
+# internal/pcsc imports net.
 build:
-	@echo "Building $(BINARY_NAME) version $(VERSION)..."
-	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v
-
-## build-static: Build a fully static binary (no libc, for initramfs images)
-build-static:
 	@echo "Building static $(BINARY_NAME) version $(VERSION)..."
 	CGO_ENABLED=0 $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v
 
+## build-static: Alias for build, which is already static
+build-static: build
+
 ## build-optimized: Build with optimizations (alias for build)
 build-optimized: build
+
+## verify-static: Assert the built binary needs no shared libraries or loader
+verify-static: build
+	@if readelf -d $(BINARY_NAME) | grep -q NEEDED; then \
+		echo "FAIL: $(BINARY_NAME) links shared libraries:"; \
+		readelf -d $(BINARY_NAME) | grep NEEDED; \
+		exit 1; \
+	fi
+	@if readelf -l $(BINARY_NAME) | grep -q "interpreter"; then \
+		echo "FAIL: $(BINARY_NAME) needs a dynamic loader, which an initramfs may not have:"; \
+		readelf -l $(BINARY_NAME) | grep interpreter; \
+		exit 1; \
+	fi
+	@echo "$(BINARY_NAME) is fully static: no NEEDED entries, no interpreter"
 
 ## clean: Clean build files
 clean:
@@ -132,7 +150,7 @@ test: test-unit
 ## test-unit: Run unit tests only
 test-unit:
 	@echo "Running unit tests..."
-	$(GOTEST) -v -tags=unit ./internal/kira/...
+	$(GOTEST) -v -tags=unit ./...
 
 ## test-docker: Run unit, integration and PC/SC tests in a container
 ##              BASE=debian:bookworm selects pcsc-lite 1.9.x instead of 2.x
@@ -170,7 +188,7 @@ test-integration:
 test-all:
 	@echo "Running all tests..."
 	@echo "Unit tests:"
-	$(GOTEST) -v -tags=unit ./internal/kira/...
+	$(GOTEST) -v -tags=unit ./...
 	@echo ""
 	@echo "Integration tests:"
 	@echo "Note: Requires swtpm (software TPM) to be installed"

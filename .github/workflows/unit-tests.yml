@@ -37,8 +37,10 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
+      # ./... rather than a named package: it survives the code being moved, and
+      # it picks up internal/piv, whose tests an explicit path had been missing.
       - name: Run unit tests
-        run: go test -v -tags=unit -coverprofile=coverage.out ./cmd/...
+        run: go test -v -tags=unit -coverprofile=coverage.out ./...
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5

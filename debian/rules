@@ -20,7 +20,7 @@ override_dh_auto_build:
 	go build -ldflags "-s -w -X main.Version=$(VERSION)" -o tpm2-kira .
 
 override_dh_auto_test:
-	go test -tags=unit ./internal/kira/...
+	go test -tags=unit ./...
 
 override_dh_auto_install:
 

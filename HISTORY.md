@@ -8,6 +8,35 @@ formats and CLI flags may change without migration paths.
 
 ---
 
+## Build
+
+### Every build path is static, not just Debian's
+
+The README has always said the binary is built with `CGO_ENABLED=0` so that the
+initramfs needs no libraries. Only `debian/rules` actually set it. `make build` —
+which `make install` uses, and whose output the mkinitcpio hook copies into the
+image — left it to the default, so on any machine with a C compiler it produced a
+binary linked against libc. The standard library uses cgo for host lookups and
+`internal/pcsc` imports `net`, so that was not hypothetical: a default build had
+two `NEEDED` entries.
+
+The AUR PKGBUILD followed the usual Arch Go recipe, which exports the `CGO_*`
+flags and builds `-buildmode=pie`. A static PIE has no `NEEDED` entries but still
+carries a `PT_INTERP`, so it depends on the dynamic loader being present in the
+image. The package now drops PIE deliberately and says why: not depending on the
+loader is worth more here than the ASLR, because this binary runs inside an
+initramfs.
+
+The release workflow and the integration workflow were both unpinned too — the
+latter explicitly set `CGO_ENABLED=1`, so CI was testing a binary that differed
+from the one that ships.
+
+All four paths now pin `CGO_ENABLED=0`, and the claim is checked rather than
+repeated: `make verify-static`, a step in the release workflow, and a guard in the
+PKGBUILD all assert no `NEEDED` entries and no interpreter.
+
+---
+
 ## Layout
 
 ### cmd/ became internal/kira/
