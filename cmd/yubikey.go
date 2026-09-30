@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -670,8 +671,76 @@ func (sess *tokenSession) ensurePIN(s *yubiKeySigner) error {
 		sess.fatal = unavailable(s, "%v — stopping here so no further attempt is spent", err)
 		return sess.fatal
 	}
+	if !sess.unlocked {
+		warnIfNoUnattendedPIN(os.Stderr)
+	}
 	sess.unlocked = true
 	return nil
+}
+
+// mkinitcpioPIN is what /etc/mkinitcpio.conf provides to the post hook.
+type mkinitcpioPIN int
+
+const (
+	mkinitcpioNotUsed       mkinitcpioPIN = iota // no mkinitcpio, or file unreadable
+	mkinitcpioPINMissing                         // no TPM2_KIRA_PIN line
+	mkinitcpioPINUnexported                      // assigned, but not exported
+	mkinitcpioPINExported                        // reaches the post hook
+)
+
+var (
+	pinAssignRe = regexp.MustCompile(`^\s*(export\s+)?` + PINEnvVar + `=`)
+	pinExportRe = regexp.MustCompile(`^\s*export\s+(.*\s)?` + PINEnvVar + `(\s|=|$)`)
+)
+
+// checkMkinitcpioPIN reads mkinitcpio.conf the way it matters for the post
+// hook: mkinitcpio sources the file in its own shell and runs the hook as a
+// child process, so only an exported TPM2_KIRA_PIN reaches it.
+func checkMkinitcpioPIN(path string) mkinitcpioPIN {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return mkinitcpioNotUsed
+	}
+	assigned, exported := false, false
+	for _, line := range strings.Split(string(data), "\n") {
+		if pinAssignRe.MatchString(line) {
+			assigned = true
+		}
+		if pinExportRe.MatchString(line) {
+			exported = true
+		}
+	}
+	switch {
+	case assigned && exported:
+		return mkinitcpioPINExported
+	case assigned:
+		return mkinitcpioPINUnexported
+	}
+	return mkinitcpioPINMissing
+}
+
+// warnIfNoUnattendedPIN tells the user, right after the PIN was accepted for
+// a manual seal or reseal, when the automatic reseal after an initramfs
+// rebuild will not have it. Silent on systems without mkinitcpio.
+func warnIfNoUnattendedPIN(w io.Writer) {
+	var problem, fix string
+	switch checkMkinitcpioPIN(mkinitcpioConfPath) {
+	case mkinitcpioPINMissing:
+		problem = fmt.Sprintf("%s has no %s line", mkinitcpioConfPath, PINEnvVar)
+		fix = "add the line"
+	case mkinitcpioPINUnexported:
+		problem = fmt.Sprintf("%s sets %s without 'export'; mkinitcpio passes\n"+
+			"         only exported variables to its hooks", mkinitcpioConfPath, PINEnvVar)
+		fix = "put 'export' in front of it, so it reads"
+	default:
+		return
+	}
+	fmt.Fprintf(w, "WARNING: %s.\n", problem)
+	fmt.Fprintln(w, "         The automatic reseal after kernel and initramfs updates will therefore")
+	fmt.Fprintln(w, "         have no PIN: it will be SKIPPED, and the next boot will show a PCR")
+	fmt.Fprintf(w, "         mismatch until you reseal by hand. To make it work, %s\n", fix)
+	fmt.Fprintf(w, "             export %s='<your PIN>'\n", PINEnvVar)
+	fmt.Fprintf(w, "         and make the file readable by root only: chmod 600 %s\n", mkinitcpioConfPath)
 }
 
 // pinSource obtains the PIN; tests replace it.

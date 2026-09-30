@@ -588,10 +588,23 @@ replaces the earlier proposal of a separate `/etc/tpm2-kira/reseal.conf`.
 
 It works because mkinitcpio sources its configuration with `.` and runs post
 hooks as child processes (`run_post_hooks` in `/usr/bin/mkinitcpio`, 42.x):
-exported variables reach the tpm2-kira hook, bare assignments do not. And it
-is safe with respect to the image: mkinitcpio does not copy its configuration
-into the initramfs (the `systemd` install hook reads `MODULES` from it and
-writes only `modules-load.d/MODULES.conf`).
+exported variables reach the tpm2-kira hook, bare assignments do not. This was
+checked with a real `mkinitcpio -c ... -g ...` run and a probe post hook:
+`TPM2_KIRA_PIN="123456"` left the hook without the variable, `export
+TPM2_KIRA_PIN="123456"` delivered it. The main file is sourced on every run,
+also when a preset passes it with `ALL_config=`. It is safe with respect to
+the image: mkinitcpio does not copy its configuration into the initramfs (the
+`systemd` install hook reads `MODULES` from it and writes only
+`modules-load.d/MODULES.conf`).
+
+**Warning when the automatic reseal will lack the PIN (implemented).** Right
+after a manual `seal` or `reseal` has had the PIN accepted — from
+`TPM2_KIRA_PIN` or typed — tpm2-kira reads `/etc/mkinitcpio.conf` and warns,
+once per run, when it has no `TPM2_KIRA_PIN` line, or has one without `export`
+(a separate `export TPM2_KIRA_PIN` line counts). The warning says the
+automatic reseal will be SKIPPED and how to fix it. Systems without
+mkinitcpio get no warning; inside the post hook the PIN comes from the
+exported line, so there is none either.
 
 What it costs, and what setup therefore says:
 
@@ -887,6 +900,7 @@ Branch `feat/yubikey-v2`, 2026-09-30.
 | `signForTPM`, `SignBlobPayload`, `verifyKeyPairMatch` on the public key | `cmd/policy_or.go`, `cmd/blob.go` | token-signed TPMT signatures and blob signatures verify; r/s padding over 20 runs |
 | Interactive `setup` (menu of usable slots plus local files; default `9a`, never a shared slot), `--yubikey[=SERIAL] [--slot]`, `--local`, no-terminal fallback; `yubikey list` | `cmd/setup.go`, `main.go` | menu, default, retries, EOF, single non-`9a` candidate, no terminal; binary run against the live pcscd |
 | PIN-policy warning (report, menu, after choosing); PIN instructions and the `mkinitcpio.conf` hint | `cmd/setup.go`, `cmd/yubikey.go` | `TestPINGuidance` |
+| Warning after a manual seal/reseal when `/etc/mkinitcpio.conf` has no exported `TPM2_KIRA_PIN` | `cmd/yubikey.go` | `TestCheckMkinitcpioPIN`, `TestWarnIfNoUnattendedPIN` (once per run, also with PIN policy `always`) |
 | §7 degradation: `PrepareSigningKey` pre-flight, `ResealSkippedError`, `ErrNVIndexReplaced` guard, one `SKIPPED:` block for all slots, `--require-key` | `cmd/reseal.go`, `cmd/nvram.go`, `main.go` | classification (skip before the write, never after it), block content, pre-flight with no PIN / unplugged / present |
 | mkinitcpio post hook `SKIPPED:` branch; example config line | `initramfs/mkinitcpio/` | hook run with a stand-in `tpm2-kira` |
 | `seal` refuses a mismatched key pair; `seal` and `info` name the token | `cmd/seal.go`, `cmd/info.go` | — |

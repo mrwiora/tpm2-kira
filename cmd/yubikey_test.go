@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
+	"io"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -35,11 +36,13 @@ type fakeTokens struct {
 
 func (f *fakeTokens) install(t *testing.T) {
 	t.Helper()
-	oldDial, oldPIN := dialTokens, pinSource
+	oldDial, oldPIN, oldConf := dialTokens, pinSource, mkinitcpioConfPath
 	t.Cleanup(func() {
 		CloseTokenSessions()
-		dialTokens, pinSource = oldDial, oldPIN
+		dialTokens, pinSource, mkinitcpioConfPath = oldDial, oldPIN, oldConf
 	})
+	// Keep the host's /etc/mkinitcpio.conf out of the tests.
+	mkinitcpioConfPath = filepath.Join(t.TempDir(), "absent-mkinitcpio.conf")
 	dialTokens = func(time.Duration) ([]*tokenConn, func(), error) {
 		f.dials++
 		if f.err != nil {
@@ -588,5 +591,81 @@ func TestVerifyKeyPairMatchThroughToken(t *testing.T) {
 	}
 	if len(card.Log) != 0 {
 		t.Error("comparing keys touched the token")
+	}
+}
+
+func TestCheckMkinitcpioPIN(t *testing.T) {
+	dir := t.TempDir()
+	cases := map[string]mkinitcpioPIN{
+		"HOOKS=(base)\n":                                     mkinitcpioPINMissing,
+		"#export TPM2_KIRA_PIN='1'\n":                        mkinitcpioPINMissing,
+		"TPM2_KIRA_PIN=\"123456\"\n":                         mkinitcpioPINUnexported,
+		"export TPM2_KIRA_PIN='123456'\n":                    mkinitcpioPINExported,
+		"  export TPM2_KIRA_PIN=123456\n":                    mkinitcpioPINExported,
+		"TPM2_KIRA_PIN=123456\nexport TPM2_KIRA_PIN\n":       mkinitcpioPINExported,
+		"TPM2_KIRA_PIN=123456\nexport FOO TPM2_KIRA_PIN\n":   mkinitcpioPINExported,
+		"export TPM2_KIRA_PIN_OLD=1\nTPM2_KIRA_PIN=123456\n": mkinitcpioPINUnexported,
+	}
+	for content, want := range cases {
+		path := filepath.Join(dir, "mkinitcpio.conf")
+		os.WriteFile(path, []byte(content), 0600)
+		if got := checkMkinitcpioPIN(path); got != want {
+			t.Errorf("%q: got %d, want %d", content, got, want)
+		}
+	}
+	if got := checkMkinitcpioPIN(filepath.Join(dir, "absent")); got != mkinitcpioNotUsed {
+		t.Errorf("absent file: %d", got)
+	}
+}
+
+// After the PIN is accepted for a manual seal, a missing or unexported PIN in
+// mkinitcpio.conf is reported once; an exported one, or no mkinitcpio, is not.
+func TestWarnIfNoUnattendedPIN(t *testing.T) {
+	card := pivtest.New(1)
+	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyAlways, piv.TouchPolicyNever, false)
+	fake := &fakeTokens{cards: []*pivtest.Card{card}}
+	fake.install(t)
+	t.Setenv(PINEnvVar, "123456")
+	signer, _ := LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+
+	conf := filepath.Join(t.TempDir(), "mkinitcpio.conf")
+	for content, wantWarning := range map[string]string{
+		"HOOKS=(base)\n":                  "has no TPM2_KIRA_PIN line",
+		"TPM2_KIRA_PIN=\"123456\"\n":      "without 'export'",
+		"export TPM2_KIRA_PIN='123456'\n": "",
+	} {
+		os.WriteFile(conf, []byte(content), 0600)
+		mkinitcpioConfPath = conf
+		var buf bytes.Buffer
+		warnIfNoUnattendedPIN(&buf)
+		if wantWarning == "" && buf.Len() != 0 {
+			t.Errorf("%q: unexpected warning:\n%s", content, buf.String())
+		}
+		if wantWarning != "" && (!strings.Contains(buf.String(), wantWarning) || !strings.Contains(buf.String(), "SKIPPED")) {
+			t.Errorf("%q: warning lacks %q:\n%s", content, wantWarning, buf.String())
+		}
+		if wantWarning == "without 'export'" {
+			t.Logf("warning:\n%s", buf.String())
+		}
+	}
+
+	// Through a real signature: the warning is printed once per process,
+	// even with PIN policy 'always' re-verifying before every signature.
+	os.WriteFile(conf, []byte("HOOKS=(base)\n"), 0600)
+	r, w, _ := os.Pipe()
+	oldStderr := os.Stderr
+	os.Stderr = w
+	digest := sha256.Sum256(nil)
+	for i := 0; i < 3; i++ {
+		if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
+			os.Stderr = oldStderr
+			t.Fatal(err)
+		}
+	}
+	w.Close()
+	os.Stderr = oldStderr
+	out, _ := io.ReadAll(r)
+	if n := strings.Count(string(out), "WARNING:"); n != 1 {
+		t.Errorf("warning printed %d times:\n%s", n, out)
 	}
 }
