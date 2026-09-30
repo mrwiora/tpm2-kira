@@ -29,7 +29,7 @@ On every boot, tpm2-kira asks the TPM to unseal the secret. If PCRs still match,
 
 When a system update changes PCR values (kernel update, initramfs rebuild, Secure Boot key rotation, etc.), the PCR branch fails. You use `reseal` with your signing key to re-seal the secret against the new PCR values.
 
-For more details on the cryptographic design, see [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md).
+For more details on the cryptographic design, see [SECURITY-BACKGROUND.md](docs/SECURITY-BACKGROUND.md).
 
 ## Requirements
 
@@ -242,380 +242,13 @@ tpm2-kira seal --pcrs "0,2,7"
 So does running without a terminal — a package hook or script gets the
 documented default (`0,2,7`) silently, with no prompt to hang on.
 
-### Custom PCRs
-
-Each PCR index can have a **source suffix** that controls where the value comes from:
-
-| Suffix | Source | Example | Notes |
-|--------|--------|---------|-------|
-| *(none)* or `r` | TPM register | `0`, `7r` | Reads current live value from the TPM |
-| `e` | Eventlog | `0e`, `7e` | Calculates from `/sys/kernel/security/tpm0/binary_bios_measurements` (PCRs 0–12) |
-| `u[:PATH]` | Unified kernel image | `11u`, `11u:/boot/EFI/Linux/arch-linux.efi` | Replays systemd-stub's section measurements natively (PCR 11 only) |
-
-You can mix sources freely:
-
-```bash
-# PCR 0 and 7 from eventlog, PCR 2 from register
-tpm2-kira seal --pcrs "0e,2,7e"
-
-# Add a UKI-computed PCR 11
-tpm2-kira seal --pcrs "0e,2e,7e,11u"
-```
-
-The `u` source parses the unified kernel image directly and reproduces what
-systemd-stub measures: for each section, `H(name + NUL)` followed by
-`H(section bytes)`, then the `enter-initrd` boot phase. It needs neither
-`objcopy` nor `systemd-measure`, and nothing is executed as a subprocess.
-
-`seal` checks that computation against the current boot's firmware event log,
-measurement by measurement. What happens on a mismatch depends on what kind it
-is:
-
-| Mismatch | Meaning | Result |
-|---|---|---|
-| Section set or order differs | tpm2-kira models systemd-stub wrongly | **fails** |
-| Section content differs, image rebuilt after boot | cannot be checked yet | warns, proceeds |
-| Section content differs, image unchanged since boot | the computation is wrong | **fails** |
-
-The middle case is the normal one right after a kernel or initramfs update: the
-image on disk is not the one that booted, so there is nothing to verify against.
-PCR 11 becomes correct once you boot that image. Pass `--verify-uki=false` to
-skip the check entirely.
-
-### Warnings about weak selections
-
-`seal` and `reseal` report selections that attest less than they appear to.
-These are advisory — the secret is still sealed.
-
-**PCR 0 on its own** identifies a firmware *build*, not a machine. It measures
-firmware code only (configuration lives in PCR 1), so every device running the
-same firmware version holds the same value and an attacker can reproduce it on
-their own hardware.
-
-**PCR 7 while Secure Boot is off or the platform is in Setup Mode.** PCR 7
-records the Secure Boot state and policy. With Secure Boot disabled it faithfully
-records "disabled" and nothing verifies which bootloader or kernel runs, so a
-matching PCR 7 does not mean the boot chain was checked. In Setup Mode the keys
-can be replaced without physical presence, so the policy it attests is one any
-root user can rewrite. The state is read from
-`/sys/firmware/efi/efivars`; if that is unavailable, tpm2-kira says so rather
-than staying silent.
-
-### The measure point
-
-tpm2-kira reads PCRs in the initrd, *after* systemd has already extended some
-of them. `systemd-pcrosseparator.service` extends `os-separator` into PCRs
-0–7, 9, 12, 13, 14, and `systemd-pcrphase-initrd.service` extends
-`enter-initrd` into PCR 11 — both before `cryptsetup-pre.target`.
-
-Eventlog-derived values describe the *end of firmware*, so tpm2-kira adds those
-extends to reach the measure point. `--measure-point` controls this:
-
-| Value | Behaviour |
-|-------|-----------|
-| `auto` (default) | Probes stable PCRs against the TPM to decide, and refuses if the result is ambiguous |
-| `on` | Always apply |
-| `off` | Reconstruct end-of-firmware values only |
-
-The mkinitcpio install hook inspects the image being built and passes the right
-value to `reseal`, which is what makes the first rebuild after these units
-appear behave correctly.
-
-### TPMs whose event log has no SHA-256 digests
-
-Some firmware writes a SHA-1-only event log even when the TPM has a SHA-256 PCR
-bank. The `e` source then has nothing to replay in the selected bank, and
-tpm2-kira refuses rather than sealing the resulting all-zero value:
-
-```
-Error: PCR 0 has no SHA-256 digests in the event log ... (digests present for this PCR: SHA-1).
-Replaying it would yield an all-zero value that this system will never produce.
-```
-
-Two ways forward:
-
-```bash
-# Preferred: keep SHA-256, drop eventlog reconstruction for these PCRs.
-# PCRs 0-7 do not change between the measure point and seal time, so the
-# register source produces exactly the same value.
-tpm2-kira seal --pcrs "0,7"
-
-# Or reconstruct from the SHA-1 log. Requires a SHA-1 PCR bank on the TPM,
-# and binds the policy to SHA-1 PCR values.
-tpm2-kira seal --sha1 --pcrs "0e,7e"
-```
-
-The SHA-256 value cannot be derived from a SHA-1 log — different banks hold
-different values, and several event types have digests that are not a plain
-hash of the logged payload, so re-hashing the payloads would be wrong.
-
-### Custom signing keys
-
-By default, `setup` generates keys at `/var/lib/tpm2-kira/keys/`. You can supply
-your own — **RSA-2048, ECDSA P-256 or ECDSA P-384**:
-
-```bash
-tpm2-kira seal --pubkey /path/to/key.pub --privkey /path/to/key.pem
-```
-
-`--pubkey` accepts a raw public key or an X.509 certificate. Both paths are
-stored in the sealed blob, so later `reseal` calls need no flags.
-
-**Keep the private key mode 0400, owned by root.** That is what `setup` writes,
-and whenever the key is opened for signing — `seal`, `reseal`, `nvram restore` —
-tpm2-kira checks it and reports anything looser:
-
-```
-WARNING: the signing key /var/lib/tpm2-kira/keys/seal.key is mode 0644.
-  Other accounts on this machine can read it. The signing key is the recovery
-  master key: whoever holds it can unseal the secret whatever the PCRs say, so
-  its only protection on disk is this mode.
-      sudo chmod 400 /var/lib/tpm2-kira/keys/seal.key
-```
-
-It is a warning rather than a refusal: a loose key still works, because being
-unable to reseal at the moment you need to would be worse. A key that is merely
-owner-writable (0600) gets a one-line note instead, since that exposes it to
-nobody.
-
-**RSA-4096 does not work.** The PolicySigned branch needs the public key loaded
-into the TPM with `TPM2_LoadExternal`, and TPMs reject 4096-bit RSA there — so
-does swtpm. tpm2-kira fails at seal time with a hint rather than leaving you to
-discover it during a recovery. Check a key before committing to it:
-
-```bash
-openssl rsa -in key.pem -noout -text | head -1     # "Private-Key: (2048 bit)"
-```
-
-### Sharing the signing key with sbctl (Secure Boot)
-
-The same key that signs your boot components can authorise TOTP resealing, so
-there is no second secret to manage. It needs one preparation step, because
-**sbctl's own keys cannot be used**: `sbctl create-keys` generates RSA-4096, and
-sbctl offers no option to change that.
-
-Check what you have:
-
-```bash
-sudo openssl rsa -in /var/lib/sbctl/keys/db/db.key -noout -text | head -1
-```
-
-If it says 4096, either keep a dedicated tpm2-kira key (the default, and the
-simplest choice) or create a Secure Boot db key that both tools can use. RSA-2048
-is the right size: it is what UEFI firmware expects for a db entry, and it is
-universally supported by TPMs.
-
-```bash
-# Generate an RSA-2048 db key and self-signed certificate.
-openssl req -new -x509 -newkey rsa:2048 -nodes -days 3650 \
-    -keyout db.key -out db.pem -subj "/CN=my Secure Boot db/"
-
-# Hand it to sbctl, which will use it to sign boot components.
-sudo sbctl import-keys --db-key db.key --db-cert db.pem
-# ...then enroll and sign as usual: sbctl enroll-keys, sbctl sign-all
-
-# Point tpm2-kira at the same key.
-sudo tpm2-kira seal --pcrs "0,7" \
-    --pubkey /var/lib/sbctl/keys/db/db.pem \
-    --privkey /var/lib/sbctl/keys/db/db.key
-```
-
-Two consequences worth knowing before you choose this:
-
-**One key now gates two things.** Compromise or loss costs both Secure Boot
-signing and TOTP recovery. That is the trade you are making for having one
-secret instead of two.
-
-**Rotating Secure Boot keys has a mandatory order.** Enrolling new keys moves
-PCR 7 *and* invalidates the PolicySigned branch, which is bound to the old key.
-Do both before resealing and nothing can unseal the blob. Reseal onto the new
-key while PCR 7 has not moved yet, so the PCR branch still opens on its own:
-
-```
-1. create the new key pair, and sbctl import-keys it
-2. sudo tpm2-kira reseal --pubkey <new db.pem> --privkey <new db.key>
-3. sudo sbctl enroll-keys        # PCR 7 moves now
-4. reboot, then sudo tpm2-kira reseal
-```
-
-Step 2 is the one that must not be skipped: it is the only moment when the blob
-can be re-pointed at the new key without needing the old one. Attempting it
-later fails cleanly — reseal checks that the key it was given matches the key
-being sealed against — but the blob is then only recoverable with the old key.
-
-A YubiKey avoids the size problem entirely, since an ECC P-256 slot key is
-universally supported: see [docs/YUBIKEY.md](docs/YUBIKEY.md).
-
-### Signing key on a YubiKey
-
-The signing key can live in a YubiKey PIV slot instead of a PEM file, so it is
-never readable and using it needs the physical token plus a PIN. A key file on
-disk stays the default; this is opt-in.
-
-The token is needed only for `seal`, `setup` and `reseal`. `reveal` and `run` —
-everything that happens at boot — never touch the signing key, so no token is
-needed to see a TOTP code.
-
-```bash
-sudo pacman -S pcsclite yubikey-manager     # or: apt install pcscd yubikey-manager
-sudo systemctl enable --now pcscd
-```
-
-On pcsc-lite 2.x (Arch, Debian trixie) `pcscd` asks polkit before accepting a
-client, and the shipped policy allows only active login sessions — with no
-exemption for root. Interactive `sudo` is fine; a systemd unit, a timer or cron
-is not. That needs a one-file polkit rule, and an unattended reseal needs the
-PIN somewhere the hook can read it. Both are covered in
-[docs/YUBIKEY.md](docs/YUBIKEY.md#pcsc-lite-2x-asks-polkit-first): on Arch the
-PIN goes in a 0600 drop-in under `/etc/mkinitcpio.conf.d/`, which mkinitcpio
-sources but never copies into the image. **Not** in Debian's `initramfs.conf`,
-which *is* copied into the image and so lands on unencrypted `/boot`.
-
-**Prepare the key.** tpm2-kira never writes to a token: it reads a slot's public
-key, verifies the PIN, and asks the card to sign. Creating the key is `ykman`'s
-job, which keeps tpm2-kira from being able to damage a key the slot may share
-with something else.
-
-```bash
-# Generate an ECC P-256 key inside the token, in slot 9a.
-#   ONCE  — one PIN check covers a whole reseal
-#   NEVER — no touch required; the reseal after an initramfs rebuild is unattended
-ykman piv keys generate --algorithm ECCP256 \
-    --pin-policy ONCE --touch-policy NEVER 9a /tmp/seal.pub
-
-# PIV exposes a public key through the slot certificate, so give the slot one.
-ykman piv certificates generate --subject "CN=tpm2-kira" 9a /tmp/seal.pub
-rm /tmp/seal.pub
-
-ykman piv access change-pin                  # the factory default is 123456
-```
-
-**Then just run setup.** On a terminal it looks for connected tokens, lists the
-keys it finds, and offers them — a key file stays the default, so pressing Enter
-gives you the behaviour from [Quick Start](#quick-start):
-
-```
-Looking for a hardware token that could hold the signing key...
-
-The signing key authorises resealing after a firmware or kernel update.
-It is only needed then — never at boot — so it can live on a token that
-you unplug the rest of the time.
-
-Found these keys on connected tokens:
-  1) YubiKey 12345678, slot 9a (PIV Authentication) — ECDSA-P-256
-       PIN once per session, touch never
-
-Where should the signing key live?
-  [Enter]  a key file at /var/lib/tpm2-kira/keys/seal.key  (default)
-  [1]      the token slot above
-
-Choice [Enter]:
-```
-
-Choosing the slot validates it, checks your TPM can load the key for
-PolicySigned, and caches the public key so later commands work with the token
-unplugged — no separate `adopt` step. Only the public key is written to disk.
-
-setup stops there and prints the `seal` command to run next, with the key
-reference already filled in. It needs no PIN, because reading a public key from
-a slot does not require one; sealing does.
-
-If a token is connected but none of its slots holds a key, setup prints the
-`ykman` commands above and lets you stop there to run them; nothing is created,
-so `setup` can simply be run again.
-
-Two flags skip the question, for scripts and for anyone who already knows:
-
-```bash
-sudo tpm2-kira setup --yubikey                  # first token found
-sudo tpm2-kira setup --yubikey 'yubikey:slot=9c'
-sudo tpm2-kira setup --local                    # a key file, no questions
-```
-
-Setup never asks when it is not run from a terminal — a package hook gets the
-key-file default silently, exactly as before.
-
-**Adopting a slot for an existing installation.** `setup` declines once
-`/var/lib/tpm2-kira/keys` exists, so to move an already-configured system onto a
-token, register the slot and reseal onto it:
-
-```bash
-sudo tpm2-kira yubikey adopt --key 'yubikey:slot=9a'
-
-export TPM2_KIRA_PIN=12345678
-sudo -E tpm2-kira reseal \
-    --privkey 'yubikey:serial=12345678;slot=9a' \
-    --pubkey /var/lib/tpm2-kira/keys/seal.pub
-```
-
-`adopt` is read-only: it reports the slot's key and policies, checks the TPM can
-load it, and caches the public key. Resealing preserves the TOTP secret, so your
-authenticator keeps working. Once it succeeds, shred the old key file.
-
-Already have a key in a slot — the one sbctl uses to sign your Secure Boot
-components, say? Skip the generation step and `adopt` it directly. Any key the
-TPM can load works (ECC P-256/P-384, RSA-2048).
-
-**Variant: importing a key generated outside the YubiKey.** Use this when the
-key already exists — an RSA-2048 Secure Boot db key that sbctl keeps using from
-a file, for instance — or when you want an offline backup of the recovery key,
-which generating on the token cannot give you.
-
-```bash
-# An existing key, or a fresh one made off the token:
-openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out seal.key
-#   ...or reuse /var/lib/sbctl/keys/db/db.key, if it is RSA-2048
-
-# Import it, setting the policies at the same time.
-#   --password is needed if the key file is encrypted.
-ykman piv keys import --pin-policy ONCE --touch-policy NEVER 9a seal.key
-
-# PIV exposes a public key through the slot certificate, so the slot needs one.
-# Either import a certificate you already have, verifying it matches the key...
-ykman piv certificates import --verify 9a db.pem
-# ...or generate a self-signed one from the public half.
-openssl pkey -in seal.key -pubout -out seal.pub
-ykman piv certificates generate 9a seal.pub
-
-sudo tpm2-kira yubikey adopt --key 'yubikey:slot=9a'
-```
-
-`adopt` and `yubikey list` report `Origin: imported — this key has existed
-outside the token`, so the distinction stays visible later; `ykman piv keys info
-9a` says the same.
-
-Then decide what happens to the key file, because that is now where the security
-of the whole arrangement rests:
-
-- **Shred it** (`shred -u seal.key`) if the token is meant to be the only copy.
-  You get the same protection as an on-token key, minus the guarantee that it
-  never existed elsewhere — whether it reached a backup, a snapshot or an
-  unencrypted disk before you deleted it is a question only you can answer.
-- **Keep it offline** if you would rather have a backup. Losing the token
-  otherwise means losing the recovery key, and re-sealing with a new TOTP secret
-  and a fresh authenticator enrolment. An imported key is the straightforward
-  answer to that, at the cost of a file existing somewhere.
-
-Generating on the token (above) is still the better default when you have no
-reason to hold a copy.
-
-**Without the token, `reseal` warns and changes nothing:**
-
-```
-tpm2-kira: SKIPPED: resealing did not happen — the signing key was not available.
-  Reason:        no YubiKey with serial 12345678 is present
-  Consequence:   ... at the next boot tpm2-kira will report a PCR MISMATCH
-                 and show no TOTP code. That is expected here — it is not
-                 evidence of tampering.
-  Affected PCRs: 0 (register), 7 (register)
-```
-
-The sealed secret is left untouched. Plug the token in, reseal, and the next boot
-shows a code again. `--require-key` turns the warning into a failure for scripts.
-
-See **[docs/YUBIKEY.md](docs/YUBIKEY.md)** for slot and policy trade-offs, PIN
-handling and lockout safety, the mandatory ordering when rotating a Secure Boot
-key that lives in the same slot, backup strategy, and troubleshooting.
+### Going further
+
+| Topic | Where |
+|---|---|
+| PCR sources (`r`, `e`, `u`), weak selections, the measure point, event logs without SHA-256 digests | [docs/PCR-SELECTION.md](docs/PCR-SELECTION.md) |
+| Using your own key, sharing one with sbctl, holding it on a YubiKey | [docs/SIGNING-KEYS.md](docs/SIGNING-KEYS.md) |
+| What each register measures | `tpm2-kira pcrtips` |
 
 ### Multiple slots
 
@@ -659,42 +292,6 @@ tpm2-kira info --json          # machine-readable
 when there is only one. Each entry carries `slot_number`, `nvram_index` and the
 blob itself, so consumers never have to branch on the slot count.
 
-## Recovering an interrupted NVRAM write
-
-Replacing an NVRAM index means undefining it first, and TPM 2.0 has no atomic
-replace. `seal` and `reseal` do everything that can fail *before* that point —
-loading the key, computing the write policy, and a test signature — so the window
-is narrow. But a TPM error, or a hardware token unplugged mid-write, can still
-leave the index empty.
-
-When that happens the blob is written to `/var/lib/tpm2-kira/recovery/` and the
-error says so. That file is not a consolation prize: the sealed object's private
-area is wrapped by this TPM's storage primary key, which is re-derived
-deterministically, so **the secret survives in those bytes**. Write them back:
-
-```bash
-sudo tpm2-kira nvram restore --nvram 0
-sudo tpm2-kira nvram restore --nvram 0 --from /var/lib/tpm2-kira/recovery/slot-0x01803010-1700000000.blob
-```
-
-Restore needs the signing key, because the index's write policy is PolicySigned —
-it uses the reference stored in the blob, so usually no flags are needed. Before
-writing anything it verifies the blob's signature, checks the key is the one the
-blob was sealed with, and loads the sealed object to confirm the blob belongs to
-this TPM. It refuses to overwrite a *different* blob already in the index, since
-that may be a newer secret you sealed in the meantime; `--force` overrides.
-
-The restored policy binds the PCR values from when the blob was written, so
-`reseal` afterwards if the current state has moved on.
-
-**Power loss during the write is an accepted risk, not a covered one.** The
-stash is written by the same process doing the NV write, so a machine that loses
-power mid-write does not get one, and the secret is gone — `seal` again and
-re-enrol your authenticator. TPM 2.0 has no atomic replace, so the window cannot
-be closed; and a machine that dies partway through a root-privileged write
-probably has a half-written initramfs too. The TOTP secret is among the easier
-things to rebuild.
-
 ## Deleting Sealed Data
 
 ```bash
@@ -711,153 +308,6 @@ Options are named, and a stray argument is refused rather than ignored.
 `tpm2-kira nvram delete 0` does **not** mean slot 0; it is rejected with a
 suggestion, because the flag package would otherwise drop the `0` and leave the
 command meaning "every slot".
-
-## Early Boot Integration (Arch Linux / mkinitcpio)
-
-tpm2-kira can display TOTP codes during early boot — before you enter your disk encryption passphrase. This way you can verify the system hasn't been tampered with before typing your LUKS password.
-
-### Install the hooks
-
-```bash
-sudo make install-mkinitcpio
-```
-
-This installs:
-- `sd-tpm2-kira` — mkinitcpio install hook (systemd-based initramfs)
-- A **post-generation hook** that automatically runs `tpm2-kira reseal` after every initramfs rebuild
-
-### Configure mkinitcpio
-
-Edit `/etc/mkinitcpio.conf` and add the hook **before** your encrypt hook:
-
-```bash
-# Systemd-based initramfs (recommended):
-HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
-```
-
-Then rebuild:
-
-```bash
-sudo mkinitcpio -P
-```
-
-The post-generation hook will automatically reseal so the next boot matches.
-
-### How it works at boot
-
-A systemd service (`tpm2-kira.service`) starts before the disk unlock prompt and runs `tpm2-kira run`, which continuously displays TOTP codes. Compare what's on screen with your authenticator app. If they match, your boot chain is clean — go ahead and type your LUKS passphrase.
-
-See [initramfs/mkinitcpio/mkinitcpio.conf.example](initramfs/mkinitcpio/mkinitcpio.conf.example) for more HOOKS configurations (LVM, multiple encrypted devices, etc.).
-
-## Early Boot Integration (Debian / initramfs-tools)
-
-Debian's stock initramfs has no systemd in it, so the systemd unit used on Arch
-does not apply. The `.deb` installs two scripts instead:
-
-| Path | Role |
-|---|---|
-| `/usr/share/initramfs-tools/hooks/tpm2-kira` | copies the binary into the image |
-| `/usr/share/initramfs-tools/scripts/init-premount/tpm2-kira` | starts the display at boot |
-| `/usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira` | stops it before the real root takes over |
-| `/etc/tpm2-kira/initramfs.conf` | display mode |
-
-`/init` runs `init-premount` before `local-top/cryptroot` asks for the
-passphrase, which is what puts the code on screen first.
-
-### Display mode
-
-`/etc/tpm2-kira/initramfs.conf` selects what happens at boot:
-
-| `TPM2_KIRA_INITRAMFS_MODE` | Behaviour |
-|---|---|
-| `run` (default) | Keeps showing codes until the disk is unlocked |
-| `once` | Prints a single code and carries on booting |
-
-In `run` mode the display refreshes once per 30-second TOTP window, writing to
-the same console as the passphrase prompt. The prompt scrolls up as codes
-arrive; typing is unaffected, since the passphrase is not echoed anyway. The
-`init-bottom` script stops the process before `run-init` replaces the initramfs,
-so nothing is left holding it open.
-
-Edit the file and run `sudo update-initramfs -u` to apply a change.
-
-### Choosing PCRs on Debian
-
-There is no UKI, so PCR 11 is empty and the `11u` and `11e` sources do not
-apply. GRUB carries the equivalent measurements instead:
-
-| PCR | Measures | Changes when |
-|---|---|---|
-| 0, 2 | firmware code and option ROMs | firmware update |
-| 4 | the GRUB EFI binary the firmware loaded | `grub-install`, shim/GRUB package update |
-| 7 | Secure Boot state and policy | key rotation, enabling/disabling Secure Boot |
-| 8 | every command GRUB runs (`grub_cmd: ...`) | `update-grub`, kernel version change |
-| 9 | contents of every file GRUB reads (grub.cfg, modules, kernel, initrd) + EFI LoadOptions | **every kernel or initramfs update** |
-
-```bash
-# Stable across kernel updates - a good default
-tpm2-kira seal --pcrs "0e,2e,4e,7e"
-
-# Adds kernel and initrd integrity, at the cost of the workflow below
-tpm2-kira seal --pcrs "0e,2e,4e,7e,8e,9e"
-```
-
-### If you seal PCR 8 or 9: reseal *after* the reboot
-
-Every PCR source on Debian is read from the **running** system. `reseal` binds
-to the kernel and initrd you booted, so running it right after
-`update-initramfs` would bind to the image you are about to leave. Only a reseal
-after the next boot is correct:
-
-```
-update-initramfs / kernel update
-        |
-        v
-    reboot  ->  no TOTP code shown        <- expected, not a compromise
-        |
-        v
-  unlock with your passphrase as usual
-        |
-        v
-  sudo tpm2-kira reseal                    <- re-binds to the new state
-```
-
-`/etc/initramfs/post-update.d/tpm2-kira` prints this reminder after a rebuild,
-but only when the sealed policy actually contains PCR 8 or 9. It deliberately
-does **not** reseal.
-
-This is a genuine trade-off rather than an oversight. Auto-resealing on every
-boot would remove the churn, but it would also turn a tampered kernel into a
-trusted baseline after a single reboot: unlock once, and the new state is
-sealed. Keeping a human in the loop is the point.
-
-## Eventlog PCR Calculator
-
-`tools/pcrtool.py` independently reconstructs PCR values, which is the first
-thing to reach for when a sealed policy stops matching. It reads the live
-firmware event log directly, or a `tpm2_eventlog` YAML dump:
-
-```bash
-# All PCRs from the running system's event log
-sudo python3 tools/pcrtool.py replay
-
-# A specific PCR, showing every extension step
-sudo python3 tools/pcrtool.py replay --pcr 7 --verbose
-
-# From a dump, which needs neither root nor a TPM
-tpm2_eventlog /sys/kernel/security/tpm0/binary_bios_measurements > evlog.yaml
-python3 tools/pcrtool.py --eventlog evlog.yaml replay
-
-# The SHA-1 bank
-sudo python3 tools/pcrtool.py --bank sha1 replay
-```
-
-The `extends` column counts how many events actually extended each PCR. A zero
-there means the log carries no digests for that PCR **in the selected bank**, so
-the value shown is only the reset value — the tool warns and exits non-zero
-rather than letting that pass as a measurement.
-
-Requires PyYAML (`pip install pyyaml`) and tpm2-tools.
 
 ## Testing
 
@@ -922,11 +372,14 @@ that only inspect a token through `pcscd` need nothing.
 
 As always the exit status is 0, so judge success from the output.
 
-**TOTP code doesn't match after update:**
+**TOTP code doesn't match after an update:**
 ```bash
-tpm2-kira reseal
+sudo tpm2-kira reseal
 ```
-If reseal also fails, check `tpm2-kira info` to see which PCRs changed and verify you have the correct signing key available.
+Expected after a firmware, kernel or bootloader change. If reseal also fails, or
+if nothing explains the change, work through
+[docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md) — it covers reconstructing the whole
+measurement chain and recovering an NVRAM write that did not complete.
 
 **Debug output:**
 ```bash
@@ -938,6 +391,33 @@ tpm2-kira --debug reveal
 tpm2-kira info            # shows what was sealed
 tpm2-kira pcrtips         # explains what each PCR measures
 ```
+
+## Early Boot Integration
+
+tpm2-kira can display TOTP codes during early boot, before the disk encryption
+passphrase is entered, so the boot chain can be checked before the passphrase is
+typed.
+
+```bash
+sudo make install-mkinitcpio     # Arch: mkinitcpio hooks
+                                 # Debian: the .deb installs its hooks already
+```
+
+On Arch, add the hook to `/etc/mkinitcpio.conf` **before** your encrypt hook and
+rebuild:
+
+```bash
+HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
+sudo mkinitcpio -P
+```
+
+The two platforms differ in more than plumbing — Debian has no systemd in its
+initramfs and no unified kernel image, so GRUB's measurements land in PCRs 8 and 9
+and a reseal has to follow the reboot rather than precede it.
+
+**See [docs/EARLY-BOOT.md](docs/EARLY-BOOT.md)** for both procedures in full: the
+hooks each platform installs, the display modes, choosing PCRs per platform, and
+the reseal ordering rule.
 
 ## Uninstall
 
@@ -972,119 +452,6 @@ Purging the Debian package deliberately leaves `/var/lib/tpm2-kira` in place:
 the signing key is the only recovery path for a secret that may still be sealed
 in the TPM. Delete the slot first, then the directory.
 
-## Project Structure
-
-`main.go` parses flags and dispatches; everything else is under `internal/`, so
-none of it is importable from outside this module.
-
-The split inside `internal/` is by **subsystem boundary**, not by layer:
-
-- `pcsc`, `piv` and `virtualpiv` are self-contained — a wire protocol, a card
-  applet, and a simulator for them. They define their own vocabulary, talk to
-  nothing else in the project, and are unit-testable on their own. That is what
-  earns a separate package.
-- `kira` is the application: the verbs and the mechanism they drive. These stay
-  together because they share one vocabulary — PCR specs, the blob, TPM handles —
-  and because output is interleaved with logic throughout. Splitting them by
-  layer would mean either a shared types package or extracting printing from
-  nearly every file, and would buy less than it cost.
-
-Within `kira`, files are named after the verb they implement (`seal.go`,
-`reseal.go`) or the subject they own (`blob.go`, `pcr.go`), and a subsystem with
-several files shares a prefix (`signer*.go`).
-
-```
-├── main.go                  # CLI entrypoint: flag parsing and dispatch
-├── internal/
-│   ├── kira/                # The application. One package, because the verbs
-│   │   │                    #   and the mechanism share one vocabulary (PCR
-│   │   │                    #   specs, blob, TPM handles) and splitting it
-│   │   │                    #   would mean a shared types package.
-│   │   ├── setup.go         #   verb: create the signing key
-│   │   ├── seal.go          #   verb: seal a TOTP secret
-│   │   ├── sealadvice.go    #   verb: suggest PCRs and a slot for this machine
-│   │   ├── reseal.go        #   verb: re-seal against current PCR values
-│   │   ├── scan.go          #   verb: reveal / run, multi-slot scanning
-│   │   ├── info.go          #   verb: inspect sealed blob metadata
-│   │   ├── nvram.go         #   verb: NVRAM define/read/write/delete
-│   │   ├── restore.go       #   verb: write a stashed blob back to NVRAM
-│   │   ├── yubikey.go       #   verb: yubikey list/adopt/status/export-pubkey
-│   │   ├── signer.go        # key references and the SigningKey abstraction
-│   │   ├── signer_pin.go    #   PIN resolution for a token-held key
-│   │   ├── signer_yubikey.go#   the PIV slot backend and token discovery
-│   │   ├── blob.go          # sealed blob serialisation (format version 9)
-│   │   ├── policy_or.go     # PolicyOR / PolicySigned digests and unsealing
-│   │   ├── pcr.go           # PCR vocabulary: specs, sources, hash algorithm
-│   │   ├── pcrwarn.go       #   warnings for selections that attest little
-│   │   ├── pcrtips.go       #   the PCR reference guide
-│   │   ├── eventlog_utils.go#   replaying the firmware event log
-│   │   ├── measurepoint.go  #   userspace extends before tpm2-kira reads PCRs
-│   │   ├── ukipredict.go    #   native PCR 11 computation from a UKI
-│   │   ├── tpm_utils.go     # low-level TPM operations
-│   │   ├── privilege.go     # root checks and key-permission warnings
-│   │   ├── prompt.go        # terminal input shared by every prompt
-│   │   ├── totp_utils.go    # TOTP generation and display
-│   │   └── constants.go     # default paths and constants
-│   ├── pcsc/                # cgo-free pcscd client (Unix socket protocol)
-│   ├── piv/                 # PIV applet: read a slot, verify a PIN, sign
-│   └── virtualpiv/          # Virtual YubiKey for tests (never in the binary)
-├── test/
-│   ├── integration/         # CLI tests driving the built binary (build-tagged)
-│   └── docker/              # Container with swtpm, pcscd and a virtual reader
-├── tools/
-│   ├── pcrtool.py            # PCR replay and full-chain diagnosis
-│   └── tpm2-pcr11predict     # Independent cross-check of the built-in PCR 11 computation
-├── docs/
-│   ├── YUBIKEY.md                # Signing key on a YubiKey PIV slot
-│   ├── PLATFORM-OBSERVATIONS.md  # Measured facts about Arch and Debian boots
-│   ├── pentest1/, pentest2/      # Security review findings and mitigations
-│   └── *.issue                   # Write-ups of specific bugs
-├── initramfs/               # Everything that goes into, or builds, an initramfs
-│   ├── systemd/tpm2-kira.service   # Unit, pulled into systemd-based images
-│   ├── mkinitcpio/                 # Arch
-│   │   ├── install/sd-tpm2-kira    # Build hook: puts the binary in the image
-│   │   ├── post/sd-tpm2-kira       # Reseal after the image is written
-│   │   └── mkinitcpio.conf.example
-│   └── initramfs-tools/            # Debian
-│       ├── hooks/tpm2-kira         # Build hook: copies the static binary
-│       ├── scripts/init-premount/tpm2-kira  # Shows the code before unlock
-│       ├── scripts/init-bottom/tpm2-kira    # Stops it before switching root
-│       ├── post-update.d/tpm2-kira          # Reseal reminder
-│       └── initramfs.conf          # Display mode (run / once)
-├── debian/                  # Debian package definition (must sit at the root)
-├── packaging/
-│   ├── aur/                 # Arch Linux PKGBUILD
-│   └── deb-version.sh       # git describe -> a Debian-valid version
-└── Makefile
-```
-
-## Diagnosing PCR mismatches
-
-If the displayed PCR values differ from what was sealed, reconstruct the whole
-chain before changing anything:
-
-```bash
-# Replays the firmware event log AND systemd's own measurement log,
-# then explains every difference against the live registers.
-sudo python3 tools/pcrtool.py verify
-```
-
-Each PCR is reported as `unchanged since firmware`, `os-separator (x1)`,
-`explained: <words>`, or `UNEXPLAINED`. Anything unexplained on a sealed PCR is
-a real finding.
-
-Two things to keep in mind while reading any PCR output:
-
-- `tpm2_eventlog`'s trailing `pcrs:` block is a **replay of the log**, not a
-  read of the TPM. Comparing it against `tpm2_pcrread` is comparing a
-  calculation against a measurement — and that difference is usually the answer.
-- The **post-boot register is not the measure-point value** for PCRs 9, 11 and
-  15. They keep being extended after the initrd, so a mismatch there is expected
-  and not evidence of tampering.
-
-See [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md) §5.6–5.8 for the full
-reconstruction rules and constants.
-
 ## Exit status
 
 **tpm2-kira always exits 0, including on failure.** This is deliberate: it is
@@ -1105,9 +472,25 @@ tpm2-kira: FAILED: <reason>
 The mkinitcpio post hook does exactly this — it greps the output for the success
 line rather than testing `$?`.
 
+## Documentation
+
+| Document | Covers |
+|---|---|
+| [docs/PCR-SELECTION.md](docs/PCR-SELECTION.md) | Choosing PCRs: sources, weak selections, the measure point, event logs without SHA-256 digests |
+| [docs/SIGNING-KEYS.md](docs/SIGNING-KEYS.md) | Using your own key, sharing one with sbctl, holding it on a YubiKey |
+| [docs/YUBIKEY.md](docs/YUBIKEY.md) | The hardware token in full: preparing a slot, PIN handling, polkit, backups, testing |
+| [docs/EARLY-BOOT.md](docs/EARLY-BOOT.md) | Showing a code before the disk is unlocked, on Arch and on Debian |
+| [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md) | Diagnosing a PCR mismatch, the eventlog calculator, recovering an interrupted write |
+| [docs/SECURITY-BACKGROUND.md](docs/SECURITY-BACKGROUND.md) | The cryptographic design, threat model and trust boundaries |
+| [docs/CODE-LAYOUT.md](docs/CODE-LAYOUT.md) | Where things live in the source, and the rule that decides it |
+| [docs/PLATFORM-OBSERVATIONS.md](docs/PLATFORM-OBSERVATIONS.md) | Measured facts about Arch and Debian boots |
+| [HISTORY.md](HISTORY.md) | Superseded formats and removed features, with the reasoning |
+
 ## Security
 
-See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy and [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md) for an in-depth description of the cryptographic design, threat model, and trust boundaries.
+See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy and
+[docs/SECURITY-BACKGROUND.md](docs/SECURITY-BACKGROUND.md) for an in-depth
+description of the cryptographic design, threat model, and trust boundaries.
 
 ## History
 

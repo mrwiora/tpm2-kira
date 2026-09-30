@@ -8,6 +8,42 @@ formats and CLI flags may change without migration paths.
 
 ---
 
+## Documentation
+
+### The README defers to topic documents
+
+The README had grown to 1122 lines, more than half of it reference material: PCR
+sources and the measure point, the Arch and Debian early-boot procedures, custom
+signing keys and sbctl sharing, the eventlog calculator, the source tree. Anyone
+arriving at the project had to scroll past all of it to find out what tpm2-kira
+does.
+
+The reference material now lives beside the rest in `docs/`, with the README
+keeping the parts someone reads once — what it is, how it works, install, the
+commands, a basic seal — and pointing at the detail:
+
+    docs/PCR-SELECTION.md   choosing PCRs: sources, weak selections, the measure
+                            point, event logs without SHA-256 digests
+    docs/SIGNING-KEYS.md    using your own key, sharing one with sbctl, the token
+    docs/EARLY-BOOT.md      showing a code before unlock, on Arch and on Debian
+    docs/DIAGNOSTICS.md     PCR mismatches, the eventlog calculator, recovery
+    docs/CODE-LAYOUT.md     where things live in the source
+
+That took the README from 1122 lines to 505 without losing anything: every
+heading that disappeared is accounted for under a clearer name in one of the new
+documents.
+
+`PLAN-YUBIKEY.md` moved to `docs/` too, leaving the repository root to the files
+that belong there.
+
+Two things that had to follow. Links written relative to the repository root
+break when the text moves down a directory, so they were rewritten. And the
+packages shipped only `README.md` as documentation — now that it defers to the
+`docs/` tree, both the `.deb` and the AUR package install that tree as well,
+otherwise the links would dangle for anyone reading the installed copy.
+
+---
+
 ## Build
 
 ### Every build path is static, not just Debian's

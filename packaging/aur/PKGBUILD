@@ -74,6 +74,11 @@ package() {
 
     install -Dm755 "$pkgname" "$pkgdir/usr/bin/$pkgname"
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+
+    # The README defers to these for the detail, so they have to travel with it.
+    install -dm755 "$pkgdir/usr/share/doc/$pkgname/docs"
+    install -Dm644 docs/*.md "$pkgdir/usr/share/doc/$pkgname/docs/"
+    install -Dm644 HISTORY.md "$pkgdir/usr/share/doc/$pkgname/HISTORY.md"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
     # Not enabled on the host: the mkinitcpio install hook enables it inside the
