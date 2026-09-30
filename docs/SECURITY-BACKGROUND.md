@@ -160,9 +160,18 @@ RSA-2048 pair and importing it with `sbctl import-keys`. See the README.
 | Private key| Required **only** for PolicySigned recovery when PCRs have |
 | (`.key`)   | changed. Never stored in the blob or in the TPM.           |
 
-The private key should be protected by filesystem permissions (readable only
-by root). It is never sent to the TPM — tpm2-kira signs a nonce locally and
-sends the **signature** to the TPM for verification.
+The private key should be protected by filesystem permissions (readable only by
+root). `setup` writes it mode **0400**, owned by root: the file is written once
+and only ever read afterwards, so dropping the write bit removes an accidental
+overwrite as well. Whenever the key is opened for signing — seal, reseal, nvram
+restore — the mode is checked, and anything granting group or other access is
+reported, because that mode is the key's only protection on disk and a readable
+key undoes the PCR policy for whoever can read it. The warning is advisory: a
+loose key still works, since refusing it would leave someone unable to reseal at
+the moment they most need to.
+
+It is never sent to the TPM — tpm2-kira signs a nonce locally and sends the
+**signature** to the TPM for verification.
 
 When both `--pubkey` and `--privkey` are provided at seal time, their
 filesystem paths are stored in the blob. This allows `reseal` to locate the
@@ -897,9 +906,11 @@ This was removed because:
 
 ## 12. Operational Security Recommendations
 
-1. **Protect the signing private key.** It is the recovery master key. Store
-   it with restrictive permissions (`chmod 600`, owned by root). Consider
-   keeping a backup in a secure offline location.
+1. **Protect the signing private key.** It is the recovery master key. Store it
+   `chmod 400`, owned by root, which is what `setup` does; tpm2-kira warns when
+   it finds anything looser while signing. Consider keeping a backup in a secure
+   offline location, or hold the key on a hardware token (docs/YUBIKEY.md) so
+   there is no file to protect.
 2. **Use RSA-2048 or ECC P-256.** These are universally supported by TPM 2.0
    hardware. RSA-4096 may not work on all TPMs.
 3. **Monitor TOTP codes.** If the TOTP code is absent or wrong at boot, the

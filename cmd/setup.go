@@ -88,7 +88,10 @@ func Setup(tpmPath string, choice SetupKeyChoice, debug bool) error {
 		Type:  "EC PRIVATE KEY",
 		Bytes: ecDER,
 	})
-	if err := os.WriteFile(privKeyPath, privPEM, 0600); err != nil {
+	// 0400: the key is written once and only ever read afterwards, so removing
+	// the write bit costs nothing and takes an accidental overwrite off the
+	// table. OpenSigningKey warns about anything looser.
+	if err := os.WriteFile(privKeyPath, privPEM, 0400); err != nil {
 		return fmt.Errorf("failed to write private key to %s: %w", privKeyPath, err)
 	}
 	fmt.Printf("  Private key written to: %s\n", privKeyPath)

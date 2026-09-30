@@ -1,8 +1,14 @@
 package cmd
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -168,5 +174,172 @@ func TestOpenTPMDeviceRealDevice(t *testing.T) {
 		if !strings.Contains(err.Error(), "sudo tpm2-kira") {
 			t.Errorf("expected the privilege explanation, got:\n%s", err)
 		}
+	}
+}
+
+// captureStdout runs fn and returns what it printed.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	original := os.Stdout
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create a pipe: %v", err)
+	}
+	os.Stdout = write
+
+	done := make(chan string, 1)
+	go func() {
+		var buf strings.Builder
+		io.Copy(&buf, read)
+		done <- buf.String()
+	}()
+
+	fn()
+
+	write.Close()
+	os.Stdout = original
+	return <-done
+}
+
+// writeKey creates a key file with a given mode and returns its path.
+func writeKey(t *testing.T, mode os.FileMode) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "seal.key")
+	if err := os.WriteFile(path, []byte("not really a key"), mode); err != nil {
+		t.Fatalf("failed to write the test key: %v", err)
+	}
+	// WriteFile is subject to umask, so set the mode explicitly.
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatalf("failed to chmod the test key: %v", err)
+	}
+
+	forgetKeyWarning(path)
+	return path
+}
+
+// forgetKeyWarning clears the once-per-file guard so a test can observe output.
+func forgetKeyWarning(path string) {
+	warnedKeyModesMu.Lock()
+	delete(warnedKeyModes, path)
+	warnedKeyModesMu.Unlock()
+}
+
+// TestWarnAboutKeyPermissions covers the three tiers: a mode that exposes the
+// key to other accounts, one that merely allows accidental modification, and the
+// recommended one that should say nothing at all.
+func TestWarnAboutKeyPermissions(t *testing.T) {
+	t.Run("0400 is silent", func(t *testing.T) {
+		path := writeKey(t, 0o400)
+		if out := captureStdout(t, func() { WarnAboutKeyPermissions(path) }); out != "" {
+			t.Errorf("0400 is the recommended mode and should say nothing, got:\n%s", out)
+		}
+	})
+
+	t.Run("0600 gets a note, not a warning", func(t *testing.T) {
+		path := writeKey(t, 0o600)
+		out := captureStdout(t, func() { WarnAboutKeyPermissions(path) })
+
+		if !strings.Contains(out, "chmod 400") {
+			t.Errorf("expected the fix to be given, got:\n%s", out)
+		}
+		if strings.Contains(out, "WARNING") {
+			t.Errorf("0600 exposes the key to nobody, so it should not be a WARNING:\n%s", out)
+		}
+		if strings.Contains(out, "can read it") {
+			t.Errorf("0600 is not readable by others; the message should not say so:\n%s", out)
+		}
+	})
+
+	for _, mode := range []os.FileMode{0o640, 0o604, 0o644, 0o660, 0o444} {
+		t.Run("group or other access warns: "+mode.String(), func(t *testing.T) {
+			path := writeKey(t, mode)
+			out := captureStdout(t, func() { WarnAboutKeyPermissions(path) })
+
+			if !strings.Contains(out, "WARNING") {
+				t.Errorf("mode %04o lets others reach the key and should warn, got:\n%s", mode, out)
+			}
+			if !strings.Contains(out, "recovery") {
+				t.Errorf("the message should say why it matters, got:\n%s", out)
+			}
+			if !strings.Contains(out, "chmod 400") {
+				t.Errorf("the message should give the fix, got:\n%s", out)
+			}
+		})
+	}
+}
+
+// TestWarnAboutKeyPermissionsWarnsOnce matters because a reseal with no --nvram
+// walks every populated slot and opens the key for each one; repeating the same
+// warning sixteen times would bury everything else.
+func TestWarnAboutKeyPermissionsWarnsOnce(t *testing.T) {
+	path := writeKey(t, 0o644)
+
+	first := captureStdout(t, func() { WarnAboutKeyPermissions(path) })
+	if !strings.Contains(first, "WARNING") {
+		t.Fatalf("the first call should warn, got:\n%s", first)
+	}
+
+	second := captureStdout(t, func() { WarnAboutKeyPermissions(path) })
+	if second != "" {
+		t.Errorf("the second call should be silent, got:\n%s", second)
+	}
+
+	// A different file is a different key and warns on its own.
+	other := writeKey(t, 0o644)
+	if out := captureStdout(t, func() { WarnAboutKeyPermissions(other) }); !strings.Contains(out, "WARNING") {
+		t.Errorf("a second key should warn on its own, got:\n%s", out)
+	}
+}
+
+// TestWarnAboutKeyPermissionsMissingFile checks that a path that is not there is
+// not reported as a permission problem — OpenSigningKey already explains that
+// case, and a second, wrong explanation would be worse than none.
+func TestWarnAboutKeyPermissionsMissingFile(t *testing.T) {
+	out := captureStdout(t, func() {
+		WarnAboutKeyPermissions(filepath.Join(t.TempDir(), "absent.key"))
+	})
+	if out != "" {
+		t.Errorf("a missing file should produce no permission warning, got:\n%s", out)
+	}
+}
+
+// TestOpenSigningKeyWarnsAboutMode checks the wiring: the warning has to reach
+// the path that actually signs.
+func TestOpenSigningKeyWarnsAboutMode(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("failed to marshal key: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "seal.key")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
+	if err := os.WriteFile(path, pemBytes, 0o644); err != nil {
+		t.Fatalf("failed to write the key: %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("failed to chmod: %v", err)
+	}
+	forgetKeyWarning(path)
+
+	var opened SigningKey
+	out := captureStdout(t, func() {
+		var openErr error
+		opened, openErr = OpenSigningKey(KeyRef{Kind: KeyRefFile, Path: path}, nil, false)
+		if openErr != nil {
+			t.Errorf("OpenSigningKey failed: %v", openErr)
+		}
+	})
+	if opened != nil {
+		opened.Close()
+	}
+
+	if !strings.Contains(out, "WARNING") {
+		t.Errorf("opening a world-readable key should warn, got:\n%s", out)
 	}
 }

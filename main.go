@@ -18,7 +18,11 @@ var Version = "dev"
 // the output, not the exit status — grep for the FAILED marker below.
 func fail(err error) {
 	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: %v\n", err)
-	fmt.Fprintln(os.Stderr, "tpm2-kira: (exit status is 0 by design; this command did NOT succeed)")
+
+	// Exit 0 deliberately: tpm2-kira is meant to be chainable in a boot
+	// sequence, so a TPM or NVRAM problem must not stop the commands after it.
+	// Callers judge success from the output, not the status — see the "Exit
+	// status" section of the README.
 	os.Exit(0)
 }
 

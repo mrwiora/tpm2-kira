@@ -10,6 +10,35 @@ formats and CLI flags may change without migration paths.
 
 ## Commands
 
+### The failure marker no longer restates the exit status
+
+Failures printed a second line, `(exit status is 0 by design; this command did
+NOT succeed)`, after every `FAILED:` message. It was noise on every error, and it
+explained a design decision to the wrong audience: a script cannot act on it, and
+a person reading one error does not need the rationale repeated. The reasoning
+now lives next to the code that exits, and in the README's "Exit status" section.
+`tpm2-kira: FAILED:` remains the marker to grep for, and the exit status is still
+always 0.
+
+### The signing key is created 0400, and a looser mode is reported
+
+`setup` used to write the private key 0600. It is now 0400: the file is written
+once and only ever read, so dropping the write bit costs nothing and takes an
+accidental overwrite off the table.
+
+Whenever the key is opened for signing — seal, reseal, nvram restore — the mode
+is checked. Group or other access is a warning naming the risk and the fix,
+because that mode is the key's only protection on disk and a readable key undoes
+the PCR policy for whoever can read it. Owner-writable but otherwise private
+(0600) is a one-line note, since it exposes the key to nobody. The recommended
+mode says nothing at all.
+
+It warns rather than refuses. A reseal is what someone reaches for when their
+machine has stopped showing a code, and declining to use a working key at that
+moment would be worse than the exposure it is warning about. It also warns once
+per file per run, since a reseal with no --nvram opens the key once per populated
+slot.
+
 ### seal guides the PCR selection when none is given
 
 `tpm2-kira seal` with no `--pcrs`, run from a terminal, now profiles the machine

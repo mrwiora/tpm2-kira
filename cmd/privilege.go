@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"sync"
 	"syscall"
 
 	"github.com/google/go-tpm/tpm2/transport"
@@ -119,4 +120,76 @@ func isPermissionError(err error) bool {
 	return errors.Is(err, fs.ErrPermission) ||
 		errors.Is(err, syscall.EACCES) ||
 		errors.Is(err, syscall.EPERM)
+}
+
+// ── Signing key file permissions ──────────────────────────────────────────
+
+// warnedKeyModes remembers which key files have already been reported, so a
+// multi-slot reseal — which opens the key once per slot — says it once.
+var (
+	warnedKeyModesMu sync.Mutex
+	warnedKeyModes   = map[string]bool{}
+)
+
+// WarnAboutKeyPermissions reports a signing key file that others can reach.
+//
+// The private key is the recovery master key: anyone holding it can unseal
+// regardless of PCR state (SECURITY-BACKGROUND §4.6). Its protection on disk is
+// filesystem permissions and nothing else, so a mode that lets another account
+// read it undoes the PCR policy entirely for that account.
+//
+// This is advisory. The key still works, and refusing to use a readable key
+// would be worse than saying so — it would leave someone unable to reseal at the
+// moment they most need to.
+func WarnAboutKeyPermissions(path string) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+
+	mode := info.Mode().Perm()
+
+	groupOrOther := mode & 0o077
+	ownerWritable := mode&0o200 != 0
+
+	if groupOrOther == 0 && !ownerWritable {
+		return
+	}
+
+	warnedKeyModesMu.Lock()
+	already := warnedKeyModes[path]
+	warnedKeyModes[path] = true
+	warnedKeyModesMu.Unlock()
+
+	if already {
+		return
+	}
+
+	if groupOrOther != 0 {
+		fmt.Printf("WARNING: the signing key %s is mode %04o.\n", path, mode)
+		fmt.Println("  Other accounts on this machine can read it. The signing key is the recovery")
+		fmt.Println("  master key: whoever holds it can unseal the secret whatever the PCRs say, so")
+		fmt.Println("  its only protection on disk is this mode.")
+		fmt.Printf("      sudo chmod 400 %s\n", path)
+
+		if owner := fileOwner(info); owner >= 0 && owner != 0 {
+			fmt.Printf("  It is also owned by UID %d rather than root.\n", owner)
+			fmt.Printf("      sudo chown root %s\n", path)
+		}
+
+		fmt.Println()
+		return
+	}
+
+	// Owner-writable only: no exposure, just an easy accident.
+	fmt.Printf("Note: the signing key %s is mode %04o; 0400 would protect it from\n", path, mode)
+	fmt.Printf("  accidental modification, since it is only ever read:  sudo chmod 400 %s\n\n", path)
+}
+
+// fileOwner extracts the owning UID, or -1 where that is not available.
+func fileOwner(info os.FileInfo) int {
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		return int(stat.Uid)
+	}
+	return -1
 }

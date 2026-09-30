@@ -357,6 +357,23 @@ tpm2-kira seal --pubkey /path/to/key.pub --privkey /path/to/key.pem
 `--pubkey` accepts a raw public key or an X.509 certificate. Both paths are
 stored in the sealed blob, so later `reseal` calls need no flags.
 
+**Keep the private key mode 0400, owned by root.** That is what `setup` writes,
+and whenever the key is opened for signing — `seal`, `reseal`, `nvram restore` —
+tpm2-kira checks it and reports anything looser:
+
+```
+WARNING: the signing key /var/lib/tpm2-kira/keys/seal.key is mode 0644.
+  Other accounts on this machine can read it. The signing key is the recovery
+  master key: whoever holds it can unseal the secret whatever the PCRs say, so
+  its only protection on disk is this mode.
+      sudo chmod 400 /var/lib/tpm2-kira/keys/seal.key
+```
+
+It is a warning rather than a refusal: a loose key still works, because being
+unable to reseal at the moment you need to would be worse. A key that is merely
+owner-writable (0600) gets a one-line note instead, since that exposes it to
+nobody.
+
 **RSA-4096 does not work.** The PolicySigned branch needs the public key loaded
 into the TPM with `TPM2_LoadExternal`, and TPMs reject 4096-bit RSA there — so
 does swtpm. tpm2-kira fails at seal time with a hint rather than leaving you to
@@ -1051,7 +1068,6 @@ Failures are printed to stderr with a fixed marker:
 
 ```
 tpm2-kira: FAILED: <reason>
-tpm2-kira: (exit status is 0 by design; this command did NOT succeed)
 ```
 
 The mkinitcpio post hook does exactly this — it greps the output for the success

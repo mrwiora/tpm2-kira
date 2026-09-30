@@ -109,7 +109,9 @@ func generateTestKeys(pubPath, privPath string) error {
 		return fmt.Errorf("failed to marshal private key: %w", err)
 	}
 	privPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privDER})
-	if err := os.WriteFile(privPath, privPEM, 0600); err != nil {
+	// 0400, matching what setup writes, so the suite exercises the mode
+	// tpm2-kira recommends rather than provoking its own warning.
+	if err := os.WriteFile(privPath, privPEM, 0400); err != nil {
 		return fmt.Errorf("failed to write private key: %w", err)
 	}
 

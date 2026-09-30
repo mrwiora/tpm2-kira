@@ -284,6 +284,11 @@ func OpenSigningKey(ref KeyRef, pin PINProvider, debug bool) (SigningKey, error)
 			return nil, err
 		}
 
+		// Checked here rather than at load time because this is the path that
+		// signs: seal, reseal and nvram restore all come through it, while
+		// merely deriving a public key does not and has no reason to warn.
+		WarnAboutKeyPermissions(ref.Path)
+
 		if debug {
 			fmt.Printf("Opened signing key from %s (%s)\n", ref.Path, PublicKeyDescription(signer.Public()))
 		}
