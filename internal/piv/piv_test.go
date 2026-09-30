@@ -119,6 +119,17 @@ func TestSign(t *testing.T) {
 	}
 
 	// RSA-2048 needs command chaining: 256 bytes of padded digest plus TLVs.
+	// PIN policy ALWAYS: the key needs a VERIFY right before it, although
+	// the PIN is still reported as verified.
+	if _, verified, _ := c.PINRetries(); !verified {
+		t.Fatal("PIN status lost after a signature")
+	}
+	if _, err := c.Sign(piv.SlotSignature, &rk.PublicKey, digest[:]); !errors.Is(err, piv.ErrPINRequired) {
+		t.Fatalf("PIN policy always without a fresh VERIFY: %v", err)
+	}
+	if err := c.VerifyPIN("123456"); err != nil {
+		t.Fatal(err)
+	}
 	sig, err = c.Sign(piv.SlotSignature, &rk.PublicKey, digest[:])
 	if err != nil {
 		t.Fatal(err)

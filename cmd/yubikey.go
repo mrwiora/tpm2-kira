@@ -570,7 +570,7 @@ func PrepareSigningKey(key crypto.Signer) error {
 	if err != nil {
 		return err
 	}
-	return sess.transaction(s, func() error { return sess.ensurePIN(s) })
+	return sess.transaction(s, func() error { return sess.ensurePIN(s, false) })
 }
 
 // transaction runs fn with exclusive use of the card and the PIV applet
@@ -602,8 +602,10 @@ func (sess *tokenSession) sign(s *yubiKeySigner, digest []byte) (sig []byte, err
 }
 
 func (sess *tokenSession) signLocked(s *yubiKeySigner, digest []byte) (sig []byte, err error) {
+	// With PIN policy 'always' every signature needs its own VERIFY.
+	force := s.stub.PINPolicy == piv.PINPolicyAlways.String()
 	for attempt := 0; attempt < 2; attempt++ {
-		if err := sess.ensurePIN(s); err != nil {
+		if err := sess.ensurePIN(s, force); err != nil {
 			return nil, err
 		}
 		if s.stub.TouchPolicy == piv.TouchPolicyAlways.String() ||
@@ -612,11 +614,12 @@ func (sess *tokenSession) signLocked(s *yubiKeySigner, digest []byte) (sig []byt
 			sess.touched = true
 		}
 		sig, err = sess.card.Sign(s.slot, s.pub, digest)
-		if errors.Is(err, piv.ErrPINRequired) {
-			// PIN policy ALWAYS: the card forgot the PIN after the last
-			// signature. A correct VERIFY resets the counter, so
-			// verifying again costs nothing.
-			sess.unlocked = false
+		if errors.Is(err, piv.ErrPINRequired) && !force {
+			// The key wants a VERIFY right before this signature
+			// (PIN policy 'always', whatever the key file says). An
+			// empty VERIFY still reports the PIN as verified then, so
+			// only a real VERIFY helps.
+			force = true
 			continue
 		}
 		break
@@ -634,8 +637,13 @@ func (sess *tokenSession) signLocked(s *yubiKeySigner, digest []byte) (sig []byt
 
 // ensurePIN makes sure the PIN is verified, asking for it at most once per
 // process and never retrying a rejected one.
-func (sess *tokenSession) ensurePIN(s *yubiKeySigner) error {
-	if s.stub.PINPolicy == piv.PINPolicyNever.String() {
+//
+// force sends a real VERIFY even when the card reports the PIN as verified.
+// A key with PIN policy 'always' needs that: the card keeps answering an
+// empty VERIFY with "verified" after the first signature, yet refuses the
+// next one until the PIN is verified again.
+func (sess *tokenSession) ensurePIN(s *yubiKeySigner, force bool) error {
+	if s.stub.PINPolicy == piv.PINPolicyNever.String() && !force {
 		return nil
 	}
 	remaining, verified, err := sess.card.PINRetries()
@@ -643,7 +651,13 @@ func (sess *tokenSession) ensurePIN(s *yubiKeySigner) error {
 		return unavailable(s, "reading the PIN retry counter: %v", err)
 	}
 	if verified {
-		return nil
+		if !force {
+			return nil
+		}
+		// The card reports "verified" only after a correct PIN, which
+		// resets the counter to full, and a wrong one clears the
+		// status again. So all attempts are left.
+		remaining = 3
 	}
 	if remaining == 0 {
 		sess.fatal = unavailable(s, "%v", piv.ErrPINBlocked)

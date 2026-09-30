@@ -38,9 +38,14 @@ type Card struct {
 
 	selected bool
 	verified bool
-	chain    []byte
-	pending  []byte
-	certs    map[piv.Slot][]byte
+	// fresh is set by a successful VERIFY and consumed by the next
+	// signature. A key with PIN policy 'always' needs it; the global
+	// verified status stays set, as on a real YubiKey, so an empty VERIFY
+	// keeps answering 9000 while such a key still refuses to sign.
+	fresh   bool
+	chain   []byte
+	pending []byte
+	certs   map[piv.Slot][]byte
 }
 
 // ErrUnplugged is returned by Transmit once Unplugged is set.
@@ -70,7 +75,7 @@ func (c *Card) AddRSAKey(slot piv.Slot, bits int, pin piv.PINPolicy, touch piv.T
 // Reset behaves like a card reset: the applet is deselected and a verified
 // PIN is forgotten.
 func (c *Card) Reset() {
-	c.selected, c.verified, c.chain, c.pending = false, false, nil, nil
+	c.selected, c.verified, c.fresh, c.chain, c.pending = false, false, false, nil, nil
 }
 
 // Sent reports whether any APDU with instruction ins was received.
@@ -288,6 +293,7 @@ func (c *Card) verify(ref byte, data []byte) []byte {
 	}
 	c.Retries = 3
 	c.verified = true
+	c.fresh = true
 	return sw(0x9000)
 }
 
@@ -309,7 +315,8 @@ func (c *Card) sign(alg piv.Algorithm, slot piv.Slot, data []byte) ([]byte, erro
 			policy = piv.PINPolicyNever
 		}
 	}
-	if policy != piv.PINPolicyNever && !c.verified {
+	if policy != piv.PINPolicyNever && !c.verified ||
+		policy == piv.PINPolicyAlways && !c.fresh {
 		return sw(0x6982), nil
 	}
 	// 7C L { 82 00, 81 L challenge }
@@ -339,9 +346,7 @@ func (c *Card) sign(alg piv.Algorithm, slot piv.Slot, data []byte) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	if policy == piv.PINPolicyAlways {
-		c.verified = false
-	}
+	c.fresh = false
 	c.SignCount++
 	return c.respond(tlv(0x7C, tlv(0x82, sig)))
 }

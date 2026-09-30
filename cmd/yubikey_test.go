@@ -838,3 +838,70 @@ func TestPINFromMkinitcpioConf(t *testing.T) {
 		t.Errorf("prompts %d, output:\n%s", fake.prompts, out)
 	}
 }
+
+// The seal that failed on a real YubiKey 5 (slot 9a, PIN policy 'always'):
+// the blob signature worked, the next signature was refused with "PIN
+// verification required" because an empty VERIFY keeps reporting the PIN as
+// verified. Every signature of a seal must work, whatever the key file
+// records, and no attempt may be spent.
+func TestPINPolicyAlwaysLikeRealYubiKey(t *testing.T) {
+	for _, recorded := range []string{"always", "once", "unknown"} {
+		t.Run("key file says "+recorded, func(t *testing.T) {
+			card := pivtest.New(33261813)
+			card.AddECKey(piv.SlotAuthentication, piv.PINPolicyAlways, piv.TouchPolicyNever, false)
+			fake := &fakeTokens{cards: []*pivtest.Card{card}}
+			fake.install(t)
+			t.Setenv(PINEnvVar, "123456")
+
+			slot := probeSlot(t, 33261813, piv.SlotAuthentication)
+			path := writeStub(t, 33261813, slot)
+			data, _ := os.ReadFile(path)
+			data = bytes.Replace(data, []byte(`"pinPolicy": "always"`), []byte(`"pinPolicy": "`+recorded+`"`), 1)
+			os.Chmod(path, 0600)
+			os.WriteFile(path, data, 0400)
+			signer, err := LoadSigningPrivateKey(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Blob signature, NV write pre-flight, two NV chunks.
+			for i := 0; i < 4; i++ {
+				digest := sha256.Sum256([]byte{byte(i)})
+				if _, err := signForTPM(signer, digest[:]); err != nil {
+					t.Fatalf("signature %d: %v", i+1, err)
+				}
+			}
+			if card.Retries != 3 || card.SignCount != 4 {
+				t.Errorf("retries %d, signatures %d", card.Retries, card.SignCount)
+			}
+		})
+	}
+}
+
+// Another process left the PIN verified; a key with PIN policy 'always'
+// still needs this process to verify it.
+func TestPINAlwaysWithPINLeftVerified(t *testing.T) {
+	card := pivtest.New(1)
+	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyAlways, piv.TouchPolicyNever, false)
+	fake := &fakeTokens{cards: []*pivtest.Card{card}}
+	fake.install(t)
+	t.Setenv(PINEnvVar, "123456")
+	signer, _ := LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+
+	other, err := piv.Open(card)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := other.VerifyPIN("123456"); err != nil {
+		t.Fatal(err)
+	}
+	other.Sign(piv.SlotAuthentication, signer.Public(), make([]byte, 32)) // consumes the fresh VERIFY
+
+	digest := sha256.Sum256(nil)
+	if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
+		t.Fatalf("sign after another process: %v", err)
+	}
+	if card.Retries != 3 {
+		t.Errorf("retries %d", card.Retries)
+	}
+}
