@@ -67,6 +67,12 @@ func (c *Card) AddRSAKey(slot piv.Slot, bits int, pin piv.PINPolicy, touch piv.T
 	return k
 }
 
+// Reset behaves like a card reset: the applet is deselected and a verified
+// PIN is forgotten.
+func (c *Card) Reset() {
+	c.selected, c.verified, c.chain, c.pending = false, false, nil, nil
+}
+
 // Sent reports whether any APDU with instruction ins was received.
 func (c *Card) Sent(ins byte) bool {
 	for _, a := range c.Log {

@@ -162,25 +162,37 @@ func printPINInstructions(w io.Writer, t TokenInfo, s TokenSlot) {
 		return
 	}
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Setup did not use the PIN; sealing does. tpm2-kira asks for it on the terminal,")
-	fmt.Fprintf(w, "or takes it from %s. To set it for this root shell without it landing\n", PINEnvVar)
-	fmt.Fprintln(w, "in the shell history:")
-	fmt.Fprintf(w, "    read -rs %s && export %s\n", PINEnvVar, PINEnvVar)
-	fmt.Fprintln(w, "    tpm2-kira seal --pcrs 0,7")
 
-	if _, err := os.Stat(mkinitcpioConfPath); err != nil {
+	info := readMkinitcpioPIN(mkinitcpioConfPath)
+	switch {
+	case info.State == mkinitcpioNotUsed:
+		// No mkinitcpio: the terminal or the environment.
+		fmt.Fprintln(w, "Setup did not use the PIN; sealing does. tpm2-kira asks for it on the terminal,")
+		fmt.Fprintf(w, "or takes it from %s. To set it for this root shell without it landing\n", PINEnvVar)
+		fmt.Fprintln(w, "in the shell history:")
+		fmt.Fprintf(w, "    read -rs %s && export %s\n", PINEnvVar, PINEnvVar)
+		fmt.Fprintln(w, "    tpm2-kira seal --pcrs 0,7")
+		return
+	case info.State == mkinitcpioPINExported && info.PIN != "":
+		fmt.Fprintf(w, "%s already sets %s: sealing, resealing and the automatic\n", mkinitcpioConfPath, PINEnvVar)
+		fmt.Fprintln(w, "reseal after kernel and initramfs updates all take the PIN from there.")
+		if info.Loose {
+			fmt.Fprintf(w, "The file can be read by other users; make it readable by root only:\n    chmod 600 %s\n", mkinitcpioConfPath)
+		}
 		return
 	}
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Automatic signing: after every kernel or initramfs update, the mkinitcpio post")
-	fmt.Fprintf(w, "hook reseals. To let it sign without asking, add this line to %s\n", mkinitcpioConfPath)
+
+	fmt.Fprintln(w, "Setup did not use the PIN; sealing does. Put it in one place and every step")
+	fmt.Fprintf(w, "finds it — seal, reseal, and the mkinitcpio post hook that reseals after every\n")
+	fmt.Fprintf(w, "kernel or initramfs update. Add this line to %s\n", mkinitcpioConfPath)
 	fmt.Fprintln(w, "('export' is required: mkinitcpio passes only exported variables to its hooks):")
 	fmt.Fprintf(w, "    export %s='<your PIN>'\n", PINEnvVar)
 	fmt.Fprintln(w, "The file is readable by every user by default and would then hold the PIN, so")
 	fmt.Fprintln(w, "make it readable by root only (it is not copied into the initramfs image):")
 	fmt.Fprintf(w, "    chmod 600 %s\n", mkinitcpioConfPath)
-	fmt.Fprintln(w, "Without the PIN there, that reseal reports SKIPPED, and the next boot shows a PCR")
-	fmt.Fprintln(w, "mismatch until you run 'tpm2-kira reseal' with the YubiKey plugged in.")
+	fmt.Fprintln(w, "Without it, seal and reseal ask for the PIN on the terminal, and the automatic")
+	fmt.Fprintln(w, "reseal reports SKIPPED: the next boot then shows a PCR mismatch until you run")
+	fmt.Fprintln(w, "'tpm2-kira reseal' with the YubiKey plugged in.")
 }
 
 // pinPolicyWarning returns a warning when the key can sign without a PIN, or

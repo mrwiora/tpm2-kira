@@ -462,8 +462,10 @@ YUBIKEY SUBCOMMANDS:
                      which are usable by tpm2-kira. Read-only; no PIN.
 
   With the signing key on a YubiKey, seal and reseal need the token and its
-  PIN: from the %s environment variable, or asked on the terminal.
-  reveal, run and info never need the token.
+  PIN. The PIN is taken from the %s environment variable, else from
+  the 'export TPM2_KIRA_PIN=...' line in /etc/mkinitcpio.conf (which the
+  automatic reseal after initramfs rebuilds needs anyway), else asked on the
+  terminal. reveal, run and info never need the token.
 
 EXAMPLES:
   tpm2-kira setup
