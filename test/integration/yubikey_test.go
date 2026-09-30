@@ -315,8 +315,22 @@ func TestSetupWithYubiKeyFlag(t *testing.T) {
 	if _, err := os.Stat("/var/lib/tpm2-kira/keys/seal.pub"); err != nil {
 		t.Errorf("the public key should have been cached: %v", err)
 	}
-	if _, err := os.Stat("/var/lib/tpm2-kira/keys/seal.key"); err == nil {
-		t.Error("setup wrote a private key file even though the key is on the token")
+
+	// The private key path does hold a file, but it names the token instead of
+	// holding a key. Leaving it absent is what broke the step to the first
+	// seal: the choice made here was recorded nowhere.
+	refBytes, err := os.ReadFile("/var/lib/tpm2-kira/keys/seal.key")
+	if err != nil {
+		t.Fatalf("setup recorded the token nowhere: %v", err)
+	}
+	if !strings.Contains(string(refBytes), "TPM2-KIRA KEY REFERENCE") {
+		t.Errorf("seal.key is not a token reference:\n%s", refBytes)
+	}
+	if strings.Contains(string(refBytes), "PRIVATE KEY-----") {
+		t.Error("setup wrote actual key material even though the key is on the token")
+	}
+	if !strings.Contains(string(refBytes), "yubikey:serial=12345678;slot=9a") {
+		t.Errorf("the reference does not name the token:\n%s", refBytes)
 	}
 
 	// Nothing sealed: that is now seal's job alone.
@@ -329,12 +343,22 @@ func TestSetupWithYubiKeyFlag(t *testing.T) {
 	// Sealing is the separate step, and it does need the PIN.
 	setPIN(t, "123456")
 
+	// No key flags: exactly what the setup output tells the operator to run.
+	// This is the regression — the default --privkey is the path above, and
+	// before it held a reference this failed with "no such file: seal.key".
 	stdout, stderr, err = runTPMKira(t, tpmPath, "seal",
-		"--nvram", nvramIndex, "--pcrs", testPCRs,
-		"--privkey", "yubikey:serial=12345678;slot=9a",
-		"--pubkey", "/var/lib/tpm2-kira/keys/seal.pub")
+		"--nvram", nvramIndex, "--pcrs", testPCRs)
 	if err != nil {
-		t.Fatalf("Seal failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
+		t.Fatalf("Seal without key flags failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
+	}
+	if strings.Contains(stderr, "no such file") {
+		t.Errorf("seal looked for a key file instead of following the reference:\n%s", stderr)
+	}
+
+	// The banner has to name the token, not the reference file, or the operator
+	// cannot tell which key is being used.
+	if !strings.Contains(stdout, "Signing Key: yubikey:serial=12345678;slot=9a") {
+		t.Errorf("the seal banner should name the token, got:\n%s", stdout)
 	}
 
 	testReveal(t, tpmPath, nvramIndex)
@@ -408,5 +432,85 @@ func TestSetupLocalIgnoresAttachedToken(t *testing.T) {
 
 	testReveal(t, tpmPath, nvramIndex)
 
+	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", nvramIndex)
+}
+
+// TestYubiKeyAdoptRecordsTheReference covers the other way a token becomes the
+// signing key: adopting a slot on a machine that is already installed. It has
+// the same obligation as setup — record the choice where seal will find it —
+// and one more: never overwrite a key file that may be the only copy.
+func TestYubiKeyAdoptRecordsTheReference(t *testing.T) {
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+
+	attachToken(t, virtualpiv.Options{Slot: 0x9A, Serial: 12345678})
+
+	if _, err := os.Stat("/var/lib/tpm2-kira/keys"); err == nil {
+		t.Skip("/var/lib/tpm2-kira/keys already exists; this test owns that path")
+	}
+	t.Cleanup(func() { os.RemoveAll("/var/lib/tpm2-kira") })
+
+	if err := os.MkdirAll("/var/lib/tpm2-kira/keys", 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	const keyPath = "/var/lib/tpm2-kira/keys/seal.key"
+
+	// A local key is already installed, which is the realistic starting point
+	// for adopting a token. It must survive.
+	if err := generateTestKeys("/var/lib/tpm2-kira/keys/seal.pub", keyPath); err != nil {
+		t.Fatalf("cannot lay down a local key: %v", err)
+	}
+	before, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// tpm2-kira exits 0 even when it fails, by design, so the exit status proves
+	// nothing here — the output is the only evidence.
+	stdout, stderr, _ := runTPMKira(t, tpmPath, "yubikey", "adopt", "--key", "yubikey:serial=12345678;slot=9a")
+	if strings.Contains(stderr, "FAILED") {
+		t.Fatalf("adopt failed:\nStdout: %s\nStderr: %s", stdout, stderr)
+	}
+
+	after, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("adopt overwrote an existing private key")
+	}
+	if !strings.Contains(stdout, "already holds a private key") {
+		t.Errorf("adopt should say why it left the key alone, got:\n%s", stdout)
+	}
+
+	// With the key moved aside, adopting records the token.
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, _ = runTPMKira(t, tpmPath, "yubikey", "adopt", "--key", "yubikey:serial=12345678;slot=9a")
+	if strings.Contains(stderr, "FAILED") {
+		t.Fatalf("adopt failed on the second run:\nStdout: %s\nStderr: %s", stdout, stderr)
+	}
+
+	refBytes, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("adopt recorded the token nowhere: %v", err)
+	}
+	if !strings.Contains(string(refBytes), "yubikey:serial=12345678;slot=9a") {
+		t.Errorf("the reference does not name the token:\n%s", refBytes)
+	}
+
+	// And sealing now works with no key flags, which is the point of all this.
+	setPIN(t, "123456")
+
+	const nvramIndex = "0x0180300e"
+	stdout, stderr, _ = runTPMKira(t, tpmPath, "seal", "--nvram", nvramIndex, "--pcrs", testPCRs)
+	if strings.Contains(stderr, "FAILED") {
+		t.Fatalf("seal after adopt failed:\nStdout: %s\nStderr: %s", stdout, stderr)
+	}
+
+	testReveal(t, tpmPath, nvramIndex)
 	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", nvramIndex)
 }

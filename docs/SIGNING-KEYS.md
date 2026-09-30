@@ -180,11 +180,50 @@ Choice [Enter]:
 
 Choosing the slot validates it, checks your TPM can load the key for
 PolicySigned, and caches the public key so later commands work with the token
-unplugged — no separate `adopt` step. Only the public key is written to disk.
+unplugged — no separate `adopt` step.
 
-setup stops there and prints the `seal` command to run next, with the key
-reference already filled in. It needs no PIN, because reading a public key from
-a slot does not require one; sealing does.
+No private key is written. Two files are:
+
+| File | Contents |
+| --- | --- |
+| `keys/seal.pub` | the public key, cached so `reveal`, `info` and the blob signature check work with the token unplugged |
+| `keys/seal.key` | a *reference* naming the token slot — not key material |
+
+`seal.key` is the path every command defaults to and the reseal hook passes, so
+it has to resolve for both variants. For a token-held key it therefore holds a
+pointer rather than a key:
+
+```
+# tpm2-kira signing key reference — this file is NOT a private key.
+#
+# The signing key lives on a hardware token:
+#
+#     yubikey:serial=12345678;slot=9a
+...
+-----BEGIN TPM2-KIRA KEY REFERENCE-----
+eXViaWtleTpzZXJpYWw9MTIzNDU2Nzg7c2xvdD05YQ==
+-----END TPM2-KIRA KEY REFERENCE-----
+```
+
+sbctl does the same thing for a Secure Boot key held in a TPM: `db.key` keeps
+its name and carries a `TSS2 PRIVATE KEY` block instead of a `PRIVATE KEY` one.
+The gain is that one well-known path works for both variants, so no script,
+hook or flag has to know which you chose.
+
+Consequences worth knowing:
+
+- It is mode 0644, not 0400. A slot number is not a secret, and the permission
+  warning stays quiet about it.
+- It is not worth backing up, and losing it loses nothing: pass the reference to
+  `--privkey`, or run `tpm2-kira yubikey adopt` to write it again.
+- Nothing overwrites a real key to put one there. If `seal.key` already holds
+  key material, `setup` and `yubikey adopt` leave it alone and say so — that
+  file may be the only copy of a key that cannot be regenerated.
+
+setup stops there and prints the `seal` command to run next. Because the
+reference is on disk, that command needs no key flags at all — only the PIN,
+since sealing signs. Reading a public key from a slot needs no PIN, which is why
+setup itself never asks for one.
 
 If a token is connected but none of its slots holds a key, setup prints the
 `ykman` commands above and lets you stop there to run them; nothing is created,

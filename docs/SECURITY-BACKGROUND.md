@@ -299,6 +299,12 @@ not reachable. An attacker in that window has only the PCR door. Note this is a
 filesystem-layout property that a different deployment could undo, not a
 guarantee the TPM makes.
 
+Holding the key on a hardware token strengthens exactly this property rather
+than changing the model: `seal.key` then holds a reference to a PIV slot instead
+of the key, so what sits on the filesystem is a slot number, and the key itself
+cannot be copied off the token at all. Unplugging it between reseals removes the
+key from the machine entirely. See [YUBIKEY.md](YUBIKEY.md).
+
 ---
 
 ## 5. Operation Flows

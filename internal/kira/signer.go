@@ -277,6 +277,20 @@ func OpenSigningKey(ref KeyRef, pin PINProvider, debug bool) (SigningKey, error)
 			}
 		}
 
+		// The file may record where the key lives rather than hold it: that is
+		// how a token-held key keeps the well-known private key path working.
+		// Resolved before the PEM load so the reference never has to look like
+		// key material, and only one level deep, which a token reference is by
+		// construction — ReadKeyReference rejects anything else.
+		if tokenRef, isRef, refErr := ReadKeyReference(ref.Path); refErr != nil {
+			return nil, refErr
+		} else if isRef {
+			if debug {
+				fmt.Printf("%s points at %s\n", ref.Path, tokenRef)
+			}
+			return openYubiKeySigningKey(tokenRef, pin, debug)
+		}
+
 		signer, err := LoadSigningPrivateKeyFromPEM(ref.Path)
 		if err != nil {
 			// The file is there but unusable. That is a real error, not
@@ -330,6 +344,11 @@ func PublicKeyForRef(ref KeyRef, cachedPubKeyPath string, debug bool) (crypto.Pu
 	default:
 		if ref.Path == "" {
 			return nil, fmt.Errorf("no public key available: no cached copy and no key reference")
+		}
+		if tokenRef, isRef, refErr := ReadKeyReference(ref.Path); refErr != nil {
+			return nil, refErr
+		} else if isRef {
+			return yubiKeyPublicKey(tokenRef, debug)
 		}
 		signer, err := LoadSigningPrivateKeyFromPEM(ref.Path)
 		if err != nil {

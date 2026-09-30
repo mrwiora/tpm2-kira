@@ -227,10 +227,12 @@ func runTPMKiraWithInput(t *testing.T, tpmPath string, stdinInput string, args .
 		// First arg is the command
 		allArgs = append(allArgs, args[0])
 
-		// Special handling for nvram command which has subcommands
-		if args[0] == "nvram" && len(args) > 1 {
-			// For nvram: nvram <subcommand> --tpm <path> <other flags>
-			// Add subcommand first (list, status, delete)
+		// Commands that take a subcommand need it before any flag: they parse
+		// args[0] as the subcommand, so injecting --tpm first would make the
+		// flag itself look like the subcommand and the command would be
+		// rejected for positional arguments.
+		if (args[0] == "nvram" || args[0] == "yubikey") && len(args) > 1 {
+			// <command> <subcommand> --tpm <path> <other flags>
 			allArgs = append(allArgs, args[1])
 
 			// Add TPM path flag after subcommand

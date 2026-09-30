@@ -36,6 +36,18 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 		return err
 	}
 
+	// The file at the private key path may record a token slot instead of
+	// holding a key, which is how a token-held key keeps that path working.
+	// Resolved here rather than only at signing time, so the banner below and
+	// the public key lookup both name the token the operator actually chose.
+	if privKeyRef.Kind == KeyRefFile {
+		if tokenRef, isRef, refErr := ReadKeyReference(privKeyRef.Path); refErr != nil {
+			return refErr
+		} else if isRef {
+			privKeyRef = tokenRef
+		}
+	}
+
 	pubKey, err := PublicKeyForRef(privKeyRef, pubKeyPath, debug)
 	if err != nil {
 		return fmt.Errorf("failed to load signing public key: %w", err)
@@ -64,7 +76,10 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	}
 
 	// Seal the generated TOTP secret
-	if err := sealDataWithSpecs(tpmPath, specs, nvramIndex, dataToSeal, pubKey, pubKeyPath, privKeyPath, debug, hashAlgo, verifyUKI, nil); err != nil {
+	// privKeyRef.String(), not privKeyPath: a reference file has already been
+	// followed above, so this hands down the token it named. For a plain key
+	// file the two are the same string.
+	if err := sealDataWithSpecs(tpmPath, specs, nvramIndex, dataToSeal, pubKey, pubKeyPath, privKeyRef.String(), debug, hashAlgo, verifyUKI, nil); err != nil {
 		return err
 	}
 

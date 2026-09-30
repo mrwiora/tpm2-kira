@@ -190,9 +190,41 @@ func YubiKeyAdopt(tpmPath, refStr, outPath string, debug bool) error {
 	effectiveRef := KeyRef{Kind: KeyRefYubiKey, Serial: serial, Slot: ref.Slot}
 
 	fmt.Printf("\n  Public key cached at: %s\n", outPath)
+
+	// Adopting the default location is the same act as 'setup' choosing a
+	// token, so it records the choice the same way. A caller who redirected the
+	// public key with --out is managing paths itself and gets the explicit
+	// command instead.
+	referenceInstalled := false
+	if outPath == DefaultPublicKeyPath {
+		err := InstallKeyReference(DefaultPrivateKeyPath, effectiveRef)
+		switch {
+		case err == nil:
+			referenceInstalled = true
+			fmt.Printf("  Reference written to:  %s\n", DefaultPrivateKeyPath)
+
+		case errors.Is(err, ErrRealKeyPresent):
+			// That file may be the only copy of a usable signing key, so it is
+			// never overwritten to make this command tidier.
+			fmt.Println()
+			fmt.Printf("WARNING: %s already holds a private key, so it was left alone.\n", DefaultPrivateKeyPath)
+			fmt.Println("         An unqualified 'seal' or 'reseal' will use that key, not this token.")
+			fmt.Println("         Move it aside once you are sure it is backed up, then run this again.")
+
+		default:
+			return err
+		}
+	}
+
 	fmt.Println("\nSeal against this key with:")
-	fmt.Printf("    sudo tpm2-kira seal --privkey '%s' --pubkey %s\n", effectiveRef, outPath)
-	fmt.Println("\nThe reference is stored in the sealed blob, so later reseals need no flags.")
+	if referenceInstalled {
+		fmt.Printf("    export %s=<your PIN>\n", PINEnvVar)
+		fmt.Println("    sudo -E tpm2-kira seal --pcrs \"0,7\"")
+		fmt.Printf("\nNo key flags are needed: %s names the token.\n", DefaultPrivateKeyPath)
+	} else {
+		fmt.Printf("    sudo tpm2-kira seal --privkey '%s' --pubkey %s\n", effectiveRef, outPath)
+	}
+	fmt.Println("\nThe reference is stored in the sealed blob too, so later reseals need no flags.")
 
 	return nil
 }

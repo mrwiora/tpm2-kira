@@ -74,7 +74,11 @@ either without having to think about the other.
 
 If a YubiKey is plugged in, `setup` notices and offers to put the signing key on
 it instead — a key file remains the default, so pressing Enter keeps the
-behaviour above. See [Signing key on a YubiKey](#signing-key-on-a-yubikey).
+behaviour above. Either way the commands are the same: with the key on a token,
+`seal.key` holds a reference naming the slot rather than a key, so `seal` and
+`reseal` need no extra flags. See
+[Signing key on a YubiKey](#signing-key-on-a-yubikey) and
+[docs/SIGNING-KEYS.md](docs/SIGNING-KEYS.md).
 
 ## Installation
 
