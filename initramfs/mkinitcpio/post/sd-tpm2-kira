@@ -25,21 +25,6 @@ fi
 
 echo "tpm2-kira: resealing TOTP secret after initramfs rebuild..."
 
-# PIN for a signing key on a YubiKey, kept in a mkinitcpio drop-in. mkinitcpio
-# sources drop-ins itself and hands exported variables to this hook, but only
-# when no configuration file is passed with -c — and a preset that sets
-# ALL_config=... passes one, which disables drop-ins. So read it here when the
-# PIN has not arrived. The file is sourced as root, so it must be root's alone.
-KIRA_PIN_DROPIN=/etc/mkinitcpio.conf.d/tpm2-kira.conf
-if [[ -z ${TPM2_KIRA_PIN-} && -f $KIRA_PIN_DROPIN ]]; then
-    if [[ $(stat -c '%u %a' "$KIRA_PIN_DROPIN") =~ ^0\ [0-7]00$ ]]; then
-        # shellcheck source=/dev/null
-        . "$KIRA_PIN_DROPIN"
-    else
-        echo "tpm2-kira: ignoring $KIRA_PIN_DROPIN: it must be owned by root with mode 600" >&2
-    fi
-fi
-
 # The install hook inspected the image that was just built and recorded whether
 # systemd's pre-measure-point units are in it. That describes the NEXT boot,
 # which runtime probing cannot do on the boot where the units first appear.
@@ -60,7 +45,8 @@ output=$(tpm2-kira reseal --measure-point="$measure_point" 2>&1)
 # SKIPPED means the signing key lives on a YubiKey that is not plugged in, or
 # its PIN was not available. Nothing was written, so the sealed secret is
 # intact; the next boot just shows a PCR mismatch until someone reseals. For
-# unattended signing, the PIN goes in the drop-in read above.
+# unattended signing, /etc/mkinitcpio.conf needs 'export TPM2_KIRA_PIN=...':
+# mkinitcpio passes only exported variables to this hook.
 if grep -q "SKIPPED:" <<< "$output"; then
     {
         echo "tpm2-kira: ================================================================"

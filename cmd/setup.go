@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -34,13 +33,8 @@ type SetupOptions struct {
 	Debug bool
 }
 
-// mkinitcpioConfPath marks a system that builds its initramfs with
-// mkinitcpio; the PIN for unattended resealing then goes in
-// mkinitcpioPINDropIn, which the tpm2-kira post hook reads.
-var (
-	mkinitcpioConfPath  = "/etc/mkinitcpio.conf"
-	mkinitcpioPINDropIn = "/etc/mkinitcpio.conf.d/tpm2-kira.conf"
-)
+// mkinitcpioConfPath is where the PIN for unattended resealing goes on Arch.
+var mkinitcpioConfPath = "/etc/mkinitcpio.conf"
 
 // setupTerminal returns the terminal to ask on, or nil when stdin is not one.
 // Tests replace it.
@@ -177,19 +171,16 @@ func printPINInstructions(w io.Writer, t TokenInfo, s TokenSlot) {
 	if _, err := os.Stat(mkinitcpioConfPath); err != nil {
 		return
 	}
-	dir := filepath.Dir(mkinitcpioPINDropIn)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Automatic signing: after every kernel or initramfs update, the mkinitcpio post")
-	fmt.Fprintln(w, "hook reseals. To let it sign without asking, store the PIN in a drop-in that only")
-	fmt.Fprintln(w, "root can read. In a root shell (the PIN is not echoed and stays out of the history):")
-	fmt.Fprintf(w, "    mkdir -p %s\n", dir)
-	fmt.Fprintf(w, "    install -m 600 /dev/null %s\n", mkinitcpioPINDropIn)
-	fmt.Fprintln(w, "    read -rsp 'YubiKey PIN: ' pin; echo")
-	fmt.Fprintf(w, "    printf 'export %s=%%q\\n' \"$pin\" > %s; unset pin\n", PINEnvVar, mkinitcpioPINDropIn)
-	fmt.Fprintln(w, "The hook ignores the file unless it is owned by root with mode 600. It is not")
-	fmt.Fprintln(w, "copied into the initramfs image. Without it, that reseal reports SKIPPED, and the")
-	fmt.Fprintln(w, "next boot shows a PCR mismatch until you run 'tpm2-kira reseal' with the YubiKey")
-	fmt.Fprintln(w, "plugged in.")
+	fmt.Fprintf(w, "hook reseals. To let it sign without asking, add this line to %s\n", mkinitcpioConfPath)
+	fmt.Fprintln(w, "('export' is required: mkinitcpio passes only exported variables to its hooks):")
+	fmt.Fprintf(w, "    export %s='<your PIN>'\n", PINEnvVar)
+	fmt.Fprintln(w, "The file is readable by every user by default and would then hold the PIN, so")
+	fmt.Fprintln(w, "make it readable by root only (it is not copied into the initramfs image):")
+	fmt.Fprintf(w, "    chmod 600 %s\n", mkinitcpioConfPath)
+	fmt.Fprintln(w, "Without the PIN there, that reseal reports SKIPPED, and the next boot shows a PCR")
+	fmt.Fprintln(w, "mismatch until you run 'tpm2-kira reseal' with the YubiKey plugged in.")
 }
 
 // pinPolicyWarning returns a warning when the key can sign without a PIN, or

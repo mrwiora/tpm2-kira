@@ -509,12 +509,10 @@ func TestPINGuidance(t *testing.T) {
 		t.Errorf("unknown policy: %q", w)
 	}
 
-	dir := t.TempDir()
-	conf := filepath.Join(dir, "mkinitcpio.conf")
-	dropIn := filepath.Join(dir, "mkinitcpio.conf.d", "tpm2-kira.conf")
-	oldConf, oldDropIn := mkinitcpioConfPath, mkinitcpioPINDropIn
-	t.Cleanup(func() { mkinitcpioConfPath, mkinitcpioPINDropIn = oldConf, oldDropIn })
-	mkinitcpioConfPath, mkinitcpioPINDropIn = conf, dropIn
+	conf := filepath.Join(t.TempDir(), "mkinitcpio.conf")
+	old := mkinitcpioConfPath
+	t.Cleanup(func() { mkinitcpioConfPath = old })
+	mkinitcpioConfPath = conf
 
 	var buf bytes.Buffer
 	printPINInstructions(&buf, tokens[0], s9a)
@@ -527,11 +525,7 @@ func TestPINGuidance(t *testing.T) {
 	buf.Reset()
 	printPINInstructions(&buf, tokens[0], s9a)
 	t.Logf("instructions:\n%s", buf.String())
-	if strings.Contains(buf.String(), conf+"\n") || strings.Contains(buf.String(), conf+" ") {
-		t.Errorf("instructions still edit %s", conf)
-	}
-	for _, want := range []string{"install -m 600 /dev/null " + dropIn, "read -rsp",
-		`printf 'export TPM2_KIRA_PIN=%q\n' "$pin" > ` + dropIn, "mode 600", "SKIPPED"} {
+	for _, want := range []string{"export TPM2_KIRA_PIN='<your PIN>'", "chmod 600 " + conf, "SKIPPED"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("instructions lack %q", want)
 		}
