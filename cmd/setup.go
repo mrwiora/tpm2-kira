@@ -51,7 +51,7 @@ func Setup(tpmPath string, nvramIndex uint32, debug bool) error {
 		Type:  "EC PRIVATE KEY",
 		Bytes: ecDER,
 	})
-	if err := os.WriteFile(privKeyPath, privPEM, 0600); err != nil {
+	if err := WriteSigningKeyFile(privKeyPath, privPEM); err != nil {
 		return fmt.Errorf("failed to write private key to %s: %w", privKeyPath, err)
 	}
 	fmt.Printf("  Private key written to: %s\n", privKeyPath)
@@ -65,7 +65,7 @@ func Setup(tpmPath string, nvramIndex uint32, debug bool) error {
 		Type:  "PUBLIC KEY",
 		Bytes: pubDER,
 	})
-	if err := os.WriteFile(pubKeyPath, pubPEM, 0644); err != nil {
+	if err := WriteSigningKeyFile(pubKeyPath, pubPEM); err != nil {
 		return fmt.Errorf("failed to write public key to %s: %w", pubKeyPath, err)
 	}
 	fmt.Printf("  Public key written to:  %s\n", pubKeyPath)

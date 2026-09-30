@@ -155,23 +155,47 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		}
 	}
 
+	// The private key is required: it is the trust anchor for the blob
+	// signature check below, and PolicySigned NV writes demand proof of key
+	// possession for every write, not just for recovery-unseal.
+	if effectivePrivKeyPath == "" {
+		tpmDev.Close()
+		return fmt.Errorf("cannot reseal: signing private key is required for blob verification and NV write authorization.\n" +
+			"  Provide --privkey <path>, or ensure the default key at " + DefaultPrivateKeyPath + " exists.\n" +
+			"  The key pair is normally created by 'tpm2-kira setup'")
+	}
+
+	// ── Check signing key file permissions ──
+	// Both key files must be mode 0400. This runs before the keys are loaded:
+	// a key that others could read or replace is not one to reseal with.
+	for _, keyPath := range []string{effectivePrivKeyPath, effectivePubKeyPath} {
+		if keyPath == "" {
+			continue
+		}
+		if err := CheckSigningKeyFileMode(keyPath); err != nil {
+			tpmDev.Close()
+			return fmt.Errorf("cannot reseal: %w", err)
+		}
+	}
+
 	// ── Verify blob integrity signature ──
 	// The signature MUST be verified BEFORE any blob field is acted on, so a
 	// tampered blob cannot steer reseal via its stored PCR specs or key paths.
 	//
 	// Derive the verification key from the private key (the trust anchor).
 	// The blob's stored PublicKeyPath is NOT trusted for this purpose.
-	if effectivePrivKeyPath != "" {
-		verifyKey, loadErr := LoadSigningPrivateKeyFromPEM(effectivePrivKeyPath)
-		if loadErr == nil {
-			if sigErr := VerifyBlobSignature(sealedData, sealedBlob, verifyKey.Public()); sigErr != nil {
-				tpmDev.Close()
-				return fmt.Errorf("blob integrity check failed — the NVRAM blob may have been tampered with: %w", sigErr)
-			}
-			if debug {
-				fmt.Println("Blob signature verified successfully")
-			}
-		}
+	// A key that fails to load is an error, not a reason to skip the check.
+	verifyKey, loadErr := LoadSigningPrivateKeyFromPEM(effectivePrivKeyPath)
+	if loadErr != nil {
+		tpmDev.Close()
+		return fmt.Errorf("cannot reseal: failed to load signing private key to verify the blob: %w", loadErr)
+	}
+	if sigErr := VerifyBlobSignature(sealedData, sealedBlob, verifyKey.Public()); sigErr != nil {
+		tpmDev.Close()
+		return fmt.Errorf("blob integrity check failed — the NVRAM blob may have been tampered with: %w", sigErr)
+	}
+	if debug {
+		fmt.Println("Blob signature verified successfully")
 	}
 
 	// ── Unseal: let the TPM decide which branch to use ──
@@ -185,13 +209,6 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 
 			// Show PCR mismatch details (blob vs current register values)
 			PrintKIRAError(pcrErr)
-
-			// Private key is required for PolicySigned recovery
-			if effectivePrivKeyPath == "" {
-				tpmDev.Close()
-				return fmt.Errorf("PCR values have changed. The signing private key is required for recovery.\n" +
-					"  Provide it with --privkey <path>")
-			}
 
 			// Use PolicySigned branch for unsealing - the TPM verifies the signature
 			result, err = UnsealWithSignedBranchFromBlob(tpmDev, nvramIndex, effectivePrivKeyPath, debug)
@@ -207,13 +224,6 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 
 			// Show PCR details using centralized helper function
 			ShowPCRDetails(tpmDev, nvramIndex, debug)
-
-			// Private key is required for PolicySigned recovery
-			if effectivePrivKeyPath == "" {
-				tpmDev.Close()
-				return fmt.Errorf("TPM policy verification failed. The signing private key is required for recovery.\n" +
-					"  Provide it with --privkey <path>")
-			}
 
 			// Use PolicySigned branch for unsealing - the TPM verifies the signature
 			result, err = UnsealWithSignedBranchFromBlob(tpmDev, nvramIndex, effectivePrivKeyPath, debug)
@@ -252,28 +262,10 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		resealPubKey = loadedPubKey
 		resealPubKeySource = effectivePubKeyPath
 		resealPubKeyPathForBlob = effectivePubKeyPath
-	} else if effectivePrivKeyPath != "" {
-		// No --pubkey but --privkey was given: derive public key from it
-		privKey, loadErr := LoadSigningPrivateKeyFromPEM(effectivePrivKeyPath)
-		if loadErr != nil {
-			return fmt.Errorf("failed to load private key to derive public key: %w", loadErr)
-		}
-		resealPubKey = privKey.Public()
-		resealPubKeySource = fmt.Sprintf("(derived from %s)", effectivePrivKeyPath)
 	} else {
-		// Neither --pubkey nor --privkey available: cannot reseal
-		return fmt.Errorf("cannot reseal: no signing key available.\n" +
-			"  Provide --pubkey <path> or --privkey <path>, or ensure the key paths\n" +
-			"  stored in the blob are accessible on the filesystem")
-	}
-
-	// The private key is now required for re-sealing — PolicySigned NV
-	// writes demand proof of key possession for every write, not just for
-	// recovery-unseal.  Validate early with a helpful message.
-	if effectivePrivKeyPath == "" {
-		return fmt.Errorf("cannot reseal: signing private key is required for NV write authorization.\n" +
-			"  Provide --privkey <path>, or ensure the default key at " + DefaultPrivateKeyPath + " exists.\n" +
-			"  The key pair is normally created by 'tpm2-kira setup'")
+		// No --pubkey: derive the public key from the private key
+		resealPubKey = verifyKey.Public()
+		resealPubKeySource = fmt.Sprintf("(derived from %s)", effectivePrivKeyPath)
 	}
 
 	// Preserve the private key path for the new blob

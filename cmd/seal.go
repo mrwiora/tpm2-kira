@@ -26,6 +26,13 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 		return fmt.Errorf("invalid PCRs: %w", err)
 	}
 
+	// Both key files must be mode 0400 before either is loaded.
+	for _, keyPath := range []string{privKeyPath, pubKeyPath} {
+		if err := CheckSigningKeyFileMode(keyPath); err != nil {
+			return fmt.Errorf("cannot seal: %w", err)
+		}
+	}
+
 	// Load and validate the signing public key
 	pubKey, _, err := LoadSigningPublicKeyFromPEM(pubKeyPath)
 	if err != nil {

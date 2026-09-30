@@ -141,6 +141,11 @@ The private key should be protected by filesystem permissions (readable only
 by root). It is never sent to the TPM — tpm2-kira signs a nonce locally and
 sends the **signature** to the TPM for verification.
 
+`setup` writes both key files with mode `0400`. `seal` and `reseal` refuse to
+run if either key file they use has any other mode, and `info` reports the mode
+of each key file recorded in the blob. `reseal` also refuses to run if the
+private key cannot be loaded, since it verifies the blob's signature with it.
+
 When both `--pubkey` and `--privkey` are provided at seal time, their
 filesystem paths are stored in the blob. This allows `reseal` to locate the
 keys automatically without requiring the user to re-specify them every time.
@@ -825,8 +830,8 @@ This was removed because:
 ## 12. Operational Security Recommendations
 
 1. **Protect the signing private key.** It is the recovery master key. Store
-   it with restrictive permissions (`chmod 600`, owned by root). Consider
-   keeping a backup in a secure offline location.
+   it with restrictive permissions (`chmod 400`, owned by root; `seal`
+   and `reseal` refuse any other mode). Consider keeping a backup in a secure offline location.
 2. **Use RSA-2048 or ECC P-256.** These are universally supported by TPM 2.0
    hardware. RSA-4096 may not work on all TPMs.
 3. **Monitor TOTP codes.** If the TOTP code is absent or wrong at boot, the

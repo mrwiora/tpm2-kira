@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -261,7 +262,8 @@ func printSigningKeyInfo(sub string, blob *SealedBlob) {
 		pubKey, _, keyErr := LoadSigningPublicKeyFromPEM(blob.Payload.PublicKeyPath)
 		if keyErr == nil {
 			fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
-			fmt.Printf("%s%sSigning Key Path: %s\n", sub, branch(true), blob.Payload.PublicKeyPath)
+			fmt.Printf("%s%sSigning Key Path: %s\n", sub, branch(false), blob.Payload.PublicKeyPath)
+			printKeyFileModes(sub, blob)
 			return
 		}
 	}
@@ -270,12 +272,41 @@ func printSigningKeyInfo(sub string, blob *SealedBlob) {
 		if keyErr == nil {
 			pubKey := privKey.Public()
 			fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
-			fmt.Printf("%s%sSigning Key Path: %s (derived from private key)\n", sub, branch(true), blob.Payload.PrivateKeyPath)
+			fmt.Printf("%s%sSigning Key Path: %s (derived from private key)\n", sub, branch(false), blob.Payload.PrivateKeyPath)
+			printKeyFileModes(sub, blob)
 			return
 		}
 	}
 	// No key could be loaded – close the branch.
 	fmt.Printf("%s%sSigning Key: unavailable (key paths not accessible)\n", sub, branch(true))
+}
+
+// printKeyFileModes reports whether each key file recorded in the blob has
+// SigningKeyFileMode. info only reports it; seal and reseal refuse to run.
+// Closes the branch.
+func printKeyFileModes(sub string, blob *SealedBlob) {
+	var paths []string
+	for _, p := range []string{blob.Payload.PrivateKeyPath, blob.Payload.PublicKeyPath} {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	for i, p := range paths {
+		var status string
+		info, err := os.Stat(p)
+		switch {
+		case err != nil:
+			status = fmt.Sprintf("cannot check (%v)", err)
+		case !info.Mode().IsRegular():
+			status = "WARNING: not a regular file; seal and reseal will refuse it"
+		case info.Mode().Perm() != SigningKeyFileMode:
+			status = fmt.Sprintf("%04o — WARNING: must be %04o; seal and reseal will refuse it (chmod %o %s)",
+				info.Mode().Perm(), SigningKeyFileMode, SigningKeyFileMode, p)
+		default:
+			status = fmt.Sprintf("%04o", SigningKeyFileMode)
+		}
+		fmt.Printf("%s%sKey File Mode: %s: %s\n", sub, branch(i == len(paths)-1), p, status)
+	}
 }
 
 func printPCRSources(sub string, blob *SealedBlob) {
