@@ -263,22 +263,39 @@ func printSigningKeyInfo(sub string, blob *SealedBlob) {
 		if keyErr == nil {
 			fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
 			fmt.Printf("%s%sSigning Key Path: %s\n", sub, branch(false), blob.Payload.PublicKeyPath)
+			printSigningKeyLocation(sub, blob)
 			printKeyFileModes(sub, blob)
 			return
 		}
 	}
 	if blob.Payload.PrivateKeyPath != "" {
-		privKey, keyErr := LoadSigningPrivateKeyFromPEM(blob.Payload.PrivateKeyPath)
+		privKey, keyErr := LoadSigningPrivateKey(blob.Payload.PrivateKeyPath)
 		if keyErr == nil {
 			pubKey := privKey.Public()
 			fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
 			fmt.Printf("%s%sSigning Key Path: %s (derived from private key)\n", sub, branch(false), blob.Payload.PrivateKeyPath)
+			printSigningKeyLocation(sub, blob)
 			printKeyFileModes(sub, blob)
 			return
 		}
 	}
 	// No key could be loaded – close the branch.
 	fmt.Printf("%s%sSigning Key: unavailable (key paths not accessible)\n", sub, branch(true))
+}
+
+// printSigningKeyLocation says where the private key lives when it is on a
+// token. Reading the key file is enough; the token is not contacted.
+func printSigningKeyLocation(sub string, blob *SealedBlob) {
+	if blob.Payload.PrivateKeyPath == "" {
+		return
+	}
+	key, err := LoadSigningPrivateKey(blob.Payload.PrivateKeyPath)
+	if err != nil {
+		return
+	}
+	if desc, ok := YubiKeyDescription(key); ok {
+		fmt.Printf("%s%sSigning Key Location: %s\n", sub, branch(false), desc)
+	}
 }
 
 // printKeyFileModes reports whether each key file recorded in the blob has

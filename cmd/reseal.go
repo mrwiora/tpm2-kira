@@ -185,7 +185,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	// Derive the verification key from the private key (the trust anchor).
 	// The blob's stored PublicKeyPath is NOT trusted for this purpose.
 	// A key that fails to load is an error, not a reason to skip the check.
-	verifyKey, loadErr := LoadSigningPrivateKeyFromPEM(effectivePrivKeyPath)
+	verifyKey, loadErr := LoadSigningPrivateKey(effectivePrivKeyPath)
 	if loadErr != nil {
 		tpmDev.Close()
 		return fmt.Errorf("cannot reseal: failed to load signing private key to verify the blob: %w", loadErr)

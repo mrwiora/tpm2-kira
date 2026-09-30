@@ -1,16 +1,25 @@
 # PLAN-YUBIKEY.md — moving the signing key onto a YubiKey
 
-Status: **proposal**. Nothing in here is implemented yet.
-Branch: `feat/yubikey-support`.
+Status: **in progress** — see §16 for what is implemented.
+Branch: `feat/yubikey-v2`.
 
-Decisions already taken (§15 records the rest):
+Decisions already taken (§14 records the rest):
 
 - **One binary.** No build-tag split, no second artifact. The PC/SC client is
   written in pure Go so `CGO_ENABLED=0` keeps working and the initramfs stays
   library-free.
-- **Blob format bumps to v9.** The project is in development and maintains no
-  backwards compatibility, so a typed key reference goes in properly rather
-  than being smuggled into a string field.
+- **The blob format does not change for this.** The token reference goes in
+  the key file, the way sbctl does it (§5). The blob keeps storing the key
+  *path*, and the path stays a real path. What changes is what that file can
+  contain: a PEM private key, or a small JSON stub naming the YubiKey serial
+  and slot.
+- **`setup` is the only enrolment command** (§8). It looks for a YubiKey and
+  says what it found; `setup --yubikey` takes the key from the token. If none
+  is found, the user is told so plainly and the local key files are created as
+  today. There is no `yubikey adopt`; `yubikey list` shows the candidates.
+- **No backwards compatibility.** The project is in developer mode, so there is
+  no migration path from a PEM key to a token beyond running setup again and
+  sealing again.
 - **`TPM2_KIRA_PIN`** is the environment variable, matching the existing
   `TPM2_KIRA_INITRAMFS_MODE` convention.
 - **A key file on disk stays the default.** The YubiKey is opt-in. `setup`
@@ -73,54 +82,33 @@ Two consequences that shape the whole design:
 
 ## 3. Core abstraction: a signer, not a path
 
-Right now a private key is a `string` path threaded through `Seal`, `Reseal`,
-`sealDataWithSpecs`, `WriteToNVRAM` and `UnsealWithSignedBranch*`. The plan
-replaces the *path* with a *resolved signer*, resolved once at the top of each
-command.
+The code already passed private keys around as `crypto.Signer`, loaded from a
+path at the top of each command. Because the token reference lives in the key
+file (§5), no new key-reference type is needed: the loader returns a different
+`crypto.Signer` for a stub, and nothing that receives it has to know.
 
 ```go
-// cmd/signer.go  (new)
-
-// KeyRef is a parsed reference to a signing key: a filesystem path, or a
-// token slot. It is what the blob stores and what the CLI flags produce.
-type KeyRef struct {
-    Kind   KeyRefKind // KeyRefFile | KeyRefYubiKey
-    Path   string     // KeyRefFile
-    Serial uint32     // KeyRefYubiKey, 0 = any
-    Slot   byte       // KeyRefYubiKey, e.g. 0x9A
-}
-
-// SigningKey is everything the rest of the code needs.
-type SigningKey interface {
-    crypto.Signer            // Public(), Sign(rand, digest, opts)
-    Ref() KeyRef
-    Close() error            // releases the card handle
-}
-
-// OpenSigningKey resolves a KeyRef into a usable key, or returns a typed
-// ErrKeyUnavailable that callers can degrade on instead of failing.
-func OpenSigningKey(ref KeyRef, pin PINSource, debug bool) (SigningKey, error)
+// cmd/policy_or.go — was LoadSigningPrivateKeyFromPEM
+func LoadSigningPrivateKey(path string) (crypto.Signer, error)
+//   PEM   → *rsa.PrivateKey / *ecdsa.PrivateKey, as before
+//   stub  → *yubiKeySigner (cmd/yubikey.go): Public() from the stub, token
+//           opened lazily on the first Sign(), errors wrap ErrTokenUnavailable
 ```
 
-Refactor surface (mechanical; no behaviour change on the file-backed path):
+The token is therefore never contacted by `info`, by blob verification, or by
+the policy computation in `reseal`; only a signature opens it.
 
-- `signForTPM(privKey crypto.Signer, digest []byte)` type-switches on
-  `*rsa.PrivateKey` / `*ecdsa.PrivateKey` and reads `r`, `s` as big.Ints. A
-  token-backed signer is neither. **It must switch on the *public* key type and
-  call `Sign()`, then parse the ECDSA ASN.1 DER back into r/s** and left-pad to
-  the curve length. This is the most error-prone change in the plan; it gets a
-  known-answer test (§11).
-- `SignBlobPayload` likewise: switch on `privKey.Public()`, call `Sign()`. For
-  ECDSA the output is already ASN.1 DER, which is what the current code
-  produces, so `VerifyBlobSignature` is unchanged.
-- `verifyKeyPairMatch` compares concrete private keys; it becomes a comparison
-  of `signer.Public()` against the loaded public key.
-- `Seal`, `Reseal`, `sealDataWithSpecs`, `WriteToNVRAM`,
-  `UnsealWithSignedBranch`, `UnsealWithSignedBranchFromBlob` take a
-  `SigningKey` (or `nil`) instead of a `privKeyPath string`.
+What had to change to make that true:
 
-The file backend is then just `LoadSigningPrivateKeyFromPEM` behind the same
-interface, and the existing test suite covers it unchanged.
+- `signForTPM` type-switched on `*rsa.PrivateKey` / `*ecdsa.PrivateKey`. It now
+  switches on the *public* key, calls `Sign()`, and parses the ECDSA ASN.1 DER
+  back into r and s, left-padded to the curve size. Software keys take the
+  same path, so there is one code path to get right.
+- `SignBlobPayload` likewise. The output formats are unchanged, so
+  `VerifyBlobSignature` is untouched.
+- `verifyKeyPairMatch` compares public keys. It was dead code; `seal` now calls
+  it, so a public key that does not belong to the private key file is refused
+  before anything is written instead of failing at the first NV write.
 
 ---
 
@@ -223,20 +211,23 @@ ykman piv keys generate --algorithm ECCP256 \
     --pin-policy ONCE --touch-policy NEVER 9a /tmp/seal.pub
 ykman piv certificates generate --subject "CN=tpm2-kira" 9a /tmp/seal.pub
 
-sudo tpm2-kira yubikey adopt --slot 9a
+sudo tpm2-kira setup --yubikey
 ```
 
-`adopt` is read-only: it reads the slot, reports the key type and the PIN and
-touch policies, checks the key against the TPM with the existing
-`ValidateKeyForTPM`, caches the public key to
-`/var/lib/tpm2-kira/keys/seal.pub`, and prints the `KeyRef` to use.
+`setup --yubikey` is read-only *towards the token*: it reads the slot and
+reports the key type and the PIN and touch policies. On the filesystem it
+writes two files: the public key to `/var/lib/tpm2-kira/keys/seal.pub`, and the
+token stub (§5) to `/var/lib/tpm2-kira/keys/seal.key`. After that, every
+command that already defaults to `seal.key` uses the token without any new
+flag. Whether the TPM accepts the key is checked by `seal`, which loads it
+before anything is written.
 
 ### 4.4 Slots, algorithms and policies — detect, do not dictate
 
 Because the slot is pre-populated, tpm2-kira takes what it finds. It supports
 any PIV slot (`9a`, `9c`, `9d`, `9e` and the retired slots `82`–`95`) and any
 key the TPM can load: RSA-2048, ECC P-256 and ECC P-384 (SECURITY-BACKGROUND
-§7). `adopt` reports what is there and warns about what will hurt, rather than
+§7). `setup` and `yubikey list` report what is there and warns about what will hurt, rather than
 insisting on one configuration.
 
 **For a slot created specifically for tpm2-kira**, `9a` with ECCP256, PIN
@@ -250,10 +241,10 @@ handled rather than warned about:
 | What the slot has | Consequence | How it is handled |
 |---|---|---|
 | PIN policy `ALWAYS` (mandatory on `9c`) | a PIN verification before **every** signature | §6.2 — the PIN is held for the process and re-verified per signature |
-| Touch policy `ALWAYS` | one physical touch per signature | `adopt` and `reseal` print the exact number of touches to expect before starting |
+| Touch policy `ALWAYS` | one physical touch per signature | "Touch the YubiKey" is printed before each signature; a touch count up front is still to do |
 | Touch policy `CACHED` | one touch per 15-second window | usually one touch for a whole reseal |
 | RSA-2048 | ~100 ms per signature instead of ~10 ms | irrelevant at ~3 signatures per slot |
-| RSA-4096 | `TPM2_LoadExternal` may reject it | caught by `adopt`, and again by the NV write pre-flight before anything is destroyed |
+| RSA-4096 | `TPM2_LoadExternal` may reject it | reported as not usable by `setup` and `yubikey list`, and caught again by the NV write pre-flight before anything is destroyed |
 
 `reseal` computes its signature count up front — 3 per slot, times the number
 of populated slots — so "this will need 12 touches" is said once, at the start,
@@ -261,42 +252,87 @@ rather than discovered one touch at a time.
 
 ### 4.5 The public key stays on disk
 
-The slot's public key is cached at `/var/lib/tpm2-kira/keys/seal.pub` and its
-path stored in the blob. Blob-signature verification, the PolicyOR digest and
-`info` then all work with the token in a drawer. The token is only ever needed
-to *sign*.
+The slot's public key is cached at `/var/lib/tpm2-kira/keys/seal.pub`, and its
+path is stored in the blob exactly as it is today. Blob-signature verification,
+the PolicyOR digest and `info` then all work with the token in a drawer. The
+token is only ever needed to *sign*.
 
 ---
 
-## 5. Blob format v9
+## 5. The key file holds the token reference; the blob does not change
 
-Since compatibility is not maintained, the key reference goes in as a typed
-field rather than a string that has to be sniffed.
+This follows sbctl. When sbctl's db key lives on a YubiKey,
+`/var/lib/sbctl/keys/db/db.key` is no longer a PEM private key but a JSON
+document describing the token key (`slot`, `algorithm`, `pinPolicy`,
+`touchPolicy`, `publicKey`), with the certificate still in `db.pem` beside it.
+Everything that reads the key by path keeps working; only the loader learns to
+recognise the second format.
 
-Replacing the `HasKeyPaths` block:
+tpm2-kira does the same with `seal.key`, and adds the one thing sbctl leaves
+out: **the serial number**. sbctl always uses whichever card it finds first in
+the signature slot, which is fine for a tool that runs interactively but not
+for a reseal hook. With the serial in the file, "wrong YubiKey plugged in" is
+diagnosed before any PIN is sent.
 
+### 5.1 Stub format
+
+```json
+{
+  "backend": "yubikey",
+  "version": 1,
+  "serial": 12345678,
+  "slot": "9a",
+  "algorithm": "ECCP256",
+  "pinPolicy": "once",
+  "touchPolicy": "never",
+  "publicKey": "<base64 PKIX DER>"
+}
 ```
-?  HasKeyRefs              uint8     0 or 1
-   If HasKeyRefs=1, twice (public then private):
-     Kind                  uint8     0=file, 1=yubikey
-     Ref length            uint16    <= 4096
-     Ref                   string    path, or "yubikey:serial=N;slot=9a"
-?  HasKeyPin               uint8     0 or 1
-   If HasKeyPin=1:
-     TokenSerial           uint32    0 if unknown
-     KeyFingerprint len    uint8     <= 64
-     KeyFingerprint        []byte    SHA-256 over the marshalled public key
-```
 
-Everything sits inside `SealedBlobPayload`, so it is covered by the existing
-blob signature automatically — a planted blob cannot redirect `reseal` at an
-attacker-controlled token without breaking that signature.
+- `backend` and `version` make the file self-describing. The loader looks at
+  the first non-whitespace byte: `-` is PEM, `{` is a stub. Anything else,
+  an unknown `backend`, or an unknown `version` is an error — never a guess.
+- `serial` selects the card. It is required; a stub without one is refused.
+- `algorithm`, `pinPolicy` and `touchPolicy` are recorded by `setup` for
+  display and for the up-front touch count (§4.4). The card is still asked at
+  run time; the stub is not trusted over the card.
+- `publicKey` is the fingerprint check. On open, the key read from the slot
+  must equal it, and it must equal `seal.pub`. A mismatch is reported as "the
+  key in slot 9a of YubiKey 12345678 is not the key this installation was set
+  up with", not as a TPM policy failure.
+- Written with `WriteSigningKeyFile`, so it gets mode 0400 like the PEM does.
+  It contains no secret, but it decides which token is trusted to sign, so it
+  gets the same protection.
 
-`CurrentBlobVersion` → 9; the unmarshal path rejects v8 with the existing
-"seal again" error. Users re-seal once and re-enrol their authenticator.
+### 5.2 What the blob keeps
 
-**Worth doing in the same bump:** if any other format change is pending, fold
-it into v9 so people re-enrol once rather than twice.
+The blob's `HasKeyPaths` block is unchanged: `PublicKeyPath` and
+`PrivateKeyPath` are still plain filesystem paths, and `CurrentBlobVersion`
+stays where it is. `reseal` reads `PrivateKeyPath`, opens the file, and the
+contents decide whether it signs with a PEM key or asks the token.
+
+Moving an existing installation from a PEM key to a YubiKey is not a supported
+operation, since compatibility is not maintained during development: remove
+the keys directory, run `setup --yubikey`, `seal` again and re-enrol the
+authenticator.
+
+### 5.3 Why this is safe without the blob signature covering it
+
+A new blob version could have put the serial inside the signed payload. With the stub
+outside the blob, the question is whether an attacker who can replace
+`seal.key` gains anything. They do not:
+
+- The TPM decides. The PolicySigned branch is bound to the *Name* of the
+  original public key. A stub pointing at the attacker's own token produces
+  signatures the TPM rejects, both for unseal and for the NV write policy.
+- The stub's `publicKey` is cross-checked against `seal.pub` and against the
+  key used to verify the blob signature, so a swapped stub fails before any
+  PIN is sent.
+- Writing to `/var/lib/tpm2-kira/keys/` already requires root. Whoever can do
+  that can also replace a PEM `seal.key`, which is the status quo.
+
+The worst a tampered stub can do is make `reseal` fail, which is the §7
+degradation path: `SKIPPED:`, and the NV index is left untouched.
 
 ---
 
@@ -379,7 +415,7 @@ no PIN supplied, PIN refused.
 
 ```
 tpm2-kira: SKIPPED: resealing did not happen — the signing key was not available.
-  Key reference: yubikey:serial=12345678;slot=9a
+  Key file:      /var/lib/tpm2-kira/keys/seal.key (YubiKey 12345678, slot 9a)
   Reason:        no YubiKey with serial 12345678 is present
   Consequence:   the PCR values on this system have changed, but the sealed
                  policy still binds the OLD values. At the next boot tpm2-kira
@@ -395,7 +431,7 @@ the user exactly which registers will mismatch.
 
 3. Exits 0, as everything in this project does by design.
 
-`seal` and `setup` **fail** instead when the key is unavailable — there is
+`seal` (and `setup --yubikey`) **fail** instead when the key is unavailable — there is
 nothing to preserve, and a half-sealed slot is worse than no slot.
 
 ### Making the warning impossible to miss
@@ -416,34 +452,101 @@ A warning that only lands in `mkinitcpio` scrollback will be missed. So:
 ## 8. CLI surface
 
 ```
-tpm2-kira yubikey list                    # readers, serial, firmware, slots, retry counter
-tpm2-kira yubikey adopt [--slot 9a] [--serial N]
-                                          # read-only: inspect an existing key,
-                                          # report its policies, check it against
-                                          # the TPM, cache the public key,
-                                          # print the ref
-tpm2-kira yubikey status                  # is the enrolled token present? retries left?
-tpm2-kira yubikey export-pubkey [--out PATH]
+tpm2-kira setup [--yubikey[=SERIAL]] [--slot SLOT]
+                                    # without --yubikey: probe, report, create
+                                    # local key files. With it: write seal.pub
+                                    # and the seal.key stub (§5) from the slot
+tpm2-kira yubikey list              # readers, serials, firmware, populated
+                                    # slots, and which are usable; read-only
 ```
 
-Extended flags on existing commands:
+`--yubikey` alone uses the only suitable token; with several plugged in, the
+serial must be given. `--slot` defaults to `9a`. Any other slot — typically
+an sbctl key in `9c` — is only used when named, because a slot shared with
+another tool couples key rotation (§12). With `--yubikey`, a missing or
+unsuitable token is a hard failure: the user asked for it explicitly. Sealing
+stays a separate `seal` step, as it already is.
+
+Deliberately absent: `adopt` (setup does it), `status` and `export-pubkey`
+(`list` and `seal.pub` cover them), and `generate`, `import` and `reset`.
+tpm2-kira only ever reads from and signs with the token; populating a slot is
+`ykman`'s job.
+
+Still planned on existing commands:
 
 ```
---privkey yubikey:serial=12345678;slot=9a   # the existing flag, now taking a ref
---pin-file PATH                             # alternative to TPM2_KIRA_PIN
---require-key                               # turn the §7 warning back into a hard
-                                            # failure, for scripts that must not
-                                            # silently skip
+--pin-file PATH       # alternative to TPM2_KIRA_PIN
+--require-key         # turn the §7 warning back into a hard failure, for
+                      # scripts that must not silently skip
 ```
 
-`setup` gains `--yubikey[=serial]`: adopt the token's key instead of generating
-a PEM, then seal as usual.
+### 8.1 `setup` looks for a YubiKey and says what it found
 
-There is no `generate`, no `import` and no `reset`. tpm2-kira only ever reads
-from and signs with the token; populating a slot is `ykman`'s job. Users moving
-from a PEM key generate a fresh key on the token and `reseal` with it, which
-works because reseal re-derives the PolicyOR digest from whatever key it is
-given.
+Plain `setup`, with no flag, probes for a token before it creates any files and
+reports the result either way. The probe never changes what gets created: the
+local PEM pair is still the default. Its job is to tell the user that a better
+option is sitting in the USB port, or that it is not.
+
+The probe is strictly read-only and PIN-free: `CMD_GET_READERS_STATE`, then
+per card `SELECT` PIV, read the serial, and read each slot's certificate or
+metadata (`GET DATA`, and `GET METADATA` INS `F7` where the firmware has it).
+No `VERIFY` is ever sent, so the probe cannot cost a PIN retry.
+
+A token is **suitable** when the PIV applet answers and at least one slot
+(`9a`, `9c`, `9d`, `9e`, `82`–`95`) holds a key the TPM can load: RSA-2048,
+ECC P-256 or ECC P-384, and the token reports a serial number (YubiKey
+firmware 5 or later), which the stub needs. The check is static, since setup
+does not open the TPM; `seal` confirms it with `ValidateKeyForTPM`.
+
+**Suitable token found** (output of the implementation):
+
+```
+Looking for a YubiKey... found one suitable for tpm2-kira:
+  YubiKey serial 12345678, firmware 5.7.1 (Yubico YubiKey OTP+FIDO+CCID 00)
+    slot 9a  ECCP256  PIN once    touch never   <- recommended
+    slot 9c  RSA2048  PIN always  touch always
+  Continuing with local key files. To keep the signing key on a YubiKey instead,
+  remove them again before sealing anything and run setup with --yubikey:
+      sudo rm -r /var/lib/tpm2-kira/keys && sudo tpm2-kira setup --yubikey=12345678
+Creating keys directory: /var/lib/tpm2-kira/keys
+...
+```
+
+Plain `setup` still creates local files when a token is present, so it never
+blocks and never needs a terminal. Removing the fresh keys directory before
+anything is sealed loses nothing.
+
+**Token found, but not suitable** (PIV disabled, all slots empty, or only keys
+the TPM cannot load such as RSA-4096 or Ed25519): each is reported with the
+reason, plus the `ykman` line from §4.3 when the slots are simply empty. Then
+setup continues with local files.
+
+**No token found:**
+
+```
+Looking for a YubiKey... none found.
+  No YubiKey could be found, so the signing key will be created as local files.
+Creating keys directory: /var/lib/tpm2-kira/keys
+...
+```
+
+"None found" covers pcscd not running, no reader and no card. With `--debug`
+the specific reason is printed (for example "no PC/SC daemon at
+/run/pcscd/pcscd.comm"), because "I plugged it in and setup did not see it" is
+almost always pcscd.
+
+Rules for the probe:
+
+- **It never fails setup.** Any error, including an unknown pcsc-lite protocol
+  version (§4.2), is reported as "could not check" and setup continues with
+  local files.
+- **It is bounded.** A 2-second timeout on the pcscd socket, so a wedged daemon
+  cannot hang setup.
+- **It is skipped** when the keys directory already exists, because setup does
+  nothing in that case anyway.
+- The summary block at the end of setup states which backend was used: "Private
+  key: /var/lib/tpm2-kira/keys/seal.key (local file)" or "(YubiKey 12345678,
+  slot 9a)".
 
 ---
 
@@ -455,7 +558,7 @@ Much smaller than it would have been with a split binary:
 |---|---|
 | `Makefile` | unchanged — no cgo, no tags, no second artifact |
 | `debian/rules` | unchanged (`CGO_ENABLED=0` still works) |
-| `debian/control` | `Recommends: pcscd` — a *runtime* suggestion, not a link-time dependency |
+| `debian/control` | `Suggests: pcscd` — a *runtime* suggestion, not a link-time dependency |
 | `packaging/aur/PKGBUILD` | `optdepends=('pcsclite: YubiKey signing key support')` |
 | `initramfs/*/hooks/*` | unchanged |
 | `initramfs/mkinitcpio/post/sd-tpm2-kira` | handle `SKIPPED:`; source `/etc/tpm2-kira/reseal.conf` for the PIN |
@@ -475,7 +578,7 @@ mkinitcpio post hook and Debian's `post-update.d` script:
 ```sh
 # Key used to authorise resealing. A path (the default) or a token reference.
 TPM2_KIRA_KEY=/var/lib/tpm2-kira/keys/seal.key
-#TPM2_KIRA_KEY=yubikey:serial=12345678;slot=9a
+# (a YubiKey key file from 'setup --yubikey' is also just a path)
 
 # PIN, only meaningful for a token key. Optional; see the warnings in §6.
 #TPM2_KIRA_PIN=12345678
@@ -550,6 +653,15 @@ The integration suite runs against `swtpm` with no card reader, so:
   multi-slot loop after the first slot; the PIN never appears in `--debug`.
 - **Degradation tests**: `reseal` with an unresolvable ref prints `SKIPPED:`,
   exits 0, and — asserted explicitly — leaves the NVRAM index byte-identical.
+- **Key file loader tests**: PEM and stub are told apart by content; unknown
+  `backend`, unknown `version`, missing `serial` and a `publicKey` that
+  disagrees with `seal.pub` are each refused with their own message. A
+  round-trip test asserts the blob bytes are identical whether `seal.key` is a
+  PEM or a stub, which is the regression test for "the blob does not change".
+- **Setup probe tests** against the APDU mock: suitable token, token with only
+  empty slots, token with only an RSA-4096 key, no pcscd, and a daemon that
+  never answers (the timeout). Each asserts the message, that no `VERIFY` was
+  sent, and that the local key files were still created.
 - **Hardware tests** behind `-tags yubikey_hw`, skipped by default, run manually
   before a release.
 
@@ -557,20 +669,22 @@ The integration suite runs against `swtpm` with no card reader, so:
 
 ## 11. Documentation
 
-- `README.md`: a YubiKey section (the `ykman` enrolment command, `adopt`,
-  reseal, what happens without the token), and the blob v9 re-seal note.
+- `README.md`: a YubiKey section (the `ykman` enrolment command, `setup --yubikey`,
+  reseal, what happens without the token), what `setup` prints when it finds
+  a token, and the `seal.key` stub format.
 - `docs/SECURITY-BACKGROUND.md`:
-  - §3.1 — the v9 blob layout and the key-reference fields.
-  - §3.3 — the key pair may live on a token; only the public key is on disk.
+  - §3.1 — unchanged; note that `PrivateKeyPath` may name a stub.
+  - §3.3 — the key pair may live on a token; only the public key and the stub
+    are on disk. Why the stub needs no blob signature (§5.3).
   - §4.6 — the interesting change (§12 below).
   - §7 — token key types and why ECCP256.
   - §8 — threat-model rows for token theft, token-present-at-boot, PIN capture.
   - §9 — unchanged, but note that NV writes now need the token.
-  - §10 — blob v9.
   - §12 — backup strategy for a lost token.
   - new §13 "Signing key on a hardware token", including the pcsc-lite
     versions the transport was tested against.
-- `HISTORY.md`: v8 → v9, and why `PrivateKeyPath` became a typed reference.
+- `HISTORY.md`: why the token reference went into the key file, following
+  sbctl, rather than into a new blob version.
 
 ---
 
@@ -635,8 +749,8 @@ Two consequences, one of them a genuine operational trap:
   a key that no longer exists.
 
   Two things follow for the implementation. The docs need this sequence
-  prominently, and `adopt` should record the key fingerprint (§5) so `reseal`
-  can say "the key in slot 9c is not the one this blob was sealed against"
+  prominently, and the stub's `publicKey` (§5.1) lets `reseal`
+  say "the key in slot 9c is not the one this blob was sealed against"
   instead of failing as an obscure TPM policy error.
 
   The simplest way to avoid the whole problem is to **not share the slot**: put
@@ -690,20 +804,20 @@ Ranked by how much I think they matter.
 2. **`tpm2-kira info` should say whether the blob is stale.** The direct
    consequence of "reseal may legitimately be skipped" is that users need a way
    to ask "am I about to reboot into a mismatch?" that is not "reboot and see".
-3. **Key fingerprint and serial pinning in the blob** (already in the v9 layout,
-   §5). Checked whenever the token is opened, it turns "wrong YubiKey" from a
+3. **Key fingerprint and serial pinning in the key file** (the stub's `serial`
+   and `publicKey`, §5.1). Checked whenever the token is opened, it turns "wrong YubiKey" from a
    confusing TPM policy failure into a one-line diagnosis.
 4. **A documented backup-key procedure.** PolicyOR has exactly two branches, so
    a second independent signing key cannot simply be added, and the same key
    cannot exist on two tokens when it is generated on-device. The options are
    (a) an offline PEM backup with a re-seal-to-switch procedure, or (b) widening
    the policy to three branches (PCR, token A, token B), which is a real change
-   to `policy_or.go` and the blob format. Since v9 is being cut anyway, (b) is
-   cheaper now than it will ever be again — worth a deliberate decision rather
-   than discovering it after someone loses a token. I would still start with (a).
+   to `policy_or.go` and needs a blob version bump of its own. The YubiKey
+   work no longer bumps the blob, so (b) would be a separate decision. I would
+   start with (a).
 5. **`--require-key`.** The graceful skip is right for the hook path; a
    controlled procedure wants the opposite. One flag, no ambiguity.
-6. **PIV attestation at adopt time.** YubiKey can attest that a key was
+6. **PIV attestation at setup time.** YubiKey can attest that a key was
    generated on-device and never imported (slot `f9`). It needs one extra APDU
    and it makes the central claim of this feature — "the key was born on the
    token" — verifiable rather than assumed.
@@ -715,15 +829,15 @@ Ranked by how much I think they matter.
 | # | Decision | Status |
 |---|---|---|
 | 1 | Split binary vs. pure-Go PC/SC | **decided: pure Go, one binary** |
-| 2 | Blob key reference | **decided: bump to v9, typed field** |
+| 2 | Where the token reference lives | **decided: in the key file, sbctl-style JSON stub with serial; blob format unchanged** (§5) |
 | 3 | Environment variable name | **decided: `TPM2_KIRA_PIN`** |
 | 4 | Token must be pre-populated | **decided: yes — tpm2-kira never writes to the token** |
 | 4a | Touch policy | detected, not dictated; `NEVER` recommended for a dedicated slot |
-| 5 | Backup for a lost token | proposed: PEM backup + switch procedure; three-branch PolicyOR is cheapest to add during the v9 bump if you want it |
+| 5 | Backup for a lost token | proposed: PEM backup + switch procedure; three-branch PolicyOR would need its own blob bump |
 | 6 | Ship `/etc/tpm2-kira/reseal.conf` for unattended key selection and PIN | proposed yes, opt-in, `0600`, refuse on bad mode (§9.1) |
 | 8 | File-backed key remains the default | **decided: yes — the token is opt-in** |
 | 9 | `TPM2_KIRA_EXPLAIN_MISMATCH` in `initramfs.conf` | proposed; carries no secret, unlike the PIN |
-| 7 | Anything else to fold into the v9 bump | open — worth checking before cutting it |
+| 7 | Token detection in `setup` | **decided: always probe, read-only and PIN-free; report a suitable token with the command to use it; report "none found" and create local files otherwise** (§8.1) |
 
 ---
 
@@ -734,16 +848,61 @@ Ranked by how much I think they matter.
    backend only. **No behaviour change**; the existing suite must pass untouched,
    plus the fake-token suite from §10.
 2. `nvram restore --from <file>`, completing the recovery path opened by step 0.
-3. Blob v9: typed key refs, fingerprint/serial pinning, `info --json` output.
+3. Key file loader: PEM vs. stub detection, stub parsing and the `publicKey`
+   cross-check against `seal.pub` (§5), with the token backend still a stub
+   that reports "unavailable". Plus `info --json` output. No blob change.
 4. Degradation path, `SKIPPED:` marker, hook changes, `--require-key`,
    `info` staleness.
 5. `internal/pcsc` — the pure-Go pcscd client, with golden-vector tests.
 6. `internal/piv` — SELECT / VERIFY / GENERAL AUTHENTICATE / GET DATA, against
    the APDU mock. No write APDUs, by decision.
-7. YubiKey `SigningKey` backend, `yubikey list|adopt|status|export-pubkey`.
+7. YubiKey `SigningKey` backend, `yubikey list`, the `setup` probe and
+   `setup --yubikey` (§8).
 8. PIN sources and the lockout state machine.
 9. Attestation, documentation.
 
 Steps 1–4 are useful on their own and can merge before any card code exists.
 Step 5 is the one with schedule risk; it is deliberately isolated behind the
 `SigningKey` interface so nothing else waits on it.
+
+---
+
+## 16. Implementation status
+
+Branch `feat/yubikey-v2`, 2026-09-30.
+
+**Done**
+
+| Piece | Where | Tested by |
+|---|---|---|
+| pcscd client (pure Go): version handshake with 4:6 → 4:4 fallback, context, reader states, connect, transactions, transmit, reset on disconnect | `internal/pcsc` | golden byte vectors and struct sizes; a scripted fake daemon (4:6, 4:4, refused 4:3, silent daemon timeout); **live against pcscd 2.5.2** (`TestLiveDaemon`, handshake, reader list and a connect error round trip) |
+| PIV read-and-sign: SELECT, GET VERSION, GET SERIAL, GET METADATA, GET DATA (certificate), VERIFY, GENERAL AUTHENTICATE; command and response chaining; PKCS #1 v1.5 padding for RSA | `internal/piv` | against `internal/piv/pivtest`, a software YubiKey that answers APDUs |
+| Key file stub, `LoadSigningPrivateKey`, lazy token signer | `cmd/yubikey.go`, `cmd/policy_or.go` | `cmd/yubikey_test.go` |
+| PIN: `TPM2_KIRA_PIN` or a no-echo prompt on `/dev/tty`; one session per process; wrong PIN poisons the session; nothing tried with one attempt left; retries shown when below 3; PIN policy `always` re-verified transparently; card reset on exit | `cmd/yubikey.go`, `main.go` | wrong PIN over four "slots" costs one attempt; last attempt never sent; no PIN costs none; policy `always` keeps the counter at 3 |
+| Key check before the PIN: slot key compared with the stub; every token signature verified against the stub key | `cmd/yubikey.go` | regenerated slot key and wrong serial are reported by name |
+| `signForTPM`, `SignBlobPayload`, `verifyKeyPairMatch` on the public key | `cmd/policy_or.go`, `cmd/blob.go` | token-signed TPMT signatures and blob signatures verify; r/s padding over 20 runs |
+| `setup` probe and report, `setup --yubikey[=SERIAL] [--slot]`, `yubikey list` | `cmd/setup.go`, `main.go` | report and slot choice tests; binary run against the live pcscd |
+| `seal` refuses a mismatched key pair; `seal` and `info` name the token | `cmd/seal.go`, `cmd/info.go` | — |
+| Packaging: `Suggests: pcscd` (not `Recommends`: the token is opt-in, and Recommends would install a daemon everywhere) and `optdepends` `pcsclite` | `debian/control`, `packaging/aur/PKGBUILD` | — |
+
+**Not done yet**
+
+- §7 degradation: `reseal` with the token absent currently fails with the
+  normal `FAILED:` marker instead of `SKIPPED:`. The NV index is not at risk:
+  the pre-flight signature in `WriteToNVRAM` runs before the undefine.
+- `--pin-file`, `--require-key`, `reseal.conf` and the hook changes (§9).
+- Touch count announced up front (§4.4); per-signature "Touch the YubiKey"
+  is printed.
+- `info` staleness, `nvram restore`, attestation, and the README and
+  SECURITY-BACKGROUND updates (§11).
+
+**Not verified**
+
+- No real YubiKey has been used. The PIV layer is tested against an emulator
+  written from the specification, and the card path through pcscd (connect,
+  transmit, transactions with a card present) has not run against real
+  hardware. A hardware check (`yubikey list`, `setup --yubikey`, `seal`,
+  `reseal`) is the next thing to do.
+- The swtpm integration suite cannot run on the development machine
+  (`tpm2-tools` is missing; it fails identically on the untouched `HEAD`), so
+  seal and reseal have not been run end to end with a token-backed key.

@@ -13,7 +13,8 @@ makedepends=('go>=1.24')
 optdepends=('mkinitcpio: for early boot integration'
             'cryptsetup: for disk encryption integration'
             'qrencode: renders the enrolment QR code during setup'
-            'tpm2-tools: for debugging and integration testing')
+            'tpm2-tools: for debugging and integration testing'
+            'pcsclite: keeping the signing key on a YubiKey (setup --yubikey)')
 conflicts=('tpm2-kira-git')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
 sha256sums=('SKIP')

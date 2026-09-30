@@ -47,7 +47,8 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 
 	// The private key must be usable before anything is generated or written:
 	// without it the PolicySigned NV write cannot be authorized.
-	if _, err := LoadSigningPrivateKeyFromPEM(privKeyPath); err != nil {
+	signer, err := LoadSigningPrivateKey(privKeyPath)
+	if err != nil {
 		return fmt.Errorf("cannot seal: signing private key is not usable: %w", err)
 	}
 
@@ -57,11 +58,22 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 		return fmt.Errorf("failed to load signing public key: %w", err)
 	}
 
+	// The public key goes into the policy and the private key authorizes
+	// the NV writes; a mismatch would only surface once the TPM refuses a
+	// write, after the index has been replaced.
+	if err := verifyKeyPairMatch(pubKey, signer); err != nil {
+		return fmt.Errorf("cannot seal: %s and %s are not a key pair: %w", pubKeyPath, privKeyPath, err)
+	}
+	keyLocation := ""
+	if desc, ok := YubiKeyDescription(signer); ok {
+		keyLocation = fmt.Sprintf("\nSigning Key Location: %s (the token and its PIN are needed now)", desc)
+	}
+
 	// Display which PCRs are being used
 	fmt.Println("=== Sealing Configuration ===")
 	fmt.Printf("Hash Algorithm: %s (%d-byte PCR digests)\n", hashAlgo.DisplayString(), hashAlgo.DigestSize())
 	fmt.Printf("PCRs used for sealing: %s\n", PCRSpecsToString(specs))
-	fmt.Printf("Signing Key: %s (%s, fingerprint: %s)\n", pubKeyPath, PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
+	fmt.Printf("Signing Key: %s (%s, fingerprint: %s)%s\n", pubKeyPath, PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey), keyLocation)
 	fmt.Printf("Authentication: PolicyOR (PCR branch + PolicySigned branch)\n")
 	fmt.Println()
 	for _, spec := range specs {
@@ -135,7 +147,7 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 	// Load the signing private key — required for PolicySigned NV writes.
 	// This is done after the TPM open so that simple input validations and
 	// the TPM availability check run first.
-	privKey, err := LoadSigningPrivateKeyFromPEM(privKeyPath)
+	privKey, err := LoadSigningPrivateKey(privKeyPath)
 	if err != nil {
 		return fmt.Errorf("failed to load signing private key for NV write authorization: %w", err)
 	}
