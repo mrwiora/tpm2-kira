@@ -132,7 +132,7 @@ test: test-unit
 ## test-unit: Run unit tests only
 test-unit:
 	@echo "Running unit tests..."
-	$(GOTEST) -v -tags=unit ./cmd/...
+	$(GOTEST) -v -tags=unit ./internal/kira/...
 
 ## test-docker: Run unit, integration and PC/SC tests in a container
 ##              BASE=debian:bookworm selects pcsc-lite 1.9.x instead of 2.x
@@ -170,7 +170,7 @@ test-integration:
 test-all:
 	@echo "Running all tests..."
 	@echo "Unit tests:"
-	$(GOTEST) -v -tags=unit ./cmd/...
+	$(GOTEST) -v -tags=unit ./internal/kira/...
 	@echo ""
 	@echo "Integration tests:"
 	@echo "Note: Requires swtpm (software TPM) to be installed"
