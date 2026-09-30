@@ -133,7 +133,11 @@ sudo update-initramfs -u
 ```
 
 The binary is built statically (`CGO_ENABLED=0`), so the initramfs needs no
-libraries and the package has no shared-library dependencies.
+libraries and the package has no shared-library dependencies. That holds for
+every build path — `make build`, the `.deb`, the AUR package and the release
+artefacts — because the installed binary is what the initramfs hooks copy.
+`make verify-static` asserts it: no `NEEDED` entries and no `PT_INTERP`, so
+neither a shared library nor the dynamic loader is required.
 
 ### Verify
 

@@ -56,8 +56,23 @@ jobs:
           VERSION=${{ steps.get_version.outputs.VERSION }}
           LDFLAGS="-s -w -X main.Version=${VERSION}"
 
-          # Build for Linux amd64
-          GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/tpm2-kira-linux-amd64 .
+          # Build for Linux amd64. CGO_ENABLED=0 is the contract, not a
+          # preference: the binary is copied into an initramfs, where no libc
+          # and no dynamic loader can be relied on.
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+            go build -ldflags "${LDFLAGS}" -o dist/tpm2-kira-linux-amd64 .
+
+      - name: Verify the binary is fully static
+        run: |
+          for bin in dist/tpm2-kira-linux-*; do
+            if readelf -d "$bin" | grep -q NEEDED; then
+              echo "FAIL: $bin links shared libraries"; readelf -d "$bin" | grep NEEDED; exit 1
+            fi
+            if readelf -l "$bin" | grep -q interpreter; then
+              echo "FAIL: $bin needs a dynamic loader"; exit 1
+            fi
+            echo "$bin: fully static"
+          done
 
       - name: Create checksums
         run: |
