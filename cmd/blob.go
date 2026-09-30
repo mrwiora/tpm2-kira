@@ -909,14 +909,17 @@ func SignBlobPayload(unsignedBlob []byte, privKey crypto.Signer) ([]byte, error)
 	var signature []byte
 	var err error
 
-	switch key := privKey.(type) {
-	case *rsa.PrivateKey:
-		signature, err = rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
+	// Dispatch on the public key: a token-backed signer is neither
+	// *rsa.PrivateKey nor *ecdsa.PrivateKey, but signs in the same formats
+	// (PKCS #1 v1.5 for RSA, ASN.1 DER for ECDSA).
+	switch privKey.Public().(type) {
+	case *rsa.PublicKey:
+		signature, err = privKey.Sign(rand.Reader, digest[:], crypto.SHA256)
 		if err != nil {
 			return nil, fmt.Errorf("RSA blob signing failed: %w", err)
 		}
-	case *ecdsa.PrivateKey:
-		signature, err = ecdsa.SignASN1(rand.Reader, key, digest[:])
+	case *ecdsa.PublicKey:
+		signature, err = privKey.Sign(rand.Reader, digest[:], crypto.SHA256)
 		if err != nil {
 			return nil, fmt.Errorf("ECDSA blob signing failed: %w", err)
 		}

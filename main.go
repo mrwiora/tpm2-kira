@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/matthias/tpm2-kira/cmd"
 )
@@ -17,6 +19,7 @@ var Version = "dev"
 // not stop the commands after it. Scripts must therefore detect failure from
 // the output, not the exit status — grep for the FAILED marker below.
 func fail(err error) {
+	cmd.CloseTokenSessions()
 	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: %v\n", err)
 	fmt.Fprintln(os.Stderr, "tpm2-kira: (exit status is 0 by design; this command did NOT succeed)")
 	os.Exit(0)
@@ -47,7 +50,7 @@ func main() {
 
 	switch command {
 	case "setup":
-		runSetup(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+		runSetup(commandArgs)
 	case "seal":
 		runSeal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "reseal":
@@ -62,6 +65,8 @@ func main() {
 		runRevealPlain(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "run":
 		runRun(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+	case "yubikey":
+		runYubiKey(commandArgs)
 	case "pcrtips":
 		if err := cmd.PCRTips(); err != nil {
 			fail(err)
@@ -75,6 +80,10 @@ func main() {
 		printUsage()
 		fail(fmt.Errorf("unknown command %q", command))
 	}
+
+	// Reset any token this process unlocked, so its PIN does not stay
+	// verified for other processes.
+	cmd.CloseTokenSessions()
 }
 
 // nvramExplicit checks whether --nvram (or -nvram) appears in the argument
@@ -97,19 +106,74 @@ func resolveOrScanAll(rawValue uint32, provided bool) uint32 {
 	return cmd.ResolveNVRAMIndex(rawValue)
 }
 
-func runSetup(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
+// yubiKeyFlag is --yubikey or --yubikey=<serial>: a boolean flag that may
+// carry a serial number.
+type yubiKeyFlag struct {
+	set    bool
+	serial uint32
+}
+
+func (f *yubiKeyFlag) IsBoolFlag() bool { return true }
+
+func (f *yubiKeyFlag) String() string {
+	if f == nil || !f.set {
+		return ""
+	}
+	if f.serial == 0 {
+		return "true"
+	}
+	return strconv.FormatUint(uint64(f.serial), 10)
+}
+
+func (f *yubiKeyFlag) Set(v string) error {
+	switch v {
+	case "true":
+		f.set, f.serial = true, 0
+	case "false":
+		f.set, f.serial = false, 0
+	default:
+		n, err := strconv.ParseUint(v, 10, 32)
+		if err != nil || n == 0 {
+			return fmt.Errorf("expected a YubiKey serial number, got %q", v)
+		}
+		f.set, f.serial = true, uint32(n)
+	}
+	return nil
+}
+
+func runSetup(args []string) {
 	fs := flag.NewFlagSet("setup", flag.ExitOnError)
-
-	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
-	debug := fs.Bool("debug", debugFlag, "Enable debug output")
-
+	var yk yubiKeyFlag
+	fs.Var(&yk, "yubikey", "Take the signing key from a YubiKey PIV slot (optionally =SERIAL)")
+	slot := fs.String("slot", "", "PIV slot of the key with --yubikey (default: 9a)")
+	local := fs.Bool("local", false, "Create local key files without looking for a YubiKey or asking")
+	debug := fs.Bool("debug", false, "Enable debug output")
 	fs.Parse(args)
 
-	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
+	if *slot != "" && !yk.set {
+		fail(fmt.Errorf("--slot needs --yubikey"))
+	}
+	if *local && yk.set {
+		fail(fmt.Errorf("--local and --yubikey exclude each other"))
+	}
 
-	if err := cmd.Setup(*tpm, sealIndex, *debug); err != nil {
+	opts := cmd.SetupOptions{UseYubiKey: yk.set, Serial: yk.serial, Slot: *slot, Local: *local, Debug: *debug}
+	if err := cmd.Setup(opts); err != nil {
 		fail(err)
+	}
+}
+
+func runYubiKey(args []string) {
+	if len(args) == 0 {
+		fail(fmt.Errorf("yubikey command requires a subcommand (list)"))
+	}
+	switch args[0] {
+	case "list":
+		if err := cmd.YubiKeyList(); err != nil {
+			fail(err)
+		}
+	default:
+		fail(fmt.Errorf("unknown yubikey subcommand %q", args[0]))
 	}
 }
 
@@ -122,7 +186,7 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
 	pubKeyPath := fs.String("pubkey", cmd.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
-	privKeyPath := fs.String("privkey", cmd.DefaultPrivateKeyPath, "Path to signing private key PEM (stored in blob for reseal convenience)")
+	privKeyPath := fs.String("privkey", cmd.DefaultPrivateKeyPath, "Path to signing private key: PEM, or the YubiKey key file from setup --yubikey (stored in blob for reseal convenience)")
 	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
 	verifyUKI := fs.Bool("verify-uki", true, "Check the built-in PCR 11 computation against this boot's event log before sealing")
 
@@ -159,8 +223,9 @@ func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	pubKeyPath := fs.String("pubkey", "", "Path to signing public key PEM (default: derived from --privkey, or preserved from blob)")
-	privKeyPath := fs.String("privkey", "", "Path to signing private key PEM (required when PCR values have changed)")
+	privKeyPath := fs.String("privkey", "", "Path to signing private key: PEM, or the YubiKey key file from setup --yubikey")
 	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
+	requireKey := fs.Bool("require-key", false, "Fail instead of reporting SKIPPED when the signing key (YubiKey) is unavailable")
 
 	fs.Parse(args)
 
@@ -180,6 +245,12 @@ func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
 	if err := cmd.ResealCommand(*tpm, scanIndex, *pcrs, *pubKeyPath, *privKeyPath, *debug); err != nil {
+		// A skip has already been reported with its SKIPPED block; it is
+		// the expected outcome with the token unplugged, not a failure,
+		// unless the caller asked for the key to be required.
+		if errors.Is(err, cmd.ErrResealSkipped) && !*requireKey {
+			return
+		}
 		fail(err)
 	}
 }
@@ -290,14 +361,15 @@ USAGE:
   tpm2-kira <command> [options]
 
 COMMANDS:
-  setup       Initial setup: generate P-256 signing keys and seal (PCRs 0,7)
-  seal        Generate and seal TOTP secret to TPM NVRAM
+  setup       Initial setup: create the signing key (run before seal)
+  seal        Generate and seal TOTP secret to TPM NVRAM (requires setup)
   reseal      Reseal secret with current PCR values (requires signing key)
   reveal      Generate TOTP code with colored KIRA format
   reveal-plain Generate TOTP code (plain output)
   run         Continuously display TOTP codes (runs until stopped)
   info        Display sealed secret information
   nvram       Manage TPM NVRAM (list, status, delete)
+  yubikey     YubiKey support (list)
   pcrtips     Show PCR (Platform Configuration Register) reference guide
   version     Show version information
   help        Show this help message
@@ -343,6 +415,9 @@ RESEAL OPTIONS:
   --privkey PATH     Path to signing private key PEM (required when PCRs changed)
                      The TPM verifies the signature via PolicySigned.
                      Also used to derive the public key when --pubkey is omitted.
+  --require-key      With the key on a YubiKey: fail when the token or its PIN
+                     is unavailable. By default reseal then prints SKIPPED,
+                     leaves every slot untouched, and exits normally.
 
 INFO OPTIONS:
   --json             Output as JSON
@@ -365,17 +440,38 @@ AUTHENTICATION:
   the signing private key.
 
 SETUP OPTIONS:
-  --tpm PATH      Path to TPM device (default: /dev/tpm0)
-  --nvram INDEX   NVRAM slot number or full index (default: 0x01803010)
-  --debug         Enable debug output
+  --yubikey[=SERIAL] Take the signing key from a YubiKey PIV slot without
+                     asking. SERIAL picks the token when several are plugged
+                     in. The slot must already hold a key: tpm2-kira never
+                     writes to the token.
+  --slot SLOT        PIV slot with --yubikey (default: 9a). Other slots, such
+                     as an sbctl key in 9c, are only used when named here.
+  --local            Create local key files without looking for a YubiKey.
+  --debug            Enable debug output
 
-  Setup creates /var/lib/tpm2-kira/keys/ with a fresh ECDSA P-256 key pair
-  (seal.pub + seal.key) and seals a TOTP secret using PCRs 0,7.
+  Setup creates /var/lib/tpm2-kira/keys/ with seal.pub and seal.key. It first
+  looks for a YubiKey. If one holds a usable key, it asks on the terminal
+  whether to use it or local key files; without a terminal it uses local key
+  files. With a YubiKey, seal.key only names the token and slot and seal.pub is
+  the token's public key: no private key is written. Setup needs no PIN.
   If the keys directory already exists, setup aborts — further changes must
   be made manually via 'seal' or 'reseal'.
 
+YUBIKEY SUBCOMMANDS:
+  list               List YubiKeys and the keys in their PIV slots, and
+                     which are usable by tpm2-kira. Read-only; no PIN.
+
+  With the signing key on a YubiKey, seal and reseal need the token and its
+  PIN. The PIN is taken from the %s environment variable, else from
+  the TPM2_KIRA_PIN='...' line in /etc/mkinitcpio.conf (which the
+  automatic reseal after initramfs rebuilds needs anyway), else asked on the
+  terminal. reveal, run and info never need the token.
+
 EXAMPLES:
   tpm2-kira setup
+  tpm2-kira setup --yubikey
+  tpm2-kira setup --yubikey=12345678 --slot 9c
+  tpm2-kira yubikey list
   tpm2-kira seal
   tpm2-kira seal --nvram 0
   tpm2-kira seal --pcrs "0e,2e,7e"
@@ -400,5 +496,5 @@ EXAMPLES:
   tpm2-kira nvram delete --nvram 0x01803010
 
 For detailed documentation, see README.md
-`, cmd.DefaultPublicKeyPath)
+`, cmd.DefaultPublicKeyPath, cmd.PINEnvVar)
 }

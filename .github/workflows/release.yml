@@ -56,8 +56,10 @@ jobs:
           VERSION=${{ steps.get_version.outputs.VERSION }}
           LDFLAGS="-s -w -X main.Version=${VERSION}"
 
-          # Build for Linux amd64
-          GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/tpm2-kira-linux-amd64 .
+          # Build for Linux amd64. Static and cgo-free: the same binary is
+          # copied into the initramfs, which has no libc.
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/tpm2-kira-linux-amd64 .
+          go version -m dist/tpm2-kira-linux-amd64 | grep -q 'CGO_ENABLED=0' || { echo "built with cgo" >&2; exit 1; }
 
       - name: Create checksums
         run: |
@@ -564,6 +566,7 @@ jobs:
           wget https://github.com/mrwiora/tpm2-kira/releases/download/${VERSION}/${DEB_FILE}
           sudo apt install ./${DEB_FILE}
           sudo tpm2-kira setup
+          sudo tpm2-kira seal --pcrs 0,7
           sudo update-initramfs -u
           \`\`\`
 

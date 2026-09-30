@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -356,7 +357,21 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 //
 // A failure to write the file is reported alongside the original error rather
 // than replacing it: the original is what the user has to act on.
+// ErrNVIndexReplaced marks an error that happened after an NVRAM index was
+// undefined for rewriting: the old blob is gone from the TPM. Callers must
+// never present such an error as harmless.
+var ErrNVIndexReplaced = errors.New("NVRAM index was replaced")
+
+type nvReplacedError struct{ err error }
+
+func (e *nvReplacedError) Error() string   { return e.err.Error() }
+func (e *nvReplacedError) Unwrap() []error { return []error{e.err, ErrNVIndexReplaced} }
+
 func stashUnwrittenBlob(index uint32, data []byte, cause error) error {
+	return &nvReplacedError{err: stashUnwrittenBlobFile(index, data, cause)}
+}
+
+func stashUnwrittenBlobFile(index uint32, data []byte, cause error) error {
 	if mkErr := os.MkdirAll(NVRAMRecoveryDir, 0700); mkErr != nil {
 		return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY and the blob could not be saved either (%v).\n  The sealed secret is lost; run 'tpm2-kira seal' and re-enrol your authenticator", cause, index, mkErr)
 	}

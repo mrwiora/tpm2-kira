@@ -8,9 +8,11 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/binary"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"os"
 
 	"github.com/google/go-tpm/tpm2"
@@ -68,12 +70,24 @@ func LoadSigningPublicKeyFromPEM(pemPath string) (crypto.PublicKey, []byte, erro
 	return pubKey, pemData, nil
 }
 
-// LoadSigningPrivateKeyFromPEM reads a PEM file and extracts the private key.
-// Supports RSA and ECDSA private keys, both PKCS#1, PKCS#8, and SEC1 formats.
-func LoadSigningPrivateKeyFromPEM(pemPath string) (crypto.Signer, error) {
+// LoadSigningPrivateKey reads a signing private key file. The file is either
+// a PEM private key (RSA or ECDSA; PKCS#1, PKCS#8 or SEC1) or a YubiKey stub
+// (see YubiKeyStub), told apart by content.
+//
+// A stub yields a signer that does not touch the token until it signs, so
+// its Public() is available with the token unplugged.
+func LoadSigningPrivateKey(pemPath string) (crypto.Signer, error) {
 	pemData, err := os.ReadFile(pemPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read private key file %s: %w", pemPath, err)
+	}
+
+	if isYubiKeyStub(pemData) {
+		stub, pub, slot, err := ParseYubiKeyStub(pemData)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", pemPath, err)
+		}
+		return &yubiKeySigner{path: pemPath, stub: stub, pub: pub, slot: slot}, nil
 	}
 
 	block, _ := pem.Decode(pemData)
@@ -648,7 +662,7 @@ func UnsealWithPCRBranch(tpmDev transport.TPM, loadedObject *LoadSealedObjectRes
 // Uses tpm2.Policy() callback to build the full policy session just-in-time.
 func UnsealWithSignedBranch(tpmDev transport.TPM, loadedObject *LoadSealedObjectResponse, sealedBlob *SealedBlob, privateKeyPath string, debug bool) ([]byte, error) {
 	// Load the private key for signing — the public key is derived from it.
-	privKey, err := LoadSigningPrivateKeyFromPEM(privateKeyPath)
+	privKey, err := LoadSigningPrivateKey(privateKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load private key: %w", err)
 	}
@@ -812,11 +826,16 @@ func ParsePublicKeyFromPEM(pemData []byte) (crypto.PublicKey, error) {
 	}
 }
 
-// signForTPM signs a digest with the private key and returns a TPM-compatible signature structure.
+// signForTPM signs a digest with the private key and returns a TPM-compatible
+// signature structure.
+//
+// It dispatches on the public key and goes through crypto.Signer, so a key
+// held on a token signs exactly like a software key. Both produce ASN.1 DER
+// for ECDSA, which the TPM wants as raw r and s padded to the curve size.
 func signForTPM(privKey crypto.Signer, digest []byte) (tpm2.TPMTSignature, error) {
-	switch key := privKey.(type) {
-	case *rsa.PrivateKey:
-		sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest)
+	switch pub := privKey.Public().(type) {
+	case *rsa.PublicKey:
+		sig, err := privKey.Sign(rand.Reader, digest, crypto.SHA256)
 		if err != nil {
 			return tpm2.TPMTSignature{}, fmt.Errorf("RSA signing failed: %w", err)
 		}
@@ -832,27 +851,24 @@ func signForTPM(privKey crypto.Signer, digest []byte) (tpm2.TPMTSignature, error
 				},
 			),
 		}, nil
-	case *ecdsa.PrivateKey:
-		r, s, err := ecdsa.Sign(rand.Reader, key, digest)
+	case *ecdsa.PublicKey:
+		der, err := privKey.Sign(rand.Reader, digest, crypto.SHA256)
 		if err != nil {
 			return tpm2.TPMTSignature{}, fmt.Errorf("ECDSA signing failed: %w", err)
 		}
-
-		byteLen := (key.Curve.Params().BitSize + 7) / 8
-		rBytes := r.Bytes()
-		sBytes := s.Bytes()
-
-		// Pad to expected length
-		if len(rBytes) < byteLen {
-			padded := make([]byte, byteLen)
-			copy(padded[byteLen-len(rBytes):], rBytes)
-			rBytes = padded
+		var parsed struct{ R, S *big.Int }
+		rest, err := asn1.Unmarshal(der, &parsed)
+		if err != nil || len(rest) != 0 || parsed.R == nil || parsed.S == nil {
+			return tpm2.TPMTSignature{}, fmt.Errorf("ECDSA signature is not valid ASN.1 DER")
 		}
-		if len(sBytes) < byteLen {
-			padded := make([]byte, byteLen)
-			copy(padded[byteLen-len(sBytes):], sBytes)
-			sBytes = padded
+
+		byteLen := (pub.Curve.Params().BitSize + 7) / 8
+		if parsed.R.Sign() <= 0 || parsed.S.Sign() <= 0 ||
+			parsed.R.BitLen() > byteLen*8 || parsed.S.BitLen() > byteLen*8 {
+			return tpm2.TPMTSignature{}, fmt.Errorf("ECDSA signature values out of range for %s", pub.Curve.Params().Name)
 		}
+		rBytes := parsed.R.FillBytes(make([]byte, byteLen))
+		sBytes := parsed.S.FillBytes(make([]byte, byteLen))
 
 		return tpm2.TPMTSignature{
 			SigAlg: tpm2.TPMAlgECDSA,
@@ -866,33 +882,35 @@ func signForTPM(privKey crypto.Signer, digest []byte) (tpm2.TPMTSignature, error
 			),
 		}, nil
 	default:
-		return tpm2.TPMTSignature{}, fmt.Errorf("unsupported private key type %T for signing", key)
+		return tpm2.TPMTSignature{}, fmt.Errorf("unsupported private key type %T for signing", pub)
 	}
 }
 
-// verifyKeyPairMatch checks that a public key and private key form a valid pair.
+// verifyKeyPairMatch checks that a public key belongs to a private key.
+// It compares public keys only, so it works for keys held on a token.
 func verifyKeyPairMatch(pubKey crypto.PublicKey, privKey crypto.Signer) error {
-	switch pub := pubKey.(type) {
-	case *rsa.PublicKey:
-		rsaPriv, ok := privKey.(*rsa.PrivateKey)
-		if !ok {
-			return fmt.Errorf("public key is RSA but private key is %T", privKey)
-		}
-		if pub.N.Cmp(rsaPriv.N) != 0 || pub.E != rsaPriv.E {
-			return fmt.Errorf("RSA public and private keys do not match")
-		}
-	case *ecdsa.PublicKey:
-		ecPriv, ok := privKey.(*ecdsa.PrivateKey)
-		if !ok {
-			return fmt.Errorf("public key is ECDSA but private key is %T", privKey)
-		}
-		if pub.X.Cmp(ecPriv.PublicKey.X) != 0 || pub.Y.Cmp(ecPriv.PublicKey.Y) != 0 {
-			return fmt.Errorf("ECDSA public and private keys do not match")
-		}
+	switch pubKey.(type) {
+	case *rsa.PublicKey, *ecdsa.PublicKey:
 	default:
 		return fmt.Errorf("unsupported public key type %T", pubKey)
 	}
+	if !publicKeysEqual(pubKey, privKey.Public()) {
+		return fmt.Errorf("public key (fingerprint %s) does not belong to the private key (fingerprint %s)",
+			PublicKeyFingerprint(pubKey), PublicKeyFingerprint(privKey.Public()))
+	}
 	return nil
+}
+
+// verifySignature checks a signature in the format crypto.Signer produces
+// for a SHA-256 digest: PKCS #1 v1.5 for RSA, ASN.1 DER for ECDSA.
+func verifySignature(pub crypto.PublicKey, digest, sig []byte) bool {
+	switch k := pub.(type) {
+	case *rsa.PublicKey:
+		return rsa.VerifyPKCS1v15(k, crypto.SHA256, digest, sig) == nil
+	case *ecdsa.PublicKey:
+		return ecdsa.VerifyASN1(k, digest, sig)
+	}
+	return false
 }
 
 // computePCRBranchDigestFromBlob recomputes the PCR branch policy digest from stored blob data.
@@ -961,7 +979,7 @@ func PublicKeyToPEM(pubKey crypto.PublicKey) ([]byte, error) {
 // DerivePublicKeyPEM extracts the public key from a private key file and returns it as PEM bytes.
 // This is a convenience function for when only the private key path is known.
 func DerivePublicKeyPEM(privateKeyPath string) ([]byte, crypto.PublicKey, error) {
-	privKey, err := LoadSigningPrivateKeyFromPEM(privateKeyPath)
+	privKey, err := LoadSigningPrivateKey(privateKeyPath)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -6,7 +6,10 @@ INSTALL_PATH=/usr/local/bin
 
 # Go parameters
 GOCMD=go
-GOBUILD=$(GOCMD) build
+# Every build is static and cgo-free: the same binary is copied into the
+# initramfs, which has no libc. With cgo enabled (Go's default wherever a C
+# compiler is installed) the net package alone links glibc dynamically.
+GOBUILD=CGO_ENABLED=0 $(GOCMD) build
 GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
@@ -35,15 +38,15 @@ LDFLAGS=-ldflags "-s -w -X main.Version=$(VERSION)"
 
 all: build
 
-## build: Build the binary
+## build: Build the binary (static, CGO_ENABLED=0)
 build:
 	@echo "Building $(BINARY_NAME) version $(VERSION)..."
 	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v
+	@$(GOCMD) version -m $(BINARY_NAME) | grep -q 'CGO_ENABLED=0' || \
+		{ echo "Error: $(BINARY_NAME) was built with cgo"; exit 1; }
 
-## build-static: Build a fully static binary (no libc, for initramfs images)
-build-static:
-	@echo "Building static $(BINARY_NAME) version $(VERSION)..."
-	CGO_ENABLED=0 $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v
+## build-static: Alias for build, which is always static
+build-static: build
 
 ## build-optimized: Build with optimizations (alias for build)
 build-optimized: build

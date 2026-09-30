@@ -64,6 +64,7 @@ Use an existing tag; the tarball must already be published on GitHub.
   `tpm2-kira.service`.
 - Does **not** enable the service on the host. The mkinitcpio install hook
   enables it inside the initramfs image, which is the only place it should run.
-- Does **not** run `tpm2-kira setup`. That generates a new TOTP secret and writes
-  to TPM NVRAM, which must never happen as a side effect of installing a package
-  or building an image. Run it once by hand, then rebuild the initramfs.
+- Does **not** run `tpm2-kira setup` or `tpm2-kira seal`. Sealing generates a
+  new TOTP secret and writes to TPM NVRAM, which must never happen as a side
+  effect of installing a package or building an image. Run both once by hand,
+  then rebuild the initramfs.
