@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"os"
@@ -75,7 +78,11 @@ func TestPrepareSigningKey(t *testing.T) {
 	signer, _ := LoadSigningPrivateKey(path)
 
 	// Software keys are always ready.
-	if err := PrepareSigningKey(testGenECDSAKey(t)); err != nil {
+	software, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareSigningKey(software); err != nil {
 		t.Fatal(err)
 	}
 
@@ -89,7 +96,7 @@ func TestPrepareSigningKey(t *testing.T) {
 
 	// Token unplugged: unavailable, with the reason the SKIPPED block shows.
 	fake.cards = nil
-	err := PrepareSigningKey(signer)
+	err = PrepareSigningKey(signer)
 	var tu *TokenUnavailableError
 	if !errors.As(err, &tu) || !strings.Contains(tu.Reason, "no YubiKey with serial 1") {
 		t.Fatalf("unplugged: %v", err)

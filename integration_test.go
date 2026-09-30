@@ -85,7 +85,7 @@ func generateTestKeys(pubPath, privPath string) error {
 		return fmt.Errorf("failed to marshal private key: %w", err)
 	}
 	privPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privDER})
-	if err := os.WriteFile(privPath, privPEM, 0600); err != nil {
+	if err := writeKeyFile(privPath, privPEM); err != nil {
 		return fmt.Errorf("failed to write private key: %w", err)
 	}
 
@@ -95,11 +95,21 @@ func generateTestKeys(pubPath, privPath string) error {
 		return fmt.Errorf("failed to marshal public key: %w", err)
 	}
 	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
-	if err := os.WriteFile(pubPath, pubPEM, 0644); err != nil {
+	if err := writeKeyFile(pubPath, pubPEM); err != nil {
 		return fmt.Errorf("failed to write public key: %w", err)
 	}
 
 	return nil
+}
+
+// writeKeyFile writes a signing key file with mode 0400, which seal and
+// reseal require of both key files. The mode is set after writing because
+// the mode given to open is filtered through the umask.
+func writeKeyFile(path string, data []byte) error {
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0400)
 }
 
 // setupSoftwareTPM initializes a software TPM simulator for testing
@@ -126,7 +136,9 @@ func setupSoftwareTPM(t *testing.T) (tpmPath string, cleanup func()) {
 		"--ctrl", "type=unixio,path="+socketPath+".ctrl",
 		"--tpm2",
 		"--server", "type=unixio,path="+socketPath,
-		"--flags", "not-need-init")
+		// startup-clear: swtpm sends TPM2_Startup itself, so the tests
+		// need no tpm2_startup from tpm2-tools.
+		"--flags", "not-need-init,startup-clear")
 
 	// Capture output for debugging
 	var outBuf, errBuf bytes.Buffer
@@ -154,17 +166,6 @@ func setupSoftwareTPM(t *testing.T) (tpmPath string, cleanup func()) {
 
 	// Additional delay to ensure TPM is fully ready
 	time.Sleep(200 * time.Millisecond)
-
-	// Initialize the TPM with TPM2_Startup command
-	// This is required for swtpm to respond to commands properly
-	// Use tpm2_startup if available, otherwise skip (may already be initialized)
-	if _, err := exec.LookPath("tpm2_startup"); err == nil {
-		startupCmd := exec.Command("sh", "-c",
-			fmt.Sprintf("TPM2TOOLS_TCTI='swtpm:path=%s' tpm2_startup -c 2>/dev/null || true", socketPath))
-		startupCmd.Run() // Ignore errors - TPM might already be initialized
-	} else {
-		t.Logf("Warning: tpm2_startup not found, TPM may not be initialized. Install tpm2-tools for better compatibility.")
-	}
 
 	cleanup = func() {
 		// Ensure swtpm process is fully stopped
