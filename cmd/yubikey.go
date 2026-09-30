@@ -383,13 +383,17 @@ func PrintTokenReport(w io.Writer, infos []TokenInfo) {
 		rec, hasRec := recommendedSlot(t)
 		for _, s := range t.Slots {
 			policies := fmt.Sprintf("PIN %-7s touch %-7s", s.pinPolicyString(), s.touchPolicyString())
-			note := ""
+			var notes []string
 			switch {
 			case s.Unsuitable != "":
-				note = "not usable: " + s.Unsuitable
+				notes = append(notes, "not usable: "+s.Unsuitable)
 			case hasRec && s.Slot == rec.Slot:
-				note = "<- recommended"
+				notes = append(notes, "<- recommended")
 			}
+			if s.Unsuitable == "" && s.PoliciesKnown && s.effectivePINPolicy() == piv.PINPolicyNever {
+				notes = append(notes, "WARNING: no PIN required (insecure)")
+			}
+			note := strings.Join(notes, "  ")
 			line := fmt.Sprintf("    slot %s  %-8s %s %s", s.Slot, s.Algorithm, policies, note)
 			fmt.Fprintln(w, strings.TrimRight(line, " "))
 		}
@@ -462,8 +466,27 @@ type tokenSession struct {
 
 var tokenSessions = map[uint32]*tokenSession{}
 
-// ErrTokenUnavailable wraps every reason a token key cannot sign right now.
+// ErrTokenUnavailable wraps every reason a token key cannot sign right now:
+// no pcscd, no token or the wrong one, an empty slot, no PIN, a refused or
+// blocked PIN. It never covers a key that is present but different from the
+// key file; that is a configuration error, not an absence.
 var ErrTokenUnavailable = errors.New("signing key on YubiKey is unavailable")
+
+// TokenUnavailableError is ErrTokenUnavailable with its details.
+type TokenUnavailableError struct {
+	Token  string // "YubiKey N, slot S"
+	Reason string
+}
+
+func (e *TokenUnavailableError) Error() string {
+	return fmt.Sprintf("%v (%s): %s", ErrTokenUnavailable, e.Token, e.Reason)
+}
+
+func (e *TokenUnavailableError) Unwrap() error { return ErrTokenUnavailable }
+
+func unavailable(s *yubiKeySigner, format string, a ...any) error {
+	return &TokenUnavailableError{Token: s.Describe(), Reason: fmt.Sprintf(format, a...)}
+}
 
 func tokenSessionFor(s *yubiKeySigner) (*tokenSession, error) {
 	if sess, ok := tokenSessions[s.stub.Serial]; ok {
@@ -472,12 +495,9 @@ func tokenSessionFor(s *yubiKeySigner) (*tokenSession, error) {
 		}
 		return sess, nil
 	}
-	unavailable := func(format string, a ...any) error {
-		return fmt.Errorf("%w (%s): %s", ErrTokenUnavailable, s.Describe(), fmt.Sprintf(format, a...))
-	}
 	conns, closeAll, err := dialTokens(TokenProbeTimeout)
 	if err != nil {
-		return nil, unavailable("%v", err)
+		return nil, unavailable(s, "%v", err)
 	}
 	var seen []string
 	for _, c := range conns {
@@ -503,9 +523,9 @@ func tokenSessionFor(s *yubiKeySigner) (*tokenSession, error) {
 	}
 	closeAll()
 	if len(seen) > 0 {
-		return nil, unavailable("no YubiKey with serial %d is present (found: %s)", s.stub.Serial, strings.Join(seen, ", "))
+		return nil, unavailable(s, "no YubiKey with serial %d is present (found: %s)", s.stub.Serial, strings.Join(seen, ", "))
 	}
-	return nil, unavailable("no YubiKey with serial %d is present", s.stub.Serial)
+	return nil, unavailable(s, "no YubiKey with serial %d is present", s.stub.Serial)
 }
 
 // checkKey compares the key in the slot with the key file before any PIN is
@@ -516,7 +536,7 @@ func (sess *tokenSession) checkKey(s *yubiKeySigner) error {
 	if md, err := sess.card.Metadata(s.slot); err == nil {
 		onCard = md.PublicKey
 	} else if errors.Is(err, piv.ErrNotFound) {
-		return fmt.Errorf("%w (%s): the slot is empty", ErrTokenUnavailable, s.Describe())
+		return unavailable(s, "the slot is empty")
 	} else if cert, err := sess.card.Certificate(s.slot); err == nil {
 		onCard = cert.PublicKey
 	}
@@ -536,22 +556,51 @@ func publicKeysEqual(a, b crypto.PublicKey) bool {
 	return ok && ea.Equal(b)
 }
 
-func (sess *tokenSession) sign(s *yubiKeySigner, digest []byte) (sig []byte, err error) {
+// PrepareSigningKey makes sure key can sign before a command changes
+// anything. For a key on a token it finds the token, compares the slot key
+// with the key file and verifies the PIN, so an absent token or a missing PIN
+// is found while nothing has been touched. Software keys are always ready.
+func PrepareSigningKey(key crypto.Signer) error {
+	s, ok := key.(*yubiKeySigner)
+	if !ok {
+		return nil
+	}
+	sess, err := tokenSessionFor(s)
+	if err != nil {
+		return err
+	}
+	return sess.transaction(s, func() error { return sess.ensurePIN(s) })
+}
+
+// transaction runs fn with exclusive use of the card and the PIV applet
+// selected.
+func (sess *tokenSession) transaction(s *yubiKeySigner, fn func() error) error {
 	if sess.fatal != nil {
-		return nil, sess.fatal
+		return sess.fatal
 	}
 	if sess.conn.begin != nil {
 		if err := sess.conn.begin(); err != nil {
-			return nil, fmt.Errorf("%w (%s): %v", ErrTokenUnavailable, s.Describe(), err)
+			return unavailable(s, "%v", err)
 		}
 		defer sess.conn.end()
 	}
 	// Another process may have selected a different applet since the last
 	// transaction; select PIV again inside this one.
 	if _, err := piv.Open(sess.conn.transport); err != nil {
-		return nil, fmt.Errorf("%w (%s): %v", ErrTokenUnavailable, s.Describe(), err)
+		return unavailable(s, "%v", err)
 	}
+	return fn()
+}
 
+func (sess *tokenSession) sign(s *yubiKeySigner, digest []byte) (sig []byte, err error) {
+	err = sess.transaction(s, func() error {
+		sig, err = sess.signLocked(s, digest)
+		return err
+	})
+	return sig, err
+}
+
+func (sess *tokenSession) signLocked(s *yubiKeySigner, digest []byte) (sig []byte, err error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		if err := sess.ensurePIN(s); err != nil {
 			return nil, err
@@ -590,19 +639,19 @@ func (sess *tokenSession) ensurePIN(s *yubiKeySigner) error {
 	}
 	remaining, verified, err := sess.card.PINRetries()
 	if err != nil {
-		return fmt.Errorf("%w (%s): reading the PIN retry counter: %v", ErrTokenUnavailable, s.Describe(), err)
+		return unavailable(s, "reading the PIN retry counter: %v", err)
 	}
 	if verified {
 		return nil
 	}
 	if remaining == 0 {
-		sess.fatal = fmt.Errorf("%w (%s): %v", ErrTokenUnavailable, s.Describe(), piv.ErrPINBlocked)
+		sess.fatal = unavailable(s, "%v", piv.ErrPINBlocked)
 		return sess.fatal
 	}
 	if remaining == 1 && !sess.unlocked {
-		sess.fatal = fmt.Errorf("%w (%s): only one PIN attempt is left, and tpm2-kira will not risk it.\n"+
-			"  Check the PIN, then use it once with 'ykman piv info' or reset the counter with the PUK:\n"+
-			"      ykman piv access unblock-pin", ErrTokenUnavailable, s.Describe())
+		sess.fatal = unavailable(s, "only one PIN attempt is left, and tpm2-kira will not risk it.\n"+
+			"  Check the PIN, then reset the counter with the PUK:\n"+
+			"      ykman piv access unblock-pin")
 		return sess.fatal
 	}
 	if remaining < 3 && !sess.unlocked {
@@ -611,14 +660,14 @@ func (sess *tokenSession) ensurePIN(s *yubiKeySigner) error {
 	if sess.pin == "" {
 		pin, err := pinSource(s)
 		if err != nil {
-			sess.fatal = fmt.Errorf("%w (%s): %v", ErrTokenUnavailable, s.Describe(), err)
+			sess.fatal = unavailable(s, "%v", err)
 			return sess.fatal
 		}
 		sess.pin = pin
 	}
 	if err := sess.card.VerifyPIN(sess.pin); err != nil {
 		sess.pin = ""
-		sess.fatal = fmt.Errorf("%w (%s): %v — stopping here so no further attempt is spent", ErrTokenUnavailable, s.Describe(), err)
+		sess.fatal = unavailable(s, "%v — stopping here so no further attempt is spent", err)
 		return sess.fatal
 	}
 	sess.unlocked = true

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
 	"crypto"
 	"crypto/ecdsa"
@@ -398,40 +399,142 @@ func TestProbeNeverSendsPIN(t *testing.T) {
 
 func TestSetupReport(t *testing.T) {
 	var buf bytes.Buffer
-	reportTokens(&buf, nil, errors.New("no PC/SC daemon at /run/pcscd/pcscd.comm"), false)
-	if !strings.Contains(buf.String(), "No YubiKey could be found, so the signing key will be created as local files.") {
+	if reportTokens(&buf, nil, errors.New("no PC/SC daemon at /run/pcscd/pcscd.comm"), false) ||
+		!strings.Contains(buf.String(), "No YubiKey could be found, so the signing key will be created as local files.") {
 		t.Errorf("no daemon:\n%s", buf.String())
 	}
 
 	buf.Reset()
-	reportTokens(&buf, nil, nil, false)
-	if !strings.Contains(buf.String(), "No YubiKey could be found") {
+	if reportTokens(&buf, nil, nil, false) || !strings.Contains(buf.String(), "No YubiKey could be found") {
 		t.Errorf("no token:\n%s", buf.String())
 	}
 
+	empty := pivtest.New(99)
+	(&fakeTokens{cards: []*pivtest.Card{empty}}).install(t)
+	tokens, _ := ProbeYubiKeys(time.Second)
+	buf.Reset()
+	if reportTokens(&buf, tokens, nil, false) || !strings.Contains(buf.String(), "none is suitable") ||
+		!strings.Contains(buf.String(), "ykman piv keys generate") {
+		t.Errorf("unsuitable report:\n%s", buf.String())
+	}
+}
+
+// setupTokens is one token with a recommended 9a key, a shared 9c key and a
+// key without PIN, plus an empty token.
+func setupTokens(t *testing.T) []TokenInfo {
+	t.Helper()
 	card := pivtest.New(12345678)
 	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	card.AddRSAKey(piv.SlotSignature, 2048, piv.PINPolicyAlways, piv.TouchPolicyAlways, false)
-	empty := pivtest.New(99)
-	(&fakeTokens{cards: []*pivtest.Card{card, empty}}).install(t)
-	tokens, _ := ProbeYubiKeys(time.Second)
+	card.AddECKey(piv.SlotKeyManagement, piv.PINPolicyNever, piv.TouchPolicyNever, false)
+	(&fakeTokens{cards: []*pivtest.Card{card, pivtest.New(99)}}).install(t)
+	tokens, err := ProbeYubiKeys(time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tokens
+}
 
-	buf.Reset()
-	reportTokens(&buf, tokens, nil, false)
-	out := buf.String()
-	t.Logf("report:\n%s", out)
-	for _, want := range []string{"found one suitable", "serial 12345678", "slot 9a", "<- recommended",
-		"slot 9c", "setup --yubikey=12345678", "no keys in any PIV slot", "Continuing with local key files.",
-		"before sealing"} {
+func TestAskKeyLocation(t *testing.T) {
+	tokens := setupTokens(t)
+	ask := func(input string) (*TokenInfo, TokenSlot, string, error) {
+		var out bytes.Buffer
+		tok, slot, err := askKeyLocation(&out, bufio.NewReader(strings.NewReader(input)), tokens, nil, false)
+		return tok, slot, out.String(), err
+	}
+
+	tok, slot, out, err := ask("\n")
+	if err != nil || tok == nil || slot.Slot != piv.SlotAuthentication {
+		t.Fatalf("default choice: %v %v\n%s", err, slot.Slot, out)
+	}
+	t.Logf("menu:\n%s", out)
+	for _, want := range []string{"Where should the signing key live?", "1) YubiKey 12345678, slot 9a",
+		"2) YubiKey 12345678, slot 9c", "3) YubiKey 12345678, slot 9d", "[no PIN required: insecure]",
+		"4) Local key files", "Choice [1]:", "WARNING: no PIN required (insecure)"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("report lacks %q:\n%s", want, out)
+			t.Errorf("menu lacks %q", want)
+		}
+	}
+
+	if tok, _, _, err := ask("4\n"); err != nil || tok != nil {
+		t.Errorf("local choice: %v %v", tok, err)
+	}
+	if _, slot, _, err := ask("2\n"); err != nil || slot.Slot != piv.SlotSignature {
+		t.Errorf("explicit 9c: %v %v", slot.Slot, err)
+	}
+	if _, slot, out, err := ask("x\n7\n2\n"); err != nil || slot.Slot != piv.SlotSignature ||
+		strings.Count(out, "Please enter a number from 1 to 4.") != 2 {
+		t.Errorf("retry after bad input: %v %v\n%s", slot.Slot, err, out)
+	}
+	if _, _, _, err := ask("x\ny\nz\n"); err == nil {
+		t.Error("three bad answers accepted")
+	}
+	if _, _, _, err := ask(""); err == nil || !strings.Contains(err.Error(), "nothing was written") {
+		t.Errorf("EOF: %v", err)
+	}
+
+	// Without a terminal: local files, and how to choose without one.
+	var buf bytes.Buffer
+	tok, _, err = askKeyLocation(&buf, nil, tokens, nil, false)
+	if err != nil || tok != nil || !strings.Contains(buf.String(), "--yubikey=SERIAL") {
+		t.Errorf("no terminal: %v %v\n%s", tok, err, buf.String())
+	}
+}
+
+// Even a single candidate is a question, and without 9a the default is local.
+func TestAskKeyLocationSingleNon9a(t *testing.T) {
+	card := pivtest.New(5)
+	card.AddRSAKey(piv.SlotSignature, 2048, piv.PINPolicyAlways, piv.TouchPolicyNever, false)
+	(&fakeTokens{cards: []*pivtest.Card{card}}).install(t)
+	tokens, _ := ProbeYubiKeys(time.Second)
+	var out bytes.Buffer
+	tok, _, err := askKeyLocation(&out, bufio.NewReader(strings.NewReader("\n")), tokens, nil, false)
+	if err != nil || tok != nil || !strings.Contains(out.String(), "Choice [2]:") {
+		t.Errorf("single 9c: %v %v\n%s", tok, err, out.String())
+	}
+}
+
+func TestPINGuidance(t *testing.T) {
+	tokens := setupTokens(t)
+	s9a, _ := tokens[0].SlotByID(piv.SlotAuthentication)
+	s9d, _ := tokens[0].SlotByID(piv.SlotKeyManagement)
+
+	if w := pinPolicyWarning(s9a); w != "" {
+		t.Errorf("PIN once warned: %s", w)
+	}
+	if w := pinPolicyWarning(s9d); !strings.Contains(w, "needs no PIN") {
+		t.Errorf("PIN never not warned: %q", w)
+	}
+	if w := pinPolicyWarning(TokenSlot{Slot: piv.SlotAuthentication}); !strings.Contains(w, "cannot be read") {
+		t.Errorf("unknown policy: %q", w)
+	}
+
+	conf := filepath.Join(t.TempDir(), "mkinitcpio.conf")
+	old := mkinitcpioConfPath
+	t.Cleanup(func() { mkinitcpioConfPath = old })
+	mkinitcpioConfPath = conf
+
+	var buf bytes.Buffer
+	printPINInstructions(&buf, tokens[0], s9a)
+	if !strings.Contains(buf.String(), "read -rs TPM2_KIRA_PIN && export TPM2_KIRA_PIN") ||
+		strings.Contains(buf.String(), "mkinitcpio") {
+		t.Errorf("without mkinitcpio:\n%s", buf.String())
+	}
+
+	os.WriteFile(conf, nil, 0644)
+	buf.Reset()
+	printPINInstructions(&buf, tokens[0], s9a)
+	t.Logf("instructions:\n%s", buf.String())
+	for _, want := range []string{"export TPM2_KIRA_PIN='<your PIN>'", "chmod 600 " + conf, "SKIPPED"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("instructions lack %q", want)
 		}
 	}
 
 	buf.Reset()
-	reportTokens(&buf, tokens[1:], nil, false)
-	if !strings.Contains(buf.String(), "none is suitable") || !strings.Contains(buf.String(), "ykman piv keys generate") {
-		t.Errorf("unsuitable report:\n%s", buf.String())
+	printPINInstructions(&buf, tokens[0], s9d)
+	if strings.Contains(buf.String(), "export") {
+		t.Errorf("PIN instructions for a key without PIN:\n%s", buf.String())
 	}
 }
 

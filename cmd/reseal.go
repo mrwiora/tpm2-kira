@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"crypto"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -15,7 +17,13 @@ import (
 func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privKeyPath string, debug bool) error {
 	if nvramIndex != 0 {
 		// Single-slot mode – same behaviour as before
-		return Reseal(tpmPath, pcrsStr, nvramIndex, pubKeyPath, privKeyPath, debug)
+		err := Reseal(tpmPath, pcrsStr, nvramIndex, pubKeyPath, privKeyPath, debug)
+		var skip *ResealSkippedError
+		if errors.As(err, &skip) {
+			fmt.Println()
+			PrintResealSkipped(os.Stdout, []*ResealSkippedError{skip})
+		}
+		return err
 	}
 
 	// Multi-slot mode – discover populated slots, then reseal each one
@@ -33,11 +41,18 @@ func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privK
 	fmt.Printf("Found %d sealed slot(s) to reseal\n\n", len(slots))
 
 	var failed []uint32
+	var skipped []*ResealSkippedError
 	for i, slotIdx := range slots {
 		slotNum := SlotNumber(slotIdx)
 		fmt.Printf("── Slot #%d (0x%08X) ─────────────────────────\n", slotNum, slotIdx)
 
-		if err := Reseal(tpmPath, pcrsStr, slotIdx, pubKeyPath, privKeyPath, debug); err != nil {
+		err := Reseal(tpmPath, pcrsStr, slotIdx, pubKeyPath, privKeyPath, debug)
+		var skip *ResealSkippedError
+		switch {
+		case errors.As(err, &skip):
+			fmt.Printf("Slot #%d (0x%08X) skipped: %v\n", slotNum, slotIdx, skip.Cause)
+			skipped = append(skipped, skip)
+		case err != nil:
 			fmt.Printf("Error resealing slot #%d (0x%08X): %v\n", slotNum, slotIdx, err)
 			failed = append(failed, slotIdx)
 		}
@@ -47,10 +62,73 @@ func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privK
 		}
 	}
 
+	if len(skipped) > 0 {
+		fmt.Println()
+		PrintResealSkipped(os.Stdout, skipped)
+	}
 	if len(failed) > 0 {
 		return fmt.Errorf("%d of %d slot(s) failed to reseal", len(failed), len(slots))
 	}
+	if len(skipped) > 0 {
+		return fmt.Errorf("%w: %d of %d slot(s)", ErrResealSkipped, len(skipped), len(slots))
+	}
 	return nil
+}
+
+// ErrResealSkipped marks a reseal that did not happen because the signing
+// key was unavailable. Nothing was written: the old blob is intact and still
+// opens through PolicySigned once the key is back.
+var ErrResealSkipped = errors.New("reseal skipped")
+
+// ResealSkippedError reports one slot whose reseal was skipped.
+type ResealSkippedError struct {
+	NVIndex    uint32
+	KeyFile    string
+	Cause      *TokenUnavailableError
+	SealedPCRs []PCRSpec
+}
+
+func (e *ResealSkippedError) Error() string {
+	return fmt.Sprintf("reseal of slot 0x%08X skipped: %v", e.NVIndex, e.Cause)
+}
+
+func (e *ResealSkippedError) Unwrap() []error { return []error{ErrResealSkipped, e.Cause} }
+
+// asResealSkipped turns an error into a skip when, and only when, the
+// signing key was unavailable and the NVRAM index was not touched. A failure
+// after the index was replaced is never a skip, whatever caused it.
+func asResealSkipped(err error, nvIndex uint32, keyFile string, blob *SealedBlob) error {
+	var cause *TokenUnavailableError
+	if err == nil || errors.Is(err, ErrNVIndexReplaced) || !errors.As(err, &cause) {
+		return err
+	}
+	return &ResealSkippedError{NVIndex: nvIndex, KeyFile: keyFile, Cause: cause, SealedPCRs: blob.GetPCRSpecs()}
+}
+
+// PrintResealSkipped prints the SKIPPED block. Its first line is the marker
+// the initramfs hooks look for.
+func PrintResealSkipped(w io.Writer, skipped []*ResealSkippedError) {
+	first := skipped[0]
+	var slots []string
+	for _, s := range skipped {
+		slots = append(slots, fmt.Sprintf("#%d", SlotNumber(s.NVIndex)))
+	}
+	fmt.Fprintln(w, "tpm2-kira: SKIPPED: resealing did not happen — the signing key was not available.")
+	fmt.Fprintf(w, "  Key file:      %s (%s)\n", first.KeyFile, first.Cause.Token)
+	fmt.Fprintf(w, "  Reason:        %s\n", indentContinuation(first.Cause.Reason, "                 "))
+	fmt.Fprintf(w, "  Slots:         %s (nothing was written; the sealed secrets are intact)\n", strings.Join(slots, ", "))
+	fmt.Fprintf(w, "  Sealed PCRs:   %s\n", PCRSpecsToString(first.SealedPCRs))
+	fmt.Fprintln(w, "  Consequence:   the sealed policy still binds the PCR values of the last seal.")
+	fmt.Fprintln(w, "                 If they have changed — as they do after a kernel or initramfs")
+	fmt.Fprintln(w, "                 update — the next boot reports a PCR MISMATCH and shows no")
+	fmt.Fprintln(w, "                 TOTP code. That is expected here; it is not evidence of tampering.")
+	fmt.Fprintln(w, "  To fix:        plug in the YubiKey and run, with the PIN typed when asked")
+	fmt.Fprintf(w, "                 or set in %s:\n", PINEnvVar)
+	fmt.Fprintln(w, "                     sudo tpm2-kira reseal")
+}
+
+func indentContinuation(s, indent string) string {
+	return strings.ReplaceAll(s, "\n", "\n"+indent)
 }
 
 // Reseal unseals data from TPM NVRAM and reseals with current PCR values.
@@ -198,6 +276,19 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		fmt.Println("Blob signature verified successfully")
 	}
 
+	// ── Make sure the key can sign before anything is changed ──
+	// Every reseal signs (the NV write policy demands it even when the PCR
+	// branch opens), so a key that cannot sign means no reseal at all. For a
+	// key on a token this finds an absent token or a missing PIN now, while
+	// the old blob is untouched, and reports a skip rather than a failure.
+	if err := PrepareSigningKey(verifyKey); err != nil {
+		tpmDev.Close()
+		if skip := asResealSkipped(err, nvramIndex, effectivePrivKeyPath, sealedBlob); skip != err {
+			return skip
+		}
+		return fmt.Errorf("cannot reseal: %w", err)
+	}
+
 	// ── Unseal: let the TPM decide which branch to use ──
 	// Try the PCR branch first. If PCRs match, the TPM authorizes it directly.
 	// If PCRs changed, fall back to PolicySigned where the TPM verifies the signature.
@@ -214,7 +305,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 			result, err = UnsealWithSignedBranchFromBlob(tpmDev, nvramIndex, effectivePrivKeyPath, debug)
 			if err != nil {
 				tpmDev.Close()
-				return fmt.Errorf("failed to unseal with signing key: %w", err)
+				return asResealSkipped(fmt.Errorf("failed to unseal with signing key: %w", err), nvramIndex, effectivePrivKeyPath, sealedBlob)
 			}
 		} else if IsTPMPolicyFailure(err) {
 			// TPM policy failure - show PCR comparison and use PolicySigned recovery
@@ -229,7 +320,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 			result, err = UnsealWithSignedBranchFromBlob(tpmDev, nvramIndex, effectivePrivKeyPath, debug)
 			if err != nil {
 				tpmDev.Close()
-				return fmt.Errorf("failed to unseal with signing key: %w", err)
+				return asResealSkipped(fmt.Errorf("failed to unseal with signing key: %w", err), nvramIndex, effectivePrivKeyPath, sealedBlob)
 			}
 		} else {
 			tpmDev.Close()
@@ -353,7 +444,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 
 	// Reseal the data with the determined specs, preserving the original hash algorithm
 	if err := sealDataWithSpecs(tpmPath, specsToUse, nvramIndex, unsealedData, resealPubKey, resealPubKeyPathForBlob, resealPrivKeyPathForBlob, debug, hashAlgo, false); err != nil {
-		return fmt.Errorf("failed to reseal data: %w", err)
+		return asResealSkipped(fmt.Errorf("failed to reseal data: %w", err), nvramIndex, resealPrivKeyPathForBlob, sealedBlob)
 	}
 
 	fmt.Printf("\nSuccessfully resealed data with PCRs: %s\n", PCRSpecsToString(specsToUse))

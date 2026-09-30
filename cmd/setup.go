@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -10,22 +11,38 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/matthias/tpm2-kira/internal/piv"
+	"golang.org/x/sys/unix"
 )
 
 // SetupOptions selects where setup puts the signing key.
 type SetupOptions struct {
-	// UseYubiKey takes the signing key from a YubiKey PIV slot instead of
-	// generating local key files.
+	// UseYubiKey takes the signing key from a YubiKey PIV slot without
+	// asking. Serial and Slot narrow the choice.
 	UseYubiKey bool
 	// Serial picks the YubiKey when several are plugged in; 0 means the
 	// only suitable one.
 	Serial uint32
 	// Slot picks the PIV slot; "" means 9a.
-	Slot  string
+	Slot string
+	// Local generates local key files without looking for a YubiKey.
+	Local bool
 	Debug bool
+}
+
+// mkinitcpioConfPath is where the PIN for unattended resealing goes on Arch.
+var mkinitcpioConfPath = "/etc/mkinitcpio.conf"
+
+// setupTerminal returns the terminal to ask on, or nil when stdin is not one.
+// Tests replace it.
+var setupTerminal = func() *bufio.Reader {
+	if _, err := unix.IoctlGetTermios(int(os.Stdin.Fd()), unix.TCGETS); err != nil {
+		return nil
+	}
+	return bufio.NewReader(os.Stdin)
 }
 
 // Setup performs initial tpm2-kira configuration: it creates the signing key
@@ -35,11 +52,13 @@ type SetupOptions struct {
 //  1. Checks whether the keys directory already exists.
 //     If it does, the system is considered already configured — an
 //     informational message is printed and setup returns successfully (exit 0).
-//  2. Looks for a YubiKey and reports what it found. The probe is read-only
-//     and never sends a PIN; without UseYubiKey it only informs.
+//  2. Looks for a YubiKey. The probe is read-only and never sends a PIN.
+//     When a usable key is found, the user chooses on the terminal between
+//     it and local key files, even when there is only one candidate.
 //  3. Creates the directory and either generates a P-256 ECDSA key pair as
-//     seal.pub / seal.key, or, with UseYubiKey, writes the token's public key
-//     to seal.pub and a key file naming the token and slot to seal.key.
+//     seal.pub / seal.key, or writes the token's public key to seal.pub and a
+//     key file naming the token and slot to seal.key. No private key is
+//     written in that case.
 func Setup(opts SetupOptions) error {
 	pubKeyPath := DefaultPublicKeyPath
 	privKeyPath := DefaultPrivateKeyPath
@@ -52,23 +71,31 @@ func Setup(opts SetupOptions) error {
 		return nil
 	}
 
-	// ── Step 2: Look for a YubiKey ──
-	fmt.Print("Looking for a YubiKey... ")
-	tokens, probeErr := ProbeYubiKeys(TokenProbeTimeout)
-
+	// ── Step 2: Decide where the key lives ──
 	var chosen *TokenInfo
 	var chosenSlot TokenSlot
-	if opts.UseYubiKey {
-		fmt.Println()
-		t, slot, err := chooseToken(os.Stdout, tokens, probeErr, opts)
+	if opts.Local {
+		fmt.Println("Using local key files (--local); not looking for a YubiKey.")
+	} else {
+		fmt.Print("Looking for a YubiKey... ")
+		tokens, probeErr := ProbeYubiKeys(TokenProbeTimeout)
+		var err error
+		if opts.UseYubiKey {
+			fmt.Println()
+			chosen, chosenSlot, err = chooseToken(os.Stdout, tokens, probeErr, opts)
+		} else {
+			chosen, chosenSlot, err = askKeyLocation(os.Stdout, setupTerminal(), tokens, probeErr, opts.Debug)
+		}
 		if err != nil {
 			return err
 		}
-		chosen, chosenSlot = t, slot
-		fmt.Printf("  Using YubiKey %d, slot %s (%s, PIN %s, touch %s)\n",
-			chosen.Serial, chosenSlot.Slot, chosenSlot.Algorithm, chosenSlot.pinPolicyString(), chosenSlot.touchPolicyString())
-	} else {
-		reportTokens(os.Stdout, tokens, probeErr, opts.Debug)
+		if chosen != nil {
+			fmt.Printf("Using YubiKey %d, slot %s (%s, PIN %s, touch %s).\n",
+				chosen.Serial, chosenSlot.Slot, chosenSlot.Algorithm, chosenSlot.pinPolicyString(), chosenSlot.touchPolicyString())
+			if w := pinPolicyWarning(chosenSlot); w != "" {
+				fmt.Println(w)
+			}
+		}
 	}
 
 	// ── Step 3: Create directory and the key files ──
@@ -88,7 +115,7 @@ func Setup(opts SetupOptions) error {
 		if pubPEM, err = PublicKeyToPEM(chosenSlot.PublicKey); err != nil {
 			return fmt.Errorf("failed to encode the YubiKey public key: %w", err)
 		}
-		location = fmt.Sprintf("YubiKey %d, slot %s", chosen.Serial, chosenSlot.Slot)
+		location = fmt.Sprintf("reference to YubiKey %d, slot %s; the key never leaves the token", chosen.Serial, chosenSlot.Slot)
 	} else {
 		var err error
 		if privPEM, pubPEM, err = generateLocalKeyPair(); err != nil {
@@ -100,7 +127,7 @@ func Setup(opts SetupOptions) error {
 		return fmt.Errorf("failed to write private key to %s: %w", privKeyPath, err)
 	}
 	if chosen != nil {
-		fmt.Printf("  Key file (refers to the YubiKey) written to: %s\n", privKeyPath)
+		fmt.Printf("  YubiKey reference written to: %s\n", privKeyPath)
 	} else {
 		fmt.Printf("  Private key written to: %s\n", privKeyPath)
 	}
@@ -119,12 +146,56 @@ func Setup(opts SetupOptions) error {
 	fmt.Println("   tpm2-kira seal --pcrs 0,7")
 	if chosen != nil {
 		fmt.Println()
-		fmt.Println("Sealing and resealing sign with the YubiKey, so keep it plugged in for")
-		fmt.Printf("those and have its PIN ready (prompted for, or set %s).\n", PINEnvVar)
-		fmt.Println("Booting and showing codes never need it: remove it afterwards.")
+		printPINInstructions(os.Stdout, *chosen, chosenSlot)
 	}
 
 	return nil
+}
+
+// printPINInstructions explains when the token and its PIN are needed and how
+// to hand the PIN to tpm2-kira, including for the unattended reseal.
+func printPINInstructions(w io.Writer, t TokenInfo, s TokenSlot) {
+	fmt.Fprintf(w, "The YubiKey (serial %d) signs whenever tpm2-kira seals or reseals; keep it\n", t.Serial)
+	fmt.Fprintln(w, "plugged in for those. Booting and showing codes never need it.")
+	if s.PoliciesKnown && s.effectivePINPolicy() == piv.PINPolicyNever {
+		fmt.Fprintln(w, "This key needs no PIN, so there is nothing to configure — see the warning above.")
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Setup did not use the PIN; sealing does. tpm2-kira asks for it on the terminal,")
+	fmt.Fprintf(w, "or takes it from %s. To set it for this root shell without it landing\n", PINEnvVar)
+	fmt.Fprintln(w, "in the shell history:")
+	fmt.Fprintf(w, "    read -rs %s && export %s\n", PINEnvVar, PINEnvVar)
+	fmt.Fprintln(w, "    tpm2-kira seal --pcrs 0,7")
+
+	if _, err := os.Stat(mkinitcpioConfPath); err != nil {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Automatic signing: after every kernel or initramfs update, the mkinitcpio post")
+	fmt.Fprintf(w, "hook reseals. To let it sign without asking, add this line to %s\n", mkinitcpioConfPath)
+	fmt.Fprintln(w, "('export' is required: mkinitcpio passes only exported variables to its hooks):")
+	fmt.Fprintf(w, "    export %s='<your PIN>'\n", PINEnvVar)
+	fmt.Fprintln(w, "The file is readable by every user by default and would then hold the PIN, so")
+	fmt.Fprintln(w, "make it readable by root only (it is not copied into the initramfs image):")
+	fmt.Fprintf(w, "    chmod 600 %s\n", mkinitcpioConfPath)
+	fmt.Fprintln(w, "Without the PIN there, that reseal reports SKIPPED, and the next boot shows a PCR")
+	fmt.Fprintln(w, "mismatch until you run 'tpm2-kira reseal' with the YubiKey plugged in.")
+}
+
+// pinPolicyWarning returns a warning when the key can sign without a PIN, or
+// when its PIN policy cannot be read; "" otherwise.
+func pinPolicyWarning(s TokenSlot) string {
+	if !s.PoliciesKnown {
+		return fmt.Sprintf("  NOTE: the PIN policy of slot %s cannot be read on firmware before 5.3.\n"+
+			"  Make sure the key requires a PIN; tpm2-kira cannot check it.", s.Slot)
+	}
+	if s.effectivePINPolicy() == piv.PINPolicyNever {
+		return fmt.Sprintf("  WARNING: the key in slot %s needs no PIN (PIN policy 'never'). Anyone holding\n"+
+			"  the YubiKey can then authorise a reseal, which is the way around a PCR mismatch.\n"+
+			"  Consider a key with PIN policy 'once' (see 'ykman piv keys generate --pin-policy').", s.Slot)
+	}
+	return ""
 }
 
 func generateLocalKeyPair() (privPEM, pubPEM []byte, err error) {
@@ -149,9 +220,9 @@ func generateLocalKeyPair() (privPEM, pubPEM []byte, err error) {
 	return privPEM, pubPEM, nil
 }
 
-// reportTokens tells the user what the probe found. It never fails: setup
-// goes on with local key files whatever happened here.
-func reportTokens(w io.Writer, tokens []TokenInfo, probeErr error, debug bool) {
+// reportTokens tells the user what the probe found and reports whether a
+// usable key is among it. Without one, setup goes on with local key files.
+func reportTokens(w io.Writer, tokens []TokenInfo, probeErr error, debug bool) bool {
 	if probeErr != nil {
 		fmt.Fprintln(w, "none found.")
 		fmt.Fprintln(w, "  No YubiKey could be found, so the signing key will be created as local files.")
@@ -160,7 +231,7 @@ func reportTokens(w io.Writer, tokens []TokenInfo, probeErr error, debug bool) {
 		} else {
 			fmt.Fprintln(w, "  (If one is plugged in, check that pcscd is running; --debug shows details.)")
 		}
-		return
+		return false
 	}
 
 	var suitable []TokenInfo
@@ -174,7 +245,7 @@ func reportTokens(w io.Writer, tokens []TokenInfo, probeErr error, debug bool) {
 	case len(tokens) == 0:
 		fmt.Fprintln(w, "none found.")
 		fmt.Fprintln(w, "  No YubiKey could be found, so the signing key will be created as local files.")
-		return
+		return false
 	case len(suitable) == 0:
 		fmt.Fprintln(w, "found, but none is suitable for tpm2-kira:")
 		PrintTokenReport(w, tokens)
@@ -183,7 +254,7 @@ func reportTokens(w io.Writer, tokens []TokenInfo, probeErr error, debug bool) {
 		fmt.Fprintln(w, "      ykman piv keys generate --algorithm ECCP256 --pin-policy ONCE --touch-policy NEVER 9a /tmp/seal.pub")
 		fmt.Fprintln(w, "      ykman piv certificates generate --subject \"CN=tpm2-kira\" 9a /tmp/seal.pub")
 		fmt.Fprintln(w, "  Continuing with local key files.")
-		return
+		return false
 	}
 
 	if len(suitable) == 1 {
@@ -192,15 +263,88 @@ func reportTokens(w io.Writer, tokens []TokenInfo, probeErr error, debug bool) {
 		fmt.Fprintf(w, "found %d suitable for tpm2-kira:\n", len(suitable))
 	}
 	PrintTokenReport(w, tokens)
-	fmt.Fprintln(w, "  Continuing with local key files. To keep the signing key on a YubiKey instead,")
-	fmt.Fprintln(w, "  remove them again before sealing anything and run setup with --yubikey:")
-	for _, t := range suitable {
-		slotArg := ""
-		if _, ok := recommendedSlot(t); !ok {
-			slotArg = " --slot <slot>"
-		}
-		fmt.Fprintf(w, "      sudo rm -r %s && sudo tpm2-kira setup --yubikey=%d%s\n", DefaultKeysDir, t.Serial, slotArg)
+	return true
+}
+
+// askKeyLocation reports what the probe found and, when there is a usable
+// key, lets the user choose between it and local key files — also when there
+// is only one candidate. tty is nil when there is no terminal: setup then
+// uses local key files and says how to choose without one. A nil token means
+// local key files.
+func askKeyLocation(w io.Writer, tty *bufio.Reader, tokens []TokenInfo, probeErr error, debug bool) (*TokenInfo, TokenSlot, error) {
+	if !reportTokens(w, tokens, probeErr, debug) {
+		return nil, TokenSlot{}, nil
 	}
+
+	type choice struct {
+		token TokenInfo
+		slot  TokenSlot
+	}
+	var choices []choice
+	for _, t := range tokens {
+		if !t.Suitable() {
+			continue
+		}
+		for _, s := range t.Slots {
+			if s.Unsuitable == "" {
+				choices = append(choices, choice{t, s})
+			}
+		}
+	}
+	local := len(choices) + 1
+	def := local
+	for i, c := range choices {
+		if c.slot.Slot == piv.SlotAuthentication {
+			def = i + 1
+			break
+		}
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Where should the signing key live?")
+	for i, c := range choices {
+		note := ""
+		if i+1 == def {
+			note = "  [recommended]"
+		}
+		if !c.slot.PoliciesKnown {
+			note += "  [PIN policy unknown]"
+		} else if c.slot.effectivePINPolicy() == piv.PINPolicyNever {
+			note += "  [no PIN required: insecure]"
+		}
+		fmt.Fprintf(w, "  %d) YubiKey %d, slot %s  (%s, PIN %s, touch %s)%s\n", i+1, c.token.Serial, c.slot.Slot,
+			c.slot.Algorithm, c.slot.pinPolicyString(), c.slot.touchPolicyString(), note)
+	}
+	fmt.Fprintf(w, "  %d) Local key files in %s (the private key is stored on disk)\n", local, DefaultKeysDir)
+
+	if tty == nil {
+		fmt.Fprintln(w, "No terminal to ask on, so local key files are used. To choose without a")
+		fmt.Fprintln(w, "terminal, run setup with --yubikey=SERIAL [--slot SLOT] or with --local.")
+		return nil, TokenSlot{}, nil
+	}
+
+	for attempt := 0; attempt < 3; attempt++ {
+		fmt.Fprintf(w, "Choice [%d]: ", def)
+		line, err := tty.ReadString('\n')
+		if err != nil && line == "" {
+			fmt.Fprintln(w)
+			return nil, TokenSlot{}, errors.New("no choice made; nothing was written")
+		}
+		answer := strings.TrimSpace(line)
+		n := def
+		if answer != "" {
+			if n, err = strconv.Atoi(answer); err != nil || n < 1 || n > local {
+				fmt.Fprintf(w, "Please enter a number from 1 to %d.\n", local)
+				continue
+			}
+		}
+		if n == local {
+			return nil, TokenSlot{}, nil
+		}
+		c := choices[n-1]
+		return &c.token, c.slot, nil
+	}
+	return nil, TokenSlot{}, errors.New("no valid choice made; nothing was written")
 }
 
 // chooseToken picks the token and slot for setup --yubikey. Any ambiguity is

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -145,14 +146,18 @@ func runSetup(args []string) {
 	var yk yubiKeyFlag
 	fs.Var(&yk, "yubikey", "Take the signing key from a YubiKey PIV slot (optionally =SERIAL)")
 	slot := fs.String("slot", "", "PIV slot of the key with --yubikey (default: 9a)")
+	local := fs.Bool("local", false, "Create local key files without looking for a YubiKey or asking")
 	debug := fs.Bool("debug", false, "Enable debug output")
 	fs.Parse(args)
 
 	if *slot != "" && !yk.set {
 		fail(fmt.Errorf("--slot needs --yubikey"))
 	}
+	if *local && yk.set {
+		fail(fmt.Errorf("--local and --yubikey exclude each other"))
+	}
 
-	opts := cmd.SetupOptions{UseYubiKey: yk.set, Serial: yk.serial, Slot: *slot, Debug: *debug}
+	opts := cmd.SetupOptions{UseYubiKey: yk.set, Serial: yk.serial, Slot: *slot, Local: *local, Debug: *debug}
 	if err := cmd.Setup(opts); err != nil {
 		fail(err)
 	}
@@ -220,6 +225,7 @@ func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 	pubKeyPath := fs.String("pubkey", "", "Path to signing public key PEM (default: derived from --privkey, or preserved from blob)")
 	privKeyPath := fs.String("privkey", "", "Path to signing private key: PEM, or the YubiKey key file from setup --yubikey")
 	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
+	requireKey := fs.Bool("require-key", false, "Fail instead of reporting SKIPPED when the signing key (YubiKey) is unavailable")
 
 	fs.Parse(args)
 
@@ -239,6 +245,12 @@ func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
 	if err := cmd.ResealCommand(*tpm, scanIndex, *pcrs, *pubKeyPath, *privKeyPath, *debug); err != nil {
+		// A skip has already been reported with its SKIPPED block; it is
+		// the expected outcome with the token unplugged, not a failure,
+		// unless the caller asked for the key to be required.
+		if errors.Is(err, cmd.ErrResealSkipped) && !*requireKey {
+			return
+		}
 		fail(err)
 	}
 }
@@ -403,6 +415,9 @@ RESEAL OPTIONS:
   --privkey PATH     Path to signing private key PEM (required when PCRs changed)
                      The TPM verifies the signature via PolicySigned.
                      Also used to derive the public key when --pubkey is omitted.
+  --require-key      With the key on a YubiKey: fail when the token or its PIN
+                     is unavailable. By default reseal then prints SKIPPED,
+                     leaves every slot untouched, and exits normally.
 
 INFO OPTIONS:
   --json             Output as JSON
@@ -425,18 +440,20 @@ AUTHENTICATION:
   the signing private key.
 
 SETUP OPTIONS:
-  --yubikey[=SERIAL] Take the signing key from a YubiKey PIV slot instead of
-                     generating local key files. SERIAL picks the token when
-                     several are plugged in. The slot must already hold a key:
-                     tpm2-kira never writes to the token.
+  --yubikey[=SERIAL] Take the signing key from a YubiKey PIV slot without
+                     asking. SERIAL picks the token when several are plugged
+                     in. The slot must already hold a key: tpm2-kira never
+                     writes to the token.
   --slot SLOT        PIV slot with --yubikey (default: 9a). Other slots, such
                      as an sbctl key in 9c, are only used when named here.
+  --local            Create local key files without looking for a YubiKey.
   --debug            Enable debug output
 
   Setup creates /var/lib/tpm2-kira/keys/ with seal.pub and seal.key. It first
-  looks for a YubiKey and says what it found; without --yubikey it then
-  generates a local ECDSA P-256 key pair. With --yubikey, seal.key is a small
-  file naming the token and slot, and seal.pub is the token's public key.
+  looks for a YubiKey. If one holds a usable key, it asks on the terminal
+  whether to use it or local key files; without a terminal it uses local key
+  files. With a YubiKey, seal.key only names the token and slot and seal.pub is
+  the token's public key: no private key is written. Setup needs no PIN.
   If the keys directory already exists, setup aborts — further changes must
   be made manually via 'seal' or 'reseal'.
 
