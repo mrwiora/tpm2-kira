@@ -45,7 +45,7 @@ several files shares a prefix (`signer*.go`).
 │   │   ├── signer.go        # key references and the SigningKey abstraction
 │   │   ├── signer_pin.go    #   PIN resolution for a token-held key
 │   │   ├── signer_yubikey.go#   the PIV slot backend and token discovery
-│   │   ├── blob.go          # sealed blob serialisation (format version 9)
+│   │   ├── blob.go          # sealed blob serialisation (format version 10)
 │   │   ├── policy_or.go     # PolicyOR / PolicySigned digests and unsealing
 │   │   ├── pcr.go           # PCR vocabulary: specs, sources, hash algorithm
 │   │   ├── pcrwarn.go       #   warnings for selections that attest little

@@ -180,11 +180,98 @@ Choice [Enter]:
 
 Choosing the slot validates it, checks your TPM can load the key for
 PolicySigned, and caches the public key so later commands work with the token
-unplugged — no separate `adopt` step. Only the public key is written to disk.
+unplugged — no separate `adopt` step.
 
-setup stops there and prints the `seal` command to run next, with the key
-reference already filled in. It needs no PIN, because reading a public key from
-a slot does not require one; sealing does.
+No private key is written. Two files are:
+
+| File | Contents |
+| --- | --- |
+| `keys/seal.pub` | the public key, cached so `reveal`, `info` and the blob signature check work with the token unplugged |
+| `keys/seal.key` | a *reference* naming the token slot — not key material |
+
+`seal.key` is the path every command defaults to and the reseal hook passes, so
+it has to resolve for both variants. For a token-held key it therefore holds a
+pointer rather than a key:
+
+```
+# tpm2-kira signing key reference — this file is NOT a private key.
+#
+# The signing key lives on a hardware token:
+#
+#     yubikey:serial=12345678;slot=9a
+...
+-----BEGIN TPM2-KIRA KEY REFERENCE-----
+eXViaWtleTpzZXJpYWw9MTIzNDU2Nzg7c2xvdD05YQ==
+-----END TPM2-KIRA KEY REFERENCE-----
+```
+
+sbctl does the same thing for a Secure Boot key held in a TPM: `db.key` keeps
+its name and carries a `TSS2 PRIVATE KEY` block instead of a `PRIVATE KEY` one.
+The gain is that one well-known path works for both variants, so no script,
+hook or flag has to know which you chose.
+
+Consequences worth knowing:
+
+- It is mode 0644, not 0400. A slot number is not a secret, and the permission
+  warning stays quiet about it.
+- It is not worth backing up, and losing it loses nothing: pass the reference to
+  `--privkey`, or run `tpm2-kira yubikey adopt` to write it again.
+- Nothing overwrites a real key to put one there. If `seal.key` already holds
+  key material, `setup` and `yubikey adopt` leave it alone and say so — that
+  file may be the only copy of a key that cannot be regenerated.
+
+setup stops there and prints the `seal` command to run next. Because the
+reference is on disk, that command needs no key flags at all — only the PIN,
+since sealing signs. Reading a public key from a slot needs no PIN, which is why
+setup itself never asks for one.
+
+### Where the signing key is looked for, in order
+
+`reseal` and `nvram restore` resolve the key from the first of these that
+answers:
+
+1. **`--privkey` on the command line.** A flag someone typed is an instruction.
+2. **`/var/lib/tpm2-kira/keys/seal.key`** — which holds one of three things:
+   the key itself, a reference naming a token slot, or a reference naming another
+   file.
+
+Then, whichever key that yields, its public half is fingerprinted and compared
+with the one the blob records. A mismatch stops the operation before anything is
+written.
+
+The sealed blob is **not** in that list, by design. Up to v9 it recorded where
+the key had been, and that copy was consulted before the file on disk, so it
+outranked the authoritative answer: moving a key to another token left `reseal`
+hunting for the retired serial with no local way to correct it. Where a key lives
+is local, mutable state, and a blob is a portable artifact that `nvram restore`
+carries onto other machines — so v10 removed it. The blob still recognises its
+own key by fingerprint; it just no longer claims to know where it is.
+
+### Pointing at a key kept somewhere else
+
+The third form exists for a key shared with something else — most often an sbctl
+Secure Boot key, which lives at `/var/lib/sbctl/keys/db/db.key` and is managed by
+sbctl. The initramfs hook runs `tpm2-kira reseal` with no `--privkey`, so without
+a pointer it would not find such a key at all:
+
+```
+# /var/lib/tpm2-kira/keys/seal.key
+-----BEGIN TPM2-KIRA KEY REFERENCE-----
+L3Zhci9saWIvc2JjdGwva2V5cy9kYi9kYi5rZXk=
+-----END TPM2-KIRA KEY REFERENCE-----
+```
+
+The payload is the target path. `setup` and `yubikey adopt` only ever write the
+key itself or a token reference, so this form is written by hand.
+
+Exactly **one** level is followed. A reference naming a token is the end of the
+chain; a reference naming a file loads that file as key material and does not
+resolve it again, so a chain of reference files cannot form a loop. A reference
+naming itself is refused with a message saying so.
+
+A symlink at `seal.key` works too and needs no reference file. The reference is
+preferred because it is explicit: `cat` shows what it points at and why, whereas
+a symlink to a Secure Boot key looks like an accident.
 
 If a token is connected but none of its slots holds a key, setup prints the
 `ykman` commands above and lets you stop there to run them; nothing is created,

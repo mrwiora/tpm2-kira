@@ -8,7 +8,8 @@ Decisions already taken (§15 records the rest):
 - **One binary.** No build-tag split, no second artifact. The PC/SC client is
   written in pure Go so `CGO_ENABLED=0` keeps working and the initramfs stays
   library-free.
-- **Blob format bumps to v9.** Done. Typed key references, plus the key
+- **Blob format bumps to v9, then v10.** Typed key references were added in v9
+  and taken back out in v10 (§16); what remains is the key
   fingerprint and token serial, so everything needed to find and identify the
   signing key lives in the blob.
 - **No separate configuration file.** There is no `reseal.conf`. The key
@@ -704,7 +705,7 @@ Ranked by how much I think they matter.
 | # | Decision | Status |
 |---|---|---|
 | 1 | Split binary vs. pure-Go PC/SC | **decided: pure Go, one binary** |
-| 2 | Blob key reference | **done: v9, typed field, plus fingerprint and serial** |
+| 2 | Blob key reference | **resolved: added in v9, removed again in v10 — the blob records only a fingerprint. See §16.** |
 | 3 | Environment variable name | **decided: `TPM2_KIRA_PIN`** |
 | 4 | Token must be pre-populated | **decided: yes — tpm2-kira never writes to the token** |
 | 4a | Touch policy | detected, not dictated; `NEVER` recommended for a dedicated slot |
@@ -736,3 +737,74 @@ Ranked by how much I think they matter.
 Steps 1–4 are useful on their own and can merge before any card code exists.
 Step 5 is the one with schedule risk; it is deliberately isolated behind the
 `SigningKey` interface so nothing else waits on it.
+
+---
+
+## 16. Done: blob v10, identical whatever holds the key
+
+**Implemented.** `CurrentBlobVersion` is 10; `PublicKeyRef`, `PrivateKeyRef` and
+`TokenSerial` are gone and `KeyFingerprint` remains. A v9 blob is rejected with
+the usual "re-seal with: tpm2-kira seal", as every earlier bump has been — the
+format has only ever supported one version at a time.
+
+Two things came out of the implementation that this section did not anticipate:
+
+- **The reference file had to learn file paths.** With no location in the blob, a
+  key kept outside the well-known path — an sbctl Secure Boot key, the case that
+  motivated sharing in the first place — could not be found by the initramfs
+  hook, which passes no `--privkey`. So a reference may now name another file as
+  well as a token slot, one level only. Without this, v10 would have been a
+  regression for exactly the setup §4 recommends.
+- **`TestResealWithStoredKeyPaths` was a test of the removed feature**, and
+  `TestYubiKeySealRevealReseal` relied on it implicitly. Both now name the key
+  explicitly, and `TestYubiKeyResealFollowsTheKeyToANewToken` covers the bug this
+  bump fixed: adopt a different token holding the same key, and reseal follows it.
+
+The original argument follows.
+
+Since `setup` and `yubikey adopt` write a reference file at the well-known
+private key path, the blob's own copy of "where the key lives" has become a
+second, weaker answer to a question already answered locally. The two can
+disagree, and the blob is consulted first, so the weaker copy wins. See
+[SIGNING-KEYS.md](SIGNING-KEYS.md) for the resulting wart, which is reproducible:
+adopt a different token and `reseal` still hunts for the old serial.
+
+The deeper objection is about what a blob is for. It is a portable artifact —
+signed, backed up, restored onto rebuilt machines by `nvram restore`. Where a key
+happens to live is local, mutable state. Putting the latter inside the former
+means a restore drags a stale filesystem path or a retired token serial onto a
+machine where neither is true.
+
+### What would change
+
+| Field | Verdict | Why |
+| --- | --- | --- |
+| `KeyFingerprint` | **keep** | It is the identity gate (§footnote ⁵ in SECURITY-BACKGROUND.md). It must be bound to the sealed object and covered by the blob signature, and it is not duplicated anywhere: `seal.pub` is mutable local state, this is signed. |
+| `TokenSerial` | **remove** | Redundant twice over: `private_key_ref` already contains `serial=`, and nothing ever compares it — it is only interpolated into an error string. |
+| `PrivateKeyRef` | **remove** | Now answered by `seal.key`, for both variants, at a fixed path. |
+| `PublicKeyRef` | **remove** | Always `seal.pub` in practice; the default path finds it. |
+
+The blob then has the same shape whichever way the key is stored, differing only
+in the fingerprint — which differs per *key*, not per storage location. Key
+resolution collapses to: `--privkey`, else the well-known path. One source of
+truth, and it is the local one, which is the copy that can be corrected.
+
+### What it costs
+
+- **Blob v10.** Acceptable in development.
+- **A breadcrumb on a bare machine.** Restoring a blob with no `keys/` directory
+  would no longer say "this was sealed against YubiKey 12345678". The
+  replacement is better: `info` prints the sealed fingerprint, `yubikey list`
+  prints the fingerprint of every connected token, and matching those two works
+  even after the key moves to another token or slot — which the serial does not.
+- **`reseal` with no local key files** would need `--privkey`. But a machine with
+  no `keys/` directory has no `seal.pub` either, so it is already supplying
+  flags.
+
+### What it does not change
+
+The `SignedBranchDigest` is derived from the public key alone, so it is already
+byte-identical for a file-held and a token-held key — verified by sealing one
+key both ways and diffing. The TPM cannot tell where the private half lives, and
+nothing here changes what it enforces. This is purely about metadata hygiene.
+

@@ -1017,11 +1017,6 @@ func PublicKeyDescription(pubKey crypto.PublicKey) string {
 	}
 }
 
-// extractPublicKeyFromSigner extracts the crypto.PublicKey from a crypto.Signer (private key).
-func extractPublicKeyFromSigner(privKey crypto.Signer) crypto.PublicKey {
-	return privKey.Public()
-}
-
 // PublicKeyToPEM encodes a crypto.PublicKey as PEM bytes (PKIX DER wrapped in PEM).
 // This is used when we only have a private key and need to store the public key in the blob.
 func PublicKeyToPEM(pubKey crypto.PublicKey) ([]byte, error) {
@@ -1036,24 +1031,6 @@ func PublicKeyToPEM(pubKey crypto.PublicKey) ([]byte, error) {
 	}
 
 	return pem.EncodeToMemory(pemBlock), nil
-}
-
-// DerivePublicKeyPEM extracts the public key from a private key file and returns it as PEM bytes.
-// This is a convenience function for when only the private key path is known.
-func DerivePublicKeyPEM(privateKeyPath string) ([]byte, crypto.PublicKey, error) {
-	privKey, err := LoadSigningPrivateKeyFromPEM(privateKeyPath)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	pubKey := extractPublicKeyFromSigner(privKey)
-
-	pemBytes, err := PublicKeyToPEM(pubKey)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return pemBytes, pubKey, nil
 }
 
 // CreateSealedObjectPolicyOR creates a sealed object using PolicyOR (no password auth).

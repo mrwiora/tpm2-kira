@@ -9,6 +9,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -227,10 +228,12 @@ func runTPMKiraWithInput(t *testing.T, tpmPath string, stdinInput string, args .
 		// First arg is the command
 		allArgs = append(allArgs, args[0])
 
-		// Special handling for nvram command which has subcommands
-		if args[0] == "nvram" && len(args) > 1 {
-			// For nvram: nvram <subcommand> --tpm <path> <other flags>
-			// Add subcommand first (list, status, delete)
+		// Commands that take a subcommand need it before any flag: they parse
+		// args[0] as the subcommand, so injecting --tpm first would make the
+		// flag itself look like the subcommand and the command would be
+		// rejected for positional arguments.
+		if (args[0] == "nvram" || args[0] == "yubikey") && len(args) > 1 {
+			// <command> <subcommand> --tpm <path> <other flags>
 			allArgs = append(allArgs, args[1])
 
 			// Add TPM path flag after subcommand
@@ -1338,14 +1341,19 @@ func TestExitCodes(t *testing.T) {
 	t.Log("✓ All exit code tests passed")
 }
 
-// TestResealWithStoredKeyPaths tests that reseal works using key paths stored in the blob
-func TestResealWithStoredKeyPaths(t *testing.T) {
+// TestResealFindsTheKeyWithoutTheBlobNamingIt replaces a test that checked
+// reseal could recover key paths from the blob. v10 removed them: where a key
+// lives is local state, and the copy in the blob outranked the local one, so
+// correcting it locally could not fix a reseal.
+//
+// The contract now is: a key at the well-known path is found with no flags, and
+// a key anywhere else is named with --privkey or pointed at from that path.
+func TestResealFindsTheKeyWithoutTheBlobNamingIt(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
 
 	nvramIndex := "0x01803004"
 
-	// Seal with both key paths (they get stored in the blob)
 	stdout, stderr, err := runTPMKira(t, tpmPath,
 		"seal",
 		"--nvram", nvramIndex,
@@ -1356,25 +1364,38 @@ func TestResealWithStoredKeyPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Seal failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
 	}
-	t.Log("✓ Seal with key paths successful")
 
-	// Reseal without specifying key paths — they should be retrieved from the blob
+	// The blob must carry no trace of where that key was.
+	info, _, _ := runTPMKira(t, tpmPath, "info", "--nvram", nvramIndex, "--json")
+	if strings.Contains(info, testPrivKeyPath) {
+		t.Errorf("the blob recorded the private key path; v10 removed it:\n%s", info)
+	}
+	if !strings.Contains(info, "key_fingerprint") {
+		t.Errorf("the blob should still record the key fingerprint:\n%s", info)
+	}
+
+	// The key is not at the well-known path, so reseal has to be told where it
+	// is. This is the documented cost of not storing a location.
+	stdout, stderr, _ = runTPMKira(t, tpmPath, "reseal", "--nvram", nvramIndex)
+	if strings.Contains(stdout, "Successfully resealed") {
+		t.Error("reseal found a key it was never told about")
+	}
+
+	// Named explicitly, it works.
 	stdout, stderr, err = runTPMKira(t, tpmPath,
 		"reseal",
 		"--nvram", nvramIndex,
+		"--privkey", testPrivKeyPath,
+		"--pubkey", testPubKeyPath,
 	)
 	if err != nil {
-		t.Fatalf("Reseal without explicit key paths failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
+		t.Fatalf("Reseal with explicit paths failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
 	}
 	if !strings.Contains(stdout, "Successfully resealed") {
-		t.Errorf("Expected success message, got: %s", stdout)
+		t.Errorf("Expected success message, got: %s\n%s", stdout, stderr)
 	}
-	t.Log("✓ Reseal using stored key paths successful")
 
-	// Verify reveal still works
 	testReveal(t, tpmPath, nvramIndex)
-
-	// Clean up
 	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", nvramIndex)
 }
 
@@ -1688,4 +1709,79 @@ func slotExists(t *testing.T, tpmPath, index string) bool {
 		t.Fatalf("cannot tell whether %s exists from:\n%s", index, combined)
 		return false
 	}
+}
+
+// TestResealFollowsAFileReference covers a key kept outside the well-known path
+// — an sbctl Secure Boot key is the motivating case — reached through a
+// reference file rather than a location in the blob.
+//
+// This is what keeps v10 from being a regression: the initramfs hook runs
+// 'tpm2-kira reseal' with no --privkey, so up to v9 such a key was found only
+// because the blob recorded its path.
+func TestResealFollowsAFileReference(t *testing.T) {
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+
+	// The well-known path is the whole point of this test, so it has to use the
+	// real one rather than a temporary directory.
+	if _, err := os.Stat("/var/lib/tpm2-kira/keys"); err == nil {
+		t.Skip("/var/lib/tpm2-kira/keys already exists; this test owns that path")
+	}
+	if err := os.MkdirAll("/var/lib/tpm2-kira/keys", 0o700); err != nil {
+		// The suite also runs unprivileged, where /var/lib is not writable.
+		// Everything else in that pass still applies; this case needs root.
+		t.Skipf("cannot create /var/lib/tpm2-kira/keys (%v); this test needs write access there", err)
+	}
+	t.Cleanup(func() { os.RemoveAll("/var/lib/tpm2-kira") })
+
+	// The key lives somewhere else entirely, as a shared one would.
+	shared := t.TempDir()
+	sharedKey := filepath.Join(shared, "db.key")
+	sharedPub := filepath.Join(shared, "db.pem")
+	if err := generateTestKeys(sharedPub, sharedKey); err != nil {
+		t.Fatal(err)
+	}
+
+	nvramIndex := "0x0180301c"
+
+	stdout, stderr, err := runTPMKira(t, tpmPath, "seal",
+		"--nvram", nvramIndex, "--pcrs", testPCRs,
+		"--privkey", sharedKey, "--pubkey", sharedPub)
+	if err != nil {
+		t.Fatalf("Seal failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
+	}
+
+	// With nothing at the well-known path, a flagless reseal cannot work.
+	stdout, _, _ = runTPMKira(t, tpmPath, "reseal", "--nvram", nvramIndex)
+	if strings.Contains(stdout, "Successfully resealed") {
+		t.Error("reseal found a key it was never told about")
+	}
+
+	// Point at it from the well-known path, the way the docs describe. The
+	// public half has to be reachable too, since reseal needs it to rebuild the
+	// policy and does not read it from the blob.
+	ref := "-----BEGIN TPM2-KIRA KEY REFERENCE-----\n" +
+		base64.StdEncoding.EncodeToString([]byte(sharedKey)) +
+		"\n-----END TPM2-KIRA KEY REFERENCE-----\n"
+	if err := os.WriteFile("/var/lib/tpm2-kira/keys/seal.key", []byte(ref), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pubPEM, err := os.ReadFile(sharedPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("/var/lib/tpm2-kira/keys/seal.pub", pubPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, err = runTPMKira(t, tpmPath, "reseal", "--nvram", nvramIndex)
+	if err != nil {
+		t.Fatalf("Reseal through the reference failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Successfully resealed") {
+		t.Errorf("reseal did not follow the reference to %s:\nstdout: %s\nstderr: %s", sharedKey, stdout, stderr)
+	}
+
+	testReveal(t, tpmPath, nvramIndex)
+	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", nvramIndex)
 }

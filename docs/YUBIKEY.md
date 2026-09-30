@@ -270,11 +270,19 @@ sudo -E tpm2-kira reseal \
 Reseal unseals with the old policy and re-binds the new blob to the new key, so
 the TOTP secret is preserved and your authenticator app keeps working.
 
-Once that succeeds, and only then, remove the old private key:
+Once that succeeds, and only then, remove the old private key and record the
+token in its place:
 
 ```bash
 sudo shred -u /var/lib/tpm2-kira/keys/seal.key
+sudo tpm2-kira yubikey adopt --key 'yubikey:serial=12345678;slot=9a'
 ```
+
+`adopt` writes a reference file at `keys/seal.key` naming the slot, which is
+what lets later commands find the key with no flags. It will not do so while a
+real key is still there — that file may be the only copy — so the `shred` has to
+come first, and only after the reseal above has succeeded. See
+[SIGNING-KEYS.md](SIGNING-KEYS.md) for what the reference file contains.
 
 If you would rather keep a copy of the key, import it instead of generating a
 fresh one — see Option C below.

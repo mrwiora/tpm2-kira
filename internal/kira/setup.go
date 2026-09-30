@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -114,7 +115,7 @@ func Setup(tpmPath string, choice SetupKeyChoice, debug bool) error {
 	fmt.Println("=== Signing keys ready ===")
 	fmt.Printf("  Private key: %s\n", privKeyPath)
 	fmt.Printf("  Public key:  %s\n", pubKeyPath)
-	printSealNext(KeyRef{})
+	printSealNext(KeyRef{}, false)
 
 	return nil
 }
@@ -124,14 +125,26 @@ func Setup(tpmPath string, choice SetupKeyChoice, debug bool) error {
 // setup deliberately stops short of it, so it has to hand over clearly — with
 // the key reference filled in, since a token needs one and there is no sealed
 // blob yet to remember it from.
-func printSealNext(ref KeyRef) {
+func printSealNext(ref KeyRef, referenceInstalled bool) {
 	fmt.Println()
 	fmt.Println("Nothing is sealed yet. Seal a TOTP secret next:")
 	fmt.Println()
 
-	if ref.IsZero() {
+	switch {
+	case ref.IsZero():
 		fmt.Println("    sudo tpm2-kira seal --pcrs \"0,7\"")
-	} else {
+
+	case referenceInstalled:
+		// The reference file at the default private key path names the token,
+		// so seal needs no key flags at all — only the PIN, which the token
+		// itself demands.
+		fmt.Printf("    export %s=<your PIN>\n", PINEnvVar)
+		fmt.Println("    sudo -E tpm2-kira seal --pcrs \"0,7\"")
+		fmt.Println()
+		fmt.Printf("  No key flags are needed: %s names the token.\n", DefaultPrivateKeyPath)
+		fmt.Printf("  Set the PIN in %s to have the reseal hook work unattended.\n", PINFileSetting)
+
+	default:
 		fmt.Printf("    export %s=<your PIN>\n", PINEnvVar)
 		fmt.Println("    sudo -E tpm2-kira seal --pcrs \"0,7\" \\")
 		fmt.Printf("        --privkey '%s' \\\n", ref)
@@ -349,12 +362,34 @@ func setupWithToken(tpmPath string, ref KeyRef, debug bool) error {
 		return fmt.Errorf("failed to cache the public key at %s: %w", DefaultPublicKeyPath, err)
 	}
 
+	// Without this the operator's choice would live nowhere: the next 'seal'
+	// falls back to the default private key path, and before the reference file
+	// existed it failed there on a key that was never going to be written.
+	refFileWritten := true
+	if err := InstallKeyReference(DefaultPrivateKeyPath, ref); err != nil {
+		if !errors.Is(err, ErrRealKeyPresent) {
+			return err
+		}
+
+		// A real key is already there. Overwriting it could destroy the only
+		// copy, so it stays and the operator is told what to do about it.
+		refFileWritten = false
+		fmt.Println()
+		fmt.Printf("WARNING: %s already holds a private key, so it was left alone.\n", DefaultPrivateKeyPath)
+		fmt.Println("         That key, not the token, is what an unqualified 'seal' will use.")
+		fmt.Println("         Move it aside once you are sure it is backed up, then run:")
+		fmt.Printf("             sudo tpm2-kira yubikey adopt --key '%s'\n", ref)
+	}
+
 	fmt.Println()
 	fmt.Println("=== Signing key ready ===")
 	fmt.Printf("  Signing key: %s\n", ref)
 	fmt.Printf("  Public key:  %s  (cached)\n", DefaultPublicKeyPath)
+	if refFileWritten {
+		fmt.Printf("  Reference:   %s  (names the token; not key material)\n", DefaultPrivateKeyPath)
+	}
 	fmt.Println("  No private key is written: it stays on the token.")
-	printSealNext(ref)
+	printSealNext(ref, refFileWritten)
 
 	fmt.Println()
 	fmt.Println("The token is needed to seal and to reseal after an update, never at boot.")

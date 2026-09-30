@@ -61,7 +61,7 @@ boot measurements.
 ### 3.1 TPM NVRAM (the "blob")
 
 The NVRAM index (default `0x01803010`) stores a serialised `SealedBlob`
-(format version 9). It contains:
+(format version 10). It contains:
 
 | Field                | Content                                                        | Sensitive? |
 |----------------------|----------------------------------------------------------------|------------|
@@ -72,10 +72,7 @@ The NVRAM index (default `0x01803010`) stores a serialised `SealedBlob`
 | `PCRDigests`         | Per-PCR index, source (register/eventlog/uki), and digest      | No         |
 | `SignedBranchDigest` | Pre-computed PolicySigned branch digest (SHA-256, 32 bytes)    | No³        |
 | `EventlogInfo`       | Metadata about eventlog calculation (path, timestamps, counts, measure-point verdict) | No |
-| `PublicKeyRef`       | Where the signing public key was at seal time: a path, or a token slot | No²        |
-| `PrivateKeyRef`      | Where the signing private key was at seal time: a path, or a token slot | No²        |
 | `KeyFingerprint`     | SHA-256 of the signing key's PKIX DER encoding                 | No⁵        |
-| `TokenSerial`        | Hardware token the key was read from, 0 for a file             | No⁵        |
 | `BlobSignature`      | Signature over everything above, verified before the blob is trusted | No⁴  |
 
 ¹ The `Private` field is an opaque blob encrypted by the TPM's internal
@@ -83,17 +80,30 @@ storage hierarchy key. It **cannot** be decrypted outside the specific TPM
 that created it. Possessing this blob alone is useless without the TPM and a
 valid policy session.
 
-² The key **references** are stored purely for operational convenience so that
-`reseal` can locate the keys automatically. They contain no secret material —
-either a filesystem path (e.g. `/var/lib/sbctl/keys/db/db.key`) or a token slot
-(`yubikey:serial=12345678;slot=9a`). They are optional, and CLI flags always
-override them. Storing the reference does **not** weaken security: the private
-key itself is never in the blob; the reference merely says where to look, and
-the TPM still performs the actual signature verification.
+² **Nothing here says where the signing key is.** Up to v9 the blob carried a
+`PublicKeyRef`, a `PrivateKeyRef` and a `TokenSerial` — a filesystem path or a
+token slot, recorded at seal time so that `reseal` needed no flags. They were
+never a secret and never weakened the policy, but they were the wrong place for
+the information, for two reasons.
 
-A reference carries both a kind byte and a canonical string, which encode the
-same fact twice and are cross-checked on read. A blob whose two disagree is
-rejected rather than resolved one way or the other.
+The blob is a **portable, signed artifact**: it is backed up, and `nvram restore`
+writes it onto rebuilt machines. Where a key happens to live is **local, mutable
+state**. A restore therefore carried a path or a token serial onto a machine
+where neither was true.
+
+Worse, that copy was consulted *before* the one on disk, so it outranked the
+authoritative answer. Moving a key to another token left `reseal` hunting for the
+retired serial — reporting `no YubiKey with serial <old> is present` while the
+right token was plugged in and the local reference named it correctly — with no
+local way to correct it.
+
+v10 removes all three. The signing key is found from `--privkey`, or from
+`/var/lib/tpm2-kira/keys/seal.key`, which holds the key, or a reference naming a
+token slot, or a reference naming another file — see
+[SIGNING-KEYS.md](SIGNING-KEYS.md). One answer, held locally, correctable by the
+operator. The consequence is that a blob is now byte-identical in shape whether
+the private key sits in a file or on a token; only the fingerprint varies, and it
+varies per key, not per storage location.
 
 **The PIN for a token-held key is deliberately not stored here.** NVRAM reads
 are open (§9), so anything in the blob is readable by any process that can talk
@@ -108,19 +118,40 @@ unnecessary key material in the blob. The public key itself is not stored —
 it is loaded from the filesystem (via the stored paths) or derived from the
 private key when needed.
 
-⁵ The fingerprint and serial identify the signing key without being usable as
-one. They let `reseal` report "the key in slot 9a is not the one this slot was
-sealed against" instead of failing as an opaque TPM policy error, and they let
-`info` describe the key with the token unplugged. Storing the public key itself
-was considered and rejected: a blob that carries its own verification key is a
-circular trust anchor, since a planted blob would carry a matching one. The
-check is advisory — the blob signature, verified against the key the caller
-actually holds, is what decides.
+⁵ The fingerprint and the serial are not the same kind of thing, and it matters
+which does what.
+
+**The fingerprint identifies the key.** `checkKeyIdentity` hashes the public half
+of whatever key was opened and compares it with `KeyFingerprint`; a mismatch
+*stops* `reseal` and `nvram restore` before anything is written. It is a gate,
+not only a nicety, and what it buys is a sentence — "the key in slot 9a is not
+the one this slot was sealed against" — where the TPM would otherwise produce an
+opaque policy failure. It also lets `info` describe the key with the token
+unplugged. Storing the public key itself was considered and rejected: a blob that
+carries its own verification key is a circular trust anchor, since a planted blob
+would carry a matching one. The blob signature, verified against the key the
+caller actually holds, remains the authoritative check; the fingerprint runs
+first because it can explain itself.
+
+**A serial is an address, never a gate** — which is why no serial is stored here
+any more. A reference's `serial=` is used to *choose* a device:
+`openTokenSession` walks the readers, asks each card for its serial, and skips
+the ones that do not match; a reference without `serial=` takes the first PIV
+card it finds. Nothing ever compares a serial to decide whether a key is the
+right one. A swapped token is caught by the fingerprint of the key inside it,
+which is the property worth pinning, because it survives the key being moved to
+another token or slot — and it is the same on every machine, unlike a path or a
+serial.
+
+The practical consequence: `yubikey list` shows each connected token's key
+fingerprint and `info` shows the sealed one, so matching those two is how you
+confirm you are holding the right token — not by reading serials.
 
 ⁴ The blob carries a detached signature over `[version ‖ payloadLen ‖ payload]`,
 made with the same signing key. Unsigned blobs are rejected outright. This
-protects the *metadata* — chiefly the PCR digests and key paths — which the TPM
-itself does not authenticate, since only the `Private` area is TPM-protected.
+protects the *metadata* — chiefly the PCR digests and the key fingerprint — which
+the TPM itself does not authenticate, since only the `Private` area is
+TPM-protected.
 
 The NVRAM index attributes are:
 
@@ -299,6 +330,12 @@ not reachable. An attacker in that window has only the PCR door. Note this is a
 filesystem-layout property that a different deployment could undo, not a
 guarantee the TPM makes.
 
+Holding the key on a hardware token strengthens exactly this property rather
+than changing the model: `seal.key` then holds a reference to a PIV slot instead
+of the key, so what sits on the filesystem is a slot number, and the key itself
+cannot be copied off the token at all. Unplugging it between reseals removes the
+key from the machine entirely. See [YUBIKEY.md](YUBIKEY.md).
+
 ---
 
 ## 5. Operation Flows
@@ -372,12 +409,12 @@ and signature between the TPM and the local signing operation.
 
 ```
 1.  Read blob from NVRAM, deserialise
-2.  Resolve key paths: CLI flags override blob-stored paths
+2.  Resolve the key: CLI flags, else the well-known path
 3.  Unseal via PCR branch (succeeds — PCRs match)
 4.  Re-seal with current PCR values
     Signing key for the new blob (in priority order):
     a. --pubkey flag (explicit override)
-    b. Blob's stored PublicKeyRef (loaded from filesystem)
+    b. /var/lib/tpm2-kira/keys/seal.pub, if it is there
     c. The public half of the resolved signing key
 ```
 
@@ -386,23 +423,30 @@ through PCR verification alone. This is the expected path after a
 `tpm2-kira reseal` following a planned change where the user has already
 rebooted into the new configuration.
 
-### 5.5 Key path resolution in reseal
+### 5.5 Key resolution in reseal
 
-Reseal resolves key paths with a two-tier fallback:
+Reseal resolves the key with a two-tier fallback, and neither tier is the blob:
 
 ```
-Effective privkey ref  = --privkey flag  →  blob.PrivateKeyRef  →  (empty)
-Effective pubkey path  = --pubkey flag   →  blob.PublicKeyRef    →  (empty)
+Effective privkey ref  = --privkey flag  →  /var/lib/tpm2-kira/keys/seal.key
+Effective pubkey path  = --pubkey flag   →  /var/lib/tpm2-kira/keys/seal.pub
 ```
 
-If a path is resolved (from either source), the key is loaded from the
-**filesystem** — never from the blob. The blob only stores the path as a
-hint. If the file has been moved or deleted, the user must provide the new
-path via CLI flags.
+The key is always loaded from the **filesystem** or read from a **token**, never
+from the blob — the blob holds no key material and, since v10, no location
+either (footnote ² above).
 
-This means that after an initial `seal --pubkey /path/pub --privkey /path/priv`,
-subsequent `reseal` commands need no flags at all — the paths are remembered
-in the blob and the keys are read fresh from the filesystem each time.
+So `reseal` needs no flags when the key is at the well-known path, which is what
+`setup` and `yubikey adopt` arrange: that path holds the key itself for a local
+key, or a reference naming the token slot, or a reference naming another file
+when the key is shared with something else such as sbctl. A key kept somewhere
+else with nothing pointing at it must be named with `--privkey` on every reseal,
+including the one the initramfs hook runs.
+
+Whichever key that yields, its public half is fingerprinted and compared against
+`KeyFingerprint` in the blob before anything is written. That check is what makes
+dropping the stored location safe: the blob still recognises its own key, it just
+no longer claims to know where it is.
 
 ### 5.6 The measure point
 
@@ -854,17 +898,8 @@ Offset  Field                   Type        Notes
                                             on top of the eventlog replay
           MeasurePointDet len   uint16      ≤ 512
           MeasurePointDetection string      how that was decided
-?       HasKeyRefs              uint8       0 or 1
-        If HasKeyRefs=1:
-          PubKeyRef kind        uint8       0=file path, 1=yubikey slot
-          PubKeyRef length      uint16      ≤ 4096
-          PubKeyRef             string      Path, or "yubikey:serial=N;slot=9a"
-          PrivKeyRef kind       uint8       0=file path, 1=yubikey slot
-          PrivKeyRef length     uint16      ≤ 4096
-          PrivKeyRef            string      Path, or "yubikey:serial=N;slot=9a"
 ?       HasKeyIdentity          uint8       0 or 1
         If HasKeyIdentity=1:
-          TokenSerial           uint32      0 when the key is a file
           KeyFingerprint len    uint8       ≤ 64
           KeyFingerprint        []byte      SHA-256 of the key's PKIX DER
 ─────────────────────── end of signed region ───────────────────────

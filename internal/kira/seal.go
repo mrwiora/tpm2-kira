@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"fmt"
-	"os"
 
 	"github.com/google/go-tpm/tpm2"
 )
@@ -36,6 +35,18 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 		return err
 	}
 
+	// The file at the private key path may record a token slot instead of
+	// holding a key, which is how a token-held key keeps that path working.
+	// Resolved here rather than only at signing time, so the banner below and
+	// the public key lookup both name the token the operator actually chose.
+	if privKeyRef.Kind == KeyRefFile {
+		if target, isRef, refErr := ReadKeyReference(privKeyRef.Path); refErr != nil {
+			return refErr
+		} else if isRef {
+			privKeyRef = target
+		}
+	}
+
 	pubKey, err := PublicKeyForRef(privKeyRef, pubKeyPath, debug)
 	if err != nil {
 		return fmt.Errorf("failed to load signing public key: %w", err)
@@ -64,7 +75,10 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	}
 
 	// Seal the generated TOTP secret
-	if err := sealDataWithSpecs(tpmPath, specs, nvramIndex, dataToSeal, pubKey, pubKeyPath, privKeyPath, debug, hashAlgo, verifyUKI, nil); err != nil {
+	// privKeyRef.String(), not privKeyPath: a reference file has already been
+	// followed above, so this hands down the token it named. For a plain key
+	// file the two are the same string.
+	if err := sealDataWithSpecs(tpmPath, specs, nvramIndex, dataToSeal, pubKey, pubKeyPath, privKeyRef.String(), debug, hashAlgo, verifyUKI, nil); err != nil {
 		return err
 	}
 
@@ -153,20 +167,6 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 		return err
 	}
 
-	// The public key reference is only useful when it names a file that can
-	// be read back, and pubKeyPath carries a default that may not exist — a
-	// key held on a token needs no public key file at all. Recording a path
-	// that is not there would send the next reseal to a missing file for
-	// something it can read from the token.
-	var pubKeyRef KeyRef
-	if pubKeyPath != "" {
-		if _, statErr := os.Stat(pubKeyPath); statErr == nil {
-			pubKeyRef = KeyRef{Kind: KeyRefFile, Path: pubKeyPath}
-		} else if debug {
-			fmt.Printf("Not recording a public key path: %s is not readable\n", pubKeyPath)
-		}
-	}
-
 	// Read all PCR values from their respective sources using the shared helper
 	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, MeasurePointModeSetting, debug)
 	if err != nil {
@@ -243,10 +243,7 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 			PCRDigests:         pcrDigests,
 			SignedBranchDigest: branches.SignedBranchDigest.Buffer,
 			EventlogInfo:       readResult.EventlogInfo,
-			PublicKeyRef:       pubKeyRef,
-			PrivateKeyRef:      privKey.Ref(),
 			KeyFingerprint:     keyFingerprint,
-			TokenSerial:        tokenSerialOf(privKey),
 		},
 	}
 
