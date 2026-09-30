@@ -47,13 +47,18 @@ func TestAdviseSuggestion(t *testing.T) {
 			wantPCR: "0,7,11u",
 		},
 		{
+			// PCR 9 needs the eventlog source: its post-boot register is
+			// polluted by systemd-tpm2-setup after the disk is unlocked.
 			name: "Secure Boot off with GRUB: measure what GRUB reads",
 			profile: SystemProfile{
-				EFI:        true,
-				SecureBoot: SecureBootState{Known: true, Enabled: false},
-				GRUB:       true,
+				EFI:               true,
+				SecureBoot:        SecureBootState{Known: true, Enabled: false},
+				EventlogPresent:   true,
+				EventlogHasSHA256: true,
+				TPMHasSHA256:      true,
+				GRUB:              true,
 			},
-			wantPCR: "0,7,8,9",
+			wantPCR: "0,7,8,9e",
 		},
 		{
 			name: "Secure Boot off, neither: measure the boot loader",
@@ -241,12 +246,15 @@ func TestAdviseFactsReportUEFI(t *testing.T) {
 func TestAdviseStatesUpkeepForSuggestedPCRs(t *testing.T) {
 	t.Run("suggested 8,9 states the after-reboot rule", func(t *testing.T) {
 		advice := SystemProfile{
-			SecureBoot: SecureBootState{Known: true, Enabled: false},
-			GRUB:       true,
+			SecureBoot:        SecureBootState{Known: true, Enabled: false},
+			EventlogPresent:   true,
+			EventlogHasSHA256: true,
+			TPMHasSHA256:      true,
+			GRUB:              true,
 		}.Advise()
 
-		if !strings.Contains(advice.PCRs, "8,9") {
-			t.Fatalf("precondition failed: expected 8,9 in %q", advice.PCRs)
+		if !strings.Contains(advice.PCRs, "8,9e") {
+			t.Fatalf("precondition failed: expected 8,9e in %q", advice.PCRs)
 		}
 
 		risks := joined(advice.Risks)

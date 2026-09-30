@@ -65,6 +65,55 @@ type SystemProfile struct {
 	SourceConflict string
 }
 
+// sourceFor returns the source suffix to use for one PCR, and why.
+//
+// The source is a property of the register, not a preference. Most PCRs stop
+// changing at the measure point, so the live register read at seal time is
+// exactly what the next boot will present and needs no event log to reproduce.
+// Three do not stop, and for those the register is actively wrong:
+//
+//	PCR 9   systemd-tpm2-setup extends four NvPCRs after the disk is unlocked, so
+//	        the post-boot register is polluted while the measure-point value is
+//	        what the event log replay plus os-separator gives. See
+//	        docs/SYSTEMD-PCROSSEPARATOR.issue §7.3.
+//	PCR 11  the boot phases (leave-initrd, sysinit, ready) land after the measure
+//	        point. The image on disk predicts the next boot, so 'u' beats both.
+//	PCR 15  machine-id and the volume key, neither in the firmware log. Nothing
+//	        can reconstruct it, so it cannot be sealed at all.
+func (p SystemProfile) sourceFor(pcr int) (suffix string, reason string) {
+	reasonVolatile, volatile := IsVolatileAfterMeasurePoint(pcr)
+
+	switch {
+	case pcr == 11 && p.UKIPath != "":
+		return "u", "computed from the image on disk, which predicts the next boot"
+
+	case volatile && p.EventlogHasSHA256:
+		return "e", "the live register is past the measure point here — " + reasonVolatile
+
+	case volatile:
+		// No log to reconstruct from, and the register is wrong. Saying so is
+		// better than sealing something that cannot match.
+		return "", "UNUSABLE: " + reasonVolatile +
+			", and the event log carries no SHA-256 digests to reconstruct from"
+
+	case p.SourceConflict != "" && p.EventlogHasSHA256:
+		return "e", "the live registers disagree with the event log on this machine"
+
+	default:
+		return "", "the register stops changing at the measure point"
+	}
+}
+
+// usableSpec renders one PCR with the source it should use, or "" when the PCR
+// cannot be sealed on this machine.
+func (p SystemProfile) usableSpec(pcr int) (string, bool) {
+	suffix, reason := p.sourceFor(pcr)
+	if strings.HasPrefix(reason, "UNUSABLE") {
+		return "", false
+	}
+	return fmt.Sprintf("%d%s", pcr, suffix), true
+}
+
 // PreferredSource returns the per-PCR source suffix to recommend, and why.
 //
 // Register and eventlog are equivalent for PCRs 0-7 on a healthy system, and the
@@ -321,7 +370,13 @@ func (p SystemProfile) Advise() SealAdvice {
 	}
 
 	// ── The suggestion ──
-	selected := []string{"0" + suffix, "7" + suffix}
+	// Each PCR gets the source its own behaviour demands; see sourceFor.
+	selected := []string{}
+	for _, pcr := range []int{0, 7} {
+		if spec, ok := p.usableSpec(pcr); ok {
+			selected = append(selected, spec)
+		}
+	}
 
 	advice.Chosen = append(advice.Chosen,
 		"PCR 0  firmware code — changes when you update the firmware")
@@ -339,24 +394,66 @@ func (p SystemProfile) Advise() SealAdvice {
 	// What measures the kernel, and whether to suggest it or merely offer it.
 	// kernelSpec carries the source suffix; kernelLabel is for the explanation,
 	// where a suffix would only be noise.
-	kernelSpec, kernelLabel, kernelWhat := "", "", ""
+	kernelSpecs, kernelLabel, kernelWhat := []string{}, "", ""
 	switch {
 	case p.UKIPath != "":
-		kernelSpec, kernelLabel, kernelWhat = "11u", "11", "the unified kernel image"
+		kernelLabel, kernelWhat = "11", "the unified kernel image"
 	case p.GRUB:
-		kernelSpec, kernelLabel, kernelWhat = "8"+suffix+",9"+suffix, "8,9", "GRUB's commands and the files it reads"
+		kernelLabel, kernelWhat = "8,9", "GRUB's commands and the files it reads"
 	default:
-		kernelSpec, kernelLabel, kernelWhat = "4"+suffix, "4", "the boot loader binary the firmware ran"
+		kernelLabel, kernelWhat = "4", "the boot loader binary the firmware ran"
+	}
+
+	kernelPCRs := map[string][]int{"11": {11}, "8,9": {8, 9}, "4": {4}}[kernelLabel]
+
+	// Take the registers that can be sealed and drop the ones that cannot,
+	// rather than abandoning the group for one unusable member. PCR 9 without a
+	// SHA-256 event log is exactly that case: PCR 8 is still worth having.
+	var dropped []int
+	for _, pcr := range kernelPCRs {
+		if spec, ok := p.usableSpec(pcr); ok {
+			kernelSpecs = append(kernelSpecs, spec)
+		} else {
+			dropped = append(dropped, pcr)
+		}
+	}
+	kernelUsable := len(kernelSpecs) > 0
+
+	if len(dropped) > 0 {
+		var names []string
+		for _, pcr := range dropped {
+			names = append(names, fmt.Sprintf("%d", pcr))
+		}
+		kernelLabel = strings.Join(strings.Split(strings.TrimSuffix(
+			strings.Join(specLabels(kernelSpecs), ","), ","), ","), ",")
+		advice.Risks = append(advice.Risks,
+			fmt.Sprintf("PCR %s left out of the suggestion: %s.\n"+
+				"    Without it the kernel and initrd are not covered as fully as they could be.",
+				strings.Join(names, " and "), secondReason(p, dropped)))
 	}
 
 	// Two reasons to include it: nothing else is verifying the kernel, or the
 	// upkeep is automated so it costs nothing to keep.
-	includeKernel := !secureBootEnforcing || (p.ResealHookInstalled && p.UKIPath != "")
+	includeKernel := kernelUsable &&
+		(!secureBootEnforcing || (p.ResealHookInstalled && p.UKIPath != ""))
 
 	if includeKernel {
-		selected = append(selected, strings.Split(kernelSpec, ",")...)
+		selected = append(selected, kernelSpecs...)
 		advice.Chosen = append(advice.Chosen,
 			fmt.Sprintf("PCR %-2s %s", kernelLabel, kernelWhat))
+
+		// A PCR whose source is not the plain register deserves a word, since
+		// the suffix in the selection is otherwise unexplained.
+		for _, pcr := range kernelPCRs {
+			if sfx, why := p.sourceFor(pcr); sfx != "" {
+				advice.Chosen = append(advice.Chosen,
+					fmt.Sprintf("       PCR %d uses '%s' because %s", pcr, sfx, why))
+			}
+		}
+	} else if !kernelUsable {
+		advice.Because = append(advice.Because,
+			fmt.Sprintf("PCR %s would measure %s, but cannot be sealed on this machine: %s.",
+				kernelLabel, kernelWhat, secondReason(p, kernelPCRs)))
 	}
 
 	advice.PCRs = strings.Join(selected, ",")
@@ -678,4 +775,23 @@ func suggestFreeSlot(tpmDev transport.TPM, debug bool) (uint32, error) {
 	return 0, fmt.Errorf("every NVRAM slot from #0 to #%d is in use;\n"+
 		"  free one with 'tpm2-kira nvram delete --nvram <slot>' or name one with --nvram",
 		MaxSlotNumber)
+}
+
+// secondReason explains why a PCR the advice wanted cannot be used.
+func secondReason(p SystemProfile, pcrs []int) string {
+	for _, pcr := range pcrs {
+		if _, why := p.sourceFor(pcr); strings.HasPrefix(why, "UNUSABLE") {
+			return strings.TrimPrefix(why, "UNUSABLE: ")
+		}
+	}
+	return "no source can reconstruct it"
+}
+
+// specLabels strips the source suffix from a list of specs, for a label.
+func specLabels(specs []string) []string {
+	labels := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		labels = append(labels, strings.TrimRight(spec, "eru"))
+	}
+	return labels
 }

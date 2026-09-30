@@ -31,6 +31,39 @@ sound policy that survives kernel updates — so measuring the kernel as well is
 suggested only when the reseal it costs is automated. Without the hook it is
 offered rather than imposed.
 
+## Register or event log: not a preference
+
+The suffix looks like a choice but mostly is not. It follows from whether the
+register stops changing before tpm2-kira reads it.
+
+| PCRs | Source | Why |
+|---|---|---|
+| 0–7, 8, 12, 13, 14 | register (no suffix) | They stop at the measure point, so the live value read at seal time is what the next boot presents — and it needs no event log to reproduce |
+| 9 | **`9e` required** | `systemd-tpm2-setup` extends four NvPCRs *after* the disk is unlocked, so the post-boot register is polluted while the measure-point value is what the replay gives |
+| 11 | **`11u`**, or `11e` | The boot phases (`leave-initrd`, `sysinit`, `ready`) land after the measure point. The image on disk predicts the *next* boot, which the register cannot |
+| 15 | **none works** | machine-id and the volume key, neither in the firmware event log. It cannot be sealed |
+
+That is measured, not assumed:
+[SYSTEMD-PCROSSEPARATOR.issue](SYSTEMD-PCROSSEPARATOR.issue) §7.3 has the
+arithmetic for PCR 9 and 11.
+
+So `0e` is not a better `0` — for PCRs 0–7 the two are equivalent, and the
+register is the more robust of the two because it does not depend on the event log
+carrying SHA-256 digests, nor on the measure-point extends being reconstructed
+correctly. That reconstruction is exactly what broke when
+`systemd-pcrosseparator.service` appeared: the replay went one extend short and
+stayed wrong until the extends were added to the calculation, while register-based
+policies needed one reseal and were then fine.
+
+`seal` picks the source per PCR for you, so a bare `tpm2-kira seal` produces
+`0,7,9e` rather than a uniform suffix. The suffix stays available in `--pcrs`
+because the blob records it per PCR, `reseal` preserves it, and comparing the two
+sources against each other is how a mismatch gets diagnosed.
+
+**Sealing a volatile PCR from its register is refused as advice and warned about
+when asked for explicitly.** `--pcrs "0,9"` produces a policy that can never be
+satisfied, and the symptom — no TOTP code, ever — looks exactly like tampering.
+
 The register-versus-event-log comparison is the one that cannot be reasoned out in
 advance. The two are equivalent for PCRs 0–7 on a healthy machine, so the register
 wins by needing no event log. Where they disagree, something is extending those
