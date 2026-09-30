@@ -5,8 +5,12 @@ package kira
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/google/go-attestation/attest"
 	"github.com/google/go-tpm/tpm2"
+	"io"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -669,5 +673,71 @@ func TestPCRHashAlgoUnknown(t *testing.T) {
 	}
 	if unknown.TPMAlg() != tpm2.TPMAlgSHA256 {
 		t.Errorf("Unknown TPMAlg() mismatch, expected SHA256")
+	}
+}
+
+// TestWarnAboutVolatileRegisters covers the guard that IsVolatileAfterMeasurePoint
+// was written for but nothing called. Sealing PCR 9, 11 or 15 from the live
+// register produces a policy that can never be satisfied — the register holds
+// extends that happen after tpm2-kira reads the TPM at boot — and the symptom is
+// no TOTP code at all, which looks exactly like tampering.
+func TestWarnAboutVolatileRegisters(t *testing.T) {
+	warned := func(specs []PCRSpec) string {
+		original := os.Stdout
+		read, write, _ := os.Pipe()
+		os.Stdout = write
+
+		done := make(chan string, 1)
+		go func() {
+			var buf strings.Builder
+			io.Copy(&buf, read)
+			done <- buf.String()
+		}()
+
+		warnAboutVolatileRegisters(specs)
+
+		write.Close()
+		os.Stdout = original
+		return <-done
+	}
+
+	for _, pcr := range []int{9, 11, 15} {
+		out := warned([]PCRSpec{{Index: pcr, Source: PCRSourceRegister}})
+		if !strings.Contains(out, "cannot work") {
+			t.Errorf("PCR %d from the register should be reported, got:\n%s", pcr, out)
+		}
+		if !strings.Contains(out, fmt.Sprintf("PCR %d", pcr)) {
+			t.Errorf("the message should name PCR %d, got:\n%s", pcr, out)
+		}
+	}
+
+	// Each one gets the fix that applies to it.
+	if out := warned([]PCRSpec{{Index: 9, Source: PCRSourceRegister}}); !strings.Contains(out, "9e") {
+		t.Errorf("PCR 9 should be pointed at the event log, got:\n%s", out)
+	}
+	if out := warned([]PCRSpec{{Index: 11, Source: PCRSourceRegister}}); !strings.Contains(out, "11u") {
+		t.Errorf("PCR 11 should be pointed at the UKI source, got:\n%s", out)
+	}
+	if out := warned([]PCRSpec{{Index: 15, Source: PCRSourceRegister}}); !strings.Contains(out, "cannot be sealed at all") {
+		t.Errorf("PCR 15 should be called unusable, got:\n%s", out)
+	}
+
+	// The stable registers are the normal case and must stay silent.
+	for _, pcr := range []int{0, 1, 2, 4, 7, 8, 12, 13, 14} {
+		if out := warned([]PCRSpec{{Index: pcr, Source: PCRSourceRegister}}); out != "" {
+			t.Errorf("PCR %d stops changing at the measure point; no warning expected, got:\n%s", pcr, out)
+		}
+	}
+
+	// And a volatile PCR with a source that does work must stay silent too.
+	for _, spec := range []PCRSpec{
+		{Index: 9, Source: PCRSourceEventlog},
+		{Index: 11, Source: PCRSourceUKI},
+		{Index: 11, Source: PCRSourceEventlog},
+	} {
+		if out := warned([]PCRSpec{spec}); out != "" {
+			t.Errorf("PCR %d with source %s is fine; no warning expected, got:\n%s",
+				spec.Index, spec.Source, out)
+		}
 	}
 }

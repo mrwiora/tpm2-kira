@@ -68,6 +68,8 @@ func WarnAboutPCRSelection(specs []PCRSpec) {
 		fmt.Println()
 	}
 
+	warnAboutVolatileRegisters(specs)
+
 	if !slices.Contains(indices, 7) {
 		return
 	}
@@ -90,6 +92,48 @@ func WarnAboutPCRSelection(specs []PCRSpec) {
 		fmt.Println("  PCR 7 measures the Secure Boot state and policy. With Secure Boot off it")
 		fmt.Println("  records \"disabled\" and nothing verifies which bootloader or kernel runs, so")
 		fmt.Println("  a matching PCR 7 does not mean the boot chain was checked.")
+		fmt.Println()
+	}
+}
+
+// warnAboutVolatileRegisters reports a PCR sealed from the live register that
+// does not stop changing at the measure point.
+//
+// This is not a weak selection, it is a broken one: the register read at seal
+// time already holds extends that happen after tpm2-kira reads the TPM at boot,
+// so the sealed value is one the measure point never presents and the policy can
+// never be satisfied. The symptom is no TOTP code, ever, which looks exactly like
+// tampering.
+//
+// docs/SYSTEMD-PCROSSEPARATOR.issue §7.3 has the measurements: PCR 9 is extended
+// four more times by systemd-tpm2-setup after the disk is unlocked, PCR 11 by the
+// later boot phases, and PCR 15 by machine-id and the volume key.
+func warnAboutVolatileRegisters(specs []PCRSpec) {
+	for _, spec := range specs {
+		if spec.Source != PCRSourceRegister {
+			continue
+		}
+
+		reason, volatile := IsVolatileAfterMeasurePoint(spec.Index)
+		if !volatile {
+			continue
+		}
+
+		fmt.Printf("WARNING: PCR %d is being sealed from the live register, which cannot work.\n", spec.Index)
+		fmt.Printf("  It keeps changing after tpm2-kira reads the TPM at boot: %s.\n", reason)
+		fmt.Println("  The value read now is therefore one the measure point never presents, so this")
+		fmt.Println("  policy will not be satisfiable and no TOTP code will ever appear.")
+
+		switch spec.Index {
+		case 11:
+			fmt.Println("  Use the unified kernel image source instead:  --pcrs \"...,11u\"")
+			fmt.Println("  or the event log:  --pcrs \"...,11e\"")
+		case 15:
+			fmt.Println("  PCR 15 is in no firmware event log either, so it cannot be sealed at all.")
+			fmt.Println("  Leave it out of the selection.")
+		default:
+			fmt.Printf("  Use the event log source instead:  --pcrs \"...,%de\"\n", spec.Index)
+		}
 		fmt.Println()
 	}
 }

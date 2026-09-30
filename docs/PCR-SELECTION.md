@@ -31,12 +31,82 @@ sound policy that survives kernel updates — so measuring the kernel as well is
 suggested only when the reseal it costs is automated. Without the hook it is
 offered rather than imposed.
 
-The register-versus-event-log comparison is the one that cannot be reasoned out in
-advance. The two are equivalent for PCRs 0–7 on a healthy machine, so the register
-wins by needing no event log. Where they disagree, something is extending those
-registers after the point tpm2-kira reads the TPM: sealing the live value would
-bind to something the next boot does not reproduce, so the reconstruction is the
-one to trust and `seal` switches to `0e,7e` and says why.
+## The three sources, and when each is used
+
+A PCR selection names registers *and* where their expected value comes from. The
+source is not a matter of taste: it follows from whether the register has finished
+changing by the time tpm2-kira reads the TPM at boot — the **measure point**, in
+the initrd just before the passphrase prompt.
+
+| Suffix | Source | Reads | Produces |
+|---|---|---|---|
+| none, or `r` | register | the live TPM register, now | whatever the register holds at seal time |
+| `e` | eventlog | `/sys/kernel/security/tpm0/binary_bios_measurements`, replayed, then the measure-point extends applied | the value the *measure point* presents |
+| `u` | uki | the unified kernel image on disk, replaying systemd-stub's section measurements | the value the *next boot* will present |
+
+### Which one each register needs
+
+| PCRs | Use | Why, and what goes wrong otherwise |
+|---|---|---|
+| 0–7, 8, 12, 13, 14 | **register** | They stop changing at the measure point, so the live value read now is what the next boot presents. It needs no event log, which makes it the more robust of the two. |
+| 9 | **`9e`** | `systemd-tpm2-setup` extends four NvPCRs *after* the disk is unlocked. The register read at seal time is therefore polluted; the replay gives the measure-point value. Sealing `9` produces a policy that can never match. |
+| 11 | **`11u`**, else `11e` | The boot phases `leave-initrd`, `sysinit` and `ready` land after the measure point, so the register is polluted the same way. `u` is better than `e` because it reads the image on disk and so predicts the *next* boot — which is what lets a reseal happen before rebooting rather than after. |
+| 15 | **nothing works** | machine-id and the volume key, and neither is in the firmware event log. It cannot be sealed by any source. Leave it out. |
+| 1, 5 | register, but rarely worth it | Firmware *configuration* and boot order. They change when UEFI settings or the boot order change, including harmless ones, so they produce false alarms. |
+
+Measured rather than assumed: the arithmetic for PCR 9 and 11 is in
+[SYSTEMD-PCROSSEPARATOR.issue](SYSTEMD-PCROSSEPARATOR.issue) §7.3.
+
+### What each source is good for
+
+**register** — the default, and right for almost everything. Simple, needs no
+event log, and self-correcting: if a component changes, one reseal from the
+running system captures the new value and the next boot matches.
+
+**`e` eventlog** — two jobs. It is *mandatory* for PCR 9, whose register is
+polluted after unlock. And it is the diagnostic tool: comparing `0e` against `0`
+is how a divergence gets found, because the two answer different questions — a
+calculation versus a measurement. That comparison is what uncovered
+`systemd-pcrosseparator.service` silently changing PCRs 0–7.
+
+**`u` uki** — the only source that predicts a state the machine has not yet been
+in. It reads the image on disk, so after a kernel update you can reseal *before*
+rebooting and the next boot matches immediately. The mkinitcpio post hook relies
+on exactly that.
+
+### Why `0e` is not a better `0`
+
+For PCRs 0–7 the two are equivalent, and the register is the sturdier choice: it
+depends neither on the event log carrying SHA-256 digests nor on the
+measure-point extends being reconstructed correctly. That reconstruction is
+precisely what broke when `systemd-pcrosseparator.service` appeared — the replay
+went one extend short and **stayed** wrong, because the calculation itself was now
+incomplete, while register-based policies needed one reseal and were fine
+afterwards. tpm2-kira now detects that case and refuses to seal rather than
+producing a value the machine will not present, but the asymmetry stands: the
+register needs no prediction to maintain.
+
+So `seal` picks the source per register for you: a bare `tpm2-kira seal` on a
+GRUB system produces `0,7,8,9e`, not a uniform suffix, and says why 9 differs. The
+suffix remains available in `--pcrs` because the blob records it per PCR, `reseal`
+preserves it, and the comparison is a diagnostic — but it is no longer something
+you have to decide.
+
+Asking for a volatile register explicitly is warned about rather than refused,
+since an explicit selection may know something this code does not:
+
+```
+WARNING: PCR 9 is being sealed from the live register, which cannot work.
+  It keeps changing after tpm2-kira reads the TPM at boot: systemd-tpm2-setup
+  NvPCR initialisation (runs after switch-root).
+  Use the event log source instead:  --pcrs "...,9e"
+```
+
+### A fourth source, considered and not adopted
+
+`systemd-pcrlock` predicts future PCR values and could in principle be a source
+of its own. The investigation, and why it is not one, is in
+[PLAN-PCRLOCK.md](PLAN-PCRLOCK.md).
 
 ## Custom PCRs
 
