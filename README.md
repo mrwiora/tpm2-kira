@@ -881,34 +881,33 @@ Ensure TPM 2.0 is enabled in your BIOS/UEFI settings.
 
 **Permission denied, or "needs root":**
 
-Every command that talks to the TPM needs root, and so does anything that reads
-the signing key under `/var/lib/tpm2-kira`. That is deliberate rather than
-incidental: whatever can open the TPM device can ask the TPM to unseal the secret
-while the PCRs still match, so the device is root-only and the threat model puts
-non-root userspace outside the trust boundary ([SECURITY-BACKGROUND.md
-§8](docs/SECURITY-BACKGROUND.md)). **Do not loosen the permissions on
-`/dev/tpm0`.**
+The TPM device is root-only, deliberately: anything able to open it can ask the
+TPM to unseal the secret while the PCR values still match, so the threat model
+places non-root userspace outside the trust boundary
+([SECURITY-BACKGROUND.md §8](docs/SECURITY-BACKGROUND.md)). **Do not loosen the
+permissions on `/dev/tpm0`** — that moves the boundary rather than working around
+it, and is not a supported configuration.
 
-Running a command without root says so, rather than reporting a bare syscall
-error:
+So every command that talks to the TPM needs `sudo`, and says so rather than
+reporting a bare syscall error:
 
 ```
-tpm2-kira: FAILED: 'tpm2-kira reveal' needs root, because it reads the sealed
-  secret from the TPM.
-  Run it again with sudo:
+tpm2-kira: FAILED: /dev/tpm0 is a TPM device, which only root may open.
+  That is deliberate: anything able to reach the TPM can ask it to unseal the
+  secret while the PCR values still match, so the device is root-only and the
+  permissions on it should not be loosened.
+  Run the command with sudo:
       sudo tpm2-kira reveal ...
   Current user has UID 1000.
 ```
 
-| Needs root | Works without it |
-|---|---|
-| `setup`, `seal`, `reseal` | `version`, `help`, `pcrtips` |
-| `reveal`, `reveal-plain`, `run`, `info` | `yubikey list`, `yubikey status` |
-| `nvram list`, `status`, `delete`, `restore` | `yubikey export-pubkey` (to stdout) |
-| `yubikey adopt` | |
+The requirement comes from the **device**, not from the verb. A software TPM
+reached over a unix socket — `--tpm /path/to/swtpm.sock`, which is how the test
+suite runs — belongs to whoever started it and needs no privilege at all.
 
-The right-hand column touches neither the TPM nor the keys directory — the
-`yubikey` ones only inspect a token through `pcscd`.
+`setup` needs root regardless, because it writes the signing key under
+`/var/lib/tpm2-kira`. `version`, `help`, `pcrtips` and the `yubikey` subcommands
+that only inspect a token through `pcscd` need nothing.
 
 As always the exit status is 0, so judge success from the output.
 

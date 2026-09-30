@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -352,64 +353,114 @@ func TestOpenSigningKeyWarnsAboutMode(t *testing.T) {
 	}
 }
 
-// TestCheckPrivilegeCoversEveryTPMCommand is a regression guard. The TPM device
-// is root-only by design, so a command that opens it and is not in the table
-// would fall through to a bare syscall error — and, worse, would imply the
-// project tolerates a non-root user reaching the TPM.
-func TestCheckPrivilegeCoversEveryTPMCommand(t *testing.T) {
+// TestRequireTPMAccessGatesDeviceNotCommand is the regression guard for where
+// this check belongs. Root is required to open the TPM character device, and a
+// software TPM on a socket needs no privilege — keying the requirement off the
+// command name instead broke the whole integration suite for a non-root user.
+func TestRequireTPMAccessGatesDeviceNotCommand(t *testing.T) {
 	if IsRoot() {
 		t.Skip("running as root; nothing is refused")
 	}
 
-	// Every command that opens the TPM, including the read-only ones.
-	gated := [][]string{
-		{"setup"}, {"seal"}, {"reseal"},
-		{"reveal"}, {"reveal-plain"}, {"run"}, {"info"},
-		{"nvram", "list"}, {"nvram", "status"},
-		{"nvram", "delete"}, {"nvram", "restore"},
-		{"yubikey", "adopt"},
-	}
+	t.Run("a socket is allowed", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "swtpm.sock")
 
-	for _, argv := range gated {
-		name := strings.Join(argv, " ")
-		err := CheckPrivilege(argv[0], argv[1:])
+		listener, err := net.Listen("unix", path)
+		if err != nil {
+			t.Skipf("cannot create a unix socket here: %v", err)
+		}
+		defer listener.Close()
+
+		if err := RequireTPMAccess(path); err != nil {
+			t.Errorf("a software TPM socket this user owns must not be refused: %v", err)
+		}
+	})
+
+	t.Run("an absent path is allowed through to the open", func(t *testing.T) {
+		if err := RequireTPMAccess(filepath.Join(t.TempDir(), "nothing")); err != nil {
+			t.Errorf("a missing path should be reported by the open, not here: %v", err)
+		}
+	})
+
+	t.Run("a regular file is allowed through to the open", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "file")
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatalf("failed to write the test file: %v", err)
+		}
+		if err := RequireTPMAccess(path); err != nil {
+			t.Errorf("a regular file should be reported by the open, not here: %v", err)
+		}
+	})
+
+	t.Run("a character device is refused", func(t *testing.T) {
+		// /dev/null is a character device present everywhere, which is what
+		// this check keys off.
+		info, err := os.Stat("/dev/null")
+		if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+			t.Skip("/dev/null is not a character device here")
+		}
+
+		err = RequireTPMAccess("/dev/null")
 		if err == nil {
-			t.Errorf("%q opens the TPM or the keys directory and must require root", name)
-			continue
+			t.Fatal("a TPM character device must be refused for a non-root user")
 		}
-		if !strings.Contains(err.Error(), "needs root") {
-			t.Errorf("%q: expected a root explanation, got: %v", name, err)
+
+		message := err.Error()
+		for _, want := range []string{"only root may open", "sudo tpm2-kira", "/dev/null"} {
+			if !strings.Contains(message, want) {
+				t.Errorf("the message should contain %q, got:\n%s", want, message)
+			}
 		}
-		if !strings.Contains(err.Error(), "sudo tpm2-kira "+name) {
-			t.Errorf("%q: the message should show the command to re-run, got: %v", name, err)
+		for _, unwanted := range []string{"udev", "chmod", "GROUP="} {
+			if strings.Contains(message, unwanted) {
+				t.Errorf("the message must not suggest %q, got:\n%s", unwanted, message)
+			}
 		}
-	}
+	})
+
+	t.Run("the message names the command when one is known", func(t *testing.T) {
+		info, err := os.Stat("/dev/null")
+		if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+			t.Skip("/dev/null is not a character device here")
+		}
+
+		previous := InvokedCommand
+		InvokedCommand = "reveal"
+		defer func() { InvokedCommand = previous }()
+
+		err = RequireTPMAccess("/dev/null")
+		if err == nil || !strings.Contains(err.Error(), "sudo tpm2-kira reveal") {
+			t.Errorf("expected the command to be named, got: %v", err)
+		}
+	})
 }
 
-// TestCheckPrivilegeAllowsHarmlessCommands checks the other side: refusing a
-// command that touches nothing would be gratuitous.
-func TestCheckPrivilegeAllowsHarmlessCommands(t *testing.T) {
-	ungated := [][]string{
-		{"version"}, {"help"}, {"pcrtips"},
-		{"yubikey", "list"}, {"yubikey", "status"}, {"yubikey", "export-pubkey"},
+// TestCheckPrivilegeGatesOnlyFilesystemCommands checks the small remaining
+// up-front gate: setup always writes under /var/lib, so it needs root whatever
+// its TPM path is, while the rest are decided at the device.
+func TestCheckPrivilegeGatesOnlyFilesystemCommands(t *testing.T) {
+	if IsRoot() {
+		t.Skip("running as root; nothing is refused")
 	}
 
-	for _, argv := range ungated {
+	if err := CheckPrivilege("setup", nil); err == nil {
+		t.Error("setup writes to /var/lib and must require root")
+	} else if !strings.Contains(err.Error(), "needs root") {
+		t.Errorf("expected a root explanation, got: %v", err)
+	}
+
+	// These may legitimately run without root against a software TPM, so they
+	// must not be refused before the device is even known.
+	for _, argv := range [][]string{
+		{"seal"}, {"reseal"}, {"reveal"}, {"reveal-plain"}, {"run"}, {"info"},
+		{"nvram", "list"}, {"nvram", "status"}, {"nvram", "delete"}, {"nvram", "restore"},
+		{"version"}, {"help"}, {"pcrtips"},
+		{"yubikey", "list"}, {"yubikey", "status"},
+	} {
 		if err := CheckPrivilege(argv[0], argv[1:]); err != nil {
-			t.Errorf("%q touches neither the TPM nor the keys and should not need root: %v",
+			t.Errorf("%q must not be refused before its TPM path is known: %v",
 				strings.Join(argv, " "), err)
 		}
-	}
-}
-
-// TestCheckPrivilegeUnknownCommandIsNotGated keeps the table from becoming a
-// silent allowlist: an unrecognised command must fall through to the usual
-// "unknown command" handling rather than being refused for the wrong reason.
-func TestCheckPrivilegeUnknownCommandIsNotGated(t *testing.T) {
-	if err := CheckPrivilege("nonsense", nil); err != nil {
-		t.Errorf("an unknown command should not be refused on privilege grounds: %v", err)
-	}
-	if err := CheckPrivilege("nvram", []string{"nonsense"}); err != nil {
-		t.Errorf("an unknown nvram subcommand should not be refused on privilege grounds: %v", err)
 	}
 }

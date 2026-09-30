@@ -47,6 +47,12 @@ func RequireRoot(command, reason string) error {
 // they get this far, so reaching the permission branch means either an unusual
 // device path or a system where root itself cannot open it.
 func OpenTPMDevice(tpmPath string) (transport.TPMCloser, error) {
+	// Refuse a root-only device before trying, so the message explains the
+	// requirement rather than relaying EACCES from three layers down.
+	if err := RequireTPMAccess(tpmPath); err != nil {
+		return nil, err
+	}
+
 	tpmDev, err := transport.OpenTPM(tpmPath)
 	if err == nil {
 		return tpmDev, nil
@@ -121,65 +127,70 @@ func isPermissionError(err error) bool {
 		errors.Is(err, syscall.EPERM)
 }
 
-// rootCommands are the commands that need root, with the reason completing
-// "... needs root, because it ...".
+// InvokedCommand is the subcommand being run, used only to make the privilege
+// message show a command worth re-running. main sets it; an empty value degrades
+// to generic advice rather than being wrong.
+var InvokedCommand string
+
+// rootFilesystemCommands need root whatever the TPM path is, because they write
+// under /var/lib/tpm2-kira. The reason completes "... needs root, because it ...".
 //
-// Every command that opens the TPM is here. The device is root-only by design:
-// anything that can reach it can ask the TPM to unseal while the PCRs still
-// match, which is why the threat model puts non-root userspace outside the trust
-// boundary (SECURITY-BACKGROUND §8). So there is no read-only tier to exempt —
-// reading the TPM is exactly the capability being protected.
-//
-// Absent from this list: version, help and pcrtips, which touch nothing, and the
-// yubikey subcommands that only inspect a token through pcscd.
-var rootCommands = map[string]string{
-	"setup":        "writes the signing key to /var/lib/tpm2-kira",
-	"seal":         "writes to TPM NVRAM and reads the signing key from /var/lib/tpm2-kira",
-	"reseal":       "writes to TPM NVRAM and reads the signing key from /var/lib/tpm2-kira",
-	"reveal":       "reads the sealed secret from the TPM",
-	"reveal-plain": "reads the sealed secret from the TPM",
-	"run":          "reads the sealed secret from the TPM",
-	"info":         "reads the sealed blob from TPM NVRAM",
+// Commands that only reach the TPM are deliberately absent. Whether they need
+// root depends on the device, not on the verb: the TPM character device is
+// root-only, but a software TPM reached over a socket belongs to whoever owns the
+// socket. RequireTPMAccess makes that call at the moment of access, where the
+// path is known.
+var rootFilesystemCommands = map[string]string{
+	"setup": "writes the signing key to /var/lib/tpm2-kira",
 }
 
-// rootNVRAMSubcommands covers the nvram subcommands, all of which open the TPM.
-var rootNVRAMSubcommands = map[string]string{
-	"list":    "reads TPM NVRAM",
-	"status":  "reads TPM NVRAM",
-	"delete":  "removes a sealed secret from TPM NVRAM",
-	"restore": "writes a sealed secret back to TPM NVRAM",
-}
-
-// rootYubiKeySubcommands are the yubikey subcommands that need root: adopt
-// caches a public key under /var/lib and checks the key against the TPM.
-// Listing and inspecting a token needs only pcscd.
-var rootYubiKeySubcommands = map[string]string{
-	"adopt": "caches the public key under /var/lib/tpm2-kira and checks it against the TPM",
-}
-
-// CheckPrivilege refuses a command that cannot work without root.
+// CheckPrivilege refuses a command that cannot work without root regardless of
+// where its TPM lives.
 func CheckPrivilege(command string, args []string) error {
-	if reason, ok := rootCommands[command]; ok {
+	if reason, ok := rootFilesystemCommands[command]; ok {
 		return RequireRoot(command, reason)
 	}
-
-	sub := ""
-	if len(args) > 0 {
-		sub = args[0]
-	}
-
-	switch command {
-	case "nvram":
-		if reason, ok := rootNVRAMSubcommands[sub]; ok {
-			return RequireRoot("nvram "+sub, reason)
-		}
-	case "yubikey":
-		if reason, ok := rootYubiKeySubcommands[sub]; ok {
-			return RequireRoot("yubikey "+sub, reason)
-		}
-	}
-
 	return nil
+}
+
+// RequireTPMAccess refuses to touch a root-only TPM device as an ordinary user.
+//
+// The check is on the device rather than on the command, because that is where
+// the requirement actually comes from. /dev/tpm0 is root-only by design: anything
+// able to open it can ask the TPM to unseal while the PCRs still match, which is
+// why the threat model places non-root userspace outside the trust boundary
+// (SECURITY-BACKGROUND §8). Loosening those permissions is not a supported
+// configuration.
+//
+// A path that is not a character device is left alone. A software TPM is reached
+// through a unix socket owned by whoever started it, and needs no privilege at
+// all — that is how the test suite runs, and refusing it would be refusing
+// something that works.
+func RequireTPMAccess(tpmPath string) error {
+	if IsRoot() {
+		return nil
+	}
+
+	info, err := os.Stat(tpmPath)
+	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		// Not a TPM device node: either absent, or a socket this user may well
+		// own. Let the open attempt speak for itself.
+		return nil
+	}
+
+	suffix := ""
+	if InvokedCommand != "" {
+		suffix = " " + InvokedCommand
+	}
+
+	return fmt.Errorf("%s is a TPM device, which only root may open.\n"+
+		"  That is deliberate: anything able to reach the TPM can ask it to unseal the\n"+
+		"  secret while the PCR values still match, so the device is root-only and the\n"+
+		"  permissions on it should not be loosened.\n"+
+		"  Run the command with sudo:\n"+
+		"      sudo tpm2-kira%s ...\n"+
+		"  Current user has UID %d.",
+		tpmPath, suffix, os.Geteuid())
 }
 
 // ── Signing key file permissions ──────────────────────────────────────────

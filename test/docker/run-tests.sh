@@ -35,6 +35,22 @@ echo "=== integration tests (software TPM) ==="
 go test -count=1 -tags=integration -timeout 10m ./... || status=1
 echo
 
+# The container runs as root, which hides anything that wrongly demands it. The
+# integration suite drives a software TPM over a socket the test user owns, so it
+# must pass unprivileged — a check that only exists because keying the privilege
+# requirement off the command name once broke exactly this.
+echo "=== integration tests as an unprivileged user ==="
+if id tpm2kiratest >/dev/null 2>&1 || useradd -m tpm2kiratest 2>/dev/null; then
+    chmod -R a+rwX /work-copy
+    mkdir -p /tmp/gocache-unpriv && chmod 777 /tmp/gocache-unpriv
+    su tpm2kiratest -c "export PATH=$PATH GOCACHE=/tmp/gocache-unpriv \
+        GOMODCACHE=$GOMODCACHE GOFLAGS=-mod=mod; \
+        cd /work-copy && go test -count=1 -tags=integration -timeout 10m ./test/integration/" || status=1
+else
+    echo "  (could not create an unprivileged user; skipped)"
+fi
+echo
+
 echo "=== PC/SC tests (real pcscd, virtual reader) ==="
 go test -count=1 -tags=pcsc -timeout 5m ./internal/pcsc/ || status=1
 echo

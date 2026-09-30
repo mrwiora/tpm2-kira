@@ -49,8 +49,12 @@ func main() {
 		commandArgs = os.Args[argsOffset:]
 	}
 
-	// Refuse early, with an explanation, rather than letting a syscall several
-	// layers down report a bare "permission denied".
+	// Named so that a privilege message can show a command worth re-running.
+	cmd.InvokedCommand = command
+
+	// Commands that write under /var/lib need root whatever their TPM path is.
+	// The TPM itself is checked at the moment it is opened, because whether
+	// root is needed depends on the device rather than on the command.
 	if err := cmd.CheckPrivilege(command, commandArgs); err != nil {
 		fail(err)
 	}

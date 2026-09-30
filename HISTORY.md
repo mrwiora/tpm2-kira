@@ -20,25 +20,35 @@ now lives next to the code that exits, and in the README's "Exit status" section
 `tpm2-kira: FAILED:` remains the marker to grep for, and the exit status is still
 always 0.
 
-### Every command that opens the TPM requires root
+### Opening the TPM requires root, and the check lives at the device
 
-The first version of the privilege check exempted the read-only commands —
-`reveal`, `info`, `nvram list` and friends — on the grounds that a udev rule
-could grant a group access to `/dev/tpm0`, and the error message offered that as
-an alternative to `sudo`.
+The first version of this exempted the read-only commands — `reveal`, `info`,
+`nvram list` and friends — on the grounds that a udev rule could grant a group
+access to `/dev/tpm0`, and the error message offered that as an alternative to
+`sudo`.
 
 That was wrong, and it contradicted the project's own threat model: §8 already
 places non-root userspace outside the trust boundary precisely because *anything*
-that can open the TPM device can ask the TPM to unseal the secret while the PCRs
-still match. Reading the sealed secret is the capability the boundary protects, so
-there is no read-only tier to exempt, and suggesting a udev rule was advice to
-move the boundary rather than to work within it.
+that can open the TPM device can ask the TPM to unseal while the PCRs still match.
+Reading the sealed secret is the capability the boundary protects, so there is no
+read-only tier to exempt, and suggesting a udev rule was advice to move the
+boundary rather than to work within it.
 
-All commands that open the TPM now require root, the suggestion is gone, and the
-threat model says explicitly that loosening the device permissions is not a
-supported configuration. `version`, `help`, `pcrtips` and the `yubikey`
-subcommands that only inspect a token through pcscd remain ungated, since they
-touch neither the TPM nor the keys directory.
+The replacement keyed the requirement off the **command name**, which was also
+wrong and broke more visibly: the integration suite drives a software TPM over a
+unix socket that the test user owns and which needs no privilege whatsoever, so
+every test failed for a non-root user. The container the suite normally runs in is
+root, which hid it.
+
+The check now lives where the requirement actually comes from — the moment the
+device is opened. A character device is refused for a non-root user; a socket, or
+a path that is not there, is left to the open attempt. That is simultaneously
+stricter about `/dev/tpm0`, which no command can now reach without root, and
+permissive about software TPMs, which never needed it. `setup` keeps an up-front
+requirement because it writes under `/var/lib/tpm2-kira` whatever its TPM path is.
+
+The container test runner gained an unprivileged pass, since running everything as
+root is what allowed a root-only assumption to go unnoticed.
 
 ### The signing key is created 0400, and a looser mode is reported
 
