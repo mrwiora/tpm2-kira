@@ -481,6 +481,7 @@ line rather than testing `$?`.
 | [docs/YUBIKEY.md](docs/YUBIKEY.md) | The hardware token in full: preparing a slot, PIN handling, polkit, backups, testing |
 | [docs/EARLY-BOOT.md](docs/EARLY-BOOT.md) | Showing a code before the disk is unlocked, on Arch and on Debian |
 | [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md) | Diagnosing a PCR mismatch, the eventlog calculator, recovering an interrupted write |
+| [docs/PLAN-PCRLOCK.md](docs/PLAN-PCRLOCK.md) | Whether systemd-pcrlock should be a fourth PCR source, and why it is not one |
 | [docs/SECURITY-BACKGROUND.md](docs/SECURITY-BACKGROUND.md) | The cryptographic design, threat model and trust boundaries |
 | [docs/CODE-LAYOUT.md](docs/CODE-LAYOUT.md) | Where things live in the source, and the rule that decides it |
 | [docs/PLATFORM-OBSERVATIONS.md](docs/PLATFORM-OBSERVATIONS.md) | Measured facts about Arch and Debian boots |
