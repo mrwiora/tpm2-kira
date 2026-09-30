@@ -50,6 +50,32 @@ On this host it is present but not enrolled: no `/var/lib/pcrlock.d`, no
 
 ---
 
+## 2.1 What `predict` actually produces
+
+From `systemd-pcrlock(8)`, and this decides both options:
+
+> Predicts the PCR state on future boots… and then generate **all possible
+> resulting PCR values for all combinations of component variants**. Note that **no
+> prediction is made for PCRs whose value does not match the event log records, for
+> which unrecognized measurements are discovered or for which components are defined
+> that cannot be found in the event log.** This is a safety measure to ensure that
+> any generated access policy can be fulfilled correctly on current and future boots.
+
+Two consequences worth being blunt about.
+
+**pcrlock does not absorb an unrecognised change — it drops the PCR.** Faced with a
+measurement it cannot account for, it makes no prediction for that register. That is
+the same choice tpm2-kira makes (refuse rather than guess), so adopting pcrlock would
+not remove the need to intervene when the platform changes. It would relocate it:
+instead of an error at seal time, the affected PCR quietly leaves the policy, and the
+policy is weaker than the operator believes. `--strict=BOOL`, added in systemd 262,
+exists to turn that into a failure — which is an admission that the default is a
+footgun.
+
+**The default PCR set is 0–5, 7, 11, 13–15.** PCR 9 is not in it, and neither are 8
+and 12. So for the one register where tpm2-kira genuinely *must* predict — PCR 9,
+whose live register is polluted after unlock — pcrlock offers nothing.
+
 ## 2. Option A — pcrlock as a PCR value source (`0p`, `7p`, …)
 
 Run `systemd-pcrlock predict`, take the digest, put it in tpm2-kira's own
@@ -119,17 +145,23 @@ into it**. Today that requires the signing key. The whole reason the PolicySigne
 branch is a recovery path rather than a convenience is that holding the key is the
 thing being proven.
 
-*The NV index's write protection is the crux, and it is unverified.* If that index
-is writable under owner authorisation — which tpm2-kira itself always presents as
-empty (§9) — then the re-blessing above needs no secret at all. This is the one
-question that would decide whether Option B is merely a trade-off or outright
-unsound, and it can be answered directly:
+*The NV index's write protection settles it, and not favourably.* The man page:
 
-```bash
-sudo /usr/lib/systemd/systemd-pcrlock make-policy      # allocates the index
-tpm2_nvreadpublic | grep -A8 "$(jq -r .nvIndex /var/lib/systemd/pcrlock.json)"
-# look at the attributes: OwnerWrite / AuthWrite / PolicyWrite, and any AuthPolicy
-```
+> The NV index contents may be changed (and thus the policy stored in it updated) by
+> providing an **access PIN**. This PIN is normally **generated automatically and
+> stored in encrypted form** (with an access policy binding it to the NV index
+> itself) **in the aforementioned JSON policy file**.
+
+That file is `/var/lib/systemd/pcrlock.json`, on the root filesystem — which is
+unlocked and readable by root for the entire time the system is running. So the
+policy is updatable by root, without any secret the operator holds. The re-blessing
+path above is therefore real, not hypothetical: root reads the PIN, runs
+`lock-uki` and `make-policy`, and the TOTP code appears after the reboot into the
+attacker's kernel.
+
+Contrast with tpm2-kira's own NV index, whose write policy is `PolicySigned`
+against the signing key (§9), and where that key is deliberately the one thing an
+attacker in the pre-unlock window cannot reach.
 
 *It is experimental.* The man page says the interface may still change. A blob
 format version and a third policy branch are expensive things to bind to that.
@@ -172,10 +204,30 @@ policy — see [SYSTEMD-PCROSSEPARATOR.issue](SYSTEMD-PCROSSEPARATOR.issue) §5:
 > boot, and therefore change PCR values, without any of the measured components
 > changing.
 
-A hardcoded list cannot survive the next such change; it will go one extend short
-again, silently, and every policy will stop matching. Reading the actual userspace
-log makes the reconstruction general. `tools/pcrtool.py verify` already does this
-in Python and is the reason full-chain diagnosis works; the Go binary does not.
+**Correcting an overstatement from an earlier draft of this document:** a hardcoded
+list does *not* fail silently today. `DetectMeasurePointExtends` compares the
+register against both the bare replay and the replay plus the known words, and when
+it matches neither it **refuses to seal**, naming the PCR and telling the user to
+use the register source instead. The silent version of this failure was the original
+1.x behaviour, before the detection existed; that is what the incident was.
+
+So the benefit is narrower than "prevents silent breakage", and worth stating
+precisely:
+
+- When systemd adds an early extend tpm2-kira does not know about, the `e` source
+  stops working with a clear error. The register source keeps working. For PCRs 0–7
+  that is a mild inconvenience, because the register is the recommended source
+  anyway.
+- **For PCR 9 it is not mild.** The register is unusable there (polluted after
+  unlock), so `9e` is the only way to seal it, and `9e` is what the guided advisor
+  suggests on any GRUB system. A systemd change would break sealing PCR 9 outright
+  until tpm2-kira learned the new word.
+- And pcrlock cannot cover for that, because PCR 9 is not in its default set
+  (§2.1). So reading the log ourselves is the only route that keeps the one
+  register requiring a prediction working across a platform change.
+
+`tools/pcrtool.py verify` already parses this log in Python and is the reason
+full-chain diagnosis works; the Go binary does not.
 
 **Sketch.** No new source, no blob version, no subprocess.
 
@@ -218,11 +270,11 @@ promising, not just a flag.
 
 | # | Question | How to answer |
 |---|---|---|
-| 1 | Is pcrlock's NV index writable under owner auth? | §3, `tpm2_nvreadpublic` on the allocated index |
-| 2 | Does `systemd-pcrlock predict` emit per-PCR digests usable as values, in the SHA-256 bank, without a policy being enrolled? | `sudo systemd-pcrlock predict --json=pretty` on an enrolled host |
+| 1 | ~~Is pcrlock's NV index writable under owner auth?~~ | **Answered** (§3): updatable with an access PIN that is stored in `/var/lib/systemd/pcrlock.json` on the root filesystem, so root can rewrite the policy |
+| 2 | Does `systemd-pcrlock predict` emit per-PCR digests usable as single values? | **Partly answered** (§2.1): it emits *all* variant combinations, so a single value only exists where one variant is defined. Confirm the JSON shape with `sudo systemd-pcrlock predict --json=pretty` on an enrolled host |
 | 3 | What exactly does `is-supported` reporting `partial` exclude? | `systemd-pcrlock is-supported --json=pretty` |
 | 4 | Is the userspace log format stable enough to parse? | Compare `/run/log/systemd/tpm2-measure.log` across systemd versions; `tools/pcrtool.py` already parses one shape |
 
-I could not answer 1–3 here: pcrlock is not enrolled on this machine, and enrolling
-it allocates a TPM NV index and writes a policy — not something to do to a system
-uninvited.
+Questions 1 and 2 are answered from the man page. Question 3 and the JSON shape in
+2 still need an enrolled host, and enrolling pcrlock allocates a TPM NV index and
+writes a policy — not something to do to a system uninvited.

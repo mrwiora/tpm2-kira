@@ -80,9 +80,11 @@ For PCRs 0–7 the two are equivalent, and the register is the sturdier choice: 
 depends neither on the event log carrying SHA-256 digests nor on the
 measure-point extends being reconstructed correctly. That reconstruction is
 precisely what broke when `systemd-pcrosseparator.service` appeared — the replay
-went one extend short and **stayed** wrong, because the calculation itself was
-now incomplete, while register-based policies needed one reseal and were fine
-afterwards.
+went one extend short and **stayed** wrong, because the calculation itself was now
+incomplete, while register-based policies needed one reseal and were fine
+afterwards. tpm2-kira now detects that case and refuses to seal rather than
+producing a value the machine will not present, but the asymmetry stands: the
+register needs no prediction to maintain.
 
 So `seal` picks the source per register for you: a bare `tpm2-kira seal` on a
 GRUB system produces `0,7,8,9e`, not a uniform suffix, and says why 9 differs. The
