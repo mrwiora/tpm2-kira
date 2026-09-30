@@ -545,24 +545,21 @@ authorise a reseal, which is the way around a PCR mismatch. On firmware before
 itself:
 
 ```
-Setup did not use the PIN; sealing does. tpm2-kira asks for it on the terminal,
-or takes it from TPM2_KIRA_PIN. To set it for this root shell without it landing
-in the shell history:
-    read -rs TPM2_KIRA_PIN && export TPM2_KIRA_PIN
-    tpm2-kira seal --pcrs 0,7
-
-Automatic signing: after every kernel or initramfs update, the mkinitcpio post
-hook reseals. To let it sign without asking, add this line to /etc/mkinitcpio.conf
-('export' is required: mkinitcpio passes only exported variables to its hooks):
-    export TPM2_KIRA_PIN='<your PIN>'
+Setup did not use the PIN; sealing does. Put it in one place and every step
+finds it — seal, reseal, and the mkinitcpio post hook that reseals after every
+kernel or initramfs update. Add this line to /etc/mkinitcpio.conf:
+    TPM2_KIRA_PIN='<your PIN>'
 The file is readable by every user by default and would then hold the PIN, so
 make it readable by root only (it is not copied into the initramfs image):
     chmod 600 /etc/mkinitcpio.conf
-Without the PIN there, that reseal reports SKIPPED, and the next boot shows a PCR
-mismatch until you run 'tpm2-kira reseal' with the YubiKey plugged in.
+Without it, seal and reseal ask for the PIN on the terminal, and the automatic
+reseal reports SKIPPED: the next boot then shows a PCR mismatch until you run
+'tpm2-kira reseal' with the YubiKey plugged in.
 ```
 
-The mkinitcpio part is printed only where `/etc/mkinitcpio.conf` exists.
+This is printed where `/etc/mkinitcpio.conf` exists. Without mkinitcpio, setup
+explains the terminal prompt and `read -rs TPM2_KIRA_PIN && export
+TPM2_KIRA_PIN` instead; when the file already sets the PIN, it says so.
 
 **No suitable key** (PIV disabled, empty slots, or only keys the TPM cannot
 load such as RSA-4096 or Ed25519): each token is listed with the reason, the
@@ -588,42 +585,50 @@ Much smaller than it would have been with a split binary:
 | `packaging/aur/PKGBUILD` | `optdepends=('pcsclite: ...')` |
 | `initramfs/*/hooks/*` | unchanged |
 | `initramfs/mkinitcpio/post/sd-tpm2-kira` | `SKIPPED:` branch (done) |
-| `initramfs/mkinitcpio/mkinitcpio.conf.example` | commented `export TPM2_KIRA_PIN=` with the `chmod 600` note (done) |
+| `initramfs/mkinitcpio/mkinitcpio.conf.example` | commented `TPM2_KIRA_PIN=` line with the `chmod 600` note (done) |
 | `initramfs/initramfs-tools/post-update.d/tpm2-kira` | unchanged: it does not reseal |
 
 ### 9.1 Where the PIN lives for unattended resealing
 
-**Decided: `/etc/mkinitcpio.conf`, as `export TPM2_KIRA_PIN='...'`.** This
-replaces the earlier proposal of a separate `/etc/tpm2-kira/reseal.conf`.
+**Decided: `/etc/mkinitcpio.conf`, as a plain `TPM2_KIRA_PIN='...'` line**,
+in the style of the file's other settings. This replaces the earlier proposal
+of a separate `/etc/tpm2-kira/reseal.conf`.
 
-It works because mkinitcpio sources its configuration with `.` and runs post
-hooks as child processes (`run_post_hooks` in `/usr/bin/mkinitcpio`, 42.x):
-exported variables reach the tpm2-kira hook, bare assignments do not. This was
-checked with a real `mkinitcpio -c ... -g ...` run and a probe post hook:
-`TPM2_KIRA_PIN="123456"` left the hook without the variable, `export
-TPM2_KIRA_PIN="123456"` delivered it. The main file is sourced on every run,
-also when a preset passes it with `ALL_config=`. It is safe with respect to
-the image: mkinitcpio does not copy its configuration into the initramfs (the
-`systemd` install hook reads `MODULES` from it and writes only
-`modules-load.d/MODULES.conf`).
+**No `export` is needed, because tpm2-kira reads the file itself** (§6), in a
+manual seal or reseal and in the reseal the post hook runs, which runs as root
+on the host. Through mkinitcpio alone it would not work: mkinitcpio sources its
+configuration with `.` and runs post hooks as child processes
+(`run_post_hooks` in `/usr/bin/mkinitcpio`, 42.x), so only exported variables
+reach a hook — checked with a real `mkinitcpio -c ... -g ...` run and a probe
+hook. mkinitcpio's own settings need no `export` because mkinitcpio reads them
+in the same shell. An exported line still works and is read the same way; it
+matters only for a value that needs the shell, such as `$(cat ...)`, which
+tpm2-kira does not evaluate but mkinitcpio hands to the hook when exported.
+
+tpm2-kira always reads `/etc/mkinitcpio.conf`. A system that builds its
+images from a different file (`mkinitcpio -c`, or a preset with `ALL_config`
+pointing elsewhere) needs the line in `/etc/mkinitcpio.conf` all the same.
+
+The PIN does not reach the image: mkinitcpio does not copy its configuration
+into the initramfs (the `systemd` install hook reads `MODULES` from it and
+writes only `modules-load.d/MODULES.conf`).
 
 **Warning when the automatic reseal will lack the PIN (implemented).** Right
 after a manual `seal` or `reseal` has had the PIN accepted, tpm2-kira reads
 `/etc/mkinitcpio.conf` and warns, once per run, **only** when the PIN is not
-available there for the hook: no `TPM2_KIRA_PIN` line, or one without
-`export` (a separate `export TPM2_KIRA_PIN` line counts). When the line is
-there and exported, the PIN was usually taken from it in the first place, and
-nothing is printed. Systems without mkinitcpio get no warning. `setup` says
-"already sets TPM2_KIRA_PIN" instead of the instructions when the line exists.
+available there: no `TPM2_KIRA_PIN` line, or one whose value needs the shell
+and is not exported. When the line is there, the PIN was usually taken from
+it in the first place, and nothing is printed. Systems without mkinitcpio get
+no warning. `setup` says "already sets TPM2_KIRA_PIN" instead of the
+instructions when the line exists.
 
 What it costs, and what setup therefore says:
 
 - `/etc/mkinitcpio.conf` is `0644` by default. With the PIN in it, it must be
   `chmod 600`; setup prints that. An upgrade of mkinitcpio does not reset the
   mode, since pacman writes a `.pacnew` for a modified backup file.
-- An exported variable is inherited by *every* post hook and its children, not
-  only tpm2-kira's. They run as root anyway, so no privilege boundary is
-  crossed, but the PIN is visible to more processes than strictly needed.
+- A plain line stays in mkinitcpio's shell and is not passed to other post
+  hooks; an exported one would be inherited by every hook and its children.
 - A drop-in `/etc/mkinitcpio.conf.d/tpm2-kira.conf` was tried and **rejected**.
   mkinitcpio 42 ignores drop-ins when a preset passes its configuration with
   `-c` (`ALL_config=...`), which is how `mkinitcpio -P` runs on many systems,
@@ -860,7 +865,7 @@ Ranked by how much I think they matter.
 | 4 | Token must be pre-populated | **decided: yes — tpm2-kira never writes to the token** |
 | 4a | Touch policy | detected, not dictated; `NEVER` recommended for a dedicated slot |
 | 5 | Backup for a lost token | proposed: PEM backup + switch procedure; three-branch PolicyOR would need its own blob bump |
-| 6 | Where the PIN for unattended resealing lives | **decided: `export TPM2_KIRA_PIN=` in `/etc/mkinitcpio.conf`, `chmod 600`** (§9.1) |
+| 6 | Where the PIN for unattended resealing lives | **decided: a plain `TPM2_KIRA_PIN=` line in `/etc/mkinitcpio.conf`, `chmod 600`; tpm2-kira reads it itself** (§9.1) |
 | 8 | File-backed key remains the default | **decided: yes — the token is opt-in** |
 | 9 | `TPM2_KIRA_EXPLAIN_MISMATCH` in `initramfs.conf` | proposed; carries no secret, unlike the PIN |
 | 7 | Token detection in `setup` | **decided: always probe, read-only and PIN-free; with a usable key, ask on the terminal (token slot or local files), even for one candidate; report "none found" and create local files otherwise** (§8.1) |
@@ -910,7 +915,7 @@ Branch `feat/yubikey-v2`, 2026-09-30.
 | `signForTPM`, `SignBlobPayload`, `verifyKeyPairMatch` on the public key | `cmd/policy_or.go`, `cmd/blob.go` | token-signed TPMT signatures and blob signatures verify; r/s padding over 20 runs |
 | Interactive `setup` (menu of usable slots plus local files; default `9a`, never a shared slot), `--yubikey[=SERIAL] [--slot]`, `--local`, no-terminal fallback; `yubikey list` | `cmd/setup.go`, `main.go` | menu, default, retries, EOF, single non-`9a` candidate, no terminal; binary run against the live pcscd |
 | PIN-policy warning (report, menu, after choosing); PIN instructions and the `mkinitcpio.conf` hint | `cmd/setup.go`, `cmd/yubikey.go` | `TestPINGuidance` |
-| PIN taken from `/etc/mkinitcpio.conf` (after the environment, before the prompt); warning after a manual seal/reseal only when that file does not provide an exported PIN | `cmd/mkinitcpio.go`, `cmd/yubikey.go` | `TestReadMkinitcpioPIN`, `TestReadMkinitcpioPINMatchesBash`, `TestPINFromMkinitcpioConf`, `TestWarnIfNoUnattendedPIN` |
+| PIN taken from `/etc/mkinitcpio.conf` (after the environment, before the prompt); warning after a manual seal/reseal only when that file does not provide the PIN | `cmd/mkinitcpio.go`, `cmd/yubikey.go` | `TestReadMkinitcpioPIN`, `TestReadMkinitcpioPINMatchesBash`, `TestPINFromMkinitcpioConf`, `TestWarnIfNoUnattendedPIN` |
 | §7 degradation: `PrepareSigningKey` pre-flight, `ResealSkippedError`, `ErrNVIndexReplaced` guard, one `SKIPPED:` block for all slots, `--require-key` | `cmd/reseal.go`, `cmd/nvram.go`, `main.go` | classification (skip before the write, never after it), block content, pre-flight with no PIN / unplugged / present |
 | mkinitcpio post hook `SKIPPED:` branch; example config line | `initramfs/mkinitcpio/` | hook run with a stand-in `tpm2-kira` |
 | `seal` refuses a mismatched key pair; `seal` and `info` name the token | `cmd/seal.go`, `cmd/info.go` | — |

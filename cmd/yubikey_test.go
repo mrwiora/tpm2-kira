@@ -536,17 +536,17 @@ func TestPINGuidance(t *testing.T) {
 	buf.Reset()
 	printPINInstructions(&buf, tokens[0], s9a)
 	t.Logf("instructions:\n%s", buf.String())
-	for _, want := range []string{"export TPM2_KIRA_PIN='<your PIN>'", "chmod 600 " + conf, "SKIPPED"} {
+	for _, want := range []string{"\n    TPM2_KIRA_PIN='<your PIN>'\n", "chmod 600 " + conf, "SKIPPED"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("instructions lack %q", want)
 		}
 	}
-	if strings.Contains(buf.String(), "read -rs") {
+	if strings.Contains(buf.String(), "export") || strings.Contains(buf.String(), "read -rs") {
 		t.Errorf("mkinitcpio system told to export in the shell:\n%s", buf.String())
 	}
 
 	// mkinitcpio already has it: nothing to do, apart from the file mode.
-	os.WriteFile(conf, []byte("export TPM2_KIRA_PIN='123456'\n"), 0644)
+	os.WriteFile(conf, []byte("TPM2_KIRA_PIN='123456'\n"), 0644)
 	buf.Reset()
 	printPINInstructions(&buf, tokens[0], s9a)
 	if !strings.Contains(buf.String(), "already sets TPM2_KIRA_PIN") || !strings.Contains(buf.String(), "chmod 600") ||
@@ -625,12 +625,12 @@ func TestCheckMkinitcpioPIN(t *testing.T) {
 	cases := map[string]mkinitcpioPIN{
 		"HOOKS=(base)\n":                                     mkinitcpioPINMissing,
 		"#export TPM2_KIRA_PIN='1'\n":                        mkinitcpioPINMissing,
-		"TPM2_KIRA_PIN=\"123456\"\n":                         mkinitcpioPINUnexported,
-		"export TPM2_KIRA_PIN='123456'\n":                    mkinitcpioPINExported,
-		"  export TPM2_KIRA_PIN=123456\n":                    mkinitcpioPINExported,
-		"TPM2_KIRA_PIN=123456\nexport TPM2_KIRA_PIN\n":       mkinitcpioPINExported,
-		"TPM2_KIRA_PIN=123456\nexport FOO TPM2_KIRA_PIN\n":   mkinitcpioPINExported,
-		"export TPM2_KIRA_PIN_OLD=1\nTPM2_KIRA_PIN=123456\n": mkinitcpioPINUnexported,
+		"TPM2_KIRA_PIN=\"123456\"\n":                         mkinitcpioPINAvailable,
+		"export TPM2_KIRA_PIN='123456'\n":                    mkinitcpioPINAvailable,
+		"  export TPM2_KIRA_PIN=123456\n":                    mkinitcpioPINAvailable,
+		"TPM2_KIRA_PIN=123456\nexport TPM2_KIRA_PIN\n":       mkinitcpioPINAvailable,
+		"TPM2_KIRA_PIN=123456\nexport FOO TPM2_KIRA_PIN\n":   mkinitcpioPINAvailable,
+		"export TPM2_KIRA_PIN_OLD=1\nTPM2_KIRA_PIN=123456\n": mkinitcpioPINAvailable,
 	}
 	for content, want := range cases {
 		path := filepath.Join(dir, "mkinitcpio.conf")
@@ -656,9 +656,10 @@ func TestWarnIfNoUnattendedPIN(t *testing.T) {
 
 	conf := filepath.Join(t.TempDir(), "mkinitcpio.conf")
 	for content, wantWarning := range map[string]string{
-		"HOOKS=(base)\n":                  "has no TPM2_KIRA_PIN line",
-		"TPM2_KIRA_PIN=\"123456\"\n":      "without 'export'",
-		"export TPM2_KIRA_PIN='123456'\n": "",
+		"HOOKS=(base)\n":                       "has no TPM2_KIRA_PIN line",
+		"TPM2_KIRA_PIN=\"123456\"\n":           "",
+		"TPM2_KIRA_PIN=\"$(cat /root/pin)\"\n": "needs the shell",
+		"export TPM2_KIRA_PIN='123456'\n":      "",
 	} {
 		os.WriteFile(conf, []byte(content), 0600)
 		mkinitcpioConfPath = conf
@@ -670,7 +671,7 @@ func TestWarnIfNoUnattendedPIN(t *testing.T) {
 		if wantWarning != "" && (!strings.Contains(buf.String(), wantWarning) || !strings.Contains(buf.String(), "SKIPPED")) {
 			t.Errorf("%q: warning lacks %q:\n%s", content, wantWarning, buf.String())
 		}
-		if wantWarning == "without 'export'" {
+		if wantWarning == "needs the shell" {
 			t.Logf("warning:\n%s", buf.String())
 		}
 	}
@@ -705,21 +706,21 @@ func TestReadMkinitcpioPIN(t *testing.T) {
 	cases := map[string]want{
 		"HOOKS=(base)\n":                                             {mkinitcpioPINMissing, ""},
 		"#export TPM2_KIRA_PIN='1'\n":                                {mkinitcpioPINMissing, ""},
-		"TPM2_KIRA_PIN=\"123456\"\n":                                 {mkinitcpioPINUnexported, "123456"},
-		"export TPM2_KIRA_PIN='123456'\n":                            {mkinitcpioPINExported, "123456"},
-		"  export TPM2_KIRA_PIN=123456   # the PIN\n":                {mkinitcpioPINExported, "123456"},
-		"TPM2_KIRA_PIN=123456\nexport TPM2_KIRA_PIN\n":               {mkinitcpioPINExported, "123456"},
-		"TPM2_KIRA_PIN=123456\nexport FOO TPM2_KIRA_PIN\n":           {mkinitcpioPINExported, "123456"},
-		"export TPM2_KIRA_PIN_OLD=1\nTPM2_KIRA_PIN=123456\n":         {mkinitcpioPINUnexported, "123456"},
-		"export TPM2_KIRA_PIN='12 4\"56'\n":                          {mkinitcpioPINExported, "12 4\"56"},
-		"export TPM2_KIRA_PIN=\"a\\\"b'c\"\n":                        {mkinitcpioPINExported, "a\"b'c"},
-		"export TPM2_KIRA_PIN=12\\ 34\n":                             {mkinitcpioPINExported, "12 34"},
-		"export TPM2_KIRA_PIN=1'2 3'\"4\"\n":                         {mkinitcpioPINExported, "12 34"},
-		"export TPM2_KIRA_PIN=111111\nexport TPM2_KIRA_PIN=222222\n": {mkinitcpioPINExported, "222222"},
-		"export TPM2_KIRA_PIN=\"$(cat /root/pin)\"\n":                {mkinitcpioPINExported, ""},
-		"export TPM2_KIRA_PIN=$PIN\n":                                {mkinitcpioPINExported, ""},
-		"export TPM2_KIRA_PIN=`cat pin`\n":                           {mkinitcpioPINExported, ""},
-		"export TPM2_KIRA_PIN='$literal'\n":                          {mkinitcpioPINExported, "$literal"},
+		"TPM2_KIRA_PIN=\"123456\"\n":                                 {mkinitcpioPINAvailable, "123456"},
+		"export TPM2_KIRA_PIN='123456'\n":                            {mkinitcpioPINAvailable, "123456"},
+		"  export TPM2_KIRA_PIN=123456   # the PIN\n":                {mkinitcpioPINAvailable, "123456"},
+		"TPM2_KIRA_PIN=123456\nexport TPM2_KIRA_PIN\n":               {mkinitcpioPINAvailable, "123456"},
+		"TPM2_KIRA_PIN=123456\nexport FOO TPM2_KIRA_PIN\n":           {mkinitcpioPINAvailable, "123456"},
+		"export TPM2_KIRA_PIN_OLD=1\nTPM2_KIRA_PIN=123456\n":         {mkinitcpioPINAvailable, "123456"},
+		"export TPM2_KIRA_PIN='12 4\"56'\n":                          {mkinitcpioPINAvailable, "12 4\"56"},
+		"export TPM2_KIRA_PIN=\"a\\\"b'c\"\n":                        {mkinitcpioPINAvailable, "a\"b'c"},
+		"export TPM2_KIRA_PIN=12\\ 34\n":                             {mkinitcpioPINAvailable, "12 34"},
+		"export TPM2_KIRA_PIN=1'2 3'\"4\"\n":                         {mkinitcpioPINAvailable, "12 34"},
+		"export TPM2_KIRA_PIN=111111\nexport TPM2_KIRA_PIN=222222\n": {mkinitcpioPINAvailable, "222222"},
+		"export TPM2_KIRA_PIN=\"$(cat /root/pin)\"\n":                {mkinitcpioPINAvailable, ""},
+		"export TPM2_KIRA_PIN=$PIN\n":                                {mkinitcpioPINAvailable, ""},
+		"export TPM2_KIRA_PIN=`cat pin`\n":                           {mkinitcpioPINAvailable, ""},
+		"export TPM2_KIRA_PIN='$literal'\n":                          {mkinitcpioPINAvailable, "$literal"},
 		"echo TPM2_KIRA_PIN=123456\n":                                {mkinitcpioPINMissing, ""},
 	}
 	for content, w := range cases {

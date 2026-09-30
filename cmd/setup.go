@@ -173,7 +173,7 @@ func printPINInstructions(w io.Writer, t TokenInfo, s TokenSlot) {
 		fmt.Fprintf(w, "    read -rs %s && export %s\n", PINEnvVar, PINEnvVar)
 		fmt.Fprintln(w, "    tpm2-kira seal --pcrs 0,7")
 		return
-	case info.State == mkinitcpioPINExported && info.PIN != "":
+	case info.State == mkinitcpioPINAvailable:
 		fmt.Fprintf(w, "%s already sets %s: sealing, resealing and the automatic\n", mkinitcpioConfPath, PINEnvVar)
 		fmt.Fprintln(w, "reseal after kernel and initramfs updates all take the PIN from there.")
 		if info.Loose {
@@ -184,9 +184,8 @@ func printPINInstructions(w io.Writer, t TokenInfo, s TokenSlot) {
 
 	fmt.Fprintln(w, "Setup did not use the PIN; sealing does. Put it in one place and every step")
 	fmt.Fprintf(w, "finds it — seal, reseal, and the mkinitcpio post hook that reseals after every\n")
-	fmt.Fprintf(w, "kernel or initramfs update. Add this line to %s\n", mkinitcpioConfPath)
-	fmt.Fprintln(w, "('export' is required: mkinitcpio passes only exported variables to its hooks):")
-	fmt.Fprintf(w, "    export %s='<your PIN>'\n", PINEnvVar)
+	fmt.Fprintf(w, "kernel or initramfs update. Add this line to %s:\n", mkinitcpioConfPath)
+	fmt.Fprintf(w, "    %s='<your PIN>'\n", PINEnvVar)
 	fmt.Fprintln(w, "The file is readable by every user by default and would then hold the PIN, so")
 	fmt.Fprintln(w, "make it readable by root only (it is not copied into the initramfs image):")
 	fmt.Fprintf(w, "    chmod 600 %s\n", mkinitcpioConfPath)

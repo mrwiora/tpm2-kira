@@ -7,20 +7,20 @@ import (
 	"strings"
 )
 
-// The PIN for the unattended reseal lives in /etc/mkinitcpio.conf, as
-// 'export TPM2_KIRA_PIN=...'. mkinitcpio sources the file in its own shell
-// and runs the post hook as a child process, so only an exported variable
-// reaches the hook. A manual seal or reseal reads the same line, so the PIN
-// is not asked for twice.
+// The PIN for the unattended reseal lives in /etc/mkinitcpio.conf as a plain
+// TPM2_KIRA_PIN='...' line, like the file's other settings. tpm2-kira reads it
+// from the file itself — in a manual seal or reseal and in the reseal the
+// post hook runs — so no 'export' is needed: mkinitcpio would pass only
+// exported variables to the hook, but the hook does not depend on that.
 
-// mkinitcpioPIN is what /etc/mkinitcpio.conf provides to the post hook.
+// mkinitcpioPIN is what /etc/mkinitcpio.conf provides.
 type mkinitcpioPIN int
 
 const (
-	mkinitcpioNotUsed       mkinitcpioPIN = iota // no mkinitcpio, or file unreadable
-	mkinitcpioPINMissing                         // no TPM2_KIRA_PIN assignment
-	mkinitcpioPINUnexported                      // assigned, but not exported
-	mkinitcpioPINExported                        // reaches the post hook
+	mkinitcpioNotUsed        mkinitcpioPIN = iota // no mkinitcpio, or file unreadable
+	mkinitcpioPINMissing                          // no TPM2_KIRA_PIN assignment
+	mkinitcpioPINNotReadable                      // needs shell expansion and is not exported
+	mkinitcpioPINAvailable                        // the reseal in the post hook will have it
 )
 
 // mkinitcpioPINInfo is the result of reading mkinitcpio.conf.
@@ -78,10 +78,14 @@ func readMkinitcpioPIN(path string) mkinitcpioPINInfo {
 		}
 	}
 	switch {
+	case info.PIN != "":
+		info.State = mkinitcpioPINAvailable
 	case assigned && exported:
-		info.State = mkinitcpioPINExported
+		// $(...) and friends: tpm2-kira cannot evaluate them, but
+		// mkinitcpio does and hands the result to the hook.
+		info.State = mkinitcpioPINAvailable
 	case assigned:
-		info.State = mkinitcpioPINUnexported
+		info.State = mkinitcpioPINNotReadable
 	}
 	return info
 }
@@ -183,27 +187,24 @@ func checkMkinitcpioPIN(path string) mkinitcpioPIN {
 
 // warnIfNoUnattendedPIN tells the user, right after the PIN was accepted for
 // a manual seal or reseal, when the automatic reseal after an initramfs
-// rebuild will not have it. Silent when mkinitcpio.conf exports the PIN, and
+// rebuild will not have it. Silent when mkinitcpio.conf provides the PIN, and
 // on systems without mkinitcpio.
 func warnIfNoUnattendedPIN(w io.Writer) {
-	info := readMkinitcpioPIN(mkinitcpioConfPath)
-	var problem, fix string
-	switch info.State {
+	var problem string
+	switch checkMkinitcpioPIN(mkinitcpioConfPath) {
 	case mkinitcpioPINMissing:
 		problem = fmt.Sprintf("%s has no %s line", mkinitcpioConfPath, PINEnvVar)
-		fix = "add the line"
-	case mkinitcpioPINUnexported:
-		problem = fmt.Sprintf("%s sets %s without 'export'; mkinitcpio passes\n"+
-			"         only exported variables to its hooks", mkinitcpioConfPath, PINEnvVar)
-		fix = "put 'export' in front of it, so it reads"
+	case mkinitcpioPINNotReadable:
+		problem = fmt.Sprintf("the %s line in %s needs the shell to evaluate it,\n"+
+			"         which tpm2-kira does not do", PINEnvVar, mkinitcpioConfPath)
 	default:
 		return
 	}
 	fmt.Fprintf(w, "WARNING: %s.\n", problem)
 	fmt.Fprintln(w, "         The automatic reseal after kernel and initramfs updates will therefore")
 	fmt.Fprintln(w, "         have no PIN: it will be SKIPPED, and the next boot will show a PCR")
-	fmt.Fprintf(w, "         mismatch until you reseal by hand. To make it work, %s\n", fix)
-	fmt.Fprintf(w, "             export %s='<your PIN>'\n", PINEnvVar)
+	fmt.Fprintln(w, "         mismatch until you reseal by hand. To make it work, add the line")
+	fmt.Fprintf(w, "             %s='<your PIN>'\n", PINEnvVar)
 	fmt.Fprintf(w, "         and make the file readable by root only: chmod 600 %s\n", mkinitcpioConfPath)
 }
 

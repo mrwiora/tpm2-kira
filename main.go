@@ -463,7 +463,7 @@ YUBIKEY SUBCOMMANDS:
 
   With the signing key on a YubiKey, seal and reseal need the token and its
   PIN. The PIN is taken from the %s environment variable, else from
-  the 'export TPM2_KIRA_PIN=...' line in /etc/mkinitcpio.conf (which the
+  the TPM2_KIRA_PIN='...' line in /etc/mkinitcpio.conf (which the
   automatic reseal after initramfs rebuilds needs anyway), else asked on the
   terminal. reveal, run and info never need the token.
 
