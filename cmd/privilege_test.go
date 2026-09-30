@@ -108,11 +108,19 @@ func TestTPMPermissionMessage(t *testing.T) {
 	for _, want := range []string{
 		"permission denied",
 		"sudo tpm2-kira",
-		"udev rule",
 		"/dev/tpm0",
 	} {
 		if !strings.Contains(message, want) {
 			t.Errorf("the message should contain %q, got:\n%s", want, message)
+		}
+	}
+
+	// Loosening the device permissions is never the advice: anything that can
+	// reach the TPM can ask it to unseal, which is why the threat model puts
+	// non-root userspace outside the boundary.
+	for _, unwanted := range []string{"udev", "chmod", "GROUP="} {
+		if strings.Contains(message, unwanted) {
+			t.Errorf("the message must not suggest %q, got:\n%s", unwanted, message)
 		}
 	}
 
@@ -341,5 +349,67 @@ func TestOpenSigningKeyWarnsAboutMode(t *testing.T) {
 
 	if !strings.Contains(out, "WARNING") {
 		t.Errorf("opening a world-readable key should warn, got:\n%s", out)
+	}
+}
+
+// TestCheckPrivilegeCoversEveryTPMCommand is a regression guard. The TPM device
+// is root-only by design, so a command that opens it and is not in the table
+// would fall through to a bare syscall error — and, worse, would imply the
+// project tolerates a non-root user reaching the TPM.
+func TestCheckPrivilegeCoversEveryTPMCommand(t *testing.T) {
+	if IsRoot() {
+		t.Skip("running as root; nothing is refused")
+	}
+
+	// Every command that opens the TPM, including the read-only ones.
+	gated := [][]string{
+		{"setup"}, {"seal"}, {"reseal"},
+		{"reveal"}, {"reveal-plain"}, {"run"}, {"info"},
+		{"nvram", "list"}, {"nvram", "status"},
+		{"nvram", "delete"}, {"nvram", "restore"},
+		{"yubikey", "adopt"},
+	}
+
+	for _, argv := range gated {
+		name := strings.Join(argv, " ")
+		err := CheckPrivilege(argv[0], argv[1:])
+		if err == nil {
+			t.Errorf("%q opens the TPM or the keys directory and must require root", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "needs root") {
+			t.Errorf("%q: expected a root explanation, got: %v", name, err)
+		}
+		if !strings.Contains(err.Error(), "sudo tpm2-kira "+name) {
+			t.Errorf("%q: the message should show the command to re-run, got: %v", name, err)
+		}
+	}
+}
+
+// TestCheckPrivilegeAllowsHarmlessCommands checks the other side: refusing a
+// command that touches nothing would be gratuitous.
+func TestCheckPrivilegeAllowsHarmlessCommands(t *testing.T) {
+	ungated := [][]string{
+		{"version"}, {"help"}, {"pcrtips"},
+		{"yubikey", "list"}, {"yubikey", "status"}, {"yubikey", "export-pubkey"},
+	}
+
+	for _, argv := range ungated {
+		if err := CheckPrivilege(argv[0], argv[1:]); err != nil {
+			t.Errorf("%q touches neither the TPM nor the keys and should not need root: %v",
+				strings.Join(argv, " "), err)
+		}
+	}
+}
+
+// TestCheckPrivilegeUnknownCommandIsNotGated keeps the table from becoming a
+// silent allowlist: an unrecognised command must fall through to the usual
+// "unknown command" handling rather than being refused for the wrong reason.
+func TestCheckPrivilegeUnknownCommandIsNotGated(t *testing.T) {
+	if err := CheckPrivilege("nonsense", nil); err != nil {
+		t.Errorf("an unknown command should not be refused on privilege grounds: %v", err)
+	}
+	if err := CheckPrivilege("nvram", []string{"nonsense"}); err != nil {
+		t.Errorf("an unknown nvram subcommand should not be refused on privilege grounds: %v", err)
 	}
 }

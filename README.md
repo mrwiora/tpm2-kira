@@ -879,43 +879,38 @@ sudo dmesg | grep -i tpm
 ```
 Ensure TPM 2.0 is enabled in your BIOS/UEFI settings.
 
-**Permission denied on `/dev/tpm0`:**
+**Permission denied, or "needs root":**
 
-tpm2-kira talks to the TPM directly and keeps its signing key under
-`/var/lib/tpm2-kira`, both root-owned on a normal system, so most commands need
-`sudo`. Running one without it says so rather than reporting a bare syscall
+Every command that talks to the TPM needs root, and so does anything that reads
+the signing key under `/var/lib/tpm2-kira`. That is deliberate rather than
+incidental: whatever can open the TPM device can ask the TPM to unseal the secret
+while the PCRs still match, so the device is root-only and the threat model puts
+non-root userspace outside the trust boundary ([SECURITY-BACKGROUND.md
+§8](docs/SECURITY-BACKGROUND.md)). **Do not loosen the permissions on
+`/dev/tpm0`.**
+
+Running a command without root says so, rather than reporting a bare syscall
 error:
 
 ```
-tpm2-kira: FAILED: 'tpm2-kira seal' needs root, because it writes to TPM NVRAM
-  and reads the signing key from /var/lib/tpm2-kira.
+tpm2-kira: FAILED: 'tpm2-kira reveal' needs root, because it reads the sealed
+  secret from the TPM.
   Run it again with sudo:
-      sudo tpm2-kira seal ...
+      sudo tpm2-kira reveal ...
   Current user has UID 1000.
 ```
 
 | Needs root | Works without it |
 |---|---|
 | `setup`, `seal`, `reseal` | `version`, `help`, `pcrtips` |
-| `nvram delete`, `nvram restore` | `reveal`, `reveal-plain`, `run`, `info` |
-| `yubikey adopt` | `nvram list`, `nvram status` |
-| | `yubikey list`, `yubikey status`, `yubikey export-pubkey` |
+| `reveal`, `reveal-plain`, `run`, `info` | `yubikey list`, `yubikey status` |
+| `nvram list`, `status`, `delete`, `restore` | `yubikey export-pubkey` (to stdout) |
+| `yubikey adopt` | |
 
-The commands in the right-hand column only read, so they are not refused
-outright — a udev rule granting a group access to `/dev/tpm0` lets them work for
-an ordinary user, which is worth setting up if you want `reveal` without `sudo`:
+The right-hand column touches neither the TPM nor the keys directory — the
+`yubikey` ones only inspect a token through `pcscd`.
 
-```bash
-ls -la /dev/tpm0
-
-# For example, in /etc/udev/rules.d/60-tpm.rules:
-#   KERNEL=="tpm0", MODE="0660", GROUP="tss"
-# then add your user to that group and replug or reboot.
-```
-
-Without such a rule they report the same explanation instead of
-`permission denied`. As always, the exit status is 0 — judge success from the
-output.
+As always the exit status is 0, so judge success from the output.
 
 **TOTP code doesn't match after update:**
 ```bash

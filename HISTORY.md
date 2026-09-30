@@ -20,6 +20,26 @@ now lives next to the code that exits, and in the README's "Exit status" section
 `tpm2-kira: FAILED:` remains the marker to grep for, and the exit status is still
 always 0.
 
+### Every command that opens the TPM requires root
+
+The first version of the privilege check exempted the read-only commands —
+`reveal`, `info`, `nvram list` and friends — on the grounds that a udev rule
+could grant a group access to `/dev/tpm0`, and the error message offered that as
+an alternative to `sudo`.
+
+That was wrong, and it contradicted the project's own threat model: §8 already
+places non-root userspace outside the trust boundary precisely because *anything*
+that can open the TPM device can ask the TPM to unseal the secret while the PCRs
+still match. Reading the sealed secret is the capability the boundary protects, so
+there is no read-only tier to exempt, and suggesting a udev rule was advice to
+move the boundary rather than to work within it.
+
+All commands that open the TPM now require root, the suggestion is gone, and the
+threat model says explicitly that loosening the device permissions is not a
+supported configuration. `version`, `help`, `pcrtips` and the `yubikey`
+subcommands that only inspect a token through pcscd remain ungated, since they
+touch neither the TPM nor the keys directory.
+
 ### The signing key is created 0400, and a looser mode is reported
 
 `setup` used to write the private key 0600. It is now 0400: the file is written
