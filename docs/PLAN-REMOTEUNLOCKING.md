@@ -208,6 +208,12 @@ That third row is the reason this design is not simply "TLS plus a quote".
 Channel binding alone would leave the relay attack open; binding the secret to
 the hardware closes it.
 
+The release key and this wrap are shared with
+[PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md), which releases a 32-byte factor
+instead of a passphrase and so needs no AES-GCM layer. Both use the one
+`Release` message defined there (§4); the "server key" of §5.1 is, generically,
+the verifier's approval key.
+
 ### 5.3 Handling the plaintext
 
 Once `ActivateCredential` returns, a passphrase exists in the initrd's memory
@@ -455,7 +461,8 @@ should be presented as such rather than shipped quietly.
 4. **Should the BLE path and the server path coexist on one machine?** A
    laptop that unlocks from a phone at home and from the server in the office
    is an attractive story and a policy-precedence problem. The blob format
-   should allow more than one verifier from the start.
+   should allow more than one verifier from the start. The phone side of that
+   story is [PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md).
 5. **Passphrase rotation at scale.** `unlock rotate` on one machine is easy; a
    fleet-wide rotation with keyslot management, partial failures and rollback
    is a project of its own.

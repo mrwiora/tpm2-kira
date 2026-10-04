@@ -269,6 +269,12 @@ the device id, a friendly name, the baseline PCR profile and the event log; the
 machine ends up holding the phone's receipt-signing public key as its pinned
 anchor.
 
+With [factor release](PLAN-FACTORRELEASE.md) enrolled, the phone additionally
+holds a wrapped factor: a blob that only this machine's TPM can open. That is
+the first secret-bearing item on the phone, and the receipt-signing key then
+doubles as the approval key for the TPM's `PolicySigned` branch
+([PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md) §4.1).
+
 Operational cost worth documenting: taking the adapter through an HCI user
 channel **disconnects everything else using Bluetooth** for the duration —
 mice, headphones, keyboards. `attest enrol` says so before it starts, offers
@@ -459,6 +465,12 @@ protects the image containing it:
 of these two situations the machine is in, in those words. It refuses without
 `--allow-sealed-anchor` when there is no image anchor
 ([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.2).
+
+The way to make the gate real on either kind of machine is to stop asking
+software to hold and withhold a secret instead:
+[PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md) has the phone release one
+factor of the LUKS key after a successful attestation. It runs in `lazy` mode,
+because the missing factor does the enforcing.
 
 The second thing to be plain about: enforced mode **cannot lock you out of your
 data**. It holds one initramfs. Boot any rescue medium and the disk unlocks

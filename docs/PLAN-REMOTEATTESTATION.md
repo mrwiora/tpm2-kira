@@ -4,13 +4,17 @@
 > **Scope:** the reusable attestation core (`attest/`). Transport-independent,
 > verifier-independent, UI-independent.
 >
-> Two consumers are planned on top of it:
-> [PLAN-BLE.md](PLAN-BLE.md) — a phone verifies the machine over Bluetooth LE
-> before the passphrase prompt — and
-> [PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) — a server verifies the
-> machine and hands out the LUKS passphrase.
+> Three consumers are planned on top of it:
 >
-> This document defines what both share. If a change here would only ever help
+> - [PLAN-BLE.md](PLAN-BLE.md) — a phone verifies the machine over Bluetooth LE
+>   before the passphrase prompt.
+> - [PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) — a server verifies the
+>   machine and hands out the LUKS passphrase.
+> - [PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md) — a verifier hands out one
+>   factor of the passphrase, which an external tool combines with a typed
+>   password.
+>
+> This document defines what they share. If a change here would only ever help
 > one of them, it belongs in that plan instead.
 
 ---
@@ -566,6 +570,10 @@ device's pinned EK, bound to the AK Name, so only the TPM that produced the
 quote can unwrap it. See [PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) §5.
 Channel binding (§6.2) is a second, weaker layer on top.
 
+The same holds for [factor release](PLAN-FACTORRELEASE.md), including over
+BLE: as soon as the phone hands out a secret, the relay is the central attack
+there too, and the same hardware binding is the answer.
+
 ### 11.4 Time
 
 The initrd has no trustworthy clock. The RTC may be wrong, and on many machines
@@ -600,8 +608,11 @@ cannot break a boot chain. That rule is right for a tool that *displays* a code
 and wrong for one that *gates* a boot: a gate that exits 0 on failure is not a
 gate.
 
-Therefore: `attest verify`, and the gate command defined in
-[PLAN-BLE.md](PLAN-BLE.md) §7, **exit non-zero on failure**, and this is stated
+Therefore: `attest verify`, the gate command defined in
+[PLAN-BLE.md](PLAN-BLE.md) §7, and the commands that hand out a secret —
+`unlock try` ([PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) §10) and
+`factor release` ([PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md) §5.2) —
+**exit non-zero on failure**, and this is stated
 in their help text and in README.md next to the existing rule. Every other
 command keeps the existing behaviour. Getting this wrong silently converts
 enforced mode into a decoration, so it is an explicit test case.
