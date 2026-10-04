@@ -29,7 +29,9 @@ type mkinitcpioPINInfo struct {
 	// PIN is the value of the last assignment. It is empty when the value
 	// cannot be known without running the shell ($VAR, $(...), `...`).
 	PIN string
-	// Loose is true when group or others may read the file.
+	// Loose is true when group or others may read the file, or it is owned
+	// by someone other than root or the caller. A PIN from such a file is
+	// refused.
 	Loose bool
 }
 
@@ -38,12 +40,23 @@ type mkinitcpioPINInfo struct {
 // export NAME, with '...', "..." and backslash quoting — and nothing more;
 // anything it cannot evaluate statically yields no PIN rather than a guess.
 func readMkinitcpioPIN(path string) mkinitcpioPINInfo {
-	data, err := os.ReadFile(path)
+	// The mode and owner are checked on the descriptor the content is read
+	// from, so they describe the file the PIN came from.
+	f, err := os.Open(path)
+	if err != nil {
+		return mkinitcpioPINInfo{State: mkinitcpioNotUsed}
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		return mkinitcpioPINInfo{State: mkinitcpioNotUsed}
+	}
+	data, err := io.ReadAll(io.LimitReader(f, 1<<20))
 	if err != nil {
 		return mkinitcpioPINInfo{State: mkinitcpioNotUsed}
 	}
 	info := mkinitcpioPINInfo{State: mkinitcpioPINMissing}
-	if st, err := os.Stat(path); err == nil && st.Mode().Perm()&0o077 != 0 {
+	if uid, ok := ownerOf(st); st.Mode().Perm()&0o077 != 0 || !ok || !trustedOwner(uid) {
 		info.Loose = true
 	}
 
@@ -209,15 +222,19 @@ func warnIfNoUnattendedPIN(w io.Writer) {
 }
 
 // pinFromMkinitcpio returns the PIN set in mkinitcpio.conf, if it can be read
-// there, and warns when the file lets others read it.
-func pinFromMkinitcpio(w io.Writer) (string, bool) {
+// there. A PIN in a file that others can read, or that root does not own, is
+// refused rather than used: it has to be treated as already disclosed.
+func pinFromMkinitcpio() (string, bool, error) {
 	info := readMkinitcpioPIN(mkinitcpioConfPath)
 	if info.PIN == "" {
-		return "", false
+		return "", false, nil
 	}
 	if info.Loose {
-		fmt.Fprintf(w, "WARNING: %s holds the YubiKey PIN but can be read by other users.\n", mkinitcpioConfPath)
-		fmt.Fprintf(w, "         Make it readable by root only: chmod 600 %s\n", mkinitcpioConfPath)
+		return "", false, fmt.Errorf("%s holds the YubiKey PIN but other users can read it, or root does not own it,\n"+
+			"  so tpm2-kira does not use it. Make it readable by root only:\n"+
+			"      chown root: %s && chmod 600 %s\n"+
+			"  and consider changing the PIN, since it may already have been read",
+			mkinitcpioConfPath, mkinitcpioConfPath, mkinitcpioConfPath)
 	}
-	return info.PIN, true
+	return info.PIN, true, nil
 }

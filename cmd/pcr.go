@@ -162,7 +162,7 @@ func PCRSpecsToString(specs []PCRSpec) string {
 	for i, spec := range specs {
 		switch spec.Source {
 		case PCRSourceUKI:
-			parts[i] = fmt.Sprintf("%du:%s", spec.Index, spec.Command)
+			parts[i] = fmt.Sprintf("%du:%s", spec.Index, quoteUntrusted(spec.Command))
 		default:
 			parts[i] = fmt.Sprintf("%d%s", spec.Index, spec.Source.Suffix())
 		}

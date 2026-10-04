@@ -13,7 +13,8 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
-// Seal generates and seals a TOTP secret to TPM NVRAM with PolicyOR (PCR + Signed branches)
+// Seal creates a new TOTP key inside the TPM and approves the current PCR
+// values for it (see cmd/totpkey.go).
 func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath string, debug bool, hashAlgo PCRHashAlgo, verifyUKI bool) error {
 	// Fall back to default key paths when not provided by the user
 	if pubKeyPath == "" {
@@ -38,22 +39,24 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 		}
 	}
 
-	// Both key files must be mode 0400 before either is loaded.
-	for _, keyPath := range []string{privKeyPath, pubKeyPath} {
-		if err := CheckSigningKeyFileMode(keyPath); err != nil {
-			return fmt.Errorf("cannot seal: %w", err)
-		}
+	// Both key files are checked (mode 0400, trusted owner and directory, no
+	// symlink) on the descriptor they are read from, so what is parsed is
+	// what was checked. The private key must be usable before anything is
+	// generated or written: without it the PolicySigned NV write cannot be
+	// authorized.
+	keyData, err := ReadSigningKeyFile(privKeyPath)
+	if err != nil {
+		return fmt.Errorf("cannot seal: %w", err)
 	}
-
-	// The private key must be usable before anything is generated or written:
-	// without it the PolicySigned NV write cannot be authorized.
-	signer, err := LoadSigningPrivateKey(privKeyPath)
+	pubData, err := ReadSigningKeyFile(pubKeyPath)
+	if err != nil {
+		return fmt.Errorf("cannot seal: %w", err)
+	}
+	signer, err := parseSigningPrivateKey(keyData, privKeyPath)
 	if err != nil {
 		return fmt.Errorf("cannot seal: signing private key is not usable: %w", err)
 	}
-
-	// Load and validate the signing public key
-	pubKey, _, err := LoadSigningPublicKeyFromPEM(pubKeyPath)
+	pubKey, err := parseSigningPublicKeyPEM(pubData, pubKeyPath)
 	if err != nil {
 		return fmt.Errorf("failed to load signing public key: %w", err)
 	}
@@ -74,7 +77,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	fmt.Printf("Hash Algorithm: %s (%d-byte PCR digests)\n", hashAlgo.DisplayString(), hashAlgo.DigestSize())
 	fmt.Printf("PCRs used for sealing: %s\n", PCRSpecsToString(specs))
 	fmt.Printf("Signing Key: %s (%s, fingerprint: %s)%s\n", pubKeyPath, PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey), keyLocation)
-	fmt.Printf("Authentication: PolicyOR (PCR branch + PolicySigned branch)\n")
+	fmt.Printf("Authentication: PolicyAuthorize (PCR values + generation, approved by the signing key)\n")
 	fmt.Println()
 	for _, spec := range specs {
 		fmt.Printf("  PCR%-2d (%s): %s\n", spec.Index, spec.Source.String(), GetPCRDescription(spec.Index))
@@ -84,80 +87,142 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	WarnAboutPCRSelection(specs)
 	WarnAboutHashAlgo(hashAlgo)
 
-	// Generate TOTP secret
-	fmt.Println("Generating TOTP secret...")
-	dataToSeal, err := generateTOTPSecret()
-	if err != nil {
-		return fmt.Errorf("failed to generate TOTP secret: %w", err)
+	if err := ValidateBlobIndex(nvramIndex); err != nil {
+		return fmt.Errorf("cannot seal: %w", err)
 	}
 
-	// Seal the generated TOTP secret
-	if err := sealDataWithSpecs(tpmPath, specs, nvramIndex, dataToSeal, pubKey, pubKeyPath, privKeyPath, debug, hashAlgo, verifyUKI); err != nil {
-		return err
-	}
-
-	// Display TOTP information
-	fmt.Println()
-	fmt.Println("=== TOTP Secret Generated ===")
-	totpSecret := string(dataToSeal)
-	fmt.Printf("Secret: %s\n", totpSecret)
-	fmt.Println()
-	fmt.Println("Scan QR Code with authenticator app:")
-	fmt.Println()
-
-	// Display QR code with slot and PCR information
-	displayTOTPQRCode(totpSecret, nvramIndex, PCRSpecsToString(specs))
-
-	fmt.Println()
-	fmt.Println("To generate TOTP codes:")
-	fmt.Printf("   tpm2-kira reveal --nvram 0x%08X\n", nvramIndex)
-	fmt.Println("   (PolicyOR: PCR branch for normal access, PolicySigned for recovery)")
-
-	return nil
-}
-
-// sealDataWithSpecs seals data using explicit PCR specs with PolicyOR (PCR + Signed branches)
-func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataToSeal []byte, pubKey crypto.PublicKey, pubKeyPath, privKeyPath string, debug bool, hashAlgo PCRHashAlgo, verifyUKI bool) error {
-	if len(specs) == 0 {
-		return fmt.Errorf("no PCRs specified")
-	}
-
-	if len(dataToSeal) == 0 {
-		return fmt.Errorf("no data to seal")
-	}
-
-	if pubKey == nil {
-		return fmt.Errorf("no signing public key provided")
-	}
-
-	if privKeyPath == "" {
-		privKeyPath = DefaultPrivateKeyPath
-	}
-
-	// Open TPM
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
 	defer tpmDev.Close()
-
-	// Cleanup TPM memory
 	CleanupTPM(tpmDev, debug)
 
-	// Load the signing private key — required for PolicySigned NV writes.
-	// This is done after the TPM open so that simple input validations and
-	// the TPM availability check run first.
-	privKey, err := LoadSigningPrivateKey(privKeyPath)
-	if err != nil {
-		return fmt.Errorf("failed to load signing private key for NV write authorization: %w", err)
+	// A key on a token must be able to sign before anything is created.
+	if err := PrepareSigningKey(signer); err != nil {
+		return fmt.Errorf("cannot seal: %w", err)
 	}
 
-	// Read all PCR values from their respective sources using the shared helper
+	alg, err := ChooseTOTPAlgorithm(tpmDev)
+	if err != nil {
+		return fmt.Errorf("cannot seal: %w", err)
+	}
+	if alg != tpm2.TPMAlgSHA1 {
+		fmt.Println("NOTE: this TPM has no SHA-1, so the TOTP key uses HMAC-SHA256 instead of the")
+		fmt.Println("  usual HMAC-SHA1. The QR code says so (algorithm=SHA256), but some")
+		fmt.Println("  authenticator apps ignore that and then show codes that never match.")
+		fmt.Println("  Check that your app's first code matches 'tpm2-kira reveal' before you rely on it.")
+		fmt.Println()
+	}
+
+	key := make([]byte, totpKeySize(alg))
+	if _, err := rand.Read(key); err != nil {
+		return fmt.Errorf("failed to generate the TOTP key: %w", err)
+	}
+	defer clear(key)
+
+	blob, err := newKeyObject(tpmDev, key, alg, pubKey)
+	if err != nil {
+		return err
+	}
+	blob.Payload.PublicKeyPath = pubKeyPath
+	blob.Payload.PrivateKeyPath = privKeyPath
+
+	if err := approveAndWrite(tpmDev, nvramIndex, blob, specs, hashAlgo, verifyUKI, signer, debug); err != nil {
+		return err
+	}
+
+	// Display TOTP information
+	totpSecret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(key)
+	fmt.Println()
+	fmt.Println("=== TOTP Secret Generated ===")
+	fmt.Println("The key is now inside the TPM, which computes every code; it is shown here")
+	fmt.Println("once, for your authenticator, and cannot be read back later.")
+	fmt.Printf("Secret: %s (HMAC-%s)\n", totpSecret, totpAlgorithmName(alg))
+	fmt.Println()
+	fmt.Println("Scan QR Code with authenticator app:")
+	fmt.Println()
+	displayTOTPQRCode(totpSecret, nvramIndex, PCRSpecsToString(specs), alg)
+
+	fmt.Println()
+	fmt.Println("To generate TOTP codes:")
+	fmt.Printf("   tpm2-kira reveal --nvram 0x%08X\n", nvramIndex)
+
+	return nil
+}
+
+// newKeyObject creates the TOTP key object for key and returns a blob with
+// the object and its policy parameters, not yet approved for any PCR state.
+//
+// The object's policy is PolicyAuthorize by pubKey, qualified by a fresh
+// policyRef: whatever pubKey approves for this policyRef can use the key.
+func newKeyObject(tpmDev transport.TPM, key []byte, alg tpm2.TPMAlgID, pubKey crypto.PublicKey) (*SealedBlob, error) {
+	// Loading the key checks that this TPM can verify its signatures, and
+	// yields the Name the TPM will see in PolicyAuthorize.
+	loadRsp, err := LoadExternalPublicKey(tpmDev, pubKey)
+	if err != nil {
+		return nil, fmt.Errorf("signing key incompatible with this TPM: %w", err)
+	}
+	keyName := loadRsp.Name.Buffer
+	FlushHandle(tpmDev, loadRsp.ObjectHandle)
+
+	signingPublic, _, err := PublicKeyToTPM2BPublic(pubKey)
+	if err != nil {
+		return nil, err
+	}
+	policyRef, err := newPolicyRef()
+	if err != nil {
+		return nil, err
+	}
+
+	primary, err := CreatePrimaryKey(tpmDev)
+	if err != nil {
+		return nil, err
+	}
+	defer FlushHandle(tpmDev, primary.ObjectHandle)
+	obj, err := CreateTOTPKey(tpmDev, primary, key, alg, policyAuthorizeDigest(keyName, policyRef))
+	if err != nil {
+		return nil, err
+	}
+
+	return &SealedBlob{
+		Version: CurrentBlobVersion,
+		Payload: SealedBlobPayload{
+			Public:        obj.Public,
+			Private:       obj.Private,
+			TOTPAlgorithm: alg,
+			PolicyRef:     policyRef,
+			SigningPublic: signingPublic.Bytes(),
+		},
+	}, nil
+}
+
+// ErrGenerationRaised marks a failure after the slot's generation was raised:
+// the previous approval is revoked, so no code is shown until a reseal
+// completes. Such a failure is never reported as a harmless skip.
+var ErrGenerationRaised = errors.New("the slot's generation was raised")
+
+// approveAndWrite approves the PCR values for specs and writes the blob.
+//
+// It raises the slot's generation, which revokes every earlier approval for
+// the slot, signs PolicyPCR(values) + PolicyNV(generation) with signer, and
+// writes the signed blob. The key object in blob is not touched: only its
+// approval changes, so the TOTP key never has to leave the TPM.
+func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, specs []PCRSpec, hashAlgo PCRHashAlgo, verifyUKI bool, signer crypto.Signer, debug bool) error {
+	if len(specs) == 0 {
+		return fmt.Errorf("no PCRs specified")
+	}
+	if signer == nil {
+		return fmt.Errorf("no signing private key provided")
+	}
+	if err := ValidateBlobIndex(nvramIndex); err != nil {
+		return err
+	}
+
 	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, MeasurePointModeSetting, debug)
 	if err != nil {
 		return err
 	}
-
 	// Reseal runs right after an initramfs rebuild, where the image on disk is
 	// expected to differ from the booted one, so only seal can check this.
 	if verifyUKI {
@@ -166,121 +231,67 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 		}
 	}
 
-	// Build ordered list of all PCR indices (preserving spec order)
-	allPCRIndices := PCRSpecIndices(specs)
-
-	// Compute the full PolicyOR digest (PCR branch + Signed branch)
-	combinedDigest, branches, err := ComputeFullPolicyDigest(tpmDev, allPCRIndices, readResult.Values, hashAlgo, pubKey, debug)
+	pcrPolicy, err := ComputePolicyDigestFromPCRValues(tpmDev, PCRSpecIndices(specs), readResult.Values, hashAlgo)
 	if err != nil {
-		return fmt.Errorf("failed to compute PolicyOR digest: %w", err)
+		return fmt.Errorf("failed to compute the PCR policy: %w", err)
 	}
 
-	if debug {
-		fmt.Println("=== PolicyOR Digest Details ===")
-		fmt.Printf("PCR branch digest: %x\n", branches.PCRBranchDigest.Buffer)
-		fmt.Printf("Signed branch digest: %x\n", branches.SignedBranchDigest.Buffer)
-		fmt.Printf("Combined PolicyOR digest: %x\n", combinedDigest.Buffer)
-		fmt.Printf("PCR values used in policy:\n")
-		for _, spec := range specs {
-			val := readResult.Values[spec.Index]
-			sourceLabel := spec.Source.String()
-			if spec.Source == PCRSourceUKI {
-				sourceLabel = fmt.Sprintf("uki [%s]", spec.Command)
-			}
-			fmt.Printf("  PCR%-2d (%s): %x\n", spec.Index, sourceLabel, val)
-		}
-		fmt.Println()
+	gen := blob.Payload.Generation + 1
+	genName, err := writeGeneration(tpmDev, GenerationIndex(nvramIndex), gen, signer.Public(), signer)
+	if err != nil {
+		return err
+	}
+	raised := func(err error) error { return fmt.Errorf("%w (to generation %d): %w", ErrGenerationRaised, gen, err) }
+
+	approved := ApprovedPolicy(pcrPolicy.Buffer, genName, gen)
+	approval, err := signApproval(signer, approved, blob.Payload.PolicyRef)
+	if err != nil {
+		return raised(err)
 	}
 
-	// Create PCRDigestPair structures with per-PCR source
 	pcrDigests := make([]PCRDigestPair, len(specs))
 	for i, spec := range specs {
 		pcrDigests[i] = PCRDigestPair{
 			Index:   spec.Index,
 			Source:  spec.Source,
 			Command: spec.Command,
-			Digest: tpm2.TPM2BDigest{
-				Buffer: readResult.Values[spec.Index],
-			},
+			Digest:  tpm2.TPM2BDigest{Buffer: readResult.Values[spec.Index]},
 		}
 	}
-
-	// Create primary key in owner hierarchy
-	primaryKey, err := CreatePrimaryKey(tpmDev)
-	if err != nil {
-		return err
-	}
-	defer FlushHandle(tpmDev, primaryKey.ObjectHandle)
-
-	// Create sealed object with PolicyOR (no password)
-	createRsp, err := CreateSealedObjectPolicyOR(tpmDev, primaryKey, dataToSeal, combinedDigest)
-	if err != nil {
-		return err
-	}
-
-	// Prepare sealed blob (Version 6: signed blob with payload substructure)
-	sealedBlob := &SealedBlob{
-		Version: CurrentBlobVersion,
-		Payload: SealedBlobPayload{
-			AppVersion:         AppVersion,
-			Public:             createRsp.Public,
-			Private:            createRsp.Private,
-			PCRDigests:         pcrDigests,
-			SignedBranchDigest: branches.SignedBranchDigest.Buffer,
-			EventlogInfo:       readResult.EventlogInfo,
-			PublicKeyPath:      pubKeyPath,
-			PrivateKeyPath:     privKeyPath,
-		},
-	}
-
-	// Marshal to bytes (unsigned envelope)
-	unsignedBlob, err := sealedBlob.Marshal()
-	if err != nil {
-		return fmt.Errorf("failed to marshal sealed data: %w", err)
-	}
-
-	// Sign the blob — the signature covers Version + PayloadLen + all
-	// payload fields.  Any future field added to SealedBlobPayload is
-	// automatically included.
-	data, err := SignBlobPayload(unsignedBlob, privKey)
-	if err != nil {
-		return fmt.Errorf("failed to sign sealed blob: %w", err)
-	}
-
-	// Write to TPM NVRAM with PolicySigned-protected writes
-	if err := WriteToNVRAM(tpmDev, nvramIndex, data, pubKey, privKey); err != nil {
-		return fmt.Errorf("failed to write to NVRAM: %w", err)
-	}
+	blob.Version = CurrentBlobVersion
+	blob.Payload.AppVersion = AppVersion
+	blob.Payload.PCRDigests = pcrDigests
+	blob.Payload.EventlogInfo = readResult.EventlogInfo
+	blob.Payload.Generation = gen
+	blob.Payload.ApprovalSignature = approval
 
 	if debug {
-		fmt.Printf("Successfully sealed TOTP secret to TPM NVRAM index 0x%08X\n", nvramIndex)
-		fmt.Printf("Hash algorithm: %s\n", hashAlgo.DisplayString())
-		fmt.Printf("PCRs used: %s\n", PCRSpecsToString(specs))
-		fmt.Printf("Secret size: %d bytes\n", len(dataToSeal))
-		fmt.Printf("Total NVRAM size: %d bytes\n", len(data))
-		if readResult.EventlogInfo != nil {
-			fmt.Printf("Eventlog path: %s\n", readResult.EventlogInfo.EventlogPath)
-			fmt.Printf("Total events: %d\n", readResult.EventlogInfo.TotalEvents)
+		fmt.Println("=== Policy Details ===")
+		fmt.Printf("PCR policy:       %x\n", pcrPolicy.Buffer)
+		fmt.Printf("Generation:       %d (index 0x%08X)\n", gen, GenerationIndex(nvramIndex))
+		fmt.Printf("Approved policy:  %x\n", approved)
+		fmt.Printf("Policy reference: %x\n", blob.Payload.PolicyRef)
+		for _, spec := range specs {
+			sourceLabel := spec.Source.String()
+			if spec.Source == PCRSourceUKI {
+				sourceLabel = fmt.Sprintf("uki [%s]", quoteUntrusted(spec.Command))
+			}
+			fmt.Printf("  PCR%-2d (%s): %x\n", spec.Index, sourceLabel, readResult.Values[spec.Index])
 		}
-		fmt.Printf("Authentication: PolicyOR (PCR + PolicySigned)\n")
-		fmt.Printf("Signing key: %s (fingerprint: %s)\n", PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
+		fmt.Println()
 	}
 
+	unsignedBlob, err := blob.Marshal()
+	if err != nil {
+		return raised(fmt.Errorf("failed to marshal sealed data: %w", err))
+	}
+	// The signature covers Version + PayloadLen + all payload fields.
+	data, err := SignBlobPayload(unsignedBlob, signer)
+	if err != nil {
+		return raised(fmt.Errorf("failed to sign sealed blob: %w", err))
+	}
+	if err := WriteToNVRAM(tpmDev, nvramIndex, data, signer.Public(), signer); err != nil {
+		return raised(fmt.Errorf("failed to write to NVRAM: %w", err))
+	}
 	return nil
-}
-
-// generateTOTPSecret generates a TOTP-compatible secret
-// Returns a 32-byte (256-bit) random secret encoded in Base32
-func generateTOTPSecret() ([]byte, error) {
-	// Generate 32 bytes of random data (256 bits)
-	randomBytes := make([]byte, 32)
-	if _, err := rand.Read(randomBytes); err != nil {
-		return nil, fmt.Errorf("failed to generate random bytes: %w", err)
-	}
-
-	// Encode to Base32 (standard for TOTP secrets)
-	// Remove padding as it's optional for TOTP
-	secret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(randomBytes)
-
-	return []byte(secret), nil
 }

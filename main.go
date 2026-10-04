@@ -31,7 +31,7 @@ func main() {
 
 	// Global flags (shared across all commands)
 	globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
-	tpmPath := globalFlags.String("tpm", "/dev/tpm0", "Path to TPM device")
+	tpmPath := globalFlags.String("tpm", cmd.DefaultTPMPath, "Path to TPM device")
 	nvramIndex := globalFlags.Uint("nvram", 0x01803010, "TPM NVRAM index to use for storage")
 	debug := globalFlags.Bool("debug", false, "Enable debug output")
 
@@ -67,6 +67,8 @@ func main() {
 		runRun(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "yubikey":
 		runYubiKey(commandArgs)
+	case "cap":
+		runCap(commandArgs, *tpmPath)
 	case "pcrtips":
 		if err := cmd.PCRTips(); err != nil {
 			fail(err)
@@ -159,6 +161,15 @@ func runSetup(args []string) {
 
 	opts := cmd.SetupOptions{UseYubiKey: yk.set, Serial: yk.serial, Slot: *slot, Local: *local, Debug: *debug}
 	if err := cmd.Setup(opts); err != nil {
+		fail(err)
+	}
+}
+
+func runCap(args []string, tpmPath string) {
+	fs := flag.NewFlagSet("cap", flag.ExitOnError)
+	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
+	fs.Parse(args)
+	if err := cmd.CapCommand(*tpm); err != nil {
 		fail(err)
 	}
 }
@@ -263,12 +274,13 @@ func runInfo(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
+	privKeyPath := fs.String("privkey", "", "Signing private key to verify the blob with (default: "+cmd.DefaultPrivateKeyPath+")")
 
 	fs.Parse(args)
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	if err := cmd.InfoCommand(*tpm, scanIndex, *debug, *jsonOutput); err != nil {
+	if err := cmd.InfoCommand(*tpm, scanIndex, *privKeyPath, *debug, *jsonOutput); err != nil {
 		fail(err)
 	}
 }
@@ -328,6 +340,7 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	yes := fs.Bool("yes", false, "delete: confirm deleting every slot (only needed without --nvram)")
 
 	fs.Parse(args)
 
@@ -346,7 +359,7 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 		}
 	case "delete":
 		deleteIndex := resolveOrScanAll(uint32(*nvram), provided)
-		if err := cmd.NVRAMDeleteCommand(*tpm, deleteIndex, *debug); err != nil {
+		if err := cmd.NVRAMDeleteCommand(*tpm, deleteIndex, *yes, *debug); err != nil {
 			fail(err)
 		}
 	default:
@@ -367,6 +380,8 @@ COMMANDS:
   reveal      Generate TOTP code with colored KIRA format
   reveal-plain Generate TOTP code (plain output)
   run         Continuously display TOTP codes (runs until stopped)
+  cap         Lock code computation until the next reboot (run when leaving
+              the initrd; the boot integration does this)
   info        Display sealed secret information
   nvram       Manage TPM NVRAM (list, status, delete)
   yubikey     YubiKey support (list)
@@ -375,7 +390,8 @@ COMMANDS:
   help        Show this help message
 
 GLOBAL OPTIONS:
-  --tpm PATH      Path to TPM device (default: /dev/tpm0)
+  --tpm PATH      Path to TPM device (default: /dev/tpmrm0, the kernel resource
+                  manager; /dev/tpm0 when the kernel provides none)
   --nvram INDEX   NVRAM slot number or full index in hex
                   Slot shorthand: 0-15 maps to 0x01803010-0x0180301F
                   Full index:     any hex value like 0x01803010
@@ -409,35 +425,43 @@ RESEAL OPTIONS:
   --pcrs INDICES     New PCR indices with optional source suffix (optional,
                      preserves original selection and per-PCR sources if omitted)
   --measure-point M  Same as for seal: auto (default), on, off
-  --pubkey PATH      Path to signing public key PEM for re-sealing (optional)
-                     Default: derived from --privkey, or loaded from blob's
-                     stored key path. Use this to change the signing key.
-  --privkey PATH     Path to signing private key PEM (required when PCRs changed)
-                     The TPM verifies the signature via PolicySigned.
-                     Also used to derive the public key when --pubkey is omitted.
+  --pubkey PATH      Path to signing public key PEM (optional). Must belong to
+                     --privkey; default: derived from the private key.
+  --privkey PATH     Path to signing private key (default: the key from setup).
+                     It verifies the blob's signature, authorizes the NV write
+                     and, when PCRs changed, the PolicySigned unseal. A key
+                     path stored in the blob is never used to find it.
   --require-key      With the key on a YubiKey: fail when the token or its PIN
                      is unavailable. By default reseal then prints SKIPPED,
                      leaves every slot untouched, and exits normally.
 
 INFO OPTIONS:
   --json             Output as JSON
+  --privkey PATH     Signing private key to verify each blob with
+                     (default: the key from setup). A blob that does not
+                     verify is shown as untrusted, and no file it names is
+                     opened.
 
 NVRAM SUBCOMMANDS:
   list               List all NVRAM indices
   status             Show NVRAM index status
-  delete             Delete NVRAM index (or all populated slots when --nvram is omitted)
+  delete             Delete NVRAM index (or all populated slots when --nvram is omitted;
+                     that asks for confirmation on a terminal, or needs --yes)
 
 AUTHENTICATION:
-  tpm2-kira uses TPM2 PolicyOR with two branches for access control:
-    Branch 1 (PCR):    Direct PCR policy - succeeds when PCR values match
-    Branch 2 (Signed): PolicySigned - requires signature from configured key
+  The TOTP key is an HMAC key inside the TPM; the TPM computes every code and
+  the key never leaves it after seal. It is usable only under a policy the
+  signing key has approved (PolicyAuthorize):
+    - the PCR values sealed for, and
+    - the slot's generation, which every reseal raises to revoke older
+      approvals.
+  reseal approves the new PCR values with the signing key; it never needs
+  the PCRs to match and never reads the key. 'cap' read-locks the generation
+  when the initrd is left, so no code can be computed in the running OS.
 
   The signing key defaults to a dedicated ECDSA P-256 pair created by 'setup'.
   Point --privkey at the sbctl secure boot DB key instead to reseal with the
   same key that signs your boot components.
-
-  No password authentication is used. Recovery after PCR changes requires
-  the signing private key.
 
 SETUP OPTIONS:
   --yubikey[=SERIAL] Take the signing key from a YubiKey PIV slot without
@@ -464,8 +488,8 @@ YUBIKEY SUBCOMMANDS:
   With the signing key on a YubiKey, seal and reseal need the token and its
   PIN. The PIN is taken from the %s environment variable, else from
   the TPM2_KIRA_PIN='...' line in /etc/mkinitcpio.conf (which the
-  automatic reseal after initramfs rebuilds needs anyway), else asked on the
-  terminal. reveal, run and info never need the token.
+  automatic reseal after initramfs rebuilds needs anyway; refused unless the
+  file is root-owned and readable by root only), else asked on the terminal. reveal, run and info never need the token.
 
 EXAMPLES:
   tpm2-kira setup
@@ -491,7 +515,7 @@ EXAMPLES:
   tpm2-kira info --nvram 0
   tpm2-kira info --nvram 0x01803010
   tpm2-kira nvram list
-  tpm2-kira nvram delete
+  tpm2-kira nvram delete --yes
   tpm2-kira nvram delete --nvram 0
   tpm2-kira nvram delete --nvram 0x01803010
 

@@ -8,3 +8,5 @@ require (
 )
 
 require golang.org/x/sys v0.41.0
+
+require rsc.io/qr v0.2.0

@@ -50,4 +50,4 @@ The scan report artifact (`strix-security-report`, 23.7 KB) is downloadable from
 
 ## Security Design
 
-For an in-depth description of the cryptographic architecture, threat model, authentication model (PolicyOR with PCR + PolicySigned branches), blob format, and trust boundaries, see [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md).
+For an in-depth description of the cryptographic architecture, threat model, authentication model (an HMAC key inside the TPM under PolicyAuthorize, with a revocable generation and a boot-time cap), blob format, and trust boundaries, see [SECURITY-BACKGROUND.md](docs/SECURITY-BACKGROUND.md).

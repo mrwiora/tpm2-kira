@@ -10,6 +10,38 @@ formats and CLI flags may change without migration paths.
 
 ## Blob format
 
+### Version 9 — the TOTP key stays in the TPM; PolicyAuthorize replaces PolicyOR
+
+Up to version 8 the blob held a *sealed* TOTP secret behind a PolicyOR: a PCR
+branch for boot, and a PolicySigned branch for recovery. Every code meant a
+`TPM2_Unseal`, so the secret crossed the TPM bus every 30 seconds, and anyone
+who satisfied the PCR branch — root in the running system, or a shell in an
+initrd booted with the sealed PCRs intact — could copy it out and produce
+codes forever. `reseal` had to unseal it too, through the PolicySigned branch
+when the PCRs had changed.
+
+Version 9 creates the key as an HMAC key object; the TPM computes each code
+with `TPM2_HMAC`, and the key is never returned. The object's policy is
+PolicyAuthorize by the signing key, so `reseal` approves new PCR values by
+signing instead of unsealing. Added with it:
+
+- a per-slot **generation index** (`GenerationIndex`): the approved policy
+  includes PolicyNV on it, and each reseal raises it, revoking every older
+  approval;
+- **`tpm2-kira cap`**, which read-locks the generation indices
+  (`READ_STCLEAR`) when the initrd is left, so nothing can compute codes
+  until the next reboot. A PCR cap was considered and rejected: PCR 23, the
+  one free choice, can be reset from locality 0 by any process with TPM
+  access;
+- a random **policyRef** per key object, so approvals made for one object
+  never fit another made with the same signing key.
+
+Removed: `SignedBranchDigest`, the PolicyOR and unseal code, and
+`generateTOTPSecret` (the secret used to be the base32 *text* of 32 random
+bytes; the key is now the raw 20 bytes RFC 4226 recommends, or 32 bytes for
+HMAC-SHA256 on a TPM without SHA-1). Blob indices are now limited to
+`0x01803000–0x018037FF`; the range above holds the generation indices.
+
 ### Version 8 — dropped the unverified eventlog hash
 
 `EventlogInfo.EventlogHash` stored a SHA-256 of the event log file and was
@@ -81,6 +113,49 @@ requirement stands, because a tampered blob can still steer reseal through its
 stored PCR specs and key paths.
 
 ---
+
+## Signing key handling
+
+### `reseal` no longer finds its key through the blob
+
+`reseal` used to fall back to the `PrivateKeyPath` / `PublicKeyPath` stored in
+the blob when no `--privkey` / `--pubkey` was given, and then verified the
+blob's signature with the key it found there. Since anyone with TPM access can
+delete and redefine the NV index, a planted blob could name its author's key
+and pass its own check; the automatic reseal after an initramfs rebuild would
+then report success instead of tampering. The key now comes from `--privkey`
+or the default location only, and the stored paths are just compared after
+verification (SECURITY-BACKGROUND §5.5). A slot sealed with a custom key needs
+`--privkey` on every reseal.
+
+`--pubkey` on reseal used to be described as the way to change the signing
+key. It never worked: the policy was built from the new public key while the
+NV write was signed with the old private key, so the TPM refused the write
+after the old index had been undefined. A mismatched `--pubkey` is now refused
+before anything is touched; changing the key means sealing again.
+
+### Key files are checked on the descriptor they are read from
+
+`CheckSigningKeyFileMode(path)` checked the mode with `stat` and the key was
+then read by path. It is replaced by `ReadSigningKeyFile`, which also refuses
+symlinks, foreign owners and writable directories, and returns the content of
+the file it checked.
+
+## Removed external tools
+
+### `qrencode`
+
+`seal` rendered the enrolment QR code by running `qrencode` with the
+`otpauth://` URI, TOTP secret included, as a command-line argument — readable
+by every local user through `/proc/<pid>/cmdline`. The code is now rendered
+in-process with `rsc.io/qr`. tpm2-kira runs no external program any more.
+
+## TPM device
+
+The default device was `/dev/tpm0`, and every command flushed all loaded
+sessions and transient objects first, including other programs' handles. The
+default is now `/dev/tpmrm0`; the global flush runs only on the raw device or a
+simulator socket, where no other program can hold handles at the same time.
 
 ## Removed functions
 
