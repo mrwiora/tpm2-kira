@@ -1,7 +1,9 @@
 [Unit]
 Description=Starting tpm2-kira
-Requires=dev-tpm0.device
-After=dev-tpm0.device
+# The resource-managed node: tpm2-kira only sees and flushes its own handles
+# there, so it cannot disturb other TPM users in the initrd.
+Requires=dev-tpmrm0.device
+After=dev-tpmrm0.device
 # PCRs must stay stable for the whole run loop, so observe them after systemd's
 # userspace extends; ordering against a unit that never starts is a no-op.
 After=systemd-pcrosseparator.service

@@ -350,7 +350,8 @@ Implemented in `readPIN` (`cmd/yubikey.go`):
    `'...'`, `"..."` and backslash quoting, last assignment wins — checked
    against what bash assigns. A value that needs expansion (`$VAR`, `$(...)`,
    backticks) counts as no PIN. When the file can be read by group or others,
-   the PIN is still used and a warning says `chmod 600`.
+   or is not owned by root, the PIN is refused (reported as an unavailable
+   token, so the post hook prints SKIPPED) and the error says `chmod 600`.
 3. Interactive prompt on `/dev/tty` with echo off. Never in a hook without a
    terminal.
 4. Nothing available → the degradation path of §7.

@@ -122,7 +122,7 @@ func TestStubRoundTrip(t *testing.T) {
 			t.Errorf("stub lacks %s:\n%s", want, data)
 		}
 	}
-	if err := CheckSigningKeyFileMode(path); err != nil {
+	if err := CheckSigningKeyFile(path); err != nil {
 		t.Errorf("stub mode: %v", err)
 	}
 
@@ -814,16 +814,17 @@ func TestPINFromMkinitcpioConf(t *testing.T) {
 	card.Retries = 3
 	CloseTokenSessions()
 
-	// A world-readable file with the PIN in it: used, but with a warning.
+	// A world-readable file with the PIN in it: refused, no attempt spent,
+	// and no fallback to the terminal.
 	os.WriteFile(conf, []byte("export TPM2_KIRA_PIN='123456'\n"), 0600)
 	os.Chmod(conf, 0644)
-	out = capture(func() {
-		if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
-			t.Fatal(err)
-		}
-	})
-	if !strings.Contains(out, "can be read by other users") || strings.Contains(out, "will therefore") {
-		t.Errorf("world-readable file:\n%s", out)
+	prompts := fake.prompts
+	_, err = signer.Sign(rand.Reader, digest[:], crypto.SHA256)
+	if err == nil || !errors.Is(err, ErrTokenUnavailable) || !strings.Contains(err.Error(), "chmod 600 "+conf) {
+		t.Errorf("world-readable file: err = %v, want an unavailable-token error naming the fix", err)
+	}
+	if card.Retries != 3 || fake.prompts != prompts {
+		t.Errorf("world-readable file: retries %d, prompts %d → %d; want no attempt and no prompt", card.Retries, prompts, fake.prompts)
 	}
 	CloseTokenSessions()
 

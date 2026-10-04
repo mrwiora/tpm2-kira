@@ -7,17 +7,26 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/x509"
+	"encoding/base32"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/matthias/tpm2-kira/cmd"
 )
 
 const (
@@ -286,9 +295,9 @@ func TestSealBasic(t *testing.T) {
 		t.Errorf("Expected secret in output, got: %s", stdout)
 	}
 
-	// Verify PolicyOR authentication is mentioned
-	if !strings.Contains(stdout, "PolicyOR") {
-		t.Errorf("Expected 'PolicyOR' in output, got: %s", stdout)
+	// Verify PolicyAuthorize authentication is mentioned
+	if !strings.Contains(stdout, "PolicyAuthorize") {
+		t.Errorf("Expected 'PolicyAuthorize' in output, got: %s", stdout)
 	}
 }
 
@@ -378,7 +387,8 @@ func TestSealWithCustomPCRs(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Use different NVRAM index for each test
-			nvramIndex := fmt.Sprintf("0x01803%03X", time.Now().UnixNano()%0xFFF)
+			// Below 0x01803800, where the generation indices begin.
+			nvramIndex := fmt.Sprintf("0x01803%03X", time.Now().UnixNano()%0x7FF)
 
 			stdout, stderr, err := runTPMKira(t, tpmPath,
 				"seal",
@@ -656,17 +666,20 @@ func TestInfo(t *testing.T) {
 	stdout, stderr, err := runTPMKira(t, tpmPath,
 		"info",
 		"--nvram", testNVRAMIndex,
+		"--privkey", testPrivKeyPath,
 	)
 
 	if err != nil {
 		t.Fatalf("Info command failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
 	}
 
-	// Verify output contains expected information (updated for PolicyOR model)
 	expectedStrings := []string{
 		"Sealed Blob Information",
+		"Signature: valid",
 		"PCR Configuration",
-		"PolicyOR",
+		"PolicyAuthorize",
+		"Approved Generation: 1",
+		"(matches)",
 	}
 
 	for _, expected := range expectedStrings {
@@ -727,11 +740,12 @@ func TestInfoJSON(t *testing.T) {
 		t.Error("slot entry carries no blob object")
 	}
 
-	// Verify it contains expected JSON fields (updated for PolicyOR model)
 	expectedFields := []string{
 		"\"version\"",
 		"\"pcr_digests\"",
-		"\"signed_branch_digest_hex\"",
+		"\"generation\"",
+		"\"approval_signature_hex\"",
+		"\"signature_verified\"",
 	}
 
 	for _, field := range expectedFields {
@@ -941,7 +955,7 @@ func testNVRAMDeleted(t *testing.T, tpmPath, nvramIndex string) {
 }
 
 // TestCompleteWorkflow is a comprehensive integration test that verifies the complete workflow
-// including seal, reveal, run, reseal, and nvram delete operations with the PolicyOR model
+// including seal, reveal, run, reseal, and nvram delete operations
 func TestCompleteWorkflow(t *testing.T) {
 	t.Log("=== PREPARATION ===")
 
@@ -1078,55 +1092,39 @@ func TestCompleteWorkflow(t *testing.T) {
 	}
 	t.Logf("✓ Reveal correctly failed after PCR change")
 
-	// Reseal without explicit private key — privkey path is stored in the blob,
-	// so reseal should be able to locate it automatically.
-	t.Log("Testing reseal without explicit signing key (should use stored path from blob)...")
+	// Reseal without explicit private key — reseal must not take the key
+	// from the path stored in the blob, so this only works if the default
+	// key happens to be the sealing key.
+	t.Log("Testing reseal without explicit signing key (must not use the stored path)...")
 	stdout, stderr, err = runTPMKira(t, tpmPath,
 		"reseal",
 		"--nvram", nvramIndexPCR,
 	)
 	combinedOutput := stdout + stderr
 	if strings.Contains(stdout, "Successfully resealed") {
-		t.Log("✓ Reseal using stored key path succeeded")
+		t.Fatalf("✗ Reseal succeeded without --privkey, using a key the blob named: %s", combinedOutput)
 	} else {
-		t.Logf("Note: Reseal using stored key path did not succeed: %s", combinedOutput)
+		t.Logf("✓ Reseal without --privkey refused: %s", strings.TrimSpace(combinedOutput))
 	}
 
-	// Reseal with explicit signing key — attempt PolicySigned recovery.
-	// Note: PolicySigned recovery may not work with all swtpm configurations.
-	// This is an informational test; if it fails at the TPM level, we log and continue.
-	t.Log("Testing reseal with explicit signing key (PolicySigned recovery, may not work with swtpm)...")
+	// Reseal with the signing key approves the new PCR values. Nothing is
+	// unsealed, so this must work whether or not the PCRs match.
+	t.Log("Testing reseal with explicit signing key after the PCR change...")
 	stdout, stderr, err = runTPMKira(t, tpmPath,
 		"reseal",
 		"--nvram", nvramIndexPCR,
 		"--privkey", testPrivKeyPath,
 	)
-	combinedOutput = stdout + stderr
-	if strings.Contains(stdout, "Successfully resealed") {
-		t.Log("✓ Reseal with signing key successful (PolicySigned recovery works)")
-
-		// Verify PCRs are still 0,23 by checking info output
-		t.Log("Verifying PCRs are still 0,23 using info command...")
-		stdout, stderr, err = runTPMKira(t, tpmPath,
-			"info",
-			"--nvram", nvramIndexPCR,
-		)
-		if err != nil {
-			t.Fatalf("✗ Info command failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
-		}
-		if !strings.Contains(stdout, "0") || !strings.Contains(stdout, "23") {
-			t.Logf("Warning: Info output may not show expected PCRs 0,23: %s", stdout)
-		}
-		t.Log("✓ Verified PCRs configuration preserved")
-
-		// Reveal after reseal - must be successful
-		t.Log("Testing reveal after reseal with new PCR values...")
-		testReveal(t, tpmPath, nvramIndexPCR)
-	} else {
-		// PolicySigned recovery failed at TPM level — this is a known limitation with swtpm
-		t.Logf("Note: PolicySigned recovery not supported by this swtpm instance (this is expected in some configurations)")
-		t.Logf("  Output: %s", strings.TrimSpace(combinedOutput))
+	if !strings.Contains(stdout, "Successfully resealed") {
+		t.Fatalf("✗ Reseal after a PCR change failed:\nStdout: %s\nStderr: %s", stdout, stderr)
 	}
+	if !strings.Contains(stdout, "Generation: 2") {
+		t.Errorf("✗ Expected the second approval of this slot (seal, reseal) to be generation 2:\n%s", stdout)
+	}
+	t.Log("✓ Reseal approved the new PCR values")
+
+	t.Log("Testing reveal after reseal with new PCR values...")
+	testReveal(t, tpmPath, nvramIndexPCR)
 
 	// Cleanup
 	t.Log("Testing nvram delete for PCR test...")
@@ -1313,8 +1311,10 @@ func TestExitCodes(t *testing.T) {
 	t.Log("✓ All exit code tests passed")
 }
 
-// TestResealWithStoredKeyPaths tests that reseal works using key paths stored in the blob
-func TestResealWithStoredKeyPaths(t *testing.T) {
+// TestResealIgnoresStoredKeyPaths checks that reseal never takes its signing
+// key from a path stored in the blob. The blob is unverified until that key
+// has checked it, so a stored path would let a planted blob name its own key.
+func TestResealIgnoresStoredKeyPaths(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
 
@@ -1333,22 +1333,216 @@ func TestResealWithStoredKeyPaths(t *testing.T) {
 	}
 	t.Log("✓ Seal with key paths successful")
 
-	// Reseal without specifying key paths — they should be retrieved from the blob
-	stdout, stderr, err = runTPMKira(t, tpmPath,
+	// Without --privkey, reseal uses the default key location only. It must
+	// not succeed via the stored path, and must name it as a hint.
+	stdout, stderr, _ = runTPMKira(t, tpmPath,
 		"reseal",
 		"--nvram", nvramIndex,
 	)
-	if err != nil {
-		t.Fatalf("Reseal without explicit key paths failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
+	if strings.Contains(stdout, "Successfully resealed") {
+		t.Fatalf("Reseal succeeded using the key path stored in the blob:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "Successfully resealed") {
-		t.Errorf("Expected success message, got: %s", stdout)
+	if !strings.Contains(stdout+stderr, "--privkey "+testPrivKeyPath) {
+		t.Errorf("Expected a hint naming the stored key path, got:\nStdout: %s\nStderr: %s", stdout, stderr)
 	}
-	t.Log("✓ Reseal using stored key paths successful")
+	t.Log("✓ Reseal refused to use the stored key path")
 
-	// Verify reveal still works
+	// With --privkey it works.
+	testResealSuccess(t, tpmPath, nvramIndex)
 	testReveal(t, tpmPath, nvramIndex)
 
 	// Clean up
+	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", nvramIndex)
+}
+
+// restartSoftwareTPM power-cycles the simulator the way a reboot resets a
+// real TPM, then sends TPM2_Startup(CLEAR). State that lasts only until the
+// next reset, such as a read lock, is gone afterwards; NV contents stay.
+func restartSoftwareTPM(t *testing.T, tpmPath string) {
+	t.Helper()
+	if out, err := exec.Command("swtpm_ioctl", "--unix", tpmPath+".ctrl", "-i").CombinedOutput(); err != nil {
+		t.Fatalf("swtpm_ioctl -i failed: %v: %s", err, out)
+	}
+	// go-tpm's open probes the TPM, which fails before TPM2_Startup, so the
+	// command is sent raw: TPM_ST_NO_SESSIONS, size 12, TPM_CC_Startup, SU_CLEAR.
+	conn, err := net.Dial("unix", tpmPath)
+	if err != nil {
+		t.Fatalf("reopen TPM: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte{0x80, 0x01, 0, 0, 0, 12, 0, 0, 0x01, 0x44, 0, 0}); err != nil {
+		t.Fatalf("TPM2_Startup: %v", err)
+	}
+	rsp := make([]byte, 10)
+	if _, err := io.ReadFull(conn, rsp); err != nil {
+		t.Fatalf("TPM2_Startup response: %v", err)
+	}
+	// 0 is success; TPM_RC_INITIALIZE (0x100) means it was already started.
+	if rc := binary.BigEndian.Uint32(rsp[6:]); rc != 0 && rc != 0x100 {
+		t.Fatalf("TPM2_Startup returned 0x%x", rc)
+	}
+}
+
+// revealPlainCode returns the single code reveal-plain prints, or "".
+func revealPlainCode(t *testing.T, tpmPath, nvramIndex string) (string, string) {
+	t.Helper()
+	stdout, stderr, _ := runTPMKira(t, tpmPath, "reveal-plain", "--nvram", nvramIndex)
+	code := strings.TrimSpace(stdout)
+	if len(code) != 6 || strings.Trim(code, "0123456789") != "" {
+		return "", stdout + stderr
+	}
+	return code, stdout + stderr
+}
+
+// TestCodeMatchesAuthenticator checks that the code the TPM computes is the
+// standard TOTP an authenticator app derives from the enrolled secret.
+func TestCodeMatchesAuthenticator(t *testing.T) {
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+	nvramIndex := "0x01803020"
+
+	stdout, stderr, err := runTPMKira(t, tpmPath, "seal", "--nvram", nvramIndex, "--pcrs", "0,7",
+		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath)
+	if err != nil || !strings.Contains(stdout, "Secret: ") {
+		t.Fatalf("seal failed: %v\n%s\n%s", err, stdout, stderr)
+	}
+	line := stdout[strings.Index(stdout, "Secret: ")+len("Secret: "):]
+	secret := strings.Fields(line)[0]
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
+	if err != nil {
+		t.Fatalf("enrolled secret %q is not base32: %v", secret, err)
+	}
+	if !strings.Contains(line, "(HMAC-SHA1)") || len(key) != 20 {
+		t.Fatalf("expected a 20-byte HMAC-SHA1 key, got %d bytes: %s", len(key), line)
+	}
+
+	// Retry across a 30-second boundary rather than flake on it.
+	for attempt := 0; attempt < 3; attempt++ {
+		before := time.Now().Unix() / 30
+		code, out := revealPlainCode(t, tpmPath, nvramIndex)
+		if code == "" {
+			t.Fatalf("reveal-plain printed no code:\n%s", out)
+		}
+		if time.Now().Unix()/30 != before {
+			continue
+		}
+		mac := hmac.New(sha1.New, key)
+		mac.Write(binary.BigEndian.AppendUint64(nil, uint64(before)))
+		sum := mac.Sum(nil)
+		off := sum[len(sum)-1] & 0x0F
+		want := fmt.Sprintf("%06d", (binary.BigEndian.Uint32(sum[off:off+4])&0x7FFFFFFF)%1000000)
+		if code != want {
+			t.Fatalf("TPM code %s differs from RFC 6238 TOTP %s", code, want)
+		}
+		t.Logf("✓ TPM code %s equals the authenticator's code", code)
+		return
+	}
+	t.Fatal("could not compare within one 30-second window")
+}
+
+// TestCapLocksCodesUntilReboot checks that 'cap' makes codes unavailable,
+// that reseal still works while locked, and that a reboot lifts the lock.
+func TestCapLocksCodesUntilReboot(t *testing.T) {
+	if _, err := exec.LookPath("swtpm_ioctl"); err != nil {
+		t.Skip("swtpm_ioctl not found")
+	}
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+	nvramIndex := "0x01803021"
+
+	if stdout, stderr, err := runTPMKira(t, tpmPath, "seal", "--nvram", nvramIndex, "--pcrs", "0,7",
+		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
+		t.Fatalf("seal failed: %v\n%s\n%s", err, stdout, stderr)
+	}
+	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code == "" {
+		t.Fatalf("no code before cap:\n%s", out)
+	}
+
+	stdout, stderr, _ := runTPMKira(t, tpmPath, "cap")
+	if !strings.Contains(stdout, "locked 1 generation index") {
+		t.Fatalf("cap did not lock the generation index:\n%s\n%s", stdout, stderr)
+	}
+	code, out := revealPlainCode(t, tpmPath, nvramIndex)
+	if code != "" || !strings.Contains(out, "Locked until reboot") {
+		t.Fatalf("expected no code after cap, got %q:\n%s", code, out)
+	}
+	t.Log("✓ No code after cap")
+
+	// A second cap is harmless.
+	if stdout, _, _ := runTPMKira(t, tpmPath, "cap"); !strings.Contains(stdout, "locked 1 generation index") {
+		t.Errorf("second cap: %s", stdout)
+	}
+
+	// reseal in the running OS works while the index is read-locked.
+	stdout, stderr, _ = runTPMKira(t, tpmPath, "reseal", "--nvram", nvramIndex, "--privkey", testPrivKeyPath)
+	if !strings.Contains(stdout, "Successfully resealed") {
+		t.Fatalf("reseal while capped failed:\n%s\n%s", stdout, stderr)
+	}
+	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code != "" {
+		t.Fatalf("reseal lifted the cap: got code %s\n%s", code, out)
+	}
+	t.Log("✓ Reseal works while capped, and the cap holds")
+
+	restartSoftwareTPM(t, tpmPath)
+	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code == "" {
+		t.Fatalf("no code after the reboot:\n%s", out)
+	}
+	t.Log("✓ Codes are back after a reboot")
+	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", nvramIndex)
+}
+
+// TestResealRevokesOldBlob checks that a blob kept from before a reseal no
+// longer yields codes once it is put back, although its approval signature
+// is genuine: the reseal raised the slot's generation.
+func TestResealRevokesOldBlob(t *testing.T) {
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+	const index = 0x01803022
+	nvramIndex := fmt.Sprintf("0x%08X", index)
+
+	if stdout, stderr, err := runTPMKira(t, tpmPath, "seal", "--nvram", nvramIndex, "--pcrs", "0,7",
+		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
+		t.Fatalf("seal failed: %v\n%s\n%s", err, stdout, stderr)
+	}
+
+	tpm, err := transport.OpenTPM(tpmPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldBlob, err := cmd.ReadFromNVRAM(tpm, index)
+	tpm.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, _ := runTPMKira(t, tpmPath, "reseal", "--nvram", nvramIndex, "--privkey", testPrivKeyPath)
+	if !strings.Contains(stdout, "Successfully resealed") {
+		t.Fatalf("reseal failed:\n%s\n%s", stdout, stderr)
+	}
+	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code == "" {
+		t.Fatalf("no code after reseal:\n%s", out)
+	}
+
+	// Put the old blob back. An attacker can do this without the key by
+	// deleting and redefining the index; the test uses the key for brevity.
+	signer, err := cmd.LoadSigningPrivateKey(testPrivKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpm, err = transport.OpenTPM(tpmPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = cmd.WriteToNVRAM(tpm, index, oldBlob, signer.Public(), signer)
+	tpm.Close()
+	if err != nil {
+		t.Fatalf("restoring the old blob: %v", err)
+	}
+
+	code, out := revealPlainCode(t, tpmPath, nvramIndex)
+	if code != "" || !strings.Contains(out, "Approval revoked") {
+		t.Fatalf("the old blob still yields a code (%q):\n%s", code, out)
+	}
+	t.Log("✓ The blob from before the reseal is revoked")
 	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", nvramIndex)
 }

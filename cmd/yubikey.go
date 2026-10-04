@@ -702,7 +702,11 @@ func readPIN(s *yubiKeySigner) (pin, source string, err error) {
 	if pin, ok := os.LookupEnv(PINEnvVar); ok && pin != "" {
 		return pin, "the " + PINEnvVar + " environment variable", nil
 	}
-	if pin, ok := pinFromMkinitcpio(os.Stderr); ok {
+	pin, ok, err := pinFromMkinitcpio()
+	if err != nil {
+		return "", "", err
+	}
+	if ok {
 		return pin, mkinitcpioConfPath, nil
 	}
 	pin, err = promptPIN(s)

@@ -143,7 +143,8 @@ func Setup(opts SetupOptions) error {
 	fmt.Printf("  Private key:    %s (%s)\n", privKeyPath, location)
 	fmt.Println()
 	fmt.Println("Next, seal a TOTP secret and scan the QR code it prints:")
-	fmt.Println("   tpm2-kira seal --pcrs 0,7")
+	fmt.Printf("   tpm2-kira seal --pcrs %s\n", RecommendedPCRs())
+	fmt.Println("   (README \"Choosing PCRs\" explains the selection and its trade-offs)")
 	if chosen != nil {
 		fmt.Println()
 		printPINInstructions(os.Stdout, *chosen, chosenSlot)
@@ -171,13 +172,14 @@ func printPINInstructions(w io.Writer, t TokenInfo, s TokenSlot) {
 		fmt.Fprintf(w, "or takes it from %s. To set it for this root shell without it landing\n", PINEnvVar)
 		fmt.Fprintln(w, "in the shell history:")
 		fmt.Fprintf(w, "    read -rs %s && export %s\n", PINEnvVar, PINEnvVar)
-		fmt.Fprintln(w, "    tpm2-kira seal --pcrs 0,7")
+		fmt.Fprintf(w, "    tpm2-kira seal --pcrs %s\n", RecommendedPCRs())
 		return
 	case info.State == mkinitcpioPINAvailable:
 		fmt.Fprintf(w, "%s already sets %s: sealing, resealing and the automatic\n", mkinitcpioConfPath, PINEnvVar)
 		fmt.Fprintln(w, "reseal after kernel and initramfs updates all take the PIN from there.")
 		if info.Loose {
-			fmt.Fprintf(w, "The file can be read by other users; make it readable by root only:\n    chmod 600 %s\n", mkinitcpioConfPath)
+			fmt.Fprintf(w, "The file can be read by other users, so tpm2-kira refuses to use the PIN until\n"+
+				"it is readable by root only:\n    chown root: %s && chmod 600 %s\n", mkinitcpioConfPath, mkinitcpioConfPath)
 		}
 		return
 	}
