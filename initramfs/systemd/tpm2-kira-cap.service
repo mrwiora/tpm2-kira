@@ -1,0 +1,26 @@
+[Unit]
+Description=Locking tpm2-kira codes until the next boot
+Documentation=file:///usr/share/doc/tpm2-kira/README.md
+DefaultDependencies=no
+ConditionPathExists=/etc/initrd-release
+Requires=dev-tpmrm0.device
+After=dev-tpmrm0.device
+# Like systemd-pcrphase-initrd's leave-initrd: the unit is stopped, and its
+# ExecStop runs, when the initrd switches to the real root (or shuts down).
+Conflicts=initrd-switch-root.target shutdown.target
+Before=initrd-switch-root.target shutdown.target
+# Stop order is the reverse of start order, so ordering this before the
+# display stops the display first and locks afterwards.
+Before=tpm2-kira.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Read-locks the generation indices: no code can be computed in the running
+# OS until the next reboot. tpm2-kira exits 0 by design; failures are shown.
+ExecStop=tpm2-kira cap
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=sysinit.target

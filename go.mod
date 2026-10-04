@@ -7,4 +7,6 @@ require (
 	github.com/google/go-tpm v0.9.8
 )
 
-require golang.org/x/sys v0.41.0 // indirect
+require golang.org/x/sys v0.41.0
+
+require rsc.io/qr v0.2.0

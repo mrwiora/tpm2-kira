@@ -1,4 +1,4 @@
-.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio deb test test-unit test-integration test-all fmt vet pkgbuild help
+.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio deb test test-unit test-integration test-all fuzz fmt vet pkgbuild help
 
 # Binary name
 BINARY_NAME=tpm2-kira
@@ -6,7 +6,10 @@ INSTALL_PATH=/usr/local/bin
 
 # Go parameters
 GOCMD=go
-GOBUILD=$(GOCMD) build
+# Every build is static and cgo-free: the same binary is copied into the
+# initramfs, which has no libc. With cgo enabled (Go's default wherever a C
+# compiler is installed) the net package alone links glibc dynamically.
+GOBUILD=CGO_ENABLED=0 $(GOCMD) build
 GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
@@ -35,15 +38,15 @@ LDFLAGS=-ldflags "-s -w -X main.Version=$(VERSION)"
 
 all: build
 
-## build: Build the binary
+## build: Build the binary (static, CGO_ENABLED=0)
 build:
 	@echo "Building $(BINARY_NAME) version $(VERSION)..."
 	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v
+	@$(GOCMD) version -m $(BINARY_NAME) | grep -q 'CGO_ENABLED=0' || \
+		{ echo "Error: $(BINARY_NAME) was built with cgo"; exit 1; }
 
-## build-static: Build a fully static binary (no libc, for initramfs images)
-build-static:
-	@echo "Building static $(BINARY_NAME) version $(VERSION)..."
-	CGO_ENABLED=0 $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v
+## build-static: Alias for build, which is always static
+build-static: build
 
 ## build-optimized: Build with optimizations (alias for build)
 build-optimized: build
@@ -88,6 +91,7 @@ install-mkinitcpio:
 	sudo cp initramfs/mkinitcpio/post/sd-tpm2-kira /etc/initcpio/post/
 	sudo chmod +x /etc/initcpio/post/sd-tpm2-kira
 	sudo mkdir -p /usr/lib/systemd/system
+	sudo install -m644 initramfs/systemd/tpm2-kira.service initramfs/systemd/tpm2-kira-cap.service /usr/lib/systemd/system/
 	@echo "Mkinitcpio hooks installed successfully!"
 	@echo ""
 	@echo "Next steps:"
@@ -95,9 +99,9 @@ install-mkinitcpio:
 	@echo ""
 	@echo "   HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)"
 	@echo ""
-	@echo "2. Seal a TOTP secret (if not already done):"
-	@echo "   tpm2-kira seal"
-	@echo "   (You will be prompted to enter an optional password securely)"
+	@echo "2. Set up and seal (if not already done; see README \"Choosing PCRs\"):"
+	@echo "   tpm2-kira setup"
+	@echo "   tpm2-kira seal --pcrs 0,7,11u"
 	@echo ""
 	@echo "3. Rebuild initramfs:"
 	@echo "   sudo mkinitcpio -P"
@@ -107,6 +111,7 @@ uninstall-mkinitcpio:
 	@echo "Uninstalling mkinitcpio hooks..."
 	sudo rm -f /etc/initcpio/install/sd-tpm2-kira
 	sudo rm -f /etc/initcpio/post/sd-tpm2-kira
+	sudo rm -f /usr/lib/systemd/system/tpm2-kira.service /usr/lib/systemd/system/tpm2-kira-cap.service
 	@echo "Mkinitcpio hooks uninstalled!"
 	@echo "Note: You should rebuild your initramfs after removing hooks:"
 	@echo "      sudo mkinitcpio -P"
@@ -133,6 +138,16 @@ test: test-unit
 test-unit:
 	@echo "Running unit tests..."
 	$(GOTEST) -v -tags=unit ./cmd/...
+
+## fuzz: Fuzz the parsers of untrusted input (FUZZTIME per target, default 30s)
+FUZZTIME ?= 30s
+fuzz:
+	@for t in FuzzUnmarshalSealedBlob FuzzParseYubiKeyStub FuzzEventlogReplay; do \
+		echo "Fuzzing $$t for $(FUZZTIME)..."; \
+		$(GOTEST) -tags=unit ./cmd -run '^$$' -fuzz "^$$t\$$" -fuzztime $(FUZZTIME) || exit 1; \
+	done
+	@echo "Fuzzing FuzzDecode for $(FUZZTIME)..."
+	$(GOTEST) ./internal/pcsc -run '^$$' -fuzz '^FuzzDecode$$' -fuzztime $(FUZZTIME)
 
 ## test-integration: Run integration tests with software TPM
 test-integration:

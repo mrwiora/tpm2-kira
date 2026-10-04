@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -18,10 +19,9 @@ const (
 type NVRAMSlot struct {
 	SlotNumber int
 	Index      uint32
-	Code       string
-	Secret     string
-	Error      error // Error encountered during unsealing (if any)
-	Available  bool  // Whether the slot has data (even if unsealing failed)
+	Code       string // TOTP code for the time of the scan, computed in the TPM
+	Error      error  // Why no code could be computed (if any)
+	Available  bool   // Whether the slot has data (even if no code could be computed)
 }
 
 // NVRAMIndexExists performs a lightweight check whether the given NVRAM index
@@ -95,7 +95,7 @@ func SlotNumber(index uint32) int {
 // Otherwise, scans only the specified nvramIndex
 func ScanAndReveal(tpmPath string, nvramIndex uint32, debug bool) ([]NVRAMSlot, map[int]string, error) {
 	// Open TPM
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -175,7 +175,7 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 				peek := PeekBlobVersion(rawData)
 				fmt.Printf("  Slot %d: NVRAM data found (%d bytes), blob version: %d", slotNumber, peek.DataSize, peek.Version)
 				if peek.AppVersion != "" {
-					fmt.Printf(", app version: %s", peek.AppVersion)
+					fmt.Printf(", app version: %s", quoteUntrusted(peek.AppVersion))
 				}
 				fmt.Println()
 			} else if debug {
@@ -185,120 +185,57 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 			CleanupTPM(tpmDev, debug)
 		}
 
-		// Try to unseal from this slot
-		result, err := UnsealWorkflow(tpmDev, i, debug)
-		if err != nil {
-			// Check if this is a blob version incompatibility (slot has data but wrong version)
-			if bve, ok := IsBlobVersionError(err); ok {
-				if debug {
-					fmt.Printf("  Slot %d: incompatible blob version (found v%d, requires v%d)\n", slotNumber, bve.FoundVersion, bve.RequiredVersion)
-				}
-
-				// Mark slot as available but with the version error
-				slots = append(slots, NVRAMSlot{
-					SlotNumber: slotNumber,
-					Index:      i,
-					Available:  true,
-					Error:      err,
-				})
-				continue
-			}
-
-			// Check if this is a PCR policy failure (slot exists but PCRs don't match)
-			if IsTPMPolicyFailure(err) {
-				if debug {
-					fmt.Printf("  Slot %d: PCR policy failure - slot exists but PCRs don't match\n", slotNumber)
-				}
-
-				// Mark slot as available but with error
-				slots = append(slots, NVRAMSlot{
-					SlotNumber: slotNumber,
-					Index:      i,
-					Available:  true,
-					Error:      err,
-				})
-				continue
-			}
-
-			// Check if it's a PCR mismatch error with detailed information
-			if _, ok := err.(*PCRMismatchError); ok {
-				if debug {
-					fmt.Printf("  Slot %d: PCR mismatch detected\n", slotNumber)
-				}
-
-				// Mark slot as available but with error
-				slots = append(slots, NVRAMSlot{
-					SlotNumber: slotNumber,
-					Index:      i,
-					Available:  true,
-					Error:      err,
-				})
-				continue
-			}
-
-			// The slot was confirmed to exist by the pre-filter, but
-			// unsealing failed for an unexpected reason (e.g. TPM
-			// resource exhaustion).  Report it so the user sees all
-			// populated slots.
-			if debug {
-				fmt.Printf("  Slot %d: NVRAM data present but unsealing failed (%v)\n", slotNumber, err)
-			}
-			slots = append(slots, NVRAMSlot{
-				SlotNumber: slotNumber,
-				Index:      i,
-				Available:  true,
-				Error:      err,
-			})
-			continue
-		}
-
-		// Get the unsealed TOTP secret
-		secret := string(result.UnsealedData)
-
-		// Generate TOTP code
-		code, _, err := generateTOTPCode(secret)
+		code, _, err := SlotCode(tpmDev, i, time.Now(), debug)
 		if err != nil {
 			if debug {
-				fmt.Printf("  Slot %d: contains data but not a valid TOTP secret\n", slotNumber)
+				fmt.Printf("  Slot %d: no code (%v)\n", slotNumber, err)
 			}
+			// The slot was confirmed to exist by the pre-filter, so it
+			// is reported with the reason, whatever it is.
+			slots = append(slots, NVRAMSlot{SlotNumber: slotNumber, Index: i, Available: true, Error: err})
 			continue
 		}
-
 		if debug {
-			fmt.Printf("  Slot %d: valid TOTP secret found, code: %s\n", slotNumber, code)
+			fmt.Printf("  Slot %d: code computed\n", slotNumber)
 		}
-
-		slots = append(slots, NVRAMSlot{
-			SlotNumber: slotNumber,
-			Index:      i,
-			Code:       code,
-			Secret:     secret,
-			Available:  true,
-		})
+		slots = append(slots, NVRAMSlot{SlotNumber: slotNumber, Index: i, Code: code, Available: true})
 	}
 
 	return slots
 }
 
-// GenerateTOTPCodesForSlots generates fresh TOTP codes for all slots
-// Returns a map of slot numbers to TOTP codes and any error encountered
+// GenerateTOTPCodesForSlots collects the codes of the slots that have one,
+// keyed by slot number. The codes were computed by the TPM during the scan.
 func GenerateTOTPCodesForSlots(slots []NVRAMSlot) (map[int]string, error) {
 	codes := make(map[int]string)
-
 	for _, slot := range slots {
-		// Skip slots that have errors (e.g., PCR mismatch)
-		if slot.Error != nil {
-			continue
+		if slot.Error == nil && slot.Code != "" {
+			codes[slot.SlotNumber] = slot.Code
 		}
-
-		code, _, err := generateTOTPCode(slot.Secret)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate TOTP code for slot %d: %w", slot.SlotNumber, err)
-		}
-		codes[slot.SlotNumber] = code
 	}
-
 	return codes, nil
+}
+
+// slotErrorLine describes why a slot has no code, for the boot console.
+// It returns "" for a PCR mismatch, which is shown with its details.
+func slotErrorLine(err error) string {
+	var genErr *GenerationMismatchError
+	switch {
+	case errors.Is(err, ErrCodesLocked):
+		return "Locked until reboot (codes are only shown before the disk is unlocked)"
+	case errors.As(err, &genErr):
+		if genErr.IndexMissing {
+			return "Generation index missing - reseal"
+		}
+		return fmt.Sprintf("Approval revoked (blob generation %d, slot at %d) - reseal", genErr.BlobGeneration, genErr.IndexGeneration)
+	}
+	if bve, ok := IsBlobVersionError(err); ok {
+		return fmt.Sprintf("Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira seal", bve.FoundVersion, bve.RequiredVersion)
+	}
+	if _, ok := err.(*PCRMismatchError); ok || IsTPMPolicyFailure(err) {
+		return ""
+	}
+	return fmt.Sprintf("No code: %v", err)
 }
 
 // PrintKIRASlots prints TOTP codes in the unified KIRA format with timestamps and PCR details
@@ -311,9 +248,8 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 
 	for _, slot := range slots {
 		if slot.Error != nil {
-			// Check if this is a version incompatibility error
-			if bve, ok := IsBlobVersionError(slot.Error); ok {
-				fmt.Printf("\033[0;31m#%d\033[0m: Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira seal\n", slot.SlotNumber, bve.FoundVersion, bve.RequiredVersion)
+			if line := slotErrorLine(slot.Error); line != "" {
+				fmt.Printf("\033[0;31m#%d\033[0m: %s\n", slot.SlotNumber, line)
 				continue
 			}
 
@@ -377,9 +313,8 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 func PrintPlainSlots(slots []NVRAMSlot, codes map[int]string) {
 	for _, slot := range slots {
 		if slot.Error != nil {
-			// Check if this is a version incompatibility error
-			if bve, ok := IsBlobVersionError(slot.Error); ok {
-				fmt.Printf("#%d: Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira seal\n", slot.SlotNumber, bve.FoundVersion, bve.RequiredVersion)
+			if line := slotErrorLine(slot.Error); line != "" {
+				fmt.Printf("#%d: %s\n", slot.SlotNumber, line)
 				continue
 			}
 			// For plain output with errors, show slot number
@@ -398,7 +333,7 @@ func PrintPlainSlots(slots []NVRAMSlot, codes map[int]string) {
 // HasValidSlots returns true if there are any slots with valid TOTP codes
 func HasValidSlots(slots []NVRAMSlot) bool {
 	for _, slot := range slots {
-		if slot.Error == nil && slot.Secret != "" {
+		if slot.Error == nil && slot.Code != "" {
 			return true
 		}
 	}
@@ -408,7 +343,7 @@ func HasValidSlots(slots []NVRAMSlot) bool {
 // RevealCommand implements the reveal command functionality
 func RevealCommand(tpmPath string, nvramIndex uint32, debug bool, plain bool) {
 	// Open TPM
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		PrintKIRAError(fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err))
 		return
@@ -458,7 +393,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, debug bool) {
 
 	for {
 		// Open TPM
-		tpmDev, err := transport.OpenTPM(tpmPath)
+		tpmDev, err := OpenTPM(tpmPath)
 		if err != nil {
 			currentTime := time.Now()
 			newError := fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
@@ -529,7 +464,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, debug bool) {
 
 		if shouldDisplay {
 			// Open TPM again for display (needed for PCR details)
-			tpmDev2, err := transport.OpenTPM(tpmPath)
+			tpmDev2, err := OpenTPM(tpmPath)
 			if err == nil {
 				// Display with colored KIRA format
 				PrintKIRASlots(tpmDev2, slots, newCodes)
@@ -539,8 +474,8 @@ func RunCommand(tpmPath string, nvramIndex uint32, debug bool) {
 				fmt.Printf("[ \033[1;33mKIRA\033[0m ] Time UTC %s\n", time.Now().UTC().Format("15:04:05"))
 				for _, slot := range slots {
 					if slot.Error != nil {
-						if bve, ok := IsBlobVersionError(slot.Error); ok {
-							fmt.Printf("\033[0;31m#%d\033[0m: Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira seal\n", slot.SlotNumber, bve.FoundVersion, bve.RequiredVersion)
+						if line := slotErrorLine(slot.Error); line != "" {
+							fmt.Printf("\033[0;31m#%d\033[0m: %s\n", slot.SlotNumber, line)
 						} else {
 							fmt.Printf("\033[0;31m#%d\033[0m: PCR Mismatch\n", slot.SlotNumber)
 						}
