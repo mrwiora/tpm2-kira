@@ -92,6 +92,27 @@ func MatchAdvertisement(serviceData []byte, recordJSON string) bool {
 	return attest.MatchServiceData(serviceData, rec.AdvKey)
 }
 
+// CheckAnchorAttestation runs the machine's check of an anchor key
+// attestation (attest.VerifyPhoneAttestation) and returns its result as JSON:
+// {"verified","root","security_level","boot_state","device_locked",
+// "unlock","patch_level","problems"}. The machine decides; the app may use
+// this only to show what the machine will see, and tests use it to check
+// real Android attestations against the machine's parser.
+func CheckAnchorAttestation(chainDER, spkiDER, challenge []byte) string {
+	a := attest.VerifyPhoneAttestation(chainDER, spkiDER, challenge, time.Now())
+	b, _ := json.Marshal(struct {
+		Verified      bool     `json:"verified"`
+		Root          string   `json:"root"`
+		SecurityLevel string   `json:"security_level"`
+		BootState     string   `json:"boot_state"`
+		DeviceLocked  bool     `json:"device_locked"`
+		Unlock        string   `json:"unlock"`
+		PatchLevel    string   `json:"patch_level"`
+		Problems      []string `json:"problems"`
+	}{a.Verified, a.Root, a.SecurityLevel, a.BootState, a.DeviceLocked, a.Unlock, a.PatchLevel, a.Problems})
+	return string(b)
+}
+
 // EKVendors returns, as a JSON array of names, the TPM vendors whose EK
 // certificates this core can verify (attest/ekroots/vendors.json).
 func EKVendors() string {
