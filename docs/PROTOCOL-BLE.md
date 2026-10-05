@@ -151,7 +151,10 @@ is newer than `kiracore.SchemaVersion()`. Capability bits are listed in §7.4.
 ### 3.3 Connection procedure (phone)
 
 1. Connect. Request an ATT MTU of 517 (Android: `requestMtu(517)`; iOS
-   negotiates on its own, typically 185).
+   negotiates on its own, typically 185). The machine agrees to at most
+   247, so the result is the smaller of the two: one ATT PDU then fits one
+   251-byte LE data packet, which old controllers handle more reliably
+   than L2CAP fragmentation. Use the value the OS reports, never 517.
 2. Discover the service, then its characteristics and the TX CCCD.
 3. Read INFO (§3.2).
 4. Enable notifications on TX (write `0x0001` to the CCCD) and wait for the
@@ -180,7 +183,7 @@ answer until they are; enabling them first avoids a stall.
 |---|---|---|
 | 23 (minimum) | 20 | 15 |
 | 185 (typical iOS) | 182 | 177 |
-| 517 (typical Android) | 514 | 509 |
+| 247 (machine maximum, Android) | 244 | 239 |
 
 ### 3.6 No pairing
 

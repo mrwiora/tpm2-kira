@@ -23,6 +23,7 @@ type fakeController struct {
 	advOn    bool
 	handle   uint16
 	aclMax   int
+	maxSent  int    // largest ACL packet the host sent
 	l2rx     []byte // reassembly of host -> central L2CAP
 	l2len    int
 	fromHost chan []byte // complete L2CAP payloads with CID prefix
@@ -72,7 +73,7 @@ func (f *fakeController) Write(p []byte) (int, error) {
 		f.mu.Unlock()
 		switch op {
 		case opLEReadBufferSize:
-			f.cmdComplete(op, 0, byte(f.aclMax), 0, 3) // 3 buffers: exercises flow control
+			f.cmdComplete(op, 0, byte(f.aclMax), byte(f.aclMax>>8), 3) // 3 buffers: exercises flow control
 		case opLESetAdvEnable:
 			f.mu.Lock()
 			f.advOn = params[0] == 1
@@ -99,6 +100,7 @@ func (f *fakeController) Write(p []byte) (int, error) {
 			f.t.Errorf("host sent %d-byte ACL packet, controller max %d", n, f.aclMax)
 		}
 		f.mu.Lock()
+		f.maxSent = max(f.maxSent, n)
 		if pb == 0 {
 			f.l2len = int(binary.LittleEndian.Uint16(data)) + 4
 			f.l2rx = append([]byte(nil), data...)
@@ -411,5 +413,81 @@ func TestDeadlineDropsIdleCentral(t *testing.T) {
 	conn := <-connCh
 	if _, err := conn.Recv(); !errors.Is(err, frame.ErrDeadline) {
 		t.Fatalf("expected deadline, got %v", err)
+	}
+}
+
+// TestPacketSizesAreCapped: a controller reporting a large (shared BR/EDR)
+// buffer and a phone asking for the largest MTU still get ACL packets of at
+// most 251 bytes and notifications that fit one LE data packet.
+func TestPacketSizesAreCapped(t *testing.T) {
+	fc := newFakeController(t)
+	fc.aclMax = 1021
+	p, err := newPeripheral(fc, Config{DeviceName: "tpm2-kira", Logf: t.Logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	connCh := acceptAsync(p, frame.DefaultBudget)
+	waitAdvertising(t, fc)
+	fc.connect()
+	conn := <-connCh
+	if conn == nil {
+		t.Fatal("accept failed")
+	}
+
+	// Android asks for 517.
+	rsp := fc.att(t, attExchangeMTUReq, byte(517&0xff), byte(517>>8))
+	if rsp[0] != attExchangeMTURsp || binary.LittleEndian.Uint16(rsp[1:]) != 247 {
+		t.Fatalf("MTU rsp %x, want server MTU 247", rsp)
+	}
+
+	// Find the CCCD; TX is the attribute before it.
+	var cccd uint16
+	for start := uint16(1); cccd == 0; {
+		rsp = fc.att(t, attFindInfoReq, byte(start), byte(start>>8), 0xFF, 0xFF)
+		if rsp[0] != attFindInfoRsp {
+			t.Fatalf("CCCD not found: %x", rsp)
+		}
+		size := 4 // format 1: 16-bit UUIDs; format 2: 128-bit
+		if rsp[1] == 2 {
+			size = 18
+		}
+		for off := 2; off+size <= len(rsp); off += size {
+			h := binary.LittleEndian.Uint16(rsp[off:])
+			if size == 4 && binary.LittleEndian.Uint16(rsp[off+2:]) == uuidCCCD {
+				cccd = h
+			}
+			start = h + 1
+		}
+	}
+	tx := cccd - 1
+	if rsp = fc.att(t, attWriteReq, byte(cccd), byte(cccd>>8), 1, 0); rsp[0] != attWriteRsp {
+		t.Fatalf("CCCD write %x", rsp)
+	}
+
+	reply := bytes.Repeat([]byte{0x5A}, 3000)
+	go func() { _ = conn.Send(reply) }()
+	reas := frame.NewReassembler(frame.MaxRecord, 0)
+	var back []byte
+	for back == nil {
+		n := fc.recv(t, cidATT)
+		if n[0] != attNotify || binary.LittleEndian.Uint16(n[1:]) != tx {
+			t.Fatalf("expected a TX notification, got %x", n[:3])
+		}
+		if len(n) > 247 {
+			t.Fatalf("notification PDU of %d bytes exceeds MTU 247", len(n))
+		}
+		if back, err = reas.Feed(n[3:]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !bytes.Equal(back, reply) {
+		t.Fatal("reply mismatch")
+	}
+	fc.mu.Lock()
+	sent := fc.maxSent
+	fc.mu.Unlock()
+	if sent > 251 {
+		t.Fatalf("host sent a %d-byte ACL packet; LE maximum is 251", sent)
 	}
 }

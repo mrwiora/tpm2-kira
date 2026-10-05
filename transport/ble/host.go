@@ -58,6 +58,7 @@ const (
 	sigCreditConnRsp    = 0x18
 	commandTimeout      = 5 * time.Second
 	maxL2CAPPDU         = maxATTMTU + 4
+	maxLEACL            = 251 // largest LE data channel payload (Data Length Extension)
 )
 
 // hciTransport is an open controller: each Read returns exactly one H4
@@ -210,6 +211,12 @@ func (h *host) init() error {
 	}
 	if aclLen < 27 || aclNum == 0 {
 		return fmt.Errorf("ble: controller reports unusable ACL buffers (%d x %d)", aclNum, aclLen)
+	}
+	if aclLen > maxLEACL {
+		// A controller may report a larger buffer, notably the BR/EDR one
+		// when LE shares it; some old controllers then mishandle LE packets
+		// above the largest LE data payload.
+		aclLen = maxLEACL
 	}
 	h.mu.Lock()
 	h.aclMax, h.credits = aclLen, aclNum

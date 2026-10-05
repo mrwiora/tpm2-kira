@@ -231,8 +231,10 @@ booting, not *which*.
 
 ### 4.3 MTU and throughput
 
-Request an ATT MTU of 517. Expect Android to grant up to 517 and iOS to settle
-around 185; assume the worst case of 23 (20 usable bytes) and let the framing
+Request an ATT MTU of 517. The machine grants at most 247 (one ATT PDU per
+251-byte LE data packet, and HCI ACL packets capped at 251 bytes, because
+controllers in the field differ in how they handle larger ones); iOS settles
+around 185. Assume the worst case of 23 (20 usable bytes) and let the framing
 handle it.
 
 | Payload | Size | At 185-byte notifications, 15 ms interval (~12 kB/s) |
@@ -442,7 +444,7 @@ into the shared core so the app and the CLI explain a diff identically.
 |---|---|---|
 | Permissions | `BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT` (API 31+); location permission for scanning below that | none for central role, but the background mode `bluetooth-central` must be declared |
 | Background | foreground service with a notification while attesting | background scanning **only** with an explicit service-UUID filter; no wildcard scans |
-| MTU | request 517, usually granted | fixed by the OS, ~185 |
+| MTU | request 517; the machine grants at most 247 | fixed by the OS, ~185 |
 | Key storage | StrongBox where present, TEE otherwise; `setUserAuthenticationRequired(true)` | Secure Enclave, `kSecAttrTokenIDSecureEnclave` |
 | Identity of the peer | MAC visible | opaque per-app UUID; the machine is identified by what it says inside the session, never by address |
 

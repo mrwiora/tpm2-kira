@@ -45,12 +45,17 @@ const (
 
 // Characteristic properties.
 const (
-	propRead         = 0x02
-	propWriteNoResp  = 0x04
-	propWrite        = 0x08
-	propNotify       = 0x10
-	defaultATTMTU    = 23
-	maxATTMTU        = 517
+	propRead        = 0x02
+	propWriteNoResp = 0x04
+	propWrite       = 0x08
+	propNotify      = 0x10
+	defaultATTMTU   = 23
+	// maxATTMTU is the largest ATT_MTU this server agrees to. 247 makes one
+	// ATT PDU plus its 4-byte L2CAP header exactly one 251-byte LE data
+	// packet, so no notification relies on the controller or the phone
+	// reassembling L2CAP fragments; controllers in the field differ in how
+	// well they do that. Larger records go out as more fragments instead.
+	maxATTMTU        = 247
 	maxAttrValueSize = 512
 )
 
