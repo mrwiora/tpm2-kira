@@ -47,6 +47,8 @@ check() {
     go test -tags=unit ./cmd/...
 }
 
+backup=(etc/tpm2-kira/attest.conf)
+
 package() {
     cd "$_srcdir"
 
@@ -58,6 +60,13 @@ package() {
     # image, which is the only place it is meant to run.
     install -Dm644 initramfs/systemd/tpm2-kira.service \
         "$pkgdir/usr/lib/systemd/system/tpm2-kira.service"
+
+    # Lazy-mode Bluetooth attestation; added to the image by the install hook
+    # only when /etc/tpm2-kira/attest.conf enables it.
+    install -Dm644 initramfs/systemd/tpm2-kira-attest.service \
+        "$pkgdir/usr/lib/systemd/system/tpm2-kira-attest.service"
+    install -Dm644 initramfs/common/attest.conf \
+        "$pkgdir/etc/tpm2-kira/attest.conf"
 
     install -Dm644 initramfs/mkinitcpio/install/sd-tpm2-kira \
         "$pkgdir/usr/lib/initcpio/install/sd-tpm2-kira"

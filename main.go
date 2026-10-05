@@ -322,18 +322,44 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 			failAttest(cmd.ExitInternal, err)
 		}
 	case "gate":
-		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
-		timeout := fs.Duration("timeout", 0, "Give up after this long (0 = wait forever)")
+		configPath := fs.String("config", cmd.DefaultAttestConfigPath, "Attestation config (adapter, timeouts)")
+		adapter := fs.Int("adapter", -1, "Bluetooth adapter index (hciN); default from the config, else 0")
+		timeout := fs.Duration("timeout", -1, "Give up after this long (0 = wait forever); default from the config")
+		adapterWait := fs.Duration("adapter-wait", -1, "Wait this long for the adapter to appear; default from the config, else 30s")
 		mode := fs.String("mode", "lazy", "Gate mode; only 'lazy' is implemented")
 		fs.Parse(args)
 		if *mode != "lazy" {
 			failAttest(cmd.ExitUsage, fmt.Errorf("mode %q is not implemented; only 'lazy' is available", *mode))
 		}
+		cfg, err := cmd.LoadAttestConfig(*configPath)
+		if err != nil {
+			failAttest(cmd.ExitUsage, err)
+		}
+		if *adapter >= 0 {
+			cfg.Adapter = *adapter
+		}
+		if *timeout >= 0 {
+			cfg.Timeout = *timeout
+		}
+		if *adapterWait >= 0 {
+			cfg.AdapterWait = *adapterWait
+		}
 		var slot uint32
 		if nvramExplicit(args) {
 			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
 		}
-		os.Exit(cmd.AttestGate(cmd.GateOptions{TPMPath: *tpm, SealIndex: slot, Adapter: *adapter, Timeout: *timeout, Debug: *debug}))
+		os.Exit(cmd.AttestGate(cmd.GateOptions{
+			TPMPath: *tpm, SealIndex: slot, Adapter: cfg.Adapter, Timeout: cfg.Timeout,
+			AdapterWait: cfg.AdapterWait, Debug: *debug,
+		}))
+	case "initramfs-deps":
+		// Used by the initramfs hooks; prints "module", "firmware" and
+		// "warning" lines for the adapter on this machine.
+		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
+		kernelLog := fs.String("kernel-log", "", "Extra kernel log text (e.g. 'journalctl -k -b -o cat' output)")
+		fwDir := fs.String("firmware-dir", cmd.DefaultFirmwareDir, "Firmware directory")
+		fs.Parse(args)
+		os.Exit(cmd.AttestInitramfsDeps(*adapter, *kernelLog, *fwDir))
 	case "status":
 		jsonOut := fs.Bool("json", false, "Output as JSON")
 		fs.Parse(args)
@@ -451,11 +477,15 @@ ATTEST SUBCOMMANDS:
                   signing key). Prints a 6-digit code to compare with the app.
                   --name STR --pcrs LIST --adapter N --privkey PATH --timeout DUR
   attest gate     Serve attestation requests until a phone returns a receipt.
-                  --mode lazy --adapter N --timeout DUR
+                  Defaults from /etc/tpm2-kira/attest.conf; uses /dev/tpmrm0
+                  when available so it can run beside the TOTP display.
+                  --mode lazy --adapter N --timeout DUR --adapter-wait DUR
   attest status   Show enrolled phones per slot (--json)
   attest quote    Produce evidence without a phone (--nonce HEX --out FILE)
   attest verify   Judge evidence offline (--evidence FILE --record FILE --nonce HEX)
   attest unenrol  Remove a slot's attestation enrolment
+  attest initramfs-deps  Modules and firmware the adapter needs (used by the
+                  initramfs hooks)
 
   EXIT STATUS: unlike every other command, 'attest gate', 'attest verify',
   'attest quote' and 'attest enrol' exit non-zero on failure:

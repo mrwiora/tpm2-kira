@@ -88,6 +88,11 @@ install-mkinitcpio:
 	sudo cp initramfs/mkinitcpio/post/sd-tpm2-kira /etc/initcpio/post/
 	sudo chmod +x /etc/initcpio/post/sd-tpm2-kira
 	sudo mkdir -p /usr/lib/systemd/system
+	sudo install -m644 initramfs/systemd/tpm2-kira.service /usr/lib/systemd/system/
+	sudo install -m644 initramfs/systemd/tpm2-kira-attest.service /usr/lib/systemd/system/
+	@if [ ! -e /etc/tpm2-kira/attest.conf ]; then \
+		sudo install -Dm644 initramfs/common/attest.conf /etc/tpm2-kira/attest.conf; \
+	fi
 	@echo "Mkinitcpio hooks installed successfully!"
 	@echo ""
 	@echo "Next steps:"
@@ -106,6 +111,7 @@ install-mkinitcpio:
 uninstall-mkinitcpio:
 	@echo "Uninstalling mkinitcpio hooks..."
 	sudo rm -f /etc/initcpio/install/sd-tpm2-kira
+	sudo rm -f /usr/lib/systemd/system/tpm2-kira-attest.service
 	sudo rm -f /etc/initcpio/post/sd-tpm2-kira
 	@echo "Mkinitcpio hooks uninstalled!"
 	@echo "Note: You should rebuild your initramfs after removing hooks:"

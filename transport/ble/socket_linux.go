@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -38,6 +39,32 @@ func adapterUp(fd, dev int) (bool, error) {
 	return binary.LittleEndian.Uint32(info[16:])&hciFlagUp != 0, nil
 }
 
+// errRetry marks conditions that clear up by themselves while a freshly
+// probed adapter finishes initialising.
+type errRetry struct{ err error }
+
+func (e errRetry) Error() string { return e.err.Error() }
+func (e errRetry) Unwrap() error { return e.err }
+
+// openUserChannelWait retries openUserChannel until the adapter exists and
+// the kernel lets go of it, or wait expires.
+func openUserChannelWait(dev int, unblock bool, wait time.Duration, logf func(string, ...any)) (hciTransport, func(), error) {
+	deadline := time.Now().Add(wait)
+	announced := false
+	for {
+		tr, release, err := openUserChannel(dev, unblock, logf)
+		var r errRetry
+		if err == nil || !errors.As(err, &r) || !time.Now().Before(deadline) {
+			return tr, release, err
+		}
+		if !announced && logf != nil {
+			logf("waiting for hci%d: %v", dev, err)
+			announced = true
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
 // openUserChannel brings the adapter down in the kernel and binds an HCI
 // user channel to it, which gives this process exclusive raw access. The
 // returned release function brings the adapter back up if it was up before.
@@ -46,7 +73,7 @@ func openUserChannel(dev int, unblock bool, logf func(string, ...any)) (hciTrans
 		logf = func(string, ...any) {}
 	}
 	if _, err := os.Stat(fmt.Sprintf("/sys/class/bluetooth/hci%d", dev)); err != nil {
-		return nil, nil, fmt.Errorf("ble: no Bluetooth adapter hci%d (kernel module or firmware missing?)", dev)
+		return nil, nil, errRetry{fmt.Errorf("ble: no Bluetooth adapter hci%d (kernel module or firmware missing?)", dev)}
 	}
 	if err := checkRFKill(dev, unblock, logf); err != nil {
 		return nil, nil, err
@@ -65,6 +92,9 @@ func openUserChannel(dev int, unblock bool, logf func(string, ...any)) (hciTrans
 		logf("bringing hci%d down for exclusive use", dev)
 		if err := unix.IoctlSetInt(ctl, hciDevDown, dev); err != nil {
 			unix.Close(ctl)
+			if errors.Is(err, unix.EBUSY) {
+				return nil, nil, errRetry{fmt.Errorf("ble: hci%d is still initialising: %w", dev, err)}
+			}
 			return nil, nil, fmt.Errorf("ble: cannot take hci%d down (needs root / CAP_NET_ADMIN): %w", dev, err)
 		}
 	}
@@ -86,7 +116,9 @@ func openUserChannel(dev int, unblock bool, logf func(string, ...any)) (hciTrans
 		unix.Close(fd)
 		release()
 		if errors.Is(err, unix.EBUSY) {
-			return nil, nil, fmt.Errorf("ble: hci%d is busy (bluetoothd may have brought it back up; stop bluetooth.service or use --adapter)", dev)
+			// Right after probing, the kernel runs the controller's setup
+			// (firmware download) and refuses the user channel meanwhile.
+			return nil, nil, errRetry{fmt.Errorf("ble: hci%d is busy (still initialising, or bluetoothd brought it back up; stop bluetooth.service or use --adapter)", dev)}
 		}
 		return nil, nil, fmt.Errorf("ble: cannot bind an HCI user channel to hci%d: %w", dev, err)
 	}

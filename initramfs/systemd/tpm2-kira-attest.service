@@ -1,0 +1,32 @@
+[Unit]
+Description=tpm2-kira remote attestation over Bluetooth LE (lazy)
+Documentation=https://github.com/mrwiora/tpm2-kira/blob/main/docs/PLAN-BLE.md
+DefaultDependencies=no
+Requires=dev-tpm0.device
+After=dev-tpm0.device
+# Quotes must describe the measure point, like the TOTP display (PLAN-BLE.md
+# §3.3); ordering against a unit that never starts is a no-op.
+After=systemd-pcrosseparator.service
+After=systemd-pcrphase-initrd.service
+# The image lists the adapter's driver modules in modules-load.d.
+After=systemd-modules-load.service
+# Started before the prompt, but never waited for: lazy mode must not hold
+# the boot. Type=simple returns as soon as the process runs.
+Before=systemd-ask-password-console.service
+# The adapter is released when the initramfs ends.
+Conflicts=initrd-switch-root.target
+Before=initrd-switch-root.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/tpm2-kira attest gate --mode lazy
+StandardOutput=tty
+StandardError=tty
+# No phone in range (3) is normal in lazy mode. A rejected boot (4) or an
+# anchor mismatch (5) is left to fail the unit, so the console shows a red
+# FAILED line next to the warning; nothing requires this unit, so the boot
+# carries on either way.
+SuccessExitStatus=3
+
+[Install]
+WantedBy=sysinit.target

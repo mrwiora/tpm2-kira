@@ -36,6 +36,92 @@ _report_measure_point() {
     fi
 }
 
+ATTEST_CONF=/etc/tpm2-kira/attest.conf
+
+# Bluetooth for remote attestation (PLAN-BLE.md §3.1). Adds exactly what the
+# configured adapter needs on this machine: its driver modules (with their
+# dependencies) and the firmware files the kernel loaded for it, as reported
+# by 'tpm2-kira attest initramfs-deps'. Nothing is added while attestation is
+# off, and nothing is added when the adapter cannot be found.
+_add_bluetooth() {
+    local mode adapter deps rc log kind value nfw=0
+    local -a modules=()
+
+    [[ -r $ATTEST_CONF ]] || return 0
+    mode=$( . "$ATTEST_CONF" && printf '%s' "${TPM2_KIRA_ATTEST:-off}" )
+    adapter=$( . "$ATTEST_CONF" && printf '%s' "${TPM2_KIRA_ATTEST_ADAPTER:-0}" )
+    adapter=${adapter#hci}
+    case $mode in
+        off | '') return 0 ;;
+        lazy) ;;
+        *)
+            warning "tpm2-kira: TPM2_KIRA_ATTEST=$mode is not supported (off, lazy); Bluetooth not added"
+            return 0
+            ;;
+    esac
+
+    if [[ $(tpm2-kira attest status --json 2>/dev/null) == '[]' ]]; then
+        warning "tpm2-kira: attestation is '$mode' but no phone is enrolled; run 'tpm2-kira attest enrol'. Bluetooth not added"
+        return 0
+    fi
+
+    # The ring buffer may have rotated on a long uptime; the journal keeps
+    # the whole boot's kernel messages.
+    log=$(mktemp)
+    journalctl -k -b -o cat > "$log" 2> /dev/null || true
+    deps=$(tpm2-kira attest initramfs-deps --adapter "$adapter" --kernel-log "$log")
+    rc=$?
+    rm -f "$log"
+
+    while read -r kind value; do
+        [[ $kind == warning ]] && warning "tpm2-kira: $value"
+    done <<< "$deps"
+
+    if (( rc != 0 )); then
+        warning "tpm2-kira: attestation is '$mode' but hci$adapter was not found; Bluetooth not added to the image"
+        return 0
+    fi
+    # Every other command exits 0 by design, so an installed binary that
+    # predates initramfs-deps "succeeds" with no output. Only an answer that
+    # names the adapter counts.
+    if ! grep -q '^adapter ' <<< "$deps"; then
+        warning "tpm2-kira: the installed tpm2-kira cannot resolve Bluetooth dependencies (too old?); Bluetooth not added"
+        return 0
+    fi
+
+    # add_module copies every firmware file a module declares: for btusb's
+    # dependencies that is ~60 files for chips this machine does not have.
+    # When the kernel log named the files this adapter really loaded, add
+    # only those; otherwise fall back to the declarations.
+    local saved_add_firmware=''
+    if grep -q '^firmware ' <<< "$deps"; then
+        saved_add_firmware=$(declare -f add_firmware)
+        add_firmware() { return 0; }
+    fi
+    while read -r kind value; do
+        if [[ $kind == module ]]; then
+            add_module "$value"
+            modules+=("$value")
+        fi
+    done <<< "$deps"
+    if [[ -n $saved_add_firmware ]]; then
+        eval "$saved_add_firmware"
+    fi
+    while read -r kind value; do
+        if [[ $kind == firmware ]]; then
+            add_firmware "$value" && nfw=$((nfw + 1))
+        fi
+    done <<< "$deps"
+
+    mkdir -p "$BUILDROOT/etc/modules-load.d"
+    printf '%s\n' "${modules[@]}" > "$BUILDROOT/etc/modules-load.d/tpm2-kira-bluetooth.conf"
+    add_file "$ATTEST_CONF"
+    add_systemd_unit tpm2-kira-attest.service
+    add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-attest.service \
+        /usr/lib/systemd/system/tpm2-kira-attest.service
+    plain "tpm2-kira: Bluetooth attestation ($mode) via hci$adapter: ${#modules[@]} modules, $nfw firmware files"
+}
+
 build() {
     # Add tpm2-kira binary to initramfs
     add_binary tpm2-kira
@@ -49,6 +135,8 @@ build() {
         /usr/lib/systemd/system/tpm2-kira.service
 
     _report_measure_point
+
+    _add_bluetooth
 
     if [[ ! -d /var/lib/tpm2-kira/keys ]]; then
         warning "tpm2-kira: not configured yet; run 'tpm2-kira setup' and rebuild"
@@ -65,6 +153,10 @@ The hook will:
 - Install the tpm2-kira binary into the image
 - Add tpm2-kira.service and enable it inside the image only
 - Start tpm2-kira in continuous run mode during boot
+- If /etc/tpm2-kira/attest.conf sets TPM2_KIRA_ATTEST=lazy and a phone is
+  enrolled: add the Bluetooth adapter's driver modules and firmware, and
+  tpm2-kira-attest.service, which serves attestation requests from the phone
+  beside the TOTP display without holding the boot
 
 Setup is NOT run from here: it generates a new TOTP secret and writes to TPM
 NVRAM, which must not happen while merely building an image. Run

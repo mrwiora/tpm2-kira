@@ -357,13 +357,34 @@ exclusively through an HCI user channel (no BlueZ needed); other Bluetooth
 devices on that adapter disconnect until it finishes. `--adapter N` selects
 another adapter.
 
+### At the passphrase prompt
+
+Enable lazy mode in `/etc/tpm2-kira/attest.conf` and rebuild the initramfs:
+
+```bash
+sudo sed -i 's/^TPM2_KIRA_ATTEST=.*/TPM2_KIRA_ATTEST=lazy/' /etc/tpm2-kira/attest.conf
+sudo mkinitcpio -P            # or: sudo update-initramfs -u
+```
+
+The hooks ask `tpm2-kira attest initramfs-deps` what the configured adapter
+needs and copy exactly that: its driver modules and the firmware files the
+kernel loaded for it in the current boot (about 1.1 MB on an Intel adapter).
+Nothing is added while attestation is off, no phone is enrolled, or the
+adapter is missing. At boot the gate runs beside the TOTP display, waits for
+the adapter, serves the phone, prints the verdict, and never holds the boot.
+
+The new modules and firmware change the initramfs and therefore PCR 11 (UKI)
+or PCR 9 (GRUB): on Arch the post hook reseals automatically; on Debian with
+PCR 9 sealed, reseal after the next boot as described below.
+
 The same session will later also release the salt for
 [hashpwd2](https://github.com/mrwiora/hashpwd2) when the LUKS key is derived
 from a password plus a phone-held factor
 ([docs/PLAN-FACTORRELEASE.md](docs/PLAN-FACTORRELEASE.md)).
 
-Status: the machine side and the phone's verification core are implemented;
-Bluetooth inside the initramfs, enforced mode and salt release are not yet.
+Status: the machine side, Bluetooth inside the initramfs (lazy mode) and the
+phone's verification core are implemented but not yet tested on real
+Bluetooth hardware; enforced mode and salt release are not implemented yet.
 The phone apps are specified in [docs/mobile/](docs/mobile/). The protocol is
 defined in [docs/PROTOCOL-BLE.md](docs/PROTOCOL-BLE.md), the design in
 [docs/PLAN-REMOTEATTESTATION.md](docs/PLAN-REMOTEATTESTATION.md) and
@@ -642,7 +663,9 @@ in the TPM. Delete the slot first, then the directory.
 │   ├── pentest1/, pentest2/      # Security review findings and mitigations
 │   └── *.issue                   # Write-ups of specific bugs
 ├── initramfs/               # Everything that goes into, or builds, an initramfs
+│   ├── common/attest.conf          # Attestation mode for the initramfs (off / lazy)
 │   ├── systemd/tpm2-kira.service   # Unit, pulled into systemd-based images
+│   ├── systemd/tpm2-kira-attest.service  # Lazy Bluetooth attestation gate
 │   ├── mkinitcpio/                 # Arch
 │   │   ├── install/sd-tpm2-kira    # Build hook: puts the binary in the image
 │   │   ├── post/sd-tpm2-kira       # Reseal after the image is written

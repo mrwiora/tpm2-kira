@@ -1,8 +1,9 @@
 # PLAN — BLE Attestation with a Mobile Device
 
-> **Status:** partially implemented (phases 1–4 on a booted system). The wire
-> contract is [PROTOCOL-BLE.md](PROTOCOL-BLE.md); see "Implementation status"
-> below for what exists and where it deviates from this plan.
+> **Status:** partially implemented — phases 1–4, and phase 5 (Bluetooth in
+> the initramfs) for lazy mode; nothing yet verified on real hardware. The wire
+> contract is [PROTOCOL-BLE.md](PROTOCOL-BLE.md); "Implementation status" below
+> lists what is done and what is open.
 > **Depends on:** [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md)
 > phases 1–5. This document adds a *transport* (Bluetooth LE), a *verifier*
 > (an Android/iOS app) and a *gate* (what happens at the passphrase prompt).
@@ -12,15 +13,33 @@
 
 ## Implementation status
 
-| Phase | State |
+Last updated 2026-10-05.
+
+### Done
+
+| Phase | What exists | Verified by |
+|---|---|---|
+| 1 — BLE stack | **Decided: in-tree.** `transport/ble/`: pure-Go HCI user channel peripheral — advertising, ACL fragmentation and flow control, L2CAP, ATT/GATT server, pairing refused — about 1,500 lines, no dependency beyond `golang.org/x/sys`. `go-ble/ble` rejected (unmaintained, dependency surface). | fake-controller tests: iOS-style discovery, MTU 23/185, records both ways, framing errors, idle deadline, re-advertising |
+| 2 — peripheral, framing, encrypted session | `transport/frame/`, Noise XX/IK in `attest/noise.go`, `tpm2-kira attest enrol` with SAS | unit tests, fuzzing, interop with the reference `noiseprotocol` library |
+| 3 — mobile core | `mobile/kiracore` (gomobile verifier), `mobile/kiratest` (simulated machine); apps specified in [mobile/](mobile/) | Go tests through the binding API; gobind generates Java and Objective-C cleanly |
+| 4 — attestation round trip, lazy mode | `tpm2-kira attest gate --mode lazy` on a booted system | swtpm integration test (real AK, EK, quotes, ActivateCredential) |
+| 5 — initramfs (part) | `tpm2-kira attest initramfs-deps` resolves the configured adapter's driver modules (the whole sysfs path) and the firmware the kernel loaded for it, from the kernel log. `/etc/tpm2-kira/attest.conf` (`TPM2_KIRA_ATTEST=off\|lazy`). mkinitcpio: modules, exact firmware, `modules-load.d`, `tpm2-kira-attest.service` (runs beside the TOTP display, never holds the boot, stopped at switch-root). initramfs-tools: same resolution, `init-premount` loads modules and starts the gate in the background, `init-bottom` stops it. The gate waits for the adapter (`TPM2_KIRA_ATTEST_ADAPTER_WAIT`), retries while the kernel finishes controller setup, and uses `/dev/tpmrm0` so it can share the TPM with the TOTP display. Hooks add nothing when attestation is off, no phone is enrolled, the adapter is missing, or the installed binary is too old. | resolver unit tests on a fake sysfs (Intel, Realtek, Broadcom log formats); stubbed-hook tests for both hooks; a real `mkinitcpio` image build on Arch containing exactly 6 modules and 1 firmware file (≈1.1 MB) |
+
+### Open
+
+| Item | Notes |
 |---|---|
-| 1 — BLE stack decision | **Decided: in-tree.** `transport/ble/` is a pure-Go HCI user channel peripheral (advertising, ACL flow control, L2CAP, ATT/GATT, SMP refusal), about 1,500 lines, no new dependency beyond `golang.org/x/sys`. `go-ble/ble` was rejected for its unmaintained state and dependency surface. Tested against a fake controller; **not yet tested on real hardware** (no adapter on the development machine). |
-| 2 — peripheral, framing, encrypted session | done: `transport/frame/`, `attest/noise.go`, `tpm2-kira attest enrol` |
-| 3 — mobile app skeleton | the phone core is done (`mobile/kiracore`, gomobile) plus a demo machine for app tests (`mobile/kiratest`); the apps themselves are specified as agent prompts in [mobile/](mobile/) |
-| 4 — attestation round trip, lazy mode | done on a booted system: `tpm2-kira attest gate --mode lazy` |
-| 5 — initramfs hooks, firmware, adapter bring-up | **not started** |
-| 6 — enforced mode | **not started**; `attest gate --mode enforced` is refused |
-| 7 — verdict UX | the shared PCR explanation (`attest/explain.go`) exists; the UI is the app's |
+| **Real hardware** | Nothing has run against a physical adapter or phone yet — the development machine has none. First boot test: an Intel/Realtek USB adapter on Arch, then Debian. |
+| **Boot test** (§8) | QEMU + swtpm boot of an image with the gate; needs a passed-through or virtual (`hci_vhci`, root) controller. |
+| **Debian firmware size** | `manual_add_modules` queues modules for `dracut-install`, which copies every firmware file the modules *declare* (dozens for btusb's dependencies) on top of the exact files. mkinitcpio avoids this; on Debian it costs space until initramfs-tools offers a way to skip declared firmware. Measure on a Debian box. |
+| **Debian measured PCRs** | Adding Bluetooth changes PCR 9 on GRUB machines; the existing post-update reminder covers resealing, but has not been re-checked with the new files. |
+| 6 — enforced mode | `attest gate --mode enforced` is refused; needs the image anchor, sealed payload v9 and the fail-closed matrix (§7.5). |
+| Salt release | `Release` is defined in the protocol; the attester answers "unsupported" (PLAN-FACTORRELEASE.md). |
+| Break-glass tokens (§7.6) | not started |
+| 7 — verdict UX | the shared PCR explanation exists (`attest/explain.go`); the UI belongs to the apps |
+| Phone apps | specified as agent prompts in [mobile/](mobile/), not built |
+| Lost-phone ceremony (§6.2, open question 3) | today: `attest enrol` with the new phone, `attest unenrol` to drop all; no per-phone removal command yet |
+| EK certificate chain | parsed and stored by the phone, not validated against vendor roots |
 
 Decisions taken while implementing, superseding the text below where they differ:
 
@@ -125,6 +144,15 @@ The mkinitcpio install hook and the initramfs-tools hook both grow a step that
 resolves the *actual* adapter on the build host (`/sys/class/bluetooth/hci0`,
 its driver and its firmware files via `modinfo -F firmware`) and copies exactly
 those. Copying all of `linux-firmware` is not acceptable for an initramfs.
+
+> **As implemented:** firmware comes from the kernel log of the build host's
+> current boot (`Bluetooth: hci0: Found device firmware: …`), not from
+> `modinfo -F firmware`. The declarations are incomplete — `btintel` declares
+> four legacy files, while current Intel adapters load names such as
+> `intel/ibt-0041-0041.sfi` that appear nowhere in modinfo — and they list
+> files for every chip a driver supports (`btrtl` declares 50). If the log
+> holds no firmware line (rotated, or an adapter without firmware), the hooks
+> fall back to the declarations and say so.
 
 If no adapter is found at build time, the hook warns and installs nothing; a
 machine configured for `enforced` that then cannot find an adapter at boot
@@ -611,6 +639,9 @@ Bluetooth firmware in an initramfs is where this plan meets hardware reality.
 5. **Firmware in the image vs. firmware size.** Some adapters need over a
    megabyte. A `/boot` of 512 MB with several kernels is not unusual. Measure
    before promising Debian users this fits.
+   *Measured on Arch (Intel AX adapter):* 6 compressed modules (≈620 KB) and
+   one firmware file (≈500 KB), ≈1.1 MB per image. Debian still to measure
+   (see "Open").
 6. **What does the phone do when it sees a machine it has never enrolled?**
    Showing it invites phishing-by-proximity; hiding it makes enrolment
    confusing. Probably: hidden by default, visible only while an enrolment is

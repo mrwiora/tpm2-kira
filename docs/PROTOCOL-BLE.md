@@ -890,7 +890,7 @@ wants to see why a boot changed.
 |---|---|
 | Releasing the hashpwd2 salt (factor enrolment, Release handling) | PLAN-FACTORRELEASE.md |
 | Enforced mode, image-pinned anchor, sealed payload v9 | PLAN-BLE.md §7, PLAN-REMOTEATTESTATION.md §10 |
-| Bluetooth (modules, firmware) inside the initramfs | PLAN-BLE.md §3.1, phase 5 |
+| Bluetooth inside the initramfs: implemented for lazy mode (hooks, `attest.conf`), not yet tested on hardware | PLAN-BLE.md §3.1, phase 5 |
 | Break-glass bypass tokens | PLAN-BLE.md §7.6 |
 
 The app SHOULD be built so that a Release step can be added after the receipt

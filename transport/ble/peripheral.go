@@ -17,6 +17,11 @@ type Config struct {
 	DeviceName string
 	// UnblockRFKill clears a soft rfkill block on the adapter before use.
 	UnblockRFKill bool
+	// Wait is how long to wait for the adapter to appear and become free.
+	// In an initramfs the adapter shows up only after its module and
+	// firmware have loaded, and the kernel holds it busy while it runs the
+	// controller's setup; both take seconds. Zero means do not wait.
+	Wait time.Duration
 	// Logf receives debug output; nil discards it.
 	Logf func(format string, args ...any)
 }
@@ -34,7 +39,7 @@ func Open(cfg Config) (*Peripheral, error) {
 	if cfg.DeviceName == "" {
 		cfg.DeviceName = "tpm2-kira"
 	}
-	tr, release, err := openUserChannel(cfg.Adapter, cfg.UnblockRFKill, cfg.Logf)
+	tr, release, err := openUserChannelWait(cfg.Adapter, cfg.UnblockRFKill, cfg.Wait, cfg.Logf)
 	if err != nil {
 		return nil, err
 	}

@@ -39,6 +39,20 @@ if [ ! -c /dev/tpmrm0 ]; then
     exit 0
 fi
 
+# Remote attestation over Bluetooth, lazy mode: serve requests from the
+# enrolled phone in the background, beside the TOTP display. It never holds
+# the boot; init-bottom stops it. The hook only puts bluetooth-modules into
+# the image when the adapter was found at build time.
+TPM2_KIRA_ATTEST=off
+[ -r /etc/tpm2-kira/attest.conf ] && . /etc/tpm2-kira/attest.conf
+if [ "$TPM2_KIRA_ATTEST" = lazy ] && [ -r /etc/tpm2-kira/bluetooth-modules ]; then
+    while read -r m; do
+        modprobe -q "$m" || true
+    done </etc/tpm2-kira/bluetooth-modules
+    /usr/bin/tpm2-kira attest gate --mode lazy >/dev/console 2>&1 &
+    echo $! > /run/tpm2-kira-attest.pid
+fi
+
 mode=run
 [ -r /etc/tpm2-kira/initramfs.conf ] && . /etc/tpm2-kira/initramfs.conf
 mode=${TPM2_KIRA_INITRAMFS_MODE:-run}

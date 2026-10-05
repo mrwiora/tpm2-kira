@@ -364,11 +364,12 @@ func confirmCode(in *bufio.Reader, code string) (bool, error) {
 
 // GateOptions configures `attest gate`.
 type GateOptions struct {
-	TPMPath   string
-	SealIndex uint32 // 0 = first enrolled slot
-	Adapter   int
-	Timeout   time.Duration // 0 = wait forever
-	Debug     bool
+	TPMPath     string
+	SealIndex   uint32 // 0 = first enrolled slot
+	Adapter     int
+	Timeout     time.Duration // 0 = wait forever
+	AdapterWait time.Duration // how long to wait for the adapter to appear
+	Debug       bool
 }
 
 // AttestGate serves attestation requests until a phone returns a receipt,
@@ -382,9 +383,10 @@ type GateOptions struct {
 // the phone's. An image-pinned anchor comes with enforced mode
 // (PLAN-REMOTEATTESTATION.md §10.2).
 func AttestGate(o GateOptions) int {
-	tpmDev, err := transport.OpenTPM(o.TPMPath)
+	tpmPath := preferResourceManager(o.TPMPath)
+	tpmDev, err := transport.OpenTPM(tpmPath)
 	if err != nil {
-		gateFail("failed to open TPM at %s: %v", o.TPMPath, err)
+		gateFail("failed to open TPM at %s: %v", tpmPath, err)
 		return ExitInternal
 	}
 	defer tpmDev.Close()
@@ -429,7 +431,7 @@ func AttestGate(o GateOptions) int {
 		Capabilities: attest.CapEventlog,
 	}
 
-	p, err := ble.Open(ble.Config{Adapter: o.Adapter, UnblockRFKill: true, Logf: debugLogf(o.Debug)})
+	p, err := ble.Open(ble.Config{Adapter: o.Adapter, UnblockRFKill: true, Wait: o.AdapterWait, Logf: debugLogf(o.Debug)})
 	if err != nil {
 		gateFail("%v", err)
 		return ExitUnavailable
