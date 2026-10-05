@@ -41,6 +41,8 @@ const (
 	evNumCompletedPkts  = 0x13
 	evLEMeta            = 0x3E
 	leConnComplete      = 0x01
+	leConnUpdate        = 0x03
+	leDataLenChange     = 0x07
 	leLTKRequest        = 0x05
 	leEnhConnComplete   = 0x0A
 	cidATT              = 0x0004
@@ -407,7 +409,25 @@ func (h *host) handleEvent(ev []byte) {
 				return
 			}
 			handle := binary.LittleEndian.Uint16(p[2:]) & 0x0FFF
+			// Interval, latency and supervision timeout follow the peer
+			// address, and in the enhanced event two private addresses.
+			at := 12
+			if p[0] == leEnhConnComplete {
+				at = 24
+			}
+			if len(p) >= at+6 {
+				h.logf("connection parameters: %s", connParams(p[at:]))
+			}
 			h.onConnect(handle)
+		case leConnUpdate:
+			if len(p) >= 10 {
+				h.logf("connection update (status 0x%02x): %s", p[1], connParams(p[4:]))
+			}
+		case leDataLenChange:
+			if len(p) >= 11 {
+				h.logf("data length: tx %d bytes, rx %d bytes",
+					binary.LittleEndian.Uint16(p[3:]), binary.LittleEndian.Uint16(p[7:]))
+			}
 		case leLTKRequest:
 			// The central asks to encrypt with a key we never agreed:
 			// there is no bonding, so decline (PLAN-BLE.md §5.1).
@@ -604,6 +624,15 @@ func (l *Link) aclIn(pb uint16, data []byte) {
 	}
 }
 
+// connParams formats the interval, latency and supervision timeout fields
+// that LE connection events carry, in their units (1.25 ms, events, 10 ms).
+func connParams(b []byte) string {
+	interval := float64(binary.LittleEndian.Uint16(b)) * 1.25
+	latency := binary.LittleEndian.Uint16(b[2:])
+	timeout := int(binary.LittleEndian.Uint16(b[4:])) * 10
+	return fmt.Sprintf("interval %.2f ms, latency %d, supervision timeout %d ms", interval, latency, timeout)
+}
+
 // signal rejects every LE signalling request: no connection-oriented
 // channels, and connection parameter updates are the central's business.
 func (l *Link) signal(p []byte) {
@@ -615,6 +644,7 @@ func (l *Link) signal(p []byte) {
 	case sigCommandReject, sigDisconnectionRsp, sigConnParamRsp, sigLECreditConnRsp, sigCreditConnRsp:
 		return
 	}
+	l.h.logf("rejecting L2CAP signalling request 0x%02x", code)
 	rej := []byte{sigCommandReject, id, 2, 0, 0, 0}
 	go func() { _ = l.h.sendL2CAP(l, cidLESignal, rej) }()
 }

@@ -370,7 +370,9 @@ func debugLogf(debug bool) func(string, ...any) {
 	if !debug {
 		return nil
 	}
-	return func(format string, args ...any) { fmt.Printf("ble: "+format+"\n", args...) }
+	return func(format string, args ...any) {
+		fmt.Printf("ble: %s "+format+"\n", append([]any{time.Now().Format("15:04:05.000")}, args...)...)
+	}
 }
 
 // confirmCode shows the short authentication string and asks the person at
