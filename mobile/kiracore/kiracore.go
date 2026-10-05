@@ -92,6 +92,13 @@ func MatchAdvertisement(serviceData []byte, recordJSON string) bool {
 	return attest.MatchServiceData(serviceData, rec.AdvKey)
 }
 
+// EKVendors returns, as a JSON array of names, the TPM vendors whose EK
+// certificates this core can verify (attest/ekroots/vendors.json).
+func EKVendors() string {
+	b, _ := json.Marshal(attest.EKVendorNames())
+	return string(b)
+}
+
 // RecordSummary returns display fields of a stored machine record as JSON:
 // {"device_id","friendly_name","enrolled_at","last_attested","profiles","slot","ek_verified_by"}.
 func RecordSummary(recordJSON string) (string, error) {

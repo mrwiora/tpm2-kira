@@ -216,3 +216,10 @@ func TestStepCarriesErrorRecordOnFailure(t *testing.T) {
 		t.Fatal("abort must end the session with an error event")
 	}
 }
+
+func TestEKVendorsListed(t *testing.T) {
+	var names []string
+	if err := json.Unmarshal([]byte(EKVendors()), &names); err != nil || len(names) == 0 || names[0] != "Intel PTT" {
+		t.Fatalf("EKVendors() = %s (%v)", EKVendors(), err)
+	}
+}
