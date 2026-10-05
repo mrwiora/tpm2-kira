@@ -470,7 +470,7 @@ nonce_m). SASConfirm has no fields.
 | 17 | ek_cert_chain | bytes ≤16384 | O | the TPM's intermediates for `ek_cert`, concatenated DER (Intel PTT: NV `0x01C00100`) |
 
 The phone verifies `ek_cert` against vendor roots built into the core
-(`attest/ekroots/`, currently Intel's on-die CA) with `ek_cert_chain` as
+(`attest/ekroots/`, one directory per vendor listed with pinned SHA-256 values in `vendors.json`; currently Intel PTT — `attest/ekroots/README.md` says how to add a vendor) with `ek_cert_chain` as
 intermediates, and requires the certificate's key to be `ek_pub`. The result
 is shown to the user before binding ("TPM verified: Intel PTT" or "not
 verified as genuine hardware") and stored in the record; it never blocks

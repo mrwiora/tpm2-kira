@@ -1,0 +1,21 @@
+{
+  "comment": "TPM vendor trust anchors for EK certificates, embedded in the core that runs in the phone app. See README.md in this directory before adding or changing anything.",
+  "vendors": [
+    {
+      "name": "Intel PTT",
+      "description": "Intel Platform Trust Technology (firmware TPM in the CSME). The per-machine CAs (CSME MCC ROM CA, Kernel CA, PTT SVN) come from the TPM itself, NV index 0x01C00100.",
+      "sources": [
+        "https://tsci.intel.com/content/OnDieCA/certs/",
+        "https://github.com/mrwiora/intel-ek-dechainer"
+      ],
+      "verified": "2026-10-05: byte-identical from both sources",
+      "roots": [
+        {"file": "intel-ptt/root.der", "subject": "OnDie CA Root Cert Signing", "sha256": "beb40bb7507b33967226aa80e084749fbb6593893c642e818d682e9a8d07fc24"}
+      ],
+      "intermediates": [
+        {"file": "intel-ptt/csme-intermediate.der", "subject": "OnDie CA CSME Intermediate CA", "sha256": "5e3eee5748ac13e0b3d1227fcdc4751aa1402dde8031d21f63cb4ecf43f02440"},
+        {"file": "intel-ptt/mcc-00001881-issuing.der", "subject": "On Die CSME P_MCC 00001881 Issuing CA", "sha256": "d4a82dde06a12689ae22a50870003de03ac04205e921410c60eb0216fb15baff"}
+      ]
+    }
+  ]
+}

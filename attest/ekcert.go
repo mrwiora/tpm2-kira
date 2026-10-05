@@ -12,15 +12,17 @@ package attest
 // ship without a usable certificate, and revocation is not checked (the app
 // has no network access). It is "verified by <vendor>" or "not verified".
 //
-// Trust anchors are embedded in ekroots/. Only roots are anchors; embedded
-// intermediates merely complete chains the TPM does not carry in full.
+// Trust anchors are embedded in ekroots/, listed with pinned SHA-256 values in
+// ekroots/vendors.json; ekroots/README.md says how to add a vendor. Only roots
+// are anchors; embedded intermediates merely complete chains the TPM does not
+// carry in full.
 //
 //	Intel PTT (on-die CSME), chain documented in
 //	https://github.com/mrwiora/intel-ek-dechainer and cross-checked against
 //	https://tsci.intel.com/content/OnDieCA/certs/:
-//	  OnDie CA Root Cert Signing                       ekroots/intel-ondie-root.der
-//	  └ OnDie CA CSME Intermediate CA                  ekroots/intel-ondie-csme-intermediate.der
-//	    └ On Die CSME P_MCC 00001881 Issuing CA        ekroots/intel-ondie-mcc-00001881-issuing.der
+//	  OnDie CA Root Cert Signing                       ekroots/intel-ptt/root.der
+//	  └ OnDie CA CSME Intermediate CA                  ekroots/intel-ptt/csme-intermediate.der
+//	    └ On Die CSME P_MCC 00001881 Issuing CA        ekroots/intel-ptt/mcc-00001881-issuing.der
 //	      └ CSME MCC ROM CA ┐ per machine, concatenated DER
 //	        └ … Kernel CA   │ in NV index 0x01C00100
 //	          └ … PTT SVN   ┘ (EKCertChainNVIndex)
@@ -32,12 +34,18 @@ package attest
 import (
 	"crypto/ecdsa"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"embed"
 	"encoding/asn1"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"slices"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-tpm/tpm2"
@@ -49,24 +57,107 @@ const EKCertChainNVIndex = 0x01C00100
 // MaxEKCertChain bounds the concatenated intermediates the attester sends.
 const MaxEKCertChain = 16384
 
-//go:embed ekroots/*.der
+//go:embed ekroots/vendors.json ekroots/*/*.der
 var ekRootFS embed.FS
 
+// ekVendor is one entry of ekroots/vendors.json, with its certificates read
+// and their pinned fingerprints checked.
 type ekVendor struct {
-	name          string
-	root          string   // trust anchor
-	intermediates []string // optional helpers, never anchors
+	Name          string        `json:"name"`
+	Roots         []ekRootEntry `json:"roots"`         // trust anchors
+	Intermediates []ekRootEntry `json:"intermediates"` // helpers, never anchors
+
+	roots, inter [][]byte
 }
 
-var ekVendors = []ekVendor{
-	{
-		name: "Intel PTT",
-		root: "ekroots/intel-ondie-root.der",
-		intermediates: []string{
-			"ekroots/intel-ondie-csme-intermediate.der",
-			"ekroots/intel-ondie-mcc-00001881-issuing.der",
-		},
-	},
+type ekRootEntry struct {
+	File   string `json:"file"`
+	SHA256 string `json:"sha256"`
+}
+
+var (
+	ekVendorsOnce sync.Once
+	ekVendors     []*ekVendor
+	ekVendorErrs  []error // vendors left out because a file is missing or changed
+)
+
+// loadEKVendors reads the embedded manifest once.
+func loadEKVendors() []*ekVendor {
+	ekVendorsOnce.Do(func() {
+		sub, err := fs.Sub(ekRootFS, "ekroots")
+		if err != nil {
+			ekVendorErrs = []error{err}
+			return
+		}
+		ekVendors, ekVendorErrs = parseEKVendors(sub)
+	})
+	return ekVendors
+}
+
+// parseEKVendors reads vendors.json from fsys. A vendor whose files do not
+// match their pinned SHA-256 is left out: its TPMs then show as "not
+// verified", which is safe, rather than trusted on an unchecked anchor.
+func parseEKVendors(fsys fs.FS) ([]*ekVendor, []error) {
+	var errs []error
+	raw, err := fs.ReadFile(fsys, "vendors.json")
+	if err != nil {
+		return nil, []error{err}
+	}
+	var m struct {
+		Vendors []*ekVendor `json:"vendors"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, []error{fmt.Errorf("vendors.json: %w", err)}
+	}
+	read := func(e ekRootEntry) ([]byte, error) {
+		b, err := fs.ReadFile(fsys, e.File)
+		if err != nil {
+			return nil, err
+		}
+		sum := sha256.Sum256(b)
+		if hex.EncodeToString(sum[:]) != strings.ToLower(e.SHA256) {
+			return nil, fmt.Errorf("%s does not match its pinned SHA-256", e.File)
+		}
+		if _, err := x509.ParseCertificate(b); err != nil {
+			return nil, fmt.Errorf("%s: %w", e.File, err)
+		}
+		return b, nil
+	}
+	var out []*ekVendor
+vendors:
+	for _, v := range m.Vendors {
+		if v.Name == "" || len(v.Roots) == 0 {
+			errs = append(errs, fmt.Errorf("vendor %q has no name or no roots", v.Name))
+			continue
+		}
+		for _, e := range v.Roots {
+			b, err := read(e)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("vendor %s: %w", v.Name, err))
+				continue vendors
+			}
+			v.roots = append(v.roots, b)
+		}
+		for _, e := range v.Intermediates {
+			b, err := read(e)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("vendor %s: %w", v.Name, err))
+				continue vendors
+			}
+			v.inter = append(v.inter, b)
+		}
+		out = append(out, v)
+	}
+	return out, errs
+}
+
+// EKVendorNames lists the TPM vendors whose EK certificates the core can verify.
+func EKVendorNames() []string {
+	var out []string
+	for _, v := range loadEKVendors() {
+		out = append(out, v.Name)
+	}
+	return out
 }
 
 var (
@@ -177,28 +268,16 @@ func sameKey(cert *x509.Certificate, ekPub []byte) error {
 // intermediates, and that the certificate is for ekPub. It returns the
 // vendor's name, or an error saying why the TPM is not verified.
 func VerifyEKCertificate(ekPub, ekCert, chain []byte, now time.Time) (string, error) {
+	if len(ekCert) == 0 {
+		return "", errNoEKCertificate
+	}
 	var errs []error
-	for _, v := range ekVendors {
-		root, err := ekRootFS.ReadFile(v.root)
-		if err != nil {
-			return "", err
-		}
-		var inter [][]byte
-		for _, f := range v.intermediates {
-			b, err := ekRootFS.ReadFile(f)
-			if err != nil {
-				return "", err
-			}
-			inter = append(inter, b)
-		}
-		if err := verifyEKCertificateWith(ekPub, ekCert, chain, [][]byte{root}, inter, now); err != nil {
+	for _, v := range loadEKVendors() {
+		if err := verifyEKCertificateWith(ekPub, ekCert, chain, v.roots, v.inter, now); err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		return v.name, nil
-	}
-	if len(ekCert) == 0 {
-		return "", errNoEKCertificate
+		return v.Name, nil
 	}
 	// Report the most specific reason: a key mismatch matters more than an
 	// unknown vendor.
@@ -207,7 +286,7 @@ func VerifyEKCertificate(ekPub, ekCert, chain []byte, now time.Time) (string, er
 			return "", e
 		}
 	}
-	return "", errors.New("the EK certificate is not issued by a known TPM vendor")
+	return "", fmt.Errorf("the EK certificate is not issued by a vendor this app knows (%s)", strings.Join(EKVendorNames(), ", "))
 }
 
 func verifyEKCertificateWith(ekPub, ekCert, chain []byte, roots, inter [][]byte, now time.Time) error {

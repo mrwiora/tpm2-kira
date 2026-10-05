@@ -9,51 +9,98 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/hex"
+	"io/fs"
 	"math/big"
+	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/google/go-tpm/tpm2"
 )
 
-// The embedded Intel certificates, cross-checked against
-// https://tsci.intel.com/content/OnDieCA/certs/ and
-// https://github.com/mrwiora/intel-ek-dechainer on 2026-10-05.
-var ekRootFingerprints = map[string]string{
-	"ekroots/intel-ondie-root.der":                 "beb40bb7507b33967226aa80e084749fbb6593893c642e818d682e9a8d07fc24",
-	"ekroots/intel-ondie-csme-intermediate.der":    "5e3eee5748ac13e0b3d1227fcdc4751aa1402dde8031d21f63cb4ecf43f02440",
-	"ekroots/intel-ondie-mcc-00001881-issuing.der": "d4a82dde06a12689ae22a50870003de03ac04205e921410c60eb0216fb15baff",
+// The manifest loads completely: every vendor's files exist, match their
+// pinned SHA-256 and parse, and no certificate is embedded without a pin.
+func TestEKVendorManifest(t *testing.T) {
+	vendors := loadEKVendors()
+	if len(ekVendorErrs) > 0 {
+		t.Fatalf("vendor manifest: %v", ekVendorErrs)
+	}
+	if !slices.Contains(EKVendorNames(), "Intel PTT") {
+		t.Fatalf("vendors: %v", EKVendorNames())
+	}
+	pinned := map[string]bool{}
+	for _, v := range vendors {
+		for _, e := range append(append([]ekRootEntry(nil), v.Roots...), v.Intermediates...) {
+			if len(e.SHA256) != 64 {
+				t.Errorf("%s: pin is not a SHA-256", e.File)
+			}
+			pinned["ekroots/"+e.File] = true
+		}
+		for _, r := range v.roots {
+			c, _ := x509.ParseCertificate(r)
+			if !c.IsCA || c.CheckSignatureFrom(c) != nil {
+				t.Errorf("%s: root %q is not a self-signed CA", v.Name, c.Subject)
+			}
+		}
+	}
+	files, _ := fs.Glob(ekRootFS, "ekroots/*/*.der")
+	for _, f := range files {
+		if !pinned[f] {
+			t.Errorf("%s is embedded but not pinned in vendors.json", f)
+		}
+	}
 }
 
-func TestEmbeddedEKRootsArePinned(t *testing.T) {
-	entries, _ := ekRootFS.ReadDir("ekroots")
-	if len(entries) != len(ekRootFingerprints) {
-		t.Fatalf("%d embedded certificates, %d pinned", len(entries), len(ekRootFingerprints))
+// A file that no longer matches its pin is never used as an anchor, and a
+// second vendor is picked up from the manifest alone.
+func TestEKVendorManifestRules(t *testing.T) {
+	root, _ := ekRootFS.ReadFile("ekroots/intel-ptt/root.der")
+	other := newEKPKI(t, mustKey(t), nil)
+	pin := func(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
+	manifest := `{"vendors":[
+	  {"name":"Good","roots":[{"file":"good/root.der","sha256":"` + pin(other.rootDER) + `"}]},
+	  {"name":"Swapped","roots":[{"file":"swapped/root.der","sha256":"` + pin(root) + `"}]},
+	  {"name":"Missing","roots":[{"file":"missing/root.der","sha256":"` + pin(root) + `"}]}]}`
+	fsys := fstest.MapFS{
+		"vendors.json":     {Data: []byte(manifest)},
+		"good/root.der":    {Data: other.rootDER},
+		"swapped/root.der": {Data: other.rootDER}, // not the pinned bytes
 	}
-	for name, want := range ekRootFingerprints {
-		b, err := ekRootFS.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := sha256.Sum256(b); hex.EncodeToString(got[:]) != want {
-			t.Errorf("%s changed: %x", name, got)
-		}
+	vendors, errs := parseEKVendors(fsys)
+	if len(vendors) != 1 || vendors[0].Name != "Good" {
+		t.Fatalf("loaded %d vendors", len(vendors))
 	}
+	if len(errs) != 2 || !strings.Contains(errs[0].Error(), "does not match its pinned SHA-256") {
+		t.Fatalf("errors: %v", errs)
+	}
+	// The new vendor verifies its own EKs with nothing but the manifest entry.
+	if err := verifyEKCertificateWith(other.ekPub, other.leafDER, other.interDER, vendors[0].roots, vendors[0].inter, time.Now()); err != nil {
+		t.Fatalf("vendor from the manifest does not verify: %v", err)
+	}
+}
+
+func mustKey(t *testing.T) *ecdsa.PrivateKey {
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
 }
 
 func TestIntelChainLinks(t *testing.T) {
 	load := func(n string) *x509.Certificate {
-		b, _ := ekRootFS.ReadFile("ekroots/" + n)
+		b, _ := ekRootFS.ReadFile("ekroots/intel-ptt/" + n)
 		c, err := x509.ParseCertificate(b)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return c
 	}
-	root := load("intel-ondie-root.der")
-	int1 := load("intel-ondie-csme-intermediate.der")
-	int2 := load("intel-ondie-mcc-00001881-issuing.der")
+	root := load("root.der")
+	int1 := load("csme-intermediate.der")
+	int2 := load("mcc-00001881-issuing.der")
 	if err := root.CheckSignatureFrom(root); err != nil {
 		t.Errorf("root self-signature: %v", err)
 	}
