@@ -140,6 +140,11 @@ If called without a command, tpm2-kira defaults to `reveal`.
 | `nvram list` | List NVRAM indices |
 | `nvram status` | Show NVRAM index status |
 | `nvram delete` | Delete sealed data from NVRAM |
+| `attest enrol` | Bind a phone to this machine over Bluetooth LE (see [Remote attestation](#remote-attestation-with-a-phone-experimental)) |
+| `attest gate` | Serve attestation requests until a phone returns a signed verdict |
+| `attest status` | Show which phones are enrolled per slot (`--json`) |
+| `attest quote` / `attest verify` | Produce evidence without a phone / judge it offline |
+| `attest unenrol` | Remove a slot's attestation enrolment |
 | `pcrtips` | PCR reference guide — what each register measures |
 | `version` | Print version |
 
@@ -327,6 +332,42 @@ blob itself, so consumers never have to branch on the slot count.
 tpm2-kira nvram delete              # deletes all populated slots
 tpm2-kira nvram delete --nvram 0    # deletes a specific slot
 ```
+
+## Remote attestation with a phone (experimental)
+
+Instead of comparing six digits by eye, a phone app can verify the boot: the
+machine's TPM signs a quote over its PCRs, the phone checks it against what it
+recorded at enrolment and shows **match**, **changed** (with an explanation of
+which part of the boot chain moved) or **failed**. After a kernel update the
+machine is not silent as with the OTP: it attests its new state and you approve
+the change on the phone. The OTP path stays and remains the fallback.
+
+```bash
+# Once, on the booted system (needs the signing key and a Bluetooth adapter):
+sudo tpm2-kira attest enrol --name "Thinkpad-X1"
+#   compare the 6-digit code on the console with the app, confirm on both
+
+# Serve an attestation (lazy mode: shows the verdict, never blocks):
+sudo tpm2-kira attest gate
+sudo tpm2-kira attest status
+```
+
+While enrolling or attesting, tpm2-kira takes the Bluetooth adapter
+exclusively through an HCI user channel (no BlueZ needed); other Bluetooth
+devices on that adapter disconnect until it finishes. `--adapter N` selects
+another adapter.
+
+The same session will later also release the salt for
+[hashpwd2](https://github.com/mrwiora/hashpwd2) when the LUKS key is derived
+from a password plus a phone-held factor
+([docs/PLAN-FACTORRELEASE.md](docs/PLAN-FACTORRELEASE.md)).
+
+Status: the machine side and the phone's verification core are implemented;
+Bluetooth inside the initramfs, enforced mode and salt release are not yet.
+The phone apps are specified in [docs/mobile/](docs/mobile/). The protocol is
+defined in [docs/PROTOCOL-BLE.md](docs/PROTOCOL-BLE.md), the design in
+[docs/PLAN-REMOTEATTESTATION.md](docs/PLAN-REMOTEATTESTATION.md) and
+[docs/PLAN-BLE.md](docs/PLAN-BLE.md).
 
 ## Early Boot Integration (Arch Linux / mkinitcpio)
 
@@ -561,6 +602,14 @@ in the TPM. Delete the slot first, then the directory.
 
 ```
 ├── main.go                  # CLI entrypoint and command routing
+├── attest/                  # Remote attestation core: protocol, Noise, Verify(); no device access
+│   └── attesttest/          # Software TPM, in-memory pipe and simulated phone for tests
+├── transport/
+│   ├── frame/               # Record fragmentation for BLE (shared with the phone)
+│   └── ble/                 # Pure-Go BLE peripheral over an HCI user channel
+├── mobile/
+│   ├── kiracore/            # gomobile binding: the phone's verifier core
+│   └── kiratest/            # gomobile binding: a simulated machine for app tests
 ├── cmd/                     # Command implementations
 │   ├── seal.go              # Seal TOTP secret into TPM
 │   ├── reseal.go            # Re-seal with new PCR values
@@ -574,6 +623,9 @@ in the TPM. Delete the slot first, then the directory.
 │   ├── ukipredict.go        # Native PCR 11 computation from a UKI
 │   ├── pcr.go               # PCR spec parsing, reading and comparison
 │   ├── pcrwarn.go           # Warnings for PCR selections that attest little
+│   ├── attest.go            # attest enrol/gate/status/quote/verify/unenrol
+│   ├── attest_blob.go       # Per-slot attestation blob (AK, pinned phones)
+│   ├── attest_tpm.go        # AK/EK, TPM2_Quote, ActivateCredential
 │   ├── nvram.go             # NVRAM read/write/scan operations
 │   ├── totp_utils.go        # TOTP generation and display
 │   ├── tpm_utils.go         # Low-level TPM operations
@@ -583,6 +635,9 @@ in the TPM. Delete the slot first, then the directory.
 │   ├── pcrtool.py            # PCR replay and full-chain diagnosis
 │   └── tpm2-pcr11predict     # Independent cross-check of the built-in PCR 11 computation
 ├── docs/
+│   ├── PROTOCOL-BLE.md           # Phone <-> machine protocol: the interface definition
+│   ├── PLAN-*.md                 # Designs: remote attestation, BLE, remote unlocking, factor release
+│   ├── mobile/                   # Agent prompts for the Android and iOS apps
 │   ├── PLATFORM-OBSERVATIONS.md  # Measured facts about Arch and Debian boots
 │   ├── pentest1/, pentest2/      # Security review findings and mitigations
 │   └── *.issue                   # Write-ups of specific bugs
@@ -652,6 +707,13 @@ tpm2-kira: (exit status is 0 by design; this command did NOT succeed)
 
 The mkinitcpio post hook does exactly this — it greps the output for the success
 line rather than testing `$?`.
+
+**Exception: the attestation commands.** `attest gate`, `attest verify`,
+`attest quote` and `attest enrol` gate or judge something, and a gate that
+exits 0 on failure is not a gate. They exit non-zero on failure: `1` internal
+error, `2` usage, `3` no phone or no adapter, `4` the phone rejected this boot
+(do not type a passphrase before checking further), `5` the receipt was not
+signed by the enrolled phone.
 
 ## Security
 

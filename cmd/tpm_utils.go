@@ -183,42 +183,48 @@ type PrimaryKeyResponse struct {
 	Name         tpm2.TPM2BName
 }
 
+// storagePrimaryTemplate is the deterministic ECC P-256 storage key that
+// parents tpm2-kira's objects. Re-created on every use, never persisted.
+func storagePrimaryTemplate() tpm2.TPMTPublic {
+	return tpm2.TPMTPublic{
+		Type:    tpm2.TPMAlgECC,
+		NameAlg: tpm2.TPMAlgSHA256,
+		ObjectAttributes: tpm2.TPMAObject{
+			FixedTPM:            true,
+			FixedParent:         true,
+			SensitiveDataOrigin: true,
+			UserWithAuth:        true,
+			Restricted:          true,
+			Decrypt:             true,
+		},
+		Parameters: tpm2.NewTPMUPublicParms(
+			tpm2.TPMAlgECC,
+			&tpm2.TPMSECCParms{
+				Symmetric: tpm2.TPMTSymDefObject{
+					Algorithm: tpm2.TPMAlgAES,
+					KeyBits: tpm2.NewTPMUSymKeyBits(
+						tpm2.TPMAlgAES,
+						tpm2.TPMKeyBits(128),
+					),
+					Mode: tpm2.NewTPMUSymMode(
+						tpm2.TPMAlgAES,
+						tpm2.TPMAlgCFB,
+					),
+				},
+				Scheme: tpm2.TPMTECCScheme{
+					Scheme: tpm2.TPMAlgNull,
+				},
+				CurveID: tpm2.TPMECCNistP256,
+			},
+		),
+	}
+}
+
 // CreatePrimaryKey creates a primary key in the owner hierarchy
 func CreatePrimaryKey(tpmDev transport.TPM) (*PrimaryKeyResponse, error) {
 	createPrimaryCmd := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHOwner,
-		InPublic: tpm2.New2B(tpm2.TPMTPublic{
-			Type:    tpm2.TPMAlgECC,
-			NameAlg: tpm2.TPMAlgSHA256,
-			ObjectAttributes: tpm2.TPMAObject{
-				FixedTPM:            true,
-				FixedParent:         true,
-				SensitiveDataOrigin: true,
-				UserWithAuth:        true,
-				Restricted:          true,
-				Decrypt:             true,
-			},
-			Parameters: tpm2.NewTPMUPublicParms(
-				tpm2.TPMAlgECC,
-				&tpm2.TPMSECCParms{
-					Symmetric: tpm2.TPMTSymDefObject{
-						Algorithm: tpm2.TPMAlgAES,
-						KeyBits: tpm2.NewTPMUSymKeyBits(
-							tpm2.TPMAlgAES,
-							tpm2.TPMKeyBits(128),
-						),
-						Mode: tpm2.NewTPMUSymMode(
-							tpm2.TPMAlgAES,
-							tpm2.TPMAlgCFB,
-						),
-					},
-					Scheme: tpm2.TPMTECCScheme{
-						Scheme: tpm2.TPMAlgNull,
-					},
-					CurveID: tpm2.TPMECCNistP256,
-				},
-			),
-		}),
+		InPublic:      tpm2.New2B(storagePrimaryTemplate()),
 	}
 
 	createPrimaryRsp, err := createPrimaryCmd.Execute(tpmDev)

@@ -132,7 +132,7 @@ test: test-unit
 ## test-unit: Run unit tests only
 test-unit:
 	@echo "Running unit tests..."
-	$(GOTEST) -v -tags=unit ./cmd/...
+	$(GOTEST) -v -tags=unit ./cmd/... ./attest/... ./transport/... ./mobile/...
 
 ## test-integration: Run integration tests with software TPM
 test-integration:
@@ -145,7 +145,7 @@ test-integration:
 test-all:
 	@echo "Running all tests..."
 	@echo "Unit tests:"
-	$(GOTEST) -v -tags=unit ./cmd/...
+	$(GOTEST) -v -tags=unit ./cmd/... ./attest/... ./transport/... ./mobile/...
 	@echo ""
 	@echo "Integration tests:"
 	@echo "Note: Requires swtpm (software TPM) to be installed"

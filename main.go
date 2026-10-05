@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/matthias/tpm2-kira/cmd"
 )
@@ -62,6 +63,8 @@ func main() {
 		runRevealPlain(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "run":
 		runRun(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+	case "attest":
+		runAttest(commandArgs, *tpmPath, *debug)
 	case "pcrtips":
 		if err := cmd.PCRTips(); err != nil {
 			fail(err)
@@ -283,6 +286,96 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	}
 }
 
+// failAttest reports a failure of an attest command that gates or judges
+// something. These are the documented exceptions to the exit-0 rule
+// (PLAN-REMOTEATTESTATION.md §12.1): a gate that exits 0 on failure is not a
+// gate, and a verifier that exits 0 on a failed check is not a verifier.
+func failAttest(code int, err error) {
+	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: %v\n", err)
+	os.Exit(code)
+}
+
+func runAttest(args []string, tpmPath string, debugFlag bool) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "attest requires a subcommand: enrol, gate, status, quote, verify, unenrol")
+		os.Exit(cmd.ExitUsage)
+	}
+	sub, args := args[0], args[1:]
+	fs := flag.NewFlagSet("attest "+sub, flag.ExitOnError)
+	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
+	nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index")
+	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+
+	switch sub {
+	case "enrol", "enroll":
+		name := fs.String("name", "", "Name shown on the phone (default: hostname)")
+		pcrs := fs.String("pcrs", "", "PCRs to quote (default: the slot's sealed selection, else 0,2,4,7)")
+		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
+		privKey := fs.String("privkey", "", "Signing key for the attestation blob (default: the slot's, else "+cmd.DefaultPrivateKeyPath+")")
+		timeout := fs.Duration("timeout", 10*time.Minute, "Give up after this long (0 = wait forever)")
+		fs.Parse(args)
+		err := cmd.AttestEnrol(cmd.EnrolOptions{
+			TPMPath: *tpm, SealIndex: uint32(*nvram), Name: *name, PCRs: *pcrs,
+			Adapter: *adapter, PrivKeyPath: *privKey, Timeout: *timeout, Debug: *debug,
+		})
+		if err != nil {
+			failAttest(cmd.ExitInternal, err)
+		}
+	case "gate":
+		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
+		timeout := fs.Duration("timeout", 0, "Give up after this long (0 = wait forever)")
+		mode := fs.String("mode", "lazy", "Gate mode; only 'lazy' is implemented")
+		fs.Parse(args)
+		if *mode != "lazy" {
+			failAttest(cmd.ExitUsage, fmt.Errorf("mode %q is not implemented; only 'lazy' is available", *mode))
+		}
+		var slot uint32
+		if nvramExplicit(args) {
+			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+		}
+		os.Exit(cmd.AttestGate(cmd.GateOptions{TPMPath: *tpm, SealIndex: slot, Adapter: *adapter, Timeout: *timeout, Debug: *debug}))
+	case "status":
+		jsonOut := fs.Bool("json", false, "Output as JSON")
+		fs.Parse(args)
+		var slot uint32
+		if nvramExplicit(args) {
+			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+		}
+		if err := cmd.AttestStatus(*tpm, slot, *jsonOut, *debug); err != nil {
+			fail(err)
+		}
+	case "quote":
+		nonce := fs.String("nonce", "", "Hex nonce chosen by whoever will verify (16-64 bytes)")
+		pcrs := fs.String("pcrs", "", "PCRs to quote (default: the enrolled selection)")
+		out := fs.String("out", "", "Write evidence to this file (default: stdout)")
+		fs.Parse(args)
+		if err := cmd.AttestQuote(*tpm, uint32(*nvram), *nonce, *pcrs, *out, *debug); err != nil {
+			failAttest(cmd.ExitInternal, err)
+		}
+	case "verify":
+		evidence := fs.String("evidence", "", "Evidence file from 'attest quote'")
+		record := fs.String("record", "", "Machine record JSON exported from a verifier")
+		nonce := fs.String("nonce", "", "The nonce given to 'attest quote'")
+		jsonOut := fs.Bool("json", false, "Output the verdict as JSON")
+		fs.Parse(args)
+		ok, err := cmd.AttestVerify(*evidence, *record, *nonce, *jsonOut)
+		if err != nil {
+			failAttest(cmd.ExitInternal, err)
+		}
+		if !ok {
+			os.Exit(cmd.ExitRejected)
+		}
+	case "unenrol", "unenroll":
+		fs.Parse(args)
+		if err := cmd.AttestUnenrol(*tpm, uint32(*nvram), *debug); err != nil {
+			fail(err)
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "unknown attest subcommand %q\n", sub)
+		os.Exit(cmd.ExitUsage)
+	}
+}
+
 func printUsage() {
 	fmt.Printf(`tpm2-kira - TPM2-based TOTP authenticator with PCR policies
 
@@ -298,6 +391,7 @@ COMMANDS:
   run         Continuously display TOTP codes (runs until stopped)
   info        Display sealed secret information
   nvram       Manage TPM NVRAM (list, status, delete)
+  attest      Remote attestation with a phone over Bluetooth LE (see ATTEST below)
   pcrtips     Show PCR (Platform Configuration Register) reference guide
   version     Show version information
   help        Show this help message
@@ -351,6 +445,22 @@ NVRAM SUBCOMMANDS:
   list               List all NVRAM indices
   status             Show NVRAM index status
   delete             Delete NVRAM index (or all populated slots when --nvram is omitted)
+
+ATTEST SUBCOMMANDS:
+  attest enrol    Bind a phone to this slot over BLE (booted system; needs the
+                  signing key). Prints a 6-digit code to compare with the app.
+                  --name STR --pcrs LIST --adapter N --privkey PATH --timeout DUR
+  attest gate     Serve attestation requests until a phone returns a receipt.
+                  --mode lazy --adapter N --timeout DUR
+  attest status   Show enrolled phones per slot (--json)
+  attest quote    Produce evidence without a phone (--nonce HEX --out FILE)
+  attest verify   Judge evidence offline (--evidence FILE --record FILE --nonce HEX)
+  attest unenrol  Remove a slot's attestation enrolment
+
+  EXIT STATUS: unlike every other command, 'attest gate', 'attest verify',
+  'attest quote' and 'attest enrol' exit non-zero on failure:
+    0 attested   1 internal error   2 usage   3 no phone / no adapter
+    4 rejected (do not type a passphrase before checking)   5 anchor mismatch
 
 AUTHENTICATION:
   tpm2-kira uses TPM2 PolicyOR with two branches for access control:

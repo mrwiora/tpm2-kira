@@ -1,10 +1,53 @@
 # PLAN — BLE Attestation with a Mobile Device
 
-> **Status:** draft / design. Nothing in here is implemented yet.
+> **Status:** partially implemented (phases 1–4 on a booted system). The wire
+> contract is [PROTOCOL-BLE.md](PROTOCOL-BLE.md); see "Implementation status"
+> below for what exists and where it deviates from this plan.
 > **Depends on:** [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md)
 > phases 1–5. This document adds a *transport* (Bluetooth LE), a *verifier*
 > (an Android/iOS app) and a *gate* (what happens at the passphrase prompt).
 > Everything cryptographic lives in the core and is not restated here.
+
+---
+
+## Implementation status
+
+| Phase | State |
+|---|---|
+| 1 — BLE stack decision | **Decided: in-tree.** `transport/ble/` is a pure-Go HCI user channel peripheral (advertising, ACL flow control, L2CAP, ATT/GATT, SMP refusal), about 1,500 lines, no new dependency beyond `golang.org/x/sys`. `go-ble/ble` was rejected for its unmaintained state and dependency surface. Tested against a fake controller; **not yet tested on real hardware** (no adapter on the development machine). |
+| 2 — peripheral, framing, encrypted session | done: `transport/frame/`, `attest/noise.go`, `tpm2-kira attest enrol` |
+| 3 — mobile app skeleton | the phone core is done (`mobile/kiracore`, gomobile) plus a demo machine for app tests (`mobile/kiratest`); the apps themselves are specified as agent prompts in [mobile/](mobile/) |
+| 4 — attestation round trip, lazy mode | done on a booted system: `tpm2-kira attest gate --mode lazy` |
+| 5 — initramfs hooks, firmware, adapter bring-up | **not started** |
+| 6 — enforced mode | **not started**; `attest gate --mode enforced` is refused |
+| 7 — verdict UX | the shared PCR explanation (`attest/explain.go`) exists; the UI is the app's |
+
+Decisions taken while implementing, superseding the text below where they differ:
+
+- **Native apps, shared Go core** instead of Flutter (§6.1): Kotlin/Compose and
+  Swift/SwiftUI, each linking the same `gomobile` library. The verifier is
+  still never written twice. Open question 2 is settled.
+- **Two Noise patterns** (§5.2): `Noise_XX_25519_ChaChaPoly_SHA256` at
+  enrolment, `Noise_IK_25519_ChaChaPoly_SHA256` afterwards. The machine stays
+  silent for any phone not enrolled. Interoperability with the reference
+  `noiseprotocol` library was checked for both patterns.
+- **SAS with commit-then-reveal** (§5.3): a code derived from the handshake
+  hash alone could be ground by a man in the middle in about a second; the
+  machine now commits to a nonce before seeing the phone's
+  ([PROTOCOL-BLE.md](PROTOCOL-BLE.md) §6.4).
+- **Advertising carries a keyed tag** (§4.2): 13 bytes of scan-response
+  service data, `flags ‖ prand ‖ HMAC(adv_key, prand)[0:8]`. Observers still
+  learn only that *a* machine is booting; an enrolled phone learns *which*.
+  This answers open question 6: unknown machines stay hidden except during an
+  explicit enrolment.
+- **Rejects are unsigned** (§6.2): a reject needs no biometric prompt, because
+  believing a false "no" costs a check, never trust. OK and approved receipts
+  are always signed.
+- **The machine's anchor in lazy mode** is the attestation blob, which the
+  initrd cannot authenticate; the console verdict is therefore advisory and the
+  phone's display is authoritative. The image anchor arrives with phase 6.
+- Attestation and salt release share one session: release is an optional
+  message after a trusted receipt ([PROTOCOL-BLE.md](PROTOCOL-BLE.md) §1.1).
 
 ---
 

@@ -1,0 +1,113 @@
+package kiratest
+
+import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/matthias/tpm2-kira/mobile/kiracore"
+)
+
+// drive plays the app against the demo machine using only the two gomobile
+// APIs, exactly as a Kotlin or Swift test would.
+func drive(t *testing.T, d *DemoMachine, s *kiracore.Session, key **ecdsa.PrivateKey, decision int) (record string, state string) {
+	s.SetMaxFragment(182)
+	queue := []*kiracore.Step{s.Start()}
+	for {
+		for len(queue) > 0 {
+			st := queue[0]
+			queue = queue[1:]
+			for i := 0; i < st.FragmentCount(); i++ {
+				d.Write(st.Fragment(i))
+			}
+			for i := 0; i < st.EventCount(); i++ {
+				var e map[string]any
+				json.Unmarshal([]byte(st.Event(i)), &e)
+				switch e["type"] {
+				case "sas":
+					if e["sas"] != d.LastSAS() {
+						t.Fatalf("SAS differs: %v vs %s", e["sas"], d.LastSAS())
+					}
+					queue = append(queue, s.ConfirmSAS(true))
+				case "need_anchor_key":
+					*key, _ = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+					der, _ := x509.MarshalPKIXPublicKey(&(*key).PublicKey)
+					queue = append(queue, s.ProvideAnchorKey(der))
+				case "need_signature":
+					h := sha256.Sum256(s.PendingTBS())
+					sig, _ := ecdsa.SignASN1(rand.Reader, *key, h[:])
+					queue = append(queue, s.ProvideSignature(sig))
+				case "verdict":
+					state = e["verdict"].(map[string]any)["state"].(string)
+					if e["needs_decision"] == true {
+						queue = append(queue, s.Decide(decision, "Thinkpad-X1"))
+					}
+				case "error":
+					t.Fatalf("error event: %s", st.Event(i))
+				}
+			}
+		}
+		if s.Finished() {
+			return s.RecordJSON(), state
+		}
+		n := d.NextNotification(5000)
+		if n == nil {
+			t.Fatal("machine went quiet")
+		}
+		queue = append(queue, s.OnNotification(n))
+	}
+}
+
+func TestDemoMachineAllStates(t *testing.T) {
+	d, err := NewDemoMachine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	noise, _ := kiracore.GenerateNoiseKey()
+	cfg := `{"verifier_id":"demo","verifier_name":"Demo"}`
+	var key *ecdsa.PrivateKey
+
+	d.StartEnrolment(185)
+	s, _ := kiracore.NewEnrolSession(cfg, noise)
+	record, _ := drive(t, d, s, &key, 0)
+	if r := d.Outcome(5000); r != "enrolled" {
+		t.Fatalf("enrolment: %s", r)
+	}
+	if !kiracore.MatchAdvertisement(d.ServiceData(), record) {
+		t.Fatal("advertisement not matched")
+	}
+
+	for _, c := range []struct {
+		setup    func()
+		decision int
+		state    string
+		result   string
+	}{
+		{func() { d.NextBoot() }, 0, "match", "verdict=ok authentic=true"},
+		{func() { d.NextBoot(); d.ChangePCR(4) }, kiracore.DecisionApproveRemember, "changed", "verdict=approved authentic=true"},
+		{func() { d.NextBoot() }, 0, "match", "verdict=ok"},
+		{func() { d.RollbackResetCount() }, kiracore.DecisionReject, "failed", "verdict=reject"},
+	} {
+		c.setup()
+		d.StartAttestation(185)
+		s, err := kiracore.NewAttestSession(cfg, noise, record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var state string
+		if rec, st := drive(t, d, s, &key, c.decision); rec != "" {
+			record, state = rec, st
+		}
+		if state != c.state {
+			t.Fatalf("state %q, want %q", state, c.state)
+		}
+		if r := d.Outcome(5000); !strings.Contains(r, c.result) {
+			t.Fatalf("machine result %q, want %q", r, c.result)
+		}
+	}
+}

@@ -1,6 +1,7 @@
 # PLAN — Remote Attestation Core
 
-> **Status:** draft / design. Nothing in here is implemented yet.
+> **Status:** phases 1–4 and the receipt half of phase 5 are implemented
+> (`attest/`, `cmd/attest*.go`); see "Implementation notes" at the end.
 > **Scope:** the reusable attestation core (`attest/`). Transport-independent,
 > verifier-independent, UI-independent.
 >
@@ -676,3 +677,23 @@ phase 3 is green.
 6. **PCR bank.** Quotes and profiles are SHA-256; a `--sha1` machine
    (README.md) would need a SHA-1 quote. Supported in the format, warned about
    loudly, and probably refused for enforced mode.
+
+---
+
+## 16. Implementation notes
+
+What was built, and where it departs from the sections above.
+
+| Topic | As implemented |
+|---|---|
+| **AK parent (§3.1)** | A storage primary in the **endorsement** hierarchy, not the owner-hierarchy primary of `CreatePrimaryKey`. TPM 2.0 Part 1 §36.7 obfuscates `resetCount`, `restartCount` and `firmwareVersion` in quotes signed by keys outside the endorsement/platform hierarchies; with an owner-hierarchy AK the reset-count replay check of §5 would compare masked values. Found on swtpm, which reported a reset count of 4157272019. Side effect: the AK survives `TPM2_Clear`, after which the verifier sees the counter go backwards and asks a human. |
+| **Package layout (§9)** | `attest/` is the pure core (no TPM, filesystem or network). The TPM-facing parts listed as `identity.go`/`quote.go` live in `cmd/attest_tpm.go`, behind the `attest.AttesterBackend` / `attest.EnrolBackend` interfaces; `attest/identity.go` holds only key templates. `TestCoreHasNoDeviceDeps` enforces the rule on `attest/`, `transport/frame/` and `mobile/`. |
+| **Verifier as a state machine (§6, §9.2)** | `attest.Verifier` is event-driven: every input returns records to send and events to show, so the phone needs no threads and no callbacks. `mobile/kiracore` wraps it for gomobile. |
+| **Enrolment (§6.1)** | `EnrolOffer` additionally carries a baseline quote bound to the session (`enrol_qd`), so the baseline profile is TPM-signed rather than claimed, and `adv_key` for advertising. `EnrolAccept` carries a required `anchor_sig` proving possession of the anchor key. |
+| **Wire encoding (§9.3)** | TLV as planned, with ascending tags and per-field limits ([PROTOCOL-BLE.md](PROTOCOL-BLE.md) §7). Golden vectors for every canonical string are in `attest/vectors_test.go`. |
+| **Release message (PLAN-FACTORRELEASE.md §4)** | Defined in the core; the attester answers `ReleaseAck{unsupported}` until factor enrolment exists. |
+| **Attestation blob (§10.1)** | NV `0x01803020`+slot, signed envelope, PolicySigned writes, a verifier *list* (up to 8) from day one (§15.5). Also holds the machine's Noise static key and advertising key, which identify the transport endpoint only — see `cmd/attest_blob.go` for why exposing them does not weaken the verdict. |
+| **Not yet implemented** | Sealed payload v9 and config binding (§10.3), image anchor (§10.2), `attest rotate-ak`, EK certificate chain validation (the certificate is parsed and passed on, not validated against vendor roots). |
+| **§15.1** | ECC AK first, RSA-2048 fallback, both implemented. |
+| **§15.4** | Stripped static binary: 5.98 MB → 6.54 MB with the whole attestation and BLE stack. Bluetooth firmware in the initramfs is still unmeasured. |
+
