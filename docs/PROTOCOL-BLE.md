@@ -63,7 +63,7 @@ and tested — not as an invitation to write a second verifier.
 | BLE role | GATT **peripheral**, advertises | GATT **central**, scans and connects |
 | Noise role | responder | initiator |
 | Attestation role | attester: produces evidence, never decides | verifier: decides, signs receipts |
-| Long-term keys | AK and EK in the TPM; X25519 static key; advertising key | X25519 static key; anchor key (ECDSA P-256, hardware, biometry-bound) |
+| Long-term keys | AK and EK in the TPM; X25519 static key; advertising key | X25519 static key; anchor key (ECDSA P-256, hardware, fresh user authentication per signature) |
 
 ---
 
@@ -513,7 +513,7 @@ Bye has no fields. Error: 1 `code` u16 R · 2 `message` string ≤256 O.
 | 16 | bypass | reserved for break-glass tokens (PLAN-BLE.md §7.6) | — |
 
 A reject needs no proof: believing a false "no" costs a check, never trust.
-Rejects are therefore sent without a biometric prompt.
+Rejects are therefore sent without an unlock prompt.
 
 ---
 
@@ -540,7 +540,7 @@ sequenceDiagram
     M->>M: TPM2_ActivateCredential(AK, EK)
     M->>P: ChallengeResponse
     P->>P: secret matches → the AK is in that TPM
-    Note over P: create anchor key in Secure Enclave / StrongBox (biometry)
+    Note over P: create anchor key in Secure Enclave / StrongBox (user auth per use)
     P->>M: EnrolAccept (anchor_pub, anchor_sig)
     M->>M: verify anchor_sig; store attestation blob (NV, PolicySigned)
     M->>P: EnrolConfirm (anchor_digest)
@@ -567,7 +567,7 @@ sequenceDiagram
         P->>M: EventlogRequest
         M->>P: EventlogChunk × n
     end
-    Note over P: match: biometry → sign. changed: user decides. failed: reject (or typed-name approval)
+    Note over P: match: unlock → sign. changed: user decides. failed: reject (or typed-name approval)
     P->>M: Receipt
     M->>M: check signature against pinned anchor and binding to this session
     M->>P: ReceiptAck
@@ -708,7 +708,7 @@ objects cross the boundary; structured data is JSON.
 | `ConfirmSAS(match) Step` | user compared the digits (`sas` event) |
 | `ProvideAnchorKey(spkiDER) Step` | `need_anchor_key` event: key created |
 | `PendingTBS() []byte` | bytes to sign for the current `need_signature` |
-| `ProvideSignature(der) Step` | signature made (after biometry) |
+| `ProvideSignature(der) Step` | signature made (after the user unlocked the key) |
 | `Decide(decision, confirmName) Step` | `verdict` event with `needs_decision` |
 | `RequestEventlog() Step` | user wants to see what changed |
 | `Eventlog() []byte` | after `eventlog` with `complete` |
@@ -737,7 +737,7 @@ Every event is a JSON object with `type`. `tbs` is base64 (prefer `PendingTBS()`
 |---|---|---|
 | `sas` | `sas` (6 digits) | show large; buttons *Matches* / *Does not match* → `ConfirmSAS` |
 | `need_anchor_key` | `device_id`, `friendly_name` | create the non-exportable P-256 key (§11.2) for this machine → `ProvideAnchorKey` |
-| `need_signature` | `purpose` (`enrol_accept`, `receipt`), `tbs`, `verdict_code` | biometric prompt, sign `PendingTBS()` → `ProvideSignature` |
+| `need_signature` | `purpose` (`enrol_accept`, `receipt`), `tbs`, `verdict_code` | unlock prompt (§11.2), sign `PendingTBS()` → `ProvideSignature` |
 | `enrolled` | `record` | persist the record (encrypted) |
 | `hello` | `device_id`, `friendly_name` | show "connected to …" |
 | `verdict` | `verdict`, `needs_decision`, `eventlog_available` | show §10.4; if `needs_decision`, offer the decisions |
@@ -765,7 +765,7 @@ Every event is a JSON object with `type`. `tbs` is base64 (prefer `PendingTBS()`
 
 | `state` | Display (PLAN-BLE.md §6.3) | Allowed decisions |
 |---|---|---|
-| `match` | ✅ "<name> — unchanged since <last_attested>." Signed after biometry; no decision. | — |
+| `match` | ✅ "<name> — unchanged since <last_attested>." Signed after the user unlocks the key; no decision. | — |
 | `changed` | ⚠️ `explanation` plus the diff | approve once · approve and remember · reject |
 | `failed` | 🛑 "Attestation failed:" + every hard reason | reject; approving needs the typed machine name |
 
@@ -825,15 +825,32 @@ One per enrolled machine, created at the `need_anchor_key` event:
 |---|---|---|
 | Algorithm | EC P-256, `SHA256withECDSA` | `kSecAttrKeyTypeECSECPrimeRandom`, 256 |
 | Storage | AndroidKeyStore, `setIsStrongBoxBacked(true)` where available, TEE otherwise | Secure Enclave, `kSecAttrTokenIDSecureEnclave` |
-| User auth | `setUserAuthenticationRequired(true)`, per-use (`setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)`), `setInvalidatedByBiometricEnrollment(true)` | `SecAccessControl` `.privateKeyUsage` + `.biometryCurrentSet` |
+| User auth | `setUserAuthenticationRequired(true)`, per-use (`setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL)`), `setInvalidatedByBiometricEnrollment(true)`; requires API 30 | `SecAccessControl` `.privateKeyUsage` + `[.biometryCurrentSet, .or, .devicePasscode]`; a fresh `LAContext` per signature (no reuse duration) |
+| Prompt | `BiometricPrompt` with a `CryptoObject`, `setAllowedAuthenticators(BIOMETRIC_STRONG or DEVICE_CREDENTIAL)` | LocalAuthentication via the key's access control (Face ID / Touch ID, passcode fallback) |
 | Export to core | `publicKey.encoded` (X.509 SPKI DER) | raw 65-byte point from `SecKeyCopyExternalRepresentation` prefixed with the fixed 26-byte P-256 SPKI header |
 
 P-256 SPKI header (hex): `3059301306072a8648ce3d020106082a8648ce3d030107034200`.
 
-The key MUST be non-exportable and every signature MUST require a fresh
-biometric authentication: a phone that is merely unlocked in someone else's
-hand must not be able to attest a machine. Rejects are unsigned and need no
-prompt (§7.5).
+The key MUST be non-exportable and every signature MUST require a fresh user
+authentication — a strong biometric (Android class 3, Face ID, Touch ID) **or
+the device's screen-lock credential** (PIN, pattern, password, passcode). A
+phone that is merely unlocked in someone else's hand must not be able to attest
+a machine. Weak biometrics (Android class 2) MUST NOT be accepted, and an
+authentication MUST NOT be reused for a later signature. Rejects are unsigned
+and need no prompt (§7.5).
+
+The screen-lock credential is accepted so that phones without biometrics, or
+users who choose not to enrol them, can act as verifiers. The cost: whoever
+knows the PIN — for instance from watching it being typed — can approve a boot
+on a phone they hold, which a biometric-only key would prevent. An app MAY
+offer a stricter biometric-only mode per machine.
+
+On Android, a per-use key that accepts the device credential needs API 30
+(Android 11); apps therefore require `minSdk 30`. Android keystore binds
+`setInvalidatedByBiometricEnrollment` to the biometrics enrolled when the key
+is created: on a phone without biometrics, enrolling a fingerprint later does
+not invalidate the key. Removing the screen lock invalidates it on both
+platforms.
 
 Losing the phone means re-enrolling the machine (`tpm2-kira attest enrol`
 again with the new phone; `attest unenrol` removes the old entry).
@@ -865,7 +882,8 @@ wants to see why a boot changed.
 4. Scan only with the service UUID filter.
 5. Show only machines whose advertisement matches a stored record, except
    during an explicit enrolment.
-6. Anchor keys: hardware-backed, non-exportable, biometric per use.
+6. Anchor keys: hardware-backed, non-exportable, a fresh user authentication
+   (strong biometric or screen-lock credential) for every signature.
 7. Never display PCR hex as the primary information; show the verdict state
    and `explanation`.
 8. For `failed`, offer reject; approval only with the typed machine name.
