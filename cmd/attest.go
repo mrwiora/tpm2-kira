@@ -444,39 +444,81 @@ func AttestGate(o GateOptions) int {
 	}
 	fmt.Printf("tpm2-kira: waiting for attestation of %q (open the app on your phone)\n", blob.FriendlyName)
 
-	start := time.Now()
-	for {
-		wait := 15 * time.Second
-		if o.Timeout > 0 {
-			left := o.Timeout - time.Since(start)
+	res, err := waitForReceipt(p, adv, o.Timeout, func(conn *frame.Conn) (*attest.AttestResult, error) {
+		return attest.ServeAttestation(conn, id, be, debugProgress(o.Debug))
+	}, os.Stdout, time.Now)
+	if errors.Is(err, errNoPhoneReachable) {
+		gateFail("phone not reachable: no phone connected over Bluetooth within %s.\n"+
+			"tpm2-kira:   This is not a TPM or boot-integrity failure. Check that the phone\n"+
+			"tpm2-kira:   is close to this machine, Bluetooth is on and the Kira app is open.", o.Timeout)
+		return ExitUnavailable
+	}
+	if err != nil {
+		gateFail("%v", err)
+		return ExitUnavailable
+	}
+	return reportReceipt(blob, res)
+}
+
+// gateRetryInterval is one advertising round of the gate: when no phone has
+// connected within it, the gate says so and starts the next round. A phone
+// can connect at any moment of a round; the length only sets how often the
+// console is told (and advertising briefly restarts).
+const gateRetryInterval = 30 * time.Second
+
+// errNoPhoneReachable means no phone connected at all before the timeout,
+// as opposed to a phone that connected and then failed.
+var errNoPhoneReachable = errors.New("no phone reachable")
+
+// phoneAcceptor is the part of ble.Peripheral the gate waits on.
+type phoneAcceptor interface {
+	Accept(adv ble.Advertisement, budget frame.Budget, timeout time.Duration) (*frame.Conn, error)
+}
+
+// waitForReceipt advertises in rounds of gateRetryInterval until a phone
+// returns a receipt, reporting every round in which no phone was reachable.
+// With timeout > 0 it gives up with errNoPhoneReachable. A session that ends
+// without a receipt (a stranger's phone, a dropped link, a cancelled
+// session) is reported and the wait goes on: one bad connection must not end
+// it.
+func waitForReceipt(acc phoneAcceptor, adv ble.Advertisement, timeout time.Duration,
+	serve func(*frame.Conn) (*attest.AttestResult, error), out io.Writer, now func() time.Time) (*attest.AttestResult, error) {
+	start := now()
+	for attempt := 1; ; attempt++ {
+		wait := gateRetryInterval
+		if timeout > 0 {
+			left := timeout - now().Sub(start)
 			if left <= 0 {
-				gateFail("no phone attested this machine within %s", o.Timeout)
-				return ExitUnavailable
+				return nil, errNoPhoneReachable
 			}
 			if left < wait {
 				wait = left
 			}
 		}
-		conn, err := p.Accept(adv, frame.DefaultBudget, wait)
+		conn, err := acc.Accept(adv, frame.DefaultBudget, wait)
 		if errors.Is(err, ble.ErrAcceptTimeout) {
-			fmt.Println("tpm2-kira: still waiting for attestation ...")
-			continue
-		}
-		if err != nil {
-			gateFail("%v", err)
-			return ExitUnavailable
-		}
-		res, err := attest.ServeAttestation(conn, id, be, debugProgress(o.Debug))
-		conn.Close()
-		if res == nil || res.Receipt == nil {
-			// A stranger's phone, a dropped link or a cancelled session:
-			// keep serving rather than let one bad connection end the wait.
-			if o.Debug && err != nil {
-				fmt.Printf("tpm2-kira: session ended without a receipt: %v\n", err)
+			if attempt == 1 {
+				fmt.Fprintln(out, "tpm2-kira: no phone reachable yet: nothing has connected over Bluetooth.")
+				fmt.Fprintln(out, "tpm2-kira:   Open Kira on your phone, close to this machine, with Bluetooth on.")
+			}
+			if timeout <= 0 || now().Sub(start) < timeout {
+				fmt.Fprintf(out, "tpm2-kira: phone not reachable yet (round %d), still waiting ...\n", attempt)
 			}
 			continue
 		}
-		return reportReceipt(blob, res)
+		if err != nil {
+			return nil, err
+		}
+		res, err := serve(conn)
+		conn.Close()
+		if res == nil || res.Receipt == nil {
+			if err == nil {
+				err = errors.New("no receipt")
+			}
+			fmt.Fprintf(out, "tpm2-kira: a phone connected, but the session ended without a receipt (%v); waiting again ...\n", err)
+			continue
+		}
+		return res, nil
 	}
 }
 

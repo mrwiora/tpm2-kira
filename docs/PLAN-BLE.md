@@ -554,7 +554,7 @@ an inconvenience, never a loss. Keep a second LUKS keyslot regardless.
 | Situation | `lazy` | `enforced` |
 |---|---|---|
 | No adapter / firmware missing | warn once, show OTP, continue | fail closed, name the missing firmware |
-| No phone in range | silent, continue | keep advertising and waiting, printing a hint every 15 s |
+| No phone in range | silent, continue | keep advertising in 30 s rounds, reporting "phone not reachable yet, still waiting" after each; with a timeout, fail with "phone not reachable" (not a TPM failure) |
 | Phone connects, verdict is "reject" | display it, continue | fail closed immediately; do not keep waiting for a better answer |
 | Receipt signature does not verify | display an error, continue | fail closed, and say **anchor mismatch** explicitly — this is either a wrong phone or an attack |
 | PCRs changed (kernel update) | OTP is absent as today; the phone can still attest and show the diff | the phone shows the diff and a human approves; this is the designed path, not an exception |
