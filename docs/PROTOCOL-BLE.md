@@ -489,7 +489,20 @@ ChallengeResponse: 1 `secret` bytes ≤64 R — the result of
 EnrolAccept: 1 `verifier_id` string ≤64 R · 2 `verifier_name` string ≤64 O ·
 3 `anchor_pub` bytes ≤256 R (SubjectPublicKeyInfo DER, ECDSA P-256) ·
 4 `policy_id` string ≤64 O · 5 `receipt_ttl` u32 O (seconds) ·
-6 `anchor_sig` bytes ≤128 R (DER ECDSA over SHA-256(`enrol_accept_tbs`)).
+6 `anchor_sig` bytes ≤128 R (DER ECDSA over SHA-256(`enrol_accept_tbs`)) ·
+7 `anchor_attestation` bytes ≤16384 O — the anchor key's attestation certificate
+chain (Android Key Attestation), concatenated DER, leaf first, made with the
+challenge `SHA-256("tpm2-kira/anchor-attest/v1" ‖ cb)`.
+
+The machine checks field 7 against pinned Google attestation roots
+(`attest/phoneroots/`): the leaf is for `anchor_pub`, the challenge is this
+session's, the key was generated in StrongBox or the TEE, needs an unlock for
+every use, and the phone booted locked and verified; on the booted machine it
+also consults Google's revocation list. `attest enrol --verify-phone
+warn|require|off` (default `warn`: show and ask) decides what an unverified
+phone means; a refusal is sent as Error code 8 (policy) and nothing is
+stored. `--verify-tpm` does the same for the machine's own EK certificate
+before enrolment starts.
 
 EnrolConfirm: 1 `anchor_digest` bytes[32] exact R (§9.4) · 2 `slot` u8 O.
 
@@ -752,7 +765,7 @@ Every event is a JSON object with `type`. `tbs` is base64 (prefer `PendingTBS()`
 | `type` | Fields | App action |
 |---|---|---|
 | `sas` | `sas` (6 digits) | show large; buttons *Matches* / *Does not match* → `ConfirmSAS` |
-| `need_anchor_key` | `device_id`, `friendly_name`, `ek_verified_by` (vendor, or absent), `ek_note` (why not verified), `initrd_coverage` (`covered` · `not_covered` · `no_initrd` · `unknown`), `initrd_pcrs` | show what is known about the machine and let the user decide to bind; then create the non-exportable P-256 key (§11.2) → `ProvideAnchorKey` |
+| `need_anchor_key` | `device_id`, `friendly_name`, `ek_verified_by` (vendor, or absent), `ek_note` (why not verified), `initrd_coverage` (`covered` · `not_covered` · `no_initrd` · `unknown`), `initrd_pcrs`, `attestation_challenge` (hex) | show what is known about the machine and let the user decide to bind; then create the non-exportable P-256 key (§11.2) with `attestation_challenge` as its attestation challenge → `ProvideAnchorKeyAttested(spki, chain)` (or `ProvideAnchorKey` where the platform cannot attest) |
 | `need_signature` | `purpose` (`enrol_accept`, `receipt`), `tbs`, `verdict_code` | unlock prompt (§11.2), sign `PendingTBS()` → `ProvideSignature` |
 | `enrolled` | `record` | persist the record (encrypted) |
 | `hello` | `device_id`, `friendly_name` | show "connected to …" |

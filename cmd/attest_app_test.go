@@ -14,7 +14,7 @@ package cmd
 //	                             big-endian u16 length
 //
 // Commands: enrol <mtu> | attest <mtu> (serve the next data connection) |
-// reboot | extend <pcr> | snapshot | rollback | sas | outcome <ms> | quit.
+// reboot | extend <pcr> | snapshot | rollback | sas | phone | outcome <ms> | quit.
 // Replies: "ok", a value, or "error: …".
 //
 // It runs only when asked:
@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -101,6 +102,7 @@ type appMachine struct {
 	mode   string // session to serve on the next data connection
 	mtu    int
 	sas    string
+	phone  *attest.PhoneAttestation // what the machine concluded about the phone's key
 	result chan string
 }
 
@@ -150,7 +152,19 @@ func (m *appMachine) newBackend() {
 		}
 		return writeAttestBlob(tpm, m.idx, m.s.blob, m.signer)
 	}
+	be.phoneJudge = phoneRecorder{m}
 	m.s.be = be
+}
+
+// phoneRecorder accepts every phone and keeps the verdict for the "phone"
+// control command.
+type phoneRecorder struct{ m *appMachine }
+
+func (r phoneRecorder) JudgePhone(a attest.PhoneAttestation) (bool, error) {
+	r.m.mu.Lock()
+	r.m.phone = &a
+	r.m.mu.Unlock()
+	return true, nil
 }
 
 // powerCycle shuts the TPM down orderly, optionally saves or restores its
@@ -277,6 +291,11 @@ func (m *appMachine) command(f []string) (reply string, quit bool) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		return m.sas, false
+	case "phone": // the machine's verdict on the phone's key attestation, as JSON
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		b, _ := json.Marshal(m.phone)
+		return string(b), false
 	case "outcome":
 		ms, err := arg()
 		if err != nil {

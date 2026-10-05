@@ -313,10 +313,21 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
 		privKey := fs.String("privkey", "", "Signing key for the attestation blob (default: the slot's, else "+cmd.DefaultPrivateKeyPath+")")
 		timeout := fs.Duration("timeout", 10*time.Minute, "Give up after this long (0 = wait forever)")
+		verifyTPM := fs.String("verify-tpm", "warn", "If this machine's TPM is not verified as genuine: warn (ask), require (refuse) or off")
+		verifyPhone := fs.String("verify-phone", "warn", "If the phone's key is not attested by genuine secure hardware: warn (ask), require (refuse) or off")
 		fs.Parse(args)
-		err := cmd.AttestEnrol(cmd.EnrolOptions{
+		vt, err := cmd.ParseHWCheckPolicy(*verifyTPM)
+		if err != nil {
+			failAttest(cmd.ExitUsage, err)
+		}
+		vp, err := cmd.ParseHWCheckPolicy(*verifyPhone)
+		if err != nil {
+			failAttest(cmd.ExitUsage, err)
+		}
+		err = cmd.AttestEnrol(cmd.EnrolOptions{
 			TPMPath: *tpm, SealIndex: uint32(*nvram), Name: *name, PCRs: *pcrs,
 			Adapter: *adapter, PrivKeyPath: *privKey, Timeout: *timeout, Debug: *debug,
+			VerifyTPM: vt, VerifyPhone: vp,
 		})
 		if err != nil {
 			failAttest(cmd.ExitInternal, err)
@@ -493,6 +504,9 @@ ATTEST SUBCOMMANDS:
   attest enrol    Bind a phone to this slot over BLE (booted system; needs the
                   signing key). Prints a 6-digit code to compare with the app.
                   --name STR --pcrs LIST --adapter N --privkey PATH --timeout DUR
+                  --verify-tpm warn|require|off    this machine's TPM genuine (EK certificate)?
+                  --verify-phone warn|require|off  the phone's key in genuine secure hardware
+                                                   (Android key attestation, Google roots)?
   attest gate     Serve attestation requests until a phone returns a receipt.
                   Defaults from /etc/tpm2-kira/attest.conf; uses /dev/tpmrm0
                   when available so it can run beside the TOTP display.

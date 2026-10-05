@@ -356,6 +356,16 @@ sudo tpm2-kira attest status
 sudo systemctl enable tpm2-kira-attest-check.service
 ```
 
+**Both sides check each other's hardware at enrolment.** The phone checks
+that this machine's TPM is genuine (its EK certificate against vendor roots
+built into the app); `attest enrol` runs the same check on itself first
+(`--verify-tpm`). The machine checks the phone's key attestation against
+Google's attestation roots and revocation list: key in StrongBox or the TEE,
+an unlock for every use, a locked and verified phone (`--verify-phone`).
+Both default to `warn`: the result is shown and, if not verified, you are
+asked (custom ROMs such as LineageOS boot "self-signed" and fail the last
+check). `require` refuses, `off` skips.
+
 **Choose PCRs that cover the initrd.** The initrd is where a passphrase
 logger would sit; if no quoted PCR measures it, a modified initrd attests as
 unchanged. `attest enrol` reads this boot's event log, says which PCRs

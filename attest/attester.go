@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // The attester side of both exchanges. It runs on the machine, blocks on a
@@ -278,6 +279,12 @@ type EKChainProvider interface {
 	EKCertChain() []byte
 }
 
+// PhoneAttestationJudge is implemented by backends that want to decide on the
+// phone's key attestation before the enrolment is stored (keyattest.go).
+type PhoneAttestationJudge interface {
+	JudgePhone(PhoneAttestation) (bool, error)
+}
+
 // EnrolIdentity is the attester's state offered at enrolment.
 type EnrolIdentity struct {
 	DeviceID     []byte
@@ -428,6 +435,17 @@ func ServeEnrolment(conn Conn, id *EnrolIdentity, be EnrolBackend, progress Prog
 	if !VerifyAnchorSignature(anchor, tbs, acc.AnchorSig) {
 		ch.SendError(ErrCodeProtocol, "anchor signature does not verify")
 		return nil, errors.New("attest: EnrolAccept anchor signature does not verify")
+	}
+	if judge, ok := be.(PhoneAttestationJudge); ok {
+		pa := VerifyPhoneAttestation(acc.AnchorAttestation, acc.AnchorPub, AnchorAttestationChallenge(cb), time.Now())
+		accept, err := judge.JudgePhone(pa)
+		if err != nil || !accept {
+			ch.SendError(ErrCodePolicy, "the machine did not accept this phone's key")
+			if err == nil {
+				err = errors.New("attest: the phone's key attestation was not accepted on the machine")
+			}
+			return nil, err
+		}
 	}
 
 	v := EnrolledVerifier{

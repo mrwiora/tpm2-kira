@@ -103,10 +103,13 @@ type Event struct {
 
 	// need_anchor_key: what the phone learnt about the machine before the
 	// user binds it (TODO-SEC.md S3, S5 in the app repository).
-	EKVerifiedBy   string `json:"ek_verified_by,omitempty"`
-	EKNote         string `json:"ek_note,omitempty"`
-	InitrdCoverage string `json:"initrd_coverage,omitempty"` // covered | not_covered | no_initrd | unknown
-	InitrdPCRs     []int  `json:"initrd_pcrs,omitempty"`
+	EKVerifiedBy string `json:"ek_verified_by,omitempty"`
+	// AttestationChallenge goes into the anchor key's attestation, binding it
+	// to this enrolment (AnchorAttestationChallenge).
+	AttestationChallenge HexStr `json:"attestation_challenge,omitempty"`
+	EKNote               string `json:"ek_note,omitempty"`
+	InitrdCoverage       string `json:"initrd_coverage,omitempty"` // covered | not_covered | no_initrd | unknown
+	InitrdPCRs           []int  `json:"initrd_pcrs,omitempty"`
 }
 
 // InitrdCoverage values in need_anchor_key events.
@@ -200,15 +203,16 @@ type Verifier struct {
 	pattern HandshakePattern
 
 	// enrolment
-	commit  []byte
-	nonceP  []byte
-	offer   *EnrolOffer
-	secret  []byte
-	anchor  []byte
-	accTBS  []byte
-	baseVer *Verdict
-	ekBy    string // vendor that vouched for the EK, or ""
-	ekNote  string // why the EK is not verified
+	commit            []byte
+	nonceP            []byte
+	offer             *EnrolOffer
+	secret            []byte
+	anchor            []byte
+	accTBS            []byte
+	baseVer           *Verdict
+	ekBy              string // vendor that vouched for the EK, or ""
+	anchorAttestation []byte
+	ekNote            string // why the EK is not verified
 
 	// attestation
 	hello    *Hello
@@ -502,6 +506,7 @@ func (v *Verifier) handleEnrol(out *Output, d *Decoder) (*Output, error) {
 		out.Events = append(out.Events, Event{
 			Type: EvNeedAnchorKey, DeviceID: v.offer.DeviceID, FriendlyName: v.offer.FriendlyName,
 			EKVerifiedBy: v.ekBy, EKNote: v.ekNote, InitrdCoverage: cov, InitrdPCRs: pcrs,
+			AttestationChallenge: AnchorAttestationChallenge(v.sess.ChannelBinding()),
 		})
 		return out, nil
 
@@ -648,6 +653,17 @@ func (v *Verifier) ConfirmSAS(match bool) (*Output, error) {
 // ProvideAnchorKey hands over the public half of the newly created,
 // non-exportable keystore key, as PKIX DER.
 func (v *Verifier) ProvideAnchorKey(pubDER []byte) (*Output, error) {
+	return v.ProvideAnchorKeyAttested(pubDER, nil)
+}
+
+// ProvideAnchorKeyAttested is ProvideAnchorKey with the key's attestation
+// certificate chain (concatenated DER, leaf first), which the machine checks.
+// The phone does not judge its own attestation; it only passes it on.
+func (v *Verifier) ProvideAnchorKeyAttested(pubDER, attestation []byte) (*Output, error) {
+	if len(attestation) > MaxAnchorAttestation {
+		attestation = nil // too large to send; the machine will say it is missing
+	}
+	v.anchorAttestation = append([]byte(nil), attestation...)
 	out := &Output{}
 	if v.state != vsWaitAnchorKey {
 		return out, errors.New("attest: no anchor key expected")
@@ -680,6 +696,8 @@ func (v *Verifier) ProvideSignature(sig []byte) (*Output, error) {
 			PolicyID:     v.cfg.policyID(),
 			ReceiptTTL:   uint32(v.cfg.ttl() / time.Second),
 			AnchorSig:    sig,
+
+			AnchorAttestation: v.anchorAttestation,
 		}).Encode()
 		if err := v.send(out, b, err); err != nil {
 			return v.fail(out, ErrCodeProtocol, err.Error())

@@ -242,6 +242,7 @@ type tpmBackend struct {
 	// enrolment only
 	confirmSAS func(code string) (bool, error)
 	commit     func(v attest.EnrolledVerifier) error
+	phoneJudge attest.PhoneAttestationJudge // nil: no check of the phone's key
 	ekAlg      uint16
 	evlog      []byte
 	evlogRead  bool
@@ -402,6 +403,14 @@ func (b *tpmBackend) ActivateCredential(blob, encSecret []byte) ([]byte, error) 
 
 // ConfirmSAS implements attest.EnrolBackend.
 func (b *tpmBackend) ConfirmSAS(code string) (bool, error) { return b.confirmSAS(code) }
+
+// JudgePhone implements attest.PhoneAttestationJudge.
+func (b *tpmBackend) JudgePhone(a attest.PhoneAttestation) (bool, error) {
+	if b.phoneJudge == nil {
+		return true, nil
+	}
+	return b.phoneJudge.JudgePhone(a)
+}
 
 // Commit implements attest.EnrolBackend.
 func (b *tpmBackend) Commit(v attest.EnrolledVerifier) error { return b.commit(v) }

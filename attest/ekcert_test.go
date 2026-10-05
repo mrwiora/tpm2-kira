@@ -32,7 +32,7 @@ func TestEKVendorManifest(t *testing.T) {
 	}
 	pinned := map[string]bool{}
 	for _, v := range vendors {
-		for _, e := range append(append([]ekRootEntry(nil), v.Roots...), v.Intermediates...) {
+		for _, e := range append(append([]trustEntry(nil), v.Roots...), v.Intermediates...) {
 			if len(e.SHA256) != 64 {
 				t.Errorf("%s: pin is not a SHA-256", e.File)
 			}
@@ -68,7 +68,7 @@ func TestEKVendorManifestRules(t *testing.T) {
 		"good/root.der":    {Data: other.rootDER},
 		"swapped/root.der": {Data: other.rootDER}, // not the pinned bytes
 	}
-	vendors, errs := parseEKVendors(fsys)
+	vendors, errs := parseTrustStore(fsys)
 	if len(vendors) != 1 || vendors[0].Name != "Good" {
 		t.Fatalf("loaded %d vendors", len(vendors))
 	}
@@ -229,6 +229,28 @@ func TestEKCertificateVerification(t *testing.T) {
 	if v, err := VerifyEKCertificate(p.ekPub, p.leafDER, p.interDER, now); err == nil || v != "" {
 		t.Fatalf("test hierarchy verified as %q under the embedded roots", v)
 	}
+}
+
+// A certificate whose last byte is 0x00 or 0xFF must survive the padding trim
+// (it was cut before: about one chain in 128 failed for no visible reason).
+func TestTrimNVPaddingKeepsTrailingZeroBytes(t *testing.T) {
+	for i := 0; i < 400; i++ {
+		ek, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		p := newEKPKI(t, ek, nil)
+		last := p.interDER[len(p.interDER)-1]
+		if last != 0 && last != 0xFF {
+			continue
+		}
+		padded := append(append([]byte(nil), p.interDER...), 0, 0xFF, 0)
+		if got := trimNVPadding(padded); string(got) != string(p.interDER) {
+			t.Fatalf("certificate ending in %#x was cut or padding kept", last)
+		}
+		if err := verifyEKCertificateWith(p.ekPub, p.leafDER, padded, [][]byte{p.rootDER}, nil, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	t.Skip("no certificate ending in 0x00/0xFF generated")
 }
 
 func TestSplitDERChain(t *testing.T) {

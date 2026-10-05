@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -128,6 +129,10 @@ type EnrolOptions struct {
 	Timeout     time.Duration
 	Debug       bool
 	In          io.Reader // console input for the confirmation; default stdin
+	// VerifyTPM / VerifyPhone: what to do when this machine's TPM, or the
+	// phone's key, cannot be verified as genuine hardware (default warn).
+	VerifyTPM   HWCheckPolicy
+	VerifyPhone HWCheckPolicy
 }
 
 // AttestEnrol binds a phone to this machine over BLE. It runs on the booted,
@@ -258,6 +263,11 @@ func AttestEnrol(o EnrolOptions) error {
 	if !ok {
 		return errors.New("enrolment cancelled: choose PCRs that cover the initrd with --pcrs")
 	}
+	if ok, err := checkOwnTPM(tpmDev, o.VerifyTPM, console, os.Stdout); err != nil {
+		return err
+	} else if !ok {
+		return errors.New("enrolment cancelled: this machine's TPM is not verified as genuine (--verify-tpm)")
+	}
 	fmt.Println()
 
 	p, err := ble.Open(ble.Config{Adapter: o.Adapter, Logf: debugLogf(o.Debug)})
@@ -280,6 +290,11 @@ func AttestEnrol(o EnrolOptions) error {
 			return err
 		}
 		return writeAttestBlob(tpmDev, idx, blob, priv)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	be.phoneJudge = &phoneJudge{
+		policy: o.VerifyPhone, console: console, out: os.Stdout,
+		revoked: func() (map[string]string, error) { return revokedSerials(client) },
 	}
 
 	id := &attest.EnrolIdentity{

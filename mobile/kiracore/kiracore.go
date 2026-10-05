@@ -256,6 +256,14 @@ func (s *Session) ProvideAnchorKey(spkiDER []byte) *Step {
 	return s.run(func() (*attest.Output, error) { return s.v.ProvideAnchorKey(spkiDER) })
 }
 
+// ProvideAnchorKeyAttested is ProvideAnchorKey with the key's attestation
+// certificate chain (Android: KeyStore.getCertificateChain, concatenated DER,
+// leaf first). Create the key with the need_anchor_key event's
+// attestation_challenge. The machine judges the chain; nil if unavailable.
+func (s *Session) ProvideAnchorKeyAttested(spkiDER, attestationDER []byte) *Step {
+	return s.run(func() (*attest.Output, error) { return s.v.ProvideAnchorKeyAttested(spkiDER, attestationDER) })
+}
+
 // PendingTBS returns the bytes to sign for the last need_signature event:
 // sign them with the anchor key as ECDSA P-256 over SHA-256 (the platform
 // hashes), DER-encoded.

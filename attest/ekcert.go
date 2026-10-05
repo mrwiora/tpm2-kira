@@ -34,12 +34,9 @@ package attest
 import (
 	"crypto/ecdsa"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"embed"
 	"encoding/asn1"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -60,95 +57,23 @@ const MaxEKCertChain = 16384
 //go:embed ekroots/vendors.json ekroots/*/*.der
 var ekRootFS embed.FS
 
-// ekVendor is one entry of ekroots/vendors.json, with its certificates read
-// and their pinned fingerprints checked.
-type ekVendor struct {
-	Name          string        `json:"name"`
-	Roots         []ekRootEntry `json:"roots"`         // trust anchors
-	Intermediates []ekRootEntry `json:"intermediates"` // helpers, never anchors
-
-	roots, inter [][]byte
-}
-
-type ekRootEntry struct {
-	File   string `json:"file"`
-	SHA256 string `json:"sha256"`
-}
-
 var (
 	ekVendorsOnce sync.Once
-	ekVendors     []*ekVendor
+	ekVendors     []*trustVendor
 	ekVendorErrs  []error // vendors left out because a file is missing or changed
 )
 
 // loadEKVendors reads the embedded manifest once.
-func loadEKVendors() []*ekVendor {
+func loadEKVendors() []*trustVendor {
 	ekVendorsOnce.Do(func() {
 		sub, err := fs.Sub(ekRootFS, "ekroots")
 		if err != nil {
 			ekVendorErrs = []error{err}
 			return
 		}
-		ekVendors, ekVendorErrs = parseEKVendors(sub)
+		ekVendors, ekVendorErrs = parseTrustStore(sub)
 	})
 	return ekVendors
-}
-
-// parseEKVendors reads vendors.json from fsys. A vendor whose files do not
-// match their pinned SHA-256 is left out: its TPMs then show as "not
-// verified", which is safe, rather than trusted on an unchecked anchor.
-func parseEKVendors(fsys fs.FS) ([]*ekVendor, []error) {
-	var errs []error
-	raw, err := fs.ReadFile(fsys, "vendors.json")
-	if err != nil {
-		return nil, []error{err}
-	}
-	var m struct {
-		Vendors []*ekVendor `json:"vendors"`
-	}
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, []error{fmt.Errorf("vendors.json: %w", err)}
-	}
-	read := func(e ekRootEntry) ([]byte, error) {
-		b, err := fs.ReadFile(fsys, e.File)
-		if err != nil {
-			return nil, err
-		}
-		sum := sha256.Sum256(b)
-		if hex.EncodeToString(sum[:]) != strings.ToLower(e.SHA256) {
-			return nil, fmt.Errorf("%s does not match its pinned SHA-256", e.File)
-		}
-		if _, err := x509.ParseCertificate(b); err != nil {
-			return nil, fmt.Errorf("%s: %w", e.File, err)
-		}
-		return b, nil
-	}
-	var out []*ekVendor
-vendors:
-	for _, v := range m.Vendors {
-		if v.Name == "" || len(v.Roots) == 0 {
-			errs = append(errs, fmt.Errorf("vendor %q has no name or no roots", v.Name))
-			continue
-		}
-		for _, e := range v.Roots {
-			b, err := read(e)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("vendor %s: %w", v.Name, err))
-				continue vendors
-			}
-			v.roots = append(v.roots, b)
-		}
-		for _, e := range v.Intermediates {
-			b, err := read(e)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("vendor %s: %w", v.Name, err))
-				continue vendors
-			}
-			v.inter = append(v.inter, b)
-		}
-		out = append(out, v)
-	}
-	return out, errs
 }
 
 // EKVendorNames lists the TPM vendors whose EK certificates the core can verify.
@@ -199,19 +124,54 @@ func SplitDERChain(chain []byte) ([][]byte, error) {
 }
 
 // trimNVPadding cuts the zero or 0xFF padding some TPMs leave after the last
-// certificate in an NV index.
+// certificate in an NV index. It walks the certificates and trims only what
+// follows a complete one: stripping trailing bytes greedily would also cut a
+// certificate whose signature happens to end in 0x00 or 0xFF.
 func trimNVPadding(b []byte) []byte {
-	end := len(b)
-	for end > 0 && (b[end-1] == 0 || b[end-1] == 0xFF) {
-		end--
-	}
-	// Only padding after a complete chain is removed; SplitDERChain checks.
-	if end < len(b) {
-		if _, err := SplitDERChain(b[:end]); err == nil {
-			return b[:end]
+	for off := 0; off < len(b); {
+		if isPadding(b[off:]) {
+			return b[:off]
 		}
+		n, ok := derLength(b[off:])
+		if !ok {
+			return b // not a chain; SplitDERChain reports why
+		}
+		off += n
 	}
 	return b
+}
+
+func isPadding(b []byte) bool {
+	for _, c := range b {
+		if c != 0 && c != 0xFF {
+			return false
+		}
+	}
+	return true
+}
+
+// derLength is the total length of the DER SEQUENCE at the start of b.
+func derLength(b []byte) (int, bool) {
+	if len(b) < 2 || b[0] != 0x30 {
+		return 0, false
+	}
+	var n, hdr int
+	switch l := int(b[1]); {
+	case l < 0x80:
+		n, hdr = l, 2
+	case l == 0x81 && len(b) >= 3:
+		n, hdr = int(b[2]), 3
+	case l == 0x82 && len(b) >= 4:
+		n, hdr = int(b[2])<<8|int(b[3]), 4
+	case l == 0x83 && len(b) >= 5:
+		n, hdr = int(b[2])<<16|int(b[3])<<8|int(b[4]), 5
+	default:
+		return 0, false
+	}
+	if hdr+n > len(b) {
+		return 0, false
+	}
+	return hdr + n, true
 }
 
 func parseEKCert(der []byte) (*x509.Certificate, error) {

@@ -681,6 +681,9 @@ type EnrolAccept struct {
 	PolicyID     string
 	ReceiptTTL   uint32 // seconds
 	AnchorSig    []byte // DER ECDSA over SHA-256(EnrolAcceptTBS)
+	// AnchorAttestation is the anchor key's attestation certificate chain
+	// (Android Key Attestation), concatenated DER, leaf first; optional.
+	AnchorAttestation []byte
 }
 
 // Encode serialises the message.
@@ -692,6 +695,7 @@ func (m *EnrolAccept) Encode() ([]byte, error) {
 	e.String(4, m.PolicyID)
 	e.U32(5, m.ReceiptTTL)
 	e.Bytes(6, m.AnchorSig)
+	e.OptBytes(7, m.AnchorAttestation)
 	return e.Finish()
 }
 
@@ -707,6 +711,8 @@ func DecodeEnrolAccept(d *Decoder) (*EnrolAccept, error) {
 		PolicyID:     d.String(4, maxShortString, false),
 		ReceiptTTL:   d.U32(5, false),
 		AnchorSig:    d.Bytes(6, maxDERSig, true),
+
+		AnchorAttestation: d.Bytes(7, MaxAnchorAttestation, false),
 	}
 	if err := d.Err(); err != nil {
 		return nil, err

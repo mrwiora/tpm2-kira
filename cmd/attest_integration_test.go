@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/x509"
 	"encoding/hex"
@@ -207,5 +208,31 @@ func TestReplacedBlobIsDetected(t *testing.T) {
 	}
 	if code, out := check(pubPath); code != ExitTampered || !strings.Contains(out, "CHANGED") {
 		t.Fatalf("rolled-back blob not flagged: %d %s", code, out)
+	}
+}
+
+// TestOwnTPMCheckOnSWTPM: swtpm's EK has no vendor certificate, so enrolment
+// warns, asks, and stops on "no" or under --verify-tpm=require.
+func TestOwnTPMCheckOnSWTPM(t *testing.T) {
+	s := newSWTPMSetup(t)
+	run := func(p HWCheckPolicy, answer string) (bool, string) {
+		var out strings.Builder
+		ok, err := checkOwnTPM(s.tpm, p, bufio.NewReader(strings.NewReader(answer)), &out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok, out.String()
+	}
+	if ok, out := run(CheckWarn, "\n"); ok || !strings.Contains(out, "NOT VERIFIED as genuine hardware: the TPM has no vendor certificate") {
+		t.Fatalf("warn/no: %v %s", ok, out)
+	}
+	if ok, _ := run(CheckWarn, "y\n"); !ok {
+		t.Fatal("warn/yes refused")
+	}
+	if ok, _ := run(CheckRequire, "y\n"); ok {
+		t.Fatal("require accepted")
+	}
+	if ok, out := run(CheckOff, ""); !ok || out != "" {
+		t.Fatal("off checked")
 	}
 }
