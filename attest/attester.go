@@ -272,6 +272,12 @@ type EnrolBackend interface {
 	Commit(v EnrolledVerifier) error
 }
 
+// EKChainProvider is implemented by backends that can supply the TPM's
+// intermediate certificates for the EK certificate (ekcert.go).
+type EKChainProvider interface {
+	EKCertChain() []byte
+}
+
 // EnrolIdentity is the attester's state offered at enrolment.
 type EnrolIdentity struct {
 	DeviceID     []byte
@@ -371,6 +377,11 @@ func ServeEnrolment(conn Conn, id *EnrolIdentity, be EnrolBackend, progress Prog
 	}
 	if evlog, _ := be.Eventlog(); len(evlog) > 0 {
 		offer.EventlogSHA256 = sha256Sum(evlog)
+	}
+	if cp, ok := be.(EKChainProvider); ok && len(ekCert) > 0 {
+		if chain := cp.EKCertChain(); len(chain) <= MaxEKCertChain {
+			offer.EKCertChain = chain
+		}
 	}
 	if b, err = offer.Encode(); err != nil {
 		return nil, err

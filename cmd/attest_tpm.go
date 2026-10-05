@@ -148,6 +148,31 @@ func pickEK(tpmDev transport.TPM) (uint16, *loadedKey, []byte, error) {
 	return uint16(tpm2.TPMAlgRSA), k, pub, nil
 }
 
+// pickCertifiedEK prefers the EK whose algorithm has a vendor certificate,
+// so the phone can verify it: Intel PTT, for one, often certifies only the
+// RSA EK. Without any certificate it falls back to pickEK.
+func pickCertifiedEK(tpmDev transport.TPM) (uint16, *loadedKey, []byte, error) {
+	for _, alg := range []uint16{uint16(tpm2.TPMAlgECC), uint16(tpm2.TPMAlgRSA)} {
+		if len(readEKCert(tpmDev, alg)) == 0 {
+			continue
+		}
+		if k, pub, err := createEK(tpmDev, alg); err == nil {
+			return alg, k, pub, nil
+		}
+	}
+	return pickEK(tpmDev)
+}
+
+// readEKCertChain reads the TPM's intermediates for the EK certificate (Intel
+// PTT keeps them concatenated in EKCertChainNVIndex); nil when absent.
+func readEKCertChain(tpmDev transport.TPM) []byte {
+	data, err := ReadFromNVRAM(tpmDev, attest.EKCertChainNVIndex)
+	if err != nil || len(data) == 0 || len(data) > attest.MaxEKCertChain {
+		return nil
+	}
+	return data
+}
+
 // readEKCert reads the vendor EK certificate, if the TPM has one. Firmware
 // TPMs frequently do not; that is reported, never required.
 func readEKCert(tpmDev transport.TPM, alg uint16) []byte {
@@ -220,6 +245,7 @@ type tpmBackend struct {
 	ekAlg      uint16
 	evlog      []byte
 	evlogRead  bool
+	initrd     *initrdCoverage // read once from the event log
 }
 
 // Quote implements attest.AttesterBackend.
@@ -280,6 +306,18 @@ func (b *tpmBackend) BootContext() attest.BootContext {
 			}
 		}
 	}
+	if b.initrd == nil {
+		cov, _ := readInitrdCoverage(DefaultEventlogPath)
+		b.initrd = &cov
+	}
+	// Only a recognised measurement is reported; "none found" may just be a
+	// boot path this version does not know, so it stays unknown.
+	if len(b.initrd.PCRs) > 0 {
+		bc.InitrdState = attest.InitrdMeasured
+		for _, p := range b.initrd.PCRs {
+			bc.InitrdPCRs = append(bc.InitrdPCRs, uint8(p))
+		}
+	}
 	sb := ReadSecureBootState()
 	switch {
 	case !sb.Known:
@@ -325,7 +363,7 @@ func (b *tpmBackend) Eventlog() ([]byte, error) {
 
 // EKPublic implements attest.EnrolBackend.
 func (b *tpmBackend) EKPublic() ([]byte, []byte, error) {
-	alg, ek, pub, err := pickEK(b.tpm)
+	alg, ek, pub, err := pickCertifiedEK(b.tpm)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -334,6 +372,9 @@ func (b *tpmBackend) EKPublic() ([]byte, []byte, error) {
 	b.blob.EKAlg = alg
 	return pub, readEKCert(b.tpm, alg), nil
 }
+
+// EKCertChain implements attest.EKChainProvider.
+func (b *tpmBackend) EKCertChain() []byte { return readEKCertChain(b.tpm) }
 
 // ActivateCredential implements attest.EnrolBackend.
 func (b *tpmBackend) ActivateCredential(blob, encSecret []byte) ([]byte, error) {

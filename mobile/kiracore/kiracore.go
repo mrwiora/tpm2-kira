@@ -93,7 +93,7 @@ func MatchAdvertisement(serviceData []byte, recordJSON string) bool {
 }
 
 // RecordSummary returns display fields of a stored machine record as JSON:
-// {"device_id","friendly_name","enrolled_at","last_attested","profiles","slot"}.
+// {"device_id","friendly_name","enrolled_at","last_attested","profiles","slot","ek_verified_by"}.
 func RecordSummary(recordJSON string) (string, error) {
 	var rec attest.MachineRecord
 	if err := json.Unmarshal([]byte(recordJSON), &rec); err != nil {
@@ -116,7 +116,8 @@ func RecordSummary(recordJSON string) (string, error) {
 		LastAttested *time.Time `json:"last_attested,omitempty"`
 		Slot         uint8      `json:"slot"`
 		Profiles     []profile  `json:"profiles"`
-	}{FriendlyName: rec.FriendlyName, EnrolledAt: rec.EnrolledAt, LastAttested: rec.LastAttested, Slot: rec.Slot}
+		EKVerifiedBy string     `json:"ek_verified_by,omitempty"`
+	}{FriendlyName: rec.FriendlyName, EnrolledAt: rec.EnrolledAt, LastAttested: rec.LastAttested, Slot: rec.Slot, EKVerifiedBy: rec.EKVerifiedBy}
 	id, _ := rec.DeviceID.MarshalText()
 	out.DeviceID = string(id)
 	for _, p := range rec.Policy.Profiles {

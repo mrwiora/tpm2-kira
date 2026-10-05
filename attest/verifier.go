@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/subtle"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 )
 
@@ -26,25 +26,28 @@ const MachineRecordVersion = 1
 // The phone stores it (encrypted at rest by the platform) as opaque JSON
 // and hands it back for every attestation.
 type MachineRecord struct {
-	Version         int        `json:"version"`
-	DeviceID        HexStr     `json:"device_id"`
-	FriendlyName    string     `json:"friendly_name"`
-	EKPub           HexStr     `json:"ek_pub"`
-	EKCert          HexStr     `json:"ek_cert,omitempty"`
-	AKPub           HexStr     `json:"ak_pub"`
-	AKName          HexStr     `json:"ak_name"`
-	MachineNoisePub HexStr     `json:"machine_noise_pub"`
-	AdvKey          HexStr     `json:"adv_key"`
-	AnchorPub       HexStr     `json:"anchor_pub"`
-	VerifierID      string     `json:"verifier_id"`
-	Slot            uint8      `json:"slot"`
-	Policy          Policy     `json:"policy"`
-	ResetCount      uint32     `json:"reset_count"`
-	FirmwareVersion uint64     `json:"firmware_version"`
-	ReceiptTTL      uint32     `json:"receipt_ttl"`
-	BaselineEvlog   HexStr     `json:"baseline_eventlog_sha256,omitempty"`
-	EnrolledAt      time.Time  `json:"enrolled_at"`
-	LastAttested    *time.Time `json:"last_attested,omitempty"`
+	Version         int    `json:"version"`
+	DeviceID        HexStr `json:"device_id"`
+	FriendlyName    string `json:"friendly_name"`
+	EKPub           HexStr `json:"ek_pub"`
+	EKCert          HexStr `json:"ek_cert,omitempty"`
+	AKPub           HexStr `json:"ak_pub"`
+	AKName          HexStr `json:"ak_name"`
+	MachineNoisePub HexStr `json:"machine_noise_pub"`
+	AdvKey          HexStr `json:"adv_key"`
+	AnchorPub       HexStr `json:"anchor_pub"`
+	VerifierID      string `json:"verifier_id"`
+	Slot            uint8  `json:"slot"`
+	Policy          Policy `json:"policy"`
+	ResetCount      uint32 `json:"reset_count"`
+	FirmwareVersion uint64 `json:"firmware_version"`
+	ReceiptTTL      uint32 `json:"receipt_ttl"`
+	BaselineEvlog   HexStr `json:"baseline_eventlog_sha256,omitempty"`
+	// EKVerifiedBy names the TPM vendor whose certificate chain vouched for
+	// the EK at enrolment; empty when it could not be verified (ekcert.go).
+	EKVerifiedBy string     `json:"ek_verified_by,omitempty"`
+	EnrolledAt   time.Time  `json:"enrolled_at"`
+	LastAttested *time.Time `json:"last_attested,omitempty"`
 }
 
 func (r *MachineRecord) pinned() *PinnedIdentity {
@@ -97,7 +100,22 @@ type Event struct {
 	Result        uint8          `json:"result,omitempty"`
 	Message       string         `json:"message,omitempty"`
 	Warnings      []string       `json:"warnings,omitempty"`
+
+	// need_anchor_key: what the phone learnt about the machine before the
+	// user binds it (TODO-SEC.md S3, S5 in the app repository).
+	EKVerifiedBy   string `json:"ek_verified_by,omitempty"`
+	EKNote         string `json:"ek_note,omitempty"`
+	InitrdCoverage string `json:"initrd_coverage,omitempty"` // covered | not_covered | no_initrd | unknown
+	InitrdPCRs     []int  `json:"initrd_pcrs,omitempty"`
 }
+
+// InitrdCoverage values in need_anchor_key events.
+const (
+	InitrdCovered    = "covered"
+	InitrdNotCovered = "not_covered"
+	InitrdNoInitrd   = "no_initrd"
+	InitrdUnknownMsg = "unknown"
+)
 
 // Event types.
 const (
@@ -189,6 +207,8 @@ type Verifier struct {
 	anchor  []byte
 	accTBS  []byte
 	baseVer *Verdict
+	ekBy    string // vendor that vouched for the EK, or ""
+	ekNote  string // why the EK is not verified
 
 	// attestation
 	hello    *Hello
@@ -478,7 +498,11 @@ func (v *Verifier) handleEnrol(out *Output, d *Decoder) (*Output, error) {
 			return v.fail(out, ErrCodeActivationFailed, "credential activation failed: the attestation key is not in the TPM that owns this EK")
 		}
 		v.state = vsWaitAnchorKey
-		out.Events = append(out.Events, Event{Type: EvNeedAnchorKey, DeviceID: v.offer.DeviceID, FriendlyName: v.offer.FriendlyName})
+		cov, pcrs := initrdCoverage(v.offer)
+		out.Events = append(out.Events, Event{
+			Type: EvNeedAnchorKey, DeviceID: v.offer.DeviceID, FriendlyName: v.offer.FriendlyName,
+			EKVerifiedBy: v.ekBy, EKNote: v.ekNote, InitrdCoverage: cov, InitrdPCRs: pcrs,
+		})
 		return out, nil
 
 	case vsWaitEnrolConfirm:
@@ -513,6 +537,7 @@ func (v *Verifier) handleEnrol(out *Output, d *Decoder) (*Output, error) {
 			FirmwareVersion: v.baseVer.FirmwareVersion,
 			ReceiptTTL:      uint32(v.cfg.ttl() / time.Second),
 			BaselineEvlog:   v.offer.EventlogSHA256,
+			EKVerifiedBy:    v.ekBy,
 			EnrolledAt:      now,
 		}
 		b, err := EncodeEmpty(MsgBye)
@@ -536,11 +561,9 @@ func (v *Verifier) checkOffer(o *EnrolOffer) error {
 	if err := ValidateEKPublic(o.EKPub); err != nil {
 		return err
 	}
-	if len(o.EKCert) > 0 {
-		if _, err := x509.ParseCertificate(o.EKCert); err != nil {
-			return fmt.Errorf("EK certificate does not parse: %w", err)
-		}
-	}
+	// The EK certificate is judged below (VerifyEKCertificate) and only ever
+	// downgrades the result to "not verified": a certificate Go cannot parse
+	// (e.g. the RSA-OAEP key identifier) must not make enrolment impossible.
 	if _, err := ParseAKPublic(o.AKPub, o.AKName); err != nil {
 		return err
 	}
@@ -569,7 +592,40 @@ func (v *Verifier) checkOffer(o *EnrolOffer) error {
 		return errors.New(msg)
 	}
 	v.baseVer = verdict
+	if by, err := VerifyEKCertificate(o.EKPub, o.EKCert, o.EKCertChain, v.cfg.now()); err == nil {
+		v.ekBy = by
+	} else {
+		v.ekNote = EKCertNote(err)
+	}
 	return nil
+}
+
+// initrdCoverage compares where the machine says its initrd was measured with
+// the PCRs the phone will check. The machine's statement is not TPM-signed;
+// it can only add a warning, never remove one.
+func initrdCoverage(o *EnrolOffer) (string, []int) {
+	bc := o.BootContext
+	switch bc.InitrdState {
+	case InitrdNone:
+		return InitrdNoInitrd, nil
+	case InitrdMeasured:
+		var pcrs []int
+		covered := false
+		for _, p := range bc.InitrdPCRs {
+			pcrs = append(pcrs, int(p))
+			if slices.Contains(o.Selection.Indices, p) {
+				covered = true
+			}
+		}
+		if len(pcrs) == 0 {
+			return InitrdUnknownMsg, nil
+		}
+		if covered {
+			return InitrdCovered, pcrs
+		}
+		return InitrdNotCovered, pcrs
+	}
+	return InitrdUnknownMsg, nil
 }
 
 // ConfirmSAS reports the user's comparison of the code on both screens.

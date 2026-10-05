@@ -30,8 +30,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/go-tpm/tpm2/transport"
+
+	"github.com/matthias/tpm2-kira/attest"
 )
 
 // DefaultAttestStateDir holds the recorded digest of each slot's blob.
@@ -220,4 +223,46 @@ func verifyBeforeExtending(signed []byte, pubKey crypto.PublicKey, slot uint32) 
 			"run 'tpm2-kira attest unenrol --nvram %d' and enrol again", slot, err, slot)
 	}
 	return nil
+}
+
+// AttestEKCert shows what the phone will conclude about this TPM at
+// enrolment: which EK is offered, whether it has a vendor certificate, and
+// whether that certificate verifies against the roots embedded in the core.
+func AttestEKCert(tpmPath string, debug bool) error {
+	tpmDev, err := transport.OpenTPM(tpmPath)
+	if err != nil {
+		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+	}
+	defer tpmDev.Close()
+	defer CleanupTPM(tpmDev, debug)
+
+	alg, ek, pub, err := pickCertifiedEK(tpmDev)
+	if err != nil {
+		return err
+	}
+	FlushHandle(tpmDev, ek.handle)
+	cert := readEKCert(tpmDev, alg)
+	chain := readEKCertChain(tpmDev)
+	fmt.Printf("EK offered at enrolment: %s\n", ekAlgName(alg))
+	fmt.Printf("EK certificate:          %s\n", presentBytes(cert))
+	n := 0
+	if certs, err := attest.SplitDERChain(chain); err == nil {
+		n = len(certs)
+	}
+	fmt.Printf("Certificate chain (NV 0x%08X): %s, %d certificate(s)\n", attest.EKCertChainNVIndex, presentBytes(chain), n)
+	by, err := attest.VerifyEKCertificate(pub, cert, chain, time.Now())
+	if err != nil {
+		fmt.Printf("Result:                  NOT VERIFIED: %s\n", attest.EKCertNote(err))
+		fmt.Println("The phone will show this TPM as \"not verified as genuine hardware\".")
+		return nil
+	}
+	fmt.Printf("Result:                  verified: %s\n", by)
+	return nil
+}
+
+func presentBytes(b []byte) string {
+	if len(b) == 0 {
+		return "absent"
+	}
+	return fmt.Sprintf("present (%d bytes)", len(b))
 }

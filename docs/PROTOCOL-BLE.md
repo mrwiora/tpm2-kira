@@ -378,7 +378,10 @@ Signatures never cover this encoding; they cover the canonical strings of §9.
 
 BootContext (nested): 1 `blob_version` u32 · 2 `nvram_index` u32 ·
 3 `measure_point` string ≤512 · 4 `secureboot_state` u8 (0 unknown, 1 enabled,
-2 disabled, 3 setup mode) · 5 `seal_pcr_selection` bytes ≤24 · 6 `uptime_ms` u64.
+2 disabled, 3 setup mode) · 5 `seal_pcr_selection` bytes ≤24 · 6 `uptime_ms` u64 ·
+7 `initrd_state` u8 (absent/0 unknown, 1 measured, 2 no initrd) · 8 `initrd_pcrs`
+bytes ≤24 — the PCRs this boot's event log shows measuring the initrd. Like the
+rest of BootContext it is not TPM-signed and can only add a warning.
 
 #### 7.3.4 EventlogRequest (0x04)
 
@@ -459,6 +462,14 @@ nonce_m). SASConfirm has no fields.
 | 14 | boot_context | BootContext | O | |
 | 15 | app_version | string ≤64 | O | |
 | 16 | adv_key | bytes[32] exact | R | §2.2 |
+| 17 | ek_cert_chain | bytes ≤16384 | O | the TPM's intermediates for `ek_cert`, concatenated DER (Intel PTT: NV `0x01C00100`) |
+
+The phone verifies `ek_cert` against vendor roots built into the core
+(`attest/ekroots/`, currently Intel's on-die CA) with `ek_cert_chain` as
+intermediates, and requires the certificate's key to be `ek_pub`. The result
+is shown to the user before binding ("TPM verified: Intel PTT" or "not
+verified as genuine hardware") and stored in the record; it never blocks
+enrolment. Revocation is not checked.
 
 #### 7.3.12 Challenge (0x25), ChallengeResponse (0x26)
 
@@ -736,7 +747,7 @@ Every event is a JSON object with `type`. `tbs` is base64 (prefer `PendingTBS()`
 | `type` | Fields | App action |
 |---|---|---|
 | `sas` | `sas` (6 digits) | show large; buttons *Matches* / *Does not match* → `ConfirmSAS` |
-| `need_anchor_key` | `device_id`, `friendly_name` | create the non-exportable P-256 key (§11.2) for this machine → `ProvideAnchorKey` |
+| `need_anchor_key` | `device_id`, `friendly_name`, `ek_verified_by` (vendor, or absent), `ek_note` (why not verified), `initrd_coverage` (`covered` · `not_covered` · `no_initrd` · `unknown`), `initrd_pcrs` | show what is known about the machine and let the user decide to bind; then create the non-exportable P-256 key (§11.2) → `ProvideAnchorKey` |
 | `need_signature` | `purpose` (`enrol_accept`, `receipt`), `tbs`, `verdict_code` | unlock prompt (§11.2), sign `PendingTBS()` → `ProvideSignature` |
 | `enrolled` | `record` | persist the record (encrypted) |
 | `hello` | `device_id`, `friendly_name` | show "connected to …" |
@@ -782,7 +793,7 @@ The app SHOULD NOT show PCR hex by default; offer it behind "Details".
 
 Opaque JSON produced by the core (`version`, `device_id`, `friendly_name`,
 EK/AK, `machine_noise_pub`, `adv_key`, `anchor_pub`, `policy` with profiles,
-counters, timestamps). The app stores it encrypted and hands it back
+counters, timestamps, `ek_verified_by`). The app stores it encrypted and hands it back
 unchanged. It contains no private key, but `adv_key` and `machine_noise_pub`
 identify the machine, so treat it as private data.
 

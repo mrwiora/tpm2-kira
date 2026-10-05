@@ -297,7 +297,7 @@ func failAttest(code int, err error) {
 
 func runAttest(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "attest requires a subcommand: enrol, gate, status, check, quote, verify, unenrol")
+		fmt.Fprintln(os.Stderr, "attest requires a subcommand: enrol, gate, status, check, ekcert, quote, verify, unenrol")
 		os.Exit(cmd.ExitUsage)
 	}
 	sub, args := args[0], args[1:]
@@ -403,6 +403,11 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 		os.Exit(cmd.AttestCheck(cmd.CheckOptions{
 			TPMPath: *tpm, SealIndex: slot, PubKeyPath: *pubKey, StateDir: *stateDir, Accept: *accept, Debug: *debug,
 		}))
+	case "ekcert":
+		fs.Parse(args)
+		if err := cmd.AttestEKCert(*tpm, *debug); err != nil {
+			fail(err)
+		}
 	case "unenrol", "unenroll":
 		fs.Parse(args)
 		if err := cmd.AttestUnenrol(*tpm, uint32(*nvram), *debug); err != nil {
@@ -498,6 +503,8 @@ ATTEST SUBCOMMANDS:
                   this machine's key, and unchanged since tpm2-kira last wrote
                   or accepted them (exit 6 if not). Run after unlock by
                   tpm2-kira-attest-check.service. --pubkey PATH --accept
+  attest ekcert   Show whether the phone will verify this TPM as genuine
+                  (EK certificate chain against the vendor roots in the core)
   attest quote    Produce evidence without a phone (--nonce HEX --out FILE)
   attest verify   Judge evidence offline (--evidence FILE --record FILE --nonce HEX)
   attest unenrol  Remove a slot's attestation enrolment

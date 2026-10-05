@@ -111,7 +111,19 @@ type BootContext struct {
 	SecureBootState  uint8
 	SealPCRSelection []uint8
 	UptimeMS         uint64
+	// Where this boot measured the initrd, read from the attester's event
+	// log: InitrdUnknown (field absent), InitrdMeasured with the PCRs, or
+	// InitrdNone for a boot without an initrd.
+	InitrdState uint8
+	InitrdPCRs  []uint8
 }
+
+// InitrdState values in BootContext.
+const (
+	InitrdUnknown  = 0
+	InitrdMeasured = 1
+	InitrdNone     = 2
+)
 
 func (b *BootContext) encode() *Encoder {
 	e := SubEncoder()
@@ -121,6 +133,10 @@ func (b *BootContext) encode() *Encoder {
 	e.U8(4, b.SecureBootState)
 	e.Bytes(5, b.SealPCRSelection)
 	e.U64(6, b.UptimeMS)
+	if b.InitrdState != InitrdUnknown {
+		e.U8(7, b.InitrdState)
+		e.OptBytes(8, b.InitrdPCRs)
+	}
 	return e
 }
 
@@ -135,6 +151,8 @@ func decodeBootContext(d *Decoder) BootContext {
 		SecureBootState:  d.U8(4, false),
 		SealPCRSelection: d.Bytes(5, MaxPCRIndex, false),
 		UptimeMS:         d.U64(6, false),
+		InitrdState:      d.U8(7, false),
+		InitrdPCRs:       d.Bytes(8, MaxPCRIndex, false),
 	}
 }
 
@@ -545,6 +563,7 @@ type EnrolOffer struct {
 	BootContext    BootContext
 	AppVersion     string
 	AdvKey         []byte // 32 bytes: lets the phone recognise this machine's advertisements
+	EKCertChain    []byte // optional: the TPM's intermediates for EKCert, concatenated DER
 }
 
 // Encode serialises the message.
@@ -566,6 +585,7 @@ func (m *EnrolOffer) Encode() ([]byte, error) {
 	e.Sub(14, m.BootContext.encode())
 	e.String(15, m.AppVersion)
 	e.Bytes(16, m.AdvKey)
+	e.OptBytes(17, m.EKCertChain)
 	return e.Finish()
 }
 
@@ -589,6 +609,7 @@ func DecodeEnrolOffer(d *Decoder) (*EnrolOffer, error) {
 		BootContext:    decodeBootContext(d.Sub(14, 2048, false)),
 		AppVersion:     d.String(15, maxShortString, false),
 		AdvKey:         d.Fixed(16, 32, true),
+		EKCertChain:    d.Bytes(17, MaxEKCertChain, false),
 	}
 	vals := d.Bytes(10, 2+maxPCRValues*(5+65), true)
 	if err := d.Err(); err != nil {
