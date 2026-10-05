@@ -22,6 +22,7 @@ const (
 // HCI opcodes (OGF << 10 | OCF).
 const (
 	opDisconnect        = 0x0406
+	opReadRSSI          = 0x1405
 	opSetEventMask      = 0x0C01
 	opReset             = 0x0C03
 	opWriteLEHostSupp   = 0x0C6D
@@ -61,6 +62,15 @@ const (
 	commandTimeout      = 5 * time.Second
 	maxL2CAPPDU         = maxATTMTU + 4
 	maxLEACL            = 251 // largest LE data channel payload (Data Length Extension)
+)
+
+var (
+	// keepAliveInterval paces a Read RSSI command to the controller while a
+	// central is connected. Some controllers (seen with an Intel 7265) lose
+	// an idle LE link after ~15 s without host traffic; the command keeps
+	// the controller and its USB link busy without touching the protocol.
+	keepAliveInterval = 2 * time.Second
+	rssiLogInterval   = 10 * time.Second
 )
 
 // hciTransport is an open controller: each Read returns exactly one H4
@@ -478,9 +488,38 @@ func (h *host) onConnect(handle uint16) {
 	go func() {
 		_, _ = h.command(opLESetDataLength, []byte{byte(handle), byte(handle >> 8), 0xFB, 0x00, 0x48, 0x08})
 	}()
+	go h.keepAlive(l)
 	select {
 	case h.newLinks <- l:
 	default:
+	}
+}
+
+// keepAlive reads the link's RSSI every keepAliveInterval until it is gone,
+// and logs it every rssiLogInterval.
+func (h *host) keepAlive(l *Link) {
+	gone := l.goneC()
+	t := time.NewTicker(keepAliveInterval)
+	defer t.Stop()
+	var logged time.Time
+	for {
+		select {
+		case <-gone:
+			return
+		case <-h.done:
+			return
+		case <-t.C:
+		}
+		p, err := h.command(opReadRSSI, []byte{byte(l.handle), byte(l.handle >> 8)})
+		switch {
+		case err != nil:
+			if !l.isGone() {
+				h.logf("keepalive: %v", err)
+			}
+		case len(p) >= 3 && time.Since(logged) >= rssiLogInterval:
+			h.logf("signal: RSSI %d dBm", int8(p[2]))
+			logged = time.Now()
+		}
 	}
 }
 
@@ -567,6 +606,16 @@ type Link struct {
 	sub    bool
 	gone   bool
 	gonech chan struct{}
+}
+
+// goneC is closed when the link is lost or closed.
+func (l *Link) goneC() <-chan struct{} {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.gonech == nil {
+		l.gonech = make(chan struct{})
+	}
+	return l.gonech
 }
 
 func (l *Link) isGone() bool {

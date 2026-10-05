@@ -491,3 +491,41 @@ func TestPacketSizesAreCapped(t *testing.T) {
 		t.Fatalf("host sent a %d-byte ACL packet; LE maximum is 251", sent)
 	}
 }
+
+// TestKeepAliveWhileConnected: the host polls RSSI while a central is
+// connected and stops once it has gone.
+func TestKeepAliveWhileConnected(t *testing.T) {
+	old := keepAliveInterval
+	keepAliveInterval = 10 * time.Millisecond
+	defer func() { keepAliveInterval = old }()
+	p, fc := startPeripheral(t)
+	defer p.Close()
+	rssiReads := func() int {
+		fc.mu.Lock()
+		defer fc.mu.Unlock()
+		n := 0
+		for _, op := range fc.cmds {
+			if op == opReadRSSI {
+				n++
+			}
+		}
+		return n
+	}
+	connCh := acceptAsync(p, frame.DefaultBudget)
+	waitAdvertising(t, fc)
+	fc.connect()
+	if c := <-connCh; c == nil {
+		t.Fatal("accept failed")
+	}
+	time.Sleep(200 * time.Millisecond)
+	if n := rssiReads(); n < 5 {
+		t.Fatalf("%d RSSI reads in 200 ms while connected", n)
+	}
+	fc.disconnect()
+	time.Sleep(50 * time.Millisecond)
+	before := rssiReads()
+	time.Sleep(200 * time.Millisecond)
+	if n := rssiReads(); n != before {
+		t.Fatalf("RSSI still polled after disconnect (%d -> %d)", before, n)
+	}
+}
