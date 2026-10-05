@@ -106,6 +106,9 @@ func openUserChannel(dev int, unblock bool, logf func(string, ...any)) (hciTrans
 		}
 		unix.Close(ctl)
 	}
+	awake := keepUSBAwake(fmt.Sprintf("/sys/class/bluetooth/hci%d/device", dev), logf)
+	closeCtl := release
+	release = func() { closeCtl(); awake() }
 
 	fd, err := unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_RAW|unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK, btprotoHCI)
 	if err != nil {
@@ -125,6 +128,40 @@ func openUserChannel(dev int, unblock bool, logf func(string, ...any)) (hciTrans
 	// A non-blocking fd wrapped in os.File uses the runtime poller, so Close
 	// interrupts a blocked Read.
 	return os.NewFile(uintptr(fd), fmt.Sprintf("hci%d-user", dev)), release, nil
+}
+
+// keepUSBAwake turns off USB runtime power management for the USB device
+// behind the adapter (dev is its sysfs "device" link) and returns a function
+// that restores it. Some controllers, the Intel 7265 for one, drop an LE
+// connection while autosuspended, which the phone sees as a supervision
+// timeout whenever the link idles - typically while the user unlocks the
+// phone. Adapters that are not USB, or not set to "auto", are left alone.
+func keepUSBAwake(dev string, logf func(string, ...any)) func() {
+	d, err := filepath.EvalSymlinks(dev)
+	if err != nil {
+		return func() {}
+	}
+	for ; d != "/" && d != "."; d = filepath.Dir(d) {
+		if _, err := os.Stat(filepath.Join(d, "idVendor")); err != nil {
+			continue
+		}
+		ctl := filepath.Join(d, "power", "control")
+		b, err := os.ReadFile(ctl)
+		if err != nil || strings.TrimSpace(string(b)) != "auto" {
+			return func() {}
+		}
+		if err := os.WriteFile(ctl, []byte("on"), 0); err != nil {
+			logf("could not disable USB autosuspend for %s: %v", filepath.Base(d), err)
+			return func() {}
+		}
+		logf("USB autosuspend disabled for %s while in use", filepath.Base(d))
+		return func() {
+			if err := os.WriteFile(ctl, []byte("auto"), 0); err != nil {
+				logf("could not restore USB autosuspend for %s: %v", filepath.Base(d), err)
+			}
+		}
+	}
+	return func() {}
 }
 
 // checkRFKill reports a hard block and, if asked, clears a soft block.
