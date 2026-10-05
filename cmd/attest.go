@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -79,6 +80,30 @@ func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *AttestBlob, priv crypt
 
 // parseAttestPCRs reads a PCR list for quoting. Quotes always cover the
 // live registers, so source suffixes from seal syntax are accepted and ignored.
+// checkSamePCRs refuses a --pcrs that differs from an existing blob's
+// selection. Further phones share the blob and its selection, so the option
+// would otherwise be ignored without a word.
+func checkSamePCRs(blob *AttestBlob, pcrs string, slot uint32) error {
+	have, err := blob.Selection()
+	if err != nil {
+		return err
+	}
+	want, err := parseAttestPCRs(pcrs, have.Alg)
+	if err != nil {
+		return err
+	}
+	w, h := slices.Clone(want.Indices), slices.Clone(have.Indices)
+	slices.Sort(w)
+	slices.Sort(h)
+	if slices.Equal(w, h) {
+		return nil
+	}
+	return fmt.Errorf("slot %d is already enrolled with PCRs %s; --pcrs %s would be ignored.\n"+
+		"Every phone enrolled on this machine checks the same PCRs. To change them, run\n"+
+		"'tpm2-kira attest unenrol' (enrolled phones must then be enrolled again), or\n"+
+		"enrol without --pcrs to keep %s", slot, have, pcrs, have)
+}
+
 func parseAttestPCRs(s string, alg uint16) (attest.PCRSelection, error) {
 	var idx []int
 	for _, f := range strings.Split(s, ",") {
@@ -176,6 +201,12 @@ func AttestEnrol(o EnrolOptions) error {
 			return err
 		}
 	}
+	if blob != nil && o.PCRs != "" {
+		if err := checkSamePCRs(blob, o.PCRs, idx-AttestNVRAMStart); err != nil {
+			return err
+		}
+	}
+
 	if blob == nil {
 		alg := attest.AlgSHA256
 		pcrs := o.PCRs
