@@ -142,7 +142,8 @@ If called without a command, tpm2-kira defaults to `reveal`.
 | `nvram delete` | Delete sealed data from NVRAM |
 | `attest enrol` | Bind a phone to this machine over Bluetooth LE (see [Remote attestation](#remote-attestation-with-a-phone-experimental)) |
 | `attest gate` | Serve attestation requests until a phone returns a signed verdict |
-| `attest status` | Show which phones are enrolled per slot (`--json`) |
+| `attest status` | Show which phones are enrolled per slot, and whether the blob is signed by this machine's key (`--json`) |
+| `attest check` | Check on the booted system that the attestation blob was not replaced or rolled back (exit 6 if it was) |
 | `attest quote` / `attest verify` | Produce evidence without a phone / judge it offline |
 | `attest unenrol` | Remove a slot's attestation enrolment |
 | `pcrtips` | PCR reference guide — what each register measures |
@@ -350,7 +351,17 @@ sudo tpm2-kira attest enrol --name "Thinkpad-X1"
 # Serve an attestation (lazy mode: shows the verdict, never blocks):
 sudo tpm2-kira attest gate
 sudo tpm2-kira attest status
+
+# After every unlock: was the attestation blob replaced while the disk was locked?
+sudo systemctl enable tpm2-kira-attest-check.service
 ```
+
+The attestation blob lives in TPM NV storage, readable and — through the owner
+hierarchy — replaceable by anyone who can talk to the TPM, including another
+OS booted on this machine. The initrd cannot authenticate it, so the verdict on
+the console is advisory: **only the phone's screen counts.** On the booted
+system `attest check` verifies the blob's signature and compares it with the
+copy recorded at the last enrolment (in `/var/lib/tpm2-kira/`).
 
 While enrolling or attesting, tpm2-kira takes the Bluetooth adapter
 exclusively through an HCI user channel (no BlueZ needed); other Bluetooth

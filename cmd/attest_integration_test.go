@@ -4,7 +4,12 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,5 +140,72 @@ func TestOfflineQuoteVerifies(t *testing.T) {
 	}
 	if v := attest.Verify(ev, pol, pin, attest.OfflineQualifyingData(randBytes(32)), time.Now()); v.State != attest.StateFailed {
 		t.Fatal("quote verified against the wrong nonce")
+	}
+}
+
+// TestReplacedBlobIsDetected performs the attack from TODO-SEC.md S2 on a
+// real TPM: the owner hierarchy undefines the attestation index and writes a
+// blob of its own (here: the attacker's phone, signed with the attacker's
+// key). 'attest check' must flag it; so must putting back an older blob
+// that this machine's key did sign.
+func TestReplacedBlobIsDetected(t *testing.T) {
+	s := newSWTPMSetup(t)
+	mine, attacker := testSigner(t), testSigner(t)
+	idx := uint32(AttestNVRAMStart + 4)
+	dir := t.TempDir()
+	check := func(pub string) (int, string) {
+		var out strings.Builder
+		code := checkSlots(s.tpm, CheckOptions{SealIndex: NVRAMSlotStart + 4, PubKeyPath: pub, StateDir: dir}, &out)
+		return code, out.String()
+	}
+	pubPath := filepath.Join(t.TempDir(), "seal.pub")
+	der, _ := x509.MarshalPKIXPublicKey(&mine.PublicKey)
+	if err := os.WriteFile(pubPath, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s.blob.Verifiers = []attest.EnrolledVerifier{{ID: "my-phone", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
+	if err := writeAttestBlob(s.tpm, idx, s.blob, mine); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := check(pubPath); code != 0 || !strings.Contains(out, "state recorded") {
+		t.Fatalf("own blob: %d %s", code, out)
+	}
+	old, _ := ReadFromNVRAM(s.tpm, idx)
+
+	// A legitimate change by this machine, recorded as tpm2-kira does.
+	s.blob.Verifiers = append(s.blob.Verifiers, attest.EnrolledVerifier{ID: "second-phone", AnchorPub: []byte{2}, NoisePub: make([]byte, 32)})
+	if err := writeAttestBlob(s.tpm, idx, s.blob, mine); err != nil {
+		t.Fatal(err)
+	}
+	cur, _ := ReadFromNVRAM(s.tpm, idx)
+	if err := recordAttestState(dir, idx, cur); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := check(pubPath); code != 0 {
+		t.Fatalf("after a recorded change: %d %s", code, out)
+	}
+
+	// The attack: undefine (owner auth, empty) and write the attacker's blob.
+	forged := *s.blob
+	forged.Verifiers = []attest.EnrolledVerifier{{ID: "attackers-phone", AnchorPub: []byte{9}, NoisePub: make([]byte, 32)}}
+	if err := writeAttestBlob(s.tpm, idx, &forged, attacker); err != nil {
+		t.Fatalf("the owner hierarchy could not replace the index: %v", err)
+	}
+	if code, out := check(pubPath); code != ExitTampered || !strings.Contains(out, "TAMPERED") {
+		t.Fatalf("replaced blob not flagged: %d %s", code, out)
+	}
+
+	// Putting back an older, validly signed blob (a removed phone returns).
+	if err := writeAttestBlob(s.tpm, idx, s.blob, mine); err != nil {
+		t.Fatal(err)
+	}
+	restored, _ := UnmarshalAttestBlob(old)
+	restored.Signature = nil
+	if err := writeAttestBlob(s.tpm, idx, restored, mine); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := check(pubPath); code != ExitTampered || !strings.Contains(out, "CHANGED") {
+		t.Fatalf("rolled-back blob not flagged: %d %s", code, out)
 	}
 }

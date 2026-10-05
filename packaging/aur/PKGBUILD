@@ -65,6 +65,10 @@ package() {
     # only when /etc/tpm2-kira/attest.conf enables it.
     install -Dm644 initramfs/systemd/tpm2-kira-attest.service \
         "$pkgdir/usr/lib/systemd/system/tpm2-kira-attest.service"
+    # Booted-system check of the attestation blob (attest check). Not enabled
+    # by default: systemctl enable tpm2-kira-attest-check.service
+    install -Dm644 systemd/tpm2-kira-attest-check.service \
+        "$pkgdir/usr/lib/systemd/system/tpm2-kira-attest-check.service"
     install -Dm644 initramfs/common/attest.conf \
         "$pkgdir/etc/tpm2-kira/attest.conf"
 

@@ -39,6 +39,7 @@ const (
 	ExitUnavailable = 3 // no adapter, timeout, nobody in range
 	ExitRejected    = 4 // the verifier rejected the attestation
 	ExitAnchor      = 5 // receipt not signed by the enrolled phone
+	ExitTampered    = 6 // attest check: the attestation blob was replaced or changed
 )
 
 // AttestInfo is the INFO characteristic: u8 protocol ‖ u8 mode ‖ u16le schema ‖ u32le capabilities.
@@ -163,6 +164,12 @@ func AttestEnrol(o EnrolOptions) error {
 	blob, err := loadAttestBlob(tpmDev, idx)
 	if err != nil {
 		blob = nil
+	}
+	if blob != nil {
+		raw, _ := ReadFromNVRAM(tpmDev, idx)
+		if err := verifyBeforeExtending(raw, priv.Public(), idx-AttestNVRAMStart); err != nil {
+			return err
+		}
 	}
 	if blob == nil {
 		alg := attest.AlgSHA256
@@ -311,6 +318,11 @@ func AttestEnrol(o EnrolOptions) error {
 		fmt.Println()
 		fmt.Printf("Enrolled:      %s (verifier id %s)\n", verifierName(v), v.ID)
 		fmt.Printf("Stored:        attestation blob at NV 0x%08X\n", idx)
+		if raw, err := ReadFromNVRAM(tpmDev, idx); err == nil {
+			if err := recordAttestState(DefaultAttestStateDir, idx, raw); err != nil {
+				fmt.Printf("Warning:       could not record the blob for 'attest check': %v\n", err)
+			}
+		}
 		fmt.Println()
 		fmt.Println("The phone can now attest this machine at boot. To serve attestation")
 		fmt.Println("requests at the passphrase prompt, enable the gate in lazy mode:")
@@ -534,6 +546,8 @@ func gateFail(format string, args ...any) {
 }
 
 func reportReceipt(blob *AttestBlob, res *attest.AttestResult) int {
+	// The initrd cannot authenticate the blob that names the phone (TODO-SEC.md S2).
+	defer fmt.Println("tpm2-kira:   (not verified on this machine: your phone's screen is authoritative)")
 	who := verifierName(res.Verifier)
 	c := res.Check
 	switch {
@@ -590,8 +604,11 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 		EKAlg        string         `json:"ek_alg"`
 		PCRSelection string         `json:"pcr_selection"`
 		AppVersion   string         `json:"app_version"`
+		Signature    string         `json:"blob_signature"` // valid | invalid | unchecked
+		SigningKey   string         `json:"signing_key,omitempty"`
 		Verifiers    []verifierJSON `json:"verifiers"`
 	}
+	invalid := 0
 	var out []slotJSON
 	for _, idx := range indices {
 		b, err := loadAttestBlob(tpmDev, idx)
@@ -611,6 +628,18 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 			EKAlg:        ekAlgName(b.EKAlg),
 			PCRSelection: sel.String(),
 			AppVersion:   b.AppVersion,
+			Signature:    "unchecked",
+		}
+		if raw, err := ReadFromNVRAM(tpmDev, idx); err == nil {
+			if pub, path, err := attestPublicKey(tpmDev, idx, ""); err == nil {
+				s.SigningKey = path
+				if VerifyAttestBlobSignature(raw, pub) == nil {
+					s.Signature = "valid"
+				} else {
+					s.Signature = "invalid"
+					invalid++
+				}
+			}
 		}
 		for _, v := range b.Verifiers {
 			s.Verifiers = append(s.Verifiers, verifierJSON{ID: v.ID, Name: v.Name, PolicyID: v.PolicyID, AnchorDigest: hex.EncodeToString(attest.AnchorDigest(v.AnchorPub))})
@@ -623,7 +652,10 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(out)
+		if err := enc.Encode(out); err != nil {
+			return err
+		}
+		return tamperedErr(invalid)
 	}
 	if len(out) == 0 {
 		fmt.Println("No slot is enrolled for attestation. Run: tpm2-kira attest enrol")
@@ -636,6 +668,14 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 		fmt.Printf("├── AK Name:    %s\n", s.AKName)
 		fmt.Printf("├── EK:         %s\n", s.EKAlg)
 		fmt.Printf("├── PCRs:       %s\n", s.PCRSelection)
+		switch s.Signature {
+		case "valid":
+			fmt.Printf("├── Signature:  valid (%s)\n", s.SigningKey)
+		case "invalid":
+			fmt.Printf("├── Signature:  INVALID: not written by this machine's signing key (%s). The blob was replaced; trust only the phone.\n", s.SigningKey)
+		default:
+			fmt.Printf("├── Signature:  not checked (signing public key not found)\n")
+		}
 		fmt.Printf("└── Verifiers:  %d\n", len(s.Verifiers))
 		for i, v := range s.Verifiers {
 			branch := "├──"
@@ -644,6 +684,13 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 			}
 			fmt.Printf("    %s %s (%s), anchor %s…\n", branch, v.Name, v.ID, v.AnchorDigest[:16])
 		}
+	}
+	return tamperedErr(invalid)
+}
+
+func tamperedErr(invalid int) error {
+	if invalid > 0 {
+		return fmt.Errorf("%d attestation blob(s) are not signed by this machine's signing key", invalid)
 	}
 	return nil
 }
@@ -810,6 +857,7 @@ func AttestUnenrol(tpmPath string, sealIndex uint32, debug bool) error {
 	if err := NVRAMDelete(tpmPath, idx, debug); err != nil {
 		return err
 	}
+	forgetAttestState(DefaultAttestStateDir, idx)
 	fmt.Printf("Attestation enrolment removed from slot %d (NV 0x%08X).\n", idx-AttestNVRAMStart, idx)
 	fmt.Println("The phone still lists this machine; remove it there too.")
 	return nil

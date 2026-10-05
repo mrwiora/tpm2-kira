@@ -1,0 +1,19 @@
+[Unit]
+Description=tpm2-kira: check that the attestation blob was not replaced
+Documentation=https://github.com/mrwiora/tpm2-kira/blob/main/docs/PLAN-BLE.md
+# Runs on the booted, unlocked system, where the signing public key and the
+# recorded blob state (on the encrypted root) are available. The initrd
+# cannot do this check; that is why the gate's console verdict is advisory.
+ConditionPathExistsGlob=/dev/tpm*
+After=local-fs.target tpm2.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/tpm2-kira attest check
+# 0 = fine. 6 = replaced or changed: the unit fails, which shows in
+# 'systemctl --failed' and the journal with the explanation printed above.
+# 2 = no signing public key on this system: nothing to check against.
+SuccessExitStatus=2
+
+[Install]
+WantedBy=multi-user.target

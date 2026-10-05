@@ -462,6 +462,15 @@ initramfs ([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.3):
 | `lazy` | Advertise and serve attestation requests. Display the verdict when one arrives. **Boot proceeds regardless**; the passphrase prompt is never blocked. |
 | `enforced` | Advertise and **hold the boot** until a valid receipt with `verdict = ok` arrives. The passphrase prompt does not appear before then. |
 
+**The attestation blob is not a trust anchor for enforced mode.** Its NV
+index refuses in-place writes without the signing key, but the owner
+hierarchy can undefine it and write a blob that lists any phone, and the
+initrd has no key to notice. Lazy mode copes: the console verdict is
+advisory, the phone's screen is authoritative, and on the booted system
+`attest check` detects a replaced or rolled-back blob. Enforced mode must
+take the anchor from the measured image (PLAN-REMOTEATTESTATION.md §10.2), so
+that changing it changes the PCRs.
+
 ### 7.2 How the hold is implemented
 
 **Arch / systemd initramfs.** A new oneshot unit:

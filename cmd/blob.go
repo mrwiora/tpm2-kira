@@ -959,21 +959,22 @@ func VerifyBlobSignature(signedBlob []byte, blob *SealedBlob, pubKey crypto.Publ
 	if signedRegionEnd > len(signedBlob) {
 		return fmt.Errorf("signed region extends beyond blob data")
 	}
-	signedRegion := signedBlob[:signedRegionEnd]
+	return verifySignedRegion(signedBlob[:signedRegionEnd], blob.BlobSignature, pubKey)
+}
 
-	// Compute SHA-256 digest of the signed region
-	digest := sha256.Sum256(signedRegion)
-
-	// Verify based on key type
+// verifySignedRegion checks a SignBlobPayload signature over region. Shared
+// by the sealed blob and the attestation blob, which use the same envelope.
+func verifySignedRegion(region, signature []byte, pubKey crypto.PublicKey) error {
+	digest := sha256.Sum256(region)
 	switch key := pubKey.(type) {
 	case *rsa.PublicKey:
-		err := rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], blob.BlobSignature)
+		err := rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], signature)
 		if err != nil {
 			return fmt.Errorf("RSA blob signature verification failed: %w", err)
 		}
 		return nil
 	case *ecdsa.PublicKey:
-		if !ecdsa.VerifyASN1(key, digest[:], blob.BlobSignature) {
+		if !ecdsa.VerifyASN1(key, digest[:], signature) {
 			return fmt.Errorf("ECDSA blob signature verification failed")
 		}
 		return nil

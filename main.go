@@ -297,7 +297,7 @@ func failAttest(code int, err error) {
 
 func runAttest(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "attest requires a subcommand: enrol, gate, status, quote, verify, unenrol")
+		fmt.Fprintln(os.Stderr, "attest requires a subcommand: enrol, gate, status, check, quote, verify, unenrol")
 		os.Exit(cmd.ExitUsage)
 	}
 	sub, args := args[0], args[1:]
@@ -391,6 +391,18 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 		if !ok {
 			os.Exit(cmd.ExitRejected)
 		}
+	case "check":
+		pubKey := fs.String("pubkey", "", "Signing public key (default: the slot's, else "+cmd.DefaultPublicKeyPath+")")
+		stateDir := fs.String("state-dir", cmd.DefaultAttestStateDir, "Where the accepted blob of each slot is recorded")
+		accept := fs.Bool("accept", false, "Record the current, validly signed blob as accepted")
+		fs.Parse(args)
+		var slot uint32
+		if nvramExplicit(args) {
+			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+		}
+		os.Exit(cmd.AttestCheck(cmd.CheckOptions{
+			TPMPath: *tpm, SealIndex: slot, PubKeyPath: *pubKey, StateDir: *stateDir, Accept: *accept, Debug: *debug,
+		}))
 	case "unenrol", "unenroll":
 		fs.Parse(args)
 		if err := cmd.AttestUnenrol(*tpm, uint32(*nvram), *debug); err != nil {
@@ -480,7 +492,12 @@ ATTEST SUBCOMMANDS:
                   Defaults from /etc/tpm2-kira/attest.conf; uses /dev/tpmrm0
                   when available so it can run beside the TOTP display.
                   --mode lazy --adapter N --timeout DUR --adapter-wait DUR
-  attest status   Show enrolled phones per slot (--json)
+  attest status   Show enrolled phones per slot and whether the blob is signed
+                  by this machine's signing key (--json); exits 1 if not
+  attest check    Verify the attestation blobs on the booted system: signed by
+                  this machine's key, and unchanged since tpm2-kira last wrote
+                  or accepted them (exit 6 if not). Run after unlock by
+                  tpm2-kira-attest-check.service. --pubkey PATH --accept
   attest quote    Produce evidence without a phone (--nonce HEX --out FILE)
   attest verify   Judge evidence offline (--evidence FILE --record FILE --nonce HEX)
   attest unenrol  Remove a slot's attestation enrolment
@@ -491,6 +508,7 @@ ATTEST SUBCOMMANDS:
   'attest quote' and 'attest enrol' exit non-zero on failure:
     0 attested   1 internal error   2 usage   3 no phone / no adapter
     4 rejected (do not type a passphrase before checking)   5 anchor mismatch
+    6 (attest check) attestation blob replaced or changed
 
 AUTHENTICATION:
   tpm2-kira uses TPM2 PolicyOR with two branches for access control:
