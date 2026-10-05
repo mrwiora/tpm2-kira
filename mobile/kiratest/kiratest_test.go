@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matthias/tpm2-kira/mobile/kiracore"
 )
@@ -30,8 +31,15 @@ func drive(t *testing.T, d *DemoMachine, s *kiracore.Session, key **ecdsa.Privat
 				json.Unmarshal([]byte(st.Event(i)), &e)
 				switch e["type"] {
 				case "sas":
-					if e["sas"] != d.LastSAS() {
-						t.Fatalf("SAS differs: %v vs %s", e["sas"], d.LastSAS())
+					// The machine records its code in the console hook, which
+					// can run just after the phone has already read the reveal.
+					shown := d.LastSAS()
+					for i := 0; shown == "" && i < 100; i++ {
+						time.Sleep(10 * time.Millisecond)
+						shown = d.LastSAS()
+					}
+					if e["sas"] != shown {
+						t.Fatalf("SAS differs: %v vs %s", e["sas"], shown)
 					}
 					queue = append(queue, s.ConfirmSAS(true))
 				case "need_anchor_key":
