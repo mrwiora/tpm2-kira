@@ -101,6 +101,11 @@ label a scan result with the machine's name before connecting. Without
 `adv_key` the bytes are indistinguishable from random: an observer learns that
 *a* tpm2-kira machine is booting nearby, not *which*.
 
+`adv_key` and the machine's Noise private key are stored in the attestation
+blob, which anyone who can talk to the TPM can read. Such a reader can
+recognise the machine and imitate its Bluetooth endpoint, but cannot produce
+a quote; this is accepted (SECURITY.md, "what it does not protect against").
+
 Scan responses need active scanning. When the platform does not deliver the
 service data (iOS in the background), the phone MAY connect and try each
 enrolled machine's record in turn; a wrong record fails the IK handshake

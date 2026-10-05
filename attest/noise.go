@@ -264,12 +264,20 @@ type Handshake struct {
 	rng       io.Reader
 
 	send, recv *CipherState
+
+	fixedEphemeral []byte // tests only: the ephemeral private key of a test vector
 }
 
 // NewHandshake prepares a handshake. For PatternIK the initiator must pass
 // the responder's static public key as remoteStatic; in every other case it
 // must be nil. rng may be nil for crypto/rand.
 func NewHandshake(p HandshakePattern, initiator bool, static *NoiseKeypair, remoteStatic []byte, rng io.Reader) (*Handshake, error) {
+	return newHandshake(p, initiator, static, remoteStatic, rng, []byte(NoisePrologue))
+}
+
+// newHandshake takes the prologue as a parameter so the implementation can be
+// checked against the published Noise test vectors (noise_vectors_test.go).
+func newHandshake(p HandshakePattern, initiator bool, static *NoiseKeypair, remoteStatic []byte, rng io.Reader, prologue []byte) (*Handshake, error) {
 	name := p.protocolName()
 	if name == "" {
 		return nil, fmt.Errorf("attest: unknown handshake pattern %d", p)
@@ -282,7 +290,7 @@ func NewHandshake(p HandshakePattern, initiator bool, static *NoiseKeypair, remo
 	}
 	hs := &Handshake{pattern: p, initiator: initiator, s: static, msgs: p.messages(), rng: rng}
 	hs.ss.init(name)
-	hs.ss.mixHash([]byte(NoisePrologue))
+	hs.ss.mixHash(prologue)
 
 	if p == PatternIK {
 		// Pre-message pattern "<- s": the responder's static key is known to
@@ -305,6 +313,16 @@ func NewHandshake(p HandshakePattern, initiator bool, static *NoiseKeypair, remo
 	return hs, nil
 }
 
+// ephemeral returns a fresh ephemeral key, or the one a test vector fixes.
+// (Go's X25519 key generation deliberately reads a varying number of bytes
+// from its random source, so vectors cannot be replayed through rng.)
+func (hs *Handshake) ephemeral() (*NoiseKeypair, error) {
+	if hs.fixedEphemeral != nil {
+		return NoiseKeypairFromPrivate(hs.fixedEphemeral)
+	}
+	return GenerateNoiseKeypair(hs.rng)
+}
+
 // myTurn reports whether this side writes the next handshake message.
 func (hs *Handshake) myTurn() bool { return (hs.idx%2 == 0) == hs.initiator }
 
@@ -323,7 +341,7 @@ func (hs *Handshake) WriteMessage(payload []byte) ([]byte, error) {
 	for _, t := range hs.msgs[hs.idx] {
 		switch t {
 		case tokE:
-			e, err := GenerateNoiseKeypair(hs.rng)
+			e, err := hs.ephemeral()
 			if err != nil {
 				return nil, err
 			}
