@@ -565,8 +565,16 @@ func (h *host) sendL2CAP(l *Link, cid uint16, payload []byte) error {
 			end = len(pdu)
 		}
 		h.mu.Lock()
-		for h.credits == 0 && !h.closed && !l.isGone() {
-			h.cond.Wait()
+		if h.credits == 0 {
+			// A controller that stops returning buffers stalls the session
+			// without an error; say so in the debug log.
+			stalled := time.AfterFunc(2*time.Second, func() {
+				h.logf("controller has returned no ACL buffer for 2 s (%d in flight)", l.inflight())
+			})
+			for h.credits == 0 && !h.closed && !l.isGone() {
+				h.cond.Wait()
+			}
+			stalled.Stop()
 		}
 		if h.closed || l.isGone() {
 			h.mu.Unlock()
@@ -606,6 +614,12 @@ type Link struct {
 	sub    bool
 	gone   bool
 	gonech chan struct{}
+}
+
+func (l *Link) inflight() int {
+	l.h.mu.Lock()
+	defer l.h.mu.Unlock()
+	return l.inFlight
 }
 
 // goneC is closed when the link is lost or closed.
@@ -705,7 +719,24 @@ func (l *Link) drop(why string) {
 
 // attHandler implementation.
 
-func (l *Link) rxWrite(v []byte) { l.conn.Deliver(v) }
+func (l *Link) rxWrite(v []byte) {
+	l.h.logf("rx fragment %s", fragInfo(v))
+	l.conn.Deliver(v)
+}
+
+// fragInfo describes a frame fragment for the debug log: its sequence
+// number, the record length, whether it starts a record, and its size.
+func fragInfo(f []byte) string {
+	if len(f) < frame.HeaderSize {
+		return fmt.Sprintf("of %d bytes (short)", len(f))
+	}
+	start := ""
+	if f[2]&frame.FlagStart != 0 {
+		start = " start"
+	}
+	return fmt.Sprintf("seq %d%s, record %d bytes, %d bytes",
+		binary.LittleEndian.Uint16(f[3:]), start, binary.LittleEndian.Uint16(f), len(f))
+}
 
 func (l *Link) subscribe(on bool) {
 	l.mu.Lock()
@@ -737,6 +768,7 @@ func (l *Link) SendFragment(frag []byte) error {
 	if len(frag) > l.att.maxNotify() {
 		return fmt.Errorf("ble: fragment of %d bytes exceeds notification size %d", len(frag), l.att.maxNotify())
 	}
+	l.h.logf("tx fragment %s", fragInfo(frag))
 	return l.h.sendL2CAP(l, cidATT, l.att.notification(frag))
 }
 
