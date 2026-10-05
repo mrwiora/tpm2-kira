@@ -146,14 +146,15 @@ func (s *swtpmSetup) extend(t *testing.T, pcr int, data string) {
 	}
 }
 
-// extendPCR extends one SHA-256 PCR with a digest made of data's first byte.
+// extendPCR extends one PCR in the SHA-1 and SHA-256 banks, as firmware
+// extends every active bank, with digests made of data's first byte.
 func extendPCR(tpm transport.TPM, pcr int, data string) error {
 	_, err := tpm2.PCRExtend{
 		PCRHandle: tpm2.AuthHandle{Handle: tpm2.TPMHandle(pcr), Auth: tpm2.PasswordAuth(nil)},
-		Digests: tpm2.TPMLDigestValues{Digests: []tpm2.TPMTHA{{
-			HashAlg: tpm2.TPMAlgSHA256,
-			Digest:  bytes.Repeat([]byte(data[:1]), 32),
-		}}},
+		Digests: tpm2.TPMLDigestValues{Digests: []tpm2.TPMTHA{
+			{HashAlg: tpm2.TPMAlgSHA1, Digest: bytes.Repeat([]byte(data[:1]), 20)},
+			{HashAlg: tpm2.TPMAlgSHA256, Digest: bytes.Repeat([]byte(data[:1]), 32)},
+		}},
 	}.Execute(tpm)
 	return err
 }

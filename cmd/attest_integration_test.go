@@ -22,7 +22,19 @@ import (
 // ActivateCredential) and attestation (real quotes over more than 8 PCRs)
 // against the verifier, and stores the blob through PolicySigned NV writes.
 func TestAttestationOnSWTPM(t *testing.T) {
+	runAttestationOnSWTPM(t, newSWTPMSetup(t))
+}
+
+// TestAttestationOnSWTPMSHA1 runs the same exchange on the SHA-1 PCR bank,
+// as old firmware TPMs (e.g. Intel PTT 10, ThinkPad T450s) offer only that.
+func TestAttestationOnSWTPMSHA1(t *testing.T) {
 	s := newSWTPMSetup(t)
+	s.blob.PCRAlg = attest.AlgSHA1
+	s.blob.PCRSelection = []uint8{0, 2, 4, 7}
+	runAttestationOnSWTPM(t, s)
+}
+
+func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	sel, _ := s.blob.Selection()
 	phone, _ := attesttest.NewPhone()
 
