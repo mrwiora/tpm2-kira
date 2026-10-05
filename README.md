@@ -356,6 +356,20 @@ sudo tpm2-kira attest status
 sudo systemctl enable tpm2-kira-attest-check.service
 ```
 
+**Choose PCRs that cover the initrd.** The initrd is where a passphrase
+logger would sit; if no quoted PCR measures it, a modified initrd attests as
+unchanged. `attest enrol` reads this boot's event log, says which PCRs
+measured the initrd, and asks before enrolling a selection that misses them:
+
+| Boot path | Initrd measured into | For example |
+|---|---|---|
+| GRUB, separate initrd | PCR 9 (the file) | `--pcrs 0,2,4,7,9` |
+| systemd-boot / EFI stub, separate initrd (kernel ≥ 5.17) | PCR 9 (tagged "Linux initrd") | `--pcrs 0,2,4,7,9` |
+| Unified kernel image (UKI) | PCR 11 (`.initrd` section) and PCR 4 (the whole image) | the default `0,2,4,7` |
+
+PCR 9 also changes with every kernel or initrd update; the phone then shows
+*changed* with the diff, and you approve the new state once.
+
 The attestation blob lives in TPM NV storage, readable and — through the owner
 hierarchy — replaceable by anyone who can talk to the TPM, including another
 OS booted on this machine. The initrd cannot authenticate it, so the verdict on

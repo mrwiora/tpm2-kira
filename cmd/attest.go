@@ -246,17 +246,25 @@ func AttestEnrol(o EnrolOptions) error {
 	fmt.Println("      Use --adapter N to enrol over a second adapter instead.")
 	fmt.Println()
 
-	p, err := ble.Open(ble.Config{Adapter: o.Adapter, Logf: debugLogf(o.Debug)})
-	if err != nil {
-		return err
-	}
-	defer p.Close()
-
 	in := o.In
 	if in == nil {
 		in = os.Stdin
 	}
 	console := bufio.NewReader(in)
+	ok, err := confirmInitrdCoverage(console, sel, DefaultEventlogPath)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("enrolment cancelled: choose PCRs that cover the initrd with --pcrs")
+	}
+	fmt.Println()
+
+	p, err := ble.Open(ble.Config{Adapter: o.Adapter, Logf: debugLogf(o.Debug)})
+	if err != nil {
+		return err
+	}
+	defer p.Close()
 	be := &tpmBackend{
 		tpm:       tpmDev,
 		blob:      blob,
