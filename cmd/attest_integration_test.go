@@ -4,102 +4,13 @@ package cmd
 
 import (
 	"bytes"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"encoding/hex"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/google/go-tpm/tpm2"
-	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/matthias/tpm2-kira/attest"
 	"github.com/matthias/tpm2-kira/attest/attesttest"
 )
-
-// startSWTPM runs a software TPM and returns its socket path.
-func startSWTPM(t *testing.T) string {
-	t.Helper()
-	if _, err := exec.LookPath("swtpm"); err != nil {
-		t.Skip("swtpm not installed")
-	}
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "swtpm.sock")
-	cmd := exec.Command("swtpm", "socket", "--tpm2",
-		"--tpmstate", "dir="+dir,
-		"--server", "type=unixio,path="+sock,
-		"--ctrl", "type=unixio,path="+sock+".ctrl",
-		"--flags", "not-need-init,startup-clear")
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
-	for i := 0; i < 50; i++ {
-		if _, err := os.Stat(sock); err == nil {
-			time.Sleep(100 * time.Millisecond)
-			return sock
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatal("swtpm did not start")
-	return ""
-}
-
-type swtpmSetup struct {
-	tpm  transport.TPMCloser
-	blob *AttestBlob
-	be   *tpmBackend
-}
-
-func newSWTPMSetup(t *testing.T) *swtpmSetup {
-	sock := startSWTPM(t)
-	tpmDev, err := transport.OpenTPM(sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { tpmDev.Close() })
-
-	pub, priv, name, err := CreateAK(tpmDev)
-	if err != nil {
-		t.Fatalf("CreateAK: %v", err)
-	}
-	if _, err := attest.ParseAKPublic(pub, name); err != nil {
-		t.Fatalf("TPM-created AK fails the verifier's own checks: %v", err)
-	}
-	noise, _ := attest.GenerateNoiseKeypair(nil)
-	sel, _ := attest.NewPCRSelection(attest.AlgSHA256, []int{0, 2, 4, 7, 8, 9, 10, 11, 14})
-	blob := &AttestBlob{
-		AppVersion:   "test",
-		DeviceID:     randBytes(16),
-		FriendlyName: "swtpm-box",
-		AKPublic:     pub,
-		AKPrivate:    priv,
-		AKName:       name,
-		NoisePrivate: noise.Private,
-		AdvKey:       randBytes(32),
-		PCRAlg:       sel.Alg,
-		PCRSelection: sel.Indices,
-	}
-	be := &tpmBackend{tpm: tpmDev, blob: blob, sealIndex: NVRAMSlotStart}
-	return &swtpmSetup{tpm: tpmDev, blob: blob, be: be}
-}
-
-func (s *swtpmSetup) extend(t *testing.T, pcr int, data string) {
-	_, err := tpm2.PCRExtend{
-		PCRHandle: tpm2.AuthHandle{Handle: tpm2.TPMHandle(pcr), Auth: tpm2.PasswordAuth(nil)},
-		Digests: tpm2.TPMLDigestValues{Digests: []tpm2.TPMTHA{{
-			HashAlg: tpm2.TPMAlgSHA256,
-			Digest:  bytes.Repeat([]byte(data[:1]), 32),
-		}}},
-	}.Execute(s.tpm)
-	if err != nil {
-		t.Fatal(err)
-	}
-}
 
 // TestAttestationOnSWTPM runs enrolment (real EK, PolicySecret session,
 // ActivateCredential) and attestation (real quotes over more than 8 PCRs)
@@ -225,12 +136,4 @@ func TestOfflineQuoteVerifies(t *testing.T) {
 	if v := attest.Verify(ev, pol, pin, attest.OfflineQualifyingData(randBytes(32)), time.Now()); v.State != attest.StateFailed {
 		t.Fatal("quote verified against the wrong nonce")
 	}
-}
-
-func testSigner(t *testing.T) *ecdsa.PrivateKey {
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return k
 }
