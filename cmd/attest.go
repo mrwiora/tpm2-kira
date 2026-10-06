@@ -620,6 +620,13 @@ func gateFail(format string, args ...any) {
 func gateRecordCheck(tpmDev transport.TPM, idx uint32, signerPath string) (bool, int) {
 	if signerPath == "" {
 		signerPath = DefaultAttestSignerPath
+		// Run by hand on the unlocked system, there is no image around
+		// the gate, but the key the image would carry is right here.
+		if _, err := os.Stat(signerPath); os.IsNotExist(err) {
+			if _, err := os.Stat(DefaultPublicKeyPath); err == nil {
+				signerPath = DefaultPublicKeyPath
+			}
+		}
 	}
 	raw, err := ReadFromNVRAM(tpmDev, idx)
 	if err != nil {
@@ -627,7 +634,7 @@ func gateRecordCheck(tpmDev transport.TPM, idx uint32, signerPath string) (bool,
 		return false, ExitInternal
 	}
 	if _, err := os.Stat(signerPath); os.IsNotExist(err) {
-		fmt.Println("tpm2-kira: this initramfs carries no signing public key to check the attestation record; rebuild it")
+		fmt.Printf("tpm2-kira: no signing public key at %s to check the attestation record (in an initramfs: rebuild it)\n", signerPath)
 		return false, 0
 	}
 	pub, _, err := LoadSigningPublicKeyFromPEM(signerPath)

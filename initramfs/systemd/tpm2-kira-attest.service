@@ -24,8 +24,11 @@ Before=initrd-switch-root.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/tpm2-kira attest gate --mode lazy
-StandardOutput=tty
-StandardError=tty
+# To the console, where the user is, and to the journal, where the lines
+# survive the boot: 'journalctl -b -u tpm2-kira-attest.service' on the
+# unlocked system says what the gate did, or why it did nothing.
+StandardOutput=journal+console
+StandardError=journal+console
 # No phone in range (3) is normal in lazy mode. A rejected boot (4) or an
 # anchor mismatch (5) is left to fail the unit, so the console shows a red
 # FAILED line next to the warning; nothing requires this unit, so the boot

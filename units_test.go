@@ -64,6 +64,11 @@ func TestGateUnitIsConfined(t *testing.T) {
 			t.Errorf("gate unit lacks %q", want)
 		}
 	}
+	// What the gate did must be readable after the boot, not only on a
+	// screen that has since been cleared.
+	if !has(lines, "StandardOutput=journal+console") || !has(lines, "StandardError=journal+console") {
+		t.Error("the gate's output does not reach the journal")
+	}
 	// What the gate cannot work without.
 	for _, want := range []string{"DeviceAllow=/dev/tpmrm0 rw", "DeviceAllow=/dev/rfkill rw", "DeviceAllow=/dev/console rw"} {
 		if !has(lines, want) {
