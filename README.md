@@ -301,7 +301,11 @@ runs, and no code can be computed until the next boot.
 A slot that is enrolled with a phone (see *Remote attestation*) is verified
 by the phone instead: the Bluetooth gate runs next to the display from the
 start, and the phone's verdict continues to the passphrase like Enter does.
-The code stays on the screen for when the phone is not at hand. The phone
+The code stays on the screen for when the phone is not at hand. While the
+phone checks, the screen also shows a second code, eight letters and digits,
+that the phone made up and sealed to a key in this machine's TPM; the TPM
+gives it up only in a boot state your signing key approved. The phone shows
+the same code and asks you to compare the two before it signs anything. The phone
 check lasts as long as the code screen: when that ends (Enter, the phone's
 verdict, or the end of the hold), the gate ends too, and nothing listens to
 the radio at the passphrase prompt. A phone that is in the middle of its
@@ -483,7 +487,10 @@ slot any more: a companion index whose slot is gone.
 Instead of comparing six digits by eye, a phone app can verify the boot: the
 machine's TPM signs a quote over its PCRs, the phone checks it against what it
 recorded at enrolment and shows **match**, **changed** (with an explanation of
-which part of the boot chain moved) or **failed**. After a kernel update the
+which part of the boot chain moved) or **failed**, together with a code that
+the machine's screen must show (see *The measure point*) and whether the
+machine's TPM released its *boot key* for this boot state. Nothing is signed
+until you have compared the code and pressed the button. After a kernel update the
 machine is not silent as with the OTP: it attests its new state and you approve
 the change on the phone. The OTP path stays and remains the fallback.
 

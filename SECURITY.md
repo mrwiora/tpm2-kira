@@ -158,6 +158,18 @@ On initramfs-tools (Debian) the gate is started by a script as one process
 with the TPM, unconfined, and runs next to the display: there the window
 above is open to it. Prefer a systemd-based initramfs where the gate matters.
 
+**The code on both screens.** At every check the phone seals an
+eight-character code to a key in the machine's TPM that is usable only in a
+boot state the signing key approved, the same policy as the TOTP key
+(docs/SECURITY-BACKGROUND.md §3.4). The machine shows the code it recovered,
+the phone shows the code it made, and you compare them before the phone signs.
+A look-alike machine that forwards the Bluetooth session to the real one
+cannot show the code; a boot the signing key has not approved gets no code,
+and the phone says so. The code does not replace the phone's own comparison
+of the registers: a changed boot that the signing key approved is still shown
+as changed, for you to decide. What the key trusts is the signing key's
+approval, so keep that key where root cannot use it (a YubiKey).
+
 The phone accepts a register that differs from its profile by exactly one
 `os-separator` extend (PCRs 0-7, 9, 12-14), because the gate asks before
 systemd's OS separator, while enrolment and a gate run by hand see the
