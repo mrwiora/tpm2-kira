@@ -317,7 +317,7 @@ sequenceDiagram
     SD->>SD: enter-initrd into PCR 11
     Note over SD,KIRA: not in the firmware log — systemd logs these separately
 
-    KIRA-->>KIRA: MEASURE POINT: policy + TPM2_HMAC per code for the next 30 min; READY=1
+    KIRA-->>KIRA: MEASURE POINT: policy + TPM2_HMAC for three codes (90 s); READY=1
 
     SD->>SD: os-separator into PCR 0-7, 9, 12, 13, 14
     Note over SD: one-way: the key's policy is unsatisfiable until the next boot
@@ -474,15 +474,16 @@ edges the measure point could land on either side of the extends, which would
 make an identical machine pass or fail across identical boots.
 
 Running *before* the separator is what makes the codes boot-time codes.
-`tpm2-kira run` asks the TPM for the codes of the next 30 minutes (the TPM
-resets a policy session after each use, so the policy is re-run before each
-of the 60 `TPM2_HMAC` calls, with the approval's verification ticket reused:
-four cheap commands per code), sends `READY=1`, and shows them for the rest
-of the prompt; the separator runs after READY and extends
+`tpm2-kira run` asks the TPM for three codes, the current window and the next
+two (the TPM resets a policy session after each use, so the policy is re-run
+before each `TPM2_HMAC`, with the approval's verification ticket reused: four
+cheap commands per code), sends `READY=1`, and shows them for the 90 seconds
+they cover; the separator runs after READY and extends
 PCRs 0–7, 9, 12–14. Extends are one-way, so from then on no process in the
 booted system can satisfy the key's policy: the key never left the TPM, only
-codes good for 30 seconds each were ever in memory, and a runtime compromise
-cannot turn into a forged code at the next boot. `tpm2-kira cap` at
+three codes good for 30 seconds each were ever in memory, so even the display
+process is worthless to an attacker after a minute and a half, and a runtime
+compromise cannot turn into a forged code at the next boot. `tpm2-kira cap` at
 `initrd-switch-root` read-locks the generation index on top of that, which
 also covers blobs whose policy holds after the separator. Earlier versions
 ran after the separator and computed each code when it was due, which left
