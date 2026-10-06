@@ -169,8 +169,11 @@ answer until they are; enabling them first avoids a stall.
 
 ### 3.4 Writes and notifications
 
-- Each fragment is written to RX as **one** ATT Write Without Response (or
-  Write Request), in order, at most `maxFragment` bytes.
+- Each fragment is written to RX as **one** ATT Write Request (preferred)
+  or Write Without Response, in order, at most `maxFragment` bytes. Write
+  Requests pace the phone to the machine's controller: a burst of
+  unacknowledged writes made an Intel 7265 drop the link (supervision
+  timeout) on the first multi-fragment record from the phone.
 - Each TX notification value is one fragment; pass it unchanged to
   `session.OnNotification`.
 - The phone MUST preserve order and MUST NOT drop or merge writes. On iOS,
