@@ -795,6 +795,12 @@ func runGateRadio(host gateHost, o GateOptions, step func(string, ...any), ended
 	res, err := waitForReceipt(p, adv, o.Timeout, func(conn *frame.Conn) (*attest.AttestResult, error) {
 		host.Report(GateSession)
 		res, err := attest.ServeAttestation(conn, id, host, debugProgress(o.Debug))
+		if svc, ok := host.(*gateService); ok {
+			// No code screen next to a gate run by hand: say it here.
+			if st, _ := svc.Status(); st.Code != "" {
+				fmt.Printf("tpm2-kira: code for your phone: %s (the phone must show the same)\n", st.Code)
+			}
+		}
 		if res == nil || res.Receipt == nil {
 			host.Report(GateWaiting) // the gate advertises again
 		}

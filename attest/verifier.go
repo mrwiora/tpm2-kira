@@ -20,7 +20,7 @@ import (
 // pixels; every decision is made here.
 
 // MachineRecordVersion is the version of the stored machine record format.
-const MachineRecordVersion = 1
+const MachineRecordVersion = 2
 
 // MachineRecord is everything a verifier keeps about one enrolled machine.
 // The phone stores it (encrypted at rest by the platform) as opaque JSON
@@ -34,6 +34,9 @@ type MachineRecord struct {
 	AKPub           HexStr `json:"ak_pub"`
 	AKName          HexStr `json:"ak_name"`
 	MachineNoisePub HexStr `json:"machine_noise_pub"`
+	// BootKeyPub is the machine's boot key (bootkey.go), an uncompressed
+	// P-256 point: every attestation seals a code to it.
+	BootKeyPub      HexStr `json:"boot_key_pub"`
 	AdvKey          HexStr `json:"adv_key"`
 	AnchorPub       HexStr `json:"anchor_pub"`
 	VerifierID      string `json:"verifier_id"`
@@ -66,7 +69,8 @@ func (r *MachineRecord) Validate() error {
 	if r.Version != MachineRecordVersion {
 		return fmt.Errorf("attest: machine record version %d, expected %d", r.Version, MachineRecordVersion)
 	}
-	if len(r.DeviceID) != DeviceIDSize || len(r.MachineNoisePub) != NoiseKeySize || len(r.AdvKey) != 32 {
+	if len(r.DeviceID) != DeviceIDSize || len(r.MachineNoisePub) != NoiseKeySize || len(r.AdvKey) != 32 ||
+		len(r.BootKeyPub) != bootPointSize {
 		return errors.New("attest: machine record is incomplete")
 	}
 	if _, err := ParseAKPublic(r.AKPub, r.AKName); err != nil {
@@ -148,6 +152,10 @@ const (
 	DecisionApproveOnce     Decision = 1
 	DecisionApproveRemember Decision = 2
 	DecisionReject          Decision = 3
+	// DecisionContinue confirms a matching boot: the person has seen the
+	// result (and compared the code with the machine's screen) and wants
+	// the receipt signed.
+	DecisionContinue Decision = 4
 )
 
 // Output is the result of one input to the verifier.
@@ -221,11 +229,14 @@ type Verifier struct {
 	evidence *Evidence
 	verdict  *Verdict
 	qd       []byte
-	receipt  *Receipt
-	remember bool
-	evlog    []byte
-	evlogSum []byte
-	evlogTot uint32
+
+	bootPoint  []byte      // enrolment: the checked boot key, to be pinned
+	bootSecret *BootSecret // attestation: this session's code and proof key
+	receipt    *Receipt
+	remember   bool
+	evlog      []byte
+	evlogSum   []byte
+	evlogTot   uint32
 }
 
 func (c *VerifierConfig) now() time.Time {
@@ -528,6 +539,7 @@ func (v *Verifier) handleEnrol(out *Output, d *Decoder) (*Output, error) {
 			AKPub:           v.offer.AKPub,
 			AKName:          v.offer.AKName,
 			MachineNoisePub: v.sess.RemoteStatic(),
+			BootKeyPub:      v.bootPoint,
 			AdvKey:          v.offer.AdvKey,
 			AnchorPub:       v.anchor,
 			VerifierID:      v.cfg.VerifierID,
@@ -579,7 +591,14 @@ func (v *Verifier) checkOffer(o *EnrolOffer) error {
 	// The EK certificate is judged below (VerifyEKCertificate) and only ever
 	// downgrades the result to "not verified": a certificate Go cannot parse
 	// (e.g. the RSA-OAEP key identifier) must not make enrolment impossible.
-	if _, err := ParseAKPublic(o.AKPub, o.AKName); err != nil {
+	akPub, err := ParseAKPublic(o.AKPub, o.AKName)
+	if err != nil {
+		return err
+	}
+	// The boot key must live in the same TPM as the attestation key, under
+	// a policy and nothing else.
+	if v.bootPoint, err = CheckBootKey(akPub, o.BootKeyPub, o.BootKeyCertify, o.BootKeyCertifySig,
+		EnrolQualifyingData(v.sess.ChannelBinding())); err != nil {
 		return err
 	}
 	pol := &Policy{
@@ -755,7 +774,21 @@ func (v *Verifier) handleAttest(out *Output, d *Decoder) (*Output, error) {
 		if _, err := io.ReadFull(v.cfg.rng(), v.nonceV); err != nil {
 			return v.fail(out, ErrCodeProtocol, err.Error())
 		}
-		b, err := (&Request{NonceV: v.nonceV, Selection: sel, PolicyID: v.record.Policy.ID}).Encode()
+		// The quote and the boot challenge are bound to the same data.
+		qd, err := QualifyingData(h.NonceA, v.nonceV, v.sess.ChannelBinding(), sel)
+		if err != nil {
+			return v.fail(out, ErrCodeProtocol, err.Error())
+		}
+		v.qd = qd
+		challenge, secret, err := NewBootChallenge(v.cfg.rng(), v.record.BootKeyPub, qd)
+		if err != nil {
+			return v.fail(out, ErrCodeProtocol, err.Error())
+		}
+		v.bootSecret = secret
+		b, err := (&Request{
+			NonceV: v.nonceV, Selection: sel, PolicyID: v.record.Policy.ID,
+			EphemeralPub: challenge.EphemeralPub, Sealed: challenge.Sealed,
+		}).Encode()
 		if err := v.send(out, b, err); err != nil {
 			return v.fail(out, ErrCodeProtocol, err.Error())
 		}
@@ -769,22 +802,15 @@ func (v *Verifier) handleAttest(out *Output, d *Decoder) (*Output, error) {
 			return v.fail(out, ErrCodeProtocol, err.Error())
 		}
 		v.evidence = ev
-		qd, err := QualifyingData(v.hello.NonceA, v.nonceV, v.sess.ChannelBinding(), v.sel)
-		if err != nil {
-			return v.fail(out, ErrCodeProtocol, err.Error())
-		}
-		v.qd = qd
-		v.verdict = Verify(ev, &v.record.Policy, v.record.pinned(), qd, v.cfg.now())
+		v.verdict = Verify(ev, &v.record.Policy, v.record.pinned(), v.qd, v.cfg.now())
+		v.judgeBootKey(ev)
 		v.evlogSum = ev.EventlogSHA256
 		v.evlogTot = ev.EventlogSize
-		ve := Event{Type: EvVerdict, Verdict: v.verdict, EventlogAvail: v.evlogSum != nil}
-		if v.verdict.State == StateMatch {
-			out.Events = append(out.Events, ve)
-			return v.prepareReceipt(out, VerdictOK)
-		}
-		ve.NeedsDecision = true
+		// Nothing is signed before the person has seen the result: also a
+		// matching boot waits for their go-ahead, after they compared the
+		// code with the machine's screen.
 		v.state = vsWaitDecision
-		out.Events = append(out.Events, ve)
+		out.Events = append(out.Events, Event{Type: EvVerdict, Verdict: v.verdict, EventlogAvail: v.evlogSum != nil, NeedsDecision: true})
 		return out, nil
 
 	case vsWaitDecision, vsWaitReceiptSig, vsWaitReceiptAck:
@@ -865,6 +891,33 @@ func (v *Verifier) Eventlog() []byte {
 // Decide records the human's answer to a verdict that needs one. Approving
 // a verdict in which a hard check failed additionally requires confirmName to
 // equal the machine's friendly name: the app makes the user type it.
+// judgeBootKey reads the machine's answer to the boot challenge into the
+// verdict. A proof that does not verify is a hard failure: the machine
+// claimed what it could not show. A refusal is not: it says that this boot
+// state is not one the machine's signing key approved, which the quote's
+// diff then explains.
+func (v *Verifier) judgeBootKey(ev *Evidence) {
+	vd := v.verdict
+	switch ev.BootKeyState {
+	case BootKeyProved:
+		if v.bootSecret != nil && v.bootSecret.Check(ev.BootProof) {
+			vd.BootKey = BootKeyResultProved
+			vd.Code = FormatBootCode(v.bootSecret.Code)
+			return
+		}
+		vd.BootKey = BootKeyResultInvalid
+		vd.hard(ReasonBootProofInvalid, "the machine's proof for the boot key does not verify")
+		vd.OK = false
+		vd.finish()
+	case BootKeyRefused:
+		vd.BootKey = BootKeyResultRefused
+	case BootKeyFailed:
+		vd.BootKey = BootKeyResultFailed
+	default:
+		vd.BootKey = BootKeyResultUnused
+	}
+}
+
 func (v *Verifier) Decide(d Decision, confirmName string) (*Output, error) {
 	out := &Output{}
 	if v.state != vsWaitDecision {
@@ -873,6 +926,11 @@ func (v *Verifier) Decide(d Decision, confirmName string) (*Output, error) {
 	switch d {
 	case DecisionReject:
 		return v.prepareReceipt(out, VerdictReject)
+	case DecisionContinue:
+		if v.verdict.State != StateMatch {
+			return out, errors.New("attest: only a matching boot can simply be continued; this one needs an approval")
+		}
+		return v.prepareReceipt(out, VerdictOK)
 	case DecisionApproveOnce, DecisionApproveRemember:
 		if v.verdict.State == StateFailed && confirmName != v.record.FriendlyName {
 			return out, errors.New("attest: approving a failed attestation requires typing the machine's name")

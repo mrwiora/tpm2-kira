@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"sync"
 
 	"github.com/google/go-tpm/tpm2"
 
@@ -38,6 +39,27 @@ type SoftTPM struct {
 
 	// TamperQuote, if set, edits each quote before it is signed.
 	TamperQuote func(att *tpm2.TPMSAttest)
+
+	// The boot key (attest/bootkey.go) and how the double treats it.
+	BootPriv   *ecdh.PrivateKey
+	BootPub    []byte // marshalled TPMT_PUBLIC
+	BootRefuse bool   // as a TPM whose policy does not hold for this boot state
+	BootForge  bool   // claim a proof without having the key
+	BootCode   string // the code of the last challenge, as the machine would show it
+	bootMu     sync.Mutex
+}
+
+// ShownCode is BootCode, for a reader in another goroutine than the session.
+func (s *SoftTPM) ShownCode() string {
+	s.bootMu.Lock()
+	defer s.bootMu.Unlock()
+	return s.BootCode
+}
+
+func (s *SoftTPM) setBootCode(code string) {
+	s.bootMu.Lock()
+	s.BootCode = code
+	s.bootMu.Unlock()
 }
 
 // NewSoftTPM creates a TPM double with fresh keys and distinct PCR values.
@@ -80,7 +102,72 @@ func NewSoftTPM() (*SoftTPM, error) {
 	for i := uint8(0); i < attest.MaxPCRIndex; i++ {
 		s.PCRs[i] = bytes.Repeat([]byte{i}, 32)
 	}
+	if s.BootPriv, err = ecdh.P256().GenerateKey(rand.Reader); err != nil {
+		return nil, err
+	}
+	point := s.BootPriv.PublicKey().Bytes()
+	bootT := attest.BootKeyTemplate(bytes.Repeat([]byte{0xB0}, 32))
+	bootT.Unique = tpm2.NewTPMUPublicID(tpm2.TPMAlgECC, &tpm2.TPMSECCPoint{
+		X: tpm2.TPM2BECCParameter{Buffer: point[1:33]},
+		Y: tpm2.TPM2BECCParameter{Buffer: point[33:65]},
+	})
+	s.BootPub = tpm2.Marshal(bootT)
 	return s, nil
+}
+
+// ProveBootKey implements attest.AttesterBackend.
+func (s *SoftTPM) ProveBootKey(ch *attest.BootChallenge, context []byte) ([]byte, uint8) {
+	s.setBootCode("")
+	if s.BootRefuse {
+		return nil, attest.BootKeyRefused
+	}
+	if s.BootForge {
+		return bytes.Repeat([]byte{0x5A}, 32), attest.BootKeyProved
+	}
+	eph, err := ecdh.P256().NewPublicKey(ch.EphemeralPub)
+	if err != nil {
+		return nil, attest.BootKeyFailed
+	}
+	z, err := s.BootPriv.ECDH(eph)
+	if err != nil {
+		return nil, attest.BootKeyFailed
+	}
+	code, proof, err := attest.OpenBootChallenge(z, ch.EphemeralPub, s.BootPriv.PublicKey().Bytes(), context, ch.Sealed)
+	if err != nil {
+		return nil, attest.BootKeyFailed
+	}
+	s.setBootCode(code)
+	return proof, attest.BootKeyProved
+}
+
+// BootKey implements attest.EnrolBackend: the public area and a
+// TPM2_Certify statement by the AK, as a TPM would produce it.
+func (s *SoftTPM) BootKey(qd []byte) ([]byte, []byte, []byte, error) {
+	pub, err := tpm2.Unmarshal[tpm2.TPMTPublic](s.BootPub)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	name, err := tpm2.ObjectName(pub)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	info := tpm2.Marshal(tpm2.TPMSAttest{
+		Magic:           tpm2.TPMGeneratedValue,
+		Type:            tpm2.TPMSTAttestCertify,
+		QualifiedSigner: tpm2.TPM2BName{Buffer: s.AKName},
+		ExtraData:       tpm2.TPM2BData{Buffer: qd},
+		ClockInfo:       tpm2.TPMSClockInfo{Clock: 1234, ResetCount: s.ResetCount, Safe: tpm2.TPMIYesNo(s.Safe)},
+		FirmwareVersion: s.Firmware,
+		Attested: tpm2.NewTPMUAttest(tpm2.TPMSTAttestCertify, &tpm2.TPMSCertifyInfo{
+			Name:          *name,
+			QualifiedName: *name,
+		}),
+	})
+	sig, err := s.sign(info)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return s.BootPub, info, sig, nil
 }
 
 // Extend extends a PCR with the SHA-256 of data.

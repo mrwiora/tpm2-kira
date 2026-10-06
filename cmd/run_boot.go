@@ -495,7 +495,15 @@ func printGateEvent(prev, cur GateStatus) {
 			fmt.Printf("   Slot #%d can be verified with your phone now: open the Kira app.\n", cur.Slot)
 		}
 	case GateSession:
-		fmt.Println("   A phone is connected: answer there. The boot waits for it.")
+		if cur.Code != "" {
+			// Only this machine's TPM, in an approved boot state, could
+			// recover what the phone sealed.
+			fmt.Printf("\n   Code for your phone:   \033[1m%s\033[0m\n", cur.Code)
+			fmt.Println("   The phone must show the same code. If it does, continue there; if not, reject there.")
+			fmt.Println()
+		} else if prev.State != GateSession {
+			fmt.Println("   A phone is connected: answer there. The boot waits for it.")
+		}
 	case GateAttested:
 		fmt.Printf("   \033[0;32mSlot #%d verified with %s.\033[0m Continuing to the passphrase.\n", cur.Slot, phoneLabel(cur.Phone))
 	case GateRejected, GateRefused:

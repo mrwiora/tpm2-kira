@@ -1,6 +1,6 @@
 # tpm2-kira BLE Attestation Protocol — Interface Definition
 
-> **Protocol version 1, schema 1.** Status: implemented on the machine side
+> **Protocol version 1, schema 2.** Status: implemented on the machine side
 > (`attest/`, `transport/frame/`, `transport/ble/`) and in the phone core
 > (`mobile/kiracore/`). This document is the contract between a tpm2-kira
 > machine and a phone app. The key words MUST, MUST NOT, SHOULD and MAY are
@@ -355,7 +355,7 @@ Signatures never cover this encoding; they cover the canonical strings of §9.
 
 | Tag | Name | Type | | Notes |
 |---|---|---|---|---|
-| 1 | schema | u16 | R | 1 |
+| 1 | schema | u16 | R | 2 |
 | 2 | device_id | bytes[16] exact | R | assigned at enrolment |
 | 3 | nonce_a | bytes[32] exact | R | attester's nonce, fresh per session |
 | 4 | capabilities | u32 | O | §7.4 |
@@ -370,6 +370,8 @@ Signatures never cover this encoding; they cover the canonical strings of §9.
 | 3 | pcr_selection | bytes ≤24 | R | PCR indices, strictly ascending, each < 24 |
 | 4 | want_eventlog | bool | O | send the event log right after Evidence |
 | 5 | policy_id | string ≤64 | O | |
+| 6 | boot_ephemeral_pub | bytes[65] exact | R | the phone's one-time P-256 key, uncompressed (§7.6) |
+| 7 | boot_sealed | bytes[24] exact | R | the code sealed to the machine's boot key (§7.6) |
 
 #### 7.3.3 Evidence (0x03)
 
@@ -386,6 +388,8 @@ Signatures never cover this encoding; they cover the canonical strings of §9.
 | 9 | boot_context | BootContext | O | informational, not TPM-signed |
 | 10 | app_version | string ≤64 | O | |
 | 11 | eventlog_size | u32 | O | bytes |
+| 12 | boot_key_state | u8 | O | 0 not tried · 1 proved · 2 refused by the TPM · 3 could not try (§7.6) |
+| 13 | boot_proof | bytes[32] exact | O | present with state 1 |
 
 BootContext (nested): 1 `blob_version` u32 · 2 `nvram_index` u32 ·
 3 `measure_point` string ≤512 · 4 `secureboot_state` u8 (0 unknown, 1 enabled,
@@ -475,6 +479,9 @@ nonce_m). SASConfirm has no fields.
 | 16 | adv_key | bytes[32] exact | R | §2.2 |
 | 17 | ek_cert_chain | bytes ≤16384 | O | the TPM's intermediates for `ek_cert`, concatenated DER (Intel PTT: NV `0x01C00100`) |
 | 18 | measure_point_values | PCRValueList | O | the PCR values expected at the boot check; same PCRs as `pcr_values` |
+| 19 | boot_key_pub | bytes ≤1024 | R | TPMT_PUBLIC of the boot key (§7.6) |
+| 20 | boot_key_certify | bytes ≤1024 | R | TPMS_ATTEST of `TPM2_Certify(boot key)` by the AK, qualifying data as for `quoted` |
+| 21 | boot_key_certify_sig | bytes ≤600 | R | TPMT_SIGNATURE over tag 20 |
 
 **Baseline.** `pcr_values` is what the running system's registers hold at
 enrolment, proven by `quoted`. The gate, however, quotes inside the initramfs,
@@ -573,6 +580,50 @@ Bye has no fields. Error: 1 `code` u16 R · 2 `message` string ≤256 O.
 
 A reject needs no proof: believing a false "no" costs a check, never trust.
 Rejects are therefore sent without an unlock prompt.
+
+**No verdict is sent before the person has answered.** Also a boot that
+matches a profile waits for a decision (`4` continue): the app shows the
+result and the code of §7.6 first.
+
+### 7.6 The boot key and its code
+
+The machine holds a second TPM key besides the AK, the *boot key*: ECC P-256,
+key agreement only, created in the TPM, not duplicable, `userWithAuth` clear,
+under the policy that also guards the machine's TOTP code. The TPM uses it
+only in a boot state the machine's signing key has approved.
+
+*Enrolment.* The machine sends the key's public area and a `TPM2_Certify`
+statement by the AK (EnrolOffer tags 19-21). The phone MUST check that the
+statement verifies under the AK, is a certify statement with magic
+`TPM_GENERATED`, carries the session's enrolment qualifying data, and names
+exactly the public area sent; and that the public area is an ECC P-256 key
+with `fixedTPM`, `fixedParent`, `sensitiveDataOrigin` and `decrypt` set,
+`sign`, `restricted` and `userWithAuth` clear, and a 32-byte policy digest.
+It pins the public point (machine record field `boot_key_pub`).
+
+*Attestation.* With `qd` the session's qualifying data (§8), the phone
+
+1. generates a P-256 key pair `(e, E)` and computes `Z = ECDH(e, boot_key_pub)`
+   (the x coordinate, 32 bytes);
+2. derives 64 bytes with HKDF-SHA256(secret `Z`, salt `qd`, info
+   `"tpm2-kira/boot-key/v1" ‖ E ‖ boot_key_pub`), both points uncompressed:
+   bytes 0-31 are `k_enc`, 32-63 `k_mac`;
+3. draws a code of 8 characters from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`;
+4. sends `E` and `AES-256-GCM(k_enc, nonce = 0^12, plaintext = code, aad = qd)`
+   in the Request (tags 6 and 7).
+
+The machine computes `Z` with `TPM2_ECDH_ZGen` under the boot key's policy.
+If the TPM lets it, the machine derives the keys, opens the code, shows it to
+the person at its console, and answers with `boot_key_state` 1 and
+`boot_proof = HMAC-SHA256(k_mac, "tpm2-kira/boot-proof/v1" ‖ qd)`. If the TPM
+refuses, it answers with state 2 and no proof. The code is never sent back.
+
+The phone verifies the proof and reports the outcome in the verdict:
+`boot_key` is `proved` (with `code`, shown as `ABCD-EFGH`), `refused`,
+`failed`, `unused`, or `invalid` when a proof was sent that does not verify,
+which is a hard failure (`boot_proof_invalid`). The person compares the code
+with the machine's screen before answering. A refusal is not a failure by
+itself: the quote's diff says what changed.
 
 **Matching a profile.** A quoted PCR matches a profile's value when the two
 are equal, or, for PCRs 0-7, 9, 12, 13 and 14 only, when one is the other
@@ -786,7 +837,8 @@ objects cross the boundary; structured data is JSON.
 | `Finished()`, `Succeeded()` | after each step |
 | `RecordJSON() string` | current record |
 
-Decisions: `1` approve once · `2` approve and remember as a new profile · `3` reject.
+Decisions: `1` approve once · `2` approve and remember as a new profile · `3` reject ·
+`4` continue (a boot that matches; anything else needs `1` or `2`).
 Approving a verdict whose `state` is `failed` additionally requires
 `confirmName` equal to the machine's `friendly_name`, typed by the user.
 
@@ -810,7 +862,7 @@ Every event is a JSON object with `type`. `tbs` is base64 (prefer `PendingTBS()`
 | `need_signature` | `purpose` (`enrol_accept`, `receipt`), `tbs`, `verdict_code` | unlock prompt (§11.2), sign `PendingTBS()` → `ProvideSignature` |
 | `enrolled` | `record` | persist the record (encrypted) |
 | `hello` | `device_id`, `friendly_name` | show "connected to …" |
-| `verdict` | `verdict`, `needs_decision`, `eventlog_available` | show §10.4; if `needs_decision`, offer the decisions |
+| `verdict` | `verdict`, `needs_decision` (always true), `eventlog_available` | show §10.4 with `verdict.boot_key` and `verdict.code`; offer the decisions |
 | `eventlog` | `received`, `total`, `complete` | progress |
 | `receipt_ack` | `result`, `message` | show what the machine made of the receipt |
 | `record_updated` | `record` | replace the stored record |
@@ -829,7 +881,8 @@ Every event is a JSON object with `type`. `tbs` is base64 (prefer `PendingTBS()`
   "pcr_diff": [{"index": 4, "expected": "…hex…", "actual": "…hex…", "description": "Boot Manager Code and Boot Attempts"}],
   "diff_against": "enrolment baseline",
   "explanation": "PCR 4 changed. The bootloader changed, which a shim, GRUB or systemd-boot update causes; the Secure Boot policy is unchanged.",
-  "reset_count": 12, "restart_count": 0, "clock_safe": true, "firmware_version": 1234
+  "reset_count": 12, "restart_count": 0, "clock_safe": true, "firmware_version": 1234,
+  "boot_key": "proved", "code": "K7QM-2XHD"
 }
 ```
 

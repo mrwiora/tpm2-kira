@@ -171,6 +171,7 @@ const (
 	ReasonResetCountDecreased = "reset_count_decreased"
 	ReasonClockUnsafe         = "clock_unsafe"
 	ReasonFirmwareChanged     = "firmware_changed"
+	ReasonBootProofInvalid    = "boot_proof_invalid"
 	ReasonSelectionMismatch   = "selection_mismatch"
 	ReasonPCRValuesInvalid    = "pcr_values_invalid"
 	ReasonPCRDigestMismatch   = "pcr_digest_mismatch"
@@ -225,7 +226,23 @@ type Verdict struct {
 	ClockSafe       bool   `json:"clock_safe"`
 	FirmwareVersion uint64 `json:"firmware_version"`
 	QuoteDigest     []byte `json:"-"`
+
+	// BootKey is what the machine's TPM made of the boot challenge
+	// (bootkey.go): "proved", "refused", "invalid", "failed" or "unused".
+	// Code is the code to compare with the machine's screen; present only
+	// when the key was proved.
+	BootKey string `json:"boot_key"`
+	Code    string `json:"code,omitempty"`
 }
+
+// Boot key results in a Verdict.
+const (
+	BootKeyResultProved  = "proved"  // the TPM released the key for this boot state
+	BootKeyResultRefused = "refused" // the TPM did not: not a state the signing key approved
+	BootKeyResultInvalid = "invalid" // the machine claimed a proof that does not verify
+	BootKeyResultFailed  = "failed"  // the machine could not try
+	BootKeyResultUnused  = "unused"  // the machine did not try
+)
 
 // Verdict states.
 const (

@@ -43,9 +43,11 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	sel, _ := s.blob.Selection()
 	phone, _ := attesttest.NewPhone()
 
-	signer := testSigner(t)
+	// The phones go into the slot's blob, next to its TOTP key, and the
+	// boot key shares that key's policy: the slot is really sealed.
 	idx := uint32(NVRAMSlotStart + 9)
-	writeTestSlot(t, s.tpm, idx, signer) // the phones go into the slot's blob, next to its TOTP key
+	signer, signerPath := sealRealSlot(t, s.sock, idx)
+	s.be.sealIndex, s.be.sealed = idx, readSealedSlot(s.tpm, idx)
 	s.be.confirmSAS = func(code string) (bool, error) { return true, nil }
 	s.be.commit = func(v attest.EnrolledVerifier) error {
 		if err := s.blob.UpsertVerifier(v); err != nil {
@@ -125,6 +127,12 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	}
 
 	res := attestRound()
+	// The TPM released the boot key for this boot state: the phone shows
+	// the code this machine recovered.
+	if vd := phone.Last(attest.EvVerdict).Verdict; vd.BootKey != attest.BootKeyResultProved || s.be.bootCode == "" ||
+		vd.Code != attest.FormatBootCode(s.be.bootCode) || !bytes.Equal(rec.BootKeyPub, mustPoint(t, stored)) {
+		t.Fatalf("boot key: verdict %q code %q, machine recovered %q", vd.BootKey, vd.Code, s.be.bootCode)
+	}
 	if res.Check.Verdict != attest.VerdictOK || !res.Check.Authentic {
 		t.Fatalf("unchanged machine not attested: %+v (verdict %+v)", res.Check, phone.Last(attest.EvVerdict).Verdict)
 	}
@@ -132,11 +140,6 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	// The same exchange as the units run it: the session in a radio worker
 	// that has nothing but the coordinator's socket, the TPM and the
 	// reading of the receipt in the coordinator.
-	signerPath := filepath.Join(t.TempDir(), "attest-signer.pem")
-	der, _ := x509.MarshalPKIXPublicKey(&signer.PublicKey)
-	if err := os.WriteFile(signerPath, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	svc := newGateService(s.tpm, idx, signerPath, false)
 	worker, err := dialGate(startTestGate(t, svc), 5*time.Second)
 	if err != nil {
@@ -185,6 +188,25 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	if res.Check.Verdict != attest.VerdictOK || !res.Check.Authentic || st.State != GateAttested || st.Slot != 9 {
 		t.Fatalf("through the coordinator: %+v, status %+v", res.Check, st)
 	}
+	// The worker asked the coordinator's TPM for the proof; the phone got a
+	// code, which only the coordinator ever held.
+	if vd := phone.Last(attest.EvVerdict).Verdict; vd.BootKey != attest.BootKeyResultProved || len(vd.Code) != attest.BootCodeLen+1 {
+		t.Fatalf("boot key through the coordinator: %+v", vd)
+	}
+	if st.Code != "" {
+		t.Fatalf("the code stayed on the screen after the phone answered: %q", st.Code)
+	}
+
+	// The boot leaves the approved state (as a changed image would, or the
+	// OS separator): the TPM refuses the boot key, no code is shown, and
+	// the quote still describes the registers.
+	if err := extendPCR(s.tpm, 23, "x"); err != nil {
+		t.Fatal(err)
+	}
+	attestRound()
+	if vd := phone.Last(attest.EvVerdict).Verdict; vd.BootKey != attest.BootKeyResultRefused || vd.Code != "" || s.be.bootCode != "" {
+		t.Fatalf("boot key outside the approved state: %+v, machine recovered %q", vd, s.be.bootCode)
+	}
 	// A worker gone wrong asks for a quote of its own and presents the
 	// phone's genuine receipt for it: the receipt belongs to another quote.
 	q, err := worker.Quote(bytes.Repeat([]byte{7}, 32), sel)
@@ -210,6 +232,15 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 		t.Fatalf("reject not delivered: %+v", res.Check)
 	}
 	t.Logf("diff explanation: %s", verdict.Explanation)
+}
+
+func mustPoint(t *testing.T, a *Attestation) []byte {
+	t.Helper()
+	p, err := bootKeyPoint(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 // TestOfflineQuoteVerifies covers `attest quote` / `attest verify`'s path:

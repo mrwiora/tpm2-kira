@@ -163,12 +163,12 @@ func (p *Phone) react(v *attest.Verifier, evs []attest.Event) (*attest.Output, e
 				if p.WantLog && e.EventlogAvail {
 					o, err = v.RequestEventlog()
 				} else {
-					o, err = v.Decide(p.Decision, p.Confirm)
+					o, err = v.Decide(p.decisionFor(e.Verdict), p.Confirm)
 				}
 			}
 		case attest.EvEventlog:
 			if e.Complete {
-				o, err = v.Decide(p.Decision, p.Confirm)
+				o, err = v.Decide(p.decisionFor(p.Last(attest.EvVerdict).Verdict), p.Confirm)
 			}
 		case attest.EvEnrolled, attest.EvRecordUpdated:
 			p.Record = e.Record
@@ -186,6 +186,16 @@ func (p *Phone) react(v *attest.Verifier, evs []attest.Event) (*attest.Output, e
 		return nil, nil
 	}
 	return merged, nil
+}
+
+// decisionFor is the person's answer to a verdict. A matching boot is
+// continued (there is nothing to approve) unless the script says reject;
+// anything else gets the scripted decision.
+func (p *Phone) decisionFor(vd *attest.Verdict) attest.Decision {
+	if vd != nil && vd.State == attest.StateMatch && p.Decision != attest.DecisionReject {
+		return attest.DecisionContinue
+	}
+	return p.Decision
 }
 
 // Has reports whether an event of a type was seen.

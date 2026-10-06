@@ -62,7 +62,7 @@ type gateHost interface {
 	// Identity returns the slot to serve, or the exit status with which
 	// the gate gives up.
 	Identity() (*gateIdentity, int, error)
-	attest.AttesterBackend
+	attest.AttesterBackend // Quote, BootContext, Eventlog, ProveBootKey
 	attest.ReceiptJudge
 	// Report tells the coordinator where the radio side is. Only progress
 	// can be reported; a verdict comes from JudgeReceipt alone.
@@ -215,6 +215,27 @@ func (s *gateService) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteRe
 	return q, nil
 }
 
+// ProveBootKey implements attest.AttesterBackend. The code the challenge
+// carries goes to the code screen through Status; the radio side gets the
+// proof and never the code.
+func (s *gateService) ProveBootKey(ch *attest.BootChallenge, context []byte) ([]byte, uint8) {
+	<-s.ready
+	if s.code != 0 || ch == nil {
+		return nil, attest.BootKeyFailed
+	}
+	s.tpmMu.Lock()
+	proof, state := s.be.ProveBootKey(ch, context)
+	code := s.be.bootCode
+	s.tpmMu.Unlock()
+	s.mu.Lock()
+	s.status.Code = attest.FormatBootCode(code)
+	if state != attest.BootKeyProved {
+		s.status.Code = ""
+	}
+	s.mu.Unlock()
+	return proof, state
+}
+
 // BootContext implements attest.AttesterBackend.
 func (s *gateService) BootContext() attest.BootContext {
 	<-s.ready
@@ -275,6 +296,7 @@ func (s *gateService) JudgeReceipt(r *attest.Receipt, verifierID string) attest.
 	if state := receiptState(check); state != "" {
 		s.status.State = state
 		s.status.Phone = verifierName(verifier)
+		s.status.Code = "" // the session it belonged to is answered
 	}
 	return check
 }
@@ -288,6 +310,9 @@ func (s *gateService) Report(state GateState) {
 	defer s.mu.Unlock()
 	if s.status.Verdict() || s.status.State == GateRefused {
 		return
+	}
+	if state != GateSession {
+		s.status.Code = "" // no session, no code to compare
 	}
 	s.status.State = state
 }

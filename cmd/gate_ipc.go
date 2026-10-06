@@ -36,6 +36,7 @@ const (
 	gateOpEventlog = "eventlog"
 	gateOpReceipt  = "receipt"
 	gateOpReport   = "report"
+	gateOpBootKey  = "boot-key"
 
 	maxGateRequest  = 64 << 10                         // the largest is a receipt
 	maxGateResponse = 2*attest.MaxEventlogSize + 1<<16 // an event log, base64 in JSON
@@ -49,6 +50,9 @@ type gateRequest struct {
 	Receipt    *attest.Receipt `json:"receipt,omitempty"`
 	VerifierID string          `json:"verifier_id,omitempty"`
 	State      GateState       `json:"state,omitempty"`
+	// boot-key: the phone's challenge, and the session data it is bound to (QD).
+	EphemeralPub []byte `json:"ephemeral_pub,omitempty"`
+	Sealed       []byte `json:"sealed,omitempty"`
 }
 
 type gateResponse struct {
@@ -59,6 +63,10 @@ type gateResponse struct {
 	Boot     *attest.BootContext  `json:"boot,omitempty"`
 	Eventlog []byte               `json:"eventlog,omitempty"`
 	Check    *attest.ReceiptCheck `json:"check,omitempty"`
+	// boot-key: the proof, when the TPM released the key, and the state.
+	// The code itself stays with the coordinator.
+	BootProof []byte `json:"boot_proof,omitempty"`
+	BootState uint8  `json:"boot_state,omitempty"`
 }
 
 func writeGateFrame(w io.Writer, v any, limit int) error {
@@ -236,6 +244,9 @@ func answerGate(host gateHost, req *gateRequest) *gateResponse {
 	case gateOpReport:
 		host.Report(req.State)
 		return &gateResponse{}
+	case gateOpBootKey:
+		proof, state := host.ProveBootKey(&attest.BootChallenge{EphemeralPub: req.EphemeralPub, Sealed: req.Sealed}, req.QD)
+		return &gateResponse{BootProof: proof, BootState: state}
 	}
 	return &gateResponse{Err: "unknown operation"}
 }
@@ -353,6 +364,16 @@ func (c *gateClient) JudgeReceipt(r *attest.Receipt, verifierID string) attest.R
 		return attest.ReceiptCheck{Verdict: r.Verdict, Ack: attest.AckMalformed, Detail: "the coordinator did not answer"}
 	}
 	return *resp.Check
+}
+
+// ProveBootKey implements attest.AttesterBackend: the coordinator's TPM
+// answers, and keeps the code.
+func (c *gateClient) ProveBootKey(ch *attest.BootChallenge, context []byte) ([]byte, uint8) {
+	resp, err := c.ask(&gateRequest{Op: gateOpBootKey, EphemeralPub: ch.EphemeralPub, Sealed: ch.Sealed, QD: context})
+	if err != nil {
+		return nil, attest.BootKeyFailed
+	}
+	return resp.BootProof, resp.BootState
 }
 
 // Report implements gateHost.

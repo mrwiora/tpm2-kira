@@ -8,7 +8,7 @@ import (
 // (docs/PROTOCOL-BLE.md) and must never be renumbered.
 
 // SchemaVersion is the protocol schema carried in Hello, Evidence and EnrolOffer.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // Size limits for variable-length fields.
 const (
@@ -197,6 +197,10 @@ type Request struct {
 	Selection    PCRSelection
 	WantEventlog bool
 	PolicyID     string
+	// The boot challenge (bootkey.go): the phone's key for this session
+	// and the code sealed to the machine's boot key.
+	EphemeralPub []byte
+	Sealed       []byte
 }
 
 // Encode serialises the message.
@@ -207,6 +211,8 @@ func (m *Request) Encode() ([]byte, error) {
 	e.Bytes(3, m.Selection.Indices)
 	e.Bool(4, m.WantEventlog)
 	e.String(5, m.PolicyID)
+	e.Bytes(6, m.EphemeralPub)
+	e.Bytes(7, m.Sealed)
 	return e.Finish()
 }
 
@@ -220,6 +226,8 @@ func DecodeRequest(d *Decoder) (*Request, error) {
 		Selection:    decodeSelection(d, 2, 3),
 		WantEventlog: d.Bool(4, false),
 		PolicyID:     d.String(5, maxShortString, false),
+		EphemeralPub: d.Fixed(6, bootPointSize, true),
+		Sealed:       d.Fixed(7, bootSealedSize, true),
 	}
 	if err := d.Err(); err != nil {
 		return nil, err
@@ -240,6 +248,10 @@ type Evidence struct {
 	EventlogSize   uint32 // optional, 0 when unknown
 	BootContext    BootContext
 	AppVersion     string
+	// BootKeyState says what the machine's TPM made of the boot challenge
+	// (BootKey* constants); BootProof is present when it released the key.
+	BootKeyState uint8
+	BootProof    []byte
 }
 
 // Encode serialises the message.
@@ -258,6 +270,8 @@ func (m *Evidence) Encode() ([]byte, error) {
 	if m.EventlogSize > 0 {
 		e.U32(11, m.EventlogSize)
 	}
+	e.U8(12, m.BootKeyState)
+	e.OptBytes(13, m.BootProof)
 	return e.Finish()
 }
 
@@ -277,6 +291,8 @@ func DecodeEvidence(d *Decoder) (*Evidence, error) {
 		BootContext:    decodeBootContext(d.Sub(9, 2048, false)),
 		AppVersion:     d.String(10, maxShortString, false),
 		EventlogSize:   d.U32(11, false),
+		BootKeyState:   d.U8(12, false),
+		BootProof:      d.Fixed(13, bootProofSize, false),
 	}
 	vals := d.Bytes(7, 2+maxPCRValues*(5+65), true)
 	if err := d.Err(); err != nil {
@@ -570,6 +586,11 @@ type EnrolOffer struct {
 	// after the initramfs (PCR 11 phases, PCR 9). Optional: the verifier
 	// pins them as the baseline when present, the quote's values otherwise.
 	MeasurePointValues []PCRValue
+	// The boot key (bootkey.go): its public area, and the attestation
+	// key's TPM2_Certify statement over it for this session.
+	BootKeyPub        []byte
+	BootKeyCertify    []byte
+	BootKeyCertifySig []byte
 }
 
 // BaselineValues are the PCR values the verifier pins at enrolment: the
@@ -618,6 +639,9 @@ func (m *EnrolOffer) Encode() ([]byte, error) {
 	if len(m.MeasurePointValues) > 0 {
 		e.Bytes(18, encodePCRValues(m.MeasurePointValues))
 	}
+	e.Bytes(19, m.BootKeyPub)
+	e.Bytes(20, m.BootKeyCertify)
+	e.Bytes(21, m.BootKeyCertifySig)
 	return e.Finish()
 }
 
@@ -642,6 +666,10 @@ func DecodeEnrolOffer(d *Decoder) (*EnrolOffer, error) {
 		AppVersion:     d.String(15, maxShortString, false),
 		AdvKey:         d.Fixed(16, 32, true),
 		EKCertChain:    d.Bytes(17, MaxEKCertChain, false),
+
+		BootKeyPub:        d.Bytes(19, maxTPMPublic, true),
+		BootKeyCertify:    d.Bytes(20, maxQuoted, true),
+		BootKeyCertifySig: d.Bytes(21, maxTPMSig, true),
 	}
 	vals := d.Bytes(10, 2+maxPCRValues*(5+65), true)
 	mpv := d.Bytes(18, 2+maxPCRValues*(5+65), false)

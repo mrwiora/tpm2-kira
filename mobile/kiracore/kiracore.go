@@ -44,6 +44,9 @@ const (
 	DecisionApproveOnce     = int(attest.DecisionApproveOnce)
 	DecisionApproveRemember = int(attest.DecisionApproveRemember)
 	DecisionReject          = int(attest.DecisionReject)
+	// DecisionContinue confirms a matching boot: every verdict now waits
+	// for the person, who compares the code with the machine's screen.
+	DecisionContinue = int(attest.DecisionContinue)
 )
 
 // Advertisement flags (service data byte 0).

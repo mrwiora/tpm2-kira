@@ -166,6 +166,8 @@ type fakeHost struct {
 	reports  []GateState
 	receipt  *attest.Receipt
 	evlog    []byte
+
+	challenge *attest.BootChallenge
 }
 
 func (f *fakeHost) Identity() (*gateIdentity, int, error) {
@@ -191,6 +193,13 @@ func (f *fakeHost) JudgeReceipt(r *attest.Receipt, id string) attest.ReceiptChec
 	return attest.ReceiptCheck{Verdict: r.Verdict, Authentic: true, Ack: attest.AckAccepted, Detail: id}
 }
 func (f *fakeHost) Report(s GateState) { f.reports = append(f.reports, s) }
+func (f *fakeHost) ProveBootKey(ch *attest.BootChallenge, context []byte) ([]byte, uint8) {
+	f.challenge = ch
+	if len(ch.EphemeralPub) != 65 {
+		return nil, attest.BootKeyFailed
+	}
+	return append([]byte("proof:"), context...), attest.BootKeyProved
+}
 
 func startTestGate(t *testing.T, host gateHost) string {
 	t.Helper()
@@ -288,6 +297,13 @@ func TestWorkerReachesTheCoordinator(t *testing.T) {
 	check := c.JudgeReceipt(&attest.Receipt{Verdict: attest.VerdictOK, QD: []byte("qd"), Signature: []byte("s")}, "p")
 	if !check.Authentic || check.Detail != "p" || host.receipt == nil || string(host.receipt.QD) != "qd" {
 		t.Fatalf("receipt: %+v", check)
+	}
+	proof, state := c.ProveBootKey(&attest.BootChallenge{EphemeralPub: make([]byte, 65), Sealed: []byte("sealed")}, []byte("ctx"))
+	if state != attest.BootKeyProved || string(proof) != "proof:ctx" || host.challenge == nil || string(host.challenge.Sealed) != "sealed" {
+		t.Fatalf("boot key through the socket: %q %d %+v", proof, state, host.challenge)
+	}
+	if _, state := c.ProveBootKey(&attest.BootChallenge{}, nil); state != attest.BootKeyFailed {
+		t.Fatalf("a malformed challenge: state %d", state)
 	}
 	c.Report(GateSession)
 	if len(host.reports) != 1 || host.reports[0] != GateSession {

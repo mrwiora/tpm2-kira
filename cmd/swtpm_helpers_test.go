@@ -7,9 +7,12 @@ package cmd
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"os/exec"
@@ -96,9 +99,46 @@ func startSWTPM(t *testing.T) string {
 }
 
 type swtpmSetup struct {
+	sock string
 	tpm  transport.TPMCloser
 	blob *Attestation
 	be   *tpmBackend
+}
+
+// sealRealSlot seals a real TOTP key into the slot at idx, the way 'seal'
+// does, bound to PCR 23 (a register tests can extend to leave the approved
+// boot state). It returns the signing key and its public key file. A phone
+// enrolment needs such a slot: the boot key shares the slot's policy.
+func sealRealSlot(t *testing.T, sock string, idx uint32) (crypto.Signer, string) {
+	t.Helper()
+	dir := t.TempDir()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privPath, pubPath := filepath.Join(dir, "seal.key"), filepath.Join(dir, "seal.pub")
+	if err := WriteSigningKeyFile(privPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})); err != nil {
+		t.Fatal(err)
+	}
+	pubPEM, err := PublicKeyToPEM(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteSigningKeyFile(pubPath, pubPEM); err != nil {
+		t.Fatal(err)
+	}
+	if err := Seal(sock, "23", idx, pubPath, privPath, false, PCRHashAlgoSHA256, false); err != nil {
+		t.Fatalf("sealing the test slot: %v", err)
+	}
+	signer, err := LoadCheckedSigningPrivateKey(privPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer, pubPath
 }
 
 func newSWTPMSetup(t *testing.T) *swtpmSetup {
@@ -112,7 +152,7 @@ func newSWTPMSetupAt(t *testing.T, sock, name string) *swtpmSetup {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &swtpmSetup{tpm: tpmDev}
+	s := &swtpmSetup{sock: sock, tpm: tpmDev}
 	t.Cleanup(func() { s.tpm.Close() })
 
 	pub, priv, akName, err := CreateAK(tpmDev)

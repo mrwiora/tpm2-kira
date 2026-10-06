@@ -121,26 +121,31 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	}
 	defer clear(key)
 
-	blob, err := newKeyObject(tpmDev, key, alg, pubKey)
-	if err != nil {
-		return err
-	}
-	blob.Payload.PublicKeyPath = pubKeyPath
-	blob.Payload.PrivateKeyPath = privKeyPath
-
 	// Sealing a slot again replaces its TOTP key, not its phones: their
 	// enrolment lives in the same blob and is carried over - if this
 	// signing key wrote it. Somebody else's entries are not signed anew.
+	// The boot key in it is bound to the slot's policy by the policy
+	// reference, so the new TOTP key takes that over too.
+	var kept *Attestation
+	var policyRef []byte
 	if oldRaw, old, err := readSlot(tpmDev, nvramIndex); err == nil && old.Payload.Attestation != nil {
 		if VerifyBlobSignature(oldRaw, old, signer.Public()) == nil {
-			blob.Payload.Attestation = old.Payload.Attestation
-			fmt.Printf("Phone enrolment: kept (%d phone(s) enrolled for this slot)\n\n", len(old.Payload.Attestation.Phone.Verifiers))
+			kept, policyRef = old.Payload.Attestation, old.Payload.PolicyRef
+			fmt.Printf("Phone enrolment: kept (%d phone(s) enrolled for this slot)\n\n", len(kept.Phone.Verifiers))
 		} else {
 			fmt.Println("WARNING: this slot carries a phone enrolment that another signing key wrote.")
 			fmt.Println("  It is not carried over. Enrol the phone again: tpm2-kira attest enrol")
 			fmt.Println()
 		}
 	}
+
+	blob, err := newKeyObject(tpmDev, key, alg, pubKey, policyRef)
+	if err != nil {
+		return err
+	}
+	blob.Payload.PublicKeyPath = pubKeyPath
+	blob.Payload.PrivateKeyPath = privKeyPath
+	blob.Payload.Attestation = kept
 
 	if err := approveAndWrite(tpmDev, nvramIndex, blob, specs, hashAlgo, verifyUKI, signer, debug); err != nil {
 		return err
@@ -168,9 +173,11 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 // newKeyObject creates the TOTP key object for key and returns a blob with
 // the object and its policy parameters, not yet approved for any PCR state.
 //
-// The object's policy is PolicyAuthorize by pubKey, qualified by a fresh
-// policyRef: whatever pubKey approves for this policyRef can use the key.
-func newKeyObject(tpmDev transport.TPM, key []byte, alg tpm2.TPMAlgID, pubKey crypto.PublicKey) (*SealedBlob, error) {
+// The object's policy is PolicyAuthorize by pubKey, qualified by policyRef:
+// whatever pubKey approves for this policyRef can use the key. A fresh one
+// is made unless the slot's existing one is passed in, which keeps the
+// slot's other keys (the boot key) under the same approvals.
+func newKeyObject(tpmDev transport.TPM, key []byte, alg tpm2.TPMAlgID, pubKey crypto.PublicKey, policyRef []byte) (*SealedBlob, error) {
 	// Loading the key checks that this TPM can verify its signatures, and
 	// yields the Name the TPM will see in PolicyAuthorize.
 	loadRsp, err := LoadExternalPublicKey(tpmDev, pubKey)
@@ -184,9 +191,10 @@ func newKeyObject(tpmDev transport.TPM, key []byte, alg tpm2.TPMAlgID, pubKey cr
 	if err != nil {
 		return nil, err
 	}
-	policyRef, err := newPolicyRef()
-	if err != nil {
-		return nil, err
+	if len(policyRef) == 0 {
+		if policyRef, err = newPolicyRef(); err != nil {
+			return nil, err
+		}
 	}
 
 	primary, err := CreatePrimaryKey(tpmDev)

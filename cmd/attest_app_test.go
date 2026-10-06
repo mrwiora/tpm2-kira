@@ -24,7 +24,7 @@ package cmd
 import (
 	"bufio"
 	"bytes"
-	"crypto/ecdsa"
+	"crypto"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -95,7 +95,7 @@ type appMachine struct {
 	mu     sync.Mutex // guards everything below except result
 	proc   *swtpmProc
 	s      *swtpmSetup
-	signer *ecdsa.PrivateKey
+	signer crypto.Signer
 	idx    uint32
 	snap   string
 	evlog  []byte
@@ -112,11 +112,10 @@ func newAppMachine(t *testing.T) *appMachine {
 		t.Skip(err)
 	}
 	m := &appMachine{
-		t:      t,
-		proc:   proc,
-		signer: testSigner(t),
-		idx:    uint32(NVRAMSlotStart + 9),
-		snap:   t.TempDir(),
+		t:    t,
+		proc: proc,
+		idx:  uint32(NVRAMSlotStart + 9),
+		snap: t.TempDir(),
 		// A fixed event log: the host's own log is neither readable nor
 		// reproducible here, and the app should transfer a real-sized one.
 		evlog:  bytes.Repeat([]byte("swtpm event log "), 3000),
@@ -124,8 +123,9 @@ func newAppMachine(t *testing.T) *appMachine {
 	}
 	t.Cleanup(func() { m.proc.stop(nil) })
 	m.s = newSWTPMSetupAt(t, proc.sock, "swtpm-box")
-	// The phones are stored in the slot's blob, next to its TOTP key.
-	writeTestSlot(t, m.s.tpm, m.idx, m.signer)
+	// The phones are stored in the slot's blob, next to its TOTP key, and
+	// the boot key shares that key's policy.
+	m.signer, _ = sealRealSlot(t, proc.sock, m.idx)
 	m.newBackend()
 	return m
 }
@@ -135,7 +135,8 @@ func (m *appMachine) newBackend() {
 	be := &tpmBackend{
 		tpm:       m.s.tpm,
 		blob:      m.s.blob,
-		sealIndex: NVRAMSlotStart,
+		sealIndex: m.idx,
+		sealed:    readSealedSlot(m.s.tpm, m.idx),
 		evlogRead: true,
 		evlog:     m.evlog,
 	}

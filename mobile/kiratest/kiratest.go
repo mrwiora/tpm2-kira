@@ -178,6 +178,25 @@ func (d *DemoMachine) LastSAS() string {
 	return d.sas
 }
 
+// LastBootCode returns the code the machine's screen shows for the running
+// (or last) attestation, as "ABCD-EFGH", or "" when its TPM refused the boot
+// key. The phone must show the same.
+func (d *DemoMachine) LastBootCode() string {
+	code := d.m.TPM.ShownCode()
+	if code == "" {
+		return ""
+	}
+	return attest.FormatBootCode(code)
+}
+
+// RefuseBootKey makes the machine's TPM refuse the boot key from now on, as
+// it does in a boot state its signing key has not approved.
+func (d *DemoMachine) RefuseBootKey(refuse bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.m.TPM.BootRefuse = refuse
+}
+
 // ChangePCR simulates a boot-chain change (e.g. 4 = bootloader update,
 // 7 = Secure Boot policy). The next attestation's verdict is "changed".
 func (d *DemoMachine) ChangePCR(index int) {

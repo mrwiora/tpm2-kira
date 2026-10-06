@@ -10,6 +10,15 @@ formats and CLI flags may change without migration paths.
 
 ## Blob format
 
+### Version 11 — the boot key
+
+The attestation part gained a second TPM key, under the policy of the slot's
+TOTP key. The phone seals a code to it at every attestation; the machine
+shows the code, and the phone shows it too and waits for the person before
+it signs anything (docs/SECURITY-BACKGROUND.md §3.4). Before, a boot that
+matched the phone's profile was signed without a question, and nothing tied
+the session to the screen in front of the person.
+
 ### Version 10 — one blob per slot; attestation as an optional part with typed methods
 
 Remote attestation first kept its data in an NV index of its own per slot

@@ -51,10 +51,24 @@ func drive(t *testing.T, d *DemoMachine, s *kiracore.Session, key **ecdsa.Privat
 					sig, _ := ecdsa.SignASN1(rand.Reader, *key, h[:])
 					queue = append(queue, s.ProvideSignature(sig))
 				case "verdict":
-					state = e["verdict"].(map[string]any)["state"].(string)
-					if e["needs_decision"] == true {
-						queue = append(queue, s.Decide(decision, "Thinkpad-X1"))
+					vd := e["verdict"].(map[string]any)
+					state = vd["state"].(string)
+					// Nothing is signed before the person answered, and the
+					// phone shows the code the machine's screen shows.
+					if e["needs_decision"] != true {
+						t.Fatalf("a verdict went through without a decision: %s", st.Event(i))
 					}
+					if vd["boot_key"] == "proved" && (vd["code"] == "" || vd["code"] != d.LastBootCode()) {
+						t.Fatalf("code on the phone %v, on the machine %q", vd["code"], d.LastBootCode())
+					}
+					if vd["boot_key"] != "proved" && vd["code"] != nil {
+						t.Fatalf("a code without a proved boot key: %s", st.Event(i))
+					}
+					dec := decision
+					if state == "match" && dec == 0 {
+						dec = kiracore.DecisionContinue
+					}
+					queue = append(queue, s.Decide(dec, "Thinkpad-X1"))
 				case "error":
 					t.Fatalf("error event: %s", st.Event(i))
 				}

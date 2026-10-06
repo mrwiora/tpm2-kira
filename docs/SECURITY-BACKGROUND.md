@@ -49,7 +49,7 @@ TPM after enrolment.
 ### 3.1 TPM NVRAM (the "blob")
 
 Each slot's NV index (default `0x01803010`; slot *n* is `0x01803010` + *n*)
-stores one serialised `SealedBlob` (format version 10, §10). It always holds
+stores one serialised `SealedBlob` (format version 11, §10). It always holds
 the slot's TOTP key. Remote attestation is an optional part of the same blob,
 and within that part the way a verifier reaches the machine is a typed
 *method*: today phones over Bluetooth LE; a verification server over the
@@ -57,7 +57,7 @@ network would be another method next to it. The blob contains:
 
 | Field               | Content                                                         | Sensitive? |
 |---------------------|-----------------------------------------------------------------|------------|
-| `Version`           | Blob format version (10)                                        | No         |
+| `Version`           | Blob format version (11)                                        | No         |
 | `AppVersion`        | tpm2-kira version that wrote the blob                           | No         |
 | `Public`            | TPMT_PUBLIC of the TOTP key object                              | No         |
 | `Private`           | TPM2B_PRIVATE of the TOTP key object (TPM-wrapped)              | **Yes**¹   |
@@ -85,6 +85,8 @@ the machine as an attester, whatever the method:
 | `AKPrivate`     | TPM2B_PRIVATE of the attestation key (TPM-wrapped)                   | **Yes**¹   |
 | `AKName`        | The attestation key's Name, which verifiers pin                      | No         |
 | `EKAlg`         | Which endorsement key template enrolment used (ECC or RSA)           | No         |
+| `BootKeyPublic` | TPMT_PUBLIC of the boot key (§3.4)                                   | No         |
+| `BootKeyPrivate`| TPM2B_PRIVATE of the boot key (TPM-wrapped)                          | **Yes**¹   |
 | `PCRAlg`, `PCRSelection` | The PCR bank and registers that are quoted                  | No         |
 | `Count`         | Value of the slot's record counter when the part last changed (§3.3) | No         |
 | methods         | Who may ask for a quote, and over what: typed blocks, below          | Partly⁵    |
@@ -100,7 +102,8 @@ Method 1, phones over Bluetooth LE (`Phone`):
 ¹ The `Private` field is encrypted by the TPM's storage hierarchy. It cannot be
 decrypted outside the TPM that created it, and the key in it can only be
 *used* by that TPM, under the object's policy. It is never decrypted for
-tpm2-kira: there is no `TPM2_Unseal`. The same holds for `AKPrivate`.
+tpm2-kira: there is no `TPM2_Unseal`. The same holds for `AKPrivate` and
+`BootKeyPrivate`.
 
 ² The key object's policy binds the signing key's **Name**, so a substituted
 `SigningPublic` makes `PolicyAuthorize` fail; it is stored because the key
@@ -163,7 +166,41 @@ ordinary index at the same handle could hold any number. Whoever has the owner
 hierarchy can raise the counter, which makes the genuine blob stale until the
 user enrols again: a denial of the phone check, never an accepted blob.
 
-### 3.4 Inside the TPM (never leaves the chip)
+### 3.4 The boot key
+
+The attestation part holds a second TPM key, the *boot key*: an ECC P-256 key
+for key agreement, created inside the TPM (`sensitiveDataOrigin`, `fixedTPM`,
+`fixedParent`), with `userWithAuth` clear and the **same policy as the slot's
+TOTP key**: PolicyAuthorize by the signing key with the slot's policy
+reference. So it is usable exactly when a TOTP code can be computed - in a
+boot state the signing key approved, at the slot's current generation, before
+`cap` - and one approval covers both keys; `reseal` needs to know nothing
+about it. `seal` on an existing slot keeps the slot's policy reference when it
+carries the attestation part over, so that the boot key stays under the new
+TOTP key's approvals.
+
+At enrolment the attestation key certifies it (`TPM2_Certify`, bound to the
+session), and the phone pins its public point after checking the attributes
+above: the key lives in the TPM it has verified and cannot be used with a
+password.
+
+At every attestation the phone seals a fresh eight-character code to the
+boot key (ECDH with a one-time key, HKDF-SHA256, AES-256-GCM, bound to the
+session's qualifying data). `TPM2_ECDH_ZGen` under the slot's policy recovers
+it. The machine shows the code on its screen and returns a MAC as proof; the
+phone shows the code and the result, and signs nothing before the person
+confirms. The code never travels back, and in the initrd the radio worker
+never sees it: the coordinator's TPM opens the challenge and hands the worker
+the proof only.
+
+What it adds to the quote: the TPM's own statement that this boot state is
+an approved one, and a tie between the phone's session and the screen in
+front of the person. A look-alike machine that forwards the Bluetooth session
+to the real one cannot show the code. What it does not replace: when the TPM
+refuses the key, only the quote says which registers differ; and the key
+trusts what the signing key approved, where the phone's own profiles do not.
+
+### 3.5 Inside the TPM (never leaves the chip)
 
 - **Storage Primary Seed**: generates the primary key deterministically.
 - **Primary Key** (ECC P-256, restricted decrypt): re-derived on every use with
@@ -173,7 +210,7 @@ user enrols again: a denial of the phone check, never an accepted blob.
   `HMAC(key, counter)` in `TPM2_HMAC`; tpm2-kira receives only the 20- or
   32-byte result and truncates it to six digits (RFC 4226).
 
-### 3.5 Filesystem (signing key pair)
+### 3.6 Filesystem (signing key pair)
 
 `tpm2-kira setup` generates an ECDSA P-256 pair, or records a key in a YubiKey
 PIV slot. Any RSA-2048 or ECC P-256/P-384 key works instead, including the
@@ -741,7 +778,7 @@ on such a system. Supporting owner auth is outside the current design.
 
 ---
 
-## 10. Blob Format (Version 10)
+## 10. Blob Format (Version 11)
 
 The blob is a binary-serialised structure with explicit length prefixes and
 maximum size limits to prevent memory exhaustion during deserialisation.
@@ -779,7 +816,7 @@ every local user in `/proc/<pid>/cmdline`.
 ```
 Offset  Field                   Type        Notes
 ─────────────────────────────────────────────────────────────
-0       Version                 uint32      Must be 10
+0       Version                 uint32      Must be 11
 4       Payload length          uint32      Signed region length
 8       AppVersion length       uint32      ≤ 1024
 ?       AppVersion              string
@@ -838,6 +875,10 @@ Offset  Field                   Type        Notes
 ?         AKName length         uint16      ≤ 68
 ?         AKName                []byte
 ?         EKAlg                 uint16      TPM_ALG_ECC or TPM_ALG_RSA
+?         BootKeyPublic length  uint32      ≤ 4096
+?         BootKeyPublic         []byte      TPMT_PUBLIC of the boot key (§3.4)
+?         BootKeyPrivate length uint32      ≤ 4096
+?         BootKeyPrivate        []byte      TPM2B_PRIVATE (TPM-wrapped)
 ?         PCRAlg                uint16      TPM_ALG_SHA256 or TPM_ALG_SHA1
 ?         PCRSelection length   uint16      ≤ 24
 ?         PCRSelection          []uint8     PCR indices that are quoted
@@ -925,7 +966,7 @@ This was removed because:
 
 1. **Protect the signing private key.** It is the recovery master key. Store
    it with restrictive permissions (`chmod 400`, owned by root, in a directory
-   only root can write to; `seal` and `reseal` refuse anything else, §3.5).
+   only root can write to; `seal` and `reseal` refuse anything else, §3.6).
    Consider keeping a backup in a secure offline location.
 2. **Use RSA-2048 or ECC P-256.** These are universally supported by TPM 2.0
    hardware. RSA-4096 may not work on all TPMs.

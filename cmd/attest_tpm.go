@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -238,6 +239,7 @@ type tpmBackend struct {
 	sealIndex uint32
 	sealed    *SealedBlob // may be nil
 	debug     bool
+	bootCode  string // the code of the last boot challenge the TPM opened
 
 	// enrolment only
 	mp         *measurePoint // the baseline prediction, computed once
@@ -414,6 +416,48 @@ func (b *tpmBackend) JudgePhone(a attest.PhoneAttestation) (bool, error) {
 		return true, nil
 	}
 	return b.phoneJudge.JudgePhone(a)
+}
+
+// BootKey implements attest.EnrolBackend: the slot's boot key, made at the
+// first enrolment under the policy of the slot's TOTP key, and certified by
+// the attestation key.
+func (b *tpmBackend) BootKey(qd []byte) ([]byte, []byte, []byte, error) {
+	if b.sealed == nil {
+		return nil, nil, nil, errors.New("the slot has no sealed TOTP key whose policy the boot key could share")
+	}
+	if len(b.blob.BootKeyPublic) == 0 {
+		pub, priv, err := createBootKey(b.tpm, b.sealed)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		b.blob.BootKeyPublic, b.blob.BootKeyPrivate = pub, priv
+	}
+	info, sig, err := certifyBootKey(b.tpm, b.blob, qd)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return b.blob.BootKeyPublic, info, sig, nil
+}
+
+// ProveBootKey implements attest.AttesterBackend. The code is kept for
+// whoever shows it to the person at the machine (BootCode).
+func (b *tpmBackend) ProveBootKey(ch *attest.BootChallenge, context []byte) ([]byte, uint8) {
+	b.bootCode = ""
+	code, proof, err := openBootChallenge(b.tpm, b.sealed, b.sealIndex, b.blob, ch, context)
+	switch {
+	case errors.Is(err, errBootKeyRefused):
+		if b.debug {
+			fmt.Printf("tpm2-kira: boot key: %v\n", err)
+		}
+		return nil, attest.BootKeyRefused
+	case err != nil:
+		if b.debug {
+			fmt.Printf("tpm2-kira: boot key: %v\n", err)
+		}
+		return nil, attest.BootKeyFailed
+	}
+	b.bootCode = code
+	return proof, attest.BootKeyProved
 }
 
 // Commit implements attest.EnrolBackend.

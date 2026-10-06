@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/matthias/tpm2-kira/attest"
 )
 
 // writeTestKeyPair writes a P-256 signing key the way setup does (SEC 1 PEM,
@@ -154,8 +156,46 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeAttestBlob(tpm, slot, testEnrolment("box"), priv); err != nil {
+	// With the boot key, as enrolment makes it: under the TOTP key's policy.
+	_, sealedBlob, err := readSlot(tpm, slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrolment := testEnrolment("box")
+	if enrolment.BootKeyPublic, enrolment.BootKeyPrivate, err = createBootKey(tpm, sealedBlob); err != nil {
+		t.Fatalf("boot key: %v", err)
+	}
+	if err := writeAttestBlob(tpm, slot, enrolment, priv); err != nil {
 		t.Fatalf("enrol: %v", err)
+	}
+	// bootKey answers a phone's challenge with the slot as it is stored now.
+	bootKey := func(what string) error {
+		t.Helper()
+		_, sb, err := readSlot(tpm, slot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		att := sb.Payload.Attestation
+		point, err := bootKeyPoint(att)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := bytes.Repeat([]byte{0x42}, 32)
+		ch, secret, err := attest.NewBootChallenge(rand.Reader, point, ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		code, proof, err := openBootChallenge(tpm, sb, slot, att, ch, ctx)
+		if err != nil {
+			return err
+		}
+		if code != secret.Code || !secret.Check(proof) {
+			t.Fatalf("%s: the TPM answered with %q, the phone sealed %q", what, code, secret.Code)
+		}
+		return nil
+	}
+	if err := bootKey("after enrolling"); err != nil {
+		t.Fatalf("the boot key does not answer in the sealed boot state: %v", err)
 	}
 	enrolled := func(what string) *Attestation {
 		t.Helper()
@@ -184,6 +224,10 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	if again, _, err := SlotCode(tpm, slot, at, false); err != nil || again != code {
 		t.Fatalf("reseal changed the TOTP code: %q then %q (%v)", code, again, err)
 	}
+	// One approval covers both keys: reseal knows nothing of the boot key.
+	if err := bootKey("after reseal"); err != nil {
+		t.Fatalf("the boot key does not answer after reseal: %v", err)
+	}
 
 	// Seal the slot again: a new TOTP key, the same phones.
 	if err := Seal(sock, "0,2,7", slot, pubPath, privPath, false, PCRHashAlgoSHA256, false); err != nil {
@@ -192,6 +236,21 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	enrolled("after sealing again")
 	if _, _, err := SlotCode(tpm, slot, at, false); err != nil {
 		t.Fatalf("code after the second seal: %v", err)
+	}
+	// The new TOTP key took the slot's policy reference over, so the
+	// phones' boot key is still under its approvals.
+	if err := bootKey("after sealing again"); err != nil {
+		t.Fatalf("the boot key does not answer after the slot was sealed again: %v", err)
+	}
+
+	// The boot state leaves what was approved, as after the OS separator:
+	// no TOTP code, and the TPM refuses the boot key.
+	extendSHA256(t, tpm, 7, bytes.Repeat([]byte{0x99}, 32))
+	if err := bootKey("outside the approved state"); !errors.Is(err, errBootKeyRefused) {
+		t.Fatalf("the boot key answered outside the approved boot state: %v", err)
+	}
+	if _, _, err := SlotCode(tpm, slot, at, false); err == nil {
+		t.Fatal("a TOTP code outside the approved boot state")
 	}
 
 	// Another signing key seals the slot: it does not adopt phones it
