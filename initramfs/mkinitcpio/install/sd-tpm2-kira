@@ -135,12 +135,18 @@ build() {
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira.service \
         /usr/lib/systemd/system/tpm2-kira.service
 
+    # Locks code computation when the initrd is left, so nothing in the
+    # running OS can compute codes (or use the key) until the next boot.
+    add_systemd_unit tpm2-kira-cap.service
+    add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-cap.service \
+        /usr/lib/systemd/system/tpm2-kira-cap.service
+
     _report_measure_point
 
     _add_bluetooth
 
     if [[ ! -d /var/lib/tpm2-kira/keys ]]; then
-        warning "tpm2-kira: not configured yet; run 'tpm2-kira setup' and rebuild"
+        warning "tpm2-kira: not configured yet; run 'tpm2-kira setup', then 'tpm2-kira seal', and rebuild"
     fi
 }
 
@@ -152,7 +158,8 @@ for continuous TOTP display.
 
 The hook will:
 - Install the tpm2-kira binary into the image
-- Add tpm2-kira.service and enable it inside the image only
+- Add tpm2-kira.service and tpm2-kira-cap.service and enable them inside
+  the image only
 - Start tpm2-kira in continuous run mode during boot
 - If /etc/tpm2-kira/attest.conf sets TPM2_KIRA_ATTEST=lazy and a phone is
   enrolled: add the Bluetooth adapter's driver modules and firmware, and
@@ -170,7 +177,9 @@ Post-generation hook (sd-tpm2-kira in /usr/lib/initcpio/post/):
   values, so the sealed TOTP secret must be resealed to match.
 
 Created systemd service:
-  tpm2-kira.service - Runs tpm2-kira in continuous TOTP mode
+  tpm2-kira.service     - Runs tpm2-kira in continuous TOTP mode
+  tpm2-kira-cap.service - Runs 'tpm2-kira cap' when switching to the real
+                          root: no codes until the next boot
 
 Prerequisites:
 - systemd-based initramfs (mkinitcpio with systemd support)

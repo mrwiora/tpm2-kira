@@ -179,14 +179,13 @@ func AttestEnrol(o EnrolOptions) error {
 
 	// The signing key is needed to write the blob at the end; find out now,
 	// before the radio is taken and a human has compared codes.
+	// --privkey or the default key; a path recorded in a blob is never
+	// used to find a key (a tampered blob could point anywhere).
 	privPath := o.PrivKeyPath
-	if privPath == "" && sealed != nil && sealed.Payload.PrivateKeyPath != "" {
-		privPath = sealed.Payload.PrivateKeyPath
-	}
 	if privPath == "" {
 		privPath = DefaultPrivateKeyPath
 	}
-	priv, err := LoadSigningPrivateKeyFromPEM(privPath)
+	priv, err := LoadCheckedSigningPrivateKey(privPath)
 	if err != nil {
 		return fmt.Errorf("enrolment needs the signing key to write the attestation blob: %w", err)
 	}

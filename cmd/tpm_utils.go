@@ -1,8 +1,13 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -10,8 +15,49 @@ import (
 
 // TPM device, session and object primitives.
 
-// CleanupTPM flushes all transient handles and sessions to free TPM memory
+// DefaultTPMPath is the kernel's resource-managed TPM device. Through it each
+// process sees only its own handles, and the kernel flushes them when the
+// device is closed.
+const DefaultTPMPath = "/dev/tpmrm0"
+
+// rawTPMPath is used only when the kernel provides no resource manager.
+const rawTPMPath = "/dev/tpm0"
+
+// openedTPM remembers whether the TPM was opened through a resource manager.
+type openedTPM struct {
+	transport.TPMCloser
+	managed bool
+}
+
+// OpenTPM opens the TPM at path. The default path falls back to the raw
+// device when the kernel has no resource manager node.
+func OpenTPM(path string) (transport.TPMCloser, error) {
+	if path == DefaultTPMPath {
+		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+			if _, rawErr := os.Stat(rawTPMPath); rawErr == nil {
+				path = rawTPMPath
+			}
+		}
+	}
+	tpm, err := transport.OpenTPM(path)
+	if err != nil {
+		return nil, err
+	}
+	return &openedTPM{TPMCloser: tpm, managed: strings.HasPrefix(filepath.Base(path), "tpmrm")}, nil
+}
+
+// CleanupTPM flushes leftover transient handles and sessions to free TPM
+// memory.
+//
+// It does nothing on a resource-managed device: there the process only sees
+// its own handles, which it flushes itself, and the kernel flushes the rest
+// on close. Flushing globally on the raw device or a simulator socket is
+// safe, because the raw device admits one opener at a time, so whatever is
+// loaded was left behind by a process that is gone.
 func CleanupTPM(tpmDev transport.TPM, debug bool) {
+	if t, ok := tpmDev.(*openedTPM); ok && t.managed {
+		return
+	}
 	if err := flushAllTransientHandles(tpmDev); err != nil {
 		if debug {
 			fmt.Printf("Warning: failed to flush transient handles: %v\n", err)
@@ -76,7 +122,8 @@ func flushAllSessions(tpmDev transport.TPM) error {
 	return nil
 }
 
-// IsTPMPolicyFailure checks if an error is a TPM policy failure that can be recovered with password authentication
+// IsTPMPolicyFailure checks if an error is a TPM policy failure: the TPM refused
+// to compute a code because the session did not satisfy the key's policy.
 func IsTPMPolicyFailure(err error) bool {
 	if err == nil {
 		return false
@@ -90,97 +137,70 @@ func IsTPMPolicyFailure(err error) bool {
 		strings.Contains(errStr, "session 1): a policy check failed")
 }
 
-// UnsealWorkflowResult contains the results of the unseal workflow
-type UnsealWorkflowResult struct {
-	UnsealedData []byte
-	SealedBlob   *SealedBlob
-}
-
-// UnsealWorkflow performs the complete unsealing workflow using PolicyOR PCR branch.
-// This consolidates the common pattern used in run, reveal, and reseal commands.
-// When PCRs don't match, returns a PCRMismatchError so the caller can fall back
-// to the PolicySigned branch if a private key is available.
-func UnsealWorkflow(tpmDev transport.TPM, nvramIndex uint32, debug bool) (*UnsealWorkflowResult, error) {
-	// Read sealed blob from NVRAM
+// SlotCode reads the blob at nvramIndex and computes its current TOTP code.
+//
+// Before asking the TPM it compares the blob with the live state, purely to
+// explain a failure: a PCRMismatchError when the registers differ from the
+// sealed values, a GenerationMismatchError when a later reseal revoked this
+// blob's approval, ErrCodesLocked after 'tpm2-kira cap'. None of these checks
+// is the gate; the TPM is.
+func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) (string, *SealedBlob, error) {
 	sealedData, err := ReadFromNVRAM(tpmDev, nvramIndex)
 	if err != nil {
-		return nil, HandleNVRAMNotFoundError(err, debug)
+		return "", nil, HandleNVRAMNotFoundError(err, debug)
 	}
-
-	// Unmarshal sealed blob
 	sealedBlob, err := UnmarshalSealedBlob(sealedData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
+		return "", nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
 
-	// Read current PCR values directly from TPM registers. This avoids any
-	// dependency on the eventlog file or the unified kernel image, which may
-	// not be available during early boot.
+	gen, err := ReadGeneration(tpmDev, GenerationIndex(nvramIndex))
+	switch {
+	case errors.Is(err, ErrCodesLocked):
+		return "", sealedBlob, ErrCodesLocked
+	case err != nil:
+		return "", sealedBlob, &GenerationMismatchError{BlobGeneration: sealedBlob.Payload.Generation, IndexMissing: true}
+	case gen != sealedBlob.Payload.Generation:
+		return "", sealedBlob, &GenerationMismatchError{BlobGeneration: sealedBlob.Payload.Generation, IndexGeneration: gen}
+	}
+
 	currentPCRValues, err := GetCurrentPCRValuesFromRegisters(tpmDev, sealedBlob, debug)
 	if err != nil {
-		return nil, err
+		return "", sealedBlob, err
+	}
+	if !VerifyPCRValues(sealedBlob.GetPCRDigestValues(), currentPCRValues) {
+		return "", sealedBlob, newPCRMismatchError(sealedBlob, currentPCRValues)
 	}
 
-	// Check if PCR values match
-	pcrMatch := VerifyPCRValues(sealedBlob.GetPCRDigestValues(), currentPCRValues)
+	code, err := TOTPCode(tpmDev, sealedBlob, nvramIndex, t)
+	return code, sealedBlob, err
+}
 
-	if !pcrMatch {
-		// Create structured PCR mismatch error with detailed information
-		expectedDigests := make([][]byte, len(sealedBlob.GetPCRDigestValues()))
-		for i, digest := range sealedBlob.GetPCRDigestValues() {
-			expectedDigests[i] = digest.Buffer
-		}
-
-		currentDigests := make([][]byte, len(currentPCRValues))
-		for i, digest := range currentPCRValues {
-			currentDigests[i] = digest.Buffer
-		}
-
-		pcrSources := make([]PCRSource, len(sealedBlob.Payload.PCRDigests))
-		for i, pcrDigest := range sealedBlob.Payload.PCRDigests {
-			pcrSources[i] = pcrDigest.Source
-		}
-
-		pcrErr := &PCRMismatchError{
-			Message:         "PCR values have changed. Use 'reseal' command with signing key to update",
-			PCRIndices:      sealedBlob.GetPCRIndices(),
-			ExpectedDigests: expectedDigests,
-			CurrentDigests:  currentDigests,
-			PCRSources:      pcrSources,
-		}
-		return nil, pcrErr
+func newPCRMismatchError(sealedBlob *SealedBlob, current []tpm2.TPM2BDigest) *PCRMismatchError {
+	expectedDigests := make([][]byte, len(sealedBlob.Payload.PCRDigests))
+	pcrSources := make([]PCRSource, len(sealedBlob.Payload.PCRDigests))
+	for i, d := range sealedBlob.Payload.PCRDigests {
+		expectedDigests[i] = d.Digest.Buffer
+		pcrSources[i] = d.Source
 	}
-
-	// Create primary key
-	primaryKey, err := CreatePrimaryKey(tpmDev)
-	if err != nil {
-		return nil, err
+	currentDigests := make([][]byte, len(current))
+	for i, d := range current {
+		currentDigests[i] = d.Buffer
 	}
-	defer FlushHandle(tpmDev, primaryKey.ObjectHandle)
-
-	// Load sealed object
-	loadedObject, err := LoadSealedObject(tpmDev, primaryKey, sealedBlob)
-	if err != nil {
-		return nil, err
+	return &PCRMismatchError{
+		Message:         "PCR values have changed. Use 'reseal' with the signing key to approve the new values",
+		PCRIndices:      sealedBlob.GetPCRIndices(),
+		ExpectedDigests: expectedDigests,
+		CurrentDigests:  currentDigests,
+		PCRSources:      pcrSources,
 	}
-	defer FlushHandle(tpmDev, loadedObject.ObjectHandle)
-
-	// Unseal the data using PolicyOR PCR branch
-	unsealedData, err := UnsealWithPCRBranch(tpmDev, loadedObject, sealedBlob, debug)
-	if err != nil {
-		return nil, err
-	}
-
-	return &UnsealWorkflowResult{
-		UnsealedData: unsealedData,
-		SealedBlob:   sealedBlob,
-	}, nil
 }
 
 // PrimaryKeyResponse contains the result of creating a primary key
 type PrimaryKeyResponse struct {
 	ObjectHandle tpm2.TPMHandle
 	Name         tpm2.TPM2BName
+	Public       tpm2.TPMTPublic // used to salt sessions
 }
 
 // storagePrimaryTemplate is the deterministic ECC P-256 storage key that
@@ -232,9 +252,15 @@ func CreatePrimaryKey(tpmDev transport.TPM) (*PrimaryKeyResponse, error) {
 		return nil, fmt.Errorf("failed to create primary key: %w", err)
 	}
 
+	pub, err := createPrimaryRsp.OutPublic.Contents()
+	if err != nil {
+		FlushHandle(tpmDev, createPrimaryRsp.ObjectHandle)
+		return nil, fmt.Errorf("failed to parse primary key: %w", err)
+	}
 	return &PrimaryKeyResponse{
 		ObjectHandle: createPrimaryRsp.ObjectHandle,
 		Name:         createPrimaryRsp.Name,
+		Public:       *pub,
 	}, nil
 }
 
@@ -250,7 +276,7 @@ type LoadSealedObjectResponse struct {
 	Name         tpm2.TPM2BName
 }
 
-// LoadSealedObject loads a sealed object into the TPM
+// LoadSealedObject loads the blob's key object into the TPM
 func LoadSealedObject(tpmDev transport.TPM, primaryKey *PrimaryKeyResponse, sealedBlob *SealedBlob) (*LoadSealedObjectResponse, error) {
 	loadCmd := tpm2.Load{
 		ParentHandle: tpm2.AuthHandle{

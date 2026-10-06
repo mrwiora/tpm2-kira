@@ -1,5 +1,6 @@
 #!/bin/sh
-# Stop the background TOTP display before the real root takes over.
+# Stop the background TOTP display and lock code computation before the real
+# root takes over.
 #
 # run-init wipes the initramfs, so a process still running from it has to go.
 
@@ -27,5 +28,9 @@ for PIDFILE in /run/tpm2-kira.pid /run/tpm2-kira-attest.pid; do
     rm -f "$PIDFILE"
     [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
 done
+
+# Lock code computation until the next boot, so nothing in the running
+# system can compute codes. Never let a failure here stop the boot.
+[ -x /usr/bin/tpm2-kira ] && /usr/bin/tpm2-kira cap >/dev/console 2>&1 || true
 
 exit 0

@@ -41,7 +41,19 @@ fi
 # tpm2-kira exits 0 even on failure, by design, so that chained commands still
 # run. Success must therefore be judged from the output, not the exit status.
 output=$(tpm2-kira reseal --measure-point="$measure_point" 2>&1)
-if grep -q "Successfully resealed" <<< "$output"; then
+#
+# SKIPPED means the signing key lives on a YubiKey that is not plugged in, or
+# its PIN was not available. Nothing was written, so the sealed secret is
+# intact; the next boot just shows a PCR mismatch until someone reseals. For
+# unattended signing, /etc/mkinitcpio.conf needs a TPM2_KIRA_PIN='...' line;
+# tpm2-kira reads it from the file itself.
+if grep -q "SKIPPED:" <<< "$output"; then
+    {
+        echo "tpm2-kira: ================================================================"
+        grep -A20 "SKIPPED:" <<< "$output"
+        echo "tpm2-kira: ================================================================"
+    } >&2
+elif grep -q "Successfully resealed" <<< "$output"; then
     echo "tpm2-kira: reseal completed successfully (measure-point=$measure_point)"
 else
     echo "tpm2-kira: WARNING — reseal did NOT succeed:" >&2

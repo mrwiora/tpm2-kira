@@ -14,17 +14,18 @@ Architecture: any
 Depends:
  initramfs-tools,
  ${misc:Depends},
-Suggests: qrencode, tpm2-tools
+Suggests: tpm2-tools, pcscd
 Description: TPM2-sealed TOTP codes shown before disk unlock
- tpm2-kira seals a TOTP secret into TPM NVRAM under a PCR policy and prints the
- current code from the initramfs, before the root filesystem passphrase is
- requested. A code that appears proves the measured boot chain still matches the
- state the secret was sealed against; a missing code means something in that
- chain changed.
+ tpm2-kira keeps a TOTP key inside the TPM and has the TPM compute the current
+ code in the initramfs, before the root filesystem passphrase is requested. A
+ code that appears proves the measured boot chain still matches the state the
+ signing key approved; a missing code means something in that chain changed.
+ The key never leaves the TPM, and code computation is locked when the real
+ root takes over.
  .
- Recovery runs through a PolicyOR branch authorised by an ECDSA signing key, so
- a legitimate firmware or bootloader update can be re-bound with
- "tpm2-kira reseal" without re-enrolling the authenticator app.
+ A legitimate firmware or bootloader update is approved with
+ "tpm2-kira reseal" and the signing key, without re-enrolling the
+ authenticator app.
  .
  On Debian the codes are shown from an initramfs-tools init-premount script, so
  no systemd in the initramfs is required.

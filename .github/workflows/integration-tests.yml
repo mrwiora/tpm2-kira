@@ -42,7 +42,8 @@ jobs:
       - name: Run integration tests
         run: go test -v -tags=integration -coverprofile=coverage.out -timeout 10m ./...
         env:
-          CGO_ENABLED: 1
+          # The tests build and run the binary; build it the way it ships.
+          CGO_ENABLED: 0
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5

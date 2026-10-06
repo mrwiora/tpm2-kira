@@ -130,7 +130,7 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 var AppVersion = "unknown"
 
 // CurrentBlobVersion is the only supported blob format version
-const CurrentBlobVersion = 8
+const CurrentBlobVersion = 9
 
 // MaxBlobSignatureLen is the maximum allowed signature size in bytes.
 // Generous: RSA-4096 PKCS#1 v1.5 = 512 bytes, ECDSA P-384 DER ≈ 104 bytes.
@@ -181,18 +181,20 @@ func (s PCRSource) Suffix() string {
 // Maximum size constraints for blob deserialization to prevent memory exhaustion.
 // These limits are generous for legitimate use while blocking malicious allocations.
 const (
-	MaxBlobSize           = 10 * 1024 * 1024 // 10MB maximum total blob size
-	MaxAppVersionLen      = 1024             // 1KB maximum app version string
-	MaxPublicLen          = 2 * 1024 * 1024  // 2MB maximum public blob
-	MaxPrivateLen         = 2 * 1024 * 1024  // 2MB maximum private blob
-	MaxPCRDigests         = 100              // Maximum 100 PCR digest entries
-	MaxDigestSize         = 1024             // Maximum 1KB per individual digest
-	MaxCommandLen         = 4096             // Maximum 4KB for the UKI path string
-	MaxEventlogPath       = 4096             // Maximum 4KB for eventlog path
-	MaxCalcTime           = 256              // Maximum 256 bytes for timestamp
-	MaxMeasurePointLen    = 512              // Maximum 512 bytes for the measure-point extend description
-	MaxSignedBranchDigest = 64               // Maximum 64 bytes for signed branch digest (SHA-256 = 32 bytes)
-	MaxKeyPathLen         = 4096             // 4KB maximum for key filesystem paths
+	MaxBlobSize         = 10 * 1024 * 1024 // 10MB maximum total blob size
+	MaxAppVersionLen    = 1024             // 1KB maximum app version string
+	MaxPublicLen        = 2 * 1024 * 1024  // 2MB maximum public blob
+	MaxPrivateLen       = 2 * 1024 * 1024  // 2MB maximum private blob
+	MaxPCRDigests       = 100              // Maximum 100 PCR digest entries
+	MaxDigestSize       = 1024             // Maximum 1KB per individual digest
+	MaxCommandLen       = 4096             // Maximum 4KB for the UKI path string
+	MaxEventlogPath     = 4096             // Maximum 4KB for eventlog path
+	MaxCalcTime         = 256              // Maximum 256 bytes for timestamp
+	MaxMeasurePointLen  = 512              // Maximum 512 bytes for the measure-point extend description
+	MaxPolicyRef        = 64               // Maximum 64 bytes for the PolicyAuthorize policyRef
+	MaxSigningPublicLen = 2048             // Maximum 2KB for the signing key's TPMT_PUBLIC
+	MaxApprovalSigLen   = 1024             // Maximum 1KB for the approval TPMT_SIGNATURE
+	MaxKeyPathLen       = 4096             // 4KB maximum for key filesystem paths
 )
 
 // PCRDigestPair represents a PCR index paired with its digest value
@@ -221,22 +223,39 @@ type EventlogInfo struct {
 // update MarshalPayload / UnmarshalPayload.  This guarantees that new
 // fields are automatically included in the signed region.
 type SealedBlobPayload struct {
-	AppVersion         string          `json:"app_version"`                // Application version that created this blob
-	Public             []byte          `json:"public"`                     // TPM public key blob
-	Private            []byte          `json:"private"`                    // TPM private key blob
-	PCRDigests         []PCRDigestPair `json:"pcr_digests"`                // PCR indices with their source and digest values
-	SignedBranchDigest []byte          `json:"signed_branch_digest"`       // Pre-computed PolicySigned branch digest (SHA-256, 32 bytes)
-	EventlogInfo       *EventlogInfo   `json:"eventlog_info"`              // Eventlog calculation metadata (if any PCR uses eventlog)
-	PublicKeyPath      string          `json:"public_key_path,omitempty"`  // Filesystem path to signing public key (stored for reseal convenience)
-	PrivateKeyPath     string          `json:"private_key_path,omitempty"` // Filesystem path to signing private key (stored for reseal convenience)
+	AppVersion string          `json:"app_version"` // Application version that created this blob
+	Public     []byte          `json:"public"`      // TPMT_PUBLIC of the TOTP HMAC key
+	Private    []byte          `json:"private"`     // TPM2B_PRIVATE of the TOTP HMAC key (wrapped by the TPM)
+	PCRDigests []PCRDigestPair `json:"pcr_digests"` // PCR indices with their source and digest values
+	// TOTPAlgorithm is the HMAC hash of the TOTP key: TPMAlgSHA1, or
+	// TPMAlgSHA256 on a TPM without SHA-1.
+	TOTPAlgorithm tpm2.TPMAlgID `json:"totp_algorithm"`
+	// Generation is the value the approved policy requires in the slot's
+	// generation index (GenerationIndex). Each reseal raises it, which
+	// revokes every earlier approval.
+	Generation uint64 `json:"generation"`
+	// PolicyRef qualifies the approvals for this key object: random per
+	// seal, so an approval made for one object never fits another.
+	PolicyRef []byte `json:"policy_ref"`
+	// SigningPublic is the TPMT_PUBLIC of the signing key. The key object's
+	// policy binds its Name, so a substituted key cannot approve anything.
+	SigningPublic []byte `json:"signing_public"`
+	// ApprovalSignature is the signing key's TPMT_SIGNATURE over
+	// H(approvedPolicy ‖ PolicyRef), where approvedPolicy is PolicyPCR over
+	// PCRDigests followed by PolicyNV(generation index == Generation).
+	ApprovalSignature []byte        `json:"approval_signature"`
+	EventlogInfo      *EventlogInfo `json:"eventlog_info"`              // Eventlog calculation metadata (if any PCR uses eventlog)
+	PublicKeyPath     string        `json:"public_key_path,omitempty"`  // Filesystem path recorded at seal time (never used to find a key)
+	PrivateKeyPath    string        `json:"private_key_path,omitempty"` // Filesystem path recorded at seal time (never used to find a key)
 }
 
 // SealedBlob is the top-level envelope: version, signed payload, and
 // detached signature.  Only BlobSignature lives outside the signed region.
 //
-// Version 7: UKI PCR source, measure-point metadata; external predict removed.
+// Version 9: TOTP key is an HMAC key used inside the TPM, authorized by
+// PolicyAuthorize; see docs/SECURITY-BACKGROUND.md §4.
 type SealedBlob struct {
-	Version       uint32            `json:"version"`                  // Blob format version (must be 6)
+	Version       uint32            `json:"version"`                  // Blob format version (must be CurrentBlobVersion)
 	Payload       SealedBlobPayload `json:"payload"`                  // All authenticated content
 	BlobSignature []byte            `json:"blob_signature,omitempty"` // Signature over [version ‖ payloadLen ‖ payload bytes]
 }
@@ -375,7 +394,9 @@ func hasEventlogPCRsInPayload(p *SealedBlobPayload) bool {
 //	[publicLen:4][public]
 //	[privateLen:4][private]
 //	[numPCRDigests:4][pcrDigestPairs...]
-//	[signedBranchDigestLen:2][signedBranchDigest]
+//	[totpAlgorithm:2][generation:8]
+//	[policyRefLen:2][policyRef][signingPublicLen:2][signingPublic]
+//	[approvalSignatureLen:2][approvalSignature]
 //	[hasEventlogInfo:1][eventlogInfo...]
 //	[hasKeyPaths:1][pubKeyPathLen:2][pubKeyPath][privKeyPathLen:2][privKeyPath]
 func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
@@ -383,7 +404,8 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		4 + len(p.Public) + // public blob
 		4 + len(p.Private) + // private blob
 		4 + // number of PCR digests
-		2 + len(p.SignedBranchDigest) + // signed branch digest length (2 bytes) + data
+		2 + 8 + // TOTP algorithm + generation
+		2 + len(p.PolicyRef) + 2 + len(p.SigningPublic) + 2 + len(p.ApprovalSignature) +
 		1 + // hasEventlogInfo flag
 		1 // hasKeyPaths flag
 
@@ -481,11 +503,17 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		offset += len(pcrDigest.Digest.Buffer)
 	}
 
-	// Signed branch digest
-	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(p.SignedBranchDigest)))
+	// Key object and approval
+	binary.LittleEndian.PutUint16(buf[offset:], uint16(p.TOTPAlgorithm))
 	offset += 2
-	copy(buf[offset:], p.SignedBranchDigest)
-	offset += len(p.SignedBranchDigest)
+	binary.LittleEndian.PutUint64(buf[offset:], p.Generation)
+	offset += 8
+	for _, field := range [][]byte{p.PolicyRef, p.SigningPublic, p.ApprovalSignature} {
+		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(field)))
+		offset += 2
+		copy(buf[offset:], field)
+		offset += len(field)
+	}
 
 	// Eventlog information flag
 	if hasEventlogInfo {
@@ -671,21 +699,37 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 		offset += digestSize
 	}
 
-	// Signed branch digest
-	if offset+2 > len(data) {
-		return nil, fmt.Errorf("data too short for signed branch digest length")
+	// Key object and approval
+	if offset+2+8 > len(data) {
+		return nil, fmt.Errorf("data too short for TOTP algorithm and generation")
 	}
-	digestLen := int(binary.LittleEndian.Uint16(data[offset:]))
+	p.TOTPAlgorithm = tpm2.TPMAlgID(binary.LittleEndian.Uint16(data[offset:]))
 	offset += 2
-	if digestLen > MaxSignedBranchDigest {
-		return nil, fmt.Errorf("signed branch digest length %d exceeds maximum %d", digestLen, MaxSignedBranchDigest)
+	p.Generation = binary.LittleEndian.Uint64(data[offset:])
+	offset += 8
+	for _, field := range []struct {
+		name string
+		max  int
+		dst  *[]byte
+	}{
+		{"policy reference", MaxPolicyRef, &p.PolicyRef},
+		{"signing public key", MaxSigningPublicLen, &p.SigningPublic},
+		{"approval signature", MaxApprovalSigLen, &p.ApprovalSignature},
+	} {
+		if offset+2 > len(data) {
+			return nil, fmt.Errorf("data too short for %s length", field.name)
+		}
+		n := int(binary.LittleEndian.Uint16(data[offset:]))
+		offset += 2
+		if n > field.max {
+			return nil, fmt.Errorf("%s length %d exceeds maximum %d", field.name, n, field.max)
+		}
+		if offset+n > len(data) {
+			return nil, fmt.Errorf("data too short for %s", field.name)
+		}
+		*field.dst = append([]byte(nil), data[offset:offset+n]...)
+		offset += n
 	}
-	if offset+digestLen > len(data) {
-		return nil, fmt.Errorf("data too short for signed branch digest data")
-	}
-	p.SignedBranchDigest = make([]byte, digestLen)
-	copy(p.SignedBranchDigest, data[offset:offset+digestLen])
-	offset += digestLen
 
 	// Eventlog info flag
 	if offset >= len(data) {
@@ -920,14 +964,17 @@ func SignBlobPayload(unsignedBlob []byte, privKey crypto.Signer) ([]byte, error)
 	var signature []byte
 	var err error
 
-	switch key := privKey.(type) {
-	case *rsa.PrivateKey:
-		signature, err = rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
+	// Dispatch on the public key: a token-backed signer is neither
+	// *rsa.PrivateKey nor *ecdsa.PrivateKey, but signs in the same formats
+	// (PKCS #1 v1.5 for RSA, ASN.1 DER for ECDSA).
+	switch privKey.Public().(type) {
+	case *rsa.PublicKey:
+		signature, err = privKey.Sign(rand.Reader, digest[:], crypto.SHA256)
 		if err != nil {
 			return nil, fmt.Errorf("RSA blob signing failed: %w", err)
 		}
-	case *ecdsa.PrivateKey:
-		signature, err = ecdsa.SignASN1(rand.Reader, key, digest[:])
+	case *ecdsa.PublicKey:
+		signature, err = privKey.Sign(rand.Reader, digest[:], crypto.SHA256)
 		if err != nil {
 			return nil, fmt.Errorf("ECDSA blob signing failed: %w", err)
 		}
@@ -1016,39 +1063,45 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 
 	// Create a JSON-friendly structure
 	type SealedBlobJSON struct {
-		Version                uint32          `json:"version"`
-		AppVersion             string          `json:"app_version"`
-		HashAlgorithm          string          `json:"hash_algorithm"`
-		Public                 string          `json:"public_hex"`
-		PublicSize             int             `json:"public_size"`
-		Private                string          `json:"private_hex"`
-		PrivateSize            int             `json:"private_size"`
-		PCRDigests             []PCRDigestJSON `json:"pcr_digests"`
-		SignedBranchDigest     string          `json:"signed_branch_digest_hex"`
-		SignedBranchDigestSize int             `json:"signed_branch_digest_size"`
-		PublicKeyPath          string          `json:"public_key_path,omitempty"`
-		PrivateKeyPath         string          `json:"private_key_path,omitempty"`
-		EventlogInfo           *EventlogInfo   `json:"eventlog_info,omitempty"`
-		BlobSignature          string          `json:"blob_signature_hex,omitempty"`
-		BlobSignatureSize      int             `json:"blob_signature_size"`
+		Version           uint32          `json:"version"`
+		AppVersion        string          `json:"app_version"`
+		HashAlgorithm     string          `json:"hash_algorithm"`
+		Public            string          `json:"public_hex"`
+		PublicSize        int             `json:"public_size"`
+		Private           string          `json:"private_hex"`
+		PrivateSize       int             `json:"private_size"`
+		PCRDigests        []PCRDigestJSON `json:"pcr_digests"`
+		TOTPAlgorithm     string          `json:"totp_algorithm"`
+		Generation        uint64          `json:"generation"`
+		PolicyRef         string          `json:"policy_ref_hex"`
+		SigningPublic     string          `json:"signing_public_hex"`
+		ApprovalSignature string          `json:"approval_signature_hex"`
+		PublicKeyPath     string          `json:"public_key_path,omitempty"`
+		PrivateKeyPath    string          `json:"private_key_path,omitempty"`
+		EventlogInfo      *EventlogInfo   `json:"eventlog_info,omitempty"`
+		BlobSignature     string          `json:"blob_signature_hex,omitempty"`
+		BlobSignatureSize int             `json:"blob_signature_size"`
 	}
 
 	jsonBlob := SealedBlobJSON{
-		Version:                sb.Version,
-		AppVersion:             sb.Payload.AppVersion,
-		HashAlgorithm:          sb.GetHashAlgo().String(),
-		Public:                 hex.EncodeToString(sb.Payload.Public),
-		PublicSize:             len(sb.Payload.Public),
-		Private:                hex.EncodeToString(sb.Payload.Private),
-		PrivateSize:            len(sb.Payload.Private),
-		PCRDigests:             pcrDigests,
-		SignedBranchDigest:     hex.EncodeToString(sb.Payload.SignedBranchDigest),
-		SignedBranchDigestSize: len(sb.Payload.SignedBranchDigest),
-		PublicKeyPath:          sb.Payload.PublicKeyPath,
-		PrivateKeyPath:         sb.Payload.PrivateKeyPath,
-		EventlogInfo:           sb.Payload.EventlogInfo,
-		BlobSignature:          hex.EncodeToString(sb.BlobSignature),
-		BlobSignatureSize:      len(sb.BlobSignature),
+		Version:           sb.Version,
+		AppVersion:        sb.Payload.AppVersion,
+		HashAlgorithm:     sb.GetHashAlgo().String(),
+		Public:            hex.EncodeToString(sb.Payload.Public),
+		PublicSize:        len(sb.Payload.Public),
+		Private:           hex.EncodeToString(sb.Payload.Private),
+		PrivateSize:       len(sb.Payload.Private),
+		PCRDigests:        pcrDigests,
+		TOTPAlgorithm:     totpAlgorithmName(sb.Payload.TOTPAlgorithm),
+		Generation:        sb.Payload.Generation,
+		PolicyRef:         hex.EncodeToString(sb.Payload.PolicyRef),
+		SigningPublic:     hex.EncodeToString(sb.Payload.SigningPublic),
+		ApprovalSignature: hex.EncodeToString(sb.Payload.ApprovalSignature),
+		PublicKeyPath:     sb.Payload.PublicKeyPath,
+		PrivateKeyPath:    sb.Payload.PrivateKeyPath,
+		EventlogInfo:      sb.Payload.EventlogInfo,
+		BlobSignature:     hex.EncodeToString(sb.BlobSignature),
+		BlobSignatureSize: len(sb.BlobSignature),
 	}
 
 	return json.Marshal(jsonBlob)

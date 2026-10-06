@@ -2,15 +2,17 @@ package cmd
 
 import (
 	"crypto/hmac"
-	"crypto/sha1"
 	"encoding/base32"
 	"encoding/binary"
 	"fmt"
+	"hash"
 	"net/url"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/google/go-tpm/tpm2"
+	"rsc.io/qr"
 )
 
 // ANSI color codes for KIRA output
@@ -124,30 +126,45 @@ func isTOTPSecret(s string) bool {
 	return err == nil
 }
 
-// generateQRCode generates a QR code using the system's qrencode command
-// Returns an error if qrencode is not installed or execution fails
-func generateQRCode(data string) error {
-	// Check if qrencode is available
-	qrencodePath, err := exec.LookPath("qrencode")
+// renderQRCode renders data as a QR code for a terminal.
+//
+// The encoder is built in: an external qrencode would receive the TOTP
+// secret on its command line, which every local user can read from
+// /proc/<pid>/cmdline while it runs. Two module rows share one text line
+// (half blocks), drawn black on white with ANSI colours so the code scans on
+// dark terminal themes too, and surrounded by the quiet zone scanners need.
+func renderQRCode(data string) (string, error) {
+	code, err := qr.Encode(data, qr.M)
 	if err != nil {
-		return fmt.Errorf("qrencode not found in PATH")
+		return "", fmt.Errorf("failed to encode QR code: %w", err)
 	}
-
-	// Run qrencode with ANSI UTF-8 output for terminal display
-	cmd := exec.Command(qrencodePath, "-t", "ANSIUTF8", data)
-	output, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("failed to execute qrencode: %w", err)
+	const quiet = 4
+	var b strings.Builder
+	for y := -quiet; y < code.Size+quiet; y += 2 {
+		b.WriteString("\033[30;47m")
+		for x := -quiet; x < code.Size+quiet; x++ {
+			top, bottom := code.Black(x, y), code.Black(x, y+1)
+			switch {
+			case top && bottom:
+				b.WriteString("█")
+			case top:
+				b.WriteString("▀")
+			case bottom:
+				b.WriteString("▄")
+			default:
+				b.WriteString(" ")
+			}
+		}
+		b.WriteString("\033[0m\n")
 	}
-
-	// Print the QR code
-	fmt.Print(string(output))
-
-	return nil
+	return b.String(), nil
 }
 
 // generateTOTPURI creates an otpauth URI for TOTP
-func generateTOTPURI(secret, label, issuer string) string {
+//
+// The algorithm parameter is only added for SHA-256: SHA-1 is the default
+// every authenticator assumes, and some apps reject the parameter.
+func generateTOTPURI(secret, label, issuer string, alg tpm2.TPMAlgID) string {
 	if label == "" {
 		label = "TPM2-KIRA"
 	}
@@ -156,32 +173,31 @@ func generateTOTPURI(secret, label, issuer string) string {
 	}
 	// URL encode the label for proper formatting
 	encodedLabel := url.PathEscape(label)
-	return fmt.Sprintf("otpauth://totp/%s?secret=%s&issuer=%s", encodedLabel, secret, issuer)
+	uri := fmt.Sprintf("otpauth://totp/%s?secret=%s&issuer=%s", encodedLabel, secret, issuer)
+	if alg == tpm2.TPMAlgSHA256 {
+		uri += "&algorithm=SHA256"
+	}
+	return uri
 }
 
-// displayTOTPQRCode generates and displays a QR code for a TOTP secret with slot and PCR info
-// If qrencode is not available, displays installation instructions
-func displayTOTPQRCode(secret string, nvramIndex uint32, pcrsStr string) {
+// displayTOTPQRCode displays a QR code for a TOTP secret with slot and PCR info
+func displayTOTPQRCode(secret string, nvramIndex uint32, pcrsStr string, alg tpm2.TPMAlgID) {
 	// Get hostname
 	hostname, err := os.Hostname()
 	if err != nil || hostname == "" {
 		hostname = "unknown"
 	}
 
-	// Calculate slot number from NVRAM index
-	slotNumber := int(nvramIndex - 0x01803010)
+	slotNumber := SlotNumber(nvramIndex)
 
 	// Create label with slot number and PCRs
 	label := fmt.Sprintf("TPM2-KIRA: %s, PCRs %s (#%d)", hostname, pcrsStr, slotNumber)
-	totpURI := generateTOTPURI(secret, label, "TPM2-KIRA")
+	totpURI := generateTOTPURI(secret, label, "TPM2-KIRA", alg)
 
-	// Try to generate and display QR code
-	if err := generateQRCode(totpURI); err != nil {
+	if qrText, err := renderQRCode(totpURI); err != nil {
 		fmt.Printf("   QR code could not be generated: %v\n", err)
-		fmt.Println("   Install 'qrencode' package to enable QR code display")
-		fmt.Println("   Example: apt install qrencode  # Debian/Ubuntu")
-		fmt.Println("           dnf install qrencode  # Fedora")
-		fmt.Println("           pacman -S qrencode    # Arch Linux")
+	} else {
+		fmt.Print(qrText)
 	}
 
 	// Always display the URI for manual entry or backup
@@ -190,51 +206,21 @@ func displayTOTPQRCode(secret string, nvramIndex uint32, pcrsStr string) {
 	fmt.Printf("   %s\n", totpURI)
 }
 
-// generateTOTPCode generates a TOTP code from a Base32-encoded secret
-// Returns the 6-digit code and seconds remaining until expiry
-func generateTOTPCode(secret string) (string, int64, error) {
-	// Remove spaces and convert to uppercase (standard Base32)
-	secret = strings.ToUpper(strings.ReplaceAll(secret, " ", ""))
-
-	// Decode Base32 secret
-	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
-	if err != nil {
-		return "", 0, fmt.Errorf("invalid Base32 secret: %w", err)
-	}
-
-	// Get current Unix timestamp
-	now := time.Now().Unix()
-
-	// TOTP uses 30-second time steps
-	timeStep := int64(30)
-	counter := now / timeStep
-
-	// Calculate time remaining in current window
-	timeRemaining := timeStep - (now % timeStep)
-
-	// Generate HOTP code using HMAC-SHA1
-	code := generateHOTP(key, counter)
-
-	return code, timeRemaining, nil
+// hotpTruncate turns an HMAC into the six-digit code (RFC 4226 dynamic
+// truncation). It works for any HMAC of at least 20 bytes, so for the
+// SHA-256 keys used on TPMs without SHA-1 too (RFC 6238).
+func hotpTruncate(mac []byte) string {
+	offset := mac[len(mac)-1] & 0x0F
+	truncated := binary.BigEndian.Uint32(mac[offset:offset+4]) & 0x7FFFFFFF
+	return fmt.Sprintf("%06d", truncated%1000000)
 }
 
-// generateHOTP generates an HOTP code using HMAC-SHA1
-func generateHOTP(key []byte, counter int64) string {
-	// Convert counter to 8-byte big-endian
+// generateHOTP computes an HOTP code in software. tpm2-kira computes codes in
+// the TPM; this is the reference the tests compare against.
+func generateHOTP(key []byte, counter int64, newHash func() hash.Hash) string {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, uint64(counter))
-
-	// HMAC-SHA1
-	mac := hmac.New(sha1.New, key)
+	mac := hmac.New(newHash, key)
 	mac.Write(buf)
-	hash := mac.Sum(nil)
-
-	// Dynamic truncation (RFC 4226)
-	offset := hash[len(hash)-1] & 0x0F
-	truncated := binary.BigEndian.Uint32(hash[offset:offset+4]) & 0x7FFFFFFF
-
-	// Generate 6-digit code
-	code := truncated % 1000000
-
-	return fmt.Sprintf("%06d", code)
+	return hotpTruncate(mac.Sum(nil))
 }

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/sha256"
-	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -29,6 +29,19 @@ const (
 func ValidateNVRAMIndex(index uint32) error {
 	if index < AppNVRAMStart || index > AppNVRAMEnd {
 		return fmt.Errorf("NVRAM index 0x%08X is outside the safe application range (0x%08X-0x%08X)", index, AppNVRAMStart, AppNVRAMEnd)
+	}
+	return nil
+}
+
+// ValidateBlobIndex checks that a blob may be stored at index: inside the
+// application range, and below the generation indices (GenerationIndex).
+func ValidateBlobIndex(index uint32) error {
+	if err := ValidateNVRAMIndex(index); err != nil {
+		return err
+	}
+	if index >= GenerationIndex(AppNVRAMStart) {
+		return fmt.Errorf("NVRAM index 0x%08X is reserved for generation indices; blobs go at 0x%08X-0x%08X",
+			index, AppNVRAMStart, GenerationIndex(AppNVRAMStart)-1)
 	}
 	return nil
 }
@@ -132,8 +145,7 @@ const NVRAMRecoveryDir = "/var/lib/tpm2-kira/recovery"
 // NVRAMRecoveryDir: it carries the sealed object's public and private areas,
 // which the TPM can still load, so the secret is not lost with the index.
 func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto.PublicKey, privKey crypto.Signer) error {
-	// Validate index is within the safe application range
-	if err := ValidateNVRAMIndex(index); err != nil {
+	if err := ValidateBlobIndex(index); err != nil {
 		return fmt.Errorf("invalid NVRAM index: %w", err)
 	}
 
@@ -252,77 +264,7 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 			chunkSize = len(data) - offset
 		}
 
-		// Re-read NV public area to get the current Name.
-		// The Name changes after the first write (TPMA_NV_WRITTEN is set).
-		nvReadPub := tpm2.NVReadPublic{
-			NVIndex: nvIndex,
-		}
-		nvReadPubRsp, err := nvReadPub.Execute(tpmDev)
-		if err != nil {
-			return stashUnwrittenBlob(index, data, fmt.Errorf("failed to read NV public: %w", err))
-		}
-
-		// Build a PolicySigned session for this chunk.  The callback is
-		// invoked by the go-tpm library when the session is first used as
-		// authorization; it signs the TPM-provided nonce to prove
-		// possession of the private key.
-		policySession := tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm transport.TPM, handle tpm2.TPMISHPolicy, nonceTPM tpm2.TPM2BNonce) error {
-			// aHash = SHA-256(nonceTPM || expiration(0))
-			// expiration is a 4-byte big-endian int32 = 0
-			// cpHashA and policyRef are empty (omitted per spec)
-			aHashInput := make([]byte, 0, len(nonceTPM.Buffer)+4)
-			aHashInput = append(aHashInput, nonceTPM.Buffer...)
-			expirationBytes := make([]byte, 4)
-			binary.BigEndian.PutUint32(expirationBytes, 0)
-			aHashInput = append(aHashInput, expirationBytes...)
-
-			aHash := sha256.Sum256(aHashInput)
-
-			// Sign the aHash with the private key
-			tpmSig, signErr := signForTPM(privKey, aHash[:])
-			if signErr != nil {
-				return fmt.Errorf("failed to sign NV write policy nonce: %w", signErr)
-			}
-
-			// Execute PolicySigned — the TPM verifies the signature
-			// against the loaded public key and extends the session
-			// digest with the key Name.
-			_, signedErr := tpm2.PolicySigned{
-				AuthObject: tpm2.NamedHandle{
-					Handle: keyHandle,
-					Name:   keyName,
-				},
-				PolicySession: handle,
-				NonceTPM:      nonceTPM,
-				Expiration:    0,
-				Auth:          tpmSig,
-			}.Execute(tpm)
-			if signedErr != nil {
-				return fmt.Errorf("failed to execute PolicySigned for NV write: %w", signedErr)
-			}
-
-			return nil
-		})
-
-		// Write the chunk using the satisfied policy session as authorization
-		write := tpm2.NVWrite{
-			AuthHandle: tpm2.AuthHandle{
-				Handle: nvIndex,
-				Name:   nvReadPubRsp.NVName,
-				Auth:   policySession,
-			},
-			NVIndex: tpm2.NamedHandle{
-				Handle: nvIndex,
-				Name:   nvReadPubRsp.NVName,
-			},
-			Data: tpm2.TPM2BMaxNVBuffer{
-				Buffer: data[offset : offset+chunkSize],
-			},
-			Offset: uint16(offset),
-		}
-
-		_, err = write.Execute(tpmDev)
-		if err != nil {
+		if err := policySignedNVWrite(tpmDev, nvIndex, uint16(offset), data[offset:offset+chunkSize], keyHandle, keyName, privKey); err != nil {
 			return stashUnwrittenBlob(index, data, fmt.Errorf("failed to write to NVRAM at offset %d: %w", offset, err))
 		}
 
@@ -344,6 +286,51 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 	return nil
 }
 
+// policySignedNVWrite writes one chunk of at most 1024 bytes to an NV index
+// whose write policy is PolicySigned by the signing key loaded at keyHandle.
+//
+// Each chunk gets its own policy session: the TPM nonce changes per session
+// and needs a fresh signature, and after the first write the TPM sets
+// TPMA_NV_WRITTEN, which changes the index's Name, so the Name is re-read
+// before every write.
+func policySignedNVWrite(tpmDev transport.TPM, nvIndex tpm2.TPMHandle, offset uint16, chunk []byte, keyHandle tpm2.TPMHandle, keyName tpm2.TPM2BName, privKey crypto.Signer) error {
+	nvReadPubRsp, err := tpm2.NVReadPublic{NVIndex: nvIndex}.Execute(tpmDev)
+	if err != nil {
+		return fmt.Errorf("failed to read NV public: %w", err)
+	}
+
+	// The callback runs when the session is first used: it signs the
+	// TPM-provided nonce to prove possession of the private key.
+	policySession := tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm transport.TPM, handle tpm2.TPMISHPolicy, nonceTPM tpm2.TPM2BNonce) error {
+		// aHash = SHA-256(nonceTPM || expiration(0)); cpHashA and
+		// policyRef are empty.
+		aHash := sha256.Sum256(append(append([]byte(nil), nonceTPM.Buffer...), 0, 0, 0, 0))
+		tpmSig, signErr := signForTPM(privKey, aHash[:])
+		if signErr != nil {
+			return fmt.Errorf("failed to sign NV write policy nonce: %w", signErr)
+		}
+		// The TPM verifies the signature against the loaded public key.
+		if _, err := (tpm2.PolicySigned{
+			AuthObject:    tpm2.NamedHandle{Handle: keyHandle, Name: keyName},
+			PolicySession: handle,
+			NonceTPM:      nonceTPM,
+			Expiration:    0,
+			Auth:          tpmSig,
+		}).Execute(tpm); err != nil {
+			return fmt.Errorf("failed to execute PolicySigned for NV write: %w", err)
+		}
+		return nil
+	})
+
+	_, err = tpm2.NVWrite{
+		AuthHandle: tpm2.AuthHandle{Handle: nvIndex, Name: nvReadPubRsp.NVName, Auth: policySession},
+		NVIndex:    tpm2.NamedHandle{Handle: nvIndex, Name: nvReadPubRsp.NVName},
+		Data:       tpm2.TPM2BMaxNVBuffer{Buffer: chunk},
+		Offset:     offset,
+	}.Execute(tpmDev)
+	return err
+}
+
 // stashUnwrittenBlob saves a blob that could not be committed to NVRAM and
 // wraps err with where it went.
 //
@@ -356,7 +343,21 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 //
 // A failure to write the file is reported alongside the original error rather
 // than replacing it: the original is what the user has to act on.
+// ErrNVIndexReplaced marks an error that happened after an NVRAM index was
+// undefined for rewriting: the old blob is gone from the TPM. Callers must
+// never present such an error as harmless.
+var ErrNVIndexReplaced = errors.New("NVRAM index was replaced")
+
+type nvReplacedError struct{ err error }
+
+func (e *nvReplacedError) Error() string   { return e.err.Error() }
+func (e *nvReplacedError) Unwrap() []error { return []error{e.err, ErrNVIndexReplaced} }
+
 func stashUnwrittenBlob(index uint32, data []byte, cause error) error {
+	return &nvReplacedError{err: stashUnwrittenBlobFile(index, data, cause)}
+}
+
+func stashUnwrittenBlobFile(index uint32, data []byte, cause error) error {
 	if mkErr := os.MkdirAll(NVRAMRecoveryDir, 0700); mkErr != nil {
 		return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY and the blob could not be saved either (%v).\n  The sealed secret is lost; run 'tpm2-kira seal' and re-enrol your authenticator", cause, index, mkErr)
 	}
@@ -372,7 +373,7 @@ func stashUnwrittenBlob(index uint32, data []byte, cause error) error {
 // NVRAMList lists all defined NVRAM indices in the TPM
 func NVRAMList(tpmPath string, nvramIndex uint32, debug bool) error {
 	// Open TPM
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -475,7 +476,7 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 	}
 
 	// Open TPM
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -516,19 +517,36 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 
 	fmt.Printf("Successfully deleted NVRAM index 0x%08X\n", nvramIndex)
 
+	// A slot's generation index goes with it.
+	if ValidateBlobIndex(nvramIndex) == nil {
+		genIndex := tpm2.TPMHandle(GenerationIndex(nvramIndex))
+		if genPub, err := (tpm2.NVReadPublic{NVIndex: genIndex}).Execute(tpmDev); err == nil {
+			if _, err := (tpm2.NVUndefineSpace{
+				AuthHandle: tpm2.TPMRHOwner,
+				NVIndex:    tpm2.NamedHandle{Handle: genIndex, Name: genPub.NVName},
+			}).Execute(tpmDev); err != nil {
+				return fmt.Errorf("deleted the blob, but not its generation index 0x%08X: %w", uint32(genIndex), err)
+			}
+		}
+	}
+
 	return nil
 }
 
 // NVRAMDeleteCommand is the top-level entry point for the nvram delete CLI
 // command.  When nvramIndex is 0 it scans every default slot and deletes
 // each populated one; otherwise it deletes only the requested index.
-func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, debug bool) error {
+//
+// Deleting every slot is irreversible and forces re-enrolling every
+// authenticator, so it needs confirmation: yes, or typing "yes" on a
+// terminal. Without either, the slots are listed and nothing is deleted.
+func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool) error {
 	if nvramIndex != 0 {
 		return NVRAMDelete(tpmPath, nvramIndex, debug)
 	}
 
 	// Multi-slot mode – discover populated slots, then delete each one.
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -539,7 +557,15 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, debug bool) error {
 		return fmt.Errorf("no sealed secrets found in NVRAM slots 0x%08X – 0x%08X", NVRAMSlotStart, NVRAMSlotEnd)
 	}
 
-	fmt.Printf("Found %d sealed slot(s) to delete\n\n", len(slots))
+	fmt.Printf("Found %d sealed slot(s) to delete:", len(slots))
+	for _, slotIdx := range slots {
+		fmt.Printf(" #%d", SlotNumber(slotIdx))
+	}
+	fmt.Println()
+	if err := confirmDeleteAll(len(slots), yes); err != nil {
+		return err
+	}
+	fmt.Println()
 
 	var failed []uint32
 	for _, slotIdx := range slots {
@@ -560,10 +586,31 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, debug bool) error {
 	return nil
 }
 
+// confirmDeleteAll asks before every slot is deleted.
+func confirmDeleteAll(count int, yes bool) error {
+	if yes {
+		return nil
+	}
+	tty := setupTerminal()
+	if tty == nil {
+		return fmt.Errorf("refusing to delete all %d slot(s) without confirmation; nothing was deleted.\n"+
+			"  Each deleted secret means re-enrolling its authenticator. To go ahead, run:\n"+
+			"      tpm2-kira nvram delete --yes\n"+
+			"  or delete one slot with --nvram <slot>", count)
+	}
+	fmt.Printf("This deletes the sealed secret of every slot listed; each authenticator must then be re-enrolled.\n"+
+		"Type 'yes' to delete all %d slot(s): ", count)
+	answer, _ := tty.ReadString('\n')
+	if strings.TrimSpace(answer) != "yes" {
+		return fmt.Errorf("not confirmed; nothing was deleted")
+	}
+	return nil
+}
+
 // NVRAMStatus shows detailed status of the specified NVRAM index
 func NVRAMStatus(tpmPath string, nvramIndex uint32, debug bool) error {
 	// Open TPM
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -632,7 +679,7 @@ func NVRAMStatus(tpmPath string, nvramIndex uint32, debug bool) error {
 				fmt.Printf("  Raw size: %d bytes\n", peek.DataSize)
 				fmt.Printf("  Version field: %d (supported: %d)\n", peek.Version, CurrentBlobVersion)
 				if peek.AppVersion != "" {
-					fmt.Printf("  App version: %s\n", peek.AppVersion)
+					fmt.Printf("  App version: %s\n", quoteUntrusted(peek.AppVersion))
 				}
 				fmt.Printf("  Parse error: %v\n", unmarshalErr)
 				fmt.Printf("  First bytes: %x\n", data[:min(32, len(data))])

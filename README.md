@@ -18,18 +18,28 @@ Time-Based One-Time-Password Tokens calculated on Secrets, that the TPM2 reveals
 
 ## How It Works
 
-tpm2-kira generates a TOTP secret and seals it inside TPM NVRAM, protected by a **PolicyOR** with two branches:
+tpm2-kira creates the TOTP key **inside the TPM**, as an HMAC key that never
+leaves it: the TPM computes every code, and the key is shown exactly once, as
+the QR code you enrol in your authenticator app.
 
-| Branch | When it works | Purpose |
-|--------|--------------|---------|
-| **PCR** | Boot measurements match the values recorded at seal time | Normal daily use — no keys or passwords needed |
-| **PolicySigned** | You have the signing private key | Recovery after firmware/kernel/bootloader updates change PCR values |
+The TPM computes a code only under a policy your signing key has approved:
 
-On every boot, tpm2-kira asks the TPM to unseal the secret. If PCRs still match, you get a valid TOTP code. Compare it with the code in your authenticator app — if they match, your boot chain is intact.
+| Condition | What it checks |
+|-----------|----------------|
+| **PCR values** | Boot measurements match the values approved at seal or reseal time |
+| **Generation** | The approval is the latest one: every reseal revokes the older ones |
+| **Not capped** | `tpm2-kira cap` has not run in this boot — it runs when the initrd is left, so the running system cannot compute codes |
 
-When a system update changes PCR values (kernel update, initramfs rebuild, Secure Boot key rotation, etc.), the PCR branch fails. You use `reseal` with your signing key to re-seal the secret against the new PCR values.
+On every boot, tpm2-kira asks the TPM for the current code before the
+passphrase prompt. Compare it with the code in your authenticator app — if
+they match, your boot chain is intact.
 
-For more details on the cryptographic design, see [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md).
+When a system update changes PCR values (kernel update, initramfs rebuild,
+Secure Boot key rotation, etc.), the TPM refuses until you approve the new
+values with `reseal` and your signing key. The key itself stays the same, so
+there is nothing to re-enrol.
+
+For more details on the cryptographic design, see [SECURITY-BACKGROUND.md](docs/SECURITY-BACKGROUND.md).
 
 ## Requirements
 
@@ -37,7 +47,8 @@ For more details on the cryptographic design, see [SECURITY-BACKGROUND.md](SECUR
 - TPM 2.0 (discrete or firmware TPM)
 
 **Software:**
-- Linux with TPM 2.0 kernel support (`/dev/tpm0` or `/dev/tpmrm0`)
+- Linux with TPM 2.0 kernel support (`/dev/tpmrm0`; `/dev/tpm0` is used only when
+  the kernel provides no resource manager)
 - Go ≥ 1.24 (build only)
 
 **Supported architectures:** x86_64, aarch64
@@ -53,14 +64,18 @@ make build
 # Install
 sudo make install
 
-# First-time setup: generates signing keys + seals a TOTP secret (PCRs 0,7)
+# First-time setup: generates the signing keys
 sudo tpm2-kira setup
+
+# Seal a TOTP secret bound to firmware, Secure Boot state and the
+# unified kernel image (kernel, initrd, command line)
+sudo tpm2-kira seal --pcrs 0,7,11u
 
 # Show the current TOTP code
 tpm2-kira reveal
 ```
 
-`setup` creates an ECDSA P-256 key pair at `/var/lib/tpm2-kira/keys/` and seals a TOTP secret bound to PCRs 0 and 7. Scan the QR code it prints with your authenticator app.
+`setup` creates an ECDSA P-256 key pair at `/var/lib/tpm2-kira/keys/` and nothing else. `seal` creates a TOTP key inside the TPM, here approved for PCRs 0, 7 and 11; scan the QR code it prints with your authenticator app. Without a unified kernel image, see [Choosing PCRs](#choosing-pcrs): a selection that leaves out the kernel, initrd and command line lets a modified initrd show a valid code. `seal` refuses to run until `setup` has created the keys (or you pass your own with `--privkey` / `--pubkey`).
 
 ## Installation
 
@@ -88,10 +103,11 @@ checksummed release tarball, and its `pkgver` is filled in at publish time, so
 it cannot be built straight from a clone. See
 [packaging/aur/README.md](packaging/aur/README.md) to build one locally.
 
-After installing, run setup once and rebuild the initramfs:
+After installing, run setup and seal once, then rebuild the initramfs:
 
 ```bash
 sudo tpm2-kira setup
+sudo tpm2-kira seal --pcrs 0,7,11u    # with a unified kernel image
 sudo mkinitcpio -P
 ```
 
@@ -107,11 +123,12 @@ sudo apt install ../tpm2-kira_*_amd64.deb
 checkout produces something like `0.2.3+9.g9d32210`.
 
 The package installs the binary, the initramfs-tools hook and boot scripts, and
-rebuilds the initramfs. It does **not** run `setup`, because that generates a
-new TOTP secret and prints a QR code you need to scan:
+rebuilds the initramfs. It does **not** run `setup` or `seal`, because sealing
+generates a new TOTP secret and prints a QR code you need to scan:
 
 ```bash
 sudo tpm2-kira setup
+sudo tpm2-kira seal --pcrs "0e,2e,4e,7e,8e,9e"
 sudo update-initramfs -u
 ```
 
@@ -130,13 +147,14 @@ If called without a command, tpm2-kira defaults to `reveal`.
 
 | Command | Description |
 |---------|-------------|
-| `setup` | One-time initial setup: generate signing keys + seal a secret (PCRs 0,7) |
-| `seal` | Generate and seal a new TOTP secret with custom PCR selection |
-| `reseal` | Re-seal the existing secret against current PCR values |
+| `setup` | One-time initial setup: generate the signing keys (run before `seal`) |
+| `seal` | Generate and seal a new TOTP secret with custom PCR selection (requires `setup` or your own keys) |
+| `reseal` | Approve new PCR values for the existing key (revokes older approvals) |
 | `reveal` | Show the current TOTP code (colored output) |
 | `reveal-plain` | Show the current TOTP code (plain text, for scripts) |
 | `run` | Continuously display TOTP codes (useful during boot) |
-| `info` | Display metadata about the sealed secret (`--json` for machine-readable output) |
+| `cap` | Lock code computation until the next reboot (run by the boot integration when leaving the initrd) |
+| `info` | Display metadata about the sealed key, its approval and its generation (`--json` for machine-readable output) |
 | `nvram list` | List NVRAM indices |
 | `nvram status` | Show NVRAM index status |
 | `nvram delete` | Delete sealed data from NVRAM |
@@ -152,7 +170,7 @@ If called without a command, tpm2-kira defaults to `reveal`.
 ## Global Options
 
 ```
---tpm PATH       TPM device path (default: /dev/tpm0)
+--tpm PATH       TPM device path (default: /dev/tpmrm0)
 --nvram INDEX    NVRAM slot: 0-15 maps to 0x01803010-0x0180301F,
                  or specify a full hex index like 0x01803010.
                  When omitted, commands auto-discover populated slots.
@@ -208,10 +226,49 @@ image on disk is not the one that booted, so there is nothing to verify against.
 PCR 11 becomes correct once you boot that image. Pass `--verify-uki=false` to
 skip the check entirely.
 
+### Choosing PCRs
+
+A code on screen means "nothing that the selected PCRs measure has changed".
+Anything they do not measure can be replaced without changing the code. Most
+important is what runs before the passphrase prompt: the kernel, the initrd
+and the kernel command line.
+
+| Boot setup | Selection | Measures kernel, initrd and command line through |
+|---|---|---|
+| Unified kernel image (systemd-stub) | `0,7,11u` | PCR 11, computed from the image on disk |
+| GRUB | `0e,2e,4e,7e,8e,9e` | PCR 8 (GRUB commands, incl. the command line) and PCR 9 (files GRUB reads) |
+| systemd-boot, separate kernel and initrd | add `9`, `12` | PCR 9 (initrd loaded by the EFI stub) and PCR 12 (command line) |
+
+Firmware-only selections such as `0,7` or `0e,2e,4e,7e` survive kernel updates
+untouched, but a replaced initrd, or a shell from an edited command line, then
+still gets a valid code — and from such a shell the TPM can be made to compute
+codes for any future time. PCRs 8 and 9 change on every kernel or initramfs update;
+see [If you seal PCR 8 or 9](#if-you-seal-pcr-8-or-9-reseal-after-the-reboot).
+
+### Hardening the boot path
+
+A selection is only as good as the ways into a shell that it measures. Also:
+
+- **Disable the boot-menu editor.** systemd-boot: `editor no` in
+  `loader.conf`. GRUB: set a superuser password. Otherwise `rd.break` or
+  `break=` on the command line drops to a root shell in the genuine initrd
+  (and if the command line is not measured, the code still matches).
+- **No shell after a failed unlock.** On Debian, add `panic=0` (reboot) so
+  initramfs-tools does not drop to its fallback shell.
+- **Firmware setup password and locked boot order**, so no other medium can be
+  booted, and the clock cannot be changed (see [How it works at
+  boot](#how-it-works-at-boot)).
+- **Your own Secure Boot keys** (e.g. with sbctl), so any medium signed for
+  other systems changes PCR 7.
+
 ### Warnings about weak selections
 
 `seal` and `reseal` report selections that attest less than they appear to.
 These are advisory — the secret is still sealed.
+
+**No PCR for the kernel, initrd or command line.** See
+[Choosing PCRs](#choosing-pcrs). The warning names what is missing and, on a
+system booted from a unified kernel image, the selection that adds it.
 
 **PCR 0 on its own** identifies a firmware *build*, not a machine. It measures
 firmware code only (configuration lives in PCR 1), so every device running the
@@ -303,7 +360,14 @@ By default, `setup` generates keys at `/var/lib/tpm2-kira/keys/`. You can supply
 tpm2-kira seal --pubkey /path/to/key.pub --privkey /path/to/key.pem
 ```
 
-Both key paths are stored in the sealed blob so that `reseal` can find them automatically.
+Both key files must be mode `0400`, owned by root (or by the user running
+tpm2-kira), not symlinks, and in a directory nobody else can write to; `seal`
+and `reseal` refuse them otherwise.
+
+Both key paths are recorded in the sealed blob for `info`, but `reseal` never
+uses them to find the key: anyone with TPM access can replace the blob, and a
+planted one would name a key its author holds. `reseal` uses `--privkey`, or
+the default key from `setup`. With a custom key, always pass `--privkey`.
 
 ### Multiple slots
 
@@ -319,10 +383,10 @@ tpm2-kira reveal --nvram 1
 
 ## Resealing After Updates
 
-When PCR values change (kernel update, initramfs rebuild, firmware update), the PCR branch will fail and `reveal` won't produce a valid code. Reseal to bind the secret to the new values:
+When PCR values change (kernel update, initramfs rebuild, firmware update), the TPM no longer computes codes and `reveal` shows a PCR mismatch. Reseal to approve the new values with your signing key; the key in the TPM, and so your authenticator, stay the same:
 
 ```bash
-# Auto-discovers the signing key from the stored blob metadata
+# Uses the default signing key from setup
 tpm2-kira reseal
 
 # Or specify the key explicitly
@@ -341,7 +405,14 @@ tpm2-kira reseal --pcrs "0e,2,4,7e"
 tpm2-kira info
 tpm2-kira info --nvram 0
 tpm2-kira info --json          # machine-readable
+tpm2-kira info --privkey /path/to/key.pem   # verify with a custom key
 ```
+
+`info` first checks each blob's signature with the signing key (`--privkey`,
+or the default key). The result is the first line of the output, and
+`signature_verified` in JSON. A blob that does not verify is still shown, but
+marked untrusted: its strings are printed escaped, and the files it names are
+not opened.
 
 `--json` always emits an array of slot objects, one per populated slot, even
 when there is only one. Each entry carries `slot_number`, `nvram_index` and the
@@ -350,7 +421,8 @@ blob itself, so consumers never have to branch on the slot count.
 ## Deleting Sealed Data
 
 ```bash
-tpm2-kira nvram delete              # deletes all populated slots
+tpm2-kira nvram delete              # all populated slots: asks to type 'yes'
+tpm2-kira nvram delete --yes        # all populated slots, without asking
 tpm2-kira nvram delete --nvram 0    # deletes a specific slot
 ```
 
@@ -480,6 +552,18 @@ The post-generation hook will automatically reseal so the next boot matches.
 
 A systemd service (`tpm2-kira.service`) starts before the disk unlock prompt and runs `tpm2-kira run`, which continuously displays TOTP codes. Compare what's on screen with your authenticator app. If they match, your boot chain is clean — go ahead and type your LUKS passphrase.
 
+When the initrd hands over to the real root, `tpm2-kira-cap.service` runs
+`tpm2-kira cap`. From then until the next reboot the TPM computes no codes,
+for anyone, root included — `tpm2-kira reveal` in the running system reports
+"Locked until reboot". `reseal` still works.
+
+A matching code is evidence only if the clock was not tampered with: the
+codes depend on the real-time clock, which nothing measures. Someone with the
+machine can boot it untouched with the clock set forward, note the codes for
+the time you will next boot, then tamper with it. A firmware setup password
+and a locked boot order make that much harder; see
+[SECURITY-BACKGROUND.md](docs/SECURITY-BACKGROUND.md) §8.
+
 See [initramfs/mkinitcpio/mkinitcpio.conf.example](initramfs/mkinitcpio/mkinitcpio.conf.example) for more HOOKS configurations (LVM, multiple encrypted devices, etc.).
 
 ## Early Boot Integration (Debian / initramfs-tools)
@@ -491,7 +575,7 @@ does not apply. The `.deb` installs two scripts instead:
 |---|---|
 | `/usr/share/initramfs-tools/hooks/tpm2-kira` | copies the binary into the image |
 | `/usr/share/initramfs-tools/scripts/init-premount/tpm2-kira` | starts the display at boot |
-| `/usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira` | stops it before the real root takes over |
+| `/usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira` | stops it and runs `tpm2-kira cap` before the real root takes over |
 | `/etc/tpm2-kira/initramfs.conf` | display mode |
 
 `/init` runs `init-premount` before `local-top/cryptroot` asks for the
@@ -510,7 +594,7 @@ In `run` mode the display refreshes once per 30-second TOTP window, writing to
 the same console as the passphrase prompt. The prompt scrolls up as codes
 arrive; typing is unaffected, since the passphrase is not echoed anyway. The
 `init-bottom` script stops the process before `run-init` replaces the initramfs,
-so nothing is left holding it open.
+so nothing is left holding it open, and then runs `tpm2-kira cap`.
 
 Edit the file and run `sudo update-initramfs -u` to apply a change.
 
@@ -528,11 +612,12 @@ apply. GRUB carries the equivalent measurements instead:
 | 9 | contents of every file GRUB reads (grub.cfg, modules, kernel, initrd) + EFI LoadOptions | **every kernel or initramfs update** |
 
 ```bash
-# Stable across kernel updates - a good default
-tpm2-kira seal --pcrs "0e,2e,4e,7e"
-
-# Adds kernel and initrd integrity, at the cost of the workflow below
+# Measures kernel, initrd and command line; needs the workflow below
 tpm2-kira seal --pcrs "0e,2e,4e,7e,8e,9e"
+
+# Stable across kernel updates, but a modified initrd or command line
+# still shows a valid code (seal prints a warning)
+tpm2-kira seal --pcrs "0e,2e,4e,7e"
 ```
 
 ### If you seal PCR 8 or 9: reseal *after* the reboot
@@ -616,10 +701,10 @@ sudo dmesg | grep -i tpm
 ```
 Ensure TPM 2.0 is enabled in your BIOS/UEFI settings.
 
-**Permission denied on `/dev/tpm0`:**
+**Permission denied on `/dev/tpmrm0`:**
 ```bash
 # Check current permissions
-ls -la /dev/tpm0
+ls -la /dev/tpmrm0
 
 # Your user needs access — either run as root or add a udev rule
 ```
@@ -645,7 +730,7 @@ tpm2-kira pcrtips         # explains what each PCR measures
 
 ```bash
 # Remove sealed data first
-tpm2-kira nvram delete
+tpm2-kira nvram delete --yes
 
 # Remove binary
 sudo make uninstall
@@ -660,19 +745,19 @@ sudo rm -rf /var/lib/tpm2-kira
 
 On Arch:
 ```bash
-tpm2-kira nvram delete
+tpm2-kira nvram delete --yes
 sudo pacman -R tpm2-kira
 ```
 
 On Debian:
 ```bash
-tpm2-kira nvram delete
+tpm2-kira nvram delete --yes
 sudo apt remove tpm2-kira
 ```
 
 Purging the Debian package deliberately leaves `/var/lib/tpm2-kira` in place:
-the signing key is the only recovery path for a secret that may still be sealed
-in the TPM. Delete the slot first, then the directory.
+the signing key is the only way to approve new PCR values for a key that may
+still be sealed in the TPM. Delete the slot first, then the directory.
 
 ## Project Structure
 
@@ -687,13 +772,16 @@ in the TPM. Delete the slot first, then the directory.
 │   ├── kiracore/            # gomobile binding: the phone's verifier core
 │   └── kiratest/            # gomobile binding: a simulated machine for app tests
 ├── cmd/                     # Command implementations
-│   ├── seal.go              # Seal TOTP secret into TPM
-│   ├── reseal.go            # Re-seal with new PCR values
-│   ├── setup.go             # First-time setup (keygen + seal)
+│   ├── seal.go              # Create the TOTP key in the TPM and approve PCR values
+│   ├── reseal.go            # Approve new PCR values, revoke older approvals
+│   ├── setup.go             # First-time setup (keygen)
 │   ├── info.go              # Inspect sealed blob metadata
 │   ├── scan.go              # Multi-slot NVRAM scanning
 │   ├── blob.go              # Sealed blob serialization format
-│   ├── policy_or.go         # PolicyOR digest computation
+│   ├── totpkey.go           # TOTP key object, PolicyAuthorize, generation, cap
+│   ├── signingkey.go        # Signing key loading, PolicySigned for NV writes
+│   ├── keyfile.go           # Key file checks (owner, mode, symlinks)
+│   ├── untrusted.go         # Printing strings from unverified blobs
 │   ├── eventlog_utils.go    # TPM eventlog parsing
 │   ├── measurepoint.go      # Userspace extends before tpm2-kira reads PCRs
 │   ├── ukipredict.go        # Native PCR 11 computation from a UKI
@@ -703,7 +791,7 @@ in the TPM. Delete the slot first, then the directory.
 │   ├── attest_blob.go       # Per-slot attestation blob (AK, pinned phones)
 │   ├── attest_tpm.go        # AK/EK, TPM2_Quote, ActivateCredential
 │   ├── nvram.go             # NVRAM read/write/scan operations
-│   ├── totp_utils.go        # TOTP generation and display
+│   ├── totp_utils.go        # Code truncation, QR code and display
 │   ├── tpm_utils.go         # Low-level TPM operations
 │   ├── pcrtips.go           # PCR reference information
 │   └── constants.go         # Default paths and constants
@@ -719,7 +807,8 @@ in the TPM. Delete the slot first, then the directory.
 │   └── *.issue                   # Write-ups of specific bugs
 ├── initramfs/               # Everything that goes into, or builds, an initramfs
 │   ├── common/attest.conf          # Attestation mode for the initramfs (off / lazy)
-│   ├── systemd/tpm2-kira.service   # Unit, pulled into systemd-based images
+│   ├── systemd/tpm2-kira.service   # Shows the code in systemd-based images
+│   ├── systemd/tpm2-kira-cap.service  # Runs 'cap' when leaving the initrd
 │   ├── systemd/tpm2-kira-attest.service  # Lazy Bluetooth attestation gate
 │   ├── mkinitcpio/                 # Arch
 │   │   ├── install/sd-tpm2-kira    # Build hook: puts the binary in the image
@@ -728,7 +817,7 @@ in the TPM. Delete the slot first, then the directory.
 │   └── initramfs-tools/            # Debian
 │       ├── hooks/tpm2-kira         # Build hook: copies the static binary
 │       ├── scripts/init-premount/tpm2-kira  # Shows the code before unlock
-│       ├── scripts/init-bottom/tpm2-kira    # Stops it before switching root
+│       ├── scripts/init-bottom/tpm2-kira    # Stops it and caps before switching root
 │       ├── post-update.d/tpm2-kira          # Reseal reminder
 │       └── initramfs.conf          # Display mode (run / once)
 ├── debian/                  # Debian package definition (must sit at the root)
@@ -762,7 +851,7 @@ Two things to keep in mind while reading any PCR output:
   15. They keep being extended after the initrd, so a mismatch there is expected
   and not evidence of tampering.
 
-See [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md) §5.6–5.8 for the full
+See [SECURITY-BACKGROUND.md](docs/SECURITY-BACKGROUND.md) §5.6–5.8 for the full
 reconstruction rules and constants.
 
 ## Exit status
@@ -795,7 +884,7 @@ signed by the enrolled phone.
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy and [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md) for an in-depth description of the cryptographic design, threat model, and trust boundaries.
+See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy and [SECURITY-BACKGROUND.md](docs/SECURITY-BACKGROUND.md) for an in-depth description of the cryptographic design, threat model, and trust boundaries.
 
 ## History
 

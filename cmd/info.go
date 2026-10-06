@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"crypto"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -42,13 +45,27 @@ type slotInfo struct {
 	SlotNumber int
 	NVPublic   *tpm2.TPMSNVPublic
 	Blob       *SealedBlob
+	Verify     blobVerification
+	raw        []byte
+	// GenState describes the slot's generation index as the TPM holds it.
+	GenState string
+}
+
+// blobVerification is the outcome of checking a blob's signature with the
+// local signing key. Until it succeeds, every blob field is untrusted.
+type blobVerification struct {
+	Verified bool
+	Key      crypto.Signer // the key that verified the blob, if Verified
+	KeyPath  string        // where that key was loaded from, or tried
+	Reason   string        // why the blob is not verified
 }
 
 // SlotInfoJSON is used for JSON multi-slot output.
 type SlotInfoJSON struct {
-	SlotNumber int             `json:"slot_number"`
-	NVRAMIndex string          `json:"nvram_index"`
-	Blob       json.RawMessage `json:"blob"`
+	SlotNumber        int             `json:"slot_number"`
+	NVRAMIndex        string          `json:"nvram_index"`
+	SignatureVerified bool            `json:"signature_verified"`
+	Blob              json.RawMessage `json:"blob"`
 }
 
 // ── entry point ─────────────────────────────────────────────────────────
@@ -56,8 +73,12 @@ type SlotInfoJSON struct {
 // InfoCommand is the top-level entry point for the info CLI command.
 // When nvramIndex is 0 it scans every default slot; otherwise it shows
 // only the requested index.
-func InfoCommand(tpmPath string, nvramIndex uint32, debug bool, jsonOutput bool) error {
-	tpmDev, err := transport.OpenTPM(tpmPath)
+//
+// Each blob's signature is checked with privKeyPath, or the default key when
+// it is empty. A blob that cannot be verified is still shown, marked as
+// untrusted, and no file it names is opened.
+func InfoCommand(tpmPath string, nvramIndex uint32, privKeyPath string, debug bool, jsonOutput bool) error {
+	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -90,6 +111,11 @@ func InfoCommand(tpmPath string, nvramIndex uint32, debug bool, jsonOutput bool)
 		if len(slots) == 0 {
 			return fmt.Errorf("populated slots found but none could be read")
 		}
+	}
+
+	verifier := newBlobVerifier(privKeyPath)
+	for i := range slots {
+		slots[i].Verify = verifier.verify(slots[i].raw, slots[i].Blob)
 	}
 
 	if jsonOutput {
@@ -128,7 +154,50 @@ func readSlotInfo(tpmDev transport.TPM, nvramIndex uint32) (*slotInfo, error) {
 		SlotNumber: SlotNumber(nvramIndex),
 		NVPublic:   nvPublic,
 		Blob:       sealedBlob,
+		raw:        sealedData,
+		GenState:   generationState(tpmDev, nvramIndex, sealedBlob.Payload.Generation),
 	}, nil
+}
+
+// generationState compares the slot's generation index with the generation
+// the blob's approval requires.
+func generationState(tpmDev transport.TPM, nvramIndex uint32, blobGen uint64) string {
+	gen, err := ReadGeneration(tpmDev, GenerationIndex(nvramIndex))
+	switch {
+	case errors.Is(err, ErrCodesLocked):
+		return "read-locked until reboot ('tpm2-kira cap' ran): no codes in this boot"
+	case err != nil:
+		return fmt.Sprintf("unavailable (%v): no codes until reseal", err)
+	case gen != blobGen:
+		return fmt.Sprintf("%d — does NOT match the blob: this approval is revoked; reseal", gen)
+	}
+	return fmt.Sprintf("%d (matches)", gen)
+}
+
+// blobVerifier loads the local signing key once and checks blobs with it.
+type blobVerifier struct {
+	keyPath string
+	key     crypto.Signer
+	loadErr error
+}
+
+func newBlobVerifier(privKeyPath string) *blobVerifier {
+	v := &blobVerifier{keyPath: privKeyPath}
+	if v.keyPath == "" {
+		v.keyPath = DefaultPrivateKeyPath
+	}
+	v.key, v.loadErr = LoadCheckedSigningPrivateKey(v.keyPath)
+	return v
+}
+
+func (v *blobVerifier) verify(raw []byte, blob *SealedBlob) blobVerification {
+	if v.loadErr != nil {
+		return blobVerification{KeyPath: v.keyPath, Reason: fmt.Sprintf("no signing key to check it with (%v)", v.loadErr)}
+	}
+	if err := VerifyBlobSignature(raw, blob, v.key.Public()); err != nil {
+		return blobVerification{KeyPath: v.keyPath, Reason: fmt.Sprintf("signature does not verify with %s (%v)", v.keyPath, err)}
+	}
+	return blobVerification{Verified: true, Key: v.key, KeyPath: v.keyPath}
 }
 
 // ── JSON output ─────────────────────────────────────────────────────────
@@ -143,9 +212,10 @@ func printJSON(slots []slotInfo) error {
 			return fmt.Errorf("failed to marshal JSON for slot #%d: %w", si.SlotNumber, err)
 		}
 		items = append(items, SlotInfoJSON{
-			SlotNumber: si.SlotNumber,
-			NVRAMIndex: fmt.Sprintf("0x%08X", si.Index),
-			Blob:       json.RawMessage(raw),
+			SlotNumber:        si.SlotNumber,
+			NVRAMIndex:        fmt.Sprintf("0x%08X", si.Index),
+			SignatureVerified: si.Verify.Verified,
+			Blob:              json.RawMessage(raw),
 		})
 	}
 	out, err := json.MarshalIndent(items, "", "  ")
@@ -192,11 +262,19 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 		fmt.Println()
 	}
 
+	// ── 0. Signature: first, because it decides how to read the rest ──
+	if si.Verify.Verified {
+		fmt.Printf("%s%sSignature: valid (verified with %s)\n", prefix, branch(false), si.Verify.KeyPath)
+	} else {
+		fmt.Printf("%s%sSignature: NOT VERIFIED — the fields below are untrusted\n", prefix, branch(false))
+		fmt.Printf("%s%s%sReason: %s\n", prefix, cont(false), branch(true), si.Verify.Reason)
+	}
+
 	// ── 1. Blob Format ──────────────────────────────────────────────
 	fmt.Printf("%s%sBlob Format\n", prefix, branch(false))
 	sub := prefix + cont(false)
 	fmt.Printf("%s%sVersion: %d\n", sub, branch(false), blob.Version)
-	fmt.Printf("%s%sApp Version: %s\n", sub, branch(false), blob.Payload.AppVersion)
+	fmt.Printf("%s%sApp Version: %s\n", sub, branch(false), quoteUntrusted(blob.Payload.AppVersion))
 	fmt.Printf("%s%sHash Algorithm: %s (%d-byte PCR digests)\n", sub, branch(true), hashAlgo.DisplayString(), hashAlgo.DigestSize())
 
 	// ── 2. NVRAM ────────────────────────────────────────────────────
@@ -218,14 +296,12 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 	}
 
 	// ── 4. Authentication ───────────────────────────────────────────
-	fmt.Printf("%s%sAuthentication: PolicyOR (PCR branch + PolicySigned branch)\n", prefix, branch(false))
+	fmt.Printf("%s%sAuthentication: PolicyAuthorize (PCR values + generation, approved by the signing key)\n", prefix, branch(false))
 	sub = prefix + cont(false)
-	if len(blob.Payload.SignedBranchDigest) > 0 {
-		fmt.Printf("%s%sSigned Branch Digest: %x (%d bytes)\n", sub, branch(false), blob.Payload.SignedBranchDigest, len(blob.Payload.SignedBranchDigest))
-		printSigningKeyInfo(sub, blob)
-	} else {
-		fmt.Printf("%s%sSigned Branch: not present (incompatible blob)\n", sub, branch(true))
-	}
+	fmt.Printf("%s%sTOTP Key: HMAC-%s, inside the TPM\n", sub, branch(false), totpAlgorithmName(blob.Payload.TOTPAlgorithm))
+	fmt.Printf("%s%sApproved Generation: %d\n", sub, branch(false), blob.Payload.Generation)
+	fmt.Printf("%s%sGeneration Index: 0x%08X = %s\n", sub, branch(false), GenerationIndex(si.Index), si.GenState)
+	printSigningKeyInfo(sub, blob, si.Verify)
 
 	// ── 5. TPM Objects ──────────────────────────────────────────────
 	fmt.Printf("%s%sTPM Objects\n", prefix, branch(false))
@@ -256,26 +332,43 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 
 // ── sub-section helpers ─────────────────────────────────────────────────
 
-func printSigningKeyInfo(sub string, blob *SealedBlob) {
-	if blob.Payload.PublicKeyPath != "" {
-		pubKey, _, keyErr := LoadSigningPublicKeyFromPEM(blob.Payload.PublicKeyPath)
-		if keyErr == nil {
-			fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
-			fmt.Printf("%s%sSigning Key Path: %s\n", sub, branch(true), blob.Payload.PublicKeyPath)
-			return
+// printSigningKeyInfo describes the signing key. Only the key that verified
+// the blob is described and checked; key paths recorded in the blob are
+// printed quoted and never opened, since the blob may have been planted.
+// Closes the branch.
+func printSigningKeyInfo(sub string, blob *SealedBlob, v blobVerification) {
+	if v.Verified {
+		pubKey := v.Key.Public()
+		fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
+		if desc, ok := YubiKeyDescription(v.Key); ok {
+			fmt.Printf("%s%sSigning Key Location: %s\n", sub, branch(false), desc)
+		}
+	} else {
+		fmt.Printf("%s%sSigning Key: unknown (blob not verified)\n", sub, branch(false))
+	}
+
+	recorded := "recorded"
+	if !v.Verified {
+		recorded = "recorded, unverified, not opened"
+	}
+	for _, p := range []struct{ label, path string }{
+		{"Private Key Path", blob.Payload.PrivateKeyPath},
+		{"Public Key Path", blob.Payload.PublicKeyPath},
+	} {
+		if p.path != "" {
+			fmt.Printf("%s%s%s: %s (%s)\n", sub, branch(false), p.label, quoteUntrusted(p.path), recorded)
 		}
 	}
-	if blob.Payload.PrivateKeyPath != "" {
-		privKey, keyErr := LoadSigningPrivateKeyFromPEM(blob.Payload.PrivateKeyPath)
-		if keyErr == nil {
-			pubKey := privKey.Public()
-			fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
-			fmt.Printf("%s%sSigning Key Path: %s (derived from private key)\n", sub, branch(true), blob.Payload.PrivateKeyPath)
-			return
-		}
+
+	fmt.Printf("%s%sKey File Check: %s: %s\n", sub, branch(true), v.KeyPath, keyFileStatus(v.KeyPath))
+}
+
+// keyFileStatus reports whether seal and reseal would accept a key file.
+func keyFileStatus(path string) string {
+	if err := CheckSigningKeyFile(path); err != nil {
+		return "WARNING: " + strings.ReplaceAll(err.Error(), "\n", " ")
 	}
-	// No key could be loaded – close the branch.
-	fmt.Printf("%s%sSigning Key: unavailable (key paths not accessible)\n", sub, branch(true))
+	return "ok (mode 0400, trusted owner and directory)"
 }
 
 func printPCRSources(sub string, blob *SealedBlob) {
@@ -285,9 +378,9 @@ func printPCRSources(sub string, blob *SealedBlob) {
 	hasRegister := len(regPCRs) > 0
 
 	if info := blob.Payload.EventlogInfo; info != nil && info.MeasurePointExtends != "" {
-		fmt.Printf("%s%sMeasure-point extends: %s\n", sub, branch(false), info.MeasurePointExtends)
+		fmt.Printf("%s%sMeasure-point extends: %s\n", sub, branch(false), quoteUntrusted(info.MeasurePointExtends))
 		if info.MeasurePointDetection != "" {
-			fmt.Printf("%s%s  detected via: %s\n", sub, branch(false), info.MeasurePointDetection)
+			fmt.Printf("%s%s  detected via: %s\n", sub, branch(false), quoteUntrusted(info.MeasurePointDetection))
 		}
 	}
 
