@@ -63,22 +63,7 @@ func PrintKIRAError(err error) {
 			expected := pcrErr.ExpectedDigests[i]
 			current := pcrErr.CurrentDigests[i]
 
-			match := true
-			if len(expected) != len(current) {
-				match = false
-			} else {
-				for j := range expected {
-					if expected[j] != current[j] {
-						match = false
-						break
-					}
-				}
-			}
-
-			status := "✓ MATCH"
-			if !match {
-				status = "✗ CHANGED"
-			}
+			status := PCRStatus(expected, current)
 
 			source := ""
 			if i < len(pcrErr.PCRSources) {

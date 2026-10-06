@@ -189,10 +189,13 @@ there is exactly one service, two characteristics and no security manager
 ### 3.3 Ordering and the measure point
 
 The BLE stack must come up *after* the userspace extends that define the
-measure point, exactly like the display loop does today
-(SECURITY-BACKGROUND.md §5.8). The unit therefore keeps
+gate's measure point (SECURITY-BACKGROUND.md §5.8). The unit therefore keeps
 `After=systemd-pcrosseparator.service` and
 `After=systemd-pcrphase-initrd.service`, and adds `Before=cryptsetup-pre.target`.
+The TOTP display, by contrast, runs *before* the separator so that the
+separator locks the secret; a quote is not a secret and post-separator values
+follow from pre-separator ones, so the gate need not hold the separator back
+while it advertises.
 
 The enrolment baseline must describe the same point: `attest enrol` runs in
 the booted system, where PCR 11 already carries systemd's later phases, so it

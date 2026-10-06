@@ -468,8 +468,12 @@ SEAL OPTIONS:
                      Examples: "0,2,7" (all register), "0e,2e,7e" (all eventlog),
                                "0e,2,7e" (mixed: 0 and 7 from eventlog, 2 from register)
                                "0e,2e,7e,11u" (eventlog + UKI-computed PCR 11)
-  --measure-point M  Account for systemd's userspace PCR extends that happen
-                     before tpm2-kira runs: auto (default), on, off
+  --measure-point M  Account for systemd's enter-initrd extend of PCR 11, which
+                     happens before tpm2-kira runs: auto (default), on, off.
+                     PCRs 0-7, 9, 12-14 are always sealed to their values before
+                     systemd-pcrosseparator.service (replayed from the event
+                     log): the display runs before it, and the separator then
+                     locks the secret until the next boot
   --pubkey PATH      Path to signing public key PEM for PolicySigned branch
                      (default: %s)
                      Accepts X.509 certificates or raw public keys (RSA, ECDSA)

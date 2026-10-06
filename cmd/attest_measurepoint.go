@@ -51,7 +51,10 @@ func predictMeasurePoint(tpmDev transport.TPM, sealed *SealedBlob, sel attest.PC
 	if sel.Alg == attest.AlgSHA1 {
 		algo = PCRHashAlgoSHA1
 	}
-	res, err := ReadPCRValues(tpmDev, specs, algo, mode, debug)
+	// The gate runs after the OS separator (unlike the display, which runs
+	// before it so the separator locks the TOTP secret): its quotes carry
+	// os-separator, and so must the baseline.
+	res, err := ReadPCRValues(tpmDev, specs, algo, mode, MeasurePointAfterSeparator, debug)
 	if err != nil {
 		return &measurePoint{err: err}
 	}

@@ -29,7 +29,8 @@ _report_measure_point() {
     if (( ${#active[@]} > 0 )); then
         printf 'on\n' > "$MEASURE_POINT_STATE"
         plain "tpm2-kira: measure-point units active: ${active[*]}"
-        plain "tpm2-kira:   sealing against post-extend PCR values (os-separator on PCRs 0-7,9,12-14; enter-initrd on PCR 11)"
+        plain "tpm2-kira:   the display runs after enter-initrd (PCR 11) and before the os-separator,"
+        plain "tpm2-kira:   which then locks the TOTP secret until the next boot"
     else
         printf 'off\n' > "$MEASURE_POINT_STATE"
         plain "tpm2-kira: no systemd measure-point units in this initramfs; sealing against end-of-firmware values"

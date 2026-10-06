@@ -32,10 +32,7 @@ func DisplayPCRMismatch(pcrIndices []int, expectedDigests, currentDigests []tpm2
 		expected := expectedDigests[i].Buffer
 		current := currentDigests[i].Buffer
 
-		status := "✓ MATCH"
-		if !bytes.Equal(expected, current) {
-			status = "✗ CHANGED"
-		}
+		status := PCRStatus(expected, current)
 
 		fmt.Printf("  PCR%-2d: %s - %s\n", pcrIndex, GetPCRDescription(pcrIndex), status)
 		fmt.Printf("    Expected (blob):    %x\n", expected)
@@ -226,6 +223,13 @@ type ReadPCRValuesResult struct {
 	Values         map[int][]byte // PCR index -> digest value (eventlog-calculated for eventlog PCRs, register value for register PCRs)
 	RegisterValues map[int][]byte // PCR index -> actual register value (always from TPM register)
 	EventlogInfo   *EventlogInfo  // eventlog metadata (nil when no eventlog PCRs)
+	// Specs are the specs actually used: before the OS separator, register
+	// specs for PCRs the separator touches are read from the event log.
+	Specs []PCRSpec
+	// AfterSeparator is set, with the reason, when such registers had to be
+	// used after all because the event log cannot be replayed: the values
+	// then include os-separator and the secret only unlocks after it.
+	AfterSeparator string
 }
 
 // ReadPCRRegisters reads PCR values directly from TPM registers for the given
@@ -336,18 +340,29 @@ func explainEventlogBankError(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PC
 //
 // Values describe tpm2-kira's measure point in the initrd, which is where the TPM
 // checks the policy, not the end of firmware and not the running system.
-func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, mode MeasurePointMode, debug bool) (*ReadPCRValuesResult, error) {
+func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, mode MeasurePointMode, point MeasurePoint, debug bool) (*ReadPCRValuesResult, error) {
 	// Separate PCRs by source
 	var eventlogPCRIndices []int
 	var ukiPCRIndices []int
 	var registerPCRIndices []int
-	for _, spec := range specs {
+	var converted []int // register specs read from the event log instead
+	specs = slices.Clone(specs)
+	for i, spec := range specs {
 		switch spec.Source {
 		case PCRSourceEventlog:
 			eventlogPCRIndices = append(eventlogPCRIndices, spec.Index)
 		case PCRSourceUKI:
 			ukiPCRIndices = append(ukiPCRIndices, spec.Index)
 		default:
+			if point == MeasurePointBeforeSeparator && mode != MeasurePointOff && slices.Contains(osSeparatorPCRs, spec.Index) {
+				// By the time anything can seal, the register already
+				// carries the os-separator, but the policy is checked
+				// before it: the value has to come from the event log.
+				specs[i].Source = PCRSourceEventlog
+				converted = append(converted, spec.Index)
+				eventlogPCRIndices = append(eventlogPCRIndices, spec.Index)
+				continue
+			}
 			registerPCRIndices = append(registerPCRIndices, spec.Index)
 		}
 	}
@@ -358,16 +373,35 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 	}
 
 	// Calculate eventlog-based PCR values
+	var calculatedPCRs map[int][]byte
+	var info *EventlogInfo
 	if len(eventlogPCRIndices) > 0 {
 		calc := NewEventlogPCRCalculator(tpmDev, eventlogPCRIndices, hashAlgo, debug)
-		calculatedPCRs, info, err := calc.CalculatePCRsFromEventlog()
-		if err != nil {
+		var err error
+		calculatedPCRs, info, err = calc.CalculatePCRsFromEventlog()
+		if err != nil && len(converted) == len(eventlogPCRIndices) {
+			// Only the converted registers needed the log and it cannot be
+			// replayed: seal to the registers after all. That binds the
+			// secret to post-separator values, so it unlocks only after
+			// the separator and stays unsealable while the system runs;
+			// the caller says so.
+			for i := range specs {
+				if slices.Contains(converted, specs[i].Index) {
+					specs[i].Source = PCRSourceRegister
+				}
+			}
+			registerPCRIndices = append(registerPCRIndices, converted...)
+			result.AfterSeparator = err.Error()
+			eventlogPCRIndices, converted = nil, nil
+		} else if err != nil {
 			var bankErr *EventlogBankError
 			if errors.As(err, &bankErr) {
 				return nil, explainEventlogBankError(tpmDev, specs, hashAlgo, bankErr)
 			}
 			return nil, fmt.Errorf("failed to calculate PCRs from eventlog: %w", err)
 		}
+	}
+	if len(eventlogPCRIndices) > 0 {
 		result.EventlogInfo = info
 
 		replay := make(map[int][]byte, len(calculatedPCRs))
@@ -405,7 +439,7 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 			apply, detection = detected, how
 		}
 		if apply {
-			applied := ApplyMeasurePointExtends(result.Values, eventlogPCRIndices, hashAlgo, debug)
+			applied := ApplyMeasurePointExtends(result.Values, eventlogPCRIndices, hashAlgo, point, debug)
 			if result.EventlogInfo != nil {
 				result.EventlogInfo.MeasurePointExtends = applied
 			}
@@ -465,6 +499,7 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 		}
 	}
 
+	result.Specs = specs
 	return result, nil
 }
 
@@ -478,7 +513,7 @@ func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug boo
 	hashAlgo := sealedBlob.GetHashAlgo()
 	specs := sealedBlob.GetPCRSpecs()
 
-	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, sealedBlob.MeasurePointMode(), debug)
+	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, sealedBlob.MeasurePointMode(), sealedBlob.MeasurePoint(), debug)
 	if err != nil {
 		return nil, err
 	}

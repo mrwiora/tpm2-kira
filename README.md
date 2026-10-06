@@ -229,19 +229,39 @@ than staying silent.
 
 ### The measure point
 
-tpm2-kira reads PCRs in the initrd, *after* systemd has already extended some
-of them. `systemd-pcrosseparator.service` extends `os-separator` into PCRs
-0–7, 9, 12, 13, 14, and `systemd-pcrphase-initrd.service` extends
-`enter-initrd` into PCR 11 — both before `cryptsetup-pre.target`.
+tpm2-kira checks its policy in the initrd, between two systemd extends that
+both happen before `cryptsetup-pre.target`: *after*
+`systemd-pcrphase-initrd.service` has extended `enter-initrd` into PCR 11,
+and *before* `systemd-pcrosseparator.service` extends `os-separator` into
+PCRs 0–7, 9, 12, 13, 14. `tpm2-kira.service` is ordered between the two and
+is `Type=notify`: it unseals every slot, then tells systemd it is ready, and
+only then does the separator run.
 
-Eventlog-derived values describe the *end of firmware*, so tpm2-kira adds those
-extends to reach the measure point. `--measure-point` controls this:
+That order is what locks the secret. PCR extends are one-way, so once the
+separator has run, nothing in the booted system can reproduce the values the
+secret is sealed to — not root, not malware — until the next boot. The code
+is shown at the prompt from memory; `tpm2-kira reveal` on a running system
+reports the slot as *locked until the next boot*, which is the intended
+state. (The PolicySigned branch is unaffected: whoever holds the signing key
+can still unseal — keep it on a YubiKey, or at least off the machine.)
+
+Because the live registers at seal time already carry the separator, PCRs
+0–7, 9, 12–14 are sealed to values replayed from the firmware event log even
+when given as register source. Where the log cannot be replayed, `seal` warns
+and falls back to the registers: the secret then unlocks only after the
+separator, the display retries after the boot has been released, and marks
+the code accordingly. Blobs sealed by earlier versions (which ran after the
+separator) keep working the same way until they are resealed.
+
+Eventlog-derived values describe the *end of firmware*, so tpm2-kira adds
+`enter-initrd` on PCR 11 to reach the measure point. `--measure-point`
+controls this:
 
 | Value | Behaviour |
 |-------|-----------|
-| `auto` (default) | Probes stable PCRs against the TPM to decide, and refuses if the result is ambiguous |
+| `auto` (default) | Probes stable PCRs against the TPM to decide whether systemd's extends are active, and refuses if the result is ambiguous |
 | `on` | Always apply |
-| `off` | Reconstruct end-of-firmware values only |
+| `off` | Reconstruct end-of-firmware values only (and read registers as they are) |
 
 The mkinitcpio install hook inspects the image being built and passes the right
 value to `reseal`, which is what makes the first rebuild after these units

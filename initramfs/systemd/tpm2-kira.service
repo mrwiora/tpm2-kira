@@ -2,16 +2,21 @@
 Description=Starting tpm2-kira
 Requires=dev-tpm0.device
 After=dev-tpm0.device
-# PCRs must stay stable for the whole run loop, so observe them after systemd's
-# userspace extends; ordering against a unit that never starts is a no-op.
-After=systemd-pcrosseparator.service
+# The measure point: after systemd's enter-initrd phase (PCR 11) and before
+# the OS separator extends PCRs 0-7, 9, 12-14. Type=notify: READY is sent once
+# every slot has been unsealed, so the separator waits for that and then locks
+# the secrets until the next boot (SECURITY-BACKGROUND.md §5.8).
 After=systemd-pcrphase-initrd.service
+Before=systemd-pcrosseparator.service
 Before=systemd-ask-password-console.service
 Conflicts=multi-user.target
 DefaultDependencies=no
 
 [Service]
-Type=simple
+Type=notify
+# READY comes right after the unseal attempts; a hung TPM must not hold the
+# boot for longer than this.
+TimeoutStartSec=60
 ExecStart=tpm2-kira run
 StandardOutput=tty
 StandardError=tty

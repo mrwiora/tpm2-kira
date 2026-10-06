@@ -116,9 +116,21 @@ func sealDataWithSpecs(tpmPath string, specs []PCRSpec, nvramIndex uint32, dataT
 	}
 
 	// Read all PCR values from their respective sources using the shared helper
-	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, MeasurePointModeSetting, debug)
+	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, MeasurePointModeSetting, MeasurePointBeforeSeparator, debug)
 	if err != nil {
 		return err
+	}
+	// Register-sourced PCRs the OS separator touches were read from the
+	// event log instead; the blob records the source actually used.
+	specs = readResult.Specs
+	if readResult.AfterSeparator != "" {
+		fmt.Println()
+		fmt.Println("WARNING: the event log cannot be replayed, so PCRs 0-7, 9, 12-14 are sealed to their")
+		fmt.Println("         register values, which already carry systemd's os-separator. The secret then")
+		fmt.Println("         unlocks only after the separator and stays unsealable while the system runs;")
+		fmt.Println("         the display at boot says so. Reason:")
+		fmt.Printf("         %s\n", readResult.AfterSeparator)
+		fmt.Println()
 	}
 
 	// Reseal runs right after an initramfs rebuild, where the image on disk is

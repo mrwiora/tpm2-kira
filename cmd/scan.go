@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
 	"time"
 
@@ -22,6 +23,10 @@ type NVRAMSlot struct {
 	Secret     string
 	Error      error // Error encountered during unsealing (if any)
 	Available  bool  // Whether the slot has data (even if unsealing failed)
+	// AfterSeparator: the slot unsealed only once the boot had been released
+	// (tpm2-kira run), i.e. possibly after the OS separator: the secret is
+	// then not locked for the rest of this boot.
+	AfterSeparator bool
 }
 
 // NVRAMIndexExists performs a lightweight check whether the given NVRAM index
@@ -310,65 +315,65 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 	fmt.Printf("[ \033[1;33mKIRA\033[0m ] Time UTC %s\n", timestamp)
 
 	for _, slot := range slots {
-		if slot.Error != nil {
-			// Check if this is a version incompatibility error
-			if bve, ok := IsBlobVersionError(slot.Error); ok {
-				fmt.Printf("\033[0;31m#%d\033[0m: Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira seal\n", slot.SlotNumber, bve.FoundVersion, bve.RequiredVersion)
-				continue
+		if slot.Error == nil {
+			if code, exists := codes[slot.SlotNumber]; exists {
+				// Green slot number for successful reveal
+				fmt.Printf("\033[0;32m#%d\033[0m: %s", slot.SlotNumber, code)
+				if slot.AfterSeparator {
+					fmt.Print("  (unsealed after the boot was released: reseal to lock it until the next boot)")
+				}
+				fmt.Println()
 			}
+			continue
+		}
+		// Check if this is a version incompatibility error
+		if bve, ok := IsBlobVersionError(slot.Error); ok {
+			fmt.Printf("\033[0;31m#%d\033[0m: Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira seal\n", slot.SlotNumber, bve.FoundVersion, bve.RequiredVersion)
+			continue
+		}
 
-			// This slot has a PCR mismatch or policy failure - red slot number
-			fmt.Printf("\033[0;31m#%d\033[0m: PCR Mismatch\n", slot.SlotNumber)
-
-			// Try to read the sealed blob to get PCR details
-			// Read the sealed blob and current register values for comparison
-			sealedData, err := ReadFromNVRAM(tpmDev, slot.Index)
-			if err == nil {
-				sealedBlob, err := UnmarshalSealedBlob(sealedData)
-				if err == nil {
-					// Read current PCR values from TPM registers only
-					// (no eventlog or UKI dependency)
-					currentPCRValues, err := GetCurrentPCRValuesFromRegisters(tpmDev, sealedBlob, false)
-					if err == nil {
-						pcrIndices := sealedBlob.GetPCRIndices()
-						expectedDigests := sealedBlob.GetPCRDigestValues()
-
-						for idx, pcrIndex := range pcrIndices {
-							if idx >= len(expectedDigests) || idx >= len(currentPCRValues) {
-								break
-							}
-
-							expected := expectedDigests[idx].Buffer
-							current := currentPCRValues[idx].Buffer
-
-							match := true
-							if len(expected) != len(current) {
-								match = false
-							} else {
-								for j := range expected {
-									if expected[j] != current[j] {
-										match = false
-										break
-									}
-								}
-							}
-
-							status := "✓ MATCH"
-							if !match {
-								status = "✗ CHANGED"
-							}
-
-							source := sealedBlob.Payload.PCRDigests[idx].Source
-							fmt.Printf("  PCR%-2d (%s): %s - %s\n", pcrIndex, source.String(), GetPCRDescription(pcrIndex), status)
-							fmt.Printf("    Expected (blob):    %x\n", expected)
-							fmt.Printf("    Current (register): %x\n", current)
+		// This slot has a PCR mismatch or policy failure - red slot number.
+		// Read the sealed blob and the registers to say which PCRs differ,
+		// and whether they differ only by the OS separator: then the secret
+		// is locked until the next boot, which is the intended state of a
+		// running system.
+		type line struct {
+			index    int
+			source   string
+			expected []byte
+			current  []byte
+		}
+		var lines []line
+		locked := false
+		if sealedData, err := ReadFromNVRAM(tpmDev, slot.Index); err == nil {
+			if sealedBlob, err := UnmarshalSealedBlob(sealedData); err == nil {
+				// Registers only: no eventlog or UKI dependency at boot.
+				if currentPCRValues, err := GetCurrentPCRValuesFromRegisters(tpmDev, sealedBlob, false); err == nil {
+					pcrIndices := sealedBlob.GetPCRIndices()
+					expectedDigests := sealedBlob.GetPCRDigestValues()
+					locked = true
+					for idx, pcrIndex := range pcrIndices {
+						if idx >= len(expectedDigests) || idx >= len(currentPCRValues) {
+							break
 						}
+						e, c := expectedDigests[idx].Buffer, currentPCRValues[idx].Buffer
+						if !bytes.Equal(e, c) && !SeparatorLocked(e, c) {
+							locked = false
+						}
+						lines = append(lines, line{pcrIndex, sealedBlob.Payload.PCRDigests[idx].Source.String(), e, c})
 					}
 				}
 			}
-		} else if code, exists := codes[slot.SlotNumber]; exists {
-			// Green slot number for successful reveal
-			fmt.Printf("\033[0;32m#%d\033[0m: %s\n", slot.SlotNumber, code)
+		}
+		if locked && len(lines) > 0 {
+			fmt.Printf("\033[0;31m#%d\033[0m: Locked until the next boot (the OS separator ran after the measure point)\n", slot.SlotNumber)
+		} else {
+			fmt.Printf("\033[0;31m#%d\033[0m: PCR Mismatch\n", slot.SlotNumber)
+		}
+		for _, l := range lines {
+			fmt.Printf("  PCR%-2d (%s): %s - %s\n", l.index, l.source, GetPCRDescription(l.index), PCRStatus(l.expected, l.current))
+			fmt.Printf("    Expected (blob):    %x\n", l.expected)
+			fmt.Printf("    Current (register): %x\n", l.current)
 		}
 	}
 }
@@ -444,135 +449,5 @@ func RevealCommand(tpmPath string, nvramIndex uint32, debug bool, plain bool) {
 		PrintPlainSlots(slots, codes)
 	} else {
 		PrintKIRASlots(tpmDev, slots, codes)
-	}
-}
-
-// RunCommand implements the run command functionality (continuous display)
-func RunCommand(tpmPath string, nvramIndex uint32, debug bool) {
-	var lastCodes map[int]string
-	var lastError error
-	var lastErrorTime time.Time
-	firstRun := true
-
-	lastCodes = make(map[int]string)
-
-	for {
-		// Open TPM
-		tpmDev, err := transport.OpenTPM(tpmPath)
-		if err != nil {
-			currentTime := time.Now()
-			newError := fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
-
-			// Show error message if it's new or 30 seconds have passed
-			if lastError == nil || lastError.Error() != newError.Error() || currentTime.Sub(lastErrorTime) >= 30*time.Second {
-				PrintKIRAError(newError)
-				lastError = newError
-				lastErrorTime = currentTime
-			}
-
-			// Wait 30 seconds before retrying
-			time.Sleep(30 * time.Second)
-			continue
-		}
-
-		// Cleanup TPM memory
-		CleanupTPM(tpmDev, debug)
-
-		// Determine if we should scan all slots or just one
-		var slots []NVRAMSlot
-		if nvramIndex == 0 {
-			// Scan all slots in the default range when nvramIndex is 0
-			slots = ScanNVRAMSlots(tpmDev, debug)
-		} else {
-			// Scan only the specified index
-			slots = ScanNVRAMSlot(tpmDev, nvramIndex, debug)
-		}
-		tpmDev.Close()
-
-		if len(slots) == 0 {
-			currentTime := time.Now()
-			var newError error
-			if nvramIndex == 0 {
-				newError = fmt.Errorf("no TOTP secrets found in NVRAM slots 0x%08X - 0x%08X", NVRAMSlotStart, NVRAMSlotEnd)
-			} else {
-				newError = fmt.Errorf("no TOTP secret found at NVRAM index 0x%08X", nvramIndex)
-			}
-
-			// Show error message if it's new or 30 seconds have passed
-			if lastError == nil || lastError.Error() != newError.Error() || currentTime.Sub(lastErrorTime) >= 30*time.Second {
-				PrintKIRAError(newError)
-				lastError = newError
-				lastErrorTime = currentTime
-			}
-
-			// Wait 30 seconds before retrying
-			time.Sleep(30 * time.Second)
-			continue
-		}
-
-		// Generate TOTP codes for valid slots
-		newCodes, _ := GenerateTOTPCodesForSlots(slots)
-
-		// Check if any code has changed or it's the first run
-		hasNewCodes := firstRun
-		if !firstRun {
-			for slotNum, code := range newCodes {
-				if lastCodes[slotNum] != code {
-					hasNewCodes = true
-					break
-				}
-			}
-		}
-
-		// Always display: on first run, when codes change, or when we have slots (even with errors)
-		shouldDisplay := firstRun || hasNewCodes || len(slots) > 0
-
-		if shouldDisplay {
-			// Open TPM again for display (needed for PCR details)
-			tpmDev2, err := transport.OpenTPM(tpmPath)
-			if err == nil {
-				// Display with colored KIRA format
-				PrintKIRASlots(tpmDev2, slots, newCodes)
-				tpmDev2.Close()
-			} else {
-				// Fallback: display without TPM access (no PCR details)
-				fmt.Printf("[ \033[1;33mKIRA\033[0m ] Time UTC %s\n", time.Now().UTC().Format("15:04:05"))
-				for _, slot := range slots {
-					if slot.Error != nil {
-						if bve, ok := IsBlobVersionError(slot.Error); ok {
-							fmt.Printf("\033[0;31m#%d\033[0m: Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira seal\n", slot.SlotNumber, bve.FoundVersion, bve.RequiredVersion)
-						} else {
-							fmt.Printf("\033[0;31m#%d\033[0m: PCR Mismatch\n", slot.SlotNumber)
-						}
-					} else if code, exists := newCodes[slot.SlotNumber]; exists {
-						fmt.Printf("\033[0;32m#%d\033[0m: %s\n", slot.SlotNumber, code)
-					}
-				}
-			}
-
-			// Add newline after each output in run mode
-			fmt.Println()
-
-			// Update last codes
-			lastCodes = newCodes
-			lastError = nil // Clear any previous error since we're successful
-			firstRun = false
-		}
-
-		// Calculate time to next TOTP window (30 second boundaries: :00 and :30)
-		now := time.Now()
-		currentSecond := now.Second()
-		var secondsToWait int
-
-		if currentSecond < 30 {
-			// Wait until :30
-			secondsToWait = 30 - currentSecond
-		} else {
-			// Wait until next :00
-			secondsToWait = 60 - currentSecond
-		}
-
-		// Sleep until the next TOTP window boundary
-		time.Sleep(time.Duration(secondsToWait) * time.Second)
 	}
 }

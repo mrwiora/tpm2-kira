@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/google/go-tpm/tpm2"
 )
@@ -281,6 +282,16 @@ func (sb *SealedBlob) MeasurePointMode() MeasurePointMode {
 		return MeasurePointOn
 	}
 	return MeasurePointOff
+}
+
+// MeasurePoint tells where this blob's policy is checked. Blobs sealed by
+// versions whose display ran after systemd-pcrosseparator.service applied
+// os-separator to their replayed values; everything else is checked before it.
+func (sb *SealedBlob) MeasurePoint() MeasurePoint {
+	if info := sb.Payload.EventlogInfo; info != nil && strings.Contains(info.MeasurePointExtends, OSSeparatorWord) {
+		return MeasurePointAfterSeparator
+	}
+	return MeasurePointBeforeSeparator
 }
 
 // HasEventlogPCRs returns true if any PCR in this blob uses eventlog as its source

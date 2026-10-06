@@ -14,10 +14,9 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
-const (
-	// Default eventlog path on Linux systems
-	DefaultEventlogPath = "/sys/kernel/security/tpm0/binary_bios_measurements"
-)
+// DefaultEventlogPath is the firmware event log on Linux; a variable so tests
+// can point the replay at a log of their own.
+var DefaultEventlogPath = "/sys/kernel/security/tpm0/binary_bios_measurements"
 
 // EventlogPCRCalculator handles PCR calculation from TPM eventlogs using go-attestation
 type EventlogPCRCalculator struct {
