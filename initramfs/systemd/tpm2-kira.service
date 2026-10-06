@@ -1,5 +1,8 @@
 [Unit]
 Description=Starting tpm2-kira
+# An initrd unit. The package also puts this file on the host, where the
+# mkinitcpio hook picks it up from; enabled there by mistake it does nothing.
+ConditionPathExists=/etc/initrd-release
 # The resource-managed node: tpm2-kira only sees and flushes its own handles
 # there, so it cannot disturb other TPM users in the initrd.
 Requires=dev-tpmrm0.device

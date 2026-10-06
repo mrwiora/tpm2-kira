@@ -918,5 +918,9 @@ func AttestUnenrol(tpmPath string, sealIndex uint32, debug bool) error {
 	forgetAttestState(DefaultAttestStateDir, idx)
 	fmt.Printf("Attestation enrolment removed from slot %d (NV 0x%08X).\n", idx-AttestNVRAMStart, idx)
 	fmt.Println("The phone still lists this machine; remove it there too.")
+	if cfg, err := LoadAttestConfig(DefaultAttestConfigPath); err == nil && cfg.Mode != "off" {
+		fmt.Println("The initramfs still carries the Bluetooth gate, which now has nothing to")
+		fmt.Println("serve: rebuild it (mkinitcpio -P / update-initramfs -u) to take it out.")
+	}
 	return nil
 }

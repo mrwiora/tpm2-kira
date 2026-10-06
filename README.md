@@ -572,6 +572,36 @@ and a locked boot order make that much harder; see
 
 See [initramfs/mkinitcpio/mkinitcpio.conf.example](initramfs/mkinitcpio/mkinitcpio.conf.example) for more HOOKS configurations (LVM, multiple encrypted devices, etc.).
 
+### What is installed where
+
+The package puts all four unit files into `/usr/lib/systemd/system` on the
+host, because the mkinitcpio hook takes them from there. None of the initrd
+units is enabled on the host, and each carries
+`ConditionPathExists=/etc/initrd-release`, so enabling one there by mistake
+does nothing.
+
+| Unit | In the initramfs image | Does something when |
+|------|------------------------|---------------------|
+| `tpm2-kira.service` (the code at the prompt) | always, once `sd-tpm2-kira` is in `HOOKS` | a TOTP key is sealed. With nothing sealed it says so once, releases the boot and exits; a later `seal` needs no rebuild |
+| `tpm2-kira-cap.service` (locks codes when the initrd is left) | always, with the display | the initrd is left. Without sealed keys there is nothing to lock |
+| `tpm2-kira-attest.service` (Bluetooth gate) | only if `/etc/tpm2-kira/attest.conf` says `lazy`, **and** a phone is enrolled, **and** the adapter was found when the image was built. Otherwise neither the unit nor any Bluetooth module or firmware is in the image; `mkinitcpio` says which condition failed | a phone connects |
+| `tpm2-kira-attest-check.service` (was the attestation blob replaced?) | never: it runs on the booted system, and only if you enable it (`systemctl enable tpm2-kira-attest-check.service`) | a phone is enrolled; otherwise it exits quietly |
+
+One case leaves a unit in the image with nothing to do: `attest unenrol`
+without rebuilding the initramfs. The gate then starts at boot, reports that no
+phone is enrolled and fails; `unenrol` tells you to rebuild.
+
+The gate is the only process that takes input from outside the machine before
+the disk is unlocked, so its unit confines it: Bluetooth and Unix sockets only,
+the capabilities for the adapter and no others, the TPM, rfkill and the console
+as its only devices, a read-only file system, and a system call filter
+(`systemd-analyze security` rates the unit 2.4, from 9.4 without).
+
+On Debian there are no units in the image: the initramfs-tools scripts start
+the display and, under the same three conditions, the gate, and run `cap` when
+the initramfs is left. The confinement above applies to systemd-based images
+only.
+
 ## Early Boot Integration (Debian / initramfs-tools)
 
 Debian's stock initramfs has no systemd in it, so the systemd unit used on Arch

@@ -2,10 +2,14 @@
 Description=tpm2-kira remote attestation over Bluetooth LE (lazy)
 Documentation=https://github.com/mrwiora/tpm2-kira/blob/main/docs/PLAN-BLE.md
 DefaultDependencies=no
-Requires=dev-tpm0.device
-After=dev-tpm0.device
-# Quotes must describe the measure point, like the TOTP display (PLAN-BLE.md
-# §3.3); ordering against a unit that never starts is a no-op.
+# An initrd unit. The package also puts this file on the host, where the
+# mkinitcpio hook picks it up from; enabled there by mistake it does nothing.
+ConditionPathExists=/etc/initrd-release
+# The resource-managed node, like the display.
+Requires=dev-tpmrm0.device
+After=dev-tpmrm0.device
+# Quotes must describe the gate's measure point (PLAN-BLE.md §3.3); ordering
+# against a unit that never starts is a no-op.
 After=systemd-pcrosseparator.service
 After=systemd-pcrphase-initrd.service
 # The image lists the adapter's driver modules in modules-load.d.
@@ -27,6 +31,49 @@ StandardError=tty
 # FAILED line next to the warning; nothing requires this unit, so the boot
 # carries on either way.
 SuccessExitStatus=3
+
+# Confinement. This process parses radio input from anyone in range, as root,
+# before the disk is unlocked. It needs the TPM, one Bluetooth adapter and the
+# console, and gets nothing else: should a parsing bug ever be found, this is
+# what limits what it can be turned into.
+#
+# Capabilities: the HCI user channel needs CAP_NET_ADMIN, the raw HCI socket
+# CAP_NET_RAW. Nothing else survives, and none can be regained.
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=
+# Sockets: Bluetooth, and Unix for the console and the TPM's resource manager.
+# No IP in any form. (Not PrivateNetwork=: Bluetooth sockets exist only in
+# the initial network namespace.)
+RestrictAddressFamilies=AF_BLUETOOTH AF_UNIX
+IPAddressDeny=any
+# Devices: the TPM, rfkill to clear a soft block, the console.
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+DeviceAllow=/dev/tpm0 rw
+DeviceAllow=/dev/rfkill rw
+DeviceAllow=/dev/console rw
+# File system: read-only. /sys stays writable (not ProtectKernelTunables=):
+# the adapter's USB power control is switched there while it is in use.
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+UMask=0077
+# Kernel interfaces a Go program talking to a socket and a device never needs.
+# An unexpected call fails with EPERM instead of killing the gate.
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=sysinit.target

@@ -22,6 +22,7 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -51,18 +52,26 @@ type bootDisplay struct {
 }
 
 func (b *bootDisplay) run() {
-	slots, allUp := b.holdForConfirmation()
+	slots, allUp, err := b.holdForConfirmation()
 	b.notify()
 	if allUp {
 		return // every slot was confirmed or at least shown; nothing more can be computed
 	}
+	if errors.Is(err, ErrNoSlots) {
+		// Nothing is sealed: the unit is in every image so that a later
+		// 'seal' needs no rebuild, but until then it has nothing to do.
+		return
+	}
 	b.serveAfterRelease(slots)
 }
 
+// ErrNoSlots: no NVRAM slot holds a TOTP key.
+var ErrNoSlots = errors.New("no TOTP key is sealed")
+
 // holdForConfirmation shows a fresh code per window until Enter or the end
 // of the hold, and reports the last slots and whether all of them had a
-// code. A scan that fails outright releases the boot at once.
-func (b *bootDisplay) holdForConfirmation() ([]NVRAMSlot, bool) {
+// code. A scan that fails outright releases the boot at once, with its error.
+func (b *bootDisplay) holdForConfirmation() ([]NVRAMSlot, bool, error) {
 	deadline := b.now().Add(b.hold)
 	var slots []NVRAMSlot
 	allUp := false
@@ -71,7 +80,7 @@ func (b *bootDisplay) holdForConfirmation() ([]NVRAMSlot, bool) {
 		s, err := b.scan(now)
 		if err != nil {
 			PrintKIRAError(err)
-			return slots, false
+			return slots, false, err
 		}
 		slots = s
 		allUp = true
@@ -87,10 +96,10 @@ func (b *bootDisplay) holdForConfirmation() ([]NVRAMSlot, bool) {
 			d = left
 		}
 		if d <= 0 || b.wait(d) {
-			return slots, allUp
+			return slots, allUp, nil
 		}
 		if !b.now().Before(deadline) {
-			return slots, allUp
+			return slots, allUp, nil
 		}
 	}
 }
@@ -230,9 +239,9 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, debug boo
 			}
 			if len(slots) == 0 {
 				if nvramIndex == 0 {
-					return nil, fmt.Errorf("no TOTP secrets found in NVRAM slots 0x%08X - 0x%08X", NVRAMSlotStart, NVRAMSlotEnd)
+					return nil, fmt.Errorf("%w in NVRAM slots 0x%08X - 0x%08X (run 'tpm2-kira seal')", ErrNoSlots, NVRAMSlotStart, NVRAMSlotEnd)
 				}
-				return nil, fmt.Errorf("no TOTP secret found at NVRAM index 0x%08X", nvramIndex)
+				return nil, fmt.Errorf("%w at NVRAM index 0x%08X (run 'tpm2-kira seal')", ErrNoSlots, nvramIndex)
 			}
 			return slots, nil
 		},

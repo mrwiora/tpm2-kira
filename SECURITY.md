@@ -79,6 +79,19 @@ booted system). Known residual risks:
 - **The initrd must be covered by the quoted PCRs.** `attest enrol` warns
   when it is not; see README.md, "Choose PCRs that cover the initrd".
 
+## The Bluetooth gate's process
+
+`tpm2-kira-attest.service` is the only part of tpm2-kira that takes input from
+outside the machine before the disk is unlocked: it parses Bluetooth packets
+from anyone in range, as root. Its unit therefore confines it to what it
+needs: `AF_BLUETOOTH` and `AF_UNIX` sockets and no IP, `CAP_NET_ADMIN` and
+`CAP_NET_RAW` and no other capability, the TPM, rfkill and the console as its
+only devices, a read-only file system, no new privileges, and a system call
+filter. A parsing bug in the radio path would be confined to that. The unit is
+in the image only when attestation is enabled and a phone is enrolled. On
+initramfs-tools (Debian) the gate is started by a script and is not confined
+this way.
+
 ## The TOTP secret on a running system
 
 `tpm2-kira.service` checks its policy in the initrd *before*

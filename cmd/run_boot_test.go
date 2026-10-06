@@ -173,6 +173,29 @@ func TestBootDisplayServesLateSlotsAfterRelease(t *testing.T) {
 	}
 }
 
+// With nothing sealed the display says so once, releases the boot and is
+// done: the unit is in every image, and must not loop there for nothing.
+func TestBootDisplayExitsWhenNothingIsSealed(t *testing.T) {
+	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)}
+	b := f.display(nil, nil, nil)
+	b.scan = func(time.Time) ([]NVRAMSlot, error) {
+		f.mu.Lock()
+		f.log = append(f.log, "scan")
+		f.mu.Unlock()
+		return nil, ErrNoSlots
+	}
+	done := make(chan struct{})
+	go func() { b.run(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the display keeps running with nothing sealed")
+	}
+	if len(f.log) != 2 || f.log[0] != "scan" || f.log[1] != "notify" {
+		t.Fatalf("log %v", f.log)
+	}
+}
+
 func TestNextTOTPBoundary(t *testing.T) {
 	at := func(s int) time.Time { return time.Date(2026, 1, 1, 0, 0, s, 500, time.UTC) }
 	if got := nextTOTPBoundary(at(5)); got.Second() != 30 {
