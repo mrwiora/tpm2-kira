@@ -11,6 +11,11 @@ package cmd
 // enrolment baseline is computed with exactly that code (ReadPCRValues), so
 // the first boot after enrolment matches and the phone only reports a change
 // when the boot chain really changed.
+//
+// The prediction is not TPM-signed, so before it is offered it is tied to the
+// live registers the way the phone will tie it (attest.CheckMeasurePointValues):
+// equal everywhere, and on PCR 11 an earlier state of the register by
+// systemd's phase words. A prediction that fails this is not offered.
 
 import (
 	"fmt"
@@ -33,17 +38,15 @@ type measurePoint struct {
 // predictMeasurePoint computes the PCR values the boot check will see for
 // the attested selection, the way the seal does for its policy.
 func predictMeasurePoint(tpmDev transport.TPM, sealed *SealedBlob, sel attest.PCRSelection, debug bool) *measurePoint {
-	var sealSpecs []PCRSpec
 	mode := MeasurePointAuto
 	if sealed != nil {
-		sealSpecs = sealed.GetPCRSpecs()
 		if sealed.HasEventlogPCRs() {
 			// The seal already probed whether systemd's measure-point
 			// extends are in effect; the TOTP policy depends on that answer.
 			mode = sealed.MeasurePointMode()
 		}
 	}
-	specs := measurePointSpecs(sel.Indices, sealSpecs)
+	specs := measurePointSpecs(sel.Indices)
 	algo := PCRHashAlgoSHA256
 	if sel.Alg == attest.AlgSHA1 {
 		algo = PCRHashAlgoSHA1
@@ -60,25 +63,28 @@ func predictMeasurePoint(tpmDev transport.TPM, sealed *SealedBlob, sel attest.PC
 		}
 		vals = append(vals, attest.PCRValue{Index: i, Digest: v})
 	}
+	live, err := readPCRBank(tpmDev, sel)
+	if err != nil {
+		return &measurePoint{err: err}
+	}
+	if err := attest.CheckMeasurePointValues(sel.Alg, live, vals); err != nil {
+		return &measurePoint{err: fmt.Errorf("the prediction does not fit the running system: %w", err)}
+	}
 	return &measurePoint{values: vals, note: describeMeasurePoint(specs, res)}
 }
 
 // measurePointSpecs chooses, per attested PCR, where its boot-check value
-// comes from: the seal's own source where the seal predicts that PCR (unified
-// kernel image or event log), so the phone pins exactly what the TOTP policy
-// is bound to; otherwise the event log for PCRs 0-12, which is what the
-// firmware log describes, and the register above that.
-func measurePointSpecs(indices []uint8, seal []PCRSpec) []PCRSpec {
+// comes from: the event log for PCRs 0-12, which is what the firmware log
+// describes, and the register above that. The baseline is about the boot
+// that is running, so the seal's unified kernel image (a file that may
+// already be newer than the booted one) is deliberately not used; the seal
+// contributes its measure-point probe result instead.
+func measurePointSpecs(indices []uint8) []PCRSpec {
 	specs := make([]PCRSpec, 0, len(indices))
 	for _, i := range indices {
 		spec := PCRSpec{Index: int(i), Source: PCRSourceRegister}
 		if i <= 12 {
 			spec.Source = PCRSourceEventlog
-		}
-		for _, s := range seal {
-			if s.Index == int(i) && (s.Source == PCRSourceUKI || s.Source == PCRSourceEventlog) {
-				spec = s
-			}
 		}
 		specs = append(specs, spec)
 	}

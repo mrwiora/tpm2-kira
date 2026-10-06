@@ -6,18 +6,13 @@ import (
 )
 
 func TestMeasurePointSpecs(t *testing.T) {
-	seal := []PCRSpec{
-		{Index: 0, Source: PCRSourceRegister},
-		{Index: 7, Source: PCRSourceEventlog},
-		{Index: 11, Source: PCRSourceUKI, Command: "/efi/EFI/Linux/arch.efi"},
-	}
-	got := measurePointSpecs([]uint8{0, 2, 7, 11, 14}, seal)
+	got := measurePointSpecs([]uint8{0, 2, 7, 11, 14})
 	want := []PCRSpec{
-		{Index: 0, Source: PCRSourceEventlog},                                 // the seal's register source predicts nothing: use the log
-		{Index: 2, Source: PCRSourceEventlog},                                 // not in the seal: the log
-		{Index: 7, Source: PCRSourceEventlog},                                 // the seal's source
-		{Index: 11, Source: PCRSourceUKI, Command: "/efi/EFI/Linux/arch.efi"}, // the seal's image
-		{Index: 14, Source: PCRSourceRegister},                                // beyond what the firmware log describes
+		{Index: 0, Source: PCRSourceEventlog},
+		{Index: 2, Source: PCRSourceEventlog},
+		{Index: 7, Source: PCRSourceEventlog},
+		{Index: 11, Source: PCRSourceEventlog}, // the stub's section measurements are in the firmware log
+		{Index: 14, Source: PCRSourceRegister}, // beyond what the firmware log describes
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %+v", got)
@@ -30,7 +25,7 @@ func TestMeasurePointSpecs(t *testing.T) {
 }
 
 func TestDescribeMeasurePoint(t *testing.T) {
-	specs := measurePointSpecs([]uint8{0, 2, 4, 7, 11}, nil)
+	specs := measurePointSpecs([]uint8{0, 2, 4, 7, 11})
 	res := &ReadPCRValuesResult{EventlogInfo: &EventlogInfo{MeasurePointExtends: "enter-initrd:11;os-separator:0,2,4,7"}}
 	got := describeMeasurePoint(specs, res)
 	want := "values at the boot check (event log for 0,2,4,7,11 + enter-initrd on 11, os-separator on 0,2,4,7)"

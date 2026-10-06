@@ -557,24 +557,14 @@ func (v *Verifier) handleEnrol(out *Output, d *Decoder) (*Output, error) {
 	return v.fail(out, ErrCodeProtocol, "unexpected "+d.Type.String())
 }
 
-// checkMeasurePointValues requires the optional boot-check values to cover
-// exactly the quoted PCRs, with digests of the quoted bank's size. They are
-// not TPM-signed: at enrolment the machine's current state is trusted anyway,
-// and the first boot check then tests the prediction against a real quote.
+// checkMeasurePointValues ties the optional boot-check values to the
+// TPM-signed quote (CheckMeasurePointValues): they may differ from the live
+// registers only where systemd provably extended PCR 11 after the boot check.
 func checkMeasurePointValues(o *EnrolOffer) error {
 	if len(o.MeasurePointValues) == 0 {
 		return nil
 	}
-	if len(o.MeasurePointValues) != len(o.PCRValues) {
-		return errors.New("boot-check values do not cover the quoted PCRs")
-	}
-	for i, v := range o.MeasurePointValues {
-		live := o.PCRValues[i]
-		if v.Index != live.Index || len(v.Digest) != len(live.Digest) {
-			return errors.New("boot-check values do not cover the quoted PCRs")
-		}
-	}
-	return nil
+	return CheckMeasurePointValues(o.Selection.Alg, o.PCRValues, o.MeasurePointValues)
 }
 
 // checkOffer validates everything in an EnrolOffer that can be checked

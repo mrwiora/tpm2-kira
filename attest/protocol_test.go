@@ -506,8 +506,12 @@ func bootCheckValues(t *testing.T, m *attesttest.Machine) ([]PCRValue, []byte) {
 func TestEnrolPinsBootCheckValues(t *testing.T) {
 	m, p := newMachine(t), newPhone(t)
 	m.Sel, _ = NewPCRSelection(AlgSHA256, []int{0, 2, 4, 7, 11})
-	m.TPM.Extend(11, "leave-initrd") // the running system has moved on
 	predicted, gate := bootCheckValues(t, m)
+	// The running system has moved on: systemd extended its later phases.
+	m.TPM.PCRs[11] = gate
+	for _, w := range []string{"leave-initrd", "sysinit", "ready"} {
+		m.TPM.Extend(11, w)
+	}
 	m.MeasurePoint = predicted
 
 	rec := enrol(t, m, p)
@@ -528,17 +532,35 @@ func TestEnrolPinsBootCheckValues(t *testing.T) {
 	}
 }
 
-// Boot-check values must cover exactly the quoted PCRs.
-func TestEnrolRejectsBootCheckValuesForOtherPCRs(t *testing.T) {
-	m, p := newMachine(t), newPhone(t)
-	m.MeasurePoint = []PCRValue{{Index: 4, Digest: make([]byte, 32)}}
-	a, b := attesttest.NewPipe()
-	go func() { _, _ = m.ServeEnrolment(a, true); a.Close() }()
-	v, err := NewEnrolVerifier(p.Config())
-	if err != nil {
-		t.Fatal(err)
+// Boot-check values are not TPM-signed: the phone accepts them only where
+// they provably precede the quoted registers (PCR 11 phases), so a machine
+// cannot pin a baseline for a boot it has not done.
+func TestEnrolRejectsUnprovenBootCheckValues(t *testing.T) {
+	live := func(m *attesttest.Machine) []PCRValue {
+		q, _ := m.TPM.Quote(nil, m.Sel)
+		return q.Values
 	}
-	if err := p.Drive(v, b); err == nil || p.Record != nil {
-		t.Fatalf("phone accepted boot-check values for other PCRs: %v", err)
+	cases := map[string]func(m *attesttest.Machine) []PCRValue{
+		"other PCRs": func(m *attesttest.Machine) []PCRValue {
+			return []PCRValue{{Index: 4, Digest: make([]byte, 32)}}
+		},
+		"a future PCR 4": func(m *attesttest.Machine) []PCRValue {
+			vals := live(m)
+			vals[2] = PCRValue{Index: 4, Digest: bytes.Repeat([]byte{0xAA}, 32)}
+			return vals
+		},
+	}
+	for name, mk := range cases {
+		m, p := newMachine(t), newPhone(t)
+		m.MeasurePoint = mk(m)
+		a, b := attesttest.NewPipe()
+		go func() { _, _ = m.ServeEnrolment(a, true); a.Close() }()
+		v, err := NewEnrolVerifier(p.Config())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Drive(v, b); err == nil || p.Record != nil {
+			t.Fatalf("%s: phone accepted the boot-check values: %v", name, err)
+		}
 	}
 }

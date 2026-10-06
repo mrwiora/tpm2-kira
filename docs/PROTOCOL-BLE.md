@@ -486,11 +486,16 @@ the TOTP seal uses (event log replay, the unified kernel image, the
 measure-point extends) and sends them as `measure_point_values`. The phone
 pins those as the "enrolment baseline" profile (`added_by` =
 `enrolment (values at the boot check)`) and still verifies `quoted` over
-`pcr_values` for the AK proof. The prediction is not TPM-signed; at enrolment
-the machine's current state is trusted anyway, and the first boot check tests
-it against a real quote. Without the field the phone pins `pcr_values`
-(`added_by` = `enrolment`), as before. The field MUST list exactly the PCRs
-of `pcr_selection`, in order, or the phone aborts the enrolment.
+`pcr_values` for the AK proof. The prediction is not TPM-signed, so the phone
+ties it to the quote: every value MUST equal the quoted one, except PCR 11,
+where the quoted value MUST be reachable from the predicted one by extending
+an ordered subset of systemd-pcrphase's words `enter-initrd`, `leave-initrd`,
+`sysinit`, `ready` (digest = bank hash of the word). PCRs are one-way, so a
+prediction that passes is an earlier state of the real register: a machine
+cannot pin a baseline for a boot it has not done. Anything else, or a field
+not listing exactly the PCRs of `pcr_selection` in order, aborts the
+enrolment. Without the field the phone pins `pcr_values` (`added_by` =
+`enrolment`), as before.
 
 The phone verifies `ek_cert` against vendor roots built into the core
 (`attest/ekroots/`, one directory per vendor listed with pinned SHA-256 values in `vendors.json`; currently Intel PTT — `attest/ekroots/README.md` says how to add a vendor) with `ek_cert_chain` as
