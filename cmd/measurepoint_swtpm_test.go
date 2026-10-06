@@ -165,6 +165,64 @@ func TestSealReadsSeparatorPCRsFromTheLog(t *testing.T) {
 	if res.AfterSeparator == "" || !same(res, live) || sourcesString(sources(res)) != sourcesString(allRegister) {
 		t.Fatalf("no log: %+v %q %v", res.Values, res.AfterSeparator, sources(res))
 	}
+
+	// A readable log that describes some other TPM (a CI machine's own
+	// firmware log while sealing against a software TPM): the same.
+	other := []struct {
+		pcr    int
+		digest []byte
+	}{{0, bytes.Repeat([]byte{0x0F}, 32)}, {2, bytes.Repeat([]byte{0x1F}, 32)}, {7, bytes.Repeat([]byte{0x2F}, 32)}}
+	otherLog := filepath.Join(t.TempDir(), "other")
+	if err := os.WriteFile(otherLog, tcg2Log(other), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	DefaultEventlogPath = otherLog
+	res = read(MeasurePointAuto, MeasurePointBeforeSeparator)
+	if res.AfterSeparator == "" || !same(res, live) || sourcesString(sources(res)) != sourcesString(allRegister) {
+		t.Fatalf("foreign log: %+v %q %v", res.Values, res.AfterSeparator, sources(res))
+	}
+	// An explicitly requested eventlog source still fails on it.
+	explicit, _ := ParsePCRSpecs("0e,2e,7e")
+	if _, err := ReadPCRValues(s.tpm, explicit, PCRHashAlgoSHA256, MeasurePointAuto, MeasurePointBeforeSeparator, false); err == nil {
+		t.Fatal("an explicit eventlog source must not fall back to the registers")
+	}
+}
+
+// The TPM returns PCR digests in ascending order whatever order they are
+// asked for in; the reader must hand each back under its own index. The
+// fallback above asks for [23, 0] when sealing on "0,23": with the values
+// swapped, a reseal after PCR 23 changed stored the wrong pair and the next
+// reveal reported a PCR mismatch.
+func TestRegistersAreReadInAnyOrder(t *testing.T) {
+	s := newSWTPMSetup(t)
+	extendSHA256(t, s.tpm, 23, bytes.Repeat([]byte{0x99}, 32))
+	asc, err := ReadPCRRegisters(s.tpm, []int{0, 23}, PCRHashAlgoSHA256, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(asc[0], asc[23]) {
+		t.Fatal("the test needs PCR 0 and PCR 23 to differ")
+	}
+	desc, err := ReadPCRRegisters(s.tpm, []int{23, 0}, PCRHashAlgoSHA256, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(asc[0], desc[0]) || !bytes.Equal(asc[23], desc[23]) {
+		t.Fatalf("values depend on the order asked for: %x/%x vs %x/%x", asc[0][:4], asc[23][:4], desc[0][:4], desc[23][:4])
+	}
+
+	// The sealing path for "0,23" without a usable event log.
+	old := DefaultEventlogPath
+	DefaultEventlogPath = filepath.Join(t.TempDir(), "missing")
+	defer func() { DefaultEventlogPath = old }()
+	specs, _ := ParsePCRSpecs("0,23")
+	res, err := ReadPCRValues(s.tpm, specs, PCRHashAlgoSHA256, MeasurePointAuto, MeasurePointBeforeSeparator, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(res.Values[0], asc[0]) || !bytes.Equal(res.Values[23], asc[23]) {
+		t.Fatalf("sealed values do not match the registers: 0=%x 23=%x", res.Values[0][:4], res.Values[23][:4])
+	}
 }
 
 func sourcesString(s []PCRSource) string {

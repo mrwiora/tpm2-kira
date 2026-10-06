@@ -230,8 +230,8 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, 
 	specs = readResult.Specs
 	if readResult.AfterSeparator != "" {
 		fmt.Println()
-		fmt.Println("WARNING: the event log cannot be replayed, so PCRs 0-7, 9, 12-14 are sealed to their")
-		fmt.Println("         register values, which already carry systemd's os-separator. The key's policy")
+		fmt.Println("WARNING: the event log cannot be used for this TPM, so PCRs 0-7, 9, 12-14 are sealed to")
+		fmt.Println("         their register values, which already carry systemd's os-separator. The key's policy")
 		fmt.Println("         then holds only after the separator: codes are computed live while the initrd")
 		fmt.Println("         runs instead of before the separator, and the display says so. Reason:")
 		fmt.Printf("         %s\n", readResult.AfterSeparator)

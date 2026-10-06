@@ -381,53 +381,42 @@ func signApproval(signer crypto.Signer, approvedPolicy, policyRef []byte) ([]byt
 
 // ── computing a code ────────────────────────────────────────────────────────
 
-// TOTPCode computes the slot's code for time t in the TPM.
+// TOTPCode computes the TOTP code of the slot whose blob is at blobIndex, for
+// time t, inside the TPM.
+//
+// The policy session satisfies the approved policy (PolicyPCR against the
+// live registers, PolicyNV against the generation index), then PolicyAuthorize
+// with a ticket for the approval signature in the blob. The TPM decides; the
+// blob is not trusted for anything it could not also have done itself:
+// PolicyAuthorize only accepts the signing key whose Name the key object's
+// policy binds.
 func TOTPCode(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, t time.Time) (string, error) {
-	codes, err := TOTPCodes(tpmDev, blob, blobIndex, t, 1)
-	if err != nil {
-		return "", err
-	}
-	return codes[0], nil
-}
-
-// TOTPCodes computes the codes of n consecutive 30-second windows, the first
-// containing t, in one policy session. The TPM resets a policy session after
-// each successful use, so the key's policy (PCR values, generation, the
-// signing key's approval) is re-run before every code; the signature ticket
-// from the first pass is reused, so each further code costs four cheap TPM
-// commands and no asymmetric crypto. The display calls this before the OS
-// separator runs, so the codes for the prompt exist before the policy
-// becomes unsatisfiable; only those codes, never the key, are then in memory.
-func TOTPCodes(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, t time.Time, n int) ([]string, error) {
 	p := &blob.Payload
 	if p.TOTPAlgorithm != tpm2.TPMAlgSHA1 && p.TOTPAlgorithm != tpm2.TPMAlgSHA256 {
-		return nil, fmt.Errorf("blob has unknown TOTP algorithm 0x%04x", uint16(p.TOTPAlgorithm))
-	}
-	if n < 1 {
-		return nil, fmt.Errorf("no codes requested")
+		return "", fmt.Errorf("blob has unknown TOTP algorithm 0x%04x", uint16(p.TOTPAlgorithm))
 	}
 	signingPublic, err := tpm2.Unmarshal[tpm2.TPMTPublic](p.SigningPublic)
 	if err != nil {
-		return nil, fmt.Errorf("blob holds no valid signing public key: %w", err)
+		return "", fmt.Errorf("blob holds no valid signing public key: %w", err)
 	}
 	approval, err := tpm2.Unmarshal[tpm2.TPMTSignature](p.ApprovalSignature)
 	if err != nil {
-		return nil, fmt.Errorf("blob holds no valid approval signature: %w", err)
+		return "", fmt.Errorf("blob holds no valid approval signature: %w", err)
 	}
 
 	genIndex := GenerationIndex(blobIndex)
 	genPub, err := tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(genIndex)}.Execute(tpmDev)
 	if err != nil {
-		return nil, &GenerationMismatchError{BlobGeneration: p.Generation, IndexMissing: true}
+		return "", &GenerationMismatchError{BlobGeneration: p.Generation, IndexMissing: true}
 	}
 	primary, err := CreatePrimaryKey(tpmDev)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	defer FlushHandle(tpmDev, primary.ObjectHandle)
 	key, err := LoadSealedObject(tpmDev, primary, blob)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	defer FlushHandle(tpmDev, key.ObjectHandle)
 
@@ -435,106 +424,73 @@ func TOTPCodes(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, t time.
 	// refuses the NULL ticket a NULL-hierarchy key produces.
 	signKey, err := tpm2.LoadExternal{InPublic: tpm2.New2B(*signingPublic), Hierarchy: tpm2.TPMRHOwner}.Execute(tpmDev)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load the signing public key: %w", err)
+		return "", fmt.Errorf("failed to load the signing public key: %w", err)
 	}
 	defer FlushHandle(tpmDev, signKey.ObjectHandle)
 
-	session, closeSession, err := tpm2.PolicySession(tpmDev, tpm2.TPMAlgSHA256, 16)
-	if err != nil {
-		return nil, fmt.Errorf("failed to start a policy session: %w", err)
-	}
-	defer func() { _ = closeSession() }()
-
-	pass := totpPolicy{blob: blob, genIndex: genIndex, genName: genPub.NVName, signKey: signKey.ObjectHandle, signKeyName: signKey.Name, approval: approval}
-	codes := make([]string, 0, n)
-	window := t.Unix() / 30
-	for i := int64(0); i < int64(n); i++ {
-		if err := pass.satisfy(tpmDev, session.Handle()); err != nil {
-			return nil, err
+	hashAlgo := blob.GetHashAlgo()
+	session := tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm transport.TPM, handle tpm2.TPMISHPolicy, _ tpm2.TPM2BNonce) error {
+		if _, err := (tpm2.PolicyPCR{
+			PolicySession: handle,
+			Pcrs: tpm2.TPMLPCRSelection{PCRSelections: []tpm2.TPMSPCRSelection{{
+				Hash:      hashAlgo.TPMAlg(),
+				PCRSelect: PcrsToBitmapBytes(blob.GetPCRIndices()),
+			}}},
+		}).Execute(tpm); err != nil {
+			return fmt.Errorf("PolicyPCR: %w", err)
 		}
-		counter := binary.BigEndian.AppendUint64(nil, uint64(window+i))
-		rsp, err := tpm2.Hmac{
-			Handle:  tpm2.AuthHandle{Handle: key.ObjectHandle, Name: key.Name, Auth: session},
-			Buffer:  tpm2.TPM2BMaxBuffer{Buffer: counter},
-			HashAlg: p.TOTPAlgorithm,
-		}.Execute(tpmDev)
-		if err != nil {
-			return nil, fmt.Errorf("failed to compute the code in the TPM: %w", err)
+		if _, err := (tpm2.PolicyNV{
+			AuthHandle:    tpm2.AuthHandle{Handle: tpm2.TPMHandle(genIndex), Name: genPub.NVName, Auth: tpm2.PasswordAuth(nil)},
+			NVIndex:       tpm2.NamedHandle{Handle: tpm2.TPMHandle(genIndex), Name: genPub.NVName},
+			PolicySession: handle,
+			OperandB:      tpm2.TPM2BOperand{Buffer: generationOperand(p.Generation)},
+			Offset:        0,
+			Operation:     tpm2.TPMEOEq,
+		}).Execute(tpm); err != nil {
+			if strings.Contains(err.Error(), "TPM_RC_NV_LOCKED") {
+				return ErrCodesLocked
+			}
+			return fmt.Errorf("PolicyNV: %w", err)
 		}
-		codes = append(codes, hotpTruncate(rsp.OutHMAC.Buffer))
-	}
-	return codes, nil
-}
-
-// totpPolicy runs the key's policy in a session: PolicyPCR, PolicyNV on the
-// generation index, then PolicyAuthorize with the signing key's approval of
-// exactly that digest. The signature is verified by the TPM once; its ticket
-// serves every later pass. ErrCodesLocked when the index is read-locked
-// ('tpm2-kira cap').
-type totpPolicy struct {
-	blob        *SealedBlob
-	genIndex    uint32
-	genName     tpm2.TPM2BName
-	signKey     tpm2.TPMHandle
-	signKeyName tpm2.TPM2BName
-	approval    *tpm2.TPMTSignature
-
-	approved *tpm2.TPM2BDigest    // the policy the approval signs, after the first pass
-	ticket   *tpm2.TPMTTKVerified // the TPM's verification of that approval
-}
-
-func (tp *totpPolicy) satisfy(tpm transport.TPM, handle tpm2.TPMISHPolicy) error {
-	p := &tp.blob.Payload
-	hashAlgo := tp.blob.GetHashAlgo()
-	if _, err := (tpm2.PolicyPCR{
-		PolicySession: handle,
-		Pcrs: tpm2.TPMLPCRSelection{PCRSelections: []tpm2.TPMSPCRSelection{{
-			Hash:      hashAlgo.TPMAlg(),
-			PCRSelect: PcrsToBitmapBytes(tp.blob.GetPCRIndices()),
-		}}},
-	}).Execute(tpm); err != nil {
-		return fmt.Errorf("PolicyPCR: %w", err)
-	}
-	if _, err := (tpm2.PolicyNV{
-		AuthHandle:    tpm2.AuthHandle{Handle: tpm2.TPMHandle(tp.genIndex), Name: tp.genName, Auth: tpm2.PasswordAuth(nil)},
-		NVIndex:       tpm2.NamedHandle{Handle: tpm2.TPMHandle(tp.genIndex), Name: tp.genName},
-		PolicySession: handle,
-		OperandB:      tpm2.TPM2BOperand{Buffer: generationOperand(p.Generation)},
-		Offset:        0,
-		Operation:     tpm2.TPMEOEq,
-	}).Execute(tpm); err != nil {
-		if strings.Contains(err.Error(), "TPM_RC_NV_LOCKED") {
-			return ErrCodesLocked
-		}
-		return fmt.Errorf("PolicyNV: %w", err)
-	}
-	if tp.ticket == nil {
 		// The session digest is now the approved policy, if the PCRs and
 		// the generation match; the signature is checked against it.
 		pgd, err := tpm2.PolicyGetDigest{PolicySession: handle}.Execute(tpm)
 		if err != nil {
 			return fmt.Errorf("PolicyGetDigest: %w", err)
 		}
-		verified, err := tpm2.VerifySignature{
-			KeyHandle: tp.signKey,
+		ticket, err := tpm2.VerifySignature{
+			KeyHandle: signKey.ObjectHandle,
 			Digest:    tpm2.TPM2BDigest{Buffer: approvalDigest(pgd.PolicyDigest.Buffer, p.PolicyRef)},
-			Signature: *tp.approval,
+			Signature: *approval,
 		}.Execute(tpm)
 		if err != nil {
 			return fmt.Errorf("the approval signature does not verify for the current PCR values and generation: %w", err)
 		}
-		tp.approved, tp.ticket = &pgd.PolicyDigest, &verified.Validation
+		if _, err := (tpm2.PolicyAuthorize{
+			PolicySession:  handle,
+			ApprovedPolicy: pgd.PolicyDigest,
+			PolicyRef:      tpm2.TPM2BDigest{Buffer: p.PolicyRef},
+			KeySign:        signKey.Name,
+			CheckTicket:    ticket.Validation,
+		}).Execute(tpm); err != nil {
+			return fmt.Errorf("PolicyAuthorize: %w", err)
+		}
+		return nil
+	})
+
+	counter := binary.BigEndian.AppendUint64(nil, uint64(t.Unix()/30))
+	rsp, err := tpm2.Hmac{
+		Handle:  tpm2.AuthHandle{Handle: key.ObjectHandle, Name: key.Name, Auth: session},
+		Buffer:  tpm2.TPM2BMaxBuffer{Buffer: counter},
+		HashAlg: p.TOTPAlgorithm,
+	}.Execute(tpmDev)
+	if err != nil {
+		if errors.Is(err, ErrCodesLocked) {
+			return "", ErrCodesLocked
+		}
+		return "", fmt.Errorf("failed to compute the code in the TPM: %w", err)
 	}
-	if _, err := (tpm2.PolicyAuthorize{
-		PolicySession:  handle,
-		ApprovedPolicy: *tp.approved,
-		PolicyRef:      tpm2.TPM2BDigest{Buffer: p.PolicyRef},
-		KeySign:        tp.signKeyName,
-		CheckTicket:    *tp.ticket,
-	}).Execute(tpm); err != nil {
-		return fmt.Errorf("PolicyAuthorize: %w", err)
-	}
-	return nil
+	return hotpTruncate(rsp.OutHMAC.Buffer), nil
 }
 
 // CapCommand implements 'tpm2-kira cap': it read-locks every generation

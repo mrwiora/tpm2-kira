@@ -260,8 +260,12 @@ func ReadPCRRegisters(tpmDev transport.TPM, pcrIndices []int, hashAlgo PCRHashAl
 			len(pcrReadResp.PCRValues.Digests), len(pcrIndices))
 	}
 
+	// The TPM returns the digests in ascending PCR order, whatever order
+	// they were asked for in.
+	ascending := slices.Clone(pcrIndices)
+	slices.Sort(ascending)
 	result := make(map[int][]byte, len(pcrIndices))
-	for i, pcrIndex := range pcrIndices {
+	for i, pcrIndex := range ascending {
 		result[pcrIndex] = pcrReadResp.PCRValues.Digests[i].Buffer
 	}
 
@@ -334,6 +338,74 @@ func explainEventlogBankError(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PC
 		msg, hashAlgo.DisplayString())
 }
 
+// readEventlogValues replays the firmware event log for the given PCRs,
+// decides whether systemd's measure-point extends are in effect, applies
+// those that belong to the measure point, and fills result.
+func readEventlogValues(tpmDev transport.TPM, indices []int, hashAlgo PCRHashAlgo, mode MeasurePointMode, point MeasurePoint, debug bool, result *ReadPCRValuesResult) error {
+	calc := NewEventlogPCRCalculator(tpmDev, indices, hashAlgo, debug)
+	calculatedPCRs, info, err := calc.CalculatePCRsFromEventlog()
+	if err != nil {
+		var bankErr *EventlogBankError
+		if errors.As(err, &bankErr) {
+			return err
+		}
+		return fmt.Errorf("failed to calculate PCRs from eventlog: %w", err)
+	}
+	result.EventlogInfo = info
+
+	replay := make(map[int][]byte, len(calculatedPCRs))
+	for idx, val := range calculatedPCRs {
+		result.Values[idx] = val
+		replay[idx] = val
+	}
+
+	if debug {
+		fmt.Println("Eventlog-calculated PCR values (end of firmware):")
+		for _, idx := range indices {
+			fmt.Printf("  PCR%d: %x\n", idx, result.Values[idx])
+		}
+	}
+
+	// Also read the actual register values for eventlog PCRs
+	registers, err := ReadPCRRegisters(tpmDev, indices, hashAlgo, debug)
+	if err != nil {
+		return err
+	}
+	for idx, val := range registers {
+		result.RegisterValues[idx] = val
+	}
+
+	apply := mode == MeasurePointOn
+	detection := "explicit (--measure-point=on)"
+	switch mode {
+	case MeasurePointOff:
+		detection = "explicit (--measure-point=off)"
+	case MeasurePointAuto:
+		detected, how, detectErr := DetectMeasurePointExtends(replay, result.RegisterValues, hashAlgo, debug)
+		if detectErr != nil {
+			return detectErr
+		}
+		apply, detection = detected, how
+	}
+	if apply {
+		applied := ApplyMeasurePointExtends(result.Values, indices, hashAlgo, point, debug)
+		if result.EventlogInfo != nil {
+			result.EventlogInfo.MeasurePointExtends = applied
+		}
+	}
+	if result.EventlogInfo != nil {
+		result.EventlogInfo.MeasurePointDetection = detection
+	}
+
+	if debug {
+		fmt.Println("Eventlog PCR values at the measure point:")
+		for _, idx := range indices {
+			fmt.Printf("  PCR%d: %x (register now: %x)\n", idx, result.Values[idx], result.RegisterValues[idx])
+		}
+	}
+	return nil
+}
+
 // ReadPCRValues reads PCR values from their respective sources (eventlog, UKI
 // UKI and/or TPM registers). This is the single shared implementation used by seal,
 // unseal, reveal and reseal paths.
@@ -372,87 +444,39 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 		RegisterValues: make(map[int][]byte),
 	}
 
-	// Calculate eventlog-based PCR values
-	var calculatedPCRs map[int][]byte
-	var info *EventlogInfo
+	// Calculate eventlog-based PCR values. Registers that were switched to
+	// the event log above are a best effort: when the log cannot be read, or
+	// does not describe this TPM (another machine's log, a software TPM),
+	// they are read from the registers after all. That binds the policy to
+	// post-separator values, so it holds only after the separator; the
+	// caller says so. PCRs asked for with the eventlog source still fail.
 	if len(eventlogPCRIndices) > 0 {
-		calc := NewEventlogPCRCalculator(tpmDev, eventlogPCRIndices, hashAlgo, debug)
-		var err error
-		calculatedPCRs, info, err = calc.CalculatePCRsFromEventlog()
-		if err != nil && len(converted) == len(eventlogPCRIndices) {
-			// Only the converted registers needed the log and it cannot be
-			// replayed: seal to the registers after all. That binds the
-			// secret to post-separator values, so it unlocks only after
-			// the separator and stays unsealable while the system runs;
-			// the caller says so.
+		err := readEventlogValues(tpmDev, eventlogPCRIndices, hashAlgo, mode, point, debug, result)
+		if err != nil && len(converted) > 0 {
+			result.AfterSeparator = err.Error()
 			for i := range specs {
 				if slices.Contains(converted, specs[i].Index) {
 					specs[i].Source = PCRSourceRegister
 				}
 			}
+			for _, idx := range eventlogPCRIndices {
+				delete(result.Values, idx)
+				delete(result.RegisterValues, idx)
+			}
+			result.EventlogInfo = nil
 			registerPCRIndices = append(registerPCRIndices, converted...)
-			result.AfterSeparator = err.Error()
-			eventlogPCRIndices, converted = nil, nil
-		} else if err != nil {
+			eventlogPCRIndices = slices.DeleteFunc(eventlogPCRIndices, func(idx int) bool { return slices.Contains(converted, idx) })
+			converted, err = nil, nil
+			if len(eventlogPCRIndices) > 0 {
+				err = readEventlogValues(tpmDev, eventlogPCRIndices, hashAlgo, mode, point, debug, result)
+			}
+		}
+		if err != nil {
 			var bankErr *EventlogBankError
 			if errors.As(err, &bankErr) {
 				return nil, explainEventlogBankError(tpmDev, specs, hashAlgo, bankErr)
 			}
-			return nil, fmt.Errorf("failed to calculate PCRs from eventlog: %w", err)
-		}
-	}
-	if len(eventlogPCRIndices) > 0 {
-		result.EventlogInfo = info
-
-		replay := make(map[int][]byte, len(calculatedPCRs))
-		for idx, val := range calculatedPCRs {
-			result.Values[idx] = val
-			replay[idx] = val
-		}
-
-		if debug {
-			fmt.Println("Eventlog-calculated PCR values (end of firmware):")
-			for _, idx := range eventlogPCRIndices {
-				fmt.Printf("  PCR%d: %x\n", idx, result.Values[idx])
-			}
-		}
-
-		// Also read the actual register values for eventlog PCRs
-		registers, err := ReadPCRRegisters(tpmDev, eventlogPCRIndices, hashAlgo, debug)
-		if err != nil {
 			return nil, err
-		}
-		for idx, val := range registers {
-			result.RegisterValues[idx] = val
-		}
-
-		apply := mode == MeasurePointOn
-		detection := "explicit (--measure-point=on)"
-		switch mode {
-		case MeasurePointOff:
-			detection = "explicit (--measure-point=off)"
-		case MeasurePointAuto:
-			detected, how, detectErr := DetectMeasurePointExtends(replay, result.RegisterValues, hashAlgo, debug)
-			if detectErr != nil {
-				return nil, detectErr
-			}
-			apply, detection = detected, how
-		}
-		if apply {
-			applied := ApplyMeasurePointExtends(result.Values, eventlogPCRIndices, hashAlgo, point, debug)
-			if result.EventlogInfo != nil {
-				result.EventlogInfo.MeasurePointExtends = applied
-			}
-		}
-		if result.EventlogInfo != nil {
-			result.EventlogInfo.MeasurePointDetection = detection
-		}
-
-		if debug {
-			fmt.Println("Eventlog PCR values at the measure point:")
-			for _, idx := range eventlogPCRIndices {
-				fmt.Printf("  PCR%d: %x (register now: %x)\n", idx, result.Values[idx], result.RegisterValues[idx])
-			}
 		}
 	}
 
