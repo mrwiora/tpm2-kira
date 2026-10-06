@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -421,29 +422,37 @@ func (b *tpmBackend) JudgePhone(a attest.PhoneAttestation) (bool, error) {
 // BootKey implements attest.EnrolBackend: the slot's boot key, made at the
 // first enrolment under the policy of the slot's TOTP key, and certified by
 // the attestation key.
-func (b *tpmBackend) BootKey(qd []byte) ([]byte, []byte, []byte, error) {
+func (b *tpmBackend) BootKey(qd []byte) (*attest.BootKeyOffer, error) {
 	if b.sealed == nil {
-		return nil, nil, nil, errors.New("the slot has no sealed TOTP key whose policy the boot key could share")
+		return nil, errors.New("the slot has no sealed TOTP key whose policy the boot key could share")
 	}
 	if len(b.blob.BootKeyPublic) == 0 {
 		pub, priv, err := createBootKey(b.tpm, b.sealed)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, err
 		}
 		b.blob.BootKeyPublic, b.blob.BootKeyPrivate = pub, priv
 	}
 	info, sig, err := certifyBootKey(b.tpm, b.blob, qd)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
-	return b.blob.BootKeyPublic, info, sig, nil
+	return &attest.BootKeyOffer{
+		PubArea: b.blob.BootKeyPublic, CertifyInfo: info, CertifySig: sig,
+		SigningPub: b.sealed.Payload.SigningPublic, PolicyRef: b.sealed.Payload.PolicyRef,
+	}, nil
 }
 
 // ProveBootKey implements attest.AttesterBackend. The code is kept for
 // whoever shows it to the person at the machine (BootCode).
-func (b *tpmBackend) ProveBootKey(ch *attest.BootChallenge, context []byte) ([]byte, uint8) {
+func (b *tpmBackend) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest []byte) (*attest.BootAnswer, uint8) {
 	b.bootCode = ""
 	code, proof, err := openBootChallenge(b.tpm, b.sealed, b.sealIndex, b.blob, ch, context)
+	var sig []byte
+	if err == nil {
+		d := sha256.Sum256(attest.BootSignatureMessage(context, quoteDigest))
+		sig, err = signWithBootKey(b.tpm, b.sealed, b.sealIndex, b.blob, d[:])
+	}
 	switch {
 	case errors.Is(err, errBootKeyRefused):
 		if b.debug {
@@ -457,7 +466,7 @@ func (b *tpmBackend) ProveBootKey(ch *attest.BootChallenge, context []byte) ([]b
 		return nil, attest.BootKeyFailed
 	}
 	b.bootCode = code
-	return proof, attest.BootKeyProved
+	return &attest.BootAnswer{Proof: proof, Signature: sig}, attest.BootKeyProved
 }
 
 // Commit implements attest.EnrolBackend.

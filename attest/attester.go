@@ -30,11 +30,12 @@ type AttesterBackend interface {
 	// Eventlog returns the firmware event log, or nil when there is none.
 	Eventlog() ([]byte, error)
 	// ProveBootKey answers the phone's boot challenge with the boot key
-	// in the TPM (bootkey.go): the proof and BootKeyProved when the TPM
-	// released the key, otherwise why not (BootKeyRefused, BootKeyFailed).
-	// The code the challenge carries is the backend's to show to the
-	// person at the machine; it never travels back.
-	ProveBootKey(ch *BootChallenge, context []byte) (proof []byte, state uint8)
+	// in the TPM (bootkey.go): the proof that it recovered the code, its
+	// signature over context and quoteDigest, and BootKeyProved when the
+	// TPM released the key, otherwise why not (BootKeyRefused,
+	// BootKeyFailed). The code the challenge carries is the backend's to
+	// show to the person at the machine; it never travels back.
+	ProveBootKey(ch *BootChallenge, context, quoteDigest []byte) (*BootAnswer, uint8)
 }
 
 // MeasurePointProvider is an optional AttesterBackend extension for enrolment:
@@ -157,9 +158,9 @@ func ServeAttestation(conn Conn, id *AttestIdentity, be AttesterBackend, progres
 		return nil, fmt.Errorf("quote: %w", err)
 	}
 	progress.say("Quote produced over %s", req.Selection)
-	bootProof, bootState := be.ProveBootKey(&BootChallenge{EphemeralPub: req.EphemeralPub, Sealed: req.Sealed}, qd)
-	if bootState != BootKeyProved {
-		bootProof = nil
+	bootAnswer, bootState := be.ProveBootKey(&BootChallenge{EphemeralPub: req.EphemeralPub, Sealed: req.Sealed}, qd, sha256Sum(q.Quoted))
+	if bootState != BootKeyProved || bootAnswer == nil {
+		bootAnswer, bootState = &BootAnswer{}, max(bootState, BootKeyRefused)
 	}
 
 	ev := &Evidence{
@@ -173,8 +174,9 @@ func ServeAttestation(conn Conn, id *AttestIdentity, be AttesterBackend, progres
 		BootContext: be.BootContext(),
 		AppVersion:  id.AppVersion,
 
-		BootKeyState: bootState,
-		BootProof:    bootProof,
+		BootKeyState:  bootState,
+		BootProof:     bootAnswer.Proof,
+		BootSignature: bootAnswer.Signature,
 	}
 	evlog, _ := be.Eventlog()
 	var evlogHash []byte
@@ -306,9 +308,10 @@ type EnrolBackend interface {
 	// Commit persists the enrolment. Nothing is written before this call.
 	Commit(v EnrolledVerifier) error
 	// BootKey returns the slot's boot key (bootkey.go), creating it at the
-	// first enrolment: its public area and the attestation key's
-	// TPM2_Certify statement over it, with qd as qualifying data.
-	BootKey(qd []byte) (pubArea, certifyInfo, certifySig []byte, err error)
+	// first enrolment: its public area, the attestation key's TPM2_Certify
+	// statement over it with qd as qualifying data, and the signing key
+	// and policy reference its policy is made of.
+	BootKey(qd []byte) (*BootKeyOffer, error)
 }
 
 // EKChainProvider is implemented by backends that can supply the TPM's
@@ -420,11 +423,13 @@ func ServeEnrolment(conn Conn, id *EnrolIdentity, be EnrolBackend, progress Prog
 		AppVersion:   id.AppVersion,
 		AdvKey:       id.AdvKey,
 	}
-	offer.BootKeyPub, offer.BootKeyCertify, offer.BootKeyCertifySig, err = be.BootKey(EnrolQualifyingData(cb))
+	bk, err := be.BootKey(EnrolQualifyingData(cb))
 	if err != nil {
 		ch.SendError(ErrCodeTPM, "boot key unavailable")
 		return nil, fmt.Errorf("boot key: %w", err)
 	}
+	offer.BootKeyPub, offer.BootKeyCertify, offer.BootKeyCertifySig = bk.PubArea, bk.CertifyInfo, bk.CertifySig
+	offer.SigningPub, offer.PolicyRef = bk.SigningPub, bk.PolicyRef
 	if evlog, _ := be.Eventlog(); len(evlog) > 0 {
 		offer.EventlogSHA256 = sha256Sum(evlog)
 	}

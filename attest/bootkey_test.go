@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ecdh"
 	"crypto/rand"
+	"encoding/hex"
 	"strings"
 	"testing"
 
@@ -97,27 +98,40 @@ func TestCheckBootKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	qd := bytes.Repeat([]byte{3}, 32)
-	pub, info, sig, err := tpm.BootKey(qd)
+	offer, err := tpm.BootKey(qd)
 	if err != nil {
 		t.Fatal(err)
 	}
-	point, err := CheckBootKey(akPub, pub, info, sig, qd)
-	if err != nil || !bytes.Equal(point, tpm.BootPriv.PublicKey().Bytes()) {
-		t.Fatalf("genuine boot key: %x %v", point, err)
+	point, signer, err := CheckBootKey(akPub, offer, qd)
+	if err != nil || !bytes.Equal(point, tpm.BootPriv.PublicKey().Bytes()) || len(signer) != 34 {
+		t.Fatalf("genuine boot key: %x %x %v", point, signer, err)
+	}
+	with := func(change func(o *BootKeyOffer)) *BootKeyOffer {
+		o := *offer
+		change(&o)
+		return &o
 	}
 
-	if _, err := CheckBootKey(akPub, pub, info, sig, bytes.Repeat([]byte{4}, 32)); err == nil {
+	if _, _, err := CheckBootKey(akPub, offer, bytes.Repeat([]byte{4}, 32)); err == nil {
 		t.Fatal("a certification from another session was accepted")
 	}
 	otherTPM, _ := attesttest.NewSoftTPM()
 	otherAK, _ := ParseAKPublic(otherTPM.AKPub, otherTPM.AKName)
-	if _, err := CheckBootKey(otherAK, pub, info, sig, qd); err == nil {
+	if _, _, err := CheckBootKey(otherAK, offer, qd); err == nil {
 		t.Fatal("a certification by another TPM's attestation key was accepted")
 	}
 	// A key the attestation key did not certify (the certificate is for the
 	// genuine one).
-	if _, err := CheckBootKey(akPub, otherTPM.BootPub, info, sig, qd); err == nil {
+	if _, _, err := CheckBootKey(akPub, with(func(o *BootKeyOffer) { o.PubArea = otherTPM.BootPub }), qd); err == nil {
 		t.Fatal("another key was accepted under the genuine key's certification")
+	}
+	// A policy that is not "approved by this signing key for this slot":
+	// another signing key, or another policy reference, named for it.
+	if _, _, err := CheckBootKey(akPub, with(func(o *BootKeyOffer) { o.SigningPub = otherTPM.SigningPub }), qd); err == nil {
+		t.Fatal("the boot key was accepted as bound to a signing key it is not bound to")
+	}
+	if _, _, err := CheckBootKey(akPub, with(func(o *BootKeyOffer) { o.PolicyRef = []byte("other slot") }), qd); err == nil {
+		t.Fatal("the boot key was accepted for another slot's policy reference")
 	}
 
 	// Keys of the wrong kind, each certified properly.
@@ -125,20 +139,22 @@ func TestCheckBootKey(t *testing.T) {
 		"usable with a password":  func(p *tpm2.TPMTPublic) { p.ObjectAttributes.UserWithAuth = true },
 		"exportable":              func(p *tpm2.TPMTPublic) { p.ObjectAttributes.FixedTPM = false },
 		"imported, not generated": func(p *tpm2.TPMTPublic) { p.ObjectAttributes.SensitiveDataOrigin = false },
-		"also a signing key":      func(p *tpm2.TPMTPublic) { p.ObjectAttributes.SignEncrypt = true },
+		"not able to sign":        func(p *tpm2.TPMTPublic) { p.ObjectAttributes.SignEncrypt = false },
+		"not able to agree keys":  func(p *tpm2.TPMTPublic) { p.ObjectAttributes.Decrypt = false },
+		"restricted":              func(p *tpm2.TPMTPublic) { p.ObjectAttributes.Restricted = true },
 		"without a policy":        func(p *tpm2.TPMTPublic) { p.AuthPolicy = tpm2.TPM2BDigest{} },
 	} {
 		tmpl, _ := tpm2.Unmarshal[tpm2.TPMTPublic](tpm.BootPub)
 		change(tmpl)
 		tpm.BootPub = tpm2.Marshal(*tmpl)
-		p, i, s, err := tpm.BootKey(qd)
+		o, err := tpm.BootKey(qd)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := CheckBootKey(akPub, p, i, s, qd); err == nil {
+		if _, _, err := CheckBootKey(akPub, o, qd); err == nil {
 			t.Errorf("a boot key that is %s was accepted", name)
 		}
-		tpm.BootPub = pub
+		tpm.BootPub = offer.PubArea
 	}
 }
 
@@ -151,8 +167,8 @@ func TestBootKeyInTheSession(t *testing.T) {
 	}
 	p, _ := attesttest.NewPhone()
 	rec := enrol(t, m, p)
-	if !bytes.Equal(rec.BootKeyPub, m.TPM.BootPriv.PublicKey().Bytes()) {
-		t.Fatal("the phone did not pin the machine's boot key")
+	if !bytes.Equal(rec.BootKeyPub, m.TPM.BootPriv.PublicKey().Bytes()) || len(rec.SigningKeyName) != 34 {
+		t.Fatal("the phone did not pin the machine's boot key and the signing key behind it")
 	}
 
 	res, merr, perr := attestOnce(t, m, p, rec)
@@ -164,7 +180,8 @@ func TestBootKeyInTheSession(t *testing.T) {
 		t.Fatalf("a matching boot was signed without asking: %+v", ve)
 	}
 	vd := ve.Verdict
-	if vd.State != StateMatch || vd.BootKey != BootKeyResultProved || vd.Code != FormatBootCode(m.TPM.BootCode) || m.TPM.BootCode == "" {
+	if vd.State != StateMatch || vd.BootKey != BootKeyResultProved || vd.Code != FormatBootCode(m.TPM.BootCode) || m.TPM.BootCode == "" ||
+		vd.SigningKey != hex.EncodeToString(rec.SigningKeyName) {
 		t.Fatalf("verdict %+v, machine shows %q", vd, m.TPM.BootCode)
 	}
 	if res.Check.Verdict != VerdictOK || !res.Check.Authentic {

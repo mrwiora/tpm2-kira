@@ -26,6 +26,12 @@ package attest
 // secret, HKDF-SHA256 derives a key that seals the code (AES-256-GCM) and a
 // key for the proof (HMAC-SHA256). Both are bound to the session's
 // qualifying data, as the quote is.
+//
+// The same key also signs (ECDSA, TPM2_Sign) the session's qualifying data
+// and the digest of the quote: a signature anyone holding the pinned public
+// key can verify, now or later, that says "this quote describes a boot state
+// the machine's signing key approved". The key agreement is what ties the
+// session to the screen; the signature is what can be shown to others.
 
 import (
 	"bytes"
@@ -33,11 +39,14 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"math/big"
 
 	"github.com/google/go-tpm/tpm2"
 )
@@ -55,6 +64,7 @@ const (
 
 	labelBootKey   = "tpm2-kira/boot-key/v1"
 	labelBootProof = "tpm2-kira/boot-proof/v1"
+	labelBootSig   = "tpm2-kira/boot-signature/v1"
 )
 
 // Boot key states in Evidence.
@@ -65,9 +75,10 @@ const (
 	BootKeyFailed  uint8 = 3 // the machine could not try (TPM or data error)
 )
 
-// BootKeyTemplate is the boot key's public area: a P-256 key-agreement key
-// that cannot leave its TPM and can be used under authPolicy only, never
-// with a password.
+// BootKeyTemplate is the boot key's public area: a P-256 key that signs and
+// agrees on keys (an unrestricted key with no fixed scheme may do both),
+// cannot leave its TPM, and can be used under authPolicy only, never with
+// a password.
 func BootKeyTemplate(authPolicy []byte) tpm2.TPMTPublic {
 	return tpm2.TPMTPublic{
 		Type:    tpm2.TPMAlgECC,
@@ -77,18 +88,16 @@ func BootKeyTemplate(authPolicy []byte) tpm2.TPMTPublic {
 			FixedParent:         true,
 			SensitiveDataOrigin: true,
 			Decrypt:             true,
+			SignEncrypt:         true,
 			NoDA:                true,
 			// UserWithAuth deliberately not set: policy only.
 		},
 		AuthPolicy: tpm2.TPM2BDigest{Buffer: authPolicy},
 		Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgECC, &tpm2.TPMSECCParms{
 			Symmetric: tpm2.TPMTSymDefObject{Algorithm: tpm2.TPMAlgNull},
-			Scheme: tpm2.TPMTECCScheme{
-				Scheme:  tpm2.TPMAlgECDH,
-				Details: tpm2.NewTPMUAsymScheme(tpm2.TPMAlgECDH, &tpm2.TPMSKeySchemeECDH{HashAlg: tpm2.TPMAlgSHA256}),
-			},
-			CurveID: tpm2.TPMECCNistP256,
-			KDF:     tpm2.TPMTKDFScheme{Scheme: tpm2.TPMAlgNull},
+			Scheme:    tpm2.TPMTECCScheme{Scheme: tpm2.TPMAlgNull},
+			CurveID:   tpm2.TPMECCNistP256,
+			KDF:       tpm2.TPMTKDFScheme{Scheme: tpm2.TPMAlgNull},
 		}),
 		Unique: tpm2.NewTPMUPublicID(tpm2.TPMAlgECC, &tpm2.TPMSECCPoint{
 			X: tpm2.TPM2BECCParameter{Buffer: make([]byte, 32)},
@@ -206,6 +215,40 @@ func (s *BootSecret) Check(proof []byte) bool {
 	return len(proof) == bootProofSize && hmac.Equal(proof, bootProof(s.kMac, s.ctx))
 }
 
+// BootAnswer is the machine's answer to a boot challenge: the proof that it
+// recovered the code, and its signature over the session and the quote.
+type BootAnswer struct {
+	Proof     []byte
+	Signature []byte // marshalled TPMT_SIGNATURE
+}
+
+// BootSignatureMessage is what the boot key signs: the session's qualifying
+// data and the quote it goes with. TPM2_Sign receives its SHA-256.
+func BootSignatureMessage(qd, quoteDigest []byte) []byte {
+	return append(append([]byte(labelBootSig), qd...), quoteDigest...)
+}
+
+// BootKeyPublicKey turns the pinned point into a key for verifying.
+func BootKeyPublicKey(point []byte) (*ecdsa.PublicKey, error) {
+	if len(point) != bootPointSize || point[0] != 4 {
+		return nil, fmt.Errorf("attest: boot key point has the wrong shape")
+	}
+	if _, err := ecdh.P256().NewPublicKey(point); err != nil {
+		return nil, fmt.Errorf("attest: boot key point is not on the curve: %w", err)
+	}
+	return &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(point[1:33]), Y: new(big.Int).SetBytes(point[33:])}, nil
+}
+
+// VerifyBootSignature checks the boot key's signature over this session and
+// quote with the pinned point.
+func VerifyBootSignature(point, qd, quoteDigest, sig []byte) error {
+	pub, err := BootKeyPublicKey(point)
+	if err != nil {
+		return err
+	}
+	return VerifyTPMSignature(pub, BootSignatureMessage(qd, quoteDigest), sig)
+}
+
 // FormatBootCode groups a code for reading: "ABCD-EFGH".
 func FormatBootCode(code string) string {
 	if len(code) != BootCodeLen {
@@ -214,69 +257,116 @@ func FormatBootCode(code string) string {
 	return code[:4] + "-" + code[4:]
 }
 
+// PolicyAuthorizeDigest is the policy digest of a key that is usable
+// exactly when keyName has approved a policy for policyRef:
+// H(H(0 ‖ TPM_CC_PolicyAuthorize ‖ keyName) ‖ policyRef) (TPM 2.0 Part 3,
+// PolicyAuthorize). It is what the machine's TOTP key and boot key carry.
+func PolicyAuthorizeDigest(keyName, policyRef []byte) []byte {
+	cc := []byte{0, 0, 0x01, 0x6a} // TPM_CC_PolicyAuthorize
+	inner := sha256.New()
+	inner.Write(make([]byte, sha256.Size))
+	inner.Write(cc)
+	inner.Write(keyName)
+	outer := sha256.New()
+	outer.Write(inner.Sum(nil))
+	outer.Write(policyRef)
+	return outer.Sum(nil)
+}
+
+// BootKeyOffer is what the machine presents for its boot key at enrolment.
+type BootKeyOffer struct {
+	PubArea     []byte // TPMT_PUBLIC of the boot key
+	CertifyInfo []byte // TPMS_ATTEST of TPM2_Certify by the AK
+	CertifySig  []byte // TPMT_SIGNATURE over it
+	SigningPub  []byte // TPMT_PUBLIC of the machine's signing key
+	PolicyRef   []byte // the slot's policy reference
+}
+
 // CheckBootKey is the phone's check of the boot key at enrolment. The key
 // must be what a relying party needs it to be - made inside this TPM, not
-// exportable, usable for key agreement only, and only under a policy (never
-// by a password) - and the attestation key, which the phone has already
-// tied to the TPM's endorsement key, must certify exactly that public area
-// for this session. It returns the key's public point for pinning.
-func CheckBootKey(akPub crypto.PublicKey, bootPubArea, certifyInfo, certifySig, qd []byte) ([]byte, error) {
+// exportable, for signing and key agreement, and only under a policy (never
+// by a password); that policy must be "whatever the machine's signing key
+// approves for this slot" (PolicyAuthorizeDigest); and the attestation key,
+// which the phone has already tied to the TPM's endorsement key, must
+// certify exactly that public area for this session. It returns the key's
+// public point and the signing key's Name for pinning.
+func CheckBootKey(akPub crypto.PublicKey, o *BootKeyOffer, qd []byte) (point, signingKeyName []byte, err error) {
+	if o == nil {
+		return nil, nil, fmt.Errorf("no boot key offered")
+	}
+	bootPubArea, certifyInfo, certifySig := o.PubArea, o.CertifyInfo, o.CertifySig
 	pub, err := tpm2.Unmarshal[tpm2.TPMTPublic](bootPubArea)
 	if err != nil {
-		return nil, fmt.Errorf("boot key public area does not parse: %w", err)
+		return nil, nil, fmt.Errorf("boot key public area does not parse: %w", err)
 	}
 	a := pub.ObjectAttributes
-	if !a.FixedTPM || !a.FixedParent || !a.SensitiveDataOrigin || !a.Decrypt || a.SignEncrypt || a.Restricted {
-		return nil, fmt.Errorf("boot key is not a non-duplicable key-agreement key made inside the TPM")
+	if !a.FixedTPM || !a.FixedParent || !a.SensitiveDataOrigin || !a.Decrypt || !a.SignEncrypt || a.Restricted {
+		return nil, nil, fmt.Errorf("boot key is not a non-duplicable signing and key-agreement key made inside the TPM")
 	}
 	if a.UserWithAuth {
-		return nil, fmt.Errorf("boot key can be used with a password instead of its policy")
+		return nil, nil, fmt.Errorf("boot key can be used with a password instead of its policy")
 	}
 	if pub.NameAlg != tpm2.TPMAlgSHA256 || len(pub.AuthPolicy.Buffer) != sha256.Size {
-		return nil, fmt.Errorf("boot key carries no SHA-256 policy")
+		return nil, nil, fmt.Errorf("boot key carries no SHA-256 policy")
 	}
 	if pub.Type != tpm2.TPMAlgECC {
-		return nil, fmt.Errorf("boot key is not an ECC key")
+		return nil, nil, fmt.Errorf("boot key is not an ECC key")
 	}
 	parms, err := pub.Parameters.ECCDetail()
 	if err != nil || parms.CurveID != tpm2.TPMECCNistP256 {
-		return nil, fmt.Errorf("boot key is not on P-256")
+		return nil, nil, fmt.Errorf("boot key is not on P-256")
 	}
 	unique, err := pub.Unique.ECC()
 	if err != nil || len(unique.X.Buffer) > 32 || len(unique.Y.Buffer) > 32 {
-		return nil, fmt.Errorf("boot key has no P-256 point")
+		return nil, nil, fmt.Errorf("boot key has no P-256 point")
 	}
-	point := make([]byte, bootPointSize)
+	point = make([]byte, bootPointSize)
 	point[0] = 4
 	copy(point[1+32-len(unique.X.Buffer):33], unique.X.Buffer)
 	copy(point[33+32-len(unique.Y.Buffer):], unique.Y.Buffer)
 	if _, err := ecdh.P256().NewPublicKey(point); err != nil {
-		return nil, fmt.Errorf("boot key point is not on the curve: %w", err)
+		return nil, nil, fmt.Errorf("boot key point is not on the curve: %w", err)
+	}
+
+	// The policy: nothing but the signing key's approvals for this slot.
+	signingPub, err := tpm2.Unmarshal[tpm2.TPMTPublic](o.SigningPub)
+	if err != nil {
+		return nil, nil, fmt.Errorf("signing key public area does not parse: %w", err)
+	}
+	signingName, err := tpm2.ObjectName(signingPub)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(o.PolicyRef) == 0 || len(o.PolicyRef) > 64 {
+		return nil, nil, fmt.Errorf("the slot's policy reference has an invalid size")
+	}
+	if !bytes.Equal(pub.AuthPolicy.Buffer, PolicyAuthorizeDigest(signingName.Buffer, o.PolicyRef)) {
+		return nil, nil, fmt.Errorf("the boot key's policy is not \"approved by the machine's signing key for this slot\"")
 	}
 
 	if err := VerifyTPMSignature(akPub, certifyInfo, certifySig); err != nil {
-		return nil, fmt.Errorf("boot key certification: %w", err)
+		return nil, nil, fmt.Errorf("boot key certification: %w", err)
 	}
 	att, err := tpm2.Unmarshal[tpm2.TPMSAttest](certifyInfo)
 	if err != nil {
-		return nil, fmt.Errorf("boot key certification does not parse: %w", err)
+		return nil, nil, fmt.Errorf("boot key certification does not parse: %w", err)
 	}
 	if att.Magic != tpm2.TPMGeneratedValue || att.Type != tpm2.TPMSTAttestCertify {
-		return nil, fmt.Errorf("boot key certification is not a TPM2_Certify statement")
+		return nil, nil, fmt.Errorf("boot key certification is not a TPM2_Certify statement")
 	}
 	if !bytes.Equal(att.ExtraData.Buffer, qd) {
-		return nil, fmt.Errorf("boot key certification is not bound to this session")
+		return nil, nil, fmt.Errorf("boot key certification is not bound to this session")
 	}
 	info, err := att.Attested.Certify()
 	if err != nil {
-		return nil, fmt.Errorf("boot key certification: %w", err)
+		return nil, nil, fmt.Errorf("boot key certification: %w", err)
 	}
 	name, err := tpm2.ObjectName(pub)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !bytes.Equal(info.Name.Buffer, name.Buffer) {
-		return nil, fmt.Errorf("the attestation key certified another key than the boot key offered")
+		return nil, nil, fmt.Errorf("the attestation key certified another key than the boot key offered")
 	}
-	return point, nil
+	return point, signingName.Buffer, nil
 }

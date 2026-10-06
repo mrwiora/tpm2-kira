@@ -497,10 +497,9 @@ func printGateEvent(prev, cur GateStatus) {
 	case GateSession:
 		if cur.Code != "" {
 			// Only this machine's TPM, in an approved boot state, could
-			// recover what the phone sealed.
-			fmt.Printf("\n   Code for your phone:   \033[1m%s\033[0m\n", cur.Code)
-			fmt.Println("   The phone must show the same code. If it does, continue there; if not, reject there.")
-			fmt.Println()
+			// recover what the phone sealed. Shown like the slot's TOTP
+			// code, as the second code of the same slot.
+			fmt.Printf("\033[0;32m#%d\033[0m: \033[1m%s\033[0m  (phone code: the phone must show the same)\n", cur.Slot, cur.Code)
 		} else if prev.State != GateSession {
 			fmt.Println("   A phone is connected: answer there. The boot waits for it.")
 		}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -36,7 +37,10 @@ type MachineRecord struct {
 	MachineNoisePub HexStr `json:"machine_noise_pub"`
 	// BootKeyPub is the machine's boot key (bootkey.go), an uncompressed
 	// P-256 point: every attestation seals a code to it.
-	BootKeyPub      HexStr `json:"boot_key_pub"`
+	BootKeyPub HexStr `json:"boot_key_pub"`
+	// SigningKeyName is the TPM Name of the machine's signing key, whose
+	// approvals are what lets the TPM use the boot key.
+	SigningKeyName  HexStr `json:"signing_key_name"`
 	AdvKey          HexStr `json:"adv_key"`
 	AnchorPub       HexStr `json:"anchor_pub"`
 	VerifierID      string `json:"verifier_id"`
@@ -230,13 +234,14 @@ type Verifier struct {
 	verdict  *Verdict
 	qd       []byte
 
-	bootPoint  []byte      // enrolment: the checked boot key, to be pinned
-	bootSecret *BootSecret // attestation: this session's code and proof key
-	receipt    *Receipt
-	remember   bool
-	evlog      []byte
-	evlogSum   []byte
-	evlogTot   uint32
+	bootPoint   []byte      // enrolment: the checked boot key, to be pinned
+	signingName []byte      // enrolment: the signing key behind its policy
+	bootSecret  *BootSecret // attestation: this session's code and proof key
+	receipt     *Receipt
+	remember    bool
+	evlog       []byte
+	evlogSum    []byte
+	evlogTot    uint32
 }
 
 func (c *VerifierConfig) now() time.Time {
@@ -540,6 +545,7 @@ func (v *Verifier) handleEnrol(out *Output, d *Decoder) (*Output, error) {
 			AKName:          v.offer.AKName,
 			MachineNoisePub: v.sess.RemoteStatic(),
 			BootKeyPub:      v.bootPoint,
+			SigningKeyName:  v.signingName,
 			AdvKey:          v.offer.AdvKey,
 			AnchorPub:       v.anchor,
 			VerifierID:      v.cfg.VerifierID,
@@ -597,8 +603,10 @@ func (v *Verifier) checkOffer(o *EnrolOffer) error {
 	}
 	// The boot key must live in the same TPM as the attestation key, under
 	// a policy and nothing else.
-	if v.bootPoint, err = CheckBootKey(akPub, o.BootKeyPub, o.BootKeyCertify, o.BootKeyCertifySig,
-		EnrolQualifyingData(v.sess.ChannelBinding())); err != nil {
+	if v.bootPoint, v.signingName, err = CheckBootKey(akPub, &BootKeyOffer{
+		PubArea: o.BootKeyPub, CertifyInfo: o.BootKeyCertify, CertifySig: o.BootKeyCertifySig,
+		SigningPub: o.SigningPub, PolicyRef: o.PolicyRef,
+	}, EnrolQualifyingData(v.sess.ChannelBinding())); err != nil {
 		return err
 	}
 	pol := &Policy{
@@ -900,13 +908,22 @@ func (v *Verifier) judgeBootKey(ev *Evidence) {
 	vd := v.verdict
 	switch ev.BootKeyState {
 	case BootKeyProved:
-		if v.bootSecret != nil && v.bootSecret.Check(ev.BootProof) {
+		// Both halves must hold: the key agreement (the code) and the
+		// signature over this session and this quote.
+		proofOK := v.bootSecret != nil && v.bootSecret.Check(ev.BootProof)
+		sigErr := VerifyBootSignature(v.record.BootKeyPub, v.qd, sha256Sum(ev.Quoted), ev.BootSignature)
+		if proofOK && sigErr == nil {
 			vd.BootKey = BootKeyResultProved
 			vd.Code = FormatBootCode(v.bootSecret.Code)
+			vd.SigningKey = hex.EncodeToString(v.record.SigningKeyName)
 			return
 		}
 		vd.BootKey = BootKeyResultInvalid
-		vd.hard(ReasonBootProofInvalid, "the machine's proof for the boot key does not verify")
+		if !proofOK {
+			vd.hard(ReasonBootProofInvalid, "the machine's proof for the boot key does not verify")
+		} else {
+			vd.hard(ReasonBootProofInvalid, "the boot key's signature does not verify: "+sigErr.Error())
+		}
 		vd.OK = false
 		vd.finish()
 	case BootKeyRefused:

@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
+
+	"github.com/matthias/tpm2-kira/attest"
 )
 
 // The TOTP key is an HMAC key inside the TPM. tpm2-kira never gets it back:
@@ -142,7 +144,7 @@ func policyNVDigest(prev []byte, indexName []byte, operandB []byte) []byte {
 // policyAuthorizeDigest is the policy of a key object that accepts any
 // policy approved by the key named keyName for policyRef.
 func policyAuthorizeDigest(keyName []byte, policyRef []byte) []byte {
-	return policyHash(policyHash(make([]byte, sha256.Size), commandCode(tpm2.TPMCCPolicyAuthorize), keyName), policyRef)
+	return attest.PolicyAuthorizeDigest(keyName, policyRef)
 }
 
 // approvalDigest is what the signing key signs to approve a policy.

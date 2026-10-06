@@ -390,6 +390,7 @@ Signatures never cover this encoding; they cover the canonical strings of §9.
 | 11 | eventlog_size | u32 | O | bytes |
 | 12 | boot_key_state | u8 | O | 0 not tried · 1 proved · 2 refused by the TPM · 3 could not try (§7.6) |
 | 13 | boot_proof | bytes[32] exact | O | present with state 1 |
+| 14 | boot_signature | bytes ≤600 | O | TPMT_SIGNATURE by the boot key over `"tpm2-kira/boot-signature/v1" ‖ qd ‖ SHA-256(quoted)`; present with state 1 |
 
 BootContext (nested): 1 `blob_version` u32 · 2 `nvram_index` u32 ·
 3 `measure_point` string ≤512 · 4 `secureboot_state` u8 (0 unknown, 1 enabled,
@@ -482,6 +483,8 @@ nonce_m). SASConfirm has no fields.
 | 19 | boot_key_pub | bytes ≤1024 | R | TPMT_PUBLIC of the boot key (§7.6) |
 | 20 | boot_key_certify | bytes ≤1024 | R | TPMS_ATTEST of `TPM2_Certify(boot key)` by the AK, qualifying data as for `quoted` |
 | 21 | boot_key_certify_sig | bytes ≤600 | R | TPMT_SIGNATURE over tag 20 |
+| 22 | signing_pub | bytes ≤1024 | R | TPMT_PUBLIC of the machine's signing key: the boot key's policy is its approvals (§7.6) |
+| 23 | policy_ref | bytes 1-64 | R | the slot's policy reference (§7.6) |
 
 **Baseline.** `pcr_values` is what the running system's registers hold at
 enrolment, proven by `quoted`. The gate, however, quotes inside the initramfs,
@@ -588,9 +591,11 @@ result and the code of §7.6 first.
 ### 7.6 The boot key and its code
 
 The machine holds a second TPM key besides the AK, the *boot key*: ECC P-256,
-key agreement only, created in the TPM, not duplicable, `userWithAuth` clear,
-under the policy that also guards the machine's TOTP code. The TPM uses it
-only in a boot state the machine's signing key has approved.
+for signing and key agreement (an unrestricted key with no fixed scheme),
+created in the TPM, not duplicable, `userWithAuth` clear, under the policy
+that also guards the machine's TOTP code: `PolicyAuthorize` by the machine's
+signing key with the slot's policy reference. The TPM uses it only in a boot
+state that key has approved.
 
 *Enrolment.* The machine sends the key's public area and a `TPM2_Certify`
 statement by the AK (EnrolOffer tags 19-21). The phone MUST check that the
@@ -598,8 +603,11 @@ statement verifies under the AK, is a certify statement with magic
 `TPM_GENERATED`, carries the session's enrolment qualifying data, and names
 exactly the public area sent; and that the public area is an ECC P-256 key
 with `fixedTPM`, `fixedParent`, `sensitiveDataOrigin` and `decrypt` set,
-`sign`, `restricted` and `userWithAuth` clear, and a 32-byte policy digest.
-It pins the public point (machine record field `boot_key_pub`).
+`restricted` and `userWithAuth` clear, and as policy digest exactly
+`H(H(0^32 ‖ TPM_CC_PolicyAuthorize ‖ Name(signing_pub)) ‖ policy_ref)` (tags
+22 and 23): approvals by that signing key, nothing else, can unlock it. It pins
+the public point and the signing key's Name (machine record fields
+`boot_key_pub`, `signing_key_name`).
 
 *Attestation.* With `qd` the session's qualifying data (§8), the phone
 
@@ -614,11 +622,17 @@ It pins the public point (machine record field `boot_key_pub`).
 
 The machine computes `Z` with `TPM2_ECDH_ZGen` under the boot key's policy.
 If the TPM lets it, the machine derives the keys, opens the code, shows it to
-the person at its console, and answers with `boot_key_state` 1 and
-`boot_proof = HMAC-SHA256(k_mac, "tpm2-kira/boot-proof/v1" ‖ qd)`. If the TPM
-refuses, it answers with state 2 and no proof. The code is never sent back.
+the person at its console, signs `SHA-256("tpm2-kira/boot-signature/v1" ‖ qd
+‖ SHA-256(quoted))` with the same key (`TPM2_Sign`, ECDSA/SHA-256, under the
+same policy), and answers with `boot_key_state` 1, `boot_proof =
+HMAC-SHA256(k_mac, "tpm2-kira/boot-proof/v1" ‖ qd)` and `boot_signature`. If
+the TPM refuses, it answers with state 2 and neither. The code is never sent
+back.
 
-The phone verifies the proof and reports the outcome in the verdict:
+The phone verifies both - the proof with its own key, the signature with the
+pinned point - and reports the outcome in the verdict (both must hold for
+`proved`; `signing_key` then names the signing key whose approval the TPM
+enforced):
 `boot_key` is `proved` (with `code`, shown as `ABCD-EFGH`), `refused`,
 `failed`, `unused`, or `invalid` when a proof was sent that does not verify,
 which is a hard failure (`boot_proof_invalid`). The person compares the code

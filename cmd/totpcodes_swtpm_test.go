@@ -7,6 +7,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -191,6 +192,20 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 		}
 		if code != secret.Code || !secret.Check(proof) {
 			t.Fatalf("%s: the TPM answered with %q, the phone sealed %q", what, code, secret.Code)
+		}
+		// And it signs, with the same key under the same policy; the
+		// phone verifies with the point it pinned.
+		quoteDigest := bytes.Repeat([]byte{0x77}, 32)
+		d := sha256.Sum256(attest.BootSignatureMessage(ctx, quoteDigest))
+		sig, err := signWithBootKey(tpm, sb, slot, att, d[:])
+		if err != nil {
+			return err
+		}
+		if err := attest.VerifyBootSignature(point, ctx, quoteDigest, sig); err != nil {
+			t.Fatalf("%s: the boot key's signature does not verify: %v", what, err)
+		}
+		if attest.VerifyBootSignature(point, ctx, bytes.Repeat([]byte{0x78}, 32), sig) == nil {
+			t.Fatalf("%s: the signature verified for another quote", what)
 		}
 		return nil
 	}

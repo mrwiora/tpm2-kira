@@ -250,8 +250,9 @@ type Evidence struct {
 	AppVersion     string
 	// BootKeyState says what the machine's TPM made of the boot challenge
 	// (BootKey* constants); BootProof is present when it released the key.
-	BootKeyState uint8
-	BootProof    []byte
+	BootKeyState  uint8
+	BootProof     []byte
+	BootSignature []byte // marshalled TPMT_SIGNATURE by the boot key (bootkey.go)
 }
 
 // Encode serialises the message.
@@ -272,6 +273,7 @@ func (m *Evidence) Encode() ([]byte, error) {
 	}
 	e.U8(12, m.BootKeyState)
 	e.OptBytes(13, m.BootProof)
+	e.OptBytes(14, m.BootSignature)
 	return e.Finish()
 }
 
@@ -293,6 +295,7 @@ func DecodeEvidence(d *Decoder) (*Evidence, error) {
 		EventlogSize:   d.U32(11, false),
 		BootKeyState:   d.U8(12, false),
 		BootProof:      d.Fixed(13, bootProofSize, false),
+		BootSignature:  d.Bytes(14, maxTPMSig, false),
 	}
 	vals := d.Bytes(7, 2+maxPCRValues*(5+65), true)
 	if err := d.Err(); err != nil {
@@ -591,6 +594,11 @@ type EnrolOffer struct {
 	BootKeyPub        []byte
 	BootKeyCertify    []byte
 	BootKeyCertifySig []byte
+	// The boot key's policy, for the phone to check it is "approved by the
+	// machine's signing key for this slot": that key's public area and the
+	// slot's policy reference.
+	SigningPub []byte
+	PolicyRef  []byte
 }
 
 // BaselineValues are the PCR values the verifier pins at enrolment: the
@@ -642,6 +650,8 @@ func (m *EnrolOffer) Encode() ([]byte, error) {
 	e.Bytes(19, m.BootKeyPub)
 	e.Bytes(20, m.BootKeyCertify)
 	e.Bytes(21, m.BootKeyCertifySig)
+	e.Bytes(22, m.SigningPub)
+	e.Bytes(23, m.PolicyRef)
 	return e.Finish()
 }
 
@@ -670,6 +680,8 @@ func DecodeEnrolOffer(d *Decoder) (*EnrolOffer, error) {
 		BootKeyPub:        d.Bytes(19, maxTPMPublic, true),
 		BootKeyCertify:    d.Bytes(20, maxQuoted, true),
 		BootKeyCertifySig: d.Bytes(21, maxTPMSig, true),
+		SigningPub:        d.Bytes(22, maxTPMPublic, true),
+		PolicyRef:         d.Bytes(23, 64, true),
 	}
 	vals := d.Bytes(10, 2+maxPCRValues*(5+65), true)
 	mpv := d.Bytes(18, 2+maxPCRValues*(5+65), false)

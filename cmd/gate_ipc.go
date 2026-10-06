@@ -53,6 +53,7 @@ type gateRequest struct {
 	// boot-key: the phone's challenge, and the session data it is bound to (QD).
 	EphemeralPub []byte `json:"ephemeral_pub,omitempty"`
 	Sealed       []byte `json:"sealed,omitempty"`
+	QuoteDigest  []byte `json:"quote_digest,omitempty"`
 }
 
 type gateResponse struct {
@@ -65,8 +66,8 @@ type gateResponse struct {
 	Check    *attest.ReceiptCheck `json:"check,omitempty"`
 	// boot-key: the proof, when the TPM released the key, and the state.
 	// The code itself stays with the coordinator.
-	BootProof []byte `json:"boot_proof,omitempty"`
-	BootState uint8  `json:"boot_state,omitempty"`
+	BootAnswer *attest.BootAnswer `json:"boot_answer,omitempty"`
+	BootState  uint8              `json:"boot_state,omitempty"`
 }
 
 func writeGateFrame(w io.Writer, v any, limit int) error {
@@ -245,8 +246,8 @@ func answerGate(host gateHost, req *gateRequest) *gateResponse {
 		host.Report(req.State)
 		return &gateResponse{}
 	case gateOpBootKey:
-		proof, state := host.ProveBootKey(&attest.BootChallenge{EphemeralPub: req.EphemeralPub, Sealed: req.Sealed}, req.QD)
-		return &gateResponse{BootProof: proof, BootState: state}
+		answer, state := host.ProveBootKey(&attest.BootChallenge{EphemeralPub: req.EphemeralPub, Sealed: req.Sealed}, req.QD, req.QuoteDigest)
+		return &gateResponse{BootAnswer: answer, BootState: state}
 	}
 	return &gateResponse{Err: "unknown operation"}
 }
@@ -368,12 +369,12 @@ func (c *gateClient) JudgeReceipt(r *attest.Receipt, verifierID string) attest.R
 
 // ProveBootKey implements attest.AttesterBackend: the coordinator's TPM
 // answers, and keeps the code.
-func (c *gateClient) ProveBootKey(ch *attest.BootChallenge, context []byte) ([]byte, uint8) {
-	resp, err := c.ask(&gateRequest{Op: gateOpBootKey, EphemeralPub: ch.EphemeralPub, Sealed: ch.Sealed, QD: context})
+func (c *gateClient) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest []byte) (*attest.BootAnswer, uint8) {
+	resp, err := c.ask(&gateRequest{Op: gateOpBootKey, EphemeralPub: ch.EphemeralPub, Sealed: ch.Sealed, QD: context, QuoteDigest: quoteDigest})
 	if err != nil {
 		return nil, attest.BootKeyFailed
 	}
-	return resp.BootProof, resp.BootState
+	return resp.BootAnswer, resp.BootState
 }
 
 // Report implements gateHost.

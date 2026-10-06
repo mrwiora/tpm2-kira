@@ -218,13 +218,13 @@ func (s *gateService) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteRe
 // ProveBootKey implements attest.AttesterBackend. The code the challenge
 // carries goes to the code screen through Status; the radio side gets the
 // proof and never the code.
-func (s *gateService) ProveBootKey(ch *attest.BootChallenge, context []byte) ([]byte, uint8) {
+func (s *gateService) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest []byte) (*attest.BootAnswer, uint8) {
 	<-s.ready
 	if s.code != 0 || ch == nil {
 		return nil, attest.BootKeyFailed
 	}
 	s.tpmMu.Lock()
-	proof, state := s.be.ProveBootKey(ch, context)
+	answer, state := s.be.ProveBootKey(ch, context, quoteDigest)
 	code := s.be.bootCode
 	s.tpmMu.Unlock()
 	s.mu.Lock()
@@ -233,7 +233,7 @@ func (s *gateService) ProveBootKey(ch *attest.BootChallenge, context []byte) ([]
 		s.status.Code = ""
 	}
 	s.mu.Unlock()
-	return proof, state
+	return answer, state
 }
 
 // BootContext implements attest.AttesterBackend.

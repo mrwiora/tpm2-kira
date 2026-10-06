@@ -233,6 +233,9 @@ type Verdict struct {
 	// when the key was proved.
 	BootKey string `json:"boot_key"`
 	Code    string `json:"code,omitempty"`
+	// SigningKey is the TPM Name (hex) of the machine's signing key, whose
+	// approval of this boot state the proof shows; with "proved" only.
+	SigningKey string `json:"signing_key,omitempty"`
 }
 
 // Boot key results in a Verdict.

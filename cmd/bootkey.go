@@ -112,6 +112,34 @@ func bootKeyPoint(att *Attestation) ([]byte, error) {
 	return point, nil
 }
 
+// signWithBootKey signs digest with the boot key, which the TPM allows if
+// the slot's policy holds.
+func signWithBootKey(tpmDev transport.TPM, sealed *SealedBlob, blobIndex uint32, att *Attestation, digest []byte) ([]byte, error) {
+	boot, err := loadBootKey(tpmDev, att)
+	if err != nil {
+		return nil, err
+	}
+	defer FlushHandle(tpmDev, boot.handle)
+	session, done, err := approvedSession(tpmDev, sealed, blobIndex)
+	if err != nil {
+		return nil, fmt.Errorf("%w (%v)", errBootKeyRefused, err)
+	}
+	defer done()
+	rsp, err := tpm2.Sign{
+		KeyHandle: tpm2.AuthHandle{Handle: boot.handle, Name: boot.name, Auth: session},
+		Digest:    tpm2.TPM2BDigest{Buffer: digest},
+		InScheme: tpm2.TPMTSigScheme{
+			Scheme:  tpm2.TPMAlgECDSA,
+			Details: tpm2.NewTPMUSigScheme(tpm2.TPMAlgECDSA, &tpm2.TPMSSchemeHash{HashAlg: tpm2.TPMAlgSHA256}),
+		},
+		Validation: tpm2.TPMTTKHashCheck{Tag: tpm2.TPMSTHashCheck, Hierarchy: tpm2.TPMRHNull},
+	}.Execute(tpmDev)
+	if err != nil {
+		return nil, fmt.Errorf("%w (%v)", errBootKeyRefused, err)
+	}
+	return tpm2.Marshal(rsp.Signature), nil
+}
+
 // openBootChallenge answers the phone's challenge with the boot key: the
 // TPM computes the shared secret if the slot's policy holds, and from it
 // come the code for the screen and the proof for the phone.
