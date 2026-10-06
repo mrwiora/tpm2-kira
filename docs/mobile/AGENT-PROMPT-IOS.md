@@ -9,8 +9,11 @@
 
 ## Your task
 
-Build **"Kira"**, an iOS app that acts as the *verifier* for tpm2-kira
-machines. Before the user types their disk passphrase on a Linux laptop, the
+Build **"Marify"** (bundle id `io.wiora.marify`), an iOS app that acts as
+the *verifier* for tpm2-kira machines. An implementation exists in the
+`marify` repository (`ios/`, next to the Android app in `android/`); this
+brief describes what it must do. Where the two apps differ, the Android app
+is the reference. Before the user types their disk passphrase on a Linux laptop, the
 laptop advertises over Bluetooth LE; the app connects, lets the machine's TPM
 prove what it booted, shows the user a verdict they can act on, and returns a
 signed receipt.
@@ -104,7 +107,7 @@ Swift facade so the rest of the app never touches the generated types.
 ## Architecture
 
 ```
-Kira/
+Marify/
 ├── Core/        KiraCore.swift        — facade: Step → struct, event JSON → enum Event (Codable)
 ├── BLE/         Central.swift         — CBCentralManager (restoration identifier), scanning with the service UUID
 │                GattLink.swift        — one CBPeripheral: discovery, notify, write-without-response flow control
@@ -207,7 +210,7 @@ Use CryptoKit:
 ```swift
 let access = SecAccessControlCreateWithFlags(nil,
     kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-    [.privateKeyUsage, .biometryCurrentSet], nil)!
+    [.privateKeyUsage, .biometryCurrentSet, .or, .devicePasscode], nil)!
 let key = try SecureEnclave.P256.Signing.PrivateKey(accessControl: access)
 // Persist key.dataRepresentation (an opaque, Secure-Enclave-bound blob) in the
 // Keychain under "kira-anchor-<deviceIdHex>", ThisDeviceOnly, not synchronizable.
@@ -224,9 +227,13 @@ SHA-256 — and pass `signature.derRepresentation` to `provideSignature`.
 Do **not** pre-hash, do **not** use `rawRepresentation`. If the user cancels,
 call `session.abort("biometric cancelled")`.
 
-Require `SecureEnclave.isAvailable` and biometry enrolled; otherwise refuse
-enrolment with an explanation (the simulator has no Secure Enclave — tests
-inject a software key, see Testing).
+The passcode as an alternative to biometrics is a deliberate deviation from
+§11.2, the same as on Android: a phone that is merely unlocked still cannot
+sign. "Require Face ID or Touch ID" at binding drops `.or, .devicePasscode`
+for that machine. Every signature evaluates a **new** `LAContext` (never a
+reused one), so each one is a fresh unlock. Require `SecureEnclave.isAvailable`
+and a passcode set; otherwise refuse enrolment with an explanation (the
+simulator has no Secure Enclave — tests inject a software key, see Testing).
 
 ## Storage
 
@@ -239,8 +246,8 @@ inject a software key, see Testing).
 
 ## Screens
 
-1. **Onboarding** — what Kira does (one paragraph from PROTOCOL-BLE.md §1.1),
-   Bluetooth permission, Face ID / Touch ID check.
+1. **Onboarding** — what Marify does (one paragraph from PROTOCOL-BLE.md §1.1),
+   Bluetooth permission, Bluetooth on, passcode set.
 2. **Machines** — enrolled machines with last-attested time; "Enrol a
    machine"; a banner "<machine> is asking for attestation" when its
    advertisement is seen (tap → session).
@@ -248,13 +255,23 @@ inject a software key, see Testing).
    machine"), ENROL-mode advertisements, then the **SAS screen**: six large
    digits, "Does this match the number on your computer's screen?" *Matches* /
    *Does not match*. Then Face ID "Bind", then success.
-4. **Attest** — progress, then the verdict:
-   - `match`: green checkmark, "<name> — unchanged since <last_attested>";
-     Face ID runs automatically to sign; then "Receipt delivered".
-   - `changed`: amber, `explanation` as the headline, the diff list
-     (description per PCR; hex behind "Details"), optional "Show event log"
-     (`requestEventlog`, progress), buttons **Approve once**, **Approve and
-     remember**, **Reject**.
+4. **Attest** — progress, then the verdict. Every verdict carries a
+   **signature badge** on its headline card: a green check "Signed" when
+   `boot_key` is `proved` (the machine's TPM signed this boot state as one
+   its owner approved, PROTOCOL-BLE.md §7.6), a red cross "Not signed"
+   otherwise. Below it the **code card**: with `proved`, the eight-character
+   `code` the machine's screen must show, and the signing key's id; without,
+   one line on why there is none (`refused`: the TPM did not release the
+   key; `invalid`: the proof did not verify; else: no answer).
+   - `match`: green card, "<name> — unchanged since <last_attested>". Nothing
+     is signed by itself: buttons **The codes match — continue**
+     (`DecisionContinue`) and **The codes differ — reject**; the unlock
+     prompt follows the choice.
+   - `changed`: amber, `explanation` as the headline; with a green badge the
+     line "New to this phone, but signed by the machine's TPM as approved by
+     its owner."; the diff list (description per PCR; hex behind "Details"),
+     optional "Show event log" (`requestEventlog`, progress), buttons
+     **Approve once**, **Approve and remember**, **Reject**.
    - `failed`: red, "Attestation failed" + every hard reason in plain words,
      **Reject** as the primary button; "Approve anyway" behind a menu,
      requiring the user to type the machine's name (passed as `confirmName`).

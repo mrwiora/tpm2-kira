@@ -9,7 +9,8 @@
 
 ## Your task
 
-Build **"Kira"**, an Android app that acts as the *verifier* for
+Build **"Marify"** (application id `io.wiora.marify`, package `app.marify`),
+an Android app that acts as the *verifier* for
 tpm2-kira machines. Before the user types their disk passphrase on a Linux
 laptop, the laptop advertises over Bluetooth LE; the app connects, lets the
 machine's TPM prove what it booted, shows the user a verdict they can act
@@ -227,7 +228,7 @@ screen (proves StrongBox/TEE); it is informational.
 
 ## Screens
 
-1. **Onboarding** — what Kira does (one paragraph from PROTOCOL-BLE.md §1.1),
+1. **Onboarding** — what Marify does (one paragraph from PROTOCOL-BLE.md §1.1),
    permissions, biometric enrolment check (refuse to continue without
    `BIOMETRIC_STRONG`).
 2. **Machines** — enrolled machines with last-attested time; FAB "Enrol a
