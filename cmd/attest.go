@@ -234,6 +234,15 @@ func AttestEnrol(o EnrolOptions) error {
 		if pcrs == "" {
 			pcrs = "0,2,4,7"
 		}
+		// Without a sealed slot to follow, the bank is SHA-256 - unless
+		// this TPM has none (old firmware TPMs offer SHA-1 only).
+		alg, note, err := chooseAttestBank(alg, sealed != nil, func(a PCRHashAlgo) bool { return TPMHasPCRBank(tpmDev, a) })
+		if err != nil {
+			return err
+		}
+		if note != "" {
+			fmt.Println(note)
+		}
 		sel, err := parseAttestPCRs(pcrs, alg)
 		if err != nil {
 			return err
@@ -275,6 +284,11 @@ func AttestEnrol(o EnrolOptions) error {
 	sel, err := blob.Selection()
 	if err != nil {
 		return err
+	}
+	// Find out now whether the TPM can quote this selection, not after the
+	// radio is taken and a human has compared codes.
+	if _, err := readPCRBank(tpmDev, sel); err != nil {
+		return fmt.Errorf("this TPM cannot quote %s: %w", sel, err)
 	}
 	noise, err := attest.NoiseKeypairFromPrivate(blob.NoisePrivate)
 	if err != nil {
@@ -486,6 +500,28 @@ func AttestGate(o GateOptions) int {
 	defer tpmDev.Close()
 	defer CleanupTPM(tpmDev, o.Debug)
 	return runGateRadio(newGateService(tpmDev, o.SealIndex, o.SignerPath, o.Debug), o, step, nil)
+}
+
+// chooseAttestBank settles the PCR bank of a new enrolment. A sealed slot
+// decided it already (fromSeal). Otherwise the default, SHA-256, stands
+// wherever the TPM has that bank; only a TPM without it gets SHA-1.
+func chooseAttestBank(alg uint16, fromSeal bool, has func(PCRHashAlgo) bool) (uint16, string, error) {
+	hashAlgo := PCRHashAlgoSHA256
+	if alg == attest.AlgSHA1 {
+		hashAlgo = PCRHashAlgoSHA1
+	}
+	if has(hashAlgo) {
+		return alg, "", nil
+	}
+	if alg == attest.AlgSHA256 && !fromSeal && has(PCRHashAlgoSHA1) {
+		return attest.AlgSHA1, "NOTE: this TPM has no SHA-256 PCR bank; the SHA-1 bank is quoted instead.\n" +
+			"      SHA-1 is deprecated: a stopgap for TPMs that offer nothing else.", nil
+	}
+	name := "SHA-256"
+	if alg == attest.AlgSHA1 {
+		name = "SHA-1"
+	}
+	return 0, "", fmt.Errorf("this TPM has no %s PCR bank to quote", name)
 }
 
 // gateCoordinatorWait is how long the worker waits for the coordinator's
