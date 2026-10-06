@@ -29,8 +29,11 @@ import (
 // index, like GenerationIndexOffset does for sealed slots.
 const AttestCounterOffset = 0x800
 
-// AttestCounterIndex is the NV index of the counter for a record index.
-func AttestCounterIndex(recordIndex uint32) uint32 { return recordIndex + AttestCounterOffset }
+// AttestCounterIndex is the NV index of the record counter for a slot's
+// blob index: 0x01803820 + slot, next to the generation indices.
+func AttestCounterIndex(slotIndex uint32) uint32 {
+	return AttestNVRAMStart + attestSlot(slotIndex) + AttestCounterOffset
+}
 
 // ErrNoRecordCounter: the slot has no usable counter. Since a counter
 // cannot be turned back, a missing one is never a reason to accept a record.

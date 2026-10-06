@@ -122,7 +122,7 @@ func (s *gateService) setup(sealIndex uint32, signerPath string, debug bool) (in
 			return ExitUsage, err
 		}
 	} else {
-		found := FindPopulatedSlotsInRange(s.tpm, AttestNVRAMStart, AttestNVRAMEnd, debug)
+		found := enrolledSlots(s.tpm, debug)
 		if len(found) == 0 {
 			return ExitUsage, errors.New("no slot is enrolled for attestation (run 'tpm2-kira attest enrol')")
 		}
@@ -130,7 +130,7 @@ func (s *gateService) setup(sealIndex uint32, signerPath string, debug bool) (in
 	}
 	s.mu.Lock()
 	s.idx = idx
-	s.status.Slot = int(idx - AttestNVRAMStart)
+	s.status.Slot = int(attestSlot(idx))
 	s.mu.Unlock()
 
 	verified, code := gateRecordCheck(s.tpm, idx, signerPath) // prints its own failure
@@ -142,12 +142,12 @@ func (s *gateService) setup(sealIndex uint32, signerPath string, debug bool) (in
 		return ExitInternal, fmt.Errorf("cannot read the attestation blob at 0x%08X: %w", idx, err)
 	}
 	if len(blob.Verifiers) == 0 {
-		return ExitUsage, fmt.Errorf("no phone is enrolled for slot %d", idx-AttestNVRAMStart)
+		return ExitUsage, fmt.Errorf("no phone is enrolled for slot %d", attestSlot(idx))
 	}
 	if _, err := attest.NoiseKeypairFromPrivate(blob.NoisePrivate); err != nil {
 		return ExitInternal, err
 	}
-	sealIdx := NVRAMSlotStart + (idx - AttestNVRAMStart)
+	sealIdx := idx // the enrolment lives in the slot's own blob
 	s.mu.Lock()
 	s.blob = blob
 	s.recordVerified = verified
@@ -163,7 +163,7 @@ func (s *gateService) Identity() (*gateIdentity, int, error) {
 		return nil, s.code, s.reason
 	}
 	id := &gateIdentity{
-		Slot:           int(s.idx - AttestNVRAMStart),
+		Slot:           int(attestSlot(s.idx)),
 		FriendlyName:   s.blob.FriendlyName,
 		DeviceID:       s.blob.DeviceID,
 		AKName:         s.blob.AKName,

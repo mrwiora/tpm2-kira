@@ -27,7 +27,7 @@ func testCoordinator(t *testing.T) (*gateService, *ecdsa.PrivateKey) {
 		t.Fatal(err)
 	}
 	anchor, _ := x509.MarshalPKIXPublicKey(&phone.PublicKey)
-	s := &gateService{ready: make(chan struct{}), issued: map[string][]byte{}, idx: AttestNVRAMStart + 2}
+	s := &gateService{ready: make(chan struct{}), issued: map[string][]byte{}, idx: NVRAMSlotStart + 2}
 	s.blob = &AttestBlob{
 		DeviceID: []byte("0123456789abcdef"), AKName: []byte("ak-name"), FriendlyName: "box",
 		NoisePrivate: make([]byte, 32), AdvKey: make([]byte, 32),

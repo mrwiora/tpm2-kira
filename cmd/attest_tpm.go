@@ -299,6 +299,9 @@ func (b *tpmBackend) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteRes
 func (b *tpmBackend) BootContext() attest.BootContext {
 	bc := attest.BootContext{BlobVersion: CurrentBlobVersion, NVRAMIndex: b.sealIndex, UptimeMS: uptimeMS()}
 	if b.sealed != nil {
+		bc.BlobVersion = b.sealed.Version
+	}
+	if b.sealed != nil {
 		if info := b.sealed.Payload.EventlogInfo; info != nil {
 			bc.MeasurePoint = info.MeasurePointExtends
 		}

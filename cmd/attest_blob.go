@@ -34,9 +34,10 @@ const (
 	// AttestNVRAMEnd is slot 15's attestation blob.
 	AttestNVRAMEnd = 0x0180302F
 
-	// AttestBlobVersion is the only supported attestation blob format.
-	// Version 2 added Count.
-	AttestBlobVersion = 2
+	// attestSectionVersion is the format of the enrolment section inside a
+	// slot's blob. (Versions 1 and 2 were NV indices of their own, at
+	// AttestNVRAMStart + slot; those are no longer read.)
+	attestSectionVersion = 3
 
 	// MaxVerifiers bounds the pinned verifier list. The format holds a list
 	// from day one so a second phone needs no format change
@@ -60,22 +61,31 @@ type AttestBlob struct {
 	PCRAlg       uint16
 	PCRSelection []uint8
 	Verifiers    []attest.EnrolledVerifier
-	// Count is the value of the slot's TPM counter when this record was
-	// written (attest_counter.go). It is signed with the rest: a record is
-	// current only while it equals the counter, which nobody can turn back.
-	Count     uint64
-	Signature []byte
+	// Count is the value of the slot's TPM counter when the enrolment was
+	// last changed (attest_counter.go). It is signed with the rest of the
+	// slot's blob: an enrolment is current only while it equals the
+	// counter, which nobody can turn back.
+	Count uint64
 }
 
-// AttestIndexForSlot maps a sealed-blob index (or slot number) to the
-// attestation index of the same slot.
+// AttestIndexForSlot resolves a slot number or index to the NV index of the
+// slot's blob, where its phone enrolment lives. Attestation needs one of
+// the sixteen default slots: the record counter is found by slot number.
 func AttestIndexForSlot(sealIndex uint32) (uint32, error) {
 	idx := ResolveNVRAMIndex(sealIndex)
 	if idx < NVRAMSlotStart || idx > NVRAMSlotEnd {
 		return 0, fmt.Errorf("attestation needs a slot in the default range (0-15), got 0x%08X", idx)
 	}
-	return AttestNVRAMStart + (idx - NVRAMSlotStart), nil
+	return idx, nil
 }
+
+// attestSlot is the slot number of a slot's blob index.
+func attestSlot(idx uint32) uint32 { return idx - NVRAMSlotStart }
+
+// legacyAttestIndex is where earlier versions kept a slot's enrolment as an
+// NV index of its own. Nothing reads those any more; they are only found
+// to be reported and removed.
+func legacyAttestIndex(idx uint32) uint32 { return AttestNVRAMStart + attestSlot(idx) }
 
 type blobWriter struct{ b bytes.Buffer }
 
@@ -157,7 +167,8 @@ func (r *blobReader) lp32(max int) []byte {
 	return r.take(int(n))
 }
 
-func (b *AttestBlob) marshalPayload() ([]byte, error) {
+// marshalSection encodes the enrolment as the section of a slot's blob.
+func (b *AttestBlob) marshalSection() ([]byte, error) {
 	if len(b.DeviceID) != attest.DeviceIDSize || len(b.NoisePrivate) != 32 || len(b.AdvKey) != 32 {
 		return nil, fmt.Errorf("attestation blob is incomplete")
 	}
@@ -166,6 +177,7 @@ func (b *AttestBlob) marshalPayload() ([]byte, error) {
 	}
 	w := &blobWriter{}
 	w.raw(attestBlobMagic)
+	w.u8(attestSectionVersion)
 	w.lp16([]byte(b.AppVersion))
 	w.raw(b.DeviceID)
 	w.lp16([]byte(b.FriendlyName))
@@ -192,35 +204,15 @@ func (b *AttestBlob) marshalPayload() ([]byte, error) {
 	return w.b.Bytes(), nil
 }
 
-// Marshal returns the unsigned envelope [version ‖ payloadLen ‖ payload],
-// ready for SignBlobPayload.
-func (b *AttestBlob) Marshal() ([]byte, error) {
-	p, err := b.marshalPayload()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]byte, 8, 8+len(p))
-	binary.LittleEndian.PutUint32(out, AttestBlobVersion)
-	binary.LittleEndian.PutUint32(out[4:], uint32(len(p)))
-	return append(out, p...), nil
-}
-
-// UnmarshalAttestBlob parses a signed attestation blob. The signature is
-// read but not verified here: the initrd has no copy of the signing key.
-func UnmarshalAttestBlob(data []byte) (*AttestBlob, error) {
-	if len(data) < 10 {
-		return nil, fmt.Errorf("attestation blob too short")
-	}
-	if v := binary.LittleEndian.Uint32(data); v != AttestBlobVersion {
-		return nil, fmt.Errorf("attestation blob version %d is not supported (requires %d); enrol again with: tpm2-kira attest enrol", v, AttestBlobVersion)
-	}
-	plen := binary.LittleEndian.Uint32(data[4:])
-	if uint64(plen)+8 > uint64(len(data)) {
-		return nil, fmt.Errorf("attestation blob payload truncated")
-	}
-	r := &blobReader{b: data[8 : 8+plen]}
+// unmarshalAttestSection parses the enrolment section of a slot's blob. It
+// carries no signature of its own: the blob's covers it.
+func unmarshalAttestSection(data []byte) (*AttestBlob, error) {
+	r := &blobReader{b: data}
 	if m := r.take(4); !bytes.Equal(m, attestBlobMagic) {
-		return nil, fmt.Errorf("NV index does not hold an attestation blob")
+		return nil, fmt.Errorf("the slot's blob does not carry a phone enrolment where one is announced")
+	}
+	if v := r.u8(); r.err == nil && v != attestSectionVersion {
+		return nil, fmt.Errorf("phone enrolment format %d is not supported (requires %d); enrol again with: tpm2-kira attest enrol", v, attestSectionVersion)
 	}
 	b := &AttestBlob{}
 	b.AppVersion = string(r.lp16(MaxAppVersionLen))
@@ -253,12 +245,7 @@ func UnmarshalAttestBlob(data []byte) (*AttestBlob, error) {
 		return nil, r.err
 	}
 	if r.off != len(r.b) {
-		return nil, fmt.Errorf("attestation blob has %d trailing bytes", len(r.b)-r.off)
-	}
-	tr := &blobReader{b: data[8+plen:]}
-	b.Signature = tr.lp16(MaxBlobSignatureLen)
-	if tr.err != nil || len(b.Signature) == 0 {
-		return nil, fmt.Errorf("attestation blob is not signed")
+		return nil, fmt.Errorf("phone enrolment has %d trailing bytes", len(r.b)-r.off)
 	}
 	return b, nil
 }

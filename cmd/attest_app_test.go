@@ -115,7 +115,7 @@ func newAppMachine(t *testing.T) *appMachine {
 		t:      t,
 		proc:   proc,
 		signer: testSigner(t),
-		idx:    uint32(AttestNVRAMStart + 9),
+		idx:    uint32(NVRAMSlotStart + 9),
 		snap:   t.TempDir(),
 		// A fixed event log: the host's own log is neither readable nor
 		// reproducible here, and the app should transfer a real-sized one.
@@ -124,6 +124,8 @@ func newAppMachine(t *testing.T) *appMachine {
 	}
 	t.Cleanup(func() { m.proc.stop(nil) })
 	m.s = newSWTPMSetupAt(t, proc.sock, "swtpm-box")
+	// The phones are stored in the slot's blob, next to its TOTP key.
+	writeTestSlot(t, m.s.tpm, m.idx, m.signer)
 	m.newBackend()
 	return m
 }

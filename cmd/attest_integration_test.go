@@ -44,7 +44,8 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	phone, _ := attesttest.NewPhone()
 
 	signer := testSigner(t)
-	idx := uint32(AttestNVRAMStart + 9)
+	idx := uint32(NVRAMSlotStart + 9)
+	writeTestSlot(t, s.tpm, idx, signer) // the phones go into the slot's blob, next to its TOTP key
 	s.be.confirmSAS = func(code string) (bool, error) { return true, nil }
 	s.be.commit = func(v attest.EnrolledVerifier) error {
 		if err := s.blob.UpsertVerifier(v); err != nil {
@@ -89,6 +90,10 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	if len(stored.Verifiers) != 1 || !bytes.Equal(stored.AKName, s.blob.AKName) || stored.EKAlg == 0 {
 		t.Fatalf("stored blob incomplete: %+v", stored)
 	}
+	if section, err := stored.marshalSection(); err == nil {
+		t.Logf("enrolment with one phone: %d bytes in the slot's blob (attestation key %d + %d bytes)",
+			len(section), len(stored.AKPublic), len(stored.AKPrivate))
+	}
 
 	attestRound := func() *attest.AttestResult {
 		a, b := attesttest.NewPipe()
@@ -132,7 +137,7 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	if err := os.WriteFile(signerPath, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	svc := newGateService(s.tpm, NVRAMSlotStart+(idx-AttestNVRAMStart), signerPath, false)
+	svc := newGateService(s.tpm, idx, signerPath, false)
 	worker, err := dialGate(startTestGate(t, svc), 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +244,9 @@ func TestOfflineQuoteVerifies(t *testing.T) {
 func TestReplacedRecordIsRefused(t *testing.T) {
 	s := newSWTPMSetup(t)
 	mine, attacker := testSigner(t), testSigner(t)
-	idx := uint32(AttestNVRAMStart + 4)
+	idx := uint32(NVRAMSlotStart + 4)
+	writeTestSlot(t, s.tpm, idx, mine)
+	sealedOnly, _ := ReadFromNVRAM(s.tpm, idx)
 	counterIdx := AttestCounterIndex(idx)
 
 	// The initramfs: built once, carrying this machine's signing public key.
@@ -286,6 +293,17 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	onePhone, _ := ReadFromNVRAM(s.tpm, idx)
+	// One blob: the phone went in next to the TOTP key, which is as it was.
+	if before, _ := UnmarshalSealedBlob(sealedOnly); before.Payload.Attest != nil || before.Version != CurrentBlobVersion {
+		t.Fatalf("the sealed slot already had an enrolment: %+v", before)
+	}
+	if after, err := UnmarshalSealedBlob(onePhone); err != nil || after.Version != EnrolledBlobVersion || after.Payload.Attest == nil ||
+		!bytes.Equal(after.Payload.Public, testSlotBlob().Payload.Public) || after.Payload.Generation != testSlotBlob().Payload.Generation {
+		t.Fatalf("enrolling changed the slot's TOTP part or did not store the phone: %+v %v", after, err)
+	}
+	if NVRAMIndexExists(s.tpm, legacyAttestIndex(idx)) {
+		t.Fatal("the enrolment was also written to the old, separate index")
+	}
 
 	// An image from before the key was put into it: served, not verified.
 	if verified, code := gateRecordCheck(s.tpm, idx, filepath.Join(t.TempDir(), "none")); verified || code != 0 {
@@ -304,12 +322,17 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 	twoPhones, _ := ReadFromNVRAM(s.tpm, idx)
 	accepted("second phone, same image")
 
-	// 1. The attacker's own record, signed with the attacker's key.
+	// 1. The attacker's own blob for the slot, with the attacker's phone
+	// and the count the TPM is at, signed with the attacker's key.
 	forged := *s.blob
 	forged.Verifiers = []attest.EnrolledVerifier{{ID: "attackers-phone", AnchorPub: []byte{9}, NoisePub: make([]byte, 32)}}
-	if err := writeAttestBlob(s.tpm, idx, &forged, attacker); err != nil {
-		t.Fatal(err)
+	if err := writeAttestBlob(s.tpm, idx, &forged, attacker); err == nil || !strings.Contains(err.Error(), "not signed by your signing key") {
+		t.Fatalf("another key was allowed to add a phone to the slot: %v", err)
 	}
+	forged.Count, _ = readAttestCounter(s.tpm, counterIdx)
+	forgedSlot := testSlotBlob()
+	forgedSlot.Payload.Attest = &forged
+	plant(signSlot(t, forgedSlot, attacker))
 	refused("attacker's record")
 	if code, out := buildImage(); code != ExitTampered || !strings.Contains(out, "TAMPERED") {
 		t.Fatalf("the image build accepted a foreign record: %d %s", code, out)
@@ -344,7 +367,8 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 	refused("older record, counter recreated")
 
 	// 4. ... or replaced by an ordinary index holding the old record's count.
-	old, _ := UnmarshalAttestBlob(onePhone)
+	oldSlot, _ := UnmarshalSealedBlob(onePhone)
+	old := oldSlot.Payload.Attest
 	pub, _ = tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(counterIdx)}.Execute(s.tpm)
 	undefine(pub.NVName)
 	fake := attestCounterPublic(counterIdx)
@@ -374,13 +398,21 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 	accepted("re-enrolled")
 	last, _ := ReadFromNVRAM(s.tpm, idx)
 
-	// 5. The slot is unenrolled (record deleted, counter raised) and the
-	// record that was current until then is put back.
-	if _, err := bumpAttestCounter(s.tpm, counterIdx); err != nil {
+	// 5. The phones are removed (the blob rewritten without them, the
+	// counter raised) and the blob that was current until then is put back.
+	if err := writeAttestBlob(s.tpm, idx, nil, mine); err != nil {
 		t.Fatal(err)
 	}
+	unenrolled, _ := ReadFromNVRAM(s.tpm, idx)
+	if a, err := UnmarshalSealedBlob(unenrolled); err != nil || a.Payload.Attest != nil || a.Version != CurrentBlobVersion ||
+		!bytes.Equal(a.Payload.Public, testSlotBlob().Payload.Public) {
+		t.Fatalf("removing the phones did not give the sealed slot back: %+v %v", a, err)
+	}
+	if verified, code := gate(); verified || code != ExitTampered {
+		t.Fatalf("a slot without phones was served (verified=%v, exit %d)", verified, code)
+	}
 	plant(last)
-	refused("record put back after unenrol")
+	refused("blob put back after unenrol")
 }
 
 // TestCoordinatorAndWorker runs the two halves of the gate the way the units
@@ -391,7 +423,8 @@ func TestCoordinatorAndWorker(t *testing.T) {
 	sock := startSWTPM(t)
 	s := newSWTPMSetupAt(t, sock, "swtpm-box")
 	mine, attacker := testSigner(t), testSigner(t)
-	idx := uint32(AttestNVRAMStart + 3)
+	idx := uint32(NVRAMSlotStart + 3)
+	writeTestSlot(t, s.tpm, idx, mine)
 	s.blob.Verifiers = []attest.EnrolledVerifier{{ID: "my-phone", Name: "Pixel", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
 	if err := writeAttestBlob(s.tpm, idx, s.blob, mine); err != nil {
 		t.Fatal(err)
@@ -462,8 +495,11 @@ func TestCoordinatorAndWorker(t *testing.T) {
 	// fails with the same status as before.
 	forged := *s.blob
 	forged.Verifiers = []attest.EnrolledVerifier{{ID: "attackers-phone", AnchorPub: []byte{9}, NoisePub: make([]byte, 32)}}
+	forged.Count, _ = readAttestCounter(svc.tpm, AttestCounterIndex(idx))
+	forgedSlot := testSlotBlob()
+	forgedSlot.Payload.Attest = &forged
 	svc.tpmMu.Lock()
-	err = writeAttestBlob(svc.tpm, idx, &forged, attacker)
+	err = WriteToNVRAM(svc.tpm, idx, signSlot(t, forgedSlot, attacker), attacker.Public(), attacker)
 	svc.tpmMu.Unlock()
 	if err != nil {
 		t.Fatal(err)
@@ -482,25 +518,42 @@ func TestCoordinatorAndWorker(t *testing.T) {
 	}
 }
 
-// TestStaleEnrolmentCanBeRemoved: a phone enrolment that another
-// installation's signing key wrote stays in the TPM when the system is
-// reinstalled. 'attest enrol' refuses to build on it; both ways of getting
-// rid of it must work without that key, and 'nvram delete' must see it even
-// when no TOTP key is sealed.
-func TestStaleEnrolmentCanBeRemoved(t *testing.T) {
+// TestStaleSlotCanBeRemoved: a slot is one thing. What a previous
+// installation left in it - TOTP key and phones, signed by a signing key
+// that no longer exists - cannot be extended, and goes as a whole, without
+// that key. Enrolments that earlier versions kept as NV indices of their
+// own are found and removed too.
+func TestStaleSlotCanBeRemoved(t *testing.T) {
 	sock := startSWTPM(t)
 	s := newSWTPMSetupAt(t, sock, "swtpm-box")
 	previous, current := testSigner(t), testSigner(t)
-	rec0, rec5 := uint32(AttestNVRAMStart), uint32(AttestNVRAMStart+5)
+	slot0, slot5 := uint32(NVRAMSlotStart), uint32(NVRAMSlotStart+5)
 	s.blob.Verifiers = []attest.EnrolledVerifier{{ID: "old-phone", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
-	for _, idx := range []uint32{rec0, rec5} {
+	for _, idx := range []uint32{slot0, slot5} {
+		writeTestSlot(t, s.tpm, idx, previous)
 		if err := writeAttestBlob(s.tpm, idx, s.blob, previous); err != nil {
 			t.Fatal(err)
 		}
 	}
-	raw, _ := ReadFromNVRAM(s.tpm, rec0)
-	if err := verifyBeforeExtending(raw, &current.PublicKey, 0); err == nil || !strings.Contains(err.Error(), "nvram delete") {
-		t.Fatalf("enrol on a foreign record: %v", err)
+	oldBlob, _ := ReadFromNVRAM(s.tpm, slot0)
+	// An enrolment in the old place, for a slot that has no blob at all.
+	legacy := uint32(AttestNVRAMStart + 7)
+	if err := WriteToNVRAM(s.tpm, legacy, []byte("an enrolment record of an earlier version"), previous.Public(), previous); err != nil {
+		t.Fatal(err)
+	}
+
+	// The new installation's key cannot add a phone to, or take one out
+	// of, what the previous one signed.
+	err := writeAttestBlob(s.tpm, slot0, s.blob, current)
+	if err == nil || !strings.Contains(err.Error(), "nvram delete --nvram 0") {
+		t.Fatalf("enrol into a foreign slot: %v", err)
+	}
+	if err := writeAttestBlob(s.tpm, slot0, nil, current); err == nil {
+		t.Fatal("a foreign slot's phones were removed by re-signing it")
+	}
+	// Nor into a slot that has no TOTP key.
+	if err := writeAttestBlob(s.tpm, NVRAMSlotStart+2, s.blob, current); err == nil || !strings.Contains(err.Error(), "seal --nvram 2") {
+		t.Fatalf("enrol without a sealed slot: %v", err)
 	}
 	exists := func(idx uint32) bool {
 		t.Helper()
@@ -513,22 +566,31 @@ func TestStaleEnrolmentCanBeRemoved(t *testing.T) {
 	}
 	s.tpm.Close() // the commands open the TPM themselves; swtpm serves one client
 
-	// One slot: 'attest unenrol'. The record goes; the counter stays, raised.
-	if err := AttestUnenrol(sock, NVRAMSlotStart, false); err != nil {
-		t.Fatalf("unenrol of a foreign record: %v", err)
+	// One slot: 'nvram delete --nvram 0' takes the blob and its counter.
+	if err := NVRAMDeleteCommand(sock, slot0, false, false); err != nil {
+		t.Fatalf("deleting a foreign slot: %v", err)
 	}
-	if exists(rec0) || !exists(AttestCounterIndex(rec0)) {
-		t.Fatalf("after unenrol: record %v, counter %v", exists(rec0), exists(AttestCounterIndex(rec0)))
+	if exists(slot0) || exists(AttestCounterIndex(slot0)) || exists(GenerationIndex(slot0)) {
+		t.Fatal("slot 0 was not deleted whole")
+	}
+	if !exists(slot5) || !exists(AttestCounterIndex(slot5)) || !exists(legacy) {
+		t.Fatal("deleting slot 0 touched something else")
+	}
+	// 'attest unenrol' removes an old-format enrolment without any key.
+	if err := AttestUnenrol(sock, NVRAMSlotStart+7, filepath.Join(t.TempDir(), "no-key"), false); err != nil {
+		t.Fatalf("unenrol of an old-format enrolment: %v", err)
+	}
+	if exists(legacy) {
+		t.Fatal("the old-format enrolment survived unenrol")
 	}
 
-	// Everything: 'nvram delete'. No TOTP key is sealed here; it must find
-	// the other enrolment and the counter that unenrol left.
+	// Everything: the other slot, and the counter unenrol left for slot 7.
 	if err := NVRAMDeleteCommand(sock, 0, true, false); err != nil {
 		t.Fatalf("nvram delete: %v", err)
 	}
-	for _, idx := range []uint32{rec0, rec5, AttestCounterIndex(rec0), AttestCounterIndex(rec5)} {
-		if exists(idx) {
-			t.Fatalf("0x%08X (%s) survived 'nvram delete'", idx, kiraIndexRole(idx))
+	for idx := uint32(AppNVRAMStart); idx <= AppNVRAMEnd; idx++ {
+		if role := kiraIndexRole(idx); role != "" && exists(idx) {
+			t.Fatalf("0x%08X (%s) survived 'nvram delete'", idx, role)
 		}
 	}
 	// Nothing left: it says so instead of claiming success.
@@ -536,14 +598,16 @@ func TestStaleEnrolmentCanBeRemoved(t *testing.T) {
 		t.Fatalf("second nvram delete: %v", err)
 	}
 
-	// A fresh enrolment works again, and a record put back from before
-	// the cleanup does not pass: the new counter is above the old one.
+	// The new installation seals and enrols; the blob from before the
+	// cleanup does not pass if it is put back: the new counter is above
+	// the old one, and the image's key is another.
 	tpmDev, err := transport.OpenTPM(sock)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tpmDev.Close()
-	if err := writeAttestBlob(tpmDev, rec0, s.blob, current); err != nil {
+	writeTestSlot(t, tpmDev, slot0, current)
+	if err := writeAttestBlob(tpmDev, slot0, s.blob, current); err != nil {
 		t.Fatalf("enrolling after the cleanup: %v", err)
 	}
 	der, _ := x509.MarshalPKIXPublicKey(&previous.PublicKey)
@@ -551,11 +615,11 @@ func TestStaleEnrolmentCanBeRemoved(t *testing.T) {
 	if err := os.WriteFile(oldKey, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteToNVRAM(tpmDev, rec0, raw, previous.Public(), previous); err != nil {
+	if err := WriteToNVRAM(tpmDev, slot0, oldBlob, previous.Public(), previous); err != nil {
 		t.Fatal(err)
 	}
-	if verified, code := gateRecordCheck(tpmDev, rec0, oldKey); verified || code != ExitTampered {
-		t.Fatalf("the record from before the cleanup was accepted again (verified=%v, exit %d)", verified, code)
+	if verified, code := gateRecordCheck(tpmDev, slot0, oldKey); verified || code != ExitTampered {
+		t.Fatalf("the blob from before the cleanup was accepted again (verified=%v, exit %d)", verified, code)
 	}
 }
 

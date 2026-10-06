@@ -129,8 +129,23 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 // This should be set by the main package during initialization
 var AppVersion = "unknown"
 
-// CurrentBlobVersion is the only supported blob format version
+// CurrentBlobVersion is the format of a slot that holds a TOTP key only.
 const CurrentBlobVersion = 9
+
+// EnrolledBlobVersion is the same format followed by the slot's phone
+// enrolment (SealedBlobPayload.Attest). A blob is written as this version
+// exactly when it carries one, so a slot without phones stays readable by
+// builds that know nothing of the section, and a build that would drop the
+// section on its next reseal refuses the blob instead.
+const EnrolledBlobVersion = 10
+
+// MaxAttestSectionLen bounds the enrolment section of a slot's blob.
+const MaxAttestSectionLen = 16 * 1024
+
+// supportedBlobVersion reports whether this build reads the version.
+func supportedBlobVersion(v uint32) bool {
+	return v == CurrentBlobVersion || v == EnrolledBlobVersion
+}
 
 // MaxBlobSignatureLen is the maximum allowed signature size in bytes.
 // Generous: RSA-4096 PKCS#1 v1.5 = 512 bytes, ECDSA P-384 DER ≈ 104 bytes.
@@ -247,6 +262,10 @@ type SealedBlobPayload struct {
 	EventlogInfo      *EventlogInfo `json:"eventlog_info"`              // Eventlog calculation metadata (if any PCR uses eventlog)
 	PublicKeyPath     string        `json:"public_key_path,omitempty"`  // Filesystem path recorded at seal time (never used to find a key)
 	PrivateKeyPath    string        `json:"private_key_path,omitempty"` // Filesystem path recorded at seal time (never used to find a key)
+	// Attest is the slot's phone enrolment, or nil without one. It lives in
+	// the slot's blob, under the same signature, so that a slot is one
+	// thing: sealed, resealed, enrolled and deleted together.
+	Attest *AttestBlob `json:"-"`
 }
 
 // SealedBlob is the top-level envelope: version, signed payload, and
@@ -576,12 +595,31 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		offset++
 	}
 
+	// The phone enrolment, when the slot has one: [len:4][section]. Its
+	// presence is what makes the blob EnrolledBlobVersion.
+	if p.Attest != nil {
+		section, err := p.Attest.marshalSection()
+		if err != nil {
+			return nil, err
+		}
+		if len(section) > MaxAttestSectionLen {
+			return nil, fmt.Errorf("phone enrolment of %d bytes exceeds %d", len(section), MaxAttestSectionLen)
+		}
+		buf = binary.LittleEndian.AppendUint32(buf, uint32(len(section)))
+		buf = append(buf, section...)
+	}
+
 	return buf, nil
 }
 
-// UnmarshalPayload parses the payload bytes back into a SealedBlobPayload.
+// UnmarshalPayload parses the payload bytes of a slot without a phone
+// enrolment (CurrentBlobVersion) back into a SealedBlobPayload.
 // The input must NOT include the outer envelope (version, payloadLen, signature).
 func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
+	return unmarshalPayloadVersion(data, CurrentBlobVersion)
+}
+
+func unmarshalPayloadVersion(data []byte, version uint32) (*SealedBlobPayload, error) {
 	if len(data) > MaxBlobSize {
 		return nil, fmt.Errorf("payload size %d exceeds maximum allowed %d bytes", len(data), MaxBlobSize)
 	}
@@ -849,6 +887,22 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 		}
 	}
 
+	if version == EnrolledBlobVersion {
+		if offset+4 > len(data) {
+			return nil, fmt.Errorf("data too short for the phone enrolment length")
+		}
+		n := int(binary.LittleEndian.Uint32(data[offset:]))
+		offset += 4
+		if n <= 0 || n > MaxAttestSectionLen || offset+n != len(data) {
+			return nil, fmt.Errorf("phone enrolment section of %d bytes does not fit the blob", n)
+		}
+		att, err := unmarshalAttestSection(data[offset : offset+n])
+		if err != nil {
+			return nil, err
+		}
+		p.Attest = att
+	}
+
 	return p, nil
 }
 
@@ -866,8 +920,12 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 	}
 
 	// [version:4][payloadLen:4][payloadBytes...]
+	version := uint32(CurrentBlobVersion)
+	if sb.Payload.Attest != nil {
+		version = EnrolledBlobVersion
+	}
 	buf := make([]byte, 4+4+len(payloadBytes))
-	binary.LittleEndian.PutUint32(buf[0:], CurrentBlobVersion)
+	binary.LittleEndian.PutUint32(buf[0:], version)
 	binary.LittleEndian.PutUint32(buf[4:], uint32(len(payloadBytes)))
 	copy(buf[8:], payloadBytes)
 	return buf, nil
@@ -891,7 +949,7 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 
 	// Version check
 	version := binary.LittleEndian.Uint32(data[0:4])
-	if version != CurrentBlobVersion {
+	if !supportedBlobVersion(version) {
 		return nil, &BlobVersionError{
 			FoundVersion:    version,
 			RequiredVersion: CurrentBlobVersion,
@@ -912,13 +970,13 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 
 	// Parse payload
 	payloadBytes := data[8:payloadEnd]
-	payload, err := UnmarshalPayload(payloadBytes)
+	payload, err := unmarshalPayloadVersion(payloadBytes, version)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
 
 	sb := &SealedBlob{
-		Version: CurrentBlobVersion,
+		Version: version,
 		Payload: *payload,
 	}
 

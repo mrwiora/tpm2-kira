@@ -7,11 +7,11 @@ import (
 
 func TestKiraIndexRole(t *testing.T) {
 	for idx, want := range map[uint32]string{
-		NVRAMSlotStart:                           "TOTP key of slot #0",
-		NVRAMSlotEnd:                             "TOTP key of slot #15",
-		AttestNVRAMStart + 3:                     "phone enrolment",
-		GenerationIndex(NVRAMSlotStart + 2):      "generation index of slot #2",
-		AttestCounterIndex(AttestNVRAMStart + 3): "record counter of slot #3",
+		NVRAMSlotStart:                         "slot #0: its TOTP key",
+		NVRAMSlotEnd:                           "slot #15: its TOTP key",
+		AttestNVRAMStart + 3:                   "old, separate format",
+		GenerationIndex(NVRAMSlotStart + 2):    "generation index of slot #2",
+		AttestCounterIndex(NVRAMSlotStart + 3): "record counter of slot #3",
 	} {
 		if got := kiraIndexRole(idx); !strings.Contains(got, want) {
 			t.Errorf("0x%08X: %q, want %q", idx, got, want)

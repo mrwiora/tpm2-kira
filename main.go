@@ -501,8 +501,9 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 			fail(err)
 		}
 	case "unenrol", "unenroll":
+		privKey := fs.String("privkey", "", "Signing key: removing a phone rewrites and signs the slot's blob (default: "+cmd.DefaultPrivateKeyPath+")")
 		fs.Parse(args)
-		if err := cmd.AttestUnenrol(*tpm, uint32(*nvram), *debug); err != nil {
+		if err := cmd.AttestUnenrol(*tpm, uint32(*nvram), *privKey, *debug); err != nil {
 			fail(err)
 		}
 	default:
@@ -613,7 +614,9 @@ NVRAM SUBCOMMANDS:
 
 ATTEST SUBCOMMANDS:
   attest enrol    Bind a phone to this slot over BLE (booted system; needs the
-                  signing key). Prints a 6-digit code to compare with the app.
+                  signing key and a sealed slot: the phones are stored in the
+                  slot's blob, next to its TOTP key, and survive reseal).
+                  Prints a 6-digit code to compare with the app.
                   --name STR --pcrs LIST --adapter N --privkey PATH --timeout DUR
                   --sha1  quote the SHA-1 PCR bank instead of SHA-256. Required,
                           as for 'seal', where nothing else works: a TPM without
@@ -640,7 +643,9 @@ ATTEST SUBCOMMANDS:
                   (EK certificate chain against the vendor roots in the core)
   attest quote    Produce evidence without a phone (--nonce HEX --out FILE)
   attest verify   Judge evidence offline (--evidence FILE --record FILE --nonce HEX)
-  attest unenrol  Remove a slot's attestation enrolment
+  attest unenrol  Remove a slot's phones from its blob; the TOTP key stays.
+                  Needs the signing key (--privkey PATH). To remove the whole
+                  slot without it: nvram delete --nvram N
   attest initramfs-deps  Modules and firmware the adapter needs (used by the
                   initramfs hooks)
 

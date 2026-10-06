@@ -53,7 +53,8 @@ The scan report artifact (`strix-security-report`, 23.7 KB) is downloadable from
 The phone's screen is the only authoritative verdict; the machine's console
 line is advisory.
 
-The record that names the enrolled phone lives in TPM NV storage, where the
+The enrolled phones are named in the slot's blob in TPM NV storage, the same
+signed blob that holds the slot's TOTP key, where the
 owner hierarchy (root, or another OS booted on this machine) can replace it:
 with one naming an attacker's phone, or with an older one that still names a
 phone you removed. The gate therefore checks the record before it advertises,

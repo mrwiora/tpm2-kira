@@ -58,26 +58,85 @@ const (
 	infoModeAttest = 2
 )
 
+// errNotEnrolled: the slot's blob carries no phone enrolment.
+var errNotEnrolled = errors.New("no phone is enrolled for this slot")
+
+// readSlot returns a slot's blob as stored and parsed.
+func readSlot(tpmDev transport.TPM, idx uint32) ([]byte, *SealedBlob, error) {
+	raw, err := ReadFromNVRAM(tpmDev, idx)
+	if err != nil {
+		return nil, nil, err
+	}
+	sb, err := UnmarshalSealedBlob(raw)
+	if err != nil {
+		return raw, nil, err
+	}
+	return raw, sb, nil
+}
+
+// loadAttestBlob returns the phone enrolment a slot's blob carries.
 func loadAttestBlob(tpmDev transport.TPM, idx uint32) (*AttestBlob, error) {
-	data, err := ReadFromNVRAM(tpmDev, idx)
+	_, sb, err := readSlot(tpmDev, idx)
 	if err != nil {
 		return nil, err
 	}
-	return UnmarshalAttestBlob(data)
+	if sb.Payload.Attest == nil {
+		return nil, errNotEnrolled
+	}
+	return sb.Payload.Attest, nil
 }
 
-// writeAttestBlob signs and stores the blob with PolicySigned NV writes.
-func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *AttestBlob, priv crypto.Signer) error {
-	// The record carries the next value of the slot's TPM counter, so an
-	// older record can never pass as the current one (attest_counter.go).
-	// Counter first: if the write fails afterwards, the old record is
-	// stale and refused, never the other way round.
-	count, err := bumpAttestCounter(tpmDev, AttestCounterIndex(idx))
-	if err != nil {
-		return err
+// enrolledSlots returns the slots whose blob carries a phone enrolment.
+func enrolledSlots(tpmDev transport.TPM, debug bool) []uint32 {
+	var out []uint32
+	for _, idx := range FindPopulatedSlots(tpmDev, debug) {
+		if _, err := loadAttestBlob(tpmDev, idx); err == nil {
+			out = append(out, idx)
+		}
 	}
-	b.Count = count
-	unsigned, err := b.Marshal()
+	return out
+}
+
+// legacyAttestRecords returns the enrolments earlier versions stored as NV
+// indices of their own. They are not read any more.
+func legacyAttestRecords(tpmDev transport.TPM) []uint32 {
+	return FindPopulatedSlotsInRange(tpmDev, AttestNVRAMStart, AttestNVRAMEnd, false)
+}
+
+// writeAttestBlob stores b as the slot's phone enrolment, or removes the
+// enrolment when b is nil, by rewriting the slot's blob: the TOTP key and
+// everything else in it are carried over as they are, and the whole is
+// signed again.
+//
+// That is only done to a blob the same signing key wrote: signing somebody
+// else's content would vouch for it. A new enrolment carries the next value
+// of the slot's record counter, so an older blob can never pass as the
+// current one (attest_counter.go). The counter is raised after the write:
+// if the write fails, the previous blob is put back and is still current;
+// between the two steps the new blob is merely not accepted yet.
+func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *AttestBlob, priv crypto.Signer) error {
+	slot := attestSlot(idx)
+	raw, sb, err := readSlot(tpmDev, idx)
+	if err != nil {
+		return fmt.Errorf("slot %d holds no sealed TOTP key (%v). A phone enrolment is stored with the slot's key: "+
+			"run 'tpm2-kira seal --nvram %d' first", slot, err, slot)
+	}
+	if err := VerifyBlobSignature(raw, sb, priv.Public()); err != nil {
+		return foreignSlotError(slot, err)
+	}
+	counterIdx := AttestCounterIndex(idx)
+	current, err := readAttestCounter(tpmDev, counterIdx)
+	if err != nil {
+		// No counter yet, or not a counter: this makes one and counts once.
+		if current, err = bumpAttestCounter(tpmDev, counterIdx); err != nil {
+			return err
+		}
+	}
+	if b != nil {
+		b.Count = current + 1
+	}
+	sb.Payload.Attest = b
+	unsigned, err := sb.Marshal()
 	if err != nil {
 		return err
 	}
@@ -85,7 +144,103 @@ func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *AttestBlob, priv crypt
 	if err != nil {
 		return err
 	}
-	return WriteToNVRAM(tpmDev, idx, signed, priv.Public(), priv)
+	if err := WriteToNVRAM(tpmDev, idx, signed, priv.Public(), priv); err != nil {
+		// The index was replaced for the write; the TOTP key lives in it.
+		if rerr := WriteToNVRAM(tpmDev, idx, raw, priv.Public(), priv); rerr != nil {
+			return fmt.Errorf("could not store the slot's blob (%w), and could not put the previous one back (%v); "+
+				"a copy is in %s", err, rerr, NVRAMRecoveryDir)
+		}
+		return fmt.Errorf("could not store the slot's blob with the phone enrolment; the slot is as it was: %w", err)
+	}
+	if got, err := bumpAttestCounter(tpmDev, counterIdx); err != nil {
+		return fmt.Errorf("the enrolment is written, but the record counter could not be raised, so it is not accepted yet: %w", err)
+	} else if b != nil && got != b.Count {
+		return fmt.Errorf("the record counter moved to %d while the enrolment was written with %d; enrol again", got, b.Count)
+	}
+	removeLegacyAttestRecord(tpmDev, idx)
+	return nil
+}
+
+// nvIndexLimit is the largest NV index this TPM stores, or 0 if it does
+// not say.
+func nvIndexLimit(tpmDev transport.TPM) int {
+	rsp, err := tpm2.GetCapability{
+		Capability:    tpm2.TPMCapTPMProperties,
+		Property:      uint32(tpm2.TPMPTNVIndexMax),
+		PropertyCount: 1,
+	}.Execute(tpmDev)
+	if err != nil {
+		return 0
+	}
+	props, err := rsp.CapabilityData.Data.TPMProperties()
+	if err != nil {
+		return 0
+	}
+	for _, p := range props.TPMProperty {
+		if p.Property == tpm2.TPMPTNVIndexMax {
+			return int(p.Value)
+		}
+	}
+	return 0
+}
+
+// enrolmentSize is the size the slot's blob has with the given enrolment
+// and one more phone of the largest size the format allows.
+func enrolmentSize(slotBlob *SealedBlob, enrolment *AttestBlob) (int, error) {
+	grown := *enrolment
+	grown.Verifiers = append(append([]attest.EnrolledVerifier(nil), enrolment.Verifiers...), attest.EnrolledVerifier{
+		ID: strings.Repeat("i", 64), Name: strings.Repeat("n", 64),
+		AnchorPub: make([]byte, 91), NoisePub: make([]byte, 32), PolicyID: strings.Repeat("p", 64),
+	})
+	if len(grown.Verifiers) > MaxVerifiers {
+		return 0, fmt.Errorf("slot already has %d verifiers enrolled", MaxVerifiers)
+	}
+	copyBlob := *slotBlob
+	copyBlob.Payload.Attest = &grown
+	unsigned, err := copyBlob.Marshal()
+	if err != nil {
+		return 0, err
+	}
+	sig := len(slotBlob.BlobSignature)
+	if sig == 0 {
+		sig = 512
+	}
+	return len(unsigned) + 2 + sig, nil
+}
+
+// checkEnrolmentFits refuses an enrolment that would not fit the slot's NV
+// index, before a phone is involved.
+func checkEnrolmentFits(tpmDev transport.TPM, slotBlob *SealedBlob, enrolment *AttestBlob, slot uint32) error {
+	size, err := enrolmentSize(slotBlob, enrolment)
+	if err != nil {
+		return err
+	}
+	limit := nvIndexLimit(tpmDev)
+	if limit > MaxNVRAMBlobSize || limit == 0 {
+		limit = MaxNVRAMBlobSize
+	}
+	if size > limit {
+		return fmt.Errorf("slot %d's blob would grow to about %d bytes with another phone, and this TPM stores at most %d per NV index.\n"+
+			"Its phones share the blob with the TOTP key: remove one with 'tpm2-kira attest unenrol --nvram %d' "+
+			"(that removes all phones of the slot) and enrol the ones you need", slot, size, limit, slot)
+	}
+	return nil
+}
+
+// foreignSlotError: the slot's blob was not written by this signing key.
+func foreignSlotError(slot uint32, cause error) error {
+	return fmt.Errorf("slot %d is not signed by your signing key (%v): it was replaced outside tpm2-kira, "+
+		"or is left over from an installation with another signing key. Inspect it with 'tpm2-kira info --nvram %d'; "+
+		"to start over, run 'tpm2-kira nvram delete --nvram %d' and seal again", slot, cause, slot, slot)
+}
+
+// removeLegacyAttestRecord deletes the slot's enrolment in the old place,
+// if one is still there. Best effort: it is dead weight, not a danger.
+func removeLegacyAttestRecord(tpmDev transport.TPM, idx uint32) {
+	legacy := legacyAttestIndex(idx)
+	if NVRAMIndexExists(tpmDev, legacy) {
+		_ = undefineIndex(tpmDev, legacy)
+	}
 }
 
 // parseAttestPCRs reads a PCR list for quoting. Quotes always cover the
@@ -186,8 +341,6 @@ func AttestEnrol(o EnrolOptions) error {
 	if err != nil {
 		return err
 	}
-	sealed := readSealedSlot(tpmDev, sealIndex)
-
 	// The signing key is needed to write the blob at the end; find out now,
 	// before the radio is taken and a human has compared codes.
 	// --privkey or the default key; a path recorded in a blob is never
@@ -201,41 +354,49 @@ func AttestEnrol(o EnrolOptions) error {
 		return fmt.Errorf("enrolment needs the signing key to write the attestation blob: %w", err)
 	}
 
-	blob, err := loadAttestBlob(tpmDev, idx)
+	// The enrolment is part of the slot's blob, next to the TOTP key, and
+	// adding a phone signs that blob again: there has to be one, and this
+	// signing key has to be the one that wrote it.
+	raw, slotBlob, err := readSlot(tpmDev, idx)
 	if err != nil {
-		blob = nil
+		return fmt.Errorf("slot %d holds no sealed TOTP key (%v).\n"+
+			"A phone enrolment is stored with the slot's key and checks the same boot: seal first with\n\n"+
+			"    tpm2-kira seal --nvram %d", attestSlot(idx), err, attestSlot(idx))
 	}
-	if blob != nil {
-		raw, _ := ReadFromNVRAM(tpmDev, idx)
-		if err := verifyBeforeExtending(raw, priv.Public(), idx-AttestNVRAMStart); err != nil {
-			return err
-		}
+	if err := VerifyBlobSignature(raw, slotBlob, priv.Public()); err != nil {
+		return foreignSlotError(attestSlot(idx), err)
+	}
+	blob := slotBlob.Payload.Attest
+	sealed := slotBlob
+	if legacy := legacyAttestIndex(idx); blob == nil && NVRAMIndexExists(tpmDev, legacy) {
+		fmt.Printf("NOTE: slot %d has an enrolment in the old, separate format (NV 0x%08X). It is not used\n"+
+			"      any more and is removed when this enrolment is stored; delete the machine in the\n"+
+			"      phone app and enrol the phone again.\n\n", attestSlot(idx), legacy)
 	}
 	if blob != nil && o.PCRs != "" {
-		if err := checkSamePCRs(blob, o.PCRs, idx-AttestNVRAMStart); err != nil {
+		if err := checkSamePCRs(blob, o.PCRs, attestSlot(idx)); err != nil {
 			return err
 		}
 	}
 	if blob != nil && o.SHA1 && blob.PCRAlg != attest.AlgSHA1 {
 		return fmt.Errorf("slot %d is already enrolled with the SHA-256 bank, which every phone of the slot shares; "+
-			"drop --sha1, or start over with 'tpm2-kira attest unenrol --nvram %d'", idx-AttestNVRAMStart, idx-AttestNVRAMStart)
+			"drop --sha1, or start over with 'tpm2-kira attest unenrol --nvram %d'", attestSlot(idx), attestSlot(idx))
 	}
 
 	if blob == nil {
+		// The phone checks the registers the slot's seal is bound to,
+		// unless --pcrs asks for others.
 		pcrs := o.PCRs
-		var sealedAlg uint16
-		if sealed != nil {
-			sealedAlg = attest.AlgSHA256
-			if sealed.GetHashAlgo() == PCRHashAlgoSHA1 {
-				sealedAlg = attest.AlgSHA1
+		sealedAlg := uint16(attest.AlgSHA256)
+		if sealed.GetHashAlgo() == PCRHashAlgoSHA1 {
+			sealedAlg = attest.AlgSHA1
+		}
+		if pcrs == "" {
+			var parts []string
+			for _, i := range sealed.GetPCRIndices() {
+				parts = append(parts, strconv.Itoa(i))
 			}
-			if pcrs == "" {
-				var parts []string
-				for _, i := range sealed.GetPCRIndices() {
-					parts = append(parts, strconv.Itoa(i))
-				}
-				pcrs = strings.Join(parts, ",")
-			}
+			pcrs = strings.Join(parts, ",")
 		}
 		if pcrs == "" {
 			pcrs = "0,2,4,7"
@@ -295,6 +456,11 @@ func AttestEnrol(o EnrolOptions) error {
 	// radio is taken and a human has compared codes.
 	if _, err := readPCRBank(tpmDev, sel); err != nil {
 		return fmt.Errorf("this TPM cannot quote %s: %w", sel, err)
+	}
+	// And whether the slot's blob still fits its NV index with one more
+	// phone in it: the TOTP key shares that index.
+	if err := checkEnrolmentFits(tpmDev, slotBlob, blob, attestSlot(idx)); err != nil {
+		return err
 	}
 	noise, err := attest.NoiseKeypairFromPrivate(blob.NoisePrivate)
 	if err != nil {
@@ -772,7 +938,7 @@ func gateRecordCheck(tpmDev transport.TPM, idx uint32, signerPath string) (bool,
 			"tpm2-kira:   It was replaced, or an older one was put back: no phone is served, and a\n"+
 			"tpm2-kira:   verdict from any phone means nothing for this boot. To start over, run\n"+
 			"tpm2-kira:   'tpm2-kira attest unenrol' on the unlocked system and enrol again.",
-			idx-AttestNVRAMStart, err)
+			attestSlot(idx), err)
 		return false, ExitTampered
 	}
 	return true, 0
@@ -825,7 +991,7 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 		}
 		indices = []uint32{idx}
 	} else {
-		indices = FindPopulatedSlotsInRange(tpmDev, AttestNVRAMStart, AttestNVRAMEnd, debug)
+		indices = enrolledSlots(tpmDev, debug)
 	}
 	type verifierJSON struct {
 		ID           string `json:"id"`
@@ -859,7 +1025,7 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 		}
 		sel, _ := b.Selection()
 		s := slotJSON{
-			Slot:         int(idx - AttestNVRAMStart),
+			Slot:         int(attestSlot(idx)),
 			NVRAMIndex:   fmt.Sprintf("0x%08X", idx),
 			DeviceID:     hex.EncodeToString(b.DeviceID),
 			FriendlyName: b.FriendlyName,
@@ -903,12 +1069,26 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 		}
 		return tamperedErr(invalid)
 	}
+	// Enrolments earlier versions kept as NV indices of their own.
+	printLegacy := func() {
+		for _, legacy := range legacyAttestRecords(tpmDev) {
+			slot := legacy - AttestNVRAMStart
+			if sealIndex != 0 && legacy != legacyAttestIndex(indices[0]) {
+				continue
+			}
+			fmt.Printf("NOTE: slot #%d has an enrolment in the old, separate format (NV 0x%08X). It is not used any more:\n"+
+				"      enrol the phone again ('tpm2-kira attest enrol --nvram %d' removes the old one), or remove it\n"+
+				"      with 'tpm2-kira attest unenrol --nvram %d'.\n", slot, legacy, slot, slot)
+		}
+	}
 	if len(out) == 0 {
 		fmt.Println("No slot is enrolled for attestation. Run: tpm2-kira attest enrol")
+		printLegacy()
 		return nil
 	}
+	defer printLegacy()
 	for _, s := range out {
-		fmt.Printf("Slot #%d (%s)\n", s.Slot, s.NVRAMIndex)
+		fmt.Printf("Slot #%d (in the slot's blob, %s)\n", s.Slot, s.NVRAMIndex)
 		fmt.Printf("├── Machine:    %s\n", s.FriendlyName)
 		fmt.Printf("├── Device ID:  %s\n", s.DeviceID)
 		fmt.Printf("├── AK Name:    %s\n", s.AKName)
@@ -918,7 +1098,7 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 		case "valid":
 			fmt.Printf("├── Signature:  valid (%s)\n", s.SigningKey)
 		case "invalid":
-			fmt.Printf("├── Signature:  INVALID: not written by this machine's signing key (%s). The blob was replaced; trust only the phone.\n", s.SigningKey)
+			fmt.Printf("├── Signature:  INVALID: the slot's blob was not written by this machine's signing key (%s). It was replaced, or is left from another installation; trust only the phone.\n", s.SigningKey)
 		default:
 			fmt.Printf("├── Signature:  not checked (signing public key not found)\n")
 		}
@@ -1100,24 +1280,56 @@ func printVerdict(v *attest.Verdict) {
 
 // AttestUnenrol deletes a slot's attestation blob. The sealed TOTP secret in
 // the same slot is untouched.
-func AttestUnenrol(tpmPath string, sealIndex uint32, debug bool) error {
+func AttestUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug bool) error {
 	idx, err := AttestIndexForSlot(sealIndex)
 	if err != nil {
 		return err
 	}
-	if err := NVRAMDelete(tpmPath, idx, debug); err != nil {
-		return err
+	slot := attestSlot(idx)
+	tpmDev, err := OpenTPM(tpmPath)
+	if err != nil {
+		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
-	// Raise the counter, so that the record just removed is stale should
-	// anyone put it back. The counter index itself stays.
-	if tpmDev, err := OpenTPM(tpmPath); err == nil {
+	defer tpmDev.Close()
+
+	legacy := legacyAttestIndex(idx)
+	hadLegacy := NVRAMIndexExists(tpmDev, legacy)
+	if _, err := loadAttestBlob(tpmDev, idx); err != nil {
+		if !hadLegacy {
+			return fmt.Errorf("slot %d has no phone enrolled", slot)
+		}
+		// Only an enrolment in the old, separate place: that is an NV
+		// index of its own and needs no key to remove.
+		if err := undefineIndex(tpmDev, legacy); err != nil {
+			return fmt.Errorf("failed to delete the old enrolment at 0x%08X: %w", legacy, err)
+		}
 		if _, err := bumpAttestCounter(tpmDev, AttestCounterIndex(idx)); err != nil {
 			fmt.Printf("Warning: could not raise the record counter: %v\n", err)
-			fmt.Println("         Until it is raised, the removed record would be accepted if put back.")
 		}
-		tpmDev.Close()
+		fmt.Printf("Attestation enrolment in the old format removed from slot %d (NV 0x%08X).\n", slot, legacy)
+		fmt.Println("The phone still lists this machine; remove it there too.")
+		return nil
 	}
-	fmt.Printf("Attestation enrolment removed from slot %d (NV 0x%08X).\n", idx-AttestNVRAMStart, idx)
+
+	// The enrolment is part of the slot's blob: taking it out writes and
+	// signs that blob again, which needs the signing key.
+	if privKeyPath == "" {
+		privKeyPath = DefaultPrivateKeyPath
+	}
+	priv, err := LoadCheckedSigningPrivateKey(privKeyPath)
+	if err != nil {
+		return fmt.Errorf("removing the enrolment rewrites the slot's blob and needs the signing key: %w\n"+
+			"Without the key, 'tpm2-kira nvram delete --nvram %d' removes the whole slot, TOTP key included", err, slot)
+	}
+	if err := PrepareSigningKey(priv); err != nil {
+		return fmt.Errorf("the signing key is not usable: %w", err)
+	}
+	// The counter is raised with it, so the blob as it was is stale should
+	// anyone put it back.
+	if err := writeAttestBlob(tpmDev, idx, nil, priv); err != nil {
+		return err
+	}
+	fmt.Printf("Attestation enrolment removed from slot %d. Its TOTP key is unchanged.\n", slot)
 	fmt.Println("The phone still lists this machine; remove it there too.")
 	if cfg, err := LoadAttestConfig(DefaultAttestConfigPath); err == nil && cfg.Mode != "off" {
 		fmt.Println("The initramfs still carries the Bluetooth gate, which now has nothing to")

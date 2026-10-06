@@ -29,7 +29,6 @@ package cmd
 
 import (
 	"crypto"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -43,16 +42,15 @@ import (
 // DefaultAttestSignerPath is the signing public key inside the initramfs.
 const DefaultAttestSignerPath = "/etc/tpm2-kira/attest-signer.pem"
 
-// VerifyAttestBlobSignature checks the signature of a stored attestation
-// blob (the raw NV contents) against pubKey, which must come from the
-// machine's own key files, never from the blob.
+// VerifyAttestBlobSignature checks the signature of a slot's blob (the raw
+// NV contents), which covers the phone enrolment in it, against pubKey.
+// The key must come from the machine's own key files, never from the blob.
 func VerifyAttestBlobSignature(signed []byte, pubKey crypto.PublicKey) error {
-	b, err := UnmarshalAttestBlob(signed)
+	sb, err := UnmarshalSealedBlob(signed)
 	if err != nil {
 		return err
 	}
-	plen := binary.LittleEndian.Uint32(signed[4:8])
-	return verifySignedRegion(signed[:8+plen], b.Signature, pubKey)
+	return VerifyBlobSignature(signed, sb, pubKey)
 }
 
 // attestPublicKey loads this machine's signing public key: an explicit
@@ -74,9 +72,13 @@ func checkAttestRecord(tpmDev transport.TPM, idx uint32, raw []byte, pubKey cryp
 	if err := VerifyAttestBlobSignature(raw, pubKey); err != nil {
 		return &recordError{foreign: true, detail: err.Error()}
 	}
-	b, err := UnmarshalAttestBlob(raw)
+	sb, err := UnmarshalSealedBlob(raw)
 	if err != nil {
 		return &recordError{foreign: true, detail: err.Error()}
+	}
+	b := sb.Payload.Attest
+	if b == nil {
+		return &recordError{detail: "the slot's blob carries no phone enrolment"}
 	}
 	counter, err := readAttestCounter(tpmDev, AttestCounterIndex(idx))
 	if err != nil {
@@ -123,7 +125,7 @@ func AttestSignerCommand(tpmPath, pubKeyPath string, out io.Writer, debug bool) 
 }
 
 func signerForImage(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer, debug bool) ([]byte, int) {
-	found := FindPopulatedSlotsInRange(tpmDev, AttestNVRAMStart, AttestNVRAMEnd, debug)
+	found := enrolledSlots(tpmDev, debug)
 	if len(found) == 0 {
 		fmt.Fprintln(errOut, "tpm2-kira: no phone is enrolled for attestation")
 		return nil, ExitUsage
@@ -134,7 +136,7 @@ func signerForImage(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer, d
 		return nil, ExitInternal
 	}
 	for _, idx := range found {
-		slot := idx - AttestNVRAMStart
+		slot := attestSlot(idx)
 		raw, err := ReadFromNVRAM(tpmDev, idx)
 		if err != nil {
 			fmt.Fprintf(errOut, "tpm2-kira: slot %d: cannot read the attestation record: %v\n", slot, err)
@@ -154,18 +156,6 @@ func signerForImage(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer, d
 		return nil, ExitInternal
 	}
 	return pemBytes, 0
-}
-
-// verifyBeforeExtending refuses to add a phone to a blob that this machine's
-// signing key did not write: extending it would sign the attacker's entries.
-func verifyBeforeExtending(signed []byte, pubKey crypto.PublicKey, slot uint32) error {
-	if err := VerifyAttestBlobSignature(signed, pubKey); err != nil {
-		return fmt.Errorf("the attestation blob in slot %d is not signed by your signing key (%v): "+
-			"it was replaced outside tpm2-kira, or is left over from an installation with another signing key. "+
-			"Inspect it with 'tpm2-kira attest status'; to start over, run 'tpm2-kira attest unenrol --nvram %d' "+
-			"(or 'tpm2-kira nvram delete' to remove everything tpm2-kira keeps in the TPM) and enrol again", slot, err, slot)
-	}
-	return nil
 }
 
 // AttestEKCert shows what the phone will conclude about this TPM at

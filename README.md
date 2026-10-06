@@ -157,13 +157,13 @@ If called without a command, tpm2-kira defaults to `reveal`.
 | `info` | Display metadata about the sealed key, its approval and its generation (`--json` for machine-readable output) |
 | `nvram list` | List NVRAM indices |
 | `nvram status` | Show NVRAM index status |
-| `nvram delete` | Delete a slot's TOTP key, or everything tpm2-kira keeps in the TPM (TOTP keys, phone enrolments, leftovers) |
+| `nvram delete` | Delete a slot (TOTP key and phones), or everything tpm2-kira keeps in the TPM |
 | `attest enrol` | Bind a phone to this machine over Bluetooth LE (see [Remote attestation](#remote-attestation-with-a-phone-experimental)) |
 | `attest gate` | Serve attestation requests until a phone returns a signed verdict |
 | `attest status` | Show which phones are enrolled per slot, and whether the blob is signed by this machine's key (`--json`) |
 | `attest signer` | Print this machine's signing public key for the initramfs, after checking the enrolled records against it and the TPM's record counter (used by the hooks; exit 6 if a record does not pass) |
 | `attest quote` / `attest verify` | Produce evidence without a phone / judge it offline |
-| `attest unenrol` | Remove a slot's attestation enrolment |
+| `attest unenrol` | Remove a slot's phones from its blob (needs the signing key; the TOTP key stays) |
 | `pcrtips` | PCR reference guide — what each register measures |
 | `version` | Print version |
 
@@ -446,26 +446,40 @@ blob itself, so consumers never have to branch on the slot count.
 ```bash
 tpm2-kira nvram delete              # everything tpm2-kira keeps in the TPM: asks to type 'yes'
 tpm2-kira nvram delete --yes        # the same, without asking
-tpm2-kira nvram delete --nvram 0    # the TOTP key of one slot
-tpm2-kira attest unenrol --nvram 0  # the phone enrolment of one slot
+tpm2-kira nvram delete --nvram 0    # one slot, whole: TOTP key and phones
+tpm2-kira attest unenrol --nvram 0  # only the phones of one slot (needs the signing key)
 ```
 
-A slot is a number (0-15), not one place in the TPM. Each slot can have up to
-four NV indices, which `nvram list` labels:
+A slot is one blob in the TPM: it holds the slot's TOTP key and, once a phone
+is enrolled, the phones too, under one signature. Two small companions belong
+to it, because they are mechanisms of the TPM and not data: an index the TPM
+can lock for the rest of the boot, and a counter the TPM only lets count up.
+`nvram list` labels all three:
 
 | NV index (slot *n*) | What it holds | Written by |
 |---|---|---|
-| `0x01803010` + *n* | the TOTP key | `seal`, `reseal` |
-| `0x01803810` + *n* | the TOTP key's generation index | `seal`, `reseal` |
-| `0x01803020` + *n* | the phone enrolment (attestation record) | `attest enrol` |
-| `0x01803820` + *n* | the phone enrolment's record counter | `attest enrol`, `attest unenrol` |
+| `0x01803010` + *n* | the slot's blob: TOTP key and phone enrolment | `seal`, `reseal`, `attest enrol`, `attest unenrol` |
+| `0x01803810` + *n* | the generation index of the TOTP key's policy | `seal`, `reseal` |
+| `0x01803820` + *n* | the record counter of the phone enrolment | `attest enrol`, `attest unenrol` |
 
-`nvram delete` without `--nvram` removes all of them for every slot, including
-what an earlier installation left behind: a phone enrolment signed by a
-signing key that no longer exists (which `attest enrol` refuses to add a phone
-to), or a counter whose record is gone. With `--nvram` it removes one slot's
-TOTP key and generation index, and says so if that slot still has a phone
-enrolled.
+Because the phones live in the slot's blob,
+
+- `attest enrol` needs a sealed slot, and checks the PCRs that slot is sealed
+  to unless `--pcrs` says otherwise;
+- `reseal` (after every kernel update) and sealing a slot again keep its
+  phones. A slot sealed by *another* signing key does not take over the
+  phones the old key vouched for;
+- `attest unenrol` rewrites the blob without the phones and therefore needs
+  the signing key; `nvram delete --nvram N` removes the slot whole and needs
+  none;
+- every phone makes the blob larger (about 200 bytes), and a TPM limits the
+  size of an NV index (2048 bytes on many). `attest enrol` checks before it
+  starts whether another phone still fits.
+
+`nvram delete` without `--nvram` removes every slot and what belongs to no
+slot any more: a companion whose slot is gone, or a phone enrolment that an
+earlier version kept as an index of its own (`0x01803020` + *n*; no longer
+read - enrol the phone again).
 
 ## Remote attestation with a phone (experimental)
 
@@ -513,9 +527,9 @@ measured the initrd, and asks before enrolling a selection that misses them:
 PCR 9 also changes with every kernel or initrd update; the phone then shows
 *changed* with the diff, and you approve the new state once.
 
-The attestation blob lives in TPM NV storage, readable and — through the owner
-hierarchy — replaceable by anyone who can talk to the TPM, including another
-OS booted on this machine. So the gate checks it before the passphrase prompt:
+The phone enrolment lives in the slot's blob in TPM NV storage, next to the
+TOTP key: readable and — through the owner hierarchy — replaceable by anyone
+who can talk to the TPM, including another OS booted on this machine. So the gate checks it before the passphrase prompt:
 the record must be signed by your signing key, whose public half the hook puts
 into the image, and its count must equal a counter the TPM keeps for the slot,
 which cannot be turned back. A foreign record fails the first check, an older
