@@ -16,14 +16,24 @@ After=systemd-pcrphase-initrd.service
 Before=systemd-pcrosseparator.service
 Before=systemd-ask-password-console.service
 Conflicts=multi-user.target
+# With a phone enrolled, this process is also the coordinator of the
+# Bluetooth gate (tpm2-kira-attest.service): it holds the TPM for the radio
+# worker, which has none, and reads the phone's receipt itself. It then
+# stays up after READY, silent and without reading the console, until the
+# initramfs ends.
+Conflicts=initrd-switch-root.target
+Before=initrd-switch-root.target
 DefaultDependencies=no
 
 [Service]
 Type=notify
-# The hold is 90 s (tpm2-kira run --hold); a hung TPM must not hold the boot
-# for longer than this. Raise it together with --hold.
+# The hold is 90 s (tpm2-kira run --hold), plus at most 60 s for a phone
+# that is in the middle of its answer; a hung TPM must not hold the boot for
+# longer than this. Raise it together with --hold.
 TimeoutStartSec=180
-ExecStart=tpm2-kira run
+# --gate: where the radio worker reaches this process. Without an enrolled
+# phone in the image nothing listens there and the process ends after READY.
+ExecStart=tpm2-kira run --gate /run/tpm2-kira/gate.sock
 # Enter on the console releases the boot.
 StandardInput=tty
 StandardOutput=tty

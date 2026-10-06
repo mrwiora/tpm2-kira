@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"os"
 	"runtime"
 	"sync"
 	"testing"
@@ -334,4 +335,61 @@ func TestPhoneSessionExtendsTheHold(t *testing.T) {
 	if got := f.clock.Sub(start); got > 5*time.Second {
 		t.Fatalf("Enter released after %s", got)
 	}
+}
+
+// The keyboard reader reports Enter, and once stopped leaves what is typed
+// to whoever reads the terminal next: the passphrase prompt.
+func TestEnterReaderLetsGoOfTheTerminal(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	e := startEnterReader(int(r.Fd()))
+
+	w.Write([]byte("abc")) // typing without Enter is not a confirmation
+	select {
+	case <-e.presses:
+		t.Fatal("reported Enter without one")
+	case <-time.After(300 * time.Millisecond):
+	}
+	w.Write([]byte("\n"))
+	select {
+	case <-e.presses:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Enter not reported")
+	}
+
+	stopped := make(chan struct{})
+	go func() { e.stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the reader did not stop")
+	}
+	e.stop() // twice is fine
+
+	// What is typed now is still there for the next reader.
+	w.Write([]byte("my passphrase\n"))
+	time.Sleep(400 * time.Millisecond)
+	buf := make([]byte, 64)
+	r.SetReadDeadline(time.Now().Add(time.Second))
+	n, err := r.Read(buf)
+	if err != nil || string(buf[:n]) != "my passphrase\n" {
+		t.Fatalf("the stopped reader took input: %q %v", buf[:n], err)
+	}
+
+	// A terminal that is not there (closed stdin) never reports anything
+	// and stops at once.
+	r2, w2, _ := os.Pipe()
+	w2.Close()
+	e2 := startEnterReader(int(r2.Fd()))
+	select {
+	case <-e2.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the reader kept polling a closed input")
+	}
+	e2.stop()
+	r2.Close()
 }

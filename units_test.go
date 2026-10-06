@@ -70,19 +70,39 @@ func TestGateUnitIsConfined(t *testing.T) {
 		t.Error("the gate's output does not reach the journal")
 	}
 	// The gate runs next to the code screen, not after it: a slot enrolled
-	// with a phone is verified while the code is shown. Its one writable
-	// path is where it reports its state to that screen.
-	if has(lines, "After=systemd-pcrosseparator.service") {
-		t.Error("the gate waits for the OS separator, i.e. for the code screen to end")
+	// with a phone is verified while the code is shown.
+	if has(lines, "After=systemd-pcrosseparator.service") || has(lines, "After=tpm2-kira.service") {
+		t.Error("the gate waits for the code screen to end")
 	}
 	if !has(lines, "After=systemd-pcrphase-initrd.service") {
 		t.Error("the gate may quote before enter-initrd is in PCR 11")
 	}
-	if !has(lines, "RuntimeDirectory=tpm2-kira-attest") || !has(lines, "RuntimeDirectoryPreserve=yes") {
-		t.Error("the gate has nowhere to report its state to the code screen")
+	// The radio worker has no TPM (it would compute TOTP codes while the
+	// code screen is up); the coordinator in tpm2-kira.service has it.
+	for _, l := range lines {
+		if strings.HasPrefix(l, "DeviceAllow=") && strings.Contains(l, "tpm") {
+			t.Errorf("the radio worker is given a TPM: %s", l)
+		}
+		if strings.Contains(l, "dev-tpm") {
+			t.Errorf("the radio worker depends on a TPM device: %s", l)
+		}
+		if strings.HasPrefix(l, "RuntimeDirectory") || strings.HasPrefix(l, "ReadWritePaths") {
+			t.Errorf("the radio worker can write to the file system: %s", l)
+		}
+	}
+	const socket = "/run/tpm2-kira/gate.sock"
+	if !has(lines, "ExecStart=/usr/bin/tpm2-kira attest gate --mode lazy --coordinator "+socket) {
+		t.Error("the radio worker is not pointed at its coordinator")
+	}
+	display := directives(t, "initramfs/systemd/tpm2-kira.service")
+	if !has(display, "ExecStart=tpm2-kira run --gate "+socket) {
+		t.Error("the code screen does not listen where the radio worker asks")
+	}
+	if !has(display, "Before=systemd-pcrosseparator.service") || !has(display, "Conflicts=initrd-switch-root.target") {
+		t.Error("the coordinator must hold the separator back and end with the initramfs")
 	}
 	// What the gate cannot work without.
-	for _, want := range []string{"DeviceAllow=/dev/tpmrm0 rw", "DeviceAllow=/dev/rfkill rw", "DeviceAllow=/dev/console rw"} {
+	for _, want := range []string{"DeviceAllow=/dev/rfkill rw", "DeviceAllow=/dev/console rw"} {
 		if !has(lines, want) {
 			t.Errorf("gate unit lacks %q", want)
 		}

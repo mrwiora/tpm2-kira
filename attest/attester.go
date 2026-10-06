@@ -39,6 +39,15 @@ type MeasurePointProvider interface {
 	MeasurePointValues(sel PCRSelection) ([]PCRValue, error)
 }
 
+// ReceiptJudge is an optional AttesterBackend extension: the backend reads
+// the receipt itself, against the quotes it issued and the anchors it holds,
+// instead of the session doing so. It lets the process that talks to the
+// phone be a different one from the process that decides what the phone
+// said (tpm2-kira's radio worker and its coordinator).
+type ReceiptJudge interface {
+	JudgeReceipt(r *Receipt, verifierID string) ReceiptCheck
+}
+
 // EnrolledVerifier is one pinned verifier, as stored in the attestation blob.
 type EnrolledVerifier struct {
 	ID        string
@@ -206,11 +215,15 @@ func ServeAttestation(conn Conn, id *AttestIdentity, be AttesterBackend, progres
 				return res, err
 			}
 			res.Receipt = r
-			anchor, aerr := ParseAnchor(res.Verifier.AnchorPub)
-			if aerr != nil {
-				anchor = nil
+			if judge, ok := be.(ReceiptJudge); ok {
+				res.Check = judge.JudgeReceipt(r, res.Verifier.ID)
+			} else {
+				anchor, aerr := ParseAnchor(res.Verifier.AnchorPub)
+				if aerr != nil {
+					anchor = nil
+				}
+				res.Check = CheckReceipt(r, anchor, exp)
 			}
-			res.Check = CheckReceipt(r, anchor, exp)
 			ack, err := (&ReceiptAck{Result: res.Check.Ack, Message: res.Check.Detail}).Encode()
 			if err != nil {
 				return res, err

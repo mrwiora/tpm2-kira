@@ -305,6 +305,14 @@ The code stays on the screen for when the phone is not at hand. If nobody
 answers, the gate keeps asking at the passphrase prompt until the disk is
 unlocked.
 
+The gate is two processes of the one `tpm2-kira` binary. The display is also
+its *coordinator* (`tpm2-kira run --gate`): it holds the TPM, issues the
+quotes and reads the phone's signed receipt. The *radio worker*
+(`tpm2-kira attest gate --coordinator`, in `tpm2-kira-attest.service`) talks
+to the phone and has no TPM at all; it asks the coordinator over a socket in
+`/run/tpm2-kira`. What listens to the radio can therefore neither have a
+TOTP code computed nor make up a verdict.
+
 That order is what locks the key for the rest of the boot. PCR extends are
 one-way, so once the separator has run, nothing in the booted system can
 satisfy the key's policy again — not root, not malware — until the next boot.
@@ -591,24 +599,26 @@ does nothing.
 
 | Unit | In the initramfs image | Does something when |
 |------|------------------------|---------------------|
-| `tpm2-kira.service` (the code at the prompt) | always, once `sd-tpm2-kira` is in `HOOKS` | a TOTP key is sealed. With nothing sealed it says so once, releases the boot and exits; a later `seal` needs no rebuild |
+| `tpm2-kira.service` (the code at the prompt, and the gate's coordinator) | always, once `sd-tpm2-kira` is in `HOOKS` | a TOTP key is sealed. With nothing sealed it says so once, releases the boot and exits; a later `seal` needs no rebuild. With a gate in the image it stays up, silent, until the initrd is left |
 | `tpm2-kira-cap.service` (locks codes when the initrd is left) | always, with the display | the initrd is left. Without sealed keys there is nothing to lock |
-| `tpm2-kira-attest.service` (Bluetooth gate) | only if `/etc/tpm2-kira/attest.conf` says `lazy`, **and** a phone is enrolled, **and** its record is signed by this machine's key and current, **and** the adapter was found when the image was built. The signing public key goes into the image with it. Otherwise neither the unit nor any Bluetooth module or firmware is in the image; `mkinitcpio` says which condition failed | a phone connects |
+| `tpm2-kira-attest.service` (Bluetooth gate, radio worker) | only if `/etc/tpm2-kira/attest.conf` says `lazy`, **and** a phone is enrolled, **and** its record is signed by this machine's key and current, **and** the adapter was found when the image was built. The signing public key goes into the image with it. Otherwise neither the unit nor any Bluetooth module or firmware is in the image; `mkinitcpio` says which condition failed | a phone connects |
 
 One case leaves a unit in the image with nothing to do: `attest unenrol`
 without rebuilding the initramfs. The gate then starts at boot, reports that no
 phone is enrolled and fails; `unenrol` tells you to rebuild.
 
-The gate is the only process that takes input from outside the machine before
-the disk is unlocked, so its unit confines it: Bluetooth and Unix sockets only,
-the capabilities for the adapter and no others, the TPM, rfkill and the console
-as its only devices, a read-only file system, and a system call filter
-(`systemd-analyze security` rates the unit 2.4, from 9.4 without).
+The radio worker is the only process that takes input from outside the
+machine before the disk is unlocked, so its unit confines it: Bluetooth and
+Unix sockets only, the capabilities for the adapter and no others, rfkill and
+the console as its only devices and no TPM, a read-only file system, and a
+system call filter (`systemd-analyze security` rates the unit 2.2, from 9.4
+without).
 
 On Debian there are no units in the image: the initramfs-tools scripts start
 the display and, under the same three conditions, the gate, and run `cap` when
-the initramfs is left. The confinement above applies to systemd-based images
-only.
+the initramfs is left. The split into coordinator and radio worker and the
+confinement above apply to systemd-based images only; there the gate is one
+process with the TPM, and the phone's verdict does not release the display.
 
 ## Early Boot Integration (Debian / initramfs-tools)
 

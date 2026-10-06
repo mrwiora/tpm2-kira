@@ -5,9 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/matthias/tpm2-kira/cmd"
@@ -324,13 +322,14 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	gate := fs.String("gate", "", "Also be the Bluetooth gate's coordinator on this socket: hold the TPM for 'attest gate --coordinator' and let the phone's verdict release the boot (set by the initrd unit)")
 	hold := fs.Uint("hold", uint(cmd.HoldDefault/time.Second), "Seconds to wait for Enter after showing the code before the boot continues on its own (0: at once)")
 
 	fs.Parse(args)
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *debug)
+	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *debug)
 }
 
 func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -425,6 +424,7 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 		timeout := fs.Duration("timeout", -1, "Give up after this long (0 = wait forever); default from the config")
 		adapterWait := fs.Duration("adapter-wait", -1, "Wait this long for the adapter to appear; default from the config, else 30s")
 		mode := fs.String("mode", "lazy", "Gate mode; only 'lazy' is implemented")
+		coordinator := fs.String("coordinator", "", "Socket of the coordinator ('tpm2-kira run --gate') that holds the TPM; without it this process uses the TPM itself")
 		fs.Parse(args)
 		if *mode != "lazy" {
 			failAttest(cmd.ExitUsage, fmt.Errorf("mode %q is not implemented; only 'lazy' is available", *mode))
@@ -449,7 +449,7 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 		os.Exit(cmd.AttestGate(cmd.GateOptions{
 			TPMPath: *tpm, SealIndex: slot, Adapter: cfg.Adapter, Timeout: cfg.Timeout,
 			AdapterWait: cfg.AdapterWait, Debug: *debug || cfg.Debug,
-			StatusPath: gateStatusPath(),
+			Coordinator: *coordinator,
 		}))
 	case "initramfs-deps":
 		// Used by the initramfs hooks; prints "module", "firmware" and
@@ -576,6 +576,11 @@ RUN OPTIONS:
                      While waiting, a fresh code is shown every 30 seconds;
                      Enter releases the boot, after which no code can be
                      computed until the next boot (the OS separator)
+  --gate SOCKET      Also be the coordinator of the Bluetooth gate on this
+                     socket (set by the initrd unit): hold the TPM for the
+                     radio worker ('attest gate --coordinator'), read the
+                     phone's receipt, and release the boot on its verdict.
+                     Only with attestation enabled and a phone enrolled
 
 RESEAL OPTIONS:
   --pcrs INDICES     New PCR indices with optional source suffix (optional,
@@ -612,9 +617,12 @@ ATTEST SUBCOMMANDS:
                   --verify-phone warn|require|off  the phone's key in genuine secure hardware
                                                    (Android key attestation, Google roots)?
   attest gate     Serve attestation requests until a phone returns a receipt.
-                  Defaults from /etc/tpm2-kira/attest.conf; uses /dev/tpmrm0
-                  when available so it can run beside the TOTP display.
+                  Defaults from /etc/tpm2-kira/attest.conf.
                   --mode lazy --adapter N --timeout DUR --adapter-wait DUR
+                  --coordinator SOCKET  be the radio worker only: no TPM in
+                    this process; quotes and the reading of the receipt come
+                    from 'tpm2-kira run --gate SOCKET' (the initrd units).
+                    Without it (by hand) this process uses the TPM itself
   attest status   Show enrolled phones per slot and whether the blob is signed
                   by this machine's signing key (--json); exits 1 if not
   attest signer   Print this machine's signing public key for the initramfs
@@ -710,15 +718,4 @@ EXAMPLES:
 
 For detailed documentation, see README.md
 `, cmd.DefaultPublicKeyPath, cmd.PINEnvVar)
-}
-
-// gateStatusPath is where the gate reports its state to the code screen:
-// in the runtime directory systemd gives its unit. Run by hand there is
-// none, and nothing is written.
-func gateStatusPath() string {
-	dir := os.Getenv("RUNTIME_DIRECTORY")
-	if dir == "" || strings.Contains(dir, ":") {
-		return ""
-	}
-	return filepath.Join(dir, filepath.Base(cmd.DefaultGateStatusPath))
 }

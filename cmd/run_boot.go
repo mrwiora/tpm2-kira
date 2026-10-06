@@ -14,12 +14,15 @@ package cmd
 // nothing left to show, so it exits. 'tpm2-kira cap' at initrd-switch-root
 // read-locks the generation index on top of that.
 //
-// A slot that is enrolled with a phone is verified by that phone instead:
-// the Bluetooth gate (tpm2-kira-attest.service) runs next to this display
-// from the start, and a verdict from the phone releases the boot the way
-// Enter does. The code stays on the screen all the same, as the fallback
-// when the phone is not at hand. The gate is another process (confined by
-// its unit); the display reads its state from a file (gate_status.go).
+// A slot that is enrolled with a phone is verified by that phone instead: a
+// verdict from the phone releases the boot the way Enter does. The code
+// stays on the screen all the same, as the fallback when the phone is not at
+// hand. For that this process is also the gate's coordinator
+// (gate_service.go): it holds the TPM for the radio worker
+// (tpm2-kira-attest.service), which has none, and reads the phone's receipt
+// itself. It therefore stays up after the boot is released, silently, until
+// the initramfs ends, so the phone can still be answered at the passphrase
+// prompt.
 //
 // A slot that yields no code during the hold is served after the boot is
 // released: a blob whose policy holds only after the separator (sealed by an
@@ -28,14 +31,18 @@ package cmd
 // says so.
 
 import (
-	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/go-tpm/tpm2/transport"
+	"golang.org/x/sys/unix"
 )
 
 // HoldDefault is how long the display waits for Enter before it releases
@@ -261,25 +268,95 @@ func sdNotifyReady() {
 	_, _ = conn.Write([]byte("READY=1\n"))
 }
 
-// enterPresses reports every line typed on stdin. Without a terminal
-// (stdin closed or not a tty) nothing is ever reported, so the hold runs
-// its course.
-func enterPresses() <-chan struct{} {
-	ch := make(chan struct{})
+// enterReader reports Enter typed on stdin, until it is stopped. It must be
+// stopped when the boot is released: the passphrase prompt reads the same
+// terminal next, and no key typed there may end up here. So it never sits
+// in a read: it polls, and reads only what is already waiting.
+type enterReader struct {
+	presses chan struct{}
+	quit    chan struct{}
+	done    chan struct{}
+	once    sync.Once
+}
+
+func startEnterReader(fd int) *enterReader {
+	e := &enterReader{presses: make(chan struct{}), quit: make(chan struct{}), done: make(chan struct{})}
 	go func() {
-		r := bufio.NewReader(os.Stdin)
+		defer close(e.done)
+		buf := make([]byte, 256)
 		for {
-			if _, err := r.ReadString('\n'); err != nil {
+			select {
+			case <-e.quit:
+				return
+			default:
+			}
+			fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+			n, err := unix.Poll(fds, 200)
+			if err == unix.EINTR || (err == nil && n == 0) {
+				continue
+			}
+			if err != nil || fds[0].Revents&unix.POLLIN == 0 {
+				return // closed, hung up, or not a terminal: the hold runs its course
+			}
+			select {
+			case <-e.quit:
+				return
+			default:
+			}
+			m, err := unix.Read(fd, buf)
+			if err != nil || m <= 0 {
 				return
 			}
-			ch <- struct{}{}
+			if bytes.IndexByte(buf[:m], '\n') < 0 && bytes.IndexByte(buf[:m], '\r') < 0 {
+				continue
+			}
+			select {
+			case e.presses <- struct{}{}:
+			case <-e.quit:
+				return
+			}
 		}
 	}()
-	return ch
+	return e
+}
+
+// stop ends the reader and returns once it can no longer touch the terminal.
+func (e *enterReader) stop() {
+	e.once.Do(func() { close(e.quit) })
+	<-e.done
+}
+
+// startCoordinator makes this process the gate's coordinator when the image
+// carries a gate for an enrolled phone: it opens the TPM for it and listens
+// on socket. Nil when there is nothing to coordinate.
+func startCoordinator(tpmPath, socket, configPath string, debug bool) *gateService {
+	if socket == "" {
+		return nil
+	}
+	cfg, err := LoadAttestConfig(configPath)
+	if err != nil || cfg.Mode != "lazy" {
+		return nil // no gate in this image
+	}
+	path := preferResourceManager(tpmPath)
+	tpmDev, err := transport.OpenTPM(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: cannot open the TPM at %s: %v\n", path, err)
+		return nil
+	}
+	l, err := listenGate(socket)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: %v\n", err)
+		tpmDev.Close()
+		return nil
+	}
+	svc := newGateService(tpmDev, 0, "", debug)
+	go serveGate(l, svc)
+	return svc
 }
 
 // RunCommand implements the run command (the display at boot).
-func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, debug bool) {
+func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket string, debug bool) {
+	svc := startCoordinator(tpmPath, gateSocket, DefaultAttestConfigPath, debug)
 	open := func() (transport.TPMCloser, error) {
 		tpmDev, err := OpenTPM(tpmPath)
 		if err != nil {
@@ -288,13 +365,10 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, debug boo
 		CleanupTPM(tpmDev, debug)
 		return tpmDev, nil
 	}
-	enter := enterPresses()
-	// The gate reports to the display only where both are started for the
-	// same boot: in a systemd initrd. Anywhere else a status file would be
-	// a leftover.
+	enter := startEnterReader(0)
 	var phone func() (GateStatus, bool)
-	if _, err := os.Stat("/etc/initrd-release"); err == nil {
-		phone = func() (GateStatus, bool) { return ReadGateStatus(DefaultGateStatusPath) }
+	if svc != nil {
+		phone = svc.Status
 	}
 	b := &bootDisplay{
 		phone:      phone,
@@ -331,7 +405,10 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, debug boo
 			s.Code, _, s.Error = SlotCode(tpmDev, s.Index, now, debug)
 			return s
 		},
-		notify: sdNotifyReady,
+		notify: func() {
+			enter.stop() // the terminal is the passphrase prompt's from here on
+			sdNotifyReady()
+		},
 		show: func(slots []NVRAMSlot, codes map[int]string, remaining time.Duration) {
 			if tpmDev, err := open(); err == nil {
 				PrintKIRASlots(tpmDev, slots, codes) // with PCR details
@@ -353,7 +430,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, debug boo
 		},
 		wait: func(d time.Duration) bool {
 			select {
-			case <-enter:
+			case <-enter.presses:
 				return true
 			case <-time.After(d):
 				return false
@@ -367,6 +444,13 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, debug boo
 		retryEvery:    2 * time.Second,
 	}
 	b.run()
+	if svc != nil {
+		// Nothing more to show, but the radio worker still needs its TPM
+		// half until the initramfs ends (systemd stops this unit then).
+		// Keys typed at the passphrase prompt must not signal this process.
+		signal.Ignore(syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTSTP, syscall.SIGHUP)
+		select {}
+	}
 }
 
 func gateStatus(phone func() (GateStatus, bool)) (GateStatus, bool) {

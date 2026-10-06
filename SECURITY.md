@@ -116,23 +116,40 @@ Known residual risks:
 outside the machine before the disk is unlocked: it parses Bluetooth packets
 from anyone in range, as root. Its unit therefore confines it to what it
 needs: `AF_BLUETOOTH` and `AF_UNIX` sockets and no IP, `CAP_NET_ADMIN` and
-`CAP_NET_RAW` and no other capability, the TPM, rfkill and the console as its
-only devices, a read-only file system, no new privileges, and a system call
+`CAP_NET_RAW` and no other capability, rfkill and the console as its only
+devices, a read-only file system, no new privileges, and a system call
 filter. A parsing bug in the radio path would be confined to that. The unit is
-in the image only when attestation is enabled and a phone is enrolled. On
-initramfs-tools (Debian) the gate is started by a script and is not confined
-this way.
+in the image only when attestation is enabled and a phone is enrolled.
 
-The gate runs next to the TOTP display, and a phone's verdict releases the
-boot to the passphrase prompt the way Enter does. The gate reports its state
-to the display through one line in its own runtime directory
-(`/run/tpm2-kira-attest/status`), the one path it may write. The display
-accepts a fixed set of states and a slot number from it and reduces the
-phone's name to printable characters. A subverted gate could therefore claim
-a verdict on the console and end the hold early; it could do the first
-through its own output before, and the second gains nothing: the hold only
-decides when the passphrase prompt appears, and what counts is the phone's
-screen, never the console.
+That process, the *radio worker*, has no TPM. It runs while the TOTP display
+is up, and in that window the TPM computes a code for anyone who can reach it
+(that is the point of the window; no secret is needed). A process that parses
+radio input must not be one of them: with a code-execution flaw in it, an
+attacker in range could have codes for future times computed and show them
+later on a tampered boot. The TPM half of the gate therefore lives in the
+display's process, the *coordinator*, which the worker reaches over a Unix
+socket only root can open (`/run/tpm2-kira/gate.sock`). Over it the worker can
+
+- obtain what it needs for the radio session (identifiers, the channel key,
+  the phones' channel keys; all readable from the TPM's NV storage by anyone
+  who can talk to it, and none of it TPM-protected),
+- have a quote signed by the attestation key, which states what the PCRs
+  are and gives nothing away,
+- hand in the phone's receipt, and report its own progress.
+
+The verdict is not the worker's to give. The coordinator accepts a receipt
+only if it is signed by an enrolled phone's key, which the worker is never
+given, and bound to a quote the coordinator itself issued in this boot. A
+subverted worker can still deny the phone check, or deliver a rejection
+nobody gave, which costs a look at the TOTP code and earns no trust. The
+coordinator's verdict releases the boot to the passphrase prompt the way
+Enter does, and is where later consumers of "this boot was verified by the
+phone" will ask. The console remains advisory all the same: what counts is
+the phone's screen.
+
+On initramfs-tools (Debian) the gate is started by a script as one process
+with the TPM, unconfined, and runs next to the display: there the window
+above is open to it. Prefer a systemd-based initramfs where the gate matters.
 
 The phone accepts a register that differs from its profile by exactly one
 `os-separator` extend (PCRs 0-7, 9, 12-14), because the gate asks from

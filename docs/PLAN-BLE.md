@@ -203,11 +203,21 @@ code gives different registers before the separator and after it alike.
 A slot that is enrolled with a phone is verified by the phone instead of by
 comparing the code: the phone's verdict releases the boot the way Enter does.
 The code stays on the screen as the fallback, and so does the end of the hold
-(lazy mode never holds the boot). The gate is a separate, confined process;
-it tells the display its state through one line in its runtime directory
-(`/run/tpm2-kira-attest/status`), which the display parses as input. A phone
-that is in the middle of its session when the hold ends extends it by at most
-a minute, so the registers do not change between its question and its answer.
+(lazy mode never holds the boot). A phone that is in the middle of its
+session when the hold ends extends it by at most a minute, so the registers
+do not change between its question and its answer.
+
+The gate is two processes of the one binary. The display is its
+*coordinator* (`tpm2-kira run --gate SOCKET`): it holds the TPM, checks the
+enrolment record, issues the quotes, and reads the phone's receipt against
+the anchors and the quotes it issued. The *radio worker* (`tpm2-kira attest
+gate --coordinator SOCKET`, the confined unit) advertises and runs the
+session; it has no TPM and asks the coordinator over the socket: identity,
+quote, boot context, event log, receipt, progress report - length-prefixed
+JSON, one request at a time (`cmd/gate_ipc.go`). Before the separator the
+TPM computes TOTP codes for any process that can reach it, so the process
+that parses radio input must not be able to. The coordinator outlives the
+display's hold, silently, until the initramfs ends.
 
 The enrolment baseline must describe the same point: `attest enrol` runs in
 the booted system, where PCR 11 already carries systemd's later phases, so it

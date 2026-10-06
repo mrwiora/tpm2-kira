@@ -441,7 +441,7 @@ func confirmCode(in *bufio.Reader, code string) (bool, error) {
 type GateOptions struct {
 	TPMPath     string
 	SignerPath  string // the signing public key in the initramfs; "" = DefaultAttestSignerPath
-	StatusPath  string // where the code screen reads the gate's state; "" = nowhere (gate_status.go)
+	Coordinator string // the coordinator's socket; "" = this process holds the TPM itself
 	SealIndex   uint32 // 0 = first enrolled slot
 	Adapter     int
 	Timeout     time.Duration // 0 = wait forever
@@ -461,6 +461,20 @@ type GateOptions struct {
 // (PLAN-REMOTEATTESTATION.md §10.2).
 func AttestGate(o GateOptions) int {
 	step := gateSteps(o.Debug)
+	if o.Coordinator != "" {
+		// The radio worker: no TPM here. Everything that needs one, and
+		// the reading of the phone's receipt, is the coordinator's.
+		step("version %s; radio worker, asking the coordinator at %s", AppVersion, o.Coordinator)
+		client, err := dialGate(o.Coordinator, gateCoordinatorWait)
+		if err != nil {
+			gateFail("%v", err)
+			return ExitUnavailable
+		}
+		defer client.Close()
+		return runGateRadio(client, o, step)
+	}
+	// Run by hand, or where no coordinator runs (initramfs-tools): one
+	// process does both halves.
 	tpmPath := preferResourceManager(o.TPMPath)
 	step("version %s; opening the TPM at %s", AppVersion, tpmPath)
 	tpmDev, err := transport.OpenTPM(tpmPath)
@@ -470,83 +484,67 @@ func AttestGate(o GateOptions) int {
 	}
 	defer tpmDev.Close()
 	defer CleanupTPM(tpmDev, o.Debug)
+	return runGateRadio(newGateService(tpmDev, o.SealIndex, o.SignerPath, o.Debug), o, step)
+}
 
-	var idx uint32
-	if o.SealIndex != 0 {
-		if idx, err = AttestIndexForSlot(o.SealIndex); err != nil {
+// gateCoordinatorWait is how long the worker waits for the coordinator's
+// socket: both are started at the same moment.
+const gateCoordinatorWait = 30 * time.Second
+
+// runGateRadio is the radio half of the gate: advertise, serve the phone,
+// print what it said. The TPM half is behind host.
+func runGateRadio(host gateHost, o GateOptions, step func(string, ...any)) int {
+	ident, code, err := host.Identity()
+	if code != 0 || err != nil {
+		if code == 0 {
+			code = ExitInternal
+		}
+		// A refused record was reported in full by whoever checked it.
+		if code != ExitTampered || o.Coordinator != "" {
 			gateFail("%v", err)
-			return ExitUsage
-		}
-	} else {
-		found := FindPopulatedSlotsInRange(tpmDev, AttestNVRAMStart, AttestNVRAMEnd, o.Debug)
-		if len(found) == 0 {
-			gateFail("no slot is enrolled for attestation (run 'tpm2-kira attest enrol')")
-			return ExitUsage
-		}
-		idx = found[0]
-	}
-	// The code screen shows the gate's state for this slot next to its code.
-	status := GateStatus{Slot: int(idx - AttestNVRAMStart)}
-	report := func(state GateState, phone string) {
-		status.State, status.Phone = state, phone
-		writeGateStatus(o.StatusPath, status)
-	}
-	step("attestation record at 0x%08X; checking its signature and count", idx)
-	recordVerified, code := gateRecordCheck(tpmDev, idx, o.SignerPath)
-	if code != 0 {
-		if code == ExitTampered {
-			report(GateRefused, "")
 		}
 		return code
 	}
-	step("record check done (verified: %v)", recordVerified)
-	blob, err := loadAttestBlob(tpmDev, idx)
-	if err != nil {
-		gateFail("cannot read the attestation blob at 0x%08X: %v", idx, err)
-		return ExitInternal
-	}
-	if len(blob.Verifiers) == 0 {
-		gateFail("no phone is enrolled for slot %d", idx-AttestNVRAMStart)
-		return ExitUsage
-	}
-	noise, err := attest.NoiseKeypairFromPrivate(blob.NoisePrivate)
+	step("serving slot %d (record verified: %v), %d phone(s) enrolled", ident.Slot, ident.RecordVerified, len(ident.Verifiers))
+	noise, err := attest.NoiseKeypairFromPrivate(ident.NoisePrivate)
 	if err != nil {
 		gateFail("%v", err)
 		return ExitInternal
 	}
-	sealIndex := NVRAMSlotStart + (idx - AttestNVRAMStart)
-	be := &tpmBackend{tpm: tpmDev, blob: blob, sealIndex: sealIndex, sealed: readSealedSlot(tpmDev, sealIndex), debug: o.Debug}
 	id := &attest.AttestIdentity{
-		DeviceID:     blob.DeviceID,
-		AKName:       blob.AKName,
+		DeviceID:     ident.DeviceID,
+		AKName:       ident.AKName,
 		NoiseStatic:  noise,
-		Verifiers:    blob.Verifiers,
 		AppVersion:   AppVersion,
 		Capabilities: attest.CapEventlog,
 	}
+	for _, v := range ident.Verifiers {
+		// No anchors here: the receipt is judged by the host.
+		id.Verifiers = append(id.Verifiers, attest.EnrolledVerifier{ID: v.ID, Name: v.Name, NoisePub: v.NoisePub})
+	}
 
-	step("%d phone(s) enrolled; opening hci%d (waiting up to %s for it)", len(blob.Verifiers), o.Adapter, o.AdapterWait)
+	step("opening hci%d (waiting up to %s for it)", o.Adapter, o.AdapterWait)
 	p, err := ble.Open(ble.Config{Adapter: o.Adapter, UnblockRFKill: true, Wait: o.AdapterWait, Logf: debugLogf(o.Debug)})
 	if err != nil {
 		gateFail("%v", err)
-		report(GateUnavailable, "")
+		host.Report(GateUnavailable)
 		return ExitUnavailable
 	}
 	defer p.Close()
 	step("hci%d is ready; advertising from here on (timeout %s, 0 = until the initramfs ends)", o.Adapter, o.Timeout)
 
 	adv := ble.Advertisement{
-		ServiceData: attest.BuildServiceData(attest.AdvFlagAttest, randBytes(4), blob.AdvKey),
+		ServiceData: attest.BuildServiceData(attest.AdvFlagAttest, randBytes(4), ident.AdvKey),
 		Info:        attestInfo(infoModeAttest, id.Capabilities),
 	}
-	fmt.Printf("tpm2-kira: waiting for attestation of %q (open the app on your phone)\n", blob.FriendlyName)
-	report(GateWaiting, "")
+	fmt.Printf("tpm2-kira: waiting for attestation of %q (open the app on your phone)\n", ident.FriendlyName)
+	host.Report(GateWaiting)
 
 	res, err := waitForReceipt(p, adv, o.Timeout, func(conn *frame.Conn) (*attest.AttestResult, error) {
-		report(GateSession, "")
-		res, err := attest.ServeAttestation(conn, id, be, debugProgress(o.Debug))
+		host.Report(GateSession)
+		res, err := attest.ServeAttestation(conn, id, host, debugProgress(o.Debug))
 		if res == nil || res.Receipt == nil {
-			report(GateWaiting, "") // the gate advertises again
+			host.Report(GateWaiting) // the gate advertises again
 		}
 		return res, err
 	}, os.Stdout, time.Now)
@@ -554,24 +552,15 @@ func AttestGate(o GateOptions) int {
 		gateFail("phone not reachable: no phone connected over Bluetooth within %s.\n"+
 			"tpm2-kira:   This is not a TPM or boot-integrity failure. Check that the phone\n"+
 			"tpm2-kira:   is close to this machine, Bluetooth is on and the Kira app is open.", o.Timeout)
-		report(GateUnavailable, "")
+		host.Report(GateUnavailable)
 		return ExitUnavailable
 	}
 	if err != nil {
 		gateFail("%v", err)
-		report(GateUnavailable, "")
+		host.Report(GateUnavailable)
 		return ExitUnavailable
 	}
-	code = reportReceipt(blob, res, recordVerified)
-	switch code {
-	case ExitAttested:
-		report(GateAttested, verifierName(res.Verifier))
-	case ExitRejected:
-		report(GateRejected, verifierName(res.Verifier))
-	default:
-		report(GateRefused, "")
-	}
-	return code
+	return reportReceipt(res, ident.RecordVerified)
 }
 
 // gateRetryInterval is one advertising round of the gate: when no phone has
@@ -701,7 +690,7 @@ func gateRecordCheck(tpmDev transport.TPM, idx uint32, signerPath string) (bool,
 	return true, 0
 }
 
-func reportReceipt(blob *AttestBlob, res *attest.AttestResult, recordVerified bool) int {
+func reportReceipt(res *attest.AttestResult, recordVerified bool) int {
 	// Even a verified record is only as good as the initramfs holding the
 	// key it was verified with (SECURITY.md); the phone's screen is the verdict.
 	if recordVerified {

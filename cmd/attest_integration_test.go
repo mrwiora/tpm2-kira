@@ -5,6 +5,7 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
@@ -120,6 +121,75 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	res := attestRound()
 	if res.Check.Verdict != attest.VerdictOK || !res.Check.Authentic {
 		t.Fatalf("unchanged machine not attested: %+v (verdict %+v)", res.Check, phone.Last(attest.EvVerdict).Verdict)
+	}
+
+	// The same exchange as the units run it: the session in a radio worker
+	// that has nothing but the coordinator's socket, the TPM and the
+	// reading of the receipt in the coordinator.
+	signerPath := filepath.Join(t.TempDir(), "attest-signer.pem")
+	der, _ := x509.MarshalPKIXPublicKey(&signer.PublicKey)
+	if err := os.WriteFile(signerPath, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc := newGateService(s.tpm, NVRAMSlotStart+(idx-AttestNVRAMStart), signerPath, false)
+	worker, err := dialGate(startTestGate(t, svc), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	ident, code, err := worker.Identity()
+	if err != nil || code != 0 || !ident.RecordVerified || ident.Slot != 9 {
+		t.Fatalf("coordinator identity: %+v %d %v", ident, code, err)
+	}
+	workerNoise, _ := attest.NoiseKeypairFromPrivate(ident.NoisePrivate)
+	workerID := &attest.AttestIdentity{DeviceID: ident.DeviceID, AKName: ident.AKName, NoiseStatic: workerNoise, AppVersion: "test"}
+	for _, v := range ident.Verifiers {
+		workerID.Verifiers = append(workerID.Verifiers, attest.EnrolledVerifier{ID: v.ID, Name: v.Name, NoisePub: v.NoisePub})
+	}
+	viaCoordinator := func() *attest.AttestResult {
+		a, b := attesttest.NewPipe()
+		type r struct {
+			res *attest.AttestResult
+			err error
+		}
+		ch := make(chan r, 1)
+		go func() {
+			res, err := attest.ServeAttestation(a, workerID, worker, nil)
+			a.Close()
+			ch <- r{res, err}
+		}()
+		v, err := attest.NewAttestVerifier(phone.Config(), phone.Record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := phone.Drive(v, b); err != nil {
+			t.Fatalf("phone: %v", err)
+		}
+		got := <-ch
+		if got.err != nil {
+			t.Fatalf("worker: %v", got.err)
+		}
+		return got.res
+	}
+	if st, ok := svc.Status(); ok && st.Verdict() {
+		t.Fatalf("a verdict before any phone answered: %+v", st)
+	}
+	res = viaCoordinator()
+	st, _ := svc.Status()
+	if res.Check.Verdict != attest.VerdictOK || !res.Check.Authentic || st.State != GateAttested || st.Slot != 9 {
+		t.Fatalf("through the coordinator: %+v, status %+v", res.Check, st)
+	}
+	// A worker gone wrong asks for a quote of its own and presents the
+	// phone's genuine receipt for it: the receipt belongs to another quote.
+	q, err := worker.Quote(bytes.Repeat([]byte{7}, 32), sel)
+	if err != nil {
+		t.Fatalf("quote through the coordinator: %v", err)
+	}
+	replayed := *res.Receipt
+	sum := sha256.Sum256(q.Quoted)
+	replayed.QuoteDigest = sum[:]
+	if c := worker.JudgeReceipt(&replayed, res.Verifier.ID); c.Authentic {
+		t.Fatalf("a receipt moved to another quote was accepted: %+v", c)
 	}
 
 	// A boot-chain change is reported as a diff on exactly that PCR.
@@ -310,6 +380,86 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 	}
 	plant(last)
 	refused("record put back after unenrol")
+}
+
+// TestCoordinatorAndWorker runs the two halves of the gate the way the units
+// start them - the coordinator of 'tpm2-kira run --gate' and the worker of
+// 'attest gate --coordinator' - up to the point where the worker needs a
+// Bluetooth adapter, which a test machine does not have.
+func TestCoordinatorAndWorker(t *testing.T) {
+	sock := startSWTPM(t)
+	s := newSWTPMSetupAt(t, sock, "swtpm-box")
+	mine, attacker := testSigner(t), testSigner(t)
+	idx := uint32(AttestNVRAMStart + 3)
+	s.blob.Verifiers = []attest.EnrolledVerifier{{ID: "my-phone", Name: "Pixel", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
+	if err := writeAttestBlob(s.tpm, idx, s.blob, mine); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	lazy := filepath.Join(dir, "attest.conf")
+	if err := os.WriteFile(lazy, []byte("TPM2_KIRA_ATTEST=lazy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	off := filepath.Join(dir, "off.conf")
+	if err := os.WriteFile(off, []byte("TPM2_KIRA_ATTEST=off\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The coordinator opens the TPM itself; swtpm serves one client.
+	s.tpm.Close()
+
+	// No gate in the image, or no socket asked for: nothing to coordinate.
+	if startCoordinator(sock, filepath.Join(dir, "a", "gate.sock"), off, false) != nil ||
+		startCoordinator(sock, filepath.Join(dir, "b", "gate.sock"), filepath.Join(dir, "missing.conf"), false) != nil ||
+		startCoordinator(sock, "", lazy, false) != nil {
+		t.Fatal("a coordinator without a gate to coordinate")
+	}
+
+	gate := filepath.Join(dir, "run", "gate.sock")
+	svc := startCoordinator(sock, gate, lazy, false)
+	if svc == nil {
+		t.Fatal("no coordinator")
+	}
+	// The worker: no TPM path, only the socket. It gets as far as the radio.
+	code := AttestGate(GateOptions{Coordinator: gate, Adapter: 250, TPMPath: "/nonexistent/tpm"})
+	if code != ExitUnavailable {
+		t.Fatalf("worker exit %d, want %d (no adapter)", code, ExitUnavailable)
+	}
+	if st, ok := svc.Status(); !ok || st.State != GateUnavailable || st.Slot != 3 {
+		t.Fatalf("coordinator status %+v", st)
+	}
+	// The TPM half works through the socket.
+	worker, err := dialGate(gate, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	sel, _ := s.blob.Selection()
+	if q, err := worker.Quote(bytes.Repeat([]byte{1}, 32), sel); err != nil || len(q.Quoted) == 0 || len(q.Values) != len(sel.Indices) {
+		t.Fatalf("quote through the coordinator: %+v %v", q, err)
+	}
+
+	// A replaced record: the coordinator refuses, and the worker's unit
+	// fails with the same status as before.
+	forged := *s.blob
+	forged.Verifiers = []attest.EnrolledVerifier{{ID: "attackers-phone", AnchorPub: []byte{9}, NoisePub: make([]byte, 32)}}
+	svc.tpmMu.Lock()
+	err = writeAttestBlob(svc.tpm, idx, &forged, attacker)
+	svc.tpmMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostKey := filepath.Join(dir, "seal.pub")
+	der, _ := x509.MarshalPKIXPublicKey(&mine.PublicKey)
+	if err := os.WriteFile(hostKey, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refused := newGateService(svc.tpm, 0, hostKey, false)
+	if code := AttestGate(GateOptions{Coordinator: startTestGate(t, refused), Adapter: 250}); code != ExitTampered {
+		t.Fatalf("worker exit %d for a replaced record, want %d", code, ExitTampered)
+	}
+	if st, _ := refused.Status(); st.State != GateRefused {
+		t.Fatalf("coordinator status %+v", st)
+	}
 }
 
 // TestOwnTPMCheckOnSWTPM: swtpm's EK has no vendor certificate, so enrolment
