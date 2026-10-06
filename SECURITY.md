@@ -50,10 +50,31 @@ The scan report artifact (`strix-security-report`, 23.7 KB) is downloadable from
 
 ## Remote attestation with a phone: what it does not protect against
 
-The phone's screen is the only authoritative verdict. The machine's console
-line is advisory: the initrd cannot authenticate the attestation blob that
-names the enrolled phone (see `tpm2-kira attest check` for the check on the
-booted system). Known residual risks:
+The phone's screen is the only authoritative verdict; the machine's console
+line is advisory.
+
+The record that names the enrolled phone lives in TPM NV storage, where the
+owner hierarchy (root, or another OS booted on this machine) can replace it:
+with one naming an attacker's phone, or with an older one that still names a
+phone you removed. The gate therefore serves only the record its initramfs
+was built for. When the image is built, on the unlocked system, the hook
+verifies each record against this machine's signing key and writes its digest
+into the image (a fingerprint, not a secret: the record itself is readable
+from the TPM); at boot the gate compares the record in the TPM with it before
+it advertises, and refuses any other, before a passphrase is typed and
+whether or not a phone is there. After enrolling or removing a phone the
+initramfs must be rebuilt.
+
+Known residual risks:
+
+- **That fingerprint is as trustworthy as the initramfs that carries it.**
+  Whoever can replace the image can replace the fingerprint with it. That is noticed when the
+  image is a unified kernel image signed for Secure Boot, or when the PCRs
+  that the TOTP seal or the phone checks cover the initrd (`attest enrol` and
+  `seal` warn when they do not). With neither - a seal on PCRs 0, 2, 7 only,
+  say, and no Secure Boot - a replaced record goes unnoticed, as would any
+  other change to the initramfs. Nothing checks the record after the disk is
+  unlocked: by then the passphrase has been typed.
 
 - **The attestation blob is readable by anyone who can talk to the TPM.**
   It holds the machine's Noise private key and its advertising key. Someone

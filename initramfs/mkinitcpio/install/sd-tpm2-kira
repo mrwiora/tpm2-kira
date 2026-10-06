@@ -66,6 +66,19 @@ _add_bluetooth() {
         return 0
     fi
 
+    # The gate serves only the enrolment records this image was built for.
+    # 'attest fingerprint' checks each record against this machine's signing
+    # key, here on the unlocked system where that key is, and prints its
+    # SHA-256 (not a secret: the record is readable from the TPM anyway); the
+    # gate compares the record in the TPM with it at boot. A record somebody
+    # else wrote is refused, and then the gate is not added at all.
+    local fingerprints
+    fingerprints=$(tpm2-kira attest fingerprint)
+    if (( $? != 0 )) || ! grep -q '^0x' <<< "$fingerprints"; then
+        warning "tpm2-kira: the attestation record was not accepted (see above); Bluetooth not added"
+        return 0
+    fi
+
     # The ring buffer may have rotated on a long uptime; the journal keeps
     # the whole boot's kernel messages.
     log=$(mktemp)
@@ -117,6 +130,7 @@ _add_bluetooth() {
     mkdir -p "$BUILDROOT/etc/modules-load.d"
     printf '%s\n' "${modules[@]}" > "$BUILDROOT/etc/modules-load.d/tpm2-kira-bluetooth.conf"
     add_file "$ATTEST_CONF"
+    printf '%s\n' "$fingerprints" > "$BUILDROOT/etc/tpm2-kira/attest-record.sha256"
     add_systemd_unit tpm2-kira-attest.service
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-attest.service \
         /usr/lib/systemd/system/tpm2-kira-attest.service

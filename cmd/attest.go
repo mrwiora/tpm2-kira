@@ -41,7 +41,7 @@ const (
 	ExitUnavailable = 3 // no adapter, timeout, nobody in range
 	ExitRejected    = 4 // the verifier rejected the attestation
 	ExitAnchor      = 5 // receipt not signed by the enrolled phone
-	ExitTampered    = 6 // attest check: the attestation blob was replaced or changed
+	ExitTampered    = 6 // the attestation record is not the one the initramfs was built for
 )
 
 // AttestInfo is the INFO characteristic: u8 protocol ‖ u8 mode ‖ u16le schema ‖ u32le capabilities.
@@ -374,16 +374,14 @@ func AttestEnrol(o EnrolOptions) error {
 		fmt.Println()
 		fmt.Printf("Enrolled:      %s (verifier id %s)\n", verifierName(v), v.ID)
 		fmt.Printf("Stored:        attestation blob at NV 0x%08X\n", idx)
-		if raw, err := ReadFromNVRAM(tpmDev, idx); err == nil {
-			if err := recordAttestState(DefaultAttestStateDir, idx, raw); err != nil {
-				fmt.Printf("Warning:       could not record the blob for 'attest check': %v\n", err)
-			}
-		}
 		fmt.Println()
 		fmt.Println("The phone can now attest this machine at boot. To serve attestation")
 		fmt.Println("requests at the passphrase prompt, enable the gate in lazy mode:")
 		fmt.Println("    echo 'TPM2_KIRA_ATTEST=lazy' | sudo tee /etc/tpm2-kira/attest.conf")
 		fmt.Println("and rebuild the initramfs (the Bluetooth hook must find your adapter).")
+		fmt.Println()
+		fmt.Println("Rebuild it after every enrolment or removal of a phone: the gate serves")
+		fmt.Println("only the enrolment record its initramfs was built for, and refuses any other.")
 		return nil
 	}
 }
@@ -434,12 +432,13 @@ func confirmCode(in *bufio.Reader, code string) (bool, error) {
 
 // GateOptions configures `attest gate`.
 type GateOptions struct {
-	TPMPath     string
-	SealIndex   uint32 // 0 = first enrolled slot
-	Adapter     int
-	Timeout     time.Duration // 0 = wait forever
-	AdapterWait time.Duration // how long to wait for the adapter to appear
-	Debug       bool
+	TPMPath         string
+	FingerprintPath string // the record fingerprints in the initramfs; "" = DefaultRecordFingerprintPath
+	SealIndex       uint32 // 0 = first enrolled slot
+	Adapter         int
+	Timeout         time.Duration // 0 = wait forever
+	AdapterWait     time.Duration // how long to wait for the adapter to appear
+	Debug           bool
 }
 
 // AttestGate serves attestation requests until a phone returns a receipt,
@@ -475,6 +474,10 @@ func AttestGate(o GateOptions) int {
 			return ExitUsage
 		}
 		idx = found[0]
+	}
+	recordKnown, code := gateRecordCheck(tpmDev, idx, o.FingerprintPath)
+	if code != 0 {
+		return code
 	}
 	blob, err := loadAttestBlob(tpmDev, idx)
 	if err != nil {
@@ -527,7 +530,7 @@ func AttestGate(o GateOptions) int {
 		gateFail("%v", err)
 		return ExitUnavailable
 	}
-	return reportReceipt(blob, res)
+	return reportReceipt(blob, res, recordKnown)
 }
 
 // gateRetryInterval is one advertising round of the gate: when no phone has
@@ -603,9 +606,47 @@ func gateFail(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: "+format+"\n", args...)
 }
 
-func reportReceipt(blob *AttestBlob, res *attest.AttestResult) int {
-	// The initrd cannot authenticate the blob that names the phone (SECURITY.md).
-	defer fmt.Println("tpm2-kira:   (not verified on this machine: your phone's screen is authoritative)")
+// gateRecordCheck compares the record in the TPM with the fingerprint this
+// initramfs carries, before anything is advertised. It reports whether the
+// record is the one the image was built for, or the exit status with which
+// the gate gives up.
+func gateRecordCheck(tpmDev transport.TPM, idx uint32, fingerprintPath string) (bool, int) {
+	if fingerprintPath == "" {
+		fingerprintPath = DefaultRecordFingerprintPath
+	}
+	raw, err := ReadFromNVRAM(tpmDev, idx)
+	if err != nil {
+		gateFail("cannot read the attestation record at 0x%08X: %v", idx, err)
+		return false, ExitInternal
+	}
+	fps, err := LoadRecordFingerprints(fingerprintPath)
+	if err != nil {
+		gateFail("cannot use the record fingerprints at %s: %v", fingerprintPath, err)
+		return false, ExitInternal
+	}
+	switch checkRecordFingerprint(fps, idx, raw) {
+	case fingerprintMatches:
+		return true, 0
+	case fingerprintAbsent:
+		fmt.Println("tpm2-kira: this initramfs carries no fingerprint of the attestation record; rebuild it")
+		return false, 0
+	}
+	gateFail("the attestation record in the TPM (slot %d) is not the one this initramfs was built for.\n"+
+		"tpm2-kira:   If you enrolled or removed a phone since, rebuild the initramfs.\n"+
+		"tpm2-kira:   Otherwise the record was replaced, or an older one was put back:\n"+
+		"tpm2-kira:   no phone is served, and a verdict from any phone means nothing for this boot.",
+		idx-AttestNVRAMStart)
+	return false, ExitTampered
+}
+
+func reportReceipt(blob *AttestBlob, res *attest.AttestResult, recordKnown bool) int {
+	// Even a record the image vouches for is only as good as that image
+	// (SECURITY.md); the phone's screen is the verdict.
+	if recordKnown {
+		defer fmt.Println("tpm2-kira:   (the enrolment record is the one this initramfs was built for; your phone's screen is authoritative)")
+	} else {
+		defer fmt.Println("tpm2-kira:   (not verified on this machine: your phone's screen is authoritative)")
+	}
 	who := verifierName(res.Verifier)
 	c := res.Check
 	switch {
@@ -689,7 +730,7 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 			Signature:    "unchecked",
 		}
 		if raw, err := ReadFromNVRAM(tpmDev, idx); err == nil {
-			if pub, path, err := attestPublicKey(tpmDev, idx, ""); err == nil {
+			if pub, path, err := attestPublicKey(""); err == nil {
 				s.SigningKey = path
 				if VerifyAttestBlobSignature(raw, pub) == nil {
 					s.Signature = "valid"
@@ -915,12 +956,11 @@ func AttestUnenrol(tpmPath string, sealIndex uint32, debug bool) error {
 	if err := NVRAMDelete(tpmPath, idx, debug); err != nil {
 		return err
 	}
-	forgetAttestState(DefaultAttestStateDir, idx)
 	fmt.Printf("Attestation enrolment removed from slot %d (NV 0x%08X).\n", idx-AttestNVRAMStart, idx)
 	fmt.Println("The phone still lists this machine; remove it there too.")
 	if cfg, err := LoadAttestConfig(DefaultAttestConfigPath); err == nil && cfg.Mode != "off" {
-		fmt.Println("The initramfs still carries the Bluetooth gate, which now has nothing to")
-		fmt.Println("serve: rebuild it (mkinitcpio -P / update-initramfs -u) to take it out.")
+		fmt.Println("The initramfs still carries the Bluetooth gate and the fingerprint of the")
+		fmt.Println("removed record: rebuild it (mkinitcpio -P / update-initramfs -u).")
 	}
 	return nil
 }

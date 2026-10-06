@@ -476,11 +476,13 @@ initramfs ([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.3):
 **The attestation blob is not a trust anchor for enforced mode.** Its NV
 index refuses in-place writes without the signing key, but the owner
 hierarchy can undefine it and write a blob that lists any phone, and the
-initrd has no key to notice. Lazy mode copes: the console verdict is
-advisory, the phone's screen is authoritative, and on the booted system
-`attest check` detects a replaced or rolled-back blob. Enforced mode must
-take the anchor from the measured image (PLAN-REMOTEATTESTATION.md §10.2), so
-that changing it changes the PCRs.
+initrd has no key to notice. The anchor therefore comes from the image: the
+hook verifies the blob against the signing key when the initramfs is built and
+writes its SHA-256 fingerprint there (`attest fingerprint`), and the gate
+refuses a blob that differs from it before it advertises, so replacing or rolling back the blob means
+changing the image too, which Secure Boot or the measured PCRs then report
+(PLAN-REMOTEATTESTATION.md §10.2). The console verdict stays advisory and the
+phone's screen authoritative.
 
 ### 7.2 How the hold is implemented
 

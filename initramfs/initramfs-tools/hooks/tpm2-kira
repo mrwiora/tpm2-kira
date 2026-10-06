@@ -55,6 +55,12 @@ if [ -r "$attest_conf" ]; then
     lazy)
         if [ "$("$kira" attest status --json 2>/dev/null)" = "[]" ]; then
             echo "tpm2-kira: attestation is 'lazy' but no phone is enrolled; run 'tpm2-kira attest enrol'. Bluetooth not added" >&2
+        # The gate serves only the enrolment records this image was built
+        # for: 'attest fingerprint' checks each against this machine's signing
+        # key and prints its SHA-256 (not a secret). A record somebody else
+        # wrote is refused, and then the gate is not added.
+        elif ! fingerprints=$("$kira" attest fingerprint) || ! printf '%s\n' "$fingerprints" | grep -q '^0x'; then
+            echo "tpm2-kira: the attestation record was not accepted (see above); Bluetooth not added" >&2
         else
             log=$(mktemp)
             journalctl -k -b -o cat >"$log" 2>/dev/null || true
@@ -94,6 +100,8 @@ if [ -r "$attest_conf" ]; then
 $deps
 DEPS
                 copy_file config "$attest_conf" /etc/tpm2-kira/attest.conf
+                mkdir -p "$DESTDIR/etc/tpm2-kira"
+                printf '%s\n' "$fingerprints" > "$DESTDIR/etc/tpm2-kira/attest-record.sha256"
                 echo "tpm2-kira: Bluetooth attestation via hci$adapter: $nmod modules, $nfw firmware files"
             fi
         fi

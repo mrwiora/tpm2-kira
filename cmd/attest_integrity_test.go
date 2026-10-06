@@ -4,7 +4,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"os"
 	"strings"
 	"testing"
 
@@ -63,42 +62,48 @@ func TestAttestBlobSignature(t *testing.T) {
 	}
 }
 
-func TestSlotIntegrityState(t *testing.T) {
+// The gate serves only the record whose fingerprint its initramfs carries: another record signed
+// by the same key (a phone added since, or an older record put back), a
+// foreign one, and a slot the image knows nothing about are all refused.
+func TestRecordFingerprints(t *testing.T) {
 	key := newKey(t)
-	dir := t.TempDir()
-	idx := uint32(AttestNVRAMStart + 3)
-	v1 := signedAttestBlob(t, key, "box")
-	v2 := signedAttestBlob(t, key, "box2")
+	idx := uint32(AttestNVRAMStart)
+	built := signedAttestBlob(t, key, "box")
 
-	res, err := checkSlotIntegrity(v1, &key.PublicKey, dir, idx, false)
-	if res != integrityFirstSeen || err != nil {
-		t.Fatalf("first check: %v %v", res, err)
+	fps, err := ParseRecordFingerprints(FormatRecordFingerprints(RecordFingerprints{idx: blobDigest(built)}))
+	if err != nil || len(fps) != 1 {
+		t.Fatalf("round trip: %v %v", fps, err)
 	}
-	if res, _ = checkSlotIntegrity(v1, &key.PublicKey, dir, idx, false); res != integrityOK {
-		t.Fatalf("unchanged blob: %v", res)
+	if checkRecordFingerprint(fps, idx, built) != fingerprintMatches {
+		t.Fatal("the record the image was built for must match")
 	}
-	// A different blob, validly signed (an older one put back): changed.
-	if res, _ = checkSlotIntegrity(v2, &key.PublicKey, dir, idx, false); res != integrityChanged {
-		t.Fatalf("changed blob: %v", res)
+	if checkRecordFingerprint(fps, idx, signedAttestBlob(t, key, "box-as-it-was")) != fingerprintDiffers {
+		t.Fatal("another record signed by the same key must not match")
 	}
-	// --accept records it; afterwards it is OK.
-	if res, err = checkSlotIntegrity(v2, &key.PublicKey, dir, idx, true); res != integrityOK || err != nil {
-		t.Fatalf("accept: %v %v", res, err)
+	if checkRecordFingerprint(fps, idx, signedAttestBlob(t, newKey(t), "box")) != fingerprintDiffers {
+		t.Fatal("a foreign record must not match")
 	}
-	if res, _ = checkSlotIntegrity(v2, &key.PublicKey, dir, idx, false); res != integrityOK {
-		t.Fatalf("after accept: %v", res)
+	if checkRecordFingerprint(fps, idx+1, built) != fingerprintDiffers {
+		t.Fatal("a slot the image does not know must not be served")
 	}
-	// --accept never records a blob with a bad signature.
-	other := signedAttestBlob(t, newKey(t), "box")
-	if res, _ = checkSlotIntegrity(other, &key.PublicKey, dir, idx, true); res != integrityBadSig {
-		t.Fatalf("accept of a foreign blob: %v", res)
+	if checkRecordFingerprint(nil, idx, built) != fingerprintAbsent {
+		t.Fatal("an image without a fingerprint file is 'absent', not a mismatch")
 	}
-	if res, _ = checkSlotIntegrity(v2, &key.PublicKey, dir, idx, false); res != integrityOK {
-		t.Fatal("foreign blob replaced the recorded state")
+
+	digest := blobDigest(built)
+	for _, bad := range []string{
+		"0x01803020",                  // no digest
+		"0x01803020 zz",               // not hex
+		"0x01803020 " + digest[:10],   // too short
+		"0x00000001 " + digest,        // not an attestation index
+		"0x01803020 " + digest + " x", // trailing field
+	} {
+		if _, err := ParseRecordFingerprints([]byte(bad + "\n")); err == nil {
+			t.Errorf("fingerprint line %q should be refused", bad)
+		}
 	}
-	st, err := os.Stat(attestStateFile(dir, idx))
-	if err != nil || st.Mode().Perm() != 0o600 {
-		t.Fatalf("state file: %v %v", st, err)
+	if fps, err := LoadRecordFingerprints(t.TempDir() + "/none"); fps != nil || err != nil {
+		t.Fatalf("a missing fingerprint file is not an error: %v %v", fps, err)
 	}
 }
 

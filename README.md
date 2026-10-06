@@ -161,7 +161,7 @@ If called without a command, tpm2-kira defaults to `reveal`.
 | `attest enrol` | Bind a phone to this machine over Bluetooth LE (see [Remote attestation](#remote-attestation-with-a-phone-experimental)) |
 | `attest gate` | Serve attestation requests until a phone returns a signed verdict |
 | `attest status` | Show which phones are enrolled per slot, and whether the blob is signed by this machine's key (`--json`) |
-| `attest check` | Check on the booted system that the attestation blob was not replaced or rolled back (exit 6 if it was) |
+| `attest fingerprint` | Print the SHA-256 fingerprints of the enrolled attestation records for the initramfs (used by the hooks; not a secret; exit 6 if a record is not signed by this machine's key) |
 | `attest quote` / `attest verify` | Produce evidence without a phone / judge it offline |
 | `attest unenrol` | Remove a slot's attestation enrolment |
 | `pcrtips` | PCR reference guide — what each register measures |
@@ -450,8 +450,9 @@ sudo tpm2-kira attest enrol --name "Thinkpad-X1"
 sudo tpm2-kira attest gate
 sudo tpm2-kira attest status
 
-# After every unlock: was the attestation blob replaced while the disk was locked?
-sudo systemctl enable tpm2-kira-attest-check.service
+# After enrolling or removing a phone: rebuild the initramfs. The gate serves
+# only the enrolment record its image was built for.
+sudo mkinitcpio -P        # Debian: sudo update-initramfs -u
 ```
 
 **Both sides check each other's hardware at enrolment.** The phone checks
@@ -480,10 +481,14 @@ PCR 9 also changes with every kernel or initrd update; the phone then shows
 
 The attestation blob lives in TPM NV storage, readable and — through the owner
 hierarchy — replaceable by anyone who can talk to the TPM, including another
-OS booted on this machine. The initrd cannot authenticate it, so the verdict on
-the console is advisory: **only the phone's screen counts.** On the booted
-system `attest check` verifies the blob's signature and compares it with the
-copy recorded at the last enrolment (in `/var/lib/tpm2-kira/`).
+OS booted on this machine. So the gate serves only the record its initramfs
+was built for: the hook verifies the record against your signing key when the
+image is built and writes its SHA-256 fingerprint into the image (not a secret:
+the record is readable from the TPM anyway), and at boot the gate refuses
+a record that differs — a foreign one, or an older one put back — before the
+passphrase prompt. That is as strong as the protection of the initramfs itself
+(a Secure Boot-signed unified kernel image, or PCRs that cover the initrd);
+the verdict on the console stays advisory: **only the phone's screen counts.**
 
 While enrolling or attesting, tpm2-kira takes the Bluetooth adapter
 exclusively through an HCI user channel (no BlueZ needed); other Bluetooth
@@ -574,9 +579,9 @@ See [initramfs/mkinitcpio/mkinitcpio.conf.example](initramfs/mkinitcpio/mkinitcp
 
 ### What is installed where
 
-The package puts all four unit files into `/usr/lib/systemd/system` on the
-host, because the mkinitcpio hook takes them from there. None of the initrd
-units is enabled on the host, and each carries
+The package puts three unit files into `/usr/lib/systemd/system` on the
+host, because the mkinitcpio hook takes them from there. None of them is
+enabled on the host, and each carries
 `ConditionPathExists=/etc/initrd-release`, so enabling one there by mistake
 does nothing.
 
@@ -584,8 +589,7 @@ does nothing.
 |------|------------------------|---------------------|
 | `tpm2-kira.service` (the code at the prompt) | always, once `sd-tpm2-kira` is in `HOOKS` | a TOTP key is sealed. With nothing sealed it says so once, releases the boot and exits; a later `seal` needs no rebuild |
 | `tpm2-kira-cap.service` (locks codes when the initrd is left) | always, with the display | the initrd is left. Without sealed keys there is nothing to lock |
-| `tpm2-kira-attest.service` (Bluetooth gate) | only if `/etc/tpm2-kira/attest.conf` says `lazy`, **and** a phone is enrolled, **and** the adapter was found when the image was built. Otherwise neither the unit nor any Bluetooth module or firmware is in the image; `mkinitcpio` says which condition failed | a phone connects |
-| `tpm2-kira-attest-check.service` (was the attestation blob replaced?) | never: it runs on the booted system, and only if you enable it (`systemctl enable tpm2-kira-attest-check.service`) | a phone is enrolled; otherwise it exits quietly |
+| `tpm2-kira-attest.service` (Bluetooth gate) | only if `/etc/tpm2-kira/attest.conf` says `lazy`, **and** a phone is enrolled, **and** its record is signed by this machine's key, **and** the adapter was found when the image was built. The record's fingerprint goes into the image with it. Otherwise neither the unit nor any Bluetooth module or firmware is in the image; `mkinitcpio` says which condition failed | a phone connects |
 
 One case leaves a unit in the image with nothing to do: `attest unenrol`
 without rebuilding the initramfs. The gate then starts at boot, reports that no

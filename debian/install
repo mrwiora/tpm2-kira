@@ -5,4 +5,3 @@ initramfs/initramfs-tools/scripts/init-bottom/tpm2-kira    usr/share/initramfs-t
 initramfs/initramfs-tools/post-update.d/tpm2-kira          etc/initramfs/post-update.d
 initramfs/initramfs-tools/initramfs.conf                   etc/tpm2-kira
 initramfs/common/attest.conf                               etc/tpm2-kira
-systemd/tpm2-kira-attest-check.service                     usr/lib/systemd/system

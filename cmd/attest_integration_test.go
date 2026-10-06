@@ -156,70 +156,97 @@ func TestOfflineQuoteVerifies(t *testing.T) {
 	}
 }
 
-// TestReplacedBlobIsDetected performs the blob-replacement attack on a
+// TestReplacedRecordIsRefused performs the record-replacement attack on a
 // real TPM: the owner hierarchy undefines the attestation index and writes a
-// blob of its own (here: the attacker's phone, signed with the attacker's
-// key). 'attest check' must flag it; so must putting back an older blob
-// that this machine's key did sign.
-func TestReplacedBlobIsDetected(t *testing.T) {
+// record of its own (here: the attacker's phone, signed with the attacker's
+// key). The gate must refuse it before advertising, and the image build must
+// refuse to accept it; so must an older record that this machine's key did sign.
+func TestReplacedRecordIsRefused(t *testing.T) {
 	s := newSWTPMSetup(t)
 	mine, attacker := testSigner(t), testSigner(t)
 	idx := uint32(AttestNVRAMStart + 4)
-	dir := t.TempDir()
-	check := func(pub string) (int, string) {
-		var out strings.Builder
-		code := checkSlots(s.tpm, CheckOptions{SealIndex: NVRAMSlotStart + 4, PubKeyPath: pub, StateDir: dir}, &out)
-		return code, out.String()
-	}
 	pubPath := filepath.Join(t.TempDir(), "seal.pub")
 	der, _ := x509.MarshalPKIXPublicKey(&mine.PublicKey)
 	if err := os.WriteFile(pubPath, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	fingerprintPath := filepath.Join(t.TempDir(), "attest-record.sha256")
+	// What the initramfs hook does when the image is built.
+	buildImage := func() (int, string) {
+		var errOut strings.Builder
+		fps, code := fingerprintSlots(s.tpm, pubPath, &errOut, false)
+		if code == 0 {
+			if err := os.WriteFile(fingerprintPath, FormatRecordFingerprints(fps), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return code, errOut.String()
+	}
+	// What the gate does at boot, before it advertises.
+	gate := func() (bool, int) { return gateRecordCheck(s.tpm, idx, fingerprintPath) }
+
+	if known, code := gateRecordCheck(s.tpm, idx, filepath.Join(t.TempDir(), "none")); known || code != ExitInternal {
+		t.Fatalf("no record at all: %v %d", known, code)
 	}
 
 	s.blob.Verifiers = []attest.EnrolledVerifier{{ID: "my-phone", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
 	if err := writeAttestBlob(s.tpm, idx, s.blob, mine); err != nil {
 		t.Fatal(err)
 	}
-	if code, out := check(pubPath); code != 0 || !strings.Contains(out, "state recorded") {
-		t.Fatalf("own blob: %d %s", code, out)
-	}
 	old, _ := ReadFromNVRAM(s.tpm, idx)
 
-	// A legitimate change by this machine, recorded as tpm2-kira does.
+	// An image built before fingerprints existed: served, but not as verified.
+	if known, code := gateRecordCheck(s.tpm, idx, filepath.Join(t.TempDir(), "none")); known || code != 0 {
+		t.Fatalf("image without a fingerprint: %v %d", known, code)
+	}
+	if code, out := buildImage(); code != 0 {
+		t.Fatalf("own record not accepted: %d %s", code, out)
+	}
+	if known, code := gate(); !known || code != 0 {
+		t.Fatalf("own record, image built for it: %v %d", known, code)
+	}
+
+	// A second phone is enrolled: the image must be rebuilt first.
 	s.blob.Verifiers = append(s.blob.Verifiers, attest.EnrolledVerifier{ID: "second-phone", AnchorPub: []byte{2}, NoisePub: make([]byte, 32)})
 	if err := writeAttestBlob(s.tpm, idx, s.blob, mine); err != nil {
 		t.Fatal(err)
 	}
-	cur, _ := ReadFromNVRAM(s.tpm, idx)
-	if err := recordAttestState(dir, idx, cur); err != nil {
-		t.Fatal(err)
+	if _, code := gate(); code != ExitTampered {
+		t.Fatalf("a record changed since the image was built must be refused, got %d", code)
 	}
-	if code, out := check(pubPath); code != 0 {
-		t.Fatalf("after a recorded change: %d %s", code, out)
+	if code, out := buildImage(); code != 0 {
+		t.Fatalf("rebuild after enrolment: %d %s", code, out)
+	}
+	if known, code := gate(); !known || code != 0 {
+		t.Fatalf("after the rebuild: %v %d", known, code)
 	}
 
-	// The attack: undefine (owner auth, empty) and write the attacker's blob.
+	// The attack: undefine (owner auth, empty) and write the attacker's record.
 	forged := *s.blob
 	forged.Verifiers = []attest.EnrolledVerifier{{ID: "attackers-phone", AnchorPub: []byte{9}, NoisePub: make([]byte, 32)}}
 	if err := writeAttestBlob(s.tpm, idx, &forged, attacker); err != nil {
 		t.Fatalf("the owner hierarchy could not replace the index: %v", err)
 	}
-	if code, out := check(pubPath); code != ExitTampered || !strings.Contains(out, "TAMPERED") {
-		t.Fatalf("replaced blob not flagged: %d %s", code, out)
+	if _, code := gate(); code != ExitTampered {
+		t.Fatalf("the attacker's record was not refused: %d", code)
+	}
+	before, _ := os.ReadFile(fingerprintPath)
+	if code, out := buildImage(); code != ExitTampered || !strings.Contains(out, "TAMPERED") {
+		t.Fatalf("the image build accepted a foreign record: %d %s", code, out)
+	}
+	if after, _ := os.ReadFile(fingerprintPath); string(after) != string(before) {
+		t.Fatal("a refused build must not touch the fingerprint file")
 	}
 
-	// Putting back an older, validly signed blob (a removed phone returns).
-	if err := writeAttestBlob(s.tpm, idx, s.blob, mine); err != nil {
-		t.Fatal(err)
-	}
+	// Putting back an older record this machine's key did sign (a removed
+	// phone returns): validly signed, and still not what the image was built for.
 	restored, _ := UnmarshalAttestBlob(old)
 	restored.Signature = nil
 	if err := writeAttestBlob(s.tpm, idx, restored, mine); err != nil {
 		t.Fatal(err)
 	}
-	if code, out := check(pubPath); code != ExitTampered || !strings.Contains(out, "CHANGED") {
-		t.Fatalf("rolled-back blob not flagged: %d %s", code, out)
+	if _, code := gate(); code != ExitTampered {
+		t.Fatalf("a rolled-back record was not refused: %d", code)
 	}
 }
 

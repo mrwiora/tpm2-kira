@@ -487,18 +487,10 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 		if !ok {
 			os.Exit(cmd.ExitRejected)
 		}
-	case "check":
-		pubKey := fs.String("pubkey", "", "Signing public key (default: the slot's, else "+cmd.DefaultPublicKeyPath+")")
-		stateDir := fs.String("state-dir", cmd.DefaultAttestStateDir, "Where the accepted blob of each slot is recorded")
-		accept := fs.Bool("accept", false, "Record the current, validly signed blob as accepted")
+	case "fingerprint":
+		pubKey := fs.String("pubkey", "", "Signing public key (default: "+cmd.DefaultPublicKeyPath+")")
 		fs.Parse(args)
-		var slot uint32
-		if nvramExplicit(args) {
-			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
-		}
-		os.Exit(cmd.AttestCheck(cmd.CheckOptions{
-			TPMPath: *tpm, SealIndex: slot, PubKeyPath: *pubKey, StateDir: *stateDir, Accept: *accept, Debug: *debug,
-		}))
+		os.Exit(cmd.AttestFingerprintCommand(*tpm, *pubKey, os.Stdout, *debug))
 	case "ekcert":
 		fs.Parse(args)
 		if err := cmd.AttestEKCert(*tpm, *debug); err != nil {
@@ -622,10 +614,11 @@ ATTEST SUBCOMMANDS:
                   --mode lazy --adapter N --timeout DUR --adapter-wait DUR
   attest status   Show enrolled phones per slot and whether the blob is signed
                   by this machine's signing key (--json); exits 1 if not
-  attest check    Verify the attestation blobs on the booted system: signed by
-                  this machine's key, and unchanged since tpm2-kira last wrote
-                  or accepted them (exit 6 if not). Run after unlock by
-                  tpm2-kira-attest-check.service. --pubkey PATH --accept
+  attest fingerprint  Print the SHA-256 fingerprints of the enrolled attestation
+                  records for the initramfs (used by the initramfs hooks; not a
+                  secret): each record must be signed by this machine's key
+                  (exit 6 if not). The gate then serves only a record whose
+                  fingerprint is in its image. --pubkey PATH
   attest ekcert   Show whether the phone will verify this TPM as genuine
                   (EK certificate chain against the vendor roots in the core)
   attest quote    Produce evidence without a phone (--nonce HEX --out FILE)
@@ -638,7 +631,7 @@ ATTEST SUBCOMMANDS:
   'attest quote' and 'attest enrol' exit non-zero on failure:
     0 attested   1 internal error   2 usage   3 no phone / no adapter
     4 rejected (do not type a passphrase before checking)   5 anchor mismatch
-    6 (attest check) attestation blob replaced or changed
+    6 the attestation record was replaced or changed since the initramfs was built
 
 AUTHENTICATION:
   The TOTP key is an HMAC key inside the TPM; the TPM computes every code and
