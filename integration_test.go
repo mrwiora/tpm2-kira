@@ -41,6 +41,38 @@ var testPubKeyPath string
 var testPrivKeyPath string
 var testKeyDir string
 
+// TestSourcesAreInputs keeps 'go test' from answering "(cached)" for this
+// suite after the code changed. The tests here only run the binary, so the
+// test program links none of the code under test and stays the same when
+// that code changes; the cached result would then be served and TestMain,
+// which rebuilds the binary, never run. Files a test looks at are inputs of
+// its cached result, so this test looks at every source file. (It has to be
+// a test: what TestMain touches before m.Run is not recorded.)
+func TestSourcesAreInputs(t *testing.T) {
+	n := 0
+	err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); path != "." && (strings.HasPrefix(name, ".") || name == "testdata") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".go") || path == "go.mod" || path == "go.sum" {
+			if _, err := os.Stat(path); err != nil {
+				return err
+			}
+			n++
+		}
+		return nil
+	})
+	if err != nil || n < 50 {
+		t.Fatalf("looked at %d source files: %v", n, err)
+	}
+}
+
 // TestMain sets up and tears down the test environment
 func TestMain(m *testing.M) {
 	// Always build the binary under test. A binary left in the tree by an
