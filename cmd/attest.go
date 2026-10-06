@@ -220,6 +220,19 @@ func checkEnrolmentFits(tpmDev transport.TPM, slotBlob *SealedBlob, enrolment *A
 	return nil
 }
 
+// imagePCRs names the PCRs of a selection that an initramfs rebuild moves:
+// 4 (the unified kernel image as the firmware measured it), 9 (the initrd)
+// and 11 (the image's sections, by systemd-stub).
+func imagePCRs(sel []uint8) string {
+	var out []string
+	for _, i := range sel {
+		if i == 4 || i == 9 || i == 11 {
+			out = append(out, strconv.Itoa(int(i)))
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
 // foreignSlotError: the slot's blob was not written by this signing key.
 func foreignSlotError(slot uint32, cause error) error {
 	return fmt.Errorf("slot %d is not signed by your signing key (%v): it was replaced outside tpm2-kira, "+
@@ -547,13 +560,25 @@ func AttestEnrol(o EnrolOptions) error {
 		}
 		fmt.Println()
 		fmt.Printf("Enrolled:      %s (verifier id %s)\n", verifierName(v), v.ID)
-		fmt.Printf("Stored:        attestation blob at NV 0x%08X\n", idx)
+		fmt.Printf("Stored:        in the blob of slot %d (NV 0x%08X)\n", attestSlot(idx), idx)
 		fmt.Println()
-		fmt.Println("The phone can now attest this machine at boot. To serve attestation")
-		fmt.Println("requests at the passphrase prompt, enable the gate in lazy mode:")
+		if len(blob.Phone.Verifiers) > 1 {
+			fmt.Println("The phone can attest this machine from the next boot on. No rebuild is needed.")
+			return nil
+		}
+		fmt.Println("The phone can now attest this machine at boot. To have the machine ask")
+		fmt.Println("it while the code is shown, enable the gate in lazy mode:")
 		fmt.Println("    echo 'TPM2_KIRA_ATTEST=lazy' | sudo tee /etc/tpm2-kira/attest.conf")
 		fmt.Println("and rebuild the initramfs (the Bluetooth hook must find your adapter).")
 		fmt.Println("Further phones need no rebuild.")
+		if changing := imagePCRs(sel.Indices); len(changing) > 0 {
+			fmt.Println()
+			fmt.Printf("NOTE: that rebuild changes the boot image, and with it PCR %s, which the phone checks.\n", changing)
+			fmt.Println("      At the first boot of the new image the phone will therefore show \"changed\", once.")
+			fmt.Println("      Check that it lists only these registers, then approve and remember.")
+			fmt.Println("      The TOTP code keeps matching all the same: the reseal hook approves the new image")
+			fmt.Println("      with your signing key. The phone does not take the machine's word for it.")
+		}
 		return nil
 	}
 }
