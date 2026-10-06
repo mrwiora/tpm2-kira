@@ -41,7 +41,7 @@ const (
 	ExitUnavailable = 3 // no adapter, timeout, nobody in range
 	ExitRejected    = 4 // the verifier rejected the attestation
 	ExitAnchor      = 5 // receipt not signed by the enrolled phone
-	ExitTampered    = 6 // the attestation record is not the one the initramfs was built for
+	ExitTampered    = 6 // the attestation record was replaced or is not the current one
 )
 
 // AttestInfo is the INFO characteristic: u8 protocol ‖ u8 mode ‖ u16le schema ‖ u32le capabilities.
@@ -67,6 +67,15 @@ func loadAttestBlob(tpmDev transport.TPM, idx uint32) (*AttestBlob, error) {
 
 // writeAttestBlob signs and stores the blob with PolicySigned NV writes.
 func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *AttestBlob, priv crypto.Signer) error {
+	// The record carries the next value of the slot's TPM counter, so an
+	// older record can never pass as the current one (attest_counter.go).
+	// Counter first: if the write fails afterwards, the old record is
+	// stale and refused, never the other way round.
+	count, err := bumpAttestCounter(tpmDev, AttestCounterIndex(idx))
+	if err != nil {
+		return err
+	}
+	b.Count = count
 	unsigned, err := b.Marshal()
 	if err != nil {
 		return err
@@ -379,9 +388,7 @@ func AttestEnrol(o EnrolOptions) error {
 		fmt.Println("requests at the passphrase prompt, enable the gate in lazy mode:")
 		fmt.Println("    echo 'TPM2_KIRA_ATTEST=lazy' | sudo tee /etc/tpm2-kira/attest.conf")
 		fmt.Println("and rebuild the initramfs (the Bluetooth hook must find your adapter).")
-		fmt.Println()
-		fmt.Println("Rebuild it after every enrolment or removal of a phone: the gate serves")
-		fmt.Println("only the enrolment record its initramfs was built for, and refuses any other.")
+		fmt.Println("Further phones need no rebuild.")
 		return nil
 	}
 }
@@ -432,13 +439,13 @@ func confirmCode(in *bufio.Reader, code string) (bool, error) {
 
 // GateOptions configures `attest gate`.
 type GateOptions struct {
-	TPMPath         string
-	FingerprintPath string // the record fingerprints in the initramfs; "" = DefaultRecordFingerprintPath
-	SealIndex       uint32 // 0 = first enrolled slot
-	Adapter         int
-	Timeout         time.Duration // 0 = wait forever
-	AdapterWait     time.Duration // how long to wait for the adapter to appear
-	Debug           bool
+	TPMPath     string
+	SignerPath  string // the signing public key in the initramfs; "" = DefaultAttestSignerPath
+	SealIndex   uint32 // 0 = first enrolled slot
+	Adapter     int
+	Timeout     time.Duration // 0 = wait forever
+	AdapterWait time.Duration // how long to wait for the adapter to appear
+	Debug       bool
 }
 
 // AttestGate serves attestation requests until a phone returns a receipt,
@@ -475,7 +482,7 @@ func AttestGate(o GateOptions) int {
 		}
 		idx = found[0]
 	}
-	recordKnown, code := gateRecordCheck(tpmDev, idx, o.FingerprintPath)
+	recordVerified, code := gateRecordCheck(tpmDev, idx, o.SignerPath)
 	if code != 0 {
 		return code
 	}
@@ -530,7 +537,7 @@ func AttestGate(o GateOptions) int {
 		gateFail("%v", err)
 		return ExitUnavailable
 	}
-	return reportReceipt(blob, res, recordKnown)
+	return reportReceipt(blob, res, recordVerified)
 }
 
 // gateRetryInterval is one advertising round of the gate: when no phone has
@@ -606,44 +613,45 @@ func gateFail(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: "+format+"\n", args...)
 }
 
-// gateRecordCheck compares the record in the TPM with the fingerprint this
-// initramfs carries, before anything is advertised. It reports whether the
-// record is the one the image was built for, or the exit status with which
-// the gate gives up.
-func gateRecordCheck(tpmDev transport.TPM, idx uint32, fingerprintPath string) (bool, int) {
-	if fingerprintPath == "" {
-		fingerprintPath = DefaultRecordFingerprintPath
+// gateRecordCheck checks the record in the TPM before anything is
+// advertised: signed by the key this initramfs carries, and current by the
+// TPM's counter. It reports whether the record was verified, or the exit
+// status with which the gate gives up.
+func gateRecordCheck(tpmDev transport.TPM, idx uint32, signerPath string) (bool, int) {
+	if signerPath == "" {
+		signerPath = DefaultAttestSignerPath
 	}
 	raw, err := ReadFromNVRAM(tpmDev, idx)
 	if err != nil {
 		gateFail("cannot read the attestation record at 0x%08X: %v", idx, err)
 		return false, ExitInternal
 	}
-	fps, err := LoadRecordFingerprints(fingerprintPath)
-	if err != nil {
-		gateFail("cannot use the record fingerprints at %s: %v", fingerprintPath, err)
-		return false, ExitInternal
-	}
-	switch checkRecordFingerprint(fps, idx, raw) {
-	case fingerprintMatches:
-		return true, 0
-	case fingerprintAbsent:
-		fmt.Println("tpm2-kira: this initramfs carries no fingerprint of the attestation record; rebuild it")
+	if _, err := os.Stat(signerPath); os.IsNotExist(err) {
+		fmt.Println("tpm2-kira: this initramfs carries no signing public key to check the attestation record; rebuild it")
 		return false, 0
 	}
-	gateFail("the attestation record in the TPM (slot %d) is not the one this initramfs was built for.\n"+
-		"tpm2-kira:   If you enrolled or removed a phone since, rebuild the initramfs.\n"+
-		"tpm2-kira:   Otherwise the record was replaced, or an older one was put back:\n"+
-		"tpm2-kira:   no phone is served, and a verdict from any phone means nothing for this boot.",
-		idx-AttestNVRAMStart)
-	return false, ExitTampered
+	pub, _, err := LoadSigningPublicKeyFromPEM(signerPath)
+	if err != nil {
+		gateFail("cannot use the signing public key at %s: %v", signerPath, err)
+		return false, ExitInternal
+	}
+	if err := checkAttestRecord(tpmDev, idx, raw, pub); err != nil {
+		gateFail("the attestation record in the TPM (slot %d) is not accepted:\n"+
+			"tpm2-kira:   %v.\n"+
+			"tpm2-kira:   It was replaced, or an older one was put back: no phone is served, and a\n"+
+			"tpm2-kira:   verdict from any phone means nothing for this boot. To start over, run\n"+
+			"tpm2-kira:   'tpm2-kira attest unenrol' on the unlocked system and enrol again.",
+			idx-AttestNVRAMStart, err)
+		return false, ExitTampered
+	}
+	return true, 0
 }
 
-func reportReceipt(blob *AttestBlob, res *attest.AttestResult, recordKnown bool) int {
-	// Even a record the image vouches for is only as good as that image
-	// (SECURITY.md); the phone's screen is the verdict.
-	if recordKnown {
-		defer fmt.Println("tpm2-kira:   (the enrolment record is the one this initramfs was built for; your phone's screen is authoritative)")
+func reportReceipt(blob *AttestBlob, res *attest.AttestResult, recordVerified bool) int {
+	// Even a verified record is only as good as the initramfs holding the
+	// key it was verified with (SECURITY.md); the phone's screen is the verdict.
+	if recordVerified {
+		defer fmt.Println("tpm2-kira:   (enrolment record verified: signed by this machine's key and current; your phone's screen is authoritative)")
 	} else {
 		defer fmt.Println("tpm2-kira:   (not verified on this machine: your phone's screen is authoritative)")
 	}
@@ -704,6 +712,7 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 		PCRSelection string         `json:"pcr_selection"`
 		AppVersion   string         `json:"app_version"`
 		Signature    string         `json:"blob_signature"` // valid | invalid | unchecked
+		Current      string         `json:"record_current"` // yes | no | unchecked: count equals the TPM counter
 		SigningKey   string         `json:"signing_key,omitempty"`
 		Verifiers    []verifierJSON `json:"verifiers"`
 	}
@@ -728,6 +737,13 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 			PCRSelection: sel.String(),
 			AppVersion:   b.AppVersion,
 			Signature:    "unchecked",
+			Current:      "unchecked",
+		}
+		if counter, err := readAttestCounter(tpmDev, AttestCounterIndex(idx)); err == nil && counter == b.Count {
+			s.Current = "yes"
+		} else {
+			s.Current = "no"
+			invalid++
 		}
 		if raw, err := ReadFromNVRAM(tpmDev, idx); err == nil {
 			if pub, path, err := attestPublicKey(""); err == nil {
@@ -774,6 +790,11 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 			fmt.Printf("├── Signature:  INVALID: not written by this machine's signing key (%s). The blob was replaced; trust only the phone.\n", s.SigningKey)
 		default:
 			fmt.Printf("├── Signature:  not checked (signing public key not found)\n")
+		}
+		if s.Current == "yes" {
+			fmt.Printf("├── Current:    yes (its count equals the TPM's record counter)\n")
+		} else {
+			fmt.Printf("├── Current:    NO: its count differs from the TPM's record counter. An older record was put back, or the counter was raised; the gate refuses it. Enrol again.\n")
 		}
 		fmt.Printf("└── Verifiers:  %d\n", len(s.Verifiers))
 		for i, v := range s.Verifiers {
@@ -956,11 +977,20 @@ func AttestUnenrol(tpmPath string, sealIndex uint32, debug bool) error {
 	if err := NVRAMDelete(tpmPath, idx, debug); err != nil {
 		return err
 	}
+	// Raise the counter, so that the record just removed is stale should
+	// anyone put it back. The counter index itself stays.
+	if tpmDev, err := OpenTPM(tpmPath); err == nil {
+		if _, err := bumpAttestCounter(tpmDev, AttestCounterIndex(idx)); err != nil {
+			fmt.Printf("Warning: could not raise the record counter: %v\n", err)
+			fmt.Println("         Until it is raised, the removed record would be accepted if put back.")
+		}
+		tpmDev.Close()
+	}
 	fmt.Printf("Attestation enrolment removed from slot %d (NV 0x%08X).\n", idx-AttestNVRAMStart, idx)
 	fmt.Println("The phone still lists this machine; remove it there too.")
 	if cfg, err := LoadAttestConfig(DefaultAttestConfigPath); err == nil && cfg.Mode != "off" {
-		fmt.Println("The initramfs still carries the Bluetooth gate and the fingerprint of the")
-		fmt.Println("removed record: rebuild it (mkinitcpio -P / update-initramfs -u).")
+		fmt.Println("The initramfs still carries the Bluetooth gate, which now has nothing to")
+		fmt.Println("serve: rebuild it (mkinitcpio -P / update-initramfs -u) to take it out.")
 	}
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/pem"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-tpm/tpm2"
 
 	"github.com/matthias/tpm2-kira/attest"
 	"github.com/matthias/tpm2-kira/attest/attesttest"
@@ -156,98 +159,157 @@ func TestOfflineQuoteVerifies(t *testing.T) {
 	}
 }
 
-// TestReplacedRecordIsRefused performs the record-replacement attack on a
-// real TPM: the owner hierarchy undefines the attestation index and writes a
-// record of its own (here: the attacker's phone, signed with the attacker's
-// key). The gate must refuse it before advertising, and the image build must
-// refuse to accept it; so must an older record that this machine's key did sign.
+// TestReplacedRecordIsRefused performs the attacks on the enrolment record on
+// a real TPM, with the owner hierarchy as the attacker has it: a record of
+// their own, an older genuine record put back, and every way of making the
+// TPM's counter agree with that older record. The gate must refuse them all
+// before it advertises - and must accept a newly enrolled phone without the
+// initramfs being rebuilt.
 func TestReplacedRecordIsRefused(t *testing.T) {
 	s := newSWTPMSetup(t)
 	mine, attacker := testSigner(t), testSigner(t)
 	idx := uint32(AttestNVRAMStart + 4)
-	pubPath := filepath.Join(t.TempDir(), "seal.pub")
+	counterIdx := AttestCounterIndex(idx)
+
+	// The initramfs: built once, carrying this machine's signing public key.
+	signerPath := filepath.Join(t.TempDir(), "attest-signer.pem")
 	der, _ := x509.MarshalPKIXPublicKey(&mine.PublicKey)
-	if err := os.WriteFile(pubPath, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
+	hostKey := filepath.Join(t.TempDir(), "seal.pub")
+	if err := os.WriteFile(hostKey, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fingerprintPath := filepath.Join(t.TempDir(), "attest-record.sha256")
-	// What the initramfs hook does when the image is built.
-	buildImage := func() (int, string) {
+	buildImage := func() (int, string) { // what the hook does
 		var errOut strings.Builder
-		fps, code := fingerprintSlots(s.tpm, pubPath, &errOut, false)
+		pemBytes, code := signerForImage(s.tpm, hostKey, &errOut, false)
 		if code == 0 {
-			if err := os.WriteFile(fingerprintPath, FormatRecordFingerprints(fps), 0o600); err != nil {
+			if err := os.WriteFile(signerPath, pemBytes, 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
 		return code, errOut.String()
 	}
-	// What the gate does at boot, before it advertises.
-	gate := func() (bool, int) { return gateRecordCheck(s.tpm, idx, fingerprintPath) }
-
-	if known, code := gateRecordCheck(s.tpm, idx, filepath.Join(t.TempDir(), "none")); known || code != ExitInternal {
-		t.Fatalf("no record at all: %v %d", known, code)
+	gate := func() (bool, int) { return gateRecordCheck(s.tpm, idx, signerPath) }
+	refused := func(what string) {
+		t.Helper()
+		if verified, code := gate(); verified || code != ExitTampered {
+			t.Fatalf("%s: not refused (verified=%v, exit %d)", what, verified, code)
+		}
+	}
+	accepted := func(what string) {
+		t.Helper()
+		if verified, code := gate(); !verified || code != 0 {
+			t.Fatalf("%s: not accepted (verified=%v, exit %d)", what, verified, code)
+		}
+	}
+	// The attacker writes arbitrary bytes into the record index: undefine
+	// with the owner hierarchy, define again under a key of their own.
+	plant := func(raw []byte) {
+		t.Helper()
+		if err := WriteToNVRAM(s.tpm, idx, raw, attacker.Public(), attacker); err != nil {
+			t.Fatalf("the owner hierarchy could not replace the index: %v", err)
+		}
 	}
 
 	s.blob.Verifiers = []attest.EnrolledVerifier{{ID: "my-phone", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
 	if err := writeAttestBlob(s.tpm, idx, s.blob, mine); err != nil {
 		t.Fatal(err)
 	}
-	old, _ := ReadFromNVRAM(s.tpm, idx)
+	onePhone, _ := ReadFromNVRAM(s.tpm, idx)
 
-	// An image built before fingerprints existed: served, but not as verified.
-	if known, code := gateRecordCheck(s.tpm, idx, filepath.Join(t.TempDir(), "none")); known || code != 0 {
-		t.Fatalf("image without a fingerprint: %v %d", known, code)
+	// An image from before the key was put into it: served, not verified.
+	if verified, code := gateRecordCheck(s.tpm, idx, filepath.Join(t.TempDir(), "none")); verified || code != 0 {
+		t.Fatalf("image without the key: %v %d", verified, code)
 	}
 	if code, out := buildImage(); code != 0 {
-		t.Fatalf("own record not accepted: %d %s", code, out)
+		t.Fatalf("image build: %d %s", code, out)
 	}
-	if known, code := gate(); !known || code != 0 {
-		t.Fatalf("own record, image built for it: %v %d", known, code)
-	}
+	accepted("own record")
 
-	// A second phone is enrolled: the image must be rebuilt first.
+	// A second phone is enrolled. No rebuild: the image is the same.
 	s.blob.Verifiers = append(s.blob.Verifiers, attest.EnrolledVerifier{ID: "second-phone", AnchorPub: []byte{2}, NoisePub: make([]byte, 32)})
 	if err := writeAttestBlob(s.tpm, idx, s.blob, mine); err != nil {
 		t.Fatal(err)
 	}
-	if _, code := gate(); code != ExitTampered {
-		t.Fatalf("a record changed since the image was built must be refused, got %d", code)
-	}
-	if code, out := buildImage(); code != 0 {
-		t.Fatalf("rebuild after enrolment: %d %s", code, out)
-	}
-	if known, code := gate(); !known || code != 0 {
-		t.Fatalf("after the rebuild: %v %d", known, code)
-	}
+	twoPhones, _ := ReadFromNVRAM(s.tpm, idx)
+	accepted("second phone, same image")
 
-	// The attack: undefine (owner auth, empty) and write the attacker's record.
+	// 1. The attacker's own record, signed with the attacker's key.
 	forged := *s.blob
 	forged.Verifiers = []attest.EnrolledVerifier{{ID: "attackers-phone", AnchorPub: []byte{9}, NoisePub: make([]byte, 32)}}
 	if err := writeAttestBlob(s.tpm, idx, &forged, attacker); err != nil {
-		t.Fatalf("the owner hierarchy could not replace the index: %v", err)
+		t.Fatal(err)
 	}
-	if _, code := gate(); code != ExitTampered {
-		t.Fatalf("the attacker's record was not refused: %d", code)
-	}
-	before, _ := os.ReadFile(fingerprintPath)
+	refused("attacker's record")
 	if code, out := buildImage(); code != ExitTampered || !strings.Contains(out, "TAMPERED") {
 		t.Fatalf("the image build accepted a foreign record: %d %s", code, out)
 	}
-	if after, _ := os.ReadFile(fingerprintPath); string(after) != string(before) {
-		t.Fatal("a refused build must not touch the fingerprint file")
-	}
 
-	// Putting back an older record this machine's key did sign (a removed
-	// phone returns): validly signed, and still not what the image was built for.
-	restored, _ := UnmarshalAttestBlob(old)
-	restored.Signature = nil
-	if err := writeAttestBlob(s.tpm, idx, restored, mine); err != nil {
+	// 2. An older record this machine's key did sign is put back.
+	plant(onePhone)
+	refused("older genuine record")
+
+	// 3. ... and the counter is deleted and recreated to make it fit. A
+	// TPM counter comes back above where it was.
+	before, err := readAttestCounter(s.tpm, counterIdx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, code := gate(); code != ExitTampered {
-		t.Fatalf("a rolled-back record was not refused: %d", code)
+	pub, _ := tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(counterIdx)}.Execute(s.tpm)
+	undefine := func(name tpm2.TPM2BName) {
+		t.Helper()
+		if _, err := (tpm2.NVUndefineSpace{AuthHandle: tpm2.TPMRHOwner, NVIndex: tpm2.NamedHandle{Handle: tpm2.TPMHandle(counterIdx), Name: name}}).Execute(s.tpm); err != nil {
+			t.Fatal(err)
+		}
 	}
+	undefine(pub.NVName)
+	refused("older record, counter deleted")
+	after, err := bumpAttestCounter(s.tpm, counterIdx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after <= before {
+		t.Fatalf("a recreated counter went back: %d after %d", after, before)
+	}
+	refused("older record, counter recreated")
+
+	// 4. ... or replaced by an ordinary index holding the old record's count.
+	old, _ := UnmarshalAttestBlob(onePhone)
+	pub, _ = tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(counterIdx)}.Execute(s.tpm)
+	undefine(pub.NVName)
+	fake := attestCounterPublic(counterIdx)
+	fake.Attributes.NT = tpm2.TPMNTOrdinary
+	if _, err := (tpm2.NVDefineSpace{AuthHandle: tpm2.TPMRHOwner, PublicInfo: tpm2.New2B(fake)}).Execute(s.tpm); err != nil {
+		t.Fatal(err)
+	}
+	fakePub, _ := tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(counterIdx)}.Execute(s.tpm)
+	if _, err := (tpm2.NVWrite{
+		AuthHandle: tpm2.AuthHandle{Handle: tpm2.TPMRHOwner, Auth: tpm2.PasswordAuth(nil)},
+		NVIndex:    tpm2.NamedHandle{Handle: tpm2.TPMHandle(counterIdx), Name: fakePub.NVName},
+		Data:       tpm2.TPM2BMaxNVBuffer{Buffer: binary.BigEndian.AppendUint64(nil, old.Count)},
+	}).Execute(s.tpm); err != nil {
+		t.Fatal(err)
+	}
+	refused("older record, counter faked with an ordinary index")
+
+	// The genuine newest record is stale too after all that: the attacker
+	// can deny service, never obtain an accepted record.
+	plant(twoPhones)
+	refused("newest record after the counter was tampered with")
+
+	// Enrolling again repairs it, again without touching the image.
+	if err := writeAttestBlob(s.tpm, idx, s.blob, mine); err != nil {
+		t.Fatal(err)
+	}
+	accepted("re-enrolled")
+	last, _ := ReadFromNVRAM(s.tpm, idx)
+
+	// 5. The slot is unenrolled (record deleted, counter raised) and the
+	// record that was current until then is put back.
+	if _, err := bumpAttestCounter(s.tpm, counterIdx); err != nil {
+		t.Fatal(err)
+	}
+	plant(last)
+	refused("record put back after unenrol")
 }
 
 // TestOwnTPMCheckOnSWTPM: swtpm's EK has no vendor certificate, so enrolment

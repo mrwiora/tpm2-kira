@@ -477,11 +477,12 @@ initramfs ([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.3):
 index refuses in-place writes without the signing key, but the owner
 hierarchy can undefine it and write a blob that lists any phone, and the
 initrd has no key to notice. The anchor therefore comes from the image: the
-hook verifies the blob against the signing key when the initramfs is built and
-writes its SHA-256 fingerprint there (`attest fingerprint`), and the gate
-refuses a blob that differs from it before it advertises, so replacing or rolling back the blob means
-changing the image too, which Secure Boot or the measured PCRs then report
-(PLAN-REMOTEATTESTATION.md §10.2). The console verdict stays advisory and the
+hook puts the signing public key there (`attest signer`), and the gate
+refuses, before it advertises, a blob that key did not sign. Replacing the
+blob then means changing the image too, which Secure Boot or the measured
+PCRs report (PLAN-REMOTEATTESTATION.md §10.2). An older blob, signed all the
+same, is refused by its count: each blob carries the value of a TPM NV counter
+for the slot, which cannot be turned back. The console verdict stays advisory and the
 phone's screen authoritative.
 
 ### 7.2 How the hold is implemented

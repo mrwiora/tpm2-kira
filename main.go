@@ -487,10 +487,10 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 		if !ok {
 			os.Exit(cmd.ExitRejected)
 		}
-	case "fingerprint":
+	case "signer":
 		pubKey := fs.String("pubkey", "", "Signing public key (default: "+cmd.DefaultPublicKeyPath+")")
 		fs.Parse(args)
-		os.Exit(cmd.AttestFingerprintCommand(*tpm, *pubKey, os.Stdout, *debug))
+		os.Exit(cmd.AttestSignerCommand(*tpm, *pubKey, os.Stdout, *debug))
 	case "ekcert":
 		fs.Parse(args)
 		if err := cmd.AttestEKCert(*tpm, *debug); err != nil {
@@ -614,11 +614,12 @@ ATTEST SUBCOMMANDS:
                   --mode lazy --adapter N --timeout DUR --adapter-wait DUR
   attest status   Show enrolled phones per slot and whether the blob is signed
                   by this machine's signing key (--json); exits 1 if not
-  attest fingerprint  Print the SHA-256 fingerprints of the enrolled attestation
-                  records for the initramfs (used by the initramfs hooks; not a
-                  secret): each record must be signed by this machine's key
-                  (exit 6 if not). The gate then serves only a record whose
-                  fingerprint is in its image. --pubkey PATH
+  attest signer   Print this machine's signing public key for the initramfs
+                  (used by the initramfs hooks; public, not a secret), after
+                  checking every enrolled record against it and the TPM's
+                  record counter (exit 6 if one does not pass). At boot the
+                  gate serves only a record signed by that key whose count
+                  equals the counter. --pubkey PATH
   attest ekcert   Show whether the phone will verify this TPM as genuine
                   (EK certificate chain against the vendor roots in the core)
   attest quote    Produce evidence without a phone (--nonce HEX --out FILE)
@@ -631,7 +632,7 @@ ATTEST SUBCOMMANDS:
   'attest quote' and 'attest enrol' exit non-zero on failure:
     0 attested   1 internal error   2 usage   3 no phone / no adapter
     4 rejected (do not type a passphrase before checking)   5 anchor mismatch
-    6 the attestation record was replaced or changed since the initramfs was built
+    6 the attestation record was replaced, or an older one was put back
 
 AUTHENTICATION:
   The TOTP key is an HMAC key inside the TPM; the TPM computes every code and

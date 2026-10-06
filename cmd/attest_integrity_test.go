@@ -62,48 +62,49 @@ func TestAttestBlobSignature(t *testing.T) {
 	}
 }
 
-// The gate serves only the record whose fingerprint its initramfs carries: another record signed
-// by the same key (a phone added since, or an older record put back), a
-// foreign one, and a slot the image knows nothing about are all refused.
-func TestRecordFingerprints(t *testing.T) {
+// The count is part of what is signed: it survives a round trip, and a
+// record with another count is another record.
+func TestAttestBlobCarriesItsCount(t *testing.T) {
 	key := newKey(t)
-	idx := uint32(AttestNVRAMStart)
-	built := signedAttestBlob(t, key, "box")
-
-	fps, err := ParseRecordFingerprints(FormatRecordFingerprints(RecordFingerprints{idx: blobDigest(built)}))
-	if err != nil || len(fps) != 1 {
-		t.Fatalf("round trip: %v %v", fps, err)
+	b := &AttestBlob{
+		AppVersion: "test", DeviceID: make([]byte, 16), FriendlyName: "box",
+		AKPublic: []byte{1}, AKPrivate: []byte{2}, AKName: []byte{3},
+		NoisePrivate: make([]byte, 32), AdvKey: make([]byte, 32),
+		PCRAlg: attest.AlgSHA256, PCRSelection: []uint8{0, 7},
+		Verifiers: []attest.EnrolledVerifier{{ID: "phone", AnchorPub: []byte{4}, NoisePub: make([]byte, 32)}},
+		Count:     41,
 	}
-	if checkRecordFingerprint(fps, idx, built) != fingerprintMatches {
-		t.Fatal("the record the image was built for must match")
+	sign := func() []byte {
+		unsigned, err := b.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		signed, err := SignBlobPayload(unsigned, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return signed
 	}
-	if checkRecordFingerprint(fps, idx, signedAttestBlob(t, key, "box-as-it-was")) != fingerprintDiffers {
-		t.Fatal("another record signed by the same key must not match")
+	first := sign()
+	got, err := UnmarshalAttestBlob(first)
+	if err != nil || got.Count != 41 {
+		t.Fatalf("count lost: %+v %v", got, err)
 	}
-	if checkRecordFingerprint(fps, idx, signedAttestBlob(t, newKey(t), "box")) != fingerprintDiffers {
-		t.Fatal("a foreign record must not match")
+	if err := VerifyAttestBlobSignature(first, &key.PublicKey); err != nil {
+		t.Fatal(err)
 	}
-	if checkRecordFingerprint(fps, idx+1, built) != fingerprintDiffers {
-		t.Fatal("a slot the image does not know must not be served")
-	}
-	if checkRecordFingerprint(nil, idx, built) != fingerprintAbsent {
-		t.Fatal("an image without a fingerprint file is 'absent', not a mismatch")
-	}
-
-	digest := blobDigest(built)
-	for _, bad := range []string{
-		"0x01803020",                  // no digest
-		"0x01803020 zz",               // not hex
-		"0x01803020 " + digest[:10],   // too short
-		"0x00000001 " + digest,        // not an attestation index
-		"0x01803020 " + digest + " x", // trailing field
-	} {
-		if _, err := ParseRecordFingerprints([]byte(bad + "\n")); err == nil {
-			t.Errorf("fingerprint line %q should be refused", bad)
+	// Changing the count in a signed record breaks its signature.
+	tampered := append([]byte(nil), first...)
+	b.Count = 42
+	second := sign()
+	for i := range first {
+		if i < len(second) && first[i] != second[i] {
+			tampered[i] = second[i] // the first differing byte is in the count
+			break
 		}
 	}
-	if fps, err := LoadRecordFingerprints(t.TempDir() + "/none"); fps != nil || err != nil {
-		t.Fatalf("a missing fingerprint file is not an error: %v %v", fps, err)
+	if VerifyAttestBlobSignature(tampered, &key.PublicKey) == nil {
+		t.Fatal("a record with an altered count still verifies")
 	}
 }
 

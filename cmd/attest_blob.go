@@ -35,7 +35,8 @@ const (
 	AttestNVRAMEnd = 0x0180302F
 
 	// AttestBlobVersion is the only supported attestation blob format.
-	AttestBlobVersion = 1
+	// Version 2 added Count.
+	AttestBlobVersion = 2
 
 	// MaxVerifiers bounds the pinned verifier list. The format holds a list
 	// from day one so a second phone needs no format change
@@ -59,7 +60,11 @@ type AttestBlob struct {
 	PCRAlg       uint16
 	PCRSelection []uint8
 	Verifiers    []attest.EnrolledVerifier
-	Signature    []byte
+	// Count is the value of the slot's TPM counter when this record was
+	// written (attest_counter.go). It is signed with the rest: a record is
+	// current only while it equals the counter, which nobody can turn back.
+	Count     uint64
+	Signature []byte
 }
 
 // AttestIndexForSlot maps a sealed-blob index (or slot number) to the
@@ -76,6 +81,7 @@ type blobWriter struct{ b bytes.Buffer }
 
 func (w *blobWriter) u8(v uint8)   { w.b.WriteByte(v) }
 func (w *blobWriter) u16(v uint16) { binary.Write(&w.b, binary.LittleEndian, v) }
+func (w *blobWriter) u64(v uint64) { binary.Write(&w.b, binary.LittleEndian, v) }
 func (w *blobWriter) raw(v []byte) { w.b.Write(v) }
 func (w *blobWriter) lp16(v []byte) {
 	w.u16(uint16(len(v)))
@@ -121,6 +127,14 @@ func (r *blobReader) u16() uint16 {
 	return binary.LittleEndian.Uint16(v)
 }
 
+func (r *blobReader) u64() uint64 {
+	v := r.take(8)
+	if v == nil {
+		return 0
+	}
+	return binary.LittleEndian.Uint64(v)
+}
+
 func (r *blobReader) lp16(max int) []byte {
 	n := int(r.u16())
 	if r.err == nil && n > max {
@@ -163,6 +177,7 @@ func (b *AttestBlob) marshalPayload() ([]byte, error) {
 	w.raw(b.AdvKey)
 	w.u16(b.PCRAlg)
 	w.lp16(b.PCRSelection)
+	w.u64(b.Count)
 	w.u8(uint8(len(b.Verifiers)))
 	for _, v := range b.Verifiers {
 		if len(v.NoisePub) != 32 {
@@ -219,6 +234,7 @@ func UnmarshalAttestBlob(data []byte) (*AttestBlob, error) {
 	b.AdvKey = r.take(32)
 	b.PCRAlg = r.u16()
 	b.PCRSelection = r.lp16(attest.MaxPCRIndex)
+	b.Count = r.u64()
 	n := int(r.u8())
 	if r.err == nil && n > MaxVerifiers {
 		return nil, fmt.Errorf("attestation blob lists %d verifiers, maximum %d", n, MaxVerifiers)

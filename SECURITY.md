@@ -56,26 +56,36 @@ line is advisory.
 The record that names the enrolled phone lives in TPM NV storage, where the
 owner hierarchy (root, or another OS booted on this machine) can replace it:
 with one naming an attacker's phone, or with an older one that still names a
-phone you removed. The gate therefore serves only the record its initramfs
-was built for. When the image is built, on the unlocked system, the hook
-verifies each record against this machine's signing key and writes its digest
-into the image (a fingerprint, not a secret: the record itself is readable
-from the TPM); at boot the gate compares the record in the TPM with it before
-it advertises, and refuses any other, before a passphrase is typed and
-whether or not a phone is there. After enrolling or removing a phone the
-initramfs must be rebuilt.
+phone you removed. The gate therefore checks the record before it advertises,
+in the initrd, before a passphrase is typed and whether or not a phone is
+there:
+
+- **its signature**, against this machine's signing public key, a copy of
+  which the hook puts into the image (public, not a secret). That refuses a
+  record written by anyone else;
+- **its count**, against a counter the TPM holds for the slot. Every record
+  tpm2-kira writes carries the counter's next value, and a TPM counter cannot
+  be turned back: even deleting it only makes the TPM start a new one above
+  the old value. That refuses an older record, however genuinely signed.
+
+Enrolling or removing a phone writes a new signed record with the next count;
+the image stays as it is, so nothing has to be rebuilt.
 
 Known residual risks:
 
-- **That fingerprint is as trustworthy as the initramfs that carries it.**
-  Whoever can replace the image can replace the fingerprint with it. That is noticed when the
-  image is a unified kernel image signed for Secure Boot, or when the PCRs
-  that the TOTP seal or the phone checks cover the initrd (`attest enrol` and
-  `seal` warn when they do not). With neither - a seal on PCRs 0, 2, 7 only,
-  say, and no Secure Boot - a replaced record goes unnoticed, as would any
-  other change to the initramfs. Nothing checks the record after the disk is
-  unlocked: by then the passphrase has been typed.
-
+- **The public key is as trustworthy as the initramfs that carries it.**
+  Whoever can replace the image can replace the key with it, and then sign a
+  record of their own. That is noticed when the image is a unified kernel
+  image signed for Secure Boot, or when the PCRs that the TOTP seal or the
+  phone checks cover the initrd (`attest enrol` and `seal` warn when they do
+  not). With neither - a seal on PCRs 0, 2, 7 only, say, and no Secure Boot -
+  a replaced record goes unnoticed, as would any other change to the
+  initramfs. Nothing checks the record after the disk is unlocked: by then
+  the passphrase has been typed.
+- **The counter can be pushed up, not back.** Someone with the owner hierarchy
+  can raise it, which makes the genuine record stale: the gate then refuses
+  it and no phone is served until you enrol again. That denies the phone
+  check; it never produces an accepted record.
 - **The attestation blob is readable by anyone who can talk to the TPM.**
   It holds the machine's Noise private key and its advertising key. Someone
   who reads it once — root, or a live USB on this machine — can recognise the

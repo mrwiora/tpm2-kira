@@ -66,15 +66,16 @@ _add_bluetooth() {
         return 0
     fi
 
-    # The gate serves only the enrolment records this image was built for.
-    # 'attest fingerprint' checks each record against this machine's signing
-    # key, here on the unlocked system where that key is, and prints its
-    # SHA-256 (not a secret: the record is readable from the TPM anyway); the
-    # gate compares the record in the TPM with it at boot. A record somebody
-    # else wrote is refused, and then the gate is not added at all.
-    local fingerprints
-    fingerprints=$(tpm2-kira attest fingerprint)
-    if (( $? != 0 )) || ! grep -q '^0x' <<< "$fingerprints"; then
+    # The gate checks the enrolment record before it advertises: signed by
+    # this machine's signing key, and current by the TPM's record counter.
+    # For the first it needs the key's public half in the image (public, not
+    # a secret). 'attest signer' prints it after checking the records here,
+    # on the unlocked system: one written by somebody else, or an older one
+    # put back, is refused, and then the gate is not added at all. The image
+    # only changes when the signing key does, not when phones come and go.
+    local signer
+    signer=$(tpm2-kira attest signer)
+    if (( $? != 0 )) || ! grep -q 'BEGIN PUBLIC KEY' <<< "$signer"; then
         warning "tpm2-kira: the attestation record was not accepted (see above); Bluetooth not added"
         return 0
     fi
@@ -130,7 +131,7 @@ _add_bluetooth() {
     mkdir -p "$BUILDROOT/etc/modules-load.d"
     printf '%s\n' "${modules[@]}" > "$BUILDROOT/etc/modules-load.d/tpm2-kira-bluetooth.conf"
     add_file "$ATTEST_CONF"
-    printf '%s\n' "$fingerprints" > "$BUILDROOT/etc/tpm2-kira/attest-record.sha256"
+    printf '%s\n' "$signer" > "$BUILDROOT/etc/tpm2-kira/attest-signer.pem"
     add_systemd_unit tpm2-kira-attest.service
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-attest.service \
         /usr/lib/systemd/system/tpm2-kira-attest.service

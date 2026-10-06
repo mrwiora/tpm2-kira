@@ -9,32 +9,30 @@ package cmd
 // machine. That could name an attacker's phone, or put back an older record
 // that still names a phone you removed.
 //
-// The gate therefore serves only the record its initramfs was built for.
-// When the image is built - on the unlocked system, where this machine's
-// signing key is - 'attest fingerprint' verifies each record's signature and
-// writes its SHA-256 into the image. At boot the gate compares the record in
-// the TPM with that fingerprint before it advertises: a foreign record and a rolled-back
-// one both differ, before any passphrase is typed and whether or not a phone
-// is there. Enrolling or removing a phone changes the record, so the image
-// has to be rebuilt afterwards.
+// The gate therefore checks the record before it advertises, in the initrd,
+// before any passphrase is typed and whether or not a phone is there:
 //
-// The fingerprint is not a secret (the record itself is readable from the
-// TPM) and it is as trustworthy as the initramfs that carries it: a unified
-// kernel image signed for Secure Boot, or PCRs covering the initrd in what
-// the TOTP seal or the phone checks. Where neither holds, whoever can
-// replace the record can replace the image and the fingerprint in it too.
+//   - its signature must verify with this machine's signing public key, a
+//     copy of which the hooks put into the image ('attest signer'). That
+//     catches a record written by anyone else;
+//   - its count must equal the slot's TPM counter (attest_counter.go), which
+//     catches an older, genuinely signed record put back.
+//
+// Enrolling or removing a phone writes a newly signed record with the next
+// count; the image does not change, so nothing has to be rebuilt.
+//
+// The public key in the image is not a secret, and it is as trustworthy as
+// the initramfs that carries it: a unified kernel image signed for Secure
+// Boot, or PCRs covering the initrd in what the TOTP seal or the phone
+// checks. Where neither holds, whoever can replace the record can replace
+// the image and the key in it too.
 
 import (
 	"crypto"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
-	"slices"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/google/go-tpm/tpm2/transport"
@@ -42,8 +40,8 @@ import (
 	"github.com/matthias/tpm2-kira/attest"
 )
 
-// DefaultRecordFingerprintPath is the fingerprint file inside the initramfs.
-const DefaultRecordFingerprintPath = "/etc/tpm2-kira/attest-record.sha256"
+// DefaultAttestSignerPath is the signing public key inside the initramfs.
+const DefaultAttestSignerPath = "/etc/tpm2-kira/attest-signer.pem"
 
 // VerifyAttestBlobSignature checks the signature of a stored attestation
 // blob (the raw NV contents) against pubKey, which must come from the
@@ -71,113 +69,70 @@ func attestPublicKey(explicit string) (crypto.PublicKey, string, error) {
 	return pub, path, nil
 }
 
-func blobDigest(signed []byte) string {
-	d := sha256.Sum256(signed)
-	return hex.EncodeToString(d[:])
-}
-
-// RecordFingerprints lists, per attestation NV index, the SHA-256 of the record an
-// initramfs was built for.
-type RecordFingerprints map[uint32]string
-
-// FormatRecordFingerprints renders the file: one "0xINDEX digest" line per slot.
-func FormatRecordFingerprints(fps RecordFingerprints) []byte {
-	idxs := make([]uint32, 0, len(fps))
-	for i := range fps {
-		idxs = append(idxs, i)
+// checkAttestRecord applies both checks to the raw record of a slot.
+func checkAttestRecord(tpmDev transport.TPM, idx uint32, raw []byte, pubKey crypto.PublicKey) error {
+	if err := VerifyAttestBlobSignature(raw, pubKey); err != nil {
+		return &recordError{foreign: true, detail: err.Error()}
 	}
-	slices.Sort(idxs)
-	var b strings.Builder
-	b.WriteString("# tpm2-kira: the attestation records this initramfs serves (NV index, SHA-256).\n")
-	b.WriteString("# Not a secret. Written by 'tpm2-kira attest fingerprint' when the image is built.\n")
-	for _, i := range idxs {
-		fmt.Fprintf(&b, "0x%08X %s\n", i, fps[i])
-	}
-	return []byte(b.String())
-}
-
-// ParseRecordFingerprints reads a fingerprint file.
-func ParseRecordFingerprints(data []byte) (RecordFingerprints, error) {
-	fps := RecordFingerprints{}
-	for n, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		f := strings.Fields(line)
-		if len(f) != 2 {
-			return nil, fmt.Errorf("fingerprint line %d: want \"0xINDEX digest\"", n+1)
-		}
-		idx, err := strconv.ParseUint(strings.TrimPrefix(f[0], "0x"), 16, 32)
-		if err != nil || uint32(idx) < AttestNVRAMStart || uint32(idx) > AttestNVRAMEnd {
-			return nil, fmt.Errorf("fingerprint line %d: %q is not an attestation NV index", n+1, f[0])
-		}
-		if d, err := hex.DecodeString(f[1]); err != nil || len(d) != sha256.Size {
-			return nil, fmt.Errorf("fingerprint line %d: not a SHA-256 digest", n+1)
-		}
-		fps[uint32(idx)] = strings.ToLower(f[1])
-	}
-	return fps, nil
-}
-
-// LoadRecordFingerprints reads the file at path; (nil, nil) when there is
-// none, as in an image built before fingerprints existed.
-func LoadRecordFingerprints(path string) (RecordFingerprints, error) {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
+	b, err := UnmarshalAttestBlob(raw)
 	if err != nil {
-		return nil, err
+		return &recordError{foreign: true, detail: err.Error()}
 	}
-	return ParseRecordFingerprints(data)
+	counter, err := readAttestCounter(tpmDev, AttestCounterIndex(idx))
+	if err != nil {
+		return &recordError{detail: err.Error()}
+	}
+	if b.Count != counter {
+		return &recordError{detail: fmt.Sprintf("the record has count %d, the TPM counter is at %d", b.Count, counter)}
+	}
+	return nil
 }
 
-// What the initramfs's fingerprint says about the record in the TPM.
-type fingerprintState int
-
-const (
-	fingerprintAbsent  fingerprintState = iota // the image carries no fingerprint
-	fingerprintMatches                         // the record is the one the image was built for
-	fingerprintDiffers                         // it is another one, or the image does not know the slot
-)
-
-func checkRecordFingerprint(fps RecordFingerprints, idx uint32, signed []byte) fingerprintState {
-	if fps == nil {
-		return fingerprintAbsent
-	}
-	if want, ok := fps[idx]; ok && want == blobDigest(signed) {
-		return fingerprintMatches
-	}
-	return fingerprintDiffers
+// recordError says why a record is not served: written by someone else, or
+// not the current one.
+type recordError struct {
+	foreign bool
+	detail  string
 }
 
-// AttestFingerprintCommand implements 'attest fingerprint', run by the
-// initramfs hooks: it verifies every enrolled record against this machine's
-// signing key and prints the fingerprints for the image. Exit ExitTampered when a record does not
-// verify, ExitUsage when nothing is enrolled; nothing is printed then.
-func AttestFingerprintCommand(tpmPath, pubKeyPath string, out io.Writer, debug bool) int {
+func (e *recordError) Error() string {
+	if e.foreign {
+		return "it is not signed by this machine's signing key (" + e.detail + ")"
+	}
+	return "it is not the current record (" + e.detail + ")"
+}
+
+// AttestSignerCommand implements 'attest signer', run by the initramfs
+// hooks: it checks every enrolled record against this machine's signing
+// public key and the record counters, and prints that key (PEM) for the
+// image. Exit ExitTampered when a record does not pass, ExitUsage when
+// nothing is enrolled; nothing is printed then.
+func AttestSignerCommand(tpmPath, pubKeyPath string, out io.Writer, debug bool) int {
 	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: failed to open TPM at %s: %v\n", tpmPath, err)
 		return ExitInternal
 	}
 	defer tpmDev.Close()
-	fps, code := fingerprintSlots(tpmDev, pubKeyPath, os.Stderr, debug)
+	pemBytes, code := signerForImage(tpmDev, pubKeyPath, os.Stderr, debug)
 	if code != 0 {
 		return code
 	}
-	_, _ = out.Write(FormatRecordFingerprints(fps))
+	_, _ = out.Write(pemBytes)
 	return 0
 }
 
-func fingerprintSlots(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer, debug bool) (RecordFingerprints, int) {
+func signerForImage(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer, debug bool) ([]byte, int) {
 	found := FindPopulatedSlotsInRange(tpmDev, AttestNVRAMStart, AttestNVRAMEnd, debug)
 	if len(found) == 0 {
-		fmt.Fprintln(errOut, "tpm2-kira: no phone is enrolled for attestation; nothing to fingerprint")
+		fmt.Fprintln(errOut, "tpm2-kira: no phone is enrolled for attestation")
 		return nil, ExitUsage
 	}
-	fps := RecordFingerprints{}
+	pub, path, err := attestPublicKey(pubKeyPath)
+	if err != nil {
+		fmt.Fprintf(errOut, "tpm2-kira: no signing public key at %s: %v\n", path, err)
+		return nil, ExitInternal
+	}
 	for _, idx := range found {
 		slot := idx - AttestNVRAMStart
 		raw, err := ReadFromNVRAM(tpmDev, idx)
@@ -185,21 +140,20 @@ func fingerprintSlots(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer,
 			fmt.Fprintf(errOut, "tpm2-kira: slot %d: cannot read the attestation record: %v\n", slot, err)
 			return nil, ExitInternal
 		}
-		pub, path, err := attestPublicKey(pubKeyPath)
-		if err != nil {
-			fmt.Fprintf(errOut, "tpm2-kira: slot %d: no signing public key at %s: %v\n", slot, path, err)
-			return nil, ExitInternal
-		}
-		if err := VerifyAttestBlobSignature(raw, pub); err != nil {
-			fmt.Fprintf(errOut, "tpm2-kira: slot %d: TAMPERED: the attestation record is not signed by this machine's\n", slot)
-			fmt.Fprintf(errOut, "tpm2-kira:   signing key (%s): %v.\n", path, err)
-			fmt.Fprintf(errOut, "tpm2-kira:   It was written outside tpm2-kira and is not accepted. Inspect it with\n")
-			fmt.Fprintf(errOut, "tpm2-kira:   'tpm2-kira attest status'; to start over: 'tpm2-kira attest unenrol --nvram %d'.\n", slot)
+		if err := checkAttestRecord(tpmDev, idx, raw, pub); err != nil {
+			fmt.Fprintf(errOut, "tpm2-kira: slot %d: TAMPERED: the attestation record is not accepted:\n", slot)
+			fmt.Fprintf(errOut, "tpm2-kira:   %v.\n", err)
+			fmt.Fprintf(errOut, "tpm2-kira:   Signing key: %s. Inspect the record with 'tpm2-kira attest status';\n", path)
+			fmt.Fprintf(errOut, "tpm2-kira:   to start over: 'tpm2-kira attest unenrol --nvram %d', then enrol again.\n", slot)
 			return nil, ExitTampered
 		}
-		fps[idx] = blobDigest(raw)
 	}
-	return fps, 0
+	pemBytes, err := PublicKeyToPEM(pub)
+	if err != nil {
+		fmt.Fprintf(errOut, "tpm2-kira: cannot encode the signing public key: %v\n", err)
+		return nil, ExitInternal
+	}
+	return pemBytes, 0
 }
 
 // verifyBeforeExtending refuses to add a phone to a blob that this machine's
