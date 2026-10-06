@@ -208,15 +208,74 @@ to the real one cannot show the code. What it does not replace: when the TPM
 refuses the key, only the quote says which registers differ; and the key
 trusts what the signing key approved, where the phone's own profiles do not.
 
-### 3.5 Inside the TPM (never leaves the chip)
+### 3.5 How several keys live in one slot, and what the TPM keeps
+
+A slot is **data**, not a key inside the TPM: a few hundred bytes in an NV
+index. The keys in it are stored the way TPM 2.0 stores every ordinary key -
+outside the TPM, wrapped so that only this TPM can use them.
+
+The TPM has almost no storage of its own. `TPM2_Create` returns two things
+for a new key: the **public area** (algorithm, attributes, policy digest,
+public key) and the **private area**, the private key encrypted and
+integrity-protected by the TPM with a key derived from its storage primary
+seed, which never leaves the chip. Those bytes can be kept anywhere; nobody
+can read the private key out of them, and no other TPM can use them
+(`fixedTPM`, `fixedParent`). To use the key, software hands both areas back
+with `TPM2_Load`: the TPM decrypts the private area internally, checks it,
+and returns a temporary handle. The key is used (`TPM2_HMAC`, `TPM2_Sign`,
+`TPM2_ECDH_ZGen`) and flushed. The plaintext key exists only inside the TPM,
+during that use. tpm2-kira never sees a private key: it moves wrapped bytes
+and asks the TPM to use them.
+
+So the slot's blob holds three independent key objects as wrapped bytes, in
+one place:
+
+```
+NV index 0x01803010+n   (bytes, under one signature by the signing key)
+├── TOTP part
+│   ├── TOTP key          public area + wrapped private area   ← TPM key object
+│   ├── approved PCR values, generation, policy reference
+│   └── signing public key, approval signature
+└── attestation part
+    ├── attestation key   public area + wrapped private area   ← TPM key object
+    ├── boot key          public area + wrapped private area   ← TPM key object
+    └── phones (anchor keys, channel keys), revision
+```
+
+The TPM has no notion of "slot"; it is given one key at a time. The NV index
+is used, rather than a file, only because the keys are needed in the initrd
+before the disk is unlocked, and because its write policy (§9) and the
+companion indices (§3.2, §3.3) are TPM mechanisms.
+
+What ties the TOTP key and the boot key together is not where they are stored
+but their **policy**. Each key's public area carries a policy digest, fixed
+at creation and part of the key's Name; both carry the same one, PolicyAuthorize
+by the signing key with this slot's policy reference (§4). Using either key
+goes the same way:
+
+1. read the blob from NV; re-create the storage primary (deterministic from
+   the seed, the same key every time);
+2. `TPM2_Load` the key wanted;
+3. open a policy session: `PolicyPCR` on the current registers, `PolicyNV`
+   on the generation index, then `PolicyAuthorize` with the approval
+   signature from the blob, which the TPM verifies against the signing key;
+4. if the session's digest equals the key's policy digest, the TPM runs
+   `TPM2_HMAC` (the code), or `TPM2_Sign` and `TPM2_ECDH_ZGen` (the boot key).
+
+The same session satisfies either key, which is why one reseal covers both,
+and why a key with a different policy is a different key with a different
+Name - the check the phone makes at enrolment (§3.4).
+
+What the TPM itself keeps, and never gives out:
 
 - **Storage Primary Seed**: generates the primary key deterministically.
 - **Primary Key** (ECC P-256, restricted decrypt): re-derived on every use with
-  `TPM2_CreatePrimary` from a fixed template; parent of the key object and the
+  `TPM2_CreatePrimary` from a fixed template; parent of the key objects and the
   salt key for the session that carries the TOTP key in at seal time.
-- **TOTP key**: a keyed-hash object with the HMAC scheme. The TPM computes
-  `HMAC(key, counter)` in `TPM2_HMAC`; tpm2-kira receives only the 20- or
-  32-byte result and truncates it to six digits (RFC 4226).
+- **The keys while loaded**: the TOTP key, a keyed-hash object with the HMAC
+  scheme (the TPM computes `HMAC(key, counter)` in `TPM2_HMAC`; tpm2-kira
+  receives only the 20- or 32-byte result and truncates it to six digits,
+  RFC 4226); the attestation key; the boot key.
 
 ### 3.6 Filesystem (signing key pair)
 
