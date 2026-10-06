@@ -537,7 +537,7 @@ func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug boo
 	hashAlgo := sealedBlob.GetHashAlgo()
 	specs := sealedBlob.GetPCRSpecs()
 
-	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, sealedBlob.MeasurePointMode(), sealedBlob.MeasurePoint(), debug)
+	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, sealedBlob.MeasurePointMode(), MeasurePointBeforeSeparator, debug)
 	if err != nil {
 		return nil, err
 	}

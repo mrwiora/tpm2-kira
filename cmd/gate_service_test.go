@@ -28,10 +28,12 @@ func testCoordinator(t *testing.T) (*gateService, *ecdsa.PrivateKey) {
 	}
 	anchor, _ := x509.MarshalPKIXPublicKey(&phone.PublicKey)
 	s := &gateService{ready: make(chan struct{}), issued: map[string][]byte{}, idx: NVRAMSlotStart + 2}
-	s.blob = &AttestBlob{
+	s.blob = &Attestation{
 		DeviceID: []byte("0123456789abcdef"), AKName: []byte("ak-name"), FriendlyName: "box",
-		NoisePrivate: make([]byte, 32), AdvKey: make([]byte, 32),
-		Verifiers: []attest.EnrolledVerifier{{ID: "phone-1", Name: "Pixel", AnchorPub: anchor, NoisePub: make([]byte, 32)}},
+		Phone: PhoneAttestation{
+			NoisePrivate: make([]byte, 32), AdvKey: make([]byte, 32),
+			Verifiers: []attest.EnrolledVerifier{{ID: "phone-1", Name: "Pixel", AnchorPub: anchor, NoisePub: make([]byte, 32)}},
+		},
 	}
 	s.status.Slot = 2
 	close(s.ready)

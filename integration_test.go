@@ -1431,7 +1431,7 @@ func revealPlainCode(t *testing.T, tpmPath, nvramIndex string) (string, string) 
 func TestCodeMatchesAuthenticator(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
-	nvramIndex := "0x01803020"
+	nvramIndex := "0x01803040"
 
 	stdout, stderr, err := runTPMKira(t, tpmPath, "seal", "--nvram", nvramIndex, "--pcrs", "0,7",
 		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath)
@@ -1480,7 +1480,7 @@ func TestCapLocksCodesUntilReboot(t *testing.T) {
 	}
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
-	nvramIndex := "0x01803021"
+	nvramIndex := "0x01803041"
 
 	if stdout, stderr, err := runTPMKira(t, tpmPath, "seal", "--nvram", nvramIndex, "--pcrs", "0,7",
 		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
@@ -1529,7 +1529,7 @@ func TestCapLocksCodesUntilReboot(t *testing.T) {
 func TestResealRevokesOldBlob(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
-	const index = 0x01803022
+	const index = 0x01803042
 	nvramIndex := fmt.Sprintf("0x%08X", index)
 
 	if stdout, stderr, err := runTPMKira(t, tpmPath, "seal", "--nvram", nvramIndex, "--pcrs", "0,7",

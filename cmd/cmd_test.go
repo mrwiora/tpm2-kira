@@ -1948,8 +1948,8 @@ func TestValidateNVRAMIndex(t *testing.T) {
 }
 
 func TestCurrentBlobVersion(t *testing.T) {
-	if CurrentBlobVersion != 9 {
-		t.Errorf("CurrentBlobVersion should be 9, got %d", CurrentBlobVersion)
+	if CurrentBlobVersion != 10 {
+		t.Errorf("CurrentBlobVersion should be 10, got %d", CurrentBlobVersion)
 	}
 }
 

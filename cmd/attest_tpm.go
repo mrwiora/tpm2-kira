@@ -89,7 +89,7 @@ type loadedKey struct {
 
 // loadAK loads the AK from the blob under a freshly derived storage primary.
 // The caller must flush the returned handle.
-func loadAK(tpmDev transport.TPM, b *AttestBlob) (*loadedKey, error) {
+func loadAK(tpmDev transport.TPM, b *Attestation) (*loadedKey, error) {
 	primary, err := createAKParent(tpmDev)
 	if err != nil {
 		return nil, err
@@ -234,7 +234,7 @@ func readPCRBank(tpmDev transport.TPM, sel attest.PCRSelection) ([]attest.PCRVal
 // tpmBackend implements attest.EnrolBackend on a real TPM.
 type tpmBackend struct {
 	tpm       transport.TPM
-	blob      *AttestBlob
+	blob      *Attestation
 	sealIndex uint32
 	sealed    *SealedBlob // may be nil
 	debug     bool

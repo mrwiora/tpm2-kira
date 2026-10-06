@@ -330,8 +330,7 @@ Because the live registers at seal time already carry the separator, PCRs
 when given as register source. Where the log cannot be replayed, `seal` warns
 and falls back to the registers: the key's policy then holds only after the
 separator, the display computes codes live after the boot has been released
-(until `cap`), and marks them accordingly. Blobs sealed by earlier versions
-(which ran after the separator) work the same way until they are resealed.
+(until `cap`), and marks them accordingly.
 
 Eventlog-derived values describe the *end of firmware*, so tpm2-kira adds
 `enter-initrd` on PCR 11 to reach the measure point. `--measure-point`
@@ -477,9 +476,7 @@ Because the phones live in the slot's blob,
   starts whether another phone still fits.
 
 `nvram delete` without `--nvram` removes every slot and what belongs to no
-slot any more: a companion whose slot is gone, or a phone enrolment that an
-earlier version kept as an index of its own (`0x01803020` + *n*; no longer
-read - enrol the phone again).
+slot any more: a companion index whose slot is gone.
 
 ## Remote attestation with a phone (experimental)
 

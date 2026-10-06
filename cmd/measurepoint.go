@@ -106,8 +106,7 @@ const (
 	MeasurePointBeforeSeparator MeasurePoint = iota
 	// MeasurePointAfterSeparator: the attestation baseline (the gate asks
 	// before the separator, and the phone takes both states for one
-	// boot), and blobs sealed by versions that
-	// ran the display after the separator. os-separator is applied too.
+	// boot). os-separator is applied too.
 	MeasurePointAfterSeparator
 )
 

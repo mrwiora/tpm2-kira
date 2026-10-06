@@ -342,7 +342,7 @@ func (m *appMachine) serve(c net.Conn, mode string, mtu int) {
 	m.mu.Unlock()
 
 	outcome := func() string {
-		noise, err := attest.NoiseKeypairFromPrivate(blob.NoisePrivate)
+		noise, err := attest.NoiseKeypairFromPrivate(blob.Phone.NoisePrivate)
 		if err != nil {
 			return "error: " + err.Error()
 		}
@@ -369,7 +369,7 @@ func (m *appMachine) serve(c net.Conn, mode string, mtu int) {
 			_, err := attest.ServeEnrolment(fc, &attest.EnrolIdentity{
 				DeviceID: blob.DeviceID, FriendlyName: blob.FriendlyName,
 				AKPub: blob.AKPublic, AKName: blob.AKName, NoiseStatic: noise,
-				AdvKey: blob.AdvKey, Selection: sel, AppVersion: "apptest",
+				AdvKey: blob.Phone.AdvKey, Selection: sel, AppVersion: "apptest",
 				Slot: uint8(SlotNumber(NVRAMSlotStart)),
 			}, be, nil)
 			if err != nil {
@@ -383,7 +383,7 @@ func (m *appMachine) serve(c net.Conn, mode string, mtu int) {
 		}
 		res, err := attest.ServeAttestation(fc, &attest.AttestIdentity{
 			DeviceID: stored.DeviceID, AKName: stored.AKName, NoiseStatic: noise,
-			Verifiers: stored.Verifiers, AppVersion: "apptest", Capabilities: attest.CapEventlog,
+			Verifiers: stored.Phone.Verifiers, AppVersion: "apptest", Capabilities: attest.CapEventlog,
 		}, be, nil)
 		if res == nil || res.Receipt == nil {
 			if err == nil {

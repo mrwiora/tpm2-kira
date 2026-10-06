@@ -25,14 +25,10 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
-// AttestCounterOffset separates a slot's record counter from its record
-// index, like GenerationIndexOffset does for sealed slots.
-const AttestCounterOffset = 0x800
-
 // AttestCounterIndex is the NV index of the record counter for a slot's
 // blob index: 0x01803820 + slot, next to the generation indices.
 func AttestCounterIndex(slotIndex uint32) uint32 {
-	return AttestNVRAMStart + attestSlot(slotIndex) + AttestCounterOffset
+	return attestCounterStart + attestSlot(slotIndex)
 }
 
 // ErrNoRecordCounter: the slot has no usable counter. Since a counter

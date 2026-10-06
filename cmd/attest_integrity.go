@@ -76,8 +76,8 @@ func checkAttestRecord(tpmDev transport.TPM, idx uint32, raw []byte, pubKey cryp
 	if err != nil {
 		return &recordError{foreign: true, detail: err.Error()}
 	}
-	b := sb.Payload.Attest
-	if b == nil {
+	b := sb.Payload.Attestation
+	if b == nil || !b.Phone.Enabled() {
 		return &recordError{detail: "the slot's blob carries no phone enrolment"}
 	}
 	counter, err := readAttestCounter(tpmDev, AttestCounterIndex(idx))

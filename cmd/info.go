@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
+
+	"github.com/matthias/tpm2-kira/attest"
 )
 
 // ── tree-drawing helpers ────────────────────────────────────────────────
@@ -49,6 +51,9 @@ type slotInfo struct {
 	raw        []byte
 	// GenState describes the slot's generation index as the TPM holds it.
 	GenState string
+	// CounterState describes the slot's record counter against the count
+	// in the blob's attestation part; empty without one.
+	CounterState string
 }
 
 // blobVerification is the outcome of checking a blob's signature with the
@@ -65,6 +70,7 @@ type SlotInfoJSON struct {
 	SlotNumber        int             `json:"slot_number"`
 	NVRAMIndex        string          `json:"nvram_index"`
 	SignatureVerified bool            `json:"signature_verified"`
+	RevisionCounter   string          `json:"revision_counter,omitempty"` // only with an attestation part
 	Blob              json.RawMessage `json:"blob"`
 }
 
@@ -149,14 +155,31 @@ func readSlotInfo(tpmDev transport.TPM, nvramIndex uint32) (*slotInfo, error) {
 		return nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
 
-	return &slotInfo{
+	si := &slotInfo{
 		Index:      nvramIndex,
 		SlotNumber: SlotNumber(nvramIndex),
 		NVPublic:   nvPublic,
 		Blob:       sealedBlob,
 		raw:        sealedData,
 		GenState:   generationState(tpmDev, nvramIndex, sealedBlob.Payload.Generation),
-	}, nil
+	}
+	if att := sealedBlob.Payload.Attestation; att != nil && nvramIndex >= NVRAMSlotStart && nvramIndex <= NVRAMSlotEnd {
+		si.CounterState = counterState(tpmDev, nvramIndex, att.Count)
+	}
+	return si, nil
+}
+
+// counterState compares the slot's record counter with the count in the
+// blob's attestation part.
+func counterState(tpmDev transport.TPM, nvramIndex uint32, count uint64) string {
+	counter, err := readAttestCounter(tpmDev, AttestCounterIndex(nvramIndex))
+	switch {
+	case err != nil:
+		return fmt.Sprintf("unavailable (%v): the gate serves no verifier until you enrol again", err)
+	case counter != count:
+		return fmt.Sprintf("%d — does NOT match the blob's revision %d: an older blob was put back, or the counter was raised; enrol again", counter, count)
+	}
+	return fmt.Sprintf("%d (matches: this is the current blob)", counter)
 }
 
 // generationState compares the slot's generation index with the generation
@@ -215,6 +238,7 @@ func printJSON(slots []slotInfo) error {
 			SlotNumber:        si.SlotNumber,
 			NVRAMIndex:        fmt.Sprintf("0x%08X", si.Index),
 			SignatureVerified: si.Verify.Verified,
+			RevisionCounter:   si.CounterState,
 			Blob:              json.RawMessage(raw),
 		})
 	}
@@ -313,6 +337,9 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 	fmt.Printf("%s%sPCR Sources\n", prefix, branch(false))
 	sub = prefix + cont(false)
 	printPCRSources(sub, blob)
+
+	// ── Remote attestation (optional part of the blob) ───────────────
+	printAttestationTree(prefix, si)
 
 	// ── 7. PCR Digests (last section) ───────────────────────────────
 	fmt.Printf("%s%sPCR Digests\n", prefix, branch(true))
@@ -466,4 +493,56 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// printAttestationTree renders the blob's remote-attestation part: who the
+// machine is to its verifiers, which key signs its quotes, which PCRs are
+// quoted, and the methods by which a verifier reaches it.
+func printAttestationTree(prefix string, si *slotInfo) {
+	att := si.Blob.Payload.Attestation
+	if att == nil {
+		fmt.Printf("%s%sRemote attestation: not set up (tpm2-kira attest enrol)\n", prefix, branch(false))
+		return
+	}
+	fmt.Printf("%s%sRemote attestation\n", prefix, branch(false))
+	sub := prefix + cont(false)
+	fmt.Printf("%s%sMachine name: %s\n", sub, branch(false), quoteUntrusted(att.FriendlyName))
+	fmt.Printf("%s%sDevice ID: %x\n", sub, branch(false), att.DeviceID)
+	fmt.Printf("%s%sWritten by: tpm2-kira %s\n", sub, branch(false), quoteUntrusted(att.AppVersion))
+	fmt.Printf("%s%sAttestation key (signs the quotes; private part wrapped by this TPM)\n", sub, branch(false))
+	ak := sub + cont(false)
+	fmt.Printf("%s%sName: %x\n", ak, branch(false), att.AKName)
+	fmt.Printf("%s%sPublic: %d bytes, private: %d bytes\n", ak, branch(false), len(att.AKPublic), len(att.AKPrivate))
+	fmt.Printf("%s%sEndorsement key used at enrolment: %s\n", ak, branch(true), ekAlgName(att.EKAlg))
+	if sel, err := att.Selection(); err == nil {
+		fmt.Printf("%s%sPCRs quoted: %s\n", sub, branch(false), sel)
+	} else {
+		fmt.Printf("%s%sPCRs quoted: invalid selection (%v)\n", sub, branch(false), err)
+	}
+	// Not a count of attestations: it moves only when the verifiers of the
+	// slot change, and says which blob is the current one.
+	fmt.Printf("%s%sRevision: %d (changes when verifiers are added or removed, not when the machine is attested)\n", sub, branch(false), att.Count)
+	if si.CounterState != "" {
+		fmt.Printf("%s%sRevision counter in the TPM (0x%08X): %s\n", sub, branch(false), AttestCounterIndex(si.Index), si.CounterState)
+	}
+	fmt.Printf("%s%sMethods\n", sub, branch(true))
+	methods := sub + cont(true)
+	if !att.Phone.Enabled() {
+		fmt.Printf("%s%s(none set up)\n", methods, branch(true))
+		return
+	}
+	phones := att.Phone.Verifiers
+	fmt.Printf("%s%sPhones over Bluetooth LE: %d enrolled (channel and advertising keys present, not shown)\n", methods, branch(true), len(phones))
+	list := methods + cont(true)
+	for i, v := range phones {
+		last := i == len(phones)-1
+		fmt.Printf("%s%s%s\n", list, branch(last), quoteUntrusted(verifierName(&v)))
+		d := list + cont(last)
+		fmt.Printf("%s%sID: %s\n", d, branch(false), quoteUntrusted(v.ID))
+		fmt.Printf("%s%sAnchor key (signs its verdicts): SHA-256 %x\n", d, branch(false), attest.AnchorDigest(v.AnchorPub))
+		fmt.Printf("%s%sChannel key: %x\n", d, branch(v.PolicyID == ""), v.NoisePub)
+		if v.PolicyID != "" {
+			fmt.Printf("%s%sPolicy: %s\n", d, branch(true), quoteUntrusted(v.PolicyID))
+		}
+	}
 }

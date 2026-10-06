@@ -69,20 +69,3 @@ func TestSeparatorLockedAndStatus(t *testing.T) {
 		}
 	}
 }
-
-func TestBlobMeasurePoint(t *testing.T) {
-	cases := map[string]MeasurePoint{
-		"":                                   MeasurePointBeforeSeparator,
-		"enter-initrd:11":                    MeasurePointBeforeSeparator,
-		"enter-initrd:11;os-separator:0,2,7": MeasurePointAfterSeparator, // sealed by an older version
-	}
-	for ext, want := range cases {
-		sb := &SealedBlob{Payload: SealedBlobPayload{EventlogInfo: &EventlogInfo{MeasurePointExtends: ext}}}
-		if got := sb.MeasurePoint(); got != want {
-			t.Errorf("extends %q: got %v, want %v", ext, got, want)
-		}
-	}
-	if (&SealedBlob{}).MeasurePoint() != MeasurePointBeforeSeparator {
-		t.Error("a blob without eventlog info is checked before the separator")
-	}
-}

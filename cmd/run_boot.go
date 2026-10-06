@@ -27,10 +27,9 @@ package cmd
 // passphrase prompt waits for the terminal to be free.
 //
 // A slot that yields no code during the hold is served after the boot is
-// released: a blob whose policy holds only after the separator (sealed by an
-// earlier version, or from registers because the event log cannot be
-// replayed) then gets its codes live, window by window, and the display
-// says so.
+// released: a blob whose policy holds only after the separator (sealed from
+// registers because the event log cannot be replayed) then gets its codes
+// live, window by window, and the display says so.
 
 import (
 	"bytes"

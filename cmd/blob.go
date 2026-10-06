@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/google/go-tpm/tpm2"
 )
@@ -129,23 +128,8 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 // This should be set by the main package during initialization
 var AppVersion = "unknown"
 
-// CurrentBlobVersion is the format of a slot that holds a TOTP key only.
-const CurrentBlobVersion = 9
-
-// EnrolledBlobVersion is the same format followed by the slot's phone
-// enrolment (SealedBlobPayload.Attest). A blob is written as this version
-// exactly when it carries one, so a slot without phones stays readable by
-// builds that know nothing of the section, and a build that would drop the
-// section on its next reseal refuses the blob instead.
-const EnrolledBlobVersion = 10
-
-// MaxAttestSectionLen bounds the enrolment section of a slot's blob.
-const MaxAttestSectionLen = 16 * 1024
-
-// supportedBlobVersion reports whether this build reads the version.
-func supportedBlobVersion(v uint32) bool {
-	return v == CurrentBlobVersion || v == EnrolledBlobVersion
-}
+// CurrentBlobVersion is the only supported blob format version.
+const CurrentBlobVersion = 10
 
 // MaxBlobSignatureLen is the maximum allowed signature size in bytes.
 // Generous: RSA-4096 PKCS#1 v1.5 = 512 bytes, ECDSA P-384 DER ≈ 104 bytes.
@@ -262,17 +246,18 @@ type SealedBlobPayload struct {
 	EventlogInfo      *EventlogInfo `json:"eventlog_info"`              // Eventlog calculation metadata (if any PCR uses eventlog)
 	PublicKeyPath     string        `json:"public_key_path,omitempty"`  // Filesystem path recorded at seal time (never used to find a key)
 	PrivateKeyPath    string        `json:"private_key_path,omitempty"` // Filesystem path recorded at seal time (never used to find a key)
-	// Attest is the slot's phone enrolment, or nil without one. It lives in
-	// the slot's blob, under the same signature, so that a slot is one
-	// thing: sealed, resealed, enrolled and deleted together.
-	Attest *AttestBlob `json:"-"`
+	// Attestation is the slot's remote-attestation part, or nil without
+	// one (attest_blob.go). It lives in the slot's blob, under the same
+	// signature, so that a slot is one thing: sealed, resealed, enrolled
+	// and deleted together.
+	Attestation *Attestation `json:"-"`
 }
 
 // SealedBlob is the top-level envelope: version, signed payload, and
 // detached signature.  Only BlobSignature lives outside the signed region.
 //
-// Version 9: TOTP key is an HMAC key used inside the TPM, authorized by
-// PolicyAuthorize; see docs/SECURITY-BACKGROUND.md §4.
+// The TOTP key is an HMAC key used inside the TPM, authorized by
+// PolicyAuthorize; see docs/SECURITY-BACKGROUND.md §4. The layout is in §10.
 type SealedBlob struct {
 	Version       uint32            `json:"version"`                  // Blob format version (must be CurrentBlobVersion)
 	Payload       SealedBlobPayload `json:"payload"`                  // All authenticated content
@@ -320,16 +305,6 @@ func (sb *SealedBlob) MeasurePointMode() MeasurePointMode {
 		return MeasurePointOn
 	}
 	return MeasurePointOff
-}
-
-// MeasurePoint tells where this blob's policy is checked. Blobs sealed by
-// versions whose display ran after systemd-pcrosseparator.service applied
-// os-separator to their replayed values; everything else is checked before it.
-func (sb *SealedBlob) MeasurePoint() MeasurePoint {
-	if info := sb.Payload.EventlogInfo; info != nil && strings.Contains(info.MeasurePointExtends, OSSeparatorWord) {
-		return MeasurePointAfterSeparator
-	}
-	return MeasurePointBeforeSeparator
 }
 
 // HasEventlogPCRs returns true if any PCR in this blob uses eventlog as its source
@@ -595,31 +570,29 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		offset++
 	}
 
-	// The phone enrolment, when the slot has one: [len:4][section]. Its
-	// presence is what makes the blob EnrolledBlobVersion.
-	if p.Attest != nil {
-		section, err := p.Attest.marshalSection()
+	// The optional attestation part ends the payload:
+	// [hasAttestation:1], then [len:4][attestation].
+	if p.Attestation == nil {
+		buf = append(buf, 0)
+	} else {
+		att, err := p.Attestation.marshal()
 		if err != nil {
 			return nil, err
 		}
-		if len(section) > MaxAttestSectionLen {
-			return nil, fmt.Errorf("phone enrolment of %d bytes exceeds %d", len(section), MaxAttestSectionLen)
+		if len(att) > MaxAttestationLen {
+			return nil, fmt.Errorf("attestation part of %d bytes exceeds %d", len(att), MaxAttestationLen)
 		}
-		buf = binary.LittleEndian.AppendUint32(buf, uint32(len(section)))
-		buf = append(buf, section...)
+		buf = append(buf, 1)
+		buf = binary.LittleEndian.AppendUint32(buf, uint32(len(att)))
+		buf = append(buf, att...)
 	}
 
 	return buf, nil
 }
 
-// UnmarshalPayload parses the payload bytes of a slot without a phone
-// enrolment (CurrentBlobVersion) back into a SealedBlobPayload.
+// UnmarshalPayload parses the payload bytes back into a SealedBlobPayload.
 // The input must NOT include the outer envelope (version, payloadLen, signature).
 func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
-	return unmarshalPayloadVersion(data, CurrentBlobVersion)
-}
-
-func unmarshalPayloadVersion(data []byte, version uint32) (*SealedBlobPayload, error) {
 	if len(data) > MaxBlobSize {
 		return nil, fmt.Errorf("payload size %d exceeds maximum allowed %d bytes", len(data), MaxBlobSize)
 	}
@@ -887,20 +860,33 @@ func unmarshalPayloadVersion(data []byte, version uint32) (*SealedBlobPayload, e
 		}
 	}
 
-	if version == EnrolledBlobVersion {
+	// The optional attestation part, which ends the payload.
+	if offset+1 > len(data) {
+		return nil, fmt.Errorf("data too short for the attestation flag")
+	}
+	hasAttestation := data[offset]
+	offset++
+	switch hasAttestation {
+	case 0:
+		if offset != len(data) {
+			return nil, fmt.Errorf("payload has %d trailing bytes", len(data)-offset)
+		}
+	case 1:
 		if offset+4 > len(data) {
-			return nil, fmt.Errorf("data too short for the phone enrolment length")
+			return nil, fmt.Errorf("data too short for the attestation length")
 		}
 		n := int(binary.LittleEndian.Uint32(data[offset:]))
 		offset += 4
-		if n <= 0 || n > MaxAttestSectionLen || offset+n != len(data) {
-			return nil, fmt.Errorf("phone enrolment section of %d bytes does not fit the blob", n)
+		if n <= 0 || n > MaxAttestationLen || offset+n != len(data) {
+			return nil, fmt.Errorf("attestation part of %d bytes does not end the payload", n)
 		}
-		att, err := unmarshalAttestSection(data[offset : offset+n])
+		att, err := unmarshalAttestation(data[offset : offset+n])
 		if err != nil {
 			return nil, err
 		}
-		p.Attest = att
+		p.Attestation = att
+	default:
+		return nil, fmt.Errorf("invalid attestation flag %d", hasAttestation)
 	}
 
 	return p, nil
@@ -920,12 +906,8 @@ func (sb *SealedBlob) Marshal() ([]byte, error) {
 	}
 
 	// [version:4][payloadLen:4][payloadBytes...]
-	version := uint32(CurrentBlobVersion)
-	if sb.Payload.Attest != nil {
-		version = EnrolledBlobVersion
-	}
 	buf := make([]byte, 4+4+len(payloadBytes))
-	binary.LittleEndian.PutUint32(buf[0:], version)
+	binary.LittleEndian.PutUint32(buf[0:], CurrentBlobVersion)
 	binary.LittleEndian.PutUint32(buf[4:], uint32(len(payloadBytes)))
 	copy(buf[8:], payloadBytes)
 	return buf, nil
@@ -949,7 +931,7 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 
 	// Version check
 	version := binary.LittleEndian.Uint32(data[0:4])
-	if !supportedBlobVersion(version) {
+	if version != CurrentBlobVersion {
 		return nil, &BlobVersionError{
 			FoundVersion:    version,
 			RequiredVersion: CurrentBlobVersion,
@@ -970,7 +952,7 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 
 	// Parse payload
 	payloadBytes := data[8:payloadEnd]
-	payload, err := unmarshalPayloadVersion(payloadBytes, version)
+	payload, err := UnmarshalPayload(payloadBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
@@ -1121,24 +1103,25 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 
 	// Create a JSON-friendly structure
 	type SealedBlobJSON struct {
-		Version           uint32          `json:"version"`
-		AppVersion        string          `json:"app_version"`
-		HashAlgorithm     string          `json:"hash_algorithm"`
-		Public            string          `json:"public_hex"`
-		PublicSize        int             `json:"public_size"`
-		Private           string          `json:"private_hex"`
-		PrivateSize       int             `json:"private_size"`
-		PCRDigests        []PCRDigestJSON `json:"pcr_digests"`
-		TOTPAlgorithm     string          `json:"totp_algorithm"`
-		Generation        uint64          `json:"generation"`
-		PolicyRef         string          `json:"policy_ref_hex"`
-		SigningPublic     string          `json:"signing_public_hex"`
-		ApprovalSignature string          `json:"approval_signature_hex"`
-		PublicKeyPath     string          `json:"public_key_path,omitempty"`
-		PrivateKeyPath    string          `json:"private_key_path,omitempty"`
-		EventlogInfo      *EventlogInfo   `json:"eventlog_info,omitempty"`
-		BlobSignature     string          `json:"blob_signature_hex,omitempty"`
-		BlobSignatureSize int             `json:"blob_signature_size"`
+		Version           uint32           `json:"version"`
+		AppVersion        string           `json:"app_version"`
+		HashAlgorithm     string           `json:"hash_algorithm"`
+		Public            string           `json:"public_hex"`
+		PublicSize        int              `json:"public_size"`
+		Private           string           `json:"private_hex"`
+		PrivateSize       int              `json:"private_size"`
+		PCRDigests        []PCRDigestJSON  `json:"pcr_digests"`
+		TOTPAlgorithm     string           `json:"totp_algorithm"`
+		Generation        uint64           `json:"generation"`
+		PolicyRef         string           `json:"policy_ref_hex"`
+		SigningPublic     string           `json:"signing_public_hex"`
+		ApprovalSignature string           `json:"approval_signature_hex"`
+		PublicKeyPath     string           `json:"public_key_path,omitempty"`
+		PrivateKeyPath    string           `json:"private_key_path,omitempty"`
+		EventlogInfo      *EventlogInfo    `json:"eventlog_info,omitempty"`
+		BlobSignature     string           `json:"blob_signature_hex,omitempty"`
+		BlobSignatureSize int              `json:"blob_signature_size"`
+		Attestation       *attestationJSON `json:"attestation,omitempty"`
 	}
 
 	jsonBlob := SealedBlobJSON{
@@ -1160,6 +1143,7 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 		EventlogInfo:      sb.Payload.EventlogInfo,
 		BlobSignature:     hex.EncodeToString(sb.BlobSignature),
 		BlobSignatureSize: len(sb.BlobSignature),
+		Attestation:       sb.Payload.Attestation.json(),
 	}
 
 	return json.Marshal(jsonBlob)

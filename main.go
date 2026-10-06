@@ -383,10 +383,14 @@ func failAttest(code int, err error) {
 
 func runAttest(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "attest requires a subcommand: enrol, gate, status, check, ekcert, quote, verify, unenrol")
+		fmt.Fprint(os.Stderr, "attest requires a subcommand.\n\n"+attestUsage)
 		os.Exit(cmd.ExitUsage)
 	}
 	sub, args := args[0], args[1:]
+	if sub == "help" || sub == "-h" || sub == "--help" {
+		fmt.Print(attestUsage)
+		return
+	}
 	fs := flag.NewFlagSet("attest "+sub, flag.ExitOnError)
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index")
@@ -395,7 +399,7 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 	switch sub {
 	case "enrol", "enroll":
 		name := fs.String("name", "", "Name shown on the phone (default: hostname)")
-		pcrs := fs.String("pcrs", "", "PCRs to quote (default: the slot's sealed selection, else 0,2,4,7)")
+		pcrs := fs.String("pcrs", "", "PCRs to quote (default: the slot's sealed selection)")
 		sha1 := fs.Bool("sha1", false, "Quote the SHA-1 PCR bank instead of SHA-256 (only for a TPM without a SHA-256 bank, or a slot sealed with --sha1)")
 		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
 		privKey := fs.String("privkey", "", "Signing key for the attestation blob (default: the slot's, else "+cmd.DefaultPrivateKeyPath+")")
@@ -512,6 +516,53 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 	}
 }
 
+// attestUsage is the ATTEST section of the help, also shown on its own by
+// 'tpm2-kira attest help'.
+const attestUsage = `ATTEST SUBCOMMANDS:
+  attest enrol    Bind a phone to this slot over BLE (booted system; needs the
+                  signing key and a sealed slot: the phones are stored in the
+                  slot's blob, next to its TOTP key, and survive reseal).
+                  Prints a 6-digit code to compare with the app.
+                  --name STR --pcrs LIST --adapter N --privkey PATH --timeout DUR
+                  --sha1  quote the SHA-1 PCR bank instead of SHA-256. Required,
+                          as for 'seal', where nothing else works: a TPM without
+                          a SHA-256 bank, or a slot sealed with --sha1
+                  --verify-tpm warn|require|off    this machine's TPM genuine (EK certificate)?
+                  --verify-phone warn|require|off  the phone's key in genuine secure hardware
+                                                   (Android key attestation, Google roots)?
+  attest gate     Serve attestation requests until a phone returns a receipt.
+                  Defaults from /etc/tpm2-kira/attest.conf.
+                  --mode lazy --adapter N --timeout DUR --adapter-wait DUR
+                  --coordinator SOCKET  be the radio worker only: no TPM in
+                    this process; quotes and the reading of the receipt come
+                    from 'tpm2-kira run --gate SOCKET' (the initrd units).
+                    Without it (by hand) this process uses the TPM itself
+  attest status   Show enrolled phones per slot and whether the blob is signed
+                  by this machine's signing key (--json); exits 1 if not
+  attest signer   Print this machine's signing public key for the initramfs
+                  (used by the initramfs hooks; public, not a secret), after
+                  checking every enrolled record against it and the TPM's
+                  record counter (exit 6 if one does not pass). At boot the
+                  gate serves only a record signed by that key whose count
+                  equals the counter. --pubkey PATH
+  attest ekcert   Show whether the phone will verify this TPM as genuine
+                  (EK certificate chain against the vendor roots in the core)
+  attest quote    Produce evidence without a phone (--nonce HEX --out FILE)
+  attest verify   Judge evidence offline (--evidence FILE --record FILE --nonce HEX)
+  attest unenrol  Remove a slot's phones from its blob; the TOTP key stays.
+                  Needs the signing key (--privkey PATH). To remove the whole
+                  slot without it: nvram delete --nvram N
+  attest initramfs-deps  Modules and firmware the adapter needs (used by the
+                  initramfs hooks)
+
+  EXIT STATUS: unlike every other command, 'attest gate', 'attest verify',
+  'attest quote' and 'attest enrol' exit non-zero on failure:
+    0 attested   1 internal error   2 usage   3 no phone / no adapter
+    4 rejected (do not type a passphrase before checking)   5 anchor mismatch
+    6 the attestation record was replaced, or an older one was put back
+
+`
+
 func printUsage() {
 	fmt.Printf(`tpm2-kira - TPM2-based TOTP authenticator with PCR policies
 
@@ -527,9 +578,21 @@ COMMANDS:
   run         Show the code at boot and wait for Enter (see RUN OPTIONS)
   cap         Lock code computation until the next reboot (run when leaving
               the initrd; the boot integration does this)
-  info        Display sealed secret information
+  info        Display a slot's blob: the TOTP key and its policy, and the
+              remote attestation set up for it (attestation key, PCRs, phones)
   nvram       Manage TPM NVRAM (list, status, delete)
-  attest      Remote attestation with a phone over Bluetooth LE (see ATTEST below)
+  attest      Remote attestation: a phone verifies this boot over Bluetooth LE.
+              Subcommands (details under ATTEST SUBCOMMANDS, or 'attest help'):
+    attest enrol      Bind a phone to a sealed slot (needs the signing key)
+    attest unenrol    Remove a slot's phones (needs the signing key)
+    attest status     Show the phones enrolled per slot, and whether the
+                      slot's blob is signed by this machine and current
+    attest gate       Ask the phone to verify this boot (the initrd runs it)
+    attest ekcert     Show whether a phone will verify this TPM as genuine
+    attest quote      Produce attestation evidence without a phone
+    attest verify     Judge attestation evidence offline
+    attest signer     Print the signing public key for the initramfs (hooks)
+    attest initramfs-deps  Bluetooth modules and firmware for the initramfs (hooks)
   yubikey     YubiKey support (list)
   pcrtips     Show PCR (Platform Configuration Register) reference guide
   version     Show version information
@@ -612,50 +675,7 @@ NVRAM SUBCOMMANDS:
   delete             Delete NVRAM index (or all populated slots when --nvram is omitted;
                      that asks for confirmation on a terminal, or needs --yes)
 
-ATTEST SUBCOMMANDS:
-  attest enrol    Bind a phone to this slot over BLE (booted system; needs the
-                  signing key and a sealed slot: the phones are stored in the
-                  slot's blob, next to its TOTP key, and survive reseal).
-                  Prints a 6-digit code to compare with the app.
-                  --name STR --pcrs LIST --adapter N --privkey PATH --timeout DUR
-                  --sha1  quote the SHA-1 PCR bank instead of SHA-256. Required,
-                          as for 'seal', where nothing else works: a TPM without
-                          a SHA-256 bank, or a slot sealed with --sha1
-                  --verify-tpm warn|require|off    this machine's TPM genuine (EK certificate)?
-                  --verify-phone warn|require|off  the phone's key in genuine secure hardware
-                                                   (Android key attestation, Google roots)?
-  attest gate     Serve attestation requests until a phone returns a receipt.
-                  Defaults from /etc/tpm2-kira/attest.conf.
-                  --mode lazy --adapter N --timeout DUR --adapter-wait DUR
-                  --coordinator SOCKET  be the radio worker only: no TPM in
-                    this process; quotes and the reading of the receipt come
-                    from 'tpm2-kira run --gate SOCKET' (the initrd units).
-                    Without it (by hand) this process uses the TPM itself
-  attest status   Show enrolled phones per slot and whether the blob is signed
-                  by this machine's signing key (--json); exits 1 if not
-  attest signer   Print this machine's signing public key for the initramfs
-                  (used by the initramfs hooks; public, not a secret), after
-                  checking every enrolled record against it and the TPM's
-                  record counter (exit 6 if one does not pass). At boot the
-                  gate serves only a record signed by that key whose count
-                  equals the counter. --pubkey PATH
-  attest ekcert   Show whether the phone will verify this TPM as genuine
-                  (EK certificate chain against the vendor roots in the core)
-  attest quote    Produce evidence without a phone (--nonce HEX --out FILE)
-  attest verify   Judge evidence offline (--evidence FILE --record FILE --nonce HEX)
-  attest unenrol  Remove a slot's phones from its blob; the TOTP key stays.
-                  Needs the signing key (--privkey PATH). To remove the whole
-                  slot without it: nvram delete --nvram N
-  attest initramfs-deps  Modules and firmware the adapter needs (used by the
-                  initramfs hooks)
-
-  EXIT STATUS: unlike every other command, 'attest gate', 'attest verify',
-  'attest quote' and 'attest enrol' exit non-zero on failure:
-    0 attested   1 internal error   2 usage   3 no phone / no adapter
-    4 rejected (do not type a passphrase before checking)   5 anchor mismatch
-    6 the attestation record was replaced, or an older one was put back
-
-AUTHENTICATION:
+`+attestUsage+`AUTHENTICATION:
   The TOTP key is an HMAC key inside the TPM; the TPM computes every code and
   the key never leaves it after seal. It is usable only under a policy the
   signing key has approved (PolicyAuthorize):
@@ -725,6 +745,13 @@ EXAMPLES:
   tpm2-kira nvram delete --yes
   tpm2-kira nvram delete --nvram 0
   tpm2-kira nvram delete --nvram 0x01803010
+  tpm2-kira attest enrol
+  tpm2-kira attest enrol --nvram 0 --name "Thinkpad"
+  tpm2-kira attest enrol --sha1
+  tpm2-kira attest status
+  tpm2-kira attest unenrol --nvram 0
+  tpm2-kira attest ekcert
+  tpm2-kira attest help
 
 For detailed documentation, see README.md
 `, cmd.DefaultPublicKeyPath, cmd.PINEnvVar)

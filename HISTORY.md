@@ -10,6 +10,28 @@ formats and CLI flags may change without migration paths.
 
 ## Blob format
 
+### Version 10 — one blob per slot; attestation as an optional part with typed methods
+
+Remote attestation first kept its data in an NV index of its own per slot
+(`0x01803020` + slot: attestation key, channel keys, the enrolled phones),
+next to the sealed blob at `0x01803010` + slot and written by different
+commands. The two could diverge: a TOTP key deleted while its enrolment
+stayed, an enrolment made without a sealed slot and on another PCR bank, and
+leftovers of one kind that the commands for the other did not see.
+
+Version 10 puts it into the slot's blob, under the blob's signature. The
+payload ends with an optional *attestation part* (identity, attestation key,
+quoted PCRs, revision count) that holds typed *methods*; the phones over
+Bluetooth LE are method 1, and another kind of verifier is another method.
+`attest enrol` therefore needs a sealed slot, `attest unenrol` rewrites the
+blob and needs the signing key, `reseal` and `seal` carry the part over, and
+deleting a slot deletes everything. The record counter (`0x01803820` + slot)
+stays an NV index: "can only count up" is a property of an index's type.
+
+For one commit there were two blob versions, 9 without phones and 10 with
+them, so that existing seals stayed valid. That was dropped at once: only
+version 10 is read.
+
 ### Version 9 — the TOTP key stays in the TPM; PolicyAuthorize replaces PolicyOR
 
 Up to version 8 the blob held a *sealed* TOTP secret behind a PolicyOR: a PCR

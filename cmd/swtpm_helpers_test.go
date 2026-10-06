@@ -97,7 +97,7 @@ func startSWTPM(t *testing.T) string {
 
 type swtpmSetup struct {
 	tpm  transport.TPMCloser
-	blob *AttestBlob
+	blob *Attestation
 	be   *tpmBackend
 }
 
@@ -124,17 +124,16 @@ func newSWTPMSetupAt(t *testing.T, sock, name string) *swtpmSetup {
 	}
 	noise, _ := attest.GenerateNoiseKeypair(nil)
 	sel, _ := attest.NewPCRSelection(attest.AlgSHA256, []int{0, 2, 4, 7, 8, 9, 10, 11, 14})
-	s.blob = &AttestBlob{
+	s.blob = &Attestation{
 		AppVersion:   "test",
 		DeviceID:     randBytes(16),
 		FriendlyName: name,
 		AKPublic:     pub,
 		AKPrivate:    priv,
 		AKName:       akName,
-		NoisePrivate: noise.Private,
-		AdvKey:       randBytes(32),
 		PCRAlg:       sel.Alg,
 		PCRSelection: sel.Indices,
+		Phone:        PhoneAttestation{NoisePrivate: noise.Private, AdvKey: randBytes(32)},
 	}
 	s.be = &tpmBackend{tpm: tpmDev, blob: s.blob, sealIndex: NVRAMSlotStart}
 	return s

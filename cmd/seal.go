@@ -131,10 +131,10 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	// Sealing a slot again replaces its TOTP key, not its phones: their
 	// enrolment lives in the same blob and is carried over - if this
 	// signing key wrote it. Somebody else's entries are not signed anew.
-	if oldRaw, old, err := readSlot(tpmDev, nvramIndex); err == nil && old.Payload.Attest != nil {
+	if oldRaw, old, err := readSlot(tpmDev, nvramIndex); err == nil && old.Payload.Attestation != nil {
 		if VerifyBlobSignature(oldRaw, old, signer.Public()) == nil {
-			blob.Payload.Attest = old.Payload.Attest
-			fmt.Printf("Phone enrolment: kept (%d phone(s) enrolled for this slot)\n\n", len(old.Payload.Attest.Verifiers))
+			blob.Payload.Attestation = old.Payload.Attestation
+			fmt.Printf("Phone enrolment: kept (%d phone(s) enrolled for this slot)\n\n", len(old.Payload.Attestation.Phone.Verifiers))
 		} else {
 			fmt.Println("WARNING: this slot carries a phone enrolment that another signing key wrote.")
 			fmt.Println("  It is not carried over. Enrol the phone again: tpm2-kira attest enrol")

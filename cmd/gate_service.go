@@ -83,7 +83,7 @@ type gateService struct {
 
 	tpm            transport.TPM
 	idx            uint32
-	blob           *AttestBlob
+	blob           *Attestation
 	be             *tpmBackend
 	recordVerified bool
 
@@ -141,10 +141,10 @@ func (s *gateService) setup(sealIndex uint32, signerPath string, debug bool) (in
 	if err != nil {
 		return ExitInternal, fmt.Errorf("cannot read the attestation blob at 0x%08X: %w", idx, err)
 	}
-	if len(blob.Verifiers) == 0 {
+	if len(blob.Phone.Verifiers) == 0 {
 		return ExitUsage, fmt.Errorf("no phone is enrolled for slot %d", attestSlot(idx))
 	}
-	if _, err := attest.NoiseKeypairFromPrivate(blob.NoisePrivate); err != nil {
+	if _, err := attest.NoiseKeypairFromPrivate(blob.Phone.NoisePrivate); err != nil {
 		return ExitInternal, err
 	}
 	sealIdx := idx // the enrolment lives in the slot's own blob
@@ -167,11 +167,11 @@ func (s *gateService) Identity() (*gateIdentity, int, error) {
 		FriendlyName:   s.blob.FriendlyName,
 		DeviceID:       s.blob.DeviceID,
 		AKName:         s.blob.AKName,
-		NoisePrivate:   s.blob.NoisePrivate,
-		AdvKey:         s.blob.AdvKey,
+		NoisePrivate:   s.blob.Phone.NoisePrivate,
+		AdvKey:         s.blob.Phone.AdvKey,
 		RecordVerified: s.recordVerified,
 	}
-	for _, v := range s.blob.Verifiers {
+	for _, v := range s.blob.Phone.Verifiers {
 		id.Verifiers = append(id.Verifiers, gateVerifier{ID: v.ID, Name: v.Name, NoisePub: v.NoisePub})
 	}
 	return id, 0, nil
@@ -249,9 +249,9 @@ func (s *gateService) JudgeReceipt(r *attest.Receipt, verifierID string) attest.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var verifier *attest.EnrolledVerifier
-	for i := range s.blob.Verifiers {
-		if s.blob.Verifiers[i].ID == verifierID {
-			verifier = &s.blob.Verifiers[i]
+	for i := range s.blob.Phone.Verifiers {
+		if s.blob.Phone.Verifiers[i].ID == verifierID {
+			verifier = &s.blob.Phone.Verifiers[i]
 		}
 	}
 	if verifier == nil {

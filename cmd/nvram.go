@@ -39,6 +39,10 @@ func ValidateBlobIndex(index uint32) error {
 	if err := ValidateNVRAMIndex(index); err != nil {
 		return err
 	}
+	if g := GenerationIndex(index); g >= AttestCounterIndex(NVRAMSlotStart) && g <= AttestCounterIndex(NVRAMSlotEnd) {
+		return fmt.Errorf("NVRAM index 0x%08X cannot hold a blob: its generation index 0x%08X is the record counter of slot %d",
+			index, g, g-attestCounterStart)
+	}
 	if index >= GenerationIndex(AppNVRAMStart) {
 		return fmt.Errorf("NVRAM index 0x%08X is reserved for generation indices; blobs go at 0x%08X-0x%08X",
 			index, AppNVRAMStart, GenerationIndex(AppNVRAMStart)-1)
@@ -520,16 +524,13 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 
 	fmt.Printf("Successfully deleted NVRAM index 0x%08X\n", nvramIndex)
 
-	// A slot is deleted whole: its record counter and an enrolment left in
-	// the old, separate format go with it. (Without its counter no blob of
+	// A slot is deleted whole: its record counter goes with it. (Without its counter no blob of
 	// the slot is accepted by the gate again, and a new counter starts
 	// above every value this one had.)
 	if nvramIndex >= NVRAMSlotStart && nvramIndex <= NVRAMSlotEnd {
-		for _, companion := range []uint32{AttestCounterIndex(nvramIndex), legacyAttestIndex(nvramIndex)} {
-			if NVRAMIndexExists(tpmDev, companion) {
-				if err := undefineIndex(tpmDev, companion); err != nil {
-					return fmt.Errorf("deleted the slot, but not its companion index 0x%08X: %w", companion, err)
-				}
+		if counter := AttestCounterIndex(nvramIndex); NVRAMIndexExists(tpmDev, counter) {
+			if err := undefineIndex(tpmDev, counter); err != nil {
+				return fmt.Errorf("deleted the slot, but not its record counter 0x%08X: %w", counter, err)
 			}
 		}
 	}
@@ -555,21 +556,17 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 func kiraIndexRole(index uint32) string {
 	switch {
 	case index >= NVRAMSlotStart && index <= NVRAMSlotEnd:
-		return fmt.Sprintf("slot #%d: its TOTP key and, if enrolled, its phones", SlotNumber(index))
-	case index >= AttestNVRAMStart && index <= AttestNVRAMEnd:
-		return fmt.Sprintf("phone enrolment of slot #%d in the old, separate format (no longer used)", index-AttestNVRAMStart)
+		return fmt.Sprintf("slot #%d: its TOTP key and, if set up, its attestation part", SlotNumber(index))
 	case index >= GenerationIndex(NVRAMSlotStart) && index <= GenerationIndex(NVRAMSlotEnd):
 		return fmt.Sprintf("generation index of slot #%d", SlotNumber(index-GenerationIndexOffset))
 	case index >= AttestCounterIndex(NVRAMSlotStart) && index <= AttestCounterIndex(NVRAMSlotEnd):
-		return fmt.Sprintf("record counter of slot #%d's phone enrolment", index-AttestCounterOffset-AttestNVRAMStart)
+		return fmt.Sprintf("record counter of slot #%d's attestation part", index-attestCounterStart)
 	}
 	return ""
 }
 
-// kiraLeftovers returns the indices that belong to no slot any more: a
-// generation index or record counter whose slot is gone, and enrolments in
-// the old, separate format, which nothing reads. An interrupted command or
-// an earlier installation leaves such things behind.
+// kiraLeftovers returns the companion indices (generation index, record
+// counter) whose slot is gone, as an interrupted command leaves them.
 func kiraLeftovers(tpmDev transport.TPM, debug bool) []uint32 {
 	var out []uint32
 	for idx := uint32(NVRAMSlotStart); idx <= NVRAMSlotEnd; idx++ {
@@ -582,7 +579,7 @@ func kiraLeftovers(tpmDev transport.TPM, debug bool) []uint32 {
 			}
 		}
 	}
-	return append(out, legacyAttestRecords(tpmDev)...)
+	return out
 }
 
 func undefineIndex(tpmDev transport.TPM, index uint32) error {
@@ -601,8 +598,7 @@ func undefineIndex(tpmDev transport.TPM, index uint32) error {
 // NVRAMDeleteCommand implements 'nvram delete'. A slot is one thing: its
 // blob holds the TOTP key and the phone enrolment, and its generation index
 // and record counter go with it. With an index that slot is deleted;
-// without one, every slot and whatever earlier versions or interrupted
-// commands left behind.
+// without one, every slot and whatever an interrupted command left behind.
 func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool) error {
 	if nvramIndex != 0 {
 		return NVRAMDelete(tpmPath, nvramIndex, debug)

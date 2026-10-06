@@ -12,6 +12,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -81,8 +82,8 @@ func TestCodeBeforeTheSeparatorThenLocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("code during the hold: %v", err)
 	}
-	if blob.MeasurePoint() != MeasurePointBeforeSeparator {
-		t.Fatalf("the blob should be sealed before the separator: %v", blob.MeasurePoint())
+	if info := blob.Payload.EventlogInfo; info != nil && strings.Contains(info.MeasurePointExtends, OSSeparatorWord) {
+		t.Fatalf("the blob should be sealed before the separator: %q", info.MeasurePointExtends)
 	}
 	next, _, err := SlotCode(tpm, NVRAMSlotStart, at.Add(30*time.Second), false)
 	if err != nil || next == first || len(first) != 6 {
@@ -156,10 +157,10 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	if err := writeAttestBlob(tpm, slot, testEnrolment("box"), priv); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
-	enrolled := func(what string) *AttestBlob {
+	enrolled := func(what string) *Attestation {
 		t.Helper()
 		a, err := loadAttestBlob(tpm, slot)
-		if err != nil || len(a.Verifiers) != 1 || a.Verifiers[0].Name != "Pixel" || a.FriendlyName != "box" {
+		if err != nil || len(a.Phone.Verifiers) != 1 || a.Phone.Verifiers[0].Name != "Pixel" || a.FriendlyName != "box" {
 			t.Fatalf("%s: the phone is gone: %+v %v", what, a, err)
 		}
 		if verified, exit := gateRecordCheck(tpm, slot, pubPath); !verified || exit != 0 {
@@ -194,7 +195,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	}
 
 	// Another signing key seals the slot: it does not adopt phones it
-	// cannot vouch for, and the blob is a plain one again.
+	// cannot vouch for: the blob has no attestation part.
 	otherPub, otherPriv := writeTestKeyPair(t)
 	if err := Seal(sock, "0,2,7", slot, otherPub, otherPriv, false, PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal with another key: %v", err)
@@ -202,7 +203,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	if _, err := loadAttestBlob(tpm, slot); !errors.Is(err, errNotEnrolled) {
 		t.Fatalf("a foreign enrolment was carried over: %v", err)
 	}
-	if _, sb, err := readSlot(tpm, slot); err != nil || sb.Version != CurrentBlobVersion {
-		t.Fatalf("slot without phones: version %v, %v", sb, err)
+	if _, sb, err := readSlot(tpm, slot); err != nil || sb.Payload.Attestation != nil {
+		t.Fatalf("slot sealed by another key: %+v, %v", sb, err)
 	}
 }
