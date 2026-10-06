@@ -22,6 +22,16 @@ type NVRAMSlot struct {
 	Code       string // TOTP code for the time of the scan, computed in the TPM
 	Error      error  // Why no code could be computed (if any)
 	Available  bool   // Whether the slot has data (even if no code could be computed)
+
+	// The boot display (tpm2-kira run) asks the TPM for the codes of the
+	// next codeHorizon before the OS separator runs: Codes are those, for
+	// consecutive windows from CodesFrom on. AfterSeparator marks a slot
+	// that got its first code only after the boot had been released, i.e.
+	// a blob whose policy holds after the separator: its codes are then
+	// computed live, as long as the policy holds, and the display says so.
+	Codes          []string
+	CodesFrom      time.Time
+	AfterSeparator bool
 }
 
 // NVRAMIndexExists performs a lightweight check whether the given NVRAM index
@@ -223,6 +233,10 @@ func slotErrorLine(err error) string {
 	switch {
 	case errors.Is(err, ErrCodesLocked):
 		return "Locked until reboot (codes are only shown before the disk is unlocked)"
+	case errors.Is(err, ErrSeparatorLocked):
+		return "Locked until the next boot (the OS separator ran after the measure point)"
+	case errors.Is(err, ErrCodesExhausted):
+		return "No further codes before the next boot (the codes computed before the OS separator ran out)"
 	case errors.As(err, &genErr):
 		if genErr.IndexMissing {
 			return "Generation index missing - reseal"
@@ -277,22 +291,7 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 							expected := expectedDigests[idx].Buffer
 							current := currentPCRValues[idx].Buffer
 
-							match := true
-							if len(expected) != len(current) {
-								match = false
-							} else {
-								for j := range expected {
-									if expected[j] != current[j] {
-										match = false
-										break
-									}
-								}
-							}
-
-							status := "✓ MATCH"
-							if !match {
-								status = "✗ CHANGED"
-							}
+							status := PCRStatus(expected, current)
 
 							source := sealedBlob.Payload.PCRDigests[idx].Source
 							fmt.Printf("  PCR%-2d (%s): %s - %s\n", pcrIndex, source.String(), GetPCRDescription(pcrIndex), status)
@@ -304,7 +303,11 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 			}
 		} else if code, exists := codes[slot.SlotNumber]; exists {
 			// Green slot number for successful reveal
-			fmt.Printf("\033[0;32m#%d\033[0m: %s\n", slot.SlotNumber, code)
+			fmt.Printf("\033[0;32m#%d\033[0m: %s", slot.SlotNumber, code)
+			if slot.AfterSeparator {
+				fmt.Print("  (computed after the boot was released: reseal to lock it before the OS separator)")
+			}
+			fmt.Println()
 		}
 	}
 }
@@ -379,135 +382,5 @@ func RevealCommand(tpmPath string, nvramIndex uint32, debug bool, plain bool) {
 		PrintPlainSlots(slots, codes)
 	} else {
 		PrintKIRASlots(tpmDev, slots, codes)
-	}
-}
-
-// RunCommand implements the run command functionality (continuous display)
-func RunCommand(tpmPath string, nvramIndex uint32, debug bool) {
-	var lastCodes map[int]string
-	var lastError error
-	var lastErrorTime time.Time
-	firstRun := true
-
-	lastCodes = make(map[int]string)
-
-	for {
-		// Open TPM
-		tpmDev, err := OpenTPM(tpmPath)
-		if err != nil {
-			currentTime := time.Now()
-			newError := fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
-
-			// Show error message if it's new or 30 seconds have passed
-			if lastError == nil || lastError.Error() != newError.Error() || currentTime.Sub(lastErrorTime) >= 30*time.Second {
-				PrintKIRAError(newError)
-				lastError = newError
-				lastErrorTime = currentTime
-			}
-
-			// Wait 30 seconds before retrying
-			time.Sleep(30 * time.Second)
-			continue
-		}
-
-		// Cleanup TPM memory
-		CleanupTPM(tpmDev, debug)
-
-		// Determine if we should scan all slots or just one
-		var slots []NVRAMSlot
-		if nvramIndex == 0 {
-			// Scan all slots in the default range when nvramIndex is 0
-			slots = ScanNVRAMSlots(tpmDev, debug)
-		} else {
-			// Scan only the specified index
-			slots = ScanNVRAMSlot(tpmDev, nvramIndex, debug)
-		}
-		tpmDev.Close()
-
-		if len(slots) == 0 {
-			currentTime := time.Now()
-			var newError error
-			if nvramIndex == 0 {
-				newError = fmt.Errorf("no TOTP secrets found in NVRAM slots 0x%08X - 0x%08X", NVRAMSlotStart, NVRAMSlotEnd)
-			} else {
-				newError = fmt.Errorf("no TOTP secret found at NVRAM index 0x%08X", nvramIndex)
-			}
-
-			// Show error message if it's new or 30 seconds have passed
-			if lastError == nil || lastError.Error() != newError.Error() || currentTime.Sub(lastErrorTime) >= 30*time.Second {
-				PrintKIRAError(newError)
-				lastError = newError
-				lastErrorTime = currentTime
-			}
-
-			// Wait 30 seconds before retrying
-			time.Sleep(30 * time.Second)
-			continue
-		}
-
-		// Generate TOTP codes for valid slots
-		newCodes, _ := GenerateTOTPCodesForSlots(slots)
-
-		// Check if any code has changed or it's the first run
-		hasNewCodes := firstRun
-		if !firstRun {
-			for slotNum, code := range newCodes {
-				if lastCodes[slotNum] != code {
-					hasNewCodes = true
-					break
-				}
-			}
-		}
-
-		// Always display: on first run, when codes change, or when we have slots (even with errors)
-		shouldDisplay := firstRun || hasNewCodes || len(slots) > 0
-
-		if shouldDisplay {
-			// Open TPM again for display (needed for PCR details)
-			tpmDev2, err := OpenTPM(tpmPath)
-			if err == nil {
-				// Display with colored KIRA format
-				PrintKIRASlots(tpmDev2, slots, newCodes)
-				tpmDev2.Close()
-			} else {
-				// Fallback: display without TPM access (no PCR details)
-				fmt.Printf("[ \033[1;33mKIRA\033[0m ] Time UTC %s\n", time.Now().UTC().Format("15:04:05"))
-				for _, slot := range slots {
-					if slot.Error != nil {
-						if line := slotErrorLine(slot.Error); line != "" {
-							fmt.Printf("\033[0;31m#%d\033[0m: %s\n", slot.SlotNumber, line)
-						} else {
-							fmt.Printf("\033[0;31m#%d\033[0m: PCR Mismatch\n", slot.SlotNumber)
-						}
-					} else if code, exists := newCodes[slot.SlotNumber]; exists {
-						fmt.Printf("\033[0;32m#%d\033[0m: %s\n", slot.SlotNumber, code)
-					}
-				}
-			}
-
-			// Add newline after each output in run mode
-			fmt.Println()
-
-			// Update last codes
-			lastCodes = newCodes
-			lastError = nil // Clear any previous error since we're successful
-			firstRun = false
-		}
-
-		// Calculate time to next TOTP window (30 second boundaries: :00 and :30)
-		now := time.Now()
-		currentSecond := now.Second()
-		var secondsToWait int
-
-		if currentSecond < 30 {
-			// Wait until :30
-			secondsToWait = 30 - currentSecond
-		} else {
-			// Wait until next :00
-			secondsToWait = 60 - currentSecond
-		}
-
-		// Sleep until the next TOTP window boundary
-		time.Sleep(time.Duration(secondsToWait) * time.Second)
 	}
 }

@@ -291,24 +291,27 @@ both happen before `cryptsetup-pre.target`: *after*
 `systemd-pcrphase-initrd.service` has extended `enter-initrd` into PCR 11,
 and *before* `systemd-pcrosseparator.service` extends `os-separator` into
 PCRs 0–7, 9, 12, 13, 14. `tpm2-kira.service` is ordered between the two and
-is `Type=notify`: it unseals every slot, then tells systemd it is ready, and
-only then does the separator run.
+is `Type=notify`: it asks the TPM for the codes of the next 30 minutes
+(the key's policy is re-run before each code, four cheap TPM commands), then
+tells systemd it is ready, and only then does the separator run.
 
-That order is what locks the secret. PCR extends are one-way, so once the
-separator has run, nothing in the booted system can reproduce the values the
-secret is sealed to — not root, not malware — until the next boot. The code
-is shown at the prompt from memory; `tpm2-kira reveal` on a running system
-reports the slot as *locked until the next boot*, which is the intended
-state. (The PolicySigned branch is unaffected: whoever holds the signing key
-can still unseal — keep it on a YubiKey, or at least off the machine.)
+That order is what locks the key for the rest of the boot. PCR extends are
+one-way, so once the separator has run, nothing in the booted system can
+satisfy the key's policy again — not root, not malware — until the next boot.
+The key never leaves the TPM; only the codes for the prompt are in memory,
+each good for 30 seconds. `tpm2-kira reveal` on a running system reports the
+slot as *locked until the next boot*, which is the intended state, and
+`tpm2-kira cap` read-locks the generation index at `initrd-switch-root` on
+top of that. (The signing key is outside the lock: whoever can use it can
+approve a new policy — keep it on a YubiKey, or at least off the machine.)
 
 Because the live registers at seal time already carry the separator, PCRs
 0–7, 9, 12–14 are sealed to values replayed from the firmware event log even
 when given as register source. Where the log cannot be replayed, `seal` warns
-and falls back to the registers: the secret then unlocks only after the
-separator, the display retries after the boot has been released, and marks
-the code accordingly. Blobs sealed by earlier versions (which ran after the
-separator) keep working the same way until they are resealed.
+and falls back to the registers: the key's policy then holds only after the
+separator, the display computes codes live after the boot has been released
+(until `cap`), and marks them accordingly. Blobs sealed by earlier versions
+(which ran after the separator) work the same way until they are resealed.
 
 Eventlog-derived values describe the *end of firmware*, so tpm2-kira adds
 `enter-initrd` on PCR 11 to reach the measure point. `--measure-point`

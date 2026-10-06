@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"hash"
 	"slices"
@@ -126,6 +127,27 @@ func MeasurePointWordsAt(point MeasurePoint, pcr int) []string {
 		return []string{EnterInitrdWord}
 	}
 	return nil
+}
+
+// ErrSeparatorLocked marks a slot whose sealed PCR values differ from the
+// registers only by the OS separator: the policy was checked before the
+// separator ran, and nothing can satisfy it again until the next boot.
+var ErrSeparatorLocked = errors.New("codes are locked until the next boot (the OS separator ran after the measure point)")
+
+// SeparatorLocked reports whether every differing PCR is the sealed value
+// plus the os-separator.
+func (e *PCRMismatchError) SeparatorLocked() bool {
+	differ := false
+	for i := range e.ExpectedDigests {
+		if i >= len(e.CurrentDigests) || bytes.Equal(e.ExpectedDigests[i], e.CurrentDigests[i]) {
+			continue
+		}
+		if !SeparatorLocked(e.ExpectedDigests[i], e.CurrentDigests[i]) {
+			return false
+		}
+		differ = true
+	}
+	return differ
 }
 
 // SeparatorLocked reports whether current is expected plus the os-separator:

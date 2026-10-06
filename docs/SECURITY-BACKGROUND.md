@@ -317,7 +317,10 @@ sequenceDiagram
     SD->>SD: enter-initrd into PCR 11
     Note over SD,KIRA: not in the firmware log — systemd logs these separately
 
-    KIRA-->>KIRA: MEASURE POINT: PCRRead / TPM2_HMAC, policy checked here
+    KIRA-->>KIRA: MEASURE POINT: policy + TPM2_HMAC per code for the next 30 min; READY=1
+
+    SD->>SD: os-separator into PCR 0-7, 9, 12, 13, 14
+    Note over SD: one-way: the key's policy is unsatisfiable until the next boot
 
     OS->>OS: leave-initrd, sysinit, ready into PCR 11
     OS->>OS: machine-id into PCR 15
@@ -470,27 +473,34 @@ Ordering is enforced so the measure point is deterministic:
 edges the measure point could land on either side of the extends, which would
 make an identical machine pass or fail across identical boots.
 
-Running *before* the separator is what makes the secret a boot-time secret.
-`tpm2-kira run` unseals every slot once, sends `READY=1`, and shows codes from
-memory for the rest of the prompt; the separator runs after READY and extends
+Running *before* the separator is what makes the codes boot-time codes.
+`tpm2-kira run` asks the TPM for the codes of the next 30 minutes (the TPM
+resets a policy session after each use, so the policy is re-run before each
+of the 60 `TPM2_HMAC` calls, with the approval's verification ticket reused:
+four cheap commands per code), sends `READY=1`, and shows them for the rest
+of the prompt; the separator runs after READY and extends
 PCRs 0–7, 9, 12–14. Extends are one-way, so from then on no process in the
-booted system can satisfy the PCR branch: root cannot read the TOTP secret
-out of the TPM at runtime, and a runtime compromise cannot turn into a forged
-code at the next boot. Earlier versions ran after the separator and re-checked
-the policy in a loop, which left the PCR branch satisfiable for the whole
-uptime. Blobs they sealed carry `os-separator` in their recorded extends and
-are still unsealed, after the boot has been released, so an upgrade does not
-lock anyone out; a reseal moves them before the separator.
+booted system can satisfy the key's policy: the key never left the TPM, only
+codes good for 30 seconds each were ever in memory, and a runtime compromise
+cannot turn into a forged code at the next boot. `tpm2-kira cap` at
+`initrd-switch-root` read-locks the generation index on top of that, which
+also covers blobs whose policy holds after the separator. Earlier versions
+ran after the separator and computed each code when it was due, which left
+the policy satisfiable until `cap`. Blobs they sealed carry `os-separator`
+in their recorded extends and still get codes, live, after the boot has been
+released, so an upgrade does not lock anyone out; a reseal moves them before
+the separator.
 
 The attestation gate (`tpm2-kira-attest.service`) stays *after* the
 separator: a quote is not a secret, post-separator values are a fixed function
 of pre-separator ones, and the gate advertises for a while during which it
 could not hold the separator back. Its baseline is predicted for that point.
 
-What the separator does not cover is the PolicySigned branch: whoever can use
-the signing key can unseal at any time. Keep it on a YubiKey, or at least off
-the machine; a key file in `/var/lib/tpm2-kira/keys` is the fallback, and with
-it a runtime root can still unseal through that branch.
+What the separator does not cover is the signing key: whoever can use it can
+approve a new policy for the current state and compute codes at any time.
+Keep it on a YubiKey (the intended setup), or at least off the machine; a key
+file in `/var/lib/tpm2-kira/keys` is the fallback, and with it a runtime root
+has that power.
 
 ---
 

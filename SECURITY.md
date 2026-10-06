@@ -83,25 +83,28 @@ booted system). Known residual risks:
 
 `tpm2-kira.service` checks its policy in the initrd *before*
 `systemd-pcrosseparator.service` extends PCRs 0–7, 9, 12–14, and is
-`Type=notify` so that the separator waits for that check. PCR extends are
-one-way: once the separator has run, no process in the booted system — root
-included — can satisfy the PCR branch again until the next boot. The code at
-the prompt is shown from memory; `tpm2-kira reveal` on the running system
-reports the slot as *locked until the next boot*. A runtime compromise can
-therefore not read the TOTP secret out of the TPM and replay a correct code
-at a later, tampered boot.
+`Type=notify` so that the separator waits for that check. The key is an HMAC
+key object that never leaves the TPM; before the separator the display asks
+the TPM for the codes of the next 30 minutes, and from then on holds nothing
+but those codes, each good for 30 seconds. PCR extends are one-way: once the
+separator has run, no process in the booted system — root included — can
+satisfy the key's policy again until the next boot; `tpm2-kira cap` read-locks
+the generation index at `initrd-switch-root` on top of that. `tpm2-kira
+reveal` on the running system reports the slot as *locked until the next
+boot*. A runtime compromise can therefore neither read the key nor compute a
+code to replay at a later, tampered boot.
 
 Two things fall outside that lock:
 
-- **The PolicySigned branch.** Whoever can use the signing key unseals at any
-  time. Keep it on a YubiKey (the intended setup); a key file under
-  `/var/lib/tpm2-kira/keys` is the fallback, better than no recovery path,
-  but with it a runtime root can unseal through that branch.
-- **Blobs sealed against post-separator values.** Blobs from versions that
+- **The signing key.** Whoever can use it can approve a new policy for the
+  current state and compute codes at any time. Keep it on a YubiKey (the
+  intended setup); a key file under `/var/lib/tpm2-kira/keys` is the fallback,
+  better than no recovery path, but with it a runtime root has that power.
+- **Blobs whose policy holds after the separator.** Blobs from versions that
   ran after the separator, and blobs sealed from registers because the event
-  log could not be replayed, still unseal after the boot has been released.
-  They work, the display marks their code, and a reseal moves them before the
-  separator where the log allows it.
+  log could not be replayed, get their codes live after the boot has been
+  released, until `cap`. They work, the display marks their code, and a reseal
+  moves them before the separator where the log allows it.
 
 ## Security Design
 
