@@ -317,7 +317,7 @@ sequenceDiagram
     SD->>SD: enter-initrd into PCR 11
     Note over SD,KIRA: not in the firmware log — systemd logs these separately
 
-    KIRA-->>KIRA: MEASURE POINT: policy + TPM2_HMAC for the current code; READY=1
+    KIRA-->>KIRA: MEASURE POINT: a fresh code per 30 s until Enter or 90 s; READY=1
 
     SD->>SD: os-separator into PCR 0-7, 9, 12, 13, 14
     Note over SD: one-way: the key's policy is unsatisfiable until the next boot
@@ -474,13 +474,15 @@ edges the measure point could land on either side of the extends, which would
 make an identical machine pass or fail across identical boots.
 
 Running *before* the separator is what makes the codes boot-time codes.
-`tpm2-kira run` asks the TPM for the current window's code, shows it, sends
-`READY=1`, and keeps it on the screen for the rest of its 30 seconds; the separator runs after READY and extends
+`tpm2-kira run` shows a fresh code every 30 seconds and asks whether it
+matches the authenticator; Enter, or the end of the 90-second hold, sends
+`READY=1` and the display exits; the separator runs after READY and extends
 PCRs 0–7, 9, 12–14. Extends are one-way, so from then on no process in the
-booted system can satisfy the key's policy: the key never left the TPM, a
-single code good for 30 seconds was ever in memory, so even the display
-process is worthless to an attacker half a minute later, and a runtime
-compromise cannot turn into a forged code at the next boot. `tpm2-kira cap` at
+booted system can satisfy the key's policy: the key never left the TPM, the
+display only ever held the code it was showing, and a runtime compromise
+cannot turn into a forged code at the next boot. Holding the boot costs
+nothing in security: during the hold only the measured initramfs runs, and
+the codes on the screen are the design. `tpm2-kira cap` at
 `initrd-switch-root` read-locks the generation index on top of that, which
 also covers blobs whose policy holds after the separator. Earlier versions
 ran after the separator and computed each code when it was due, which left

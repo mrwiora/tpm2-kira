@@ -23,14 +23,10 @@ type NVRAMSlot struct {
 	Error      error  // Why no code could be computed (if any)
 	Available  bool   // Whether the slot has data (even if no code could be computed)
 
-	// The boot display (tpm2-kira run) asks the TPM for the codes of the
-	// next codeHorizon before the OS separator runs: Codes are those, for
-	// consecutive windows from CodesFrom on. AfterSeparator marks a slot
-	// that got its first code only after the boot had been released, i.e.
-	// a blob whose policy holds after the separator: its codes are then
-	// computed live, as long as the policy holds, and the display says so.
-	Codes          []string
-	CodesFrom      time.Time
+	// AfterSeparator marks a slot that got its first code only after the
+	// boot display released the boot (tpm2-kira run), i.e. a blob whose
+	// policy holds after the OS separator: its codes are computed live for
+	// as long as the policy holds, and the display says so.
 	AfterSeparator bool
 }
 
@@ -235,8 +231,6 @@ func slotErrorLine(err error) string {
 		return "Locked until reboot (codes are only shown before the disk is unlocked)"
 	case errors.Is(err, ErrSeparatorLocked):
 		return "Locked until the next boot (the OS separator ran after the measure point)"
-	case errors.Is(err, ErrCodesExhausted):
-		return "No further codes before the next boot (the codes computed before the OS separator ran out)"
 	case errors.As(err, &genErr):
 		if genErr.IndexMissing {
 			return "Generation index missing - reseal"

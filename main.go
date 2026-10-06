@@ -322,12 +322,13 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	hold := fs.Uint("hold", uint(cmd.HoldDefault/time.Second), "Seconds to wait for Enter after showing the code before the boot continues on its own (0: at once)")
 
 	fs.Parse(args)
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	cmd.RunCommand(*tpm, scanIndex, *debug)
+	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *debug)
 }
 
 func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -526,7 +527,7 @@ COMMANDS:
   reseal      Reseal secret with current PCR values (requires signing key)
   reveal      Generate TOTP code with colored KIRA format
   reveal-plain Generate TOTP code (plain output)
-  run         Continuously display TOTP codes (runs until stopped)
+  run         Show the code at boot and wait for Enter (see RUN OPTIONS)
   cap         Lock code computation until the next reboot (run when leaving
               the initrd; the boot integration does this)
   info        Display sealed secret information
@@ -572,6 +573,13 @@ SEAL OPTIONS:
                      Use only if firmware eventlog does not provide SHA-256 digests
   --verify-uki       Check the built-in PCR 11 computation against this boot's
                      event log before sealing (default: true)
+
+RUN OPTIONS:
+  --hold S           Seconds to wait for Enter after showing the code before
+                     the boot continues on its own (default 90, 0: at once).
+                     While waiting, a fresh code is shown every 30 seconds;
+                     Enter releases the boot, after which no code can be
+                     computed until the next boot (the OS separator)
 
 RESEAL OPTIONS:
   --pcrs INDICES     New PCR indices with optional source suffix (optional,

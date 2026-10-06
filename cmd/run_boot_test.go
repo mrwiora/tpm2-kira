@@ -8,93 +8,168 @@ import (
 	"time"
 )
 
-// The boot display releases the boot (READY) only after it has asked the TPM
-// for every slot's codes; a slot that yields a code only afterwards is served
-// live and marked; a slot's precomputed codes run out at the horizon.
-func TestBootDisplayComputesCodesBeforeReleasingTheBoot(t *testing.T) {
-	var mu sync.Mutex
-	var log []string
-	clock := time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)
-	lives := 0
-	done := make(chan struct{})
-	var shown [][]NVRAMSlot
+// A fake environment for the boot display: a clock that advances on every
+// wait and sleep, and a script of Enter presses.
+type fakeBoot struct {
+	mu      sync.Mutex
+	clock   time.Time
+	log     []string
+	shown   [][]NVRAMSlot
+	enters  []bool // answers for successive waits
+	lives   int
+	stopped chan struct{} // closed when stop() ends the display
+}
 
-	b := &bootDisplay{
-		scan: func(from time.Time) ([]NVRAMSlot, error) {
-			mu.Lock()
-			log = append(log, "scan")
-			mu.Unlock()
-			return []NVRAMSlot{
-				{SlotNumber: 0, Index: NVRAMSlotStart, Available: true, Codes: []string{"111111", "222222"}, CodesFrom: from},
-				{SlotNumber: 1, Index: NVRAMSlotStart + 1, Available: true, Error: errors.New("PCR mismatch")},
-			}, nil
+func (f *fakeBoot) display(scan func(time.Time) []NVRAMSlot, live func(NVRAMSlot, time.Time) NVRAMSlot, stop func([]NVRAMSlot) bool) *bootDisplay {
+	return &bootDisplay{
+		scan: func(now time.Time) ([]NVRAMSlot, error) {
+			f.mu.Lock()
+			f.log = append(f.log, "scan")
+			f.mu.Unlock()
+			return scan(now), nil
 		},
 		live: func(s NVRAMSlot, now time.Time) NVRAMSlot {
-			mu.Lock()
-			log = append(log, "live")
-			lives++
-			n := lives
-			mu.Unlock()
-			if n < 2 {
-				return s
-			}
-			s.Error, s.Code = nil, "999999"
-			return s
+			f.mu.Lock()
+			f.log = append(f.log, "live")
+			f.lives++
+			f.mu.Unlock()
+			return live(s, now)
 		},
-		notify: func() {
-			mu.Lock()
-			log = append(log, "notify")
-			mu.Unlock()
-		},
-		show: func(slots []NVRAMSlot, codes map[int]string) {
-			mu.Lock()
-			log = append(log, "show")
-			shown = append(shown, append([]NVRAMSlot(nil), slots...))
-			exhausted := errors.Is(slots[0].Error, ErrCodesExhausted)
-			mu.Unlock()
-			if exhausted {
-				close(done)
+		notify: func() { f.mu.Lock(); f.log = append(f.log, "notify"); f.mu.Unlock() },
+		show: func(slots []NVRAMSlot, codes map[int]string, remaining time.Duration) {
+			f.mu.Lock()
+			f.log = append(f.log, "show")
+			f.shown = append(f.shown, append([]NVRAMSlot(nil), slots...))
+			f.mu.Unlock()
+			if stop != nil && stop(slots) {
+				close(f.stopped)
 				runtime.Goexit()
 			}
 		},
-		sleep: func(d time.Duration) { mu.Lock(); clock = clock.Add(d); mu.Unlock() },
-		now:   func() time.Time { mu.Lock(); defer mu.Unlock(); return clock },
+		wait: func(d time.Duration) bool {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.log = append(f.log, "wait")
+			if len(f.enters) > 0 {
+				enter := f.enters[0]
+				f.enters = f.enters[1:]
+				if enter {
+					f.clock = f.clock.Add(time.Second)
+					return true
+				}
+			}
+			f.clock = f.clock.Add(d)
+			return false
+		},
+		sleep: func(d time.Duration) { f.mu.Lock(); f.clock = f.clock.Add(d); f.mu.Unlock() },
+		now:   func() time.Time { f.mu.Lock(); defer f.mu.Unlock(); return f.clock },
 
-		scanRetry: 30 * time.Second, quickRetryFor: time.Minute, retryEvery: 2 * time.Second,
+		hold: 90 * time.Second, scanRetry: 30 * time.Second, quickRetryFor: time.Minute, retryEvery: 2 * time.Second,
 	}
-	go b.run()
+}
+
+func okSlot(now time.Time) []NVRAMSlot {
+	return []NVRAMSlot{{SlotNumber: 0, Index: NVRAMSlotStart, Available: true, Code: now.Format("150405")}}
+}
+
+// Enter releases the boot: READY after the code was shown, then the display
+// is done.
+func TestBootDisplayEnterReleasesTheBoot(t *testing.T) {
+	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC), enters: []bool{false, true}}
+	b := f.display(okSlot, nil, nil)
+	done := make(chan struct{})
+	go func() { b.run(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the display never ran out of precomputed codes")
+		t.Fatal("run did not return after Enter")
 	}
+	want := []string{"scan", "show", "wait", "scan", "show", "wait", "notify"}
+	if len(f.log) != len(want) {
+		t.Fatalf("log %v", f.log)
+	}
+	for i := range want {
+		if f.log[i] != want[i] {
+			t.Fatalf("step %d: got %q, want %q (log %v)", i, f.log[i], want[i], f.log)
+		}
+	}
+	if f.shown[0][0].Code == f.shown[1][0].Code {
+		t.Fatal("each window should show a fresh code")
+	}
+}
 
-	mu.Lock()
-	defer mu.Unlock()
-	// Two retries until the slot yields a code; it is then recomputed live
-	// when shown, like every window from here on.
-	for i, w := range []string{"scan", "notify", "show", "live", "live", "live", "show"} {
-		if log[i] != w {
-			t.Fatalf("step %d: got %q, want %q (log %v)", i, log[i], w, log)
+// Without Enter the hold runs out and the boot goes on by itself.
+func TestBootDisplayReleasesAfterTheHold(t *testing.T) {
+	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)}
+	b := f.display(okSlot, nil, nil)
+	done := make(chan struct{})
+	go func() { b.run(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return after the hold")
+	}
+	if f.log[len(f.log)-1] != "notify" || len(f.shown) < 3 {
+		t.Fatalf("expected several windows then READY: %v", f.log)
+	}
+	if got := f.clock.Sub(time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)); got < 90*time.Second || got > 91*time.Second {
+		t.Fatalf("held for %v, want 90 s", got)
+	}
+}
+
+// A slot with no code during the hold is served live after the release and
+// marked; a slot that was fine is then locked.
+func TestBootDisplayServesLateSlotsAfterRelease(t *testing.T) {
+	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC), enters: []bool{true}}
+	scan := func(now time.Time) []NVRAMSlot {
+		return []NVRAMSlot{
+			{SlotNumber: 0, Index: NVRAMSlotStart, Available: true, Code: "111111"},
+			{SlotNumber: 1, Index: NVRAMSlotStart + 1, Available: true, Error: errors.New("PCR mismatch")},
 		}
 	}
-	first := shown[0]
-	if first[0].Code != "111111" || first[0].AfterSeparator {
-		t.Fatalf("first window should show the first precomputed code: %+v", first[0])
-	}
-	second := shown[1]
-	if second[1].Code != "999999" || !second[1].AfterSeparator {
-		t.Fatalf("the retried slot is served live and marked: %+v", second[1])
-	}
-	last := shown[len(shown)-1]
-	if !errors.Is(last[0].Error, ErrCodesExhausted) || last[1].Code != "999999" {
-		t.Fatalf("after the horizon slot 0 is exhausted, the live slot continues: %+v", last)
-	}
-	// The second window still had a precomputed code.
-	for _, s := range shown[1 : len(shown)-1] {
-		if s[0].Code != "111111" && s[0].Code != "222222" {
-			t.Fatalf("precomputed codes should be served in order: %+v", s[0])
+	live := func(s NVRAMSlot, now time.Time) NVRAMSlot {
+		if s.SlotNumber == 0 {
+			s.Code, s.Error = "", ErrSeparatorLocked
+			return s
 		}
+		f.mu.Lock()
+		n := f.lives
+		f.mu.Unlock()
+		if n < 3 {
+			return s
+		}
+		s.Code, s.Error = "999999", nil
+		return s
+	}
+	stop := func(slots []NVRAMSlot) bool { return slots[1].Error == nil }
+	f.stopped = make(chan struct{})
+	b := f.display(scan, live, stop)
+	go b.run()
+	select {
+	case <-f.stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the late slot never came up")
+	}
+	last := f.shown[len(f.shown)-1]
+	if !last[1].AfterSeparator || last[1].Code != "999999" {
+		t.Fatalf("the late slot should be served live and marked: %+v", last[1])
+	}
+	if !errors.Is(last[0].Error, ErrSeparatorLocked) {
+		t.Fatalf("the confirmed slot is locked after the release: %+v", last[0])
+	}
+	seen := false
+	for i, e := range f.log {
+		if e == "notify" {
+			seen = true
+			for _, before := range f.log[:i] {
+				if before == "live" {
+					t.Fatal("nothing is served live before the release")
+				}
+			}
+		}
+	}
+	if !seen {
+		t.Fatal("READY was never sent")
 	}
 }
 

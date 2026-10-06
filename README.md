@@ -291,16 +291,18 @@ both happen before `cryptsetup-pre.target`: *after*
 `systemd-pcrphase-initrd.service` has extended `enter-initrd` into PCR 11,
 and *before* `systemd-pcrosseparator.service` extends `os-separator` into
 PCRs 0–7, 9, 12, 13, 14. `tpm2-kira.service` is ordered between the two and
-is `Type=notify`: it asks the TPM for the current window's code, shows it,
-tells systemd it is ready, and only then does the separator run. The code is
-good for the rest of its 30-second window; after that the prompt says so,
-and the next code needs the next boot.
+is `Type=notify`: while it holds READY back, the PCRs still hold the sealed
+values, so it shows a fresh code every 30 seconds and asks whether it
+matches your authenticator. Enter continues to the passphrase, and so does
+the end of the hold (90 seconds by default, `tpm2-kira run --hold`), so a
+boot nobody watches goes on by itself. READY is sent then, the separator
+runs, and no code can be computed until the next boot.
 
 That order is what locks the key for the rest of the boot. PCR extends are
 one-way, so once the separator has run, nothing in the booted system can
 satisfy the key's policy again — not root, not malware — until the next boot.
-The key never leaves the TPM; a single code is ever in memory, good for
-30 seconds. `tpm2-kira reveal` on a running system reports the
+The key never leaves the TPM; the display holds nothing but the code it is
+showing, good for 30 seconds. `tpm2-kira reveal` on a running system reports the
 slot as *locked until the next boot*, which is the intended state, and
 `tpm2-kira cap` read-locks the generation index at `initrd-switch-root` on
 top of that. (The signing key is outside the lock: whoever can use it can

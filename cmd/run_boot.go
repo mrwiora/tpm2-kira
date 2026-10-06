@@ -4,22 +4,24 @@ package cmd
 //
 // tpm2-kira.service orders itself after systemd-pcrphase-initrd.service
 // (enter-initrd on PCR 11) and before systemd-pcrosseparator.service, and is
-// Type=notify. Before READY=1 it asks the TPM for the codes of the next
-// codeHorizon (TOTPCodes); the separator then extends
-// os-separator into PCRs 0-7, 9, 12-14, after which the key's policy cannot
-// be satisfied again until the next boot. The key never leaves the TPM; only
-// those codes are in memory, each good for 30 seconds, and the display shows
-// them for as long as the prompt is up. 'tpm2-kira cap' at initrd-switch-root
+// Type=notify. While it holds READY=1 back, the PCRs still hold the sealed
+// values, so it asks the TPM for a fresh code every 30 seconds and shows it
+// with a question: does it match the authenticator? Enter sends READY=1,
+// and so does the end of the hold (90 seconds by default), so a boot nobody
+// watches continues on its own. The separator then extends os-separator into
+// PCRs 0-7, 9, 12-14, after which the key's policy cannot be satisfied again
+// until the next boot; the key never left the TPM, and the display has
+// nothing left to show, so it exits. 'tpm2-kira cap' at initrd-switch-root
 // read-locks the generation index on top of that.
 //
-// A slot that yields no code before the boot is released is retried
-// afterwards: a blob whose policy holds only after the separator (sealed by
-// an earlier version, or from registers because the event log cannot be
+// A slot that yields no code during the hold is served after the boot is
+// released: a blob whose policy holds only after the separator (sealed by an
+// earlier version, or from registers because the event log cannot be
 // replayed) then gets its codes live, window by window, and the display
 // says so.
 
 import (
-	"errors"
+	"bufio"
 	"fmt"
 	"net"
 	"os"
@@ -28,55 +30,100 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
-// codeHorizon is how far ahead the display computes codes before the OS
-// separator: one window, the current one. A firmware TPM takes noticeably
-// long per policy pass, so one code is computed and shown at once; it is
-// good for the rest of its 30-second window, and nothing is left for
-// anyone who gets hold of the display process later. Whoever needs a code
-// after that needs the next boot.
-const codeHorizon = 30 * time.Second
-
-// ErrCodesExhausted: the codes computed before the separator ran out.
-var ErrCodesExhausted = errors.New("no further codes before the next boot: the codes computed before the OS separator ran out")
+// HoldDefault is how long the display waits for Enter before it releases
+// the boot on its own.
+const HoldDefault = 90 * time.Second
 
 // bootDisplay is RunCommand with its environment pluggable for tests.
 type bootDisplay struct {
-	scan   func(from time.Time) ([]NVRAMSlot, error) // every slot, with its codes from 'from' on
-	live   func(NVRAMSlot, time.Time) NVRAMSlot      // one code for now, computed in the TPM
-	notify func()                                    // tells systemd the policies have been checked
-	show   func([]NVRAMSlot, map[int]string)
+	scan   func(now time.Time) ([]NVRAMSlot, error) // every slot, with its code for now
+	live   func(NVRAMSlot, time.Time) NVRAMSlot     // one slot's code for now
+	notify func()                                   // tells systemd the boot may go on
+	show   func(slots []NVRAMSlot, codes map[int]string, remaining time.Duration)
+	wait   func(d time.Duration) bool // true: Enter was pressed within d
 	sleep  func(time.Duration)
 	now    func() time.Time
 
+	hold          time.Duration // how long to wait for Enter
 	scanRetry     time.Duration // between attempts while nothing can be shown
-	quickRetryFor time.Duration // failed slots are retried every retryEvery this long,
+	quickRetryFor time.Duration // after the release, failed slots are retried every retryEvery this long,
 	retryEvery    time.Duration // then once per TOTP window
 }
 
 func (b *bootDisplay) run() {
-	slots, err := b.scan(b.now())
-	notified := false
-	for err != nil {
-		PrintKIRAError(err)
-		if !notified {
-			// Never hold the boot for a missing TPM or an empty NVRAM.
-			b.notify()
-			notified = true
-		}
-		b.sleep(b.scanRetry)
-		slots, err = b.scan(b.now())
+	slots, allUp := b.holdForConfirmation()
+	b.notify()
+	if allUp {
+		return // every slot was confirmed or at least shown; nothing more can be computed
 	}
-	if !notified {
-		b.notify()
+	b.serveAfterRelease(slots)
+}
+
+// holdForConfirmation shows a fresh code per window until Enter or the end
+// of the hold, and reports the last slots and whether all of them had a
+// code. A scan that fails outright releases the boot at once.
+func (b *bootDisplay) holdForConfirmation() ([]NVRAMSlot, bool) {
+	deadline := b.now().Add(b.hold)
+	var slots []NVRAMSlot
+	allUp := false
+	for {
+		now := b.now()
+		s, err := b.scan(now)
+		if err != nil {
+			PrintKIRAError(err)
+			return slots, false
+		}
+		slots = s
+		allUp = true
+		for _, sl := range slots {
+			if sl.Error != nil {
+				allUp = false
+			}
+		}
+		codes, _ := GenerateTOTPCodesForSlots(slots)
+		b.show(slots, codes, deadline.Sub(now))
+		d := nextTOTPBoundary(now).Sub(now)
+		if left := deadline.Sub(now); left < d {
+			d = left
+		}
+		if d <= 0 || b.wait(d) {
+			return slots, allUp
+		}
+		if !b.now().Before(deadline) {
+			return slots, allUp
+		}
+	}
+}
+
+// serveAfterRelease keeps the display up for slots that had no code during
+// the hold: once the separator has run, a blob sealed against
+// post-separator values yields its codes live. Slots that were fine during
+// the hold are now locked and shown as such.
+func (b *bootDisplay) serveAfterRelease(slots []NVRAMSlot) {
+	for len(slots) == 0 {
+		b.sleep(b.scanRetry)
+		s, err := b.scan(b.now())
+		if err != nil {
+			PrintKIRAError(err)
+			continue
+		}
+		slots = s
+	}
+	failed := map[int]bool{}
+	for _, s := range slots {
+		failed[s.SlotNumber] = s.Error != nil
 	}
 	quickUntil := b.now().Add(b.quickRetryFor)
 	for {
 		now := b.now()
 		for i := range slots {
-			b.refresh(&slots[i], now)
+			slots[i] = b.live(slots[i], now)
+			if slots[i].Error == nil && failed[slots[i].SlotNumber] {
+				slots[i].AfterSeparator = true
+			}
 		}
 		codes, _ := GenerateTOTPCodesForSlots(slots)
-		b.show(slots, codes)
+		b.show(slots, codes, -1)
 		boundary := nextTOTPBoundary(now)
 		for b.now().Before(boundary) {
 			step := boundary.Sub(b.now())
@@ -84,41 +131,20 @@ func (b *bootDisplay) run() {
 				step = b.retryEvery
 			}
 			b.sleep(step)
-			if b.now().Before(quickUntil) && b.retryFailed(slots) {
+			if b.now().Before(quickUntil) && b.retryFailed(slots, failed) {
 				break // a slot came up: show it now
 			}
 		}
-		if !b.now().Before(quickUntil) {
-			b.retryFailed(slots)
-		}
 	}
 }
 
-// refresh sets the slot's code for the window containing now: from the
-// codes computed before the separator, or live for a slot that only works
-// after it.
-func (b *bootDisplay) refresh(s *NVRAMSlot, now time.Time) {
-	switch {
-	case s.AfterSeparator:
-		*s = b.live(*s, now)
-	case len(s.Codes) > 0:
-		i := now.Unix()/30 - s.CodesFrom.Unix()/30
-		if i >= 0 && i < int64(len(s.Codes)) {
-			s.Code, s.Error = s.Codes[i], nil
-		} else {
-			s.Code, s.Error = "", ErrCodesExhausted
-		}
-	}
-}
-
-// retryFailed gives every failed slot another try and reports whether one
-// came up. A slot that only yields a code now was not locked by the
-// separator, so it is served live from here on.
-func (b *bootDisplay) retryFailed(slots []NVRAMSlot) bool {
+// retryFailed gives every slot that had no code during the hold another
+// try and reports whether one came up.
+func (b *bootDisplay) retryFailed(slots []NVRAMSlot, failed map[int]bool) bool {
 	changed := false
 	now := b.now()
 	for i, s := range slots {
-		if s.Error == nil || s.AfterSeparator || errors.Is(s.Error, ErrCodesExhausted) {
+		if s.Error == nil || !failed[s.SlotNumber] {
 			continue
 		}
 		if _, ok := IsBlobVersionError(s.Error); ok {
@@ -161,8 +187,25 @@ func sdNotifyReady() {
 	_, _ = conn.Write([]byte("READY=1\n"))
 }
 
-// RunCommand implements the run command (continuous display at boot).
-func RunCommand(tpmPath string, nvramIndex uint32, debug bool) {
+// enterPresses reports every line typed on stdin. Without a terminal
+// (stdin closed or not a tty) nothing is ever reported, so the hold runs
+// its course.
+func enterPresses() <-chan struct{} {
+	ch := make(chan struct{})
+	go func() {
+		r := bufio.NewReader(os.Stdin)
+		for {
+			if _, err := r.ReadString('\n'); err != nil {
+				return
+			}
+			ch <- struct{}{}
+		}
+	}()
+	return ch
+}
+
+// RunCommand implements the run command (the display at boot).
+func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, debug bool) {
 	open := func() (transport.TPMCloser, error) {
 		tpmDev, err := OpenTPM(tpmPath)
 		if err != nil {
@@ -171,9 +214,9 @@ func RunCommand(tpmPath string, nvramIndex uint32, debug bool) {
 		CleanupTPM(tpmDev, debug)
 		return tpmDev, nil
 	}
-	windows := int(codeHorizon / (30 * time.Second))
+	enter := enterPresses()
 	b := &bootDisplay{
-		scan: func(from time.Time) ([]NVRAMSlot, error) {
+		scan: func(now time.Time) ([]NVRAMSlot, error) {
 			tpmDev, err := open()
 			if err != nil {
 				return nil, err
@@ -191,17 +234,6 @@ func RunCommand(tpmPath string, nvramIndex uint32, debug bool) {
 				}
 				return nil, fmt.Errorf("no TOTP secret found at NVRAM index 0x%08X", nvramIndex)
 			}
-			for i := range slots {
-				if slots[i].Error != nil {
-					continue
-				}
-				codes, _, err := SlotCodes(tpmDev, slots[i].Index, from, windows, debug)
-				if err != nil {
-					slots[i].Code, slots[i].Error = "", err
-					continue
-				}
-				slots[i].Codes, slots[i].CodesFrom = codes, from
-			}
 			return slots, nil
 		},
 		live: func(s NVRAMSlot, now time.Time) NVRAMSlot {
@@ -215,17 +247,31 @@ func RunCommand(tpmPath string, nvramIndex uint32, debug bool) {
 			return s
 		},
 		notify: sdNotifyReady,
-		show: func(slots []NVRAMSlot, codes map[int]string) {
+		show: func(slots []NVRAMSlot, codes map[int]string, remaining time.Duration) {
 			if tpmDev, err := open(); err == nil {
 				PrintKIRASlots(tpmDev, slots, codes) // with PCR details
 				tpmDev.Close()
 			} else {
 				printSlotsWithoutTPM(slots, codes)
 			}
+			if remaining >= 0 {
+				fmt.Println()
+				fmt.Println("   Does the code match your authenticator? Press Enter to continue to the passphrase.")
+				fmt.Printf("   (continues on its own in %d s)\n", int(remaining.Round(time.Second)/time.Second))
+			}
 			fmt.Println()
+		},
+		wait: func(d time.Duration) bool {
+			select {
+			case <-enter:
+				return true
+			case <-time.After(d):
+				return false
+			}
 		},
 		sleep:         time.Sleep,
 		now:           time.Now,
+		hold:          hold,
 		scanRetry:     30 * time.Second,
 		quickRetryFor: time.Minute,
 		retryEvery:    2 * time.Second,

@@ -84,9 +84,10 @@ booted system). Known residual risks:
 `tpm2-kira.service` checks its policy in the initrd *before*
 `systemd-pcrosseparator.service` extends PCRs 0–7, 9, 12–14, and is
 `Type=notify` so that the separator waits for that check. The key is an HMAC
-key object that never leaves the TPM; before the separator the display asks
-the TPM for the current window's code and from then on holds nothing but
-that, good for 30 seconds. PCR extends are one-way: once the
+key object that never leaves the TPM; while the display holds the boot (a
+fresh code every 30 seconds until Enter or 90 seconds), the policy is still
+satisfiable, and the moment it releases the boot it exits. PCR extends are
+one-way: once the
 separator has run, no process in the booted system — root included — can
 satisfy the key's policy again until the next boot; `tpm2-kira cap` read-locks
 the generation index at `initrd-switch-root` on top of that. `tpm2-kira
