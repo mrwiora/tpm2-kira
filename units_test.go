@@ -54,6 +54,7 @@ func TestGateUnitIsConfined(t *testing.T) {
 		"IPAddressDeny=any",
 		"DevicePolicy=closed",
 		"ProtectSystem=strict",
+		"ProtectKernelTunables=yes",
 		"MemoryDenyWriteExecute=yes",
 		"SystemCallFilter=@system-service",
 		"SystemCallFilter=~@privileged",
@@ -70,8 +71,8 @@ func TestGateUnitIsConfined(t *testing.T) {
 		}
 	}
 	// Bluetooth sockets exist only in the initial network namespace, and
-	// the adapter's USB power control is a sysfs write.
-	for _, bad := range []string{"PrivateNetwork=yes", "PrivateDevices=yes", "ProtectKernelTunables=yes"} {
+	// the TPM is a device.
+	for _, bad := range []string{"PrivateNetwork=yes", "PrivateDevices=yes"} {
 		if has(lines, bad) {
 			t.Errorf("gate unit has %q, which breaks it", bad)
 		}

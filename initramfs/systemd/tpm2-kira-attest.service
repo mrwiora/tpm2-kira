@@ -53,9 +53,10 @@ DeviceAllow=/dev/tpmrm0 rw
 DeviceAllow=/dev/tpm0 rw
 DeviceAllow=/dev/rfkill rw
 DeviceAllow=/dev/console rw
-# File system: read-only. /sys stays writable (not ProtectKernelTunables=):
-# the adapter's USB power control is switched there while it is in use.
+# File system: read-only, /sys and /proc/sys included. The gate only reads
+# there (adapter and rfkill state, the event log, the Secure Boot variables).
 ProtectSystem=strict
+ProtectKernelTunables=yes
 ProtectHome=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
