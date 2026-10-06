@@ -161,8 +161,9 @@ func signerForImage(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer, d
 func verifyBeforeExtending(signed []byte, pubKey crypto.PublicKey, slot uint32) error {
 	if err := VerifyAttestBlobSignature(signed, pubKey); err != nil {
 		return fmt.Errorf("the attestation blob in slot %d is not signed by your signing key (%v): "+
-			"it was replaced outside tpm2-kira. Inspect it with 'tpm2-kira attest status'; to start over, "+
-			"run 'tpm2-kira attest unenrol --nvram %d' and enrol again", slot, err, slot)
+			"it was replaced outside tpm2-kira, or is left over from an installation with another signing key. "+
+			"Inspect it with 'tpm2-kira attest status'; to start over, run 'tpm2-kira attest unenrol --nvram %d' "+
+			"(or 'tpm2-kira nvram delete' to remove everything tpm2-kira keeps in the TPM) and enrol again", slot, err, slot)
 	}
 	return nil
 }

@@ -157,7 +157,7 @@ If called without a command, tpm2-kira defaults to `reveal`.
 | `info` | Display metadata about the sealed key, its approval and its generation (`--json` for machine-readable output) |
 | `nvram list` | List NVRAM indices |
 | `nvram status` | Show NVRAM index status |
-| `nvram delete` | Delete sealed data from NVRAM |
+| `nvram delete` | Delete a slot's TOTP key, or everything tpm2-kira keeps in the TPM (TOTP keys, phone enrolments, leftovers) |
 | `attest enrol` | Bind a phone to this machine over Bluetooth LE (see [Remote attestation](#remote-attestation-with-a-phone-experimental)) |
 | `attest gate` | Serve attestation requests until a phone returns a signed verdict |
 | `attest status` | Show which phones are enrolled per slot, and whether the blob is signed by this machine's key (`--json`) |
@@ -444,10 +444,28 @@ blob itself, so consumers never have to branch on the slot count.
 ## Deleting Sealed Data
 
 ```bash
-tpm2-kira nvram delete              # all populated slots: asks to type 'yes'
-tpm2-kira nvram delete --yes        # all populated slots, without asking
-tpm2-kira nvram delete --nvram 0    # deletes a specific slot
+tpm2-kira nvram delete              # everything tpm2-kira keeps in the TPM: asks to type 'yes'
+tpm2-kira nvram delete --yes        # the same, without asking
+tpm2-kira nvram delete --nvram 0    # the TOTP key of one slot
+tpm2-kira attest unenrol --nvram 0  # the phone enrolment of one slot
 ```
+
+A slot is a number (0-15), not one place in the TPM. Each slot can have up to
+four NV indices, which `nvram list` labels:
+
+| NV index (slot *n*) | What it holds | Written by |
+|---|---|---|
+| `0x01803010` + *n* | the TOTP key | `seal`, `reseal` |
+| `0x01803810` + *n* | the TOTP key's generation index | `seal`, `reseal` |
+| `0x01803020` + *n* | the phone enrolment (attestation record) | `attest enrol` |
+| `0x01803820` + *n* | the phone enrolment's record counter | `attest enrol`, `attest unenrol` |
+
+`nvram delete` without `--nvram` removes all of them for every slot, including
+what an earlier installation left behind: a phone enrolment signed by a
+signing key that no longer exists (which `attest enrol` refuses to add a phone
+to), or a counter whose record is gone. With `--nvram` it removes one slot's
+TOTP key and generation index, and says so if that slot still has a phone
+enrolled.
 
 ## Remote attestation with a phone (experimental)
 

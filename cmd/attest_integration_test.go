@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/matthias/tpm2-kira/attest"
 	"github.com/matthias/tpm2-kira/attest/attesttest"
@@ -478,6 +479,83 @@ func TestCoordinatorAndWorker(t *testing.T) {
 	}
 	if st, _ := refused.Status(); st.State != GateRefused {
 		t.Fatalf("coordinator status %+v", st)
+	}
+}
+
+// TestStaleEnrolmentCanBeRemoved: a phone enrolment that another
+// installation's signing key wrote stays in the TPM when the system is
+// reinstalled. 'attest enrol' refuses to build on it; both ways of getting
+// rid of it must work without that key, and 'nvram delete' must see it even
+// when no TOTP key is sealed.
+func TestStaleEnrolmentCanBeRemoved(t *testing.T) {
+	sock := startSWTPM(t)
+	s := newSWTPMSetupAt(t, sock, "swtpm-box")
+	previous, current := testSigner(t), testSigner(t)
+	rec0, rec5 := uint32(AttestNVRAMStart), uint32(AttestNVRAMStart+5)
+	s.blob.Verifiers = []attest.EnrolledVerifier{{ID: "old-phone", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
+	for _, idx := range []uint32{rec0, rec5} {
+		if err := writeAttestBlob(s.tpm, idx, s.blob, previous); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, _ := ReadFromNVRAM(s.tpm, rec0)
+	if err := verifyBeforeExtending(raw, &current.PublicKey, 0); err == nil || !strings.Contains(err.Error(), "nvram delete") {
+		t.Fatalf("enrol on a foreign record: %v", err)
+	}
+	exists := func(idx uint32) bool {
+		t.Helper()
+		tpmDev, err := transport.OpenTPM(sock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tpmDev.Close()
+		return NVRAMIndexExists(tpmDev, idx)
+	}
+	s.tpm.Close() // the commands open the TPM themselves; swtpm serves one client
+
+	// One slot: 'attest unenrol'. The record goes; the counter stays, raised.
+	if err := AttestUnenrol(sock, NVRAMSlotStart, false); err != nil {
+		t.Fatalf("unenrol of a foreign record: %v", err)
+	}
+	if exists(rec0) || !exists(AttestCounterIndex(rec0)) {
+		t.Fatalf("after unenrol: record %v, counter %v", exists(rec0), exists(AttestCounterIndex(rec0)))
+	}
+
+	// Everything: 'nvram delete'. No TOTP key is sealed here; it must find
+	// the other enrolment and the counter that unenrol left.
+	if err := NVRAMDeleteCommand(sock, 0, true, false); err != nil {
+		t.Fatalf("nvram delete: %v", err)
+	}
+	for _, idx := range []uint32{rec0, rec5, AttestCounterIndex(rec0), AttestCounterIndex(rec5)} {
+		if exists(idx) {
+			t.Fatalf("0x%08X (%s) survived 'nvram delete'", idx, kiraIndexRole(idx))
+		}
+	}
+	// Nothing left: it says so instead of claiming success.
+	if err := NVRAMDeleteCommand(sock, 0, true, false); err == nil || !strings.Contains(err.Error(), "nothing of tpm2-kira") {
+		t.Fatalf("second nvram delete: %v", err)
+	}
+
+	// A fresh enrolment works again, and a record put back from before
+	// the cleanup does not pass: the new counter is above the old one.
+	tpmDev, err := transport.OpenTPM(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tpmDev.Close()
+	if err := writeAttestBlob(tpmDev, rec0, s.blob, current); err != nil {
+		t.Fatalf("enrolling after the cleanup: %v", err)
+	}
+	der, _ := x509.MarshalPKIXPublicKey(&previous.PublicKey)
+	oldKey := filepath.Join(t.TempDir(), "old.pub")
+	if err := os.WriteFile(oldKey, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteToNVRAM(tpmDev, rec0, raw, previous.Public(), previous); err != nil {
+		t.Fatal(err)
+	}
+	if verified, code := gateRecordCheck(tpmDev, rec0, oldKey); verified || code != ExitTampered {
+		t.Fatalf("the record from before the cleanup was accepted again (verified=%v, exit %d)", verified, code)
 	}
 }
 
