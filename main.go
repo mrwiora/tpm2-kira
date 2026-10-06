@@ -396,6 +396,7 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 	case "enrol", "enroll":
 		name := fs.String("name", "", "Name shown on the phone (default: hostname)")
 		pcrs := fs.String("pcrs", "", "PCRs to quote (default: the slot's sealed selection, else 0,2,4,7)")
+		sha1 := fs.Bool("sha1", false, "Quote the SHA-1 PCR bank instead of SHA-256 (only for a TPM without a SHA-256 bank, or a slot sealed with --sha1)")
 		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
 		privKey := fs.String("privkey", "", "Signing key for the attestation blob (default: the slot's, else "+cmd.DefaultPrivateKeyPath+")")
 		timeout := fs.Duration("timeout", 10*time.Minute, "Give up after this long (0 = wait forever)")
@@ -411,7 +412,7 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 			failAttest(cmd.ExitUsage, err)
 		}
 		err = cmd.AttestEnrol(cmd.EnrolOptions{
-			TPMPath: *tpm, SealIndex: uint32(*nvram), Name: *name, PCRs: *pcrs,
+			TPMPath: *tpm, SealIndex: uint32(*nvram), Name: *name, PCRs: *pcrs, SHA1: *sha1,
 			Adapter: *adapter, PrivKeyPath: *privKey, Timeout: *timeout, Debug: *debug,
 			VerifyTPM: vt, VerifyPhone: vp,
 		})
@@ -614,6 +615,9 @@ ATTEST SUBCOMMANDS:
   attest enrol    Bind a phone to this slot over BLE (booted system; needs the
                   signing key). Prints a 6-digit code to compare with the app.
                   --name STR --pcrs LIST --adapter N --privkey PATH --timeout DUR
+                  --sha1  quote the SHA-1 PCR bank instead of SHA-256. Required,
+                          as for 'seal', where nothing else works: a TPM without
+                          a SHA-256 bank, or a slot sealed with --sha1
                   --verify-tpm warn|require|off    this machine's TPM genuine (EK certificate)?
                   --verify-phone warn|require|off  the phone's key in genuine secure hardware
                                                    (Android key attestation, Google roots)?

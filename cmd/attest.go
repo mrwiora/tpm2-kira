@@ -159,6 +159,7 @@ type EnrolOptions struct {
 	SealIndex   uint32
 	Name        string
 	PCRs        string
+	SHA1        bool // quote the SHA-1 bank; never chosen without it
 	Adapter     int
 	PrivKeyPath string
 	Timeout     time.Duration
@@ -215,13 +216,18 @@ func AttestEnrol(o EnrolOptions) error {
 			return err
 		}
 	}
+	if blob != nil && o.SHA1 && blob.PCRAlg != attest.AlgSHA1 {
+		return fmt.Errorf("slot %d is already enrolled with the SHA-256 bank, which every phone of the slot shares; "+
+			"drop --sha1, or start over with 'tpm2-kira attest unenrol --nvram %d'", idx-AttestNVRAMStart, idx-AttestNVRAMStart)
+	}
 
 	if blob == nil {
-		alg := attest.AlgSHA256
 		pcrs := o.PCRs
+		var sealedAlg uint16
 		if sealed != nil {
+			sealedAlg = attest.AlgSHA256
 			if sealed.GetHashAlgo() == PCRHashAlgoSHA1 {
-				alg = attest.AlgSHA1
+				sealedAlg = attest.AlgSHA1
 			}
 			if pcrs == "" {
 				var parts []string
@@ -234,14 +240,11 @@ func AttestEnrol(o EnrolOptions) error {
 		if pcrs == "" {
 			pcrs = "0,2,4,7"
 		}
-		// Without a sealed slot to follow, the bank is SHA-256 - unless
-		// this TPM has none (old firmware TPMs offer SHA-1 only).
-		alg, note, err := chooseAttestBank(alg, sealed != nil, func(a PCRHashAlgo) bool { return TPMHasPCRBank(tpmDev, a) })
+		// SHA-256, unless --sha1 says otherwise: like 'seal', SHA-1 is
+		// never picked for the user, not even where nothing else works.
+		alg, err := chooseAttestBank(o.SHA1, sealedAlg, func(a PCRHashAlgo) bool { return TPMHasPCRBank(tpmDev, a) })
 		if err != nil {
 			return err
-		}
-		if note != "" {
-			fmt.Println(note)
 		}
 		sel, err := parseAttestPCRs(pcrs, alg)
 		if err != nil {
@@ -284,6 +287,9 @@ func AttestEnrol(o EnrolOptions) error {
 	sel, err := blob.Selection()
 	if err != nil {
 		return err
+	}
+	if sel.Alg == attest.AlgSHA1 {
+		warnAboutSHA1Quote()
 	}
 	// Find out now whether the TPM can quote this selection, not after the
 	// radio is taken and a human has compared codes.
@@ -502,26 +508,41 @@ func AttestGate(o GateOptions) int {
 	return runGateRadio(newGateService(tpmDev, o.SealIndex, o.SignerPath, o.Debug), o, step, nil)
 }
 
-// chooseAttestBank settles the PCR bank of a new enrolment. A sealed slot
-// decided it already (fromSeal). Otherwise the default, SHA-256, stands
-// wherever the TPM has that bank; only a TPM without it gets SHA-1.
-func chooseAttestBank(alg uint16, fromSeal bool, has func(PCRHashAlgo) bool) (uint16, string, error) {
-	hashAlgo := PCRHashAlgoSHA256
-	if alg == attest.AlgSHA1 {
-		hashAlgo = PCRHashAlgoSHA1
+// chooseAttestBank settles the PCR bank of a new enrolment: SHA-256, or
+// SHA-1 when --sha1 was given. The slot's seal (sealedAlg, 0 without one)
+// and the TPM must agree; where they do not, the answer is the command to
+// run instead, never another bank.
+func chooseAttestBank(sha1 bool, sealedAlg uint16, has func(PCRHashAlgo) bool) (uint16, error) {
+	const stopgap = "WARNING: SHA-1 is broken against collision attacks and is deprecated for\n" +
+		"new deployments. Prefer a TPM with a SHA-256 PCR bank, and treat this as a stopgap."
+	alg, hashAlgo := uint16(attest.AlgSHA256), PCRHashAlgoSHA256
+	if sha1 {
+		alg, hashAlgo = attest.AlgSHA1, PCRHashAlgoSHA1
+	}
+	if sealedAlg == attest.AlgSHA1 && !sha1 {
+		return 0, fmt.Errorf("the slot is sealed against the SHA-1 PCR bank, and its phone enrolment quotes the same registers.\n"+
+			"Say so explicitly:\n\n    tpm2-kira attest enrol --sha1\n\n%s", stopgap)
+	}
+	if sealedAlg == attest.AlgSHA256 && sha1 {
+		return 0, errors.New("the slot is sealed against the SHA-256 PCR bank, and its phone enrolment quotes the same registers; drop --sha1")
 	}
 	if has(hashAlgo) {
-		return alg, "", nil
+		return alg, nil
 	}
-	if alg == attest.AlgSHA256 && !fromSeal && has(PCRHashAlgoSHA1) {
-		return attest.AlgSHA1, "NOTE: this TPM has no SHA-256 PCR bank; the SHA-1 bank is quoted instead.\n" +
-			"      SHA-1 is deprecated: a stopgap for TPMs that offer nothing else.", nil
+	if !sha1 && has(PCRHashAlgoSHA1) {
+		return 0, fmt.Errorf("this TPM has no SHA-256 PCR bank to quote.\n"+
+			"The only remaining option is the SHA-1 bank:\n\n    tpm2-kira attest enrol --sha1\n\n%s", stopgap)
 	}
-	name := "SHA-256"
-	if alg == attest.AlgSHA1 {
-		name = "SHA-1"
-	}
-	return 0, "", fmt.Errorf("this TPM has no %s PCR bank to quote", name)
+	return 0, fmt.Errorf("this TPM has no %s PCR bank to quote", hashAlgo.DisplayString())
+}
+
+// warnAboutSHA1Quote is 'attest enrol's counterpart of WarnAboutHashAlgo.
+func warnAboutSHA1Quote() {
+	fmt.Println("WARNING: the phone will check the SHA-1 PCR bank.")
+	fmt.Println("  SHA-1 is broken against collision attacks and TPMs are not required to")
+	fmt.Println("  provide a SHA-1 bank at all. Use it only where the TPM offers no SHA-256")
+	fmt.Println("  bank, and treat it as a stopgap.")
+	fmt.Println()
 }
 
 // gateCoordinatorWait is how long the worker waits for the coordinator's

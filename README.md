@@ -480,6 +480,8 @@ the change on the phone. The OTP path stays and remains the fallback.
 # Once, on the booted system (needs the signing key and a Bluetooth adapter):
 sudo tpm2-kira attest enrol --name "Thinkpad-X1"
 #   compare the 6-digit code on the console with the app, confirm on both
+#   A TPM without a SHA-256 PCR bank, or a slot sealed with --sha1, needs
+#   --sha1 here as well: SHA-1 is never chosen without being asked for.
 
 # Serve an attestation (lazy mode: shows the verdict, never blocks):
 sudo tpm2-kira attest gate
