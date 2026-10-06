@@ -42,6 +42,59 @@ func ExtendWord(alg uint16, value []byte, word string) ([]byte, error) {
 	return h.Sum(nil), nil
 }
 
+// OSSeparatorWord is what systemd-pcrosseparator.service extends, in the
+// initrd before the disk is unlocked, into OSSeparatorPCRs (its ExecStart;
+// systemd 262). The machine's boot check starts before that and goes on
+// after it, so a quote of one and the same boot can show either state.
+const OSSeparatorWord = "os-separator"
+
+// OSSeparatorPCRs are the registers systemd-pcrosseparator.service extends.
+var OSSeparatorPCRs = []uint8{0, 1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14}
+
+// SameBootState reports whether two values of one PCR describe the same
+// measured boot: equal, or, on a register the OS separator is extended into,
+// one of them is the other plus exactly that separator.
+//
+// The separator is a constant that systemd adds to every boot, so it says
+// nothing about what was booted: code that differs gives a register value
+// that differs, and no number of separators leads from one to the other
+// short of a hash collision. Both directions are accepted because a profile
+// may have been recorded at either moment (at enrolment after the separator,
+// by "approve and remember" at whichever moment the phone was asked).
+func SameBootState(idx uint8, a, b []byte) bool {
+	if bytes.Equal(a, b) {
+		return len(a) > 0
+	}
+	if len(a) != len(b) || !isOSSeparatorPCR(idx) {
+		return false
+	}
+	var alg uint16
+	switch len(a) {
+	case 20:
+		alg = AlgSHA1
+	case 32:
+		alg = AlgSHA256
+	default:
+		return false
+	}
+	if ext, err := ExtendWord(alg, a, OSSeparatorWord); err == nil && bytes.Equal(ext, b) {
+		return true
+	}
+	if ext, err := ExtendWord(alg, b, OSSeparatorWord); err == nil && bytes.Equal(ext, a) {
+		return true
+	}
+	return false
+}
+
+func isOSSeparatorPCR(idx uint8) bool {
+	for _, i := range OSSeparatorPCRs {
+		if i == idx {
+			return true
+		}
+	}
+	return false
+}
+
 // CheckMeasurePointValues verifies a predicted boot-check baseline against
 // the TPM-signed live values of the same selection. Every predicted value
 // must equal the live one, except PCR 11: there the live value must be

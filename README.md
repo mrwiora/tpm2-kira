@@ -298,6 +298,13 @@ the end of the hold (90 seconds by default, `tpm2-kira run --hold`), so a
 boot nobody watches goes on by itself. READY is sent then, the separator
 runs, and no code can be computed until the next boot.
 
+A slot that is enrolled with a phone (see *Remote attestation*) is verified
+by the phone instead: the Bluetooth gate runs next to the display from the
+start, and the phone's verdict continues to the passphrase like Enter does.
+The code stays on the screen for when the phone is not at hand. If nobody
+answers, the gate keeps asking at the passphrase prompt until the disk is
+unlocked.
+
 That order is what locks the key for the rest of the boot. PCR extends are
 one-way, so once the separator has run, nothing in the booted system can
 satisfy the key's policy again — not root, not malware — until the next boot.

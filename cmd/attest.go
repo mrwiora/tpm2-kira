@@ -441,6 +441,7 @@ func confirmCode(in *bufio.Reader, code string) (bool, error) {
 type GateOptions struct {
 	TPMPath     string
 	SignerPath  string // the signing public key in the initramfs; "" = DefaultAttestSignerPath
+	StatusPath  string // where the code screen reads the gate's state; "" = nowhere (gate_status.go)
 	SealIndex   uint32 // 0 = first enrolled slot
 	Adapter     int
 	Timeout     time.Duration // 0 = wait forever
@@ -484,9 +485,18 @@ func AttestGate(o GateOptions) int {
 		}
 		idx = found[0]
 	}
+	// The code screen shows the gate's state for this slot next to its code.
+	status := GateStatus{Slot: int(idx - AttestNVRAMStart)}
+	report := func(state GateState, phone string) {
+		status.State, status.Phone = state, phone
+		writeGateStatus(o.StatusPath, status)
+	}
 	step("attestation record at 0x%08X; checking its signature and count", idx)
 	recordVerified, code := gateRecordCheck(tpmDev, idx, o.SignerPath)
 	if code != 0 {
+		if code == ExitTampered {
+			report(GateRefused, "")
+		}
 		return code
 	}
 	step("record check done (verified: %v)", recordVerified)
@@ -519,6 +529,7 @@ func AttestGate(o GateOptions) int {
 	p, err := ble.Open(ble.Config{Adapter: o.Adapter, UnblockRFKill: true, Wait: o.AdapterWait, Logf: debugLogf(o.Debug)})
 	if err != nil {
 		gateFail("%v", err)
+		report(GateUnavailable, "")
 		return ExitUnavailable
 	}
 	defer p.Close()
@@ -529,21 +540,38 @@ func AttestGate(o GateOptions) int {
 		Info:        attestInfo(infoModeAttest, id.Capabilities),
 	}
 	fmt.Printf("tpm2-kira: waiting for attestation of %q (open the app on your phone)\n", blob.FriendlyName)
+	report(GateWaiting, "")
 
 	res, err := waitForReceipt(p, adv, o.Timeout, func(conn *frame.Conn) (*attest.AttestResult, error) {
-		return attest.ServeAttestation(conn, id, be, debugProgress(o.Debug))
+		report(GateSession, "")
+		res, err := attest.ServeAttestation(conn, id, be, debugProgress(o.Debug))
+		if res == nil || res.Receipt == nil {
+			report(GateWaiting, "") // the gate advertises again
+		}
+		return res, err
 	}, os.Stdout, time.Now)
 	if errors.Is(err, errNoPhoneReachable) {
 		gateFail("phone not reachable: no phone connected over Bluetooth within %s.\n"+
 			"tpm2-kira:   This is not a TPM or boot-integrity failure. Check that the phone\n"+
 			"tpm2-kira:   is close to this machine, Bluetooth is on and the Kira app is open.", o.Timeout)
+		report(GateUnavailable, "")
 		return ExitUnavailable
 	}
 	if err != nil {
 		gateFail("%v", err)
+		report(GateUnavailable, "")
 		return ExitUnavailable
 	}
-	return reportReceipt(blob, res, recordVerified)
+	code = reportReceipt(blob, res, recordVerified)
+	switch code {
+	case ExitAttested:
+		report(GateAttested, verifierName(res.Verifier))
+	case ExitRejected:
+		report(GateRejected, verifierName(res.Verifier))
+	default:
+		report(GateRefused, "")
+	}
+	return code
 }
 
 // gateRetryInterval is one advertising round of the gate: when no phone has

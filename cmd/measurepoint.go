@@ -104,8 +104,9 @@ const (
 	// after systemd-pcrphase-initrd's enter-initrd on PCR 11 and before the
 	// separator. Only enter-initrd is applied to a replayed value.
 	MeasurePointBeforeSeparator MeasurePoint = iota
-	// MeasurePointAfterSeparator: the attestation gate, which keeps
-	// advertising while the boot goes on, and blobs sealed by versions that
+	// MeasurePointAfterSeparator: the attestation baseline (the gate asks
+	// from before the separator until the disk is unlocked, and the phone
+	// takes both states for one boot), and blobs sealed by versions that
 	// ran the display after the separator. os-separator is applied too.
 	MeasurePointAfterSeparator
 )

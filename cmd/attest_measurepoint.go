@@ -51,9 +51,10 @@ func predictMeasurePoint(tpmDev transport.TPM, sealed *SealedBlob, sel attest.PC
 	if sel.Alg == attest.AlgSHA1 {
 		algo = PCRHashAlgoSHA1
 	}
-	// The gate runs after the OS separator (unlike the display, which runs
-	// before it so the separator locks the TOTP secret): its quotes carry
-	// os-separator, and so must the baseline.
+	// The baseline is the state after the OS separator: that is the one the
+	// running system's registers can vouch for (CheckMeasurePointValues).
+	// The gate also quotes before the separator, while the code is shown;
+	// the phone takes both for the same boot (attest.SameBootState).
 	res, err := ReadPCRValues(tpmDev, specs, algo, mode, MeasurePointAfterSeparator, debug)
 	if err != nil {
 		return &measurePoint{err: err}

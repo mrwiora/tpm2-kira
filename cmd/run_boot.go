@@ -14,6 +14,13 @@ package cmd
 // nothing left to show, so it exits. 'tpm2-kira cap' at initrd-switch-root
 // read-locks the generation index on top of that.
 //
+// A slot that is enrolled with a phone is verified by that phone instead:
+// the Bluetooth gate (tpm2-kira-attest.service) runs next to this display
+// from the start, and a verdict from the phone releases the boot the way
+// Enter does. The code stays on the screen all the same, as the fallback
+// when the phone is not at hand. The gate is another process (confined by
+// its unit); the display reads its state from a file (gate_status.go).
+//
 // A slot that yields no code during the hold is served after the boot is
 // released: a blob whose policy holds only after the separator (sealed by an
 // earlier version, or from registers because the event log cannot be
@@ -45,6 +52,12 @@ type bootDisplay struct {
 	sleep  func(time.Duration)
 	now    func() time.Time
 
+	// The Bluetooth gate, when one runs next to the display; nil otherwise.
+	phone      func() (GateStatus, bool)  // its state for the slot it serves
+	phoneEvent func(prev, cur GateStatus) // tells the user about a change
+	phonePoll  time.Duration              // how often the state is looked at
+	phoneGrace time.Duration              // how far a session in progress may extend the hold
+
 	hold          time.Duration // how long to wait for Enter
 	scanRetry     time.Duration // between attempts while nothing can be shown
 	quickRetryFor time.Duration // after the release, failed slots are retried every retryEvery this long,
@@ -68,13 +81,24 @@ func (b *bootDisplay) run() {
 // ErrNoSlots: no NVRAM slot holds a TOTP key.
 var ErrNoSlots = errors.New("no TOTP key is sealed")
 
-// holdForConfirmation shows a fresh code per window until Enter or the end
-// of the hold, and reports the last slots and whether all of them had a
-// code. A scan that fails outright releases the boot at once, with its error.
+// holdForConfirmation shows a fresh code per window until the boot is
+// confirmed - Enter, or the enrolled phone accepting it - or the hold ends,
+// and reports the last slots and whether all of them had a code. A scan
+// that fails outright releases the boot at once, with its error.
 func (b *bootDisplay) holdForConfirmation() ([]NVRAMSlot, bool, error) {
 	deadline := b.now().Add(b.hold)
 	var slots []NVRAMSlot
+	var gate GateStatus
 	allUp := false
+	// A phone that is in the middle of its session when the hold ends gets
+	// to finish: releasing the boot under it would change the registers
+	// between its question and its answer.
+	limit := func() time.Time {
+		if gate.State == GateSession {
+			return deadline.Add(b.phoneGrace)
+		}
+		return deadline
+	}
 	for {
 		now := b.now()
 		s, err := b.scan(now)
@@ -90,16 +114,57 @@ func (b *bootDisplay) holdForConfirmation() ([]NVRAMSlot, bool, error) {
 			}
 		}
 		codes, _ := GenerateTOTPCodesForSlots(slots)
-		b.show(slots, codes, deadline.Sub(now))
-		d := nextTOTPBoundary(now).Sub(now)
-		if left := deadline.Sub(now); left < d {
-			d = left
+		// What the prompt is about to say needs no announcement of its own.
+		if cur, ok := gateStatus(b.phone); ok && cur.Asking() {
+			gate = cur
 		}
-		if d <= 0 || b.wait(d) {
-			return slots, allUp, nil
+		remaining := limit().Sub(now)
+		if remaining < 0 {
+			remaining = 0
 		}
-		if !b.now().Before(deadline) {
-			return slots, allUp, nil
+		b.show(slots, codes, remaining)
+		boundary := nextTOTPBoundary(now)
+		for {
+			until := boundary
+			if l := limit(); l.Before(until) {
+				until = l
+			}
+			enter := b.waitFor(until, &gate)
+			if enter || gate.State == GateAttested {
+				return slots, allUp, nil
+			}
+			now := b.now()
+			if !now.Before(limit()) {
+				return slots, allUp, nil
+			}
+			if !now.Before(boundary) {
+				break // a new code
+			}
+		}
+	}
+}
+
+// waitFor waits until the given time, and reports Enter. While it waits it
+// follows the gate: a change of its state is announced and ends the wait.
+func (b *bootDisplay) waitFor(until time.Time, gate *GateStatus) bool {
+	for {
+		if cur, ok := gateStatus(b.phone); ok && cur != *gate {
+			prev := *gate
+			*gate = cur
+			if b.phoneEvent != nil {
+				b.phoneEvent(prev, cur)
+			}
+			return false
+		}
+		left := until.Sub(b.now())
+		if left <= 0 {
+			return false
+		}
+		if b.phone != nil && b.phonePoll > 0 && left > b.phonePoll {
+			left = b.phonePoll
+		}
+		if b.wait(left) {
+			return true
 		}
 	}
 }
@@ -224,7 +289,18 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, debug boo
 		return tpmDev, nil
 	}
 	enter := enterPresses()
+	// The gate reports to the display only where both are started for the
+	// same boot: in a systemd initrd. Anywhere else a status file would be
+	// a leftover.
+	var phone func() (GateStatus, bool)
+	if _, err := os.Stat("/etc/initrd-release"); err == nil {
+		phone = func() (GateStatus, bool) { return ReadGateStatus(DefaultGateStatusPath) }
+	}
 	b := &bootDisplay{
+		phone:      phone,
+		phoneEvent: printGateEvent,
+		phonePoll:  500 * time.Millisecond,
+		phoneGrace: time.Minute,
 		scan: func(now time.Time) ([]NVRAMSlot, error) {
 			tpmDev, err := open()
 			if err != nil {
@@ -265,7 +341,12 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, debug boo
 			}
 			if remaining >= 0 {
 				fmt.Println()
-				fmt.Println("   Does the code match your authenticator? Press Enter to continue to the passphrase.")
+				if st, ok := gateStatus(phone); ok && st.Asking() {
+					fmt.Printf("   Slot #%d is enrolled with a phone: open the Kira app to verify this boot.\n", st.Slot)
+					fmt.Println("   Without the phone: compare the code with your authenticator and press Enter.")
+				} else {
+					fmt.Println("   Does the code match your authenticator? Press Enter to continue to the passphrase.")
+				}
 				fmt.Printf("   (continues on its own in %d s)\n", int(remaining.Round(time.Second)/time.Second))
 			}
 			fmt.Println()
@@ -286,6 +367,37 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, debug boo
 		retryEvery:    2 * time.Second,
 	}
 	b.run()
+}
+
+func gateStatus(phone func() (GateStatus, bool)) (GateStatus, bool) {
+	if phone == nil {
+		return GateStatus{}, false
+	}
+	return phone()
+}
+
+// printGateEvent tells the person at the console what the gate's change of
+// state means for them. The verdict itself is printed by the gate.
+func printGateEvent(prev, cur GateStatus) {
+	switch cur.State {
+	case GateWaiting:
+		if prev.State == "" {
+			fmt.Printf("   Slot #%d can be verified with your phone now: open the Kira app.\n", cur.Slot)
+		}
+	case GateSession:
+		fmt.Println("   A phone is connected: answer there. The boot waits for it.")
+	case GateAttested:
+		fmt.Printf("   \033[0;32mSlot #%d verified with %s.\033[0m Continuing to the passphrase.\n", cur.Slot, phoneLabel(cur.Phone))
+	case GateRejected, GateRefused:
+		fmt.Printf("   \033[0;31mSlot #%d was NOT verified by the phone (see above).\033[0m Do not type your passphrase unless you know why.\n", cur.Slot)
+	}
+}
+
+func phoneLabel(name string) string {
+	if name == "" {
+		return "your phone"
+	}
+	return name
 }
 
 // printSlotsWithoutTPM is the display when the TPM cannot be opened for the

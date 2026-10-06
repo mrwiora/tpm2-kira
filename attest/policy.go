@@ -1,7 +1,6 @@
 package attest
 
 import (
-	"bytes"
 	"encoding/hex"
 	"fmt"
 	"time"
@@ -72,10 +71,12 @@ func (p *Profile) usable(now time.Time) bool {
 }
 
 // matches reports whether values satisfy the profile for every selected PCR.
+// A register may be before or after systemd's OS separator (SameBootState):
+// the machine asks from before the separator until the disk is unlocked.
 func (p *Profile) matches(sel []uint8, values map[uint8][]byte) bool {
 	for _, idx := range sel {
 		want, ok := p.Values[idx]
-		if !ok || !bytes.Equal(want, values[idx]) {
+		if !ok || !SameBootState(idx, want, values[idx]) {
 			return false
 		}
 	}
@@ -86,7 +87,7 @@ func (p *Profile) matches(sel []uint8, values map[uint8][]byte) bool {
 func (p *Profile) diffCount(sel []uint8, values map[uint8][]byte) int {
 	n := 0
 	for _, idx := range sel {
-		if want, ok := p.Values[idx]; !ok || !bytes.Equal(want, values[idx]) {
+		if want, ok := p.Values[idx]; !ok || !SameBootState(idx, want, values[idx]) {
 			n++
 		}
 	}

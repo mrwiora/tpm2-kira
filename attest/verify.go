@@ -143,7 +143,7 @@ func Verify(ev *Evidence, pol *Policy, pin *PinnedIdentity, expectedQD []byte, n
 			v.DiffAgainst = closest.Name
 			for _, idx := range sel.Indices {
 				want := closest.Values[idx]
-				if !bytes.Equal(want, values[idx]) {
+				if !SameBootState(idx, want, values[idx]) {
 					v.PCRDiff = append(v.PCRDiff, PCRDiff{
 						Index:       idx,
 						Expected:    hex.EncodeToString(want),

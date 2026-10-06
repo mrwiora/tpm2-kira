@@ -123,6 +123,23 @@ in the image only when attestation is enabled and a phone is enrolled. On
 initramfs-tools (Debian) the gate is started by a script and is not confined
 this way.
 
+The gate runs next to the TOTP display, and a phone's verdict releases the
+boot to the passphrase prompt the way Enter does. The gate reports its state
+to the display through one line in its own runtime directory
+(`/run/tpm2-kira-attest/status`), the one path it may write. The display
+accepts a fixed set of states and a slot number from it and reduces the
+phone's name to printable characters. A subverted gate could therefore claim
+a verdict on the console and end the hold early; it could do the first
+through its own output before, and the second gains nothing: the hold only
+decides when the passphrase prompt appears, and what counts is the phone's
+screen, never the console.
+
+The phone accepts a register that differs from its profile by exactly one
+`os-separator` extend (PCRs 0-7, 9, 12-14), because the gate asks from
+before systemd's OS separator until the disk is unlocked. That constant is
+part of every boot and says nothing about what was booted; code that differs
+gives registers that differ, before the separator and after it.
+
 ## The TOTP secret on a running system
 
 `tpm2-kira.service` checks its policy in the initrd *before*

@@ -5,7 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/matthias/tpm2-kira/cmd"
@@ -447,6 +449,7 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 		os.Exit(cmd.AttestGate(cmd.GateOptions{
 			TPMPath: *tpm, SealIndex: slot, Adapter: cfg.Adapter, Timeout: cfg.Timeout,
 			AdapterWait: cfg.AdapterWait, Debug: *debug || cfg.Debug,
+			StatusPath: gateStatusPath(),
 		}))
 	case "initramfs-deps":
 		// Used by the initramfs hooks; prints "module", "firmware" and
@@ -707,4 +710,15 @@ EXAMPLES:
 
 For detailed documentation, see README.md
 `, cmd.DefaultPublicKeyPath, cmd.PINEnvVar)
+}
+
+// gateStatusPath is where the gate reports its state to the code screen:
+// in the runtime directory systemd gives its unit. Run by hand there is
+// none, and nothing is written.
+func gateStatusPath() string {
+	dir := os.Getenv("RUNTIME_DIRECTORY")
+	if dir == "" || strings.Contains(dir, ":") {
+		return ""
+	}
+	return filepath.Join(dir, filepath.Base(cmd.DefaultGateStatusPath))
 }

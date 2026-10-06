@@ -8,9 +8,12 @@ ConditionPathExists=/etc/initrd-release
 # The resource-managed node, like the display.
 Requires=dev-tpmrm0.device
 After=dev-tpmrm0.device
-# Quotes must describe the gate's measure point (PLAN-BLE.md §3.3); ordering
-# against a unit that never starts is a no-op.
-After=systemd-pcrosseparator.service
+# Started together with the code screen (tpm2-kira.service), not after it: a
+# slot enrolled with a phone is verified by the phone while the code is
+# shown, and the phone's verdict releases the boot like Enter does. The gate
+# keeps asking after that, until the disk is unlocked. Its quotes therefore
+# come from before or after systemd-pcrosseparator.service; the phone treats
+# both as the same boot (PLAN-BLE.md §3.3). enter-initrd is in PCR 11 by then.
 After=systemd-pcrphase-initrd.service
 # The image lists the adapter's driver modules in modules-load.d.
 After=systemd-modules-load.service
@@ -34,6 +37,11 @@ StandardError=journal+console
 # FAILED line next to the warning; nothing requires this unit, so the boot
 # carries on either way.
 SuccessExitStatus=3
+
+# Where the gate tells the code screen its state (one line: waiting, phone
+# connected, verdict). Kept after the gate has exited with its verdict.
+RuntimeDirectory=tpm2-kira-attest
+RuntimeDirectoryPreserve=yes
 
 # Confinement. This process parses radio input from anyone in range, as root,
 # before the disk is unlocked. It needs the TPM, one Bluetooth adapter and the

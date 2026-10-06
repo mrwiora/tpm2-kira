@@ -485,7 +485,9 @@ The machine therefore predicts the measure-point values with the same code
 the TOTP seal uses (event log replay, the unified kernel image, the
 measure-point extends) and sends them as `measure_point_values`. The phone
 pins those as the "enrolment baseline" profile (`added_by` =
-`enrolment (values at the boot check)`) and still verifies `quoted` over
+`enrolment (values at the boot check)`; they carry systemd's `os-separator`,
+like the registers of the running system they are checked against) and still
+verifies `quoted` over
 `pcr_values` for the AK proof. The prediction is not TPM-signed, so the phone
 ties it to the quote: every value MUST equal the quoted one, except PCR 11,
 where the quoted value MUST be reachable from the predicted one by extending
@@ -571,6 +573,16 @@ Bye has no fields. Error: 1 `code` u16 R · 2 `message` string ≤256 O.
 
 A reject needs no proof: believing a false "no" costs a check, never trust.
 Rejects are therefore sent without an unlock prompt.
+
+**Matching a profile.** A quoted PCR matches a profile's value when the two
+are equal, or, for PCRs 0-7, 9, 12, 13 and 14 only, when one is the other
+extended once with the bank's digest of the word `os-separator`. The machine
+asks from before `systemd-pcrosseparator.service` until the disk is unlocked,
+and that unit extends this constant into those PCRs of every boot, so both
+values describe the same measured boot. The rule holds in both directions
+because a profile may have been recorded at either moment, and per PCR
+because a quote may be taken while the unit runs. PCRs listed as changed in a
+diff are those that do not match under this rule.
 
 ---
 

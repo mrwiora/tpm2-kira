@@ -69,6 +69,18 @@ func TestGateUnitIsConfined(t *testing.T) {
 	if !has(lines, "StandardOutput=journal+console") || !has(lines, "StandardError=journal+console") {
 		t.Error("the gate's output does not reach the journal")
 	}
+	// The gate runs next to the code screen, not after it: a slot enrolled
+	// with a phone is verified while the code is shown. Its one writable
+	// path is where it reports its state to that screen.
+	if has(lines, "After=systemd-pcrosseparator.service") {
+		t.Error("the gate waits for the OS separator, i.e. for the code screen to end")
+	}
+	if !has(lines, "After=systemd-pcrphase-initrd.service") {
+		t.Error("the gate may quote before enter-initrd is in PCR 11")
+	}
+	if !has(lines, "RuntimeDirectory=tpm2-kira-attest") || !has(lines, "RuntimeDirectoryPreserve=yes") {
+		t.Error("the gate has nowhere to report its state to the code screen")
+	}
 	// What the gate cannot work without.
 	for _, want := range []string{"DeviceAllow=/dev/tpmrm0 rw", "DeviceAllow=/dev/rfkill rw", "DeviceAllow=/dev/console rw"} {
 		if !has(lines, want) {

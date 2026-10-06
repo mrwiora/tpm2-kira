@@ -188,14 +188,26 @@ there is exactly one service, two characteristics and no security manager
 
 ### 3.3 Ordering and the measure point
 
-The BLE stack must come up *after* the userspace extends that define the
-gate's measure point (SECURITY-BACKGROUND.md §5.8). The unit therefore keeps
-`After=systemd-pcrosseparator.service` and
-`After=systemd-pcrphase-initrd.service`, and adds `Before=cryptsetup-pre.target`.
-The TOTP display, by contrast, runs *before* the separator so that the
-separator locks the secret; a quote is not a secret and post-separator values
-follow from pre-separator ones, so the gate need not hold the separator back
-while it advertises.
+The gate starts together with the TOTP display, `After=systemd-pcrphase-initrd.service`
+(`enter-initrd` is in PCR 11 by then), and keeps advertising until the
+initramfs ends. The display holds `systemd-pcrosseparator.service` back until
+the boot is confirmed, so the gate's quotes come from *before* the separator
+while the code is on the screen and from *after* it at the passphrase prompt.
+
+Both are the same boot. The separator is a constant systemd extends into
+PCRs 0-7, 9, 12-14 of every boot, so the verifier treats a register that
+differs from a profile by exactly one `os-separator` extend, in either
+direction, as equal (`attest.SameBootState`, PROTOCOL-BLE.md §7.5). Different
+code gives different registers before the separator and after it alike.
+
+A slot that is enrolled with a phone is verified by the phone instead of by
+comparing the code: the phone's verdict releases the boot the way Enter does.
+The code stays on the screen as the fallback, and so does the end of the hold
+(lazy mode never holds the boot). The gate is a separate, confined process;
+it tells the display its state through one line in its runtime directory
+(`/run/tpm2-kira-attest/status`), which the display parses as input. A phone
+that is in the middle of its session when the hold ends extends it by at most
+a minute, so the registers do not change between its question and its answer.
 
 The enrolment baseline must describe the same point: `attest enrol` runs in
 the booted system, where PCR 11 already carries systemd's later phases, so it

@@ -205,3 +205,133 @@ func TestNextTOTPBoundary(t *testing.T) {
 		t.Fatalf("from :31 got %v", got)
 	}
 }
+
+// A gate next to the display: its state is scripted by the fake clock.
+func (f *fakeBoot) withGate(b *bootDisplay, at func(elapsed time.Duration) (GateStatus, bool)) (*[]GateStatus, time.Time) {
+	start := f.clock
+	events := &[]GateStatus{}
+	b.phone = func() (GateStatus, bool) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return at(f.clock.Sub(start))
+	}
+	b.phoneEvent = func(_, cur GateStatus) { *events = append(*events, cur) }
+	b.phonePoll = time.Second
+	b.phoneGrace = time.Minute
+	return events, start
+}
+
+func runDisplay(t *testing.T, b *bootDisplay) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { b.run(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the display did not release the boot")
+	}
+}
+
+func notified(f *fakeBoot) bool {
+	for _, l := range f.log {
+		if l == "notify" {
+			return true
+		}
+	}
+	return false
+}
+
+// A slot enrolled with a phone is verified by the phone: its verdict
+// releases the boot without Enter, and the code was on the screen meanwhile.
+func TestPhoneVerdictReleasesTheBoot(t *testing.T) {
+	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)}
+	b := f.display(okSlot, nil, nil)
+	events, start := f.withGate(b, func(e time.Duration) (GateStatus, bool) {
+		switch {
+		case e < 3*time.Second:
+			return GateStatus{}, false // the gate is still starting
+		case e < 8*time.Second:
+			return GateStatus{Slot: 0, State: GateWaiting}, true
+		case e < 12*time.Second:
+			return GateStatus{Slot: 0, State: GateSession}, true
+		}
+		return GateStatus{Slot: 0, State: GateAttested, Phone: "Pixel"}, true
+	})
+	runDisplay(t, b)
+	if got := f.clock.Sub(start); got < 12*time.Second || got > 14*time.Second {
+		t.Fatalf("released after %s, want at the phone's verdict (12 s)", got)
+	}
+	if len(f.shown) == 0 || f.shown[0][0].Code == "" {
+		t.Fatal("the code was not shown while the phone was asked")
+	}
+	var states []GateState
+	for _, e := range *events {
+		states = append(states, e.State)
+	}
+	if len(states) != 3 || states[0] != GateWaiting || states[1] != GateSession || states[2] != GateAttested {
+		t.Fatalf("announced %v", states)
+	}
+	if !notified(f) {
+		t.Fatal("no READY")
+	}
+}
+
+// A phone that rejects the boot does not release it early; the hold runs
+// its course, as it does when nobody answers (lazy mode holds nothing back).
+func TestPhoneRejectionDoesNotReleaseEarly(t *testing.T) {
+	for _, state := range []GateState{GateRejected, GateRefused, GateUnavailable, GateWaiting} {
+		f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)}
+		b := f.display(okSlot, nil, nil)
+		_, start := f.withGate(b, func(e time.Duration) (GateStatus, bool) {
+			if e < 5*time.Second {
+				return GateStatus{Slot: 0, State: GateWaiting}, true
+			}
+			return GateStatus{Slot: 0, State: state, Phone: "Pixel"}, true
+		})
+		runDisplay(t, b)
+		if got := f.clock.Sub(start); got != 90*time.Second {
+			t.Fatalf("%s: released after %s, want the full hold", state, got)
+		}
+	}
+}
+
+// A phone in the middle of its session when the hold ends may finish, for a
+// bounded time.
+func TestPhoneSessionExtendsTheHold(t *testing.T) {
+	gate := func(verdictAt time.Duration) func(time.Duration) (GateStatus, bool) {
+		return func(e time.Duration) (GateStatus, bool) {
+			switch {
+			case e < 85*time.Second:
+				return GateStatus{Slot: 0, State: GateWaiting}, true
+			case verdictAt > 0 && e >= verdictAt:
+				return GateStatus{Slot: 0, State: GateAttested, Phone: "Pixel"}, true
+			}
+			return GateStatus{Slot: 0, State: GateSession}, true
+		}
+	}
+	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)}
+	b := f.display(okSlot, nil, nil)
+	_, start := f.withGate(b, gate(100*time.Second))
+	runDisplay(t, b)
+	if got := f.clock.Sub(start); got < 100*time.Second || got > 102*time.Second {
+		t.Fatalf("released after %s, want at the verdict (100 s)", got)
+	}
+
+	// A session that never ends: released when the grace is over.
+	f = &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)}
+	b = f.display(okSlot, nil, nil)
+	_, start = f.withGate(b, gate(0))
+	runDisplay(t, b)
+	if got := f.clock.Sub(start); got != 150*time.Second {
+		t.Fatalf("released after %s, want hold + grace (150 s)", got)
+	}
+
+	// Enter still works while a phone is connected.
+	f = &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC), enters: []bool{false, false, true}}
+	b = f.display(okSlot, nil, nil)
+	_, start = f.withGate(b, func(time.Duration) (GateStatus, bool) { return GateStatus{Slot: 0, State: GateSession}, true })
+	runDisplay(t, b)
+	if got := f.clock.Sub(start); got > 5*time.Second {
+		t.Fatalf("Enter released after %s", got)
+	}
+}
