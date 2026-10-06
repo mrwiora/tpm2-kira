@@ -563,7 +563,8 @@ SEAL OPTIONS:
                      systemd-pcrosseparator.service (replayed from the event
                      log): the display runs before it, and the separator then
                      locks the secret until the next boot
-  --pubkey PATH      Path to signing public key PEM for PolicySigned branch
+  --pubkey PATH      Path to the signing key's public half (PEM): it approves
+                     PCR values for the key and authorizes NV writes
                      (default: %s)
                      Accepts X.509 certificates or raw public keys (RSA, ECDSA)
   --privkey PATH     Path to signing private key PEM (optional)
@@ -589,7 +590,7 @@ RESEAL OPTIONS:
                      --privkey; default: derived from the private key.
   --privkey PATH     Path to signing private key (default: the key from setup).
                      It verifies the blob's signature, authorizes the NV write
-                     and, when PCRs changed, the PolicySigned unseal. A key
+                     and approves the new PCR values. A key
                      path stored in the blob is never used to find it.
   --require-key      With the key on a YubiKey: fail when the token or its PIN
                      is unavailable. By default reseal then prints SKIPPED,

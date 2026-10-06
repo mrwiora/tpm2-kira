@@ -1,8 +1,8 @@
 package attest
 
 // Android Key Attestation: is the phone's anchor key really inside secure
-// hardware? (TODO-SEC.md in the app repository, "both sides check each
-// other's hardware".)
+// hardware? Both sides check each other's hardware: the phone verifies the
+// machine's EK certificate, the machine the phone's key attestation.
 //
 // At enrolment the phone creates its anchor key with an attestation challenge
 // derived from the session, and sends the key's certificate chain in

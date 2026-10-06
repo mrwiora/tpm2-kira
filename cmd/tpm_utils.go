@@ -146,48 +146,39 @@ func IsTPMPolicyFailure(err error) bool {
 // when a later reseal revoked this blob's approval, ErrCodesLocked after
 // 'tpm2-kira cap'. None of these checks is the gate; the TPM is.
 func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) (string, *SealedBlob, error) {
-	codes, blob, err := SlotCodes(tpmDev, nvramIndex, t, 1, debug)
-	if err != nil {
-		return "", blob, err
-	}
-	return codes[0], blob, nil
-}
-
-// SlotCodes is SlotCode for n consecutive windows from t on (TOTPCodes).
-func SlotCodes(tpmDev transport.TPM, nvramIndex uint32, t time.Time, n int, debug bool) ([]string, *SealedBlob, error) {
 	sealedData, err := ReadFromNVRAM(tpmDev, nvramIndex)
 	if err != nil {
-		return nil, nil, HandleNVRAMNotFoundError(err, debug)
+		return "", nil, HandleNVRAMNotFoundError(err, debug)
 	}
 	sealedBlob, err := UnmarshalSealedBlob(sealedData)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
+		return "", nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
 
 	gen, err := ReadGeneration(tpmDev, GenerationIndex(nvramIndex))
 	switch {
 	case errors.Is(err, ErrCodesLocked):
-		return nil, sealedBlob, ErrCodesLocked
+		return "", sealedBlob, ErrCodesLocked
 	case err != nil:
-		return nil, sealedBlob, &GenerationMismatchError{BlobGeneration: sealedBlob.Payload.Generation, IndexMissing: true}
+		return "", sealedBlob, &GenerationMismatchError{BlobGeneration: sealedBlob.Payload.Generation, IndexMissing: true}
 	case gen != sealedBlob.Payload.Generation:
-		return nil, sealedBlob, &GenerationMismatchError{BlobGeneration: sealedBlob.Payload.Generation, IndexGeneration: gen}
+		return "", sealedBlob, &GenerationMismatchError{BlobGeneration: sealedBlob.Payload.Generation, IndexGeneration: gen}
 	}
 
 	currentPCRValues, err := GetCurrentPCRValuesFromRegisters(tpmDev, sealedBlob, debug)
 	if err != nil {
-		return nil, sealedBlob, err
+		return "", sealedBlob, err
 	}
 	if !VerifyPCRValues(sealedBlob.GetPCRDigestValues(), currentPCRValues) {
 		mismatch := newPCRMismatchError(sealedBlob, currentPCRValues)
 		if mismatch.SeparatorLocked() {
-			return nil, sealedBlob, ErrSeparatorLocked
+			return "", sealedBlob, ErrSeparatorLocked
 		}
-		return nil, sealedBlob, mismatch
+		return "", sealedBlob, mismatch
 	}
 
-	codes, err := TOTPCodes(tpmDev, sealedBlob, nvramIndex, t, n)
-	return codes, sealedBlob, err
+	code, err := TOTPCode(tpmDev, sealedBlob, nvramIndex, t)
+	return code, sealedBlob, err
 }
 
 func newPCRMismatchError(sealedBlob *SealedBlob, current []tpm2.TPM2BDigest) *PCRMismatchError {

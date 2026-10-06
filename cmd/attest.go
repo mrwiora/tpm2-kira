@@ -604,7 +604,7 @@ func gateFail(format string, args ...any) {
 }
 
 func reportReceipt(blob *AttestBlob, res *attest.AttestResult) int {
-	// The initrd cannot authenticate the blob that names the phone (TODO-SEC.md S2).
+	// The initrd cannot authenticate the blob that names the phone (SECURITY.md).
 	defer fmt.Println("tpm2-kira:   (not verified on this machine: your phone's screen is authoritative)")
 	who := verifierName(res.Verifier)
 	c := res.Check

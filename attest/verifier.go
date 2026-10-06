@@ -102,7 +102,7 @@ type Event struct {
 	Warnings      []string       `json:"warnings,omitempty"`
 
 	// need_anchor_key: what the phone learnt about the machine before the
-	// user binds it (TODO-SEC.md S3, S5 in the app repository).
+	// user binds it.
 	EKVerifiedBy string `json:"ek_verified_by,omitempty"`
 	// AttestationChallenge goes into the anchor key's attestation, binding it
 	// to this enrolment (AnchorAttestationChallenge).

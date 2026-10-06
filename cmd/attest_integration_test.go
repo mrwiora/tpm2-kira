@@ -156,7 +156,7 @@ func TestOfflineQuoteVerifies(t *testing.T) {
 	}
 }
 
-// TestReplacedBlobIsDetected performs the attack from TODO-SEC.md S2 on a
+// TestReplacedBlobIsDetected performs the blob-replacement attack on a
 // real TPM: the owner hierarchy undefines the attestation index and writes a
 // blob of its own (here: the attacker's phone, signed with the attacker's
 // key). 'attest check' must flag it; so must putting back an older blob

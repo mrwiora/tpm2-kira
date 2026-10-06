@@ -1,7 +1,7 @@
 package cmd
 
-// Does the PCR selection a phone will check cover the initrd? (TODO-SEC.md S5
-// in the marify app repository.) The initrd is where a passphrase logger
+// Does the PCR selection a phone will check cover the initrd? The initrd is
+// where a passphrase logger
 // would sit; if no quoted PCR measures it, a modified initrd attests as
 // "match". Which PCRs measure it depends on the boot path, so it is read from
 // this boot's event log rather than assumed.

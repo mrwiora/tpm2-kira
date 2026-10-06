@@ -38,11 +38,10 @@ func writeTestKeyPair(t *testing.T) (pubPath, privPath string) {
 	return pubPath, privPath
 }
 
-// The display takes the codes for the prompt in one policy session before
-// the OS separator runs. Once the separator has extended the PCRs, the slot
-// reports itself locked until the next boot, while the codes taken earlier
-// are still the right ones.
-func TestCodesBeforeTheSeparatorThenLocked(t *testing.T) {
+// While the display holds the boot, the PCRs still hold the sealed values
+// and the TPM computes a code per window. Once the OS separator has extended
+// them, the slot reports itself locked until the next boot.
+func TestCodeBeforeTheSeparatorThenLocked(t *testing.T) {
 	sock := startSWTPM(t)
 	tpm, err := OpenTPM(sock)
 	if err != nil {
@@ -76,23 +75,18 @@ func TestCodesBeforeTheSeparatorThenLocked(t *testing.T) {
 		t.Fatalf("seal: %v", err)
 	}
 
-	// Codes for five windows in one session equal five single-code calls.
+	// A code per window, as the display asks for them during the hold.
 	at := time.Date(2026, 10, 6, 1, 0, 0, 0, time.UTC)
-	ahead, blob, err := SlotCodes(tpm, NVRAMSlotStart, at, 5, false)
+	first, blob, err := SlotCode(tpm, NVRAMSlotStart, at, false)
 	if err != nil {
-		t.Fatalf("codes ahead: %v", err)
+		t.Fatalf("code during the hold: %v", err)
 	}
 	if blob.MeasurePoint() != MeasurePointBeforeSeparator {
 		t.Fatalf("the blob should be sealed before the separator: %v", blob.MeasurePoint())
 	}
-	for i := range ahead {
-		one, err := TOTPCode(tpm, blob, NVRAMSlotStart, at.Add(time.Duration(i)*30*time.Second))
-		if err != nil {
-			t.Fatalf("code %d: %v", i, err)
-		}
-		if one != ahead[i] {
-			t.Fatalf("window %d: single call %s, ahead %s", i, one, ahead[i])
-		}
+	next, _, err := SlotCode(tpm, NVRAMSlotStart, at.Add(30*time.Second), false)
+	if err != nil || next == first || len(first) != 6 {
+		t.Fatalf("the next window should give another code: %q then %q (%v)", first, next, err)
 	}
 
 	// systemd-pcrosseparator runs: the sealed values are unreachable now.
@@ -108,8 +102,5 @@ func TestCodesBeforeTheSeparatorThenLocked(t *testing.T) {
 	}
 	if line := slotErrorLine(slots[0].Error); line != "Locked until the next boot (the OS separator ran after the measure point)" {
 		t.Fatalf("line %q", line)
-	}
-	if len(ahead) != 5 || ahead[0] == "" {
-		t.Fatal("the codes taken before the separator are what the prompt shows")
 	}
 }

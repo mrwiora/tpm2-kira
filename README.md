@@ -152,7 +152,7 @@ If called without a command, tpm2-kira defaults to `reveal`.
 | `reseal` | Approve new PCR values for the existing key (revokes older approvals) |
 | `reveal` | Show the current TOTP code (colored output) |
 | `reveal-plain` | Show the current TOTP code (plain text, for scripts) |
-| `run` | Continuously display TOTP codes (useful during boot) |
+| `run` | Show a fresh code at boot until Enter (or 90 s), then release the boot |
 | `cap` | Lock code computation until the next reboot (run by the boot integration when leaving the initrd) |
 | `info` | Display metadata about the sealed key, its approval and its generation (`--json` for machine-readable output) |
 | `nvram list` | List NVRAM indices |
@@ -556,7 +556,7 @@ The post-generation hook will automatically reseal so the next boot matches.
 
 ### How it works at boot
 
-A systemd service (`tpm2-kira.service`) starts before the disk unlock prompt and runs `tpm2-kira run`, which continuously displays TOTP codes. Compare what's on screen with your authenticator app. If they match, your boot chain is clean — go ahead and type your LUKS passphrase.
+A systemd service (`tpm2-kira.service`) starts before the disk unlock prompt and runs `tpm2-kira run`, which shows a fresh TOTP code every 30 seconds. Compare what's on screen with your authenticator app. If they match, your boot chain is clean — press Enter and type your LUKS passphrase. Without Enter the boot continues by itself after 90 seconds; once it has continued, no code can be computed until the next boot.
 
 When the initrd hands over to the real root, `tpm2-kira-cap.service` runs
 `tpm2-kira cap`. From then until the next reboot the TPM computes no codes,
