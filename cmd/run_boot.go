@@ -20,9 +20,11 @@ package cmd
 // hand. For that this process is also the gate's coordinator
 // (gate_service.go): it holds the TPM for the radio worker
 // (tpm2-kira-attest.service), which has none, and reads the phone's receipt
-// itself. It therefore stays up after the boot is released, silently, until
-// the initramfs ends, so the phone can still be answered at the passphrase
-// prompt.
+// itself. Its service ends with the hold (lazy mode: the phone has as long
+// as the code is asked about, plus the time to finish an answer it has
+// begun), and the worker ends with it. The process must not outlive the
+// hold on the console in any case: it owns the terminal, and systemd's
+// passphrase prompt waits for the terminal to be free.
 //
 // A slot that yields no code during the hold is served after the boot is
 // released: a blob whose policy holds only after the separator (sealed by an
@@ -326,37 +328,63 @@ func (e *enterReader) stop() {
 	<-e.done
 }
 
+// releaseTerminal gives up the controlling terminal that StandardInput=tty
+// made this process the owner of. systemd's passphrase prompt takes the
+// console for itself and waits for as long as another session owns it, so
+// a display that outlives its hold would otherwise keep the prompt from
+// ever appearing. Writing to the terminal still works afterwards.
+func releaseTerminal(fd int) {
+	// Giving it up sends the owner a hangup; it is not one.
+	signal.Ignore(syscall.SIGHUP, syscall.SIGCONT)
+	_ = unix.IoctlSetInt(fd, unix.TIOCNOTTY, 0)
+}
+
 // startCoordinator makes this process the gate's coordinator when the image
 // carries a gate for an enrolled phone: it opens the TPM for it and listens
 // on socket. Nil when there is nothing to coordinate.
-func startCoordinator(tpmPath, socket, configPath string, debug bool) *gateService {
+func startCoordinator(tpmPath, socket, configPath string, debug bool) (*gateService, func()) {
+	svc, server := openCoordinator(tpmPath, socket, configPath, debug)
+	if svc == nil {
+		return nil, func() {}
+	}
+	var once sync.Once
+	// The TPM handle is left to the end of the process: an operation for
+	// the worker may still be running on it.
+	return svc, func() {
+		once.Do(func() {
+			server.Close()
+			os.Remove(socket)
+		})
+	}
+}
+
+func openCoordinator(tpmPath, socket, configPath string, debug bool) (*gateService, *gateServer) {
 	if socket == "" {
-		return nil
+		return nil, nil
 	}
 	cfg, err := LoadAttestConfig(configPath)
 	if err != nil || cfg.Mode != "lazy" {
-		return nil // no gate in this image
+		return nil, nil // no gate in this image
 	}
 	path := preferResourceManager(tpmPath)
 	tpmDev, err := transport.OpenTPM(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: cannot open the TPM at %s: %v\n", path, err)
-		return nil
+		return nil, nil
 	}
 	l, err := listenGate(socket)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: %v\n", err)
 		tpmDev.Close()
-		return nil
+		return nil, nil
 	}
 	svc := newGateService(tpmDev, 0, "", debug)
-	go serveGate(l, svc)
-	return svc
+	return svc, serveGate(l, svc)
 }
 
 // RunCommand implements the run command (the display at boot).
 func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket string, debug bool) {
-	svc := startCoordinator(tpmPath, gateSocket, DefaultAttestConfigPath, debug)
+	svc, endCoordinator := startCoordinator(tpmPath, gateSocket, DefaultAttestConfigPath, debug)
 	open := func() (transport.TPMCloser, error) {
 		tpmDev, err := OpenTPM(tpmPath)
 		if err != nil {
@@ -407,6 +435,12 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		},
 		notify: func() {
 			enter.stop() // the terminal is the passphrase prompt's from here on
+			// Lazy mode: the phone check ends with the hold, and the
+			// radio worker with it.
+			endCoordinator()
+			// A display that goes on (codes that only compute after the
+			// separator) writes to the terminal but must not own it.
+			releaseTerminal(0)
 			sdNotifyReady()
 		},
 		show: func(slots []NVRAMSlot, codes map[int]string, remaining time.Duration) {
@@ -444,13 +478,6 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		retryEvery:    2 * time.Second,
 	}
 	b.run()
-	if svc != nil {
-		// Nothing more to show, but the radio worker still needs its TPM
-		// half until the initramfs ends (systemd stops this unit then).
-		// Keys typed at the passphrase prompt must not signal this process.
-		signal.Ignore(syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTSTP, syscall.SIGHUP)
-		select {}
-	}
 }
 
 func gateStatus(phone func() (GateStatus, bool)) (GateStatus, bool) {

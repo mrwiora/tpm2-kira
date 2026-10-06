@@ -44,8 +44,8 @@ func ExtendWord(alg uint16, value []byte, word string) ([]byte, error) {
 
 // OSSeparatorWord is what systemd-pcrosseparator.service extends, in the
 // initrd before the disk is unlocked, into OSSeparatorPCRs (its ExecStart;
-// systemd 262). The machine's boot check starts before that and goes on
-// after it, so a quote of one and the same boot can show either state.
+// systemd 262). The machine's boot check happens before that, enrolment
+// and a check by hand after it, so one and the same boot shows either state.
 const OSSeparatorWord = "os-separator"
 
 // OSSeparatorPCRs are the registers systemd-pcrosseparator.service extends.

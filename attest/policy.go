@@ -72,7 +72,7 @@ func (p *Profile) usable(now time.Time) bool {
 
 // matches reports whether values satisfy the profile for every selected PCR.
 // A register may be before or after systemd's OS separator (SameBootState):
-// the machine asks from before the separator until the disk is unlocked.
+// the machine asks before it, and enrolment records the state after it.
 func (p *Profile) matches(sel []uint8, values map[uint8][]byte) bool {
 	for _, idx := range sel {
 		want, ok := p.Values[idx]

@@ -301,9 +301,11 @@ runs, and no code can be computed until the next boot.
 A slot that is enrolled with a phone (see *Remote attestation*) is verified
 by the phone instead: the Bluetooth gate runs next to the display from the
 start, and the phone's verdict continues to the passphrase like Enter does.
-The code stays on the screen for when the phone is not at hand. If nobody
-answers, the gate keeps asking at the passphrase prompt until the disk is
-unlocked.
+The code stays on the screen for when the phone is not at hand. The phone
+check lasts as long as the code screen: when that ends (Enter, the phone's
+verdict, or the end of the hold), the gate ends too, and nothing listens to
+the radio at the passphrase prompt. A phone that is in the middle of its
+answer when the hold runs out gets up to a minute more.
 
 The gate is two processes of the one `tpm2-kira` binary. The display is also
 its *coordinator* (`tpm2-kira run --gate`): it holds the TPM, issues the
@@ -599,7 +601,7 @@ does nothing.
 
 | Unit | In the initramfs image | Does something when |
 |------|------------------------|---------------------|
-| `tpm2-kira.service` (the code at the prompt, and the gate's coordinator) | always, once `sd-tpm2-kira` is in `HOOKS` | a TOTP key is sealed. With nothing sealed it says so once, releases the boot and exits; a later `seal` needs no rebuild. With a gate in the image it stays up, silent, until the initrd is left |
+| `tpm2-kira.service` (the code at the prompt, and the gate's coordinator) | always, once `sd-tpm2-kira` is in `HOOKS` | a TOTP key is sealed. With nothing sealed it says so once, releases the boot and exits; a later `seal` needs no rebuild. It ends when the boot is released, and the gate with it |
 | `tpm2-kira-cap.service` (locks codes when the initrd is left) | always, with the display | the initrd is left. Without sealed keys there is nothing to lock |
 | `tpm2-kira-attest.service` (Bluetooth gate, radio worker) | only if `/etc/tpm2-kira/attest.conf` says `lazy`, **and** a phone is enrolled, **and** its record is signed by this machine's key and current, **and** the adapter was found when the image was built. The signing public key goes into the image with it. Otherwise neither the unit nor any Bluetooth module or firmware is in the image; `mkinitcpio` says which condition failed | a phone connects |
 

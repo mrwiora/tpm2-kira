@@ -53,8 +53,8 @@ func predictMeasurePoint(tpmDev transport.TPM, sealed *SealedBlob, sel attest.PC
 	}
 	// The baseline is the state after the OS separator: that is the one the
 	// running system's registers can vouch for (CheckMeasurePointValues).
-	// The gate also quotes before the separator, while the code is shown;
-	// the phone takes both for the same boot (attest.SameBootState).
+	// The gate quotes before the separator, while the code is shown; the
+	// phone takes both for the same boot (attest.SameBootState).
 	res, err := ReadPCRValues(tpmDev, specs, algo, mode, MeasurePointAfterSeparator, debug)
 	if err != nil {
 		return &measurePoint{err: err}

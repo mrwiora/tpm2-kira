@@ -107,17 +107,59 @@ func listenGate(path string) (net.Listener, error) {
 	return l, nil
 }
 
-// serveGate answers radio workers until the listener is closed. Requests
-// are handled one at a time, whichever connection they come from.
-func serveGate(l net.Listener, host gateHost) {
+// gateServer is the coordinator's listening side.
+type gateServer struct {
+	l     net.Listener
+	mu    sync.Mutex
+	conns map[net.Conn]struct{}
+	done  bool
+}
+
+// serveGate answers radio workers until Close. Requests are handled one at
+// a time, whichever connection they come from.
+func serveGate(l net.Listener, host gateHost) *gateServer {
+	g := &gateServer{l: l, conns: map[net.Conn]struct{}{}}
+	go g.run(host)
+	return g
+}
+
+// Close ends the coordinator's service: the socket goes away and every
+// worker's connection is closed, which is how a worker learns that the
+// phone check is over for this boot.
+func (g *gateServer) Close() {
+	g.mu.Lock()
+	g.done = true
+	conns := g.conns
+	g.conns = map[net.Conn]struct{}{}
+	g.mu.Unlock()
+	g.l.Close()
+	for c := range conns {
+		c.Close()
+	}
+}
+
+func (g *gateServer) run(host gateHost) {
 	var one sync.Mutex
 	for {
-		conn, err := l.Accept()
+		conn, err := g.l.Accept()
 		if err != nil {
 			return
 		}
+		g.mu.Lock()
+		if g.done {
+			g.mu.Unlock()
+			conn.Close()
+			return
+		}
+		g.conns[conn] = struct{}{}
+		g.mu.Unlock()
 		go func() {
-			defer conn.Close()
+			defer func() {
+				g.mu.Lock()
+				delete(g.conns, conn)
+				g.mu.Unlock()
+				conn.Close()
+			}()
 			if !sameUser(conn) {
 				return
 			}
@@ -201,8 +243,10 @@ func answerGate(host gateHost, req *gateRequest) *gateResponse {
 // gateClient is the radio worker's side: a gateHost whose every method is
 // a question to the coordinator.
 type gateClient struct {
-	mu   sync.Mutex
-	conn net.Conn
+	mu    sync.Mutex
+	conn  net.Conn
+	watch net.Conn      // a second, silent connection: it ends when the coordinator does
+	gone  chan struct{} // closed then
 }
 
 // dialGate connects to the coordinator, which starts at the same moment as
@@ -212,7 +256,18 @@ func dialGate(path string, wait time.Duration) (*gateClient, error) {
 	for {
 		conn, err := net.Dial("unix", path)
 		if err == nil {
-			return &gateClient{conn: conn}, nil
+			c := &gateClient{conn: conn, gone: make(chan struct{})}
+			if c.watch, err = net.Dial("unix", path); err != nil {
+				conn.Close()
+				return nil, fmt.Errorf("coordinator at %s: %w", path, err)
+			}
+			go func() {
+				// Nothing is ever sent here; the read returns when the
+				// coordinator closes its side or exits.
+				_, _ = c.watch.Read(make([]byte, 1))
+				close(c.gone)
+			}()
+			return c, nil
 		}
 		if !time.Now().Before(deadline) {
 			return nil, fmt.Errorf("no coordinator at %s (is tpm2-kira.service running?): %w", path, err)
@@ -221,7 +276,13 @@ func dialGate(path string, wait time.Duration) (*gateClient, error) {
 	}
 }
 
-func (c *gateClient) Close() error { return c.conn.Close() }
+func (c *gateClient) Close() error {
+	c.watch.Close()
+	return c.conn.Close()
+}
+
+// Gone is closed when the coordinator has ended its service.
+func (c *gateClient) Gone() <-chan struct{} { return c.gone }
 
 func (c *gateClient) ask(req *gateRequest) (*gateResponse, error) {
 	c.mu.Lock()

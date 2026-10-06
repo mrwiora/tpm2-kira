@@ -189,10 +189,10 @@ there is exactly one service, two characteristics and no security manager
 ### 3.3 Ordering and the measure point
 
 The gate starts together with the TOTP display, `After=systemd-pcrphase-initrd.service`
-(`enter-initrd` is in PCR 11 by then), and keeps advertising until the
-initramfs ends. The display holds `systemd-pcrosseparator.service` back until
-the boot is confirmed, so the gate's quotes come from *before* the separator
-while the code is on the screen and from *after* it at the passphrase prompt.
+(`enter-initrd` is in PCR 11 by then), and ends with it. The display holds
+`systemd-pcrosseparator.service` back until the boot is confirmed, so the
+gate's quotes come from *before* the separator. The enrolment baseline, and a
+gate run by hand or by initramfs-tools, see the registers *after* it.
 
 Both are the same boot. The separator is a constant systemd extends into
 PCRs 0-7, 9, 12-14 of every boot, so the verifier treats a register that
@@ -216,8 +216,14 @@ session; it has no TPM and asks the coordinator over the socket: identity,
 quote, boot context, event log, receipt, progress report - length-prefixed
 JSON, one request at a time (`cmd/gate_ipc.go`). Before the separator the
 TPM computes TOTP codes for any process that can reach it, so the process
-that parses radio input must not be able to. The coordinator outlives the
-display's hold, silently, until the initramfs ends.
+that parses radio input must not be able to.
+
+Lazy mode ends with the hold: the coordinator closes its socket when it
+releases the boot and exits, and the worker, which watches the connection,
+stops advertising and exits too. The display's process must not stay on the
+console past the hold in any case: `StandardInput=tty` makes it the owner of
+the terminal, and systemd's password agent waits for the console to be free
+before it shows the passphrase prompt.
 
 The enrolment baseline must describe the same point: `attest enrol` runs in
 the booted system, where PCR 11 already carries systemd's later phases, so it

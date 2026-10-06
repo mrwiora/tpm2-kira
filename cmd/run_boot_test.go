@@ -2,11 +2,14 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"runtime"
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // A fake environment for the boot display: a clock that advances on every
@@ -392,4 +395,77 @@ func TestEnterReaderLetsGoOfTheTerminal(t *testing.T) {
 	}
 	e2.stop()
 	r2.Close()
+}
+
+// openPTY returns a pseudo-terminal: the side a keyboard types into and the
+// terminal side a program reads.
+func openPTY(t *testing.T) (keyboard, terminal *os.File) {
+	t.Helper()
+	m, err := os.OpenFile("/dev/ptmx", os.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		t.Skipf("no pseudo-terminals here: %v", err)
+	}
+	if err := unix.IoctlSetPointerInt(int(m.Fd()), unix.TIOCSPTLCK, 0); err != nil {
+		t.Skipf("cannot unlock the pseudo-terminal: %v", err)
+	}
+	n, err := unix.IoctlGetInt(int(m.Fd()), unix.TIOCGPTN)
+	if err != nil {
+		t.Skipf("no pseudo-terminal name: %v", err)
+	}
+	s, err := os.OpenFile(fmt.Sprintf("/dev/pts/%d", n), os.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		t.Skipf("cannot open the terminal side: %v", err)
+	}
+	t.Cleanup(func() { s.Close(); m.Close() })
+	return m, s
+}
+
+// The same on a terminal device, where a line is only readable once Enter
+// was pressed: Enter is reported, and after the reader stopped, a line typed
+// at the passphrase prompt is still there for the prompt.
+func TestEnterReaderOnATerminal(t *testing.T) {
+	keyboard, terminal := openPTY(t)
+	fd, err := unix.Dup(int(terminal.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fd)
+	e := startEnterReader(fd)
+
+	keyboard.Write([]byte("no"))
+	select {
+	case <-e.presses:
+		t.Fatal("reported Enter without one")
+	case <-time.After(400 * time.Millisecond):
+	}
+	keyboard.Write([]byte("\r")) // the Enter key
+	select {
+	case <-e.presses:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Enter on a terminal not reported")
+	}
+	keyboard.Write([]byte("\r")) // and again, as an impatient user does
+	select {
+	case <-e.presses:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second Enter not reported")
+	}
+	e.stop()
+
+	keyboard.Write([]byte("correct horse\r"))
+	time.Sleep(400 * time.Millisecond)
+	got := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 64)
+		n, _ := unix.Read(fd, buf)
+		got <- string(buf[:n])
+	}()
+	select {
+	case line := <-got:
+		if line != "correct horse\n" {
+			t.Fatalf("the prompt read %q", line)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the stopped reader took the passphrase line")
+	}
 }

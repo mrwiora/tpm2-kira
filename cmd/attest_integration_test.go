@@ -408,14 +408,20 @@ func TestCoordinatorAndWorker(t *testing.T) {
 	s.tpm.Close()
 
 	// No gate in the image, or no socket asked for: nothing to coordinate.
-	if startCoordinator(sock, filepath.Join(dir, "a", "gate.sock"), off, false) != nil ||
-		startCoordinator(sock, filepath.Join(dir, "b", "gate.sock"), filepath.Join(dir, "missing.conf"), false) != nil ||
-		startCoordinator(sock, "", lazy, false) != nil {
-		t.Fatal("a coordinator without a gate to coordinate")
+	for _, c := range [][2]string{
+		{filepath.Join(dir, "a", "gate.sock"), off},
+		{filepath.Join(dir, "b", "gate.sock"), filepath.Join(dir, "missing.conf")},
+		{"", lazy},
+	} {
+		if svc, end := startCoordinator(sock, c[0], c[1], false); svc != nil {
+			t.Fatalf("a coordinator without a gate to coordinate (%v)", c)
+		} else {
+			end() // nothing to end, and no harm in asking
+		}
 	}
 
 	gate := filepath.Join(dir, "run", "gate.sock")
-	svc := startCoordinator(sock, gate, lazy, false)
+	svc, endCoordinator := startCoordinator(sock, gate, lazy, false)
 	if svc == nil {
 		t.Fatal("no coordinator")
 	}
@@ -437,6 +443,19 @@ func TestCoordinatorAndWorker(t *testing.T) {
 	if q, err := worker.Quote(bytes.Repeat([]byte{1}, 32), sel); err != nil || len(q.Quoted) == 0 || len(q.Values) != len(sel.Indices) {
 		t.Fatalf("quote through the coordinator: %+v %v", q, err)
 	}
+
+	// The hold ends: so does the coordinator's service, and a worker that
+	// comes now finds nobody (it has no TPM of its own to fall back to).
+	endCoordinator()
+	select {
+	case <-worker.Gone():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the worker did not learn that the hold ended")
+	}
+	if _, err := os.Stat(gate); err == nil {
+		t.Fatal("the socket outlived the coordinator's service")
+	}
+	endCoordinator()
 
 	// A replaced record: the coordinator refuses, and the worker's unit
 	// fails with the same status as before.

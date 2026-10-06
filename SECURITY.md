@@ -147,13 +147,19 @@ Enter does, and is where later consumers of "this boot was verified by the
 phone" will ask. The console remains advisory all the same: what counts is
 the phone's screen.
 
+In lazy mode the phone check lasts as long as the code screen: when the hold
+ends (Enter, the phone's verdict, or 90 seconds; a phone in the middle of
+its answer gets up to a minute more), the coordinator's service ends and the
+worker with it. Nothing listens to the radio at the passphrase prompt.
+
 On initramfs-tools (Debian) the gate is started by a script as one process
 with the TPM, unconfined, and runs next to the display: there the window
 above is open to it. Prefer a systemd-based initramfs where the gate matters.
 
 The phone accepts a register that differs from its profile by exactly one
-`os-separator` extend (PCRs 0-7, 9, 12-14), because the gate asks from
-before systemd's OS separator until the disk is unlocked. That constant is
+`os-separator` extend (PCRs 0-7, 9, 12-14), because the gate asks before
+systemd's OS separator, while enrolment and a gate run by hand see the
+registers after it. That constant is
 part of every boot and says nothing about what was booted; code that differs
 gives registers that differ, before the separator and after it.
 

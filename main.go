@@ -580,7 +580,8 @@ RUN OPTIONS:
                      socket (set by the initrd unit): hold the TPM for the
                      radio worker ('attest gate --coordinator'), read the
                      phone's receipt, and release the boot on its verdict.
-                     Only with attestation enabled and a phone enrolled
+                     Only with attestation enabled and a phone enrolled.
+                     The phone check ends when the boot is released
 
 RESEAL OPTIONS:
   --pcrs INDICES     New PCR indices with optional source suffix (optional,

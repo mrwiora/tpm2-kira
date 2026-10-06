@@ -18,9 +18,12 @@ Before=systemd-ask-password-console.service
 Conflicts=multi-user.target
 # With a phone enrolled, this process is also the coordinator of the
 # Bluetooth gate (tpm2-kira-attest.service): it holds the TPM for the radio
-# worker, which has none, and reads the phone's receipt itself. It then
-# stays up after READY, silent and without reading the console, until the
-# initramfs ends.
+# worker, which has none, and reads the phone's receipt itself. That service
+# ends when the boot is released, and normally the process with it. It must
+# not stay on the console: StandardInput=tty makes it the terminal's owner,
+# and the passphrase prompt waits for the console to be free. (A display
+# that goes on for codes that only compute after the separator gives the
+# terminal up first.)
 Conflicts=initrd-switch-root.target
 Before=initrd-switch-root.target
 DefaultDependencies=no

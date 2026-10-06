@@ -577,8 +577,9 @@ Rejects are therefore sent without an unlock prompt.
 **Matching a profile.** A quoted PCR matches a profile's value when the two
 are equal, or, for PCRs 0-7, 9, 12, 13 and 14 only, when one is the other
 extended once with the bank's digest of the word `os-separator`. The machine
-asks from before `systemd-pcrosseparator.service` until the disk is unlocked,
-and that unit extends this constant into those PCRs of every boot, so both
+asks before `systemd-pcrosseparator.service` has run, while the enrolment
+baseline, and a machine asked by hand later, show the registers after it;
+that unit extends this constant into those PCRs of every boot, so both
 values describe the same measured boot. The rule holds in both directions
 because a profile may have been recorded at either moment, and per PCR
 because a quote may be taken while the unit runs. PCRs listed as changed in a

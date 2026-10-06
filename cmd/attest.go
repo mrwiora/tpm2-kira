@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-tpm/tpm2"
@@ -471,7 +472,7 @@ func AttestGate(o GateOptions) int {
 			return ExitUnavailable
 		}
 		defer client.Close()
-		return runGateRadio(client, o, step)
+		return runGateRadio(client, o, step, client.Gone())
 	}
 	// Run by hand, or where no coordinator runs (initramfs-tools): one
 	// process does both halves.
@@ -484,7 +485,7 @@ func AttestGate(o GateOptions) int {
 	}
 	defer tpmDev.Close()
 	defer CleanupTPM(tpmDev, o.Debug)
-	return runGateRadio(newGateService(tpmDev, o.SealIndex, o.SignerPath, o.Debug), o, step)
+	return runGateRadio(newGateService(tpmDev, o.SealIndex, o.SignerPath, o.Debug), o, step, nil)
 }
 
 // gateCoordinatorWait is how long the worker waits for the coordinator's
@@ -492,8 +493,10 @@ func AttestGate(o GateOptions) int {
 const gateCoordinatorWait = 30 * time.Second
 
 // runGateRadio is the radio half of the gate: advertise, serve the phone,
-// print what it said. The TPM half is behind host.
-func runGateRadio(host gateHost, o GateOptions, step func(string, ...any)) int {
+// print what it said. The TPM half is behind host; when ended is closed,
+// that half is gone (the code screen has released the boot) and the radio
+// stops.
+func runGateRadio(host gateHost, o GateOptions, step func(string, ...any), ended <-chan struct{}) int {
 	ident, code, err := host.Identity()
 	if code != 0 || err != nil {
 		if code == 0 {
@@ -530,8 +533,31 @@ func runGateRadio(host gateHost, o GateOptions, step func(string, ...any)) int {
 		host.Report(GateUnavailable)
 		return ExitUnavailable
 	}
-	defer p.Close()
-	step("hci%d is ready; advertising from here on (timeout %s, 0 = until the initramfs ends)", o.Adapter, o.Timeout)
+	var closeOnce sync.Once
+	closeRadio := func() { closeOnce.Do(func() { p.Close() }) }
+	defer closeRadio()
+	over := make(chan struct{})
+	if ended != nil {
+		finished := make(chan struct{})
+		defer close(finished)
+		go func() {
+			select {
+			case <-ended:
+				close(over)
+				closeRadio() // ends a pending wait for a phone
+			case <-finished:
+			}
+		}()
+	}
+	isOver := func() bool {
+		select {
+		case <-over:
+			return true
+		default:
+			return false
+		}
+	}
+	step("hci%d is ready; advertising from here on (timeout %s, 0 = as long as the code screen is up)", o.Adapter, o.Timeout)
 
 	adv := ble.Advertisement{
 		ServiceData: attest.BuildServiceData(attest.AdvFlagAttest, randBytes(4), ident.AdvKey),
@@ -553,6 +579,11 @@ func runGateRadio(host gateHost, o GateOptions, step func(string, ...any)) int {
 			"tpm2-kira:   This is not a TPM or boot-integrity failure. Check that the phone\n"+
 			"tpm2-kira:   is close to this machine, Bluetooth is on and the Kira app is open.", o.Timeout)
 		host.Report(GateUnavailable)
+		return ExitUnavailable
+	}
+	if err != nil && isOver() {
+		// Lazy mode: the phone check lasts as long as the code screen.
+		fmt.Println("tpm2-kira: the code screen has ended; the phone was not asked in time for this boot")
 		return ExitUnavailable
 	}
 	if err != nil {

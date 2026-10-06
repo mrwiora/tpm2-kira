@@ -11,10 +11,12 @@ ConditionPathExists=/etc/initrd-release
 # after that unit, which only counts as started when the boot is released.
 Wants=tpm2-kira.service
 # A slot enrolled with a phone is verified by the phone while the code is
-# shown, and the phone's verdict releases the boot like Enter does. The gate
-# keeps asking after that, until the disk is unlocked. Its quotes therefore
-# come from before or after systemd-pcrosseparator.service; the phone treats
-# both as the same boot (PLAN-BLE.md §3.3). enter-initrd is in PCR 11 by then.
+# shown, and the phone's verdict releases the boot like Enter does. When the
+# code screen ends, so does the coordinator's service, and this worker exits
+# (lazy mode: nothing listens to the radio at the passphrase prompt). Its
+# quotes come from before systemd-pcrosseparator.service; the phone knows
+# the registers from after it and treats both as the same boot (PLAN-BLE.md
+# §3.3). enter-initrd is in PCR 11 by then.
 After=systemd-pcrphase-initrd.service
 # The image lists the adapter's driver modules in modules-load.d.
 After=systemd-modules-load.service

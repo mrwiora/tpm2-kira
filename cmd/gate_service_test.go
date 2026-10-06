@@ -192,14 +192,56 @@ func (f *fakeHost) Report(s GateState) { f.reports = append(f.reports, s) }
 
 func startTestGate(t *testing.T, host gateHost) string {
 	t.Helper()
+	path, _ := startTestGateServer(t, host)
+	return path
+}
+
+func startTestGateServer(t *testing.T, host gateHost) (string, *gateServer) {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "run", "gate.sock")
 	l, err := listenGate(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { l.Close() })
-	go serveGate(l, host)
-	return path
+	g := serveGate(l, host)
+	t.Cleanup(g.Close)
+	return path, g
+}
+
+// Lazy mode: the coordinator's service ends with the code screen's hold, and
+// the worker learns of it at once, also while it is only waiting for a phone.
+func TestWorkerLearnsThatTheCoordinatorEnded(t *testing.T) {
+	path, server := startTestGateServer(t, &fakeHost{identity: &gateIdentity{FriendlyName: "box"}})
+	c, err := dialGate(path, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, _, err := c.Identity(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-c.Gone():
+		t.Fatal("reported gone while the coordinator serves")
+	case <-time.After(200 * time.Millisecond):
+	}
+	server.Close()
+	select {
+	case <-c.Gone():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the worker did not learn that the coordinator ended")
+	}
+	if _, _, err := c.Identity(); err == nil {
+		t.Fatal("a closed coordinator answered")
+	}
+	if _, err := c.Quote(make([]byte, 32), attest.PCRSelection{Alg: attest.AlgSHA256, Indices: []uint8{0}}); err == nil {
+		t.Fatal("a closed coordinator quoted")
+	}
+	// Nobody new is served either.
+	if _, err := dialGate(path, 300*time.Millisecond); err == nil {
+		t.Fatal("a closed coordinator accepted a worker")
+	}
+	server.Close() // twice is fine
 }
 
 func TestWorkerReachesTheCoordinator(t *testing.T) {
