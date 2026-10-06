@@ -199,9 +199,15 @@ func (s *SoftTPM) ActivateCredential(idObject, encSecret []byte) ([]byte, error)
 // console and a commit sink.
 type SoftEnrol struct {
 	*SoftTPM
-	SASAnswer bool
-	SASSeen   string
-	Committed *attest.EnrolledVerifier
+	SASAnswer    bool
+	SASSeen      string
+	Committed    *attest.EnrolledVerifier
+	MeasurePoint []attest.PCRValue // boot-check values to offer; nil: none
+}
+
+// MeasurePointValues implements attest.MeasurePointProvider.
+func (b *SoftEnrol) MeasurePointValues(attest.PCRSelection) ([]attest.PCRValue, error) {
+	return b.MeasurePoint, nil
 }
 
 // ConfirmSAS implements attest.EnrolBackend.
@@ -227,7 +233,9 @@ type Machine struct {
 	Noise    *attest.NoiseKeypair
 	AdvKey   []byte
 	Sel      attest.PCRSelection
-	Verifier *attest.EnrolledVerifier
+	// MeasurePoint, when set, is offered as the values at the boot check.
+	MeasurePoint []attest.PCRValue
+	Verifier     *attest.EnrolledVerifier
 }
 
 // NewMachine creates a machine quoting PCRs 0, 2, 4 and 7.
@@ -271,7 +279,7 @@ func (m *Machine) AttestIdentity() *attest.AttestIdentity {
 // ServeEnrolment runs the machine side of an enrolment on conn and records
 // the pinned verifier.
 func (m *Machine) ServeEnrolment(conn attest.Conn, sasAnswer bool) (*SoftEnrol, error) {
-	be := &SoftEnrol{SoftTPM: m.TPM, SASAnswer: sasAnswer}
+	be := &SoftEnrol{SoftTPM: m.TPM, SASAnswer: sasAnswer, MeasurePoint: m.MeasurePoint}
 	v, err := attest.ServeEnrolment(conn, m.EnrolIdentity(), be, nil)
 	if err == nil {
 		m.Verifier = v

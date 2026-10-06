@@ -536,7 +536,7 @@ func (v *Verifier) handleEnrol(out *Output, d *Decoder) (*Output, error) {
 				ID:        v.cfg.policyID(),
 				Selection: v.offer.Selection.Indices,
 				PCRAlg:    v.offer.Selection.Alg,
-				Profiles:  []Profile{ProfileFromValues("enrolment baseline", v.offer.PCRValues, now, "enrolment")},
+				Profiles:  []Profile{ProfileFromValues("enrolment baseline", v.offer.BaselineValues(), now, v.offer.BaselineAddedBy())},
 			},
 			ResetCount:      v.baseVer.ResetCount,
 			FirmwareVersion: v.baseVer.FirmwareVersion,
@@ -555,6 +555,26 @@ func (v *Verifier) handleEnrol(out *Output, d *Decoder) (*Output, error) {
 		return out, nil
 	}
 	return v.fail(out, ErrCodeProtocol, "unexpected "+d.Type.String())
+}
+
+// checkMeasurePointValues requires the optional boot-check values to cover
+// exactly the quoted PCRs, with digests of the quoted bank's size. They are
+// not TPM-signed: at enrolment the machine's current state is trusted anyway,
+// and the first boot check then tests the prediction against a real quote.
+func checkMeasurePointValues(o *EnrolOffer) error {
+	if len(o.MeasurePointValues) == 0 {
+		return nil
+	}
+	if len(o.MeasurePointValues) != len(o.PCRValues) {
+		return errors.New("boot-check values do not cover the quoted PCRs")
+	}
+	for i, v := range o.MeasurePointValues {
+		live := o.PCRValues[i]
+		if v.Index != live.Index || len(v.Digest) != len(live.Digest) {
+			return errors.New("boot-check values do not cover the quoted PCRs")
+		}
+	}
+	return nil
 }
 
 // checkOffer validates everything in an EnrolOffer that can be checked
@@ -597,6 +617,9 @@ func (v *Verifier) checkOffer(o *EnrolOffer) error {
 		return errors.New(msg)
 	}
 	v.baseVer = verdict
+	if err := checkMeasurePointValues(o); err != nil {
+		return err
+	}
 	if by, err := VerifyEKCertificate(o.EKPub, o.EKCert, o.EKCertChain, v.cfg.now()); err == nil {
 		v.ekBy = by
 	} else {

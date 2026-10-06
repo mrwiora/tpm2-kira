@@ -13,7 +13,8 @@ func TestEnrolOfferCarriesChainAndInitrd(t *testing.T) {
 		PCRValues: []PCRValue{{0, make([]byte, 32)}, {2, make([]byte, 32)}, {4, make([]byte, 32)}, {7, make([]byte, 32)}},
 		Quoted:    []byte{4}, Signature: []byte{5}, AdvKey: make([]byte, 32),
 		EKCert: []byte{0x30, 0}, EKCertChain: []byte{0x30, 1, 2},
-		BootContext: BootContext{InitrdState: InitrdMeasured, InitrdPCRs: []uint8{9}},
+		BootContext:        BootContext{InitrdState: InitrdMeasured, InitrdPCRs: []uint8{9}},
+		MeasurePointValues: []PCRValue{{0, make([]byte, 32)}, {2, make([]byte, 32)}, {4, bytes.Repeat([]byte{4}, 32)}, {7, make([]byte, 32)}},
 	}
 	b, err := offer.Encode()
 	if err != nil {
@@ -31,13 +32,22 @@ func TestEnrolOfferCarriesChainAndInitrd(t *testing.T) {
 		!bytes.Equal(got.BootContext.InitrdPCRs, []uint8{9}) {
 		t.Fatalf("round trip lost fields: %+v", got)
 	}
+	if len(got.MeasurePointValues) != 4 || got.MeasurePointValues[2].Index != 4 || got.MeasurePointValues[2].Digest[0] != 4 {
+		t.Fatalf("round trip lost the boot-check values: %+v", got.MeasurePointValues)
+	}
+	if !bytes.Equal(got.BaselineValues()[2].Digest, got.MeasurePointValues[2].Digest) || got.BaselineAddedBy() != BaselineMeasurePoint {
+		t.Fatal("baseline should be the boot-check values when offered")
+	}
 
 	// An attester that predates the fields: absent means unknown, not "none".
-	offer.EKCertChain, offer.BootContext = nil, BootContext{}
+	offer.EKCertChain, offer.BootContext, offer.MeasurePointValues = nil, BootContext{}, nil
 	b, _ = offer.Encode()
 	d, _ = Decode(b)
-	if got, err = DecodeEnrolOffer(d); err != nil || got.EKCertChain != nil || got.BootContext.InitrdState != InitrdUnknown {
+	if got, err = DecodeEnrolOffer(d); err != nil || got.EKCertChain != nil || got.BootContext.InitrdState != InitrdUnknown || got.MeasurePointValues != nil {
 		t.Fatalf("old offer: %+v %v", got, err)
+	}
+	if got.BaselineAddedBy() != BaselineLive || len(got.BaselineValues()) != 4 {
+		t.Fatal("baseline should fall back to the quote's values")
 	}
 }
 

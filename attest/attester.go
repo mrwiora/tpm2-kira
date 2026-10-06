@@ -31,6 +31,14 @@ type AttesterBackend interface {
 	Eventlog() ([]byte, error)
 }
 
+// MeasurePointProvider is an optional AttesterBackend extension for enrolment:
+// the PCR values expected at the boot check, where the gate quotes inside the
+// initramfs. The TOTP seal predicts the same point, and the provider is meant
+// to use the same code. A nil result with a nil error means no prediction.
+type MeasurePointProvider interface {
+	MeasurePointValues(sel PCRSelection) ([]PCRValue, error)
+}
+
 // EnrolledVerifier is one pinned verifier, as stored in the attestation blob.
 type EnrolledVerifier struct {
 	ID        string
@@ -388,6 +396,12 @@ func ServeEnrolment(conn Conn, id *EnrolIdentity, be EnrolBackend, progress Prog
 	if cp, ok := be.(EKChainProvider); ok && len(ekCert) > 0 {
 		if chain := cp.EKCertChain(); len(chain) <= MaxEKCertChain {
 			offer.EKCertChain = chain
+		}
+	}
+	if mp, ok := be.(MeasurePointProvider); ok {
+		// Why a prediction failed was reported before the session started.
+		if vals, err := mp.MeasurePointValues(id.Selection); err == nil && len(vals) > 0 {
+			offer.MeasurePointValues = vals
 		}
 	}
 	if b, err = offer.Encode(); err != nil {

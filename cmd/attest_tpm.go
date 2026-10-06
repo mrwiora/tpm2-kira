@@ -240,6 +240,7 @@ type tpmBackend struct {
 	debug     bool
 
 	// enrolment only
+	mp         *measurePoint // the baseline prediction, computed once
 	confirmSAS func(code string) (bool, error)
 	commit     func(v attest.EnrolledVerifier) error
 	phoneJudge attest.PhoneAttestationJudge // nil: no check of the phone's key

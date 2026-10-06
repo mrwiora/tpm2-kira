@@ -194,6 +194,12 @@ measure point, exactly like the display loop does today
 `After=systemd-pcrosseparator.service` and
 `After=systemd-pcrphase-initrd.service`, and adds `Before=cryptsetup-pre.target`.
 
+The enrolment baseline must describe the same point: `attest enrol` runs in
+the booted system, where PCR 11 already carries systemd's later phases, so it
+predicts the measure-point values with the seal's own code (`ReadPCRValues`)
+and sends them as `measure_point_values` (PROTOCOL-BLE.md §7.3.11). The phone
+pins those, not the live registers.
+
 Loading a Bluetooth module does not extend a PCR, so bringing the radio up does
 not itself move the measure point. But the modules and firmware are *content of
 the initramfs*, so they change PCR 11 (UKI) or PCR 9 (Debian/GRUB) — that is,

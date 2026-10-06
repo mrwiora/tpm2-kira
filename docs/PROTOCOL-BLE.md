@@ -474,6 +474,23 @@ nonce_m). SASConfirm has no fields.
 | 15 | app_version | string ≤64 | O | |
 | 16 | adv_key | bytes[32] exact | R | §2.2 |
 | 17 | ek_cert_chain | bytes ≤16384 | O | the TPM's intermediates for `ek_cert`, concatenated DER (Intel PTT: NV `0x01C00100`) |
+| 18 | measure_point_values | PCRValueList | O | the PCR values expected at the boot check; same PCRs as `pcr_values` |
+
+**Baseline.** `pcr_values` is what the running system's registers hold at
+enrolment, proven by `quoted`. The gate, however, quotes inside the initramfs,
+at tpm2-kira's measure point, and systemd extends some PCRs after that (PCR 11
+with its `leave-initrd`, `sysinit` and `ready` phases; PCR 9 by
+`systemd-tpm2-setup`), so for those `pcr_values` can never match a boot check.
+The machine therefore predicts the measure-point values with the same code
+the TOTP seal uses (event log replay, the unified kernel image, the
+measure-point extends) and sends them as `measure_point_values`. The phone
+pins those as the "enrolment baseline" profile (`added_by` =
+`enrolment (values at the boot check)`) and still verifies `quoted` over
+`pcr_values` for the AK proof. The prediction is not TPM-signed; at enrolment
+the machine's current state is trusted anyway, and the first boot check tests
+it against a real quote. Without the field the phone pins `pcr_values`
+(`added_by` = `enrolment`), as before. The field MUST list exactly the PCRs
+of `pcr_selection`, in order, or the phone aborts the enrolment.
 
 The phone verifies `ek_cert` against vendor roots built into the core
 (`attest/ekroots/`, one directory per vendor listed with pinned SHA-256 values in `vendors.json`; currently Intel PTT — `attest/ekroots/README.md` says how to add a vendor) with `ek_cert_chain` as

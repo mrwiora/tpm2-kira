@@ -564,7 +564,36 @@ type EnrolOffer struct {
 	AppVersion     string
 	AdvKey         []byte // 32 bytes: lets the phone recognise this machine's advertisements
 	EKCertChain    []byte // optional: the TPM's intermediates for EKCert, concatenated DER
+	// MeasurePointValues are the PCR values the machine expects at the boot
+	// check, where the gate quotes inside the initramfs. They differ from
+	// PCRValues, the running system's registers, for PCRs systemd extends
+	// after the initramfs (PCR 11 phases, PCR 9). Optional: the verifier
+	// pins them as the baseline when present, the quote's values otherwise.
+	MeasurePointValues []PCRValue
 }
+
+// BaselineValues are the PCR values the verifier pins at enrolment: the
+// boot-check values when the machine predicted them, else the live quote's.
+func (m *EnrolOffer) BaselineValues() []PCRValue {
+	if len(m.MeasurePointValues) > 0 {
+		return m.MeasurePointValues
+	}
+	return m.PCRValues
+}
+
+// BaselineAddedBy names the baseline's origin in the record's profile.
+func (m *EnrolOffer) BaselineAddedBy() string {
+	if len(m.MeasurePointValues) > 0 {
+		return BaselineMeasurePoint
+	}
+	return BaselineLive
+}
+
+// Profile AddedBy values for the enrolment baseline.
+const (
+	BaselineLive         = "enrolment"
+	BaselineMeasurePoint = "enrolment (values at the boot check)"
+)
 
 // Encode serialises the message.
 func (m *EnrolOffer) Encode() ([]byte, error) {
@@ -586,6 +615,9 @@ func (m *EnrolOffer) Encode() ([]byte, error) {
 	e.String(15, m.AppVersion)
 	e.Bytes(16, m.AdvKey)
 	e.OptBytes(17, m.EKCertChain)
+	if len(m.MeasurePointValues) > 0 {
+		e.Bytes(18, encodePCRValues(m.MeasurePointValues))
+	}
 	return e.Finish()
 }
 
@@ -612,6 +644,7 @@ func DecodeEnrolOffer(d *Decoder) (*EnrolOffer, error) {
 		EKCertChain:    d.Bytes(17, MaxEKCertChain, false),
 	}
 	vals := d.Bytes(10, 2+maxPCRValues*(5+65), true)
+	mpv := d.Bytes(18, 2+maxPCRValues*(5+65), false)
 	if err := d.Err(); err != nil {
 		return nil, err
 	}
@@ -623,6 +656,11 @@ func DecodeEnrolOffer(d *Decoder) (*EnrolOffer, error) {
 		return nil, err
 	}
 	m.PCRValues = pv
+	if len(mpv) > 0 {
+		if m.MeasurePointValues, err = decodePCRValues(mpv); err != nil {
+			return nil, err
+		}
+	}
 	return m, nil
 }
 

@@ -480,3 +480,65 @@ func TestEnrolAcceptSignatureFormatChecked(t *testing.T) {
 		t.Fatal("raw signature must not verify as DER")
 	}
 }
+
+// bootCheckValues returns the machine's live values with PCR 11 replaced by
+// what the boot check would see (before systemd's later phases).
+func bootCheckValues(t *testing.T, m *attesttest.Machine) ([]PCRValue, []byte) {
+	t.Helper()
+	live, err := m.TPM.Quote(nil, m.Sel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := sha256.Sum256([]byte("PCR 11 at enter-initrd"))
+	vals := append([]PCRValue(nil), live.Values...)
+	for i := range vals {
+		if vals[i].Index == 11 {
+			vals[i] = PCRValue{Index: 11, Digest: gate[:]}
+		}
+	}
+	return vals, gate[:]
+}
+
+// The gate quotes inside the initramfs, before systemd extends PCR 11 with
+// its later boot phases, so the running system's registers at enrolment can
+// never match a boot check. The machine therefore predicts the boot-check
+// values and the phone pins those; the first boot then matches.
+func TestEnrolPinsBootCheckValues(t *testing.T) {
+	m, p := newMachine(t), newPhone(t)
+	m.Sel, _ = NewPCRSelection(AlgSHA256, []int{0, 2, 4, 7, 11})
+	m.TPM.Extend(11, "leave-initrd") // the running system has moved on
+	predicted, gate := bootCheckValues(t, m)
+	m.MeasurePoint = predicted
+
+	rec := enrol(t, m, p)
+	prof := rec.Policy.Profiles[0]
+	if !bytes.Equal(prof.Values[11], gate) || prof.AddedBy != BaselineMeasurePoint {
+		t.Fatalf("baseline does not pin the boot-check values: %+v", prof)
+	}
+
+	// Next boot: the registers show the boot-check values.
+	m.TPM.PCRs[11] = gate
+	m.TPM.ResetCount++
+	res, merr, perr := attestOnce(t, m, p, rec)
+	if merr != nil || perr != nil {
+		t.Fatalf("machine %v phone %v", merr, perr)
+	}
+	if res.Check.Verdict != VerdictOK {
+		t.Fatalf("first boot after enrolment should match, got %+v", p.Last(EvVerdict).Verdict)
+	}
+}
+
+// Boot-check values must cover exactly the quoted PCRs.
+func TestEnrolRejectsBootCheckValuesForOtherPCRs(t *testing.T) {
+	m, p := newMachine(t), newPhone(t)
+	m.MeasurePoint = []PCRValue{{Index: 4, Digest: make([]byte, 32)}}
+	a, b := attesttest.NewPipe()
+	go func() { _, _ = m.ServeEnrolment(a, true); a.Close() }()
+	v, err := NewEnrolVerifier(p.Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Drive(v, b); err == nil || p.Record != nil {
+		t.Fatalf("phone accepted boot-check values for other PCRs: %v", err)
+	}
+}

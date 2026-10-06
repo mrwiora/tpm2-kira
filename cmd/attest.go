@@ -275,6 +275,8 @@ func AttestEnrol(o EnrolOptions) error {
 	fmt.Println("=== tpm2-kira attest enrol ===")
 	fmt.Printf("Machine:       %s (slot %d)\n", blob.FriendlyName, SlotNumber(sealIndex))
 	fmt.Printf("PCRs quoted:   %s\n", sel)
+	mp := predictMeasurePoint(tpmDev, sealed, sel, o.Debug)
+	printMeasurePoint(mp, sel)
 	fmt.Printf("Adapter:       hci%d\n", o.Adapter)
 	fmt.Println()
 	fmt.Println("NOTE: the adapter is taken over exclusively while enrolling. Bluetooth")
@@ -312,6 +314,7 @@ func AttestEnrol(o EnrolOptions) error {
 		sealIndex: sealIndex,
 		sealed:    sealed,
 		debug:     o.Debug,
+		mp:        mp,
 		confirmSAS: func(code string) (bool, error) {
 			return confirmCode(console, code)
 		},
