@@ -982,3 +982,94 @@ This was removed because:
 6. **NVRAM index range.** tpm2-kira uses blob indices `0x01803000–0x018037FF`
    and generation indices `0x01803800–0x01803FFF` (TPM2 owner-defined NV
    range). Avoid conflicts with other applications using the same range.
+
+---
+
+## 13. Trust between the phone and the machine: who signs what, and why the phone believes it
+
+Remote attestation rests on a handful of signatures and one key agreement.
+This section lists them in the order they are given, what each one proves,
+and on what the phone's trust in it rests. The phone verifies everything
+itself, in the Go core it shares with the machine (`attest/`); the app only
+moves bytes and shows results.
+
+### 13.1 Roots
+
+There are exactly three roots of trust. Everything below is derived from
+them.
+
+| Root | Held by | Established how |
+|---|---|---|
+| The TPM's **endorsement key** (EK) and its vendor certificate | the TPM | Burnt in by the TPM vendor. The phone checks the certificate chain against vendor roots built into the core. Where a TPM has no certificate (Intel PTT on old machines), the phone says "not verified as genuine hardware" and the person decides whether to enrol. |
+| The **pairing**: the person at both screens at enrolment | the person | A six-digit short authentication string (SAS) computed from the encrypted channel's binding and both sides' nonces, shown by the machine and the phone, confirmed on both. It defeats a man in the middle at enrolment; it is not a TOTP code. |
+| The machine's **signing key** (`setup`; ideally on a YubiKey) | the machine's owner | Not known to the phone. The phone meets it only indirectly, through the boot key (§13.4): a boot state it has approved lets the TPM use that key. |
+
+Everything the phone later trusts about a machine is *trust on first use*:
+whatever it pins at enrolment, it holds the machine to afterwards. So enrol
+only a machine whose current state you trust (`attest enrol` says so).
+
+### 13.2 At enrolment
+
+In order. "cb" is the channel binding of the Noise session, a value both
+sides derive and nobody outside the session knows.
+
+| # | Who | What is signed or proven | With which key | What it proves | Why the phone believes it |
+|---|---|---|---|---|---|
+| 1 | both | Encrypted channel (Noise IK) | fresh static keys, exchanged in the session | nobody reads or alters the messages | **Not yet trusted**: a man in the middle could sit here. Step 2 closes that. |
+| 2 | both | SAS over (cb, nonce_phone, nonce_machine), with a commitment so neither side can pick its nonce after seeing the other's | nothing: compared by the person | both screens are ends of the *same* channel | the person saw the same six digits on both screens (root 2) |
+| 3 | machine | EK public area and EK certificate | — | this is a real TPM from a known vendor | the certificate chain verifies to a vendor root in the core (root 1), or the person accepted "not verified" |
+| 4 | phone → TPM | **Credential activation**: the phone encrypts a secret to the EK such that only a TPM holding that EK *and* an object with the AK's Name can recover it (`TPM2_MakeCredential` in software, `TPM2_ActivateCredential` in the TPM) | the EK | the attestation key (AK) lives in the TPM of step 3 | only that TPM can decrypt; the phone received its own secret back |
+| 5 | machine | Baseline **quote** over the selected PCRs, qualifying data = H(enrol label ‖ cb) | the AK (restricted signing key) | these are the register values of the running system, in this session | the AK was tied to the TPM in step 4; the qualifying data ties the quote to this session |
+| 6 | machine | **Boot-check prediction** (`measure_point_values`): the values the gate will see in the initrd | not signed | what to pin as the baseline | not signed, so the phone *checks* it against the quote of step 5: equal everywhere, and on PCR 11 the quote must be reachable from the prediction by systemd's phase words only (§5.6-5.8). A prediction that fails is not used |
+| 7 | machine | **Certification of the boot key** (`TPM2_Certify`), qualifying data as in step 5 | the AK | the boot key is an object of this TPM with exactly this public area: made inside the TPM, not duplicable, key agreement only, usable only under a policy, never by a password (§3.4) | signed by the AK of step 4; the phone also checks every attribute of the public area and that the certified Name is the Name of the public area it was sent |
+| 8 | phone | **EnrolAccept** over (device id, cb, AK Name, anchor public key, verifier id, policy id) | the phone's **anchor key**, generated in the phone's hardware keystore for this machine | this phone holds the anchor key, and binds it to this machine and this session | *this one is for the machine*: the machine pins the anchor public key and later accepts receipts signed by it only. Optionally the phone adds Android Key Attestation for the anchor, so the machine can see the key is in genuine secure hardware |
+| 9 | machine | The slot's **blob**, with the phone enrolled (`BlobSignature`, §3.1 note 4), and the record counter raised (§3.3) | the signing key | the stored enrolment was written by this machine's owner and is the current one | checked by the machine itself at every boot, against a copy of the signing public key in the initramfs; not by the phone |
+
+What the phone pins after step 8: the device id, the EK, the AK (public area
+and Name), the baseline PCR values, the boot key's public point, the
+machine's channel key and advertising key. What the machine pins: the
+phone's anchor public key and channel key.
+
+### 13.3 At every boot
+
+| # | Who | What is signed or proven | With which key | What it proves | Why the phone believes it |
+|---|---|---|---|---|---|
+| 1 | both | Encrypted channel (Noise IK) with the *pinned* static keys | the keys of 13.2 step 1 | the peer is the enrolled machine / the enrolled phone, and nobody is in between | both sides refuse any other static key; nothing to compare any more |
+| 2 | machine | **Hello** with a fresh nonce; phone answers a **Request** with its own nonce, the PCR selection, and the **boot challenge** (§3.4): a one-time key and the code sealed to the boot key | — | freshness and binding: `qd = H(label ‖ nonce_a ‖ nonce_v ‖ cb ‖ selection)` is new for every session and known only to its two ends | its own nonce is in it |
+| 3 | machine | **Quote** over the selected PCRs with qualifying data `qd` | the AK | these are the registers *now*, in this session, as signed by the TPM pinned at enrolment; the quote also carries the TPM's reset counter and firmware version | the AK is pinned (13.2 step 4); `qd` makes a replay impossible; a reset counter that went backwards is a hard failure |
+| 4 | machine | **Boot key proof**: the TPM recovers the code with `TPM2_ECDH_ZGen` under the slot's policy; the machine shows the code and returns `HMAC(k_mac, label ‖ qd)` | the boot key, usable only if the slot's policy holds: PCRs as approved by the signing key, current generation, before `cap` | *the machine's signing key has approved this boot state*, and the screen in front of the person belongs to the machine whose TPM answered | the boot key was certified at enrolment (13.2 step 7); the code and the MAC key derive from a shared secret only that key can compute; the code is compared by the person with the machine's screen. A proof that does not verify is a hard failure; a refusal is reported as such and is not, by itself, a failure |
+| 5 | phone | Comparison of the quoted values with its **profiles** (the baseline and whatever the person approved and remembered later) | — | match, or which registers changed and what that means | its own stored values; this is the one judgement no key on the machine can make for it |
+| 6 | person | The decision: continue (match), approve once, approve and remember, or reject | — | a human looked at the result and the code | — |
+| 7 | phone | **Receipt** over (verdict, device id, AK Name, `qd`, SHA-256 of the quote, policy id, issue and expiry time, verifier id) | the anchor key, unlocked by the phone's PIN or biometrics | *this phone* gave *this verdict* about *this quote* in *this session* | *for the machine*: the coordinator (§3.4, the process that holds the TPM) checks the signature against the pinned anchor and the binding against the quote it issued itself. A reject needs no signature: believing a false "no" costs a check, never trust |
+
+### 13.4 Why the boot key does not replace the quote, and the quote does not replace the boot key
+
+The quote (step 3) proves **what the registers are**; the phone judges them
+against values *it* holds. Nothing on the machine, not even the signing key,
+can make the phone call a changed boot "unchanged".
+
+The boot key proof (step 4) proves **that the machine's signing key approved
+this state**, and ties the session to the screen. It knows nothing about
+which registers moved. A machine that cannot produce it is not necessarily
+compromised: an update that was not resealed, or a check run after the code
+screen, looks the same.
+
+So the phone shows both, and decides from both: green when the signature of
+the boot state is valid, red when it is not; match or changed from its own
+comparison. A changed boot with a valid boot-key proof is a state the
+machine's owner approved (a resealed update); a changed boot without one is
+a state nobody approved yet; a matching boot without one means the machine
+could not vouch for itself this time.
+
+### 13.5 What is *not* trusted
+
+- **The machine's console.** Everything it prints, including "ATTESTED", is
+  advisory. The verdict is on the phone's screen.
+- **The enrolment record on the machine** (the slot's blob): the phone never
+  reads it. The machine checks it itself (§3.3, §9) so that a replaced
+  record cannot make the gate serve a stranger's phone.
+- **The boot-check prediction** (13.2 step 6): used only after the quote of
+  the running system vouched for it.
+- **The app.** It shows what the core tells it and passes the person's
+  answer back. A bug in the app can mislead the person; it cannot make the
+  core sign a receipt it would not sign.
