@@ -29,12 +29,12 @@ import (
 )
 
 // codeHorizon is how far ahead the display computes codes before the OS
-// separator: three windows, the current one and the next two, so the codes
-// in memory are good for at most 90 seconds. Three codes cost a dozen cheap
-// TPM commands, well under a second even on a firmware TPM, and leave no
-// supply for anyone who gets hold of the display process later: whoever
-// wants a code after that needs the next boot.
-const codeHorizon = 90 * time.Second
+// separator: one window, the current one. A firmware TPM takes noticeably
+// long per policy pass, so one code is computed and shown at once; it is
+// good for the rest of its 30-second window, and nothing is left for
+// anyone who gets hold of the display process later. Whoever needs a code
+// after that needs the next boot.
+const codeHorizon = 30 * time.Second
 
 // ErrCodesExhausted: the codes computed before the separator ran out.
 var ErrCodesExhausted = errors.New("no further codes before the next boot: the codes computed before the OS separator ran out")
