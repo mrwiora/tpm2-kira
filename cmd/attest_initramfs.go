@@ -41,6 +41,7 @@ type AttestConfig struct {
 	Adapter     int           // TPM2_KIRA_ATTEST_ADAPTER
 	Timeout     time.Duration // TPM2_KIRA_ATTEST_TIMEOUT: 0 waits until the initrd ends
 	AdapterWait time.Duration // TPM2_KIRA_ATTEST_ADAPTER_WAIT: how long to wait for hciN to appear
+	Debug       bool          // TPM2_KIRA_ATTEST_DEBUG: the gate logs every step it takes
 }
 
 // DefaultAttestConfig is used when the file is missing.
@@ -101,6 +102,15 @@ func ParseAttestConfig(data []byte) (AttestConfig, error) {
 				cfg.Timeout = d
 			} else {
 				cfg.AdapterWait = d
+			}
+		case "TPM2_KIRA_ATTEST_DEBUG":
+			switch strings.ToLower(val) {
+			case "1", "yes", "true", "on":
+				cfg.Debug = true
+			case "", "0", "no", "false", "off":
+				cfg.Debug = false
+			default:
+				return cfg, fmt.Errorf("attest.conf line %d: TPM2_KIRA_ATTEST_DEBUG must be 1 or 0, not %q", n, val)
 			}
 		default:
 			// Unknown keys are ignored so newer files work with older binaries.

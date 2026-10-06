@@ -154,7 +154,9 @@ func (h *host) command(op uint16, params []byte) ([]byte, error) {
 	case <-h.cmdWait:
 	default:
 	}
+	sent := time.Now()
 	if err := h.write(pkt); err != nil {
+		h.logf("command 0x%04x: write failed: %v", op, err)
 		return nil, fmt.Errorf("ble: write command 0x%04x: %w", op, err)
 	}
 	timer := time.NewTimer(commandTimeout)
@@ -166,12 +168,18 @@ func (h *host) command(op uint16, params []byte) ([]byte, error) {
 				continue
 			}
 			if r.status != 0 {
+				h.logf("command 0x%04x: status 0x%02x after %d ms", op, r.status, time.Since(sent).Milliseconds())
 				return nil, fmt.Errorf("ble: command 0x%04x failed with status 0x%02x", op, r.status)
+			}
+			if op != opReadRSSI { // the keepalive logs its own line every 2 s
+				h.logf("command 0x%04x: ok after %d ms", op, time.Since(sent).Milliseconds())
 			}
 			return r.params, nil
 		case <-timer.C:
+			h.logf("command 0x%04x: no answer from the controller within %s", op, commandTimeout)
 			return nil, fmt.Errorf("ble: command 0x%04x timed out", op)
 		case <-h.done:
+			h.logf("command 0x%04x: the adapter went away: %v", op, h.err())
 			return nil, h.err()
 		}
 	}
@@ -310,12 +318,16 @@ func (h *host) startAdvertising() error {
 	if _, err := h.command(opLESetScanRspData, padAD(sr)); err != nil {
 		return err
 	}
-	_, err := h.command(opLESetAdvEnable, []byte{1})
-	return err
+	if _, err := h.command(opLESetAdvEnable, []byte{1}); err != nil {
+		return err
+	}
+	h.logf("advertising (100 ms interval, %d bytes of service data)", len(adv.ServiceData))
+	return nil
 }
 
 func (h *host) stopAdvertising() {
 	_, _ = h.command(opLESetAdvEnable, []byte{0})
+	h.logf("advertising stopped")
 }
 
 // readLoop dispatches everything the controller sends.

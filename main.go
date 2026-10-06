@@ -446,7 +446,7 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 		}
 		os.Exit(cmd.AttestGate(cmd.GateOptions{
 			TPMPath: *tpm, SealIndex: slot, Adapter: cfg.Adapter, Timeout: cfg.Timeout,
-			AdapterWait: cfg.AdapterWait, Debug: *debug,
+			AdapterWait: cfg.AdapterWait, Debug: *debug || cfg.Debug,
 		}))
 	case "initramfs-deps":
 		// Used by the initramfs hooks; prints "module", "firmware" and

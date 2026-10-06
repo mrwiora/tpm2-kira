@@ -459,7 +459,9 @@ type GateOptions struct {
 // the phone's. An image-pinned anchor comes with enforced mode
 // (PLAN-REMOTEATTESTATION.md §10.2).
 func AttestGate(o GateOptions) int {
+	step := gateSteps(o.Debug)
 	tpmPath := preferResourceManager(o.TPMPath)
+	step("version %s; opening the TPM at %s", AppVersion, tpmPath)
 	tpmDev, err := transport.OpenTPM(tpmPath)
 	if err != nil {
 		gateFail("failed to open TPM at %s: %v", tpmPath, err)
@@ -482,10 +484,12 @@ func AttestGate(o GateOptions) int {
 		}
 		idx = found[0]
 	}
+	step("attestation record at 0x%08X; checking its signature and count", idx)
 	recordVerified, code := gateRecordCheck(tpmDev, idx, o.SignerPath)
 	if code != 0 {
 		return code
 	}
+	step("record check done (verified: %v)", recordVerified)
 	blob, err := loadAttestBlob(tpmDev, idx)
 	if err != nil {
 		gateFail("cannot read the attestation blob at 0x%08X: %v", idx, err)
@@ -511,12 +515,14 @@ func AttestGate(o GateOptions) int {
 		Capabilities: attest.CapEventlog,
 	}
 
+	step("%d phone(s) enrolled; opening hci%d (waiting up to %s for it)", len(blob.Verifiers), o.Adapter, o.AdapterWait)
 	p, err := ble.Open(ble.Config{Adapter: o.Adapter, UnblockRFKill: true, Wait: o.AdapterWait, Logf: debugLogf(o.Debug)})
 	if err != nil {
 		gateFail("%v", err)
 		return ExitUnavailable
 	}
 	defer p.Close()
+	step("hci%d is ready; advertising from here on (timeout %s, 0 = until the initramfs ends)", o.Adapter, o.Timeout)
 
 	adv := ble.Advertisement{
 		ServiceData: attest.BuildServiceData(attest.AdvFlagAttest, randBytes(4), blob.AdvKey),
@@ -607,6 +613,19 @@ func debugProgress(debug bool) attest.Progress {
 		return nil
 	}
 	return func(format string, args ...any) { fmt.Printf("tpm2-kira: "+format+"\n", args...) }
+}
+
+// gateSteps returns the gate's step log for debug runs: one line per step
+// with the time since the gate started, so that a boot where the phone was
+// never asked shows how far the gate got and where the time went.
+func gateSteps(debug bool) func(string, ...any) {
+	if !debug {
+		return func(string, ...any) {}
+	}
+	start := time.Now()
+	return func(format string, args ...any) {
+		fmt.Printf("tpm2-kira: gate +%.1fs: "+format+"\n", append([]any{time.Since(start).Seconds()}, args...)...)
+	}
 }
 
 func gateFail(format string, args ...any) {

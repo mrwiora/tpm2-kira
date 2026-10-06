@@ -143,6 +143,19 @@ TPM2_KIRA_FUTURE_KEY=whatever
 	if cfg.Mode != "lazy" || cfg.Adapter != 1 || cfg.Timeout != 90*time.Second || cfg.AdapterWait != time.Minute {
 		t.Fatalf("parsed %+v", cfg)
 	}
+	// Debug is off unless asked for, and a typo is not silently "off".
+	if cfg.Debug {
+		t.Fatal("debug on by default")
+	}
+	for val, want := range map[string]bool{"1": true, "yes": true, "0": false, "off": false} {
+		c, err := ParseAttestConfig([]byte("TPM2_KIRA_ATTEST_DEBUG=" + val + "\n"))
+		if err != nil || c.Debug != want {
+			t.Fatalf("TPM2_KIRA_ATTEST_DEBUG=%s: %v %v", val, c.Debug, err)
+		}
+	}
+	if _, err := ParseAttestConfig([]byte("TPM2_KIRA_ATTEST_DEBUG=maybe\n")); err == nil {
+		t.Fatal("invalid debug value accepted")
+	}
 	if _, err := ParseAttestConfig([]byte("TPM2_KIRA_ATTEST=enforced\n")); err == nil {
 		t.Fatal("enforced must be refused until implemented")
 	}

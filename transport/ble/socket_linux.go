@@ -88,6 +88,7 @@ func openUserChannel(dev int, unblock bool, logf func(string, ...any)) (hciTrans
 		unix.Close(ctl)
 		return nil, nil, fmt.Errorf("ble: cannot query hci%d: %w", dev, err)
 	}
+	logf("hci%d is present, not blocked by rfkill, currently %s", dev, map[bool]string{true: "up", false: "down"}[wasUp])
 	if wasUp {
 		logf("bringing hci%d down for exclusive use", dev)
 		if err := unix.IoctlSetInt(ctl, hciDevDown, dev); err != nil {
@@ -122,6 +123,7 @@ func openUserChannel(dev int, unblock bool, logf func(string, ...any)) (hciTrans
 		}
 		return nil, nil, fmt.Errorf("ble: cannot bind an HCI user channel to hci%d: %w", dev, err)
 	}
+	logf("hci%d: user channel bound", dev)
 	// A non-blocking fd wrapped in os.File uses the runtime poller, so Close
 	// interrupts a blocked Read.
 	return os.NewFile(uintptr(fd), fmt.Sprintf("hci%d-user", dev)), release, nil
