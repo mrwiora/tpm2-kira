@@ -8,25 +8,19 @@ import (
 	"github.com/matthias/tpm2-kira/attest"
 )
 
-// The attestation blob: a second NV object per slot, separate from the sealed
-// blob because it has a different lifecycle — enrolment changes it, sealing
-// does not (PLAN-REMOTEATTESTATION.md §10.1).
+// A slot's phone enrolment: the attestation key, the keys of the channel to
+// the phones, and the phones themselves.
 //
-// It reuses the sealed blob's conventions: little-endian length prefixes, an
-// explicit maximum on every variable-length field, a detached signature by the
-// signing key over [version ‖ payloadLen ‖ payload], NV writes authorised by
-// PolicySigned with the same key, and no migration between versions.
+// It is a section of the slot's blob (blob.go, SealedBlobPayload.Attest), at
+// the end of the payload and under the blob's signature, so that a slot is
+// one thing: sealed, resealed, enrolled and deleted together. The layout is
+// documented in docs/SECURITY-BACKGROUND.md §10. It follows the blob's
+// conventions: little-endian length prefixes and an explicit maximum on
+// every variable-length field.
 //
-// Nothing in it is secret in the sense the sealed blob's seed is:
-//
-//   - the AK private area is wrapped by this TPM's storage hierarchy and
-//     useless anywhere else;
-//   - the Noise static key and the advertising key identify the machine's
-//     *transport* endpoint. Someone who reads them (root, or anyone booting
-//     another OS on this machine) can impersonate the BLE endpoint, but cannot
-//     produce a quote: quotes come from the TPM and are bound to the session by
-//     the channel binding, and a TPM in a tampered state reports tampered PCRs.
-//     The phone's verdict therefore never rests on these keys.
+// The first design kept it as an NV object of its own (AttestNVRAMStart +
+// slot, PLAN-REMOTEATTESTATION.md §10.1). Those are no longer read, only
+// found and removed.
 
 const (
 	// AttestNVRAMStart is slot 0's attestation blob; slot N is at +N.

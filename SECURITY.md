@@ -87,8 +87,9 @@ Known residual risks:
   can raise it, which makes the genuine record stale: the gate then refuses
   it and no phone is served until you enrol again. That denies the phone
   check; it never produces an accepted record.
-- **The attestation blob is readable by anyone who can talk to the TPM.**
-  It holds the machine's Noise private key and its advertising key. Someone
+- **The slot's blob is readable by anyone who can talk to the TPM.**
+  With a phone enrolled it holds the machine's Noise private key and its
+  advertising key (docs/SECURITY-BACKGROUND.md §3.1). Someone
   who reads it once — root, or a live USB on this machine — can recognise the
   machine's advertisements and imitate its Bluetooth endpoint. They cannot
   produce a quote: quotes come from the TPM, are bound to the session, and a

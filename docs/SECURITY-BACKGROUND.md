@@ -48,12 +48,14 @@ TPM after enrolment.
 
 ### 3.1 TPM NVRAM (the "blob")
 
-Each slot's NV index (default `0x01803010`) stores a serialised `SealedBlob`
-(format version 9). It contains:
+Each slot's NV index (default `0x01803010`; slot *n* is `0x01803010` + *n*)
+stores one serialised `SealedBlob`: the slot's TOTP key and, once a phone is
+enrolled for remote attestation, the phone enrolment as well. It is format
+version 9 without an enrolment and version 10 with one (§10). It contains:
 
 | Field               | Content                                                         | Sensitive? |
 |---------------------|-----------------------------------------------------------------|------------|
-| `Version`           | Blob format version (9)                                         | No         |
+| `Version`           | Blob format version: 9, or 10 when `Attest` is present          | No         |
 | `AppVersion`        | tpm2-kira version that wrote the blob                           | No         |
 | `Public`            | TPMT_PUBLIC of the TOTP key object                              | No         |
 | `Private`           | TPM2B_PRIVATE of the TOTP key object (TPM-wrapped)              | **Yes**¹   |
@@ -66,7 +68,25 @@ Each slot's NV index (default `0x01803010`) stores a serialised `SealedBlob`
 | `EventlogInfo`      | Metadata about eventlog calculation (path, timestamps, counts, measure-point verdict) | No |
 | `PublicKeyPath`     | Path of the signing public key, recorded for `info`             | No³        |
 | `PrivateKeyPath`    | Path of the signing private key, recorded for `info`            | No³        |
+| `Attest`            | The slot's phone enrolment, absent without one (fields below)   | Partly⁵    |
 | `BlobSignature`     | Signature over everything above                                 | No⁴        |
+
+The phone enrolment (`Attest`), written by `attest enrol`:
+
+| Field           | Content                                                              | Sensitive? |
+|-----------------|----------------------------------------------------------------------|------------|
+| `AppVersion`    | tpm2-kira version that wrote the enrolment                           | No         |
+| `DeviceID`      | 16 random bytes naming this machine to its phones                    | No         |
+| `FriendlyName`  | The name shown on the phone                                          | No         |
+| `AKPublic`      | TPMT_PUBLIC of the attestation key                                   | No         |
+| `AKPrivate`     | TPM2B_PRIVATE of the attestation key (TPM-wrapped)                   | **Yes**¹   |
+| `AKName`        | The attestation key's Name, which the phone pins                     | No         |
+| `EKAlg`         | Which endorsement key template enrolment used (ECC or RSA)           | No         |
+| `NoisePrivate`  | The machine's static key for the encrypted channel to the phone      | **Yes**⁵   |
+| `AdvKey`        | Key that lets an enrolled phone recognise the machine's advertising  | **Yes**⁵   |
+| `PCRAlg`, `PCRSelection` | The PCR bank and registers the phones check                 | No         |
+| `Count`         | Value of the slot's record counter when the phones last changed (§3.3) | No       |
+| `Verifiers`     | Up to 8 phones: id, name, anchor public key, channel public key, policy id | No   |
 
 ¹ The `Private` field is encrypted by the TPM's storage hierarchy. It cannot be
 decrypted outside the TPM that created it, and the key in it can only be
@@ -85,7 +105,21 @@ planted blob naming its author's key would pass its own check (§5.4).
 ⁴ The blob carries a detached signature over `[version ‖ payloadLen ‖ payload]`,
 made with the same signing key. Unsigned blobs are rejected outright. It
 protects the *metadata* (PCR selection and sources, UKI paths) that `reseal`
-acts on; the TPM enforces the rest by itself.
+acts on; the TPM enforces the rest by itself. It also covers the phone
+enrolment: which phones are enrolled cannot be changed without the signing
+key, and the Bluetooth gate verifies the signature in the initrd with a copy
+of the signing *public* key that the initramfs hooks put into the image.
+
+⁵ `NoisePrivate` and `AdvKey` are stored in the clear and, unlike the two
+`Private` fields, are **not** protected by the TPM: the blob is readable by
+anyone who can talk to the TPM (§9). Someone who reads them can recognise the
+machine's advertisements and imitate its Bluetooth endpoint, but cannot produce
+a quote, which only the TPM's attestation key can sign (SECURITY.md, "Remote
+attestation with a phone: what it does not protect against").
+
+Up to and including tpm2-kira 0.4.2.r46 the phone enrolment was an NV index of
+its own (`0x01803020` + *n*). Those are no longer read; `nvram list` labels
+them, and `attest enrol`, `attest unenrol` and `nvram delete` remove them.
 
 ### 3.2 The generation index
 
@@ -98,7 +132,27 @@ Each slot has a second NV index at blob index + `0x800` (`0x01803810` for slot
 - `READ_STCLEAR`: `TPM2_NV_ReadLock` makes it unreadable until the next TPM
   reset, i.e. reboot. Nothing else can undo the lock.
 
-### 3.3 Inside the TPM (never leaves the chip)
+### 3.3 The record counter
+
+A slot with a phone enrolment has a third NV index, at `0x01803820` + *n*: an
+8-byte **counter** (`TPM_NT_COUNTER`), with `OwnerWrite`, `OwnerRead`,
+`AuthRead` (empty auth) and `NoDA`.
+
+It answers a question a signature cannot: is this blob the *current* one? An
+older blob, still naming a phone that was removed since, verifies just as well.
+So the enrolment carries a `Count`, and the gate accepts the blob only while
+`Count` equals the counter. `attest enrol` and `attest unenrol` write the blob
+with the counter's next value and then increment the counter; `reseal` and
+`seal` carry the enrolment over with its `Count` unchanged.
+
+A TPM counter can only be incremented. Deleting the index does not help
+either: the TPM starts a new counter above the highest value any counter in
+it ever had. The gate also insists that the index *is* a counter, since an
+ordinary index at the same handle could hold any number. Whoever has the owner
+hierarchy can raise the counter, which makes the genuine blob stale until the
+user enrols again: a denial of the phone check, never an accepted blob.
+
+### 3.4 Inside the TPM (never leaves the chip)
 
 - **Storage Primary Seed**: generates the primary key deterministically.
 - **Primary Key** (ECC P-256, restricted decrypt): re-derived on every use with
@@ -108,7 +162,7 @@ Each slot has a second NV index at blob index + `0x800` (`0x01803810` for slot
   `HMAC(key, counter)` in `TPM2_HMAC`; tpm2-kira receives only the 20- or
   32-byte result and truncates it to six digits (RFC 4226).
 
-### 3.4 Filesystem (signing key pair)
+### 3.5 Filesystem (signing key pair)
 
 `tpm2-kira setup` generates an ECDSA P-256 pair, or records a key in a YubiKey
 PIV slot. Any RSA-2048 or ECC P-256/P-384 key works instead, including the
@@ -681,11 +735,27 @@ on such a system. Supporting owner auth is outside the current design.
 
 ---
 
-## 10. Blob Format (Version 9)
+## 10. Blob Format (Versions 9 and 10)
 
 The blob is a binary-serialised structure with explicit length prefixes and
 maximum size limits to prevent memory exhaustion during deserialisation.
 
+One blob per slot. **Version 9** is a slot with a TOTP key only. **Version 10**
+is the same layout followed by the slot's phone enrolment, and a blob is
+written as version 10 exactly when it carries one. Removing the phones gives
+the version 9 bytes back. So
+
+- a slot without phones is unchanged by the existence of version 10, and
+  stays readable by builds that know only version 9;
+- a build that knows only version 9 refuses a version 10 blob instead of
+  reading it and dropping the phones on its next `reseal`;
+- a version field that does not match the content (9 with an enrolment
+  appended, 10 without one) is either a parse error or, since the version is
+  inside the signed region, a signature failure.
+
+Version 10 put the phone enrolment into the slot's blob; before, it was an NV
+index of its own with a separate life (it could outlive the TOTP key it
+belonged to, or be created without one).
 Version 9 replaced the sealed secret with an HMAC key used inside the TPM, and
 the PolicyOR (PCR branch or PolicySigned branch) with PolicyAuthorize: the
 `SignedBranchDigest` field gave way to the TOTP algorithm, the generation,
@@ -703,7 +773,7 @@ TOTP secret on its command line, readable by every local user in
 ```
 Offset  Field                   Type        Notes
 ─────────────────────────────────────────────────────────────
-0       Version                 uint32      Must be 9
+0       Version                 uint32      9, or 10 with a phone enrolment
 4       Payload length          uint32      Signed region length
 8       AppVersion length       uint32      ≤ 1024
 ?       AppVersion              string
@@ -747,6 +817,39 @@ Offset  Field                   Type        Notes
           PubKeyPath            string      Filesystem path to public key
           PrivKeyPath length    uint16      ≤ 4096
           PrivKeyPath           string      Filesystem path to private key
+        Only if Version=10 (the phone enrolment, up to the end of the payload):
+?         Enrolment length      uint32      ≤ 16384; must end the payload exactly
+?         Magic                 [4]byte     "KATT"
+?         Enrolment format      uint8       Must be 3
+?         AppVersion length     uint16      ≤ 1024
+?         AppVersion            string
+?         DeviceID              [16]byte    Random, assigned at first enrolment
+?         FriendlyName length   uint16      ≤ 64
+?         FriendlyName          string      Name shown on the phone
+?         AKPublic length       uint32      ≤ 4096
+?         AKPublic              []byte      TPMT_PUBLIC of the attestation key
+?         AKPrivate length      uint32      ≤ 4096
+?         AKPrivate             []byte      TPM2B_PRIVATE (TPM-wrapped)
+?         AKName length         uint16      ≤ 68
+?         AKName                []byte
+?         EKAlg                 uint16      TPM_ALG_ECC or TPM_ALG_RSA
+?         NoisePrivate          [32]byte    X25519 static key of the channel
+?         AdvKey                [32]byte    Advertising key
+?         PCRAlg                uint16      TPM_ALG_SHA256 or TPM_ALG_SHA1
+?         PCRSelection length   uint16      ≤ 24
+?         PCRSelection          []uint8     PCR indices the phones check
+?         Count                 uint64      Must equal the slot's record counter
+?         Verifier count        uint8       ≤ 8
+          For each verifier (phone):
+            ID length           uint16      ≤ 64
+            ID                  string
+            Name length         uint16      ≤ 64
+            Name                string
+            AnchorPub length    uint16      ≤ 256
+            AnchorPub           []byte      PKIX DER, ECDSA P-256: signs receipts
+            NoisePub            [32]byte    X25519 static key of the phone
+            PolicyID length     uint16      ≤ 64
+            PolicyID            string
 ─────────────────────── end of signed region ───────────────────────
 ?       Signature length        uint16      ≤ 1024, must be non-zero
 ?       Signature               []byte      Over [version ‖ payloadLen ‖ payload]
@@ -756,15 +859,39 @@ Everything except the trailing signature is covered by `SealedBlobPayload`, so
 any field added there is automatically inside the signed region. A blob whose
 signature is absent is rejected rather than treated as legacy.
 
+The enrolment is the last thing in the payload, and its length must end the
+payload exactly: nothing can follow it unsigned, and a truncated or padded one
+does not parse. It has a format number of its own (3; formats 1 and 2 were the
+separate NV index), so the enrolment can change without touching the TOTP
+part.
+
+**Who writes what.** `seal` creates the blob. `reseal` reads it, verifies it
+with the signing key, changes the PCR digests, generation and approval, and
+writes it back, enrolment included and unchanged. `seal` on an existing slot
+keeps the enrolment if the same signing key wrote the old blob, and drops it
+otherwise: it does not sign phones it cannot vouch for. `attest enrol` and
+`attest unenrol` read the blob, verify it, add or remove the enrolment and
+write it back, TOTP part unchanged; if that write fails, the previous blob is
+put back. Every write replaces the NV index (`TPM2_NV_UndefineSpace`, then
+define and PolicySigned writes, §9).
+
+**Size.** The blob has to fit one NV index, whose maximum the TPM reports as
+`TPM_PT_NV_INDEX_MAX` (2048 bytes on many, including Intel PTT). Measured on
+swtpm with ECC keys and three sealed PCRs: 912 bytes for the TOTP part, 542
+more for an enrolment with one phone, and roughly 200 for each further phone.
+`attest enrol` computes the size with one more phone of the largest allowed
+size before it starts and refuses if that exceeds the TPM's limit.
+
 The stored PCR digests are **measure-point values**, not end-of-firmware values
 and not the values a running system would report. `MeasurePointExtends` records
 which userspace extends were folded in, so verification reproduces exactly what
 was sealed instead of re-deriving it — see §5.6–5.8.
 
-**There is no migration between blob versions.** Only the current version is
+**There is no migration from older blob versions.** Versions 9 and 10 are
 accepted; an older blob produces an error telling the user to seal again. Since
 the TOTP secret cannot be carried across, that also means re-enrolling the
-authenticator app.
+authenticator app. A phone enrolment from the separate NV index is not carried
+into the blob either: the phone is enrolled again.
 
 All multi-byte integers are little-endian. Strings are UTF-8 without null
 terminators.
@@ -793,7 +920,7 @@ This was removed because:
 
 1. **Protect the signing private key.** It is the recovery master key. Store
    it with restrictive permissions (`chmod 400`, owned by root, in a directory
-   only root can write to; `seal` and `reseal` refuse anything else, §3.4).
+   only root can write to; `seal` and `reseal` refuse anything else, §3.5).
    Consider keeping a backup in a secure offline location.
 2. **Use RSA-2048 or ECC P-256.** These are universally supported by TPM 2.0
    hardware. RSA-4096 may not work on all TPMs.

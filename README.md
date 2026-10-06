@@ -878,7 +878,7 @@ still be sealed in the TPM. Delete the slot first, then the directory.
 │   ├── pcr.go               # PCR spec parsing, reading and comparison
 │   ├── pcrwarn.go           # Warnings for PCR selections that attest little
 │   ├── attest.go            # attest enrol/gate/status/quote/verify/unenrol
-│   ├── attest_blob.go       # Per-slot attestation blob (AK, pinned phones)
+│   ├── attest_blob.go       # A slot's phone enrolment (AK, pinned phones), a section of its blob
 │   ├── attest_tpm.go        # AK/EK, TPM2_Quote, ActivateCredential
 │   ├── nvram.go             # NVRAM read/write/scan operations
 │   ├── totp_utils.go        # Code truncation, QR code and display

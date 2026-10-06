@@ -454,6 +454,14 @@ That is a property worth keeping for a binary that goes into an initramfs.
 
 ### 10.1 The attestation blob
 
+> **Superseded (2026-10-06).** The enrolment is no longer an NVRAM object of
+> its own. It is a section of the slot's sealed blob, under that blob's
+> signature (blob version 10; SECURITY-BACKGROUND.md §3.1, §3.3 and §10). The
+> separate lifecycle described below turned out to be the problem: an
+> enrolment could outlive the TOTP key of its slot or exist without one, and
+> the commands for one did not see leftovers of the other. What remains from
+> this section is the content of the enrolment and the conventions it follows.
+
 A second NVRAM object, separate from the sealed blob, because it has a
 different lifecycle: enrolment changes it, sealing does not.
 
