@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/google/go-tpm/tpm2"
+
+	"github.com/matthias/tpm2-kira/attest"
 )
 
 // The factor's round trip on swtpm: wrapped for this TPM's EK and the
@@ -18,7 +20,7 @@ import (
 func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 	sock := startSWTPM(t)
 	const slot = NVRAMSlotStart + 1
-	signer, _ := sealRealSlot(t, sock, slot) // sealed to PCR 23
+	signer, pubPath := sealRealSlot(t, sock, slot) // sealed to PCR 23
 	s := newSWTPMSetupAt(t, sock, "box")
 	tpm := s.tpm
 	s.blob.EKAlg = uint16(tpm2.TPMAlgECC)
@@ -66,6 +68,28 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 		t.Fatal("labels")
 	}
 
+	// The coordinator does the same at boot, from a Release, and keeps
+	// only the salt.
+	s.blob.Phone.Verifiers = []attest.EnrolledVerifier{{ID: "my-phone", Name: "Pixel", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
+	if err := writeAttestBlob(tpm, slot, s.blob, signer); err != nil {
+		t.Fatal(err)
+	}
+	svc := newGateService(tpm, slot, pubPath, false)
+	status, msg := svc.TakeRelease(&attest.Release{Kind: attest.ReleaseKindFactor, CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret})
+	if status != attest.ReleaseOK {
+		t.Fatalf("the coordinator did not open the factor: %d %s", status, msg)
+	}
+	if !bytes.Equal(svc.Salt(), salt) {
+		t.Fatal("the coordinator's salt is not the factor's")
+	}
+	svc.Forget()
+	if svc.Salt() != nil {
+		t.Fatal("the salt survived Forget")
+	}
+	if status, _ := svc.TakeRelease(&attest.Release{Kind: attest.ReleaseKindPassphrase}); status != attest.ReleaseUnsupported {
+		t.Fatalf("a passphrase release was taken: %d", status)
+	}
+
 	// A different TPM (a second swtpm) with the same blob: the EK is
 	// another, and the credential does not open.
 	other := startSWTPM(t)
@@ -110,6 +134,9 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 	s.extend(t, 23, "something else booted")
 	if _, err := unwrapFactor(tpm, sb, slot, att, w); !errors.Is(err, errFactorRefused) {
 		t.Fatalf("after a PCR change: %v", err)
+	}
+	if status, _ := svc.TakeRelease(&attest.Release{Kind: attest.ReleaseKindFactor, CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret}); status != attest.ReleaseTPMRefused || svc.Salt() != nil {
+		t.Fatalf("the coordinator took a factor after a PCR change: %d", status)
 	}
 }
 

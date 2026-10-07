@@ -270,13 +270,46 @@ func openConsole() (io.ReadWriteCloser, int, error) {
 // character, Backspace deletes, an empty line asks again. Ctrl-C gives up
 // (no key: systemd-cryptsetup falls back to its own prompt).
 func consolePassphrase(volume string) ([]byte, error) {
+	return consoleAsk(volume, "passphrase", "")
+}
+
+// diskKey is the key provider's answer with the factor (factor.go): when
+// the phone released one in this boot and the TPM opened it, the typed
+// password and the factor's salt are combined (Combine, hashpwd2's
+// derivation) into the key; without a factor the typed passphrase is the
+// key, as it is for a volume enrolled by hand. salt returns the salt or
+// nil; the key is for the caller to wipe.
+func diskKey(salt func() []byte) func(volume string) ([]byte, error) {
+	return func(volume string) ([]byte, error) {
+		s := salt()
+		if s == nil {
+			return consolePassphrase(volume)
+		}
+		defer wipe(s)
+		pw, err := consoleAsk(volume, "password",
+			"The phone released the disk factor: the key is derived from it and your password.\n"+
+				"   (Ctrl-C skips to systemd's own prompt, where the recovery passphrase works.)")
+		if err != nil {
+			return nil, err
+		}
+		defer wipe(pw)
+		return Combine(pw, s)
+	}
+}
+
+// consoleAsk asks on the console for a volume's passphrase or password,
+// with a note above the prompt when there is one.
+func consoleAsk(volume, what, note string) ([]byte, error) {
 	con, fd, err := openConsole()
 	if err != nil {
 		return nil, fmt.Errorf("cannot open the console: %w", err)
 	}
 	defer con.Close()
+	if note != "" {
+		fmt.Fprintf(con, "\n🔑 %s\n", note)
+	}
 	for {
-		fmt.Fprintf(con, "\n🔐 Please enter passphrase for disk %s: ", volume)
+		fmt.Fprintf(con, "\n🔐 Please enter %s for disk %s: ", what, volume)
 		pw, err := readPassphrase(con, fd)
 		fmt.Fprintln(con)
 		if err != nil {

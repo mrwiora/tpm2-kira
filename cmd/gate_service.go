@@ -64,6 +64,7 @@ type gateHost interface {
 	Identity() (*gateIdentity, int, error)
 	attest.AttesterBackend // Quote, BootContext, Eventlog, ProveBootKey
 	attest.ReceiptJudge
+	attest.FactorBackend // FactorToKeep, TakeRelease (factor.go)
 	// Report tells the coordinator where the radio side is. Only progress
 	// can be reported; a verdict comes from JudgeReceipt alone.
 	Report(state GateState)
@@ -90,6 +91,13 @@ type gateService struct {
 	issued      map[string][]byte // SHA-256 of a quote issued this boot -> its qualifying data
 	issuedOrder []string
 	status      GateStatus
+
+	// The factor (factor.go). keep is what 'factor enrol' asks the phone
+	// to keep, sent in the evidence; salt is the combiner's salt from the
+	// factor the phone released and the TPM opened, held for the moment
+	// the disk's key is asked for (and wiped with Close).
+	keep *attest.FactorBlob
+	salt []byte
 }
 
 // newGateService sets the coordinator up in the background (the TPM can be
@@ -262,6 +270,69 @@ func (s *gateService) Eventlog() ([]byte, error) {
 // a quote this coordinator issued, name an enrolled phone, and carry that
 // phone's signature. What the radio side believes about its session plays
 // no part.
+// Keep sets the factor the next evidence asks the phone to keep.
+func (s *gateService) Keep(f *attest.FactorBlob) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keep = f
+}
+
+// FactorToKeep implements attest.FactorBackend.
+func (s *gateService) FactorToKeep() *attest.FactorBlob {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.keep
+}
+
+// TakeRelease implements attest.FactorBackend: the factor the phone
+// released is opened in the TPM now, while the slot's policy still holds
+// (before the OS separator), and only the combiner's salt is kept. The
+// status tells the phone what the TPM made of it.
+func (s *gateService) TakeRelease(r *attest.Release) (uint8, string) {
+	<-s.ready
+	if s.code != 0 || s.blob == nil || s.be == nil || s.be.sealed == nil {
+		return attest.ReleaseUnsupported, "this machine has no slot to open a factor with"
+	}
+	if r == nil || r.Kind != attest.ReleaseKindFactor {
+		return attest.ReleaseUnsupported, "not a factor"
+	}
+	s.tpmMu.Lock()
+	f, err := unwrapFactor(s.tpm, s.be.sealed, s.be.sealIndex, s.blob, &WrappedFactor{Credential: r.CredentialBlob, EncryptedSecret: r.EncryptedSecret})
+	s.tpmMu.Unlock()
+	if err != nil {
+		if errors.Is(err, errNoReleaseKey) {
+			return attest.ReleaseUnsupported, err.Error()
+		}
+		return attest.ReleaseTPMRefused, "the TPM did not open the factor: " + err.Error()
+	}
+	salt := FactorSalt(f, r.Label)
+	wipe(f)
+	s.mu.Lock()
+	wipe(s.salt)
+	s.salt = salt
+	s.mu.Unlock()
+	return attest.ReleaseOK, "the TPM opened the factor; the disk's key will be derived from it and your password"
+}
+
+// Salt returns a copy of the combiner's salt from the released factor,
+// or nil when no factor was released in this boot.
+func (s *gateService) Salt() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.salt == nil {
+		return nil
+	}
+	return append([]byte(nil), s.salt...)
+}
+
+// Forget wipes the salt; called when the key provider is done with it.
+func (s *gateService) Forget() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	wipe(s.salt)
+	s.salt = nil
+}
+
 func (s *gateService) JudgeReceipt(r *attest.Receipt, verifierID string) attest.ReceiptCheck {
 	<-s.ready
 	if s.code != 0 || r == nil {

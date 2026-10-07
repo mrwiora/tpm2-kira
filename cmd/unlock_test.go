@@ -399,3 +399,54 @@ func TestConsolePassphraseOnASocket(t *testing.T) {
 		t.Fatalf("%q %v", pw, err)
 	}
 }
+
+// With a salt from the coordinator the provider asks for the password and
+// answers with the combined key; without one, with the passphrase as typed.
+func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
+	if testing.Short() {
+		t.Skip("1 GiB of Argon2id")
+	}
+	path := filepath.Join(t.TempDir(), "console.sock")
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	t.Setenv("TPM2_KIRA_CONSOLE", path)
+	prompts := make(chan string, 4)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				buf := make([]byte, 1024)
+				n, _ := c.Read(buf)
+				prompts <- string(buf[:n])
+				c.Write([]byte("hunter2\n"))
+				io.Copy(io.Discard, c)
+			}()
+		}
+	}()
+	salt := []byte("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	key, err := diskKey(func() []byte { return append([]byte(nil), salt...) })("cryptroot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := Combine([]byte("hunter2"), salt)
+	if !bytes.Equal(key, want) {
+		t.Fatal("the key is not the combination of password and salt")
+	}
+	if p := <-prompts; !strings.Contains(p, "released the disk factor") || !strings.Contains(p, "enter password for disk cryptroot") {
+		t.Errorf("prompt: %q", p)
+	}
+	plain, err := diskKey(func() []byte { return nil })("cryptroot")
+	if err != nil || string(plain) != "hunter2" {
+		t.Fatalf("without a factor: %q %v", plain, err)
+	}
+	if p := <-prompts; !strings.Contains(p, "enter passphrase for disk cryptroot") || strings.Contains(p, "factor") {
+		t.Errorf("prompt without a factor: %q", p)
+	}
+}

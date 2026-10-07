@@ -395,7 +395,15 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 	if l, err := listenUnlock(unlockSocket); err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the disk unlock is not served: %v\n", err)
 	} else if l != nil {
-		unlock = serveUnlock(l, consolePassphrase, unlockLogger(debug))
+		// With a factor released by the phone and opened by the TPM
+		// (the coordinator keeps the salt), the key is derived from it
+		// and the password; otherwise the passphrase is the key.
+		unlock = serveUnlock(l, diskKey(func() []byte {
+			if svc == nil {
+				return nil
+			}
+			return svc.Salt()
+		}), unlockLogger(debug))
 	}
 	open := func() (transport.TPMCloser, error) {
 		tpmDev, err := OpenTPM(tpmPath)
@@ -499,6 +507,9 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		// the service at switch-root.
 		waitForStop()
 		unlock.Close()
+	}
+	if svc != nil {
+		svc.Forget()
 	}
 }
 

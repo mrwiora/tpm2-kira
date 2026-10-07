@@ -30,13 +30,15 @@ import (
 const DefaultGateSocketPath = "/run/tpm2-kira/gate.sock"
 
 const (
-	gateOpIdentity = "identity"
-	gateOpQuote    = "quote"
-	gateOpBoot     = "boot-context"
-	gateOpEventlog = "eventlog"
-	gateOpReceipt  = "receipt"
-	gateOpReport   = "report"
-	gateOpBootKey  = "boot-key"
+	gateOpIdentity   = "identity"
+	gateOpQuote      = "quote"
+	gateOpBoot       = "boot-context"
+	gateOpEventlog   = "eventlog"
+	gateOpReceipt    = "receipt"
+	gateOpReport     = "report"
+	gateOpBootKey    = "boot-key"
+	gateOpFactorKeep = "factor-keep"
+	gateOpRelease    = "release"
 
 	maxGateRequest  = 64 << 10                         // the largest is a receipt
 	maxGateResponse = 2*attest.MaxEventlogSize + 1<<16 // an event log, base64 in JSON
@@ -54,6 +56,8 @@ type gateRequest struct {
 	EphemeralPub []byte `json:"ephemeral_pub,omitempty"`
 	Sealed       []byte `json:"sealed,omitempty"`
 	QuoteDigest  []byte `json:"quote_digest,omitempty"`
+	// release: what the phone released; the coordinator opens it.
+	Release *attest.Release `json:"release,omitempty"`
 }
 
 type gateResponse struct {
@@ -68,6 +72,10 @@ type gateResponse struct {
 	// The code itself stays with the coordinator.
 	BootAnswer *attest.BootAnswer `json:"boot_answer,omitempty"`
 	BootState  uint8              `json:"boot_state,omitempty"`
+	// factor-keep: the factor to ask the phone to keep; release: the status.
+	Keep          *attest.FactorBlob `json:"keep,omitempty"`
+	ReleaseStatus uint8              `json:"release_status,omitempty"`
+	Message       string             `json:"message,omitempty"`
 }
 
 func writeGateFrame(w io.Writer, v any, limit int) error {
@@ -248,6 +256,14 @@ func answerGate(host gateHost, req *gateRequest) *gateResponse {
 	case gateOpBootKey:
 		answer, state := host.ProveBootKey(&attest.BootChallenge{EphemeralPub: req.EphemeralPub, Sealed: req.Sealed}, req.QD, req.QuoteDigest)
 		return &gateResponse{BootAnswer: answer, BootState: state}
+	case gateOpFactorKeep:
+		return &gateResponse{Keep: host.FactorToKeep()}
+	case gateOpRelease:
+		if req.Release == nil {
+			return &gateResponse{Err: "no release"}
+		}
+		status, msg := host.TakeRelease(req.Release)
+		return &gateResponse{ReleaseStatus: status, Message: msg}
 	}
 	return &gateResponse{Err: "unknown operation"}
 }
@@ -375,6 +391,27 @@ func (c *gateClient) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest
 		return nil, attest.BootKeyFailed
 	}
 	return resp.BootAnswer, resp.BootState
+}
+
+// FactorToKeep implements attest.FactorBackend: the coordinator's.
+func (c *gateClient) FactorToKeep() *attest.FactorBlob {
+	resp, err := c.ask(&gateRequest{Op: gateOpFactorKeep})
+	if err != nil {
+		return nil
+	}
+	return resp.Keep
+}
+
+// TakeRelease implements attest.FactorBackend: the coordinator's TPM opens it.
+func (c *gateClient) TakeRelease(r *attest.Release) (uint8, string) {
+	resp, err := c.ask(&gateRequest{Op: gateOpRelease, Release: r})
+	if err != nil {
+		return attest.ReleaseTPMRefused, "the coordinator did not answer"
+	}
+	if resp.Err != "" {
+		return attest.ReleaseTPMRefused, resp.Err
+	}
+	return resp.ReleaseStatus, resp.Message
 }
 
 // Report implements gateHost.

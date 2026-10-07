@@ -166,6 +166,8 @@ type fakeHost struct {
 	reports  []GateState
 	receipt  *attest.Receipt
 	evlog    []byte
+	keep     *attest.FactorBlob
+	release  *attest.Release
 
 	challenge *attest.BootChallenge
 }
@@ -192,7 +194,12 @@ func (f *fakeHost) JudgeReceipt(r *attest.Receipt, id string) attest.ReceiptChec
 	f.receipt = r
 	return attest.ReceiptCheck{Verdict: r.Verdict, Authentic: true, Ack: attest.AckAccepted, Detail: id}
 }
-func (f *fakeHost) Report(s GateState) { f.reports = append(f.reports, s) }
+func (f *fakeHost) Report(s GateState)               { f.reports = append(f.reports, s) }
+func (f *fakeHost) FactorToKeep() *attest.FactorBlob { return f.keep }
+func (f *fakeHost) TakeRelease(r *attest.Release) (uint8, string) {
+	f.release = r
+	return attest.ReleaseOK, "opened"
+}
 func (f *fakeHost) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest []byte) (*attest.BootAnswer, uint8) {
 	f.challenge = ch
 	if len(ch.EphemeralPub) != 65 {
@@ -305,6 +312,19 @@ func TestWorkerReachesTheCoordinator(t *testing.T) {
 	}
 	if _, state := c.ProveBootKey(&attest.BootChallenge{}, nil, nil); state != attest.BootKeyFailed {
 		t.Fatalf("a malformed challenge: state %d", state)
+	}
+	// The factor through the socket: nothing to keep, then something; the
+	// release reaches the coordinator and its status comes back.
+	if k := c.FactorToKeep(); k != nil {
+		t.Fatalf("a factor to keep from nowhere: %+v", k)
+	}
+	host.keep = &attest.FactorBlob{CredentialBlob: []byte("cred"), EncryptedSecret: []byte("sec"), Label: "luks"}
+	if k := c.FactorToKeep(); k == nil || string(k.CredentialBlob) != "cred" || k.Label != "luks" {
+		t.Fatalf("factor to keep: %+v", k)
+	}
+	status, msg := c.TakeRelease(&attest.Release{Kind: attest.ReleaseKindFactor, CredentialBlob: []byte("cred"), EncryptedSecret: []byte("sec")})
+	if status != attest.ReleaseOK || msg != "opened" || host.release == nil || string(host.release.CredentialBlob) != "cred" {
+		t.Fatalf("release through the socket: %d %q %+v", status, msg, host.release)
 	}
 	c.Report(GateSession)
 	if len(host.reports) != 1 || host.reports[0] != GateSession {
