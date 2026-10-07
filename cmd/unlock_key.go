@@ -77,10 +77,17 @@ func askUnlockSocket(socket, volume string, wait time.Duration) ([]byte, error) 
 	return key, nil
 }
 
-// execAskpass replaces this process with cryptsetup's prompt.
+// execAskpass replaces this process with cryptsetup's prompt. askpass
+// writes its prompt to stderr and reads the console; the keyscript sends
+// this process's stderr to the boot log, so both are pointed at the
+// console again first, or the question would be asked unseen.
 func execAskpass(volume string) error {
 	if _, err := os.Stat(askpass); err != nil {
 		return fmt.Errorf("no key, and %s is not there either", askpass)
+	}
+	if con, err := os.OpenFile("/dev/console", os.O_RDWR, 0); err == nil {
+		syscall.Dup2(int(con.Fd()), 0)
+		syscall.Dup2(int(con.Fd()), 2)
 	}
 	return syscall.Exec(askpass, []string{askpass, "Please unlock disk " + volume + ": "}, os.Environ())
 }
