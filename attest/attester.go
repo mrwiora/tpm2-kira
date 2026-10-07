@@ -55,6 +55,18 @@ type ReceiptJudge interface {
 	JudgeReceipt(r *Receipt, verifierID string) ReceiptCheck
 }
 
+// FactorBackend is an optional AttesterBackend extension for factor
+// release (PLAN-FACTORRELEASE.md). FactorToKeep is sent in the evidence
+// when the backend has a new factor the phone should keep ('factor enrol');
+// nil at boot. TakeRelease receives what the phone released after a
+// trusted receipt and says what became of it (a ReleaseAck status); the
+// backend opens it in the TPM, or keeps it for the moment the disk's key
+// is asked for. A backend that does not implement this gets no factor.
+type FactorBackend interface {
+	FactorToKeep() *FactorBlob
+	TakeRelease(r *Release) (status uint8, message string)
+}
+
 // EnrolledVerifier is one pinned verifier, as stored in the attestation blob.
 type EnrolledVerifier struct {
 	ID        string
@@ -89,6 +101,7 @@ type AttestResult struct {
 	Request  *Request
 	Receipt  *Receipt
 	Check    ReceiptCheck
+	Release  *Release // the phone's released factor, when it sent one
 }
 
 // ErrUnknownVerifier is returned when an IK initiator is not an enrolled phone.
@@ -178,6 +191,10 @@ func ServeAttestation(conn Conn, id *AttestIdentity, be AttesterBackend, progres
 		BootProof:     bootAnswer.Proof,
 		BootSignature: bootAnswer.Signature,
 	}
+	fb, _ := be.(FactorBackend)
+	if fb != nil {
+		ev.FactorKeep = fb.FactorToKeep()
+	}
 	evlog, _ := be.Eventlog()
 	var evlogHash []byte
 	if len(evlog) > 0 && len(evlog) <= MaxEventlogSize {
@@ -247,10 +264,24 @@ func ServeAttestation(conn Conn, id *AttestIdentity, be AttesterBackend, progres
 				return res, err
 			}
 		case MsgRelease:
-			// Factor release (PLAN-FACTORRELEASE.md) is defined in the
-			// protocol but not implemented by this attester yet.
-			ack, _ := (&ReleaseAck{Status: ReleaseUnsupported, Message: "release not supported by this version"}).Encode()
-			if err := ch.SendMsg(ack); err != nil {
+			r, err := DecodeRelease(d)
+			if err != nil {
+				return res, err
+			}
+			ack := &ReleaseAck{Status: ReleaseUnsupported, Message: "this machine takes no factor"}
+			switch {
+			case res.Receipt == nil || !res.Check.Authentic || res.Check.Ack != AckAccepted:
+				ack = &ReleaseAck{Status: ReleaseNoReceipt, Message: "no accepted receipt before the release"}
+			case fb != nil && r.Kind == ReleaseKindFactor:
+				res.Release = r
+				ack.Status, ack.Message = fb.TakeRelease(r)
+			}
+			progress.say("Factor released by %s: %s", verifierLabel(res.Verifier), ack.Message)
+			b, err := ack.Encode()
+			if err != nil {
+				return res, err
+			}
+			if err := ch.SendMsg(b); err != nil {
 				return res, err
 			}
 		case MsgBye:

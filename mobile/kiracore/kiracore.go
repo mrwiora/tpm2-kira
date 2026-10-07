@@ -148,7 +148,13 @@ func RecordSummary(recordJSON string) (string, error) {
 		Slot         uint8      `json:"slot"`
 		Profiles     []profile  `json:"profiles"`
 		EKVerifiedBy string     `json:"ek_verified_by,omitempty"`
+		// A kept disk factor (PLAN-FACTORRELEASE.md): when it was kept.
+		FactorKeptAt *time.Time `json:"factor_kept_at,omitempty"`
 	}{FriendlyName: rec.FriendlyName, EnrolledAt: rec.EnrolledAt, LastAttested: rec.LastAttested, Slot: rec.Slot, EKVerifiedBy: rec.EKVerifiedBy}
+	if rec.HasFactor() {
+		t := rec.Factor.KeptAt
+		out.FactorKeptAt = &t
+	}
 	id, _ := rec.DeviceID.MarshalText()
 	out.DeviceID = string(id)
 	for _, p := range rec.Policy.Profiles {

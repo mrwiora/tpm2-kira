@@ -253,6 +253,21 @@ type Evidence struct {
 	BootKeyState  uint8
 	BootProof     []byte
 	BootSignature []byte // marshalled TPMT_SIGNATURE by the boot key (bootkey.go)
+	// FactorKeep asks the verifier to keep this wrapped factor for the
+	// machine (PLAN-FACTORRELEASE.md §6): sent by 'factor enrol' on the
+	// booted system, never at boot. The verifier stores it with the
+	// record once the person has accepted the verdict, and returns it in
+	// a Release after every trusted receipt from then on.
+	FactorKeep *FactorBlob
+}
+
+// FactorBlob is a wrapped factor: TPM2_MakeCredential output for the
+// machine's EK and release key. Only that TPM, in the boot state its
+// signing key approved, can open it; the verifier cannot.
+type FactorBlob struct {
+	CredentialBlob  []byte // TPM2B_ID_OBJECT contents
+	EncryptedSecret []byte // TPM2B_ENCRYPTED_SECRET contents
+	Label           string // the factor's label, default "luks"
 }
 
 // Encode serialises the message.
@@ -274,6 +289,13 @@ func (m *Evidence) Encode() ([]byte, error) {
 	e.U8(12, m.BootKeyState)
 	e.OptBytes(13, m.BootProof)
 	e.OptBytes(14, m.BootSignature)
+	if f := m.FactorKeep; f != nil {
+		e.Bytes(15, f.CredentialBlob)
+		e.Bytes(16, f.EncryptedSecret)
+		if f.Label != "" {
+			e.String(17, f.Label)
+		}
+	}
 	return e.Finish()
 }
 
@@ -296,6 +318,13 @@ func DecodeEvidence(d *Decoder) (*Evidence, error) {
 		BootKeyState:   d.U8(12, false),
 		BootProof:      d.Fixed(13, bootProofSize, false),
 		BootSignature:  d.Bytes(14, maxTPMSig, false),
+	}
+	if cred := d.Bytes(15, maxCredential, false); cred != nil {
+		m.FactorKeep = &FactorBlob{
+			CredentialBlob:  cred,
+			EncryptedSecret: d.Bytes(16, maxCredential, true),
+			Label:           d.String(17, maxShortString, false),
+		}
 	}
 	vals := d.Bytes(7, 2+maxPCRValues*(5+65), true)
 	if err := d.Err(); err != nil {

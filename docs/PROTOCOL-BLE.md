@@ -391,6 +391,9 @@ Signatures never cover this encoding; they cover the canonical strings of §9.
 | 12 | boot_key_state | u8 | O | 0 not tried · 1 proved · 2 refused by the TPM · 3 could not try (§7.6) |
 | 13 | boot_proof | bytes[32] exact | O | present with state 1 |
 | 14 | boot_signature | bytes ≤600 | O | TPMT_SIGNATURE by the boot key over `"tpm2-kira/boot-signature/v1" ‖ qd ‖ SHA-256(quoted)`; present with state 1 |
+| 15 | factor_credential | bytes ≤1024 | O | a wrapped factor the phone is asked to keep (`factor enrol` on the booted system; never at boot): `TPM2_MakeCredential` credentialBlob for the machine's EK and release key. Kept, replacing any kept one, when the verdict is accepted (not on reject); returned in a Release after the accepted receipt of this and every later session |
+| 16 | factor_secret | bytes ≤1024 | O | with 15: `TPM2_MakeCredential` secret |
+| 17 | factor_label | string ≤64 | O | with 15: the factor's label, default `luks` |
 
 BootContext (nested): 1 `blob_version` u32 · 2 `nvram_index` u32 ·
 3 `measure_point` string ≤512 · 4 `secureboot_state` u8 (0 unknown, 1 enabled,
@@ -426,9 +429,12 @@ offset; the core checks the final SHA-256.
 
 #### 7.3.7 Release (0x07) — salt release, optional
 
-Sent after a Receipt with a trusted verdict, in the same session, only if
-Hello advertised `CAP_RELEASE_FACTOR` (kind 2) or `CAP_RELEASE_PASSPHRASE`
-(kind 1).
+Sent by the phone after the ReceiptAck of a trusted verdict (ok or
+approved) that the machine accepted (result 1), in the same session, when
+the phone keeps a factor for the machine (Evidence tags 15-17). The phone
+then waits for the ReleaseAck and sends Bye. A machine that takes no
+factor answers status 2 and the session still ends well; the TPM, not the
+phone, decides whether a released factor opens.
 
 | Tag | Name | Type | | Notes |
 |---|---|---|---|---|
@@ -437,7 +443,7 @@ Hello advertised `CAP_RELEASE_FACTOR` (kind 2) or `CAP_RELEASE_PASSPHRASE`
 | 3 | credential_blob | bytes ≤1024 | R | `TPM2_MakeCredential` credentialBlob, made at factor enrolment |
 | 4 | encrypted_secret | bytes ≤1024 | R | `TPM2_MakeCredential` secret |
 | 5 | ciphertext | bytes ≤4096 | O | kind 1 only |
-| 6 | approval | bytes ≤600 | O | PolicySigned approval for a changed boot (PLAN-FACTORRELEASE.md §4.1) |
+| 6 | approval | bytes ≤600 | O | unused: the release key has no branch the phone could open (PLAN-FACTORRELEASE.md §4.1) |
 | 7 | label | string ≤64 | O | factor label, default `luks` |
 
 The phone never holds the factor itself — only this blob, which only the

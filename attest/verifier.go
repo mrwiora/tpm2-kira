@@ -21,7 +21,7 @@ import (
 // pixels; every decision is made here.
 
 // MachineRecordVersion is the version of the stored machine record format.
-const MachineRecordVersion = 2
+const MachineRecordVersion = 3
 
 // MachineRecord is everything a verifier keeps about one enrolled machine.
 // The phone stores it (encrypted at rest by the platform) as opaque JSON
@@ -55,6 +55,23 @@ type MachineRecord struct {
 	EKVerifiedBy string     `json:"ek_verified_by,omitempty"`
 	EnrolledAt   time.Time  `json:"enrolled_at"`
 	LastAttested *time.Time `json:"last_attested,omitempty"`
+	// Factor is the machine's wrapped disk factor (PLAN-FACTORRELEASE.md),
+	// kept since the person accepted a verdict whose evidence carried it,
+	// and returned after every trusted receipt. The phone cannot open it.
+	Factor *FactorRecord `json:"factor,omitempty"`
+}
+
+// FactorRecord is a kept FactorBlob with when it was kept.
+type FactorRecord struct {
+	CredentialBlob  HexStr    `json:"credential_blob"`
+	EncryptedSecret HexStr    `json:"encrypted_secret"`
+	Label           string    `json:"label,omitempty"`
+	KeptAt          time.Time `json:"kept_at"`
+}
+
+// HasFactor reports whether the record keeps a disk factor for the machine.
+func (r *MachineRecord) HasFactor() bool {
+	return r != nil && r.Factor != nil && len(r.Factor.CredentialBlob) > 0
 }
 
 func (r *MachineRecord) pinned() *PinnedIdentity {
@@ -91,12 +108,15 @@ func (r *MachineRecord) Validate() error {
 type Event struct {
 	Type string `json:"type"`
 
-	SAS           string         `json:"sas,omitempty"`
-	Purpose       string         `json:"purpose,omitempty"`
-	TBS           []byte         `json:"tbs,omitempty"`
-	VerdictCode   uint8          `json:"verdict_code,omitempty"`
-	Verdict       *Verdict       `json:"verdict,omitempty"`
-	NeedsDecision bool           `json:"needs_decision,omitempty"`
+	SAS           string   `json:"sas,omitempty"`
+	Purpose       string   `json:"purpose,omitempty"`
+	TBS           []byte   `json:"tbs,omitempty"`
+	VerdictCode   uint8    `json:"verdict_code,omitempty"`
+	Verdict       *Verdict `json:"verdict,omitempty"`
+	NeedsDecision bool     `json:"needs_decision,omitempty"`
+	// verdict: the machine asks the phone to keep a new disk factor; it is
+	// kept, replacing any kept one, when the verdict is accepted.
+	FactorOffered bool           `json:"factor_offered,omitempty"`
 	EventlogAvail bool           `json:"eventlog_available,omitempty"`
 	Record        *MachineRecord `json:"record,omitempty"`
 	DeviceID      HexStr         `json:"device_id,omitempty"`
@@ -139,6 +159,7 @@ const (
 	EvEventlog      = "eventlog"        // event log transfer progress
 	EvReceiptAck    = "receipt_ack"     // what the machine made of the receipt
 	EvRecordUpdated = "record_updated"  // persist Record (replaces the stored one)
+	EvReleaseAck    = "release_ack"     // what the machine made of the released factor
 	EvDone          = "done"            // session finished normally; disconnect
 	EvError         = "error"           // session failed; disconnect
 )
@@ -199,6 +220,7 @@ const (
 	vsWaitDecision
 	vsWaitReceiptSig
 	vsWaitReceiptAck
+	vsWaitReleaseAck
 	// terminal
 	vsDone
 	vsFailed
@@ -239,6 +261,8 @@ type Verifier struct {
 	bootSecret  *BootSecret // attestation: this session's code and proof key
 	receipt     *Receipt
 	remember    bool
+	factorKeep  *FactorBlob // attestation: the factor the evidence asked to keep
+	releasing   bool        // a Release is out, a ReleaseAck is awaited
 	evlog       []byte
 	evlogSum    []byte
 	evlogTot    uint32
@@ -817,11 +841,12 @@ func (v *Verifier) handleAttest(out *Output, d *Decoder) (*Output, error) {
 		// Nothing is signed before the person has seen the result: also a
 		// matching boot waits for their go-ahead, after they compared the
 		// code with the machine's screen.
+		v.factorKeep = ev.FactorKeep
 		v.state = vsWaitDecision
-		out.Events = append(out.Events, Event{Type: EvVerdict, Verdict: v.verdict, EventlogAvail: v.evlogSum != nil, NeedsDecision: true})
+		out.Events = append(out.Events, Event{Type: EvVerdict, Verdict: v.verdict, EventlogAvail: v.evlogSum != nil, NeedsDecision: true, FactorOffered: ev.FactorKeep != nil})
 		return out, nil
 
-	case vsWaitDecision, vsWaitReceiptSig, vsWaitReceiptAck:
+	case vsWaitDecision, vsWaitReceiptSig, vsWaitReceiptAck, vsWaitReleaseAck:
 		if d.Type == MsgEventlogChunk {
 			return v.handleEventlogChunk(out, d)
 		}
@@ -834,17 +859,48 @@ func (v *Verifier) handleAttest(out *Output, d *Decoder) (*Output, error) {
 			if v.receipt.Verdict.Trusted() {
 				v.updateRecord()
 				out.Events = append(out.Events, Event{Type: EvRecordUpdated, Record: v.record})
+				// The factor goes out only after a trusted receipt the
+				// machine accepted: the TPM decides whether it opens.
+				if ack.Result == AckAccepted && v.record.HasFactor() {
+					return v.sendRelease(out)
+				}
 			}
-			b, err := EncodeEmpty(MsgBye)
-			if err := v.send(out, b, err); err != nil {
+			return v.bye(out)
+		}
+		if v.state == vsWaitReleaseAck && d.Type == MsgReleaseAck {
+			ack, err := DecodeReleaseAck(d)
+			if err != nil {
 				return v.fail(out, ErrCodeProtocol, err.Error())
 			}
-			v.state = vsDone
-			out.Events = append(out.Events, Event{Type: EvDone})
-			return out, nil
+			out.Events = append(out.Events, Event{Type: EvReleaseAck, Result: ack.Status, Message: ack.Message})
+			return v.bye(out)
 		}
 	}
 	return v.fail(out, ErrCodeProtocol, "unexpected "+d.Type.String())
+}
+
+// sendRelease hands the machine its kept factor.
+func (v *Verifier) sendRelease(out *Output) (*Output, error) {
+	f := v.record.Factor
+	b, err := (&Release{
+		Kind: ReleaseKindFactor, Slot: v.record.Slot,
+		CredentialBlob: f.CredentialBlob, EncryptedSecret: f.EncryptedSecret, Label: f.Label,
+	}).Encode()
+	if err := v.send(out, b, err); err != nil {
+		return v.fail(out, ErrCodeProtocol, err.Error())
+	}
+	v.state = vsWaitReleaseAck
+	return out, nil
+}
+
+func (v *Verifier) bye(out *Output) (*Output, error) {
+	b, err := EncodeEmpty(MsgBye)
+	if err := v.send(out, b, err); err != nil {
+		return v.fail(out, ErrCodeProtocol, err.Error())
+	}
+	v.state = vsDone
+	out.Events = append(out.Events, Event{Type: EvDone})
+	return out, nil
 }
 
 func (v *Verifier) handleEventlogChunk(out *Output, d *Decoder) (*Output, error) {
@@ -1011,6 +1067,9 @@ func (v *Verifier) updateRecord() {
 	}
 	r.FirmwareVersion = v.verdict.FirmwareVersion
 	r.LastAttested = &now
+	if f := v.factorKeep; f != nil {
+		r.Factor = &FactorRecord{CredentialBlob: f.CredentialBlob, EncryptedSecret: f.EncryptedSecret, Label: f.Label, KeptAt: now}
+	}
 	if v.verdict.Profile != "" {
 		for i := range r.Policy.Profiles {
 			p := &r.Policy.Profiles[i]
