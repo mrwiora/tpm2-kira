@@ -1,9 +1,11 @@
 # PLAN — BLE Attestation with a Mobile Device
 
 > **Status:** partially implemented — phases 1–4, and phase 5 (Bluetooth in
-> the initramfs) for lazy mode; nothing yet verified on real hardware. The wire
+> the initramfs); nothing yet verified on real hardware. The wire
 > contract is [PROTOCOL-BLE.md](PROTOCOL-BLE.md); "Implementation status" below
-> lists what is done and what is open.
+> lists what is done and what is open. What this plan calls "lazy mode" is
+> the only behaviour there is (§7): a phone is served whenever one is
+> enrolled, no mode is set anywhere, and the boot is never held.
 > **Depends on:** [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md)
 > phases 1–5. This document adds a *transport* (Bluetooth LE), a *verifier*
 > (an Android/iOS app) and a *gate* (what happens at the passphrase prompt).

@@ -20,7 +20,7 @@ package cmd
 // hand. For that this process is also the gate's coordinator
 // (gate_service.go): it holds the TPM for the radio worker
 // (tpm2-kira-attest.service), which has none, and reads the phone's receipt
-// itself. Its service ends with the hold (lazy mode: the phone has as long
+// itself. Its service ends with the hold (the phone has as long
 // as the code is asked about, plus the time to finish an answer it has
 // begun), and the worker ends with it. The process must not outlive the
 // hold on the console in any case: it owns the terminal, and systemd's
@@ -339,10 +339,11 @@ func releaseTerminal(fd int) {
 }
 
 // startCoordinator makes this process the gate's coordinator when the image
-// carries a gate for an enrolled phone: it opens the TPM for it and listens
-// on socket. Nil when there is nothing to coordinate.
-func startCoordinator(tpmPath, socket, configPath string, debug bool) (*gateService, func()) {
-	svc, server := openCoordinator(tpmPath, socket, configPath, debug)
+// carries a gate for an enrolled phone - the hook puts the signing public
+// key at signerPath with the gate and not otherwise: it opens the TPM for
+// it and listens on socket. Nil when there is nothing to coordinate.
+func startCoordinator(tpmPath, socket, configPath, signerPath string, debug bool) (*gateService, func()) {
+	svc, server := openCoordinator(tpmPath, socket, configPath, signerPath, debug)
 	if svc == nil {
 		return nil, func() {}
 	}
@@ -357,13 +358,16 @@ func startCoordinator(tpmPath, socket, configPath string, debug bool) (*gateServ
 	}
 }
 
-func openCoordinator(tpmPath, socket, configPath string, debug bool) (*gateService, *gateServer) {
+func openCoordinator(tpmPath, socket, configPath, signerPath string, debug bool) (*gateService, *gateServer) {
 	if socket == "" {
 		return nil, nil
 	}
-	cfg, err := LoadAttestConfig(configPath)
-	if err != nil || cfg.Mode != "lazy" {
+	if _, err := os.Stat(signerPath); err != nil {
 		return nil, nil // no gate in this image
+	}
+	if _, err := LoadAttestConfig(configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: %v\n", err)
+		return nil, nil
 	}
 	path := preferResourceManager(tpmPath)
 	tpmDev, err := transport.OpenTPM(path)
@@ -386,7 +390,7 @@ func openCoordinator(tpmPath, socket, configPath string, debug bool) (*gateServi
 // also the key provider for systemd-cryptsetup: it answers the volumes'
 // key requests once the hold has ended, and stays until it is stopped.
 func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, debug bool) {
-	svc, endCoordinator := startCoordinator(tpmPath, gateSocket, DefaultAttestConfigPath, debug)
+	svc, endCoordinator := startCoordinator(tpmPath, gateSocket, DefaultAttestConfigPath, DefaultAttestSignerPath, debug)
 	var unlock *unlockServer
 	if l, err := listenUnlock(unlockSocket); err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the disk unlock is not served: %v\n", err)

@@ -566,11 +566,9 @@ func AttestEnrol(o EnrolOptions) error {
 			fmt.Println("The phone can attest this machine from the next boot on. No rebuild is needed.")
 			return nil
 		}
-		fmt.Println("The phone can now attest this machine at boot. To have the machine ask")
-		fmt.Println("it while the code is shown, enable the gate in lazy mode:")
-		fmt.Println("    echo 'TPM2_KIRA_ATTEST=lazy' | sudo tee /etc/tpm2-kira/attest.conf")
-		fmt.Println("and rebuild the initramfs (the Bluetooth hook must find your adapter).")
-		fmt.Println("Further phones need no rebuild.")
+		fmt.Println("The phone can now attest this machine at boot. Rebuild the initramfs so")
+		fmt.Println("the machine asks it while the code is shown (the hook adds the Bluetooth")
+		fmt.Println("adapter it finds). Further phones need no rebuild.")
 		if changing := imagePCRs(sel.Indices); len(changing) > 0 {
 			fmt.Println()
 			fmt.Printf("NOTE: that rebuild changes the boot image, and with it PCR %s, which the phone checks.\n", changing)
@@ -640,9 +638,9 @@ type GateOptions struct {
 }
 
 // AttestGate serves attestation requests until a phone returns a receipt,
-// and reports the outcome as an exit code. In lazy mode the unit that runs
-// it does not hold the boot: the result is shown, and the passphrase prompt
-// appears regardless.
+// and reports the outcome as an exit code. The unit that runs it does not
+// hold the boot: the result is shown, and the passphrase prompt appears
+// regardless.
 //
 // The receipt is checked against the anchor in the attestation blob. In the
 // initrd that blob cannot be authenticated (the signing key is not there), so
@@ -1310,9 +1308,7 @@ func AttestUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug b
 	}
 	fmt.Printf("Attestation enrolment removed from slot %d. Its TOTP key is unchanged.\n", slot)
 	fmt.Println("The phone still lists this machine; remove it there too.")
-	if cfg, err := LoadAttestConfig(DefaultAttestConfigPath); err == nil && cfg.Mode != "off" {
-		fmt.Println("The initramfs still carries the Bluetooth gate, which now has nothing to")
-		fmt.Println("serve: rebuild it (mkinitcpio -P / update-initramfs -u) to take it out.")
-	}
+	fmt.Println("The initramfs still carries the Bluetooth gate, which now has nothing to")
+	fmt.Println("serve: rebuild it (mkinitcpio -P / update-initramfs -u) to take it out.")
 	return nil
 }

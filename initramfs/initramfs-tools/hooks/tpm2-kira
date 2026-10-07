@@ -39,77 +39,68 @@ fi
 manual_add_modules tpm_tis
 manual_add_modules tpm_crb
 
-# Bluetooth for remote attestation (PLAN-BLE.md §3.1): only when
-# /etc/tpm2-kira/attest.conf enables it. 'tpm2-kira attest initramfs-deps'
-# names the configured adapter's driver modules and the firmware files the
-# kernel loaded for it on this machine; nothing else is copied.
+# Bluetooth for remote attestation (PLAN-BLE.md §3.1), whenever a phone is
+# enrolled. 'tpm2-kira attest initramfs-deps' names the configured adapter's
+# driver modules and the firmware files the kernel loaded for it on this
+# machine; nothing else is copied. Without an enrolled phone, or without the
+# adapter, the image shows the code and serves the disk's key and asks no
+# phone.
 attest_conf=/etc/tpm2-kira/attest.conf
-if [ -r "$attest_conf" ]; then
-    TPM2_KIRA_ATTEST=off
-    TPM2_KIRA_ATTEST_ADAPTER=0
-    . "$attest_conf"
-    adapter=${TPM2_KIRA_ATTEST_ADAPTER#hci}
+TPM2_KIRA_ATTEST_ADAPTER=0
+[ -r "$attest_conf" ] && . "$attest_conf"
+adapter=${TPM2_KIRA_ATTEST_ADAPTER#hci}
+enrolled=$("$kira" attest status --json 2>/dev/null)
+if [ -z "$enrolled" ] || [ "$enrolled" = "[]" ]; then
+    echo "tpm2-kira: no phone is enrolled; Bluetooth not added"
+# The gate checks the enrolment record before it advertises: signed
+# by this machine's signing key, and current by the TPM's record
+# counter. 'attest signer' prints the key's public half (public, not
+# a secret) for the image after checking the records; one written by
+# somebody else, or an older one put back, is refused, and then the
+# gate is not added.
+elif ! signer=$("$kira" attest signer) || ! printf '%s\n' "$signer" | grep -q 'BEGIN PUBLIC KEY'; then
+    echo "tpm2-kira: the attestation record was not accepted (see above); Bluetooth not added" >&2
+else
+    log=$(mktemp)
+    journalctl -k -b -o cat >"$log" 2>/dev/null || true
+    rc=0
+    deps=$("$kira" attest initramfs-deps --adapter "$adapter" --kernel-log "$log") || rc=$?
+    rm -f "$log"
 
-    case "$TPM2_KIRA_ATTEST" in
-    off | "") ;;
-    lazy)
-        if [ "$("$kira" attest status --json 2>/dev/null)" = "[]" ]; then
-            echo "tpm2-kira: attestation is 'lazy' but no phone is enrolled; run 'tpm2-kira attest enrol'. Bluetooth not added" >&2
-        # The gate checks the enrolment record before it advertises: signed
-        # by this machine's signing key, and current by the TPM's record
-        # counter. 'attest signer' prints the key's public half (public, not
-        # a secret) for the image after checking the records; one written by
-        # somebody else, or an older one put back, is refused, and then the
-        # gate is not added.
-        elif ! signer=$("$kira" attest signer) || ! printf '%s\n' "$signer" | grep -q 'BEGIN PUBLIC KEY'; then
-            echo "tpm2-kira: the attestation record was not accepted (see above); Bluetooth not added" >&2
-        else
-            log=$(mktemp)
-            journalctl -k -b -o cat >"$log" 2>/dev/null || true
-            rc=0
-            deps=$("$kira" attest initramfs-deps --adapter "$adapter" --kernel-log "$log") || rc=$?
-            rm -f "$log"
-
-            if [ "$rc" -ne 0 ]; then
-                echo "tpm2-kira: attestation is 'lazy' but hci$adapter was not found; Bluetooth not added" >&2
-            elif ! printf '%s\n' "$deps" | grep -q '^adapter '; then
-                # Every other command exits 0 by design, so a binary that
-                # predates initramfs-deps "succeeds" with no output.
-                echo "tpm2-kira: the installed tpm2-kira cannot resolve Bluetooth dependencies (too old?); Bluetooth not added" >&2
-            else
-                mkdir -p "$DESTDIR/etc/tpm2-kira"
-                : >"$DESTDIR/etc/tpm2-kira/bluetooth-modules"
-                nmod=0
-                nfw=0
-                # A here-document keeps the loop in this shell, so the
-                # counters survive it.
-                while read -r kind value; do
-                    case "$kind" in
-                    module)
-                        manual_add_modules "$value"
-                        echo "$value" >>"$DESTDIR/etc/tpm2-kira/bluetooth-modules"
-                        nmod=$((nmod + 1))
-                        ;;
-                    firmware)
-                        add_firmware "$value"
-                        nfw=$((nfw + 1))
-                        ;;
-                    warning)
-                        echo "tpm2-kira: $value" >&2
-                        ;;
-                    esac
-                done <<DEPS
+    if [ "$rc" -ne 0 ]; then
+        echo "tpm2-kira: a phone is enrolled but hci$adapter was not found; Bluetooth not added" >&2
+    elif ! printf '%s\n' "$deps" | grep -q '^adapter '; then
+        # Every other command exits 0 by design, so a binary that
+        # predates initramfs-deps "succeeds" with no output.
+        echo "tpm2-kira: the installed tpm2-kira cannot resolve Bluetooth dependencies (too old?); Bluetooth not added" >&2
+    else
+        mkdir -p "$DESTDIR/etc/tpm2-kira"
+        : >"$DESTDIR/etc/tpm2-kira/bluetooth-modules"
+        nmod=0
+        nfw=0
+        # A here-document keeps the loop in this shell, so the
+        # counters survive it.
+        while read -r kind value; do
+            case "$kind" in
+            module)
+                manual_add_modules "$value"
+                echo "$value" >>"$DESTDIR/etc/tpm2-kira/bluetooth-modules"
+                nmod=$((nmod + 1))
+                ;;
+            firmware)
+                add_firmware "$value"
+                nfw=$((nfw + 1))
+                ;;
+            warning)
+                echo "tpm2-kira: $value" >&2
+                ;;
+            esac
+        done <<DEPS
 $deps
 DEPS
-                copy_file config "$attest_conf" /etc/tpm2-kira/attest.conf
-                mkdir -p "$DESTDIR/etc/tpm2-kira"
-                printf '%s\n' "$signer" > "$DESTDIR/etc/tpm2-kira/attest-signer.pem"
-                echo "tpm2-kira: Bluetooth attestation via hci$adapter: $nmod modules, $nfw firmware files"
-            fi
-        fi
-        ;;
-    *)
-        echo "tpm2-kira: TPM2_KIRA_ATTEST=$TPM2_KIRA_ATTEST is not supported (off, lazy); Bluetooth not added" >&2
-        ;;
-    esac
+        [ -r "$attest_conf" ] && copy_file config "$attest_conf" /etc/tpm2-kira/attest.conf
+        mkdir -p "$DESTDIR/etc/tpm2-kira"
+        printf '%s\n' "$signer" > "$DESTDIR/etc/tpm2-kira/attest-signer.pem"
+        echo "tpm2-kira: Bluetooth attestation via hci$adapter: $nmod modules, $nfw firmware files"
+    fi
 fi

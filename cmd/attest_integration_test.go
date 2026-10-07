@@ -458,32 +458,41 @@ func TestCoordinatorAndWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	lazy := filepath.Join(dir, "attest.conf")
-	if err := os.WriteFile(lazy, []byte("TPM2_KIRA_ATTEST=lazy\n"), 0o600); err != nil {
+	conf := filepath.Join(dir, "attest.conf")
+	if err := os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST_ADAPTER=0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	off := filepath.Join(dir, "off.conf")
-	if err := os.WriteFile(off, []byte("TPM2_KIRA_ATTEST=off\n"), 0o600); err != nil {
+	// The gate is in the image when the hook put the signer there.
+	signer := filepath.Join(dir, "attest-signer.pem")
+	if err := os.WriteFile(signer, []byte("not read here\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	noSigner := filepath.Join(dir, "no-signer.pem")
 	// The coordinator opens the TPM itself; swtpm serves one client.
 	s.tpm.Close()
 
 	// No gate in the image, or no socket asked for: nothing to coordinate.
-	for _, c := range [][2]string{
-		{filepath.Join(dir, "a", "gate.sock"), off},
-		{filepath.Join(dir, "b", "gate.sock"), filepath.Join(dir, "missing.conf")},
-		{"", lazy},
+	for _, c := range [][3]string{
+		{filepath.Join(dir, "a", "gate.sock"), conf, noSigner},
+		{"", conf, signer},
 	} {
-		if svc, end := startCoordinator(sock, c[0], c[1], false); svc != nil {
+		if svc, end := startCoordinator(sock, c[0], c[1], c[2], false); svc != nil {
 			t.Fatalf("a coordinator without a gate to coordinate (%v)", c)
 		} else {
 			end() // nothing to end, and no harm in asking
 		}
 	}
+	// A config the gate cannot use is reported, and there is no gate.
+	bad := filepath.Join(dir, "bad.conf")
+	os.WriteFile(bad, []byte("TPM2_KIRA_ATTEST=lazy\n"), 0o600)
+	if svc, end := startCoordinator(sock, filepath.Join(dir, "c", "gate.sock"), bad, signer, false); svc != nil {
+		t.Fatal("a coordinator with a config it refuses")
+	} else {
+		end()
+	}
 
 	gate := filepath.Join(dir, "run", "gate.sock")
-	svc, endCoordinator := startCoordinator(sock, gate, lazy, false)
+	svc, endCoordinator := startCoordinator(sock, gate, conf, signer, false)
 	if svc == nil {
 		t.Fatal("no coordinator")
 	}

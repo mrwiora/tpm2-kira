@@ -524,7 +524,7 @@ sudo tpm2-kira attest enrol --name "Thinkpad-X1"
 #   A TPM without a SHA-256 PCR bank, or a slot sealed with --sha1, needs
 #   --sha1 here as well: SHA-1 is never chosen without being asked for.
 
-# Serve an attestation (lazy mode: shows the verdict, never blocks):
+# Serve an attestation by hand (shows the verdict, never blocks):
 sudo tpm2-kira attest gate
 sudo tpm2-kira attest status
 
@@ -570,21 +570,22 @@ exclusively through an HCI user channel (no BlueZ needed); other Bluetooth
 devices on that adapter disconnect until it finishes. `--adapter N` selects
 another adapter.
 
-### At the passphrase prompt
+### At the code screen
 
-Enable lazy mode in `/etc/tpm2-kira/attest.conf` and rebuild the initramfs:
+Once a phone is enrolled, rebuild the initramfs:
 
 ```bash
-sudo sed -i 's/^TPM2_KIRA_ATTEST=.*/TPM2_KIRA_ATTEST=lazy/' /etc/tpm2-kira/attest.conf
 sudo mkinitcpio -P            # or: sudo update-initramfs -u
 ```
 
-The hooks ask `tpm2-kira attest initramfs-deps` what the configured adapter
-needs and copy exactly that: its driver modules and the firmware files the
-kernel loaded for it in the current boot (about 1.1 MB on an Intel adapter).
-Nothing is added while attestation is off, no phone is enrolled, or the
-adapter is missing. At boot the gate runs beside the TOTP display, waits for
-the adapter, serves the phone, prints the verdict, and never holds the boot.
+There is no mode to switch on: the hooks ask `tpm2-kira attest
+initramfs-deps` what the adapter needs (`TPM2_KIRA_ATTEST_ADAPTER` in
+`/etc/tpm2-kira/attest.conf`, hci0 by default) and copy exactly that: its
+driver modules and the firmware files the kernel loaded for it in the
+current boot (about 1.1 MB on an Intel adapter). Nothing is added while no
+phone is enrolled or the adapter is missing. At boot the gate runs beside
+the TOTP display, waits for the adapter, serves the phone, prints the
+verdict, and never holds the boot.
 
 The new modules and firmware change the initramfs and therefore PCR 11 (UKI)
 or PCR 9 (GRUB): on Arch the post hook reseals automatically; on Debian with
@@ -595,10 +596,10 @@ The same session will later also release the salt for
 from a password plus a phone-held factor
 ([docs/PLAN-FACTORRELEASE.md](docs/PLAN-FACTORRELEASE.md)).
 
-Status: the machine side, Bluetooth inside the initramfs (lazy mode) and the
-phone's verification core are implemented but not yet tested on real
-Bluetooth hardware; salt release is not implemented yet. There is no
-enforced mode: the passphrase can always be entered by hand
+Status: the machine side, Bluetooth inside the initramfs and the phone's
+verification core are implemented but not yet tested on real Bluetooth
+hardware; salt release is not implemented yet. The phone's verdict informs;
+the passphrase can always be entered by hand
 ([UNLOCK-DISK.md](docs/UNLOCK-DISK.md) §4).
 The phone apps are specified in [docs/mobile/](docs/mobile/). The protocol is
 defined in [docs/PROTOCOL-BLE.md](docs/PROTOCOL-BLE.md), the design in
@@ -621,13 +622,27 @@ This installs:
 
 ### Configure mkinitcpio
 
-Edit `/etc/mkinitcpio.conf` and add the hook next to `sd-encrypt` (the
-order of the two does not matter):
+Edit `/etc/mkinitcpio.conf` and add the hook next to `sd-encrypt`:
 
 ```bash
 # Systemd-based initramfs (recommended):
 HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
 ```
+
+The order of the two hooks does not matter for the boot: what runs when is
+decided by the units (`tpm2-kira.service` before `systemd-pcrosseparator`,
+the key socket before `cryptsetup-pre.target`, the disk after both), not
+by the position in `HOOKS`, and neither hook reads what the other wrote.
+`sd-tpm2-kira sd-encrypt` is the order to use, because it reads like the
+boot: the code screen, then the disk.
+
+What the image does at boot depends on two things, both optional:
+
+| In the image / on the command line | At boot |
+|---|---|
+| nothing but the hook | the code screen, then `sd-encrypt`'s own passphrase prompt (systemd's), as if tpm2-kira were not there once the code is confirmed |
+| `rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock` on the kernel command line | the code screen, then tpm2-kira's passphrase prompt; a typo falls back to systemd's prompt |
+| a phone enrolled (`attest enrol`) and the adapter found at build time | the code screen also asks the phone and shows its verdict; the passphrase prompt is never held |
 
 ### Configure the disk unlock
 
@@ -717,7 +732,7 @@ does nothing.
 | `tpm2-kira.service` (the code at the prompt, the gate's coordinator, and the key provider for `systemd-cryptsetup`) | always, once `sd-tpm2-kira` is in `HOOKS` | a TOTP key is sealed. With nothing sealed it says so once and releases the boot; a later `seal` needs no rebuild. The gate ends when the boot is released; the process stays to answer the volumes' key requests and ends at switch-root |
 | `tpm2-kira-unlock.socket` (the key socket) | always, with the display | `systemd-cryptsetup` activates a volume whose key file is the socket |
 | `tpm2-kira-cap.service` (locks codes when the initrd is left) | always, with the display | the initrd is left. Without sealed keys there is nothing to lock |
-| `tpm2-kira-attest.service` (Bluetooth gate, radio worker) | only if `/etc/tpm2-kira/attest.conf` says `lazy`, **and** a phone is enrolled, **and** its record is signed by this machine's key and current, **and** the adapter was found when the image was built. The signing public key goes into the image with it. Otherwise neither the unit nor any Bluetooth module or firmware is in the image; `mkinitcpio` says which condition failed | a phone connects |
+| `tpm2-kira-attest.service` (Bluetooth gate, radio worker) | only if a phone is enrolled, **and** its record is signed by this machine's key and current, **and** the adapter was found when the image was built. The signing public key goes into the image with it. Otherwise neither the unit nor any Bluetooth module or firmware is in the image; `mkinitcpio` says which condition failed | a phone connects |
 
 One case leaves a unit in the image with nothing to do: `attest unenrol`
 without rebuilding the initramfs. The gate then starts at boot, reports that no
@@ -976,7 +991,7 @@ still be sealed in the TPM. Delete the slot first, then the directory.
 │   ├── pentest1/, pentest2/      # Security review findings and mitigations
 │   └── *.issue                   # Write-ups of specific bugs
 ├── initramfs/               # Everything that goes into, or builds, an initramfs
-│   ├── common/attest.conf          # Attestation mode for the initramfs (off / lazy)
+│   ├── common/attest.conf          # The Bluetooth adapter and timeouts for the initramfs
 │   ├── systemd/tpm2-kira.service   # Shows the code in systemd-based images
 │   ├── systemd/tpm2-kira-cap.service  # Runs 'cap' when leaving the initrd
 │   ├── systemd/tpm2-kira-attest.service  # Lazy Bluetooth attestation gate

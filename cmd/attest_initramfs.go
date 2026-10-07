@@ -28,7 +28,7 @@ import (
 // megabytes of firmware for other chips into the image.
 
 const (
-	// DefaultAttestConfigPath holds the attestation mode for the initramfs.
+	// DefaultAttestConfigPath holds the radio settings for the initramfs.
 	DefaultAttestConfigPath = "/etc/tpm2-kira/attest.conf"
 	// DefaultFirmwareDir is where the kernel loads firmware from.
 	DefaultFirmwareDir = "/usr/lib/firmware"
@@ -37,7 +37,6 @@ const (
 // AttestConfig is /etc/tpm2-kira/attest.conf: shell-style KEY=VALUE lines,
 // so the Debian init scripts can source the same file.
 type AttestConfig struct {
-	Mode        string        // TPM2_KIRA_ATTEST: off | lazy
 	Adapter     int           // TPM2_KIRA_ATTEST_ADAPTER
 	Timeout     time.Duration // TPM2_KIRA_ATTEST_TIMEOUT: 0 waits until the initrd ends
 	AdapterWait time.Duration // TPM2_KIRA_ATTEST_ADAPTER_WAIT: how long to wait for hciN to appear
@@ -46,7 +45,7 @@ type AttestConfig struct {
 
 // DefaultAttestConfig is used when the file is missing.
 func DefaultAttestConfig() AttestConfig {
-	return AttestConfig{Mode: "off", AdapterWait: 30 * time.Second}
+	return AttestConfig{AdapterWait: 30 * time.Second}
 }
 
 // LoadAttestConfig reads the config file; a missing file yields the defaults.
@@ -79,14 +78,7 @@ func ParseAttestConfig(data []byte) (AttestConfig, error) {
 		val = strings.Trim(strings.TrimSpace(val), `"'`)
 		switch key {
 		case "TPM2_KIRA_ATTEST":
-			switch val {
-			case "off", "lazy":
-				cfg.Mode = val
-			case "enforced":
-				return cfg, fmt.Errorf("attest.conf line %d: there is no enforced mode: the passphrase can always be entered by hand (docs/UNLOCK-DISK.md §4); use lazy", n)
-			default:
-				return cfg, fmt.Errorf("attest.conf line %d: TPM2_KIRA_ATTEST must be off or lazy, not %q", n, val)
-			}
+			return cfg, fmt.Errorf("attest.conf line %d: there is no attestation mode to set; the phone is served whenever one is enrolled. Remove the line", n)
 		case "TPM2_KIRA_ATTEST_ADAPTER":
 			v, err := strconv.Atoi(strings.TrimPrefix(val, "hci"))
 			if err != nil || v < 0 || v > 255 {
@@ -113,7 +105,7 @@ func ParseAttestConfig(data []byte) (AttestConfig, error) {
 				return cfg, fmt.Errorf("attest.conf line %d: TPM2_KIRA_ATTEST_DEBUG must be 1 or 0, not %q", n, val)
 			}
 		default:
-			// Unknown keys are ignored so newer files work with older binaries.
+			return cfg, fmt.Errorf("attest.conf line %d: unknown key %q", n, key)
 		}
 	}
 	return cfg, sc.Err()

@@ -50,6 +50,18 @@ hand before the next `reseal`.
 
 ## Attestation
 
+### attest.conf had a mode: TPM2_KIRA_ATTEST=off|lazy
+
+Until 2026-10-07 the phone was served at boot only with
+`TPM2_KIRA_ATTEST=lazy` in `/etc/tpm2-kira/attest.conf` (`off` by
+default), `attest gate` took `--mode lazy`, and `tpm2-kira run` decided
+whether to coordinate a gate by that line. Removed with the enforced mode
+below: there was nothing left to choose. A phone is served whenever one
+is enrolled and the hook found the adapter; `attest.conf` keeps the
+adapter and the timeouts, and a `TPM2_KIRA_ATTEST=` line is refused.
+`run` knows the gate is in the image by the signer the hook put there
+(`/etc/tpm2-kira/attest-signer.pem`).
+
 ### An enforced mode was planned
 
 PLAN-BLE.md §7 designed `TPM2_KIRA_ATTEST=enforced`: hold the boot until

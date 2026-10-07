@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -131,16 +132,14 @@ func TestResolveBTDepsRejectsPathTraversal(t *testing.T) {
 func TestParseAttestConfig(t *testing.T) {
 	cfg, err := ParseAttestConfig([]byte(`
 # comment
-TPM2_KIRA_ATTEST=lazy
 TPM2_KIRA_ATTEST_ADAPTER="hci1"
 TPM2_KIRA_ATTEST_TIMEOUT=90
 TPM2_KIRA_ATTEST_ADAPTER_WAIT=1m
-TPM2_KIRA_FUTURE_KEY=whatever
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Mode != "lazy" || cfg.Adapter != 1 || cfg.Timeout != 90*time.Second || cfg.AdapterWait != time.Minute {
+	if cfg.Adapter != 1 || cfg.Timeout != 90*time.Second || cfg.AdapterWait != time.Minute {
 		t.Fatalf("parsed %+v", cfg)
 	}
 	// Debug is off unless asked for, and a typo is not silently "off".
@@ -156,14 +155,14 @@ TPM2_KIRA_FUTURE_KEY=whatever
 	if _, err := ParseAttestConfig([]byte("TPM2_KIRA_ATTEST_DEBUG=maybe\n")); err == nil {
 		t.Fatal("invalid debug value accepted")
 	}
-	if _, err := ParseAttestConfig([]byte("TPM2_KIRA_ATTEST=enforced\n")); err == nil {
-		t.Fatal("enforced must be refused: there is no such mode")
+	if _, err := ParseAttestConfig([]byte("TPM2_KIRA_ATTEST=lazy\n")); err == nil || !strings.Contains(err.Error(), "no attestation mode") {
+		t.Fatalf("a mode line must be refused: %v", err)
 	}
-	if _, err := ParseAttestConfig([]byte("TPM2_KIRA_ATTEST=sometimes\n")); err == nil {
-		t.Fatal("unknown mode accepted")
+	if _, err := ParseAttestConfig([]byte("TPM2_KIRA_SOMETHING=1\n")); err == nil {
+		t.Fatal("unknown key accepted")
 	}
 	def, err := LoadAttestConfig(filepath.Join(t.TempDir(), "missing"))
-	if err != nil || def.Mode != "off" {
-		t.Fatalf("missing file should mean off: %+v %v", def, err)
+	if err != nil || def.AdapterWait != 30*time.Second {
+		t.Fatalf("missing file should mean the defaults: %+v %v", def, err)
 	}
 }

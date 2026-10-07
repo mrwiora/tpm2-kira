@@ -439,12 +439,8 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 		adapter := fs.Int("adapter", -1, "Bluetooth adapter index (hciN); default from the config, else 0")
 		timeout := fs.Duration("timeout", -1, "Give up after this long (0 = wait forever); default from the config")
 		adapterWait := fs.Duration("adapter-wait", -1, "Wait this long for the adapter to appear; default from the config, else 30s")
-		mode := fs.String("mode", "lazy", "Gate mode; only 'lazy' is implemented")
 		coordinator := fs.String("coordinator", "", "Socket of the coordinator ('tpm2-kira run --gate') that holds the TPM; without it this process uses the TPM itself")
 		fs.Parse(args)
-		if *mode != "lazy" {
-			failAttest(cmd.ExitUsage, fmt.Errorf("mode %q is not implemented; only 'lazy' is available", *mode))
-		}
 		cfg, err := cmd.LoadAttestConfig(*configPath)
 		if err != nil {
 			failAttest(cmd.ExitUsage, err)
@@ -541,9 +537,9 @@ const attestUsage = `ATTEST SUBCOMMANDS:
                   --verify-tpm warn|require|off    this machine's TPM genuine (EK certificate)?
                   --verify-phone warn|require|off  the phone's key in genuine secure hardware
                                                    (Android key attestation, Google roots)?
-  attest gate     Serve attestation requests until a phone returns a receipt.
-                  Defaults from /etc/tpm2-kira/attest.conf.
-                  --mode lazy --adapter N --timeout DUR --adapter-wait DUR
+  attest gate     Serve attestation requests until a phone returns a receipt;
+                  the boot is never held. Defaults from /etc/tpm2-kira/attest.conf.
+                  --adapter N --timeout DUR --adapter-wait DUR
                   --coordinator SOCKET  be the radio worker only: no TPM in
                     this process; quotes and the reading of the receipt come
                     from 'tpm2-kira run --gate SOCKET' (the initrd units).

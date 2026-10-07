@@ -91,7 +91,7 @@ func TestGateUnitIsConfined(t *testing.T) {
 		}
 	}
 	const socket = "/run/tpm2-kira/gate.sock"
-	if !has(lines, "ExecStart=/usr/bin/tpm2-kira attest gate --mode lazy --coordinator "+socket) {
+	if !has(lines, "ExecStart=/usr/bin/tpm2-kira attest gate --coordinator "+socket) {
 		t.Error("the radio worker is not pointed at its coordinator")
 	}
 	display := directives(t, "initramfs/systemd/tpm2-kira.service")

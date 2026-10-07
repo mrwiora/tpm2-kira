@@ -39,32 +39,28 @@ _report_measure_point() {
 
 ATTEST_CONF=/etc/tpm2-kira/attest.conf
 
-# Bluetooth for remote attestation (PLAN-BLE.md §3.1). Adds exactly what the
-# configured adapter needs on this machine: its driver modules (with their
-# dependencies) and the firmware files the kernel loaded for it, as reported
-# by 'tpm2-kira attest initramfs-deps'. Nothing is added while attestation is
-# off, and nothing is added when the adapter cannot be found.
+# Bluetooth for remote attestation (PLAN-BLE.md §3.1), whenever a phone is
+# enrolled. Adds exactly what the configured adapter needs on this machine:
+# its driver modules (with their dependencies) and the firmware files the
+# kernel loaded for it, as reported by 'tpm2-kira attest initramfs-deps'.
+# Nothing is added without an enrolled phone, and nothing when the adapter
+# cannot be found: the image then shows the code and serves the disk's key,
+# and no phone is asked.
 _add_bluetooth() {
-    local mode adapter deps rc log kind value nfw=0
+    local adapter deps rc log kind value nfw=0
     local -a modules=()
 
-    [[ -r $ATTEST_CONF ]] || return 0
-    mode=$( . "$ATTEST_CONF" && printf '%s' "${TPM2_KIRA_ATTEST:-off}" )
-    adapter=$( . "$ATTEST_CONF" && printf '%s' "${TPM2_KIRA_ATTEST_ADAPTER:-0}" )
-    adapter=${adapter#hci}
-    case $mode in
-        off | '') return 0 ;;
-        lazy) ;;
-        *)
-            warning "tpm2-kira: TPM2_KIRA_ATTEST=$mode is not supported (off, lazy); Bluetooth not added"
-            return 0
-            ;;
-    esac
-
-    if [[ $(tpm2-kira attest status --json 2>/dev/null) == '[]' ]]; then
-        warning "tpm2-kira: attestation is '$mode' but no phone is enrolled; run 'tpm2-kira attest enrol'. Bluetooth not added"
+    local enrolled
+    enrolled=$(tpm2-kira attest status --json 2>/dev/null)
+    if [[ -z $enrolled || $enrolled == '[]' ]]; then
+        plain "tpm2-kira: no phone is enrolled; Bluetooth not added"
         return 0
     fi
+    adapter=0
+    if [[ -r $ATTEST_CONF ]]; then
+        adapter=$( . "$ATTEST_CONF" && printf '%s' "${TPM2_KIRA_ATTEST_ADAPTER:-0}" )
+    fi
+    adapter=${adapter#hci}
 
     # The gate checks the enrolment record before it advertises: signed by
     # this machine's signing key, and current by the TPM's record counter.
@@ -93,7 +89,7 @@ _add_bluetooth() {
     done <<< "$deps"
 
     if (( rc != 0 )); then
-        warning "tpm2-kira: attestation is '$mode' but hci$adapter was not found; Bluetooth not added to the image"
+        warning "tpm2-kira: a phone is enrolled but hci$adapter was not found; Bluetooth not added to the image"
         return 0
     fi
     # Every other command exits 0 by design, so an installed binary that
@@ -130,12 +126,12 @@ _add_bluetooth() {
 
     mkdir -p "$BUILDROOT/etc/modules-load.d"
     printf '%s\n' "${modules[@]}" > "$BUILDROOT/etc/modules-load.d/tpm2-kira-bluetooth.conf"
-    add_file "$ATTEST_CONF"
+    [[ -r $ATTEST_CONF ]] && add_file "$ATTEST_CONF"
     printf '%s\n' "$signer" > "$BUILDROOT/etc/tpm2-kira/attest-signer.pem"
     add_systemd_unit tpm2-kira-attest.service
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-attest.service \
         /usr/lib/systemd/system/tpm2-kira-attest.service
-    plain "tpm2-kira: Bluetooth attestation ($mode) via hci$adapter: ${#modules[@]} modules, $nfw firmware files"
+    plain "tpm2-kira: Bluetooth attestation via hci$adapter: ${#modules[@]} modules, $nfw firmware files"
 }
 
 UNLOCK_SOCKET=/run/tpm2-kira/unlock.sock
@@ -236,10 +232,10 @@ The hook will:
   or in the key field of an x-initrd.attach line of /etc/crypttab.
   systemd-cryptsetup reads the key from tpm2-kira, which asks at its
   prompt once the code screen is confirmed. Nothing is written.
-- If /etc/tpm2-kira/attest.conf sets TPM2_KIRA_ATTEST=lazy and a phone is
-  enrolled: add the Bluetooth adapter's driver modules and firmware, and
-  tpm2-kira-attest.service, which serves attestation requests from the phone
-  beside the TOTP display without holding the boot
+- If a phone is enrolled: add the Bluetooth adapter's driver modules and
+  firmware (the adapter from /etc/tpm2-kira/attest.conf, hci0 by default),
+  and tpm2-kira-attest.service, which serves attestation requests from the
+  phone beside the TOTP display without holding the boot
 
 Setup is NOT run from here: it generates a new TOTP secret and writes to TPM
 NVRAM, which must not happen while merely building an image. Run
