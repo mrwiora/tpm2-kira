@@ -43,7 +43,7 @@ THE PHONE (the Marify app, over Bluetooth LE)
                kept by the phone, opened only by this TPM in an approved boot
 
 THE DISK'S KEY (mode in /etc/tpm2-kira/unlock.conf)
-  luks         status, enrol, rotate, remove, mark: tpm2-kira's LUKS keyslots,
+  luks         status, enrol, remove, mark: tpm2-kira's LUKS keyslots,
                marked by a token in the header
   derive       hashpwd2 by hand: password and salt to a key file for luksAddKey
 
@@ -295,7 +295,6 @@ keyscript asks at askpass directly.
 
 	"luks": `tpm2-kira luks status [<device>…] [--json]
 tpm2-kira luks enrol  <device> --mode password+salt|password+remotesalt [options]
-tpm2-kira luks rotate <device> --keyslot N [options]
 tpm2-kira luks remove <device> --keyslot N
 tpm2-kira luks mark   <device> --keyslot N --mode password+salt|password+remotesalt [options]
 
@@ -319,10 +318,6 @@ prompt is always the fallback (docs/PLAN-LUKS.md).
               --existing-key-file F   a passphrase file to authorise (scripts)
               --no-config             leave unlock.conf alone
               --privkey --pubkey --adapter --timeout --adapter-wait  as remote-salt enrol
-  rotate    A new keyslot of the same kind as --keyslot N (a new password and
-            salt; or a new remote salt for the phone, which then no longer
-            has the old one), then keyslot N goes. The mode stays.
-              --existing-key-file F  --privkey --pubkey --adapter --timeout
   remove    'cryptsetup luksKillSlot' for a keyslot tpm2-kira marked, and
             its token. A remaining passphrase authorises it (cryptsetup
             asks; --existing-key-file F for scripts). Never the last keyslot,
@@ -333,7 +328,6 @@ prompt is always the fallback (docs/PLAN-LUKS.md).
   tpm2-kira luks status
   tpm2-kira luks enrol /dev/sda2 --mode password+salt
   tpm2-kira luks enrol /dev/sda2 --mode password+remotesalt
-  tpm2-kira luks rotate /dev/sda2 --keyslot 1
   tpm2-kira luks remove /dev/sda2 --keyslot 1
   tpm2-kira luks mark /dev/sda2 --keyslot 1 --mode password+salt
 `,

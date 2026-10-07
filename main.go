@@ -537,28 +537,6 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		if err := cmd.LuksRemove(cmd.LuksRemoveOptions{Device: fs.Arg(0), Keyslot: *keyslot, ExistingKeyFile: *existing}); err != nil {
 			fail(err)
 		}
-	case "rotate":
-		fs := flag.NewFlagSet("luks rotate", flag.ExitOnError)
-		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+remotesalt)")
-		keyslot := fs.Int("keyslot", -1, "The keyslot to replace, one tpm2-kira marked (required)")
-		privKey := fs.String("privkey", "", "Signing key (password+remotesalt; default: "+cmd.DefaultPrivateKeyPath+")")
-		pubKey := fs.String("pubkey", "", "Signing public key (default: "+cmd.DefaultPublicKeyPath+")")
-		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
-		timeout := fs.Duration("timeout", 10*time.Minute, "Give up waiting for the phone after this long (0 = wait forever)")
-		adapterWait := fs.Duration("adapter-wait", 30*time.Second, "Wait this long for the adapter to appear")
-		existing := fs.String("existing-key-file", "", "A file with a remaining passphrase to authorise cryptsetup (scripts; by default cryptsetup asks)")
-		debug := fs.Bool("debug", debugFlag, "Enable debug output")
-		fs.Parse(deviceLast(args[1:]))
-		if fs.NArg() != 1 || *keyslot < 0 {
-			fail(fmt.Errorf("usage: tpm2-kira luks rotate <device> --keyslot N"))
-		}
-		if err := cmd.LuksRotate(cmd.LuksRotateOptions{
-			Device: fs.Arg(0), Keyslot: *keyslot, ExistingKeyFile: *existing,
-			Remote: cmd.FactorEnrolOptions{TPMPath: *tpm, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
-				Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: true, Debug: *debug},
-		}); err != nil {
-			fail(err)
-		}
 	default:
 		fail(fmt.Errorf("unknown luks subcommand %q", args[0]))
 	}

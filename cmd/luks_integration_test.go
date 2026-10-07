@@ -78,9 +78,8 @@ func TestLuksEnrolOnAnImage(t *testing.T) {
 		t.Fatalf("without a recovery keyslot: %v", err)
 	}
 
-	// rotate: a new keyslot of the same kind, the old one gone; remove:
-	// only tpm2-kira's, never the last. cryptsetup wants a passphrase of a
-	// keyslot other than the one killed.
+	// remove: only tpm2-kira's, never the last. cryptsetup wants a
+	// passphrase of a keyslot other than the one killed.
 	if err := LuksRemove(LuksRemoveOptions{Device: loop, Keyslot: 0, ExistingKeyFile: keyFile}); err != nil {
 		t.Fatal(err)
 	}
@@ -95,20 +94,7 @@ func TestLuksEnrolOnAnImage(t *testing.T) {
 	if out, err := add.CombinedOutput(); err != nil {
 		t.Fatalf("luksAddKey: %v: %s", err, out)
 	}
-	answers = []string{"new-horse", "new-horse", "new-salt"}
-	if err := LuksRotate(LuksRotateOptions{Device: loop, Keyslot: 1, ExistingKeyFile: existing}); err != nil {
-		t.Fatalf("luks rotate: %v", err)
-	}
-	st = readLuksStatus(loop)
-	if len(st.Keyslots) != 2 || st.Keyslots[0].Keyslot != 0 || st.Keyslots[0].Token != nil || st.Keyslots[1].Keyslot != 2 || st.Keyslots[1].Token == nil {
-		t.Fatalf("after rotate: %+v", st)
-	}
-	key, _ = Combine([]byte("new-horse"), []byte("new-salt"))
-	os.WriteFile(keyFile, key, 0o600)
-	if out, err := exec.Command("cryptsetup", "open", "--test-passphrase", loop, "--key-file", keyFile).CombinedOutput(); err != nil {
-		t.Fatalf("the rotated key does not open the header: %v %s", err, out)
-	}
-	if err := LuksRemove(LuksRemoveOptions{Device: loop, Keyslot: 0, ExistingKeyFile: existing}); err == nil || !strings.Contains(err.Error(), "not tpm2-kira's") {
+	if err := LuksRemove(LuksRemoveOptions{Device: loop, Keyslot: 0, ExistingKeyFile: keyFile}); err == nil || !strings.Contains(err.Error(), "not tpm2-kira's") {
 		t.Fatalf("a keyslot that is not ours: %v", err)
 	}
 

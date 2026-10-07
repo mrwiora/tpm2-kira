@@ -1,9 +1,10 @@
 # PLAN — tpm2-kira and the LUKS keyslots
 
 > **Status:** in implementation. Done: the keyslot token, `luks status`,
-> `luks mark`, `luks enrol` (both modes), `luks rotate`, `luks remove`
-> (§2, §3), the unlock modes (§1), the `remote-salt` command name. Next:
-> `tpm2-kira status` (§4), the network verifier (§6).
+> `luks mark`, `luks enrol` (both modes), `luks remove` (§2, §3), the
+> unlock modes (§1), the `remote-salt` command name. Not now: `luks rotate`
+> (a new keyslot is `remove` and `enrol`). Next: `tpm2-kira status` (§4),
+> the network verifier (§6).
 > **Changes a standing rule:** tpm2-kira may touch LUKS keyslots - only
 > through the `luks` verb, only with `cryptsetup`, and every keyslot it adds
 > is marked with a token (§2). `derive` and the `--out` paths stay as the
@@ -65,7 +66,6 @@ tpm2-kira luks status [<device>…] [--json]      # our keyslots per LUKS device
 tpm2-kira luks mark   <device> --keyslot N --mode password+salt|password+remotesalt [--nvram N] [--label STR]
 tpm2-kira luks enrol  <device> --mode password+salt|password+remotesalt [--nvram N] [--label STR]
 tpm2-kira luks remove <device> --keyslot N
-tpm2-kira luks rotate <device> --keyslot N
 ```
 
 - `status` without a device looks at every `crypto_LUKS` block device
@@ -82,9 +82,8 @@ tpm2-kira luks rotate <device> --keyslot N
   to `cryptsetup` through a pipe, never a file.
 - `remove` is `luksKillSlot` (a remaining passphrase authorises it) plus
   the token's removal; only a keyslot tpm2-kira marked, never the last one.
-- `rotate` is `enrol` of a new keyslot of the old one's kind (mode, slot
-  and label from its token; a new remote salt for the phone) and `remove`
-  of the old one; the mode in `unlock.conf` stays.
+- A new key for a keyslot is `enrol` of the new one and `remove` of the
+  old one (`remote-salt rotate` for a new remote salt first).
 
 ## 4. One overview
 
