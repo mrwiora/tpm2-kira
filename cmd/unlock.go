@@ -135,7 +135,7 @@ func (s *unlockServer) answer(c net.Conn) {
 	if !req.Direct() {
 		// A token's saved key lives in the LUKS header or a file; this
 		// provider holds none. Closing without data lets systemd-cryptsetup
-		// report the failure for that volume.
+		// go on without it.
 		s.log(fmt.Sprintf("unlock: %s asks for a %s key, which this provider does not hold", req.Volume, req.Kind))
 		return
 	}
@@ -267,7 +267,7 @@ func openConsole() (io.ReadWriteCloser, int, error) {
 // consolePassphrase asks on the console for the passphrase of a volume,
 // the way systemd's agent does: on /dev/console, echo off, a '*' per
 // character, Backspace deletes, an empty line asks again. Ctrl-C gives up
-// (no key: systemd-cryptsetup reports the volume as failed).
+// (no key: systemd-cryptsetup falls back to its own prompt).
 func consolePassphrase(volume string) ([]byte, error) {
 	con, fd, err := openConsole()
 	if err != nil {

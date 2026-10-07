@@ -126,15 +126,33 @@ hibernation image; the initrd has no swap and no hibernation.
 
 ## 4. What this does not give, and what would
 
-- **Retry on a mistyped passphrase.** A key file is tried once; a wrong
-  one fails the unit. The password agent is the only channel with retries
-  (`tries=`): the agent is asked again. If the hardware test shows that a
-  typo means the emergency shell, tpm2-kira can act as the password agent
-  for the *re-ask* while keeping the key socket for the first key, or
-  verify the passphrase against the header itself before answering.
-- **Prompt options** of `crypttab(5)` — `tries`, `timeout`, `verify`,
-  `password-cache`, `headless`, `password-echo` — describe the agent
-  prompt and do not apply to a volume whose key is a file or a socket.
+- **A mistyped passphrase is not the end: systemd's own prompt is the
+  fallback.** `systemd-cryptsetup` tries the key file once; a wrong key
+  (`Failed to activate with key file ... (Key data incorrect?)`), a
+  missing one, and an empty answer all come back as "try again", and on
+  the next of its `tries` (default 3) it drops the key file and asks for
+  a passphrase through its password agent - the console prompt that
+  sd-encrypt installs. So after tpm2-kira's prompt, two attempts at
+  systemd's follow, with the same passphrase or a recovery passphrase in
+  another LUKS keyslot (cryptsetup tries every keyslot). Only when
+  `tries` are used up does the unit fail (`Too many attempts to
+  activate; giving up.`), `cryptsetup.target` fails, and the initrd
+  reaches `emergency.target`: `sulogin`, which in an initrd without a
+  root password offers nothing but Enter and a reboot; `rd.emergency=reboot`
+  or `=poweroff` on the command line skips the dead end. Secure Boot
+  changes none of this. (Verified in `src/cryptsetup/cryptsetup.c` of
+  systemd 262 - the retry loop "invalidates one of the passed fields, so
+  that we fall back to the next best thing" - and by the end-to-end test
+  with `headless=true`, which fails exactly where the prompt would be.)
+  Consequences for tpm2-kira: a wrong answer is never fatal, and
+  "no answer" is not a hold. Enforced mode must keep the connection open
+  and never answer until the phone has approved; closing it without data
+  hands the volume to systemd's prompt, which is the escape hatch, not the
+  enforcement. `rd.luks.options=<UUID>=tries=N` sets the attempts.
+- **Prompt options** of `crypttab(5)` - `timeout`, `verify`,
+  `password-cache`, `headless`, `password-echo` - describe the agent
+  prompt and apply to the fallback prompt only; `tries` counts tpm2-kira's
+  answer as the first attempt.
 - **Plymouth.** The agent prompt would appear in plymouth; tpm2-kira's is
   text on the console.
 - **A credential drop-in** (`LoadCredential=cryptsetup.passphrase:<socket>`

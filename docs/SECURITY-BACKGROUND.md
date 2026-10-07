@@ -453,8 +453,12 @@ place a key file would be. The transfer, step by step:
 6.  tpm2-kira writes the raw bytes - no newline, no length, no framing;
     EOF ends the key - wipes its copy and closes.
 7.  systemd-cryptsetup unlocks the keyslot with those bytes and maps the
-    volume. A wrong passphrase fails its unit, as a wrong key file would;
-    tpm2-kira is not told.
+    volume. A wrong passphrase is a wrong key file: systemd-cryptsetup
+    drops the key file and asks for a passphrase itself, through its
+    password agent on the console, for the remaining tries (3 in all);
+    tpm2-kira is not told. Only then the unit fails. No answer at all
+    (the connection closed without data) is treated the same, so an
+    enforcing provider holds the connection open; it does not close it.
 ```
 
 What is systemd's, used as installed by sd-encrypt: `systemd-cryptsetup`,

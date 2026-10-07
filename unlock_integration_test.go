@@ -69,7 +69,10 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cl.Close()
-	prompts := make(chan string, 4)
+	prompts := make(chan string, 8)
+	// What the person "types" at the next prompt; "" closes the console
+	// without an answer (Ctrl-D: no key for the volume).
+	answers := make(chan string, 8)
 	go func() {
 		for {
 			c, err := cl.Accept()
@@ -81,11 +84,14 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 				buf := make([]byte, 512)
 				n, _ := c.Read(buf)
 				prompts <- string(buf[:n])
-				c.Write([]byte(passphrase + "\n"))
-				io.Copy(io.Discard, c)
+				if a := <-answers; a != "" {
+					c.Write([]byte(a + "\n"))
+					io.Copy(io.Discard, c)
+				}
 			}()
 		}
 	}()
+	answers <- passphrase
 	run := exec.Command("./tpm2-kira", "run", "--tpm", filepath.Join(dir, "no-tpm"), "--hold", "0", "--unlock", sock)
 	run.Env = append(os.Environ(), "TPM2_KIRA_CONSOLE="+console)
 	var runOut bytes.Buffer
@@ -134,4 +140,37 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 		exec.Command(sdc, "detach", volume).Run()
 		t.Fatalf("a token request was served: %s", out)
 	}
+
+	// A wrong passphrase at tpm2-kira's prompt is a wrong key file:
+	// systemd-cryptsetup drops the key file and asks for a passphrase
+	// itself (its password agent) for the remaining tries. headless=true
+	// makes that step fail with a message instead of a prompt, which is
+	// how the test sees that the fallback was reached.
+	answers <- "not the passphrase"
+	wrong := exec.Command(sdc, "attach", volume, loop, sock, "headless=true")
+	wrong.Env = append(os.Environ(), "SYSTEMD_LOG_LEVEL=info")
+	out, err = wrong.CombinedOutput()
+	if err == nil {
+		exec.Command(sdc, "detach", volume).Run()
+		t.Fatalf("a wrong passphrase unlocked the volume: %s", out)
+	}
+	if !bytes.Contains(out, []byte("Key data incorrect?")) || !bytes.Contains(out, []byte("Password querying disabled via 'headless' option.")) {
+		t.Errorf("after a wrong passphrase systemd-cryptsetup should fall back to its own prompt:\n%s", out)
+	}
+	<-prompts
+
+	// No answer at all (the prompt cancelled: tpm2-kira closes without a
+	// key) reads as an empty key file, and the fallback is the same prompt.
+	answers <- ""
+	none := exec.Command(sdc, "attach", volume, loop, sock, "headless=true")
+	none.Env = append(os.Environ(), "SYSTEMD_LOG_LEVEL=info")
+	out, err = none.CombinedOutput()
+	if err == nil {
+		exec.Command(sdc, "detach", volume).Run()
+		t.Fatalf("no answer unlocked the volume: %s", out)
+	}
+	if !bytes.Contains(out, []byte("Password querying disabled via 'headless' option.")) {
+		t.Errorf("after no answer systemd-cryptsetup should fall back to its own prompt:\n%s", out)
+	}
+	<-prompts
 }

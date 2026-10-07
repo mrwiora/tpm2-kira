@@ -677,7 +677,10 @@ The passphrase prompt that follows is tpm2-kira's: `systemd-cryptsetup`
 activates the volume with every option in your `crypttab`, connects to
 `/run/tpm2-kira/unlock.sock` for the key, tpm2-kira asks `Please enter
 passphrase for disk <volume>:` and answers with what you type. tpm2-kira
-never opens the disk itself; it only provides the key. This is also where
+never opens the disk itself; it only provides the key. A typo is not
+fatal: `systemd-cryptsetup` then asks on its own prompt for the remaining
+two tries, as it does for a wrong key file, and a recovery passphrase in
+another LUKS keyslot works at either prompt. This is also where
 the key will come from other sources than your fingers: a factor the
 phone releases after a successful attestation
 ([PLAN-FACTORRELEASE.md](docs/PLAN-FACTORRELEASE.md)), or nothing before
