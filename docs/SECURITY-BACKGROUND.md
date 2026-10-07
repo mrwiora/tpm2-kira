@@ -994,7 +994,7 @@ every local user in `/proc/<pid>/cmdline`.
 ```
 Offset  Field                   Type        Notes
 ─────────────────────────────────────────────────────────────
-0       Version                 uint32      Must be 11
+0       Version                 uint32      Must be 12
 4       Payload length          uint32      Signed region length
 8       AppVersion length       uint32      ≤ 1024
 ?       AppVersion              string
