@@ -515,7 +515,18 @@ phone's screen authoritative.
 
 ### 7.2 How the hold is implemented
 
-**Arch / systemd initramfs.** A new oneshot unit:
+**Arch / systemd initramfs, as built.** tpm2-kira is the key provider of
+the volumes the initrd unlocks: `tpm2-kira-unlock.socket` is the key file
+of each of them (crypttab(5), AF_UNIX key files, named in the key field
+of `/etc/crypttab`), `systemd-cryptsetup` connects to it when it
+activates the volume and reads the key, and `tpm2-kira.service` answers
+once the code screen's hold has ended. Enforced mode is then nothing but
+"do not answer before the phone's verdict is `ok`": the request waits for
+as long as it takes, no unit has to fail to hold the boot, and the TPM
+side of the attestation still happens before the OS separator, where the
+boot key's policy holds. The fail-closed matrix of §7.5 becomes the list
+of conditions under which the provider never answers. The original design
+of a separate oneshot gate unit follows for the record:
 
 ```ini
 [Unit]

@@ -357,6 +357,16 @@ stack ([PLAN-BLE.md](PLAN-BLE.md) §3.3). `systemd-cryptsetup` picks up
 after use. If the unit fails, there is no key file and `systemd-cryptsetup`
 asks on the console.
 
+**Since tpm2-kira became the key provider** (crypttab(5) AF_UNIX key
+files, `tpm2-kira-unlock.socket`), the derivation belongs into its answer
+rather than into a key file: `systemd-cryptsetup` asks tpm2-kira for the
+volume's key, tpm2-kira asks the person for the password at its own prompt,
+runs the combiner with the factor it unwrapped before the separator, and
+answers with the derived key. No key touches tmpfs, the ordering above is
+implied, and the fallback is the same prompt without a factor (the
+recovery key of §7.3). The unit above stays as the shape of the Debian
+`keyscript=` variant.
+
 **Debian / initramfs-tools:** the same script as a `keyscript=`, writing the
 derived key to stdout instead of a file.
 

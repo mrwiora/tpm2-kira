@@ -403,11 +403,96 @@ YubiKey, it is never on disk.
 4.  CreatePrimary, Load the key object
 5.  Policy session as in §4.3, then TPM2_HMAC(time / 30)
 6.  Truncate to six digits
+7.  After the hold: answer systemd-cryptsetup's key requests on the
+    unlock socket, one volume at a time, with what is typed at the prompt
 ```
 
 A planted blob can only carry an object its author created, whose key does
 not match the user's authenticator; the substitution shows as a failed
 comparison, not a false pass.
+
+Step 7 is where the disk's key enters, and it is deliberately
+systemd-cryptsetup's own mechanism (crypttab(5), AF_UNIX key files, the
+socket named in the key field of `/etc/crypttab`) rather than a prompt of
+tpm2-kira's that systemd knows nothing about: the volume is activated by
+systemd-cryptsetup with its crypttab options, after the OS separator as
+always, and only the source of the key moves. What tpm2-kira answers with
+is the whole of its trust in the unlock: today the typed passphrase, so
+the security is unchanged; with factor release a key derived from the
+passphrase and the phone's factor; in enforced mode no answer before the
+phone has approved the boot. The request waits for as long as tpm2-kira
+takes, which is what makes a hold real without a unit that refuses to
+start. The provider trusts nothing about the requester beyond its uid and
+its peer name, and gives nothing to a request for a token's saved key: it
+holds no such keys.
+
+#### Disk unlock: who does what
+
+tpm2-kira does not open the disk. It never reads the LUKS header, derives
+a key or speaks to device-mapper; it hands over bytes when asked, in the
+place a key file would be. The transfer, step by step:
+
+```
+1.  tpm2-kira-unlock.socket creates /run/tpm2-kira/unlock.sock (root, 0600)
+    before cryptsetup-pre.target; tpm2-kira.service adopts it (Sockets=,
+    LISTEN_FDS).
+2.  /etc/crypttab names that path in the key field of the volume; the
+    sd-encrypt hook copied the line into the image, and the generator made
+    systemd-cryptsetup@<volume>.service from it before any unit ran.
+3.  systemd-cryptsetup@<volume>.service runs
+      systemd-cryptsetup attach <volume> <device> /run/tpm2-kira/unlock.sock
+    The key "file" is a socket: it binds an abstract client socket named
+    NUL ‖ random ‖ "/cryptsetup/" ‖ <volume> and connects.
+4.  tpm2-kira checks the peer's uid (its own: root) and reads the volume
+    out of the peer name. Any other peer, and the token kinds
+    (/cryptsetup-tpm2/, -fido2-salt/, -pkcs11/, which want a saved token
+    key), are closed without data.
+5.  The request waits until the hold has ended (READY), then, one at a
+    time, the key source runs: today the prompt on /dev/console.
+6.  tpm2-kira writes the raw bytes - no newline, no length, no framing;
+    EOF ends the key - wipes its copy and closes.
+7.  systemd-cryptsetup unlocks the keyslot with those bytes and maps the
+    volume. A wrong passphrase fails its unit, as a wrong key file would;
+    tpm2-kira is not told.
+```
+
+What is systemd's, used as installed by sd-encrypt: `systemd-cryptsetup`,
+its generator, `cryptsetup.target` and `cryptsetup-pre.target`, the
+generated `systemd-cryptsetup@*.service` units, the dm-crypt modules and
+udev rules, the crypttab in the image. What is tpm2-kira's: the socket
+unit and the provider (`cmd/unlock.go`), whose key source is one function
+of the volume name - enforced mode and factor release replace that
+function, not the transfer. The configuration is the administrator's
+line in `/etc/crypttab`.
+
+The transfer is the one systemd offers for exactly this: a key provider
+service. systemd's interactive path (the password agent on
+`/run/systemd/ask-password`, which the console prompt uses) is also an
+AF_UNIX socket under `/run`, in the other direction - the agent sends the
+typed passphrase to the waiting `systemd-cryptsetup` as a datagram, and
+the receiver drops datagrams from any sender that is not root. Here the
+provider is the one that checks: a connection from another user than
+tpm2-kira's own (root in the initrd) is refused before the peer name is
+read. Both channels are root-only `/run` sockets that never touch a file
+or the kernel keyring; the `password-cache` option, which would keep a
+passphrase in the keyring for later volumes, does not apply to volumes
+routed here.
+
+Memory. `systemd-cryptsetup` locks its whole address space (`mlockall`,
+through libcryptsetup's `crypt_memory_lock`) so that no page with key
+material can be written to swap, keeps the key in libcryptsetup's guarded
+buffers and erases them (`explicit_bzero`) when done; its password agent
+erases the line it read as well. tpm2-kira does the equivalent for the
+one buffer that matters: the passphrase is read into a single buffer of
+cryptsetup's own limit (512 bytes, no growing slice that would leave
+earlier copies to the garbage collector), that buffer is locked
+(`mlock`), it is overwritten to its full capacity after the answer, on
+Backspace and on cancel, and the process is not dumpable
+(`PR_SET_DUMPABLE`), so a crash cannot write it to a core file. What
+neither side can do: the kernel's socket buffer holds the bytes between
+write and read (freed, not zeroed), and a hibernation image would hold
+all of RAM, locked or not - neither exists in the initrd, which has no
+swap. The whole of it, with what sd-encrypt is: `UNLOCK-DISK.md`.
 
 ### 5.3 Approve and write (seal and reseal)
 

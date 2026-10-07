@@ -8,6 +8,31 @@ formats and CLI flags may change without migration paths.
 
 ---
 
+## Boot integration
+
+### The passphrase prompt was systemd's; tpm2-kira only ran before it
+
+Until the key provider (2026-10-07), `tpm2-kira.service` showed the code,
+held the boot with Type=notify until Enter, the phone's verdict or 90 s,
+then sent READY and ended, and systemd's console agent asked for the
+passphrase. The process had to give up the console at the end of the hold
+(`TIOCNOTTY`) or the prompt never appeared. Now `systemd-cryptsetup` takes
+the volume's key from `tpm2-kira-unlock.socket` (crypttab(5) AF_UNIX key
+files, the socket in the key field of `/etc/crypttab`) and tpm2-kira asks
+at its own prompt; the service stays until switch-root. The console is
+still released with the hold, because other prompts (a token PIN, a volume
+not routed through the socket) are systemd's.
+
+### The hook rewrote the image's crypttab
+
+The first key-provider branch (feat/unlock-disk, same day, never merged)
+had the mkinitcpio hook put the socket into the key field of the image's
+crypttab itself, which made it depend on sd-encrypt running first; it then
+sourced sd-encrypt's build function to stand in for that hook altogether.
+Dropped for the line in `/etc/crypttab`: the key source is configuration,
+as it is for `tpm2-device=` and key files, and no hook of ours patches or
+replaces a distribution hook (docs/UNLOCK-DISK.md §5).
+
 ## Blob format
 
 ### Version 11 — the boot key

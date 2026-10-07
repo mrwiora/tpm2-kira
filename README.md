@@ -596,12 +596,32 @@ This installs:
 
 ### Configure mkinitcpio
 
-Edit `/etc/mkinitcpio.conf` and add the hook **before** your encrypt hook:
+Edit `/etc/mkinitcpio.conf` and add the hook next to `sd-encrypt` (the
+order of the two does not matter):
 
 ```bash
 # Systemd-based initramfs (recommended):
 HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
 ```
+
+### Configure the disk unlock
+
+The passphrase is asked at tpm2-kira's prompt, after the code screen, for
+every volume whose key file in `/etc/crypttab` is tpm2-kira's socket:
+
+```
+cryptroot  UUID=…  /run/tpm2-kira/unlock.sock  x-initrd.attach,discard
+```
+
+That is `crypttab(5)`'s own way of taking a key from a service ("AF_UNIX
+key files"); `sd-encrypt` copies the line into the image as it is, and
+`systemd-cryptsetup` reads the key from tpm2-kira when it activates the
+volume. A volume configured only on the kernel command line
+(`rd.luks.name=`) gets the same with
+`rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock`. Volumes with `none` or
+`-` in the key field are still asked for by systemd's own console prompt;
+`mkinitcpio` names them. Volumes with a key file or a token
+(`tpm2-device=`, `fido2-device=`, `pkcs11-uri=`) are not tpm2-kira's.
 
 Then rebuild:
 
@@ -613,7 +633,19 @@ The post-generation hook will automatically reseal so the next boot matches.
 
 ### How it works at boot
 
-A systemd service (`tpm2-kira.service`) starts before the disk unlock prompt and runs `tpm2-kira run`, which shows a fresh TOTP code every 30 seconds. Compare what's on screen with your authenticator app. If they match, your boot chain is clean — press Enter and type your LUKS passphrase. Without Enter the boot continues by itself after 90 seconds; once it has continued, no code can be computed until the next boot.
+A systemd service (`tpm2-kira.service`) starts before the disk unlock and runs `tpm2-kira run`, which shows a fresh TOTP code every 30 seconds. Compare what's on screen with your authenticator app. If they match, your boot chain is clean — press Enter and type your LUKS passphrase. Without Enter the boot continues by itself after 90 seconds; once it has continued, no code can be computed until the next boot.
+
+The passphrase prompt that follows is tpm2-kira's: `systemd-cryptsetup`
+activates the volume with every option in your `crypttab`, connects to
+`/run/tpm2-kira/unlock.sock` for the key, tpm2-kira asks `Please enter
+passphrase for disk <volume>:` and answers with what you type. tpm2-kira
+never opens the disk itself; it only provides the key. This is also where
+the key will come from other sources than your fingers: a factor the
+phone releases after a successful attestation
+([PLAN-FACTORRELEASE.md](docs/PLAN-FACTORRELEASE.md)), or nothing before
+the phone has approved the boot (enforced mode). How systemd's unlock
+works and why this is the way to plug in:
+[UNLOCK-DISK.md](docs/UNLOCK-DISK.md).
 
 When the initrd hands over to the real root, `tpm2-kira-cap.service` runs
 `tpm2-kira cap`. From then until the next reboot the TPM computes no codes,
@@ -631,7 +663,7 @@ See [initramfs/mkinitcpio/mkinitcpio.conf.example](initramfs/mkinitcpio/mkinitcp
 
 ### What is installed where
 
-The package puts three unit files into `/usr/lib/systemd/system` on the
+The package puts four unit files into `/usr/lib/systemd/system` on the
 host, because the mkinitcpio hook takes them from there. None of them is
 enabled on the host, and each carries
 `ConditionPathExists=/etc/initrd-release`, so enabling one there by mistake
@@ -639,7 +671,8 @@ does nothing.
 
 | Unit | In the initramfs image | Does something when |
 |------|------------------------|---------------------|
-| `tpm2-kira.service` (the code at the prompt, and the gate's coordinator) | always, once `sd-tpm2-kira` is in `HOOKS` | a TOTP key is sealed. With nothing sealed it says so once, releases the boot and exits; a later `seal` needs no rebuild. It ends when the boot is released, and the gate with it |
+| `tpm2-kira.service` (the code at the prompt, the gate's coordinator, and the key provider for `systemd-cryptsetup`) | always, once `sd-tpm2-kira` is in `HOOKS` | a TOTP key is sealed. With nothing sealed it says so once and releases the boot; a later `seal` needs no rebuild. The gate ends when the boot is released; the process stays to answer the volumes' key requests and ends at switch-root |
+| `tpm2-kira-unlock.socket` (the key socket) | always, with the display | `systemd-cryptsetup` activates a volume whose key file is the socket |
 | `tpm2-kira-cap.service` (locks codes when the initrd is left) | always, with the display | the initrd is left. Without sealed keys there is nothing to lock |
 | `tpm2-kira-attest.service` (Bluetooth gate, radio worker) | only if `/etc/tpm2-kira/attest.conf` says `lazy`, **and** a phone is enrolled, **and** its record is signed by this machine's key and current, **and** the adapter was found when the image was built. The signing public key goes into the image with it. Otherwise neither the unit nor any Bluetooth module or firmware is in the image; `mkinitcpio` says which condition failed | a phone connects |
 
