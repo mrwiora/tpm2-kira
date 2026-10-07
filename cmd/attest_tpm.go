@@ -454,6 +454,12 @@ func (b *tpmBackend) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest
 		sig, err = signWithBootKey(b.tpm, b.sealed, b.sealIndex, b.blob, d[:])
 	}
 	switch {
+	case errors.Is(err, ErrCodesLocked):
+		// The booted system: 'cap' locked the slot until the next boot.
+		if b.debug {
+			fmt.Printf("tpm2-kira: boot key: %v\n", err)
+		}
+		return nil, attest.BootKeyLocked
 	case errors.Is(err, errBootKeyRefused):
 		if b.debug {
 			fmt.Printf("tpm2-kira: boot key: %v\n", err)

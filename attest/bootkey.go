@@ -73,6 +73,10 @@ const (
 	BootKeyProved  uint8 = 1 // the TPM released the key; the proof is attached
 	BootKeyRefused uint8 = 2 // the TPM refused: this boot state is not an approved one
 	BootKeyFailed  uint8 = 3 // the machine could not try (TPM or data error)
+	// BootKeyLocked: the booted system. The key is locked until the next
+	// boot by design ('tpm2-kira cap' when the initrd was left), so there is
+	// no code and no signature; the quote still says which boot this is.
+	BootKeyLocked uint8 = 4
 )
 
 // BootKeyTemplate is the boot key's public area: a P-256 key that signs and

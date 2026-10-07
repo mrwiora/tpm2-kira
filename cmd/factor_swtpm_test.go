@@ -92,6 +92,18 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 		t.Fatalf("a passphrase release was taken: %d", status)
 	}
 
+	// At enrolment nothing is opened (the booted system has the slot
+	// locked): the phone must give back what it was asked to keep.
+	keep := &attest.FactorBlob{CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret, Label: "luks"}
+	svc.Keep(keep)
+	if status, msg := svc.TakeRelease(&attest.Release{Kind: attest.ReleaseKindFactor, CredentialBlob: w.Credential, EncryptedSecret: []byte{1, 2, 3}, Label: "luks"}); status != attest.ReleaseTPMRefused || svc.Returned() {
+		t.Fatalf("a different credential was taken as returned: %d %s", status, msg)
+	}
+	if status, msg := svc.TakeRelease(&attest.Release{Kind: attest.ReleaseKindFactor, CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret, Label: "luks"}); status != attest.ReleaseOK || !svc.Returned() || svc.Salt() != nil {
+		t.Fatalf("the returned credential: %d %s returned=%v", status, msg, svc.Returned())
+	}
+	svc.Keep(nil)
+
 	// A different TPM (a second swtpm) with the same blob: the EK is
 	// another, and the credential does not open.
 	other := startSWTPM(t)

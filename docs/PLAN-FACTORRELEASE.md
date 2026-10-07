@@ -264,8 +264,15 @@ tpm2-kira remote-salt enrol [--nvram N] [--label STR] --out PATH
    (blob version 12 carries it), draw F, wrap it for this TPM's EK and the
    release key's name, hand the credential to the phone over the enrolled
    session; the phone stores it with the machine's record.
-3. Prove the round trip before anything depends on it: ask the phone for
-   the credential back, open it in the TPM, compare with F.
+3. Prove the hand-over before anything depends on it: the phone returns
+   the credential after the accepted receipt, and it must be byte for byte
+   what it was given. The session is a check of the *running system*: the
+   quote matches the profile (PCR 11 by systemd's phase words, the others
+   by the OS separator), and the boot key answers `locked` - `cap` locked
+   the slot until the next boot, so the TPM cannot open anything now and
+   there is no code. That this TPM opens the credential under the slot's
+   policy is proven by the next boot, in the initrd; the boot log says so,
+   and the recovery passphrase is there if it does not.
 4. Ask for the password at the prompt, derive the key, write it to
    `--out` (tmpfs only, root-owned parent, mode 0600) and print the next
    steps; nothing else is kept:

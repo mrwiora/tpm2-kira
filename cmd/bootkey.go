@@ -122,7 +122,7 @@ func signWithBootKey(tpmDev transport.TPM, sealed *SealedBlob, blobIndex uint32,
 	defer FlushHandle(tpmDev, boot.handle)
 	session, done, err := approvedSession(tpmDev, sealed, blobIndex)
 	if err != nil {
-		return nil, fmt.Errorf("%w (%v)", errBootKeyRefused, err)
+		return nil, fmt.Errorf("%w (%w)", errBootKeyRefused, err)
 	}
 	defer done()
 	rsp, err := tpm2.Sign{
@@ -135,7 +135,7 @@ func signWithBootKey(tpmDev transport.TPM, sealed *SealedBlob, blobIndex uint32,
 		Validation: tpm2.TPMTTKHashCheck{Tag: tpm2.TPMSTHashCheck, Hierarchy: tpm2.TPMRHNull},
 	}.Execute(tpmDev)
 	if err != nil {
-		return nil, fmt.Errorf("%w (%v)", errBootKeyRefused, err)
+		return nil, fmt.Errorf("%w (%w)", errBootKeyRefused, err)
 	}
 	return tpm2.Marshal(rsp.Signature), nil
 }
@@ -161,7 +161,7 @@ func openBootChallenge(tpmDev transport.TPM, sealed *SealedBlob, blobIndex uint3
 	defer FlushHandle(tpmDev, boot.handle)
 	session, done, err := approvedSession(tpmDev, sealed, blobIndex)
 	if err != nil {
-		return "", nil, fmt.Errorf("%w (%v)", errBootKeyRefused, err)
+		return "", nil, fmt.Errorf("%w (%w)", errBootKeyRefused, err)
 	}
 	defer done()
 	rsp, err := tpm2.ECDHZGen{
@@ -172,7 +172,7 @@ func openBootChallenge(tpmDev transport.TPM, sealed *SealedBlob, blobIndex uint3
 		}),
 	}.Execute(tpmDev)
 	if err != nil {
-		return "", nil, fmt.Errorf("%w (%v)", errBootKeyRefused, err)
+		return "", nil, fmt.Errorf("%w (%w)", errBootKeyRefused, err)
 	}
 	out, err := rsp.OutPoint.Contents()
 	if err != nil {

@@ -388,7 +388,7 @@ Signatures never cover this encoding; they cover the canonical strings of §9.
 | 9 | boot_context | BootContext | O | informational, not TPM-signed |
 | 10 | app_version | string ≤64 | O | |
 | 11 | eventlog_size | u32 | O | bytes |
-| 12 | boot_key_state | u8 | O | 0 not tried · 1 proved · 2 refused by the TPM · 3 could not try (§7.6) |
+| 12 | boot_key_state | u8 | O | 0 not tried · 1 proved · 2 refused by the TPM · 3 could not try · 4 locked until the next boot (§7.6) |
 | 13 | boot_proof | bytes[32] exact | O | present with state 1 |
 | 14 | boot_signature | bytes ≤600 | O | TPMT_SIGNATURE by the boot key over `"tpm2-kira/boot-signature/v1" ‖ qd ‖ SHA-256(quoted)`; present with state 1 |
 | 15 | factor_credential | bytes ≤1024 | O | a wrapped factor the phone is asked to keep (`factor enrol` on the booted system; never at boot): `TPM2_MakeCredential` credentialBlob for the machine's EK and release key. Kept, replacing any kept one, when the verdict is accepted (not on reject); returned in a Release after the accepted receipt of this and every later session |
@@ -632,18 +632,23 @@ the person at its console, signs `SHA-256("tpm2-kira/boot-signature/v1" ‖ qd
 ‖ SHA-256(quoted))` with the same key (`TPM2_Sign`, ECDSA/SHA-256, under the
 same policy), and answers with `boot_key_state` 1, `boot_proof =
 HMAC-SHA256(k_mac, "tpm2-kira/boot-proof/v1" ‖ qd)` and `boot_signature`. If
-the TPM refuses, it answers with state 2 and neither. The code is never sent
-back.
+the TPM refuses, it answers with state 2 and neither. On the booted system,
+where `tpm2-kira cap` has locked the slot until the next boot (a check by
+hand, or a remote salt's enrolment, PLAN-FACTORRELEASE.md §6), it answers with state 4 and
+neither: not a refusal of the boot state, but the key's unavailability by
+design. The code is never sent back.
 
 The phone verifies both - the proof with its own key, the signature with the
 pinned point - and reports the outcome in the verdict (both must hold for
 `proved`; `signing_key` then names the signing key whose approval the TPM
 enforced):
 `boot_key` is `proved` (with `code`, shown as `ABCD-EFGH`), `refused`,
-`failed`, `unused`, or `invalid` when a proof was sent that does not verify,
+`failed`, `unused`, `locked` (state 4: the running system, no code until
+the next boot), or `invalid` when a proof was sent that does not verify,
 which is a hard failure (`boot_proof_invalid`). The person compares the code
 with the machine's screen before answering. A refusal is not a failure by
-itself: the quote's diff says what changed.
+itself: the quote's diff says what changed; `locked` is not one either, and
+says nothing about the boot's approval - only the quote speaks then.
 
 **Matching a profile.** A quoted PCR matches a profile's value when the two
 are equal, or, for PCRs 0-7, 9, 12, 13 and 14 only, when one is the other
@@ -653,8 +658,11 @@ baseline, and a machine asked by hand later, show the registers after it;
 that unit extends this constant into those PCRs of every boot, so both
 values describe the same measured boot. The rule holds in both directions
 because a profile may have been recorded at either moment, and per PCR
-because a quote may be taken while the unit runs. PCRs listed as changed in a
-diff are those that do not match under this rule.
+because a quote may be taken while the unit runs. PCR 11 matches when one
+value is the other extended by systemd's phase words in order (`enter-initrd`,
+`leave-initrd`, `sysinit`, `ready`, any ordered subset): the running system
+of the boot the profile knows, which a check after boot sees. PCRs listed as
+changed in a diff are those that do not match under these rules.
 
 ---
 

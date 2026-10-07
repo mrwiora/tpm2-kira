@@ -147,8 +147,11 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	want := FactorSalt(f, label)
 	defer wipe(want)
 
-	// The phone keeps the credential in an ordinary check, and returns it
-	// after the accepted receipt; the coordinator opens it in the TPM.
+	// The phone keeps the credential in an ordinary check of the booted
+	// system (the quote says which boot this is; the boot key is locked
+	// until the next boot, so there is no code), and returns it after the
+	// accepted receipt. The TPM opens it at the next boot, in the initrd,
+	// where the slot's policy holds; here the salt is known in the clear.
 	pubKeyPath := o.PubKeyPath
 	if pubKeyPath == "" {
 		pubKeyPath = DefaultPublicKeyPath
@@ -156,18 +159,15 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	svc := newGateService(tpmDev, idx, pubKeyPath, o.Debug)
 	svc.Keep(&attest.FactorBlob{CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret, Label: label})
 	fmt.Println("Open Marify on the phone and verify this machine: the verdict screen asks")
-	fmt.Println("to keep the remote salt. Accept the verdict to keep it.")
+	fmt.Println("to keep the remote salt (no code: after boot the boot key is locked). Continue")
+	fmt.Println("to keep it.")
 	code := runGateRadio(svc, GateOptions{TPMPath: o.TPMPath, Adapter: o.Adapter, Timeout: o.Timeout, AdapterWait: o.AdapterWait, Debug: o.Debug}, gateSteps(o.Debug), nil)
 	defer svc.Forget()
-	got := svc.Salt()
-	defer wipe(got)
-	if code != 0 || got == nil {
+	if code != 0 || !svc.Returned() {
 		return nil, 0, fmt.Errorf("the phone did not return the remote salt (gate exit %d); nothing was enrolled. Check the phone's screen and run this again", code)
 	}
-	if !bytes.Equal(got, want) {
-		return nil, 0, errors.New("the remote salt the phone returned is not the one it was given; nothing was enrolled")
-	}
-	fmt.Println("The phone keeps the remote salt, and this TPM opened it: the round trip works.")
+	fmt.Println("The phone keeps the remote salt and gave it back unchanged. This TPM opens it at")
+	fmt.Println("the next boot, under the slot's policy; the boot log says so.")
 
 	pw, err := terminalPassword("Password for the disk (the factor's other half): ")
 	if err != nil {

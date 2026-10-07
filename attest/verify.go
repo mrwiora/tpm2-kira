@@ -228,7 +228,8 @@ type Verdict struct {
 	QuoteDigest     []byte `json:"-"`
 
 	// BootKey is what the machine's TPM made of the boot challenge
-	// (bootkey.go): "proved", "refused", "invalid", "failed" or "unused".
+	// (bootkey.go): "proved", "refused", "invalid", "failed", "unused" or
+	// "locked" (the booted system: no code until the next boot, by design).
 	// Code is the code to compare with the machine's screen; present only
 	// when the key was proved.
 	BootKey string `json:"boot_key"`
@@ -245,6 +246,7 @@ const (
 	BootKeyResultInvalid = "invalid" // the machine claimed a proof that does not verify
 	BootKeyResultFailed  = "failed"  // the machine could not try
 	BootKeyResultUnused  = "unused"  // the machine did not try
+	BootKeyResultLocked  = "locked"  // after boot: the key is locked until the next boot by design
 )
 
 // Verdict states.

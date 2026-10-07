@@ -23,6 +23,7 @@ package cmd
 // on a verified boot later has one place to ask.
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -98,6 +99,8 @@ type gateService struct {
 	// the disk's key is asked for (and wiped with Close).
 	keep *attest.FactorBlob
 	salt []byte
+	// returned: at enrolment, the phone gave keep back unchanged.
+	returned bool
 }
 
 // newGateService sets the coordinator up in the background (the TPM can be
@@ -288,6 +291,11 @@ func (s *gateService) FactorToKeep() *attest.FactorBlob {
 // released is opened in the TPM now, while the slot's policy still holds
 // (before the OS separator), and only the combiner's salt is kept. The
 // status tells the phone what the TPM made of it.
+//
+// At enrolment (Keep was set) the machine runs in the booted system, where
+// the slot is locked until the next boot, so nothing is opened: the phone
+// must give back exactly what it was asked to keep, which says it kept it.
+// That this TPM opens it is the next boot's proof.
 func (s *gateService) TakeRelease(r *attest.Release) (uint8, string) {
 	<-s.ready
 	if s.code != 0 || s.blob == nil || s.be == nil || s.be.sealed == nil {
@@ -295,6 +303,18 @@ func (s *gateService) TakeRelease(r *attest.Release) (uint8, string) {
 	}
 	if r == nil || r.Kind != attest.ReleaseKindFactor {
 		return attest.ReleaseUnsupported, "not a remote salt"
+	}
+	s.mu.Lock()
+	keep := s.keep
+	s.mu.Unlock()
+	if keep != nil {
+		if !bytes.Equal(r.CredentialBlob, keep.CredentialBlob) || !bytes.Equal(r.EncryptedSecret, keep.EncryptedSecret) || r.Label != keep.Label {
+			return attest.ReleaseTPMRefused, "the remote salt returned is not the one the phone was asked to keep"
+		}
+		s.mu.Lock()
+		s.returned = true
+		s.mu.Unlock()
+		return attest.ReleaseOK, "the phone keeps the remote salt; this TPM opens it at the next boot"
 	}
 	s.tpmMu.Lock()
 	f, err := unwrapFactor(s.tpm, s.be.sealed, s.be.sealIndex, s.blob, &WrappedFactor{Credential: r.CredentialBlob, EncryptedSecret: r.EncryptedSecret})
@@ -323,6 +343,14 @@ func (s *gateService) Salt() []byte {
 		return nil
 	}
 	return append([]byte(nil), s.salt...)
+}
+
+// Returned says whether the phone gave back, at enrolment, what it was
+// asked to keep.
+func (s *gateService) Returned() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.returned
 }
 
 // Forget wipes the salt; called when the key provider is done with it.

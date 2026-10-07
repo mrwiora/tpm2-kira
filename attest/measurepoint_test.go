@@ -72,7 +72,7 @@ func TestSameBootState(t *testing.T) {
 			}
 		}
 		// Registers the separator is not extended into must be equal.
-		for _, idx := range []uint8{8, 10, 11, 15, 23} {
+		for _, idx := range []uint8{8, 10, 15, 23} {
 			if !SameBootState(idx, before, before) {
 				t.Fatalf("PCR %d: equal values differ", idx)
 			}
@@ -82,6 +82,23 @@ func TestSameBootState(t *testing.T) {
 		}
 		if SameBootState(0, before, after[:size-1]) || SameBootState(0, nil, nil) {
 			t.Fatal("malformed values accepted")
+		}
+
+		// PCR 11: the booted system is the boot-check value extended by
+		// systemd's phase words, in order; a word out of order or any
+		// other extension is another boot.
+		leave, _ := ExtendWord(alg, before, "leave-initrd")
+		sysinit, _ := ExtendWord(alg, leave, "sysinit")
+		ready, _ := ExtendWord(alg, sysinit, "ready")
+		for _, later := range [][]byte{leave, sysinit, ready} {
+			if !SameBootState(11, before, later) || !SameBootState(11, later, before) {
+				t.Fatalf("alg %#x PCR 11: a later phase of the same boot not recognised", alg)
+			}
+		}
+		wrongOrder, _ := ExtendWord(alg, before, "ready")
+		wrongOrder, _ = ExtendWord(alg, wrongOrder, "leave-initrd")
+		if SameBootState(11, before, wrongOrder) || SameBootState(11, before, other) || SameBootState(11, before, after) {
+			t.Fatalf("alg %#x PCR 11: accepted a state that is not this boot", alg)
 		}
 	}
 }

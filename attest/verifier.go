@@ -986,6 +986,8 @@ func (v *Verifier) judgeBootKey(ev *Evidence) {
 		vd.BootKey = BootKeyResultRefused
 	case BootKeyFailed:
 		vd.BootKey = BootKeyResultFailed
+	case BootKeyLocked:
+		vd.BootKey = BootKeyResultLocked
 	default:
 		vd.BootKey = BootKeyResultUnused
 	}

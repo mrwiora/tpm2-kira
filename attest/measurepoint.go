@@ -65,6 +65,9 @@ func SameBootState(idx uint8, a, b []byte) bool {
 	if bytes.Equal(a, b) {
 		return len(a) > 0
 	}
+	if idx == 11 {
+		return SamePCR11Boot(a, b)
+	}
 	if len(a) != len(b) || !isOSSeparatorPCR(idx) {
 		return false
 	}
@@ -84,6 +87,29 @@ func SameBootState(idx uint8, a, b []byte) bool {
 		return true
 	}
 	return false
+}
+
+// SamePCR11Boot is SameBootState for PCR 11, whose later phases systemd
+// extends with words (PCR11Phases): a value reachable from the other by
+// phase words is the same boot, seen later - the booted system of the
+// boot the profile knows. Either direction, as for SameBootState.
+func SamePCR11Boot(a, b []byte) bool {
+	if bytes.Equal(a, b) {
+		return len(a) > 0
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	var alg uint16
+	switch len(a) {
+	case 20:
+		alg = AlgSHA1
+	case 32:
+		alg = AlgSHA256
+	default:
+		return false
+	}
+	return reachableByPhases(alg, a, b) || reachableByPhases(alg, b, a)
 }
 
 func isOSSeparatorPCR(idx uint8) bool {
