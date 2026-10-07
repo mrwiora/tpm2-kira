@@ -27,6 +27,12 @@ Conflicts=multi-user.target
 Conflicts=initrd-switch-root.target
 Before=initrd-switch-root.target
 DefaultDependencies=no
+# The disk's key: systemd-cryptsetup asks for it on this socket (see the
+# socket unit), after the separator. This process answers once the code
+# screen is confirmed, at its own passphrase prompt, and stays alive for
+# that until switch-root; the console is given up with the hold, so the
+# prompt opens /dev/console only while it asks.
+Sockets=tpm2-kira-unlock.socket
 
 [Service]
 Type=notify
@@ -35,7 +41,8 @@ Type=notify
 # longer than this. Raise it together with --hold.
 TimeoutStartSec=180
 # --gate: where the radio worker reaches this process. Without an enrolled
-# phone in the image nothing listens there and the process ends after READY.
+# phone in the image nothing listens there. The key socket comes from the
+# socket unit (Sockets=), not from a flag.
 ExecStart=tpm2-kira run --gate /run/tpm2-kira/gate.sock
 # Enter on the console releases the boot.
 StandardInput=tty

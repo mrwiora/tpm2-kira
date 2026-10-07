@@ -91,7 +91,7 @@ install-mkinitcpio:
 	sudo cp initramfs/mkinitcpio/post/sd-tpm2-kira /etc/initcpio/post/
 	sudo chmod +x /etc/initcpio/post/sd-tpm2-kira
 	sudo mkdir -p /usr/lib/systemd/system
-	sudo install -m644 initramfs/systemd/tpm2-kira.service initramfs/systemd/tpm2-kira-cap.service /usr/lib/systemd/system/
+	sudo install -m644 initramfs/systemd/tpm2-kira.service initramfs/systemd/tpm2-kira-cap.service initramfs/systemd/tpm2-kira-unlock.socket /usr/lib/systemd/system/
 	sudo install -m644 initramfs/systemd/tpm2-kira-attest.service /usr/lib/systemd/system/
 	@if [ ! -e /etc/tpm2-kira/attest.conf ]; then \
 		sudo install -Dm644 initramfs/common/attest.conf /etc/tpm2-kira/attest.conf; \
@@ -99,9 +99,13 @@ install-mkinitcpio:
 	@echo "Mkinitcpio hooks installed successfully!"
 	@echo ""
 	@echo "Next steps:"
-	@echo "1. Edit /etc/mkinitcpio.conf and add the hook BEFORE sd-encrypt:"
+	@echo "1. Edit /etc/mkinitcpio.conf and add the hook next to sd-encrypt:"
 	@echo ""
 	@echo "   HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)"
+	@echo ""
+	@echo "   In /etc/crypttab, give each volume the initrd unlocks tpm2-kira's socket"
+	@echo "   as its key file (see README \"Configure the disk unlock\"):"
+	@echo "     cryptroot  UUID=...  /run/tpm2-kira/unlock.sock  x-initrd.attach"
 	@echo ""
 	@echo "2. Set up and seal (if not already done; see README \"Choosing PCRs\"):"
 	@echo "   tpm2-kira setup"
@@ -116,7 +120,7 @@ uninstall-mkinitcpio:
 	sudo rm -f /etc/initcpio/install/sd-tpm2-kira
 	sudo rm -f /usr/lib/systemd/system/tpm2-kira-attest.service
 	sudo rm -f /etc/initcpio/post/sd-tpm2-kira
-	sudo rm -f /usr/lib/systemd/system/tpm2-kira.service /usr/lib/systemd/system/tpm2-kira-cap.service
+	sudo rm -f /usr/lib/systemd/system/tpm2-kira.service /usr/lib/systemd/system/tpm2-kira-cap.service /usr/lib/systemd/system/tpm2-kira-unlock.socket
 	@echo "Mkinitcpio hooks uninstalled!"
 	@echo "Note: You should rebuild your initramfs after removing hooks:"
 	@echo "      sudo mkinitcpio -P"

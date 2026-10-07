@@ -35,7 +35,7 @@ func has(lines []string, want string) bool {
 // The initrd units are installed on the host too (the mkinitcpio hook takes
 // them from there). Enabled on the host by mistake they must do nothing.
 func TestInitrdUnitsOnlyRunInTheInitrd(t *testing.T) {
-	for _, unit := range []string{"tpm2-kira.service", "tpm2-kira-cap.service", "tpm2-kira-attest.service"} {
+	for _, unit := range []string{"tpm2-kira.service", "tpm2-kira-cap.service", "tpm2-kira-attest.service", "tpm2-kira-unlock.socket"} {
 		if !has(directives(t, "initramfs/systemd/"+unit), "ConditionPathExists=/etc/initrd-release") {
 			t.Errorf("%s lacks ConditionPathExists=/etc/initrd-release", unit)
 		}
@@ -113,5 +113,32 @@ func TestGateUnitIsConfined(t *testing.T) {
 		if has(lines, bad) {
 			t.Errorf("gate unit has %q, which breaks it", bad)
 		}
+	}
+}
+
+// The disk's key comes from tpm2-kira: the socket unit is the key file of
+// the volumes (crypttab(5), AF_UNIX key files), exists before any
+// cryptsetup unit, and is answered by the display's process.
+func TestUnlockSocketIsWiredToTheDisplay(t *testing.T) {
+	sock := directives(t, "initramfs/systemd/tpm2-kira-unlock.socket")
+	for _, want := range []string{
+		"ListenStream=/run/tpm2-kira/unlock.sock",
+		"SocketMode=0600",
+		"Before=cryptsetup-pre.target",
+		"Service=tpm2-kira.service",
+		"RemoveOnStop=yes",
+	} {
+		if !has(sock, want) {
+			t.Errorf("socket unit lacks %q", want)
+		}
+	}
+	svc := directives(t, "initramfs/systemd/tpm2-kira.service")
+	if !has(svc, "Sockets=tpm2-kira-unlock.socket") {
+		t.Error("the display's service does not take the key socket")
+	}
+	// The key is asked for after the separator, which the display's READY
+	// precedes; the service must not end with the hold any more.
+	if !has(svc, "Conflicts=initrd-switch-root.target") {
+		t.Error("the service is not ended at switch-root")
 	}
 }

@@ -138,6 +138,43 @@ _add_bluetooth() {
     plain "tpm2-kira: Bluetooth attestation ($mode) via hci$adapter: ${#modules[@]} modules, $nfw firmware files"
 }
 
+UNLOCK_SOCKET=/run/tpm2-kira/unlock.sock
+
+# The disk's unlock goes through tpm2-kira when /etc/crypttab says so: a
+# volume whose key field is tpm2-kira's socket is unlocked by
+# systemd-cryptsetup with the key it reads from there (crypttab(5), "AF_UNIX
+# KEY FILES"), which tpm2-kira answers once the code screen is confirmed.
+# The sd-encrypt hook copies the x-initrd.attach lines into the image as
+# they are; this hook adds the socket unit and reports, per volume, where
+# its key comes from. It reads the host's crypttab, not the image's, so it
+# does not matter which of the two hooks runs first.
+_add_unlock() {
+    local crypttab=${1:-/etc/crypttab}
+    local name key opts n=0
+    local -a prompt=()
+
+    add_systemd_unit tpm2-kira-unlock.socket
+    add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-unlock.socket \
+        /usr/lib/systemd/system/tpm2-kira-unlock.socket
+
+    while read -r name _ key opts; do
+        (( n++ ))
+        if [[ $key == "$UNLOCK_SOCKET" ]]; then
+            plain "tpm2-kira: $name is unlocked through tpm2-kira's prompt"
+        elif [[ -z $key || $key == none || $key == - ]] &&
+            [[ ,$opts, != *,tpm2-device=* && ,$opts, != *,fido2-device=* && ,$opts, != *,pkcs11-uri=* && ,$opts, != *,keyscript=* ]]; then
+            prompt+=("$name")
+        fi
+    done < <(awk '!/^\s*($|#)/ && $4 ~ /x-initrd\.attach/' "$crypttab" 2>/dev/null)
+
+    if (( n == 0 )); then
+        warning "tpm2-kira: no x-initrd.attach line in /etc/crypttab; a volume named on the kernel command line goes through tpm2-kira with rd.luks.key=<UUID>=$UNLOCK_SOCKET"
+    fi
+    for name in "${prompt[@]}"; do
+        warning "tpm2-kira: $name is asked for by systemd's own prompt, not tpm2-kira's; to change that, put $UNLOCK_SOCKET into its key field in /etc/crypttab"
+    done
+}
+
 build() {
     # Add tpm2-kira binary to initramfs
     add_binary tpm2-kira
@@ -158,6 +195,8 @@ build() {
 
     _report_measure_point
 
+    _add_unlock
+
     _add_bluetooth
 
     if [[ ! -d /var/lib/tpm2-kira/keys ]]; then
@@ -173,9 +212,14 @@ for continuous TOTP display.
 
 The hook will:
 - Install the tpm2-kira binary into the image
-- Add tpm2-kira.service and tpm2-kira-cap.service and enable them inside
-  the image only
+- Add tpm2-kira.service, tpm2-kira-cap.service and tpm2-kira-unlock.socket
+  and enable them inside the image only
 - Start tpm2-kira in continuous run mode during boot
+- Report where each volume's key comes from: a volume whose key field in
+  /etc/crypttab is /run/tpm2-kira/unlock.sock (crypttab(5), AF_UNIX key
+  files) is unlocked by systemd-cryptsetup with the key tpm2-kira provides,
+  asked at its prompt once the code screen is confirmed. The sd-encrypt
+  hook copies the line into the image as it is; nothing is rewritten.
 - If /etc/tpm2-kira/attest.conf sets TPM2_KIRA_ATTEST=lazy and a phone is
   enrolled: add the Bluetooth adapter's driver modules and firmware, and
   tpm2-kira-attest.service, which serves attestation requests from the phone
@@ -191,17 +235,21 @@ Post-generation hook (sd-tpm2-kira in /usr/lib/initcpio/post/):
   measured into PCRs at boot — every rebuild may change the expected
   values, so the sealed TOTP secret must be resealed to match.
 
-Created systemd service:
-  tpm2-kira.service     - Runs tpm2-kira in continuous TOTP mode
-  tpm2-kira-cap.service - Runs 'tpm2-kira cap' when switching to the real
-                          root: no codes until the next boot
+Created systemd units:
+  tpm2-kira.service       - Runs tpm2-kira in continuous TOTP mode, and
+                            answers systemd-cryptsetup's key requests
+  tpm2-kira-unlock.socket - The key socket systemd-cryptsetup connects to
+  tpm2-kira-cap.service   - Runs 'tpm2-kira cap' when switching to the real
+                            root: no codes until the next boot
 
 Prerequisites:
-- systemd-based initramfs (mkinitcpio with systemd support)
+- systemd-based initramfs (mkinitcpio with systemd support, sd-encrypt)
 - tpm2-kira binary must be installed
 - TPM 2.0 hardware or firmware TPM must be available
 
-Usage in /etc/mkinitcpio.conf:
-  HOOKS=(... sd-tpm2-kira ...)
+Usage in /etc/mkinitcpio.conf (either order):
+  HOOKS=(... sd-tpm2-kira sd-encrypt ...)
+and in /etc/crypttab:
+  cryptroot  UUID=...  /run/tpm2-kira/unlock.sock  x-initrd.attach
 HELPEOF
 }

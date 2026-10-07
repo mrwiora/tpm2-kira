@@ -66,6 +66,8 @@ package() {
         "$pkgdir/usr/lib/systemd/system/tpm2-kira.service"
     install -Dm644 initramfs/systemd/tpm2-kira-cap.service \
         "$pkgdir/usr/lib/systemd/system/tpm2-kira-cap.service"
+    install -Dm644 initramfs/systemd/tpm2-kira-unlock.socket \
+        "$pkgdir/usr/lib/systemd/system/tpm2-kira-unlock.socket"
 
     # Lazy-mode Bluetooth attestation; added to the image by the install hook
     # only when /etc/tpm2-kira/attest.conf enables it.
