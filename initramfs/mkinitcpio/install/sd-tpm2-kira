@@ -203,8 +203,22 @@ _add_unlock() {
         fi
     done < <(awk '!/^\s*($|#)/ && $4 ~ /x-initrd\.attach/' "$crypttab" 2>/dev/null)
 
+    # The devices with a keyslot of tpm2-kira's: is each routed, and if not,
+    # what the line should read ('tpm2-kira luks route'; it edits nothing).
+    local -a routeargs=()
+    for f in "${cmdlines[@]}"; do
+        [[ $f == /proc/cmdline ]] && continue
+        routeargs+=(--cmdline "$f")
+    done
+    local advice
+    if advice=$(tpm2-kira luks route "${routeargs[@]}" --crypttab "$crypttab" 2>&1); then
+        [[ -n $advice ]] && plain "tpm2-kira: $advice"
+    else
+        warning "tpm2-kira: the disk's key is not routed through tpm2-kira everywhere - the files below are not edited; change them as shown and rebuild:"
+        while IFS= read -r line; do plain "    $line"; done <<< "$advice"
+    fi
     if (( ! routed )); then
-        warning "tpm2-kira: no volume is unlocked through tpm2-kira yet; add rd.luks.key=<UUID>=$UNLOCK_SOCKET to the kernel command line (README, \"Configure the disk unlock\")"
+        warning "tpm2-kira: no volume is unlocked through tpm2-kira yet; add rd.luks.key=<UUID>=$UNLOCK_SOCKET next to rd.luks.name= on the kernel command line (README, \"Configure the disk unlock\")"
     fi
 }
 

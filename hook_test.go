@@ -30,6 +30,8 @@ add_systemd_unit() { echo "UNIT $1"; }
 add_symlink() { echo "LINK $1"; }
 plain() { echo "PLAIN $*"; }
 warning() { echo "WARNING $*"; }
+# 'tpm2-kira luks route' as the test wants it: its lines and its exit status.
+tpm2-kira() { [[ "$1 $2" == "luks route" ]] || return 0; printf '%s' "$ROUTE_OUT"; return "${ROUTE_RC:-0}"; }
 source initramfs/mkinitcpio/install/sd-tpm2-kira
 _add_unlock "$@"
 `
@@ -78,5 +80,24 @@ later UUID=cccc /run/tpm2-kira/unlock.sock discard
 	got = run(filepath.Join(dir, "none"), plain)
 	if !strings.Contains(got, "WARNING tpm2-kira: no volume is unlocked through tpm2-kira yet; add rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock") {
 		t.Errorf("no hint:\n%s", got)
+	}
+
+	// 'luks route' found a problem: its lines, under a warning, as the
+	// person should see them.
+	advice := "/dev/sda2: /etc/kernel/cmdline: rd.luks.name= for 1111-2222 appears 2 times.\n  The line should read:\n    rd.luks.name=1111-2222=cryptroot rd.luks.key=1111-2222=/run/tpm2-kira/unlock.sock rw\n"
+	cmd := exec.Command("bash", "-c", script, "-", filepath.Join(dir, "none"), plain)
+	cmd.Env = append(os.Environ(), "ROUTE_RC=1", "ROUTE_OUT="+advice)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	for _, want := range []string{
+		"WARNING tpm2-kira: the disk's key is not routed through tpm2-kira everywhere",
+		"PLAIN     /dev/sda2: /etc/kernel/cmdline: rd.luks.name= for 1111-2222 appears 2 times.",
+		"PLAIN         rd.luks.name=1111-2222=cryptroot rd.luks.key=1111-2222=/run/tpm2-kira/unlock.sock rw",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
 	}
 }

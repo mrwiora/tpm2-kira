@@ -118,6 +118,25 @@ func collectStatus(o StatusOptions) StatusReport {
 	}
 
 	r.Notes = append(r.Notes, statusNotes(r)...)
+	// The route of the key, for the devices with a keyslot of ours.
+	var routed []string
+	for _, d := range r.Devices {
+		for _, ks := range d.Keyslots {
+			if ks.Token != nil {
+				routed = append(routed, d.Device)
+				break
+			}
+		}
+	}
+	if len(routed) > 0 {
+		if findings, err := RouteFindings(routed, nil, ""); err == nil {
+			for _, f := range findings {
+				if !f.Routed {
+					r.Notes = append(r.Notes, strings.TrimRight(routeText(f), "\n"))
+				}
+			}
+		}
+	}
 	return r
 }
 

@@ -806,7 +806,7 @@ func runGateRadio(host gateHost, o GateOptions, step func(string, ...any), ended
 	if errors.Is(err, errNoPhoneReachable) {
 		gateFail("phone not reachable: no phone connected over Bluetooth within %s.\n"+
 			"tpm2-kira:   This is not a TPM or boot-integrity failure. Check that the phone\n"+
-			"tpm2-kira:   is close to this machine, Bluetooth is on and the Kira app is open.", o.Timeout)
+			"tpm2-kira:   is close to this machine, Bluetooth is on and the Marify app is open.", o.Timeout)
 		host.Report(GateUnavailable)
 		return ExitUnavailable
 	}
@@ -862,7 +862,7 @@ func waitForReceipt(acc phoneAcceptor, adv ble.Advertisement, timeout time.Durat
 		if errors.Is(err, ble.ErrAcceptTimeout) {
 			if attempt == 1 {
 				fmt.Fprintln(out, "tpm2-kira: no phone reachable yet: nothing has connected over Bluetooth.")
-				fmt.Fprintln(out, "tpm2-kira:   Open Kira on your phone, close to this machine, with Bluetooth on.")
+				fmt.Fprintln(out, "tpm2-kira:   Open Marify on your phone, close to this machine, with Bluetooth on.")
 			}
 			if timeout <= 0 || now().Sub(start) < timeout {
 				fmt.Fprintf(out, "tpm2-kira: phone not reachable yet (round %d), still waiting ...\n", attempt)
@@ -968,15 +968,15 @@ func reportReceipt(res *attest.AttestResult, recordVerified bool) int {
 		fmt.Printf("tpm2-kira: APPROVED on %s: boot state changed and was approved by you\n", who)
 		return ExitAttested
 	case c.Verdict == attest.VerdictReject && (c.Authentic || c.Ack == attest.AckRejectNoted):
-		fmt.Printf("tpm2-kira: REJECTED by %s: the phone does not trust this boot.\n", who)
-		fmt.Println("tpm2-kira: Do not type a passphrase before checking further (compare the TOTP code).")
+		fmt.Fprintf(os.Stderr, "tpm2-kira: REJECTED by %s: the phone does not trust this boot.\n", who)
+		fmt.Fprintln(os.Stderr, "tpm2-kira: Do not type a passphrase before checking further (compare the TOTP code).")
 		return ExitRejected
 	case c.Ack == attest.AckBadSignature:
-		fmt.Printf("tpm2-kira: ANCHOR MISMATCH: the receipt was not signed by the enrolled phone (%s).\n", c.Detail)
-		fmt.Println("tpm2-kira: This is either a wrong phone or an attack.")
+		fmt.Fprintf(os.Stderr, "tpm2-kira: ANCHOR MISMATCH: the receipt was not signed by the enrolled phone (%s).\n", c.Detail)
+		fmt.Fprintln(os.Stderr, "tpm2-kira: This is either a wrong phone or an attack.")
 		return ExitAnchor
 	default:
-		fmt.Printf("tpm2-kira: receipt not accepted: %s\n", c.Detail)
+		fmt.Fprintf(os.Stderr, "tpm2-kira: receipt not accepted: %s\n", c.Detail)
 		return ExitInternal
 	}
 }

@@ -468,6 +468,12 @@ func failAttest(code int, err error) {
 	os.Exit(code)
 }
 
+// stringList is a repeatable string flag.
+type stringList []string
+
+func (l *stringList) String() string     { return strings.Join(*l, ",") }
+func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
+
 // deviceLast moves a leading device argument behind the flags, so that
 // 'luks mark /dev/sda2 --keyslot 1' and 'luks mark --keyslot 1 /dev/sda2'
 // both parse (the flag package stops at the first non-flag).
@@ -536,6 +542,17 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 				Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: true, Debug: *debug},
 		}); err != nil {
 			fail(err)
+		}
+	case "route":
+		fs := flag.NewFlagSet("luks route", flag.ExitOnError)
+		var cmdlines stringList
+		fs.Var(&cmdlines, "cmdline", "A kernel command line file to judge (repeatable; default: the ones that exist)")
+		crypttab := fs.String("crypttab", "", "The crypttab to judge (default /etc/crypttab)")
+		jsonOut := fs.Bool("json", false, "Machine-readable output")
+		fs.Parse(args[1:])
+		if err := cmd.LuksRoute(fs.Args(), cmdlines, *crypttab, *jsonOut); err != nil {
+			fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
+			os.Exit(1) // the hook reads it
 		}
 	case "remove":
 		fs := flag.NewFlagSet("luks remove", flag.ExitOnError)

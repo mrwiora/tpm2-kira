@@ -448,6 +448,9 @@ func LuksEnrol(o LuksEnrolOptions) error {
 		}
 		fmt.Printf("%s: TPM2_KIRA_UNLOCK=%s\n", DefaultUnlockConfigPath, o.Mode)
 	}
+	if advice := RouteAdvice(o.Device); advice != "" {
+		fmt.Print(advice)
+	}
 	fmt.Println("Rebuild the initramfs (mkinitcpio -P / update-initramfs -u) and the next boot asks")
 	fmt.Println("at tpm2-kira's prompt. The recovery passphrase stays the way in at cryptsetup's.")
 	return nil

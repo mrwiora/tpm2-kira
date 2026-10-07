@@ -45,8 +45,8 @@ THE PHONE (the Marify app, over Bluetooth LE)
                kept by the phone, opened only by this TPM in an approved boot
 
 THE DISK'S KEY (mode in /etc/tpm2-kira/unlock.conf)
-  luks         status, enrol, remove, mark: tpm2-kira's LUKS keyslots,
-               marked by a token in the header
+  luks         status, enrol, remove, mark, route: tpm2-kira's LUKS keyslots,
+               and where the initrd takes the key from
   derive       hashpwd2 by hand: password and salt to a key file for luksAddKey
 
 AT BOOT (run by the initramfs units and hooks)
@@ -314,6 +314,7 @@ keyscript asks at askpass directly.
 	"luks": `tpm2-kira luks status [<device>…] [--json]
 tpm2-kira luks enrol  <device> --mode password+salt|password+remotesalt [options]
 tpm2-kira luks remove <device> --keyslot N
+tpm2-kira luks route  [<device>…] [--cmdline FILE]… [--crypttab FILE] [--json]
 tpm2-kira luks mark   <device> --keyslot N --mode password+salt|password+remotesalt [options]
 
 tpm2-kira's LUKS keyslots. Every keyslot it adds is marked with a LUKS2
@@ -342,11 +343,21 @@ prompt is always the fallback (docs/PLAN-LUKS.md).
             never one that is not tpm2-kira's
   mark      The token for a keyslot made by hand (derive or remote-salt enrol
             --out, then luksAddKey): --keyslot N --mode M [--nvram N --label STR]
+  route     Where the initrd is told to take the key from tpm2-kira, for
+            every device with a keyslot of ours (or the ones named): the
+            kernel command line (/etc/cmdline.d/*.conf or /etc/kernel/cmdline,
+            boot loader entries) needs rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock
+            next to rd.luks.name=; /etc/crypttab the socket as key file with
+            x-initrd.attach, or on Debian keyscript=/lib/cryptsetup/scripts/tpm2-kira.
+            Nothing is edited: a wrong line is named and the line is printed
+            as it should read. Exit 1 while something is wrong. 'luks enrol'
+            ends with it, 'status' notes it, the mkinitcpio hook runs it
 
   tpm2-kira luks status
   tpm2-kira luks enrol /dev/sda2 --mode password+salt
   tpm2-kira luks enrol /dev/sda2 --mode password+remotesalt
   tpm2-kira luks remove /dev/sda2 --keyslot 1
+  tpm2-kira luks route
   tpm2-kira luks mark /dev/sda2 --keyslot 1 --mode password+salt
 `,
 

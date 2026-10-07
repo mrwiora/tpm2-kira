@@ -64,10 +64,11 @@ func TestGateUnitIsConfined(t *testing.T) {
 			t.Errorf("gate unit lacks %q", want)
 		}
 	}
-	// What the gate did must be readable after the boot, not only on a
-	// screen that has since been cleared.
-	if !has(lines, "StandardOutput=journal+console") || !has(lines, "StandardError=journal+console") {
-		t.Error("the gate's output does not reach the journal")
+	// What the gate did must be readable after the boot; its narrative
+	// stays off the console, where the code screen is, and what needs
+	// eyes (stderr) reaches it.
+	if !has(lines, "StandardOutput=journal") || !has(lines, "StandardError=journal+console") {
+		t.Error("the gate's output: narrative to the journal, failures to the console too")
 	}
 	// The gate runs next to the code screen, not after it: a slot enrolled
 	// with a phone is verified while the code is shown.

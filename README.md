@@ -153,7 +153,7 @@ tpm2-kira runs `reveal`.
 |---|---|
 | Setting up the machine | `setup` the signing key · `seal` a new TOTP key to the boot state · `reseal` approve the current boot state (the hooks run it) · `status` the overview · `info` a slot's blob · `nvram list\|status\|delete\|restore` |
 | The phone (Marify, Bluetooth LE) | `attest enrol\|unenrol\|status\|gate\|signer\|ekcert\|quote\|verify\|config-check` · `remote-salt enrol\|rotate\|status\|unenrol` |
-| The disk's key | `luks status\|enrol\|remove\|mark` · `derive` (hashpwd2 by hand) · the mode in `/etc/tpm2-kira/unlock.conf` |
+| The disk's key | `luks status\|enrol\|remove\|mark\|route` · `derive` (hashpwd2 by hand) · the mode in `/etc/tpm2-kira/unlock.conf` |
 | At boot (the units and hooks) | `run` · `cap` · `unlock-key` (Debian keyscript) |
 | By hand | `reveal` / `reveal-plain` · `yubikey list` · `pcrtips` · `version` |
 
@@ -562,8 +562,20 @@ change. With a UKI the command line is the file in your preset
 the entry's `options` line. `rd.luks.key=/run/tpm2-kira/unlock.sock`
 without a UUID routes every volume named on the command line.
 
-`mkinitcpio` reports what is configured (`the volume <UUID> is unlocked
-through tpm2-kira's prompt`) or, if nothing is, the parameter to add.
+Both parameters stay; a second `rd.luks.name=` with the socket as its
+"name" makes systemd set up a volume called `/run/tpm2-kira/unlock.sock`
+and no `cryptroot` ("Failed to start Cryptography Setup for
+/run/tpm2-kira/unlock.sock").
+
+**tpm2-kira does not edit the command line, it tells you what it should
+read**: `tpm2-kira luks route` reads the files the command line comes from
+(`/etc/cmdline.d/*.conf`, else `/etc/kernel/cmdline`; boot loader
+entries; `/etc/crypttab`), names what is wrong for every device with a
+keyslot of tpm2-kira's - the parameter missing, a doubled `rd.luks.name=`,
+the socket as the volume's name, another key file - and prints the line
+as it should read. `luks enrol` ends with it, `tpm2-kira status` notes it,
+and `mkinitcpio -P` runs it (the hook's `the volume <UUID> is unlocked
+through tpm2-kira's prompt`, or a warning with the lines to change).
 
 ### What tpm2-kira does with the disk's key: `unlock.conf`
 

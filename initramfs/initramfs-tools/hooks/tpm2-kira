@@ -45,6 +45,16 @@ if [ -r /etc/tpm2-kira/unlock.conf ]; then
     fi
 fi
 
+# The devices with a keyslot of tpm2-kira's: does /etc/crypttab route each
+# through the keyscript, and if not, what the line should read
+# ('tpm2-kira luks route'; it edits nothing).
+if advice=$("$kira" luks route 2>&1); then
+    [ -n "$advice" ] && echo "tpm2-kira: $advice"
+else
+    echo "tpm2-kira: the disk's key is not routed through tpm2-kira everywhere - /etc/crypttab is not edited; change it as shown and run update-initramfs -u:" >&2
+    echo "$advice" | sed 's/^/    /' >&2
+fi
+
 # Built in on most kernels, but a module on some machines.
 manual_add_modules tpm_tis
 manual_add_modules tpm_crb
