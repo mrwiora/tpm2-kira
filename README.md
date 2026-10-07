@@ -670,6 +670,38 @@ without a UUID routes every volume named on the command line.
 `mkinitcpio` reports what is configured (`the volume <UUID> is unlocked
 through tpm2-kira's prompt`) or, if nothing is, the parameter to add.
 
+### hashpwd2 at the prompt: password and salt, no phone
+
+tpm2-kira can be [hashpwd2](https://github.com/mrwiora/hashpwd2) at the
+prompt, on Arch and on Debian alike: with
+
+```
+# /etc/tpm2-kira/unlock.conf
+TPM2_KIRA_UNLOCK=hashpwd2
+```
+
+and a rebuilt initramfs, the prompt after the code screen asks for a
+**password** and a **salt** and hands `systemd-cryptsetup` (Arch) or the
+keyscript (Debian) hashpwd2's derivation of the two - the same bytes
+hashpwd2 prints, so a keyslot enrolled with hashpwd2 opens as it is. For
+a new keyslot, derive the key once on the unlocked system and add it:
+
+```bash
+sudo mkdir -m 700 -p /run/tpm2-kira
+sudo tpm2-kira derive --out /run/tpm2-kira/luks.key     # asks password (twice) and salt
+sudo cryptsetup luksAddKey /dev/nvme0n1p2 /run/tpm2-kira/luks.key
+sudo cryptsetup open --test-passphrase /dev/nvme0n1p2 --key-file /run/tpm2-kira/luks.key
+sudo rm /run/tpm2-kira/luks.key
+```
+
+Keep a recovery passphrase in another keyslot: Ctrl-C at tpm2-kira's
+prompt, or a wrong answer, goes to cryptsetup's own prompt where it
+works. The derivation needs 1 GiB of memory in the initramfs and takes
+some seconds; the keyboard layout in the initramfs must be the one the
+password was typed with (`sd-vconsole` on Arch, the `keymap` hook on
+Debian). With a phone and a factor enrolled (next section), the factor
+takes the salt's place and only the password is asked for.
+
 ### The disk factor: your password and the phone, together
 
 With a phone enrolled, the disk can need **both** your password and a

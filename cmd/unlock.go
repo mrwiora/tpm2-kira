@@ -287,26 +287,37 @@ func consolePassphrase(volume string) ([]byte, error) {
 	return consoleAsk(volume, "passphrase", "")
 }
 
-// diskKey is the key provider's answer with the factor (factor.go): when
-// the phone released one in this boot and the TPM opened it, the typed
-// password and the factor's salt are combined (Combine, hashpwd2's
-// derivation) into the key; without a factor the typed passphrase is the
-// key, as it is for a volume enrolled by hand. salt returns the salt or
+// diskKey is the key provider's answer. When the phone released a factor
+// in this boot and the TPM opened it (factor.go), the typed password and
+// the factor's salt are combined (Combine, hashpwd2's derivation) into
+// the key. Without a factor, in mode hashpwd2 (unlock.conf) the password
+// and a typed salt are combined the same way - hashpwd2 inside tpm2-kira,
+// no phone needed; in mode passphrase the typed passphrase is the key, as
+// it is for a volume enrolled by hand. salt returns the released salt or
 // nil; the key is for the caller to wipe.
-func diskKey(salt func() []byte) func(volume string) ([]byte, error) {
+func diskKey(salt func() []byte, mode string) func(volume string) ([]byte, error) {
 	return func(volume string) ([]byte, error) {
 		s := salt()
-		if s == nil {
+		if s == nil && mode != UnlockHashpwd2 {
 			return consolePassphrase(volume)
 		}
-		defer wipe(s)
-		pw, err := consoleAsk(volume, "password",
-			"The phone released the disk factor: the key is derived from it and your password.\n"+
-				"   (Ctrl-C skips to systemd's own prompt, where the recovery passphrase works.)")
+		note := "hashpwd2: the key is derived from your password and salt (Argon2id, some seconds).\n" +
+			"   (Ctrl-C skips to cryptsetup's own prompt, where the recovery passphrase works.)"
+		if s != nil {
+			note = "The phone released the disk factor: the key is derived from it and your password.\n" +
+				"   (Ctrl-C skips to cryptsetup's own prompt, where the recovery passphrase works.)"
+		}
+		pw, err := consoleAsk(volume, "password", note)
 		if err != nil {
 			return nil, err
 		}
 		defer wipe(pw)
+		if s == nil {
+			if s, err = consoleAsk(volume, "salt", ""); err != nil {
+				return nil, err
+			}
+		}
+		defer wipe(s)
 		return Combine(pw, s)
 	}
 }

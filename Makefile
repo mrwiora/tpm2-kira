@@ -96,6 +96,9 @@ install-mkinitcpio:
 	@if [ ! -e /etc/tpm2-kira/attest.conf ]; then \
 		sudo install -Dm644 initramfs/common/attest.conf /etc/tpm2-kira/attest.conf; \
 	fi
+	@if [ ! -e /etc/tpm2-kira/unlock.conf ]; then \
+		sudo install -Dm644 initramfs/common/unlock.conf /etc/tpm2-kira/unlock.conf; \
+	fi
 	@echo "Mkinitcpio hooks installed successfully!"
 	@echo ""
 	@echo "Next steps:"

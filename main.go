@@ -70,6 +70,13 @@ func main() {
 		runAttest(commandArgs, *tpmPath, *debug)
 	case "factor":
 		runFactor(commandArgs, *tpmPath, *debug)
+	case "derive":
+		fs := flag.NewFlagSet("derive", flag.ExitOnError)
+		out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
+		fs.Parse(commandArgs)
+		if err := cmd.DeriveCommand(*out); err != nil {
+			fail(err)
+		}
 	case "unlock-key":
 		fs := flag.NewFlagSet("unlock-key", flag.ExitOnError)
 		socket := fs.String("socket", cmd.DefaultUnlockSocket, "The key socket of 'tpm2-kira run --unlock'")
@@ -694,6 +701,9 @@ COMMANDS:
   attest      Remote attestation: a phone verifies this boot over Bluetooth LE.
   factor      The disk factor: one half of the disk's key, kept by the phone
               (factor enrol --out /run/tpm2-kira/luks.key)
+  derive      hashpwd2 by hand: password and salt to a key file on tmpfs
+              (--out /run/tpm2-kira/luks.key) for cryptsetup luksAddKey, for
+              the hashpwd2 mode of /etc/tpm2-kira/unlock.conf
   unlock-key  Debian keyscript: the volume's key from the socket of
               'run --unlock' to stdout, else cryptsetup's own prompt
               Subcommands (details under ATTEST SUBCOMMANDS, or 'attest help'):

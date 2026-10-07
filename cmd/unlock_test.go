@@ -441,7 +441,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 		}
 	}()
 	salt := []byte("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-	key, err := diskKey(func() []byte { return append([]byte(nil), salt...) })("cryptroot")
+	key, err := diskKey(func() []byte { return append([]byte(nil), salt...) }, UnlockPassphrase)("cryptroot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +452,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 	if p := <-prompts; !strings.Contains(p, "released the disk factor") || !strings.Contains(p, "enter password for disk cryptroot") {
 		t.Errorf("prompt: %q", p)
 	}
-	plain, err := diskKey(func() []byte { return nil })("cryptroot")
+	plain, err := diskKey(func() []byte { return nil }, UnlockPassphrase)("cryptroot")
 	if err != nil || string(plain) != "hunter2" {
 		t.Fatalf("without a factor: %q %v", plain, err)
 	}
@@ -481,5 +481,86 @@ func TestAskUnlockSocket(t *testing.T) {
 	start := time.Now()
 	if _, err := askUnlockSocket(filepath.Join(t.TempDir(), "none.sock"), "v", 300*time.Millisecond); err == nil || time.Since(start) < 250*time.Millisecond {
 		t.Fatalf("without a socket: %v after %v", err, time.Since(start))
+	}
+}
+
+// In mode hashpwd2 the provider asks for the password and the salt and
+// answers with their combination; a released factor takes the salt's
+// place and only the password is asked for.
+func TestDiskKeyHashpwd2Mode(t *testing.T) {
+	if testing.Short() {
+		t.Skip("1 GiB of Argon2id")
+	}
+	path := filepath.Join(t.TempDir(), "console.sock")
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	t.Setenv("TPM2_KIRA_CONSOLE", path)
+	prompts := make(chan string, 8)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				buf := make([]byte, 1024)
+				for {
+					n, err := c.Read(buf)
+					if err != nil {
+						return
+					}
+					s := string(buf[:n])
+					prompts <- s
+					switch {
+					case strings.Contains(s, "enter password"):
+						c.Write([]byte("hunter2\n"))
+					case strings.Contains(s, "enter salt"):
+						c.Write([]byte("my-salt\n"))
+					}
+				}
+			}()
+		}
+	}()
+	key, err := diskKey(func() []byte { return nil }, UnlockHashpwd2)("cryptroot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := Combine([]byte("hunter2"), []byte("my-salt"))
+	if !bytes.Equal(key, want) {
+		t.Fatal("the key is not hashpwd2's derivation of password and salt")
+	}
+	seen := ""
+	for done := false; !done; {
+		select {
+		case p := <-prompts:
+			seen += p
+		default:
+			done = true
+		}
+	}
+	if !strings.Contains(seen, "hashpwd2: the key is derived") || !strings.Contains(seen, "enter password") || !strings.Contains(seen, "enter salt") {
+		t.Errorf("prompts: %q", seen)
+	}
+}
+
+func TestParseUnlockConfig(t *testing.T) {
+	cfg, err := ParseUnlockConfig([]byte("# comment\nTPM2_KIRA_UNLOCK=hashpwd2\n"))
+	if err != nil || cfg.Mode != UnlockHashpwd2 {
+		t.Fatalf("%+v %v", cfg, err)
+	}
+	if cfg, err := ParseUnlockConfig(nil); err != nil || cfg.Mode != UnlockPassphrase {
+		t.Fatalf("empty: %+v %v", cfg, err)
+	}
+	for _, bad := range []string{"TPM2_KIRA_UNLOCK=yes\n", "TPM2_KIRA_SALT=x\n", "nonsense\n"} {
+		if _, err := ParseUnlockConfig([]byte(bad)); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+	if cfg, err := LoadUnlockConfig(filepath.Join(t.TempDir(), "none")); err != nil || cfg.Mode != UnlockPassphrase {
+		t.Fatalf("missing file: %+v %v", cfg, err)
 	}
 }

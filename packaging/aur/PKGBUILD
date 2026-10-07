@@ -51,7 +51,7 @@ check() {
     go test -tags=unit ./cmd/...
 }
 
-backup=(etc/tpm2-kira/attest.conf)
+backup=(etc/tpm2-kira/attest.conf etc/tpm2-kira/unlock.conf)
 
 package() {
     cd "$_srcdir"
@@ -75,6 +75,9 @@ package() {
         "$pkgdir/usr/lib/systemd/system/tpm2-kira-attest.service"
     install -Dm644 initramfs/common/attest.conf \
         "$pkgdir/etc/tpm2-kira/attest.conf"
+    # How the key provider answers at boot (passphrase, or hashpwd2).
+    install -Dm644 initramfs/common/unlock.conf \
+        "$pkgdir/etc/tpm2-kira/unlock.conf"
 
     install -Dm644 initramfs/mkinitcpio/install/sd-tpm2-kira \
         "$pkgdir/usr/lib/initcpio/install/sd-tpm2-kira"

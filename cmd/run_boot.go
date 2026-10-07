@@ -397,13 +397,17 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 	} else if l != nil {
 		// With a factor released by the phone and opened by the TPM
 		// (the coordinator keeps the salt), the key is derived from it
-		// and the password; otherwise the passphrase is the key.
+		// and the password; otherwise as unlock.conf says.
+		cfg, err := LoadUnlockConfig(DefaultUnlockConfigPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "tpm2-kira: %v; answering with the passphrase\n", err)
+		}
 		unlock = serveUnlock(l, diskKey(func() []byte {
 			if svc == nil {
 				return nil
 			}
 			return svc.Salt()
-		}), unlockLogger(debug))
+		}, cfg.Mode), unlockLogger(debug))
 	}
 	open := func() (transport.TPMCloser, error) {
 		tpmDev, err := OpenTPM(tpmPath)

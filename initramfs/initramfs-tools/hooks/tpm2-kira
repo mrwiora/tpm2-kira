@@ -34,6 +34,10 @@ copy_exec "$kira" /usr/bin/tpm2-kira
 if [ -r /etc/tpm2-kira/initramfs.conf ]; then
     copy_file config /etc/tpm2-kira/initramfs.conf /etc/tpm2-kira/initramfs.conf
 fi
+# How the provider answers (passphrase, or hashpwd2's password and salt).
+if [ -r /etc/tpm2-kira/unlock.conf ]; then
+    copy_file config /etc/tpm2-kira/unlock.conf /etc/tpm2-kira/unlock.conf
+fi
 
 # Built in on most kernels, but a module on some machines.
 manual_add_modules tpm_tis

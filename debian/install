@@ -8,3 +8,4 @@ initramfs/initramfs-tools/kernel/zzz-tpm2-kira             etc/kernel/postrm.d
 initramfs/initramfs-tools/keyscript/tpm2-kira              lib/cryptsetup/scripts
 initramfs/initramfs-tools/initramfs.conf                   etc/tpm2-kira
 initramfs/common/attest.conf                               etc/tpm2-kira
+initramfs/common/unlock.conf                               etc/tpm2-kira

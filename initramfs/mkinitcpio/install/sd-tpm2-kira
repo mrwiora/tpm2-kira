@@ -156,6 +156,13 @@ _add_unlock() {
     add_systemd_unit tpm2-kira-unlock.socket
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-unlock.socket \
         /usr/lib/systemd/system/tpm2-kira-unlock.socket
+    # How the provider answers (passphrase, or hashpwd2's password and salt).
+    if [[ -r /etc/tpm2-kira/unlock.conf ]]; then
+        add_file /etc/tpm2-kira/unlock.conf
+        if grep -q '^TPM2_KIRA_UNLOCK=hashpwd2' /etc/tpm2-kira/unlock.conf; then
+            plain "tpm2-kira: the disk's key is derived from password and salt (hashpwd2) at boot"
+        fi
+    fi
 
     for f in "${cmdlines[@]}"; do
         [[ -r $f ]] || continue
