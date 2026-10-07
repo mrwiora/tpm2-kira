@@ -199,6 +199,10 @@ build() {
 
     # Add systemd service dependency
     add_systemd_unit tpm2-kira.service
+    # The display wants the TPM but runs without one (the key provider does
+    # not need it); wait for the device for a bounded time only.
+    mkdir -p "$BUILDROOT/usr/lib/systemd/system/dev-tpmrm0.device.d"
+    printf '[Unit]\nJobTimeoutSec=5\n' > "$BUILDROOT/usr/lib/systemd/system/dev-tpmrm0.device.d/tpm2-kira.conf"
 
     # add_systemd_unit only carries over .wants symlinks that already exist on
     # the host. Enabling the unit here keeps the host's own boot untouched.

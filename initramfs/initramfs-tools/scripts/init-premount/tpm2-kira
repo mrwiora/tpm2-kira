@@ -35,8 +35,9 @@ while [ ! -c /dev/tpmrm0 ] && [ "$i" -lt 5 ]; do
 done
 
 if [ ! -c /dev/tpmrm0 ]; then
-    log_warning_msg "tpm2-kira: /dev/tpmrm0 did not appear; skipping TOTP display"
-    exit 0
+    # No code without a TPM, but the key provider does not need one: the
+    # prompt (passphrase, or hashpwd2's password and salt) is tpm2-kira's.
+    log_warning_msg "tpm2-kira: /dev/tpmrm0 did not appear; no code this boot"
 fi
 
 # The two sockets of the display: the gate's, where the radio worker reaches

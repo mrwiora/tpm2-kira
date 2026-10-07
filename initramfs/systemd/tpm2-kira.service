@@ -4,8 +4,12 @@ Description=Starting tpm2-kira
 # mkinitcpio hook picks it up from; enabled there by mistake it does nothing.
 ConditionPathExists=/etc/initrd-release
 # The resource-managed node: tpm2-kira only sees and flushes its own handles
-# there, so it cannot disturb other TPM users in the initrd.
-Requires=dev-tpmrm0.device
+# there, so it cannot disturb other TPM users in the initrd. Wanted, not
+# required: without a TPM there is no code, but the key provider still
+# answers (the passphrase, or hashpwd2's password and salt), so the prompt
+# is tpm2-kira's on every machine. The hook bounds the wait for the device
+# (dev-tpmrm0.device.d, JobTimeoutSec=5).
+Wants=dev-tpmrm0.device
 After=dev-tpmrm0.device
 # The measure point: after systemd's enter-initrd phase (PCR 11) and before
 # the OS separator extends PCRs 0-7, 9, 12-14. Type=notify: a fresh code is
