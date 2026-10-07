@@ -157,7 +157,7 @@ TPM2_KIRA_FUTURE_KEY=whatever
 		t.Fatal("invalid debug value accepted")
 	}
 	if _, err := ParseAttestConfig([]byte("TPM2_KIRA_ATTEST=enforced\n")); err == nil {
-		t.Fatal("enforced must be refused until implemented")
+		t.Fatal("enforced must be refused: there is no such mode")
 	}
 	if _, err := ParseAttestConfig([]byte("TPM2_KIRA_ATTEST=sometimes\n")); err == nil {
 		t.Fatal("unknown mode accepted")

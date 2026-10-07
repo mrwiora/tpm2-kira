@@ -35,3 +35,8 @@ It may not carry what came before.
   TPMs must not change the SHA-256 path.
 - **Tests must run against the current code.** Use `-count=1` for the
   integration suite; a result marked `(cached)` has tested nothing.
+- **No enforced mode; the passphrase can always be entered by hand.**
+  tpm2-kira adds ways to unlock (its prompt, later a phone-released
+  factor) and informs; it never withholds systemd's own prompt, which is
+  the fallback after a wrong or missing answer (docs/UNLOCK-DISK.md §4).
+  Do not build a mode that holds the boot on the phone's verdict.

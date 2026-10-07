@@ -505,21 +505,22 @@ when it is most needed.
 
 The `sealed` anchor exists for machines with no Secure Boot and no signed
 image, where the `image` anchor would be a file any root user could rewrite.
-Enforced mode refuses to enable with only a `sealed` anchor unless
-`--allow-sealed-anchor` is passed, and says why.
+(There is no enforced mode - PLAN-BLE.md §7 - so the `image` anchor is
+what a verifier line on the console could be pinned to, not what a gate
+trusts.)
 
 ### 10.3 Binding the configuration
 
-Attestation mode (`off` / `lazy` / `enforced`), the timeout and the policy id
+Attestation mode (`off` / `lazy`), the timeout and the policy id
 live in `/etc/tpm2-kira/attest.conf` inside the initramfs. On a system that
 seals PCR 11 (UKI) or PCR 9 (Debian/GRUB), editing that file changes a measured
 value and the change is caught. On a system that seals neither — `--pcrs "0,7"`
 is a documented and reasonable selection — the file is *not* measured, and
-`enforced` could be downgraded to `lazy` by editing a text file.
+`lazy` could be turned `off` by editing a text file.
 
 So the SHA-256 of the effective configuration is carried **inside the sealed
 object**, alongside the TOTP seed. A mismatch between the sealed digest and the
-file on disk is reported and, in enforced mode, fails closed.
+file on disk is reported.
 
 This extends the sealed payload from "a TOTP seed" to a small structure, which
 means a **sealed blob format version bump to 9** and a re-seal + authenticator

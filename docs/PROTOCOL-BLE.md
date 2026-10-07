@@ -1044,7 +1044,7 @@ wants to see why a boot changed.
 | Item | Where specified |
 |---|---|
 | Releasing the hashpwd2 salt (factor enrolment, Release handling) | PLAN-FACTORRELEASE.md |
-| Enforced mode, image-pinned anchor, sealed payload v9 — the NV attestation blob can be replaced through the owner hierarchy and must not be what enforced mode trusts | PLAN-BLE.md §7.1, PLAN-REMOTEATTESTATION.md §10 |
+| No enforced mode: the passphrase can always be entered by hand; enforcement, where wanted, is a missing factor | UNLOCK-DISK.md §4, PLAN-BLE.md §7 |
 | Bluetooth inside the initramfs: implemented for lazy mode (hooks, `attest.conf`), not yet tested on hardware | PLAN-BLE.md §3.1, phase 5 |
 | Break-glass bypass tokens | PLAN-BLE.md §7.6 |
 

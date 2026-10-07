@@ -37,7 +37,7 @@ const (
 // AttestConfig is /etc/tpm2-kira/attest.conf: shell-style KEY=VALUE lines,
 // so the Debian init scripts can source the same file.
 type AttestConfig struct {
-	Mode        string        // TPM2_KIRA_ATTEST: off | lazy (enforced is not implemented)
+	Mode        string        // TPM2_KIRA_ATTEST: off | lazy
 	Adapter     int           // TPM2_KIRA_ATTEST_ADAPTER
 	Timeout     time.Duration // TPM2_KIRA_ATTEST_TIMEOUT: 0 waits until the initrd ends
 	AdapterWait time.Duration // TPM2_KIRA_ATTEST_ADAPTER_WAIT: how long to wait for hciN to appear
@@ -83,7 +83,7 @@ func ParseAttestConfig(data []byte) (AttestConfig, error) {
 			case "off", "lazy":
 				cfg.Mode = val
 			case "enforced":
-				return cfg, fmt.Errorf("attest.conf line %d: enforced mode is not implemented; use lazy", n)
+				return cfg, fmt.Errorf("attest.conf line %d: there is no enforced mode: the passphrase can always be entered by hand (docs/UNLOCK-DISK.md §4); use lazy", n)
 			default:
 				return cfg, fmt.Errorf("attest.conf line %d: TPM2_KIRA_ATTEST must be off or lazy, not %q", n, val)
 			}

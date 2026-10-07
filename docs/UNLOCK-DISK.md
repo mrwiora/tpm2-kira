@@ -111,8 +111,7 @@ demands of a sender too), refuses a peer name that is not
 `/cryptsetup/<volume>`, gives nothing to token requests (it holds no saved
 token keys), and answers a request only after the code screen's hold has
 ended (`sd_notify(READY)`), one volume at a time at its own prompt.
-Enforced mode is the same provider that does not answer before the phone's
-verdict; factor release is the same provider answering with a derived key.
+Factor release will be the same provider answering with a derived key.
 The transfer never changes.
 
 **Treat the bytes like libcryptsetup does.** `systemd-cryptsetup` locks
@@ -124,45 +123,70 @@ not dumpable while it serves keys. Neither side can zero the kernel's
 socket buffer between write and read, and neither can protect against a
 hibernation image; the initrd has no swap and no hibernation.
 
-## 4. What this does not give, and what would
+## 4. When the answer is wrong: systemd's prompt is the fallback
 
-- **A mistyped passphrase is not the end: systemd's own prompt is the
-  fallback.** `systemd-cryptsetup` tries the key file once; a wrong key
-  (`Failed to activate with key file ... (Key data incorrect?)`), a
-  missing one, and an empty answer all come back as "try again", and on
-  the next of its `tries` (default 3) it drops the key file and asks for
-  a passphrase through its password agent - the console prompt that
-  sd-encrypt installs. So after tpm2-kira's prompt, two attempts at
-  systemd's follow, with the same passphrase or a recovery passphrase in
-  another LUKS keyslot (cryptsetup tries every keyslot). Only when
-  `tries` are used up does the unit fail (`Too many attempts to
-  activate; giving up.`), `cryptsetup.target` fails, and the initrd
-  reaches `emergency.target`: `sulogin`, which in an initrd without a
-  root password offers nothing but Enter and a reboot; `rd.emergency=reboot`
-  or `=poweroff` on the command line skips the dead end. Secure Boot
-  changes none of this. (Verified in `src/cryptsetup/cryptsetup.c` of
-  systemd 262 - the retry loop "invalidates one of the passed fields, so
-  that we fall back to the next best thing" - and by the end-to-end test
-  with `headless=true`, which fails exactly where the prompt would be.)
-  Consequences for tpm2-kira: a wrong answer is never fatal, and
-  "no answer" is not a hold. Enforced mode must keep the connection open
-  and never answer until the phone has approved; closing it without data
-  hands the volume to systemd's prompt, which is the escape hatch, not the
-  enforcement. `rd.luks.options=<UUID>=tries=N` sets the attempts.
+What `systemd-cryptsetup` does with a key that does not open the volume
+decides whether a typo at tpm2-kira's prompt, or a tpm2-kira that cannot
+answer, is a reboot or a second chance. It is a second chance, by
+systemd's design. From `src/cryptsetup/cryptsetup.c` (systemd 262), the
+attach loop runs `tries` times (default 3, `rd.luks.options=<UUID>=tries=N`):
+
+1. **Try 1: the key file**, our socket. The bytes are tried against every
+   keyslot. A wrong key logs `Failed to activate with key file '…'. (Key
+   data incorrect?)` and returns `-EAGAIN`; a key file that cannot be
+   read (`… key file '…' missing.`) and an empty answer do the same.
+2. On `-EAGAIN` the loop "invalidates one of the passed fields, so that we
+   fall back to the next best thing": `key_file = NULL`.
+3. **Tries 2 and 3: a passphrase from the password agent** - the console
+   prompt that sd-encrypt installs (`systemd-ask-password-console`), on
+   the console tpm2-kira gave up at the end of its hold. Any keyslot's
+   passphrase works, so a recovery passphrase in a second keyslot is the
+   way out of a lost or wrong tpm2-kira answer.
+4. Only after the last try: `Too many attempts to activate; giving up.`;
+   the unit fails, `cryptsetup.target` fails, the initrd reaches
+   `emergency.target`. In an initrd `sulogin` finds the root account
+   locked and offers nothing but Enter, which fails again: a reboot.
+   `rd.emergency=reboot` or `=poweroff` turns that into one directly.
+   Secure Boot changes none of this; it decides what is loaded, not what
+   a failed unit does.
+
+The end-to-end test (`unlock_integration_test.go`, root) checks both the
+wrong answer and the no-answer case with `headless=true`, which makes the
+agent step fail with `Password querying disabled via 'headless' option.`
+instead of prompting - exactly where the fallback prompt would be.
+
+What this means for tpm2-kira:
+
+- **The manual passphrase is always there.** Whatever tpm2-kira does -
+  asks and gets a typo, is cancelled with Ctrl-C, cannot derive a key, has
+  no phone, crashes - the next try is systemd's own prompt, with the
+  volume's passphrase or a recovery passphrase. tpm2-kira adds a way to
+  unlock; it never takes the ordinary way away.
+- **Therefore there is no enforced mode.** An enforced mode would have to
+  hold the connection open and never answer until the phone approved,
+  because closing it is the fallback, not a refusal - and it would still
+  be a local software gate that an image without it bypasses (PLAN-BLE.md
+  §7.4). The intention is the opposite: tpm2-kira does its work, the
+  phone's verdict informs the person at the keyboard, and the passphrase
+  can always be entered by hand. What enforces, if anything, is a missing
+  factor (PLAN-FACTORRELEASE.md): a key the disk needs and the machine
+  does not have until the phone releases it, with the recovery passphrase
+  as the manual way in.
 - **Prompt options** of `crypttab(5)` - `timeout`, `verify`,
   `password-cache`, `headless`, `password-echo` - describe the agent
-  prompt and apply to the fallback prompt only; `tries` counts tpm2-kira's
-  answer as the first attempt.
-- **Plymouth.** The agent prompt would appear in plymouth; tpm2-kira's is
-  text on the console.
-- **A credential drop-in** (`LoadCredential=cryptsetup.passphrase:<socket>`
-  on `systemd-cryptsetup@.service`) would reach every volume without any
-  crypttab change, with the volume in the credential peer name
-  (`\0<random>/unit/<unit>/<credential>`); it also reaches token volumes
-  that do not want a passphrase, and its behaviour after a wrong credential
-  is not verified. Kept as an option, not used.
+  prompt and apply to the fallback only; `tries` counts tpm2-kira's answer
+  as the first attempt. Plymouth shows the fallback prompt, not tpm2-kira's.
 
-## 5. What was tried and dropped
+## 5. Kept as an option, not used
+
+A credential drop-in (`LoadCredential=cryptsetup.passphrase:<socket>` on
+`systemd-cryptsetup@.service`) would reach every volume without any
+command-line or crypttab change, with the volume in the credential peer
+name (`\0<random>/unit/<unit>/<credential>`); it also reaches token
+volumes that do not want a passphrase, and its behaviour after a wrong
+credential is not verified.
+
+## 6. What was tried and dropped
 
 Rewriting the image's crypttab from the hook (and then sourcing
 sd-encrypt's build function to be allowed to run after it) worked, but it

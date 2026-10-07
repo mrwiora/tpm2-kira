@@ -487,7 +487,18 @@ into the shared core so the app and the CLI explain a diff identically.
 
 ---
 
-## 7. The gate: lazy and enforced
+## 7. The gate: lazy, and why not enforced
+
+**Decision (2026-10-07): there is no enforced mode.** tpm2-kira does its
+work and informs; the passphrase can always be entered by hand. The disk
+unlock goes through systemd-cryptsetup's key-file socket, and a wrong or
+missing answer from tpm2-kira sends systemd-cryptsetup to its own prompt
+for the remaining tries (UNLOCK-DISK.md §4) - so "holding the boot" would
+mean never answering, a local software gate of the kind §7.4 already
+calls worthless on a machine whose image is not authenticated. What
+enforces, if anything, is the missing factor of PLAN-FACTORRELEASE.md.
+The `enforced` rows and §7.2's gate unit below stay as the record of the
+design that was not built; `attest.conf` refuses the value.
 
 ### 7.1 Modes
 
@@ -520,13 +531,10 @@ the volumes the initrd unlocks: `tpm2-kira-unlock.socket` is the key file
 of each of them (crypttab(5), AF_UNIX key files, named by `rd.luks.key=`
 on the kernel command line), `systemd-cryptsetup` connects to it when it
 activates the volume and reads the key, and `tpm2-kira.service` answers
-once the code screen's hold has ended. Enforced mode is then nothing but
-"do not answer before the phone's verdict is `ok`": the request waits for
-as long as it takes, no unit has to fail to hold the boot, and the TPM
-side of the attestation still happens before the OS separator, where the
-boot key's policy holds. The fail-closed matrix of §7.5 becomes the list
-of conditions under which the provider never answers. The original design
-of a separate oneshot gate unit follows for the record:
+once the code screen's hold has ended. The TPM side of the attestation
+still happens before the OS separator, where the boot key's policy holds.
+The original design of a separate oneshot gate unit, for the enforced
+mode that is not built, follows for the record:
 
 ```ini
 [Unit]

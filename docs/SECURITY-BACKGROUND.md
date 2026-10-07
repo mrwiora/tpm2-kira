@@ -419,12 +419,14 @@ systemd-cryptsetup with its crypttab options, after the OS separator as
 always, and only the source of the key moves. What tpm2-kira answers with
 is the whole of its trust in the unlock: today the typed passphrase, so
 the security is unchanged; with factor release a key derived from the
-passphrase and the phone's factor; in enforced mode no answer before the
-phone has approved the boot. The request waits for as long as tpm2-kira
-takes, which is what makes a hold real without a unit that refuses to
-start. The provider trusts nothing about the requester beyond its uid and
-its peer name, and gives nothing to a request for a token's saved key: it
-holds no such keys.
+passphrase and the phone's factor. The request waits for as long as
+tpm2-kira takes, which is what makes a hold real without a unit that
+refuses to start; and a wrong or missing answer sends systemd-cryptsetup
+to its own prompt for the remaining tries, so the passphrase can always
+be entered by hand - there is no enforced mode (UNLOCK-DISK.md §4). The
+provider trusts nothing about the requester beyond its uid and its peer
+name, and gives nothing to a request for a token's saved key: it holds no
+such keys.
 
 #### Disk unlock: who does what
 
@@ -457,8 +459,7 @@ place a key file would be. The transfer, step by step:
     drops the key file and asks for a passphrase itself, through its
     password agent on the console, for the remaining tries (3 in all);
     tpm2-kira is not told. Only then the unit fails. No answer at all
-    (the connection closed without data) is treated the same, so an
-    enforcing provider holds the connection open; it does not close it.
+    (the connection closed without data) is treated the same.
 ```
 
 What is systemd's, used as installed by sd-encrypt: `systemd-cryptsetup`,
@@ -466,8 +467,8 @@ its generator, `cryptsetup.target` and `cryptsetup-pre.target`, the
 generated `systemd-cryptsetup@*.service` units, the dm-crypt modules and
 udev rules, the crypttab in the image. What is tpm2-kira's: the socket
 unit and the provider (`cmd/unlock.go`), whose key source is one function
-of the volume name - enforced mode and factor release replace that
-function, not the transfer. The configuration is the administrator's
+of the volume name - factor release replaces that function, not the
+transfer. The configuration is the administrator's
 `rd.luks.key=` on the kernel command line.
 
 The transfer is the one systemd offers for exactly this: a key provider

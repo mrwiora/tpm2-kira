@@ -647,8 +647,7 @@ type GateOptions struct {
 // The receipt is checked against the anchor in the attestation blob. In the
 // initrd that blob cannot be authenticated (the signing key is not there), so
 // on this machine the verdict line is advisory; the authoritative display is
-// the phone's. An image-pinned anchor comes with enforced mode
-// (PLAN-REMOTEATTESTATION.md §10.2).
+// the phone's (PLAN-REMOTEATTESTATION.md §10.2).
 func AttestGate(o GateOptions) int {
 	step := gateSteps(o.Debug)
 	if o.Coordinator != "" {

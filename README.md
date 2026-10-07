@@ -597,7 +597,9 @@ from a password plus a phone-held factor
 
 Status: the machine side, Bluetooth inside the initramfs (lazy mode) and the
 phone's verification core are implemented but not yet tested on real
-Bluetooth hardware; enforced mode and salt release are not implemented yet.
+Bluetooth hardware; salt release is not implemented yet. There is no
+enforced mode: the passphrase can always be entered by hand
+([UNLOCK-DISK.md](docs/UNLOCK-DISK.md) §4).
 The phone apps are specified in [docs/mobile/](docs/mobile/). The protocol is
 defined in [docs/PROTOCOL-BLE.md](docs/PROTOCOL-BLE.md), the design in
 [docs/PLAN-REMOTEATTESTATION.md](docs/PLAN-REMOTEATTESTATION.md) and
@@ -683,10 +685,10 @@ two tries, as it does for a wrong key file, and a recovery passphrase in
 another LUKS keyslot works at either prompt. This is also where
 the key will come from other sources than your fingers: a factor the
 phone releases after a successful attestation
-([PLAN-FACTORRELEASE.md](docs/PLAN-FACTORRELEASE.md)), or nothing before
-the phone has approved the boot (enforced mode). How systemd's unlock
-works and why this is the way to plug in:
-[UNLOCK-DISK.md](docs/UNLOCK-DISK.md).
+([PLAN-FACTORRELEASE.md](docs/PLAN-FACTORRELEASE.md)). There is no mode
+in which tpm2-kira withholds the prompt: the passphrase can always be
+entered by hand. How systemd's unlock works, why this is the way to plug
+in, and what happens after a typo: [UNLOCK-DISK.md](docs/UNLOCK-DISK.md).
 
 When the initrd hands over to the real root, `tpm2-kira-cap.service` runs
 `tpm2-kira cap`. From then until the next reboot the TPM computes no codes,

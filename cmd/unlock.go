@@ -26,9 +26,10 @@ import (
 // of the disk is a question to tpm2-kira and not a prompt of its own:
 // today it answers with what the person types at its own prompt, later
 // with a key derived from that and a factor the phone released
-// (PLAN-FACTORRELEASE.md), and in enforced mode it answers only when the
-// phone has approved the boot. systemd-cryptsetup waits for the answer for
-// as long as it takes.
+// (PLAN-FACTORRELEASE.md). systemd-cryptsetup waits for the answer for as
+// long as it takes, and a wrong or missing answer sends it to its own
+// prompt for the remaining tries (UNLOCK-DISK.md §4): the passphrase can
+// always be entered by hand, which is why there is no enforced mode.
 
 // DefaultUnlockSocket is where the initrd units put the key socket.
 const DefaultUnlockSocket = "/run/tpm2-kira/unlock.sock"
@@ -80,8 +81,8 @@ type unlockServer struct {
 }
 
 // serveUnlock answers on l. Requests wait until release is called (the
-// hold: the boot is confirmed, or in enforced mode approved) and are then
-// answered one after the other with key.
+// hold: the code screen is confirmed) and are then answered one after the
+// other with key.
 func serveUnlock(l net.Listener, key func(volume string) ([]byte, error), log func(string)) *unlockServer {
 	noCoreDump()
 	s := &unlockServer{l: l, key: key, log: log, gate: make(chan struct{}), done: make(chan struct{})}

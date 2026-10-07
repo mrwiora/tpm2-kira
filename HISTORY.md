@@ -48,6 +48,20 @@ seal.key), and a failed NVRAM rewrite stashed the blob under
 `/var/lib`. No migration: an installed system moves the keys directory by
 hand before the next `reseal`.
 
+## Attestation
+
+### An enforced mode was planned
+
+PLAN-BLE.md §7 designed `TPM2_KIRA_ATTEST=enforced`: hold the boot until
+the phone's verdict is `ok`, with a fail-closed matrix and an image-pinned
+anchor. Dropped on 2026-10-07, never implemented. The disk unlock goes
+through systemd-cryptsetup's key-file socket, where a wrong or missing
+answer falls back to systemd's own prompt; an enforced mode would have had
+to never answer, a local software gate the plan itself rated worthless
+without an authenticated image. The intention is that tpm2-kira informs
+and the passphrase can always be entered by hand; enforcement, where
+wanted, is a missing factor (PLAN-FACTORRELEASE.md).
+
 ## Blob format
 
 ### Version 11 — the boot key
