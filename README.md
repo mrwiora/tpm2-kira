@@ -720,8 +720,12 @@ the key (1 GiB of memory, some seconds) and gives it to
 `systemd-cryptsetup`. No phone, no verdict, or a TPM that refused: the
 prompt asks for the *passphrase* as it does without a factor; Ctrl-C at
 either prompt goes to systemd's own prompt for the recovery passphrase.
-A new factor (`factor enrol` again) replaces the old one on the phone;
-remove the old keyslot by hand.
+`factor status` says which slots have a factor (`--json` for scripts);
+`factor rotate` gives the phone a new factor and derives the new key,
+after which the old keyslot is removed by hand (`cryptsetup luksKillSlot`);
+`factor unenrol` takes the release key out of the slot, so what the phone
+keeps can never be opened again, and the keyslot is removed by hand. The
+phone side runs on Android; the iOS app is tested separately.
 `/etc/crypttab` is not touched and does not need to be: only if a volume
 is kept there with `x-initrd.attach` instead of on the command line, the
 same socket goes into that line's key field

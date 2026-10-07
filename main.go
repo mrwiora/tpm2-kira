@@ -395,11 +395,45 @@ func failAttest(code int, err error) {
 }
 
 func runFactor(args []string, tpmPath string, debugFlag bool) {
-	if len(args) == 0 || args[0] != "enrol" && args[0] != "enroll" {
-		fmt.Fprint(os.Stderr, "factor requires a subcommand: enrol\n\n"+factorUsage)
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, "factor requires a subcommand: enrol, rotate, status, unenrol\n\n"+factorUsage)
 		os.Exit(cmd.ExitUsage)
 	}
-	fs := flag.NewFlagSet("factor enrol", flag.ExitOnError)
+	switch args[0] {
+	case "status":
+		fs := flag.NewFlagSet("factor status", flag.ExitOnError)
+		tpm := fs.String("tpm", tpmPath, "Path to TPM device")
+		nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index (default: every enrolled slot)")
+		jsonOut := fs.Bool("json", false, "Machine-readable output")
+		debug := fs.Bool("debug", debugFlag, "Enable debug output")
+		fs.Parse(args[1:])
+		var slot uint32
+		if nvramExplicit(args[1:]) {
+			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+		}
+		if err := cmd.FactorStatus(*tpm, slot, *jsonOut, *debug); err != nil {
+			fail(err)
+		}
+		return
+	case "unenrol", "unenroll":
+		fs := flag.NewFlagSet("factor unenrol", flag.ExitOnError)
+		tpm := fs.String("tpm", tpmPath, "Path to TPM device")
+		nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index")
+		privKey := fs.String("privkey", "", "Signing key (default: "+cmd.DefaultPrivateKeyPath+")")
+		debug := fs.Bool("debug", debugFlag, "Enable debug output")
+		fs.Parse(args[1:])
+		if err := cmd.FactorUnenrol(*tpm, cmd.ResolveNVRAMIndex(uint32(*nvram)), *privKey, *debug); err != nil {
+			fail(err)
+		}
+		return
+	case "enrol", "enroll", "rotate":
+	case "help", "-h", "--help":
+		fmt.Print(factorUsage)
+		return
+	default:
+		fail(fmt.Errorf("unknown factor subcommand %q", args[0]))
+	}
+	fs := flag.NewFlagSet("factor "+args[0], flag.ExitOnError)
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index (default: the first enrolled slot)")
 	label := fs.String("label", "luks", "The factor's label: one factor serves volumes with unrelated salts")
@@ -419,6 +453,7 @@ func runFactor(args []string, tpmPath string, debugFlag bool) {
 	if err := cmd.FactorEnrol(cmd.FactorEnrolOptions{
 		TPMPath: *tpm, SealIndex: slot, Label: *label, Out: *out, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
 		Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: *yes, Debug: *debug,
+		Rotate: args[0] == "rotate",
 	}); err != nil {
 		fail(err)
 	}
@@ -439,6 +474,12 @@ recovery passphrase in its own keyslot opens the disk at systemd's prompt.
                     --timeout DUR --adapter-wait DUR --yes
                   Have a recovery passphrase in a second keyslot first:
                     cryptsetup luksAddKey <device>
+  factor rotate   The same with a new factor for a slot that has one; the
+                  old keyslot is then to be removed by hand
+  factor status   Which slots have a factor enrolled (--nvram N, --json)
+  factor unenrol  Take the release key out of the slot's blob (--nvram N,
+                  --privkey PATH): what the phone keeps can then not be
+                  opened; remove the factor's keyslot by hand
 `
 
 func runAttest(args []string, tpmPath string, debugFlag bool) {

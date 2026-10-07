@@ -7,9 +7,8 @@
 > (`cmd/factor.go`), the phone's part (Evidence tags 15-17, the kept
 > factor in the record, Release after the accepted receipt; both apps),
 > the coordinator opening the release before the separator, the provider
-> answering with the derived key (`diskKey`), and `factor enrol`. Open:
-> the hardware run, `factor status`/`rotate`/`unenrol`, and the Debian
-> script. The review of 2026-10-07 changed §1.2,
+> answering with the derived key (`diskKey`), `factor enrol`, `rotate`,
+> `status` and `unenrol`. Open: §13. The review of 2026-10-07 changed §1.2,
 > §3.2, §5, §6 and §7 from the first draft; HISTORY.md keeps the draft's
 > shape.
 > **Depends on:** [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md)
@@ -431,3 +430,36 @@ Phase 1 depends on the same go/no-go as
 5. **Does the server path want factors too?** A workstation in an office
    could take its factor from the server and still require a typed password.
    The `Release` message already allows it.
+
+---
+
+## 13. Open
+
+1. **The hardware run** on the T450s: enrol the phone again (record
+   version 3), `factor enrol`, reboot, the password at tpm2-kira's prompt,
+   the volume open; then a mistyped password (systemd's prompt follows),
+   a boot without the phone (the passphrase prompt, then the recovery
+   passphrase at systemd's), and a boot after a kernel update without a
+   reseal (the phone shows the change; the TPM refuses the factor; the
+   recovery passphrase).
+2. **Debian / initramfs-tools.** Nothing of the factor runs there yet.
+   The shape, untested because no Debian machine is at hand: the
+   init-premount script runs the display and the gate as today; the gate's
+   coordinator keeps the salt in memory only, so on Debian - where the
+   display ends before `cryptroot` runs - the salt has to outlive it. The
+   plan: `run` writes the salt to `/run/tpm2-kira/salt` (tmpfs in the
+   initramfs, mode 0600) when a factor was opened; a `keyscript=` of the
+   `crypttab` entry, `tpm2-kira unlock-key <volume>`, reads it, asks for
+   the password on the console, derives the key, prints it to stdout and
+   removes the file; without the file it asks for the passphrase and
+   prints that. `cryptsetup`'s own retry handles a wrong answer. The
+   initramfs-tools hook copies the keyscript. To be built and tested on a
+   Debian machine.
+3. **The phone forgetting a factor.** After `factor unenrol` the phone
+   still keeps the old credential and offers it at every check; the
+   machine answers "takes no factor". Harmless, but the details screen
+   says "kept". A receipt-ack message or a flag in the evidence could tell
+   the phone to drop it; not built.
+4. **The iOS app** has not been compiled or run; it is tested separately
+   (marify: `ios/README.md`). The factor's card, line and row exist there
+   as in the Android app.

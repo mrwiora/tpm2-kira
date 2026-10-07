@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,7 +20,8 @@ import (
 // FactorEnrolOptions is what 'factor enrol' takes.
 type FactorEnrolOptions struct {
 	TPMPath     string
-	SealIndex   uint32 // 0 = first enrolled slot
+	SealIndex   uint32 // slot (0-15) or its NVRAM index; 0 is slot 0
+	Rotate      bool   // a new factor for a slot that has one: the old keyslot is to go
 	Label       string // the factor's label, default "luks"
 	Out         string // where the derived key goes: a file on tmpfs
 	PrivKeyPath string // the signing key, for the release key's first enrolment
@@ -75,6 +77,9 @@ func FactorEnrol(o FactorEnrolOptions) error {
 		return err
 	}
 
+	if o.Rotate && len(att.ReleaseKeyPublic) == 0 {
+		return fmt.Errorf("slot %d has no factor to rotate; use 'factor enrol'", slot)
+	}
 	if len(att.ReleaseKeyPublic) == 0 {
 		// The release key goes into the slot's blob, which is signed.
 		privKeyPath := o.PrivKeyPath
@@ -158,6 +163,13 @@ func FactorEnrol(o FactorEnrolOptions) error {
 	fmt.Printf("    cryptsetup open --test-passphrase <device> --key-file %s\n", o.Out)
 	fmt.Printf("    rm %s\n", o.Out)
 	fmt.Println()
+	if o.Rotate {
+		fmt.Println("The phone now keeps the new factor and no longer has the old one. Remove the")
+		fmt.Println("old keyslot once the new one is in place (cryptsetup luksKillSlot <device> N;")
+		fmt.Println("'cryptsetup luksDump' lists them), or the old key stays valid for whoever")
+		fmt.Println("captured the old factor.")
+		fmt.Println()
+	}
 	fmt.Println("At boot, once the phone has verified the machine, tpm2-kira asks for the")
 	fmt.Println("password and derives this key. The recovery passphrase in its own keyslot")
 	fmt.Println("stays the way in without the phone: at systemd's prompt (Ctrl-C at tpm2-kira's).")
@@ -229,4 +241,108 @@ func writeKeyOut(path string, key []byte) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// FactorStatus reports, per slot, whether a factor is enrolled on the
+// machine's side: the release key in the slot's blob. The factor itself
+// is the phone's; the machine keeps nothing of it, so nothing more can be
+// said here. --json for scripts.
+func FactorStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) error {
+	tpmDev, err := OpenTPM(tpmPath)
+	if err != nil {
+		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+	}
+	defer tpmDev.Close()
+	var indices []uint32
+	if sealIndex != 0 {
+		idx, err := AttestIndexForSlot(sealIndex)
+		if err != nil {
+			return err
+		}
+		indices = []uint32{idx}
+	} else {
+		indices = enrolledSlots(tpmDev, debug)
+	}
+	type slotJSON struct {
+		Slot       int    `json:"slot_number"`
+		NVRAMIndex string `json:"nvram_index"`
+		ReleaseKey bool   `json:"release_key"`
+		Phones     int    `json:"phones"`
+	}
+	var out []slotJSON
+	for _, idx := range indices {
+		b, err := loadAttestBlob(tpmDev, idx)
+		if err != nil {
+			if sealIndex != 0 {
+				return fmt.Errorf("slot %d has no phone enrolled", attestSlot(idx))
+			}
+			continue
+		}
+		out = append(out, slotJSON{Slot: int(attestSlot(idx)), NVRAMIndex: fmt.Sprintf("0x%08X", idx),
+			ReleaseKey: len(b.ReleaseKeyPublic) > 0, Phones: len(b.Phone.Verifiers)})
+	}
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if out == nil {
+			out = []slotJSON{}
+		}
+		return enc.Encode(out)
+	}
+	if len(out) == 0 {
+		fmt.Println("No slot has a phone enrolled; a factor needs one ('tpm2-kira attest enrol').")
+		return nil
+	}
+	for _, s := range out {
+		if s.ReleaseKey {
+			fmt.Printf("Slot %d (%s): factor enrolled - the release key is in the slot's blob; the\n"+
+				"  factor itself is kept by the phone (%d enrolled) and opened by this TPM at boot\n", s.Slot, s.NVRAMIndex, s.Phones)
+		} else {
+			fmt.Printf("Slot %d (%s): no factor ('tpm2-kira factor enrol --out /run/tpm2-kira/luks.key')\n", s.Slot, s.NVRAMIndex)
+		}
+	}
+	return nil
+}
+
+// FactorUnenrol takes the release key out of the slot's blob: what the
+// phone keeps can then not be opened by any TPM, and the factor's keyslot
+// is dead weight the user removes by hand. Needs the signing key, like
+// every rewrite of the blob.
+func FactorUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug bool) error {
+	idx, err := AttestIndexForSlot(sealIndex)
+	if err != nil {
+		return err
+	}
+	slot := attestSlot(idx)
+	tpmDev, err := OpenTPM(tpmPath)
+	if err != nil {
+		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+	}
+	defer tpmDev.Close()
+	att, err := loadAttestBlob(tpmDev, idx)
+	if err != nil {
+		return fmt.Errorf("slot %d has no phone enrolled", slot)
+	}
+	if len(att.ReleaseKeyPublic) == 0 {
+		return fmt.Errorf("slot %d has no factor enrolled", slot)
+	}
+	if privKeyPath == "" {
+		privKeyPath = DefaultPrivateKeyPath
+	}
+	priv, err := LoadCheckedSigningPrivateKey(privKeyPath)
+	if err != nil {
+		return fmt.Errorf("removing the factor rewrites the slot's blob and needs the signing key: %w", err)
+	}
+	if err := PrepareSigningKey(priv); err != nil {
+		return fmt.Errorf("the signing key is not usable: %w", err)
+	}
+	att.ReleaseKeyPublic, att.ReleaseKeyPrivate = nil, nil
+	if err := writeAttestBlob(tpmDev, idx, att, priv); err != nil {
+		return err
+	}
+	fmt.Printf("Factor removed from slot %d: the release key is gone, so what the phone keeps\n", slot)
+	fmt.Println("cannot be opened any more (it answers \"takes no factor\" at the next check).")
+	fmt.Println("Remove the factor's keyslot by hand: cryptsetup luksKillSlot <device> N")
+	fmt.Println("('cryptsetup luksDump' lists them). The recovery passphrase stays.")
+	return nil
 }

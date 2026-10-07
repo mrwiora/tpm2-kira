@@ -5,6 +5,8 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -148,4 +150,99 @@ func TestFactorNeedsAReleaseKey(t *testing.T) {
 	if _, _, err := wrapFactor(s.tpm, s.blob, nil); !errors.Is(err, errNoReleaseKey) {
 		t.Fatalf("%v", err)
 	}
+}
+
+// factor status says whether a slot has a release key; factor unenrol
+// takes it out, after which the phone's kept factor cannot be opened.
+func TestFactorStatusAndUnenrol(t *testing.T) {
+	sock := startSWTPM(t)
+	const slot = NVRAMSlotStart + 1
+	signer, pubPath := sealRealSlot(t, sock, slot)
+	privPath := strings.TrimSuffix(pubPath, "seal.pub") + "seal.key"
+	s := newSWTPMSetupAt(t, sock, "box")
+	tpm := s.tpm
+	s.blob.EKAlg = uint16(tpm2.TPMAlgECC)
+	s.blob.Phone.Verifiers = []attest.EnrolledVerifier{{ID: "my-phone", Name: "Pixel", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
+	if err := writeAttestBlob(tpm, slot, s.blob, signer); err != nil {
+		t.Fatal(err)
+	}
+	tpm.Close() // the commands open the TPM themselves
+
+	out := grabStdout(t, func() {
+		if err := FactorStatus(sock, 0, false, false); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, "Slot 1") || !strings.Contains(out, "no factor") {
+		t.Fatalf("status without a factor: %q", out)
+	}
+	if err := FactorUnenrol(sock, 1, privPath, false); err == nil || !strings.Contains(err.Error(), "no factor enrolled") {
+		t.Fatalf("unenrol without a factor: %v", err)
+	}
+
+	tpmDev, err := OpenTPM(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sealed, err := readSlot(tpmDev, slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, priv, err := createReleaseKey(tpmDev, sealed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.blob.ReleaseKeyPublic, s.blob.ReleaseKeyPrivate = pub, priv
+	if err := writeAttestBlob(tpmDev, slot, s.blob, signer); err != nil {
+		t.Fatal(err)
+	}
+	att, _ := loadAttestBlob(tpmDev, slot)
+	f, w, err := wrapFactor(tpmDev, att, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wipe(f)
+	tpmDev.Close()
+
+	out = grabStdout(t, func() {
+		if err := FactorStatus(sock, 1, true, false); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, `"release_key": true`) || !strings.Contains(out, `"phones": 1`) {
+		t.Fatalf("status json: %q", out)
+	}
+
+	if err := FactorUnenrol(sock, 1, privPath, false); err != nil {
+		t.Fatalf("unenrol: %v", err)
+	}
+	tpmDev, _ = OpenTPM(sock)
+	defer tpmDev.Close()
+	_, sb, _ := readSlot(tpmDev, slot)
+	if len(sb.Payload.Attestation.ReleaseKeyPublic) != 0 {
+		t.Fatal("the release key is still in the blob")
+	}
+	if _, err := unwrapFactor(tpmDev, sb, slot, sb.Payload.Attestation, w); !errors.Is(err, errNoReleaseKey) {
+		t.Fatalf("the kept factor after unenrol: %v", err)
+	}
+}
+
+// grabStdout is captureStdout for the integration build.
+func grabStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	done := make(chan []byte)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- b
+	}()
+	defer func() { os.Stdout = old }()
+	fn()
+	w.Close()
+	return string(<-done)
 }
