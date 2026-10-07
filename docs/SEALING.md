@@ -115,11 +115,13 @@ the default key from `setup`. With a custom key, always pass `--privkey`.
 
 ## Multiple slots
 
-tpm2-kira supports up to 16 NVRAM slots (0–15). Useful if you need separate secrets for different purposes:
+tpm2-kira supports up to 16 NVRAM slots (0–15). A plain `seal` takes two: slot
+0 for what this boot measured and slot 1 for the fallback (`0e,7e`). More, for
+separate secrets or selections:
 
 ```bash
-tpm2-kira seal --nvram 0
-tpm2-kira seal --nvram 1 --pcrs "0e,2e,7e"
+tpm2-kira seal --nvram 2
+tpm2-kira seal --nvram 3 --pcrs "0e,2e,7e"
 
 tpm2-kira reveal --nvram 0
 tpm2-kira reveal --nvram 1

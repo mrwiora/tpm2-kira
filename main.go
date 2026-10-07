@@ -130,7 +130,7 @@ func main() {
 // list.  This lets us distinguish "flag absent" from "flag set to default".
 func nvramExplicit(args []string) bool {
 	for _, arg := range args {
-		if arg == "--nvram" || arg == "-nvram" {
+		if arg == "--nvram" || arg == "-nvram" || strings.HasPrefix(arg, "--nvram=") || strings.HasPrefix(arg, "-nvram=") {
 			return true
 		}
 	}
@@ -230,7 +230,7 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("seal", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	pcrs := fs.String("pcrs", "0,2,7", "PCR indices to use for policy")
+	pcrs := fs.String("pcrs", "", "PCR indices to use for policy (default: what this boot measured, see 'help seal')")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
@@ -247,21 +247,49 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	}
 	cmd.MeasurePointModeSetting = mode
 
-	// Validate PCR specs before proceeding
-	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
-		fail(err)
-	}
-
 	hashAlgo := cmd.PCRHashAlgoSHA256
 	if *useSHA1 {
 		hashAlgo = cmd.PCRHashAlgoSHA1
 	}
 
+	// Without --pcrs, the selection is what this boot measured. Without
+	// --pcrs and --nvram, slot 0 gets it and slot 1 the fallback (0 and 7
+	// alone), so a boot change that was not predicted still shows a code.
+	// With either, one slot: the one named (else 0), the PCRs named (else
+	// the selection).
+	slotGiven := nvramExplicit(args)
+	if *pcrs == "" {
+		sel, why := cmd.DefaultPCRSelection("")
+		fmt.Printf("PCRs: %s (%s)\n\n", sel, why)
+		*pcrs = sel
+	}
+	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
+		fail(err)
+	}
 	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
-
 	if err := cmd.Seal(*tpm, *pcrs, sealIndex, *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
 		fail(err)
 	}
+	if !slotGiven && !pcrsGiven(args) {
+		fmt.Printf("\n=== Slot %d: the fallback, sealed to PCRs %s alone ===\n", cmd.FallbackSlot, cmd.FallbackPCRSelection)
+		fmt.Println("Its code shows in a boot whose kernel or boot loader changed unpredicted, as long")
+		fmt.Println("as the firmware and the secure boot state are the same; it says the machine is")
+		fmt.Println("not simply lost. Pair this one with your authenticator too.")
+		fmt.Println()
+		if err := cmd.Seal(*tpm, cmd.FallbackPCRSelection, cmd.ResolveNVRAMIndex(cmd.FallbackSlot), *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
+			fail(err)
+		}
+	}
+}
+
+// pcrsGiven says whether --pcrs is among the arguments.
+func pcrsGiven(args []string) bool {
+	for _, a := range args {
+		if a == "--pcrs" || a == "-pcrs" || strings.HasPrefix(a, "--pcrs=") || strings.HasPrefix(a, "-pcrs=") {
+			return true
+		}
+	}
+	return false
 }
 
 func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -494,6 +522,39 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		if err := cmd.LuksEnrol(cmd.LuksEnrolOptions{
 			Device: fs.Arg(0), Mode: *mode, ExistingKeyFile: *existing, NoConfig: *noConfig,
 			Remote: cmd.FactorEnrolOptions{TPMPath: *tpm, SealIndex: slot, Label: *label, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
+				Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: true, Debug: *debug},
+		}); err != nil {
+			fail(err)
+		}
+	case "remove":
+		fs := flag.NewFlagSet("luks remove", flag.ExitOnError)
+		keyslot := fs.Int("keyslot", -1, "The keyslot to remove, one tpm2-kira marked (required)")
+		existing := fs.String("existing-key-file", "", "A file with a remaining passphrase to authorise luksKillSlot (scripts; by default cryptsetup asks)")
+		fs.Parse(deviceLast(args[1:]))
+		if fs.NArg() != 1 || *keyslot < 0 {
+			fail(fmt.Errorf("usage: tpm2-kira luks remove <device> --keyslot N"))
+		}
+		if err := cmd.LuksRemove(cmd.LuksRemoveOptions{Device: fs.Arg(0), Keyslot: *keyslot, ExistingKeyFile: *existing}); err != nil {
+			fail(err)
+		}
+	case "rotate":
+		fs := flag.NewFlagSet("luks rotate", flag.ExitOnError)
+		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+remotesalt)")
+		keyslot := fs.Int("keyslot", -1, "The keyslot to replace, one tpm2-kira marked (required)")
+		privKey := fs.String("privkey", "", "Signing key (password+remotesalt; default: "+cmd.DefaultPrivateKeyPath+")")
+		pubKey := fs.String("pubkey", "", "Signing public key (default: "+cmd.DefaultPublicKeyPath+")")
+		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
+		timeout := fs.Duration("timeout", 10*time.Minute, "Give up waiting for the phone after this long (0 = wait forever)")
+		adapterWait := fs.Duration("adapter-wait", 30*time.Second, "Wait this long for the adapter to appear")
+		existing := fs.String("existing-key-file", "", "A file with a remaining passphrase to authorise cryptsetup (scripts; by default cryptsetup asks)")
+		debug := fs.Bool("debug", debugFlag, "Enable debug output")
+		fs.Parse(deviceLast(args[1:]))
+		if fs.NArg() != 1 || *keyslot < 0 {
+			fail(fmt.Errorf("usage: tpm2-kira luks rotate <device> --keyslot N"))
+		}
+		if err := cmd.LuksRotate(cmd.LuksRotateOptions{
+			Device: fs.Arg(0), Keyslot: *keyslot, ExistingKeyFile: *existing,
+			Remote: cmd.FactorEnrolOptions{TPMPath: *tpm, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
 				Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: true, Debug: *debug},
 		}); err != nil {
 			fail(err)

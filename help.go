@@ -43,8 +43,8 @@ THE PHONE (the Marify app, over Bluetooth LE)
                kept by the phone, opened only by this TPM in an approved boot
 
 THE DISK'S KEY (mode in /etc/tpm2-kira/unlock.conf)
-  luks         status, enrol, mark: tpm2-kira's LUKS keyslots, marked by a
-               token in the header
+  luks         status, enrol, rotate, remove, mark: tpm2-kira's LUKS keyslots,
+               marked by a token in the header
   derive       hashpwd2 by hand: password and salt to a key file for luksAddKey
 
 AT BOOT (run by the initramfs units and hooks)
@@ -132,14 +132,23 @@ the boot components.
 	"seal": `tpm2-kira seal [--nvram N] [--pcrs LIST] [--measure-point M] [--pubkey PATH]
                 [--privkey PATH] [--sha1] [--verify-uki=false]
 
-Generates a TOTP key inside the TPM and seals it in a slot (the first free
-one, or --nvram) to the boot state. The key never leaves the TPM: the TPM
-computes every code, and only under a policy the signing key approved
-(PolicyAuthorize): the PCR values, and the slot's generation, which every
-reseal raises to revoke the older approvals. Pair the code with the Marify
-app, or any TOTP app, from the QR code shown.
+Generates a TOTP key inside the TPM and seals it in a slot to the boot
+state. The key never leaves the TPM: the TPM computes every code, and only
+under a policy the signing key approved (PolicyAuthorize): the PCR values,
+and the slot's generation, which every reseal raises to revoke the older
+approvals. Pair the code with the Marify app, or any TOTP app, from the QR
+code shown.
 
-  --pcrs LIST        PCRs with a source suffix each (default 0,2,7):
+Without --pcrs the selection is what this boot measured: the firmware and
+the secure boot state (0e,2e,7e), plus PCR 11 computed from the unified
+kernel image when one booted (11u), or GRUB's PCRs 8 and 9 predicted from
+grub.cfg when GRUB did (8e,9e). Without --pcrs and --nvram, two slots are
+sealed: slot 0 with that selection, and slot 1, the fallback, with 0e,7e
+alone - a boot whose kernel changed unpredicted still shows slot 1's code,
+which says the machine is not simply lost. With --pcrs or --nvram, one
+slot: the one named (else 0), the PCRs named (else the selection).
+
+  --pcrs LIST        PCRs with a source suffix each:
                        r  read from the TPM's registers (default)
                        e  replayed from the event log (PCRs 0-12)
                        u[:PATH]  computed from the unified kernel image (PCR 11)
@@ -160,8 +169,9 @@ app, or any TOTP app, from the QR code shown.
   --verify-uki       Check the PCR 11 computation against this boot's event
                      log first (default true)
 
-  tpm2-kira seal
-  tpm2-kira seal --nvram 0 --pcrs "0e,2e,7e,11u"
+  tpm2-kira seal                          slot 0 as measured, slot 1 the fallback
+  tpm2-kira seal --pcrs "0e,2e,7e,11u"    slot 0 with these
+  tpm2-kira seal --nvram 2 --pcrs "0e,7e"
   tpm2-kira seal --sha1 --pcrs "0e,2e,7e"
 `,
 
@@ -284,8 +294,10 @@ keyscript asks at askpass directly.
 	"remote-salt": factorUsage,
 
 	"luks": `tpm2-kira luks status [<device>…] [--json]
-tpm2-kira luks enrol <device> --mode password+salt|password+remotesalt [options]
-tpm2-kira luks mark  <device> --keyslot N --mode password+salt|password+remotesalt [options]
+tpm2-kira luks enrol  <device> --mode password+salt|password+remotesalt [options]
+tpm2-kira luks rotate <device> --keyslot N [options]
+tpm2-kira luks remove <device> --keyslot N
+tpm2-kira luks mark   <device> --keyslot N --mode password+salt|password+remotesalt [options]
 
 tpm2-kira's LUKS keyslots. Every keyslot it adds is marked with a LUKS2
 token of type tpm2-kira in the header ({"mode","slot","label","created"};
@@ -307,12 +319,22 @@ prompt is always the fallback (docs/PLAN-LUKS.md).
               --existing-key-file F   a passphrase file to authorise (scripts)
               --no-config             leave unlock.conf alone
               --privkey --pubkey --adapter --timeout --adapter-wait  as remote-salt enrol
+  rotate    A new keyslot of the same kind as --keyslot N (a new password and
+            salt; or a new remote salt for the phone, which then no longer
+            has the old one), then keyslot N goes. The mode stays.
+              --existing-key-file F  --privkey --pubkey --adapter --timeout
+  remove    'cryptsetup luksKillSlot' for a keyslot tpm2-kira marked, and
+            its token. A remaining passphrase authorises it (cryptsetup
+            asks; --existing-key-file F for scripts). Never the last keyslot,
+            never one that is not tpm2-kira's
   mark      The token for a keyslot made by hand (derive or remote-salt enrol
             --out, then luksAddKey): --keyslot N --mode M [--nvram N --label STR]
 
   tpm2-kira luks status
   tpm2-kira luks enrol /dev/sda2 --mode password+salt
   tpm2-kira luks enrol /dev/sda2 --mode password+remotesalt
+  tpm2-kira luks rotate /dev/sda2 --keyslot 1
+  tpm2-kira luks remove /dev/sda2 --keyslot 1
   tpm2-kira luks mark /dev/sda2 --keyslot 1 --mode password+salt
 `,
 

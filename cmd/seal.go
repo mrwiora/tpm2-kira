@@ -84,7 +84,10 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	}
 	fmt.Println()
 
-	WarnAboutPCRSelection(specs)
+	// The fallback slot is sealed to 0 and 7 alone by design (default_pcrs.go).
+	if !(pcrsStr == FallbackPCRSelection && nvramIndex == ResolveNVRAMIndex(FallbackSlot)) {
+		WarnAboutPCRSelection(specs)
+	}
 	WarnAboutHashAlgo(hashAlgo)
 
 	if err := ValidateBlobIndex(nvramIndex); err != nil {

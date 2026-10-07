@@ -67,15 +67,16 @@ sudo make install
 # First-time setup: generates the signing keys
 sudo tpm2-kira setup
 
-# Seal a TOTP secret bound to firmware, Secure Boot state and the
-# unified kernel image (kernel, initrd, command line)
-sudo tpm2-kira seal --pcrs 0,7,11u
+# Seal a TOTP key to what this boot measured: firmware and Secure Boot
+# state, plus the unified kernel image or GRUB's PCRs - and a fallback
+# slot sealed to firmware and Secure Boot state alone
+sudo tpm2-kira seal
 
 # Show the current TOTP code
 tpm2-kira reveal
 ```
 
-`setup` makes the signing key that approves every PCR policy, and nothing else. It looks for a YubiKey first: with one plugged in it offers to take the key from a PIV slot (`--yubikey`, optionally `=SERIAL`, `--slot`, default 9a) so the private key never exists on the machine; without one, or with `--local`, it creates an ECDSA P-256 key pair at `/etc/tpm2-kira/keys/` (`seal.pub`, `seal.key`, root-only). `tpm2-kira yubikey list` shows the candidates; the trade-offs are in [docs/PLAN-YUBIKEY.md](docs/PLAN-YUBIKEY.md). `seal` creates a TOTP key inside the TPM, here approved for PCRs 0, 7 and 11; scan the QR code it prints with your authenticator app. Without a unified kernel image, see [Choosing PCRs](#choosing-pcrs): a selection that leaves out the kernel, initrd and command line lets a modified initrd show a valid code. `seal` refuses to run until `setup` has created the keys (or you pass your own with `--privkey` / `--pubkey`).
+`setup` makes the signing key that approves every PCR policy, and nothing else. It looks for a YubiKey first: with one plugged in it offers to take the key from a PIV slot (`--yubikey`, optionally `=SERIAL`, `--slot`, default 9a) so the private key never exists on the machine; without one, or with `--local`, it creates an ECDSA P-256 key pair at `/etc/tpm2-kira/keys/` (`seal.pub`, `seal.key`, root-only). `tpm2-kira yubikey list` shows the candidates; the trade-offs are in [docs/PLAN-YUBIKEY.md](docs/PLAN-YUBIKEY.md). `seal` creates a TOTP key inside the TPM, approved for what this boot measured (see [Basic seal](#basic-seal)); scan the QR codes it prints with your authenticator app, the fallback slot's too. A selection that leaves out the kernel, initrd and command line lets a modified initrd show a valid code, see [Choosing PCRs](#choosing-pcrs). `seal` refuses to run until `setup` has created the keys (or you pass your own with `--privkey` / `--pubkey`).
 
 ## Installation
 
@@ -152,7 +153,7 @@ tpm2-kira runs `reveal`.
 |---|---|
 | Setting up the machine | `setup` the signing key · `seal` a new TOTP key to the boot state · `reseal` approve the current boot state (the hooks run it) · `info` a slot · `nvram list\|status\|delete\|restore` |
 | The phone (Marify, Bluetooth LE) | `attest enrol\|unenrol\|status\|gate\|signer\|ekcert\|quote\|verify\|config-check` · `remote-salt enrol\|rotate\|status\|unenrol` |
-| The disk's key | `luks status\|enrol\|mark` · `derive` (hashpwd2 by hand) · the mode in `/etc/tpm2-kira/unlock.conf` |
+| The disk's key | `luks status\|enrol\|rotate\|remove\|mark` · `derive` (hashpwd2 by hand) · the mode in `/etc/tpm2-kira/unlock.conf` |
 | At boot (the units and hooks) | `run` · `cap` · `unlock-key` (Debian keyscript) |
 | By hand | `reveal` / `reveal-plain` · `yubikey list` · `pcrtips` · `version` |
 
@@ -165,9 +166,27 @@ it most commands take every populated slot), `--debug`.
 ### Basic seal
 
 ```bash
-# Uses default PCRs 0,2,7 read from TPM registers
 tpm2-kira seal
 ```
+
+Without `--pcrs`, the selection is what this boot measured, read from the
+event log:
+
+| This boot | Slot 0 is sealed to | Why |
+|---|---|---|
+| a unified kernel image (systemd-stub) | `0e,2e,7e,11u` | firmware, option ROMs, Secure Boot state, and PCR 11 computed from the image - a kernel update is predicted from the new image |
+| GRUB | `0e,2e,7e,8e,9e` | the same, and GRUB's commands and the files it read, predicted from `grub.cfg` for the next boot |
+| neither | `0e,2e,7e` | firmware, option ROMs, Secure Boot state |
+
+Without `--pcrs` and `--nvram`, a second slot is sealed as well: **slot 1,
+the fallback, to `0e,7e` alone**. When a kernel or boot loader change was
+not predicted, slot 0 shows no code, but slot 1 still does as long as the
+firmware and the Secure Boot state are what they were: the machine is not
+simply lost, and the first slot is resealed once the boot is understood.
+Pair both with your authenticator.
+
+With `--pcrs`, or `--nvram`, one slot is sealed: the one named (else 0),
+to the PCRs named (else the selection above).
 
 ### Custom PCRs
 

@@ -488,3 +488,102 @@ func setUnlockMode(path, mode string) error {
 	}
 	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
 }
+
+// LuksRemoveOptions is what luks remove takes.
+type LuksRemoveOptions struct {
+	Device  string
+	Keyslot int
+	// ExistingKeyFile authorises luksKillSlot instead of cryptsetup's
+	// prompt for a remaining passphrase (scripts and tests).
+	ExistingKeyFile string
+}
+
+// LuksRemove takes one of tpm2-kira's keyslots out of the header, with its
+// token: 'cryptsetup luksKillSlot', authorised by a remaining passphrase
+// (the recovery keyslot's, at cryptsetup's prompt), then 'token remove'.
+// A keyslot that is not tpm2-kira's is refused - that is cryptsetup's to
+// remove by hand - and so is the last keyslot of the device.
+func LuksRemove(o LuksRemoveOptions) error {
+	st := readLuksStatus(o.Device)
+	if st.Error != "" {
+		return errors.New(st.Error)
+	}
+	var have *KeyslotStatus
+	for i := range st.Keyslots {
+		if st.Keyslots[i].Keyslot == o.Keyslot {
+			have = &st.Keyslots[i]
+		}
+	}
+	if have == nil {
+		return fmt.Errorf("%s has no keyslot %d", o.Device, o.Keyslot)
+	}
+	if have.Token == nil {
+		return fmt.Errorf("keyslot %d is not tpm2-kira's; tpm2-kira removes only the keyslots it marked (cryptsetup luksKillSlot %s %d by hand)", o.Keyslot, o.Device, o.Keyslot)
+	}
+	if len(st.Keyslots) == 1 {
+		return fmt.Errorf("keyslot %d is the last keyslot of %s; removing it would make the device unopenable", o.Keyslot, o.Device)
+	}
+	args := []string{"luksKillSlot"}
+	if o.ExistingKeyFile != "" {
+		args = append(args, "--batch-mode", "--key-file", o.ExistingKeyFile)
+	}
+	args = append(args, o.Device, strconv.Itoa(o.Keyslot))
+	if _, err := cryptsetupTTY(nil, args...); err != nil {
+		return err
+	}
+	if _, err := cryptsetup(nil, "token", "remove", "--token-id", strconv.Itoa(have.TokenID), o.Device); err != nil {
+		return fmt.Errorf("keyslot %d is removed, its token %d is not: %w", o.Keyslot, have.TokenID, err)
+	}
+	fmt.Printf("%s keyslot %d removed (was %s)\n", o.Device, o.Keyslot, describeKeyslot(*have))
+	left := 0
+	for _, s := range st.Keyslots {
+		if s.Token != nil && s.Keyslot != o.Keyslot {
+			left++
+		}
+	}
+	if left == 0 {
+		fmt.Printf("No keyslot of %s is tpm2-kira's now. If no other device has one, set\n", o.Device)
+		fmt.Printf("TPM2_KIRA_UNLOCK=skip in %s and rebuild the initramfs.\n", DefaultUnlockConfigPath)
+	}
+	return nil
+}
+
+// LuksRotateOptions is what luks rotate takes: the keyslot to replace, and
+// what luks enrol needs for the new one.
+type LuksRotateOptions struct {
+	Device          string
+	Keyslot         int
+	ExistingKeyFile string
+	Remote          FactorEnrolOptions // password+remotesalt: the TPM, the phone, the keys
+}
+
+// LuksRotate replaces one of tpm2-kira's keyslots by a new one of the same
+// kind: a new password and salt, or a new remote salt for the phone, then
+// the old keyslot goes. The mode, the slot and the label come from the old
+// keyslot's token; unlock.conf is not touched, the mode stays.
+func LuksRotate(o LuksRotateOptions) error {
+	st := readLuksStatus(o.Device)
+	if st.Error != "" {
+		return errors.New(st.Error)
+	}
+	var old *LuksToken
+	for _, s := range st.Keyslots {
+		if s.Keyslot == o.Keyslot {
+			old = s.Token
+		}
+	}
+	if old == nil {
+		return fmt.Errorf("keyslot %d of %s is not tpm2-kira's; rotate replaces only a keyslot it marked", o.Keyslot, o.Device)
+	}
+	remote := o.Remote
+	remote.Label = old.Label
+	if old.Slot != nil {
+		remote.SealIndex = uint32(*old.Slot)
+	}
+	remote.Rotate = true
+	fmt.Printf("Replacing keyslot %d (%s) by a new one of the same kind.\n", o.Keyslot, old.Mode)
+	if err := LuksEnrol(LuksEnrolOptions{Device: o.Device, Mode: old.Mode, ExistingKeyFile: o.ExistingKeyFile, NoConfig: true, Remote: remote}); err != nil {
+		return err
+	}
+	return LuksRemove(LuksRemoveOptions{Device: o.Device, Keyslot: o.Keyslot, ExistingKeyFile: o.ExistingKeyFile})
+}
