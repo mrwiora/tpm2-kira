@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/matthias/tpm2-kira/cmd"
@@ -416,6 +417,16 @@ func failAttest(code int, err error) {
 	os.Exit(code)
 }
 
+// deviceLast moves a leading device argument behind the flags, so that
+// 'luks mark /dev/sda2 --keyslot 1' and 'luks mark --keyslot 1 /dev/sda2'
+// both parse (the flag package stops at the first non-flag).
+func deviceLast(args []string) []string {
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		return append(append([]string{}, args[1:]...), args[0])
+	}
+	return args
+}
+
 func runLuks(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
 		fail(fmt.Errorf("luks requires a subcommand: status, mark"))
@@ -436,7 +447,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		nvram := fs.Uint("nvram", 0, "The tpm2-kira slot of the remote salt (password+remotesalt)")
 		label := fs.String("label", "luks", "The salt's label (password+remotesalt)")
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
-		fs.Parse(args[1:])
+		fs.Parse(deviceLast(args[1:]))
 		if fs.NArg() != 1 || *keyslot < 0 || *mode == "" {
 			fail(fmt.Errorf("usage: tpm2-kira luks mark <device> --keyslot N --mode password+salt|password+remotesalt"))
 		}
