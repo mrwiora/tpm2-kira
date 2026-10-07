@@ -2,9 +2,9 @@
 
 > **Status:** in implementation. Done: the keyslot token, `luks status`,
 > `luks mark`, `luks enrol` (both modes), `luks remove` (§2, §3), the
-> unlock modes (§1), the `remote-salt` command name. Not now: `luks rotate`
-> (a new keyslot is `remove` and `enrol`). Next: `tpm2-kira status` (§4),
-> the network verifier (§6).
+> unlock modes (§1), the `remote-salt` command name, `tpm2-kira status`
+> (§4). Not now: `luks rotate` (a new keyslot is `remove` and `enrol`).
+> Next: the network verifier (§6).
 > **Changes a standing rule:** tpm2-kira may touch LUKS keyslots - only
 > through the `luks` verb, only with `cryptsetup`, and every keyslot it adds
 > is marked with a token (§2). `derive` and the `--out` paths stay as the
@@ -96,7 +96,11 @@ tpm2-kira status
 ```
 
 `attest status`, `remote-salt status`, `luks status` and `unlock.conf` in
-one place, which is what a person wants to know before a reboot.
+one place, which is what a person wants to know before a reboot - and the
+notes under it: what does not fit together (a mode without a keyslot for
+it, a marked keyslot with the mode at `skip`, `password+remotesalt`
+without a remote salt, no fallback slot, a reseal due) with the command
+to run. `--json` for scripts.
 
 ## 5. What stays by hand
 
