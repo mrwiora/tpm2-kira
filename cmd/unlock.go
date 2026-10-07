@@ -382,8 +382,10 @@ func readPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 		return bytes.TrimRight(line, "\r"), nil
 	}
 	raw := *old
-	raw.Lflag &^= unix.ECHO | unix.ICANON
-	raw.Lflag |= unix.ISIG
+	// No echo, no line discipline, and no signals: Ctrl-C must arrive as
+	// a byte to cancel the prompt, because the display has given up its
+	// controlling terminal and a SIGINT from the tty would reach nobody.
+	raw.Lflag &^= unix.ECHO | unix.ICANON | unix.ISIG
 	raw.Cc[unix.VMIN], raw.Cc[unix.VTIME] = 1, 0
 	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &raw); err != nil {
 		return nil, err

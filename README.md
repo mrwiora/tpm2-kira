@@ -871,9 +871,13 @@ and `sudo update-initramfs -u`. The keyscript asks the same socket
 started by `init-premount` answers once the code screen is confirmed,
 with what you type at `🔐 Please enter passphrase for disk vda3_crypt:`
 (or, with a phone and a factor, the key derived from your password).
-`cryptroot` re-runs the keyscript for each of its tries, so a typo is
-asked again; without the socket (no TPM, `once` mode) the keyscript is
-cryptsetup's own prompt, as before tpm2-kira.
+`cryptroot` re-runs the keyscript for each of its tries (`tries=`, 3 by
+default): the first ones are tpm2-kira's prompt, the last is cryptsetup's
+own, for the recovery passphrase; Ctrl-C at tpm2-kira's prompt goes
+there at once. Without the socket (no TPM, `once` mode) the keyscript is
+cryptsetup's own prompt, as before tpm2-kira. (On Arch, `systemd-cryptsetup`
+tries a key file once: after a wrong answer at tpm2-kira's prompt its own
+prompt follows.)
 
 What the display reported at boot - when the volume asked, when the hold
 ended, when the prompt opened and answered - is in

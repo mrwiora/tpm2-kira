@@ -337,6 +337,11 @@ func TestReadPassphraseOnATerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Ctrl-C cancels, as a byte: the tty must not turn it into a signal.
+	go func() { ptm.Write([]byte("abc\x03")) }()
+	if _, err := readPassphrase(pts, int(pts.Fd())); !errors.Is(err, errPassphraseCancelled) {
+		t.Fatalf("Ctrl-C: %v", err)
+	}
 	want := "abc" + strings.Repeat("z", maxPassphrase-3)
 	if string(pw) != want {
 		t.Fatalf("got %d bytes %q...", len(pw), pw[:8])
