@@ -69,8 +69,8 @@ func main() {
 		runRun(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "attest":
 		runAttest(commandArgs, *tpmPath, *debug)
-	case "factor":
-		runFactor(commandArgs, *tpmPath, *debug)
+	case "remote-salt":
+		runRemoteSalt(commandArgs, *tpmPath, *debug)
 	case "derive":
 		fs := flag.NewFlagSet("derive", flag.ExitOnError)
 		out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
@@ -460,14 +460,14 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 	}
 }
 
-func runFactor(args []string, tpmPath string, debugFlag bool) {
+func runRemoteSalt(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, "factor requires a subcommand: enrol, rotate, status, unenrol\n\n"+factorUsage)
+		fmt.Fprint(os.Stderr, "remote-salt requires a subcommand: enrol, rotate, status, unenrol\n\n"+factorUsage)
 		os.Exit(cmd.ExitUsage)
 	}
 	switch args[0] {
 	case "status":
-		fs := flag.NewFlagSet("factor status", flag.ExitOnError)
+		fs := flag.NewFlagSet("remote-salt status", flag.ExitOnError)
 		tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 		nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index (default: every enrolled slot)")
 		jsonOut := fs.Bool("json", false, "Machine-readable output")
@@ -482,7 +482,7 @@ func runFactor(args []string, tpmPath string, debugFlag bool) {
 		}
 		return
 	case "unenrol", "unenroll":
-		fs := flag.NewFlagSet("factor unenrol", flag.ExitOnError)
+		fs := flag.NewFlagSet("remote-salt unenrol", flag.ExitOnError)
 		tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 		nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index")
 		privKey := fs.String("privkey", "", "Signing key (default: "+cmd.DefaultPrivateKeyPath+")")
@@ -497,9 +497,9 @@ func runFactor(args []string, tpmPath string, debugFlag bool) {
 		fmt.Print(factorUsage)
 		return
 	default:
-		fail(fmt.Errorf("unknown factor subcommand %q", args[0]))
+		fail(fmt.Errorf("unknown remote-salt subcommand %q", args[0]))
 	}
-	fs := flag.NewFlagSet("factor "+args[0], flag.ExitOnError)
+	fs := flag.NewFlagSet("remote-salt "+args[0], flag.ExitOnError)
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index (default: the first enrolled slot)")
 	label := fs.String("label", "luks", "The factor's label: one factor serves volumes with unrelated salts")
@@ -525,27 +525,29 @@ func runFactor(args []string, tpmPath string, debugFlag bool) {
 	}
 }
 
-const factorUsage = `The disk factor (docs/PLAN-FACTORRELEASE.md): the phone keeps one half of
-the disk's key - a value only this machine's TPM can open, in a boot its
-signing key approved - and hands it back after a verdict you accept. At
-boot tpm2-kira derives the key from it and your password (hashpwd2's
-derivation) and gives it to systemd-cryptsetup. Without the phone, the
-recovery passphrase in its own keyslot opens the disk at systemd's prompt.
+const factorUsage = `The remote salt (docs/PLAN-FACTORRELEASE.md): the salt of the disk's key,
+kept by the verifier that attests this machine - today the phone enrolled
+with 'attest enrol', over Bluetooth LE - as a value only this machine's
+TPM can open, in a boot its signing key approved. The phone hands it back
+after a verdict you accept; at boot tpm2-kira asks for your password and
+derives the key from both (hashpwd2's derivation, unlock mode
+password+remotesalt). Without the phone, the recovery passphrase in its
+own keyslot opens the disk at cryptsetup's prompt.
 
-  factor enrol    Give the phone a factor, prove the round trip, derive the
-                  key once for 'cryptsetup luksAddKey':
-                    --out PATH   the key file, on tmpfs (required)
-                    --label STR  default luks
-                    --nvram N --privkey PATH --pubkey PATH --adapter N
-                    --timeout DUR --adapter-wait DUR --yes
-                  Have a recovery passphrase in a second keyslot first:
-                    cryptsetup luksAddKey <device>
-  factor rotate   The same with a new factor for a slot that has one; the
-                  old keyslot is then to be removed by hand
-  factor status   Which slots have a factor enrolled (--nvram N, --json)
-  factor unenrol  Take the release key out of the slot's blob (--nvram N,
-                  --privkey PATH): what the phone keeps can then not be
-                  opened; remove the factor's keyslot by hand
+  remote-salt enrol    Give the phone a salt, prove the round trip, derive
+                       the key once for 'cryptsetup luksAddKey':
+                         --out PATH   the key file, on tmpfs (required)
+                         --label STR  default luks
+                         --nvram N --privkey PATH --pubkey PATH --adapter N
+                         --timeout DUR --adapter-wait DUR --yes
+                       Have a recovery passphrase in a second keyslot first:
+                         cryptsetup luksAddKey <device>
+  remote-salt rotate   The same with a new salt for a slot that has one; the
+                       old keyslot is then to be removed by hand
+  remote-salt status   Which slots have a remote salt enrolled (--nvram N, --json)
+  remote-salt unenrol  Take the release key out of the slot's blob (--nvram N,
+                       --privkey PATH): what the phone keeps can then not be
+                       opened; remove the salt's keyslot by hand
 `
 
 func runAttest(args []string, tpmPath string, debugFlag bool) {
@@ -745,8 +747,8 @@ COMMANDS:
               remote attestation set up for it (attestation key, PCRs, phones)
   nvram       Manage TPM NVRAM (list, status, delete, restore)
   attest      Remote attestation: a phone verifies this boot over Bluetooth LE.
-  factor      The disk factor: one half of the disk's key, kept by the phone
-              (factor enrol --out /run/tpm2-kira/luks.key)
+  remote-salt The salt of the disk's key, kept by the phone that attests this
+              machine (remote-salt enrol --out /run/tpm2-kira/luks.key)
   derive      hashpwd2 by hand: password and salt to a key file on tmpfs
               (--out /run/tpm2-kira/luks.key) for cryptsetup luksAddKey, for
               the password+salt mode of /etc/tpm2-kira/unlock.conf

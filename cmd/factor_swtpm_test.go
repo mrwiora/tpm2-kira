@@ -173,10 +173,10 @@ func TestFactorStatusAndUnenrol(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if !strings.Contains(out, "Slot 1") || !strings.Contains(out, "no factor") {
+	if !strings.Contains(out, "Slot 1") || !strings.Contains(out, "no remote salt") {
 		t.Fatalf("status without a factor: %q", out)
 	}
-	if err := FactorUnenrol(sock, 1, privPath, false); err == nil || !strings.Contains(err.Error(), "no factor enrolled") {
+	if err := FactorUnenrol(sock, 1, privPath, false); err == nil || !strings.Contains(err.Error(), "no remote salt enrolled") {
 		t.Fatalf("unenrol without a factor: %v", err)
 	}
 

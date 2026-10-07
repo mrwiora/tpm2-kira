@@ -2,7 +2,7 @@
 
 > **Status:** in implementation. Done: the keyslot token and `luks status`,
 > `luks mark` (§2, §3), the unlock modes (§1). Next, in order: the
-> `remotesalt` command name (§1), `luks enrol --mode password+salt`,
+> `remote-salt` command name - done, `luks enrol --mode password+salt`,
 > `luks enrol --mode password+remotesalt`, `tpm2-kira status`, the network
 > verifier (§6).
 > **Changes a standing rule:** tpm2-kira may touch LUKS keyslots - only
@@ -26,8 +26,8 @@ for the slot and the remote salt enrolled with it. `luks mark` and `luks
 enrol` refuse the mode otherwise, the hooks warn at image build, `run`
 says so at boot. The same words name the token's `mode` (§2). What the
 phone keeps is the **remote salt**; the command for it is
-`tpm2-kira remotesalt enrol|status|rotate|unenrol` (today `factor …`,
-renamed in the next step). "Factor" stays in the Go identifiers until the
+`tpm2-kira remote-salt enrol|status|rotate|unenrol` (renamed from `factor …`).
+"Factor" stays in the Go identifiers until the
 rename of the code is its own change; PLAN-FACTORRELEASE.md is the design
 of the mechanism and keeps its title. Later, with more than one verifier
 able to hold a salt, the mode may name the source - `password+phone:salt`,
@@ -95,12 +95,12 @@ tpm2-kira status
   /dev/vda2  keyslot 0 not tpm2-kira's; keyslot 2 password+remotesalt (slot 0, label luks); keyslot 1 password+salt
 ```
 
-`attest status`, `remotesalt status`, `luks status` and `unlock.conf` in
+`attest status`, `remote-salt status`, `luks status` and `unlock.conf` in
 one place, which is what a person wants to know before a reboot.
 
 ## 5. What stays by hand
 
-`derive --out` and `remotesalt enrol --out` write the key to tmpfs for a
+`derive --out` and `remote-salt enrol --out` write the key to tmpfs for a
 `luksAddKey` run by hand; `luks mark` then records it. People who do not
 want tpm2-kira near their header keep that path; `luks status` tells them
 the same as everyone.
@@ -118,7 +118,7 @@ tpm2-kira attest enrol                          # a phone over BLE, as today
 tpm2-kira attest enrol --server https://host    # the same handshake over TCP
 tpm2-kira attest status                         # phones and servers, per slot
 tpm2-kira attest unenrol --verifier <id>
-tpm2-kira remotesalt enrol --verifier <id>      # which verifier keeps the salt
+tpm2-kira remote-salt enrol --verifier <id>     # which verifier keeps the salt
 ```
 
 The gate serves both at boot - the radio worker for BLE, a network worker

@@ -291,10 +291,10 @@ func (s *gateService) FactorToKeep() *attest.FactorBlob {
 func (s *gateService) TakeRelease(r *attest.Release) (uint8, string) {
 	<-s.ready
 	if s.code != 0 || s.blob == nil || s.be == nil || s.be.sealed == nil {
-		return attest.ReleaseUnsupported, "this machine has no slot to open a factor with"
+		return attest.ReleaseUnsupported, "this machine has no slot to open a remote salt with"
 	}
 	if r == nil || r.Kind != attest.ReleaseKindFactor {
-		return attest.ReleaseUnsupported, "not a factor"
+		return attest.ReleaseUnsupported, "not a remote salt"
 	}
 	s.tpmMu.Lock()
 	f, err := unwrapFactor(s.tpm, s.be.sealed, s.be.sealIndex, s.blob, &WrappedFactor{Credential: r.CredentialBlob, EncryptedSecret: r.EncryptedSecret})
@@ -303,7 +303,7 @@ func (s *gateService) TakeRelease(r *attest.Release) (uint8, string) {
 		if errors.Is(err, errNoReleaseKey) {
 			return attest.ReleaseUnsupported, err.Error()
 		}
-		return attest.ReleaseTPMRefused, "the TPM did not open the factor: " + err.Error()
+		return attest.ReleaseTPMRefused, "the TPM did not open the remote salt: " + err.Error()
 	}
 	salt := FactorSalt(f, r.Label)
 	wipe(f)
@@ -311,7 +311,7 @@ func (s *gateService) TakeRelease(r *attest.Release) (uint8, string) {
 	wipe(s.salt)
 	s.salt = salt
 	s.mu.Unlock()
-	return attest.ReleaseOK, "the TPM opened the factor; the disk's key will be derived from it and your password"
+	return attest.ReleaseOK, "the TPM opened the remote salt; the disk's key will be derived from it and your password"
 }
 
 // Salt returns a copy of the combiner's salt from the released factor,
