@@ -41,11 +41,12 @@ system's files alone (docs/UNLOCK-DISK.md §5).
 ### The signing keys lived in /var/lib/tpm2-kira/keys
 
 Until 2026-10-07 `setup` created `/var/lib/tpm2-kira/keys/` (seal.pub,
-seal.key). Moved to `/etc/tpm2-kira/keys/`, where systemd keeps its own
-key material (`/etc/systemd/tpm2-pcr-*`); `/var/lib/tpm2-kira/recovery/`
-stays what it is, a place for NVRAM recovery blobs, not keys. No
-migration: an installed system moves the directory by hand before the
-next `reseal`.
+seal.key), and a failed NVRAM rewrite stashed the blob under
+`/var/lib/tpm2-kira/recovery/`. Both moved to `/etc/tpm2-kira/` (`keys/`,
+`recovery/`), where systemd keeps its own key material
+(`/etc/systemd/tpm2-pcr-*`); nothing of tpm2-kira's is left under
+`/var/lib`. No migration: an installed system moves the keys directory by
+hand before the next `reseal`.
 
 ## Blob format
 

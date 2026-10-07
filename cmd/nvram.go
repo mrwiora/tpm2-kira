@@ -133,7 +133,7 @@ const MaxNVRAMBlobSize = 65535
 
 // NVRAMRecoveryDir holds a blob that could not be written back after the index
 // had already been undefined.  See stashUnwrittenBlob.
-const NVRAMRecoveryDir = "/var/lib/tpm2-kira/recovery"
+const NVRAMRecoveryDir = "/etc/tpm2-kira/recovery"
 
 // WriteToNVRAM writes data to a TPM NVRAM index.
 //

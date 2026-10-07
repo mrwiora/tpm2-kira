@@ -826,7 +826,7 @@ Ranked by how much I think they matter.
    public area stores the size as a uint16, so a blob over 65535 bytes was
    silently truncated by the conversion), a read-back comparison after the last
    chunk, and `stashUnwrittenBlob`, which writes the blob to
-   `/var/lib/tpm2-kira/recovery/` if a step after the undefine fails — the
+   `/etc/tpm2-kira/recovery/` if a step after the undefine fails — the
    sealed object's private area is wrapped by the TPM's deterministic primary
    key, so the secret survives in those bytes even though the index is gone.
 
