@@ -33,7 +33,9 @@ SETTING UP THE MACHINE
   seal         Seal a new TOTP key to the boot state (PCRs) in a TPM slot
   reseal       Approve the current boot state for a slot (after a boot change;
                the initramfs hooks run it)
-  info         Show a slot: its TOTP policy and the phones that attest it
+  status       The one page before a reboot: slots, phones, unlock mode,
+               LUKS keyslots, and what does not fit together
+  info         Show a slot's blob in full: its TOTP policy, the phones
   nvram        The TPM's slots: list, status, delete, restore
 
 THE PHONE (the Marify app, over Bluetooth LE)
@@ -74,7 +76,7 @@ FIRST STEPS
                                                      password and the phone's salt
   then rebuild the initramfs: mkinitcpio -P (Arch), update-initramfs -u (Debian)
 
-More: tpm2-kira help seal | run | attest | remote-salt | luks | nvram | setup;
+More: tpm2-kira help status | seal | run | attest | remote-salt | luks | nvram;
 docs/ and README.md
 `)
 }
@@ -199,6 +201,22 @@ the token and its PIN (` + cmd.PINEnvVar + `, or TPM2_KIRA_PIN='...' in
   tpm2-kira reseal
   tpm2-kira reseal --nvram 0 --pcrs "0e,2,4,7e"
   tpm2-kira reseal --privkey /path/to/my-key.key
+`,
+
+	"status": `tpm2-kira status [--json] [--privkey PATH] [--unlock-conf PATH]
+
+The overview, read-only: every slot with what it is sealed to, its
+generation (does the TPM's index match, or is a reseal due), whether this
+machine's key signed it, its phones and whether a remote salt is enrolled;
+the unlock mode from /etc/tpm2-kira/unlock.conf; every LUKS device's
+keyslots and which are tpm2-kira's. Then the notes: what does not fit
+together and what to run - a mode without a keyslot for it, a keyslot
+whose mode is not set, a remote salt that is not enrolled, no fallback
+slot, a slot that needs a reseal. Root for the LUKS headers.
+
+  --json              Machine-readable
+  --privkey PATH      The signing key the blobs are checked with
+  --unlock-conf PATH  (default ` + cmd.DefaultUnlockConfigPath + `)
 `,
 
 	"info": `tpm2-kira info [--nvram N] [--json] [--privkey PATH]

@@ -151,7 +151,7 @@ tpm2-kira runs `reveal`.
 
 | | Commands |
 |---|---|
-| Setting up the machine | `setup` the signing key · `seal` a new TOTP key to the boot state · `reseal` approve the current boot state (the hooks run it) · `info` a slot · `nvram list\|status\|delete\|restore` |
+| Setting up the machine | `setup` the signing key · `seal` a new TOTP key to the boot state · `reseal` approve the current boot state (the hooks run it) · `status` the overview · `info` a slot's blob · `nvram list\|status\|delete\|restore` |
 | The phone (Marify, Bluetooth LE) | `attest enrol\|unenrol\|status\|gate\|signer\|ekcert\|quote\|verify\|config-check` · `remote-salt enrol\|rotate\|status\|unenrol` |
 | The disk's key | `luks status\|enrol\|remove\|mark` · `derive` (hashpwd2 by hand) · the mode in `/etc/tpm2-kira/unlock.conf` |
 | At boot (the units and hooks) | `run` · `cap` · `unlock-key` (Debian keyscript) |

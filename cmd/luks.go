@@ -48,9 +48,23 @@ type luksMetadata struct {
 	Tokens map[string]json.RawMessage `json:"tokens"`
 }
 
+// cryptsetupPath finds cryptsetup, in the sbin directories too when they
+// are not on an unprivileged PATH (Debian).
+func cryptsetupPath() string {
+	if p, err := exec.LookPath("cryptsetup"); err == nil {
+		return p
+	}
+	for _, p := range []string{"/usr/sbin/cryptsetup", "/sbin/cryptsetup"} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "cryptsetup"
+}
+
 // cryptsetup runs cryptsetup with stdin and returns its output.
 var cryptsetup = func(stdin []byte, args ...string) ([]byte, error) {
-	c := exec.Command("cryptsetup", args...)
+	c := exec.Command(cryptsetupPath(), args...)
 	c.Stdin = bytes.NewReader(stdin)
 	var out, errb bytes.Buffer
 	c.Stdout, c.Stderr = &out, &errb
@@ -456,7 +470,7 @@ func checkRemoteSaltReadyOrEnrolable(tpmPath string, idx uint32) (bool, error) {
 // cryptsetupTTY runs cryptsetup with the key on stdin and the terminal for
 // its prompts (an existing passphrase to authorise luksAddKey).
 var cryptsetupTTY = func(stdin []byte, args ...string) ([]byte, error) {
-	c := exec.Command("cryptsetup", args...)
+	c := exec.Command(cryptsetupPath(), args...)
 	c.Stdin = bytes.NewReader(stdin)
 	c.Stdout, c.Stderr = os.Stderr, os.Stderr
 	if err := c.Run(); err != nil {

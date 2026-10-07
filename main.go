@@ -65,6 +65,17 @@ func main() {
 		runReseal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "info":
 		runInfo(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+	case "status":
+		fs := flag.NewFlagSet("status", flag.ExitOnError)
+		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
+		privKey := fs.String("privkey", "", "Signing key the blobs are checked with (default: "+cmd.DefaultPrivateKeyPath+")")
+		conf := fs.String("unlock-conf", cmd.DefaultUnlockConfigPath, "The unlock configuration")
+		jsonOut := fs.Bool("json", false, "Machine-readable output")
+		dbg := fs.Bool("debug", *debug, "Enable debug output")
+		fs.Parse(commandArgs)
+		if err := cmd.Status(cmd.StatusOptions{TPMPath: *tpm, PrivKeyPath: *privKey, UnlockConfigPath: *conf, JSON: *jsonOut, Debug: *dbg}); err != nil {
+			fail(err)
+		}
 	case "nvram":
 		runNVRAM(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "reveal":
