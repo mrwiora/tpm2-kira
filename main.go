@@ -50,6 +50,12 @@ func main() {
 		commandArgs = os.Args[argsOffset:]
 	}
 
+	// '<command> help', '-h' or '--help' is that command's page.
+	if len(commandArgs) > 0 && isHelp(commandArgs[0]) && command != "help" {
+		printHelp(command)
+		return
+	}
+
 	switch command {
 	case "setup":
 		runSetup(commandArgs)
@@ -104,7 +110,11 @@ func main() {
 	case "version", "-v", "--version":
 		fmt.Printf("tpm2-kira version %s\n", Version)
 	case "help", "-h", "--help":
-		printUsage()
+		if len(commandArgs) > 0 {
+			printHelp(commandArgs[0])
+		} else {
+			printUsage()
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", command)
 		printUsage()
@@ -360,7 +370,9 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 
 func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	if len(args) == 0 {
-		fail(fmt.Errorf("nvram command requires a subcommand (list, status, delete, restore)"))
+		fmt.Fprint(os.Stderr, "nvram requires a subcommand.\n\n")
+		printHelp("nvram")
+		os.Exit(cmd.ExitUsage)
 	}
 
 	subcommand := args[0]
@@ -429,7 +441,9 @@ func deviceLast(args []string) []string {
 
 func runLuks(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
-		fail(fmt.Errorf("luks requires a subcommand: status, enrol, mark"))
+		fmt.Fprint(os.Stderr, "luks requires a subcommand.\n\n")
+		printHelp("luks")
+		os.Exit(cmd.ExitUsage)
 	}
 	switch args[0] {
 	case "status":
@@ -491,7 +505,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 
 func runRemoteSalt(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, "remote-salt requires a subcommand: enrol, rotate, status, unenrol\n\n"+factorUsage)
+		fmt.Fprint(os.Stderr, "remote-salt requires a subcommand.\n\n"+factorUsage)
 		os.Exit(cmd.ExitUsage)
 	}
 	switch args[0] {
@@ -554,7 +568,9 @@ func runRemoteSalt(args []string, tpmPath string, debugFlag bool) {
 	}
 }
 
-const factorUsage = `The remote salt (docs/PLAN-FACTORRELEASE.md): the salt of the disk's key,
+const factorUsage = `tpm2-kira remote-salt enrol | rotate | status | unenrol [options]
+
+The remote salt (docs/PLAN-FACTORRELEASE.md): the salt of the disk's key,
 kept by the verifier that attests this machine - today the phone enrolled
 with 'attest enrol', over Bluetooth LE - as a value only this machine's
 TPM can open, in a boot its signing key approved. The phone hands it back
@@ -564,7 +580,8 @@ password+remotesalt). Without the phone, the recovery passphrase in its
 own keyslot opens the disk at cryptsetup's prompt.
 
   remote-salt enrol    Give the phone a salt, prove the round trip, derive
-                       the key once for 'cryptsetup luksAddKey':
+                       the key once for 'cryptsetup luksAddKey' ('luks enrol
+                       --mode password+remotesalt' does all of it in one step):
                          --out PATH   the key file, on tmpfs (required)
                          --label STR  default luks
                          --nvram N --privkey PATH --pubkey PATH --adapter N
@@ -720,9 +737,14 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 	}
 }
 
-// attestUsage is the ATTEST section of the help, also shown on its own by
-// 'tpm2-kira attest help'.
-const attestUsage = `ATTEST SUBCOMMANDS:
+// attestUsage is the page of 'tpm2-kira help attest'.
+const attestUsage = `tpm2-kira attest <subcommand> [options]
+
+Remote attestation: a phone with the Marify app verifies this boot over
+Bluetooth LE - the TPM quotes the PCRs, the phone judges them against the
+record it was given at enrolment, and shows a code that must match the
+machine's screen (docs/PLAN-REMOTEATTESTATION.md).
+
   attest enrol    Bind a phone to this slot over BLE (booted system; needs the
                   signing key and a sealed slot: the phones are stored in the
                   slot's blob, next to its TOTP key, and survive reseal).
@@ -768,212 +790,3 @@ const attestUsage = `ATTEST SUBCOMMANDS:
     6 the attestation record was replaced, or an older one was put back
 
 `
-
-func printUsage() {
-	fmt.Printf(`tpm2-kira - TPM2-based TOTP authenticator with PCR policies
-
-USAGE:
-  tpm2-kira <command> [options]
-
-COMMANDS:
-  setup       Initial setup: create the signing key (run before seal)
-  seal        Generate and seal TOTP secret to TPM NVRAM (requires setup)
-  reseal      Reseal secret with current PCR values (requires signing key)
-  reveal      Generate TOTP code with colored KIRA format
-  reveal-plain Generate TOTP code (plain output)
-  run         Show the code at boot and wait for Enter (see RUN OPTIONS)
-  cap         Lock code computation until the next reboot (run when leaving
-              the initrd; the boot integration does this)
-  info        Display a slot's blob: the TOTP key and its policy, and the
-              remote attestation set up for it (attestation key, PCRs, phones)
-  nvram       Manage TPM NVRAM (list, status, delete, restore)
-  attest      Remote attestation: a phone verifies this boot over Bluetooth LE.
-  remote-salt The salt of the disk's key, kept by the phone that attests this
-              machine (remote-salt enrol --out /run/tpm2-kira/luks.key)
-  derive      hashpwd2 by hand: password and salt to a key file on tmpfs
-              (--out /run/tpm2-kira/luks.key) for cryptsetup luksAddKey, for
-              the password+salt mode of /etc/tpm2-kira/unlock.conf
-  luks        tpm2-kira's LUKS keyslots, marked by a token in the header:
-              luks status [<device>…] [--json]
-              luks enrol <device> --mode password+salt|password+remotesalt
-                (the password, the salt or the phone's remote salt, luksAddKey,
-                the token, the mode in unlock.conf; cryptsetup asks an existing
-                passphrase to authorise)
-              luks mark <device> --keyslot N --mode password+salt|password+remotesalt
-  unlock-key  Debian keyscript: the volume's key from the socket of
-              'run --unlock' to stdout, else cryptsetup's own prompt
-              Subcommands (details under ATTEST SUBCOMMANDS, or 'attest help'):
-    attest enrol      Bind a phone to a sealed slot (needs the signing key)
-    attest unenrol    Remove a slot's phones (needs the signing key)
-    attest status     Show the phones enrolled per slot, and whether the
-                      slot's blob is signed by this machine and current
-    attest gate       Ask the phone to verify this boot (the initrd runs it)
-    attest ekcert     Show whether a phone will verify this TPM as genuine
-    attest quote      Produce attestation evidence without a phone
-    attest verify     Judge attestation evidence offline
-    attest signer     Print the signing public key for the initramfs (hooks)
-    attest initramfs-deps  Bluetooth modules and firmware for the initramfs (hooks)
-  yubikey     YubiKey support (list)
-  pcrtips     Show PCR (Platform Configuration Register) reference guide
-  version     Show version information
-  help        Show this help message
-
-GLOBAL OPTIONS:
-  --tpm PATH      Path to TPM device (default: /dev/tpmrm0, the kernel resource
-                  manager; /dev/tpm0 when the kernel provides none)
-  --nvram INDEX   NVRAM slot number or full index in hex
-                  Slot shorthand: 0-15 maps to 0x01803010-0x0180301F
-                  Full index:     any hex value like 0x01803010
-                  When omitted, commands automatically discover and operate on
-                  all populated slots in the default range.
-  --debug         Enable debug output
-
-SEAL OPTIONS:
-  --pcrs INDICES     PCR indices with optional source suffix (default: 0,2,7)
-                     Suffix 'r' = read from TPM registers (default if no suffix)
-                     Suffix 'e' = calculate from TPM eventlog (PCRs 0-12 only)
-                     Suffix 'u[:PATH]' = compute from a unified kernel image (PCR 11 only)
-                       Replays systemd-stub's section measurements internally
-                     Examples: "0,2,7" (all register), "0e,2e,7e" (all eventlog),
-                               "0e,2,7e" (mixed: 0 and 7 from eventlog, 2 from register)
-                               "0e,2e,7e,11u" (eventlog + UKI-computed PCR 11)
-  --measure-point M  Account for systemd's enter-initrd extend of PCR 11, which
-                     happens before tpm2-kira runs: auto (default), on, off.
-                     PCRs 0-7, 9, 12-14 are always sealed to their values before
-                     systemd-pcrosseparator.service (replayed from the event
-                     log): the display runs before it, and the separator then
-                     locks the secret until the next boot
-  --pubkey PATH      Path to the signing key's public half (PEM): it approves
-                     PCR values for the key and authorizes NV writes
-                     (default: %s)
-                     Accepts X.509 certificates or raw public keys (RSA, ECDSA)
-  --privkey PATH     Path to signing private key PEM (optional)
-                     Both key paths are stored in the blob so reseal can find
-                     them automatically without requiring --pubkey / --privkey
-  --sha1             Use SHA-1 PCR bank instead of SHA-256 (default: SHA-256)
-                     Use only if firmware eventlog does not provide SHA-256 digests
-  --verify-uki       Check the built-in PCR 11 computation against this boot's
-                     event log before sealing (default: true)
-
-RUN OPTIONS:
-  --hold S           Seconds to wait for Enter after showing the code before
-                     the boot continues on its own (default 90, 0: at once).
-                     While waiting, a fresh code is shown every 30 seconds;
-                     Enter releases the boot, after which no code can be
-                     computed until the next boot (the OS separator)
-  --gate SOCKET      Also be the coordinator of the Bluetooth gate on this
-                     socket (set by the initrd unit): hold the TPM for the
-                     radio worker ('attest gate --coordinator'), read the
-                     phone's receipt, and release the boot on its verdict.
-                     Only with attestation enabled and a phone enrolled.
-                     The phone check ends when the boot is released
-
-RESEAL OPTIONS:
-  --pcrs INDICES     New PCR indices with optional source suffix (optional,
-                     preserves original selection and per-PCR sources if omitted)
-  --measure-point M  Same as for seal: auto (default), on, off
-  --pubkey PATH      Path to signing public key PEM (optional). Must belong to
-                     --privkey; default: derived from the private key.
-  --privkey PATH     Path to signing private key (default: the key from setup).
-                     It verifies the blob's signature, authorizes the NV write
-                     and approves the new PCR values. A key
-                     path stored in the blob is never used to find it.
-  --require-key      With the key on a YubiKey: fail when the token or its PIN
-                     is unavailable. By default reseal then prints SKIPPED,
-                     leaves every slot untouched, and exits normally.
-
-INFO OPTIONS:
-  --json             Output as JSON
-  --privkey PATH     Signing private key to verify each blob with
-                     (default: the key from setup). A blob that does not
-                     verify is shown as untrusted, and no file it names is
-                     opened.
-
-NVRAM SUBCOMMANDS:
-  list               List all NVRAM indices
-  status             Show NVRAM index status
-  delete             Delete NVRAM index (or all populated slots when --nvram is omitted;
-                     that asks for confirmation on a terminal, or needs --yes)
-
-`+attestUsage+`AUTHENTICATION:
-  The TOTP key is an HMAC key inside the TPM; the TPM computes every code and
-  the key never leaves it after seal. It is usable only under a policy the
-  signing key has approved (PolicyAuthorize):
-    - the PCR values sealed for, and
-    - the slot's generation, which every reseal raises to revoke older
-      approvals.
-  reseal approves the new PCR values with the signing key; it never needs
-  the PCRs to match and never reads the key. 'cap' read-locks the generation
-  when the initrd is left, so no code can be computed in the running OS.
-
-  The signing key defaults to a dedicated ECDSA P-256 pair created by 'setup'.
-  Point --privkey at the sbctl secure boot DB key instead to reseal with the
-  same key that signs your boot components.
-
-SETUP OPTIONS:
-  --yubikey[=SERIAL] Take the signing key from a YubiKey PIV slot without
-                     asking. SERIAL picks the token when several are plugged
-                     in. The slot must already hold a key: tpm2-kira never
-                     writes to the token.
-  --slot SLOT        PIV slot with --yubikey (default: 9a). Other slots, such
-                     as an sbctl key in 9c, are only used when named here.
-  --local            Create local key files without looking for a YubiKey.
-  --debug            Enable debug output
-
-  Setup creates /etc/tpm2-kira/keys/ with seal.pub and seal.key. It first
-  looks for a YubiKey. If one holds a usable key, it asks on the terminal
-  whether to use it or local key files; without a terminal it uses local key
-  files. With a YubiKey, seal.key only names the token and slot and seal.pub is
-  the token's public key: no private key is written. Setup needs no PIN.
-  If the keys directory already exists, setup aborts — further changes must
-  be made manually via 'seal' or 'reseal'.
-
-YUBIKEY SUBCOMMANDS:
-  list               List YubiKeys and the keys in their PIV slots, and
-                     which are usable by tpm2-kira. Read-only; no PIN.
-
-  With the signing key on a YubiKey, seal and reseal need the token and its
-  PIN. The PIN is taken from the %s environment variable, else from
-  the TPM2_KIRA_PIN='...' line in /etc/mkinitcpio.conf (which the
-  automatic reseal after initramfs rebuilds needs anyway; refused unless the
-  file is root-owned and readable by root only), else asked on the terminal. reveal, run and info never need the token.
-
-EXAMPLES:
-  tpm2-kira setup
-  tpm2-kira setup --yubikey
-  tpm2-kira setup --yubikey=12345678 --slot 9c
-  tpm2-kira yubikey list
-  tpm2-kira seal
-  tpm2-kira seal --nvram 0
-  tpm2-kira seal --pcrs "0e,2e,7e"
-  tpm2-kira seal --pcrs "0e,2e,7e,11u"
-  tpm2-kira seal --pubkey /path/to/my-key.pem
-  tpm2-kira seal --sha1 --pcrs "0e,2e,7e"
-  tpm2-kira seal --pcrs "0e,2,4,7e"
-  tpm2-kira reveal
-  tpm2-kira reveal --nvram 3
-  tpm2-kira reveal-plain
-  tpm2-kira run
-  tpm2-kira reseal
-  tpm2-kira reseal --nvram 0
-  tpm2-kira reseal --pcrs "0e,2,4,7e"
-  tpm2-kira reseal --privkey /path/to/my-key.key
-  tpm2-kira info
-  tpm2-kira info --nvram 0
-  tpm2-kira info --nvram 0x01803010
-  tpm2-kira nvram list
-  tpm2-kira nvram delete --yes
-  tpm2-kira nvram delete --nvram 0
-  tpm2-kira nvram delete --nvram 0x01803010
-  tpm2-kira nvram restore /etc/tpm2-kira/recovery/slot-0x01803010-1759823456.blob
-  tpm2-kira attest enrol
-  tpm2-kira attest enrol --nvram 0 --name "Thinkpad"
-  tpm2-kira attest enrol --sha1
-  tpm2-kira attest status
-  tpm2-kira attest unenrol --nvram 0
-  tpm2-kira attest ekcert
-  tpm2-kira attest help
-
-For detailed documentation, see README.md
-`, cmd.DefaultPublicKeyPath, cmd.PINEnvVar)
-}

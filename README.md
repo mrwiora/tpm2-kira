@@ -143,42 +143,22 @@ tpm2-kira version
 
 ## Commands
 
-If called without a command, tpm2-kira defaults to `reveal`.
+`tpm2-kira help` is one screen, the commands grouped by what you are doing;
+`tpm2-kira help <command>` (or `<command> --help`) is that command's page
+with its subcommands, options and examples. Called without a command,
+tpm2-kira runs `reveal`.
 
-| Command | Description |
-|---------|-------------|
-| `setup` | One-time initial setup: generate the signing keys (run before `seal`) |
-| `seal` | Generate and seal a new TOTP secret with custom PCR selection (requires `setup` or your own keys) |
-| `reseal` | Approve new PCR values for the existing key (revokes older approvals) |
-| `reveal` | Show the current TOTP code (colored output) |
-| `reveal-plain` | Show the current TOTP code (plain text, for scripts) |
-| `run` | Show a fresh code at boot until Enter (or 90 s), then release the boot |
-| `cap` | Lock code computation until the next reboot (run by the boot integration when leaving the initrd) |
-| `info` | Display metadata about the sealed key, its approval and its generation (`--json` for machine-readable output) |
-| `nvram list` | List NVRAM indices |
-| `nvram status` | Show NVRAM index status |
-| `nvram delete` | Delete a slot (TOTP key and phones), or everything tpm2-kira keeps in the TPM |
-| `nvram restore` | Put a blob back that a failed rewrite stashed under `/etc/tpm2-kira/recovery/` |
-| `attest enrol` | Bind a phone to this machine over Bluetooth LE (see [Remote attestation](#remote-attestation-with-a-phone-experimental)) |
-| `attest gate` | Serve attestation requests until a phone returns a signed verdict |
-| `attest status` | Show which phones are enrolled per slot, and whether the blob is signed by this machine's key (`--json`) |
-| `attest signer` | Print this machine's signing public key for the initramfs, after checking the enrolled records against it and the TPM's record counter (used by the hooks; exit 6 if a record does not pass) |
-| `attest quote` / `attest verify` | Produce evidence without a phone / judge it offline |
-| `attest unenrol` | Remove a slot's phones from its blob (needs the signing key; the TOTP key stays) |
-| `derive` | hashpwd2 by hand: password and salt to a key file on tmpfs for `cryptsetup luksAddKey` |
-| `luks status` / `luks mark` | Which LUKS keyslots are tpm2-kira's (a token in the header), and how their key is made |
-| `pcrtips` | PCR reference guide — what each register measures |
-| `version` | Print version |
+| | Commands |
+|---|---|
+| Setting up the machine | `setup` the signing key · `seal` a new TOTP key to the boot state · `reseal` approve the current boot state (the hooks run it) · `info` a slot · `nvram list\|status\|delete\|restore` |
+| The phone (Marify, Bluetooth LE) | `attest enrol\|unenrol\|status\|gate\|signer\|ekcert\|quote\|verify\|config-check` · `remote-salt enrol\|rotate\|status\|unenrol` |
+| The disk's key | `luks status\|enrol\|mark` · `derive` (hashpwd2 by hand) · the mode in `/etc/tpm2-kira/unlock.conf` |
+| At boot (the units and hooks) | `run` · `cap` · `unlock-key` (Debian keyscript) |
+| By hand | `reveal` / `reveal-plain` · `yubikey list` · `pcrtips` · `version` |
 
-## Global Options
-
-```
---tpm PATH       TPM device path (default: /dev/tpmrm0)
---nvram INDEX    NVRAM slot: 0-15 maps to 0x01803010-0x0180301F,
-                 or specify a full hex index like 0x01803010.
-                 When omitted, commands auto-discover populated slots.
---debug          Verbose output
-```
+Global options come before the command: `--tpm PATH` (default `/dev/tpmrm0`),
+`--nvram INDEX` (a slot 0-15 or a full index such as `0x01803010`; without
+it most commands take every populated slot), `--debug`.
 
 ## Sealing Secrets
 
