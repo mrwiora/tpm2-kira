@@ -197,7 +197,7 @@ Two things fall outside that lock:
 
 - **The signing key.** Whoever can use it can approve a new policy for the
   current state and compute codes at any time. Keep it on a YubiKey (the
-  intended setup); a key file under `/var/lib/tpm2-kira/keys` is the fallback,
+  intended setup); a key file under `/etc/tpm2-kira/keys` is the fallback,
   better than no recovery path, but with it a runtime root has that power.
 - **Blobs whose policy holds after the separator.** Blobs from versions that
   ran after the separator, and blobs sealed from registers because the event

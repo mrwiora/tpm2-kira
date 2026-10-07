@@ -36,6 +36,17 @@ default for a few hours and gave way to `rd.luks.key=` on the kernel
 command line, which is honoured in the initrd only and leaves the running
 system's files alone (docs/UNLOCK-DISK.md §5).
 
+## Key material
+
+### The signing keys lived in /var/lib/tpm2-kira/keys
+
+Until 2026-10-07 `setup` created `/var/lib/tpm2-kira/keys/` (seal.pub,
+seal.key). Moved to `/etc/tpm2-kira/keys/`, where systemd keeps its own
+key material (`/etc/systemd/tpm2-pcr-*`); `/var/lib/tpm2-kira/recovery/`
+stays what it is, a place for NVRAM recovery blobs, not keys. No
+migration: an installed system moves the directory by hand before the
+next `reseal`.
+
 ## Blob format
 
 ### Version 11 — the boot key

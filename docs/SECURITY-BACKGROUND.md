@@ -36,8 +36,8 @@ TPM after enrolment.
 
 ┌──────────────────────────────────────────────────────────────┐
 │                          Filesystem                          │
-│  /var/lib/tpm2-kira/keys/seal.pub   signing public key       │
-│  /var/lib/tpm2-kira/keys/seal.key   signing private key, or  │
+│  /etc/tpm2-kira/keys/seal.pub   signing public key       │
+│  /etc/tpm2-kira/keys/seal.key   signing private key, or  │
 │                                     a YubiKey reference      │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -372,7 +372,7 @@ makes first (PCR values, generation) only produce readable errors.
 > the signing key approves.
 
 Anyone holding the signing private key can approve any state. The key is as
-security-critical as the TPM policy. `/var/lib/tpm2-kira/keys/seal.key` sits on
+security-critical as the TPM policy. `/etc/tpm2-kira/keys/seal.key` sits on
 the encrypted root filesystem, so it is not reachable in the initrd; with a
 YubiKey, it is never on disk.
 
@@ -527,7 +527,7 @@ read-locked: the index's Name for `PolicyNV` is computed with the
 ### 5.5 Key resolution in reseal
 
 ```
-Private key = --privkey flag  →  /var/lib/tpm2-kira/keys/seal.key
+Private key = --privkey flag  →  /etc/tpm2-kira/keys/seal.key
 Public key  = --pubkey flag (must match)  →  derived from the private key
 ```
 
@@ -749,7 +749,7 @@ could not hold the separator back. Its baseline is predicted for that point.
 What the separator does not cover is the signing key: whoever can use it can
 approve a new policy for the current state and compute codes at any time.
 Keep it on a YubiKey (the intended setup), or at least off the machine; a key
-file in `/var/lib/tpm2-kira/keys` is the fallback, and with it a runtime root
+file in `/etc/tpm2-kira/keys` is the fallback, and with it a runtime root
 has that power.
 
 ---

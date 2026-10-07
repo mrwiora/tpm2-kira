@@ -35,7 +35,7 @@ Decisions already taken (§14 records the rest):
 
 ## 1. Goal
 
-Today the PolicySigned recovery key lives at `/var/lib/tpm2-kira/keys/seal.key`
+Today the PolicySigned recovery key lives at `/etc/tpm2-kira/keys/seal.key`
 as a PEM file on the encrypted root filesystem. The goal is to move it into a
 YubiKey PIV slot, so that:
 
@@ -216,8 +216,8 @@ sudo tpm2-kira setup --yubikey
 
 `setup --yubikey` is read-only *towards the token*: it reads the slot and
 reports the key type and the PIN and touch policies. On the filesystem it
-writes two files: the public key to `/var/lib/tpm2-kira/keys/seal.pub`, and the
-token stub (§5) to `/var/lib/tpm2-kira/keys/seal.key`. After that, every
+writes two files: the public key to `/etc/tpm2-kira/keys/seal.pub`, and the
+token stub (§5) to `/etc/tpm2-kira/keys/seal.key`. After that, every
 command that already defaults to `seal.key` uses the token without any new
 flag. Whether the TPM accepts the key is checked by `seal`, which loads it
 before anything is written.
@@ -252,7 +252,7 @@ rather than discovered one touch at a time.
 
 ### 4.5 The public key stays on disk
 
-The slot's public key is cached at `/var/lib/tpm2-kira/keys/seal.pub`, and its
+The slot's public key is cached at `/etc/tpm2-kira/keys/seal.pub`, and its
 path is stored in the blob exactly as it is today. Blob-signature verification,
 the PolicyOR digest and `info` then all work with the token in a drawer. The
 token is only ever needed to *sign*.
@@ -328,7 +328,7 @@ outside the blob, the question is whether an attacker who can replace
 - The stub's `publicKey` is cross-checked against `seal.pub` and against the
   key used to verify the blob signature, so a swapped stub fails before any
   PIN is sent.
-- Writing to `/var/lib/tpm2-kira/keys/` already requires root. Whoever can do
+- Writing to `/etc/tpm2-kira/keys/` already requires root. Whoever can do
   that can also replace a PEM `seal.key`, which is the status quo.
 
 The worst a tampered stub can do is make `reseal` fail, which is the §7
@@ -436,7 +436,7 @@ and stays a `FAILED:`. In code, every such reason is a `TokenUnavailableError`
 
 ```
 tpm2-kira: SKIPPED: resealing did not happen — the signing key was not available.
-  Key file:      /var/lib/tpm2-kira/keys/seal.key (YubiKey 12345678, slot 9a)
+  Key file:      /etc/tpm2-kira/keys/seal.key (YubiKey 12345678, slot 9a)
   Reason:        no YubiKey with serial 12345678 is present
   Slots:         #0, #1 (nothing was written; the sealed secrets are intact)
   Sealed PCRs:   0,7
@@ -527,7 +527,7 @@ Where should the signing key live?
   1) YubiKey 12345678, slot 9a  (ECCP256, PIN once, touch never)  [recommended]
   2) YubiKey 12345678, slot 9c  (RSA2048, PIN always, touch always)
   3) YubiKey 12345678, slot 9d  (ECCP256, PIN never, touch never)  [no PIN required: insecure]
-  4) Local key files in /var/lib/tpm2-kira/keys (the private key is stored on disk)
+  4) Local key files in /etc/tpm2-kira/keys (the private key is stored on disk)
 Choice [1]:
 ```
 

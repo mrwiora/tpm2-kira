@@ -11,7 +11,7 @@
 #   $1 — kernel version
 #   $2 — path to the generated initramfs image
 
-KIRA_KEYS_DIR="/var/lib/tpm2-kira/keys"
+KIRA_KEYS_DIR="/etc/tpm2-kira/keys"
 
 # Only act when tpm2-kira is installed and has been set up.
 if ! command -v tpm2-kira &> /dev/null; then

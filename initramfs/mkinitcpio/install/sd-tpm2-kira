@@ -214,7 +214,7 @@ build() {
 
     _add_bluetooth
 
-    if [[ ! -d /var/lib/tpm2-kira/keys ]]; then
+    if [[ ! -d /etc/tpm2-kira/keys ]]; then
         warning "tpm2-kira: not configured yet; run 'tpm2-kira setup', then 'tpm2-kira seal', and rebuild"
     fi
 }

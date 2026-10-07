@@ -12,7 +12,7 @@ set -e
 STAMP=/run/tpm2-kira/post-update.reminded
 
 command -v tpm2-kira >/dev/null 2>&1 || exit 0
-[ -d /var/lib/tpm2-kira/keys ] || exit 0
+[ -d /etc/tpm2-kira/keys ] || exit 0
 
 # update-initramfs calls us once per kernel version; one reminder is enough.
 [ -e "$STAMP" ] && exit 0

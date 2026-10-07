@@ -3,7 +3,7 @@ set -e
 
 case "$1" in
 configure)
-    if [ ! -d /var/lib/tpm2-kira/keys ]; then
+    if [ ! -d /etc/tpm2-kira/keys ]; then
         # Deliberately not automatic: seal generates a NEW TOTP secret and
         # prints a QR code that has to be scanned interactively.
         echo "tpm2-kira: not configured yet. Run 'sudo tpm2-kira setup' to create"

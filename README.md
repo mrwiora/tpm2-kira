@@ -75,7 +75,7 @@ sudo tpm2-kira seal --pcrs 0,7,11u
 tpm2-kira reveal
 ```
 
-`setup` creates an ECDSA P-256 key pair at `/var/lib/tpm2-kira/keys/` and nothing else. `seal` creates a TOTP key inside the TPM, here approved for PCRs 0, 7 and 11; scan the QR code it prints with your authenticator app. Without a unified kernel image, see [Choosing PCRs](#choosing-pcrs): a selection that leaves out the kernel, initrd and command line lets a modified initrd show a valid code. `seal` refuses to run until `setup` has created the keys (or you pass your own with `--privkey` / `--pubkey`).
+`setup` creates an ECDSA P-256 key pair at `/etc/tpm2-kira/keys/` and nothing else. `seal` creates a TOTP key inside the TPM, here approved for PCRs 0, 7 and 11; scan the QR code it prints with your authenticator app. Without a unified kernel image, see [Choosing PCRs](#choosing-pcrs): a selection that leaves out the kernel, initrd and command line lets a modified initrd show a valid code. `seal` refuses to run until `setup` has created the keys (or you pass your own with `--privkey` / `--pubkey`).
 
 ## Installation
 
@@ -380,7 +380,7 @@ hash of the logged payload, so re-hashing the payloads would be wrong.
 
 ### Custom signing keys
 
-By default, `setup` generates keys at `/var/lib/tpm2-kira/keys/`. You can supply your own (RSA-2048, ECDSA P-256, or ECDSA P-384):
+By default, `setup` generates keys at `/etc/tpm2-kira/keys/`. You can supply your own (RSA-2048, ECDSA P-256, or ECDSA P-384):
 
 ```bash
 tpm2-kira seal --pubkey /path/to/key.pub --privkey /path/to/key.pem
@@ -416,7 +416,7 @@ When PCR values change (kernel update, initramfs rebuild, firmware update), the 
 tpm2-kira reseal
 
 # Or specify the key explicitly
-tpm2-kira reseal --privkey /var/lib/tpm2-kira/keys/seal.key
+tpm2-kira reseal --privkey /etc/tpm2-kira/keys/seal.key
 ```
 
 You can also change the PCR selection during reseal:
@@ -882,7 +882,7 @@ sudo make uninstall-mkinitcpio
 sudo mkinitcpio -P
 
 # Optionally remove signing keys
-sudo rm -rf /var/lib/tpm2-kira
+sudo rm -rf /etc/tpm2-kira/keys
 ```
 
 On Arch:
@@ -897,7 +897,7 @@ tpm2-kira nvram delete --yes
 sudo apt remove tpm2-kira
 ```
 
-Purging the Debian package deliberately leaves `/var/lib/tpm2-kira` in place:
+Purging the Debian package deliberately leaves `/etc/tpm2-kira/keys` in place:
 the signing key is the only way to approve new PCR values for a key that may
 still be sealed in the TPM. Delete the slot first, then the directory.
 

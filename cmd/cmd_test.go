@@ -513,8 +513,8 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 						{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
 					PolicyRef:      make([]byte, 32),
-					PublicKeyPath:  "/var/lib/tpm2-kira/keys/seal.pub",
-					PrivateKeyPath: "/var/lib/tpm2-kira/keys/seal.key",
+					PublicKeyPath:  "/etc/tpm2-kira/keys/seal.pub",
+					PrivateKeyPath: "/etc/tpm2-kira/keys/seal.key",
 				},
 			},
 		},
@@ -2980,8 +2980,8 @@ func TestMarshalPayloadUnmarshalPayloadRoundTrip(t *testing.T) {
 			TotalEvents:     100,
 			ProcessedEvents: 50,
 		},
-		PublicKeyPath:  "/var/lib/tpm2-kira/keys/seal.pub",
-		PrivateKeyPath: "/var/lib/tpm2-kira/keys/seal.key",
+		PublicKeyPath:  "/etc/tpm2-kira/keys/seal.pub",
+		PrivateKeyPath: "/etc/tpm2-kira/keys/seal.key",
 	}
 
 	data, err := original.MarshalPayload()

@@ -37,13 +37,13 @@ func captureStdout(t *testing.T, fn func()) string {
 
 func TestQuoteUntrusted(t *testing.T) {
 	for in, want := range map[string]string{
-		"/var/lib/tpm2-kira/keys/seal.key": "/var/lib/tpm2-kira/keys/seal.key",
-		"v0.3.1":                           "v0.3.1",
-		"":                                 `""`,
-		"a b":                              `"a b"`,
-		"\x1b[2J":                          `"\x1b[2J"`,
-		"x\nFAKE LINE":                     `"x\nFAKE LINE"`,
-		"\xff":                             `"\xff"`,
+		"/etc/tpm2-kira/keys/seal.key": "/etc/tpm2-kira/keys/seal.key",
+		"v0.3.1":                       "v0.3.1",
+		"":                             `""`,
+		"a b":                          `"a b"`,
+		"\x1b[2J":                      `"\x1b[2J"`,
+		"x\nFAKE LINE":                 `"x\nFAKE LINE"`,
+		"\xff":                         `"\xff"`,
 	} {
 		if got := quoteUntrusted(in); got != want {
 			t.Errorf("quoteUntrusted(%q) = %s, want %s", in, got, want)

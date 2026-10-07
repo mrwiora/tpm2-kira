@@ -701,7 +701,7 @@ SETUP OPTIONS:
   --local            Create local key files without looking for a YubiKey.
   --debug            Enable debug output
 
-  Setup creates /var/lib/tpm2-kira/keys/ with seal.pub and seal.key. It first
+  Setup creates /etc/tpm2-kira/keys/ with seal.pub and seal.key. It first
   looks for a YubiKey. If one holds a usable key, it asks on the terminal
   whether to use it or local key files; without a terminal it uses local key
   files. With a YubiKey, seal.key only names the token and slot and seal.pub is
