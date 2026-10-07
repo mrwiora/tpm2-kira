@@ -66,22 +66,38 @@ typed passphrase without a trailing newline opens the same keyslot.
 ## 3. The secure way to plug in
 
 **Configure, do not patch.** A key source is the administrator's
-statement in `/etc/crypttab`, the same place `tpm2-device=auto` or a key
-file is written:
+statement, in the same place `tpm2-device=auto` or a key file would be
+written. tpm2-kira is for the main disk, and on a systemd initrd the
+main disk is named on the kernel command line (`rd.luks.name=`), so its
+key file is named there too:
+
+```
+rd.luks.name=<UUID>=cryptroot rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock
+```
+
+`rd.luks.key=` is "the analogue of the third crypttab(5) field", honoured
+in the initrd only: the generator passes the path to `systemd-cryptsetup`
+as the key file, and the main system never sees it. `/etc/crypttab` is
+not touched. `rd.luks.key=/run/tpm2-kira/unlock.sock` without a UUID
+applies to every volume named on the command line.
+
+A volume kept in `/etc/crypttab` with `x-initrd.attach` instead takes
+the socket in that line's key field:
 
 ```
 cryptroot  UUID=…  /run/tpm2-kira/unlock.sock  x-initrd.attach,discard
 ```
 
-sd-encrypt copies that line into the image unchanged; the generator turns
-it into the unit; `systemd-cryptsetup` connects. No hook rewrites
-anything, no hook replaces another, the order of hooks does not matter,
-and reading the configuration tells the truth. After switch-root the
-main system's `systemd-cryptsetup@cryptroot.service` finds the volume
-already active and exits 0; the socket's absence there is irrelevant.
+sd-encrypt copies the line into the image unchanged and the generator
+turns it into the unit. After switch-root the main system's
+`systemd-cryptsetup@cryptroot.service` finds the volume already active
+and exits 0; the socket's absence there is irrelevant. This is the form
+for a second volume, or for a setup that does not name the disk on the
+command line; it is not the default, because it changes a file of the
+running system for something that happens in the initrd only.
 
-A volume named only on the kernel command line gets the same with
-`rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock`.
+Either way no hook rewrites anything, no hook replaces another, the order
+of hooks does not matter, and reading the configuration tells the truth.
 
 **Provide the socket with a socket unit.** `tpm2-kira-unlock.socket`
 creates `/run/tpm2-kira/unlock.sock` (root, 0600) `Before=cryptsetup-pre.target`
@@ -133,5 +149,8 @@ hibernation image; the initrd has no swap and no hibernation.
 Rewriting the image's crypttab from the hook (and then sourcing
 sd-encrypt's build function to be allowed to run after it) worked, but it
 made the hook order matter, hid the key source from the configuration and
-replaced a distribution hook to avoid asking for one line. The line is the
-right answer; see HISTORY.md.
+replaced a distribution hook to avoid asking for one parameter. Telling
+the administrator to put the socket into `/etc/crypttab` by default was
+the next step and also dropped: it edits a file of the running system for
+the initrd's sake, when the command line already names the disk. The
+parameter is the right answer; see HISTORY.md.

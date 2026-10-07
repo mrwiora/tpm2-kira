@@ -140,39 +140,54 @@ _add_bluetooth() {
 
 UNLOCK_SOCKET=/run/tpm2-kira/unlock.sock
 
-# The disk's unlock goes through tpm2-kira when /etc/crypttab says so: a
-# volume whose key field is tpm2-kira's socket is unlocked by
-# systemd-cryptsetup with the key it reads from there (crypttab(5), "AF_UNIX
-# KEY FILES"), which tpm2-kira answers once the code screen is confirmed.
-# The sd-encrypt hook copies the x-initrd.attach lines into the image as
-# they are; this hook adds the socket unit and reports, per volume, where
-# its key comes from. It reads the host's crypttab, not the image's, so it
-# does not matter which of the two hooks runs first.
+# The disk's unlock goes through tpm2-kira when the volume's key file is
+# tpm2-kira's socket: systemd-cryptsetup reads the key from there
+# (crypttab(5), "AF_UNIX KEY FILES") and tpm2-kira answers once the code
+# screen is confirmed. The key file is named on the kernel command line,
+# rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock, honoured in the initrd
+# only (systemd-cryptsetup-generator(8)); or, for a volume kept in
+# /etc/crypttab with x-initrd.attach, in that line's key field. This hook
+# adds the socket unit and reports what it finds configured: the command
+# line of the running system and the files the UKI is built from, and the
+# crypttab. Nothing is written.
 _add_unlock() {
     local crypttab=${1:-/etc/crypttab}
-    local name key opts n=0
-    local -a prompt=()
+    shift
+    local -a cmdlines=("$@")
+    (( ${#cmdlines[@]} )) || cmdlines=(/proc/cmdline /etc/kernel/cmdline /etc/cmdline.d/*.conf)
+    local f word uuid name key opts routed=0
 
     add_systemd_unit tpm2-kira-unlock.socket
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-unlock.socket \
         /usr/lib/systemd/system/tpm2-kira-unlock.socket
 
+    for f in "${cmdlines[@]}"; do
+        [[ -r $f ]] || continue
+        for word in $(< "$f"); do
+            case $word in
+                rd.luks.key=*=$UNLOCK_SOCKET|luks.key=*=$UNLOCK_SOCKET)
+                    uuid=${word#*=}
+                    uuid=${uuid%%=*}
+                    plain "tpm2-kira: the volume $uuid is unlocked through tpm2-kira's prompt ($f)"
+                    routed=1
+                    ;;
+                rd.luks.key=$UNLOCK_SOCKET|luks.key=$UNLOCK_SOCKET)
+                    plain "tpm2-kira: every volume named on the kernel command line is unlocked through tpm2-kira's prompt ($f)"
+                    routed=1
+                    ;;
+            esac
+        done
+    done
     while read -r name _ key opts; do
-        (( n++ ))
         if [[ $key == "$UNLOCK_SOCKET" ]]; then
-            plain "tpm2-kira: $name is unlocked through tpm2-kira's prompt"
-        elif [[ -z $key || $key == none || $key == - ]] &&
-            [[ ,$opts, != *,tpm2-device=* && ,$opts, != *,fido2-device=* && ,$opts, != *,pkcs11-uri=* && ,$opts, != *,keyscript=* ]]; then
-            prompt+=("$name")
+            plain "tpm2-kira: $name is unlocked through tpm2-kira's prompt ($crypttab)"
+            routed=1
         fi
     done < <(awk '!/^\s*($|#)/ && $4 ~ /x-initrd\.attach/' "$crypttab" 2>/dev/null)
 
-    if (( n == 0 )); then
-        warning "tpm2-kira: no x-initrd.attach line in /etc/crypttab; a volume named on the kernel command line goes through tpm2-kira with rd.luks.key=<UUID>=$UNLOCK_SOCKET"
+    if (( ! routed )); then
+        warning "tpm2-kira: no volume is unlocked through tpm2-kira yet; add rd.luks.key=<UUID>=$UNLOCK_SOCKET to the kernel command line (README, \"Configure the disk unlock\")"
     fi
-    for name in "${prompt[@]}"; do
-        warning "tpm2-kira: $name is asked for by systemd's own prompt, not tpm2-kira's; to change that, put $UNLOCK_SOCKET into its key field in /etc/crypttab"
-    done
 }
 
 build() {
@@ -215,11 +230,12 @@ The hook will:
 - Add tpm2-kira.service, tpm2-kira-cap.service and tpm2-kira-unlock.socket
   and enable them inside the image only
 - Start tpm2-kira in continuous run mode during boot
-- Report where each volume's key comes from: a volume whose key field in
-  /etc/crypttab is /run/tpm2-kira/unlock.sock (crypttab(5), AF_UNIX key
-  files) is unlocked by systemd-cryptsetup with the key tpm2-kira provides,
-  asked at its prompt once the code screen is confirmed. The sd-encrypt
-  hook copies the line into the image as it is; nothing is rewritten.
+- Report which volumes are unlocked through tpm2-kira: those whose key
+  file is /run/tpm2-kira/unlock.sock (crypttab(5), AF_UNIX key files),
+  named on the kernel command line as rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock
+  or in the key field of an x-initrd.attach line of /etc/crypttab.
+  systemd-cryptsetup reads the key from tpm2-kira, which asks at its
+  prompt once the code screen is confirmed. Nothing is written.
 - If /etc/tpm2-kira/attest.conf sets TPM2_KIRA_ATTEST=lazy and a phone is
   enrolled: add the Bluetooth adapter's driver modules and firmware, and
   tpm2-kira-attest.service, which serves attestation requests from the phone
@@ -249,7 +265,7 @@ Prerequisites:
 
 Usage in /etc/mkinitcpio.conf (either order):
   HOOKS=(... sd-tpm2-kira sd-encrypt ...)
-and in /etc/crypttab:
-  cryptroot  UUID=...  /run/tpm2-kira/unlock.sock  x-initrd.attach
+and on the kernel command line, next to rd.luks.name=<UUID>=cryptroot:
+  rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock
 HELPEOF
 }

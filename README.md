@@ -607,21 +607,36 @@ HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt fi
 ### Configure the disk unlock
 
 The passphrase is asked at tpm2-kira's prompt, after the code screen, for
-every volume whose key file in `/etc/crypttab` is tpm2-kira's socket:
+every volume whose *key file* is tpm2-kira's socket,
+`/run/tpm2-kira/unlock.sock`. That is `crypttab(5)`'s own way of taking a
+key from a service ("AF_UNIX key files"): `systemd-cryptsetup` connects
+to the socket and reads the key when it activates the volume. tpm2-kira
+is meant for the main disk, which on a systemd initrd is named on the
+kernel command line; name its key file there too, next to
+`rd.luks.name=`:
 
 ```
-cryptroot  UUID=…  /run/tpm2-kira/unlock.sock  x-initrd.attach,discard
+rd.luks.name=<UUID>=cryptroot rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock
 ```
 
-That is `crypttab(5)`'s own way of taking a key from a service ("AF_UNIX
-key files"); `sd-encrypt` copies the line into the image as it is, and
-`systemd-cryptsetup` reads the key from tpm2-kira when it activates the
-volume. A volume configured only on the kernel command line
-(`rd.luks.name=`) gets the same with
-`rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock`. Volumes with `none` or
-`-` in the key field are still asked for by systemd's own console prompt;
-`mkinitcpio` names them. Volumes with a key file or a token
-(`tpm2-device=`, `fido2-device=`, `pkcs11-uri=`) are not tpm2-kira's.
+`<UUID>` is the LUKS UUID (`cryptsetup luksUUID /dev/<partition>`), the
+same in both. `rd.luks.key=` is honoured in the initrd only
+(`systemd-cryptsetup-generator(8)`), so the running system sees no
+change. With a UKI the command line is the file in your preset
+(`/etc/kernel/cmdline` or `/etc/cmdline.d/`); with a boot loader it is
+the entry's `options` line. `rd.luks.key=/run/tpm2-kira/unlock.sock`
+without a UUID routes every volume named on the command line.
+
+`mkinitcpio` reports what is configured (`the volume <UUID> is unlocked
+through tpm2-kira's prompt`) or, if nothing is, the parameter to add.
+`/etc/crypttab` is not touched and does not need to be: only if a volume
+is kept there with `x-initrd.attach` instead of on the command line, the
+same socket goes into that line's key field
+(`cryptroot UUID=… /run/tpm2-kira/unlock.sock x-initrd.attach`), and
+`sd-encrypt` copies it into the image as it is. Volumes with `none` or
+`-` as key file are still asked for by systemd's own console prompt;
+volumes with a key file or a token (`tpm2-device=`, `fido2-device=`,
+`pkcs11-uri=`) are not tpm2-kira's.
 
 Then rebuild:
 

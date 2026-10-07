@@ -413,7 +413,7 @@ comparison, not a false pass.
 
 Step 7 is where the disk's key enters, and it is deliberately
 systemd-cryptsetup's own mechanism (crypttab(5), AF_UNIX key files, the
-socket named in the key field of `/etc/crypttab`) rather than a prompt of
+socket named as the volume's key file by `rd.luks.key=`) rather than a prompt of
 tpm2-kira's that systemd knows nothing about: the volume is activated by
 systemd-cryptsetup with its crypttab options, after the OS separator as
 always, and only the source of the key moves. What tpm2-kira answers with
@@ -436,8 +436,9 @@ place a key file would be. The transfer, step by step:
 1.  tpm2-kira-unlock.socket creates /run/tpm2-kira/unlock.sock (root, 0600)
     before cryptsetup-pre.target; tpm2-kira.service adopts it (Sockets=,
     LISTEN_FDS).
-2.  /etc/crypttab names that path in the key field of the volume; the
-    sd-encrypt hook copied the line into the image, and the generator made
+2.  The kernel command line names that path as the volume's key file
+    (rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock; or an x-initrd.attach
+    line of /etc/crypttab does, in its key field), and the generator made
     systemd-cryptsetup@<volume>.service from it before any unit ran.
 3.  systemd-cryptsetup@<volume>.service runs
       systemd-cryptsetup attach <volume> <device> /run/tpm2-kira/unlock.sock
@@ -463,7 +464,7 @@ udev rules, the crypttab in the image. What is tpm2-kira's: the socket
 unit and the provider (`cmd/unlock.go`), whose key source is one function
 of the volume name - enforced mode and factor release replace that
 function, not the transfer. The configuration is the administrator's
-line in `/etc/crypttab`.
+`rd.luks.key=` on the kernel command line.
 
 The transfer is the one systemd offers for exactly this: a key provider
 service. systemd's interactive path (the password agent on

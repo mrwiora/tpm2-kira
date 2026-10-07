@@ -29,9 +29,12 @@ The first key-provider branch (feat/unlock-disk, same day, never merged)
 had the mkinitcpio hook put the socket into the key field of the image's
 crypttab itself, which made it depend on sd-encrypt running first; it then
 sourced sd-encrypt's build function to stand in for that hook altogether.
-Dropped for the line in `/etc/crypttab`: the key source is configuration,
+Dropped: the key source is configuration,
 as it is for `tpm2-device=` and key files, and no hook of ours patches or
-replaces a distribution hook (docs/UNLOCK-DISK.md §5).
+replaces a distribution hook. The crypttab line was then the documented
+default for a few hours and gave way to `rd.luks.key=` on the kernel
+command line, which is honoured in the initrd only and leaves the running
+system's files alone (docs/UNLOCK-DISK.md §5).
 
 ## Blob format
 

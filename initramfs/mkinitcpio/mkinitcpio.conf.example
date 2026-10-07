@@ -37,8 +37,9 @@ FILES=()
 # SYSTEMD INITRAMFS WITH TPM2-KIRA AND ENCRYPTION
 # sd-tpm2-kira requires a systemd-based initramfs with sd-encrypt; the order
 # of the two does not matter. The passphrase is asked at tpm2-kira's prompt
-# for every volume whose key file in /etc/crypttab is
-# /run/tpm2-kira/unlock.sock (see the README, "Configure the disk unlock").
+# for every volume whose key file is /run/tpm2-kira/unlock.sock, set on the
+# kernel command line as rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock (see
+# the README, "Configure the disk unlock").
 HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
 
 # OTHER COMMON CONFIGURATIONS
@@ -94,7 +95,8 @@ HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt fi
 # 5. Compatibility:
 #    - sd-tpm2-kira requires a systemd-based initramfs ('systemd' in HOOKS)
 #      with sd-encrypt; tpm2-kira provides the key of the volumes whose
-#      key file in /etc/crypttab is /run/tpm2-kira/unlock.sock
+#      key file is /run/tpm2-kira/unlock.sock (rd.luks.key= on the kernel
+#      command line)
 #
 # 6. After Configuration:
 #    - Rebuild initramfs: sudo mkinitcpio -P

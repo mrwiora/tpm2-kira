@@ -517,8 +517,8 @@ phone's screen authoritative.
 
 **Arch / systemd initramfs, as built.** tpm2-kira is the key provider of
 the volumes the initrd unlocks: `tpm2-kira-unlock.socket` is the key file
-of each of them (crypttab(5), AF_UNIX key files, named in the key field
-of `/etc/crypttab`), `systemd-cryptsetup` connects to it when it
+of each of them (crypttab(5), AF_UNIX key files, named by `rd.luks.key=`
+on the kernel command line), `systemd-cryptsetup` connects to it when it
 activates the volume and reads the key, and `tpm2-kira.service` answers
 once the code screen's hold has ended. Enforced mode is then nothing but
 "do not answer before the phone's verdict is `ok`": the request waits for
