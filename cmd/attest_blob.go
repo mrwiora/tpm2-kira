@@ -55,8 +55,12 @@ type Attestation struct {
 	// The boot key (bootkey.go): usable only under the slot's policy.
 	BootKeyPublic  []byte // marshalled TPMT_PUBLIC
 	BootKeyPrivate []byte // TPM2B_PRIVATE contents, wrapped by the storage primary
-	PCRAlg         uint16
-	PCRSelection   []uint8
+	// The release key (factor.go): the object a wrapped factor is made
+	// for, under the slot's policy plus PolicyCommandCode(ActivateCredential).
+	ReleaseKeyPublic  []byte // marshalled TPMT_PUBLIC
+	ReleaseKeyPrivate []byte // TPM2B_PRIVATE contents, wrapped by the storage primary
+	PCRAlg            uint16
+	PCRSelection      []uint8
 	// Count is the revision of the attestation part: the value of the
 	// slot's TPM counter when the part was last changed (attest_counter.go).
 	// It does not count attestations; it moves when verifiers are added or
@@ -188,6 +192,8 @@ func (b *Attestation) marshal() ([]byte, error) {
 	w.u16(b.EKAlg)
 	w.lp32(b.BootKeyPublic)
 	w.lp32(b.BootKeyPrivate)
+	w.lp32(b.ReleaseKeyPublic)
+	w.lp32(b.ReleaseKeyPrivate)
 	w.u16(b.PCRAlg)
 	w.lp16(b.PCRSelection)
 	w.u64(b.Count)
@@ -247,6 +253,8 @@ func unmarshalAttestation(data []byte) (*Attestation, error) {
 	b.EKAlg = r.u16()
 	b.BootKeyPublic = r.lp32(4096)
 	b.BootKeyPrivate = r.lp32(4096)
+	b.ReleaseKeyPublic = r.lp32(4096)
+	b.ReleaseKeyPrivate = r.lp32(4096)
 	b.PCRAlg = r.u16()
 	b.PCRSelection = r.lp16(attest.MaxPCRIndex)
 	b.Count = r.u64()

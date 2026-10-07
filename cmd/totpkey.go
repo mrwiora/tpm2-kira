@@ -434,6 +434,13 @@ func TOTPCode(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, t time.T
 // key). The session runs its policy when a command uses it. The caller calls
 // done once that command has been executed.
 func approvedSession(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32) (tpm2.Session, func(), error) {
+	return approvedSessionThen(tpmDev, blob, blobIndex, nil)
+}
+
+// approvedSessionThen is approvedSession with one more policy command run
+// after PolicyAuthorize, for an object whose policy extends the slot's
+// (the release key: PolicyCommandCode, attest.ReleaseKeyPolicy).
+func approvedSessionThen(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, then func(transport.TPM, tpm2.TPMISHPolicy) error) (tpm2.Session, func(), error) {
 	p := &blob.Payload
 	signingPublic, err := tpm2.Unmarshal[tpm2.TPMTPublic](p.SigningPublic)
 	if err != nil {
@@ -504,6 +511,9 @@ func approvedSession(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32) (
 			CheckTicket:    ticket.Validation,
 		}).Execute(tpm); err != nil {
 			return fmt.Errorf("PolicyAuthorize: %w", err)
+		}
+		if then != nil {
+			return then(tpm, handle)
 		}
 		return nil
 	})

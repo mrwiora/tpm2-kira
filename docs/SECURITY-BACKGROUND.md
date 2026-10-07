@@ -49,7 +49,7 @@ TPM after enrolment.
 ### 3.1 TPM NVRAM (the "blob")
 
 Each slot's NV index (default `0x01803010`; slot *n* is `0x01803010` + *n*)
-stores one serialised `SealedBlob` (format version 11, §10). It always holds
+stores one serialised `SealedBlob` (format version 12, §10). It always holds
 the slot's TOTP key. Remote attestation is an optional part of the same blob,
 and within that part the way a verifier reaches the machine is a typed
 *method*: today phones over Bluetooth LE; a verification server over the
@@ -87,6 +87,8 @@ the machine as an attester, whatever the method:
 | `EKAlg`         | Which endorsement key template enrolment used (ECC or RSA)           | No         |
 | `BootKeyPublic` | TPMT_PUBLIC of the boot key (§3.4)                                   | No         |
 | `BootKeyPrivate`| TPM2B_PRIVATE of the boot key (TPM-wrapped)                          | **Yes**¹   |
+| `ReleaseKeyPublic` | TPMT_PUBLIC of the release key (§3.7)                             | No         |
+| `ReleaseKeyPrivate`| TPM2B_PRIVATE of the release key (TPM-wrapped)                    | **Yes**¹   |
 | `PCRAlg`, `PCRSelection` | The PCR bank and registers that are quoted                  | No         |
 | `Count`         | Value of the slot's record counter when the part last changed (§3.3) | No         |
 | methods         | Who may ask for a quote, and over what: typed blocks, below          | Partly⁵    |
@@ -954,7 +956,7 @@ on such a system. Supporting owner auth is outside the current design.
 
 ---
 
-## 10. Blob Format (Version 11)
+## 10. Blob Format (Version 12)
 
 The blob is a binary-serialised structure with explicit length prefixes and
 maximum size limits to prevent memory exhaustion during deserialisation.
@@ -1055,6 +1057,10 @@ Offset  Field                   Type        Notes
 ?         BootKeyPublic         []byte      TPMT_PUBLIC of the boot key (§3.4)
 ?         BootKeyPrivate length uint32      ≤ 4096
 ?         BootKeyPrivate        []byte      TPM2B_PRIVATE (TPM-wrapped)
+?         ReleaseKeyPublic length  uint32   ≤ 4096
+?         ReleaseKeyPublic      []byte      TPMT_PUBLIC of the release key (§3.7); empty until a factor is enrolled
+?         ReleaseKeyPrivate length uint32   ≤ 4096
+?         ReleaseKeyPrivate     []byte      TPM2B_PRIVATE (TPM-wrapped)
 ?         PCRAlg                uint16      TPM_ALG_SHA256 or TPM_ALG_SHA1
 ?         PCRSelection length   uint16      ≤ 24
 ?         PCRSelection          []uint8     PCR indices that are quoted
