@@ -5,12 +5,12 @@ package main
 
 import (
 	"bytes"
-	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -82,9 +82,17 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	}
 	defer cl.Close()
 	prompts := make(chan string, 8)
-	// What the person "types" at the next prompts: the password and the
-	// salt; "" closes the console without an answer (Ctrl-C: no key).
-	answers := make(chan [2]string, 8)
+	// What the person "types" at the prompts of the next attempt: the
+	// password and the salt; "" closes the console without an answer
+	// (Ctrl-C: no key). The provider opens the console once per prompt,
+	// so the answers are kept, not queued.
+	var answersMu sync.Mutex
+	var current [2]string
+	answer := func(pw, salt string) {
+		answersMu.Lock()
+		current = [2]string{pw, salt}
+		answersMu.Unlock()
+	}
 	go func() {
 		for {
 			c, err := cl.Accept()
@@ -93,9 +101,11 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 			}
 			go func() {
 				defer c.Close()
-				a := <-answers
+				answersMu.Lock()
+				a := current
+				answersMu.Unlock()
 				buf := make([]byte, 1024)
-				for i := 0; i < 2; i++ {
+				for {
 					n, err := c.Read(buf)
 					if err != nil {
 						return
@@ -111,11 +121,10 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 						c.Write([]byte(a[1] + "\n"))
 					}
 				}
-				io.Copy(io.Discard, c)
 			}()
 		}
 	}()
-	answers <- [2]string{password, salt}
+	answer(password, salt)
 	run := exec.Command("./tpm2-kira", "run", "--tpm", filepath.Join(dir, "no-tpm"), "--hold", "0", "--unlock", sock)
 	run.Env = append(os.Environ(), "TPM2_KIRA_CONSOLE="+console, "TPM2_KIRA_UNLOCK_CONF="+conf)
 	var runOut bytes.Buffer
@@ -125,7 +134,15 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	}
 	defer func() {
 		run.Process.Signal(os.Interrupt)
-		run.Wait()
+		done := make(chan error, 1)
+		go func() { done <- run.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Errorf("tpm2-kira run did not end on SIGINT within 5 s; killed. Its output:\n%s", runOut.String())
+			run.Process.Kill()
+			<-done
+		}
 	}()
 	for i := 0; i < 100; i++ {
 		if _, err := os.Stat(sock); err == nil {
@@ -160,9 +177,9 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 		t.Fatalf("detach: %v: %s", err, out)
 	}
 
-	// The token logic is not served: a saved key request gets nothing and
-	// the activation fails rather than hangs.
-	bad := exec.Command(sdc, "attach", volume, loop, sock, "tpm2-device=auto")
+	// The token logic is not served: a saved key request gets nothing, and
+	// systemd-cryptsetup goes to its own prompt (headless: fails).
+	bad := exec.Command(sdc, "attach", volume, loop, sock, "tpm2-device=auto,headless=true")
 	bad.Env = append(os.Environ(), "SYSTEMD_LOG_LEVEL=info")
 	if out, err := bad.CombinedOutput(); err == nil {
 		exec.Command(sdc, "detach", volume).Run()
@@ -174,7 +191,7 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	// itself (its password agent) for the remaining tries. headless=true
 	// makes that step fail with a message instead of a prompt, which is
 	// how the test sees that the fallback was reached.
-	answers <- [2]string{password, "not the salt"}
+	answer(password, "not the salt")
 	wrong := exec.Command(sdc, "attach", volume, loop, sock, "headless=true")
 	wrong.Env = append(os.Environ(), "SYSTEMD_LOG_LEVEL=info")
 	out, err = wrong.CombinedOutput()
@@ -191,7 +208,7 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 
 	// No answer at all (the prompt cancelled: tpm2-kira closes without a
 	// key) reads as an empty key file, and the fallback is the same prompt.
-	answers <- [2]string{"", ""}
+	answer("", "")
 	none := exec.Command(sdc, "attach", volume, loop, sock, "headless=true")
 	none.Env = append(os.Environ(), "SYSTEMD_LOG_LEVEL=info")
 	out, err = none.CombinedOutput()
