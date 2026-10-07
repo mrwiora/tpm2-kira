@@ -324,12 +324,13 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	gate := fs.String("gate", "", "Also be the Bluetooth gate's coordinator on this socket: hold the TPM for 'attest gate --coordinator' and let the phone's verdict release the boot (set by the initrd unit)")
 	hold := fs.Uint("hold", uint(cmd.HoldDefault/time.Second), "Seconds to wait for Enter after showing the code before the boot continues on its own (0: at once)")
+	unlock := fs.String("unlock", "", "Also answer systemd-cryptsetup's key requests on this socket (crypttab(5) AF_UNIX key files): the passphrase is asked at tpm2-kira's prompt once the code screen is confirmed. The initrd's socket unit passes the socket instead (set by the initrd unit)")
 
 	fs.Parse(args)
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *debug)
+	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, *debug)
 }
 
 func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {

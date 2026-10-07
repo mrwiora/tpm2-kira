@@ -381,9 +381,18 @@ func openCoordinator(tpmPath, socket, configPath string, debug bool) (*gateServi
 	return svc, serveGate(l, svc)
 }
 
-// RunCommand implements the run command (the display at boot).
-func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket string, debug bool) {
+// RunCommand implements the run command (the display at boot). With
+// unlockSocket (or a socket from systemd's socket unit) this process is
+// also the key provider for systemd-cryptsetup: it answers the volumes'
+// key requests once the hold has ended, and stays until it is stopped.
+func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, debug bool) {
 	svc, endCoordinator := startCoordinator(tpmPath, gateSocket, DefaultAttestConfigPath, debug)
+	var unlock *unlockServer
+	if l, err := listenUnlock(unlockSocket); err != nil {
+		fmt.Fprintf(os.Stderr, "tpm2-kira: the disk unlock is not served: %v\n", err)
+	} else if l != nil {
+		unlock = serveUnlock(l, consolePassphrase, unlockLogger(debug))
+	}
 	open := func() (transport.TPMCloser, error) {
 		tpmDev, err := OpenTPM(tpmPath)
 		if err != nil {
@@ -441,6 +450,10 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			// separator) writes to the terminal but must not own it.
 			releaseTerminal(0)
 			sdNotifyReady()
+			// From here on systemd-cryptsetup's key requests are answered.
+			if unlock != nil {
+				unlock.release()
+			}
 		},
 		show: func(slots []NVRAMSlot, codes map[int]string, remaining time.Duration) {
 			if tpmDev, err := open(); err == nil {
@@ -477,6 +490,19 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		retryEvery:    2 * time.Second,
 	}
 	b.run()
+	if unlock != nil {
+		// The display is done; the key provider stays until systemd stops
+		// the service at switch-root.
+		waitForStop()
+		unlock.Close()
+	}
+}
+
+// waitForStop returns when systemd (or anyone) asks this process to end.
+func waitForStop() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
+	<-ch
 }
 
 func gateStatus(phone func() (GateStatus, bool)) (GateStatus, bool) {
