@@ -564,3 +564,23 @@ func TestParseUnlockConfig(t *testing.T) {
 		t.Fatalf("missing file: %+v %v", cfg, err)
 	}
 }
+
+// Several answers on one pipe, one prompt each: a prompt takes its line
+// and nothing more (derive asks three times from the same stdin).
+func TestReadPassphraseTakesOneLineOfAPipe(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	go func() {
+		w.Write([]byte("first\nsecond\nthird"))
+		w.Close()
+	}()
+	for _, want := range []string{"first", "second", "third"} {
+		got, err := readPassphrase(r, int(r.Fd()))
+		if err != nil || string(got) != want {
+			t.Fatalf("%q %v, want %q", got, err, want)
+		}
+	}
+}

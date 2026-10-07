@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -358,12 +357,29 @@ func readPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 		}
 	}
 	if old == nil {
-		// Not a terminal: one line, without its end.
-		line, err := bufio.NewReader(f).ReadBytes('\n')
-		if err != nil && !(errors.Is(err, io.EOF) && len(line) > 0) {
-			return nil, err
+		// Not a terminal: one line, without its end, read a byte at a
+		// time so that nothing past the line is taken from the input -
+		// the next prompt reads the same pipe.
+		var line []byte
+		buf := make([]byte, 1)
+		for {
+			n, err := f.Read(buf)
+			if n == 1 {
+				if buf[0] == '\n' {
+					break
+				}
+				line = append(line, buf[0])
+				continue
+			}
+			if err != nil {
+				if errors.Is(err, io.EOF) && len(line) > 0 {
+					break
+				}
+				wipe(line)
+				return nil, err
+			}
 		}
-		return bytes.TrimRight(line, "\r\n"), nil
+		return bytes.TrimRight(line, "\r"), nil
 	}
 	raw := *old
 	raw.Lflag &^= unix.ECHO | unix.ICANON
