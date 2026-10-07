@@ -28,9 +28,10 @@ const FallbackSlot = 1
 var ukiDirs = []string{"/boot/EFI/Linux", "/efi/EFI/Linux", "/boot/efi/EFI/Linux"}
 
 // DefaultPCRSelection is the selection for this boot and the reason, from
-// the event log at eventlogPath (the default when ""). Without an event
-// log the selection is the plain one.
-func DefaultPCRSelection(eventlogPath string) (string, string) {
+// the event log at eventlogPath (the default when "") in the bank of algo
+// (--sha1 changes the bank, nothing else). Without an event log the
+// selection is the plain one.
+func DefaultPCRSelection(eventlogPath string, algo PCRHashAlgo) (string, string) {
 	if eventlogPath == "" {
 		eventlogPath = DefaultEventlogPath
 	}
@@ -42,11 +43,7 @@ func DefaultPCRSelection(eventlogPath string) (string, string) {
 	if err != nil {
 		return "0e,2e,7e", "the event log does not parse: the firmware and the secure boot state"
 	}
-	events := log.Events(attest.HashSHA256)
-	if len(events) == 0 {
-		events = log.Events(attest.HashSHA1)
-	}
-	return defaultPCRSelection(events, findUKI())
+	return defaultPCRSelection(log.Events(attestHash(algo)), findUKI())
 }
 
 // defaultPCRSelection decides from the events: systemd-stub's section

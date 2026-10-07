@@ -45,12 +45,9 @@ func WarnAboutHashAlgo(hashAlgo PCRHashAlgo) {
 	if hashAlgo != PCRHashAlgoSHA1 {
 		return
 	}
-	fmt.Println("WARNING: sealing against the SHA-1 PCR bank.")
-	fmt.Println("  SHA-1 is broken against collision attacks and TPMs are not required to")
-	fmt.Println("  provide a SHA-1 bank at all, so this policy may become unsatisfiable on")
-	fmt.Println("  future hardware. Use it only where the firmware event log carries no")
-	fmt.Println("  SHA-256 digests, and prefer the register source instead where possible:")
-	fmt.Println("      tpm2-kira seal --pcrs \"0,7\"")
+	fmt.Println("NOTE: sealing against the SHA-1 PCR bank, as --sha1 asked: this TPM or its")
+	fmt.Println("  firmware log has no SHA-256 digests. SHA-1 is weak against collisions and")
+	fmt.Println("  a TPM need not have the bank at all. Everything else is as with SHA-256.")
 	fmt.Println()
 }
 

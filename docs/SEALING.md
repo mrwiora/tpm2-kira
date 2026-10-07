@@ -79,17 +79,12 @@ Error: PCR 0 has no SHA-256 digests in the event log ... (digests present for th
 Replaying it would yield an all-zero value that this system will never produce.
 ```
 
-Two ways forward:
+`--sha1` acknowledges the weakness and takes the SHA-1 bank; nothing else
+changes - the default selection, the fallback slot, the prediction of PCR
+11 or 8/9 are the same as with SHA-256:
 
 ```bash
-# Preferred: keep SHA-256, drop eventlog reconstruction for these PCRs.
-# PCRs 0-7 do not change between the measure point and seal time, so the
-# register source produces exactly the same value.
-tpm2-kira seal --pcrs "0,7"
-
-# Or reconstruct from the SHA-1 log. Requires a SHA-1 PCR bank on the TPM,
-# and binds the policy to SHA-1 PCR values.
-tpm2-kira seal --sha1 --pcrs "0e,7e"
+tpm2-kira seal --sha1
 ```
 
 The SHA-256 value cannot be derived from a SHA-1 log — different banks hold

@@ -32,6 +32,10 @@ func TestDefaultPCRSelection(t *testing.T) {
 	if sel, _ := defaultPCRSelection(eventsOf(t, "testdata/debian13-grub-eventlog.bin"), ""); sel != "0e,2e,7e,8e,9e" {
 		t.Errorf("Debian with GRUB: %s", sel)
 	}
+	// --sha1 changes the bank the events are read from, not the selection.
+	if sel, _ := DefaultPCRSelection("testdata/debian13-grub-eventlog.bin", PCRHashAlgoSHA1); sel != "0e,2e,7e,8e,9e" {
+		t.Errorf("Debian in the SHA-1 bank: %s", sel)
+	}
 	if sel, _ := defaultPCRSelection(nil, ""); sel != "0e,2e,7e" {
 		t.Errorf("neither: %s", sel)
 	}
@@ -40,7 +44,7 @@ func TestDefaultPCRSelection(t *testing.T) {
 			t.Errorf("%s does not parse: %v", sel, err)
 		}
 	}
-	if sel, why := DefaultPCRSelection("/nonexistent"); sel != "0e,2e,7e" || why == "" {
+	if sel, why := DefaultPCRSelection("/nonexistent", PCRHashAlgoSHA256); sel != "0e,2e,7e" || why == "" {
 		t.Errorf("without a log: %s (%s)", sel, why)
 	}
 }

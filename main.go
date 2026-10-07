@@ -259,7 +259,7 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	// the selection).
 	slotGiven := nvramExplicit(args)
 	if *pcrs == "" {
-		sel, why := cmd.DefaultPCRSelection("")
+		sel, why := cmd.DefaultPCRSelection("", hashAlgo)
 		fmt.Printf("PCRs: %s (%s)\n\n", sel, why)
 		*pcrs = sel
 	}
