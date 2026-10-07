@@ -75,7 +75,7 @@ sudo tpm2-kira seal --pcrs 0,7,11u
 tpm2-kira reveal
 ```
 
-`setup` creates an ECDSA P-256 key pair at `/etc/tpm2-kira/keys/` and nothing else. `seal` creates a TOTP key inside the TPM, here approved for PCRs 0, 7 and 11; scan the QR code it prints with your authenticator app. Without a unified kernel image, see [Choosing PCRs](#choosing-pcrs): a selection that leaves out the kernel, initrd and command line lets a modified initrd show a valid code. `seal` refuses to run until `setup` has created the keys (or you pass your own with `--privkey` / `--pubkey`).
+`setup` makes the signing key that approves every PCR policy, and nothing else. It looks for a YubiKey first: with one plugged in it offers to take the key from a PIV slot (`--yubikey`, optionally `=SERIAL`, `--slot`, default 9a) so the private key never exists on the machine; without one, or with `--local`, it creates an ECDSA P-256 key pair at `/etc/tpm2-kira/keys/` (`seal.pub`, `seal.key`, root-only). `tpm2-kira yubikey list` shows the candidates; the trade-offs are in [docs/PLAN-YUBIKEY.md](docs/PLAN-YUBIKEY.md). `seal` creates a TOTP key inside the TPM, here approved for PCRs 0, 7 and 11; scan the QR code it prints with your authenticator app. Without a unified kernel image, see [Choosing PCRs](#choosing-pcrs): a selection that leaves out the kernel, initrd and command line lets a modified initrd show a valid code. `seal` refuses to run until `setup` has created the keys (or you pass your own with `--privkey` / `--pubkey`).
 
 ## Installation
 
@@ -243,8 +243,9 @@ and the kernel command line.
 Firmware-only selections such as `0,7` or `0e,2e,4e,7e` survive kernel updates
 untouched, but a replaced initrd, or a shell from an edited command line, then
 still gets a valid code — and from such a shell the TPM can be made to compute
-codes for any future time. PCRs 8 and 9 change on every kernel or initramfs update;
-see [If you seal PCR 8 or 9](#if-you-seal-pcr-8-or-9-reseal-after-the-reboot).
+codes for any future time. PCRs 8 and 9 change on every kernel or initramfs
+update; `reseal` predicts them from the files on disk, see
+[docs/BOOT-INTEGRATION.md](docs/BOOT-INTEGRATION.md#pcr-8-and-9-are-predicted-for-the-next-boot).
 
 ### Hardening the boot path
 
@@ -287,126 +288,19 @@ than staying silent.
 
 ### The measure point
 
-tpm2-kira checks its policy in the initrd, between two systemd extends that
-both happen before `cryptsetup-pre.target`: *after*
-`systemd-pcrphase-initrd.service` has extended `enter-initrd` into PCR 11,
-and *before* `systemd-pcrosseparator.service` extends `os-separator` into
-PCRs 0–7, 9, 12, 13, 14. `tpm2-kira.service` is ordered between the two and
-is `Type=notify`: while it holds READY back, the PCRs still hold the sealed
-values, so it shows a fresh code every 30 seconds and asks whether it
-matches your authenticator. Enter continues to the passphrase, and so does
-the end of the hold (90 seconds by default, `tpm2-kira run --hold`), so a
-boot nobody watches goes on by itself. READY is sent then, the separator
-runs, and no code can be computed until the next boot.
-
-A slot that is enrolled with a phone (see *Remote attestation*) is verified
-by the phone instead: the Bluetooth gate runs next to the display from the
-start, and the phone's verdict continues to the passphrase like Enter does.
-The code stays on the screen for when the phone is not at hand. While the
-phone checks, the screen also shows a second code, eight letters and digits,
-that the phone made up and sealed to a key in this machine's TPM; the TPM
-gives it up only in a boot state your signing key approved. The phone shows
-the same code and asks you to compare the two before it signs anything. The phone
-check lasts as long as the code screen: when that ends (Enter, the phone's
-verdict, or the end of the hold), the gate ends too, and nothing listens to
-the radio at the passphrase prompt. A phone that is in the middle of its
-answer when the hold runs out gets up to a minute more.
-
-The gate is two processes of the one `tpm2-kira` binary. The display is also
-its *coordinator* (`tpm2-kira run --gate`): it holds the TPM, issues the
-quotes and reads the phone's signed receipt. The *radio worker*
-(`tpm2-kira attest gate --coordinator`, in `tpm2-kira-attest.service`) talks
-to the phone and has no TPM at all; it asks the coordinator over a socket in
-`/run/tpm2-kira`. What listens to the radio can therefore neither have a
-TOTP code computed nor make up a verdict.
-
-That order is what locks the key for the rest of the boot. PCR extends are
-one-way, so once the separator has run, nothing in the booted system can
-satisfy the key's policy again — not root, not malware — until the next boot.
-The key never leaves the TPM; the display holds nothing but the code it is
-showing, good for 30 seconds. `tpm2-kira reveal` on a running system reports the
-slot as *locked until the next boot*, which is the intended state, and
-`tpm2-kira cap` read-locks the generation index at `initrd-switch-root` on
-top of that. (The signing key is outside the lock: whoever can use it can
-approve a new policy — keep it on a YubiKey, or at least off the machine.)
-
-Because the live registers at seal time already carry the separator, PCRs
-0–7, 9, 12–14 are sealed to values replayed from the firmware event log even
-when given as register source. Where the log cannot be replayed, `seal` warns
-and falls back to the registers: the key's policy then holds only after the
-separator, the display computes codes live after the boot has been released
-(until `cap`), and marks them accordingly.
-
-Eventlog-derived values describe the *end of firmware*, so tpm2-kira adds
-`enter-initrd` on PCR 11 to reach the measure point. `--measure-point`
-controls this:
-
-| Value | Behaviour |
-|-------|-----------|
-| `auto` (default) | Probes stable PCRs against the TPM to decide whether systemd's extends are active, and refuses if the result is ambiguous |
-| `on` | Always apply |
-| `off` | Reconstruct end-of-firmware values only (and read registers as they are) |
-
-The mkinitcpio install hook inspects the image being built and passes the right
-value to `reseal`, which is what makes the first rebuild after these units
-appear behave correctly.
+The display runs before systemd's OS separator, so the seal predicts the PCR values of that point; `--measure-point` and what it means: [docs/SEALING.md](docs/SEALING.md#the-measure-point).
 
 ### TPMs whose event log has no SHA-256 digests
 
-Some firmware writes a SHA-1-only event log even when the TPM has a SHA-256 PCR
-bank. The `e` source then has nothing to replay in the selected bank, and
-tpm2-kira refuses rather than sealing the resulting all-zero value:
-
-```
-Error: PCR 0 has no SHA-256 digests in the event log ... (digests present for this PCR: SHA-1).
-Replaying it would yield an all-zero value that this system will never produce.
-```
-
-Two ways forward:
-
-```bash
-# Preferred: keep SHA-256, drop eventlog reconstruction for these PCRs.
-# PCRs 0-7 do not change between the measure point and seal time, so the
-# register source produces exactly the same value.
-tpm2-kira seal --pcrs "0,7"
-
-# Or reconstruct from the SHA-1 log. Requires a SHA-1 PCR bank on the TPM,
-# and binds the policy to SHA-1 PCR values.
-tpm2-kira seal --sha1 --pcrs "0e,7e"
-```
-
-The SHA-256 value cannot be derived from a SHA-1 log — different banks hold
-different values, and several event types have digests that are not a plain
-hash of the logged payload, so re-hashing the payloads would be wrong.
+A TPM without a SHA-256 PCR bank needs `--sha1` throughout: [docs/SEALING.md](docs/SEALING.md#tpms-whose-event-log-has-no-sha-256-digests).
 
 ### Custom signing keys
 
-By default, `setup` generates keys at `/etc/tpm2-kira/keys/`. You can supply your own (RSA-2048, ECDSA P-256, or ECDSA P-384):
-
-```bash
-tpm2-kira seal --pubkey /path/to/key.pub --privkey /path/to/key.pem
-```
-
-Both key files must be mode `0400`, owned by root (or by the user running
-tpm2-kira), not symlinks, and in a directory nobody else can write to; `seal`
-and `reseal` refuse them otherwise.
-
-Both key paths are recorded in the sealed blob for `info`, but `reseal` never
-uses them to find the key: anyone with TPM access can replace the blob, and a
-planted one would name a key its author holds. `reseal` uses `--privkey`, or
-the default key from `setup`. With a custom key, always pass `--privkey`.
+Your own key pair instead of `setup`'s (`--privkey`, `--pubkey`; RSA-2048, P-256, P-384): [docs/SEALING.md](docs/SEALING.md#custom-signing-keys).
 
 ### Multiple slots
 
-tpm2-kira supports up to 16 NVRAM slots (0–15). Useful if you need separate secrets for different purposes:
-
-```bash
-tpm2-kira seal --nvram 0
-tpm2-kira seal --nvram 1 --pcrs "0e,2e,7e"
-
-tpm2-kira reveal --nvram 0
-tpm2-kira reveal --nvram 1
-```
+Up to sixteen slots, `--nvram N`: [docs/SEALING.md](docs/SEALING.md#multiple-slots).
 
 ## Resealing After Updates
 
@@ -810,35 +704,7 @@ See [initramfs/mkinitcpio/mkinitcpio.conf.example](initramfs/mkinitcpio/mkinitcp
 
 ### What is installed where
 
-The package puts four unit files into `/usr/lib/systemd/system` on the
-host, because the mkinitcpio hook takes them from there. None of them is
-enabled on the host, and each carries
-`ConditionPathExists=/etc/initrd-release`, so enabling one there by mistake
-does nothing.
-
-| Unit | In the initramfs image | Does something when |
-|------|------------------------|---------------------|
-| `tpm2-kira.service` (the code at the prompt, the gate's coordinator, and the key provider for `systemd-cryptsetup`) | always, once `sd-tpm2-kira` is in `HOOKS` | a TOTP key is sealed. With nothing sealed it says so once and releases the boot; a later `seal` needs no rebuild. The gate ends when the boot is released; the process stays to answer the volumes' key requests and ends at switch-root |
-| `tpm2-kira-unlock.socket` (the key socket) | always, with the display | `systemd-cryptsetup` activates a volume whose key file is the socket |
-| `tpm2-kira-cap.service` (locks codes when the initrd is left) | always, with the display | the initrd is left. Without sealed keys there is nothing to lock |
-| `tpm2-kira-attest.service` (Bluetooth gate, radio worker) | only if a phone is enrolled, **and** its record is signed by this machine's key and current, **and** the adapter was found when the image was built. The signing public key goes into the image with it. Otherwise neither the unit nor any Bluetooth module or firmware is in the image; `mkinitcpio` says which condition failed | a phone connects |
-
-One case leaves a unit in the image with nothing to do: `attest unenrol`
-without rebuilding the initramfs. The gate then starts at boot, reports that no
-phone is enrolled and fails; `unenrol` tells you to rebuild.
-
-The radio worker is the only process that takes input from outside the
-machine before the disk is unlocked, so its unit confines it: Bluetooth and
-Unix sockets only, the capabilities for the adapter and no others, rfkill and
-the console as its only devices and no TPM, a read-only file system, and a
-system call filter (`systemd-analyze security` rates the unit 2.2, from 9.4
-without).
-
-On Debian there are no units in the image: the initramfs-tools scripts start
-the display and, under the same three conditions, the gate, and run `cap` when
-the initramfs is left. The split into coordinator and radio worker and the
-confinement above apply to systemd-based images only; there the gate is one
-process with the TPM, and the phone's verdict does not release the display.
+Which unit runs when, and under which conditions the gate is in the image: [docs/BOOT-INTEGRATION.md](docs/BOOT-INTEGRATION.md#what-is-installed-where).
 
 ## Early Boot Integration (Debian / initramfs-tools)
 
@@ -887,20 +753,7 @@ initramfs-tools 0.148 and cryptsetup 2.7.
 
 ### Display mode
 
-`/etc/tpm2-kira/initramfs.conf` selects what happens at boot:
-
-| `TPM2_KIRA_INITRAMFS_MODE` | Behaviour |
-|---|---|
-| `run` (default) | Keeps showing codes until the disk is unlocked |
-| `once` | Prints a single code and carries on booting |
-
-In `run` mode the display refreshes once per 30-second TOTP window, writing to
-the same console as the passphrase prompt. The prompt scrolls up as codes
-arrive; typing is unaffected, since the passphrase is not echoed anyway. The
-`init-bottom` script stops the process before `run-init` replaces the initramfs,
-so nothing is left holding it open, and then runs `tpm2-kira cap`.
-
-Edit the file and run `sudo update-initramfs -u` to apply a change.
+`/etc/tpm2-kira/initramfs.conf`, `run` or `once`: [docs/BOOT-INTEGRATION.md](docs/BOOT-INTEGRATION.md#display-mode).
 
 ### Choosing PCRs on Debian
 
@@ -926,118 +779,7 @@ tpm2-kira seal --pcrs "0e,2e,4e,7e"
 
 ### PCR 8 and 9 are predicted for the next boot
 
-GRUB measures every command it runs into PCR 8 and every file it reads
-into PCR 9, and the kernel's EFI stub adds its load options and the initrd
-to PCR 9. The event log of the running boot is the complete script of
-that. After an update only the entries of what changed differ, so
-`reseal` replays this boot's log with those entries replaced by what is
-on disk now - the way SUSE's `pcr-oracle` does it; neither Debian nor
-`systemd-pcrlock` (which knows no GRUB) offers this:
-
-| changed on disk | what is put into the replay |
-|---|---|
-| the initrd (`update-initramfs`) | its SHA-256, in GRUB's file event and the stub's `Linux initrd` tag |
-| a new kernel | the version string in GRUB's `linux`/`initrd`/`echo` commands, the kernel command line and the stub's load options; the kernel's and initrd's SHA-256 |
-| `grub.cfg` (`update-grub`) | its SHA-256, and the `menuentry`/`submenu` commands rebuilt from it - GRUB measures them with their whole body |
-| `grubenv`, GRUB modules, `.lst` files | their SHA-256 |
-
-The hooks run it: `/etc/initramfs/post-update.d/tpm2-kira` after every
-`update-initramfs`, and `/etc/kernel/postinst.d/zzz-tpm2-kira` (also
-`postrm.d`) after `zz-update-grub` has written the final `grub.cfg` of a
-kernel install or removal. `reseal` prints what it substituted, for
-example `PCR9 /initrd.img-6.12.111+deb13-amd64: now /boot/initrd.img-…`.
-The next boot then shows a code at once; no boot without one, no second
-reseal.
-
-What the prediction cannot know, and what then happens: a different menu
-entry chosen at the GRUB menu, a command line edited there, a `grubenv`
-the boot rewrites (`GRUB_SAVEDEFAULT`, `recordfail`), or a GRUB package
-update that changes the module set. Such a boot shows no code - expected,
-not a compromise - and `sudo tpm2-kira reseal` after it binds to the
-state you booted, as the reseal always did. The prediction is checked
-against this machine's real log in the test suite
-(`cmd/grub_predict_test.go`, Debian 13, GRUB 2.12).
-
-Resealing is still never automatic at *boot*: a tampered kernel does not
-become a trusted baseline by being booted once. The hooks run on the
-unlocked system, after a change you made.
-
-## Eventlog PCR Calculator
-
-`tools/pcrtool.py` independently reconstructs PCR values, which is the first
-thing to reach for when a sealed policy stops matching. It reads the live
-firmware event log directly, or a `tpm2_eventlog` YAML dump:
-
-```bash
-# All PCRs from the running system's event log
-sudo python3 tools/pcrtool.py replay
-
-# A specific PCR, showing every extension step
-sudo python3 tools/pcrtool.py replay --pcr 7 --verbose
-
-# From a dump, which needs neither root nor a TPM
-tpm2_eventlog /sys/kernel/security/tpm0/binary_bios_measurements > evlog.yaml
-python3 tools/pcrtool.py --eventlog evlog.yaml replay
-
-# The SHA-1 bank
-sudo python3 tools/pcrtool.py --bank sha1 replay
-```
-
-The `extends` column counts how many events actually extended each PCR. A zero
-there means the log carries no digests for that PCR **in the selected bank**, so
-the value shown is only the reset value — the tool warns and exits non-zero
-rather than letting that pass as a measurement.
-
-Requires PyYAML (`pip install pyyaml`) and tpm2-tools.
-
-## Testing
-
-```bash
-# Unit tests (no TPM required)
-make test-unit
-
-# Integration tests (requires swtpm + socat)
-# Install: sudo apt install swtpm swtpm-tools socat
-#      or: sudo pacman -S swtpm socat
-make test-integration
-
-# Everything
-make test-all
-```
-
-## Troubleshooting
-
-**TPM device not found:**
-```bash
-ls -la /dev/tpm*
-sudo dmesg | grep -i tpm
-```
-Ensure TPM 2.0 is enabled in your BIOS/UEFI settings.
-
-**Permission denied on `/dev/tpmrm0`:**
-```bash
-# Check current permissions
-ls -la /dev/tpmrm0
-
-# Your user needs access — either run as root or add a udev rule
-```
-
-**TOTP code doesn't match after update:**
-```bash
-tpm2-kira reseal
-```
-If reseal also fails, check `tpm2-kira info` to see which PCRs changed and verify you have the correct signing key available.
-
-**Debug output:**
-```bash
-tpm2-kira --debug reveal
-```
-
-**Check current PCR values vs. sealed values:**
-```bash
-tpm2-kira info            # shows what was sealed
-tpm2-kira pcrtips         # explains what each PCR measures
-```
+`reseal` predicts PCR 8 and 9 from this boot's event log and the files on disk, so an update needs no boot without a code; the hooks run it. What it cannot foresee, and the state of the art: [docs/BOOT-INTEGRATION.md](docs/BOOT-INTEGRATION.md#pcr-8-and-9-are-predicted-for-the-next-boot).
 
 ## Uninstall
 
@@ -1072,128 +814,9 @@ Purging the Debian package deliberately leaves `/etc/tpm2-kira/keys` in place:
 the signing key is the only way to approve new PCR values for a key that may
 still be sealed in the TPM. Delete the slot first, then the directory.
 
-## Project Structure
+## Troubleshooting, diagnosis, exit status
 
-```
-├── main.go                  # CLI entrypoint and command routing
-├── attest/                  # Remote attestation core: protocol, Noise, Verify(); no device access
-│   └── attesttest/          # Software TPM, in-memory pipe and simulated phone for tests
-├── transport/
-│   ├── frame/               # Record fragmentation for BLE (shared with the phone)
-│   └── ble/                 # Pure-Go BLE peripheral over an HCI user channel
-├── mobile/
-│   ├── kiracore/            # gomobile binding: the phone's verifier core
-│   └── kiratest/            # gomobile binding: a simulated machine for app tests
-├── cmd/                     # Command implementations
-│   ├── seal.go              # Create the TOTP key in the TPM and approve PCR values
-│   ├── reseal.go            # Approve new PCR values, revoke older approvals
-│   ├── setup.go             # First-time setup (keygen)
-│   ├── info.go              # Inspect sealed blob metadata
-│   ├── scan.go              # Multi-slot NVRAM scanning
-│   ├── blob.go              # Sealed blob serialization format
-│   ├── totpkey.go           # TOTP key object, PolicyAuthorize, generation, cap
-│   ├── signingkey.go        # Signing key loading, PolicySigned for NV writes
-│   ├── keyfile.go           # Key file checks (owner, mode, symlinks)
-│   ├── untrusted.go         # Printing strings from unverified blobs
-│   ├── eventlog_utils.go    # TPM eventlog parsing
-│   ├── measurepoint.go      # Userspace extends before tpm2-kira reads PCRs
-│   ├── ukipredict.go        # Native PCR 11 computation from a UKI
-│   ├── pcr.go               # PCR spec parsing, reading and comparison
-│   ├── pcrwarn.go           # Warnings for PCR selections that attest little
-│   ├── attest.go            # attest enrol/gate/status/quote/verify/unenrol
-│   ├── attest_blob.go       # A slot's phone enrolment (AK, pinned phones), a section of its blob
-│   ├── attest_tpm.go        # AK/EK, TPM2_Quote, ActivateCredential
-│   ├── nvram.go             # NVRAM read/write/scan operations
-│   ├── totp_utils.go        # Code truncation, QR code and display
-│   ├── tpm_utils.go         # Low-level TPM operations
-│   ├── pcrtips.go           # PCR reference information
-│   └── constants.go         # Default paths and constants
-├── tools/
-│   ├── pcrtool.py            # PCR replay and full-chain diagnosis
-│   └── tpm2-pcr11predict     # Independent cross-check of the built-in PCR 11 computation
-├── docs/
-│   ├── PROTOCOL-BLE.md           # Phone <-> machine protocol: the interface definition
-│   ├── PLAN-*.md                 # Designs: remote attestation, BLE, remote unlocking, factor release
-│   ├── mobile/                   # Agent prompts for the Android and iOS apps
-│   ├── PLATFORM-OBSERVATIONS.md  # Measured facts about Arch and Debian boots
-│   ├── pentest1/, pentest2/      # Security review findings and mitigations
-│   └── *.issue                   # Write-ups of specific bugs
-├── initramfs/               # Everything that goes into, or builds, an initramfs
-│   ├── common/attest.conf          # The Bluetooth adapter and timeouts for the initramfs
-│   ├── systemd/tpm2-kira.service   # Shows the code in systemd-based images
-│   ├── systemd/tpm2-kira-cap.service  # Runs 'cap' when leaving the initrd
-│   ├── systemd/tpm2-kira-attest.service  # Lazy Bluetooth attestation gate
-│   ├── mkinitcpio/                 # Arch
-│   │   ├── install/sd-tpm2-kira    # Build hook: puts the binary in the image
-│   │   ├── post/sd-tpm2-kira       # Reseal after the image is written
-│   │   └── mkinitcpio.conf.example
-│   └── initramfs-tools/            # Debian
-│       ├── hooks/tpm2-kira         # Build hook: copies the static binary
-│       ├── scripts/init-premount/tpm2-kira  # Shows the code before unlock
-│       ├── scripts/init-bottom/tpm2-kira    # Stops it and caps before switching root
-│       ├── post-update.d/tpm2-kira          # Reseal reminder
-│       └── initramfs.conf          # Display mode (run / once)
-├── debian/                  # Debian package definition (must sit at the root)
-├── packaging/
-│   ├── aur/                 # Arch Linux PKGBUILD
-│   └── deb-version.sh       # git describe -> a Debian-valid version
-└── Makefile
-```
-
-## Diagnosing PCR mismatches
-
-If the displayed PCR values differ from what was sealed, reconstruct the whole
-chain before changing anything:
-
-```bash
-# Replays the firmware event log AND systemd's own measurement log,
-# then explains every difference against the live registers.
-sudo python3 tools/pcrtool.py verify
-```
-
-Each PCR is reported as `unchanged since firmware`, `os-separator (x1)`,
-`explained: <words>`, or `UNEXPLAINED`. Anything unexplained on a sealed PCR is
-a real finding.
-
-Two things to keep in mind while reading any PCR output:
-
-- `tpm2_eventlog`'s trailing `pcrs:` block is a **replay of the log**, not a
-  read of the TPM. Comparing it against `tpm2_pcrread` is comparing a
-  calculation against a measurement — and that difference is usually the answer.
-- The **post-boot register is not the measure-point value** for PCRs 9, 11 and
-  15. They keep being extended after the initrd, so a mismatch there is expected
-  and not evidence of tampering.
-
-See [SECURITY-BACKGROUND.md](docs/SECURITY-BACKGROUND.md) §5.6–5.8 for the full
-reconstruction rules and constants.
-
-## Exit status
-
-**tpm2-kira always exits 0, including on failure.** This is deliberate: it is
-meant to be chainable in a boot sequence, so a TPM or NVRAM problem must not
-stop the commands after it.
-
-```bash
-tpm2-kira && cryptsetup open /dev/nvme0n1p2 cryptroot
-```
-
-Scripts must therefore judge success from the **output**, not the exit status.
-Failures are printed to stderr with a fixed marker:
-
-```
-tpm2-kira: FAILED: <reason>
-tpm2-kira: (exit status is 0 by design; this command did NOT succeed)
-```
-
-The mkinitcpio post hook does exactly this — it greps the output for the success
-line rather than testing `$?`.
-
-**Exception: the attestation commands.** `attest gate`, `attest verify`,
-`attest quote` and `attest enrol` gate or judge something, and a gate that
-exits 0 on failure is not a gate. They exit non-zero on failure: `1` internal
-error, `2` usage, `3` no phone or no adapter, `4` the phone rejected this boot
-(do not type a passphrase before checking further), `5` the receipt was not
-signed by the enrolled phone.
+The event-log calculator, what to do when a code stops matching, the common errors and the exit status table are in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md); the repository layout and how the tests are run in [docs/PROJECT-STRUCTURE.md](docs/PROJECT-STRUCTURE.md).
 
 ## Security
 
