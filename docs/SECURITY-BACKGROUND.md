@@ -924,6 +924,24 @@ What this means in practice:
    the substitution shows up as a failed comparison, not as a false pass.
 5. **The real access control is on the key object**, not the NVRAM index.
    Its `authPolicy` (PolicyAuthorize) is what prevents unauthorised use.
+6. **tpm2-kira's own rewrites pass through the same gap.** There is no
+   atomic replace: `reseal`, `attest enrol` and `attest unenrol` undefine
+   the slot and define and write it again, and between the two the TPM
+   holds no blob. Everything that can fail without touching the TPM -
+   loading the signing key, a token's PIN, the signer itself on a dummy
+   digest - is exercised before the undefine. If a step after it fails
+   (the define refused, a chunk not written, the read-back differing), the
+   blob that was about to be written is saved to
+   `/etc/tpm2-kira/recovery/slot-0x<index>-<time>.blob`, mode 0600, and the
+   error says so and cannot be mistaken for success. The file is as good
+   as the index was: it holds the key object's public and private areas,
+   the private one wrapped under this TPM's storage primary, which is
+   re-derived from the owner seed, so only this TPM can load it and only
+   under the object's policy. `nvram restore FILE` verifies the blob's
+   signature with the signing key (never with a key the file names),
+   requires the slot to be empty, approves the blob again for the PCRs it
+   was sealed to at a new generation, writes it as reseal does, and
+   removes the file. The codes are the ones from before.
 
 Setting an owner-hierarchy password would close the delete path, but tpm2-kira
 currently always presents an empty owner auth value, so it would stop working

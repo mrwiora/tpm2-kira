@@ -335,7 +335,7 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 
 func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	if len(args) == 0 {
-		fail(fmt.Errorf("nvram command requires a subcommand (list, status, delete)"))
+		fail(fmt.Errorf("nvram command requires a subcommand (list, status, delete, restore)"))
 	}
 
 	subcommand := args[0]
@@ -347,6 +347,8 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	yes := fs.Bool("yes", false, "delete: confirm deleting every slot (only needed without --nvram)")
+	pubKey := fs.String("pubkey", "", "restore: signing public key (default: derived from the private key)")
+	privKey := fs.String("privkey", "", "restore: signing private key (default: "+cmd.DefaultPrivateKeyPath+")")
 
 	fs.Parse(args)
 
@@ -366,6 +368,14 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	case "delete":
 		deleteIndex := resolveOrScanAll(uint32(*nvram), provided)
 		if err := cmd.NVRAMDeleteCommand(*tpm, deleteIndex, *yes, *debug); err != nil {
+			fail(err)
+		}
+	case "restore":
+		if fs.NArg() != 1 {
+			fail(fmt.Errorf("nvram restore takes the stashed blob's file: tpm2-kira nvram restore %s/slot-0x<index>-<time>.blob", cmd.NVRAMRecoveryDir))
+		}
+		restoreIndex := resolveOrScanAll(uint32(*nvram), provided)
+		if err := cmd.NVRAMRestore(*tpm, fs.Arg(0), restoreIndex, *pubKey, *privKey, *debug); err != nil {
 			fail(err)
 		}
 	default:
@@ -581,7 +591,7 @@ COMMANDS:
               the initrd; the boot integration does this)
   info        Display a slot's blob: the TOTP key and its policy, and the
               remote attestation set up for it (attestation key, PCRs, phones)
-  nvram       Manage TPM NVRAM (list, status, delete)
+  nvram       Manage TPM NVRAM (list, status, delete, restore)
   attest      Remote attestation: a phone verifies this boot over Bluetooth LE.
               Subcommands (details under ATTEST SUBCOMMANDS, or 'attest help'):
     attest enrol      Bind a phone to a sealed slot (needs the signing key)
@@ -746,6 +756,7 @@ EXAMPLES:
   tpm2-kira nvram delete --yes
   tpm2-kira nvram delete --nvram 0
   tpm2-kira nvram delete --nvram 0x01803010
+  tpm2-kira nvram restore /etc/tpm2-kira/recovery/slot-0x01803010-1759823456.blob
   tpm2-kira attest enrol
   tpm2-kira attest enrol --nvram 0 --name "Thinkpad"
   tpm2-kira attest enrol --sha1

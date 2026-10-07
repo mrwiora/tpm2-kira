@@ -158,6 +158,7 @@ If called without a command, tpm2-kira defaults to `reveal`.
 | `nvram list` | List NVRAM indices |
 | `nvram status` | Show NVRAM index status |
 | `nvram delete` | Delete a slot (TOTP key and phones), or everything tpm2-kira keeps in the TPM |
+| `nvram restore` | Put a blob back that a failed rewrite stashed under `/etc/tpm2-kira/recovery/` |
 | `attest enrol` | Bind a phone to this machine over Bluetooth LE (see [Remote attestation](#remote-attestation-with-a-phone-experimental)) |
 | `attest gate` | Serve attestation requests until a phone returns a signed verdict |
 | `attest status` | Show which phones are enrolled per slot, and whether the blob is signed by this machine's key (`--json`) |
@@ -481,6 +482,28 @@ Because the phones live in the slot's blob,
 
 `nvram delete` without `--nvram` removes every slot and what belongs to no
 slot any more: a companion index whose slot is gone.
+
+### If a rewrite of the slot fails
+
+A TPM cannot replace an NV index in place: `reseal`, `attest enrol` and
+`attest unenrol` undefine the slot and write it again, and for a moment
+the TPM holds no blob. Everything that can fail without touching the TPM
+(loading the key, the token's PIN, the signer) is exercised before that
+moment. If a step after it fails anyway — the TPM refuses the define, a
+chunk does not write, the read-back differs — the blob that was about to
+be written is saved to `/etc/tpm2-kira/recovery/slot-0x<index>-<time>.blob`
+and the command says so. The file holds the sealed object as this TPM
+wrapped it, which only this TPM can load, so the secret is not lost with
+the index. Once the cause is fixed:
+
+```bash
+tpm2-kira nvram restore /etc/tpm2-kira/recovery/slot-0x01803010-1759823456.blob
+```
+
+verifies the blob with the signing key, needs the slot to be empty (it
+is, after such a failure), approves the blob again for the PCRs it was
+sealed to, writes it, and removes the file. The codes are the ones from
+before; nothing has to be re-enrolled.
 
 ## Remote attestation with a phone (experimental)
 
