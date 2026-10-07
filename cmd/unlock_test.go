@@ -171,7 +171,7 @@ func TestUnlockServerRefusesStrangers(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(logs) != 1 || !strings.Contains(logs[0], "refusing") {
+	if len(logs) != 2 || !strings.Contains(logs[0], "hold has ended") || !strings.Contains(logs[1], "refusing") {
 		t.Errorf("logs: %v", logs)
 	}
 }

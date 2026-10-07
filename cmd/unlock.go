@@ -102,6 +102,7 @@ func (s *unlockServer) release() {
 	select {
 	case <-s.gate:
 	default:
+		s.log("unlock: the hold has ended; key requests are answered from now on")
 		close(s.gate)
 	}
 }
@@ -147,9 +148,11 @@ func (s *unlockServer) answer(c net.Conn) {
 		s.log(fmt.Sprintf("unlock: %s asks for a %s key, which this provider does not hold", req.Volume, req.Kind))
 		return
 	}
+	s.log(fmt.Sprintf("unlock: %s asks for its key", req.Volume))
 	<-s.gate
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.log(fmt.Sprintf("unlock: asking at the prompt for %s", req.Volume))
 	s.prompting.Store(true)
 	key, err := s.key(req.Volume)
 	s.prompting.Store(false)
@@ -160,7 +163,9 @@ func (s *unlockServer) answer(c net.Conn) {
 	defer wipe(key)
 	if _, err := c.Write(key); err != nil {
 		s.log(fmt.Sprintf("unlock: writing the key for %s failed: %v", req.Volume, err))
+		return
 	}
+	s.log(fmt.Sprintf("unlock: answered for %s (%d bytes)", req.Volume, len(key)))
 }
 
 // peerIsUs checks that the connection comes from a process of this user
@@ -399,14 +404,10 @@ func readPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 // maxPassphrase is cryptsetup's own limit for a typed passphrase.
 const maxPassphrase = 512
 
-// unlockLogger writes to stderr with the journal's time; the console shows
-// it too, which is where the person is.
+// unlockLogger writes to stderr, with the time: the journal or the
+// initramfs log (Debian) is read after the boot.
 func unlockLogger(debug bool) func(string) {
 	return func(msg string) {
-		if debug {
-			fmt.Fprintf(os.Stderr, "tpm2-kira: %s %s\n", time.Now().Format("15:04:05"), msg)
-		} else {
-			fmt.Fprintf(os.Stderr, "tpm2-kira: %s\n", msg)
-		}
+		fmt.Fprintf(os.Stderr, "tpm2-kira: %s %s\n", time.Now().UTC().Format("15:04:05.000"), msg)
 	}
 }

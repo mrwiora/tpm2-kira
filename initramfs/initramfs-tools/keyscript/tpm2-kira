@@ -7,4 +7,6 @@
 # script for each of its tries, so a typo is asked again.
 #
 #   /etc/crypttab:  <name> UUID=... none luks,keyscript=/lib/cryptsetup/scripts/tpm2-kira
-exec /usr/bin/tpm2-kira unlock-key "$CRYPTTAB_NAME"
+mkdir -p /run/initramfs
+echo "$(date -u +%T 2>/dev/null) keyscript for $CRYPTTAB_NAME (try $CRYPTTAB_TRIED)" >>/run/initramfs/tpm2-kira.log
+exec /usr/bin/tpm2-kira unlock-key "$CRYPTTAB_NAME" 2>>/run/initramfs/tpm2-kira.log
