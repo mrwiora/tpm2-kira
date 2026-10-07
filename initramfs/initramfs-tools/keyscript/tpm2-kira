@@ -1,0 +1,10 @@
+#!/bin/sh
+# cryptsetup keyscript (crypttab(5) keyscript=): the volume's key from
+# tpm2-kira. 'tpm2-kira run --unlock' in the initramfs answers on its socket
+# once the code screen is confirmed - the typed passphrase, or the key
+# derived from the password and the factor the phone released. Without the
+# socket, tpm2-kira becomes cryptsetup's own prompt. cryptroot re-runs this
+# script for each of its tries, so a typo is asked again.
+#
+#   /etc/crypttab:  <name> UUID=... none luks,keyscript=/lib/cryptsetup/scripts/tpm2-kira
+exec /usr/bin/tpm2-kira unlock-key "$CRYPTTAB_NAME"

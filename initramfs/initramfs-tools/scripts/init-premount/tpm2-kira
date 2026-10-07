@@ -39,17 +39,13 @@ if [ ! -c /dev/tpmrm0 ]; then
     exit 0
 fi
 
-# Remote attestation over Bluetooth: serve requests from the enrolled phone
-# in the background, beside the TOTP display. It never holds the boot;
-# init-bottom stops it. The hook only puts bluetooth-modules into the image
-# when a phone is enrolled and the adapter was found at build time.
-if [ -r /etc/tpm2-kira/bluetooth-modules ]; then
-    while read -r m; do
-        modprobe -q "$m" || true
-    done </etc/tpm2-kira/bluetooth-modules
-    /usr/bin/tpm2-kira attest gate >/dev/console 2>&1 &
-    echo $! > /run/tpm2-kira-attest.pid
-fi
+# The two sockets of the display: the gate's, where the radio worker reaches
+# the TPM (only when a phone is enrolled, which puts the signer into the
+# image), and the key socket, where the keyscript of crypttab's
+# keyscript=/lib/cryptsetup/scripts/tpm2-kira takes the volume's key from.
+mkdir -p -m 700 /run/tpm2-kira
+GATE=/run/tpm2-kira/gate.sock
+UNLOCK=/run/tpm2-kira/unlock.sock
 
 mode=run
 [ -r /etc/tpm2-kira/initramfs.conf ] && . /etc/tpm2-kira/initramfs.conf
@@ -61,9 +57,21 @@ once)
     /usr/bin/tpm2-kira reveal >/dev/console 2>&1 || true
     ;;
 *)
-    # Refreshes once per 30-second TOTP window, so it shares the console with
-    # cryptsetup's prompt without drowning it. init-bottom stops it again.
-    /usr/bin/tpm2-kira run >/dev/console 2>&1 &
+    # The code screen, the gate's coordinator and the key provider in one
+    # process; it stays for the keyscript until init-bottom stops it.
+    /usr/bin/tpm2-kira run --gate "$GATE" --unlock "$UNLOCK" >/dev/console 2>&1 &
     echo $! > /run/tpm2-kira.pid
     ;;
 esac
+
+# Remote attestation over Bluetooth: the radio worker serves the enrolled
+# phone beside the code screen, with the coordinator's TPM. It never holds
+# the boot; init-bottom stops it. The hook only puts bluetooth-modules into
+# the image when a phone is enrolled and the adapter was found at build time.
+if [ "$mode" != once ] && [ -r /etc/tpm2-kira/bluetooth-modules ]; then
+    while read -r m; do
+        modprobe -q "$m" || true
+    done </etc/tpm2-kira/bluetooth-modules
+    /usr/bin/tpm2-kira attest gate --coordinator "$GATE" >/dev/console 2>&1 &
+    echo $! > /run/tpm2-kira-attest.pid
+fi

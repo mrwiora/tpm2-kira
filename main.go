@@ -70,6 +70,19 @@ func main() {
 		runAttest(commandArgs, *tpmPath, *debug)
 	case "factor":
 		runFactor(commandArgs, *tpmPath, *debug)
+	case "unlock-key":
+		fs := flag.NewFlagSet("unlock-key", flag.ExitOnError)
+		socket := fs.String("socket", cmd.DefaultUnlockSocket, "The key socket of 'tpm2-kira run --unlock'")
+		wait := fs.Duration("wait", 5*time.Second, "How long to wait for the socket to appear")
+		fs.Parse(commandArgs)
+		volume := fs.Arg(0)
+		if volume == "" {
+			volume = os.Getenv("CRYPTTAB_NAME")
+		}
+		if err := cmd.UnlockKeyCommand(*socket, volume, *wait); err != nil {
+			fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
+			os.Exit(1) // a keyscript's exit status is what cryptroot reads
+		}
 	case "yubikey":
 		runYubiKey(commandArgs)
 	case "cap":
@@ -681,6 +694,8 @@ COMMANDS:
   attest      Remote attestation: a phone verifies this boot over Bluetooth LE.
   factor      The disk factor: one half of the disk's key, kept by the phone
               (factor enrol --out /run/tpm2-kira/luks.key)
+  unlock-key  Debian keyscript: the volume's key from the socket of
+              'run --unlock' to stdout, else cryptsetup's own prompt
               Subcommands (details under ATTEST SUBCOMMANDS, or 'attest help'):
     attest enrol      Bind a phone to a sealed slot (needs the signing key)
     attest unenrol    Remove a slot's phones (needs the signing key)

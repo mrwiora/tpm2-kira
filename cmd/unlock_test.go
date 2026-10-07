@@ -450,3 +450,26 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 		t.Errorf("prompt without a factor: %q", p)
 	}
 }
+
+// The Debian keyscript's half: unlock-key asks the socket the way
+// systemd-cryptsetup does and gets the key; without a socket it gives up
+// after the wait (and would become askpass).
+func TestAskUnlockSocket(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "unlock.sock")
+	l, err := listenUnlock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asked string
+	s := serveUnlock(l, func(v string) ([]byte, error) { asked = v; return []byte("key\n"), nil }, func(string) {})
+	defer s.Close()
+	s.release()
+	key, err := askUnlockSocket(path, "vda3_crypt", time.Second)
+	if err != nil || string(key) != "key\n" || asked != "vda3_crypt" {
+		t.Fatalf("%q %v (asked %q)", key, err, asked)
+	}
+	start := time.Now()
+	if _, err := askUnlockSocket(filepath.Join(t.TempDir(), "none.sock"), "v", 300*time.Millisecond); err == nil || time.Since(start) < 250*time.Millisecond {
+		t.Fatalf("without a socket: %v after %v", err, time.Since(start))
+	}
+}
