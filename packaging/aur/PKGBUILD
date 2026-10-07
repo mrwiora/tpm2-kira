@@ -1,8 +1,10 @@
 # Maintainer: Matthias R. Wiora <matthias@wiora.io>
 pkgname=tpm2-kira
-pkgver=0.0.0
-# pkgver may not contain '-', but a prerelease tag can. Keep them separate.
-_tag="v$pkgver"
+# The release tag, and its pacman form: pkgver may not contain '-', so a
+# prerelease tag's "-rc1" becomes "rc1" (pacman sorts 0.5.0rc1 before
+# 0.5.0, as a prerelease must). Set both for a release.
+_tag=v0.5.0-rc1
+pkgver=0.5.0rc1
 pkgrel=1
 pkgdesc="TPM2-based TOTP authenticator with PCR policies"
 arch=('x86_64')
