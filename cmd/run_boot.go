@@ -395,12 +395,14 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 	if l, err := listenUnlock(unlockSocket); err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the disk unlock is not served: %v\n", err)
 	} else if l != nil {
-		// With a factor released by the phone and opened by the TPM
-		// (the coordinator keeps the salt), the key is derived from it
-		// and the password; otherwise as unlock.conf says.
+		// As unlock.conf says; the coordinator keeps the salt a verifier
+		// released and the TPM opened.
 		cfg, err := LoadUnlockConfig(DefaultUnlockConfigPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "tpm2-kira: %v; answering with the passphrase\n", err)
+			fmt.Fprintf(os.Stderr, "tpm2-kira: %v; not answering (mode skip)\n", err)
+		}
+		if cfg.Mode == UnlockPasswordRemoteSalt && svc == nil {
+			fmt.Fprintln(os.Stderr, "tpm2-kira: unlock mode password+remotesalt, but no phone check is in this image: no remote salt can be released; cryptsetup's own prompt will follow")
 		}
 		unlock = serveUnlock(l, diskKey(func() []byte {
 			if svc == nil {

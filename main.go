@@ -77,6 +77,8 @@ func main() {
 		if err := cmd.DeriveCommand(*out); err != nil {
 			fail(err)
 		}
+	case "luks":
+		runLuks(commandArgs, *tpmPath, *debug)
 	case "unlock-key":
 		fs := flag.NewFlagSet("unlock-key", flag.ExitOnError)
 		socket := fs.String("socket", cmd.DefaultUnlockSocket, "The key socket of 'tpm2-kira run --unlock'")
@@ -414,6 +416,39 @@ func failAttest(code int, err error) {
 	os.Exit(code)
 }
 
+func runLuks(args []string, tpmPath string, debugFlag bool) {
+	if len(args) == 0 {
+		fail(fmt.Errorf("luks requires a subcommand: status, mark"))
+	}
+	switch args[0] {
+	case "status":
+		fs := flag.NewFlagSet("luks status", flag.ExitOnError)
+		jsonOut := fs.Bool("json", false, "Machine-readable output")
+		fs.Parse(args[1:])
+		if err := cmd.LuksStatus(fs.Args(), *jsonOut); err != nil {
+			fail(err)
+		}
+	case "mark":
+		fs := flag.NewFlagSet("luks mark", flag.ExitOnError)
+		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+remotesalt: the slot's verifier is checked)")
+		keyslot := fs.Int("keyslot", -1, "The LUKS keyslot to mark (required)")
+		mode := fs.String("mode", "", "How its key is made: password+salt or password+remotesalt (required)")
+		nvram := fs.Uint("nvram", 0, "The tpm2-kira slot of the remote salt (password+remotesalt)")
+		label := fs.String("label", "luks", "The salt's label (password+remotesalt)")
+		debug := fs.Bool("debug", debugFlag, "Enable debug output")
+		fs.Parse(args[1:])
+		if fs.NArg() != 1 || *keyslot < 0 || *mode == "" {
+			fail(fmt.Errorf("usage: tpm2-kira luks mark <device> --keyslot N --mode password+salt|password+remotesalt"))
+		}
+		if err := cmd.LuksMark(cmd.LuksMarkOptions{TPMPath: *tpm, Device: fs.Arg(0), Keyslot: *keyslot, Mode: *mode,
+			SealIndex: cmd.ResolveNVRAMIndex(uint32(*nvram)), Label: *label, Debug: *debug}); err != nil {
+			fail(err)
+		}
+	default:
+		fail(fmt.Errorf("unknown luks subcommand %q", args[0]))
+	}
+}
+
 func runFactor(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, "factor requires a subcommand: enrol, rotate, status, unenrol\n\n"+factorUsage)
@@ -703,7 +738,10 @@ COMMANDS:
               (factor enrol --out /run/tpm2-kira/luks.key)
   derive      hashpwd2 by hand: password and salt to a key file on tmpfs
               (--out /run/tpm2-kira/luks.key) for cryptsetup luksAddKey, for
-              the hashpwd2 mode of /etc/tpm2-kira/unlock.conf
+              the password+salt mode of /etc/tpm2-kira/unlock.conf
+  luks        tpm2-kira's LUKS keyslots, marked by a token in the header:
+              luks status [<device>…] [--json]
+              luks mark <device> --keyslot N --mode password+salt|password+remotesalt
   unlock-key  Debian keyscript: the volume's key from the socket of
               'run --unlock' to stdout, else cryptsetup's own prompt
               Subcommands (details under ATTEST SUBCOMMANDS, or 'attest help'):

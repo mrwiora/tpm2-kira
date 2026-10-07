@@ -9,7 +9,7 @@ import (
 
 // DeriveCommand is hashpwd2 by hand: the password and the salt asked on
 // the terminal, their combination written to a file on tmpfs for
-// 'cryptsetup luksAddKey', so a keyslot can be enrolled for the hashpwd2
+// 'cryptsetup luksAddKey', so a keyslot can be enrolled for the password+salt
 // mode of unlock.conf without a phone. The same bytes hashpwd2 itself
 // would print; nothing is kept.
 func DeriveCommand(out string) error {
@@ -52,7 +52,8 @@ func DeriveCommand(out string) error {
 	fmt.Printf("    cryptsetup open --test-passphrase <device> --key-file %s\n", out)
 	fmt.Printf("    rm %s\n", out)
 	fmt.Println()
-	fmt.Println("Then set TPM2_KIRA_UNLOCK=hashpwd2 in /etc/tpm2-kira/unlock.conf and rebuild the")
+	fmt.Println("Then mark the keyslot (tpm2-kira luks mark <device> --keyslot N --mode password+salt),")
+	fmt.Println("set TPM2_KIRA_UNLOCK=password+salt in /etc/tpm2-kira/unlock.conf and rebuild the")
 	fmt.Println("initramfs: at boot tpm2-kira asks for the password and the salt and derives this")
 	fmt.Println("key. Keep a recovery passphrase in another keyslot; it works at cryptsetup's prompt.")
 	return nil

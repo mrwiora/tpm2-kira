@@ -286,25 +286,34 @@ func consolePassphrase(volume string) ([]byte, error) {
 	return consoleAsk(volume, "passphrase", "")
 }
 
-// diskKey is the key provider's answer. When the phone released a factor
-// in this boot and the TPM opened it (factor.go), the typed password and
-// the factor's salt are combined (Combine, hashpwd2's derivation) into
-// the key. Without a factor, in mode hashpwd2 (unlock.conf) the password
-// and a typed salt are combined the same way - hashpwd2 inside tpm2-kira,
-// no phone needed; in mode passphrase the typed passphrase is the key, as
-// it is for a volume enrolled by hand. salt returns the released salt or
-// nil; the key is for the caller to wipe.
+// errUnlockSkipped: mode skip, or no remote salt in a mode that needs
+// one: tpm2-kira gives no key, and cryptsetup's own prompt follows.
+var errUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own prompt follows")
+
+// diskKey is the key provider's answer, as unlock.conf says (unlock_config.go):
+//
+//	skip                 no answer: cryptsetup's own prompt, tpm2-kira untouched
+//	password+salt        a typed password and a typed salt, combined (hashpwd2's derivation)
+//	password+remotesalt  a typed password and the salt the verifier released in this boot
+//	                     and the TPM opened (factor.go); without one, no answer
+//
+// salt returns the released salt or nil; the key is for the caller to wipe.
 func diskKey(salt func() []byte, mode string) func(volume string) ([]byte, error) {
 	return func(volume string) ([]byte, error) {
-		s := salt()
-		if s == nil && mode != UnlockHashpwd2 {
-			return consolePassphrase(volume)
-		}
-		note := "hashpwd2: the key is derived from your password and salt (Argon2id, some seconds).\n" +
-			"   (Ctrl-C skips to cryptsetup's own prompt, where the recovery passphrase works.)"
-		if s != nil {
-			note = "The phone released the disk factor: the key is derived from it and your password.\n" +
+		var s []byte
+		var note string
+		switch mode {
+		case UnlockPasswordSalt:
+			note = "The key is derived from your password and salt (Argon2id, some seconds).\n" +
 				"   (Ctrl-C skips to cryptsetup's own prompt, where the recovery passphrase works.)"
+		case UnlockPasswordRemoteSalt:
+			if s = salt(); s == nil {
+				return nil, errors.New("no remote salt was released in this boot: " + errUnlockSkipped.Error())
+			}
+			note = "The verifier released the disk's salt: the key is derived from it and your password.\n" +
+				"   (Ctrl-C skips to cryptsetup's own prompt, where the recovery passphrase works.)"
+		default:
+			return nil, errUnlockSkipped
 		}
 		pw, err := consoleAsk(volume, "password", note)
 		if err != nil {

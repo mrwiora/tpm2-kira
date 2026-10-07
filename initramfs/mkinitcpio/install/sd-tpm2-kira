@@ -156,11 +156,19 @@ _add_unlock() {
     add_systemd_unit tpm2-kira-unlock.socket
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-unlock.socket \
         /usr/lib/systemd/system/tpm2-kira-unlock.socket
-    # How the provider answers (passphrase, or hashpwd2's password and salt).
+    # How the disk's key is made (unlock.conf: skip, password+salt,
+    # password+remotesalt).
     if [[ -r /etc/tpm2-kira/unlock.conf ]]; then
         add_file /etc/tpm2-kira/unlock.conf
-        if grep -q '^TPM2_KIRA_UNLOCK=hashpwd2' /etc/tpm2-kira/unlock.conf; then
-            plain "tpm2-kira: the disk's key is derived from password and salt (hashpwd2) at boot"
+        local mode
+        mode=$(sed -n 's/^TPM2_KIRA_UNLOCK=//p' /etc/tpm2-kira/unlock.conf | tail -1)
+        plain "tpm2-kira: unlock mode ${mode:-skip}"
+        if [[ $mode == password+remotesalt ]]; then
+            local enrolled
+            enrolled=$(tpm2-kira attest status --json 2>/dev/null)
+            if [[ -z $enrolled || $enrolled == '[]' ]]; then
+                warning "tpm2-kira: unlock mode password+remotesalt, but no phone is enrolled: the remote salt is only released by an attestation. Every boot will fall back to cryptsetup's own prompt"
+            fi
         fi
     fi
 

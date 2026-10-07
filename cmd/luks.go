@@ -1,0 +1,305 @@
+package cmd
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// tpm2-kira's keyslots in a LUKS2 header (PLAN-LUKS.md §2): a token of
+// type "tpm2-kira" bound to the keyslot says how the key in it is made at
+// the prompt. No key material is in it; cryptsetup needs no handler for
+// it, since the key comes through the socket or the keyscript, not
+// through the token. Read with luksDump --dump-json-metadata, written
+// with token import.
+
+// LuksTokenType is the token's type in the header.
+const LuksTokenType = "tpm2-kira"
+
+// The modes a keyslot's key is made in, as the token and unlock.conf
+// name them.
+const (
+	LuksModePasswordSalt       = UnlockPasswordSalt       // "password+salt"
+	LuksModePasswordRemoteSalt = UnlockPasswordRemoteSalt // "password+remotesalt"
+)
+
+// LuksToken is the token's JSON.
+type LuksToken struct {
+	Type     string   `json:"type"`
+	Keyslots []string `json:"keyslots"`
+	Mode     string   `json:"mode"`
+	Slot     *int     `json:"slot,omitempty"` // the tpm2-kira slot of the remote salt
+	Label    string   `json:"label,omitempty"`
+	Created  string   `json:"created"`
+}
+
+// luksMetadata is the part of luksDump --dump-json-metadata this reads.
+type luksMetadata struct {
+	Keyslots map[string]struct {
+		Type string `json:"type"`
+	} `json:"keyslots"`
+	Tokens map[string]json.RawMessage `json:"tokens"`
+}
+
+// cryptsetup runs cryptsetup with stdin and returns its output.
+var cryptsetup = func(stdin []byte, args ...string) ([]byte, error) {
+	c := exec.Command("cryptsetup", args...)
+	c.Stdin = bytes.NewReader(stdin)
+	var out, errb bytes.Buffer
+	c.Stdout, c.Stderr = &out, &errb
+	if err := c.Run(); err != nil {
+		msg := strings.TrimSpace(errb.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return nil, fmt.Errorf("cryptsetup %s: %s", args[0], msg)
+	}
+	return out.Bytes(), nil
+}
+
+// luksDevices lists the crypto_LUKS block devices lsblk knows.
+func luksDevices() ([]string, error) {
+	out, err := exec.Command("lsblk", "-J", "-o", "PATH,FSTYPE").Output()
+	if err != nil {
+		return nil, fmt.Errorf("lsblk: %w", err)
+	}
+	return parseLsblk(out)
+}
+
+func parseLsblk(out []byte) ([]string, error) {
+	type dev struct {
+		Path     string `json:"path"`
+		FSType   string `json:"fstype"`
+		Children []dev  `json:"children"`
+	}
+	var top struct {
+		Devices []dev `json:"blockdevices"`
+	}
+	if err := json.Unmarshal(out, &top); err != nil {
+		return nil, fmt.Errorf("lsblk: %w", err)
+	}
+	var found []string
+	var walk func([]dev)
+	walk = func(ds []dev) {
+		for _, d := range ds {
+			if d.FSType == "crypto_LUKS" {
+				found = append(found, d.Path)
+			}
+			walk(d.Children)
+		}
+	}
+	walk(top.Devices)
+	sort.Strings(found)
+	return found, nil
+}
+
+// KeyslotStatus is one keyslot of a device as luks status reports it.
+type KeyslotStatus struct {
+	Keyslot int        `json:"keyslot"`
+	Token   *LuksToken `json:"token,omitempty"` // nil: not tpm2-kira's
+	TokenID int        `json:"token_id,omitempty"`
+}
+
+// LuksDeviceStatus is one device.
+type LuksDeviceStatus struct {
+	Device   string          `json:"device"`
+	Keyslots []KeyslotStatus `json:"keyslots"`
+	Error    string          `json:"error,omitempty"`
+}
+
+// readLuksStatus reads a device's header and pairs keyslots with tokens.
+func readLuksStatus(device string) LuksDeviceStatus {
+	st := LuksDeviceStatus{Device: device}
+	out, err := cryptsetup(nil, "luksDump", "--dump-json-metadata", device)
+	if err != nil {
+		st.Error = err.Error()
+		return st
+	}
+	slots, err := parseLuksMetadata(out)
+	if err != nil {
+		st.Error = err.Error()
+		return st
+	}
+	st.Keyslots = slots
+	return st
+}
+
+func parseLuksMetadata(out []byte) ([]KeyslotStatus, error) {
+	var md luksMetadata
+	if err := json.Unmarshal(out, &md); err != nil {
+		return nil, fmt.Errorf("the header's metadata does not parse (LUKS2 only): %w", err)
+	}
+	byKeyslot := map[string]KeyslotStatus{}
+	for num := range md.Keyslots {
+		n, _ := strconv.Atoi(num)
+		byKeyslot[num] = KeyslotStatus{Keyslot: n}
+	}
+	for id, raw := range md.Tokens {
+		var tok LuksToken
+		if err := json.Unmarshal(raw, &tok); err != nil || tok.Type != LuksTokenType {
+			continue
+		}
+		tid, _ := strconv.Atoi(id)
+		for _, ks := range tok.Keyslots {
+			if s, ok := byKeyslot[ks]; ok {
+				t := tok
+				s.Token, s.TokenID = &t, tid
+				byKeyslot[ks] = s
+			}
+		}
+	}
+	var slots []KeyslotStatus
+	for _, s := range byKeyslot {
+		slots = append(slots, s)
+	}
+	sort.Slice(slots, func(i, j int) bool { return slots[i].Keyslot < slots[j].Keyslot })
+	return slots, nil
+}
+
+// LuksStatus prints which keyslots of the given devices (all LUKS devices
+// when none is given) are tpm2-kira's, and how their key is made.
+func LuksStatus(devices []string, jsonOut bool) error {
+	if len(devices) == 0 {
+		var err error
+		if devices, err = luksDevices(); err != nil {
+			return err
+		}
+		if len(devices) == 0 {
+			fmt.Println("No LUKS device found.")
+			return nil
+		}
+	}
+	var all []LuksDeviceStatus
+	for _, d := range devices {
+		all = append(all, readLuksStatus(d))
+	}
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(all)
+	}
+	for _, st := range all {
+		fmt.Printf("%s\n", st.Device)
+		if st.Error != "" {
+			fmt.Printf("  %s\n", st.Error)
+			continue
+		}
+		for _, s := range st.Keyslots {
+			fmt.Printf("  keyslot %d: %s\n", s.Keyslot, describeKeyslot(s))
+		}
+	}
+	return nil
+}
+
+func describeKeyslot(s KeyslotStatus) string {
+	if s.Token == nil {
+		return "not tpm2-kira's (a passphrase, or a key enrolled by other means)"
+	}
+	t := s.Token
+	switch t.Mode {
+	case LuksModePasswordSalt:
+		return fmt.Sprintf("tpm2-kira, password+salt: a typed password and a typed salt (token %d, %s)", s.TokenID, t.Created)
+	case LuksModePasswordRemoteSalt:
+		slot := "?"
+		if t.Slot != nil {
+			slot = strconv.Itoa(*t.Slot)
+		}
+		return fmt.Sprintf("tpm2-kira, password+remotesalt: a typed password and the verifier's salt, slot %s, label %q (token %d, %s)", slot, t.Label, s.TokenID, t.Created)
+	}
+	return fmt.Sprintf("tpm2-kira, mode %q (token %d)", t.Mode, s.TokenID)
+}
+
+// LuksMarkOptions is what luks mark takes.
+type LuksMarkOptions struct {
+	TPMPath   string
+	Device    string
+	Keyslot   int
+	Mode      string
+	SealIndex uint32 // password+remotesalt: the slot whose remote salt it is
+	Label     string
+	Debug     bool
+}
+
+// errNoRemoteSalt: password+remotesalt is only ever available with an
+// attestation set up: a verifier enrolled for the slot, and the slot's
+// remote salt enrolled with it.
+var errNoRemoteSalt = errors.New("password+remotesalt needs an attestation: a phone enrolled for the slot ('tpm2-kira attest enrol') and the remote salt enrolled with it ('tpm2-kira remotesalt enrol')")
+
+// checkRemoteSaltReady says whether the slot can release a remote salt at
+// all: a verifier is enrolled and the release key exists.
+func checkRemoteSaltReady(tpmPath string, sealIndex uint32) error {
+	tpmDev, err := OpenTPM(tpmPath)
+	if err != nil {
+		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+	}
+	defer tpmDev.Close()
+	att, err := loadAttestBlob(tpmDev, sealIndex)
+	if err != nil {
+		return fmt.Errorf("%w (slot %d has no phone enrolled)", errNoRemoteSalt, attestSlot(sealIndex))
+	}
+	if len(att.ReleaseKeyPublic) == 0 {
+		return fmt.Errorf("%w (slot %d has no release key yet)", errNoRemoteSalt, attestSlot(sealIndex))
+	}
+	return nil
+}
+
+// LuksMark writes the token for an existing keyslot. For
+// password+remotesalt the slot must be able to release one (checkRemoteSaltReady).
+func LuksMark(o LuksMarkOptions) error {
+	device, keyslot, mode, label := o.Device, o.Keyslot, o.Mode, o.Label
+	if mode != LuksModePasswordSalt && mode != LuksModePasswordRemoteSalt {
+		return fmt.Errorf("--mode must be %s or %s", LuksModePasswordSalt, LuksModePasswordRemoteSalt)
+	}
+	slot := 0
+	if mode == LuksModePasswordRemoteSalt {
+		idx, err := AttestIndexForSlot(o.SealIndex)
+		if err != nil {
+			return err
+		}
+		if err := checkRemoteSaltReady(o.TPMPath, idx); err != nil {
+			return err
+		}
+		slot = int(attestSlot(idx))
+	}
+	st := readLuksStatus(device)
+	if st.Error != "" {
+		return errors.New(st.Error)
+	}
+	var have *KeyslotStatus
+	for i := range st.Keyslots {
+		if st.Keyslots[i].Keyslot == keyslot {
+			have = &st.Keyslots[i]
+		}
+	}
+	if have == nil {
+		return fmt.Errorf("%s has no keyslot %d", device, keyslot)
+	}
+	if have.Token != nil {
+		return fmt.Errorf("keyslot %d is marked already (token %d, %s); remove it first: tpm2-kira luks remove", keyslot, have.TokenID, have.Token.Mode)
+	}
+	tok := LuksToken{Type: LuksTokenType, Keyslots: []string{strconv.Itoa(keyslot)}, Mode: mode, Created: time.Now().UTC().Format(time.RFC3339)}
+	if mode == LuksModePasswordRemoteSalt {
+		s := slot
+		tok.Slot = &s
+		if label == "" {
+			label = "luks"
+		}
+		tok.Label = label
+	}
+	b, err := json.Marshal(tok)
+	if err != nil {
+		return err
+	}
+	if _, err := cryptsetup(b, "token", "import", "--json-file", "-", device); err != nil {
+		return err
+	}
+	fmt.Printf("%s keyslot %d marked: %s\n", device, keyslot, describeKeyslot(KeyslotStatus{Keyslot: keyslot, Token: &tok}))
+	return nil
+}

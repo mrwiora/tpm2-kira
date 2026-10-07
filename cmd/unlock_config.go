@@ -11,10 +11,11 @@ import (
 // DefaultUnlockConfigPath holds how the key provider answers.
 const DefaultUnlockConfigPath = "/etc/tpm2-kira/unlock.conf"
 
-// The provider's modes (TPM2_KIRA_UNLOCK).
+// The provider's modes (TPM2_KIRA_UNLOCK): how the disk's key is made.
 const (
-	UnlockPassphrase = "passphrase" // the passphrase as typed
-	UnlockHashpwd2   = "hashpwd2"   // password and salt, combined (combine.go)
+	UnlockSkip               = "skip"                // tpm2-kira stays out of it: cryptsetup's own prompt
+	UnlockPasswordSalt       = "password+salt"       // a typed password and a typed salt, combined (combine.go)
+	UnlockPasswordRemoteSalt = "password+remotesalt" // a typed password and the salt a verifier released
 )
 
 // UnlockConfig is /etc/tpm2-kira/unlock.conf: shell-style KEY=VALUE lines,
@@ -23,9 +24,9 @@ type UnlockConfig struct {
 	Mode string
 }
 
-// LoadUnlockConfig reads the file; a missing file means the passphrase.
+// LoadUnlockConfig reads the file; a missing file means skip.
 func LoadUnlockConfig(path string) (UnlockConfig, error) {
-	cfg := UnlockConfig{Mode: UnlockPassphrase}
+	cfg := UnlockConfig{Mode: UnlockSkip}
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return cfg, nil
@@ -38,7 +39,7 @@ func LoadUnlockConfig(path string) (UnlockConfig, error) {
 
 // ParseUnlockConfig parses unlock.conf content.
 func ParseUnlockConfig(data []byte) (UnlockConfig, error) {
-	cfg := UnlockConfig{Mode: UnlockPassphrase}
+	cfg := UnlockConfig{Mode: UnlockSkip}
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	n := 0
 	for sc.Scan() {
@@ -56,10 +57,10 @@ func ParseUnlockConfig(data []byte) (UnlockConfig, error) {
 		switch key {
 		case "TPM2_KIRA_UNLOCK":
 			switch val {
-			case UnlockPassphrase, UnlockHashpwd2:
+			case UnlockSkip, UnlockPasswordSalt, UnlockPasswordRemoteSalt:
 				cfg.Mode = val
 			default:
-				return cfg, fmt.Errorf("unlock.conf line %d: TPM2_KIRA_UNLOCK must be passphrase or hashpwd2, not %q", n, val)
+				return cfg, fmt.Errorf("unlock.conf line %d: TPM2_KIRA_UNLOCK must be skip, password+salt or password+remotesalt, not %q", n, val)
 			}
 		default:
 			return cfg, fmt.Errorf("unlock.conf line %d: unknown key %q", n, key)

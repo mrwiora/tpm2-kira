@@ -18,7 +18,8 @@ import (
 // /lib/cryptsetup/scripts/tpm2-kira runs 'tpm2-kira unlock-key <volume>',
 // which asks the same socket the same way systemd-cryptsetup would - from
 // an abstract address named /cryptsetup/<volume> - and writes the answer
-// to stdout. Without the socket (no TPM, 'once' mode, a failure) it
+// to stdout. Without the socket (no TPM, 'once' mode, a failure), or
+// when tpm2-kira has no key to give (mode skip, no remote salt), it
 // becomes cryptsetup's own prompt, /lib/cryptsetup/askpass, so the boot
 // is never worse than without tpm2-kira. cryptroot's tries= re-runs the
 // keyscript after a wrong key, which asks at tpm2-kira's prompt again.

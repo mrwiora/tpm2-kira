@@ -446,7 +446,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 		}
 	}()
 	salt := []byte("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-	key, err := diskKey(func() []byte { return append([]byte(nil), salt...) }, UnlockPassphrase)("cryptroot")
+	key, err := diskKey(func() []byte { return append([]byte(nil), salt...) }, UnlockPasswordRemoteSalt)("cryptroot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,15 +454,21 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 	if !bytes.Equal(key, want) {
 		t.Fatal("the key is not the combination of password and salt")
 	}
-	if p := <-prompts; !strings.Contains(p, "released the disk factor") || !strings.Contains(p, "enter password for disk cryptroot") {
+	if p := <-prompts; !strings.Contains(p, "released the disk's salt") || !strings.Contains(p, "enter password for disk cryptroot") {
 		t.Errorf("prompt: %q", p)
 	}
-	plain, err := diskKey(func() []byte { return nil }, UnlockPassphrase)("cryptroot")
-	if err != nil || string(plain) != "hunter2" {
-		t.Fatalf("without a factor: %q %v", plain, err)
+	// Without a released salt the mode gives no key and asks nothing;
+	// mode skip never asks.
+	if _, err := diskKey(func() []byte { return nil }, UnlockPasswordRemoteSalt)("cryptroot"); err == nil || !strings.Contains(err.Error(), "no remote salt") {
+		t.Fatalf("without a remote salt: %v", err)
 	}
-	if p := <-prompts; !strings.Contains(p, "enter passphrase for disk cryptroot") || strings.Contains(p, "factor") {
-		t.Errorf("prompt without a factor: %q", p)
+	if _, err := diskKey(func() []byte { return append([]byte(nil), salt...) }, UnlockSkip)("cryptroot"); !errors.Is(err, errUnlockSkipped) {
+		t.Fatalf("skip: %v", err)
+	}
+	select {
+	case p := <-prompts:
+		t.Fatalf("a prompt without a key to give: %q", p)
+	default:
 	}
 }
 
@@ -489,10 +495,9 @@ func TestAskUnlockSocket(t *testing.T) {
 	}
 }
 
-// In mode hashpwd2 the provider asks for the password and the salt and
-// answers with their combination; a released factor takes the salt's
-// place and only the password is asked for.
-func TestDiskKeyHashpwd2Mode(t *testing.T) {
+// In mode password+salt the provider asks for the password and the salt
+// and answers with their combination.
+func TestDiskKeyPasswordSaltMode(t *testing.T) {
 	if testing.Short() {
 		t.Skip("1 GiB of Argon2id")
 	}
@@ -530,7 +535,7 @@ func TestDiskKeyHashpwd2Mode(t *testing.T) {
 			}()
 		}
 	}()
-	key, err := diskKey(func() []byte { return nil }, UnlockHashpwd2)("cryptroot")
+	key, err := diskKey(func() []byte { return nil }, UnlockPasswordSalt)("cryptroot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,25 +552,28 @@ func TestDiskKeyHashpwd2Mode(t *testing.T) {
 			done = true
 		}
 	}
-	if !strings.Contains(seen, "hashpwd2: the key is derived") || !strings.Contains(seen, "enter password") || !strings.Contains(seen, "enter salt") {
+	if !strings.Contains(seen, "derived from your password and salt") || !strings.Contains(seen, "enter password") || !strings.Contains(seen, "enter salt") {
 		t.Errorf("prompts: %q", seen)
 	}
 }
 
 func TestParseUnlockConfig(t *testing.T) {
-	cfg, err := ParseUnlockConfig([]byte("# comment\nTPM2_KIRA_UNLOCK=hashpwd2\n"))
-	if err != nil || cfg.Mode != UnlockHashpwd2 {
+	cfg, err := ParseUnlockConfig([]byte("# comment\nTPM2_KIRA_UNLOCK=password+salt\n"))
+	if err != nil || cfg.Mode != UnlockPasswordSalt {
 		t.Fatalf("%+v %v", cfg, err)
 	}
-	if cfg, err := ParseUnlockConfig(nil); err != nil || cfg.Mode != UnlockPassphrase {
+	if cfg, err := ParseUnlockConfig([]byte("TPM2_KIRA_UNLOCK=password+remotesalt\n")); err != nil || cfg.Mode != UnlockPasswordRemoteSalt {
+		t.Fatalf("%+v %v", cfg, err)
+	}
+	if cfg, err := ParseUnlockConfig(nil); err != nil || cfg.Mode != UnlockSkip {
 		t.Fatalf("empty: %+v %v", cfg, err)
 	}
-	for _, bad := range []string{"TPM2_KIRA_UNLOCK=yes\n", "TPM2_KIRA_SALT=x\n", "nonsense\n"} {
+	for _, bad := range []string{"TPM2_KIRA_UNLOCK=yes\n", "TPM2_KIRA_UNLOCK=hashpwd2\n", "TPM2_KIRA_SALT=x\n", "nonsense\n"} {
 		if _, err := ParseUnlockConfig([]byte(bad)); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
 	}
-	if cfg, err := LoadUnlockConfig(filepath.Join(t.TempDir(), "none")); err != nil || cfg.Mode != UnlockPassphrase {
+	if cfg, err := LoadUnlockConfig(filepath.Join(t.TempDir(), "none")); err != nil || cfg.Mode != UnlockSkip {
 		t.Fatalf("missing file: %+v %v", cfg, err)
 	}
 }

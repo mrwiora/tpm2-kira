@@ -165,6 +165,8 @@ If called without a command, tpm2-kira defaults to `reveal`.
 | `attest signer` | Print this machine's signing public key for the initramfs, after checking the enrolled records against it and the TPM's record counter (used by the hooks; exit 6 if a record does not pass) |
 | `attest quote` / `attest verify` | Produce evidence without a phone / judge it offline |
 | `attest unenrol` | Remove a slot's phones from its blob (needs the signing key; the TOTP key stays) |
+| `derive` | hashpwd2 by hand: password and salt to a key file on tmpfs for `cryptsetup luksAddKey` |
+| `luks status` / `luks mark` | Which LUKS keyslots are tpm2-kira's (a token in the header), and how their key is made |
 | `pcrtips` | PCR reference guide — what each register measures |
 | `version` | Print version |
 
@@ -564,21 +566,26 @@ without a UUID routes every volume named on the command line.
 `mkinitcpio` reports what is configured (`the volume <UUID> is unlocked
 through tpm2-kira's prompt`) or, if nothing is, the parameter to add.
 
-### hashpwd2 at the prompt: password and salt, no phone
+### What tpm2-kira does with the disk's key: `unlock.conf`
 
-tpm2-kira can be [hashpwd2](https://github.com/mrwiora/hashpwd2) at the
-prompt, on Arch and on Debian alike: with
+`/etc/tpm2-kira/unlock.conf` names it, in three modes, the same on Arch
+and Debian; the hooks copy the file into the image, so rebuild after a
+change:
 
-```
-# /etc/tpm2-kira/unlock.conf
-TPM2_KIRA_UNLOCK=hashpwd2
-```
+| `TPM2_KIRA_UNLOCK=` | at boot, after the code screen |
+|---|---|
+| `skip` (default) | tpm2-kira stays out of it: cryptsetup's own prompt asks for the LUKS passphrase |
+| `password+salt` | tpm2-kira asks for a **password** and a **salt** and hands over [hashpwd2](https://github.com/mrwiora/hashpwd2)'s derivation of the two - the same bytes hashpwd2 prints, so a keyslot enrolled with hashpwd2 opens as it is |
+| `password+remotesalt` | tpm2-kira asks for the **password**; the salt is the one the phone released after verifying the machine and this TPM opened (next section). Only with an attestation set up; without a released salt, no answer |
 
-and a rebuilt initramfs, the prompt after the code screen asks for a
-**password** and a **salt** and hands `systemd-cryptsetup` (Arch) or the
-keyscript (Debian) hashpwd2's derivation of the two - the same bytes
-hashpwd2 prints, so a keyslot enrolled with hashpwd2 opens as it is. For
-a new keyslot, derive the key once on the unlocked system and add it:
+In every mode a wrong answer, or Ctrl-C at tpm2-kira's prompt, goes to
+cryptsetup's own prompt, where the recovery passphrase works - keep one
+in its own keyslot. The derivation needs 1 GiB of memory in the initramfs
+and takes some seconds; the keyboard layout in the initramfs must be the
+one the password was typed with (`sd-vconsole` on Arch, the `keymap`
+hook on Debian).
+
+A keyslot for `password+salt`, made on the unlocked system:
 
 ```bash
 sudo mkdir -m 700 -p /run/tpm2-kira
@@ -586,15 +593,14 @@ sudo tpm2-kira derive --out /run/tpm2-kira/luks.key     # asks password (twice) 
 sudo cryptsetup luksAddKey /dev/nvme0n1p2 /run/tpm2-kira/luks.key
 sudo cryptsetup open --test-passphrase /dev/nvme0n1p2 --key-file /run/tpm2-kira/luks.key
 sudo rm /run/tpm2-kira/luks.key
+sudo tpm2-kira luks mark /dev/nvme0n1p2 --keyslot 1 --mode password+salt
 ```
 
-Keep a recovery passphrase in another keyslot: Ctrl-C at tpm2-kira's
-prompt, or a wrong answer, goes to cryptsetup's own prompt where it
-works. The derivation needs 1 GiB of memory in the initramfs and takes
-some seconds; the keyboard layout in the initramfs must be the one the
-password was typed with (`sd-vconsole` on Arch, the `keymap` hook on
-Debian). With a phone and a factor enrolled (next section), the factor
-takes the salt's place and only the password is asked for.
+The last line marks the keyslot as tpm2-kira's with a LUKS2 token in the
+header (no key material; `cryptsetup luksDump` lists it as
+`tpm2-kira`), so that `tpm2-kira luks status` can say which keyslot is
+whose and how its key is made. The plan for `luks enrol`, which will do
+all of the above in one step, is [docs/PLAN-LUKS.md](docs/PLAN-LUKS.md).
 
 ### The disk factor: your password and the phone, together
 
