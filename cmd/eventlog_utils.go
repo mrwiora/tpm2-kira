@@ -24,6 +24,18 @@ type EventlogPCRCalculator struct {
 	PCRIndices []int
 	HashAlgo   PCRHashAlgo
 	Debug      bool
+	// Prediction is set when PCR 8/9 were predicted for the next boot
+	// from this boot's log and the files on disk (grub_predict.go).
+	Prediction *grubPrediction
+}
+
+func (calc *EventlogPCRCalculator) wantsPCR(n int) bool {
+	for _, i := range calc.PCRIndices {
+		if i == n {
+			return true
+		}
+	}
+	return false
 }
 
 // NewEventlogPCRCalculator creates a new eventlog PCR calculator
@@ -104,6 +116,26 @@ func (calc *EventlogPCRCalculator) CalculatePCRsFromEventlogPath(eventlogPath st
 			}
 		}
 		return nil, nil, fmt.Errorf("eventlog contains no %s events", calc.HashAlgo.DisplayString())
+	}
+
+	// PCR 8 and 9 on a GRUB system: the next boot's values, from this
+	// boot's log with what changed on disk put in (grub_predict.go). On
+	// a system without GRUB's events nothing matches and nothing changes.
+	if calc.wantsPCR(8) || calc.wantsPCR(9) {
+		if p := predictGRUB(events, diskFiles{}, installedKernels("/boot")); len(p.Substituted) > 0 {
+			calc.Prediction = p
+			fmt.Printf("PCR 8/9 predicted for the next boot from the files on disk (%d of the log's entries changed", len(p.Substituted))
+			if p.NewKernel != "" {
+				fmt.Printf("; kernel %s", p.NewKernel)
+			}
+			fmt.Println("):")
+			for _, line := range p.Substituted {
+				if len(line) > 110 {
+					line = line[:107] + "..."
+				}
+				fmt.Printf("  %s\n", line)
+			}
+		}
 	}
 
 	// Calculate PCR values by replaying the eventlog

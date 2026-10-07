@@ -656,10 +656,16 @@ policy: `leave-initrd`, `sysinit`, `ready` (PCR 11), `machine-id:<id>` (PCR 15),
 > of every file it reads — grub.cfg, modules, kernel, initrd — plus
 > `LOADED_IMAGE::LoadOptions`) instead.
 >
-> PCR 9 therefore changes on **every** kernel or initramfs update, and no
-> source can predict its next value the way `11u` predicts PCR 11 from a UKI on
-> disk — every Debian source is read from the running system. Sealing PCR 8/9
-> means re-sealing after the reboot that follows an update, not before it.
+> PCR 8 and 9 therefore change on **every** kernel or initramfs update. The
+> `e` source predicts their next value from this boot's log: GRUB's and the
+> stub's digest conventions are known (a file event is the file's SHA-256, a
+> `grub_cmd` the command text's, the load options the UTF-16 of
+> `BOOT_IMAGE=` plus the command line), so the entries of what changed on disk
+> are replaced and the log replayed (`cmd/grub_predict.go`, with the
+> `menuentry`/`submenu` commands rebuilt from the new grub.cfg, since GRUB
+> measures them with their body). What it cannot foresee - a menu choice, an
+> edited command line, a grubenv the boot rewrites - leaves a boot without a
+> code and a reseal after it.
 
 **UKI section measurement.** systemd-stub measures each present section twice,
 in its own fixed order (`.linux`, `.osrel`, `.cmdline`, `.initrd`, `.ucode`,

@@ -1,0 +1,17 @@
+#!/bin/sh
+# Run by the kernel package hooks (/etc/kernel/postinst.d, postrm.d) after
+# zz-update-grub has written the new grub.cfg: the last word on what GRUB
+# will measure at the next boot. Reseals with PCR 8 and 9 predicted from
+# this boot's event log and the files on disk (the new kernel, its initrd,
+# the menu entries of the new grub.cfg).
+#   $1 kernel version   $2 kernel image path
+
+set -e
+
+command -v tpm2-kira >/dev/null 2>&1 || exit 0
+[ -d /etc/tpm2-kira/keys ] || exit 0
+tpm2-kira info --json 2>/dev/null | grep -q '"index"' || exit 0
+
+echo "tpm2-kira: kernel $1 and grub.cfg changed; resealing for the next boot" >&2
+tpm2-kira reseal || echo "tpm2-kira: reseal did not succeed; the next boot shows no code until 'tpm2-kira reseal' does" >&2
+exit 0

@@ -588,8 +588,8 @@ the TOTP display, waits for the adapter, serves the phone, prints the
 verdict, and never holds the boot.
 
 The new modules and firmware change the initramfs and therefore PCR 11 (UKI)
-or PCR 9 (GRUB): on Arch the post hook reseals automatically; on Debian with
-PCR 9 sealed, reseal after the next boot as described below.
+or PCR 9 (GRUB): on both, the post hook reseals automatically, on Debian
+with PCR 8/9 predicted for the next boot (below).
 
 The same session will later also release the salt for
 [hashpwd2](https://github.com/mrwiora/hashpwd2) when the LUKS key is derived
@@ -880,7 +880,7 @@ apply. GRUB carries the equivalent measurements instead:
 | 9 | contents of every file GRUB reads (grub.cfg, modules, kernel, initrd) + EFI LoadOptions | **every kernel or initramfs update** |
 
 ```bash
-# Measures kernel, initrd and command line; needs the workflow below
+# Measures kernel, initrd and command line; predicted across updates (below)
 tpm2-kira seal --pcrs "0e,2e,4e,7e,8e,9e"
 
 # Stable across kernel updates, but a modified initrd or command line
@@ -888,34 +888,43 @@ tpm2-kira seal --pcrs "0e,2e,4e,7e,8e,9e"
 tpm2-kira seal --pcrs "0e,2e,4e,7e"
 ```
 
-### If you seal PCR 8 or 9: reseal *after* the reboot
+### PCR 8 and 9 are predicted for the next boot
 
-Every PCR source on Debian is read from the **running** system. `reseal` binds
-to the kernel and initrd you booted, so running it right after
-`update-initramfs` would bind to the image you are about to leave. Only a reseal
-after the next boot is correct:
+GRUB measures every command it runs into PCR 8 and every file it reads
+into PCR 9, and the kernel's EFI stub adds its load options and the initrd
+to PCR 9. The event log of the running boot is the complete script of
+that. After an update only the entries of what changed differ, so
+`reseal` replays this boot's log with those entries replaced by what is
+on disk now - the way SUSE's `pcr-oracle` does it; neither Debian nor
+`systemd-pcrlock` (which knows no GRUB) offers this:
 
-```
-update-initramfs / kernel update
-        |
-        v
-    reboot  ->  no TOTP code shown        <- expected, not a compromise
-        |
-        v
-  unlock with your passphrase as usual
-        |
-        v
-  sudo tpm2-kira reseal                    <- re-binds to the new state
-```
+| changed on disk | what is put into the replay |
+|---|---|
+| the initrd (`update-initramfs`) | its SHA-256, in GRUB's file event and the stub's `Linux initrd` tag |
+| a new kernel | the version string in GRUB's `linux`/`initrd`/`echo` commands, the kernel command line and the stub's load options; the kernel's and initrd's SHA-256 |
+| `grub.cfg` (`update-grub`) | its SHA-256, and the `menuentry`/`submenu` commands rebuilt from it - GRUB measures them with their whole body |
+| `grubenv`, GRUB modules, `.lst` files | their SHA-256 |
 
-`/etc/initramfs/post-update.d/tpm2-kira` prints this reminder after a rebuild,
-but only when the sealed policy actually contains PCR 8 or 9. It deliberately
-does **not** reseal.
+The hooks run it: `/etc/initramfs/post-update.d/tpm2-kira` after every
+`update-initramfs`, and `/etc/kernel/postinst.d/zzz-tpm2-kira` (also
+`postrm.d`) after `zz-update-grub` has written the final `grub.cfg` of a
+kernel install or removal. `reseal` prints what it substituted, for
+example `PCR9 /initrd.img-6.12.111+deb13-amd64: now /boot/initrd.img-…`.
+The next boot then shows a code at once; no boot without one, no second
+reseal.
 
-This is a genuine trade-off rather than an oversight. Auto-resealing on every
-boot would remove the churn, but it would also turn a tampered kernel into a
-trusted baseline after a single reboot: unlock once, and the new state is
-sealed. Keeping a human in the loop is the point.
+What the prediction cannot know, and what then happens: a different menu
+entry chosen at the GRUB menu, a command line edited there, a `grubenv`
+the boot rewrites (`GRUB_SAVEDEFAULT`, `recordfail`), or a GRUB package
+update that changes the module set. Such a boot shows no code - expected,
+not a compromise - and `sudo tpm2-kira reseal` after it binds to the
+state you booted, as the reseal always did. The prediction is checked
+against this machine's real log in the test suite
+(`cmd/grub_predict_test.go`, Debian 13, GRUB 2.12).
+
+Resealing is still never automatic at *boot*: a tampered kernel does not
+become a trusted baseline by being booted once. The hooks run on the
+unlocked system, after a change you made.
 
 ## Eventlog PCR Calculator
 

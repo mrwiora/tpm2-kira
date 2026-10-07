@@ -280,11 +280,12 @@ flowchart LR
     Q --> UN["unlock, profile consumed"]
 ```
 
-Where a value cannot be predicted — Debian's PCR 9 is read from the running
-system and no source can compute its next value (SECURITY-BACKGROUND.md §5.7) —
-the honest answer is that unattended reboots need live approval, and the
-documentation should say which PCR selections buy unattended reboots and which
-do not.
+Where a value cannot be predicted — on Debian PCR 8/9 are predicted from
+the running boot's log and the files on disk (`cmd/grub_predict.go`), which
+covers updates but not a menu choice, an edited command line or a grubenv
+rewrite — the honest answer is that unattended reboots need live approval,
+and the documentation should say which PCR selections buy unattended reboots
+and which do not.
 
 ---
 
