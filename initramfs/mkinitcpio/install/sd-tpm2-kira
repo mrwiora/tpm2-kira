@@ -37,7 +37,7 @@ _report_measure_point() {
     fi
 }
 
-ATTEST_CONF=/etc/tpm2-kira/attest.conf
+ATTEST_CONF=${TPM2_KIRA_ATTEST_CONF:-/etc/tpm2-kira/attest.conf}
 
 # Bluetooth for remote attestation (PLAN-BLE.md §3.1), whenever a phone is
 # enrolled. Adds exactly what the configured adapter needs on this machine:
@@ -49,6 +49,13 @@ ATTEST_CONF=/etc/tpm2-kira/attest.conf
 _add_bluetooth() {
     local adapter deps rc log kind value nfw=0
     local -a modules=()
+
+    # A config the gate cannot load would leave the phone unserved at boot
+    # with nothing but a journal line to say so: refuse it here.
+    if [[ -r $ATTEST_CONF ]] && ! tpm2-kira attest config-check "$ATTEST_CONF" >/dev/null 2>&1; then
+        error "tpm2-kira: $ATTEST_CONF is not valid: $(tpm2-kira attest config-check "$ATTEST_CONF" 2>&1 | tail -1)"
+        return 1
+    fi
 
     local enrolled
     enrolled=$(tpm2-kira attest status --json 2>/dev/null)
@@ -227,7 +234,7 @@ build() {
 
     _add_unlock
 
-    _add_bluetooth
+    _add_bluetooth || return 1
 
     if [[ ! -d /etc/tpm2-kira/keys ]]; then
         warning "tpm2-kira: not configured yet; run 'tpm2-kira setup', then 'tpm2-kira seal', and rebuild"

@@ -621,6 +621,16 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 			AdapterWait: cfg.AdapterWait, Debug: *debug || cfg.Debug,
 			Coordinator: *coordinator,
 		}))
+	case "config-check":
+		fs.Parse(args)
+		path := fs.Arg(0)
+		if path == "" {
+			path = cmd.DefaultAttestConfigPath
+		}
+		if _, err := cmd.LoadAttestConfig(path); err != nil {
+			failAttest(cmd.ExitUsage, err)
+		}
+		fmt.Printf("%s: valid\n", path)
 	case "initramfs-deps":
 		// Used by the initramfs hooks; prints "module", "firmware" and
 		// "warning" lines for the adapter on this machine.
@@ -719,6 +729,8 @@ const attestUsage = `ATTEST SUBCOMMANDS:
                   slot without it: nvram delete --nvram N
   attest initramfs-deps  Modules and firmware the adapter needs (used by the
                   initramfs hooks)
+  attest config-check [PATH]  Say whether attest.conf loads (exit 2 and the
+                  reason if not; used by the initramfs hooks)
 
   EXIT STATUS: unlike every other command, 'attest gate', 'attest verify',
   'attest quote' and 'attest enrol' exit non-zero on failure:
