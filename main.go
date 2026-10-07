@@ -68,6 +68,8 @@ func main() {
 		runRun(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "attest":
 		runAttest(commandArgs, *tpmPath, *debug)
+	case "factor":
+		runFactor(commandArgs, *tpmPath, *debug)
 	case "yubikey":
 		runYubiKey(commandArgs)
 	case "cap":
@@ -392,6 +394,53 @@ func failAttest(code int, err error) {
 	os.Exit(code)
 }
 
+func runFactor(args []string, tpmPath string, debugFlag bool) {
+	if len(args) == 0 || args[0] != "enrol" && args[0] != "enroll" {
+		fmt.Fprint(os.Stderr, "factor requires a subcommand: enrol\n\n"+factorUsage)
+		os.Exit(cmd.ExitUsage)
+	}
+	fs := flag.NewFlagSet("factor enrol", flag.ExitOnError)
+	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
+	nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index (default: the first enrolled slot)")
+	label := fs.String("label", "luks", "The factor's label: one factor serves volumes with unrelated salts")
+	out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
+	privKey := fs.String("privkey", "", "Signing key, for the first enrolment of a slot (default: "+cmd.DefaultPrivateKeyPath+")")
+	pubKey := fs.String("pubkey", "", "Signing public key, for the record check (default: "+cmd.DefaultPublicKeyPath+")")
+	adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
+	timeout := fs.Duration("timeout", 10*time.Minute, "Give up waiting for the phone after this long (0 = wait forever)")
+	adapterWait := fs.Duration("adapter-wait", 30*time.Second, "Wait this long for the adapter to appear")
+	yes := fs.Bool("yes", false, "The recovery passphrase is in a second keyslot already; do not ask")
+	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	fs.Parse(args[1:])
+	var slot uint32
+	if nvramExplicit(args[1:]) {
+		slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+	}
+	if err := cmd.FactorEnrol(cmd.FactorEnrolOptions{
+		TPMPath: *tpm, SealIndex: slot, Label: *label, Out: *out, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
+		Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: *yes, Debug: *debug,
+	}); err != nil {
+		fail(err)
+	}
+}
+
+const factorUsage = `The disk factor (docs/PLAN-FACTORRELEASE.md): the phone keeps one half of
+the disk's key - a value only this machine's TPM can open, in a boot its
+signing key approved - and hands it back after a verdict you accept. At
+boot tpm2-kira derives the key from it and your password (hashpwd2's
+derivation) and gives it to systemd-cryptsetup. Without the phone, the
+recovery passphrase in its own keyslot opens the disk at systemd's prompt.
+
+  factor enrol    Give the phone a factor, prove the round trip, derive the
+                  key once for 'cryptsetup luksAddKey':
+                    --out PATH   the key file, on tmpfs (required)
+                    --label STR  default luks
+                    --nvram N --privkey PATH --pubkey PATH --adapter N
+                    --timeout DUR --adapter-wait DUR --yes
+                  Have a recovery passphrase in a second keyslot first:
+                    cryptsetup luksAddKey <device>
+`
+
 func runAttest(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, "attest requires a subcommand.\n\n"+attestUsage)
@@ -589,6 +638,8 @@ COMMANDS:
               remote attestation set up for it (attestation key, PCRs, phones)
   nvram       Manage TPM NVRAM (list, status, delete, restore)
   attest      Remote attestation: a phone verifies this boot over Bluetooth LE.
+  factor      The disk factor: one half of the disk's key, kept by the phone
+              (factor enrol --out /run/tpm2-kira/luks.key)
               Subcommands (details under ATTEST SUBCOMMANDS, or 'attest help'):
     attest enrol      Bind a phone to a sealed slot (needs the signing key)
     attest unenrol    Remove a slot's phones (needs the signing key)

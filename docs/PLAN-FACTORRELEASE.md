@@ -4,9 +4,12 @@
 > combiner inside tpm2-kira (`cmd/combine.go`, byte-identical with
 > hashpwd2), the release key under the slot's approval
 > (`attest/releasekey.go`), wrap, unwrap and the salt derivation
-> (`cmd/factor.go`), all on swtpm. Open: the phone's part (enrolment
-> message, release after the verdict), `factor enrol`, and the provider
-> answering with the derived key. The review of 2026-10-07 changed §1.2,
+> (`cmd/factor.go`), the phone's part (Evidence tags 15-17, the kept
+> factor in the record, Release after the accepted receipt; both apps),
+> the coordinator opening the release before the separator, the provider
+> answering with the derived key (`diskKey`), and `factor enrol`. Open:
+> the hardware run, `factor status`/`rotate`/`unenrol`, and the Debian
+> script. The review of 2026-10-07 changed §1.2,
 > §3.2, §5, §6 and §7 from the first draft; HISTORY.md keeps the draft's
 > shape.
 > **Depends on:** [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md)

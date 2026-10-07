@@ -669,6 +669,59 @@ without a UUID routes every volume named on the command line.
 
 `mkinitcpio` reports what is configured (`the volume <UUID> is unlocked
 through tpm2-kira's prompt`) or, if nothing is, the parameter to add.
+
+### The disk factor: your password and the phone, together
+
+With a phone enrolled, the disk can need **both** your password and a
+factor the phone keeps ([PLAN-FACTORRELEASE.md](docs/PLAN-FACTORRELEASE.md)):
+a value only this machine's TPM can open, and only in a boot your
+signing key approved. The key in the LUKS keyslot is hashpwd2's
+derivation of the two (Argon2id; tpm2-kira computes it itself, byte for
+byte as [hashpwd2](https://github.com/mrwiora/hashpwd2) does). Whoever
+has the disk and the password still needs the phone and this machine;
+whoever has the phone and the machine still needs the password.
+
+1. **Recovery passphrase first**, in its own keyslot, typed at
+   cryptsetup's prompt - long, not the password below, written down
+   somewhere safe. It is the way in without the phone, at systemd's own
+   prompt. `factor enrol` asks whether it exists.
+
+   ```bash
+   sudo cryptsetup luksAddKey /dev/nvme0n1p2
+   ```
+
+2. **Enrol the factor.** On the unlocked system, with Marify open on the
+   phone:
+
+   ```bash
+   sudo mkdir -m 700 -p /run/tpm2-kira
+   sudo tpm2-kira factor enrol --out /run/tpm2-kira/luks.key
+   ```
+
+   The phone shows the ordinary verdict screen with a card "Keep this
+   machine's disk factor"; accepting the verdict keeps it. The phone
+   hands it straight back, the TPM opens it, and only if the round trip
+   gives back what was sent does tpm2-kira ask for your password and
+   write the derived key - once, to tmpfs. The first enrolment of a slot
+   also adds the release key to its blob (needs the signing key).
+
+3. **Add the derived key** and remove the file:
+
+   ```bash
+   sudo cryptsetup luksAddKey /dev/nvme0n1p2 /run/tpm2-kira/luks.key
+   sudo cryptsetup open --test-passphrase /dev/nvme0n1p2 --key-file /run/tpm2-kira/luks.key
+   sudo rm /run/tpm2-kira/luks.key
+   ```
+
+At boot: code screen, the phone verifies and hands the factor back, the
+TPM opens it before the OS separator, and tpm2-kira's prompt says `The
+phone released the disk factor` and asks for the *password*. It derives
+the key (1 GiB of memory, some seconds) and gives it to
+`systemd-cryptsetup`. No phone, no verdict, or a TPM that refused: the
+prompt asks for the *passphrase* as it does without a factor; Ctrl-C at
+either prompt goes to systemd's own prompt for the recovery passphrase.
+A new factor (`factor enrol` again) replaces the old one on the phone;
+remove the old keyslot by hand.
 `/etc/crypttab` is not touched and does not need to be: only if a volume
 is kept there with `x-initrd.attach` instead of on the command line, the
 same socket goes into that line's key field
