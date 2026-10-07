@@ -326,9 +326,9 @@ prompt is always the fallback (docs/PLAN-LUKS.md).
             it is - tpm2-kira, password+salt; tpm2-kira, password+remotesalt,
             slot 0; or not tpm2-kira's
   enrol     The whole thing in one step: asks the password and the salt (or
-            runs the remote salt's round trip with the phone), derives the
-            key, 'cryptsetup luksAddKey' with the key on its stdin (cryptsetup
-            asks an existing passphrase to authorise; a device whose every
+            runs the remote salt's hand-over with the phone), derives the
+            key, asks an existing passphrase of the device (the recovery
+            one) to authorise, 'cryptsetup luksAddKey' (a device whose every
             keyslot is tpm2-kira's is refused), imports the token, sets the
             mode in /etc/tpm2-kira/unlock.conf. Then rebuild the initramfs.
               --nvram N               the slot whose phone keeps the salt
@@ -337,8 +337,8 @@ prompt is always the fallback (docs/PLAN-LUKS.md).
               --no-config             leave unlock.conf alone
               --privkey --pubkey --adapter --timeout --adapter-wait  as remote-salt enrol
   remove    'cryptsetup luksKillSlot' for a keyslot tpm2-kira marked, and
-            its token. A remaining passphrase authorises it (cryptsetup
-            asks; --existing-key-file F for scripts). Never the last keyslot,
+            its token. A remaining passphrase, asked, authorises it
+            (--existing-key-file F for scripts). Never the last keyslot,
             never one that is not tpm2-kira's
   mark      The token for a keyslot made by hand (derive or remote-salt enrol
             --out, then luksAddKey): --keyslot N --mode M [--nvram N --label STR]

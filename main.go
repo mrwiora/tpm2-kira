@@ -519,7 +519,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
 		timeout := fs.Duration("timeout", 10*time.Minute, "Give up waiting for the phone after this long (0 = wait forever)")
 		adapterWait := fs.Duration("adapter-wait", 30*time.Second, "Wait this long for the adapter to appear")
-		existing := fs.String("existing-key-file", "", "A file with an existing passphrase to authorise luksAddKey (scripts; by default cryptsetup asks)")
+		existing := fs.String("existing-key-file", "", "A file with an existing passphrase to authorise luksAddKey (scripts; by default asked)")
 		noConfig := fs.Bool("no-config", false, "Do not set the mode in /etc/tpm2-kira/unlock.conf")
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		fs.Parse(deviceLast(args[1:]))
@@ -540,7 +540,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 	case "remove":
 		fs := flag.NewFlagSet("luks remove", flag.ExitOnError)
 		keyslot := fs.Int("keyslot", -1, "The keyslot to remove, one tpm2-kira marked (required)")
-		existing := fs.String("existing-key-file", "", "A file with a remaining passphrase to authorise luksKillSlot (scripts; by default cryptsetup asks)")
+		existing := fs.String("existing-key-file", "", "A file with a remaining passphrase to authorise luksKillSlot (scripts; by default asked)")
 		fs.Parse(deviceLast(args[1:]))
 		if fs.NArg() != 1 || *keyslot < 0 {
 			fail(fmt.Errorf("usage: tpm2-kira luks remove <device> --keyslot N"))

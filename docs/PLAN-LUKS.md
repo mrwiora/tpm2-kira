@@ -102,6 +102,13 @@ it, a marked keyslot with the mode at `skip`, `password+remotesalt`
 without a remote salt, no fallback slot, a reseal due) with the command
 to run. `--json` for scripts.
 
+## 4a. Open: the inputs from files
+
+`luks enrol` and `luks remove` ask at the terminal: the password, the
+salt, the existing passphrase. For scripts and for a password manager the
+same should come from files (`--password-file`, `--salt-file`; the
+existing passphrase already does, `--existing-key-file`). Not yet.
+
 ## 5. What stays by hand
 
 `derive --out` and `remote-salt enrol --out` write the key to tmpfs for a

@@ -336,7 +336,7 @@ var terminalAsk = terminalPassword
 // LuksEnrol adds a keyslot whose key tpm2-kira makes at boot (PLAN-LUKS.md
 // §3): the password (and the salt, or the remote salt's round trip with
 // the phone), the derivation, 'cryptsetup luksAddKey' with the key on its
-// stdin - cryptsetup asks an existing passphrase to authorise, the
+// stdin and an existing passphrase, asked at the prompt, on a pipe - the
 // recovery keyslot the device must have - the token for the new keyslot,
 // and the mode in unlock.conf. The key is never on disk.
 func LuksEnrol(o LuksEnrolOptions) error {
@@ -404,12 +404,12 @@ func LuksEnrol(o LuksEnrolOptions) error {
 	}
 	defer wipe(key)
 
-	args := []string{"luksAddKey", "--batch-mode"}
-	if o.ExistingKeyFile != "" {
-		args = append(args, "--key-file", o.ExistingKeyFile)
+	existing, err := existingPassphrase(o.Device, o.ExistingKeyFile)
+	if err != nil {
+		return err
 	}
-	args = append(args, o.Device, "-")
-	if _, err := cryptsetupTTY(key, args...); err != nil {
+	defer wipe(existing)
+	if _, err := cryptsetupAuth(key, existing, "luksAddKey", "--batch-mode", "--key-file", existingFD, o.Device, "-"); err != nil {
 		return err
 	}
 	after := readLuksStatus(o.Device)
@@ -467,13 +467,46 @@ func checkRemoteSaltReadyOrEnrolable(tpmPath string, idx uint32) (bool, error) {
 	return true, nil
 }
 
-// cryptsetupTTY runs cryptsetup with the key on stdin and the terminal for
-// its prompts (an existing passphrase to authorise luksAddKey).
-var cryptsetupTTY = func(stdin []byte, args ...string) ([]byte, error) {
+// existingFD is where cryptsetupAuth puts the existing passphrase: a pipe
+// on descriptor 3, named by --key-file. cryptsetup reads a passphrase
+// from stdin when stdin is not a terminal, and stdin carries the new key
+// ('-'), so the two must not share it.
+const existingFD = "/dev/fd/3"
+
+// existingPassphrase is a passphrase of one of the device's other
+// keyslots, which cryptsetup wants before it changes the header: from the
+// file named (scripts), else asked on the terminal. Without a trailing
+// newline, which --key-file would take as part of it.
+func existingPassphrase(device, file string) ([]byte, error) {
+	if file != "" {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			return nil, err
+		}
+		return b, nil
+	}
+	return terminalAsk("An existing passphrase of " + device + " (the recovery passphrase), to authorise: ")
+}
+
+// cryptsetupAuth runs cryptsetup with key on stdin (nil: nothing) and
+// existing on descriptor 3 (existingFD), its messages on stderr.
+var cryptsetupAuth = func(key, existing []byte, args ...string) ([]byte, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
 	c := exec.Command(cryptsetupPath(), args...)
-	c.Stdin = bytes.NewReader(stdin)
+	c.Stdin = bytes.NewReader(key)
 	c.Stdout, c.Stderr = os.Stderr, os.Stderr
-	if err := c.Run(); err != nil {
+	c.ExtraFiles = []*os.File{r}
+	if err := c.Start(); err != nil {
+		w.Close()
+		return nil, err
+	}
+	w.Write(existing)
+	w.Close()
+	if err := c.Wait(); err != nil {
 		return nil, fmt.Errorf("cryptsetup %s: %w", args[0], err)
 	}
 	return nil, nil
@@ -514,7 +547,7 @@ type LuksRemoveOptions struct {
 
 // LuksRemove takes one of tpm2-kira's keyslots out of the header, with its
 // token: 'cryptsetup luksKillSlot', authorised by a remaining passphrase
-// (the recovery keyslot's, at cryptsetup's prompt), then 'token remove'.
+// (the recovery keyslot's, asked at the prompt), then 'token remove'.
 // A keyslot that is not tpm2-kira's is refused - that is cryptsetup's to
 // remove by hand - and so is the last keyslot of the device.
 func LuksRemove(o LuksRemoveOptions) error {
@@ -537,12 +570,12 @@ func LuksRemove(o LuksRemoveOptions) error {
 	if len(st.Keyslots) == 1 {
 		return fmt.Errorf("keyslot %d is the last keyslot of %s; removing it would make the device unopenable", o.Keyslot, o.Device)
 	}
-	args := []string{"luksKillSlot"}
-	if o.ExistingKeyFile != "" {
-		args = append(args, "--batch-mode", "--key-file", o.ExistingKeyFile)
+	existing, err := existingPassphrase(o.Device, o.ExistingKeyFile)
+	if err != nil {
+		return err
 	}
-	args = append(args, o.Device, strconv.Itoa(o.Keyslot))
-	if _, err := cryptsetupTTY(nil, args...); err != nil {
+	defer wipe(existing)
+	if _, err := cryptsetupAuth(nil, existing, "luksKillSlot", "--batch-mode", "--key-file", existingFD, o.Device, strconv.Itoa(o.Keyslot)); err != nil {
 		return err
 	}
 	if _, err := cryptsetup(nil, "token", "remove", "--token-id", strconv.Itoa(have.TokenID), o.Device); err != nil {
