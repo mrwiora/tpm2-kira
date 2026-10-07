@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/matthias/tpm2-kira/cmd"
 )
 
 // The real systemd-cryptsetup unlocks a LUKS2 volume with the key it reads
@@ -46,10 +48,20 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	const passphrase = "correct horse battery staple"
+	// Mode password+salt: the keyslot holds the combination of the two,
+	// which the provider derives from what is typed at its prompts.
+	const password, salt = "correct horse", "battery staple"
+	conf := filepath.Join(dir, "unlock.conf")
+	if err := os.WriteFile(conf, []byte("TPM2_KIRA_UNLOCK=password+salt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := cmd.Combine([]byte(password), []byte(salt))
+	if err != nil {
+		t.Fatal(err)
+	}
 	format := exec.Command("cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode",
 		"--pbkdf", "pbkdf2", "--pbkdf-force-iterations", "1000", "--key-file", "-", img)
-	format.Stdin = strings.NewReader(passphrase) // no newline: a key file's bytes
+	format.Stdin = bytes.NewReader(key)
 	if out, err := format.CombinedOutput(); err != nil {
 		t.Fatalf("luksFormat: %v: %s", err, out)
 	}
@@ -70,9 +82,9 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	}
 	defer cl.Close()
 	prompts := make(chan string, 8)
-	// What the person "types" at the next prompt; "" closes the console
-	// without an answer (Ctrl-D: no key for the volume).
-	answers := make(chan string, 8)
+	// What the person "types" at the next prompts: the password and the
+	// salt; "" closes the console without an answer (Ctrl-C: no key).
+	answers := make(chan [2]string, 8)
 	go func() {
 		for {
 			c, err := cl.Accept()
@@ -81,19 +93,31 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 			}
 			go func() {
 				defer c.Close()
-				buf := make([]byte, 512)
-				n, _ := c.Read(buf)
-				prompts <- string(buf[:n])
-				if a := <-answers; a != "" {
-					c.Write([]byte(a + "\n"))
-					io.Copy(io.Discard, c)
+				a := <-answers
+				buf := make([]byte, 1024)
+				for i := 0; i < 2; i++ {
+					n, err := c.Read(buf)
+					if err != nil {
+						return
+					}
+					s := string(buf[:n])
+					prompts <- s
+					if a[0] == "" {
+						return // cancelled
+					}
+					if strings.Contains(s, "enter password") {
+						c.Write([]byte(a[0] + "\n"))
+					} else if strings.Contains(s, "enter salt") {
+						c.Write([]byte(a[1] + "\n"))
+					}
 				}
+				io.Copy(io.Discard, c)
 			}()
 		}
 	}()
-	answers <- passphrase
+	answers <- [2]string{password, salt}
 	run := exec.Command("./tpm2-kira", "run", "--tpm", filepath.Join(dir, "no-tpm"), "--hold", "0", "--unlock", sock)
-	run.Env = append(os.Environ(), "TPM2_KIRA_CONSOLE="+console)
+	run.Env = append(os.Environ(), "TPM2_KIRA_CONSOLE="+console, "TPM2_KIRA_UNLOCK_CONF="+conf)
 	var runOut bytes.Buffer
 	run.Stdout, run.Stderr = &runOut, &runOut
 	if err := run.Start(); err != nil {
@@ -120,13 +144,17 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	if _, err := os.Stat("/dev/mapper/" + volume); err != nil {
 		t.Fatalf("the volume is not mapped: %v\n%s", err, out)
 	}
-	select {
-	case p := <-prompts:
-		if !strings.Contains(p, "passphrase for disk "+volume) {
-			t.Errorf("prompt: %q", p)
+	seen := ""
+	for done := false; !done; {
+		select {
+		case p := <-prompts:
+			seen += p
+		default:
+			done = true
 		}
-	default:
-		t.Error("tpm2-kira did not ask at its prompt")
+	}
+	if !strings.Contains(seen, "password for disk "+volume) || !strings.Contains(seen, "salt for disk "+volume) {
+		t.Errorf("prompts: %q", seen)
 	}
 	if out, err := exec.Command(sdc, "detach", volume).CombinedOutput(); err != nil {
 		t.Fatalf("detach: %v: %s", err, out)
@@ -146,7 +174,7 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	// itself (its password agent) for the remaining tries. headless=true
 	// makes that step fail with a message instead of a prompt, which is
 	// how the test sees that the fallback was reached.
-	answers <- "not the passphrase"
+	answers <- [2]string{password, "not the salt"}
 	wrong := exec.Command(sdc, "attach", volume, loop, sock, "headless=true")
 	wrong.Env = append(os.Environ(), "SYSTEMD_LOG_LEVEL=info")
 	out, err = wrong.CombinedOutput()
@@ -157,11 +185,13 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	if !bytes.Contains(out, []byte("Key data incorrect?")) || !bytes.Contains(out, []byte("Password querying disabled via 'headless' option.")) {
 		t.Errorf("after a wrong passphrase systemd-cryptsetup should fall back to its own prompt:\n%s", out)
 	}
-	<-prompts
+	for len(prompts) > 0 {
+		<-prompts
+	}
 
 	// No answer at all (the prompt cancelled: tpm2-kira closes without a
 	// key) reads as an empty key file, and the fallback is the same prompt.
-	answers <- ""
+	answers <- [2]string{"", ""}
 	none := exec.Command(sdc, "attach", volume, loop, sock, "headless=true")
 	none.Env = append(os.Environ(), "SYSTEMD_LOG_LEVEL=info")
 	out, err = none.CombinedOutput()
@@ -172,5 +202,4 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	if !bytes.Contains(out, []byte("Password querying disabled via 'headless' option.")) {
 		t.Errorf("after no answer systemd-cryptsetup should fall back to its own prompt:\n%s", out)
 	}
-	<-prompts
 }

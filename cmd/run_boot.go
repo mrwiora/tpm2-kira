@@ -137,6 +137,7 @@ func (b *bootDisplay) holdForConfirmation() ([]NVRAMSlot, bool, error) {
 			if l := limit(); l.Before(until) {
 				until = l
 			}
+			before := gate.Code
 			enter := b.waitFor(until, &gate)
 			if enter || gate.State == GateAttested {
 				return slots, allUp, nil
@@ -147,6 +148,15 @@ func (b *bootDisplay) holdForConfirmation() ([]NVRAMSlot, bool, error) {
 			}
 			if !now.Before(boundary) {
 				break // a new code
+			}
+			if gate.Code != before {
+				// The phone is in: the slot's line shows the phone code
+				// from now on, at once, not at the next window.
+				remaining := limit().Sub(now)
+				if remaining < 0 {
+					remaining = 0
+				}
+				b.show(slots, codes, remaining)
 			}
 		}
 	}
@@ -397,7 +407,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 	} else if l != nil {
 		// As unlock.conf says; the coordinator keeps the salt a verifier
 		// released and the TPM opened.
-		cfg, err := LoadUnlockConfig(DefaultUnlockConfigPath)
+		cfg, err := LoadUnlockConfig(unlockConfigPath())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "tpm2-kira: %v; not answering (mode skip)\n", err)
 		}
@@ -477,6 +487,8 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			if unlock != nil && unlock.Prompting() {
 				return // the prompt owns the console; nothing is drawn over it
 			}
+			st, ok := gateStatus(phone)
+			codes = phoneCodes(codes, st, ok)
 			if tpmDev, err := open(); err == nil {
 				PrintKIRASlots(tpmDev, slots, codes) // with PCR details
 				tpmDev.Close()
@@ -486,7 +498,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			if remaining >= 0 {
 				fmt.Println()
 				if st, ok := gateStatus(phone); ok && st.Asking() {
-					fmt.Printf("   Slot #%d is enrolled with a phone: open the Kira app to verify this boot.\n", st.Slot)
+					fmt.Printf("   Slot #%d is enrolled with a phone: open the Marify app to verify this boot.\n", st.Slot)
 					fmt.Println("   Without the phone: compare the code with your authenticator and press Enter.")
 				} else {
 					fmt.Println("   Does the code match your authenticator? Press Enter to continue to the passphrase.")
@@ -529,6 +541,22 @@ func waitForStop() {
 	<-ch
 }
 
+// phoneCodes puts the phone code in the place of the slot's TOTP code
+// while a phone's session is on: only this machine's TPM, in an approved
+// boot state, could recover what the phone sealed, so the phone must show
+// the same eight characters. The TOTP is for the boot without a phone.
+func phoneCodes(codes map[int]string, st GateStatus, ok bool) map[int]string {
+	if !ok || st.Code == "" {
+		return codes
+	}
+	out := make(map[int]string, len(codes)+1)
+	for k, v := range codes {
+		out[k] = v
+	}
+	out[st.Slot] = st.Code + "  (phone code: the phone must show the same)"
+	return out
+}
+
 func gateStatus(phone func() (GateStatus, bool)) (GateStatus, bool) {
 	if phone == nil {
 		return GateStatus{}, false
@@ -542,15 +570,12 @@ func printGateEvent(prev, cur GateStatus) {
 	switch cur.State {
 	case GateWaiting:
 		if prev.State == "" {
-			fmt.Printf("   Slot #%d can be verified with your phone now: open the Kira app.\n", cur.Slot)
+			fmt.Printf("   Slot #%d can be verified with your phone now: open the Marify app.\n", cur.Slot)
 		}
 	case GateSession:
-		if cur.Code != "" {
-			// Only this machine's TPM, in an approved boot state, could
-			// recover what the phone sealed. Shown like the slot's TOTP
-			// code, as the second code of the same slot.
-			fmt.Printf("\033[0;32m#%d\033[0m: \033[1m%s\033[0m  (phone code: the phone must show the same)\n", cur.Slot, cur.Code)
-		} else if prev.State != GateSession {
+		// The phone code goes into the slot's own line (phoneCodes); here
+		// only the fact that a phone is in.
+		if prev.State != GateSession {
 			fmt.Println("   A phone is connected: answer there. The boot waits for it.")
 		}
 	case GateAttested:

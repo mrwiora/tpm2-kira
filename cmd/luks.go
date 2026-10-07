@@ -303,3 +303,188 @@ func LuksMark(o LuksMarkOptions) error {
 	fmt.Printf("%s keyslot %d marked: %s\n", device, keyslot, describeKeyslot(KeyslotStatus{Keyslot: keyslot, Token: &tok}))
 	return nil
 }
+
+// LuksEnrolOptions is what luks enrol takes.
+type LuksEnrolOptions struct {
+	Device string
+	Mode   string
+	// ExistingKeyFile authorises luksAddKey instead of cryptsetup's prompt
+	// for an existing passphrase (scripts and tests).
+	ExistingKeyFile string
+	// NoConfig leaves unlock.conf alone.
+	NoConfig bool
+	Remote   FactorEnrolOptions // password+remotesalt: the slot, the phone, the keys
+}
+
+// terminalAsk asks on the terminal; tests replace it.
+var terminalAsk = terminalPassword
+
+// LuksEnrol adds a keyslot whose key tpm2-kira makes at boot (PLAN-LUKS.md
+// §3): the password (and the salt, or the remote salt's round trip with
+// the phone), the derivation, 'cryptsetup luksAddKey' with the key on its
+// stdin - cryptsetup asks an existing passphrase to authorise, the
+// recovery keyslot the device must have - the token for the new keyslot,
+// and the mode in unlock.conf. The key is never on disk.
+func LuksEnrol(o LuksEnrolOptions) error {
+	if o.Mode != LuksModePasswordSalt && o.Mode != LuksModePasswordRemoteSalt {
+		return fmt.Errorf("--mode must be %s or %s", LuksModePasswordSalt, LuksModePasswordRemoteSalt)
+	}
+	before := readLuksStatus(o.Device)
+	if before.Error != "" {
+		return errors.New(before.Error)
+	}
+	recovery := false
+	for _, s := range before.Keyslots {
+		if s.Token == nil {
+			recovery = true
+		}
+	}
+	if !recovery {
+		return fmt.Errorf("%s has no keyslot that is not tpm2-kira's: add a recovery passphrase first (cryptsetup luksAddKey %s)", o.Device, o.Device)
+	}
+
+	var key []byte
+	slot := 0
+	label := ""
+	switch o.Mode {
+	case LuksModePasswordSalt:
+		pw, err := terminalAsk("Password: ")
+		if err != nil {
+			return err
+		}
+		defer wipe(pw)
+		again, err := terminalAsk("The same password again: ")
+		if err != nil {
+			return err
+		}
+		defer wipe(again)
+		if !bytes.Equal(pw, again) {
+			return errors.New("the passwords differ; nothing was added")
+		}
+		salt, err := terminalAsk("Salt (asked for at boot the same way): ")
+		if err != nil {
+			return err
+		}
+		defer wipe(salt)
+		fmt.Fprintln(os.Stderr, "Deriving the key (Argon2id, 1 GiB, a few seconds) ...")
+		if key, err = Combine(pw, salt); err != nil {
+			return err
+		}
+	case LuksModePasswordRemoteSalt:
+		idx, err := AttestIndexForSlot(o.Remote.SealIndex)
+		if err != nil {
+			return err
+		}
+		if _, err := checkRemoteSaltReadyOrEnrolable(o.Remote.TPMPath, idx); err != nil {
+			return err
+		}
+		k, s, err := remoteSaltKey(o.Remote)
+		if err != nil {
+			return err
+		}
+		key, slot = k, int(s)
+		label = o.Remote.Label
+		if label == "" {
+			label = "luks"
+		}
+	}
+	defer wipe(key)
+
+	args := []string{"luksAddKey", "--batch-mode"}
+	if o.ExistingKeyFile != "" {
+		args = append(args, "--key-file", o.ExistingKeyFile)
+	}
+	args = append(args, o.Device, "-")
+	if _, err := cryptsetupTTY(key, args...); err != nil {
+		return err
+	}
+	after := readLuksStatus(o.Device)
+	if after.Error != "" {
+		return errors.New(after.Error)
+	}
+	had := map[int]bool{}
+	for _, s := range before.Keyslots {
+		had[s.Keyslot] = true
+	}
+	newSlot := -1
+	for _, s := range after.Keyslots {
+		if !had[s.Keyslot] {
+			newSlot = s.Keyslot
+		}
+	}
+	if newSlot < 0 {
+		return errors.New("cryptsetup added no keyslot")
+	}
+	tok := LuksToken{Type: LuksTokenType, Keyslots: []string{strconv.Itoa(newSlot)}, Mode: o.Mode, Created: time.Now().UTC().Format(time.RFC3339)}
+	if o.Mode == LuksModePasswordRemoteSalt {
+		s := slot
+		tok.Slot, tok.Label = &s, label
+	}
+	b, err := json.Marshal(tok)
+	if err != nil {
+		return err
+	}
+	if _, err := cryptsetup(b, "token", "import", "--json-file", "-", o.Device); err != nil {
+		return fmt.Errorf("the keyslot %d is added, but its token is not: %w (tpm2-kira luks mark %s --keyslot %d --mode %s)", newSlot, err, o.Device, newSlot, o.Mode)
+	}
+	fmt.Printf("%s keyslot %d added: %s\n", o.Device, newSlot, describeKeyslot(KeyslotStatus{Keyslot: newSlot, Token: &tok}))
+	if !o.NoConfig {
+		if err := setUnlockMode(DefaultUnlockConfigPath, o.Mode); err != nil {
+			return fmt.Errorf("the keyslot is added; the unlock mode is not set: %w", err)
+		}
+		fmt.Printf("%s: TPM2_KIRA_UNLOCK=%s\n", DefaultUnlockConfigPath, o.Mode)
+	}
+	fmt.Println("Rebuild the initramfs (mkinitcpio -P / update-initramfs -u) and the next boot asks")
+	fmt.Println("at tpm2-kira's prompt. The recovery passphrase stays the way in at cryptsetup's.")
+	return nil
+}
+
+// checkRemoteSaltReadyOrEnrolable is checkRemoteSaltReady without the
+// release key: a phone enrolled is enough, remoteSaltKey makes the key.
+func checkRemoteSaltReadyOrEnrolable(tpmPath string, idx uint32) (bool, error) {
+	tpmDev, err := OpenTPM(tpmPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+	}
+	defer tpmDev.Close()
+	if _, err := loadAttestBlob(tpmDev, idx); err != nil {
+		return false, fmt.Errorf("%w (slot %d has no phone enrolled)", errNoRemoteSalt, attestSlot(idx))
+	}
+	return true, nil
+}
+
+// cryptsetupTTY runs cryptsetup with the key on stdin and the terminal for
+// its prompts (an existing passphrase to authorise luksAddKey).
+var cryptsetupTTY = func(stdin []byte, args ...string) ([]byte, error) {
+	c := exec.Command("cryptsetup", args...)
+	c.Stdin = bytes.NewReader(stdin)
+	c.Stdout, c.Stderr = os.Stderr, os.Stderr
+	if err := c.Run(); err != nil {
+		return nil, fmt.Errorf("cryptsetup %s: %w", args[0], err)
+	}
+	return nil, nil
+}
+
+// setUnlockMode writes TPM2_KIRA_UNLOCK=mode into unlock.conf, replacing
+// the line or adding it; a missing file is created with the line.
+func setUnlockMode(path, mode string) error {
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	done := false
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "TPM2_KIRA_UNLOCK=") {
+			lines[i] = "TPM2_KIRA_UNLOCK=" + mode
+			done = true
+		}
+	}
+	if !done {
+		if len(data) == 0 {
+			lines = nil
+		}
+		lines = append(lines, "TPM2_KIRA_UNLOCK="+mode)
+	}
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+}

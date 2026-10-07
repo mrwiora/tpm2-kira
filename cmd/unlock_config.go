@@ -11,6 +11,15 @@ import (
 // DefaultUnlockConfigPath holds how the key provider answers.
 const DefaultUnlockConfigPath = "/etc/tpm2-kira/unlock.conf"
 
+// unlockConfigPath is DefaultUnlockConfigPath, or TPM2_KIRA_UNLOCK_CONF
+// for tests.
+func unlockConfigPath() string {
+	if p := os.Getenv("TPM2_KIRA_UNLOCK_CONF"); p != "" {
+		return p
+	}
+	return DefaultUnlockConfigPath
+}
+
 // The provider's modes (TPM2_KIRA_UNLOCK): how the disk's key is made.
 const (
 	UnlockSkip               = "skip"                // tpm2-kira stays out of it: cryptsetup's own prompt

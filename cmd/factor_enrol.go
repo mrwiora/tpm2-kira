@@ -51,104 +51,7 @@ func FactorEnrol(o FactorEnrolOptions) error {
 	if !o.Yes && !confirmRecoveryKeyslot() {
 		return errors.New("add a recovery passphrase to a second LUKS keyslot first (cryptsetup luksAddKey <device>), then run this again")
 	}
-	label := o.Label
-	if label == "" {
-		label = "luks"
-	}
-
-	idx, err := AttestIndexForSlot(o.SealIndex)
-	if err != nil {
-		return err
-	}
-	slot := attestSlot(idx)
-	tpmDev, err := OpenTPM(o.TPMPath)
-	if err != nil {
-		return fmt.Errorf("failed to open TPM at %s: %w", o.TPMPath, err)
-	}
-	defer tpmDev.Close()
-	CleanupTPM(tpmDev, o.Debug)
-
-	att, err := loadAttestBlob(tpmDev, idx)
-	if err != nil {
-		return fmt.Errorf("slot %d has no phone enrolled: run 'tpm2-kira attest enrol' first", slot)
-	}
-	_, sealed, err := readSlot(tpmDev, idx)
-	if err != nil {
-		return err
-	}
-
-	if o.Rotate && len(att.ReleaseKeyPublic) == 0 {
-		return fmt.Errorf("slot %d has no remote salt to rotate; use 'remote-salt enrol'", slot)
-	}
-	if len(att.ReleaseKeyPublic) == 0 {
-		// The release key goes into the slot's blob, which is signed.
-		privKeyPath := o.PrivKeyPath
-		if privKeyPath == "" {
-			privKeyPath = DefaultPrivateKeyPath
-		}
-		priv, err := LoadCheckedSigningPrivateKey(privKeyPath)
-		if err != nil {
-			return fmt.Errorf("the first remote-salt enrolment adds the release key to the slot's blob and needs the signing key: %w", err)
-		}
-		if err := PrepareSigningKey(priv); err != nil {
-			return fmt.Errorf("the signing key is not usable: %w", err)
-		}
-		pub, privArea, err := createReleaseKey(tpmDev, sealed)
-		if err != nil {
-			return err
-		}
-		att.ReleaseKeyPublic, att.ReleaseKeyPrivate = pub, privArea
-		if err := writeAttestBlob(tpmDev, idx, att, priv); err != nil {
-			return err
-		}
-		fmt.Printf("Release key created for slot %d, under the slot's policy\n", slot)
-	}
-
-	f, w, err := wrapFactor(tpmDev, att, nil)
-	if err != nil {
-		return err
-	}
-	defer wipe(f)
-	want := FactorSalt(f, label)
-	defer wipe(want)
-
-	// The phone keeps the credential in an ordinary check, and returns it
-	// after the accepted receipt; the coordinator opens it in the TPM.
-	pubKeyPath := o.PubKeyPath
-	if pubKeyPath == "" {
-		pubKeyPath = DefaultPublicKeyPath
-	}
-	svc := newGateService(tpmDev, idx, pubKeyPath, o.Debug)
-	svc.Keep(&attest.FactorBlob{CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret, Label: label})
-	fmt.Println("Open Marify on the phone and verify this machine: the verdict screen asks")
-	fmt.Println("to keep the remote salt. Accept the verdict to keep it.")
-	code := runGateRadio(svc, GateOptions{TPMPath: o.TPMPath, Adapter: o.Adapter, Timeout: o.Timeout, AdapterWait: o.AdapterWait, Debug: o.Debug}, gateSteps(o.Debug), nil)
-	defer svc.Forget()
-	got := svc.Salt()
-	defer wipe(got)
-	if code != 0 || got == nil {
-		return fmt.Errorf("the phone did not return the remote salt (gate exit %d); nothing was enrolled. Check the phone's screen and run this again", code)
-	}
-	if !bytes.Equal(got, want) {
-		return errors.New("the remote salt the phone returned is not the one it was given; nothing was enrolled")
-	}
-	fmt.Println("The phone keeps the remote salt, and this TPM opened it: the round trip works.")
-
-	pw, err := terminalPassword("Password for the disk (the factor's other half): ")
-	if err != nil {
-		return err
-	}
-	defer wipe(pw)
-	again, err := terminalPassword("The same password again: ")
-	if err != nil {
-		return err
-	}
-	defer wipe(again)
-	if !bytes.Equal(pw, again) {
-		return errors.New("the passwords differ; nothing was written")
-	}
-	fmt.Fprintln(os.Stderr, "Deriving the key (Argon2id, 1 GiB, a few seconds) ...")
-	key, err := Combine(pw, want)
+	key, _, err := remoteSaltKey(o)
 	if err != nil {
 		return err
 	}
@@ -176,6 +79,115 @@ func FactorEnrol(o FactorEnrolOptions) error {
 	fmt.Println("the password and derives this key. The recovery passphrase in its own keyslot")
 	fmt.Println("stays the way in without the phone: at cryptsetup's prompt (Ctrl-C at tpm2-kira's).")
 	return nil
+}
+
+// remoteSaltKey does the enrolment up to the derived key: the release key
+// if the slot has none, F wrapped for this TPM, the phone asked to keep
+// it and handing it back, the TPM opening it, then the password and the
+// derivation. Returns the key (the caller wipes it) and the slot number.
+func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
+	label := o.Label
+	if label == "" {
+		label = "luks"
+	}
+
+	idx, err := AttestIndexForSlot(o.SealIndex)
+	if err != nil {
+		return nil, 0, err
+	}
+	slot := attestSlot(idx)
+	tpmDev, err := OpenTPM(o.TPMPath)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to open TPM at %s: %w", o.TPMPath, err)
+	}
+	defer tpmDev.Close()
+	CleanupTPM(tpmDev, o.Debug)
+
+	att, err := loadAttestBlob(tpmDev, idx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("slot %d has no phone enrolled: run 'tpm2-kira attest enrol' first", slot)
+	}
+	_, sealed, err := readSlot(tpmDev, idx)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if o.Rotate && len(att.ReleaseKeyPublic) == 0 {
+		return nil, 0, fmt.Errorf("slot %d has no remote salt to rotate; use 'remote-salt enrol'", slot)
+	}
+	if len(att.ReleaseKeyPublic) == 0 {
+		// The release key goes into the slot's blob, which is signed.
+		privKeyPath := o.PrivKeyPath
+		if privKeyPath == "" {
+			privKeyPath = DefaultPrivateKeyPath
+		}
+		priv, err := LoadCheckedSigningPrivateKey(privKeyPath)
+		if err != nil {
+			return nil, 0, fmt.Errorf("the first remote-salt enrolment adds the release key to the slot's blob and needs the signing key: %w", err)
+		}
+		if err := PrepareSigningKey(priv); err != nil {
+			return nil, 0, fmt.Errorf("the signing key is not usable: %w", err)
+		}
+		pub, privArea, err := createReleaseKey(tpmDev, sealed)
+		if err != nil {
+			return nil, 0, err
+		}
+		att.ReleaseKeyPublic, att.ReleaseKeyPrivate = pub, privArea
+		if err := writeAttestBlob(tpmDev, idx, att, priv); err != nil {
+			return nil, 0, err
+		}
+		fmt.Printf("Release key created for slot %d, under the slot's policy\n", slot)
+	}
+
+	f, w, err := wrapFactor(tpmDev, att, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer wipe(f)
+	want := FactorSalt(f, label)
+	defer wipe(want)
+
+	// The phone keeps the credential in an ordinary check, and returns it
+	// after the accepted receipt; the coordinator opens it in the TPM.
+	pubKeyPath := o.PubKeyPath
+	if pubKeyPath == "" {
+		pubKeyPath = DefaultPublicKeyPath
+	}
+	svc := newGateService(tpmDev, idx, pubKeyPath, o.Debug)
+	svc.Keep(&attest.FactorBlob{CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret, Label: label})
+	fmt.Println("Open Marify on the phone and verify this machine: the verdict screen asks")
+	fmt.Println("to keep the remote salt. Accept the verdict to keep it.")
+	code := runGateRadio(svc, GateOptions{TPMPath: o.TPMPath, Adapter: o.Adapter, Timeout: o.Timeout, AdapterWait: o.AdapterWait, Debug: o.Debug}, gateSteps(o.Debug), nil)
+	defer svc.Forget()
+	got := svc.Salt()
+	defer wipe(got)
+	if code != 0 || got == nil {
+		return nil, 0, fmt.Errorf("the phone did not return the remote salt (gate exit %d); nothing was enrolled. Check the phone's screen and run this again", code)
+	}
+	if !bytes.Equal(got, want) {
+		return nil, 0, errors.New("the remote salt the phone returned is not the one it was given; nothing was enrolled")
+	}
+	fmt.Println("The phone keeps the remote salt, and this TPM opened it: the round trip works.")
+
+	pw, err := terminalPassword("Password for the disk (the factor's other half): ")
+	if err != nil {
+		return nil, 0, err
+	}
+	defer wipe(pw)
+	again, err := terminalPassword("The same password again: ")
+	if err != nil {
+		return nil, 0, err
+	}
+	defer wipe(again)
+	if !bytes.Equal(pw, again) {
+		return nil, 0, errors.New("the passwords differ; nothing was written")
+	}
+	fmt.Fprintln(os.Stderr, "Deriving the key (Argon2id, 1 GiB, a few seconds) ...")
+	key, err := Combine(pw, want)
+	if err != nil {
+		return nil, 0, err
+	}
+	return key, slot, nil
 }
 
 // confirmRecoveryKeyslot asks, on the terminal, whether the recovery

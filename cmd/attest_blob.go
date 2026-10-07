@@ -19,7 +19,7 @@ import (
 //	                 quoted, and the count that says the part is current
 //	  methods        who may ask for a quote, and over what. Each method is
 //	                 a typed, length-prefixed block of its own:
-//	    1  phone     phones over Bluetooth LE (the Kira app)
+//	    1  phone     phones over Bluetooth LE (the Marify app)
 //
 // A further method - a verification server reached over the network, say -
 // is another type next to the phone, with its own data, and uses the same

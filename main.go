@@ -429,7 +429,7 @@ func deviceLast(args []string) []string {
 
 func runLuks(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
-		fail(fmt.Errorf("luks requires a subcommand: status, mark"))
+		fail(fmt.Errorf("luks requires a subcommand: status, enrol, mark"))
 	}
 	switch args[0] {
 	case "status":
@@ -453,6 +453,35 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		}
 		if err := cmd.LuksMark(cmd.LuksMarkOptions{TPMPath: *tpm, Device: fs.Arg(0), Keyslot: *keyslot, Mode: *mode,
 			SealIndex: cmd.ResolveNVRAMIndex(uint32(*nvram)), Label: *label, Debug: *debug}); err != nil {
+			fail(err)
+		}
+	case "enrol", "enroll":
+		fs := flag.NewFlagSet("luks enrol", flag.ExitOnError)
+		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+remotesalt)")
+		mode := fs.String("mode", "", "How the key is made at boot: password+salt or password+remotesalt (required)")
+		nvram := fs.Uint("nvram", 0, "The tpm2-kira slot whose phone keeps the remote salt (password+remotesalt)")
+		label := fs.String("label", "luks", "The remote salt's label (password+remotesalt)")
+		privKey := fs.String("privkey", "", "Signing key, for the first remote salt of a slot (default: "+cmd.DefaultPrivateKeyPath+")")
+		pubKey := fs.String("pubkey", "", "Signing public key, for the record check (default: "+cmd.DefaultPublicKeyPath+")")
+		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
+		timeout := fs.Duration("timeout", 10*time.Minute, "Give up waiting for the phone after this long (0 = wait forever)")
+		adapterWait := fs.Duration("adapter-wait", 30*time.Second, "Wait this long for the adapter to appear")
+		existing := fs.String("existing-key-file", "", "A file with an existing passphrase to authorise luksAddKey (scripts; by default cryptsetup asks)")
+		noConfig := fs.Bool("no-config", false, "Do not set the mode in /etc/tpm2-kira/unlock.conf")
+		debug := fs.Bool("debug", debugFlag, "Enable debug output")
+		fs.Parse(deviceLast(args[1:]))
+		if fs.NArg() != 1 || *mode == "" {
+			fail(fmt.Errorf("usage: tpm2-kira luks enrol <device> --mode password+salt|password+remotesalt"))
+		}
+		var slot uint32
+		if nvramExplicit(args[1:]) {
+			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+		}
+		if err := cmd.LuksEnrol(cmd.LuksEnrolOptions{
+			Device: fs.Arg(0), Mode: *mode, ExistingKeyFile: *existing, NoConfig: *noConfig,
+			Remote: cmd.FactorEnrolOptions{TPMPath: *tpm, SealIndex: slot, Label: *label, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
+				Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: true, Debug: *debug},
+		}); err != nil {
 			fail(err)
 		}
 	default:
@@ -766,6 +795,10 @@ COMMANDS:
               the password+salt mode of /etc/tpm2-kira/unlock.conf
   luks        tpm2-kira's LUKS keyslots, marked by a token in the header:
               luks status [<device>…] [--json]
+              luks enrol <device> --mode password+salt|password+remotesalt
+                (the password, the salt or the phone's remote salt, luksAddKey,
+                the token, the mode in unlock.conf; cryptsetup asks an existing
+                passphrase to authorise)
               luks mark <device> --keyslot N --mode password+salt|password+remotesalt
   unlock-key  Debian keyscript: the volume's key from the socket of
               'run --unlock' to stdout, else cryptsetup's own prompt

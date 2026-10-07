@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -467,5 +468,34 @@ func TestEnterReaderOnATerminal(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("the stopped reader took the passphrase line")
+	}
+}
+
+// The phone's code goes into the slot's line the moment the phone is in,
+// not at the next window: a redraw follows the session's start.
+func TestPhoneCodeShownAtOnce(t *testing.T) {
+	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)}
+	b := f.display(okSlot, nil, nil)
+	f.withGate(b, func(e time.Duration) (GateStatus, bool) {
+		switch {
+		case e < 4*time.Second:
+			return GateStatus{Slot: 0, State: GateWaiting}, true
+		case e < 9*time.Second:
+			return GateStatus{Slot: 0, State: GateSession, Code: "K7QM-2XHD"}, true
+		}
+		return GateStatus{Slot: 0, State: GateAttested, Phone: "Pixel"}, true
+	})
+	runDisplay(t, b)
+	// The first frame is the TOTP alone; a frame drawn at the session's
+	// start (within a second of :09, well before the :30 window) follows.
+	if len(f.shown) < 2 {
+		t.Fatalf("%d frames; the session's start did not redraw", len(f.shown))
+	}
+	codes := phoneCodes(map[int]string{0: "123456"}, GateStatus{Slot: 0, Code: "K7QM-2XHD"}, true)
+	if !strings.Contains(codes[0], "K7QM-2XHD") || strings.Contains(codes[0], "123456") {
+		t.Fatalf("slot line with a phone in: %q", codes[0])
+	}
+	if codes := phoneCodes(map[int]string{0: "123456"}, GateStatus{}, false); codes[0] != "123456" {
+		t.Fatalf("slot line without a phone: %q", codes[0])
 	}
 }
