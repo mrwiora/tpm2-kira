@@ -260,10 +260,13 @@ tpm2-kira remote-salt enrol [--nvram N] [--label STR] --out PATH
 ```
 
 1. Refuse unless the user confirms a second LUKS keyslot exists (§7.3).
-2. Create the release key under the slot's policy if the slot has none
-   (blob version 12 carries it), draw F, wrap it for this TPM's EK and the
-   release key's name, hand the credential to the phone over the enrolled
-   session; the phone stores it with the machine's record.
+2. With the signing key - every hand-over needs it, as reseal does: the
+   YubiKey and its PIN, or the local key files - create the release key
+   under the slot's policy if the slot has none (blob version 12 carries
+   it), draw F, wrap it for this TPM's EK and the release key's name, hand
+   the credential to the phone over the enrolled session; the phone stores
+   it with the machine's record. Replacing what the phone keeps is the
+   owner's act, not root's alone.
 3. Prove the hand-over before anything depends on it: the phone returns
    the credential after the accepted receipt, and it must be byte for byte
    what it was given. The session is a check of the *running system*: the

@@ -24,7 +24,7 @@ type FactorEnrolOptions struct {
 	Rotate      bool   // a new factor for a slot that has one: the old keyslot is to go
 	Label       string // the factor's label, default "luks"
 	Out         string // where the derived key goes: a file on tmpfs
-	PrivKeyPath string // the signing key, for the release key's first enrolment
+	PrivKeyPath string // the signing key: every hand-over needs it
 	PubKeyPath  string // the signing public key, for the gate's record check
 	Adapter     int
 	Timeout     time.Duration
@@ -115,19 +115,24 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	if o.Rotate && len(att.ReleaseKeyPublic) == 0 {
 		return nil, 0, fmt.Errorf("slot %d has no remote salt to rotate; use 'remote-salt enrol'", slot)
 	}
+
+	// Every hand-over needs the signing key, as reseal does: with the key
+	// on a YubiKey, the token and its PIN; with local key files, root. The
+	// first one also puts the release key into the slot's blob, which is
+	// signed; a later one replaces what the phone keeps, which is the
+	// owner's act, not root's alone.
+	privKeyPath := o.PrivKeyPath
+	if privKeyPath == "" {
+		privKeyPath = DefaultPrivateKeyPath
+	}
+	priv, err := LoadCheckedSigningPrivateKey(privKeyPath)
+	if err != nil {
+		return nil, 0, fmt.Errorf("a remote salt is given to the phone with the signing key only: %w", err)
+	}
+	if err := PrepareSigningKey(priv); err != nil {
+		return nil, 0, fmt.Errorf("the signing key is not usable: %w", err)
+	}
 	if len(att.ReleaseKeyPublic) == 0 {
-		// The release key goes into the slot's blob, which is signed.
-		privKeyPath := o.PrivKeyPath
-		if privKeyPath == "" {
-			privKeyPath = DefaultPrivateKeyPath
-		}
-		priv, err := LoadCheckedSigningPrivateKey(privKeyPath)
-		if err != nil {
-			return nil, 0, fmt.Errorf("the first remote-salt enrolment adds the release key to the slot's blob and needs the signing key: %w", err)
-		}
-		if err := PrepareSigningKey(priv); err != nil {
-			return nil, 0, fmt.Errorf("the signing key is not usable: %w", err)
-		}
 		pub, privArea, err := createReleaseKey(tpmDev, sealed)
 		if err != nil {
 			return nil, 0, err
