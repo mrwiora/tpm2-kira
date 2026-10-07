@@ -428,7 +428,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 	}
 	defer l.Close()
 	t.Setenv("TPM2_KIRA_CONSOLE", path)
-	prompts := make(chan string, 4)
+	prompts := make(chan string, 16)
 	go func() {
 		for {
 			c, err := l.Accept()
@@ -438,10 +438,17 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 			go func() {
 				defer c.Close()
 				buf := make([]byte, 1024)
-				n, _ := c.Read(buf)
-				prompts <- string(buf[:n])
-				c.Write([]byte("hunter2\n"))
-				io.Copy(io.Discard, c)
+				for {
+					n, err := c.Read(buf)
+					if err != nil {
+						return
+					}
+					p := string(buf[:n])
+					prompts <- p
+					if strings.Contains(p, "enter password") {
+						c.Write([]byte("hunter2\n"))
+					}
+				}
 			}()
 		}
 	}()
@@ -454,11 +461,28 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 	if !bytes.Equal(key, want) {
 		t.Fatal("the key is not the combination of password and salt")
 	}
-	if p := <-prompts; !strings.Contains(p, "released the disk's salt") || !strings.Contains(p, "enter password for disk cryptroot") {
-		t.Errorf("prompt: %q", p)
+	// The note and the prompt are two writes; take what arrives until
+	// the prompt is in.
+	seen := ""
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(seen, "enter password for disk cryptroot") && time.Now().Before(deadline); {
+		select {
+		case p := <-prompts:
+			seen += p
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	if !strings.Contains(seen, "released the disk's salt") || !strings.Contains(seen, "enter password for disk cryptroot") {
+		t.Errorf("prompt: %q", seen)
 	}
 	// Without a released salt the mode gives no key and asks nothing;
-	// mode skip never asks.
+	// mode skip never asks. (The echo of the answer above is drained first.)
+	for drained := false; !drained; {
+		select {
+		case <-prompts:
+		case <-time.After(300 * time.Millisecond):
+			drained = true
+		}
+	}
 	if _, err := diskKey(func() []byte { return nil }, UnlockPasswordRemoteSalt)("cryptroot"); err == nil || !strings.Contains(err.Error(), "no remote salt") {
 		t.Fatalf("without a remote salt: %v", err)
 	}
