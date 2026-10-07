@@ -48,6 +48,22 @@ seal.key), and a failed NVRAM rewrite stashed the blob under
 `/var/lib`. No migration: an installed system moves the keys directory by
 hand before the next `reseal`.
 
+## Factor release
+
+### The first draft had a separate combiner and a provider interface
+
+PLAN-FACTORRELEASE.md as drafted kept hashpwd2 a separate program: a
+`factor release` command printed the salt as one hex line on stdout (an
+"interface 1" with exit codes 0-5), a derivation unit and a shell script
+fed it with the password into hashpwd2, and the key file went to
+`/run/cryptsetup-keys.d`. The release key had a `PolicyOR` with a
+`PolicySigned` branch the phone could open after a PCR change. Reviewed
+on 2026-10-07: the combiner is inside tpm2-kira (`cmd/combine.go`,
+hashpwd2's bytes), the answer goes to systemd-cryptsetup over the key
+socket, and the release key's policy is the slot's approval plus the
+command code, with no branch the phone can open: only a boot the
+machine's signing key approved at seal or reseal gets the factor.
+
 ## Attestation
 
 ### attest.conf had a mode: TPM2_KIRA_ATTEST=off|lazy

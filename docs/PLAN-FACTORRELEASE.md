@@ -1,6 +1,14 @@
 # PLAN — Factor Release for External Key Derivation
 
-> **Status:** draft / design. Nothing in here is implemented yet.
+> **Status:** in implementation on `feat/hashpwd` (2026-10-07). Done: the
+> combiner inside tpm2-kira (`cmd/combine.go`, byte-identical with
+> hashpwd2), the release key under the slot's approval
+> (`attest/releasekey.go`), wrap, unwrap and the salt derivation
+> (`cmd/factor.go`), all on swtpm. Open: the phone's part (enrolment
+> message, release after the verdict), `factor enrol`, and the provider
+> answering with the derived key. The review of 2026-10-07 changed §1.2,
+> §3.2, §5, §6 and §7 from the first draft; HISTORY.md keeps the draft's
+> shape.
 > **Depends on:** [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md)
 > phases 1–5, the release key from
 > [PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) §5.1 (its phase 1 spike),
@@ -26,21 +34,21 @@ sequenceDiagram
     participant P as Phone
     participant K as tpm2-kira (initrd)
     participant T as TPM
-    participant H as hashpwd2 (initrd)
+    participant C as systemd-cryptsetup
 
     K->>P: attestation, as in PLAN-BLE.md §1
     P->>P: Verify(), biometry
     P->>K: receipt + wrapped factor
     K->>T: TPM2_ActivateCredential(RK, EK)
     T-->>K: factor secret F
-    K->>H: factor (§5), 64 hex characters
-    U->>H: password
-    H->>H: Argon2id(password, salt = factor)
-    H->>H: key file for systemd-cryptsetup
+    K->>K: salt = FactorSalt(F) (§3), F wiped
+    U->>K: password, at tpm2-kira's prompt
+    K->>K: Combine(password, salt): Argon2id, hashpwd2's bytes (§1.2)
+    K->>C: the key, over the key socket (UNLOCK-DISK.md)
 ```
 
-The reference combiner is [hashpwd2](https://github.com/mrwiora/hashpwd2). It
-is, and stays, a separate program (§1.2).
+The combiner is [hashpwd2](https://github.com/mrwiora/hashpwd2)'s
+derivation, inside tpm2-kira (§1.2).
 
 ### 1.1 Why a factor and not the passphrase
 
@@ -59,23 +67,25 @@ It also changes what a verifier compromise is worth. A phone that releases a
 passphrase is the key to the disk. A phone that releases a factor is half of
 one.
 
-### 1.2 The boundary between the two programs
+### 1.2 One program
 
-| | tpm2-kira | combiner (hashpwd2) |
-|---|---|---|
-| Talks to the TPM, the radio, the verifier | yes | never |
-| Sees the user's password | **never** | yes |
-| Derives the LUKS key | **never** | yes |
-| Touches LUKS keyslots | never | never — the user runs `cryptsetup` |
+The combiner is inside tpm2-kira (`cmd/combine.go`): hashpwd2's
+derivation, byte for byte - Argon2id with its parameters (1 GiB, 16
+passes, 4 lanes, 64 bytes), base64 without padding, the trailing newline
+that is part of the key - checked against the hashpwd2 binary in a test.
+A keyslot enrolled with hashpwd2 opens with tpm2-kira and the other way
+round. The decision of 2026-10-07: the password, the salt and the derived
+key never cross a process boundary, a shell variable or a file in `/run`;
+the password is typed at tpm2-kira's prompt, the salt comes out of the
+TPM in the same process, the key goes to `systemd-cryptsetup` through the
+key socket (UNLOCK-DISK.md). What tpm2-kira still does not do is touch a
+LUKS keyslot: enrolment writes the derived key once to a file on tmpfs
+for `cryptsetup luksAddKey`, as hashpwd2's README does (§6).
 
-Neither binary links, imports or executes the other. They meet at the
-interface in §5, and deployment glue (a unit and a few lines of shell, §7)
-connects them. tpm2-kira does not learn Argon2 parameters; the combiner does
-not learn what a PCR is.
-
-This also keeps the rule from
-[PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §9.3 intact: no new
-dependency for a KDF that another tool already owns.
+Two costs come with hashpwd2's parameters and are accepted: the initrd
+needs 1 GiB of free memory for the derivation, and it takes some seconds
+(about 15 s on a 2015 laptop). The parameters are part of the contract
+with every enrolled keyslot and do not change.
 
 ---
 
@@ -139,6 +149,36 @@ tpm2-kira prints those steps; it does not perform them.
 
 ---
 
+### 3.2 The release key
+
+The object the credential is made for (`attest/releasekey.go`). It lives
+in the slot's blob beside the boot key, and its policy is the slot's own,
+extended by one step:
+
+```
+RK.authPolicy = H( TOTPKey.authPolicy ‖ TPM_CC_PolicyCommandCode ‖ TPM_CC_ActivateCredential )
+TOTPKey.authPolicy = PolicyAuthorize(signing key, policyRef)       (SECURITY-BACKGROUND.md §4)
+```
+
+`TPM2_ActivateCredential` needs the ADMIN role on the object; with
+`adminWithPolicy` set, that is a policy session whose command code is
+`ActivateCredential`. The session is the one the TOTP key computes codes
+with - PolicyPCR over the sealed selection, PolicyNV over the generation,
+the approval signature, PolicyAuthorize - and then `PolicyCommandCode`.
+So the factor unwraps exactly where a code computes: in the boot state
+the signing key approved at seal or reseal, and in no other. There is no
+second branch: a boot the signing key has not approved gets no factor,
+and the recovery passphrase (§7.3) is the way in. The first draft's
+`PolicyOR` with a `PolicySigned` branch for the phone is dropped: an
+approval from the phone would open the factor in a boot state the
+machine's own signing key never saw, which is the one thing the design
+must not allow (§8.4).
+
+Verified on swtpm (`cmd/factor_swtpm_test.go`): the credential opens to
+the same F in the approved state; not on another TPM; not with the slot's
+policy alone (the command code is required); not after a PCR of the
+selection moved.
+
 ## 4. The release message
 
 The core gains one message, sent by the verifier after a receipt with
@@ -160,158 +200,77 @@ unlocking-only variant inside the core would be the design failure that plan's
 §2 warns about. A `Release` for kind 2 is a few hundred bytes; over BLE it is
 instant ([PLAN-BLE.md](PLAN-BLE.md) §4.3).
 
-### 4.1 The two branches
+### 4.1 One branch
 
-| Boot state | RK branch | What the phone does |
+| Boot state | What the phone does | What the TPM does |
 |---|---|---|
-| PCRs match the sealed selection | `PolicyPCR` | verifies, biometry, sends `credential` |
-| PCRs changed (kernel update) | `PolicySigned` | shows the diff ([PLAN-BLE.md](PLAN-BLE.md) §6.3); on approval signs the TPM's `nonceTPM` and sends `credential` + `approval` |
+| the signing key's approval holds (PCRs and generation as sealed) | verifies, unlocks its key, returns `credential` with the receipt | opens it |
+| PCRs changed (an update not yet resealed, or something else) | shows the diff ([PLAN-BLE.md](PLAN-BLE.md) §6.3); whatever the person decides, the credential it returns | refuses (§3.2) |
 
-The approval key is the phone's receipt-signing key
-([PLAN-BLE.md](PLAN-BLE.md) §6.2), so an approval costs a biometric prompt and
-is evaluated by the TPM, not by software in the initrd.
-
-The phone's hardware is not a functional requirement. The TPM checks an
-ordinary ECDSA P-256 / SHA-256 signature over
-`nonceTPM ‖ expiration ‖ cpHashA ‖ policyRef`; any key can produce it, and in
-the `PolicyPCR` branch the phone signs nothing the TPM sees at all. Keeping the
-approval key in the Secure Enclave or StrongBox is hardening: it decides
-whether a copy of the app's data is enough to approve a tampered boot (§8.2),
-or whether the attacker needs the phone itself and its owner's biometry.
-
-> **To verify in phase 1:** the signature conversion (DER from the phone to
-> the TPM's `r`, `s`), on swtpm and one real TPM.
+The phone cannot approve a boot state the machine's signing key has not;
+it can only hand the credential back, and the TPM decides. A reviewed
+change is approved where every change is: by `reseal` on the unlocked
+system, which the post hook runs after each image build. The phone's
+`approval` field of the first draft is gone.
 
 ---
 
-## 5. The provider interface
+## 5. The answer
 
-This is the contract between tpm2-kira and any combiner. It is deliberately
-the smallest thing that works in both a systemd and a non-systemd initramfs:
-one process, one line on stdout, one exit status. No socket, no D-Bus, no
-daemon — the reasoning of [PLAN-BLE.md](PLAN-BLE.md) §3.2 applies.
-
-### 5.1 Contract, version 1
+There is no provider interface: the factor is consumed where it is
+produced. `tpm2-kira run` serves the volume's key to `systemd-cryptsetup`
+on `/run/tpm2-kira/unlock.sock` (UNLOCK-DISK.md). With a factor enrolled,
+its answer for a volume is:
 
 ```
-tpm2-kira factor release [--nvram N] [--label STR] [--timeout DUR] [--out PATH]
+1.  the phone's verdict is in, and it returned the credential (§4)
+2.  F     = unwrapFactor(credential)            TPM, release key under the slot's policy
+3.  salt  = FactorSalt(F, label)                 64 hex characters; F wiped
+4.  pw    = the password typed at tpm2-kira's prompt
+5.  key   = Combine(pw, salt)                    Argon2id, hashpwd2's bytes; pw and salt wiped
+6.  write key to systemd-cryptsetup; wipe
 ```
 
-| | Rule |
-|---|---|
-| **stdout** | exactly 64 lowercase hexadecimal characters followed by one `\n`. Nothing else is ever written to stdout. |
-| **Meaning** | the 64 ASCII characters *are* the salt. The consumer must not hex-decode them. |
-| **Atomicity** | the line is written with a single `write` after the factor is complete. On any failure stdout stays empty. |
-| **Exit status** | `0` only when the full line was written. Non-zero otherwise (§5.2). |
-| **stderr / console** | all progress and diagnostics. Never the factor, in any mode; there is no flag that prints it. |
-| **`--out PATH`** | instead of stdout: write to a temporary file and rename, mode `0600`. Refused unless the target is on `tmpfs` or `ramfs` and the parent directory is root-owned and not group- or world-accessible. |
-| **Memory** | `F` and the factor live in the `secretbuf` of [PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) §5.3 and are wiped before exit. |
-| **Stability** | same enrolment + same label ⇒ same line, for the lifetime of the enrolment. The derivation string `tpm2-kira/factor/v1` is part of the contract. |
+Without a credential (no phone, no verdict, the TPM refused), step 4 is
+the only step: the prompt asks for the passphrase as it does without a
+factor, the answer is tried as it is, and a wrong one falls back to
+systemd's own prompt (UNLOCK-DISK.md §4). The person therefore has, at
+the same prompt, the everyday password - which only works together with
+the factor - and the recovery passphrase of §7.3. Whether the factor was
+released is said on the console before the prompt, so a boot that the
+phone did not approve is recognisable before anything is typed.
 
-A hex line, because line-oriented tools consume it without framing rules: no
-NUL bytes, no embedded newline, no locale. hashpwd2 reads its salt as a line
-today, so the contract works with it unchanged.
-
-`tpm2-kira factor status --json` reports `"interface": 1`. A change to any row
-above is a new interface number and a new derivation string.
-
-### 5.2 Exit status
-
-`factor release` joins the commands that do not follow the exit-0 rule
-([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §12.1). A provider that
-exits 0 without a factor would make the combiner derive a key from an empty
-salt.
-
-| Code | Meaning | Sensible reaction of the caller |
-|---|---|---|
-| `0` | factor written | continue |
-| `1` | internal error | fall back to the console prompt |
-| `2` | usage error | fix the unit |
-| `3` | verifier unavailable: no adapter, timeout, nobody in range | fall back, say the phone was not reached |
-| `4` | verifier rejected the attestation | fall back, **and warn before any passphrase is typed** |
-| `5` | TPM refused the unwrap | fall back, **and warn** |
-
-Codes 4 and 5 are the product, not an error to swallow: they are the moment
-the user must not type anything into this machine without checking further.
-
-### 5.3 What the combiner must guarantee
-
-Requirements on the other side of the interface. For hashpwd2 these are
-changes to make there, tracked there:
-
-1. **Exit non-zero on an empty secret or an empty salt, and on any read
-   error.** Today it hashes empty input and exits 0.
-2. **No diagnostic output of secret or salt in the boot path** (`--debug`).
-3. **A stable output format.** The derived key includes hashpwd2's trailing
-   newline; that must not change under an enrolled keyslot.
-4. *Optional, preferred:* read the salt from a file descriptor or file
-   (`--salt-fd N` / `--salt-file PATH`), so the factor never has to pass
-   through a shell variable.
-
-### 5.4 Calling patterns
-
-Works with hashpwd2 as it is today — the factor first, the password second:
-
-```sh
-#!/bin/sh
-# /usr/local/lib/hashpwd2-derive <volume-name>
-set -eu
-umask 077
-
-factor=$(tpm2-kira factor release --label "$1") || exit $?
-secret=$(systemd-ask-password --timeout=0 "Password for $1:")
-[ -n "$secret" ] || exit 1
-
-mkdir -p /run/cryptsetup-keys.d
-printf '%s\n%s\n' "$secret" "$factor" | hashpwd2 > "/run/cryptsetup-keys.d/$1.key.tmp" 2>/dev/null
-mv "/run/cryptsetup-keys.d/$1.key.tmp" "/run/cryptsetup-keys.d/$1.key"
-```
-
-**The order is the point.** The password prompt appears only after the
-verifier has accepted this boot. A machine that fails attestation never asks
-for the password.
-
-With a file-descriptor option in the combiner, the factor skips the shell:
-
-```sh
-tpm2-kira factor release --label "$1" --out /run/tpm2-kira/factor
-systemd-ask-password --timeout=0 "Password for $1:" \
-    | hashpwd2 --salt-file /run/tpm2-kira/factor > "/run/cryptsetup-keys.d/$1.key"
-rm -f /run/tpm2-kira/factor
-```
-
----
+The derivation string of the salt, `tpm2-kira/factor/v1`, and hashpwd2's
+parameters are the contract with every enrolled keyslot; a change to
+either is a new string and a re-enrolment.
 
 ## 6. Enrolment
 
-On the booted, unlocked system, after `attest enrol`:
+On the booted, unlocked system, with a phone enrolled (`attest enrol`):
 
 ```
 tpm2-kira factor enrol [--nvram N] [--label STR] --out PATH
 ```
 
-1. Refuse unless the user confirms a second LUKS keyslot exists
-   ([PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) §4.1 applies verbatim).
-2. Create the RK, generate `F`, wrap it, send the credential to the verifier.
-3. **Prove the round trip before anything depends on it:** request a release
-   from the verifier, unwrap, and compare with `F`. Abort on mismatch.
-4. Write the factor to `--out` (same rules as §5.1) and print the next steps:
+1. Refuse unless the user confirms a second LUKS keyslot exists (§7.3).
+2. Create the release key under the slot's policy if the slot has none
+   (blob version 12 carries it), draw F, wrap it for this TPM's EK and the
+   release key's name, hand the credential to the phone over the enrolled
+   session; the phone stores it with the machine's record.
+3. Prove the round trip before anything depends on it: ask the phone for
+   the credential back, open it in the TPM, compare with F.
+4. Ask for the password at the prompt, derive the key, write it to
+   `--out` (tmpfs only, root-owned parent, mode 0600) and print the next
+   steps; nothing else is kept:
 
 ```
-Factor written to /run/tpm2-kira/factor
+Key written to /run/tpm2-kira/luks.key
 
-Next steps — tpm2-kira does not touch your keyslots:
-    hashpwd2 --salt-file /run/tpm2-kira/factor > /run/new.key      # asks for your password (§5.3, item 4)
-    cryptsetup luksAddKey /dev/nvme0n1p2 /run/new.key
-    cryptsetup open --test-passphrase /dev/nvme0n1p2 --key-file /run/new.key
-    rm /run/new.key /run/tpm2-kira/factor
-    mkinitcpio -P && tpm2-kira reseal
+Next steps - tpm2-kira does not touch your keyslots:
+    cryptsetup luksAddKey /dev/nvme0n1p2 /run/tpm2-kira/luks.key
+    cryptsetup open --test-passphrase /dev/nvme0n1p2 --key-file /run/tpm2-kira/luks.key
+    rm /run/tpm2-kira/luks.key
 ```
-
-The factor is shown to the system exactly once, the way the TOTP key is shown
-exactly once as a QR code.
-
----
 
 ## 7. Boot integration
 
@@ -326,49 +285,13 @@ Factor release therefore runs with the gate in `lazy` mode. The boot is never
 held by software, and a failed release ends at the ordinary console prompt
 rather than an emergency shell.
 
-### 7.2 Units
+### 7.2 No units
 
-The glue belongs to the deployment, not to either binary. tpm2-kira ships it
-as an example next to its initramfs hooks.
-
-```ini
-[Unit]
-Description=Derive LUKS key from attested factor and password
-DefaultDependencies=no
-Requires=dev-tpm0.device
-After=dev-tpm0.device
-After=systemd-pcrosseparator.service
-After=systemd-pcrphase-initrd.service
-After=systemd-vconsole-setup.service
-Wants=cryptsetup-pre.target
-Before=cryptsetup-pre.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/local/lib/hashpwd2-derive root
-StandardOutput=tty
-StandardError=tty
-```
-
-The measure-point ordering is the same as for the display loop and the BLE
-stack ([PLAN-BLE.md](PLAN-BLE.md) §3.3). `systemd-cryptsetup` picks up
-`/run/cryptsetup-keys.d/<name>.key` by itself; `keyfile-erase` removes it
-after use. If the unit fails, there is no key file and `systemd-cryptsetup`
-asks on the console.
-
-**Since tpm2-kira became the key provider** (crypttab(5) AF_UNIX key
-files, `tpm2-kira-unlock.socket`), the derivation belongs into its answer
-rather than into a key file: `systemd-cryptsetup` asks tpm2-kira for the
-volume's key, tpm2-kira asks the person for the password at its own prompt,
-runs the combiner with the factor it unwrapped before the separator, and
-answers with the derived key. No key touches tmpfs, the ordering above is
-implied, and the fallback is the same prompt without a factor (the
-recovery key of §7.3). The unit above stays as the shape of the Debian
-`keyscript=` variant.
-
-**Debian / initramfs-tools:** the same script as a `keyscript=`, writing the
-derived key to stdout instead of a file.
+The key socket already orders everything: `tpm2-kira-unlock.socket` is
+`Before=cryptsetup-pre.target`, the request arrives after the separator,
+and `tpm2-kira run` answers it (§5). No derivation unit, no key file in
+`/run/cryptsetup-keys.d`, no `keyfile-erase`. The Debian `keyscript=`
+variant is the same answer written to stdout; not built.
 
 ### 7.3 The fallback keyslot is now the target
 
@@ -423,15 +346,35 @@ from tpm2-kira.
 
 ---
 
+### 8.4 Only the tpm2-kira that sealed or resealed the slot
+
+The release key's policy is the slot's approval (§3.2), and the approval
+is a signature over the PCR values the signing key computed for one
+image - on a UKI system PCR 11, which `systemd-stub` extends with the
+measurement of the initrd, and the initrd contains the tpm2-kira binary.
+So "the tpm2-kira that resealed the slot" is not a claim the binary makes
+about itself; it is what the stub measured and what the signing key
+approved. A different binary in the image changes PCR 11, the approval
+no longer verifies, and neither a code nor the factor comes out. Nothing
+in tpm2-kira measures tpm2-kira: a self-measurement into a free PCR would
+be made by the thing it is meant to check, and a replaced binary would
+extend the old binary's hash. The measuring is done by the firmware and
+the stub, which is where it can be trusted; Secure Boot over the UKI
+adds who signed the image (PCR 7). On a GRUB system the same holds with
+PCR 9 (the initrd file) instead of PCR 11, and the reseal after each
+rebuild is what keeps the approval on the current image.
+
 ## 9. CLI
 
 ```
 tpm2-kira factor enrol    [--nvram N] [--label STR] --out PATH
-tpm2-kira factor release  [--nvram N] [--label STR] [--timeout DUR] [--out PATH]
 tpm2-kira factor status   [--nvram N] [--json]
 tpm2-kira factor rotate   [--nvram N] [--label STR] --out PATH
 tpm2-kira factor unenrol  [--nvram N]              # does not touch keyslots
 ```
+
+There is no `factor release`: the release is `run`'s answer on the key
+socket (§5).
 
 ---
 
