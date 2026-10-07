@@ -468,6 +468,9 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			}
 		},
 		show: func(slots []NVRAMSlot, codes map[int]string, remaining time.Duration) {
+			if unlock != nil && unlock.Prompting() {
+				return // the prompt owns the console; nothing is drawn over it
+			}
 			if tpmDev, err := open(); err == nil {
 				PrintKIRASlots(tpmDev, slots, codes) // with PCR details
 				tpmDev.Close()

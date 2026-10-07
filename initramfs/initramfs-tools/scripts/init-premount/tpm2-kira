@@ -59,7 +59,9 @@ once)
 *)
     # The code screen, the gate's coordinator and the key provider in one
     # process; it stays for the keyscript until init-bottom stops it.
-    /usr/bin/tpm2-kira run --gate "$GATE" --unlock "$UNLOCK" >/dev/console 2>&1 &
+    # A background job of a non-interactive shell would get /dev/null as
+    # stdin; Enter at the code screen is read from the console.
+    /usr/bin/tpm2-kira run --gate "$GATE" --unlock "$UNLOCK" </dev/console >/dev/console 2>&1 &
     echo $! > /run/tpm2-kira.pid
     ;;
 esac

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -70,7 +71,10 @@ func TestUnlockServerAnswersAfterRelease(t *testing.T) {
 	var mu sync.Mutex
 	var asked []string
 	var logs []string
-	s := serveUnlock(l, func(v string) ([]byte, error) {
+	var sawPrompting atomic.Bool
+	var s *unlockServer
+	s = serveUnlock(l, func(v string) ([]byte, error) {
+		sawPrompting.Store(s.Prompting())
 		mu.Lock()
 		defer mu.Unlock()
 		asked = append(asked, v)
@@ -94,12 +98,18 @@ func TestUnlockServerAnswersAfterRelease(t *testing.T) {
 	}
 	mu.Unlock()
 
+	if s.Prompting() {
+		t.Fatal("prompting before any request was answered")
+	}
 	s.release()
 	s.release() // twice is fine
 	c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	got, err := io.ReadAll(c)
 	if err != nil || string(got) != "secret-for-cryptroot" {
 		t.Fatalf("key: %q, %v", got, err)
+	}
+	if s.Prompting() || !sawPrompting.Load() {
+		t.Fatal("the display was not told that a prompt was open")
 	}
 
 	// A second volume, served after the first.

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -78,7 +79,13 @@ type unlockServer struct {
 	mu   sync.Mutex // one answer at a time: the prompt is one terminal
 	gate chan struct{}
 	done chan struct{}
+	// prompting is set while a key is being asked for: the display must
+	// not draw over the prompt (Prompting reports it).
+	prompting atomic.Bool
 }
+
+// Prompting reports whether a prompt is open on the console right now.
+func (s *unlockServer) Prompting() bool { return s.prompting.Load() }
 
 // serveUnlock answers on l. Requests wait until release is called (the
 // hold: the code screen is confirmed) and are then answered one after the
@@ -143,7 +150,9 @@ func (s *unlockServer) answer(c net.Conn) {
 	<-s.gate
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.prompting.Store(true)
 	key, err := s.key(req.Volume)
+	s.prompting.Store(false)
 	if err != nil {
 		s.log(fmt.Sprintf("unlock: no key for %s: %v", req.Volume, err))
 		return
