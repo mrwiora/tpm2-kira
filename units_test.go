@@ -95,6 +95,11 @@ func TestGateUnitIsConfined(t *testing.T) {
 		t.Error("the radio worker is not pointed at its coordinator")
 	}
 	display := directives(t, "initramfs/systemd/tpm2-kira.service")
+	// The code screen owns the terminal; what the key provider reports
+	// (stderr) must be readable after the boot as well.
+	if !has(display, "StandardInput=tty") || !has(display, "StandardOutput=tty") || !has(display, "StandardError=journal+console") {
+		t.Error("the display's terminal and journal wiring")
+	}
 	if !has(display, "ExecStart=tpm2-kira run --gate "+socket) {
 		t.Error("the code screen does not listen where the radio worker asks")
 	}

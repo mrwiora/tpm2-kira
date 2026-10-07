@@ -47,7 +47,11 @@ ExecStart=tpm2-kira run --gate /run/tpm2-kira/gate.sock
 # Enter on the console releases the boot.
 StandardInput=tty
 StandardOutput=tty
-StandardError=tty
+# What the key provider and the phone check report (when a volume asked,
+# when the hold ended, when the prompt opened and answered) goes to the
+# journal as well, which the initrd's journald hands to the system's:
+#   journalctl -b -u tpm2-kira.service
+StandardError=journal+console
 
 [Install]
 WantedBy=sysinit.target

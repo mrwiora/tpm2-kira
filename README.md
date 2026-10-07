@@ -818,10 +818,36 @@ does not apply. The `.deb` installs two scripts instead:
 | `/usr/share/initramfs-tools/hooks/tpm2-kira` | copies the binary into the image |
 | `/usr/share/initramfs-tools/scripts/init-premount/tpm2-kira` | starts the display at boot |
 | `/usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira` | stops it and runs `tpm2-kira cap` before the real root takes over |
+| `/lib/cryptsetup/scripts/tpm2-kira` | cryptsetup keyscript: the volume's key from tpm2-kira's prompt |
 | `/etc/tpm2-kira/initramfs.conf` | display mode |
 
 `/init` runs `init-premount` before `local-top/cryptroot` asks for the
 passphrase, which is what puts the code on screen first.
+
+### Configure the disk unlock (Debian)
+
+There is no `systemd-cryptsetup` in a Debian initramfs; `cryptroot` runs
+a `keyscript=` from `/etc/crypttab` instead and reads the key from its
+stdout. Add tpm2-kira's to the root volume's line:
+
+```
+vda3_crypt UUID=… none luks,discard,keyscript=/lib/cryptsetup/scripts/tpm2-kira
+```
+
+and `sudo update-initramfs -u`. The keyscript asks the same socket
+`systemd-cryptsetup` would on Arch (`tpm2-kira unlock-key`): the display
+started by `init-premount` answers once the code screen is confirmed,
+with what you type at `🔐 Please enter passphrase for disk vda3_crypt:`
+(or, with a phone and a factor, the key derived from your password).
+`cryptroot` re-runs the keyscript for each of its tries, so a typo is
+asked again; without the socket (no TPM, `once` mode) the keyscript is
+cryptsetup's own prompt, as before tpm2-kira.
+
+What the display reported at boot - when the volume asked, when the hold
+ended, when the prompt opened and answered - is in
+`/run/initramfs/tpm2-kira.log` after the boot (on Arch:
+`journalctl -b -u tpm2-kira.service`). Tested on Debian 13 with
+initramfs-tools 0.148 and cryptsetup 2.7.
 
 ### Display mode
 
