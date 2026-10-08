@@ -40,8 +40,10 @@ type machineFacts struct {
 	TPMErr     string
 	SHA256Bank bool
 	SHA1Bank   bool
-	LogSHA256  bool // the event log carries SHA-256 digests
-	UseSHA1    bool // the only way on this machine
+	LogRead    bool // the event log can be read
+	LogSHA256  bool // and carries SHA-256 digests
+	UseSHA1    bool // the only way on this machine (SHA1Why says why)
+	SHA1Why    string
 	PCRs       string
 	PCRsWhy    string
 	Keys       string // "" when setup has not run; else what the key is
@@ -73,10 +75,23 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 		f.SHA1Bank = TPMHasPCRBank(tpmDev, PCRHashAlgoSHA1)
 		tpmDev.Close()
 	}
-	if d, err := EventDigestsForPCR(DefaultEventlogPath, 0, PCRHashAlgoSHA256); err == nil && len(d) > 0 {
-		f.LogSHA256 = true
+	if _, err := readRawEventLogFromPath(DefaultEventlogPath); err == nil {
+		f.LogRead = true
+		if d, err := EventDigestsForPCR(DefaultEventlogPath, 0, PCRHashAlgoSHA256); err == nil && len(d) > 0 {
+			f.LogSHA256 = true
+		}
 	}
-	f.UseSHA1 = f.TPMErr == "" && !(f.SHA256Bank && f.LogSHA256) && f.SHA1Bank
+	// The SHA-1 bank is for a TPM without a SHA-256 bank, and for a
+	// firmware whose event log measures into the SHA-1 bank alone (then
+	// the SHA-256 registers hold nothing the boot put there). Without a
+	// log to read the registers decide, and SHA-256 is what seal reads.
+	switch {
+	case f.TPMErr != "" || !f.SHA1Bank:
+	case !f.SHA256Bank:
+		f.UseSHA1, f.SHA1Why = true, "no SHA-256 bank"
+	case f.LogRead && !f.LogSHA256:
+		f.UseSHA1, f.SHA1Why = true, "the event log has no SHA-256 digests"
+	}
 	algo := PCRHashAlgoSHA256
 	if f.UseSHA1 {
 		algo = PCRHashAlgoSHA1
@@ -108,11 +123,11 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	if m, _ := filepath.Glob("/sys/class/bluetooth/hci*"); len(m) > 0 {
 		f.Adapter = filepath.Base(m[0])
 	}
-	if _, err := LoadAttestConfig(DefaultControlConfigPath); err != nil {
+	if _, err := LoadAttestConfig(controlConfigPath()); err != nil {
 		f.AttestConf = err.Error()
 	}
 
-	f.Status = collectStatus(StatusOptions{TPMPath: tpmPath, UnlockConfigPath: DefaultControlConfigPath, Debug: debug})
+	f.Status = collectStatus(StatusOptions{TPMPath: tpmPath, ConfigPath: controlConfigPath(), Debug: debug})
 	f.Risks = risks(&f)
 	for _, s := range f.Status.Slots {
 		f.Phone = f.Phone || len(s.Phones) > 0
@@ -139,7 +154,7 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 func risks(f *machineFacts) []string {
 	var r []string
 	if f.UseSHA1 {
-		r = append(r, "the SHA-1 bank is used (no SHA-256 bank with a SHA-256 event log): SHA-1 collisions are practical, so a measured boot can in principle be forged; the acknowledged weakness of this TPM")
+		r = append(r, "the SHA-1 bank is used ("+f.SHA1Why+"): SHA-1 collisions are practical, so a measured boot can in principle be forged; the acknowledged weakness of this TPM")
 	}
 	switch {
 	case !f.SecureBoot.Known:
@@ -292,7 +307,7 @@ func (c *controller) steps() []controlStep {
 	case f.Adapter == "":
 		attest.Blocked = "no Bluetooth adapter on this machine"
 	case f.AttestConf != "":
-		attest.Blocked = DefaultControlConfigPath + ": " + f.AttestConf
+		attest.Blocked = controlConfigPath() + ": " + f.AttestConf
 	case f.Phone:
 		attest.Done = "a phone is enrolled"
 	}
@@ -324,7 +339,7 @@ func (c *controller) steps() []controlStep {
 	// ours takes its key from tpm2-kira. Control sets the mode (the
 	// commands touch no configuration file); the route it advises.
 	unlock := controlStep{Key: "unlock", Title: "Unlock at boot (control.conf, the key's route, the initramfs)",
-		Explain: "The boot derives the key only in the mode set in " + DefaultControlConfigPath + ", and a device gets it only when its rd.luks.key= (crypttab on Debian) names tpm2-kira's socket.",
+		Explain: "The boot derives the key only in the mode set in " + controlConfigPath() + ", and a device gets it only when its rd.luks.key= (crypttab on Debian) names tpm2-kira's socket.",
 		Run:     (*controller).runUnlock}
 	wanted := c.wantedUnlockMode()
 	var unrouted []string
@@ -384,10 +399,10 @@ func (c *controller) setMode(mode string) error {
 	if c.facts.Status.UnlockMode == mode {
 		return nil
 	}
-	if err := setUnlockMode(DefaultControlConfigPath, mode); err != nil {
+	if err := setUnlockMode(controlConfigPath(), mode); err != nil {
 		return fmt.Errorf("the unlock mode is not set: %w", err)
 	}
-	fmt.Fprintf(c.out, "%s: TPM2_KIRA_UNLOCK=%s\n", DefaultControlConfigPath, mode)
+	fmt.Fprintf(c.out, "%s: TPM2_KIRA_UNLOCK=%s\n", controlConfigPath(), mode)
 	c.facts.Status.UnlockMode = mode
 	c.ran = true
 	return nil
@@ -606,9 +621,11 @@ func (c *controller) factsText() string {
 	case f.TPMErr != "":
 		fmt.Fprintf(&w, "  TPM         none usable (%s)\n", f.TPMErr)
 	case f.UseSHA1:
-		fmt.Fprintf(&w, "  TPM         %s - no SHA-256 bank with a SHA-256 event log; the SHA-1 bank is used (--sha1), the weakness acknowledged\n", f.TPM)
-	default:
+		fmt.Fprintf(&w, "  TPM         %s - %s; the SHA-1 bank is used (--sha1), the weakness acknowledged\n", f.TPM, f.SHA1Why)
+	case f.LogSHA256:
 		fmt.Fprintf(&w, "  TPM         %s, SHA-256 bank and event log\n", f.TPM)
+	default:
+		fmt.Fprintf(&w, "  TPM         %s, SHA-256 bank; no event log to read, the registers as they are\n", f.TPM)
 	}
 	if f.TPMErr == "" {
 		switch {

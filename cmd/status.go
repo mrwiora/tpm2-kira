@@ -18,11 +18,11 @@ import (
 
 // StatusOptions is what status takes.
 type StatusOptions struct {
-	TPMPath          string
-	PrivKeyPath      string // the signing key the blobs are checked with
-	UnlockConfigPath string
-	JSON             bool
-	Debug            bool
+	TPMPath     string
+	PrivKeyPath string // the signing key the blobs are checked with
+	ConfigPath  string
+	JSON        bool
+	Debug       bool
 }
 
 // StatusSlot is one slot of the report.
@@ -46,7 +46,7 @@ type StatusReport struct {
 	TPMError     string             `json:"tpm_error,omitempty"`
 	Slots        []StatusSlot       `json:"slots"`
 	UnlockMode   string             `json:"unlock_mode"`
-	UnlockConfig string             `json:"unlock_config"`
+	Config       string             `json:"config"`
 	UnlockError  string             `json:"unlock_error,omitempty"`
 	Devices      []LuksDeviceStatus `json:"devices"`
 	DevicesError string             `json:"devices_error,omitempty"`
@@ -101,8 +101,8 @@ func collectStatus(o StatusOptions) StatusReport {
 		tpmDev.Close()
 	}
 
-	cfg, err := LoadUnlockConfig(o.UnlockConfigPath)
-	r.UnlockConfig = o.UnlockConfigPath
+	cfg, err := LoadUnlockConfig(o.ConfigPath)
+	r.Config = o.ConfigPath
 	if err != nil {
 		r.UnlockError = err.Error()
 	} else {
@@ -208,7 +208,7 @@ func statusNotes(r StatusReport) []string {
 		}
 	case UnlockSkip:
 		for mode, n := range marked {
-			notes = append(notes, fmt.Sprintf("%d keyslot(s) are marked %s, but the unlock mode is skip: the boot asks at cryptsetup's prompt (TPM2_KIRA_UNLOCK=%s in %s, then rebuild the initramfs)", n, mode, mode, r.UnlockConfig))
+			notes = append(notes, fmt.Sprintf("%d keyslot(s) are marked %s, but the unlock mode is skip: the boot asks at cryptsetup's prompt (TPM2_KIRA_UNLOCK=%s in %s, then rebuild the initramfs)", n, mode, mode, r.Config))
 		}
 	}
 	return notes
@@ -240,7 +240,7 @@ func printStatus(r StatusReport) {
 		}
 	}
 	fmt.Println()
-	fmt.Printf("Disk unlock (%s)\n", r.UnlockConfig)
+	fmt.Printf("Disk unlock (%s)\n", r.Config)
 	if r.UnlockError != "" {
 		fmt.Printf("  %s\n", r.UnlockError)
 	} else {

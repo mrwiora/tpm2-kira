@@ -117,8 +117,9 @@ var helpPages = map[string]string{
 
 The guided way through the protections. It first looks at what the
 machine has - the TPM and its banks (the SHA-1 bank only where there is
-no SHA-256 one with a SHA-256 event log), how it booted and so which PCRs
-to seal to, the initramfs kind, a Bluetooth adapter, the LUKS devices -
+no SHA-256 one, or the event log measures into SHA-1 alone), how it
+booted and so which PCRs to seal to, the initramfs kind, a Bluetooth
+adapter, the LUKS devices -
 and at what is configured: the signing key, the slots, the phone, the
 keyslots, the unlock mode, the route of the key. One screen shows both,
 the protections in the order they build on each other -
@@ -252,7 +253,7 @@ the token and its PIN (` + cmd.PINEnvVar + `, or the TPM2_KIRA_PIN line of
   tpm2-kira reseal --privkey /path/to/my-key.key
 `,
 
-	"status": `tpm2-kira status [--json] [--privkey PATH] [--unlock-conf PATH]
+	"status": `tpm2-kira status [--json] [--privkey PATH] [--conf PATH]
 
 The overview, read-only: every slot with what it is sealed to, its
 generation (does the TPM's index match, or is a reseal due), whether this
@@ -265,7 +266,7 @@ slot, a slot that needs a reseal. Root for the LUKS headers.
 
   --json              Machine-readable
   --privkey PATH      The signing key the blobs are checked with
-  --unlock-conf PATH  (default ` + cmd.DefaultControlConfigPath + `)
+  --conf PATH         The configuration file (default ` + cmd.DefaultControlConfigPath + `)
 `,
 
 	"info": `tpm2-kira info [--nvram N] [--json] [--privkey PATH]

@@ -86,7 +86,7 @@ func TestControlRisks(t *testing.T) {
 	if r := risks(&f); len(r) != 0 {
 		t.Fatalf("a sound machine has risks: %v", r)
 	}
-	f.UseSHA1 = true
+	f.UseSHA1, f.SHA1Why = true, "no SHA-256 bank"
 	f.SecureBoot = SecureBootState{Known: true, SetupMode: true}
 	f.Status.Slots[0].PCRs = "0,2,7"
 	f.EKBy, f.EKNote, f.Phone = "", "the TPM has no vendor certificate for its endorsement key", true

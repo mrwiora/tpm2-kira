@@ -100,11 +100,11 @@ func main() {
 		fs := flag.NewFlagSet("status", flag.ExitOnError)
 		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
 		privKey := fs.String("privkey", "", "Signing key the blobs are checked with (default: "+cmd.DefaultPrivateKeyPath+")")
-		conf := fs.String("unlock-conf", cmd.DefaultControlConfigPath, "The unlock configuration")
+		conf := fs.String("conf", cmd.DefaultControlConfigPath, "The configuration file")
 		jsonOut := fs.Bool("json", false, "Machine-readable output")
 		dbg := fs.Bool("debug", *debug, "Enable debug output")
 		fs.Parse(commandArgs)
-		if err := cmd.Status(cmd.StatusOptions{TPMPath: *tpm, PrivKeyPath: *privKey, UnlockConfigPath: *conf, JSON: *jsonOut, Debug: *dbg}); err != nil {
+		if err := cmd.Status(cmd.StatusOptions{TPMPath: *tpm, PrivKeyPath: *privKey, ConfigPath: *conf, JSON: *jsonOut, Debug: *dbg}); err != nil {
 			fail(err)
 		}
 	case "nvram":

@@ -400,7 +400,7 @@ func openCoordinator(tpmPath, socket, configPath, signerPath string, debug bool)
 // also the key provider for systemd-cryptsetup: it answers the volumes'
 // key requests once the hold has ended, and stays until it is stopped.
 func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, debug bool) {
-	svc, endCoordinator := startCoordinator(tpmPath, gateSocket, DefaultControlConfigPath, DefaultAttestSignerPath, debug)
+	svc, endCoordinator := startCoordinator(tpmPath, gateSocket, controlConfigPath(), DefaultAttestSignerPath, debug)
 	var unlock *unlockServer
 	unlockMode := "" // what the next prompt is, for the code screen's words
 	if l, err := listenUnlock(unlockSocket); err != nil {

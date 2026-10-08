@@ -442,8 +442,8 @@ func LuksEnrol(o LuksEnrolOptions) error {
 	fmt.Printf("%s keyslot %d added: %s\n", o.Device, newSlot, describeKeyslot(KeyslotStatus{Keyslot: newSlot, Token: &tok}))
 	// The commands touch no configuration file: the mode in control.conf is
 	// control's (or the person's) to set.
-	if cfg, _ := LoadUnlockConfig(DefaultControlConfigPath); cfg.Mode != o.Mode {
-		fmt.Printf("The boot uses this keyslot with TPM2_KIRA_UNLOCK=%s in %s (now %s):\n", o.Mode, DefaultControlConfigPath, cfg.Mode)
+	if cfg, _ := LoadUnlockConfig(controlConfigPath()); cfg.Mode != o.Mode {
+		fmt.Printf("The boot uses this keyslot with TPM2_KIRA_UNLOCK=%s in %s (now %s):\n", o.Mode, controlConfigPath(), cfg.Mode)
 		fmt.Println("tpm2-kira control sets it, or set it by hand.")
 	}
 	if advice := RouteAdvice(o.Device); advice != "" {
@@ -567,7 +567,7 @@ func LuksRemove(o LuksRemoveOptions) error {
 	}
 	if left == 0 {
 		fmt.Printf("No keyslot of %s is tpm2-kira's now. If no other device has one, set\n", o.Device)
-		fmt.Printf("TPM2_KIRA_UNLOCK=skip in %s and rebuild the initramfs.\n", DefaultControlConfigPath)
+		fmt.Printf("TPM2_KIRA_UNLOCK=skip in %s and rebuild the initramfs.\n", controlConfigPath())
 	}
 	return nil
 }
