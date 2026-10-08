@@ -149,14 +149,10 @@ func (b *bootDisplay) holdForConfirmation() ([]NVRAMSlot, bool, error) {
 			if !now.Before(boundary) {
 				break // a new code
 			}
-			if gate.Code != before {
-				// The phone is in: the slot's line shows the phone code
-				// from now on, at once, not at the next window.
-				remaining := limit().Sub(now)
-				if remaining < 0 {
-					remaining = 0
-				}
-				b.show(slots, codes, remaining)
+			if gate.Code != before && gate.Code != "" {
+				// The phone is in: its code, at once, on its own line (the
+				// slot's line carries it from the next window on).
+				fmt.Printf("%s %s  (the phone must show the same)\n", kiraTag(tagPurple), gate.Code)
 			}
 		}
 	}
@@ -496,9 +492,14 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			// separator) writes to the terminal but must not own it.
 			releaseTerminal(0)
 			sdNotifyReady()
-			// From here on systemd-cryptsetup's key requests are answered.
+			// From here on systemd-cryptsetup's key requests are answered -
+			// after a moment: READY lets the units behind this one finish,
+			// and their lines on the console would land in the prompt.
 			if unlock != nil {
-				unlock.release()
+				go func() {
+					time.Sleep(promptDelay)
+					unlock.release()
+				}()
 			}
 		},
 		show: func(slots []NVRAMSlot, codes map[int]string, remaining time.Duration) {
@@ -516,16 +517,10 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			if remaining >= 0 {
 				fmt.Println()
 				if st, ok := gateStatus(phone); ok && st.Asking() {
-					if unlockMode == UnlockPasswordRemoteSalt {
-						fmt.Printf("   Slot #%d is enrolled with a phone: open Marify to attest this boot and return the disk's salt.\n", st.Slot)
-					} else {
-						fmt.Printf("   Slot #%d is enrolled with a phone: open Marify to attest this boot.\n", st.Slot)
-					}
-					fmt.Println("   Without the phone: compare the code with your authenticator and press Enter.")
+					fmt.Printf("   Enter: continue without the phone (on its own in %d s).\n", int(remaining.Round(time.Second)/time.Second))
 				} else {
-					fmt.Printf("   Does the code match your authenticator? Press Enter to continue to %s.\n", nextPrompt(unlockMode))
+					fmt.Printf("   Does the code match your authenticator? Enter: continue to %s (on its own in %d s).\n", nextPrompt(unlockMode), int(remaining.Round(time.Second)/time.Second))
 				}
-				fmt.Printf("   (continues on its own in %d s)\n", int(remaining.Round(time.Second)/time.Second))
 			}
 			fmt.Println()
 		},
@@ -568,14 +563,22 @@ func waitForStop() {
 // boot state, could recover what the phone sealed, so the phone must show
 // the same eight characters. The TOTP is for the boot without a phone.
 func phoneCodes(codes map[int]string, st GateStatus, ok bool) map[int]string {
-	if !ok || st.Code == "" {
+	if !ok || !st.Asking() {
 		return codes
 	}
-	out := make(map[int]string, len(codes)+1)
+	totp, has := codes[st.Slot]
+	if !has {
+		return codes
+	}
+	out := make(map[int]string, len(codes))
 	for k, v := range codes {
 		out[k] = v
 	}
-	out[st.Slot] = st.Code + "  (phone code: the phone must show the same)"
+	line := "Attest via BLE (" + phoneLabel(st.Enrolled) + ") - " + totp
+	if st.Code != "" {
+		line += "  phone code " + st.Code
+	}
+	out[st.Slot] = line
 	return out
 }
 
@@ -585,6 +588,22 @@ func gateStatus(phone func() (GateStatus, bool)) (GateStatus, bool) {
 	}
 	return phone()
 }
+
+// promptDelay is the pause between the end of the code screen and the
+// first key request answered: the units that waited for READY print
+// their lines meanwhile, not into the prompt. A pause only; nothing is
+// trusted differently.
+var promptDelay = 3 * time.Second
+
+// kiraTag is the "[ KIRA ]" tag in a colour: yellow for the screen and its
+// lines, blue for the prompt, purple for the phone's code.
+func kiraTag(colour string) string { return "[ \033[1;" + colour + "mKIRA\033[0m ]" }
+
+const (
+	tagYellow = "33"
+	tagBlue   = "34"
+	tagPurple = "35"
+)
 
 // nextPrompt names what follows the code screen, in the unlock mode's
 // words: "the password prompt" when tpm2-kira asks (the password is what
@@ -609,30 +628,30 @@ func gateEventPrinter(mode string) func(prev, cur GateStatus) {
 		case GateWaiting:
 			if prev.State == "" {
 				if mode == UnlockPasswordRemoteSalt {
-					fmt.Printf("   Slot #%d: open Marify on your phone to attest this boot and return the disk's salt.\n", cur.Slot)
+					fmt.Printf("%s Slot #%d: open Marify on your phone to attest this boot and return the disk's salt.\n", kiraTag(tagYellow), cur.Slot)
 				} else {
-					fmt.Printf("   Slot #%d: open Marify on your phone to attest this boot.\n", cur.Slot)
+					fmt.Printf("%s Slot #%d: open Marify on your phone to attest this boot.\n", kiraTag(tagYellow), cur.Slot)
 				}
 			}
 		case GateSession:
 			// The phone code goes into the slot's own line (phoneCodes);
 			// here only the fact that a phone is in.
 			if prev.State != GateSession {
-				fmt.Println("   A phone is connected: answer there. The boot waits for it.")
+				fmt.Printf("%s A phone is connected: answer there. The boot waits for it.\n", kiraTag(tagYellow))
 			}
 		case GateAttested:
 			switch {
 			case cur.Releasing:
-				fmt.Printf("   \033[0;32mSlot #%d attested by %s.\033[0m Waiting for the salt from the phone ...\n", cur.Slot, phoneLabel(cur.Phone))
+				fmt.Printf("%s \033[0;32mSlot #%d attested by %s.\033[0m Waiting for the salt from the phone ...\n", kiraTag(tagYellow), cur.Slot, phoneLabel(cur.Phone))
 			case prev.Releasing && cur.SaltTaken:
-				fmt.Printf("   \033[0;32mThe phone returned the salt.\033[0m Continuing to %s.\n", nextPrompt(mode))
+				fmt.Printf("%s \033[0;32mThe phone returned the salt.\033[0m Continuing to %s.\n", kiraTag(tagYellow), nextPrompt(mode))
 			case prev.Releasing:
-				fmt.Printf("   \033[0;33mNo salt came from the phone.\033[0m Continuing to cryptsetup's own prompt (the recovery passphrase).\n")
+				fmt.Printf("%s \033[0;33mNo salt came from the phone.\033[0m Continuing to cryptsetup's own prompt (the recovery passphrase).\n", kiraTag(tagYellow))
 			case prev.State != GateAttested:
-				fmt.Printf("   \033[0;32mSlot #%d attested by %s.\033[0m Continuing to %s.\n", cur.Slot, phoneLabel(cur.Phone), nextPrompt(mode))
+				fmt.Printf("%s \033[0;32mSlot #%d attested by %s.\033[0m Continuing to %s.\n", kiraTag(tagYellow), cur.Slot, phoneLabel(cur.Phone), nextPrompt(mode))
 			}
 		case GateRejected, GateRefused:
-			fmt.Printf("   \033[0;31mSlot #%d was NOT attested by the phone (see above).\033[0m Do not type your password unless you know why.\n", cur.Slot)
+			fmt.Printf("%s \033[0;31mSlot #%d was NOT attested by the phone (see above).\033[0m Do not type your password unless you know why.\n", kiraTag(tagYellow), cur.Slot)
 		}
 	}
 }

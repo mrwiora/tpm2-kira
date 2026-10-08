@@ -173,6 +173,7 @@ func (s *gateService) setup(sealIndex uint32, signerPath string, debug bool) (in
 	sealIdx := idx // the enrolment lives in the slot's own blob
 	s.mu.Lock()
 	s.blob = blob
+	s.status.Enrolled = enrolledLabel(blob.Phone.Verifiers)
 	s.recordVerified = verified
 	s.be = &tpmBackend{tpm: s.tpm, blob: blob, sealIndex: sealIdx, sealed: readSealedSlot(s.tpm, sealIdx), debug: debug}
 	s.mu.Unlock()
@@ -475,4 +476,17 @@ func receiptState(c attest.ReceiptCheck) GateState {
 		return GateRefused
 	}
 	return ""
+}
+
+// enrolledLabel names the enrolled phones for the slot's line: the first
+// one, "+N" for the others.
+func enrolledLabel(vs []attest.EnrolledVerifier) string {
+	if len(vs) == 0 {
+		return ""
+	}
+	name := verifierName(&vs[0])
+	if len(vs) > 1 {
+		name += fmt.Sprintf(" +%d", len(vs)-1)
+	}
+	return name
 }

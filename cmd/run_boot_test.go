@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -486,14 +485,19 @@ func TestPhoneCodeShownAtOnce(t *testing.T) {
 		return GateStatus{Slot: 0, State: GateAttested, Phone: "Pixel"}, true
 	})
 	runDisplay(t, b)
-	// The first frame is the TOTP alone; a frame drawn at the session's
-	// start (within a second of :09, well before the :30 window) follows.
-	if len(f.shown) < 2 {
-		t.Fatalf("%d frames; the session's start did not redraw", len(f.shown))
+	// The code's arrival prints its own line; the frames are the windows'.
+	if len(f.shown) < 1 {
+		t.Fatalf("%d frames", len(f.shown))
 	}
-	codes := phoneCodes(map[int]string{0: "123456"}, GateStatus{Slot: 0, Code: "K7QM-2XHD"}, true)
-	if !strings.Contains(codes[0], "K7QM-2XHD") || strings.Contains(codes[0], "123456") {
+	codes := phoneCodes(map[int]string{0: "123456"}, GateStatus{Slot: 0, State: GateSession, Enrolled: "Pixel", Code: "K7QM-2XHD"}, true)
+	if codes[0] != "Attest via BLE (Pixel) - 123456  phone code K7QM-2XHD" {
 		t.Fatalf("slot line with a phone in: %q", codes[0])
+	}
+	if codes := phoneCodes(map[int]string{0: "123456"}, GateStatus{Slot: 0, State: GateWaiting, Enrolled: "Pixel"}, true); codes[0] != "Attest via BLE (Pixel) - 123456" {
+		t.Fatalf("slot line while the phone is asked: %q", codes[0])
+	}
+	if codes := phoneCodes(map[int]string{0: "123456"}, GateStatus{Slot: 0, State: GateAttested, Phone: "Pixel"}, true); codes[0] != "123456" {
+		t.Fatalf("slot line after the verdict: %q", codes[0])
 	}
 	if codes := phoneCodes(map[int]string{0: "123456"}, GateStatus{}, false); codes[0] != "123456" {
 		t.Fatalf("slot line without a phone: %q", codes[0])

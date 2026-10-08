@@ -29,6 +29,9 @@ type GateStatus struct {
 	Slot  int // the TOTP slot number the enrolment belongs to
 	State GateState
 	Phone string // the phone's name, once it has answered
+	// Enrolled is the name of the phone enrolled for the slot (the first,
+	// with "+N" for more), for the slot's line while it is asked.
+	Enrolled string
 	// Code is the code of the phone's boot challenge, while its session
 	// lasts: the person compares it with what the phone shows.
 	Code string

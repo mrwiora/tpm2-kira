@@ -341,7 +341,7 @@ func diskKey(salt func() []byte, mode string) func(volume string) ([]byte, error
 //	[ KIRA ] Disk cryptroot: the key is derived from your password and the salt your phone returned.
 //	         Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works.
 //
-//	🔐 Password for disk cryptroot:
+//	[ KIRA ] Password for disk cryptroot:          (the tag in blue, the question in bold)
 func consoleAsk(volume, what, note string) ([]byte, error) {
 	con, fd, err := openConsole()
 	if err != nil {
@@ -350,13 +350,13 @@ func consoleAsk(volume, what, note string) ([]byte, error) {
 	defer con.Close()
 	if note != "" {
 		lines := strings.Split(note, "\n")
-		fmt.Fprintf(con, "\n[ \033[1;33mKIRA\033[0m ] Disk %s: %s\n", volume, lines[0])
+		fmt.Fprintf(con, "\n%s Disk %s: %s\n", kiraTag(tagYellow), volume, lines[0])
 		for _, l := range lines[1:] {
 			fmt.Fprintf(con, "         %s\n", l)
 		}
 	}
 	for {
-		fmt.Fprintf(con, "\n🔐 \033[1m%s for disk %s:\033[0m ", what, volume)
+		fmt.Fprintf(con, "\n%s \033[1m%s for disk %s:\033[0m ", kiraTag(tagBlue), what, volume)
 		pw, err := readPassphrase(con, fd)
 		fmt.Fprintln(con)
 		if err != nil {
