@@ -7,8 +7,8 @@
 > tests read and type on, and adds the phone: Marify in the Android
 > emulator, reached over a virtual Bluetooth link.
 > **A larger rework**, done in the milestones of §9, each usable on its
-> own. The BLE link (§7) carries the one open question that decides its
-> shape (§10.1); the rest is known ground.
+> own. The BLE link (§7) rests on netsim's HCI port, which the emulator
+> documents (§7.2); the questions left are in §10.
 
 ## 1. What the host is for
 
@@ -48,10 +48,10 @@ Three things this gives that the hand-installed VMs cannot:
 |---|---|
 | Hardware | x86-64 with VT-x/AMD-V, 32 GiB RAM (each machine 2-4 GiB, the emulator 4 GiB, Argon2id at 1 GiB inside a machine), 200 GiB SSD, no need for a GPU or Bluetooth hardware |
 | OS | Arch Linux (the same Go, QEMU, swtpm, OVMF and Android SDK as the workstation; Debian works too, with the versions below) |
-| Packages | `qemu-full` (or `qemu-system-x86`, `qemu-img`), `edk2-ovmf` (Secure Boot variables), `swtpm`, `socat`, `oath-toolkit` (`oathtool`), `python3`, `go` (or go.dev's into `/usr/local/go`, README), `android-sdk-cmdline-tools`, `openssh`, `git`; Debian: `archinstall` is not needed on the host, the Arch ISO runs it (§4) |
-| Users | `tester`, member of `kvm`, runs everything; no root for the tests themselves. The emulator needs `/dev/kvm` as well |
+| Packages | `qemu-full` (or `qemu-system-x86`, `qemu-img`), `edk2-ovmf` (Secure Boot variables), `swtpm`, `socat`, `oath-toolkit` (`oathtool`), `python3`, `go` (or go.dev's into `/usr/local/go`, README), `openssh`, `git`, a JDK 17 for `sdkmanager`; the Android SDK itself is fetched by the script (§7.2), not from the distribution. `archinstall` is not needed on the host, the Arch ISO runs it (§4) |
+| Users | `tester`, member of `kvm`, runs everything; no root for the tests themselves. The emulator is QEMU too and needs `/dev/kvm` as well; both share it |
 | Network | one libvirt-free `qemu-bridge-helper` bridge or user-mode networking with port forwards; every machine has a fixed address the harness knows (`testhost.conf`, §4) |
-| Layout | `/srv/testhost/`: `images/` (base images and their swtpm state), `runs/` (overlays, consoles and logs of one run each), `iso/` (the installers), `android/` (SDK, AVD), `conf/testhost.conf` |
+| Layout | `/srv/testhost/`: `images/` (base images and their swtpm state), `runs/` (overlays, consoles and logs of one run each), `iso/` (the installers), `android/` (the SDK, the AVD, the APK under test), `conf/testhost.conf` |
 
 No libvirt: QEMU is started by the harness with the exact command line
 (§4.3), so the machine is the same on every run and the serial console,
@@ -213,12 +213,20 @@ Marify ─ the emulator's virtual controller ─ netsimd / rootcanal (the virtua
                                  guest: /dev/virtio-ports/hci ─ hci bridge ─ /dev/vhci ─ hci0 ─ the gate
 ```
 
-- **The emulator's radio.** Emulator 33 and later with an API 33/34
-  Google APIs x86_64 image emulates Bluetooth through `netsimd`
-  (rootcanal's successor): a virtual controller per emulated device and
-  a shared air in which LE advertising, scanning and connections work.
-  rootcanal accepts **external HCI clients** on its HCI port (6402): a
-  process speaking H4 over TCP is one more device in the air.
+- **The emulator's radio.** Emulator 33.1.4 and later with an API 33/34
+  Google APIs x86_64 image emulates Bluetooth through **netsim**
+  (`netsimd`, built on rootcanal): a virtual controller per emulated
+  device and a shared air in which LE advertising, scanning and
+  connections work. netsim **ships with the emulator package** - there is
+  nothing to install besides the SDK's `emulator` - and the emulator
+  starts it (`-packet-streamer-endpoint default`; the emulator talks to
+  it over gRPC). rootcanal's **HCI port** is kept: every new TCP
+  connection on it spawns a new virtual controller in the air, speaking
+  H4 (the Bluetooth UART transport) over TCP; the emulator sets the port
+  with `-netsim-args="--hci-port 6402"` (rootcanal's default, 6402, is
+  what the plan uses; several emulators need several ports). The same
+  channel is what Bumble uses to put an external BLE host into the
+  emulator's air, so it is a supported way in, not a side door.
 - **The machine's adapter.** The kernel's `hci_vhci`: a process that
   opens `/dev/vhci` is a controller `hci0`, with the process at the HCI
   level. tpm2-kira's gate works on an HCI user channel with legacy LE
@@ -236,16 +244,55 @@ Marify ─ the emulator's virtual controller ─ netsimd / rootcanal (the virtua
 QEMU carries the TCP side (`-chardev socket,host=127.0.0.1,port=6402`),
 so the initramfs needs no network.
 
-### 7.2 The emulator
+### 7.2 The Android machine, installed by a script like the others
 
-An AVD `marify` (API 34, Google APIs, x86_64, 4 GiB), started headless
-(`emulator -avd marify -no-window -no-audio -netsim` as the version
-calls it), Marify's **debug** APK installed with `adb`. The harness
-drives the app with its instrumented tests (`android/app/src/androidTest`
-holds a session test against a machine already: `SwtpmMachineSessionTest`
-for the demo machine; a `RealMachineSessionTest` connects to the
-advertised machine, binds, checks a boot, keeps the remote salt, returns
-it) and, where a test needs the screens, UI Automator through `adb`.
+The phone is a machine of the host like `arch-uki`: the Android
+emulator (itself QEMU on KVM), set up by `tools/testhost/android-setup.sh`
+once, frozen, and started from that state for every run. The script:
+
+1. **The SDK**, into `android/sdk/`: the command-line tools zip from
+   developer.android.com, then `sdkmanager "platform-tools" "emulator"
+   "system-images;android-34;google_apis;x86_64"`, licences accepted.
+   `netsimd` and the `netsim` CLI arrive with `emulator`
+   (`android/sdk/emulator/`); nothing else provides them. The versions
+   are pinned in `testhost.conf` (`emulator` 36.x, the image's revision)
+   so a rebuild gives the same machine.
+2. **The AVD** `marify`: `avdmanager create avd -n marify -k
+   "system-images;android-34;google_apis;x86_64" -d pixel_6a`, then
+   `config.ini`: `hw.ramSize=4096`, `disk.dataPartition.size=4G`,
+   `hw.keyboard=yes`, `hw.gpu.mode=swiftshader_indirect` (no display).
+3. **The first boot and its state**: `emulator -avd marify -no-window
+   -no-audio -packet-streamer-endpoint default -netsim-args="--hci-port
+   6402"`, `adb wait-for-device` and the boot completed
+   (`sys.boot_completed`), then over `adb`: Bluetooth on
+   (`svc bluetooth enable`), a device credential (`locksettings set-pin`,
+   the one Marify asks for at every signature), the animations off,
+   Marify's **debug APK** installed with its permissions granted
+   (`pm grant … BLUETOOTH_SCAN/CONNECT`, location for the scan), the
+   instrumentation APK with it. Then a **snapshot** (`adb emu avd
+   snapshot save base`) - the emulator's own frozen state, as the
+   qcow2 overlay is for the Linux machines: a run starts with
+   `-snapshot base -no-snapshot-save` and leaves nothing behind.
+4. **The APK under test** is the one built for the commit
+   (`android/scripts/build-core.sh` and Gradle on the host, or the APK the
+   workstation built); a run installs it over the snapshot's one first.
+
+The harness drives the app with its instrumented tests
+(`android/app/src/androidTest` holds a session test against a machine
+already: `SwtpmMachineSessionTest` for the demo machine; a
+`RealMachineSessionTest` connects to the advertised machine, binds,
+checks a boot, keeps the remote salt, returns it) and, where a test needs
+the screens, UI Automator through `adb`. `netsim` (the CLI) lists the
+devices in the air - the phone, and the Linux machine once its bridge
+connected - and `--pcap` in the netsim arguments records every packet of
+a run next to the console log.
+
+**Standalone rootcanal** (`pip install rootcanal`, or Bazel from
+google/rootcanal) is the same controller without Android: two machines,
+or a machine and a Go test, on one rootcanal give tpm2-kira's own BLE
+transport a controller-level integration test in CI, without the
+emulator. The emulator is for Marify; rootcanal alone is for
+`transport/ble`.
 
 Two consequences of the emulator for tpm2-kira's checks:
 
@@ -307,24 +354,26 @@ The rule stays: wait for states, never for times; nothing twice.
 3. **Scenarios** (§8): `kernel-update` (the hooks' reseal), `luks-salt`,
    `pcr-mismatch`, the YubiKey PIN from control.conf with the token
    emulator is a unit test and stays one.
-4. **The phone** (§7): the open question of §10.1 answered first; then
-   the bridge, the hook knob, the AVD, `RealMachineSessionTest`, the six
-   BLE scenarios. *Result: the whole protocol under test on every commit.*
+4. **The phone** (§7): `android-setup.sh` and the frozen AVD, the bridge
+   and the hook knob, the first connection seen in `netsim`'s device
+   list (§10.1), `RealMachineSessionTest`, the six BLE scenarios.
+   *Result: the whole protocol under test on every commit.*
 5. **`arch-sha1`** and whatever machine the next platform observation
    needs (`docs/PLATFORM-OBSERVATIONS.md`).
 
-Milestones 1-3 do not depend on 4; 4 is the one with an unknown.
+Milestones 1-3 do not depend on 4; 4 is the one with a first contact to make.
 
 ## 10. Open questions
 
-1. **The HCI port of the emulator's netsim.** rootcanal has `--hci_port`;
-   whether the `netsimd` shipped with the current emulator still exposes
-   it, or only its gRPC packet streamer, decides the bridge: H4 over a
-   chardev (§7.1, the small one) or a host-side relay speaking gRPC to
-   netsim and H4 to the chardev (the same guest side, a larger host
-   side). To check on the host before milestone 4: `netsimd --help`,
-   `netsim-cli devices` with the emulator running, a `nc` to the port.
-   Fallback: a standalone rootcanal and the emulator pointed at it.
+1. **netsim's HCI port, in practice.** The emulator documents
+   `--hci-port` and rootcanal's H4-over-TCP channel; what is left to see
+   on the host is the first connection from the bridge: the new
+   controller appearing in `netsim` 's device list, and Marify's scan
+   finding the machine's advertisement. Two things known to bite: a
+   controller attached while Android's Bluetooth is up can be refused
+   (Bumble's note - Bluetooth off, attach, on, in the setup), and the
+   emulator must be started with the port before the machine's QEMU
+   connects (`reconnect=1` on the chardev covers the order).
 2. **Secure Boot on Debian under OVMF**: shim with Microsoft's keys from
    `OVMF_VARS.secboot` (the firmware's enrolled defaults) or the
    machine's own keys like Arch; the former is what a Debian user has.
