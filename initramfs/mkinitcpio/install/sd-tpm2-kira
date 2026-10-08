@@ -179,40 +179,33 @@ _add_unlock() {
         fi
     fi
 
+    # Is any volume routed through the socket at all (the command line, or
+    # an x-initrd.attach line of crypttab)? Said only when none is.
     for f in "${cmdlines[@]}"; do
         [[ -r $f ]] || continue
         for word in $(< "$f"); do
             case $word in
-                rd.luks.key=*=$UNLOCK_SOCKET|luks.key=*=$UNLOCK_SOCKET)
-                    uuid=${word#*=}
-                    uuid=${uuid%%=*}
-                    plain "tpm2-kira: the volume $uuid is unlocked through tpm2-kira's prompt ($f)"
-                    routed=1
-                    ;;
-                rd.luks.key=$UNLOCK_SOCKET|luks.key=$UNLOCK_SOCKET)
-                    plain "tpm2-kira: every volume named on the kernel command line is unlocked through tpm2-kira's prompt ($f)"
+                rd.luks.key=*=$UNLOCK_SOCKET|luks.key=*=$UNLOCK_SOCKET|rd.luks.key=$UNLOCK_SOCKET|luks.key=$UNLOCK_SOCKET)
                     routed=1
                     ;;
             esac
         done
     done
     while read -r name _ key opts; do
-        if [[ $key == "$UNLOCK_SOCKET" ]]; then
-            plain "tpm2-kira: $name is unlocked through tpm2-kira's prompt ($crypttab)"
-            routed=1
-        fi
+        [[ $key == "$UNLOCK_SOCKET" ]] && routed=1
     done < <(awk '!/^\s*($|#)/ && $4 ~ /x-initrd\.attach/' "$crypttab" 2>/dev/null)
 
-    # The devices with a keyslot of tpm2-kira's: is each routed, and if not,
-    # what the line should read ('tpm2-kira luks route'; it edits nothing).
+    # The devices with a keyslot of tpm2-kira's, one line each: where the
+    # key comes from, or what is wrong and what the line should read
+    # ('tpm2-kira luks route'; it edits nothing).
     local -a routeargs=()
     for f in "${cmdlines[@]}"; do
         [[ $f == /proc/cmdline ]] && continue
         routeargs+=(--cmdline "$f")
     done
-    local advice
+    local advice line
     if advice=$(tpm2-kira luks route "${routeargs[@]}" --crypttab "$crypttab" 2>&1); then
-        [[ -n $advice ]] && plain "tpm2-kira: $advice"
+        while IFS= read -r line; do [[ -n $line ]] && plain "tpm2-kira: $line"; done <<< "$advice"
     else
         warning "tpm2-kira: the disk's key is not routed through tpm2-kira everywhere - the files below are not edited; change them as shown and rebuild:"
         while IFS= read -r line; do plain "    $line"; done <<< "$advice"

@@ -121,7 +121,7 @@ func AdviseCmdline(file, cmdline, uuid string) (RouteFinding, bool) {
 		fixed[names[0]] = "rd.luks.name=" + uuid + "=cryptroot"
 		fixed = append(fixed[:names[0]+1], append([]string{"rd.luks.key=" + uuid + "=" + DefaultUnlockSocket}, fixed[names[0]+1:]...)...)
 	case len(keys) == 0 && defaultKey == DefaultUnlockSocket:
-		f.Routed, f.Note = true, "rd.luks.key="+DefaultUnlockSocket+" routes every volume named on the command line"
+		f.Routed, f.Note = true, "rd.luks.key= without a UUID in "+file+", for every volume named there"
 		return f, true
 	case len(keys) == 0:
 		f.Problem = fmt.Sprintf("rd.luks.key= for %s is missing: the initrd asks at systemd's own prompt", uuid)
@@ -129,7 +129,7 @@ func AdviseCmdline(file, cmdline, uuid string) (RouteFinding, bool) {
 	default:
 		path := words[keys[0]][strings.LastIndex(words[keys[0]], "=")+1:]
 		if path == DefaultUnlockSocket {
-			f.Routed, f.Note = true, "rd.luks.key="+uuid+"="+DefaultUnlockSocket
+			f.Routed, f.Note = true, "rd.luks.key= in "+file
 			return f, true
 		}
 		f.Problem = fmt.Sprintf("rd.luks.key= for %s is %s, not tpm2-kira's socket", uuid, path)
@@ -166,7 +166,7 @@ func AdviseCrypttab(file string, data []byte, uuid, device string, debian bool) 
 		}
 		if debian {
 			if strings.Contains(","+opts+",", ",keyscript="+DebianKeyscript+",") {
-				f.Routed, f.Note = true, "keyscript="+DebianKeyscript
+				f.Routed, f.Note = true, "keyscript= in "+file
 				return f, true
 			}
 			f.Problem = fmt.Sprintf("the line for %s has no keyscript=%s: the initrd asks at cryptsetup's own prompt", fields[0], DebianKeyscript)
@@ -182,7 +182,7 @@ func AdviseCrypttab(file string, data []byte, uuid, device string, debian bool) 
 			return f, true
 		}
 		if key == DefaultUnlockSocket && strings.Contains(","+opts+",", ",x-initrd.attach,") {
-			f.Routed, f.Note = true, "the key file of "+fields[0]+" is the socket"
+			f.Routed, f.Note = true, "the key file of "+fields[0]+" in "+file
 			return f, true
 		}
 		if key == DefaultUnlockSocket {
@@ -326,10 +326,10 @@ func routeText(f RouteFinding) string {
 		dev = f.UUID
 	}
 	if f.Routed {
-		fmt.Fprintf(&b, "%s: the key comes from tpm2-kira (%s: %s)\n", dev, f.File, f.Note)
+		fmt.Fprintf(&b, "%s (%s): the key comes from tpm2-kira: %s\n", dev, f.UUID, f.Note)
 		return b.String()
 	}
-	fmt.Fprintf(&b, "%s: %s: %s.\n", dev, f.File, f.Problem)
+	fmt.Fprintf(&b, "%s (%s): %s: %s.\n", dev, f.UUID, f.File, f.Problem)
 	fmt.Fprintf(&b, "  The line should read:\n    %s\n", f.Should)
 	return b.String()
 }

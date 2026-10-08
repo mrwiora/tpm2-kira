@@ -53,8 +53,6 @@ later UUID=cccc /run/tpm2-kira/unlock.sock discard
 	for _, want := range []string{
 		"UNIT tpm2-kira-unlock.socket",
 		"LINK /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-unlock.socket",
-		"PLAIN tpm2-kira: the volume 1111-2222 is unlocked through tpm2-kira's prompt (" + cmdline + ")",
-		"PLAIN tpm2-kira: cryptroot is unlocked through tpm2-kira's prompt (" + crypttab + ")",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
@@ -71,8 +69,15 @@ later UUID=cccc /run/tpm2-kira/unlock.sock discard
 
 	// The socket for every volume on the command line.
 	all := write("all", "rd.luks.name=1111-2222=cryptroot rd.luks.key=/run/tpm2-kira/unlock.sock\n")
-	if got := run(filepath.Join(dir, "none"), all); !strings.Contains(got, "every volume named on the kernel command line") || strings.Contains(got, "WARNING") {
+	if got := run(filepath.Join(dir, "none"), all); strings.Contains(got, "WARNING") {
 		t.Errorf("socket without a UUID:\n%s", got)
+	}
+
+	// What 'luks route' says, one line each, as the hook shows it.
+	cmd0 := exec.Command("bash", "-c", script, "-", crypttab, cmdline)
+	cmd0.Env = append(os.Environ(), "ROUTE_OUT=/dev/sda2 (1111-2222): the key comes from tpm2-kira: rd.luks.key= in "+cmdline+"\n")
+	if out, err := cmd0.CombinedOutput(); err != nil || !strings.Contains(string(out), "PLAIN tpm2-kira: /dev/sda2 (1111-2222): the key comes from tpm2-kira: rd.luks.key= in "+cmdline) || strings.Contains(string(out), "WARNING") {
+		t.Errorf("the route line: %v\n%s", err, out)
 	}
 
 	// Nothing routed: the parameter to add.
