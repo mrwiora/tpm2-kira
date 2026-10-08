@@ -597,7 +597,7 @@ func debugLogf(debug bool) func(string, ...any) {
 		return nil
 	}
 	return func(format string, args ...any) {
-		fmt.Printf("ble: %s "+format+"\n", append([]any{time.Now().Format("15:04:05.000")}, args...)...)
+		narrateAt(prioDebug, "ble: %s "+format, append([]any{time.Now().Format("15:04:05.000")}, args...)...)
 	}
 }
 
@@ -647,6 +647,7 @@ type GateOptions struct {
 // on this machine the verdict line is advisory; the authoritative display is
 // the phone's (PLAN-REMOTEATTESTATION.md §10.2).
 func AttestGate(o GateOptions) int {
+	narrateDebug = o.Debug
 	step := gateSteps(o.Debug)
 	if o.Coordinator != "" {
 		// The radio worker: no TPM here. Everything that needs one, and
@@ -786,7 +787,7 @@ func runGateRadio(host gateHost, o GateOptions, step func(string, ...any), ended
 		ServiceData: attest.BuildServiceData(attest.AdvFlagAttest, randBytes(4), ident.AdvKey),
 		Info:        attestInfo(infoModeAttest, id.Capabilities),
 	}
-	fmt.Printf("tpm2-kira: waiting for attestation of %q (open the app on your phone)\n", ident.FriendlyName)
+	narrate("tpm2-kira: waiting for attestation of %q (open the app on your phone)", ident.FriendlyName)
 	host.Report(GateWaiting)
 
 	res, err := waitForReceipt(p, adv, o.Timeout, func(conn *frame.Conn) (*attest.AttestResult, error) {
@@ -804,7 +805,7 @@ func runGateRadio(host gateHost, o GateOptions, step func(string, ...any), ended
 			host.Report(GateSessionOver) // nothing more comes: no release to wait for
 		}
 		return res, err
-	}, os.Stdout, time.Now)
+	}, narrator{prioInfo}, time.Now)
 	if errors.Is(err, errNoPhoneReachable) {
 		gateFail("phone not reachable: no phone connected over Bluetooth within %s.\n"+
 			"tpm2-kira:   This is not a TPM or boot-integrity failure. Check that the phone\n"+
@@ -814,7 +815,7 @@ func runGateRadio(host gateHost, o GateOptions, step func(string, ...any), ended
 	}
 	if err != nil && isOver() {
 		// Lazy mode: the phone check lasts as long as the code screen.
-		fmt.Println("tpm2-kira: the code screen has ended; the phone was not asked in time for this boot")
+		narrate("tpm2-kira: the code screen has ended; the phone was not asked in time for this boot")
 		return ExitUnavailable
 	}
 	if err != nil {
@@ -891,7 +892,7 @@ func debugProgress(debug bool) attest.Progress {
 	if !debug {
 		return nil
 	}
-	return func(format string, args ...any) { fmt.Printf("tpm2-kira: "+format+"\n", args...) }
+	return func(format string, args ...any) { narrateAt(prioDebug, "tpm2-kira: "+format, args...) }
 }
 
 // gateSteps returns the gate's step log for debug runs: one line per step
@@ -903,7 +904,7 @@ func gateSteps(debug bool) func(string, ...any) {
 	}
 	start := time.Now()
 	return func(format string, args ...any) {
-		fmt.Printf("tpm2-kira: gate +%.1fs: "+format+"\n", append([]any{time.Since(start).Seconds()}, args...)...)
+		narrateAt(prioDebug, "tpm2-kira: gate +%.1fs: "+format, append([]any{time.Since(start).Seconds()}, args...)...)
 	}
 }
 
@@ -956,18 +957,18 @@ func reportReceipt(res *attest.AttestResult, recordVerified bool) int {
 	// Even a verified record is only as good as the initramfs holding the
 	// key it was verified with (SECURITY.md); the phone's screen is the verdict.
 	if recordVerified {
-		defer fmt.Println("tpm2-kira:   (enrolment record verified: signed by this machine's key and current; your phone's screen is authoritative)")
+		defer narrate("tpm2-kira:   (enrolment record verified: signed by this machine's key and current; your phone's screen is authoritative)")
 	} else {
-		defer fmt.Println("tpm2-kira:   (not verified on this machine: your phone's screen is authoritative)")
+		defer narrate("tpm2-kira:   (not verified on this machine: your phone's screen is authoritative)")
 	}
 	who := verifierName(res.Verifier)
 	c := res.Check
 	switch {
 	case c.Authentic && c.Verdict == attest.VerdictOK:
-		fmt.Printf("tpm2-kira: ATTESTED by %s: boot state matches a known-good profile\n", who)
+		narrate("tpm2-kira: ATTESTED by %s: boot state matches a known-good profile", who)
 		return ExitAttested
 	case c.Authentic && c.Verdict == attest.VerdictApproved:
-		fmt.Printf("tpm2-kira: APPROVED on %s: boot state changed and was approved by you\n", who)
+		narrate("tpm2-kira: APPROVED on %s: boot state changed and was approved by you", who)
 		return ExitAttested
 	case c.Verdict == attest.VerdictReject && (c.Authentic || c.Ack == attest.AckRejectNoted):
 		fmt.Fprintf(os.Stderr, "tpm2-kira: REJECTED by %s: the phone does not trust this boot.\n", who)

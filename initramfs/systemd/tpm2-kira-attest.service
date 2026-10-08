@@ -30,13 +30,14 @@ Before=initrd-switch-root.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/tpm2-kira attest gate --coordinator /run/tpm2-kira/gate.sock
-# The worker's narrative (waiting, rounds, a phone connected) goes to the
-# journal only: the code screen of tpm2-kira.service is where the person
-# looks, and it shows the gate's state in the slot's line; the two on one
-# console interleave. What needs eyes - a rejected boot, a wrong phone, no
-# adapter - is on stderr and reaches the console too.
-# 'journalctl -b -u tpm2-kira-attest.service' on the unlocked system says
-# what the gate did, or why it did nothing.
+# The worker's narrative (waiting, rounds, a phone connected, the verdict,
+# and with TPM2_KIRA_ATTEST_DEBUG=1 every step) is written to the journal
+# directly, never to the console: the code screen of tpm2-kira.service is
+# where the person looks, and it shows the gate's state in the slot's
+# line. What needs eyes - a rejected boot, a wrong phone, no adapter - is
+# on stderr and reaches the console too; with debug on, the narrative as
+# well. 'journalctl -b -u tpm2-kira-attest.service' on the unlocked system
+# says what the gate did, or why it did nothing.
 StandardOutput=journal
 StandardError=journal+console
 # No phone in range (3) is normal in lazy mode. A rejected boot (4) or an

@@ -52,9 +52,13 @@ ExecStart=tpm2-kira run --gate /run/tpm2-kira/gate.sock
 StandardInput=tty
 StandardOutput=tty
 # What the key provider and the phone check report (when a volume asked,
-# when the hold ended, when the prompt opened and answered) goes to the
-# journal as well, which the initrd's journald hands to the system's:
+# when the hold ended, when the prompt opened and answered) is written to
+# the journal directly, never to the console (the code screen is there);
+# the initrd's journald hands it to the system's:
 #   journalctl -b -u tpm2-kira.service
+# stderr carries failures and warnings, which the console shows as well.
+# TPM2_KIRA_ATTEST_DEBUG=1 in attest.conf puts the narrative on the
+# console too.
 StandardError=journal+console
 
 [Install]

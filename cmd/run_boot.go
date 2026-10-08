@@ -375,9 +375,13 @@ func openCoordinator(tpmPath, socket, configPath, signerPath string, debug bool)
 	if _, err := os.Stat(signerPath); err != nil {
 		return nil, nil // no gate in this image
 	}
-	if _, err := LoadAttestConfig(configPath); err != nil {
+	cfg, err := LoadAttestConfig(configPath)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: %v\n", err)
 		return nil, nil
+	}
+	if cfg.Debug {
+		debug, narrateDebug = true, true // TPM2_KIRA_ATTEST_DEBUG=1: the narrative on the console too
 	}
 	path := preferResourceManager(tpmPath)
 	tpmDev, err := transport.OpenTPM(path)

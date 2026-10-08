@@ -65,7 +65,7 @@ once)
     # display reports (stderr: the key requests, the phone) goes to a log
     # that survives into the booted system, /run/initramfs/tpm2-kira.log.
     mkdir -p /run/initramfs
-    /usr/bin/tpm2-kira run --gate "$GATE" --unlock "$UNLOCK" </dev/console >/dev/console 2>>/run/initramfs/tpm2-kira.log &
+    TPM2_KIRA_LOG=/run/initramfs/tpm2-kira.log /usr/bin/tpm2-kira run --gate "$GATE" --unlock "$UNLOCK" </dev/console >/dev/console 2>>/run/initramfs/tpm2-kira.log &
     echo $! > /run/tpm2-kira.pid
     ;;
 esac
@@ -78,6 +78,7 @@ if [ "$mode" != once ] && [ -r /etc/tpm2-kira/bluetooth-modules ]; then
     while read -r m; do
         modprobe -q "$m" || true
     done </etc/tpm2-kira/bluetooth-modules
-    /usr/bin/tpm2-kira attest gate --coordinator "$GATE" >/dev/console 2>&1 &
+    # Its narrative goes to the log (TPM2_KIRA_LOG); what needs eyes, to the console.
+    TPM2_KIRA_LOG=/run/initramfs/tpm2-kira.log /usr/bin/tpm2-kira attest gate --coordinator "$GATE" >/dev/null 2>/dev/console &
     echo $! > /run/tpm2-kira-attest.pid
 fi

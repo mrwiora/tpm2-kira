@@ -446,6 +446,6 @@ const maxPassphrase = 512
 // initramfs log (Debian) is read after the boot.
 func unlockLogger(debug bool) func(string) {
 	return func(msg string) {
-		fmt.Fprintf(os.Stderr, "tpm2-kira: %s %s\n", time.Now().UTC().Format("15:04:05.000"), msg)
+		narrate("tpm2-kira: %s %s", time.Now().UTC().Format("15:04:05.000"), msg)
 	}
 }
