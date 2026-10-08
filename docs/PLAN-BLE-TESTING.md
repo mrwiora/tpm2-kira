@@ -57,6 +57,60 @@ No libvirt: QEMU is started by the harness with the exact command line
 (§4.3), so the machine is the same on every run and the serial console,
 the TPM socket and the HCI port are where the harness expects them.
 
+### 2.1 `tools/testhost/host-setup.sh`
+
+The host, too, is set up by a script, run once as `tester` (the few
+root steps are `sudo` lines in it), idempotent, with every version in
+`conf/testhost.conf`:
+
+1. **Packages** of the table above (`pacman -S --needed …`), the `kvm`
+   group, `/dev/kvm` readable by `tester`; the layout under
+   `/srv/testhost/`, owned by `tester`.
+2. **The installers**: the Arch ISO and the Debian netinst ISO into
+   `iso/`, with their signatures checked (`sq`/`gpg` against the
+   distributions' keys), the versions pinned.
+3. **OVMF**: a copy of `OVMF_VARS.4m.fd` as the template a machine's
+   variables start from (§4.2), `OVMF_CODE.secboot.4m.fd` referenced in
+   place.
+4. **The Android SDK**, into `android/sdk/`:
+   ```
+   wget https://dl.google.com/android/repository/commandlinetools-linux-<pinned>_latest.zip
+   unzip … -d android/sdk/cmdline-tools && mv … cmdline-tools/latest
+   yes | sdkmanager --licenses
+   sdkmanager "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64"
+   ```
+   This is the **netsim install**: `emulator` brings `netsimd`, the
+   `netsim` CLI and `netsim-cli` into `android/sdk/emulator/`; there is
+   no package of their own. The script checks for them and for the HCI
+   option: `android/sdk/emulator/netsimd --help | grep -- --hci-port`
+   (the emulator passes `-netsim-args` through to this binary, §7.1).
+   `ANDROID_HOME`, `ANDROID_USER_HOME=/srv/testhost/android/home`
+   (the AVDs and netsim's artifacts) and the `PATH` go into
+   `conf/env.sh`, sourced by every other script.
+5. **Standalone rootcanal**, for `transport/ble`'s tests without Android
+   (§7.2): a virtual environment, so nothing of it touches the host's
+   Python:
+   ```
+   python -m venv /srv/testhost/rootcanal
+   /srv/testhost/rootcanal/bin/pip install rootcanal==<pinned>
+   ```
+   Started as `/srv/testhost/rootcanal/bin/python -m rootcanal
+   --hci_port 6412 --test_port 6411` (ports of its own, next to the
+   emulator's 6402, so both can run); the script checks it answers on
+   the HCI port (a connection, an `HCI_Reset`, the Command Complete) and
+   stops it. The Bazel build from google/rootcanal is the way when the
+   wheel does not fit the host; the plan does not need it.
+6. **The hci bridge** (§7.1) built static from `tools/hcibridge` with the
+   host's Go, into `/srv/testhost/bin/`, from where the initramfs hooks
+   of a test machine take it (`TPM2_KIRA_TEST_HCI=1`); `oathtool`
+   checked against a known secret and time (§6).
+7. **The check at the end**: `qemu-system-x86_64 --version`, `swtpm
+   --version`, `go version`, `emulator -version`, `netsimd` present,
+   rootcanal answering, `/dev/kvm` writable, the free space - printed as
+   one table, and the script exits non-zero when a line is missing. The
+   same check is `host-setup.sh --check`, run by the harness before
+   every run.
+
 ## 3. The machines
 
 | name | distribution | boot | initramfs | disk | tests |
@@ -343,7 +397,8 @@ The rule stays: wait for states, never for times; nothing twice.
 
 ## 9. Milestones
 
-1. **The host and the installed machines** (§2, §4): `host-setup.sh`,
+1. **The host and the installed machines** (§2.1, §4): `host-setup.sh`
+   (the SDK with netsim and the standalone rootcanal included),
    `install.sh` for `arch-uki` and `debian-grub`, `run.sh`; the two base
    images; today's `acceptance.py` runs against them unchanged through
    the port forwards. *Result: a defined state and a rebuild in minutes.*
