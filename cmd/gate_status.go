@@ -18,6 +18,10 @@ const (
 	GateRejected    GateState = "rejected"    // the phone rejected this boot
 	GateRefused     GateState = "refused"     // the receipt or the enrolment record was not accepted
 	GateUnavailable GateState = "unavailable" // no adapter, or the gate gave up
+	// GateSessionOver is reported by the radio side when a session that
+	// gave a receipt has ended (Bye): nothing more comes from it. Not a
+	// state of the slot; it only ends a pending release.
+	GateSessionOver GateState = "session-over"
 )
 
 // GateStatus is the gate's state for the slot it serves.
@@ -28,7 +32,16 @@ type GateStatus struct {
 	// Code is the code of the phone's boot challenge, while its session
 	// lasts: the person compares it with what the phone shows.
 	Code string
+	// Releasing: attested, and the phone's remote salt is expected but
+	// not yet taken. The phone sends it one step after the receipt; the
+	// boot is not released before it has arrived, the session has ended,
+	// or releaseWait has passed.
+	Releasing bool
 }
+
+// Released reports whether the boot may go on: the phone has spoken for
+// this boot, and whatever it had to hand over has arrived.
+func (s GateStatus) Released() bool { return s.State == GateAttested && !s.Releasing }
 
 // Verdict reports whether the phone has spoken, for or against.
 func (s GateStatus) Verdict() bool {

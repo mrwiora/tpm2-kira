@@ -139,7 +139,7 @@ func (b *bootDisplay) holdForConfirmation() ([]NVRAMSlot, bool, error) {
 			}
 			before := gate.Code
 			enter := b.waitFor(until, &gate)
-			if enter || gate.State == GateAttested {
+			if enter || gate.Released() {
 				return slots, allUp, nil
 			}
 			now := b.now()
@@ -414,9 +414,21 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		if cfg.Mode == UnlockPasswordRemoteSalt && svc == nil {
 			fmt.Fprintln(os.Stderr, "tpm2-kira: unlock mode password+remotesalt, but no phone check is in this image: no remote salt can be released; cryptsetup's own prompt will follow")
 		}
+		if cfg.Mode == UnlockPasswordRemoteSalt && svc != nil {
+			svc.ExpectRelease(true)
+		}
 		unlock = serveUnlock(l, diskKey(func() []byte {
 			if svc == nil {
 				return nil
+			}
+			// The phone's salt follows its receipt by one message: give
+			// it the time, bounded (gate_service.go releaseWait).
+			for {
+				st, _ := svc.Status()
+				if !st.Releasing {
+					break
+				}
+				time.Sleep(200 * time.Millisecond)
 			}
 			return svc.Salt()
 		}, cfg.Mode), unlockLogger(debug))
@@ -579,7 +591,11 @@ func printGateEvent(prev, cur GateStatus) {
 			fmt.Println("   A phone is connected: answer there. The boot waits for it.")
 		}
 	case GateAttested:
-		fmt.Printf("   \033[0;32mSlot #%d verified with %s.\033[0m Continuing to the passphrase.\n", cur.Slot, phoneLabel(cur.Phone))
+		if cur.Releasing {
+			fmt.Printf("   \033[0;32mSlot #%d verified with %s.\033[0m Waiting for the remote salt ...\n", cur.Slot, phoneLabel(cur.Phone))
+		} else if prev.State != GateAttested {
+			fmt.Printf("   \033[0;32mSlot #%d verified with %s.\033[0m Continuing to the passphrase.\n", cur.Slot, phoneLabel(cur.Phone))
+		}
 	case GateRejected, GateRefused:
 		fmt.Printf("   \033[0;31mSlot #%d was NOT verified by the phone (see above).\033[0m Do not type your passphrase unless you know why.\n", cur.Slot)
 	}

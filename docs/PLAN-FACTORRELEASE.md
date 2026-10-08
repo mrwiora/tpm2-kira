@@ -310,6 +310,22 @@ and `tpm2-kira run` answers it (§5). No derivation unit, no key file in
 `/run/cryptsetup-keys.d`, no `keyfile-erase`. The Debian `keyscript=`
 variant is the same answer written to stdout; not built.
 
+### 7.2a The boot waits for the Release, bounded
+
+The phone sends the Release one message after the receipt (ReceiptAck →
+Release → ReleaseAck → Bye), and the coordinator marks the slot attested
+at the receipt - so the code screen used to release the boot before the
+salt had arrived, and the key provider answered "no remote salt" for a
+salt that landed a moment later (seen on the T450s: once it won the race,
+once not). Now, when the unlock mode needs the salt and the slot has a
+release key, an attested slot is *releasing* until the Release is taken
+(whatever became of it), the session ends with Bye (a phone without a
+salt), or 15 s have passed since the receipt - the bound, so the boot
+never hangs on a session that died in between. The code screen and the
+key provider both wait on it. Nothing is consumed by a release: the phone
+keeps the credential, the machine keeps nothing across boots, no counter
+moves; every boot with PCRs and signatures in order gets the salt.
+
 ### 7.3 The fallback keyslot is now the target
 
 A tampered initramfs cannot obtain the factor, but it can print "phone not

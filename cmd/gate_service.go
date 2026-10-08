@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/google/go-tpm/tpm2/transport"
 
@@ -101,7 +102,18 @@ type gateService struct {
 	salt []byte
 	// returned: at enrolment, the phone gave keep back unchanged.
 	returned bool
+	// expectRelease: the unlock mode needs the phone's remote salt, so a
+	// receipt is followed by a Release that the boot waits for (bounded by
+	// releaseWait from releaseSince).
+	expectRelease bool
+	releaseSince  time.Time
 }
+
+// releaseWait bounds how long the boot waits for the phone's remote salt
+// after the receipt: the phone writes its record and sends one more
+// message; a phone that has no salt sends Bye instead, which ends the
+// wait at once. The bound is for a session that dies in between.
+const releaseWait = 15 * time.Second
 
 // newGateService sets the coordinator up in the background (the TPM can be
 // slow, and the code screen must not wait for it): finds the enrolled slot,
@@ -316,6 +328,11 @@ func (s *gateService) TakeRelease(r *attest.Release) (uint8, string) {
 		s.mu.Unlock()
 		return attest.ReleaseOK, "the phone keeps the remote salt; this TPM opens it at the next boot"
 	}
+	defer func() {
+		s.mu.Lock()
+		s.status.Releasing = false // taken, one way or the other
+		s.mu.Unlock()
+	}()
 	s.tpmMu.Lock()
 	f, err := unwrapFactor(s.tpm, s.be.sealed, s.be.sealIndex, s.blob, &WrappedFactor{Credential: r.CredentialBlob, EncryptedSecret: r.EncryptedSecret})
 	s.tpmMu.Unlock()
@@ -396,12 +413,30 @@ func (s *gateService) JudgeReceipt(r *attest.Receipt, verifierID string) attest.
 		s.status.State = state
 		s.status.Phone = verifierName(verifier)
 		s.status.Code = "" // the session it belonged to is answered
+		if state == GateAttested && s.expectRelease && len(s.blob.ReleaseKeyPublic) > 0 {
+			s.status.Releasing = true
+			s.releaseSince = time.Now()
+		}
 	}
 	return check
 }
 
+// ExpectRelease says that the disk's key needs the phone's remote salt:
+// an attested boot waits for the Release that follows the receipt.
+func (s *gateService) ExpectRelease(expect bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.expectRelease = expect
+}
+
 // Report implements gateHost. A verdict, once given, stays.
 func (s *gateService) Report(state GateState) {
+	if state == GateSessionOver {
+		s.mu.Lock()
+		s.status.Releasing = false // nothing more comes from that session
+		s.mu.Unlock()
+		return
+	}
 	if state != GateWaiting && state != GateSession && state != GateUnavailable {
 		return
 	}
@@ -421,6 +456,9 @@ func (s *gateService) Report(state GateState) {
 func (s *gateService) Status() (GateStatus, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.status.Releasing && time.Since(s.releaseSince) > releaseWait {
+		s.status.Releasing = false // the bound: the boot never hangs on it
+	}
 	return s.status, s.status.State != ""
 }
 

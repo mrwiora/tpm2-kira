@@ -800,6 +800,8 @@ func runGateRadio(host gateHost, o GateOptions, step func(string, ...any), ended
 		}
 		if res == nil || res.Receipt == nil {
 			host.Report(GateWaiting) // the gate advertises again
+		} else {
+			host.Report(GateSessionOver) // nothing more comes: no release to wait for
 		}
 		return res, err
 	}, os.Stdout, time.Now)
