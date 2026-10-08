@@ -199,7 +199,7 @@ func statusNotes(r StatusReport) []string {
 	switch r.UnlockMode {
 	case UnlockPasswordRemoteSalt:
 		if r.TPMError == "" && !remoteSalt {
-			notes = append(notes, "unlock mode password+remotesalt, but no slot has a remote salt enrolled: the boot asks nothing and falls back to cryptsetup's prompt (tpm2-kira luks enrol <device> --mode password+remotesalt)")
+			notes = append(notes, "unlock mode password+remotesalt, but no slot has a remote salt enrolled: no salt can come from a phone, every boot asks for a typed salt (tpm2-kira luks enrol <device> --mode password+remotesalt)")
 		}
 		fallthrough
 	case UnlockPasswordSalt:

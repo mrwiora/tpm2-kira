@@ -447,6 +447,8 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 					prompts <- p
 					if strings.Contains(p, "Password for disk") {
 						c.Write([]byte("hunter2\n"))
+					} else if strings.Contains(p, "Salt for disk") {
+						c.Write([]byte("typed-salt\n"))
 					}
 				}
 			}()
@@ -483,8 +485,32 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 			drained = true
 		}
 	}
-	if _, err := diskKey(func() []byte { return nil }, UnlockPasswordRemoteSalt)("cryptroot"); err == nil || !strings.Contains(err.Error(), "no salt from the phone") {
-		t.Fatalf("without a remote salt: %v", err)
+	// Without a salt from the phone: the password+salt variant, a typed
+	// salt, said so at the prompt.
+	key, err = diskKey(func() []byte { return nil }, UnlockPasswordRemoteSalt)("cryptroot")
+	if err != nil {
+		t.Fatalf("without a salt from the phone: %v", err)
+	}
+	if want, _ := Combine([]byte("hunter2"), []byte("typed-salt")); !bytes.Equal(key, want) {
+		t.Fatal("without a salt from the phone the key is not password + typed salt")
+	}
+	seen = ""
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(seen, "Salt for disk cryptroot") && time.Now().Before(deadline); {
+		select {
+		case p := <-prompts:
+			seen += p
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	if !strings.Contains(seen, "no salt came from the phone") {
+		t.Errorf("the fallback was not explained: %q", seen)
+	}
+	for drained := false; !drained; { // the echo after the salt
+		select {
+		case <-prompts:
+		case <-time.After(300 * time.Millisecond):
+			drained = true
+		}
 	}
 	if _, err := diskKey(func() []byte { return append([]byte(nil), salt...) }, UnlockSkip)("cryptroot"); !errors.Is(err, errUnlockSkipped) {
 		t.Fatalf("skip: %v", err)

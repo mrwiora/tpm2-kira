@@ -587,7 +587,7 @@ change:
 |---|---|
 | `skip` (default) | tpm2-kira stays out of it: cryptsetup's own prompt asks for the LUKS passphrase |
 | `password+salt` | tpm2-kira asks for a **password** and a **salt** and hands over [hashpwd2](https://github.com/mrwiora/hashpwd2)'s derivation of the two - the same bytes hashpwd2 prints, so a keyslot enrolled with hashpwd2 opens as it is |
-| `password+remotesalt` | tpm2-kira asks for the **password**; the salt is the one the phone released after verifying the machine and this TPM opened (next section). Only with an attestation set up; without a released salt, no answer |
+| `password+remotesalt` | tpm2-kira asks for the **password**; the salt is the one the phone released after verifying the machine and this TPM opened (next section). Only with an attestation set up. Without a salt from the phone (no phone in range, nothing released) it asks for a typed salt as in `password+salt`, which opens a keyslot enrolled that way; Ctrl-C then leads to cryptsetup's own prompt |
 
 In every mode a wrong answer, or Ctrl-C at tpm2-kira's prompt, goes to
 cryptsetup's own prompt, where the recovery passphrase works - keep one

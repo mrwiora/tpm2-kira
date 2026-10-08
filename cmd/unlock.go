@@ -295,7 +295,8 @@ var errUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own p
 //	skip                 no answer: cryptsetup's own prompt, tpm2-kira untouched
 //	password+salt        a typed password and a typed salt, combined (hashpwd2's derivation)
 //	password+remotesalt  a typed password and the salt the verifier released in this boot
-//	                     and the TPM opened (factor.go); without one, no answer
+//	                     and the TPM opened (factor.go); without one, a typed salt
+//	                     (the password+salt variant), then cryptsetup's own prompt
 //
 // salt returns the released salt or nil; the key is for the caller to wipe.
 func diskKey(salt func() []byte, mode string) func(volume string) ([]byte, error) {
@@ -308,7 +309,14 @@ func diskKey(salt func() []byte, mode string) func(volume string) ([]byte, error
 				"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
 		case UnlockPasswordRemoteSalt:
 			if s = salt(); s == nil {
-				return nil, errors.New("no salt from the phone in this boot: " + errUnlockSkipped.Error())
+				// No phone, or no salt from it: the password+salt variant,
+				// which opens a keyslot enrolled that way; Ctrl-C, or a
+				// key that opens nothing, then leads to cryptsetup's own
+				// prompt and the recovery passphrase.
+				note = "no salt came from the phone: the key is derived from your password and a salt you type,\n" +
+					"as for a keyslot enrolled with password+salt (Argon2id, some seconds).\n" +
+					"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
+				break
 			}
 			note = "the key is derived from your password and the salt your phone returned.\n" +
 				"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."

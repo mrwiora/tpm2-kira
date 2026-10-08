@@ -19,7 +19,7 @@ person uses (decided 2026-10-07):
 |---|---|---|
 | `skip` | nothing: cryptsetup's own prompt asks for the LUKS passphrase (default) | - |
 | `password+salt` | asks for a password and a salt, hands over hashpwd2's derivation | - |
-| `password+remotesalt` | asks for the password; the salt is the one the verifier released and the TPM opened | no answer: cryptsetup's prompt, the recovery keyslot |
+| `password+remotesalt` | asks for the password; the salt is the one the verifier released and the TPM opened | asks for a typed salt (the `password+salt` variant, a keyslot enrolled that way); Ctrl-C: cryptsetup's prompt, the recovery keyslot |
 
 `password+remotesalt` exists only with an attestation: a verifier enrolled
 for the slot and the remote salt enrolled with it. `luks mark` and `luks

@@ -414,7 +414,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		}
 		unlockMode = cfg.Mode
 		if cfg.Mode == UnlockPasswordRemoteSalt && svc == nil {
-			fmt.Fprintln(os.Stderr, "tpm2-kira: unlock mode password+remotesalt, but no phone check is in this image: no remote salt can be released; cryptsetup's own prompt will follow")
+			fmt.Fprintln(os.Stderr, "tpm2-kira: unlock mode password+remotesalt, but no phone check is in this image: no salt can come from a phone; the prompt asks for a typed salt instead")
 		}
 		if cfg.Mode == UnlockPasswordRemoteSalt && svc != nil {
 			svc.ExpectRelease(true)
@@ -646,7 +646,7 @@ func gateEventPrinter(mode string) func(prev, cur GateStatus) {
 			case prev.Releasing && cur.SaltTaken:
 				fmt.Printf("%s \033[0;32mThe phone returned the salt.\033[0m Continuing to %s.\n", kiraTag(tagYellow), nextPrompt(mode))
 			case prev.Releasing:
-				fmt.Printf("%s \033[0;33mNo salt came from the phone.\033[0m Continuing to cryptsetup's own prompt (the recovery passphrase).\n", kiraTag(tagYellow))
+				fmt.Printf("%s \033[0;33mNo salt came from the phone.\033[0m Continuing to the password and salt prompt (a typed salt; Ctrl-C there: cryptsetup's own prompt).\n", kiraTag(tagYellow))
 			case prev.State != GateAttested:
 				fmt.Printf("%s \033[0;32mSlot #%d attested by %s.\033[0m Continuing to %s.\n", kiraTag(tagYellow), cur.Slot, phoneLabel(cur.Phone), nextPrompt(mode))
 			}

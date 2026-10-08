@@ -125,6 +125,15 @@ hibernation image; the initrd has no swap and no hibernation.
 
 ## 4. When the answer is wrong: systemd's prompt is the fallback
 
+The chain, from the most convenient to the one that always works: in
+mode `password+remotesalt`, the password and the salt the phone returned;
+without a salt from the phone (no phone in range, nothing released), the
+password and a **typed** salt - the `password+salt` variant, which opens
+a keyslot enrolled that way, if there is one; and at Ctrl-C, or when the
+derived key opens nothing, systemd's own prompt and the recovery
+passphrase. Each step is offered at tpm2-kira's prompt and says which it
+is.
+
 What `systemd-cryptsetup` does with a key that does not open the volume
 decides whether a typo at tpm2-kira's prompt, or a tpm2-kira that cannot
 answer, is a reboot or a second chance. It is a second chance, by

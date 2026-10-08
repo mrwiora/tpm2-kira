@@ -174,7 +174,7 @@ _add_unlock() {
             local enrolled
             enrolled=$(tpm2-kira attest status --json 2>/dev/null)
             if [[ -z $enrolled || $enrolled == '[]' ]]; then
-                warning "tpm2-kira: unlock mode password+remotesalt, but no phone is enrolled: the remote salt is only released by an attestation. Every boot will fall back to cryptsetup's own prompt"
+                warning "tpm2-kira: unlock mode password+remotesalt, but no phone is enrolled: the remote salt is only released by an attestation. Every boot will ask for a typed salt instead"
             fi
         fi
     fi
