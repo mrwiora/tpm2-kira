@@ -10,8 +10,10 @@ import (
 // The key file for luksAddKey goes nowhere but tmpfs, in a directory root
 // owns and nobody else enters, and never over an existing file.
 func TestCheckKeyOut(t *testing.T) {
-	if err := checkKeyOut(filepath.Join(".", "luks.key")); err == nil || !strings.Contains(err.Error(), "not on tmpfs") {
-		t.Fatalf("a key file on the repository's disk: %v", err)
+	// The root file system is on a disk (the source tree may be on tmpfs
+	// where the package is built).
+	if err := checkKeyOut("/luks.key"); err == nil || !strings.Contains(err.Error(), "not on tmpfs") {
+		t.Fatalf("a key file on the root file system: %v", err)
 	}
 	dir := t.TempDir() // /tmp, usually tmpfs; owned by this user
 	err := checkKeyOut(filepath.Join(dir, "luks.key"))
