@@ -153,29 +153,29 @@ each other - each done, possible, or blocked with the reason - and the
 recommended next step. Pick a number and it runs that step with the same
 functions the commands below use; run it again later and it shows the
 state and what is left. The commands below are for specific settings.
+The screens are forms (arrow keys, Enter; Esc leaves; `ACCESSIBLE=1` for
+plain prompts), built with [charmbracelet/huh](https://github.com/charmbracelet/huh);
+without a terminal, `control` prints the overview and exits.
 
 ```
-[ KIRA ] control - the protections of this machine, step by step
-
-What this machine has
-  TPM         /dev/tpmrm0, SHA-256 bank and event log
-  Boot        a unified kernel image booted: ...: PCRs 0e,2e,7e,11u
-  Initramfs   mkinitcpio
-  Bluetooth   hci0 (attestation by phone possible)
-  LUKS        /dev/sda2: keyslots 0 not tpm2-kira's; not routed through tpm2-kira
-  Unlock      mode skip
-
-Protections
-  [x] 1  Signing key  - local key files in /etc/tpm2-kira/keys
-  [x] 2  TOTP code at boot  - slot 0 sealed to 0e,2e,7e,11u; the fallback in place
-  [ ] 3  Attestation by phone (Marify, Bluetooth LE)
-  [ ] 4  Disk key from password + salt (hashpwd2)
-  [-] 5  Disk key from password + remote salt (the phone)  - needs the attestation by phone
-
-Recommended next: 3  Attestation by phone (Marify, Bluetooth LE)
-  The phone checks the boot state against what it pinned and shows a code the machine must show too; ...
-
-Choose a step by number, or q to leave:
+  [ KIRA ] control - the protections of this machine, step by step
+  What this machine has
+    TPM         /dev/tpmrm0, SHA-256 bank and event log
+    Boot        a unified kernel image booted: ...: PCRs 0e,2e,7e,11u
+    Initramfs   mkinitcpio
+    Bluetooth   hci0 (attestation by phone possible)
+    LUKS        /dev/sda2: keyslots 0 not tpm2-kira's; not routed through tpm2-kira
+    Unlock      mode skip
+┃ Protections
+┃ Recommended next: Attestation by phone (Marify, Bluetooth LE)
+┃ The phone checks the boot state against what it pinned and shows a code the machine must show too; ...
+┃   ✓ Signing key  - local key files in /etc/tpm2-kira/keys
+┃   ✓ TOTP code at boot  - slot 0 sealed to 0e,2e,7e,11u; the fallback in place
+┃ >   Attestation by phone (Marify, Bluetooth LE)
+┃     Disk key from password + salt (hashpwd2)
+┃   - Disk key from password + remote salt (the phone)  - needs the attestation by phone
+┃     Leave
+↑ up • ↓ down • / filter • enter submit
 ```
 
 ## Commands

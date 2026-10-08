@@ -129,7 +129,8 @@ the protections in the order they build on each other -
 recommended next one. Pick a number and it runs that step with the
 functions the commands on the right use, then shows the screen again.
 Run again later, it shows the state and what is left. On leaving it
-names the initramfs rebuild. Without a terminal it prints the screen
+names the initramfs rebuild. Forms: arrow keys and Enter, Esc leaves,
+ACCESSIBLE=1 for plain prompts. Without a terminal it prints the screen
 and leaves (a script's look).
 
   tpm2-kira control
