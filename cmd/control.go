@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/sys/unix"
 )
 
@@ -29,7 +30,6 @@ import (
 type ControlOptions struct {
 	TPMPath string
 	Debug   bool
-	In      io.Reader // the person's answers (tests); default stdin
 	Out     io.Writer // default stdout
 }
 
@@ -145,7 +145,6 @@ func (s controlStep) marker() string {
 // controller holds one run of the control command.
 type controller struct {
 	o     ControlOptions
-	in    *bufio.Reader
 	out   io.Writer
 	tty   bool
 	facts machineFacts
@@ -243,45 +242,30 @@ func Control(o ControlOptions) error {
 	if c.out == nil {
 		c.out = os.Stdout
 	}
-	in := o.In
-	if in == nil {
-		in = os.Stdin
-		c.tty = isTerminal(os.Stdin)
-	}
-	c.in = bufio.NewReader(in)
-	if o.In != nil {
-		c.tty = true
-	}
+	c.tty = isTerminal(os.Stdin)
 	for {
 		c.facts = collectFacts(o.TPMPath, o.Debug)
 		steps := c.steps()
-		c.show(steps)
 		if !c.tty {
+			c.show(steps)
 			return nil // the analysis and the recommendation, for a script
 		}
-		fmt.Fprint(c.out, "\nChoose a step by number, or q to leave: ")
-		line, err := c.in.ReadString('\n')
-		if err != nil && line == "" {
-			fmt.Fprintln(c.out)
-			return nil
-		}
-		line = strings.TrimSpace(line)
-		if line == "" || line == "q" || line == "Q" {
+		key, err := c.pick(steps)
+		if err != nil || key == "" {
 			c.leave(steps)
 			return nil
 		}
-		n, err := strconv.Atoi(line)
-		if err != nil || n < 1 || n > len(steps) {
-			continue
+		var s controlStep
+		for _, st := range steps {
+			if st.Key == key {
+				s = st
+			}
 		}
-		s := steps[n-1]
-		if s.Blocked != "" {
-			fmt.Fprintf(c.out, "\n%s: %s.\n", s.Title, s.Blocked)
-			c.pause()
-			continue
-		}
-		if s.Done != "" && !c.confirm(s.Title+" is done ("+s.Done+"). Run it again?") {
-			continue
+		if s.Done != "" {
+			again, err := c.confirm(s.Title+" is done", s.Done+". Run it again?")
+			if err != nil || !again {
+				continue
+			}
 		}
 		fmt.Fprintf(c.out, "\n\033[1m%s\033[0m\n%s\n\n", s.Title, s.Explain)
 		if err := s.Run(c); err != nil {
@@ -289,48 +273,134 @@ func Control(o ControlOptions) error {
 		} else {
 			c.ran = true
 		}
-		c.pause()
+		if _, err := c.confirm("Back to the overview?", ""); err != nil {
+			c.leave(steps)
+			return nil
+		}
 	}
 }
 
-// show draws the one screen: the facts, the steps, the recommendation.
-func (c *controller) show(steps []controlStep) {
-	f := &c.facts
-	w := c.out
-	if c.tty {
-		fmt.Fprint(w, "\033[H\033[2J")
-	}
-	fmt.Fprintf(w, "%s control - the protections of this machine, step by step\n\n", kiraTag(tagYellow))
+// The forms (charmbracelet/huh): the overview with the step to pick, a
+// yes/no, a device. They render inline, so what a step prints stays on
+// the screen above the next form. Esc or Ctrl-C leaves.
 
-	fmt.Fprintln(w, "\033[1mWhat this machine has\033[0m")
+func (c *controller) theme() *huh.Theme {
+	t := huh.ThemeBase()
+	yellow := lipgloss.Color("3")
+	t.Focused.Title = t.Focused.Title.Foreground(yellow).Bold(true)
+	t.Focused.SelectSelector = t.Focused.SelectSelector.Foreground(yellow)
+	t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(yellow).Bold(true)
+	t.Focused.Description = t.Focused.Description.Foreground(lipgloss.Color("7"))
+	t.Focused.ErrorMessage = t.Focused.ErrorMessage.Foreground(lipgloss.Color("1"))
+	return t
+}
+
+func (c *controller) form(fields ...huh.Field) *huh.Form {
+	return huh.NewForm(huh.NewGroup(fields...)).WithTheme(c.theme()).WithShowHelp(true).WithAccessible(os.Getenv("ACCESSIBLE") != "")
+}
+
+// pick is the overview: the facts as a note, the steps as a select with
+// their state, the recommendation in the description. A blocked step
+// cannot be picked; the reason is shown instead. "" is leave.
+func (c *controller) pick(steps []controlStep) (string, error) {
+	blocked := map[string]string{}
+	var opts []huh.Option[string]
+	for _, s := range steps {
+		var label string
+		switch {
+		case s.Done != "":
+			label = "✓ " + s.Title + "  - " + s.Done
+		case s.Blocked != "":
+			label = "- " + s.Title + "  - " + s.Blocked
+			blocked[s.Key] = s.Blocked
+		default:
+			label = "  " + s.Title
+		}
+		opts = append(opts, huh.NewOption(label, s.Key))
+	}
+	opts = append(opts, huh.NewOption("  Leave", ""))
+	desc := "Every protection this machine can have is in place."
+	initial := ""
+	if n := recommended(steps); n >= 0 {
+		desc = "Recommended next: " + steps[n].Title + "\n" + steps[n].Explain
+		initial = steps[n].Key
+	}
+	if notes := c.facts.Status.Notes; len(notes) > 0 {
+		desc += "\n\nNotes:"
+		for _, n := range notes {
+			desc += "\n- " + n
+		}
+	}
+	choice := initial
+	err := c.form(
+		huh.NewNote().Title("[ KIRA ] control - the protections of this machine, step by step").Description("What this machine has\n"+c.factsText()),
+		huh.NewSelect[string]().Title("Protections").Description(desc).Options(opts...).Value(&choice).
+			Validate(func(k string) error {
+				if why, ok := blocked[k]; ok {
+					return errors.New(why)
+				}
+				return nil
+			}),
+	).Run()
+	if err != nil {
+		return "", err
+	}
+	return choice, nil
+}
+
+func (c *controller) confirm(title, description string) (bool, error) {
+	yes := false
+	err := c.form(huh.NewConfirm().Title(title).Description(description).Affirmative("Yes").Negative("No").Value(&yes)).Run()
+	return yes, err
+}
+
+func (c *controller) choose(title string, items []string) (int, error) {
+	if len(items) == 0 {
+		return 0, errors.New("nothing to choose from")
+	}
+	var opts []huh.Option[int]
+	for i, it := range items {
+		opts = append(opts, huh.NewOption(it, i))
+	}
+	n := 0
+	if err := c.form(huh.NewSelect[int]().Title(title).Options(opts...).Value(&n)).Run(); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// factsText is "What this machine has", one line per fact.
+func (c *controller) factsText() string {
+	f := &c.facts
+	var w strings.Builder
 	switch {
 	case f.TPMErr != "":
-		fmt.Fprintf(w, "  TPM         none usable (%s)\n", f.TPMErr)
+		fmt.Fprintf(&w, "  TPM         none usable (%s)\n", f.TPMErr)
 	case f.UseSHA1:
-		fmt.Fprintf(w, "  TPM         %s - no SHA-256 bank with a SHA-256 event log; the SHA-1 bank is used (--sha1), the weakness acknowledged\n", f.TPM)
+		fmt.Fprintf(&w, "  TPM         %s - no SHA-256 bank with a SHA-256 event log; the SHA-1 bank is used (--sha1), the weakness acknowledged\n", f.TPM)
 	default:
-		fmt.Fprintf(w, "  TPM         %s, SHA-256 bank and event log\n", f.TPM)
+		fmt.Fprintf(&w, "  TPM         %s, SHA-256 bank and event log\n", f.TPM)
 	}
-	fmt.Fprintf(w, "  Boot        %s: PCRs %s\n", f.PCRsWhy, f.PCRs)
+	fmt.Fprintf(&w, "  Boot        %s: PCRs %s\n", f.PCRsWhy, f.PCRs)
 	if f.Initramfs != "" {
-		fmt.Fprintf(w, "  Initramfs   %s\n", f.Initramfs)
+		fmt.Fprintf(&w, "  Initramfs   %s\n", f.Initramfs)
 	} else {
-		fmt.Fprintln(w, "  Initramfs   neither mkinitcpio nor initramfs-tools found: no boot integration here")
+		fmt.Fprintln(&w, "  Initramfs   neither mkinitcpio nor initramfs-tools found: no boot integration here")
 	}
 	if f.Adapter != "" {
-		fmt.Fprintf(w, "  Bluetooth   %s (attestation by phone possible)\n", f.Adapter)
+		fmt.Fprintf(&w, "  Bluetooth   %s (attestation by phone possible)\n", f.Adapter)
 	} else {
-		fmt.Fprintln(w, "  Bluetooth   no adapter: no attestation by phone")
+		fmt.Fprintln(&w, "  Bluetooth   no adapter: no attestation by phone")
 	}
 	switch {
 	case f.Status.DevicesError != "":
-		fmt.Fprintf(w, "  LUKS        %s\n", f.Status.DevicesError)
+		fmt.Fprintf(&w, "  LUKS        %s\n", f.Status.DevicesError)
 	case len(f.Status.Devices) == 0:
-		fmt.Fprintln(w, "  LUKS        no encrypted device")
+		fmt.Fprintln(&w, "  LUKS        no encrypted device")
 	default:
 		for _, d := range f.Status.Devices {
 			if d.Error != "" {
-				fmt.Fprintf(w, "  LUKS        %s: %s\n", d.Device, d.Error)
+				fmt.Fprintf(&w, "  LUKS        %s: %s\n", d.Device, d.Error)
 				continue
 			}
 			var parts []string
@@ -341,10 +411,31 @@ func (c *controller) show(steps []controlStep) {
 			if f.Routed[d.Device] {
 				route = "key from tpm2-kira"
 			}
-			fmt.Fprintf(w, "  LUKS        %s: keyslots %s; %s\n", d.Device, strings.Join(parts, ", "), route)
+			fmt.Fprintf(&w, "  LUKS        %s: keyslots %s; %s\n", d.Device, strings.Join(parts, ", "), route)
 		}
 	}
-	fmt.Fprintf(w, "  Unlock      mode %s\n", f.Status.UnlockMode)
+	fmt.Fprintf(&w, "  Unlock      mode %s\n", f.Status.UnlockMode)
+	return w.String()
+}
+
+// recommended is the index of the first step that can be done, or -1.
+func recommended(steps []controlStep) int {
+	for i, s := range steps {
+		if s.Done == "" && s.Blocked == "" {
+			return i
+		}
+	}
+	return -1
+}
+
+// show draws the one screen in plain text: the facts, the steps, the
+// recommendation (a script's look, and the tests').
+func (c *controller) show(steps []controlStep) {
+	f := &c.facts
+	w := c.out
+	fmt.Fprintf(w, "%s control - the protections of this machine, step by step\n\n", kiraTag(tagYellow))
+	fmt.Fprintln(w, "\033[1mWhat this machine has\033[0m")
+	fmt.Fprint(w, c.factsText())
 
 	fmt.Fprintln(w, "\n\033[1mProtections\033[0m")
 	next := -1
@@ -399,32 +490,6 @@ func (c *controller) leave(steps []controlStep) {
 	}
 }
 
-func (c *controller) pause() {
-	fmt.Fprint(c.out, "\nEnter to go on: ")
-	c.in.ReadString('\n')
-}
-
-func (c *controller) confirm(q string) bool {
-	fmt.Fprintf(c.out, "\n%s [y/N]: ", q)
-	line, _ := c.in.ReadString('\n')
-	return strings.EqualFold(strings.TrimSpace(line), "y")
-}
-
-// choose picks one of the items by number.
-func (c *controller) choose(q string, items []string) (int, error) {
-	fmt.Fprintln(c.out, q)
-	for i, it := range items {
-		fmt.Fprintf(c.out, "  %d  %s\n", i+1, it)
-	}
-	fmt.Fprint(c.out, "Number: ")
-	line, _ := c.in.ReadString('\n')
-	n, err := strconv.Atoi(strings.TrimSpace(line))
-	if err != nil || n < 1 || n > len(items) {
-		return 0, errors.New("no choice made")
-	}
-	return n - 1, nil
-}
-
 // The steps' actions: the expert commands' functions, with the defaults
 // the analysis settled.
 
@@ -458,7 +523,7 @@ func (c *controller) runLuks(mode string) error {
 	dev := ""
 	if len(devices) == 1 {
 		dev = devices[0]
-		if !c.confirm("The keyslot goes to " + dev + ". Go on?") {
+		if ok, err := c.confirm("The keyslot goes to "+dev+".", "Go on?"); err != nil || !ok {
 			return errors.New("not confirmed")
 		}
 	} else {
