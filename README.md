@@ -49,7 +49,9 @@ For more details on the cryptographic design, see [SECURITY-BACKGROUND.md](docs/
 **Software:**
 - Linux with TPM 2.0 kernel support (`/dev/tpmrm0`; `/dev/tpm0` is used only when
   the kernel provides no resource manager)
-- Go ≥ 1.24 (build only)
+- Go ≥ 1.25.8 (build only; the `go` line of go.mod is the requirement). Debian 13
+  ships 1.24: install the current Go from https://go.dev/dl into `/usr/local/go`
+  and put `/usr/local/go/bin` first in `PATH`.
 
 **Supported architectures:** x86_64, aarch64
 
@@ -85,7 +87,7 @@ tpm2-kira reveal
 ```bash
 sudo pacman -S base-devel go git    # Arch
 # or
-sudo apt install build-essential golang git    # Debian/Ubuntu
+sudo apt install build-essential git    # Debian/Ubuntu, with Go from go.dev (see above)
 
 git clone https://github.com/mrwiora/tpm2-kira.git
 cd tpm2-kira
@@ -115,7 +117,7 @@ sudo mkinitcpio -P
 ### Debian / Ubuntu (.deb)
 
 ```bash
-sudo apt install build-essential debhelper dpkg-dev golang-go
+sudo apt install build-essential debhelper dpkg-dev    # and Go from go.dev (see above)
 make deb
 sudo apt install ../tpm2-kira_*_amd64.deb
 ```

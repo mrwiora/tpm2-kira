@@ -12,7 +12,7 @@ url="https://github.com/mrwiora/tpm2-kira"
 license=('BSD-3-Clause')
 # Statically linked, no cgo: the same binary runs in the initramfs.
 depends=()
-makedepends=('go>=1.24')
+makedepends=('go>=1.25.8')
 optdepends=('mkinitcpio: for early boot integration'
             'cryptsetup: for disk encryption integration'
             'tpm2-tools: for debugging and integration testing'

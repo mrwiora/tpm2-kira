@@ -61,7 +61,7 @@ with gomobile and call.
 
 - Kotlin 2.x, Jetpack Compose (Material 3), coroutines/Flow, Hilt or manual DI.
 - `minSdk 28`, `targetSdk` current. Gradle Kotlin DSL, version catalog.
-- Go ≥ 1.24, Android SDK + NDK, `gomobile`:
+- Go ≥ 1.25.8, Android SDK + NDK, `gomobile`:
 
 ```sh
 go install golang.org/x/mobile/cmd/gomobile@latest

@@ -62,7 +62,7 @@ gomobile into an `.xcframework` and call.
 
 - Swift 6 (strict concurrency), SwiftUI, iOS 16+, Xcode current.
   CoreBluetooth, CryptoKit, LocalAuthentication, Security.
-- Go ≥ 1.24, `gomobile`:
+- Go ≥ 1.25.8, `gomobile`:
 
 ```sh
 go install golang.org/x/mobile/cmd/gomobile@latest

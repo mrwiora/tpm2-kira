@@ -131,7 +131,7 @@ uninstall-mkinitcpio:
 ## deb: Build the Debian package (version derived from git describe)
 deb:
 	@command -v dpkg-buildpackage >/dev/null 2>&1 || { \
-		echo "Error: dpkg-buildpackage not found. Install dpkg-dev, debhelper and golang-go."; \
+		echo "Error: dpkg-buildpackage not found. Install dpkg-dev and debhelper (and Go from go.dev)."; \
 		exit 1; \
 	}
 	@DEB_VERSION=$$(packaging/deb-version.sh); \
