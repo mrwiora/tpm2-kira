@@ -699,7 +699,7 @@ A systemd service (`tpm2-kira.service`) starts before the disk unlock and runs `
 The passphrase prompt that follows is tpm2-kira's: `systemd-cryptsetup`
 activates the volume with every option in your `crypttab`, connects to
 `/run/tpm2-kira/unlock.sock` for the key, tpm2-kira asks `Passphrase
-passphrase for disk <volume>:` and answers with what you type. tpm2-kira
+for disk <volume>:` and answers with what you type. tpm2-kira
 never opens the disk itself; it only provides the key. A typo is not
 fatal: `systemd-cryptsetup` then asks on its own prompt for the remaining
 two tries, as it does for a wrong key file, and a recovery passphrase in
