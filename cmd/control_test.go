@@ -56,3 +56,11 @@ func TestControlSteps(t *testing.T) {
 		t.Errorf("SHA-1 not said:\n%s", out.String())
 	}
 }
+
+func TestNoteTextEscapesMarkupAndDropsIndent(t *testing.T) {
+	got := noteText("  TPM         /dev/tpm_rm0 *x*\n  Boot        a\\b\n")
+	want := "TPM         /dev/tpm\\_rm0 \\*x\\*\nBoot        a\\\\b\n"
+	if got != want {
+		t.Fatalf("noteText:\n%q\nwant\n%q", got, want)
+	}
+}

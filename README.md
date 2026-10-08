@@ -153,8 +153,10 @@ each other - each done, possible, or blocked with the reason - and the
 recommended next step. Pick a number and it runs that step with the same
 functions the commands below use; run it again later and it shows the
 state and what is left. The commands below are for specific settings.
-The screens are forms (arrow keys, Enter; Esc leaves; `ACCESSIBLE=1` for
-plain prompts), built with [charmbracelet/huh](https://github.com/charmbracelet/huh);
+The overview is a page of its own, the screen cleared each time it is shown;
+what a step prints stays until "Back to the overview?" is answered. The
+screens are forms (arrow keys, Enter; Esc leaves; `ACCESSIBLE=1` for
+plain prompts), built with [huh v2](https://github.com/charmbracelet/huh) (module charm.land/huh/v2);
 without a terminal, `control` prints the overview and exits.
 
 ```

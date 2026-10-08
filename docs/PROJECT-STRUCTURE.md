@@ -16,7 +16,7 @@ Where things are in the repository, and how the tests are run.
 │   └── kiratest/            # gomobile binding: a simulated machine for app tests
 ├── cmd/                     # Command implementations
 │   ├── control.go           # The guided way: analysis, the protections, the step to run
-│   │                        #   (forms by charmbracelet/huh, the one TUI dependency)
+│   │                        #   (forms by huh v2, charm.land, the one TUI dependency)
 │   ├── status.go            # The overview: slots, phone, unlock mode, keyslots, notes
 │   ├── luks.go, route.go    # LUKS keyslots and tokens; where the initrd takes the key from
 │   ├── default_pcrs.go      # What 'seal' seals to by default, and the fallback slot

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 	"golang.org/x/sys/unix"
 )
 
@@ -244,12 +244,16 @@ func Control(o ControlOptions) error {
 	}
 	c.tty = isTerminal(os.Stdin)
 	for {
+		if c.tty { // the overview is a page of its own: what the last step printed was read before "back to the overview?"
+			fmt.Fprint(c.out, clearScreen+"\033[2mLooking at this machine ...\033[0m\n")
+		}
 		c.facts = collectFacts(o.TPMPath, o.Debug)
 		steps := c.steps()
 		if !c.tty {
 			c.show(steps)
 			return nil // the analysis and the recommendation, for a script
 		}
+		fmt.Fprint(c.out, clearScreen)
 		key, err := c.pick(steps)
 		if err != nil || key == "" {
 			c.leave(steps)
@@ -280,23 +284,40 @@ func Control(o ControlOptions) error {
 	}
 }
 
-// The forms (charmbracelet/huh): the overview with the step to pick, a
+// clearScreen is the terminal cleared, the cursor at the top.
+const clearScreen = "\033[H\033[2J"
+
+// The forms (charm.land/huh v2): the overview with the step to pick, a
 // yes/no, a device. They render inline, so what a step prints stays on
 // the screen above the next form. Esc or Ctrl-C leaves.
 
-func (c *controller) theme() *huh.Theme {
-	t := huh.ThemeBase()
-	yellow := lipgloss.Color("3")
-	t.Focused.Title = t.Focused.Title.Foreground(yellow).Bold(true)
-	t.Focused.SelectSelector = t.Focused.SelectSelector.Foreground(yellow)
-	t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(yellow).Bold(true)
-	t.Focused.Description = t.Focused.Description.Foreground(lipgloss.Color("7"))
-	t.Focused.ErrorMessage = t.Focused.ErrorMessage.Foreground(lipgloss.Color("1"))
-	return t
+// theme is the base theme in this machine's colours, the same on a light
+// and a dark background. (huh v2, charm.land: its bubbletea asks the
+// terminal for the background colour inside the program, where the reply
+// is read as a reply; v1 asked at process start and a reply that came a
+// moment late was read by the form as keystrokes.)
+func (c *controller) theme() huh.Theme {
+	return huh.ThemeFunc(func(bool) *huh.Styles {
+		t := huh.ThemeBase(true)
+		yellow, grey := lipgloss.Color("3"), lipgloss.Color("8")
+		t.Focused.Title = t.Focused.Title.Foreground(yellow).Bold(true)
+		t.Focused.SelectSelector = t.Focused.SelectSelector.Foreground(yellow)
+		t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(yellow).Bold(true)
+		t.Focused.Description = t.Focused.Description.Foreground(lipgloss.Color("7"))
+		t.Focused.ErrorMessage = t.Focused.ErrorMessage.Foreground(lipgloss.Color("1"))
+		for _, s := range []*lipgloss.Style{&t.Help.Ellipsis, &t.Help.ShortKey, &t.Help.ShortDesc, &t.Help.ShortSeparator,
+			&t.Help.FullKey, &t.Help.FullDesc, &t.Help.FullSeparator} {
+			*s = lipgloss.NewStyle().Foreground(grey)
+		}
+		t.Blurred.Title, t.Blurred.Description = t.Focused.Title, t.Focused.Description
+		return t
+	})
 }
 
 func (c *controller) form(fields ...huh.Field) *huh.Form {
-	return huh.NewForm(huh.NewGroup(fields...)).WithTheme(c.theme()).WithShowHelp(true).WithAccessible(os.Getenv("ACCESSIBLE") != "")
+	km := huh.NewDefaultKeyMap()
+	km.Select.Filter.SetEnabled(false) // a handful of entries: no filter
+	return huh.NewForm(huh.NewGroup(fields...)).WithTheme(c.theme()).WithKeyMap(km).WithShowHelp(true).WithAccessible(os.Getenv("ACCESSIBLE") != "")
 }
 
 // pick is the overview: the facts as a note, the steps as a select with
@@ -333,7 +354,7 @@ func (c *controller) pick(steps []controlStep) (string, error) {
 	}
 	choice := initial
 	err := c.form(
-		huh.NewNote().Title("[ KIRA ] control - the protections of this machine, step by step").Description("What this machine has\n"+c.factsText()),
+		huh.NewNote().Title("[ KIRA ] control - the protections of this machine, step by step").Description("*What this machine has*\n"+noteText(c.factsText())),
 		huh.NewSelect[string]().Title("Protections").Description(desc).Options(opts...).Value(&choice).
 			Validate(func(k string) error {
 				if why, ok := blocked[k]; ok {
@@ -367,6 +388,13 @@ func (c *controller) choose(title string, items []string) (int, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+// noteText is text for a note's description: huh's note reads \, _ and
+// * as markup, and its wrapping drops the spaces a line begins with.
+func noteText(s string) string {
+	s = strings.NewReplacer(`\`, `\\`, "_", `\_`, "*", `\*`).Replace(s)
+	return strings.ReplaceAll("\n"+s, "\n  ", "\n")[1:]
 }
 
 // factsText is "What this machine has", one line per fact.
