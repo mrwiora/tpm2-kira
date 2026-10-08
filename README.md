@@ -225,9 +225,10 @@ event log:
 | a unified kernel image (systemd-stub) | `0e,2e,7e,11u` | firmware, option ROMs, Secure Boot state, and PCR 11 computed from the image - a kernel update is predicted from the new image |
 | GRUB | `0e,2e,7e,8e,9e` | the same, and GRUB's commands and the files it read, predicted from `grub.cfg` for the next boot |
 | neither | `0e,2e,7e` | firmware, option ROMs, Secure Boot state |
+| no event log to read (a software TPM, a run without root) | `0,2,7` | the same registers as they are now: nothing can be replayed |
 
 Without `--pcrs` and `--nvram`, a second slot is sealed as well: **slot 1,
-the fallback, to `0e,7e` alone**. When a kernel or boot loader change was
+the fallback, to `0e,7e` alone** (`0,7` without an event log). When a kernel or boot loader change was
 not predicted, slot 0 shows no code, but slot 1 still does as long as the
 firmware and the Secure Boot state are what they were: the machine is not
 simply lost, and the first slot is resealed once the boot is understood.

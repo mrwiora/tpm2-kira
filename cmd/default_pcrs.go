@@ -18,8 +18,13 @@ import (
 // change was not predicted, the firmware and the secure boot state still
 // vouch for the machine, and that slot's code still shows.
 
-// FallbackPCRSelection is what the fallback slot is sealed to.
+// FallbackPCRSelection is what the fallback slot is sealed to; without an
+// event log the registers as they are (FallbackRegisterSelection).
 const FallbackPCRSelection = "0e,7e"
+
+// FallbackRegisterSelection is the fallback selection read from the
+// registers, for a machine whose event log cannot be read.
+const FallbackRegisterSelection = "0,7"
 
 // FallbackSlot is the slot the fallback goes into.
 const FallbackSlot = 1
@@ -30,21 +35,34 @@ var ukiDirs = []string{"/boot/EFI/Linux", "/efi/EFI/Linux", "/boot/efi/EFI/Linux
 
 // DefaultPCRSelection is the selection for this boot and the reason, from
 // the event log at eventlogPath (the default when "") in the bank of algo
-// (--sha1 changes the bank, nothing else). Without an event log the
-// selection is the plain one.
+// (--sha1 changes the bank, nothing else). Without an event log to read
+// (a software TPM, a run without root) the selection is the registers as
+// they are: nothing can be computed.
 func DefaultPCRSelection(eventlogPath string, algo PCRHashAlgo) (string, string) {
 	if eventlogPath == "" {
 		eventlogPath = DefaultEventlogPath
 	}
 	raw, err := readRawEventLogFromPath(eventlogPath)
 	if err != nil {
-		return "0e,2e,7e", "no event log to read: the firmware and the secure boot state"
+		return "0,2,7", "no event log to read: the firmware and the secure boot state, as the registers hold them"
 	}
 	log, err := attest.ParseEventLog(raw)
 	if err != nil {
-		return "0e,2e,7e", "the event log does not parse: the firmware and the secure boot state"
+		return "0,2,7", "the event log does not parse: the firmware and the secure boot state, as the registers hold them"
 	}
 	return defaultPCRSelection(log.Events(attestHash(algo)), findUKI())
+}
+
+// defaultFallbackSelection is the fallback slot's selection, from the
+// event log when there is one to read.
+func defaultFallbackSelection(eventlogPath string) string {
+	if eventlogPath == "" {
+		eventlogPath = DefaultEventlogPath
+	}
+	if _, err := readRawEventLogFromPath(eventlogPath); err != nil {
+		return FallbackRegisterSelection
+	}
+	return FallbackPCRSelection
 }
 
 // defaultPCRSelection decides from the events: systemd-stub's section
@@ -101,10 +119,11 @@ func SealDefaults(tpmPath, pubKeyPath, privKeyPath string, algo PCRHashAlgo, deb
 	if err := Seal(tpmPath, sel, ResolveNVRAMIndex(0), pubKeyPath, privKeyPath, debug, algo, true); err != nil {
 		return err
 	}
-	fmt.Printf("\n=== Slot %d: the fallback, sealed to PCRs %s alone ===\n", FallbackSlot, FallbackPCRSelection)
+	fallback := defaultFallbackSelection("")
+	fmt.Printf("\n=== Slot %d: the fallback, sealed to PCRs %s alone ===\n", FallbackSlot, fallback)
 	fmt.Println("Its code shows in a boot whose kernel or boot loader changed unpredicted, as long")
 	fmt.Println("as the firmware and the secure boot state are the same; it says the machine is")
 	fmt.Println("not simply lost. Pair this one with your authenticator too.")
 	fmt.Println()
-	return Seal(tpmPath, FallbackPCRSelection, ResolveNVRAMIndex(FallbackSlot), pubKeyPath, privKeyPath, debug, algo, true)
+	return Seal(tpmPath, fallback, ResolveNVRAMIndex(FallbackSlot), pubKeyPath, privKeyPath, debug, algo, true)
 }

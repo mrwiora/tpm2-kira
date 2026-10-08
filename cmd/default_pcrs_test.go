@@ -44,7 +44,14 @@ func TestDefaultPCRSelection(t *testing.T) {
 			t.Errorf("%s does not parse: %v", sel, err)
 		}
 	}
-	if sel, why := DefaultPCRSelection("/nonexistent", PCRHashAlgoSHA256); sel != "0e,2e,7e" || why == "" {
+	// Without a log nothing can be computed: the registers as they are.
+	if sel, why := DefaultPCRSelection("/nonexistent", PCRHashAlgoSHA256); sel != "0,2,7" || why == "" {
 		t.Errorf("without a log: %s (%s)", sel, why)
+	}
+	if sel := defaultFallbackSelection("/nonexistent"); sel != FallbackRegisterSelection {
+		t.Errorf("the fallback without a log: %s", sel)
+	}
+	if sel := defaultFallbackSelection("testdata/debian13-grub-eventlog.bin"); sel != FallbackPCRSelection {
+		t.Errorf("the fallback with a log: %s", sel)
 	}
 }

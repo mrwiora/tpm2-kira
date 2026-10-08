@@ -51,7 +51,7 @@ func TestLuksEnrolOnAnImage(t *testing.T) {
 	conf := filepath.Join(dir, "unlock.conf")
 	os.WriteFile(conf, []byte("# comment\nTPM2_KIRA_UNLOCK=skip\n"), 0o644)
 
-	if err := LuksEnrol(LuksEnrolOptions{Device: loop, Mode: LuksModePasswordSalt, ExistingKeyFile: existing, NoConfig: true}); err != nil {
+	if err := LuksEnrol(LuksEnrolOptions{Device: loop, Mode: LuksModePasswordSalt, ExistingKeyFile: existing}); err != nil {
 		t.Fatalf("luks enrol: %v", err)
 	}
 	st := readLuksStatus(loop)
@@ -74,7 +74,7 @@ func TestLuksEnrolOnAnImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	answers = []string{"x", "x", "y"}
-	if err := LuksEnrol(LuksEnrolOptions{Device: loop, Mode: LuksModePasswordSalt, ExistingKeyFile: existing, NoConfig: true}); err == nil || !strings.Contains(err.Error(), "recovery passphrase") {
+	if err := LuksEnrol(LuksEnrolOptions{Device: loop, Mode: LuksModePasswordSalt, ExistingKeyFile: existing}); err == nil || !strings.Contains(err.Error(), "recovery passphrase") {
 		t.Fatalf("without a recovery keyslot: %v", err)
 	}
 

@@ -186,9 +186,10 @@ code shown.
 Without --pcrs the selection is what this boot measured: the firmware and
 the secure boot state (0e,2e,7e), plus PCR 11 computed from the unified
 kernel image when one booted (11u), or GRUB's PCRs 8 and 9 predicted from
-grub.cfg when GRUB did (8e,9e). Without --pcrs and --nvram, two slots are
+grub.cfg when GRUB did (8e,9e); without an event log to read, the
+registers as they are (0,2,7). Without --pcrs and --nvram, two slots are
 sealed: slot 0 with that selection, and slot 1, the fallback, with 0e,7e
-alone - a boot whose kernel changed unpredicted still shows slot 1's code,
+alone (0,7 without a log) - a boot whose kernel changed unpredicted still shows slot 1's code,
 which says the machine is not simply lost. With --pcrs or --nvram, one
 slot: the one named (else 0), the PCRs named (else the selection).
 
