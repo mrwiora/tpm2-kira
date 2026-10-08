@@ -65,6 +65,14 @@ func main() {
 		runReseal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "info":
 		runInfo(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+	case "control":
+		fs := flag.NewFlagSet("control", flag.ExitOnError)
+		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
+		dbg := fs.Bool("debug", *debug, "Enable debug output")
+		fs.Parse(commandArgs)
+		if err := cmd.Control(cmd.ControlOptions{TPMPath: *tpm, Debug: *dbg}); err != nil {
+			fail(err)
+		}
 	case "status":
 		fs := flag.NewFlagSet("status", flag.ExitOnError)
 		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
@@ -268,7 +276,12 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	// alone), so a boot change that was not predicted still shows a code.
 	// With either, one slot: the one named (else 0), the PCRs named (else
 	// the selection).
-	slotGiven := nvramExplicit(args)
+	if !nvramExplicit(args) && !pcrsGiven(args) {
+		if err := cmd.SealDefaults(*tpm, *pubKeyPath, *privKeyPath, hashAlgo, *debug); err != nil {
+			fail(err)
+		}
+		return
+	}
 	if *pcrs == "" {
 		sel, why := cmd.DefaultPCRSelection("", hashAlgo)
 		fmt.Printf("PCRs: %s (%s)\n\n", sel, why)
@@ -277,19 +290,8 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
 		fail(err)
 	}
-	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
-	if err := cmd.Seal(*tpm, *pcrs, sealIndex, *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
+	if err := cmd.Seal(*tpm, *pcrs, cmd.ResolveNVRAMIndex(uint32(*nvram)), *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
 		fail(err)
-	}
-	if !slotGiven && !pcrsGiven(args) {
-		fmt.Printf("\n=== Slot %d: the fallback, sealed to PCRs %s alone ===\n", cmd.FallbackSlot, cmd.FallbackPCRSelection)
-		fmt.Println("Its code shows in a boot whose kernel or boot loader changed unpredicted, as long")
-		fmt.Println("as the firmware and the secure boot state are the same; it says the machine is")
-		fmt.Println("not simply lost. Pair this one with your authenticator too.")
-		fmt.Println()
-		if err := cmd.Seal(*tpm, cmd.FallbackPCRSelection, cmd.ResolveNVRAMIndex(cmd.FallbackSlot), *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
-			fail(err)
-		}
 	}
 }
 

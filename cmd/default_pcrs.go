@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,4 +90,21 @@ func findUKI() string {
 		}
 	}
 	return ""
+}
+
+// SealDefaults is 'seal' without arguments: slot 0 to what this boot
+// measured, slot 1 to the fallback selection, both with the signing key
+// at the paths given ("" for the defaults).
+func SealDefaults(tpmPath, pubKeyPath, privKeyPath string, algo PCRHashAlgo, debug bool) error {
+	sel, why := DefaultPCRSelection("", algo)
+	fmt.Printf("PCRs: %s (%s)\n\n", sel, why)
+	if err := Seal(tpmPath, sel, ResolveNVRAMIndex(0), pubKeyPath, privKeyPath, debug, algo, true); err != nil {
+		return err
+	}
+	fmt.Printf("\n=== Slot %d: the fallback, sealed to PCRs %s alone ===\n", FallbackSlot, FallbackPCRSelection)
+	fmt.Println("Its code shows in a boot whose kernel or boot loader changed unpredicted, as long")
+	fmt.Println("as the firmware and the secure boot state are the same; it says the machine is")
+	fmt.Println("not simply lost. Pair this one with your authenticator too.")
+	fmt.Println()
+	return Seal(tpmPath, FallbackPCRSelection, ResolveNVRAMIndex(FallbackSlot), pubKeyPath, privKeyPath, debug, algo, true)
 }

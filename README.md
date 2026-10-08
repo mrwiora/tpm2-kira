@@ -142,6 +142,42 @@ libraries and the package has no shared-library dependencies.
 tpm2-kira version
 ```
 
+## Guided: `tpm2-kira control`
+
+One screen for a person rather than a script: what the machine has (the
+TPM and its banks, how it booted and so which PCRs to seal to, the
+initramfs kind, a Bluetooth adapter, the LUKS devices), what is configured
+(the signing key, the slots, the phone, the keyslots, the unlock mode,
+the route of the key), the five protections in the order they build on
+each other - each done, possible, or blocked with the reason - and the
+recommended next step. Pick a number and it runs that step with the same
+functions the commands below use; run it again later and it shows the
+state and what is left. The commands below are for specific settings.
+
+```
+[ KIRA ] control - the protections of this machine, step by step
+
+What this machine has
+  TPM         /dev/tpmrm0, SHA-256 bank and event log
+  Boot        a unified kernel image booted: ...: PCRs 0e,2e,7e,11u
+  Initramfs   mkinitcpio
+  Bluetooth   hci0 (attestation by phone possible)
+  LUKS        /dev/sda2: keyslots 0 not tpm2-kira's; not routed through tpm2-kira
+  Unlock      mode skip
+
+Protections
+  [x] 1  Signing key  - local key files in /etc/tpm2-kira/keys
+  [x] 2  TOTP code at boot  - slot 0 sealed to 0e,2e,7e,11u; the fallback in place
+  [ ] 3  Attestation by phone (Marify, Bluetooth LE)
+  [ ] 4  Disk key from password + salt (hashpwd2)
+  [-] 5  Disk key from password + remote salt (the phone)  - needs the attestation by phone
+
+Recommended next: 3  Attestation by phone (Marify, Bluetooth LE)
+  The phone checks the boot state against what it pinned and shows a code the machine must show too; ...
+
+Choose a step by number, or q to leave:
+```
+
 ## Commands
 
 `tpm2-kira help` is one screen, the commands grouped by what you are doing;
@@ -151,6 +187,7 @@ tpm2-kira runs `reveal`.
 
 | | Commands |
 |---|---|
+| Guided | `control`: one screen, the protections step by step |
 | Setting up the machine | `setup` the signing key · `seal` a new TOTP key to the boot state · `reseal` approve the current boot state (the hooks run it) · `status` the overview · `info` a slot's blob · `nvram list\|status\|delete\|restore` |
 | The phone (Marify, Bluetooth LE) | `attest enrol\|unenrol\|status\|gate\|signer\|ekcert\|quote\|verify\|config-check` · `remote-salt enrol\|rotate\|status\|unenrol` |
 | The disk's key | `luks status\|enrol\|remove\|mark\|route` · `derive` (hashpwd2 by hand) · the mode in `/etc/tpm2-kira/unlock.conf` |

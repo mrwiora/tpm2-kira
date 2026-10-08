@@ -28,7 +28,11 @@ USAGE
   tpm2-kira <command> [subcommand] [options]
   tpm2-kira help <command>       that command's page: subcommands, options, examples
 
-SETTING UP THE MACHINE
+GUIDED
+  control      One screen: what this machine has, which protections are in
+               place, the recommended next step - and runs the step you pick
+
+SETTING UP THE MACHINE (what control runs; by hand for specific settings)
   setup        Create the signing key (local files, or the key in a YubiKey)
   seal         Seal a new TOTP key to the boot state (PCRs) in a TPM slot
   reseal       Approve the current boot state for a slot (after a boot change;
@@ -69,6 +73,7 @@ GLOBAL OPTIONS (before the command)
   --debug         Debug output
 
 FIRST STEPS
+  tpm2-kira control                                  guided, step by step; or:
   tpm2-kira setup && tpm2-kira seal                  a code at every boot
   tpm2-kira attest enrol                             the phone verifies the boot
   tpm2-kira luks enrol /dev/sda2 --mode password+remotesalt
@@ -104,6 +109,32 @@ func printHelp(topic string) {
 // helpPages are the pages of 'tpm2-kira help <command>'. A command with
 // subcommands has one page; the subcommands are on it.
 var helpPages = map[string]string{
+	"control": `tpm2-kira control [--tpm PATH]
+
+The guided way through the protections. It first looks at what the
+machine has - the TPM and its banks (the SHA-1 bank only where there is
+no SHA-256 one with a SHA-256 event log), how it booted and so which PCRs
+to seal to, the initramfs kind, a Bluetooth adapter, the LUKS devices -
+and at what is configured: the signing key, the slots, the phone, the
+keyslots, the unlock mode, the route of the key. One screen shows both,
+the protections in the order they build on each other -
+
+  1  Signing key                               setup
+  2  TOTP code at boot                         seal (slot 0 and the fallback slot)
+  3  Attestation by phone                      attest enrol
+  4  Disk key from password + salt             luks enrol --mode password+salt
+  5  Disk key from password + remote salt      luks enrol --mode password+remotesalt
+
+- each marked done, possible, or blocked with the reason, and the
+recommended next one. Pick a number and it runs that step with the
+functions the commands on the right use, then shows the screen again.
+Run again later, it shows the state and what is left. On leaving it
+names the initramfs rebuild. Without a terminal it prints the screen
+and leaves (a script's look).
+
+  tpm2-kira control
+`,
+
 	"setup": `tpm2-kira setup [--yubikey[=SERIAL] [--slot SLOT] | --local]
 
 Creates /etc/tpm2-kira/keys/ with seal.pub and seal.key, the signing key
