@@ -13,9 +13,22 @@ import (
 // so a keyslot enrolled with either opens with the other. The reference
 // binary is built from its checkout when one is at hand (HASHPWD2_SRC or
 // ../../hashpwd2); without it the shape of the output is still checked.
+// cheapCombine makes Combine cheap for the rest of the test, for the tests
+// of what happens around the derivation: the key's route, the prompts, the
+// modes. The derivation itself is TestCombineIsHashpwd2's.
+func cheapCombine(t *testing.T) {
+	t.Helper()
+	mem, it := combineMemoryKiB, combineIterations
+	combineMemoryKiB, combineIterations = 8*1024, 1
+	t.Cleanup(func() { combineMemoryKiB, combineIterations = mem, it })
+}
+
 func TestCombineIsHashpwd2(t *testing.T) {
 	if testing.Short() {
 		t.Skip("1 GiB of Argon2id")
+	}
+	if combineMemoryKiB != 1<<20 || combineIterations != 16 || combineParallelism != 4 {
+		t.Fatalf("not hashpwd2's cost: %d KiB, %d passes, %d lanes", combineMemoryKiB, combineIterations, combineParallelism)
 	}
 	const password, salt = "correct horse battery staple", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	key, err := Combine([]byte(password), []byte(salt))

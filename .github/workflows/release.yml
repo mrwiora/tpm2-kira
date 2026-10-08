@@ -6,6 +6,34 @@ on:
       - "*"
 
 jobs:
+  # The unit tests once, here; the package builds below then skip their own
+  # run of the same tests (makepkg --nocheck, DEB_BUILD_OPTIONS=nocheck).
+  unit-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Run unit tests
+        run: go test -tags=unit ./cmd/... ./attest/... ./transport/... ./mobile/...
+
   build-binaries:
     runs-on: ubuntu-latest
     permissions:
@@ -76,6 +104,7 @@ jobs:
           retention-days: 1
 
   build-archlinux:
+    needs: [unit-tests]
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -135,7 +164,7 @@ jobs:
       - name: Build package
         run: |
           cd packaging/aur
-          sudo -u builder makepkg --noconfirm --syncdeps --rmdeps --clean
+          sudo -u builder makepkg --noconfirm --syncdeps --rmdeps --clean --nocheck
           if ! ls *.pkg.tar.zst >/dev/null 2>&1; then
             echo "ERROR: No package file was created"
             exit 1
@@ -215,6 +244,7 @@ jobs:
           retention-days: 1
 
   build-debian:
+    needs: [unit-tests]
     runs-on: ubuntu-latest
     container:
       image: debian:trixie
@@ -274,7 +304,7 @@ jobs:
 
       - name: Build source and binary packages
         run: |
-          dpkg-buildpackage -us -uc
+          DEB_BUILD_OPTIONS=nocheck dpkg-buildpackage -us -uc
 
       - name: Collect artifacts
         run: |

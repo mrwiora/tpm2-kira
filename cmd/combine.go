@@ -14,13 +14,17 @@ import (
 // released (factor.go); the password is typed at tpm2-kira's prompt; the
 // result is the key file systemd-cryptsetup reads from the unlock socket.
 
-// Argon2id as hashpwd2 sets it: 1 GiB, 16 passes, 4 lanes, 64 bytes.
-const (
-	combineMemoryKiB   = 1 << 20
-	combineIterations  = 16
-	combineParallelism = 4
-	combineKeyLength   = 64
+// Argon2id as hashpwd2 sets it: 1 GiB, 16 passes, 4 lanes, 64 bytes. The
+// cost is a variable for the tests of the flows around the derivation
+// (cheapCombine in combine_test.go); the derivation itself is tested with
+// hashpwd2's numbers.
+var (
+	combineMemoryKiB   uint32 = 1 << 20
+	combineIterations  uint32 = 16
+	combineParallelism uint8  = 4
 )
+
+const combineKeyLength = 64
 
 var errCombineEmpty = errors.New("the password and the salt must both be non-empty")
 

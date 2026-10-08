@@ -418,6 +418,7 @@ func TestConsolePassphraseOnASocket(t *testing.T) {
 // With a salt from the coordinator the provider asks for the password and
 // answers with the combined key; without one, with the passphrase as typed.
 func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
+	cheapCombine(t)
 	if testing.Short() {
 		t.Skip("1 GiB of Argon2id")
 	}
@@ -548,6 +549,7 @@ func TestAskUnlockSocket(t *testing.T) {
 // In mode password+salt the provider asks for the password and the salt
 // and answers with their combination.
 func TestDiskKeyPasswordSaltMode(t *testing.T) {
+	cheapCombine(t)
 	if testing.Short() {
 		t.Skip("1 GiB of Argon2id")
 	}

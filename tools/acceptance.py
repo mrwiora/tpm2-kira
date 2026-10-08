@@ -5,7 +5,8 @@
     tools/acceptance.py --distro debian --host 172.17.2.196 --user pix --password-file ~/.vm-pw
 
 It builds the package of the checked-out commit on the target (makepkg on
-Arch, dpkg-buildpackage on Debian), installs it, checks what can be checked
+Arch, dpkg-buildpackage on Debian), keeps a copy of it in the run's
+directory, installs it, checks what can be checked
 over ssh, reboots the machine when you say so, asks you what the console
 showed (the codes against your authenticator, the disk unlock), checks the
 booted system and its journal, and writes a report with every log in one
@@ -184,6 +185,12 @@ class Target:
         if rc != 0:
             raise SystemExit(f"scp {local}: {out}")
 
+    def copy_from(self, remote, local):
+        argv = ["scp", "-q"] + self._base(scp=True) + [f"{self.user}@{self.host}:{remote}", local]
+        rc, out = self._run(argv)
+        if rc != 0:
+            raise SystemExit(f"scp {remote}: {out}")
+
     def interactive(self, cmd):
         """Hands the terminal to a command on the target (the person types)."""
         argv = ["ssh", "-t"] + self._base() + [f"{self.user}@{self.host}", cmd]
@@ -278,6 +285,7 @@ def build_and_install(t, distro, rev, log, rep):
             return None
         rc, pkg = t.run(f"ls {work}/tpm2-kira-{version}-*.pkg.tar.zst | grep -v debug | head -1")
         pkg = pkg.strip()
+        t.copy_from(pkg, os.path.join(log.dir, os.path.basename(pkg)))
         rc, out = t.run(f"pacman -U --noconfirm {shlex.quote(pkg)} 2>&1", root=True)
         log.save("install.log", out)
         # pacman's exit is non-zero when a hook (mkinitcpio) reports an
@@ -306,11 +314,11 @@ def build_and_install(t, distro, rev, log, rep):
             if rc != 0:
                 rep.check("Go on the target", False, out[-500:])
                 return None
-        base = git("show", f"{rev}:debian/changelog").split("\n")[0]
-        m = re.match(r"\S+ \(([^)]+)\)", base)
-        version = f"{m.group(1)}+{short}"
+        # The version as 'make deb' and the release workflow set it.
+        version = subprocess.check_output([os.path.join(REPO, "packaging", "deb-version.sh"),
+                                           git("describe", "--tags", rev)], text=True).strip()
         rc, out = t.run(f"set -e; cd {work} && tar xzf {tarball} && cd tpm2-kira-{short} && "
-                        f"sed -i '1s/({m.group(1)})/({version})/' debian/changelog && "
+                        f"sed -i '1s/^tpm2-kira (.*)/tpm2-kira ({version})/' debian/changelog && "
                         # debian/rules caches under the tree, which this run throws
                         # away: the user's cache instead, kept across runs. The unit
                         # tests have their own run; the package build skips them.
@@ -319,6 +327,7 @@ def build_and_install(t, distro, rev, log, rep):
         if not rep.check("package builds (dpkg-buildpackage)", rc == 0, out[-800:] if rc else ""):
             return None
         deb = f"{work}/tpm2-kira_{version}_amd64.deb"
+        t.copy_from(deb, os.path.join(log.dir, os.path.basename(deb)))
         rc, out = t.run(f"dpkg -i {deb} 2>&1", root=True)
         log.save("install.log", out)
         rc2, installed = t.run("dpkg-query -W -f='${Version}' tpm2-kira")
