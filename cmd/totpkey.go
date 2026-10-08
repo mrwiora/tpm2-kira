@@ -14,7 +14,7 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // The TOTP key is an HMAC key inside the TPM. tpm2-kira never gets it back:

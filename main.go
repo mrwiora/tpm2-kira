@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matthias/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/cmd"
 )
 
 // Version is the application version, set by build flags

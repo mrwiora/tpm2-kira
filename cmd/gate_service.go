@@ -33,7 +33,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // gateIdentity is what the radio worker needs to advertise and to run the

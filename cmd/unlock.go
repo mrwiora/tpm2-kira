@@ -278,14 +278,6 @@ func openConsole() (io.ReadWriteCloser, int, error) {
 	return f, int(f.Fd()), nil
 }
 
-// consolePassphrase asks on the console for the passphrase of a volume,
-// the way systemd's agent does: on /dev/console, echo off, a '*' per
-// character, Backspace deletes, an empty line asks again. Ctrl-C gives up
-// (no key: systemd-cryptsetup falls back to its own prompt).
-func consolePassphrase(volume string) ([]byte, error) {
-	return consoleAsk(volume, "Passphrase", "")
-}
-
 // errUnlockSkipped: mode skip, or no remote salt in a mode that needs
 // one: tpm2-kira gives no key, and cryptsetup's own prompt follows.
 var errUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own prompt follows")

@@ -13,8 +13,8 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 
-	. "github.com/matthias/tpm2-kira/attest"
-	"github.com/matthias/tpm2-kira/attest/attesttest"
+	. "github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest/attesttest"
 )
 
 func newMachine(t *testing.T) *attesttest.Machine {

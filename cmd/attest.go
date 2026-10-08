@@ -20,9 +20,9 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/matthias/tpm2-kira/attest"
-	"github.com/matthias/tpm2-kira/transport/ble"
-	"github.com/matthias/tpm2-kira/transport/frame"
+	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/transport/ble"
+	"github.com/mrwiora/tpm2-kira/transport/frame"
 )
 
 // Remote attestation commands (PLAN-REMOTEATTESTATION.md §12, PLAN-BLE.md).
@@ -326,7 +326,7 @@ type EnrolOptions struct {
 // AttestEnrol binds a phone to this machine over BLE. It runs on the booted,
 // unlocked system: it writes NVRAM and needs the signing key, like `seal`.
 func AttestEnrol(o EnrolOptions) error {
-	tpmDev, err := transport.OpenTPM(o.TPMPath)
+	tpmDev, err := OpenTPM(o.TPMPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", o.TPMPath, err)
 	}
@@ -581,9 +581,12 @@ func AttestEnrol(o EnrolOptions) error {
 	}
 }
 
+// verifierName is the phone's name as the console may show it: the name
+// was chosen on the phone, so it is quoted when it holds anything but
+// printable text.
 func verifierName(v *attest.EnrolledVerifier) string {
 	if v.Name != "" {
-		return v.Name
+		return quoteUntrusted(v.Name)
 	}
 	return "phone"
 }
@@ -665,7 +668,7 @@ func AttestGate(o GateOptions) int {
 	// process does both halves.
 	tpmPath := preferResourceManager(o.TPMPath)
 	step("version %s; opening the TPM at %s", AppVersion, tpmPath)
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		gateFail("failed to open TPM at %s: %v", tpmPath, err)
 		return ExitInternal
@@ -986,7 +989,7 @@ func reportReceipt(res *attest.AttestResult, recordVerified bool) int {
 
 // AttestStatus shows the enrolment of one slot or all slots.
 func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) error {
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -1108,7 +1111,7 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 			if i == len(s.Verifiers)-1 {
 				branch = "└──"
 			}
-			fmt.Printf("    %s %s (%s), anchor %s…\n", branch, v.Name, v.ID, v.AnchorDigest[:16])
+			fmt.Printf("    %s %s (%s), anchor %s…\n", branch, quoteUntrusted(v.Name), v.ID, v.AnchorDigest[:16])
 		}
 	}
 	return tamperedErr(invalid)
@@ -1128,7 +1131,7 @@ func AttestQuote(tpmPath string, sealIndex uint32, nonceHex, pcrs, outPath strin
 	if err != nil || len(nonce) < 16 || len(nonce) > 64 {
 		return fmt.Errorf("--nonce must be 16-64 bytes of hex, chosen by the verifier")
 	}
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}

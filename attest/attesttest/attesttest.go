@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // Pipe is one end of an in-memory record pipe implementing attest.Conn.
@@ -197,9 +197,6 @@ func (p *Phone) decisionFor(vd *attest.Verdict) attest.Decision {
 	}
 	return p.Decision
 }
-
-// Has reports whether an event of a type was seen.
-func (p *Phone) Has(typ string) bool { return p.Last(typ) != nil }
 
 // Last returns the most recent event of a type, or nil.
 func (p *Phone) Last(typ string) *attest.Event {

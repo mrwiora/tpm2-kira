@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // The remote-attestation part of a slot's blob.

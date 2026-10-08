@@ -262,7 +262,6 @@ type Verifier struct {
 	receipt     *Receipt
 	remember    bool
 	factorKeep  *FactorBlob // attestation: the factor the evidence asked to keep
-	releasing   bool        // a Release is out, a ReleaseAck is awaited
 	evlog       []byte
 	evlogSum    []byte
 	evlogTot    uint32

@@ -96,50 +96,6 @@ func SlotNumber(index uint32) int {
 	return -1
 }
 
-// ScanAndReveal scans NVRAM slots, displays PCR mismatches, and returns valid slots with codes
-// If nvramIndex is 0, scans all slots in the default range
-// Otherwise, scans only the specified nvramIndex
-func ScanAndReveal(tpmPath string, nvramIndex uint32, debug bool) ([]NVRAMSlot, map[int]string, error) {
-	// Open TPM
-	tpmDev, err := OpenTPM(tpmPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
-	}
-	defer tpmDev.Close()
-
-	// Cleanup TPM memory
-	CleanupTPM(tpmDev, debug)
-
-	// Determine if we should scan all slots or just one
-	var slots []NVRAMSlot
-	if nvramIndex == 0 {
-		// Scan all slots in the default range when nvramIndex is 0
-		slots = ScanNVRAMSlots(tpmDev, debug)
-		if len(slots) == 0 {
-			return nil, nil, fmt.Errorf("no TOTP secrets found in NVRAM slots 0x%08X - 0x%08X", NVRAMSlotStart, NVRAMSlotEnd)
-		}
-	} else {
-		// Scan only the specified index
-		slots = ScanNVRAMSlot(tpmDev, nvramIndex, debug)
-		if len(slots) == 0 {
-			return nil, nil, fmt.Errorf("no TOTP secret found at NVRAM index 0x%08X", nvramIndex)
-		}
-	}
-
-	// Check if we have any valid slots (without PCR mismatches)
-	if !HasValidSlots(slots) {
-		return slots, nil, fmt.Errorf("TOTP secrets found but all have PCR mismatches (see details above)")
-	}
-
-	// Generate TOTP codes for all slots
-	codes, err := GenerateTOTPCodesForSlots(slots)
-	if err != nil {
-		return slots, nil, err
-	}
-
-	return slots, codes, nil
-}
-
 // ScanNVRAMSlots scans all NVRAM indices from 0x01803010 to 0x0180301F
 // and returns a list of slots containing valid TOTP secrets
 func ScanNVRAMSlots(tpmDev transport.TPM, debug bool) []NVRAMSlot {

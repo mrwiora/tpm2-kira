@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // A coordinator for one slot with one enrolled phone and no TPM behind it:

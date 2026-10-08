@@ -10,7 +10,7 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // ── tree-drawing helpers ────────────────────────────────────────────────
@@ -536,7 +536,7 @@ func printAttestationTree(prefix string, si *slotInfo) {
 	list := methods + cont(true)
 	for i, v := range phones {
 		last := i == len(phones)-1
-		fmt.Printf("%s%s%s\n", list, branch(last), quoteUntrusted(verifierName(&v)))
+		fmt.Printf("%s%s%s\n", list, branch(last), verifierName(&v))
 		d := list + cont(last)
 		fmt.Printf("%s%sID: %s\n", d, branch(false), quoteUntrusted(v.ID))
 		fmt.Printf("%s%sAnchor key (signs its verdicts): SHA-256 %x\n", d, branch(false), attest.AnchorDigest(v.AnchorPub))

@@ -397,31 +397,6 @@ func dummySignatureForKey(pubKey crypto.PublicKey) (tpm2.TPMTSignature, error) {
 	}
 }
 
-// ParsePublicKeyFromPEM extracts a crypto.PublicKey from PEM-encoded data (cert or public key).
-func ParsePublicKeyFromPEM(pemData []byte) (crypto.PublicKey, error) {
-	block, _ := pem.Decode(pemData)
-	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM data")
-	}
-
-	switch block.Type {
-	case "CERTIFICATE":
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse X.509 certificate: %w", err)
-		}
-		return cert.PublicKey, nil
-	case "PUBLIC KEY":
-		key, err := x509.ParsePKIXPublicKey(block.Bytes)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse public key: %w", err)
-		}
-		return key, nil
-	default:
-		return nil, fmt.Errorf("unsupported PEM block type %q", block.Type)
-	}
-}
-
 // signForTPM signs a digest with the private key and returns a TPM-compatible
 // signature structure.
 //

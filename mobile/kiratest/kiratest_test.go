@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matthias/tpm2-kira/mobile/kiracore"
+	"github.com/mrwiora/tpm2-kira/mobile/kiracore"
 )
 
 // drive plays the app against the demo machine using only the two gomobile

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	. "github.com/matthias/tpm2-kira/attest"
-	"github.com/matthias/tpm2-kira/attest/attesttest"
+	. "github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest/attesttest"
 )
 
 // refusingBackend is the software TPM with a machine operator who refuses the

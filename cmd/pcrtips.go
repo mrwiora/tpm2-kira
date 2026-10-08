@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // PCRTips displays information about what each PCR measures

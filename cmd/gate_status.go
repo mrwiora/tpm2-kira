@@ -3,11 +3,6 @@ package cmd
 // The gate's state for the slot it serves, as the coordinator
 // (gate_service.go) keeps it and the code screen shows it.
 
-import (
-	"strconv"
-	"strings"
-)
-
 // GateState is where the gate is in serving a slot.
 type GateState string
 
@@ -55,18 +50,3 @@ func (s GateStatus) Verdict() bool {
 
 // Asking reports whether a phone can verify the slot right now.
 func (s GateStatus) Asking() bool { return s.State == GateWaiting || s.State == GateSession }
-
-// printableName keeps what can be shown on a console without moving the
-// cursor or changing colours: the name is chosen on the phone.
-func printableName(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if b.Len() >= 64 {
-			break
-		}
-		if r >= 0x20 && r != 0x7f && !(r >= 0x80 && r < 0xa0) && strconv.IsPrint(r) {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}

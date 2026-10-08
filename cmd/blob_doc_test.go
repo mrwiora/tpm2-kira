@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // The format reference in docs/SECURITY-BACKGROUND.md §10 states numbers

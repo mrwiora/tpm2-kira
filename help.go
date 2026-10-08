@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/matthias/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/cmd"
 )
 
 // The help in two layers: 'tpm2-kira help' is one screen - the commands

@@ -36,7 +36,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // DefaultAttestSignerPath is the signing public key inside the initramfs.
@@ -162,7 +162,7 @@ func signerForImage(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer, d
 // enrolment: which EK is offered, whether it has a vendor certificate, and
 // whether that certificate verifies against the roots embedded in the core.
 func AttestEKCert(tpmPath string, debug bool) error {
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}

@@ -40,8 +40,8 @@ import (
 
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/matthias/tpm2-kira/attest"
-	"github.com/matthias/tpm2-kira/transport/frame"
+	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/transport/frame"
 )
 
 func TestAppMachine(t *testing.T) {

@@ -1,4 +1,4 @@
-module github.com/matthias/tpm2-kira
+module github.com/mrwiora/tpm2-kira
 
 go 1.25.8
 

@@ -12,7 +12,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // The factor's round trip on swtpm: wrapped for this TPM's EK and the

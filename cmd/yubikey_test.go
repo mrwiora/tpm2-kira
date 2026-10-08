@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/google/go-tpm/tpm2"
-	"github.com/matthias/tpm2-kira/internal/piv"
-	"github.com/matthias/tpm2-kira/internal/piv/pivtest"
+	"github.com/mrwiora/tpm2-kira/internal/piv"
+	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
 )
 
 // fakeTokens makes dialTokens return the given emulated cards and records

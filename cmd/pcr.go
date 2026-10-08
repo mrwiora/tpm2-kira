@@ -14,32 +14,6 @@ import (
 
 // PCR selection, parsing, reading and comparison.
 
-// DisplayPCRMismatch shows the differences between expected and current PCR values
-func DisplayPCRMismatch(pcrIndices []int, expectedDigests, currentDigests []tpm2.TPM2BDigest) {
-	if len(expectedDigests) != len(currentDigests) {
-		fmt.Printf("Error: PCR digest count mismatch (expected: %d, current: %d)\n", len(expectedDigests), len(currentDigests))
-		return
-	}
-
-	fmt.Printf("PCRs used for sealing: %v\n", pcrIndices)
-	fmt.Println()
-
-	for i, pcrIndex := range pcrIndices {
-		if i >= len(expectedDigests) || i >= len(currentDigests) {
-			break
-		}
-
-		expected := expectedDigests[i].Buffer
-		current := currentDigests[i].Buffer
-
-		status := PCRStatus(expected, current)
-
-		fmt.Printf("  PCR%-2d: %s - %s\n", pcrIndex, GetPCRDescription(pcrIndex), status)
-		fmt.Printf("    Expected (blob):    %x\n", expected)
-		fmt.Printf("    Current (register): %x\n", current)
-	}
-}
-
 // VerifyPCRValues compares sealed and current PCR digest values
 func VerifyPCRValues(sealed, current []tpm2.TPM2BDigest) bool {
 	if len(sealed) != len(current) {
@@ -174,48 +148,6 @@ func PCRSpecIndices(specs []PCRSpec) []int {
 		indices[i] = spec.Index
 	}
 	return indices
-}
-
-// ShowPCRDetails attempts to show PCR comparison details for the given error.
-// Reads current PCR values from TPM registers only (no eventlog/uki reconstruction).
-// Returns true if PCR details were successfully shown, false otherwise.
-func ShowPCRDetails(tpmDev transport.TPM, nvramIndex uint32, debug bool) bool {
-	// Try to show PCR details
-	sealedData, readErr := ReadFromNVRAM(tpmDev, nvramIndex)
-	if readErr == nil {
-		blob, unmarshalErr := UnmarshalSealedBlob(sealedData)
-		if unmarshalErr == nil {
-			currentPCRs, pcrErr := GetCurrentPCRValuesFromRegisters(tpmDev, blob, debug)
-			if pcrErr == nil {
-				fmt.Println("=== PCR Mismatch Details ===")
-				DisplayPCRMismatch(blob.GetPCRIndices(), blob.GetPCRDigestValues(), currentPCRs)
-				fmt.Println()
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// HandleTPMPolicyFailureWithPCRDetails handles TPM policy failures by showing PCR details and guidance
-// Returns true if the error was handled (is a TPM policy failure), false otherwise
-func HandleTPMPolicyFailureWithPCRDetails(err error, tpmDev transport.TPM, nvramIndex uint32, debug bool) bool {
-	if !IsTPMPolicyFailure(err) {
-		return false
-	}
-
-	// Show the original error
-	fmt.Println(FormatKIRAError(err))
-	fmt.Println()
-
-	// Show PCR details
-	ShowPCRDetails(tpmDev, nvramIndex, debug)
-
-	// Show guidance
-	fmt.Println("To fix this, run: tpm2-kira reseal --privkey /path/to/private.key")
-	fmt.Println("(Provide the signing private key that corresponds to the public key used during sealing)")
-
-	return true
 }
 
 // ReadPCRValuesResult holds the result of reading PCR values from all sources.
@@ -525,32 +457,6 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 
 	result.Specs = specs
 	return result, nil
-}
-
-// GetCurrentPCRValues retrieves current PCR values for comparison, handling
-// eventlog-based, UKI-based, and direct TPM reads. The hash algorithm is
-// automatically detected from the sealed blob's digest sizes. Results are
-// returned in the same order as the blob's PCR digests.
-// NOTE: This uses source-aware reading (eventlog/uki/register). For the
-// unseal/reveal/run path use GetCurrentPCRValuesFromRegisters instead.
-func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug bool) ([]tpm2.TPM2BDigest, error) {
-	hashAlgo := sealedBlob.GetHashAlgo()
-	specs := sealedBlob.GetPCRSpecs()
-
-	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, sealedBlob.MeasurePointMode(), MeasurePointBeforeSeparator, debug)
-	if err != nil {
-		return nil, err
-	}
-
-	// Map results back to blob PCR digest order
-	currentPCRValues := make([]tpm2.TPM2BDigest, len(sealedBlob.Payload.PCRDigests))
-	for i, pair := range sealedBlob.Payload.PCRDigests {
-		if val, ok := readResult.Values[pair.Index]; ok {
-			currentPCRValues[i] = tpm2.TPM2BDigest{Buffer: val}
-		}
-	}
-
-	return currentPCRValues, nil
 }
 
 // GetCurrentPCRValuesFromRegisters reads current PCR values directly from TPM

@@ -416,19 +416,6 @@ func ParseAKPublic(pubBytes, wantName []byte) (crypto.PublicKey, error) {
 	return tpm2.Pub(*pub)
 }
 
-// AKName computes the TPM Name of a marshalled TPMT_PUBLIC.
-func AKName(pubBytes []byte) ([]byte, error) {
-	pub, err := tpm2.Unmarshal[tpm2.TPMTPublic](pubBytes)
-	if err != nil {
-		return nil, err
-	}
-	name, err := tpm2.ObjectName(pub)
-	if err != nil {
-		return nil, err
-	}
-	return name.Buffer, nil
-}
-
 // VerifyTPMSignature checks a marshalled TPMT_SIGNATURE over msg. Only
 // SHA-256 signatures are accepted: a SHA-1 signature is a downgrade.
 func VerifyTPMSignature(pub crypto.PublicKey, msg, sigBytes []byte) error {

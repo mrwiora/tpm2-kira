@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/google/go-tpm/tpm2/transport"
-	"github.com/matthias/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/cmd"
 )
 
 const (

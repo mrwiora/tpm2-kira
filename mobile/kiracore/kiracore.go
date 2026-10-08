@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matthias/tpm2-kira/attest"
-	"github.com/matthias/tpm2-kira/transport/frame"
+	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/transport/frame"
 )
 
 // ProtocolVersion is the INFO characteristic's protocol byte this core speaks.
@@ -64,15 +64,6 @@ func GenerateNoiseKey() ([]byte, error) {
 		return nil, err
 	}
 	return kp.Private, nil
-}
-
-// NoisePublicKey derives the public half of a static key.
-func NoisePublicKey(priv []byte) ([]byte, error) {
-	kp, err := attest.NoiseKeypairFromPrivate(priv)
-	if err != nil {
-		return nil, err
-	}
-	return kp.Public, nil
 }
 
 // AdvertisementFlags returns the flags byte of a tpm2-kira scan response's

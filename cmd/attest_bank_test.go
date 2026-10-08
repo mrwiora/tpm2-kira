@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // The bank of a new enrolment is SHA-256 unless --sha1 is given, as for

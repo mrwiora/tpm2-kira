@@ -3,7 +3,7 @@ package attest_test
 import (
 	"testing"
 
-	. "github.com/matthias/tpm2-kira/attest"
+	. "github.com/mrwiora/tpm2-kira/attest"
 )
 
 // The software TPM double has no EK certificate: enrolment still succeeds,

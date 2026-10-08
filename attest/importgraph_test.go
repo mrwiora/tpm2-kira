@@ -20,8 +20,8 @@ func TestCoreHasNoDeviceDeps(t *testing.T) {
 		"github.com/google/go-tpm/tpm2/transport",
 		"github.com/google/go-attestation",
 		"golang.org/x/sys",
-		"github.com/matthias/tpm2-kira/cmd",
-		"github.com/matthias/tpm2-kira/transport/ble",
+		"github.com/mrwiora/tpm2-kira/cmd",
+		"github.com/mrwiora/tpm2-kira/transport/ble",
 	}
 	pure := []string{".", "../transport/frame", "../mobile/kiracore", "../mobile/kiratest", "attesttest"}
 	for _, dir := range pure {

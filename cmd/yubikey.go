@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matthias/tpm2-kira/internal/pcsc"
-	"github.com/matthias/tpm2-kira/internal/piv"
+	"github.com/mrwiora/tpm2-kira/internal/pcsc"
+	"github.com/mrwiora/tpm2-kira/internal/piv"
 	"golang.org/x/sys/unix"
 )
 

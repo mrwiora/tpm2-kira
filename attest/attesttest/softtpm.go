@@ -17,7 +17,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // SoftTPM is a software double of the TPM operations an attester needs: a

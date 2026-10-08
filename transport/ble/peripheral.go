@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matthias/tpm2-kira/transport/frame"
+	"github.com/mrwiora/tpm2-kira/transport/frame"
 )
 
 // Config selects and describes the adapter.

@@ -12,8 +12,7 @@ import (
 
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/google/go-tpm/tpm2/transport"
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 	"golang.org/x/sys/unix"
 )
 
@@ -178,7 +177,7 @@ func risks(f *machineFacts) []string {
 // ekVerdict is what a phone concludes about this TPM's endorsement key:
 // the vendor whose certificate chain vouches for it, or why none does.
 func ekVerdict(tpmPath string, debug bool) (by, note string) {
-	tpmDev, err := transport.OpenTPM(tpmPath)
+	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		return "", err.Error()
 	}

@@ -8,12 +8,14 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"hash"
 	"strings"
 	"testing"
 
@@ -1998,45 +2000,6 @@ func TestGetPCRDescription(t *testing.T) {
 	}
 }
 
-// TestIsTOTPSecret tests TOTP secret detection
-func TestIsTOTPSecret(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected bool
-	}{
-		{
-			name:     "Valid Base32",
-			input:    "JBSWY3DPEHPK3PXP",
-			expected: true,
-		},
-		{
-			name:     "Valid long Base32",
-			input:    "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
-			expected: true,
-		},
-		{
-			name:     "Short string",
-			input:    "AB",
-			expected: false,
-		},
-		{
-			name:     "Empty",
-			input:    "",
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isTOTPSecret(tt.input)
-			if result != tt.expected {
-				t.Errorf("isTOTPSecret(%q) = %v, want %v", tt.input, result, tt.expected)
-			}
-		})
-	}
-}
-
 // TestGenerateTOTPURI tests TOTP URI generation
 func TestGenerateTOTPURI(t *testing.T) {
 	tests := []struct {
@@ -3101,4 +3064,14 @@ type testError struct {
 
 func (e *testError) Error() string {
 	return e.msg
+}
+
+// generateHOTP computes an HOTP code in software. tpm2-kira computes codes in
+// the TPM; this is the reference the tests compare against.
+func generateHOTP(key []byte, counter int64, newHash func() hash.Hash) string {
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, uint64(counter))
+	mac := hmac.New(newHash, key)
+	mac.Write(buf)
+	return hotpTruncate(mac.Sum(nil))
 }

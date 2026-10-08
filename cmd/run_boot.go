@@ -380,7 +380,7 @@ func openCoordinator(tpmPath, socket, configPath, signerPath string, debug bool)
 		debug, narrateDebug = true, true // TPM2_KIRA_ATTEST_DEBUG=1: the narrative on the console too
 	}
 	path := preferResourceManager(tpmPath)
-	tpmDev, err := transport.OpenTPM(path)
+	tpmDev, err := OpenTPM(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: cannot open the TPM at %s: %v\n", path, err)
 		return nil, nil

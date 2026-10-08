@@ -409,7 +409,7 @@ func TestConsolePassphraseOnASocket(t *testing.T) {
 		c.Write([]byte("open sesame\n"))
 		io.Copy(io.Discard, c)
 	}()
-	pw, err := consolePassphrase("vol")
+	pw, err := consoleAsk("vol", "Passphrase", "")
 	if err != nil || string(pw) != "open sesame" {
 		t.Fatalf("%q %v", pw, err)
 	}

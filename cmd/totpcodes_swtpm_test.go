@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // writeTestKeyPair writes a P-256 signing key the way setup does (SEC 1 PEM,

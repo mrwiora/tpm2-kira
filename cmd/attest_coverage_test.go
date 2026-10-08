@@ -9,7 +9,7 @@ import (
 
 	evlog "github.com/google/go-attestation/attest"
 
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 func utf16le(s string) []byte {

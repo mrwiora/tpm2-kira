@@ -110,13 +110,6 @@ const (
 	MeasurePointAfterSeparator
 )
 
-func (p MeasurePoint) String() string {
-	if p == MeasurePointAfterSeparator {
-		return "after the OS separator"
-	}
-	return "before the OS separator"
-}
-
 // MeasurePointWordsAt returns the words measured into the PCR by the given
 // point, for a value reconstructed from the firmware event log.
 func MeasurePointWordsAt(point MeasurePoint, pcr int) []string {

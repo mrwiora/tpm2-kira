@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matthias/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 func TestCheckSamePCRs(t *testing.T) {

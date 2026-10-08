@@ -19,8 +19,8 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/matthias/tpm2-kira/attest"
-	"github.com/matthias/tpm2-kira/attest/attesttest"
+	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/attest/attesttest"
 )
 
 // TestAttestationOnSWTPM runs enrolment (real EK, PolicySecret session,

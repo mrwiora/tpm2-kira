@@ -250,12 +250,6 @@ func (d *Decoder) fail(format string, args ...any) {
 	}
 }
 
-// Has reports whether a field is present.
-func (d *Decoder) Has(tag uint16) bool {
-	_, ok := d.fields[tag]
-	return ok
-}
-
 func (d *Decoder) raw(tag uint16, required bool) ([]byte, bool) {
 	if d.err != nil {
 		return nil, false
