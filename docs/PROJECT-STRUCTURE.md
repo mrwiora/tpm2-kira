@@ -44,6 +44,7 @@ Where things are in the repository, and how the tests are run.
 │   ├── pcrtips.go           # PCR reference information
 │   └── constants.go         # Default paths and constants
 ├── tools/
+│   ├── acceptance.py         # The acceptance run on a machine: package, install, checks, reboot, report
 │   ├── pcrtool.py            # PCR replay and full-chain diagnosis
 │   └── tpm2-pcr11predict     # Independent cross-check of the built-in PCR 11 computation
 ├── docs/
@@ -88,4 +89,12 @@ make test-integration
 
 # Everything
 make test-all
+
+# The acceptance run on a machine of one distribution: builds the package
+# of the checked-out commit on the target, installs it, checks the
+# installed system and its initramfs, reboots when you say so, asks what
+# the console showed, checks the booted system and its journal, and
+# writes a report with every log into one directory.
+tools/acceptance.py --distro arch   --host 172.17.2.198 --user pix --ask-password
+tools/acceptance.py --distro debian --host 172.17.2.196 --user pix --password-file ~/.vm-pw --luks /dev/vda3
 ```

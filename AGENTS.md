@@ -35,6 +35,23 @@ It may not carry what came before.
   TPMs must not change the SHA-256 path.
 - **Tests must run against the current code.** Use `-count=1` for the
   integration suite; a result marked `(cached)` has tested nothing.
+- **Tests and test runs are fast, and they wait for a state, never for a
+  time.** Poll for the status you need (a process gone, ssh answering, a
+  file written) and go on the moment it is there; a timeout is an upper
+  bound for a failure, not a wait. A run never does the same work twice:
+  the acceptance run (`tools/acceptance.py`) builds the package without
+  its unit tests (`makepkg --nocheck`, `DEB_BUILD_OPTIONS=nocheck`: they
+  have their own run), keeps the Go build cache across runs
+  (`GOCACHE` from the environment, `debian/rules`), installs build
+  dependencies only when they are missing, and fails at once at a prompt
+  it cannot answer instead of sitting at it. What this meant in numbers
+  (2026-10-08): the Arch run went from 3 min to 25 s, the Debian run from
+  over 4 min to 65 s, by removing a duplicate test run, a thrown-away
+  cache and an `apt-get install` of what was installed.
+- **A test machine's own defect is reported, not repaired.** When a VM is
+  misconfigured (an empty `/etc/resolv.conf`, say), the run fails with the
+  advice and the owner fixes the machine by hand, so the defect does not
+  come back unnoticed.
 - **No enforced mode; the passphrase can always be entered by hand.**
   tpm2-kira adds ways to unlock (its prompt, later a phone-released
   factor) and informs; it never withholds systemd's own prompt, which is
