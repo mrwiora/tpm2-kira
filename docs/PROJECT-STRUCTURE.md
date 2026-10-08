@@ -49,7 +49,7 @@ Where things are in the repository, and how the tests are run.
 │   └── tpm2-pcr11predict     # Independent cross-check of the built-in PCR 11 computation
 ├── docs/
 │   ├── PROTOCOL-BLE.md           # Phone <-> machine protocol: the interface definition
-│   ├── PLAN-*.md                 # Designs: remote attestation, BLE, remote unlocking, factor release
+│   ├── PLAN-*.md                 # Designs: remote attestation, BLE, remote unlocking, factor release, the test host (PLAN-BLE-TESTING)
 │   ├── mobile/                   # Agent prompts for the Android and iOS apps
 │   ├── PLATFORM-OBSERVATIONS.md  # Measured facts about Arch and Debian boots
 │   ├── pentest1/, pentest2/      # Security review findings and mitigations
@@ -98,3 +98,7 @@ make test-all
 tools/acceptance.py --distro arch   --host 172.17.2.198 --user pix --ask-password
 tools/acceptance.py --distro debian --host 172.17.2.196 --user pix --password-file ~/.vm-pw --luks /dev/vda3
 ```
+
+The machines this run should have - installed by a script, in a frozen
+state, with a serial console the harness reads and the phone in the
+Android emulator - are the plan in `docs/PLAN-BLE-TESTING.md`.
