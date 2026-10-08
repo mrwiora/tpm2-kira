@@ -1,5 +1,5 @@
 [Unit]
-Description=Starting tpm2-kira
+Description=tpm2-kira code screen and disk unlock
 # An initrd unit. The package also puts this file on the host, where the
 # mkinitcpio hook picks it up from; enabled there by mistake it does nothing.
 ConditionPathExists=/etc/initrd-release

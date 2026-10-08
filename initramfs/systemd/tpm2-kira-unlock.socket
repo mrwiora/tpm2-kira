@@ -1,5 +1,5 @@
 [Unit]
-Description=tpm2-kira key socket for systemd-cryptsetup
+Description=tpm2-kira disk unlock socket
 Documentation=man:crypttab(5)
 # An initrd unit. The package also puts this file on the host, where the
 # mkinitcpio hook picks it up from; enabled there by mistake it does nothing.

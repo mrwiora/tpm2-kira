@@ -1,5 +1,5 @@
 [Unit]
-Description=tpm2-kira remote attestation over Bluetooth LE (lazy), radio worker
+Description=tpm2-kira attestation by phone (Bluetooth LE)
 Documentation=https://github.com/mrwiora/tpm2-kira/blob/main/docs/PLAN-BLE.md
 DefaultDependencies=no
 # An initrd unit. The package also puts this file on the host, where the
