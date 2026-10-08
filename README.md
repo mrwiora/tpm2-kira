@@ -151,10 +151,17 @@ TPM and its banks, how it booted and so which PCRs to seal to, the
 initramfs kind, a Bluetooth adapter, the LUKS devices), what is configured
 (the signing key, the slots, the phone, the keyslots, the unlock mode,
 the route of the key), the five protections in the order they build on
-each other - each done, possible, or blocked with the reason - and the
-recommended next step. Pick a number and it runs that step with the same
-functions the commands below use; run it again later and it shows the
-state and what is left. The commands below are for specific settings.
+each other plus the unlock's prerequisites - each done, possible, or
+blocked with the reason - and the recommended next step. Pick a number
+and it runs that step with the same functions the commands below use;
+run it again later and it shows the state and what is left. The commands
+below are for specific settings, and they touch no configuration file:
+`control` alone sets the mode in `/etc/tpm2-kira/unlock.conf` (after an
+enrolment, and its "Unlock at boot" step checks that the mode fits the
+keyslots and that each device's key is routed through tpm2-kira, advising
+the kernel command line or crypttab where it is not). Everything but the
+help needs root; `control` says so on its own screen, the commands in a
+line.
 The overview is a page of its own, the screen cleared each time it is shown;
 what a step prints stays until "Back to the overview?" is answered. The
 screens are forms (arrow keys, Enter; Esc leaves; `ACCESSIBLE=1` for

@@ -77,9 +77,10 @@ tpm2-kira luks remove <device> --keyslot N
 - `enrol` is the whole thing: ask the password (and the salt, or run the
   remote salt's round trip with the verifier), derive, `cryptsetup
   luksAddKey` (which asks an existing passphrase to authorise - the
-  recovery keyslot `enrol` insists on), import the token, set the unlock
-  mode in `unlock.conf`, say "rebuild the initramfs". The derived key goes
-  to `cryptsetup` through a pipe, never a file.
+  recovery keyslot `enrol` insists on), import the token, say "rebuild the
+  initramfs" - and name the mode `unlock.conf` needs without setting it:
+  the commands touch no configuration file, `control` sets the mode. The
+  derived key goes to `cryptsetup` through a pipe, never a file.
 - `remove` is `luksKillSlot` (a remaining passphrase authorises it) plus
   the token's removal; only a keyslot tpm2-kira marked, never the last one.
 - A new key for a keyslot is `enrol` of the new one and `remove` of the

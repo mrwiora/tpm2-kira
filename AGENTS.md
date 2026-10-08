@@ -40,3 +40,13 @@ It may not carry what came before.
   factor) and informs; it never withholds systemd's own prompt, which is
   the fallback after a wrong or missing answer (docs/UNLOCK-DISK.md §4).
   Do not build a mode that holds the boot on the phone's verdict.
+- **The commands touch no configuration file; `control` does.** `setup`,
+  `seal`, `luks enrol` and the rest do their one thing and say what a
+  configuration file would need (the mode in `unlock.conf`, the kernel
+  command line); only `tpm2-kira control` sets the unlock mode, and it
+  checks the prerequisites of a working setup. The kernel command line and
+  crypttab are advised, never edited.
+- **Root for everything but the help.** Every command refuses to run as a
+  user (`main.go` `requireRoot`); `control` says so on its own screen. The
+  test suite's exception is `TPM2_KIRA_UNPRIVILEGED=1` for the binary
+  against a software TPM.

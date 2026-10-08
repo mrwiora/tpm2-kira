@@ -28,6 +28,10 @@ USAGE
   tpm2-kira <command> [subcommand] [options]
   tpm2-kira help <command>       that command's page: subcommands, options, examples
 
+Everything but the help needs root: the TPM, the keys in /etc/tpm2-kira,
+the LUKS headers and the initramfs are root's. The commands touch no
+configuration file; control sets the unlock mode and checks the rest.
+
 GUIDED
   control      One screen: what this machine has, which protections are in
                place, the recommended next step - and runs the step you pick
@@ -124,10 +128,16 @@ the protections in the order they build on each other -
   3  Attestation by phone                      attest enrol
   4  Disk key from password + salt             luks enrol --mode password+salt
   5  Disk key from password + remote salt      luks enrol --mode password+remotesalt
+  6  Unlock at boot                            the mode in unlock.conf, the key's route
 
 - each marked done, possible, or blocked with the reason, and the
 recommended next one. Pick a number and it runs that step with the
 functions the commands on the right use, then shows the screen again.
+Control alone writes a configuration file: after an enrolment it sets
+TPM2_KIRA_UNLOCK in /etc/tpm2-kira/unlock.conf, and step 6 checks that the
+mode fits the keyslots and that every device with a keyslot of
+tpm2-kira's takes its key from tpm2-kira - advising the kernel command
+line (crypttab on Debian) where it does not; those stay yours to edit.
 Run again later, it shows the state and what is left. On leaving it
 names the initramfs rebuild. Forms: arrow keys and Enter, Esc leaves,
 ACCESSIBLE=1 for plain prompts. Without a terminal it prints the screen
@@ -362,12 +372,12 @@ prompt is always the fallback (docs/PLAN-LUKS.md).
             runs the remote salt's hand-over with the phone), derives the
             key, asks an existing passphrase of the device (the recovery
             one) to authorise, 'cryptsetup luksAddKey' (a device whose every
-            keyslot is tpm2-kira's is refused), imports the token, sets the
-            mode in /etc/tpm2-kira/unlock.conf. Then rebuild the initramfs.
+            keyslot is tpm2-kira's is refused), imports the token. It sets
+            no mode: TPM2_KIRA_UNLOCK in /etc/tpm2-kira/unlock.conf is
+            control's to set (or yours). Then rebuild the initramfs.
               --nvram N               the slot whose phone keeps the salt
               --label STR             the remote salt's label (default luks)
               --existing-key-file F   a passphrase file to authorise (scripts)
-              --no-config             leave unlock.conf alone
               --privkey --pubkey --adapter --timeout --adapter-wait  as remote-salt enrol
   remove    'cryptsetup luksKillSlot' for a keyslot tpm2-kira marked, and
             its token. A remaining passphrase, asked, authorises it

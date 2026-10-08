@@ -79,6 +79,9 @@ func TestMain(m *testing.M) {
 	// earlier run or by 'make' would otherwise be tested instead of the
 	// current code; the build cache makes an up-to-date build cheap.
 	// Built the way it ships: static and cgo-free.
+	// The suite runs the binary as a user against a software TPM; the
+	// binary refuses anything but help as a user unless told so.
+	os.Setenv("TPM2_KIRA_UNPRIVILEGED", "1")
 	fmt.Println("Building tpm2-kira binary for testing...")
 	buildCmd := exec.Command("go", "build", "-o", "tpm2-kira")
 	buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0")

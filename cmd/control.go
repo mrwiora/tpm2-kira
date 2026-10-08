@@ -233,7 +233,112 @@ func (c *controller) steps() []controlStep {
 		luksRemote.Done = "a keyslot is enrolled; unlock mode " + f.Status.UnlockMode
 	}
 
-	return []controlStep{keys, seal, attest, luksSalt, luksRemote}
+	// The prerequisites of the disk unlock, checked together: the mode in
+	// unlock.conf fits the keyslots, and every device with a keyslot of
+	// ours takes its key from tpm2-kira. Control sets the mode (the
+	// commands touch no configuration file); the route it advises.
+	unlock := controlStep{Key: "unlock", Title: "Unlock at boot (unlock.conf, the key's route, the initramfs)",
+		Explain: "The boot derives the key only in the mode set in " + DefaultUnlockConfigPath + ", and a device gets it only when its rd.luks.key= (crypttab on Debian) names tpm2-kira's socket.",
+		Run:     (*controller).runUnlock}
+	wanted := c.wantedUnlockMode()
+	var unrouted []string
+	for _, d := range f.Status.Devices {
+		if d.Error != "" || f.Routed[d.Device] {
+			continue
+		}
+		for _, ks := range d.Keyslots {
+			if ks.Token != nil {
+				unrouted = append(unrouted, d.Device)
+				break
+			}
+		}
+	}
+	switch {
+	case wanted == "":
+		unlock.Blocked = "needs a keyslot of tpm2-kira's"
+	case f.Status.UnlockMode == wanted && len(unrouted) == 0:
+		unlock.Done = "mode " + wanted + "; the key routed"
+	default:
+		var open []string
+		if f.Status.UnlockMode != wanted {
+			open = append(open, "TPM2_KIRA_UNLOCK="+wanted+" (now "+f.Status.UnlockMode+")")
+		}
+		if len(unrouted) > 0 {
+			open = append(open, strings.Join(unrouted, ", ")+" not routed through tpm2-kira")
+		}
+		unlock.Explain += "\nOpen: " + strings.Join(open, "; ") + "."
+	}
+
+	return []controlStep{keys, seal, attest, luksSalt, luksRemote, unlock}
+}
+
+// wantedUnlockMode is the mode the keyslots call for: the phone's when a
+// remote-salt keyslot exists (a typed-salt one next to it is the fallback),
+// else the typed salt's; "" without a keyslot of ours.
+func (c *controller) wantedUnlockMode() string {
+	wanted := ""
+	for _, d := range c.facts.Status.Devices {
+		for _, ks := range d.Keyslots {
+			if ks.Token == nil {
+				continue
+			}
+			if ks.Token.Mode == LuksModePasswordRemoteSalt {
+				return UnlockPasswordRemoteSalt
+			}
+			if ks.Token.Mode == LuksModePasswordSalt {
+				wanted = UnlockPasswordSalt
+			}
+		}
+	}
+	return wanted
+}
+
+// setMode sets the mode in unlock.conf when it differs, and says so.
+func (c *controller) setMode(mode string) error {
+	if c.facts.Status.UnlockMode == mode {
+		return nil
+	}
+	if err := setUnlockMode(DefaultUnlockConfigPath, mode); err != nil {
+		return fmt.Errorf("the unlock mode is not set: %w", err)
+	}
+	fmt.Fprintf(c.out, "%s: TPM2_KIRA_UNLOCK=%s\n", DefaultUnlockConfigPath, mode)
+	c.facts.Status.UnlockMode = mode
+	c.ran = true
+	return nil
+}
+
+// runUnlock sets the mode the keyslots call for and advises the route for
+// the devices that lack it (the kernel command line and crypttab are the
+// person's to change).
+func (c *controller) runUnlock() error {
+	if err := c.setMode(c.wantedUnlockMode()); err != nil {
+		return err
+	}
+	for _, d := range c.facts.Status.Devices {
+		if d.Error != "" || c.facts.Routed[d.Device] {
+			continue
+		}
+		for _, ks := range d.Keyslots {
+			if ks.Token != nil {
+				fmt.Fprint(c.out, RouteAdvice(d.Device))
+				break
+			}
+		}
+	}
+	return nil
+}
+
+// ControlNeedsRoot is control's answer when it is not root: its screen,
+// or a line without a terminal.
+func ControlNeedsRoot() {
+	text := "Everything control looks at and sets is root's: the TPM, the keys in /etc/tpm2-kira, the LUKS headers, the initramfs.\n\n    sudo tpm2-kira control"
+	if !isTerminal(os.Stdin) {
+		fmt.Fprintln(os.Stderr, "tpm2-kira control: root is needed - sudo tpm2-kira control")
+		return
+	}
+	c := &controller{out: os.Stdout}
+	fmt.Fprint(c.out, clearScreen)
+	c.form(huh.NewNote().Title("[ KIRA ] control needs root").Description(noteText(text)).Next(true).NextLabel("Leave")).Run()
 }
 
 // Control runs the guided workflow.
@@ -561,16 +666,19 @@ func (c *controller) runLuks(mode string) error {
 		}
 		dev = devices[i]
 	}
-	noConfig := false
-	if mode == LuksModePasswordSalt && c.facts.Status.UnlockMode == UnlockPasswordRemoteSalt {
-		// A typed-salt keyslot next to the phone's: the mode stays, the
-		// typed salt is the fallback when the phone is not there.
-		noConfig = true
-	}
-	return LuksEnrol(LuksEnrolOptions{
-		Device: dev, Mode: mode, NoConfig: noConfig,
+	if err := LuksEnrol(LuksEnrolOptions{
+		Device: dev, Mode: mode,
 		Remote: FactorEnrolOptions{TPMPath: c.o.TPMPath, Timeout: 10 * time.Minute, AdapterWait: 30 * time.Second, Yes: true, Debug: c.o.Debug},
-	})
+	}); err != nil {
+		return err
+	}
+	// The mode in unlock.conf is control's to set. A typed-salt keyslot
+	// next to the phone's leaves the mode: the typed salt is the fallback
+	// when the phone is not there.
+	if mode == LuksModePasswordSalt && c.facts.Status.UnlockMode == UnlockPasswordRemoteSalt {
+		return nil
+	}
+	return c.setMode(mode)
 }
 
 func isTerminal(f *os.File) bool {

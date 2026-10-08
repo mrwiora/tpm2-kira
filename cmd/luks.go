@@ -325,9 +325,7 @@ type LuksEnrolOptions struct {
 	// ExistingKeyFile authorises luksAddKey instead of cryptsetup's prompt
 	// for an existing passphrase (scripts and tests).
 	ExistingKeyFile string
-	// NoConfig leaves unlock.conf alone.
-	NoConfig bool
-	Remote   FactorEnrolOptions // password+remotesalt: the slot, the phone, the keys
+	Remote          FactorEnrolOptions // password+remotesalt: the slot, the phone, the keys
 }
 
 // terminalAsk asks on the terminal; tests replace it.
@@ -442,11 +440,11 @@ func LuksEnrol(o LuksEnrolOptions) error {
 		return fmt.Errorf("the keyslot %d is added, but its token is not: %w (tpm2-kira luks mark %s --keyslot %d --mode %s)", newSlot, err, o.Device, newSlot, o.Mode)
 	}
 	fmt.Printf("%s keyslot %d added: %s\n", o.Device, newSlot, describeKeyslot(KeyslotStatus{Keyslot: newSlot, Token: &tok}))
-	if !o.NoConfig {
-		if err := setUnlockMode(DefaultUnlockConfigPath, o.Mode); err != nil {
-			return fmt.Errorf("the keyslot is added; the unlock mode is not set: %w", err)
-		}
-		fmt.Printf("%s: TPM2_KIRA_UNLOCK=%s\n", DefaultUnlockConfigPath, o.Mode)
+	// The commands touch no configuration file: the mode in unlock.conf is
+	// control's (or the person's) to set.
+	if cfg, _ := LoadUnlockConfig(DefaultUnlockConfigPath); cfg.Mode != o.Mode {
+		fmt.Printf("The boot uses this keyslot with TPM2_KIRA_UNLOCK=%s in %s (now %s):\n", o.Mode, DefaultUnlockConfigPath, cfg.Mode)
+		fmt.Println("tpm2-kira control sets it, or set it by hand.")
 	}
 	if advice := RouteAdvice(o.Device); advice != "" {
 		fmt.Print(advice)
@@ -516,7 +514,8 @@ var cryptsetupAuth = func(key, existing []byte, args ...string) ([]byte, error) 
 }
 
 // setUnlockMode writes TPM2_KIRA_UNLOCK=mode into unlock.conf, replacing
-// the line or adding it; a missing file is created with the line.
+// the line or adding it; a missing file is created with the line. Only
+// control calls it: the commands touch no configuration file.
 func setUnlockMode(path, mode string) error {
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {

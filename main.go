@@ -27,6 +27,27 @@ func fail(err error) {
 	os.Exit(0)
 }
 
+// requireRoot ends the run when it is not root's: everything but the help,
+// the version and the PCR reference reads or writes what is root's alone
+// (the TPM, the keys in /etc/tpm2-kira, the LUKS headers, the initramfs).
+// control says so on its own screen. The test suite runs the binary as a
+// user against a software TPM: TPM2_KIRA_UNPRIVILEGED=1 skips the check.
+func requireRoot(command string) {
+	switch command {
+	case "version", "-v", "--version", "help", "-h", "--help", "pcrtips":
+		return
+	}
+	if os.Geteuid() == 0 || os.Getenv("TPM2_KIRA_UNPRIVILEGED") != "" {
+		return
+	}
+	if command == "control" {
+		cmd.ControlNeedsRoot()
+	} else {
+		fmt.Fprintf(os.Stderr, "tpm2-kira %s: root is needed - sudo tpm2-kira %s\n", command, strings.Join(os.Args[1:], " "))
+	}
+	os.Exit(1)
+}
+
 func main() {
 	// Set application version in cmd package
 	cmd.AppVersion = Version
@@ -55,6 +76,8 @@ func main() {
 		printHelp(command)
 		return
 	}
+
+	requireRoot(command)
 
 	switch command {
 	case "setup":
@@ -528,7 +551,6 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		timeout := fs.Duration("timeout", 10*time.Minute, "Give up waiting for the phone after this long (0 = wait forever)")
 		adapterWait := fs.Duration("adapter-wait", 30*time.Second, "Wait this long for the adapter to appear")
 		existing := fs.String("existing-key-file", "", "A file with an existing passphrase to authorise luksAddKey (scripts; by default asked)")
-		noConfig := fs.Bool("no-config", false, "Do not set the mode in /etc/tpm2-kira/unlock.conf")
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		fs.Parse(deviceLast(args[1:]))
 		if fs.NArg() != 1 || *mode == "" {
@@ -539,7 +561,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
 		}
 		if err := cmd.LuksEnrol(cmd.LuksEnrolOptions{
-			Device: fs.Arg(0), Mode: *mode, ExistingKeyFile: *existing, NoConfig: *noConfig,
+			Device: fs.Arg(0), Mode: *mode, ExistingKeyFile: *existing,
 			Remote: cmd.FactorEnrolOptions{TPMPath: *tpm, SealIndex: slot, Label: *label, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
 				Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: true, Debug: *debug},
 		}); err != nil {
