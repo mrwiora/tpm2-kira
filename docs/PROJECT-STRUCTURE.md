@@ -54,7 +54,7 @@ Where things are in the repository, and how the tests are run.
 │   ├── pentest1/, pentest2/      # Security review findings and mitigations
 │   └── *.issue                   # Write-ups of specific bugs
 ├── initramfs/               # Everything that goes into, or builds, an initramfs
-│   ├── common/attest.conf          # The Bluetooth adapter and timeouts for the initramfs
+│   ├── common/control.conf          # The one configuration file: unlock mode, radio, YubiKey PIN
 │   ├── systemd/tpm2-kira.service   # Shows the code in systemd-based images
 │   ├── systemd/tpm2-kira-cap.service  # Runs 'cap' when leaving the initrd
 │   ├── systemd/tpm2-kira-attest.service  # Lazy Bluetooth attestation gate

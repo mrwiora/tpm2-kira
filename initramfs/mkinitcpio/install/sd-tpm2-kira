@@ -37,10 +37,24 @@ _report_measure_point() {
     fi
 }
 
-ATTEST_CONF=${TPM2_KIRA_ATTEST_CONF:-/etc/tpm2-kira/attest.conf}
+CONF=${TPM2_KIRA_CONTROL_CONF:-/etc/tpm2-kira/control.conf}
 
 # Bluetooth for remote attestation (PLAN-BLE.md §3.1), whenever a phone is
 # enrolled. Adds exactly what the configured adapter needs on this machine:
+# The configuration file goes into the image without its PIN line: the
+# YubiKey's PIN is for the reseal on the running system, and the image (a
+# unified kernel image on the ESP, say) is not root's alone.
+_add_config() {
+    [[ -r $CONF ]] || return 0
+    if ! tpm2-kira attest config-check "$CONF" >/dev/null 2>&1; then
+        error "tpm2-kira: $CONF is not valid: $(tpm2-kira attest config-check "$CONF" 2>&1 | tail -1)"
+        return 1
+    fi
+    mkdir -p "$BUILDROOT/etc/tpm2-kira"
+    grep -v '^[[:space:]]*TPM2_KIRA_PIN=' "$CONF" > "$BUILDROOT/etc/tpm2-kira/control.conf"
+    chmod 644 "$BUILDROOT/etc/tpm2-kira/control.conf"
+}
+
 # its driver modules (with their dependencies) and the firmware files the
 # kernel loaded for it, as reported by 'tpm2-kira attest initramfs-deps'.
 # Nothing is added without an enrolled phone, and nothing when the adapter
@@ -50,13 +64,6 @@ _add_bluetooth() {
     local adapter deps rc log kind value nfw=0
     local -a modules=()
 
-    # A config the gate cannot load would leave the phone unserved at boot
-    # with nothing but a journal line to say so: refuse it here.
-    if [[ -r $ATTEST_CONF ]] && ! tpm2-kira attest config-check "$ATTEST_CONF" >/dev/null 2>&1; then
-        error "tpm2-kira: $ATTEST_CONF is not valid: $(tpm2-kira attest config-check "$ATTEST_CONF" 2>&1 | tail -1)"
-        return 1
-    fi
-
     local enrolled
     enrolled=$(tpm2-kira attest status --json 2>/dev/null)
     if [[ -z $enrolled || $enrolled == '[]' ]]; then
@@ -64,8 +71,8 @@ _add_bluetooth() {
         return 0
     fi
     adapter=0
-    if [[ -r $ATTEST_CONF ]]; then
-        adapter=$( . "$ATTEST_CONF" && printf '%s' "${TPM2_KIRA_ATTEST_ADAPTER:-0}" )
+    if [[ -r $CONF ]]; then
+        adapter=$( . "$CONF" && printf '%s' "${TPM2_KIRA_ATTEST_ADAPTER:-0}" )
     fi
     adapter=${adapter#hci}
 
@@ -133,7 +140,6 @@ _add_bluetooth() {
 
     mkdir -p "$BUILDROOT/etc/modules-load.d"
     printf '%s\n' "${modules[@]}" > "$BUILDROOT/etc/modules-load.d/tpm2-kira-bluetooth.conf"
-    [[ -r $ATTEST_CONF ]] && add_file "$ATTEST_CONF"
     printf '%s\n' "$signer" > "$BUILDROOT/etc/tpm2-kira/attest-signer.pem"
     add_systemd_unit tpm2-kira-attest.service
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-attest.service \
@@ -163,12 +169,11 @@ _add_unlock() {
     add_systemd_unit tpm2-kira-unlock.socket
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-unlock.socket \
         /usr/lib/systemd/system/tpm2-kira-unlock.socket
-    # How the disk's key is made (unlock.conf: skip, password+salt,
-    # password+remotesalt).
-    if [[ -r /etc/tpm2-kira/unlock.conf ]]; then
-        add_file /etc/tpm2-kira/unlock.conf
+    # How the disk's key is made (TPM2_KIRA_UNLOCK in control.conf: skip,
+    # password+salt, password+remotesalt); the file is added by _add_config.
+    if [[ -r $CONF ]]; then
         local mode
-        mode=$(sed -n 's/^TPM2_KIRA_UNLOCK=//p' /etc/tpm2-kira/unlock.conf | tail -1)
+        mode=$(sed -n 's/^TPM2_KIRA_UNLOCK=//p' "$CONF" | tail -1)
         plain "tpm2-kira: unlock mode ${mode:-skip}"
         if [[ $mode == password+remotesalt ]]; then
             local enrolled
@@ -239,6 +244,8 @@ build() {
 
     _report_measure_point
 
+    _add_config || return 1
+
     _add_unlock
 
     _add_bluetooth || return 1
@@ -266,7 +273,7 @@ The hook will:
   systemd-cryptsetup reads the key from tpm2-kira, which asks at its
   prompt once the code screen is confirmed. Nothing is written.
 - If a phone is enrolled: add the Bluetooth adapter's driver modules and
-  firmware (the adapter from /etc/tpm2-kira/attest.conf, hci0 by default),
+  firmware (the adapter from /etc/tpm2-kira/control.conf, hci0 by default),
   and tpm2-kira-attest.service, which serves attestation requests from the
   phone beside the TOTP display without holding the boot
 

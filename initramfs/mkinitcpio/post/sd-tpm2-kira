@@ -45,8 +45,8 @@ output=$(tpm2-kira reseal --measure-point="$measure_point" 2>&1)
 # SKIPPED means the signing key lives on a YubiKey that is not plugged in, or
 # its PIN was not available. Nothing was written, so the sealed secret is
 # intact; the next boot just shows a PCR mismatch until someone reseals. For
-# unattended signing, /etc/mkinitcpio.conf needs a TPM2_KIRA_PIN='...' line;
-# tpm2-kira reads it from the file itself.
+# unattended signing, /etc/tpm2-kira/control.conf holds TPM2_KIRA_PIN='...'
+# ('tpm2-kira control' stores it); tpm2-kira reads it from the file itself.
 if grep -q "SKIPPED:" <<< "$output"; then
     {
         echo "tpm2-kira: ================================================================"

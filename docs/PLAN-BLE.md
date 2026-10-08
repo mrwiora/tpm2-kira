@@ -25,7 +25,7 @@ Last updated 2026-10-05.
 | 2 — peripheral, framing, encrypted session | `transport/frame/`, Noise XX/IK in `attest/noise.go`, `tpm2-kira attest enrol` with SAS | unit tests, fuzzing, interop with the reference `noiseprotocol` library |
 | 3 — mobile core | `mobile/kiracore` (gomobile verifier), `mobile/kiratest` (simulated machine); apps specified in [mobile/](mobile/) | Go tests through the binding API; gobind generates Java and Objective-C cleanly |
 | 4 — attestation round trip, lazy mode | `tpm2-kira attest gate --mode lazy` on a booted system | swtpm integration test (real AK, EK, quotes, ActivateCredential) |
-| 5 — initramfs (part) | `tpm2-kira attest initramfs-deps` resolves the configured adapter's driver modules (the whole sysfs path) and the firmware the kernel loaded for it, from the kernel log. `/etc/tpm2-kira/attest.conf` (`TPM2_KIRA_ATTEST=off\|lazy`). mkinitcpio: modules, exact firmware, `modules-load.d`, `tpm2-kira-attest.service` (runs beside the TOTP display, never holds the boot, stopped at switch-root). initramfs-tools: same resolution, `init-premount` loads modules and starts the gate in the background, `init-bottom` stops it. The gate waits for the adapter (`TPM2_KIRA_ATTEST_ADAPTER_WAIT`), retries while the kernel finishes controller setup, and uses `/dev/tpmrm0` so it can share the TPM with the TOTP display. Hooks add nothing when attestation is off, no phone is enrolled, the adapter is missing, or the installed binary is too old. | resolver unit tests on a fake sysfs (Intel, Realtek, Broadcom log formats); stubbed-hook tests for both hooks; a real `mkinitcpio` image build on Arch containing exactly 6 modules and 1 firmware file (≈1.1 MB) |
+| 5 — initramfs (part) | `tpm2-kira attest initramfs-deps` resolves the configured adapter's driver modules (the whole sysfs path) and the firmware the kernel loaded for it, from the kernel log. `/etc/tpm2-kira/control.conf` (`TPM2_KIRA_ATTEST=off\|lazy`). mkinitcpio: modules, exact firmware, `modules-load.d`, `tpm2-kira-attest.service` (runs beside the TOTP display, never holds the boot, stopped at switch-root). initramfs-tools: same resolution, `init-premount` loads modules and starts the gate in the background, `init-bottom` stops it. The gate waits for the adapter (`TPM2_KIRA_ATTEST_ADAPTER_WAIT`), retries while the kernel finishes controller setup, and uses `/dev/tpmrm0` so it can share the TPM with the TOTP display. Hooks add nothing when attestation is off, no phone is enrolled, the adapter is missing, or the installed binary is too old. | resolver unit tests on a fake sysfs (Intel, Realtek, Broadcom log formats); stubbed-hook tests for both hooks; a real `mkinitcpio` image build on Arch containing exactly 6 modules and 1 firmware file (≈1.1 MB) |
 
 ### Open
 
@@ -500,11 +500,11 @@ mean never answering, a local software gate of the kind §7.4 already
 calls worthless on a machine whose image is not authenticated. What
 enforces, if anything, is the missing factor of PLAN-FACTORRELEASE.md.
 The `enforced` rows and §7.2's gate unit below stay as the record of the
-design that was not built; `attest.conf` refuses the value.
+design that was not built; `control.conf` refuses the value.
 
 ### 7.1 Modes
 
-`/etc/tpm2-kira/attest.conf`, with its digest bound into the sealed object so
+`/etc/tpm2-kira/control.conf`, with its digest bound into the sealed object so
 it cannot be silently downgraded on a machine that does not measure its
 initramfs ([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.3):
 

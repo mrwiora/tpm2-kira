@@ -15,7 +15,6 @@ import (
 	"io"
 	"math/big"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -39,13 +38,13 @@ type fakeTokens struct {
 
 func (f *fakeTokens) install(t *testing.T) {
 	t.Helper()
-	oldDial, oldPrompt, oldConf := dialTokens, promptPIN, mkinitcpioConfPath
+	oldDial, oldPrompt := dialTokens, promptPIN
 	t.Cleanup(func() {
 		CloseTokenSessions()
-		dialTokens, promptPIN, mkinitcpioConfPath = oldDial, oldPrompt, oldConf
+		dialTokens, promptPIN = oldDial, oldPrompt
 	})
-	// Keep the host's /etc/mkinitcpio.conf out of the tests.
-	mkinitcpioConfPath = filepath.Join(t.TempDir(), "absent-mkinitcpio.conf")
+	// Keep the host's control.conf out of the tests.
+	t.Setenv("TPM2_KIRA_CONTROL_CONF", filepath.Join(t.TempDir(), "absent-control.conf"))
 	dialTokens = func(time.Duration) ([]*tokenConn, func(), error) {
 		f.dials++
 		if f.err != nil {
@@ -518,38 +517,24 @@ func TestPINGuidance(t *testing.T) {
 		t.Errorf("unknown policy: %q", w)
 	}
 
-	conf := filepath.Join(t.TempDir(), "mkinitcpio.conf")
-	old := mkinitcpioConfPath
-	t.Cleanup(func() { mkinitcpioConfPath = old })
-	mkinitcpioConfPath = conf
+	conf := filepath.Join(t.TempDir(), "control.conf")
+	t.Setenv("TPM2_KIRA_CONTROL_CONF", conf)
 
-	// No mkinitcpio: the terminal or the environment.
+	// No PIN stored: control stores it; the terminal or the environment meanwhile.
 	var buf bytes.Buffer
 	printPINInstructions(&buf, tokens[0], s9a)
-	if !strings.Contains(buf.String(), "read -rs TPM2_KIRA_PIN && export TPM2_KIRA_PIN") ||
-		strings.Contains(buf.String(), "mkinitcpio") {
-		t.Errorf("without mkinitcpio:\n%s", buf.String())
-	}
-
-	// mkinitcpio without the PIN: the line to add.
-	os.WriteFile(conf, []byte("HOOKS=(base)\n"), 0644)
-	buf.Reset()
-	printPINInstructions(&buf, tokens[0], s9a)
 	t.Logf("instructions:\n%s", buf.String())
-	for _, want := range []string{"\n    TPM2_KIRA_PIN='<your PIN>'\n", "chmod 600 " + conf, "SKIPPED"} {
+	for _, want := range []string{"tpm2-kira control", "TPM2_KIRA_PIN='<your PIN>' in " + conf, "read -rs TPM2_KIRA_PIN && export TPM2_KIRA_PIN", "SKIPPED"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("instructions lack %q", want)
 		}
 	}
-	if strings.Contains(buf.String(), "export") || strings.Contains(buf.String(), "read -rs") {
-		t.Errorf("mkinitcpio system told to export in the shell:\n%s", buf.String())
-	}
 
-	// mkinitcpio already has it: nothing to do, apart from the file mode.
+	// Stored: nothing to do, apart from the file mode.
 	os.WriteFile(conf, []byte("TPM2_KIRA_PIN='123456'\n"), 0644)
 	buf.Reset()
 	printPINInstructions(&buf, tokens[0], s9a)
-	if !strings.Contains(buf.String(), "already sets TPM2_KIRA_PIN") || !strings.Contains(buf.String(), "chmod 600") ||
+	if !strings.Contains(buf.String(), "stores the PIN") || !strings.Contains(buf.String(), "chmod 600") ||
 		strings.Contains(buf.String(), "<your PIN>") {
 		t.Errorf("PIN already configured:\n%s", buf.String())
 	}
@@ -558,12 +543,6 @@ func TestPINGuidance(t *testing.T) {
 	printPINInstructions(&buf, tokens[0], s9a)
 	if strings.Contains(buf.String(), "chmod") {
 		t.Errorf("mode 600 still told to chmod:\n%s", buf.String())
-	}
-
-	buf.Reset()
-	printPINInstructions(&buf, tokens[0], s9d)
-	if strings.Contains(buf.String(), "export") {
-		t.Errorf("PIN instructions for a key without PIN:\n%s", buf.String())
 	}
 }
 
@@ -620,157 +599,14 @@ func TestVerifyKeyPairMatchThroughToken(t *testing.T) {
 	}
 }
 
-func TestCheckMkinitcpioPIN(t *testing.T) {
-	dir := t.TempDir()
-	cases := map[string]mkinitcpioPIN{
-		"HOOKS=(base)\n":                                     mkinitcpioPINMissing,
-		"#export TPM2_KIRA_PIN='1'\n":                        mkinitcpioPINMissing,
-		"TPM2_KIRA_PIN=\"123456\"\n":                         mkinitcpioPINAvailable,
-		"export TPM2_KIRA_PIN='123456'\n":                    mkinitcpioPINAvailable,
-		"  export TPM2_KIRA_PIN=123456\n":                    mkinitcpioPINAvailable,
-		"TPM2_KIRA_PIN=123456\nexport TPM2_KIRA_PIN\n":       mkinitcpioPINAvailable,
-		"TPM2_KIRA_PIN=123456\nexport FOO TPM2_KIRA_PIN\n":   mkinitcpioPINAvailable,
-		"export TPM2_KIRA_PIN_OLD=1\nTPM2_KIRA_PIN=123456\n": mkinitcpioPINAvailable,
-	}
-	for content, want := range cases {
-		path := filepath.Join(dir, "mkinitcpio.conf")
-		os.WriteFile(path, []byte(content), 0600)
-		if got := checkMkinitcpioPIN(path); got != want {
-			t.Errorf("%q: got %d, want %d", content, got, want)
-		}
-	}
-	if got := checkMkinitcpioPIN(filepath.Join(dir, "absent")); got != mkinitcpioNotUsed {
-		t.Errorf("absent file: %d", got)
-	}
-}
-
-// After the PIN is accepted for a manual seal, a missing or unexported PIN in
-// mkinitcpio.conf is reported once; an exported one, or no mkinitcpio, is not.
-func TestWarnIfNoUnattendedPIN(t *testing.T) {
-	card := pivtest.New(1)
-	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyAlways, piv.TouchPolicyNever, false)
-	fake := &fakeTokens{cards: []*pivtest.Card{card}}
-	fake.install(t)
-	t.Setenv(PINEnvVar, "123456")
-	signer, _ := LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
-
-	conf := filepath.Join(t.TempDir(), "mkinitcpio.conf")
-	for content, wantWarning := range map[string]string{
-		"HOOKS=(base)\n":                       "has no TPM2_KIRA_PIN line",
-		"TPM2_KIRA_PIN=\"123456\"\n":           "",
-		"TPM2_KIRA_PIN=\"$(cat /root/pin)\"\n": "needs the shell",
-		"export TPM2_KIRA_PIN='123456'\n":      "",
-	} {
-		os.WriteFile(conf, []byte(content), 0600)
-		mkinitcpioConfPath = conf
-		var buf bytes.Buffer
-		warnIfNoUnattendedPIN(&buf)
-		if wantWarning == "" && buf.Len() != 0 {
-			t.Errorf("%q: unexpected warning:\n%s", content, buf.String())
-		}
-		if wantWarning != "" && (!strings.Contains(buf.String(), wantWarning) || !strings.Contains(buf.String(), "SKIPPED")) {
-			t.Errorf("%q: warning lacks %q:\n%s", content, wantWarning, buf.String())
-		}
-		if wantWarning == "needs the shell" {
-			t.Logf("warning:\n%s", buf.String())
-		}
-	}
-
-	// Through a real signature: the warning is printed once per process,
-	// even with PIN policy 'always' re-verifying before every signature.
-	os.WriteFile(conf, []byte("HOOKS=(base)\n"), 0600)
-	r, w, _ := os.Pipe()
-	oldStderr := os.Stderr
-	os.Stderr = w
-	digest := sha256.Sum256(nil)
-	for i := 0; i < 3; i++ {
-		if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
-			os.Stderr = oldStderr
-			t.Fatal(err)
-		}
-	}
-	w.Close()
-	os.Stderr = oldStderr
-	out, _ := io.ReadAll(r)
-	if n := strings.Count(string(out), "WARNING:"); n != 1 {
-		t.Errorf("warning printed %d times:\n%s", n, out)
-	}
-}
-
-func TestReadMkinitcpioPIN(t *testing.T) {
-	dir := t.TempDir()
-	type want struct {
-		state mkinitcpioPIN
-		pin   string
-	}
-	cases := map[string]want{
-		"HOOKS=(base)\n":                                             {mkinitcpioPINMissing, ""},
-		"#export TPM2_KIRA_PIN='1'\n":                                {mkinitcpioPINMissing, ""},
-		"TPM2_KIRA_PIN=\"123456\"\n":                                 {mkinitcpioPINAvailable, "123456"},
-		"export TPM2_KIRA_PIN='123456'\n":                            {mkinitcpioPINAvailable, "123456"},
-		"  export TPM2_KIRA_PIN=123456   # the PIN\n":                {mkinitcpioPINAvailable, "123456"},
-		"TPM2_KIRA_PIN=123456\nexport TPM2_KIRA_PIN\n":               {mkinitcpioPINAvailable, "123456"},
-		"TPM2_KIRA_PIN=123456\nexport FOO TPM2_KIRA_PIN\n":           {mkinitcpioPINAvailable, "123456"},
-		"export TPM2_KIRA_PIN_OLD=1\nTPM2_KIRA_PIN=123456\n":         {mkinitcpioPINAvailable, "123456"},
-		"export TPM2_KIRA_PIN='12 4\"56'\n":                          {mkinitcpioPINAvailable, "12 4\"56"},
-		"export TPM2_KIRA_PIN=\"a\\\"b'c\"\n":                        {mkinitcpioPINAvailable, "a\"b'c"},
-		"export TPM2_KIRA_PIN=12\\ 34\n":                             {mkinitcpioPINAvailable, "12 34"},
-		"export TPM2_KIRA_PIN=1'2 3'\"4\"\n":                         {mkinitcpioPINAvailable, "12 34"},
-		"export TPM2_KIRA_PIN=111111\nexport TPM2_KIRA_PIN=222222\n": {mkinitcpioPINAvailable, "222222"},
-		"export TPM2_KIRA_PIN=\"$(cat /root/pin)\"\n":                {mkinitcpioPINAvailable, ""},
-		"export TPM2_KIRA_PIN=$PIN\n":                                {mkinitcpioPINAvailable, ""},
-		"export TPM2_KIRA_PIN=`cat pin`\n":                           {mkinitcpioPINAvailable, ""},
-		"export TPM2_KIRA_PIN='$literal'\n":                          {mkinitcpioPINAvailable, "$literal"},
-		"echo TPM2_KIRA_PIN=123456\n":                                {mkinitcpioPINMissing, ""},
-	}
-	for content, w := range cases {
-		path := filepath.Join(dir, "mkinitcpio.conf")
-		os.WriteFile(path, []byte(content), 0600)
-		info := readMkinitcpioPIN(path)
-		if info.State != w.state || info.PIN != w.pin {
-			t.Errorf("%q: got state %d PIN %q, want %d %q", content, info.State, info.PIN, w.state, w.pin)
-		}
-	}
-	if got := readMkinitcpioPIN(filepath.Join(dir, "absent")); got.State != mkinitcpioNotUsed {
-		t.Errorf("absent file: %+v", got)
-	}
-}
-
-// The values above must be what bash itself assigns.
-func TestReadMkinitcpioPINMatchesBash(t *testing.T) {
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skip("no bash")
-	}
-	dir := t.TempDir()
-	for _, line := range []string{
-		`export TPM2_KIRA_PIN='12 4"56'`,
-		`export TPM2_KIRA_PIN="a\"b'c"`,
-		`export TPM2_KIRA_PIN=12\ 34`,
-		`export TPM2_KIRA_PIN=1'2 3'"4"`,
-		`export TPM2_KIRA_PIN='$literal'`,
-		`TPM2_KIRA_PIN="1\$2"`,
-	} {
-		path := filepath.Join(dir, "mkinitcpio.conf")
-		os.WriteFile(path, []byte(line+"\n"), 0600)
-		out, err := exec.Command(bash, "-c", `. "$1"; printf %s "$TPM2_KIRA_PIN"`, "-", path).Output()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := readMkinitcpioPIN(path).PIN; got != string(out) {
-			t.Errorf("%s: parsed %q, bash assigns %q", line, got, out)
-		}
-	}
-}
-
-func TestPINFromMkinitcpioConf(t *testing.T) {
+func TestPINFromControlConf(t *testing.T) {
 	card := pivtest.New(1)
 	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	fake := &fakeTokens{cards: []*pivtest.Card{card}}
 	fake.install(t)
 	os.Unsetenv(PINEnvVar)
-	conf := filepath.Join(t.TempDir(), "mkinitcpio.conf")
-	mkinitcpioConfPath = conf
+	conf := filepath.Join(t.TempDir(), "control.conf")
+	t.Setenv("TPM2_KIRA_CONTROL_CONF", conf)
 	signer, _ := LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	digest := sha256.Sum256(nil)
 
@@ -785,8 +621,8 @@ func TestPINFromMkinitcpioConf(t *testing.T) {
 		return string(out)
 	}
 
-	// PIN in mkinitcpio.conf: used without asking, and no warning.
-	os.WriteFile(conf, []byte("HOOKS=(base)\nexport TPM2_KIRA_PIN='123456'\n"), 0600)
+	// PIN in control.conf: used without asking, and no warning.
+	os.WriteFile(conf, []byte("TPM2_KIRA_UNLOCK=skip\nTPM2_KIRA_PIN='123456'\n"), 0600)
 	out := capture(func() {
 		if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
 			t.Fatal(err)
@@ -798,7 +634,7 @@ func TestPINFromMkinitcpioConf(t *testing.T) {
 	CloseTokenSessions()
 
 	// The environment wins over the file.
-	os.WriteFile(conf, []byte("export TPM2_KIRA_PIN='999999'\n"), 0600)
+	os.WriteFile(conf, []byte("TPM2_KIRA_PIN='999999'\n"), 0600)
 	t.Setenv(PINEnvVar, "123456")
 	if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
 		t.Fatalf("environment PIN not preferred: %v", err)
@@ -816,7 +652,7 @@ func TestPINFromMkinitcpioConf(t *testing.T) {
 
 	// A world-readable file with the PIN in it: refused, no attempt spent,
 	// and no fallback to the terminal.
-	os.WriteFile(conf, []byte("export TPM2_KIRA_PIN='123456'\n"), 0600)
+	os.WriteFile(conf, []byte("TPM2_KIRA_PIN='123456'\n"), 0600)
 	os.Chmod(conf, 0644)
 	prompts := fake.prompts
 	_, err = signer.Sign(rand.Reader, digest[:], crypto.SHA256)
@@ -829,14 +665,14 @@ func TestPINFromMkinitcpioConf(t *testing.T) {
 	CloseTokenSessions()
 
 	// No PIN in the file: asked on the terminal, then warned once.
-	os.WriteFile(conf, []byte("HOOKS=(base)\n"), 0600)
+	os.WriteFile(conf, []byte("TPM2_KIRA_UNLOCK=skip\n"), 0600)
 	fake.typed = "123456"
 	out = capture(func() {
 		if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
 			t.Fatal(err)
 		}
 	})
-	if fake.prompts != 1 || strings.Count(out, "has no TPM2_KIRA_PIN line") != 1 {
+	if fake.prompts != 1 || strings.Count(out, "holds no TPM2_KIRA_PIN") != 1 {
 		t.Errorf("prompts %d, output:\n%s", fake.prompts, out)
 	}
 }

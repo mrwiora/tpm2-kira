@@ -48,7 +48,7 @@ func TestLuksEnrolOnAnImage(t *testing.T) {
 		return []byte(a), nil
 	}
 	defer func() { terminalAsk = oldAsk }()
-	conf := filepath.Join(dir, "unlock.conf")
+	conf := filepath.Join(dir, "control.conf")
 	os.WriteFile(conf, []byte("# comment\nTPM2_KIRA_UNLOCK=skip\n"), 0o644)
 
 	if err := LuksEnrol(LuksEnrolOptions{Device: loop, Mode: LuksModePasswordSalt, ExistingKeyFile: existing}); err != nil {
@@ -98,18 +98,18 @@ func TestLuksEnrolOnAnImage(t *testing.T) {
 		t.Fatalf("a keyslot that is not ours: %v", err)
 	}
 
-	// The mode in unlock.conf: replaced, or added, or the file made.
+	// The mode in control.conf: replaced, or added, or the file made.
 	if err := setUnlockMode(conf, LuksModePasswordSalt); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(conf); string(b) != "# comment\nTPM2_KIRA_UNLOCK=password+salt\n" {
-		t.Fatalf("unlock.conf: %q", b)
+		t.Fatalf("control.conf: %q", b)
 	}
 	fresh := filepath.Join(dir, "fresh.conf")
 	if err := setUnlockMode(fresh, LuksModePasswordRemoteSalt); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(fresh); string(b) != "TPM2_KIRA_UNLOCK=password+remotesalt\n" {
-		t.Fatalf("fresh unlock.conf: %q", b)
+		t.Fatalf("fresh control.conf: %q", b)
 	}
 }

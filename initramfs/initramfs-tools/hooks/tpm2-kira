@@ -34,10 +34,20 @@ copy_exec "$kira" /usr/bin/tpm2-kira
 if [ -r /etc/tpm2-kira/initramfs.conf ]; then
     copy_file config /etc/tpm2-kira/initramfs.conf /etc/tpm2-kira/initramfs.conf
 fi
-# How the disk's key is made (unlock.conf: skip, password+salt, password+remotesalt).
-if [ -r /etc/tpm2-kira/unlock.conf ]; then
-    copy_file config /etc/tpm2-kira/unlock.conf /etc/tpm2-kira/unlock.conf
-    if grep -q '^TPM2_KIRA_UNLOCK=password+remotesalt' /etc/tpm2-kira/unlock.conf; then
+# The configuration file: how the disk's key is made (TPM2_KIRA_UNLOCK: skip,
+# password+salt, password+remotesalt), the radio (TPM2_KIRA_ATTEST_*). It
+# goes into the image without its PIN line: the YubiKey's PIN is for the
+# reseal on the running system, and the image is not root's alone.
+conf=/etc/tpm2-kira/control.conf
+if [ -r "$conf" ] && ! "$kira" attest config-check "$conf" >/dev/null 2>&1; then
+    echo "tpm2-kira: $conf is not valid: $("$kira" attest config-check "$conf" 2>&1 | tail -1)" >&2
+    exit 1
+fi
+if [ -r "$conf" ]; then
+    mkdir -p "$DESTDIR/etc/tpm2-kira"
+    grep -v '^[[:space:]]*TPM2_KIRA_PIN=' "$conf" > "$DESTDIR/etc/tpm2-kira/control.conf"
+    chmod 644 "$DESTDIR/etc/tpm2-kira/control.conf"
+    if grep -q '^TPM2_KIRA_UNLOCK=password+remotesalt' "$conf"; then
         enrolled=$("$kira" attest status --json 2>/dev/null)
         if [ -z "$enrolled" ] || [ "$enrolled" = "[]" ]; then
             echo "tpm2-kira: unlock mode password+remotesalt, but no phone is enrolled: the remote salt is only released by an attestation; every boot will ask for a typed salt instead" >&2
@@ -65,13 +75,8 @@ manual_add_modules tpm_crb
 # machine; nothing else is copied. Without an enrolled phone, or without the
 # adapter, the image shows the code and serves the disk's key and asks no
 # phone.
-attest_conf=/etc/tpm2-kira/attest.conf
-if [ -r "$attest_conf" ] && ! "$kira" attest config-check "$attest_conf" >/dev/null 2>&1; then
-    echo "tpm2-kira: $attest_conf is not valid: $("$kira" attest config-check "$attest_conf" 2>&1 | tail -1)" >&2
-    exit 1
-fi
 TPM2_KIRA_ATTEST_ADAPTER=0
-[ -r "$attest_conf" ] && . "$attest_conf"
+[ -r "$conf" ] && . "$conf"
 adapter=${TPM2_KIRA_ATTEST_ADAPTER#hci}
 enrolled=$("$kira" attest status --json 2>/dev/null)
 if [ -z "$enrolled" ] || [ "$enrolled" = "[]" ]; then
@@ -122,7 +127,6 @@ else
         done <<DEPS
 $deps
 DEPS
-        [ -r "$attest_conf" ] && copy_file config "$attest_conf" /etc/tpm2-kira/attest.conf
         mkdir -p "$DESTDIR/etc/tpm2-kira"
         printf '%s\n' "$signer" > "$DESTDIR/etc/tpm2-kira/attest-signer.pem"
         echo "tpm2-kira: Bluetooth attestation via hci$adapter: $nmod modules, $nfw firmware files"

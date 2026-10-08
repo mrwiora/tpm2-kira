@@ -512,7 +512,7 @@ trusts.)
 ### 10.3 Binding the configuration
 
 Attestation mode (`off` / `lazy`), the timeout and the policy id
-live in `/etc/tpm2-kira/attest.conf` inside the initramfs. On a system that
+live in `/etc/tpm2-kira/control.conf` inside the initramfs. On a system that
 seals PCR 11 (UKI) or PCR 9 (Debian/GRUB), editing that file changes a measured
 value and the change is caught. On a system that seals neither — `--pcrs "0,7"`
 is a documented and reasonable selection — the file is *not* measured, and
@@ -533,7 +533,7 @@ SealedPayload v9 := {
     totp_secret     []byte      // as today
     device_id       [16]byte    // zero when not enrolled
     anchor_digest   [32]byte    // SHA-256 of the pinned verifier public key, zero when none
-    config_digest   [32]byte    // SHA-256 of the canonicalised attest.conf, zero when none
+    config_digest   [32]byte    // SHA-256 of the canonicalised control.conf, zero when none
 }
 ```
 

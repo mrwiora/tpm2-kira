@@ -100,7 +100,7 @@ func main() {
 		fs := flag.NewFlagSet("status", flag.ExitOnError)
 		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
 		privKey := fs.String("privkey", "", "Signing key the blobs are checked with (default: "+cmd.DefaultPrivateKeyPath+")")
-		conf := fs.String("unlock-conf", cmd.DefaultUnlockConfigPath, "The unlock configuration")
+		conf := fs.String("unlock-conf", cmd.DefaultControlConfigPath, "The unlock configuration")
 		jsonOut := fs.Bool("json", false, "Machine-readable output")
 		dbg := fs.Bool("debug", *debug, "Enable debug output")
 		fs.Parse(commandArgs)
@@ -730,7 +730,7 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 			failAttest(cmd.ExitInternal, err)
 		}
 	case "gate":
-		configPath := fs.String("config", cmd.DefaultAttestConfigPath, "Attestation config (adapter, timeouts)")
+		configPath := fs.String("config", cmd.DefaultControlConfigPath, "Attestation config (adapter, timeouts)")
 		adapter := fs.Int("adapter", -1, "Bluetooth adapter index (hciN); default from the config, else 0")
 		timeout := fs.Duration("timeout", -1, "Give up after this long (0 = wait forever); default from the config")
 		adapterWait := fs.Duration("adapter-wait", -1, "Wait this long for the adapter to appear; default from the config, else 30s")
@@ -762,7 +762,7 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 		fs.Parse(args)
 		path := fs.Arg(0)
 		if path == "" {
-			path = cmd.DefaultAttestConfigPath
+			path = cmd.DefaultControlConfigPath
 		}
 		if _, err := cmd.LoadAttestConfig(path); err != nil {
 			failAttest(cmd.ExitUsage, err)
@@ -848,7 +848,7 @@ machine's screen (docs/PLAN-REMOTEATTESTATION.md).
                   --verify-phone warn|require|off  the phone's key in genuine secure hardware
                                                    (Android key attestation, Google roots)?
   attest gate     Serve attestation requests until a phone returns a receipt;
-                  the boot is never held. Defaults from /etc/tpm2-kira/attest.conf.
+                  the boot is never held. Defaults from /etc/tpm2-kira/control.conf.
                   --adapter N --timeout DUR --adapter-wait DUR
                   --coordinator SOCKET  be the radio worker only: no TPM in
                     this process; quotes and the reading of the receipt come
@@ -871,7 +871,7 @@ machine's screen (docs/PLAN-REMOTEATTESTATION.md).
                   slot without it: nvram delete --nvram N
   attest initramfs-deps  Modules and firmware the adapter needs (used by the
                   initramfs hooks)
-  attest config-check [PATH]  Say whether attest.conf loads (exit 2 and the
+  attest config-check [PATH]  Say whether control.conf loads (exit 2 and the
                   reason if not; used by the initramfs hooks)
 
   EXIT STATUS: unlike every other command, 'attest gate', 'attest verify',

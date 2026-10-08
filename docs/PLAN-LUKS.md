@@ -78,7 +78,7 @@ tpm2-kira luks remove <device> --keyslot N
   remote salt's round trip with the verifier), derive, `cryptsetup
   luksAddKey` (which asks an existing passphrase to authorise - the
   recovery keyslot `enrol` insists on), import the token, say "rebuild the
-  initramfs" - and name the mode `unlock.conf` needs without setting it:
+  initramfs" - and name the mode `control.conf` needs without setting it:
   the commands touch no configuration file, `control` sets the mode. The
   derived key goes to `cryptsetup` through a pipe, never a file.
 - `remove` is `luksKillSlot` (a remaining passphrase authorises it) plus
@@ -92,11 +92,11 @@ tpm2-kira luks remove <device> --keyslot N
 tpm2-kira status
   slot 0   TOTP sealed to 0e,2e,7e,11u (generation 12); release key present
            verifiers: phone "Pixel" (BLE, remote salt kept 2026-10-07)
-  unlock   mode password+remotesalt (/etc/tpm2-kira/unlock.conf)
+  unlock   mode password+remotesalt (/etc/tpm2-kira/control.conf)
   /dev/vda2  keyslot 0 not tpm2-kira's; keyslot 2 password+remotesalt (slot 0, label luks); keyslot 1 password+salt
 ```
 
-`attest status`, `remote-salt status`, `luks status` and `unlock.conf` in
+`attest status`, `remote-salt status`, `luks status` and `control.conf` in
 one place, which is what a person wants to know before a reboot - and the
 notes under it: what does not fit together (a mode without a keyslot for
 it, a marked keyslot with the mode at `skip`, `password+remotesalt`

@@ -40,12 +40,16 @@ It may not carry what came before.
   factor) and informs; it never withholds systemd's own prompt, which is
   the fallback after a wrong or missing answer (docs/UNLOCK-DISK.md §4).
   Do not build a mode that holds the boot on the phone's verdict.
-- **The commands touch no configuration file; `control` does.** `setup`,
-  `seal`, `luks enrol` and the rest do their one thing and say what a
-  configuration file would need (the mode in `unlock.conf`, the kernel
-  command line); only `tpm2-kira control` sets the unlock mode, and it
-  checks the prerequisites of a working setup. The kernel command line and
-  crypttab are advised, never edited.
+- **One configuration file, `/etc/tpm2-kira/control.conf`, and only
+  `control` writes it.** It holds the unlock mode, the radio settings and
+  the YubiKey's PIN (the hooks copy it into the initramfs without the PIN
+  line). `setup`, `seal`, `luks enrol` and the rest do their one thing and
+  say what the file would need; `tpm2-kira control` sets it and checks the
+  prerequisites of a working setup. Every other file on the system - the
+  kernel command line, crypttab, `/etc/mkinitcpio.conf` - is advised by
+  `control`, never edited. What weakens the protections (SHA-1, Secure Boot
+  off or in Setup Mode, an unvouched endorsement key, a selection without
+  the kernel) is shown on `control`'s overview under Risks.
 - **Root for everything but the help.** Every command refuses to run as a
   user (`main.go` `requireRoot`); `control` says so on its own screen. The
   test suite's exception is `TPM2_KIRA_UNPRIVILEGED=1` for the binary

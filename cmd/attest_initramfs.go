@@ -1,15 +1,11 @@
 package cmd
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
-	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -27,104 +23,8 @@ import (
 // appear nowhere in modinfo), and copying every declared file would put
 // megabytes of firmware for other chips into the image.
 
-const (
-	// DefaultAttestConfigPath holds the radio settings for the initramfs.
-	DefaultAttestConfigPath = "/etc/tpm2-kira/attest.conf"
-	// DefaultFirmwareDir is where the kernel loads firmware from.
-	DefaultFirmwareDir = "/usr/lib/firmware"
-)
-
-// AttestConfig is /etc/tpm2-kira/attest.conf: shell-style KEY=VALUE lines,
-// so the Debian init scripts can source the same file.
-type AttestConfig struct {
-	Adapter     int           // TPM2_KIRA_ATTEST_ADAPTER
-	Timeout     time.Duration // TPM2_KIRA_ATTEST_TIMEOUT: 0 waits until the initrd ends
-	AdapterWait time.Duration // TPM2_KIRA_ATTEST_ADAPTER_WAIT: how long to wait for hciN to appear
-	Debug       bool          // TPM2_KIRA_ATTEST_DEBUG: the gate logs every step it takes
-}
-
-// DefaultAttestConfig is used when the file is missing.
-func DefaultAttestConfig() AttestConfig {
-	return AttestConfig{AdapterWait: 30 * time.Second}
-}
-
-// LoadAttestConfig reads the config file; a missing file yields the defaults.
-func LoadAttestConfig(path string) (AttestConfig, error) {
-	cfg := DefaultAttestConfig()
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return cfg, nil
-	}
-	if err != nil {
-		return cfg, err
-	}
-	return ParseAttestConfig(data)
-}
-
-// ParseAttestConfig parses attest.conf content.
-func ParseAttestConfig(data []byte) (AttestConfig, error) {
-	cfg := DefaultAttestConfig()
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	for n := 1; sc.Scan(); n++ {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		key, val, ok := strings.Cut(line, "=")
-		if !ok {
-			return cfg, fmt.Errorf("attest.conf line %d: expected KEY=VALUE", n)
-		}
-		key = strings.TrimSpace(key)
-		val = strings.Trim(strings.TrimSpace(val), `"'`)
-		switch key {
-		case "TPM2_KIRA_ATTEST":
-			return cfg, fmt.Errorf("attest.conf line %d: there is no attestation mode to set; the phone is served whenever one is enrolled. Remove the line", n)
-		case "TPM2_KIRA_ATTEST_ADAPTER":
-			v, err := strconv.Atoi(strings.TrimPrefix(val, "hci"))
-			if err != nil || v < 0 || v > 255 {
-				return cfg, fmt.Errorf("attest.conf line %d: invalid adapter %q", n, val)
-			}
-			cfg.Adapter = v
-		case "TPM2_KIRA_ATTEST_TIMEOUT", "TPM2_KIRA_ATTEST_ADAPTER_WAIT":
-			d, err := parseSecondsOrDuration(val)
-			if err != nil {
-				return cfg, fmt.Errorf("attest.conf line %d: %v", n, err)
-			}
-			if key == "TPM2_KIRA_ATTEST_TIMEOUT" {
-				cfg.Timeout = d
-			} else {
-				cfg.AdapterWait = d
-			}
-		case "TPM2_KIRA_ATTEST_DEBUG":
-			switch strings.ToLower(val) {
-			case "1", "yes", "true", "on":
-				cfg.Debug = true
-			case "", "0", "no", "false", "off":
-				cfg.Debug = false
-			default:
-				return cfg, fmt.Errorf("attest.conf line %d: TPM2_KIRA_ATTEST_DEBUG must be 1 or 0, not %q", n, val)
-			}
-		default:
-			return cfg, fmt.Errorf("attest.conf line %d: unknown key %q", n, key)
-		}
-	}
-	return cfg, sc.Err()
-}
-
-// parseSecondsOrDuration accepts "30" (seconds) or a Go duration ("2m").
-func parseSecondsOrDuration(s string) (time.Duration, error) {
-	if s == "" {
-		return 0, nil
-	}
-	if n, err := strconv.Atoi(s); err == nil && n >= 0 {
-		return time.Duration(n) * time.Second, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil || d < 0 {
-		return 0, fmt.Errorf("invalid duration %q", s)
-	}
-	return d, nil
-}
+// DefaultFirmwareDir is where the kernel loads firmware from.
+const DefaultFirmwareDir = "/usr/lib/firmware"
 
 // BTDeps is what an initramfs needs for one adapter.
 type BTDeps struct {

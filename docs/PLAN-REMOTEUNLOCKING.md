@@ -399,8 +399,8 @@ tpm2-kira unlock unenrol                        # remove the device; does not to
 tpm2-kira attest predict --upload               # pre-register the next boot's PCR values (§6.3)
 ```
 
-`/etc/tpm2-kira/unlock.conf` holds the server address, the timeout and the
-fallback behaviour; like `attest.conf` its digest is bound into the sealed
+`/etc/tpm2-kira/control.conf` holds the server address, the timeout and the
+fallback behaviour; like `control.conf` its digest is bound into the sealed
 object ([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.3), so a
 machine that does not measure its initramfs still detects an edited server
 address.

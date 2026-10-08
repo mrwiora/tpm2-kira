@@ -23,7 +23,7 @@ import (
 // LuksTokenType is the token's type in the header.
 const LuksTokenType = "tpm2-kira"
 
-// The modes a keyslot's key is made in, as the token and unlock.conf
+// The modes a keyslot's key is made in, as the token and control.conf
 // name them.
 const (
 	LuksModePasswordSalt       = UnlockPasswordSalt       // "password+salt"
@@ -336,7 +336,7 @@ var terminalAsk = terminalPassword
 // the phone), the derivation, 'cryptsetup luksAddKey' with the key on its
 // stdin and an existing passphrase, asked at the prompt, on a pipe - the
 // recovery keyslot the device must have - the token for the new keyslot,
-// and the mode in unlock.conf. The key is never on disk.
+// and the mode in control.conf. The key is never on disk.
 func LuksEnrol(o LuksEnrolOptions) error {
 	if o.Mode != LuksModePasswordSalt && o.Mode != LuksModePasswordRemoteSalt {
 		return fmt.Errorf("--mode must be %s or %s", LuksModePasswordSalt, LuksModePasswordRemoteSalt)
@@ -440,10 +440,10 @@ func LuksEnrol(o LuksEnrolOptions) error {
 		return fmt.Errorf("the keyslot %d is added, but its token is not: %w (tpm2-kira luks mark %s --keyslot %d --mode %s)", newSlot, err, o.Device, newSlot, o.Mode)
 	}
 	fmt.Printf("%s keyslot %d added: %s\n", o.Device, newSlot, describeKeyslot(KeyslotStatus{Keyslot: newSlot, Token: &tok}))
-	// The commands touch no configuration file: the mode in unlock.conf is
+	// The commands touch no configuration file: the mode in control.conf is
 	// control's (or the person's) to set.
-	if cfg, _ := LoadUnlockConfig(DefaultUnlockConfigPath); cfg.Mode != o.Mode {
-		fmt.Printf("The boot uses this keyslot with TPM2_KIRA_UNLOCK=%s in %s (now %s):\n", o.Mode, DefaultUnlockConfigPath, cfg.Mode)
+	if cfg, _ := LoadUnlockConfig(DefaultControlConfigPath); cfg.Mode != o.Mode {
+		fmt.Printf("The boot uses this keyslot with TPM2_KIRA_UNLOCK=%s in %s (now %s):\n", o.Mode, DefaultControlConfigPath, cfg.Mode)
 		fmt.Println("tpm2-kira control sets it, or set it by hand.")
 	}
 	if advice := RouteAdvice(o.Device); advice != "" {
@@ -513,31 +513,6 @@ var cryptsetupAuth = func(key, existing []byte, args ...string) ([]byte, error) 
 	return nil, nil
 }
 
-// setUnlockMode writes TPM2_KIRA_UNLOCK=mode into unlock.conf, replacing
-// the line or adding it; a missing file is created with the line. Only
-// control calls it: the commands touch no configuration file.
-func setUnlockMode(path, mode string) error {
-	data, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	done := false
-	for i, l := range lines {
-		if strings.HasPrefix(strings.TrimSpace(l), "TPM2_KIRA_UNLOCK=") {
-			lines[i] = "TPM2_KIRA_UNLOCK=" + mode
-			done = true
-		}
-	}
-	if !done {
-		if len(data) == 0 {
-			lines = nil
-		}
-		lines = append(lines, "TPM2_KIRA_UNLOCK="+mode)
-	}
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
-}
-
 // LuksRemoveOptions is what luks remove takes.
 type LuksRemoveOptions struct {
 	Device  string
@@ -592,7 +567,7 @@ func LuksRemove(o LuksRemoveOptions) error {
 	}
 	if left == 0 {
 		fmt.Printf("No keyslot of %s is tpm2-kira's now. If no other device has one, set\n", o.Device)
-		fmt.Printf("TPM2_KIRA_UNLOCK=skip in %s and rebuild the initramfs.\n", DefaultUnlockConfigPath)
+		fmt.Printf("TPM2_KIRA_UNLOCK=skip in %s and rebuild the initramfs.\n", DefaultControlConfigPath)
 	}
 	return nil
 }

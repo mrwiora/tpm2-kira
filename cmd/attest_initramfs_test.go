@@ -130,7 +130,7 @@ func TestResolveBTDepsRejectsPathTraversal(t *testing.T) {
 }
 
 func TestParseAttestConfig(t *testing.T) {
-	cfg, err := ParseAttestConfig([]byte(`
+	cfg, err := parseAttest([]byte(`
 # comment
 TPM2_KIRA_ATTEST_ADAPTER="hci1"
 TPM2_KIRA_ATTEST_TIMEOUT=90
@@ -147,22 +147,28 @@ TPM2_KIRA_ATTEST_ADAPTER_WAIT=1m
 		t.Fatal("debug on by default")
 	}
 	for val, want := range map[string]bool{"1": true, "yes": true, "0": false, "off": false} {
-		c, err := ParseAttestConfig([]byte("TPM2_KIRA_ATTEST_DEBUG=" + val + "\n"))
+		c, err := parseAttest([]byte("TPM2_KIRA_ATTEST_DEBUG=" + val + "\n"))
 		if err != nil || c.Debug != want {
 			t.Fatalf("TPM2_KIRA_ATTEST_DEBUG=%s: %v %v", val, c.Debug, err)
 		}
 	}
-	if _, err := ParseAttestConfig([]byte("TPM2_KIRA_ATTEST_DEBUG=maybe\n")); err == nil {
+	if _, err := parseAttest([]byte("TPM2_KIRA_ATTEST_DEBUG=maybe\n")); err == nil {
 		t.Fatal("invalid debug value accepted")
 	}
-	if _, err := ParseAttestConfig([]byte("TPM2_KIRA_ATTEST=lazy\n")); err == nil || !strings.Contains(err.Error(), "no attestation mode") {
+	if _, err := parseAttest([]byte("TPM2_KIRA_ATTEST=lazy\n")); err == nil || !strings.Contains(err.Error(), "no attestation mode") {
 		t.Fatalf("a mode line must be refused: %v", err)
 	}
-	if _, err := ParseAttestConfig([]byte("TPM2_KIRA_SOMETHING=1\n")); err == nil {
+	if _, err := parseAttest([]byte("TPM2_KIRA_SOMETHING=1\n")); err == nil {
 		t.Fatal("unknown key accepted")
 	}
 	def, err := LoadAttestConfig(filepath.Join(t.TempDir(), "missing"))
 	if err != nil || def.AdapterWait != 30*time.Second {
 		t.Fatalf("missing file should mean the defaults: %+v %v", def, err)
 	}
+}
+
+// parseAttest is the radio part of control.conf's content.
+func parseAttest(data []byte) (AttestConfig, error) {
+	cfg, err := ParseControlConfig(data)
+	return cfg.Attest, err
 }

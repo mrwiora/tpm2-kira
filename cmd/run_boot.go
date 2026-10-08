@@ -400,15 +400,15 @@ func openCoordinator(tpmPath, socket, configPath, signerPath string, debug bool)
 // also the key provider for systemd-cryptsetup: it answers the volumes'
 // key requests once the hold has ended, and stays until it is stopped.
 func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, debug bool) {
-	svc, endCoordinator := startCoordinator(tpmPath, gateSocket, DefaultAttestConfigPath, DefaultAttestSignerPath, debug)
+	svc, endCoordinator := startCoordinator(tpmPath, gateSocket, DefaultControlConfigPath, DefaultAttestSignerPath, debug)
 	var unlock *unlockServer
 	unlockMode := "" // what the next prompt is, for the code screen's words
 	if l, err := listenUnlock(unlockSocket); err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the disk unlock is not served: %v\n", err)
 	} else if l != nil {
-		// As unlock.conf says; the coordinator keeps the salt a verifier
+		// As control.conf says; the coordinator keeps the salt a verifier
 		// released and the TPM opened.
-		cfg, err := LoadUnlockConfig(unlockConfigPath())
+		cfg, err := LoadUnlockConfig(controlConfigPath())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "tpm2-kira: %v; not answering (mode skip)\n", err)
 		}

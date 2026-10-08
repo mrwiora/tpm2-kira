@@ -156,12 +156,18 @@ blocked with the reason - and the recommended next step. Pick a number
 and it runs that step with the same functions the commands below use;
 run it again later and it shows the state and what is left. The commands
 below are for specific settings, and they touch no configuration file:
-`control` alone sets the mode in `/etc/tpm2-kira/unlock.conf` (after an
-enrolment, and its "Unlock at boot" step checks that the mode fits the
-keyslots and that each device's key is routed through tpm2-kira, advising
-the kernel command line or crypttab where it is not). Everything but the
-help needs root; `control` says so on its own screen, the commands in a
-line.
+`control` alone writes `/etc/tpm2-kira/control.conf`, the one configuration
+file - the unlock mode after an enrolment, the YubiKey's PIN after checking
+it on the token (readable by root alone, left out of the initramfs); its
+"Unlock at boot" step checks that the mode fits the keyslots and that each
+device's key is routed through tpm2-kira, advising the kernel command line
+or crypttab where it is not - every other file is advised, never edited.
+What weakens the protections is listed on the overview under **Risks**: the
+SHA-1 bank in use, Secure Boot disabled or in Setup Mode, a slot sealed
+without the kernel measured, a TPM whose endorsement key no known vendor
+vouches for (a phone then trusts it on first use, as it would a software
+TPM), a loose file holding the PIN. Everything but the help needs root;
+`control` says so on its own screen, the commands in a line.
 The overview is a page of its own, the screen cleared each time it is shown;
 what a step prints stays until "Back to the overview?" is answered. The
 screens are forms (arrow keys, Enter; Esc leaves; `ACCESSIBLE=1` for
@@ -201,7 +207,7 @@ tpm2-kira runs `reveal`.
 | Guided | `control`: one screen, the protections step by step |
 | Setting up the machine | `setup` the signing key · `seal` a new TOTP key to the boot state · `reseal` approve the current boot state (the hooks run it) · `status` the overview · `info` a slot's blob · `nvram list\|status\|delete\|restore` |
 | The phone (Marify, Bluetooth LE) | `attest enrol\|unenrol\|status\|gate\|signer\|ekcert\|quote\|verify\|config-check` · `remote-salt enrol\|rotate\|status\|unenrol` |
-| The disk's key | `luks status\|enrol\|remove\|mark\|route` · `derive` (hashpwd2 by hand) · the mode in `/etc/tpm2-kira/unlock.conf` |
+| The disk's key | `luks status\|enrol\|remove\|mark\|route` · `derive` (hashpwd2 by hand) · the mode in `/etc/tpm2-kira/control.conf` |
 | At boot (the units and hooks) | `run` · `cap` · `unlock-key` (Debian keyscript) |
 | By hand | `reveal` / `reveal-plain` · `yubikey list` · `pcrtips` · `version` |
 
@@ -524,7 +530,7 @@ sudo mkinitcpio -P            # or: sudo update-initramfs -u
 
 There is no mode to switch on: the hooks ask `tpm2-kira attest
 initramfs-deps` what the adapter needs (`TPM2_KIRA_ATTEST_ADAPTER` in
-`/etc/tpm2-kira/attest.conf`, hci0 by default) and copy exactly that: its
+`/etc/tpm2-kira/control.conf`, hci0 by default) and copy exactly that: its
 driver modules and the firmware files the kernel loaded for it in the
 current boot (about 1.1 MB on an Intel adapter). Nothing is added while no
 phone is enrolled or the adapter is missing. At boot the gate runs beside
@@ -626,9 +632,9 @@ as it should read. `luks enrol` ends with it, `tpm2-kira status` notes it,
 and `mkinitcpio -P` runs it (the hook's `the volume <UUID> is unlocked
 through tpm2-kira's prompt`, or a warning with the lines to change).
 
-### What tpm2-kira does with the disk's key: `unlock.conf`
+### What tpm2-kira does with the disk's key: `control.conf`
 
-`/etc/tpm2-kira/unlock.conf` names it, in three modes, the same on Arch
+`/etc/tpm2-kira/control.conf` names it, in three modes, the same on Arch
 and Debian; the hooks copy the file into the image, so rebuild after a
 change:
 
@@ -707,7 +713,7 @@ machine; whoever has the phone and the machine still needs the password.
    sudo cryptsetup open --test-passphrase /dev/nvme0n1p2 --key-file /run/tpm2-kira/luks.key
    sudo rm /run/tpm2-kira/luks.key
    sudo tpm2-kira luks mark /dev/nvme0n1p2 --keyslot 2 --mode password+remotesalt
-   sudo sed -i 's/^TPM2_KIRA_UNLOCK=.*/TPM2_KIRA_UNLOCK=password+remotesalt/' /etc/tpm2-kira/unlock.conf
+   sudo sed -i 's/^TPM2_KIRA_UNLOCK=.*/TPM2_KIRA_UNLOCK=password+remotesalt/' /etc/tpm2-kira/control.conf
    sudo mkinitcpio -P            # Debian: update-initramfs -u
    ```
 

@@ -12,6 +12,8 @@ import (
 
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/matthias/tpm2-kira/attest"
 	"golang.org/x/sys/unix"
 )
 
@@ -44,9 +46,16 @@ type machineFacts struct {
 	PCRs       string
 	PCRsWhy    string
 	Keys       string // "" when setup has not run; else what the key is
-	Initramfs  string // mkinitcpio, initramfs-tools, or ""
-	Adapter    string // hciN, or ""
-	AttestConf string // "" when attest.conf loads; else the reason
+	YubiKey    bool   // the key is on a YubiKey that wants a PIN
+	PINStored  bool   // control.conf holds the PIN, root's alone
+	PINLoose   bool   // control.conf holds the PIN, but others can read it
+	EKBy       string // the vendor whose chain vouches for this TPM's EK; "" when none does
+	EKNote     string // why none does
+	SecureBoot SecureBootState
+	Risks      []string // what weakens the protections, for the person to know
+	Initramfs  string   // mkinitcpio, initramfs-tools, or ""
+	Adapter    string   // hciN, or ""
+	AttestConf string   // "" when control.conf loads; else the reason
 
 	Status StatusReport // the slots, the unlock mode, the LUKS devices, the notes
 	Phone  bool         // a phone is enrolled for some slot
@@ -80,8 +89,16 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 		if k, err := LoadCheckedSigningPrivateKey(DefaultPrivateKeyPath); err == nil {
 			if desc, ok := YubiKeyDescription(k); ok {
 				f.Keys = desc
+				f.YubiKey = yubiKeyWantsPIN(k)
 			}
 		}
+	}
+	if pin, loose := configPIN(controlConfigPath()); pin != "" {
+		f.PINStored, f.PINLoose = !loose, loose
+	}
+	f.SecureBoot = ReadSecureBootState()
+	if f.TPMErr == "" {
+		f.EKBy, f.EKNote = ekVerdict(tpmPath, debug)
 	}
 	switch {
 	case fileExists("/etc/mkinitcpio.conf"):
@@ -92,11 +109,12 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	if m, _ := filepath.Glob("/sys/class/bluetooth/hci*"); len(m) > 0 {
 		f.Adapter = filepath.Base(m[0])
 	}
-	if _, err := LoadAttestConfig(DefaultAttestConfigPath); err != nil {
+	if _, err := LoadAttestConfig(DefaultControlConfigPath); err != nil {
 		f.AttestConf = err.Error()
 	}
 
-	f.Status = collectStatus(StatusOptions{TPMPath: tpmPath, UnlockConfigPath: DefaultUnlockConfigPath, Debug: debug})
+	f.Status = collectStatus(StatusOptions{TPMPath: tpmPath, UnlockConfigPath: DefaultControlConfigPath, Debug: debug})
+	f.Risks = risks(&f)
 	for _, s := range f.Status.Slots {
 		f.Phone = f.Phone || len(s.Phones) > 0
 		f.Salt = f.Salt || s.RemoteSalt
@@ -115,6 +133,67 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 		}
 	}
 	return f
+}
+
+// risks are what weakens the protections: said on the overview, in the
+// person's face, since none of them stops a step from running.
+func risks(f *machineFacts) []string {
+	var r []string
+	if f.UseSHA1 {
+		r = append(r, "the SHA-1 bank is used (no SHA-256 bank with a SHA-256 event log): SHA-1 collisions are practical, so a measured boot can in principle be forged; the acknowledged weakness of this TPM")
+	}
+	switch {
+	case !f.SecureBoot.Known:
+		r = append(r, "the Secure Boot state cannot be read (no efivars): whether PCR 7 attests an enforced policy is unknown")
+	case f.SecureBoot.SetupMode:
+		r = append(r, "the platform is in Setup Mode: the Secure Boot keys can be replaced without physical presence, so PCR 7 records a policy any root user can rewrite")
+	case !f.SecureBoot.Enabled:
+		r = append(r, "Secure Boot is disabled: the boot loader and the kernel run unsigned, and PCR 7 records only that")
+	}
+	for _, s := range f.Status.Slots {
+		if s.Fallback {
+			continue
+		}
+		specs, err := ParsePCRSpecs(s.PCRs)
+		if err != nil {
+			continue
+		}
+		if kernelInitrd, cmdline := bootChainCoverage(PCRSpecIndices(specs)); !kernelInitrd || !cmdline {
+			r = append(r, fmt.Sprintf("slot %d is sealed to PCRs %s, which leave the kernel, the initrd or the command line unmeasured: a replaced initrd or an edited command line still shows a valid code (reseal with 11u, or 8e,9e)", s.Slot, s.PCRs))
+		}
+	}
+	if f.TPMErr == "" && f.EKBy == "" {
+		phone := ""
+		if f.Phone {
+			phone = " - the enrolled phone pinned it on first use, as it would any TPM, a software one included"
+		}
+		r = append(r, "no known vendor vouches for this TPM's endorsement key ("+f.EKNote+"): a phone cannot tell it from a software TPM"+phone)
+	}
+	if f.PINLoose {
+		r = append(r, controlConfigPath()+" holds the YubiKey PIN, but other users can read it, or root does not own it: chown root: and chmod 600 it, and consider changing the PIN")
+	}
+	return r
+}
+
+// ekVerdict is what a phone concludes about this TPM's endorsement key:
+// the vendor whose certificate chain vouches for it, or why none does.
+func ekVerdict(tpmPath string, debug bool) (by, note string) {
+	tpmDev, err := transport.OpenTPM(tpmPath)
+	if err != nil {
+		return "", err.Error()
+	}
+	defer tpmDev.Close()
+	defer CleanupTPM(tpmDev, debug)
+	alg, ek, pub, err := pickCertifiedEK(tpmDev)
+	if err != nil {
+		return "", err.Error()
+	}
+	FlushHandle(tpmDev, ek.handle)
+	by, err = attest.VerifyEKCertificate(pub, readEKCert(tpmDev, alg), readEKCertChain(tpmDev), time.Now())
+	if err != nil {
+		return "", attest.EKCertNote(err)
+	}
+	return by, ""
 }
 
 func fileExists(p string) bool {
@@ -179,7 +258,15 @@ func (c *controller) steps() []controlStep {
 	keys := controlStep{Key: "setup", Title: "Signing key",
 		Explain: "The key that approves boot states and authorises every write to the TPM: local files, or a key on a YubiKey.",
 		Run:     (*controller).runSetup}
-	if f.Keys != "" {
+	switch {
+	case f.Keys == "":
+	case f.YubiKey && f.PINStored:
+		keys.Done = f.Keys + "; its PIN in " + controlConfigPath()
+	case f.YubiKey:
+		// The key is there, the PIN not: the hooks' reseal after a kernel
+		// update is skipped until it is. The step stores it.
+		keys.Explain = f.Keys + ". Its PIN, stored in " + controlConfigPath() + " (readable by root alone, left out of the initramfs), lets the hooks reseal unattended after a kernel or initramfs update; without it that reseal is skipped and the next boot shows a PCR mismatch."
+	default:
 		keys.Done = f.Keys
 	}
 
@@ -206,7 +293,7 @@ func (c *controller) steps() []controlStep {
 	case f.Adapter == "":
 		attest.Blocked = "no Bluetooth adapter on this machine"
 	case f.AttestConf != "":
-		attest.Blocked = DefaultAttestConfigPath + ": " + f.AttestConf
+		attest.Blocked = DefaultControlConfigPath + ": " + f.AttestConf
 	case f.Phone:
 		attest.Done = "a phone is enrolled"
 	}
@@ -234,11 +321,11 @@ func (c *controller) steps() []controlStep {
 	}
 
 	// The prerequisites of the disk unlock, checked together: the mode in
-	// unlock.conf fits the keyslots, and every device with a keyslot of
+	// control.conf fits the keyslots, and every device with a keyslot of
 	// ours takes its key from tpm2-kira. Control sets the mode (the
 	// commands touch no configuration file); the route it advises.
-	unlock := controlStep{Key: "unlock", Title: "Unlock at boot (unlock.conf, the key's route, the initramfs)",
-		Explain: "The boot derives the key only in the mode set in " + DefaultUnlockConfigPath + ", and a device gets it only when its rd.luks.key= (crypttab on Debian) names tpm2-kira's socket.",
+	unlock := controlStep{Key: "unlock", Title: "Unlock at boot (control.conf, the key's route, the initramfs)",
+		Explain: "The boot derives the key only in the mode set in " + DefaultControlConfigPath + ", and a device gets it only when its rd.luks.key= (crypttab on Debian) names tpm2-kira's socket.",
 		Run:     (*controller).runUnlock}
 	wanted := c.wantedUnlockMode()
 	var unrouted []string
@@ -293,15 +380,15 @@ func (c *controller) wantedUnlockMode() string {
 	return wanted
 }
 
-// setMode sets the mode in unlock.conf when it differs, and says so.
+// setMode sets the mode in control.conf when it differs, and says so.
 func (c *controller) setMode(mode string) error {
 	if c.facts.Status.UnlockMode == mode {
 		return nil
 	}
-	if err := setUnlockMode(DefaultUnlockConfigPath, mode); err != nil {
+	if err := setUnlockMode(DefaultControlConfigPath, mode); err != nil {
 		return fmt.Errorf("the unlock mode is not set: %w", err)
 	}
-	fmt.Fprintf(c.out, "%s: TPM2_KIRA_UNLOCK=%s\n", DefaultUnlockConfigPath, mode)
+	fmt.Fprintf(c.out, "%s: TPM2_KIRA_UNLOCK=%s\n", DefaultControlConfigPath, mode)
 	c.facts.Status.UnlockMode = mode
 	c.ran = true
 	return nil
@@ -459,7 +546,7 @@ func (c *controller) pick(steps []controlStep) (string, error) {
 	}
 	choice := initial
 	err := c.form(
-		huh.NewNote().Title("[ KIRA ] control - the protections of this machine, step by step").Description("*What this machine has*\n"+noteText(c.factsText())),
+		huh.NewNote().Title("[ KIRA ] control - the protections of this machine, step by step").Description(c.noteDescription()),
 		huh.NewSelect[string]().Title("Protections").Description(desc).Options(opts...).Value(&choice).
 			Validate(func(k string) error {
 				if why, ok := blocked[k]; ok {
@@ -495,6 +582,16 @@ func (c *controller) choose(title string, items []string) (int, error) {
 	return n, nil
 }
 
+// noteDescription is the overview note: the facts, and the risks when
+// there are any.
+func (c *controller) noteDescription() string {
+	d := "*What this machine has*\n" + noteText(c.factsText())
+	if r := c.risksText(); r != "" {
+		d += "\n*Risks*\n" + noteText(r)
+	}
+	return d
+}
+
 // noteText is text for a note's description: huh's note reads \, _ and
 // * as markup, and its wrapping drops the spaces a line begins with.
 func noteText(s string) string {
@@ -513,6 +610,24 @@ func (c *controller) factsText() string {
 		fmt.Fprintf(&w, "  TPM         %s - no SHA-256 bank with a SHA-256 event log; the SHA-1 bank is used (--sha1), the weakness acknowledged\n", f.TPM)
 	default:
 		fmt.Fprintf(&w, "  TPM         %s, SHA-256 bank and event log\n", f.TPM)
+	}
+	if f.TPMErr == "" {
+		switch {
+		case f.EKBy != "":
+			fmt.Fprintf(&w, "  Vendor      %s vouches for the endorsement key\n", f.EKBy)
+		default:
+			fmt.Fprintf(&w, "  Vendor      none vouches for the endorsement key: %s\n", f.EKNote)
+		}
+	}
+	switch {
+	case !f.SecureBoot.Known:
+		fmt.Fprintln(&w, "  Secure Boot state unknown (no efivars)")
+	case f.SecureBoot.SetupMode:
+		fmt.Fprintln(&w, "  Secure Boot Setup Mode: the keys can be replaced by any root user")
+	case f.SecureBoot.Enabled:
+		fmt.Fprintln(&w, "  Secure Boot enabled")
+	default:
+		fmt.Fprintln(&w, "  Secure Boot disabled")
 	}
 	fmt.Fprintf(&w, "  Boot        %s: PCRs %s\n", f.PCRsWhy, f.PCRs)
 	if f.Initramfs != "" {
@@ -551,6 +666,15 @@ func (c *controller) factsText() string {
 	return w.String()
 }
 
+// risksText is "Risks", one line each; "" without any.
+func (c *controller) risksText() string {
+	var w strings.Builder
+	for _, r := range c.facts.Risks {
+		fmt.Fprintf(&w, "  ! %s\n", r)
+	}
+	return w.String()
+}
+
 // recommended is the index of the first step that can be done, or -1.
 func recommended(steps []controlStep) int {
 	for i, s := range steps {
@@ -569,6 +693,10 @@ func (c *controller) show(steps []controlStep) {
 	fmt.Fprintf(w, "%s control - the protections of this machine, step by step\n\n", kiraTag(tagYellow))
 	fmt.Fprintln(w, "\033[1mWhat this machine has\033[0m")
 	fmt.Fprint(w, c.factsText())
+	if r := c.risksText(); r != "" {
+		fmt.Fprintln(w, "\n\033[1;31mRisks\033[0m")
+		fmt.Fprint(w, r)
+	}
 
 	fmt.Fprintln(w, "\n\033[1mProtections\033[0m")
 	next := -1
@@ -627,7 +755,50 @@ func (c *controller) leave(steps []controlStep) {
 // the analysis settled.
 
 func (c *controller) runSetup() error {
-	return Setup(SetupOptions{Debug: c.o.Debug})
+	if c.facts.Keys == "" {
+		if err := Setup(SetupOptions{Debug: c.o.Debug}); err != nil {
+			return err
+		}
+		k, err := LoadCheckedSigningPrivateKey(DefaultPrivateKeyPath)
+		if err != nil {
+			return err
+		}
+		if _, ok := YubiKeyDescription(k); !ok || !yubiKeyWantsPIN(k) {
+			return nil
+		}
+	}
+	return c.storePIN()
+}
+
+// storePIN asks the YubiKey's PIN, checks it on the token and stores it
+// in control.conf for the unattended reseal.
+func (c *controller) storePIN() error {
+	key, err := LoadCheckedSigningPrivateKey(DefaultPrivateKeyPath)
+	if err != nil {
+		return err
+	}
+	desc, _ := YubiKeyDescription(key)
+	pin := ""
+	err = c.form(huh.NewInput().Title("PIN of " + desc).
+		Description("Checked on the token, then stored in " + controlConfigPath() + " for the reseal the hooks run; readable by root alone, never in the initramfs.").
+		EchoMode(huh.EchoModePassword).Value(&pin).
+		Validate(func(s string) error {
+			if s == "" {
+				return errors.New("the PIN is empty")
+			}
+			return nil
+		})).Run()
+	if err != nil {
+		return err
+	}
+	if err := VerifyYubiKeyPIN(key, pin); err != nil {
+		return err
+	}
+	if err := setControlPIN(controlConfigPath(), pin); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "%s: %s stored, the file readable by root alone\n", controlConfigPath(), PINEnvVar)
+	return nil
 }
 
 func (c *controller) runSeal() error {
@@ -672,7 +843,7 @@ func (c *controller) runLuks(mode string) error {
 	}); err != nil {
 		return err
 	}
-	// The mode in unlock.conf is control's to set. A typed-salt keyslot
+	// The mode in control.conf is control's to set. A typed-salt keyslot
 	// next to the phone's leaves the mode: the typed salt is the fallback
 	// when the phone is not there.
 	if mode == LuksModePasswordSalt && c.facts.Status.UnlockMode == UnlockPasswordRemoteSalt {

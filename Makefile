@@ -93,11 +93,8 @@ install-mkinitcpio:
 	sudo mkdir -p /usr/lib/systemd/system
 	sudo install -m644 initramfs/systemd/tpm2-kira.service initramfs/systemd/tpm2-kira-cap.service initramfs/systemd/tpm2-kira-unlock.socket /usr/lib/systemd/system/
 	sudo install -m644 initramfs/systemd/tpm2-kira-attest.service /usr/lib/systemd/system/
-	@if [ ! -e /etc/tpm2-kira/attest.conf ]; then \
-		sudo install -Dm644 initramfs/common/attest.conf /etc/tpm2-kira/attest.conf; \
-	fi
-	@if [ ! -e /etc/tpm2-kira/unlock.conf ]; then \
-		sudo install -Dm644 initramfs/common/unlock.conf /etc/tpm2-kira/unlock.conf; \
+	@if [ ! -e /etc/tpm2-kira/control.conf ]; then \
+		sudo install -Dm644 initramfs/common/control.conf /etc/tpm2-kira/control.conf; \
 	fi
 	@echo "Mkinitcpio hooks installed successfully!"
 	@echo ""

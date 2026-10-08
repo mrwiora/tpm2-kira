@@ -608,18 +608,18 @@ func TestDiskKeyPasswordSaltMode(t *testing.T) {
 }
 
 func TestParseUnlockConfig(t *testing.T) {
-	cfg, err := ParseUnlockConfig([]byte("# comment\nTPM2_KIRA_UNLOCK=password+salt\n"))
+	cfg, err := parseUnlock([]byte("# comment\nTPM2_KIRA_UNLOCK=password+salt\n"))
 	if err != nil || cfg.Mode != UnlockPasswordSalt {
 		t.Fatalf("%+v %v", cfg, err)
 	}
-	if cfg, err := ParseUnlockConfig([]byte("TPM2_KIRA_UNLOCK=password+remotesalt\n")); err != nil || cfg.Mode != UnlockPasswordRemoteSalt {
+	if cfg, err := parseUnlock([]byte("TPM2_KIRA_UNLOCK=password+remotesalt\n")); err != nil || cfg.Mode != UnlockPasswordRemoteSalt {
 		t.Fatalf("%+v %v", cfg, err)
 	}
-	if cfg, err := ParseUnlockConfig(nil); err != nil || cfg.Mode != UnlockSkip {
+	if cfg, err := parseUnlock(nil); err != nil || cfg.Mode != UnlockSkip {
 		t.Fatalf("empty: %+v %v", cfg, err)
 	}
 	for _, bad := range []string{"TPM2_KIRA_UNLOCK=yes\n", "TPM2_KIRA_UNLOCK=hashpwd2\n", "TPM2_KIRA_SALT=x\n", "nonsense\n"} {
-		if _, err := ParseUnlockConfig([]byte(bad)); err == nil {
+		if _, err := parseUnlock([]byte(bad)); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
 	}
@@ -646,4 +646,10 @@ func TestReadPassphraseTakesOneLineOfAPipe(t *testing.T) {
 			t.Fatalf("%q %v, want %q", got, err, want)
 		}
 	}
+}
+
+// parseUnlock is the unlock part of control.conf's content.
+func parseUnlock(data []byte) (UnlockConfig, error) {
+	cfg, err := ParseControlConfig(data)
+	return cfg.Unlock, err
 }

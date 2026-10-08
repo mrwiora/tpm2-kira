@@ -290,7 +290,7 @@ func consolePassphrase(volume string) ([]byte, error) {
 // one: tpm2-kira gives no key, and cryptsetup's own prompt follows.
 var errUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own prompt follows")
 
-// diskKey is the key provider's answer, as unlock.conf says (unlock_config.go):
+// diskKey is the key provider's answer, as control.conf says (unlock_config.go):
 //
 //	skip                 no answer: cryptsetup's own prompt, tpm2-kira untouched
 //	password+salt        a typed password and a typed salt, combined (hashpwd2's derivation)

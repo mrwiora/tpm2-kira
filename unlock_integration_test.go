@@ -51,7 +51,7 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	// Mode password+salt: the keyslot holds the combination of the two,
 	// which the provider derives from what is typed at its prompts.
 	const password, salt = "correct horse", "battery staple"
-	conf := filepath.Join(dir, "unlock.conf")
+	conf := filepath.Join(dir, "control.conf")
 	if err := os.WriteFile(conf, []byte("TPM2_KIRA_UNLOCK=password+salt\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	}()
 	answer(password, salt)
 	run := exec.Command("./tpm2-kira", "run", "--tpm", filepath.Join(dir, "no-tpm"), "--hold", "0", "--unlock", sock)
-	run.Env = append(os.Environ(), "TPM2_KIRA_CONSOLE="+console, "TPM2_KIRA_UNLOCK_CONF="+conf)
+	run.Env = append(os.Environ(), "TPM2_KIRA_CONSOLE="+console, "TPM2_KIRA_CONTROL_CONF="+conf)
 	var runOut bytes.Buffer
 	run.Stdout, run.Stderr = &runOut, &runOut
 	if err := run.Start(); err != nil {

@@ -458,7 +458,7 @@ func TestCoordinatorAndWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	conf := filepath.Join(dir, "attest.conf")
+	conf := filepath.Join(dir, "control.conf")
 	if err := os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST_ADAPTER=0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

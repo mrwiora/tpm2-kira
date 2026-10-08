@@ -696,27 +696,87 @@ func (sess *tokenSession) ensurePIN(s *yubiKeySigner, force bool) error {
 var promptPIN = promptPINOnTTY
 
 // readPIN finds the PIN without asking when it can: TPM2_KIRA_PIN first, then
-// the line in /etc/mkinitcpio.conf that the unattended reseal uses, and only
-// then the terminal. source names where the PIN came from, for messages.
+// control.conf, where the unattended reseal finds it, and only then the
+// terminal. source names where the PIN came from, for messages.
 func readPIN(s *yubiKeySigner) (pin, source string, err error) {
 	if pin, ok := os.LookupEnv(PINEnvVar); ok && pin != "" {
 		return pin, "the " + PINEnvVar + " environment variable", nil
 	}
-	pin, ok, err := pinFromMkinitcpio()
+	pin, ok, err := pinFromConfig()
 	if err != nil {
 		return "", "", err
 	}
 	if ok {
-		return pin, mkinitcpioConfPath, nil
+		return pin, controlConfigPath(), nil
 	}
 	pin, err = promptPIN(s)
 	return pin, "the terminal", err
 }
 
+// pinFromConfig returns the PIN control.conf stores, if it may be used. A
+// PIN in a file that others can read, or that root does not own, is refused
+// rather than used: it has to be treated as already disclosed.
+func pinFromConfig() (string, bool, error) {
+	path := controlConfigPath()
+	pin, loose := configPIN(path)
+	if pin == "" {
+		return "", false, nil
+	}
+	if loose {
+		return "", false, fmt.Errorf("%s holds the YubiKey PIN but other users can read it, or root does not own it,\n"+
+			"  so tpm2-kira does not use it. Make it readable by root only:\n"+
+			"      chown root: %s && chmod 600 %s\n"+
+			"  and consider changing the PIN, since it may already have been read",
+			path, path, path)
+	}
+	return pin, true, nil
+}
+
+// warnIfNoUnattendedPIN tells the user, right after the PIN was accepted for
+// a manual seal or reseal, when the automatic reseal after an initramfs
+// rebuild will not have it. Silent when control.conf provides the PIN.
+func warnIfNoUnattendedPIN(w io.Writer) {
+	if pin, _ := configPIN(controlConfigPath()); pin != "" {
+		return
+	}
+	fmt.Fprintf(w, "WARNING: %s holds no %s.\n", controlConfigPath(), PINEnvVar)
+	fmt.Fprintln(w, "         The automatic reseal after kernel and initramfs updates will therefore")
+	fmt.Fprintln(w, "         have no PIN: it will be SKIPPED, and the next boot will show a PCR")
+	fmt.Fprintln(w, "         mismatch until you reseal by hand. 'tpm2-kira control' stores the PIN")
+	fmt.Fprintln(w, "         (the signing key step), readable by root alone.")
+}
+
+// VerifyYubiKeyPIN checks pin against the token key signs with, so a PIN
+// about to be stored is known to be right; a wrong one costs one of the
+// token's attempts, which is why fewer than two left is refused. On
+// success the session is unlocked for the signatures that follow.
+func VerifyYubiKeyPIN(key crypto.Signer, pin string) error {
+	s, ok := key.(*yubiKeySigner)
+	if !ok {
+		return errors.New("the signing key is not on a YubiKey")
+	}
+	sess, err := tokenSessionFor(s)
+	if err != nil {
+		return err
+	}
+	remaining, verified, err := sess.card.PINRetries()
+	if err != nil {
+		return unavailable(s, "reading the PIN retry counter: %v", err)
+	}
+	if !verified && remaining < 2 {
+		return fmt.Errorf("only %d PIN attempt(s) left on YubiKey %d: not risking it (ykman piv access unblock-pin)", remaining, s.stub.Serial)
+	}
+	if err := sess.card.VerifyPIN(pin); err != nil {
+		return fmt.Errorf("YubiKey %d: %v", s.stub.Serial, err)
+	}
+	sess.pin, sess.pinSource, sess.unlocked = pin, "control", true
+	return nil
+}
+
 func promptPINOnTTY(s *yubiKeySigner) (string, error) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return "", fmt.Errorf("no PIN: set %s or put it in %s (there is no terminal to ask on)", PINEnvVar, mkinitcpioConfPath)
+		return "", fmt.Errorf("no PIN: set %s or store it with tpm2-kira control (there is no terminal to ask on)", PINEnvVar)
 	}
 	defer tty.Close()
 	fmt.Fprintf(tty, "PIN for %s: ", s.Describe())
@@ -772,4 +832,15 @@ func CloseTokenSessions() {
 		sess.pin = ""
 		delete(tokenSessions, serial)
 	}
+}
+
+// yubiKeyWantsPIN says whether signing with key, on a YubiKey, takes a PIN
+// (the slot's policy as the key file records it; an unknown policy counts
+// as wanting one).
+func yubiKeyWantsPIN(key crypto.Signer) bool {
+	s, ok := key.(*yubiKeySigner)
+	if !ok {
+		return false
+	}
+	return s.stub.PINPolicy != piv.PINPolicyNever.String()
 }
