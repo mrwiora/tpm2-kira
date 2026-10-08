@@ -115,9 +115,9 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 					if a[0] == "" {
 						return // cancelled
 					}
-					if strings.Contains(s, "enter password") {
+					if strings.Contains(s, "Password for disk") {
 						c.Write([]byte(a[0] + "\n"))
-					} else if strings.Contains(s, "enter salt") {
+					} else if strings.Contains(s, "Salt for disk") {
 						c.Write([]byte(a[1] + "\n"))
 					}
 				}

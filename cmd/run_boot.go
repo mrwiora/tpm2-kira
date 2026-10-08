@@ -406,6 +406,7 @@ func openCoordinator(tpmPath, socket, configPath, signerPath string, debug bool)
 func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, debug bool) {
 	svc, endCoordinator := startCoordinator(tpmPath, gateSocket, DefaultAttestConfigPath, DefaultAttestSignerPath, debug)
 	var unlock *unlockServer
+	unlockMode := "" // what the next prompt is, for the code screen's words
 	if l, err := listenUnlock(unlockSocket); err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the disk unlock is not served: %v\n", err)
 	} else if l != nil {
@@ -415,6 +416,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "tpm2-kira: %v; not answering (mode skip)\n", err)
 		}
+		unlockMode = cfg.Mode
 		if cfg.Mode == UnlockPasswordRemoteSalt && svc == nil {
 			fmt.Fprintln(os.Stderr, "tpm2-kira: unlock mode password+remotesalt, but no phone check is in this image: no remote salt can be released; cryptsetup's own prompt will follow")
 		}
@@ -452,7 +454,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 	}
 	b := &bootDisplay{
 		phone:      phone,
-		phoneEvent: printGateEvent,
+		phoneEvent: gateEventPrinter(unlockMode),
 		phonePoll:  500 * time.Millisecond,
 		phoneGrace: time.Minute,
 		scan: func(now time.Time) ([]NVRAMSlot, error) {
@@ -514,10 +516,14 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			if remaining >= 0 {
 				fmt.Println()
 				if st, ok := gateStatus(phone); ok && st.Asking() {
-					fmt.Printf("   Slot #%d is enrolled with a phone: open the Marify app to verify this boot.\n", st.Slot)
+					if unlockMode == UnlockPasswordRemoteSalt {
+						fmt.Printf("   Slot #%d is enrolled with a phone: open Marify to attest this boot and return the disk's salt.\n", st.Slot)
+					} else {
+						fmt.Printf("   Slot #%d is enrolled with a phone: open Marify to attest this boot.\n", st.Slot)
+					}
 					fmt.Println("   Without the phone: compare the code with your authenticator and press Enter.")
 				} else {
-					fmt.Println("   Does the code match your authenticator? Press Enter to continue to the passphrase.")
+					fmt.Printf("   Does the code match your authenticator? Press Enter to continue to %s.\n", nextPrompt(unlockMode))
 				}
 				fmt.Printf("   (continues on its own in %d s)\n", int(remaining.Round(time.Second)/time.Second))
 			}
@@ -580,28 +586,54 @@ func gateStatus(phone func() (GateStatus, bool)) (GateStatus, bool) {
 	return phone()
 }
 
-// printGateEvent tells the person at the console what the gate's change of
-// state means for them. The verdict itself is printed by the gate.
-func printGateEvent(prev, cur GateStatus) {
-	switch cur.State {
-	case GateWaiting:
-		if prev.State == "" {
-			fmt.Printf("   Slot #%d can be verified with your phone now: open the Marify app.\n", cur.Slot)
+// nextPrompt names what follows the code screen, in the unlock mode's
+// words: "the password prompt" when tpm2-kira asks (the password is what
+// the person types; the salt is typed too, or comes from the phone),
+// "cryptsetup's prompt" in mode skip.
+func nextPrompt(mode string) string {
+	switch mode {
+	case UnlockPasswordSalt:
+		return "the password and salt prompt"
+	case UnlockPasswordRemoteSalt:
+		return "the password prompt"
+	}
+	return "cryptsetup's prompt"
+}
+
+// gateEventPrinter tells the person at the console what the gate's change
+// of state means for them, in the unlock mode's words. The verdict itself
+// is the gate's to print.
+func gateEventPrinter(mode string) func(prev, cur GateStatus) {
+	return func(prev, cur GateStatus) {
+		switch cur.State {
+		case GateWaiting:
+			if prev.State == "" {
+				if mode == UnlockPasswordRemoteSalt {
+					fmt.Printf("   Slot #%d: open Marify on your phone to attest this boot and return the disk's salt.\n", cur.Slot)
+				} else {
+					fmt.Printf("   Slot #%d: open Marify on your phone to attest this boot.\n", cur.Slot)
+				}
+			}
+		case GateSession:
+			// The phone code goes into the slot's own line (phoneCodes);
+			// here only the fact that a phone is in.
+			if prev.State != GateSession {
+				fmt.Println("   A phone is connected: answer there. The boot waits for it.")
+			}
+		case GateAttested:
+			switch {
+			case cur.Releasing:
+				fmt.Printf("   \033[0;32mSlot #%d attested by %s.\033[0m Waiting for the salt from the phone ...\n", cur.Slot, phoneLabel(cur.Phone))
+			case prev.Releasing && cur.SaltTaken:
+				fmt.Printf("   \033[0;32mThe phone returned the salt.\033[0m Continuing to %s.\n", nextPrompt(mode))
+			case prev.Releasing:
+				fmt.Printf("   \033[0;33mNo salt came from the phone.\033[0m Continuing to cryptsetup's own prompt (the recovery passphrase).\n")
+			case prev.State != GateAttested:
+				fmt.Printf("   \033[0;32mSlot #%d attested by %s.\033[0m Continuing to %s.\n", cur.Slot, phoneLabel(cur.Phone), nextPrompt(mode))
+			}
+		case GateRejected, GateRefused:
+			fmt.Printf("   \033[0;31mSlot #%d was NOT attested by the phone (see above).\033[0m Do not type your password unless you know why.\n", cur.Slot)
 		}
-	case GateSession:
-		// The phone code goes into the slot's own line (phoneCodes); here
-		// only the fact that a phone is in.
-		if prev.State != GateSession {
-			fmt.Println("   A phone is connected: answer there. The boot waits for it.")
-		}
-	case GateAttested:
-		if cur.Releasing {
-			fmt.Printf("   \033[0;32mSlot #%d verified with %s.\033[0m Waiting for the remote salt ...\n", cur.Slot, phoneLabel(cur.Phone))
-		} else if prev.State != GateAttested {
-			fmt.Printf("   \033[0;32mSlot #%d verified with %s.\033[0m Continuing to the passphrase.\n", cur.Slot, phoneLabel(cur.Phone))
-		}
-	case GateRejected, GateRefused:
-		fmt.Printf("   \033[0;31mSlot #%d was NOT verified by the phone (see above).\033[0m Do not type your passphrase unless you know why.\n", cur.Slot)
 	}
 }
 

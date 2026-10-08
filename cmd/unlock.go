@@ -283,7 +283,7 @@ func openConsole() (io.ReadWriteCloser, int, error) {
 // character, Backspace deletes, an empty line asks again. Ctrl-C gives up
 // (no key: systemd-cryptsetup falls back to its own prompt).
 func consolePassphrase(volume string) ([]byte, error) {
-	return consoleAsk(volume, "passphrase", "")
+	return consoleAsk(volume, "Passphrase", "")
 }
 
 // errUnlockSkipped: mode skip, or no remote salt in a mode that needs
@@ -304,24 +304,24 @@ func diskKey(salt func() []byte, mode string) func(volume string) ([]byte, error
 		var note string
 		switch mode {
 		case UnlockPasswordSalt:
-			note = "The key is derived from your password and salt (Argon2id, some seconds).\n" +
-				"   (Ctrl-C skips to cryptsetup's own prompt, where the recovery passphrase works.)"
+			note = "the key is derived from your password and your salt, both typed here (Argon2id, some seconds).\n" +
+				"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
 		case UnlockPasswordRemoteSalt:
 			if s = salt(); s == nil {
-				return nil, errors.New("no remote salt was released in this boot: " + errUnlockSkipped.Error())
+				return nil, errors.New("no salt from the phone in this boot: " + errUnlockSkipped.Error())
 			}
-			note = "The verifier released the disk's salt: the key is derived from it and your password.\n" +
-				"   (Ctrl-C skips to cryptsetup's own prompt, where the recovery passphrase works.)"
+			note = "the key is derived from your password and the salt your phone returned.\n" +
+				"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
 		default:
 			return nil, errUnlockSkipped
 		}
-		pw, err := consoleAsk(volume, "password", note)
+		pw, err := consoleAsk(volume, "Password", note)
 		if err != nil {
 			return nil, err
 		}
 		defer wipe(pw)
 		if s == nil {
-			if s, err = consoleAsk(volume, "salt", ""); err != nil {
+			if s, err = consoleAsk(volume, "Salt", ""); err != nil {
 				return nil, err
 			}
 		}
@@ -332,6 +332,16 @@ func diskKey(salt func() []byte, mode string) func(volume string) ([]byte, error
 
 // consoleAsk asks on the console for a volume's passphrase or password,
 // with a note above the prompt when there is one.
+// The prompt, as the person sees it: a note under the code screen's own
+// tag saying what the key is made of and where Ctrl-C leads, then the
+// question in bold, as systemd's own prompt is - "Password" is what the
+// person types, "Salt" the second part they type in mode password+salt;
+// the phone's salt is never asked for.
+//
+//	[ KIRA ] Disk cryptroot: the key is derived from your password and the salt your phone returned.
+//	         Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works.
+//
+//	🔐 Password for disk cryptroot:
 func consoleAsk(volume, what, note string) ([]byte, error) {
 	con, fd, err := openConsole()
 	if err != nil {
@@ -339,10 +349,14 @@ func consoleAsk(volume, what, note string) ([]byte, error) {
 	}
 	defer con.Close()
 	if note != "" {
-		fmt.Fprintf(con, "\n🔑 %s\n", note)
+		lines := strings.Split(note, "\n")
+		fmt.Fprintf(con, "\n[ \033[1;33mKIRA\033[0m ] Disk %s: %s\n", volume, lines[0])
+		for _, l := range lines[1:] {
+			fmt.Fprintf(con, "         %s\n", l)
+		}
 	}
 	for {
-		fmt.Fprintf(con, "\n🔐 Please enter %s for disk %s: ", what, volume)
+		fmt.Fprintf(con, "\n🔐 \033[1m%s for disk %s:\033[0m ", what, volume)
 		pw, err := readPassphrase(con, fd)
 		fmt.Fprintln(con)
 		if err != nil {
@@ -354,7 +368,7 @@ func consoleAsk(volume, what, note string) ([]byte, error) {
 	}
 }
 
-var errPassphraseCancelled = errors.New("cancelled at the passphrase prompt")
+var errPassphraseCancelled = errors.New("cancelled at the prompt")
 
 // readPassphrase reads one line with echo off from a terminal (fd), or a
 // plain line from anything else (tests, a pipe, a socket: fd < 0).

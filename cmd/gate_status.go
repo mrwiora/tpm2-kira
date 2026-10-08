@@ -37,6 +37,8 @@ type GateStatus struct {
 	// boot is not released before it has arrived, the session has ended,
 	// or releaseWait has passed.
 	Releasing bool
+	// SaltTaken: the phone returned the salt and the TPM opened it.
+	SaltTaken bool
 }
 
 // Released reports whether the boot may go on: the phone has spoken for

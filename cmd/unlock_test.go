@@ -401,7 +401,7 @@ func TestConsolePassphraseOnASocket(t *testing.T) {
 		defer c.Close()
 		buf := make([]byte, 256)
 		n, _ := c.Read(buf)
-		if !strings.Contains(string(buf[:n]), "passphrase for disk vol") {
+		if !strings.Contains(string(buf[:n]), "Passphrase for disk vol") {
 			t.Errorf("prompt: %q", buf[:n])
 		}
 		c.Write([]byte("\n")) // an empty line asks again
@@ -445,7 +445,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 					}
 					p := string(buf[:n])
 					prompts <- p
-					if strings.Contains(p, "enter password") {
+					if strings.Contains(p, "Password for disk") {
 						c.Write([]byte("hunter2\n"))
 					}
 				}
@@ -464,14 +464,14 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 	// The note and the prompt are two writes; take what arrives until
 	// the prompt is in.
 	seen := ""
-	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(seen, "enter password for disk cryptroot") && time.Now().Before(deadline); {
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(seen, "Password for disk cryptroot") && time.Now().Before(deadline); {
 		select {
 		case p := <-prompts:
 			seen += p
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
-	if !strings.Contains(seen, "released the disk's salt") || !strings.Contains(seen, "enter password for disk cryptroot") {
+	if !strings.Contains(seen, "the salt your phone returned") || !strings.Contains(seen, "Password for disk cryptroot") {
 		t.Errorf("prompt: %q", seen)
 	}
 	// Without a released salt the mode gives no key and asks nothing;
@@ -483,7 +483,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 			drained = true
 		}
 	}
-	if _, err := diskKey(func() []byte { return nil }, UnlockPasswordRemoteSalt)("cryptroot"); err == nil || !strings.Contains(err.Error(), "no remote salt") {
+	if _, err := diskKey(func() []byte { return nil }, UnlockPasswordRemoteSalt)("cryptroot"); err == nil || !strings.Contains(err.Error(), "no salt from the phone") {
 		t.Fatalf("without a remote salt: %v", err)
 	}
 	if _, err := diskKey(func() []byte { return append([]byte(nil), salt...) }, UnlockSkip)("cryptroot"); !errors.Is(err, errUnlockSkipped) {
@@ -550,9 +550,9 @@ func TestDiskKeyPasswordSaltMode(t *testing.T) {
 					s := string(buf[:n])
 					prompts <- s
 					switch {
-					case strings.Contains(s, "enter password"):
+					case strings.Contains(s, "Password for disk"):
 						c.Write([]byte("hunter2\n"))
-					case strings.Contains(s, "enter salt"):
+					case strings.Contains(s, "Salt for disk"):
 						c.Write([]byte("my-salt\n"))
 					}
 				}
@@ -576,7 +576,7 @@ func TestDiskKeyPasswordSaltMode(t *testing.T) {
 			done = true
 		}
 	}
-	if !strings.Contains(seen, "derived from your password and salt") || !strings.Contains(seen, "enter password") || !strings.Contains(seen, "enter salt") {
+	if !strings.Contains(seen, "your password and your salt") || !strings.Contains(seen, "Password for disk") || !strings.Contains(seen, "Salt for disk") {
 		t.Errorf("prompts: %q", seen)
 	}
 }

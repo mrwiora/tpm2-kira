@@ -698,7 +698,7 @@ A systemd service (`tpm2-kira.service`) starts before the disk unlock and runs `
 
 The passphrase prompt that follows is tpm2-kira's: `systemd-cryptsetup`
 activates the volume with every option in your `crypttab`, connects to
-`/run/tpm2-kira/unlock.sock` for the key, tpm2-kira asks `Please enter
+`/run/tpm2-kira/unlock.sock` for the key, tpm2-kira asks `Passphrase
 passphrase for disk <volume>:` and answers with what you type. tpm2-kira
 never opens the disk itself; it only provides the key. A typo is not
 fatal: `systemd-cryptsetup` then asks on its own prompt for the remaining
@@ -758,7 +758,7 @@ vda3_crypt UUID=… none luks,discard,keyscript=/lib/cryptsetup/scripts/tpm2-kir
 and `sudo update-initramfs -u`. The keyscript asks the same socket
 `systemd-cryptsetup` would on Arch (`tpm2-kira unlock-key`): the display
 started by `init-premount` answers once the code screen is confirmed,
-with what you type at `🔐 Please enter passphrase for disk vda3_crypt:`
+with what you type at `🔐 Passphrase for disk vda3_crypt:`
 (or, with a phone and a factor, the key derived from your password).
 `cryptroot` re-runs the keyscript for each of its tries (`tries=`, 3 by
 default): the first ones are tpm2-kira's prompt, the last is cryptsetup's

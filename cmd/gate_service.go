@@ -347,8 +347,9 @@ func (s *gateService) TakeRelease(r *attest.Release) (uint8, string) {
 	s.mu.Lock()
 	wipe(s.salt)
 	s.salt = salt
+	s.status.SaltTaken = true
 	s.mu.Unlock()
-	return attest.ReleaseOK, "the TPM opened the remote salt; the disk's key will be derived from it and your password"
+	return attest.ReleaseOK, "the TPM opened the salt; the disk's key is derived from it and the password typed at the machine"
 }
 
 // Salt returns a copy of the combiner's salt from the released factor,
