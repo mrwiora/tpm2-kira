@@ -49,7 +49,7 @@ For more details on the cryptographic design, see [SECURITY-BACKGROUND.md](docs/
 **Software:**
 - Linux with TPM 2.0 kernel support (`/dev/tpmrm0`; `/dev/tpm0` is used only when
   the kernel provides no resource manager)
-- Go ≥ 1.25.8 (build only; the `go` line of go.mod is the requirement). Debian 13
+- Go ≥ 1.26.0 (build only; the `go` line of go.mod is the requirement). Debian 13
   ships 1.24: install the current Go from https://go.dev/dl into `/usr/local/go`
   and put `/usr/local/go/bin` first in `PATH`.
 

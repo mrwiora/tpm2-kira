@@ -14,15 +14,16 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: "1.27"
+          check-latest: true
 
       - name: Cache Go modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/go-build
@@ -45,17 +46,18 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: "1.27"
+          check-latest: true
 
       - name: Cache Go modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/go-build
@@ -80,9 +82,12 @@ jobs:
           # Create dist directory
           mkdir -p dist
 
-          # Get version for ldflags
+          # Get version for ldflags. -w drops the DWARF data; the symbol
+          # table stays (no -s): govulncheck reads it to tell which
+          # functions the binary holds, and without it every vulnerability
+          # of every module is reported.
           VERSION=${{ steps.get_version.outputs.VERSION }}
-          LDFLAGS="-s -w -X main.Version=${VERSION}"
+          LDFLAGS="-w -X main.Version=${VERSION}"
 
           # Build for Linux amd64. Static and cgo-free: the same binary is
           # copied into the initramfs, which has no libc.
@@ -95,7 +100,7 @@ jobs:
           sha256sum * > checksums.txt
 
       - name: Upload binary artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-binaries
           path: |
@@ -123,7 +128,7 @@ jobs:
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -234,7 +239,7 @@ jobs:
           sha256sum tpm2-kira-*.pkg.tar.zst | grep -v debug > package-checksums.txt || sha256sum tpm2-kira-*.pkg.tar.zst > package-checksums.txt
 
       - name: Upload package artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: archlinux-package
           path: |
@@ -267,7 +272,7 @@ jobs:
           echo "/usr/local/go/bin" >> "$GITHUB_PATH"
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -359,7 +364,7 @@ jobs:
           cat debian-checksums.txt
 
       - name: Upload package artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: debian-package
           path: debpkg/
@@ -382,7 +387,7 @@ jobs:
           pacman -S --noconfirm base-devel git openssh
 
       - name: Download the PKGBUILD that was actually built
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: archlinux-package
           path: built/
@@ -465,25 +470,25 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Download binary artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: linux-binaries
           path: dist/
 
       - name: Download package artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: archlinux-package
           path: archlinux/
 
       # Not 'debian/': that would collide with the packaging directory in the checkout.
       - name: Download Debian package artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: debian-package
           path: debpkg/

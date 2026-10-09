@@ -1,0 +1,9 @@
+# Vulnerabilities govulncheck reports wrongly, with the proof. Read by
+# tools/vulncheck.py: `GO-ID  why`, one per line.
+
+# The record is UNREVIEWED and has no fixed version, so every version of
+# go-attestation is reported. The advisory it comes from, GHSA-9r4w-jg96-92mv,
+# says patched in v0.6.1; the fix (commit b6e905e, "Guard against hash
+# injection via oversized SignatureHeaderSize" in attest/internal/events.go)
+# is in v0.6.4, the version in go.mod. Drop this when the record is reviewed.
+GO-2026-5298  go-attestation v0.6.4 carries the fix; the DB record is unreviewed and names no fixed version

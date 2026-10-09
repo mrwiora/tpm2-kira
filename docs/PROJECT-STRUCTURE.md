@@ -46,7 +46,9 @@ Where things are in the repository, and how the tests are run.
 ├── tools/
 │   ├── acceptance.py         # The acceptance run on a machine: package, install, checks, reboot, report
 │   ├── pcrtool.py            # PCR replay and full-chain diagnosis
-│   └── tpm2-pcr11predict     # Independent cross-check of the built-in PCR 11 computation
+│   ├── tpm2-pcr11predict     # Independent cross-check of the built-in PCR 11 computation
+│   ├── vulncheck.py          # govulncheck that fails on what the code calls into, minus vulncheck-ignore
+│   └── vulncheck-ignore      # Records the Go vulnerability database has wrong, with the proof
 ├── docs/
 │   ├── PROTOCOL-BLE.md           # Phone <-> machine protocol: the interface definition
 │   ├── PLAN-*.md                 # Designs: remote attestation, BLE, remote unlocking, factor release, the test host (PLAN-BLE-TESTING)
@@ -97,6 +99,10 @@ make test-all
 # writes a report with every log into one directory.
 tools/acceptance.py --distro arch   --host 172.17.2.198 --user pix --ask-password
 tools/acceptance.py --distro debian --host 172.17.2.196 --user pix --password-file ~/.vm-pw --luks /dev/vda3
+
+# Known vulnerabilities the code calls into (what the Vulnerability Scan
+# workflow runs: the source on every push, the release binary daily)
+tools/vulncheck.py ./...
 ```
 
 The machines this run should have - installed by a script, in a frozen

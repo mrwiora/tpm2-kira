@@ -10,3 +10,10 @@ updates:
       # build itself uses the current Go). They are bumped by hand when the
       # required Go moves anyway.
       - dependency-name: "golang.org/x/*"
+
+  # The actions the workflows use: a major behind means the deprecated
+  # Node runtime, and the warning in every job's log.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
