@@ -19,8 +19,6 @@ package cmd
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
 
 	"github.com/google/go-tpm/tpm2/transport"
 
@@ -28,10 +26,10 @@ import (
 )
 
 // measurePoint is the boot-check prediction for one enrolment: the values,
-// a note saying how they were obtained, or the reason there are none.
+// or the reason there are none (enrol then says the first boot will show
+// "changed" once).
 type measurePoint struct {
 	values []attest.PCRValue
-	note   string
 	err    error
 }
 
@@ -74,7 +72,7 @@ func predictMeasurePoint(tpmDev transport.TPM, sealed *SealedBlob, sel attest.PC
 	if err := attest.CheckMeasurePointValues(sel.Alg, live, vals); err != nil {
 		return &measurePoint{err: fmt.Errorf("the prediction does not fit the running system: %w", err)}
 	}
-	return &measurePoint{values: vals, note: describeMeasurePoint(specs, res)}
+	return &measurePoint{values: vals}
 }
 
 // measurePointSpecs chooses, per attested PCR, where its boot-check value
@@ -93,49 +91,6 @@ func measurePointSpecs(indices []uint8) []PCRSpec {
 		specs = append(specs, spec)
 	}
 	return specs
-}
-
-// describeMeasurePoint says in one line how the baseline was obtained.
-func describeMeasurePoint(specs []PCRSpec, res *ReadPCRValuesResult) string {
-	by := map[PCRSource][]string{}
-	for _, s := range specs {
-		by[s.Source] = append(by[s.Source], strconv.Itoa(s.Index))
-	}
-	var parts []string
-	if v := by[PCRSourceEventlog]; len(v) > 0 {
-		parts = append(parts, "event log for "+strings.Join(v, ","))
-	}
-	if v := by[PCRSourceUKI]; len(v) > 0 {
-		parts = append(parts, "unified kernel image for "+strings.Join(v, ",")+
-			" + "+strings.Join(MeasurePointPhases, " + ")+" on "+strings.Join(v, ","))
-	}
-	if v := by[PCRSourceRegister]; len(v) > 0 {
-		parts = append(parts, "registers for "+strings.Join(v, ","))
-	}
-	s := strings.Join(parts, "; ")
-	if res.EventlogInfo != nil && res.EventlogInfo.MeasurePointExtends != "" {
-		// "word:1,2;word:3" from ApplyMeasurePointExtends
-		s += " + " + strings.NewReplacer(":", " on ", ";", ", ").Replace(res.EventlogInfo.MeasurePointExtends)
-	}
-	return "values at the boot check (" + s + ")"
-}
-
-// printMeasurePoint reports the baseline in the enrolment header.
-func printMeasurePoint(mp *measurePoint, sel attest.PCRSelection) {
-	if mp.err == nil {
-		fmt.Printf("Baseline:      %s\n", mp.note)
-		return
-	}
-	fmt.Println("Baseline:      live PCR values; the values at the boot check could not be predicted:")
-	for _, line := range strings.Split(mp.err.Error(), "\n") {
-		fmt.Printf("               %s\n", line)
-	}
-	for _, i := range sel.Indices {
-		if why, ok := IsVolatileAfterMeasurePoint(int(i)); ok {
-			fmt.Printf("WARNING: PCR %d changes after the boot check (%s),\n", i, why)
-			fmt.Println("         so the first boot will show it as changed. Approve it once on the phone.")
-		}
-	}
 }
 
 // MeasurePointValues implements attest.MeasurePointProvider.

@@ -130,8 +130,7 @@ func decideInitrdCoverage(console *bufio.Reader, sel attest.PCRSelection, cov in
 		return true, nil
 	}
 	if cov.coveredBy(sel.Indices) {
-		fmt.Printf("Initrd:        covered (%s)\n", strings.Join(cov.How, "; "))
-		return true, nil
+		return true, nil // covered: nothing to say
 	}
 	fmt.Println()
 	fmt.Println("WARNING: the PCRs the phone will check do not cover the initrd.")

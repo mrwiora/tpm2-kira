@@ -31,7 +31,9 @@ It may not carry what came before.
   that must be separated (the confined radio worker) are the same binary run
   with other arguments, never a second executable.
 - **SHA-1 only when asked.** The SHA-1 PCR bank is used only with `--sha1`,
-  with a warning; nothing falls back to it on its own. Workarounds for old
+  with a warning at seal and reseal (control's overview carries the risk
+  instead, so its steps say nothing twice); nothing falls back to it on
+  its own. Workarounds for old
   TPMs must not change the SHA-256 path.
 - **Tests must run against the current code.** Use `-count=1` for the
   integration suite; a result marked `(cached)` has tested nothing.

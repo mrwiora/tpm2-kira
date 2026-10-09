@@ -440,9 +440,6 @@ func AttestEnrol(o EnrolOptions) error {
 	if err != nil {
 		return err
 	}
-	if sel.Alg == attest.AlgSHA1 {
-		warnAboutSHA1Quote()
-	}
 	// Find out now whether the TPM can quote this selection, not after the
 	// radio is taken and a human has compared codes.
 	if _, err := readPCRBank(tpmDev, sel); err != nil {
@@ -458,17 +455,20 @@ func AttestEnrol(o EnrolOptions) error {
 		return err
 	}
 
-	fmt.Println("=== tpm2-kira attest enrol ===")
-	fmt.Printf("Machine:       %s (slot %d)\n", blob.FriendlyName, SlotNumber(sealIndex))
-	fmt.Printf("PCRs quoted:   %s\n", sel)
+	// The header is two lines: what the phone sees in detail is its own
+	// screen's job ('attest status' and 'info' say it here), and the
+	// overview already judges the machine.
 	mp := predictMeasurePoint(tpmDev, sealed, sel, o.Debug)
-	printMeasurePoint(mp, sel)
-	fmt.Printf("Adapter:       hci%d\n", o.Adapter)
+	fmt.Printf("Enrolling %q (slot %d) over hci%d. The adapter is taken over until this\n", blob.FriendlyName, SlotNumber(sealIndex), o.Adapter)
+	fmt.Println("finishes: its Bluetooth devices disconnect meanwhile (--adapter N for another).")
 	fmt.Println()
-	fmt.Println("NOTE: the adapter is taken over exclusively while enrolling. Bluetooth")
-	fmt.Println("      mice, keyboards and headsets on it disconnect until this finishes.")
-	fmt.Println("      Use --adapter N to enrol over a second adapter instead.")
-	fmt.Println()
+	if mp.err != nil {
+		// Without a prediction the phone pins the running system's values,
+		// which the boot check cannot match.
+		fmt.Println("NOTE: the values at the boot check could not be predicted: the phone will show")
+		fmt.Println("      \"changed\" at the first boot - check and approve it there once.")
+		fmt.Println()
+	}
 
 	in := o.In
 	if in == nil {
@@ -704,15 +704,6 @@ func chooseAttestBank(sha1 bool, sealedAlg uint16, has func(PCRHashAlgo) bool) (
 			"The only remaining option is the SHA-1 bank:\n\n    tpm2-kira attest enrol --sha1\n\n%s", stopgap)
 	}
 	return 0, fmt.Errorf("this TPM has no %s PCR bank to quote", hashAlgo.DisplayString())
-}
-
-// warnAboutSHA1Quote is 'attest enrol's counterpart of WarnAboutHashAlgo.
-func warnAboutSHA1Quote() {
-	fmt.Println("WARNING: the phone will check the SHA-1 PCR bank.")
-	fmt.Println("  SHA-1 is broken against collision attacks and TPMs are not required to")
-	fmt.Println("  provide a SHA-1 bank at all. Use it only where the TPM offers no SHA-256")
-	fmt.Println("  bank, and treat it as a stopgap.")
-	fmt.Println()
 }
 
 // gateCoordinatorWait is how long the worker waits for the coordinator's
