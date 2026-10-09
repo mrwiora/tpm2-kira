@@ -272,5 +272,5 @@ func slotKeyslotAdvice(tpmPath string) string {
 	if len(dirt) == 0 {
 		return ""
 	}
-	return dirtText(dirt) + "\n'tpm2-kira control' (Remove a slot) deletes what is left; 'luks remove' takes a keyslot by hand.\n"
+	return dirtText(dirt) + "\n'tpm2-kira control' (the slot's line) deletes what is left; 'luks remove' takes a keyslot by hand.\n"
 }

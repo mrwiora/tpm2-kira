@@ -191,7 +191,7 @@ func statusNotes(r StatusReport) []string {
 				continue
 			}
 			if !slotThere[ks.Token.Slot] {
-				notes = append(notes, fmt.Sprintf("%s keyslot %d is bound to slot %d, which is gone - the slot is dirty: 'tpm2-kira control' (Remove a slot) deletes what is left, or tpm2-kira luks remove %s --keyslot %d by hand", d.Device, ks.Keyslot, ks.Token.Slot, d.Device, ks.Keyslot))
+				notes = append(notes, fmt.Sprintf("%s keyslot %d is bound to slot %d, which is gone - the slot is dirty: 'tpm2-kira control' (the slot's line) deletes what is left, or tpm2-kira luks remove %s --keyslot %d by hand", d.Device, ks.Keyslot, ks.Token.Slot, d.Device, ks.Keyslot))
 				continue
 			}
 			if ks.Token.Mode == LuksModePasswordRemoteSalt {

@@ -73,9 +73,11 @@ It may not carry what came before.
   say what the file would need; `tpm2-kira control` sets it and checks the
   prerequisites of a working setup. Every other file on the system - the
   kernel command line, crypttab, `/etc/mkinitcpio.conf` - is advised by
-  `control`, never edited. What weakens the protections (SHA-1, Secure Boot
-  off or in Setup Mode, an unvouched endorsement key, a selection without
-  the kernel) is shown on `control`'s overview under Risks.
+  `control`, never edited. `control`'s status judges line by line - green
+  what is good, red what is not with the risk in brackets (SHA-1, Secure
+  Boot off or in Setup Mode, an unvouched endorsement key, a selection
+  without the kernel, a loose file holding the PIN); there is no separate
+  risks list.
 - **Root for everything but the help.** Every command refuses to run as a
   user (`main.go` `requireRoot`); `control` says so on its own screen. The
   test suite's exception is `TPM2_KIRA_UNPRIVILEGED=1` for the binary

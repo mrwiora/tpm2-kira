@@ -6,45 +6,67 @@ import (
 	"testing"
 )
 
-// The steps are judged from the facts: done, possible, or blocked with
-// the reason, in the order they build on each other.
+// The overview is a tree judged from the facts: the signing key, the
+// standard sealing guided while a slot of the pair is missing, then every
+// slot a line of its own with the strong slot's options under it, the
+// typed-salt keyslot independent of the slots, and the unlock greyed until
+// a keyslot of ours exists.
 func TestControlSteps(t *testing.T) {
 	c := &controller{facts: machineFacts{TPM: "/dev/tpmrm0", SHA256Bank: true, LogSHA256: true, PCRs: "0e,2e,7e,11u"}}
 	steps := c.steps()
-	if len(steps) != 7 || steps[0].Done != "" || steps[1].Blocked != "needs the signing key" || steps[2].Blocked != "needs the TOTP seal" || steps[5].Blocked != "needs a keyslot of tpm2-kira's" || steps[6].Blocked != "no slot in the TPM" {
+	if len(steps) != 4 || steps[0].Done != "" || steps[1].Key != "seal" || steps[1].Blocked != "needs the signing key" ||
+		steps[2].Key != "luks-salt" || steps[2].Blocked == "" || steps[3].Key != "unlock" || steps[3].Blocked != "no slot is sealed yet" {
 		t.Fatalf("a bare machine: %+v", steps)
 	}
 
+	// With the key the sealing of the standard pair is the recommendation:
+	// no slot-specific option shows before a slot exists.
 	c.facts.Keys = "local key files"
-	c.facts.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u", Signed: true}, {Slot: 1, PCRs: "0e,7e", Fallback: true, Signed: true}}
 	steps = c.steps()
-	if steps[1].Done == "" || steps[2].Blocked != "no Bluetooth adapter on this machine" || steps[3].Blocked == "" {
-		t.Fatalf("sealed, no adapter, no LUKS: %+v", steps)
+	if steps[1].Blocked != "" || recommended(steps) != 1 || !strings.Contains(steps[1].Explain, "The standard pair") {
+		t.Fatalf("no slot yet: %+v", steps[1])
 	}
 
-	c.facts.Adapter = "hci0"
+	// Both slots sealed: the tree replaces the seal step; the strong slot
+	// carries the options, each slot's line removes it.
+	c.facts.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u", Signed: true}, {Slot: 1, PCRs: "0e,7e", Fallback: true, Signed: true}}
 	c.facts.Status.Devices = []LuksDeviceStatus{{Device: "/dev/sda2", Keyslots: []KeyslotStatus{{Keyslot: 0}}}}
 	steps = c.steps()
-	if steps[2].Blocked != "" || steps[2].Done != "" || steps[3].Blocked != "" || steps[4].Blocked != "needs the attestation by phone" {
-		t.Fatalf("adapter and a device: %+v", steps)
+	if len(steps) != 7 || steps[1].Key != "slot:0" || steps[2].Key != "attest" || steps[3].Key != "luks-remote" ||
+		steps[4].Key != "slot:1" || steps[5].Key != "luks-salt" || steps[6].Key != "unlock" {
+		t.Fatalf("the tree: %+v", steps)
+	}
+	if steps[1].Done != "sealed to 0e,2e,7e,11u" || !steps[1].Optional || !steps[1].SelfConfirm ||
+		steps[4].Done != "the fallback, sealed to 0e,7e" {
+		t.Fatalf("the slot lines: %+v %+v", steps[1], steps[4])
+	}
+	if !steps[2].Child || !steps[3].Child || steps[2].Blocked != "no Bluetooth adapter on this machine" ||
+		steps[3].Blocked != "needs the attestation by phone" {
+		t.Fatalf("the strong slot's options: %+v %+v", steps[2], steps[3])
+	}
+	if steps[6].Blocked != "needs a keyslot of tpm2-kira's (the remote salt under slot 0, or the typed salt)" {
+		t.Fatalf("unlock without a keyslot: %+v", steps[6])
 	}
 
+	// A phone and a remote-salt keyslot bound to slot 0, read from the
+	// LUKS header: the options under slot 0 are done.
+	c.facts.Adapter = "hci0"
 	c.facts.Phone = true
 	c.facts.Status.Slots[0].Phones = []string{"Pixel"}
 	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: 0}})
 	steps = c.steps()
-	if steps[2].Done == "" || steps[4].Done == "" || steps[3].Done != "" {
-		t.Fatalf("phone and a remote-salt keyslot: %+v", steps)
+	if steps[2].Done != `phone "Pixel"` || steps[3].Done != "keyslot 1 of /dev/sda2" {
+		t.Fatalf("phone and remote-salt keyslot: %+v %+v", steps[2], steps[3])
 	}
 	// The unlock step: the mode the keyslots call for, and the route.
-	if steps[5].Done != "" || !strings.Contains(steps[5].Explain, "Open: TPM2_KIRA_UNLOCK=password+remotesalt (now ); /dev/sda2 not routed") {
-		t.Fatalf("mode unset, device unrouted: %+v", steps[5])
+	if steps[6].Done != "" || !strings.Contains(steps[6].Explain, "Open: TPM2_KIRA_UNLOCK=password+remotesalt (now ); /dev/sda2 not routed") {
+		t.Fatalf("mode unset, device unrouted: %+v", steps[6])
 	}
 	c.facts.Status.UnlockMode = UnlockPasswordRemoteSalt
 	c.facts.Routed = map[string]bool{"/dev/sda2": true}
 	steps = c.steps()
-	if steps[5].Done != "mode password+remotesalt; the key routed" {
-		t.Fatalf("mode set, device routed: %+v", steps[5])
+	if steps[6].Done != "mode password+remotesalt; the key routed" {
+		t.Fatalf("mode set, device routed: %+v", steps[6])
 	}
 	c.facts.Status.Devices[0].Keyslots[1].Token.Mode = LuksModePasswordSalt
 	if got := c.wantedUnlockMode(); got != UnlockPasswordSalt {
@@ -52,37 +74,43 @@ func TestControlSteps(t *testing.T) {
 	}
 	c.facts.Status.Devices[0].Keyslots[1].Token.Mode = LuksModePasswordRemoteSalt
 
-	// The screen: the facts, the markers, the recommendation.
+	// The screen: the status, the markers, the tree, the recommendation.
 	var out bytes.Buffer
 	c.out = &out
 	c.show(steps)
 	got := out.String()
-	for _, want := range []string{"SHA-256 bank and event log", "hci0", "[x]", "[ ] 4", "Recommended next:", "4  Disk key from password + salt (hashpwd2)\n", "6  Unlock at boot (control.conf, the key's route, the initramfs)  - mode password+remotesalt; the key routed"} {
+	for _, want := range []string{"SHA-256 bank and event log", "hci0", "[x]", "Slot 0  - sealed to 0e,2e,7e,11u",
+		"  Attestation by phone", "Recommended next:", "6  Disk key from password + salt (hashpwd2)\n",
+		"7  Unlock at boot (control.conf, the key's route, the initramfs)  - mode password+remotesalt; the key routed"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the screen lacks %q:\n%s", want, got)
 		}
 	}
-	c.facts.UseSHA1 = true
-	out.Reset()
-	c.show(steps)
-	if !strings.Contains(out.String(), "the SHA-1 bank is used") {
-		t.Errorf("SHA-1 not said:\n%s", out.String())
-	}
 
-	// The remove step: with whole slots it waits, picked by hand, never the
-	// recommendation; a half-gone slot turns it dirty and recommended first.
-	if steps[6].Blocked != "" || steps[6].Dirty != "" || !steps[6].Optional {
-		t.Fatalf("remove with whole slots: %+v", steps[6])
-	}
+	// A half-gone slot is a line of its own, dirty and recommended first.
 	c.facts.Dirt = []SlotContents{{Slot: 2, Index: NVRAMSlotStart + 2, Counter: true}}
 	dirty := c.steps()
-	if !strings.Contains(dirty[6].Dirty, "slot 2 is dirty: the record counter left") || recommended(dirty) != 6 {
-		t.Fatalf("a dirty slot: %+v", dirty[6])
+	if dirty[5].Key != "slot:2" || dirty[5].Dirty != "dirty: the record counter left" || recommended(dirty) != 5 {
+		t.Fatalf("a dirty slot: %+v", dirty[5])
 	}
 	out.Reset()
 	c.show(dirty)
-	if got := out.String(); !strings.Contains(got, "[!]") || !strings.Contains(got, "7  Remove a slot  - slot 2 is dirty") {
+	if got := out.String(); !strings.Contains(got, "[!]") || !strings.Contains(got, "Slot 2  - dirty: the record counter left") {
 		t.Fatalf("the dirty screen:\n%s", got)
+	}
+	c.facts.Dirt = nil
+
+	// A missing half of the standard pair brings the seal step back, for
+	// exactly the missing slot.
+	c.facts.Status.Slots = c.facts.Status.Slots[:1]
+	steps = c.steps()
+	if steps[1].Key != "seal" || !strings.Contains(steps[1].Explain, "Slot 1, the fallback, is missing") || steps[2].Key != "slot:0" {
+		t.Fatalf("fallback missing: %+v", steps[1])
+	}
+	c.facts.Status.Slots = []StatusSlot{{Slot: 1, PCRs: "0e,7e", Fallback: true, Signed: true}}
+	steps = c.steps()
+	if steps[1].Key != "seal" || !strings.Contains(steps[1].Explain, "Slot 0 is missing") {
+		t.Fatalf("slot 0 missing: %+v", steps[1])
 	}
 }
 
@@ -94,46 +122,66 @@ func TestNoteTextEscapesMarkupAndDropsIndent(t *testing.T) {
 	}
 }
 
-// The risks: what weakens the protections, judged from the facts.
-func TestControlRisks(t *testing.T) {
-	f := machineFacts{SecureBoot: SecureBootState{Known: true, Enabled: true}, EKBy: "Infineon"}
+// The status on top judges line by line: green what is good, red what is
+// not with the risk in brackets; there is no separate risks list.
+func TestControlStatusJudgement(t *testing.T) {
+	f := machineFacts{TPM: "/dev/tpmrm0", LogSHA256: true, Keys: "local key files",
+		SecureBoot: SecureBootState{Known: true, Enabled: true}, EKBy: "Infineon", Initramfs: "mkinitcpio"}
 	f.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u"}, {Slot: 1, PCRs: "0e,7e", Fallback: true}}
-	if r := risks(&f); len(r) != 0 {
-		t.Fatalf("a sound machine has risks: %v", r)
-	}
-	f.UseSHA1, f.SHA1Why = true, "no SHA-256 bank"
-	f.SecureBoot = SecureBootState{Known: true, SetupMode: true}
-	f.Status.Slots[0].PCRs = "0,2,7"
-	f.EKBy, f.EKNote, f.Phone = "", "the TPM has no vendor certificate for its endorsement key", true
-	f.PINLoose = true
-	r := risks(&f)
-	for i, want := range []string{"SHA-1 bank", "Setup Mode", "slot 0 is sealed to PCRs 0,2,7", "no known vendor vouches", "holds the YubiKey PIN"} {
-		if i >= len(r) || !strings.Contains(r[i], want) {
-			t.Errorf("risk %d lacks %q: %v", i, want, r)
+	c := &controller{facts: f}
+	got := c.factsText()
+	for _, want := range []string{
+		good("/dev/tpmrm0, SHA-256 bank and event log"),
+		good("Infineon vouches for the endorsement key"),
+		good("enabled"),
+		good("0 (0e,2e,7e,11u), 1 (0e,7e, the fallback)"),
+		good("local key files"),
+		good("mkinitcpio"),
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the sound machine lacks %q:\n%s", want, got)
 		}
 	}
-	if !strings.Contains(r[3], "enrolled phone pinned it on first use") {
-		t.Errorf("the phone's trust not said: %s", r[3])
+	if strings.Contains(got, "risk:") || strings.Contains(got, "\033[0;31m") {
+		t.Errorf("a sound machine shows red:\n%s", got)
 	}
-	f.SecureBoot = SecureBootState{Known: true}
-	if r := risks(&f); !strings.Contains(r[1], "Secure Boot is disabled") {
-		t.Errorf("disabled: %v", r)
+
+	c.facts.UseSHA1, c.facts.SHA1Why = true, "no SHA-256 bank"
+	c.facts.SecureBoot = SecureBootState{Known: true, SetupMode: true}
+	c.facts.Status.Slots[0].PCRs = "0,2,7"
+	c.facts.EKBy, c.facts.EKNote, c.facts.Phone = "", "the TPM has no vendor certificate for its endorsement key", true
+	c.facts.PINLoose = true
+	c.facts.Initramfs = ""
+	got = c.factsText()
+	for _, want := range []string{
+		"the SHA-1 bank is used (risk: SHA-1 collisions are practical",
+		"Setup Mode (risk: any root user can replace the keys",
+		"slot 0 leaves the kernel, the initrd or the command line unmeasured (risk: a replaced initrd",
+		"none vouches for the endorsement key: the TPM has no vendor certificate for its endorsement key (risk: the enrolled phone pinned it on first use",
+		"holds the PIN, but other users can read it",
+		"neither mkinitcpio nor initramfs-tools found (risk: no code screen at boot",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the status lacks %q:\n%s", want, got)
+		}
 	}
-	f.SecureBoot = SecureBootState{}
-	if r := risks(&f); !strings.Contains(r[1], "cannot be read") {
-		t.Errorf("unknown: %v", r)
+	c.facts.SecureBoot = SecureBootState{Known: true}
+	if got := c.factsText(); !strings.Contains(got, "disabled (risk: the boot loader and the kernel run unsigned") {
+		t.Errorf("disabled: %s", got)
 	}
-	// On the screens.
-	f.Risks = risks(&f)
-	c := &controller{facts: f}
+	c.facts.SecureBoot = SecureBootState{}
+	if got := c.factsText(); !strings.Contains(got, "state unknown, no efivars (risk:") {
+		t.Errorf("unknown: %s", got)
+	}
+	if d := c.noteDescription(); strings.Contains(d, "Risks") {
+		t.Errorf("a separate risks list remains:\n%s", d)
+	}
+	// The plain screen carries the judged status and the version header.
 	var out bytes.Buffer
 	c.out = &out
 	c.show(c.steps())
-	if !strings.Contains(out.String(), "Risks") || !strings.Contains(out.String(), "  ! the SHA-1 bank") {
-		t.Errorf("the plain screen lacks the risks:\n%s", out.String())
-	}
-	if d := c.noteDescription(); !strings.Contains(d, "*Risks*\n! the SHA-1 bank") {
-		t.Errorf("the note lacks the risks:\n%s", d)
+	if !strings.Contains(out.String(), "control unknown - the protections") || !strings.Contains(out.String(), "the SHA-1 bank is used (risk:") {
+		t.Errorf("the plain screen:\n%s", out.String())
 	}
 }
 

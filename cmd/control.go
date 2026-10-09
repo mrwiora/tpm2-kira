@@ -54,10 +54,9 @@ type machineFacts struct {
 	EKBy       string // the vendor whose chain vouches for this TPM's EK; "" when none does
 	EKNote     string // why none does
 	SecureBoot SecureBootState
-	Risks      []string // what weakens the protections, for the person to know
-	Initramfs  string   // mkinitcpio, initramfs-tools, or ""
-	Adapter    string   // hciN, or ""
-	AttestConf string   // "" when control.conf loads; else the reason
+	Initramfs  string // mkinitcpio, initramfs-tools, or ""
+	Adapter    string // hciN, or ""
+	AttestConf string // "" when control.conf loads; else the reason
 
 	Status StatusReport   // the slots, the unlock mode, the LUKS devices, the notes
 	Dirt   []SlotContents // slots whose blob is gone but of which parts remain
@@ -133,7 +132,6 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	if f.TPMErr == "" {
 		f.Dirt = collectDirt(tpmPath, f.Status.Devices)
 	}
-	f.Risks = risks(&f)
 	for _, s := range f.Status.Slots {
 		f.Phone = f.Phone || len(s.Phones) > 0
 		f.Salt = f.Salt || s.RemoteSalt
@@ -154,21 +152,11 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	return f
 }
 
-// risks are what weakens the protections: said on the overview, in the
-// person's face, since none of them stops a step from running.
-func risks(f *machineFacts) []string {
-	var r []string
-	if f.UseSHA1 {
-		r = append(r, "the SHA-1 bank is used ("+f.SHA1Why+"): SHA-1 collisions are practical, so a measured boot can in principle be forged; the acknowledged weakness of this TPM")
-	}
-	switch {
-	case !f.SecureBoot.Known:
-		r = append(r, "the Secure Boot state cannot be read (no efivars): whether PCR 7 attests an enforced policy is unknown")
-	case f.SecureBoot.SetupMode:
-		r = append(r, "the platform is in Setup Mode: the Secure Boot keys can be replaced without physical presence, so PCR 7 records a policy any root user can rewrite")
-	case !f.SecureBoot.Enabled:
-		r = append(r, "Secure Boot is disabled: the boot loader and the kernel run unsigned, and PCR 7 records only that")
-	}
+// weakSlots are the slots whose selection leaves the kernel, the initrd
+// or the command line unmeasured (the fallback is weak by design and not
+// counted).
+func weakSlots(f *machineFacts) []int {
+	var weak []int
 	for _, s := range f.Status.Slots {
 		if s.Fallback {
 			continue
@@ -178,20 +166,10 @@ func risks(f *machineFacts) []string {
 			continue
 		}
 		if kernelInitrd, cmdline := bootChainCoverage(PCRSpecIndices(specs)); !kernelInitrd || !cmdline {
-			r = append(r, fmt.Sprintf("slot %d is sealed to PCRs %s, which leave the kernel, the initrd or the command line unmeasured: a replaced initrd or an edited command line still shows a valid code (reseal with 11u, or 8e,9e)", s.Slot, s.PCRs))
+			weak = append(weak, s.Slot)
 		}
 	}
-	if f.TPMErr == "" && f.EKBy == "" {
-		phone := ""
-		if f.Phone {
-			phone = " - the enrolled phone pinned it on first use, as it would any TPM, a software one included"
-		}
-		r = append(r, "no known vendor vouches for this TPM's endorsement key ("+f.EKNote+"): a phone cannot tell it from a software TPM"+phone)
-	}
-	if f.PINLoose {
-		r = append(r, controlConfigPath()+" holds the YubiKey PIN, but other users can read it, or root does not own it: chown root: and chmod 600 it, and consider changing the PIN")
-	}
-	return r
+	return weak
 }
 
 // ekVerdict is what a phone concludes about this TPM's endorsement key:
@@ -220,16 +198,22 @@ func fileExists(p string) bool {
 	return err == nil
 }
 
-// A step of the protection, as the menu shows it.
+// A step of the protection, as the menu shows it. The overview is a tree:
+// every populated slot is a line of its own, the options that build on a
+// slot (the attestation, the remote salt) are indented under it (Child),
+// and picking a slot's own line removes the slot whole (SelfConfirm: the
+// step asks before it acts, so no "run it again?" stands in front).
 type controlStep struct {
-	Key      string
-	Title    string
-	Explain  string // one or two lines on what it does
-	Done     string // "" when not done; else how it is
-	Blocked  string // "" when it can be done; else why not
-	Dirty    string // "" when nothing is half-gone; else what and where
-	Optional bool   // not a protection: never the recommendation on its own
-	Run      func(c *controller) error
+	Key         string
+	Title       string
+	Explain     string // one or two lines on what it does
+	Done        string // "" when not done; else how it is
+	Blocked     string // "" when it can be done; else why not
+	Dirty       string // "" when nothing is half-gone; else what and where
+	Optional    bool   // not a protection: never the recommendation on its own
+	Child       bool   // indented under the slot line above it
+	SelfConfirm bool   // Run confirms by itself; picked straight even when Done
+	Run         func(c *controller) error
 }
 
 func (s controlStep) marker() string {
@@ -253,26 +237,41 @@ type controller struct {
 	ran   bool // a step ran: the initramfs is to be rebuilt
 }
 
-// steps are the protections in the order they build on each other, judged
-// against the facts.
+// steps are the overview: the signing key, then the slots as a tree - the
+// standard sealing (slots 0 and 1) guided while one of them is missing,
+// each populated slot a line of its own that removes the slot whole when
+// picked, with the options that build on the strong slot indented under it
+// - then the keyslot from a typed salt (independent of the slots) and the
+// unlock, greyed until a keyslot of ours exists.
 func (c *controller) steps() []controlStep {
 	f := &c.facts
-	var slot0 *StatusSlot
+	var slot0, strong *StatusSlot
 	fallback := false
 	for i := range f.Status.Slots {
-		if f.Status.Slots[i].Slot == 0 {
-			slot0 = &f.Status.Slots[i]
+		s := &f.Status.Slots[i]
+		if s.Slot == 0 {
+			slot0 = s
 		}
-		fallback = fallback || f.Status.Slots[i].Fallback
+		if !s.Fallback && strong == nil {
+			strong = s // the strong slot carries the options: slot 0 normally
+		}
+		fallback = fallback || s.Fallback
 	}
-	hasSalt, hasRemote := false, false
+	hasSalt := false
+	keyslotsOf := map[int][]string{} // slot -> "keyslot N of /dev/x", from the LUKS headers
+	remoteOf := map[int][]string{}   // the same, the remote-salt ones alone
 	for _, d := range f.Status.Devices {
 		for _, ks := range d.Keyslots {
-			if ks.Token != nil && ks.Token.Mode == LuksModePasswordSalt {
+			if ks.Token == nil {
+				continue
+			}
+			name := fmt.Sprintf("keyslot %d of %s", ks.Keyslot, d.Device)
+			keyslotsOf[ks.Token.Slot] = append(keyslotsOf[ks.Token.Slot], name)
+			if ks.Token.Mode == LuksModePasswordSalt {
 				hasSalt = true
 			}
-			if ks.Token != nil && ks.Token.Mode == LuksModePasswordRemoteSalt {
-				hasRemote = true
+			if ks.Token.Mode == LuksModePasswordRemoteSalt {
+				remoteOf[ks.Token.Slot] = append(remoteOf[ks.Token.Slot], name)
 			}
 		}
 	}
@@ -292,37 +291,102 @@ func (c *controller) steps() []controlStep {
 	default:
 		keys.Done = f.Keys
 	}
+	steps := []controlStep{keys}
 
-	seal := controlStep{Key: "seal", Title: "TOTP code at boot",
-		Explain: "A TOTP key sealed in the TPM to this boot's state (" + f.PCRs + "), shown as a code at every boot - plus a fallback slot sealed to PCRs 0 and 7 alone. Pair both with your authenticator.",
-		Run:     (*controller).runSeal}
-	switch {
-	case f.TPMErr != "":
-		seal.Blocked = "no TPM: " + f.TPMErr
-	case f.Keys == "":
-		seal.Blocked = "needs the signing key"
-	case slot0 != nil && fallback:
-		seal.Done = "slot 0 sealed to " + slot0.PCRs + "; the fallback in place"
-	case slot0 != nil:
-		seal.Done = "slot 0 sealed to " + slot0.PCRs + " (no fallback slot: tpm2-kira seal --nvram 1 --pcrs 0e,7e)"
+	// The standard sealing, slots 0 and 1: the step guides to it while one
+	// of the two is missing and seals exactly what lacks; with both in
+	// place the tree below shows them and the step disappears ('tpm2-kira
+	// seal' stays for sealing anew by hand).
+	if slot0 == nil || !fallback {
+		seal := controlStep{Key: "seal", Title: "TOTP codes at boot (slot 0, and slot 1 the fallback)",
+			Run: (*controller).runSeal}
+		switch {
+		case f.TPMErr != "":
+			seal.Blocked = "no TPM: " + f.TPMErr
+		case f.Keys == "":
+			seal.Blocked = "needs the signing key"
+		case slot0 == nil && !fallback:
+			seal.Explain = "The standard pair: a TOTP key sealed to this boot's state (" + f.PCRs + ") into slot 0, and one sealed to PCRs 0 and 7 alone into slot 1 - the fallback for a boot whose kernel changed unpredicted. Pair both with your authenticator."
+		case slot0 == nil:
+			seal.Explain = "Slot 0 is missing: seals a TOTP key to this boot's state (" + f.PCRs + ") into it. Slot 1, the fallback, stays as it is."
+		default:
+			seal.Explain = "Slot 1, the fallback, is missing: seals a TOTP key to PCRs 0 and 7 alone into it, the code for a boot whose kernel changed unpredicted. Slot 0 stays as it is."
+		}
+		steps = append(steps, seal)
 	}
 
-	attest := controlStep{Key: "attest", Title: "Attestation by phone (Marify, Bluetooth LE)",
-		Explain: "The phone checks the boot state against what it pinned and shows a code the machine must show too; it replaces Enter at the code screen.",
-		Run:     (*controller).runAttest}
-	switch {
-	case seal.Done == "":
-		attest.Blocked = "needs the TOTP seal"
-	case f.Adapter == "":
-		attest.Blocked = "no Bluetooth adapter on this machine"
-	case f.AttestConf != "":
-		attest.Blocked = controlConfigPath() + ": " + f.AttestConf
-	case f.Phone:
-		attest.Done = "a phone is enrolled"
+	// The tree: every populated slot, and every dirty one, is a line of
+	// its own; picking the line removes the slot whole, dirt included.
+	lines := map[int]controlStep{}
+	var order []int
+	for i := range f.Status.Slots {
+		s := f.Status.Slots[i]
+		desc := "sealed to " + s.PCRs
+		if s.Fallback {
+			desc = "the fallback, " + desc
+		}
+		if strong == nil || s.Slot != strong.Slot {
+			// The strong slot's phones and keyslots are its children's
+			// lines; every other slot carries them on its own line.
+			if len(s.Phones) > 0 {
+				desc += ", phone " + quoted(s.Phones)
+			}
+			for _, name := range keyslotsOf[s.Slot] {
+				desc += ", " + name
+			}
+		}
+		n := s.Slot
+		lines[n] = controlStep{Key: fmt.Sprintf("slot:%d", n), Title: fmt.Sprintf("Slot %d", n),
+			Done: desc, Optional: true, SelfConfirm: true,
+			Explain: "Picking a slot deletes it whole: the TOTP key (its codes in the authenticator), the phones, the remote salt, the LUKS keyslots bound to it, the recovery blobs. Keyslots that are not tpm2-kira's - the recovery passphrase - stay.",
+			Run:     func(c *controller) error { return c.runRemoveSlot(n) }}
+		order = append(order, n)
+	}
+	for _, d := range f.Dirt {
+		n := d.Slot
+		lines[n] = controlStep{Key: fmt.Sprintf("slot:%d", n), Title: fmt.Sprintf("Slot %d", n),
+			Dirty: "dirty: " + d.Remains() + " left", SelfConfirm: true,
+			Explain: "A deletion stopped halfway, or a piece was taken by hand: picking the slot removes what is left of it.",
+			Run:     func(c *controller) error { return c.runRemoveSlot(n) }}
+		order = append(order, n)
+	}
+	sort.Ints(order)
+	for _, n := range order {
+		steps = append(steps, lines[n])
+		if strong == nil || n != strong.Slot {
+			continue
+		}
+		// The options that build on the strong slot, under its line.
+		attest := controlStep{Key: "attest", Child: true, Title: "Attestation by phone (Marify, Bluetooth LE)",
+			Explain: "The phone checks the boot state against what it pinned and shows a code the machine must show too; it replaces Enter at the code screen.",
+			Run:     (*controller).runAttest}
+		switch {
+		case f.Adapter == "":
+			attest.Blocked = "no Bluetooth adapter on this machine"
+		case f.AttestConf != "":
+			attest.Blocked = controlConfigPath() + ": " + f.AttestConf
+		case len(strong.Phones) > 0:
+			attest.Done = "phone " + quoted(strong.Phones)
+		}
+		luksRemote := controlStep{Key: "luks-remote", Child: true, Title: "Disk key from password + remote salt (the phone)",
+			Explain: "A LUKS keyslot whose key is derived from your password and the salt the phone hands back after it attested the boot: the disk needs the phone, this TPM in an approved boot, and your password.",
+			Run:     func(c *controller) error { return c.runLuks(LuksModePasswordRemoteSalt) }}
+		switch {
+		case !luksDevices:
+			luksRemote.Blocked = "no LUKS device found (root for the headers)"
+		case attest.Done == "":
+			luksRemote.Blocked = "needs the attestation by phone"
+		case len(remoteOf[strong.Slot]) > 0:
+			luksRemote.Done = strings.Join(remoteOf[strong.Slot], ", ")
+		}
+		steps = append(steps, attest, luksRemote)
 	}
 
+	// The keyslot from a typed salt: independent of the slots to set up
+	// (its token is bound to slot 0 all the same, so deleting the slot
+	// deletes it).
 	luksSalt := controlStep{Key: "luks-salt", Title: "Disk key from password + salt (hashpwd2)",
-		Explain: "A LUKS keyslot whose key is derived at boot from a password and a salt you type (Argon2id, 1 GiB); the recovery passphrase stays in its own keyslot.",
+		Explain: "A LUKS keyslot whose key is derived at boot from a password and a salt you type (Argon2id, 1 GiB); the recovery passphrase stays in its own keyslot. Independent of the slots; the keyslot is bound to slot 0 and deleted with it.",
 		Run:     func(c *controller) error { return c.runLuks(LuksModePasswordSalt) }}
 	switch {
 	case !luksDevices:
@@ -331,22 +395,11 @@ func (c *controller) steps() []controlStep {
 		luksSalt.Done = "a keyslot is enrolled"
 	}
 
-	luksRemote := controlStep{Key: "luks-remote", Title: "Disk key from password + remote salt (the phone)",
-		Explain: "As above, but the salt is kept by the phone and handed back only after it attested the boot: the disk needs the phone, this TPM in an approved boot, and your password.",
-		Run:     func(c *controller) error { return c.runLuks(LuksModePasswordRemoteSalt) }}
-	switch {
-	case !luksDevices:
-		luksRemote.Blocked = "no LUKS device found (root for the headers)"
-	case attest.Done == "":
-		luksRemote.Blocked = "needs the attestation by phone"
-	case hasRemote:
-		luksRemote.Done = "a keyslot is enrolled; unlock mode " + f.Status.UnlockMode
-	}
-
 	// The prerequisites of the disk unlock, checked together: the mode in
 	// control.conf fits the keyslots, and every device with a keyslot of
 	// ours takes its key from tpm2-kira. Control sets the mode (the
-	// commands touch no configuration file); the route it advises.
+	// commands touch no configuration file); the route it advises. Greyed
+	// until a keyslot of ours exists.
 	unlock := controlStep{Key: "unlock", Title: "Unlock at boot (control.conf, the key's route, the initramfs)",
 		Explain: "The boot derives the key only in the mode set in " + controlConfigPath() + ", and a device gets it only when its rd.luks.key= (crypttab on Debian) names tpm2-kira's socket.",
 		Run:     (*controller).runUnlock}
@@ -364,8 +417,10 @@ func (c *controller) steps() []controlStep {
 		}
 	}
 	switch {
+	case wanted == "" && len(f.Status.Slots) == 0:
+		unlock.Blocked = "no slot is sealed yet"
 	case wanted == "":
-		unlock.Blocked = "needs a keyslot of tpm2-kira's"
+		unlock.Blocked = "needs a keyslot of tpm2-kira's (the remote salt under slot 0, or the typed salt)"
 	case f.Status.UnlockMode == wanted && len(unrouted) == 0:
 		unlock.Done = "mode " + wanted + "; the key routed"
 	default:
@@ -379,23 +434,7 @@ func (c *controller) steps() []controlStep {
 		unlock.Explain += "\nOpen: " + strings.Join(open, "; ") + "."
 	}
 
-	// The one way to delete a slot: everything it is made of goes together -
-	// the blob (the TOTP key, the phones, the remote salt), its companion
-	// indices, the LUKS keyslot bound to it, the recovery blobs. A slot whose
-	// deletion stopped halfway is dirty, and this step takes the rest.
-	remove := controlStep{Key: "remove", Title: "Remove a slot", Optional: true,
-		Explain: "Deletes one slot whole: the TOTP key (its codes in the authenticator), the phones, the remote salt, the LUKS keyslot bound to it, the recovery blobs. Keyslots that are not tpm2-kira's - the recovery passphrase - stay.",
-		Run:     (*controller).runRemove}
-	switch {
-	case f.TPMErr != "":
-		remove.Blocked = "no TPM: " + f.TPMErr
-	case len(f.Status.Slots) == 0 && len(f.Dirt) == 0:
-		remove.Blocked = "no slot in the TPM"
-	case len(f.Dirt) > 0:
-		remove.Dirty = dirtText(f.Dirt)
-	}
-
-	return []controlStep{keys, seal, attest, luksSalt, luksRemote, unlock, remove}
+	return append(steps, luksSalt, unlock)
 }
 
 // wantedUnlockMode is the mode the keyslots call for: the phone's when a
@@ -471,6 +510,17 @@ func ControlNeedsRoot() {
 	c.form(huh.NewNote().Title("[ KIRA ] control needs root").Description(noteText(text)).Next(true).NextLabel("Leave")).Run()
 }
 
+// header is the one line on top of every overview: the tag, the version,
+// what this is. Printed once per screen, outside the form, so a redraw of
+// the form cannot double it.
+func (c *controller) header() string {
+	v := AppVersion
+	if v == "" {
+		v = "unknown"
+	}
+	return fmt.Sprintf("%s control %s - the protections of this machine, step by step", kiraTag(tagYellow), v)
+}
+
 // Control runs the guided workflow.
 func Control(o ControlOptions) error {
 	c := &controller{o: o, out: o.Out}
@@ -488,7 +538,7 @@ func Control(o ControlOptions) error {
 			c.show(steps)
 			return nil // the analysis and the recommendation, for a script
 		}
-		fmt.Fprint(c.out, clearScreen)
+		fmt.Fprint(c.out, clearScreen+c.header()+"\n\n")
 		key, err := c.pick(steps)
 		if err != nil || key == "" {
 			c.leave(steps)
@@ -500,7 +550,7 @@ func Control(o ControlOptions) error {
 				s = st
 			}
 		}
-		if s.Done != "" {
+		if s.Done != "" && !s.SelfConfirm {
 			again, err := c.confirm(s.Title+" is done", s.Done+". Run it again?")
 			if err != nil || !again {
 				continue
@@ -562,17 +612,21 @@ func (c *controller) pick(steps []controlStep) (string, error) {
 	blocked := map[string]string{}
 	var opts []huh.Option[string]
 	for _, s := range steps {
+		indent := ""
+		if s.Child {
+			indent = "   "
+		}
 		var label string
 		switch {
 		case s.Dirty != "":
-			label = "! " + s.Title + "  - " + s.Dirty
+			label = indent + "! " + s.Title + "  - " + s.Dirty
 		case s.Done != "":
-			label = "✓ " + s.Title + "  - " + s.Done
+			label = indent + "✓ " + s.Title + "  - " + s.Done
 		case s.Blocked != "":
-			label = "- " + s.Title + "  - " + s.Blocked
+			label = indent + "- " + s.Title + "  - " + s.Blocked
 			blocked[s.Key] = s.Blocked
 		default:
-			label = "  " + s.Title
+			label = indent + "  " + s.Title
 		}
 		opts = append(opts, huh.NewOption(label, s.Key))
 	}
@@ -591,7 +645,7 @@ func (c *controller) pick(steps []controlStep) (string, error) {
 	}
 	choice := initial
 	err := c.form(
-		huh.NewNote().Title("[ KIRA ] control - the protections of this machine, step by step").Description(c.noteDescription()),
+		huh.NewNote().Description(c.noteDescription()),
 		huh.NewSelect[string]().Title("Protections").Description(desc).Options(opts...).Value(&choice).
 			Validate(func(k string) error {
 				if why, ok := blocked[k]; ok {
@@ -627,14 +681,9 @@ func (c *controller) choose(title string, items []string) (int, error) {
 	return n, nil
 }
 
-// noteDescription is the overview note: the facts, and the risks when
-// there are any.
+// noteDescription is the overview note: the status, judged line by line.
 func (c *controller) noteDescription() string {
-	d := "*What this machine has*\n" + noteText(c.factsText())
-	if r := c.risksText(); r != "" {
-		d += "\n*Risks*\n" + noteText(r)
-	}
-	return d
+	return "*What this machine has*\n" + noteText(c.factsText())
 }
 
 // noteText is text for a note's description: huh's note reads \, _ and
@@ -644,43 +693,86 @@ func noteText(s string) string {
 	return strings.ReplaceAll("\n"+s, "\n  ", "\n")[1:]
 }
 
-// factsText is "What this machine has", one line per fact.
+// The status is judged line by line: green is good, red is not good and
+// says why - the risk in brackets. What is neither (plain information)
+// stays uncoloured.
+func good(s string) string { return "\033[0;32m" + s + "\033[0m" }
+func bad(s string) string  { return "\033[0;31m" + s + "\033[0m" }
+
+// factsText is "What this machine has", one line per fact, each marked
+// green when it is as it should be and red with the risk in brackets
+// when it is not.
 func (c *controller) factsText() string {
 	f := &c.facts
 	var w strings.Builder
 	switch {
 	case f.TPMErr != "":
-		fmt.Fprintf(&w, "  TPM         none usable (%s)\n", f.TPMErr)
+		fmt.Fprintf(&w, "  TPM         %s\n", bad(fmt.Sprintf("none usable (%s)", f.TPMErr)))
 	case f.UseSHA1:
-		fmt.Fprintf(&w, "  TPM         %s - %s; the SHA-1 bank is used (--sha1), the weakness acknowledged\n", f.TPM, f.SHA1Why)
+		fmt.Fprintf(&w, "  TPM         %s\n", bad(fmt.Sprintf("%s - %s; the SHA-1 bank is used (risk: SHA-1 collisions are practical, a measured boot can in principle be forged)", f.TPM, f.SHA1Why)))
 	case f.LogSHA256:
-		fmt.Fprintf(&w, "  TPM         %s, SHA-256 bank and event log\n", f.TPM)
+		fmt.Fprintf(&w, "  TPM         %s\n", good(f.TPM+", SHA-256 bank and event log"))
 	default:
 		fmt.Fprintf(&w, "  TPM         %s, SHA-256 bank; no event log to read, the registers as they are\n", f.TPM)
 	}
 	if f.TPMErr == "" {
 		switch {
 		case f.EKBy != "":
-			fmt.Fprintf(&w, "  Vendor      %s vouches for the endorsement key\n", f.EKBy)
+			fmt.Fprintf(&w, "  Vendor      %s\n", good(f.EKBy+" vouches for the endorsement key"))
 		default:
-			fmt.Fprintf(&w, "  Vendor      none vouches for the endorsement key: %s\n", f.EKNote)
+			phone := "a phone trusts it on first use, as it would a software TPM"
+			if f.Phone {
+				phone = "the enrolled phone pinned it on first use, as it would a software TPM"
+			}
+			fmt.Fprintf(&w, "  Vendor      %s\n", bad(fmt.Sprintf("none vouches for the endorsement key: %s (risk: %s)", f.EKNote, phone)))
 		}
 	}
 	switch {
 	case !f.SecureBoot.Known:
-		fmt.Fprintln(&w, "  Secure Boot state unknown (no efivars)")
+		fmt.Fprintf(&w, "  Secure Boot %s\n", bad("state unknown, no efivars (risk: whether PCR 7 attests an enforced policy is unknown)"))
 	case f.SecureBoot.SetupMode:
-		fmt.Fprintln(&w, "  Secure Boot Setup Mode: the keys can be replaced by any root user")
+		fmt.Fprintf(&w, "  Secure Boot %s\n", bad("Setup Mode (risk: any root user can replace the keys, PCR 7 attests a policy that can be rewritten)"))
 	case f.SecureBoot.Enabled:
-		fmt.Fprintln(&w, "  Secure Boot enabled")
+		fmt.Fprintf(&w, "  Secure Boot %s\n", good("enabled"))
 	default:
-		fmt.Fprintln(&w, "  Secure Boot disabled")
+		fmt.Fprintf(&w, "  Secure Boot %s\n", bad("disabled (risk: the boot loader and the kernel run unsigned, and PCR 7 records only that)"))
 	}
 	fmt.Fprintf(&w, "  Boot        %s: PCRs %s\n", f.PCRsWhy, f.PCRs)
+	if f.TPMErr == "" {
+		var parts []string
+		for _, s := range f.Status.Slots {
+			p := fmt.Sprintf("%d (%s)", s.Slot, s.PCRs)
+			if s.Fallback {
+				p = fmt.Sprintf("%d (%s, the fallback)", s.Slot, s.PCRs)
+			}
+			parts = append(parts, p)
+		}
+		switch weak := weakSlots(f); {
+		case len(parts) == 0:
+			fmt.Fprintln(&w, "  Slots       none sealed")
+		case len(weak) > 0:
+			fmt.Fprintf(&w, "  Slots       %s\n", bad(fmt.Sprintf("%s - slot %s leaves the kernel, the initrd or the command line unmeasured (risk: a replaced initrd or an edited command line still shows a valid code - reseal with 11u, or 8e,9e)",
+				strings.Join(parts, ", "), joinInts(weak))))
+		default:
+			fmt.Fprintf(&w, "  Slots       %s\n", good(strings.Join(parts, ", ")))
+		}
+	}
+	keyDesc := f.Keys
+	if keyDesc == "" {
+		keyDesc = "none yet (setup makes it)"
+	}
+	switch {
+	case f.PINLoose: // a disclosed PIN is a risk whatever key the files describe
+		fmt.Fprintf(&w, "  Key         %s\n", bad(fmt.Sprintf("%s (risk: %s holds the PIN, but other users can read it, or root does not own it - chown root:, chmod 600, consider a new PIN)", keyDesc, controlConfigPath())))
+	case f.Keys == "":
+		fmt.Fprintf(&w, "  Key         %s\n", keyDesc)
+	default:
+		fmt.Fprintf(&w, "  Key         %s\n", good(f.Keys))
+	}
 	if f.Initramfs != "" {
-		fmt.Fprintf(&w, "  Initramfs   %s\n", f.Initramfs)
+		fmt.Fprintf(&w, "  Initramfs   %s\n", good(f.Initramfs))
 	} else {
-		fmt.Fprintln(&w, "  Initramfs   neither mkinitcpio nor initramfs-tools found: no boot integration here")
+		fmt.Fprintf(&w, "  Initramfs   %s\n", bad("neither mkinitcpio nor initramfs-tools found (risk: no code screen at boot - no boot integration here)"))
 	}
 	if f.Adapter != "" {
 		fmt.Fprintf(&w, "  Bluetooth   %s (attestation by phone possible)\n", f.Adapter)
@@ -713,13 +805,12 @@ func (c *controller) factsText() string {
 	return w.String()
 }
 
-// risksText is "Risks", one line each; "" without any.
-func (c *controller) risksText() string {
-	var w strings.Builder
-	for _, r := range c.facts.Risks {
-		fmt.Fprintf(&w, "  ! %s\n", r)
+func joinInts(ns []int) string {
+	parts := make([]string, len(ns))
+	for i, n := range ns {
+		parts[i] = strconv.Itoa(n)
 	}
-	return w.String()
+	return strings.Join(parts, ", ")
 }
 
 // recommended is the index of a dirty step - a half-gone slot comes before
@@ -744,18 +835,18 @@ func recommended(steps []controlStep) int {
 func (c *controller) show(steps []controlStep) {
 	f := &c.facts
 	w := c.out
-	fmt.Fprintf(w, "%s control - the protections of this machine, step by step\n\n", kiraTag(tagYellow))
+	fmt.Fprintf(w, "%s\n\n", c.header())
 	fmt.Fprintln(w, "\033[1mWhat this machine has\033[0m")
 	fmt.Fprint(w, c.factsText())
-	if r := c.risksText(); r != "" {
-		fmt.Fprintln(w, "\n\033[1;31mRisks\033[0m")
-		fmt.Fprint(w, r)
-	}
 
 	fmt.Fprintln(w, "\n\033[1mProtections\033[0m")
 	next := recommended(steps)
 	for i, s := range steps {
-		fmt.Fprintf(w, "  %s %d  %s", s.marker(), i+1, s.Title)
+		indent := ""
+		if s.Child {
+			indent = "  "
+		}
+		fmt.Fprintf(w, "  %s %d  %s%s", s.marker(), i+1, indent, s.Title)
 		switch {
 		case s.Dirty != "":
 			fmt.Fprintf(w, "  - %s", s.Dirty)
@@ -853,10 +944,26 @@ func (c *controller) storePIN() error {
 	return nil
 }
 
+// runSeal seals what the standard pair lacks: both slots when none is
+// there, else only the missing one, so the other's TOTP key (and so its
+// authenticator entry) stays as it is.
 func (c *controller) runSeal() error {
 	algo := PCRHashAlgoSHA256
 	if c.facts.UseSHA1 {
 		algo = PCRHashAlgoSHA1
+	}
+	slot0, fallback := false, false
+	for _, s := range c.facts.Status.Slots {
+		slot0 = slot0 || s.Slot == 0
+		fallback = fallback || s.Fallback
+	}
+	switch {
+	case slot0 && !fallback:
+		return Seal(c.o.TPMPath, defaultFallbackSelection(""), ResolveNVRAMIndex(FallbackSlot), "", "", c.o.Debug, algo, true)
+	case !slot0 && fallback:
+		sel, why := DefaultPCRSelection("", algo)
+		fmt.Fprintf(c.out, "PCRs: %s (%s)\n\n", sel, why)
+		return Seal(c.o.TPMPath, sel, ResolveNVRAMIndex(0), "", "", c.o.Debug, algo, true)
 	}
 	return SealDefaults(c.o.TPMPath, "", "", algo, c.o.Debug)
 }
@@ -904,17 +1011,17 @@ func (c *controller) runLuks(mode string) error {
 	return c.setMode(mode)
 }
 
-// runRemove is control's one way to delete a slot, whole. What a failed
-// part leaves behind shows as dirty on the overview until a run removes it.
-func (c *controller) runRemove() error {
+// runRemoveSlot is control's one way to delete a slot, whole: the slot's
+// own line in the tree runs it. What a failed part leaves behind shows as
+// dirty on the overview until a run removes it.
+func (c *controller) runRemoveSlot(slot int) error {
 	f := &c.facts
-	type cand struct {
-		slot  int
-		label string
-	}
-	var cands []cand
+	label := ""
 	for _, s := range f.Status.Slots {
-		label := fmt.Sprintf("slot %d - sealed to %s", s.Slot, s.PCRs)
+		if s.Slot != slot {
+			continue
+		}
+		label = "sealed to " + s.PCRs
 		if s.Fallback {
 			label += " (the fallback)"
 		}
@@ -931,26 +1038,18 @@ func (c *controller) runRemove() error {
 				}
 			}
 		}
-		cands = append(cands, cand{s.Slot, label})
 	}
 	for _, d := range f.Dirt {
-		cands = append(cands, cand{d.Slot, fmt.Sprintf("slot %d - dirty: %s left", d.Slot, d.Remains())})
+		if d.Slot == slot {
+			label = "dirty: " + d.Remains() + " left"
+		}
 	}
-	sort.Slice(cands, func(i, j int) bool { return cands[i].slot < cands[j].slot })
-	labels := make([]string, len(cands))
-	for i, x := range cands {
-		labels[i] = x.label
-	}
-	i, err := c.choose("Which slot goes, whole?", labels)
-	if err != nil {
-		return err
-	}
-	ok, err := c.confirm(fmt.Sprintf("Delete slot %d?", cands[i].slot),
-		"Gone for good: "+cands[i].label+". The authenticator's code for it stops matching. Removing a LUKS keyslot asks for a remaining passphrase (the recovery one); keyslots that are not tpm2-kira's stay.")
+	ok, err := c.confirm(fmt.Sprintf("Delete slot %d whole?", slot),
+		"Gone for good: "+label+". The authenticator's code for it stops matching. Removing a LUKS keyslot asks for a remaining passphrase (the recovery one); keyslots that are not tpm2-kira's stay.")
 	if err != nil || !ok {
 		return errors.New("not confirmed")
 	}
-	err = DeleteSlot(DeleteSlotOptions{TPMPath: c.o.TPMPath, Slot: cands[i].slot, Debug: c.o.Debug, Out: c.out})
+	err = DeleteSlot(DeleteSlotOptions{TPMPath: c.o.TPMPath, Slot: slot, Debug: c.o.Debug, Out: c.out})
 	c.ran = true // parts may be gone even when the error says the rest is not
 	if err != nil {
 		return err

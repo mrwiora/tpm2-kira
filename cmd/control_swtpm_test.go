@@ -39,27 +39,30 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	if f.Status.UnlockMode != UnlockSkip || f.Status.Config != conf || f.PINStored || f.PINLoose || f.AttestConf != "" {
 		t.Errorf("a missing control.conf: mode %q from %q, pin %v/%v, attest %q", f.Status.UnlockMode, f.Status.Config, f.PINStored, f.PINLoose, f.AttestConf)
 	}
-	for _, want := range []string{"no known vendor vouches", "slot 0 is sealed to PCRs 23"} {
-		found := false
-		for _, r := range f.Risks {
-			found = found || strings.Contains(r, want)
-		}
-		if !found {
-			t.Errorf("risk %q missing: %q", want, f.Risks)
+	// The judged status: swtpm's EK and the test slot's selection are not
+	// good, and the lines say the risk.
+	judged := (&controller{facts: f}).factsText()
+	for _, want := range []string{"none vouches for the endorsement key", "slot 0 leaves the kernel, the initrd or the command line unmeasured"} {
+		if !strings.Contains(judged, want) {
+			t.Errorf("the status lacks %q:\n%s", want, judged)
 		}
 	}
 
 	// The steps, with the host's part of the facts (a key, a radio)
-	// stubbed: the TOTP seal is done, the unlock step waits for a keyslot.
+	// stubbed: slot 0 exists, the fallback does not, so the seal step
+	// offers exactly that; the unlock step waits for a keyslot.
 	f.Keys, f.Adapter = "local key files", "hci0"
 	var out strings.Builder
 	c := &controller{facts: f, out: &out}
 	steps := c.steps()
-	if steps[1].Key != "seal" || steps[1].Done == "" {
+	if steps[1].Key != "seal" || !strings.Contains(steps[1].Explain, "the fallback, is missing") {
 		t.Errorf("the seal step: %+v", steps[1])
 	}
-	if steps[5].Key != "unlock" || steps[5].Blocked != "needs a keyslot of tpm2-kira's" {
-		t.Errorf("the unlock step: %+v", steps[5])
+	if steps[2].Key != "slot:0" || steps[3].Key != "attest" || steps[3].Blocked != "" {
+		t.Errorf("the tree: %+v %+v", steps[2], steps[3])
+	}
+	if steps[6].Key != "unlock" || !strings.Contains(steps[6].Blocked, "needs a keyslot of tpm2-kira's") {
+		t.Errorf("the unlock step: %+v", steps[6])
 	}
 
 	// Setting the mode writes the file, the one thing control writes.
@@ -108,8 +111,8 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	if f.PINStored || !f.PINLoose {
 		t.Errorf("a loose file: stored %v loose %v", f.PINStored, f.PINLoose)
 	}
-	if !strings.Contains(strings.Join(f.Risks, "\n"), conf+" holds the YubiKey PIN, but other users can read it") {
-		t.Errorf("the loose file is not a risk: %q", f.Risks)
+	if judged := (&controller{facts: f}).factsText(); !strings.Contains(judged, conf+" holds the PIN, but other users can read it") {
+		t.Errorf("the loose file is not marked on the status:\n%s", judged)
 	}
 
 	// A file that does not load blocks the attestation step and names itself.
@@ -122,7 +125,7 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	}
 	f.Keys, f.Adapter = "local key files", "hci0"
 	c = &controller{facts: f, out: &out}
-	if s := c.steps()[2]; s.Key != "attest" || !strings.HasPrefix(s.Blocked, conf+": ") {
+	if s := c.steps()[3]; s.Key != "attest" || !strings.HasPrefix(s.Blocked, conf+": ") {
 		t.Errorf("the attest step with a broken file: %+v", s)
 	}
 }

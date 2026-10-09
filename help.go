@@ -115,45 +115,45 @@ func printHelp(topic string) {
 var helpPages = map[string]string{
 	"control": `tpm2-kira control [--tpm PATH]
 
-The guided way through the protections. It first looks at what the
-machine has - the TPM and its banks (the SHA-1 bank only where there is
-no SHA-256 one, or the event log measures into SHA-1 alone), how it
-booted and so which PCRs to seal to, the initramfs kind, a Bluetooth
-adapter, the LUKS devices -
-and at what is configured: the signing key, the slots, the phone, the
-keyslots, the unlock mode, the route of the key. One screen shows both,
-the protections in the order they build on each other -
+The guided way through the protections. The header carries the version.
+On top, the machine's status, judged line by line - the TPM and its
+banks, the endorsement key's vendor, Secure Boot, how it booted, the
+slots, the signing key, the initramfs kind, Bluetooth, the LUKS devices,
+the unlock mode - green what is good, red what is not with the risk in
+brackets: the SHA-1 bank, Secure Boot disabled or in Setup Mode, a slot
+sealed without the kernel measured, an endorsement key no known vendor
+vouches for (a phone then trusts this TPM on first use), a loose file
+holding the PIN. Under it the protections, as a tree:
 
-  1  Signing key                               setup (and the YubiKey's PIN, stored)
-  2  TOTP code at boot                         seal (slot 0 and the fallback slot)
-  3  Attestation by phone                      attest enrol
-  4  Disk key from password + salt             luks enrol --mode password+salt
-  5  Disk key from password + remote salt      luks enrol --mode password+remotesalt
-  6  Unlock at boot                            the mode in control.conf, the key's route
-  7  Remove a slot                             everything a slot is made of, in one act
+  Signing key                                setup (and the YubiKey's PIN, stored)
+  TOTP codes at boot (slots 0 and 1)         seal; shown while one of the pair is missing
+  Slot 0                                     picking a slot's line deletes it whole
+    Attestation by phone                     attest enrol
+    Disk key from password + remote salt     luks enrol --mode password+remotesalt
+  Slot 1
+  Disk key from password + salt              luks enrol --mode password+salt (independent of the slots)
+  Unlock at boot                             the mode in control.conf, the key's route
 
-- each marked done, possible, or blocked with the reason, and the
-recommended next one. Pick a number and it runs that step with the
-functions the commands on the right use, then shows the screen again.
+- each done, possible, or blocked with the reason, and the next one
+recommended. With no slot at all, the standard sealing (slot 0 to this
+boot's state, slot 1 the fallback) is the one step offered; sealed, every
+slot is a line of its own, the options that build on the strong slot
+under it (the remote-salt keyslot's state read from the LUKS header), and
+the unlock stays greyed until a keyslot of tpm2-kira's exists. Picking a
+slot's line deletes the slot whole - the TOTP key, the phones, the remote
+salt, the LUKS keyslots bound to it, the recovery blobs - after a
+confirmation, and the unlock mode is set back to what the remaining
+keyslots call for. A slot whose deletion stopped halfway is dirty, marked
+[!] and recommended first, until a run removes the rest; the expert
+commands (nvram delete, luks remove, attest unenrol) stay for taking one
+piece by hand, and leave the slot dirty the same way.
 Control alone writes the one configuration file, /etc/tpm2-kira/control.conf:
 the unlock mode after an enrolment, the YubiKey's PIN after checking it on
 the token (the file is then root's alone; the hooks leave the PIN out of
-the initramfs). Step 6 checks that the mode fits the keyslots and that
-every device with a keyslot of tpm2-kira's takes its key from tpm2-kira -
-advising the kernel command line (crypttab on Debian) where it does not;
-those, and every other file, stay yours to edit. Step 7 is the one way to
-delete a slot: the blob in the TPM (the TOTP key, the phones, the remote
-salt), its generation index and record counter, the LUKS keyslot bound to
-the slot by its token, the recovery blobs - in one act, and the unlock
-mode is set back to what the remaining keyslots call for. A slot whose
-deletion stopped halfway is dirty, marked [!] and recommended first,
-until a run removes the rest; the expert commands (nvram delete, luks
-remove, attest unenrol) stay for taking one piece by hand, and leave the
-slot dirty the same way. Under Risks the overview
-lists what weakens the protections: the SHA-1 bank, Secure Boot disabled
-or in Setup Mode, a slot sealed without the kernel measured, an
-endorsement key no known vendor vouches for (a phone then trusts this
-TPM on first use), a loose file holding the PIN.
+the initramfs). The unlock line checks that the mode fits the keyslots and
+that every device with a keyslot of tpm2-kira's takes its key from
+tpm2-kira - advising the kernel command line (crypttab on Debian) where it
+does not; those, and every other file, stay yours to edit.
 Run again later, it shows the state and what is left. On leaving it
 names the initramfs rebuild. Forms: arrow keys and Enter, Esc leaves,
 ACCESSIBLE=1 for plain prompts. Without a terminal it prints the screen
@@ -302,7 +302,7 @@ The TPM's slots: 0-15 are the NV indices 0x01803010-0x0180301F.
   delete           Delete the slot's indices in the TPM - or every populated
                    slot's without --nvram, which asks on a terminal or needs
                    --yes. A LUKS keyslot bound to the slot stays and leaves
-                   the slot dirty; 'tpm2-kira control' (Remove a slot)
+                   the slot dirty; 'tpm2-kira control' (the slot's line)
                    deletes a slot whole
   restore FILE     Put back a blob that a failed write stashed in
                    ` + cmd.NVRAMRecoveryDir + `/ (slot-0x<index>-<time>.blob):
