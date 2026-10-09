@@ -126,7 +126,7 @@ def main():
         print()
 
     for vuln_id, why in ignores.items():
-        if vuln_id not in called:
+        if vuln_id not in called and vuln_id not in required:
             print(f"note: {vuln_id} is in {os.path.relpath(IGNORE_FILE)} but no longer reported; drop it")
 
     sys.stdout.flush()

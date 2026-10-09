@@ -36,7 +36,9 @@ jobs:
       - name: Scan the source
         run: tools/vulncheck.py ./...
 
+  # Not on a push: the asset is the last release, whatever the push changed.
   release-binary:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
