@@ -40,9 +40,15 @@ func ReadSecureBootState() SecureBootState {
 	return SecureBootState{Enabled: enabled, SetupMode: setupMode, Known: true}
 }
 
+// AdvisoryWarnings switches the advisory warnings of seal and reseal (a
+// weak selection, SHA-1, Secure Boot off). 'control' turns them off for
+// the steps it runs: its overview says the same, judged line by line in
+// red, and need not say it twice. The commands run by hand keep them.
+var AdvisoryWarnings = true
+
 // WarnAboutHashAlgo reports a PCR bank that should not be used for new policies.
 func WarnAboutHashAlgo(hashAlgo PCRHashAlgo) {
-	if hashAlgo != PCRHashAlgoSHA1 {
+	if hashAlgo != PCRHashAlgoSHA1 || !AdvisoryWarnings {
 		return
 	}
 	fmt.Println("NOTE: sealing against the SHA-1 PCR bank, as --sha1 asked: this TPM or its")
@@ -80,6 +86,9 @@ func bootChainCoverage(indices []int) (kernelInitrd, cmdline bool) {
 // WarnAboutPCRSelection reports selections that attest less than they appear
 // to. These are advisory: an unusual selection is still sealed.
 func WarnAboutPCRSelection(specs []PCRSpec) {
+	if !AdvisoryWarnings {
+		return
+	}
 	indices := PCRSpecIndices(specs)
 
 	if kernelInitrd, cmdline := bootChainCoverage(indices); !kernelInitrd || !cmdline {

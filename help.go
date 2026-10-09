@@ -118,15 +118,18 @@ var helpPages = map[string]string{
 The guided way through the protections. The header carries the version.
 On top, the machine's status, judged line by line - the TPM and its
 banks, the endorsement key's vendor, Secure Boot, how it booted, the
-slots, the signing key, the initramfs kind, Bluetooth, the LUKS devices,
-the unlock mode - green what is good, red what is not with the risk in
-brackets: the SHA-1 bank, Secure Boot disabled or in Setup Mode, a slot
+slots, the signing key, the initramfs kind and whether sd-tpm2-kira is
+wired into it (the hook installed, and in mkinitcpio's HOOKS), Bluetooth,
+the LUKS devices, the unlock mode - green what is good, red what is not
+with the risk in brackets: the SHA-1 bank, Secure Boot disabled or in Setup Mode, a slot
 sealed without the kernel measured, an endorsement key no known vendor
 vouches for (a phone then trusts this TPM on first use), a loose file
 holding the PIN. Under it the protections, as a tree:
 
   Signing key                                setup (and the YubiKey's PIN, stored)
-  TOTP codes at boot (slots 0 and 1)         seal; shown while one of the pair is missing
+  TOTP codes at boot (slots 0 and 1)         seal; shown while one of the pair is missing,
+                                             slot 0's evaluated PCRs a recommendation to
+                                             acknowledge, or custom PCRs instead
   Slot 0                                     picking a slot's line deletes it whole
     Attestation by phone                     attest enrol
     Disk key from password + remote salt     luks enrol --mode password+remotesalt
@@ -135,8 +138,13 @@ holding the PIN. Under it the protections, as a tree:
   Unlock at boot                             the mode in control.conf, the key's route
 
 - each done, possible, or blocked with the reason, and the next one
-recommended. With no slot at all, the standard sealing (slot 0 to this
-boot's state, slot 1 the fallback) is the one step offered; sealed, every
+recommended. The steps run without the commands' advisory warnings (a
+weak selection, SHA-1, Secure Boot off): the status above says the same,
+judged and in red, and nothing is said twice. With no slot at all, the
+standard sealing (slot 0 to this boot's state, slot 1 the fallback) is
+the one step offered; sealing asks slot 0's PCRs as a recommendation -
+the selection evaluated for this machine - to acknowledge, or custom
+PCRs to give instead. Sealed, every
 slot is a line of its own, the options that build on the strong slot
 under it (the remote-salt keyslot's state read from the LUKS header), and
 the unlock stays greyed until a keyslot of tpm2-kira's exists. Picking a
@@ -154,6 +162,8 @@ the initramfs). The unlock line checks that the mode fits the keyslots and
 that every device with a keyslot of tpm2-kira's takes its key from
 tpm2-kira - advising the kernel command line (crypttab on Debian) where it
 does not; those, and every other file, stay yours to edit.
+Sealing both slots, each QR code gets a cleared screen of its own, held
+until the scan is confirmed: it is shown this once.
 Run again later, it shows the state and what is left. On leaving it
 names the initramfs rebuild. Forms: arrow keys and Enter, Esc leaves,
 ACCESSIBLE=1 for plain prompts. Without a terminal it prints the screen

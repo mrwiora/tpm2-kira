@@ -55,6 +55,7 @@ type machineFacts struct {
 	EKNote     string // why none does
 	SecureBoot SecureBootState
 	Initramfs  string // mkinitcpio, initramfs-tools, or ""
+	HookState  string // why the boot integration would not run; "" when wired
 	Adapter    string // hciN, or ""
 	AttestConf string // "" when control.conf loads; else the reason
 
@@ -116,11 +117,12 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 		f.EKBy, f.EKNote = ekVerdict(tpmPath, debug)
 	}
 	switch {
-	case fileExists("/etc/mkinitcpio.conf"):
+	case fileExists(mkinitcpioConf):
 		f.Initramfs = "mkinitcpio"
 	case isDebianInitramfs():
 		f.Initramfs = "initramfs-tools"
 	}
+	f.HookState = initramfsHookState(f.Initramfs)
 	if m, _ := filepath.Glob("/sys/class/bluetooth/hci*"); len(m) > 0 {
 		f.Adapter = filepath.Base(m[0])
 	}
@@ -306,9 +308,9 @@ func (c *controller) steps() []controlStep {
 		case f.Keys == "":
 			seal.Blocked = "needs the signing key"
 		case slot0 == nil && !fallback:
-			seal.Explain = "The standard pair: a TOTP key sealed to this boot's state (" + f.PCRs + ") into slot 0, and one sealed to PCRs 0 and 7 alone into slot 1 - the fallback for a boot whose kernel changed unpredicted. Pair both with your authenticator."
+			seal.Explain = "The standard pair: a TOTP key sealed into slot 0 - to " + f.PCRs + ", evaluated for this machine and put up as the recommendation to acknowledge, or custom PCRs instead - and one sealed to PCRs 0 and 7 alone into slot 1, the fallback for a boot whose kernel changed unpredicted. Pair both with your authenticator."
 		case slot0 == nil:
-			seal.Explain = "Slot 0 is missing: seals a TOTP key to this boot's state (" + f.PCRs + ") into it. Slot 1, the fallback, stays as it is."
+			seal.Explain = "Slot 0 is missing: seals a TOTP key into it - to " + f.PCRs + ", evaluated for this machine and put up as the recommendation to acknowledge, or custom PCRs instead. Slot 1, the fallback, stays as it is."
 		default:
 			seal.Explain = "Slot 1, the fallback, is missing: seals a TOTP key to PCRs 0 and 7 alone into it, the code for a boot whose kernel changed unpredicted. Slot 0 stays as it is."
 		}
@@ -507,7 +509,7 @@ func ControlNeedsRoot() {
 	}
 	c := &controller{out: os.Stdout}
 	fmt.Fprint(c.out, clearScreen)
-	c.form(huh.NewNote().Title("[ KIRA ] control needs root").Description(noteText(text)).Next(true).NextLabel("Leave")).Run()
+	c.form(huh.NewNote().Title("[ KIRA ] control needs root").Description(noteText(text)).Next(true).NextLabel("Quit")).Run()
 }
 
 // header is the one line on top of every overview: the tag, the version,
@@ -528,6 +530,11 @@ func Control(o ControlOptions) error {
 		c.out = os.Stdout
 	}
 	c.tty = isTerminal(os.Stdin)
+	// The overview judges the risks itself, in red on the status, so the
+	// steps run without the commands' advisory warnings: nothing is said
+	// twice. Run by hand, seal and reseal keep them.
+	defer func(old bool) { AdvisoryWarnings = old }(AdvisoryWarnings)
+	AdvisoryWarnings = false
 	for {
 		if c.tty { // the overview is a page of its own: what the last step printed was read before "back to the overview?"
 			fmt.Fprint(c.out, clearScreen+"\033[2mLooking at this machine ...\033[0m\n")
@@ -630,12 +637,10 @@ func (c *controller) pick(steps []controlStep) (string, error) {
 		}
 		opts = append(opts, huh.NewOption(label, s.Key))
 	}
-	opts = append(opts, huh.NewOption("  Leave", ""))
+	opts = append(opts, huh.NewOption("  Quit", ""))
 	desc := "Every protection this machine can have is in place."
-	initial := ""
 	if n := recommended(steps); n >= 0 {
 		desc = "Recommended next: " + steps[n].Title + "\n" + steps[n].Explain
-		initial = steps[n].Key
 	}
 	if notes := c.facts.Status.Notes; len(notes) > 0 {
 		desc += "\n\nNotes:"
@@ -643,7 +648,10 @@ func (c *controller) pick(steps []controlStep) (string, error) {
 			desc += "\n- " + n
 		}
 	}
-	choice := initial
+	// Quit is preselected, on entering and on every return to the
+	// overview: Enter alone never runs a step, the recommendation is
+	// named in the text and picked by hand.
+	choice := ""
 	err := c.form(
 		huh.NewNote().Description(c.noteDescription()),
 		huh.NewSelect[string]().Title("Protections").Description(desc).Options(opts...).Value(&choice).
@@ -769,10 +777,15 @@ func (c *controller) factsText() string {
 	default:
 		fmt.Fprintf(&w, "  Key         %s\n", good(f.Keys))
 	}
-	if f.Initramfs != "" {
-		fmt.Fprintf(&w, "  Initramfs   %s\n", good(f.Initramfs))
-	} else {
+	switch {
+	case f.Initramfs == "":
 		fmt.Fprintf(&w, "  Initramfs   %s\n", bad("neither mkinitcpio nor initramfs-tools found (risk: no code screen at boot - no boot integration here)"))
+	case f.HookState != "":
+		fmt.Fprintf(&w, "  Initramfs   %s\n", bad(fmt.Sprintf("%s, but %s (risk: the next boot shows no code screen and serves no key)", f.Initramfs, f.HookState)))
+	case f.Initramfs == "mkinitcpio":
+		fmt.Fprintf(&w, "  Initramfs   %s\n", good("mkinitcpio, sd-tpm2-kira in HOOKS"))
+	default:
+		fmt.Fprintf(&w, "  Initramfs   %s\n", good(f.Initramfs))
 	}
 	if f.Adapter != "" {
 		fmt.Fprintf(&w, "  Bluetooth   %s (attestation by phone possible)\n", f.Adapter)
@@ -946,7 +959,9 @@ func (c *controller) storePIN() error {
 
 // runSeal seals what the standard pair lacks: both slots when none is
 // there, else only the missing one, so the other's TOTP key (and so its
-// authenticator entry) stays as it is.
+// authenticator entry) stays as it is. Slot 0's selection is the one the
+// analysis evaluated, put up as a recommendation: the person acknowledges
+// it, or gives custom PCRs instead (confirmPCRs).
 func (c *controller) runSeal() error {
 	algo := PCRHashAlgoSHA256
 	if c.facts.UseSHA1 {
@@ -957,15 +972,70 @@ func (c *controller) runSeal() error {
 		slot0 = slot0 || s.Slot == 0
 		fallback = fallback || s.Fallback
 	}
-	switch {
-	case slot0 && !fallback:
-		return Seal(c.o.TPMPath, defaultFallbackSelection(""), ResolveNVRAMIndex(FallbackSlot), "", "", c.o.Debug, algo, true)
-	case !slot0 && fallback:
-		sel, why := DefaultPCRSelection("", algo)
-		fmt.Fprintf(c.out, "PCRs: %s (%s)\n\n", sel, why)
-		return Seal(c.o.TPMPath, sel, ResolveNVRAMIndex(0), "", "", c.o.Debug, algo, true)
+	// Each slot's QR code gets a cleared screen of its own: the second
+	// slot's output would otherwise scroll the first one's code away, and
+	// it is shown this once. Between the two the person confirms the scan;
+	// the last screen stays until "Back to the overview?" is answered.
+	if slot0 && !fallback {
+		fmt.Fprint(c.out, clearScreen)
+		return SealFallback(c.o.TPMPath, "", "", algo, c.o.Debug)
 	}
-	return SealDefaults(c.o.TPMPath, "", "", algo, c.o.Debug)
+	sel, err := c.confirmPCRs()
+	if err != nil {
+		return err
+	}
+	fmt.Fprint(c.out, clearScreen)
+	if err := Seal(c.o.TPMPath, sel, ResolveNVRAMIndex(0), "", "", c.o.Debug, algo, true); err != nil {
+		return err
+	}
+	if fallback {
+		return nil
+	}
+	if err := c.scanned("Slot 0"); err != nil {
+		return err
+	}
+	fmt.Fprint(c.out, clearScreen)
+	return SealFallback(c.o.TPMPath, "", "", algo, c.o.Debug)
+}
+
+// scanned holds a slot's QR code on the screen until the person says the
+// authenticator has it.
+func (c *controller) scanned(what string) error {
+	return c.form(huh.NewNote().Title(what + " is sealed").
+		Description("Scan the QR code above with your authenticator now: it is shown this once.").
+		Next(true).NextLabel("It is in my authenticator")).Run()
+}
+
+// confirmPCRs puts the evaluated selection up as the recommendation for
+// slot 0: acknowledged, it is sealed as evaluated; else the person gives
+// custom PCRs, checked for form (what a selection protects, the overview
+// judges afterwards). The fallback slot's selection is fixed by design.
+func (c *controller) confirmPCRs() (string, error) {
+	f := &c.facts
+	const custom = "custom"
+	choice := f.PCRs
+	if err := c.form(huh.NewSelect[string]().Title("Slot 0 is sealed to these PCRs").
+		Description("Evaluated for this machine: "+f.PCRsWhy+".").
+		Options(
+			huh.NewOption("The recommended "+f.PCRs, f.PCRs),
+			huh.NewOption("Custom PCRs", custom),
+		).Value(&choice)).Run(); err != nil {
+		return "", err
+	}
+	if choice != custom {
+		return choice, nil
+	}
+	pcrs := f.PCRs
+	if err := c.form(huh.NewInput().Title("PCRs for slot 0").
+		Description("Indices with a source each: none or r the register, e the event log, u the unified kernel image - such as 0e,2e,7e,11u (tpm2-kira help seal).").
+		Value(&pcrs).
+		Validate(func(s string) error {
+			_, err := ParsePCRSpecs(s)
+			return err
+		})).Run(); err != nil {
+		return "", err
+	}
+	return pcrs, nil
 }
 
 func (c *controller) runAttest() error {

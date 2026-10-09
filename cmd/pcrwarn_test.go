@@ -39,3 +39,26 @@ func TestWarnAboutBootChainCoverage(t *testing.T) {
 		}
 	}
 }
+
+// control switches the advisory warnings off: its overview judges the
+// same, in red, and nothing is said twice.
+func TestAdvisoryWarningsSwitch(t *testing.T) {
+	specs, err := ParsePCRSpecs("0,7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func(old bool) { AdvisoryWarnings = old }(AdvisoryWarnings)
+	AdvisoryWarnings = false
+	out := captureStdout(t, func() {
+		WarnAboutPCRSelection(specs)
+		WarnAboutHashAlgo(PCRHashAlgoSHA1)
+	})
+	if out != "" {
+		t.Fatalf("advisories although switched off:\n%s", out)
+	}
+	AdvisoryWarnings = true
+	out = captureStdout(t, func() { WarnAboutHashAlgo(PCRHashAlgoSHA1) })
+	if !strings.Contains(out, "SHA-1") {
+		t.Fatalf("the SHA-1 note is gone:\n%s", out)
+	}
+}

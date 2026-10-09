@@ -152,16 +152,23 @@ tpm2-kira version
 One screen for a person rather than a script. On top, the machine's
 status, judged line by line - the TPM and its banks, the endorsement
 key's vendor, Secure Boot, how it booted, the slots, the signing key, the
-initramfs kind, a Bluetooth adapter, the LUKS devices, the unlock mode -
+initramfs kind and whether sd-tpm2-kira is wired into it (the hook
+files installed, and on Arch sd-tpm2-kira in HOOKS of
+/etc/mkinitcpio.conf or a drop-in), a Bluetooth adapter, the LUKS
+devices, the unlock mode -
 **green what is good, red what is not, with the risk in brackets**: the
 SHA-1 bank in use, Secure Boot disabled or in Setup Mode, a slot sealed
 without the kernel measured, a TPM whose endorsement key no known vendor
 vouches for (a phone then trusts it on first use, as it would a software
 TPM), a loose file holding the PIN. The header carries the version.
 
-Under it the protections, as a tree. With no slot at all, one step is
-offered: the standard sealing - slot 0 to this boot's state, slot 1 the
-fallback. Sealed, every slot is a line of its own, and the options that
+Under it the protections, as a tree, and because the status above
+already says what is not good, the steps repeat none of the commands'
+advisory warnings. With no slot at all, one step is offered: the
+standard sealing - slot 0 to this boot's state and slot 1 the fallback,
+where slot 0's evaluated PCR selection is put up as a recommendation:
+acknowledge it, or define custom PCRs for slot 0. Sealed, every slot is
+a line of its own, and the options that
 build on the strong slot (slot 0) nest under it: the attestation by
 phone, and the disk key from password + remote salt, its enrolled state
 read from the LUKS header's tokens. **Picking a slot's line deletes the
@@ -184,7 +191,9 @@ the kernel command line or crypttab where it is not - every other file is
 advised, never edited. Everything but the help needs root; `control` says
 so on its own screen, the commands in a line.
 The overview is a page of its own, the screen cleared each time it is shown;
-what a step prints stays until "Back to the overview?" is answered. The
+what a step prints stays until "Back to the overview?" is answered. Sealing
+both slots, each QR code gets a cleared screen of its own, held until you
+confirm it is in your authenticator. The
 screens are forms (arrow keys, Enter; Esc leaves; `ACCESSIBLE=1` for
 plain prompts), built with [huh v2](https://github.com/charmbracelet/huh) (module charm.land/huh/v2);
 without a terminal, `control` prints the overview and exits.
@@ -212,7 +221,7 @@ without a terminal, `control` prints the overview and exits.
 ┃   ✓ Slot 1  - the fallback, sealed to 0e,7e
 ┃     Disk key from password + salt (hashpwd2)
 ┃   - Unlock at boot (control.conf, the key's route, the initramfs)  - needs a keyslot of tpm2-kira's
-┃     Leave
+┃     Quit
 ↑ up • ↓ down • enter submit
 ```
 

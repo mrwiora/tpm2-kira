@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
@@ -136,7 +137,7 @@ func TestControlStatusJudgement(t *testing.T) {
 		good("enabled"),
 		good("0 (0e,2e,7e,11u), 1 (0e,7e, the fallback)"),
 		good("local key files"),
-		good("mkinitcpio"),
+		good("mkinitcpio, sd-tpm2-kira in HOOKS"),
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the sound machine lacks %q:\n%s", want, got)
@@ -165,6 +166,11 @@ func TestControlStatusJudgement(t *testing.T) {
 			t.Errorf("the status lacks %q:\n%s", want, got)
 		}
 	}
+	c.facts.Initramfs, c.facts.HookState = "mkinitcpio", "sd-tpm2-kira is not in HOOKS of /etc/mkinitcpio.conf - add it next to sd-encrypt, then rebuild"
+	if got := c.factsText(); !strings.Contains(got, "mkinitcpio, but sd-tpm2-kira is not in HOOKS") || !strings.Contains(got, "(risk: the next boot shows no code screen and serves no key)") {
+		t.Errorf("the unwired hook is not marked:\n%s", got)
+	}
+	c.facts.Initramfs, c.facts.HookState = "", ""
 	c.facts.SecureBoot = SecureBootState{Known: true}
 	if got := c.factsText(); !strings.Contains(got, "disabled (risk: the boot loader and the kernel run unsigned") {
 		t.Errorf("disabled: %s", got)
@@ -199,5 +205,50 @@ func TestControlYubiKeyPINStep(t *testing.T) {
 	c.facts.YubiKey = false
 	if s := c.steps()[0]; s.Done != "YubiKey 123 slot 9a" {
 		t.Fatalf("no PIN wanted: %+v", s)
+	}
+}
+
+// The boot integration is wired only when the hook files are installed
+// and, with mkinitcpio, sd-tpm2-kira is in the HOOKS that mkinitcpio
+// would use - the conf and its drop-ins, the last assignment winning.
+func TestInitramfsHookState(t *testing.T) {
+	dir := t.TempDir()
+	defer func(conf, hook, pre string) { mkinitcpioConf, mkinitcpioHook, debianPremount = conf, hook, pre }(mkinitcpioConf, mkinitcpioHook, debianPremount)
+	mkinitcpioConf = dir + "/mkinitcpio.conf"
+	mkinitcpioHook = dir + "/sd-tpm2-kira"
+	debianPremount = dir + "/premount"
+
+	if s := initramfsHookState("mkinitcpio"); !strings.Contains(s, "hook is not installed") {
+		t.Fatalf("no hook files: %q", s)
+	}
+	os.WriteFile(mkinitcpioHook, []byte("#!/bin/bash\n"), 0o644)
+	os.WriteFile(mkinitcpioConf, []byte("# comment, not an assignment:\n#HOOKS=(base sd-tpm2-kira)\nHOOKS=(base systemd block\n       sd-encrypt filesystems)\n"), 0o644)
+	if s := initramfsHookState("mkinitcpio"); !strings.Contains(s, "is not in HOOKS of "+mkinitcpioConf) {
+		t.Fatalf("missing from HOOKS: %q", s)
+	}
+	os.WriteFile(mkinitcpioConf, []byte("HOOKS=(base systemd block sd-tpm2-kira sd-encrypt filesystems) # trailing\n"), 0o644)
+	if s := initramfsHookState("mkinitcpio"); s != "" {
+		t.Fatalf("wired, yet: %q", s)
+	}
+	// A drop-in overrides the conf, as mkinitcpio reads them.
+	os.MkdirAll(dir+"/mkinitcpio.conf.d", 0o755)
+	os.WriteFile(dir+"/mkinitcpio.conf.d/10-override.conf", []byte(`HOOKS="base systemd sd-encrypt"`+"\n"), 0o644)
+	if s := initramfsHookState("mkinitcpio"); !strings.Contains(s, "is not in HOOKS") {
+		t.Fatalf("the drop-in did not win: %q", s)
+	}
+	os.WriteFile(dir+"/mkinitcpio.conf.d/20-ours.conf", []byte("HOOKS=('base' 'systemd' 'sd-tpm2-kira' 'sd-encrypt')\n"), 0o644)
+	if s := initramfsHookState("mkinitcpio"); s != "" {
+		t.Fatalf("the later drop-in did not win: %q", s)
+	}
+
+	if s := initramfsHookState("initramfs-tools"); !strings.Contains(s, "boot scripts are not installed") {
+		t.Fatalf("no Debian scripts: %q", s)
+	}
+	os.WriteFile(debianPremount, []byte("#!/bin/sh\n"), 0o644)
+	if s := initramfsHookState("initramfs-tools"); s != "" {
+		t.Fatalf("Debian wired, yet: %q", s)
+	}
+	if s := initramfsHookState(""); s != "" {
+		t.Fatalf("no initramfs at all judges nothing: %q", s)
 	}
 }

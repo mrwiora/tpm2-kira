@@ -119,6 +119,11 @@ func SealDefaults(tpmPath, pubKeyPath, privKeyPath string, algo PCRHashAlgo, deb
 	if err := Seal(tpmPath, sel, ResolveNVRAMIndex(0), pubKeyPath, privKeyPath, debug, algo, true); err != nil {
 		return err
 	}
+	return SealFallback(tpmPath, pubKeyPath, privKeyPath, algo, debug)
+}
+
+// SealFallback seals slot 1, the fallback, and says what it is for.
+func SealFallback(tpmPath, pubKeyPath, privKeyPath string, algo PCRHashAlgo, debug bool) error {
 	fallback := defaultFallbackSelection("")
 	fmt.Printf("\n=== Slot %d: the fallback, sealed to PCRs %s alone ===\n", FallbackSlot, fallback)
 	fmt.Println("Its code shows in a boot whose kernel or boot loader changed unpredicted, as long")
