@@ -503,3 +503,49 @@ func TestPhoneCodeShownAtOnce(t *testing.T) {
 		t.Fatalf("slot line without a phone: %q", codes[0])
 	}
 }
+
+// The prompt's turn: the key requests are answered as soon as the unit
+// whose line prints last has finished, at once without systemd, and after
+// promptDelay at the latest when the unit never turns active.
+func TestWaitPromptTurn(t *testing.T) {
+	oldDelay, oldPoll, oldActive, oldSystemd := promptDelay, promptPoll, unitActive, underSystemd
+	defer func() { promptDelay, promptPoll, unitActive, underSystemd = oldDelay, oldPoll, oldActive, oldSystemd }()
+	promptDelay, promptPoll = 200*time.Millisecond, time.Millisecond
+
+	// Without systemd nothing prints after READY: no unit is asked for.
+	underSystemd = func() bool { return false }
+	asked := 0
+	unitActive = func(unit string) bool { asked++; return false }
+	waitPromptTurn()
+	if asked != 0 {
+		t.Fatal("asked for a unit without systemd")
+	}
+
+	// The unit finishes on the third poll: the wait ends there, long
+	// before the cap.
+	underSystemd = func() bool { return true }
+	unitActive = func(unit string) bool {
+		if unit != promptGateUnit {
+			t.Fatalf("asked for %q", unit)
+		}
+		asked++
+		return asked == 3
+	}
+	start := time.Now()
+	waitPromptTurn()
+	if asked != 3 {
+		t.Fatalf("asked %d times", asked)
+	}
+	if time.Since(start) >= promptDelay {
+		t.Fatal("waited the whole cap although the unit finished")
+	}
+
+	// A unit that never turns active (not in this initramfs, condition
+	// failed): the cap bounds the wait.
+	unitActive = func(string) bool { return false }
+	start = time.Now()
+	waitPromptTurn()
+	if waited := time.Since(start); waited < promptDelay || waited > 10*promptDelay {
+		t.Fatalf("the cap did not bound the wait: %v", waited)
+	}
+}

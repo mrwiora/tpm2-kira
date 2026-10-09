@@ -110,7 +110,11 @@ refuses a peer of another uid (`SO_PEERCRED`, what the password agent
 demands of a sender too), refuses a peer name that is not
 `/cryptsetup/<volume>`, gives nothing to token requests (it holds no saved
 token keys), and answers a request only after the code screen's hold has
-ended (`sd_notify(READY)`), one volume at a time at its own prompt.
+ended (`sd_notify(READY)`) and the units READY let loose have printed
+their console lines - the last of them `systemd-pcrnvdone.service`, "TPM
+PCR NvPCR Initialization Separator", watched until active with a cap of
+3 s for a machine where it never runs - one volume at a time at its own
+prompt.
 Factor release will be the same provider answering with a derived key.
 The transfer never changes.
 

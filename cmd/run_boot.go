@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -493,11 +494,11 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			releaseTerminal(0)
 			sdNotifyReady()
 			// From here on systemd-cryptsetup's key requests are answered -
-			// after a moment: READY lets the units behind this one finish,
-			// and their lines on the console would land in the prompt.
+			// once the units READY let loose have printed their lines,
+			// which would otherwise land in the prompt (waitPromptTurn).
 			if unlock != nil {
 				go func() {
-					time.Sleep(promptDelay)
+					waitPromptTurn()
 					unlock.release()
 				}()
 			}
@@ -589,11 +590,53 @@ func gateStatus(phone func() (GateStatus, bool)) (GateStatus, bool) {
 	return phone()
 }
 
-// promptDelay is the pause between the end of the code screen and the
-// first key request answered: the units that waited for READY print
-// their lines meanwhile, not into the prompt. A pause only; nothing is
-// trusted differently.
+// The prompt's turn on the console: READY lets the units ordered behind
+// the code screen run, and their lines would land in the prompt. The last
+// of them to print is systemd-pcrnvdone.service, "TPM PCR NvPCR
+// Initialization Separator" - a oneshot before cryptsetup-pre.target, so
+// it is done before any volume may ask for its key - and once it is
+// active its line is on the console. waitPromptTurn watches for that
+// instead of sitting out the whole pause; promptDelay caps the wait where
+// the unit never runs (no measured OS, an older systemd). A pause only;
+// nothing is trusted differently.
+
+// promptGateUnit is the unit whose finish says the console is quiet.
+const promptGateUnit = "systemd-pcrnvdone.service"
+
+// promptDelay is the longest pause between the end of the code screen and
+// the first key request answered.
 var promptDelay = 3 * time.Second
+
+// promptPoll is how often the unit is asked for.
+var promptPoll = 100 * time.Millisecond
+
+// unitActive asks systemd whether the unit is active - for a oneshot with
+// RemainAfterExit: has finished, its console line printed. A var: tests
+// replace it.
+var unitActive = func(unit string) bool {
+	return exec.Command("systemctl", "is-active", "--quiet", unit).Run() == nil
+}
+
+// underSystemd says whether systemd is this boot's init; a Debian
+// initramfs has none, and then nothing prints after READY. A var: tests
+// replace it.
+var underSystemd = func() bool {
+	_, err := os.Stat("/run/systemd/system")
+	return err == nil
+}
+
+// waitPromptTurn returns when promptGateUnit has finished, at once without
+// systemd, and after promptDelay at the latest.
+func waitPromptTurn() {
+	if !underSystemd() {
+		return
+	}
+	for deadline := time.Now().Add(promptDelay); ; time.Sleep(promptPoll) {
+		if unitActive(promptGateUnit) || !time.Now().Before(deadline) {
+			return
+		}
+	}
+}
 
 // kiraTag is the "[ KIRA ]" tag in a colour: yellow for the screen and its
 // lines, blue for the prompt, purple for the phone's code.
