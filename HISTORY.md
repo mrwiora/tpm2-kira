@@ -90,6 +90,20 @@ without an authenticated image. The intention is that tpm2-kira informs
 and the passphrase can always be entered by hand; enforcement, where
 wanted, is a missing factor (PLAN-FACTORRELEASE.md).
 
+## LUKS keyslot token
+
+### `slot` only for the remote salt
+
+The LUKS2 token (`type: tpm2-kira`) first carried its `slot` field only in
+`password+remotesalt` mode, as "the slot whose remote salt it is"; a
+`password+salt` token named no slot. So nothing tied a typed-salt keyslot
+to the slot whose protections it rode on, deleting a slot could not take
+its keyslots with it, and a keyslot left behind was invisible as such. Now
+every token carries `slot` (0 unless `--nvram` names another), deleting a
+slot deletes its keyslots, and a keyslot outliving its slot is reported as
+the slot being dirty. A token written before this change reads as bound to
+slot 0, which is where every keyslot of a one-slot machine belonged anyway.
+
 ## Blob format
 
 ### Version 11 — the boot key

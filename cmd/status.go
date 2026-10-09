@@ -172,6 +172,10 @@ func statusNotes(r StatusReport) []string {
 		notes = append(notes, fmt.Sprintf("no fallback slot (PCRs %s alone) for a boot whose kernel changed unpredicted: tpm2-kira seal --nvram %d --pcrs %s", FallbackPCRSelection, FallbackSlot, FallbackPCRSelection))
 	}
 
+	slotThere := map[int]bool{}
+	for _, s := range r.Slots {
+		slotThere[s.Slot] = true
+	}
 	marked := map[string]int{} // mode -> keyslots marked with it, over every device
 	headersRead := r.DevicesError == ""
 	for _, d := range r.Devices {
@@ -183,15 +187,22 @@ func statusNotes(r StatusReport) []string {
 				continue
 			}
 			marked[ks.Token.Mode]++
-			if ks.Token.Mode == LuksModePasswordRemoteSalt && ks.Token.Slot != nil && r.TPMError == "" {
+			if r.TPMError != "" {
+				continue
+			}
+			if !slotThere[ks.Token.Slot] {
+				notes = append(notes, fmt.Sprintf("%s keyslot %d is bound to slot %d, which is gone - the slot is dirty: 'tpm2-kira control' (Remove a slot) deletes what is left, or tpm2-kira luks remove %s --keyslot %d by hand", d.Device, ks.Keyslot, ks.Token.Slot, d.Device, ks.Keyslot))
+				continue
+			}
+			if ks.Token.Mode == LuksModePasswordRemoteSalt {
 				ok := false
 				for _, s := range r.Slots {
-					if s.Slot == *ks.Token.Slot && s.RemoteSalt {
+					if s.Slot == ks.Token.Slot && s.RemoteSalt {
 						ok = true
 					}
 				}
 				if !ok {
-					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the remote salt of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
+					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the remote salt of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, ks.Token.Slot, d.Device, ks.Keyslot))
 				}
 			}
 		}
@@ -274,10 +285,10 @@ func shortKeyslot(ks KeyslotStatus) string {
 	if ks.Token == nil {
 		return "not tpm2-kira's"
 	}
-	if ks.Token.Mode == LuksModePasswordRemoteSalt && ks.Token.Slot != nil {
-		return fmt.Sprintf("%s (slot %d, label %q)", ks.Token.Mode, *ks.Token.Slot, ks.Token.Label)
+	if ks.Token.Mode == LuksModePasswordRemoteSalt {
+		return fmt.Sprintf("%s (slot %d, label %q)", ks.Token.Mode, ks.Token.Slot, ks.Token.Label)
 	}
-	return ks.Token.Mode
+	return fmt.Sprintf("%s (slot %d)", ks.Token.Mode, ks.Token.Slot)
 }
 
 func quoted(names []string) string {

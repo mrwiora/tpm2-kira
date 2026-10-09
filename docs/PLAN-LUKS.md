@@ -48,7 +48,11 @@ of ours:
 
 - `mode`: `password+salt` or `password+remotesalt` - how the key in this
   keyslot is made at the prompt.
-- `slot`: the tpm2-kira slot whose remote salt it is (password+remotesalt only).
+- `slot`: the tpm2-kira slot the keyslot is bound to, always written (0
+  unless `--nvram` names another; for password+remotesalt the slot whose
+  remote salt it is). Deleting the slot (control, Remove a slot) deletes
+  the keyslot with it; a keyslot outliving its slot is dirty, and status
+  and control say so.
 - `label`: the salt's label (PLAN-FACTORRELEASE §3); one enrolment can
   serve volumes with unrelated salts.
 - `created`: when.
@@ -69,9 +73,10 @@ tpm2-kira luks remove <device> --keyslot N
 ```
 
 - `status` without a device looks at every `crypto_LUKS` block device
-  (`lsblk`). For each keyslot it says whose it is: `tpm2-kira, password+salt`,
-  `tpm2-kira, password+remotesalt, slot 0`, or `not tpm2-kira's` - the
-  recovery passphrase, or a key enrolled by other means.
+  (`lsblk`). For each keyslot it says whose it is: `tpm2-kira,
+  password+salt (slot 0)`, `tpm2-kira, password+remotesalt (slot 0)`, or
+  `not tpm2-kira's` - the recovery passphrase, or a key enrolled by other
+  means.
 - `mark` writes the token for a keyslot that exists - made with `derive`
   or hashpwd2 and `luksAddKey` by hand, or before tokens existed.
 - `enrol` is the whole thing: ask the password (and the salt, or run the

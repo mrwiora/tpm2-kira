@@ -130,6 +130,7 @@ the protections in the order they build on each other -
   4  Disk key from password + salt             luks enrol --mode password+salt
   5  Disk key from password + remote salt      luks enrol --mode password+remotesalt
   6  Unlock at boot                            the mode in control.conf, the key's route
+  7  Remove a slot                             everything a slot is made of, in one act
 
 - each marked done, possible, or blocked with the reason, and the
 recommended next one. Pick a number and it runs that step with the
@@ -140,7 +141,15 @@ the token (the file is then root's alone; the hooks leave the PIN out of
 the initramfs). Step 6 checks that the mode fits the keyslots and that
 every device with a keyslot of tpm2-kira's takes its key from tpm2-kira -
 advising the kernel command line (crypttab on Debian) where it does not;
-those, and every other file, stay yours to edit. Under Risks the overview
+those, and every other file, stay yours to edit. Step 7 is the one way to
+delete a slot: the blob in the TPM (the TOTP key, the phones, the remote
+salt), its generation index and record counter, the LUKS keyslot bound to
+the slot by its token, the recovery blobs - in one act, and the unlock
+mode is set back to what the remaining keyslots call for. A slot whose
+deletion stopped halfway is dirty, marked [!] and recommended first,
+until a run removes the rest; the expert commands (nvram delete, luks
+remove, attest unenrol) stay for taking one piece by hand, and leave the
+slot dirty the same way. Under Risks the overview
 lists what weakens the protections: the SHA-1 bank, Secure Boot disabled
 or in Setup Mode, a slot sealed without the kernel measured, an
 endorsement key no known vendor vouches for (a phone then trusts this
@@ -290,8 +299,11 @@ The TPM's slots: 0-15 are the NV indices 0x01803010-0x0180301F.
 
   list             Every NV index the TPM holds
   status           A slot's NV index: size, attributes, written
-  delete           Delete the slot - or every populated slot without --nvram,
-                   which asks on a terminal or needs --yes
+  delete           Delete the slot's indices in the TPM - or every populated
+                   slot's without --nvram, which asks on a terminal or needs
+                   --yes. A LUKS keyslot bound to the slot stays and leaves
+                   the slot dirty; 'tpm2-kira control' (Remove a slot)
+                   deletes a slot whole
   restore FILE     Put back a blob that a failed write stashed in
                    ` + cmd.NVRAMRecoveryDir + `/ (slot-0x<index>-<time>.blob):
                    the sealed TOTP key survives a lost index. It is approved
@@ -370,12 +382,15 @@ tpm2-kira luks mark   <device> --keyslot N --mode password+salt|password+remotes
 tpm2-kira's LUKS keyslots. Every keyslot it adds is marked with a LUKS2
 token of type tpm2-kira in the header ({"mode","slot","label","created"};
 no secret), so status, removal and rotation know which are its own. The
-recovery passphrase stays in a keyslot of its own, unmarked: cryptsetup's
-prompt is always the fallback (docs/PLAN-LUKS.md).
+token's "slot" binds the keyslot to one tpm2-kira slot (0 unless --nvram
+names another), whatever the mode: deleting that slot (control, Remove a
+slot) deletes the keyslot with it, and a keyslot outliving its slot is
+dirty. The recovery passphrase stays in a keyslot of its own, unmarked:
+cryptsetup's prompt is always the fallback (docs/PLAN-LUKS.md).
 
   status    Every crypto_LUKS device (or the ones named): per keyslot whose
-            it is - tpm2-kira, password+salt; tpm2-kira, password+remotesalt,
-            slot 0; or not tpm2-kira's
+            it is - tpm2-kira, password+salt (slot 0); tpm2-kira,
+            password+remotesalt (slot 0); or not tpm2-kira's
   enrol     The whole thing in one step: asks the password and the salt (or
             runs the remote salt's hand-over with the phone), derives the
             key, asks an existing passphrase of the device (the recovery
@@ -383,7 +398,8 @@ prompt is always the fallback (docs/PLAN-LUKS.md).
             keyslot is tpm2-kira's is refused), imports the token. It sets
             no mode: TPM2_KIRA_UNLOCK in /etc/tpm2-kira/control.conf is
             control's to set (or yours). Then rebuild the initramfs.
-              --nvram N               the slot whose phone keeps the salt
+              --nvram N               the slot the keyslot is bound to (default
+                                      0; password+remotesalt: whose phone keeps the salt)
               --label STR             the remote salt's label (default luks)
               --existing-key-file F   a passphrase file to authorise (scripts)
               --privkey --pubkey --adapter --timeout --adapter-wait  as remote-salt enrol

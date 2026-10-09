@@ -9,10 +9,9 @@ import (
 // The steps are judged from the facts: done, possible, or blocked with
 // the reason, in the order they build on each other.
 func TestControlSteps(t *testing.T) {
-	zero := 0
 	c := &controller{facts: machineFacts{TPM: "/dev/tpmrm0", SHA256Bank: true, LogSHA256: true, PCRs: "0e,2e,7e,11u"}}
 	steps := c.steps()
-	if len(steps) != 6 || steps[0].Done != "" || steps[1].Blocked != "needs the signing key" || steps[2].Blocked != "needs the TOTP seal" || steps[5].Blocked != "needs a keyslot of tpm2-kira's" {
+	if len(steps) != 7 || steps[0].Done != "" || steps[1].Blocked != "needs the signing key" || steps[2].Blocked != "needs the TOTP seal" || steps[5].Blocked != "needs a keyslot of tpm2-kira's" || steps[6].Blocked != "no slot in the TPM" {
 		t.Fatalf("a bare machine: %+v", steps)
 	}
 
@@ -32,7 +31,7 @@ func TestControlSteps(t *testing.T) {
 
 	c.facts.Phone = true
 	c.facts.Status.Slots[0].Phones = []string{"Pixel"}
-	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: &zero}})
+	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: 0}})
 	steps = c.steps()
 	if steps[2].Done == "" || steps[4].Done == "" || steps[3].Done != "" {
 		t.Fatalf("phone and a remote-salt keyslot: %+v", steps)
@@ -68,6 +67,22 @@ func TestControlSteps(t *testing.T) {
 	c.show(steps)
 	if !strings.Contains(out.String(), "the SHA-1 bank is used") {
 		t.Errorf("SHA-1 not said:\n%s", out.String())
+	}
+
+	// The remove step: with whole slots it waits, picked by hand, never the
+	// recommendation; a half-gone slot turns it dirty and recommended first.
+	if steps[6].Blocked != "" || steps[6].Dirty != "" || !steps[6].Optional {
+		t.Fatalf("remove with whole slots: %+v", steps[6])
+	}
+	c.facts.Dirt = []SlotContents{{Slot: 2, Index: NVRAMSlotStart + 2, Counter: true}}
+	dirty := c.steps()
+	if !strings.Contains(dirty[6].Dirty, "slot 2 is dirty: the record counter left") || recommended(dirty) != 6 {
+		t.Fatalf("a dirty slot: %+v", dirty[6])
+	}
+	out.Reset()
+	c.show(dirty)
+	if got := out.String(); !strings.Contains(got, "[!]") || !strings.Contains(got, "7  Remove a slot  - slot 2 is dirty") {
+		t.Fatalf("the dirty screen:\n%s", got)
 	}
 }
 

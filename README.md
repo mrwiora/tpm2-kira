@@ -155,7 +155,11 @@ initramfs kind, a Bluetooth adapter, the LUKS devices), what is configured
 (the signing key, the slots, the phone, the keyslots, the unlock mode,
 the route of the key), the five protections in the order they build on
 each other plus the unlock's prerequisites - each done, possible, or
-blocked with the reason - and the recommended next step. Pick a number
+blocked with the reason - and the recommended next step. It also holds
+the one option to delete a slot whole, everything it is made of in one
+act (see [Deleting sealed data](#deleting-sealed-data)); a slot whose
+deletion stopped halfway shows as dirty, marked `[!]` and recommended
+first, until a run removes the rest. Pick a number
 and it runs that step with the same functions the commands below use;
 run it again later and it shows the state and what is left. The commands
 below are for specific settings, and they touch no configuration file:
@@ -194,6 +198,7 @@ without a terminal, `control` prints the overview and exits.
 ┃ >   Attestation by phone (Marify, Bluetooth LE)
 ┃     Disk key from password + salt (hashpwd2)
 ┃   - Disk key from password + remote salt (the phone)  - needs the attestation by phone
+┃     Remove a slot
 ┃     Leave
 ↑ up • ↓ down • / filter • enter submit
 ```
@@ -400,10 +405,25 @@ blob itself, so consumers never have to branch on the slot count.
 
 ## Deleting Sealed Data
 
+**Deleting a slot is one act**: `tpm2-kira control`, *Remove a slot*. It
+deletes everything the slot is made of - the blob in the TPM (the TOTP
+key, the phones, the remote salt's release key), its two companion
+indices, the LUKS keyslot bound to the slot by its token, the recovery
+blobs stashed for it - and sets the unlock mode back to what the
+remaining keyslots call for. If any part fails to go (no remaining
+passphrase for `luksKillSlot`, a TPM that refuses), the rest is still
+removed, and the slot is **dirty**: parts of it exist while its blob is
+gone. `control` shows a dirty slot with `[!]` and recommends the removal
+first, `status` notes it, until a run removes what is left.
+
+The pieces can still be taken by hand - these leave the slot dirty the
+same way where something of it remains:
+
 ```bash
 tpm2-kira nvram delete              # everything tpm2-kira keeps in the TPM: asks to type 'yes'
 tpm2-kira nvram delete --yes        # the same, without asking
-tpm2-kira nvram delete --nvram 0    # one slot, whole: TOTP key and phones
+tpm2-kira nvram delete --nvram 0    # one slot's indices in the TPM: TOTP key and phones
+tpm2-kira luks remove /dev/sda2 --keyslot 1   # one LUKS keyslot of tpm2-kira's, with its token
 tpm2-kira attest unenrol --nvram 0  # only the phones of one slot (needs the signing key)
 ```
 
@@ -434,7 +454,9 @@ Because the phones live in the slot's blob,
   starts whether another phone still fits.
 
 `nvram delete` without `--nvram` removes every slot and what belongs to no
-slot any more: a companion index whose slot is gone.
+slot any more: a companion index whose slot is gone. What it never touches
+is the LUKS header: a keyslot bound to a deleted slot is named as dirty,
+and `control` (or `luks remove`) takes it.
 
 ### If a rewrite of the slot fails
 
@@ -666,9 +688,13 @@ sudo tpm2-kira luks mark /dev/nvme0n1p2 --keyslot 1 --mode password+salt
 ```
 
 The last line marks the keyslot as tpm2-kira's with a LUKS2 token in the
-header (no key material; `cryptsetup luksDump` lists it as
-`tpm2-kira`), so that `tpm2-kira luks status` can say which keyslot is
-whose and how its key is made. The plan for `luks enrol`, which will do
+header (no key material; `cryptsetup luksDump` lists it as `tpm2-kira`,
+and its JSON carries `"slot": 0`), so that `tpm2-kira luks status` can
+say which keyslot is whose and how its key is made. The token binds the
+keyslot to one tpm2-kira slot - slot 0 unless `--nvram` names another,
+whatever the mode (OTP alone, with the attestation, or with the remote
+salt): deleting that slot deletes the keyslot with it
+([Deleting sealed data](#deleting-sealed-data)). The plan for `luks enrol`, which will do
 all of the above in one step, is [docs/PLAN-LUKS.md](docs/PLAN-LUKS.md).
 
 ### The remote salt: your password and the phone, together

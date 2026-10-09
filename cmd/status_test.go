@@ -10,7 +10,6 @@ func TestStatusNotes(t *testing.T) {
 	slot := func(n int, pcrs string, remote bool) StatusSlot {
 		return StatusSlot{Slot: n, PCRs: pcrs, Fallback: pcrs == "0e,7e", GenState: "3 (matches)", Signed: true, RemoteSalt: remote}
 	}
-	zero := 0
 	dev := func(tokens ...*LuksToken) LuksDeviceStatus {
 		d := LuksDeviceStatus{Device: "/dev/x"}
 		for i, tok := range tokens {
@@ -19,7 +18,7 @@ func TestStatusNotes(t *testing.T) {
 		return d
 	}
 	ok := StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e,11u", true), slot(1, "0e,7e", false)}, UnlockMode: UnlockPasswordRemoteSalt,
-		Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: &zero})}}
+		Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: 0})}}
 	if n := statusNotes(ok); len(n) != 0 {
 		t.Errorf("a consistent machine has notes: %v", n)
 	}
@@ -34,12 +33,14 @@ func TestStatusNotes(t *testing.T) {
 		{"reseal due", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,7e", Fallback: true, GenState: "4 — does NOT match the blob", Signed: true}}, UnlockMode: UnlockSkip}, "resealed"},
 		{"not signed", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,7e", Fallback: true, GenState: "3 (matches)", SignReason: "no key"}}, UnlockMode: UnlockSkip}, "not signed by this machine"},
 		{"remotesalt without one", StatusReport{Slots: []StatusSlot{slot(1, "0e,7e", false)}, UnlockMode: UnlockPasswordRemoteSalt,
-			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: &zero})}}, "no slot has a remote salt"},
+			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: 0})}}, "no slot has a remote salt"},
 		{"mode without keyslot", StatusReport{Slots: []StatusSlot{slot(1, "0e,7e", false)}, UnlockMode: UnlockPasswordSalt, Devices: []LuksDeviceStatus{dev(nil)}}, "no LUKS keyslot is marked"},
 		{"keyslot without mode", StatusReport{Slots: []StatusSlot{slot(1, "0e,7e", false)}, UnlockMode: UnlockSkip,
 			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordSalt})}}, "unlock mode is skip"},
+		{"keyslot bound to a gone slot", StatusReport{Slots: []StatusSlot{slot(0, "0e,7e", false)}, UnlockMode: UnlockSkip,
+			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordSalt, Slot: 2})}}, "bound to slot 2, which is gone"},
 		{"keyslot's slot lost its salt", StatusReport{Slots: []StatusSlot{slot(0, "0e,7e", false)}, UnlockMode: UnlockPasswordRemoteSalt,
-			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: &zero})}}, "keyslot 1 needs the remote salt of slot 0"},
+			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: 0})}}, "keyslot 1 needs the remote salt of slot 0"},
 	}
 	for _, c := range cases {
 		notes := strings.Join(statusNotes(c.r), "\n")

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -58,9 +59,10 @@ type machineFacts struct {
 	Adapter    string   // hciN, or ""
 	AttestConf string   // "" when control.conf loads; else the reason
 
-	Status StatusReport // the slots, the unlock mode, the LUKS devices, the notes
-	Phone  bool         // a phone is enrolled for some slot
-	Salt   bool         // a remote salt is enrolled for some slot
+	Status StatusReport   // the slots, the unlock mode, the LUKS devices, the notes
+	Dirt   []SlotContents // slots whose blob is gone but of which parts remain
+	Phone  bool           // a phone is enrolled for some slot
+	Salt   bool           // a remote salt is enrolled for some slot
 	Routed map[string]bool
 }
 
@@ -128,6 +130,9 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	}
 
 	f.Status = collectStatus(StatusOptions{TPMPath: tpmPath, ConfigPath: controlConfigPath(), Debug: debug})
+	if f.TPMErr == "" {
+		f.Dirt = collectDirt(tpmPath, f.Status.Devices)
+	}
 	f.Risks = risks(&f)
 	for _, s := range f.Status.Slots {
 		f.Phone = f.Phone || len(s.Phones) > 0
@@ -217,16 +222,20 @@ func fileExists(p string) bool {
 
 // A step of the protection, as the menu shows it.
 type controlStep struct {
-	Key     string
-	Title   string
-	Explain string // one or two lines on what it does
-	Done    string // "" when not done; else how it is
-	Blocked string // "" when it can be done; else why not
-	Run     func(c *controller) error
+	Key      string
+	Title    string
+	Explain  string // one or two lines on what it does
+	Done     string // "" when not done; else how it is
+	Blocked  string // "" when it can be done; else why not
+	Dirty    string // "" when nothing is half-gone; else what and where
+	Optional bool   // not a protection: never the recommendation on its own
+	Run      func(c *controller) error
 }
 
 func (s controlStep) marker() string {
 	switch {
+	case s.Dirty != "":
+		return "\033[0;31m[!]\033[0m"
 	case s.Done != "":
 		return "\033[0;32m[x]\033[0m"
 	case s.Blocked != "":
@@ -370,15 +379,35 @@ func (c *controller) steps() []controlStep {
 		unlock.Explain += "\nOpen: " + strings.Join(open, "; ") + "."
 	}
 
-	return []controlStep{keys, seal, attest, luksSalt, luksRemote, unlock}
+	// The one way to delete a slot: everything it is made of goes together -
+	// the blob (the TOTP key, the phones, the remote salt), its companion
+	// indices, the LUKS keyslot bound to it, the recovery blobs. A slot whose
+	// deletion stopped halfway is dirty, and this step takes the rest.
+	remove := controlStep{Key: "remove", Title: "Remove a slot", Optional: true,
+		Explain: "Deletes one slot whole: the TOTP key (its codes in the authenticator), the phones, the remote salt, the LUKS keyslot bound to it, the recovery blobs. Keyslots that are not tpm2-kira's - the recovery passphrase - stay.",
+		Run:     (*controller).runRemove}
+	switch {
+	case f.TPMErr != "":
+		remove.Blocked = "no TPM: " + f.TPMErr
+	case len(f.Status.Slots) == 0 && len(f.Dirt) == 0:
+		remove.Blocked = "no slot in the TPM"
+	case len(f.Dirt) > 0:
+		remove.Dirty = dirtText(f.Dirt)
+	}
+
+	return []controlStep{keys, seal, attest, luksSalt, luksRemote, unlock, remove}
 }
 
 // wantedUnlockMode is the mode the keyslots call for: the phone's when a
 // remote-salt keyslot exists (a typed-salt one next to it is the fallback),
 // else the typed salt's; "" without a keyslot of ours.
 func (c *controller) wantedUnlockMode() string {
+	return wantedMode(c.facts.Status.Devices)
+}
+
+func wantedMode(devices []LuksDeviceStatus) string {
 	wanted := ""
-	for _, d := range c.facts.Status.Devices {
+	for _, d := range devices {
 		for _, ks := range d.Keyslots {
 			if ks.Token == nil {
 				continue
@@ -535,6 +564,8 @@ func (c *controller) pick(steps []controlStep) (string, error) {
 	for _, s := range steps {
 		var label string
 		switch {
+		case s.Dirty != "":
+			label = "! " + s.Title + "  - " + s.Dirty
 		case s.Done != "":
 			label = "✓ " + s.Title + "  - " + s.Done
 		case s.Blocked != "":
@@ -691,10 +722,17 @@ func (c *controller) risksText() string {
 	return w.String()
 }
 
-// recommended is the index of the first step that can be done, or -1.
+// recommended is the index of a dirty step - a half-gone slot comes before
+// everything, since the protections around it cannot be judged - else of
+// the first protection that can be done, or -1.
 func recommended(steps []controlStep) int {
 	for i, s := range steps {
-		if s.Done == "" && s.Blocked == "" {
+		if s.Dirty != "" {
+			return i
+		}
+	}
+	for i, s := range steps {
+		if !s.Optional && s.Done == "" && s.Blocked == "" {
 			return i
 		}
 	}
@@ -715,18 +753,16 @@ func (c *controller) show(steps []controlStep) {
 	}
 
 	fmt.Fprintln(w, "\n\033[1mProtections\033[0m")
-	next := -1
+	next := recommended(steps)
 	for i, s := range steps {
 		fmt.Fprintf(w, "  %s %d  %s", s.marker(), i+1, s.Title)
 		switch {
+		case s.Dirty != "":
+			fmt.Fprintf(w, "  - %s", s.Dirty)
 		case s.Done != "":
 			fmt.Fprintf(w, "  - %s", s.Done)
 		case s.Blocked != "":
 			fmt.Fprintf(w, "  - %s", s.Blocked)
-		default:
-			if next < 0 {
-				next = i
-			}
 		}
 		fmt.Fprintln(w)
 	}
@@ -864,6 +900,70 @@ func (c *controller) runLuks(mode string) error {
 	// when the phone is not there.
 	if mode == LuksModePasswordSalt && c.facts.Status.UnlockMode == UnlockPasswordRemoteSalt {
 		return nil
+	}
+	return c.setMode(mode)
+}
+
+// runRemove is control's one way to delete a slot, whole. What a failed
+// part leaves behind shows as dirty on the overview until a run removes it.
+func (c *controller) runRemove() error {
+	f := &c.facts
+	type cand struct {
+		slot  int
+		label string
+	}
+	var cands []cand
+	for _, s := range f.Status.Slots {
+		label := fmt.Sprintf("slot %d - sealed to %s", s.Slot, s.PCRs)
+		if s.Fallback {
+			label += " (the fallback)"
+		}
+		if len(s.Phones) > 0 {
+			label += ", phone " + quoted(s.Phones)
+		}
+		if s.RemoteSalt {
+			label += ", remote salt"
+		}
+		for _, d := range f.Status.Devices {
+			for _, ks := range d.Keyslots {
+				if ks.Token != nil && ks.Token.Slot == s.Slot {
+					label += fmt.Sprintf(", keyslot %d of %s", ks.Keyslot, d.Device)
+				}
+			}
+		}
+		cands = append(cands, cand{s.Slot, label})
+	}
+	for _, d := range f.Dirt {
+		cands = append(cands, cand{d.Slot, fmt.Sprintf("slot %d - dirty: %s left", d.Slot, d.Remains())})
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].slot < cands[j].slot })
+	labels := make([]string, len(cands))
+	for i, x := range cands {
+		labels[i] = x.label
+	}
+	i, err := c.choose("Which slot goes, whole?", labels)
+	if err != nil {
+		return err
+	}
+	ok, err := c.confirm(fmt.Sprintf("Delete slot %d?", cands[i].slot),
+		"Gone for good: "+cands[i].label+". The authenticator's code for it stops matching. Removing a LUKS keyslot asks for a remaining passphrase (the recovery one); keyslots that are not tpm2-kira's stay.")
+	if err != nil || !ok {
+		return errors.New("not confirmed")
+	}
+	err = DeleteSlot(DeleteSlotOptions{TPMPath: c.o.TPMPath, Slot: cands[i].slot, Debug: c.o.Debug, Out: c.out})
+	c.ran = true // parts may be gone even when the error says the rest is not
+	if err != nil {
+		return err
+	}
+	// The unlock mode is control's to keep fitting: what the remaining
+	// keyslots call for, skip without any.
+	devices, derr := readAllLuksStatuses()
+	if derr != nil {
+		return nil // headers unknown: the mode is not touched
+	}
+	mode := wantedMode(devices)
+	if mode == "" {
+		mode = UnlockSkip
 	}
 	return c.setMode(mode)
 }

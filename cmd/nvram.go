@@ -132,8 +132,9 @@ func ReadFromNVRAM(tpmDev transport.TPM, index uint32) ([]byte, error) {
 const MaxNVRAMBlobSize = 65535
 
 // NVRAMRecoveryDir holds a blob that could not be written back after the index
-// had already been undefined.  See stashUnwrittenBlob.
-const NVRAMRecoveryDir = "/etc/tpm2-kira/recovery"
+// had already been undefined.  See stashUnwrittenBlob. A variable so the
+// tests can point it elsewhere.
+var NVRAMRecoveryDir = "/etc/tpm2-kira/recovery"
 
 // WriteToNVRAM writes data to a TPM NVRAM index.
 //
@@ -601,7 +602,13 @@ func undefineIndex(tpmDev transport.TPM, index uint32) error {
 // without one, every slot and whatever an interrupted command left behind.
 func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool) error {
 	if nvramIndex != 0 {
-		return NVRAMDelete(tpmPath, nvramIndex, debug)
+		if err := NVRAMDelete(tpmPath, nvramIndex, debug); err != nil {
+			return err
+		}
+		// What outlives the blob by design of this command - a LUKS keyslot
+		// bound to the slot, a recovery blob - makes the slot dirty; say so.
+		fmt.Print(slotKeyslotAdvice(tpmPath))
+		return nil
 	}
 
 	// Everything mode - discover what there is, then delete each.
@@ -683,6 +690,7 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 		fmt.Println("The phones still list this machine; remove it there too.")
 		fmt.Println("The initramfs may still carry the Bluetooth gate: rebuild it (mkinitcpio -P / update-initramfs -u).")
 	}
+	fmt.Print(slotKeyslotAdvice(tpmPath))
 	return nil
 }
 
