@@ -12,8 +12,8 @@ url="https://github.com/mrwiora/tpm2-kira"
 license=('BSD-3-Clause')
 # Statically linked, no cgo: the same binary runs in the initramfs.
 depends=()
-# go.mod names the Go the build uses (the current release); an older
-# installed go fetches it by itself (GOTOOLCHAIN=auto).
+# go.mod's go line is the minimum; the release build sets GOTOOLCHAIN to
+# the current Go release, which go fetches when the installed one is older.
 makedepends=('go')
 optdepends=('mkinitcpio: for early boot integration'
             'cryptsetup: for disk encryption integration'

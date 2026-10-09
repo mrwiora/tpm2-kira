@@ -1,0 +1,19 @@
+name: Go, the current release
+description: >
+  Sets up the Go release go.dev names as current, so every build and test
+  runs on the newest standard library whatever go.mod asks for as a minimum.
+runs:
+  using: composite
+  steps:
+    - name: Ask go.dev for the current release
+      id: latest
+      shell: bash
+      run: |
+        GO=$(curl -fsS 'https://go.dev/VERSION?m=text' | head -1)
+        [[ "$GO" =~ ^go[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "go.dev answered '$GO'" >&2; exit 1; }
+        echo "version=${GO#go}" >> "$GITHUB_OUTPUT"
+        echo "Go ${GO#go}"
+    - uses: actions/setup-go@v7
+      with:
+        go-version: ${{ steps.latest.outputs.version }}
+        check-latest: true

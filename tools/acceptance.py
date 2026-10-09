@@ -32,6 +32,7 @@ import sys
 import tempfile
 import termios
 import time
+import urllib.request
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -249,6 +250,17 @@ def pacman_version(rev):
     return d.replace("-", "_")
 
 
+def latest_go():
+    """The Go release go.dev names as current, e.g. go1.27.2: the release
+    builds use it (GOTOOLCHAIN), so the acceptance build does too, whatever
+    go the target has installed."""
+    with urllib.request.urlopen("https://go.dev/VERSION?m=text", timeout=20) as r:
+        go = r.read().decode().split("\n", 1)[0].strip()
+    if not re.fullmatch(r"go\d+\.\d+(\.\d+)?", go):
+        sys.exit(f"go.dev answered {go!r}")
+    return go
+
+
 def build_and_install(t, distro, rev, log, rep):
     short = git("rev-parse", "--short", rev)
     full = git("rev-parse", rev)
@@ -279,7 +291,7 @@ def build_and_install(t, distro, rev, log, rep):
         pb = os.path.join(log.dir, "PKGBUILD")
         open(pb, "w").write(pkgbuild)
         t.copy_to(pb, f"{work}/PKGBUILD")
-        rc, out = t.run(f"cd {work} && makepkg -f --nocheck 2>&1")
+        rc, out = t.run(f"cd {work} && GOTOOLCHAIN={latest_go()} makepkg -f --nocheck 2>&1")
         log.save("build.log", out)
         if not rep.check("package builds (makepkg)", rc == 0, out[-800:] if rc else ""):
             return None
@@ -322,7 +334,8 @@ def build_and_install(t, distro, rev, log, rep):
                         # debian/rules caches under the tree, which this run throws
                         # away: the user's cache instead, kept across runs. The unit
                         # tests have their own run; the package build skips them.
-                        "mkdir -p $HOME/.cache/go-build && GOCACHE=$HOME/.cache/go-build DEB_BUILD_OPTIONS=nocheck PATH=/usr/local/go/bin:$PATH dpkg-buildpackage -us -uc -b 2>&1")
+                        f"mkdir -p $HOME/.cache/go-build && GOCACHE=$HOME/.cache/go-build GOTOOLCHAIN={latest_go()} "
+                        "DEB_BUILD_OPTIONS=nocheck PATH=/usr/local/go/bin:$PATH dpkg-buildpackage -us -uc -b 2>&1")
         log.save("build.log", out)
         if not rep.check("package builds (dpkg-buildpackage)", rc == 0, out[-800:] if rc else ""):
             return None

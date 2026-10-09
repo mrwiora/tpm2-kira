@@ -2,7 +2,7 @@ Source: tpm2-kira
 Section: admin
 Priority: optional
 Maintainer: Matthias Robert Wiora <matthias@wiora.io>
-# Go >= the go line of go.mod (1.27.2), newer than Debian 13's golang-go: the
+# Go >= the go line of go.mod (1.26.0), newer than Debian 13's golang-go: the
 # build uses the go in PATH (from go.dev), so Go is not a package dependency.
 Build-Depends:
  debhelper-compat (= 13),

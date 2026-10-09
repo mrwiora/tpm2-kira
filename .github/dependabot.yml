@@ -4,9 +4,9 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
-    # The golang.org/x modules included: go.mod's go line is the current
-    # Go release (the Go line itself is bumped by hand, with every Go
-    # release), so their requirement never runs ahead of it.
+    # The golang.org/x modules included: they raise go.mod's go line to the
+    # Go before the current one at most, and the builds use the current one
+    # anyway (see .github/actions/go-latest).
 
   # The actions the workflows use: a major behind means the deprecated
   # Node runtime, and the warning in every job's log.

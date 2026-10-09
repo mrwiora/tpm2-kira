@@ -17,10 +17,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: "1.27"
-          check-latest: true
+        uses: ./.github/actions/go-latest
 
       - name: Cache Go modules
         uses: actions/cache@v6
@@ -51,10 +48,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: "1.27"
-          check-latest: true
+        uses: ./.github/actions/go-latest
 
       - name: Cache Go modules
         uses: actions/cache@v6
@@ -166,10 +160,15 @@ jobs:
 
           cat PKGBUILD
 
+      # pacman's go may be a release behind go.dev; GOTOOLCHAIN names the
+      # current one, which go fetches (checked against sum.golang.org).
       - name: Build package
         run: |
           cd packaging/aur
-          sudo -u builder makepkg --noconfirm --syncdeps --rmdeps --clean --nocheck
+          GO=$(curl -fsS 'https://go.dev/VERSION?m=text' | head -1)
+          [[ "$GO" =~ ^go[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "go.dev answered '$GO'" >&2; exit 1; }
+          sudo -u builder env GOTOOLCHAIN="$GO" makepkg --noconfirm --syncdeps --rmdeps --clean --nocheck
+          echo "GO=$GO" >> "$GITHUB_ENV"
           if ! ls *.pkg.tar.zst >/dev/null 2>&1; then
             echo "ERROR: No package file was created"
             exit 1
@@ -232,6 +231,10 @@ jobs:
 
           "/tmp/package-test/usr/bin/tpm2-kira" version
 
+          # Built with the current Go release, not pacman's.
+          BUILT=$(go version -m /tmp/package-test/usr/bin/tpm2-kira | head -1 | awk '{print $2}')
+          [[ "$BUILT" == "$GO" ]] || { echo "ERROR: built with $BUILT, the current release is $GO"; exit 1; }
+
       - name: Create package checksum
         run: |
           cd packaging/aur
@@ -257,8 +260,8 @@ jobs:
       contents: read
 
     steps:
-      # Debian's golang-go is older than go.mod asks; the package is built
-      # with the current Go from go.dev, the way the README says to.
+      # Debian's golang-go is a major behind; the package is built with the
+      # current Go release from go.dev, the way the README says to.
       - name: Install build dependencies
         run: |
           apt-get update

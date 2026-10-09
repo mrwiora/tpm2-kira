@@ -52,10 +52,12 @@ It may not carry what came before.
   misconfigured (an empty `/etc/resolv.conf`, say), the run fails with the
   advice and the owner fixes the machine by hand, so the defect does not
   come back unnoticed.
-- **go.mod asks for the current Go release.** The `go` line is bumped with
-  every Go release (by hand; dependabot does not touch it), so no build ships
-  a standard library with known vulnerabilities; an older installed Go
-  fetches the one named (`GOTOOLCHAIN=auto`). The vulnerability scan
+- **Builds use the current Go release, asked from go.dev at build time.**
+  The workflows set it up through `.github/actions/go-latest`, the Arch
+  package build and the acceptance runs through `GOTOOLCHAIN`, so no release
+  ships a standard library with known vulnerabilities and nobody has to
+  bump anything when Go releases. go.mod's `go` line is the minimum the
+  code builds with, nothing more. The vulnerability scan
   (`tools/vulncheck.py`, run by the Vulnerability Scan workflow) fails on
   what the code calls into; a record the database has wrong goes into
   `tools/vulncheck-ignore` with its proof, never silenced elsewhere.
