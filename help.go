@@ -397,12 +397,16 @@ tpm2-kira luks mark   <device> --keyslot N --mode password+salt|password+remotes
 
 tpm2-kira's LUKS keyslots. Every keyslot it adds is marked with a LUKS2
 token of type tpm2-kira in the header ({"mode","slot","label","created"};
-no secret), so status, removal and rotation know which are its own. The
-token's "slot" binds the keyslot to one tpm2-kira slot (0 unless --nvram
-names another), whatever the mode: deleting that slot (control, Remove a
-slot) deletes the keyslot with it, and a keyslot outliving its slot is
-dirty. The recovery passphrase stays in a keyslot of its own, unmarked:
-cryptsetup's prompt is always the fallback (docs/PLAN-LUKS.md).
+no secret), so status, removal and rotation know which are its own, and
+the boot reads the key's recipe from it. A password+remotesalt keyslot is
+bound by "slot" to the slot whose enrolment releases its salt (0 unless
+--nvram names another): deleting that slot (control, the slot's line)
+deletes the keyslot with it, and a keyslot outliving its slot is dirty.
+A password+salt keyslot is bound to nothing - no TPM is in its key - and
+survives every slot; the two coexist, the typed salt the fallback when
+the phone is not there. The recovery passphrase stays in a keyslot of its
+own, unmarked: cryptsetup's prompt is always the fallback
+(docs/PLAN-LUKS.md).
 
   status    Every crypto_LUKS device (or the ones named): per keyslot whose
             it is - tpm2-kira, password+salt (slot 0); tpm2-kira,

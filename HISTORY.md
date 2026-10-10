@@ -108,6 +108,16 @@ token's mode values.
 
 ## LUKS keyslot token
 
+### Every mode bound to a slot
+
+For a short while every token carried `slot` (0 by default), whatever the
+mode, and deleting a slot took every keyslot bound to it - the typed-salt
+keyslot included, although no TPM is in its key. That made removing a
+slot overwrite protection that did not depend on it. Now only
+`password+remotesalt` binds (the slot whose enrolment releases its salt);
+a `password+salt` token carries no `slot`, survives every slot, and
+coexists with the remote-salt keyslot as the typed fallback.
+
 ### `slot` only for the remote salt
 
 The LUKS2 token (`type: tpm2-kira`) first carried its `slot` field only in

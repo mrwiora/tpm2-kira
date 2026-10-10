@@ -88,7 +88,7 @@ func collectSlotContents(tpmDev transport.TPM, devices []LuksDeviceStatus, slot 
 	}
 	for _, d := range devices {
 		for _, ks := range d.Keyslots {
-			if ks.Token != nil && ks.Token.Slot == slot {
+			if ks.Token != nil && ks.Token.BoundTo(slot) {
 				c.Keyslots = append(c.Keyslots, SlotKeyslot{Device: d.Device, KeyslotStatus: ks})
 			}
 		}

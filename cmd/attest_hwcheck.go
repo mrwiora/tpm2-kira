@@ -139,6 +139,8 @@ func (j *phoneJudge) JudgePhone(a attest.PhoneAttestation) (bool, error) {
 	if j.policy == CheckOff {
 		return true, nil
 	}
+	fmt.Fprintln(j.out, "Checking the phone's key attestation in the background (its certificate")
+	fmt.Fprintln(j.out, "chain against Google's roots, its serials against the revocation list) ...")
 	if j.revoked != nil && a.Root != "" {
 		if list, err := j.revoked(); err != nil {
 			fmt.Fprintf(j.out, "Phone key:     revocation not checked (%v)\n", err)

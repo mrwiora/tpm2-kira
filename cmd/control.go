@@ -271,20 +271,17 @@ func (c *controller) steps() []controlStep {
 		fallback = fallback || s.Fallback
 	}
 	hasSalt := false
-	keyslotsOf := map[int][]string{} // slot -> "keyslot N of /dev/x", from the LUKS headers
-	remoteOf := map[int][]string{}   // the same, the remote-salt ones alone
+	boundTo := map[int][]string{} // slot -> "keyslot N of /dev/x": the remote-salt keyslots, from the LUKS headers
 	for _, d := range f.Status.Devices {
 		for _, ks := range d.Keyslots {
 			if ks.Token == nil {
 				continue
 			}
-			name := fmt.Sprintf("keyslot %d of %s", ks.Keyslot, d.Device)
-			keyslotsOf[ks.Token.Slot] = append(keyslotsOf[ks.Token.Slot], name)
 			if ks.Token.Mode == LuksModePasswordSalt {
 				hasSalt = true
 			}
-			if ks.Token.Mode == LuksModePasswordRemoteSalt {
-				remoteOf[ks.Token.Slot] = append(remoteOf[ks.Token.Slot], name)
+			if ks.Token.Mode == LuksModePasswordRemoteSalt && ks.Token.Slot != nil {
+				boundTo[*ks.Token.Slot] = append(boundTo[*ks.Token.Slot], fmt.Sprintf("keyslot %d of %s", ks.Keyslot, d.Device))
 			}
 		}
 	}
@@ -381,7 +378,7 @@ func (c *controller) steps() []controlStep {
 			if len(s.Phones) > 0 {
 				desc += ", phone " + quoted(s.Phones)
 			}
-			for _, name := range keyslotsOf[s.Slot] {
+			for _, name := range boundTo[s.Slot] {
 				desc += ", " + name
 			}
 		}
@@ -422,17 +419,18 @@ func (c *controller) steps() []controlStep {
 			luksRemote.Blocked = "no LUKS device found (root for the headers)"
 		case attest.Done == "":
 			luksRemote.Blocked = "needs the attestation by phone"
-		case len(remoteOf[strong.Slot]) > 0:
-			luksRemote.Done = strings.Join(remoteOf[strong.Slot], ", ")
+		case len(boundTo[strong.Slot]) > 0:
+			luksRemote.Done = strings.Join(boundTo[strong.Slot], ", ")
 		}
 		steps = append(steps, attest, luksRemote)
 	}
 
-	// The keyslot from a typed salt: independent of the slots to set up
-	// (its token is bound to slot 0 all the same, so deleting the slot
-	// deletes it).
+	// The keyslot from a typed salt: independent of the slots - no TPM is
+	// in its key, no slot binding in its token, and deleting a slot leaves
+	// it untouched. It coexists with the remote-salt keyslot: at boot the
+	// phone's salt is tried first, the typed salt is the fallback.
 	luksSalt := controlStep{Key: "luks-salt", Title: "Disk key from password + salt (hashpwd2)",
-		Explain: "A LUKS keyslot whose key is derived at boot from a password and a salt you type (Argon2id, 1 GiB); the recovery passphrase stays in its own keyslot. Independent of the slots; the keyslot is bound to slot 0 and deleted with it.",
+		Explain: "A LUKS keyslot whose key is derived at boot from a password and a salt you type (Argon2id, 1 GiB); the recovery passphrase stays in its own keyslot. Bound to no slot - deleting a slot leaves it untouched - and it coexists with the remote-salt keyslot, as the typed fallback when the phone is not there.",
 		Run:     func(c *controller) error { return c.runLuks(LuksModePasswordSalt) }}
 	switch {
 	case !luksDevices:
@@ -1196,7 +1194,7 @@ func (c *controller) runRemoveSlot(slot int) error {
 		}
 		for _, d := range f.Status.Devices {
 			for _, ks := range d.Keyslots {
-				if ks.Token != nil && ks.Token.Slot == s.Slot {
+				if ks.Token != nil && ks.Token.BoundTo(s.Slot) {
 					label += fmt.Sprintf(", keyslot %d of %s", ks.Keyslot, d.Device)
 				}
 			}

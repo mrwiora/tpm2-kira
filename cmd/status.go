@@ -183,22 +183,22 @@ func statusNotes(r StatusReport) []string {
 				continue
 			}
 			marked[ks.Token.Mode]++
-			if r.TPMError != "" {
-				continue
+			if r.TPMError != "" || ks.Token.Slot == nil {
+				continue // bound to no slot: nothing of the TPM to check
 			}
-			if !slotThere[ks.Token.Slot] {
-				notes = append(notes, fmt.Sprintf("%s keyslot %d is bound to slot %d, which is gone - the slot is dirty: 'tpm2-kira control' (the slot's line) deletes what is left, or tpm2-kira luks remove %s --keyslot %d by hand", d.Device, ks.Keyslot, ks.Token.Slot, d.Device, ks.Keyslot))
+			if !slotThere[*ks.Token.Slot] {
+				notes = append(notes, fmt.Sprintf("%s keyslot %d is bound to slot %d, which is gone - the slot is dirty: 'tpm2-kira control' (the slot's line) deletes what is left, or tpm2-kira luks remove %s --keyslot %d by hand", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
 				continue
 			}
 			if ks.Token.Mode == LuksModePasswordRemoteSalt {
 				ok := false
 				for _, s := range r.Slots {
-					if s.Slot == ks.Token.Slot && s.RemoteSalt {
+					if s.Slot == *ks.Token.Slot && s.RemoteSalt {
 						ok = true
 					}
 				}
 				if !ok {
-					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the remote salt of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, ks.Token.Slot, d.Device, ks.Keyslot))
+					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the remote salt of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
 				}
 			}
 		}
@@ -267,10 +267,10 @@ func shortKeyslot(ks KeyslotStatus) string {
 	if ks.Token == nil {
 		return "not tpm2-kira's"
 	}
-	if ks.Token.Mode == LuksModePasswordRemoteSalt {
-		return fmt.Sprintf("%s (slot %d, label %q)", ks.Token.Mode, ks.Token.Slot, ks.Token.Label)
+	if ks.Token.Mode == LuksModePasswordRemoteSalt && ks.Token.Slot != nil {
+		return fmt.Sprintf("%s (slot %d, label %q)", ks.Token.Mode, *ks.Token.Slot, ks.Token.Label)
 	}
-	return fmt.Sprintf("%s (slot %d)", ks.Token.Mode, ks.Token.Slot)
+	return ks.Token.Mode
 }
 
 func quoted(names []string) string {

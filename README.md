@@ -439,8 +439,9 @@ blob itself, so consumers never have to branch on the slot count.
 **Deleting a slot is one act**: `tpm2-kira control`, the slot's own line. It
 deletes everything the slot is made of - the blob in the TPM (the TOTP
 key, the phones, the remote salt's release key), its two companion
-indices, the LUKS keyslot bound to the slot by its token, the recovery
-blobs stashed for it. If any part fails to go (no remaining
+indices, the `password+remotesalt` keyslots bound to the slot by their
+token (a `password+salt` keyslot is bound to nothing and stays), the
+recovery blobs stashed for it. If any part fails to go (no remaining
 passphrase for `luksKillSlot`, a TPM that refuses), the rest is still
 removed, and the slot is **dirty**: parts of it exist while its blob is
 gone. `control` shows a dirty slot with `[!]` and recommends the removal
@@ -718,13 +719,15 @@ sudo tpm2-kira luks mark /dev/nvme0n1p2 --keyslot 1 --mode password+salt
 ```
 
 The last line marks the keyslot as tpm2-kira's with a LUKS2 token in the
-header (no key material; `cryptsetup luksDump` lists it as `tpm2-kira`,
-and its JSON carries `"slot": 0`), so that `tpm2-kira luks status` can
-say which keyslot is whose and how its key is made. The token binds the
-keyslot to one tpm2-kira slot - slot 0 unless `--nvram` names another,
-whatever the mode (OTP alone, with the attestation, or with the remote
-salt): deleting that slot deletes the keyslot with it
-([Deleting sealed data](#deleting-sealed-data)). The plan for `luks enrol`, which will do
+header (no key material; `cryptsetup luksDump` lists it as `tpm2-kira`),
+so that `tpm2-kira luks status` can say which keyslot is whose and how
+its key is made. A `password+salt` keyslot is bound to nothing: no TPM is
+in its key, and no slot's deletion takes it. A `password+remotesalt`
+keyslot carries `"slot": N` - the slot whose enrolment releases its salt
+(slot 0 unless `--nvram` names another) - and is deleted with that slot
+([Deleting sealed data](#deleting-sealed-data)). The two coexist on one
+device: at boot the phone's salt is tried first, the typed salt is the
+fallback. The plan for `luks enrol`, which will do
 all of the above in one step, is [docs/PLAN-LUKS.md](docs/PLAN-LUKS.md).
 
 ### The remote salt: your password and the phone, together

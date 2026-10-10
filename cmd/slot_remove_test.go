@@ -51,10 +51,12 @@ func TestCollectSlotContentsWithoutTPM(t *testing.T) {
 	stash := filepath.Join(NVRAMRecoveryDir, "slot-0x01803012-1759823456.blob")
 	os.WriteFile(stash, []byte("x"), 0o600)
 
+	zero, two := 0, 2
 	devices := []LuksDeviceStatus{{Device: "/dev/x", Keyslots: []KeyslotStatus{
 		{Keyslot: 0},
-		{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordSalt, Slot: 2}},
-		{Keyslot: 2, Token: &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: 0}},
+		{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: &two}},
+		{Keyslot: 2, Token: &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: &zero}},
+		{Keyslot: 3, Token: &LuksToken{Mode: LuksModePasswordSalt}}, // bound to nothing: no slot takes it
 	}}}
 	c := collectSlotContents(nil, devices, 2)
 	if c.Blob || c.Generation || c.Counter || len(c.Keyslots) != 1 || c.Keyslots[0].Keyslot != 1 || len(c.Recovery) != 1 {
@@ -76,7 +78,7 @@ func TestDeleteSlotTakesWhatItCan(t *testing.T) {
 
 	const meta = `{
 	  "keyslots": {"0": {"type": "luks2"}, "1": {"type": "luks2"}},
-	  "tokens": {"0": {"type": "tpm2-kira", "keyslots": ["1"], "mode": "password+salt", "slot": 0, "created": "2026-10-07T17:30:00Z"}}
+	  "tokens": {"0": {"type": "tpm2-kira", "keyslots": ["1"], "mode": "password+remotesalt", "slot": 0, "created": "2026-10-07T17:30:00Z"}}
 	}`
 	listLuksDevices = func() ([]string, error) { return []string{"/dev/fake"}, nil }
 	var tokenRemoved, killed []string
@@ -119,7 +121,7 @@ func TestDeleteSlotTakesWhatItCan(t *testing.T) {
 	// stay openable, and the failure says what to add first.
 	const allOurs = `{
 	  "keyslots": {"1": {"type": "luks2"}},
-	  "tokens": {"0": {"type": "tpm2-kira", "keyslots": ["1"], "mode": "password+salt", "slot": 0, "created": "2026-10-07T17:30:00Z"}}
+	  "tokens": {"0": {"type": "tpm2-kira", "keyslots": ["1"], "mode": "password+remotesalt", "slot": 0, "created": "2026-10-07T17:30:00Z"}}
 	}`
 	cryptsetup = func(stdin []byte, args ...string) ([]byte, error) { return []byte(allOurs), nil }
 	killed = nil

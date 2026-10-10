@@ -11,7 +11,7 @@ import (
 const luksMetadataSample = `{
   "keyslots": {"0": {"type": "luks2", "key_size": 64}, "1": {"type": "luks2", "key_size": 64}, "2": {"type": "luks2", "key_size": 64}},
   "tokens": {
-    "0": {"type": "tpm2-kira", "keyslots": ["1"], "mode": "password+salt", "slot": 0, "created": "2026-10-07T17:30:00Z"},
+    "0": {"type": "tpm2-kira", "keyslots": ["1"], "mode": "password+salt", "created": "2026-10-07T17:30:00Z"},
     "1": {"type": "systemd-tpm2", "keyslots": ["2"], "tpm2-blob": "x"},
     "2": {"type": "tpm2-kira", "keyslots": ["0"], "mode": "password+remotesalt", "slot": 0, "label": "luks", "created": "2026-10-07T18:00:00Z"}
   },
@@ -29,7 +29,7 @@ func TestParseLuksMetadata(t *testing.T) {
 	if slots[1].Token == nil || slots[1].Token.Mode != LuksModePasswordSalt || slots[1].TokenID != 0 {
 		t.Fatalf("keyslot 1: %+v", slots[1])
 	}
-	if slots[0].Token == nil || slots[0].Token.Mode != LuksModePasswordRemoteSalt || slots[0].Token.Slot != 0 || slots[0].TokenID != 2 {
+	if slots[0].Token == nil || slots[0].Token.Mode != LuksModePasswordRemoteSalt || !slots[0].Token.BoundTo(0) || slots[0].TokenID != 2 {
 		t.Fatalf("keyslot 0: %+v", slots[0])
 	}
 	if slots[2].Token != nil {
@@ -38,7 +38,7 @@ func TestParseLuksMetadata(t *testing.T) {
 	if d := describeKeyslot(slots[2]); !strings.Contains(d, "not tpm2-kira's") {
 		t.Error(d)
 	}
-	if d := describeKeyslot(slots[1]); !strings.Contains(d, "password+salt") || !strings.Contains(d, "bound to slot 0") || !strings.Contains(d, "token 0") {
+	if d := describeKeyslot(slots[1]); !strings.Contains(d, "password+salt") || !strings.Contains(d, "bound to no slot") || !strings.Contains(d, "token 0") {
 		t.Error(d)
 	}
 	if d := describeKeyslot(slots[0]); !strings.Contains(d, "password+remotesalt") || !strings.Contains(d, "slot 0") || !strings.Contains(d, `"luks"`) {
@@ -90,10 +90,10 @@ func TestLuksStatusReadsTokens(t *testing.T) {
 	if err := json.Unmarshal(imported, &tok); err != nil || tok.Type != LuksTokenType || tok.Keyslots[0] != "2" || tok.Mode != LuksModePasswordSalt || tok.Created == "" {
 		t.Fatalf("imported %s: %v", imported, err)
 	}
-	// The binding is in the header for everyone to see: luksDump's JSON
-	// carries "slot": 0, whatever the mode.
-	if !strings.Contains(string(imported), `"slot":0`) {
-		t.Fatalf("the token does not name its slot: %s", imported)
+	// A typed-salt keyslot is bound to nothing: its token carries no slot,
+	// so no slot's deletion takes it (only password+remotesalt binds).
+	if strings.Contains(string(imported), `"slot"`) {
+		t.Fatalf("a password+salt token names a slot: %s", imported)
 	}
 	// A keyslot marked already is refused; a keyslot that is not there too.
 	if err := LuksMark(LuksMarkOptions{Device: "/dev/fake", Keyslot: 1, Mode: LuksModePasswordSalt}); err == nil || !strings.Contains(err.Error(), "marked already") {

@@ -80,7 +80,8 @@ func TestControlSteps(t *testing.T) {
 	c.facts.Adapter = "hci0"
 	c.facts.Phone = true
 	c.facts.Status.Slots[0].Phones = []string{"Pixel"}
-	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: 0}})
+	zero := 0
+	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: &zero}})
 	steps = c.steps()
 	if steps[3].Done != `phone "Pixel"` || steps[4].Done != "keyslot 1 of /dev/sda2" {
 		t.Fatalf("phone and remote-salt keyslot: %+v %+v", steps[3], steps[4])

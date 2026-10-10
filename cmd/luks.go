@@ -31,17 +31,25 @@ const (
 	LuksModePasswordRemoteSalt = "password+remotesalt" // a typed password and the salt a verifier released
 )
 
-// LuksToken is the token's JSON. Slot is always written: every keyslot of
-// tpm2-kira's is bound to one slot (0 unless named otherwise) - whether its
-// key needs only the slot's code screen, the attestation too, or the remote
-// salt - and deleting that slot deletes the keyslot with it.
+// LuksToken is the token's JSON. Slot is the binding to a tpm2-kira slot
+// and is written for password+remotesalt alone: that key needs the salt
+// the slot's enrolment releases, so deleting the slot deletes the keyslot
+// with it. A password+salt keyslot depends on no slot - no TPM is in its
+// key - and carries no binding: it survives every slot and coexists with
+// the remote-salt keyslot (at boot the phone's salt is tried first, the
+// typed salt is the fallback).
 type LuksToken struct {
 	Type     string   `json:"type"`
 	Keyslots []string `json:"keyslots"`
 	Mode     string   `json:"mode"`
-	Slot     int      `json:"slot"` // the tpm2-kira slot the keyslot is bound to
+	Slot     *int     `json:"slot,omitempty"` // password+remotesalt: the slot whose salt it needs
 	Label    string   `json:"label,omitempty"`
 	Created  string   `json:"created"`
+}
+
+// BoundTo says whether the keyslot is bound to the given tpm2-kira slot.
+func (t *LuksToken) BoundTo(slot int) bool {
+	return t.Slot != nil && *t.Slot == slot
 }
 
 // luksMetadata is the part of luksDump --dump-json-metadata this reads.
@@ -226,11 +234,15 @@ func describeKeyslot(s KeyslotStatus) string {
 	t := s.Token
 	switch t.Mode {
 	case LuksModePasswordSalt:
-		return fmt.Sprintf("tpm2-kira, password+salt: a typed password and a typed salt, bound to slot %d (token %d, %s)", t.Slot, s.TokenID, t.Created)
+		return fmt.Sprintf("tpm2-kira, password+salt: a typed password and a typed salt, bound to no slot (token %d, %s)", s.TokenID, t.Created)
 	case LuksModePasswordRemoteSalt:
-		return fmt.Sprintf("tpm2-kira, password+remotesalt: a typed password and the verifier's salt, bound to slot %d, label %q (token %d, %s)", t.Slot, t.Label, s.TokenID, t.Created)
+		slot := "?"
+		if t.Slot != nil {
+			slot = strconv.Itoa(*t.Slot)
+		}
+		return fmt.Sprintf("tpm2-kira, password+remotesalt: a typed password and the verifier's salt, bound to slot %s, label %q (token %d, %s)", slot, t.Label, s.TokenID, t.Created)
 	}
-	return fmt.Sprintf("tpm2-kira, mode %q, bound to slot %d (token %d)", t.Mode, t.Slot, s.TokenID)
+	return fmt.Sprintf("tpm2-kira, mode %q (token %d)", t.Mode, s.TokenID)
 }
 
 // LuksMarkOptions is what luks mark takes.
@@ -278,20 +290,22 @@ func checkRemoteSaltReady(tpmPath string, sealIndex uint32) error {
 	return nil
 }
 
-// LuksMark writes the token for an existing keyslot, bound to one slot
-// (--nvram, slot 0 unless named). For password+remotesalt the slot must be
-// able to release one (checkRemoteSaltReady).
+// LuksMark writes the token for an existing keyslot. A password+remotesalt
+// keyslot is bound to the slot whose salt it needs (--nvram, slot 0 unless
+// named), which must be able to release one (checkRemoteSaltReady); a
+// password+salt keyslot is bound to nothing.
 func LuksMark(o LuksMarkOptions) error {
 	device, keyslot, mode, label := o.Device, o.Keyslot, o.Mode, o.Label
 	if mode != LuksModePasswordSalt && mode != LuksModePasswordRemoteSalt {
 		return fmt.Errorf("--mode must be %s or %s", LuksModePasswordSalt, LuksModePasswordRemoteSalt)
 	}
-	idx, err := boundSlotIndex(o.SealIndex)
-	if err != nil {
-		return err
-	}
-	slot := SlotNumber(idx)
+	slot := 0
 	if mode == LuksModePasswordRemoteSalt {
+		idx, err := boundSlotIndex(o.SealIndex)
+		if err != nil {
+			return err
+		}
+		slot = SlotNumber(idx)
 		if err := checkRemoteSaltReady(o.TPMPath, idx); err != nil {
 			return err
 		}
@@ -312,8 +326,9 @@ func LuksMark(o LuksMarkOptions) error {
 	if have.Token != nil {
 		return fmt.Errorf("keyslot %d is marked already (token %d, %s); remove it first: tpm2-kira luks remove", keyslot, have.TokenID, have.Token.Mode)
 	}
-	tok := LuksToken{Type: LuksTokenType, Keyslots: []string{strconv.Itoa(keyslot)}, Mode: mode, Slot: slot, Created: time.Now().UTC().Format(time.RFC3339)}
+	tok := LuksToken{Type: LuksTokenType, Keyslots: []string{strconv.Itoa(keyslot)}, Mode: mode, Created: time.Now().UTC().Format(time.RFC3339)}
 	if mode == LuksModePasswordRemoteSalt {
+		tok.Slot = &slot
 		if label == "" {
 			label = "luks"
 		}
@@ -367,12 +382,8 @@ func LuksEnrol(o LuksEnrolOptions) error {
 		return fmt.Errorf("%s has no keyslot that is not tpm2-kira's: add a recovery passphrase first (cryptsetup luksAddKey %s)", o.Device, o.Device)
 	}
 
-	idx, err := boundSlotIndex(o.Remote.SealIndex)
-	if err != nil {
-		return err
-	}
 	var key []byte
-	slot := SlotNumber(idx)
+	slot := 0
 	label := ""
 	switch o.Mode {
 	case LuksModePasswordSalt:
@@ -399,6 +410,10 @@ func LuksEnrol(o LuksEnrolOptions) error {
 			return err
 		}
 	case LuksModePasswordRemoteSalt:
+		idx, err := boundSlotIndex(o.Remote.SealIndex)
+		if err != nil {
+			return err
+		}
 		if _, err := checkRemoteSaltReadyOrEnrolable(o.Remote.TPMPath, idx); err != nil {
 			return err
 		}
@@ -439,9 +454,9 @@ func LuksEnrol(o LuksEnrolOptions) error {
 	if newSlot < 0 {
 		return errors.New("cryptsetup added no keyslot")
 	}
-	tok := LuksToken{Type: LuksTokenType, Keyslots: []string{strconv.Itoa(newSlot)}, Mode: o.Mode, Slot: slot, Created: time.Now().UTC().Format(time.RFC3339)}
+	tok := LuksToken{Type: LuksTokenType, Keyslots: []string{strconv.Itoa(newSlot)}, Mode: o.Mode, Created: time.Now().UTC().Format(time.RFC3339)}
 	if o.Mode == LuksModePasswordRemoteSalt {
-		tok.Label = label
+		tok.Slot, tok.Label = &slot, label
 	}
 	b, err := json.Marshal(tok)
 	if err != nil {

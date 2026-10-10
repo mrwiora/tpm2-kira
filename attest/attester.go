@@ -497,6 +497,8 @@ func ServeEnrolment(conn Conn, id *EnrolIdentity, be EnrolBackend, progress Prog
 	if err := ch.SendMsg(b); err != nil {
 		return nil, err
 	}
+	progress.say("Sent the quote, the attestation key and this TPM's EK certificate; the phone")
+	progress.say("is checking them now (the EK against its vendor roots, the quote against the key) ...")
 
 	if d, err = ch.RecvMsg(); err != nil {
 		return nil, err
@@ -519,6 +521,8 @@ func ServeEnrolment(conn Conn, id *EnrolIdentity, be EnrolBackend, progress Prog
 	}
 	// Whether the activation proves a genuine TPM is the EK verdict's to
 	// say, and the phone says it: no claim here.
+	progress.say("Now look at the phone: it shows its verdict on this machine's TPM and boot")
+	progress.say("state and asks whether to keep the machine. Waiting for your answer there ...")
 
 	if d, err = ch.RecvMsg(); err != nil {
 		return nil, err

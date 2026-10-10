@@ -51,11 +51,11 @@ of ours:
 
 - `mode`: `password+salt` or `password+remotesalt` - how the key in this
   keyslot is made at the prompt.
-- `slot`: the tpm2-kira slot the keyslot is bound to, always written (0
-  unless `--nvram` names another; for password+remotesalt the slot whose
-  remote salt it is). Deleting the slot (control, Remove a slot) deletes
+- `slot`: password+remotesalt only - the slot whose enrolment releases
+  the salt (0 unless `--nvram` names another). Deleting the slot deletes
   the keyslot with it; a keyslot outliving its slot is dirty, and status
-  and control say so.
+  and control say so. A password+salt keyslot carries no binding: no TPM
+  is in its key, and no slot's deletion takes it.
 - `label`: the salt's label (PLAN-FACTORRELEASE §3); one enrolment can
   serve volumes with unrelated salts.
 - `created`: when.
