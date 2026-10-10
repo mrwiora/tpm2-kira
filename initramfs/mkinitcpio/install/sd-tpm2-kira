@@ -107,10 +107,13 @@ _add_bluetooth() {
         return 0
     fi
 
-    # The ring buffer may have rotated on a long uptime; the journal keeps
-    # the whole boot's kernel messages.
+    # The firmware the adapter loads is named in the kernel log of a boot
+    # that loaded it - not every boot does (an Intel controller keeps its
+    # firmware over a warm reboot and then names none). So the Bluetooth
+    # lines of every boot the journal keeps go in; the ring buffer may also
+    # have rotated on a long uptime.
     log=$(mktemp)
-    journalctl -k -b -o cat > "$log" 2> /dev/null || true
+    journalctl -k -o cat --no-pager 2> /dev/null | grep -E 'Bluetooth: hci[0-9]+:' > "$log" || true
     deps=$(tpm2-kira attest initramfs-deps --adapter "$adapter" --kernel-log "$log")
     rc=$?
     rm -f "$log"

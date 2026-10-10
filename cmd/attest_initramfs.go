@@ -22,13 +22,30 @@ import (
 // while current Intel adapters load names like intel/ibt-0041-0041.sfi that
 // appear nowhere in modinfo), and copying every declared file would put
 // megabytes of firmware for other chips into the image.
+//
+// A boot does not always log its firmware: an Intel controller that kept
+// its firmware over a warm reboot says "Firmware already loaded" and names
+// no file, and an image built in that boot would lack the file the next
+// cold start needs ("firmware missing" in the initrd). So the hooks pass
+// the kernel messages of every boot the journal keeps, and what was found
+// is remembered per adapter (BTFirmwareStateDir) for a boot whose journal
+// names none.
 
 // DefaultFirmwareDir is where the kernel loads firmware from.
 const DefaultFirmwareDir = "/usr/lib/firmware"
 
+// BTFirmwareStateDir keeps, per adapter, the firmware files a kernel log
+// once named for it. A variable so the tests can point it elsewhere.
+var BTFirmwareStateDir = "/var/lib/tpm2-kira/bt-firmware"
+
+// firmwareSiblings are files a driver loads next to the one it names:
+// Intel's DDC parameters belong to its firmware image.
+var firmwareSiblings = map[string][]string{".sfi": {".ddc"}}
+
 // BTDeps is what an initramfs needs for one adapter.
 type BTDeps struct {
 	Adapter  string
+	Key      string // the adapter's hardware identity (its modalias): the firmware depends on it
 	Modules  []string
 	Firmware []string // paths relative to the firmware directory, without compression suffix
 	Warnings []string
@@ -49,7 +66,7 @@ func ResolveBTDeps(sysRoot, fwDir string, adapter int, kernelLog []byte) (*BTDep
 	if err != nil {
 		return nil, fmt.Errorf("no Bluetooth adapter %s on this machine", name)
 	}
-	deps := &BTDeps{Adapter: name}
+	deps := &BTDeps{Adapter: name, Key: adapterKey(real, filepath.Join(sysRoot, "devices"))}
 	seen := map[string]bool{}
 	addModule := func(m string) {
 		m = strings.ReplaceAll(m, "-", "_")
@@ -87,17 +104,81 @@ func ResolveBTDeps(sysRoot, fwDir string, adapter int, kernelLog []byte) (*BTDep
 			if fwSeen[tok] || strings.Contains(tok, "..") {
 				continue
 			}
-			if firmwareExists(fwDir, tok) {
-				fwSeen[tok] = true
-				deps.Firmware = append(deps.Firmware, tok)
+			if !firmwareExists(fwDir, tok) {
+				continue
+			}
+			for _, f := range append([]string{tok}, siblings(tok)...) {
+				if !fwSeen[f] && firmwareExists(fwDir, f) {
+					fwSeen[f] = true
+					deps.Firmware = append(deps.Firmware, f)
+				}
 			}
 		}
 	}
-	if len(deps.Firmware) == 0 {
-		deps.Warnings = append(deps.Warnings, fmt.Sprintf(
-			"the kernel log records no firmware load for %s (adapter without firmware, or log rotated); relying on the firmware the modules declare", name))
-	}
 	return deps, nil
+}
+
+func siblings(file string) []string {
+	ext := filepath.Ext(file)
+	var out []string
+	for _, other := range firmwareSiblings[ext] {
+		out = append(out, strings.TrimSuffix(file, ext)+other)
+	}
+	return out
+}
+
+// adapterKey names the adapter's hardware for BTFirmwareStateDir: the
+// modalias of the nearest device above hciN that has one (USB vendor,
+// product and revision, for example), made a file name.
+func adapterKey(hciDir, devicesRoot string) string {
+	for dir := filepath.Dir(hciDir); strings.HasPrefix(dir, devicesRoot) && dir != devicesRoot; dir = filepath.Dir(dir) {
+		if b, err := os.ReadFile(filepath.Join(dir, "modalias")); err == nil {
+			alias := strings.TrimSpace(string(b))
+			if alias != "" {
+				return regexp.MustCompile(`[^A-Za-z0-9._-]`).ReplaceAllString(alias, "_")
+			}
+		}
+	}
+	return ""
+}
+
+// rememberedFirmware completes deps from BTFirmwareStateDir when no log
+// named the adapter's firmware, and records what a log did name. It says
+// in a warning which way it went when the log was silent.
+func rememberedFirmware(deps *BTDeps, fwDir string) {
+	if deps.Key == "" {
+		if len(deps.Firmware) == 0 {
+			deps.Warnings = append(deps.Warnings, noFirmwareWarning(deps.Adapter))
+		}
+		return
+	}
+	state := filepath.Join(BTFirmwareStateDir, deps.Key)
+	if len(deps.Firmware) > 0 {
+		if err := os.MkdirAll(BTFirmwareStateDir, 0o755); err == nil {
+			os.WriteFile(state, []byte(strings.Join(deps.Firmware, "\n")+"\n"), 0o644)
+		}
+		return
+	}
+	data, err := os.ReadFile(state)
+	if err == nil {
+		for _, f := range strings.Fields(string(data)) {
+			if !strings.Contains(f, "..") && firmwareExists(fwDir, f) {
+				deps.Firmware = append(deps.Firmware, f)
+			}
+		}
+	}
+	if len(deps.Firmware) > 0 {
+		deps.Warnings = append(deps.Warnings, fmt.Sprintf(
+			"no kernel log names %s's firmware; using what an earlier boot loaded (%s)", deps.Adapter, strings.Join(deps.Firmware, ", ")))
+		return
+	}
+	deps.Warnings = append(deps.Warnings, noFirmwareWarning(deps.Adapter))
+}
+
+func noFirmwareWarning(adapter string) string {
+	return fmt.Sprintf("no kernel log names the firmware %s loads, and none is remembered: the image gets only the firmware "+
+		"the modules declare, which for current Intel adapters is not the right file, and the adapter may then not start "+
+		"in the initrd. Power the machine off (a cold start loads the firmware and logs it), boot, and rebuild (mkinitcpio -P)", adapter)
 }
 
 func firmwareExists(fwDir, rel string) bool {
@@ -146,6 +227,7 @@ func AttestInitramfsDeps(adapter int, kernelLogPath, fwDir string) int {
 		fmt.Printf("warning %v\n", err)
 		return ExitUnavailable
 	}
+	rememberedFirmware(deps, fwDir)
 	fmt.Printf("adapter %s\n", deps.Adapter)
 	for _, m := range deps.Modules {
 		fmt.Printf("module %s\n", m)
@@ -171,4 +253,21 @@ func preferResourceManager(path string) string {
 		return "/dev/tpmrm0"
 	}
 	return path
+}
+
+// adapterFirmware is the firmware the image build would put in for the
+// adapter: what this boot's kernel log names, else what an earlier boot's
+// did (remembered). The journal of earlier boots is the hooks' to read;
+// this is the quick look for control's overview.
+func adapterFirmware(adapter string) []string {
+	var n int
+	if _, err := fmt.Sscanf(adapter, "hci%d", &n); err != nil {
+		return nil
+	}
+	deps, err := ResolveBTDeps("/sys", DefaultFirmwareDir, n, readKernelLog(""))
+	if err != nil {
+		return nil
+	}
+	rememberedFirmware(deps, DefaultFirmwareDir)
+	return deps.Firmware
 }

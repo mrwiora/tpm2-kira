@@ -44,6 +44,7 @@ func fakeSysfs(t *testing.T) string {
 	link(filepath.Join(root, "bus/pci/drivers/xhci_hcd"), filepath.Join(pci, "driver"))
 	link(filepath.Join(root, "bus/usb/drivers/usb"), filepath.Join(usb, "driver"))
 	link(filepath.Join(root, "bus/usb/drivers/btusb"), filepath.Join(iface, "driver"))
+	os.WriteFile(filepath.Join(iface, "modalias"), []byte("usb:v8087p0026d0002dcE0dsc01dp01icE0isc01ip01in00\n"), 0o644)
 	mk("class/bluetooth")
 	link(hci, filepath.Join(root, "class/bluetooth/hci0"))
 	return root
@@ -111,11 +112,13 @@ func TestResolveBTDepsNoAdapterAndNoLog(t *testing.T) {
 	if _, err := ResolveBTDeps(sys, t.TempDir(), 3, nil); err == nil {
 		t.Fatal("hci3 does not exist")
 	}
+	BTFirmwareStateDir = t.TempDir()
 	deps, err := ResolveBTDeps(sys, t.TempDir(), 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(deps.Firmware) != 0 || len(deps.Warnings) != 1 {
+	rememberedFirmware(deps, t.TempDir())
+	if len(deps.Firmware) != 0 || len(deps.Warnings) != 1 || !strings.Contains(deps.Warnings[0], "Power the machine off") {
 		t.Fatalf("expected a firmware warning, got %+v", deps)
 	}
 }
@@ -171,4 +174,43 @@ TPM2_KIRA_ATTEST_ADAPTER_WAIT=1m
 func parseAttest(data []byte) (AttestConfig, error) {
 	cfg, err := ParseControlConfig(data)
 	return cfg.Attest, err
+}
+
+// A boot whose Intel controller kept its firmware over a warm reboot names
+// no file. The image built in it must still carry the firmware a cold start
+// needs: the one an earlier boot loaded, remembered per adapter - with its
+// DDC file, which belongs to it even where the log names only the image.
+func TestResolveBTDepsRemembersFirmwareOverAWarmReboot(t *testing.T) {
+	sys := fakeSysfs(t)
+	fw := fakeFirmware(t, "intel/ibt-0040-0041.sfi.zst", "intel/ibt-0040-0041.ddc.zst", "intel/ibt-11-5.sfi")
+	BTFirmwareStateDir = filepath.Join(t.TempDir(), "state")
+
+	cold := "Bluetooth: hci0: Found device firmware: intel/ibt-0040-0041.sfi\n"
+	deps, err := ResolveBTDeps(sys, fw, 0, []byte(cold))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rememberedFirmware(deps, fw)
+	want := []string{"intel/ibt-0040-0041.sfi", "intel/ibt-0040-0041.ddc"}
+	if !reflect.DeepEqual(deps.Firmware, want) || len(deps.Warnings) != 0 {
+		t.Fatalf("cold start: %+v", deps)
+	}
+
+	warm := "Bluetooth: hci0: Firmware already loaded\nBluetooth: hci0: Firmware revision 0.0 build 191 week 21 2021\n"
+	deps, err = ResolveBTDeps(sys, fw, 0, []byte(warm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rememberedFirmware(deps, fw)
+	if !reflect.DeepEqual(deps.Firmware, want) || len(deps.Warnings) != 1 || !strings.Contains(deps.Warnings[0], "an earlier boot") {
+		t.Fatalf("warm reboot: %+v", deps)
+	}
+
+	// Another adapter (another modalias) does not take this one's files.
+	os.WriteFile(filepath.Join(sys, "devices/pci0000:00/0000:00:14.0/usb1/1-10/1-10:1.0/modalias"), []byte("usb:v0BDAp8771\n"), 0o644)
+	deps, _ = ResolveBTDeps(sys, fw, 0, []byte(warm))
+	rememberedFirmware(deps, fw)
+	if len(deps.Firmware) != 0 {
+		t.Fatalf("another adapter got these files: %v", deps.Firmware)
+	}
 }

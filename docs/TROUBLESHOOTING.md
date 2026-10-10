@@ -53,6 +53,22 @@ tpm2-kira reseal
 ```
 If reseal also fails, check `tpm2-kira info` to see which PCRs changed and verify you have the correct signing key available.
 
+**The phone is not asked at boot; the kernel says hci0's firmware is missing:**
+The image has the Bluetooth driver but not the adapter's firmware. The image
+build learns the firmware's name from the kernel log of a boot that loaded
+it, and not every boot does: an Intel controller keeps its firmware over a
+warm reboot and then names none. The hooks read every boot the journal
+keeps and remember what they found per adapter
+(`/var/lib/tpm2-kira/bt-firmware/`); `control`'s overview shows the
+firmware on its Bluetooth line, red when none is known.
+```bash
+sudo tpm2-kira attest initramfs-deps --adapter 0      # what the next image gets
+journalctl -k -o cat | grep -E 'Bluetooth: hci[0-9]+:' # what the kernel logged
+lsinitcpio /boot/EFI/Linux/arch-linux.efi | grep -iE 'firmware|bluetooth|bt'
+```
+If no firmware line appears: power the machine off (a cold start loads the
+firmware and logs it), boot, and rebuild with `mkinitcpio -P`.
+
 **Debug output:**
 ```bash
 tpm2-kira --debug reveal

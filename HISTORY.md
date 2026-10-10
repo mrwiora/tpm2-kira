@@ -340,6 +340,19 @@ then read by path. It is replaced by `ReadSigningKeyFile`, which also refuses
 symlinks, foreign owners and writable directories, and returns the content of
 the file it checked.
 
+## Bluetooth in the initramfs
+
+### The firmware came from the current boot's log alone
+
+Until 2026-10-10 the hooks read `journalctl -k -b`: the firmware the
+adapter loaded in the boot the image was built in. An Intel controller that
+kept its firmware over a warm reboot names no file, the hook then fell back
+to the files the modules declare (for Intel, legacy ones), and the next cold
+start found its firmware missing in the initrd. Now the Bluetooth lines of
+every boot the journal keeps are read, what was found is remembered per
+adapter, an Intel `.sfi` brings its `.ddc`, and `control` shows the
+firmware the image will get.
+
 ## Removed external tools
 
 ### `qrencode`

@@ -86,8 +86,10 @@ if [ -z "$enrolled" ] || [ "$enrolled" = "[]" ]; then
 elif ! signer=$("$kira" attest signer) || ! printf '%s\n' "$signer" | grep -q 'BEGIN PUBLIC KEY'; then
     echo "tpm2-kira: the attestation record was not accepted (see above); Bluetooth not added" >&2
 else
+    # The Bluetooth lines of every boot the journal keeps: not every boot
+    # names the firmware (an Intel controller keeps it over a warm reboot).
     log=$(mktemp)
-    journalctl -k -b -o cat >"$log" 2>/dev/null || true
+    journalctl -k -o cat --no-pager 2>/dev/null | grep -E 'Bluetooth: hci[0-9]+:' >"$log" || true
     rc=0
     deps=$("$kira" attest initramfs-deps --adapter "$adapter" --kernel-log "$log") || rc=$?
     rm -f "$log"

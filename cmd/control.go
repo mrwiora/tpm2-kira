@@ -66,6 +66,10 @@ type machineFacts struct {
 	Phone    bool           // a phone is enrolled for some slot
 	Salt     bool           // a remote salt is enrolled for some slot
 	BTAlways bool           // Bluetooth is packed into every image (control.conf)
+	// BTFirmware is the adapter's firmware as the image build will find it
+	// (attest_initramfs.go); empty when no log named it and none is
+	// remembered, so the image may not start the adapter.
+	BTFirmware []string
 	Guide    string         // guided or manual (TPM2_KIRA_CONTROL); "" until chosen
 	Capped   bool           // 'tpm2-kira cap' ran: this boot went through the code screen
 	NewImage string         // an image was rebuilt after this boot started; "" when not
@@ -135,6 +139,7 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	}
 	if m, _ := filepath.Glob("/sys/class/bluetooth/hci*"); len(m) > 0 {
 		f.Adapter = filepath.Base(m[0])
+		f.BTFirmware = adapterFirmware(f.Adapter)
 	}
 	if cfg, err := LoadControlConfig(controlConfigPath()); err != nil {
 		f.AttestConf = err.Error()
@@ -851,9 +856,16 @@ func (c *controller) factsText() string {
 	default:
 		fmt.Fprintf(&w, "  Initramfs   %s\n", good(f.Initramfs))
 	}
-	if f.Adapter != "" {
-		fmt.Fprintf(&w, "  Bluetooth   %s (attestation by phone possible)\n", f.Adapter)
-	} else {
+	switch {
+	case f.Adapter != "" && len(f.BTFirmware) == 0 && (f.Phone || f.BTAlways):
+		// It goes into the image: without its firmware the adapter does
+		// not start in the initrd. An adapter that needs none is rare.
+		fmt.Fprintf(&w, "  Bluetooth   %s\n", bad(f.Adapter+", no firmware for it seen loaded (risk: the image cannot start it at boot, unless it needs none - power off, boot, then rebuild)"))
+	case f.Adapter != "" && len(f.BTFirmware) == 0:
+		fmt.Fprintf(&w, "  Bluetooth   %s (attestation by phone possible; no firmware seen loaded yet)\n", f.Adapter)
+	case f.Adapter != "":
+		fmt.Fprintf(&w, "  Bluetooth   %s (attestation by phone possible; firmware %s)\n", f.Adapter, strings.Join(f.BTFirmware, ", "))
+	default:
 		fmt.Fprintln(&w, "  Bluetooth   no adapter: no attestation by phone")
 	}
 	switch {
