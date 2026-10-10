@@ -665,6 +665,19 @@ func TestPINFromControlConf(t *testing.T) {
 	}
 	CloseTokenSessions()
 
+	// A file that does not load - a line this version refuses next to the
+	// PIN - is named with the reason, and nothing is asked: the reseal of
+	// an image build must not wait at a terminal nobody watches.
+	CloseTokenSessions()
+	os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST_TIMEOUT=0\nTPM2_KIRA_PIN='123456'\n"), 0600)
+	prompts = fake.prompts
+	_, err = signer.Sign(rand.Reader, digest[:], crypto.SHA256)
+	if err == nil || !strings.Contains(err.Error(), "does not load, so the PIN in it is not read") ||
+		!strings.Contains(err.Error(), "TPM2_KIRA_ATTEST_TIMEOUT is gone") || fake.prompts != prompts {
+		t.Errorf("a file that does not load: err = %v, prompts %d → %d", err, prompts, fake.prompts)
+	}
+	CloseTokenSessions()
+
 	// No PIN in the file: asked on the terminal, then warned once.
 	os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST_ADAPTER=0\n"), 0600)
 	fake.typed = "123456"

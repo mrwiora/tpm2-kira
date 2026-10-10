@@ -40,7 +40,11 @@ fi
 
 # tpm2-kira exits 0 even on failure, by design, so that chained commands still
 # run. Success must therefore be judged from the output, not the exit status.
-output=$(tpm2-kira reseal --measure-point="$measure_point" 2>&1)
+#
+# The reseal never asks: setsid gives it no controlling terminal, so a PIN
+# it cannot read from control.conf ends it with the reason (SKIPPED)
+# instead of a prompt that would hold mkinitcpio -P.
+output=$(setsid -w tpm2-kira reseal --measure-point="$measure_point" 2>&1 < /dev/null)
 #
 # SKIPPED means the signing key lives on a YubiKey that is not plugged in, or
 # its PIN was not available. Nothing was written, so the sealed secret is

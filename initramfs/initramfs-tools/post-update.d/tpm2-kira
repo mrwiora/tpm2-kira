@@ -17,5 +17,7 @@ command -v tpm2-kira >/dev/null 2>&1 || exit 0
 tpm2-kira info --json 2>/dev/null | grep -q '"index"' || exit 0
 
 echo "tpm2-kira: initramfs rebuilt ($1); resealing for the next boot" >&2
-tpm2-kira reseal || echo "tpm2-kira: reseal did not succeed; the next boot shows no code until 'tpm2-kira reseal' does" >&2
+# No terminal (setsid): a PIN it cannot read from control.conf ends the
+# reseal with the reason instead of a prompt that would hold the update.
+setsid -w tpm2-kira reseal </dev/null || echo "tpm2-kira: reseal did not succeed; the next boot shows no code until 'tpm2-kira reseal' does" >&2
 exit 0

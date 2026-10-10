@@ -720,6 +720,14 @@ func pinFromConfig() (string, bool, error) {
 	path := controlConfigPath()
 	pin, loose := configPIN(path)
 	if pin == "" {
+		// A file that does not load must not make its PIN vanish
+		// quietly: the reseal would then ask for one on a terminal that
+		// nobody watches (the hook's, inside mkinitcpio -P) and wait.
+		if _, err := os.Stat(path); err == nil {
+			if _, err := LoadControlConfig(path); err != nil {
+				return "", false, fmt.Errorf("%s does not load, so the PIN in it is not read: %w", path, err)
+			}
+		}
 		return "", false, nil
 	}
 	if loose {

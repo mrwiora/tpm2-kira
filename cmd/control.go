@@ -907,6 +907,9 @@ func (c *controller) factsText() string {
 	case f.Adapter != "" && f.HookState == "" && (f.Phone || f.BTAlways):
 		fmt.Fprintf(&w, "  Boot image  %s\n", good("carries "+f.Adapter+"'s driver and firmware for the phone's gate"))
 	}
+	if f.AttestConf != "" {
+		fmt.Fprintf(&w, "  Config      %s\n", bad(controlConfigPath()+" does not load: "+f.AttestConf+" (risk: the automatic reseal after an image rebuild reads no PIN from it, and the image build stops)"))
+	}
 	if f.BootDebug {
 		fmt.Fprintf(&w, "  Debug       %s\n", warn("on at boot: the code screen and the phone check log every step, on the console too"))
 	}
