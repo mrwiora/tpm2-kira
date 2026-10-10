@@ -70,11 +70,15 @@ type machineFacts struct {
 	// (attest_initramfs.go); empty when no log named it and none is
 	// remembered, so the image may not start the adapter.
 	BTFirmware []string
-	Guide      string // guided or manual (TPM2_KIRA_CONTROL); "" until chosen
-	Capped     bool   // 'tpm2-kira cap' ran: this boot went through the code screen
-	NewImage   string // an image was rebuilt after this boot started; "" when not
-	Routed     map[string]bool
-	Route      []RouteFinding // the route's findings, for the step that writes the fixes
+	// ImageBT says what the boot images lack of the adapter's part, when
+	// it belongs in them (a phone, or Bluetooth packed always); "" when
+	// they carry it or it does not belong there.
+	ImageBT  string
+	Guide    string // guided or manual (TPM2_KIRA_CONTROL); "" until chosen
+	Capped   bool   // 'tpm2-kira cap' ran: this boot went through the code screen
+	NewImage string // an image was rebuilt after this boot started; "" when not
+	Routed   map[string]bool
+	Route    []RouteFinding // the route's findings, for the step that writes the fixes
 }
 
 // collectFacts is the analysis.
@@ -159,6 +163,9 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	}
 	if f.Initramfs == "mkinitcpio" {
 		f.NewImage = imageNewerThanBoot()
+	}
+	if f.Adapter != "" && f.Initramfs != "" && f.HookState == "" && (f.Phone || f.BTAlways) {
+		f.ImageBT = imageBluetoothProblem(f.BTFirmware)
 	}
 	var devices []string
 	for _, d := range f.Status.Devices {
@@ -869,6 +876,12 @@ func (c *controller) factsText() string {
 		fmt.Fprintln(&w, "  Bluetooth   no adapter: no attestation by phone")
 	}
 	switch {
+	case f.ImageBT != "":
+		fmt.Fprintf(&w, "  Boot image  %s\n", bad(f.ImageBT+" (risk: the phone is not asked at boot)"))
+	case f.Adapter != "" && f.HookState == "" && (f.Phone || f.BTAlways):
+		fmt.Fprintf(&w, "  Boot image  %s\n", good("carries "+f.Adapter+"'s driver and firmware for the phone's gate"))
+	}
+	switch {
 	case f.Status.DevicesError != "":
 		fmt.Fprintf(&w, "  LUKS        %s\n", f.Status.DevicesError)
 	case len(f.Status.Devices) == 0:
@@ -1444,9 +1457,12 @@ func (c *controller) runInitramfs() error {
 // the Bluetooth modules, when an adapter is there, preselected and free to
 // deselect - and runs mkinitcpio -P when asked.
 func (c *controller) offerRebuild() error {
+	if c.facts.Adapter != "" && (c.facts.BTAlways || c.facts.Phone) {
+		fmt.Fprintln(c.out, btImagePlan(c.facts.Adapter))
+	}
 	if c.facts.Adapter != "" && !c.facts.BTAlways {
 		ok, err := c.confirmYes("Pack Bluetooth into every boot image (~1.1 MB)?",
-			"With "+c.facts.Adapter+" in the image from the start, enrolling and removing phones never changes it, and the first enrolment causes no \"changed\" verdict at the next boot. Deselect to keep the image lean: the hooks then add Bluetooth once a phone is enrolled, and that first rebuild shows \"changed\" once.")
+			btImagePlan(c.facts.Adapter)+"\n\nWith "+c.facts.Adapter+" in the image from the start, enrolling and removing phones never changes it, and the first enrolment causes no \"changed\" verdict at the next boot. Deselect to keep the image lean: the hook then adds Bluetooth once a phone is enrolled, and that first rebuild shows \"changed\" once. Yes writes TPM2_KIRA_ATTEST_BLUETOOTH=always into "+controlConfigPath()+"; nothing else is edited.")
 		if err != nil {
 			return err
 		}
@@ -1529,4 +1545,32 @@ func (c *controller) runRemoveSlot(slot int) error {
 func isTerminal(f *os.File) bool {
 	_, err := unix.IoctlGetTermios(int(f.Fd()), unix.TCGETS)
 	return err == nil
+}
+
+// btImagePlan says what the sd-tpm2-kira hook puts into the image for the
+// adapter - the same resolution it runs (attest_initramfs.go) - so it can
+// be seen before the rebuild, and checked after it.
+func btImagePlan(adapter string) string {
+	var n int
+	if _, err := fmt.Sscanf(adapter, "hci%d", &n); err != nil {
+		return ""
+	}
+	deps, err := ResolveBTDeps("/sys", DefaultFirmwareDir, n, append(readKernelLog(""), journalBluetoothLines()...))
+	if err != nil {
+		return "The sd-tpm2-kira hook adds Bluetooth for " + adapter + ": " + err.Error()
+	}
+	rememberedFirmware(deps, DefaultFirmwareDir)
+	var b strings.Builder
+	fmt.Fprintf(&b, "The sd-tpm2-kira hook adds for %s (no edit of mkinitcpio.conf):\n", adapter)
+	fmt.Fprintf(&b, "  modules:   %s (with their dependencies)\n", strings.Join(deps.Modules, " "))
+	if len(deps.Firmware) > 0 {
+		fmt.Fprintf(&b, "  firmware:  %s\n", strings.Join(deps.Firmware, " "))
+	} else {
+		fmt.Fprintf(&b, "  firmware:  none known - only what the modules declare\n")
+	}
+	fmt.Fprintf(&b, "  and:       /%s, the gate's unit tpm2-kira-attest.service, the signing public key", btModulesLoadConf)
+	for _, w := range deps.Warnings {
+		fmt.Fprintf(&b, "\n  NOTE: %s", w)
+	}
+	return b.String()
 }

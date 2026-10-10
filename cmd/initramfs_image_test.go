@@ -1,0 +1,69 @@
+package cmd
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// A preset that builds unified kernel images names them default_uki=: they
+// are images too (the rebuild and boot-age checks look at them).
+func TestPresetImagesIncludeUKIs(t *testing.T) {
+	dir := t.TempDir()
+	old := mkinitcpioPresetDir
+	mkinitcpioPresetDir = dir
+	defer func() { mkinitcpioPresetDir = old }()
+	os.WriteFile(filepath.Join(dir, "linux.preset"), []byte(`ALL_kver="/boot/vmlinuz-linux"
+PRESETS=('default' 'fallback')
+#default_image="/boot/initramfs-linux.img"
+default_uki="/boot/EFI/Linux/arch-linux.efi"
+fallback_uki="/boot/EFI/Linux/arch-linux-fallback.efi"
+`), 0o644)
+	got := strings.Join(mkinitcpioImages(), " ")
+	if got != "/boot/EFI/Linux/arch-linux.efi /boot/EFI/Linux/arch-linux-fallback.efi" {
+		t.Fatalf("images %q", got)
+	}
+}
+
+// control looks into the images: the gate's part and the adapter's
+// firmware must be in every one the next boot may start.
+func TestImageBluetoothProblem(t *testing.T) {
+	dir := t.TempDir()
+	old := mkinitcpioPresetDir
+	mkinitcpioPresetDir = dir
+	defer func() { mkinitcpioPresetDir = old }()
+	img := filepath.Join(dir, "arch-linux.efi")
+	os.WriteFile(img, []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(dir, "linux.preset"), []byte(`default_uki="`+img+`"`+"\n"), 0o644)
+
+	oldList := listImage
+	defer func() { listImage = oldList }()
+	contents := []string{}
+	listImage = func(string) ([]string, error) { return contents, nil }
+	fw := []string{"intel/ibt-0040-0041.sfi"}
+
+	if p := imageBluetoothProblem(fw); !strings.Contains(p, "holds no Bluetooth") {
+		t.Fatalf("an image without the gate: %q", p)
+	}
+	contents = []string{"./" + btModulesLoadConf}
+	touch := func() { // a new build: the cache goes by modification time
+		st, _ := os.Stat(img)
+		os.Chtimes(img, st.ModTime().Add(1e9), st.ModTime().Add(1e9))
+	}
+	touch()
+	if p := imageBluetoothProblem(fw); !strings.Contains(p, "lacks the adapter's firmware intel/ibt-0040-0041.sfi") {
+		t.Fatalf("an image without the firmware: %q", p)
+	}
+	contents = append(contents, "usr/lib/firmware/intel/ibt-0040-0041.sfi.zst")
+	touch()
+	if p := imageBluetoothProblem(fw); p != "" {
+		t.Fatalf("a complete image: %q", p)
+	}
+	listImage = func(string) ([]string, error) { return nil, errors.New("no objcopy") }
+	touch()
+	if p := imageBluetoothProblem(fw); !strings.Contains(p, "cannot be read") {
+		t.Fatalf("an unreadable image: %q", p)
+	}
+}

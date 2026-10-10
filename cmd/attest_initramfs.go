@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -264,10 +265,30 @@ func adapterFirmware(adapter string) []string {
 	if _, err := fmt.Sscanf(adapter, "hci%d", &n); err != nil {
 		return nil
 	}
-	deps, err := ResolveBTDeps("/sys", DefaultFirmwareDir, n, readKernelLog(""))
+	deps, err := ResolveBTDeps("/sys", DefaultFirmwareDir, n, append(readKernelLog(""), journalBluetoothLines()...))
 	if err != nil {
 		return nil
 	}
 	rememberedFirmware(deps, DefaultFirmwareDir)
 	return deps.Firmware
+}
+
+// journalBluetoothLines are the Bluetooth kernel messages of every boot
+// the journal keeps, as the hooks pass them.
+func journalBluetoothLines() []byte {
+	out, err := exec.Command("journalctl", "-k", "-o", "cat", "--no-pager", "-g", `Bluetooth: hci[0-9]+:`).Output()
+	if err == nil {
+		return out
+	}
+	all, err := exec.Command("journalctl", "-k", "-o", "cat", "--no-pager").Output()
+	if err != nil {
+		return nil
+	}
+	var keep []byte
+	for _, l := range strings.Split(string(all), "\n") {
+		if strings.Contains(l, "Bluetooth: hci") {
+			keep = append(keep, l+"\n"...)
+		}
+	}
+	return keep
 }

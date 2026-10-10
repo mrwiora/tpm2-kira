@@ -165,8 +165,9 @@ func parseHooks(data string) ([]string, bool) {
 // the tests.
 var mkinitcpioPresetDir = "/etc/mkinitcpio.d"
 
-// presetImageRe matches the image paths of a preset (default_image="...").
-var presetImageRe = regexp.MustCompile(`(?m)^[A-Za-z0-9_]*image="?([^"\n]+)"?`)
+// presetImageRe matches the image paths of a preset: default_image="..."
+// for an initramfs, default_uki="..." for a unified kernel image.
+var presetImageRe = regexp.MustCompile(`(?m)^[A-Za-z0-9_]*(?:image|uki)="?([^"\n]+)"?`)
 
 // mkinitcpioImages are the images the presets name.
 func mkinitcpioImages() []string {

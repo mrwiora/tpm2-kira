@@ -989,7 +989,7 @@ still be sealed in the TPM. Delete the slot first, then the directory.
 
 ## Troubleshooting, diagnosis, exit status
 
-The event-log calculator, what to do when a code stops matching, the common errors and the exit status table are in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md); the repository layout and how the tests are run in [docs/PROJECT-STRUCTURE.md](docs/PROJECT-STRUCTURE.md).
+The event-log calculator, what to do when a code stops matching, the common errors and the exit status table are in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md); how Bluetooth gets into the boot image and why a phone was not asked at boot in [docs/DEBUG-BLE.md](docs/DEBUG-BLE.md); the repository layout and how the tests are run in [docs/PROJECT-STRUCTURE.md](docs/PROJECT-STRUCTURE.md).
 
 ## Security
 

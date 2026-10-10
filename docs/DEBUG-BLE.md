@@ -1,0 +1,130 @@
+# Debugging the phone check at boot (Bluetooth LE)
+
+The phone is asked at boot by a gate that runs in the initramfs, next to the
+code screen. For that the image needs the Bluetooth adapter's driver
+modules, its firmware, the gate's unit and the signing public key. This page
+says how they get there, how to see what was put in, and how to find out
+why a phone was not asked.
+
+## 1. How Bluetooth gets into the image
+
+**Through the `sd-tpm2-kira` hook, not through an edit of
+`/etc/mkinitcpio.conf`.** The hook is the one you put into `HOOKS` for the
+code screen; at every `mkinitcpio -P` its build function also adds
+Bluetooth, when it belongs in the image:
+
+| `TPM2_KIRA_ATTEST_BLUETOOTH` in `/etc/tpm2-kira/control.conf` | Bluetooth in the image |
+|---|---|
+| `auto` (default) | once a phone is enrolled for some slot |
+| `always` | in every image, before any phone (~1.1 MB) |
+
+`control` writes `always` when you answer *Yes* to "Pack Bluetooth into every
+boot image?" (offered before a rebuild, preselected). That line is the only
+setting; `mkinitcpio.conf` is not touched for Bluetooth. Debian's
+initramfs-tools hook (`/usr/share/initramfs-tools/hooks/tpm2-kira`) does the
+same with the same setting.
+
+What the hook adds, for the adapter `TPM2_KIRA_ATTEST_ADAPTER` (default
+`hci0`):
+
+| What | From where |
+|---|---|
+| the driver modules along the adapter's sysfs path (`btusb`, `btintel`, `xhci_pci`, ..., `bluetooth`) with their dependencies | `/sys/class/bluetooth/hciN` |
+| the firmware files the adapter loads (e.g. `intel/ibt-0040-0041.sfi` and its `.ddc`) | the kernel log of every boot the journal keeps; remembered per adapter in `/var/lib/tpm2-kira/bt-firmware/` (§3) |
+| `/etc/modules-load.d/tpm2-kira-bluetooth.conf` | the module list, loaded early in the initrd |
+| `tpm2-kira-attest.service` | the gate's unit |
+| `/etc/tpm2-kira/attest-signer.pem` | the signing public key, to check the enrolment record |
+
+The resolution is `tpm2-kira attest initramfs-deps`; the hook only copies
+what it answers. `control` runs the same resolution and shows its answer
+before the rebuild ("The sd-tpm2-kira hook adds for hci0: ...").
+
+### Why the hook, and not MODULES= and FILES= in mkinitcpio.conf
+
+- **The firmware's name is not known in advance.** It depends on the chip
+  and is learnt from the kernel log; a `FILES=` line would have to be
+  written per machine and kept in step with `linux-firmware` (compressed
+  names, renamed files). `MODULES=(btusb)` alone brings the firmware the
+  modules *declare*, which for current Intel adapters is not the file they
+  load.
+- **Modules alone are not the gate.** Its unit, the module list and the
+  signing public key have to be added by a hook in any case.
+- **`auto` follows the enrolment:** no phone, no Bluetooth in the image,
+  without anyone editing a file.
+- **One mechanism for mkinitcpio and initramfs-tools**, which has no
+  `mkinitcpio.conf`.
+
+What makes it visible instead: the plan shown before every rebuild, the
+hook's line in the `mkinitcpio` output (`tpm2-kira: Bluetooth attestation
+via hci0: 6 modules, 2 firmware files`, or a warning), and `control`'s check
+of the built image (§2).
+
+## 2. Is it in the image?
+
+`control`'s overview checks the images the next boot may start (every
+preset's `default_image`/`default_uki`, Debian's `initrd.img` of the
+running kernel) whenever Bluetooth belongs in them:
+
+```
+  Bluetooth   hci0 (attestation by phone possible; firmware intel/ibt-0040-0041.sfi, intel/ibt-0040-0041.ddc)
+  Boot image  carries hci0's driver and firmware for the phone's gate
+```
+
+red when an image lacks the gate's part or the adapter's firmware. By hand:
+
+```bash
+lsinitcpio /boot/EFI/Linux/arch-linux.efi | grep -E 'tpm2-kira|firmware|bluetooth'   # a UKI or an .img
+lsinitramfs /boot/initrd.img-$(uname -r) | grep -E 'tpm2-kira|firmware|bluetooth'     # Debian
+sudo tpm2-kira attest initramfs-deps --adapter 0     # what the next build will add
+```
+
+## 3. The firmware
+
+The kernel names the firmware it loads, but not in every boot: an Intel
+controller that kept its firmware over a warm reboot logs "Firmware already
+loaded" and names no file. An image built in such a boot used to get the
+modules' declared files instead, and the next cold start failed in the
+initrd with the firmware missing. Therefore:
+
+- the hooks read the Bluetooth kernel lines of **every boot the journal
+  keeps** (`journalctl -k`), not just the current one;
+- what a log named is **remembered per adapter**, by its modalias, in
+  `/var/lib/tpm2-kira/bt-firmware/`, and used when no log names any;
+- an Intel `.sfi` brings its `.ddc`;
+- with nothing known the hook warns, and `control` shows the Bluetooth line
+  red.
+
+If no firmware is known: **power the machine off** (a cold start loads the
+firmware and logs it), boot, and rebuild (`mkinitcpio -P`).
+
+```bash
+journalctl -k -o cat | grep -E 'Bluetooth: hci[0-9]+:'   # what the kernel logged, all boots
+ls /var/lib/tpm2-kira/bt-firmware/ && cat /var/lib/tpm2-kira/bt-firmware/*
+```
+
+## 4. Why was the phone not asked?
+
+After the boot, on the unlocked system:
+
+```bash
+journalctl -b -u tpm2-kira-attest.service -u tpm2-kira.service   # Debian: /run/initramfs/tpm2-kira.log
+journalctl -b -k | grep -iE 'bluetooth|hci|firmware'
+```
+
+| What the log says | Cause | What to do |
+|---|---|---|
+| no `tpm2-kira-attest.service` at all | the image has no Bluetooth: no phone was enrolled when it was built (`auto`), or the hook warned | `control`'s Boot image line; rebuild |
+| kernel: `Direct firmware load for ... failed`, `firmware missing` | the image lacks the adapter's firmware (§3) | power off, boot, rebuild |
+| `no Bluetooth adapter hci0` / the gate waits for the adapter | module or firmware not loaded in time, or another index | `TPM2_KIRA_ATTEST_ADAPTER`, `TPM2_KIRA_ATTEST_ADAPTER_WAIT` in `control.conf` |
+| `the attestation record is not accepted` | the enrolment in the TPM is not the one the image's signing key vouches for (replaced, or an older one put back) | `tpm2-kira attest status`; enrol again |
+| the phone sees no machine | the phone's Bluetooth is off, or Marify has no record for this machine (enrolled again elsewhere) | enrol the phone again |
+
+For every step the gate takes (TPM, adapter, controller commands,
+advertising, connections), set `TPM2_KIRA_ATTEST_DEBUG=1` in
+`/etc/tpm2-kira/control.conf`, rebuild, and boot: the narrative then also
+reaches the console. The gate can be run by hand on the booted system to
+test the radio and the phone without a reboot:
+
+```bash
+sudo tpm2-kira attest gate     # the verdict is shown; nothing is unlocked
+```

@@ -67,7 +67,8 @@ journalctl -k -o cat | grep -E 'Bluetooth: hci[0-9]+:' # what the kernel logged
 lsinitcpio /boot/EFI/Linux/arch-linux.efi | grep -iE 'firmware|bluetooth|bt'
 ```
 If no firmware line appears: power the machine off (a cold start loads the
-firmware and logs it), boot, and rebuild with `mkinitcpio -P`.
+firmware and logs it), boot, and rebuild with `mkinitcpio -P`. More in
+[DEBUG-BLE.md](DEBUG-BLE.md).
 
 **Debug output:**
 ```bash
