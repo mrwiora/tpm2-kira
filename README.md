@@ -149,7 +149,10 @@ tpm2-kira version
 
 ## Guided: `tpm2-kira control`
 
-One screen for a person rather than a script. The first run asks how to
+One screen for a person rather than a script. It starts by checking
+`/etc/tpm2-kira/control.conf`: a file that does not load is not worked on
+- control lists every line it refuses, with its number and what to do, and
+quits before anything is asked or written. The first run asks how to
 guide you - **guided**: one row (the signing key, the mkinitcpio
 configuration, the key's route, the slots), one rebuild, then the reboot,
 and part 2 (the phone, and the disk's key) continues after it; or

@@ -615,6 +615,14 @@ func Control(o ControlOptions) error {
 		c.out = os.Stdout
 	}
 	c.tty = isTerminal(os.Stdin)
+	// The configuration file first: control writes it, and a step taken
+	// on a file that does not load would be taken on defaults it never
+	// chose (the guided/manual choice read as "not made", a PIN whose
+	// file the settings reject). Everything wrong with it, then quit.
+	if problems := controlConfigProblemsText(controlConfigPath()); problems != "" {
+		fmt.Fprintf(c.out, "\n%s\n\n%s", c.header(), problems)
+		return fmt.Errorf("%s does not load: fix it as shown, then start control again", controlConfigPath())
+	}
 	// The overview judges the risks itself, in red on the status, so the
 	// steps run without the commands' advisory warnings: nothing is said
 	// twice. Run by hand, seal and reseal keep them.
@@ -906,9 +914,6 @@ func (c *controller) factsText() string {
 		fmt.Fprintf(&w, "  Boot image  %s\n", bad(f.ImageBT+" (risk: the phone is not asked at boot)"))
 	case f.Adapter != "" && f.HookState == "" && (f.Phone || f.BTAlways):
 		fmt.Fprintf(&w, "  Boot image  %s\n", good("carries "+f.Adapter+"'s driver and firmware for the phone's gate"))
-	}
-	if f.AttestConf != "" {
-		fmt.Fprintf(&w, "  Config      %s\n", bad(controlConfigPath()+" does not load: "+f.AttestConf+" (risk: the automatic reseal after an image rebuild reads no PIN from it, and the image build stops)"))
 	}
 	if f.BootDebug {
 		fmt.Fprintf(&w, "  Debug       %s\n", warn("on at boot: the code screen and the phone check log every step, on the console too"))
@@ -1275,7 +1280,10 @@ func dirtyLine(d SlotContents) controlStep {
 // or every step by hand - and keeps the answer in control.conf. The last
 // entry of the overview switches it any time.
 func (c *controller) ensureGuide() error {
-	cfg, _ := LoadControlConfig(controlConfigPath())
+	cfg, err := LoadControlConfig(controlConfigPath())
+	if err != nil {
+		return err // checked at the start; never asked over a file that does not load
+	}
 	if cfg.Control != "" {
 		return nil
 	}
@@ -1755,4 +1763,29 @@ func (c *controller) runBootDebug() error {
 		fmt.Fprintln(c.out, "Debug at boot is off.")
 	}
 	return nil
+}
+
+// controlConfigProblemsText says everything that keeps control.conf from
+// loading - each line, its number and what to do - or "" when it loads
+// (or is not there: the defaults). The PIN line is never quoted.
+func controlConfigProblemsText(path string) string {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return ""
+	}
+	if err != nil {
+		return fmt.Sprintf("%s cannot be read: %v\n", path, err)
+	}
+	problems := ControlConfigProblems(data)
+	if len(problems) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\033[0;31m%s does not load\033[0m - control stops before anything is asked or written:\n\n", path)
+	for _, p := range problems {
+		fmt.Fprintf(&b, "  - %s\n", strings.TrimPrefix(p.Error(), "control.conf "))
+	}
+	fmt.Fprintf(&b, "\nEdit the file: remove or correct the lines above; every other line, the PIN\n"+
+		"included, stays as it is. Then start 'tpm2-kira control' again.\n\n")
+	return b.String()
 }

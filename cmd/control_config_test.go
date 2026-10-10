@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,5 +77,44 @@ func TestBuildSettingsDoNotStopTheBuild(t *testing.T) {
 	os.WriteFile(path, []byte("TPM2_KIRA_ATTEST_ADAPTER=hci2\nTPM2_KIRA_ATTEST_TIMEOUT=0\n"), 0o600)
 	if cfg, w := buildSettings(path); cfg.Adapter != 0 || cfg.Bluetooth != "auto" || !strings.Contains(w, "does not load") {
 		t.Fatalf("%+v %q", cfg, w)
+	}
+}
+
+// control checks control.conf before anything else: every line that does
+// not load, with its number and what to do, and then it quits - nothing
+// asked (the guided/manual choice read as "not made" asked every time),
+// nothing written. The PIN is never quoted.
+func TestControlStopsOnAConfigThatDoesNotLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "control.conf")
+	t.Setenv("TPM2_KIRA_CONTROL_CONF", path)
+	os.WriteFile(path, []byte("TPM2_KIRA_CONTROL=guided\nTPM2_KIRA_ATTEST_TIMEOUT=0\nTPM2_KIRA_PIN='secret-1234'\nTPM2_KIRA_ATTEST_DEBUG=1\n"), 0o600)
+	before, _ := os.ReadFile(path)
+
+	var out bytes.Buffer
+	err := Control(ControlOptions{TPMPath: filepath.Join(t.TempDir(), "no-tpm"), Out: &out})
+	got := out.String()
+	if err == nil || !strings.Contains(err.Error(), "does not load") {
+		t.Fatalf("control went on: %v\n%s", err, got)
+	}
+	for _, want := range []string{"line 2: TPM2_KIRA_ATTEST_TIMEOUT is gone", "line 4: TPM2_KIRA_ATTEST_DEBUG is gone", "Remove the line", "the PIN\nincluded, stays"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the output lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "secret-1234") || strings.Contains(got, "Looking at this machine") || strings.Contains(got, "Protections") {
+		t.Errorf("control said too much, or went on:\n%s", got)
+	}
+	if after, _ := os.ReadFile(path); !bytes.Equal(before, after) {
+		t.Error("control wrote the file")
+	}
+
+	// Fixed, control goes on, and the choice in the file is taken.
+	os.WriteFile(path, []byte("TPM2_KIRA_CONTROL=guided\nTPM2_KIRA_PIN='secret-1234'\n"), 0o600)
+	out.Reset()
+	if err := Control(ControlOptions{TPMPath: filepath.Join(t.TempDir(), "no-tpm"), Out: &out}); err != nil || !strings.Contains(out.String(), "Protections") {
+		t.Fatalf("a good file: %v\n%s", err, out.String())
+	}
+	if problems := ControlConfigProblems([]byte("TPM2_KIRA_CONTROL=wizard\nx\n")); len(problems) != 2 {
+		t.Fatalf("problems %v", problems)
 	}
 }

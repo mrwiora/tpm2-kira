@@ -85,60 +85,86 @@ func LoadAttestConfig(path string) (AttestConfig, error) {
 	return cfg.Attest, err
 }
 
-// ParseControlConfig parses control.conf content.
+// ParseControlConfig parses control.conf content: the first line it
+// refuses is the error (ControlConfigProblems lists them all).
 func ParseControlConfig(data []byte) (ControlConfig, error) {
 	cfg := DefaultControlConfig()
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	for n := 1; sc.Scan(); n++ {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		key, val, ok := strings.Cut(line, "=")
-		if !ok {
-			return cfg, fmt.Errorf("control.conf line %d: expected KEY=VALUE", n)
-		}
-		key = strings.TrimSpace(key)
-		val = strings.Trim(strings.TrimSpace(val), `"'`)
-		switch key {
-		case "TPM2_KIRA_UNLOCK":
-			return cfg, fmt.Errorf("control.conf line %d: there is no unlock mode to set any more; the boot reads how a key is made from the LUKS header's tokens. Remove the line", n)
-		case "TPM2_KIRA_CONTROL":
-			switch val {
-			case "guided", "manual":
-				cfg.Control = val
-			default:
-				return cfg, fmt.Errorf("control.conf line %d: TPM2_KIRA_CONTROL must be guided or manual, not %q", n, val)
-			}
-		case "TPM2_KIRA_ATTEST_BLUETOOTH":
-			switch val {
-			case "", "auto", "always":
-				cfg.Attest.Bluetooth = val
-				if val == "" {
-					cfg.Attest.Bluetooth = "auto"
-				}
-			default:
-				return cfg, fmt.Errorf("control.conf line %d: TPM2_KIRA_ATTEST_BLUETOOTH must be auto or always, not %q", n, val)
-			}
-		case PINEnvVar:
-			// Read by storedPIN alone, for the signer; never kept here.
-		case "TPM2_KIRA_ATTEST":
-			return cfg, fmt.Errorf("control.conf line %d: there is no attestation mode to set; the phone is served whenever one is enrolled. Remove the line", n)
-		case "TPM2_KIRA_ATTEST_ADAPTER":
-			v, err := strconv.Atoi(strings.TrimPrefix(val, "hci"))
-			if err != nil || v < 0 || v > 255 {
-				return cfg, fmt.Errorf("control.conf line %d: invalid adapter %q", n, val)
-			}
-			cfg.Attest.Adapter = v
-		case "TPM2_KIRA_ATTEST_TIMEOUT", "TPM2_KIRA_ATTEST_ADAPTER_WAIT":
-			return cfg, fmt.Errorf("control.conf line %d: %s is gone: the gate in the boot image waits for the adapter and a phone as long as the code screen holds. Remove the line", n, key)
-		case "TPM2_KIRA_ATTEST_DEBUG":
-			return cfg, fmt.Errorf("control.conf line %d: TPM2_KIRA_ATTEST_DEBUG is gone: switch \"Debug at boot\" in 'tpm2-kira control' instead (a setting in the TPM; nothing of control.conf goes into the boot image). Remove the line", n)
-		default:
-			return cfg, fmt.Errorf("control.conf line %d: unknown key %q", n, key)
+		if err := parseControlLine(&cfg, n, sc.Text()); err != nil {
+			return cfg, err
 		}
 	}
 	return cfg, sc.Err()
+}
+
+// ControlConfigProblems lists every line of control.conf content that does
+// not load, each with its number and what to do; none for a good file.
+func ControlConfigProblems(data []byte) []error {
+	cfg := DefaultControlConfig()
+	var out []error
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	for n := 1; sc.Scan(); n++ {
+		if err := parseControlLine(&cfg, n, sc.Text()); err != nil {
+			out = append(out, err)
+		}
+	}
+	if err := sc.Err(); err != nil {
+		out = append(out, err)
+	}
+	return out
+}
+
+// parseControlLine takes one line (number n) into cfg.
+func parseControlLine(cfg *ControlConfig, n int, line string) error {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return nil
+	}
+	key, val, ok := strings.Cut(line, "=")
+	if !ok {
+		return fmt.Errorf("control.conf line %d: expected KEY=VALUE", n)
+	}
+	key = strings.TrimSpace(key)
+	val = strings.Trim(strings.TrimSpace(val), `"'`)
+	switch key {
+	case "TPM2_KIRA_UNLOCK":
+		return fmt.Errorf("control.conf line %d: there is no unlock mode to set any more; the boot reads how a key is made from the LUKS header's tokens. Remove the line", n)
+	case "TPM2_KIRA_CONTROL":
+		switch val {
+		case "guided", "manual":
+			cfg.Control = val
+		default:
+			return fmt.Errorf("control.conf line %d: TPM2_KIRA_CONTROL must be guided or manual, not %q", n, val)
+		}
+	case "TPM2_KIRA_ATTEST_BLUETOOTH":
+		switch val {
+		case "", "auto", "always":
+			cfg.Attest.Bluetooth = val
+			if val == "" {
+				cfg.Attest.Bluetooth = "auto"
+			}
+		default:
+			return fmt.Errorf("control.conf line %d: TPM2_KIRA_ATTEST_BLUETOOTH must be auto or always, not %q", n, val)
+		}
+	case PINEnvVar:
+		// Read by storedPIN alone, for the signer; never kept here.
+	case "TPM2_KIRA_ATTEST":
+		return fmt.Errorf("control.conf line %d: there is no attestation mode to set; the phone is served whenever one is enrolled. Remove the line", n)
+	case "TPM2_KIRA_ATTEST_ADAPTER":
+		v, err := strconv.Atoi(strings.TrimPrefix(val, "hci"))
+		if err != nil || v < 0 || v > 255 {
+			return fmt.Errorf("control.conf line %d: invalid adapter %q", n, val)
+		}
+		cfg.Attest.Adapter = v
+	case "TPM2_KIRA_ATTEST_TIMEOUT", "TPM2_KIRA_ATTEST_ADAPTER_WAIT":
+		return fmt.Errorf("control.conf line %d: %s is gone: the gate in the boot image waits for the adapter and a phone as long as the code screen holds. Remove the line", n, key)
+	case "TPM2_KIRA_ATTEST_DEBUG":
+		return fmt.Errorf("control.conf line %d: TPM2_KIRA_ATTEST_DEBUG is gone: switch \"Debug at boot\" in 'tpm2-kira control' instead (a setting in the TPM; nothing of control.conf goes into the boot image). Remove the line", n)
+	default:
+		return fmt.Errorf("control.conf line %d: unknown key %q", n, key)
+	}
+	return nil
 }
 
 // setControlValue writes KEY=value into control.conf, replacing the line
