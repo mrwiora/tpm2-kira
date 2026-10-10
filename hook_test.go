@@ -106,3 +106,54 @@ later UUID=cccc /run/tpm2-kira/unlock.sock discard
 		}
 	}
 }
+
+// The image gets the radio settings of control.conf and nothing else: the
+// YubiKey's PIN never reaches it, however its line is spelt (the image, a
+// UKI on the ESP say, is not root's alone).
+func TestHookPutsNoPINIntoTheImage(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	os.Mkdir(bin, 0o755)
+	if out, err := exec.Command("go", "build", "-o", filepath.Join(bin, "tpm2-kira"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	conf := filepath.Join(dir, "control.conf")
+	if err := os.WriteFile(conf, []byte(`# radio
+TPM2_KIRA_ATTEST_ADAPTER=hci1
+TPM2_KIRA_ATTEST_ADAPTER_WAIT=45
+TPM2_KIRA_PIN = 'secret-1234'
+  TPM2_KIRA_CONTROL=guided
+TPM2_KIRA_ATTEST_BLUETOOTH=always
+TPM2_KIRA_ATTEST_DEBUG=1
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "root")
+	script := `
+error() { echo "ERROR $*"; }
+source initramfs/mkinitcpio/install/sd-tpm2-kira
+_add_config
+`
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "TPM2_KIRA_CONTROL_CONF="+conf, "BUILDROOT="+root, "TPM2_KIRA_UNPRIVILEGED=1")
+	if out, err := cmd.CombinedOutput(); err != nil || strings.Contains(string(out), "ERROR") {
+		t.Fatalf("%v: %s", err, out)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "etc/tpm2-kira/control.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, no := range []string{"secret", "PIN", "CONTROL", "BLUETOOTH"} {
+		if strings.Contains(string(got), no) {
+			t.Errorf("%q reached the image:\n%s", no, got)
+		}
+	}
+	for _, want := range []string{"TPM2_KIRA_ATTEST_ADAPTER=1\n", "TPM2_KIRA_ATTEST_ADAPTER_WAIT=45\n", "TPM2_KIRA_ATTEST_DEBUG=1\n"} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("the image lacks %q:\n%s", want, got)
+		}
+	}
+}

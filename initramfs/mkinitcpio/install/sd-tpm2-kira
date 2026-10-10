@@ -41,9 +41,11 @@ CONF=${TPM2_KIRA_CONTROL_CONF:-/etc/tpm2-kira/control.conf}
 
 # Bluetooth for remote attestation (PLAN-BLE.md §3.1), whenever a phone is
 # enrolled. Adds exactly what the configured adapter needs on this machine:
-# The configuration file goes into the image without its PIN line: the
-# YubiKey's PIN is for the reseal on the running system, and the image (a
-# unified kernel image on the ESP, say) is not root's alone.
+# The image gets the radio settings of the configuration file and nothing
+# else: 'attest image-config' writes them from the parsed file, key by key,
+# so the YubiKey's PIN (for the reseal on the running system) can never
+# reach the image, which (a unified kernel image on the ESP, say) is not
+# root's alone.
 _add_config() {
     [[ -r $CONF ]] || return 0
     if ! tpm2-kira attest config-check "$CONF" >/dev/null 2>&1; then
@@ -51,10 +53,12 @@ _add_config() {
         return 1
     fi
     mkdir -p "$BUILDROOT/etc/tpm2-kira"
-    # The PIN is a secret, and TPM2_KIRA_CONTROL / TPM2_KIRA_ATTEST_BLUETOOTH
-    # matter on the host alone: left out, so changing them never changes the
-    # image (and with it PCR 11).
-    grep -v -E '^[[:space:]]*TPM2_KIRA_(PIN|CONTROL|ATTEST_BLUETOOTH)=' "$CONF" > "$BUILDROOT/etc/tpm2-kira/control.conf"
+    if ! tpm2-kira attest image-config "$CONF" > "$BUILDROOT/etc/tpm2-kira/control.conf" ||
+        ! grep -q '^TPM2_KIRA_ATTEST_ADAPTER=' "$BUILDROOT/etc/tpm2-kira/control.conf"; then
+        rm -f "$BUILDROOT/etc/tpm2-kira/control.conf"
+        error "tpm2-kira: the installed tpm2-kira cannot write the image's configuration (attest image-config)"
+        return 1
+    fi
     chmod 644 "$BUILDROOT/etc/tpm2-kira/control.conf"
 }
 

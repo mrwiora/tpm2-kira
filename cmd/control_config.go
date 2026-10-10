@@ -244,3 +244,22 @@ func configPIN(path string) (pin string, loose bool) {
 	uid, ok := ownerOf(st)
 	return cfg.PIN, st.Mode().Perm()&0o077 != 0 || !ok || !trustedOwner(uid)
 }
+
+// ImageControlConfig is what of control.conf goes into the boot image:
+// the radio settings the gate reads there, and nothing else. It is written
+// from the parsed file, key by key, not filtered from it: a key is in the
+// image only because it is named here, so the PIN - a secret, and the image
+// is not root's alone (a unified kernel image on the ESP) - can never slip
+// through a spelling a filter did not foresee. TPM2_KIRA_CONTROL and
+// TPM2_KIRA_ATTEST_BLUETOOTH matter on the host alone and stay out too, so
+// changing them never changes the image (and with it PCR 11).
+func ImageControlConfig(cfg *ControlConfig) []byte {
+	debug := 0
+	if cfg.Attest.Debug {
+		debug = 1
+	}
+	return []byte(fmt.Sprintf("# The boot image's part of /etc/tpm2-kira/control.conf, written by\n"+
+		"# 'tpm2-kira attest image-config': the radio settings, nothing else.\n"+
+		"TPM2_KIRA_ATTEST_ADAPTER=%d\nTPM2_KIRA_ATTEST_TIMEOUT=%d\nTPM2_KIRA_ATTEST_ADAPTER_WAIT=%d\nTPM2_KIRA_ATTEST_DEBUG=%d\n",
+		cfg.Attest.Adapter, int(cfg.Attest.Timeout/time.Second), int(cfg.Attest.AdapterWait/time.Second), debug))
+}

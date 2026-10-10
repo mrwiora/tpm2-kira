@@ -218,8 +218,8 @@ Every step runs with the same functions the commands below use; run
 commands below are for specific settings, and they touch no configuration
 file: `control` alone writes `/etc/tpm2-kira/control.conf`, the one
 configuration file - the radio settings and the YubiKey's PIN after
-checking it on the token (readable by root alone, left out of the
-initramfs). Next to the mkinitcpio step sits "Unlock at boot (the key's
+checking it on the token (readable by root alone; the initramfs gets the
+radio settings alone, written key by key, never the PIN). Next to the mkinitcpio step sits "Unlock at boot (the key's
 route)": both are wiring checks, green and no longer pickable once in
 place, and the route is the prerequisite of both disk-key steps. Every
 file is advised, never edited, with two exceptions, each asked for every

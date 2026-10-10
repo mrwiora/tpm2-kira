@@ -342,6 +342,15 @@ the file it checked.
 
 ## Bluetooth in the initramfs
 
+### The image's control.conf was the host's, filtered
+
+Until 2026-10-10 the hooks copied `control.conf` into the image and
+removed the PIN with `grep -v '^[[:space:]]*TPM2_KIRA_PIN='`. The parser
+also accepts `TPM2_KIRA_PIN = '...'`, which that pattern lets through, so
+a PIN in that spelling would have reached the image (a UKI on the ESP).
+`control` never writes that spelling. Now `attest image-config` writes
+the image's file from the parsed configuration, the radio settings alone.
+
 ### The firmware came from the current boot's log alone
 
 Until 2026-10-10 the hooks read `journalctl -k -b`: the firmware the

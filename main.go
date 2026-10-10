@@ -758,6 +758,19 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 			AdapterWait: cfg.AdapterWait, Debug: *debug || cfg.Debug,
 			Coordinator: *coordinator,
 		}))
+	case "image-config":
+		// Used by the initramfs hooks: the boot image's part of
+		// control.conf - the radio settings alone, never the PIN.
+		fs.Parse(args)
+		path := fs.Arg(0)
+		if path == "" {
+			path = cmd.DefaultControlConfigPath
+		}
+		cfg, err := cmd.LoadControlConfig(path)
+		if err != nil {
+			failAttest(cmd.ExitUsage, err)
+		}
+		os.Stdout.Write(cmd.ImageControlConfig(&cfg))
 	case "config-check":
 		fs.Parse(args)
 		path := fs.Arg(0)
@@ -873,6 +886,8 @@ machine's screen (docs/PLAN-REMOTEATTESTATION.md).
                   initramfs hooks)
   attest config-check [PATH]  Say whether control.conf loads (exit 2 and the
                   reason if not; used by the initramfs hooks)
+  attest image-config [PATH]  The boot image's part of control.conf: the radio
+                  settings alone, never the PIN (used by the initramfs hooks)
 
   EXIT STATUS: unlike every other command, 'attest gate', 'attest verify',
   'attest quote' and 'attest enrol' exit non-zero on failure:

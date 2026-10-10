@@ -594,10 +594,11 @@ the file itself (§6), in a manual seal or reseal and in the reseal the hooks
 run after an image rebuild, which runs as root on the host; the mkinitcpio
 post hook and Debian's hook need no variable from their own environment.
 
-The PIN does not reach the image: both install hooks copy `control.conf`
-into the initramfs **without** the `TPM2_KIRA_PIN` line (`grep -v`), since an
-image - a unified kernel image on the ESP, say - is not root's alone. A PIN
-found in the image's copy would be a bug of the hooks, not a setting.
+The PIN does not reach the image, since an image - a unified kernel image on
+the ESP, say - is not root's alone. Both install hooks write the image's
+`control.conf` with `tpm2-kira attest image-config`, which emits the radio
+settings from the parsed file, key by key, and nothing else: an allow-list,
+not a filter.
 
 **Warning when the automatic reseal will lack the PIN (implemented).** Right
 after a manual `seal` or `reseal` has had the PIN accepted, tpm2-kira warns,

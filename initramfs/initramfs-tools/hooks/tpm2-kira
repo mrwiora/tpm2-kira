@@ -35,9 +35,10 @@ if [ -r /etc/tpm2-kira/initramfs.conf ]; then
     copy_file config /etc/tpm2-kira/initramfs.conf /etc/tpm2-kira/initramfs.conf
 fi
 # The configuration file: the radio (TPM2_KIRA_ATTEST_*). How the disk's
-# key is made is read from each volume's LUKS2 header at boot. It
-# goes into the image without its PIN line: the YubiKey's PIN is for the
-# reseal on the running system, and the image is not root's alone.
+# key is made is read from each volume's LUKS2 header at boot. The image
+# gets the radio settings alone, written key by key by 'attest
+# image-config': the YubiKey's PIN (for the reseal on the running system)
+# can never reach it, and the image is not root's alone.
 conf=/etc/tpm2-kira/control.conf
 if [ -r "$conf" ] && ! "$kira" attest config-check "$conf" >/dev/null 2>&1; then
     echo "tpm2-kira: $conf is not valid: $("$kira" attest config-check "$conf" 2>&1 | tail -1)" >&2
@@ -45,9 +46,12 @@ if [ -r "$conf" ] && ! "$kira" attest config-check "$conf" >/dev/null 2>&1; then
 fi
 if [ -r "$conf" ]; then
     mkdir -p "$DESTDIR/etc/tpm2-kira"
-    # The PIN is a secret, and TPM2_KIRA_CONTROL / TPM2_KIRA_ATTEST_BLUETOOTH
-    # matter on the host alone: left out, so changing them never changes the image.
-    grep -v -E '^[[:space:]]*TPM2_KIRA_(PIN|CONTROL|ATTEST_BLUETOOTH)=' "$conf" > "$DESTDIR/etc/tpm2-kira/control.conf"
+    if ! "$kira" attest image-config "$conf" >"$DESTDIR/etc/tpm2-kira/control.conf" ||
+        ! grep -q '^TPM2_KIRA_ATTEST_ADAPTER=' "$DESTDIR/etc/tpm2-kira/control.conf"; then
+        rm -f "$DESTDIR/etc/tpm2-kira/control.conf"
+        echo "tpm2-kira: the installed tpm2-kira cannot write the image's configuration (attest image-config)" >&2
+        exit 1
+    fi
     chmod 644 "$DESTDIR/etc/tpm2-kira/control.conf"
 fi
 

@@ -70,7 +70,8 @@ It may not carry what came before.
   Do not build a mode that holds the boot on the phone's verdict.
 - **One configuration file, `/etc/tpm2-kira/control.conf`, and only
   `control` writes it.** It holds the radio settings and the YubiKey's PIN
-  (the hooks copy it into the initramfs without the PIN line). How the
+  (the image gets its radio settings alone, written key by key by
+  `attest image-config`: never the PIN). How the
   disk's key is made is not configured anywhere: the boot reads it from
   each volume's own LUKS2 header - the tpm2-kira token of a keyslot names
   the recipe (cmd/luks_header.go), so an enrolment needs no mode set and
