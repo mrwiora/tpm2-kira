@@ -446,7 +446,7 @@ func (c *controller) steps() []controlStep {
 		}
 		// The options that build on the strong slot, under its line.
 		attest := controlStep{Key: "attest", Child: true, Title: "Attestation by phone (Marify, Bluetooth LE)",
-			Explain: "The phone checks the boot state against what it pinned and shows a code the machine must show too; it replaces Enter at the code screen. While a phone is enrolled, slot 0 has no TOTP code (the screen says \"mobile attestation locked - please connect\" until the phone is in); slot 1, the fallback, keeps its code. Removing the last phone gives slot 0 a new TOTP code.",
+			Explain: "The phone checks the boot state against what it pinned and shows a code the machine must show too; it replaces Enter at the code screen. It is enrolled in a boot whose slot 0 code you compared - the phone takes that boot as the good one - and it asks you so. While a phone is enrolled, slot 0 has no TOTP code (the screen says \"mobile attestation locked - please connect\" until the phone is in); slot 1, the fallback, keeps its code. Removing the last phone gives slot 0 a new TOTP code.",
 			Run:     (*controller).runAttest}
 		switch {
 		case f.Adapter == "":

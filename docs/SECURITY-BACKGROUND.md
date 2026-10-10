@@ -113,6 +113,34 @@ it, not under the TOTP key, and keep working. The fallback, slot 1, keeps
 its code: it is the check for a boot without the phone (a flat battery, a
 lost phone, no Bluetooth in the initrd).
 
+**Why a slot starts with a TOTP key: the phone is enrolled in a verified
+boot.** Enrolment is trust on first use for the phone: it pins the
+machine's attestation key and takes the boot state of the enrolling boot
+as the baseline every later boot is compared with. Nothing the phone can
+check itself says that this first state is clean; a boot chain that was
+tampered with before the enrolment would be pinned as good. Only a check
+made before the phone existed can say it, so the order is fixed:
+
+1. The slot is sealed with a TOTP key (`control`'s part 1, or `seal`).
+2. The machine boots through tpm2-kira's code screen. The code exists only
+   while the PCRs are the ones the signing key approved, and the person
+   compares it with the authenticator: this boot is verified.
+3. In that boot the phone is enrolled (part 2, `attest enrol`), and with
+   that the slot's TOTP key is retired.
+
+`attest enrol` enforces what the machine can know of this (`requireVerifiedBoot`
+in `cmd/attest.go`): the boot passed the code screen (`cap` read-locked
+the generation indices, which happens only there), and, for a slot with a
+TOTP key, the slot's PCRs at the code screen - recomputed from this boot's
+event log, before the OS separator, with `enter-initrd` on PCR 11 - are
+the approved ones, so the screen did show the slot's code. A boot that
+fails either is refused: it was not verified, whatever happened at its
+screen. What the machine cannot know, that someone compared the code, it
+asks before the phone is involved. A further phone for a slot that
+already has phones needs a boot an enrolled phone attested ("mobile
+attestation passed"); the machine keeps no record of that verdict, so it
+asks. The rule holds for `control` and for `attest enrol` by hand alike.
+
 **What the machine keeps of a phone, and why no more.** The blob is readable
 by anyone who can talk to the TPM (§9), so it holds only what the machine
 needs to find and trust its phone:

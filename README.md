@@ -155,7 +155,20 @@ configuration, the key's route, the slots), one rebuild, then the reboot,
 and part 2 (the phone, and the disk's key) continues after it; or
 **manual**: every step picked by hand, the overview saying what is
 possible and why not. The choice lives in `control.conf` and the
-overview's last entry switches it any time. On top, the machine's
+overview's last entry switches it any time.
+
+**Why the TOTP code comes first, and the phone only after a reboot.**
+Enrolling a phone pins the boot it happens in as the good one: every later
+boot is compared with it, and nothing the phone can check itself says that
+this first state is clean. So the phone is enrolled only in a boot you
+verified: part 1 seals slot 0 with a TOTP code, the reboot goes through the
+code screen, you compare the code with your authenticator, and in that boot
+part 2 enrols the phone, which then retires slot 0's code. `attest enrol`
+holds to it whichever way it is started: it refuses a boot that did not
+pass the code screen, and one whose PCRs at the code screen were not the
+ones slot 0's code is approved for (no code was shown, nothing verified
+it); then it asks whether you compared the code. A further phone needs a
+boot an enrolled phone attested (SECURITY-BACKGROUND §3.1). On top, the machine's
 status, judged line by line - the TPM and its banks, the endorsement
 key's vendor, Secure Boot, how it booted, the slots, the signing key, the
 initramfs kind and whether sd-tpm2-kira is wired into it (the hook
