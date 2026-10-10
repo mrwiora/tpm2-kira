@@ -6,6 +6,8 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"io"
 	"net"
 	"os"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/cmd"
+	"golang.org/x/crypto/ssh"
 )
 
 // syncBuffer is run's output, read while it is written.
@@ -39,18 +42,16 @@ func (s *syncBuffer) String() string {
 }
 
 // remoteBoot is 'tpm2-kira run --ssh' against a software TPM with a sealed
-// slot and a LUKS2 header marked password+salt, with a tinysshd that
-// hands the connection straight to its command - the chain of the image
-// without the SSH protocol: TCP, the session command, the code screen's
-// socket, the key socket.
+// slot and a LUKS2 header marked password+salt: the chain of the image -
+// SSH to the unprivileged 'remote serve', the session handed to 'run',
+// the code screen, the key socket.
 type remoteBoot struct {
 	run     *exec.Cmd
 	out     *syncBuffer
 	stdin   io.WriteCloser
 	port    int
 	unlock  string
-	socket  string // the code screen's, for the sessions
-	keyDir  string // the unsealed host key
+	key     ssh.Signer // may log in
 	volume  string
 	cleanup func()
 }
@@ -83,10 +84,10 @@ func startRemoteBoot(t *testing.T) *remoteBoot {
 	conf := filepath.Join(dir, "control.conf")
 	os.WriteFile(conf, []byte("# nothing\n"), 0o600)
 
-	// tinysshd -e COMMAND KEYDIR: here the command alone, on the connection.
-	fake := filepath.Join(dir, "tinysshd")
-	// The session refuses to run as a user; in the image it is root.
-	os.WriteFile(fake, []byte("#!/bin/sh\nTPM2_KIRA_UNPRIVILEGED=1 exec sh -c \"$2\"\n"), 0o755)
+	_, sk, _ := ed25519.GenerateKey(rand.Reader)
+	login, _ := ssh.NewSignerFromKey(sk)
+	auth := filepath.Join(dir, "authorized_keys")
+	os.WriteFile(auth, ssh.MarshalAuthorizedKey(login.PublicKey()), 0o600)
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -94,12 +95,10 @@ func startRemoteBoot(t *testing.T) *remoteBoot {
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 
-	b := &remoteBoot{out: &syncBuffer{}, port: port, unlock: filepath.Join(dir, "unlock.sock"), volume: volume,
-		socket: filepath.Join(dir, "remote.sock"), keyDir: filepath.Join(dir, "keydir")}
+	b := &remoteBoot{out: &syncBuffer{}, port: port, unlock: filepath.Join(dir, "unlock.sock"), volume: volume, key: login}
 	b.run = exec.Command("./tpm2-kira", "run", "--tpm", tpmPath, "--nvram", "0x01803010", "--unlock", b.unlock,
-		"--ssh="+strconv.Itoa(port), "--ssh-socket", b.socket,
-		"--ssh-hostkey", filepath.Join(dir, "none.sealed"), "--ssh-keydir", b.keyDir)
-	b.run.Env = append(os.Environ(), "TPM2_KIRA_TINYSSHD="+fake, "TPM2_KIRA_CRYPTTAB="+crypttab,
+		"--ssh="+strconv.Itoa(port), "--ssh-hostkey", filepath.Join(dir, "none.sealed"), "--ssh-authorized-keys", auth)
+	b.run.Env = append(os.Environ(), "TPM2_KIRA_CRYPTTAB="+crypttab,
 		"TPM2_KIRA_CONTROL_CONF="+conf, "TPM2_KIRA_CONSOLE="+filepath.Join(dir, "console"))
 	b.run.Stdout, b.run.Stderr = b.out, b.out
 	b.stdin, _ = b.run.StdinPipe()
@@ -132,16 +131,29 @@ func (b *remoteBoot) waitOutput(t *testing.T, want string) {
 	}
 }
 
-// login connects to the SSH port.
-func (b *remoteBoot) login(t *testing.T) (net.Conn, *bufio.Reader) {
+// login logs in as 'ssh root@host' does, with a terminal and the shell.
+func (b *remoteBoot) login(t *testing.T) (io.Writer, *bufio.Reader, *ssh.Client) {
 	t.Helper()
-	c, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(b.port))
+	c, err := ssh.Dial("tcp", "127.0.0.1:"+strconv.Itoa(b.port), &ssh.ClientConfig{
+		User: "root", Auth: []ssh.AuthMethod{ssh.PublicKeys(b.key)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // a throwaway key: no sealed one in this test
+		Timeout:         10 * time.Second,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { c.Close() })
-	c.SetDeadline(time.Now().Add(30 * time.Second))
-	return c, bufio.NewReader(c)
+	sess, err := c.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.RequestPty("xterm", 24, 80, ssh.TerminalModes{})
+	in, _ := sess.StdinPipe()
+	out, _ := sess.StdoutPipe()
+	if err := sess.Shell(); err != nil {
+		t.Fatal(err)
+	}
+	return in, bufio.NewReader(out), c
 }
 
 // keyRequest asks for the volume's key as systemd-cryptsetup does (its
@@ -179,7 +191,7 @@ func readUntil(t *testing.T, r *bufio.Reader, want string) string {
 // session: the key systemd-cryptsetup reads is theirs.
 func TestRemoteSSHConfirmsAndUnlocks(t *testing.T) {
 	b := startRemoteBoot(t)
-	c, r := b.login(t)
+	c, r, _ := b.login(t)
 	screen := readUntil(t, r, "asked here")
 	if !strings.Contains(screen, "#0") || !strings.Contains(screen, "Does the code match your authenticator?") {
 		t.Fatalf("the session's screen:\n%s", screen)
@@ -208,13 +220,13 @@ func TestRemoteSSHConfirmsAndUnlocks(t *testing.T) {
 	b.waitOutput(t, "Confirmed over SSH")
 	b.waitOutput(t, "asked in the SSH session")
 
-	// Stopped at switch-root: nothing of the server stays behind in /run.
+	// Stopped at switch-root: the unprivileged half goes with it, and the
+	// port with that.
 	b.run.Process.Signal(os.Interrupt)
 	b.run.Wait()
-	for _, p := range []string{b.socket, b.keyDir} {
-		if _, err := os.Stat(p); !os.IsNotExist(err) {
-			t.Errorf("%s stayed after the stop: %v", p, err)
-		}
+	if c, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(b.port)); err == nil {
+		c.Close()
+		t.Fatal("the port still answers after the stop")
 	}
 }
 
@@ -222,7 +234,7 @@ func TestRemoteSSHConfirmsAndUnlocks(t *testing.T) {
 // and the port no longer answers.
 func TestRemoteSSHEnterAtConsoleStops(t *testing.T) {
 	b := startRemoteBoot(t)
-	_, r := b.login(t)
+	_, r, _ := b.login(t)
 	readUntil(t, r, "asked here")
 	b.stdin.Write([]byte("\n"))
 	readUntil(t, r, "the SSH server stops")

@@ -225,9 +225,7 @@ _add_bluetooth
 // The network and SSH part of the hook: what 'tpm2-kira remote initramfs'
 // prints is added - systemd-networkd enabled with its user, the matched
 // interface's driver - and a setting it refuses leaves both out with the
-// reason. Without tinysshd on the system the SSH server is left out and
-// its drop-in removed, so the image boots with the code screen at the
-// console.
+// reason. The SSH server needs nothing more: it is tpm2-kira itself.
 func TestHookAddsNetworkAndSSH(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("no bash")
@@ -263,25 +261,15 @@ _add_remote
 	if got, _ := run("tpm2-kira: TPM2_KIRA_SSH=on needs a network in the image\n", "2"); !strings.Contains(got, "WARNING tpm2-kira: no network or SSH in the image: TPM2_KIRA_SSH=on needs a network") || strings.Contains(got, "UNIT") {
 		t.Fatalf("a refused setting:\n%s", got)
 	}
-	got, root := run("net dhcp\nmodule e1000e\nssh 22\nhostkey SHA256:abc from /etc/ssh/ssh_host_ed25519_key, sealed to PCR 0+7\n", "0")
+	got, _ := run("net dhcp\nmodule e1000e\nssh 22\nhostkey SHA256:abc from /etc/ssh/ssh_host_ed25519_key, sealed to PCR 0+7\n", "0")
 	for _, want := range []string{"MODULE e1000e", "UNIT systemd-networkd.service", "LINK /usr/lib/systemd/system/sysinit.target.wants/systemd-networkd.service", "PLAIN tpm2-kira: network at boot: dhcp via e1000e"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q:\n%s", want, got)
 		}
 	}
-	dropIn := filepath.Join(root, "etc/systemd/system/tpm2-kira.service.d/remote.conf")
-	if _, err := os.Stat("/usr/bin/tinysshd"); err == nil {
-		if !strings.Contains(got, "BINARY /usr/bin/tinysshd") || !strings.Contains(got, "BINARY systemd-tty-ask-password-agent") ||
-			!strings.Contains(got, "PLAIN tpm2-kira: SSH host key SHA256:abc from /etc/ssh/ssh_host_ed25519_key, sealed to PCR 0+7") {
-			t.Errorf("tinysshd or the password agent not added:\n%s", got)
-		}
-	} else {
-		if !strings.Contains(got, "tinysshd is not installed") || strings.Contains(got, "BINARY") {
-			t.Errorf("without tinysshd:\n%s", got)
-		}
-		if _, err := os.Stat(dropIn); !os.IsNotExist(err) {
-			t.Error("the drop-in that starts the SSH server stayed without tinysshd")
-		}
+	// The SSH server is tpm2-kira itself: no other binary, no shell.
+	if strings.Contains(got, "BINARY") || !strings.Contains(got, "PLAIN tpm2-kira: SSH host key SHA256:abc from /etc/ssh/ssh_host_ed25519_key, sealed to PCR 0+7") {
+		t.Errorf("the SSH part:\n%s", got)
 	}
 	if got, _ := run("net static\nmodules-all\nwarning no interface aa:bb:cc:dd:ee:09 on this machine\n", "0"); !strings.Contains(got, "ALLMODULES /drivers/net") || !strings.Contains(got, "WARNING tpm2-kira: no interface aa:bb") {
 		t.Errorf("no interface matched:\n%s", got)

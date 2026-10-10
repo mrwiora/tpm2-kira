@@ -2,14 +2,13 @@ package cmd
 
 // The SSH server of the code screen (docs/REMOTE-SSH.md). With TPM2_KIRA_SSH
 // on, the image's tpm2-kira.service runs 'tpm2-kira run --ssh=PORT': the
-// process that holds the boot listens on the port itself and starts one
-// tinysshd per connection (inetd style, the connection on its stdin and
-// stdout), whose only command is 'tpm2-kira remote session'. That session
-// connects back to this process on a local socket and becomes a terminal
-// of the code screen: it sees the codes, and Enter there confirms them and
+// process that holds the boot opens the port and starts 'tpm2-kira remote
+// serve' on it, without privileges (remote_serve.go, remote_privsep.go).
+// That process speaks SSH and hands every login over as a session of the
+// code screen: it sees the codes, and Enter there confirms them and
 // releases the boot, as Enter at the console does. The password prompt
 // then opens in the session that released, and cryptsetup's own prompt,
-// should it follow, is answered there through systemd's password agent.
+// should it follow, is answered there too (remote_agent.go).
 //
 // The console is told where to log in instead of being shown the codes,
 // and Enter there continues at the console: the SSH server stops, every
@@ -23,63 +22,42 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
-
-// DefaultRemoteSocket is where the sessions reach the code screen.
-const DefaultRemoteSocket = "/run/tpm2-kira/remote.sock"
-
-// tinysshdPath is the server binary: /usr/bin/tinysshd, or for tests the
-// program in TPM2_KIRA_TINYSSHD.
-var tinysshdPath = func() string {
-	if p := os.Getenv("TPM2_KIRA_TINYSSHD"); p != "" {
-		return p
-	}
-	return "/usr/bin/tinysshd"
-}()
 
 // RemoteOptions are run's SSH settings; Port 0 is no SSH server.
 type RemoteOptions struct {
-	Port    int
-	Hold    time.Duration // 0: until a confirmation comes
-	TPM     string        // the TPM the host key is unsealed with
-	HostKey string        // the sealed host key (ImageSealedHostKey)
-	KeyDir  string        // where it is unsealed to for tinysshd (DefaultHostKeyDir)
-	Socket  string        // DefaultRemoteSocket
+	Port           int
+	Hold           time.Duration // 0: until a confirmation comes
+	TPM            string        // the TPM the host key is unsealed with
+	HostKey        string        // the sealed host key (ImageSealedHostKey)
+	AuthorizedKeys string        // who may log in (ImageAuthorizedKeys)
 }
 
 // remoteServer is the SSH server and its sessions.
 type remoteServer struct {
 	opts    RemoteOptions
-	self    string // this executable, for the session command
-	tcp     net.Listener
-	local   net.Listener
+	child   *serveChild
 	log     func(string)
 	console io.Writer // the console's own lines
 	hostKey hostKeyAtBoot
 
 	mu       sync.Mutex
-	procs    map[*exec.Cmd]chan struct{} // closed when the tinysshd has ended
-	sessions []*remoteSession            // in the order they came
-	screen   []byte                      // the last code screen, for a session that comes in
-	released bool                        // the boot is released; keys go to prompts now
-	stopped  bool                        // released at the console: nothing is served
-	target   *remoteSession              // the session that released, for the prompt
-	done     chan struct{}               // closed when stop has ended
-	releases chan struct{}               // a session confirmed
-	changed  chan struct{}               // a session came or went
+	sessions []*remoteSession // in the order they came
+	screen   []byte           // the last code screen, for a session that comes in
+	released bool             // the boot is released; keys go to prompts now
+	stopped  bool             // released at the console: nothing is served
+	target   *remoteSession   // the session that released, for the prompt
+	done     chan struct{}    // closed when stop has ended
+	releases chan struct{}    // a session confirmed
+	changed  chan struct{}    // a session came or went
 }
 
-// remoteSession is one 'tpm2-kira remote session' on the local socket.
+// remoteSession is one login, handed over by 'remote serve'.
 type remoteSession struct {
 	conn   net.Conn
 	keys   chan byte // what is typed once the boot is released, for a prompt
@@ -101,130 +79,70 @@ func (s *remoteSession) write(b []byte) {
 	}
 }
 
-// startRemote opens the port and the local socket. A port that cannot be
-// opened is said on the console and the code screen goes on without SSH.
+// startRemote unseals the host key, opens the port and starts 'remote
+// serve' on it. A server that cannot start is said on the console and the
+// code screen goes on without SSH.
 func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteServer, error) {
-	if o.Socket == "" {
-		o.Socket = DefaultRemoteSocket
+	if o.AuthorizedKeys == "" {
+		o.AuthorizedKeys = ImageAuthorizedKeys
 	}
-	if o.KeyDir == "" {
-		o.KeyDir = DefaultHostKeyDir
-	}
-	if _, err := os.Stat(tinysshdPath); err != nil {
-		return nil, fmt.Errorf("%s is not in the image (rebuild with TPM2_KIRA_SSH=on): %w", tinysshdPath, err)
-	}
-	self, err := os.Executable()
+	authorized, _, err := authorizedKeys(o.AuthorizedKeys)
 	if err != nil {
 		return nil, err
 	}
+	if len(authorized) == 0 {
+		return nil, fmt.Errorf("%s holds no key: nobody could log in", o.AuthorizedKeys)
+	}
 	// Unsealed now, while the code screen holds the boot ahead of the OS
-	// separator: after it, PCR 0 and 7 no longer fit the policy.
-	hk, err := prepareHostKey(o.TPM, o.HostKey, o.KeyDir)
+	// separator: after it, PCR 0 and 7 no longer fit the policy. The key
+	// stays in this process; 'remote serve' asks it for signatures.
+	hk, err := prepareHostKey(o.TPM, o.HostKey)
 	if err != nil {
 		return nil, fmt.Errorf("SSH host key: %w", err)
 	}
 	if hk.Throwaway != "" {
 		log("ssh: serving a throwaway host key: " + hk.Throwaway)
 	}
-	local, err := listenGate(o.Socket)
-	if err != nil {
-		os.RemoveAll(hk.Dir)
-		return nil, err
-	}
 	tcp, err := net.Listen("tcp", ":"+strconv.Itoa(o.Port))
 	if err != nil {
-		local.Close()
-		os.Remove(o.Socket)
-		os.RemoveAll(hk.Dir)
 		return nil, err
 	}
-	r := &remoteServer{opts: o, self: self, tcp: tcp, local: local, log: log, console: console, hostKey: hk,
-		procs: map[*exec.Cmd]chan struct{}{}, done: make(chan struct{}), releases: make(chan struct{}, 1), changed: make(chan struct{}, 1)}
-	go r.acceptSSH()
-	go r.acceptSessions()
+	if o.Port == 0 {
+		o.Port = tcp.Addr().(*net.TCPAddr).Port
+	}
+	r := &remoteServer{opts: o, log: log, console: console, hostKey: hk,
+		done: make(chan struct{}), releases: make(chan struct{}, 1), changed: make(chan struct{}, 1)}
+	child, how, err := startServe(tcp.(*net.TCPListener), hk.key, authorized, log, r.addSession)
+	if err != nil {
+		return nil, fmt.Errorf("remote serve: %w", err)
+	}
+	r.child = child
+	log(describeServe(child, how))
 	log(fmt.Sprintf("ssh: listening on port %d, host key %s", o.Port, hk.Fingerprint))
+	go r.answerPasswordQuestions()
 	return r, nil
 }
 
-// acceptSSH hands every connection to a tinysshd of its own.
-func (r *remoteServer) acceptSSH() {
-	for {
-		c, err := r.tcp.Accept()
-		if err != nil {
-			return
-		}
-		r.log(fmt.Sprintf("ssh: connection from %s", c.RemoteAddr()))
-		f, err := c.(*net.TCPConn).File()
+// addSession takes a login 'remote serve' handed over.
+func (r *remoteServer) addSession(c net.Conn, who string) {
+	s := &remoteSession{conn: c, keys: make(chan byte, maxPassphrase), closed: make(chan struct{})}
+	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
 		c.Close()
-		if err != nil {
-			continue
-		}
-		cmd := exec.Command(tinysshdPath, "-e", "exec "+r.self+" remote session --socket "+r.opts.Socket, r.hostKey.Dir)
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = f, f, os.Stderr
-		cmd.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin"}
-		// A session of its own: this process gives the console up when the
-		// boot is released, and as the console's session leader that sends
-		// SIGHUP to everything in its session - the tinysshd of the
-		// session that is to ask the password among them.
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-		r.mu.Lock()
-		if r.stopped {
-			r.mu.Unlock()
-			f.Close()
-			return
-		}
-		err = cmd.Start()
-		ended := make(chan struct{})
-		if err == nil {
-			r.procs[cmd] = ended
-		}
-		r.mu.Unlock()
-		f.Close()
-		if err != nil {
-			r.log("ssh: tinysshd: " + err.Error())
-			continue
-		}
-		go func() {
-			cmd.Wait()
-			close(ended)
-			r.mu.Lock()
-			delete(r.procs, cmd)
-			r.mu.Unlock()
-		}()
+		return
 	}
-}
-
-// acceptSessions takes the sessions tinysshd started.
-func (r *remoteServer) acceptSessions() {
-	for {
-		c, err := r.local.Accept()
-		if err != nil {
-			return
-		}
-		if err := peerIsUs(c); err != nil {
-			r.log("ssh: refusing a session: " + err.Error())
-			c.Close()
-			continue
-		}
-		s := &remoteSession{conn: c, keys: make(chan byte, maxPassphrase), closed: make(chan struct{})}
-		r.mu.Lock()
-		if r.stopped {
-			r.mu.Unlock()
-			c.Close()
-			continue
-		}
-		r.sessions = append(r.sessions, s)
-		screen, released := r.screen, r.released
-		r.mu.Unlock()
-		r.log("ssh: a session is in")
-		r.signal(r.changed)
-		if released {
-			s.write([]byte(fmt.Sprintf("%s The boot is released; the password is asked here when a disk asks for its key.\r\n", kiraTag(tagYellow))))
-		} else if len(screen) > 0 {
-			s.write(screen)
-		}
-		go r.read(s)
+	r.sessions = append(r.sessions, s)
+	screen, released := r.screen, r.released
+	r.mu.Unlock()
+	r.log("ssh: a session is in: " + who)
+	r.signal(r.changed)
+	if released {
+		s.write([]byte(fmt.Sprintf("%s The boot is released; the password is asked here when a disk asks for its key.\r\n", kiraTag(tagYellow))))
+	} else if len(screen) > 0 {
+		s.write(screen)
 	}
+	go r.read(s)
 }
 
 // read follows what is typed in a session: while the boot is held, Enter
@@ -324,8 +242,8 @@ func (r *remoteServer) release(atConsole bool) bool {
 	return true
 }
 
-// stop closes the port, tells every session why, and ends them and their
-// tinysshd.
+// stop tells every session why and closes it, then ends 'remote serve',
+// which closes the port.
 func (r *remoteServer) stop(why string) {
 	r.mu.Lock()
 	if r.stopped {
@@ -335,34 +253,14 @@ func (r *remoteServer) stop(why string) {
 	r.stopped = true
 	sessions := r.sessions
 	r.sessions = nil
-	procs := map[*exec.Cmd]chan struct{}{}
-	for p, ended := range r.procs {
-		procs[p] = ended
-	}
 	r.mu.Unlock()
-	r.tcp.Close()
-	r.local.Close()
-	os.Remove(r.opts.Socket)
 	for _, s := range sessions {
 		s.write([]byte(fmt.Sprintf("\r\n%s %s\r\n", kiraTag(tagYellow), why)))
 		s.close()
 	}
-	// A closed session ends its client, which hands the notice on and
-	// exits, and tinysshd with it; what is still there then is killed.
-	deadline, expired := time.After(2*time.Second), false
-	for p, ended := range procs {
-		if !expired {
-			select {
-			case <-ended:
-				continue
-			case <-deadline:
-				expired = true
-			}
-		}
-		p.Process.Kill()
-	}
-	// No tinysshd is left to read the key.
-	os.RemoveAll(r.hostKey.Dir)
+	// The closed sessions end their relays in the child, which hands the
+	// notice on; then the child goes.
+	r.child.stop()
 	r.log("ssh: stopped")
 	close(r.done)
 }
@@ -406,6 +304,12 @@ func (r *remoteServer) ask(volume, what, note string) ([]byte, error) {
 			fmt.Fprintf(&b, "         %s\r\n", l)
 		}
 	}
+	return askIn(s, b.String(), fmt.Sprintf("%s for disk %s:", what, volume), nil)
+}
+
+// askIn asks in session s until something is typed: header once, then
+// the prompt. It fails when the session leaves or cancel is closed.
+func askIn(s *remoteSession, header, prompt string, cancel <-chan struct{}) ([]byte, error) {
 	// What was typed before the question is not part of the answer.
 	for drained := false; !drained; {
 		select {
@@ -415,14 +319,16 @@ func (r *remoteServer) ask(volume, what, note string) ([]byte, error) {
 		}
 	}
 	for {
-		s.write([]byte(b.String() + fmt.Sprintf("\r\n%s \033[1m%s for disk %s:\033[0m ", kiraTag(tagBlue), what, volume)))
-		b.Reset()
+		s.write([]byte(header + fmt.Sprintf("\r\n%s \033[1m%s\033[0m ", kiraTag(tagBlue), prompt)))
+		header = ""
 		pw, err := readRawPassphrase(func() (byte, error) {
 			select {
 			case c := <-s.keys:
 				return c, nil
 			case <-s.closed:
 				return 0, io.EOF
+			case <-cancel:
+				return 0, errAskCancelled
 			}
 		}, s.conn)
 		s.write([]byte("\r\n"))
@@ -502,101 +408,6 @@ func consoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int, remai
 	return b.String()
 }
 
-// RemoteSessionCommand is 'tpm2-kira remote session', the command tinysshd
-// runs for a login: a terminal of the code screen. It relays the terminal
-// to the code screen's socket (raw: every key goes there, the screen does
-// the echo), and answers cryptsetup's own prompt through systemd's
-// password agent whenever one is pending. Without a code screen to reach
-// it is the agent alone.
-func RemoteSessionCommand(socket string) error {
-	c, err := net.Dial("unix", socket)
-	if err != nil {
-		fmt.Printf("tpm2-kira: no code screen to reach (%v); answering systemd's password questions.\n", err)
-		return runPasswordAgent(true)
-	}
-	defer c.Close()
-	fd := int(os.Stdin.Fd())
-	old, terr := unix.IoctlGetTermios(fd, unix.TCGETS)
-	setRaw := func() {}
-	restore := func() {}
-	if terr == nil {
-		raw := *old
-		raw.Lflag &^= unix.ECHO | unix.ICANON | unix.ISIG
-		raw.Cc[unix.VMIN], raw.Cc[unix.VTIME] = 1, 0
-		setRaw = func() { unix.IoctlSetTermios(fd, unix.TCSETS, &raw) }
-		restore = func() { unix.IoctlSetTermios(fd, unix.TCSETS, old) }
-	}
-	setRaw()
-	defer restore()
-
-	done := make(chan struct{})
-	go func() {
-		io.Copy(os.Stdout, c)
-		close(done)
-	}()
-	buf := make([]byte, 256)
-	for {
-		select {
-		case <-done:
-			return nil
-		default:
-		}
-		if pendingPasswordQuestion() {
-			restore()
-			fmt.Print("\r\n")
-			runPasswordAgent(false)
-			setRaw()
-			continue
-		}
-		fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
-		n, err := unix.Poll(fds, 300)
-		if err == unix.EINTR || (err == nil && n == 0) {
-			continue
-		}
-		if err != nil || fds[0].Revents&(unix.POLLIN|unix.POLLHUP) == 0 {
-			return err
-		}
-		m, err := unix.Read(fd, buf)
-		if err != nil || m <= 0 {
-			return nil
-		}
-		if _, err := c.Write(buf[:m]); err != nil {
-			return nil
-		}
-	}
-}
-
-// askPasswordDir is where systemd puts its pending password questions; a
-// var for the tests.
-var askPasswordDir = "/run/systemd/ask-password"
-
-// pendingPasswordQuestion says whether systemd asks for a password now
-// (cryptsetup's own prompt, after tpm2-kira gave no key or a wrong one).
-func pendingPasswordQuestion() bool {
-	ents, err := os.ReadDir(askPasswordDir)
-	if err != nil {
-		return false
-	}
-	for _, e := range ents {
-		if strings.HasPrefix(e.Name(), "ask.") {
-			return true
-		}
-	}
-	return false
-}
-
-// runPasswordAgent answers systemd's pending password questions on this
-// terminal - and with watch, every later one as well.
-func runPasswordAgent(watch bool) error {
-	args := []string{"--query"}
-	if watch {
-		args = append(args, "--watch")
-	}
-	cmd := exec.Command("systemd-tty-ask-password-agent", args...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return cmd.Run()
-}
-
 // RemoteStatusLines is control's view of the image's network and SSH
 // settings: one line each, and what is missing for them.
 func RemoteStatusLines(r RemoteConfig) []string {
@@ -617,10 +428,10 @@ func RemoteStatusLines(r RemoteConfig) []string {
 	return out
 }
 
-// authorizedKeyCount is the number of keys tinysshd would accept from the
-// file, -1 when it cannot be read.
+// authorizedKeyCount is the number of keys that may log in from the file,
+// -1 when it cannot be read.
 func authorizedKeyCount(path string) int {
-	keys, err := ed25519AuthorizedKeys(path)
+	keys, _, err := authorizedKeys(path)
 	if err != nil {
 		return -1
 	}

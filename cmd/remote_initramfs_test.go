@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // The image build: the networkd file, the sealed host key, the ed25519 keys
@@ -39,41 +41,49 @@ func TestRemoteInitramfs(t *testing.T) {
 		t.Fatalf("off: %q %v", out, err)
 	}
 	write("TPM2_KIRA_NET=dhcp\nTPM2_KIRA_SSH=on\n")
-	os.WriteFile(auth, []byte("ssh-rsa AAAA rsa\n"), 0o600)
-	if _, err := run(); err == nil || !strings.Contains(err.Error(), "no ssh-ed25519 key") {
-		t.Fatalf("no ed25519 key: %v", err)
+	login := func(comment string) string {
+		_, k, _ := ed25519.GenerateKey(nil)
+		s, _ := ssh.NewSignerFromKey(k)
+		return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(s.PublicKey()))) + " " + comment
 	}
-	os.WriteFile(auth, []byte("ssh-rsa AAAA rsa\nssh-ed25519 AAAAC3 admin@desk\n"), 0o600)
-	if _, err := run(); err == nil || !strings.Contains(err.Error(), "tinysshd-makekey") {
+	limited, admin := `from="10.0.0.1" `+login("limited"), login("admin@desk")
+	os.WriteFile(auth, []byte("ssh-rsa AAAA broken\n"+limited+"\n"), 0o600)
+	if _, err := run(); err == nil || !strings.Contains(err.Error(), "holds no key without options") {
+		t.Fatalf("no usable key: %v", err)
+	}
+	os.WriteFile(auth, []byte("# keys\nssh-rsa AAAA broken\n"+limited+"\n"+admin+"\n"), 0o600)
+	if _, err := run(); err == nil || !strings.Contains(err.Error(), "no SSH host key at") {
 		t.Fatalf("no host key: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, imageNetworkFile)); err == nil {
 		t.Fatal("a refused setting wrote into the image")
 	}
-	pub, sk, _ := ed25519.GenerateKey(nil)
-	os.MkdirAll(keys, 0o700)
-	os.WriteFile(filepath.Join(keys, "ed25519.pk"), pub, 0o644)
-	os.WriteFile(filepath.Join(keys, ".ed25519.sk"), sk, 0o600)
+	if err := createHostKey(keys); err != nil {
+		t.Fatal(err)
+	}
+	sk, _ := loadHostKey(keys)
+	pub := sk.Public().(ed25519.PublicKey)
 	out, err := run()
-	if err != nil || out != "net dhcp\nmodule drv_enp1s0\nssh 22\nhostkey "+hostKeyFingerprint(pub)+" from "+keys+", sealed to PCR 0+7\n" {
+	if err != nil || out != "net dhcp\nmodule drv_enp1s0\nssh 22\nhostkey "+hostKeyFingerprint(pub)+" from "+keys+", sealed to PCR 0+7\n"+
+		"warning 2 line(s) of "+auth+" left out: options in front of the key are not honoured, and what does not parse is no key\n" {
 		t.Fatalf("dhcp with ssh: %q %v", out, err)
 	}
 	if !sealedKey.Equal(sk) {
 		t.Fatal("another key was sealed")
 	}
 	for path, want := range map[string]string{
-		imageNetworkFile:   "DHCP=yes",
-		ImageSealedHostKey: "SEALED",
-		imageAuthorizedKey: "ssh-ed25519 AAAAC3 admin@desk\n",
-		imageRunDropIn:     `"TPM2_KIRA_REMOTE=--ssh=22 --ssh-hold=0 --ssh-hostkey=/etc/tpm2-kira/ssh/ed25519.sealed"`,
+		imageNetworkFile:    "DHCP=yes",
+		ImageSealedHostKey:  "SEALED",
+		ImageAuthorizedKeys: admin + "\n",
+		imageRunDropIn:      `"TPM2_KIRA_REMOTE=--ssh=22 --ssh-hold=0 --ssh-hostkey=/etc/tpm2-kira/ssh/ed25519.sealed"`,
 	} {
 		data, err := os.ReadFile(filepath.Join(root, path))
 		if err != nil || !strings.Contains(string(data), want) {
 			t.Errorf("%s: %q %v, want %q", path, data, err, want)
 		}
 	}
-	if b, _ := os.ReadFile(filepath.Join(root, imageAuthorizedKey)); strings.Contains(string(b), "ssh-rsa") {
-		t.Error("a key tinysshd does not take went into the image")
+	if b, _ := os.ReadFile(filepath.Join(root, ImageAuthorizedKeys)); strings.Contains(string(b), "broken") || strings.Contains(string(b), "limited") {
+		t.Errorf("a line that does not let anyone in went into the image:\n%s", b)
 	}
 	if st, _ := os.Stat(filepath.Join(root, ImageSealedHostKey)); st.Mode().Perm() != 0o600 {
 		t.Errorf("sealed host key mode %v", st.Mode().Perm())

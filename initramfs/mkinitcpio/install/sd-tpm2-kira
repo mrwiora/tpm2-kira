@@ -176,10 +176,10 @@ _add_bluetooth() {
 # The network and the SSH server of the image (docs/REMOTE-SSH.md), from
 # control.conf's TPM2_KIRA_NET_* and TPM2_KIRA_SSH_*: independent of
 # /etc/systemd/network, which is the running system's. 'tpm2-kira remote
-# initramfs' writes the files (the systemd-networkd file, the SSH host keys
-# and authorized keys, the drop-in that makes 'tpm2-kira run' the SSH
-# server) and says what is added here: systemd-networkd, the drivers of
-# the matched interface, tinysshd and a shell for its command. A setting
+# initramfs' writes the files (the systemd-networkd file, the sealed SSH
+# host key and the authorized keys, the drop-in that makes 'tpm2-kira run'
+# the SSH server) and says what is added here: systemd-networkd and the
+# drivers of the matched interface. The SSH server is tpm2-kira itself. A setting
 # that cannot work is said, and the image is built without both - it
 # still boots, with the code screen at the console.
 _add_remote() {
@@ -213,19 +213,8 @@ _add_remote() {
     local port
     port=$(sed -n 's/^ssh //p' <<< "$out")
     [[ -n $port ]] || return 0
-    if [[ ! -x /usr/bin/tinysshd ]]; then
-        warning "tpm2-kira: TPM2_KIRA_SSH=on, but tinysshd is not installed (pacman -S tinyssh); no SSH in the image"
-        rm -f "$BUILDROOT/etc/systemd/system/tpm2-kira.service.d/remote.conf"
-        return 0
-    fi
-    add_binary /usr/bin/tinysshd
-    # tinysshd runs its command with sh -c.
-    if [[ ! -e $BUILDROOT/usr/bin/sh ]]; then
-        add_binary /usr/lib/initcpio/busybox /usr/bin/busybox
-        add_symlink /usr/bin/sh busybox
-    fi
-    # cryptsetup's own prompt, answered in the SSH session.
-    add_binary systemd-tty-ask-password-agent
+    # The SSH server is tpm2-kira itself ('run' and its unprivileged
+    # 'remote serve'): nothing more to add.
     plain "tpm2-kira: SSH at boot on port $port: the codes are confirmed in an SSH session"
     plain "tpm2-kira: SSH host key $hostkey"
 }
@@ -347,7 +336,7 @@ The hook will:
   prompt once the code screen is confirmed. Nothing is written.
 - With TPM2_KIRA_NET in /etc/tpm2-kira/control.conf: systemd-networkd and
   the matched interface's driver, configured from control.conf alone; with
-  TPM2_KIRA_SSH=on also tinysshd, started by tpm2-kira.service itself: the
+  TPM2_KIRA_SSH=on also tpm2-kira's own SSH server, run unprivileged: the
   codes are confirmed and the password typed in an SSH session, the console
   says where to log in (docs/REMOTE-SSH.md). The SSH host key (the system's
   OpenSSH ed25519 key by default) is sealed to this TPM at every build,

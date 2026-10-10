@@ -31,13 +31,13 @@ type NetConfig struct {
 	DNS       []string // TPM2_KIRA_NET_DNS
 }
 
-// SSHConfig is the image's SSH server (tinysshd), started by 'tpm2-kira
-// run' while the code screen holds.
+// SSHConfig is the image's SSH server, started by 'tpm2-kira run' while
+// the code screen holds.
 type SSHConfig struct {
 	On             bool   // TPM2_KIRA_SSH: on or off
 	Port           int    // TPM2_KIRA_SSH_PORT
-	AuthorizedKeys string // TPM2_KIRA_SSH_AUTHORIZED_KEYS: whose ssh-ed25519 keys may log in
-	HostKey        string // TPM2_KIRA_SSH_HOSTKEY: an OpenSSH ed25519 key file or a tinysshd key directory, sealed to the TPM in the image
+	AuthorizedKeys string // TPM2_KIRA_SSH_AUTHORIZED_KEYS: whose keys may log in
+	HostKey        string // TPM2_KIRA_SSH_HOSTKEY: an OpenSSH ed25519 key, sealed to the TPM in the image
 	Hold           int    // TPM2_KIRA_SSH_HOLD: seconds the boot waits for a confirmation; 0 until one comes
 }
 
@@ -51,8 +51,8 @@ type RemoteConfig struct {
 const (
 	DefaultSSHAuthorizedKeys = "/root/.ssh/authorized_keys"
 	DefaultSSHHostKey        = "/etc/ssh/ssh_host_ed25519_key"
-	// DefaultTinysshKeyDir is where control creates a key of the image's own.
-	DefaultTinysshKeyDir = "/etc/tinyssh/sshkeydir"
+	// DefaultOwnHostKey is where control creates a key of the image's own.
+	DefaultOwnHostKey = "/etc/tpm2-kira/ssh_host_ed25519_key"
 )
 
 // DefaultRemoteConfig is a file without these lines: no network, no SSH.

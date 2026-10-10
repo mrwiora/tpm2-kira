@@ -378,7 +378,7 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
                    the phone's receipt, release the boot on its verdict
   --unlock SOCKET  Serve the disk's key on this socket (the unit sets
                    ` + cmd.DefaultUnlockSocket + `)
-  --ssh PORT       Be the SSH server on PORT (tinysshd per connection): the
+  --ssh PORT       Be the SSH server on PORT ('remote serve', unprivileged): the
                    codes are shown and confirmed in an SSH session, the
                    password is asked there; the console says where to log
                    in, and Enter there continues at the console instead
@@ -389,22 +389,22 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
                    once at the start, before the OS separator; when it does
                    not unseal, a throwaway key is served and the console
                    shows its fingerprint
-  --ssh-keydir DIR Where the key is unsealed to for tinysshd (default
-                   ` + cmd.DefaultHostKeyDir + `, the initramfs's memory)
+  --ssh-authorized-keys PATH  The keys that may log in (default
+                   ` + cmd.ImageAuthorizedKeys + `)
 `,
 
-	"remote": `tpm2-kira remote session [--socket PATH]
-tpm2-kira remote initramfs --buildroot DIR [--conf PATH] [--tpm PATH]
+	"remote": `tpm2-kira remote initramfs --buildroot DIR [--conf PATH] [--tpm PATH]
+tpm2-kira remote serve
 
 The code screen over SSH (docs/REMOTE-SSH.md). The network and the SSH
 server of the boot image are set in /etc/tpm2-kira/control.conf
 (TPM2_KIRA_NET_*, TPM2_KIRA_SSH_*; 'tpm2-kira control' sets them and
 suggests the network from /etc/systemd/network).
 
-  session    What tinysshd runs for a login in the image: a terminal of the
-             code screen. Enter confirms the code and releases the boot, the
-             password is asked in the session, and cryptsetup's own prompt
-             is answered there through systemd's password agent
+  serve      The SSH server itself, started by 'run --ssh' alone: as nobody,
+             in namespaces of its own, with no access to any file. It holds
+             no host key ('run' signs) and no password; a login becomes a
+             session of the code screen in 'run'
   initramfs  What the mkinitcpio hook calls: writes the systemd-networkd
              file, the authorized keys and the drop-in of tpm2-kira.service
              into DIR, seals the SSH host key (TPM2_KIRA_SSH_HOSTKEY, the

@@ -1,10 +1,10 @@
 package cmd
 
 import (
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"net"
-	"os/exec"
 	"strconv"
 	"strings"
 
@@ -21,7 +21,7 @@ import (
 func (c *controller) remoteStep() controlStep {
 	f := &c.facts
 	st := controlStep{Key: "remote", Title: "Network and SSH at boot", Optional: true, SelfConfirm: true,
-		Explain: "The boot image brings up its own network (DHCP or a static address, set here and nowhere else) and tpm2-kira starts an SSH server (tinysshd) with the code screen: the codes are confirmed and the password typed in an SSH session, and the console says where to log in - Enter there continues at the console instead. Picking it changes the settings.",
+		Explain: "The boot image brings up its own network (DHCP or a static address, set here and nowhere else) and tpm2-kira starts its own SSH server with the code screen: the codes are confirmed and the password typed in an SSH session, and the console says where to log in - Enter there continues at the console instead. Picking it changes the settings.",
 		Run:     (*controller).runRemote}
 	switch {
 	case f.Initramfs != "mkinitcpio":
@@ -104,7 +104,7 @@ func (c *controller) runRemote() error {
 
 	on := r.SSH.On || c.facts.Remote.Net.Mode == "off"
 	if err := c.form(huh.NewConfirm().Title("Start the SSH server with the code screen?").
-		Description("tinysshd, started by tpm2-kira at boot: log in as root with a key of " + r.SSH.AuthorizedKeys + " (ssh-ed25519 only), confirm the code, type the password there.").
+		Description("tpm2-kira's own, unprivileged SSH server at boot: log in as root with a key of " + r.SSH.AuthorizedKeys + ", confirm the code, type the password there.").
 		Affirmative("Yes").Negative("No: the network alone").Value(&on)).Run(); err != nil {
 		return err
 	}
@@ -139,19 +139,16 @@ func (c *controller) runRemote() error {
 }
 
 // ensureSSHKeys checks what the image's SSH server needs on this system:
-// tinysshd itself, a host key - the system's OpenSSH key or one of the
-// image's own, created when asked; sealed to the TPM at every image build
-// either way - and a key that may log in.
+// a host key - the system's OpenSSH key, or one of the image's own,
+// created when asked; sealed to the TPM at every image build either way -
+// and a key that may log in.
 func (c *controller) ensureSSHKeys(s *SSHConfig) error {
-	if _, err := exec.LookPath("tinysshd"); err != nil {
-		fmt.Fprintln(c.out, warn("tinysshd is not installed: pacman -S tinyssh, before the rebuild."))
-	}
 	var opts []huh.Option[string]
 	if _, err := loadHostKey(DefaultSSHHostKey); err == nil {
 		opts = append(opts, huh.NewOption("The system's OpenSSH host key: the image answers as the system does", DefaultSSHHostKey))
 	}
-	opts = append(opts, huh.NewOption("A key of the image's own ("+DefaultTinysshKeyDir+")", DefaultTinysshKeyDir))
-	if s.HostKey != DefaultSSHHostKey && s.HostKey != DefaultTinysshKeyDir {
+	opts = append(opts, huh.NewOption("A key of the image's own ("+DefaultOwnHostKey+")", DefaultOwnHostKey))
+	if s.HostKey != DefaultSSHHostKey && s.HostKey != DefaultOwnHostKey {
 		opts = append(opts, huh.NewOption("As set: "+s.HostKey, s.HostKey))
 	}
 	choice := s.HostKey
@@ -162,27 +159,26 @@ func (c *controller) ensureSSHKeys(s *SSHConfig) error {
 	}
 	s.HostKey = choice
 	if _, err := loadHostKey(s.HostKey); err != nil {
-		if s.HostKey != DefaultTinysshKeyDir {
+		if s.HostKey != DefaultOwnHostKey {
 			fmt.Fprintln(c.out, warn(err.Error()+": the image is built without SSH until it can be read."))
-		} else if ok, err := c.confirmYes("Create the SSH host key of the boot image?", "tinysshd-makekey "+s.HostKey); err != nil {
+		} else if ok, err := c.confirmYes("Create the SSH host key of the boot image?", "A new ed25519 key at "+s.HostKey+", for the boot image alone."); err != nil {
 			return err
 		} else if !ok {
 			fmt.Fprintln(c.out, warn("No host key: the image is built without SSH until "+s.HostKey+" holds one."))
+		} else if err := createHostKey(s.HostKey); err != nil {
+			return err
 		} else {
-			mk := exec.Command("tinysshd-makekey", s.HostKey)
-			mk.Stdout, mk.Stderr = c.out, c.out
-			if err := mk.Run(); err != nil {
-				return fmt.Errorf("tinysshd-makekey %s: %w", s.HostKey, err)
-			}
+			k, _ := loadHostKey(s.HostKey)
+			fmt.Fprintf(c.out, "Created %s: %s\n", s.HostKey, hostKeyFingerprint(k.Public().(ed25519.PublicKey)))
 		}
 	}
 	switch n := authorizedKeyCount(s.AuthorizedKeys); {
 	case n < 0:
-		fmt.Fprintln(c.out, warn(s.AuthorizedKeys+" cannot be read: nobody could log in. Put an ssh-ed25519 key there before the rebuild."))
+		fmt.Fprintln(c.out, warn(s.AuthorizedKeys+" cannot be read: nobody could log in. Put a key there before the rebuild."))
 	case n == 0:
-		fmt.Fprintln(c.out, warn(s.AuthorizedKeys+" holds no ssh-ed25519 key, the only kind tinysshd accepts: nobody could log in."))
+		fmt.Fprintln(c.out, warn(s.AuthorizedKeys+" holds no key without options: nobody could log in."))
 	default:
-		fmt.Fprintf(c.out, "%s: %d ssh-ed25519 key(s) may log in at boot.\n", s.AuthorizedKeys, n)
+		fmt.Fprintf(c.out, "%s: %d key(s) may log in at boot.\n", s.AuthorizedKeys, n)
 	}
 	return nil
 }

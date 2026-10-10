@@ -24,6 +24,19 @@ itself, so the confirmation in a session is the release, and the
 network is configured for the image alone in control.conf
 (docs/REMOTE-SSH.md).
 
+### The SSH server was tinysshd
+
+The first two versions (2026-10-10) had 'run' spawn a tinysshd per
+connection whose command, 'tpm2-kira remote session', relayed the
+terminal to run over /run/tpm2-kira/remote.sock and ran
+systemd-tty-ask-password-agent for cryptsetup's own prompt. tinysshd and
+the session ran as root, so the separate process isolated nothing; the
+image needed tinysshd, a shell and the agent; the host key had to sit in
+a file for tinysshd; logins were ssh-ed25519 only. Replaced the same day
+by 'remote serve' (x/crypto/ssh, as nobody, in namespaces, under
+Landlock, signing delegated to run) and run as the session's password
+agent.
+
 ### The image's SSH host key was stored in clear
 
 The first version (2026-10-10) copied a tinysshd key directory of the

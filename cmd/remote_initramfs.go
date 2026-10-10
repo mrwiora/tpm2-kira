@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
@@ -10,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // What the image build adds for the network and the SSH server
@@ -22,7 +23,7 @@ import (
 //	net dhcp|static         systemd-networkd with its user, enabled
 //	module NAME             the driver of an interface the network matches
 //	modules-all             no interface matched here: every network driver
-//	ssh PORT                tinysshd (the hook adds the binary and a shell)
+//	ssh PORT                the SSH server ('run' itself; nothing for the hook to add)
 //	hostkey FINGERPRINT     the host key sealed into the image, for the hook to say
 //	warning TEXT            said by the hook, the build goes on
 //
@@ -33,9 +34,9 @@ import (
 
 // The paths in the image.
 const (
-	imageNetworkFile   = "/etc/systemd/network/10-tpm2-kira.network"
-	imageAuthorizedKey = "/root/.ssh/authorized_keys"
-	imageRunDropIn     = "/etc/systemd/system/tpm2-kira.service.d/remote.conf"
+	imageNetworkFile    = "/etc/systemd/network/10-tpm2-kira.network"
+	ImageAuthorizedKeys = "/root/.ssh/authorized_keys"
+	imageRunDropIn      = "/etc/systemd/system/tpm2-kira.service.d/remote.conf"
 )
 
 // RemoteInitramfsCommand implements 'remote initramfs'.
@@ -61,11 +62,15 @@ func RemoteInitramfsCommand(configPath, buildroot, tpmPath string, out io.Writer
 	if r.SSH.On {
 		// Checked before anything is written: an image half with SSH is
 		// worse than one without.
-		if keys, err = ed25519AuthorizedKeys(r.SSH.AuthorizedKeys); err != nil {
+		var skipped int
+		if keys, skipped, err = authorizedKeys(r.SSH.AuthorizedKeys); err != nil {
 			return err
 		}
 		if len(keys) == 0 {
-			return fmt.Errorf("%s holds no ssh-ed25519 key, the only kind tinysshd accepts: nobody could log in", r.SSH.AuthorizedKeys)
+			return fmt.Errorf("%s holds no key without options: nobody could log in", r.SSH.AuthorizedKeys)
+		}
+		if skipped > 0 {
+			defer fmt.Fprintf(out, "warning %d line(s) of %s left out: options in front of the key are not honoured, and what does not parse is no key\n", skipped, r.SSH.AuthorizedKeys)
 		}
 		key, err := loadHostKey(r.SSH.HostKey)
 		if err != nil {
@@ -106,7 +111,7 @@ func RemoteInitramfsCommand(configPath, buildroot, tpmPath string, out io.Writer
 		return err
 	}
 	os.Chmod(filepath.Join(buildroot, "/root/.ssh"), 0o700)
-	if err := writeImageFile(buildroot, imageAuthorizedKey, []byte(strings.Join(keys, "\n")+"\n"), 0o600); err != nil {
+	if err := writeImageFile(buildroot, ImageAuthorizedKeys, []byte(strings.Join(keys, "\n")+"\n"), 0o600); err != nil {
 		return err
 	}
 	if err := writeImageFile(buildroot, imageRunDropIn, []byte(runDropIn(r.SSH)), 0o644); err != nil {
@@ -151,24 +156,30 @@ Environment="TPM2_KIRA_REMOTE=--ssh=%d --ssh-hold=%d --ssh-hostkey=%s"
 `, timeout, s.Port, s.Hold, ImageSealedHostKey)
 }
 
-// ed25519AuthorizedKeys are the ssh-ed25519 lines of an authorized_keys
-// file: tinysshd accepts no other kind. Options in front of the key type
-// (from="...") are not understood by tinysshd either, so a line with them
-// is left out too.
-func ed25519AuthorizedKeys(path string) ([]string, error) {
-	f, err := os.Open(path)
+// authorizedKeys are the keys of an authorized_keys file that may log in,
+// one per line as the file has them, and how many lines were left out: a
+// line with options in front of the key (from="...", command="...") is
+// not honoured by 'remote serve', so it does not let anyone in either.
+func authorizedKeys(path string) ([]string, int, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("the keys that may log in over SSH: %w", err)
+		return nil, 0, fmt.Errorf("the keys that may log in over SSH: %w", err)
 	}
-	defer f.Close()
 	var out []string
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		if l := strings.TrimSpace(sc.Text()); strings.HasPrefix(l, "ssh-ed25519 ") {
-			out = append(out, l)
+	skipped := 0
+	for _, l := range strings.Split(string(data), "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
 		}
+		_, _, opts, _, err := ssh.ParseAuthorizedKey([]byte(l))
+		if err != nil || len(opts) > 0 {
+			skipped++
+			continue
+		}
+		out = append(out, l)
 	}
-	return out, sc.Err()
+	return out, skipped, nil
 }
 
 func writeImageFile(buildroot, path string, data []byte, mode os.FileMode) error {

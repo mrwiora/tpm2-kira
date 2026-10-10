@@ -37,6 +37,10 @@ func requireRoot(command string) {
 	case "version", "-v", "--version", "help", "-h", "--help", "pcrtips":
 		return
 	}
+	// The SSH server's unprivileged half: started by 'run' as nobody.
+	if command == "remote" && len(os.Args) > 2 && os.Args[2] == "serve" {
+		return
+	}
 	if os.Geteuid() == 0 || os.Getenv("TPM2_KIRA_UNPRIVILEGED") != "" {
 		return
 	}
@@ -429,14 +433,13 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	sshPort := fs.Int("ssh", 0, "Also be the SSH server on this port: the codes are shown and confirmed in an SSH session, the console says where to log in (set by the image's drop-in from TPM2_KIRA_SSH)")
 	sshHold := fs.Uint("ssh-hold", 0, "With --ssh: seconds to wait for a confirmation, in place of --hold (0: until one comes)")
 	sshHostKey := fs.String("ssh-hostkey", cmd.ImageSealedHostKey, "With --ssh: the host key sealed to the TPM by the image build; a throwaway key is served when it does not unseal")
-	sshKeyDir := fs.String("ssh-keydir", cmd.DefaultHostKeyDir, "With --ssh: where the host key is unsealed to for tinysshd, in the initramfs's memory")
-	sshSocket := fs.String("ssh-socket", cmd.DefaultRemoteSocket, "With --ssh: where the SSH sessions reach the code screen")
+	sshAuthorized := fs.String("ssh-authorized-keys", cmd.ImageAuthorizedKeys, "With --ssh: the keys that may log in")
 
 	fs.Parse(args)
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, cmd.RemoteOptions{Port: *sshPort, Hold: time.Duration(*sshHold) * time.Second, HostKey: *sshHostKey, KeyDir: *sshKeyDir, Socket: *sshSocket}, *debug)
+	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, cmd.RemoteOptions{Port: *sshPort, Hold: time.Duration(*sshHold) * time.Second, HostKey: *sshHostKey, AuthorizedKeys: *sshAuthorized}, *debug)
 }
 
 func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -886,12 +889,9 @@ func runRemote(args []string, tpmPath string) {
 		os.Exit(cmd.ExitUsage)
 	}
 	switch args[0] {
-	case "session":
-		fs := flag.NewFlagSet("remote session", flag.ExitOnError)
-		socket := fs.String("socket", cmd.DefaultRemoteSocket, "The code screen's socket")
-		fs.Parse(args[1:])
-		if err := cmd.RemoteSessionCommand(*socket); err != nil {
-			fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
+	case "serve":
+		if err := cmd.RemoteServeCommand(); err != nil {
+			fmt.Fprintf(os.Stderr, "tpm2-kira remote serve: %v\n", err)
 			os.Exit(1)
 		}
 	case "initramfs":

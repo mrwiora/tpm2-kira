@@ -15,8 +15,8 @@ import (
 )
 
 // The host key is read from an OpenSSH private key file - the running
-// system's host key - or from a tinysshd key directory; only an
-// unencrypted ed25519 key serves, the only kind tinysshd takes.
+// system's host key, or one control created; only an unencrypted ed25519
+// key is sealed.
 func TestLoadHostKey(t *testing.T) {
 	dir := t.TempDir()
 	_, sk, _ := ed25519.GenerateKey(rand.Reader)
@@ -39,12 +39,20 @@ func TestLoadHostKey(t *testing.T) {
 		t.Fatalf("OpenSSH key: %v", err)
 	}
 
-	tiny := filepath.Join(dir, "sshkeydir")
-	if err := writeTinysshKey(tiny, sk); err != nil {
+	own := filepath.Join(dir, "own", "ssh_host_ed25519_key")
+	if err := createHostKey(own); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := loadHostKey(tiny); err != nil || !got.Equal(sk) {
-		t.Fatalf("tinysshd key directory: %v", err)
+	got, err := loadHostKey(own)
+	if err != nil {
+		t.Fatalf("created key: %v", err)
+	}
+	pub, _ := os.ReadFile(own + ".pub")
+	if pk, _, _, _, err := ssh.ParseAuthorizedKey(pub); err != nil || hostKeyFingerprint(got.Public().(ed25519.PublicKey)) != ssh.FingerprintSHA256(pk) {
+		t.Fatalf("the .pub does not fit: %v", err)
+	}
+	if st, _ := os.Stat(own); st.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v", st.Mode().Perm())
 	}
 
 	ec, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -52,7 +60,6 @@ func TestLoadHostKey(t *testing.T) {
 		writePEM("ecdsa", ec, ""):        "not an ed25519 key",
 		writePEM("locked", sk, "secret"): "protected by a passphrase",
 		filepath.Join(dir, "missing"):    "no SSH host key at",
-		func() string { p := filepath.Join(dir, "empty"); os.Mkdir(p, 0o700); return p }(): "tinysshd-makekey",
 	} {
 		if _, err := loadHostKey(path); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v, want %q", filepath.Base(path), err, want)

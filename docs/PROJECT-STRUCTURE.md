@@ -22,7 +22,10 @@ Where things are in the repository, and how the tests are run.
 │   ├── remote_config.go     # The boot image's network and SSH settings; the networkd file
 │   ├── remote_initramfs.go  # What the image build adds for them ('remote initramfs')
 │   ├── remote_hostkey.go    # The SSH host key sealed to PCR 0+7, unsealed at the code screen
-│   ├── remote_ssh.go        # The SSH server of the code screen, and 'remote session'
+│   ├── remote_ssh.go        # The SSH server of the code screen: sessions, prompts, the console hint
+│   ├── remote_serve.go      # 'remote serve': the SSH protocol, unprivileged and sandboxed
+│   ├── remote_privsep.go    # run's side of it: start without privileges, sign, take sessions
+│   ├── remote_agent.go      # cryptsetup's own prompt in the session (ask-password protocol)
 │   ├── control_remote.go    # control's step for them
 │   ├── default_pcrs.go      # What 'seal' seals to by default, and the fallback slot
 │   ├── seal.go              # Create the TOTP key in the TPM and approve PCR values

@@ -7,8 +7,8 @@ package cmd
 // ('remote initramfs') seals the key's secret half to this TPM, under a
 // policy of PCR 0 (firmware) and PCR 7 (Secure Boot state and keys), and
 // the image holds only the sealed object. 'run' unseals it once, at the
-// start of the code screen, into the initramfs's memory, where tinysshd
-// reads it; it never reaches a disk.
+// start of the code screen, and keeps it in its own memory: it signs the
+// key exchanges 'remote serve' asks it to sign, and is written nowhere.
 //
 // The policy is checked before the OS separator - the code screen holds
 // the boot ahead of systemd-pcrosseparator - so the values sealed are
@@ -20,14 +20,15 @@ package cmd
 //
 // The key is the running system's OpenSSH host key by default
 // (/etc/ssh/ssh_host_ed25519_key): the image answers as the system does,
-// and the clients need no second known_hosts entry. A tinysshd key
-// directory (tinysshd-makekey) serves instead for a key of the image's own.
+// and the clients need no second known_hosts entry. For a key of the
+// image's own, control creates DefaultOwnHostKey.
 
 import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -44,13 +45,8 @@ import (
 // survives a kernel update; both are final before tpm2-kira runs.
 var hostKeyPCRs = []int{0, 7}
 
-// The sealed key's file in the image, and where 'run' unseals it to.
-const (
-	ImageSealedHostKey = "/etc/tpm2-kira/ssh/ed25519.sealed"
-	// The initramfs's own root, not /run: /run is carried over into the
-	// booted system, the initramfs is freed at switch-root.
-	DefaultHostKeyDir = "/tmp/tpm2-kira-ssh"
-)
+// ImageSealedHostKey is the sealed key's file in the image.
+const ImageSealedHostKey = "/etc/tpm2-kira/ssh/ed25519.sealed"
 
 // sealedHostKey is the file in the image.
 type sealedHostKey struct {
@@ -64,31 +60,13 @@ type sealedHostKey struct {
 
 const sealedHostKeyVersion = 1
 
-// loadHostKey reads the key at path: an OpenSSH private key file
-// (ssh-ed25519, unencrypted) or a tinysshd key directory.
+// loadHostKey reads the OpenSSH private key at path (ssh-ed25519,
+// unencrypted).
 func loadHostKey(path string) (ed25519.PrivateKey, error) {
-	st, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return nil, fmt.Errorf("no SSH host key at %s: TPM2_KIRA_SSH_HOSTKEY names an OpenSSH ed25519 key or a key directory made by 'tinysshd-makekey DIR' (tpm2-kira control offers both)", path)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("SSH host key: %w", err)
-	}
-	if st.IsDir() {
-		sk, err := os.ReadFile(filepath.Join(path, ".ed25519.sk"))
-		if err != nil {
-			return nil, fmt.Errorf("SSH host key: %w (create one with 'tinysshd-makekey %s')", err, path)
-		}
-		pk, err := os.ReadFile(filepath.Join(path, "ed25519.pk"))
-		if err != nil {
-			return nil, fmt.Errorf("SSH host key: %w", err)
-		}
-		if len(sk) != ed25519.PrivateKeySize || len(pk) != ed25519.PublicKeySize || !bytes.Equal(sk[32:], pk) {
-			return nil, fmt.Errorf("SSH host key: %s does not hold a tinysshd ed25519 key pair", path)
-		}
-		return ed25519.PrivateKey(sk), nil
-	}
 	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("no SSH host key at %s: TPM2_KIRA_SSH_HOSTKEY names an OpenSSH ed25519 key (tpm2-kira control offers the system's, or creates one of the image's own)", path)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("SSH host key: %w", err)
 	}
@@ -102,9 +80,33 @@ func loadHostKey(path string) (ed25519.PrivateKey, error) {
 	}
 	k, ok := raw.(*ed25519.PrivateKey)
 	if !ok {
-		return nil, fmt.Errorf("SSH host key %s is not an ed25519 key, the only kind tinysshd serves", path)
+		return nil, fmt.Errorf("SSH host key %s is not an ed25519 key, the only kind sealed", path)
 	}
 	return *k, nil
+}
+
+// createHostKey writes a new ed25519 key in OpenSSH's format, with its
+// .pub beside it.
+func createHostKey(path string) error {
+	pub, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	block, err := ssh.MarshalPrivateKey(key, "tpm2-kira boot image")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
+		return err
+	}
+	sp, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path+".pub", ssh.MarshalAuthorizedKey(sp), 0o644)
 }
 
 // hostKeyFingerprint is the key's SHA256 fingerprint as ssh prints it.
@@ -253,32 +255,18 @@ func changedHostKeyPCRs(tpmDev transport.TPM, s *sealedHostKey, bank PCRHashAlgo
 	return "PCR " + strings.Join(changed, " and ")
 }
 
-// writeTinysshKey writes key as a tinysshd key directory.
-func writeTinysshKey(dir string, key ed25519.PrivateKey) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(dir, ".ed25519.sk"), key, 0o600); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, "ed25519.pk"), key.Public().(ed25519.PublicKey), 0o644)
-}
-
 // hostKeyAtBoot is what the SSH server serves.
 type hostKeyAtBoot struct {
-	Dir         string // the tinysshd key directory
+	key         ed25519.PrivateKey
 	Fingerprint string
 	Throwaway   string // why the sealed key is not served, "" when it is
 }
 
-// prepareHostKey unseals the image's host key into dir. When it cannot
-// (a firmware or Secure Boot update since the build, another TPM), a
-// throwaway key is served instead: the ssh client then warns of a changed
-// host key, and the console shows the throwaway's fingerprint to compare.
-func prepareHostKey(tpmPath, sealedPath, dir string) (hostKeyAtBoot, error) {
+// prepareHostKey unseals the image's host key. When it cannot (a firmware
+// or Secure Boot update since the build, another TPM), a throwaway key is
+// served instead: the ssh client then warns of a changed host key, and the
+// console shows the throwaway's fingerprint to compare.
+func prepareHostKey(tpmPath, sealedPath string) (hostKeyAtBoot, error) {
 	key, why := unsealHostKeyFile(tpmPath, sealedPath)
 	if key == nil {
 		_, sk, err := ed25519.GenerateKey(rand.Reader)
@@ -287,12 +275,7 @@ func prepareHostKey(tpmPath, sealedPath, dir string) (hostKeyAtBoot, error) {
 		}
 		key = sk
 	}
-	os.RemoveAll(dir)
-	if err := writeTinysshKey(dir, key); err != nil {
-		os.RemoveAll(dir)
-		return hostKeyAtBoot{}, err
-	}
-	return hostKeyAtBoot{Dir: dir, Fingerprint: hostKeyFingerprint(key.Public().(ed25519.PublicKey)), Throwaway: why}, nil
+	return hostKeyAtBoot{key: key, Fingerprint: hostKeyFingerprint(key.Public().(ed25519.PublicKey)), Throwaway: why}, nil
 }
 
 // unsealHostKeyFile is the key, or nil and why not.
