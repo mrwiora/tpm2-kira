@@ -152,3 +152,61 @@ func TestHookPutsNoConfigIntoTheImage(t *testing.T) {
 		t.Fatalf("a file with a gone setting: %s", out)
 	}
 }
+
+// The hook's Bluetooth part, into an empty image tree: the modules, the
+// firmware, the rule that lets the adapter in, and the signing public key
+// the gate checks the enrolment with - which needs etc/tpm2-kira in the
+// image, a directory nothing else creates any more.
+func TestHookAddsBluetoothIntoAnEmptyImage(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash")
+	}
+	dir := t.TempDir()
+	root := filepath.Join(dir, "root")
+	os.Mkdir(root, 0o755)
+	conf := filepath.Join(dir, "control.conf")
+	os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST_ADAPTER=0\n"), 0o600)
+	script := `
+add_module() { echo "MODULE $1"; }
+add_firmware() { echo "FIRMWARE $1"; }
+add_systemd_unit() { echo "UNIT $1"; }
+add_symlink() { :; }
+plain() { echo "PLAIN $*"; }
+warning() { echo "WARNING $*"; }
+error() { echo "ERROR $*"; }
+journalctl() { :; }
+tpm2-kira() {
+    case "$1 $2" in
+    "attest status") echo '[{"slot_number":0}]' ;;
+    "attest signer") printf -- '-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n' ;;
+    "attest initramfs-deps")
+        printf 'adapter hci0\nmodule btusb\nmodule btintel\nfirmware intel/ibt-0180-0041.sfi\n'
+        printf 'udev ACTION=="add", SUBSYSTEM=="usb", KERNEL=="3-10", ATTR{idVendor}=="8087", ATTR{idProduct}=="0033", ATTR{authorized}="1"\n' ;;
+    esac
+}
+source initramfs/mkinitcpio/install/sd-tpm2-kira
+_add_bluetooth
+`
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "BUILDROOT="+root, "TPM2_KIRA_CONTROL_CONF="+conf)
+	out, err := cmd.CombinedOutput()
+	if err != nil || strings.Contains(string(out), "WARNING") || strings.Contains(string(out), "ERROR") ||
+		strings.Contains(string(out), "No such file") {
+		t.Fatalf("%v:\n%s", err, out)
+	}
+	for file, want := range map[string]string{
+		"etc/tpm2-kira/attest-signer.pem":               "BEGIN PUBLIC KEY",
+		"etc/modules-load.d/tpm2-kira-bluetooth.conf":   "btusb\nbtintel\n",
+		"etc/udev/rules.d/70-tpm2-kira-bluetooth.rules": `KERNEL=="3-10"`,
+	} {
+		b, err := os.ReadFile(filepath.Join(root, file))
+		if err != nil || !strings.Contains(string(b), want) {
+			t.Errorf("%s: %q %v", file, b, err)
+		}
+	}
+	for _, want := range []string{"MODULE btusb", "FIRMWARE intel/ibt-0180-0041.sfi", "UNIT tpm2-kira-attest.service", "2 modules, 1 firmware files"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("the hook did not say %q:\n%s", want, out)
+		}
+	}
+}

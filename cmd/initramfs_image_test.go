@@ -58,6 +58,11 @@ func TestImageBluetoothProblem(t *testing.T) {
 		os.Chtimes(img, st.ModTime().Add(1e9), st.ModTime().Add(1e9))
 	}
 	touch()
+	if p := imageBluetoothProblem(fw); !strings.Contains(p, "lacks the signing public key") {
+		t.Fatalf("an image without the signer: %q", p)
+	}
+	contents = append(contents, "etc/tpm2-kira/attest-signer.pem")
+	touch()
 	if p := imageBluetoothProblem(fw); !strings.Contains(p, "lacks the adapter's firmware intel/ibt-0040-0041.sfi") {
 		t.Fatalf("an image without the firmware: %q", p)
 	}

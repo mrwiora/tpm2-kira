@@ -168,6 +168,9 @@ _add_bluetooth() {
 
     mkdir -p "$BUILDROOT/etc/modules-load.d"
     printf '%s\n' "${modules[@]}" > "$BUILDROOT/etc/modules-load.d/tpm2-kira-bluetooth.conf"
+    # The signing key's public half, which the gate checks the enrolment
+    # record with: in the image alone, never on the running system.
+    mkdir -p "$BUILDROOT/etc/tpm2-kira"
     printf '%s\n' "$signer" > "$BUILDROOT/etc/tpm2-kira/attest-signer.pem"
     add_systemd_unit tpm2-kira-attest.service
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-attest.service \

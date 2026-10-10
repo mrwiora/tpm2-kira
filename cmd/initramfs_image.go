@@ -96,6 +96,9 @@ func imageBluetoothProblem(firmware []string) string {
 		if !files[btModulesLoadConf] {
 			return fmt.Sprintf("%s holds no Bluetooth: the hook did not add it (see the mkinitcpio output) - rebuild", filepath.Base(img))
 		}
+		if !files[strings.TrimPrefix(DefaultAttestSignerPath, "/")] {
+			return fmt.Sprintf("%s lacks the signing public key the phone check needs (%s): the gate does not start - rebuild", filepath.Base(img), DefaultAttestSignerPath)
+		}
 		for _, fw := range firmware {
 			if !imageHasFirmware(files, fw) {
 				return fmt.Sprintf("%s lacks the adapter's firmware %s - rebuild", filepath.Base(img), fw)
