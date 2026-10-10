@@ -51,6 +51,10 @@ func DefaultAttestConfig() AttestConfig {
 type ControlConfig struct {
 	Attest AttestConfig
 	PIN    string // TPM2_KIRA_PIN: the YubiKey's PIN, "" when not stored
+	// Control is how 'tpm2-kira control' guides: "guided" (the one row,
+	// then the reboot, then part 2), "manual" (every step by hand), or ""
+	// (not chosen yet: the start screen asks). Changeable there any time.
+	Control string // TPM2_KIRA_CONTROL
 }
 
 // DefaultControlConfig is a missing file: the radio's defaults.
@@ -95,6 +99,13 @@ func ParseControlConfig(data []byte) (ControlConfig, error) {
 		switch key {
 		case "TPM2_KIRA_UNLOCK":
 			return cfg, fmt.Errorf("control.conf line %d: there is no unlock mode to set any more; the boot reads how a key is made from the LUKS header's tokens. Remove the line", n)
+		case "TPM2_KIRA_CONTROL":
+			switch val {
+			case "guided", "manual":
+				cfg.Control = val
+			default:
+				return cfg, fmt.Errorf("control.conf line %d: TPM2_KIRA_CONTROL must be guided or manual, not %q", n, val)
+			}
 		case "TPM2_KIRA_ATTEST_BLUETOOTH":
 			switch val {
 			case "", "auto", "always":
@@ -190,6 +201,11 @@ func setControlValue(path, key, value string) error {
 // image, enrolled phone or not.
 func setAttestBluetooth(path, value string) error {
 	return setControlValue(path, "TPM2_KIRA_ATTEST_BLUETOOTH", value)
+}
+
+// setControlGuide keeps the guided/manual choice.
+func setControlGuide(path, value string) error {
+	return setControlValue(path, "TPM2_KIRA_CONTROL", value)
 }
 
 // setControlPIN stores the YubiKey's PIN in control.conf, which is then

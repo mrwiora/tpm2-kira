@@ -17,8 +17,9 @@ import (
 func TestControlSteps(t *testing.T) {
 	c := &controller{facts: machineFacts{TPM: "/dev/tpmrm0", SHA256Bank: true, LogSHA256: true, PCRs: "0e,2e,7e,11u"}}
 	steps := c.steps()
-	if len(steps) != 2 || steps[0].Key != "setup" || steps[1].Key != "initramfs" ||
-		!strings.Contains(steps[1].Blocked, "neither mkinitcpio nor initramfs-tools") {
+	if len(steps) != 3 || steps[0].Key != "setup" || steps[1].Key != "initramfs" ||
+		!strings.Contains(steps[1].Blocked, "neither mkinitcpio nor initramfs-tools") ||
+		steps[2].Key != "guide" || steps[2].Title != "Switch to the guided set-up" {
 		t.Fatalf("a bare machine: %+v", steps)
 	}
 
@@ -28,15 +29,15 @@ func TestControlSteps(t *testing.T) {
 	c.facts.Initramfs, c.facts.HookState = "mkinitcpio", "sd-tpm2-kira is not in HOOKS of /etc/mkinitcpio.conf - add it next to sd-encrypt, then rebuild"
 	c.facts.Dirt = []SlotContents{{Slot: 2, Index: NVRAMSlotStart + 2, Counter: true}}
 	steps = c.steps()
-	if len(steps) != 3 || steps[1].Key != "initramfs" || steps[1].Done != "" || steps[1].Title != "mkinitcpio configuration" ||
-		steps[2].Key != "slot:2" || steps[2].Dirty == "" {
+	if len(steps) != 4 || steps[1].Key != "initramfs" || steps[1].Done != "" || steps[1].Title != "mkinitcpio configuration" ||
+		steps[2].Key != "slot:2" || steps[2].Dirty == "" || steps[3].Key != "guide" {
 		t.Fatalf("gated with dirt: %+v", steps)
 	}
 	if recommended(steps) != 2 { // dirt first, then the open gate steps
 		t.Fatalf("recommended %d", recommended(steps))
 	}
 	c.facts.Dirt = nil
-	if steps = c.steps(); len(steps) != 2 || recommended(steps) != 1 {
+	if steps = c.steps(); len(steps) != 3 || recommended(steps) != 1 {
 		t.Fatalf("gated: %+v", steps)
 	}
 
@@ -45,7 +46,7 @@ func TestControlSteps(t *testing.T) {
 	// before a slot exists.
 	c.facts.HookState = ""
 	steps = c.steps()
-	if len(steps) != 5 || steps[1].Done != "sd-tpm2-kira in HOOKS of "+mkinitcpioConf+", the image rebuilt" ||
+	if len(steps) != 6 || steps[1].Done != "sd-tpm2-kira in HOOKS of "+mkinitcpioConf+", the image rebuilt" ||
 		steps[2].Key != "route" || !steps[2].Check || steps[3].Key != "seal" || steps[4].Key != "luks-salt" {
 		t.Fatalf("wired, no slot: %+v", steps)
 	}
@@ -62,7 +63,7 @@ func TestControlSteps(t *testing.T) {
 	c.facts.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u", Signed: true}, {Slot: 1, PCRs: "0e,7e", Fallback: true, Signed: true}}
 	c.facts.Status.Devices = []LuksDeviceStatus{{Device: "/dev/sda2", Keyslots: []KeyslotStatus{{Keyslot: 0}}}}
 	steps = c.steps()
-	if len(steps) != 8 || steps[2].Key != "route" || steps[3].Key != "slot:0" || steps[4].Key != "attest" ||
+	if len(steps) != 9 || steps[2].Key != "route" || steps[3].Key != "slot:0" || steps[4].Key != "attest" ||
 		steps[5].Key != "luks-remote" || steps[6].Key != "slot:1" || steps[7].Key != "luks-salt" {
 		t.Fatalf("the tree: %+v", steps)
 	}
@@ -367,5 +368,48 @@ func TestImageNewerThanBoot(t *testing.T) {
 	os.Chtimes(img, old, old)
 	if got := imageNewerThanBoot(); got != "" {
 		t.Fatalf("an image older than the boot: %q", got)
+	}
+}
+
+// The guided mode leads with the one row while part 1 is open, says which
+// part the set-up stands in, and both modes switch to the other at the
+// bottom. The manual mode keeps every step and every explanation.
+func TestControlGuidedJourney(t *testing.T) {
+	c := &controller{facts: machineFacts{TPM: "/dev/tpmrm0", PCRs: "0e,2e,7e,11u", Guide: "guided"}}
+	steps := c.steps()
+	if steps[0].Key != "journey" || !steps[0].SelfConfirm || recommended(steps) != 0 {
+		t.Fatalf("the row does not lead: %+v", steps[0])
+	}
+	if last := steps[len(steps)-1]; last.Key != "guide" || last.Title != "Switch to the manual set-up" {
+		t.Fatalf("the switch: %+v", last)
+	}
+	if p := c.phase(steps); !strings.Contains(p, "Part 1 of 2") {
+		t.Fatalf("phase: %q", p)
+	}
+
+	// Part 1 done, enrolments open: part 2 is named; the row is gone.
+	c.facts.Keys = "local key files"
+	c.facts.Initramfs, c.facts.HookState = "mkinitcpio", ""
+	c.facts.Capped = true
+	c.facts.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u", Signed: true}, {Slot: 1, PCRs: "0e,7e", Fallback: true, Signed: true}}
+	c.facts.Status.Devices = []LuksDeviceStatus{{Device: "/dev/sda2", Keyslots: []KeyslotStatus{{Keyslot: 0}}}}
+	c.facts.Routed = map[string]bool{"/dev/sda2": true}
+	c.facts.Adapter = "hci0"
+	steps = c.steps()
+	if steps[0].Key == "journey" {
+		t.Fatalf("the row although part 1 is done: %+v", steps[0])
+	}
+	if p := c.phase(steps); !strings.Contains(p, "Part 2 of 2") {
+		t.Fatalf("phase: %q", p)
+	}
+
+	// Manual: no row, no part line, the switch points back.
+	c.facts.Guide = "manual"
+	steps = c.steps()
+	if steps[0].Key == "journey" || c.phase(steps) != "" {
+		t.Fatalf("manual shows the row: %+v", steps[0])
+	}
+	if last := steps[len(steps)-1]; last.Title != "Switch to the guided set-up" {
+		t.Fatalf("the switch: %+v", last)
 	}
 }

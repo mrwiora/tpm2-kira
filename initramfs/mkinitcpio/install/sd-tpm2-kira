@@ -51,7 +51,10 @@ _add_config() {
         return 1
     fi
     mkdir -p "$BUILDROOT/etc/tpm2-kira"
-    grep -v '^[[:space:]]*TPM2_KIRA_PIN=' "$CONF" > "$BUILDROOT/etc/tpm2-kira/control.conf"
+    # The PIN is a secret, and TPM2_KIRA_CONTROL / TPM2_KIRA_ATTEST_BLUETOOTH
+    # matter on the host alone: left out, so changing them never changes the
+    # image (and with it PCR 11).
+    grep -v -E '^[[:space:]]*TPM2_KIRA_(PIN|CONTROL|ATTEST_BLUETOOTH)=' "$CONF" > "$BUILDROOT/etc/tpm2-kira/control.conf"
     chmod 644 "$BUILDROOT/etc/tpm2-kira/control.conf"
 }
 

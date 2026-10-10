@@ -149,7 +149,13 @@ tpm2-kira version
 
 ## Guided: `tpm2-kira control`
 
-One screen for a person rather than a script. On top, the machine's
+One screen for a person rather than a script. The first run asks how to
+guide you - **guided**: one row (the signing key, the mkinitcpio
+configuration, the key's route, the slots), one rebuild, then the reboot,
+and part 2 (the phone, and the disk's key) continues after it; or
+**manual**: every step picked by hand, the overview saying what is
+possible and why not. The choice lives in `control.conf` and the
+overview's last entry switches it any time. On top, the machine's
 status, judged line by line - the TPM and its banks, the endorsement
 key's vendor, Secure Boot, how it booted, the slots, the signing key, the
 initramfs kind and whether sd-tpm2-kira is wired into it (the hook

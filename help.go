@@ -116,7 +116,13 @@ func printHelp(topic string) {
 var helpPages = map[string]string{
 	"control": `tpm2-kira control [--tpm PATH]
 
-The guided way through the protections. The header carries the version.
+The guided way through the protections. The first run asks how: guided -
+one row (the key, mkinitcpio, the route, the slots), one rebuild, the
+reboot, then part 2 (the phone, and the disk's key); or manual - every
+step by hand, the overview saying what is possible and why not. The
+choice is TPM2_KIRA_CONTROL in control.conf; the overview's last entry
+switches it any time. The header carries the version and, guided, the
+part the set-up stands in.
 On top, the machine's status, judged line by line - the TPM and its
 banks, the endorsement key's vendor, Secure Boot, how it booted, the
 slots, the signing key, the initramfs kind and whether sd-tpm2-kira is

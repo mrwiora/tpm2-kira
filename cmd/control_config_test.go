@@ -28,6 +28,15 @@ func TestControlConfigOneFile(t *testing.T) {
 	if _, err := ParseControlConfig([]byte("TPM2_KIRA_ATTEST_BLUETOOTH=sometimes\n")); err == nil {
 		t.Fatal("an unknown bluetooth policy parsed")
 	}
+	if err := setControlGuide(path, "guided"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err := LoadControlConfig(path); err != nil || cfg.Control != "guided" {
+		t.Fatalf("the guide choice: %+v %v", cfg, err)
+	}
+	if _, err := ParseControlConfig([]byte("TPM2_KIRA_CONTROL=wizard\n")); err == nil {
+		t.Fatal("an unknown guide mode parsed")
+	}
 	missing, err := LoadControlConfig(filepath.Join(t.TempDir(), "none"))
 	if err != nil || missing.Attest.AdapterWait == 0 || missing.Attest.Bluetooth != "auto" {
 		t.Fatalf("missing file: %+v %v", missing, err)

@@ -66,6 +66,7 @@ type machineFacts struct {
 	Phone    bool           // a phone is enrolled for some slot
 	Salt     bool           // a remote salt is enrolled for some slot
 	BTAlways bool           // Bluetooth is packed into every image (control.conf)
+	Guide    string         // guided or manual (TPM2_KIRA_CONTROL); "" until chosen
 	Capped   bool           // 'tpm2-kira cap' ran: this boot went through the code screen
 	NewImage string         // an image was rebuilt after this boot started; "" when not
 	Routed   map[string]bool
@@ -135,10 +136,11 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	if m, _ := filepath.Glob("/sys/class/bluetooth/hci*"); len(m) > 0 {
 		f.Adapter = filepath.Base(m[0])
 	}
-	if cfg, err := LoadAttestConfig(controlConfigPath()); err != nil {
+	if cfg, err := LoadControlConfig(controlConfigPath()); err != nil {
 		f.AttestConf = err.Error()
 	} else {
-		f.BTAlways = cfg.Bluetooth == "always"
+		f.BTAlways = cfg.Attest.Bluetooth == "always"
+		f.Guide = cfg.Control
 	}
 
 	f.Status = collectStatus(StatusOptions{TPMPath: tpmPath, ConfigPath: controlConfigPath(), Debug: debug})
@@ -257,6 +259,9 @@ type controller struct {
 	tty   bool
 	facts machineFacts
 	ran   bool // a step ran: the initramfs is to be rebuilt
+	// batch: the guided row runs; the stages skip their own rebuild
+	// offers, the row ends with the one rebuild.
+	batch bool
 }
 
 // steps are the overview: the signing key, then the slots as a tree - the
@@ -345,10 +350,6 @@ func (c *controller) steps() []controlStep {
 	route := controlStep{Key: "route", Title: "Unlock at boot (the key's route)", Check: true,
 		Explain: "systemd-cryptsetup takes a volume's key from tpm2-kira when its rd.luks.key= names the socket (keyscript= in crypttab on Debian). The step shows each line as it should read and writes it when you say so - editing the file yourself works just as well. How the key is made, the boot reads from the volume's own LUKS header.",
 		Run:     (*controller).runRoute}
-	anyRouted := false
-	for _, routed := range f.Routed {
-		anyRouted = anyRouted || routed
-	}
 	var unrouted []string
 	for _, d := range f.Status.Devices {
 		if d.Error != "" || f.Routed[d.Device] {
@@ -366,7 +367,7 @@ func (c *controller) steps() []controlStep {
 		route.Blocked = "no LUKS device found (root for the headers)"
 	case len(unrouted) > 0:
 		route.Explain += "\nOpen: " + strings.Join(unrouted, ", ") + " not routed through tpm2-kira."
-	case anyRouted:
+	case routeResolved(f):
 		route.Done = "the key routed"
 	}
 
@@ -379,7 +380,7 @@ func (c *controller) steps() []controlStep {
 		for _, d := range f.Dirt {
 			steps = append(steps, dirtyLine(d))
 		}
-		return steps
+		return c.finishSteps(steps)
 	}
 	steps = append(steps, route)
 
@@ -497,7 +498,7 @@ func (c *controller) steps() []controlStep {
 		luksSalt.Done = "a keyslot is enrolled"
 	}
 
-	return append(steps, luksSalt)
+	return c.finishSteps(append(steps, luksSalt))
 }
 
 // runRoute shows, per unrouted device, the line as it should read and
@@ -538,7 +539,7 @@ func (c *controller) runRoute() error {
 		return nil
 	}
 	c.ran = true
-	if c.facts.Initramfs == "mkinitcpio" {
+	if c.facts.Initramfs == "mkinitcpio" && !c.batch {
 		// A unified kernel image carries the command line: rebuild.
 		return c.offerRebuild()
 	}
@@ -581,6 +582,11 @@ func Control(o ControlOptions) error {
 	// twice. Run by hand, seal and reseal keep them.
 	defer func(old bool) { AdvisoryWarnings = old }(AdvisoryWarnings)
 	AdvisoryWarnings = false
+	if c.tty {
+		if err := c.ensureGuide(); err != nil {
+			return nil // Esc at the first question: leave, nothing stored
+		}
+	}
 	for {
 		if c.tty { // the overview is a page of its own: what the last step printed was read before "back to the overview?"
 			fmt.Fprint(c.out, clearScreen+"\n\033[2mLooking at this machine ...\033[0m\n")
@@ -591,7 +597,7 @@ func Control(o ControlOptions) error {
 			c.show(steps)
 			return nil // the analysis and the recommendation, for a script
 		}
-		fmt.Fprint(c.out, clearScreen+"\n"+c.header()+"\n\n")
+		fmt.Fprint(c.out, clearScreen+"\n"+c.header()+c.phase(steps)+"\n\n")
 		key, err := c.pick(steps)
 		if err != nil || key == "" {
 			c.leave(steps)
@@ -1193,6 +1199,186 @@ func dirtyLine(d SlotContents) controlStep {
 		Run:     func(c *controller) error { return c.runRemoveSlot(n) }}
 }
 
+// ensureGuide asks, once, how control shall guide - the one guided row,
+// or every step by hand - and keeps the answer in control.conf. The last
+// entry of the overview switches it any time.
+func (c *controller) ensureGuide() error {
+	cfg, _ := LoadControlConfig(controlConfigPath())
+	if cfg.Control != "" {
+		return nil
+	}
+	fmt.Fprint(c.out, clearScreen+"\n"+c.header()+"\n\n")
+	choice := "guided"
+	if err := c.form(huh.NewSelect[string]().Title("How shall control guide you?").
+		Description("Kept in "+controlConfigPath()+"; the overview's last entry switches any time.").
+		Options(
+			huh.NewOption("Guided - one row until the reboot, then the phone and the disk (recommended)", "guided"),
+			huh.NewOption("Manual - every step picked by hand; the overview says what is possible and why not", "manual"),
+		).Value(&choice)).Run(); err != nil {
+		return err
+	}
+	return setControlGuide(controlConfigPath(), choice)
+}
+
+// routeResolved says whether the key's route needs nothing: something is
+// routed, and no device with a keyslot of ours is not.
+func routeResolved(f *machineFacts) bool {
+	if len(f.Status.Devices) == 0 || f.Status.DevicesError != "" {
+		return false
+	}
+	any := false
+	for _, routed := range f.Routed {
+		any = any || routed
+	}
+	if !any {
+		return false
+	}
+	for _, d := range f.Status.Devices {
+		if d.Error != "" || f.Routed[d.Device] {
+			continue
+		}
+		for _, ks := range d.Keyslots {
+			if ks.Token != nil {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// finishSteps closes every steps() return: in the guided mode the one row
+// leads while part 1 is open, and both modes end with the switch to the
+// other and keep every explanation of what is possible and why not.
+func (c *controller) finishSteps(steps []controlStep) []controlStep {
+	f := &c.facts
+	guided := f.Guide == "guided"
+	if guided {
+		open := false
+		for _, s := range steps {
+			switch s.Key {
+			case "setup", "initramfs", "route", "seal":
+				open = open || (s.Done == "" && s.Blocked == "")
+			}
+		}
+		if open {
+			journey := controlStep{Key: "journey", Title: "Set up this machine (part 1 of 2)", SelfConfirm: true,
+				Explain: "One row: the signing key, the mkinitcpio configuration, the key's route, the slots - one rebuild at the end, then the reboot. Part 2 (the phone, and the disk's key) continues after it; a stage already green is skipped, so the row resumes where it stopped.",
+				Run:     (*controller).runJourney}
+			steps = append([]controlStep{journey}, steps...)
+		}
+	}
+	label, target := "Switch to the manual set-up", "manual"
+	if !guided {
+		label, target = "Switch to the guided set-up", "guided"
+	}
+	steps = append(steps, controlStep{Key: "guide", Title: label, Optional: true, SelfConfirm: true,
+		Explain: "The choice lives in " + controlConfigPath() + " and switches here any time.",
+		Run: func(c *controller) error {
+			if err := setControlGuide(controlConfigPath(), target); err != nil {
+				return err
+			}
+			c.facts.Guide = target
+			fmt.Fprintf(c.out, "%s: TPM2_KIRA_CONTROL=%s\n", controlConfigPath(), target)
+			return nil
+		}})
+	return steps
+}
+
+// phase names where the guided set-up stands, under the header.
+func (c *controller) phase(steps []controlStep) string {
+	if c.facts.Guide != "guided" {
+		return ""
+	}
+	for _, s := range steps {
+		if s.Key == "journey" {
+			return "\n  Part 1 of 2: the machine, until the reboot"
+		}
+	}
+	for _, s := range steps {
+		switch s.Key {
+		case "attest", "luks-remote", "luks-salt":
+			if s.Done == "" {
+				return "\n  Part 2 of 2: the phone, and the disk's key"
+			}
+		}
+	}
+	return ""
+}
+
+// runJourney is the guided row, part 1: the same functions the steps run,
+// in order, each stage skipped when it is green already - the row resumes
+// where it stopped - the rebuild once at the end, then the reboot screen.
+func (c *controller) runJourney() error {
+	type stage struct {
+		title string
+		open  func() bool
+		run   func() error
+	}
+	stages := []stage{
+		{"Signing key", func() bool {
+			return c.facts.Keys == "" || (c.facts.YubiKey && !c.facts.PINStored)
+		}, c.runSetup},
+		{"mkinitcpio configuration", func() bool {
+			return c.facts.Initramfs == "mkinitcpio" && c.facts.HookState != ""
+		}, c.runInitramfs},
+		{"Unlock at boot (the key's route)", func() bool {
+			return len(c.facts.Status.Devices) > 0 && c.facts.Status.DevicesError == "" && !routeResolved(&c.facts)
+		}, c.runRoute},
+		{"TOTP codes at boot (slots 0 and 1)", func() bool {
+			slot0, fallback := false, false
+			for _, s := range c.facts.Status.Slots {
+				slot0 = slot0 || s.Slot == 0
+				fallback = fallback || s.Fallback
+			}
+			return c.facts.Keys != "" && c.facts.TPMErr == "" && (!slot0 || !fallback)
+		}, c.runSeal},
+	}
+	c.batch = true
+	defer func() { c.batch = false }()
+	for _, st := range stages {
+		if !st.open() {
+			continue
+		}
+		fmt.Fprintf(c.out, "\n\033[1m%s\033[0m\n\n", st.title)
+		if err := st.run(); err != nil {
+			return err
+		}
+		c.facts = collectFacts(c.o.TPMPath, c.o.Debug)
+	}
+	c.batch = false
+	if c.facts.Initramfs == "mkinitcpio" {
+		fmt.Fprintf(c.out, "\n\033[1mThe one rebuild\033[0m\n\n")
+		if err := c.offerRebuild(); err != nil {
+			return err
+		}
+	}
+	return c.rebootScreen()
+}
+
+// rebootScreen closes part 1: the reboot is what makes part 2 possible -
+// the code screen runs, 'cap' locks the boot key's answer the designed
+// way, and the phone can pin values the next boot matches.
+func (c *controller) rebootScreen() error {
+	fmt.Fprint(c.out, clearScreen+"\n"+c.header()+"\n\n")
+	fmt.Fprintln(c.out, "Part 1 is done. The machine must boot through what was just built:")
+	fmt.Fprintln(c.out, "at the boot, compare the code on the screen with your authenticator, press")
+	fmt.Fprintln(c.out, "Enter and type your passphrase. Back in the system, run")
+	fmt.Fprintln(c.out)
+	fmt.Fprintln(c.out, "    sudo tpm2-kira control")
+	fmt.Fprintln(c.out)
+	fmt.Fprintln(c.out, "again: part 2 - the phone, and the disk's key - continues there.")
+	fmt.Fprintln(c.out)
+	yes := true
+	if err := c.form(huh.NewConfirm().Title("Reboot now?").Description("'Later' leaves the reboot to you.").
+		Affirmative("Reboot now").Negative("Later").Value(&yes)).Run(); err != nil || !yes {
+		return nil
+	}
+	fmt.Fprintln(c.out, "Rebooting ...")
+	reboot := exec.Command("systemctl", "reboot")
+	reboot.Stdout, reboot.Stderr = c.out, c.out
+	return reboot.Run()
+}
+
 // runInitramfs wires the boot integration. On mkinitcpio it shows the
 // HOOKS line as it is and as it should read, and writes it when asked -
 // the standing rule that control edits no file of the system has this one
@@ -1218,6 +1404,9 @@ func (c *controller) runInitramfs() error {
 	}
 	if oldLine == newLine {
 		fmt.Fprintf(c.out, "sd-tpm2-kira is already in the HOOKS of %s.\n", file)
+		if c.batch {
+			return nil
+		}
 		return c.offerRebuild()
 	}
 	fmt.Fprintf(c.out, "The boot image is built from the HOOKS of %s. The line reads\n\n    %s\n\nand must carry sd-tpm2-kira next to sd-encrypt, so the code screen runs before\nthe passphrase prompt:\n\n    %s\n\nPut that line into the file yourself and rebuild (mkinitcpio -P) - or let this\nstep write it, which changes nothing else of the file.\n\n", file, oldLine, newLine)
@@ -1232,6 +1421,9 @@ func (c *controller) runInitramfs() error {
 	}
 	fmt.Fprintf(c.out, "%s now reads: %s\n", file, line)
 	c.ran = true // should the rebuild below be declined, leaving advises it
+	if c.batch {
+		return nil // the guided row rebuilds once, at its end
+	}
 	return c.offerRebuild()
 }
 
