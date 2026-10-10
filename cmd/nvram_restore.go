@@ -76,11 +76,6 @@ func NVRAMRestore(tpmPath, file string, nvramIndex uint32, pubKeyPath, privKeyPa
 	pub := signer.Public()
 	fmt.Printf("Signing key: %s (%s, fingerprint: %s)\n", keys.privKeyPath, PublicKeyDescription(pub), PublicKeyFingerprint(pub))
 
-	blob.Payload.PrivateKeyPath = keys.privKeyPath
-	blob.Payload.PublicKeyPath = pubKeyPath
-	if pubKeyPath == "" && keys.privKeyPath == DefaultPrivateKeyPath {
-		blob.Payload.PublicKeyPath = DefaultPublicKeyPath
-	}
 	if err := approveAndWrite(tpmDev, nvramIndex, blob, specs, hashAlgo, false, signer, debug); err != nil {
 		return fmt.Errorf("failed to restore: %w", err)
 	}

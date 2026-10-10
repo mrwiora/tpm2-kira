@@ -85,8 +85,8 @@ func TestCodeBeforeTheSeparatorThenLocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("code during the hold: %v", err)
 	}
-	if info := blob.Payload.EventlogInfo; info != nil && strings.Contains(info.MeasurePointExtends, OSSeparatorWord) {
-		t.Fatalf("the blob should be sealed before the separator: %q", info.MeasurePointExtends)
+	if extends := blob.MeasurePointExtends(); strings.Contains(extends, OSSeparatorWord) {
+		t.Fatalf("the blob should be sealed before the separator: %q", extends)
 	}
 	next, _, err := SlotCode(tpm, NVRAMSlotStart, at.Add(30*time.Second), false)
 	if err != nil || next == first || len(first) != 6 {

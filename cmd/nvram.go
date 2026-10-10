@@ -131,6 +131,19 @@ func ReadFromNVRAM(tpmDev transport.TPM, index uint32) ([]byte, error) {
 // by the conversion rather than rejected.
 const MaxNVRAMBlobSize = 65535
 
+// BlobTooLargeError is a blob that this TPM cannot store in one NV index.
+// It is found before the index is touched: the slot stays as it was.
+type BlobTooLargeError struct {
+	Index uint32
+	Size  int // the blob, signed
+	Limit int // TPM2_PT_NV_INDEX_MAX of this TPM
+}
+
+func (e *BlobTooLargeError) Error() string {
+	return fmt.Sprintf("the blob for NV index 0x%08X would be %d bytes, %d more than this TPM stores in one NV index (%d); nothing was written",
+		e.Index, e.Size, e.Size-e.Limit, e.Limit)
+}
+
 // NVRAMRecoveryDir holds a blob that could not be written back after the index
 // had already been undefined.  See stashUnwrittenBlob. A variable so the
 // tests can point it elsewhere.
@@ -159,6 +172,11 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 	}
 	if len(data) > MaxNVRAMBlobSize {
 		return fmt.Errorf("blob is %d bytes, which exceeds the %d-byte maximum for an NV index", len(data), MaxNVRAMBlobSize)
+	}
+	// The TPM's own limit decides, for the blob as it is: what fits
+	// depends on the signing key, the phones and the PCRs together.
+	if limit := nvIndexLimit(tpmDev); limit > 0 && len(data) > limit {
+		return &BlobTooLargeError{Index: index, Size: len(data), Limit: limit}
 	}
 
 	if pubKey == nil {
@@ -792,9 +810,6 @@ func NVRAMStatus(tpmPath string, nvramIndex uint32, debug bool) error {
 				peek := PeekBlobVersion(data)
 				fmt.Printf("  Raw size: %d bytes\n", peek.DataSize)
 				fmt.Printf("  Version field: %d (supported: %d)\n", peek.Version, CurrentBlobVersion)
-				if peek.AppVersion != "" {
-					fmt.Printf("  App version: %s\n", quoteUntrusted(peek.AppVersion))
-				}
 				fmt.Printf("  Parse error: %v\n", unmarshalErr)
 				fmt.Printf("  First bytes: %x\n", data[:min(32, len(data))])
 			}

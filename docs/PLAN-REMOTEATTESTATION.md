@@ -170,7 +170,7 @@ Evidence := {
 BootContext := {
     blob_version        uint32      // sealed blob format version in use
     nvram_index         uint32
-    measure_point       string      // MeasurePointExtends, verbatim from the blob
+    measure_point       string      // the measure-point extends the blob's seal applied
     secureboot_state    uint8       // enabled / disabled / setup-mode / unknown
     seal_pcr_selection  []uint8
     uptime_ms           uint64
@@ -207,8 +207,7 @@ when the verifier asks for it — which it does when the values do *not* match a
 profile, and a human needs to see *what changed*. Verifiers cache logs by hash.
 
 The log is read from `DefaultEventlogPath` only, never from a path supplied by
-a blob or by the peer — the rule HISTORY.md already records for
-`EventlogInfo.EventlogPath` applies here unchanged.
+the peer; the blob names none.
 
 ---
 

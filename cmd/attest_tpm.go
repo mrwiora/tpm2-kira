@@ -359,9 +359,7 @@ func (b *tpmBackend) BootContext() attest.BootContext {
 		bc.BlobVersion = b.sealed.Version
 	}
 	if b.sealed != nil {
-		if info := b.sealed.Payload.EventlogInfo; info != nil {
-			bc.MeasurePoint = info.MeasurePointExtends
-		}
+		bc.MeasurePoint = b.sealed.MeasurePointExtends()
 		for _, i := range b.sealed.GetPCRIndices() {
 			if i >= 0 && i < attest.MaxPCRIndex {
 				bc.SealPCRSelection = append(bc.SealPCRSelection, uint8(i))

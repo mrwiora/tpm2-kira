@@ -165,7 +165,6 @@ func newSWTPMSetupAt(t *testing.T, sock, name string) *swtpmSetup {
 	noise, _ := attest.GenerateNoiseKeypair(nil)
 	sel, _ := attest.NewPCRSelection(attest.AlgSHA256, []int{0, 2, 4, 7, 8, 9, 10, 11, 14})
 	s.blob = &Attestation{
-		AppVersion:   "test",
 		DeviceID:     randBytes(16),
 		FriendlyName: name,
 		AKPublic:     pub,

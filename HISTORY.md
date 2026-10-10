@@ -142,6 +142,25 @@ slot 0, which is where every keyslot of a one-slot machine belonged anyway.
 
 ## Blob format
 
+### Version 13 — only what is used; the TPM's limit decides
+
+The blob lost what only described how it was made: the tool's version (in
+the TOTP part and in the attestation part), the event log's path, the time
+and event counts of the calculation, the measure-point description and how
+it was detected (one flag remains; `info` derives the extends from the
+eventlog PCRs), the signing key files' paths (the key is found at the
+default location or through `--privkey`, never through the blob), and the
+attestation key's Name (computed from its public area). About 100 bytes for
+a slot of register PCRs, more with eventlog PCRs, all of it room for phones
+and, next, several kernel images per slot (docs/PLAN-SUPPORT-MULTIPLE-UKI.md).
+
+`attest enrol` refused a phone when the blob would not fit with another
+phone of the largest size the format allows, and assumed a 512-byte blob
+signature when it had none: a second phone was refused on a TPM with room
+for it. Now every write is compared with the TPM's `TPM2_PT_NV_INDEX_MAX`
+for the blob at hand, before the old index is touched, and `seal` and
+`reseal` check the same before raising the generation.
+
 ### Version 11 — the boot key
 
 The attestation part gained a second TPM key, under the policy of the slot's
@@ -287,9 +306,9 @@ blob's signature with the key it found there. Since anyone with TPM access can
 delete and redefine the NV index, a planted blob could name its author's key
 and pass its own check; the automatic reseal after an initramfs rebuild would
 then report success instead of tampering. The key now comes from `--privkey`
-or the default location only, and the stored paths are just compared after
-verification (SECURITY-BACKGROUND §5.5). A slot sealed with a custom key needs
-`--privkey` on every reseal.
+or the default location only (SECURITY-BACKGROUND §5.5), and since version 13
+the blob no longer records the paths at all. A slot sealed with a custom key
+needs `--privkey` on every reseal.
 
 `--pubkey` on reseal used to be described as the way to change the signing
 key. It never worked: the policy was built from the new public key while the

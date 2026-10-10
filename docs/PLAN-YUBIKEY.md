@@ -306,10 +306,9 @@ diagnosed before any PIN is sent.
 
 ### 5.2 What the blob keeps
 
-The blob's `HasKeyPaths` block is unchanged: `PublicKeyPath` and
-`PrivateKeyPath` are still plain filesystem paths, and `CurrentBlobVersion`
-stays where it is. `reseal` reads `PrivateKeyPath`, opens the file, and the
-contents decide whether it signs with a PEM key or asks the token.
+The blob names no key file. `reseal` opens the private key file (the default,
+or `--privkey`), and its contents decide whether it signs with a PEM key or
+asks the token.
 
 Moving an existing installation from a PEM key to a YubiKey is not a supported
 operation, since compatibility is not maintained during development: remove
@@ -679,7 +678,7 @@ The integration suite runs against `swtpm` with no card reader, so:
   reseal, what happens without the token), what `setup` prints when it finds
   a token, and the `seal.key` stub format.
 - `docs/SECURITY-BACKGROUND.md`:
-  - §3.1 — unchanged; note that `PrivateKeyPath` may name a stub.
+  - §3.1 — unchanged.
   - §3.3 — the key pair may live on a token; only the public key and the stub
     are on disk. Why the stub needs no blob signature (§5.3).
   - §4.6 — the interesting change (§12 below).

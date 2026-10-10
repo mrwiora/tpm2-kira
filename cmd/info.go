@@ -298,7 +298,6 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 	fmt.Printf("%s%sBlob Format\n", prefix, branch(false))
 	sub := prefix + cont(false)
 	fmt.Printf("%s%sVersion: %d\n", sub, branch(false), blob.Version)
-	fmt.Printf("%s%sApp Version: %s\n", sub, branch(false), quoteUntrusted(blob.Payload.AppVersion))
 	fmt.Printf("%s%sHash Algorithm: %s (%d-byte PCR digests)\n", sub, branch(true), hashAlgo.DisplayString(), hashAlgo.DigestSize())
 
 	// ── 2. NVRAM ────────────────────────────────────────────────────
@@ -374,19 +373,6 @@ func printSigningKeyInfo(sub string, blob *SealedBlob, v blobVerification) {
 		fmt.Printf("%s%sSigning Key: unknown (blob not verified)\n", sub, branch(false))
 	}
 
-	recorded := "recorded"
-	if !v.Verified {
-		recorded = "recorded, unverified, not opened"
-	}
-	for _, p := range []struct{ label, path string }{
-		{"Private Key Path", blob.Payload.PrivateKeyPath},
-		{"Public Key Path", blob.Payload.PublicKeyPath},
-	} {
-		if p.path != "" {
-			fmt.Printf("%s%s%s: %s (%s)\n", sub, branch(false), p.label, quoteUntrusted(p.path), recorded)
-		}
-	}
-
 	fmt.Printf("%s%sKey File Check: %s: %s\n", sub, branch(true), v.KeyPath, keyFileStatus(v.KeyPath))
 }
 
@@ -404,11 +390,8 @@ func printPCRSources(sub string, blob *SealedBlob) {
 	regPCRs := blob.GetRegisterPCRIndices()
 	hasRegister := len(regPCRs) > 0
 
-	if info := blob.Payload.EventlogInfo; info != nil && info.MeasurePointExtends != "" {
-		fmt.Printf("%s%sMeasure-point extends: %s\n", sub, branch(false), quoteUntrusted(info.MeasurePointExtends))
-		if info.MeasurePointDetection != "" {
-			fmt.Printf("%s%s  detected via: %s\n", sub, branch(false), quoteUntrusted(info.MeasurePointDetection))
-		}
+	if extends := blob.MeasurePointExtends(); extends != "" {
+		fmt.Printf("%s%sMeasure-point extends: %s\n", sub, branch(false), extends)
 	}
 
 	// Summary line
@@ -508,7 +491,6 @@ func printAttestationTree(prefix string, si *slotInfo) {
 	sub := prefix + cont(false)
 	fmt.Printf("%s%sMachine name: %s\n", sub, branch(false), quoteUntrusted(att.FriendlyName))
 	fmt.Printf("%s%sDevice ID: %x\n", sub, branch(false), att.DeviceID)
-	fmt.Printf("%s%sWritten by: tpm2-kira %s\n", sub, branch(false), quoteUntrusted(att.AppVersion))
 	fmt.Printf("%s%sAttestation key (signs the quotes; private part wrapped by this TPM)\n", sub, branch(false))
 	ak := sub + cont(false)
 	fmt.Printf("%s%sName: %x\n", ak, branch(false), att.AKName)

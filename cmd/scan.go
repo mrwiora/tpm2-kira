@@ -135,11 +135,7 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 			rawData, peekErr := ReadFromNVRAM(tpmDev, i)
 			if peekErr == nil {
 				peek := PeekBlobVersion(rawData)
-				fmt.Printf("  Slot %d: NVRAM data found (%d bytes), blob version: %d", slotNumber, peek.DataSize, peek.Version)
-				if peek.AppVersion != "" {
-					fmt.Printf(", app version: %s", quoteUntrusted(peek.AppVersion))
-				}
-				fmt.Println()
+				fmt.Printf("  Slot %d: NVRAM data found (%d bytes), blob version: %d\n", slotNumber, peek.DataSize, peek.Version)
 			} else if debug {
 				fmt.Printf("  Slot %d: no NVRAM data (%v)\n", slotNumber, peekErr)
 			}

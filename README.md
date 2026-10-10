@@ -401,7 +401,7 @@ A TPM without a SHA-256 PCR bank needs `--sha1` throughout: [docs/SEALING.md](do
 
 ### Custom signing keys
 
-Your own key pair instead of `setup`'s (`--privkey`, `--pubkey`; RSA-2048, P-256, P-384): [docs/SEALING.md](docs/SEALING.md#custom-signing-keys).
+Your own key pair instead of `setup`'s (`--privkey`, `--pubkey`; P-256, the default and the smallest in the TPM, P-384 or RSA-2048): [docs/SEALING.md](docs/SEALING.md#custom-signing-keys).
 
 ### Multiple slots
 

@@ -103,10 +103,13 @@ Both key files must be mode `0400`, owned by root (or by the user running
 tpm2-kira), not symlinks, and in a directory nobody else can write to; `seal`
 and `reseal` refuse them otherwise.
 
-Both key paths are recorded in the sealed blob for `info`, but `reseal` never
-uses them to find the key: anyone with TPM access can replace the blob, and a
-planted one would name a key its author holds. `reseal` uses `--privkey`, or
+The blob names no key file: anyone with TPM access can replace the blob, and
+a planted one would name a key its author holds. `reseal` uses `--privkey`, or
 the default key from `setup`. With a custom key, always pass `--privkey`.
+
+ECC P-256 is the default and the smallest: the key is stored in every slot
+and signs twice per slot, so an RSA key leaves less of the TPM's NV index
+(often 2048 bytes) for phones (SECURITY-BACKGROUND §10, *Size*).
 
 ## Multiple slots
 

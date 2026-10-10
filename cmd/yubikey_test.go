@@ -238,7 +238,7 @@ func TestBlobSignatureThroughToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	blob := &SealedBlob{Version: CurrentBlobVersion, Payload: SealedBlobPayload{
-		AppVersion: "test", Public: []byte("pub"), Private: []byte("priv"),
+		Public: []byte("pub"), Private: []byte("priv"),
 		PCRDigests: []PCRDigestPair{{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}}},
 	}}
 	unsigned, err := blob.Marshal()

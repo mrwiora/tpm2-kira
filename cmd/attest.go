@@ -139,6 +139,12 @@ func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *Attestation, priv cryp
 		return err
 	}
 	if err := WriteToNVRAM(tpmDev, idx, signed, priv.Public(), priv); err != nil {
+		var tooLarge *BlobTooLargeError
+		if errors.As(err, &tooLarge) {
+			return fmt.Errorf("slot %d's blob would be %d bytes with this enrolment, and this TPM stores at most %d in one NV index; "+
+				"nothing was written. Its phones share the blob with the TOTP key: remove one with 'tpm2-kira attest unenrol --nvram %d' "+
+				"(that removes all phones of the slot) and enrol the ones you need", slot, tooLarge.Size, tooLarge.Limit, slot)
+		}
 		// The index was replaced for the write; the TOTP key lives in it.
 		if rerr := WriteToNVRAM(tpmDev, idx, raw, priv.Public(), priv); rerr != nil {
 			return fmt.Errorf("could not store the slot's blob (%w), and could not put the previous one back (%v); "+
@@ -177,16 +183,16 @@ func nvIndexLimit(tpmDev transport.TPM) int {
 	return 0
 }
 
-// enrolmentSize is the size the slot's blob has with the given enrolment
-// and one more phone of the largest size the format allows.
+// enrolmentSize is the size the slot's blob has at least after the
+// enrolment. The phone is not known before it answers: it may be one of the
+// slot's phones enrolling again, which replaces its entry, and its strings
+// may be short. So a phone is added only to a slot without any, with empty
+// strings. The exact size is checked when the blob is written
+// (WriteToNVRAM).
 func enrolmentSize(slotBlob *SealedBlob, enrolment *Attestation) (int, error) {
 	grown := *enrolment
-	grown.Phone.Verifiers = append(append([]attest.EnrolledVerifier(nil), enrolment.Phone.Verifiers...), attest.EnrolledVerifier{
-		ID: strings.Repeat("i", 64), Name: strings.Repeat("n", 64),
-		AnchorPub: make([]byte, 91), NoisePub: make([]byte, 32), PolicyID: strings.Repeat("p", 64),
-	})
-	if len(grown.Phone.Verifiers) > MaxVerifiers {
-		return 0, fmt.Errorf("slot already has %d verifiers enrolled", MaxVerifiers)
+	if len(enrolment.Phone.Verifiers) == 0 {
+		grown.Phone.Verifiers = []attest.EnrolledVerifier{{AnchorPub: make([]byte, 91), NoisePub: make([]byte, 32)}}
 	}
 	copyBlob := *slotBlob
 	copyBlob.Payload.Attestation = &grown
@@ -201,8 +207,9 @@ func enrolmentSize(slotBlob *SealedBlob, enrolment *Attestation) (int, error) {
 	return len(unsigned) + 2 + sig, nil
 }
 
-// checkEnrolmentFits refuses an enrolment that would not fit the slot's NV
-// index, before a phone is involved.
+// checkEnrolmentFits refuses, before a phone is involved, an enrolment
+// that cannot fit the slot's NV index whatever the phone: only then. What
+// the phone adds is checked against the TPM when the blob is written.
 func checkEnrolmentFits(tpmDev transport.TPM, slotBlob *SealedBlob, enrolment *Attestation, slot uint32) error {
 	size, err := enrolmentSize(slotBlob, enrolment)
 	if err != nil {
@@ -213,7 +220,7 @@ func checkEnrolmentFits(tpmDev transport.TPM, slotBlob *SealedBlob, enrolment *A
 		limit = MaxNVRAMBlobSize
 	}
 	if size > limit {
-		return fmt.Errorf("slot %d's blob would grow to about %d bytes with another phone, and this TPM stores at most %d per NV index.\n"+
+		return fmt.Errorf("slot %d's blob would grow to at least %d bytes with another phone, and this TPM stores at most %d per NV index.\n"+
 			"Its phones share the blob with the TOTP key: remove one with 'tpm2-kira attest unenrol --nvram %d' "+
 			"(that removes all phones of the slot) and enrol the ones you need", slot, size, limit, slot)
 	}
@@ -432,10 +439,6 @@ func AttestEnrol(o EnrolOptions) error {
 	} else if o.Name != "" {
 		blob.FriendlyName = o.Name
 	}
-	blob.AppVersion = AppVersion
-	if blob.AppVersion == "" {
-		blob.AppVersion = "unknown"
-	}
 	sel, err := blob.Selection()
 	if err != nil {
 		return err
@@ -530,7 +533,7 @@ func AttestEnrol(o EnrolOptions) error {
 		NoiseStatic:  noise,
 		AdvKey:       blob.Phone.AdvKey,
 		Selection:    sel,
-		AppVersion:   blob.AppVersion,
+		AppVersion:   AppVersion,
 		Slot:         uint8(SlotNumber(sealIndex)),
 	}
 	adv := ble.Advertisement{
@@ -1051,7 +1054,6 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 		AKName       string         `json:"ak_name"`
 		EKAlg        string         `json:"ek_alg"`
 		PCRSelection string         `json:"pcr_selection"`
-		AppVersion   string         `json:"app_version"`
 		Signature    string         `json:"blob_signature"` // valid | invalid | unchecked
 		Current      string         `json:"record_current"` // yes | no | unchecked: count equals the TPM counter
 		SigningKey   string         `json:"signing_key,omitempty"`
@@ -1076,7 +1078,6 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 			AKName:       hex.EncodeToString(b.AKName),
 			EKAlg:        ekAlgName(b.EKAlg),
 			PCRSelection: sel.String(),
-			AppVersion:   b.AppVersion,
 			Signature:    "unchecked",
 			Current:      "unchecked",
 		}

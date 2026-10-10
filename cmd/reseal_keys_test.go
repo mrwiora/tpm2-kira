@@ -51,14 +51,13 @@ func newTestKeyDir(t *testing.T, name string) string {
 	return dir
 }
 
-// signedTestBlob returns a blob signed by key and naming the given key paths.
-func signedTestBlob(t *testing.T, key *ecdsa.PrivateKey, privPath, pubPath string) ([]byte, *SealedBlob) {
+// signedTestBlob returns a blob signed by key.
+func signedTestBlob(t *testing.T, key *ecdsa.PrivateKey) ([]byte, *SealedBlob) {
 	t.Helper()
 	sb := &SealedBlob{Version: CurrentBlobVersion, Payload: SealedBlobPayload{
-		AppVersion: "test", Public: []byte{1}, Private: []byte{2},
-		PCRDigests:    []PCRDigestPair{{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}}},
-		PolicyRef:     make([]byte, 32),
-		PublicKeyPath: pubPath, PrivateKeyPath: privPath,
+		Public: []byte{1}, Private: []byte{2},
+		PCRDigests: []PCRDigestPair{{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}}},
+		PolicyRef:  make([]byte, 32),
 	}}
 	unsigned, err := sb.Marshal()
 	if err != nil {
@@ -75,20 +74,10 @@ func signedTestBlob(t *testing.T, key *ecdsa.PrivateKey, privPath, pubPath strin
 	return data, parsed
 }
 
-func TestResolveResealKeysIgnoresBlobKeyPaths(t *testing.T) {
+func TestResolveResealKeysRefusesForeignBlob(t *testing.T) {
 	_, ownPriv, _ := writeTestKeyPair(t, newTestKeyDir(t, "owner"))
-
-	// The attacker's key sits in a directory the planted blob points at.
-	// It is made unreadable, so any attempt to open it would surface as a
-	// permission error instead of the integrity failure checked for below.
-	attackerDir := newTestKeyDir(t, "attacker")
-	attackerKey, attackerPriv, attackerPub := writeTestKeyPair(t, attackerDir)
-	if err := os.Chmod(attackerDir, 0); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(attackerDir, 0700) })
-
-	data, blob := signedTestBlob(t, attackerKey, attackerPriv, attackerPub)
+	attackerKey, _, _ := writeTestKeyPair(t, newTestKeyDir(t, "attacker"))
+	data, blob := signedTestBlob(t, attackerKey)
 
 	_, err := resolveResealKeys(data, blob, ownPriv, "", false)
 	if err == nil {
@@ -98,17 +87,11 @@ func TestResolveResealKeysIgnoresBlobKeyPaths(t *testing.T) {
 	if !strings.Contains(msg, "blob integrity check failed") {
 		t.Errorf("error = %q, want the integrity failure", msg)
 	}
-	if strings.Contains(msg, "permission denied") {
-		t.Errorf("the attacker's key file was opened: %q", msg)
-	}
-	if !strings.Contains(msg, "(unverified)") || !strings.Contains(msg, attackerPriv) {
-		t.Errorf("error should name the blob's key path as unverified: %q", msg)
-	}
 }
 
 func TestResolveResealKeysAcceptsOwnBlob(t *testing.T) {
 	key, priv, pub := writeTestKeyPair(t, newTestKeyDir(t, "owner"))
-	data, blob := signedTestBlob(t, key, priv, pub)
+	data, blob := signedTestBlob(t, key)
 
 	keys, err := resolveResealKeys(data, blob, priv, pub, false)
 	if err != nil {
@@ -122,7 +105,7 @@ func TestResolveResealKeysAcceptsOwnBlob(t *testing.T) {
 func TestResolveResealKeysRejectsMismatchedPubkey(t *testing.T) {
 	key, priv, _ := writeTestKeyPair(t, newTestKeyDir(t, "owner"))
 	_, _, otherPub := writeTestKeyPair(t, newTestKeyDir(t, "other"))
-	data, blob := signedTestBlob(t, key, priv, "")
+	data, blob := signedTestBlob(t, key)
 
 	_, err := resolveResealKeys(data, blob, priv, otherPub, false)
 	if err == nil || !strings.Contains(err.Error(), "not a key pair") {
@@ -130,14 +113,14 @@ func TestResolveResealKeysRejectsMismatchedPubkey(t *testing.T) {
 	}
 }
 
-func TestResolveResealKeysMissingKeyNamesBlobPath(t *testing.T) {
-	key, priv, pub := writeTestKeyPair(t, newTestKeyDir(t, "owner"))
-	data, blob := signedTestBlob(t, key, priv, pub)
+func TestResolveResealKeysMissingKey(t *testing.T) {
+	key, _, _ := writeTestKeyPair(t, newTestKeyDir(t, "owner"))
+	data, blob := signedTestBlob(t, key)
 
 	missing := filepath.Join(t.TempDir(), "absent.key")
 	_, err := resolveResealKeys(data, blob, missing, "", false)
 	if err == nil || !strings.Contains(err.Error(), "no signing private key at "+missing) ||
-		!strings.Contains(err.Error(), "--privkey "+priv) {
-		t.Errorf("error = %v, want a missing-key error that suggests --privkey %s", err, priv)
+		!strings.Contains(err.Error(), "--privkey <path>") {
+		t.Errorf("error = %v, want a missing-key error that suggests --privkey", err)
 	}
 }

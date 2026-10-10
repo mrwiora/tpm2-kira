@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/google/go-tpm/tpm2"
 	"github.com/mrwiora/tpm2-kira/attest"
 )
 
@@ -45,12 +46,11 @@ const (
 
 // Attestation is the optional remote-attestation part of a slot's blob.
 type Attestation struct {
-	AppVersion   string
 	DeviceID     []byte // 16 bytes, random, assigned at first enrolment
 	FriendlyName string // the machine's name as verifiers show it
 	AKPublic     []byte // marshalled TPMT_PUBLIC
 	AKPrivate    []byte // TPM2B_PRIVATE contents, wrapped by the storage primary
-	AKName       []byte
+	AKName       []byte // not stored: the Name of AKPublic, computed when read
 	EKAlg        uint16 // TPM_ALG_ECC or TPM_ALG_RSA: which EK template enrolment used
 	// The boot key (bootkey.go): usable only under the slot's policy.
 	BootKeyPublic  []byte // marshalled TPMT_PUBLIC
@@ -183,12 +183,10 @@ func (b *Attestation) marshal() ([]byte, error) {
 		return nil, fmt.Errorf("attestation data is incomplete")
 	}
 	w := &blobWriter{}
-	w.lp16([]byte(b.AppVersion))
 	w.raw(b.DeviceID)
 	w.lp16([]byte(b.FriendlyName))
 	w.lp32(b.AKPublic)
 	w.lp32(b.AKPrivate)
-	w.lp16(b.AKName)
 	w.u16(b.EKAlg)
 	w.lp32(b.BootKeyPublic)
 	w.lp32(b.BootKeyPrivate)
@@ -244,12 +242,10 @@ func (p *PhoneAttestation) marshal() ([]byte, error) {
 func unmarshalAttestation(data []byte) (*Attestation, error) {
 	r := &blobReader{b: data}
 	b := &Attestation{}
-	b.AppVersion = string(r.lp16(MaxAppVersionLen))
 	b.DeviceID = r.take(attest.DeviceIDSize)
 	b.FriendlyName = string(r.lp16(64))
 	b.AKPublic = r.lp32(4096)
 	b.AKPrivate = r.lp32(4096)
-	b.AKName = r.lp16(68)
 	b.EKAlg = r.u16()
 	b.BootKeyPublic = r.lp32(4096)
 	b.BootKeyPrivate = r.lp32(4096)
@@ -287,6 +283,15 @@ func unmarshalAttestation(data []byte) (*Attestation, error) {
 	if r.off != len(r.b) {
 		return nil, fmt.Errorf("attestation data has %d trailing bytes", len(r.b)-r.off)
 	}
+	akPub, err := tpm2.Unmarshal[tpm2.TPMTPublic](b.AKPublic)
+	if err != nil {
+		return nil, fmt.Errorf("the attestation key's public area: %w", err)
+	}
+	name, err := tpm2.ObjectName(akPub)
+	if err != nil {
+		return nil, fmt.Errorf("the attestation key's Name: %w", err)
+	}
+	b.AKName = name.Buffer
 	return b, nil
 }
 
@@ -341,7 +346,6 @@ func (b *Attestation) UpsertVerifier(v attest.EnrolledVerifier) error {
 // identifies the machine and its verifiers. The channel and advertising
 // keys and the attestation key's private area are left out.
 type attestationJSON struct {
-	AppVersion   string             `json:"app_version"`
 	DeviceID     string             `json:"device_id"`
 	FriendlyName string             `json:"friendly_name"`
 	AKName       string             `json:"ak_name"`
@@ -376,7 +380,6 @@ func (b *Attestation) json() *attestationJSON {
 	}
 	sel, _ := b.Selection()
 	out := &attestationJSON{
-		AppVersion:   b.AppVersion,
 		DeviceID:     hex.EncodeToString(b.DeviceID),
 		FriendlyName: b.FriendlyName,
 		AKName:       hex.EncodeToString(b.AKName),

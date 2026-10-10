@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -55,21 +54,16 @@ func TestInfoDoesNotTrustPlantedBlob(t *testing.T) {
 	_, ownPriv, _ := writeTestKeyPair(t, newTestKeyDir(t, "owner"))
 
 	// A planted blob, signed by its author, with escape sequences in its
-	// strings and key paths pointing into a directory nobody can enter.
+	// one string, the image path.
 	attackerKey, _, _ := writeTestKeyPair(t, newTestKeyDir(t, "attacker"))
-	locked := newTestKeyDir(t, "locked")
-	if err := os.Chmod(locked, 0); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(locked, 0700) })
 	esc := "\x1b[2J"
 	sb := &SealedBlob{Version: CurrentBlobVersion, Payload: SealedBlobPayload{
-		AppVersion: "evil" + esc, Public: []byte{1}, Private: []byte{2},
-		PCRDigests:     []PCRDigestPair{{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}}},
-		PolicyRef:      make([]byte, 32),
-		EventlogInfo:   &EventlogInfo{EventlogPath: "/x", MeasurePointExtends: "os-separator:0" + esc, MeasurePointDetection: esc},
-		PrivateKeyPath: filepath.Join(locked, "k"+esc),
-		PublicKeyPath:  filepath.Join(locked, "p"+esc),
+		Public: []byte{1}, Private: []byte{2},
+		PCRDigests: []PCRDigestPair{
+			{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+			{Index: 11, Source: PCRSourceUKI, Command: "/boot/x" + esc + ".efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+		},
+		PolicyRef: make([]byte, 32),
 	}}
 	unsigned, err := sb.Marshal()
 	if err != nil {
@@ -98,12 +92,6 @@ func TestInfoDoesNotTrustPlantedBlob(t *testing.T) {
 	if !strings.Contains(out, "Signature: NOT VERIFIED") {
 		t.Error("output does not mark the blob as unverified")
 	}
-	if !strings.Contains(out, "unverified, not opened") {
-		t.Error("output does not mark the recorded key paths as unverified")
-	}
-	if strings.Contains(out, "permission denied") {
-		t.Error("a key path from the blob was opened")
-	}
 
 	jsonOut := captureStdout(t, func() {
 		if err := printJSON([]slotInfo{si}); err != nil {
@@ -123,8 +111,8 @@ func TestInfoDoesNotTrustPlantedBlob(t *testing.T) {
 }
 
 func TestInfoVerifiedBlob(t *testing.T) {
-	key, priv, pub := writeTestKeyPair(t, newTestKeyDir(t, "owner"))
-	data, blob := signedTestBlob(t, key, priv, pub)
+	key, priv, _ := writeTestKeyPair(t, newTestKeyDir(t, "owner"))
+	data, blob := signedTestBlob(t, key)
 	si := slotInfo{Index: NVRAMSlotStart, NVPublic: &tpm2.TPMSNVPublic{DataSize: uint16(len(data))}, Blob: blob, raw: data}
 	si.Verify = newBlobVerifier(priv).verify(si.raw, si.Blob)
 	if !si.Verify.Verified {

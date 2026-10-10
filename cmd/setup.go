@@ -247,7 +247,7 @@ func reportTokens(w io.Writer, tokens []TokenInfo, probeErr error, debug bool) b
 	case len(suitable) == 0:
 		fmt.Fprintln(w, "found, but none is suitable for tpm2-kira:")
 		PrintTokenReport(w, tokens)
-		fmt.Fprintln(w, "  A suitable key is RSA-2048, ECC P-256 or ECC P-384 in a PIV slot. To create one in")
+		fmt.Fprintln(w, "  A suitable key is ECC P-256 (the smallest in the TPM), ECC P-384 or RSA-2048 in a PIV slot. To create one in")
 		fmt.Fprintln(w, "  slot 9a (this overwrites whatever is in that slot):")
 		fmt.Fprintln(w, "      ykman piv keys generate --algorithm ECCP256 --pin-policy ONCE --touch-policy NEVER 9a /tmp/seal.pub")
 		fmt.Fprintln(w, "      ykman piv certificates generate --subject \"CN=tpm2-kira\" 9a /tmp/seal.pub")

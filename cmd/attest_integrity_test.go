@@ -22,7 +22,7 @@ func testSlotBlob() *SealedBlob {
 	return &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			AppVersion: "test", Public: []byte{1, 2, 3}, Private: []byte{4, 5},
+			Public: []byte{1, 2, 3}, Private: []byte{4, 5},
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: bytes.Repeat([]byte{0xA0}, 32)}},
 				{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: bytes.Repeat([]byte{0xA7}, 32)}},
@@ -33,10 +33,22 @@ func testSlotBlob() *SealedBlob {
 	}
 }
 
+// testAKPublic is a well-formed attestation key public area and its Name,
+// which the blob does not store but computes from it.
+func testAKPublic() ([]byte, []byte) {
+	pub := attest.AKTemplateECC()
+	name, err := tpm2.ObjectName(&pub)
+	if err != nil {
+		panic(err)
+	}
+	return tpm2.Marshal(pub), name.Buffer
+}
+
 func testEnrolment(name string) *Attestation {
+	akPub, akName := testAKPublic()
 	return &Attestation{
-		AppVersion: "test", DeviceID: bytes.Repeat([]byte{0xD1}, 16), FriendlyName: name,
-		AKPublic: []byte{1}, AKPrivate: []byte{2}, AKName: []byte{3}, EKAlg: 0x23,
+		DeviceID: bytes.Repeat([]byte{0xD1}, 16), FriendlyName: name,
+		AKPublic: akPub, AKPrivate: []byte{2}, AKName: akName, EKAlg: 0x23,
 		PCRAlg: attest.AlgSHA256, PCRSelection: []uint8{0, 7},
 		Phone: PhoneAttestation{
 			NoisePrivate: bytes.Repeat([]byte{0x11}, 32), AdvKey: bytes.Repeat([]byte{0x22}, 32),
@@ -112,7 +124,7 @@ func TestSlotBlobLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, want := got.Payload.Attestation, sb.Payload.Attestation
-	if a == nil || a.Count != 41 || a.FriendlyName != "box" || a.EKAlg != 0x23 || a.AppVersion != "test" ||
+	if a == nil || a.Count != 41 || a.FriendlyName != "box" || a.EKAlg != 0x23 ||
 		!bytes.Equal(a.DeviceID, want.DeviceID) || !bytes.Equal(a.AKName, want.AKName) ||
 		a.PCRAlg != attest.AlgSHA256 || !bytes.Equal(a.PCRSelection, want.PCRSelection) {
 		t.Fatalf("attestation part did not survive: %+v", a)
@@ -286,36 +298,5 @@ func TestForeignSlotIsNamedAsSuch(t *testing.T) {
 	err := foreignSlotError(2, bytes.ErrTooLarge)
 	if !strings.Contains(err.Error(), "nvram delete --nvram 2") || !strings.Contains(err.Error(), "another signing key") {
 		t.Fatalf("%v", err)
-	}
-}
-
-// The size check before a phone is involved: every phone makes the slot's
-// blob larger, and the TOTP key shares it.
-func TestEnrolmentSize(t *testing.T) {
-	sb := testSlotBlob()
-	sb.BlobSignature = make([]byte, 72)
-	e := testEnrolment("box")
-	one, err := enrolmentSize(sb, e)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e.Phone.Verifiers = append(e.Phone.Verifiers, attest.EnrolledVerifier{ID: "second", AnchorPub: make([]byte, 91), NoisePub: make([]byte, 32)})
-	two, err := enrolmentSize(sb, e)
-	if err != nil || two <= one {
-		t.Fatalf("sizes %d then %d: %v", one, two, err)
-	}
-	// It is an upper bound for what is then written.
-	grown := *e
-	grown.Phone.Verifiers = append(grown.Phone.Verifiers, attest.EnrolledVerifier{ID: "third", Name: "x", AnchorPub: make([]byte, 91), NoisePub: make([]byte, 32)})
-	real := *sb
-	real.Payload.Attestation = &grown
-	if written := len(signSlot(t, &real, newKey(t))); written > two {
-		t.Fatalf("estimated %d bytes for a blob of %d", two, written)
-	}
-	for len(e.Phone.Verifiers) < MaxVerifiers {
-		e.Phone.Verifiers = append(e.Phone.Verifiers, attest.EnrolledVerifier{ID: "more", NoisePub: make([]byte, 32)})
-	}
-	if _, err := enrolmentSize(sb, e); err == nil {
-		t.Fatal("a ninth phone was sized instead of refused")
 	}
 }

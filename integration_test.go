@@ -1346,16 +1346,15 @@ func TestExitCodes(t *testing.T) {
 	t.Log("✓ All exit code tests passed")
 }
 
-// TestResealIgnoresStoredKeyPaths checks that reseal never takes its signing
-// key from a path stored in the blob. The blob is unverified until that key
-// has checked it, so a stored path would let a planted blob name its own key.
-func TestResealIgnoresStoredKeyPaths(t *testing.T) {
+// TestResealNeedsItsKeyGiven checks that a slot sealed with a custom key is
+// resealed only with that key given: the blob names no key file, and reseal
+// takes the key from --privkey or the default location.
+func TestResealNeedsItsKeyGiven(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
 
 	nvramIndex := "0x01803004"
 
-	// Seal with both key paths (they get stored in the blob)
 	stdout, stderr, err := runTPMKira(t, tpmPath,
 		"seal",
 		"--nvram", nvramIndex,
@@ -1366,21 +1365,20 @@ func TestResealIgnoresStoredKeyPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Seal failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
 	}
-	t.Log("✓ Seal with key paths successful")
+	t.Log("✓ Seal with a custom key successful")
 
-	// Without --privkey, reseal uses the default key location only. It must
-	// not succeed via the stored path, and must name it as a hint.
+	// Without --privkey, reseal uses the default key location only.
 	stdout, stderr, _ = runTPMKira(t, tpmPath,
 		"reseal",
 		"--nvram", nvramIndex,
 	)
 	if strings.Contains(stdout, "Successfully resealed") {
-		t.Fatalf("Reseal succeeded using the key path stored in the blob:\n%s", stdout)
+		t.Fatalf("Reseal succeeded without the slot's key:\n%s", stdout)
 	}
-	if !strings.Contains(stdout+stderr, "--privkey "+testPrivKeyPath) {
-		t.Errorf("Expected a hint naming the stored key path, got:\nStdout: %s\nStderr: %s", stdout, stderr)
+	if !strings.Contains(stdout+stderr, "--privkey <path>") {
+		t.Errorf("Expected the advice to pass --privkey, got:\nStdout: %s\nStderr: %s", stdout, stderr)
 	}
-	t.Log("✓ Reseal refused to use the stored key path")
+	t.Log("✓ Reseal without the key refused")
 
 	// With --privkey it works.
 	testResealSuccess(t, tpmPath, nvramIndex)

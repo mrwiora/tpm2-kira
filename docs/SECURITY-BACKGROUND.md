@@ -49,7 +49,7 @@ TPM after enrolment.
 ### 3.1 TPM NVRAM (the "blob")
 
 Each slot's NV index (default `0x01803010`; slot *n* is `0x01803010` + *n*)
-stores one serialised `SealedBlob` (format version 12, §10). It always holds
+stores one serialised `SealedBlob` (format version 13, §10). It always holds
 the slot's TOTP key. Remote attestation is an optional part of the same blob,
 and within that part the way a verifier reaches the machine is a typed
 *method*: today phones over Bluetooth LE; a verification server over the
@@ -57,8 +57,7 @@ network would be another method next to it. The blob contains:
 
 | Field               | Content                                                         | Sensitive? |
 |---------------------|-----------------------------------------------------------------|------------|
-| `Version`           | Blob format version (11)                                        | No         |
-| `AppVersion`        | tpm2-kira version that wrote the blob                           | No         |
+| `Version`           | Blob format version (13)                                        | No         |
 | `Public`            | TPMT_PUBLIC of the TOTP key object                              | No         |
 | `Private`           | TPM2B_PRIVATE of the TOTP key object (TPM-wrapped)              | **Yes**¹   |
 | `PCRDigests`        | Per-PCR index, source (register/eventlog/uki) and digest        | No         |
@@ -67,9 +66,7 @@ network would be another method next to it. The blob contains:
 | `PolicyRef`         | Random per key object; qualifies its approvals                  | No         |
 | `SigningPublic`     | TPMT_PUBLIC of the signing key                                  | No²        |
 | `ApprovalSignature` | Signing key's signature over `H(approvedPolicy ‖ PolicyRef)`    | No         |
-| `EventlogInfo`      | Metadata about eventlog calculation (path, timestamps, counts, measure-point verdict) | No |
-| `PublicKeyPath`     | Path of the signing public key, recorded for `info`             | No³        |
-| `PrivateKeyPath`    | Path of the signing private key, recorded for `info`            | No³        |
+| `MeasurePointApplied` | Whether the eventlog PCRs' values include the measure-point extends³ | No |
 | `Attestation`       | The optional remote-attestation part (fields below)             | Partly⁵    |
 | `BlobSignature`     | Signature over everything above                                 | No⁴        |
 
@@ -78,12 +75,10 @@ the machine as an attester, whatever the method:
 
 | Field           | Content                                                              | Sensitive? |
 |-----------------|----------------------------------------------------------------------|------------|
-| `AppVersion`    | tpm2-kira version that wrote the part                                | No         |
 | `DeviceID`      | 16 random bytes naming this machine to its verifiers                 | No         |
 | `FriendlyName`  | The machine's name as verifiers show it                              | No         |
-| `AKPublic`      | TPMT_PUBLIC of the attestation key, which signs the quotes           | No         |
+| `AKPublic`      | TPMT_PUBLIC of the attestation key, which signs the quotes; its Name, which verifiers pin, is computed from it | No |
 | `AKPrivate`     | TPM2B_PRIVATE of the attestation key (TPM-wrapped)                   | **Yes**¹   |
-| `AKName`        | The attestation key's Name, which verifiers pin                      | No         |
 | `EKAlg`         | Which endorsement key template enrolment used (ECC or RSA)           | No         |
 | `BootKeyPublic` | TPMT_PUBLIC of the boot key (§3.4)                                   | No         |
 | `BootKeyPrivate`| TPM2B_PRIVATE of the boot key (TPM-wrapped)                          | **Yes**¹   |
@@ -111,10 +106,15 @@ tpm2-kira: there is no `TPM2_Unseal`. The same holds for `AKPrivate` and
 `SigningPublic` makes `PolicyAuthorize` fail; it is stored because the key
 files are not reachable in the initrd.
 
-³ The key **paths** are a record for `info`. Nothing loads a key from them.
-`reseal` must not: the blob is untrusted until a key has verified it, so a
-planted blob naming its author's key would pass its own check (§5.4).
-`info` prints them escaped and never opens them.
+³ Which extends were applied follows from the eventlog PCRs: the seal folds
+the same words into each of them (§5.8), so the blob keeps one flag and `info`
+spells the extends out from the selection. The blob holds nothing that only
+describes how it was made (the tool's version, the event log's path, the time
+of the calculation, the key files' paths): what is not needed to compute a
+code, to reseal or to attest is not stored, since every byte counts against
+the TPM's per-index limit (§10, *Size*). The signing key's files are found at
+tpm2-kira's default paths or the ones given on the command line, never from
+the blob (§5.5).
 
 ⁴ The blob carries a detached signature over `[version ‖ payloadLen ‖ payload]`,
 made with the same signing key. Unsigned blobs are rejected outright. It
@@ -538,17 +538,12 @@ Private key = --privkey flag  →  /etc/tpm2-kira/keys/seal.key
 Public key  = --pubkey flag (must match)  →  derived from the private key
 ```
 
-The key paths recorded in the blob are **never** used to find a key. The blob
-is what the key is about to verify, and anyone with TPM access can replace it
-(§9): a planted blob signed by its author's key, naming that key's path, would
-otherwise verify against itself, and reseal would report success instead of
-tampering. Only after verification are the recorded paths compared with the
-key in use, and a difference is printed.
-
-When reseal cannot find or verify with its key and the blob names a different
-one, the error quotes that path as *unverified* and says to pass it with
-`--privkey` only if the user sealed with it. A slot sealed with a non-default
-key therefore always needs `--privkey` on reseal.
+The blob names no key file. The blob is what the key is about to verify, and
+anyone with TPM access can replace it (§9): a planted blob signed by its
+author's key and naming that key would otherwise verify against itself, and
+reseal would report success instead of tampering. So the key comes from the
+command line or tpm2-kira's default location, and a slot sealed with a
+non-default key always needs `--privkey` on reseal.
 
 `resolveResealKeys` in `cmd/reseal.go` implements this.
 
@@ -962,7 +957,7 @@ on such a system. Supporting owner auth is outside the current design.
 
 ---
 
-## 10. Blob Format (Version 12)
+## 10. Blob Format (Version 13)
 
 The blob is a binary-serialised structure with explicit length prefixes and
 maximum size limits to prevent memory exhaustion during deserialisation.
@@ -1000,11 +995,9 @@ every local user in `/proc/<pid>/cmdline`.
 ```
 Offset  Field                   Type        Notes
 ─────────────────────────────────────────────────────────────
-0       Version                 uint32      Must be 12
+0       Version                 uint32      Must be 13
 4       Payload length          uint32      Signed region length
-8       AppVersion length       uint32      ≤ 1024
-?       AppVersion              string
-?       Public length           uint32      ≤ 2MB
+8       Public length           uint32      ≤ 2MB
 ?       Public                  []byte      TPMT_PUBLIC of the TOTP key object
 ?       Private length          uint32      ≤ 2MB
 ?       Private                 []byte      TPM2B_PRIVATE
@@ -1025,30 +1018,12 @@ Offset  Field                   Type        Notes
 ?       SigningPublic           []byte      TPMT_PUBLIC of the signing key
 ?       ApprovalSignature len   uint16      ≤ 1024
 ?       ApprovalSignature       []byte      TPMT_SIGNATURE over H(approvedPolicy ‖ PolicyRef)
-?       HasEventlogInfo         uint8       0 or 1
-        If HasEventlogInfo=1:
-          EventlogPath length   uint32
-          EventlogPath          string
-          CalcTime length       uint32
-          CalcTime              string
-          TotalEvents           uint32
-          ProcessedEvents       uint32
-          MeasurePointExt len   uint16      ≤ 512
-          MeasurePointExtends   string      "word:pcr,pcr;word:pcr" applied
-                                            on top of the eventlog replay
-          MeasurePointDet len   uint16      ≤ 512
-          MeasurePointDetection string      how that was decided
-?       HasKeyPaths             uint8       0 or 1
-        If HasKeyPaths=1:
-          PubKeyPath length     uint16      ≤ 4096
-          PubKeyPath            string      Filesystem path to public key
-          PrivKeyPath length    uint16      ≤ 4096
-          PrivKeyPath           string      Filesystem path to private key
+?       MeasurePointApplied     uint8       0 or 1: the measure-point extends are in
+                                            the eventlog PCRs' values; 1 only
+                                            with eventlog PCRs
 ?       HasAttestation          uint8       0 or 1; 0 ends the payload
         If HasAttestation=1 (the attestation part, up to the end of the payload):
 ?         Attestation length    uint32      ≤ 16384; must end the payload exactly
-?         AppVersion length     uint16      ≤ 1024
-?         AppVersion            string
 ?         DeviceID              [16]byte    Random, assigned at first enrolment
 ?         FriendlyName length   uint16      ≤ 64
 ?         FriendlyName          string      The machine's name for verifiers
@@ -1056,8 +1031,6 @@ Offset  Field                   Type        Notes
 ?         AKPublic              []byte      TPMT_PUBLIC of the attestation key
 ?         AKPrivate length      uint32      ≤ 4096
 ?         AKPrivate             []byte      TPM2B_PRIVATE (TPM-wrapped)
-?         AKName length         uint16      ≤ 68
-?         AKName                []byte
 ?         EKAlg                 uint16      TPM_ALG_ECC or TPM_ALG_RSA
 ?         BootKeyPublic length  uint32      ≤ 4096
 ?         BootKeyPublic         []byte      TPMT_PUBLIC of the boot key (§3.4)
@@ -1115,17 +1088,35 @@ put back. Every write replaces the NV index (`TPM2_NV_UndefineSpace`, then
 define and PolicySigned writes, §9).
 
 **Size.** The blob has to fit one NV index, whose maximum the TPM reports as
-`TPM_PT_NV_INDEX_MAX` (2048 bytes on many, including Intel PTT). Measured on
-swtpm with ECC keys and three sealed PCRs: about 910 bytes for the TOTP part,
-about 540 more for the attestation part with one phone, and roughly 200 for
-each further phone.
-`attest enrol` computes the size with one more phone of the largest allowed
-size before it starts and refuses if that exceeds the TPM's limit.
+`TPM2_PT_NV_INDEX_MAX` (2048 bytes on many, including Intel PTT). What fits
+depends on the combination, and the signing key matters most: it is in the
+blob once as `SigningPublic` and signs twice (the approval and the blob).
+Measured on swtpm with four sealed PCRs:
+
+| Signing key | TOTP part | Signing key + both signatures |
+|-------------|-----------|-------------------------------|
+| ECC P-256 (the default) | ~690 bytes | 88 + 72 + 72 |
+| RSA 2048    | ~1250 bytes | 280 + 262 + 262 |
+| RSA 4096    | ~2020 bytes (computed; swtpm cannot load the key) | 536 + 518 + 518 |
+
+The attestation part adds about 760 bytes with one phone and about 200 for
+each further phone (their names count). With an RSA 4096 key a slot has room
+for the TOTP key alone on a 2048-byte TPM.
+
+There is no fixed limit on phones beyond the format's eight: whether a blob
+fits is decided for the blob at hand, against the TPM it is written to.
+`WriteToNVRAM` compares the signed blob with `TPM2_PT_NV_INDEX_MAX` before the
+old index is touched, and refuses with the number of bytes missing; the slot
+keeps what it held. `seal` and `reseal` check the same before they raise the
+generation, with the largest signatures the key can make, so a blob that
+would not fit never costs the slot its approval. `attest enrol` checks before
+the phone is involved only what is certain (a slot without phones gains at
+least one), and the write decides for the phone that actually enrolled.
 
 The stored PCR digests are **measure-point values**, not end-of-firmware values
-and not the values a running system would report. `MeasurePointExtends` records
-which userspace extends were folded in, so verification reproduces exactly what
-was sealed instead of re-deriving it — see §5.6–5.8.
+and not the values a running system would report. `MeasurePointApplied` says
+whether userspace extends were folded in, so verification reproduces exactly
+what was sealed instead of re-deriving it — see §5.6–5.8.
 
 All multi-byte integers are little-endian. Strings are UTF-8 without null
 terminators.

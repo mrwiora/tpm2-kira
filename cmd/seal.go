@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"crypto"
+	"crypto/ecdsa"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base32"
 	"errors"
 	"fmt"
@@ -146,8 +148,6 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	if err != nil {
 		return err
 	}
-	blob.Payload.PublicKeyPath = pubKeyPath
-	blob.Payload.PrivateKeyPath = privKeyPath
 	blob.Payload.Attestation = kept
 
 	if err := approveAndWrite(tpmDev, nvramIndex, blob, specs, hashAlgo, verifyUKI, signer, debug); err != nil {
@@ -227,6 +227,55 @@ func newKeyObject(tpmDev transport.TPM, key []byte, alg tpm2.TPMAlgID, pubKey cr
 // completes. Such a failure is never reported as a harmless skip.
 var ErrGenerationRaised = errors.New("the slot's generation was raised")
 
+// checkBlobFits fails with a BlobTooLargeError when blob, with the given
+// PCR values and generation and signatures of the largest size pub makes,
+// would not fit this TPM's NV index.
+func checkBlobFits(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, pcrDigests []PCRDigestPair, measurePoint bool, gen uint64, pub crypto.PublicKey) error {
+	limit := nvIndexLimit(tpmDev)
+	if limit == 0 {
+		return nil
+	}
+	approvalMax, blobSigMax, err := signatureSizes(pub)
+	if err != nil {
+		return err
+	}
+	trial := *blob
+	trial.Version = CurrentBlobVersion
+	trial.Payload.PCRDigests = pcrDigests
+	trial.Payload.MeasurePointApplied = measurePoint
+	trial.Payload.Generation = gen
+	trial.Payload.ApprovalSignature = make([]byte, approvalMax)
+	unsigned, err := trial.Marshal()
+	if err != nil {
+		return err
+	}
+	if size := len(unsigned) + 2 + blobSigMax; size > limit {
+		return &BlobTooLargeError{Index: nvramIndex, Size: size, Limit: limit}
+	}
+	return nil
+}
+
+// signatureSizes returns the largest approval (a TPMT_SIGNATURE) and blob
+// signature (PKCS #1 v1.5, or ASN.1 DER for ECDSA) the key pub makes.
+func signatureSizes(pub crypto.PublicKey) (approval, blob int, err error) {
+	switch k := pub.(type) {
+	case *rsa.PublicKey:
+		n := k.Size()
+		return 2 + 2 + 2 + n, n, nil
+	case *ecdsa.PublicKey:
+		c := (k.Curve.Params().BitSize + 7) / 8
+		// r and s, each an INTEGER of up to c+1 bytes, in a SEQUENCE.
+		body := 2 * (2 + c + 1)
+		header := 2
+		if body > 127 {
+			header = 3
+		}
+		return 2 + 2 + 2*(2+c), header + body, nil
+	default:
+		return 0, 0, fmt.Errorf("unsupported signing key type %T", pub)
+	}
+}
+
 // approveAndWrite approves the PCR values for specs and writes the blob.
 //
 // It raises the slot's generation, which revokes every earlier approval for
@@ -275,7 +324,24 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, 
 		return fmt.Errorf("failed to compute the PCR policy: %w", err)
 	}
 
+	pcrDigests := make([]PCRDigestPair, len(specs))
+	for i, spec := range specs {
+		pcrDigests[i] = PCRDigestPair{
+			Index:   spec.Index,
+			Source:  spec.Source,
+			Command: spec.Command,
+			Digest:  tpm2.TPM2BDigest{Buffer: readResult.Values[spec.Index]},
+		}
+	}
+	measurePoint := readResult.EventlogInfo != nil && readResult.EventlogInfo.MeasurePointExtends != ""
 	gen := blob.Payload.Generation + 1
+
+	// Raising the generation revokes the slot's approval, so a blob this
+	// TPM cannot store must be found before that, not by the write.
+	if err := checkBlobFits(tpmDev, nvramIndex, blob, pcrDigests, measurePoint, gen, signer.Public()); err != nil {
+		return err
+	}
+
 	genName, err := writeGeneration(tpmDev, GenerationIndex(nvramIndex), gen, signer.Public(), signer)
 	if err != nil {
 		return err
@@ -288,19 +354,9 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, 
 		return raised(err)
 	}
 
-	pcrDigests := make([]PCRDigestPair, len(specs))
-	for i, spec := range specs {
-		pcrDigests[i] = PCRDigestPair{
-			Index:   spec.Index,
-			Source:  spec.Source,
-			Command: spec.Command,
-			Digest:  tpm2.TPM2BDigest{Buffer: readResult.Values[spec.Index]},
-		}
-	}
 	blob.Version = CurrentBlobVersion
-	blob.Payload.AppVersion = AppVersion
 	blob.Payload.PCRDigests = pcrDigests
-	blob.Payload.EventlogInfo = readResult.EventlogInfo
+	blob.Payload.MeasurePointApplied = measurePoint
 	blob.Payload.Generation = gen
 	blob.Payload.ApprovalSignature = approval
 
