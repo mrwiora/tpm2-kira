@@ -54,7 +54,9 @@ func TestControlSteps(t *testing.T) {
 	}
 
 	// Both slots sealed: the tree replaces the seal step; the strong slot
-	// carries the options, each slot's line removes it.
+	// carries the options, each slot's line removes it. The boot is capped
+	// (it went through the code screen), as an enrolment needs.
+	c.facts.Capped = true
 	c.facts.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u", Signed: true}, {Slot: 1, PCRs: "0e,7e", Fallback: true, Signed: true}}
 	c.facts.Status.Devices = []LuksDeviceStatus{{Device: "/dev/sda2", Keyslots: []KeyslotStatus{{Keyslot: 0}}}}
 	steps = c.steps()
@@ -70,6 +72,20 @@ func TestControlSteps(t *testing.T) {
 		steps[4].Blocked != "needs the attestation by phone" {
 		t.Fatalf("the strong slot's options: %+v %+v", steps[3], steps[4])
 	}
+	// An uncapped boot, or an image newer than the boot, blocks the
+	// enrolments: the phone would pin what the next boot cannot match.
+	c.facts.Adapter = "hci0"
+	c.facts.Capped = false
+	if s := c.steps()[3]; !strings.Contains(s.Blocked, "did not pass tpm2-kira's code screen") {
+		t.Fatalf("uncapped boot: %+v", s)
+	}
+	c.facts.Capped = true
+	c.facts.NewImage = "/boot/initramfs-linux.img was rebuilt after this boot started: reboot first - a phone enrolled now would pin values the next boot cannot match"
+	if s := c.steps()[3]; !strings.Contains(s.Blocked, "rebuilt after this boot started") {
+		t.Fatalf("new image: %+v", s)
+	}
+	c.facts.NewImage = ""
+	c.facts.Adapter = ""
 	if steps[7].Blocked != "needs a keyslot of tpm2-kira's (the remote salt under slot 0, or the typed salt)" {
 		t.Fatalf("unlock without a keyslot: %+v", steps[7])
 	}
@@ -327,5 +343,30 @@ func TestAdoptHookAndRebuildPending(t *testing.T) {
 	os.Chtimes(img, now, now)
 	if p := rebuildPending(mkinitcpioConf); p != "" {
 		t.Fatalf("fresh image: %q", p)
+	}
+}
+
+// An image rebuilt after the boot started is found by the timestamps:
+// what a phone pins now, the next boot cannot match.
+func TestImageNewerThanBoot(t *testing.T) {
+	dir := t.TempDir()
+	defer func(p, u string) { mkinitcpioPresetDir, uptimePath = p, u }(mkinitcpioPresetDir, uptimePath)
+	mkinitcpioPresetDir = dir
+	uptimePath = dir + "/uptime"
+	img := dir + "/initramfs-linux.img"
+	os.WriteFile(dir+"/linux.preset", []byte("default_image=\""+img+"\"\n"), 0o644)
+	os.WriteFile(uptimePath, []byte("3600.00 7200.00\n"), 0o644)
+
+	if got := imageNewerThanBoot(); got != "" { // no image at all
+		t.Fatalf("no image: %q", got)
+	}
+	os.WriteFile(img, []byte("img"), 0o644) // written now: after the boot an hour ago
+	if got := imageNewerThanBoot(); !strings.Contains(got, "rebuilt after this boot started") {
+		t.Fatalf("fresh image: %q", got)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	os.Chtimes(img, old, old)
+	if got := imageNewerThanBoot(); got != "" {
+		t.Fatalf("an image older than the boot: %q", got)
 	}
 }

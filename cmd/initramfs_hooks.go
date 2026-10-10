@@ -7,7 +7,9 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Whether the boot integration is wired, for control's status: the package
@@ -205,6 +207,40 @@ func rebuildPending(conf string) string {
 		}
 		if ist.ModTime().Before(st.ModTime()) {
 			return fmt.Sprintf("%s was built before %s last changed: the image cannot carry the hook yet", img, file)
+		}
+	}
+	return ""
+}
+
+// uptimePath is /proc/uptime; a var for the tests.
+var uptimePath = "/proc/uptime"
+
+// imageNewerThanBoot says whether a preset image was rebuilt after this
+// boot started. A phone enrolled now would pin this boot's values, which
+// the next start - of the newer image - cannot match; the answer is a
+// reboot before enrolling. "" when the images predate the boot, or when
+// nothing can be told.
+func imageNewerThanBoot() string {
+	data, err := os.ReadFile(uptimePath)
+	if err != nil {
+		return ""
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) == 0 {
+		return ""
+	}
+	up, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return ""
+	}
+	booted := time.Now().Add(-time.Duration(up * float64(time.Second)))
+	for _, img := range mkinitcpioImages() {
+		st, err := os.Stat(img)
+		if err != nil {
+			continue
+		}
+		if st.ModTime().After(booted) {
+			return fmt.Sprintf("%s was rebuilt after this boot started: reboot first - a phone enrolled now would pin values the next boot cannot match", img)
 		}
 	}
 	return ""

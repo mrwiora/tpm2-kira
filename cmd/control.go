@@ -66,6 +66,8 @@ type machineFacts struct {
 	Phone    bool           // a phone is enrolled for some slot
 	Salt     bool           // a remote salt is enrolled for some slot
 	BTAlways bool           // Bluetooth is packed into every image (control.conf)
+	Capped   bool           // 'tpm2-kira cap' ran: this boot went through the code screen
+	NewImage string         // an image was rebuilt after this boot started; "" when not
 	Routed   map[string]bool
 }
 
@@ -145,6 +147,10 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	for _, s := range f.Status.Slots {
 		f.Phone = f.Phone || len(s.Phones) > 0
 		f.Salt = f.Salt || s.RemoteSalt
+		f.Capped = f.Capped || strings.Contains(s.GenState, "read-locked until reboot")
+	}
+	if f.Initramfs == "mkinitcpio" {
+		f.NewImage = imageNewerThanBoot()
 	}
 	var devices []string
 	for _, d := range f.Status.Devices {
@@ -410,6 +416,13 @@ func (c *controller) steps() []controlStep {
 			attest.Blocked = controlConfigPath() + ": " + f.AttestConf
 		case len(strong.Phones) > 0:
 			attest.Done = "phone " + quoted(strong.Phones)
+		case f.NewImage != "":
+			// Enrolling pins this boot's values; a newer image on disk
+			// makes the next boot differ, and a reboot cures both this
+			// and the boot key's verdict below.
+			attest.Blocked = f.NewImage
+		case !f.Capped:
+			attest.Blocked = "this boot did not pass tpm2-kira's code screen (the image at boot was not wired): reboot, then enrol - the phone would otherwise call the boot key refused instead of locked"
 		}
 		luksRemote := controlStep{Key: "luks-remote", Child: true, Title: "Disk key from password + remote salt (the phone)",
 			Explain: "A LUKS keyslot whose key is derived from your password and the salt the phone hands back after it attested the boot: the disk needs the phone, this TPM in an approved boot, and your password.",
@@ -421,6 +434,10 @@ func (c *controller) steps() []controlStep {
 			luksRemote.Blocked = "needs the attestation by phone"
 		case len(boundTo[strong.Slot]) > 0:
 			luksRemote.Done = strings.Join(boundTo[strong.Slot], ", ")
+		case f.NewImage != "":
+			luksRemote.Blocked = f.NewImage
+		case !f.Capped:
+			luksRemote.Blocked = "this boot did not pass tpm2-kira's code screen: reboot, then enrol the salt - the phone would otherwise call the boot key refused instead of locked"
 		}
 		steps = append(steps, attest, luksRemote)
 	}
@@ -1045,10 +1062,22 @@ func (c *controller) runAttest() error {
 	// The machine's own TPM was judged on the overview (the Vendor line),
 	// and the phone checks it authoritatively at enrolment: no second
 	// verdict and no ask here. The phone's key is still checked.
-	return AttestEnrol(EnrolOptions{
+	if err := AttestEnrol(EnrolOptions{
 		TPMPath: c.o.TPMPath, Name: name, SHA1: c.facts.UseSHA1, Timeout: 10 * time.Minute, Debug: c.o.Debug,
 		VerifyTPM: CheckOff, VerifyPhone: CheckWarn,
-	})
+	}); err != nil {
+		return err
+	}
+	// Without the prepacked Bluetooth the first phone brings the gate's
+	// modules into the image: rebuild now, and the next boot shows
+	// "changed" once on the phone. Prepacked, the image is already whole.
+	if c.facts.Initramfs == "mkinitcpio" && !c.facts.BTAlways && !c.facts.Phone {
+		fmt.Fprintln(c.out)
+		fmt.Fprintln(c.out, "The first phone brings the Bluetooth gate into the image: rebuild, and the")
+		fmt.Fprintln(c.out, "next boot shows \"changed\" once on the phone - check and approve it there.")
+		return c.offerRebuild()
+	}
+	return nil
 }
 
 func (c *controller) runLuks(mode string) error {
@@ -1162,6 +1191,9 @@ func (c *controller) offerRebuild() error {
 		return fmt.Errorf("mkinitcpio -P: %w", err)
 	}
 	c.ran = false // just rebuilt: nothing to advise on leaving
+	fmt.Fprintln(c.out)
+	fmt.Fprintln(c.out, "Reboot before enrolling a phone or a remote salt: the phone pins what the")
+	fmt.Fprintln(c.out, "next boot shows, and the boot key answers only in a boot through this image.")
 	return nil
 }
 

@@ -458,6 +458,7 @@ func AttestEnrol(o EnrolOptions) error {
 	// The header is two lines: what the phone sees in detail is its own
 	// screen's job ('attest status' and 'info' say it here), and the
 	// overview already judges the machine.
+	warnUncappedBoot(tpmDev)
 	mp := predictMeasurePoint(tpmDev, sealed, sel, o.Debug)
 	fmt.Printf("Enrolling %q (slot %d) over hci%d. The adapter is taken over until this\n", blob.FriendlyName, SlotNumber(sealIndex), o.Adapter)
 	fmt.Println("finishes: its Bluetooth devices disconnect meanwhile (--adapter N for another).")
@@ -717,6 +718,31 @@ func chooseAttestBank(sha1 bool, sealedAlg uint16, has func(PCRHashAlgo) bool) (
 			"The only remaining option is the SHA-1 bank:\n\n    tpm2-kira attest enrol --sha1\n\n%s", stopgap)
 	}
 	return 0, fmt.Errorf("this TPM has no %s PCR bank to quote", hashAlgo.DisplayString())
+}
+
+// bootThroughKira says whether this boot passed the code screen:
+// 'tpm2-kira cap' read-locked a generation index when the initrd was left.
+func bootThroughKira(tpmDev transport.TPM) bool {
+	for _, idx := range FindPopulatedSlots(tpmDev, false) {
+		if _, err := ReadGeneration(tpmDev, GenerationIndex(idx)); errors.Is(err, ErrCodesLocked) {
+			return true
+		}
+	}
+	return false
+}
+
+// warnUncappedBoot says, before a session with the phone, what its boot
+// key verdict will read in a boot that never passed the code screen:
+// refused, not the designed "locked until the next boot". control blocks
+// its steps on this; by hand the note is the warning.
+func warnUncappedBoot(tpmDev transport.TPM) {
+	if bootThroughKira(tpmDev) {
+		return
+	}
+	fmt.Println("NOTE: this boot did not pass tpm2-kira's code screen, so the TPM cannot answer")
+	fmt.Println("      with the boot key and the phone will call it refused. In a boot through")
+	fmt.Println("      the wired image it reads \"locked until the next boot\", by design.")
+	fmt.Println()
 }
 
 // gateCoordinatorWait is how long the worker waits for the coordinator's

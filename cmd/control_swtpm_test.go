@@ -54,6 +54,7 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	// for a keyslot.
 	f.Keys, f.Adapter = "local key files", "hci0"
 	f.Initramfs, f.HookState, f.Rebuild = "mkinitcpio", "", ""
+	f.Capped = true
 	var out strings.Builder
 	c := &controller{facts: f, out: &out}
 	steps := c.steps()
@@ -114,6 +115,7 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	}
 	f.Keys, f.Adapter = "local key files", "hci0"
 	f.Initramfs, f.HookState, f.Rebuild = "mkinitcpio", "", ""
+	f.Capped = true
 	c = &controller{facts: f, out: &out}
 	if s := c.steps()[4]; s.Key != "attest" || !strings.HasPrefix(s.Blocked, conf+": ") {
 		t.Errorf("the attest step with a broken file: %+v", s)

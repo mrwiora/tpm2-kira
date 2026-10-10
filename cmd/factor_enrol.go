@@ -107,6 +107,7 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	if err != nil {
 		return nil, 0, fmt.Errorf("slot %d has no phone enrolled: run 'tpm2-kira attest enrol' first", slot)
 	}
+	warnUncappedBoot(tpmDev)
 	_, sealed, err := readSlot(tpmDev, idx)
 	if err != nil {
 		return nil, 0, err
