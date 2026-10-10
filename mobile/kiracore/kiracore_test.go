@@ -53,14 +53,13 @@ type event struct {
 // app plays the mobile application around a Session.
 type app struct {
 	t       *testing.T
-	noise   []byte
 	anchor  *ecdsa.PrivateKey
 	record  string
 	events  []event
 	verdict *attest.Verdict
 }
 
-func (a *app) cfg() string { return `{"verifier_id":"pixel-1","verifier_name":"Pixel 9"}` }
+func (a *app) cfg() string { return `{"policy_id":"default"}` }
 
 // run drives s over the link until the session ends.
 func (a *app) run(s *Session, link *memLink, conn *frame.Conn, mtu int) {
@@ -136,14 +135,13 @@ func TestBindingEnrolAndAttest(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		noise, _ := GenerateNoiseKey()
-		a := &app{t: t, noise: noise}
+		a := &app{t: t}
 
 		// Enrolment.
 		link, conn := newLinkConn(t, mtu)
 		done := make(chan error, 1)
 		go func() { _, err := m.ServeEnrolment(conn, true); conn.Close(); done <- err }()
-		s, err := NewEnrolSession(a.cfg(), noise)
+		s, err := NewEnrolSession(a.cfg())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -182,7 +180,7 @@ func TestBindingEnrolAndAttest(t *testing.T) {
 			conn.Close()
 			rch <- res{r, err}
 		}()
-		s, err = NewAttestSession(a.cfg(), noise, a.record)
+		s, err = NewAttestSession(a.cfg(), a.record)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -201,8 +199,7 @@ func TestBindingEnrolAndAttest(t *testing.T) {
 }
 
 func TestStepCarriesErrorRecordOnFailure(t *testing.T) {
-	noise, _ := GenerateNoiseKey()
-	s, err := NewEnrolSession(`{"verifier_id":"x"}`, noise)
+	s, err := NewEnrolSession(`{}`)
 	if err != nil {
 		t.Fatal(err)
 	}

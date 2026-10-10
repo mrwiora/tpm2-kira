@@ -28,7 +28,14 @@ type NVRAMSlot struct {
 	// policy holds after the OS separator: its codes are computed live for
 	// as long as the policy holds, and the display says so.
 	AfterSeparator bool
+
+	// Phone marks a slot attested by its phones: it has no TOTP key, so
+	// no code, and the display shows the phone's state instead.
+	Phone bool
 }
+
+// phoneSlotDefault is a phone slot's line where no gate reports on it.
+const phoneSlotDefault = "mobile attestation (a phone is enrolled; no TOTP code)"
 
 // NVRAMIndexExists performs a lightweight check whether the given NVRAM index
 // is defined and contains data.  It only reads the NV public area — no
@@ -144,6 +151,10 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 		}
 
 		code, _, err := SlotCode(tpmDev, i, time.Now(), debug)
+		if errors.Is(err, ErrPhoneSlot) {
+			slots = append(slots, NVRAMSlot{SlotNumber: slotNumber, Index: i, Available: true, Phone: true})
+			continue
+		}
 		if err != nil {
 			if debug {
 				fmt.Printf("  Slot %d: no code (%v)\n", slotNumber, err)
@@ -247,6 +258,8 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 					}
 				}
 			}
+		} else if slot.Phone {
+			fmt.Printf("\033[0;33m#%d\033[0m: %s\n", slot.SlotNumber, phoneSlotText(codes, slot))
 		} else if code, exists := codes[slot.SlotNumber]; exists {
 			// Green slot number for successful reveal
 			fmt.Printf("\033[0;32m#%d\033[0m: %s", slot.SlotNumber, code)
@@ -256,6 +269,15 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 			fmt.Println()
 		}
 	}
+}
+
+// phoneSlotText is a phone slot's line: what the boot screen put in codes
+// for it, or phoneSlotDefault.
+func phoneSlotText(codes map[int]string, slot NVRAMSlot) string {
+	if line, ok := codes[slot.SlotNumber]; ok {
+		return line
+	}
+	return phoneSlotDefault
 }
 
 // PrintPlainSlots prints TOTP codes in plain format (no KIRA header)
@@ -268,6 +290,8 @@ func PrintPlainSlots(slots []NVRAMSlot, codes map[int]string) {
 			}
 			// For plain output with errors, show slot number
 			fmt.Printf("#%d: PCR Mismatch\n", slot.SlotNumber)
+		} else if slot.Phone {
+			fmt.Printf("#%d: %s\n", slot.SlotNumber, phoneSlotText(codes, slot))
 		} else if code, exists := codes[slot.SlotNumber]; exists {
 			// For plain output with codes, only show the code without prefix if single slot
 			if len(slots) == 1 {

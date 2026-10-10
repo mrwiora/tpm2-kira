@@ -22,14 +22,11 @@ import (
 // slot's policy does not hold in this boot state (or codes are locked).
 var errBootKeyRefused = errors.New("the TPM refused the boot key: this boot state is not one the signing key approved")
 
-// createBootKey makes the slot's boot key under the policy of its TOTP key.
+// createBootKey makes the slot's boot key under the slot's policy.
 func createBootKey(tpmDev transport.TPM, sealed *SealedBlob) (public, private []byte, err error) {
-	totp, err := tpm2.Unmarshal[tpm2.TPMTPublic](sealed.Payload.Public)
+	policy, err := sealed.SlotPolicy()
 	if err != nil {
-		return nil, nil, fmt.Errorf("the slot's TOTP key has no valid public area: %w", err)
-	}
-	if len(totp.AuthPolicy.Buffer) == 0 {
-		return nil, nil, errors.New("the slot's TOTP key has no policy to share")
+		return nil, nil, err
 	}
 	primary, err := CreatePrimaryKey(tpmDev)
 	if err != nil {
@@ -38,7 +35,7 @@ func createBootKey(tpmDev transport.TPM, sealed *SealedBlob) (public, private []
 	defer FlushHandle(tpmDev, primary.ObjectHandle)
 	rsp, err := tpm2.Create{
 		ParentHandle: tpm2.AuthHandle{Handle: primary.ObjectHandle, Name: primary.Name, Auth: tpm2.PasswordAuth(nil)},
-		InPublic:     tpm2.New2B(attest.BootKeyTemplate(totp.AuthPolicy.Buffer)),
+		InPublic:     tpm2.New2B(attest.BootKeyTemplate(policy)),
 	}.Execute(tpmDev)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create the boot key in the TPM: %w", err)

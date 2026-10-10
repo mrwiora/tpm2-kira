@@ -506,7 +506,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 				return // the prompt owns the console; nothing is drawn over it
 			}
 			st, ok := gateStatus(phone)
-			codes = phoneCodes(codes, st, ok)
+			codes = phoneCodes(codes, slots, st, ok)
 			if tpmDev, err := open(); err == nil {
 				PrintKIRASlots(tpmDev, slots, codes) // with PCR details
 				tpmDev.Close()
@@ -557,28 +557,48 @@ func waitForStop() {
 	<-ch
 }
 
-// phoneCodes puts the phone code in the place of the slot's TOTP code
-// while a phone's session is on: only this machine's TPM, in an approved
-// boot state, could recover what the phone sealed, so the phone must show
-// the same eight characters. The TOTP is for the boot without a phone.
-func phoneCodes(codes map[int]string, st GateStatus, ok bool) map[int]string {
-	if !ok || !st.Asking() {
-		return codes
-	}
-	totp, has := codes[st.Slot]
-	if !has {
-		return codes
-	}
+// phoneCodes puts each phone slot's line into codes: a slot with phones
+// has no TOTP code, and its line says how far the phone's check has got.
+// The slot the gate serves follows the gate; any other phone slot waits.
+func phoneCodes(codes map[int]string, slots []NVRAMSlot, st GateStatus, ok bool) map[int]string {
 	out := make(map[int]string, len(codes))
 	for k, v := range codes {
 		out[k] = v
 	}
-	line := "Attest via BLE (" + phoneLabel(st.Enrolled) + ") - " + totp
-	if st.Code != "" {
-		line += "  phone code " + st.Code
+	for _, s := range slots {
+		if !s.Phone {
+			continue
+		}
+		if !ok || st.Slot != s.SlotNumber {
+			out[s.SlotNumber] = phoneLineLocked
+			continue
+		}
+		out[s.SlotNumber] = phoneLine(st)
 	}
-	out[st.Slot] = line
 	return out
+}
+
+// phoneLineLocked is a phone slot's line until a phone has connected.
+const phoneLineLocked = "mobile attestation locked - please connect"
+
+// phoneLine is the line of the slot the gate serves, by the gate's state.
+// Which phone answered is not said: the person knows their phone, and the
+// screen is no place to tell anyone else (docs/SECURITY-BACKGROUND.md §3.1).
+func phoneLine(st GateStatus) string {
+	switch st.State {
+	case GateSession:
+		if st.Code != "" {
+			return "mobile attestation - phone code " + st.Code + " (the phone must show the same)"
+		}
+		return "mobile attestation - phone connected, answer there"
+	case GateAttested:
+		return "\033[0;32mmobile attestation passed\033[0m"
+	case GateRejected, GateRefused:
+		return "\033[0;31mmobile attestation FAILED\033[0m"
+	case GateUnavailable:
+		return "mobile attestation unavailable (no Bluetooth adapter) - the passphrase by hand"
+	}
+	return phoneLineLocked
 }
 
 func gateStatus(phone func() (GateStatus, bool)) (GateStatus, bool) {
@@ -685,25 +705,18 @@ func gateEventPrinter(modeOf func() string) func(prev, cur GateStatus) {
 		case GateAttested:
 			switch {
 			case cur.Releasing:
-				fmt.Printf("%s \033[0;32mSlot #%d attested by %s.\033[0m Waiting for the salt from the phone ...\n", kiraTag(tagYellow), cur.Slot, phoneLabel(cur.Phone))
+				fmt.Printf("%s \033[0;32mSlot #%d attested by your phone.\033[0m Waiting for the salt from the phone ...\n", kiraTag(tagYellow), cur.Slot)
 			case prev.Releasing && cur.SaltTaken:
 				fmt.Printf("%s \033[0;32mThe phone returned the salt.\033[0m Continuing to %s.\n", kiraTag(tagYellow), nextPrompt(mode))
 			case prev.Releasing:
 				fmt.Printf("%s \033[0;33mNo salt came from the phone.\033[0m Continuing to the password and salt prompt (a typed salt; Ctrl-C there: cryptsetup's own prompt).\n", kiraTag(tagYellow))
 			case prev.State != GateAttested:
-				fmt.Printf("%s \033[0;32mSlot #%d attested by %s.\033[0m Continuing to %s.\n", kiraTag(tagYellow), cur.Slot, phoneLabel(cur.Phone), nextPrompt(mode))
+				fmt.Printf("%s \033[0;32mSlot #%d attested by your phone.\033[0m Continuing to %s.\n", kiraTag(tagYellow), cur.Slot, nextPrompt(mode))
 			}
 		case GateRejected, GateRefused:
 			fmt.Printf("%s \033[0;31mSlot #%d was NOT attested by the phone (see above).\033[0m Do not type your password unless you know why.\n", kiraTag(tagYellow), cur.Slot)
 		}
 	}
-}
-
-func phoneLabel(name string) string {
-	if name == "" {
-		return "your phone"
-	}
-	return name
 }
 
 // printSlotsWithoutTPM is the display when the TPM cannot be opened for the
@@ -717,6 +730,8 @@ func printSlotsWithoutTPM(slots []NVRAMSlot, codes map[int]string) {
 			} else {
 				fmt.Printf("\033[0;31m#%d\033[0m: PCR Mismatch\n", slot.SlotNumber)
 			}
+		} else if slot.Phone {
+			fmt.Printf("\033[0;33m#%d\033[0m: %s\n", slot.SlotNumber, phoneSlotText(codes, slot))
 		} else if code, exists := codes[slot.SlotNumber]; exists {
 			fmt.Printf("\033[0;32m#%d\033[0m: %s\n", slot.SlotNumber, code)
 		}

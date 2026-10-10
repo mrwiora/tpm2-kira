@@ -32,7 +32,7 @@ func testCoordinator(t *testing.T) (*gateService, *ecdsa.PrivateKey) {
 		DeviceID: []byte("0123456789abcdef"), AKName: []byte("ak-name"), FriendlyName: "box",
 		Phone: PhoneAttestation{
 			NoisePrivate: make([]byte, 32), AdvKey: make([]byte, 32),
-			Verifiers: []attest.EnrolledVerifier{{ID: "phone-1", Name: "Pixel", AnchorPub: anchor, NoisePub: make([]byte, 32)}},
+			Verifiers: []attest.EnrolledVerifier{{ID: "phone-1", AnchorPub: anchor, NoisePub: make([]byte, 32)}},
 		},
 	}
 	s.status.Slot = 2
@@ -112,7 +112,7 @@ func TestOnlyThePhonesReceiptGivesAVerdict(t *testing.T) {
 	// The genuine receipt.
 	c := s.JudgeReceipt(signedReceipt(t, s, phone, attest.VerdictOK, digest, qd), "phone-1")
 	st, ok := s.Status()
-	if !c.Authentic || c.Ack != attest.AckAccepted || !ok || st.State != GateAttested || st.Phone != "Pixel" || st.Slot != 2 {
+	if !c.Authentic || c.Ack != attest.AckAccepted || !ok || st.State != GateAttested || st.Slot != 2 {
 		t.Fatalf("genuine receipt: %+v, status %+v", c, st)
 	}
 	// Progress reports do not take a verdict back.
@@ -266,7 +266,7 @@ func TestWorkerReachesTheCoordinator(t *testing.T) {
 	host := &fakeHost{
 		identity: &gateIdentity{Slot: 1, FriendlyName: "box", DeviceID: []byte("dev"), AKName: []byte("ak"),
 			NoisePrivate: make([]byte, 32), AdvKey: []byte("adv"), RecordVerified: true,
-			Verifiers: []gateVerifier{{ID: "p", Name: "Pixel", NoisePub: []byte("np")}}},
+			Verifiers: []gateVerifier{{ID: "p", NoisePub: []byte("np")}}},
 		evlog: make([]byte, 300_000),
 	}
 	path := startTestGate(t, host)
@@ -285,7 +285,7 @@ func TestWorkerReachesTheCoordinator(t *testing.T) {
 	}
 	defer c.Close()
 	id, code, err := c.Identity()
-	if err != nil || code != 0 || id.FriendlyName != "box" || !id.RecordVerified || len(id.Verifiers) != 1 || id.Verifiers[0].Name != "Pixel" {
+	if err != nil || code != 0 || id.FriendlyName != "box" || !id.RecordVerified || len(id.Verifiers) != 1 || id.Verifiers[0].ID != "p" {
 		t.Fatalf("identity: %+v %d %v", id, code, err)
 	}
 	q, err := c.Quote(make([]byte, 32), attest.PCRSelection{Alg: attest.AlgSHA256, Indices: []uint8{7}})

@@ -321,7 +321,11 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 	// ── 4. Authentication ───────────────────────────────────────────
 	fmt.Printf("%s%sAuthentication: PolicyAuthorize (PCR values + generation, approved by the signing key)\n", prefix, branch(false))
 	sub = prefix + cont(false)
-	fmt.Printf("%s%sTOTP Key: HMAC-%s, inside the TPM\n", sub, branch(false), totpAlgorithmName(blob.Payload.TOTPAlgorithm))
+	if blob.HasTOTPKey() {
+		fmt.Printf("%s%sTOTP Key: HMAC-%s, inside the TPM\n", sub, branch(false), totpAlgorithmName(blob.Payload.TOTPAlgorithm))
+	} else {
+		fmt.Printf("%s%sTOTP Key: none - the slot is attested by its phone(s)\n", sub, branch(false))
+	}
 	fmt.Printf("%s%sApproved Generation: %d\n", sub, branch(false), blob.Payload.Generation)
 	fmt.Printf("%s%sGeneration Index: 0x%08X = %s\n", sub, branch(false), GenerationIndex(si.Index), si.GenState)
 	printSigningKeyInfo(sub, blob, si.Verify)
@@ -518,7 +522,7 @@ func printAttestationTree(prefix string, si *slotInfo) {
 	list := methods + cont(true)
 	for i, v := range phones {
 		last := i == len(phones)-1
-		fmt.Printf("%s%s%s\n", list, branch(last), verifierName(&v))
+		fmt.Printf("%s%sphone %d\n", list, branch(last), i+1)
 		d := list + cont(last)
 		fmt.Printf("%s%sID: %s\n", d, branch(false), quoteUntrusted(v.ID))
 		fmt.Printf("%s%sAnchor key (signs its verdicts): SHA-256 %x\n", d, branch(false), attest.AnchorDigest(v.AnchorPub))

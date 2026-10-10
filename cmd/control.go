@@ -148,7 +148,7 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 		f.Dirt = collectDirt(tpmPath, f.Status.Devices)
 	}
 	for _, s := range f.Status.Slots {
-		f.Phone = f.Phone || len(s.Phones) > 0
+		f.Phone = f.Phone || s.Phones > 0
 		f.Salt = f.Salt || s.RemoteSalt
 		f.Capped = f.Capped || strings.Contains(s.GenState, "read-locked until reboot")
 	}
@@ -420,8 +420,8 @@ func (c *controller) steps() []controlStep {
 		if strong == nil || s.Slot != strong.Slot {
 			// The strong slot's phones and keyslots are its children's
 			// lines; every other slot carries them on its own line.
-			if len(s.Phones) > 0 {
-				desc += ", phone " + quoted(s.Phones)
+			if s.Phones > 0 {
+				desc += ", " + phonesText(s.Phones)
 			}
 			for _, name := range boundTo[s.Slot] {
 				desc += ", " + name
@@ -446,15 +446,15 @@ func (c *controller) steps() []controlStep {
 		}
 		// The options that build on the strong slot, under its line.
 		attest := controlStep{Key: "attest", Child: true, Title: "Attestation by phone (Marify, Bluetooth LE)",
-			Explain: "The phone checks the boot state against what it pinned and shows a code the machine must show too; it replaces Enter at the code screen.",
+			Explain: "The phone checks the boot state against what it pinned and shows a code the machine must show too; it replaces Enter at the code screen. While a phone is enrolled, slot 0 has no TOTP code (the screen says \"mobile attestation locked - please connect\" until the phone is in); slot 1, the fallback, keeps its code. Removing the last phone gives slot 0 a new TOTP code.",
 			Run:     (*controller).runAttest}
 		switch {
 		case f.Adapter == "":
 			attest.Blocked = "no Bluetooth adapter on this machine"
 		case f.AttestConf != "":
 			attest.Blocked = controlConfigPath() + ": " + f.AttestConf
-		case len(strong.Phones) > 0:
-			attest.Done = "phone " + quoted(strong.Phones)
+		case strong.Phones > 0:
+			attest.Done = phonesText(strong.Phones) + " (the slot has no TOTP code while a phone is enrolled)"
 		case f.NewImage != "":
 			// Enrolling pins this boot's values; a newer image on disk
 			// makes the next boot differ, and a reboot cures both this
@@ -1485,8 +1485,8 @@ func (c *controller) runRemoveSlot(slot int) error {
 		if s.Fallback {
 			label += " (the fallback)"
 		}
-		if len(s.Phones) > 0 {
-			label += ", phone " + quoted(s.Phones)
+		if s.Phones > 0 {
+			label += ", " + phonesText(s.Phones)
 		}
 		if s.RemoteSalt {
 			label += ", remote salt"

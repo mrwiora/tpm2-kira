@@ -176,12 +176,10 @@ func DeleteSlot(o DeleteSlotOptions) error {
 	if !c.Any() && tpmErr == nil && devErr == nil {
 		return fmt.Errorf("slot %d: nothing to delete", o.Slot)
 	}
-	var phones []string
+	phones := 0
 	if c.Blob {
 		if att, err := loadAttestBlob(tpmDev, c.Index); err == nil {
-			for _, v := range att.Phone.Verifiers {
-				phones = append(phones, v.Name)
-			}
+			phones = len(att.Phone.Verifiers)
 		}
 	}
 
@@ -256,8 +254,8 @@ func DeleteSlot(o DeleteSlotOptions) error {
 	if c.Blob {
 		fmt.Fprintln(out, "Its code in the authenticator matches nothing now; remove the entry there.")
 	}
-	if len(phones) > 0 {
-		fmt.Fprintf(out, "The phone(s) %s still list this machine; remove it there too.\n", quoted(phones))
+	if phones > 0 {
+		fmt.Fprintf(out, "Your phone(s) still list this machine (%d enrolled); remove it in Marify too.\n", phones)
 	}
 	return nil
 }

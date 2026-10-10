@@ -468,15 +468,15 @@ tpm2-kira luks remove /dev/sda2 --keyslot 1   # one LUKS keyslot of tpm2-kira's,
 tpm2-kira attest unenrol --nvram 0  # only the phones of one slot (needs the signing key)
 ```
 
-A slot is one blob in the TPM: it holds the slot's TOTP key and, once a phone
-is enrolled, the phones too, under one signature. Two small companions belong
+A slot is one blob in the TPM: it holds the slot's TOTP key or, once a phone
+is enrolled, the phones instead, under one signature. Two small companions belong
 to it, because they are mechanisms of the TPM and not data: an index the TPM
 can lock for the rest of the boot, and a counter the TPM only lets count up.
 `nvram list` labels all three:
 
 | NV index (slot *n*) | What it holds | Written by |
 |---|---|---|
-| `0x01803010` + *n* | the slot's blob: TOTP key and phone enrolment | `seal`, `reseal`, `attest enrol`, `attest unenrol` |
+| `0x01803010` + *n* | the slot's blob: TOTP key or phone enrolment | `seal`, `reseal`, `attest enrol`, `attest unenrol` |
 | `0x01803810` + *n* | the generation index of the TOTP key's policy | `seal`, `reseal` |
 | `0x01803820` + *n* | the record counter of the phone enrolment | `attest enrol`, `attest unenrol` |
 
@@ -487,12 +487,16 @@ Because the phones live in the slot's blob,
 - `reseal` (after every kernel update) and sealing a slot again keep its
   phones. A slot sealed by *another* signing key does not take over the
   phones the old key vouched for;
-- `attest unenrol` rewrites the blob without the phones and therefore needs
-  the signing key; `nvram delete --nvram N` removes the slot whole and needs
-  none;
-- every phone makes the blob larger (about 200 bytes), and a TPM limits the
-  size of an NV index (2048 bytes on many). `attest enrol` checks before it
-  starts whether another phone still fits.
+- the first phone retires the slot's TOTP code: the boot screen then shows
+  "mobile attestation locked - please connect" for the slot until the phone
+  is in. Remove the slot's entry from your authenticator; slot 1, the
+  fallback, keeps its code for a boot without the phone;
+- `attest unenrol` rewrites the blob without the phones and gives the slot a
+  new TOTP key (its QR code is shown), and therefore needs the signing key;
+  `nvram delete --nvram N` removes the slot whole and needs none;
+- every further phone makes the blob larger (about 170 bytes), and a TPM
+  limits the size of an NV index (2048 bytes on many). Whether a phone fits
+  is checked for the blob as it would be written.
 
 `nvram delete` without `--nvram` removes every slot and what belongs to no
 slot any more: a companion index whose slot is gone. What it never touches
@@ -531,7 +535,11 @@ the machine's screen must show (see *The measure point*) and whether the
 machine's TPM released its *boot key* for this boot state. Nothing is signed
 until you have compared the code and pressed the button. After a kernel update the
 machine is not silent as with the OTP: it attests its new state and you approve
-the change on the phone. The OTP path stays and remains the fallback.
+the change on the phone. The slot the phone attests has no TOTP code while a
+phone is enrolled; the fallback slot keeps its code for a boot without the
+phone. The machine does not store or show the phone's name, and the phone
+gives every machine an identity of its own: one phone attests any number of
+machines, none of which can tell that the others share it.
 
 ```bash
 # Once, on the booted system (needs the signing key and a Bluetooth adapter):

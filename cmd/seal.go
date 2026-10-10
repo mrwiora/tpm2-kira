@@ -108,29 +108,12 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 		return fmt.Errorf("cannot seal: %w", err)
 	}
 
-	alg, err := ChooseTOTPAlgorithm(tpmDev)
-	if err != nil {
-		return fmt.Errorf("cannot seal: %w", err)
-	}
-	if alg != tpm2.TPMAlgSHA1 {
-		fmt.Println("NOTE: this TPM has no SHA-1, so the TOTP key uses HMAC-SHA256 instead of the")
-		fmt.Println("  usual HMAC-SHA1. The QR code says so (algorithm=SHA256), but some")
-		fmt.Println("  authenticator apps ignore that and then show codes that never match.")
-		fmt.Println("  Check that your app's first code matches 'tpm2-kira reveal' before you rely on it.")
-		fmt.Println()
-	}
-
-	key := make([]byte, totpKeySize(alg))
-	if _, err := rand.Read(key); err != nil {
-		return fmt.Errorf("failed to generate the TOTP key: %w", err)
-	}
-	defer clear(key)
-
 	// Sealing a slot again replaces its TOTP key, not its phones: their
 	// enrolment lives in the same blob and is carried over - if this
 	// signing key wrote it. Somebody else's entries are not signed anew.
 	// The boot key in it is bound to the slot's policy by the policy
-	// reference, so the new TOTP key takes that over too.
+	// reference, which is kept. A slot with phones gets no TOTP key: the
+	// phones check its boots (SealedBlobPayload).
 	var kept *Attestation
 	var policyRef []byte
 	if oldRaw, old, err := readSlot(tpmDev, nvramIndex); err == nil && old.Payload.Attestation != nil {
@@ -144,50 +127,57 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 		}
 	}
 
-	blob, err := newKeyObject(tpmDev, key, alg, pubKey, policyRef)
+	blob, err := newSlot(tpmDev, pubKey, policyRef)
 	if err != nil {
 		return err
 	}
 	blob.Payload.Attestation = kept
+	var key []byte
+	var alg tpm2.TPMAlgID
+	if !blob.PhoneAttested() {
+		if key, alg, err = newTOTPSecret(tpmDev); err != nil {
+			return fmt.Errorf("cannot seal: %w", err)
+		}
+		defer clear(key)
+		if alg != tpm2.TPMAlgSHA1 {
+			fmt.Println("NOTE: this TPM has no SHA-1, so the TOTP key uses HMAC-SHA256 instead of the")
+			fmt.Println("  usual HMAC-SHA1. The QR code says so (algorithm=SHA256), but some")
+			fmt.Println("  authenticator apps ignore that and then show codes that never match.")
+			fmt.Println("  Check that your app's first code matches 'tpm2-kira reveal' before you rely on it.")
+			fmt.Println()
+		}
+		if err := addTOTPKey(tpmDev, blob, key, alg); err != nil {
+			return err
+		}
+	}
 
 	if err := approveAndWrite(tpmDev, nvramIndex, blob, specs, hashAlgo, verifyUKI, signer, debug); err != nil {
 		return err
 	}
-
-	// Display TOTP information
-	totpSecret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(key)
-	fmt.Println()
-	fmt.Println("=== TOTP Secret Generated ===")
-	fmt.Println("The key is now inside the TPM, which computes every code; it is shown here")
-	fmt.Println("once, for your authenticator, and cannot be read back later.")
-	fmt.Printf("Secret: %s (HMAC-%s)\n", totpSecret, totpAlgorithmName(alg))
-	fmt.Println()
-	fmt.Println("Scan QR Code with authenticator app:")
-	fmt.Println()
-	displayTOTPQRCode(totpSecret, nvramIndex, PCRSpecsToString(specs), alg)
-
-	fmt.Println()
-	fmt.Println("To generate TOTP codes:")
-	fmt.Printf("   tpm2-kira reveal --nvram 0x%08X\n", nvramIndex)
-
+	if key == nil {
+		fmt.Println()
+		fmt.Printf("Slot %d is attested by its phone(s): it has no TOTP code while a phone is enrolled.\n", SlotNumber(nvramIndex))
+		fmt.Println("The new PCR values are approved for the phone's check at boot.")
+		return nil
+	}
+	showTOTPSecret(key, alg, nvramIndex, PCRSpecsToString(specs))
 	return nil
 }
 
-// newKeyObject creates the TOTP key object for key and returns a blob with
-// the object and its policy parameters, not yet approved for any PCR state.
+// newSlot returns a blob with the slot's policy parameters, not yet
+// approved for any PCR state and without a TOTP key (addTOTPKey).
 //
-// The object's policy is PolicyAuthorize by pubKey, qualified by policyRef:
-// whatever pubKey approves for this policyRef can use the key. A fresh one
-// is made unless the slot's existing one is passed in, which keeps the
-// slot's other keys (the boot key) under the same approvals.
-func newKeyObject(tpmDev transport.TPM, key []byte, alg tpm2.TPMAlgID, pubKey crypto.PublicKey, policyRef []byte) (*SealedBlob, error) {
-	// Loading the key checks that this TPM can verify its signatures, and
-	// yields the Name the TPM will see in PolicyAuthorize.
+// Every key of the slot is created under PolicyAuthorize by pubKey,
+// qualified by policyRef: whatever pubKey approves for this policyRef can
+// use them. A fresh policyRef is made unless the slot's existing one is
+// passed in, which keeps the slot's other keys (the boot key, the release
+// key) under the same approvals.
+func newSlot(tpmDev transport.TPM, pubKey crypto.PublicKey, policyRef []byte) (*SealedBlob, error) {
+	// Loading the key checks that this TPM can verify its signatures.
 	loadRsp, err := LoadExternalPublicKey(tpmDev, pubKey)
 	if err != nil {
 		return nil, fmt.Errorf("signing key incompatible with this TPM: %w", err)
 	}
-	keyName := loadRsp.Name.Buffer
 	FlushHandle(tpmDev, loadRsp.ObjectHandle)
 
 	signingPublic, _, err := PublicKeyToTPM2BPublic(pubKey)
@@ -199,27 +189,62 @@ func newKeyObject(tpmDev transport.TPM, key []byte, alg tpm2.TPMAlgID, pubKey cr
 			return nil, err
 		}
 	}
-
-	primary, err := CreatePrimaryKey(tpmDev)
-	if err != nil {
-		return nil, err
-	}
-	defer FlushHandle(tpmDev, primary.ObjectHandle)
-	obj, err := CreateTOTPKey(tpmDev, primary, key, alg, policyAuthorizeDigest(keyName, policyRef))
-	if err != nil {
-		return nil, err
-	}
-
 	return &SealedBlob{
 		Version: CurrentBlobVersion,
-		Payload: SealedBlobPayload{
-			Public:        obj.Public,
-			Private:       obj.Private,
-			TOTPAlgorithm: alg,
-			PolicyRef:     policyRef,
-			SigningPublic: signingPublic.Bytes(),
-		},
+		Payload: SealedBlobPayload{PolicyRef: policyRef, SigningPublic: signingPublic.Bytes()},
 	}, nil
+}
+
+// addTOTPKey creates the TOTP key object for key under the slot's policy
+// and puts it into blob.
+func addTOTPKey(tpmDev transport.TPM, blob *SealedBlob, key []byte, alg tpm2.TPMAlgID) error {
+	policy, err := blob.SlotPolicy()
+	if err != nil {
+		return err
+	}
+	primary, err := CreatePrimaryKey(tpmDev)
+	if err != nil {
+		return err
+	}
+	defer FlushHandle(tpmDev, primary.ObjectHandle)
+	obj, err := CreateTOTPKey(tpmDev, primary, key, alg, policy)
+	if err != nil {
+		return err
+	}
+	blob.Payload.Public, blob.Payload.Private, blob.Payload.TOTPAlgorithm = obj.Public, obj.Private, alg
+	return nil
+}
+
+// newTOTPSecret makes a TOTP key for this TPM: its HMAC algorithm (SHA-1,
+// or SHA-256 on a TPM without it) and random bytes of the matching size.
+func newTOTPSecret(tpmDev transport.TPM) ([]byte, tpm2.TPMAlgID, error) {
+	alg, err := ChooseTOTPAlgorithm(tpmDev)
+	if err != nil {
+		return nil, 0, err
+	}
+	key := make([]byte, totpKeySize(alg))
+	if _, err := rand.Read(key); err != nil {
+		return nil, 0, fmt.Errorf("failed to generate the TOTP key: %w", err)
+	}
+	return key, alg, nil
+}
+
+// showTOTPSecret prints a new TOTP key once, with its QR code for the
+// authenticator.
+func showTOTPSecret(key []byte, alg tpm2.TPMAlgID, nvramIndex uint32, pcrs string) {
+	totpSecret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(key)
+	fmt.Println()
+	fmt.Println("=== TOTP Secret Generated ===")
+	fmt.Println("The key is now inside the TPM, which computes every code; it is shown here")
+	fmt.Println("once, for your authenticator, and cannot be read back later.")
+	fmt.Printf("Secret: %s (HMAC-%s)\n", totpSecret, totpAlgorithmName(alg))
+	fmt.Println()
+	fmt.Println("Scan QR Code with authenticator app:")
+	fmt.Println()
+	displayTOTPQRCode(totpSecret, nvramIndex, pcrs, alg)
+	fmt.Println()
+	fmt.Println("To generate TOTP codes:")
+	fmt.Printf("   tpm2-kira reveal --nvram 0x%08X\n", nvramIndex)
 }
 
 // ErrGenerationRaised marks a failure after the slot's generation was raised:

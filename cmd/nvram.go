@@ -801,8 +801,11 @@ func NVRAMStatus(tpmPath string, nvramIndex uint32, debug bool) error {
 				fmt.Printf("Contains Sealed Data:\n")
 				fmt.Printf("  PCR Indices: %v\n", blob.GetPCRIndices())
 				fmt.Printf("  Number of PCRs: %d\n", len(blob.Payload.PCRDigests))
-				fmt.Printf("  Public Blob Size: %d bytes\n", len(blob.Payload.Public))
-				fmt.Printf("  Private Blob Size: %d bytes\n", len(blob.Payload.Private))
+				if blob.HasTOTPKey() {
+					fmt.Printf("  TOTP key: public %d bytes, private %d bytes\n", len(blob.Payload.Public), len(blob.Payload.Private))
+				} else {
+					fmt.Printf("  TOTP key: none (attested by its phones)\n")
+				}
 				break
 			}
 			fmt.Printf("Data Format: Unknown (not a sealed blob)\n")

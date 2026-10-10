@@ -56,8 +56,9 @@ func signedTestBlob(t *testing.T, key *ecdsa.PrivateKey) ([]byte, *SealedBlob) {
 	t.Helper()
 	sb := &SealedBlob{Version: CurrentBlobVersion, Payload: SealedBlobPayload{
 		Public: []byte{1}, Private: []byte{2},
-		PCRDigests: []PCRDigestPair{{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}}},
-		PolicyRef:  make([]byte, 32),
+		TOTPAlgorithm: tpm2.TPMAlgSHA1,
+		PCRDigests:    []PCRDigestPair{{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}}},
+		PolicyRef:     make([]byte, 32),
 	}}
 	unsigned, err := sb.Marshal()
 	if err != nil {

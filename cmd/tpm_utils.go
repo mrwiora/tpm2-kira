@@ -137,6 +137,9 @@ func IsTPMPolicyFailure(err error) bool {
 		strings.Contains(errStr, "session 1): a policy check failed")
 }
 
+// ErrPhoneSlot: the slot is attested by its phones and has no TOTP code.
+var ErrPhoneSlot = errors.New("the slot is attested by its phone and has no TOTP code")
+
 // SlotCode reads the blob at nvramIndex and computes its current TOTP code.
 //
 // Before asking the TPM it compares the blob with the live state, purely to
@@ -153,6 +156,9 @@ func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) 
 	sealedBlob, err := UnmarshalSealedBlob(sealedData)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
+	}
+	if !sealedBlob.HasTOTPKey() {
+		return "", sealedBlob, ErrPhoneSlot
 	}
 
 	gen, err := ReadGeneration(tpmDev, GenerationIndex(nvramIndex))

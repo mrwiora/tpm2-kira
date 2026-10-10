@@ -356,8 +356,9 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					Public:  []byte("public-data-test"),
-					Private: []byte("private-data-test"),
+					Public:        []byte("public-data-test"),
+					Private:       []byte("private-data-test"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest0")}},
 						{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest2")}},
@@ -371,8 +372,9 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					Public:  []byte("public-predict"),
-					Private: []byte("private-predict"),
+					Public:        []byte("public-predict"),
+					Private:       []byte("private-predict"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -389,8 +391,9 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					Public:  []byte("public"),
-					Private: []byte("private"),
+					Public:        []byte("public"),
+					Private:       []byte("private"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest7")}},
 					},
@@ -402,8 +405,9 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					Public:  []byte("test-public-key-data"),
-					Private: []byte("test-private-key-data"),
+					Public:        []byte("test-public-key-data"),
+					Private:       []byte("test-private-key-data"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 1, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -420,9 +424,10 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					Public:     []byte("pub"),
-					Private:    []byte("priv"),
-					PCRDigests: []PCRDigestPair{},
+					Public:        []byte("pub"),
+					Private:       []byte("priv"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
+					PCRDigests:    []PCRDigestPair{},
 				},
 			},
 		},
@@ -431,8 +436,9 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					Public:  []byte("public-data"),
-					Private: []byte("private-data"),
+					Public:        []byte("public-data"),
+					Private:       []byte("private-data"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 2, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -448,8 +454,9 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					Public:  []byte("public-mixed"),
-					Private: []byte("private-mixed"),
+					Public:        []byte("public-mixed"),
+					Private:       []byte("private-mixed"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -466,8 +473,9 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					Public:  []byte("pub"),
-					Private: []byte("priv"),
+					Public:        []byte("pub"),
+					Private:       []byte("priv"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
@@ -480,8 +488,9 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					Public:  []byte("pub-kp"),
-					Private: []byte("priv-kp"),
+					Public:        []byte("pub-kp"),
+					Private:       []byte("priv-kp"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
@@ -729,8 +738,9 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 				sb := &SealedBlob{
 					Version: CurrentBlobVersion,
 					Payload: SealedBlobPayload{
-						Public:  []byte{1, 2, 3},
-						Private: []byte{4, 5, 6},
+						Public:        []byte{1, 2, 3},
+						Private:       []byte{4, 5, 6},
+						TOTPAlgorithm: tpm2.TPMAlgSHA1,
 						PCRDigests: []PCRDigestPair{
 							{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						},
@@ -1392,8 +1402,9 @@ func TestSealedBlobMarshalJSONWithMeasurePoint(t *testing.T) {
 	blob := &SealedBlob{
 		Version: 6,
 		Payload: SealedBlobPayload{
-			Public:  []byte{0x01},
-			Private: []byte{0x02},
+			Public:        []byte{0x01},
+			Private:       []byte{0x02},
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA}}},
 				{Index: 11, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xBB}}},
@@ -1559,8 +1570,9 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 	original := &SealedBlob{
 		Version: 6,
 		Payload: SealedBlobPayload{
-			Public:  make([]byte, 100), // Typical public key size
-			Private: make([]byte, 150), // Typical private key size
+			Public:        make([]byte, 100), // Typical public key size
+			Private:       make([]byte, 150), // Typical private key size
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -1640,8 +1652,9 @@ func TestSealedBlobRoundTripNoEventlog(t *testing.T) {
 	original := &SealedBlob{
 		Version: 6,
 		Payload: SealedBlobPayload{
-			Public:  []byte("pub-data"),
-			Private: []byte("priv-data"),
+			Public:        []byte("pub-data"),
+			Private:       []byte("priv-data"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -2435,8 +2448,9 @@ func TestSignBlobPayload(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			Public:  []byte("public-data"),
-			Private: []byte("private-data"),
+			Public:        []byte("public-data"),
+			Private:       []byte("private-data"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -2483,8 +2497,9 @@ func TestVerifyBlobSignature(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			Public:  []byte("public-data"),
-			Private: []byte("private-data"),
+			Public:        []byte("public-data"),
+			Private:       []byte("private-data"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
@@ -2547,8 +2562,9 @@ func TestVerifyBlobSignatureRSA(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			Public:  []byte("rsa-public-data"),
-			Private: []byte("rsa-private-data"),
+			Public:        []byte("rsa-public-data"),
+			Private:       []byte("rsa-private-data"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
@@ -2585,8 +2601,9 @@ func TestUnsignedBlobRejected(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			Public:  []byte("pub"),
-			Private: []byte("priv"),
+			Public:        []byte("pub"),
+			Private:       []byte("priv"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
@@ -2614,8 +2631,9 @@ func TestEmptySignatureRejected(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			Public:  []byte("pub"),
-			Private: []byte("priv"),
+			Public:        []byte("pub"),
+			Private:       []byte("priv"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
@@ -2712,8 +2730,9 @@ func TestSignBlobPayloadUnsupportedKeyType(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			Public:  []byte("pub"),
-			Private: []byte("priv"),
+			Public:        []byte("pub"),
+			Private:       []byte("priv"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
@@ -2760,8 +2779,9 @@ func TestSignedBlobVersionInSignedRegion(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			Public:  []byte("pub"),
-			Private: []byte("priv"),
+			Public:        []byte("pub"),
+			Private:       []byte("priv"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
@@ -2789,8 +2809,9 @@ func TestSignedBlobVersionInSignedRegion(t *testing.T) {
 
 func TestMarshalPayloadUnmarshalPayloadRoundTrip(t *testing.T) {
 	original := &SealedBlobPayload{
-		Public:  []byte("test-public-key-blob"),
-		Private: []byte("test-private-key-blob"),
+		Public:        []byte("test-public-key-blob"),
+		Private:       []byte("test-private-key-blob"),
+		TOTPAlgorithm: tpm2.TPMAlgSHA1,
 		PCRDigests: []PCRDigestPair{
 			{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -2845,8 +2866,9 @@ func TestSignBlobPayloadSignedRegionCoverage(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			Public:  []byte("pub"),
-			Private: []byte("priv"),
+			Public:        []byte("pub"),
+			Private:       []byte("priv"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},

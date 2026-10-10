@@ -58,7 +58,12 @@ func TestReadLuks2TokensAndRecipe(t *testing.T) {
 	if recipeOfTokens(fresh) != LuksModePasswordSalt {
 		t.Fatalf("an obsolete token was acted on: %q", recipeOfTokens(fresh))
 	}
-	if recipeOfTokens(toks[:1]) != LuksModePasswordSalt && recipeOfTokens(toks[1:]) != LuksModePasswordSalt {
+	// The tokens come in no fixed order (a JSON object): find the salt's.
+	salt := false
+	for _, tk := range toks {
+		salt = salt || (!tk.Obsolete && recipeOfTokens([]LuksToken{tk}) == LuksModePasswordSalt)
+	}
+	if !salt {
 		t.Fatal("the typed salt's token was not read")
 	}
 

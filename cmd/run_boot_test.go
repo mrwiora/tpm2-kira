@@ -259,7 +259,7 @@ func TestPhoneVerdictReleasesTheBoot(t *testing.T) {
 		case e < 12*time.Second:
 			return GateStatus{Slot: 0, State: GateSession}, true
 		}
-		return GateStatus{Slot: 0, State: GateAttested, Phone: "Pixel"}, true
+		return GateStatus{Slot: 0, State: GateAttested}, true
 	})
 	runDisplay(t, b)
 	if got := f.clock.Sub(start); got < 12*time.Second || got > 14*time.Second {
@@ -290,7 +290,7 @@ func TestPhoneRejectionDoesNotReleaseEarly(t *testing.T) {
 			if e < 5*time.Second {
 				return GateStatus{Slot: 0, State: GateWaiting}, true
 			}
-			return GateStatus{Slot: 0, State: state, Phone: "Pixel"}, true
+			return GateStatus{Slot: 0, State: state}, true
 		})
 		runDisplay(t, b)
 		if got := f.clock.Sub(start); got != 90*time.Second {
@@ -308,7 +308,7 @@ func TestPhoneSessionExtendsTheHold(t *testing.T) {
 			case e < 85*time.Second:
 				return GateStatus{Slot: 0, State: GateWaiting}, true
 			case verdictAt > 0 && e >= verdictAt:
-				return GateStatus{Slot: 0, State: GateAttested, Phone: "Pixel"}, true
+				return GateStatus{Slot: 0, State: GateAttested}, true
 			}
 			return GateStatus{Slot: 0, State: GateSession}, true
 		}
@@ -482,25 +482,37 @@ func TestPhoneCodeShownAtOnce(t *testing.T) {
 		case e < 9*time.Second:
 			return GateStatus{Slot: 0, State: GateSession, Code: "K7QM-2XHD"}, true
 		}
-		return GateStatus{Slot: 0, State: GateAttested, Phone: "Pixel"}, true
+		return GateStatus{Slot: 0, State: GateAttested}, true
 	})
 	runDisplay(t, b)
 	// The code's arrival prints its own line; the frames are the windows'.
 	if len(f.shown) < 1 {
 		t.Fatalf("%d frames", len(f.shown))
 	}
-	codes := phoneCodes(map[int]string{0: "123456"}, GateStatus{Slot: 0, State: GateSession, Enrolled: "Pixel", Code: "K7QM-2XHD"}, true)
-	if codes[0] != "Attest via BLE (Pixel) - 123456  phone code K7QM-2XHD" {
-		t.Fatalf("slot line with a phone in: %q", codes[0])
-	}
-	if codes := phoneCodes(map[int]string{0: "123456"}, GateStatus{Slot: 0, State: GateWaiting, Enrolled: "Pixel"}, true); codes[0] != "Attest via BLE (Pixel) - 123456" {
-		t.Fatalf("slot line while the phone is asked: %q", codes[0])
-	}
-	if codes := phoneCodes(map[int]string{0: "123456"}, GateStatus{Slot: 0, State: GateAttested, Phone: "Pixel"}, true); codes[0] != "123456" {
-		t.Fatalf("slot line after the verdict: %q", codes[0])
-	}
-	if codes := phoneCodes(map[int]string{0: "123456"}, GateStatus{}, false); codes[0] != "123456" {
-		t.Fatalf("slot line without a phone: %q", codes[0])
+}
+
+// A phone slot has no TOTP code: its line says how far the phone has got,
+// and never which phone it is. A TOTP slot next to it keeps its code.
+func TestPhoneSlotLines(t *testing.T) {
+	slots := []NVRAMSlot{{SlotNumber: 0, Phone: true}, {SlotNumber: 1, Code: "654321"}}
+	codes := map[int]string{1: "654321"}
+	for _, c := range []struct {
+		st   GateStatus
+		ok   bool
+		want string
+	}{
+		{GateStatus{}, false, "mobile attestation locked - please connect"},
+		{GateStatus{Slot: 0, State: GateWaiting}, true, "mobile attestation locked - please connect"},
+		{GateStatus{Slot: 0, State: GateSession}, true, "mobile attestation - phone connected, answer there"},
+		{GateStatus{Slot: 0, State: GateSession, Code: "K7QM-2XHD"}, true, "mobile attestation - phone code K7QM-2XHD (the phone must show the same)"},
+		{GateStatus{Slot: 0, State: GateAttested}, true, "\033[0;32mmobile attestation passed\033[0m"},
+		{GateStatus{Slot: 0, State: GateRejected}, true, "\033[0;31mmobile attestation FAILED\033[0m"},
+		{GateStatus{Slot: 3, State: GateAttested}, true, "mobile attestation locked - please connect"},
+	} {
+		got := phoneCodes(codes, slots, c.st, c.ok)
+		if got[0] != c.want || got[1] != "654321" {
+			t.Errorf("%+v: %q, %q", c.st, got[0], got[1])
+		}
 	}
 }
 

@@ -49,8 +49,9 @@ TPM after enrolment.
 ### 3.1 TPM NVRAM (the "blob")
 
 Each slot's NV index (default `0x01803010`; slot *n* is `0x01803010` + *n*)
-stores one serialised `SealedBlob` (format version 13, §10). It always holds
-the slot's TOTP key. Remote attestation is an optional part of the same blob,
+stores one serialised `SealedBlob` (format version 13, §10). It holds the
+slot's TOTP key or its phones, never both (*TOTP key or phones*, below).
+Remote attestation is an optional part of the same blob,
 and within that part the way a verifier reaches the machine is a typed
 *method*: today phones over Bluetooth LE; a verification server over the
 network would be another method next to it. The blob contains:
@@ -58,12 +59,12 @@ network would be another method next to it. The blob contains:
 | Field               | Content                                                         | Sensitive? |
 |---------------------|-----------------------------------------------------------------|------------|
 | `Version`           | Blob format version (13)                                        | No         |
-| `Public`            | TPMT_PUBLIC of the TOTP key object                              | No         |
-| `Private`           | TPM2B_PRIVATE of the TOTP key object (TPM-wrapped)              | **Yes**¹   |
+| `Public`            | TPMT_PUBLIC of the TOTP key object; empty while phones are enrolled | No     |
+| `Private`           | TPM2B_PRIVATE of the TOTP key object (TPM-wrapped); empty with phones | **Yes**¹ |
 | `PCRDigests`        | Per-PCR index, source (register/eventlog/uki) and digest        | No         |
-| `TOTPAlgorithm`     | HMAC hash of the key: SHA-1, or SHA-256 on a TPM without SHA-1  | No         |
+| `TOTPAlgorithm`     | HMAC hash of the key: SHA-1, or SHA-256 on a TPM without SHA-1; 0 with phones | No |
 | `Generation`        | The generation the approval requires                            | No         |
-| `PolicyRef`         | Random per key object; qualifies its approvals                  | No         |
+| `PolicyRef`         | Random per slot; qualifies its approvals for all its keys       | No         |
 | `SigningPublic`     | TPMT_PUBLIC of the signing key                                  | No²        |
 | `ApprovalSignature` | Signing key's signature over `H(approvedPolicy ‖ PolicyRef)`    | No         |
 | `MeasurePointApplied` | Whether the eventlog PCRs' values include the measure-point extends³ | No |
@@ -94,7 +95,45 @@ Method 1, phones over Bluetooth LE (`Phone`):
 |-----------------|----------------------------------------------------------------------|------------|
 | `NoisePrivate`  | The machine's static key for the encrypted channel to the phones     | **Yes**⁵   |
 | `AdvKey`        | Key that lets an enrolled phone recognise the machine's advertising  | **Yes**⁵   |
-| `Verifiers`     | Up to 8 phones: id, name, anchor public key (signs the phone's verdicts), channel public key, policy id | No |
+| `Verifiers`     | Up to 8 phones: id, anchor public key (signs the phone's verdicts), channel public key, policy id; no name | No |
+
+**TOTP key or phones.** A slot is checked one way at a time. Without a phone
+its TOTP key shows a code at boot, compared with the authenticator. The first
+phone enrolled for the slot retires the key: the phone's check (the quote,
+the boot key's code, the person's confirmation on the phone, §13) covers what
+the code proves and more, and a second, weaker path to the same verdict
+would only be one more thing to keep, lose or leak. While a phone is enrolled
+the boot screen shows the slot as "mobile attestation locked - please
+connect" until the phone is in, then the phone's code, then the verdict.
+When the last phone leaves, the slot gets a new TOTP key at once, made under
+the slot's policy, so the approval in force covers it without a reseal; its
+QR code is shown then. The slot's policy (`SigningPublic` and `PolicyRef`)
+stays through all of it: the boot key and the release key are made under
+it, not under the TOTP key, and keep working. The fallback, slot 1, keeps
+its code: it is the check for a boot without the phone (a flat battery, a
+lost phone, no Bluetooth in the initrd).
+
+**What the machine keeps of a phone, and why no more.** The blob is readable
+by anyone who can talk to the TPM (§9), so it holds only what the machine
+needs to find and trust its phone:
+
+- the phone's channel key, by which the machine recognises it in the
+  encrypted handshake, and the id it signs its receipts with;
+- the anchor key, which verifies the phone's verdicts;
+- nothing that names the phone. The phone sends no name (it used to send
+  its model), the machine numbers its phones ("phone 1", "phone 2") and
+  says at boot only that "your phone" attested. The machine finds the phone
+  by itself, in the handshake, so nobody needs to be told which phone to
+  pick up; the person knows their phone.
+- no Bluetooth address: the phone connects to the machine, which
+  advertises with a new random address at every boot, and the phone's
+  address is never stored.
+
+And none of it links a phone across machines: the phone makes a new
+channel key, id and anchor key for every machine it enrols with
+(PROTOCOL-BLE.md §11.1, §11.2), so two machines comparing what they keep
+find nothing in common. One phone still attests any number of machines,
+each through its own record.
 
 ¹ The `Private` field is encrypted by the TPM's storage hierarchy. It cannot be
 decrypted outside the TPM that created it, and the key in it can only be
@@ -997,9 +1036,9 @@ Offset  Field                   Type        Notes
 ─────────────────────────────────────────────────────────────
 0       Version                 uint32      Must be 13
 4       Payload length          uint32      Signed region length
-8       Public length           uint32      ≤ 2MB
+8       Public length           uint32      ≤ 2MB; 0 with phones (§3.1)
 ?       Public                  []byte      TPMT_PUBLIC of the TOTP key object
-?       Private length          uint32      ≤ 2MB
+?       Private length          uint32      ≤ 2MB; 0 with phones
 ?       Private                 []byte      TPM2B_PRIVATE
 ?       PCR digest count        uint32      ≤ 100
         For each PCR digest:
@@ -1010,7 +1049,7 @@ Offset  Field                   Type        Notes
           Path                  string      Only if source=uki (UKI location)
           Digest length         uint16      ≤ 1024
           Digest                []byte      Value at the MEASURE POINT
-?       TOTPAlgorithm           uint16      TPM_ALG_SHA1 or TPM_ALG_SHA256
+?       TOTPAlgorithm           uint16      TPM_ALG_SHA1 or TPM_ALG_SHA256; 0 with phones
 ?       Generation              uint64      Generation the approval requires
 ?       PolicyRef length        uint16      ≤ 64
 ?       PolicyRef               []byte
@@ -1056,8 +1095,6 @@ Offset  Field                   Type        Notes
             For each phone:
               ID length         uint16      ≤ 64
               ID                string
-              Name length       uint16      ≤ 64
-              Name              string
               AnchorPub length  uint16      ≤ 256
               AnchorPub         []byte      PKIX DER, ECDSA P-256: signs verdicts
               NoisePub          [32]byte    X25519 static key of the phone
@@ -1099,9 +1136,10 @@ Measured on swtpm with four sealed PCRs:
 | RSA 2048    | ~1250 bytes | 280 + 262 + 262 |
 | RSA 4096    | ~2020 bytes (computed; swtpm cannot load the key) | 536 + 518 + 518 |
 
-The attestation part adds about 760 bytes with one phone and about 200 for
-each further phone (their names count). With an RSA 4096 key a slot has room
-for the TOTP key alone on a 2048-byte TPM.
+The attestation part adds about 720 bytes with one phone and about 170 for
+each further phone, and the first phone retires the TOTP key, about 230
+bytes (*TOTP key or phones*, §3.1). With an RSA 4096 key a slot without
+phones still fits a 2048-byte TPM; with a phone it does not.
 
 There is no fixed limit on phones beyond the format's eight: whether a blob
 fits is decided for the blob at hand, against the TPM it is written to.

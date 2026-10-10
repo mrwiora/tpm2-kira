@@ -72,7 +72,7 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 
 	// The coordinator does the same at boot, from a Release, and keeps
 	// only the salt.
-	s.blob.Phone.Verifiers = []attest.EnrolledVerifier{{ID: "my-phone", Name: "Pixel", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
+	s.blob.Phone.Verifiers = []attest.EnrolledVerifier{{ID: "my-phone", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
 	if err := writeAttestBlob(tpm, slot, s.blob, signer); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestFactorStatusAndUnenrol(t *testing.T) {
 	s := newSWTPMSetupAt(t, sock, "box")
 	tpm := s.tpm
 	s.blob.EKAlg = uint16(tpm2.TPMAlgECC)
-	s.blob.Phone.Verifiers = []attest.EnrolledVerifier{{ID: "my-phone", Name: "Pixel", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
+	s.blob.Phone.Verifiers = []attest.EnrolledVerifier{{ID: "my-phone", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
 	if err := writeAttestBlob(tpm, slot, s.blob, signer); err != nil {
 		t.Fatal(err)
 	}

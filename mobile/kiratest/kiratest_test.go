@@ -90,12 +90,11 @@ func TestDemoMachineAllStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	noise, _ := kiracore.GenerateNoiseKey()
-	cfg := `{"verifier_id":"demo","verifier_name":"Demo"}`
+	cfg := `{}`
 	var key *ecdsa.PrivateKey
 
 	d.StartEnrolment(185)
-	s, _ := kiracore.NewEnrolSession(cfg, noise)
+	s, _ := kiracore.NewEnrolSession(cfg)
 	record, _ := drive(t, d, s, &key, 0)
 	if r := d.Outcome(5000); r != "enrolled" {
 		t.Fatalf("enrolment: %s", r)
@@ -117,7 +116,7 @@ func TestDemoMachineAllStates(t *testing.T) {
 	} {
 		c.setup()
 		d.StartAttestation(185)
-		s, err := kiracore.NewAttestSession(cfg, noise, record)
+		s, err := kiracore.NewAttestSession(cfg, record)
 		if err != nil {
 			t.Fatal(err)
 		}

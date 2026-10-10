@@ -153,7 +153,7 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	workerNoise, _ := attest.NoiseKeypairFromPrivate(ident.NoisePrivate)
 	workerID := &attest.AttestIdentity{DeviceID: ident.DeviceID, AKName: ident.AKName, NoiseStatic: workerNoise, AppVersion: "test"}
 	for _, v := range ident.Verifiers {
-		workerID.Verifiers = append(workerID.Verifiers, attest.EnrolledVerifier{ID: v.ID, Name: v.Name, NoisePub: v.NoisePub})
+		workerID.Verifiers = append(workerID.Verifiers, attest.EnrolledVerifier{ID: v.ID, NoisePub: v.NoisePub})
 	}
 	viaCoordinator := func() *attest.AttestResult {
 		a, b := attesttest.NewPipe()
@@ -324,13 +324,14 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	onePhone, _ := ReadFromNVRAM(s.tpm, idx)
-	// One blob: the phone went in next to the TOTP key, which is as it was.
+	// One blob: the phone went in and retired the TOTP key; the approval
+	// is as it was.
 	if before, _ := UnmarshalSealedBlob(sealedOnly); before.Payload.Attestation != nil {
 		t.Fatalf("the sealed slot already had an enrolment: %+v", before)
 	}
 	if after, err := UnmarshalSealedBlob(onePhone); err != nil || after.Payload.Attestation == nil ||
-		!bytes.Equal(after.Payload.Public, testSlotBlob().Payload.Public) || after.Payload.Generation != testSlotBlob().Payload.Generation {
-		t.Fatalf("enrolling changed the slot's TOTP part or did not store the phone: %+v %v", after, err)
+		after.HasTOTPKey() || after.Payload.Generation != testSlotBlob().Payload.Generation {
+		t.Fatalf("enrolling kept the slot's TOTP key or did not store the phone: %+v %v", after, err)
 	}
 
 	// An image from before the key was put into it: served, not verified.
@@ -359,7 +360,7 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 	}
 	forged.Count, _ = readAttestCounter(s.tpm, counterIdx)
 	forgedSlot := testSlotBlob()
-	forgedSlot.Payload.Attestation = &forged
+	withPhones(forgedSlot, &forged)
 	plant(signSlot(t, forgedSlot, attacker))
 	refused("attacker's record")
 	if code, out := buildImage(); code != ExitTampered || !strings.Contains(out, "TAMPERED") {
@@ -432,9 +433,8 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	unenrolled, _ := ReadFromNVRAM(s.tpm, idx)
-	if a, err := UnmarshalSealedBlob(unenrolled); err != nil || a.Payload.Attestation != nil ||
-		!bytes.Equal(a.Payload.Public, testSlotBlob().Payload.Public) {
-		t.Fatalf("removing the phones did not give the sealed slot back: %+v %v", a, err)
+	if a, err := UnmarshalSealedBlob(unenrolled); err != nil || a.Payload.Attestation != nil || !a.HasTOTPKey() {
+		t.Fatalf("removing the phones did not give the slot a TOTP key back: %+v %v", a, err)
 	}
 	if verified, code := gate(); verified || code != ExitTampered {
 		t.Fatalf("a slot without phones was served (verified=%v, exit %d)", verified, code)
@@ -453,7 +453,7 @@ func TestCoordinatorAndWorker(t *testing.T) {
 	mine, attacker := testSigner(t), testSigner(t)
 	idx := uint32(NVRAMSlotStart + 3)
 	writeTestSlot(t, s.tpm, idx, mine)
-	s.blob.Phone.Verifiers = []attest.EnrolledVerifier{{ID: "my-phone", Name: "Pixel", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
+	s.blob.Phone.Verifiers = []attest.EnrolledVerifier{{ID: "my-phone", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
 	if err := writeAttestBlob(s.tpm, idx, s.blob, mine); err != nil {
 		t.Fatal(err)
 	}
@@ -534,7 +534,7 @@ func TestCoordinatorAndWorker(t *testing.T) {
 	forged.Phone.Verifiers = []attest.EnrolledVerifier{{ID: "attackers-phone", AnchorPub: []byte{9}, NoisePub: make([]byte, 32)}}
 	forged.Count, _ = readAttestCounter(svc.tpm, AttestCounterIndex(idx))
 	forgedSlot := testSlotBlob()
-	forgedSlot.Payload.Attestation = &forged
+	withPhones(forgedSlot, &forged)
 	svc.tpmMu.Lock()
 	err = WriteToNVRAM(svc.tpm, idx, signSlot(t, forgedSlot, attacker), attacker.Public(), attacker)
 	svc.tpmMu.Unlock()

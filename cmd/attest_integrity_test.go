@@ -16,6 +16,20 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 )
 
+// testSigningPublic is a well-formed signing key public area, so that the
+// slot's policy can be computed (a new TOTP key is made under it).
+var testSigningPublic = func() []byte {
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	pub, _, err := PublicKeyToTPM2BPublic(&k.PublicKey)
+	if err != nil {
+		panic(err)
+	}
+	return pub.Bytes()
+}()
+
 // testSlotBlob is a slot's blob with a stand-in TOTP key: everything the
 // format needs, nothing a TPM would accept.
 func testSlotBlob() *SealedBlob {
@@ -28,7 +42,7 @@ func testSlotBlob() *SealedBlob {
 				{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: bytes.Repeat([]byte{0xA7}, 32)}},
 			},
 			TOTPAlgorithm: tpm2.TPMAlgSHA1, Generation: 3,
-			PolicyRef: []byte("policy-ref"), SigningPublic: []byte{6}, ApprovalSignature: []byte{7},
+			PolicyRef: []byte("policy-ref"), SigningPublic: testSigningPublic, ApprovalSignature: []byte{7},
 		},
 	}
 }
@@ -44,6 +58,15 @@ func testAKPublic() ([]byte, []byte) {
 	return tpm2.Marshal(pub), name.Buffer
 }
 
+// withPhones gives sb the enrolment a, which retires its TOTP key: a slot
+// has one or phones (SealedBlobPayload).
+func withPhones(sb *SealedBlob, a *Attestation) {
+	sb.Payload.Attestation = a
+	if len(a.Phone.Verifiers) > 0 {
+		sb.Payload.Public, sb.Payload.Private, sb.Payload.TOTPAlgorithm = nil, nil, 0
+	}
+}
+
 func testEnrolment(name string) *Attestation {
 	akPub, akName := testAKPublic()
 	return &Attestation{
@@ -52,7 +75,7 @@ func testEnrolment(name string) *Attestation {
 		PCRAlg: attest.AlgSHA256, PCRSelection: []uint8{0, 7},
 		Phone: PhoneAttestation{
 			NoisePrivate: bytes.Repeat([]byte{0x11}, 32), AdvKey: bytes.Repeat([]byte{0x22}, 32),
-			Verifiers: []attest.EnrolledVerifier{{ID: "phone", Name: "Pixel", AnchorPub: []byte{4}, NoisePub: make([]byte, 32), PolicyID: "p"}},
+			Verifiers: []attest.EnrolledVerifier{{ID: "phone", AnchorPub: []byte{4}, NoisePub: make([]byte, 32), PolicyID: "p"}},
 		},
 	}
 }
@@ -74,7 +97,7 @@ func signSlot(t *testing.T, sb *SealedBlob, key crypto.Signer) []byte {
 func signedAttestBlob(t *testing.T, key *ecdsa.PrivateKey, name string) []byte {
 	t.Helper()
 	sb := testSlotBlob()
-	sb.Payload.Attestation = testEnrolment(name)
+	withPhones(sb, testEnrolment(name))
 	return signSlot(t, sb, key)
 }
 
@@ -116,7 +139,7 @@ func TestSlotBlobLayout(t *testing.T) {
 
 	// With attestation and the phone method.
 	sb := testSlotBlob()
-	sb.Payload.Attestation = testEnrolment("box")
+	withPhones(sb, testEnrolment("box"))
 	sb.Payload.Attestation.Count = 41
 	enrolled := signSlot(t, sb, key)
 	got, err = UnmarshalSealedBlob(enrolled)
@@ -129,27 +152,28 @@ func TestSlotBlobLayout(t *testing.T) {
 		a.PCRAlg != attest.AlgSHA256 || !bytes.Equal(a.PCRSelection, want.PCRSelection) {
 		t.Fatalf("attestation part did not survive: %+v", a)
 	}
-	if !a.Phone.Enabled() || len(a.Phone.Verifiers) != 1 || a.Phone.Verifiers[0].Name != "Pixel" || a.Phone.Verifiers[0].PolicyID != "p" ||
+	if !a.Phone.Enabled() || len(a.Phone.Verifiers) != 1 || a.Phone.Verifiers[0].ID != "phone" || a.Phone.Verifiers[0].PolicyID != "p" ||
 		!bytes.Equal(a.Phone.NoisePrivate, want.Phone.NoisePrivate) || !bytes.Equal(a.Phone.AdvKey, want.Phone.AdvKey) {
 		t.Fatalf("phone method did not survive: %+v", a.Phone)
 	}
-	// The TOTP half is untouched by it.
-	if !bytes.Equal(got.Payload.Public, sb.Payload.Public) || got.Payload.Generation != 3 || len(got.Payload.PCRDigests) != 2 ||
+	// The rest of the slot is untouched by it; its TOTP key is retired.
+	if got.HasTOTPKey() || got.Payload.Generation != 3 || len(got.Payload.PCRDigests) != 2 ||
 		string(got.Payload.PolicyRef) != "policy-ref" {
 		t.Fatalf("TOTP part changed: %+v", got.Payload)
 	}
-	// Removing the attestation gives the plain blob back, byte for byte.
+	// Removing the phones without bringing a TOTP key back leaves a slot
+	// that checks nothing: it does not marshal.
 	got.Payload.Attestation = nil
-	again, err := got.Marshal()
-	if err != nil || !bytes.Equal(again, plain[:8+payloadLen]) {
-		t.Fatalf("a slot whose attestation was removed differs from one that never had any (%v)", err)
+	if _, err := got.Marshal(); err == nil {
+		t.Fatal("a slot with neither a TOTP key nor phones was written")
 	}
 
 	// An attestation part without any method is valid data, and nobody is
-	// enrolled in it.
+	// enrolled in it: the slot keeps its TOTP key.
 	bare := testSlotBlob()
-	bare.Payload.Attestation = testEnrolment("box")
-	bare.Payload.Attestation.Phone = PhoneAttestation{}
+	noMethod := testEnrolment("box")
+	noMethod.Phone = PhoneAttestation{}
+	bare.Payload.Attestation = noMethod
 	got, err = UnmarshalSealedBlob(signSlot(t, bare, key))
 	if err != nil || got.Payload.Attestation == nil || got.Payload.Attestation.Phone.Enabled() {
 		t.Fatalf("attestation without methods: %+v %v", got, err)
@@ -170,12 +194,13 @@ func TestSlotBlobLayout(t *testing.T) {
 // What does not follow the layout is not read as something else.
 func TestSlotBlobRejectsMalformedAttestation(t *testing.T) {
 	sb := testSlotBlob()
+	withPhones(sb, testEnrolment("box"))
 	payload, err := sb.Payload.MarshalPayload()
 	if err != nil {
 		t.Fatal(err)
 	}
-	totp := payload[:len(payload)-1] // everything before the attestation flag
 	att, _ := testEnrolment("box").marshal()
+	totp := payload[:len(payload)-1-4-len(att)] // everything before the attestation flag
 	phone, _ := (&testEnrolment("box").Phone).marshal()
 	head := att[:len(att)-len(phone)-6] // up to, not including, the method count
 	method := func(kind byte, data []byte) []byte {
@@ -243,7 +268,7 @@ func TestAttestBlobSignature(t *testing.T) {
 	if VerifyAttestBlobSignature(signedAttestBlob(t, theirs, "box"), &mine.PublicKey) == nil {
 		t.Fatal("attacker-signed blob accepted")
 	}
-	for _, target := range []string{"box", "Pixel", "phone"} {
+	for _, target := range []string{"box", "phone"} {
 		edited := append([]byte(nil), blob...)
 		i := bytes.LastIndex(edited, []byte(target))
 		edited[i] ^= 0x01 // the enrolment changed after signing
@@ -253,7 +278,10 @@ func TestAttestBlobSignature(t *testing.T) {
 	}
 	// An attestation part put into somebody's signed blob, signature kept.
 	plain := signSlot(t, testSlotBlob(), mine)
-	att, _ := testEnrolment("attacker").marshal()
+	// No phone in it: the slot keeps its TOTP key, so the graft parses.
+	e := testEnrolment("attacker")
+	e.Phone.Verifiers = nil
+	att, _ := e.marshal()
 	payloadLen := binary.LittleEndian.Uint32(plain[4:])
 	grafted := append([]byte(nil), plain[:8+payloadLen-1]...) // without the flag "no attestation"
 	grafted = append(grafted, 1)
@@ -274,7 +302,7 @@ func TestAttestBlobSignature(t *testing.T) {
 func TestAttestBlobCarriesItsCount(t *testing.T) {
 	key := newKey(t)
 	sb := testSlotBlob()
-	sb.Payload.Attestation = testEnrolment("box")
+	withPhones(sb, testEnrolment("box"))
 	sb.Payload.Attestation.Count = 41
 	first := signSlot(t, sb, key)
 	sb.Payload.Attestation.Count = 42

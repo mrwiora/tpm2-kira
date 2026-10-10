@@ -782,12 +782,11 @@ func DecodeChallengeResponse(d *Decoder) (*ChallengeResponse, error) {
 
 // EnrolAccept pins the verifier's anchor on the attester (verifier -> attester).
 type EnrolAccept struct {
-	VerifierID   string
-	VerifierName string
-	AnchorPub    []byte // PKIX DER, ECDSA P-256
-	PolicyID     string
-	ReceiptTTL   uint32 // seconds
-	AnchorSig    []byte // DER ECDSA over SHA-256(EnrolAcceptTBS)
+	VerifierID string
+	AnchorPub  []byte // PKIX DER, ECDSA P-256
+	PolicyID   string
+	ReceiptTTL uint32 // seconds
+	AnchorSig  []byte // DER ECDSA over SHA-256(EnrolAcceptTBS)
 	// AnchorAttestation is the anchor key's attestation certificate chain
 	// (Android Key Attestation), concatenated DER, leaf first; optional.
 	AnchorAttestation []byte
@@ -797,7 +796,6 @@ type EnrolAccept struct {
 func (m *EnrolAccept) Encode() ([]byte, error) {
 	e := NewEncoder(MsgEnrolAccept)
 	e.String(1, m.VerifierID)
-	e.String(2, m.VerifierName)
 	e.Bytes(3, m.AnchorPub)
 	e.String(4, m.PolicyID)
 	e.U32(5, m.ReceiptTTL)
@@ -812,12 +810,11 @@ func DecodeEnrolAccept(d *Decoder) (*EnrolAccept, error) {
 		return nil, err
 	}
 	m := &EnrolAccept{
-		VerifierID:   d.String(1, maxShortString, true),
-		VerifierName: d.String(2, maxShortString, false),
-		AnchorPub:    d.Bytes(3, maxAnchorPub, true),
-		PolicyID:     d.String(4, maxShortString, false),
-		ReceiptTTL:   d.U32(5, false),
-		AnchorSig:    d.Bytes(6, maxDERSig, true),
+		VerifierID: d.String(1, maxShortString, true),
+		AnchorPub:  d.Bytes(3, maxAnchorPub, true),
+		PolicyID:   d.String(4, maxShortString, false),
+		ReceiptTTL: d.U32(5, false),
+		AnchorSig:  d.Bytes(6, maxDERSig, true),
 
 		AnchorAttestation: d.Bytes(7, MaxAnchorAttestation, false),
 	}

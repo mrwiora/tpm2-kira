@@ -106,8 +106,9 @@ func TestEnrolAndAttestMatch(t *testing.T) {
 	if !bytes.Equal(rec.AKName, m.TPM.AKName) || !bytes.Equal(rec.MachineNoisePub, m.Noise.Public) {
 		t.Fatal("record does not pin the machine's keys")
 	}
-	if !EqualKeys(m.Verifier.NoisePub, p.Noise.Public) {
-		t.Fatal("machine did not pin the phone's Noise key")
+	phoneNoise, err := NoiseKeypairFromPrivate(rec.VerifierNoisePriv)
+	if err != nil || !EqualKeys(m.Verifier.NoisePub, phoneNoise.Public) {
+		t.Fatal("machine did not pin the phone's Noise key for this machine")
 	}
 	if rec.ResetCount != m.TPM.ResetCount {
 		t.Fatalf("reset count not pinned: %d", rec.ResetCount)
@@ -202,8 +203,12 @@ func TestFailedApprovalNeedsTypedName(t *testing.T) {
 func TestUnknownPhoneGetsNoAnswer(t *testing.T) {
 	m, p := newMachine(t), newPhone(t)
 	rec := enrol(t, m, p)
-	stranger := newPhone(t)
-	res, merr, perr := attestOnce(t, m, stranger, rec)
+	// A phone the machine never enrolled: the same record, but a key of
+	// its own.
+	stranger := *rec
+	kp, _ := GenerateNoiseKeypair(nil)
+	stranger.VerifierNoisePriv = kp.Private
+	res, merr, perr := attestOnce(t, m, p, &stranger)
 	if !errors.Is(merr, ErrUnknownVerifier) {
 		t.Fatalf("machine should refuse an unknown phone, got %v (%v)", merr, res)
 	}
@@ -562,5 +567,40 @@ func TestEnrolRejectsUnprovenBootCheckValues(t *testing.T) {
 		if err := p.Drive(v, b); err == nil || p.Record != nil {
 			t.Fatalf("%s: phone accepted the boot-check values: %v", name, err)
 		}
+	}
+}
+
+// One phone, two machines: each enrolment gives the phone an identity of its
+// own (a static Noise key and a verifier id) that the other machine never
+// sees, and the phone attests both, each through its own record.
+func TestOnePhoneTwoMachinesUnlinked(t *testing.T) {
+	m1, m2, p := newMachine(t), newMachine(t), newPhone(t)
+	r1 := *enrol(t, m1, p)
+	r2 := *enrol(t, m2, p)
+
+	if r1.VerifierID == r2.VerifierID || bytes.Equal(r1.VerifierNoisePriv, r2.VerifierNoisePriv) {
+		t.Fatal("the phone showed both machines the same identity")
+	}
+	if m1.Verifier.ID == m2.Verifier.ID || EqualKeys(m1.Verifier.NoisePub, m2.Verifier.NoisePub) {
+		t.Fatal("the machines pinned the same phone identity")
+	}
+
+	for _, c := range []struct {
+		m   *attesttest.Machine
+		rec MachineRecord
+	}{{m1, r1}, {m2, r2}, {m1, r1}} {
+		c.m.TPM.ResetCount++
+		rec := c.rec
+		res, merr, perr := attestOnce(t, c.m, p, &rec)
+		if merr != nil || perr != nil || !res.Check.Authentic || res.Check.Ack != AckAccepted {
+			t.Fatalf("attesting %x: machine %v phone %v %+v", c.rec.DeviceID, merr, perr, res)
+		}
+	}
+
+	// A record answers only its own machine: the other one does not know
+	// the identity in it.
+	m2.TPM.ResetCount++
+	if _, merr, _ := attestOnce(t, m2, p, &r1); merr == nil {
+		t.Fatal("a machine accepted the phone's identity for another machine")
 	}
 }

@@ -229,7 +229,6 @@ func (p *PhoneAttestation) marshal() ([]byte, error) {
 			return nil, fmt.Errorf("phone %q has an invalid Noise key", v.ID)
 		}
 		w.lp16([]byte(v.ID))
-		w.lp16([]byte(v.Name))
 		w.lp16(v.AnchorPub)
 		w.raw(v.NoisePub)
 		w.lp16([]byte(v.PolicyID))
@@ -306,7 +305,6 @@ func (p *PhoneAttestation) unmarshal(data []byte) error {
 	for i := 0; i < n && r.err == nil; i++ {
 		p.Verifiers = append(p.Verifiers, attest.EnrolledVerifier{
 			ID:        string(r.lp16(64)),
-			Name:      string(r.lp16(64)),
 			AnchorPub: r.lp16(256),
 			NoisePub:  r.take(32),
 			PolicyID:  string(r.lp16(64)),
@@ -368,7 +366,6 @@ type phoneMethodJSON struct {
 
 type phoneEntryJSON struct {
 	ID           string `json:"id"`
-	Name         string `json:"name,omitempty"`
 	PolicyID     string `json:"policy_id,omitempty"`
 	AnchorDigest string `json:"anchor_digest"`
 	NoisePublic  string `json:"noise_public_hex"`
@@ -393,7 +390,7 @@ func (b *Attestation) json() *attestationJSON {
 		m := &phoneMethodJSON{Transport: "bluetooth-le", Verifiers: []phoneEntryJSON{}}
 		for _, v := range b.Phone.Verifiers {
 			m.Verifiers = append(m.Verifiers, phoneEntryJSON{
-				ID: v.ID, Name: v.Name, PolicyID: v.PolicyID,
+				ID: v.ID, PolicyID: v.PolicyID,
 				AnchorDigest: hex.EncodeToString(attest.AnchorDigest(v.AnchorPub)),
 				NoisePublic:  hex.EncodeToString(v.NoisePub),
 			})

@@ -534,7 +534,8 @@ ChallengeResponse: 1 `secret` bytes ≤64 R — the result of
 
 #### 7.3.13 EnrolAccept (0x27), EnrolConfirm (0x28)
 
-EnrolAccept: 1 `verifier_id` string ≤64 R · 2 `verifier_name` string ≤64 O ·
+EnrolAccept: 1 `verifier_id` string ≤64 R · (2 is not used: the phone's name
+is not sent, §11.1) ·
 3 `anchor_pub` bytes ≤256 R (SubjectPublicKeyInfo DER, ECDSA P-256) ·
 4 `policy_id` string ≤64 O · 5 `receipt_ttl` u32 O (seconds) ·
 6 `anchor_sig` bytes ≤128 R (DER ECDSA over SHA-256(`enrol_accept_tbs`)) ·
@@ -839,15 +840,13 @@ objects cross the boundary; structured data is JSON.
 |---|---|
 | `ProtocolVersion() int`, `SchemaVersion() int` | compare with INFO |
 | `ServiceUUID`, `RXCharUUID`, `TXCharUUID`, `InfoUUID` (constants) | GATT UUIDs |
-| `GenerateNoiseKey() []byte` | the phone's static X25519 private key; create once, store encrypted |
-| `NoisePublicKey(priv) []byte` | |
 | `AdvertisementFlags(serviceData) int` | `-1` if not 13 bytes |
 | `MatchAdvertisement(serviceData, recordJSON) bool` | label scan results |
 | `RecordSummary(recordJSON) string` | display fields of a stored record |
-| `NewEnrolSession(configJSON, noisePriv) Session` | |
-| `NewAttestSession(configJSON, noisePriv, recordJSON) Session` | |
+| `NewEnrolSession(configJSON) Session` | makes the phone's identity for this machine (§11.1) |
+| `NewAttestSession(configJSON, recordJSON) Session` | uses the identity in the record |
 
-`configJSON`: `{"verifier_id": "<stable random id, 1-64 bytes>", "verifier_name": "Pixel 9", "policy_id": "default", "receipt_ttl_seconds": 300}`.
+`configJSON`: `{"policy_id": "default", "receipt_ttl_seconds": 300}`.
 
 ### 10.2 Session
 
@@ -964,10 +963,22 @@ software key.
 
 ## 11. Keys and storage on the phone
 
-### 11.1 Static Noise key
+### 11.1 The phone's identity towards a machine
 
-One per installation, from `GenerateNoiseKey()`. Store encrypted
-(Android: Keystore-wrapped AES key + EncryptedFile / DataStore; iOS: Keychain,
+One per enrolled machine: every enrolment makes a new static Noise key and a
+new random `verifier_id` (16 bytes, hex), and the machine record keeps them
+(`verifier_noise_priv`, `verifier_id`). An attestation takes them from the
+record of the machine it talks to; the app picks that record by the
+machine's advertisement, as before. So one app attests any number of
+machines, each with its own identity, and no two machines learn anything
+about the phone they could compare: what a machine stores of its phones
+(the id, the Noise public key, the anchor key, which is per machine too,
+§11.2) is unlinkable to what any other machine stores. The phone sends no
+name; the machine numbers its phones (`phone 1`, `phone 2`) and the person
+knows which is theirs.
+
+The record holds the Noise private key, so it is stored encrypted
+(Android: Keystore-wrapped AES-GCM; iOS: Keychain,
 `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`). Never sync, never back up.
 
 ### 11.2 Anchor key (receipt signing)

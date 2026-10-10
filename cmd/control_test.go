@@ -103,11 +103,11 @@ func TestControlSteps(t *testing.T) {
 	// A phone and a remote-salt keyslot bound to slot 0, read from the
 	// LUKS header: the options under slot 0 are done.
 	c.facts.Phone = true
-	c.facts.Status.Slots[0].Phones = []string{"Pixel"}
+	c.facts.Status.Slots[0].Phones = 1
 	zero := 0
 	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: &zero}})
 	steps = c.steps()
-	if steps[4].Done != `phone "Pixel"` || steps[5].Done != "keyslot 1 of /dev/sda2" {
+	if steps[4].Done != "attested by 1 phone (the slot has no TOTP code while a phone is enrolled)" || steps[5].Done != "keyslot 1 of /dev/sda2" {
 		t.Fatalf("phone and remote-salt keyslot: %+v %+v", steps[4], steps[5])
 	}
 

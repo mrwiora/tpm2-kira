@@ -145,8 +145,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	if err := Seal(sock, "0,2,7", slot, pubPath, privPath, false, PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
-	code, _, err := SlotCode(tpm, slot, at, false)
-	if err != nil {
+	if _, _, err := SlotCode(tpm, slot, at, false); err != nil {
 		t.Fatalf("code after seal: %v", err)
 	}
 	sealedSize := func() int { raw, _ := ReadFromNVRAM(tpm, slot); return len(raw) }
@@ -215,7 +214,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	enrolled := func(what string) *Attestation {
 		t.Helper()
 		a, err := loadAttestBlob(tpm, slot)
-		if err != nil || len(a.Phone.Verifiers) != 1 || a.Phone.Verifiers[0].Name != "Pixel" || a.FriendlyName != "box" {
+		if err != nil || len(a.Phone.Verifiers) != 1 || a.Phone.Verifiers[0].ID != "phone" || a.FriendlyName != "box" {
 			t.Fatalf("%s: the phone is gone: %+v %v", what, a, err)
 		}
 		if verified, exit := gateRecordCheck(tpm, slot, pubPath); !verified || exit != 0 {
@@ -224,9 +223,14 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 		return a
 	}
 	count := enrolled("after enrolling").Count
-	if again, _, err := SlotCode(tpm, slot, at, false); err != nil || again != code {
-		t.Fatalf("enrolling a phone changed the slot's TOTP code: %q then %q (%v)", code, again, err)
+	// A slot with a phone has no TOTP code: the phone checks its boots.
+	noCode := func(what string) {
+		t.Helper()
+		if _, sb, err := SlotCode(tpm, slot, at, false); !errors.Is(err, ErrPhoneSlot) || sb.HasTOTPKey() {
+			t.Fatalf("%s: the slot still has a TOTP code (%v)", what, err)
+		}
 	}
+	noCode("after enrolling")
 	t.Logf("slot blob: %d bytes sealed, %d bytes with one phone", plain, sealedSize())
 
 	// Reseal, as the hook does after every kernel update.
@@ -236,36 +240,50 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	if got := enrolled("after reseal").Count; got != count {
 		t.Fatalf("reseal changed the enrolment's count from %d to %d", count, got)
 	}
-	if again, _, err := SlotCode(tpm, slot, at, false); err != nil || again != code {
-		t.Fatalf("reseal changed the TOTP code: %q then %q (%v)", code, again, err)
-	}
+	noCode("after reseal")
 	// One approval covers both keys: reseal knows nothing of the boot key.
 	if err := bootKey("after reseal"); err != nil {
 		t.Fatalf("the boot key does not answer after reseal: %v", err)
 	}
 
-	// Seal the slot again: a new TOTP key, the same phones.
+	// Seal the slot again: the same phones, still no TOTP key.
 	if err := Seal(sock, "0,2,7", slot, pubPath, privPath, false, PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("second seal: %v", err)
 	}
 	enrolled("after sealing again")
-	if _, _, err := SlotCode(tpm, slot, at, false); err != nil {
-		t.Fatalf("code after the second seal: %v", err)
-	}
-	// The new TOTP key took the slot's policy reference over, so the
-	// phones' boot key is still under its approvals.
+	noCode("after sealing again")
+	// The slot kept its policy reference, so the phones' boot key is
+	// still under its approvals.
 	if err := bootKey("after sealing again"); err != nil {
 		t.Fatalf("the boot key does not answer after the slot was sealed again: %v", err)
 	}
 
+	// The last phone leaves: the slot gets a TOTP key again, a new one,
+	// under the approval in force, so it computes at once, no reseal.
+	if err := writeAttestBlob(tpm, slot, nil, priv); err != nil {
+		t.Fatalf("removing the phone: %v", err)
+	}
+	if _, sb, err := readSlot(tpm, slot); err != nil || !sb.HasTOTPKey() || sb.Payload.Attestation != nil {
+		t.Fatalf("after the last phone left: %+v %v", sb, err)
+	}
+	if code, _, err := SlotCode(tpm, slot, at, false); err != nil || len(code) != 6 {
+		t.Fatalf("the new TOTP key gives no code under the approval in force: %q %v", code, err)
+	}
+	// And a phone again: the boot key, made under the slot's policy, is
+	// still good for it.
+	if err := writeAttestBlob(tpm, slot, enrolment, priv); err != nil {
+		t.Fatalf("enrolling again: %v", err)
+	}
+	noCode("after enrolling again")
+	if err := bootKey("after enrolling again"); err != nil {
+		t.Fatalf("the boot key does not answer after enrolling again: %v", err)
+	}
+
 	// The boot state leaves what was approved, as after the OS separator:
-	// no TOTP code, and the TPM refuses the boot key.
+	// the TPM refuses the boot key.
 	extendSHA256(t, tpm, 7, bytes.Repeat([]byte{0x99}, 32))
 	if err := bootKey("outside the approved state"); !errors.Is(err, errBootKeyRefused) {
 		t.Fatalf("the boot key answered outside the approved boot state: %v", err)
-	}
-	if _, _, err := SlotCode(tpm, slot, at, false); err == nil {
-		t.Fatal("a TOTP code outside the approved boot state")
 	}
 
 	// Another signing key seals the slot: it does not adopt phones it

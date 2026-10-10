@@ -53,7 +53,6 @@ type gateIdentity struct {
 
 type gateVerifier struct {
 	ID       string `json:"id"`
-	Name     string `json:"name"`
 	NoisePub []byte `json:"noise_pub"`
 }
 
@@ -173,7 +172,6 @@ func (s *gateService) setup(sealIndex uint32, signerPath string, debug bool) (in
 	sealIdx := idx // the enrolment lives in the slot's own blob
 	s.mu.Lock()
 	s.blob = blob
-	s.status.Enrolled = enrolledLabel(blob.Phone.Verifiers)
 	s.recordVerified = verified
 	s.be = &tpmBackend{tpm: s.tpm, blob: blob, sealIndex: sealIdx, sealed: readSealedSlot(s.tpm, sealIdx), debug: debug}
 	s.mu.Unlock()
@@ -196,7 +194,7 @@ func (s *gateService) Identity() (*gateIdentity, int, error) {
 		RecordVerified: s.recordVerified,
 	}
 	for _, v := range s.blob.Phone.Verifiers {
-		id.Verifiers = append(id.Verifiers, gateVerifier{ID: v.ID, Name: v.Name, NoisePub: v.NoisePub})
+		id.Verifiers = append(id.Verifiers, gateVerifier{ID: v.ID, NoisePub: v.NoisePub})
 	}
 	return id, 0, nil
 }
@@ -413,7 +411,6 @@ func (s *gateService) JudgeReceipt(r *attest.Receipt, verifierID string) attest.
 	})
 	if state := receiptState(check); state != "" {
 		s.status.State = state
-		s.status.Phone = verifierName(verifier)
 		s.status.Code = "" // the session it belonged to is answered
 		if state == GateAttested && s.expectRelease && len(s.blob.ReleaseKeyPublic) > 0 {
 			s.status.Releasing = true
@@ -476,17 +473,4 @@ func receiptState(c attest.ReceiptCheck) GateState {
 		return GateRefused
 	}
 	return ""
-}
-
-// enrolledLabel names the enrolled phones for the slot's line: the first
-// one, "+N" for the others.
-func enrolledLabel(vs []attest.EnrolledVerifier) string {
-	if len(vs) == 0 {
-		return ""
-	}
-	name := verifierName(&vs[0])
-	if len(vs) > 1 {
-		name += fmt.Sprintf(" +%d", len(vs)-1)
-	}
-	return name
 }

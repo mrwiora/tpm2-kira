@@ -199,9 +199,14 @@ type EventlogInfo struct {
 // signature.  When adding new fields to the blob, add them HERE and
 // update MarshalPayload / UnmarshalPayload.  This guarantees that new
 // fields are automatically included in the signed region.
+//
+// A slot holds a TOTP key or phones, never both: the TOTP code is how a boot
+// is checked without a phone, and a slot with phones is checked by them
+// (HasTOTPKey, PhoneAttested). Public, Private and TOTPAlgorithm are then
+// empty; the slot's policy stays and authorizes the boot and release keys.
 type SealedBlobPayload struct {
-	Public     []byte          `json:"public"`      // TPMT_PUBLIC of the TOTP HMAC key
-	Private    []byte          `json:"private"`     // TPM2B_PRIVATE of the TOTP HMAC key (wrapped by the TPM)
+	Public     []byte          `json:"public"`      // TPMT_PUBLIC of the TOTP HMAC key; empty with phones
+	Private    []byte          `json:"private"`     // TPM2B_PRIVATE of the TOTP HMAC key (wrapped by the TPM); empty with phones
 	PCRDigests []PCRDigestPair `json:"pcr_digests"` // PCR indices with their source and digest values
 	// TOTPAlgorithm is the HMAC hash of the TOTP key: TPMAlgSHA1, or
 	// TPMAlgSHA256 on a TPM without SHA-1.
@@ -241,6 +246,53 @@ type SealedBlob struct {
 	Version       uint32            `json:"version"`                  // Blob format version (must be CurrentBlobVersion)
 	Payload       SealedBlobPayload `json:"payload"`                  // All authenticated content
 	BlobSignature []byte            `json:"blob_signature,omitempty"` // Signature over [version ‖ payloadLen ‖ payload bytes]
+}
+
+// HasTOTPKey reports whether the slot holds a TOTP key: it does exactly
+// when no phone is enrolled for it.
+func (sb *SealedBlob) HasTOTPKey() bool { return len(sb.Payload.Public) > 0 }
+
+// PhoneAttested reports whether phones are enrolled for the slot, which
+// then has no TOTP code.
+func (sb *SealedBlob) PhoneAttested() bool { return sb.Payload.phoneAttested() }
+
+func (p *SealedBlobPayload) phoneAttested() bool {
+	return p.Attestation != nil && len(p.Attestation.Phone.Verifiers) > 0
+}
+
+// checkTOTPOrPhones holds a payload to the rule: a TOTP key or phones.
+func (p *SealedBlobPayload) checkTOTPOrPhones() error {
+	hasKey := len(p.Public) > 0 || len(p.Private) > 0
+	switch {
+	case hasKey && p.phoneAttested():
+		return fmt.Errorf("a slot with phones holds no TOTP key")
+	case !hasKey && !p.phoneAttested():
+		return fmt.Errorf("a slot without phones needs its TOTP key")
+	case hasKey && (len(p.Public) == 0 || len(p.Private) == 0 || p.TOTPAlgorithm == 0):
+		return fmt.Errorf("the TOTP key is incomplete")
+	case !hasKey && p.TOTPAlgorithm != 0:
+		return fmt.Errorf("a TOTP algorithm without a TOTP key")
+	}
+	return nil
+}
+
+// SlotPolicy is the policy every key of the slot is created under:
+// PolicyAuthorize by the signing key, qualified by the slot's PolicyRef.
+// The TOTP key, the boot key and the release key share it, so the boot and
+// release keys work whether or not the slot has a TOTP key.
+func (sb *SealedBlob) SlotPolicy() ([]byte, error) {
+	pub, err := tpm2.Unmarshal[tpm2.TPMTPublic](sb.Payload.SigningPublic)
+	if err != nil {
+		return nil, fmt.Errorf("the slot's signing key has no valid public area: %w", err)
+	}
+	name, err := tpm2.ObjectName(pub)
+	if err != nil {
+		return nil, err
+	}
+	if len(sb.Payload.PolicyRef) == 0 {
+		return nil, fmt.Errorf("the slot has no policy reference")
+	}
+	return policyAuthorizeDigest(name.Buffer, sb.Payload.PolicyRef), nil
 }
 
 // GetHashAlgo infers the PCR hash algorithm from the stored digest sizes.
@@ -388,6 +440,9 @@ func hasEventlogPCRsInPayload(p *SealedBlobPayload) bool {
 //	[measurePointApplied:1]
 //	[hasAttestation:1][attestationLen:4][attestation]
 func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
+	if err := p.checkTOTPOrPhones(); err != nil {
+		return nil, err
+	}
 	size := 4 + len(p.Public) + // public blob
 		4 + len(p.Private) + // private blob
 		4 + // number of PCR digests
@@ -679,6 +734,9 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 		return nil, fmt.Errorf("invalid attestation flag %d", hasAttestation)
 	}
 
+	if err := p.checkTOTPOrPhones(); err != nil {
+		return nil, err
+	}
 	return p, nil
 }
 

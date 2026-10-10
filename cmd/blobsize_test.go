@@ -7,6 +7,8 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"testing"
+
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // signatureSizes bounds what the keys really produce: the size check before
@@ -38,35 +40,33 @@ func TestSignatureSizesBoundRealSignatures(t *testing.T) {
 }
 
 // Before a phone answers, enrolment counts only what is certain: a phone
-// more for a slot without one, none for a slot that has some (the phone may
-// be one of them enrolling again), and empty strings either way.
+// more for a slot without one (whose TOTP key then goes), none for a slot
+// that has some (the phone may be one of them enrolling again), and empty
+// strings either way.
 func TestEnrolmentSizeIsALowerBound(t *testing.T) {
 	sb := testSlotBlob()
 	sb.BlobSignature = make([]byte, 72)
 	none := testEnrolment("box")
 	none.Phone.Verifiers = nil
-	bare := *sb
-	bare.Payload.Attestation = none
-	unsigned, err := bare.Marshal()
+	minimal := testEnrolment("box")
+	minimal.Phone.Verifiers = []attest.EnrolledVerifier{{AnchorPub: make([]byte, 91), NoisePub: make([]byte, 32)}}
+	first := testSlotBlob()
+	withPhones(first, minimal)
+	unsigned, err := first.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	withPhone, err := enrolmentSize(sb, none)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if grown := withPhone - (len(unsigned) + 2 + 72); grown <= 0 || grown > 2+2+2+91+32+2 {
-		t.Fatalf("a first phone adds %d bytes to the estimate", grown)
+	if got, err := enrolmentSize(sb, none); err != nil || got != len(unsigned)+2+72 {
+		t.Fatalf("a first phone: estimate %d, the smallest such blob %d (%v)", got, len(unsigned)+2+72, err)
 	}
 
-	one := testEnrolment("box")
-	sb1 := *sb
-	sb1.Payload.Attestation = one
-	unsigned, err = sb1.Marshal()
+	one := testSlotBlob()
+	withPhones(one, testEnrolment("box"))
+	unsigned, err = one.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again, err := enrolmentSize(sb, one); err != nil || again != len(unsigned)+2+72 {
+	if again, err := enrolmentSize(sb, one.Payload.Attestation); err != nil || again != len(unsigned)+2+72 {
 		t.Fatalf("a slot with a phone: estimate %d, the blob as it is %d (%v)", again, len(unsigned)+2+72, err)
 	}
 }

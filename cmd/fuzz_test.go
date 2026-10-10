@@ -18,6 +18,7 @@ import (
 func FuzzUnmarshalSealedBlob(f *testing.F) {
 	sb := &SealedBlob{Version: CurrentBlobVersion, Payload: SealedBlobPayload{
 		Public: []byte{1, 2}, Private: []byte{3},
+		TOTPAlgorithm: tpm2.TPMAlgSHA1,
 		PCRDigests: []PCRDigestPair{
 			{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			{Index: 11, Source: PCRSourceUKI, Command: "/boot/x.efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},

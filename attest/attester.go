@@ -70,7 +70,6 @@ type FactorBackend interface {
 // EnrolledVerifier is one pinned verifier, as stored in the attestation blob.
 type EnrolledVerifier struct {
 	ID        string
-	Name      string
 	AnchorPub []byte // PKIX DER, ECDSA P-256
 	NoisePub  []byte // X25519 static key used in the IK handshake
 	PolicyID  string
@@ -146,7 +145,7 @@ func ServeAttestation(conn Conn, id *AttestIdentity, be AttesterBackend, progres
 	if err != nil {
 		return nil, err
 	}
-	progress.say("Session established with %s", verifierLabel(res.Verifier))
+	progress.say("Session established with the phone")
 
 	nonceA, err := randomBytes(NonceSize)
 	if err != nil {
@@ -292,7 +291,7 @@ func ServeAttestation(conn Conn, id *AttestIdentity, be AttesterBackend, progres
 				res.Release = r
 				ack.Status, ack.Message = fb.TakeRelease(r)
 			}
-			progress.good("Remote salt released by %s: %s", verifierLabel(res.Verifier), ack.Message)
+			progress.good("Remote salt released by the phone: %s", ack.Message)
 			b, err := ack.Encode()
 			if err != nil {
 				return res, err
@@ -310,16 +309,6 @@ func ServeAttestation(conn Conn, id *AttestIdentity, be AttesterBackend, progres
 			return res, fmt.Errorf("attest: unexpected %s", d.Type)
 		}
 	}
-}
-
-func verifierLabel(v *EnrolledVerifier) string {
-	if v == nil {
-		return "unknown verifier"
-	}
-	if v.Name != "" {
-		return fmt.Sprintf("%q", v.Name)
-	}
-	return v.ID
 }
 
 func sendEventlog(ch *Channel, evlog, hash []byte, offset uint32) error {
@@ -556,7 +545,6 @@ func ServeEnrolment(conn Conn, id *EnrolIdentity, be EnrolBackend, progress Prog
 
 	v := EnrolledVerifier{
 		ID:        acc.VerifierID,
-		Name:      acc.VerifierName,
 		AnchorPub: acc.AnchorPub,
 		NoisePub:  phoneNoise,
 		PolicyID:  acc.PolicyID,

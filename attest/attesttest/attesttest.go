@@ -66,7 +66,6 @@ func (p *Pipe) Close() error {
 // standing in for the Secure Enclave / StrongBox key, and a user who
 // confirms codes and makes decisions.
 type Phone struct {
-	Noise     *attest.NoiseKeypair
 	Anchor    *ecdsa.PrivateKey
 	SASAnswer bool
 	Decision  attest.Decision
@@ -80,16 +79,12 @@ type Phone struct {
 // NewPhone creates a phone with fresh keys that confirms every code and
 // approves every changed state once.
 func NewPhone() (*Phone, error) {
-	kp, err := attest.GenerateNoiseKeypair(nil)
-	if err != nil {
-		return nil, err
-	}
-	return &Phone{Noise: kp, SASAnswer: true, Decision: attest.DecisionApproveOnce}, nil
+	return &Phone{SASAnswer: true, Decision: attest.DecisionApproveOnce}, nil
 }
 
 // Config returns the verifier configuration for this phone.
 func (p *Phone) Config() attest.VerifierConfig {
-	return attest.VerifierConfig{NoiseStatic: p.Noise, VerifierID: "test-phone", VerifierName: "Test Phone"}
+	return attest.VerifierConfig{}
 }
 
 // Drive runs v against conn until the session finishes.

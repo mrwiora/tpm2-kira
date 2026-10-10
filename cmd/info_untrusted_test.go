@@ -59,6 +59,7 @@ func TestInfoDoesNotTrustPlantedBlob(t *testing.T) {
 	esc := "\x1b[2J"
 	sb := &SealedBlob{Version: CurrentBlobVersion, Payload: SealedBlobPayload{
 		Public: []byte{1}, Private: []byte{2},
+		TOTPAlgorithm: tpm2.TPMAlgSHA1,
 		PCRDigests: []PCRDigestPair{
 			{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			{Index: 11, Source: PCRSourceUKI, Command: "/boot/x" + esc + ".efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},

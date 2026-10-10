@@ -27,16 +27,16 @@ type StatusOptions struct {
 
 // StatusSlot is one slot of the report.
 type StatusSlot struct {
-	Slot       int      `json:"slot_number"`
-	NVRAMIndex string   `json:"nvram_index"`
-	PCRs       string   `json:"pcrs"`
-	Fallback   bool     `json:"fallback"` // sealed to 0 and 7 alone
-	Generation uint64   `json:"generation"`
-	GenState   string   `json:"generation_state"`
-	Signed     bool     `json:"signed"` // by this machine's signing key
-	SignReason string   `json:"sign_reason,omitempty"`
-	Phones     []string `json:"phones"`
-	RemoteSalt bool     `json:"remote_salt"` // the release key is in the blob
+	Slot       int    `json:"slot_number"`
+	NVRAMIndex string `json:"nvram_index"`
+	PCRs       string `json:"pcrs"`
+	Fallback   bool   `json:"fallback"` // sealed to 0 and 7 alone
+	Generation uint64 `json:"generation"`
+	GenState   string `json:"generation_state"`
+	Signed     bool   `json:"signed"` // by this machine's signing key
+	SignReason string `json:"sign_reason,omitempty"`
+	Phones     int    `json:"phones"`      // enrolled; the slot then has no TOTP code
+	RemoteSalt bool   `json:"remote_salt"` // the release key is in the blob
 }
 
 // StatusReport is the whole report.
@@ -83,16 +83,14 @@ func collectStatus(o StatusOptions) StatusReport {
 				r.Notes = append(r.Notes, fmt.Sprintf("slot %d (0x%08X) does not read as a blob: %v", SlotNumber(idx), idx, err))
 				continue
 			}
-			s := StatusSlot{Slot: SlotNumber(idx), NVRAMIndex: fmt.Sprintf("0x%08X", idx), Phones: []string{},
+			s := StatusSlot{Slot: SlotNumber(idx), NVRAMIndex: fmt.Sprintf("0x%08X", idx),
 				PCRs: PCRSpecsToString(sb.GetPCRSpecs()), Generation: sb.Payload.Generation,
 				GenState: generationState(tpmDev, idx, sb.Payload.Generation)}
 			s.Fallback = isFallbackSelection(sb.GetPCRSpecs())
 			v := verifier.verify(raw, sb)
 			s.Signed, s.SignReason = v.Verified, v.Reason
 			if att := sb.Payload.Attestation; att != nil && att.Phone.Enabled() {
-				for _, p := range att.Phone.Verifiers {
-					s.Phones = append(s.Phones, p.Name)
-				}
+				s.Phones = len(att.Phone.Verifiers)
 				s.RemoteSalt = len(att.ReleaseKeyPublic) > 0
 			}
 			r.Slots = append(r.Slots, s)
@@ -235,10 +233,10 @@ func printStatus(r StatusReport) {
 		}
 		fmt.Printf("  slot %-2d  sealed to %s; generation %s; %s\n", s.Slot, pcrs, s.GenState, signed)
 		switch {
-		case len(s.Phones) > 0 && s.RemoteSalt:
-			fmt.Printf("           phone: %s; remote salt enrolled\n", quoted(s.Phones))
-		case len(s.Phones) > 0:
-			fmt.Printf("           phone: %s; no remote salt\n", quoted(s.Phones))
+		case s.Phones > 0 && s.RemoteSalt:
+			fmt.Printf("           %s, no TOTP code; remote salt enrolled\n", phonesText(s.Phones))
+		case s.Phones > 0:
+			fmt.Printf("           %s, no TOTP code; no remote salt\n", phonesText(s.Phones))
 		}
 	}
 	fmt.Println()
@@ -292,4 +290,12 @@ func quoted(names []string) string {
 		q[i] = strconv.Quote(n)
 	}
 	return strings.Join(q, ", ")
+}
+
+// phonesText says how many phones attest a slot, without naming them.
+func phonesText(n int) string {
+	if n == 1 {
+		return "attested by 1 phone"
+	}
+	return fmt.Sprintf("attested by %d phones", n)
 }

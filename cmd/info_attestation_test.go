@@ -15,7 +15,7 @@ import (
 // are present in the blob and are not printed.
 func TestInfoShowsTheAttestationPart(t *testing.T) {
 	sb := testSlotBlob()
-	sb.Payload.Attestation = testEnrolment("my laptop")
+	withPhones(sb, testEnrolment("my laptop"))
 	sb.Payload.Attestation.Count = 4
 	si := &slotInfo{
 		Index: NVRAMSlotStart, SlotNumber: 0, Blob: sb, NVPublic: &tpm2.TPMSNVPublic{},
@@ -33,7 +33,7 @@ func TestInfoShowsTheAttestationPart(t *testing.T) {
 		"Revision counter in the TPM (0x01803820): 4 (matches",
 		"Methods",
 		"Phones over Bluetooth LE: 1 enrolled",
-		"└── Pixel",
+		"└── phone 1",
 		"ID: phone",
 		"Anchor key",
 		"Policy: p",
@@ -55,17 +55,17 @@ func TestInfoShowsTheAttestationPart(t *testing.T) {
 		t.Errorf("info without attestation:\n%s", out)
 	}
 	bare := testSlotBlob()
-	bare.Payload.Attestation = testEnrolment("x")
+	withPhones(bare, testEnrolment("x"))
 	bare.Payload.Attestation.Phone = PhoneAttestation{}
 	si.Blob = bare
 	if out := captureStdout(t, func() { printAttestationTree("", si) }); !strings.Contains(out, "(none set up)") {
 		t.Errorf("info with an attestation part without methods:\n%s", out)
 	}
 
-	// A phone's name is chosen on the phone: it cannot drive the terminal.
+	// A phone's id is chosen on the phone: it cannot drive the terminal.
 	evil := testSlotBlob()
-	evil.Payload.Attestation = testEnrolment("x\x1b[2J")
-	evil.Payload.Attestation.Phone.Verifiers[0].Name = "ok\x1b[31m\nSignature: valid"
+	withPhones(evil, testEnrolment("x\x1b[2J"))
+	evil.Payload.Attestation.Phone.Verifiers[0].ID = "ok\x1b[31m\nSignature: valid"
 	si.Blob = evil
 	if out := captureStdout(t, func() { printAttestationTree("", si) }); strings.Contains(out, "\x1b") || strings.Contains(out, "\nSignature: valid") {
 		t.Errorf("an escape sequence or a forged line reached the terminal:\n%q", out)
@@ -74,7 +74,7 @@ func TestInfoShowsTheAttestationPart(t *testing.T) {
 
 func TestInfoJSONShowsTheAttestationPart(t *testing.T) {
 	sb := testSlotBlob()
-	sb.Payload.Attestation = testEnrolment("my laptop")
+	withPhones(sb, testEnrolment("my laptop"))
 	sb.Payload.Attestation.Count = 4
 	raw, err := json.Marshal(sb)
 	if err != nil {
@@ -90,7 +90,7 @@ func TestInfoJSONShowsTheAttestationPart(t *testing.T) {
 				Phone *struct {
 					Transport string `json:"transport"`
 					Verifiers []struct {
-						ID, Name     string
+						ID           string
 						AnchorDigest string `json:"anchor_digest"`
 					} `json:"verifiers"`
 				} `json:"phone"`
@@ -103,7 +103,7 @@ func TestInfoJSONShowsTheAttestationPart(t *testing.T) {
 	a := got.Attestation
 	if got.Version != CurrentBlobVersion || a == nil || a.FriendlyName != "my laptop" || a.Revision != 4 || a.PCRSelection != "sha256:[0 7]" ||
 		a.Methods.Phone == nil || a.Methods.Phone.Transport != "bluetooth-le" || len(a.Methods.Phone.Verifiers) != 1 ||
-		a.Methods.Phone.Verifiers[0].Name != "Pixel" || len(a.Methods.Phone.Verifiers[0].AnchorDigest) != 64 {
+		a.Methods.Phone.Verifiers[0].ID != "phone" || len(a.Methods.Phone.Verifiers[0].AnchorDigest) != 64 {
 		t.Fatalf("attestation in JSON: %s", raw)
 	}
 	for _, secret := range []string{strings.Repeat("11", 32), strings.Repeat("22", 32), "noise_private", "adv_key", "ak_private"} {

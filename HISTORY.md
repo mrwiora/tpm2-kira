@@ -142,6 +142,23 @@ slot 0, which is where every keyslot of a one-slot machine belonged anyway.
 
 ## Blob format
 
+### A slot with phones has no TOTP key; phones carry no name
+
+Until 2026-10-10 the first phone enrolled for a slot joined its TOTP key:
+the code was shown next to the phone's and either could release the boot.
+Now a slot is checked one way at a time - its TOTP key, or its phones - and
+the first phone retires the key (the last one leaving brings a new one).
+The phone's check covers what the code proves; keeping both was a second,
+weaker path to the same verdict, and one more secret in an authenticator.
+The fallback slot keeps its code for the boot without a phone.
+
+In the same change the phone stopped sending its name (its model) and the
+machine stopped storing and showing it, and the phone stopped using one
+channel key and one id for every machine: each enrolment makes new ones,
+kept in that machine's record (machine record version 4). What a machine
+keeps of a phone - readable by anyone with TPM access - no longer names it
+or links it to other machines (SECURITY-BACKGROUND §3.1).
+
 ### Version 13 — only what is used; the TPM's limit decides
 
 The blob lost what only described how it was made: the tool's version (in

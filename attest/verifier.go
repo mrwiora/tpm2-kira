@@ -21,7 +21,7 @@ import (
 // pixels; every decision is made here.
 
 // MachineRecordVersion is the version of the stored machine record format.
-const MachineRecordVersion = 3
+const MachineRecordVersion = 4
 
 // MachineRecord is everything a verifier keeps about one enrolled machine.
 // The phone stores it (encrypted at rest by the platform) as opaque JSON
@@ -40,16 +40,21 @@ type MachineRecord struct {
 	BootKeyPub HexStr `json:"boot_key_pub"`
 	// SigningKeyName is the TPM Name of the machine's signing key, whose
 	// approvals are what lets the TPM use the boot key.
-	SigningKeyName  HexStr `json:"signing_key_name"`
-	AdvKey          HexStr `json:"adv_key"`
-	AnchorPub       HexStr `json:"anchor_pub"`
-	VerifierID      string `json:"verifier_id"`
-	Slot            uint8  `json:"slot"`
-	Policy          Policy `json:"policy"`
-	ResetCount      uint32 `json:"reset_count"`
-	FirmwareVersion uint64 `json:"firmware_version"`
-	ReceiptTTL      uint32 `json:"receipt_ttl"`
-	BaselineEvlog   HexStr `json:"baseline_eventlog_sha256,omitempty"`
+	SigningKeyName HexStr `json:"signing_key_name"`
+	AdvKey         HexStr `json:"adv_key"`
+	AnchorPub      HexStr `json:"anchor_pub"`
+	// VerifierID and VerifierNoisePriv are the phone's identity towards
+	// this machine alone: made at enrolment, used for no other machine, so
+	// machines comparing what they know of their phones find nothing in
+	// common. One phone keeps one record, and so one identity, per machine.
+	VerifierID        string `json:"verifier_id"`
+	VerifierNoisePriv HexStr `json:"verifier_noise_priv"`
+	Slot              uint8  `json:"slot"`
+	Policy            Policy `json:"policy"`
+	ResetCount        uint32 `json:"reset_count"`
+	FirmwareVersion   uint64 `json:"firmware_version"`
+	ReceiptTTL        uint32 `json:"receipt_ttl"`
+	BaselineEvlog     HexStr `json:"baseline_eventlog_sha256,omitempty"`
 	// EKVerifiedBy names the TPM vendor whose certificate chain vouched for
 	// the EK at enrolment; empty when it could not be verified (ekcert.go).
 	EKVerifiedBy string     `json:"ek_verified_by,omitempty"`
@@ -91,7 +96,8 @@ func (r *MachineRecord) Validate() error {
 		return fmt.Errorf("attest: machine record version %d, expected %d", r.Version, MachineRecordVersion)
 	}
 	if len(r.DeviceID) != DeviceIDSize || len(r.MachineNoisePub) != NoiseKeySize || len(r.AdvKey) != 32 ||
-		len(r.BootKeyPub) != bootPointSize {
+		len(r.BootKeyPub) != bootPointSize || len(r.VerifierNoisePriv) != NoiseKeySize ||
+		r.VerifierID == "" || len(r.VerifierID) > maxShortString {
 		return errors.New("attest: machine record is incomplete")
 	}
 	if _, err := ParseAKPublic(r.AKPub, r.AKName); err != nil {
@@ -189,15 +195,14 @@ type Output struct {
 	Events  []Event
 }
 
-// VerifierConfig is the phone's own identity.
+// VerifierConfig is the phone's settings. Its identity towards a machine
+// (the static Noise key and the verifier id) is not configured: enrolment
+// makes a new one and keeps it in the machine's record.
 type VerifierConfig struct {
-	NoiseStatic  *NoiseKeypair
-	VerifierID   string
-	VerifierName string
-	PolicyID     string        // default "default"
-	ReceiptTTL   time.Duration // default 5 minutes
-	Now          func() time.Time
-	Rand         io.Reader
+	PolicyID   string        // default "default"
+	ReceiptTTL time.Duration // default 5 minutes
+	Now        func() time.Time
+	Rand       io.Reader
 }
 
 type vstate int
@@ -229,6 +234,8 @@ const (
 // Verifier is one session's state machine.
 type Verifier struct {
 	cfg     VerifierConfig
+	noise   *NoiseKeypair // the phone's static key towards this machine
+	id      string        // the phone's verifier id towards this machine
 	enrol   bool
 	state   vstate
 	hs      *Handshake
@@ -295,42 +302,39 @@ func (c *VerifierConfig) ttl() time.Duration {
 	return 5 * time.Minute
 }
 
-func (c *VerifierConfig) validate() error {
-	if c.NoiseStatic == nil {
-		return errors.New("attest: verifier needs a static Noise key")
-	}
-	if c.VerifierID == "" || len(c.VerifierID) > maxShortString {
-		return errors.New("attest: verifier id must be 1-64 bytes")
-	}
-	return nil
-}
-
-// NewEnrolVerifier starts an enrolment session.
+// NewEnrolVerifier starts an enrolment session, with an identity made for
+// this machine alone: a new static Noise key and a random verifier id.
 func NewEnrolVerifier(cfg VerifierConfig) (*Verifier, error) {
-	if err := cfg.validate(); err != nil {
-		return nil, err
-	}
-	hs, err := NewHandshake(PatternXX, true, cfg.NoiseStatic, nil, cfg.rng())
+	noise, err := GenerateNoiseKeypair(cfg.rng())
 	if err != nil {
 		return nil, err
 	}
-	return &Verifier{cfg: cfg, enrol: true, hs: hs, pattern: PatternXX}, nil
+	id := make([]byte, 16)
+	if _, err := io.ReadFull(cfg.rng(), id); err != nil {
+		return nil, err
+	}
+	hs, err := NewHandshake(PatternXX, true, noise, nil, cfg.rng())
+	if err != nil {
+		return nil, err
+	}
+	return &Verifier{cfg: cfg, noise: noise, id: hex.EncodeToString(id), enrol: true, hs: hs, pattern: PatternXX}, nil
 }
 
 // NewAttestVerifier starts an attestation session against an enrolled machine.
 func NewAttestVerifier(cfg VerifierConfig, rec *MachineRecord) (*Verifier, error) {
-	if err := cfg.validate(); err != nil {
-		return nil, err
-	}
 	if err := rec.Validate(); err != nil {
 		return nil, err
 	}
-	hs, err := NewHandshake(PatternIK, true, cfg.NoiseStatic, rec.MachineNoisePub, cfg.rng())
+	noise, err := NoiseKeypairFromPrivate(rec.VerifierNoisePriv)
+	if err != nil {
+		return nil, err
+	}
+	hs, err := NewHandshake(PatternIK, true, noise, rec.MachineNoisePub, cfg.rng())
 	if err != nil {
 		return nil, err
 	}
 	cp := *rec
-	return &Verifier{cfg: cfg, hs: hs, record: &cp, pattern: PatternIK}, nil
+	return &Verifier{cfg: cfg, noise: noise, id: rec.VerifierID, hs: hs, record: &cp, pattern: PatternIK}, nil
 }
 
 // Finished reports whether the session has ended (successfully or not).
@@ -559,20 +563,21 @@ func (v *Verifier) handleEnrol(out *Output, d *Decoder) (*Output, error) {
 		}
 		now := v.cfg.now()
 		rec := &MachineRecord{
-			Version:         MachineRecordVersion,
-			DeviceID:        v.offer.DeviceID,
-			FriendlyName:    v.offer.FriendlyName,
-			EKPub:           v.offer.EKPub,
-			EKCert:          v.offer.EKCert,
-			AKPub:           v.offer.AKPub,
-			AKName:          v.offer.AKName,
-			MachineNoisePub: v.sess.RemoteStatic(),
-			BootKeyPub:      v.bootPoint,
-			SigningKeyName:  v.signingName,
-			AdvKey:          v.offer.AdvKey,
-			AnchorPub:       v.anchor,
-			VerifierID:      v.cfg.VerifierID,
-			Slot:            ec.Slot,
+			Version:           MachineRecordVersion,
+			DeviceID:          v.offer.DeviceID,
+			FriendlyName:      v.offer.FriendlyName,
+			EKPub:             v.offer.EKPub,
+			EKCert:            v.offer.EKCert,
+			AKPub:             v.offer.AKPub,
+			AKName:            v.offer.AKName,
+			MachineNoisePub:   v.sess.RemoteStatic(),
+			BootKeyPub:        v.bootPoint,
+			SigningKeyName:    v.signingName,
+			AdvKey:            v.offer.AdvKey,
+			AnchorPub:         v.anchor,
+			VerifierID:        v.id,
+			VerifierNoisePriv: v.noise.Private,
+			Slot:              ec.Slot,
 			Policy: Policy{
 				ID:        v.cfg.policyID(),
 				Selection: v.offer.Selection.Indices,
@@ -735,7 +740,7 @@ func (v *Verifier) ProvideAnchorKeyAttested(pubDER, attestation []byte) (*Output
 		return out, err // recoverable: the app may retry with a correct key
 	}
 	v.anchor = append([]byte(nil), pubDER...)
-	v.accTBS = EnrolAcceptTBS(v.offer.DeviceID, v.sess.ChannelBinding(), v.offer.AKName, v.anchor, v.cfg.VerifierID, v.cfg.policyID())
+	v.accTBS = EnrolAcceptTBS(v.offer.DeviceID, v.sess.ChannelBinding(), v.offer.AKName, v.anchor, v.id, v.cfg.policyID())
 	v.state = vsWaitAnchorSig
 	out.Events = append(out.Events, Event{Type: EvNeedSignature, Purpose: PurposeEnrolAccept, TBS: v.accTBS})
 	return out, nil
@@ -753,12 +758,11 @@ func (v *Verifier) ProvideSignature(sig []byte) (*Output, error) {
 			return out, errors.New("attest: signature does not verify against the anchor key; it must be DER ECDSA over SHA-256(tbs)")
 		}
 		b, err := (&EnrolAccept{
-			VerifierID:   v.cfg.VerifierID,
-			VerifierName: v.cfg.VerifierName,
-			AnchorPub:    v.anchor,
-			PolicyID:     v.cfg.policyID(),
-			ReceiptTTL:   uint32(v.cfg.ttl() / time.Second),
-			AnchorSig:    sig,
+			VerifierID: v.id,
+			AnchorPub:  v.anchor,
+			PolicyID:   v.cfg.policyID(),
+			ReceiptTTL: uint32(v.cfg.ttl() / time.Second),
+			AnchorSig:  sig,
 
 			AnchorAttestation: v.anchorAttestation,
 		}).Encode()

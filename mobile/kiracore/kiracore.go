@@ -55,17 +55,6 @@ const (
 	AdvFlagAttest = int(attest.AdvFlagAttest)
 )
 
-// GenerateNoiseKey creates the phone's static X25519 private key (32 bytes).
-// Create it once per installation and store it in the platform's encrypted
-// storage; it identifies the phone to every enrolled machine.
-func GenerateNoiseKey() ([]byte, error) {
-	kp, err := attest.GenerateNoiseKeypair(nil)
-	if err != nil {
-		return nil, err
-	}
-	return kp.Private, nil
-}
-
 // AdvertisementFlags returns the flags byte of a tpm2-kira scan response's
 // service data, or -1 if the data is not 13 bytes.
 func AdvertisementFlags(serviceData []byte) int {
@@ -155,35 +144,28 @@ func RecordSummary(recordJSON string) (string, error) {
 	return string(b), err
 }
 
-// Config is the phone's verifier identity, given as JSON to the session
+// Config is the phone's settings, given as JSON to the session
 // constructors:
 //
-//	{"verifier_id": "…", "verifier_name": "Pixel 9", "policy_id": "default",
-//	 "receipt_ttl_seconds": 300}
+//	{"policy_id": "default", "receipt_ttl_seconds": 300}
 //
-// verifier_id is a stable random identifier for this installation (1-64 bytes).
+// The phone's identity towards a machine (its static Noise key and verifier
+// id) is no setting: enrolment makes a new one for every machine and keeps
+// it in that machine's record, so no two machines see the same phone, and
+// one app attests any number of machines, each through its own record.
 type config struct {
-	VerifierID   string `json:"verifier_id"`
-	VerifierName string `json:"verifier_name"`
-	PolicyID     string `json:"policy_id"`
-	ReceiptTTL   int    `json:"receipt_ttl_seconds"`
+	PolicyID   string `json:"policy_id"`
+	ReceiptTTL int    `json:"receipt_ttl_seconds"`
 }
 
-func parseConfig(cfgJSON string, noisePriv []byte) (attest.VerifierConfig, error) {
+func parseConfig(cfgJSON string) (attest.VerifierConfig, error) {
 	var c config
 	if err := json.Unmarshal([]byte(cfgJSON), &c); err != nil {
 		return attest.VerifierConfig{}, err
 	}
-	kp, err := attest.NoiseKeypairFromPrivate(noisePriv)
-	if err != nil {
-		return attest.VerifierConfig{}, err
-	}
 	return attest.VerifierConfig{
-		NoiseStatic:  kp,
-		VerifierID:   c.VerifierID,
-		VerifierName: c.VerifierName,
-		PolicyID:     c.PolicyID,
-		ReceiptTTL:   time.Duration(c.ReceiptTTL) * time.Second,
+		PolicyID:   c.PolicyID,
+		ReceiptTTL: time.Duration(c.ReceiptTTL) * time.Second,
 	}, nil
 }
 
@@ -204,8 +186,8 @@ func newSession(v *attest.Verifier) *Session {
 
 // NewEnrolSession prepares an enrolment. Connect only to a machine whose
 // advertisement has AdvFlagEnrol set.
-func NewEnrolSession(cfgJSON string, noisePriv []byte) (*Session, error) {
-	cfg, err := parseConfig(cfgJSON, noisePriv)
+func NewEnrolSession(cfgJSON string) (*Session, error) {
+	cfg, err := parseConfig(cfgJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -217,8 +199,8 @@ func NewEnrolSession(cfgJSON string, noisePriv []byte) (*Session, error) {
 }
 
 // NewAttestSession prepares an attestation of the machine in recordJSON.
-func NewAttestSession(cfgJSON string, noisePriv []byte, recordJSON string) (*Session, error) {
-	cfg, err := parseConfig(cfgJSON, noisePriv)
+func NewAttestSession(cfgJSON string, recordJSON string) (*Session, error) {
+	cfg, err := parseConfig(cfgJSON)
 	if err != nil {
 		return nil, err
 	}

@@ -129,7 +129,26 @@ func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *Attestation, priv cryp
 	if b != nil {
 		b.Count = current + 1
 	}
+	// A slot has a TOTP key or phones (SealedBlobPayload): the first phone
+	// retires the key, and the last one leaving brings a new one, under
+	// the slot's policy, so the approval in force covers it at once.
+	retired := false
+	var newKey []byte
+	var newAlg tpm2.TPMAlgID
 	sb.Payload.Attestation = b
+	switch {
+	case sb.PhoneAttested():
+		retired = sb.HasTOTPKey()
+		sb.Payload.Public, sb.Payload.Private, sb.Payload.TOTPAlgorithm = nil, nil, 0
+	case !sb.HasTOTPKey():
+		if newKey, newAlg, err = newTOTPSecret(tpmDev); err != nil {
+			return err
+		}
+		defer clear(newKey)
+		if err := addTOTPKey(tpmDev, sb, newKey, newAlg); err != nil {
+			return err
+		}
+	}
 	unsigned, err := sb.Marshal()
 	if err != nil {
 		return err
@@ -156,6 +175,14 @@ func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *Attestation, priv cryp
 		return fmt.Errorf("the enrolment is written, but the record counter could not be raised, so it is not accepted yet: %w", err)
 	} else if b != nil && got != b.Count {
 		return fmt.Errorf("the record counter moved to %d while the enrolment was written with %d; enrol again", got, b.Count)
+	}
+	if retired {
+		fmt.Printf("Slot %d's TOTP code is retired: the phone checks its boots from now on. Remove its\n", slot)
+		fmt.Printf("entry from your authenticator app (\"TPM2-KIRA: ... (#%d)\"); it shows no valid code any more.\n", slot)
+	}
+	if newKey != nil {
+		fmt.Printf("Slot %d has no phone any more, so it has a TOTP code again (a new one):\n", slot)
+		showTOTPSecret(newKey, newAlg, idx, PCRSpecsToString(sb.GetPCRSpecs()))
 	}
 	return nil
 }
@@ -196,6 +223,8 @@ func enrolmentSize(slotBlob *SealedBlob, enrolment *Attestation) (int, error) {
 	}
 	copyBlob := *slotBlob
 	copyBlob.Payload.Attestation = &grown
+	// With a phone, the slot's TOTP key goes (writeAttestBlob).
+	copyBlob.Payload.Public, copyBlob.Payload.Private, copyBlob.Payload.TOTPAlgorithm = nil, nil, 0
 	unsigned, err := copyBlob.Marshal()
 	if err != nil {
 		return 0, err
@@ -556,7 +585,7 @@ func AttestEnrol(o EnrolOptions) error {
 			return err
 		}
 		fmt.Println("Connected:     a phone (anonymous until the session is confirmed)")
-		v, err := attest.ServeEnrolment(conn, id, be, progressf)
+		_, err = attest.ServeEnrolment(conn, id, be, progressf)
 		conn.Close()
 		if err != nil {
 			var em *attest.ErrorMsg
@@ -567,7 +596,7 @@ func AttestEnrol(o EnrolOptions) error {
 			continue
 		}
 		fmt.Println()
-		fmt.Printf("\033[0;32mEnrolled:      %s (verifier id %s)\033[0m\n", verifierName(v), v.ID)
+		fmt.Printf("\033[0;32mEnrolled:      phone %d of this slot\033[0m\n", len(blob.Phone.Verifiers))
 		fmt.Printf("Stored:        in the blob of slot %d (NV 0x%08X)\n", attestSlot(idx), idx)
 		fmt.Println()
 		if len(blob.Phone.Verifiers) > 1 {
@@ -587,16 +616,6 @@ func AttestEnrol(o EnrolOptions) error {
 		}
 		return nil
 	}
-}
-
-// verifierName is the phone's name as the console may show it: the name
-// was chosen on the phone, so it is quoted when it holds anything but
-// printable text.
-func verifierName(v *attest.EnrolledVerifier) string {
-	if v.Name != "" {
-		return quoteUntrusted(v.Name)
-	}
-	return "phone"
 }
 
 // progressf prints the session's progress plainly, successes green and
@@ -783,7 +802,7 @@ func runGateRadio(host gateHost, o GateOptions, step func(string, ...any), ended
 	}
 	for _, v := range ident.Verifiers {
 		// No anchors here: the receipt is judged by the host.
-		id.Verifiers = append(id.Verifiers, attest.EnrolledVerifier{ID: v.ID, Name: v.Name, NoisePub: v.NoisePub})
+		id.Verifiers = append(id.Verifiers, attest.EnrolledVerifier{ID: v.ID, NoisePub: v.NoisePub})
 	}
 
 	step("opening hci%d (waiting up to %s for it)", o.Adapter, o.AdapterWait)
@@ -999,7 +1018,7 @@ func reportReceipt(res *attest.AttestResult, recordVerified bool) int {
 	} else {
 		defer narrate("tpm2-kira:   (not verified on this machine: your phone's screen is authoritative)")
 	}
-	who := verifierName(res.Verifier)
+	who := "your phone"
 	c := res.Check
 	switch {
 	case c.Authentic && c.Verdict == attest.VerdictOK:
@@ -1042,7 +1061,6 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 	}
 	type verifierJSON struct {
 		ID           string `json:"id"`
-		Name         string `json:"name,omitempty"`
 		PolicyID     string `json:"policy_id,omitempty"`
 		AnchorDigest string `json:"anchor_digest"`
 	}
@@ -1099,7 +1117,7 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 			}
 		}
 		for _, v := range b.Phone.Verifiers {
-			s.Verifiers = append(s.Verifiers, verifierJSON{ID: v.ID, Name: v.Name, PolicyID: v.PolicyID, AnchorDigest: hex.EncodeToString(attest.AnchorDigest(v.AnchorPub))})
+			s.Verifiers = append(s.Verifiers, verifierJSON{ID: v.ID, PolicyID: v.PolicyID, AnchorDigest: hex.EncodeToString(attest.AnchorDigest(v.AnchorPub))})
 		}
 		out = append(out, s)
 	}
@@ -1144,7 +1162,7 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 			if i == len(s.Verifiers)-1 {
 				branch = "└──"
 			}
-			fmt.Printf("    %s %s (%s), anchor %s…\n", branch, quoteUntrusted(v.Name), v.ID, v.AnchorDigest[:16])
+			fmt.Printf("    %s phone %d (%s), anchor %s…\n", branch, i+1, v.ID, v.AnchorDigest[:16])
 		}
 	}
 	return tamperedErr(invalid)
