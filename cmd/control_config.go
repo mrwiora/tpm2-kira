@@ -14,11 +14,13 @@ import (
 // the attestation by phone (TPM2_KIRA_ATTEST_*) and the YubiKey's PIN for
 // the unattended reseal (TPM2_KIRA_PIN). How the disk's key is made is not
 // configured anywhere: the boot reads it from the LUKS header's tokens
-// (luks_header.go). Shell-style KEY=VALUE lines, so the initramfs
-// scripts source it too; the hooks copy it into the initramfs without the
-// PIN line. 'tpm2-kira control' is what writes it; the other commands only
-// read. A file holding the PIN must be root's and readable by root alone,
-// else the PIN in it is treated as disclosed and not used.
+// (luks_header.go). KEY=VALUE lines. Nothing of it goes into the boot
+// image, and no script sources it: tpm2-kira reads it, the image build's
+// two settings through 'attest initramfs-deps'. 'tpm2-kira control' is what
+// writes it; the other commands only read. The PIN is read from its own
+// line (storedPIN), for the signer alone, whatever the other lines say. A
+// file holding the PIN must be root's and readable by root alone, else the
+// PIN in it is treated as disclosed and not used.
 
 // DefaultControlConfigPath is the file.
 const DefaultControlConfigPath = "/etc/tpm2-kira/control.conf"
@@ -53,7 +55,6 @@ func DefaultAttestConfig() AttestConfig {
 // ControlConfig is the whole file.
 type ControlConfig struct {
 	Attest AttestConfig
-	PIN    string // TPM2_KIRA_PIN: the YubiKey's PIN, "" when not stored
 	// Control is how 'tpm2-kira control' guides: "guided" (the one row,
 	// then the reboot, then part 2), "manual" (every step by hand), or ""
 	// (not chosen yet: the start screen asks). Changeable there any time.
@@ -120,7 +121,7 @@ func ParseControlConfig(data []byte) (ControlConfig, error) {
 				return cfg, fmt.Errorf("control.conf line %d: TPM2_KIRA_ATTEST_BLUETOOTH must be auto or always, not %q", n, val)
 			}
 		case PINEnvVar:
-			cfg.PIN = val
+			// Read by storedPIN alone, for the signer; never kept here.
 		case "TPM2_KIRA_ATTEST":
 			return cfg, fmt.Errorf("control.conf line %d: there is no attestation mode to set; the phone is served whenever one is enrolled. Remove the line", n)
 		case "TPM2_KIRA_ATTEST_ADAPTER":
@@ -182,7 +183,7 @@ func setControlGuide(path, value string) error {
 }
 
 // setControlPIN stores the YubiKey's PIN in control.conf, which is then
-// readable by root alone (the hooks leave the line out of the initramfs).
+// readable by root alone. Nothing of the file goes into the boot image.
 func setControlPIN(path, pin string) error {
 	if strings.ContainsAny(pin, "'\n") {
 		return fmt.Errorf("the PIN cannot hold a quote or a newline")
@@ -193,10 +194,37 @@ func setControlPIN(path, pin string) error {
 	return os.Chmod(path, 0o600)
 }
 
-// configPIN is the PIN control.conf stores: "" when there is none; loose
+// The YubiKey's PIN is read from control.conf by storedPIN alone, from its
+// own line, whatever the other lines say: a settings line this version
+// refuses must not take the PIN with it (the signing key would then ask on
+// a terminal, or fail). Its value goes to the signer, to sign with the
+// key, and nowhere else; everything else asks pinStored, which says only
+// whether it is there. control.conf never goes into the boot image.
+
+// pinLine returns the value of the last TPM2_KIRA_PIN line, read with the
+// parser's line syntax (KEY=VALUE, spaces around both, quotes around the
+// value).
+func pinLine(data []byte) (string, bool) {
+	pin, found := "", false
+	for _, l := range strings.Split(string(data), "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(l, "=")
+		if !ok || strings.TrimSpace(key) != PINEnvVar {
+			continue
+		}
+		pin, found = strings.Trim(strings.TrimSpace(val), `"'`), true
+	}
+	return pin, found && pin != ""
+}
+
+// storedPIN is the PIN control.conf stores: "" when there is none; loose
 // when the file is not root's, or group or others may read it - such a PIN
-// is refused, it has to be treated as already disclosed.
-func configPIN(path string) (pin string, loose bool) {
+// is refused, it has to be treated as already disclosed. For the signer
+// only (pinFromConfig).
+func storedPIN(path string) (pin string, loose bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", false
@@ -210,10 +238,17 @@ func configPIN(path string) (pin string, loose bool) {
 	if err != nil {
 		return "", false
 	}
-	cfg, err := ParseControlConfig(data)
-	if err != nil || cfg.PIN == "" {
+	pin, ok := pinLine(data)
+	if !ok {
 		return "", false
 	}
-	uid, ok := ownerOf(st)
-	return cfg.PIN, st.Mode().Perm()&0o077 != 0 || !ok || !trustedOwner(uid)
+	uid, owned := ownerOf(st)
+	return pin, st.Mode().Perm()&0o077 != 0 || !owned || !trustedOwner(uid)
+}
+
+// pinStored says whether control.conf stores a PIN, and whether it is
+// loose (readable by others): the PIN's value stays out of it.
+func pinStored(path string) (stored, loose bool) {
+	pin, loose := storedPIN(path)
+	return pin != "", loose
 }

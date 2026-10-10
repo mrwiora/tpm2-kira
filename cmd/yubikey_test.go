@@ -665,16 +665,20 @@ func TestPINFromControlConf(t *testing.T) {
 	}
 	CloseTokenSessions()
 
-	// A file that does not load - a line this version refuses next to the
-	// PIN - is named with the reason, and nothing is asked: the reseal of
-	// an image build must not wait at a terminal nobody watches.
+	// A line this version refuses next to the PIN does not take the PIN
+	// with it: it is used, nothing is asked.
 	CloseTokenSessions()
 	os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST_TIMEOUT=0\nTPM2_KIRA_PIN='123456'\n"), 0600)
+	os.Chmod(conf, 0600)
 	prompts = fake.prompts
-	_, err = signer.Sign(rand.Reader, digest[:], crypto.SHA256)
-	if err == nil || !strings.Contains(err.Error(), "does not load, so the PIN in it is not read") ||
-		!strings.Contains(err.Error(), "TPM2_KIRA_ATTEST_TIMEOUT is gone") || fake.prompts != prompts {
-		t.Errorf("a file that does not load: err = %v, prompts %d → %d", err, prompts, fake.prompts)
+	if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil || fake.prompts != prompts {
+		t.Errorf("a refused line next to the PIN: err = %v, prompts %d → %d", err, prompts, fake.prompts)
+	}
+	if stored, loose := pinStored(conf); !stored || loose {
+		t.Errorf("pinStored = %v, %v", stored, loose)
+	}
+	if _, err := LoadControlConfig(conf); err == nil {
+		t.Error("the refused line should still make the settings invalid")
 	}
 	CloseTokenSessions()
 

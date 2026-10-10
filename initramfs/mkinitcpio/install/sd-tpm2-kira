@@ -42,15 +42,16 @@ CONF=${TPM2_KIRA_CONTROL_CONF:-/etc/tpm2-kira/control.conf}
 # The configuration file is the running system's alone: it says which
 # adapter's driver goes into the image and when (TPM2_KIRA_ATTEST_ADAPTER,
 # _BLUETOOTH), and holds the YubiKey's PIN. Nothing of it goes into the
-# image - the gate there takes the adapter that comes up, waits as long as
-# the code screen holds, and logs every step with tpm2-kira.debug=1 on the
-# kernel command line. It is checked here, since the build reads it.
+# image, and this hook does not read it either - 'attest initramfs-deps'
+# reads the two settings. A file that does not load is said here, never a
+# reason to stop the build: the image is built with the defaults (a kernel
+# update must not end with a half-built image over a settings line).
 _check_config() {
     [[ -r $CONF ]] || return 0
     if ! tpm2-kira attest config-check "$CONF" >/dev/null 2>&1; then
-        error "tpm2-kira: $CONF is not valid: $(tpm2-kira attest config-check "$CONF" 2>&1 | tail -1)"
-        return 1
+        warning "tpm2-kira: $CONF is not valid: $(tpm2-kira attest config-check "$CONF" 2>&1 | tail -1)"
     fi
+    return 0
 }
 
 # Bluetooth for remote attestation (PLAN-BLE.md §3.1), whenever a phone is
@@ -61,25 +62,30 @@ _check_config() {
 # cannot be found: the image then shows the code and serves the disk's key,
 # and no phone is asked.
 _add_bluetooth() {
-    local adapter deps rc log kind value nfw=0 policy=auto
+    local adapter deps rc log kind value nfw=0 policy
     local -a modules=()
 
-    # auto: only with an enrolled phone. always: packed into every image,
-    # so enrolling and removing phones never changes it (control.conf).
-    if [[ -r $CONF ]]; then
-        policy=$( . "$CONF" && printf '%s' "${TPM2_KIRA_ATTEST_BLUETOOTH:-auto}" )
-    fi
+    # The firmware the adapter loads is named in the kernel log of a boot
+    # that loaded it - not every boot does (an Intel controller keeps its
+    # firmware over a warm reboot and then names none). So the Bluetooth
+    # lines of every boot the journal keeps go in; the ring buffer may also
+    # have rotated on a long uptime. initramfs-deps also reads the two
+    # settings of control.conf: which adapter, and the policy (auto: only
+    # with an enrolled phone; always: packed into every image).
+    log=$(mktemp)
+    journalctl -k -o cat --no-pager 2> /dev/null | grep -E 'Bluetooth: hci[0-9]+:' > "$log" || true
+    deps=$(tpm2-kira attest initramfs-deps --kernel-log "$log")
+    rc=$?
+    rm -f "$log"
+    policy=$(sed -n 's/^policy //p' <<< "$deps")
+    adapter=$(sed -n 's/^adapter hci//p' <<< "$deps")
+
     local enrolled
     enrolled=$(tpm2-kira attest status --json 2>/dev/null)
     if [[ -z $enrolled || $enrolled == '[]' ]] && [[ $policy != always ]]; then
         plain "tpm2-kira: no phone is enrolled; Bluetooth not added"
         return 0
     fi
-    adapter=0
-    if [[ -r $CONF ]]; then
-        adapter=$( . "$CONF" && printf '%s' "${TPM2_KIRA_ATTEST_ADAPTER:-0}" )
-    fi
-    adapter=${adapter#hci}
 
     # The gate checks the enrolment record before it advertises: signed by
     # this machine's signing key, and current by the TPM's record counter.
@@ -104,23 +110,12 @@ _add_bluetooth() {
         return 0
     fi
 
-    # The firmware the adapter loads is named in the kernel log of a boot
-    # that loaded it - not every boot does (an Intel controller keeps its
-    # firmware over a warm reboot and then names none). So the Bluetooth
-    # lines of every boot the journal keeps go in; the ring buffer may also
-    # have rotated on a long uptime.
-    log=$(mktemp)
-    journalctl -k -o cat --no-pager 2> /dev/null | grep -E 'Bluetooth: hci[0-9]+:' > "$log" || true
-    deps=$(tpm2-kira attest initramfs-deps --adapter "$adapter" --kernel-log "$log")
-    rc=$?
-    rm -f "$log"
-
     while read -r kind value; do
         [[ $kind == warning ]] && warning "tpm2-kira: $value"
     done <<< "$deps"
 
     if (( rc != 0 )); then
-        warning "tpm2-kira: a phone is enrolled but hci$adapter was not found; Bluetooth not added to the image"
+        warning "tpm2-kira: a phone is enrolled but its Bluetooth adapter was not found; Bluetooth not added to the image"
         return 0
     fi
     # Every other command exits 0 by design, so an installed binary that

@@ -718,16 +718,8 @@ func readPIN(s *yubiKeySigner) (pin, source string, err error) {
 // rather than used: it has to be treated as already disclosed.
 func pinFromConfig() (string, bool, error) {
 	path := controlConfigPath()
-	pin, loose := configPIN(path)
+	pin, loose := storedPIN(path)
 	if pin == "" {
-		// A file that does not load must not make its PIN vanish
-		// quietly: the reseal would then ask for one on a terminal that
-		// nobody watches (the hook's, inside mkinitcpio -P) and wait.
-		if _, err := os.Stat(path); err == nil {
-			if _, err := LoadControlConfig(path); err != nil {
-				return "", false, fmt.Errorf("%s does not load, so the PIN in it is not read: %w", path, err)
-			}
-		}
 		return "", false, nil
 	}
 	if loose {
@@ -744,7 +736,7 @@ func pinFromConfig() (string, bool, error) {
 // a manual seal or reseal, when the automatic reseal after an initramfs
 // rebuild will not have it. Silent when control.conf provides the PIN.
 func warnIfNoUnattendedPIN(w io.Writer) {
-	if pin, _ := configPIN(controlConfigPath()); pin != "" {
+	if stored, _ := pinStored(controlConfigPath()); stored {
 		return
 	}
 	fmt.Fprintf(w, "WARNING: %s holds no %s.\n", controlConfigPath(), PINEnvVar)

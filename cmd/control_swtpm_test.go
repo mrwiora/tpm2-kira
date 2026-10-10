@@ -72,7 +72,7 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	if err := setAttestBluetooth(conf, "always"); err != nil {
 		t.Fatal(err)
 	}
-	if cfg, err := LoadControlConfig(conf); err != nil || cfg.Attest.Bluetooth != "always" || cfg.PIN != "" {
+	if cfg, err := LoadControlConfig(conf); err != nil || cfg.Attest.Bluetooth != "always" {
 		t.Errorf("control.conf loads as %+v, %v", cfg, err)
 	}
 	f = collectFacts(sock, false)
@@ -92,9 +92,21 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	if st, _ := os.Stat(conf); st.Mode().Perm() != 0o600 {
 		t.Errorf("control.conf with the PIN is %v", st.Mode().Perm())
 	}
-	if cfg, _ := LoadControlConfig(conf); cfg.Attest.Bluetooth != "always" || cfg.PIN != "123456" {
+	if cfg, _ := LoadControlConfig(conf); cfg.Attest.Bluetooth != "always" {
 		t.Errorf("the policy kept next to the PIN: %+v", cfg)
 	}
+	if pin, loose := storedPIN(conf); pin != "123456" || loose {
+		t.Errorf("the PIN read back: %q loose %v", pin, loose)
+	}
+	// A line this version refuses: the settings are invalid (red Config
+	// line), the PIN is still stored - storing it again cannot loop.
+	data, _ := os.ReadFile(conf)
+	os.WriteFile(conf, append([]byte("TPM2_KIRA_ATTEST_TIMEOUT=0\n"), data...), 0o600)
+	f = collectFacts(sock, false)
+	if !f.PINStored || f.AttestConf == "" {
+		t.Errorf("a refused line next to the PIN: stored %v, config %q", f.PINStored, f.AttestConf)
+	}
+	os.WriteFile(conf, data, 0o600)
 	// Readable by others: the PIN counts as disclosed, and that is a risk.
 	os.Chmod(conf, 0o644)
 	f = collectFacts(sock, false)

@@ -133,7 +133,7 @@ func TestHookPutsNoConfigIntoTheImage(t *testing.T) {
 	}
 	root := filepath.Join(dir, "root")
 	run := func(conf string) string {
-		cmd := exec.Command("bash", "-c", "error() { echo \"ERROR $*\"; }\nsource initramfs/mkinitcpio/install/sd-tpm2-kira\n_check_config && echo OK")
+		cmd := exec.Command("bash", "-c", "error() { echo \"ERROR $*\"; }\nwarning() { echo \"WARNING $*\"; }\nsource initramfs/mkinitcpio/install/sd-tpm2-kira\n_check_config && echo OK")
 		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "TPM2_KIRA_CONTROL_CONF="+conf, "BUILDROOT="+root, "TPM2_KIRA_UNPRIVILEGED=1")
 		out, _ := cmd.CombinedOutput()
 		return string(out)
@@ -148,7 +148,8 @@ func TestHookPutsNoConfigIntoTheImage(t *testing.T) {
 	}
 	old := filepath.Join(dir, "old.conf")
 	os.WriteFile(old, []byte("TPM2_KIRA_ATTEST_DEBUG=1\n"), 0o600)
-	if out := run(old); !strings.Contains(out, "ERROR") || !strings.Contains(out, "Debug at boot") {
+	// A file that does not load is said, but never stops the build.
+	if out := run(old); !strings.Contains(out, "OK") || strings.Contains(out, "ERROR") || !strings.Contains(out, "Debug at boot") {
 		t.Fatalf("a file with a gone setting: %s", out)
 	}
 }
@@ -165,7 +166,7 @@ func TestHookAddsBluetoothIntoAnEmptyImage(t *testing.T) {
 	root := filepath.Join(dir, "root")
 	os.Mkdir(root, 0o755)
 	conf := filepath.Join(dir, "control.conf")
-	os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST_ADAPTER=0\n"), 0o600)
+	os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST_ADAPTER=0\nTPM2_KIRA_PIN='secret-1234'\n"), 0o600)
 	script := `
 add_module() { echo "MODULE $1"; }
 add_firmware() { echo "FIRMWARE $1"; }
@@ -180,7 +181,7 @@ tpm2-kira() {
     "attest status") echo '[{"slot_number":0}]' ;;
     "attest signer") printf -- '-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n' ;;
     "attest initramfs-deps")
-        printf 'adapter hci0\nmodule btusb\nmodule btintel\nfirmware intel/ibt-0180-0041.sfi\n'
+        printf 'policy auto\nadapter hci0\nmodule btusb\nmodule btintel\nfirmware intel/ibt-0180-0041.sfi\n'
         printf 'udev ACTION=="add", SUBSYSTEM=="usb", KERNEL=="3-10", ATTR{idVendor}=="8087", ATTR{idProduct}=="0033", ATTR{authorized}="1"\n' ;;
     esac
 }
@@ -204,6 +205,16 @@ _add_bluetooth
 			t.Errorf("%s: %q %v", file, b, err)
 		}
 	}
+	// Nothing of control.conf in the image: no file of it, and not the PIN
+	// in any file.
+	filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			if b, _ := os.ReadFile(p); strings.Contains(string(b), "secret-1234") || filepath.Base(p) == "control.conf" {
+				t.Errorf("%s carries control.conf or its PIN", p)
+			}
+		}
+		return nil
+	})
 	for _, want := range []string{"MODULE btusb", "FIRMWARE intel/ibt-0180-0041.sfi", "UNIT tpm2-kira-attest.service", "2 modules, 1 firmware files"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("the hook did not say %q:\n%s", want, out)

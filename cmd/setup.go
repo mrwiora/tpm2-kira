@@ -162,7 +162,7 @@ func printPINInstructions(w io.Writer, t TokenInfo, s TokenSlot) {
 	fmt.Fprintln(w)
 
 	path := controlConfigPath()
-	if pin, loose := configPIN(path); pin != "" {
+	if stored, loose := pinStored(path); stored {
 		fmt.Fprintf(w, "%s stores the PIN: sealing, resealing and the automatic reseal\n", path)
 		fmt.Fprintln(w, "after kernel and initramfs updates all take it from there.")
 		if loose {

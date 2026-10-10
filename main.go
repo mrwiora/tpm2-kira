@@ -761,7 +761,7 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 	case "initramfs-deps":
 		// Used by the initramfs hooks; prints "module", "firmware" and
 		// "warning" lines for the adapter on this machine.
-		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
+		adapter := fs.Int("adapter", -1, "Bluetooth adapter index (hciN); default: TPM2_KIRA_ATTEST_ADAPTER of control.conf")
 		kernelLog := fs.String("kernel-log", "", "Extra kernel log text (e.g. 'journalctl -k -b -o cat' output)")
 		fwDir := fs.String("firmware-dir", cmd.DefaultFirmwareDir, "Firmware directory")
 		fs.Parse(args)

@@ -595,9 +595,15 @@ run after an image rebuild, which runs as root on the host; the mkinitcpio
 post hook and Debian's hook need no variable from their own environment.
 
 The PIN does not reach the image, since an image - a unified kernel image on
-the ESP, say - is not root's alone: nothing of `control.conf` goes into it.
-The hooks read the file on the running system (which adapter's driver to
-pack) and check it; the gate in the image needs no setting.
+the ESP, say - is not root's alone: nothing of `control.conf` goes into it,
+and no hook sources the file (`attest initramfs-deps` reads the build's two
+settings). The PIN is read from its own line (`storedPIN`), whatever the
+other lines say: a settings line this version refuses never takes the PIN
+with it. Its value goes to the YubiKey signer alone, to sign with the key -
+the blob, the approvals, the authorisations of NV writes; everything else
+(`control`, `setup`, the warnings) only learns whether it is stored. A
+file that does not load is shown red by `control` and warned about by the
+image build, which then builds with the defaults rather than stopping.
 
 **Warning when the automatic reseal will lack the PIN (implemented).** Right
 after a manual `seal` or `reseal` has had the PIN accepted, tpm2-kira warns,
@@ -839,7 +845,7 @@ Ranked by how much I think they matter.
 | 4 | Token must be pre-populated | **decided: yes — tpm2-kira never writes to the token** |
 | 4a | Touch policy | detected, not dictated; `NEVER` recommended for a dedicated slot |
 | 5 | Backup for a lost token | proposed: PEM backup + switch procedure; three-branch PolicyOR would need its own blob bump |
-| 6 | Where the PIN for unattended resealing lives | **a plain `TPM2_KIRA_PIN=` line in `/etc/tpm2-kira/control.conf`, written by `control`, `chmod 600`, left out of the image; tpm2-kira reads it itself** (§9.1) |
+| 6 | Where the PIN for unattended resealing lives | **a plain `TPM2_KIRA_PIN=` line in `/etc/tpm2-kira/control.conf`, written by `control`, `chmod 600`, never in the image, read from its own line for the signer alone** (§9.1) |
 | 8 | File-backed key remains the default | **decided: yes — the token is opt-in** |
 | 9 | `TPM2_KIRA_EXPLAIN_MISMATCH` in `initramfs.conf` | proposed; carries no secret, unlike the PIN |
 | 7 | Token detection in `setup` | **decided: always probe, read-only and PIN-free; with a usable key, ask on the terminal (token slot or local files), even for one candidate; report "none found" and create local files otherwise** (§8.1) |

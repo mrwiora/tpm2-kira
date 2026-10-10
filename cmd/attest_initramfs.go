@@ -241,6 +241,20 @@ func firmwareExists(fwDir, rel string) bool {
 	return false
 }
 
+// buildSettings are what an image build reads of control.conf: the adapter
+// whose driver goes in, and whether Bluetooth goes in before a phone is
+// enrolled. A file that does not load does not stop the build - a kernel
+// update must never end with a half-built image over a settings line -
+// it is built with the defaults, and the warning says why; control shows
+// the file red.
+func buildSettings(path string) (AttestConfig, string) {
+	cfg, err := LoadAttestConfig(path)
+	if err != nil {
+		return DefaultAttestConfig(), fmt.Sprintf("%s does not load (%v); the image is built with hci0 and Bluetooth only with an enrolled phone", path, err)
+	}
+	return cfg, ""
+}
+
 // readKernelLog returns the kernel ring buffer (needs CAP_SYSLOG, as the
 // initramfs hooks have) plus an optional extra log file, e.g. the output of
 // `journalctl -k -b`, which survives ring-buffer rotation on a long uptime.
@@ -263,6 +277,7 @@ func readKernelLog(extra string) []byte {
 
 // AttestInitramfsDeps prints the adapter's needs for the initramfs hooks:
 //
+//	policy auto     always: Bluetooth goes in before a phone is enrolled
 //	adapter hci0
 //	module btusb
 //	firmware intel/ibt-0041-0041.sfi
@@ -273,6 +288,16 @@ func readKernelLog(extra string) []byte {
 func AttestInitramfsDeps(adapter int, kernelLogPath, fwDir string) int {
 	if fwDir == "" {
 		fwDir = DefaultFirmwareDir
+	}
+	// The build's two settings come from here, not from the hook: it never
+	// reads control.conf, which holds the YubiKey's PIN, itself.
+	settings, warning := buildSettings(controlConfigPath())
+	fmt.Printf("policy %s\n", settings.Bluetooth)
+	if warning != "" {
+		fmt.Printf("warning %s\n", warning)
+	}
+	if adapter < 0 {
+		adapter = settings.Adapter
 	}
 	deps, err := ResolveBTDeps("/sys", fwDir, adapter, readKernelLog(kernelLogPath))
 	if err != nil {

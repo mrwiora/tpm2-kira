@@ -136,7 +136,7 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 			}
 		}
 	}
-	if pin, loose := configPIN(controlConfigPath()); pin != "" {
+	if stored, loose := pinStored(controlConfigPath()); stored {
 		f.PINStored, f.PINLoose = !loose, loose
 	}
 	f.SecureBoot = ReadSecureBootState()
@@ -350,7 +350,7 @@ func (c *controller) steps() []controlStep {
 	case f.YubiKey:
 		// The key is there, the PIN not: the hooks' reseal after a kernel
 		// update is skipped until it is. The step stores it.
-		keys.Explain = f.Keys + ". Its PIN, stored in " + controlConfigPath() + " (readable by root alone, left out of the initramfs), lets the hooks reseal unattended after a kernel or initramfs update; without it that reseal is skipped and the next boot shows a PCR mismatch."
+		keys.Explain = f.Keys + ". Its PIN, stored in " + controlConfigPath() + " (readable by root alone; nothing of the file goes into the boot image), lets the hooks reseal unattended after a kernel or initramfs update; without it that reseal is skipped and the next boot shows a PCR mismatch."
 	default:
 		keys.Done = f.Keys
 	}
