@@ -219,16 +219,17 @@ without a terminal, `control` prints the overview and exits.
     Initramfs   mkinitcpio
     Bluetooth   hci0 (attestation by phone possible)
     LUKS        /dev/sda2: keyslots 0 not tpm2-kira's; not routed through tpm2-kira
-┃ Protections
-┃ Recommended next: Attestation by phone (Marify, Bluetooth LE)
-┃ The phone checks the boot state against what it pinned and shows a code the machine must show too; ...
+  Protections
+  Recommended next: Attestation by phone (Marify, Bluetooth LE)
+  The phone checks the boot state against what it pinned and shows a code the machine must show too; ...
 ┃   ✓ Signing key  - local key files in /etc/tpm2-kira/keys
+┃   ✓ mkinitcpio configuration  - sd-tpm2-kira in HOOKS of /etc/mkinitcpio.conf, the image rebuilt
 ┃   ✓ Slot 0  - sealed to 0e,2e,7e,11u
 ┃ >     Attestation by phone (Marify, Bluetooth LE)
 ┃     - Disk key from password + remote salt (the phone)  - needs the attestation by phone
 ┃   ✓ Slot 1  - the fallback, sealed to 0e,7e
-┃     Disk key from password + salt (hashpwd2)
-┃   - Unlock at boot (control.conf, the key's route, the initramfs)  - needs a keyslot of tpm2-kira's
+┃   • Disk key from password + salt (hashpwd2)
+┃   - Unlock at boot (the key's route, the initramfs)  - needs a keyslot of tpm2-kira's
 ┃     Quit
 ↑ up • ↓ down • enter submit
 ```

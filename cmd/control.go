@@ -534,7 +534,7 @@ func Control(o ControlOptions) error {
 	AdvisoryWarnings = false
 	for {
 		if c.tty { // the overview is a page of its own: what the last step printed was read before "back to the overview?"
-			fmt.Fprint(c.out, clearScreen+"\033[2mLooking at this machine ...\033[0m\n")
+			fmt.Fprint(c.out, clearScreen+"\n\033[2mLooking at this machine ...\033[0m\n")
 		}
 		c.facts = collectFacts(o.TPMPath, o.Debug)
 		steps := c.steps()
@@ -542,7 +542,7 @@ func Control(o ControlOptions) error {
 			c.show(steps)
 			return nil // the analysis and the recommendation, for a script
 		}
-		fmt.Fprint(c.out, clearScreen+c.header()+"\n\n")
+		fmt.Fprint(c.out, clearScreen+"\n"+c.header()+"\n\n")
 		key, err := c.pick(steps)
 		if err != nil || key == "" {
 			c.leave(steps)
@@ -638,14 +638,17 @@ func (c *controller) pick(steps []controlStep) (string, error) {
 		opts = append(opts, huh.NewOption(label, s.Key))
 	}
 	opts = append(opts, huh.NewOption("  Quit", ""))
-	desc := "Every protection this machine can have is in place."
+	// The status, the recommendation and the notes are the note's, plain;
+	// the select holds the selectable lines alone, so only they carry the
+	// focused group's mark.
+	head := "Every protection this machine can have is in place."
 	if n := recommended(steps); n >= 0 {
-		desc = "Recommended next: " + steps[n].Title + "\n" + steps[n].Explain
+		head = "Recommended next: " + steps[n].Title + "\n" + steps[n].Explain
 	}
 	if notes := c.facts.Status.Notes; len(notes) > 0 {
-		desc += "\n\nNotes:"
+		head += "\n\nNotes:"
 		for _, n := range notes {
-			desc += "\n- " + n
+			head += "\n- " + n
 		}
 	}
 	// Quit is preselected, on entering and on every return to the
@@ -653,8 +656,8 @@ func (c *controller) pick(steps []controlStep) (string, error) {
 	// named in the text and picked by hand.
 	choice := ""
 	err := c.form(
-		huh.NewNote().Description(c.noteDescription()),
-		huh.NewSelect[string]().Title("Protections").Description(desc).Options(opts...).Value(&choice).
+		huh.NewNote().Description(c.noteDescription()+"\n*Protections*\n"+noteText(head)),
+		huh.NewSelect[string]().Options(opts...).Value(&choice).
 			Validate(func(k string) error {
 				if why, ok := blocked[k]; ok {
 					return errors.New(why)
@@ -848,7 +851,7 @@ func recommended(steps []controlStep) int {
 func (c *controller) show(steps []controlStep) {
 	f := &c.facts
 	w := c.out
-	fmt.Fprintf(w, "%s\n\n", c.header())
+	fmt.Fprintf(w, "\n%s\n\n", c.header())
 	fmt.Fprintln(w, "\033[1mWhat this machine has\033[0m")
 	fmt.Fprint(w, c.factsText())
 
