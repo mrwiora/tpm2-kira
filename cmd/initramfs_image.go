@@ -115,3 +115,23 @@ func imageHasFirmware(files map[string]bool, fw string) bool {
 	}
 	return false
 }
+
+// imageAuthorizationProblem says whether the boot image lacks the rule
+// that lets the adapter in, when its bus lets no new device in by itself:
+// "" when the image carries it.
+func imageAuthorizationProblem(dev *USBDevice) string {
+	for _, img := range bootImages() {
+		files, err := imageFiles(img)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Sprintf("%s cannot be read (%v)", img, err)
+		}
+		if !files[BTUdevRuleFile] {
+			return fmt.Sprintf("the USB bus lets no new device in, and %s has no rule for the adapter (USB %s, %s:%s) - rebuild",
+				filepath.Base(img), dev.Port, dev.Vendor, dev.Product)
+		}
+	}
+	return ""
+}

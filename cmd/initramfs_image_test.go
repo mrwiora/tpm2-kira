@@ -72,3 +72,28 @@ func TestImageBluetoothProblem(t *testing.T) {
 		t.Fatalf("an unreadable image: %q", p)
 	}
 }
+
+func TestImageAuthorizationProblem(t *testing.T) {
+	dir := t.TempDir()
+	old := mkinitcpioPresetDir
+	mkinitcpioPresetDir = dir
+	defer func() { mkinitcpioPresetDir = old }()
+	img := filepath.Join(dir, "arch-linux.efi")
+	os.WriteFile(img, []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(dir, "linux.preset"), []byte(`default_uki="`+img+`"`+"\n"), 0o644)
+	oldList := listImage
+	defer func() { listImage = oldList }()
+	contents := []string{btModulesLoadConf}
+	listImage = func(string) ([]string, error) { return contents, nil }
+	dev := &USBDevice{Port: "3-10", Vendor: "8087", Product: "0033"}
+
+	if p := imageAuthorizationProblem(dev); !strings.Contains(p, "no rule for the adapter (USB 3-10, 8087:0033)") {
+		t.Fatalf("an image without the rule: %q", p)
+	}
+	contents = append(contents, BTUdevRuleFile)
+	st, _ := os.Stat(img)
+	os.Chtimes(img, st.ModTime().Add(1e9), st.ModTime().Add(1e9))
+	if p := imageAuthorizationProblem(dev); p != "" {
+		t.Fatalf("an image with the rule: %q", p)
+	}
+}

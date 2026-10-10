@@ -34,6 +34,7 @@ What the hook adds, for the adapter `TPM2_KIRA_ATTEST_ADAPTER` (default
 | `/etc/modules-load.d/tpm2-kira-bluetooth.conf` | the module list, loaded early in the initrd |
 | `tpm2-kira-attest.service` | the gate's unit |
 | `/etc/tpm2-kira/attest-signer.pem` | the signing public key, to check the enrolment record |
+| `/etc/udev/rules.d/70-tpm2-kira-bluetooth.rules`, only when the adapter's USB bus lets no new device in by itself | a rule that lets exactly this adapter in, at its port (§4) |
 
 The resolution is `tpm2-kira attest initramfs-deps`; the hook only copies
 what it answers. `control` runs the same resolution and shows its answer
@@ -115,11 +116,33 @@ journalctl -b -k | grep -iE 'bluetooth|hci|firmware'
 
 | What the log says | Cause | What to do |
 |---|---|---|
+| kernel: `usb 3-10: Device is not authorized for usage`, later `authorized to connect` once the system is up | the USB bus lets no new device in by itself (`usbcore.authorized_default=0`, as USBGuard sets it), and the image had no rule that lets the adapter in | rebuild: the hook now adds the rule (below) |
 | no `tpm2-kira-attest.service` at all | the image has no Bluetooth: no phone was enrolled when it was built (`auto`), or the hook warned | `control`'s Boot image line; rebuild |
 | kernel: `Direct firmware load for ... failed`, `firmware missing` | the image lacks the adapter's firmware (§3) | power off, boot, rebuild |
 | `no Bluetooth adapter hci0` / the gate waits for the adapter | module or firmware not loaded in time, or another index | `TPM2_KIRA_ATTEST_ADAPTER`, `TPM2_KIRA_ATTEST_ADAPTER_WAIT` in `control.conf` |
 | `the attestation record is not accepted` | the enrolment in the TPM is not the one the image's signing key vouches for (replaced, or an older one put back) | `tpm2-kira attest status`; enrol again |
 | the phone sees no machine | the phone's Bluetooth is off, or Marify has no record for this machine (enrolled again elsewhere) | enrol the phone again |
+
+**USB authorization.** With `usbcore.authorized_default=0` (USBGuard sets
+it) the kernel lets no new USB device in until something authorizes it.
+On the running system that is USBGuard or your udev rules; in the image
+neither exists, so the adapter stays out and its driver never binds. When
+the adapter's bus blocks new devices (`authorized_default` 0 or 2 on its
+root hub), the hook writes one rule into the image - never onto the
+system, where your own policy decides:
+
+```
+ACTION=="add", SUBSYSTEM=="usb", KERNEL=="3-10", ATTR{idVendor}=="8087", ATTR{idProduct}=="0033", ATTR{authorized}="1"
+```
+
+exactly this adapter, at its port. `control` shows it before a rebuild and
+checks it in its own line, *Adapter at boot*. By hand:
+
+```bash
+cat /sys/bus/usb/devices/usb*/authorized_default         # 0: new devices blocked
+cat /proc/cmdline | tr ' ' '\n' | grep usbcore           # usbcore.authorized_default=0?
+lsinitcpio /boot/EFI/Linux/arch-linux.efi | grep 70-tpm2-kira-bluetooth.rules
+```
 
 For every step the gate takes (TPM, adapter, controller commands,
 advertising, connections), set `TPM2_KIRA_ATTEST_DEBUG=1` in

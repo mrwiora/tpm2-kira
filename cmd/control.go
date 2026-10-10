@@ -70,6 +70,12 @@ type machineFacts struct {
 	// (attest_initramfs.go); empty when no log named it and none is
 	// remembered, so the image may not start the adapter.
 	BTFirmware []string
+	// BTAuthorize is the adapter's USB device when its bus lets no new
+	// device in by itself, so the image needs a rule for it; nil when not.
+	BTAuthorize *USBDevice
+	// ImageAuth says what the boot image lacks to let the adapter in; ""
+	// when it carries the rule or needs none.
+	ImageAuth string
 	// ImageBT says what the boot images lack of the adapter's part, when
 	// it belongs in them (a phone, or Bluetooth packed always); "" when
 	// they carry it or it does not belong there.
@@ -147,7 +153,9 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	}
 	if m, _ := filepath.Glob("/sys/class/bluetooth/hci*"); len(m) > 0 {
 		f.Adapter = filepath.Base(m[0])
-		f.BTFirmware = adapterFirmware(f.Adapter)
+		if deps := adapterDeps(f.Adapter); deps != nil {
+			f.BTFirmware, f.BTAuthorize = deps.Firmware, deps.Authorize
+		}
 	}
 	if cfg, err := LoadControlConfig(controlConfigPath()); err != nil {
 		f.AttestConf = err.Error()
@@ -170,10 +178,16 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	}
 	if f.Adapter != "" && f.Initramfs != "" && f.HookState == "" && (f.Phone || f.BTAlways) {
 		f.ImageBT = imageBluetoothProblem(f.BTFirmware)
+		if f.BTAuthorize != nil {
+			f.ImageAuth = imageAuthorizationProblem(f.BTAuthorize)
+		}
 	}
 	f.Pending = pendingRebuild(f.Initramfs)
 	if f.ImageBT != "" {
 		f.Pending = append(f.Pending, f.ImageBT)
+	}
+	if f.ImageAuth != "" {
+		f.Pending = append(f.Pending, f.ImageAuth)
 	}
 	var devices []string
 	for _, d := range f.Status.Devices {
@@ -885,6 +899,19 @@ func (c *controller) factsText() string {
 	case f.Adapter != "" && f.HookState == "" && (f.Phone || f.BTAlways):
 		fmt.Fprintf(&w, "  Boot image  %s\n", good("carries "+f.Adapter+"'s driver and firmware for the phone's gate"))
 	}
+	// The adapter's USB bus may let no new device in by itself
+	// (usbcore.authorized_default=0, as USBGuard sets it): then the image
+	// needs the rule that lets the adapter in, a check of its own.
+	if f.Adapter != "" && f.HookState == "" && (f.Phone || f.BTAlways) {
+		switch {
+		case f.BTAuthorize == nil:
+			fmt.Fprintf(&w, "  Adapter at boot  %s\n", good("its USB bus lets it in by itself"))
+		case f.ImageAuth != "":
+			fmt.Fprintf(&w, "  Adapter at boot  %s\n", bad(f.ImageAuth+" (risk: the driver never binds at boot and the phone is not asked)"))
+		default:
+			fmt.Fprintf(&w, "  Adapter at boot  %s\n", good(fmt.Sprintf("let in by tpm2-kira's rule in the image (USB %s, %s:%s); the bus blocks new devices", f.BTAuthorize.Port, f.BTAuthorize.Vendor, f.BTAuthorize.Product)))
+		}
+	}
 	switch {
 	case f.Status.DevicesError != "":
 		fmt.Fprintf(&w, "  LUKS        %s\n", f.Status.DevicesError)
@@ -1571,6 +1598,9 @@ func btImagePlan(adapter string) string {
 		fmt.Fprintf(&b, "  firmware:  none known - only what the modules declare\n")
 	}
 	fmt.Fprintf(&b, "  and:       /%s, the gate's unit tpm2-kira-attest.service, the signing public key", btModulesLoadConf)
+	if deps.Authorize != nil {
+		fmt.Fprintf(&b, "\n  and:       /%s, as the adapter's USB bus lets no new device in by itself:\n             %s", BTUdevRuleFile, deps.Authorize.UdevRule())
+	}
 	for _, w := range deps.Warnings {
 		fmt.Fprintf(&b, "\n  NOTE: %s", w)
 	}

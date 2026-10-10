@@ -122,6 +122,13 @@ else
                 add_firmware "$value"
                 nfw=$((nfw + 1))
                 ;;
+            udev)
+                # The bus lets no new device in by itself: this rule
+                # lets exactly the adapter in, in the image alone.
+                mkdir -p "$DESTDIR/etc/udev/rules.d"
+                echo "$value" >>"$DESTDIR/etc/udev/rules.d/70-tpm2-kira-bluetooth.rules"
+                echo "tpm2-kira: hci$adapter's USB bus lets no new device in: the image lets the adapter in"
+                ;;
             warning)
                 echo "tpm2-kira: $value" >&2
                 ;;

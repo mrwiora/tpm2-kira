@@ -49,7 +49,29 @@ type BTDeps struct {
 	Key      string // the adapter's hardware identity (its modalias): the firmware depends on it
 	Modules  []string
 	Firmware []string // paths relative to the firmware directory, without compression suffix
-	Warnings []string
+	// Authorize is the adapter's USB device when its bus lets no new
+	// device in by itself (usbcore.authorized_default=0, or 2 for an
+	// external one; USBGuard sets 0): the image then needs a rule that
+	// lets exactly this device in, or the driver never binds at boot.
+	Authorize *USBDevice
+	Warnings  []string
+}
+
+// USBDevice names one USB device: its port (the kernel's name for it,
+// such as 3-10) and its vendor and product.
+type USBDevice struct {
+	Port, Vendor, Product string
+}
+
+// BTUdevRuleFile is where the hooks put the rule in the image.
+const BTUdevRuleFile = "etc/udev/rules.d/70-tpm2-kira-bluetooth.rules"
+
+// UdevRule is the rule that authorizes the device at its port, and only
+// it: in the image alone, never on the host, where the person's own
+// policy (USBGuard, their rules) decides.
+func (d *USBDevice) UdevRule() string {
+	return fmt.Sprintf(`ACTION=="add", SUBSYSTEM=="usb", KERNEL=="%s", ATTR{idVendor}=="%s", ATTR{idProduct}=="%s", ATTR{authorized}="1"`,
+		d.Port, d.Vendor, d.Product)
 }
 
 // firmwareToken matches firmware file names as Bluetooth drivers log them:
@@ -88,6 +110,7 @@ func ResolveBTDeps(sysRoot, fwDir string, adapter int, kernelLog []byte) (*BTDep
 		}
 	}
 	addModule("bluetooth")
+	deps.Authorize = usbAuthorization(real, devicesRoot)
 	if len(deps.Modules) == 1 {
 		deps.Warnings = append(deps.Warnings, fmt.Sprintf("no driver module found for %s; it may be built into the kernel", name))
 	}
@@ -117,6 +140,33 @@ func ResolveBTDeps(sysRoot, fwDir string, adapter int, kernelLog []byte) (*BTDep
 		}
 	}
 	return deps, nil
+}
+
+// usbAuthorization finds the USB device above the adapter and reports it
+// when its bus does not let new devices in by default. The root hub of
+// the bus (usbN) carries authorized_default: 1 all, 0 none, 2 internal
+// only. With 2 an internal adapter is let in anyway, but its rule costs
+// nothing and does not depend on how the port is described.
+func usbAuthorization(hciDir, devicesRoot string) *USBDevice {
+	var dev *USBDevice
+	for dir := filepath.Dir(hciDir); strings.HasPrefix(dir, devicesRoot) && dir != devicesRoot; dir = filepath.Dir(dir) {
+		if dev == nil {
+			vendor, verr := os.ReadFile(filepath.Join(dir, "idVendor"))
+			product, perr := os.ReadFile(filepath.Join(dir, "idProduct"))
+			if verr == nil && perr == nil {
+				dev = &USBDevice{Port: filepath.Base(dir), Vendor: strings.TrimSpace(string(vendor)), Product: strings.TrimSpace(string(product))}
+			}
+			continue
+		}
+		if b, err := os.ReadFile(filepath.Join(dir, "authorized_default")); err == nil {
+			switch strings.TrimSpace(string(b)) {
+			case "0", "2":
+				return dev
+			}
+			return nil
+		}
+	}
+	return nil
 }
 
 func siblings(file string) []string {
@@ -216,6 +266,7 @@ func readKernelLog(extra string) []byte {
 //	adapter hci0
 //	module btusb
 //	firmware intel/ibt-0041-0041.sfi
+//	udev <rule>     only when the bus lets no new device in by itself
 //	warning <text>
 //
 // Exit status 0 when the adapter exists, ExitUnavailable when it does not.
@@ -235,6 +286,9 @@ func AttestInitramfsDeps(adapter int, kernelLogPath, fwDir string) int {
 	}
 	for _, f := range deps.Firmware {
 		fmt.Printf("firmware %s\n", f)
+	}
+	if deps.Authorize != nil {
+		fmt.Printf("udev %s\n", deps.Authorize.UdevRule())
 	}
 	for _, w := range deps.Warnings {
 		fmt.Printf("warning %s\n", w)
@@ -256,11 +310,11 @@ func preferResourceManager(path string) string {
 	return path
 }
 
-// adapterFirmware is the firmware the image build would put in for the
-// adapter: what this boot's kernel log names, else what an earlier boot's
-// did (remembered). The journal of earlier boots is the hooks' to read;
-// this is the quick look for control's overview.
-func adapterFirmware(adapter string) []string {
+// adapterDeps is what the image build would put in for the adapter, by
+// the same resolution the hooks run: the firmware this boot's or an
+// earlier boot's kernel log names (or remembered), and the rule that lets
+// the adapter in when its bus does not. nil when there is no such adapter.
+func adapterDeps(adapter string) *BTDeps {
 	var n int
 	if _, err := fmt.Sscanf(adapter, "hci%d", &n); err != nil {
 		return nil
@@ -270,7 +324,7 @@ func adapterFirmware(adapter string) []string {
 		return nil
 	}
 	rememberedFirmware(deps, DefaultFirmwareDir)
-	return deps.Firmware
+	return deps
 }
 
 // journalBluetoothLines are the Bluetooth kernel messages of every boot

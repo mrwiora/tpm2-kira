@@ -214,3 +214,32 @@ func TestResolveBTDepsRemembersFirmwareOverAWarmReboot(t *testing.T) {
 		t.Fatalf("another adapter got these files: %v", deps.Firmware)
 	}
 }
+
+// A USB bus that lets no new device in by itself (usbcore.authorized_
+// default=0, as with USBGuard) needs a rule in the image for the adapter,
+// exactly it at its port; a bus that lets devices in needs none.
+func TestResolveBTDepsUSBAuthorization(t *testing.T) {
+	sys := fakeSysfs(t)
+	usb := filepath.Join(sys, "devices/pci0000:00/0000:00:14.0/usb1/1-10")
+	os.WriteFile(filepath.Join(usb, "idVendor"), []byte("8087\n"), 0o644)
+	os.WriteFile(filepath.Join(usb, "idProduct"), []byte("0033\n"), 0o644)
+	bus := filepath.Join(sys, "devices/pci0000:00/0000:00:14.0/usb1")
+	for value, want := range map[string]string{
+		"1\n": "",
+		"0\n": `ACTION=="add", SUBSYSTEM=="usb", KERNEL=="1-10", ATTR{idVendor}=="8087", ATTR{idProduct}=="0033", ATTR{authorized}="1"`,
+		"2\n": `ACTION=="add", SUBSYSTEM=="usb", KERNEL=="1-10", ATTR{idVendor}=="8087", ATTR{idProduct}=="0033", ATTR{authorized}="1"`,
+	} {
+		os.WriteFile(filepath.Join(bus, "authorized_default"), []byte(value), 0o644)
+		deps, err := ResolveBTDeps(sys, t.TempDir(), 0, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := ""
+		if deps.Authorize != nil {
+			got = deps.Authorize.UdevRule()
+		}
+		if got != want {
+			t.Errorf("authorized_default %q: rule %q, want %q", strings.TrimSpace(value), got, want)
+		}
+	}
+}

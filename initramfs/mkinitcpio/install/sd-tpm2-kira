@@ -162,6 +162,17 @@ _add_bluetooth() {
         fi
     done <<< "$deps"
 
+    # The adapter's USB bus lets no new device in by itself
+    # (usbcore.authorized_default=0, as with USBGuard): without a rule the
+    # driver never binds in the image. The rule lets exactly this adapter
+    # in, at its port, and exists in the image alone - the running
+    # system's own policy is not touched.
+    if grep -q '^udev ' <<< "$deps"; then
+        mkdir -p "$BUILDROOT/etc/udev/rules.d"
+        sed -n 's/^udev //p' <<< "$deps" > "$BUILDROOT/etc/udev/rules.d/70-tpm2-kira-bluetooth.rules"
+        plain "tpm2-kira: hci$adapter's USB bus lets no new device in: the image lets the adapter in"
+    fi
+
     mkdir -p "$BUILDROOT/etc/modules-load.d"
     printf '%s\n' "${modules[@]}" > "$BUILDROOT/etc/modules-load.d/tpm2-kira-bluetooth.conf"
     printf '%s\n' "$signer" > "$BUILDROOT/etc/tpm2-kira/attest-signer.pem"
