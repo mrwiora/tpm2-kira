@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -528,4 +529,85 @@ func TestKeepAliveWhileConnected(t *testing.T) {
 	if n := rssiReads(); n != before {
 		t.Fatalf("RSSI still polled after disconnect (%d -> %d)", before, n)
 	}
+}
+
+func TestMain(m *testing.M) {
+	// The central's chance to leave by itself, short for the tests; the
+	// tests that are about it set their own.
+	peerLeaveWait = 20 * time.Millisecond
+	os.Exit(m.Run())
+}
+
+// countDisconnects is how often the host commanded a disconnect.
+func countDisconnects(fc *fakeController) int {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	n := 0
+	for _, op := range fc.cmds {
+		if op == opDisconnect {
+			n++
+		}
+	}
+	return n
+}
+
+// Close lets the central leave by itself first: a session ends on the
+// central's last write, whose response a commanded disconnect would drop
+// (Android: GATT status 133, the write "failed" after a completed
+// session). A central that leaves in time is not disconnected; one that
+// stays is, after the wait.
+func TestCloseLetsTheCentralLeaveFirst(t *testing.T) {
+	defer func(w time.Duration) { peerLeaveWait = w }(peerLeaveWait)
+	peerLeaveWait = time.Second
+
+	p, fc := startPeripheral(t)
+	defer p.Close()
+	connCh := acceptAsync(p, frame.DefaultBudget)
+	waitAdvertising(t, fc)
+	fc.connect()
+	conn := <-connCh
+	if conn == nil {
+		t.Fatal("accept failed")
+	}
+	conn.Close() // the link closes behind it, on its own goroutine
+	time.Sleep(50 * time.Millisecond)
+	if n := countDisconnects(fc); n != 0 {
+		t.Fatalf("the host disconnected before the central had its chance: %d", n)
+	}
+	fc.disconnect() // the central's own disconnect, in time
+	waitLinkGone(t, p)
+	if n := countDisconnects(fc); n != 0 {
+		t.Fatalf("a central that left was disconnected again: %d", n)
+	}
+
+	// A central that stays is disconnected after the wait.
+	peerLeaveWait = 30 * time.Millisecond
+	connCh = acceptAsync(p, frame.DefaultBudget)
+	waitAdvertising(t, fc)
+	fc.connect()
+	if conn = <-connCh; conn == nil {
+		t.Fatal("second accept failed")
+	}
+	conn.Close()
+	for deadline := time.Now().Add(2 * time.Second); countDisconnects(fc) == 0 && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := countDisconnects(fc); n != 1 {
+		t.Fatalf("a central that stayed was not disconnected: %d", n)
+	}
+}
+
+// waitLinkGone waits until the peripheral holds no link.
+func waitLinkGone(t *testing.T, p *Peripheral) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		p.h.mu.Lock()
+		gone := p.h.link == nil
+		p.h.mu.Unlock()
+		if gone {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the link did not go")
 }

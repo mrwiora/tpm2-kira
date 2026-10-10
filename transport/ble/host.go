@@ -787,7 +787,17 @@ func (l *Link) SendFragment(frag []byte) error {
 // MaxFragment is ATT_MTU - 3.
 func (l *Link) MaxFragment() int { return l.att.maxNotify() }
 
-// Close disconnects the central. It waits briefly for the controller to
+// peerLeaveWait is how long Close lets the central leave by itself before
+// disconnecting it. A session ends on the central's last write (its Bye):
+// the write response is queued the moment the write arrives, but a
+// controller drops the ACL data still pending when a disconnect is
+// commanded, and Android then reports the write failed (GATT status 133)
+// although the session completed. The central disconnects right after
+// its last write, so the wait ends early in the common case.
+var peerLeaveWait = 1500 * time.Millisecond
+
+// Close disconnects the central - after it had the chance to leave by
+// itself (peerLeaveWait) - and waits briefly for the controller to
 // confirm, so advertising can resume cleanly.
 func (l *Link) Close() error {
 	l.mu.Lock()
@@ -800,6 +810,13 @@ func (l *Link) Close() error {
 	}
 	ch := l.gonech
 	l.mu.Unlock()
+	select {
+	case <-ch:
+		return nil // the central left: nothing to disconnect
+	case <-time.After(peerLeaveWait):
+	case <-l.h.done:
+		return nil
+	}
 	go func() {
 		_, _ = l.h.command(opDisconnect, []byte{byte(l.handle), byte(l.handle >> 8), reasonRemoteUser})
 	}()

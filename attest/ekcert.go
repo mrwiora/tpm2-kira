@@ -28,8 +28,10 @@ package attest
 //	          └ … PTT SVN   ┘ (EKCertChainNVIndex)
 //	            └ EK certificate (NV 0x01C00002 RSA / 0x01C0000A ECC)
 //
-// Other Intel product families use other P_MCC issuing CAs; until one is
-// added, their EKs show as "not verified".
+// Other Intel product families use other P_MCC issuing CAs. The machine
+// completes the chain with the one its EK names (CompleteEKChain, from
+// the caIssuers URL at tsci.intel.com); trust still comes from the
+// embedded root alone.
 
 import (
 	"crypto/ecdsa"
@@ -37,6 +39,7 @@ import (
 	"crypto/x509"
 	"embed"
 	"encoding/asn1"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -246,6 +249,9 @@ func VerifyEKCertificate(ekPub, ekCert, chain []byte, now time.Time) (string, er
 			return "", e
 		}
 	}
+	if missing := EKIssuerMissing(ekCert, chain); missing != "" {
+		return "", fmt.Errorf("the chain breaks off at %q: not embedded, and not sent by the machine (known: %s)", missing, strings.Join(EKVendorNames(), ", "))
+	}
 	return "", fmt.Errorf("the EK certificate is not issued by a vendor this app knows (%s)", strings.Join(EKVendorNames(), ", "))
 }
 
@@ -305,4 +311,126 @@ func EKCertNote(err error) string {
 	default:
 		return err.Error()
 	}
+}
+
+// knownEKCerts are the embedded roots and intermediates, parsed.
+func knownEKCerts() []*x509.Certificate {
+	var out []*x509.Certificate
+	for _, v := range loadEKVendors() {
+		for _, b := range append(slices.Clone(v.roots), v.inter...) {
+			if c, err := x509.ParseCertificate(b); err == nil {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
+// MaxEKChainFetches bounds the issuers CompleteEKChain fetches: Intel's
+// chain needs one (the P_MCC issuing CA), sometimes two.
+const MaxEKChainFetches = 3
+
+// CompleteEKChain adds to chain the issuers it lacks, fetched from the
+// caIssuers URL (AIA) of the certificate that names them: Intel signs the
+// EKs of each product family under its own "P_MCC" issuing CA, and only
+// one of them is embedded. A fetched certificate is an intermediate like
+// any the TPM carries - nothing is trusted for being fetched: the chain
+// still has to end at an embedded root, which VerifyEKCertificate
+// checks. The phone has no network; the machine does, and sends the
+// completed chain. fetch returns a certificate's DER (or PEM); errors
+// leave the chain as it is.
+func CompleteEKChain(leaf, chain []byte, fetch func(url string) ([]byte, error)) []byte {
+	if len(leaf) == 0 || fetch == nil {
+		return chain
+	}
+	out := trimNVPadding(chain)
+	have := func() []*x509.Certificate {
+		all := knownEKCerts()
+		if c, err := parseEKCert(leaf); err == nil {
+			all = append(all, c)
+		}
+		if certs, err := SplitDERChain(out); err == nil {
+			for _, b := range certs {
+				if c, err := parseEKCert(b); err == nil {
+					all = append(all, c)
+				}
+			}
+		}
+		return all
+	}
+	for i := 0; i < MaxEKChainFetches; i++ {
+		missing := missingIssuer(have())
+		if missing == nil || len(missing.IssuingCertificateURL) == 0 {
+			return out
+		}
+		var got []byte
+		for _, u := range missing.IssuingCertificateURL {
+			b, err := fetch(u)
+			if err != nil {
+				continue
+			}
+			// The issuer by name and by key: it signed the certificate
+			// that names it. A name alone could be anybody's.
+			if c, err := parseEKCert(derOf(b)); err == nil && bytesEqualRDN(c.RawSubject, missing.RawIssuer) &&
+				missing.CheckSignatureFrom(c) == nil {
+				got = c.Raw
+				break
+			}
+		}
+		if got == nil || len(out)+len(got) > MaxEKCertChain {
+			return out
+		}
+		out = append(slices.Clone(out), got...)
+	}
+	return out
+}
+
+// missingIssuer is a certificate whose issuer none of certs is, and
+// which is not self-signed: where the chain breaks off.
+func missingIssuer(certs []*x509.Certificate) *x509.Certificate {
+	subjects := map[string]bool{}
+	for _, c := range certs {
+		subjects[string(c.RawSubject)] = true
+	}
+	for _, c := range certs {
+		if bytesEqualRDN(c.RawSubject, c.RawIssuer) {
+			continue // a root
+		}
+		if !subjects[string(c.RawIssuer)] {
+			return c
+		}
+	}
+	return nil
+}
+
+func bytesEqualRDN(a, b []byte) bool { return string(a) == string(b) }
+
+// derOf accepts DER, or a PEM certificate as some CAs serve their AIA.
+func derOf(b []byte) []byte {
+	if blk, _ := pem.Decode(b); blk != nil && blk.Type == "CERTIFICATE" {
+		return blk.Bytes
+	}
+	return b
+}
+
+// EKIssuerMissing names the issuer the chain of leaf and chain lacks, or
+// "" when every issuer is there: the reason an Intel EK of another product
+// family is not verified, said in Intel's own words ("On Die CSME P_MCC
+// 0000xxxx Issuing CA").
+func EKIssuerMissing(leaf, chain []byte) string {
+	certs := knownEKCerts()
+	if c, err := parseEKCert(leaf); err == nil {
+		certs = append(certs, c)
+	}
+	if parts, err := SplitDERChain(trimNVPadding(chain)); err == nil {
+		for _, b := range parts {
+			if c, err := parseEKCert(b); err == nil {
+				certs = append(certs, c)
+			}
+		}
+	}
+	if m := missingIssuer(certs); m != nil {
+		return m.Issuer.String()
+	}
+	return ""
 }

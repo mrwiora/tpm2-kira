@@ -548,7 +548,10 @@ sudo tpm2-kira attest status
 
 **Both sides check each other's hardware at enrolment.** The phone checks
 that this machine's TPM is genuine (its EK certificate against vendor roots
-built into the app); `attest enrol` runs the same check on itself first
+built into the app; Intel signs each product family's EKs under its own
+issuing CA, which the machine fetches from the URL the chain names and
+sends along - trust still comes from the embedded root alone, and
+`tpm2-kira attest ekcert` shows the chain and where it breaks off); `attest enrol` runs the same check on itself first
 (`--verify-tpm`). The machine checks the phone's key attestation against
 Google's attestation roots and revocation list: key in StrongBox or the TEE,
 an unlock for every use, a locked and verified phone (`--verify-phone`).

@@ -206,7 +206,8 @@ func ekVerdict(tpmPath string, debug bool) (by, note string) {
 		return "", err.Error()
 	}
 	FlushHandle(tpmDev, ek.handle)
-	by, err = attest.VerifyEKCertificate(pub, readEKCert(tpmDev, alg), readEKCertChain(tpmDev), time.Now())
+	leaf := readEKCert(tpmDev, alg)
+	by, err = attest.VerifyEKCertificate(pub, leaf, readEKCertChain(tpmDev, leaf), time.Now())
 	if err != nil {
 		return "", attest.EKCertNote(err)
 	}

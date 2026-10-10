@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/hex"
+	"encoding/pem"
 	"io/fs"
 	"math/big"
 	"slices"
@@ -269,5 +270,54 @@ func TestSplitDERChain(t *testing.T) {
 	}
 	if certs, err := SplitDERChain(nil); err != nil || len(certs) != 0 {
 		t.Error("empty chain")
+	}
+}
+
+// A TPM that carries no intermediate: the machine completes the chain from
+// the caIssuers URL the EK certificate names, as for an Intel EK of a
+// product family whose P_MCC issuing CA is not embedded. A fetched
+// certificate that is not the named issuer is ignored, PEM is accepted,
+// and what was fetched earns no trust: the chain must still end at the
+// root.
+func TestCompleteEKChainFromAIA(t *testing.T) {
+	const url = "http://ca.example/issuing.cer"
+	pki := newEKPKI(t, mustKey(t), func(c *x509.Certificate) { c.IssuingCertificateURL = []string{url} })
+	if got := EKIssuerMissing(pki.leafDER, nil); got != "CN=Test TPM Intermediate" {
+		t.Fatalf("the missing issuer: %q", got)
+	}
+	if err := verifyEKCertificateWith(pki.ekPub, pki.leafDER, nil, [][]byte{pki.rootDER}, nil, time.Now()); err == nil {
+		t.Fatal("verified without the intermediate")
+	}
+
+	asked := 0
+	pemOf := func(der []byte) []byte {
+		return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	}
+	chain := CompleteEKChain(pki.leafDER, nil, func(u string) ([]byte, error) {
+		asked++
+		if u != url {
+			t.Errorf("fetched %q", u)
+		}
+		return pemOf(pki.interDER), nil
+	})
+	if asked != 1 || !slices.Equal(chain, pki.interDER) {
+		t.Fatalf("completed chain: %d fetches, %d bytes", asked, len(chain))
+	}
+	if err := verifyEKCertificateWith(pki.ekPub, pki.leafDER, chain, [][]byte{pki.rootDER}, nil, time.Now()); err != nil {
+		t.Fatalf("the completed chain does not verify: %v", err)
+	}
+	if got := EKIssuerMissing(pki.leafDER, chain); got != "CN=Test TPM Root" {
+		t.Fatalf("after completion the break is at the root: %q", got)
+	}
+
+	// The wrong certificate at the URL is not taken.
+	other := newEKPKI(t, mustKey(t), nil)
+	if c := CompleteEKChain(pki.leafDER, nil, func(string) ([]byte, error) { return other.interDER, nil }); len(c) != 0 {
+		t.Fatal("a certificate that is not the issuer was taken")
+	}
+	// A root that is not embedded stays untrusted however the chain is
+	// completed: fetching the root itself does not make it an anchor.
+	if c := CompleteEKChain(pki.leafDER, pki.interDER, func(string) ([]byte, error) { return pki.rootDER, nil }); !slices.Equal(c, pki.interDER) {
+		t.Fatal("a chain without AIA on its top was extended")
 	}
 }

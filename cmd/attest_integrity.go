@@ -29,6 +29,7 @@ package cmd
 
 import (
 	"crypto"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"os"
@@ -175,21 +176,35 @@ func AttestEKCert(tpmPath string, debug bool) error {
 	}
 	FlushHandle(tpmDev, ek.handle)
 	cert := readEKCert(tpmDev, alg)
-	chain := readEKCertChain(tpmDev)
+	chain := readEKCertChain(tpmDev, cert)
 	fmt.Printf("EK offered at enrolment: %s\n", ekAlgName(alg))
 	fmt.Printf("EK certificate:          %s\n", presentBytes(cert))
-	n := 0
-	if certs, err := attest.SplitDERChain(chain); err == nil {
-		n = len(certs)
+	// The chain as the phone receives it: the TPM's intermediates (NV
+	// 0x01C00100) and what was fetched from caIssuers URLs, each with
+	// its issuer, so a break shows where it is.
+	if c, err := x509.ParseCertificate(cert); err == nil {
+		fmt.Printf("  leaf  %s\n        issued by %s\n", c.Subject, c.Issuer)
+		for _, u := range c.IssuingCertificateURL {
+			fmt.Printf("        caIssuers %s\n", u)
+		}
 	}
-	fmt.Printf("Certificate chain (NV 0x%08X): %s, %d certificate(s)\n", attest.EKCertChainNVIndex, presentBytes(chain), n)
+	certs, _ := attest.SplitDERChain(chain)
+	fmt.Printf("Certificate chain:       %d certificate(s) (NV 0x%08X, completed from caIssuers URLs)\n", len(certs), attest.EKCertChainNVIndex)
+	for i, b := range certs {
+		if c, err := x509.ParseCertificate(b); err == nil {
+			fmt.Printf("  %d     %s\n        issued by %s\n", i+1, c.Subject, c.Issuer)
+		}
+	}
+	if missing := attest.EKIssuerMissing(cert, chain); missing != "" {
+		fmt.Printf("Breaks off at:           %s (neither embedded nor fetched)\n", missing)
+	}
 	by, err := attest.VerifyEKCertificate(pub, cert, chain, time.Now())
 	if err != nil {
-		fmt.Printf("Result:                  NOT VERIFIED: %s\n", attest.EKCertNote(err))
+		fmt.Printf("Result:                  \033[0;31mNOT VERIFIED: %s\033[0m\n", attest.EKCertNote(err))
 		fmt.Println("The phone will show this TPM as \"not verified as genuine hardware\".")
 		return nil
 	}
-	fmt.Printf("Result:                  verified: %s\n", by)
+	fmt.Printf("Result:                  \033[0;32mverified: %s\033[0m\n", by)
 	return nil
 }
 

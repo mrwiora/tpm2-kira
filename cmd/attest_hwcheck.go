@@ -94,7 +94,8 @@ func ownEKVerdict(tpmDev transport.TPM) (vendor, note string, err error) {
 		return "", "", err
 	}
 	FlushHandle(tpmDev, ek.handle)
-	by, verr := attest.VerifyEKCertificate(pub, readEKCert(tpmDev, alg), readEKCertChain(tpmDev), time.Now())
+	leaf := readEKCert(tpmDev, alg)
+	by, verr := attest.VerifyEKCertificate(pub, leaf, readEKCertChain(tpmDev, leaf), time.Now())
 	return by, attest.EKCertNote(verr), nil
 }
 

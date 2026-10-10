@@ -3,11 +3,17 @@ package cmd
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -167,12 +173,60 @@ func pickCertifiedEK(tpmDev transport.TPM) (uint16, *loadedKey, []byte, error) {
 
 // readEKCertChain reads the TPM's intermediates for the EK certificate (Intel
 // PTT keeps them concatenated in EKCertChainNVIndex); nil when absent.
-func readEKCertChain(tpmDev transport.TPM) []byte {
+func readEKCertChain(tpmDev transport.TPM, leaf []byte) []byte {
 	data, err := ReadFromNVRAM(tpmDev, attest.EKCertChainNVIndex)
-	if err != nil || len(data) == 0 || len(data) > attest.MaxEKCertChain {
-		return nil
+	if err != nil || len(data) > attest.MaxEKCertChain {
+		data = nil
 	}
-	return data
+	// The issuers the TPM does not carry - Intel's P_MCC issuing CA of
+	// this product family - from the caIssuers URL, cached: the phone has
+	// no network, the machine sends what it found. Trust comes from the
+	// embedded root alone (attest.CompleteEKChain).
+	return attest.CompleteEKChain(leaf, data, fetchEKIssuer)
+}
+
+// ekIssuerCacheDir keeps the issuers fetched for the EK chain; a var for
+// the tests. Anything in it is an untrusted intermediate like the TPM's.
+var ekIssuerCacheDir = "/var/cache/tpm2-kira/ek-issuers"
+
+// ekFetchFailed remembers, for this process, the URLs that failed: an
+// offline machine pays the timeout once per run, not per overview.
+var ekFetchFailed sync.Map
+
+// fetchEKIssuer fetches a certificate from a caIssuers URL: the cache
+// first, then the network (http or https, 5 s, 64 KiB at most).
+var fetchEKIssuer = func(url string) ([]byte, error) {
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		return nil, fmt.Errorf("not an http URL: %q", url)
+	}
+	sum := sha256.Sum256([]byte(url))
+	cached := filepath.Join(ekIssuerCacheDir, hex.EncodeToString(sum[:])+".der")
+	if b, err := os.ReadFile(cached); err == nil {
+		return b, nil
+	}
+	if _, failed := ekFetchFailed.Load(url); failed {
+		return nil, errors.New("fetched before, and it failed")
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		ekFetchFailed.Store(url, true)
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		ekFetchFailed.Store(url, true)
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		ekFetchFailed.Store(url, true)
+		return nil, err
+	}
+	if os.MkdirAll(ekIssuerCacheDir, 0o755) == nil {
+		_ = os.WriteFile(cached, b, 0o644) // a cache: losing it costs a fetch
+	}
+	return b, nil
 }
 
 // readEKCert reads the vendor EK certificate, if the TPM has one. Firmware
@@ -382,7 +436,9 @@ func (b *tpmBackend) EKPublic() ([]byte, []byte, error) {
 }
 
 // EKCertChain implements attest.EKChainProvider.
-func (b *tpmBackend) EKCertChain() []byte { return readEKCertChain(b.tpm) }
+func (b *tpmBackend) EKCertChain() []byte {
+	return readEKCertChain(b.tpm, readEKCert(b.tpm, b.ekAlg))
+}
 
 // ActivateCredential implements attest.EnrolBackend.
 func (b *tpmBackend) ActivateCredential(blob, encSecret []byte) ([]byte, error) {
