@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -107,12 +108,22 @@ later UUID=cccc /run/tpm2-kira/unlock.sock discard
 	}
 }
 
-// The image gets the radio settings of control.conf and nothing else: the
-// YubiKey's PIN never reaches it, however its line is spelt (the image, a
-// UKI on the ESP say, is not root's alone).
-func TestHookPutsNoPINIntoTheImage(t *testing.T) {
+// Nothing of control.conf goes into the image - not the YubiKey's PIN,
+// not a setting: the hooks only check the file, which their build reads.
+// Neither hook writes a control.conf into the image, and a file that does
+// not load stops the build.
+func TestHookPutsNoConfigIntoTheImage(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("no bash")
+	}
+	for _, hook := range []string{"initramfs/mkinitcpio/install/sd-tpm2-kira", "initramfs/initramfs-tools/hooks/tpm2-kira"} {
+		b, err := os.ReadFile(hook)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if regexp.MustCompile(`(BUILDROOT|DESTDIR)[^\n]*control\.conf|add_file[^\n]*control\.conf|copy_file[^\n]*control\.conf`).Match(b) {
+			t.Errorf("%s writes a control.conf into the image", hook)
+		}
 	}
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "bin")
@@ -120,40 +131,24 @@ func TestHookPutsNoPINIntoTheImage(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", filepath.Join(bin, "tpm2-kira"), ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
-	conf := filepath.Join(dir, "control.conf")
-	if err := os.WriteFile(conf, []byte(`# radio
-TPM2_KIRA_ATTEST_ADAPTER=hci1
-TPM2_KIRA_ATTEST_ADAPTER_WAIT=45
-TPM2_KIRA_PIN = 'secret-1234'
-  TPM2_KIRA_CONTROL=guided
-TPM2_KIRA_ATTEST_BLUETOOTH=always
-TPM2_KIRA_ATTEST_DEBUG=1
-`), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	root := filepath.Join(dir, "root")
-	script := `
-error() { echo "ERROR $*"; }
-source initramfs/mkinitcpio/install/sd-tpm2-kira
-_add_config
-`
-	cmd := exec.Command("bash", "-c", script)
-	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "TPM2_KIRA_CONTROL_CONF="+conf, "BUILDROOT="+root, "TPM2_KIRA_UNPRIVILEGED=1")
-	if out, err := cmd.CombinedOutput(); err != nil || strings.Contains(string(out), "ERROR") {
-		t.Fatalf("%v: %s", err, out)
+	run := func(conf string) string {
+		cmd := exec.Command("bash", "-c", "error() { echo \"ERROR $*\"; }\nsource initramfs/mkinitcpio/install/sd-tpm2-kira\n_check_config && echo OK")
+		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "TPM2_KIRA_CONTROL_CONF="+conf, "BUILDROOT="+root, "TPM2_KIRA_UNPRIVILEGED=1")
+		out, _ := cmd.CombinedOutput()
+		return string(out)
 	}
-	got, err := os.ReadFile(filepath.Join(root, "etc/tpm2-kira/control.conf"))
-	if err != nil {
-		t.Fatal(err)
+	good := filepath.Join(dir, "good.conf")
+	os.WriteFile(good, []byte("TPM2_KIRA_ATTEST_ADAPTER=hci1\nTPM2_KIRA_PIN='secret-1234'\n"), 0o600)
+	if out := run(good); !strings.Contains(out, "OK") {
+		t.Fatalf("a good file: %s", out)
 	}
-	for _, no := range []string{"secret", "PIN", "CONTROL", "BLUETOOTH"} {
-		if strings.Contains(string(got), no) {
-			t.Errorf("%q reached the image:\n%s", no, got)
-		}
+	if _, err := os.Stat(filepath.Join(root, "etc/tpm2-kira")); err == nil {
+		t.Fatal("the check wrote into the image")
 	}
-	for _, want := range []string{"TPM2_KIRA_ATTEST_ADAPTER=1\n", "TPM2_KIRA_ATTEST_ADAPTER_WAIT=45\n", "TPM2_KIRA_ATTEST_DEBUG=1\n"} {
-		if !strings.Contains(string(got), want) {
-			t.Errorf("the image lacks %q:\n%s", want, got)
-		}
+	old := filepath.Join(dir, "old.conf")
+	os.WriteFile(old, []byte("TPM2_KIRA_ATTEST_DEBUG=1\n"), 0o600)
+	if out := run(old); !strings.Contains(out, "ERROR") || !strings.Contains(out, "tpm2-kira.debug=1") {
+		t.Fatalf("a file with a gone setting: %s", out)
 	}
 }

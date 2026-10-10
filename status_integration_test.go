@@ -205,12 +205,11 @@ func TestStatusNotes(t *testing.T) {
 	}
 }
 
-// 'attest config-check' is what the initramfs hooks run before copying
-// control.conf into the image: the file as control writes it is valid, a
-// missing file is the defaults, and a line that cannot be used names
-// itself.
+// 'attest config-check' is what the initramfs hooks run before a build
+// reads control.conf: the file as control writes it is valid, a missing
+// file is the defaults, and a line that cannot be used names itself.
 func TestConfigCheck(t *testing.T) {
-	good := writeConf(t, "# written by control\nTPM2_KIRA_ATTEST_ADAPTER=hci1\nTPM2_KIRA_ATTEST_TIMEOUT=45\nTPM2_KIRA_ATTEST_ADAPTER_WAIT=10s\nTPM2_KIRA_ATTEST_DEBUG=1\nTPM2_KIRA_ATTEST_BLUETOOTH=always\nTPM2_KIRA_PIN='123456'\n")
+	good := writeConf(t, "# written by control\nTPM2_KIRA_ATTEST_ADAPTER=hci1\nTPM2_KIRA_ATTEST_BLUETOOTH=always\nTPM2_KIRA_PIN='123456'\n")
 	stdout, stderr, code := kira(t, nil, "attest", "config-check", good)
 	if code != 0 || !strings.Contains(stdout, good+": valid") {
 		t.Errorf("a good file: exit %d, %q %q", code, stdout, stderr)
@@ -223,7 +222,8 @@ func TestConfigCheck(t *testing.T) {
 		"TPM2_KIRA_UNLOCK=skip\n":           "line 1: there is no unlock mode to set any more",
 		"TPM2_KIRA_ATTEST=lazy\n":           "line 1: there is no attestation mode to set",
 		"\nTPM2_KIRA_ATTEST_ADAPTER=eth0\n": "line 2: invalid adapter",
-		"TPM2_KIRA_ATTEST_TIMEOUT=soon\n":   "line 1:",
+		"TPM2_KIRA_ATTEST_TIMEOUT=45\n":     "line 1: TPM2_KIRA_ATTEST_TIMEOUT is gone",
+		"TPM2_KIRA_ATTEST_DEBUG=1\n":        "tpm2-kira.debug=1 on the kernel command line",
 		"just words\n":                      "line 1: expected KEY=VALUE",
 	} {
 		path := writeConf(t, content)

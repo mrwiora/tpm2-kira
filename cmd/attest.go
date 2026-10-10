@@ -679,12 +679,12 @@ func confirmCode(in *bufio.Reader, code string) (bool, error) {
 // GateOptions configures `attest gate`.
 type GateOptions struct {
 	TPMPath     string
-	SignerPath  string // the signing public key in the initramfs; "" = DefaultAttestSignerPath
-	Coordinator string // the coordinator's socket; "" = this process holds the TPM itself
-	SealIndex   uint32 // 0 = first enrolled slot
-	Adapter     int
+	SignerPath  string        // the signing public key in the initramfs; "" = DefaultAttestSignerPath
+	Coordinator string        // the coordinator's socket; "" = this process holds the TPM itself
+	SealIndex   uint32        // 0 = first enrolled slot
+	Adapter     int           // hciN, or ble.AnyAdapter: the first that comes up
 	Timeout     time.Duration // 0 = wait forever
-	AdapterWait time.Duration // how long to wait for the adapter to appear
+	AdapterWait time.Duration // how long to wait for the adapter to appear; the code screen's end stops it earlier
 	Debug       bool
 }
 
@@ -890,6 +890,29 @@ func confirmVerifiedBoot(in *bufio.Reader, sealed *SealedBlob, slot uint32, matc
 	}
 }
 
+// GateAdapterWait is how long the gate waits for its adapter: a bound for
+// a gate without a code screen; in the image the screen's end stops the
+// wait earlier (runGateRadio's ended).
+const GateAdapterWait = 10 * time.Minute
+
+// KernelDebug reports tpm2-kira.debug=1 (or tpm2-kira.debug) on the kernel
+// command line: in the boot image the gate and the code screen then log
+// every step, and the gate's narrative reaches the console. It is the only
+// switch the image has; nothing of control.conf goes into it.
+func KernelDebug() bool {
+	b, err := os.ReadFile("/proc/cmdline")
+	if err != nil {
+		return false
+	}
+	for _, w := range strings.Fields(string(b)) {
+		switch w {
+		case "tpm2-kira.debug", "tpm2-kira.debug=1", "tpm2-kira.debug=yes", "tpm2-kira.debug=on":
+			return true
+		}
+	}
+	return false
+}
+
 // gateCoordinatorWait is how long the worker waits for the coordinator's
 // socket: both are started at the same moment.
 const gateCoordinatorWait = 30 * time.Second
@@ -928,8 +951,12 @@ func runGateRadio(host gateHost, o GateOptions, step func(string, ...any), ended
 		id.Verifiers = append(id.Verifiers, attest.EnrolledVerifier{ID: v.ID, NoisePub: v.NoisePub})
 	}
 
-	step("opening hci%d (waiting up to %s for it)", o.Adapter, o.AdapterWait)
-	p, err := ble.Open(ble.Config{Adapter: o.Adapter, UnblockRFKill: true, Wait: o.AdapterWait, Logf: debugLogf(o.Debug)})
+	if o.Adapter == ble.AnyAdapter {
+		step("waiting for the Bluetooth adapter (as long as the code screen holds)")
+	} else {
+		step("opening hci%d (waiting up to %s for it)", o.Adapter, o.AdapterWait)
+	}
+	p, err := ble.Open(ble.Config{Adapter: o.Adapter, UnblockRFKill: true, Wait: o.AdapterWait, Cancel: ended, Logf: debugLogf(o.Debug)})
 	if err != nil {
 		gateFail("%v", err)
 		host.Report(GateUnavailable)

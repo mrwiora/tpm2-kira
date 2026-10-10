@@ -119,7 +119,7 @@ journalctl -b -k | grep -iE 'bluetooth|hci|firmware'
 | kernel: `usb 3-10: Device is not authorized for usage`, later `authorized to connect` once the system is up | the USB bus lets no new device in by itself (`usbcore.authorized_default=0`, as USBGuard sets it), and the image had no rule that lets the adapter in | rebuild: the hook now adds the rule (below) |
 | no `tpm2-kira-attest.service` at all | the image has no Bluetooth: no phone was enrolled when it was built (`auto`), or the hook warned | `control`'s Boot image line; rebuild |
 | kernel: `Direct firmware load for ... failed`, `firmware missing` | the image lacks the adapter's firmware (§3) | power off, boot, rebuild |
-| `no Bluetooth adapter hci0` / the gate waits for the adapter | module or firmware not loaded in time, or another index | `TPM2_KIRA_ATTEST_ADAPTER`, `TPM2_KIRA_ATTEST_ADAPTER_WAIT` in `control.conf` |
+| `no Bluetooth adapter` / the gate waits for the adapter until the code screen ends | module, firmware or USB authorization missing in the image | `control`'s *Boot image* and *Adapter at boot* lines; `TPM2_KIRA_ATTEST_ADAPTER` says whose driver goes in |
 | `the attestation record is not accepted` | the enrolment in the TPM is not the one the image's signing key vouches for (replaced, or an older one put back) | `tpm2-kira attest status`; enrol again |
 | the phone sees no machine | the phone's Bluetooth is off, or Marify has no record for this machine (enrolled again elsewhere) | enrol the phone again |
 
@@ -145,9 +145,12 @@ lsinitcpio /boot/EFI/Linux/arch-linux.efi | grep 70-tpm2-kira-bluetooth.rules
 ```
 
 For every step the gate takes (TPM, adapter, controller commands,
-advertising, connections), set `TPM2_KIRA_ATTEST_DEBUG=1` in
-`/etc/tpm2-kira/control.conf`, rebuild, and boot: the narrative then also
-reaches the console. The gate can be run by hand on the booted system to
+advertising, connections), put `tpm2-kira.debug=1` on the kernel command
+line - at the boot loader where it can be edited, else in
+`/etc/kernel/cmdline` and rebuild - and boot: the narrative then also
+reaches the console. Nothing of `control.conf` goes into the image; the
+gate takes the adapter that comes up and waits as long as the code screen
+holds. The gate can be run by hand on the booted system to
 test the radio and the phone without a reboot:
 
 ```bash

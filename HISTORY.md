@@ -348,8 +348,13 @@ Until 2026-10-10 the hooks copied `control.conf` into the image and
 removed the PIN with `grep -v '^[[:space:]]*TPM2_KIRA_PIN='`. The parser
 also accepts `TPM2_KIRA_PIN = '...'`, which that pattern lets through, so
 a PIN in that spelling would have reached the image (a UKI on the ESP).
-`control` never writes that spelling. Now `attest image-config` writes
-the image's file from the parsed configuration, the radio settings alone.
+`control` never writes that spelling. Then for a day `attest image-config`
+wrote the image's file from the parsed configuration, the radio settings
+alone; now nothing of `control.conf` goes into the image at all. The gate
+there takes the adapter that comes up, waits for it and a phone as long
+as the code screen holds (`TPM2_KIRA_ATTEST_TIMEOUT` and `_ADAPTER_WAIT`
+are gone), and logs every step with `tpm2-kira.debug=1` on the kernel
+command line (`TPM2_KIRA_ATTEST_DEBUG` is gone).
 
 ### The firmware came from the current boot's log alone
 

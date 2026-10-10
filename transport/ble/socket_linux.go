@@ -48,21 +48,52 @@ func (e errRetry) Unwrap() error { return e.err }
 
 // openUserChannelWait retries openUserChannel until the adapter exists and
 // the kernel lets go of it, or wait expires.
-func openUserChannelWait(dev int, unblock bool, wait time.Duration, logf func(string, ...any)) (hciTransport, func(), error) {
+func openUserChannelWait(dev int, unblock bool, wait time.Duration, cancel <-chan struct{}, logf func(string, ...any)) (hciTransport, func(), error) {
 	deadline := time.Now().Add(wait)
 	announced := false
 	for {
-		tr, release, err := openUserChannel(dev, unblock, logf)
+		d := dev
+		if d == AnyAdapter {
+			d = firstAdapter()
+		}
+		var tr hciTransport
+		var release func()
+		var err error
+		if d < 0 {
+			err = errRetry{errors.New("ble: no Bluetooth adapter (kernel module, firmware or USB authorization missing?)")}
+		} else {
+			tr, release, err = openUserChannel(d, unblock, logf)
+		}
 		var r errRetry
 		if err == nil || !errors.As(err, &r) || !time.Now().Before(deadline) {
 			return tr, release, err
 		}
 		if !announced && logf != nil {
-			logf("waiting for hci%d: %v", dev, err)
+			logf("waiting for the adapter: %v", err)
 			announced = true
 		}
-		time.Sleep(250 * time.Millisecond)
+		select {
+		case <-cancel:
+			return nil, nil, err
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
+}
+
+// firstAdapter is the lowest hciN there is, or -1.
+func firstAdapter() int {
+	entries, _ := os.ReadDir("/sys/class/bluetooth")
+	best := -1
+	for _, e := range entries {
+		n, err := strconv.Atoi(strings.TrimPrefix(e.Name(), "hci"))
+		if err != nil || !strings.HasPrefix(e.Name(), "hci") {
+			continue
+		}
+		if best < 0 || n < best {
+			best = n
+		}
+	}
+	return best
 }
 
 // openUserChannel brings the adapter down in the kernel and binds an HCI

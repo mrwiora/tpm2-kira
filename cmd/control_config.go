@@ -8,7 +8,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // /etc/tpm2-kira/control.conf is the one configuration file: the radio of
@@ -34,17 +33,20 @@ func controlConfigPath() string {
 }
 
 // AttestConfig is the radio part of control.conf.
+//
+// Both settings are for the running system alone: which adapter's driver
+// and firmware the hooks put into the boot image, and when. Nothing of
+// this file goes into the image; the gate there takes the adapter that
+// comes up and waits as long as the code screen holds, and
+// tpm2-kira.debug=1 on the kernel command line makes it log every step.
 type AttestConfig struct {
-	Adapter     int           // TPM2_KIRA_ATTEST_ADAPTER
-	Timeout     time.Duration // TPM2_KIRA_ATTEST_TIMEOUT: 0 waits until the initrd ends
-	AdapterWait time.Duration // TPM2_KIRA_ATTEST_ADAPTER_WAIT: how long to wait for hciN to appear
-	Debug       bool          // TPM2_KIRA_ATTEST_DEBUG: the gate logs every step it takes
-	Bluetooth   string        // TPM2_KIRA_ATTEST_BLUETOOTH: "auto" (with an enrolled phone), or "always"
+	Adapter   int    // TPM2_KIRA_ATTEST_ADAPTER: whose driver goes into the image
+	Bluetooth string // TPM2_KIRA_ATTEST_BLUETOOTH: "auto" (with an enrolled phone), or "always"
 }
 
 // DefaultAttestConfig is used when the file is missing.
 func DefaultAttestConfig() AttestConfig {
-	return AttestConfig{AdapterWait: 30 * time.Second, Bluetooth: "auto"}
+	return AttestConfig{Bluetooth: "auto"}
 }
 
 // ControlConfig is the whole file.
@@ -127,44 +129,14 @@ func ParseControlConfig(data []byte) (ControlConfig, error) {
 			}
 			cfg.Attest.Adapter = v
 		case "TPM2_KIRA_ATTEST_TIMEOUT", "TPM2_KIRA_ATTEST_ADAPTER_WAIT":
-			d, err := parseSecondsOrDuration(val)
-			if err != nil {
-				return cfg, fmt.Errorf("control.conf line %d: %v", n, err)
-			}
-			if key == "TPM2_KIRA_ATTEST_TIMEOUT" {
-				cfg.Attest.Timeout = d
-			} else {
-				cfg.Attest.AdapterWait = d
-			}
+			return cfg, fmt.Errorf("control.conf line %d: %s is gone: the gate in the boot image waits for the adapter and a phone as long as the code screen holds. Remove the line", n, key)
 		case "TPM2_KIRA_ATTEST_DEBUG":
-			switch strings.ToLower(val) {
-			case "1", "yes", "true", "on":
-				cfg.Attest.Debug = true
-			case "", "0", "no", "false", "off":
-				cfg.Attest.Debug = false
-			default:
-				return cfg, fmt.Errorf("control.conf line %d: TPM2_KIRA_ATTEST_DEBUG must be 1 or 0, not %q", n, val)
-			}
+			return cfg, fmt.Errorf("control.conf line %d: TPM2_KIRA_ATTEST_DEBUG is gone: put tpm2-kira.debug=1 on the kernel command line instead (nothing of control.conf goes into the boot image). Remove the line", n)
 		default:
 			return cfg, fmt.Errorf("control.conf line %d: unknown key %q", n, key)
 		}
 	}
 	return cfg, sc.Err()
-}
-
-// parseSecondsOrDuration accepts "30" (seconds) or a Go duration ("2m").
-func parseSecondsOrDuration(s string) (time.Duration, error) {
-	if s == "" {
-		return 0, nil
-	}
-	if n, err := strconv.Atoi(s); err == nil && n >= 0 {
-		return time.Duration(n) * time.Second, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil || d < 0 {
-		return 0, fmt.Errorf("invalid duration %q", s)
-	}
-	return d, nil
 }
 
 // setControlValue writes KEY=value into control.conf, replacing the line
@@ -243,23 +215,4 @@ func configPIN(path string) (pin string, loose bool) {
 	}
 	uid, ok := ownerOf(st)
 	return cfg.PIN, st.Mode().Perm()&0o077 != 0 || !ok || !trustedOwner(uid)
-}
-
-// ImageControlConfig is what of control.conf goes into the boot image:
-// the radio settings the gate reads there, and nothing else. It is written
-// from the parsed file, key by key, not filtered from it: a key is in the
-// image only because it is named here, so the PIN - a secret, and the image
-// is not root's alone (a unified kernel image on the ESP) - can never slip
-// through a spelling a filter did not foresee. TPM2_KIRA_CONTROL and
-// TPM2_KIRA_ATTEST_BLUETOOTH matter on the host alone and stay out too, so
-// changing them never changes the image (and with it PCR 11).
-func ImageControlConfig(cfg *ControlConfig) []byte {
-	debug := 0
-	if cfg.Attest.Debug {
-		debug = 1
-	}
-	return []byte(fmt.Sprintf("# The boot image's part of /etc/tpm2-kira/control.conf, written by\n"+
-		"# 'tpm2-kira attest image-config': the radio settings, nothing else.\n"+
-		"TPM2_KIRA_ATTEST_ADAPTER=%d\nTPM2_KIRA_ATTEST_TIMEOUT=%d\nTPM2_KIRA_ATTEST_ADAPTER_WAIT=%d\nTPM2_KIRA_ATTEST_DEBUG=%d\n",
-		cfg.Attest.Adapter, int(cfg.Attest.Timeout/time.Second), int(cfg.Attest.AdapterWait/time.Second), debug))
 }

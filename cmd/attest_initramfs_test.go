@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 )
 
 // fakeSysfs builds a sysfs tree for a USB Bluetooth adapter behind xhci:
@@ -136,36 +135,28 @@ func TestParseAttestConfig(t *testing.T) {
 	cfg, err := parseAttest([]byte(`
 # comment
 TPM2_KIRA_ATTEST_ADAPTER="hci1"
-TPM2_KIRA_ATTEST_TIMEOUT=90
-TPM2_KIRA_ATTEST_ADAPTER_WAIT=1m
 `))
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || cfg.Adapter != 1 {
+		t.Fatalf("parsed %+v %v", cfg, err)
 	}
-	if cfg.Adapter != 1 || cfg.Timeout != 90*time.Second || cfg.AdapterWait != time.Minute {
-		t.Fatalf("parsed %+v", cfg)
-	}
-	// Debug is off unless asked for, and a typo is not silently "off".
-	if cfg.Debug {
-		t.Fatal("debug on by default")
-	}
-	for val, want := range map[string]bool{"1": true, "yes": true, "0": false, "off": false} {
-		c, err := parseAttest([]byte("TPM2_KIRA_ATTEST_DEBUG=" + val + "\n"))
-		if err != nil || c.Debug != want {
-			t.Fatalf("TPM2_KIRA_ATTEST_DEBUG=%s: %v %v", val, c.Debug, err)
+	// What the boot image used to read from the file is gone: the gate
+	// waits as long as the code screen holds, and debug is a kernel
+	// command line switch. Each says what replaces it.
+	for line, want := range map[string]string{
+		"TPM2_KIRA_ATTEST_TIMEOUT=90\n":      "as long as the code screen holds",
+		"TPM2_KIRA_ATTEST_ADAPTER_WAIT=1m\n": "as long as the code screen holds",
+		"TPM2_KIRA_ATTEST_DEBUG=1\n":         "tpm2-kira.debug=1",
+		"TPM2_KIRA_ATTEST=lazy\n":            "no attestation mode",
+	} {
+		if _, err := parseAttest([]byte(line)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v", line, err)
 		}
-	}
-	if _, err := parseAttest([]byte("TPM2_KIRA_ATTEST_DEBUG=maybe\n")); err == nil {
-		t.Fatal("invalid debug value accepted")
-	}
-	if _, err := parseAttest([]byte("TPM2_KIRA_ATTEST=lazy\n")); err == nil || !strings.Contains(err.Error(), "no attestation mode") {
-		t.Fatalf("a mode line must be refused: %v", err)
 	}
 	if _, err := parseAttest([]byte("TPM2_KIRA_SOMETHING=1\n")); err == nil {
 		t.Fatal("unknown key accepted")
 	}
 	def, err := LoadAttestConfig(filepath.Join(t.TempDir(), "missing"))
-	if err != nil || def.AdapterWait != 30*time.Second {
+	if err != nil || def.Adapter != 0 || def.Bluetooth != "auto" {
 		t.Fatalf("missing file should mean the defaults: %+v %v", def, err)
 	}
 }

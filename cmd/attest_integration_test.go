@@ -472,27 +472,18 @@ func TestCoordinatorAndWorker(t *testing.T) {
 	s.tpm.Close()
 
 	// No gate in the image, or no socket asked for: nothing to coordinate.
-	for _, c := range [][3]string{
-		{filepath.Join(dir, "a", "gate.sock"), conf, noSigner},
-		{"", conf, signer},
+	for _, c := range [][2]string{
+		{filepath.Join(dir, "a", "gate.sock"), noSigner},
+		{"", signer},
 	} {
-		if svc, end := startCoordinator(sock, c[0], c[1], c[2], false); svc != nil {
+		if svc, end := startCoordinator(sock, c[0], c[1], false); svc != nil {
 			t.Fatalf("a coordinator without a gate to coordinate (%v)", c)
 		} else {
 			end() // nothing to end, and no harm in asking
 		}
 	}
-	// A config the gate cannot use is reported, and there is no gate.
-	bad := filepath.Join(dir, "bad.conf")
-	os.WriteFile(bad, []byte("TPM2_KIRA_ATTEST=lazy\n"), 0o600)
-	if svc, end := startCoordinator(sock, filepath.Join(dir, "c", "gate.sock"), bad, signer, false); svc != nil {
-		t.Fatal("a coordinator with a config it refuses")
-	} else {
-		end()
-	}
-
 	gate := filepath.Join(dir, "run", "gate.sock")
-	svc, endCoordinator := startCoordinator(sock, gate, conf, signer, false)
+	svc, endCoordinator := startCoordinator(sock, gate, signer, false)
 	if svc == nil {
 		t.Fatal("no coordinator")
 	}

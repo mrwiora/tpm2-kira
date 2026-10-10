@@ -31,7 +31,7 @@ Before=initrd-switch-root.target
 Type=simple
 ExecStart=/usr/bin/tpm2-kira attest gate --coordinator /run/tpm2-kira/gate.sock
 # The worker's narrative (waiting, rounds, a phone connected, the verdict,
-# and with TPM2_KIRA_ATTEST_DEBUG=1 every step) is written to the journal
+# and with tpm2-kira.debug=1 on the kernel command line every step) is written to the journal
 # directly, never to the console: the code screen of tpm2-kira.service is
 # where the person looks, and it shows the gate's state in the slot's
 # line. What needs eyes - a rejected boot, a wrong phone, no adapter - is

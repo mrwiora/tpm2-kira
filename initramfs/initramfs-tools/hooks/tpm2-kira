@@ -34,25 +34,14 @@ copy_exec "$kira" /usr/bin/tpm2-kira
 if [ -r /etc/tpm2-kira/initramfs.conf ]; then
     copy_file config /etc/tpm2-kira/initramfs.conf /etc/tpm2-kira/initramfs.conf
 fi
-# The configuration file: the radio (TPM2_KIRA_ATTEST_*). How the disk's
-# key is made is read from each volume's LUKS2 header at boot. The image
-# gets the radio settings alone, written key by key by 'attest
-# image-config': the YubiKey's PIN (for the reseal on the running system)
-# can never reach it, and the image is not root's alone.
+# The configuration file is the running system's alone (which adapter's
+# driver goes into the image, and the YubiKey's PIN): nothing of it goes
+# into the image. It is checked here, since this build reads it. How the
+# disk's key is made is read from each volume's LUKS2 header at boot.
 conf=/etc/tpm2-kira/control.conf
 if [ -r "$conf" ] && ! "$kira" attest config-check "$conf" >/dev/null 2>&1; then
     echo "tpm2-kira: $conf is not valid: $("$kira" attest config-check "$conf" 2>&1 | tail -1)" >&2
     exit 1
-fi
-if [ -r "$conf" ]; then
-    mkdir -p "$DESTDIR/etc/tpm2-kira"
-    if ! "$kira" attest image-config "$conf" >"$DESTDIR/etc/tpm2-kira/control.conf" ||
-        ! grep -q '^TPM2_KIRA_ATTEST_ADAPTER=' "$DESTDIR/etc/tpm2-kira/control.conf"; then
-        rm -f "$DESTDIR/etc/tpm2-kira/control.conf"
-        echo "tpm2-kira: the installed tpm2-kira cannot write the image's configuration (attest image-config)" >&2
-        exit 1
-    fi
-    chmod 644 "$DESTDIR/etc/tpm2-kira/control.conf"
 fi
 
 # The devices with a keyslot of tpm2-kira's: does /etc/crypttab route each

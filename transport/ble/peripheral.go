@@ -10,7 +10,7 @@ import (
 
 // Config selects and describes the adapter.
 type Config struct {
-	// Adapter is the HCI device index (hci0 = 0).
+	// Adapter is the HCI device index (hci0 = 0), or AnyAdapter.
 	Adapter int
 	// DeviceName is the GAP device name readable after connecting. It is
 	// never advertised; keep it generic.
@@ -22,9 +22,17 @@ type Config struct {
 	// firmware have loaded, and the kernel holds it busy while it runs the
 	// controller's setup; both take seconds. Zero means do not wait.
 	Wait time.Duration
+	// Cancel ends the wait for the adapter early when it is closed; nil
+	// never does.
+	Cancel <-chan struct{}
 	// Logf receives debug output; nil discards it.
 	Logf func(format string, args ...any)
 }
+
+// AnyAdapter takes the first adapter that is there - the lowest hciN - as
+// it comes up: in an initramfs that carries one adapter's driver alone,
+// that is the adapter.
+const AnyAdapter = -1
 
 // Peripheral owns one adapter exclusively for its lifetime.
 type Peripheral struct {
@@ -39,7 +47,7 @@ func Open(cfg Config) (*Peripheral, error) {
 	if cfg.DeviceName == "" {
 		cfg.DeviceName = "tpm2-kira"
 	}
-	tr, release, err := openUserChannelWait(cfg.Adapter, cfg.UnblockRFKill, cfg.Wait, cfg.Logf)
+	tr, release, err := openUserChannelWait(cfg.Adapter, cfg.UnblockRFKill, cfg.Wait, cfg.Cancel, cfg.Logf)
 	if err != nil {
 		return nil, err
 	}

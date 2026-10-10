@@ -595,10 +595,9 @@ run after an image rebuild, which runs as root on the host; the mkinitcpio
 post hook and Debian's hook need no variable from their own environment.
 
 The PIN does not reach the image, since an image - a unified kernel image on
-the ESP, say - is not root's alone. Both install hooks write the image's
-`control.conf` with `tpm2-kira attest image-config`, which emits the radio
-settings from the parsed file, key by key, and nothing else: an allow-list,
-not a filter.
+the ESP, say - is not root's alone: nothing of `control.conf` goes into it.
+The hooks read the file on the running system (which adapter's driver to
+pack) and check it; the gate in the image needs no setting.
 
 **Warning when the automatic reseal will lack the PIN (implemented).** Right
 after a manual `seal` or `reseal` has had the PIN accepted, tpm2-kira warns,

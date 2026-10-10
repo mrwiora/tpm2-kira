@@ -730,47 +730,24 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 			failAttest(cmd.ExitInternal, err)
 		}
 	case "gate":
-		configPath := fs.String("config", cmd.DefaultControlConfigPath, "Attestation config (adapter, timeouts)")
-		adapter := fs.Int("adapter", -1, "Bluetooth adapter index (hciN); default from the config, else 0")
-		timeout := fs.Duration("timeout", -1, "Give up after this long (0 = wait forever); default from the config")
-		adapterWait := fs.Duration("adapter-wait", -1, "Wait this long for the adapter to appear; default from the config, else 30s")
+		// Nothing is configured: the gate takes the adapter that comes up
+		// (the image carries one adapter's driver), waits for it and for a
+		// phone as long as the code screen holds, and logs every step with
+		// tpm2-kira.debug=1 on the kernel command line.
+		adapter := fs.Int("adapter", -1, "Bluetooth adapter index (hciN); default: the first that comes up")
+		timeout := fs.Duration("timeout", 0, "Give up after this long (0 = as long as the code screen holds, or forever without one)")
+		adapterWait := fs.Duration("adapter-wait", cmd.GateAdapterWait, "Wait this long for the adapter to appear")
 		coordinator := fs.String("coordinator", "", "Socket of the coordinator ('tpm2-kira run --gate') that holds the TPM; without it this process uses the TPM itself")
 		fs.Parse(args)
-		cfg, err := cmd.LoadAttestConfig(*configPath)
-		if err != nil {
-			failAttest(cmd.ExitUsage, err)
-		}
-		if *adapter >= 0 {
-			cfg.Adapter = *adapter
-		}
-		if *timeout >= 0 {
-			cfg.Timeout = *timeout
-		}
-		if *adapterWait >= 0 {
-			cfg.AdapterWait = *adapterWait
-		}
 		var slot uint32
 		if nvramExplicit(args) {
 			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
 		}
 		os.Exit(cmd.AttestGate(cmd.GateOptions{
-			TPMPath: *tpm, SealIndex: slot, Adapter: cfg.Adapter, Timeout: cfg.Timeout,
-			AdapterWait: cfg.AdapterWait, Debug: *debug || cfg.Debug,
+			TPMPath: *tpm, SealIndex: slot, Adapter: *adapter, Timeout: *timeout,
+			AdapterWait: *adapterWait, Debug: *debug || cmd.KernelDebug(),
 			Coordinator: *coordinator,
 		}))
-	case "image-config":
-		// Used by the initramfs hooks: the boot image's part of
-		// control.conf - the radio settings alone, never the PIN.
-		fs.Parse(args)
-		path := fs.Arg(0)
-		if path == "" {
-			path = cmd.DefaultControlConfigPath
-		}
-		cfg, err := cmd.LoadControlConfig(path)
-		if err != nil {
-			failAttest(cmd.ExitUsage, err)
-		}
-		os.Stdout.Write(cmd.ImageControlConfig(&cfg))
 	case "config-check":
 		fs.Parse(args)
 		path := fs.Arg(0)
@@ -886,8 +863,6 @@ machine's screen (docs/PLAN-REMOTEATTESTATION.md).
                   initramfs hooks)
   attest config-check [PATH]  Say whether control.conf loads (exit 2 and the
                   reason if not; used by the initramfs hooks)
-  attest image-config [PATH]  The boot image's part of control.conf: the radio
-                  settings alone, never the PIN (used by the initramfs hooks)
 
   EXIT STATUS: unlike every other command, 'attest gate', 'attest verify',
   'attest quote' and 'attest enrol' exit non-zero on failure:

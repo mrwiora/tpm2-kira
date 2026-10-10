@@ -38,7 +38,7 @@ func TestControlConfigOneFile(t *testing.T) {
 		t.Fatal("an unknown guide mode parsed")
 	}
 	missing, err := LoadControlConfig(filepath.Join(t.TempDir(), "none"))
-	if err != nil || missing.Attest.AdapterWait == 0 || missing.Attest.Bluetooth != "auto" {
+	if err != nil || missing.Attest.Bluetooth != "auto" {
 		t.Fatalf("missing file: %+v %v", missing, err)
 	}
 }

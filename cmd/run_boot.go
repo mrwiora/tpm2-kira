@@ -349,8 +349,8 @@ func releaseTerminal(fd int) {
 // carries a gate for an enrolled phone - the hook puts the signing public
 // key at signerPath with the gate and not otherwise: it opens the TPM for
 // it and listens on socket. Nil when there is nothing to coordinate.
-func startCoordinator(tpmPath, socket, configPath, signerPath string, debug bool) (*gateService, func()) {
-	svc, server := openCoordinator(tpmPath, socket, configPath, signerPath, debug)
+func startCoordinator(tpmPath, socket, signerPath string, debug bool) (*gateService, func()) {
+	svc, server := openCoordinator(tpmPath, socket, signerPath, debug)
 	if svc == nil {
 		return nil, func() {}
 	}
@@ -365,20 +365,15 @@ func startCoordinator(tpmPath, socket, configPath, signerPath string, debug bool
 	}
 }
 
-func openCoordinator(tpmPath, socket, configPath, signerPath string, debug bool) (*gateService, *gateServer) {
+func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*gateService, *gateServer) {
 	if socket == "" {
 		return nil, nil
 	}
 	if _, err := os.Stat(signerPath); err != nil {
 		return nil, nil // no gate in this image
 	}
-	cfg, err := LoadAttestConfig(configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: %v\n", err)
-		return nil, nil
-	}
-	if cfg.Debug {
-		debug, narrateDebug = true, true // TPM2_KIRA_ATTEST_DEBUG=1: the narrative on the console too
+	if KernelDebug() {
+		debug, narrateDebug = true, true // tpm2-kira.debug=1: the narrative on the console too
 	}
 	path := preferResourceManager(tpmPath)
 	tpmDev, err := OpenTPM(path)
@@ -401,7 +396,7 @@ func openCoordinator(tpmPath, socket, configPath, signerPath string, debug bool)
 // also the key provider for systemd-cryptsetup: it answers the volumes'
 // key requests once the hold has ended, and stays until it is stopped.
 func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, debug bool) {
-	svc, endCoordinator := startCoordinator(tpmPath, gateSocket, controlConfigPath(), DefaultAttestSignerPath, debug)
+	svc, endCoordinator := startCoordinator(tpmPath, gateSocket, DefaultAttestSignerPath, debug)
 	var unlock *unlockServer
 	// What the next prompt is, for the code screen's words: the recipe of
 	// the first routed volume, read from its LUKS2 header once it is
