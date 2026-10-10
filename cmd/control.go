@@ -864,6 +864,9 @@ func (c *controller) factsText() string {
 			for _, ks := range d.Keyslots {
 				parts = append(parts, strconv.Itoa(ks.Keyslot)+" "+shortKeyslot(ks))
 			}
+			for _, o := range d.Orphans {
+				parts = append(parts, fmt.Sprintf("token %d (%s) without a keyslot", o.ID, o.Type))
+			}
 			route := "not routed through tpm2-kira"
 			if f.Routed[d.Device] {
 				route = "key from tpm2-kira"

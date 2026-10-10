@@ -65,11 +65,9 @@ func ReadLuks2Tokens(device string) ([]LuksToken, error) {
 	}
 	var out []LuksToken
 	for _, raw := range md.Tokens {
-		var tok LuksToken
-		if err := json.Unmarshal(raw, &tok); err != nil || tok.Type != LuksTokenType {
-			continue
+		if tok, ok := parseKiraToken(raw); ok {
+			out = append(out, tok)
 		}
-		out = append(out, tok)
 	}
 	return out, nil
 }
@@ -198,6 +196,9 @@ func (r *unlockRecipe) forVolume(volume string) (mode, why string) {
 func recipeOfTokens(toks []LuksToken) string {
 	mode := ""
 	for _, t := range toks {
+		if t.Obsolete {
+			continue // the old one-type form: re-marked, never acted on
+		}
 		switch t.Mode {
 		case LuksModePasswordRemoteSalt:
 			return LuksModePasswordRemoteSalt

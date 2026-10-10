@@ -45,12 +45,15 @@ still comes through the socket (Arch) or the keyscript (Debian). A token
 of ours:
 
 ```json
-{"type": "tpm2-kira", "keyslots": ["1"], "mode": "password+salt",
- "slot": 0, "label": "luks", "created": "2026-10-07T17:30:00Z"}
+{"type": "tpm2-kira-salt", "keyslots": ["1"], "created": "2026-10-07T17:30:00Z"}
+{"type": "tpm2-kira-remotesalt", "keyslots": ["2"], "slot": 0,
+ "label": "luks", "created": "2026-10-07T18:00:00Z"}
 ```
 
-- `mode`: `password+salt` or `password+remotesalt` - how the key in this
-  keyslot is made at the prompt.
+- the type carries the mode, so a plain `luksDump` tells the two apart:
+  `tpm2-kira-salt` is `password+salt`, `tpm2-kira-remotesalt` is
+  `password+remotesalt` (`+` is not allowed in a LUKS2 token type, so the
+  type spells it out).
 - `slot`: password+remotesalt only - the slot whose enrolment releases
   the salt (0 unless `--nvram` names another). Deleting the slot deletes
   the keyslot with it; a keyslot outliving its slot is dirty, and status

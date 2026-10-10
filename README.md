@@ -723,9 +723,10 @@ sudo tpm2-kira luks mark /dev/nvme0n1p2 --keyslot 1 --mode password+salt
 ```
 
 The last line marks the keyslot as tpm2-kira's with a LUKS2 token in the
-header (no key material; `cryptsetup luksDump` lists it as `tpm2-kira`),
-so that `tpm2-kira luks status` can say which keyslot is whose and how
-its key is made. A `password+salt` keyslot is bound to nothing: no TPM is
+header (no key material). The token's type carries the mode, so a plain
+`cryptsetup luksDump` tells them apart: `tpm2-kira-salt` for
+`password+salt`, `tpm2-kira-remotesalt` for `password+remotesalt` (`+` is
+not allowed in a token type, so the type spells it out). A `password+salt` keyslot is bound to nothing: no TPM is
 in its key, and no slot's deletion takes it. A `password+remotesalt`
 keyslot carries `"slot": N` - the slot whose enrolment releases its salt
 (slot 0 unless `--nvram` names another) - and is deleted with that slot

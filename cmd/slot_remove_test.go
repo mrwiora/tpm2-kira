@@ -78,7 +78,7 @@ func TestDeleteSlotTakesWhatItCan(t *testing.T) {
 
 	const meta = `{
 	  "keyslots": {"0": {"type": "luks2"}, "1": {"type": "luks2"}},
-	  "tokens": {"0": {"type": "tpm2-kira", "keyslots": ["1"], "mode": "password+remotesalt", "slot": 0, "created": "2026-10-07T17:30:00Z"}}
+	  "tokens": {"0": {"type": "tpm2-kira-remotesalt", "keyslots": ["1"], "slot": 0, "created": "2026-10-07T17:30:00Z"}}
 	}`
 	listLuksDevices = func() ([]string, error) { return []string{"/dev/fake"}, nil }
 	var tokenRemoved, killed []string
@@ -121,7 +121,7 @@ func TestDeleteSlotTakesWhatItCan(t *testing.T) {
 	// stay openable, and the failure says what to add first.
 	const allOurs = `{
 	  "keyslots": {"1": {"type": "luks2"}},
-	  "tokens": {"0": {"type": "tpm2-kira", "keyslots": ["1"], "mode": "password+remotesalt", "slot": 0, "created": "2026-10-07T17:30:00Z"}}
+	  "tokens": {"0": {"type": "tpm2-kira-remotesalt", "keyslots": ["1"], "slot": 0, "created": "2026-10-07T17:30:00Z"}}
 	}`
 	cryptsetup = func(stdin []byte, args ...string) ([]byte, error) { return []byte(allOurs), nil }
 	killed = nil

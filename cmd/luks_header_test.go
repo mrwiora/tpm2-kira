@@ -32,16 +32,31 @@ func writeLuks2Header(t *testing.T, tokensJSON string) string {
 // winning over the typed one.
 func TestReadLuks2TokensAndRecipe(t *testing.T) {
 	dev := writeLuks2Header(t, `{
-	  "0": {"type": "tpm2-kira", "keyslots": ["1"], "mode": "password+salt", "slot": 0, "created": "2026-10-07T17:30:00Z"},
+	  "0": {"type": "tpm2-kira-salt", "keyslots": ["1"], "created": "2026-10-07T17:30:00Z"},
 	  "1": {"type": "systemd-tpm2", "keyslots": ["2"], "tpm2-blob": "x"},
-	  "2": {"type": "tpm2-kira", "keyslots": ["3"], "mode": "password+remotesalt", "slot": 0, "label": "luks", "created": "2026-10-07T18:00:00Z"}
+	  "2": {"type": "tpm2-kira-remotesalt", "keyslots": ["3"], "slot": 0, "label": "luks", "created": "2026-10-07T18:00:00Z"},
+	  "3": {"type": "tpm2-kira", "keyslots": ["4"], "mode": "password+remotesalt", "slot": 0, "created": "x"}
 	}`)
 	toks, err := ReadLuks2Tokens(dev)
-	if err != nil || len(toks) != 2 {
+	if err != nil || len(toks) != 3 {
 		t.Fatalf("%v %+v", err, toks)
 	}
+	// The old one-type token is recognised but never acted on: with only
+	// it as the remote-salt mark, the typed salt's recipe wins.
 	if recipeOfTokens(toks) != LuksModePasswordRemoteSalt {
 		t.Fatalf("the remote salt does not win: %q", recipeOfTokens(toks))
+	}
+	var fresh []LuksToken
+	for _, tk := range toks {
+		if !tk.Obsolete && tk.Mode == LuksModePasswordSalt {
+			fresh = append(fresh, tk)
+		}
+		if tk.Obsolete {
+			fresh = append(fresh, tk)
+		}
+	}
+	if recipeOfTokens(fresh) != LuksModePasswordSalt {
+		t.Fatalf("an obsolete token was acted on: %q", recipeOfTokens(fresh))
 	}
 	if recipeOfTokens(toks[:1]) != LuksModePasswordSalt && recipeOfTokens(toks[1:]) != LuksModePasswordSalt {
 		t.Fatal("the typed salt's token was not read")
@@ -98,7 +113,7 @@ func TestUnlockRecipe(t *testing.T) {
 	defer func(c string, ct []string) { bootCmdlinePath, bootCrypttabPaths = c, ct }(bootCmdlinePath, bootCrypttabPaths)
 	bootCmdlinePath = filepath.Join(dir, "cmdline")
 	bootCrypttabPaths = []string{filepath.Join(dir, "crypttab")}
-	dev := writeLuks2Header(t, `{"0": {"type": "tpm2-kira", "keyslots": ["1"], "mode": "password+salt", "slot": 0, "created": "x"}}`)
+	dev := writeLuks2Header(t, `{"0": {"type": "tpm2-kira-salt", "keyslots": ["1"], "created": "x"}}`)
 	os.WriteFile(bootCrypttabPaths[0], []byte("cryptroot "+dev+" none luks\n"), 0o644)
 
 	r := &unlockRecipe{}

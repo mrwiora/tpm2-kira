@@ -401,9 +401,12 @@ tpm2-kira luks route  [<device>…] [--cmdline FILE]… [--crypttab FILE] [--jso
 tpm2-kira luks mark   <device> --keyslot N --mode password+salt|password+remotesalt [options]
 
 tpm2-kira's LUKS keyslots. Every keyslot it adds is marked with a LUKS2
-token of type tpm2-kira in the header ({"mode","slot","label","created"};
-no secret), so status, removal and rotation know which are its own, and
-the boot reads the key's recipe from it. A password+remotesalt keyslot is
+token in the header (no secret), whose type carries the mode, so a plain
+luksDump tells them apart: tpm2-kira-salt is password+salt,
+tpm2-kira-remotesalt is password+remotesalt. status, removal and rotation
+know the keyslots by it, and the boot reads the key's recipe from it; a
+token of ours without a keyslot is named as a leftover, with the
+'cryptsetup token remove' that takes it. A password+remotesalt keyslot is
 bound by "slot" to the slot whose enrolment releases its salt (0 unless
 --nvram names another): deleting that slot (control, the slot's line)
 deletes the keyslot with it, and a keyslot outliving its slot is dirty.

@@ -178,8 +178,15 @@ func statusNotes(r StatusReport) []string {
 		if d.Error != "" {
 			headersRead = false // a header not read: the keyslot checks would be guesses
 		}
+		for _, o := range d.Orphans {
+			notes = append(notes, fmt.Sprintf("%s token %d (%s) points at no existing keyslot - a leftover: cryptsetup token remove --token-id %d %s", d.Device, o.ID, o.Type, o.ID, d.Device))
+		}
 		for _, ks := range d.Keyslots {
 			if ks.Token == nil {
+				continue
+			}
+			if ks.Token.Obsolete {
+				notes = append(notes, fmt.Sprintf("%s keyslot %d carries the old token type %s: cryptsetup token remove --token-id %d %s, then tpm2-kira luks mark %s --keyslot %d --mode <its mode>", d.Device, ks.Keyslot, luksTokenTypeOld, ks.TokenID, d.Device, d.Device, ks.Keyslot))
 				continue
 			}
 			marked[ks.Token.Mode]++
@@ -251,6 +258,9 @@ func printStatus(r StatusReport) {
 		for _, ks := range d.Keyslots {
 			parts = append(parts, "keyslot "+strconv.Itoa(ks.Keyslot)+": "+shortKeyslot(ks))
 		}
+		for _, o := range d.Orphans {
+			parts = append(parts, fmt.Sprintf("token %d (%s): no keyslot, a leftover", o.ID, o.Type))
+		}
 		fmt.Printf("  %s  %s\n", d.Device, strings.Join(parts, "; "))
 	}
 	if len(r.Notes) > 0 {
@@ -266,6 +276,9 @@ func printStatus(r StatusReport) {
 func shortKeyslot(ks KeyslotStatus) string {
 	if ks.Token == nil {
 		return "not tpm2-kira's"
+	}
+	if ks.Token.Obsolete {
+		return "an old token: re-mark (the notes say how)"
 	}
 	if ks.Token.Mode == LuksModePasswordRemoteSalt && ks.Token.Slot != nil {
 		return fmt.Sprintf("%s (slot %d, label %q)", ks.Token.Mode, *ks.Token.Slot, ks.Token.Label)

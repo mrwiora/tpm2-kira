@@ -20,8 +20,25 @@ import (
 // through the token. Read with luksDump --dump-json-metadata, written
 // with token import.
 
-// LuksTokenType is the token's type in the header.
-const LuksTokenType = "tpm2-kira"
+// The token's type carries the keyslot's recipe, so a plain 'cryptsetup
+// luksDump' tells the two apart ('+' is not allowed in a LUKS2 token
+// type - it may name a plugin file - so the type spells the mode out).
+const (
+	LuksTokenTypeSalt       = "tpm2-kira-salt"       // password+salt
+	LuksTokenTypeRemoteSalt = "tpm2-kira-remotesalt" // password+remotesalt
+	// luksTokenTypeOld is the one type of earlier versions, the mode in a
+	// field: recognised only to say what to do now - remove it and mark
+	// the keyslot anew (Obsolete).
+	luksTokenTypeOld = "tpm2-kira"
+)
+
+// tokenTypeOf is the type a mode's token is written with.
+func tokenTypeOf(mode string) string {
+	if mode == LuksModePasswordRemoteSalt {
+		return LuksTokenTypeRemoteSalt
+	}
+	return LuksTokenTypeSalt
+}
 
 // The modes a keyslot's key is made in, as the token names them. The boot
 // reads them from the header itself (luks_header.go): there is no
@@ -41,15 +58,40 @@ const (
 type LuksToken struct {
 	Type     string   `json:"type"`
 	Keyslots []string `json:"keyslots"`
-	Mode     string   `json:"mode"`
 	Slot     *int     `json:"slot,omitempty"` // password+remotesalt: the slot whose salt it needs
 	Label    string   `json:"label,omitempty"`
 	Created  string   `json:"created"`
+	// Mode is the type's meaning, derived when reading: the type carries it.
+	Mode string `json:"-"`
+	// Obsolete marks the old one-type form: shown so the keyslot can be
+	// re-marked, used for nothing else.
+	Obsolete bool `json:"-"`
+}
+
+// parseKiraToken reads one token's JSON when it is ours: the type carries
+// the mode, and the old one-type form is recognised as obsolete.
+func parseKiraToken(raw json.RawMessage) (LuksToken, bool) {
+	var tok LuksToken
+	if err := json.Unmarshal(raw, &tok); err != nil {
+		return tok, false
+	}
+	switch tok.Type {
+	case LuksTokenTypeSalt:
+		tok.Mode = LuksModePasswordSalt
+	case LuksTokenTypeRemoteSalt:
+		tok.Mode = LuksModePasswordRemoteSalt
+	case luksTokenTypeOld:
+		tok.Obsolete = true
+	default:
+		return tok, false
+	}
+	return tok, true
 }
 
 // BoundTo says whether the keyslot is bound to the given tpm2-kira slot.
+// An obsolete token binds nothing: it is re-marked, never acted on.
 func (t *LuksToken) BoundTo(slot int) bool {
-	return t.Slot != nil && *t.Slot == slot
+	return !t.Obsolete && t.Slot != nil && *t.Slot == slot
 }
 
 // luksMetadata is the part of luksDump --dump-json-metadata this reads.
@@ -129,6 +171,12 @@ func parseLsblk(out []byte) ([]string, error) {
 	return found, nil
 }
 
+// OrphanToken is a token of ours whose keyslots are gone: a leftover.
+type OrphanToken struct {
+	ID   int    `json:"id"`
+	Type string `json:"type"`
+}
+
 // KeyslotStatus is one keyslot of a device as luks status reports it.
 type KeyslotStatus struct {
 	Keyslot int        `json:"keyslot"`
@@ -140,6 +188,7 @@ type KeyslotStatus struct {
 type LuksDeviceStatus struct {
 	Device   string          `json:"device"`
 	Keyslots []KeyslotStatus `json:"keyslots"`
+	Orphans  []OrphanToken   `json:"orphan_tokens,omitempty"` // tokens of ours whose keyslots are gone
 	Error    string          `json:"error,omitempty"`
 }
 
@@ -151,37 +200,45 @@ func readLuksStatus(device string) LuksDeviceStatus {
 		st.Error = err.Error()
 		return st
 	}
-	slots, err := parseLuksMetadata(out)
+	slots, orphans, err := parseLuksMetadata(out)
 	if err != nil {
 		st.Error = err.Error()
 		return st
 	}
-	st.Keyslots = slots
+	st.Keyslots, st.Orphans = slots, orphans
 	return st
 }
 
-func parseLuksMetadata(out []byte) ([]KeyslotStatus, error) {
+func parseLuksMetadata(out []byte) ([]KeyslotStatus, []OrphanToken, error) {
 	var md luksMetadata
 	if err := json.Unmarshal(out, &md); err != nil {
-		return nil, fmt.Errorf("the header's metadata does not parse (LUKS2 only): %w", err)
+		return nil, nil, fmt.Errorf("the header's metadata does not parse (LUKS2 only): %w", err)
 	}
 	byKeyslot := map[string]KeyslotStatus{}
 	for num := range md.Keyslots {
 		n, _ := strconv.Atoi(num)
 		byKeyslot[num] = KeyslotStatus{Keyslot: n}
 	}
+	var orphans []OrphanToken
 	for id, raw := range md.Tokens {
-		var tok LuksToken
-		if err := json.Unmarshal(raw, &tok); err != nil || tok.Type != LuksTokenType {
+		tok, ok := parseKiraToken(raw)
+		if !ok {
 			continue
 		}
 		tid, _ := strconv.Atoi(id)
+		assigned := false
 		for _, ks := range tok.Keyslots {
 			if s, ok := byKeyslot[ks]; ok {
 				t := tok
 				s.Token, s.TokenID = &t, tid
 				byKeyslot[ks] = s
+				assigned = true
 			}
+		}
+		if !assigned {
+			// A token whose keyslots are gone: a leftover of a kill that
+			// skipped the token, to be removed by name.
+			orphans = append(orphans, OrphanToken{ID: tid, Type: tok.Type})
 		}
 	}
 	var slots []KeyslotStatus
@@ -189,7 +246,8 @@ func parseLuksMetadata(out []byte) ([]KeyslotStatus, error) {
 		slots = append(slots, s)
 	}
 	sort.Slice(slots, func(i, j int) bool { return slots[i].Keyslot < slots[j].Keyslot })
-	return slots, nil
+	sort.Slice(orphans, func(i, j int) bool { return orphans[i].ID < orphans[j].ID })
+	return slots, orphans, nil
 }
 
 // LuksStatus prints which keyslots of the given devices (all LUKS devices
@@ -232,6 +290,9 @@ func describeKeyslot(s KeyslotStatus) string {
 		return "not tpm2-kira's (a passphrase, or a key enrolled by other means)"
 	}
 	t := s.Token
+	if t.Obsolete {
+		return fmt.Sprintf("tpm2-kira, an old token (type %s): remove it and mark the keyslot anew - cryptsetup token remove --token-id %d <device>, then tpm2-kira luks mark", luksTokenTypeOld, s.TokenID)
+	}
 	switch t.Mode {
 	case LuksModePasswordSalt:
 		return fmt.Sprintf("tpm2-kira, password+salt: a typed password and a typed salt, bound to no slot (token %d, %s)", s.TokenID, t.Created)
@@ -323,10 +384,13 @@ func LuksMark(o LuksMarkOptions) error {
 	if have == nil {
 		return fmt.Errorf("%s has no keyslot %d", device, keyslot)
 	}
+	if have.Token != nil && have.Token.Obsolete {
+		return fmt.Errorf("keyslot %d carries the old token type %s: cryptsetup token remove --token-id %d %s, then mark it anew", keyslot, luksTokenTypeOld, have.TokenID, device)
+	}
 	if have.Token != nil {
 		return fmt.Errorf("keyslot %d is marked already (token %d, %s); remove it first: tpm2-kira luks remove", keyslot, have.TokenID, have.Token.Mode)
 	}
-	tok := LuksToken{Type: LuksTokenType, Keyslots: []string{strconv.Itoa(keyslot)}, Mode: mode, Created: time.Now().UTC().Format(time.RFC3339)}
+	tok := LuksToken{Type: tokenTypeOf(mode), Keyslots: []string{strconv.Itoa(keyslot)}, Mode: mode, Created: time.Now().UTC().Format(time.RFC3339)}
 	if mode == LuksModePasswordRemoteSalt {
 		tok.Slot = &slot
 		if label == "" {
@@ -454,7 +518,7 @@ func LuksEnrol(o LuksEnrolOptions) error {
 	if newSlot < 0 {
 		return errors.New("cryptsetup added no keyslot")
 	}
-	tok := LuksToken{Type: LuksTokenType, Keyslots: []string{strconv.Itoa(newSlot)}, Mode: o.Mode, Created: time.Now().UTC().Format(time.RFC3339)}
+	tok := LuksToken{Type: tokenTypeOf(o.Mode), Keyslots: []string{strconv.Itoa(newSlot)}, Mode: o.Mode, Created: time.Now().UTC().Format(time.RFC3339)}
 	if o.Mode == LuksModePasswordRemoteSalt {
 		tok.Slot, tok.Label = &slot, label
 	}

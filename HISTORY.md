@@ -108,6 +108,16 @@ token's mode values.
 
 ## LUKS keyslot token
 
+### One token type, the mode in a field
+
+The token's type was "tpm2-kira" for both modes, the mode a JSON field: a
+plain 'cryptsetup luksDump', which shows only the types, could not tell a
+password+salt keyslot from a password+remotesalt one. Now the type
+carries the mode - tpm2-kira-salt and tpm2-kira-remotesalt ('+' is not
+allowed in a token type) - and the mode field is gone. A token of the old
+type is recognised only to say what to do now: remove it (cryptsetup
+token remove --token-id N) and mark the keyslot anew.
+
 ### Every mode bound to a slot
 
 For a short while every token carried `slot` (0 by default), whatever the
