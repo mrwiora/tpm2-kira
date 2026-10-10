@@ -464,9 +464,13 @@ func AttestEnrol(o EnrolOptions) error {
 	fmt.Println()
 	if mp.err != nil {
 		// Without a prediction the phone pins the running system's values,
-		// which the boot check cannot match.
+		// which the boot check cannot match. The reason is printed: it is
+		// what a bug report needs.
 		fmt.Println("NOTE: the values at the boot check could not be predicted: the phone will show")
-		fmt.Println("      \"changed\" at the first boot - check and approve it there once.")
+		fmt.Println("      \"changed\" at the first boot - check and approve it there once. Reason:")
+		for _, line := range strings.Split(mp.err.Error(), "\n") {
+			fmt.Printf("      %s\n", line)
+		}
 		fmt.Println()
 	}
 
@@ -555,11 +559,11 @@ func AttestEnrol(o EnrolOptions) error {
 			if errors.As(err, &em) || strings.Contains(err.Error(), "rejected") {
 				return fmt.Errorf("enrolment aborted: %w", err)
 			}
-			fmt.Printf("Session failed: %v\nWaiting for another attempt ...\n\n", err)
+			fmt.Printf("\033[0;31mSession failed: %v\033[0m\nWaiting for another attempt ...\n\n", err)
 			continue
 		}
 		fmt.Println()
-		fmt.Printf("Enrolled:      %s (verifier id %s)\n", verifierName(v), v.ID)
+		fmt.Printf("\033[0;32mEnrolled:      %s (verifier id %s)\033[0m\n", verifierName(v), v.ID)
 		fmt.Printf("Stored:        in the blob of slot %d (NV 0x%08X)\n", attestSlot(idx), idx)
 		fmt.Println()
 		if len(blob.Phone.Verifiers) > 1 {
@@ -591,8 +595,17 @@ func verifierName(v *attest.EnrolledVerifier) string {
 	return "phone"
 }
 
-func progressf(format string, args ...any) {
-	fmt.Printf("               "+format+"\n", args...)
+// progressf prints the session's progress plainly, successes green and
+// failures red.
+func progressf(level attest.ProgressLevel, format string, args ...any) {
+	line := fmt.Sprintf(format, args...)
+	switch level {
+	case attest.ProgressGood:
+		line = "\033[0;32m" + line + "\033[0m"
+	case attest.ProgressBad:
+		line = "\033[0;31m" + line + "\033[0m"
+	}
+	fmt.Println(line)
 }
 
 func debugLogf(debug bool) func(string, ...any) {
@@ -886,7 +899,9 @@ func debugProgress(debug bool) attest.Progress {
 	if !debug {
 		return nil
 	}
-	return func(format string, args ...any) { narrateAt(prioDebug, "tpm2-kira: "+format, args...) }
+	return func(_ attest.ProgressLevel, format string, args ...any) {
+		narrateAt(prioDebug, "tpm2-kira: "+format, args...)
+	}
 }
 
 // gateSteps returns the gate's step log for debug runs: one line per step

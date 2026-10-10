@@ -86,12 +86,28 @@ type AttestIdentity struct {
 	Capabilities uint32
 }
 
+// ProgressLevel says what a progress line reports: plain information, a
+// success, or a failure. The console colours by it; a journal ignores it.
+type ProgressLevel int
+
+const (
+	ProgressInfo ProgressLevel = iota
+	ProgressGood
+	ProgressBad
+)
+
 // Progress receives human-readable status lines for the console.
-type Progress func(format string, args ...any)
+type Progress func(level ProgressLevel, format string, args ...any)
 
 func (p Progress) say(format string, args ...any) {
 	if p != nil {
-		p(format, args...)
+		p(ProgressInfo, format, args...)
+	}
+}
+
+func (p Progress) good(format string, args ...any) {
+	if p != nil {
+		p(ProgressGood, format, args...)
 	}
 }
 
@@ -276,7 +292,7 @@ func ServeAttestation(conn Conn, id *AttestIdentity, be AttesterBackend, progres
 				res.Release = r
 				ack.Status, ack.Message = fb.TakeRelease(r)
 			}
-			progress.say("Remote salt released by %s: %s", verifierLabel(res.Verifier), ack.Message)
+			progress.good("Remote salt released by %s: %s", verifierLabel(res.Verifier), ack.Message)
 			b, err := ack.Encode()
 			if err != nil {
 				return res, err
@@ -426,7 +442,7 @@ func ServeEnrolment(conn Conn, id *EnrolIdentity, be EnrolBackend, progress Prog
 		ch.SendError(ErrCodeProtocol, err.Error())
 		return nil, err
 	}
-	progress.say("Code confirmed on both devices")
+	progress.good("Code confirmed on both devices")
 
 	ekPub, ekCert, err := be.EKPublic()
 	if err != nil {
@@ -501,7 +517,8 @@ func ServeEnrolment(conn Conn, id *EnrolIdentity, be EnrolBackend, progress Prog
 	if err := ch.SendMsg(b); err != nil {
 		return nil, err
 	}
-	progress.say("Credential activated: the phone has verified the attestation key lives in this TPM")
+	// Whether the activation proves a genuine TPM is the EK verdict's to
+	// say, and the phone says it: no claim here.
 
 	if d, err = ch.RecvMsg(); err != nil {
 		return nil, err

@@ -566,7 +566,8 @@ func Control(o ControlOptions) error {
 		} else {
 			c.ran = true
 		}
-		if _, err := c.confirm("Back to the overview?", ""); err != nil {
+		// One button: whatever happened, the overview follows (Esc leaves).
+		if err := c.form(huh.NewNote().Title("Back to the overview").Next(true).NextLabel("OK")).Run(); err != nil {
 			c.leave(steps)
 			return nil
 		}
