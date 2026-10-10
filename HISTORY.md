@@ -142,7 +142,7 @@ slot 0, which is where every keyslot of a one-slot machine belonged anyway.
 
 ## Blob format
 
-### A slot with phones has no TOTP key; phones carry no name
+### Version 14 — a slot with phones has no TOTP key; phones carry no name
 
 Until 2026-10-10 the first phone enrolled for a slot joined its TOTP key:
 the code was shown next to the phone's and either could release the boot.

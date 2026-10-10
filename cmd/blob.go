@@ -111,7 +111,7 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 var AppVersion = "unknown"
 
 // CurrentBlobVersion is the only supported blob format version.
-const CurrentBlobVersion = 13
+const CurrentBlobVersion = 14
 
 // MaxBlobSignatureLen is the maximum allowed signature size in bytes.
 // Generous: RSA-4096 PKCS#1 v1.5 = 512 bytes, ECDSA P-384 DER ≈ 104 bytes.

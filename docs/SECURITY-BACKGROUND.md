@@ -49,7 +49,7 @@ TPM after enrolment.
 ### 3.1 TPM NVRAM (the "blob")
 
 Each slot's NV index (default `0x01803010`; slot *n* is `0x01803010` + *n*)
-stores one serialised `SealedBlob` (format version 13, §10). It holds the
+stores one serialised `SealedBlob` (format version 14, §10). It holds the
 slot's TOTP key or its phones, never both (*TOTP key or phones*, below).
 Remote attestation is an optional part of the same blob,
 and within that part the way a verifier reaches the machine is a typed
@@ -58,7 +58,7 @@ network would be another method next to it. The blob contains:
 
 | Field               | Content                                                         | Sensitive? |
 |---------------------|-----------------------------------------------------------------|------------|
-| `Version`           | Blob format version (13)                                        | No         |
+| `Version`           | Blob format version (14)                                        | No         |
 | `Public`            | TPMT_PUBLIC of the TOTP key object; empty while phones are enrolled | No     |
 | `Private`           | TPM2B_PRIVATE of the TOTP key object (TPM-wrapped); empty with phones | **Yes**¹ |
 | `PCRDigests`        | Per-PCR index, source (register/eventlog/uki) and digest        | No         |
@@ -996,7 +996,7 @@ on such a system. Supporting owner auth is outside the current design.
 
 ---
 
-## 10. Blob Format (Version 13)
+## 10. Blob Format (Version 14)
 
 The blob is a binary-serialised structure with explicit length prefixes and
 maximum size limits to prevent memory exhaustion during deserialisation.
@@ -1034,7 +1034,7 @@ every local user in `/proc/<pid>/cmdline`.
 ```
 Offset  Field                   Type        Notes
 ─────────────────────────────────────────────────────────────
-0       Version                 uint32      Must be 13
+0       Version                 uint32      Must be 14
 4       Payload length          uint32      Signed region length
 8       Public length           uint32      ≤ 2MB; 0 with phones (§3.1)
 ?       Public                  []byte      TPMT_PUBLIC of the TOTP key object
