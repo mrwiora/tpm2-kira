@@ -1,7 +1,7 @@
 # PLAN — Several unified kernel images per slot
 
 > **Status:** concept. Step 1 (a smaller blob, and a size check against
-> the TPM instead of a fixed refusal) is implemented; steps 2–5 are open.
+> the TPM instead of a fixed refusal) is implemented; steps 2–6 are open.
 > **Scope:** the slot blob, `seal`, `reseal`, the boot's policy session,
 > the mkinitcpio post hook and `control`.
 
@@ -190,3 +190,18 @@ same way. The blob version is raised; existing slots are sealed again
 5. **Tests and documentation**: swtpm integration with two images that
    differ in their initrd; SECURITY-BACKGROUND §3.1 and §10, SEALING.md,
    README.
+6. **`control` checks every image, not only the default.** Today its
+   image checks - the hook built in, the image newer than the boot, a
+   file it is built from changed after it, the phone's Bluetooth part in
+   it - look at the first preset's `default_uki` (or `default_image`)
+   alone (`mkinitcpioImages`, `cmd/initramfs_hooks.go`); a fallback or a
+   further profile is not looked at, so a stale one goes unnoticed and an
+   image outside the presets' build list cannot raise a false alarm. With
+   profiles every image matters. Proposed: the overview's Boot image line
+   turns **orange** when the default image is good but another one is not,
+   and picking it opens a submenu with one line per image (the preset's
+   name and path) saying what each carries - the hook, the Bluetooth
+   modules and the adapter's firmware - green or red, with the rebuild of
+   the ones that lack something offered there. Images the presets name but
+   do not build (`PRESETS=` leaves them out) are listed as such, not as
+   failures.

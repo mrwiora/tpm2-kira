@@ -33,8 +33,8 @@ var listImage = func(img string) ([]string, error) {
 	return strings.Split(strings.TrimSpace(string(out)), "\n"), nil
 }
 
-// bootImages are the images the next boot may start: the presets' images
-// and unified kernel images on mkinitcpio, the running kernel's initrd on
+// bootImages is the image the next boot starts: the first preset's default
+// image on mkinitcpio (mkinitcpioImages), the running kernel's initrd on
 // Debian.
 func bootImages() []string {
 	if isDebianInitramfs() {

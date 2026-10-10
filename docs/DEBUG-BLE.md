@@ -61,9 +61,11 @@ of the built image (§2).
 
 ## 2. Is it in the image?
 
-`control`'s overview checks the images the next boot may start (every
-preset's `default_image`/`default_uki`, Debian's `initrd.img` of the
-running kernel) whenever Bluetooth belongs in them:
+`control`'s overview checks the image the next boot starts - the first
+preset's `default_uki` (or `default_image`), Debian's `initrd.img` of the
+running kernel - whenever Bluetooth belongs in it. Fallback images and
+further profiles are not checked yet (PLAN-SUPPORT-MULTIPLE-UKI.md, step
+6); look into them by hand:
 
 ```
   Bluetooth   hci0 (attestation by phone possible; firmware intel/ibt-0040-0041.sfi, intel/ibt-0040-0041.ddc)

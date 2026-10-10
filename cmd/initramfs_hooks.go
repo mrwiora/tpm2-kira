@@ -165,13 +165,16 @@ func parseHooks(data string) ([]string, bool) {
 // the tests.
 var mkinitcpioPresetDir = "/etc/mkinitcpio.d"
 
-// presetImageRe matches the image paths of a preset: default_image="..."
-// for an initramfs, default_uki="..." for a unified kernel image.
-var presetImageRe = regexp.MustCompile(`(?m)^[A-Za-z0-9_]*(?:image|uki)="?([^"\n]+)"?`)
+// presetDefaultRe matches a preset's default image: default_uki="..." for
+// a unified kernel image, default_image="..." for an initramfs.
+var presetDefaultRe = regexp.MustCompile(`(?m)^default_(uki|image)="?([^"\n]+)"?`)
 
-// mkinitcpioImages are the images the presets name.
+// mkinitcpioImages is the image the checks look at: the default unified
+// kernel image of the first preset, else its default initramfs. The other
+// images - fallback, further profiles - are not checked yet; checking each
+// is planned (docs/PLAN-SUPPORT-MULTIPLE-UKI.md, step 6). One image, as a
+// list, so the callers need not change when it becomes several.
 func mkinitcpioImages() []string {
-	var images []string
 	files, _ := filepath.Glob(filepath.Join(mkinitcpioPresetDir, "*.preset"))
 	sort.Strings(files)
 	for _, f := range files {
@@ -179,11 +182,18 @@ func mkinitcpioImages() []string {
 		if err != nil {
 			continue
 		}
-		for _, m := range presetImageRe.FindAllStringSubmatch(string(data), -1) {
-			images = append(images, strings.TrimSpace(m[1]))
+		var image string
+		for _, m := range presetDefaultRe.FindAllStringSubmatch(string(data), -1) {
+			if m[1] == "uki" {
+				return []string{strings.TrimSpace(m[2])}
+			}
+			image = strings.TrimSpace(m[2])
+		}
+		if image != "" {
+			return []string{image}
 		}
 	}
-	return images
+	return nil
 }
 
 // rebuildPending says, as far as the timestamps tell, whether an image

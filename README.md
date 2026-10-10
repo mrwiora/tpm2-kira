@@ -202,7 +202,9 @@ recommended first, until a run removes the rest. The disk key from
 password + salt is its own step, independent of the slots, and "Unlock at
 boot" stays greyed until a keyslot of tpm2-kira's exists.
 
-Two hints lead the overview when they apply. **Rebuild the boot image**
+Two hints lead the overview when they apply; both look at the first
+preset's default image (its UKI, else its initramfs) - fallback and further
+profiles are not checked yet. **Rebuild the boot image**
 appears when a file the image is built from (`mkinitcpio.conf` and its
 `.d` files, `/etc/kernel/cmdline`, `crypttab.initramfs`) changed after it,
 or when it lacks the phone's Bluetooth part; picking it rebuilds. **Ready

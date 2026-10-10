@@ -1628,7 +1628,7 @@ func (c *controller) imageHints(steps []controlStep) []controlStep {
 var rebootNow = func() error { return exec.Command("systemctl", "reboot").Run() }
 
 // pendingRebuild lists the files a boot image is built from that changed
-// after one of the images the next boot may start was built.
+// after the image the next boot starts (mkinitcpioImages) was built.
 func pendingRebuild(initramfs string) []string {
 	var inputs []string
 	switch initramfs {
