@@ -202,6 +202,15 @@ recommended first, until a run removes the rest. The disk key from
 password + salt is its own step, independent of the slots, and "Unlock at
 boot" stays greyed until a keyslot of tpm2-kira's exists.
 
+Two hints lead the overview when they apply. **Rebuild the boot image**
+appears when a file the image is built from (`mkinitcpio.conf` and its
+`.d` files, `/etc/kernel/cmdline`, `crypttab.initramfs`) changed after it,
+or when it lacks the phone's Bluetooth part; picking it rebuilds. **Ready
+to reboot** appears when the image is current but this boot did not go
+through it - after part 1 of the guided set-up, or after a rebuild -
+and picking it reboots, after a confirmation. Leaving `control` asks for
+`mkinitcpio -P` only when the image really is out of date, saying why.
+
 Every step runs with the same functions the commands below use; run
 `control` again later and it shows the state and what is left. The
 commands below are for specific settings, and they touch no configuration

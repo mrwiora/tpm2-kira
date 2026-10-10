@@ -90,15 +90,27 @@ func TestControlSteps(t *testing.T) {
 	// enrolments: the phone would pin what the next boot cannot match.
 	c.facts.Adapter = "hci0"
 	c.facts.Capped = false
-	if s := c.steps()[4]; !strings.Contains(s.Blocked, "did not pass tpm2-kira's code screen") {
-		t.Fatalf("uncapped boot: %+v", s)
+	// ... and the overview leads with the hint that the device is ready to
+	// be rebooted, which can be picked to reboot.
+	if steps := c.steps(); steps[0].Key != "reboot" || !steps[0].Optional || !strings.Contains(steps[0].Explain, "ready to be rebooted") ||
+		!strings.Contains(stepByKey(steps, "attest").Blocked, "did not pass tpm2-kira's code screen") {
+		t.Fatalf("uncapped boot: %+v", steps)
 	}
 	c.facts.Capped = true
 	c.facts.NewImage = "/boot/initramfs-linux.img was rebuilt after this boot started: reboot first - a phone enrolled now would pin values the next boot cannot match"
-	if s := c.steps()[4]; !strings.Contains(s.Blocked, "rebuilt after this boot started") {
-		t.Fatalf("new image: %+v", s)
+	if steps := c.steps(); steps[0].Key != "reboot" || !strings.Contains(stepByKey(steps, "attest").Blocked, "rebuilt after this boot started") {
+		t.Fatalf("new image: %+v", steps)
 	}
+	// An image out of date: rebuild first, no reboot hint yet.
+	c.facts.Pending = []string{"/etc/kernel/cmdline changed after arch-linux.efi was built"}
+	if steps := c.steps(); steps[0].Key != "rebuild" || !strings.Contains(steps[0].Explain, "/etc/kernel/cmdline changed") || steps[1].Key == "reboot" {
+		t.Fatalf("pending rebuild: %+v", steps[:2])
+	}
+	c.facts.Pending = nil
 	c.facts.NewImage = ""
+	if steps := c.steps(); steps[0].Key == "reboot" || steps[0].Key == "rebuild" {
+		t.Fatalf("a boot through the current image needs no hint: %+v", steps[0])
+	}
 
 	// A phone and a remote-salt keyslot bound to slot 0, read from the
 	// LUKS header: the options under slot 0 are done.
@@ -412,4 +424,13 @@ func TestControlGuidedJourney(t *testing.T) {
 	if last := steps[len(steps)-1]; last.Title != "Switch to the guided set-up" {
 		t.Fatalf("the switch: %+v", last)
 	}
+}
+
+func stepByKey(steps []controlStep, key string) controlStep {
+	for _, s := range steps {
+		if s.Key == key {
+			return s
+		}
+	}
+	return controlStep{}
 }

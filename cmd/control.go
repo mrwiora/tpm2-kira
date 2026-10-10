@@ -73,7 +73,11 @@ type machineFacts struct {
 	// ImageBT says what the boot images lack of the adapter's part, when
 	// it belongs in them (a phone, or Bluetooth packed always); "" when
 	// they carry it or it does not belong there.
-	ImageBT  string
+	ImageBT string
+	// Pending are the reasons the boot image is out of date: a file it is
+	// built from changed after it, or it lacks what belongs in it. Empty
+	// when the image is as it should be.
+	Pending  []string
 	Guide    string // guided or manual (TPM2_KIRA_CONTROL); "" until chosen
 	Capped   bool   // 'tpm2-kira cap' ran: this boot went through the code screen
 	NewImage string // an image was rebuilt after this boot started; "" when not
@@ -166,6 +170,10 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	}
 	if f.Adapter != "" && f.Initramfs != "" && f.HookState == "" && (f.Phone || f.BTAlways) {
 		f.ImageBT = imageBluetoothProblem(f.BTFirmware)
+	}
+	f.Pending = pendingRebuild(f.Initramfs)
+	if f.ImageBT != "" {
+		f.Pending = append(f.Pending, f.ImageBT)
 	}
 	var devices []string
 	for _, d := range f.Status.Devices {
@@ -271,7 +279,6 @@ type controller struct {
 	out   io.Writer
 	tty   bool
 	facts machineFacts
-	ran   bool // a step ran: the initramfs is to be rebuilt
 	// batch: the guided row runs; the stages skip their own rebuild
 	// offers, the row ends with the one rebuild.
 	batch bool
@@ -551,7 +558,6 @@ func (c *controller) runRoute() error {
 	if !wrote {
 		return nil
 	}
-	c.ran = true
 	if c.facts.Initramfs == "mkinitcpio" && !c.batch {
 		// A unified kernel image carries the command line: rebuild.
 		return c.offerRebuild()
@@ -631,8 +637,6 @@ func Control(o ControlOptions) error {
 		fmt.Fprintf(c.out, "\n\033[1m%s\033[0m\n%s\n\n", s.Title, s.Explain)
 		if err := s.Run(c); err != nil {
 			fmt.Fprintf(c.out, "\n\033[0;31mNot done:\033[0m %v\n", err)
-		} else {
-			c.ran = true
 		}
 		// One button: whatever happened, the overview follows (Esc leaves).
 		if err := c.form(huh.NewNote().Title("Back to the overview").Next(true).NextLabel("OK")).Run(); err != nil {
@@ -977,13 +981,14 @@ func (c *controller) show(steps []controlStep) {
 // leave says what is left to do by hand: the initramfs, the route.
 func (c *controller) leave(steps []controlStep) {
 	fmt.Fprintln(c.out)
-	if c.ran {
-		switch c.facts.Initramfs {
-		case "mkinitcpio":
-			fmt.Fprintln(c.out, "Rebuild the initramfs for the next boot to carry this: mkinitcpio -P")
-		case "initramfs-tools":
-			fmt.Fprintln(c.out, "Rebuild the initramfs for the next boot to carry this: update-initramfs -u")
+	// Said only when the image really is out of date: what changed since
+	// it was built is looked at, not which steps ran.
+	if pending := collectFacts(c.o.TPMPath, c.o.Debug).Pending; len(pending) > 0 {
+		cmd := "mkinitcpio -P"
+		if c.facts.Initramfs == "initramfs-tools" {
+			cmd = "update-initramfs -u"
 		}
+		fmt.Fprintf(c.out, "Rebuild the initramfs for the next boot (%s): %s\n", cmd, strings.Join(pending, "; "))
 	}
 	for _, d := range c.facts.Status.Devices {
 		if d.Error != "" || c.facts.Routed[d.Device] {
@@ -1293,6 +1298,7 @@ func (c *controller) finishSteps(steps []controlStep) []controlStep {
 			steps = append([]controlStep{journey}, steps...)
 		}
 	}
+	steps = append(c.imageHints(steps), steps...)
 	label, target := "Switch to the manual set-up", "manual"
 	if !guided {
 		label, target = "Switch to the guided set-up", "guided"
@@ -1446,7 +1452,6 @@ func (c *controller) runInitramfs() error {
 		return err
 	}
 	fmt.Fprintf(c.out, "%s now reads: %s\n", file, line)
-	c.ran = true // should the rebuild below be declined, leaving advises it
 	if c.batch {
 		return nil // the guided row rebuilds once, at its end
 	}
@@ -1472,7 +1477,6 @@ func (c *controller) offerRebuild() error {
 			}
 			fmt.Fprintf(c.out, "%s: TPM2_KIRA_ATTEST_BLUETOOTH=always\n", controlConfigPath())
 			c.facts.BTAlways = true
-			c.ran = true
 		}
 	}
 	ok, err := c.confirmYes("Run mkinitcpio -P now?", "Builds every preset's image with the hook in; the output follows here.")
@@ -1485,7 +1489,6 @@ func (c *controller) offerRebuild() error {
 	if err := rebuild.Run(); err != nil {
 		return fmt.Errorf("mkinitcpio -P: %w", err)
 	}
-	c.ran = false // just rebuilt: nothing to advise on leaving
 	fmt.Fprintln(c.out)
 	fmt.Fprintln(c.out, "Reboot before enrolling a phone or a remote salt: the phone pins what the")
 	fmt.Fprintln(c.out, "next boot shows, and the boot key answers only in a boot through this image.")
@@ -1538,7 +1541,6 @@ func (c *controller) runRemoveSlot(slot int) error {
 		return errors.New("not confirmed")
 	}
 	err = DeleteSlot(DeleteSlotOptions{TPMPath: c.o.TPMPath, Slot: slot, Debug: c.o.Debug, Out: c.out})
-	c.ran = true // parts may be gone even when the error says the rest is not
 	return err
 }
 
@@ -1573,4 +1575,90 @@ func btImagePlan(adapter string) string {
 		fmt.Fprintf(&b, "\n  NOTE: %s", w)
 	}
 	return b.String()
+}
+
+// imageHints are the overview's two hints about the boot image, ahead of
+// everything else: rebuild it when it is out of date, and - when it is
+// current and this boot is not one through it - reboot. Each can be
+// picked to do it; neither is a protection of its own.
+func (c *controller) imageHints(steps []controlStep) []controlStep {
+	f := &c.facts
+	for _, s := range steps {
+		// The row and an open wiring step rebuild by themselves.
+		if s.Key == "journey" || ((s.Key == "initramfs" || s.Key == "route") && s.Done == "" && s.Blocked == "") {
+			return nil
+		}
+	}
+	if f.Initramfs == "" {
+		return nil
+	}
+	if len(f.Pending) > 0 {
+		return []controlStep{{Key: "rebuild", Title: "Rebuild the boot image", SelfConfirm: true,
+			Explain: "The image the next boot starts is out of date: " + strings.Join(f.Pending, "; ") + ". Picking this rebuilds it.",
+			Run: func(c *controller) error {
+				if c.facts.Initramfs != "mkinitcpio" {
+					return errors.New("run update-initramfs -u")
+				}
+				return c.offerRebuild()
+			}}}
+	}
+	if len(f.Status.Slots) == 0 || (f.Capped && f.NewImage == "") {
+		return nil
+	}
+	why := "the boot image is ready, and this boot did not go through it"
+	if f.NewImage != "" {
+		why = f.NewImage
+	}
+	explain := "The device is ready to be rebooted: " + why + ". At the boot, compare the code on the screen with your authenticator, press Enter and type your passphrase."
+	if f.Guide == "guided" && !f.Phone {
+		explain += " Part 2 - the phone, and the disk's key - continues afterwards in 'tpm2-kira control'."
+	}
+	return []controlStep{{Key: "reboot", Title: "Ready to reboot", Optional: true, SelfConfirm: true,
+		Explain: explain + " Picking this reboots now, after a confirmation.",
+		Run: func(c *controller) error {
+			ok, err := c.confirm("Reboot now?", "Unsaved work in other programs is lost.")
+			if err != nil || !ok {
+				return errors.New("not rebooted")
+			}
+			return rebootNow()
+		}}}
+}
+
+// rebootNow asks systemd to reboot; a var for the tests.
+var rebootNow = func() error { return exec.Command("systemctl", "reboot").Run() }
+
+// pendingRebuild lists the files a boot image is built from that changed
+// after one of the images the next boot may start was built.
+func pendingRebuild(initramfs string) []string {
+	var inputs []string
+	switch initramfs {
+	case "mkinitcpio":
+		inputs = append([]string{mkinitcpioConf, "/etc/kernel/cmdline", "/etc/crypttab.initramfs"}, globs("/etc/mkinitcpio.conf.d/*.conf", "/etc/cmdline.d/*.conf")...)
+	case "initramfs-tools":
+		inputs = append([]string{"/etc/crypttab", "/etc/initramfs-tools/initramfs.conf", "/etc/initramfs-tools/modules"}, globs("/etc/initramfs-tools/conf.d/*")...)
+	default:
+		return nil
+	}
+	var out []string
+	for _, img := range bootImages() {
+		ist, err := os.Stat(img)
+		if err != nil {
+			continue
+		}
+		for _, in := range inputs {
+			if st, err := os.Stat(in); err == nil && st.ModTime().After(ist.ModTime()) {
+				out = append(out, fmt.Sprintf("%s changed after %s was built", in, filepath.Base(img)))
+			}
+		}
+	}
+	return out
+}
+
+func globs(patterns ...string) []string {
+	var out []string
+	for _, p := range patterns {
+		m, _ := filepath.Glob(p)
+		out = append(out, m...)
+	}
+	return out
 }
