@@ -18,6 +18,7 @@
 #                go.dev, as AGENTS.md asks; else the local go's)
 #   MARIFY_SRC   the Marify checkout (default ../marify next to this one)
 #   ANDROID_HOME Android SDK with an NDK (for apk; see marify's build-core.sh)
+#   JAVA_HOME    a JDK (for apk: gomobile runs javac, Gradle runs on it)
 #
 # Uncommitted changes are not built: the packages come from 'git archive
 # HEAD', so they always match a commit.
@@ -60,6 +61,8 @@ if want deb; then command -v docker >/dev/null || die "docker not found: the Deb
 marify="${MARIFY_SRC:-$root/../marify}"
 if want apk; then
     [[ -x "$marify/android/gradlew" ]] || die "no Marify checkout at $marify (set MARIFY_SRC, or leave out 'apk')"
+    [[ -n "${JAVA_HOME:-}" ]] && export PATH="$JAVA_HOME/bin:$PATH"
+    command -v javac >/dev/null || die "no JDK: set JAVA_HOME to one (gomobile needs javac), or leave out 'apk'"
 fi
 
 if want arch; then
