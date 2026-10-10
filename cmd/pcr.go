@@ -14,35 +14,6 @@ import (
 
 // PCR selection, parsing, reading and comparison.
 
-// DisplayPCRMismatch shows the differences between expected and current PCR values
-func DisplayPCRMismatch(pcrIndices []int, expectedDigests, currentDigests []tpm2.TPM2BDigest) {
-	if len(expectedDigests) != len(currentDigests) {
-		fmt.Printf("Error: PCR digest count mismatch (expected: %d, current: %d)\n", len(expectedDigests), len(currentDigests))
-		return
-	}
-
-	fmt.Printf("PCRs used for sealing: %v\n", pcrIndices)
-	fmt.Println()
-
-	for i, pcrIndex := range pcrIndices {
-		if i >= len(expectedDigests) || i >= len(currentDigests) {
-			break
-		}
-
-		expected := expectedDigests[i].Buffer
-		current := currentDigests[i].Buffer
-
-		status := "✓ MATCH"
-		if !bytes.Equal(expected, current) {
-			status = "✗ CHANGED"
-		}
-
-		fmt.Printf("  PCR%-2d: %s - %s\n", pcrIndex, GetPCRDescription(pcrIndex), status)
-		fmt.Printf("    Expected (blob):    %x\n", expected)
-		fmt.Printf("    Current (register): %x\n", current)
-	}
-}
-
 // VerifyPCRValues compares sealed and current PCR digest values
 func VerifyPCRValues(sealed, current []tpm2.TPM2BDigest) bool {
 	if len(sealed) != len(current) {
@@ -179,53 +150,18 @@ func PCRSpecIndices(specs []PCRSpec) []int {
 	return indices
 }
 
-// ShowPCRDetails attempts to show PCR comparison details for the given error.
-// Reads current PCR values from TPM registers only (no eventlog/uki reconstruction).
-// Returns true if PCR details were successfully shown, false otherwise.
-func ShowPCRDetails(tpmDev transport.TPM, nvramIndex uint32, debug bool) bool {
-	// Try to show PCR details
-	sealedData, readErr := ReadFromNVRAM(tpmDev, nvramIndex)
-	if readErr == nil {
-		blob, unmarshalErr := UnmarshalSealedBlob(sealedData)
-		if unmarshalErr == nil {
-			currentPCRs, pcrErr := GetCurrentPCRValuesFromRegisters(tpmDev, blob, debug)
-			if pcrErr == nil {
-				fmt.Println("=== PCR Mismatch Details ===")
-				DisplayPCRMismatch(blob.GetPCRIndices(), blob.GetPCRDigestValues(), currentPCRs)
-				fmt.Println()
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// HandleTPMPolicyFailureWithPCRDetails handles TPM policy failures by showing PCR details and guidance
-// Returns true if the error was handled (is a TPM policy failure), false otherwise
-func HandleTPMPolicyFailureWithPCRDetails(err error, tpmDev transport.TPM, nvramIndex uint32, debug bool) bool {
-	if !IsTPMPolicyFailure(err) {
-		return false
-	}
-
-	// Show the original error
-	fmt.Println(FormatKIRAError(err))
-	fmt.Println()
-
-	// Show PCR details
-	ShowPCRDetails(tpmDev, nvramIndex, debug)
-
-	// Show guidance
-	fmt.Println("To fix this, run: tpm2-kira reseal --privkey /path/to/private.key")
-	fmt.Println("(Provide the signing private key that corresponds to the public key used during sealing)")
-
-	return true
-}
-
 // ReadPCRValuesResult holds the result of reading PCR values from all sources.
 type ReadPCRValuesResult struct {
 	Values         map[int][]byte // PCR index -> digest value (eventlog-calculated for eventlog PCRs, register value for register PCRs)
 	RegisterValues map[int][]byte // PCR index -> actual register value (always from TPM register)
 	EventlogInfo   *EventlogInfo  // eventlog metadata (nil when no eventlog PCRs)
+	// Specs are the specs actually used: before the OS separator, register
+	// specs for PCRs the separator touches are read from the event log.
+	Specs []PCRSpec
+	// AfterSeparator is set, with the reason, when such registers had to be
+	// used after all because the event log cannot be replayed: the values
+	// then include os-separator and the secret only unlocks after it.
+	AfterSeparator string
 }
 
 // ReadPCRRegisters reads PCR values directly from TPM registers for the given
@@ -256,8 +192,12 @@ func ReadPCRRegisters(tpmDev transport.TPM, pcrIndices []int, hashAlgo PCRHashAl
 			len(pcrReadResp.PCRValues.Digests), len(pcrIndices))
 	}
 
+	// The TPM returns the digests in ascending PCR order, whatever order
+	// they were asked for in.
+	ascending := slices.Clone(pcrIndices)
+	slices.Sort(ascending)
 	result := make(map[int][]byte, len(pcrIndices))
-	for i, pcrIndex := range pcrIndices {
+	for i, pcrIndex := range ascending {
 		result[pcrIndex] = pcrReadResp.PCRValues.Digests[i].Buffer
 	}
 
@@ -330,24 +270,103 @@ func explainEventlogBankError(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PC
 		msg, hashAlgo.DisplayString())
 }
 
+// readEventlogValues replays the firmware event log for the given PCRs,
+// decides whether systemd's measure-point extends are in effect, applies
+// those that belong to the measure point, and fills result.
+func readEventlogValues(tpmDev transport.TPM, indices []int, hashAlgo PCRHashAlgo, mode MeasurePointMode, point MeasurePoint, debug bool, result *ReadPCRValuesResult) error {
+	calc := NewEventlogPCRCalculator(tpmDev, indices, hashAlgo, debug)
+	calculatedPCRs, info, err := calc.CalculatePCRsFromEventlog()
+	if err != nil {
+		var bankErr *EventlogBankError
+		if errors.As(err, &bankErr) {
+			return err
+		}
+		return fmt.Errorf("failed to calculate PCRs from eventlog: %w", err)
+	}
+	result.EventlogInfo = info
+
+	replay := make(map[int][]byte, len(calculatedPCRs))
+	for idx, val := range calculatedPCRs {
+		result.Values[idx] = val
+		replay[idx] = val
+	}
+
+	if debug {
+		fmt.Println("Eventlog-calculated PCR values (end of firmware):")
+		for _, idx := range indices {
+			fmt.Printf("  PCR%d: %x\n", idx, result.Values[idx])
+		}
+	}
+
+	// Also read the actual register values for eventlog PCRs
+	registers, err := ReadPCRRegisters(tpmDev, indices, hashAlgo, debug)
+	if err != nil {
+		return err
+	}
+	for idx, val := range registers {
+		result.RegisterValues[idx] = val
+	}
+
+	apply := mode == MeasurePointOn
+	detection := "explicit (--measure-point=on)"
+	switch mode {
+	case MeasurePointOff:
+		detection = "explicit (--measure-point=off)"
+	case MeasurePointAuto:
+		detected, how, detectErr := DetectMeasurePointExtends(replay, result.RegisterValues, hashAlgo, debug)
+		if detectErr != nil {
+			return detectErr
+		}
+		apply, detection = detected, how
+	}
+	if apply {
+		applied := ApplyMeasurePointExtends(result.Values, indices, hashAlgo, point, debug)
+		if result.EventlogInfo != nil {
+			result.EventlogInfo.MeasurePointExtends = applied
+		}
+	}
+	if result.EventlogInfo != nil {
+		result.EventlogInfo.MeasurePointDetection = detection
+	}
+
+	if debug {
+		fmt.Println("Eventlog PCR values at the measure point:")
+		for _, idx := range indices {
+			fmt.Printf("  PCR%d: %x (register now: %x)\n", idx, result.Values[idx], result.RegisterValues[idx])
+		}
+	}
+	return nil
+}
+
 // ReadPCRValues reads PCR values from their respective sources (eventlog, UKI
 // UKI and/or TPM registers). This is the single shared implementation used by seal,
 // unseal, reveal and reseal paths.
 //
 // Values describe tpm2-kira's measure point in the initrd, which is where the TPM
 // checks the policy, not the end of firmware and not the running system.
-func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, mode MeasurePointMode, debug bool) (*ReadPCRValuesResult, error) {
+func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, mode MeasurePointMode, point MeasurePoint, debug bool) (*ReadPCRValuesResult, error) {
 	// Separate PCRs by source
 	var eventlogPCRIndices []int
 	var ukiPCRIndices []int
 	var registerPCRIndices []int
-	for _, spec := range specs {
+	var converted []int // register specs read from the event log instead
+	specs = slices.Clone(specs)
+	for i, spec := range specs {
 		switch spec.Source {
 		case PCRSourceEventlog:
 			eventlogPCRIndices = append(eventlogPCRIndices, spec.Index)
 		case PCRSourceUKI:
 			ukiPCRIndices = append(ukiPCRIndices, spec.Index)
 		default:
+			if point == MeasurePointBeforeSeparator && mode != MeasurePointOff && slices.Contains(osSeparatorPCRs, spec.Index) {
+				// By the time anything can seal, the register already
+				// carries the os-separator, but the policy is checked
+				// before it: the value has to come from the event log.
+				specs[i].Source = PCRSourceEventlog
+				converted = append(converted, spec.Index)
+				eventlogPCRIndices = append(eventlogPCRIndices, spec.Index)
+				continue
+			}
 			registerPCRIndices = append(registerPCRIndices, spec.Index)
 		}
 	}
@@ -357,68 +376,39 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 		RegisterValues: make(map[int][]byte),
 	}
 
-	// Calculate eventlog-based PCR values
+	// Calculate eventlog-based PCR values. Registers that were switched to
+	// the event log above are a best effort: when the log cannot be read, or
+	// does not describe this TPM (another machine's log, a software TPM),
+	// they are read from the registers after all. That binds the policy to
+	// post-separator values, so it holds only after the separator; the
+	// caller says so. PCRs asked for with the eventlog source still fail.
 	if len(eventlogPCRIndices) > 0 {
-		calc := NewEventlogPCRCalculator(tpmDev, eventlogPCRIndices, hashAlgo, debug)
-		calculatedPCRs, info, err := calc.CalculatePCRsFromEventlog()
+		err := readEventlogValues(tpmDev, eventlogPCRIndices, hashAlgo, mode, point, debug, result)
+		if err != nil && len(converted) > 0 {
+			result.AfterSeparator = err.Error()
+			for i := range specs {
+				if slices.Contains(converted, specs[i].Index) {
+					specs[i].Source = PCRSourceRegister
+				}
+			}
+			for _, idx := range eventlogPCRIndices {
+				delete(result.Values, idx)
+				delete(result.RegisterValues, idx)
+			}
+			result.EventlogInfo = nil
+			registerPCRIndices = append(registerPCRIndices, converted...)
+			eventlogPCRIndices = slices.DeleteFunc(eventlogPCRIndices, func(idx int) bool { return slices.Contains(converted, idx) })
+			converted, err = nil, nil
+			if len(eventlogPCRIndices) > 0 {
+				err = readEventlogValues(tpmDev, eventlogPCRIndices, hashAlgo, mode, point, debug, result)
+			}
+		}
 		if err != nil {
 			var bankErr *EventlogBankError
 			if errors.As(err, &bankErr) {
 				return nil, explainEventlogBankError(tpmDev, specs, hashAlgo, bankErr)
 			}
-			return nil, fmt.Errorf("failed to calculate PCRs from eventlog: %w", err)
-		}
-		result.EventlogInfo = info
-
-		replay := make(map[int][]byte, len(calculatedPCRs))
-		for idx, val := range calculatedPCRs {
-			result.Values[idx] = val
-			replay[idx] = val
-		}
-
-		if debug {
-			fmt.Println("Eventlog-calculated PCR values (end of firmware):")
-			for _, idx := range eventlogPCRIndices {
-				fmt.Printf("  PCR%d: %x\n", idx, result.Values[idx])
-			}
-		}
-
-		// Also read the actual register values for eventlog PCRs
-		registers, err := ReadPCRRegisters(tpmDev, eventlogPCRIndices, hashAlgo, debug)
-		if err != nil {
 			return nil, err
-		}
-		for idx, val := range registers {
-			result.RegisterValues[idx] = val
-		}
-
-		apply := mode == MeasurePointOn
-		detection := "explicit (--measure-point=on)"
-		switch mode {
-		case MeasurePointOff:
-			detection = "explicit (--measure-point=off)"
-		case MeasurePointAuto:
-			detected, how, detectErr := DetectMeasurePointExtends(replay, result.RegisterValues, hashAlgo, debug)
-			if detectErr != nil {
-				return nil, detectErr
-			}
-			apply, detection = detected, how
-		}
-		if apply {
-			applied := ApplyMeasurePointExtends(result.Values, eventlogPCRIndices, hashAlgo, debug)
-			if result.EventlogInfo != nil {
-				result.EventlogInfo.MeasurePointExtends = applied
-			}
-		}
-		if result.EventlogInfo != nil {
-			result.EventlogInfo.MeasurePointDetection = detection
-		}
-
-		if debug {
-			fmt.Println("Eventlog PCR values at the measure point:")
-			for _, idx := range eventlogPCRIndices {
-				fmt.Printf("  PCR%d: %x (register now: %x)\n", idx, result.Values[idx], result.RegisterValues[idx])
-			}
 		}
 	}
 
@@ -465,33 +455,8 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 		}
 	}
 
+	result.Specs = specs
 	return result, nil
-}
-
-// GetCurrentPCRValues retrieves current PCR values for comparison, handling
-// eventlog-based, UKI-based, and direct TPM reads. The hash algorithm is
-// automatically detected from the sealed blob's digest sizes. Results are
-// returned in the same order as the blob's PCR digests.
-// NOTE: This uses source-aware reading (eventlog/uki/register). For the
-// unseal/reveal/run path use GetCurrentPCRValuesFromRegisters instead.
-func GetCurrentPCRValues(tpmDev transport.TPM, sealedBlob *SealedBlob, debug bool) ([]tpm2.TPM2BDigest, error) {
-	hashAlgo := sealedBlob.GetHashAlgo()
-	specs := sealedBlob.GetPCRSpecs()
-
-	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, sealedBlob.MeasurePointMode(), debug)
-	if err != nil {
-		return nil, err
-	}
-
-	// Map results back to blob PCR digest order
-	currentPCRValues := make([]tpm2.TPM2BDigest, len(sealedBlob.Payload.PCRDigests))
-	for i, pair := range sealedBlob.Payload.PCRDigests {
-		if val, ok := readResult.Values[pair.Index]; ok {
-			currentPCRValues[i] = tpm2.TPM2BDigest{Buffer: val}
-		}
-	}
-
-	return currentPCRValues, nil
 }
 
 // GetCurrentPCRValuesFromRegisters reads current PCR values directly from TPM

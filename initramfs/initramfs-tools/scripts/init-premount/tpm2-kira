@@ -35,9 +35,18 @@ while [ ! -c /dev/tpmrm0 ] && [ "$i" -lt 5 ]; do
 done
 
 if [ ! -c /dev/tpmrm0 ]; then
-    log_warning_msg "tpm2-kira: /dev/tpmrm0 did not appear; skipping TOTP display"
-    exit 0
+    # No code without a TPM, but the key provider does not need one: the
+    # prompt (passphrase, or hashpwd2's password and salt) is tpm2-kira's.
+    log_warning_msg "tpm2-kira: /dev/tpmrm0 did not appear; no code this boot"
 fi
+
+# The two sockets of the display: the gate's, where the radio worker reaches
+# the TPM (only when a phone is enrolled, which puts the signer into the
+# image), and the key socket, where the keyscript of crypttab's
+# keyscript=/lib/cryptsetup/scripts/tpm2-kira takes the volume's key from.
+mkdir -p -m 700 /run/tpm2-kira
+GATE=/run/tpm2-kira/gate.sock
+UNLOCK=/run/tpm2-kira/unlock.sock
 
 mode=run
 [ -r /etc/tpm2-kira/initramfs.conf ] && . /etc/tpm2-kira/initramfs.conf
@@ -49,9 +58,27 @@ once)
     /usr/bin/tpm2-kira reveal >/dev/console 2>&1 || true
     ;;
 *)
-    # Refreshes once per 30-second TOTP window, so it shares the console with
-    # cryptsetup's prompt without drowning it. init-bottom stops it again.
-    /usr/bin/tpm2-kira run >/dev/console 2>&1 &
+    # The code screen, the gate's coordinator and the key provider in one
+    # process; it stays for the keyscript until init-bottom stops it.
+    # A background job of a non-interactive shell would get /dev/null as
+    # stdin; Enter at the code screen is read from the console. What the
+    # display reports (stderr: the key requests, the phone) goes to a log
+    # that survives into the booted system, /run/initramfs/tpm2-kira.log.
+    mkdir -p /run/initramfs
+    TPM2_KIRA_LOG=/run/initramfs/tpm2-kira.log /usr/bin/tpm2-kira run --gate "$GATE" --unlock "$UNLOCK" </dev/console >/dev/console 2>>/run/initramfs/tpm2-kira.log &
     echo $! > /run/tpm2-kira.pid
     ;;
 esac
+
+# Remote attestation over Bluetooth: the radio worker serves the enrolled
+# phone beside the code screen, with the coordinator's TPM. It never holds
+# the boot; init-bottom stops it. The hook only puts bluetooth-modules into
+# the image when a phone is enrolled and the adapter was found at build time.
+if [ "$mode" != once ] && [ -r /etc/tpm2-kira/bluetooth-modules ]; then
+    while read -r m; do
+        modprobe -q "$m" || true
+    done </etc/tpm2-kira/bluetooth-modules
+    # Its narrative goes to the log (TPM2_KIRA_LOG); what needs eyes, to the console.
+    TPM2_KIRA_LOG=/run/initramfs/tpm2-kira.log /usr/bin/tpm2-kira attest gate --coordinator "$GATE" >/dev/null 2>/dev/console &
+    echo $! > /run/tpm2-kira-attest.pid
+fi

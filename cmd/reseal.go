@@ -217,17 +217,10 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 
 	WarnAboutPCRSelection(specsToUse)
 	WarnAboutHashAlgo(hashAlgo)
-	printResealSources(specsToUse, sealedBlob)
+	printResealSources(specsToUse)
 
 	pub := signer.Public()
 	fmt.Printf("Signing key: %s (%s, fingerprint: %s)\n", keys.privKeyPath, PublicKeyDescription(pub), PublicKeyFingerprint(pub))
-
-	// Record the paths in use, for info. They are never used to find a key.
-	sealedBlob.Payload.PrivateKeyPath = keys.privKeyPath
-	sealedBlob.Payload.PublicKeyPath = pubKeyPath
-	if pubKeyPath == "" && keys.privKeyPath == DefaultPrivateKeyPath {
-		sealedBlob.Payload.PublicKeyPath = DefaultPublicKeyPath
-	}
 
 	if err := approveAndWrite(tpmDev, nvramIndex, sealedBlob, specsToUse, hashAlgo, false, signer, debug); err != nil {
 		return asResealSkipped(fmt.Errorf("failed to reseal: %w", err), nvramIndex, keys.privKeyPath, sealedBlob)
@@ -254,15 +247,10 @@ func checkObjectSigningKey(blob *SealedBlob, pub crypto.PublicKey) error {
 	return nil
 }
 
-func printResealSources(specs []PCRSpec, blob *SealedBlob) {
+func printResealSources(specs []PCRSpec) {
 	for _, spec := range specs {
 		fmt.Printf("  PCR%-2d (%s): %s\n", spec.Index, spec.Source.String(), GetPCRDescription(spec.Index))
-		switch spec.Source {
-		case PCRSourceEventlog:
-			if info := blob.Payload.EventlogInfo; info != nil {
-				fmt.Printf("         previously from %s, %s\n", quoteUntrusted(info.EventlogPath), quoteUntrusted(info.CalculationTime))
-			}
-		case PCRSourceUKI:
+		if spec.Source == PCRSourceUKI {
 			fmt.Printf("         recomputed from the unified kernel image %s\n", quoteUntrusted(spec.Command))
 		}
 	}
@@ -280,9 +268,8 @@ type resealKeys struct {
 //
 // The blob is not trusted until its signature is verified, and anyone with
 // TPM access can replace it (SECURITY-BACKGROUND §9). The key that verifies
-// it therefore comes from --privkey or the default location, never from a
-// path the blob names: a planted blob would name a key its author holds and
-// pass its own check. Blob paths are only compared afterwards.
+// it therefore comes from --privkey or tpm2-kira's default location; the
+// blob names no key file.
 func resolveResealKeys(sealedData []byte, sealedBlob *SealedBlob, privKeyPath, pubKeyPath string, debug bool) (*resealKeys, error) {
 	keys := &resealKeys{privKeyPath: privKeyPath}
 	if keys.privKeyPath == "" {
@@ -291,8 +278,8 @@ func resolveResealKeys(sealedData []byte, sealedBlob *SealedBlob, privKeyPath, p
 	if _, err := os.Lstat(keys.privKeyPath); errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("cannot reseal: no signing private key at %s.\n"+
 			"  The key verifies the blob and authorizes the NV write, so reseal needs it.\n"+
-			"  Pass --privkey <path>, or create the default key pair with 'tpm2-kira setup'.%s",
-			keys.privKeyPath, blobKeyPathHint(sealedBlob, keys.privKeyPath))
+			"  Pass --privkey <path>, or create the default key pair with 'tpm2-kira setup'.",
+			keys.privKeyPath)
 	}
 
 	// Loaded from a checked file (mode 0400, trusted owner and directory,
@@ -320,34 +307,14 @@ func resolveResealKeys(sealedData []byte, sealedBlob *SealedBlob, privKeyPath, p
 	}
 
 	// The signature MUST be verified BEFORE any blob field is acted on, so a
-	// tampered blob cannot steer reseal via its stored PCR specs or key paths.
+	// tampered blob cannot steer reseal via its stored PCR specs.
 	if err := VerifyBlobSignature(sealedData, sealedBlob, signer.Public()); err != nil {
-		return nil, fmt.Errorf("blob integrity check failed — the NVRAM blob may have been tampered with: %w%s",
-			err, blobKeyPathHint(sealedBlob, keys.privKeyPath))
+		return nil, fmt.Errorf("blob integrity check failed — the NVRAM blob may have been tampered with: %w", err)
 	}
 	if debug {
 		fmt.Println("Blob signature verified successfully")
 	}
-
-	// The blob is trusted from here on; its stored path is only compared.
-	if p := sealedBlob.Payload.PrivateKeyPath; p != "" && p != keys.privKeyPath {
-		fmt.Printf("Note: the blob was sealed with key file %s; using %s, which verified it.\n",
-			quoteUntrusted(p), keys.privKeyPath)
-	}
 	return keys, nil
-}
-
-// blobKeyPathHint names the key file a blob claims to have been sealed with,
-// when it differs from the one in use. The path is unverified: it is quoted,
-// never opened, and the user is told to pass it only if they recognise it.
-func blobKeyPathHint(blob *SealedBlob, used string) string {
-	p := blob.Payload.PrivateKeyPath
-	if p == "" || p == used {
-		return ""
-	}
-	return fmt.Sprintf("\n  The blob says it was sealed with key file %s (unverified).\n"+
-		"  Only if you sealed it with that key yourself, rerun with: --privkey %s",
-		quoteUntrusted(p), quoteUntrusted(p))
 }
 
 // IsTPMAuthError checks if an error is a TPM authentication/authorization failure

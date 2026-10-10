@@ -1,0 +1,20 @@
+#!/bin/sh
+# cryptsetup keyscript (crypttab(5) keyscript=): the volume's key from
+# tpm2-kira. 'tpm2-kira run --unlock' in the initramfs answers on its socket
+# once the code screen is confirmed - the typed passphrase, or the key
+# derived from the password and the factor the phone released. Without the
+# socket, tpm2-kira becomes cryptsetup's own prompt. cryptroot re-runs this
+# script for each of its tries, so a typo is asked again.
+#
+#   /etc/crypttab:  <name> UUID=... none luks,keyscript=/lib/cryptsetup/scripts/tpm2-kira
+mkdir -p /run/initramfs
+echo "$(date -u +%T 2>/dev/null) keyscript for $CRYPTTAB_NAME (try $CRYPTTAB_TRIED)" >>/run/initramfs/tpm2-kira.log
+# cryptroot re-runs this script for each of its tries (3 by default) and
+# counts them in CRYPTTAB_TRIED. The last try is cryptsetup's own prompt,
+# where the recovery passphrase works; the ones before are tpm2-kira's.
+last=$(( ${CRYPTTAB_OPTION_tries:-3} - 1 ))
+if [ "${CRYPTTAB_TRIED:-0}" -ge "$last" ] && [ "$last" -gt 0 ]; then
+    echo "$(date -u +%T 2>/dev/null) last try: cryptsetup's own prompt" >>/run/initramfs/tpm2-kira.log
+    exec /lib/cryptsetup/askpass "Please unlock disk $CRYPTTAB_NAME (recovery passphrase): "
+fi
+exec /usr/bin/tpm2-kira unlock-key "$CRYPTTAB_NAME" 2>>/run/initramfs/tpm2-kira.log

@@ -9,11 +9,11 @@ remove)
     fi
     ;;
 purge)
-    # /var/lib/tpm2-kira/keys and the sealed NVRAM blob are left in place on
+    # /etc/tpm2-kira/keys and the sealed NVRAM blob are left in place on
     # purge: deleting the signing key destroys the only recovery path for a
     # secret that may still be sealed in the TPM.
-    if [ -d /var/lib/tpm2-kira/keys ]; then
-        echo "tpm2-kira: keeping /var/lib/tpm2-kira (signing keys)." >&2
+    if [ -d /etc/tpm2-kira/keys ]; then
+        echo "tpm2-kira: keeping /etc/tpm2-kira/keys (signing keys)." >&2
         echo "tpm2-kira: remove it and any sealed slot ('tpm2-kira nvram delete')" >&2
         echo "tpm2-kira: manually if you really want them gone." >&2
     fi

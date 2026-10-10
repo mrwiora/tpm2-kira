@@ -1,16 +1,21 @@
 # PLAN — Remote Attestation Core
 
-> **Status:** draft / design. Nothing in here is implemented yet.
+> **Status:** phases 1–4 and the receipt half of phase 5 are implemented
+> (`attest/`, `cmd/attest*.go`); see "Implementation notes" at the end.
 > **Scope:** the reusable attestation core (`attest/`). Transport-independent,
 > verifier-independent, UI-independent.
 >
-> Two consumers are planned on top of it:
-> [PLAN-BLE.md](PLAN-BLE.md) — a phone verifies the machine over Bluetooth LE
-> before the passphrase prompt — and
-> [PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) — a server verifies the
-> machine and hands out the LUKS passphrase.
+> Three consumers are planned on top of it:
 >
-> This document defines what both share. If a change here would only ever help
+> - [PLAN-BLE.md](PLAN-BLE.md) — a phone verifies the machine over Bluetooth LE
+>   before the passphrase prompt.
+> - [PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) — a server verifies the
+>   machine and hands out the LUKS passphrase.
+> - [PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md) — a verifier hands out one
+>   factor of the passphrase, which an external tool combines with a typed
+>   password.
+>
+> This document defines what they share. If a change here would only ever help
 > one of them, it belongs in that plan instead.
 
 ---
@@ -165,7 +170,7 @@ Evidence := {
 BootContext := {
     blob_version        uint32      // sealed blob format version in use
     nvram_index         uint32
-    measure_point       string      // MeasurePointExtends, verbatim from the blob
+    measure_point       string      // the measure-point extends the blob's seal applied
     secureboot_state    uint8       // enabled / disabled / setup-mode / unknown
     seal_pcr_selection  []uint8
     uptime_ms           uint64
@@ -202,8 +207,7 @@ when the verifier asks for it — which it does when the values do *not* match a
 profile, and a human needs to see *what changed*. Verifiers cache logs by hash.
 
 The log is read from `DefaultEventlogPath` only, never from a path supplied by
-a blob or by the peer — the rule HISTORY.md already records for
-`EventlogInfo.EventlogPath` applies here unchanged.
+the peer; the blob names none.
 
 ---
 
@@ -449,6 +453,14 @@ That is a property worth keeping for a binary that goes into an initramfs.
 
 ### 10.1 The attestation blob
 
+> **Superseded (2026-10-06).** The enrolment is no longer an NVRAM object of
+> its own. It is a section of the slot's sealed blob, under that blob's
+> signature (blob version 10; SECURITY-BACKGROUND.md §3.1, §3.3 and §10). The
+> separate lifecycle described below turned out to be the problem: an
+> enrolment could outlive the TOTP key of its slot or exist without one, and
+> the commands for one did not see leftovers of the other. What remains from
+> this section is the content of the enrolment and the conventions it follows.
+
 A second NVRAM object, separate from the sealed blob, because it has a
 different lifecycle: enrolment changes it, sealing does not.
 
@@ -492,21 +504,22 @@ when it is most needed.
 
 The `sealed` anchor exists for machines with no Secure Boot and no signed
 image, where the `image` anchor would be a file any root user could rewrite.
-Enforced mode refuses to enable with only a `sealed` anchor unless
-`--allow-sealed-anchor` is passed, and says why.
+(There is no enforced mode - PLAN-BLE.md §7 - so the `image` anchor is
+what a verifier line on the console could be pinned to, not what a gate
+trusts.)
 
 ### 10.3 Binding the configuration
 
-Attestation mode (`off` / `lazy` / `enforced`), the timeout and the policy id
-live in `/etc/tpm2-kira/attest.conf` inside the initramfs. On a system that
+Attestation mode (`off` / `lazy`), the timeout and the policy id
+live in `/etc/tpm2-kira/control.conf` inside the initramfs. On a system that
 seals PCR 11 (UKI) or PCR 9 (Debian/GRUB), editing that file changes a measured
 value and the change is caught. On a system that seals neither — `--pcrs "0,7"`
 is a documented and reasonable selection — the file is *not* measured, and
-`enforced` could be downgraded to `lazy` by editing a text file.
+`lazy` could be turned `off` by editing a text file.
 
 So the SHA-256 of the effective configuration is carried **inside the sealed
 object**, alongside the TOTP seed. A mismatch between the sealed digest and the
-file on disk is reported and, in enforced mode, fails closed.
+file on disk is reported.
 
 This extends the sealed payload from "a TOTP seed" to a small structure, which
 means a **sealed blob format version bump to 9** and a re-seal + authenticator
@@ -519,7 +532,7 @@ SealedPayload v9 := {
     totp_secret     []byte      // as today
     device_id       [16]byte    // zero when not enrolled
     anchor_digest   [32]byte    // SHA-256 of the pinned verifier public key, zero when none
-    config_digest   [32]byte    // SHA-256 of the canonicalised attest.conf, zero when none
+    config_digest   [32]byte    // SHA-256 of the canonicalised control.conf, zero when none
 }
 ```
 
@@ -566,6 +579,10 @@ device's pinned EK, bound to the AK Name, so only the TPM that produced the
 quote can unwrap it. See [PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) §5.
 Channel binding (§6.2) is a second, weaker layer on top.
 
+The same holds for [factor release](PLAN-FACTORRELEASE.md), including over
+BLE: as soon as the phone hands out a secret, the relay is the central attack
+there too, and the same hardware binding is the answer.
+
 ### 11.4 Time
 
 The initrd has no trustworthy clock. The RTC may be wrong, and on many machines
@@ -600,8 +617,11 @@ cannot break a boot chain. That rule is right for a tool that *displays* a code
 and wrong for one that *gates* a boot: a gate that exits 0 on failure is not a
 gate.
 
-Therefore: `attest verify`, and the gate command defined in
-[PLAN-BLE.md](PLAN-BLE.md) §7, **exit non-zero on failure**, and this is stated
+Therefore: `attest verify`, the gate command defined in
+[PLAN-BLE.md](PLAN-BLE.md) §7, and the commands that hand out a secret —
+`unlock try` ([PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) §10) and
+`factor release` ([PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md) §5.2) —
+**exit non-zero on failure**, and this is stated
 in their help text and in README.md next to the existing rule. Every other
 command keeps the existing behaviour. Getting this wrong silently converts
 enforced mode into a decoration, so it is an explicit test case.
@@ -665,3 +685,23 @@ phase 3 is green.
 6. **PCR bank.** Quotes and profiles are SHA-256; a `--sha1` machine
    (README.md) would need a SHA-1 quote. Supported in the format, warned about
    loudly, and probably refused for enforced mode.
+
+---
+
+## 16. Implementation notes
+
+What was built, and where it departs from the sections above.
+
+| Topic | As implemented |
+|---|---|
+| **AK parent (§3.1)** | A storage primary in the **endorsement** hierarchy, not the owner-hierarchy primary of `CreatePrimaryKey`. TPM 2.0 Part 1 §36.7 obfuscates `resetCount`, `restartCount` and `firmwareVersion` in quotes signed by keys outside the endorsement/platform hierarchies; with an owner-hierarchy AK the reset-count replay check of §5 would compare masked values. Found on swtpm, which reported a reset count of 4157272019. Side effect: the AK survives `TPM2_Clear`, after which the verifier sees the counter go backwards and asks a human. |
+| **Package layout (§9)** | `attest/` is the pure core (no TPM, filesystem or network). The TPM-facing parts listed as `identity.go`/`quote.go` live in `cmd/attest_tpm.go`, behind the `attest.AttesterBackend` / `attest.EnrolBackend` interfaces; `attest/identity.go` holds only key templates. `TestCoreHasNoDeviceDeps` enforces the rule on `attest/`, `transport/frame/` and `mobile/`. |
+| **Verifier as a state machine (§6, §9.2)** | `attest.Verifier` is event-driven: every input returns records to send and events to show, so the phone needs no threads and no callbacks. `mobile/kiracore` wraps it for gomobile. |
+| **Enrolment (§6.1)** | `EnrolOffer` additionally carries a baseline quote bound to the session (`enrol_qd`), so the baseline profile is TPM-signed rather than claimed, and `adv_key` for advertising. `EnrolAccept` carries a required `anchor_sig` proving possession of the anchor key. |
+| **Wire encoding (§9.3)** | TLV as planned, with ascending tags and per-field limits ([PROTOCOL-BLE.md](PROTOCOL-BLE.md) §7). Golden vectors for every canonical string are in `attest/vectors_test.go`. |
+| **Release message (PLAN-FACTORRELEASE.md §4)** | Defined in the core; the attester answers `ReleaseAck{unsupported}` until factor enrolment exists. |
+| **Attestation blob (§10.1)** | NV `0x01803020`+slot, signed envelope, PolicySigned writes, a verifier *list* (up to 8) from day one (§15.5). Also holds the machine's Noise static key and advertising key, which identify the transport endpoint only — see `cmd/attest_blob.go` for why exposing them does not weaken the verdict. |
+| **Not yet implemented** | Sealed payload v9 and config binding (§10.3), image anchor (§10.2), `attest rotate-ak`, EK certificate chain validation (the certificate is parsed and passed on, not validated against vendor roots). |
+| **§15.1** | ECC AK first, RSA-2048 fallback, both implemented. |
+| **§15.4** | Stripped static binary: 5.98 MB → 6.54 MB with the whole attestation and BLE stack. Bluetooth firmware in the initramfs is still unmeasured. |
+

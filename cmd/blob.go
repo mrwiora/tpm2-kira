@@ -93,43 +93,25 @@ func IsBlobVersionError(err error) (*BlobVersionError, bool) {
 
 // BlobPeek contains basic information about a raw blob without full unmarshaling
 type BlobPeek struct {
-	DataSize   int
-	Version    uint32
-	AppVersion string // empty if version is too old or data too short to read
+	DataSize int
+	Version  uint32
 }
 
-// PeekBlobVersion reads just the version and app version from raw blob data without full unmarshal.
-// For current blobs the layout is: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
-// For older blobs the layout is: [version:4][appVersionLen:4][appVersion...]
-// PeekBlobVersion reads just the version and app version from raw blob data without full unmarshal.
-// Layout: [version:4][payloadLen:4][appVersionLen:4][appVersion...]
+// PeekBlobVersion reads just the version from raw blob data without full
+// unmarshal: the first four bytes, in every version.
 func PeekBlobVersion(data []byte) *BlobPeek {
-	peek := &BlobPeek{
-		DataSize: len(data),
+	peek := &BlobPeek{DataSize: len(data)}
+	if len(data) >= 4 {
+		peek.Version = binary.LittleEndian.Uint32(data[0:4])
 	}
-
-	if len(data) < 4 {
-		return peek
-	}
-
-	peek.Version = binary.LittleEndian.Uint32(data[0:4])
-
-	if len(data) >= 12 {
-		appVersionLen := binary.LittleEndian.Uint32(data[8:12])
-		if appVersionLen > 0 && appVersionLen < 256 && len(data) >= 12+int(appVersionLen) {
-			peek.AppVersion = string(data[12 : 12+appVersionLen])
-		}
-	}
-
 	return peek
 }
 
-// AppVersion is the version of the application that created the sealed blob
-// This should be set by the main package during initialization
+// AppVersion is the version of this build, set by the main package.
 var AppVersion = "unknown"
 
-// CurrentBlobVersion is the only supported blob format version
-const CurrentBlobVersion = 9
+// CurrentBlobVersion is the only supported blob format version.
+const CurrentBlobVersion = 14
 
 // MaxBlobSignatureLen is the maximum allowed signature size in bytes.
 // Generous: RSA-4096 PKCS#1 v1.5 = 512 bytes, ECDSA P-384 DER ≈ 104 bytes.
@@ -181,19 +163,14 @@ func (s PCRSource) Suffix() string {
 // These limits are generous for legitimate use while blocking malicious allocations.
 const (
 	MaxBlobSize         = 10 * 1024 * 1024 // 10MB maximum total blob size
-	MaxAppVersionLen    = 1024             // 1KB maximum app version string
 	MaxPublicLen        = 2 * 1024 * 1024  // 2MB maximum public blob
 	MaxPrivateLen       = 2 * 1024 * 1024  // 2MB maximum private blob
 	MaxPCRDigests       = 100              // Maximum 100 PCR digest entries
 	MaxDigestSize       = 1024             // Maximum 1KB per individual digest
 	MaxCommandLen       = 4096             // Maximum 4KB for the UKI path string
-	MaxEventlogPath     = 4096             // Maximum 4KB for eventlog path
-	MaxCalcTime         = 256              // Maximum 256 bytes for timestamp
-	MaxMeasurePointLen  = 512              // Maximum 512 bytes for the measure-point extend description
 	MaxPolicyRef        = 64               // Maximum 64 bytes for the PolicyAuthorize policyRef
 	MaxSigningPublicLen = 2048             // Maximum 2KB for the signing key's TPMT_PUBLIC
 	MaxApprovalSigLen   = 1024             // Maximum 1KB for the approval TPMT_SIGNATURE
-	MaxKeyPathLen       = 4096             // 4KB maximum for key filesystem paths
 )
 
 // PCRDigestPair represents a PCR index paired with its digest value
@@ -204,7 +181,8 @@ type PCRDigestPair struct {
 	Digest  tpm2.TPM2BDigest `json:"digest"`            // PCR digest value at seal time
 }
 
-// EventlogInfo represents metadata about eventlog-based PCR calculation
+// EventlogInfo describes an eventlog-based PCR calculation. It is not
+// stored: the blob keeps only whether the measure-point extends were applied.
 type EventlogInfo struct {
 	EventlogPath    string `json:"eventlog_path"`    // Path the eventlog was read from (never reopened from the blob)
 	CalculationTime string `json:"calculation_time"` // When calculation was performed
@@ -221,10 +199,14 @@ type EventlogInfo struct {
 // signature.  When adding new fields to the blob, add them HERE and
 // update MarshalPayload / UnmarshalPayload.  This guarantees that new
 // fields are automatically included in the signed region.
+//
+// A slot holds a TOTP key or phones, never both: the TOTP code is how a boot
+// is checked without a phone, and a slot with phones is checked by them
+// (HasTOTPKey, PhoneAttested). Public, Private and TOTPAlgorithm are then
+// empty; the slot's policy stays and authorizes the boot and release keys.
 type SealedBlobPayload struct {
-	AppVersion string          `json:"app_version"` // Application version that created this blob
-	Public     []byte          `json:"public"`      // TPMT_PUBLIC of the TOTP HMAC key
-	Private    []byte          `json:"private"`     // TPM2B_PRIVATE of the TOTP HMAC key (wrapped by the TPM)
+	Public     []byte          `json:"public"`      // TPMT_PUBLIC of the TOTP HMAC key; empty with phones
+	Private    []byte          `json:"private"`     // TPM2B_PRIVATE of the TOTP HMAC key (wrapped by the TPM); empty with phones
 	PCRDigests []PCRDigestPair `json:"pcr_digests"` // PCR indices with their source and digest values
 	// TOTPAlgorithm is the HMAC hash of the TOTP key: TPMAlgSHA1, or
 	// TPMAlgSHA256 on a TPM without SHA-1.
@@ -242,21 +224,75 @@ type SealedBlobPayload struct {
 	// ApprovalSignature is the signing key's TPMT_SIGNATURE over
 	// H(approvedPolicy ‖ PolicyRef), where approvedPolicy is PolicyPCR over
 	// PCRDigests followed by PolicyNV(generation index == Generation).
-	ApprovalSignature []byte        `json:"approval_signature"`
-	EventlogInfo      *EventlogInfo `json:"eventlog_info"`              // Eventlog calculation metadata (if any PCR uses eventlog)
-	PublicKeyPath     string        `json:"public_key_path,omitempty"`  // Filesystem path recorded at seal time (never used to find a key)
-	PrivateKeyPath    string        `json:"private_key_path,omitempty"` // Filesystem path recorded at seal time (never used to find a key)
+	ApprovalSignature []byte `json:"approval_signature"`
+	// MeasurePointApplied says the eventlog PCRs' values include the
+	// measure-point extends (MeasurePointWordsAt, before the separator), so
+	// verification recomputes exactly what was sealed. Always false
+	// without eventlog PCRs.
+	MeasurePointApplied bool `json:"measure_point_applied"`
+	// Attestation is the slot's remote-attestation part, or nil without
+	// one (attest_blob.go). It lives in the slot's blob, under the same
+	// signature, so that a slot is one thing: sealed, resealed, enrolled
+	// and deleted together.
+	Attestation *Attestation `json:"-"`
 }
 
 // SealedBlob is the top-level envelope: version, signed payload, and
 // detached signature.  Only BlobSignature lives outside the signed region.
 //
-// Version 9: TOTP key is an HMAC key used inside the TPM, authorized by
-// PolicyAuthorize; see docs/SECURITY-BACKGROUND.md §4.
+// The TOTP key is an HMAC key used inside the TPM, authorized by
+// PolicyAuthorize; see docs/SECURITY-BACKGROUND.md §4. The layout is in §10.
 type SealedBlob struct {
 	Version       uint32            `json:"version"`                  // Blob format version (must be CurrentBlobVersion)
 	Payload       SealedBlobPayload `json:"payload"`                  // All authenticated content
 	BlobSignature []byte            `json:"blob_signature,omitempty"` // Signature over [version ‖ payloadLen ‖ payload bytes]
+}
+
+// HasTOTPKey reports whether the slot holds a TOTP key: it does exactly
+// when no phone is enrolled for it.
+func (sb *SealedBlob) HasTOTPKey() bool { return len(sb.Payload.Public) > 0 }
+
+// PhoneAttested reports whether phones are enrolled for the slot, which
+// then has no TOTP code.
+func (sb *SealedBlob) PhoneAttested() bool { return sb.Payload.phoneAttested() }
+
+func (p *SealedBlobPayload) phoneAttested() bool {
+	return p.Attestation != nil && len(p.Attestation.Phone.Verifiers) > 0
+}
+
+// checkTOTPOrPhones holds a payload to the rule: a TOTP key or phones.
+func (p *SealedBlobPayload) checkTOTPOrPhones() error {
+	hasKey := len(p.Public) > 0 || len(p.Private) > 0
+	switch {
+	case hasKey && p.phoneAttested():
+		return fmt.Errorf("a slot with phones holds no TOTP key")
+	case !hasKey && !p.phoneAttested():
+		return fmt.Errorf("a slot without phones needs its TOTP key")
+	case hasKey && (len(p.Public) == 0 || len(p.Private) == 0 || p.TOTPAlgorithm == 0):
+		return fmt.Errorf("the TOTP key is incomplete")
+	case !hasKey && p.TOTPAlgorithm != 0:
+		return fmt.Errorf("a TOTP algorithm without a TOTP key")
+	}
+	return nil
+}
+
+// SlotPolicy is the policy every key of the slot is created under:
+// PolicyAuthorize by the signing key, qualified by the slot's PolicyRef.
+// The TOTP key, the boot key and the release key share it, so the boot and
+// release keys work whether or not the slot has a TOTP key.
+func (sb *SealedBlob) SlotPolicy() ([]byte, error) {
+	pub, err := tpm2.Unmarshal[tpm2.TPMTPublic](sb.Payload.SigningPublic)
+	if err != nil {
+		return nil, fmt.Errorf("the slot's signing key has no valid public area: %w", err)
+	}
+	name, err := tpm2.ObjectName(pub)
+	if err != nil {
+		return nil, err
+	}
+	if len(sb.Payload.PolicyRef) == 0 {
+		return nil, fmt.Errorf("the slot has no policy reference")
+	}
+	return policyAuthorizeDigest(name.Buffer, sb.Payload.PolicyRef), nil
 }
 
 // GetHashAlgo infers the PCR hash algorithm from the stored digest sizes.
@@ -296,10 +332,26 @@ func (sb *SealedBlob) GetPCRDigestValues() []tpm2.TPM2BDigest {
 // MeasurePointMode reproduces the measure-point handling this blob was sealed
 // with, so verification recomputes exactly the values the policy was bound to.
 func (sb *SealedBlob) MeasurePointMode() MeasurePointMode {
-	if info := sb.Payload.EventlogInfo; info != nil && info.MeasurePointExtends != "" {
+	if sb.Payload.MeasurePointApplied {
 		return MeasurePointOn
 	}
 	return MeasurePointOff
+}
+
+// MeasurePointExtends describes the extends folded into the eventlog PCRs,
+// as "word:pcr,pcr;word:pcr", or "" when none were. It is derived from the
+// selection: the seal applies the same words to every eventlog PCR.
+func (sb *SealedBlob) MeasurePointExtends() string {
+	if !sb.Payload.MeasurePointApplied {
+		return ""
+	}
+	byWord := map[string][]int{}
+	for _, pcr := range sb.GetEventlogPCRIndices() {
+		for _, word := range MeasurePointWordsAt(MeasurePointBeforeSeparator, pcr) {
+			byWord[word] = append(byWord[word], pcr)
+		}
+	}
+	return FormatMeasurePointExtends(byWord)
 }
 
 // HasEventlogPCRs returns true if any PCR in this blob uses eventlog as its source
@@ -379,24 +431,24 @@ func hasEventlogPCRsInPayload(p *SealedBlobPayload) bool {
 //
 // Format:
 //
-//	[appVersionLen:4][appVersion]
 //	[publicLen:4][public]
 //	[privateLen:4][private]
 //	[numPCRDigests:4][pcrDigestPairs...]
 //	[totpAlgorithm:2][generation:8]
 //	[policyRefLen:2][policyRef][signingPublicLen:2][signingPublic]
 //	[approvalSignatureLen:2][approvalSignature]
-//	[hasEventlogInfo:1][eventlogInfo...]
-//	[hasKeyPaths:1][pubKeyPathLen:2][pubKeyPath][privKeyPathLen:2][privKeyPath]
+//	[measurePointApplied:1]
+//	[hasAttestation:1][attestationLen:4][attestation]
 func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
-	size := 4 + len(p.AppVersion) + // app version length + string
-		4 + len(p.Public) + // public blob
+	if err := p.checkTOTPOrPhones(); err != nil {
+		return nil, err
+	}
+	size := 4 + len(p.Public) + // public blob
 		4 + len(p.Private) + // private blob
 		4 + // number of PCR digests
 		2 + 8 + // TOTP algorithm + generation
 		2 + len(p.PolicyRef) + 2 + len(p.SigningPublic) + 2 + len(p.ApprovalSignature) +
-		1 + // hasEventlogInfo flag
-		1 // hasKeyPaths flag
+		1 // measure-point flag
 
 	// Guard against integer overflow and unreasonable allocations
 	if size < 0 || size > MaxBlobSize {
@@ -416,29 +468,6 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		}
 	}
 
-	// Calculate eventlog info size (if present)
-	hasEventlogInfo := hasEventlogPCRsInPayload(p) && p.EventlogInfo != nil
-	if hasEventlogInfo {
-		size += 4 + len(p.EventlogInfo.EventlogPath) + // eventlog path
-			4 + len(p.EventlogInfo.CalculationTime) + // calculation time
-			4 + 4 + // total events + processed events (4 bytes each)
-			2 + len(p.EventlogInfo.MeasurePointExtends) + // measure-point extends
-			2 + len(p.EventlogInfo.MeasurePointDetection) // measure-point detection
-		if size < 0 || size > MaxBlobSize {
-			return nil, fmt.Errorf("sealed blob payload size %d exceeds maximum allowed %d bytes after eventlog info", size, MaxBlobSize)
-		}
-	}
-
-	// Calculate key paths size (if present)
-	hasKeyPaths := p.PublicKeyPath != "" || p.PrivateKeyPath != ""
-	if hasKeyPaths {
-		size += 2 + len(p.PublicKeyPath) + // pubkey path length + string
-			2 + len(p.PrivateKeyPath) // privkey path length + string
-		if size < 0 || size > MaxBlobSize {
-			return nil, fmt.Errorf("sealed blob payload size %d exceeds maximum allowed %d bytes after key paths", size, MaxBlobSize)
-		}
-	}
-
 	// Final sanity check before allocation
 	if size < 0 || size > MaxBlobSize {
 		return nil, fmt.Errorf("sealed blob payload total size %d exceeds maximum allowed %d bytes", size, MaxBlobSize)
@@ -446,12 +475,6 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 
 	buf := make([]byte, size)
 	offset := 0
-
-	// App version
-	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(p.AppVersion)))
-	offset += 4
-	copy(buf[offset:], p.AppVersion)
-	offset += len(p.AppVersion)
 
 	// Public blob
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(p.Public)))
@@ -504,65 +527,26 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		offset += len(field)
 	}
 
-	// Eventlog information flag
-	if hasEventlogInfo {
+	// Whether the measure-point extends are in the eventlog PCRs' values
+	if p.MeasurePointApplied && hasEventlogPCRsInPayload(p) {
 		buf[offset] = 1
-	} else {
-		buf[offset] = 0
-	}
-	offset++
-
-	// Eventlog metadata (only if flag is set)
-	if hasEventlogInfo {
-		// Eventlog path
-		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(p.EventlogInfo.EventlogPath)))
-		offset += 4
-		copy(buf[offset:], p.EventlogInfo.EventlogPath)
-		offset += len(p.EventlogInfo.EventlogPath)
-
-		// Calculation time
-		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(p.EventlogInfo.CalculationTime)))
-		offset += 4
-		copy(buf[offset:], p.EventlogInfo.CalculationTime)
-		offset += len(p.EventlogInfo.CalculationTime)
-
-		// Total events and processed events
-		binary.LittleEndian.PutUint32(buf[offset:], uint32(p.EventlogInfo.TotalEvents))
-		offset += 4
-		binary.LittleEndian.PutUint32(buf[offset:], uint32(p.EventlogInfo.ProcessedEvents))
-		offset += 4
-
-		// Measure-point extends applied on top of the replay
-		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(p.EventlogInfo.MeasurePointExtends)))
-		offset += 2
-		copy(buf[offset:], p.EventlogInfo.MeasurePointExtends)
-		offset += len(p.EventlogInfo.MeasurePointExtends)
-
-		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(p.EventlogInfo.MeasurePointDetection)))
-		offset += 2
-		copy(buf[offset:], p.EventlogInfo.MeasurePointDetection)
-		offset += len(p.EventlogInfo.MeasurePointDetection)
 	}
 
-	// Key paths flag and data
-	if hasKeyPaths {
-		buf[offset] = 1
-		offset++
-
-		// Public key path
-		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(p.PublicKeyPath)))
-		offset += 2
-		copy(buf[offset:], p.PublicKeyPath)
-		offset += len(p.PublicKeyPath)
-
-		// Private key path
-		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(p.PrivateKeyPath)))
-		offset += 2
-		copy(buf[offset:], p.PrivateKeyPath)
-		offset += len(p.PrivateKeyPath)
+	// The optional attestation part ends the payload:
+	// [hasAttestation:1], then [len:4][attestation].
+	if p.Attestation == nil {
+		buf = append(buf, 0)
 	} else {
-		buf[offset] = 0
-		offset++
+		att, err := p.Attestation.marshal()
+		if err != nil {
+			return nil, err
+		}
+		if len(att) > MaxAttestationLen {
+			return nil, fmt.Errorf("attestation part of %d bytes exceeds %d", len(att), MaxAttestationLen)
+		}
+		buf = append(buf, 1)
+		buf = binary.LittleEndian.AppendUint32(buf, uint32(len(att)))
+		buf = append(buf, att...)
 	}
 
 	return buf, nil
@@ -577,21 +561,6 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 
 	offset := 0
 	p := &SealedBlobPayload{}
-
-	// App version
-	if offset+4 > len(data) {
-		return nil, fmt.Errorf("data too short for app version length")
-	}
-	appVersionLen := binary.LittleEndian.Uint32(data[offset:])
-	offset += 4
-	if appVersionLen > MaxAppVersionLen {
-		return nil, fmt.Errorf("app version length %d exceeds maximum %d", appVersionLen, MaxAppVersionLen)
-	}
-	if offset+int(appVersionLen) > len(data) {
-		return nil, fmt.Errorf("invalid app version length")
-	}
-	p.AppVersion = string(data[offset : offset+int(appVersionLen)])
-	offset += int(appVersionLen)
 
 	// Public blob
 	if offset+4 > len(data) {
@@ -720,124 +689,54 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 		offset += n
 	}
 
-	// Eventlog info flag
+	// Measure-point flag
 	if offset >= len(data) {
-		return nil, fmt.Errorf("data too short for eventlog info flag")
+		return nil, fmt.Errorf("data too short for the measure-point flag")
 	}
-	hasEventlogInfo := data[offset] == 1
+	switch data[offset] {
+	case 0:
+	case 1:
+		if !hasEventlogPCRsInPayload(p) {
+			return nil, fmt.Errorf("measure-point flag set without eventlog PCRs")
+		}
+		p.MeasurePointApplied = true
+	default:
+		return nil, fmt.Errorf("invalid measure-point flag %d", data[offset])
+	}
 	offset++
 
-	// Read eventlog metadata if flag is set and there's more data
-	if hasEventlogInfo && offset < len(data) {
-		p.EventlogInfo = &EventlogInfo{}
-
-		// Eventlog path
+	// The optional attestation part, which ends the payload.
+	if offset+1 > len(data) {
+		return nil, fmt.Errorf("data too short for the attestation flag")
+	}
+	hasAttestation := data[offset]
+	offset++
+	switch hasAttestation {
+	case 0:
+		if offset != len(data) {
+			return nil, fmt.Errorf("payload has %d trailing bytes", len(data)-offset)
+		}
+	case 1:
 		if offset+4 > len(data) {
-			return nil, fmt.Errorf("data too short for eventlog path length")
+			return nil, fmt.Errorf("data too short for the attestation length")
 		}
-		pathLen := binary.LittleEndian.Uint32(data[offset:])
+		n := int(binary.LittleEndian.Uint32(data[offset:]))
 		offset += 4
-		if pathLen > MaxEventlogPath {
-			return nil, fmt.Errorf("eventlog path length %d exceeds maximum %d", pathLen, MaxEventlogPath)
+		if n <= 0 || n > MaxAttestationLen || offset+n != len(data) {
+			return nil, fmt.Errorf("attestation part of %d bytes does not end the payload", n)
 		}
-		if offset+int(pathLen) > len(data) {
-			return nil, fmt.Errorf("data too short for eventlog path")
+		att, err := unmarshalAttestation(data[offset : offset+n])
+		if err != nil {
+			return nil, err
 		}
-		p.EventlogInfo.EventlogPath = string(data[offset : offset+int(pathLen)])
-		offset += int(pathLen)
-
-		// Calculation time
-		if offset+4 > len(data) {
-			return nil, fmt.Errorf("data too short for calculation time length")
-		}
-		timeLen := binary.LittleEndian.Uint32(data[offset:])
-		offset += 4
-		if timeLen > MaxCalcTime {
-			return nil, fmt.Errorf("calculation time length %d exceeds maximum %d", timeLen, MaxCalcTime)
-		}
-		if offset+int(timeLen) > len(data) {
-			return nil, fmt.Errorf("data too short for calculation time")
-		}
-		p.EventlogInfo.CalculationTime = string(data[offset : offset+int(timeLen)])
-		offset += int(timeLen)
-
-		// Total and processed events
-		if offset+8 > len(data) {
-			return nil, fmt.Errorf("data too short for event counts")
-		}
-		p.EventlogInfo.TotalEvents = int(binary.LittleEndian.Uint32(data[offset:]))
-		offset += 4
-		p.EventlogInfo.ProcessedEvents = int(binary.LittleEndian.Uint32(data[offset:]))
-		offset += 4
-
-		// Measure-point extends
-		if offset+2 > len(data) {
-			return nil, fmt.Errorf("data too short for measure-point extends length")
-		}
-		extendsLen := binary.LittleEndian.Uint16(data[offset:])
-		offset += 2
-		if extendsLen > MaxMeasurePointLen {
-			return nil, fmt.Errorf("measure-point extends length %d exceeds maximum %d", extendsLen, MaxMeasurePointLen)
-		}
-		if offset+int(extendsLen) > len(data) {
-			return nil, fmt.Errorf("data too short for measure-point extends")
-		}
-		p.EventlogInfo.MeasurePointExtends = string(data[offset : offset+int(extendsLen)])
-		offset += int(extendsLen)
-
-		if offset+2 > len(data) {
-			return nil, fmt.Errorf("data too short for measure-point detection length")
-		}
-		detectionLen := binary.LittleEndian.Uint16(data[offset:])
-		offset += 2
-		if detectionLen > MaxMeasurePointLen {
-			return nil, fmt.Errorf("measure-point detection length %d exceeds maximum %d", detectionLen, MaxMeasurePointLen)
-		}
-		if offset+int(detectionLen) > len(data) {
-			return nil, fmt.Errorf("data too short for measure-point detection")
-		}
-		p.EventlogInfo.MeasurePointDetection = string(data[offset : offset+int(detectionLen)])
-		offset += int(detectionLen)
+		p.Attestation = att
+	default:
+		return nil, fmt.Errorf("invalid attestation flag %d", hasAttestation)
 	}
 
-	// Key paths (trailing optional section)
-	if offset < len(data) {
-		hasKeyPaths := data[offset] == 1
-		offset++
-
-		if hasKeyPaths && offset < len(data) {
-			// Public key path
-			if offset+2 > len(data) {
-				return nil, fmt.Errorf("data too short for public key path length")
-			}
-			pubPathLen := int(binary.LittleEndian.Uint16(data[offset:]))
-			offset += 2
-			if pubPathLen > MaxKeyPathLen {
-				return nil, fmt.Errorf("public key path length %d exceeds maximum %d", pubPathLen, MaxKeyPathLen)
-			}
-			if offset+pubPathLen > len(data) {
-				return nil, fmt.Errorf("data too short for public key path")
-			}
-			p.PublicKeyPath = string(data[offset : offset+pubPathLen])
-			offset += pubPathLen
-
-			// Private key path
-			if offset+2 > len(data) {
-				return nil, fmt.Errorf("data too short for private key path length")
-			}
-			privPathLen := int(binary.LittleEndian.Uint16(data[offset:]))
-			offset += 2
-			if privPathLen > MaxKeyPathLen {
-				return nil, fmt.Errorf("private key path length %d exceeds maximum %d", privPathLen, MaxKeyPathLen)
-			}
-			if offset+privPathLen > len(data) {
-				return nil, fmt.Errorf("data too short for private key path")
-			}
-			p.PrivateKeyPath = string(data[offset : offset+privPathLen])
-			offset += privPathLen
-		}
+	if err := p.checkTOTPOrPhones(); err != nil {
+		return nil, err
 	}
-
 	return p, nil
 }
 
@@ -907,7 +806,7 @@ func UnmarshalSealedBlob(data []byte) (*SealedBlob, error) {
 	}
 
 	sb := &SealedBlob{
-		Version: CurrentBlobVersion,
+		Version: version,
 		Payload: *payload,
 	}
 
@@ -1006,21 +905,22 @@ func VerifyBlobSignature(signedBlob []byte, blob *SealedBlob, pubKey crypto.Publ
 	if signedRegionEnd > len(signedBlob) {
 		return fmt.Errorf("signed region extends beyond blob data")
 	}
-	signedRegion := signedBlob[:signedRegionEnd]
+	return verifySignedRegion(signedBlob[:signedRegionEnd], blob.BlobSignature, pubKey)
+}
 
-	// Compute SHA-256 digest of the signed region
-	digest := sha256.Sum256(signedRegion)
-
-	// Verify based on key type
+// verifySignedRegion checks a SignBlobPayload signature over region. Shared
+// by the sealed blob and the attestation blob, which use the same envelope.
+func verifySignedRegion(region, signature []byte, pubKey crypto.PublicKey) error {
+	digest := sha256.Sum256(region)
 	switch key := pubKey.(type) {
 	case *rsa.PublicKey:
-		err := rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], blob.BlobSignature)
+		err := rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], signature)
 		if err != nil {
 			return fmt.Errorf("RSA blob signature verification failed: %w", err)
 		}
 		return nil
 	case *ecdsa.PublicKey:
-		if !ecdsa.VerifyASN1(key, digest[:], blob.BlobSignature) {
+		if !ecdsa.VerifyASN1(key, digest[:], signature) {
 			return fmt.Errorf("ECDSA blob signature verification failed")
 		}
 		return nil
@@ -1051,29 +951,26 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 
 	// Create a JSON-friendly structure
 	type SealedBlobJSON struct {
-		Version           uint32          `json:"version"`
-		AppVersion        string          `json:"app_version"`
-		HashAlgorithm     string          `json:"hash_algorithm"`
-		Public            string          `json:"public_hex"`
-		PublicSize        int             `json:"public_size"`
-		Private           string          `json:"private_hex"`
-		PrivateSize       int             `json:"private_size"`
-		PCRDigests        []PCRDigestJSON `json:"pcr_digests"`
-		TOTPAlgorithm     string          `json:"totp_algorithm"`
-		Generation        uint64          `json:"generation"`
-		PolicyRef         string          `json:"policy_ref_hex"`
-		SigningPublic     string          `json:"signing_public_hex"`
-		ApprovalSignature string          `json:"approval_signature_hex"`
-		PublicKeyPath     string          `json:"public_key_path,omitempty"`
-		PrivateKeyPath    string          `json:"private_key_path,omitempty"`
-		EventlogInfo      *EventlogInfo   `json:"eventlog_info,omitempty"`
-		BlobSignature     string          `json:"blob_signature_hex,omitempty"`
-		BlobSignatureSize int             `json:"blob_signature_size"`
+		Version           uint32           `json:"version"`
+		HashAlgorithm     string           `json:"hash_algorithm"`
+		Public            string           `json:"public_hex"`
+		PublicSize        int              `json:"public_size"`
+		Private           string           `json:"private_hex"`
+		PrivateSize       int              `json:"private_size"`
+		PCRDigests        []PCRDigestJSON  `json:"pcr_digests"`
+		TOTPAlgorithm     string           `json:"totp_algorithm"`
+		Generation        uint64           `json:"generation"`
+		PolicyRef         string           `json:"policy_ref_hex"`
+		SigningPublic     string           `json:"signing_public_hex"`
+		ApprovalSignature string           `json:"approval_signature_hex"`
+		MeasurePoint      string           `json:"measure_point_extends,omitempty"`
+		BlobSignature     string           `json:"blob_signature_hex,omitempty"`
+		BlobSignatureSize int              `json:"blob_signature_size"`
+		Attestation       *attestationJSON `json:"attestation,omitempty"`
 	}
 
 	jsonBlob := SealedBlobJSON{
 		Version:           sb.Version,
-		AppVersion:        sb.Payload.AppVersion,
 		HashAlgorithm:     sb.GetHashAlgo().String(),
 		Public:            hex.EncodeToString(sb.Payload.Public),
 		PublicSize:        len(sb.Payload.Public),
@@ -1085,11 +982,10 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 		PolicyRef:         hex.EncodeToString(sb.Payload.PolicyRef),
 		SigningPublic:     hex.EncodeToString(sb.Payload.SigningPublic),
 		ApprovalSignature: hex.EncodeToString(sb.Payload.ApprovalSignature),
-		PublicKeyPath:     sb.Payload.PublicKeyPath,
-		PrivateKeyPath:    sb.Payload.PrivateKeyPath,
-		EventlogInfo:      sb.Payload.EventlogInfo,
+		MeasurePoint:      sb.MeasurePointExtends(),
 		BlobSignature:     hex.EncodeToString(sb.BlobSignature),
 		BlobSignatureSize: len(sb.BlobSignature),
+		Attestation:       sb.Payload.Attestation.json(),
 	}
 
 	return json.Marshal(jsonBlob)

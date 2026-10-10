@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"hash"
 	"slices"
@@ -44,7 +45,7 @@ var osSeparatorPCRs = []int{0, 1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14}
 // against. They cannot be used to validate a measure-point prediction.
 var volatileAfterMeasurePoint = map[int]string{
 	9:  "systemd-tpm2-setup NvPCR initialisation (runs after switch-root)",
-	11: "systemd-pcrphase (leave-initrd, sysinit, ready)",
+	11: "systemd-pcrnvdone and systemd-pcrphase (nvpcr-separator, leave-initrd, sysinit, ready)",
 	15: "systemd-pcrmachine and cryptsetup volume key measurement",
 }
 
@@ -91,6 +92,80 @@ func (m MeasurePointMode) String() string {
 // the blob recorded, so an existing seal keeps validating after a policy change.
 var MeasurePointModeSetting = MeasurePointAuto
 
+// MeasurePoint is where a policy is checked relative to
+// systemd-pcrosseparator.service, which extends os-separator into PCRs 0-7,
+// 9, 12-14 before cryptsetup. PCR extends are one-way, so after it nothing in
+// the running system can reproduce the earlier values: a secret sealed to them
+// is locked until the next boot.
+type MeasurePoint int
+
+const (
+	// MeasurePointBeforeSeparator: the TOTP display (tpm2-kira.service),
+	// after systemd-pcrphase-initrd's enter-initrd on PCR 11 and before the
+	// separator. Only enter-initrd is applied to a replayed value.
+	MeasurePointBeforeSeparator MeasurePoint = iota
+	// MeasurePointAfterSeparator: the attestation baseline (the gate asks
+	// before the separator, and the phone takes both states for one
+	// boot). os-separator is applied too.
+	MeasurePointAfterSeparator
+)
+
+// MeasurePointWordsAt returns the words measured into the PCR by the given
+// point, for a value reconstructed from the firmware event log.
+func MeasurePointWordsAt(point MeasurePoint, pcr int) []string {
+	if point == MeasurePointAfterSeparator {
+		return MeasurePointWords(pcr)
+	}
+	if pcr == 11 {
+		return []string{EnterInitrdWord}
+	}
+	return nil
+}
+
+// ErrSeparatorLocked marks a slot whose sealed PCR values differ from the
+// registers only by the OS separator: the policy was checked before the
+// separator ran, and nothing can satisfy it again until the next boot.
+var ErrSeparatorLocked = errors.New("codes are locked until the next boot (the OS separator ran after the measure point)")
+
+// SeparatorLocked reports whether every differing PCR is the sealed value
+// plus the os-separator.
+func (e *PCRMismatchError) SeparatorLocked() bool {
+	differ := false
+	for i := range e.ExpectedDigests {
+		if i >= len(e.CurrentDigests) || bytes.Equal(e.ExpectedDigests[i], e.CurrentDigests[i]) {
+			continue
+		}
+		if !SeparatorLocked(e.ExpectedDigests[i], e.CurrentDigests[i]) {
+			return false
+		}
+		differ = true
+	}
+	return differ
+}
+
+// SeparatorLocked reports whether current is expected plus the os-separator:
+// the value was sealed before the separator and the separator has run since.
+func SeparatorLocked(expected, current []byte) bool {
+	algo := PCRHashAlgoSHA256
+	if len(expected) == sha1.Size {
+		algo = PCRHashAlgoSHA1
+	}
+	return len(expected) == len(current) &&
+		bytes.Equal(current, ExtendDigest(algo, expected, DigestOf(algo, []byte(OSSeparatorWord))))
+}
+
+// PCRStatus labels a sealed value against the live register for the displays.
+func PCRStatus(expected, current []byte) string {
+	switch {
+	case bytes.Equal(expected, current):
+		return "✓ MATCH"
+	case SeparatorLocked(expected, current):
+		return "✗ LOCKED (the OS separator ran after the measure point)"
+	default:
+		return "✗ CHANGED"
+	}
+}
+
 func newHashFor(algo PCRHashAlgo) hash.Hash {
 	if algo == PCRHashAlgoSHA1 {
 		return sha1.New()
@@ -113,9 +188,11 @@ func ExtendDigest(algo PCRHashAlgo, current, next []byte) []byte {
 	return h.Sum(nil)
 }
 
-// MeasurePointWords returns the words already measured into the given PCR by
-// the time tpm2-kira reads it, for a value reconstructed from the firmware
-// event log.
+// MeasurePointWords returns every word systemd measures into the given PCR
+// before cryptsetup, for a value reconstructed from the firmware event log.
+// The live registers at seal time carry all of them, which is what the
+// measure-point probe compares against; MeasurePointWordsAt says which apply
+// at a given measure point.
 func MeasurePointWords(pcr int) []string {
 	var words []string
 	if slices.Contains(osSeparatorPCRs, pcr) {
@@ -204,7 +281,7 @@ func DetectMeasurePointExtends(replay, registers map[int][]byte, algo PCRHashAlg
 // ApplyMeasurePointExtends rewrites eventlog-reconstructed PCR values so they
 // describe the measure point rather than the end of firmware. It returns a
 // canonical description of what was applied, for recording in the blob.
-func ApplyMeasurePointExtends(values map[int][]byte, indices []int, algo PCRHashAlgo, debug bool) string {
+func ApplyMeasurePointExtends(values map[int][]byte, indices []int, algo PCRHashAlgo, point MeasurePoint, debug bool) string {
 	byWord := map[string][]int{}
 
 	for _, pcr := range indices {
@@ -212,13 +289,13 @@ func ApplyMeasurePointExtends(values map[int][]byte, indices []int, algo PCRHash
 		if !ok {
 			continue
 		}
-		for _, word := range MeasurePointWords(pcr) {
+		for _, word := range MeasurePointWordsAt(point, pcr) {
 			value = ExtendDigest(algo, value, DigestOf(algo, []byte(word)))
 			byWord[word] = append(byWord[word], pcr)
 		}
 		values[pcr] = value
 		if debug {
-			if words := MeasurePointWords(pcr); len(words) > 0 {
+			if words := MeasurePointWordsAt(point, pcr); len(words) > 0 {
 				fmt.Printf("  PCR%d + %s -> %x\n", pcr, strings.Join(words, " + "), value)
 			}
 		}

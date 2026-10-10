@@ -8,12 +8,14 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"hash"
 	"strings"
 	"testing"
 
@@ -354,9 +356,9 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					AppVersion: "test-1.0.0",
-					Public:     []byte("public-data-test"),
-					Private:    []byte("private-data-test"),
+					Public:        []byte("public-data-test"),
+					Private:       []byte("private-data-test"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest0")}},
 						{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest2")}},
@@ -370,22 +372,17 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					AppVersion: "test-predict",
-					Public:     []byte("public-predict"),
-					Private:    []byte("private-predict"),
+					Public:        []byte("public-predict"),
+					Private:       []byte("private-predict"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
-					PolicyRef: make([]byte, 32),
-					EventlogInfo: &EventlogInfo{
-						EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
-						CalculationTime: "2024-01-01T00:00:00Z",
-						TotalEvents:     100,
-						ProcessedEvents: 50,
-					},
+					PolicyRef:           make([]byte, 32),
+					MeasurePointApplied: true,
 				},
 			},
 		},
@@ -394,9 +391,9 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					AppVersion: "test-0.0.0",
-					Public:     []byte("public"),
-					Private:    []byte("private"),
+					Public:        []byte("public"),
+					Private:       []byte("private"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest7")}},
 					},
@@ -408,9 +405,9 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					AppVersion: "v2.0.0",
-					Public:     []byte("test-public-key-data"),
-					Private:    []byte("test-private-key-data"),
+					Public:        []byte("test-public-key-data"),
+					Private:       []byte("test-private-key-data"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 1, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -427,10 +424,10 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					AppVersion: "test",
-					Public:     []byte("pub"),
-					Private:    []byte("priv"),
-					PCRDigests: []PCRDigestPair{},
+					Public:        []byte("pub"),
+					Private:       []byte("priv"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
+					PCRDigests:    []PCRDigestPair{},
 				},
 			},
 		},
@@ -439,21 +436,16 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					AppVersion: "test-eventlog",
-					Public:     []byte("public-data"),
-					Private:    []byte("private-data"),
+					Public:        []byte("public-data"),
+					Private:       []byte("private-data"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 2, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
-					PolicyRef: make([]byte, 32),
-					EventlogInfo: &EventlogInfo{
-						EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
-						CalculationTime: "2024-01-01T00:00:00Z",
-						TotalEvents:     100,
-						ProcessedEvents: 50,
-					},
+					PolicyRef:           make([]byte, 32),
+					MeasurePointApplied: true,
 				},
 			},
 		},
@@ -462,22 +454,17 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					AppVersion: "test-mixed",
-					Public:     []byte("public-mixed"),
-					Private:    []byte("private-mixed"),
+					Public:        []byte("public-mixed"),
+					Private:       []byte("private-mixed"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
-					PolicyRef: make([]byte, 32),
-					EventlogInfo: &EventlogInfo{
-						EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
-						CalculationTime: "2024-06-15T12:00:00Z",
-						TotalEvents:     200,
-						ProcessedEvents: 80,
-					},
+					PolicyRef:           make([]byte, 32),
+					MeasurePointApplied: true,
 				},
 			},
 		},
@@ -486,35 +473,28 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					AppVersion: "test-single-e",
-					Public:     []byte("pub"),
-					Private:    []byte("priv"),
+					Public:        []byte("pub"),
+					Private:       []byte("priv"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
-					EventlogInfo: &EventlogInfo{
-						EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
-						CalculationTime: "2024-03-01T00:00:00Z",
-						TotalEvents:     50,
-						ProcessedEvents: 20,
-					},
+					MeasurePointApplied: true,
 				},
 			},
 		},
 		{
-			name: "Blob with key paths",
+			name: "Blob with a register PCR and a policy reference",
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					AppVersion: "test-keypaths",
-					Public:     []byte("pub-kp"),
-					Private:    []byte("priv-kp"),
+					Public:        []byte("pub-kp"),
+					Private:       []byte("priv-kp"),
+					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
 						{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
-					PolicyRef:      make([]byte, 32),
-					PublicKeyPath:  "/var/lib/tpm2-kira/keys/seal.pub",
-					PrivateKeyPath: "/var/lib/tpm2-kira/keys/seal.key",
+					PolicyRef: make([]byte, 32),
 				},
 			},
 		},
@@ -534,10 +514,6 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			// Compare
 			if unmarshaled.Version != CurrentBlobVersion {
 				t.Errorf("Version should be %d, got %d", CurrentBlobVersion, unmarshaled.Version)
-			}
-
-			if unmarshaled.Payload.AppVersion != tt.blob.Payload.AppVersion {
-				t.Errorf("AppVersion mismatch: expected %s, got %s", tt.blob.Payload.AppVersion, unmarshaled.Payload.AppVersion)
 			}
 
 			if !bytes.Equal(unmarshaled.Payload.Public, tt.blob.Payload.Public) {
@@ -580,35 +556,8 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 				t.Errorf("HasEventlogPCRs mismatch: expected %v, got %v", expectedHasEventlog, unmarshaled.HasEventlogPCRs())
 			}
 
-			if tt.blob.Payload.EventlogInfo != nil {
-				if unmarshaled.Payload.EventlogInfo == nil {
-					t.Errorf("EventlogInfo should not be nil")
-				} else {
-					if unmarshaled.Payload.EventlogInfo.EventlogPath != tt.blob.Payload.EventlogInfo.EventlogPath {
-						t.Errorf("EventlogPath mismatch")
-					}
-					if unmarshaled.Payload.EventlogInfo.CalculationTime != tt.blob.Payload.EventlogInfo.CalculationTime {
-						t.Errorf("CalculationTime mismatch")
-					}
-					if unmarshaled.Payload.EventlogInfo.TotalEvents != tt.blob.Payload.EventlogInfo.TotalEvents {
-						t.Errorf("TotalEvents mismatch")
-					}
-					if unmarshaled.Payload.EventlogInfo.ProcessedEvents != tt.blob.Payload.EventlogInfo.ProcessedEvents {
-						t.Errorf("ProcessedEvents mismatch")
-					}
-				}
-			} else {
-				if unmarshaled.Payload.EventlogInfo != nil {
-					t.Errorf("EventlogInfo should be nil")
-				}
-			}
-
-			// Check key paths
-			if unmarshaled.Payload.PublicKeyPath != tt.blob.Payload.PublicKeyPath {
-				t.Errorf("PublicKeyPath mismatch: expected %q, got %q", tt.blob.Payload.PublicKeyPath, unmarshaled.Payload.PublicKeyPath)
-			}
-			if unmarshaled.Payload.PrivateKeyPath != tt.blob.Payload.PrivateKeyPath {
-				t.Errorf("PrivateKeyPath mismatch: expected %q, got %q", tt.blob.Payload.PrivateKeyPath, unmarshaled.Payload.PrivateKeyPath)
+			if unmarshaled.Payload.MeasurePointApplied != tt.blob.Payload.MeasurePointApplied {
+				t.Errorf("MeasurePointApplied mismatch: expected %v, got %v", tt.blob.Payload.MeasurePointApplied, unmarshaled.Payload.MeasurePointApplied)
 			}
 
 			// Check BlobSignature is populated
@@ -723,14 +672,9 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 	}
 
 	// Helper to build a minimal payload with controlled field lengths
-	makePayload := func(appVersionLen, publicLen, privateLen, numPCRDigests uint32) []byte {
+	makePayload := func(publicLen, privateLen, numPCRDigests uint32) []byte {
 		buf := make([]byte, 0, 256)
 		b4 := make([]byte, 4)
-
-		// appVersionLen
-		binary.LittleEndian.PutUint32(b4, appVersionLen)
-		buf = append(buf, b4...)
-		buf = append(buf, make([]byte, appVersionLen)...)
 
 		// publicLen
 		binary.LittleEndian.PutUint32(b4, publicLen)
@@ -755,18 +699,9 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 		expectErr string
 	}{
 		{
-			name: "oversized app version length",
-			blobMaker: func() []byte {
-				payload := make([]byte, 4)
-				binary.LittleEndian.PutUint32(payload[0:4], MaxAppVersionLen+1) // too large
-				return makeSignedBlob(payload)
-			},
-			expectErr: "exceeds maximum",
-		},
-		{
 			name: "oversized public blob length",
 			blobMaker: func() []byte {
-				payload := makePayload(0, MaxPublicLen+1, 0, 0)
+				payload := makePayload(MaxPublicLen+1, 0, 0)
 				return makeSignedBlob(payload)
 			},
 			expectErr: "exceeds maximum",
@@ -774,7 +709,7 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 		{
 			name: "oversized private blob length",
 			blobMaker: func() []byte {
-				payload := makePayload(0, 0, MaxPrivateLen+1, 0)
+				payload := makePayload(0, MaxPrivateLen+1, 0)
 				return makeSignedBlob(payload)
 			},
 			expectErr: "exceeds maximum",
@@ -782,7 +717,7 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 		{
 			name: "oversized PCR digest count",
 			blobMaker: func() []byte {
-				payload := makePayload(0, 0, 0, MaxPCRDigests+1)
+				payload := makePayload(0, 0, MaxPCRDigests+1)
 				return makeSignedBlob(payload)
 			},
 			expectErr: "exceeds maximum",
@@ -803,9 +738,9 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 				sb := &SealedBlob{
 					Version: CurrentBlobVersion,
 					Payload: SealedBlobPayload{
-						AppVersion: "test",
-						Public:     []byte{1, 2, 3},
-						Private:    []byte{4, 5, 6},
+						Public:        []byte{1, 2, 3},
+						Private:       []byte{4, 5, 6},
+						TOTPAlgorithm: tpm2.TPMAlgSHA1,
 						PCRDigests: []PCRDigestPair{
 							{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						},
@@ -917,11 +852,10 @@ func TestBlobVersionErrorNotDetected(t *testing.T) {
 // TestPeekBlobVersion tests raw blob inspection without full unmarshal
 func TestPeekBlobVersion(t *testing.T) {
 	tests := []struct {
-		name               string
-		data               []byte
-		expectedVersion    uint32
-		expectedAppVersion string
-		expectedSize       int
+		name            string
+		data            []byte
+		expectedVersion uint32
+		expectedSize    int
 	}{
 		{
 			name:            "Too short for version",
@@ -936,35 +870,19 @@ func TestPeekBlobVersion(t *testing.T) {
 				binary.LittleEndian.PutUint32(d[0:4], 2)
 				return d
 			}(),
-			expectedVersion:    2,
-			expectedAppVersion: "",
-			expectedSize:       20,
+			expectedVersion: 2,
+			expectedSize:    20,
 		},
 		{
-			name: "Current version blob (appVersionLen at offset 8)",
+			name: "Current version blob",
 			data: func() []byte {
 				d := make([]byte, 30)
 				binary.LittleEndian.PutUint32(d[0:4], CurrentBlobVersion)
 				binary.LittleEndian.PutUint32(d[4:8], 20) // payloadLen (doesn't matter for peek)
-				binary.LittleEndian.PutUint32(d[8:12], 5) // appVersionLen = 5
-				copy(d[12:], "3.0.0")
 				return d
 			}(),
-			expectedVersion:    CurrentBlobVersion,
-			expectedAppVersion: "3.0.0",
-			expectedSize:       30,
-		},
-		{
-			name: "Version present but app version truncated",
-			data: func() []byte {
-				d := make([]byte, 8)
-				d[0] = 0x02
-				d[4] = 0xFF // app version length way too long
-				return d
-			}(),
-			expectedVersion:    2,
-			expectedAppVersion: "", // can't read app version
-			expectedSize:       8,
+			expectedVersion: CurrentBlobVersion,
+			expectedSize:    30,
 		},
 		{
 			name:            "Exactly 4 bytes",
@@ -982,9 +900,6 @@ func TestPeekBlobVersion(t *testing.T) {
 			}
 			if peek.Version != tt.expectedVersion {
 				t.Errorf("Version: expected %d, got %d", tt.expectedVersion, peek.Version)
-			}
-			if peek.AppVersion != tt.expectedAppVersion {
-				t.Errorf("AppVersion: expected %q, got %q", tt.expectedAppVersion, peek.AppVersion)
 			}
 		})
 	}
@@ -1396,9 +1311,8 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 	blob := &SealedBlob{
 		Version: 6,
 		Payload: SealedBlobPayload{
-			AppVersion: "test-1.0.0",
-			Public:     []byte{0x01, 0x02, 0x03},
-			Private:    []byte{0x04, 0x05, 0x06},
+			Public:  []byte{0x01, 0x02, 0x03},
+			Private: []byte{0x04, 0x05, 0x06},
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA, 0xBB}}},
 				{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xCC, 0xDD}}},
@@ -1418,7 +1332,6 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 	// Check for expected fields
 	expectedFields := []string{
 		`"version"`,
-		`"app_version"`,
 		`"hash_algorithm"`,
 		`"public_hex"`,
 		`"private_hex"`,
@@ -1483,24 +1396,21 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 	}
 }
 
-// TestSealedBlobMarshalJSONWithEventlogInfo tests JSON serialization with eventlog info
-func TestSealedBlobMarshalJSONWithEventlogInfo(t *testing.T) {
+// TestSealedBlobMarshalJSONWithMeasurePoint: the extends the blob only
+// flags are spelt out, derived from its eventlog PCRs.
+func TestSealedBlobMarshalJSONWithMeasurePoint(t *testing.T) {
 	blob := &SealedBlob{
 		Version: 6,
 		Payload: SealedBlobPayload{
-			AppVersion: "test-1.0.0",
-			Public:     []byte{0x01},
-			Private:    []byte{0x02},
+			Public:        []byte{0x01},
+			Private:       []byte{0x02},
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA}}},
+				{Index: 11, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xBB}}},
 			},
-			PolicyRef: make([]byte, 32),
-			EventlogInfo: &EventlogInfo{
-				EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
-				CalculationTime: "2024-01-01T00:00:00Z",
-				TotalEvents:     100,
-				ProcessedEvents: 50,
-			},
+			PolicyRef:           make([]byte, 32),
+			MeasurePointApplied: true,
 		},
 	}
 
@@ -1509,12 +1419,9 @@ func TestSealedBlobMarshalJSONWithEventlogInfo(t *testing.T) {
 		t.Fatalf("MarshalJSON failed: %v", err)
 	}
 
-	// Check eventlog_info is present
-	if !bytes.Contains(jsonData, []byte(`"eventlog_info"`)) {
-		t.Errorf("Expected JSON to contain eventlog_info")
-	}
-	if !bytes.Contains(jsonData, []byte(`"eventlog_path"`)) {
-		t.Errorf("Expected JSON to contain eventlog_path")
+	want := `"measure_point_extends":"` + EnterInitrdWord + `:11"`
+	if !bytes.Contains(jsonData, []byte(want)) {
+		t.Errorf("JSON lacks %s: %s", want, jsonData)
 	}
 }
 
@@ -1571,7 +1478,6 @@ func TestGetHashAlgo(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					AppVersion: "test",
 					PCRDigests: []PCRDigestPair{
 						{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -1585,7 +1491,6 @@ func TestGetHashAlgo(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					AppVersion: "test",
 					PCRDigests: []PCRDigestPair{
 						{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 20)}},
 						{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 20)}},
@@ -1599,7 +1504,6 @@ func TestGetHashAlgo(t *testing.T) {
 			blob: &SealedBlob{
 				Version: 6,
 				Payload: SealedBlobPayload{
-					AppVersion: "test",
 					PCRDigests: []PCRDigestPair{},
 				},
 			},
@@ -1609,9 +1513,7 @@ func TestGetHashAlgo(t *testing.T) {
 			name: "No PCR digests defaults to SHA256",
 			blob: &SealedBlob{
 				Version: 6,
-				Payload: SealedBlobPayload{
-					AppVersion: "test",
-				},
+				Payload: SealedBlobPayload{},
 			},
 			expected: PCRHashAlgoSHA256,
 		},
@@ -1668,22 +1570,17 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 	original := &SealedBlob{
 		Version: 6,
 		Payload: SealedBlobPayload{
-			AppVersion: "v1.2.3",
-			Public:     make([]byte, 100), // Typical public key size
-			Private:    make([]byte, 150), // Typical private key size
+			Public:        make([]byte, 100), // Typical public key size
+			Private:       make([]byte, 150), // Typical private key size
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
-			PolicyRef: make([]byte, 32),
-			EventlogInfo: &EventlogInfo{
-				EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
-				CalculationTime: "2024-06-15T10:30:00Z",
-				TotalEvents:     150,
-				ProcessedEvents: 75,
-			},
+			PolicyRef:           make([]byte, 32),
+			MeasurePointApplied: true,
 		},
 	}
 
@@ -1715,9 +1612,6 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 	if restored.Version != CurrentBlobVersion {
 		t.Errorf("Version should be %d, got %d", CurrentBlobVersion, restored.Version)
 	}
-	if restored.Payload.AppVersion != original.Payload.AppVersion {
-		t.Error("AppVersion mismatch")
-	}
 	if !bytes.Equal(restored.Payload.Public, original.Payload.Public) {
 		t.Error("Public data mismatch")
 	}
@@ -1738,15 +1632,8 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 	if restored.HasEventlogPCRs() != original.HasEventlogPCRs() {
 		t.Error("HasEventlogPCRs mismatch")
 	}
-	// Verify eventlog info
-	if restored.Payload.EventlogInfo == nil {
-		t.Fatal("EventlogInfo should not be nil")
-	}
-	if restored.Payload.EventlogInfo.EventlogPath != original.Payload.EventlogInfo.EventlogPath {
-		t.Error("EventlogPath mismatch")
-	}
-	if restored.Payload.EventlogInfo.TotalEvents != original.Payload.EventlogInfo.TotalEvents {
-		t.Error("TotalEvents mismatch")
+	if !restored.Payload.MeasurePointApplied {
+		t.Error("the measure-point flag was lost")
 	}
 
 	// Verify signature
@@ -1765,9 +1652,9 @@ func TestSealedBlobRoundTripNoEventlog(t *testing.T) {
 	original := &SealedBlob{
 		Version: 6,
 		Payload: SealedBlobPayload{
-			AppVersion: "v1.0.0",
-			Public:     []byte("pub-data"),
-			Private:    []byte("priv-data"),
+			Public:        []byte("pub-data"),
+			Private:       []byte("priv-data"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -1786,8 +1673,8 @@ func TestSealedBlobRoundTripNoEventlog(t *testing.T) {
 	if restored.HasEventlogPCRs() {
 		t.Error("Should not have eventlog PCRs")
 	}
-	if restored.Payload.EventlogInfo != nil {
-		t.Error("EventlogInfo should be nil for all-register blob")
+	if restored.Payload.MeasurePointApplied {
+		t.Error("an all-register blob has no measure-point extends")
 	}
 	for i, pair := range restored.Payload.PCRDigests {
 		if pair.Source != PCRSourceRegister {
@@ -1948,8 +1835,8 @@ func TestValidateNVRAMIndex(t *testing.T) {
 }
 
 func TestCurrentBlobVersion(t *testing.T) {
-	if CurrentBlobVersion != 9 {
-		t.Errorf("CurrentBlobVersion should be 9, got %d", CurrentBlobVersion)
+	if CurrentBlobVersion != 14 {
+		t.Errorf("CurrentBlobVersion should be 14, got %d", CurrentBlobVersion)
 	}
 }
 
@@ -1993,45 +1880,6 @@ func TestGetPCRDescription(t *testing.T) {
 			d := GetPCRDescription(tt.index)
 			if d == "" {
 				t.Errorf("Expected non-empty description for PCR %d", tt.index)
-			}
-		})
-	}
-}
-
-// TestIsTOTPSecret tests TOTP secret detection
-func TestIsTOTPSecret(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected bool
-	}{
-		{
-			name:     "Valid Base32",
-			input:    "JBSWY3DPEHPK3PXP",
-			expected: true,
-		},
-		{
-			name:     "Valid long Base32",
-			input:    "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
-			expected: true,
-		},
-		{
-			name:     "Short string",
-			input:    "AB",
-			expected: false,
-		},
-		{
-			name:     "Empty",
-			input:    "",
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isTOTPSecret(tt.input)
-			if result != tt.expected {
-				t.Errorf("isTOTPSecret(%q) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -2600,9 +2448,9 @@ func TestSignBlobPayload(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			AppVersion: "test-sign",
-			Public:     []byte("public-data"),
-			Private:    []byte("private-data"),
+			Public:        []byte("public-data"),
+			Private:       []byte("private-data"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -2649,9 +2497,9 @@ func TestVerifyBlobSignature(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			AppVersion: "test-verify",
-			Public:     []byte("public-data"),
-			Private:    []byte("private-data"),
+			Public:        []byte("public-data"),
+			Private:       []byte("private-data"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
@@ -2714,9 +2562,9 @@ func TestVerifyBlobSignatureRSA(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			AppVersion: "test-rsa",
-			Public:     []byte("rsa-public-data"),
-			Private:    []byte("rsa-private-data"),
+			Public:        []byte("rsa-public-data"),
+			Private:       []byte("rsa-private-data"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
@@ -2753,9 +2601,9 @@ func TestUnsignedBlobRejected(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			AppVersion: "test-unsigned",
-			Public:     []byte("pub"),
-			Private:    []byte("priv"),
+			Public:        []byte("pub"),
+			Private:       []byte("priv"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
@@ -2783,9 +2631,9 @@ func TestEmptySignatureRejected(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			AppVersion: "test-empty-sig",
-			Public:     []byte("pub"),
-			Private:    []byte("priv"),
+			Public:        []byte("pub"),
+			Private:       []byte("priv"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
@@ -2828,10 +2676,8 @@ func TestSignBlobPayloadTooShort(t *testing.T) {
 
 func TestVerifyBlobSignatureEmptySignature(t *testing.T) {
 	blob := &SealedBlob{
-		Version: CurrentBlobVersion,
-		Payload: SealedBlobPayload{
-			AppVersion: "test",
-		},
+		Version:       CurrentBlobVersion,
+		Payload:       SealedBlobPayload{},
 		BlobSignature: []byte{}, // empty
 	}
 
@@ -2853,10 +2699,8 @@ func TestVerifyBlobSignatureUnsupportedKeyType(t *testing.T) {
 	type weirdKey struct{}
 
 	blob := &SealedBlob{
-		Version: CurrentBlobVersion,
-		Payload: SealedBlobPayload{
-			AppVersion: "test",
-		},
+		Version:       CurrentBlobVersion,
+		Payload:       SealedBlobPayload{},
 		BlobSignature: []byte{0x01, 0x02, 0x03},
 	}
 
@@ -2886,9 +2730,9 @@ func TestSignBlobPayloadUnsupportedKeyType(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			AppVersion: "test-multi-key",
-			Public:     []byte("pub"),
-			Private:    []byte("priv"),
+			Public:        []byte("pub"),
+			Private:       []byte("priv"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
@@ -2935,9 +2779,9 @@ func TestSignedBlobVersionInSignedRegion(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			AppVersion: "test-version-signed",
-			Public:     []byte("pub"),
-			Private:    []byte("priv"),
+			Public:        []byte("pub"),
+			Private:       []byte("priv"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
@@ -2965,23 +2809,16 @@ func TestSignedBlobVersionInSignedRegion(t *testing.T) {
 
 func TestMarshalPayloadUnmarshalPayloadRoundTrip(t *testing.T) {
 	original := &SealedBlobPayload{
-		AppVersion: "payload-test-v1",
-		Public:     []byte("test-public-key-blob"),
-		Private:    []byte("test-private-key-blob"),
+		Public:        []byte("test-public-key-blob"),
+		Private:       []byte("test-private-key-blob"),
+		TOTPAlgorithm: tpm2.TPMAlgSHA1,
 		PCRDigests: []PCRDigestPair{
 			{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 		},
-		PolicyRef: make([]byte, 32),
-		EventlogInfo: &EventlogInfo{
-			EventlogPath:    "/sys/kernel/security/tpm0/binary_bios_measurements",
-			CalculationTime: "2024-01-01T00:00:00Z",
-			TotalEvents:     100,
-			ProcessedEvents: 50,
-		},
-		PublicKeyPath:  "/var/lib/tpm2-kira/keys/seal.pub",
-		PrivateKeyPath: "/var/lib/tpm2-kira/keys/seal.key",
+		PolicyRef:           make([]byte, 32),
+		MeasurePointApplied: true,
 	}
 
 	data, err := original.MarshalPayload()
@@ -2994,9 +2831,6 @@ func TestMarshalPayloadUnmarshalPayloadRoundTrip(t *testing.T) {
 		t.Fatalf("UnmarshalPayload failed: %v", err)
 	}
 
-	if restored.AppVersion != original.AppVersion {
-		t.Errorf("AppVersion mismatch: %q vs %q", restored.AppVersion, original.AppVersion)
-	}
 	if !bytes.Equal(restored.Public, original.Public) {
 		t.Error("Public mismatch")
 	}
@@ -3020,17 +2854,8 @@ func TestMarshalPayloadUnmarshalPayloadRoundTrip(t *testing.T) {
 	if !bytes.Equal(restored.PolicyRef, original.PolicyRef) {
 		t.Error("PolicyRef mismatch")
 	}
-	if restored.EventlogInfo == nil {
-		t.Fatal("EventlogInfo is nil")
-	}
-	if restored.EventlogInfo.EventlogPath != original.EventlogInfo.EventlogPath {
-		t.Error("EventlogPath mismatch")
-	}
-	if restored.PublicKeyPath != original.PublicKeyPath {
-		t.Errorf("PublicKeyPath: %q vs %q", restored.PublicKeyPath, original.PublicKeyPath)
-	}
-	if restored.PrivateKeyPath != original.PrivateKeyPath {
-		t.Errorf("PrivateKeyPath: %q vs %q", restored.PrivateKeyPath, original.PrivateKeyPath)
+	if !restored.MeasurePointApplied {
+		t.Error("the measure-point flag was lost")
 	}
 }
 
@@ -3041,9 +2866,9 @@ func TestSignBlobPayloadSignedRegionCoverage(t *testing.T) {
 	blob := &SealedBlob{
 		Version: CurrentBlobVersion,
 		Payload: SealedBlobPayload{
-			AppVersion: "region-test",
-			Public:     []byte("pub"),
-			Private:    []byte("priv"),
+			Public:        []byte("pub"),
+			Private:       []byte("priv"),
+			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
 				{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
@@ -3101,4 +2926,14 @@ type testError struct {
 
 func (e *testError) Error() string {
 	return e.msg
+}
+
+// generateHOTP computes an HOTP code in software. tpm2-kira computes codes in
+// the TPM; this is the reference the tests compare against.
+func generateHOTP(key []byte, counter int64, newHash func() hash.Hash) string {
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, uint64(counter))
+	mac := hmac.New(newHash, key)
+	mac.Write(buf)
+	return hotpTruncate(mac.Sum(nil))
 }

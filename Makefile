@@ -1,4 +1,4 @@
-.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio deb test test-unit test-integration test-all fuzz fmt vet pkgbuild help
+.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio deb test test-unit test-integration test-all fuzz fmt vet packages pkgbuild help
 
 # Binary name
 BINARY_NAME=tpm2-kira
@@ -91,13 +91,21 @@ install-mkinitcpio:
 	sudo cp initramfs/mkinitcpio/post/sd-tpm2-kira /etc/initcpio/post/
 	sudo chmod +x /etc/initcpio/post/sd-tpm2-kira
 	sudo mkdir -p /usr/lib/systemd/system
-	sudo install -m644 initramfs/systemd/tpm2-kira.service initramfs/systemd/tpm2-kira-cap.service /usr/lib/systemd/system/
+	sudo install -m644 initramfs/systemd/tpm2-kira.service initramfs/systemd/tpm2-kira-cap.service initramfs/systemd/tpm2-kira-unlock.socket /usr/lib/systemd/system/
+	sudo install -m644 initramfs/systemd/tpm2-kira-attest.service /usr/lib/systemd/system/
+	@if [ ! -e /etc/tpm2-kira/control.conf ]; then \
+		sudo install -Dm644 initramfs/common/control.conf /etc/tpm2-kira/control.conf; \
+	fi
 	@echo "Mkinitcpio hooks installed successfully!"
 	@echo ""
 	@echo "Next steps:"
-	@echo "1. Edit /etc/mkinitcpio.conf and add the hook BEFORE sd-encrypt:"
+	@echo "1. Edit /etc/mkinitcpio.conf and add the hook next to sd-encrypt:"
 	@echo ""
 	@echo "   HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)"
+	@echo ""
+	@echo "   On the kernel command line, make tpm2-kira's socket the key file of the"
+	@echo "   root volume (see README \"Configure the disk unlock\"):"
+	@echo "     rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock"
 	@echo ""
 	@echo "2. Set up and seal (if not already done; see README \"Choosing PCRs\"):"
 	@echo "   tpm2-kira setup"
@@ -110,8 +118,9 @@ install-mkinitcpio:
 uninstall-mkinitcpio:
 	@echo "Uninstalling mkinitcpio hooks..."
 	sudo rm -f /etc/initcpio/install/sd-tpm2-kira
+	sudo rm -f /usr/lib/systemd/system/tpm2-kira-attest.service
 	sudo rm -f /etc/initcpio/post/sd-tpm2-kira
-	sudo rm -f /usr/lib/systemd/system/tpm2-kira.service /usr/lib/systemd/system/tpm2-kira-cap.service
+	sudo rm -f /usr/lib/systemd/system/tpm2-kira.service /usr/lib/systemd/system/tpm2-kira-cap.service /usr/lib/systemd/system/tpm2-kira-unlock.socket
 	@echo "Mkinitcpio hooks uninstalled!"
 	@echo "Note: You should rebuild your initramfs after removing hooks:"
 	@echo "      sudo mkinitcpio -P"
@@ -119,7 +128,7 @@ uninstall-mkinitcpio:
 ## deb: Build the Debian package (version derived from git describe)
 deb:
 	@command -v dpkg-buildpackage >/dev/null 2>&1 || { \
-		echo "Error: dpkg-buildpackage not found. Install dpkg-dev, debhelper and golang-go."; \
+		echo "Error: dpkg-buildpackage not found. Install dpkg-dev and debhelper (and Go from go.dev)."; \
 		exit 1; \
 	}
 	@DEB_VERSION=$$(packaging/deb-version.sh); \
@@ -137,7 +146,7 @@ test: test-unit
 ## test-unit: Run unit tests only
 test-unit:
 	@echo "Running unit tests..."
-	$(GOTEST) -v -tags=unit ./cmd/...
+	$(GOTEST) -v -tags=unit ./cmd/... ./attest/... ./transport/... ./mobile/...
 
 ## fuzz: Fuzz the parsers of untrusted input (FUZZTIME per target, default 30s)
 FUZZTIME ?= 30s
@@ -160,7 +169,7 @@ test-integration:
 test-all:
 	@echo "Running all tests..."
 	@echo "Unit tests:"
-	$(GOTEST) -v -tags=unit ./cmd/...
+	$(GOTEST) -v -tags=unit ./cmd/... ./attest/... ./transport/... ./mobile/...
 	@echo ""
 	@echo "Integration tests:"
 	@echo "Note: Requires swtpm (software TPM) to be installed"
@@ -182,7 +191,11 @@ deps:
 	$(GOMOD) download
 	$(GOMOD) tidy
 
-## pkgbuild: Build Arch Linux package
+## packages: Build the Arch and Debian packages and the Marify APKs of HEAD (packaging/build-packages.sh)
+packages:
+	@packaging/build-packages.sh
+
+## pkgbuild: Build Arch Linux package of the release tag
 pkgbuild:
 	@echo "Building Arch Linux package..."
 	@if ! command -v makepkg >/dev/null 2>&1; then \

@@ -29,10 +29,208 @@ _report_measure_point() {
     if (( ${#active[@]} > 0 )); then
         printf 'on\n' > "$MEASURE_POINT_STATE"
         plain "tpm2-kira: measure-point units active: ${active[*]}"
-        plain "tpm2-kira:   sealing against post-extend PCR values (os-separator on PCRs 0-7,9,12-14; enter-initrd on PCR 11)"
+        plain "tpm2-kira:   the display runs after enter-initrd (PCR 11) and before the os-separator,"
+        plain "tpm2-kira:   which then locks the TOTP secret until the next boot"
     else
         printf 'off\n' > "$MEASURE_POINT_STATE"
         plain "tpm2-kira: no systemd measure-point units in this initramfs; sealing against end-of-firmware values"
+    fi
+}
+
+CONF=${TPM2_KIRA_CONTROL_CONF:-/etc/tpm2-kira/control.conf}
+
+# The configuration file is the running system's alone: it says which
+# adapter's driver goes into the image and when (TPM2_KIRA_ATTEST_ADAPTER,
+# _BLUETOOTH), and holds the YubiKey's PIN. Nothing of it goes into the
+# image, and this hook does not read it either - 'attest initramfs-deps'
+# reads the two settings. A file that does not load is said here, never a
+# reason to stop the build: the image is built with the defaults (a kernel
+# update must not end with a half-built image over a settings line).
+_check_config() {
+    [[ -r $CONF ]] || return 0
+    if ! tpm2-kira attest config-check "$CONF" >/dev/null 2>&1; then
+        warning "tpm2-kira: $CONF is not valid: $(tpm2-kira attest config-check "$CONF" 2>&1 | tail -1)"
+    fi
+    return 0
+}
+
+# Bluetooth for remote attestation (PLAN-BLE.md §3.1), whenever a phone is
+# enrolled. Adds exactly what the configured adapter needs on this machine:
+# its driver modules (with their dependencies) and the firmware files the
+# kernel loaded for it, as reported by 'tpm2-kira attest initramfs-deps'.
+# Nothing is added without an enrolled phone, and nothing when the adapter
+# cannot be found: the image then shows the code and serves the disk's key,
+# and no phone is asked.
+_add_bluetooth() {
+    local adapter deps rc log kind value nfw=0 policy
+    local -a modules=()
+
+    # The firmware the adapter loads is named in the kernel log of a boot
+    # that loaded it - not every boot does (an Intel controller keeps its
+    # firmware over a warm reboot and then names none). So the Bluetooth
+    # lines of every boot the journal keeps go in; the ring buffer may also
+    # have rotated on a long uptime. initramfs-deps also reads the two
+    # settings of control.conf: which adapter, and the policy (auto: only
+    # with an enrolled phone; always: packed into every image).
+    log=$(mktemp)
+    journalctl -k -o cat --no-pager 2> /dev/null | grep -E 'Bluetooth: hci[0-9]+:' > "$log" || true
+    deps=$(tpm2-kira attest initramfs-deps --kernel-log "$log")
+    rc=$?
+    rm -f "$log"
+    policy=$(sed -n 's/^policy //p' <<< "$deps")
+    adapter=$(sed -n 's/^adapter hci//p' <<< "$deps")
+
+    local enrolled
+    enrolled=$(tpm2-kira attest status --json 2>/dev/null)
+    if [[ -z $enrolled || $enrolled == '[]' ]] && [[ $policy != always ]]; then
+        plain "tpm2-kira: no phone is enrolled; Bluetooth not added"
+        return 0
+    fi
+
+    # The gate checks the enrolment record before it advertises: signed by
+    # this machine's signing key, and current by the TPM's record counter.
+    # For the first it needs the key's public half in the image (public, not
+    # a secret). 'attest signer' prints it after checking the records here,
+    # on the unlocked system: one written by somebody else, or an older one
+    # put back, is refused, and then the gate is not added at all. The image
+    # only changes when the signing key does, not when phones come and go.
+    # Packed ahead of any enrolment (always), the key comes from setup's
+    # seal.pub: there is no record to check yet.
+    local signer
+    if [[ -n $enrolled && $enrolled != '[]' ]]; then
+        signer=$(tpm2-kira attest signer)
+        if (( $? != 0 )) || ! grep -q 'BEGIN PUBLIC KEY' <<< "$signer"; then
+            warning "tpm2-kira: the attestation record was not accepted (see above); Bluetooth not added"
+            return 0
+        fi
+    elif [[ -r /etc/tpm2-kira/keys/seal.pub ]] && grep -q 'BEGIN PUBLIC KEY' /etc/tpm2-kira/keys/seal.pub; then
+        signer=$(cat /etc/tpm2-kira/keys/seal.pub)
+    else
+        warning "tpm2-kira: TPM2_KIRA_ATTEST_BLUETOOTH=always, but no signing public key at /etc/tpm2-kira/keys/seal.pub (tpm2-kira setup); Bluetooth not added"
+        return 0
+    fi
+
+    while read -r kind value; do
+        [[ $kind == warning ]] && warning "tpm2-kira: $value"
+    done <<< "$deps"
+
+    if (( rc != 0 )); then
+        warning "tpm2-kira: a phone is enrolled but its Bluetooth adapter was not found; Bluetooth not added to the image"
+        return 0
+    fi
+    # Every other command exits 0 by design, so an installed binary that
+    # predates initramfs-deps "succeeds" with no output. Only an answer that
+    # names the adapter counts.
+    if ! grep -q '^adapter ' <<< "$deps"; then
+        warning "tpm2-kira: the installed tpm2-kira cannot resolve Bluetooth dependencies (too old?); Bluetooth not added"
+        return 0
+    fi
+
+    # add_module copies every firmware file a module declares: for btusb's
+    # dependencies that is ~60 files for chips this machine does not have.
+    # When the kernel log named the files this adapter really loaded, add
+    # only those; otherwise fall back to the declarations.
+    local saved_add_firmware=''
+    if grep -q '^firmware ' <<< "$deps"; then
+        saved_add_firmware=$(declare -f add_firmware)
+        add_firmware() { return 0; }
+    fi
+    while read -r kind value; do
+        if [[ $kind == module ]]; then
+            add_module "$value"
+            modules+=("$value")
+        fi
+    done <<< "$deps"
+    if [[ -n $saved_add_firmware ]]; then
+        eval "$saved_add_firmware"
+    fi
+    while read -r kind value; do
+        if [[ $kind == firmware ]]; then
+            add_firmware "$value" && nfw=$((nfw + 1))
+        fi
+    done <<< "$deps"
+
+    # The adapter's USB bus lets no new device in by itself
+    # (usbcore.authorized_default=0, as with USBGuard): without a rule the
+    # driver never binds in the image. The rule lets exactly this adapter
+    # in, at its port, and exists in the image alone - the running
+    # system's own policy is not touched.
+    if grep -q '^udev ' <<< "$deps"; then
+        mkdir -p "$BUILDROOT/etc/udev/rules.d"
+        sed -n 's/^udev //p' <<< "$deps" > "$BUILDROOT/etc/udev/rules.d/70-tpm2-kira-bluetooth.rules"
+        plain "tpm2-kira: hci$adapter's USB bus lets no new device in: the image lets the adapter in"
+    fi
+
+    mkdir -p "$BUILDROOT/etc/modules-load.d"
+    printf '%s\n' "${modules[@]}" > "$BUILDROOT/etc/modules-load.d/tpm2-kira-bluetooth.conf"
+    # The signing key's public half, which the gate checks the enrolment
+    # record with: in the image alone, never on the running system.
+    mkdir -p "$BUILDROOT/etc/tpm2-kira"
+    printf '%s\n' "$signer" > "$BUILDROOT/etc/tpm2-kira/attest-signer.pem"
+    add_systemd_unit tpm2-kira-attest.service
+    add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-attest.service \
+        /usr/lib/systemd/system/tpm2-kira-attest.service
+    plain "tpm2-kira: Bluetooth attestation via hci$adapter: ${#modules[@]} modules, $nfw firmware files"
+}
+
+UNLOCK_SOCKET=/run/tpm2-kira/unlock.sock
+
+# The disk's unlock goes through tpm2-kira when the volume's key file is
+# tpm2-kira's socket: systemd-cryptsetup reads the key from there
+# (crypttab(5), "AF_UNIX KEY FILES") and tpm2-kira answers once the code
+# screen is confirmed. The key file is named on the kernel command line,
+# rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock, honoured in the initrd
+# only (systemd-cryptsetup-generator(8)); or, for a volume kept in
+# /etc/crypttab with x-initrd.attach, in that line's key field. This hook
+# adds the socket unit and reports what it finds configured: the command
+# line of the running system and the files the UKI is built from, and the
+# crypttab. Nothing is written.
+_add_unlock() {
+    local crypttab=${1:-/etc/crypttab}
+    shift
+    local -a cmdlines=("$@")
+    (( ${#cmdlines[@]} )) || cmdlines=(/proc/cmdline /etc/kernel/cmdline /etc/cmdline.d/*.conf)
+    local f word uuid name key opts routed=0
+
+    add_systemd_unit tpm2-kira-unlock.socket
+    add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-unlock.socket \
+        /usr/lib/systemd/system/tpm2-kira-unlock.socket
+    # How the disk's key is made is not configured: the key provider reads
+    # each volume's LUKS2 header at boot (the tpm2-kira tokens).
+
+    # Is any volume routed through the socket at all (the command line, or
+    # an x-initrd.attach line of crypttab)? Said only when none is.
+    for f in "${cmdlines[@]}"; do
+        [[ -r $f ]] || continue
+        for word in $(< "$f"); do
+            case $word in
+                rd.luks.key=*=$UNLOCK_SOCKET|luks.key=*=$UNLOCK_SOCKET|rd.luks.key=$UNLOCK_SOCKET|luks.key=$UNLOCK_SOCKET)
+                    routed=1
+                    ;;
+            esac
+        done
+    done
+    while read -r name _ key opts; do
+        [[ $key == "$UNLOCK_SOCKET" ]] && routed=1
+    done < <(awk '!/^\s*($|#)/ && $4 ~ /x-initrd\.attach/' "$crypttab" 2>/dev/null)
+
+    # The devices with a keyslot of tpm2-kira's, one line each: where the
+    # key comes from, or what is wrong and what the line should read
+    # ('tpm2-kira luks route'; it edits nothing).
+    local -a routeargs=()
+    for f in "${cmdlines[@]}"; do
+        [[ $f == /proc/cmdline ]] && continue
+        routeargs+=(--cmdline "$f")
+    done
+    local advice line
+    if advice=$(tpm2-kira luks route "${routeargs[@]}" --crypttab "$crypttab" 2>&1); then
+        while IFS= read -r line; do [[ -n $line ]] && plain "tpm2-kira: $line"; done <<< "$advice"
+    else
+        warning "tpm2-kira: the disk's key is not routed through tpm2-kira everywhere - the files below are not edited; change them as shown and rebuild:"
+        while IFS= read -r line; do plain "    $line"; done <<< "$advice"
+    fi
+    if (( ! routed )); then
+        warning "tpm2-kira: no volume is unlocked through tpm2-kira yet; add rd.luks.key=<UUID>=$UNLOCK_SOCKET next to rd.luks.name= on the kernel command line (README, \"Configure the disk unlock\")"
     fi
 }
 
@@ -42,6 +240,10 @@ build() {
 
     # Add systemd service dependency
     add_systemd_unit tpm2-kira.service
+    # The display wants the TPM but runs without one (the key provider does
+    # not need it); wait for the device for a bounded time only.
+    mkdir -p "$BUILDROOT/usr/lib/systemd/system/dev-tpmrm0.device.d"
+    printf '[Unit]\nJobTimeoutSec=5\n' > "$BUILDROOT/usr/lib/systemd/system/dev-tpmrm0.device.d/tpm2-kira.conf"
 
     # add_systemd_unit only carries over .wants symlinks that already exist on
     # the host. Enabling the unit here keeps the host's own boot untouched.
@@ -56,7 +258,13 @@ build() {
 
     _report_measure_point
 
-    if [[ ! -d /var/lib/tpm2-kira/keys ]]; then
+    _check_config || return 1
+
+    _add_unlock
+
+    _add_bluetooth || return 1
+
+    if [[ ! -d /etc/tpm2-kira/keys ]]; then
         warning "tpm2-kira: not configured yet; run 'tpm2-kira setup', then 'tpm2-kira seal', and rebuild"
     fi
 }
@@ -69,9 +277,19 @@ for continuous TOTP display.
 
 The hook will:
 - Install the tpm2-kira binary into the image
-- Add tpm2-kira.service and tpm2-kira-cap.service and enable them inside
-  the image only
+- Add tpm2-kira.service, tpm2-kira-cap.service and tpm2-kira-unlock.socket
+  and enable them inside the image only
 - Start tpm2-kira in continuous run mode during boot
+- Report which volumes are unlocked through tpm2-kira: those whose key
+  file is /run/tpm2-kira/unlock.sock (crypttab(5), AF_UNIX key files),
+  named on the kernel command line as rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock
+  or in the key field of an x-initrd.attach line of /etc/crypttab.
+  systemd-cryptsetup reads the key from tpm2-kira, which asks at its
+  prompt once the code screen is confirmed. Nothing is written.
+- If a phone is enrolled: add the Bluetooth adapter's driver modules and
+  firmware (the adapter from /etc/tpm2-kira/control.conf, hci0 by default),
+  and tpm2-kira-attest.service, which serves attestation requests from the
+  phone beside the TOTP display without holding the boot
 
 Setup is NOT run from here: it generates a new TOTP secret and writes to TPM
 NVRAM, which must not happen while merely building an image. Run
@@ -83,17 +301,21 @@ Post-generation hook (sd-tpm2-kira in /usr/lib/initcpio/post/):
   measured into PCRs at boot — every rebuild may change the expected
   values, so the sealed TOTP secret must be resealed to match.
 
-Created systemd service:
-  tpm2-kira.service     - Runs tpm2-kira in continuous TOTP mode
-  tpm2-kira-cap.service - Runs 'tpm2-kira cap' when switching to the real
-                          root: no codes until the next boot
+Created systemd units:
+  tpm2-kira.service       - Runs tpm2-kira in continuous TOTP mode, and
+                            answers systemd-cryptsetup's key requests
+  tpm2-kira-unlock.socket - The key socket systemd-cryptsetup connects to
+  tpm2-kira-cap.service   - Runs 'tpm2-kira cap' when switching to the real
+                            root: no codes until the next boot
 
 Prerequisites:
-- systemd-based initramfs (mkinitcpio with systemd support)
+- systemd-based initramfs (mkinitcpio with systemd support, sd-encrypt)
 - tpm2-kira binary must be installed
 - TPM 2.0 hardware or firmware TPM must be available
 
-Usage in /etc/mkinitcpio.conf:
-  HOOKS=(... sd-tpm2-kira ...)
+Usage in /etc/mkinitcpio.conf (either order):
+  HOOKS=(... sd-tpm2-kira sd-encrypt ...)
+and on the kernel command line, next to rd.luks.name=<UUID>=cryptroot:
+  rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock
 HELPEOF
 }

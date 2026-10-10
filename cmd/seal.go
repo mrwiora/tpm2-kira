@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"crypto"
+	"crypto/ecdsa"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base32"
 	"errors"
 	"fmt"
@@ -84,7 +86,10 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	}
 	fmt.Println()
 
-	WarnAboutPCRSelection(specs)
+	// The fallback slot is sealed to 0 and 7 alone by design (default_pcrs.go).
+	if !(pcrsStr == FallbackPCRSelection && nvramIndex == ResolveNVRAMIndex(FallbackSlot)) {
+		WarnAboutPCRSelection(specs)
+	}
 	WarnAboutHashAlgo(hashAlgo)
 
 	if err := ValidateBlobIndex(nvramIndex); err != nil {
@@ -103,36 +108,130 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 		return fmt.Errorf("cannot seal: %w", err)
 	}
 
-	alg, err := ChooseTOTPAlgorithm(tpmDev)
-	if err != nil {
-		return fmt.Errorf("cannot seal: %w", err)
-	}
-	if alg != tpm2.TPMAlgSHA1 {
-		fmt.Println("NOTE: this TPM has no SHA-1, so the TOTP key uses HMAC-SHA256 instead of the")
-		fmt.Println("  usual HMAC-SHA1. The QR code says so (algorithm=SHA256), but some")
-		fmt.Println("  authenticator apps ignore that and then show codes that never match.")
-		fmt.Println("  Check that your app's first code matches 'tpm2-kira reveal' before you rely on it.")
-		fmt.Println()
+	// Sealing a slot again replaces its TOTP key, not its phones: their
+	// enrolment lives in the same blob and is carried over - if this
+	// signing key wrote it. Somebody else's entries are not signed anew.
+	// The boot key in it is bound to the slot's policy by the policy
+	// reference, which is kept. A slot with phones gets no TOTP key: the
+	// phones check its boots (SealedBlobPayload).
+	var kept *Attestation
+	var policyRef []byte
+	if oldRaw, old, err := readSlot(tpmDev, nvramIndex); err == nil && old.Payload.Attestation != nil {
+		if VerifyBlobSignature(oldRaw, old, signer.Public()) == nil {
+			kept, policyRef = old.Payload.Attestation, old.Payload.PolicyRef
+			fmt.Printf("Phone enrolment: kept (%d phone(s) enrolled for this slot)\n\n", len(kept.Phone.Verifiers))
+		} else {
+			fmt.Println("WARNING: this slot carries a phone enrolment that another signing key wrote.")
+			fmt.Println("  It is not carried over. Enrol the phone again: tpm2-kira attest enrol")
+			fmt.Println()
+		}
 	}
 
-	key := make([]byte, totpKeySize(alg))
-	if _, err := rand.Read(key); err != nil {
-		return fmt.Errorf("failed to generate the TOTP key: %w", err)
-	}
-	defer clear(key)
-
-	blob, err := newKeyObject(tpmDev, key, alg, pubKey)
+	blob, err := newSlot(tpmDev, pubKey, policyRef)
 	if err != nil {
 		return err
 	}
-	blob.Payload.PublicKeyPath = pubKeyPath
-	blob.Payload.PrivateKeyPath = privKeyPath
+	blob.Payload.Attestation = kept
+	var key []byte
+	var alg tpm2.TPMAlgID
+	if !blob.PhoneAttested() {
+		if key, alg, err = newTOTPSecret(tpmDev); err != nil {
+			return fmt.Errorf("cannot seal: %w", err)
+		}
+		defer clear(key)
+		if alg != tpm2.TPMAlgSHA1 {
+			fmt.Println("NOTE: this TPM has no SHA-1, so the TOTP key uses HMAC-SHA256 instead of the")
+			fmt.Println("  usual HMAC-SHA1. The QR code says so (algorithm=SHA256), but some")
+			fmt.Println("  authenticator apps ignore that and then show codes that never match.")
+			fmt.Println("  Check that your app's first code matches 'tpm2-kira reveal' before you rely on it.")
+			fmt.Println()
+		}
+		if err := addTOTPKey(tpmDev, blob, key, alg); err != nil {
+			return err
+		}
+	}
 
 	if err := approveAndWrite(tpmDev, nvramIndex, blob, specs, hashAlgo, verifyUKI, signer, debug); err != nil {
 		return err
 	}
+	if key == nil {
+		fmt.Println()
+		fmt.Printf("Slot %d is attested by its phone(s): it has no TOTP code while a phone is enrolled.\n", SlotNumber(nvramIndex))
+		fmt.Println("The new PCR values are approved for the phone's check at boot.")
+		return nil
+	}
+	showTOTPSecret(key, alg, nvramIndex, PCRSpecsToString(specs))
+	return nil
+}
 
-	// Display TOTP information
+// newSlot returns a blob with the slot's policy parameters, not yet
+// approved for any PCR state and without a TOTP key (addTOTPKey).
+//
+// Every key of the slot is created under PolicyAuthorize by pubKey,
+// qualified by policyRef: whatever pubKey approves for this policyRef can
+// use them. A fresh policyRef is made unless the slot's existing one is
+// passed in, which keeps the slot's other keys (the boot key, the release
+// key) under the same approvals.
+func newSlot(tpmDev transport.TPM, pubKey crypto.PublicKey, policyRef []byte) (*SealedBlob, error) {
+	// Loading the key checks that this TPM can verify its signatures.
+	loadRsp, err := LoadExternalPublicKey(tpmDev, pubKey)
+	if err != nil {
+		return nil, fmt.Errorf("signing key incompatible with this TPM: %w", err)
+	}
+	FlushHandle(tpmDev, loadRsp.ObjectHandle)
+
+	signingPublic, _, err := PublicKeyToTPM2BPublic(pubKey)
+	if err != nil {
+		return nil, err
+	}
+	if len(policyRef) == 0 {
+		if policyRef, err = newPolicyRef(); err != nil {
+			return nil, err
+		}
+	}
+	return &SealedBlob{
+		Version: CurrentBlobVersion,
+		Payload: SealedBlobPayload{PolicyRef: policyRef, SigningPublic: signingPublic.Bytes()},
+	}, nil
+}
+
+// addTOTPKey creates the TOTP key object for key under the slot's policy
+// and puts it into blob.
+func addTOTPKey(tpmDev transport.TPM, blob *SealedBlob, key []byte, alg tpm2.TPMAlgID) error {
+	policy, err := blob.SlotPolicy()
+	if err != nil {
+		return err
+	}
+	primary, err := CreatePrimaryKey(tpmDev)
+	if err != nil {
+		return err
+	}
+	defer FlushHandle(tpmDev, primary.ObjectHandle)
+	obj, err := CreateTOTPKey(tpmDev, primary, key, alg, policy)
+	if err != nil {
+		return err
+	}
+	blob.Payload.Public, blob.Payload.Private, blob.Payload.TOTPAlgorithm = obj.Public, obj.Private, alg
+	return nil
+}
+
+// newTOTPSecret makes a TOTP key for this TPM: its HMAC algorithm (SHA-1,
+// or SHA-256 on a TPM without it) and random bytes of the matching size.
+func newTOTPSecret(tpmDev transport.TPM) ([]byte, tpm2.TPMAlgID, error) {
+	alg, err := ChooseTOTPAlgorithm(tpmDev)
+	if err != nil {
+		return nil, 0, err
+	}
+	key := make([]byte, totpKeySize(alg))
+	if _, err := rand.Read(key); err != nil {
+		return nil, 0, fmt.Errorf("failed to generate the TOTP key: %w", err)
+	}
+	return key, alg, nil
+}
+
+// showTOTPSecret prints a new TOTP key once, with its QR code for the
+// authenticator.
+func showTOTPSecret(key []byte, alg tpm2.TPMAlgID, nvramIndex uint32, pcrs string) {
 	totpSecret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(key)
 	fmt.Println()
 	fmt.Println("=== TOTP Secret Generated ===")
@@ -142,65 +241,65 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	fmt.Println()
 	fmt.Println("Scan QR Code with authenticator app:")
 	fmt.Println()
-	displayTOTPQRCode(totpSecret, nvramIndex, PCRSpecsToString(specs), alg)
-
+	displayTOTPQRCode(totpSecret, nvramIndex, pcrs, alg)
 	fmt.Println()
 	fmt.Println("To generate TOTP codes:")
 	fmt.Printf("   tpm2-kira reveal --nvram 0x%08X\n", nvramIndex)
-
-	return nil
-}
-
-// newKeyObject creates the TOTP key object for key and returns a blob with
-// the object and its policy parameters, not yet approved for any PCR state.
-//
-// The object's policy is PolicyAuthorize by pubKey, qualified by a fresh
-// policyRef: whatever pubKey approves for this policyRef can use the key.
-func newKeyObject(tpmDev transport.TPM, key []byte, alg tpm2.TPMAlgID, pubKey crypto.PublicKey) (*SealedBlob, error) {
-	// Loading the key checks that this TPM can verify its signatures, and
-	// yields the Name the TPM will see in PolicyAuthorize.
-	loadRsp, err := LoadExternalPublicKey(tpmDev, pubKey)
-	if err != nil {
-		return nil, fmt.Errorf("signing key incompatible with this TPM: %w", err)
-	}
-	keyName := loadRsp.Name.Buffer
-	FlushHandle(tpmDev, loadRsp.ObjectHandle)
-
-	signingPublic, _, err := PublicKeyToTPM2BPublic(pubKey)
-	if err != nil {
-		return nil, err
-	}
-	policyRef, err := newPolicyRef()
-	if err != nil {
-		return nil, err
-	}
-
-	primary, err := CreatePrimaryKey(tpmDev)
-	if err != nil {
-		return nil, err
-	}
-	defer FlushHandle(tpmDev, primary.ObjectHandle)
-	obj, err := CreateTOTPKey(tpmDev, primary, key, alg, policyAuthorizeDigest(keyName, policyRef))
-	if err != nil {
-		return nil, err
-	}
-
-	return &SealedBlob{
-		Version: CurrentBlobVersion,
-		Payload: SealedBlobPayload{
-			Public:        obj.Public,
-			Private:       obj.Private,
-			TOTPAlgorithm: alg,
-			PolicyRef:     policyRef,
-			SigningPublic: signingPublic.Bytes(),
-		},
-	}, nil
 }
 
 // ErrGenerationRaised marks a failure after the slot's generation was raised:
 // the previous approval is revoked, so no code is shown until a reseal
 // completes. Such a failure is never reported as a harmless skip.
 var ErrGenerationRaised = errors.New("the slot's generation was raised")
+
+// checkBlobFits fails with a BlobTooLargeError when blob, with the given
+// PCR values and generation and signatures of the largest size pub makes,
+// would not fit this TPM's NV index.
+func checkBlobFits(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, pcrDigests []PCRDigestPair, measurePoint bool, gen uint64, pub crypto.PublicKey) error {
+	limit := nvIndexLimit(tpmDev)
+	if limit == 0 {
+		return nil
+	}
+	approvalMax, blobSigMax, err := signatureSizes(pub)
+	if err != nil {
+		return err
+	}
+	trial := *blob
+	trial.Version = CurrentBlobVersion
+	trial.Payload.PCRDigests = pcrDigests
+	trial.Payload.MeasurePointApplied = measurePoint
+	trial.Payload.Generation = gen
+	trial.Payload.ApprovalSignature = make([]byte, approvalMax)
+	unsigned, err := trial.Marshal()
+	if err != nil {
+		return err
+	}
+	if size := len(unsigned) + 2 + blobSigMax; size > limit {
+		return &BlobTooLargeError{Index: nvramIndex, Size: size, Limit: limit}
+	}
+	return nil
+}
+
+// signatureSizes returns the largest approval (a TPMT_SIGNATURE) and blob
+// signature (PKCS #1 v1.5, or ASN.1 DER for ECDSA) the key pub makes.
+func signatureSizes(pub crypto.PublicKey) (approval, blob int, err error) {
+	switch k := pub.(type) {
+	case *rsa.PublicKey:
+		n := k.Size()
+		return 2 + 2 + 2 + n, n, nil
+	case *ecdsa.PublicKey:
+		c := (k.Curve.Params().BitSize + 7) / 8
+		// r and s, each an INTEGER of up to c+1 bytes, in a SEQUENCE.
+		body := 2 * (2 + c + 1)
+		header := 2
+		if body > 127 {
+			header = 3
+		}
+		return 2 + 2 + 2*(2+c), header + body, nil
+	default:
+		return 0, 0, fmt.Errorf("unsupported signing key type %T", pub)
+	}
+}
 
 // approveAndWrite approves the PCR values for specs and writes the blob.
 //
@@ -219,9 +318,23 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, 
 		return err
 	}
 
-	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, MeasurePointModeSetting, debug)
+	// The display checks the key's policy before the OS separator runs, so
+	// PCRs the separator touches are read from the event log even when
+	// given as register source (the registers already carry the separator
+	// by the time anything can seal); the blob records the source used.
+	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, MeasurePointModeSetting, MeasurePointBeforeSeparator, debug)
 	if err != nil {
 		return err
+	}
+	specs = readResult.Specs
+	if readResult.AfterSeparator != "" {
+		fmt.Println()
+		fmt.Println("WARNING: the event log cannot be used for this TPM, so PCRs 0-7, 9, 12-14 are sealed to")
+		fmt.Println("         their register values, which already carry systemd's os-separator. The key's policy")
+		fmt.Println("         then holds only after the separator: codes are computed live while the initrd")
+		fmt.Println("         runs instead of before the separator, and the display says so. Reason:")
+		fmt.Printf("         %s\n", readResult.AfterSeparator)
+		fmt.Println()
 	}
 	// Reseal runs right after an initramfs rebuild, where the image on disk is
 	// expected to differ from the booted one, so only seal can check this.
@@ -236,7 +349,24 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, 
 		return fmt.Errorf("failed to compute the PCR policy: %w", err)
 	}
 
+	pcrDigests := make([]PCRDigestPair, len(specs))
+	for i, spec := range specs {
+		pcrDigests[i] = PCRDigestPair{
+			Index:   spec.Index,
+			Source:  spec.Source,
+			Command: spec.Command,
+			Digest:  tpm2.TPM2BDigest{Buffer: readResult.Values[spec.Index]},
+		}
+	}
+	measurePoint := readResult.EventlogInfo != nil && readResult.EventlogInfo.MeasurePointExtends != ""
 	gen := blob.Payload.Generation + 1
+
+	// Raising the generation revokes the slot's approval, so a blob this
+	// TPM cannot store must be found before that, not by the write.
+	if err := checkBlobFits(tpmDev, nvramIndex, blob, pcrDigests, measurePoint, gen, signer.Public()); err != nil {
+		return err
+	}
+
 	genName, err := writeGeneration(tpmDev, GenerationIndex(nvramIndex), gen, signer.Public(), signer)
 	if err != nil {
 		return err
@@ -249,19 +379,9 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, 
 		return raised(err)
 	}
 
-	pcrDigests := make([]PCRDigestPair, len(specs))
-	for i, spec := range specs {
-		pcrDigests[i] = PCRDigestPair{
-			Index:   spec.Index,
-			Source:  spec.Source,
-			Command: spec.Command,
-			Digest:  tpm2.TPM2BDigest{Buffer: readResult.Values[spec.Index]},
-		}
-	}
 	blob.Version = CurrentBlobVersion
-	blob.Payload.AppVersion = AppVersion
 	blob.Payload.PCRDigests = pcrDigests
-	blob.Payload.EventlogInfo = readResult.EventlogInfo
+	blob.Payload.MeasurePointApplied = measurePoint
 	blob.Payload.Generation = gen
 	blob.Payload.ApprovalSignature = approval
 

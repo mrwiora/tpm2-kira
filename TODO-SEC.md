@@ -42,7 +42,7 @@ finish it, tick it off here.
 | 3 | Med | reseal | Blob signature is verified with a key the blob itself names | S |
 | 4 | Med | keys | Key files checked for mode only, not owner / symlink / parent | S |
 | 5 | Med | seal | TOTP secret passed to `qrencode` on the command line | S |
-| 6 | Med | yubikey | PIN read from world-readable `/etc/mkinitcpio.conf` | M |
+| 6 | Med | yubikey | PIN read from a world-readable file | M |
 | 7 | Med | tpm | Unseal/Create parameters cross the TPM bus in cleartext | M |
 | 8 | Med | tpm | Raw `/dev/tpm0` default plus global handle flush | S |
 | 9 | Low | info | `info` prints and opens unverified blob strings | S |
@@ -345,43 +345,25 @@ asserts the QR output for a fixed URI is non-empty.
 
 ---
 
-## 6. YubiKey PIN in `/etc/mkinitcpio.conf`
+## 6. YubiKey PIN in a world-readable file
 
-- [x] done — owner chose to keep `/etc/mkinitcpio.conf` as the only file; a PIN there is now refused (not warned about) unless the file is root-owned and not group/world-readable, checked on the read descriptor. Steps 1 and 3 (dedicated file, removing the parser) are therefore not done.
+- [x] done — the PIN lives in `/etc/tpm2-kira/control.conf`
+  (`TPM2_KIRA_PIN`), the one file `control` writes: the Signing key step
+  checks the PIN on the token, writes the line and makes the file 0600.
+  `readPIN` (`cmd/yubikey.go`) reads the environment, then the file, then
+  the terminal; a file that is not root's or is group/world-readable is
+  refused on the opened descriptor, not warned about (`configPIN`,
+  `cmd/control_config.go`). The initramfs hooks copy the file without the
+  PIN line. The old place, a line in `/etc/mkinitcpio.conf`, is gone with
+  its parser.
 
-**Where**
-- `cmd/mkinitcpio.go:40` `readMkinitcpioPIN`, `:213` `pinFromMkinitcpio`
-  (a loose mode sets `Loose` and only prints a warning)
-- `cmd/yubikey.go:701` `readPIN` — order: env, mkinitcpio.conf, terminal
-- `cmd/setup.go` `printPINInstructions` — tells users to add the line
-
-**Problem.** `/etc/mkinitcpio.conf` is mode 0644 by default, is routinely
-pasted into forum posts and bug reports, and is committed by etckeeper. The
-code uses a PIN from a world-readable file after a warning. A PIN at rest
-also means root plus a plugged-in token can sign — which is the reseal
-authorisation the token is supposed to guard.
-
-**Resolution.**
-1. Read the PIN from a dedicated file, proposed `/etc/tpm2-kira/pin`
-   (contents: the PIN, one line). Refuse it unless it is a regular file,
-   owner root, mode 0600 or 0400, checked with `fstat` on the opened
-   descriptor (same pattern as item 4).
-2. Fail closed: a file with wrong ownership or mode is an error that names
-   the fix, not a warning followed by use. In the post hook this surfaces as
-   the existing SKIPPED block.
-3. Remove the mkinitcpio.conf parsing (`readMkinitcpioPIN`, `shellWords`,
-   `shellUnquote`, `warnIfNoUnattendedPIN` and their tests) and record the
-   removal in `HISTORY.md`. If the owner wants a transition period instead,
-   keep reading it but refuse a loose mode.
-4. Update `setup`'s instructions, the SKIPPED text in `cmd/reseal.go`
-   (`PrintResealSkipped`), the comments in
-   `initramfs/mkinitcpio/post/sd-tpm2-kira`, and the usage text in `main.go`.
-5. Document the trade-off plainly: an unattended PIN makes the token a
-   presence check only. Recommend touch policy `cached`/`always` for users
-   who can accept a manual reseal.
+**Trade-off** (`docs/PLAN-YUBIKEY.md` §4.4 and §6): an unattended PIN
+makes the token a presence check only; the touch policy decides whether a
+reseal needs a hand on the key.
 
 **Done when** `readPIN` never returns a PIN from a group/world-readable or
-non-root-owned file, with tests for each refusal.
+non-root-owned file, with tests for each refusal (`cmd/yubikey_test.go`
+`TestPINFromControlConf`).
 
 ---
 

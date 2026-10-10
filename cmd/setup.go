@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/matthias/tpm2-kira/internal/piv"
+	"github.com/mrwiora/tpm2-kira/internal/piv"
 	"golang.org/x/sys/unix"
 )
 
@@ -32,9 +32,6 @@ type SetupOptions struct {
 	Local bool
 	Debug bool
 }
-
-// mkinitcpioConfPath is where the PIN for unattended resealing goes on Arch.
-var mkinitcpioConfPath = "/etc/mkinitcpio.conf"
 
 // setupTerminal returns the terminal to ask on, or nil when stdin is not one.
 // Tests replace it.
@@ -164,35 +161,23 @@ func printPINInstructions(w io.Writer, t TokenInfo, s TokenSlot) {
 	}
 	fmt.Fprintln(w)
 
-	info := readMkinitcpioPIN(mkinitcpioConfPath)
-	switch {
-	case info.State == mkinitcpioNotUsed:
-		// No mkinitcpio: the terminal or the environment.
-		fmt.Fprintln(w, "Setup did not use the PIN; sealing does. tpm2-kira asks for it on the terminal,")
-		fmt.Fprintf(w, "or takes it from %s. To set it for this root shell without it landing\n", PINEnvVar)
-		fmt.Fprintln(w, "in the shell history:")
-		fmt.Fprintf(w, "    read -rs %s && export %s\n", PINEnvVar, PINEnvVar)
-		fmt.Fprintf(w, "    tpm2-kira seal --pcrs %s\n", RecommendedPCRs())
-		return
-	case info.State == mkinitcpioPINAvailable:
-		fmt.Fprintf(w, "%s already sets %s: sealing, resealing and the automatic\n", mkinitcpioConfPath, PINEnvVar)
-		fmt.Fprintln(w, "reseal after kernel and initramfs updates all take the PIN from there.")
-		if info.Loose {
+	path := controlConfigPath()
+	if stored, loose := pinStored(path); stored {
+		fmt.Fprintf(w, "%s stores the PIN: sealing, resealing and the automatic reseal\n", path)
+		fmt.Fprintln(w, "after kernel and initramfs updates all take it from there.")
+		if loose {
 			fmt.Fprintf(w, "The file can be read by other users, so tpm2-kira refuses to use the PIN until\n"+
-				"it is readable by root only:\n    chown root: %s && chmod 600 %s\n", mkinitcpioConfPath, mkinitcpioConfPath)
+				"it is readable by root only:\n    chown root: %s && chmod 600 %s\n", path, path)
 		}
 		return
 	}
-
-	fmt.Fprintln(w, "Setup did not use the PIN; sealing does. Put it in one place and every step")
-	fmt.Fprintf(w, "finds it — seal, reseal, and the mkinitcpio post hook that reseals after every\n")
-	fmt.Fprintf(w, "kernel or initramfs update. Add this line to %s:\n", mkinitcpioConfPath)
-	fmt.Fprintf(w, "    %s='<your PIN>'\n", PINEnvVar)
-	fmt.Fprintln(w, "The file is readable by every user by default and would then hold the PIN, so")
-	fmt.Fprintln(w, "make it readable by root only (it is not copied into the initramfs image):")
-	fmt.Fprintf(w, "    chmod 600 %s\n", mkinitcpioConfPath)
-	fmt.Fprintln(w, "Without it, seal and reseal ask for the PIN on the terminal, and the automatic")
-	fmt.Fprintln(w, "reseal reports SKIPPED: the next boot then shows a PCR mismatch until you run")
+	fmt.Fprintln(w, "Setup did not use the PIN; sealing does. Stored in one place, every step finds")
+	fmt.Fprintln(w, "it - seal, reseal, and the reseal the initramfs hooks run after every kernel")
+	fmt.Fprintln(w, "or initramfs update: 'tpm2-kira control' stores it (the signing key step),")
+	fmt.Fprintf(w, "as %s='<your PIN>' in %s, readable by root alone.\n", PINEnvVar, path)
+	fmt.Fprintln(w, "Without it, seal and reseal ask for the PIN on the terminal (or take it from")
+	fmt.Fprintf(w, "%s: read -rs %s && export %s), and the automatic reseal\n", PINEnvVar, PINEnvVar, PINEnvVar)
+	fmt.Fprintln(w, "reports SKIPPED: the next boot then shows a PCR mismatch until you run")
 	fmt.Fprintln(w, "'tpm2-kira reseal' with the YubiKey plugged in.")
 }
 
@@ -262,7 +247,7 @@ func reportTokens(w io.Writer, tokens []TokenInfo, probeErr error, debug bool) b
 	case len(suitable) == 0:
 		fmt.Fprintln(w, "found, but none is suitable for tpm2-kira:")
 		PrintTokenReport(w, tokens)
-		fmt.Fprintln(w, "  A suitable key is RSA-2048, ECC P-256 or ECC P-384 in a PIV slot. To create one in")
+		fmt.Fprintln(w, "  A suitable key is ECC P-256 (the smallest in the TPM), ECC P-384 or RSA-2048 in a PIV slot. To create one in")
 		fmt.Fprintln(w, "  slot 9a (this overwrites whatever is in that slot):")
 		fmt.Fprintln(w, "      ykman piv keys generate --algorithm ECCP256 --pin-policy ONCE --touch-policy NEVER 9a /tmp/seal.pub")
 		fmt.Fprintln(w, "      ykman piv certificates generate --subject \"CN=tpm2-kira\" 9a /tmp/seal.pub")

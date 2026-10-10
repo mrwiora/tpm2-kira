@@ -117,7 +117,7 @@ od -An -tu1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e0980
 ```
 kernel          6.12.107+deb13-amd64
 initramfs-tools 0.148.4          (no systemd in the initrd)
-golang-go       1.24.4
+golang-go       1.24.4           (too old for the build: Go from go.dev in /usr/local/go)
 boot            GRUB, EFI
 disk            vda3 crypto_LUKS -> vda3_crypt -> debian--vg {root,swap}
 crypttab        vda3_crypt UUID=b0c9ff53-… none luks,discard,x-initrd.attach

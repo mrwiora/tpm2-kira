@@ -17,13 +17,13 @@ import (
 
 func FuzzUnmarshalSealedBlob(f *testing.F) {
 	sb := &SealedBlob{Version: CurrentBlobVersion, Payload: SealedBlobPayload{
-		AppVersion: "x", Public: []byte{1, 2}, Private: []byte{3},
+		Public: []byte{1, 2}, Private: []byte{3},
+		TOTPAlgorithm: tpm2.TPMAlgSHA1,
 		PCRDigests: []PCRDigestPair{
 			{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			{Index: 11, Source: PCRSourceUKI, Command: "/boot/x.efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 		},
-		PolicyRef: make([]byte, 32), PublicKeyPath: "/a", PrivateKeyPath: "/b",
-		EventlogInfo: &EventlogInfo{EventlogPath: "/p", MeasurePointExtends: "os-separator:0"}}}
+		PolicyRef: make([]byte, 32), MeasurePointApplied: true}}
 	if b, err := sb.Marshal(); err == nil {
 		f.Add(append(b, 2, 0, 1, 2))
 	}

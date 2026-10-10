@@ -1,5 +1,12 @@
 # Packaging
 
+`make packages` (or [build-packages.sh](build-packages.sh)) builds everything
+from the committed state in one run: the Arch package with `makepkg`, the
+Debian package in a Debian 13 container ([deb/Dockerfile](deb/Dockerfile),
+built on first use with the current Go release), and the Marify APKs next to
+this checkout. `packaging/build-packages.sh deb` builds one; `--help` lists
+the options. The results are in `build/packages/`.
+
 | Target | Where |
 |--------|-------|
 | Arch Linux (AUR) | [aur/](aur/) |

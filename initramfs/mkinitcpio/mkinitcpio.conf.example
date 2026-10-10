@@ -7,12 +7,9 @@
 
 # TPM2-KIRA SIGNING KEY ON A YUBIKEY
 # With 'tpm2-kira setup' on a YubiKey, the reseal that runs after every image
-# build signs on the token. tpm2-kira reads the PIN from this line, for that
-# reseal and for a manual seal or reseal. The PIN is not copied into the image,
-# but this file is world-readable by default, and tpm2-kira refuses the PIN
-# until it is readable by root only:
-#     chmod 600 /etc/mkinitcpio.conf
-#TPM2_KIRA_PIN='123456'
+# build signs on the token. The PIN for it is not here: 'tpm2-kira control'
+# stores it in /etc/tpm2-kira/control.conf (TPM2_KIRA_PIN), readable by root
+# alone, and the install hook leaves that line out of the image.
 
 # MODULES
 # The following modules are loaded before any boot hooks are run.
@@ -35,8 +32,11 @@ FILES=()
 # in which HOOKS are added.
 
 # SYSTEMD INITRAMFS WITH TPM2-KIRA AND ENCRYPTION
-# sd-tpm2-kira requires a systemd-based initramfs and must be placed before
-# 'sd-encrypt' so the TOTP code is shown before the passphrase is asked for.
+# sd-tpm2-kira requires a systemd-based initramfs with sd-encrypt; the order
+# of the two does not matter. The passphrase is asked at tpm2-kira's prompt
+# for every volume whose key file is /run/tpm2-kira/unlock.sock, set on the
+# kernel command line as rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock (see
+# the README, "Configure the disk unlock").
 HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
 
 # OTHER COMMON CONFIGURATIONS
@@ -69,8 +69,8 @@ HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt fi
 # IMPORTANT NOTES FOR TPM2-KIRA INTEGRATION:
 #
 # 1. Hook Placement:
-#    - Place sd-tpm2-kira BEFORE the sd-encrypt hook
-#    - This provides TOTP authentication before disk decryption
+#    - Place sd-tpm2-kira next to sd-encrypt, in either order: the units
+#      decide that the TOTP code is shown before the disk is unlocked
 #    - Place after 'keyboard' to ensure input is available if needed
 #
 # 2. Use Case:
@@ -91,6 +91,9 @@ HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt fi
 #
 # 5. Compatibility:
 #    - sd-tpm2-kira requires a systemd-based initramfs ('systemd' in HOOKS)
+#      with sd-encrypt; tpm2-kira provides the key of the volumes whose
+#      key file is /run/tpm2-kira/unlock.sock (rd.luks.key= on the kernel
+#      command line)
 #
 # 6. After Configuration:
 #    - Rebuild initramfs: sudo mkinitcpio -P

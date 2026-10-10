@@ -40,17 +40,20 @@ func ReadSecureBootState() SecureBootState {
 	return SecureBootState{Enabled: enabled, SetupMode: setupMode, Known: true}
 }
 
+// AdvisoryWarnings switches the advisory warnings of seal and reseal (a
+// weak selection, SHA-1, Secure Boot off). 'control' turns them off for
+// the steps it runs: its overview says the same, judged line by line in
+// red, and need not say it twice. The commands run by hand keep them.
+var AdvisoryWarnings = true
+
 // WarnAboutHashAlgo reports a PCR bank that should not be used for new policies.
 func WarnAboutHashAlgo(hashAlgo PCRHashAlgo) {
-	if hashAlgo != PCRHashAlgoSHA1 {
+	if hashAlgo != PCRHashAlgoSHA1 || !AdvisoryWarnings {
 		return
 	}
-	fmt.Println("WARNING: sealing against the SHA-1 PCR bank.")
-	fmt.Println("  SHA-1 is broken against collision attacks and TPMs are not required to")
-	fmt.Println("  provide a SHA-1 bank at all, so this policy may become unsatisfiable on")
-	fmt.Println("  future hardware. Use it only where the firmware event log carries no")
-	fmt.Println("  SHA-256 digests, and prefer the register source instead where possible:")
-	fmt.Println("      tpm2-kira seal --pcrs \"0,7\"")
+	fmt.Println("NOTE: sealing against the SHA-1 PCR bank, as --sha1 asked: this TPM or its")
+	fmt.Println("  firmware log has no SHA-256 digests. SHA-1 is weak against collisions and")
+	fmt.Println("  a TPM need not have the bank at all. Everything else is as with SHA-256.")
 	fmt.Println()
 }
 
@@ -83,6 +86,9 @@ func bootChainCoverage(indices []int) (kernelInitrd, cmdline bool) {
 // WarnAboutPCRSelection reports selections that attest less than they appear
 // to. These are advisory: an unusual selection is still sealed.
 func WarnAboutPCRSelection(specs []PCRSpec) {
+	if !AdvisoryWarnings {
+		return
+	}
 	indices := PCRSpecIndices(specs)
 
 	if kernelInitrd, cmdline := bootChainCoverage(indices); !kernelInitrd || !cmdline {

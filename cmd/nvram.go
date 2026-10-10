@@ -39,6 +39,10 @@ func ValidateBlobIndex(index uint32) error {
 	if err := ValidateNVRAMIndex(index); err != nil {
 		return err
 	}
+	if g := GenerationIndex(index); g >= AttestCounterIndex(NVRAMSlotStart) && g <= AttestCounterIndex(NVRAMSlotEnd) {
+		return fmt.Errorf("NVRAM index 0x%08X cannot hold a blob: its generation index 0x%08X is the record counter of slot %d",
+			index, g, g-attestCounterStart)
+	}
 	if index >= GenerationIndex(AppNVRAMStart) {
 		return fmt.Errorf("NVRAM index 0x%08X is reserved for generation indices; blobs go at 0x%08X-0x%08X",
 			index, AppNVRAMStart, GenerationIndex(AppNVRAMStart)-1)
@@ -127,9 +131,23 @@ func ReadFromNVRAM(tpmDev transport.TPM, index uint32) ([]byte, error) {
 // by the conversion rather than rejected.
 const MaxNVRAMBlobSize = 65535
 
+// BlobTooLargeError is a blob that this TPM cannot store in one NV index.
+// It is found before the index is touched: the slot stays as it was.
+type BlobTooLargeError struct {
+	Index uint32
+	Size  int // the blob, signed
+	Limit int // TPM2_PT_NV_INDEX_MAX of this TPM
+}
+
+func (e *BlobTooLargeError) Error() string {
+	return fmt.Sprintf("the blob for NV index 0x%08X would be %d bytes, %d more than this TPM stores in one NV index (%d); nothing was written",
+		e.Index, e.Size, e.Size-e.Limit, e.Limit)
+}
+
 // NVRAMRecoveryDir holds a blob that could not be written back after the index
-// had already been undefined.  See stashUnwrittenBlob.
-const NVRAMRecoveryDir = "/var/lib/tpm2-kira/recovery"
+// had already been undefined.  See stashUnwrittenBlob. A variable so the
+// tests can point it elsewhere.
+var NVRAMRecoveryDir = "/etc/tpm2-kira/recovery"
 
 // WriteToNVRAM writes data to a TPM NVRAM index.
 //
@@ -154,6 +172,11 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 	}
 	if len(data) > MaxNVRAMBlobSize {
 		return fmt.Errorf("blob is %d bytes, which exceeds the %d-byte maximum for an NV index", len(data), MaxNVRAMBlobSize)
+	}
+	// The TPM's own limit decides, for the blob as it is: what fits
+	// depends on the signing key, the phones and the PCRs together.
+	if limit := nvIndexLimit(tpmDev); limit > 0 && len(data) > limit {
+		return &BlobTooLargeError{Index: index, Size: len(data), Limit: limit}
 	}
 
 	if pubKey == nil {
@@ -367,7 +390,7 @@ func stashUnwrittenBlobFile(index uint32, data []byte, cause error) error {
 		return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY and the blob could not be saved either (%v).\n  The sealed secret is lost; run 'tpm2-kira seal' and re-enrol your authenticator", cause, index, wrErr)
 	}
 
-	return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY. The blob that was about to be written has been saved to:\n      %s\n  Keep this file: it holds the sealed object and is the only remaining copy of the secret.\n  Fix the cause above, then write it back. If you discard it, the secret is gone and\n  you must run 'tpm2-kira seal' and re-enrol your authenticator", cause, index, path)
+	return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY. The blob that was about to be written has been saved to:\n      %s\n  Keep this file: it holds the sealed object and is the only remaining copy of the secret.\n  Fix the cause above, then put it back:\n      tpm2-kira nvram restore %s\n  If you discard it, the secret is gone and you must run 'tpm2-kira seal' and re-enrol\n  your authenticator", cause, index, path, path)
 }
 
 // NVRAMList lists all defined NVRAM indices in the TPM
@@ -428,6 +451,9 @@ func NVRAMList(tpmPath string, nvramIndex uint32, debug bool) error {
 		}
 
 		fmt.Printf("Index: 0x%08X\n", handle)
+		if role := kiraIndexRole(uint32(handle)); role != "" {
+			fmt.Printf("  tpm2-kira: %s\n", role)
+		}
 		fmt.Printf("  Size: %d bytes\n", nvPublic.DataSize)
 		fmt.Printf("  Name Algorithm: %v\n", nvPublic.NameAlg)
 
@@ -517,6 +543,17 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 
 	fmt.Printf("Successfully deleted NVRAM index 0x%08X\n", nvramIndex)
 
+	// A slot is deleted whole: its record counter goes with it. (Without its counter no blob of
+	// the slot is accepted by the gate again, and a new counter starts
+	// above every value this one had.)
+	if nvramIndex >= NVRAMSlotStart && nvramIndex <= NVRAMSlotEnd {
+		if counter := AttestCounterIndex(nvramIndex); NVRAMIndexExists(tpmDev, counter) {
+			if err := undefineIndex(tpmDev, counter); err != nil {
+				return fmt.Errorf("deleted the slot, but not its record counter 0x%08X: %w", counter, err)
+			}
+		}
+	}
+
 	// A slot's generation index goes with it.
 	if ValidateBlobIndex(nvramIndex) == nil {
 		genIndex := tpm2.TPMHandle(GenerationIndex(nvramIndex))
@@ -533,73 +570,174 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 	return nil
 }
 
-// NVRAMDeleteCommand is the top-level entry point for the nvram delete CLI
-// command.  When nvramIndex is 0 it scans every default slot and deletes
-// each populated one; otherwise it deletes only the requested index.
-//
-// Deleting every slot is irreversible and forces re-enrolling every
-// authenticator, so it needs confirmation: yes, or typing "yes" on a
-// terminal. Without either, the slots are listed and nothing is deleted.
+// kiraIndexRole says what tpm2-kira keeps at an NV index, or "" for an
+// index that is not one of its own.
+func kiraIndexRole(index uint32) string {
+	switch {
+	case index == BootSettingsIndex:
+		return "the boot settings (debug at boot)"
+	case index >= NVRAMSlotStart && index <= NVRAMSlotEnd:
+		return fmt.Sprintf("slot #%d: its TOTP key and, if set up, its attestation part", SlotNumber(index))
+	case index >= GenerationIndex(NVRAMSlotStart) && index <= GenerationIndex(NVRAMSlotEnd):
+		return fmt.Sprintf("generation index of slot #%d", SlotNumber(index-GenerationIndexOffset))
+	case index >= AttestCounterIndex(NVRAMSlotStart) && index <= AttestCounterIndex(NVRAMSlotEnd):
+		return fmt.Sprintf("record counter of slot #%d's attestation part", index-attestCounterStart)
+	}
+	return ""
+}
+
+// kiraLeftovers returns the indices that belong to no slot: the companion
+// indices (generation index, record counter) whose slot is gone, as an
+// interrupted command leaves them, and the boot settings.
+func kiraLeftovers(tpmDev transport.TPM, debug bool) []uint32 {
+	var out []uint32
+	if NVRAMIndexExists(tpmDev, BootSettingsIndex) {
+		out = append(out, BootSettingsIndex)
+	}
+	for idx := uint32(NVRAMSlotStart); idx <= NVRAMSlotEnd; idx++ {
+		if NVRAMIndexExists(tpmDev, idx) {
+			continue
+		}
+		for _, companion := range []uint32{GenerationIndex(idx), AttestCounterIndex(idx)} {
+			if NVRAMIndexExists(tpmDev, companion) {
+				out = append(out, companion)
+			}
+		}
+	}
+	return out
+}
+
+func undefineIndex(tpmDev transport.TPM, index uint32) error {
+	h := tpm2.TPMHandle(index)
+	pub, err := (tpm2.NVReadPublic{NVIndex: h}).Execute(tpmDev)
+	if err != nil {
+		return err
+	}
+	_, err = (tpm2.NVUndefineSpace{
+		AuthHandle: tpm2.TPMRHOwner,
+		NVIndex:    tpm2.NamedHandle{Handle: h, Name: pub.NVName},
+	}).Execute(tpmDev)
+	return err
+}
+
+// NVRAMDeleteCommand implements 'nvram delete'. A slot is one thing: its
+// blob holds the TOTP key and the phone enrolment, and its generation index
+// and record counter go with it. With an index that slot is deleted;
+// without one, every slot and whatever an interrupted command left behind.
 func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool) error {
 	if nvramIndex != 0 {
-		return NVRAMDelete(tpmPath, nvramIndex, debug)
+		if err := NVRAMDelete(tpmPath, nvramIndex, debug); err != nil {
+			return err
+		}
+		// What outlives the blob by design of this command - a LUKS keyslot
+		// bound to the slot, a recovery blob - makes the slot dirty; say so.
+		fmt.Print(slotKeyslotAdvice(tpmPath))
+		return nil
 	}
 
-	// Multi-slot mode – discover populated slots, then delete each one.
+	// Everything mode - discover what there is, then delete each.
 	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
 	slots := FindPopulatedSlots(tpmDev, debug)
+	enrolled := 0
+	for _, idx := range slots {
+		if _, err := loadAttestBlob(tpmDev, idx); err == nil {
+			enrolled++
+		}
+	}
+	leftovers := kiraLeftovers(tpmDev, debug)
 	tpmDev.Close()
 
-	if len(slots) == 0 {
-		return fmt.Errorf("no sealed secrets found in NVRAM slots 0x%08X – 0x%08X", NVRAMSlotStart, NVRAMSlotEnd)
+	total := len(slots) + len(leftovers)
+	if total == 0 {
+		return fmt.Errorf("nothing of tpm2-kira found in the TPM: no sealed secrets in NVRAM slots 0x%08X – 0x%08X and no leftover indices",
+			NVRAMSlotStart, NVRAMSlotEnd)
 	}
 
-	fmt.Printf("Found %d sealed slot(s) to delete:", len(slots))
-	for _, slotIdx := range slots {
-		fmt.Printf(" #%d", SlotNumber(slotIdx))
+	if len(slots) > 0 {
+		fmt.Printf("Found %d sealed slot(s) to delete:", len(slots))
+		for _, slotIdx := range slots {
+			fmt.Printf(" #%d", SlotNumber(slotIdx))
+		}
+		if enrolled > 0 {
+			fmt.Printf(" (%d with phones enrolled)", enrolled)
+		}
+		fmt.Println()
 	}
-	fmt.Println()
-	if err := confirmDeleteAll(len(slots), yes); err != nil {
+	if len(leftovers) > 0 {
+		fmt.Printf("Found %d leftover index(es) that belong to no slot:\n", len(leftovers))
+		for _, idx := range leftovers {
+			fmt.Printf("  0x%08X  %s\n", idx, kiraIndexRole(idx))
+		}
+	}
+	if err := confirmDeleteAll(len(slots), enrolled, len(leftovers), yes); err != nil {
 		return err
 	}
 	fmt.Println()
 
-	var failed []uint32
+	failed := 0
 	for _, slotIdx := range slots {
-		slotNum := SlotNumber(slotIdx)
-		fmt.Printf("Deleting slot #%d (0x%08X)... ", slotNum, slotIdx)
-
+		fmt.Printf("Deleting slot #%d (0x%08X)... ", SlotNumber(slotIdx), slotIdx)
 		if err := NVRAMDelete(tpmPath, slotIdx, debug); err != nil {
 			fmt.Printf("FAILED: %v\n", err)
-			failed = append(failed, slotIdx)
+			failed++
 		}
+	}
+	if len(leftovers) > 0 {
+		tpmDev, err := OpenTPM(tpmPath)
+		if err != nil {
+			return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+		}
+		for _, idx := range leftovers {
+			if !NVRAMIndexExists(tpmDev, idx) {
+				continue // went with its slot
+			}
+			fmt.Printf("Deleting leftover 0x%08X... ", idx)
+			if err := undefineIndex(tpmDev, idx); err != nil {
+				fmt.Printf("FAILED: %v\n", err)
+				failed++
+				continue
+			}
+			fmt.Println("done")
+		}
+		tpmDev.Close()
 	}
 
 	fmt.Println()
-	if len(failed) > 0 {
-		return fmt.Errorf("%d of %d slot(s) failed to delete", len(failed), len(slots))
+	if failed > 0 {
+		return fmt.Errorf("%d of %d item(s) failed to delete", failed, total)
 	}
-	fmt.Printf("All %d slot(s) deleted successfully\n", len(slots))
+	fmt.Printf("All %d item(s) deleted successfully\n", total)
+	if enrolled > 0 {
+		fmt.Println("The phones still list this machine; remove it there too.")
+		fmt.Println("The initramfs may still carry the Bluetooth gate: rebuild it (mkinitcpio -P / update-initramfs -u).")
+	}
+	fmt.Print(slotKeyslotAdvice(tpmPath))
 	return nil
 }
 
-// confirmDeleteAll asks before every slot is deleted.
-func confirmDeleteAll(count int, yes bool) error {
+func confirmDeleteAll(slots, enrolled, leftovers int, yes bool) error {
 	if yes {
 		return nil
 	}
+	total := slots + leftovers
 	tty := setupTerminal()
 	if tty == nil {
-		return fmt.Errorf("refusing to delete all %d slot(s) without confirmation; nothing was deleted.\n"+
-			"  Each deleted secret means re-enrolling its authenticator. To go ahead, run:\n"+
+		return fmt.Errorf("refusing to delete all %d item(s) without confirmation; nothing was deleted.\n"+
+			"  Each deleted slot means re-enrolling its authenticator and its phones.\n"+
+			"  To go ahead, run:\n"+
 			"      tpm2-kira nvram delete --yes\n"+
-			"  or delete one slot with --nvram <slot>", count)
+			"  or delete one slot with --nvram <slot>", total)
 	}
-	fmt.Printf("This deletes the sealed secret of every slot listed; each authenticator must then be re-enrolled.\n"+
-		"Type 'yes' to delete all %d slot(s): ", count)
+	if slots > 0 {
+		fmt.Println("This deletes the sealed secret of every slot listed; each authenticator must then be re-enrolled.")
+	}
+	if enrolled > 0 {
+		fmt.Println("The phones enrolled for those slots go with them; each must then be enrolled again.")
+	}
+	fmt.Printf("Type 'yes' to delete all %d item(s): ", total)
 	answer, _ := tty.ReadString('\n')
 	if strings.TrimSpace(answer) != "yes" {
 		return fmt.Errorf("not confirmed; nothing was deleted")
@@ -669,8 +807,11 @@ func NVRAMStatus(tpmPath string, nvramIndex uint32, debug bool) error {
 				fmt.Printf("Contains Sealed Data:\n")
 				fmt.Printf("  PCR Indices: %v\n", blob.GetPCRIndices())
 				fmt.Printf("  Number of PCRs: %d\n", len(blob.Payload.PCRDigests))
-				fmt.Printf("  Public Blob Size: %d bytes\n", len(blob.Payload.Public))
-				fmt.Printf("  Private Blob Size: %d bytes\n", len(blob.Payload.Private))
+				if blob.HasTOTPKey() {
+					fmt.Printf("  TOTP key: public %d bytes, private %d bytes\n", len(blob.Payload.Public), len(blob.Payload.Private))
+				} else {
+					fmt.Printf("  TOTP key: none (attested by its phones)\n")
+				}
 				break
 			}
 			fmt.Printf("Data Format: Unknown (not a sealed blob)\n")
@@ -678,9 +819,6 @@ func NVRAMStatus(tpmPath string, nvramIndex uint32, debug bool) error {
 				peek := PeekBlobVersion(data)
 				fmt.Printf("  Raw size: %d bytes\n", peek.DataSize)
 				fmt.Printf("  Version field: %d (supported: %d)\n", peek.Version, CurrentBlobVersion)
-				if peek.AppVersion != "" {
-					fmt.Printf("  App version: %s\n", quoteUntrusted(peek.AppVersion))
-				}
 				fmt.Printf("  Parse error: %v\n", unmarshalErr)
 				fmt.Printf("  First bytes: %x\n", data[:min(32, len(data))])
 			}

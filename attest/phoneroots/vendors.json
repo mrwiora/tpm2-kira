@@ -1,0 +1,18 @@
+{
+  "comment": "Attestation roots for the phone's anchor key (Android Key Attestation), checked by the machine at enrolment. Same rules as ekroots/README.md.",
+  "vendors": [
+    {
+      "name": "Google",
+      "description": "Android Key Attestation roots. The RSA root has been reissued several times with the same key; only the current certificate is pinned.",
+      "sources": [
+        "https://developer.android.com/privacy-and-security/security-key-attestation",
+        "https://android.googleapis.com/attestation/root"
+      ],
+      "verified": "2026-10-05: the two roots served by the attestation API are byte-identical to the documented ones",
+      "roots": [
+        {"file": "google/hardware-attestation-root.der", "subject": "serialNumber=f92009e853b6b045 (RSA-4096, valid to 2042)", "sha256": "cedb1cb6dc896ae5ec797348bce9286753c2b38ee71ce0fbe34a9a1248800dfc"},
+        {"file": "google/key-attestation-ca1.der", "subject": "Key Attestation CA1 (ECDSA P-384, valid to 2035)", "sha256": "6d9db4ce6c5c0b293166d08986e05774a8776ceb525d9e4329520de12ba4bcc0"}
+      ]
+    }
+  ]
+}

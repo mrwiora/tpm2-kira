@@ -1,8 +1,10 @@
 # Maintainer: Matthias R. Wiora <matthias@wiora.io>
 pkgname=tpm2-kira
-pkgver=0.0.0
-# pkgver may not contain '-', but a prerelease tag can. Keep them separate.
-_tag="v$pkgver"
+# The release tag, and its pacman form: pkgver may not contain '-', so a
+# prerelease tag's "-rc1" becomes "rc1" (pacman sorts 0.5.0rc1 before
+# 0.5.0, as a prerelease must). Set both for a release.
+_tag=v0.5.0-rc1
+pkgver=0.5.0rc1
 pkgrel=1
 pkgdesc="TPM2-based TOTP authenticator with PCR policies"
 arch=('x86_64')
@@ -10,7 +12,9 @@ url="https://github.com/mrwiora/tpm2-kira"
 license=('BSD-3-Clause')
 # Statically linked, no cgo: the same binary runs in the initramfs.
 depends=()
-makedepends=('go>=1.24')
+# go.mod's go line is the minimum; the release build sets GOTOOLCHAIN to
+# the current Go release, which go fetches when the installed one is older.
+makedepends=('go')
 optdepends=('mkinitcpio: for early boot integration'
             'cryptsetup: for disk encryption integration'
             'tpm2-tools: for debugging and integration testing'
@@ -51,6 +55,8 @@ check() {
     go test -tags=unit ./cmd/...
 }
 
+backup=(etc/tpm2-kira/control.conf)
+
 package() {
     cd "$_srcdir"
 
@@ -64,6 +70,16 @@ package() {
         "$pkgdir/usr/lib/systemd/system/tpm2-kira.service"
     install -Dm644 initramfs/systemd/tpm2-kira-cap.service \
         "$pkgdir/usr/lib/systemd/system/tpm2-kira-cap.service"
+    install -Dm644 initramfs/systemd/tpm2-kira-unlock.socket \
+        "$pkgdir/usr/lib/systemd/system/tpm2-kira-unlock.socket"
+
+    # The attestation by phone; added to the image by the install hook
+    # when a phone is enrolled.
+    install -Dm644 initramfs/systemd/tpm2-kira-attest.service \
+        "$pkgdir/usr/lib/systemd/system/tpm2-kira-attest.service"
+    # The one configuration file: the unlock mode, the radio.
+    install -Dm644 initramfs/common/control.conf \
+        "$pkgdir/etc/tpm2-kira/control.conf"
 
     install -Dm644 initramfs/mkinitcpio/install/sd-tpm2-kira \
         "$pkgdir/usr/lib/initcpio/install/sd-tpm2-kira"

@@ -6,6 +6,32 @@ on:
       - "*"
 
 jobs:
+  # The unit tests once, here; the package builds below then skip their own
+  # run of the same tests (makepkg --nocheck, DEB_BUILD_OPTIONS=nocheck).
+  unit-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: ./.github/actions/go-latest
+
+      - name: Cache Go modules
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Run unit tests
+        run: go test -tags=unit ./cmd/... ./attest/... ./transport/... ./mobile/...
+
   build-binaries:
     runs-on: ubuntu-latest
     permissions:
@@ -17,17 +43,15 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.27"
+        uses: ./.github/actions/go-latest
 
       - name: Cache Go modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/go-build
@@ -52,9 +76,12 @@ jobs:
           # Create dist directory
           mkdir -p dist
 
-          # Get version for ldflags
+          # Get version for ldflags. -w drops the DWARF data; the symbol
+          # table stays (no -s): govulncheck reads it to tell which
+          # functions the binary holds, and without it every vulnerability
+          # of every module is reported.
           VERSION=${{ steps.get_version.outputs.VERSION }}
-          LDFLAGS="-s -w -X main.Version=${VERSION}"
+          LDFLAGS="-w -X main.Version=${VERSION}"
 
           # Build for Linux amd64. Static and cgo-free: the same binary is
           # copied into the initramfs, which has no libc.
@@ -67,7 +94,7 @@ jobs:
           sha256sum * > checksums.txt
 
       - name: Upload binary artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-binaries
           path: |
@@ -76,6 +103,7 @@ jobs:
           retention-days: 1
 
   build-archlinux:
+    needs: [unit-tests]
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -94,7 +122,7 @@ jobs:
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -132,10 +160,15 @@ jobs:
 
           cat PKGBUILD
 
+      # pacman's go may be a release behind go.dev; GOTOOLCHAIN names the
+      # current one, which go fetches (checked against sum.golang.org).
       - name: Build package
         run: |
           cd packaging/aur
-          sudo -u builder makepkg --noconfirm --syncdeps --rmdeps --clean
+          GO=$(curl -fsS 'https://go.dev/VERSION?m=text' | head -1)
+          [[ "$GO" =~ ^go[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "go.dev answered '$GO'" >&2; exit 1; }
+          sudo -u builder env GOTOOLCHAIN="$GO" makepkg --noconfirm --syncdeps --rmdeps --clean --nocheck
+          echo "GO=$GO" >> "$GITHUB_ENV"
           if ! ls *.pkg.tar.zst >/dev/null 2>&1; then
             echo "ERROR: No package file was created"
             exit 1
@@ -198,6 +231,10 @@ jobs:
 
           "/tmp/package-test/usr/bin/tpm2-kira" version
 
+          # Built with the current Go release, not pacman's.
+          BUILT=$(go version -m /tmp/package-test/usr/bin/tpm2-kira | head -1 | awk '{print $2}')
+          [[ "$BUILT" == "$GO" ]] || { echo "ERROR: built with $BUILT, the current release is $GO"; exit 1; }
+
       - name: Create package checksum
         run: |
           cd packaging/aur
@@ -205,7 +242,7 @@ jobs:
           sha256sum tpm2-kira-*.pkg.tar.zst | grep -v debug > package-checksums.txt || sha256sum tpm2-kira-*.pkg.tar.zst > package-checksums.txt
 
       - name: Upload package artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: archlinux-package
           path: |
@@ -215,6 +252,7 @@ jobs:
           retention-days: 1
 
   build-debian:
+    needs: [unit-tests]
     runs-on: ubuntu-latest
     container:
       image: debian:trixie
@@ -222,23 +260,28 @@ jobs:
       contents: read
 
     steps:
+      # Debian's golang-go is a major behind; the package is built with the
+      # current Go release from go.dev, the way the README says to.
       - name: Install build dependencies
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential ca-certificates debhelper dpkg-dev git golang-go lintian xz-utils
+            build-essential ca-certificates debhelper dpkg-dev git lintian wget xz-utils
+          GO=$(wget -qO- 'https://go.dev/VERSION?m=text' | head -1)
+          wget -q "https://go.dev/dl/${GO}.linux-amd64.tar.gz"
+          echo "$(wget -qO- "https://dl.google.com/go/${GO}.linux-amd64.tar.gz.sha256")  ${GO}.linux-amd64.tar.gz" | sha256sum -c -
+          tar -C /usr/local -xzf "${GO}.linux-amd64.tar.gz"
+          rm "${GO}.linux-amd64.tar.gz"
+          echo "/usr/local/go/bin" >> "$GITHUB_PATH"
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      # The package must build with the Go the distro actually ships, not a
-      # newer toolchain from setup-go, or CI proves nothing about installability.
-      - name: Record the distro toolchain
+      - name: Record the toolchain
         run: |
           go version
-          dpkg-query -W -f='golang-go ${Version}\n' golang-go
           echo "go directive in go.mod: $(awk '/^go /{print $2}' go.mod)"
 
       - name: Set package version from tag
@@ -269,7 +312,7 @@ jobs:
 
       - name: Build source and binary packages
         run: |
-          dpkg-buildpackage -us -uc
+          DEB_BUILD_OPTIONS=nocheck dpkg-buildpackage -us -uc
 
       - name: Collect artifacts
         run: |
@@ -324,7 +367,7 @@ jobs:
           cat debian-checksums.txt
 
       - name: Upload package artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: debian-package
           path: debpkg/
@@ -347,7 +390,7 @@ jobs:
           pacman -S --noconfirm base-devel git openssh
 
       - name: Download the PKGBUILD that was actually built
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: archlinux-package
           path: built/
@@ -430,25 +473,25 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Download binary artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: linux-binaries
           path: dist/
 
       - name: Download package artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: archlinux-package
           path: archlinux/
 
       # Not 'debian/': that would collide with the packaging directory in the checkout.
       - name: Download Debian package artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: debian-package
           path: debpkg/

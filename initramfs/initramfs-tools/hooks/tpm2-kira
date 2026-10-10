@@ -34,7 +34,99 @@ copy_exec "$kira" /usr/bin/tpm2-kira
 if [ -r /etc/tpm2-kira/initramfs.conf ]; then
     copy_file config /etc/tpm2-kira/initramfs.conf /etc/tpm2-kira/initramfs.conf
 fi
+# The configuration file is the running system's alone (which adapter's
+# driver goes into the image, and the YubiKey's PIN): nothing of it goes
+# into the image, and this hook does not read it - 'attest initramfs-deps'
+# does. A file that does not load is said, never a reason to stop the
+# build: it is built with the defaults. How the disk's key is made is read
+# from each volume's LUKS2 header at boot.
+conf=/etc/tpm2-kira/control.conf
+if [ -r "$conf" ] && ! "$kira" attest config-check "$conf" >/dev/null 2>&1; then
+    echo "tpm2-kira: WARNING: $conf is not valid: $("$kira" attest config-check "$conf" 2>&1 | tail -1)" >&2
+fi
+
+# The devices with a keyslot of tpm2-kira's: does /etc/crypttab route each
+# through the keyscript, and if not, what the line should read
+# ('tpm2-kira luks route'; it edits nothing).
+if advice=$("$kira" luks route 2>&1); then
+    [ -n "$advice" ] && echo "tpm2-kira: $advice"
+else
+    echo "tpm2-kira: the disk's key is not routed through tpm2-kira everywhere - /etc/crypttab is not edited; change it as shown and run update-initramfs -u:" >&2
+    echo "$advice" | sed 's/^/    /' >&2
+fi
 
 # Built in on most kernels, but a module on some machines.
 manual_add_modules tpm_tis
 manual_add_modules tpm_crb
+
+# Bluetooth for remote attestation (PLAN-BLE.md §3.1), whenever a phone is
+# enrolled. 'tpm2-kira attest initramfs-deps' names the configured adapter's
+# driver modules and the firmware files the kernel loaded for it on this
+# machine; nothing else is copied. Without an enrolled phone, or without the
+# adapter, the image shows the code and serves the disk's key and asks no
+# phone.
+enrolled=$("$kira" attest status --json 2>/dev/null)
+if [ -z "$enrolled" ] || [ "$enrolled" = "[]" ]; then
+    echo "tpm2-kira: no phone is enrolled; Bluetooth not added"
+# The gate checks the enrolment record before it advertises: signed
+# by this machine's signing key, and current by the TPM's record
+# counter. 'attest signer' prints the key's public half (public, not
+# a secret) for the image after checking the records; one written by
+# somebody else, or an older one put back, is refused, and then the
+# gate is not added.
+elif ! signer=$("$kira" attest signer) || ! printf '%s\n' "$signer" | grep -q 'BEGIN PUBLIC KEY'; then
+    echo "tpm2-kira: the attestation record was not accepted (see above); Bluetooth not added" >&2
+else
+    # The Bluetooth lines of every boot the journal keeps: not every boot
+    # names the firmware (an Intel controller keeps it over a warm reboot).
+    log=$(mktemp)
+    journalctl -k -o cat --no-pager 2>/dev/null | grep -E 'Bluetooth: hci[0-9]+:' >"$log" || true
+    rc=0
+    deps=$("$kira" attest initramfs-deps --kernel-log "$log") || rc=$?
+    rm -f "$log"
+    adapter=$(printf '%s\n' "$deps" | sed -n 's/^adapter hci//p')
+
+    if [ "$rc" -ne 0 ]; then
+        printf '%s\n' "$deps" | sed -n 's/^warning /tpm2-kira: /p' >&2
+        echo "tpm2-kira: a phone is enrolled but its Bluetooth adapter was not found; Bluetooth not added" >&2
+    elif ! printf '%s\n' "$deps" | grep -q '^adapter '; then
+        # Every other command exits 0 by design, so a binary that
+        # predates initramfs-deps "succeeds" with no output.
+        echo "tpm2-kira: the installed tpm2-kira cannot resolve Bluetooth dependencies (too old?); Bluetooth not added" >&2
+    else
+        mkdir -p "$DESTDIR/etc/tpm2-kira"
+        : >"$DESTDIR/etc/tpm2-kira/bluetooth-modules"
+        nmod=0
+        nfw=0
+        # A here-document keeps the loop in this shell, so the
+        # counters survive it.
+        while read -r kind value; do
+            case "$kind" in
+            module)
+                manual_add_modules "$value"
+                echo "$value" >>"$DESTDIR/etc/tpm2-kira/bluetooth-modules"
+                nmod=$((nmod + 1))
+                ;;
+            firmware)
+                add_firmware "$value"
+                nfw=$((nfw + 1))
+                ;;
+            udev)
+                # The bus lets no new device in by itself: this rule
+                # lets exactly the adapter in, in the image alone.
+                mkdir -p "$DESTDIR/etc/udev/rules.d"
+                echo "$value" >>"$DESTDIR/etc/udev/rules.d/70-tpm2-kira-bluetooth.rules"
+                echo "tpm2-kira: hci$adapter's USB bus lets no new device in: the image lets the adapter in"
+                ;;
+            warning)
+                echo "tpm2-kira: $value" >&2
+                ;;
+            esac
+        done <<DEPS
+$deps
+DEPS
+        mkdir -p "$DESTDIR/etc/tpm2-kira"
+        printf '%s\n' "$signer" > "$DESTDIR/etc/tpm2-kira/attest-signer.pem"
+        echo "tpm2-kira: Bluetooth attestation via hci$adapter: $nmod modules, $nfw firmware files"
+    fi
+fi

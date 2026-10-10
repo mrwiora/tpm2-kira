@@ -1,22 +1,72 @@
 [Unit]
-Description=Starting tpm2-kira
+Description=tpm2-kira code screen and disk unlock
+# An initrd unit. The package also puts this file on the host, where the
+# mkinitcpio hook picks it up from; enabled there by mistake it does nothing.
+ConditionPathExists=/etc/initrd-release
 # The resource-managed node: tpm2-kira only sees and flushes its own handles
-# there, so it cannot disturb other TPM users in the initrd.
-Requires=dev-tpmrm0.device
+# there, so it cannot disturb other TPM users in the initrd. Wanted, not
+# required: without a TPM there is no code, but the key provider still
+# answers (the passphrase, or hashpwd2's password and salt), so the prompt
+# is tpm2-kira's on every machine. The hook bounds the wait for the device
+# (dev-tpmrm0.device.d, JobTimeoutSec=5).
+Wants=dev-tpmrm0.device
 After=dev-tpmrm0.device
-# PCRs must stay stable for the whole run loop, so observe them after systemd's
-# userspace extends; ordering against a unit that never starts is a no-op.
-After=systemd-pcrosseparator.service
+# The measure point: after systemd's enter-initrd phase (PCR 11) and before
+# the OS separator extends PCRs 0-7, 9, 12-14. Type=notify: a fresh code is
+# shown every 30 s until Enter is pressed on the console or the hold (90 s)
+# ends; READY is sent then, the separator runs, and the key's policy is
+# unsatisfiable until the next boot (SECURITY-BACKGROUND.md §5.8).
 After=systemd-pcrphase-initrd.service
+Before=systemd-pcrosseparator.service
+# systemd 258's NvPCR initialisation separator extends PCR 11 in the
+# initrd; unordered it could land while the code is shown and break the
+# policy mid-screen. Held back like the OS separator, it is also what the
+# key provider waits for before the prompt (run_boot.go, waitPromptTurn).
+# Unknown to older systemd, where the ordering is simply ignored.
+Before=systemd-pcrnvdone.service
 Before=systemd-ask-password-console.service
 Conflicts=multi-user.target
+# With a phone enrolled, this process is also the coordinator of the
+# Bluetooth gate (tpm2-kira-attest.service): it holds the TPM for the radio
+# worker, which has none, and reads the phone's receipt itself. That service
+# ends when the boot is released, and normally the process with it. It must
+# not stay on the console: StandardInput=tty makes it the terminal's owner,
+# and the passphrase prompt waits for the console to be free. (A display
+# that goes on for codes that only compute after the separator gives the
+# terminal up first.)
+Conflicts=initrd-switch-root.target
+Before=initrd-switch-root.target
 DefaultDependencies=no
+# The disk's key: systemd-cryptsetup asks for it on this socket (see the
+# socket unit), after the separator. This process answers once the code
+# screen is confirmed, at its own passphrase prompt, and stays alive for
+# that until switch-root; the console is given up with the hold, so the
+# prompt opens /dev/console only while it asks.
+Sockets=tpm2-kira-unlock.socket
 
 [Service]
-Type=simple
-ExecStart=tpm2-kira run
+Type=notify
+# The hold is 90 s (tpm2-kira run --hold), plus at most 60 s for a phone
+# that is in the middle of its answer; a hung TPM must not hold the boot for
+# longer than this. Raise it together with --hold.
+TimeoutStartSec=180
+# --gate: where the radio worker reaches this process. Without an enrolled
+# phone in the image nothing listens there. The key socket comes from the
+# socket unit (Sockets=), not from a flag.
+ExecStart=tpm2-kira run --gate /run/tpm2-kira/gate.sock
+# Enter on the console releases the boot.
+StandardInput=tty
 StandardOutput=tty
-StandardError=tty
+# What the key provider and the phone check report (when a volume asked,
+# when the hold ended, when the prompt opened and answered) is written to
+# the journal directly, never to the console (the code screen is there);
+# the initrd's journald hands it to the system's:
+#   journalctl -b -u tpm2-kira.service
+# stderr carries failures and warnings, which the console shows as well.
+# "Debug at boot" (the boot settings in the TPM, 'tpm2-kira control') puts
+# the narrative on the
+# console too.
+StandardError=journal+console
 
 [Install]
 WantedBy=sysinit.target

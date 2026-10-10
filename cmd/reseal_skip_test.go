@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matthias/tpm2-kira/internal/piv"
-	"github.com/matthias/tpm2-kira/internal/piv/pivtest"
+	"github.com/mrwiora/tpm2-kira/internal/piv"
+	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
 )
 
 func testBlob() *SealedBlob {
@@ -53,8 +53,8 @@ func TestPrintResealSkipped(t *testing.T) {
 	cause := &TokenUnavailableError{Token: "YubiKey 12345678, slot 9a", Reason: "no YubiKey with serial 12345678 is present"}
 	var buf bytes.Buffer
 	PrintResealSkipped(&buf, []*ResealSkippedError{
-		{NVIndex: 0x01803010, KeyFile: "/var/lib/tpm2-kira/keys/seal.key", Cause: cause, SealedPCRs: testBlob().GetPCRSpecs()},
-		{NVIndex: 0x01803011, KeyFile: "/var/lib/tpm2-kira/keys/seal.key", Cause: cause},
+		{NVIndex: 0x01803010, KeyFile: "/etc/tpm2-kira/keys/seal.key", Cause: cause, SealedPCRs: testBlob().GetPCRSpecs()},
+		{NVIndex: 0x01803011, KeyFile: "/etc/tpm2-kira/keys/seal.key", Cause: cause},
 	})
 	out := buf.String()
 	t.Logf("block:\n%s", out)

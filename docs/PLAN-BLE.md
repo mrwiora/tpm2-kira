@@ -1,10 +1,74 @@
 # PLAN — BLE Attestation with a Mobile Device
 
-> **Status:** draft / design. Nothing in here is implemented yet.
+> **Status:** partially implemented — phases 1–4, and phase 5 (Bluetooth in
+> the initramfs); nothing yet verified on real hardware. The wire
+> contract is [PROTOCOL-BLE.md](PROTOCOL-BLE.md); "Implementation status" below
+> lists what is done and what is open. What this plan calls "lazy mode" is
+> the only behaviour there is (§7): a phone is served whenever one is
+> enrolled, no mode is set anywhere, and the boot is never held.
 > **Depends on:** [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md)
 > phases 1–5. This document adds a *transport* (Bluetooth LE), a *verifier*
 > (an Android/iOS app) and a *gate* (what happens at the passphrase prompt).
 > Everything cryptographic lives in the core and is not restated here.
+
+---
+
+## Implementation status
+
+Last updated 2026-10-05.
+
+### Done
+
+| Phase | What exists | Verified by |
+|---|---|---|
+| 1 — BLE stack | **Decided: in-tree.** `transport/ble/`: pure-Go HCI user channel peripheral — advertising, ACL fragmentation and flow control, L2CAP, ATT/GATT server, pairing refused — about 1,500 lines, no dependency beyond `golang.org/x/sys`. `go-ble/ble` rejected (unmaintained, dependency surface). | fake-controller tests: iOS-style discovery, MTU 23/185, records both ways, framing errors, idle deadline, re-advertising |
+| 2 — peripheral, framing, encrypted session | `transport/frame/`, Noise XX/IK in `attest/noise.go`, `tpm2-kira attest enrol` with SAS | unit tests, fuzzing, interop with the reference `noiseprotocol` library |
+| 3 — mobile core | `mobile/kiracore` (gomobile verifier), `mobile/kiratest` (simulated machine); apps specified in [mobile/](mobile/) | Go tests through the binding API; gobind generates Java and Objective-C cleanly |
+| 4 — attestation round trip, lazy mode | `tpm2-kira attest gate --mode lazy` on a booted system | swtpm integration test (real AK, EK, quotes, ActivateCredential) |
+| 5 — initramfs (part) | `tpm2-kira attest initramfs-deps` resolves the configured adapter's driver modules (the whole sysfs path) and the firmware the kernel loaded for it, from the kernel log. `/etc/tpm2-kira/control.conf` (`TPM2_KIRA_ATTEST=off\|lazy`). mkinitcpio: modules, exact firmware, `modules-load.d`, `tpm2-kira-attest.service` (runs beside the TOTP display, never holds the boot, stopped at switch-root). initramfs-tools: same resolution, `init-premount` loads modules and starts the gate in the background, `init-bottom` stops it. The gate waits for the adapter that comes up as long as the code screen holds, retries while the kernel finishes controller setup, and uses `/dev/tpmrm0` so it can share the TPM with the TOTP display. Hooks add nothing when attestation is off, no phone is enrolled, the adapter is missing, or the installed binary is too old. | resolver unit tests on a fake sysfs (Intel, Realtek, Broadcom log formats); stubbed-hook tests for both hooks; a real `mkinitcpio` image build on Arch containing exactly 6 modules and 1 firmware file (≈1.1 MB) |
+
+### Open
+
+| Item | Notes |
+|---|---|
+| **Real hardware** | Nothing has run against a physical adapter or phone yet — the development machine has none. First boot test: an Intel/Realtek USB adapter on Arch, then Debian. |
+| **Boot test** (§8) | QEMU + swtpm boot of an image with the gate; needs a passed-through or virtual (`hci_vhci`, root) controller. |
+| **Debian firmware size** | `manual_add_modules` queues modules for `dracut-install`, which copies every firmware file the modules *declare* (dozens for btusb's dependencies) on top of the exact files. mkinitcpio avoids this; on Debian it costs space until initramfs-tools offers a way to skip declared firmware. Measure on a Debian box. |
+| **Debian measured PCRs** | Adding Bluetooth changes PCR 9 on GRUB machines; the existing post-update reminder covers resealing, but has not been re-checked with the new files. |
+| 6 — enforced mode | `attest gate --mode enforced` is refused; needs the image anchor, sealed payload v9 and the fail-closed matrix (§7.5). |
+| Salt release | `Release` is defined in the protocol; the attester answers "unsupported" (PLAN-FACTORRELEASE.md). |
+| Break-glass tokens (§7.6) | not started |
+| 7 — verdict UX | the shared PCR explanation exists (`attest/explain.go`); the UI belongs to the apps |
+| Phone apps | specified as agent prompts in [mobile/](mobile/), not built |
+| Lost-phone ceremony (§6.2, open question 3) | today: `attest enrol` with the new phone, `attest unenrol` to drop all; no per-phone removal command yet |
+| EK certificate chain | parsed and stored by the phone, not validated against vendor roots |
+
+Decisions taken while implementing, superseding the text below where they differ:
+
+- **Native apps, shared Go core** instead of Flutter (§6.1): Kotlin/Compose and
+  Swift/SwiftUI, each linking the same `gomobile` library. The verifier is
+  still never written twice. Open question 2 is settled.
+- **Two Noise patterns** (§5.2): `Noise_XX_25519_ChaChaPoly_SHA256` at
+  enrolment, `Noise_IK_25519_ChaChaPoly_SHA256` afterwards. The machine stays
+  silent for any phone not enrolled. Interoperability with the reference
+  `noiseprotocol` library was checked for both patterns.
+- **SAS with commit-then-reveal** (§5.3): a code derived from the handshake
+  hash alone could be ground by a man in the middle in about a second; the
+  machine now commits to a nonce before seeing the phone's
+  ([PROTOCOL-BLE.md](PROTOCOL-BLE.md) §6.4).
+- **Advertising carries a keyed tag** (§4.2): 13 bytes of scan-response
+  service data, `flags ‖ prand ‖ HMAC(adv_key, prand)[0:8]`. Observers still
+  learn only that *a* machine is booting; an enrolled phone learns *which*.
+  This answers open question 6: unknown machines stay hidden except during an
+  explicit enrolment.
+- **Rejects are unsigned** (§6.2): a reject needs no biometric prompt, because
+  believing a false "no" costs a check, never trust. OK and approved receipts
+  are always signed.
+- **The machine's anchor in lazy mode** is the attestation blob, which the
+  initrd cannot authenticate; the console verdict is therefore advisory and the
+  phone's display is authoritative. The image anchor arrives with phase 6.
+- Attestation and salt release share one session: release is an optional
+  message after a trusted receipt ([PROTOCOL-BLE.md](PROTOCOL-BLE.md) §1.1).
 
 ---
 
@@ -83,6 +147,15 @@ resolves the *actual* adapter on the build host (`/sys/class/bluetooth/hci0`,
 its driver and its firmware files via `modinfo -F firmware`) and copies exactly
 those. Copying all of `linux-firmware` is not acceptable for an initramfs.
 
+> **As implemented:** firmware comes from the kernel log of the build host's
+> current boot (`Bluetooth: hci0: Found device firmware: …`), not from
+> `modinfo -F firmware`. The declarations are incomplete — `btintel` declares
+> four legacy files, while current Intel adapters load names such as
+> `intel/ibt-0041-0041.sfi` that appear nowhere in modinfo — and they list
+> files for every chip a driver supports (`btrtl` declares 50). If the log
+> holds no firmware line (rotated, or an adapter without firmware), the hooks
+> fall back to the declarations and say so.
+
 If no adapter is found at build time, the hook warns and installs nothing; a
 machine configured for `enforced` that then cannot find an adapter at boot
 fails closed, which is why `attest enrol` refuses to enable enforced mode
@@ -117,11 +190,48 @@ there is exactly one service, two characteristics and no security manager
 
 ### 3.3 Ordering and the measure point
 
-The BLE stack must come up *after* the userspace extends that define the
-measure point, exactly like the display loop does today
-(SECURITY-BACKGROUND.md §5.8). The unit therefore keeps
-`After=systemd-pcrosseparator.service` and
-`After=systemd-pcrphase-initrd.service`, and adds `Before=cryptsetup-pre.target`.
+The gate starts together with the TOTP display, `After=systemd-pcrphase-initrd.service`
+(`enter-initrd` is in PCR 11 by then), and ends with it. The display holds
+`systemd-pcrosseparator.service` back until the boot is confirmed, so the
+gate's quotes come from *before* the separator. The enrolment baseline, and a
+gate run by hand or by initramfs-tools, see the registers *after* it.
+
+Both are the same boot. The separator is a constant systemd extends into
+PCRs 0-7, 9, 12-14 of every boot, so the verifier treats a register that
+differs from a profile by exactly one `os-separator` extend, in either
+direction, as equal (`attest.SameBootState`, PROTOCOL-BLE.md §7.5). Different
+code gives different registers before the separator and after it alike.
+
+A slot that is enrolled with a phone is verified by the phone instead of by
+comparing the code: the phone's verdict releases the boot the way Enter does.
+The code stays on the screen as the fallback, and so does the end of the hold
+(lazy mode never holds the boot). A phone that is in the middle of its
+session when the hold ends extends it by at most a minute, so the registers
+do not change between its question and its answer.
+
+The gate is two processes of the one binary. The display is its
+*coordinator* (`tpm2-kira run --gate SOCKET`): it holds the TPM, checks the
+enrolment record, issues the quotes, and reads the phone's receipt against
+the anchors and the quotes it issued. The *radio worker* (`tpm2-kira attest
+gate --coordinator SOCKET`, the confined unit) advertises and runs the
+session; it has no TPM and asks the coordinator over the socket: identity,
+quote, boot context, event log, receipt, progress report - length-prefixed
+JSON, one request at a time (`cmd/gate_ipc.go`). Before the separator the
+TPM computes TOTP codes for any process that can reach it, so the process
+that parses radio input must not be able to.
+
+Lazy mode ends with the hold: the coordinator closes its socket when it
+releases the boot and exits, and the worker, which watches the connection,
+stops advertising and exits too. The display's process must not stay on the
+console past the hold in any case: `StandardInput=tty` makes it the owner of
+the terminal, and systemd's password agent waits for the console to be free
+before it shows the passphrase prompt.
+
+The enrolment baseline must describe the same point: `attest enrol` runs in
+the booted system, where PCR 11 already carries systemd's later phases, so it
+predicts the measure-point values with the seal's own code (`ReadPCRValues`)
+and sends them as `measure_point_values` (PROTOCOL-BLE.md §7.3.11). The phone
+pins those, not the live registers.
 
 Loading a Bluetooth module does not extend a PCR, so bringing the radio up does
 not itself move the measure point. But the modules and firmware are *content of
@@ -160,8 +270,10 @@ booting, not *which*.
 
 ### 4.3 MTU and throughput
 
-Request an ATT MTU of 517. Expect Android to grant up to 517 and iOS to settle
-around 185; assume the worst case of 23 (20 usable bytes) and let the framing
+Request an ATT MTU of 517. The machine grants at most 247 (one ATT PDU per
+251-byte LE data packet, and HCI ACL packets capped at 251 bytes, because
+controllers in the field differ in how they handle larger ones); iOS settles
+around 185. Assume the worst case of 23 (20 usable bytes) and let the framing
 handle it.
 
 | Payload | Size | At 185-byte notifications, 15 ms interval (~12 kB/s) |
@@ -269,6 +381,12 @@ the device id, a friendly name, the baseline PCR profile and the event log; the
 machine ends up holding the phone's receipt-signing public key as its pinned
 anchor.
 
+With [factor release](PLAN-FACTORRELEASE.md) enrolled, the phone additionally
+holds a wrapped factor: a blob that only this machine's TPM can open. That is
+the first secret-bearing item on the phone, and the receipt-signing key then
+doubles as the approval key for the TPM's `PolicySigned` branch
+([PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md) §4.1).
+
 Operational cost worth documenting: taking the adapter through an HCI user
 channel **disconnects everything else using Bluetooth** for the duration —
 mice, headphones, keyboards. `attest enrol` says so before it starts, offers
@@ -365,17 +483,28 @@ into the shared core so the app and the CLI explain a diff identically.
 |---|---|---|
 | Permissions | `BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT` (API 31+); location permission for scanning below that | none for central role, but the background mode `bluetooth-central` must be declared |
 | Background | foreground service with a notification while attesting | background scanning **only** with an explicit service-UUID filter; no wildcard scans |
-| MTU | request 517, usually granted | fixed by the OS, ~185 |
+| MTU | request 517; the machine grants at most 247 | fixed by the OS, ~185 |
 | Key storage | StrongBox where present, TEE otherwise; `setUserAuthenticationRequired(true)` | Secure Enclave, `kSecAttrTokenIDSecureEnclave` |
 | Identity of the peer | MAC visible | opaque per-app UUID; the machine is identified by what it says inside the session, never by address |
 
 ---
 
-## 7. The gate: lazy and enforced
+## 7. The gate: lazy, and why not enforced
+
+**Decision (2026-10-07): there is no enforced mode.** tpm2-kira does its
+work and informs; the passphrase can always be entered by hand. The disk
+unlock goes through systemd-cryptsetup's key-file socket, and a wrong or
+missing answer from tpm2-kira sends systemd-cryptsetup to its own prompt
+for the remaining tries (UNLOCK-DISK.md §4) - so "holding the boot" would
+mean never answering, a local software gate of the kind §7.4 already
+calls worthless on a machine whose image is not authenticated. What
+enforces, if anything, is the missing factor of PLAN-FACTORRELEASE.md.
+The `enforced` rows and §7.2's gate unit below stay as the record of the
+design that was not built; `control.conf` refuses the value.
 
 ### 7.1 Modes
 
-`/etc/tpm2-kira/attest.conf`, with its digest bound into the sealed object so
+`/etc/tpm2-kira/control.conf`, with its digest bound into the sealed object so
 it cannot be silently downgraded on a machine that does not measure its
 initramfs ([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.3):
 
@@ -385,9 +514,29 @@ initramfs ([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.3):
 | `lazy` | Advertise and serve attestation requests. Display the verdict when one arrives. **Boot proceeds regardless**; the passphrase prompt is never blocked. |
 | `enforced` | Advertise and **hold the boot** until a valid receipt with `verdict = ok` arrives. The passphrase prompt does not appear before then. |
 
+**The attestation blob is not a trust anchor for enforced mode.** Its NV
+index refuses in-place writes without the signing key, but the owner
+hierarchy can undefine it and write a blob that lists any phone, and the
+initrd has no key to notice. The anchor therefore comes from the image: the
+hook puts the signing public key there (`attest signer`), and the gate
+refuses, before it advertises, a blob that key did not sign. Replacing the
+blob then means changing the image too, which Secure Boot or the measured
+PCRs report (PLAN-REMOTEATTESTATION.md §10.2). An older blob, signed all the
+same, is refused by its count: each blob carries the value of a TPM NV counter
+for the slot, which cannot be turned back. The console verdict stays advisory and the
+phone's screen authoritative.
+
 ### 7.2 How the hold is implemented
 
-**Arch / systemd initramfs.** A new oneshot unit:
+**Arch / systemd initramfs, as built.** tpm2-kira is the key provider of
+the volumes the initrd unlocks: `tpm2-kira-unlock.socket` is the key file
+of each of them (crypttab(5), AF_UNIX key files, named by `rd.luks.key=`
+on the kernel command line), `systemd-cryptsetup` connects to it when it
+activates the volume and reads the key, and `tpm2-kira.service` answers
+once the code screen's hold has ended. The TPM side of the attestation
+still happens before the OS separator, where the boot key's policy holds.
+The original design of a separate oneshot gate unit, for the enforced
+mode that is not built, follows for the record:
 
 ```ini
 [Unit]
@@ -460,6 +609,12 @@ of these two situations the machine is in, in those words. It refuses without
 `--allow-sealed-anchor` when there is no image anchor
 ([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.2).
 
+The way to make the gate real on either kind of machine is to stop asking
+software to hold and withhold a secret instead:
+[PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md) has the phone release one
+factor of the LUKS key after a successful attestation. It runs in `lazy` mode,
+because the missing factor does the enforcing.
+
 The second thing to be plain about: enforced mode **cannot lock you out of your
 data**. It holds one initramfs. Boot any rescue medium and the disk unlocks
 with the passphrase you already have. That also caps its value — an attacker
@@ -471,7 +626,7 @@ an inconvenience, never a loss. Keep a second LUKS keyslot regardless.
 | Situation | `lazy` | `enforced` |
 |---|---|---|
 | No adapter / firmware missing | warn once, show OTP, continue | fail closed, name the missing firmware |
-| No phone in range | silent, continue | keep advertising and waiting, printing a hint every 15 s |
+| No phone in range | silent, continue | keep advertising in 30 s rounds, reporting "phone not reachable yet, still waiting" after each; with a timeout, fail with "phone not reachable" (not a TPM failure) |
 | Phone connects, verdict is "reject" | display it, continue | fail closed immediately; do not keep waiting for a better answer |
 | Receipt signature does not verify | display an error, continue | fail closed, and say **anchor mismatch** explicitly — this is either a wrong phone or an attack |
 | PCRs changed (kernel update) | OTP is absent as today; the phone can still attest and show the diff | the phone shows the diff and a human approves; this is the designed path, not an exception |
@@ -556,6 +711,9 @@ Bluetooth firmware in an initramfs is where this plan meets hardware reality.
 5. **Firmware in the image vs. firmware size.** Some adapters need over a
    megabyte. A `/boot` of 512 MB with several kernels is not unusual. Measure
    before promising Debian users this fits.
+   *Measured on Arch (Intel AX adapter):* 6 compressed modules (≈620 KB) and
+   one firmware file (≈500 KB), ≈1.1 MB per image. Debian still to measure
+   (see "Open").
 6. **What does the phone do when it sees a machine it has never enrolled?**
    Showing it invites phishing-by-proximity; hiding it makes enrolment
    confusing. Probably: hidden by default, visible only while an enrolment is

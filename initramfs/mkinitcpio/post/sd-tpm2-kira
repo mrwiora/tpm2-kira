@@ -11,7 +11,7 @@
 #   $1 — kernel version
 #   $2 — path to the generated initramfs image
 
-KIRA_KEYS_DIR="/var/lib/tpm2-kira/keys"
+KIRA_KEYS_DIR="/etc/tpm2-kira/keys"
 
 # Only act when tpm2-kira is installed and has been set up.
 if ! command -v tpm2-kira &> /dev/null; then
@@ -40,13 +40,17 @@ fi
 
 # tpm2-kira exits 0 even on failure, by design, so that chained commands still
 # run. Success must therefore be judged from the output, not the exit status.
-output=$(tpm2-kira reseal --measure-point="$measure_point" 2>&1)
+#
+# The reseal never asks: setsid gives it no controlling terminal, so a PIN
+# it cannot read from control.conf ends it with the reason (SKIPPED)
+# instead of a prompt that would hold mkinitcpio -P.
+output=$(setsid -w tpm2-kira reseal --measure-point="$measure_point" 2>&1 < /dev/null)
 #
 # SKIPPED means the signing key lives on a YubiKey that is not plugged in, or
 # its PIN was not available. Nothing was written, so the sealed secret is
 # intact; the next boot just shows a PCR mismatch until someone reseals. For
-# unattended signing, /etc/mkinitcpio.conf needs a TPM2_KIRA_PIN='...' line;
-# tpm2-kira reads it from the file itself.
+# unattended signing, /etc/tpm2-kira/control.conf holds TPM2_KIRA_PIN='...'
+# ('tpm2-kira control' stores it); tpm2-kira reads it from the file itself.
 if grep -q "SKIPPED:" <<< "$output"; then
     {
         echo "tpm2-kira: ================================================================"

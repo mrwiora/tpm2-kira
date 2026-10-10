@@ -137,13 +137,17 @@ func IsTPMPolicyFailure(err error) bool {
 		strings.Contains(errStr, "session 1): a policy check failed")
 }
 
+// ErrPhoneSlot: the slot is attested by its phones and has no TOTP code.
+var ErrPhoneSlot = errors.New("the slot is attested by its phone and has no TOTP code")
+
 // SlotCode reads the blob at nvramIndex and computes its current TOTP code.
 //
 // Before asking the TPM it compares the blob with the live state, purely to
 // explain a failure: a PCRMismatchError when the registers differ from the
-// sealed values, a GenerationMismatchError when a later reseal revoked this
-// blob's approval, ErrCodesLocked after 'tpm2-kira cap'. None of these checks
-// is the gate; the TPM is.
+// sealed values, ErrSeparatorLocked when they differ only by the OS
+// separator that ran after the measure point, a GenerationMismatchError
+// when a later reseal revoked this blob's approval, ErrCodesLocked after
+// 'tpm2-kira cap'. None of these checks is the gate; the TPM is.
 func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) (string, *SealedBlob, error) {
 	sealedData, err := ReadFromNVRAM(tpmDev, nvramIndex)
 	if err != nil {
@@ -152,6 +156,9 @@ func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) 
 	sealedBlob, err := UnmarshalSealedBlob(sealedData)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
+	}
+	if !sealedBlob.HasTOTPKey() {
+		return "", sealedBlob, ErrPhoneSlot
 	}
 
 	gen, err := ReadGeneration(tpmDev, GenerationIndex(nvramIndex))
@@ -169,7 +176,11 @@ func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) 
 		return "", sealedBlob, err
 	}
 	if !VerifyPCRValues(sealedBlob.GetPCRDigestValues(), currentPCRValues) {
-		return "", sealedBlob, newPCRMismatchError(sealedBlob, currentPCRValues)
+		mismatch := newPCRMismatchError(sealedBlob, currentPCRValues)
+		if mismatch.SeparatorLocked() {
+			return "", sealedBlob, ErrSeparatorLocked
+		}
+		return "", sealedBlob, mismatch
 	}
 
 	code, err := TOTPCode(tpmDev, sealedBlob, nvramIndex, t)
@@ -203,42 +214,48 @@ type PrimaryKeyResponse struct {
 	Public       tpm2.TPMTPublic // used to salt sessions
 }
 
+// storagePrimaryTemplate is the deterministic ECC P-256 storage key that
+// parents tpm2-kira's objects. Re-created on every use, never persisted.
+func storagePrimaryTemplate() tpm2.TPMTPublic {
+	return tpm2.TPMTPublic{
+		Type:    tpm2.TPMAlgECC,
+		NameAlg: tpm2.TPMAlgSHA256,
+		ObjectAttributes: tpm2.TPMAObject{
+			FixedTPM:            true,
+			FixedParent:         true,
+			SensitiveDataOrigin: true,
+			UserWithAuth:        true,
+			Restricted:          true,
+			Decrypt:             true,
+		},
+		Parameters: tpm2.NewTPMUPublicParms(
+			tpm2.TPMAlgECC,
+			&tpm2.TPMSECCParms{
+				Symmetric: tpm2.TPMTSymDefObject{
+					Algorithm: tpm2.TPMAlgAES,
+					KeyBits: tpm2.NewTPMUSymKeyBits(
+						tpm2.TPMAlgAES,
+						tpm2.TPMKeyBits(128),
+					),
+					Mode: tpm2.NewTPMUSymMode(
+						tpm2.TPMAlgAES,
+						tpm2.TPMAlgCFB,
+					),
+				},
+				Scheme: tpm2.TPMTECCScheme{
+					Scheme: tpm2.TPMAlgNull,
+				},
+				CurveID: tpm2.TPMECCNistP256,
+			},
+		),
+	}
+}
+
 // CreatePrimaryKey creates a primary key in the owner hierarchy
 func CreatePrimaryKey(tpmDev transport.TPM) (*PrimaryKeyResponse, error) {
 	createPrimaryCmd := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHOwner,
-		InPublic: tpm2.New2B(tpm2.TPMTPublic{
-			Type:    tpm2.TPMAlgECC,
-			NameAlg: tpm2.TPMAlgSHA256,
-			ObjectAttributes: tpm2.TPMAObject{
-				FixedTPM:            true,
-				FixedParent:         true,
-				SensitiveDataOrigin: true,
-				UserWithAuth:        true,
-				Restricted:          true,
-				Decrypt:             true,
-			},
-			Parameters: tpm2.NewTPMUPublicParms(
-				tpm2.TPMAlgECC,
-				&tpm2.TPMSECCParms{
-					Symmetric: tpm2.TPMTSymDefObject{
-						Algorithm: tpm2.TPMAlgAES,
-						KeyBits: tpm2.NewTPMUSymKeyBits(
-							tpm2.TPMAlgAES,
-							tpm2.TPMKeyBits(128),
-						),
-						Mode: tpm2.NewTPMUSymMode(
-							tpm2.TPMAlgAES,
-							tpm2.TPMAlgCFB,
-						),
-					},
-					Scheme: tpm2.TPMTECCScheme{
-						Scheme: tpm2.TPMAlgNull,
-					},
-					CurveID: tpm2.TPMECCNistP256,
-				},
-			),
-		}),
+		InPublic:      tpm2.New2B(storagePrimaryTemplate()),
 	}
 
 	createPrimaryRsp, err := createPrimaryCmd.Execute(tpmDev)

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 
-	"github.com/matthias/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/cmd"
 )
 
 // Version is the application version, set by build flags
@@ -23,6 +25,27 @@ func fail(err error) {
 	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: %v\n", err)
 	fmt.Fprintln(os.Stderr, "tpm2-kira: (exit status is 0 by design; this command did NOT succeed)")
 	os.Exit(0)
+}
+
+// requireRoot ends the run when it is not root's: everything but the help,
+// the version and the PCR reference reads or writes what is root's alone
+// (the TPM, the keys in /etc/tpm2-kira, the LUKS headers, the initramfs).
+// control says so on its own screen. The test suite runs the binary as a
+// user against a software TPM: TPM2_KIRA_UNPRIVILEGED=1 skips the check.
+func requireRoot(command string) {
+	switch command {
+	case "version", "-v", "--version", "help", "-h", "--help", "pcrtips":
+		return
+	}
+	if os.Geteuid() == 0 || os.Getenv("TPM2_KIRA_UNPRIVILEGED") != "" {
+		return
+	}
+	if command == "control" {
+		cmd.ControlNeedsRoot()
+	} else {
+		fmt.Fprintf(os.Stderr, "tpm2-kira %s: root is needed - sudo tpm2-kira %s\n", command, strings.Join(os.Args[1:], " "))
+	}
+	os.Exit(1)
 }
 
 func main() {
@@ -48,6 +71,14 @@ func main() {
 		commandArgs = os.Args[argsOffset:]
 	}
 
+	// '<command> help', '-h' or '--help' is that command's page.
+	if len(commandArgs) > 0 && isHelp(commandArgs[0]) && command != "help" {
+		printHelp(command)
+		return
+	}
+
+	requireRoot(command)
+
 	switch command {
 	case "setup":
 		runSetup(commandArgs)
@@ -57,6 +88,25 @@ func main() {
 		runReseal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "info":
 		runInfo(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+	case "control":
+		fs := flag.NewFlagSet("control", flag.ExitOnError)
+		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
+		dbg := fs.Bool("debug", *debug, "Enable debug output")
+		fs.Parse(commandArgs)
+		if err := cmd.Control(cmd.ControlOptions{TPMPath: *tpm, Debug: *dbg}); err != nil {
+			fail(err)
+		}
+	case "status":
+		fs := flag.NewFlagSet("status", flag.ExitOnError)
+		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
+		privKey := fs.String("privkey", "", "Signing key the blobs are checked with (default: "+cmd.DefaultPrivateKeyPath+")")
+		conf := fs.String("conf", cmd.DefaultControlConfigPath, "The configuration file")
+		jsonOut := fs.Bool("json", false, "Machine-readable output")
+		dbg := fs.Bool("debug", *debug, "Enable debug output")
+		fs.Parse(commandArgs)
+		if err := cmd.Status(cmd.StatusOptions{TPMPath: *tpm, PrivKeyPath: *privKey, ConfigPath: *conf, JSON: *jsonOut, Debug: *dbg}); err != nil {
+			fail(err)
+		}
 	case "nvram":
 		runNVRAM(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "reveal":
@@ -65,6 +115,32 @@ func main() {
 		runRevealPlain(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
 	case "run":
 		runRun(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+	case "attest":
+		runAttest(commandArgs, *tpmPath, *debug)
+	case "remote-salt":
+		runRemoteSalt(commandArgs, *tpmPath, *debug)
+	case "derive":
+		fs := flag.NewFlagSet("derive", flag.ExitOnError)
+		out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
+		fs.Parse(commandArgs)
+		if err := cmd.DeriveCommand(*out); err != nil {
+			fail(err)
+		}
+	case "luks":
+		runLuks(commandArgs, *tpmPath, *debug)
+	case "unlock-key":
+		fs := flag.NewFlagSet("unlock-key", flag.ExitOnError)
+		socket := fs.String("socket", cmd.DefaultUnlockSocket, "The key socket of 'tpm2-kira run --unlock'")
+		wait := fs.Duration("wait", 5*time.Second, "How long to wait for the socket to appear")
+		fs.Parse(commandArgs)
+		volume := fs.Arg(0)
+		if volume == "" {
+			volume = os.Getenv("CRYPTTAB_NAME")
+		}
+		if err := cmd.UnlockKeyCommand(*socket, volume, *wait); err != nil {
+			fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
+			os.Exit(1) // a keyscript's exit status is what cryptroot reads
+		}
 	case "yubikey":
 		runYubiKey(commandArgs)
 	case "cap":
@@ -76,7 +152,11 @@ func main() {
 	case "version", "-v", "--version":
 		fmt.Printf("tpm2-kira version %s\n", Version)
 	case "help", "-h", "--help":
-		printUsage()
+		if len(commandArgs) > 0 {
+			printHelp(commandArgs[0])
+		} else {
+			printUsage()
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", command)
 		printUsage()
@@ -92,7 +172,7 @@ func main() {
 // list.  This lets us distinguish "flag absent" from "flag set to default".
 func nvramExplicit(args []string) bool {
 	for _, arg := range args {
-		if arg == "--nvram" || arg == "-nvram" {
+		if arg == "--nvram" || arg == "-nvram" || strings.HasPrefix(arg, "--nvram=") || strings.HasPrefix(arg, "-nvram=") {
 			return true
 		}
 	}
@@ -192,7 +272,7 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	fs := flag.NewFlagSet("seal", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	pcrs := fs.String("pcrs", "0,2,7", "PCR indices to use for policy")
+	pcrs := fs.String("pcrs", "", "PCR indices to use for policy (default: what this boot measured, see 'help seal')")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
@@ -209,21 +289,43 @@ func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	}
 	cmd.MeasurePointModeSetting = mode
 
-	// Validate PCR specs before proceeding
-	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
-		fail(err)
-	}
-
 	hashAlgo := cmd.PCRHashAlgoSHA256
 	if *useSHA1 {
 		hashAlgo = cmd.PCRHashAlgoSHA1
 	}
 
-	sealIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
-
-	if err := cmd.Seal(*tpm, *pcrs, sealIndex, *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
+	// Without --pcrs, the selection is what this boot measured. Without
+	// --pcrs and --nvram, slot 0 gets it and slot 1 the fallback (0 and 7
+	// alone), so a boot change that was not predicted still shows a code.
+	// With either, one slot: the one named (else 0), the PCRs named (else
+	// the selection).
+	if !nvramExplicit(args) && !pcrsGiven(args) {
+		if err := cmd.SealDefaults(*tpm, *pubKeyPath, *privKeyPath, hashAlgo, *debug); err != nil {
+			fail(err)
+		}
+		return
+	}
+	if *pcrs == "" {
+		sel, why := cmd.DefaultPCRSelection("", hashAlgo)
+		fmt.Printf("PCRs: %s (%s)\n\n", sel, why)
+		*pcrs = sel
+	}
+	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
 		fail(err)
 	}
+	if err := cmd.Seal(*tpm, *pcrs, cmd.ResolveNVRAMIndex(uint32(*nvram)), *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
+		fail(err)
+	}
+}
+
+// pcrsGiven says whether --pcrs is among the arguments.
+func pcrsGiven(args []string) bool {
+	for _, a := range args {
+		if a == "--pcrs" || a == "-pcrs" || strings.HasPrefix(a, "--pcrs=") || strings.HasPrefix(a, "-pcrs=") {
+			return true
+		}
+	}
+	return false
 }
 
 func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -319,17 +421,22 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	gate := fs.String("gate", "", "Also be the Bluetooth gate's coordinator on this socket: hold the TPM for 'attest gate --coordinator' and let the phone's verdict release the boot (set by the initrd unit)")
+	hold := fs.Uint("hold", uint(cmd.HoldDefault/time.Second), "Seconds to wait for Enter after showing the code before the boot continues on its own (0: at once)")
+	unlock := fs.String("unlock", "", "Also answer systemd-cryptsetup's key requests on this socket (crypttab(5) AF_UNIX key files): the passphrase is asked at tpm2-kira's prompt once the code screen is confirmed. The initrd's socket unit passes the socket instead (set by the initrd unit)")
 
 	fs.Parse(args)
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	cmd.RunCommand(*tpm, scanIndex, *debug)
+	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, *debug)
 }
 
 func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	if len(args) == 0 {
-		fail(fmt.Errorf("nvram command requires a subcommand (list, status, delete)"))
+		fmt.Fprint(os.Stderr, "nvram requires a subcommand.\n\n")
+		printHelp("nvram")
+		os.Exit(cmd.ExitUsage)
 	}
 
 	subcommand := args[0]
@@ -341,6 +448,8 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	yes := fs.Bool("yes", false, "delete: confirm deleting every slot (only needed without --nvram)")
+	pubKey := fs.String("pubkey", "", "restore: signing public key (default: derived from the private key)")
+	privKey := fs.String("privkey", "", "restore: signing private key (default: "+cmd.DefaultPrivateKeyPath+")")
 
 	fs.Parse(args)
 
@@ -362,163 +471,403 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 		if err := cmd.NVRAMDeleteCommand(*tpm, deleteIndex, *yes, *debug); err != nil {
 			fail(err)
 		}
+	case "restore":
+		if fs.NArg() != 1 {
+			fail(fmt.Errorf("nvram restore takes the stashed blob's file: tpm2-kira nvram restore %s/slot-0x<index>-<time>.blob", cmd.NVRAMRecoveryDir))
+		}
+		restoreIndex := resolveOrScanAll(uint32(*nvram), provided)
+		if err := cmd.NVRAMRestore(*tpm, fs.Arg(0), restoreIndex, *pubKey, *privKey, *debug); err != nil {
+			fail(err)
+		}
 	default:
 		fail(fmt.Errorf("unknown nvram subcommand %q", subcommand))
 	}
 }
 
-func printUsage() {
-	fmt.Printf(`tpm2-kira - TPM2-based TOTP authenticator with PCR policies
-
-USAGE:
-  tpm2-kira <command> [options]
-
-COMMANDS:
-  setup       Initial setup: create the signing key (run before seal)
-  seal        Generate and seal TOTP secret to TPM NVRAM (requires setup)
-  reseal      Reseal secret with current PCR values (requires signing key)
-  reveal      Generate TOTP code with colored KIRA format
-  reveal-plain Generate TOTP code (plain output)
-  run         Continuously display TOTP codes (runs until stopped)
-  cap         Lock code computation until the next reboot (run when leaving
-              the initrd; the boot integration does this)
-  info        Display sealed secret information
-  nvram       Manage TPM NVRAM (list, status, delete)
-  yubikey     YubiKey support (list)
-  pcrtips     Show PCR (Platform Configuration Register) reference guide
-  version     Show version information
-  help        Show this help message
-
-GLOBAL OPTIONS:
-  --tpm PATH      Path to TPM device (default: /dev/tpmrm0, the kernel resource
-                  manager; /dev/tpm0 when the kernel provides none)
-  --nvram INDEX   NVRAM slot number or full index in hex
-                  Slot shorthand: 0-15 maps to 0x01803010-0x0180301F
-                  Full index:     any hex value like 0x01803010
-                  When omitted, commands automatically discover and operate on
-                  all populated slots in the default range.
-  --debug         Enable debug output
-
-SEAL OPTIONS:
-  --pcrs INDICES     PCR indices with optional source suffix (default: 0,2,7)
-                     Suffix 'r' = read from TPM registers (default if no suffix)
-                     Suffix 'e' = calculate from TPM eventlog (PCRs 0-12 only)
-                     Suffix 'u[:PATH]' = compute from a unified kernel image (PCR 11 only)
-                       Replays systemd-stub's section measurements internally
-                     Examples: "0,2,7" (all register), "0e,2e,7e" (all eventlog),
-                               "0e,2,7e" (mixed: 0 and 7 from eventlog, 2 from register)
-                               "0e,2e,7e,11u" (eventlog + UKI-computed PCR 11)
-  --measure-point M  Account for systemd's userspace PCR extends that happen
-                     before tpm2-kira runs: auto (default), on, off
-  --pubkey PATH      Path to signing public key PEM for PolicySigned branch
-                     (default: %s)
-                     Accepts X.509 certificates or raw public keys (RSA, ECDSA)
-  --privkey PATH     Path to signing private key PEM (optional)
-                     Both key paths are stored in the blob so reseal can find
-                     them automatically without requiring --pubkey / --privkey
-  --sha1             Use SHA-1 PCR bank instead of SHA-256 (default: SHA-256)
-                     Use only if firmware eventlog does not provide SHA-256 digests
-  --verify-uki       Check the built-in PCR 11 computation against this boot's
-                     event log before sealing (default: true)
-
-RESEAL OPTIONS:
-  --pcrs INDICES     New PCR indices with optional source suffix (optional,
-                     preserves original selection and per-PCR sources if omitted)
-  --measure-point M  Same as for seal: auto (default), on, off
-  --pubkey PATH      Path to signing public key PEM (optional). Must belong to
-                     --privkey; default: derived from the private key.
-  --privkey PATH     Path to signing private key (default: the key from setup).
-                     It verifies the blob's signature, authorizes the NV write
-                     and, when PCRs changed, the PolicySigned unseal. A key
-                     path stored in the blob is never used to find it.
-  --require-key      With the key on a YubiKey: fail when the token or its PIN
-                     is unavailable. By default reseal then prints SKIPPED,
-                     leaves every slot untouched, and exits normally.
-
-INFO OPTIONS:
-  --json             Output as JSON
-  --privkey PATH     Signing private key to verify each blob with
-                     (default: the key from setup). A blob that does not
-                     verify is shown as untrusted, and no file it names is
-                     opened.
-
-NVRAM SUBCOMMANDS:
-  list               List all NVRAM indices
-  status             Show NVRAM index status
-  delete             Delete NVRAM index (or all populated slots when --nvram is omitted;
-                     that asks for confirmation on a terminal, or needs --yes)
-
-AUTHENTICATION:
-  The TOTP key is an HMAC key inside the TPM; the TPM computes every code and
-  the key never leaves it after seal. It is usable only under a policy the
-  signing key has approved (PolicyAuthorize):
-    - the PCR values sealed for, and
-    - the slot's generation, which every reseal raises to revoke older
-      approvals.
-  reseal approves the new PCR values with the signing key; it never needs
-  the PCRs to match and never reads the key. 'cap' read-locks the generation
-  when the initrd is left, so no code can be computed in the running OS.
-
-  The signing key defaults to a dedicated ECDSA P-256 pair created by 'setup'.
-  Point --privkey at the sbctl secure boot DB key instead to reseal with the
-  same key that signs your boot components.
-
-SETUP OPTIONS:
-  --yubikey[=SERIAL] Take the signing key from a YubiKey PIV slot without
-                     asking. SERIAL picks the token when several are plugged
-                     in. The slot must already hold a key: tpm2-kira never
-                     writes to the token.
-  --slot SLOT        PIV slot with --yubikey (default: 9a). Other slots, such
-                     as an sbctl key in 9c, are only used when named here.
-  --local            Create local key files without looking for a YubiKey.
-  --debug            Enable debug output
-
-  Setup creates /var/lib/tpm2-kira/keys/ with seal.pub and seal.key. It first
-  looks for a YubiKey. If one holds a usable key, it asks on the terminal
-  whether to use it or local key files; without a terminal it uses local key
-  files. With a YubiKey, seal.key only names the token and slot and seal.pub is
-  the token's public key: no private key is written. Setup needs no PIN.
-  If the keys directory already exists, setup aborts — further changes must
-  be made manually via 'seal' or 'reseal'.
-
-YUBIKEY SUBCOMMANDS:
-  list               List YubiKeys and the keys in their PIV slots, and
-                     which are usable by tpm2-kira. Read-only; no PIN.
-
-  With the signing key on a YubiKey, seal and reseal need the token and its
-  PIN. The PIN is taken from the %s environment variable, else from
-  the TPM2_KIRA_PIN='...' line in /etc/mkinitcpio.conf (which the
-  automatic reseal after initramfs rebuilds needs anyway; refused unless the
-  file is root-owned and readable by root only), else asked on the terminal. reveal, run and info never need the token.
-
-EXAMPLES:
-  tpm2-kira setup
-  tpm2-kira setup --yubikey
-  tpm2-kira setup --yubikey=12345678 --slot 9c
-  tpm2-kira yubikey list
-  tpm2-kira seal
-  tpm2-kira seal --nvram 0
-  tpm2-kira seal --pcrs "0e,2e,7e"
-  tpm2-kira seal --pcrs "0e,2e,7e,11u"
-  tpm2-kira seal --pubkey /path/to/my-key.pem
-  tpm2-kira seal --sha1 --pcrs "0e,2e,7e"
-  tpm2-kira seal --pcrs "0e,2,4,7e"
-  tpm2-kira reveal
-  tpm2-kira reveal --nvram 3
-  tpm2-kira reveal-plain
-  tpm2-kira run
-  tpm2-kira reseal
-  tpm2-kira reseal --nvram 0
-  tpm2-kira reseal --pcrs "0e,2,4,7e"
-  tpm2-kira reseal --privkey /path/to/my-key.key
-  tpm2-kira info
-  tpm2-kira info --nvram 0
-  tpm2-kira info --nvram 0x01803010
-  tpm2-kira nvram list
-  tpm2-kira nvram delete --yes
-  tpm2-kira nvram delete --nvram 0
-  tpm2-kira nvram delete --nvram 0x01803010
-
-For detailed documentation, see README.md
-`, cmd.DefaultPublicKeyPath, cmd.PINEnvVar)
+// failAttest reports a failure of an attest command that gates or judges
+// something. These are the documented exceptions to the exit-0 rule
+// (PLAN-REMOTEATTESTATION.md §12.1): a gate that exits 0 on failure is not a
+// gate, and a verifier that exits 0 on a failed check is not a verifier.
+func failAttest(code int, err error) {
+	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: %v\n", err)
+	os.Exit(code)
 }
+
+// stringList is a repeatable string flag.
+type stringList []string
+
+func (l *stringList) String() string     { return strings.Join(*l, ",") }
+func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
+
+// deviceLast moves a leading device argument behind the flags, so that
+// 'luks mark /dev/sda2 --keyslot 1' and 'luks mark --keyslot 1 /dev/sda2'
+// both parse (the flag package stops at the first non-flag).
+func deviceLast(args []string) []string {
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		return append(append([]string{}, args[1:]...), args[0])
+	}
+	return args
+}
+
+func runLuks(args []string, tpmPath string, debugFlag bool) {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, "luks requires a subcommand.\n\n")
+		printHelp("luks")
+		os.Exit(cmd.ExitUsage)
+	}
+	switch args[0] {
+	case "status":
+		fs := flag.NewFlagSet("luks status", flag.ExitOnError)
+		jsonOut := fs.Bool("json", false, "Machine-readable output")
+		fs.Parse(args[1:])
+		if err := cmd.LuksStatus(fs.Args(), *jsonOut); err != nil {
+			fail(err)
+		}
+	case "mark":
+		fs := flag.NewFlagSet("luks mark", flag.ExitOnError)
+		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+remotesalt: the slot's verifier is checked)")
+		keyslot := fs.Int("keyslot", -1, "The LUKS keyslot to mark (required)")
+		mode := fs.String("mode", "", "How its key is made: password+salt or password+remotesalt (required)")
+		nvram := fs.Uint("nvram", 0, "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+remotesalt: the slot whose remote salt it is)")
+		label := fs.String("label", "luks", "The salt's label (password+remotesalt)")
+		debug := fs.Bool("debug", debugFlag, "Enable debug output")
+		fs.Parse(deviceLast(args[1:]))
+		if fs.NArg() != 1 || *keyslot < 0 || *mode == "" {
+			fail(fmt.Errorf("usage: tpm2-kira luks mark <device> --keyslot N --mode password+salt|password+remotesalt"))
+		}
+		if err := cmd.LuksMark(cmd.LuksMarkOptions{TPMPath: *tpm, Device: fs.Arg(0), Keyslot: *keyslot, Mode: *mode,
+			SealIndex: cmd.ResolveNVRAMIndex(uint32(*nvram)), Label: *label, Debug: *debug}); err != nil {
+			fail(err)
+		}
+	case "enrol", "enroll":
+		fs := flag.NewFlagSet("luks enrol", flag.ExitOnError)
+		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+remotesalt)")
+		mode := fs.String("mode", "", "How the key is made at boot: password+salt or password+remotesalt (required)")
+		nvram := fs.Uint("nvram", 0, "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+remotesalt: the slot whose phone keeps the salt)")
+		label := fs.String("label", "luks", "The remote salt's label (password+remotesalt)")
+		privKey := fs.String("privkey", "", "Signing key, needed for every hand-over (default: "+cmd.DefaultPrivateKeyPath+")")
+		pubKey := fs.String("pubkey", "", "Signing public key, for the record check (default: "+cmd.DefaultPublicKeyPath+")")
+		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
+		timeout := fs.Duration("timeout", 10*time.Minute, "Give up waiting for the phone after this long (0 = wait forever)")
+		adapterWait := fs.Duration("adapter-wait", 30*time.Second, "Wait this long for the adapter to appear")
+		existing := fs.String("existing-key-file", "", "A file with an existing passphrase to authorise luksAddKey (scripts; by default asked)")
+		debug := fs.Bool("debug", debugFlag, "Enable debug output")
+		fs.Parse(deviceLast(args[1:]))
+		if fs.NArg() != 1 || *mode == "" {
+			fail(fmt.Errorf("usage: tpm2-kira luks enrol <device> --mode password+salt|password+remotesalt"))
+		}
+		var slot uint32
+		if nvramExplicit(args[1:]) {
+			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+		}
+		if err := cmd.LuksEnrol(cmd.LuksEnrolOptions{
+			Device: fs.Arg(0), Mode: *mode, ExistingKeyFile: *existing,
+			Remote: cmd.FactorEnrolOptions{TPMPath: *tpm, SealIndex: slot, Label: *label, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
+				Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: true, Debug: *debug},
+		}); err != nil {
+			fail(err)
+		}
+	case "route":
+		fs := flag.NewFlagSet("luks route", flag.ExitOnError)
+		var cmdlines stringList
+		fs.Var(&cmdlines, "cmdline", "A kernel command line file to judge (repeatable; default: the ones that exist)")
+		crypttab := fs.String("crypttab", "", "The crypttab to judge (default /etc/crypttab)")
+		jsonOut := fs.Bool("json", false, "Machine-readable output")
+		fs.Parse(args[1:])
+		if err := cmd.LuksRoute(fs.Args(), cmdlines, *crypttab, *jsonOut); err != nil {
+			fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
+			os.Exit(1) // the hook reads it
+		}
+	case "remove":
+		fs := flag.NewFlagSet("luks remove", flag.ExitOnError)
+		keyslot := fs.Int("keyslot", -1, "The keyslot to remove, one tpm2-kira marked (required)")
+		existing := fs.String("existing-key-file", "", "A file with a remaining passphrase to authorise luksKillSlot (scripts; by default asked)")
+		fs.Parse(deviceLast(args[1:]))
+		if fs.NArg() != 1 || *keyslot < 0 {
+			fail(fmt.Errorf("usage: tpm2-kira luks remove <device> --keyslot N"))
+		}
+		if err := cmd.LuksRemove(cmd.LuksRemoveOptions{Device: fs.Arg(0), Keyslot: *keyslot, ExistingKeyFile: *existing}); err != nil {
+			fail(err)
+		}
+	default:
+		fail(fmt.Errorf("unknown luks subcommand %q", args[0]))
+	}
+}
+
+func runRemoteSalt(args []string, tpmPath string, debugFlag bool) {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, "remote-salt requires a subcommand.\n\n"+factorUsage)
+		os.Exit(cmd.ExitUsage)
+	}
+	switch args[0] {
+	case "status":
+		fs := flag.NewFlagSet("remote-salt status", flag.ExitOnError)
+		tpm := fs.String("tpm", tpmPath, "Path to TPM device")
+		nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index (default: every enrolled slot)")
+		jsonOut := fs.Bool("json", false, "Machine-readable output")
+		debug := fs.Bool("debug", debugFlag, "Enable debug output")
+		fs.Parse(args[1:])
+		var slot uint32
+		if nvramExplicit(args[1:]) {
+			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+		}
+		if err := cmd.FactorStatus(*tpm, slot, *jsonOut, *debug); err != nil {
+			fail(err)
+		}
+		return
+	case "unenrol", "unenroll":
+		fs := flag.NewFlagSet("remote-salt unenrol", flag.ExitOnError)
+		tpm := fs.String("tpm", tpmPath, "Path to TPM device")
+		nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index")
+		privKey := fs.String("privkey", "", "Signing key (default: "+cmd.DefaultPrivateKeyPath+")")
+		debug := fs.Bool("debug", debugFlag, "Enable debug output")
+		fs.Parse(args[1:])
+		if err := cmd.FactorUnenrol(*tpm, cmd.ResolveNVRAMIndex(uint32(*nvram)), *privKey, *debug); err != nil {
+			fail(err)
+		}
+		return
+	case "enrol", "enroll", "rotate":
+	case "help", "-h", "--help":
+		fmt.Print(factorUsage)
+		return
+	default:
+		fail(fmt.Errorf("unknown remote-salt subcommand %q", args[0]))
+	}
+	fs := flag.NewFlagSet("remote-salt "+args[0], flag.ExitOnError)
+	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
+	nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index (default: the first enrolled slot)")
+	label := fs.String("label", "luks", "The factor's label: one factor serves volumes with unrelated salts")
+	out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
+	privKey := fs.String("privkey", "", "Signing key, needed for every hand-over (default: "+cmd.DefaultPrivateKeyPath+")")
+	pubKey := fs.String("pubkey", "", "Signing public key, for the record check (default: "+cmd.DefaultPublicKeyPath+")")
+	adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
+	timeout := fs.Duration("timeout", 10*time.Minute, "Give up waiting for the phone after this long (0 = wait forever)")
+	adapterWait := fs.Duration("adapter-wait", 30*time.Second, "Wait this long for the adapter to appear")
+	yes := fs.Bool("yes", false, "The recovery passphrase is in a second keyslot already; do not ask")
+	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	fs.Parse(args[1:])
+	var slot uint32
+	if nvramExplicit(args[1:]) {
+		slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+	}
+	if err := cmd.FactorEnrol(cmd.FactorEnrolOptions{
+		TPMPath: *tpm, SealIndex: slot, Label: *label, Out: *out, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
+		Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: *yes, Debug: *debug,
+		Rotate: args[0] == "rotate",
+	}); err != nil {
+		fail(err)
+	}
+}
+
+const factorUsage = `tpm2-kira remote-salt enrol | rotate | status | unenrol [options]
+
+The remote salt (docs/PLAN-FACTORRELEASE.md): the salt of the disk's key,
+kept by the verifier that attests this machine - today the phone enrolled
+with 'attest enrol', over Bluetooth LE - as a value only this machine's
+TPM can open, in a boot its signing key approved. The phone hands it back
+after a verdict you accept; at boot tpm2-kira asks for your password and
+derives the key from both (hashpwd2's derivation, unlock mode
+password+remotesalt). Without the phone, the recovery passphrase in its
+own keyslot opens the disk at cryptsetup's prompt.
+
+  remote-salt enrol    Give the phone a salt, prove the round trip, derive
+                       the key once for 'cryptsetup luksAddKey' ('luks enrol
+                       --mode password+remotesalt' does all of it in one step):
+                         --out PATH   the key file, on tmpfs (required)
+                         --label STR  default luks
+                         --nvram N --privkey PATH --pubkey PATH --adapter N
+                         --timeout DUR --adapter-wait DUR --yes
+                       Have a recovery passphrase in a second keyslot first:
+                         cryptsetup luksAddKey <device>
+  remote-salt rotate   The same with a new salt for a slot that has one; the
+                       old keyslot is then to be removed by hand
+  remote-salt status   Which slots have a remote salt enrolled (--nvram N, --json)
+  remote-salt unenrol  Take the release key out of the slot's blob (--nvram N,
+                       --privkey PATH): what the phone keeps can then not be
+                       opened; remove the salt's keyslot by hand
+`
+
+func runAttest(args []string, tpmPath string, debugFlag bool) {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, "attest requires a subcommand.\n\n"+attestUsage)
+		os.Exit(cmd.ExitUsage)
+	}
+	sub, args := args[0], args[1:]
+	if sub == "help" || sub == "-h" || sub == "--help" {
+		fmt.Print(attestUsage)
+		return
+	}
+	fs := flag.NewFlagSet("attest "+sub, flag.ExitOnError)
+	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
+	nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index")
+	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+
+	switch sub {
+	case "enrol", "enroll":
+		name := fs.String("name", "", "Name shown on the phone (default: hostname)")
+		pcrs := fs.String("pcrs", "", "PCRs to quote (default: the slot's sealed selection)")
+		sha1 := fs.Bool("sha1", false, "Quote the SHA-1 PCR bank instead of SHA-256 (only for a TPM without a SHA-256 bank, or a slot sealed with --sha1)")
+		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
+		privKey := fs.String("privkey", "", "Signing key for the attestation blob (default: the slot's, else "+cmd.DefaultPrivateKeyPath+")")
+		timeout := fs.Duration("timeout", 10*time.Minute, "Give up after this long (0 = wait forever)")
+		verifyTPM := fs.String("verify-tpm", "warn", "If this machine's TPM is not verified as genuine: warn (ask), require (refuse) or off")
+		verifyPhone := fs.String("verify-phone", "warn", "If the phone's key is not attested by genuine secure hardware: warn (ask), require (refuse) or off")
+		fs.Parse(args)
+		vt, err := cmd.ParseHWCheckPolicy(*verifyTPM)
+		if err != nil {
+			failAttest(cmd.ExitUsage, err)
+		}
+		vp, err := cmd.ParseHWCheckPolicy(*verifyPhone)
+		if err != nil {
+			failAttest(cmd.ExitUsage, err)
+		}
+		err = cmd.AttestEnrol(cmd.EnrolOptions{
+			TPMPath: *tpm, SealIndex: uint32(*nvram), Name: *name, PCRs: *pcrs, SHA1: *sha1,
+			Adapter: *adapter, PrivKeyPath: *privKey, Timeout: *timeout, Debug: *debug,
+			VerifyTPM: vt, VerifyPhone: vp,
+		})
+		if err != nil {
+			failAttest(cmd.ExitInternal, err)
+		}
+	case "gate":
+		// Nothing is configured: the gate takes the adapter that comes up
+		// (the image carries one adapter's driver), waits for it and for a
+		// phone as long as the code screen holds, and logs every step when
+		// the boot settings in the TPM say debug (bootsettings.go).
+		adapter := fs.Int("adapter", -1, "Bluetooth adapter index (hciN); default: the first that comes up")
+		timeout := fs.Duration("timeout", 0, "Give up after this long (0 = as long as the code screen holds, or forever without one)")
+		adapterWait := fs.Duration("adapter-wait", cmd.GateAdapterWait, "Wait this long for the adapter to appear")
+		coordinator := fs.String("coordinator", "", "Socket of the coordinator ('tpm2-kira run --gate') that holds the TPM; without it this process uses the TPM itself")
+		fs.Parse(args)
+		var slot uint32
+		if nvramExplicit(args) {
+			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+		}
+		os.Exit(cmd.AttestGate(cmd.GateOptions{
+			TPMPath: *tpm, SealIndex: slot, Adapter: *adapter, Timeout: *timeout,
+			AdapterWait: *adapterWait, Debug: *debug || cmd.BootDebug(*tpm),
+			Coordinator: *coordinator,
+		}))
+	case "config-check":
+		fs.Parse(args)
+		path := fs.Arg(0)
+		if path == "" {
+			path = cmd.DefaultControlConfigPath
+		}
+		if _, err := cmd.LoadAttestConfig(path); err != nil {
+			failAttest(cmd.ExitUsage, err)
+		}
+		fmt.Printf("%s: valid\n", path)
+	case "initramfs-deps":
+		// Used by the initramfs hooks; prints "module", "firmware" and
+		// "warning" lines for the adapter on this machine.
+		adapter := fs.Int("adapter", -1, "Bluetooth adapter index (hciN); default: TPM2_KIRA_ATTEST_ADAPTER of control.conf")
+		kernelLog := fs.String("kernel-log", "", "Extra kernel log text (e.g. 'journalctl -k -b -o cat' output)")
+		fwDir := fs.String("firmware-dir", cmd.DefaultFirmwareDir, "Firmware directory")
+		fs.Parse(args)
+		os.Exit(cmd.AttestInitramfsDeps(*adapter, *kernelLog, *fwDir))
+	case "status":
+		jsonOut := fs.Bool("json", false, "Output as JSON")
+		fs.Parse(args)
+		var slot uint32
+		if nvramExplicit(args) {
+			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+		}
+		if err := cmd.AttestStatus(*tpm, slot, *jsonOut, *debug); err != nil {
+			fail(err)
+		}
+	case "quote":
+		nonce := fs.String("nonce", "", "Hex nonce chosen by whoever will verify (16-64 bytes)")
+		pcrs := fs.String("pcrs", "", "PCRs to quote (default: the enrolled selection)")
+		out := fs.String("out", "", "Write evidence to this file (default: stdout)")
+		fs.Parse(args)
+		if err := cmd.AttestQuote(*tpm, uint32(*nvram), *nonce, *pcrs, *out, *debug); err != nil {
+			failAttest(cmd.ExitInternal, err)
+		}
+	case "verify":
+		evidence := fs.String("evidence", "", "Evidence file from 'attest quote'")
+		record := fs.String("record", "", "Machine record JSON exported from a verifier")
+		nonce := fs.String("nonce", "", "The nonce given to 'attest quote'")
+		jsonOut := fs.Bool("json", false, "Output the verdict as JSON")
+		fs.Parse(args)
+		ok, err := cmd.AttestVerify(*evidence, *record, *nonce, *jsonOut)
+		if err != nil {
+			failAttest(cmd.ExitInternal, err)
+		}
+		if !ok {
+			os.Exit(cmd.ExitRejected)
+		}
+	case "signer":
+		pubKey := fs.String("pubkey", "", "Signing public key (default: "+cmd.DefaultPublicKeyPath+")")
+		fs.Parse(args)
+		os.Exit(cmd.AttestSignerCommand(*tpm, *pubKey, os.Stdout, *debug))
+	case "ekcert":
+		fs.Parse(args)
+		if err := cmd.AttestEKCert(*tpm, *debug); err != nil {
+			fail(err)
+		}
+	case "unenrol", "unenroll":
+		privKey := fs.String("privkey", "", "Signing key: removing a phone rewrites and signs the slot's blob (default: "+cmd.DefaultPrivateKeyPath+")")
+		fs.Parse(args)
+		if err := cmd.AttestUnenrol(*tpm, uint32(*nvram), *privKey, *debug); err != nil {
+			fail(err)
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "unknown attest subcommand %q\n", sub)
+		os.Exit(cmd.ExitUsage)
+	}
+}
+
+// attestUsage is the page of 'tpm2-kira help attest'.
+const attestUsage = `tpm2-kira attest <subcommand> [options]
+
+Remote attestation: a phone with the Marify app verifies this boot over
+Bluetooth LE - the TPM quotes the PCRs, the phone judges them against the
+record it was given at enrolment, and shows a code that must match the
+machine's screen (docs/PLAN-REMOTEATTESTATION.md).
+
+  attest enrol    Bind a phone to this slot over BLE (booted system; needs the
+                  signing key and a sealed slot: the phones are stored in the
+                  slot's blob, next to its TOTP key, and survive reseal).
+                  Prints a 6-digit code to compare with the app.
+                  --name STR --pcrs LIST --adapter N --privkey PATH --timeout DUR
+                  --sha1  quote the SHA-1 PCR bank instead of SHA-256. Required,
+                          as for 'seal', where nothing else works: a TPM without
+                          a SHA-256 bank, or a slot sealed with --sha1
+                  --verify-tpm warn|require|off    this machine's TPM genuine (EK certificate)?
+                  --verify-phone warn|require|off  the phone's key in genuine secure hardware
+                                                   (Android key attestation, Google roots)?
+  attest gate     Serve attestation requests until a phone returns a receipt;
+                  the boot is never held. Defaults from /etc/tpm2-kira/control.conf.
+                  --adapter N --timeout DUR --adapter-wait DUR
+                  --coordinator SOCKET  be the radio worker only: no TPM in
+                    this process; quotes and the reading of the receipt come
+                    from 'tpm2-kira run --gate SOCKET' (the initrd units).
+                    Without it (by hand) this process uses the TPM itself
+  attest status   Show enrolled phones per slot and whether the blob is signed
+                  by this machine's signing key (--json); exits 1 if not
+  attest signer   Print this machine's signing public key for the initramfs
+                  (used by the initramfs hooks; public, not a secret), after
+                  checking every enrolled record against it and the TPM's
+                  record counter (exit 6 if one does not pass). At boot the
+                  gate serves only a record signed by that key whose count
+                  equals the counter. --pubkey PATH
+  attest ekcert   Show whether the phone will verify this TPM as genuine
+                  (EK certificate chain against the vendor roots in the core)
+  attest quote    Produce evidence without a phone (--nonce HEX --out FILE)
+  attest verify   Judge evidence offline (--evidence FILE --record FILE --nonce HEX)
+  attest unenrol  Remove a slot's phones from its blob; the TOTP key stays.
+                  Needs the signing key (--privkey PATH). To remove the whole
+                  slot without it: nvram delete --nvram N
+  attest initramfs-deps  Modules and firmware the adapter needs (used by the
+                  initramfs hooks)
+  attest config-check [PATH]  Say whether control.conf loads (exit 2 and the
+                  reason if not; used by the initramfs hooks)
+
+  EXIT STATUS: unlike every other command, 'attest gate', 'attest verify',
+  'attest quote' and 'attest enrol' exit non-zero on failure:
+    0 attested   1 internal error   2 usage   3 no phone / no adapter
+    4 rejected (do not type a passphrase before checking)   5 anchor mismatch
+    6 the attestation record was replaced, or an older one was put back
+
+`

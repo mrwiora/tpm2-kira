@@ -1,10 +1,11 @@
 #!/usr/bin/make -f
 
 export CGO_ENABLED = 0
-export GOCACHE = $(CURDIR)/debian/.gocache
+# A GOCACHE from the environment is kept (a build that runs again and again).
+export GOCACHE ?= $(CURDIR)/debian/.gocache
 # A vendored source tree builds offline; without one the modules are fetched.
 export GOFLAGS = $(if $(wildcard vendor/modules.txt),-mod=vendor,-mod=readonly)
-# Fail if go.mod outgrows the distro Go rather than silently fetching a toolchain.
+# Fail if go.mod outgrows the installed Go rather than silently fetching a toolchain.
 export GOTOOLCHAIN = local
 
 VERSION := $(shell dpkg-parsechangelog -SVersion)

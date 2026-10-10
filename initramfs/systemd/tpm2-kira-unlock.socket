@@ -1,0 +1,25 @@
+[Unit]
+Description=tpm2-kira disk unlock socket
+Documentation=man:crypttab(5)
+# An initrd unit. The package also puts this file on the host, where the
+# mkinitcpio hook picks it up from; enabled there by mistake it does nothing.
+ConditionPathExists=/etc/initrd-release
+DefaultDependencies=no
+# /etc/crypttab names this socket as the key file of the volumes tpm2-kira
+# unlocks (crypttab(5), "AF_UNIX KEY FILES"): systemd-cryptsetup connects
+# here when it activates such a volume and reads the key from the
+# connection. The socket exists before any cryptsetup unit can start, so a
+# connection never finds it missing; tpm2-kira.service answers.
+Before=cryptsetup-pre.target
+Conflicts=initrd-switch-root.target
+Before=initrd-switch-root.target
+
+[Socket]
+ListenStream=/run/tpm2-kira/unlock.sock
+SocketMode=0600
+DirectoryMode=0700
+RemoveOnStop=yes
+Service=tpm2-kira.service
+
+[Install]
+WantedBy=sysinit.target

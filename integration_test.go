@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/google/go-tpm/tpm2/transport"
-	"github.com/matthias/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/cmd"
 )
 
 const (
@@ -41,18 +41,53 @@ var testPubKeyPath string
 var testPrivKeyPath string
 var testKeyDir string
 
+// TestSourcesAreInputs keeps 'go test' from answering "(cached)" for this
+// suite after the code changed. The tests here only run the binary, so the
+// test program links none of the code under test and stays the same when
+// that code changes; the cached result would then be served and TestMain,
+// which rebuilds the binary, never run. Files a test looks at are inputs of
+// its cached result, so this test looks at every source file. (It has to be
+// a test: what TestMain touches before m.Run is not recorded.)
+func TestSourcesAreInputs(t *testing.T) {
+	n := 0
+	err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); path != "." && (strings.HasPrefix(name, ".") || name == "testdata") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".go") || path == "go.mod" || path == "go.sum" {
+			if _, err := os.Stat(path); err != nil {
+				return err
+			}
+			n++
+		}
+		return nil
+	})
+	if err != nil || n < 50 {
+		t.Fatalf("looked at %d source files: %v", n, err)
+	}
+}
+
 // TestMain sets up and tears down the test environment
 func TestMain(m *testing.M) {
-	// Check if binary exists, if not build it
-	if _, err := os.Stat("./tpm2-kira"); os.IsNotExist(err) {
-		fmt.Println("Building tpm2-kira binary for testing...")
-		// Built the way it ships: static and cgo-free.
-		buildCmd := exec.Command("go", "build", "-o", "tpm2-kira")
-		buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-		if output, err := buildCmd.CombinedOutput(); err != nil {
-			fmt.Printf("Failed to build binary: %v\nOutput: %s\n", err, output)
-			os.Exit(1)
-		}
+	// Always build the binary under test. A binary left in the tree by an
+	// earlier run or by 'make' would otherwise be tested instead of the
+	// current code; the build cache makes an up-to-date build cheap.
+	// Built the way it ships: static and cgo-free.
+	// The suite runs the binary as a user against a software TPM; the
+	// binary refuses anything but help as a user unless told so.
+	os.Setenv("TPM2_KIRA_UNPRIVILEGED", "1")
+	fmt.Println("Building tpm2-kira binary for testing...")
+	buildCmd := exec.Command("go", "build", "-o", "tpm2-kira")
+	buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if output, err := buildCmd.CombinedOutput(); err != nil {
+		fmt.Printf("Failed to build binary: %v\nOutput: %s\n", err, output)
+		os.Exit(1)
 	}
 
 	// Generate test signing keys
@@ -1311,16 +1346,15 @@ func TestExitCodes(t *testing.T) {
 	t.Log("✓ All exit code tests passed")
 }
 
-// TestResealIgnoresStoredKeyPaths checks that reseal never takes its signing
-// key from a path stored in the blob. The blob is unverified until that key
-// has checked it, so a stored path would let a planted blob name its own key.
-func TestResealIgnoresStoredKeyPaths(t *testing.T) {
+// TestResealNeedsItsKeyGiven checks that a slot sealed with a custom key is
+// resealed only with that key given: the blob names no key file, and reseal
+// takes the key from --privkey or the default location.
+func TestResealNeedsItsKeyGiven(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
 
 	nvramIndex := "0x01803004"
 
-	// Seal with both key paths (they get stored in the blob)
 	stdout, stderr, err := runTPMKira(t, tpmPath,
 		"seal",
 		"--nvram", nvramIndex,
@@ -1331,21 +1365,20 @@ func TestResealIgnoresStoredKeyPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Seal failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
 	}
-	t.Log("✓ Seal with key paths successful")
+	t.Log("✓ Seal with a custom key successful")
 
-	// Without --privkey, reseal uses the default key location only. It must
-	// not succeed via the stored path, and must name it as a hint.
+	// Without --privkey, reseal uses the default key location only.
 	stdout, stderr, _ = runTPMKira(t, tpmPath,
 		"reseal",
 		"--nvram", nvramIndex,
 	)
 	if strings.Contains(stdout, "Successfully resealed") {
-		t.Fatalf("Reseal succeeded using the key path stored in the blob:\n%s", stdout)
+		t.Fatalf("Reseal succeeded without the slot's key:\n%s", stdout)
 	}
-	if !strings.Contains(stdout+stderr, "--privkey "+testPrivKeyPath) {
-		t.Errorf("Expected a hint naming the stored key path, got:\nStdout: %s\nStderr: %s", stdout, stderr)
+	if !strings.Contains(stdout+stderr, "--privkey <path>") {
+		t.Errorf("Expected the advice to pass --privkey, got:\nStdout: %s\nStderr: %s", stdout, stderr)
 	}
-	t.Log("✓ Reseal refused to use the stored key path")
+	t.Log("✓ Reseal without the key refused")
 
 	// With --privkey it works.
 	testResealSuccess(t, tpmPath, nvramIndex)
@@ -1399,7 +1432,7 @@ func revealPlainCode(t *testing.T, tpmPath, nvramIndex string) (string, string) 
 func TestCodeMatchesAuthenticator(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
-	nvramIndex := "0x01803020"
+	nvramIndex := "0x01803040"
 
 	stdout, stderr, err := runTPMKira(t, tpmPath, "seal", "--nvram", nvramIndex, "--pcrs", "0,7",
 		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath)
@@ -1448,7 +1481,7 @@ func TestCapLocksCodesUntilReboot(t *testing.T) {
 	}
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
-	nvramIndex := "0x01803021"
+	nvramIndex := "0x01803041"
 
 	if stdout, stderr, err := runTPMKira(t, tpmPath, "seal", "--nvram", nvramIndex, "--pcrs", "0,7",
 		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
@@ -1497,7 +1530,7 @@ func TestCapLocksCodesUntilReboot(t *testing.T) {
 func TestResealRevokesOldBlob(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
-	const index = 0x01803022
+	const index = 0x01803042
 	nvramIndex := fmt.Sprintf("0x%08X", index)
 
 	if stdout, stderr, err := runTPMKira(t, tpmPath, "seal", "--nvram", nvramIndex, "--pcrs", "0,7",

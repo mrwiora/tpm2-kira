@@ -1,5 +1,5 @@
 [Unit]
-Description=Locking tpm2-kira codes until the next boot
+Description=tpm2-kira lock of the codes until the next boot
 Documentation=file:///usr/share/doc/tpm2-kira/README.md
 DefaultDependencies=no
 ConditionPathExists=/etc/initrd-release

@@ -1,0 +1,94 @@
+[Unit]
+Description=tpm2-kira attestation by phone (Bluetooth LE)
+Documentation=https://github.com/mrwiora/tpm2-kira/blob/main/docs/PLAN-BLE.md
+DefaultDependencies=no
+# An initrd unit. The package also puts this file on the host, where the
+# mkinitcpio hook picks it up from; enabled there by mistake it does nothing.
+ConditionPathExists=/etc/initrd-release
+# The radio half of the gate. It has no TPM: tpm2-kira.service, started at
+# the same moment, is its coordinator, holds the TPM, issues the quotes and
+# reads the phone's receipt (the worker waits for its socket). Not ordered
+# after that unit, which only counts as started when the boot is released.
+Wants=tpm2-kira.service
+# A slot enrolled with a phone is verified by the phone while the code is
+# shown, and the phone's verdict releases the boot like Enter does. When the
+# code screen ends, so does the coordinator's service, and this worker exits
+# (lazy mode: nothing listens to the radio at the passphrase prompt). Its
+# quotes come from before systemd-pcrosseparator.service; the phone knows
+# the registers from after it and treats both as the same boot (PLAN-BLE.md
+# §3.3). enter-initrd is in PCR 11 by then.
+After=systemd-pcrphase-initrd.service
+# The image lists the adapter's driver modules in modules-load.d.
+After=systemd-modules-load.service
+# Started before the prompt, but never waited for: lazy mode must not hold
+# the boot. Type=simple returns as soon as the process runs.
+Before=systemd-ask-password-console.service
+# The adapter is released when the initramfs ends.
+Conflicts=initrd-switch-root.target
+Before=initrd-switch-root.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/tpm2-kira attest gate --coordinator /run/tpm2-kira/gate.sock
+# The worker's narrative (waiting, rounds, a phone connected, the verdict,
+# and with "Debug at boot" switched on in control every step) is written to the journal
+# directly, never to the console: the code screen of tpm2-kira.service is
+# where the person looks, and it shows the gate's state in the slot's
+# line. What needs eyes - a rejected boot, a wrong phone, no adapter - is
+# on stderr and reaches the console too; with debug on, the narrative as
+# well. 'journalctl -b -u tpm2-kira-attest.service' on the unlocked system
+# says what the gate did, or why it did nothing.
+StandardOutput=journal
+StandardError=journal+console
+# No phone in range (3) is normal in lazy mode. A rejected boot (4) or an
+# anchor mismatch (5) is left to fail the unit, so the console shows a red
+# FAILED line next to the warning; nothing requires this unit, so the boot
+# carries on either way.
+SuccessExitStatus=3
+
+# Confinement. This process parses radio input from anyone in range, as root,
+# before the disk is unlocked. It needs one Bluetooth adapter and the socket
+# of its coordinator, and gets nothing else - in particular no TPM, which
+# while the code screen is up would compute TOTP codes for whoever asks.
+# Should a parsing bug ever be found, this is what limits what it can be
+# turned into.
+#
+# Capabilities: the HCI user channel needs CAP_NET_ADMIN, the raw HCI socket
+# CAP_NET_RAW. Nothing else survives, and none can be regained.
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=
+# Sockets: Bluetooth, and Unix for the coordinator and the journal.
+# No IP in any form. (Not PrivateNetwork=: Bluetooth sockets exist only in
+# the initial network namespace.)
+RestrictAddressFamilies=AF_BLUETOOTH AF_UNIX
+IPAddressDeny=any
+# Devices: rfkill to clear a soft block, and the console. No TPM.
+DevicePolicy=closed
+DeviceAllow=/dev/rfkill rw
+DeviceAllow=/dev/console rw
+# File system: read-only, /sys and /proc/sys included. The worker only reads
+# there (its configuration, adapter and rfkill state).
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+UMask=0077
+# Kernel interfaces a Go program talking to a socket and a device never needs.
+# An unexpected call fails with EPERM instead of killing the gate.
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=sysinit.target

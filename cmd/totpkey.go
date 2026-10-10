@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
+
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // The TOTP key is an HMAC key inside the TPM. tpm2-kira never gets it back:
@@ -142,7 +144,7 @@ func policyNVDigest(prev []byte, indexName []byte, operandB []byte) []byte {
 // policyAuthorizeDigest is the policy of a key object that accepts any
 // policy approved by the key named keyName for policyRef.
 func policyAuthorizeDigest(keyName []byte, policyRef []byte) []byte {
-	return policyHash(policyHash(make([]byte, sha256.Size), commandCode(tpm2.TPMCCPolicyAuthorize), keyName), policyRef)
+	return attest.PolicyAuthorizeDigest(keyName, policyRef)
 }
 
 // approvalDigest is what the signing key signs to approve a policy.
@@ -395,20 +397,11 @@ func TOTPCode(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, t time.T
 	if p.TOTPAlgorithm != tpm2.TPMAlgSHA1 && p.TOTPAlgorithm != tpm2.TPMAlgSHA256 {
 		return "", fmt.Errorf("blob has unknown TOTP algorithm 0x%04x", uint16(p.TOTPAlgorithm))
 	}
-	signingPublic, err := tpm2.Unmarshal[tpm2.TPMTPublic](p.SigningPublic)
+	session, done, err := approvedSession(tpmDev, blob, blobIndex)
 	if err != nil {
-		return "", fmt.Errorf("blob holds no valid signing public key: %w", err)
+		return "", err
 	}
-	approval, err := tpm2.Unmarshal[tpm2.TPMTSignature](p.ApprovalSignature)
-	if err != nil {
-		return "", fmt.Errorf("blob holds no valid approval signature: %w", err)
-	}
-
-	genIndex := GenerationIndex(blobIndex)
-	genPub, err := tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(genIndex)}.Execute(tpmDev)
-	if err != nil {
-		return "", &GenerationMismatchError{BlobGeneration: p.Generation, IndexMissing: true}
-	}
+	defer done()
 	primary, err := CreatePrimaryKey(tpmDev)
 	if err != nil {
 		return "", err
@@ -420,13 +413,57 @@ func TOTPCode(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, t time.T
 	}
 	defer FlushHandle(tpmDev, key.ObjectHandle)
 
+	counter := binary.BigEndian.AppendUint64(nil, uint64(t.Unix()/30))
+	rsp, err := tpm2.Hmac{
+		Handle:  tpm2.AuthHandle{Handle: key.ObjectHandle, Name: key.Name, Auth: session},
+		Buffer:  tpm2.TPM2BMaxBuffer{Buffer: counter},
+		HashAlg: p.TOTPAlgorithm,
+	}.Execute(tpmDev)
+	if err != nil {
+		if errors.Is(err, ErrCodesLocked) {
+			return "", ErrCodesLocked
+		}
+		return "", fmt.Errorf("failed to compute the code in the TPM: %w", err)
+	}
+	return hotpTruncate(rsp.OutHMAC.Buffer), nil
+}
+
+// approvedSession returns a policy session that satisfies the slot's policy
+// if the PCRs and the generation are what the signing key approved: the one
+// authorization for everything bound to the slot (the TOTP key, the boot
+// key). The session runs its policy when a command uses it. The caller calls
+// done once that command has been executed.
+func approvedSession(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32) (tpm2.Session, func(), error) {
+	return approvedSessionThen(tpmDev, blob, blobIndex, nil)
+}
+
+// approvedSessionThen is approvedSession with one more policy command run
+// after PolicyAuthorize, for an object whose policy extends the slot's
+// (the release key: PolicyCommandCode, attest.ReleaseKeyPolicy).
+func approvedSessionThen(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, then func(transport.TPM, tpm2.TPMISHPolicy) error) (tpm2.Session, func(), error) {
+	p := &blob.Payload
+	signingPublic, err := tpm2.Unmarshal[tpm2.TPMTPublic](p.SigningPublic)
+	if err != nil {
+		return nil, nil, fmt.Errorf("blob holds no valid signing public key: %w", err)
+	}
+	approval, err := tpm2.Unmarshal[tpm2.TPMTSignature](p.ApprovalSignature)
+	if err != nil {
+		return nil, nil, fmt.Errorf("blob holds no valid approval signature: %w", err)
+	}
+
+	genIndex := GenerationIndex(blobIndex)
+	genPub, err := tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(genIndex)}.Execute(tpmDev)
+	if err != nil {
+		return nil, nil, &GenerationMismatchError{BlobGeneration: p.Generation, IndexMissing: true}
+	}
+
 	// The ticket must come from a key in a real hierarchy: PolicyAuthorize
 	// refuses the NULL ticket a NULL-hierarchy key produces.
 	signKey, err := tpm2.LoadExternal{InPublic: tpm2.New2B(*signingPublic), Hierarchy: tpm2.TPMRHOwner}.Execute(tpmDev)
 	if err != nil {
-		return "", fmt.Errorf("failed to load the signing public key: %w", err)
+		return nil, nil, fmt.Errorf("failed to load the signing public key: %w", err)
 	}
-	defer FlushHandle(tpmDev, signKey.ObjectHandle)
+	done := func() { FlushHandle(tpmDev, signKey.ObjectHandle) }
 
 	hashAlgo := blob.GetHashAlgo()
 	session := tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm transport.TPM, handle tpm2.TPMISHPolicy, _ tpm2.TPM2BNonce) error {
@@ -475,22 +512,12 @@ func TOTPCode(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, t time.T
 		}).Execute(tpm); err != nil {
 			return fmt.Errorf("PolicyAuthorize: %w", err)
 		}
+		if then != nil {
+			return then(tpm, handle)
+		}
 		return nil
 	})
-
-	counter := binary.BigEndian.AppendUint64(nil, uint64(t.Unix()/30))
-	rsp, err := tpm2.Hmac{
-		Handle:  tpm2.AuthHandle{Handle: key.ObjectHandle, Name: key.Name, Auth: session},
-		Buffer:  tpm2.TPM2BMaxBuffer{Buffer: counter},
-		HashAlg: p.TOTPAlgorithm,
-	}.Execute(tpmDev)
-	if err != nil {
-		if errors.Is(err, ErrCodesLocked) {
-			return "", ErrCodesLocked
-		}
-		return "", fmt.Errorf("failed to compute the code in the TPM: %w", err)
-	}
-	return hotpTruncate(rsp.OutHMAC.Buffer), nil
+	return session, done, nil
 }
 
 // CapCommand implements 'tpm2-kira cap': it read-locks every generation

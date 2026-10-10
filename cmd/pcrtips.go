@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+
+	"github.com/mrwiora/tpm2-kira/attest"
 )
 
 // PCRTips displays information about what each PCR measures
@@ -66,11 +68,11 @@ func PCRTips() error {
 	fmt.Println("    0e,2e,7e         - Firmware + secure boot state")
 	fmt.Println("    0e,2e,7e,11u     - Adds the unified kernel image (recommended)")
 	fmt.Println("  GRUB + non-systemd initramfs (Debian):")
-	fmt.Println("    0e,2e,4e,7e      - Stable across kernel updates (recommended)")
-	fmt.Println("    0e,2e,4e,7e,8e,9e - Adds grub.cfg, kernel and initramfs. PCR 9")
-	fmt.Println("                       changes on every kernel/initramfs update, and")
-	fmt.Println("                       cannot be predicted ahead of the reboot, so it")
-	fmt.Println("                       needs a reseal AFTER booting the new image.")
+	fmt.Println("    0e,2e,4e,7e,8e,9e - Adds grub.cfg, kernel and initramfs (recommended).")
+	fmt.Println("                       PCR 8/9 are predicted for the next boot from the")
+	fmt.Println("                       files on disk; the hooks reseal after each update.")
+	fmt.Println("    0e,2e,4e,7e      - Without them: a modified initrd or command line")
+	fmt.Println("                       still shows a valid code.")
 	fmt.Println()
 	fmt.Println("Selections that attest less than they look like they do:")
 	fmt.Println("  PCR 0 alone   - Identifies the firmware BUILD, not this machine. Any")
@@ -87,31 +89,12 @@ func PCRTips() error {
 	return nil
 }
 
-// GetPCRDescription returns a short description for a given PCR index
+// GetPCRDescription returns a short description for a given PCR index. The
+// table lives in the attestation core so the phone explains a PCR difference
+// with the same words as the CLI.
 func GetPCRDescription(pcrIndex int) string {
-	descriptions := map[int]string{
-		0:  "Core System Firmware executable code (Firmware)",
-		1:  "Core System Firmware data (UEFI settings)",
-		2:  "Extended or pluggable executable code (OpROMs)",
-		3:  "Extended or pluggable firmware data",
-		4:  "Boot Manager Code and Boot Attempts",
-		5:  "Boot Manager Configuration and Data (GPT table)",
-		6:  "Resume from S4 and S5 Power State Events",
-		7:  "Secure Boot State (PK/KEK/db certificates)",
-		8:  "GRUB commands (logged as 'grub_cmd: ...')",
-		9:  "Contents of files GRUB read, plus EFI LoadOptions",
-		10: "Runtime measurements, by convention Linux IMA",
-		11: "Hash of the Unified kernel image",
-		12: "Overridden kernel command line, Credentials",
-		13: "System Extensions",
-		14: "shim's MokList, MokListX, and MokSBState",
-		15: "Hash of the LUKS volume key",
-		16: "Debug (may be reset at any time)",
-		23: "Application Support (OS can set/reset)",
+	if pcrIndex < 0 || pcrIndex > 255 {
+		return "Unknown PCR"
 	}
-
-	if desc, ok := descriptions[pcrIndex]; ok {
-		return desc
-	}
-	return "Unknown PCR"
+	return attest.PCRDescription(uint8(pcrIndex))
 }

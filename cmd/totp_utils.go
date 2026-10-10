@@ -1,11 +1,8 @@
 package cmd
 
 import (
-	"crypto/hmac"
-	"encoding/base32"
 	"encoding/binary"
 	"fmt"
-	"hash"
 	"net/url"
 	"os"
 	"strings"
@@ -36,11 +33,6 @@ func FormatKIRAError(err error) string {
 	return fmt.Sprintf("[ %s ] %s ERROR: %v", KIRAError, timestamp, err)
 }
 
-// PrintKIRAOutput prints a TOTP code with colored KIRA formatting
-func PrintKIRAOutput(code string) {
-	fmt.Println(FormatKIRAOutput(code))
-}
-
 // PrintKIRAError prints an error with colored KIRA formatting
 // If the error is a PCRMismatchError, it includes detailed PCR information.
 // On the unseal path CurrentDigests always holds TPM register values; no
@@ -65,22 +57,7 @@ func PrintKIRAError(err error) {
 			expected := pcrErr.ExpectedDigests[i]
 			current := pcrErr.CurrentDigests[i]
 
-			match := true
-			if len(expected) != len(current) {
-				match = false
-			} else {
-				for j := range expected {
-					if expected[j] != current[j] {
-						match = false
-						break
-					}
-				}
-			}
-
-			status := "✓ MATCH"
-			if !match {
-				status = "✗ CHANGED"
-			}
+			status := PCRStatus(expected, current)
 
 			source := ""
 			if i < len(pcrErr.PCRSources) {
@@ -124,21 +101,6 @@ type PCRMismatchError struct {
 
 func (e *PCRMismatchError) Error() string {
 	return e.Message
-}
-
-// isTOTPSecret checks if a string looks like a Base32-encoded TOTP secret
-func isTOTPSecret(s string) bool {
-	// Remove spaces and convert to uppercase
-	s = strings.ToUpper(strings.ReplaceAll(s, " ", ""))
-
-	// TOTP secrets are typically 16-64 characters in Base32
-	if len(s) < 16 || len(s) > 128 {
-		return false
-	}
-
-	// Try to decode as Base32
-	_, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(s)
-	return err == nil
 }
 
 // renderQRCode renders data as a QR code for a terminal.
@@ -228,14 +190,4 @@ func hotpTruncate(mac []byte) string {
 	offset := mac[len(mac)-1] & 0x0F
 	truncated := binary.BigEndian.Uint32(mac[offset:offset+4]) & 0x7FFFFFFF
 	return fmt.Sprintf("%06d", truncated%1000000)
-}
-
-// generateHOTP computes an HOTP code in software. tpm2-kira computes codes in
-// the TPM; this is the reference the tests compare against.
-func generateHOTP(key []byte, counter int64, newHash func() hash.Hash) string {
-	buf := make([]byte, 8)
-	binary.BigEndian.PutUint64(buf, uint64(counter))
-	mac := hmac.New(newHash, key)
-	mac.Write(buf)
-	return hotpTruncate(mac.Sum(nil))
 }

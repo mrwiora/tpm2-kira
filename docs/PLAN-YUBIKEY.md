@@ -35,7 +35,7 @@ Decisions already taken (§14 records the rest):
 
 ## 1. Goal
 
-Today the PolicySigned recovery key lives at `/var/lib/tpm2-kira/keys/seal.key`
+Today the PolicySigned recovery key lives at `/etc/tpm2-kira/keys/seal.key`
 as a PEM file on the encrypted root filesystem. The goal is to move it into a
 YubiKey PIV slot, so that:
 
@@ -216,8 +216,8 @@ sudo tpm2-kira setup --yubikey
 
 `setup --yubikey` is read-only *towards the token*: it reads the slot and
 reports the key type and the PIN and touch policies. On the filesystem it
-writes two files: the public key to `/var/lib/tpm2-kira/keys/seal.pub`, and the
-token stub (§5) to `/var/lib/tpm2-kira/keys/seal.key`. After that, every
+writes two files: the public key to `/etc/tpm2-kira/keys/seal.pub`, and the
+token stub (§5) to `/etc/tpm2-kira/keys/seal.key`. After that, every
 command that already defaults to `seal.key` uses the token without any new
 flag. Whether the TPM accepts the key is checked by `seal`, which loads it
 before anything is written.
@@ -252,7 +252,7 @@ rather than discovered one touch at a time.
 
 ### 4.5 The public key stays on disk
 
-The slot's public key is cached at `/var/lib/tpm2-kira/keys/seal.pub`, and its
+The slot's public key is cached at `/etc/tpm2-kira/keys/seal.pub`, and its
 path is stored in the blob exactly as it is today. Blob-signature verification,
 the PolicyOR digest and `info` then all work with the token in a drawer. The
 token is only ever needed to *sign*.
@@ -306,10 +306,9 @@ diagnosed before any PIN is sent.
 
 ### 5.2 What the blob keeps
 
-The blob's `HasKeyPaths` block is unchanged: `PublicKeyPath` and
-`PrivateKeyPath` are still plain filesystem paths, and `CurrentBlobVersion`
-stays where it is. `reseal` reads `PrivateKeyPath`, opens the file, and the
-contents decide whether it signs with a PEM key or asks the token.
+The blob names no key file. `reseal` opens the private key file (the default,
+or `--privkey`), and its contents decide whether it signs with a PEM key or
+asks the token.
 
 Moving an existing installation from a PEM key to a YubiKey is not a supported
 operation, since compatibility is not maintained during development: remove
@@ -328,7 +327,7 @@ outside the blob, the question is whether an attacker who can replace
 - The stub's `publicKey` is cross-checked against `seal.pub` and against the
   key used to verify the blob signature, so a swapped stub fails before any
   PIN is sent.
-- Writing to `/var/lib/tpm2-kira/keys/` already requires root. Whoever can do
+- Writing to `/etc/tpm2-kira/keys/` already requires root. Whoever can do
   that can also replace a PEM `seal.key`, which is the status quo.
 
 The worst a tampered stub can do is make `reseal` fail, which is the §7
@@ -343,22 +342,21 @@ degradation path: `SKIPPED:`, and the NV index is left untouched.
 Implemented in `readPIN` (`cmd/yubikey.go`):
 
 1. `TPM2_KIRA_PIN` environment variable — an explicit override.
-2. The `TPM2_KIRA_PIN` line in `/etc/mkinitcpio.conf` (§9.1). The same line
-   serves the unattended post hook, so the PIN lives in one place and a manual
-   seal or reseal does not ask for it again. The file is parsed, never
-   executed: `NAME=value`, `export NAME=value` and `export NAME`, with
-   `'...'`, `"..."` and backslash quoting, last assignment wins — checked
-   against what bash assigns. A value that needs expansion (`$VAR`, `$(...)`,
-   backticks) counts as no PIN. When the file can be read by group or others,
-   or is not owned by root, the PIN is refused (reported as an unavailable
-   token, so the post hook prints SKIPPED) and the error says `chmod 600`.
+2. The `TPM2_KIRA_PIN` line in `/etc/tpm2-kira/control.conf` (§9.1), the
+   one configuration file, which `tpm2-kira control` writes (the signing key
+   step: the PIN is checked on the token first). The same line serves the
+   unattended reseal the hooks run, so the PIN lives in one place and a
+   manual seal or reseal does not ask for it again. When the file can be
+   read by group or others, or is not owned by root, the PIN is refused
+   (reported as an unavailable token, so the hook prints SKIPPED) and the
+   error says `chmod 600`.
 3. Interactive prompt on `/dev/tty` with echo off. Never in a hook without a
    terminal.
 4. Nothing available → the degradation path of §7.
 
-A rejected PIN names its source ("PIN from /etc/mkinitcpio.conf"), because a
-stale line in the file is the likely cause and it costs one attempt per run.
-A `--pin-file` option is no longer planned: the mkinitcpio line covers it.
+A rejected PIN names its source ("PIN from /etc/tpm2-kira/control.conf"),
+because a stale line in the file is the likely cause and it costs one attempt
+per run. A `--pin-file` option is not planned: the line covers it.
 
 ### Lockout safety — the part that must not be got wrong
 
@@ -436,7 +434,7 @@ and stays a `FAILED:`. In code, every such reason is a `TokenUnavailableError`
 
 ```
 tpm2-kira: SKIPPED: resealing did not happen — the signing key was not available.
-  Key file:      /var/lib/tpm2-kira/keys/seal.key (YubiKey 12345678, slot 9a)
+  Key file:      /etc/tpm2-kira/keys/seal.key (YubiKey 12345678, slot 9a)
   Reason:        no YubiKey with serial 12345678 is present
   Slots:         #0, #1 (nothing was written; the sealed secrets are intact)
   Sealed PCRs:   0,7
@@ -527,7 +525,7 @@ Where should the signing key live?
   1) YubiKey 12345678, slot 9a  (ECCP256, PIN once, touch never)  [recommended]
   2) YubiKey 12345678, slot 9c  (RSA2048, PIN always, touch always)
   3) YubiKey 12345678, slot 9d  (ECCP256, PIN never, touch never)  [no PIN required: insecure]
-  4) Local key files in /var/lib/tpm2-kira/keys (the private key is stored on disk)
+  4) Local key files in /etc/tpm2-kira/keys (the private key is stored on disk)
 Choice [1]:
 ```
 
@@ -546,15 +544,13 @@ authorise a reseal, which is the way around a PCR mismatch. On firmware before
 itself:
 
 ```
-Setup did not use the PIN; sealing does. Put it in one place and every step
-finds it — seal, reseal, and the mkinitcpio post hook that reseals after every
-kernel or initramfs update. Add this line to /etc/mkinitcpio.conf:
-    TPM2_KIRA_PIN='<your PIN>'
-The file is readable by every user by default and would then hold the PIN, so
-make it readable by root only (it is not copied into the initramfs image):
-    chmod 600 /etc/mkinitcpio.conf
-Without it, seal and reseal ask for the PIN on the terminal, and the automatic
-reseal reports SKIPPED: the next boot then shows a PCR mismatch until you run
+Setup did not use the PIN; sealing does. Stored in one place, every step finds
+it - seal, reseal, and the reseal the initramfs hooks run after every kernel
+or initramfs update: 'tpm2-kira control' stores it (the signing key step),
+as TPM2_KIRA_PIN='<your PIN>' in /etc/tpm2-kira/control.conf, readable by root alone.
+Without it, seal and reseal ask for the PIN on the terminal (or take it from
+TPM2_KIRA_PIN: read -rs TPM2_KIRA_PIN && export TPM2_KIRA_PIN), and the automatic reseal
+reports SKIPPED: the next boot then shows a PCR mismatch until you run
 'tpm2-kira reseal' with the YubiKey plugged in.
 ```
 
@@ -586,56 +582,40 @@ Much smaller than it would have been with a split binary:
 | `packaging/aur/PKGBUILD` | `optdepends=('pcsclite: ...')` |
 | `initramfs/*/hooks/*` | unchanged |
 | `initramfs/mkinitcpio/post/sd-tpm2-kira` | `SKIPPED:` branch (done) |
-| `initramfs/mkinitcpio/mkinitcpio.conf.example` | commented `TPM2_KIRA_PIN=` line with the `chmod 600` note (done) |
+| `initramfs/mkinitcpio/mkinitcpio.conf.example` | says the PIN is in `control.conf`, not here (done) |
 | `initramfs/initramfs-tools/post-update.d/tpm2-kira` | unchanged: it does not reseal |
 
 ### 9.1 Where the PIN lives for unattended resealing
 
-**Decided: `/etc/mkinitcpio.conf`, as a plain `TPM2_KIRA_PIN='...'` line**,
-in the style of the file's other settings. This replaces the earlier proposal
-of a separate `/etc/tpm2-kira/reseal.conf`.
+**`/etc/tpm2-kira/control.conf`, as a plain `TPM2_KIRA_PIN='...'` line**,
+next to the unlock mode and the radio settings: the one configuration file,
+written by `tpm2-kira control` and read by everything else. tpm2-kira reads
+the file itself (§6), in a manual seal or reseal and in the reseal the hooks
+run after an image rebuild, which runs as root on the host; the mkinitcpio
+post hook and Debian's hook need no variable from their own environment.
 
-**No `export` is needed, because tpm2-kira reads the file itself** (§6), in a
-manual seal or reseal and in the reseal the post hook runs, which runs as root
-on the host. Through mkinitcpio alone it would not work: mkinitcpio sources its
-configuration with `.` and runs post hooks as child processes
-(`run_post_hooks` in `/usr/bin/mkinitcpio`, 42.x), so only exported variables
-reach a hook — checked with a real `mkinitcpio -c ... -g ...` run and a probe
-hook. mkinitcpio's own settings need no `export` because mkinitcpio reads them
-in the same shell. An exported line still works and is read the same way; it
-matters only for a value that needs the shell, such as `$(cat ...)`, which
-tpm2-kira does not evaluate but mkinitcpio hands to the hook when exported.
-
-tpm2-kira always reads `/etc/mkinitcpio.conf`. A system that builds its
-images from a different file (`mkinitcpio -c`, or a preset with `ALL_config`
-pointing elsewhere) needs the line in `/etc/mkinitcpio.conf` all the same.
-
-The PIN does not reach the image: mkinitcpio does not copy its configuration
-into the initramfs (the `systemd` install hook reads `MODULES` from it and
-writes only `modules-load.d/MODULES.conf`).
+The PIN does not reach the image, since an image - a unified kernel image on
+the ESP, say - is not root's alone: nothing of `control.conf` goes into it,
+and no hook sources the file (`attest initramfs-deps` reads the build's two
+settings). The PIN is read from its own line (`storedPIN`), whatever the
+other lines say: a settings line this version refuses never takes the PIN
+with it. Its value goes to the YubiKey signer alone, to sign with the key -
+the blob, the approvals, the authorisations of NV writes; everything else
+(`control`, `setup`, the warnings) only learns whether it is stored. A
+file that does not load is shown red by `control` and warned about by the
+image build, which then builds with the defaults rather than stopping.
 
 **Warning when the automatic reseal will lack the PIN (implemented).** Right
-after a manual `seal` or `reseal` has had the PIN accepted, tpm2-kira reads
-`/etc/mkinitcpio.conf` and warns, once per run, **only** when the PIN is not
-available there: no `TPM2_KIRA_PIN` line, or one whose value needs the shell
-and is not exported. When the line is there, the PIN was usually taken from
-it in the first place, and nothing is printed. Systems without mkinitcpio get
-no warning. `setup` says "already sets TPM2_KIRA_PIN" instead of the
-instructions when the line exists.
+after a manual `seal` or `reseal` has had the PIN accepted, tpm2-kira warns,
+once per run, **only** when `control.conf` holds no usable PIN. `setup` says
+"stores the PIN" instead of the instructions when the line exists, and tells
+to `chmod 600` when the file is loose; `control` lists a loose file under
+Risks.
 
-What it costs, and what setup therefore says:
-
-- `/etc/mkinitcpio.conf` is `0644` by default. With the PIN in it, it must be
-  `chmod 600`; setup prints that. An upgrade of mkinitcpio does not reset the
-  mode, since pacman writes a `.pacnew` for a modified backup file.
-- A plain line stays in mkinitcpio's shell and is not passed to other post
-  hooks; an exported one would be inherited by every hook and its children.
-- A drop-in `/etc/mkinitcpio.conf.d/tpm2-kira.conf` was tried and **rejected**.
-  mkinitcpio 42 ignores drop-ins when a preset passes its configuration with
-  `-c` (`ALL_config=...`), which is how `mkinitcpio -P` runs on many systems,
-  so the post hook would have had to source the file itself. The main file
-  is sourced in every case, including through `ALL_config`, and needs no
-  such workaround.
+What it costs: the file is `0644` as installed (it holds nothing secret
+then); `control` makes it `0600` the moment it stores the PIN. The earlier
+place, a line in `/etc/mkinitcpio.conf`, is gone: it tied the PIN to one
+distribution's tool and left Debian without a place.
 
 **It must not go in `initramfs.conf`.** Debian's hook copies that file *into
 the image*:
@@ -645,9 +625,8 @@ copy_file config /etc/tpm2-kira/initramfs.conf /etc/tpm2-kira/initramfs.conf
 ```
 
 The image lives on unencrypted `/boot`, so a PIN there would be readable by
-anyone with physical access — the attacker the tool exists to detect — and
-the initramfs has no use for it. tpm2-kira should ignore `TPM2_KIRA_PIN` if it
-finds it in `initramfs.conf`, and say why (not done).
+anyone with physical access - the attacker the tool exists to detect - and
+the initramfs has no use for it.
 
 **What *would* belong in `initramfs.conf`** is a display concern: a variable
 such as `TPM2_KIRA_EXPLAIN_MISMATCH=yes|no` letting the boot-time display
@@ -705,7 +684,7 @@ The integration suite runs against `swtpm` with no card reader, so:
   reseal, what happens without the token), what `setup` prints when it finds
   a token, and the `seal.key` stub format.
 - `docs/SECURITY-BACKGROUND.md`:
-  - §3.1 — unchanged; note that `PrivateKeyPath` may name a stub.
+  - §3.1 — unchanged.
   - §3.3 — the key pair may live on a token; only the public key and the stub
     are on disk. Why the stub needs no blob signature (§5.3).
   - §4.6 — the interesting change (§12 below).
@@ -802,7 +781,7 @@ Two consequences, one of them a genuine operational trap:
   should say: remove the token when you are not resealing. That is the entire
   point of it being removable.
 - *PIN capture.* A root-level attacker on a machine where the PIN sits in
-  `/etc/mkinitcpio.conf` or a systemd environment file has the PIN. They
+  `/etc/tpm2-kira/control.conf` has the PIN. They
   still need the token. This is a deliberate trade and should read as one.
 - *Loss of the token is loss of recovery.* A lost key file is restorable from a
   backup; a lost token is not, and the blob's own docs call the signing key "the
@@ -826,7 +805,7 @@ Ranked by how much I think they matter.
    public area stores the size as a uint16, so a blob over 65535 bytes was
    silently truncated by the conversion), a read-back comparison after the last
    chunk, and `stashUnwrittenBlob`, which writes the blob to
-   `/var/lib/tpm2-kira/recovery/` if a step after the undefine fails — the
+   `/etc/tpm2-kira/recovery/` if a step after the undefine fails — the
    sealed object's private area is wrapped by the TPM's deterministic primary
    key, so the secret survives in those bytes even though the index is gone.
 
@@ -866,7 +845,7 @@ Ranked by how much I think they matter.
 | 4 | Token must be pre-populated | **decided: yes — tpm2-kira never writes to the token** |
 | 4a | Touch policy | detected, not dictated; `NEVER` recommended for a dedicated slot |
 | 5 | Backup for a lost token | proposed: PEM backup + switch procedure; three-branch PolicyOR would need its own blob bump |
-| 6 | Where the PIN for unattended resealing lives | **decided: a plain `TPM2_KIRA_PIN=` line in `/etc/mkinitcpio.conf`, `chmod 600`; tpm2-kira reads it itself** (§9.1) |
+| 6 | Where the PIN for unattended resealing lives | **a plain `TPM2_KIRA_PIN=` line in `/etc/tpm2-kira/control.conf`, written by `control`, `chmod 600`, never in the image, read from its own line for the signer alone** (§9.1) |
 | 8 | File-backed key remains the default | **decided: yes — the token is opt-in** |
 | 9 | `TPM2_KIRA_EXPLAIN_MISMATCH` in `initramfs.conf` | proposed; carries no secret, unlike the PIN |
 | 7 | Token detection in `setup` | **decided: always probe, read-only and PIN-free; with a usable key, ask on the terminal (token slot or local files), even for one candidate; report "none found" and create local files otherwise** (§8.1) |
@@ -915,8 +894,8 @@ Branch `feat/yubikey-v2`, 2026-09-30.
 | Key check before the PIN: slot key compared with the stub; every token signature verified against the stub key | `cmd/yubikey.go` | regenerated slot key and wrong serial are reported by name |
 | `signForTPM`, `SignBlobPayload`, `verifyKeyPairMatch` on the public key | `cmd/policy_or.go`, `cmd/blob.go` | token-signed TPMT signatures and blob signatures verify; r/s padding over 20 runs |
 | Interactive `setup` (menu of usable slots plus local files; default `9a`, never a shared slot), `--yubikey[=SERIAL] [--slot]`, `--local`, no-terminal fallback; `yubikey list` | `cmd/setup.go`, `main.go` | menu, default, retries, EOF, single non-`9a` candidate, no terminal; binary run against the live pcscd |
-| PIN-policy warning (report, menu, after choosing); PIN instructions and the `mkinitcpio.conf` hint | `cmd/setup.go`, `cmd/yubikey.go` | `TestPINGuidance` |
-| PIN taken from `/etc/mkinitcpio.conf` (after the environment, before the prompt); warning after a manual seal/reseal only when that file does not provide the PIN | `cmd/mkinitcpio.go`, `cmd/yubikey.go` | `TestReadMkinitcpioPIN`, `TestReadMkinitcpioPINMatchesBash`, `TestPINFromMkinitcpioConf`, `TestWarnIfNoUnattendedPIN` |
+| PIN-policy warning (report, menu, after choosing); PIN instructions and the `control.conf` hint | `cmd/setup.go`, `cmd/yubikey.go` | `TestPINGuidance` |
+| PIN taken from `/etc/tpm2-kira/control.conf` (after the environment, before the prompt); warning after a manual seal/reseal only when that file does not provide the PIN; `control` stores it after checking it on the token | `cmd/control_config.go`, `cmd/yubikey.go`, `cmd/control.go` | `TestPINFromControlConf`, `TestControlConfigOneFile`, `TestControlYubiKeyPINStep` |
 | §7 degradation: `PrepareSigningKey` pre-flight, `ResealSkippedError`, `ErrNVIndexReplaced` guard, one `SKIPPED:` block for all slots, `--require-key` | `cmd/reseal.go`, `cmd/nvram.go`, `main.go` | classification (skip before the write, never after it), block content, pre-flight with no PIN / unplugged / present |
 | mkinitcpio post hook `SKIPPED:` branch; example config line | `initramfs/mkinitcpio/` | hook run with a stand-in `tpm2-kira` |
 | `seal` refuses a mismatched key pair; `seal` and `info` name the token | `cmd/seal.go`, `cmd/info.go` | — |
