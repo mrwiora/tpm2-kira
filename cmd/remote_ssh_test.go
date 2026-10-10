@@ -24,7 +24,8 @@ func testRemote(t *testing.T) (*remoteServer, string, string) {
 	tinysshdPath = fake
 	t.Cleanup(func() { tinysshdPath = old })
 	socket := filepath.Join(dir, "remote.sock")
-	srv, err := startRemote(RemoteOptions{Port: 0, HostKeys: "/etc/tpm2-kira/ssh", Socket: socket}, io.Discard, func(string) {})
+	// No sealed key: the server comes up with a throwaway one.
+	srv, err := startRemote(RemoteOptions{Port: 0, HostKey: filepath.Join(dir, "none.sealed"), KeyDir: filepath.Join(dir, "keydir"), Socket: socket}, io.Discard, func(string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +60,7 @@ func until(t *testing.T, r *bufio.Reader, want string) string {
 }
 
 // A connection to the port starts tinysshd with the session command and
-// the image's host keys.
+// the unsealed host key's directory.
 func TestRemoteStartsTinysshd(t *testing.T) {
 	srv, _, args := testRemote(t)
 	c, err := net.Dial("tcp", srv.tcp.Addr().String())
@@ -70,7 +71,7 @@ func TestRemoteStartsTinysshd(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if b, err := os.ReadFile(args); err == nil {
-			if got := strings.TrimSpace(string(b)); !strings.HasPrefix(got, "-e exec ") || !strings.HasSuffix(got, " remote session --socket "+srv.opts.Socket+" /etc/tpm2-kira/ssh") {
+			if got := strings.TrimSpace(string(b)); !strings.HasPrefix(got, "-e exec ") || !strings.HasSuffix(got, " remote session --socket "+srv.opts.Socket+" "+srv.hostKey.Dir) {
 				t.Fatalf("tinysshd %s", got)
 			}
 			return
@@ -159,6 +160,35 @@ func TestRemoteConsoleReleaseStops(t *testing.T) {
 	if srv.promptTarget() != nil {
 		t.Fatal("a prompt target after the stop")
 	}
+	if _, err := os.Stat(srv.hostKey.Dir); !os.IsNotExist(err) {
+		t.Fatalf("the host key is still there: %v", err)
+	}
+}
+
+// A host key that does not unseal (here: none in the image) is replaced by
+// a throwaway key in tinysshd's format, and the console says so with the
+// fingerprint to compare.
+func TestRemoteThrowawayHostKey(t *testing.T) {
+	srv, _, _ := testRemote(t)
+	hk := srv.hostKey
+	pk, err1 := os.ReadFile(filepath.Join(hk.Dir, "ed25519.pk"))
+	sk, err2 := os.ReadFile(filepath.Join(hk.Dir, ".ed25519.sk"))
+	if err1 != nil || err2 != nil || len(pk) != 32 || len(sk) != 64 || !bytes.Equal(sk[32:], pk) {
+		t.Fatalf("not a tinysshd key directory: %v %v %d %d", err1, err2, len(pk), len(sk))
+	}
+	if st, _ := os.Stat(hk.Dir); st.Mode().Perm() != 0o700 {
+		t.Fatalf("key directory mode %v", st.Mode().Perm())
+	}
+	if hk.Throwaway == "" || hk.Fingerprint != hostKeyFingerprint(pk) {
+		t.Fatalf("%+v", hk)
+	}
+	h := consoleHint(22, []string{"192.0.2.10 (enp1s0)"}, hk, 0, -1)
+	if !strings.Contains(h, hk.Fingerprint+": a throwaway key") || !strings.Contains(h, "the image holds no sealed host key") {
+		t.Fatalf("hint:\n%s", h)
+	}
+	if h := consoleHint(22, nil, hostKeyAtBoot{Fingerprint: "SHA256:abc"}, 0, -1); !strings.Contains(h, "Host key SHA256:abc (unsealed from the TPM)") {
+		t.Fatalf("hint:\n%s", h)
+	}
 }
 
 // Released by the phone (or the hold's end) with a session in: the newest
@@ -188,13 +218,13 @@ func TestRemoteReleaseElsewhere(t *testing.T) {
 // The console names every address to log in at, the port when it is not
 // 22, and that Enter continues there.
 func TestConsoleHint(t *testing.T) {
-	h := consoleHint(2222, []string{"192.0.2.10 (enp1s0)", "2001:db8::10 (enp1s0)"}, 1, 30*time.Second)
+	h := consoleHint(2222, []string{"192.0.2.10 (enp1s0)", "2001:db8::10 (enp1s0)"}, hostKeyAtBoot{}, 1, 30*time.Second)
 	for _, want := range []string{"ssh root@192.0.2.10 -p 2222   (enp1s0)", "ssh root@2001:db8::10 -p 2222", "(30 s)", "An SSH session is connected", "Enter here: continue at this console"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("hint lacks %q:\n%s", want, h)
 		}
 	}
-	if h := consoleHint(22, nil, 0, -1); !strings.Contains(h, "waiting for a network address (port 22)") || strings.Contains(h, "-p 22") || strings.Contains(h, " s)") {
+	if h := consoleHint(22, nil, hostKeyAtBoot{}, 0, -1); !strings.Contains(h, "waiting for a network address (port 22)") || strings.Contains(h, "-p 22") || strings.Contains(h, " s)") {
 		t.Errorf("no address, no limit:\n%s", h)
 	}
 }

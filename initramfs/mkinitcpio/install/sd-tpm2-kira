@@ -198,6 +198,8 @@ _add_remote() {
             warning) warning "tpm2-kira: $value" ;;
         esac
     done <<< "$out"
+    local hostkey
+    hostkey=$(sed -n 's/^hostkey //p' <<< "$out")
 
     add_systemd_unit systemd-networkd.service
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/systemd-networkd.service \
@@ -225,6 +227,7 @@ _add_remote() {
     # cryptsetup's own prompt, answered in the SSH session.
     add_binary systemd-tty-ask-password-agent
     plain "tpm2-kira: SSH at boot on port $port: the codes are confirmed in an SSH session"
+    plain "tpm2-kira: SSH host key $hostkey"
 }
 
 UNLOCK_SOCKET=/run/tpm2-kira/unlock.sock
@@ -346,7 +349,9 @@ The hook will:
   the matched interface's driver, configured from control.conf alone; with
   TPM2_KIRA_SSH=on also tinysshd, started by tpm2-kira.service itself: the
   codes are confirmed and the password typed in an SSH session, the console
-  says where to log in (docs/REMOTE-SSH.md)
+  says where to log in (docs/REMOTE-SSH.md). The SSH host key (the system's
+  OpenSSH ed25519 key by default) is sealed to this TPM at every build,
+  bound to PCR 0 and 7; the image holds no usable copy
 - If a phone is enrolled: add the Bluetooth adapter's driver modules and
   firmware (the adapter from /etc/tpm2-kira/control.conf, hci0 by default),
   and tpm2-kira-attest.service, which serves attestation requests from the

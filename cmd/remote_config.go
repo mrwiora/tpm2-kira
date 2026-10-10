@@ -37,7 +37,7 @@ type SSHConfig struct {
 	On             bool   // TPM2_KIRA_SSH: on or off
 	Port           int    // TPM2_KIRA_SSH_PORT
 	AuthorizedKeys string // TPM2_KIRA_SSH_AUTHORIZED_KEYS: whose ssh-ed25519 keys may log in
-	HostKeys       string // TPM2_KIRA_SSH_HOSTKEYS: tinysshd's key directory (tinysshd-makekey)
+	HostKey        string // TPM2_KIRA_SSH_HOSTKEY: an OpenSSH ed25519 key file or a tinysshd key directory, sealed to the TPM in the image
 	Hold           int    // TPM2_KIRA_SSH_HOLD: seconds the boot waits for a confirmation; 0 until one comes
 }
 
@@ -50,14 +50,16 @@ type RemoteConfig struct {
 // Default paths of the SSH server's keys.
 const (
 	DefaultSSHAuthorizedKeys = "/root/.ssh/authorized_keys"
-	DefaultSSHHostKeys       = "/etc/tinyssh/sshkeydir"
+	DefaultSSHHostKey        = "/etc/ssh/ssh_host_ed25519_key"
+	// DefaultTinysshKeyDir is where control creates a key of the image's own.
+	DefaultTinysshKeyDir = "/etc/tinyssh/sshkeydir"
 )
 
 // DefaultRemoteConfig is a file without these lines: no network, no SSH.
 func DefaultRemoteConfig() RemoteConfig {
 	return RemoteConfig{
 		Net: NetConfig{Mode: "off"},
-		SSH: SSHConfig{Port: 22, AuthorizedKeys: DefaultSSHAuthorizedKeys, HostKeys: DefaultSSHHostKeys},
+		SSH: SSHConfig{Port: 22, AuthorizedKeys: DefaultSSHAuthorizedKeys, HostKey: DefaultSSHHostKey},
 	}
 }
 
@@ -130,12 +132,12 @@ func parseRemoteLine(cfg *RemoteConfig, n int, key, val string) (handled bool, e
 			return true, fmt.Errorf("control.conf line %d: TPM2_KIRA_SSH_HOLD must be seconds (0: until a confirmation comes), not %q", n, val)
 		}
 		cfg.SSH.Hold = h
-	case "TPM2_KIRA_SSH_AUTHORIZED_KEYS", "TPM2_KIRA_SSH_HOSTKEYS":
+	case "TPM2_KIRA_SSH_AUTHORIZED_KEYS", "TPM2_KIRA_SSH_HOSTKEY":
 		if !filepath.IsAbs(val) {
 			return true, fmt.Errorf("control.conf line %d: %s must be an absolute path, not %q", n, key, val)
 		}
-		if key == "TPM2_KIRA_SSH_HOSTKEYS" {
-			cfg.SSH.HostKeys = val
+		if key == "TPM2_KIRA_SSH_HOSTKEY" {
+			cfg.SSH.HostKey = val
 		} else {
 			cfg.SSH.AuthorizedKeys = val
 		}
@@ -216,6 +218,7 @@ func (r RemoteConfig) Lines() [][2]string {
 		{"TPM2_KIRA_SSH", onOff[r.SSH.On]},
 		{"TPM2_KIRA_SSH_PORT", strconv.Itoa(r.SSH.Port)},
 		{"TPM2_KIRA_SSH_HOLD", strconv.Itoa(r.SSH.Hold)},
+		{"TPM2_KIRA_SSH_HOSTKEY", r.SSH.HostKey},
 	}
 }
 

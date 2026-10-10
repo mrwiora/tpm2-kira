@@ -678,7 +678,10 @@ ssh root@<address shown on the console>
 
 The settings live in `/etc/tpm2-kira/control.conf` (`TPM2_KIRA_NET_*`,
 `TPM2_KIRA_SSH_*`), independent of the running system's network
-configuration. Details and limits: [docs/REMOTE-SSH.md](docs/REMOTE-SSH.md).
+configuration. The SSH host key - the system's OpenSSH ed25519 key by
+default, so `known_hosts` needs no second entry - goes into the image only
+sealed to the TPM, bound to PCR 0 and 7, and is unsealed at the code
+screen. Details and limits: [docs/REMOTE-SSH.md](docs/REMOTE-SSH.md).
 
 ## Early Boot Integration (Arch Linux / mkinitcpio)
 

@@ -24,6 +24,17 @@ itself, so the confirmation in a session is the release, and the
 network is configured for the image alone in control.conf
 (docs/REMOTE-SSH.md).
 
+### The image's SSH host key was stored in clear
+
+The first version (2026-10-10) copied a tinysshd key directory of the
+image's own (TPM2_KIRA_SSH_HOSTKEYS) into the image unencrypted, as every
+initramfs SSH server does. The same day it was replaced by a key sealed
+to PCR 0+7 (TPM2_KIRA_SSH_HOSTKEY), the system's OpenSSH key by default,
+following the sd-tinyssh TPM2 variants of mkinitcpio-systemd-extras -
+but sealed to the values before the OS separator, because the code
+screen's server runs ahead of it, and with tpm2-kira's own TPM code in
+place of systemd-creds.
+
 ### The passphrase prompt was systemd's; tpm2-kira only ran before it
 
 Until the key provider (2026-10-07), `tpm2-kira.service` showed the code,

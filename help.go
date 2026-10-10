@@ -384,11 +384,17 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
                    in, and Enter there continues at the console instead
   --ssh-hold S     With --ssh, in place of --hold (default 0: until a
                    confirmation comes)
-  --ssh-hostkeys DIR  tinysshd's key directory (default /etc/tpm2-kira/ssh)
+  --ssh-hostkey PATH  The host key the image build sealed to the TPM
+                   (PCR 0+7; default ` + cmd.ImageSealedHostKey + `). Unsealed
+                   once at the start, before the OS separator; when it does
+                   not unseal, a throwaway key is served and the console
+                   shows its fingerprint
+  --ssh-keydir DIR Where the key is unsealed to for tinysshd (default
+                   ` + cmd.DefaultHostKeyDir + `, the initramfs's memory)
 `,
 
 	"remote": `tpm2-kira remote session [--socket PATH]
-tpm2-kira remote initramfs --buildroot DIR [--conf PATH]
+tpm2-kira remote initramfs --buildroot DIR [--conf PATH] [--tpm PATH]
 
 The code screen over SSH (docs/REMOTE-SSH.md). The network and the SSH
 server of the boot image are set in /etc/tpm2-kira/control.conf
@@ -400,8 +406,10 @@ suggests the network from /etc/systemd/network).
              password is asked in the session, and cryptsetup's own prompt
              is answered there through systemd's password agent
   initramfs  What the mkinitcpio hook calls: writes the systemd-networkd
-             file, the SSH host keys and authorized keys, and the drop-in
-             of tpm2-kira.service into DIR, and prints the modules and
+             file, the authorized keys and the drop-in of tpm2-kira.service
+             into DIR, seals the SSH host key (TPM2_KIRA_SSH_HOSTKEY, the
+             system's OpenSSH key by default) to this TPM's PCR 0 and 7 as
+             they will be at the code screen, and prints the modules and
              binaries the hook adds. Exit 2: nothing to add, and why
 `,
 

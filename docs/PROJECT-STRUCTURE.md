@@ -21,6 +21,7 @@ Where things are in the repository, and how the tests are run.
 │   ├── luks.go, route.go    # LUKS keyslots and tokens; where the initrd takes the key from
 │   ├── remote_config.go     # The boot image's network and SSH settings; the networkd file
 │   ├── remote_initramfs.go  # What the image build adds for them ('remote initramfs')
+│   ├── remote_hostkey.go    # The SSH host key sealed to PCR 0+7, unsealed at the code screen
 │   ├── remote_ssh.go        # The SSH server of the code screen, and 'remote session'
 │   ├── control_remote.go    # control's step for them
 │   ├── default_pcrs.go      # What 'seal' seals to by default, and the fallback slot

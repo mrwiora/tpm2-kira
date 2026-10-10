@@ -120,7 +120,7 @@ func main() {
 	case "remote-salt":
 		runRemoteSalt(commandArgs, *tpmPath, *debug)
 	case "remote":
-		runRemote(commandArgs)
+		runRemote(commandArgs, *tpmPath)
 	case "derive":
 		fs := flag.NewFlagSet("derive", flag.ExitOnError)
 		out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
@@ -428,14 +428,15 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	unlock := fs.String("unlock", "", "Also answer systemd-cryptsetup's key requests on this socket (crypttab(5) AF_UNIX key files): the passphrase is asked at tpm2-kira's prompt once the code screen is confirmed. The initrd's socket unit passes the socket instead (set by the initrd unit)")
 	sshPort := fs.Int("ssh", 0, "Also be the SSH server on this port: the codes are shown and confirmed in an SSH session, the console says where to log in (set by the image's drop-in from TPM2_KIRA_SSH)")
 	sshHold := fs.Uint("ssh-hold", 0, "With --ssh: seconds to wait for a confirmation, in place of --hold (0: until one comes)")
-	sshHostKeys := fs.String("ssh-hostkeys", "/etc/tpm2-kira/ssh", "With --ssh: tinysshd's key directory")
+	sshHostKey := fs.String("ssh-hostkey", cmd.ImageSealedHostKey, "With --ssh: the host key sealed to the TPM by the image build; a throwaway key is served when it does not unseal")
+	sshKeyDir := fs.String("ssh-keydir", cmd.DefaultHostKeyDir, "With --ssh: where the host key is unsealed to for tinysshd, in the initramfs's memory")
 	sshSocket := fs.String("ssh-socket", cmd.DefaultRemoteSocket, "With --ssh: where the SSH sessions reach the code screen")
 
 	fs.Parse(args)
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, cmd.RemoteOptions{Port: *sshPort, Hold: time.Duration(*sshHold) * time.Second, HostKeys: *sshHostKeys, Socket: *sshSocket}, *debug)
+	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, cmd.RemoteOptions{Port: *sshPort, Hold: time.Duration(*sshHold) * time.Second, HostKey: *sshHostKey, KeyDir: *sshKeyDir, Socket: *sshSocket}, *debug)
 }
 
 func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -878,7 +879,7 @@ machine's screen (docs/PLAN-REMOTEATTESTATION.md).
 
 `
 
-func runRemote(args []string) {
+func runRemote(args []string, tpmPath string) {
 	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, "remote requires a subcommand.\n\n")
 		printHelp("remote")
@@ -897,8 +898,9 @@ func runRemote(args []string) {
 		fs := flag.NewFlagSet("remote initramfs", flag.ExitOnError)
 		buildroot := fs.String("buildroot", "", "The image under construction (mkinitcpio's BUILDROOT)")
 		conf := fs.String("conf", cmd.DefaultControlConfigPath, "The configuration file")
+		tpm := fs.String("tpm", tpmPath, "The TPM the SSH host key is sealed to")
 		fs.Parse(args[1:])
-		if err := cmd.RemoteInitramfsCommand(*conf, *buildroot, os.Stdout); err != nil {
+		if err := cmd.RemoteInitramfsCommand(*conf, *buildroot, *tpm, os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
 			os.Exit(2) // the hook adds neither network nor SSH
 		}

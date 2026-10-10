@@ -49,6 +49,8 @@ type remoteBoot struct {
 	stdin   io.WriteCloser
 	port    int
 	unlock  string
+	socket  string // the code screen's, for the sessions
+	keyDir  string // the unsealed host key
 	volume  string
 	cleanup func()
 }
@@ -92,9 +94,11 @@ func startRemoteBoot(t *testing.T) *remoteBoot {
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 
-	b := &remoteBoot{out: &syncBuffer{}, port: port, unlock: filepath.Join(dir, "unlock.sock"), volume: volume}
+	b := &remoteBoot{out: &syncBuffer{}, port: port, unlock: filepath.Join(dir, "unlock.sock"), volume: volume,
+		socket: filepath.Join(dir, "remote.sock"), keyDir: filepath.Join(dir, "keydir")}
 	b.run = exec.Command("./tpm2-kira", "run", "--tpm", tpmPath, "--nvram", "0x01803010", "--unlock", b.unlock,
-		"--ssh="+strconv.Itoa(port), "--ssh-socket", filepath.Join(dir, "remote.sock"))
+		"--ssh="+strconv.Itoa(port), "--ssh-socket", b.socket,
+		"--ssh-hostkey", filepath.Join(dir, "none.sealed"), "--ssh-keydir", b.keyDir)
 	b.run.Env = append(os.Environ(), "TPM2_KIRA_TINYSSHD="+fake, "TPM2_KIRA_CRYPTTAB="+crypttab,
 		"TPM2_KIRA_CONTROL_CONF="+conf, "TPM2_KIRA_CONSOLE="+filepath.Join(dir, "console"))
 	b.run.Stdout, b.run.Stderr = b.out, b.out
@@ -184,6 +188,7 @@ func TestRemoteSSHConfirmsAndUnlocks(t *testing.T) {
 		t.Fatalf("the console shows the codes:\n%s", b.out.String())
 	}
 	b.waitOutput(t, "An SSH session is connected")
+	b.waitOutput(t, "a throwaway key, the sealed one did not unseal") // none in this image
 
 	key := b.keyRequest(t)
 	c.Write([]byte("\r"))
@@ -202,6 +207,15 @@ func TestRemoteSSHConfirmsAndUnlocks(t *testing.T) {
 	}
 	b.waitOutput(t, "Confirmed over SSH")
 	b.waitOutput(t, "asked in the SSH session")
+
+	// Stopped at switch-root: nothing of the server stays behind in /run.
+	b.run.Process.Signal(os.Interrupt)
+	b.run.Wait()
+	for _, p := range []string{b.socket, b.keyDir} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s stayed after the stop: %v", p, err)
+		}
+	}
 }
 
 // Enter at the console continues there: the session is told and closed,

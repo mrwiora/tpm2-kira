@@ -25,7 +25,7 @@ TPM2_KIRA_SSH_HOLD=300
 	r := cfg.Remote
 	if r.Net.Mode != "static" || r.Net.Match != "aa:bb:cc:dd:ee:ff" || len(r.Net.Addresses) != 2 ||
 		r.Net.Gateways[0] != "192.0.2.1" || len(r.Net.DNS) != 2 || !r.SSH.On || r.SSH.Port != 2222 || r.SSH.Hold != 300 ||
-		r.SSH.AuthorizedKeys != DefaultSSHAuthorizedKeys || r.SSH.HostKeys != DefaultSSHHostKeys || r.Problem() != "" {
+		r.SSH.AuthorizedKeys != DefaultSSHAuthorizedKeys || r.SSH.HostKey != DefaultSSHHostKey || r.Problem() != "" {
 		t.Fatalf("%+v %q", r, r.Problem())
 	}
 	if d := DefaultControlConfig().Remote; d.Net.Mode != "off" || d.SSH.On || d.SSH.Port != 22 {
@@ -34,7 +34,7 @@ TPM2_KIRA_SSH_HOLD=300
 	for _, bad := range []string{
 		"TPM2_KIRA_NET=wifi", "TPM2_KIRA_NET_MATCH=eth 0", "TPM2_KIRA_NET_ADDRESS=192.0.2.10",
 		"TPM2_KIRA_NET_GATEWAY=gw", "TPM2_KIRA_NET_DNS=1.1.1.1 dns", "TPM2_KIRA_SSH=yes",
-		"TPM2_KIRA_SSH_PORT=70000", "TPM2_KIRA_SSH_HOLD=-1", "TPM2_KIRA_SSH_HOSTKEYS=keys",
+		"TPM2_KIRA_SSH_PORT=70000", "TPM2_KIRA_SSH_HOLD=-1", "TPM2_KIRA_SSH_HOSTKEY=keys",
 	} {
 		if _, err := ParseControlConfig([]byte("# x\n" + bad + "\n")); err == nil || !strings.Contains(err.Error(), "line 2") {
 			t.Errorf("%s: %v", bad, err)

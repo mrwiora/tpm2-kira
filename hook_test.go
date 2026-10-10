@@ -263,7 +263,7 @@ _add_remote
 	if got, _ := run("tpm2-kira: TPM2_KIRA_SSH=on needs a network in the image\n", "2"); !strings.Contains(got, "WARNING tpm2-kira: no network or SSH in the image: TPM2_KIRA_SSH=on needs a network") || strings.Contains(got, "UNIT") {
 		t.Fatalf("a refused setting:\n%s", got)
 	}
-	got, root := run("net dhcp\nmodule e1000e\nssh 22\n", "0")
+	got, root := run("net dhcp\nmodule e1000e\nssh 22\nhostkey SHA256:abc from /etc/ssh/ssh_host_ed25519_key, sealed to PCR 0+7\n", "0")
 	for _, want := range []string{"MODULE e1000e", "UNIT systemd-networkd.service", "LINK /usr/lib/systemd/system/sysinit.target.wants/systemd-networkd.service", "PLAIN tpm2-kira: network at boot: dhcp via e1000e"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q:\n%s", want, got)
@@ -271,7 +271,8 @@ _add_remote
 	}
 	dropIn := filepath.Join(root, "etc/systemd/system/tpm2-kira.service.d/remote.conf")
 	if _, err := os.Stat("/usr/bin/tinysshd"); err == nil {
-		if !strings.Contains(got, "BINARY /usr/bin/tinysshd") || !strings.Contains(got, "BINARY systemd-tty-ask-password-agent") {
+		if !strings.Contains(got, "BINARY /usr/bin/tinysshd") || !strings.Contains(got, "BINARY systemd-tty-ask-password-agent") ||
+			!strings.Contains(got, "PLAIN tpm2-kira: SSH host key SHA256:abc from /etc/ssh/ssh_host_ed25519_key, sealed to PCR 0+7") {
 			t.Errorf("tinysshd or the password agent not added:\n%s", got)
 		}
 	} else {

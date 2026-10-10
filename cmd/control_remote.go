@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -132,33 +131,48 @@ func (c *controller) runRemote() error {
 		}
 		r.SSH.Port, _ = strconv.Atoi(port)
 		r.SSH.Hold, _ = strconv.Atoi(hold)
-		if err := c.ensureSSHKeys(r.SSH); err != nil {
+		if err := c.ensureSSHKeys(&r.SSH); err != nil {
 			return err
 		}
 	}
 	return c.writeRemote(r)
 }
 
-// ensureSSHKeys checks what the image's SSH server needs on this system,
-// and creates the host key when asked: tinysshd itself, a host key of its
-// own (never the running system's OpenSSH key), and a key that may log in.
-func (c *controller) ensureSSHKeys(s SSHConfig) error {
+// ensureSSHKeys checks what the image's SSH server needs on this system:
+// tinysshd itself, a host key - the system's OpenSSH key or one of the
+// image's own, created when asked; sealed to the TPM at every image build
+// either way - and a key that may log in.
+func (c *controller) ensureSSHKeys(s *SSHConfig) error {
 	if _, err := exec.LookPath("tinysshd"); err != nil {
 		fmt.Fprintln(c.out, warn("tinysshd is not installed: pacman -S tinyssh, before the rebuild."))
 	}
-	if _, err := os.Stat(s.HostKeys + "/.ed25519.sk"); err != nil {
-		ok, err := c.confirmYes("Create the SSH host key of the boot image?",
-			"tinysshd-makekey "+s.HostKeys+": a key of the image's own, not the running system's. It sits unencrypted in the boot image, like every host key of an initramfs SSH server; note its fingerprint at the first login.")
-		if err != nil {
+	var opts []huh.Option[string]
+	if _, err := loadHostKey(DefaultSSHHostKey); err == nil {
+		opts = append(opts, huh.NewOption("The system's OpenSSH host key: the image answers as the system does", DefaultSSHHostKey))
+	}
+	opts = append(opts, huh.NewOption("A key of the image's own ("+DefaultTinysshKeyDir+")", DefaultTinysshKeyDir))
+	if s.HostKey != DefaultSSHHostKey && s.HostKey != DefaultTinysshKeyDir {
+		opts = append(opts, huh.NewOption("As set: "+s.HostKey, s.HostKey))
+	}
+	choice := s.HostKey
+	if err := c.form(huh.NewSelect[string]().Title("SSH host key of the boot image").
+		Description("Sealed to this TPM at every image build, bound to PCR 0 (firmware) and PCR 7 (Secure Boot): the image holds no usable key, and after a firmware or Secure Boot update it serves a throwaway key until the next rebuild.").
+		Options(opts...).Value(&choice)).Run(); err != nil {
+		return err
+	}
+	s.HostKey = choice
+	if _, err := loadHostKey(s.HostKey); err != nil {
+		if s.HostKey != DefaultTinysshKeyDir {
+			fmt.Fprintln(c.out, warn(err.Error()+": the image is built without SSH until it can be read."))
+		} else if ok, err := c.confirmYes("Create the SSH host key of the boot image?", "tinysshd-makekey "+s.HostKey); err != nil {
 			return err
-		}
-		if !ok {
-			fmt.Fprintln(c.out, warn("No host key: the image is built without SSH until "+s.HostKeys+" holds one."))
+		} else if !ok {
+			fmt.Fprintln(c.out, warn("No host key: the image is built without SSH until "+s.HostKey+" holds one."))
 		} else {
-			mk := exec.Command("tinysshd-makekey", s.HostKeys)
+			mk := exec.Command("tinysshd-makekey", s.HostKey)
 			mk.Stdout, mk.Stderr = c.out, c.out
 			if err := mk.Run(); err != nil {
-				return fmt.Errorf("tinysshd-makekey %s: %w", s.HostKeys, err)
+				return fmt.Errorf("tinysshd-makekey %s: %w", s.HostKey, err)
 			}
 		}
 	}

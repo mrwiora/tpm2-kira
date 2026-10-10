@@ -84,7 +84,7 @@ func startHintPrinter(srv *remoteServer) *hintPrinter {
 			addrs, n := addresses(), srv.count()
 			if key := fmt.Sprint(addrs, n); key != h.last && h.last != "" {
 				h.last = key
-				fmt.Print("\n" + consoleHint(srv.opts.Port, addrs, n, h.left))
+				fmt.Print("\n" + consoleHint(srv.opts.Port, addrs, srv.hostKey, n, h.left))
 			}
 			h.mu.Unlock()
 		}
@@ -102,7 +102,7 @@ func (h *hintPrinter) print(remaining time.Duration) {
 	h.left = remaining
 	addrs, n := addresses(), h.srv.count()
 	h.last = fmt.Sprint(addrs, n)
-	fmt.Print("\n" + consoleHint(h.srv.opts.Port, addrs, n, remaining))
+	fmt.Print("\n" + consoleHint(h.srv.opts.Port, addrs, h.srv.hostKey, n, remaining))
 }
 
 func (h *hintPrinter) stop() {
@@ -460,10 +460,14 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 	var srv *remoteServer
 	ask := prompter(consoleAsk)
 	if remote.Port > 0 {
+		if remote.TPM == "" {
+			remote.TPM = tpmPath
+		}
 		var err error
 		if srv, err = startRemote(remote, os.Stdout, unlockLogger(debug)); err != nil {
 			fmt.Fprintf(os.Stderr, "tpm2-kira: the SSH server is not started: %v - the code screen is at the console\n", err)
 		} else {
+			stopRemoteOnSignal(srv)
 			ask = srv.ask
 			hold = remote.Hold
 			if hold == 0 {
@@ -644,11 +648,29 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		// The display is done; the key provider stays until systemd stops
 		// the service at switch-root.
 		waitForStop()
+		if srv != nil {
+			<-srv.done // its socket removed before the process ends
+		}
 		unlock.Close()
 	}
 	if svc != nil {
 		svc.Forget()
 	}
+}
+
+// stopRemoteOnSignal stops the SSH server when systemd stops the service
+// at switch-root - whatever run is doing then - so that its socket does
+// not stay in /run, which is carried over into the booted system, then
+// ends the process by the signal as it would have ended without this.
+func stopRemoteOnSignal(srv *remoteServer) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-ch
+		srv.stop("The machine boots; the SSH server stops.")
+		signal.Reset(syscall.SIGTERM, syscall.SIGINT)
+		syscall.Kill(os.Getpid(), sig.(syscall.Signal))
+	}()
 }
 
 // waitForStop returns when systemd (or anyone) asks this process to end.

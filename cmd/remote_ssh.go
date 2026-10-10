@@ -49,10 +49,12 @@ var tinysshdPath = func() string {
 
 // RemoteOptions are run's SSH settings; Port 0 is no SSH server.
 type RemoteOptions struct {
-	Port     int
-	Hold     time.Duration // 0: until a confirmation comes
-	HostKeys string        // tinysshd's key directory
-	Socket   string        // DefaultRemoteSocket
+	Port    int
+	Hold    time.Duration // 0: until a confirmation comes
+	TPM     string        // the TPM the host key is unsealed with
+	HostKey string        // the sealed host key (ImageSealedHostKey)
+	KeyDir  string        // where it is unsealed to for tinysshd (DefaultHostKeyDir)
+	Socket  string        // DefaultRemoteSocket
 }
 
 // remoteServer is the SSH server and its sessions.
@@ -63,6 +65,7 @@ type remoteServer struct {
 	local   net.Listener
 	log     func(string)
 	console io.Writer // the console's own lines
+	hostKey hostKeyAtBoot
 
 	mu       sync.Mutex
 	procs    map[*exec.Cmd]chan struct{} // closed when the tinysshd has ended
@@ -71,6 +74,7 @@ type remoteServer struct {
 	released bool                        // the boot is released; keys go to prompts now
 	stopped  bool                        // released at the console: nothing is served
 	target   *remoteSession              // the session that released, for the prompt
+	done     chan struct{}               // closed when stop has ended
 	releases chan struct{}               // a session confirmed
 	changed  chan struct{}               // a session came or went
 }
@@ -103,6 +107,9 @@ func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteS
 	if o.Socket == "" {
 		o.Socket = DefaultRemoteSocket
 	}
+	if o.KeyDir == "" {
+		o.KeyDir = DefaultHostKeyDir
+	}
 	if _, err := os.Stat(tinysshdPath); err != nil {
 		return nil, fmt.Errorf("%s is not in the image (rebuild with TPM2_KIRA_SSH=on): %w", tinysshdPath, err)
 	}
@@ -110,21 +117,32 @@ func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteS
 	if err != nil {
 		return nil, err
 	}
+	// Unsealed now, while the code screen holds the boot ahead of the OS
+	// separator: after it, PCR 0 and 7 no longer fit the policy.
+	hk, err := prepareHostKey(o.TPM, o.HostKey, o.KeyDir)
+	if err != nil {
+		return nil, fmt.Errorf("SSH host key: %w", err)
+	}
+	if hk.Throwaway != "" {
+		log("ssh: serving a throwaway host key: " + hk.Throwaway)
+	}
 	local, err := listenGate(o.Socket)
 	if err != nil {
+		os.RemoveAll(hk.Dir)
 		return nil, err
 	}
 	tcp, err := net.Listen("tcp", ":"+strconv.Itoa(o.Port))
 	if err != nil {
 		local.Close()
 		os.Remove(o.Socket)
+		os.RemoveAll(hk.Dir)
 		return nil, err
 	}
-	r := &remoteServer{opts: o, self: self, tcp: tcp, local: local, log: log, console: console,
-		procs: map[*exec.Cmd]chan struct{}{}, releases: make(chan struct{}, 1), changed: make(chan struct{}, 1)}
+	r := &remoteServer{opts: o, self: self, tcp: tcp, local: local, log: log, console: console, hostKey: hk,
+		procs: map[*exec.Cmd]chan struct{}{}, done: make(chan struct{}), releases: make(chan struct{}, 1), changed: make(chan struct{}, 1)}
 	go r.acceptSSH()
 	go r.acceptSessions()
-	log(fmt.Sprintf("ssh: listening on port %d", o.Port))
+	log(fmt.Sprintf("ssh: listening on port %d, host key %s", o.Port, hk.Fingerprint))
 	return r, nil
 }
 
@@ -141,7 +159,7 @@ func (r *remoteServer) acceptSSH() {
 		if err != nil {
 			continue
 		}
-		cmd := exec.Command(tinysshdPath, "-e", "exec "+r.self+" remote session --socket "+r.opts.Socket, r.opts.HostKeys)
+		cmd := exec.Command(tinysshdPath, "-e", "exec "+r.self+" remote session --socket "+r.opts.Socket, r.hostKey.Dir)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = f, f, os.Stderr
 		cmd.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin"}
 		// A session of its own: this process gives the console up when the
@@ -343,7 +361,10 @@ func (r *remoteServer) stop(why string) {
 		}
 		p.Process.Kill()
 	}
+	// No tinysshd is left to read the key.
+	os.RemoveAll(r.hostKey.Dir)
 	r.log("ssh: stopped")
+	close(r.done)
 }
 
 // promptTarget is the session the password is asked in, nil for the
@@ -443,7 +464,7 @@ func addresses() []string {
 
 // consoleHint is what the console shows instead of the codes: where to log
 // in, that the boot waits for it, and that Enter continues here.
-func consoleHint(port int, addrs []string, sessions int, remaining time.Duration) string {
+func consoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int, remaining time.Duration) string {
 	var b strings.Builder
 	p := ""
 	if port != 22 {
@@ -458,6 +479,12 @@ func consoleHint(port int, addrs []string, sessions int, remaining time.Duration
 			ip, iface, _ := strings.Cut(a, " ")
 			fmt.Fprintf(&b, "           ssh root@%s%s   %s\n", ip, p, iface)
 		}
+	}
+	if hk.Throwaway != "" {
+		fmt.Fprintf(&b, "         Host key %s: a throwaway key, the sealed one did not unseal\n", hk.Fingerprint)
+		fmt.Fprintf(&b, "         (%s); ssh warns of a changed host key. Rebuild the image after this boot.\n", hk.Throwaway)
+	} else if hk.Fingerprint != "" {
+		fmt.Fprintf(&b, "         Host key %s (unsealed from the TPM)\n", hk.Fingerprint)
 	}
 	b.WriteString("         The codes are shown and confirmed in the SSH session; the boot waits for it")
 	if remaining >= 0 {

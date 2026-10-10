@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bufio"
+	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,27 +23,23 @@ import (
 //	module NAME             the driver of an interface the network matches
 //	modules-all             no interface matched here: every network driver
 //	ssh PORT                tinysshd (the hook adds the binary and a shell)
+//	hostkey FINGERPRINT     the host key sealed into the image, for the hook to say
 //	warning TEXT            said by the hook, the build goes on
 //
-// A setting that cannot make a working image (Problem, a missing host key)
-// is an error, exit status 2: the hook then adds neither network nor SSH
+// A setting that cannot make a working image (Problem, a host key that is
+// missing or cannot be sealed) is an error, exit status 2: the hook then adds neither network nor SSH
 // and says why - the image still boots, with the code screen at the
 // console.
 
 // The paths in the image.
 const (
 	imageNetworkFile   = "/etc/systemd/network/10-tpm2-kira.network"
-	imageSSHHostKeys   = "/etc/tpm2-kira/ssh"
 	imageAuthorizedKey = "/root/.ssh/authorized_keys"
 	imageRunDropIn     = "/etc/systemd/system/tpm2-kira.service.d/remote.conf"
 )
 
-// tinysshHostKeyFiles are the files of a tinysshd key directory
-// (tinysshd-makekey); the ed25519 pair is required.
-var tinysshHostKeyFiles = []string{"ed25519.pk", ".ed25519.sk", "nistp256ecdsa.pk", ".nistp256ecdsa.sk"}
-
 // RemoteInitramfsCommand implements 'remote initramfs'.
-func RemoteInitramfsCommand(configPath, buildroot string, out io.Writer) error {
+func RemoteInitramfsCommand(configPath, buildroot, tpmPath string, out io.Writer) error {
 	if buildroot == "" {
 		return errors.New("--buildroot is required")
 	}
@@ -58,18 +56,25 @@ func RemoteInitramfsCommand(configPath, buildroot string, out io.Writer) error {
 		return nil
 	}
 	var keys []string
+	var sealed []byte
+	var fingerprint string
 	if r.SSH.On {
 		// Checked before anything is written: an image half with SSH is
 		// worse than one without.
-		if _, err := os.Stat(filepath.Join(r.SSH.HostKeys, ".ed25519.sk")); err != nil {
-			return fmt.Errorf("no SSH host key in %s: create one with 'tinysshd-makekey %s' (tpm2-kira control offers it)", r.SSH.HostKeys, r.SSH.HostKeys)
-		}
 		if keys, err = ed25519AuthorizedKeys(r.SSH.AuthorizedKeys); err != nil {
 			return err
 		}
 		if len(keys) == 0 {
 			return fmt.Errorf("%s holds no ssh-ed25519 key, the only kind tinysshd accepts: nobody could log in", r.SSH.AuthorizedKeys)
 		}
+		key, err := loadHostKey(r.SSH.HostKey)
+		if err != nil {
+			return err
+		}
+		if sealed, err = sealForImage(key, tpmPath); err != nil {
+			return err
+		}
+		fingerprint = hostKeyFingerprint(key.Public().(ed25519.PublicKey))
 	}
 
 	if err := writeImageFile(buildroot, imageNetworkFile, []byte(r.Net.NetworkdFile()), 0o644); err != nil {
@@ -94,21 +99,8 @@ func RemoteInitramfsCommand(configPath, buildroot string, out io.Writer) error {
 	if !r.SSH.On {
 		return nil
 	}
-	for _, f := range tinysshHostKeyFiles {
-		data, err := os.ReadFile(filepath.Join(r.SSH.HostKeys, f))
-		if os.IsNotExist(err) && f != "ed25519.pk" && f != ".ed25519.sk" {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		mode := os.FileMode(0o644)
-		if strings.HasPrefix(f, ".") {
-			mode = 0o600
-		}
-		if err := writeImageFile(buildroot, filepath.Join(imageSSHHostKeys, f), data, mode); err != nil {
-			return err
-		}
+	if err := writeImageFile(buildroot, ImageSealedHostKey, sealed, 0o600); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Join(buildroot, "/root/.ssh"), 0o700); err != nil {
 		return err
@@ -121,7 +113,23 @@ func RemoteInitramfsCommand(configPath, buildroot string, out io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(out, "ssh %d\n", r.SSH.Port)
+	fmt.Fprintf(out, "hostkey %s from %s, sealed to PCR 0+7\n", fingerprint, r.SSH.HostKey)
 	return nil
+}
+
+// sealForImage seals the host key to the TPM at tpmPath: the file of the
+// image. A var for the tests without a TPM.
+var sealForImage = func(key ed25519.PrivateKey, tpmPath string) ([]byte, error) {
+	tpmDev, err := OpenTPM(tpmPath)
+	if err != nil {
+		return nil, fmt.Errorf("the SSH host key is sealed to the TPM: %w", err)
+	}
+	defer tpmDev.Close()
+	s, err := sealHostKey(tpmDev, key)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(s)
 }
 
 // runDropIn makes tpm2-kira.service start the SSH server, and hold as long
@@ -139,8 +147,8 @@ Wants=systemd-networkd.service
 
 [Service]
 TimeoutStartSec=%s
-Environment="TPM2_KIRA_REMOTE=--ssh=%d --ssh-hold=%d --ssh-hostkeys=%s"
-`, timeout, s.Port, s.Hold, imageSSHHostKeys)
+Environment="TPM2_KIRA_REMOTE=--ssh=%d --ssh-hold=%d --ssh-hostkey=%s"
+`, timeout, s.Port, s.Hold, ImageSealedHostKey)
 }
 
 // ed25519AuthorizedKeys are the ssh-ed25519 lines of an authorized_keys
