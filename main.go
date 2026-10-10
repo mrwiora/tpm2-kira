@@ -119,6 +119,8 @@ func main() {
 		runAttest(commandArgs, *tpmPath, *debug)
 	case "remote-salt":
 		runRemoteSalt(commandArgs, *tpmPath, *debug)
+	case "remote":
+		runRemote(commandArgs)
 	case "derive":
 		fs := flag.NewFlagSet("derive", flag.ExitOnError)
 		out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
@@ -424,12 +426,16 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	gate := fs.String("gate", "", "Also be the Bluetooth gate's coordinator on this socket: hold the TPM for 'attest gate --coordinator' and let the phone's verdict release the boot (set by the initrd unit)")
 	hold := fs.Uint("hold", uint(cmd.HoldDefault/time.Second), "Seconds to wait for Enter after showing the code before the boot continues on its own (0: at once)")
 	unlock := fs.String("unlock", "", "Also answer systemd-cryptsetup's key requests on this socket (crypttab(5) AF_UNIX key files): the passphrase is asked at tpm2-kira's prompt once the code screen is confirmed. The initrd's socket unit passes the socket instead (set by the initrd unit)")
+	sshPort := fs.Int("ssh", 0, "Also be the SSH server on this port: the codes are shown and confirmed in an SSH session, the console says where to log in (set by the image's drop-in from TPM2_KIRA_SSH)")
+	sshHold := fs.Uint("ssh-hold", 0, "With --ssh: seconds to wait for a confirmation, in place of --hold (0: until one comes)")
+	sshHostKeys := fs.String("ssh-hostkeys", "/etc/tpm2-kira/ssh", "With --ssh: tinysshd's key directory")
+	sshSocket := fs.String("ssh-socket", cmd.DefaultRemoteSocket, "With --ssh: where the SSH sessions reach the code screen")
 
 	fs.Parse(args)
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, *debug)
+	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, cmd.RemoteOptions{Port: *sshPort, Hold: time.Duration(*sshHold) * time.Second, HostKeys: *sshHostKeys, Socket: *sshSocket}, *debug)
 }
 
 func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -871,3 +877,34 @@ machine's screen (docs/PLAN-REMOTEATTESTATION.md).
     6 the attestation record was replaced, or an older one was put back
 
 `
+
+func runRemote(args []string) {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, "remote requires a subcommand.\n\n")
+		printHelp("remote")
+		os.Exit(cmd.ExitUsage)
+	}
+	switch args[0] {
+	case "session":
+		fs := flag.NewFlagSet("remote session", flag.ExitOnError)
+		socket := fs.String("socket", cmd.DefaultRemoteSocket, "The code screen's socket")
+		fs.Parse(args[1:])
+		if err := cmd.RemoteSessionCommand(*socket); err != nil {
+			fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
+			os.Exit(1)
+		}
+	case "initramfs":
+		fs := flag.NewFlagSet("remote initramfs", flag.ExitOnError)
+		buildroot := fs.String("buildroot", "", "The image under construction (mkinitcpio's BUILDROOT)")
+		conf := fs.String("conf", cmd.DefaultControlConfigPath, "The configuration file")
+		fs.Parse(args[1:])
+		if err := cmd.RemoteInitramfsCommand(*conf, *buildroot, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
+			os.Exit(2) // the hook adds neither network nor SSH
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "unknown remote subcommand %q\n\n", args[0])
+		printHelp("remote")
+		os.Exit(cmd.ExitUsage)
+	}
+}

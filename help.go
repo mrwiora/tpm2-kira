@@ -53,6 +53,10 @@ THE PHONE (the Marify app, over Bluetooth LE)
   remote-salt  enrol, rotate, status, unenrol: the salt of the disk's key,
                kept by the phone, opened only by this TPM in an approved boot
 
+REMOTE (SSH in the boot image; set in control)
+  remote       session, initramfs: the code screen over SSH, and what the
+               image build adds for the network and the SSH server
+
 THE DISK'S KEY (mode in /etc/tpm2-kira/control.conf)
   luks         status, enrol, remove, mark, route: tpm2-kira's LUKS keyslots,
                and where the initrd takes the key from
@@ -350,7 +354,7 @@ computes it under the slot's policy: in a boot the signing key approved,
 before the OS separator (after 'cap' there is no code until the next boot).
 `,
 
-	"run": `tpm2-kira run [--hold S] [--gate SOCKET] [--unlock SOCKET]
+	"run": `tpm2-kira run [--hold S] [--gate SOCKET] [--unlock SOCKET] [--ssh PORT ...]
 
 What the initramfs runs: shows the code of every slot and holds the boot
 for Enter; with a phone enrolled, coordinates the Bluetooth gate and shows
@@ -374,6 +378,31 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
                    the phone's receipt, release the boot on its verdict
   --unlock SOCKET  Serve the disk's key on this socket (the unit sets
                    ` + cmd.DefaultUnlockSocket + `)
+  --ssh PORT       Be the SSH server on PORT (tinysshd per connection): the
+                   codes are shown and confirmed in an SSH session, the
+                   password is asked there; the console says where to log
+                   in, and Enter there continues at the console instead
+  --ssh-hold S     With --ssh, in place of --hold (default 0: until a
+                   confirmation comes)
+  --ssh-hostkeys DIR  tinysshd's key directory (default /etc/tpm2-kira/ssh)
+`,
+
+	"remote": `tpm2-kira remote session [--socket PATH]
+tpm2-kira remote initramfs --buildroot DIR [--conf PATH]
+
+The code screen over SSH (docs/REMOTE-SSH.md). The network and the SSH
+server of the boot image are set in /etc/tpm2-kira/control.conf
+(TPM2_KIRA_NET_*, TPM2_KIRA_SSH_*; 'tpm2-kira control' sets them and
+suggests the network from /etc/systemd/network).
+
+  session    What tinysshd runs for a login in the image: a terminal of the
+             code screen. Enter confirms the code and releases the boot, the
+             password is asked in the session, and cryptsetup's own prompt
+             is answered there through systemd's password agent
+  initramfs  What the mkinitcpio hook calls: writes the systemd-networkd
+             file, the SSH host keys and authorized keys, and the drop-in
+             of tpm2-kira.service into DIR, and prints the modules and
+             binaries the hook adds. Exit 2: nothing to add, and why
 `,
 
 	"cap": `tpm2-kira cap

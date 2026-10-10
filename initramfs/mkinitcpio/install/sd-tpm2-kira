@@ -173,6 +173,60 @@ _add_bluetooth() {
     plain "tpm2-kira: Bluetooth attestation via hci$adapter: ${#modules[@]} modules, $nfw firmware files"
 }
 
+# The network and the SSH server of the image (docs/REMOTE-SSH.md), from
+# control.conf's TPM2_KIRA_NET_* and TPM2_KIRA_SSH_*: independent of
+# /etc/systemd/network, which is the running system's. 'tpm2-kira remote
+# initramfs' writes the files (the systemd-networkd file, the SSH host keys
+# and authorized keys, the drop-in that makes 'tpm2-kira run' the SSH
+# server) and says what is added here: systemd-networkd, the drivers of
+# the matched interface, tinysshd and a shell for its command. A setting
+# that cannot work is said, and the image is built without both - it
+# still boots, with the code screen at the console.
+_add_remote() {
+    local out kind value
+    local -a modules=()
+    if ! out=$(tpm2-kira remote initramfs --conf "$CONF" --buildroot "$BUILDROOT" 2>&1); then
+        warning "tpm2-kira: no network or SSH in the image: ${out##*tpm2-kira: }"
+        return 0
+    fi
+    [[ $out == 'net off' ]] && return 0
+
+    while read -r kind value; do
+        case $kind in
+            module) add_module "$value" && modules+=("$value") ;;
+            modules-all) add_checked_modules /drivers/net ;;
+            warning) warning "tpm2-kira: $value" ;;
+        esac
+    done <<< "$out"
+
+    add_systemd_unit systemd-networkd.service
+    add_symlink /usr/lib/systemd/system/sysinit.target.wants/systemd-networkd.service \
+        /usr/lib/systemd/system/systemd-networkd.service
+    local db
+    for db in passwd shadow group; do
+        grep '^systemd-network:' "/etc/$db" >> "$BUILDROOT/etc/$db"
+    done
+    plain "tpm2-kira: network at boot: $(sed -n 's/^net //p' <<< "$out")${modules:+ via ${modules[*]}}"
+
+    local port
+    port=$(sed -n 's/^ssh //p' <<< "$out")
+    [[ -n $port ]] || return 0
+    if [[ ! -x /usr/bin/tinysshd ]]; then
+        warning "tpm2-kira: TPM2_KIRA_SSH=on, but tinysshd is not installed (pacman -S tinyssh); no SSH in the image"
+        rm -f "$BUILDROOT/etc/systemd/system/tpm2-kira.service.d/remote.conf"
+        return 0
+    fi
+    add_binary /usr/bin/tinysshd
+    # tinysshd runs its command with sh -c.
+    if [[ ! -e $BUILDROOT/usr/bin/sh ]]; then
+        add_binary /usr/lib/initcpio/busybox /usr/bin/busybox
+        add_symlink /usr/bin/sh busybox
+    fi
+    # cryptsetup's own prompt, answered in the SSH session.
+    add_binary systemd-tty-ask-password-agent
+    plain "tpm2-kira: SSH at boot on port $port: the codes are confirmed in an SSH session"
+}
+
 UNLOCK_SOCKET=/run/tpm2-kira/unlock.sock
 
 # The disk's unlock goes through tpm2-kira when the volume's key file is
@@ -264,6 +318,8 @@ build() {
 
     _add_bluetooth || return 1
 
+    _add_remote
+
     if [[ ! -d /etc/tpm2-kira/keys ]]; then
         warning "tpm2-kira: not configured yet; run 'tpm2-kira setup', then 'tpm2-kira seal', and rebuild"
     fi
@@ -286,6 +342,11 @@ The hook will:
   or in the key field of an x-initrd.attach line of /etc/crypttab.
   systemd-cryptsetup reads the key from tpm2-kira, which asks at its
   prompt once the code screen is confirmed. Nothing is written.
+- With TPM2_KIRA_NET in /etc/tpm2-kira/control.conf: systemd-networkd and
+  the matched interface's driver, configured from control.conf alone; with
+  TPM2_KIRA_SSH=on also tinysshd, started by tpm2-kira.service itself: the
+  codes are confirmed and the password typed in an SSH session, the console
+  says where to log in (docs/REMOTE-SSH.md)
 - If a phone is enrolled: add the Bluetooth adapter's driver modules and
   firmware (the adapter from /etc/tpm2-kira/control.conf, hci0 by default),
   and tpm2-kira-attest.service, which serves attestation requests from the

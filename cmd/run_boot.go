@@ -35,6 +35,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -50,6 +51,63 @@ import (
 // HoldDefault is how long the display waits for Enter before it releases
 // the boot on its own.
 const HoldDefault = 90 * time.Second
+
+// holdUnlimited is a hold that ends only with a confirmation: the SSH
+// server's TPM2_KIRA_SSH_HOLD=0.
+const holdUnlimited = 100 * 365 * 24 * time.Hour
+
+// hintPrinter puts consoleHint on the console while the SSH server holds
+// the boot: at every new window, and as soon as an address comes up or a
+// session comes or goes.
+type hintPrinter struct {
+	srv  *remoteServer
+	mu   sync.Mutex
+	last string // the addresses and sessions it last showed
+	left time.Duration
+	quit chan struct{}
+	once sync.Once
+}
+
+func startHintPrinter(srv *remoteServer) *hintPrinter {
+	h := &hintPrinter{srv: srv, left: -1, quit: make(chan struct{})}
+	go func() {
+		t := time.NewTicker(500 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-h.quit:
+				return
+			case <-t.C:
+			case <-srv.changed:
+			}
+			h.mu.Lock()
+			addrs, n := addresses(), srv.count()
+			if key := fmt.Sprint(addrs, n); key != h.last && h.last != "" {
+				h.last = key
+				fmt.Print("\n" + consoleHint(srv.opts.Port, addrs, n, h.left))
+			}
+			h.mu.Unlock()
+		}
+	}()
+	return h
+}
+
+// print shows the hint now; remaining is the hold's time left.
+func (h *hintPrinter) print(remaining time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if remaining >= holdUnlimited/2 {
+		remaining = -1
+	}
+	h.left = remaining
+	addrs, n := addresses(), h.srv.count()
+	h.last = fmt.Sprint(addrs, n)
+	fmt.Print("\n" + consoleHint(h.srv.opts.Port, addrs, n, remaining))
+}
+
+func (h *hintPrinter) stop() {
+	h.once.Do(func() { close(h.quit) })
+}
 
 // bootDisplay is RunCommand with its environment pluggable for tests.
 type bootDisplay struct {
@@ -395,8 +453,24 @@ func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*gateServi
 // unlockSocket (or a socket from systemd's socket unit) this process is
 // also the key provider for systemd-cryptsetup: it answers the volumes'
 // key requests once the hold has ended, and stays until it is stopped.
-func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, debug bool) {
+// With remote.Port it is also the SSH server (remote_ssh.go): the codes
+// are shown and confirmed in an SSH session, and the console says where.
+func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, remote RemoteOptions, debug bool) {
 	svc, endCoordinator := startCoordinator(tpmPath, gateSocket, DefaultAttestSignerPath, debug)
+	var srv *remoteServer
+	ask := prompter(consoleAsk)
+	if remote.Port > 0 {
+		var err error
+		if srv, err = startRemote(remote, os.Stdout, unlockLogger(debug)); err != nil {
+			fmt.Fprintf(os.Stderr, "tpm2-kira: the SSH server is not started: %v - the code screen is at the console\n", err)
+		} else {
+			ask = srv.ask
+			hold = remote.Hold
+			if hold == 0 {
+				hold = holdUnlimited
+			}
+		}
+	}
 	var unlock *unlockServer
 	// What the next prompt is, for the code screen's words: the recipe of
 	// the first routed volume, read from its LUKS2 header once it is
@@ -427,7 +501,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 				time.Sleep(200 * time.Millisecond)
 			}
 			return svc.Salt()
-		}, recipes.forVolume), unlockLogger(debug))
+		}, recipes.forVolume, ask), unlockLogger(debug))
 	}
 	open := func() (transport.TPMCloser, error) {
 		tpmDev, err := OpenTPM(tpmPath)
@@ -438,6 +512,11 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		return tpmDev, nil
 	}
 	enter := startEnterReader(0)
+	atConsole := false // the hold ended with Enter at the console
+	var hint *hintPrinter
+	if srv != nil {
+		hint = startHintPrinter(srv)
+	}
 	var phone func() (GateStatus, bool)
 	if svc != nil {
 		phone = svc.Status
@@ -479,6 +558,14 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		},
 		notify: func() {
 			enter.stop() // the terminal is the passphrase prompt's from here on
+			if srv != nil {
+				hint.stop()
+				// Enter at the console stops the SSH server; otherwise the
+				// session that confirmed (or the newest one) has the prompt.
+				if srv.release(atConsole) {
+					fmt.Printf("%s Confirmed over SSH: the password is asked in the SSH session.\n", kiraTag(tagYellow))
+				}
+			}
 			// Lazy mode: the phone check ends with the hold, and the
 			// radio worker with it.
 			endCoordinator()
@@ -502,12 +589,24 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			}
 			st, ok := gateStatus(phone)
 			codes = phoneCodes(codes, slots, st, ok)
-			if tpmDev, err := open(); err == nil {
-				PrintKIRASlots(tpmDev, slots, codes) // with PCR details
-				tpmDev.Close()
-			} else {
-				printSlotsWithoutTPM(slots, codes)
+			if srv != nil && remaining >= 0 {
+				// The codes go to the SSH sessions; the console says where.
+				var screen bytes.Buffer
+				printSlots(&screen, open, slots, codes)
+				left := ""
+				if remaining < holdUnlimited/2 {
+					left = fmt.Sprintf(" (on its own in %d s)", int(remaining.Round(time.Second)/time.Second))
+				}
+				if st, ok := gateStatus(phone); ok && st.Asking() {
+					fmt.Fprintf(&screen, "\n   Enter: continue without the phone%s; q: leave.\n\n", left)
+				} else {
+					fmt.Fprintf(&screen, "\n   Does the code match your authenticator? Enter: continue to %s, asked here%s; q: leave.\n\n", nextPrompt(promptMode()), left)
+				}
+				srv.show(screen.Bytes())
+				hint.print(remaining)
+				return
 			}
+			printSlots(os.Stdout, open, slots, codes)
 			if remaining >= 0 {
 				fmt.Println()
 				if st, ok := gateStatus(phone); ok && st.Asking() {
@@ -519,8 +618,15 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			fmt.Println()
 		},
 		wait: func(d time.Duration) bool {
+			var confirmed chan struct{} // nil without SSH: never ready
+			if srv != nil {
+				confirmed = srv.releases
+			}
 			select {
 			case <-enter.presses:
+				atConsole = true
+				return true
+			case <-confirmed:
 				return true
 			case <-time.After(d):
 				return false
@@ -714,21 +820,32 @@ func gateEventPrinter(modeOf func() string) func(prev, cur GateStatus) {
 	}
 }
 
+// printSlots is the code screen onto w, with the PCR details of a slot
+// that has no code when the TPM can be opened for them.
+func printSlots(w io.Writer, open func() (transport.TPMCloser, error), slots []NVRAMSlot, codes map[int]string) {
+	if tpmDev, err := open(); err == nil {
+		FprintKIRASlots(w, tpmDev, slots, codes)
+		tpmDev.Close()
+		return
+	}
+	printSlotsWithoutTPM(w, slots, codes)
+}
+
 // printSlotsWithoutTPM is the display when the TPM cannot be opened for the
 // PCR details.
-func printSlotsWithoutTPM(slots []NVRAMSlot, codes map[int]string) {
-	fmt.Printf("[ \033[1;33mKIRA\033[0m ] Time UTC %s\n", time.Now().UTC().Format("15:04:05"))
+func printSlotsWithoutTPM(w io.Writer, slots []NVRAMSlot, codes map[int]string) {
+	fmt.Fprintf(w, "[ \033[1;33mKIRA\033[0m ] Time UTC %s\n", time.Now().UTC().Format("15:04:05"))
 	for _, slot := range slots {
 		if slot.Error != nil {
 			if line := slotErrorLine(slot.Error); line != "" {
-				fmt.Printf("\033[0;31m#%d\033[0m: %s\n", slot.SlotNumber, line)
+				fmt.Fprintf(w, "\033[0;31m#%d\033[0m: %s\n", slot.SlotNumber, line)
 			} else {
-				fmt.Printf("\033[0;31m#%d\033[0m: PCR Mismatch\n", slot.SlotNumber)
+				fmt.Fprintf(w, "\033[0;31m#%d\033[0m: PCR Mismatch\n", slot.SlotNumber)
 			}
 		} else if slot.Phone {
-			fmt.Printf("\033[0;33m#%d\033[0m: %s\n", slot.SlotNumber, phoneSlotText(codes, slot))
+			fmt.Fprintf(w, "\033[0;33m#%d\033[0m: %s\n", slot.SlotNumber, phoneSlotText(codes, slot))
 		} else if code, exists := codes[slot.SlotNumber]; exists {
-			fmt.Printf("\033[0;32m#%d\033[0m: %s\n", slot.SlotNumber, code)
+			fmt.Fprintf(w, "\033[0;32m#%d\033[0m: %s\n", slot.SlotNumber, code)
 		}
 	}
 }

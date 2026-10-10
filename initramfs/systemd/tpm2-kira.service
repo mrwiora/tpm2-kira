@@ -52,8 +52,10 @@ Type=notify
 TimeoutStartSec=180
 # --gate: where the radio worker reaches this process. Without an enrolled
 # phone in the image nothing listens there. The key socket comes from the
-# socket unit (Sockets=), not from a flag.
-ExecStart=tpm2-kira run --gate /run/tpm2-kira/gate.sock
+# socket unit (Sockets=), not from a flag. TPM2_KIRA_REMOTE is set by the
+# image's drop-in (tpm2-kira.service.d/remote.conf) when control.conf turns
+# the SSH server on: --ssh=PORT and its hold; unset, it is no argument.
+ExecStart=tpm2-kira run --gate /run/tpm2-kira/gate.sock $TPM2_KIRA_REMOTE
 # Enter on the console releases the boot.
 StandardInput=tty
 StandardOutput=tty

@@ -10,6 +10,20 @@ formats and CLI flags may change without migration paths.
 
 ## Boot integration
 
+### SSH in the initrd came from mkinitcpio-systemd-extras
+
+Until the code screen got its own SSH server (2026-10-10), remote unlock
+used the sd-network and sd-tinyssh hooks of mkinitcpio-systemd-extras:
+the image copied the running system's /etc/systemd/network, tinysshd was
+socket-activated by its own unit, and its command was
+`tpm2-kira && systemd-tty-ask-password-agent --query --watch`. That
+assumed a code could be computed whenever the admin arrived; after the
+hold the OS separator had made the key's policy unsatisfiable, and the
+remote admin got no code. Now the process that holds the boot listens
+itself, so the confirmation in a session is the release, and the
+network is configured for the image alone in control.conf
+(docs/REMOTE-SSH.md).
+
 ### The passphrase prompt was systemd's; tpm2-kira only ran before it
 
 Until the key provider (2026-10-07), `tpm2-kira.service` showed the code,

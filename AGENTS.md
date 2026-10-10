@@ -69,8 +69,12 @@ It may not carry what came before.
   the fallback after a wrong or missing answer (docs/UNLOCK-DISK.md §4).
   Do not build a mode that holds the boot on the phone's verdict.
 - **One configuration file, `/etc/tpm2-kira/control.conf`, and only
-  `control` writes it.** It holds the radio settings and the YubiKey's PIN
-  (nothing of it goes into the boot image: the gate there takes the
+  `control` writes it.** It holds the radio settings, the YubiKey's PIN
+  and the boot image's network and SSH server (TPM2_KIRA_NET_*,
+  TPM2_KIRA_SSH_*: the one part the image build turns into files of the
+  image - a networkd file, a unit drop-in - through `tpm2-kira remote
+  initramfs`; the file itself never goes in, docs/REMOTE-SSH.md)
+  (nothing else of it reaches the boot image: the gate there takes the
   adapter that comes up, waits as long as the code screen holds, and
   logs every step when "Debug at boot" is on - a switch in the TPM, NV
   index 0x01803000, written by `control` with the signing key).

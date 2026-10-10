@@ -91,6 +91,7 @@ type machineFacts struct {
 	NewImage string // an image was rebuilt after this boot started; "" when not
 	Routed   map[string]bool
 	Route    []RouteFinding // the route's findings, for the step that writes the fixes
+	Remote   RemoteConfig   // the boot image's network and SSH server (control.conf)
 }
 
 // collectFacts is the analysis.
@@ -164,6 +165,7 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	} else {
 		f.BTAlways = cfg.Attest.Bluetooth == "always"
 		f.Guide = cfg.Control
+		f.Remote = cfg.Remote
 	}
 
 	f.Status = collectStatus(StatusOptions{TPMPath: tpmPath, ConfigPath: controlConfigPath(), Debug: debug})
@@ -1362,6 +1364,10 @@ func (c *controller) finishSteps(steps []controlStep) []controlStep {
 	// Only where something runs at boot: a slot, or the switch still on.
 	if len(f.Status.Slots) > 0 || f.BootDebug {
 		steps = append(steps, debugStep)
+	}
+	// Like the switch: once a code screen exists to hold, or while set.
+	if len(f.Status.Slots) > 0 || f.Remote.Net.NetworkdFile() != "" {
+		steps = append(steps, c.remoteStep())
 	}
 	label, target := "Switch to the manual set-up", "manual"
 	if !guided {

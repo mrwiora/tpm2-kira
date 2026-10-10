@@ -293,7 +293,10 @@ var errUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own p
 //	                     (the password+salt variant), then cryptsetup's own prompt
 //
 // salt returns the released salt or nil; the key is for the caller to wipe.
-func diskKey(salt func() []byte, recipe func(volume string) (mode, why string)) func(volume string) ([]byte, error) {
+//
+// ask is where the person is asked: consoleAsk, or the SSH session that
+// confirmed the code screen (remoteServer.ask).
+func diskKey(salt func() []byte, recipe func(volume string) (mode, why string), ask prompter) func(volume string) ([]byte, error) {
 	return func(volume string) ([]byte, error) {
 		var s []byte
 		var note string
@@ -321,13 +324,13 @@ func diskKey(salt func() []byte, recipe func(volume string) (mode, why string)) 
 			}
 			return nil, errUnlockSkipped
 		}
-		pw, err := consoleAsk(volume, "Password", note)
+		pw, err := ask(volume, "Password", note)
 		if err != nil {
 			return nil, err
 		}
 		defer wipe(pw)
 		if s == nil {
-			if s, err = consoleAsk(volume, "Salt", ""); err != nil {
+			if s, err = ask(volume, "Salt", ""); err != nil {
 				return nil, err
 			}
 		}
@@ -335,6 +338,10 @@ func diskKey(salt func() []byte, recipe func(volume string) (mode, why string)) 
 		return Combine(pw, s)
 	}
 }
+
+// prompter asks for a volume's password or salt, with a note above the
+// question when there is one.
+type prompter func(volume, what, note string) ([]byte, error)
 
 // consoleAsk asks on the console for a volume's passphrase or password,
 // with a note above the prompt when there is one.
@@ -420,23 +427,36 @@ func readPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 		return nil, err
 	}
 	defer unix.IoctlSetTermios(fd, unix.TCSETS, old)
+	one := make([]byte, 1)
+	return readRawPassphrase(func() (byte, error) {
+		n, err := f.Read(one)
+		if err == nil && n == 0 {
+			err = io.EOF
+		}
+		return one[0], err
+	}, f)
+}
+
+// readRawPassphrase reads a passphrase key by key from a terminal without
+// echo or line discipline - the console, or an SSH session (remote_ssh.go)
+// - and echoes a '*' per key to echo.
+func readRawPassphrase(next func() (byte, error), echo io.Writer) ([]byte, error) {
 	// One buffer of the final size, so the passphrase is in one place
 	// only: no growing slice leaves earlier copies behind for the garbage
 	// collector to find. Locked in memory, as libcryptsetup locks its key
 	// buffers; a page that the initrd could not swap out anyway.
 	pw := make([]byte, 0, maxPassphrase)
 	unix.Mlock(pw[:maxPassphrase])
-	buf := make([]byte, 1)
 	for {
-		n, err := f.Read(buf)
-		if err != nil || n == 0 {
+		c, err := next()
+		if err != nil {
 			wipe(pw)
 			if errors.Is(err, io.EOF) {
 				return nil, errPassphraseCancelled
 			}
 			return nil, err
 		}
-		switch c := buf[0]; c {
+		switch c {
 		case '\n', '\r':
 			return pw, nil
 		case 3, 4: // Ctrl-C, Ctrl-D
@@ -446,15 +466,15 @@ func readPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 			if len(pw) > 0 {
 				pw[len(pw)-1] = 0
 				pw = pw[:len(pw)-1]
-				fmt.Fprint(f, "\b \b")
+				fmt.Fprint(echo, "\b \b")
 			}
 		default:
 			if len(pw) == maxPassphrase {
-				fmt.Fprint(f, "\a")
+				fmt.Fprint(echo, "\a")
 				continue
 			}
 			pw = append(pw, c)
-			fmt.Fprint(f, "*")
+			fmt.Fprint(echo, "*")
 		}
 	}
 }

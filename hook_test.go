@@ -221,3 +221,68 @@ _add_bluetooth
 		}
 	}
 }
+
+// The network and SSH part of the hook: what 'tpm2-kira remote initramfs'
+// prints is added - systemd-networkd enabled with its user, the matched
+// interface's driver - and a setting it refuses leaves both out with the
+// reason. Without tinysshd on the system the SSH server is left out and
+// its drop-in removed, so the image boots with the code screen at the
+// console.
+func TestHookAddsNetworkAndSSH(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash")
+	}
+	script := `
+add_module() { echo "MODULE $1"; }
+add_checked_modules() { echo "ALLMODULES $1"; }
+add_binary() { echo "BINARY $*"; }
+add_systemd_unit() { echo "UNIT $1"; }
+add_symlink() { echo "LINK $1"; }
+plain() { echo "PLAIN $*"; }
+warning() { echo "WARNING $*"; }
+tpm2-kira() { [[ "$1 $2" == "remote initramfs" ]] || return 0; printf '%s' "$REMOTE_OUT"; return "${REMOTE_RC:-0}"; }
+source initramfs/mkinitcpio/install/sd-tpm2-kira
+_add_remote
+`
+	run := func(out, rc string) (string, string) {
+		root := t.TempDir()
+		os.MkdirAll(filepath.Join(root, "etc/systemd/system/tpm2-kira.service.d"), 0o755)
+		os.WriteFile(filepath.Join(root, "etc/systemd/system/tpm2-kira.service.d/remote.conf"), []byte("x"), 0o644)
+		cmd := exec.Command("bash", "-c", script)
+		cmd.Env = append(os.Environ(), "BUILDROOT="+root, "REMOTE_OUT="+out, "REMOTE_RC="+rc)
+		b, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v:\n%s", err, b)
+		}
+		return string(b), root
+	}
+
+	if got, _ := run("net off\n", "0"); strings.Contains(got, "UNIT") || strings.Contains(got, "WARNING") {
+		t.Fatalf("off added something:\n%s", got)
+	}
+	if got, _ := run("tpm2-kira: TPM2_KIRA_SSH=on needs a network in the image\n", "2"); !strings.Contains(got, "WARNING tpm2-kira: no network or SSH in the image: TPM2_KIRA_SSH=on needs a network") || strings.Contains(got, "UNIT") {
+		t.Fatalf("a refused setting:\n%s", got)
+	}
+	got, root := run("net dhcp\nmodule e1000e\nssh 22\n", "0")
+	for _, want := range []string{"MODULE e1000e", "UNIT systemd-networkd.service", "LINK /usr/lib/systemd/system/sysinit.target.wants/systemd-networkd.service", "PLAIN tpm2-kira: network at boot: dhcp via e1000e"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+	dropIn := filepath.Join(root, "etc/systemd/system/tpm2-kira.service.d/remote.conf")
+	if _, err := os.Stat("/usr/bin/tinysshd"); err == nil {
+		if !strings.Contains(got, "BINARY /usr/bin/tinysshd") || !strings.Contains(got, "BINARY systemd-tty-ask-password-agent") {
+			t.Errorf("tinysshd or the password agent not added:\n%s", got)
+		}
+	} else {
+		if !strings.Contains(got, "tinysshd is not installed") || strings.Contains(got, "BINARY") {
+			t.Errorf("without tinysshd:\n%s", got)
+		}
+		if _, err := os.Stat(dropIn); !os.IsNotExist(err) {
+			t.Error("the drop-in that starts the SSH server stayed without tinysshd")
+		}
+	}
+	if got, _ := run("net static\nmodules-all\nwarning no interface aa:bb:cc:dd:ee:09 on this machine\n", "0"); !strings.Contains(got, "ALLMODULES /drivers/net") || !strings.Contains(got, "WARNING tpm2-kira: no interface aa:bb") {
+		t.Errorf("no interface matched:\n%s", got)
+	}
+}

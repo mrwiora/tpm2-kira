@@ -14,9 +14,12 @@ import (
 // the attestation by phone (TPM2_KIRA_ATTEST_*) and the YubiKey's PIN for
 // the unattended reseal (TPM2_KIRA_PIN). How the disk's key is made is not
 // configured anywhere: the boot reads it from the LUKS header's tokens
-// (luks_header.go). KEY=VALUE lines. Nothing of it goes into the boot
-// image, and no script sources it: tpm2-kira reads it, the image build's
-// two settings through 'attest initramfs-deps'. 'tpm2-kira control' is what
+// (luks_header.go); and the boot image's network and SSH server
+// (TPM2_KIRA_NET_*, TPM2_KIRA_SSH_*, remote_config.go). KEY=VALUE lines.
+// The file never goes into the boot image, and no script sources it:
+// tpm2-kira reads it, the image build through 'attest initramfs-deps'
+// (the radio) and 'remote initramfs' (which writes the network and SSH
+// settings into the image as files of their own). 'tpm2-kira control' is what
 // writes it; the other commands only read. The PIN is read from its own
 // line (storedPIN), for the signer alone, whatever the other lines say. A
 // file holding the PIN must be root's and readable by root alone, else the
@@ -59,11 +62,14 @@ type ControlConfig struct {
 	// then the reboot, then part 2), "manual" (every step by hand), or ""
 	// (not chosen yet: the start screen asks). Changeable there any time.
 	Control string // TPM2_KIRA_CONTROL
+	// Remote is the boot image's network and SSH server (remote_config.go):
+	// unlike the rest, the image build turns it into files of the image.
+	Remote RemoteConfig
 }
 
 // DefaultControlConfig is a missing file: the radio's defaults.
 func DefaultControlConfig() ControlConfig {
-	return ControlConfig{Attest: DefaultAttestConfig()}
+	return ControlConfig{Attest: DefaultAttestConfig(), Remote: DefaultRemoteConfig()}
 }
 
 // LoadControlConfig reads the file; a missing file is the defaults.
@@ -127,6 +133,9 @@ func parseControlLine(cfg *ControlConfig, n int, line string) error {
 	}
 	key = strings.TrimSpace(key)
 	val = strings.Trim(strings.TrimSpace(val), `"'`)
+	if handled, err := parseRemoteLine(&cfg.Remote, n, key, val); handled {
+		return err
+	}
 	switch key {
 	case "TPM2_KIRA_UNLOCK":
 		return fmt.Errorf("control.conf line %d: there is no unlock mode to set any more; the boot reads how a key is made from the LUKS header's tokens. Remove the line", n)

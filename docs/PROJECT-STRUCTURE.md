@@ -19,6 +19,10 @@ Where things are in the repository, and how the tests are run.
 │   │                        #   (forms by huh v2, charm.land, the one TUI dependency)
 │   ├── status.go            # The overview: slots, phone, unlock mode, keyslots, notes
 │   ├── luks.go, route.go    # LUKS keyslots and tokens; where the initrd takes the key from
+│   ├── remote_config.go     # The boot image's network and SSH settings; the networkd file
+│   ├── remote_initramfs.go  # What the image build adds for them ('remote initramfs')
+│   ├── remote_ssh.go        # The SSH server of the code screen, and 'remote session'
+│   ├── control_remote.go    # control's step for them
 │   ├── default_pcrs.go      # What 'seal' seals to by default, and the fallback slot
 │   ├── seal.go              # Create the TOTP key in the TPM and approve PCR values
 │   ├── reseal.go            # Approve new PCR values, revoke older approvals

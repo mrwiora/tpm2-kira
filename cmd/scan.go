@@ -3,6 +3,8 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"time"
 
 	"github.com/google/go-tpm/tpm2"
@@ -211,21 +213,26 @@ func slotErrorLine(err error) string {
 
 // PrintKIRASlots prints TOTP codes in the unified KIRA format with timestamps and PCR details
 func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]string) {
+	FprintKIRASlots(os.Stdout, tpmDev, slots, codes)
+}
+
+// FprintKIRASlots is PrintKIRASlots onto w: the console, or an SSH session.
+func FprintKIRASlots(w io.Writer, tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]string) {
 	now := time.Now().UTC()
 	timestamp := now.Format("15:04:05")
 
 	// Yellow color for KIRA
-	fmt.Printf("[ \033[1;33mKIRA\033[0m ] Time UTC %s\n", timestamp)
+	fmt.Fprintf(w, "[ \033[1;33mKIRA\033[0m ] Time UTC %s\n", timestamp)
 
 	for _, slot := range slots {
 		if slot.Error != nil {
 			if line := slotErrorLine(slot.Error); line != "" {
-				fmt.Printf("\033[0;31m#%d\033[0m: %s\n", slot.SlotNumber, line)
+				fmt.Fprintf(w, "\033[0;31m#%d\033[0m: %s\n", slot.SlotNumber, line)
 				continue
 			}
 
 			// This slot has a PCR mismatch or policy failure - red slot number
-			fmt.Printf("\033[0;31m#%d\033[0m: PCR Mismatch\n", slot.SlotNumber)
+			fmt.Fprintf(w, "\033[0;31m#%d\033[0m: PCR Mismatch\n", slot.SlotNumber)
 
 			// Try to read the sealed blob to get PCR details
 			// Read the sealed blob and current register values for comparison
@@ -251,22 +258,22 @@ func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]strin
 							status := PCRStatus(expected, current)
 
 							source := sealedBlob.Payload.PCRDigests[idx].Source
-							fmt.Printf("  PCR%-2d (%s): %s - %s\n", pcrIndex, source.String(), GetPCRDescription(pcrIndex), status)
-							fmt.Printf("    Expected (blob):    %x\n", expected)
-							fmt.Printf("    Current (register): %x\n", current)
+							fmt.Fprintf(w, "  PCR%-2d (%s): %s - %s\n", pcrIndex, source.String(), GetPCRDescription(pcrIndex), status)
+							fmt.Fprintf(w, "    Expected (blob):    %x\n", expected)
+							fmt.Fprintf(w, "    Current (register): %x\n", current)
 						}
 					}
 				}
 			}
 		} else if slot.Phone {
-			fmt.Printf("\033[0;33m#%d\033[0m: %s\n", slot.SlotNumber, phoneSlotText(codes, slot))
+			fmt.Fprintf(w, "\033[0;33m#%d\033[0m: %s\n", slot.SlotNumber, phoneSlotText(codes, slot))
 		} else if code, exists := codes[slot.SlotNumber]; exists {
 			// Green slot number for successful reveal
-			fmt.Printf("\033[0;32m#%d\033[0m: %s", slot.SlotNumber, code)
+			fmt.Fprintf(w, "\033[0;32m#%d\033[0m: %s", slot.SlotNumber, code)
 			if slot.AfterSeparator {
-				fmt.Print("  (computed after the boot was released: reseal to lock it before the OS separator)")
+				fmt.Fprint(w, "  (computed after the boot was released: reseal to lock it before the OS separator)")
 			}
-			fmt.Println()
+			fmt.Fprintln(w)
 		}
 	}
 }
