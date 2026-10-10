@@ -1,4 +1,4 @@
-.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio deb test test-unit test-integration test-all fuzz fmt vet pkgbuild help
+.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio deb test test-unit test-integration test-all fuzz fmt vet packages pkgbuild help
 
 # Binary name
 BINARY_NAME=tpm2-kira
@@ -191,7 +191,11 @@ deps:
 	$(GOMOD) download
 	$(GOMOD) tidy
 
-## pkgbuild: Build Arch Linux package
+## packages: Build the Arch and Debian packages and the Marify APKs of HEAD (packaging/build-packages.sh)
+packages:
+	@packaging/build-packages.sh
+
+## pkgbuild: Build Arch Linux package of the release tag
 pkgbuild:
 	@echo "Building Arch Linux package..."
 	@if ! command -v makepkg >/dev/null 2>&1; then \
