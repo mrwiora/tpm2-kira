@@ -45,9 +45,8 @@ type StatusReport struct {
 	TPM          string             `json:"tpm"`
 	TPMError     string             `json:"tpm_error,omitempty"`
 	Slots        []StatusSlot       `json:"slots"`
-	UnlockMode   string             `json:"unlock_mode"`
 	Config       string             `json:"config"`
-	UnlockError  string             `json:"unlock_error,omitempty"`
+	ConfigError  string             `json:"config_error,omitempty"`
 	Devices      []LuksDeviceStatus `json:"devices"`
 	DevicesError string             `json:"devices_error,omitempty"`
 	Notes        []string           `json:"notes"`
@@ -101,12 +100,9 @@ func collectStatus(o StatusOptions) StatusReport {
 		tpmDev.Close()
 	}
 
-	cfg, err := LoadUnlockConfig(o.ConfigPath)
 	r.Config = o.ConfigPath
-	if err != nil {
-		r.UnlockError = err.Error()
-	} else {
-		r.UnlockMode = cfg.Mode
+	if _, err := LoadControlConfig(o.ConfigPath); err != nil {
+		r.ConfigError = err.Error()
 	}
 
 	devices, err := luksDevices()
@@ -207,20 +203,8 @@ func statusNotes(r StatusReport) []string {
 			}
 		}
 	}
-	switch r.UnlockMode {
-	case UnlockPasswordRemoteSalt:
-		if r.TPMError == "" && !remoteSalt {
-			notes = append(notes, "unlock mode password+remotesalt, but no slot has a remote salt enrolled: no salt can come from a phone, every boot asks for a typed salt (tpm2-kira luks enrol <device> --mode password+remotesalt)")
-		}
-		fallthrough
-	case UnlockPasswordSalt:
-		if headersRead && marked[r.UnlockMode] == 0 {
-			notes = append(notes, fmt.Sprintf("unlock mode %s, but no LUKS keyslot is marked for it: the derived key opens nothing (tpm2-kira luks enrol <device> --mode %s, or luks mark)", r.UnlockMode, r.UnlockMode))
-		}
-	case UnlockSkip:
-		for mode, n := range marked {
-			notes = append(notes, fmt.Sprintf("%d keyslot(s) are marked %s, but the unlock mode is skip: the boot asks at cryptsetup's prompt (TPM2_KIRA_UNLOCK=%s in %s, then rebuild the initramfs)", n, mode, mode, r.Config))
-		}
+	if remoteSalt && headersRead && marked[LuksModePasswordRemoteSalt] == 0 {
+		notes = append(notes, "a remote salt is enrolled, but no LUKS keyslot is marked password+remotesalt: the phone's salt opens nothing (tpm2-kira luks enrol <device> --mode password+remotesalt)")
 	}
 	return notes
 }
@@ -251,11 +235,9 @@ func printStatus(r StatusReport) {
 		}
 	}
 	fmt.Println()
-	fmt.Printf("Disk unlock (%s)\n", r.Config)
-	if r.UnlockError != "" {
-		fmt.Printf("  %s\n", r.UnlockError)
-	} else {
-		fmt.Printf("  mode %s\n", r.UnlockMode)
+	fmt.Println("Disk unlock (how a key is made is in each device's LUKS header)")
+	if r.ConfigError != "" {
+		fmt.Printf("  %s: %s\n", r.Config, r.ConfigError)
 	}
 	if r.DevicesError != "" {
 		fmt.Printf("  %s\n", r.DevicesError)

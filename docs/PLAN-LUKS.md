@@ -13,11 +13,14 @@
 ## 1. Names
 
 The modes say what tpm2-kira does with the disk's key, in the words a
-person uses (decided 2026-10-07):
+person uses (decided 2026-10-07). They are the keyslot token's `mode`,
+read from the volume's own header at boot - there is no configured
+unlock mode (the TPM2_KIRA_UNLOCK of earlier versions is gone,
+HISTORY.md):
 
-| `TPM2_KIRA_UNLOCK=` | what tpm2-kira does | without a released salt |
+| the keyslot's token says | what tpm2-kira does | without a released salt |
 |---|---|---|
-| `skip` | nothing: cryptsetup's own prompt asks for the LUKS passphrase (default) | - |
+| *(no token)* | nothing: cryptsetup's own prompt asks for the LUKS passphrase | - |
 | `password+salt` | asks for a password and a salt, hands over hashpwd2's derivation | - |
 | `password+remotesalt` | asks for the password; the salt is the one the verifier released and the TPM opened | asks for a typed salt (the `password+salt` variant, a keyslot enrolled that way); Ctrl-C: cryptsetup's prompt, the recovery keyslot |
 
@@ -101,12 +104,11 @@ tpm2-kira status
   /dev/vda2  keyslot 0 not tpm2-kira's; keyslot 2 password+remotesalt (slot 0, label luks); keyslot 1 password+salt
 ```
 
-`attest status`, `remote-salt status`, `luks status` and `control.conf` in
-one place, which is what a person wants to know before a reboot - and the
-notes under it: what does not fit together (a mode without a keyslot for
-it, a marked keyslot with the mode at `skip`, `password+remotesalt`
-without a remote salt, no fallback slot, a reseal due) with the command
-to run. `--json` for scripts.
+`attest status`, `remote-salt status` and `luks status` in one place,
+which is what a person wants to know before a reboot - and the notes
+under it: what does not fit together (`password+remotesalt` without a
+remote salt, a keyslot bound to a slot that is gone, no fallback slot, a
+reseal due) with the command to run. `--json` for scripts.
 
 ## 4a. Open: the inputs from files
 

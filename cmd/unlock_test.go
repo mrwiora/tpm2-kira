@@ -456,7 +456,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 		}
 	}()
 	salt := []byte("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-	key, err := diskKey(func() []byte { return append([]byte(nil), salt...) }, UnlockPasswordRemoteSalt)("cryptroot")
+	key, err := diskKey(func() []byte { return append([]byte(nil), salt...) }, recipeOf(LuksModePasswordRemoteSalt))("cryptroot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,7 +488,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 	}
 	// Without a salt from the phone: the password+salt variant, a typed
 	// salt, said so at the prompt.
-	key, err = diskKey(func() []byte { return nil }, UnlockPasswordRemoteSalt)("cryptroot")
+	key, err = diskKey(func() []byte { return nil }, recipeOf(LuksModePasswordRemoteSalt))("cryptroot")
 	if err != nil {
 		t.Fatalf("without a salt from the phone: %v", err)
 	}
@@ -513,8 +513,8 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 			drained = true
 		}
 	}
-	if _, err := diskKey(func() []byte { return append([]byte(nil), salt...) }, UnlockSkip)("cryptroot"); !errors.Is(err, errUnlockSkipped) {
-		t.Fatalf("skip: %v", err)
+	if _, err := diskKey(func() []byte { return append([]byte(nil), salt...) }, recipeOf(""))("cryptroot"); !errors.Is(err, errUnlockSkipped) {
+		t.Fatalf("no keyslot of ours: %v", err)
 	}
 	select {
 	case p := <-prompts:
@@ -587,7 +587,7 @@ func TestDiskKeyPasswordSaltMode(t *testing.T) {
 			}()
 		}
 	}()
-	key, err := diskKey(func() []byte { return nil }, UnlockPasswordSalt)("cryptroot")
+	key, err := diskKey(func() []byte { return nil }, recipeOf(LuksModePasswordSalt))("cryptroot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -609,24 +609,11 @@ func TestDiskKeyPasswordSaltMode(t *testing.T) {
 	}
 }
 
-func TestParseUnlockConfig(t *testing.T) {
-	cfg, err := parseUnlock([]byte("# comment\nTPM2_KIRA_UNLOCK=password+salt\n"))
-	if err != nil || cfg.Mode != UnlockPasswordSalt {
-		t.Fatalf("%+v %v", cfg, err)
-	}
-	if cfg, err := parseUnlock([]byte("TPM2_KIRA_UNLOCK=password+remotesalt\n")); err != nil || cfg.Mode != UnlockPasswordRemoteSalt {
-		t.Fatalf("%+v %v", cfg, err)
-	}
-	if cfg, err := parseUnlock(nil); err != nil || cfg.Mode != UnlockSkip {
-		t.Fatalf("empty: %+v %v", cfg, err)
-	}
-	for _, bad := range []string{"TPM2_KIRA_UNLOCK=yes\n", "TPM2_KIRA_UNLOCK=hashpwd2\n", "TPM2_KIRA_SALT=x\n", "nonsense\n"} {
-		if _, err := parseUnlock([]byte(bad)); err == nil {
-			t.Errorf("accepted %q", bad)
-		}
-	}
-	if cfg, err := LoadUnlockConfig(filepath.Join(t.TempDir(), "none")); err != nil || cfg.Mode != UnlockSkip {
-		t.Fatalf("missing file: %+v %v", cfg, err)
+// There is no unlock mode to configure: a TPM2_KIRA_UNLOCK line is an
+// error that says what to do now.
+func TestUnlockModeLineIsGone(t *testing.T) {
+	if _, err := ParseControlConfig([]byte("TPM2_KIRA_UNLOCK=password+salt\n")); err == nil || !strings.Contains(err.Error(), "Remove the line") {
+		t.Fatalf("a mode line parsed: %v", err)
 	}
 }
 
@@ -650,8 +637,7 @@ func TestReadPassphraseTakesOneLineOfAPipe(t *testing.T) {
 	}
 }
 
-// parseUnlock is the unlock part of control.conf's content.
-func parseUnlock(data []byte) (UnlockConfig, error) {
-	cfg, err := ParseControlConfig(data)
-	return cfg.Unlock, err
+// recipeOf is a volume-independent recipe, for the prompt tests.
+func recipeOf(mode string) func(string) (string, string) {
+	return func(string) (string, string) { return mode, "" }
 }

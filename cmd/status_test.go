@@ -17,7 +17,7 @@ func TestStatusNotes(t *testing.T) {
 		}
 		return d
 	}
-	ok := StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e,11u", true), slot(1, "0e,7e", false)}, UnlockMode: UnlockPasswordRemoteSalt,
+	ok := StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e,11u", true), slot(1, "0e,7e", false)},
 		Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: 0})}}
 	if n := statusNotes(ok); len(n) != 0 {
 		t.Errorf("a consistent machine has notes: %v", n)
@@ -28,18 +28,15 @@ func TestStatusNotes(t *testing.T) {
 		r    StatusReport
 		want string
 	}{
-		{"nothing sealed", StatusReport{UnlockMode: UnlockSkip}, "no slot is sealed"},
-		{"no fallback", StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e", false)}, UnlockMode: UnlockSkip}, "no fallback slot"},
-		{"reseal due", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,7e", Fallback: true, GenState: "4 — does NOT match the blob", Signed: true}}, UnlockMode: UnlockSkip}, "resealed"},
-		{"not signed", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,7e", Fallback: true, GenState: "3 (matches)", SignReason: "no key"}}, UnlockMode: UnlockSkip}, "not signed by this machine"},
-		{"remotesalt without one", StatusReport{Slots: []StatusSlot{slot(1, "0e,7e", false)}, UnlockMode: UnlockPasswordRemoteSalt,
-			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: 0})}}, "no slot has a remote salt"},
-		{"mode without keyslot", StatusReport{Slots: []StatusSlot{slot(1, "0e,7e", false)}, UnlockMode: UnlockPasswordSalt, Devices: []LuksDeviceStatus{dev(nil)}}, "no LUKS keyslot is marked"},
-		{"keyslot without mode", StatusReport{Slots: []StatusSlot{slot(1, "0e,7e", false)}, UnlockMode: UnlockSkip,
-			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordSalt})}}, "unlock mode is skip"},
-		{"keyslot bound to a gone slot", StatusReport{Slots: []StatusSlot{slot(0, "0e,7e", false)}, UnlockMode: UnlockSkip,
+		{"nothing sealed", StatusReport{}, "no slot is sealed"},
+		{"no fallback", StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e", false)}}, "no fallback slot"},
+		{"reseal due", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,7e", Fallback: true, GenState: "4 — does NOT match the blob", Signed: true}}}, "resealed"},
+		{"not signed", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,7e", Fallback: true, GenState: "3 (matches)", SignReason: "no key"}}}, "not signed by this machine"},
+		{"salt without a keyslot", StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e,11u", true), slot(1, "0e,7e", false)},
+			Devices: []LuksDeviceStatus{dev(nil)}}, "no LUKS keyslot is marked password+remotesalt"},
+		{"keyslot bound to a gone slot", StatusReport{Slots: []StatusSlot{slot(0, "0e,7e", false)},
 			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordSalt, Slot: 2})}}, "bound to slot 2, which is gone"},
-		{"keyslot's slot lost its salt", StatusReport{Slots: []StatusSlot{slot(0, "0e,7e", false)}, UnlockMode: UnlockPasswordRemoteSalt,
+		{"keyslot's slot lost its salt", StatusReport{Slots: []StatusSlot{slot(0, "0e,7e", false)},
 			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: 0})}}, "keyslot 1 needs the remote salt of slot 0"},
 	}
 	for _, c := range cases {
@@ -50,7 +47,7 @@ func TestStatusNotes(t *testing.T) {
 	}
 
 	// A header that could not be read (no root): no guess about keyslots.
-	unread := StatusReport{Slots: []StatusSlot{slot(1, "0e,7e", false)}, UnlockMode: UnlockPasswordSalt,
+	unread := StatusReport{Slots: []StatusSlot{slot(1, "0e,7e", false)},
 		Devices: []LuksDeviceStatus{{Device: "/dev/x", Error: "permission denied"}}}
 	if n := strings.Join(statusNotes(unread), "\n"); strings.Contains(n, "no LUKS keyslot") {
 		t.Errorf("a guess about keyslots whose header was not read: %s", n)

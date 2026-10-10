@@ -278,28 +278,31 @@ func openConsole() (io.ReadWriteCloser, int, error) {
 	return f, int(f.Fd()), nil
 }
 
-// errUnlockSkipped: mode skip, or no remote salt in a mode that needs
-// one: tpm2-kira gives no key, and cryptsetup's own prompt follows.
+// errUnlockSkipped: no keyslot of tpm2-kira's on the volume, or its
+// header not readable: tpm2-kira gives no key, and cryptsetup's own
+// prompt follows.
 var errUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own prompt follows")
 
-// diskKey is the key provider's answer, as control.conf says (control_config.go):
+// diskKey is the key provider's answer, as the volume's own LUKS2 header
+// says (unlockRecipe reads its tpm2-kira tokens the moment it asks):
 //
-//	skip                 no answer: cryptsetup's own prompt, tpm2-kira untouched
+//	no token             no answer: cryptsetup's own prompt, tpm2-kira untouched
 //	password+salt        a typed password and a typed salt, combined (hashpwd2's derivation)
 //	password+remotesalt  a typed password and the salt the verifier released in this boot
 //	                     and the TPM opened (factor.go); without one, a typed salt
 //	                     (the password+salt variant), then cryptsetup's own prompt
 //
 // salt returns the released salt or nil; the key is for the caller to wipe.
-func diskKey(salt func() []byte, mode string) func(volume string) ([]byte, error) {
+func diskKey(salt func() []byte, recipe func(volume string) (mode, why string)) func(volume string) ([]byte, error) {
 	return func(volume string) ([]byte, error) {
 		var s []byte
 		var note string
+		mode, why := recipe(volume)
 		switch mode {
-		case UnlockPasswordSalt:
+		case LuksModePasswordSalt:
 			note = "the key is derived from your password and your salt, both typed here (Argon2id, some seconds).\n" +
 				"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
-		case UnlockPasswordRemoteSalt:
+		case LuksModePasswordRemoteSalt:
 			if s = salt(); s == nil {
 				// No phone, or no salt from it: the password+salt variant,
 				// which opens a keyslot enrolled that way; Ctrl-C, or a
@@ -313,6 +316,9 @@ func diskKey(salt func() []byte, mode string) func(volume string) ([]byte, error
 			note = "the key is derived from your password and the salt your phone returned.\n" +
 				"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
 		default:
+			if why != "" {
+				return nil, fmt.Errorf("%w (%s)", errUnlockSkipped, why)
+			}
 			return nil, errUnlockSkipped
 		}
 		pw, err := consoleAsk(volume, "Password", note)

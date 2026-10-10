@@ -622,7 +622,7 @@ func TestPINFromControlConf(t *testing.T) {
 	}
 
 	// PIN in control.conf: used without asking, and no warning.
-	os.WriteFile(conf, []byte("TPM2_KIRA_UNLOCK=skip\nTPM2_KIRA_PIN='123456'\n"), 0600)
+	os.WriteFile(conf, []byte("TPM2_KIRA_PIN='123456'\n"), 0600)
 	out := capture(func() {
 		if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
 			t.Fatal(err)
@@ -665,7 +665,7 @@ func TestPINFromControlConf(t *testing.T) {
 	CloseTokenSessions()
 
 	// No PIN in the file: asked on the terminal, then warned once.
-	os.WriteFile(conf, []byte("TPM2_KIRA_UNLOCK=skip\n"), 0600)
+	os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST_ADAPTER=0\n"), 0600)
 	fake.typed = "123456"
 	out = capture(func() {
 		if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {

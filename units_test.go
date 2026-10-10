@@ -104,8 +104,8 @@ func TestGateUnitIsConfined(t *testing.T) {
 	if !has(display, "ExecStart=tpm2-kira run --gate "+socket) {
 		t.Error("the code screen does not listen where the radio worker asks")
 	}
-	if !has(display, "Before=systemd-pcrosseparator.service") || !has(display, "Conflicts=initrd-switch-root.target") {
-		t.Error("the coordinator must hold the separator back and end with the initramfs")
+	if !has(display, "Before=systemd-pcrosseparator.service") || !has(display, "Before=systemd-pcrnvdone.service") || !has(display, "Conflicts=initrd-switch-root.target") {
+		t.Error("the coordinator must hold both separators back and end with the initramfs")
 	}
 	// What the gate cannot work without.
 	for _, want := range []string{"DeviceAllow=/dev/rfkill rw", "DeviceAllow=/dev/console rw"} {

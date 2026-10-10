@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -56,14 +57,16 @@ type machineFacts struct {
 	SecureBoot SecureBootState
 	Initramfs  string // mkinitcpio, initramfs-tools, or ""
 	HookState  string // why the boot integration would not run; "" when wired
+	Rebuild    string // mkinitcpio: why the image still lacks the hook; "" when it carries it
 	Adapter    string // hciN, or ""
 	AttestConf string // "" when control.conf loads; else the reason
 
-	Status StatusReport   // the slots, the unlock mode, the LUKS devices, the notes
-	Dirt   []SlotContents // slots whose blob is gone but of which parts remain
-	Phone  bool           // a phone is enrolled for some slot
-	Salt   bool           // a remote salt is enrolled for some slot
-	Routed map[string]bool
+	Status   StatusReport   // the slots, the unlock mode, the LUKS devices, the notes
+	Dirt     []SlotContents // slots whose blob is gone but of which parts remain
+	Phone    bool           // a phone is enrolled for some slot
+	Salt     bool           // a remote salt is enrolled for some slot
+	BTAlways bool           // Bluetooth is packed into every image (control.conf)
+	Routed   map[string]bool
 }
 
 // collectFacts is the analysis.
@@ -123,11 +126,16 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 		f.Initramfs = "initramfs-tools"
 	}
 	f.HookState = initramfsHookState(f.Initramfs)
+	if f.Initramfs == "mkinitcpio" && f.HookState == "" {
+		f.Rebuild = rebuildPending(mkinitcpioConf)
+	}
 	if m, _ := filepath.Glob("/sys/class/bluetooth/hci*"); len(m) > 0 {
 		f.Adapter = filepath.Base(m[0])
 	}
-	if _, err := LoadAttestConfig(controlConfigPath()); err != nil {
+	if cfg, err := LoadAttestConfig(controlConfigPath()); err != nil {
 		f.AttestConf = err.Error()
+	} else {
+		f.BTAlways = cfg.Bluetooth == "always"
 	}
 
 	f.Status = collectStatus(StatusOptions{TPMPath: tpmPath, ConfigPath: controlConfigPath(), Debug: debug})
@@ -218,6 +226,9 @@ type controlStep struct {
 	Run         func(c *controller) error
 }
 
+// The one colour language of the overview: green is good and done, orange
+// is open - possible and still to do - and red is dirty, a half-gone slot.
+// Blocked stays grey.
 func (s controlStep) marker() string {
 	switch {
 	case s.Dirty != "":
@@ -227,7 +238,7 @@ func (s controlStep) marker() string {
 	case s.Blocked != "":
 		return "\033[0;90m[-]\033[0m"
 	}
-	return "[ ]"
+	return "\033[0;33m[ ]\033[0m"
 }
 
 // controller holds one run of the control command.
@@ -293,7 +304,44 @@ func (c *controller) steps() []controlStep {
 	default:
 		keys.Done = f.Keys
 	}
-	steps := []controlStep{keys}
+	// The boot integration is the second foundation: without the hook in
+	// the image there is no code screen, no gate and no key at boot, so
+	// everything else waits behind it.
+	boot := controlStep{Key: "initramfs", Run: (*controller).runInitramfs}
+	switch f.Initramfs {
+	case "mkinitcpio":
+		boot.Title = "mkinitcpio configuration"
+		switch {
+		case f.HookState != "":
+			boot.Explain = "The code screen, the gate and the key provider enter the boot image through the sd-tpm2-kira hook: " + mkinitcpioConf + " must carry it in HOOKS, next to sd-encrypt. The step shows the line as it should read and writes it when you say so - editing the file yourself works just as well - and then offers the rebuild (mkinitcpio -P)."
+		case f.Rebuild != "":
+			boot.Explain = f.Rebuild + ". The step offers to run mkinitcpio -P."
+		default:
+			boot.Done = "sd-tpm2-kira in HOOKS of " + mkinitcpioConf + ", the image rebuilt"
+		}
+	case "initramfs-tools":
+		boot.Title = "initramfs-tools integration"
+		if f.HookState == "" {
+			boot.Done = "the boot scripts are in place"
+		} else {
+			boot.Explain = "The .deb installs the boot scripts into /usr/share/initramfs-tools; nothing is configured by hand."
+		}
+	default:
+		boot.Title = "Initramfs integration"
+		boot.Blocked = "neither mkinitcpio nor initramfs-tools found: no code screen at boot"
+	}
+
+	steps := []controlStep{keys, boot}
+
+	// Until the signing key exists and the boot integration is wired, the
+	// overview is these two steps and Quit: everything else builds on
+	// them. Only a dirty slot shows through, so a cleanup is never hidden.
+	if keys.Done == "" || boot.Done == "" {
+		for _, d := range f.Dirt {
+			steps = append(steps, dirtyLine(d))
+		}
+		return steps
+	}
 
 	// The standard sealing, slots 0 and 1: the step guides to it while one
 	// of the two is missing and seals exactly what lacks; with both in
@@ -345,12 +393,8 @@ func (c *controller) steps() []controlStep {
 		order = append(order, n)
 	}
 	for _, d := range f.Dirt {
-		n := d.Slot
-		lines[n] = controlStep{Key: fmt.Sprintf("slot:%d", n), Title: fmt.Sprintf("Slot %d", n),
-			Dirty: "dirty: " + d.Remains() + " left", SelfConfirm: true,
-			Explain: "A deletion stopped halfway, or a piece was taken by hand: picking the slot removes what is left of it.",
-			Run:     func(c *controller) error { return c.runRemoveSlot(n) }}
-		order = append(order, n)
+		lines[d.Slot] = dirtyLine(d)
+		order = append(order, d.Slot)
 	}
 	sort.Ints(order)
 	for _, n := range order {
@@ -397,94 +441,47 @@ func (c *controller) steps() []controlStep {
 		luksSalt.Done = "a keyslot is enrolled"
 	}
 
-	// The prerequisites of the disk unlock, checked together: the mode in
-	// control.conf fits the keyslots, and every device with a keyslot of
-	// ours takes its key from tpm2-kira. Control sets the mode (the
-	// commands touch no configuration file); the route it advises. Greyed
-	// until a keyslot of ours exists.
-	unlock := controlStep{Key: "unlock", Title: "Unlock at boot (control.conf, the key's route, the initramfs)",
-		Explain: "The boot derives the key only in the mode set in " + controlConfigPath() + ", and a device gets it only when its rd.luks.key= (crypttab on Debian) names tpm2-kira's socket.",
+	// The disk unlock's one prerequisite left: every device with a keyslot
+	// of ours takes its key from tpm2-kira (the route). How the key is
+	// made, the boot reads from the LUKS header itself - nothing is
+	// configured. Greyed until a keyslot of ours exists.
+	unlock := controlStep{Key: "unlock", Title: "Unlock at boot (the key's route, the initramfs)",
+		Explain: "A device gets its key from tpm2-kira when its rd.luks.key= (crypttab on Debian) names tpm2-kira's socket; how the key is made, the boot reads from the device's own LUKS header.",
 		Run:     (*controller).runUnlock}
-	wanted := c.wantedUnlockMode()
+	anyKeyslot := false
 	var unrouted []string
 	for _, d := range f.Status.Devices {
-		if d.Error != "" || f.Routed[d.Device] {
+		if d.Error != "" {
 			continue
 		}
 		for _, ks := range d.Keyslots {
 			if ks.Token != nil {
-				unrouted = append(unrouted, d.Device)
+				anyKeyslot = true
+				if !f.Routed[d.Device] {
+					unrouted = append(unrouted, d.Device)
+				}
 				break
 			}
 		}
 	}
 	switch {
-	case wanted == "" && len(f.Status.Slots) == 0:
+	case !anyKeyslot && len(f.Status.Slots) == 0:
 		unlock.Blocked = "no slot is sealed yet"
-	case wanted == "":
+	case !anyKeyslot:
 		unlock.Blocked = "needs a keyslot of tpm2-kira's (the remote salt under slot 0, or the typed salt)"
-	case f.Status.UnlockMode == wanted && len(unrouted) == 0:
-		unlock.Done = "mode " + wanted + "; the key routed"
+	case len(unrouted) == 0:
+		unlock.Done = "the key routed"
 	default:
-		var open []string
-		if f.Status.UnlockMode != wanted {
-			open = append(open, "TPM2_KIRA_UNLOCK="+wanted+" (now "+f.Status.UnlockMode+")")
-		}
-		if len(unrouted) > 0 {
-			open = append(open, strings.Join(unrouted, ", ")+" not routed through tpm2-kira")
-		}
-		unlock.Explain += "\nOpen: " + strings.Join(open, "; ") + "."
+		unlock.Explain += "\nOpen: " + strings.Join(unrouted, ", ") + " not routed through tpm2-kira."
 	}
 
 	return append(steps, luksSalt, unlock)
 }
 
-// wantedUnlockMode is the mode the keyslots call for: the phone's when a
-// remote-salt keyslot exists (a typed-salt one next to it is the fallback),
-// else the typed salt's; "" without a keyslot of ours.
-func (c *controller) wantedUnlockMode() string {
-	return wantedMode(c.facts.Status.Devices)
-}
-
-func wantedMode(devices []LuksDeviceStatus) string {
-	wanted := ""
-	for _, d := range devices {
-		for _, ks := range d.Keyslots {
-			if ks.Token == nil {
-				continue
-			}
-			if ks.Token.Mode == LuksModePasswordRemoteSalt {
-				return UnlockPasswordRemoteSalt
-			}
-			if ks.Token.Mode == LuksModePasswordSalt {
-				wanted = UnlockPasswordSalt
-			}
-		}
-	}
-	return wanted
-}
-
-// setMode sets the mode in control.conf when it differs, and says so.
-func (c *controller) setMode(mode string) error {
-	if c.facts.Status.UnlockMode == mode {
-		return nil
-	}
-	if err := setUnlockMode(controlConfigPath(), mode); err != nil {
-		return fmt.Errorf("the unlock mode is not set: %w", err)
-	}
-	fmt.Fprintf(c.out, "%s: TPM2_KIRA_UNLOCK=%s\n", controlConfigPath(), mode)
-	c.facts.Status.UnlockMode = mode
-	c.ran = true
-	return nil
-}
-
-// runUnlock sets the mode the keyslots call for and advises the route for
-// the devices that lack it (the kernel command line and crypttab are the
-// person's to change).
+// runUnlock advises the route for the devices that lack it (the kernel
+// command line and crypttab are the person's to change). How the key is
+// made needs no setting: the boot reads it from the LUKS header itself.
 func (c *controller) runUnlock() error {
-	if err := c.setMode(c.wantedUnlockMode()); err != nil {
-		return err
-	}
 	for _, d := range c.facts.Status.Devices {
 		if d.Error != "" || c.facts.Routed[d.Device] {
 			continue
@@ -623,17 +620,20 @@ func (c *controller) pick(steps []controlStep) (string, error) {
 		if s.Child {
 			indent = "   "
 		}
+		// The same colours as the status: red the dirty, green the done,
+		// orange the open; the blocked grey. Only the mark is coloured,
+		// so the selection's own styling stays readable.
 		var label string
 		switch {
 		case s.Dirty != "":
-			label = indent + "! " + s.Title + "  - " + s.Dirty
+			label = indent + bad("!") + " " + s.Title + "  - " + s.Dirty
 		case s.Done != "":
-			label = indent + "✓ " + s.Title + "  - " + s.Done
+			label = indent + good("✓") + " " + s.Title + "  - " + s.Done
 		case s.Blocked != "":
-			label = indent + "- " + s.Title + "  - " + s.Blocked
+			label = indent + "\033[0;90m-\033[0m " + s.Title + "  - " + s.Blocked
 			blocked[s.Key] = s.Blocked
 		default:
-			label = indent + "  " + s.Title
+			label = indent + amber("•") + " " + s.Title
 		}
 		opts = append(opts, huh.NewOption(label, s.Key))
 	}
@@ -704,8 +704,9 @@ func noteText(s string) string {
 // The status is judged line by line: green is good, red is not good and
 // says why - the risk in brackets. What is neither (plain information)
 // stays uncoloured.
-func good(s string) string { return "\033[0;32m" + s + "\033[0m" }
-func bad(s string) string  { return "\033[0;31m" + s + "\033[0m" }
+func good(s string) string  { return "\033[0;32m" + s + "\033[0m" }
+func bad(s string) string   { return "\033[0;31m" + s + "\033[0m" }
+func amber(s string) string { return "\033[0;33m" + s + "\033[0m" }
 
 // factsText is "What this machine has", one line per fact, each marked
 // green when it is as it should be and red with the risk in brackets
@@ -814,7 +815,6 @@ func (c *controller) factsText() string {
 			fmt.Fprintf(&w, "  LUKS        %s: keyslots %s; %s\n", d.Device, strings.Join(parts, ", "), route)
 		}
 	}
-	fmt.Fprintf(&w, "  Unlock      mode %s\n", f.Status.UnlockMode)
 	return w.String()
 }
 
@@ -1040,9 +1040,12 @@ func (c *controller) confirmPCRs() (string, error) {
 
 func (c *controller) runAttest() error {
 	name, _ := os.Hostname()
+	// The machine's own TPM was judged on the overview (the Vendor line),
+	// and the phone checks it authoritatively at enrolment: no second
+	// verdict and no ask here. The phone's key is still checked.
 	return AttestEnrol(EnrolOptions{
 		TPMPath: c.o.TPMPath, Name: name, SHA1: c.facts.UseSHA1, Timeout: 10 * time.Minute, Debug: c.o.Debug,
-		VerifyTPM: CheckWarn, VerifyPhone: CheckWarn,
+		VerifyTPM: CheckOff, VerifyPhone: CheckWarn,
 	})
 }
 
@@ -1072,13 +1075,99 @@ func (c *controller) runLuks(mode string) error {
 	}); err != nil {
 		return err
 	}
-	// The mode in control.conf is control's to set. A typed-salt keyslot
-	// next to the phone's leaves the mode: the typed salt is the fallback
-	// when the phone is not there.
-	if mode == LuksModePasswordSalt && c.facts.Status.UnlockMode == UnlockPasswordRemoteSalt {
+	return nil
+}
+
+// dirtyLine is a half-gone slot's line: red, recommended first, and
+// picking it removes what is left.
+func dirtyLine(d SlotContents) controlStep {
+	n := d.Slot
+	return controlStep{Key: fmt.Sprintf("slot:%d", n), Title: fmt.Sprintf("Slot %d", n),
+		Dirty: "dirty: " + d.Remains() + " left", SelfConfirm: true,
+		Explain: "A deletion stopped halfway, or a piece was taken by hand: picking the slot removes what is left of it.",
+		Run:     func(c *controller) error { return c.runRemoveSlot(n) }}
+}
+
+// runInitramfs wires the boot integration. On mkinitcpio it shows the
+// HOOKS line as it is and as it should read, and writes it when asked -
+// the standing rule that control edits no file of the system has this one
+// exception, asked for every time; editing by hand works just as well,
+// and the step says how.
+func (c *controller) runInitramfs() error {
+	f := &c.facts
+	switch {
+	case f.Initramfs == "initramfs-tools":
+		fmt.Fprintln(c.out, "The .deb installs the boot scripts; nothing is configured by hand here.")
+		if f.HookState != "" {
+			fmt.Fprintln(c.out, f.HookState)
+		}
+		return nil
+	case f.Initramfs != "mkinitcpio":
+		return errors.New("no initramfs system found")
+	case !fileExists(mkinitcpioHook):
+		return errors.New("the sd-tpm2-kira hook files are not installed: sudo make install-mkinitcpio, or the package; then run this step again")
+	}
+	file, oldLine, newLine, err := AdoptHookLine(mkinitcpioConf)
+	if err != nil {
+		return err
+	}
+	if oldLine == newLine {
+		fmt.Fprintf(c.out, "sd-tpm2-kira is already in the HOOKS of %s.\n", file)
+		return c.offerRebuild()
+	}
+	fmt.Fprintf(c.out, "The boot image is built from the HOOKS of %s. The line reads\n\n    %s\n\nand must carry sd-tpm2-kira next to sd-encrypt, so the code screen runs before\nthe passphrase prompt:\n\n    %s\n\nPut that line into the file yourself and rebuild (mkinitcpio -P) - or let this\nstep write it, which changes nothing else of the file.\n\n", file, oldLine, newLine)
+	ok, err := c.confirm("Write the line into "+file+"?", "Only the HOOKS assignment changes; 'No' leaves the editing to you.")
+	if err != nil || !ok {
+		fmt.Fprintf(c.out, "Nothing was written. Put the line above into %s and rebuild (mkinitcpio -P).\n", file)
 		return nil
 	}
-	return c.setMode(mode)
+	file, line, err := AdoptHook(mkinitcpioConf)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "%s now reads: %s\n", file, line)
+	c.ran = true // should the rebuild below be declined, leaving advises it
+	return c.offerRebuild()
+}
+
+// offerRebuild proposes what belongs into the image before it is built -
+// the Bluetooth modules, when an adapter is there, preselected and free to
+// deselect - and runs mkinitcpio -P when asked.
+func (c *controller) offerRebuild() error {
+	if c.facts.Adapter != "" && !c.facts.BTAlways {
+		ok, err := c.confirmYes("Pack Bluetooth into every boot image (~1.1 MB)?",
+			"With "+c.facts.Adapter+" in the image from the start, enrolling and removing phones never changes it, and the first enrolment causes no \"changed\" verdict at the next boot. Deselect to keep the image lean: the hooks then add Bluetooth once a phone is enrolled, and that first rebuild shows \"changed\" once.")
+		if err != nil {
+			return err
+		}
+		if ok {
+			if err := setAttestBluetooth(controlConfigPath(), "always"); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.out, "%s: TPM2_KIRA_ATTEST_BLUETOOTH=always\n", controlConfigPath())
+			c.facts.BTAlways = true
+			c.ran = true
+		}
+	}
+	ok, err := c.confirmYes("Run mkinitcpio -P now?", "Builds every preset's image with the hook in; the output follows here.")
+	if err != nil || !ok {
+		fmt.Fprintln(c.out, "Not rebuilt: run mkinitcpio -P yourself before the next boot.")
+		return nil
+	}
+	rebuild := exec.Command("mkinitcpio", "-P")
+	rebuild.Stdout, rebuild.Stderr = c.out, c.out
+	if err := rebuild.Run(); err != nil {
+		return fmt.Errorf("mkinitcpio -P: %w", err)
+	}
+	c.ran = false // just rebuilt: nothing to advise on leaving
+	return nil
+}
+
+// confirmYes is confirm with Yes preselected: a proposal to deselect.
+func (c *controller) confirmYes(title, description string) (bool, error) {
+	yes := true
+	err := c.form(huh.NewConfirm().Title(title).Description(description).Affirmative("Yes").Negative("No").Value(&yes)).Run()
+	return yes, err
 }
 
 // runRemoveSlot is control's one way to delete a slot, whole: the slot's
@@ -1121,20 +1210,7 @@ func (c *controller) runRemoveSlot(slot int) error {
 	}
 	err = DeleteSlot(DeleteSlotOptions{TPMPath: c.o.TPMPath, Slot: slot, Debug: c.o.Debug, Out: c.out})
 	c.ran = true // parts may be gone even when the error says the rest is not
-	if err != nil {
-		return err
-	}
-	// The unlock mode is control's to keep fitting: what the remaining
-	// keyslots call for, skip without any.
-	devices, derr := readAllLuksStatuses()
-	if derr != nil {
-		return nil // headers unknown: the mode is not touched
-	}
-	mode := wantedMode(devices)
-	if mode == "" {
-		mode = UnlockSkip
-	}
-	return c.setMode(mode)
+	return err
 }
 
 func isTerminal(f *os.File) bool {

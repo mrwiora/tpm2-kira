@@ -122,7 +122,7 @@ func TestSealDefaultsAndStatus(t *testing.T) {
 		}
 	}
 
-	conf := writeConf(t, "TPM2_KIRA_UNLOCK=password+salt\n")
+	conf := writeConf(t, "TPM2_KIRA_ATTEST_ADAPTER=0\n")
 	r := statusJSON(t, tpmPath, testPrivKeyPath, conf)
 	if r.TPMError != "" || len(r.Slots) != 2 {
 		t.Fatalf("status: tpm_error %q, %d slots: %+v", r.TPMError, len(r.Slots), r)
@@ -136,21 +136,13 @@ func TestSealDefaultsAndStatus(t *testing.T) {
 			t.Errorf("slot %d: %+v; want pcrs %s, fallback %v, signed, generation matching", i, s, want.pcrs, want.fallback)
 		}
 	}
-	if r.UnlockMode != cmd.UnlockPasswordSalt || r.Config != conf || r.UnlockError != "" {
-		t.Errorf("unlock: mode %q from %q (%q); want password+salt from %s", r.UnlockMode, r.Config, r.UnlockError, conf)
-	}
-	// The slots are in order; the one note left is about the machine the
-	// suite runs on: a mode that no LUKS keyslot is marked for (or none,
-	// when the headers could not be read without root).
-	for _, n := range r.Notes {
-		if !strings.Contains(n, "unlock mode password+salt, but no LUKS keyslot is marked for it") {
-			t.Errorf("a note where nothing is wrong: %q", n)
-		}
+	if r.Config != conf || r.ConfigError != "" {
+		t.Errorf("config: %q (%q); want %s", r.Config, r.ConfigError, conf)
 	}
 
 	// The plain report says the same.
 	stdout, _, code = kira(t, nil, "status", "--tpm", tpmPath, "--privkey", testPrivKeyPath, "--conf", conf)
-	for _, want := range []string{"slot 0   sealed to 0,2,7;", "slot 1   sealed to 0,7 (the fallback);", "signed by this machine's key", "Disk unlock (" + conf + ")", "mode password+salt"} {
+	for _, want := range []string{"slot 0   sealed to 0,2,7;", "slot 1   sealed to 0,7 (the fallback);", "signed by this machine's key", "Disk unlock (how a key is made is in each device's LUKS header)"} {
 		if code != 0 || !strings.Contains(stdout, want) {
 			t.Errorf("status: %q missing in\n%s", want, stdout)
 		}
@@ -166,8 +158,8 @@ func TestStatusNotes(t *testing.T) {
 
 	empty := writeConf(t, "")
 	r := statusJSON(t, tpmPath, testPrivKeyPath, empty)
-	if r.UnlockMode != cmd.UnlockSkip || len(r.Slots) != 0 || !hasNote(r.Notes, "no slot is sealed: tpm2-kira seal") {
-		t.Errorf("nothing sealed, an empty file: mode %q, %d slots, notes %q", r.UnlockMode, len(r.Slots), r.Notes)
+	if len(r.Slots) != 0 || !hasNote(r.Notes, "no slot is sealed: tpm2-kira seal") {
+		t.Errorf("nothing sealed, an empty file: %d slots, notes %q", len(r.Slots), r.Notes)
 	}
 
 	// Slot 0 alone, to a selection that is not the fallback.
@@ -195,28 +187,21 @@ func TestStatusNotes(t *testing.T) {
 		t.Errorf("another key: notes %q", r.Notes)
 	}
 
-	// password+remotesalt without a remote salt enrolled.
-	remote := writeConf(t, "TPM2_KIRA_UNLOCK='password+remotesalt'\n")
-	r = statusJSON(t, tpmPath, testPrivKeyPath, remote)
-	if r.UnlockMode != cmd.UnlockPasswordRemoteSalt || !hasNote(r.Notes, "no slot has a remote salt enrolled") {
-		t.Errorf("remote salt mode: mode %q, notes %q", r.UnlockMode, r.Notes)
-	}
-
-	// A file that does not parse: the error, not a guessed mode.
-	bad := writeConf(t, "TPM2_KIRA_UNLOCK=tpm\n")
+	// A leftover mode line: the error that says what to do now.
+	bad := writeConf(t, "TPM2_KIRA_UNLOCK=password+salt\n")
 	r = statusJSON(t, tpmPath, testPrivKeyPath, bad)
-	if r.UnlockMode != "" || !strings.Contains(r.UnlockError, "TPM2_KIRA_UNLOCK must be skip, password+salt or password+remotesalt") {
-		t.Errorf("bad file: mode %q, error %q", r.UnlockMode, r.UnlockError)
+	if !strings.Contains(r.ConfigError, "no unlock mode to set any more") {
+		t.Errorf("bad file: error %q", r.ConfigError)
 	}
 	stdout, _, _ := kira(t, nil, "status", "--tpm", tpmPath, "--privkey", testPrivKeyPath, "--conf", bad)
-	if !strings.Contains(stdout, "TPM2_KIRA_UNLOCK must be") {
+	if !strings.Contains(stdout, "no unlock mode to set any more") {
 		t.Errorf("bad file, plain: %s", stdout)
 	}
 
 	// Without the TPM the slots are an error and the rest still shows.
-	r = statusJSON(t, filepath.Join(t.TempDir(), "no-tpm"), testPrivKeyPath, remote)
-	if r.TPMError == "" || r.UnlockMode != cmd.UnlockPasswordRemoteSalt || hasNote(r.Notes, "no slot") {
-		t.Errorf("no TPM: error %q, mode %q, notes %q", r.TPMError, r.UnlockMode, r.Notes)
+	r = statusJSON(t, filepath.Join(t.TempDir(), "no-tpm"), testPrivKeyPath, empty)
+	if r.TPMError == "" || hasNote(r.Notes, "no slot") {
+		t.Errorf("no TPM: error %q, notes %q", r.TPMError, r.Notes)
 	}
 }
 
@@ -225,7 +210,7 @@ func TestStatusNotes(t *testing.T) {
 // missing file is the defaults, and a line that cannot be used names
 // itself.
 func TestConfigCheck(t *testing.T) {
-	good := writeConf(t, "# written by control\nTPM2_KIRA_UNLOCK=password+remotesalt\nTPM2_KIRA_ATTEST_ADAPTER=hci1\nTPM2_KIRA_ATTEST_TIMEOUT=45\nTPM2_KIRA_ATTEST_ADAPTER_WAIT=10s\nTPM2_KIRA_ATTEST_DEBUG=1\nTPM2_KIRA_PIN='123456'\n")
+	good := writeConf(t, "# written by control\nTPM2_KIRA_ATTEST_ADAPTER=hci1\nTPM2_KIRA_ATTEST_TIMEOUT=45\nTPM2_KIRA_ATTEST_ADAPTER_WAIT=10s\nTPM2_KIRA_ATTEST_DEBUG=1\nTPM2_KIRA_ATTEST_BLUETOOTH=always\nTPM2_KIRA_PIN='123456'\n")
 	stdout, stderr, code := kira(t, nil, "attest", "config-check", good)
 	if code != 0 || !strings.Contains(stdout, good+": valid") {
 		t.Errorf("a good file: exit %d, %q %q", code, stdout, stderr)
@@ -235,7 +220,7 @@ func TestConfigCheck(t *testing.T) {
 		t.Errorf("a missing file is the defaults: exit %d, %q", code, stdout)
 	}
 	for content, reason := range map[string]string{
-		"TPM2_KIRA_UNLOCK=yes\n":            "line 1: TPM2_KIRA_UNLOCK must be skip, password+salt or password+remotesalt",
+		"TPM2_KIRA_UNLOCK=skip\n":           "line 1: there is no unlock mode to set any more",
 		"TPM2_KIRA_ATTEST=lazy\n":           "line 1: there is no attestation mode to set",
 		"\nTPM2_KIRA_ATTEST_ADAPTER=eth0\n": "line 2: invalid adapter",
 		"TPM2_KIRA_ATTEST_TIMEOUT=soon\n":   "line 1:",

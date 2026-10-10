@@ -5,27 +5,52 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
-// The overview is a tree judged from the facts: the signing key, the
-// standard sealing guided while a slot of the pair is missing, then every
-// slot a line of its own with the strong slot's options under it, the
-// typed-salt keyslot independent of the slots, and the unlock greyed until
-// a keyslot of ours exists.
+// The overview is gated: until the signing key exists and the boot
+// integration is wired, it is those two steps and Quit - only a dirty
+// slot shows through. Then the tree: the standard sealing while a slot of
+// the pair is missing, every slot a line of its own with the strong
+// slot's options under it, the typed-salt keyslot independent of the
+// slots, and the unlock greyed until a keyslot of ours exists.
 func TestControlSteps(t *testing.T) {
 	c := &controller{facts: machineFacts{TPM: "/dev/tpmrm0", SHA256Bank: true, LogSHA256: true, PCRs: "0e,2e,7e,11u"}}
 	steps := c.steps()
-	if len(steps) != 4 || steps[0].Done != "" || steps[1].Key != "seal" || steps[1].Blocked != "needs the signing key" ||
-		steps[2].Key != "luks-salt" || steps[2].Blocked == "" || steps[3].Key != "unlock" || steps[3].Blocked != "no slot is sealed yet" {
+	if len(steps) != 2 || steps[0].Key != "setup" || steps[1].Key != "initramfs" ||
+		!strings.Contains(steps[1].Blocked, "neither mkinitcpio nor initramfs-tools") {
 		t.Fatalf("a bare machine: %+v", steps)
 	}
 
-	// With the key the sealing of the standard pair is the recommendation:
-	// no slot-specific option shows before a slot exists.
+	// The key alone is not enough: the boot integration gates too, and a
+	// dirty slot still shows through the gate.
 	c.facts.Keys = "local key files"
+	c.facts.Initramfs, c.facts.HookState = "mkinitcpio", "sd-tpm2-kira is not in HOOKS of /etc/mkinitcpio.conf - add it next to sd-encrypt, then rebuild"
+	c.facts.Dirt = []SlotContents{{Slot: 2, Index: NVRAMSlotStart + 2, Counter: true}}
 	steps = c.steps()
-	if steps[1].Blocked != "" || recommended(steps) != 1 || !strings.Contains(steps[1].Explain, "The standard pair") {
-		t.Fatalf("no slot yet: %+v", steps[1])
+	if len(steps) != 3 || steps[1].Key != "initramfs" || steps[1].Done != "" || steps[1].Title != "mkinitcpio configuration" ||
+		steps[2].Key != "slot:2" || steps[2].Dirty == "" {
+		t.Fatalf("gated with dirt: %+v", steps)
+	}
+	if recommended(steps) != 2 { // dirt first, then the open gate steps
+		t.Fatalf("recommended %d", recommended(steps))
+	}
+	c.facts.Dirt = nil
+	if steps = c.steps(); len(steps) != 2 || recommended(steps) != 1 {
+		t.Fatalf("gated: %+v", steps)
+	}
+
+	// Wired: the sealing of the standard pair is the recommendation; no
+	// slot-specific option shows before a slot exists, the unlock is grey.
+	c.facts.HookState = ""
+	steps = c.steps()
+	if len(steps) != 5 || steps[1].Done != "sd-tpm2-kira in HOOKS of "+mkinitcpioConf+", the image rebuilt" ||
+		steps[2].Key != "seal" || steps[3].Key != "luks-salt" || steps[4].Key != "unlock" {
+		t.Fatalf("wired, no slot: %+v", steps)
+	}
+	if recommended(steps) != 2 || !strings.Contains(steps[2].Explain, "The standard pair") ||
+		steps[4].Blocked != "no slot is sealed yet" {
+		t.Fatalf("no slot yet: %+v", steps[2])
 	}
 
 	// Both slots sealed: the tree replaces the seal step; the strong slot
@@ -33,47 +58,41 @@ func TestControlSteps(t *testing.T) {
 	c.facts.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u", Signed: true}, {Slot: 1, PCRs: "0e,7e", Fallback: true, Signed: true}}
 	c.facts.Status.Devices = []LuksDeviceStatus{{Device: "/dev/sda2", Keyslots: []KeyslotStatus{{Keyslot: 0}}}}
 	steps = c.steps()
-	if len(steps) != 7 || steps[1].Key != "slot:0" || steps[2].Key != "attest" || steps[3].Key != "luks-remote" ||
-		steps[4].Key != "slot:1" || steps[5].Key != "luks-salt" || steps[6].Key != "unlock" {
+	if len(steps) != 8 || steps[2].Key != "slot:0" || steps[3].Key != "attest" || steps[4].Key != "luks-remote" ||
+		steps[5].Key != "slot:1" || steps[6].Key != "luks-salt" || steps[7].Key != "unlock" {
 		t.Fatalf("the tree: %+v", steps)
 	}
-	if steps[1].Done != "sealed to 0e,2e,7e,11u" || !steps[1].Optional || !steps[1].SelfConfirm ||
-		steps[4].Done != "the fallback, sealed to 0e,7e" {
-		t.Fatalf("the slot lines: %+v %+v", steps[1], steps[4])
+	if steps[2].Done != "sealed to 0e,2e,7e,11u" || !steps[2].Optional || !steps[2].SelfConfirm ||
+		steps[5].Done != "the fallback, sealed to 0e,7e" {
+		t.Fatalf("the slot lines: %+v %+v", steps[2], steps[5])
 	}
-	if !steps[2].Child || !steps[3].Child || steps[2].Blocked != "no Bluetooth adapter on this machine" ||
-		steps[3].Blocked != "needs the attestation by phone" {
-		t.Fatalf("the strong slot's options: %+v %+v", steps[2], steps[3])
+	if !steps[3].Child || !steps[4].Child || steps[3].Blocked != "no Bluetooth adapter on this machine" ||
+		steps[4].Blocked != "needs the attestation by phone" {
+		t.Fatalf("the strong slot's options: %+v %+v", steps[3], steps[4])
 	}
-	if steps[6].Blocked != "needs a keyslot of tpm2-kira's (the remote salt under slot 0, or the typed salt)" {
-		t.Fatalf("unlock without a keyslot: %+v", steps[6])
+	if steps[7].Blocked != "needs a keyslot of tpm2-kira's (the remote salt under slot 0, or the typed salt)" {
+		t.Fatalf("unlock without a keyslot: %+v", steps[7])
 	}
 
 	// A phone and a remote-salt keyslot bound to slot 0, read from the
-	// LUKS header: the options under slot 0 are done.
+	// LUKS header: the options under slot 0 are done, and the unlock
+	// waits only for the route.
 	c.facts.Adapter = "hci0"
 	c.facts.Phone = true
 	c.facts.Status.Slots[0].Phones = []string{"Pixel"}
 	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: 0}})
 	steps = c.steps()
-	if steps[2].Done != `phone "Pixel"` || steps[3].Done != "keyslot 1 of /dev/sda2" {
-		t.Fatalf("phone and remote-salt keyslot: %+v %+v", steps[2], steps[3])
+	if steps[3].Done != `phone "Pixel"` || steps[4].Done != "keyslot 1 of /dev/sda2" {
+		t.Fatalf("phone and remote-salt keyslot: %+v %+v", steps[3], steps[4])
 	}
-	// The unlock step: the mode the keyslots call for, and the route.
-	if steps[6].Done != "" || !strings.Contains(steps[6].Explain, "Open: TPM2_KIRA_UNLOCK=password+remotesalt (now ); /dev/sda2 not routed") {
-		t.Fatalf("mode unset, device unrouted: %+v", steps[6])
+	if steps[7].Done != "" || !strings.Contains(steps[7].Explain, "Open: /dev/sda2 not routed through tpm2-kira") {
+		t.Fatalf("device unrouted: %+v", steps[7])
 	}
-	c.facts.Status.UnlockMode = UnlockPasswordRemoteSalt
 	c.facts.Routed = map[string]bool{"/dev/sda2": true}
 	steps = c.steps()
-	if steps[6].Done != "mode password+remotesalt; the key routed" {
-		t.Fatalf("mode set, device routed: %+v", steps[6])
+	if steps[7].Done != "the key routed" {
+		t.Fatalf("device routed: %+v", steps[7])
 	}
-	c.facts.Status.Devices[0].Keyslots[1].Token.Mode = LuksModePasswordSalt
-	if got := c.wantedUnlockMode(); got != UnlockPasswordSalt {
-		t.Fatalf("a typed-salt keyslot alone wants %q", got)
-	}
-	c.facts.Status.Devices[0].Keyslots[1].Token.Mode = LuksModePasswordRemoteSalt
 
 	// The screen: the status, the markers, the tree, the recommendation.
 	var out bytes.Buffer
@@ -81,8 +100,8 @@ func TestControlSteps(t *testing.T) {
 	c.show(steps)
 	got := out.String()
 	for _, want := range []string{"SHA-256 bank and event log", "hci0", "[x]", "Slot 0  - sealed to 0e,2e,7e,11u",
-		"  Attestation by phone", "Recommended next:", "6  Disk key from password + salt (hashpwd2)\n",
-		"7  Unlock at boot (control.conf, the key's route, the initramfs)  - mode password+remotesalt; the key routed"} {
+		"  Attestation by phone", "Recommended next:", "7  Disk key from password + salt (hashpwd2)\n",
+		"8  Unlock at boot (the key's route, the initramfs)  - the key routed"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the screen lacks %q:\n%s", want, got)
 		}
@@ -91,8 +110,8 @@ func TestControlSteps(t *testing.T) {
 	// A half-gone slot is a line of its own, dirty and recommended first.
 	c.facts.Dirt = []SlotContents{{Slot: 2, Index: NVRAMSlotStart + 2, Counter: true}}
 	dirty := c.steps()
-	if dirty[5].Key != "slot:2" || dirty[5].Dirty != "dirty: the record counter left" || recommended(dirty) != 5 {
-		t.Fatalf("a dirty slot: %+v", dirty[5])
+	if dirty[6].Key != "slot:2" || dirty[6].Dirty != "dirty: the record counter left" || recommended(dirty) != 6 {
+		t.Fatalf("a dirty slot: %+v", dirty[6])
 	}
 	out.Reset()
 	c.show(dirty)
@@ -105,13 +124,13 @@ func TestControlSteps(t *testing.T) {
 	// exactly the missing slot.
 	c.facts.Status.Slots = c.facts.Status.Slots[:1]
 	steps = c.steps()
-	if steps[1].Key != "seal" || !strings.Contains(steps[1].Explain, "Slot 1, the fallback, is missing") || steps[2].Key != "slot:0" {
-		t.Fatalf("fallback missing: %+v", steps[1])
+	if steps[2].Key != "seal" || !strings.Contains(steps[2].Explain, "Slot 1, the fallback, is missing") || steps[3].Key != "slot:0" {
+		t.Fatalf("fallback missing: %+v", steps[2])
 	}
 	c.facts.Status.Slots = []StatusSlot{{Slot: 1, PCRs: "0e,7e", Fallback: true, Signed: true}}
 	steps = c.steps()
-	if steps[1].Key != "seal" || !strings.Contains(steps[1].Explain, "Slot 0 is missing") {
-		t.Fatalf("slot 0 missing: %+v", steps[1])
+	if steps[2].Key != "seal" || !strings.Contains(steps[2].Explain, "Slot 0 is missing") {
+		t.Fatalf("slot 0 missing: %+v", steps[2])
 	}
 }
 
@@ -250,5 +269,62 @@ func TestInitramfsHookState(t *testing.T) {
 	}
 	if s := initramfsHookState(""); s != "" {
 		t.Fatalf("no initramfs at all judges nothing: %q", s)
+	}
+}
+
+// Adopting the HOOKS: the line as it should read, written only on request,
+// before sd-encrypt; and the rebuild check from the timestamps.
+func TestAdoptHookAndRebuildPending(t *testing.T) {
+	dir := t.TempDir()
+	defer func(c, p string) { mkinitcpioConf, mkinitcpioPresetDir = c, p }(mkinitcpioConf, mkinitcpioPresetDir)
+	mkinitcpioConf = dir + "/mkinitcpio.conf"
+	mkinitcpioPresetDir = dir + "/mkinitcpio.d"
+	os.WriteFile(mkinitcpioConf, []byte("MODULES=()\nHOOKS=(base systemd block sd-encrypt filesystems)\n"), 0o644)
+
+	file, oldLine, newLine, err := AdoptHookLine(mkinitcpioConf)
+	if err != nil || file != mkinitcpioConf ||
+		oldLine != "HOOKS=(base systemd block sd-encrypt filesystems)" ||
+		newLine != "HOOKS=(base systemd block sd-tpm2-kira sd-encrypt filesystems)" {
+		t.Fatalf("%q %q %q %v", file, oldLine, newLine, err)
+	}
+	if _, line, err := AdoptHook(mkinitcpioConf); err != nil || line != newLine {
+		t.Fatalf("adopt: %q %v", line, err)
+	}
+	data, _ := os.ReadFile(mkinitcpioConf)
+	if string(data) != "MODULES=()\nHOOKS=(base systemd block sd-tpm2-kira sd-encrypt filesystems)\n" {
+		t.Fatalf("the file after adopting:\n%s", data)
+	}
+	if s := initramfsHookState("mkinitcpio"); strings.Contains(s, "HOOKS") { // the hook files are the host's business here
+		t.Fatalf("not wired after adopting: %q", s)
+	}
+	// Without sd-encrypt the hook goes after systemd; without either it is
+	// not an editing matter.
+	os.WriteFile(mkinitcpioConf, []byte("HOOKS=(base systemd autodetect block filesystems)\n"), 0o644)
+	if _, _, newLine, err := AdoptHookLine(mkinitcpioConf); err != nil || newLine != "HOOKS=(base systemd sd-tpm2-kira autodetect block filesystems)" {
+		t.Fatalf("after systemd: %q %v", newLine, err)
+	}
+	os.WriteFile(mkinitcpioConf, []byte("HOOKS=(base udev encrypt filesystems)\n"), 0o644)
+	if _, _, _, err := AdoptHookLine(mkinitcpioConf); err == nil || !strings.Contains(err.Error(), "systemd-based initramfs") {
+		t.Fatalf("a busybox initramfs: %v", err)
+	}
+
+	// The rebuild check: an image older than the HOOKS file is pending.
+	os.WriteFile(mkinitcpioConf, []byte("HOOKS=(base systemd sd-tpm2-kira sd-encrypt)\n"), 0o644)
+	os.MkdirAll(mkinitcpioPresetDir, 0o755)
+	img := dir + "/initramfs-linux.img"
+	os.WriteFile(dir+"/mkinitcpio.d/linux.preset", []byte("PRESETS=('default')\ndefault_image=\""+img+"\"\n"), 0o644)
+	if p := rebuildPending(mkinitcpioConf); p != "" { // no image yet: nothing to tell
+		t.Fatalf("no image: %q", p)
+	}
+	os.WriteFile(img, []byte("img"), 0o644)
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(img, old, old)
+	if p := rebuildPending(mkinitcpioConf); !strings.Contains(p, "was built before") {
+		t.Fatalf("stale image: %q", p)
+	}
+	now := time.Now().Add(time.Minute)
+	os.Chtimes(img, now, now)
+	if p := rebuildPending(mkinitcpioConf); p != "" {
+		t.Fatalf("fresh image: %q", p)
 	}
 }

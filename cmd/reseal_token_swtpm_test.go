@@ -26,7 +26,7 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 	os.Unsetenv(PINEnvVar)
 	conf := filepath.Join(t.TempDir(), "control.conf")
 	t.Setenv("TPM2_KIRA_CONTROL_CONF", conf)
-	os.WriteFile(conf, []byte("TPM2_KIRA_UNLOCK=skip\nTPM2_KIRA_PIN='123456'\n"), 0o600)
+	os.WriteFile(conf, []byte("TPM2_KIRA_PIN='123456'\n"), 0o600)
 
 	privPath := writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication))
 	pubPEM, err := PublicKeyToPEM(&key.PublicKey)
@@ -57,7 +57,7 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 	}
 
 	// Without it, and without a terminal: skipped, and the slot as it was.
-	os.WriteFile(conf, []byte("TPM2_KIRA_UNLOCK=skip\n"), 0o600)
+	os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST_ADAPTER=0\n"), 0o600)
 	err = Reseal(sock, "", idx, pubPath, privPath, false)
 	var skipped *ResealSkippedError
 	if !errors.Is(err, ErrResealSkipped) || !errors.As(err, &skipped) || skipped.NVIndex != idx {

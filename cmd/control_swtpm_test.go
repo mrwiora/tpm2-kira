@@ -36,8 +36,8 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	if len(f.Status.Slots) != 1 || f.Status.Slots[0].PCRs != "23" || f.Status.Slots[0].Fallback {
 		t.Fatalf("slots: %+v", f.Status.Slots)
 	}
-	if f.Status.UnlockMode != UnlockSkip || f.Status.Config != conf || f.PINStored || f.PINLoose || f.AttestConf != "" {
-		t.Errorf("a missing control.conf: mode %q from %q, pin %v/%v, attest %q", f.Status.UnlockMode, f.Status.Config, f.PINStored, f.PINLoose, f.AttestConf)
+	if f.Status.Config != conf || f.PINStored || f.PINLoose || f.AttestConf != "" {
+		t.Errorf("a missing control.conf: config %q, pin %v/%v, attest %q", f.Status.Config, f.PINStored, f.PINLoose, f.AttestConf)
 	}
 	// The judged status: swtpm's EK and the test slot's selection are not
 	// good, and the lines say the risk.
@@ -48,46 +48,35 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 		}
 	}
 
-	// The steps, with the host's part of the facts (a key, a radio)
-	// stubbed: slot 0 exists, the fallback does not, so the seal step
-	// offers exactly that; the unlock step waits for a keyslot.
+	// The steps, with the host's part of the facts (a key, the boot
+	// integration, a radio) stubbed: slot 0 exists, the fallback does
+	// not, so the seal step offers exactly that; the unlock step waits
+	// for a keyslot.
 	f.Keys, f.Adapter = "local key files", "hci0"
+	f.Initramfs, f.HookState, f.Rebuild = "mkinitcpio", "", ""
 	var out strings.Builder
 	c := &controller{facts: f, out: &out}
 	steps := c.steps()
-	if steps[1].Key != "seal" || !strings.Contains(steps[1].Explain, "the fallback, is missing") {
-		t.Errorf("the seal step: %+v", steps[1])
+	if steps[2].Key != "seal" || !strings.Contains(steps[2].Explain, "the fallback, is missing") {
+		t.Errorf("the seal step: %+v", steps[2])
 	}
-	if steps[2].Key != "slot:0" || steps[3].Key != "attest" || steps[3].Blocked != "" {
-		t.Errorf("the tree: %+v %+v", steps[2], steps[3])
+	if steps[3].Key != "slot:0" || steps[4].Key != "attest" || steps[4].Blocked != "" {
+		t.Errorf("the tree: %+v %+v", steps[3], steps[4])
 	}
-	if steps[6].Key != "unlock" || !strings.Contains(steps[6].Blocked, "needs a keyslot of tpm2-kira's") {
-		t.Errorf("the unlock step: %+v", steps[6])
+	if steps[7].Key != "unlock" || !strings.Contains(steps[7].Blocked, "needs a keyslot of tpm2-kira's") {
+		t.Errorf("the unlock step: %+v", steps[7])
 	}
 
-	// Setting the mode writes the file, the one thing control writes.
-	if err := c.setMode(UnlockPasswordSalt); err != nil {
+	// The Bluetooth policy writes the file, the one thing control writes.
+	if err := setAttestBluetooth(conf, "always"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), conf+": TPM2_KIRA_UNLOCK=password+salt") || !c.ran {
-		t.Errorf("setMode said: %q", out.String())
-	}
-	data, err := os.ReadFile(conf)
-	if err != nil || !strings.Contains(string(data), "TPM2_KIRA_UNLOCK=password+salt\n") {
-		t.Fatalf("control.conf after setMode: %q %v", data, err)
-	}
-	if cfg, err := LoadControlConfig(conf); err != nil || cfg.Unlock.Mode != UnlockPasswordSalt || cfg.PIN != "" {
+	if cfg, err := LoadControlConfig(conf); err != nil || cfg.Attest.Bluetooth != "always" || cfg.PIN != "" {
 		t.Errorf("control.conf loads as %+v, %v", cfg, err)
 	}
 	f = collectFacts(sock, false)
-	if f.Status.UnlockMode != UnlockPasswordSalt {
-		t.Errorf("the facts after setMode: mode %q", f.Status.UnlockMode)
-	}
-	// The same mode again writes nothing.
-	out.Reset()
-	c = &controller{facts: f, out: &out}
-	if err := c.setMode(UnlockPasswordSalt); err != nil || out.Len() != 0 || c.ran {
-		t.Errorf("setting the mode that is set: %v %q", err, out.String())
+	if !f.BTAlways {
+		t.Errorf("the facts after setAttestBluetooth: always not seen")
 	}
 
 	// The PIN stored next to it, as the Signing key step does it; the
@@ -102,8 +91,8 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	if st, _ := os.Stat(conf); st.Mode().Perm() != 0o600 {
 		t.Errorf("control.conf with the PIN is %v", st.Mode().Perm())
 	}
-	if cfg, _ := LoadControlConfig(conf); cfg.Unlock.Mode != UnlockPasswordSalt || cfg.PIN != "123456" {
-		t.Errorf("the mode kept next to the PIN: %+v", cfg)
+	if cfg, _ := LoadControlConfig(conf); cfg.Attest.Bluetooth != "always" || cfg.PIN != "123456" {
+		t.Errorf("the policy kept next to the PIN: %+v", cfg)
 	}
 	// Readable by others: the PIN counts as disclosed, and that is a risk.
 	os.Chmod(conf, 0o644)
@@ -120,12 +109,13 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 		t.Fatal(err)
 	}
 	f = collectFacts(sock, false)
-	if !strings.Contains(f.AttestConf, "no attestation mode") || f.Status.UnlockError == "" {
-		t.Errorf("a broken file: attest %q, unlock %q", f.AttestConf, f.Status.UnlockError)
+	if !strings.Contains(f.AttestConf, "no attestation mode") || f.Status.ConfigError == "" {
+		t.Errorf("a broken file: attest %q, config %q", f.AttestConf, f.Status.ConfigError)
 	}
 	f.Keys, f.Adapter = "local key files", "hci0"
+	f.Initramfs, f.HookState, f.Rebuild = "mkinitcpio", "", ""
 	c = &controller{facts: f, out: &out}
-	if s := c.steps()[3]; s.Key != "attest" || !strings.HasPrefix(s.Blocked, conf+": ") {
+	if s := c.steps()[4]; s.Key != "attest" || !strings.HasPrefix(s.Blocked, conf+": ") {
 		t.Errorf("the attest step with a broken file: %+v", s)
 	}
 }

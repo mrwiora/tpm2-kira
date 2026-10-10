@@ -61,12 +61,17 @@ _add_config() {
 # cannot be found: the image then shows the code and serves the disk's key,
 # and no phone is asked.
 _add_bluetooth() {
-    local adapter deps rc log kind value nfw=0
+    local adapter deps rc log kind value nfw=0 policy=auto
     local -a modules=()
 
+    # auto: only with an enrolled phone. always: packed into every image,
+    # so enrolling and removing phones never changes it (control.conf).
+    if [[ -r $CONF ]]; then
+        policy=$( . "$CONF" && printf '%s' "${TPM2_KIRA_ATTEST_BLUETOOTH:-auto}" )
+    fi
     local enrolled
     enrolled=$(tpm2-kira attest status --json 2>/dev/null)
-    if [[ -z $enrolled || $enrolled == '[]' ]]; then
+    if [[ -z $enrolled || $enrolled == '[]' ]] && [[ $policy != always ]]; then
         plain "tpm2-kira: no phone is enrolled; Bluetooth not added"
         return 0
     fi
@@ -83,10 +88,19 @@ _add_bluetooth() {
     # on the unlocked system: one written by somebody else, or an older one
     # put back, is refused, and then the gate is not added at all. The image
     # only changes when the signing key does, not when phones come and go.
+    # Packed ahead of any enrolment (always), the key comes from setup's
+    # seal.pub: there is no record to check yet.
     local signer
-    signer=$(tpm2-kira attest signer)
-    if (( $? != 0 )) || ! grep -q 'BEGIN PUBLIC KEY' <<< "$signer"; then
-        warning "tpm2-kira: the attestation record was not accepted (see above); Bluetooth not added"
+    if [[ -n $enrolled && $enrolled != '[]' ]]; then
+        signer=$(tpm2-kira attest signer)
+        if (( $? != 0 )) || ! grep -q 'BEGIN PUBLIC KEY' <<< "$signer"; then
+            warning "tpm2-kira: the attestation record was not accepted (see above); Bluetooth not added"
+            return 0
+        fi
+    elif [[ -r /etc/tpm2-kira/keys/seal.pub ]] && grep -q 'BEGIN PUBLIC KEY' /etc/tpm2-kira/keys/seal.pub; then
+        signer=$(cat /etc/tpm2-kira/keys/seal.pub)
+    else
+        warning "tpm2-kira: TPM2_KIRA_ATTEST_BLUETOOTH=always, but no signing public key at /etc/tpm2-kira/keys/seal.pub (tpm2-kira setup); Bluetooth not added"
         return 0
     fi
 
@@ -169,20 +183,8 @@ _add_unlock() {
     add_systemd_unit tpm2-kira-unlock.socket
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-unlock.socket \
         /usr/lib/systemd/system/tpm2-kira-unlock.socket
-    # How the disk's key is made (TPM2_KIRA_UNLOCK in control.conf: skip,
-    # password+salt, password+remotesalt); the file is added by _add_config.
-    if [[ -r $CONF ]]; then
-        local mode
-        mode=$(sed -n 's/^TPM2_KIRA_UNLOCK=//p' "$CONF" | tail -1)
-        plain "tpm2-kira: unlock mode ${mode:-skip}"
-        if [[ $mode == password+remotesalt ]]; then
-            local enrolled
-            enrolled=$(tpm2-kira attest status --json 2>/dev/null)
-            if [[ -z $enrolled || $enrolled == '[]' ]]; then
-                warning "tpm2-kira: unlock mode password+remotesalt, but no phone is enrolled: the remote salt is only released by an attestation. Every boot will ask for a typed salt instead"
-            fi
-        fi
-    fi
+    # How the disk's key is made is not configured: the key provider reads
+    # each volume's LUKS2 header at boot (the tpm2-kira tokens).
 
     # Is any volume routed through the socket at all (the command line, or
     # an x-initrd.attach line of crypttab)? Said only when none is.

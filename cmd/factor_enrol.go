@@ -73,11 +73,11 @@ func FactorEnrol(o FactorEnrolOptions) error {
 		fmt.Println("captured the old salt.")
 		fmt.Println()
 	}
-	fmt.Println("Then: tpm2-kira luks mark <device> --keyslot N --mode password+remotesalt, set")
-	fmt.Println("TPM2_KIRA_UNLOCK=password+remotesalt in /etc/tpm2-kira/control.conf and rebuild the")
-	fmt.Println("initramfs. At boot, once the phone has verified the machine, tpm2-kira asks for")
-	fmt.Println("the password and derives this key. The recovery passphrase in its own keyslot")
-	fmt.Println("stays the way in without the phone: at cryptsetup's prompt (Ctrl-C at tpm2-kira's).")
+	fmt.Println("Then: tpm2-kira luks mark <device> --keyslot N --mode password+remotesalt. The mark")
+	fmt.Println("is all the boot needs: it reads the recipe from the header, and once the phone has")
+	fmt.Println("verified the machine, asks for the password and derives this key. The recovery")
+	fmt.Println("passphrase in its own keyslot stays the way in without the phone: at cryptsetup's")
+	fmt.Println("prompt (Ctrl-C at tpm2-kira's).")
 	return nil
 }
 

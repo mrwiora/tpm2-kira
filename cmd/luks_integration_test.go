@@ -97,19 +97,4 @@ func TestLuksEnrolOnAnImage(t *testing.T) {
 	if err := LuksRemove(LuksRemoveOptions{Device: loop, Keyslot: 0, ExistingKeyFile: keyFile}); err == nil || !strings.Contains(err.Error(), "not tpm2-kira's") {
 		t.Fatalf("a keyslot that is not ours: %v", err)
 	}
-
-	// The mode in control.conf: replaced, or added, or the file made.
-	if err := setUnlockMode(conf, LuksModePasswordSalt); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := os.ReadFile(conf); string(b) != "# comment\nTPM2_KIRA_UNLOCK=password+salt\n" {
-		t.Fatalf("control.conf: %q", b)
-	}
-	fresh := filepath.Join(dir, "fresh.conf")
-	if err := setUnlockMode(fresh, LuksModePasswordRemoteSalt); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := os.ReadFile(fresh); string(b) != "TPM2_KIRA_UNLOCK=password+remotesalt\n" {
-		t.Fatalf("fresh control.conf: %q", b)
-	}
 }

@@ -52,9 +52,9 @@ func DeriveCommand(out string) error {
 	fmt.Printf("    cryptsetup open --test-passphrase <device> --key-file %s\n", out)
 	fmt.Printf("    rm %s\n", out)
 	fmt.Println()
-	fmt.Println("Then mark the keyslot (tpm2-kira luks mark <device> --keyslot N --mode password+salt),")
-	fmt.Println("set TPM2_KIRA_UNLOCK=password+salt in /etc/tpm2-kira/control.conf and rebuild the")
-	fmt.Println("initramfs: at boot tpm2-kira asks for the password and the salt and derives this")
-	fmt.Println("key. Keep a recovery passphrase in another keyslot; it works at cryptsetup's prompt.")
+	fmt.Println("Then mark the keyslot (tpm2-kira luks mark <device> --keyslot N --mode password+salt):")
+	fmt.Println("the mark is all the boot needs - it reads the recipe from the header and asks for")
+	fmt.Println("the password and the salt to derive this key. Keep a recovery passphrase in")
+	fmt.Println("another keyslot; it works at cryptsetup's prompt.")
 	return nil
 }

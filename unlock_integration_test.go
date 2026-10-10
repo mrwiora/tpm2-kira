@@ -48,11 +48,12 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	// Mode password+salt: the keyslot holds the combination of the two,
-	// which the provider derives from what is typed at its prompts.
+	// A password+salt keyslot: the provider reads the recipe from the
+	// volume's own header (the token luks mark writes below) and derives
+	// the key from what is typed at its prompts.
 	const password, salt = "correct horse", "battery staple"
 	conf := filepath.Join(dir, "control.conf")
-	if err := os.WriteFile(conf, []byte("TPM2_KIRA_UNLOCK=password+salt\n"), 0o600); err != nil {
+	if err := os.WriteFile(conf, []byte("# nothing to configure\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	key, err := cmd.Combine([]byte(password), []byte(salt))
@@ -71,6 +72,9 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	}
 	loop := strings.TrimSpace(string(loopOut))
 	defer exec.Command("losetup", "-d", loop).Run()
+	if err := cmd.LuksMark(cmd.LuksMarkOptions{Device: loop, Keyslot: 0, Mode: "password+salt"}); err != nil {
+		t.Fatalf("luks mark: %v", err)
+	}
 
 	// tpm2-kira run without a TPM: nothing to show, the hold ends at once,
 	// the key socket is served. The prompt goes to a socket the test answers.
@@ -125,8 +129,13 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 		}
 	}()
 	answer(password, salt)
+	volume := "tpm2kira-test-" + strings.ToLower(t.Name()[len(t.Name())-6:])
+	crypttab := filepath.Join(dir, "crypttab")
+	if err := os.WriteFile(crypttab, []byte(volume+" "+loop+" none luks\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	run := exec.Command("./tpm2-kira", "run", "--tpm", filepath.Join(dir, "no-tpm"), "--hold", "0", "--unlock", sock)
-	run.Env = append(os.Environ(), "TPM2_KIRA_CONSOLE="+console, "TPM2_KIRA_CONTROL_CONF="+conf)
+	run.Env = append(os.Environ(), "TPM2_KIRA_CONSOLE="+console, "TPM2_KIRA_CONTROL_CONF="+conf, "TPM2_KIRA_CRYPTTAB="+crypttab)
 	var runOut bytes.Buffer
 	run.Stdout, run.Stderr = &runOut, &runOut
 	if err := run.Start(); err != nil {
@@ -151,7 +160,6 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	volume := "tpm2kira-test-" + strings.ToLower(t.Name()[len(t.Name())-6:])
 	attach := exec.Command(sdc, "attach", volume, loop, sock)
 	out, err := attach.CombinedOutput()
 	if err != nil {

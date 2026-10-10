@@ -403,23 +403,21 @@ func openCoordinator(tpmPath, socket, configPath, signerPath string, debug bool)
 func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, debug bool) {
 	svc, endCoordinator := startCoordinator(tpmPath, gateSocket, controlConfigPath(), DefaultAttestSignerPath, debug)
 	var unlock *unlockServer
-	unlockMode := "" // what the next prompt is, for the code screen's words
+	// What the next prompt is, for the code screen's words: the recipe of
+	// the first routed volume, read from its LUKS2 header once it is
+	// readable. The key itself is made per volume (unlockRecipe): nothing
+	// is configured, the header is the truth.
+	promptMode := func() string { return "" }
 	if l, err := listenUnlock(unlockSocket); err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the disk unlock is not served: %v\n", err)
 	} else if l != nil {
-		// As control.conf says; the coordinator keeps the salt a verifier
-		// released and the TPM opened.
-		cfg, err := LoadUnlockConfig(controlConfigPath())
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "tpm2-kira: %v; not answering (mode skip)\n", err)
-		}
-		unlockMode = cfg.Mode
-		if cfg.Mode == UnlockPasswordRemoteSalt && svc == nil {
-			fmt.Fprintln(os.Stderr, "tpm2-kira: unlock mode password+remotesalt, but no phone check is in this image: no salt can come from a phone; the prompt asks for a typed salt instead")
-		}
-		if cfg.Mode == UnlockPasswordRemoteSalt && svc != nil {
+		promptMode = screenRecipe(DefaultUnlockSocket)
+		if svc != nil {
+			// A slot whose enrolment holds a release key waits for the
+			// salt that follows the phone's receipt.
 			svc.ExpectRelease(true)
 		}
+		recipes := &unlockRecipe{}
 		unlock = serveUnlock(l, diskKey(func() []byte {
 			if svc == nil {
 				return nil
@@ -434,7 +432,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 				time.Sleep(200 * time.Millisecond)
 			}
 			return svc.Salt()
-		}, cfg.Mode), unlockLogger(debug))
+		}, recipes.forVolume), unlockLogger(debug))
 	}
 	open := func() (transport.TPMCloser, error) {
 		tpmDev, err := OpenTPM(tpmPath)
@@ -451,7 +449,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 	}
 	b := &bootDisplay{
 		phone:      phone,
-		phoneEvent: gateEventPrinter(unlockMode),
+		phoneEvent: gateEventPrinter(promptMode),
 		phonePoll:  500 * time.Millisecond,
 		phoneGrace: time.Minute,
 		scan: func(now time.Time) ([]NVRAMSlot, error) {
@@ -520,7 +518,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 				if st, ok := gateStatus(phone); ok && st.Asking() {
 					fmt.Printf("   Enter: continue without the phone (on its own in %d s).\n", int(remaining.Round(time.Second)/time.Second))
 				} else {
-					fmt.Printf("   Does the code match your authenticator? Enter: continue to %s (on its own in %d s).\n", nextPrompt(unlockMode), int(remaining.Round(time.Second)/time.Second))
+					fmt.Printf("   Does the code match your authenticator? Enter: continue to %s (on its own in %d s).\n", nextPrompt(promptMode()), int(remaining.Round(time.Second)/time.Second))
 				}
 			}
 			fmt.Println()
@@ -648,29 +646,31 @@ const (
 	tagPurple = "35"
 )
 
-// nextPrompt names what follows the code screen, in the unlock mode's
-// words: "the password prompt" when tpm2-kira asks (the password is what
-// the person types; the salt is typed too, or comes from the phone),
-// "cryptsetup's prompt" in mode skip.
+// nextPrompt names what follows the code screen, in the words of the
+// routed volume's recipe: "the password prompt" when tpm2-kira asks (the
+// password is what the person types; the salt is typed too, or comes from
+// the phone), "cryptsetup's prompt" when nothing of tpm2-kira's answers.
 func nextPrompt(mode string) string {
 	switch mode {
-	case UnlockPasswordSalt:
+	case LuksModePasswordSalt:
 		return "the password and salt prompt"
-	case UnlockPasswordRemoteSalt:
+	case LuksModePasswordRemoteSalt:
 		return "the password prompt"
 	}
 	return "cryptsetup's prompt"
 }
 
 // gateEventPrinter tells the person at the console what the gate's change
-// of state means for them, in the unlock mode's words. The verdict itself
-// is the gate's to print.
-func gateEventPrinter(mode string) func(prev, cur GateStatus) {
+// of state means for them, in the routed volume's words (resolved lazily:
+// the header may not be readable when the screen starts). The verdict
+// itself is the gate's to print.
+func gateEventPrinter(modeOf func() string) func(prev, cur GateStatus) {
 	return func(prev, cur GateStatus) {
+		mode := modeOf()
 		switch cur.State {
 		case GateWaiting:
 			if prev.State == "" {
-				if mode == UnlockPasswordRemoteSalt {
+				if mode == LuksModePasswordRemoteSalt {
 					fmt.Printf("%s Slot #%d: open Marify on your phone to attest this boot and return the disk's salt.\n", kiraTag(tagYellow), cur.Slot)
 				} else {
 					fmt.Printf("%s Slot #%d: open Marify on your phone to attest this boot.\n", kiraTag(tagYellow), cur.Slot)

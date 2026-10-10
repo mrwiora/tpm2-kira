@@ -45,7 +45,7 @@ var osSeparatorPCRs = []int{0, 1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14}
 // against. They cannot be used to validate a measure-point prediction.
 var volatileAfterMeasurePoint = map[int]string{
 	9:  "systemd-tpm2-setup NvPCR initialisation (runs after switch-root)",
-	11: "systemd-pcrphase (leave-initrd, sysinit, ready)",
+	11: "systemd-pcrnvdone and systemd-pcrphase (nvpcr-separator, leave-initrd, sysinit, ready)",
 	15: "systemd-pcrmachine and cryptsetup volume key measurement",
 }
 

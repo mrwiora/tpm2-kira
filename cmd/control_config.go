@@ -11,10 +11,11 @@ import (
 	"time"
 )
 
-// /etc/tpm2-kira/control.conf is the one configuration file: how the disk's
-// key is made at boot (TPM2_KIRA_UNLOCK), the radio of the attestation by
-// phone (TPM2_KIRA_ATTEST_*), and the YubiKey's PIN for the unattended
-// reseal (TPM2_KIRA_PIN). Shell-style KEY=VALUE lines, so the initramfs
+// /etc/tpm2-kira/control.conf is the one configuration file: the radio of
+// the attestation by phone (TPM2_KIRA_ATTEST_*) and the YubiKey's PIN for
+// the unattended reseal (TPM2_KIRA_PIN). How the disk's key is made is not
+// configured anywhere: the boot reads it from the LUKS header's tokens
+// (luks_header.go). Shell-style KEY=VALUE lines, so the initramfs
 // scripts source it too; the hooks copy it into the initramfs without the
 // PIN line. 'tpm2-kira control' is what writes it; the other commands only
 // read. A file holding the PIN must be root's and readable by root alone,
@@ -32,42 +33,29 @@ func controlConfigPath() string {
 	return DefaultControlConfigPath
 }
 
-// The provider's modes (TPM2_KIRA_UNLOCK): how the disk's key is made.
-const (
-	UnlockSkip               = "skip"                // tpm2-kira stays out of it: cryptsetup's own prompt
-	UnlockPasswordSalt       = "password+salt"       // a typed password and a typed salt, combined (combine.go)
-	UnlockPasswordRemoteSalt = "password+remotesalt" // a typed password and the salt a verifier released
-)
-
-// UnlockConfig is the disk-unlock part of control.conf.
-type UnlockConfig struct {
-	Mode string
-}
-
 // AttestConfig is the radio part of control.conf.
 type AttestConfig struct {
 	Adapter     int           // TPM2_KIRA_ATTEST_ADAPTER
 	Timeout     time.Duration // TPM2_KIRA_ATTEST_TIMEOUT: 0 waits until the initrd ends
 	AdapterWait time.Duration // TPM2_KIRA_ATTEST_ADAPTER_WAIT: how long to wait for hciN to appear
 	Debug       bool          // TPM2_KIRA_ATTEST_DEBUG: the gate logs every step it takes
+	Bluetooth   string        // TPM2_KIRA_ATTEST_BLUETOOTH: "auto" (with an enrolled phone), or "always"
 }
 
 // DefaultAttestConfig is used when the file is missing.
 func DefaultAttestConfig() AttestConfig {
-	return AttestConfig{AdapterWait: 30 * time.Second}
+	return AttestConfig{AdapterWait: 30 * time.Second, Bluetooth: "auto"}
 }
 
 // ControlConfig is the whole file.
 type ControlConfig struct {
-	Unlock UnlockConfig
 	Attest AttestConfig
 	PIN    string // TPM2_KIRA_PIN: the YubiKey's PIN, "" when not stored
 }
 
-// DefaultControlConfig is a missing file: the unlock skipped, the radio's
-// defaults.
+// DefaultControlConfig is a missing file: the radio's defaults.
 func DefaultControlConfig() ControlConfig {
-	return ControlConfig{Unlock: UnlockConfig{Mode: UnlockSkip}, Attest: DefaultAttestConfig()}
+	return ControlConfig{Attest: DefaultAttestConfig()}
 }
 
 // LoadControlConfig reads the file; a missing file is the defaults.
@@ -81,12 +69,6 @@ func LoadControlConfig(path string) (ControlConfig, error) {
 		return cfg, err
 	}
 	return ParseControlConfig(data)
-}
-
-// LoadUnlockConfig is the unlock part of the file at path.
-func LoadUnlockConfig(path string) (UnlockConfig, error) {
-	cfg, err := LoadControlConfig(path)
-	return cfg.Unlock, err
 }
 
 // LoadAttestConfig is the radio part of the file at path.
@@ -112,11 +94,16 @@ func ParseControlConfig(data []byte) (ControlConfig, error) {
 		val = strings.Trim(strings.TrimSpace(val), `"'`)
 		switch key {
 		case "TPM2_KIRA_UNLOCK":
+			return cfg, fmt.Errorf("control.conf line %d: there is no unlock mode to set any more; the boot reads how a key is made from the LUKS header's tokens. Remove the line", n)
+		case "TPM2_KIRA_ATTEST_BLUETOOTH":
 			switch val {
-			case UnlockSkip, UnlockPasswordSalt, UnlockPasswordRemoteSalt:
-				cfg.Unlock.Mode = val
+			case "", "auto", "always":
+				cfg.Attest.Bluetooth = val
+				if val == "" {
+					cfg.Attest.Bluetooth = "auto"
+				}
 			default:
-				return cfg, fmt.Errorf("control.conf line %d: TPM2_KIRA_UNLOCK must be skip, password+salt or password+remotesalt, not %q", n, val)
+				return cfg, fmt.Errorf("control.conf line %d: TPM2_KIRA_ATTEST_BLUETOOTH must be auto or always, not %q", n, val)
 			}
 		case PINEnvVar:
 			cfg.PIN = val
@@ -199,9 +186,10 @@ func setControlValue(path, key, value string) error {
 	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), mode)
 }
 
-// setUnlockMode sets TPM2_KIRA_UNLOCK in control.conf.
-func setUnlockMode(path, mode string) error {
-	return setControlValue(path, "TPM2_KIRA_UNLOCK", mode)
+// setAttestBluetooth sets whether the hooks pack Bluetooth into every
+// image, enrolled phone or not.
+func setAttestBluetooth(path, value string) error {
+	return setControlValue(path, "TPM2_KIRA_ATTEST_BLUETOOTH", value)
 }
 
 // setControlPIN stores the YubiKey's PIN in control.conf, which is then

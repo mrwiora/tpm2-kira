@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -47,27 +48,96 @@ func initramfsHookState(kind string) string {
 // conf.d drop-ins in sorted order, the last assignment winning, as
 // mkinitcpio reads them.
 func mkinitcpioHooks(conf string) []string {
-	files := []string{conf}
-	if m, _ := filepath.Glob(filepath.Join(filepath.Dir(conf), "mkinitcpio.conf.d", "*.conf")); len(m) > 0 {
-		sort.Strings(m)
-		files = append(files, m...)
-	}
-	var hooks []string
-	for _, f := range files {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			continue
-		}
-		if h, ok := parseHooks(string(data)); ok {
-			hooks = h
-		}
-	}
+	_, _, hooks := winningHooks(conf)
 	return hooks
 }
 
 // hooksRe matches a HOOKS assignment: an array (which may span lines), a
 // quoted string, or the rest of the line.
 var hooksRe = regexp.MustCompile(`(?ms)^[ \t]*HOOKS=(\([^)]*\)|"[^"]*"|'[^']*'|[^\n]*)`)
+
+// winningHooks is the HOOKS assignment mkinitcpio would use - the last one
+// over the conf and its drop-ins - as it stands in its file: the file, the
+// assignment's value text, and the parsed hooks.
+func winningHooks(conf string) (file, value string, hooks []string) {
+	files := []string{conf}
+	if m, _ := filepath.Glob(filepath.Join(filepath.Dir(conf), "mkinitcpio.conf.d", "*.conf")); len(m) > 0 {
+		sort.Strings(m)
+		files = append(files, m...)
+	}
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		if h, ok := parseHooks(string(data)); ok {
+			ms := hooksRe.FindAllStringSubmatch(string(data), -1)
+			file, value, hooks = f, ms[len(ms)-1][1], h
+		}
+	}
+	return file, value, hooks
+}
+
+// AdoptHookLine is the winning HOOKS line as it should read, with
+// sd-tpm2-kira in it, and the file it lives in - for control to show, and
+// for AdoptHook to write when asked. An error says why it cannot be done
+// by editing (no HOOKS assignment, or an initramfs without the systemd
+// hook, which sd-tpm2-kira needs).
+func AdoptHookLine(conf string) (file, oldLine, newLine string, err error) {
+	file, value, hooks := winningHooks(conf)
+	if file == "" {
+		return "", "", "", fmt.Errorf("no HOOKS assignment found in %s or its drop-ins", conf)
+	}
+	if slices.Contains(hooks, "sd-tpm2-kira") {
+		return file, "HOOKS=" + value, "HOOKS=" + value, nil
+	}
+	var adopted string
+	switch {
+	case strings.Contains(value, "sd-encrypt"):
+		adopted = strings.Replace(value, "sd-encrypt", "sd-tpm2-kira sd-encrypt", 1)
+	case regexp.MustCompile(`systemd([ \t\n)'"])`).MatchString(value):
+		adopted = regexp.MustCompile(`systemd([ \t\n)'"])`).ReplaceAllString(value, "systemd sd-tpm2-kira${1}")
+	default:
+		return "", "", "", fmt.Errorf("the HOOKS of %s carry neither systemd nor sd-encrypt: sd-tpm2-kira needs a systemd-based initramfs (HOOKS with base systemd ... sd-encrypt)", file)
+	}
+	return file, "HOOKS=" + value, "HOOKS=" + adopted, nil
+}
+
+// AdoptHook writes sd-tpm2-kira into the winning HOOKS assignment, before
+// sd-encrypt (else after systemd), and reports the file and the line as it
+// reads now. Only the one assignment changes; the rest of the file is kept
+// byte for byte.
+func AdoptHook(conf string) (file, newLine string, err error) {
+	file, oldLine, newLine, err := AdoptHookLine(conf)
+	if err != nil {
+		return "", "", err
+	}
+	if oldLine == newLine {
+		return file, newLine, nil // already in
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return "", "", err
+	}
+	oldValue, newValue := oldLine[len("HOOKS="):], newLine[len("HOOKS="):]
+	ms := hooksRe.FindAllStringSubmatchIndex(string(data), -1)
+	if len(ms) == 0 {
+		return "", "", fmt.Errorf("the HOOKS assignment of %s disappeared while editing", file)
+	}
+	start, end := ms[len(ms)-1][2], ms[len(ms)-1][3]
+	if string(data[start:end]) != oldValue {
+		return "", "", fmt.Errorf("the HOOKS assignment of %s changed while editing", file)
+	}
+	out := string(data[:start]) + newValue + string(data[end:])
+	st, err := os.Stat(file)
+	if err != nil {
+		return "", "", err
+	}
+	if err := os.WriteFile(file, []byte(out), st.Mode().Perm()); err != nil {
+		return "", "", err
+	}
+	return file, newLine, nil
+}
 
 // parseHooks finds the last HOOKS assignment in one file's text, with the
 // comments cut as a shell would.
@@ -87,4 +157,55 @@ func parseHooks(data string) ([]string, bool) {
 		fields[i] = strings.Trim(f, `"'`)
 	}
 	return fields, true
+}
+
+// mkinitcpioPresetDir holds the presets whose images -P builds; a var for
+// the tests.
+var mkinitcpioPresetDir = "/etc/mkinitcpio.d"
+
+// presetImageRe matches the image paths of a preset (default_image="...").
+var presetImageRe = regexp.MustCompile(`(?m)^[A-Za-z0-9_]*image="?([^"\n]+)"?`)
+
+// mkinitcpioImages are the images the presets name.
+func mkinitcpioImages() []string {
+	var images []string
+	files, _ := filepath.Glob(filepath.Join(mkinitcpioPresetDir, "*.preset"))
+	sort.Strings(files)
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, m := range presetImageRe.FindAllStringSubmatch(string(data), -1) {
+			images = append(images, strings.TrimSpace(m[1]))
+		}
+	}
+	return images
+}
+
+// rebuildPending says, as far as the timestamps tell, whether an image
+// still predates the HOOKS that name sd-tpm2-kira: built before the file
+// last changed, it cannot carry the hook, and the next boot would show no
+// code screen. "" when every image is newer, or when nothing can be told
+// (no presets, no images yet - mkinitcpio -P is then due anyway and the
+// step offers it).
+func rebuildPending(conf string) string {
+	file, _, _ := winningHooks(conf)
+	if file == "" {
+		return ""
+	}
+	st, err := os.Stat(file)
+	if err != nil {
+		return ""
+	}
+	for _, img := range mkinitcpioImages() {
+		ist, err := os.Stat(img)
+		if err != nil {
+			continue
+		}
+		if ist.ModTime().Before(st.ModTime()) {
+			return fmt.Sprintf("%s was built before %s last changed: the image cannot carry the hook yet", img, file)
+		}
+	}
+	return ""
 }

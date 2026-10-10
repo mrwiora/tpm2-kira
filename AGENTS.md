@@ -69,13 +69,18 @@ It may not carry what came before.
   the fallback after a wrong or missing answer (docs/UNLOCK-DISK.md §4).
   Do not build a mode that holds the boot on the phone's verdict.
 - **One configuration file, `/etc/tpm2-kira/control.conf`, and only
-  `control` writes it.** It holds the unlock mode, the radio settings and
-  the YubiKey's PIN (the hooks copy it into the initramfs without the PIN
-  line). `setup`, `seal`, `luks enrol` and the rest do their one thing and
-  say what the file would need; `tpm2-kira control` sets it and checks the
-  prerequisites of a working setup. Every other file on the system - the
-  kernel command line, crypttab, `/etc/mkinitcpio.conf` - is advised by
-  `control`, never edited. `control`'s status judges line by line - green
+  `control` writes it.** It holds the radio settings and the YubiKey's PIN
+  (the hooks copy it into the initramfs without the PIN line). How the
+  disk's key is made is not configured anywhere: the boot reads it from
+  each volume's own LUKS2 header - the tpm2-kira token of a keyslot names
+  the recipe (cmd/luks_header.go), so an enrolment needs no mode set and
+  no rebuild for one. `setup`, `seal`, `luks enrol` and the rest do their
+  one thing; `tpm2-kira control` checks the prerequisites of a working
+  setup. Every other file on the system - the kernel command line,
+  crypttab - is advised by `control`, never edited, with one exception
+  asked for every time: the HOOKS of `/etc/mkinitcpio.conf` (its
+  mkinitcpio step writes sd-tpm2-kira in when the person says so, and runs
+  mkinitcpio -P when asked). `control`'s status judges line by line - green
   what is good, red what is not with the risk in brackets (SHA-1, Secure
   Boot off or in Setup Mode, an unvouched endorsement key, a selection
   without the kernel, a loose file holding the PIN); there is no separate

@@ -29,8 +29,9 @@ USAGE
   tpm2-kira help <command>       that command's page: subcommands, options, examples
 
 Everything but the help needs root: the TPM, the keys in /etc/tpm2-kira,
-the LUKS headers and the initramfs are root's. The commands touch no
-configuration file; control sets the unlock mode and checks the rest.
+the LUKS headers and the initramfs are root's. How a disk's key is made
+is in its own LUKS header (the keyslot's token), read at boot: there is
+no unlock mode to set anywhere.
 
 GUIDED
   control      One screen: what this machine has, which protections are in
@@ -41,8 +42,8 @@ SETTING UP THE MACHINE (what control runs; by hand for specific settings)
   seal         Seal a new TOTP key to the boot state (PCRs) in a TPM slot
   reseal       Approve the current boot state for a slot (after a boot change;
                the initramfs hooks run it)
-  status       The one page before a reboot: slots, phones, unlock mode,
-               LUKS keyslots, and what does not fit together
+  status       The one page before a reboot: slots, phones, LUKS
+               keyslots, and what does not fit together
   info         Show a slot's blob in full: its TOTP policy, the phones
   nvram        The TPM's slots: list, status, delete, restore
 
@@ -120,8 +121,8 @@ On top, the machine's status, judged line by line - the TPM and its
 banks, the endorsement key's vendor, Secure Boot, how it booted, the
 slots, the signing key, the initramfs kind and whether sd-tpm2-kira is
 wired into it (the hook installed, and in mkinitcpio's HOOKS), Bluetooth,
-the LUKS devices, the unlock mode - green what is good, red what is not
-with the risk in brackets: the SHA-1 bank, Secure Boot disabled or in Setup Mode, a slot
+the LUKS devices - green what is good, orange what is open, red what is
+not good with the risk in brackets: the SHA-1 bank, Secure Boot disabled or in Setup Mode, a slot
 sealed without the kernel measured, an endorsement key no known vendor
 vouches for (a phone then trusts this TPM on first use), a loose file
 holding the PIN. Under it the protections, as a tree:
@@ -135,7 +136,7 @@ holding the PIN. Under it the protections, as a tree:
     Disk key from password + remote salt     luks enrol --mode password+remotesalt
   Slot 1
   Disk key from password + salt              luks enrol --mode password+salt (independent of the slots)
-  Unlock at boot                             the mode in control.conf, the key's route
+  Unlock at boot                             the key's route; the recipe is the header's
 
 - each done, possible, or blocked with the reason, and the next one
 recommended. The steps run without the commands' advisory warnings (a
@@ -150,18 +151,23 @@ under it (the remote-salt keyslot's state read from the LUKS header), and
 the unlock stays greyed until a keyslot of tpm2-kira's exists. Picking a
 slot's line deletes the slot whole - the TOTP key, the phones, the remote
 salt, the LUKS keyslots bound to it, the recovery blobs - after a
-confirmation, and the unlock mode is set back to what the remaining
-keyslots call for. A slot whose deletion stopped halfway is dirty, marked
+confirmation. A slot whose deletion stopped halfway is dirty, marked
 [!] and recommended first, until a run removes the rest; the expert
 commands (nvram delete, luks remove, attest unenrol) stay for taking one
 piece by hand, and leave the slot dirty the same way.
 Control alone writes the one configuration file, /etc/tpm2-kira/control.conf:
-the unlock mode after an enrolment, the YubiKey's PIN after checking it on
-the token (the file is then root's alone; the hooks leave the PIN out of
-the initramfs). The unlock line checks that the mode fits the keyslots and
-that every device with a keyslot of tpm2-kira's takes its key from
-tpm2-kira - advising the kernel command line (crypttab on Debian) where it
-does not; those, and every other file, stay yours to edit.
+the radio settings and the YubiKey's PIN after checking it on the token
+(the file is then root's alone; the hooks leave the PIN out of the
+initramfs). The unlock line checks that every device with a keyslot of
+tpm2-kira's takes its key from tpm2-kira - advising the kernel command
+line (crypttab on Debian) where it does not; those, and every other file,
+stay yours to edit, with one exception, asked for every time: the
+mkinitcpio step writes sd-tpm2-kira into HOOKS when you say so, and runs
+mkinitcpio -P when asked, proposing first - with a Bluetooth adapter at
+hand - to pack its modules into every image (~1.1 MB, deselectable), so
+enrolling phones later never changes the image. The overview opens with
+the signing key and the mkinitcpio step alone, and the rest appears once
+both are done; only a dirty slot shows through.
 Sealing both slots, each QR code gets a cleared screen of its own, held
 until the scan is confirmed: it is shown this once.
 Run again later, it shows the state and what is left. On leaving it
@@ -277,10 +283,10 @@ the token and its PIN (` + cmd.PINEnvVar + `, or the TPM2_KIRA_PIN line of
 The overview, read-only: every slot with what it is sealed to, its
 generation (does the TPM's index match, or is a reseal due), whether this
 machine's key signed it, its phones and whether a remote salt is enrolled;
-the unlock mode from /etc/tpm2-kira/control.conf; every LUKS device's
-keyslots and which are tpm2-kira's. Then the notes: what does not fit
-together and what to run - a mode without a keyslot for it, a keyslot
-whose mode is not set, a remote salt that is not enrolled, no fallback
+every LUKS device's keyslots and which are tpm2-kira's (how a key is made
+is each keyslot's token, read from the header at boot). Then the notes:
+what does not fit together and what to run - a remote salt without a
+keyslot for it, a keyslot bound to a slot that is gone, no fallback
 slot, a slot that needs a reseal. Root for the LUKS headers.
 
   --json              Machine-readable
@@ -405,9 +411,9 @@ cryptsetup's prompt is always the fallback (docs/PLAN-LUKS.md).
             runs the remote salt's hand-over with the phone), derives the
             key, asks an existing passphrase of the device (the recovery
             one) to authorise, 'cryptsetup luksAddKey' (a device whose every
-            keyslot is tpm2-kira's is refused), imports the token. It sets
-            no mode: TPM2_KIRA_UNLOCK in /etc/tpm2-kira/control.conf is
-            control's to set (or yours). Then rebuild the initramfs.
+            keyslot is tpm2-kira's is refused), imports the token - which
+            is all the boot needs: it reads the recipe from the header
+            when the volume asks. Nothing else is configured.
               --nvram N               the slot the keyslot is bound to (default
                                       0; password+remotesalt: whose phone keeps the salt)
               --label STR             the remote salt's label (default luks)

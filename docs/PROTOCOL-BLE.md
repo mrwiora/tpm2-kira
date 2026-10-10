@@ -495,7 +495,9 @@ nonce_m). SASConfirm has no fields.
 **Baseline.** `pcr_values` is what the running system's registers hold at
 enrolment, proven by `quoted`. The gate, however, quotes inside the initramfs,
 at tpm2-kira's measure point, and systemd extends some PCRs after that (PCR 11
-with its `leave-initrd`, `sysinit` and `ready` phases; PCR 9 by
+with `nvpcr-separator` - systemd 258's NvPCR initialisation separator, which
+tpm2-kira.service holds back like the OS separator - and the `leave-initrd`,
+`sysinit` and `ready` phases; PCR 9 by
 `systemd-tpm2-setup`), so for those `pcr_values` can never match a boot check.
 The machine therefore predicts the measure-point values with the same code
 the TOTP seal uses (event log replay, the unified kernel image, the
@@ -507,8 +509,8 @@ verifies `quoted` over
 `pcr_values` for the AK proof. The prediction is not TPM-signed, so the phone
 ties it to the quote: every value MUST equal the quoted one, except PCR 11,
 where the quoted value MUST be reachable from the predicted one by extending
-an ordered subset of systemd-pcrphase's words `enter-initrd`, `leave-initrd`,
-`sysinit`, `ready` (digest = bank hash of the word). PCRs are one-way, so a
+an ordered subset of systemd's words `enter-initrd`, `nvpcr-separator`,
+`leave-initrd`, `sysinit`, `ready` (digest = bank hash of the word). PCRs are one-way, so a
 prediction that passes is an earlier state of the real register: a machine
 cannot pin a baseline for a boot it has not done. Anything else, or a field
 not listing exactly the PCRs of `pcr_selection` in order, aborts the
@@ -660,7 +662,7 @@ values describe the same measured boot. The rule holds in both directions
 because a profile may have been recorded at either moment, and per PCR
 because a quote may be taken while the unit runs. PCR 11 matches when one
 value is the other extended by systemd's phase words in order (`enter-initrd`,
-`leave-initrd`, `sysinit`, `ready`, any ordered subset): the running system
+`nvpcr-separator`, `leave-initrd`, `sysinit`, `ready`, any ordered subset): the running system
 of the boot the profile knows, which a check after boot sees. PCRs listed as
 changed in a diff are those that do not match under these rules.
 

@@ -90,6 +90,22 @@ without an authenticated image. The intention is that tpm2-kira informs
 and the passphrase can always be entered by hand; enforcement, where
 wanted, is a missing factor (PLAN-FACTORRELEASE.md).
 
+## The unlock mode
+
+### TPM2_KIRA_UNLOCK in control.conf
+
+How the disk's key was made at boot was configured: TPM2_KIRA_UNLOCK in
+/etc/tpm2-kira/control.conf (skip, password+salt, password+remotesalt),
+copied into the initramfs, so an enrolment needed the mode set and a
+rebuild, and a mode that did not fit the keyslots derived a key that
+opened nothing - status had three notes only for such mismatches. Now the
+keyslot's token in the volume's own LUKS2 header names the recipe, and the
+key provider reads the header the moment the volume asks
+(cmd/luks_header.go): nothing to configure, nothing to copy, nothing to
+mismatch, and no rebuild after an enrolment. A leftover TPM2_KIRA_UNLOCK
+line is an error that says to remove it. The mode names live on as the
+token's mode values.
+
 ## LUKS keyslot token
 
 ### `slot` only for the remote salt

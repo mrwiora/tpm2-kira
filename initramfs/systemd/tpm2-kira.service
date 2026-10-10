@@ -18,6 +18,12 @@ After=dev-tpmrm0.device
 # unsatisfiable until the next boot (SECURITY-BACKGROUND.md §5.8).
 After=systemd-pcrphase-initrd.service
 Before=systemd-pcrosseparator.service
+# systemd 258's NvPCR initialisation separator extends PCR 11 in the
+# initrd; unordered it could land while the code is shown and break the
+# policy mid-screen. Held back like the OS separator, it is also what the
+# key provider waits for before the prompt (run_boot.go, waitPromptTurn).
+# Unknown to older systemd, where the ordering is simply ignored.
+Before=systemd-pcrnvdone.service
 Before=systemd-ask-password-console.service
 Conflicts=multi-user.target
 # With a phone enrolled, this process is also the coordinator of the

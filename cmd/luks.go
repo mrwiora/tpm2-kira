@@ -23,11 +23,12 @@ import (
 // LuksTokenType is the token's type in the header.
 const LuksTokenType = "tpm2-kira"
 
-// The modes a keyslot's key is made in, as the token and control.conf
-// name them.
+// The modes a keyslot's key is made in, as the token names them. The boot
+// reads them from the header itself (luks_header.go): there is no
+// configured unlock mode any more.
 const (
-	LuksModePasswordSalt       = UnlockPasswordSalt       // "password+salt"
-	LuksModePasswordRemoteSalt = UnlockPasswordRemoteSalt // "password+remotesalt"
+	LuksModePasswordSalt       = "password+salt"       // a typed password and a typed salt, combined
+	LuksModePasswordRemoteSalt = "password+remotesalt" // a typed password and the salt a verifier released
 )
 
 // LuksToken is the token's JSON. Slot is always written: every keyslot of
@@ -450,17 +451,13 @@ func LuksEnrol(o LuksEnrolOptions) error {
 		return fmt.Errorf("the keyslot %d is added, but its token is not: %w (tpm2-kira luks mark %s --keyslot %d --mode %s)", newSlot, err, o.Device, newSlot, o.Mode)
 	}
 	fmt.Printf("%s keyslot %d added: %s\n", o.Device, newSlot, describeKeyslot(KeyslotStatus{Keyslot: newSlot, Token: &tok}))
-	// The commands touch no configuration file: the mode in control.conf is
-	// control's (or the person's) to set.
-	if cfg, _ := LoadUnlockConfig(controlConfigPath()); cfg.Mode != o.Mode {
-		fmt.Printf("The boot uses this keyslot with TPM2_KIRA_UNLOCK=%s in %s (now %s):\n", o.Mode, controlConfigPath(), cfg.Mode)
-		fmt.Println("tpm2-kira control sets it, or set it by hand.")
-	}
+	// Nothing is configured: at boot the key provider reads the token just
+	// written and asks accordingly. Only the route must be in place.
 	if advice := RouteAdvice(o.Device); advice != "" {
 		fmt.Print(advice)
 	}
-	fmt.Println("Rebuild the initramfs (mkinitcpio -P / update-initramfs -u) and the next boot asks")
-	fmt.Println("at tpm2-kira's prompt. The recovery passphrase stays the way in at cryptsetup's.")
+	fmt.Println("The next boot asks at tpm2-kira's prompt; the recovery passphrase stays the")
+	fmt.Println("way in at cryptsetup's own.")
 	return nil
 }
 
@@ -573,8 +570,8 @@ func LuksRemove(o LuksRemoveOptions) error {
 		}
 	}
 	if left == 0 {
-		fmt.Printf("No keyslot of %s is tpm2-kira's now. If no other device has one, set\n", o.Device)
-		fmt.Printf("TPM2_KIRA_UNLOCK=skip in %s and rebuild the initramfs.\n", controlConfigPath())
+		fmt.Printf("No keyslot of %s is tpm2-kira's now: the next boot goes to cryptsetup's own\n", o.Device)
+		fmt.Println("prompt for it - the provider reads that from the header, nothing to set.")
 	}
 	return nil
 }
