@@ -70,11 +70,11 @@ type machineFacts struct {
 	// (attest_initramfs.go); empty when no log named it and none is
 	// remembered, so the image may not start the adapter.
 	BTFirmware []string
-	Guide    string         // guided or manual (TPM2_KIRA_CONTROL); "" until chosen
-	Capped   bool           // 'tpm2-kira cap' ran: this boot went through the code screen
-	NewImage string         // an image was rebuilt after this boot started; "" when not
-	Routed   map[string]bool
-	Route    []RouteFinding // the route's findings, for the step that writes the fixes
+	Guide      string // guided or manual (TPM2_KIRA_CONTROL); "" until chosen
+	Capped     bool   // 'tpm2-kira cap' ran: this boot went through the code screen
+	NewImage   string // an image was rebuilt after this boot started; "" when not
+	Routed     map[string]bool
+	Route      []RouteFinding // the route's findings, for the step that writes the fixes
 }
 
 // collectFacts is the analysis.
