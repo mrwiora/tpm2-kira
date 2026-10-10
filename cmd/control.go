@@ -76,6 +76,8 @@ type machineFacts struct {
 	// ImageAuth says what the boot image lacks to let the adapter in; ""
 	// when it carries the rule or needs none.
 	ImageAuth string
+	// BootDebug is the boot settings' debug switch (bootsettings.go).
+	BootDebug bool
 	// ImageBT says what the boot images lack of the adapter's part, when
 	// it belongs in them (a phone, or Bluetooth packed always); "" when
 	// they carry it or it does not belong there.
@@ -165,6 +167,9 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	}
 
 	f.Status = collectStatus(StatusOptions{TPMPath: tpmPath, ConfigPath: controlConfigPath(), Debug: debug})
+	if f.TPMErr == "" {
+		f.BootDebug = BootDebug(tpmPath)
+	}
 	if f.TPMErr == "" {
 		f.Dirt = collectDirt(tpmPath, f.Status.Devices)
 	}
@@ -797,8 +802,11 @@ func noteText(s string) string {
 // The status is judged line by line: green is good, red is not good and
 // says why - the risk in brackets. What is neither (plain information)
 // stays uncoloured.
-func good(s string) string  { return "\033[0;32m" + s + "\033[0m" }
-func bad(s string) string   { return "\033[0;31m" + s + "\033[0m" }
+func good(s string) string { return "\033[0;32m" + s + "\033[0m" }
+func bad(s string) string  { return "\033[0;31m" + s + "\033[0m" }
+
+// warn is orange: not a risk, but nothing to leave as it is.
+func warn(s string) string  { return "\033[0;33m" + s + "\033[0m" }
 func amber(s string) string { return "\033[0;33m" + s + "\033[0m" }
 
 // factsText is "What this machine has", one line per fact, each marked
@@ -898,6 +906,9 @@ func (c *controller) factsText() string {
 		fmt.Fprintf(&w, "  Boot image  %s\n", bad(f.ImageBT+" (risk: the phone is not asked at boot)"))
 	case f.Adapter != "" && f.HookState == "" && (f.Phone || f.BTAlways):
 		fmt.Fprintf(&w, "  Boot image  %s\n", good("carries "+f.Adapter+"'s driver and firmware for the phone's gate"))
+	}
+	if f.BootDebug {
+		fmt.Fprintf(&w, "  Debug       %s\n", warn("on at boot: the code screen and the phone check log every step, on the console too"))
 	}
 	// The adapter's USB bus may let no new device in by itself
 	// (usbcore.authorized_default=0, as USBGuard sets it): then the image
@@ -1326,6 +1337,21 @@ func (c *controller) finishSteps(steps []controlStep) []controlStep {
 		}
 	}
 	steps = append(c.imageHints(steps), steps...)
+	debugStep := controlStep{Key: "debug", Title: "Debug at boot", Optional: true, SelfConfirm: true,
+		Explain: "Makes the code screen and the phone check log every step they take at the next boots, on the console too - for finding out why a phone was not asked. A switch in the TPM (NV index 0x01803000), written with the signing key: no rebuild, the boot image and PCR 11 stay as they are. Picking it again switches it off.",
+		Run:     (*controller).runBootDebug}
+	switch {
+	case f.TPMErr != "":
+		debugStep.Blocked = "no TPM: " + f.TPMErr
+	case f.Keys == "":
+		debugStep.Blocked = "needs the signing key"
+	case f.BootDebug:
+		debugStep.Done = "on: every boot logs every step until it is switched off"
+	}
+	// Only where something runs at boot: a slot, or the switch still on.
+	if len(f.Status.Slots) > 0 || f.BootDebug {
+		steps = append(steps, debugStep)
+	}
 	label, target := "Switch to the manual set-up", "manual"
 	if !guided {
 		label, target = "Switch to the guided set-up", "guided"
@@ -1691,4 +1717,39 @@ func globs(patterns ...string) []string {
 		out = append(out, m...)
 	}
 	return out
+}
+
+// runBootDebug switches the boot settings' debug on or off.
+func (c *controller) runBootDebug() error {
+	on := !c.facts.BootDebug
+	title := "Switch debug at boot on?"
+	if !on {
+		title = "Switch debug at boot off?"
+	}
+	ok, err := c.confirm(title, "Takes effect at the next boot; nothing is rebuilt.")
+	if err != nil || !ok {
+		return errors.New("not switched")
+	}
+	signer, err := LoadCheckedSigningPrivateKey(DefaultPrivateKeyPath)
+	if err != nil {
+		return err
+	}
+	if err := PrepareSigningKey(signer); err != nil {
+		return err
+	}
+	tpmDev, err := OpenTPM(c.o.TPMPath)
+	if err != nil {
+		return err
+	}
+	defer tpmDev.Close()
+	if err := WriteBootSettings(tpmDev, BootSettings{Debug: on}, signer); err != nil {
+		return err
+	}
+	c.facts.BootDebug = on
+	if on {
+		fmt.Fprintln(c.out, "Debug at boot is on: from the next boot the code screen and the phone check log every step, on the console too.")
+	} else {
+		fmt.Fprintln(c.out, "Debug at boot is off.")
+	}
+	return nil
 }

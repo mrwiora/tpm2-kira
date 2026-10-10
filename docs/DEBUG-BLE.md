@@ -145,10 +145,12 @@ lsinitcpio /boot/EFI/Linux/arch-linux.efi | grep 70-tpm2-kira-bluetooth.rules
 ```
 
 For every step the gate takes (TPM, adapter, controller commands,
-advertising, connections), put `tpm2-kira.debug=1` on the kernel command
-line - at the boot loader where it can be edited, else in
-`/etc/kernel/cmdline` and rebuild - and boot: the narrative then also
-reaches the console. Nothing of `control.conf` goes into the image; the
+advertising, connections), switch **Debug at boot** on in `tpm2-kira
+control` and boot: the code screen and the gate then log every step, and the
+narrative also reaches the console, at every boot until it is switched off
+(the overview shows it, orange). The switch is in the TPM (NV index
+`0x01803000`, the boot settings), written with the signing key: no rebuild,
+and the image and PCR 11 stay as they are. Nothing of `control.conf` goes into the image; the
 gate takes the adapter that comes up and waits as long as the code screen
 holds. The gate can be run by hand on the booted system to
 test the radio and the phone without a reboot:

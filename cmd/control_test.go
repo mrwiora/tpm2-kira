@@ -63,7 +63,7 @@ func TestControlSteps(t *testing.T) {
 	c.facts.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u", Signed: true}, {Slot: 1, PCRs: "0e,7e", Fallback: true, Signed: true}}
 	c.facts.Status.Devices = []LuksDeviceStatus{{Device: "/dev/sda2", Keyslots: []KeyslotStatus{{Keyslot: 0}}}}
 	steps = c.steps()
-	if len(steps) != 9 || steps[2].Key != "route" || steps[3].Key != "slot:0" || steps[4].Key != "attest" ||
+	if len(steps) != 10 || steps[8].Key != "debug" || steps[2].Key != "route" || steps[3].Key != "slot:0" || steps[4].Key != "attest" ||
 		steps[5].Key != "luks-remote" || steps[6].Key != "slot:1" || steps[7].Key != "luks-salt" {
 		t.Fatalf("the tree: %+v", steps)
 	}

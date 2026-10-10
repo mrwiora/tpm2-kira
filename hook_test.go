@@ -148,7 +148,7 @@ func TestHookPutsNoConfigIntoTheImage(t *testing.T) {
 	}
 	old := filepath.Join(dir, "old.conf")
 	os.WriteFile(old, []byte("TPM2_KIRA_ATTEST_DEBUG=1\n"), 0o600)
-	if out := run(old); !strings.Contains(out, "ERROR") || !strings.Contains(out, "tpm2-kira.debug=1") {
+	if out := run(old); !strings.Contains(out, "ERROR") || !strings.Contains(out, "Debug at boot") {
 		t.Fatalf("a file with a gone setting: %s", out)
 	}
 }

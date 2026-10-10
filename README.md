@@ -496,13 +496,14 @@ A slot is one blob in the TPM: it holds the slot's TOTP key or, once a phone
 is enrolled, the phones instead, under one signature. Two small companions belong
 to it, because they are mechanisms of the TPM and not data: an index the TPM
 can lock for the rest of the boot, and a counter the TPM only lets count up.
-`nvram list` labels all three:
+`nvram list` labels all three, and the machine's boot settings next to them:
 
 | NV index (slot *n*) | What it holds | Written by |
 |---|---|---|
 | `0x01803010` + *n* | the slot's blob: TOTP key or phone enrolment | `seal`, `reseal`, `attest enrol`, `attest unenrol` |
 | `0x01803810` + *n* | the generation index of the TOTP key's policy | `seal`, `reseal` |
 | `0x01803820` + *n* | the record counter of the phone enrolment | `attest enrol`, `attest unenrol` |
+| `0x01803000` | the boot settings: "Debug at boot" (one per machine, only while it is on) | `control` |
 
 Because the phones live in the slot's blob,
 

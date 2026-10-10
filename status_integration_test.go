@@ -223,7 +223,7 @@ func TestConfigCheck(t *testing.T) {
 		"TPM2_KIRA_ATTEST=lazy\n":           "line 1: there is no attestation mode to set",
 		"\nTPM2_KIRA_ATTEST_ADAPTER=eth0\n": "line 2: invalid adapter",
 		"TPM2_KIRA_ATTEST_TIMEOUT=45\n":     "line 1: TPM2_KIRA_ATTEST_TIMEOUT is gone",
-		"TPM2_KIRA_ATTEST_DEBUG=1\n":        "tpm2-kira.debug=1 on the kernel command line",
+		"TPM2_KIRA_ATTEST_DEBUG=1\n":        "Debug at boot",
 		"just words\n":                      "line 1: expected KEY=VALUE",
 	} {
 		path := writeConf(t, content)

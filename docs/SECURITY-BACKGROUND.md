@@ -235,6 +235,21 @@ ordinary index at the same handle could hold any number. Whoever has the owner
 hierarchy can raise the counter, which makes the genuine blob stale until the
 user enrols again: a denial of the phone check, never an accepted blob.
 
+### 3.3a The boot settings
+
+One NV index per machine, `0x01803000` (the free start of the range, below
+the slots), holds the switches the boot reads: today one, debug, which makes
+the code screen and the phone check log every step and put the narrative on
+the console. Format: `[version:1 = 1][flags:1]`, bit 0 debug; another
+version or an unknown flag is refused. It exists only while a switch is on.
+`control` writes it with the signing key (PolicySigned, as the slots'
+blobs), so nobody else can turn on verbose output on the console; anyone
+with TPM access can read it, and it holds nothing secret. It is not
+measured and not signed beyond its write policy: it changes how much is
+logged, never what is trusted. Keeping it in the TPM rather than on the
+kernel command line or in the image means switching it changes neither the
+image nor PCR 11.
+
 ### 3.4 The boot key
 
 The attestation part holds a second TPM key, the *boot key*: an ECC P-256 key

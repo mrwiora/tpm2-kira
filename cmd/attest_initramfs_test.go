@@ -145,7 +145,7 @@ TPM2_KIRA_ATTEST_ADAPTER="hci1"
 	for line, want := range map[string]string{
 		"TPM2_KIRA_ATTEST_TIMEOUT=90\n":      "as long as the code screen holds",
 		"TPM2_KIRA_ATTEST_ADAPTER_WAIT=1m\n": "as long as the code screen holds",
-		"TPM2_KIRA_ATTEST_DEBUG=1\n":         "tpm2-kira.debug=1",
+		"TPM2_KIRA_ATTEST_DEBUG=1\n":         "Debug at boot",
 		"TPM2_KIRA_ATTEST=lazy\n":            "no attestation mode",
 	} {
 		if _, err := parseAttest([]byte(line)); err == nil || !strings.Contains(err.Error(), want) {

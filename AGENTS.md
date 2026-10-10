@@ -72,7 +72,8 @@ It may not carry what came before.
   `control` writes it.** It holds the radio settings and the YubiKey's PIN
   (nothing of it goes into the boot image: the gate there takes the
   adapter that comes up, waits as long as the code screen holds, and
-  logs every step with `tpm2-kira.debug=1` on the kernel command line).
+  logs every step when "Debug at boot" is on - a switch in the TPM, NV
+  index 0x01803000, written by `control` with the signing key).
   How the
   disk's key is made is not configured anywhere: the boot reads it from
   each volume's own LUKS2 header - the tpm2-kira token of a keyslot names

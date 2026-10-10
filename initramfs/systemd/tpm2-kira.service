@@ -63,7 +63,8 @@ StandardOutput=tty
 # the initrd's journald hands it to the system's:
 #   journalctl -b -u tpm2-kira.service
 # stderr carries failures and warnings, which the console shows as well.
-# tpm2-kira.debug=1 on the kernel command line puts the narrative on the
+# "Debug at boot" (the boot settings in the TPM, 'tpm2-kira control') puts
+# the narrative on the
 # console too.
 StandardError=journal+console
 

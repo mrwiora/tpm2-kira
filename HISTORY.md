@@ -353,8 +353,12 @@ wrote the image's file from the parsed configuration, the radio settings
 alone; now nothing of `control.conf` goes into the image at all. The gate
 there takes the adapter that comes up, waits for it and a phone as long
 as the code screen holds (`TPM2_KIRA_ATTEST_TIMEOUT` and `_ADAPTER_WAIT`
-are gone), and logs every step with `tpm2-kira.debug=1` on the kernel
-command line (`TPM2_KIRA_ATTEST_DEBUG` is gone).
+are gone), and logs every step when the boot settings in the TPM say
+debug (`TPM2_KIRA_ATTEST_DEBUG` is gone). For a day that switch was
+`tpm2-kira.debug=1` on the kernel command line; a unified kernel image
+under Secure Boot has a command line nobody can edit at boot, so turning it
+on meant a rebuild and a new PCR 11. It is NV index 0x01803000 now,
+written by `control` with the signing key.
 
 ### The firmware came from the current boot's log alone
 

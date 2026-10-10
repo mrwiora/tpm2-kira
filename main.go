@@ -732,8 +732,8 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 	case "gate":
 		// Nothing is configured: the gate takes the adapter that comes up
 		// (the image carries one adapter's driver), waits for it and for a
-		// phone as long as the code screen holds, and logs every step with
-		// tpm2-kira.debug=1 on the kernel command line.
+		// phone as long as the code screen holds, and logs every step when
+		// the boot settings in the TPM say debug (bootsettings.go).
 		adapter := fs.Int("adapter", -1, "Bluetooth adapter index (hciN); default: the first that comes up")
 		timeout := fs.Duration("timeout", 0, "Give up after this long (0 = as long as the code screen holds, or forever without one)")
 		adapterWait := fs.Duration("adapter-wait", cmd.GateAdapterWait, "Wait this long for the adapter to appear")
@@ -745,7 +745,7 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 		}
 		os.Exit(cmd.AttestGate(cmd.GateOptions{
 			TPMPath: *tpm, SealIndex: slot, Adapter: *adapter, Timeout: *timeout,
-			AdapterWait: *adapterWait, Debug: *debug || cmd.KernelDebug(),
+			AdapterWait: *adapterWait, Debug: *debug || cmd.BootDebug(*tpm),
 			Coordinator: *coordinator,
 		}))
 	case "config-check":

@@ -372,14 +372,14 @@ func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*gateServi
 	if _, err := os.Stat(signerPath); err != nil {
 		return nil, nil // no gate in this image
 	}
-	if KernelDebug() {
-		debug, narrateDebug = true, true // tpm2-kira.debug=1: the narrative on the console too
-	}
 	path := preferResourceManager(tpmPath)
 	tpmDev, err := OpenTPM(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: cannot open the TPM at %s: %v\n", path, err)
 		return nil, nil
+	}
+	if s, err := ReadBootSettings(tpmDev); err == nil && s.Debug {
+		debug, narrateDebug = true, true // the boot settings' debug: the narrative on the console too
 	}
 	l, err := listenGate(socket)
 	if err != nil {

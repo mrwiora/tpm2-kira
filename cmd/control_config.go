@@ -38,7 +38,8 @@ func controlConfigPath() string {
 // and firmware the hooks put into the boot image, and when. Nothing of
 // this file goes into the image; the gate there takes the adapter that
 // comes up and waits as long as the code screen holds, and
-// tpm2-kira.debug=1 on the kernel command line makes it log every step.
+// the boot settings' debug switch in the TPM (bootsettings.go, written by
+// control) makes it log every step.
 type AttestConfig struct {
 	Adapter   int    // TPM2_KIRA_ATTEST_ADAPTER: whose driver goes into the image
 	Bluetooth string // TPM2_KIRA_ATTEST_BLUETOOTH: "auto" (with an enrolled phone), or "always"
@@ -131,7 +132,7 @@ func ParseControlConfig(data []byte) (ControlConfig, error) {
 		case "TPM2_KIRA_ATTEST_TIMEOUT", "TPM2_KIRA_ATTEST_ADAPTER_WAIT":
 			return cfg, fmt.Errorf("control.conf line %d: %s is gone: the gate in the boot image waits for the adapter and a phone as long as the code screen holds. Remove the line", n, key)
 		case "TPM2_KIRA_ATTEST_DEBUG":
-			return cfg, fmt.Errorf("control.conf line %d: TPM2_KIRA_ATTEST_DEBUG is gone: put tpm2-kira.debug=1 on the kernel command line instead (nothing of control.conf goes into the boot image). Remove the line", n)
+			return cfg, fmt.Errorf("control.conf line %d: TPM2_KIRA_ATTEST_DEBUG is gone: switch \"Debug at boot\" in 'tpm2-kira control' instead (a setting in the TPM; nothing of control.conf goes into the boot image). Remove the line", n)
 		default:
 			return cfg, fmt.Errorf("control.conf line %d: unknown key %q", n, key)
 		}

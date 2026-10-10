@@ -895,24 +895,6 @@ func confirmVerifiedBoot(in *bufio.Reader, sealed *SealedBlob, slot uint32, matc
 // wait earlier (runGateRadio's ended).
 const GateAdapterWait = 10 * time.Minute
 
-// KernelDebug reports tpm2-kira.debug=1 (or tpm2-kira.debug) on the kernel
-// command line: in the boot image the gate and the code screen then log
-// every step, and the gate's narrative reaches the console. It is the only
-// switch the image has; nothing of control.conf goes into it.
-func KernelDebug() bool {
-	b, err := os.ReadFile("/proc/cmdline")
-	if err != nil {
-		return false
-	}
-	for _, w := range strings.Fields(string(b)) {
-		switch w {
-		case "tpm2-kira.debug", "tpm2-kira.debug=1", "tpm2-kira.debug=yes", "tpm2-kira.debug=on":
-			return true
-		}
-	}
-	return false
-}
-
 // gateCoordinatorWait is how long the worker waits for the coordinator's
 // socket: both are started at the same moment.
 const gateCoordinatorWait = 30 * time.Second
