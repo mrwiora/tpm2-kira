@@ -53,19 +53,19 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	// not, so the seal step offers exactly that; the unlock step waits
 	// for a keyslot.
 	f.Keys, f.Adapter = "local key files", "hci0"
-	f.Initramfs, f.HookState, f.Rebuild = "mkinitcpio", "", ""
+	f.Initramfs, f.HookState, f.Rebuild, f.NewImage = "mkinitcpio", "", "", ""
 	f.Capped = true
 	var out strings.Builder
 	c := &controller{facts: f, out: &out}
 	steps := c.steps()
-	if steps[2].Key != "seal" || !strings.Contains(steps[2].Explain, "the fallback, is missing") {
-		t.Errorf("the seal step: %+v", steps[2])
+	if steps[2].Key != "route" || !strings.Contains(steps[2].Blocked, "no LUKS device") {
+		t.Errorf("the route step: %+v", steps[2])
 	}
-	if steps[3].Key != "slot:0" || steps[4].Key != "attest" || steps[4].Blocked != "" {
-		t.Errorf("the tree: %+v %+v", steps[3], steps[4])
+	if steps[3].Key != "seal" || !strings.Contains(steps[3].Explain, "the fallback, is missing") {
+		t.Errorf("the seal step: %+v", steps[3])
 	}
-	if steps[7].Key != "unlock" || !strings.Contains(steps[7].Blocked, "needs a keyslot of tpm2-kira's") {
-		t.Errorf("the unlock step: %+v", steps[7])
+	if steps[4].Key != "slot:0" || steps[5].Key != "attest" || steps[5].Blocked != "" {
+		t.Errorf("the tree: %+v %+v", steps[4], steps[5])
 	}
 
 	// The Bluetooth policy writes the file, the one thing control writes.
@@ -114,10 +114,10 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 		t.Errorf("a broken file: attest %q, config %q", f.AttestConf, f.Status.ConfigError)
 	}
 	f.Keys, f.Adapter = "local key files", "hci0"
-	f.Initramfs, f.HookState, f.Rebuild = "mkinitcpio", "", ""
+	f.Initramfs, f.HookState, f.Rebuild, f.NewImage = "mkinitcpio", "", "", ""
 	f.Capped = true
 	c = &controller{facts: f, out: &out}
-	if s := c.steps()[4]; s.Key != "attest" || !strings.HasPrefix(s.Blocked, conf+": ") {
+	if s := c.steps()[5]; s.Key != "attest" || !strings.HasPrefix(s.Blocked, conf+": ") {
 		t.Errorf("the attest step with a broken file: %+v", s)
 	}
 }

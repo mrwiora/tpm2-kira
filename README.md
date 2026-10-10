@@ -189,15 +189,19 @@ commands below are for specific settings, and they touch no configuration
 file: `control` alone writes `/etc/tpm2-kira/control.conf`, the one
 configuration file - the radio settings and the YubiKey's PIN after
 checking it on the token (readable by root alone, left out of the
-initramfs); its "Unlock at boot" step checks that each device's key is
-routed through tpm2-kira, advising the kernel command line or crypttab
-where it is not. Every other file is advised, never edited, with one
-exception, asked for every time: the mkinitcpio step writes sd-tpm2-kira
-into the HOOKS of `/etc/mkinitcpio.conf` when you say so (editing it
-yourself works just as well) and runs `mkinitcpio -P` when asked -
-proposing first, with a Bluetooth adapter at hand, to pack its modules
-into every image (~1.1 MB, deselectable), so enrolling phones later never
-changes the image. Everything but the help needs root; `control` says
+initramfs). Next to the mkinitcpio step sits "Unlock at boot (the key's
+route)": both are wiring checks, green and no longer pickable once in
+place, and the route is the prerequisite of both disk-key steps. Every
+file is advised, never edited, with two exceptions, each asked for every
+time: the mkinitcpio step writes sd-tpm2-kira into the HOOKS of
+`/etc/mkinitcpio.conf` when you say so (editing it yourself works just as
+well) and runs `mkinitcpio -P` when asked - proposing first, with a
+Bluetooth adapter at hand, to pack its modules into every image (~1.1 MB,
+deselectable), so enrolling phones later never changes the image - and
+the route step writes the line it shows into `/etc/kernel/cmdline` (or
+the cmdline.d file, a boot entry's options line, a crypttab line) the
+same way. The two disk-key steps are toggles: enrolled, picking one
+offers the keyslot's removal instead of a second enrolment. Everything but the help needs root; `control` says
 so on its own screen, the commands in a line.
 The overview is a page of its own, the screen cleared each time it is shown;
 what a step prints stays until "Back to the overview?" is answered. Sealing
@@ -224,12 +228,12 @@ without a terminal, `control` prints the overview and exits.
   The phone checks the boot state against what it pinned and shows a code the machine must show too; ...
 ┃   ✓ Signing key  - local key files in /etc/tpm2-kira/keys
 ┃   ✓ mkinitcpio configuration  - sd-tpm2-kira in HOOKS of /etc/mkinitcpio.conf, the image rebuilt
+┃   ✓ Unlock at boot (the key's route)  - the key routed
 ┃   ✓ Slot 0  - sealed to 0e,2e,7e,11u
 ┃ >     Attestation by phone (Marify, Bluetooth LE)
 ┃     - Disk key from password + remote salt (the phone)  - needs the attestation by phone
 ┃   ✓ Slot 1  - the fallback, sealed to 0e,7e
 ┃   • Disk key from password + salt (hashpwd2)
-┃   - Unlock at boot (the key's route, the initramfs)  - needs a keyslot of tpm2-kira's
 ┃     Quit
 ↑ up • ↓ down • enter submit
 ```

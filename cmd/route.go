@@ -34,6 +34,11 @@ type RouteFinding struct {
 	Problem string `json:"problem,omitempty"` // what is wrong, if anything
 	Should  string `json:"should,omitempty"`  // the line as it should read
 	Note    string `json:"note,omitempty"`    // routed: how
+	// Kind says what Should replaces, and so that WriteRouteFix can write
+	// it: "cmdline" (the whole command line of the file), "entry" (the
+	// options line of a boot loader entry), "crypttab" (the volume's
+	// line). "" is a template for a volume named nowhere: advice alone.
+	Kind string `json:"kind,omitempty"`
 }
 
 // luksUUID is the LUKS UUID of a device.
@@ -81,7 +86,10 @@ func cmdlineOf(file string, data []byte) string {
 // AdviseCmdline judges one command line for one volume and says what it
 // should read. A volume not named on it is not this line's business.
 func AdviseCmdline(file, cmdline, uuid string) (RouteFinding, bool) {
-	f := RouteFinding{File: file, UUID: uuid}
+	f := RouteFinding{File: file, UUID: uuid, Kind: "cmdline"}
+	if strings.Contains(file, "/loader/entries/") {
+		f.Kind = "entry"
+	}
 	words := strings.Fields(cmdline)
 	var names, keys []int // indices of the words
 	defaultKey := ""
@@ -143,7 +151,7 @@ func AdviseCmdline(file, cmdline, uuid string) (RouteFinding, bool) {
 // (the socket as the key file of an x-initrd.attach line; Arch) or the
 // Debian form (the keyscript in the options).
 func AdviseCrypttab(file string, data []byte, uuid, device string, debian bool) (RouteFinding, bool) {
-	f := RouteFinding{File: file, UUID: uuid, Device: device}
+	f := RouteFinding{File: file, UUID: uuid, Device: device, Kind: "crypttab"}
 	for _, line := range strings.Split(string(data), "\n") {
 		t := strings.TrimSpace(line)
 		if t == "" || strings.HasPrefix(t, "#") {
@@ -284,6 +292,65 @@ func RouteFindings(devices []string, cmdlines []string, crypttab string) ([]Rout
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Device < out[j].Device })
 	return out, nil
+}
+
+// WriteRouteFix writes a finding's Should into its file: the whole
+// command line of a cmdline file, the options line of a boot loader
+// entry, the volume's line of a crypttab. Only a finding judged from an
+// existing line is written (Kind says which); control asks first, every
+// time, and editing the file yourself works just as well.
+func WriteRouteFix(f RouteFinding) error {
+	if f.Kind == "" || f.Should == "" {
+		return fmt.Errorf("%s: this finding is advice, not a line to write", f.File)
+	}
+	data, err := os.ReadFile(f.File)
+	if err != nil {
+		return err
+	}
+	perm := os.FileMode(0o644)
+	if st, err := os.Stat(f.File); err == nil {
+		perm = st.Mode().Perm()
+	}
+	var out string
+	switch f.Kind {
+	case "cmdline":
+		out = f.Should + "\n"
+	case "entry":
+		lines := strings.Split(string(data), "\n")
+		done := false
+		for i, l := range lines {
+			if fs := strings.Fields(l); len(fs) > 0 && fs[0] == "options" {
+				lines[i] = "options " + f.Should
+				done = true
+				break
+			}
+		}
+		if !done {
+			return fmt.Errorf("%s has no options line to replace", f.File)
+		}
+		out = strings.Join(lines, "\n")
+	case "crypttab":
+		lines := strings.Split(string(data), "\n")
+		done := false
+		for i, l := range lines {
+			fs := strings.Fields(strings.TrimSpace(l))
+			if len(fs) < 2 || strings.HasPrefix(fs[0], "#") {
+				continue
+			}
+			if strings.EqualFold(fs[1], "UUID="+f.UUID) || fs[1] == f.Device || fs[1] == "/dev/disk/by-uuid/"+f.UUID {
+				lines[i] = f.Should
+				done = true
+				break
+			}
+		}
+		if !done {
+			return fmt.Errorf("%s has no line for %s to replace", f.File, f.Device)
+		}
+		out = strings.Join(lines, "\n")
+	default:
+		return fmt.Errorf("unknown finding kind %q", f.Kind)
+	}
+	return os.WriteFile(f.File, []byte(out), perm)
 }
 
 // errRouteProblem: at least one finding has a problem.

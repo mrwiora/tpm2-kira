@@ -128,15 +128,17 @@ vouches for (a phone then trusts this TPM on first use), a loose file
 holding the PIN. Under it the protections, as a tree:
 
   Signing key                                setup (and the YubiKey's PIN, stored)
+  mkinitcpio configuration                   sd-tpm2-kira in HOOKS, the image rebuilt
+  Unlock at boot (the key's route)           rd.luks.key= names the socket (crypttab on Debian)
   TOTP codes at boot (slots 0 and 1)         seal; shown while one of the pair is missing,
                                              slot 0's evaluated PCRs a recommendation to
                                              acknowledge, or custom PCRs instead
   Slot 0                                     picking a slot's line deletes it whole
     Attestation by phone                     attest enrol
-    Disk key from password + remote salt     luks enrol --mode password+remotesalt
+    Disk key from password + remote salt     luks enrol; enrolled, it offers the removal
   Slot 1
-  Disk key from password + salt              luks enrol --mode password+salt (independent of the slots)
-  Unlock at boot                             the key's route; the recipe is the header's
+  Disk key from password + salt              luks enrol (independent of the slots); enrolled,
+                                             it offers the removal
 
 - each done, possible, or blocked with the reason, and the next one
 recommended. The steps run without the commands' advisory warnings (a
@@ -158,16 +160,19 @@ piece by hand, and leave the slot dirty the same way.
 Control alone writes the one configuration file, /etc/tpm2-kira/control.conf:
 the radio settings and the YubiKey's PIN after checking it on the token
 (the file is then root's alone; the hooks leave the PIN out of the
-initramfs). The unlock line checks that every device with a keyslot of
-tpm2-kira's takes its key from tpm2-kira - advising the kernel command
-line (crypttab on Debian) where it does not; those, and every other file,
-stay yours to edit, with one exception, asked for every time: the
-mkinitcpio step writes sd-tpm2-kira into HOOKS when you say so, and runs
+initramfs). The route line checks that every device with a keyslot of
+tpm2-kira's takes its key from tpm2-kira; those files, and every other,
+stay yours to edit, with two exceptions, each asked for every time: the
+mkinitcpio step writes sd-tpm2-kira into HOOKS when you say so and runs
 mkinitcpio -P when asked, proposing first - with a Bluetooth adapter at
 hand - to pack its modules into every image (~1.1 MB, deselectable), so
-enrolling phones later never changes the image. The overview opens with
-the signing key and the mkinitcpio step alone, and the rest appears once
-both are done; only a dirty slot shows through.
+enrolling phones later never changes the image; and the route step
+writes the line it shows into the cmdline file, a boot entry's options
+or crypttab when you say so. Both are checks: in place, they show green
+and cannot be picked. The overview opens with the signing key and the
+mkinitcpio step alone, and the rest appears once both are done (only a
+dirty slot shows through); the route is the prerequisite of both
+disk-key steps.
 Sealing both slots, each QR code gets a cleared screen of its own, held
 until the scan is confirmed: it is shown this once.
 Run again later, it shows the state and what is left. On leaving it

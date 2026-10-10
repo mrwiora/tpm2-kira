@@ -69,6 +69,7 @@ type machineFacts struct {
 	Capped   bool           // 'tpm2-kira cap' ran: this boot went through the code screen
 	NewImage string         // an image was rebuilt after this boot started; "" when not
 	Routed   map[string]bool
+	Route    []RouteFinding // the route's findings, for the step that writes the fixes
 }
 
 // collectFacts is the analysis.
@@ -158,6 +159,7 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	}
 	if len(devices) > 0 {
 		if findings, err := RouteFindings(devices, nil, ""); err == nil {
+			f.Route = findings
 			for _, r := range findings {
 				if r.Routed {
 					f.Routed[r.Device] = true
@@ -227,6 +229,7 @@ type controlStep struct {
 	Blocked     string // "" when it can be done; else why not
 	Dirty       string // "" when nothing is half-gone; else what and where
 	Optional    bool   // not a protection: never the recommendation on its own
+	Check       bool   // a wiring check: pickable only while it is open
 	Child       bool   // indented under the slot line above it
 	SelfConfirm bool   // Run confirms by itself; picked straight even when Done
 	Run         func(c *controller) error
@@ -310,7 +313,7 @@ func (c *controller) steps() []controlStep {
 	// The boot integration is the second foundation: without the hook in
 	// the image there is no code screen, no gate and no key at boot, so
 	// everything else waits behind it.
-	boot := controlStep{Key: "initramfs", Run: (*controller).runInitramfs}
+	boot := controlStep{Key: "initramfs", Check: true, Run: (*controller).runInitramfs}
 	switch f.Initramfs {
 	case "mkinitcpio":
 		boot.Title = "mkinitcpio configuration"
@@ -334,6 +337,39 @@ func (c *controller) steps() []controlStep {
 		boot.Blocked = "neither mkinitcpio nor initramfs-tools found: no code screen at boot"
 	}
 
+	// The key's route sits next to the boot integration: both are wiring,
+	// checked rather than run once they are in place. systemd-cryptsetup
+	// takes a volume's key from tpm2-kira only where rd.luks.key= names
+	// the socket (keyscript= in crypttab on Debian); the disk-key steps
+	// below wait for it.
+	route := controlStep{Key: "route", Title: "Unlock at boot (the key's route)", Check: true,
+		Explain: "systemd-cryptsetup takes a volume's key from tpm2-kira when its rd.luks.key= names the socket (keyscript= in crypttab on Debian). The step shows each line as it should read and writes it when you say so - editing the file yourself works just as well. How the key is made, the boot reads from the volume's own LUKS header.",
+		Run:     (*controller).runRoute}
+	anyRouted := false
+	for _, routed := range f.Routed {
+		anyRouted = anyRouted || routed
+	}
+	var unrouted []string
+	for _, d := range f.Status.Devices {
+		if d.Error != "" || f.Routed[d.Device] {
+			continue
+		}
+		for _, ks := range d.Keyslots {
+			if ks.Token != nil {
+				unrouted = append(unrouted, d.Device)
+				break
+			}
+		}
+	}
+	switch {
+	case len(f.Status.Devices) == 0 || f.Status.DevicesError != "":
+		route.Blocked = "no LUKS device found (root for the headers)"
+	case len(unrouted) > 0:
+		route.Explain += "\nOpen: " + strings.Join(unrouted, ", ") + " not routed through tpm2-kira."
+	case anyRouted:
+		route.Done = "the key routed"
+	}
+
 	steps := []controlStep{keys, boot}
 
 	// Until the signing key exists and the boot integration is wired, the
@@ -345,6 +381,7 @@ func (c *controller) steps() []controlStep {
 		}
 		return steps
 	}
+	steps = append(steps, route)
 
 	// The standard sealing, slots 0 and 1: the step guides to it while one
 	// of the two is missing and seals exactly what lacks; with both in
@@ -424,12 +461,14 @@ func (c *controller) steps() []controlStep {
 		case !f.Capped:
 			attest.Blocked = "this boot did not pass tpm2-kira's code screen (the image at boot was not wired): reboot, then enrol - the phone would otherwise call the boot key refused instead of locked"
 		}
-		luksRemote := controlStep{Key: "luks-remote", Child: true, Title: "Disk key from password + remote salt (the phone)",
-			Explain: "A LUKS keyslot whose key is derived from your password and the salt the phone hands back after it attested the boot: the disk needs the phone, this TPM in an approved boot, and your password.",
+		luksRemote := controlStep{Key: "luks-remote", Child: true, SelfConfirm: true, Title: "Disk key from password + remote salt (the phone)",
+			Explain: "A LUKS keyslot whose key is derived from your password and the salt the phone hands back after it attested the boot: the disk needs the phone, this TPM in an approved boot, and your password. Enrolled, picking it offers the removal.",
 			Run:     func(c *controller) error { return c.runLuks(LuksModePasswordRemoteSalt) }}
 		switch {
 		case !luksDevices:
 			luksRemote.Blocked = "no LUKS device found (root for the headers)"
+		case route.Done == "":
+			luksRemote.Blocked = "needs the key's route (Unlock at boot above)"
 		case attest.Done == "":
 			luksRemote.Blocked = "needs the attestation by phone"
 		case len(boundTo[strong.Slot]) > 0:
@@ -446,67 +485,62 @@ func (c *controller) steps() []controlStep {
 	// in its key, no slot binding in its token, and deleting a slot leaves
 	// it untouched. It coexists with the remote-salt keyslot: at boot the
 	// phone's salt is tried first, the typed salt is the fallback.
-	luksSalt := controlStep{Key: "luks-salt", Title: "Disk key from password + salt (hashpwd2)",
-		Explain: "A LUKS keyslot whose key is derived at boot from a password and a salt you type (Argon2id, 1 GiB); the recovery passphrase stays in its own keyslot. Bound to no slot - deleting a slot leaves it untouched - and it coexists with the remote-salt keyslot, as the typed fallback when the phone is not there.",
+	luksSalt := controlStep{Key: "luks-salt", SelfConfirm: true, Title: "Disk key from password + salt (hashpwd2)",
+		Explain: "A LUKS keyslot whose key is derived at boot from a password and a salt you type (Argon2id, 1 GiB); the recovery passphrase stays in its own keyslot. Bound to no slot - deleting a slot leaves it untouched - and it coexists with the remote-salt keyslot, as the typed fallback when the phone is not there. Enrolled, picking it offers the removal.",
 		Run:     func(c *controller) error { return c.runLuks(LuksModePasswordSalt) }}
 	switch {
 	case !luksDevices:
 		luksSalt.Blocked = "no LUKS device found (root for the headers)"
+	case route.Done == "":
+		luksSalt.Blocked = "needs the key's route (Unlock at boot above): the derived key must reach systemd-cryptsetup"
 	case hasSalt:
 		luksSalt.Done = "a keyslot is enrolled"
 	}
 
-	// The disk unlock's one prerequisite left: every device with a keyslot
-	// of ours takes its key from tpm2-kira (the route). How the key is
-	// made, the boot reads from the LUKS header itself - nothing is
-	// configured. Greyed until a keyslot of ours exists.
-	unlock := controlStep{Key: "unlock", Title: "Unlock at boot (the key's route, the initramfs)",
-		Explain: "A device gets its key from tpm2-kira when its rd.luks.key= (crypttab on Debian) names tpm2-kira's socket; how the key is made, the boot reads from the device's own LUKS header.",
-		Run:     (*controller).runUnlock}
-	anyKeyslot := false
-	var unrouted []string
-	for _, d := range f.Status.Devices {
-		if d.Error != "" {
-			continue
-		}
-		for _, ks := range d.Keyslots {
-			if ks.Token != nil {
-				anyKeyslot = true
-				if !f.Routed[d.Device] {
-					unrouted = append(unrouted, d.Device)
-				}
-				break
-			}
-		}
-	}
-	switch {
-	case !anyKeyslot && len(f.Status.Slots) == 0:
-		unlock.Blocked = "no slot is sealed yet"
-	case !anyKeyslot:
-		unlock.Blocked = "needs a keyslot of tpm2-kira's (the remote salt under slot 0, or the typed salt)"
-	case len(unrouted) == 0:
-		unlock.Done = "the key routed"
-	default:
-		unlock.Explain += "\nOpen: " + strings.Join(unrouted, ", ") + " not routed through tpm2-kira."
-	}
-
-	return append(steps, luksSalt, unlock)
+	return append(steps, luksSalt)
 }
 
-// runUnlock advises the route for the devices that lack it (the kernel
-// command line and crypttab are the person's to change). How the key is
-// made needs no setting: the boot reads it from the LUKS header itself.
-func (c *controller) runUnlock() error {
-	for _, d := range c.facts.Status.Devices {
-		if d.Error != "" || c.facts.Routed[d.Device] {
+// runRoute shows, per unrouted device, the line as it should read and
+// writes it when asked - the same ask-first editing as the mkinitcpio
+// step; a volume named nowhere stays advice. A written command line is in
+// the image on a UKI, so the rebuild is offered after.
+func (c *controller) runRoute() error {
+	wrote, printed := false, false
+	for _, fd := range c.facts.Route {
+		if fd.Routed || fd.Problem == "" || c.facts.Routed[fd.Device] {
 			continue
 		}
-		for _, ks := range d.Keyslots {
-			if ks.Token != nil {
-				fmt.Fprint(c.out, RouteAdvice(d.Device))
-				break
-			}
+		printed = true
+		fmt.Fprintf(c.out, "%s (%s): %s: %s.\n", fd.Device, fd.UUID, fd.File, fd.Problem)
+		if fd.Kind == "" {
+			fmt.Fprintf(c.out, "The line to add, with your root= kept (this one is yours to write):\n\n    %s\n\n", fd.Should)
+			continue
 		}
+		what := map[string]string{"cmdline": "the command line in", "entry": "the options line of", "crypttab": "the volume's line in"}[fd.Kind]
+		fmt.Fprintf(c.out, "As it should read:\n\n    %s\n\nEdit %s %s yourself, or let this step write it.\n\n", fd.Should, what, fd.File)
+		ok, err := c.confirmYes("Write it into "+fd.File+"?", "Only "+what+" "+fd.File+" changes; 'No' leaves the editing to you.")
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		if err := WriteRouteFix(fd); err != nil {
+			return err
+		}
+		fmt.Fprintf(c.out, "%s written.\n\n", fd.File)
+		wrote = true
+	}
+	if !printed {
+		fmt.Fprintln(c.out, "Nothing to route: no LUKS volume is known to the boot yet (rd.luks.name= on the kernel command line, or crypttab).")
+	}
+	if !wrote {
+		return nil
+	}
+	c.ran = true
+	if c.facts.Initramfs == "mkinitcpio" {
+		// A unified kernel image carries the command line: rebuild.
+		return c.offerRebuild()
 	}
 	return nil
 }
@@ -645,6 +679,9 @@ func (c *controller) pick(steps []controlStep) (string, error) {
 			label = indent + bad("!") + " " + s.Title + "  - " + s.Dirty
 		case s.Done != "":
 			label = indent + good("✓") + " " + s.Title + "  - " + s.Done
+			if s.Check {
+				blocked[s.Key] = "in place: " + s.Done
+			}
 		case s.Blocked != "":
 			label = indent + "\033[0;90m-\033[0m " + s.Title + "  - " + s.Blocked
 			blocked[s.Key] = s.Blocked
@@ -1080,7 +1117,41 @@ func (c *controller) runAttest() error {
 	return nil
 }
 
+// runLuks enrols a keyslot of the mode - or, with one enrolled already,
+// offers its removal: the step is a toggle, a second enrolment is not.
 func (c *controller) runLuks(mode string) error {
+	type enrolled struct {
+		device string
+		ks     KeyslotStatus
+	}
+	var have []enrolled
+	for _, d := range c.facts.Status.Devices {
+		for _, ks := range d.Keyslots {
+			if ks.Token != nil && ks.Token.Mode == mode {
+				have = append(have, enrolled{d.Device, ks})
+			}
+		}
+	}
+	if len(have) > 0 {
+		i := 0
+		if len(have) > 1 {
+			var labels []string
+			for _, e := range have {
+				labels = append(labels, fmt.Sprintf("keyslot %d of %s", e.ks.Keyslot, e.device))
+			}
+			var err error
+			if i, err = c.choose("Which keyslot goes?", labels); err != nil {
+				return err
+			}
+		}
+		e := have[i]
+		ok, err := c.confirm(fmt.Sprintf("Remove keyslot %d of %s?", e.ks.Keyslot, e.device),
+			"This keyslot is enrolled already ("+mode+"), so picking the step offers its removal. The key opens nothing afterwards; a remaining passphrase (the recovery one) authorises it, and enrolling anew is this same step.")
+		if err != nil || !ok {
+			return errors.New("not confirmed")
+		}
+		return LuksRemove(LuksRemoveOptions{Device: e.device, Keyslot: e.ks.Keyslot})
+	}
 	var devices []string
 	for _, d := range c.facts.Status.Devices {
 		if d.Error == "" {

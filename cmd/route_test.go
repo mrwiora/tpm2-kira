@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -63,5 +65,48 @@ func TestAdviseCrypttab(t *testing.T) {
 	}
 	if _, ok = AdviseCrypttab("/etc/crypttab", []byte("other UUID=1111 none luks\n"), routeUUID, "/dev/vda2", false); ok {
 		t.Error("another volume's line taken")
+	}
+}
+
+// WriteRouteFix writes exactly the line a finding's Should names: the
+// whole command line of a cmdline file, the options line of a boot
+// loader entry, the volume's line of a crypttab - and nothing else.
+func TestWriteRouteFix(t *testing.T) {
+	dir := t.TempDir()
+
+	cmdline := filepath.Join(dir, "cmdline")
+	os.WriteFile(cmdline, []byte("quiet rd.luks.name=AB=cryptroot root=/dev/mapper/cryptroot\n"), 0o644)
+	f := RouteFinding{File: cmdline, Kind: "cmdline", Should: "quiet rd.luks.name=AB=cryptroot rd.luks.key=AB=" + DefaultUnlockSocket + " root=/dev/mapper/cryptroot"}
+	if err := WriteRouteFix(f); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(cmdline); string(b) != f.Should+"\n" {
+		t.Fatalf("cmdline: %q", b)
+	}
+
+	entry := filepath.Join(dir, "arch.conf")
+	os.WriteFile(entry, []byte("title Arch\nlinux /vmlinuz\noptions quiet rd.luks.name=AB=cryptroot\n"), 0o644)
+	f = RouteFinding{File: "/boot/loader/entries/arch.conf", Kind: "entry", Should: "quiet rd.luks.name=AB=cryptroot rd.luks.key=AB=" + DefaultUnlockSocket}
+	f.File = entry
+	if err := WriteRouteFix(f); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(entry); string(b) != "title Arch\nlinux /vmlinuz\noptions "+f.Should+"\n" {
+		t.Fatalf("entry: %q", b)
+	}
+
+	crypttab := filepath.Join(dir, "crypttab")
+	os.WriteFile(crypttab, []byte("# c\nother UUID=XY none luks\ncryptroot UUID=AB none luks\n"), 0o644)
+	f = RouteFinding{File: crypttab, Kind: "crypttab", UUID: "AB", Should: "cryptroot UUID=AB " + DefaultUnlockSocket + " luks,x-initrd.attach"}
+	if err := WriteRouteFix(f); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(crypttab); string(b) != "# c\nother UUID=XY none luks\n"+f.Should+"\n" {
+		t.Fatalf("crypttab: %q", b)
+	}
+
+	// A template (a volume named nowhere) is advice, never written.
+	if err := WriteRouteFix(RouteFinding{File: cmdline, Should: "x ..."}); err == nil {
+		t.Fatal("a template was written")
 	}
 }

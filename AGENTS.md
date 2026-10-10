@@ -77,10 +77,12 @@ It may not carry what came before.
   no rebuild for one. `setup`, `seal`, `luks enrol` and the rest do their
   one thing; `tpm2-kira control` checks the prerequisites of a working
   setup. Every other file on the system - the kernel command line,
-  crypttab - is advised by `control`, never edited, with one exception
-  asked for every time: the HOOKS of `/etc/mkinitcpio.conf` (its
+  crypttab - is advised by `control`, never edited, with two exceptions,
+  each asked for every time: the HOOKS of `/etc/mkinitcpio.conf` (its
   mkinitcpio step writes sd-tpm2-kira in when the person says so, and runs
-  mkinitcpio -P when asked). `control`'s status judges line by line - green
+  mkinitcpio -P when asked), and the key's route (the route step writes
+  the shown line into the cmdline file, a boot entry's options or
+  crypttab when the person says so). `control`'s status judges line by line - green
   what is good, red what is not with the risk in brackets (SHA-1, Secure
   Boot off or in Setup Mode, an unvouched endorsement key, a selection
   without the kernel, a loose file holding the PIN); there is no separate
