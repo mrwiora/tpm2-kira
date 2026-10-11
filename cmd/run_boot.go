@@ -481,7 +481,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 	// separator), and a key made ends the hold on its own. The attempt
 	// lasts as long as the hold.
 	vaultCtx, endVault := context.WithCancel(context.Background())
-	vault := startVaultKeys(vaultCtx, tpmPath, os.Stdout, debug)
+	vault := startVaultKeys(vaultCtx, tpmPath, os.Stdout, unlockLogger(debug), debug)
 	var vaultKey func(string) ([]byte, error)
 	if vault != nil {
 		vaultKey = vault.forVolume

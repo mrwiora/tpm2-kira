@@ -316,9 +316,10 @@ type vaultKeys struct {
 
 // startVaultKeys opens, in the background, the key of every slot with the
 // vault method - while the code screen holds, because the parts open only
-// in the approved boot state; ctx ends with the hold. Nil when no slot has
-// the method.
-func startVaultKeys(ctx context.Context, tpmPath string, out io.Writer, debug bool) *vaultKeys {
+// in the approved boot state; ctx ends with the hold. What happens goes to
+// out (the console) and to log (the boot's log). Nil when no slot has the
+// method.
+func startVaultKeys(ctx context.Context, tpmPath string, out io.Writer, log func(string), debug bool) *vaultKeys {
 	tpmDev, err := OpenTPM(preferResourceManager(tpmPath))
 	if err != nil {
 		return nil
@@ -334,16 +335,21 @@ func startVaultKeys(ctx context.Context, tpmPath string, out io.Writer, debug bo
 		defer tpmDev.Close()
 		for _, vs := range slots {
 			n := SlotNumber(vs.idx)
-			say := func(s string) { fmt.Fprintf(out, "%s Slot #%d: %s\n", kiraTag(tagYellow), n, s) }
+			say := func(s string) {
+				fmt.Fprintf(out, "%s Slot #%d: %s\n", kiraTag(tagYellow), n, s)
+				log(fmt.Sprintf("vault: slot %d: %s", n, s))
+			}
 			say(fmt.Sprintf("asking the vault at %s for the disk's remote part ...", vs.att.Vault.URL))
 			key, err := openVaultKey(ctx, tpmDev, vs, say)
 			if err != nil {
 				vk.errs[n] = err
 				fmt.Fprintf(out, "%s \033[0;31mSlot #%d: no key from the vault:\033[0m %v\n", kiraTag(tagYellow), n, err)
+				log(fmt.Sprintf("vault: slot %d: no key: %v", n, err))
 				continue
 			}
 			vk.keys[n] = key
 			fmt.Fprintf(out, "%s \033[0;32mSlot #%d: the vault released the remote part; the disk's key is made.\033[0m\n", kiraTag(tagYellow), n)
+			log(fmt.Sprintf("vault: slot %d: released; the key is made", n))
 		}
 	}()
 	return vk

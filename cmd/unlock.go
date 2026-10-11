@@ -151,7 +151,7 @@ func (s *unlockServer) answer(c net.Conn) {
 	<-s.gate
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.log(fmt.Sprintf("unlock: asking at the prompt for %s", req.Volume))
+	s.log(fmt.Sprintf("unlock: making the key for %s, as its header says", req.Volume))
 	s.prompting.Store(true)
 	key, err := s.key(req.Volume)
 	s.prompting.Store(false)
