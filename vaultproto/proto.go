@@ -1,5 +1,5 @@
 // Package vaultproto is the contract between tpm2-kira and tpm2-kira-vault
-// (docs/VAULT.md): the messages of the vault's REST interface, and the
+// (docs/REMOTE-UNLOCK.md): the messages of the vault's REST interface, and the
 // check the vault makes before it releases a machine's remote part.
 //
 // The disk's key of a keyslot in mode tpm+vault is made of two parts. The
@@ -156,7 +156,7 @@ const (
 type ReleaseResponse struct {
 	Status     string   `json:"status"`
 	Remote     *Wrapped `json:"remote,omitempty"`
-	Pepper     []byte   `json:"pepper,omitempty"` // reserved: an operator's pepper (docs/VAULT.md)
+	Pepper     []byte   `json:"pepper,omitempty"` // reserved: an operator's pepper (docs/REMOTE-UNLOCK.md)
 	RetryAfter int      `json:"retry_after,omitempty"`
 	Reason     string   `json:"reason,omitempty"`
 }

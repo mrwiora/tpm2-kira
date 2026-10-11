@@ -173,7 +173,7 @@ _add_bluetooth() {
     plain "tpm2-kira: Bluetooth attestation via hci$adapter: ${#modules[@]} modules, $nfw firmware files"
 }
 
-# The network and the SSH server of the image (docs/REMOTE-SSH.md), from
+# The network and the SSH server of the image (docs/SSH.md), from
 # control.conf's TPM2_KIRA_NET_* and TPM2_KIRA_SSH_*: independent of
 # /etc/systemd/network, which is the running system's. 'tpm2-kira remote
 # initramfs' writes the files (the systemd-networkd file, the sealed SSH
@@ -338,7 +338,7 @@ The hook will:
   the matched interface's driver, configured from control.conf alone; with
   TPM2_KIRA_SSH=on also tpm2-kira's own SSH server, run unprivileged: the
   codes are confirmed and the password typed in an SSH session, the console
-  says where to log in (docs/REMOTE-SSH.md). The SSH host key (the system's
+  says where to log in (docs/SSH.md). The SSH host key (the system's
   OpenSSH ed25519 key by default) is sealed to this TPM at every build,
   bound to PCR 0 and 7; the image holds no usable copy
 - If a phone is enrolled: add the Bluetooth adapter's driver modules and

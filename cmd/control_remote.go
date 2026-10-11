@@ -12,7 +12,7 @@ import (
 )
 
 // control's step for the boot image's network and SSH server
-// (remote_config.go, docs/REMOTE-SSH.md): the settings are asked one by
+// (remote_config.go, docs/SSH.md): the settings are asked one by
 // one, proposed from what is set or, the first time, from the running
 // system's network configuration (systemd-networkd or ifupdown), then
 // written into control.conf and the image rebuilt. Nothing of it is on

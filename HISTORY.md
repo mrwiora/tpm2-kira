@@ -22,7 +22,7 @@ hold the OS separator had made the key's policy unsatisfiable, and the
 remote admin got no code. Now the process that holds the boot listens
 itself, so the confirmation in a session is the release, and the
 network is configured for the image alone in control.conf
-(docs/REMOTE-SSH.md).
+(docs/SSH.md).
 
 ### The SSH server was tinysshd
 

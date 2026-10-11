@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-// The network and the SSH server of the boot image (docs/REMOTE-SSH.md):
+// The network and the SSH server of the boot image (docs/SSH.md):
 // the TPM2_KIRA_NET_* and TPM2_KIRA_SSH_* lines of control.conf. They are
 // set for the image alone and do not depend on /etc/systemd/network or
 // /etc/network/interfaces, which configure the running system ('tpm2-kira

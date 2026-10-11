@@ -1,7 +1,7 @@
 # PLAN — Remote Unlocking
 
 > **Status:** draft / design. Its first shape is implemented differently, as
-> [VAULT.md](VAULT.md): the disk's key from a local part in the machine's TPM
+> [REMOTE-UNLOCK.md](REMOTE-UNLOCK.md): the disk's key from a local part in the machine's TPM
 > and a remote part the vault releases, both under the slot's approved
 > policy; no passphrase is handed out.
 > **Depends on:** [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md)

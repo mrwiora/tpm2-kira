@@ -656,7 +656,7 @@ func runVault(args []string, tpmPath string, debugFlag bool) {
 
 const vaultUsage = `tpm2-kira vault enrol | status | unenrol [options]
 
-The disk's key from two TPMs (docs/VAULT.md, unlock mode tpm+vault): a
+The disk's key from two TPMs (docs/REMOTE-UNLOCK.md, unlock mode tpm+vault): a
 local part kept in this machine's TPM and a remote part kept by
 tpm2-kira-vault, each opening only in a boot state the slot's signing key
 approved. The vault releases its part to a fresh quote of such a state;

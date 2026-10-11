@@ -54,7 +54,7 @@ slot's TOTP key or its phones, never both (*TOTP key or phones*, below).
 Remote attestation is an optional part of the same blob,
 and within that part the way a verifier reaches the machine is a typed
 *method*: phones over Bluetooth LE, and tpm2-kira-vault over HTTPS
-(VAULT.md). The blob contains:
+(REMOTE-UNLOCK.md). The blob contains:
 
 | Field               | Content                                                         | Sensitive? |
 |---------------------|-----------------------------------------------------------------|------------|
@@ -97,7 +97,7 @@ Method 1, phones over Bluetooth LE (`Phone`):
 | `AdvKey`        | Key that lets an enrolled phone recognise the machine's advertising  | **Yes**⁵   |
 | `Verifiers`     | Up to 8 phones: id, anchor public key (signs the phone's verdicts), channel public key, policy id; no name | No |
 
-Method 2, tpm2-kira-vault (`Vault`, VAULT.md), created by `vault enrol`:
+Method 2, tpm2-kira-vault (`Vault`, REMOTE-UNLOCK.md), created by `vault enrol`:
 
 | Field           | Content                                                              | Sensitive? |
 |-----------------|----------------------------------------------------------------------|------------|

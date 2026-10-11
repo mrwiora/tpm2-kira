@@ -664,45 +664,32 @@ defined in [docs/PROTOCOL-BLE.md](docs/PROTOCOL-BLE.md), the design in
 ## The code screen over SSH (Arch and Debian, experimental)
 
 The boot image can bring up its own network, and tpm2-kira then runs its
-own SSH server with the code screen - the protocol in a process without
-privileges, namespaces or file access of its own: log in as root, compare the
-code, press Enter and type the disk's password in the session. The
-console shows where to log in; Enter at the console continues there and
-stops the SSH server. Both the network and SSH are off until turned on.
+own, unprivileged SSH server with the code screen: log in as root, confirm
+the code, type the disk's password there. Off until turned on.
 
 ```bash
-sudo tpm2-kira control      # "Network and SSH at boot": DHCP or static, proposed
-                            # from /etc/systemd/network or /etc/network/interfaces;
-                            # SSH only when you say yes; rebuilds the image
+sudo tpm2-kira control      # "Network and SSH at boot"
 ssh root@<address shown on the console>
 ```
 
-The settings live in `/etc/tpm2-kira/control.conf` (`TPM2_KIRA_NET_*`,
-`TPM2_KIRA_SSH_*`), independent of the running system's network
-configuration. The SSH host key - the system's OpenSSH ed25519 key by
-default, so `known_hosts` needs no second entry - goes into the image only
-sealed to the TPM, bound to PCR 0 and 7, and is unsealed at the code
-screen. Details and limits: [docs/REMOTE-SSH.md](docs/REMOTE-SSH.md).
+Everything about it - settings, the image build on both distributions,
+the privilege separation, the host key sealed to PCR 0+7, the boot flow,
+tests and limits: [docs/SSH.md](docs/SSH.md).
 
 ## Unattended unlock with a vault (experimental)
 
-A keyslot in mode `tpm+vault` opens without anybody typing: its key is
-made from a local part kept in this machine's TPM and a remote part kept
-by [tpm2-kira-vault](../tpm2-kira-vault), a separate service with a TPM of
-its own. Both parts open only in a boot state your signing key approved,
-before the boot is capped. The vault releases its part only to a fresh
-TPM quote of such a state, and stops releasing it for a machine you
-revoke there. Without the vault, the recovery passphrase in its own
-keyslot opens the disk at cryptsetup's prompt.
+A keyslot in mode `tpm+vault` opens without anybody typing: a local part
+in this machine's TPM and a remote part from
+[tpm2-kira-vault](../tpm2-kira-vault), both opening only in a boot state
+your signing key approved. Revoked on the vault, the machine no longer
+unlocks; without the vault, the recovery passphrase does.
 
 ```bash
-# on the vault:   tpm2-kira-vault token create --name db-03   (prints the line below)
-sudo tpm2-kira luks enrol /dev/sda2 --mode tpm+vault \
-    --url https://vault:8443 --pin sha256:… --token …
+sudo tpm2-kira luks enrol /dev/sda2 --mode tpm+vault --url https://vault:8443 --pin sha256:… --token …
 ```
 
-The boot image needs its network (`tpm2-kira control`, "Network and SSH at
-boot"). Design, protocol and threats: [docs/VAULT.md](docs/VAULT.md).
+Everything about it - the design, setting up both sides, the protocol,
+the vault's rules and recovery, threats, tests: [docs/REMOTE-UNLOCK.md](docs/REMOTE-UNLOCK.md).
 
 ## Early Boot Integration (Arch Linux / mkinitcpio)
 

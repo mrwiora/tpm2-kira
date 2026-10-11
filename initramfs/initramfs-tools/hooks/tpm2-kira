@@ -131,7 +131,7 @@ DEPS
     fi
 fi
 
-# The network and tpm2-kira's own SSH server at boot (docs/REMOTE-SSH.md),
+# The network and tpm2-kira's own SSH server at boot (docs/SSH.md),
 # only when /etc/tpm2-kira/control.conf turns them on (TPM2_KIRA_NET,
 # TPM2_KIRA_SSH; both off by default). 'remote initramfs' writes
 # /etc/tpm2-kira/remote.conf, the sealed host key and the keys that may log

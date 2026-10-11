@@ -1,6 +1,6 @@
 package cmd
 
-// The SSH host key of the boot image, sealed to the TPM (docs/REMOTE-SSH.md).
+// The SSH host key of the boot image, sealed to the TPM (docs/SSH.md).
 //
 // The image is unencrypted, so a host key stored in it serves anyone who
 // can read /boot to impersonate the machine. Instead the image build

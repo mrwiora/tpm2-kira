@@ -1,7 +1,7 @@
 package cmd
 
 // 'tpm2-kira remote serve': the SSH server of the code screen, in a
-// process of its own without privileges (docs/REMOTE-SSH.md).
+// process of its own without privileges (docs/SSH.md).
 //
 // 'run' holds the TPM, the disk's key and the code screen; it must not
 // parse what arrives from the network before a login. So it opens the

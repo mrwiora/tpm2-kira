@@ -1,7 +1,7 @@
 package cmd
 
 // The disk's key from two TPMs: the local part in this machine's TPM, the
-// remote part kept by tpm2-kira-vault (docs/VAULT.md, package vaultproto).
+// remote part kept by tpm2-kira-vault (docs/REMOTE-UNLOCK.md, package vaultproto).
 //
 // Both parts are 32 random bytes, wrapped (TPM2_MakeCredential) for this
 // TPM's EK and the slot's release key: they open only through the release
@@ -44,7 +44,7 @@ const vaultInfo = "tpm2-kira/vault/v1"
 // VaultKey derives a tpm+vault keyslot's key: 64 lowercase hexadecimal
 // characters, HKDF-SHA256(L ‖ R [‖ pepper], info = vaultInfo ‖ lp(label)
 // [‖ "pepper"]). The pepper is reserved for a device the vault releases
-// only with an operator's pepper (docs/VAULT.md §8); nil without.
+// only with an operator's pepper (docs/REMOTE-UNLOCK.md §12); nil without.
 func VaultKey(local, remote []byte, label string, pepper []byte) []byte {
 	if label == "" {
 		label = "luks"

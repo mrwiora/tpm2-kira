@@ -61,6 +61,8 @@ Where things are in the repository, and how the tests are run.
 │   └── vulncheck-ignore      # Records the Go vulnerability database has wrong, with the proof
 ├── docs/
 │   ├── PROTOCOL-BLE.md           # Phone <-> machine protocol: the interface definition
+│   ├── SSH.md                    # SSH in the boot image: the code screen over the network
+│   ├── REMOTE-UNLOCK.md          # tpm+vault: the disk's key from this TPM and tpm2-kira-vault
 │   ├── PLAN-*.md                 # Designs: remote attestation, BLE, remote unlocking, factor release, the test host (PLAN-BLE-TESTING)
 │   ├── mobile/                   # Agent prompts for the Android and iOS apps
 │   ├── PLATFORM-OBSERVATIONS.md  # Measured facts about Arch and Debian boots

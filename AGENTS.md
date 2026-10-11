@@ -73,7 +73,7 @@ It may not carry what came before.
   and the boot image's network and SSH server (TPM2_KIRA_NET_*,
   TPM2_KIRA_SSH_*: the one part the image build turns into files of the
   image - a networkd file, a unit drop-in - through `tpm2-kira remote
-  initramfs`; the file itself never goes in, docs/REMOTE-SSH.md)
+  initramfs`; the file itself never goes in, docs/SSH.md)
   (nothing else of it reaches the boot image: the gate there takes the
   adapter that comes up, waits as long as the code screen holds, and
   logs every step when "Debug at boot" is on - a switch in the TPM, NV

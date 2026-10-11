@@ -1,6 +1,6 @@
 package cmd
 
-// The SSH server of the code screen (docs/REMOTE-SSH.md). With TPM2_KIRA_SSH
+// The SSH server of the code screen (docs/SSH.md). With TPM2_KIRA_SSH
 // on, the image's tpm2-kira.service runs 'tpm2-kira run --ssh=PORT': the
 // process that holds the boot opens the port and starts 'tpm2-kira remote
 // serve' on it, without privileges (remote_serve.go, remote_privsep.go).

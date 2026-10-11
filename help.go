@@ -54,7 +54,7 @@ THE PHONE (the Marify app, over Bluetooth LE)
                kept by the phone, opened only by this TPM in an approved boot
 
 REMOTE (SSH in the boot image; set in control)
-  remote       session, initramfs: the code screen over SSH, and what the
+  remote       serve, initramfs: the code screen over SSH, and what the
                image build adds for the network and the SSH server
   vault        enrol, status, unenrol: the disk's key from this TPM and
                tpm2-kira-vault, unattended (mode tpm+vault)
@@ -401,7 +401,7 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
 	"remote": `tpm2-kira remote initramfs --buildroot DIR [--format mkinitcpio|initramfs-tools] [--conf PATH] [--tpm PATH]
 tpm2-kira remote serve
 
-The code screen over SSH (docs/REMOTE-SSH.md). The network and the SSH
+The code screen over SSH (docs/SSH.md). The network and the SSH
 server of the boot image are set in /etc/tpm2-kira/control.conf
 (TPM2_KIRA_NET_*, TPM2_KIRA_SSH_*; 'tpm2-kira control' sets them and
 suggests the network from /etc/systemd/network or /etc/network/interfaces).
@@ -456,7 +456,7 @@ tpm2-kira's LUKS keyslots. Every keyslot it adds is marked with a LUKS2
 token in the header (no secret), whose type carries the mode, so a plain
 luksDump tells them apart: tpm2-kira-salt is password+salt,
 tpm2-kira-remotesalt is password+remotesalt, tpm2-kira-vault is tpm+vault
-(docs/VAULT.md). status, removal and rotation
+(docs/REMOTE-UNLOCK.md). status, removal and rotation
 know the keyslots by it, and the boot reads the key's recipe from it; a
 token of ours without a keyslot is named as a leftover, with the
 'cryptsetup token remove' that takes it. A password+remotesalt or tpm+vault
