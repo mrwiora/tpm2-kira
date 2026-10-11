@@ -14,11 +14,13 @@ import (
 
 // The network and the SSH server of the boot image (docs/REMOTE-SSH.md):
 // the TPM2_KIRA_NET_* and TPM2_KIRA_SSH_* lines of control.conf. They are
-// set for the image alone and do not depend on /etc/systemd/network, which
-// configures the running system ('tpm2-kira control' only reads it for a
-// suggestion). The image build turns them into a systemd-networkd file and
-// a drop-in of tpm2-kira.service ('tpm2-kira remote initramfs', called by
-// the mkinitcpio hook); control.conf itself stays out of the image. The
+// set for the image alone and do not depend on /etc/systemd/network or
+// /etc/network/interfaces, which configure the running system ('tpm2-kira
+// control' only reads them for a suggestion). The image build ('tpm2-kira
+// remote initramfs', called by the hooks) turns them into a systemd-networkd
+// file and a drop-in of tpm2-kira.service (mkinitcpio), or into
+// /etc/tpm2-kira/remote.conf for the boot scripts (initramfs-tools);
+// control.conf itself stays out of the image. The
 // network is its own setting because more than the SSH server will use it
 // (an outgoing request for the remote salt, PLAN-REMOTEUNLOCKING.md).
 
@@ -244,6 +246,7 @@ func setRemoteConfig(path string, r RemoteConfig) error {
 var (
 	sysClassNet       = "/sys/class/net"
 	systemdNetworkDir = "/etc/systemd/network"
+	ifupdownFile      = "/etc/network/interfaces"
 )
 
 // netInterface is a physical network interface of this machine.
@@ -307,7 +310,8 @@ func (n NetConfig) matchedInterfaces() []netInterface {
 // SuggestNetwork proposes the image's network from the running system's
 // systemd-networkd configuration: the first .network file that sets DHCP
 // or an address, matched by the MAC of the interface it names (the image
-// may name the interface differently). Without such a file, DHCP on the
+// may name the interface differently). Without one, from ifupdown's
+// /etc/network/interfaces (Debian); without that either, DHCP on the
 // first wired interface. The second value says where it comes from.
 func SuggestNetwork() (NetConfig, string) {
 	files, _ := filepath.Glob(filepath.Join(systemdNetworkDir, "*.network"))
@@ -342,9 +346,12 @@ func SuggestNetwork() (NetConfig, string) {
 		}
 		return s, filepath.Base(f)
 	}
+	if s, ok := suggestFromIfupdown(ifaces); ok {
+		return s, ifupdownFile
+	}
 	for _, it := range ifaces {
 		if !it.Wireless {
-			return NetConfig{Mode: "dhcp", Match: it.MAC}, "no systemd-networkd configuration; DHCP on " + it.Name
+			return NetConfig{Mode: "dhcp", Match: it.MAC}, "no network configuration found; DHCP on " + it.Name
 		}
 	}
 	return NetConfig{Mode: "dhcp"}, "no wired interface found"
@@ -441,4 +448,127 @@ func (n NetConfig) Describe() string {
 		return s
 	}
 	return "off"
+}
+
+// suggestFromIfupdown proposes from the first wired interface of this
+// machine that /etc/network/interfaces (and the files it sources) brings
+// up by DHCP or with a static address (interfaces(5)): "iface NAME inet
+// dhcp|static" with address, netmask, gateway, dns-nameservers, plus
+// "iface NAME inet6 static" addresses.
+func suggestFromIfupdown(ifaces []netInterface) (NetConfig, bool) {
+	stanzas := map[string]*NetConfig{}
+	var order []string
+	var cur *NetConfig
+	var netmask string // for the address of the current inet stanza
+	finish := func() {
+		if cur != nil && netmask != "" && len(cur.Addresses) > 0 && !strings.Contains(cur.Addresses[len(cur.Addresses)-1], "/") {
+			if ones, _ := net.IPMask(net.ParseIP(netmask).To4()).Size(); ones > 0 {
+				cur.Addresses[len(cur.Addresses)-1] += "/" + strconv.Itoa(ones)
+			}
+		}
+		netmask = ""
+	}
+	var read func(path string, depth int)
+	read = func(path string, depth int) {
+		f, err := os.Open(path)
+		if err != nil || depth > 3 {
+			return
+		}
+		defer f.Close()
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			w := strings.Fields(sc.Text())
+			if len(w) == 0 || strings.HasPrefix(w[0], "#") {
+				continue
+			}
+			switch {
+			case w[0] == "source" && len(w) > 1:
+				finish()
+				cur = nil
+				files, _ := filepath.Glob(w[1])
+				sort.Strings(files)
+				for _, f := range files {
+					read(f, depth+1)
+				}
+			case w[0] == "iface" && len(w) >= 4:
+				finish()
+				cur = nil
+				name, family, method := w[1], w[2], w[3]
+				if family != "inet" && family != "inet6" {
+					continue
+				}
+				n := stanzas[name]
+				if n == nil {
+					n = &NetConfig{}
+					stanzas[name] = n
+					order = append(order, name)
+				}
+				switch {
+				case family == "inet" && method == "dhcp":
+					n.Mode = "dhcp"
+				case method == "static" && n.Mode != "dhcp":
+					n.Mode = "static"
+				}
+				if method == "static" {
+					cur = n
+				}
+			case w[0] == "auto" || w[0] == "allow-hotplug" || strings.HasPrefix(w[0], "allow-") || w[0] == "mapping":
+				finish()
+				cur = nil
+			case cur != nil && len(w) > 1:
+				switch w[0] {
+				case "address":
+					finish()
+					if ip := net.ParseIP(w[1]); ip != nil {
+						cur.Addresses = append(cur.Addresses, w[1]) // the prefix from netmask, or none
+					} else if _, _, err := net.ParseCIDR(w[1]); err == nil {
+						cur.Addresses = append(cur.Addresses, w[1])
+					}
+				case "netmask":
+					if strings.Contains(w[1], ".") {
+						netmask = w[1]
+					} else if len(cur.Addresses) > 0 && !strings.Contains(cur.Addresses[len(cur.Addresses)-1], "/") {
+						cur.Addresses[len(cur.Addresses)-1] += "/" + w[1]
+					}
+				case "gateway":
+					if net.ParseIP(w[1]) != nil {
+						cur.Gateways = append(cur.Gateways, w[1])
+					}
+				case "dns-nameservers":
+					for _, d := range w[1:] {
+						if net.ParseIP(d) != nil {
+							cur.DNS = append(cur.DNS, d)
+						}
+					}
+				}
+			}
+		}
+		finish()
+	}
+	read(ifupdownFile, 0)
+	for _, name := range order {
+		n := stanzas[name]
+		if n.Mode == "" {
+			continue
+		}
+		for _, it := range ifaces {
+			if it.Wireless || !globMatch(name, it.Name) {
+				continue
+			}
+			s := NetConfig{Mode: n.Mode, Match: it.MAC, DNS: n.DNS}
+			if n.Mode == "static" {
+				for _, a := range n.Addresses {
+					if _, _, err := net.ParseCIDR(a); err == nil {
+						s.Addresses = append(s.Addresses, a)
+					}
+				}
+				if len(s.Addresses) == 0 {
+					continue // an address without its prefix: no proposal
+				}
+				s.Gateways = n.Gateways
+			}
+			return s, true
+		}
+	}
+	return NetConfig{}, false
 }

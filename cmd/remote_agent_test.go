@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // askFile writes a question as systemd-ask-password does, and listens on
@@ -97,4 +99,68 @@ func TestReadPasswordQuestion(t *testing.T) {
 	if err != nil || q.socket != "/x" || q.message != "m" || !q.expired() {
 		t.Fatalf("%+v %v", q, err)
 	}
+}
+
+// fakeAskpass makes dir/proc/PID look like initramfs-tools' askpass with
+// the FIFO open, started at start, asking prompt.
+func fakeAskpass(t *testing.T, dir string, pid int, start, prompt string) string {
+	t.Helper()
+	p := filepath.Join(dir, "proc", fmt.Sprint(pid))
+	os.MkdirAll(filepath.Join(p, "fd"), 0o755)
+	os.Symlink(askpassBin, filepath.Join(p, "exe"))
+	os.Symlink(askpassFIFO, filepath.Join(p, "fd", "3"))
+	os.WriteFile(filepath.Join(p, "cmdline"), []byte("/lib/cryptsetup/askpass\x00"+prompt+"\x00"), 0o644)
+	setStart(t, p, start)
+	return p
+}
+
+func setStart(t *testing.T, p, start string) {
+	t.Helper()
+	// pid (comm) state, then fields 4..21, then starttime (22).
+	os.WriteFile(filepath.Join(p, "stat"), []byte("1 (ask pass) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 "+start+" 0 0\n"), 0o644)
+}
+
+// initramfs-tools: cryptsetup's own askpass is found by its open FIFO and
+// asked in the session; the answer goes into the FIFO. One that ends
+// while it is asked (answered at the console) is withdrawn.
+func TestRemoteAnswersAskpass(t *testing.T) {
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	oldProc, oldBin, oldFIFO, oldDir := procDir, askpassBin, askpassFIFO, askPasswordDir
+	procDir, askpassBin, askpassFIFO, askPasswordDir = filepath.Join(dir, "proc"), filepath.Join(dir, "askpass"), filepath.Join(dir, "passfifo"), filepath.Join(dir, "none")
+	t.Cleanup(func() { procDir, askpassBin, askpassFIFO, askPasswordDir = oldProc, oldBin, oldFIFO, oldDir })
+	os.WriteFile(askpassBin, nil, 0o755)
+	if err := unix.Mkfifo(askpassFIFO, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// askpass' end: read and write, so it never sees an end of file.
+	fifo, err := os.OpenFile(askpassFIFO, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fifo.Close() })
+	os.MkdirAll(filepath.Join(dir, "proc", "1"), 0o755) // not askpass
+
+	srv, key, _ := testRemote(t)
+	in, r, _ := login(t, srv, key)
+	for srv.count() < 1 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	in.Write([]byte("\r"))
+	<-srv.releases
+	srv.release(false)
+
+	fakeAskpass(t, dir, 4242, "777", "Please unlock disk vda3_crypt (recovery passphrase): ")
+	until(t, r, "cryptsetup asks: Please unlock disk vda3_crypt (recovery passphrase)")
+	until(t, r, "Passphrase:")
+	in.Write([]byte("hunter2\r"))
+	fifo.SetReadDeadline(time.Now().Add(10 * time.Second))
+	buf := make([]byte, 64)
+	if n, err := fifo.Read(buf); err != nil || string(buf[:n]) != "hunter2" {
+		t.Fatalf("answer %q %v", buf[:n], err)
+	}
+
+	p := fakeAskpass(t, dir, 4243, "900", "Please unlock disk vda3_crypt (recovery passphrase): ")
+	until(t, r, "Passphrase:")
+	setStart(t, p, "901") // ended, and the pid taken again
+	until(t, r, "Answered at the console.")
 }

@@ -275,3 +275,70 @@ _add_remote
 		t.Errorf("no interface matched:\n%s", got)
 	}
 }
+
+// The initramfs-tools hook's network and SSH part: what 'tpm2-kira remote
+// initramfs --format initramfs-tools' prints is added (the driver, or
+// every network driver), a refused setting leaves both out with the
+// reason, and without busybox (ip) the image gets no network.
+func TestDebianHookAddsNetworkAndSSH(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	hook, err := os.ReadFile("initramfs/initramfs-tools/hooks/tpm2-kira")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	funcs := filepath.Join(dir, "hook-functions")
+	os.WriteFile(funcs, []byte(`
+copy_exec() { :; }
+copy_file() { :; }
+manual_add_modules() { echo "MODULE $1"; }
+auto_add_modules() { echo "AUTOMODULES $1"; }
+add_firmware() { :; }
+busybox() { :; }
+tpm2-kira() {
+    case "$1 $2" in
+    "remote initramfs")
+        [ "$3 $4" = "--format initramfs-tools" ] || { echo "FORMAT $3 $4"; return 2; }
+        mkdir -p "$DESTDIR/etc/tpm2-kira"; echo x > "$DESTDIR/etc/tpm2-kira/remote.conf"
+        printf '%s' "$REMOTE_OUT"; return "${REMOTE_RC:-0}" ;;
+    "attest status") echo '[]' ;;
+    esac
+}
+`), 0o644)
+	copyHook := filepath.Join(dir, "hook")
+	os.WriteFile(copyHook, []byte(strings.Replace(string(hook), "/usr/share/initramfs-tools/hook-functions", funcs, 1)), 0o755)
+	run := func(out, rc, busybox string) (string, string) {
+		root := t.TempDir()
+		cmd := exec.Command("sh", copyHook)
+		cmd.Env = append(os.Environ(), "DESTDIR="+root, "REMOTE_OUT="+out, "REMOTE_RC="+rc, "BUSYBOX="+busybox)
+		b, _ := cmd.CombinedOutput()
+		return string(b), root
+	}
+	if got, _ := run("net off\n", "0", "auto"); strings.Contains(got, "network at boot") || strings.Contains(got, "MODULE e") {
+		t.Fatalf("off added something:\n%s", got)
+	}
+	if got, _ := run("tpm2-kira: TPM2_KIRA_SSH=on needs a network in the image\n", "2", "auto"); !strings.Contains(got, "tpm2-kira: no network or SSH in the image: TPM2_KIRA_SSH=on needs a network") {
+		t.Fatalf("a refused setting:\n%s", got)
+	}
+	got, root := run("net dhcp\nmodule e1000e\nssh 22\nhostkey SHA256:abc from /etc/ssh/ssh_host_ed25519_key, sealed to PCR 0+7\n", "0", "auto")
+	for _, want := range []string{"MODULE e1000e", "tpm2-kira: network at boot: dhcp via e1000e", "SSH at boot on port 22", "SSH host key SHA256:abc"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "etc/tpm2-kira/remote.conf")); err != nil {
+		t.Error(err)
+	}
+	if got, _ := run("net static\nmodules-all\nwarning no interface aa:bb:cc:dd:ee:09 on this machine\n", "0", "auto"); !strings.Contains(got, "AUTOMODULES net") || !strings.Contains(got, "tpm2-kira: no interface aa:bb") {
+		t.Errorf("no interface matched:\n%s", got)
+	}
+	got, root = run("net dhcp\nmodule e1000e\n", "0", "n")
+	if !strings.Contains(got, "it needs busybox") || strings.Contains(got, "MODULE e1000e") {
+		t.Errorf("without busybox:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, "etc/tpm2-kira/remote.conf")); err == nil {
+		t.Error("remote.conf stayed in an image without busybox")
+	}
+}

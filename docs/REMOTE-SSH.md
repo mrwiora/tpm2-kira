@@ -1,11 +1,14 @@
 # The code screen over SSH
 
-Arch / mkinitcpio. The boot image brings up a network of its own, and
+Arch (mkinitcpio) and Debian (initramfs-tools). The boot image brings up
+a network of its own, and
 `tpm2-kira run`, the process that holds the boot at the code screen, also
 runs an SSH server, with the SSH protocol in a separate, unprivileged
 process. Whoever logs in sees the codes, confirms them, and types the
 disk's password there. The console says where to log in, and Enter at the
-console continues there instead.
+console continues there instead. Network and SSH are both off until set
+in `control.conf` (by hand or with `tpm2-kira control`, whose SSH question
+defaults to No).
 
 ## Configuration
 
@@ -25,9 +28,9 @@ control` (the "Network and SSH at boot" step):
 | `TPM2_KIRA_SSH_HOSTKEY` | `/etc/ssh/ssh_host_ed25519_key` (the system's OpenSSH key), or an ed25519 key of the image's own (control creates `/etc/tpm2-kira/ssh_host_ed25519_key`). Sealed to the TPM, see below |
 
 The network is configured for the image alone and does not depend on
-`/etc/systemd/network`, which belongs to the running system. control
-reads that directory only to suggest DHCP or the static address, plus
-the MAC of the interface the file names. Match by MAC: in the image,
+`/etc/systemd/network` or `/etc/network/interfaces`, which belong to the
+running system. control reads them only to suggest DHCP or the static
+address, plus the MAC of the interface they name. Match by MAC: in the image,
 interfaces keep their kernel names (`eth0`), not the predictable names of
 the running system. The network has its own setting, apart from SSH,
 because more will use it later: an outgoing request for the remote salt
@@ -35,7 +38,7 @@ because more will use it later: an outgoing request for the remote salt
 
 `control.conf` itself never goes into the image. When the image is
 built, `tpm2-kira remote initramfs --buildroot DIR` (called by the hook)
-turns the settings into files of the image:
+turns the settings into files of the image. On Arch:
 
 - `/etc/systemd/network/10-tpm2-kira.network`. With DHCP it sets
   `ClientIdentifier=mac`, because the image has no machine-id to derive
@@ -48,7 +51,16 @@ turns the settings into files of the image:
   --ssh-hold=S ...`) and lifts `TimeoutStartSec` when the hold has no
   limit.
 
-The hook adds systemd-networkd (enabled, with its user) and the driver
+On Debian (`--format initramfs-tools`) the network and the flags for
+`run` go into one file instead, `/etc/tpm2-kira/remote.conf`, read by
+`scripts/init-premount/tpm2-kira`; the sealed key and the authorized keys
+are the same files.
+
+The mkinitcpio hook adds systemd-networkd (enabled, with its user), the
+initramfs-tools hook nothing but the driver: DHCP is initramfs-tools' own
+klibc `ipconfig` (as for an NFS root or dropbear-initramfs), a static
+address busybox' `ip`, which also takes the network down at the end -
+without busybox in the image the hook adds no network. Both add the driver
 module of the matched interface (every network driver when none matches
 on the build machine). Nothing else: the SSH server is tpm2-kira itself,
 and no shell, SSH daemon or password agent goes into the image. If a
@@ -173,6 +185,33 @@ tpm2-kira.service (holds READY)
 The network comes up in parallel with the code screen: networkd is not
 ordered after the hold.
 
+### On Debian
+
+```
+init-premount/tpm2-kira
+  ├── tpm2-kira run --ssh=PORT ...          (background, as on Arch)
+  └── the network, in the background: waits for the interface (MAC, name, or the
+      first wired one), then ipconfig (DHCP) or ip (static)
+local-top/cryptroot
+  └── keyscript=/lib/cryptsetup/scripts/tpm2-kira: 'tpm2-kira unlock-key' waits on
+      run's socket - the hold is there, until the code is confirmed
+init-bottom/tpm2-kira
+  └── SIGTERM to run (sessions told, 'remote serve' ends), then the interface's
+      addresses and routes flushed and the link set down
+```
+
+Without systemd there is no ask-password: cryptsetup's own prompt is
+`/lib/cryptsetup/askpass` (the keyscript's last try, or Ctrl-C at
+tpm2-kira's prompt). askpass reads the console and the FIFO
+`/lib/cryptsetup/passfifo` at once; `run` finds the askpass process that
+holds the FIFO open, asks its prompt in the session and writes the answer
+into the FIFO, as `cryptroot-unlock` does. The question is gone when that
+process is.
+
+The interface is taken down before the real root takes over: ifupdown or
+NetworkManager configure it again, and an address left from the image
+would stay beside theirs.
+
 ## Known limits
 
 - **PCR 0 and 7 bind the host key to the firmware and the Secure Boot
@@ -187,6 +226,15 @@ ordered after the hold.
   on the console only; whoever logs in remotely after a firmware update
   has to accept an unknown key for that boot.
 - **DHCP may give the image another address than the running system**,
-  because the client identifiers differ. The console shows the address;
-  a reservation by MAC or a static address makes it predictable.
-- Debian / initramfs-tools: not yet.
+  because the client identifiers differ (on the Debian test VM: klibc's
+  `ipconfig` got another lease than dhclient). The console shows the
+  address; a reservation by MAC or a static address makes it predictable.
+- **On Debian with GRUB nothing extends PCR 0-7 after the image**, and
+  with Secure Boot off PCR 7 says little: the sealed host key unseals in
+  the running system too, and in any OS booted on the machine. With the
+  default, the system's own OpenSSH key, that gives nothing away that root
+  does not have already; a key of the image's own is kept out of a
+  readable `/boot` and off other machines, not away from this one.
+- **Debian needs busybox in the image** (initramfs-tools' `BUSYBOX`,
+  default `auto`): its `ip` sets a static address and takes the network
+  down at the end. Without it the hook adds no network and says so.

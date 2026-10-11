@@ -14,13 +14,14 @@ import (
 )
 
 // What the image build adds for the network and the SSH server
-// (control.conf's TPM2_KIRA_NET_* and TPM2_KIRA_SSH_*). The mkinitcpio hook
-// calls 'tpm2-kira remote initramfs --buildroot DIR', which writes the
-// files into the image under construction and prints, one per line, what
-// the hook itself has to add:
+// (control.conf's TPM2_KIRA_NET_* and TPM2_KIRA_SSH_*). The hooks call
+// 'tpm2-kira remote initramfs --buildroot DIR [--format initramfs-tools]',
+// which writes the files into the image under construction and prints,
+// one per line, what the hook itself has to add:
 //
 //	net off                 nothing to add
-//	net dhcp|static         systemd-networkd with its user, enabled
+//	net dhcp|static         mkinitcpio: systemd-networkd with its user, enabled;
+//	                        initramfs-tools: nothing (klibc's ipconfig, busybox's ip)
 //	module NAME             the driver of an interface the network matches
 //	modules-all             no interface matched here: every network driver
 //	ssh PORT                the SSH server ('run' itself; nothing for the hook to add)
@@ -37,12 +38,25 @@ const (
 	imageNetworkFile    = "/etc/systemd/network/10-tpm2-kira.network"
 	ImageAuthorizedKeys = "/root/.ssh/authorized_keys"
 	imageRunDropIn      = "/etc/systemd/system/tpm2-kira.service.d/remote.conf"
+	// imageRemoteConf is initramfs-tools' in place of the two above: read
+	// by the init-premount script, which brings the network up and starts
+	// 'run' with TPM2_KIRA_REMOTE.
+	imageRemoteConf = "/etc/tpm2-kira/remote.conf"
+)
+
+// The image formats of 'remote initramfs --format'.
+const (
+	FormatMkinitcpio     = "mkinitcpio"
+	FormatInitramfsTools = "initramfs-tools"
 )
 
 // RemoteInitramfsCommand implements 'remote initramfs'.
-func RemoteInitramfsCommand(configPath, buildroot, tpmPath string, out io.Writer) error {
+func RemoteInitramfsCommand(configPath, buildroot, tpmPath, format string, out io.Writer) error {
 	if buildroot == "" {
 		return errors.New("--buildroot is required")
+	}
+	if format != FormatMkinitcpio && format != FormatInitramfsTools {
+		return fmt.Errorf("--format must be %s or %s, not %q", FormatMkinitcpio, FormatInitramfsTools, format)
 	}
 	cfg, err := LoadControlConfig(configPath)
 	if err != nil {
@@ -82,7 +96,11 @@ func RemoteInitramfsCommand(configPath, buildroot, tpmPath string, out io.Writer
 		fingerprint = hostKeyFingerprint(key.Public().(ed25519.PublicKey))
 	}
 
-	if err := writeImageFile(buildroot, imageNetworkFile, []byte(r.Net.NetworkdFile()), 0o644); err != nil {
+	if format == FormatInitramfsTools {
+		if err := writeImageFile(buildroot, imageRemoteConf, []byte(remoteConf(r)), 0o644); err != nil {
+			return err
+		}
+	} else if err := writeImageFile(buildroot, imageNetworkFile, []byte(r.Net.NetworkdFile()), 0o644); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "net %s\n", r.Net.Mode)
@@ -114,8 +132,10 @@ func RemoteInitramfsCommand(configPath, buildroot, tpmPath string, out io.Writer
 	if err := writeImageFile(buildroot, ImageAuthorizedKeys, []byte(strings.Join(keys, "\n")+"\n"), 0o600); err != nil {
 		return err
 	}
-	if err := writeImageFile(buildroot, imageRunDropIn, []byte(runDropIn(r.SSH)), 0o644); err != nil {
-		return err
+	if format == FormatMkinitcpio {
+		if err := writeImageFile(buildroot, imageRunDropIn, []byte(runDropIn(r.SSH)), 0o644); err != nil {
+			return err
+		}
 	}
 	fmt.Fprintf(out, "ssh %d\n", r.SSH.Port)
 	fmt.Fprintf(out, "hostkey %s from %s, sealed to PCR 0+7\n", fingerprint, r.SSH.HostKey)
@@ -154,6 +174,29 @@ Wants=systemd-networkd.service
 TimeoutStartSec=%s
 Environment="TPM2_KIRA_REMOTE=--ssh=%d --ssh-hold=%d --ssh-hostkey=%s"
 `, timeout, s.Port, s.Hold, ImageSealedHostKey)
+}
+
+// remoteConf is the image's /etc/tpm2-kira/remote.conf on initramfs-tools,
+// sourced by the init-premount script. Every value was checked when
+// control.conf was read (addresses, a MAC or an interface name, numbers),
+// so none needs more than the double quotes.
+func remoteConf(r RemoteConfig) string {
+	var b strings.Builder
+	b.WriteString("# Written by 'tpm2-kira remote initramfs' from /etc/tpm2-kira/control.conf,\n")
+	b.WriteString("# for the boot image alone; read by scripts/init-premount/tpm2-kira.\n")
+	for _, kv := range [][2]string{
+		{"TPM2_KIRA_NET", r.Net.Mode},
+		{"TPM2_KIRA_NET_MATCH", r.Net.Match},
+		{"TPM2_KIRA_NET_ADDRESS", strings.Join(r.Net.Addresses, " ")},
+		{"TPM2_KIRA_NET_GATEWAY", strings.Join(r.Net.Gateways, " ")},
+		{"TPM2_KIRA_NET_DNS", strings.Join(r.Net.DNS, " ")},
+	} {
+		fmt.Fprintf(&b, "%s=\"%s\"\n", kv[0], kv[1])
+	}
+	if r.SSH.On {
+		fmt.Fprintf(&b, "TPM2_KIRA_REMOTE=\"--ssh=%d --ssh-hold=%d --ssh-hostkey=%s\"\n", r.SSH.Port, r.SSH.Hold, ImageSealedHostKey)
+	}
+	return b.String()
 }
 
 // authorizedKeys are the keys of an authorized_keys file that may log in,

@@ -661,18 +661,19 @@ defined in [docs/PROTOCOL-BLE.md](docs/PROTOCOL-BLE.md), the design in
 [docs/PLAN-REMOTEATTESTATION.md](docs/PLAN-REMOTEATTESTATION.md) and
 [docs/PLAN-BLE.md](docs/PLAN-BLE.md).
 
-## The code screen over SSH (Arch, experimental)
+## The code screen over SSH (Arch and Debian, experimental)
 
 The boot image can bring up its own network, and tpm2-kira then runs its
 own SSH server with the code screen - the protocol in a process without
 privileges, namespaces or file access of its own: log in as root, compare the
 code, press Enter and type the disk's password in the session. The
 console shows where to log in; Enter at the console continues there and
-stops the SSH server.
+stops the SSH server. Both the network and SSH are off until turned on.
 
 ```bash
-sudo tpm2-kira control      # "Network and SSH at boot": DHCP or static,
-                            # proposed from /etc/systemd/network; rebuilds
+sudo tpm2-kira control      # "Network and SSH at boot": DHCP or static, proposed
+                            # from /etc/systemd/network or /etc/network/interfaces;
+                            # SSH only when you say yes; rebuilds the image
 ssh root@<address shown on the console>
 ```
 

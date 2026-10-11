@@ -899,8 +899,9 @@ func runRemote(args []string, tpmPath string) {
 		buildroot := fs.String("buildroot", "", "The image under construction (mkinitcpio's BUILDROOT)")
 		conf := fs.String("conf", cmd.DefaultControlConfigPath, "The configuration file")
 		tpm := fs.String("tpm", tpmPath, "The TPM the SSH host key is sealed to")
+		format := fs.String("format", cmd.FormatMkinitcpio, "The image's kind: mkinitcpio (systemd-networkd and a drop-in of tpm2-kira.service) or initramfs-tools (/etc/tpm2-kira/remote.conf for the boot scripts)")
 		fs.Parse(args[1:])
-		if err := cmd.RemoteInitramfsCommand(*conf, *buildroot, *tpm, os.Stdout); err != nil {
+		if err := cmd.RemoteInitramfsCommand(*conf, *buildroot, *tpm, *format, os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
 			os.Exit(2) // the hook adds neither network nor SSH
 		}

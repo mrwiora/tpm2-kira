@@ -52,6 +52,80 @@ mode=run
 [ -r /etc/tpm2-kira/initramfs.conf ] && . /etc/tpm2-kira/initramfs.conf
 mode=${TPM2_KIRA_INITRAMFS_MODE:-run}
 
+# The network and the SSH server (docs/REMOTE-SSH.md), written by the hook
+# from control.conf only when they are turned on there.
+TPM2_KIRA_NET=off
+TPM2_KIRA_REMOTE=
+[ -r /etc/tpm2-kira/remote.conf ] && . /etc/tpm2-kira/remote.conf
+[ "$mode" = once ] && TPM2_KIRA_REMOTE=
+
+# tpm2_kira_netdev prints the interface the network is for: the one with
+# the MAC or the name TPM2_KIRA_NET_MATCH says, or the first wired one.
+tpm2_kira_netdev() {
+    for d in /sys/class/net/*; do
+        [ -e "$d/device" ] || continue
+        case "${TPM2_KIRA_NET_MATCH:-}" in
+        *:*)
+            [ "$(cat "$d/address" 2>/dev/null)" = "$TPM2_KIRA_NET_MATCH" ] || continue
+            ;;
+        "")
+            [ -e "$d/wireless" ] || [ -e "$d/phy80211" ] && continue
+            ;;
+        *)
+            [ "${d##*/}" = "$TPM2_KIRA_NET_MATCH" ] || continue
+            ;;
+        esac
+        echo "${d##*/}"
+        return 0
+    done
+    return 1
+}
+
+# tpm2_kira_net brings the network up, in the background: the code screen
+# does not wait for it. DHCP is initramfs-tools' own (klibc's ipconfig, as
+# for an NFS root or dropbear-initramfs), a static address busybox' ip.
+# The interface is noted for init-bottom, which takes it down again.
+tpm2_kira_net() {
+    # ipconfig fails each try it times out, and a static address may be
+    # set already: neither ends the setup.
+    set +e
+    i=0
+    while ! dev=$(tpm2_kira_netdev); do
+        if [ "$i" -ge 180 ]; then
+            echo "tpm2-kira: network: no interface ${TPM2_KIRA_NET_MATCH:-wired} appeared"
+            return 1
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    echo "$dev" > /run/tpm2-kira/net-device
+    case "$TPM2_KIRA_NET" in
+    dhcp)
+        unset BOOTIF
+        DEVICE=$dev
+        IP=dhcp
+        configure_networking
+        ;;
+    static)
+        ip link set dev "$dev" up
+        for a in $TPM2_KIRA_NET_ADDRESS; do
+            ip address add "$a" dev "$dev"
+        done
+        for g in $TPM2_KIRA_NET_GATEWAY; do
+            case "$g" in
+            *:*) ip -6 route add default via "$g" dev "$dev" ;;
+            *) ip route add default via "$g" dev "$dev" ;;
+            esac
+        done
+        : > /etc/resolv.conf
+        for n in $TPM2_KIRA_NET_DNS; do
+            echo "nameserver $n" >> /etc/resolv.conf
+        done
+        ;;
+    esac
+    echo "tpm2-kira: network: $TPM2_KIRA_NET on $dev: $(ip -o address show dev "$dev" 2>/dev/null | awk '{print $4}' | tr '\n' ' ')"
+}
+
 # Never allow a failure here to abort boot.
 case "$mode" in
 once)
@@ -65,8 +139,17 @@ once)
     # display reports (stderr: the key requests, the phone) goes to a log
     # that survives into the booted system, /run/initramfs/tpm2-kira.log.
     mkdir -p /run/initramfs
-    TPM2_KIRA_LOG=/run/initramfs/tpm2-kira.log /usr/bin/tpm2-kira run --gate "$GATE" --unlock "$UNLOCK" </dev/console >/dev/console 2>>/run/initramfs/tpm2-kira.log &
+    # TPM2_KIRA_REMOTE (--ssh=PORT ...) makes it the SSH server too.
+    # shellcheck disable=SC2086
+    TPM2_KIRA_LOG=/run/initramfs/tpm2-kira.log /usr/bin/tpm2-kira run --gate "$GATE" --unlock "$UNLOCK" $TPM2_KIRA_REMOTE </dev/console >/dev/console 2>>/run/initramfs/tpm2-kira.log &
     echo $! > /run/tpm2-kira.pid
+    ;;
+esac
+
+case "$TPM2_KIRA_NET" in
+dhcp | static)
+    tpm2_kira_net >>/run/initramfs/tpm2-kira.log 2>&1 </dev/null &
+    echo $! > /run/tpm2-kira-net.pid
     ;;
 esac
 

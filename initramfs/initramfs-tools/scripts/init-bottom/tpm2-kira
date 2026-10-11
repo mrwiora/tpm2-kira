@@ -19,15 +19,46 @@ prereqs)
     ;;
 esac
 
-# The TOTP display and, if enabled, the Bluetooth attestation gate. Neither
-# has anything to flush or save, so there is no reason to wait for a graceful
-# exit; the kernel releases the adapter when the gate's socket closes.
-for PIDFILE in /run/tpm2-kira.pid /run/tpm2-kira-attest.pid; do
+# The TOTP display, which may be the SSH server too: asked to stop first,
+# so the SSH sessions are told and its unprivileged half ends with it; a
+# second later it is killed.
+if [ -r /run/tpm2-kira.pid ]; then
+    read -r pid < /run/tpm2-kira.pid
+    rm -f /run/tpm2-kira.pid
+    if [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null; then
+        i=0
+        while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 10 ]; do
+            sleep 0.1 2>/dev/null || sleep 1
+            i=$((i + 1))
+        done
+        kill -9 "$pid" 2>/dev/null || true
+    fi
+fi
+
+# The Bluetooth attestation gate and the network's setup, if still at it.
+# Neither has anything to flush or save; the kernel releases the adapter
+# when the gate's socket closes.
+for PIDFILE in /run/tpm2-kira-attest.pid /run/tpm2-kira-net.pid; do
     [ -r "$PIDFILE" ] || continue
     read -r pid < "$PIDFILE"
     rm -f "$PIDFILE"
     [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
 done
+
+# The image's network goes down: the running system configures the
+# interface itself (ifupdown, NetworkManager), and an address left from
+# here would stay beside its own.
+if [ -r /run/tpm2-kira/net-device ]; then
+    read -r dev < /run/tpm2-kira/net-device
+    rm -f /run/tpm2-kira/net-device
+    killall -q ipconfig 2>/dev/null || true
+    if [ -n "$dev" ] && command -v ip >/dev/null 2>&1; then
+        ip address flush dev "$dev" 2>/dev/null || true
+        ip route flush dev "$dev" 2>/dev/null || true
+        ip link set dev "$dev" down 2>/dev/null || true
+    fi
+    rm -f "/run/net-$dev.conf"
+fi
 
 # Lock code computation until the next boot, so nothing in the running
 # system can compute codes. Never let a failure here stop the boot.

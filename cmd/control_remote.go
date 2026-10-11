@@ -14,8 +14,9 @@ import (
 // control's step for the boot image's network and SSH server
 // (remote_config.go, docs/REMOTE-SSH.md): the settings are asked one by
 // one, proposed from what is set or, the first time, from the running
-// system's systemd-networkd configuration, then written into control.conf
-// and the image rebuilt.
+// system's network configuration (systemd-networkd or ifupdown), then
+// written into control.conf and the image rebuilt. Nothing of it is on
+// until it is picked here, and the SSH server's question defaults to No.
 
 // remoteStep is the overview's line.
 func (c *controller) remoteStep() controlStep {
@@ -24,8 +25,8 @@ func (c *controller) remoteStep() controlStep {
 		Explain: "The boot image brings up its own network (DHCP or a static address, set here and nowhere else) and tpm2-kira starts its own SSH server with the code screen: the codes are confirmed and the password typed in an SSH session, and the console says where to log in - Enter there continues at the console instead. Picking it changes the settings.",
 		Run:     (*controller).runRemote}
 	switch {
-	case f.Initramfs != "mkinitcpio":
-		st.Blocked = "the boot image is built with mkinitcpio only, for now"
+	case f.Initramfs != "mkinitcpio" && f.Initramfs != "initramfs-tools":
+		st.Blocked = "the boot image is built with mkinitcpio or initramfs-tools only"
 	case f.AttestConf != "":
 		st.Blocked = "control.conf does not load"
 	case f.Remote.Net.Mode != "off":
@@ -48,7 +49,7 @@ func (c *controller) runRemote() error {
 	}
 	mode := r.Net.Mode
 	if err := c.form(huh.NewSelect[string]().Title("Network in the boot image").
-		Description("Set for the image alone; /etc/systemd/network stays the running system's.").
+		Description("Set for the image alone; the running system's network configuration stays as it is.").
 		Options(huh.NewOption("DHCP", "dhcp"), huh.NewOption("Static address", "static"),
 			huh.NewOption("Off: no network, no SSH", "off")).
 		Value(&mode)).Run(); err != nil {
@@ -102,7 +103,7 @@ func (c *controller) runRemote() error {
 		r.Net.Addresses, r.Net.Gateways = nil, nil
 	}
 
-	on := r.SSH.On || c.facts.Remote.Net.Mode == "off"
+	on := r.SSH.On // off until somebody says yes
 	if err := c.form(huh.NewConfirm().Title("Start the SSH server with the code screen?").
 		Description("tpm2-kira's own, unprivileged SSH server at boot: log in as root with a key of " + r.SSH.AuthorizedKeys + ", confirm the code, type the password there.").
 		Affirmative("Yes").Negative("No: the network alone").Value(&on)).Run(); err != nil {

@@ -1549,15 +1549,20 @@ func (c *controller) offerRebuild() error {
 			c.facts.BTAlways = true
 		}
 	}
-	ok, err := c.confirmYes("Run mkinitcpio -P now?", "Builds every preset's image with the hook in; the output follows here.")
+	argv, what := []string{"mkinitcpio", "-P"}, "Builds every preset's image with the hook in; the output follows here."
+	if c.facts.Initramfs == "initramfs-tools" {
+		argv, what = []string{"update-initramfs", "-u"}, "Builds the current kernel's image with the hook in; the output follows here."
+	}
+	name := strings.Join(argv, " ")
+	ok, err := c.confirmYes("Run "+name+" now?", what)
 	if err != nil || !ok {
-		fmt.Fprintln(c.out, "Not rebuilt: run mkinitcpio -P yourself before the next boot.")
+		fmt.Fprintf(c.out, "Not rebuilt: run %s yourself before the next boot.\n", name)
 		return nil
 	}
-	rebuild := exec.Command("mkinitcpio", "-P")
+	rebuild := exec.Command(argv[0], argv[1:]...)
 	rebuild.Stdout, rebuild.Stderr = c.out, c.out
 	if err := rebuild.Run(); err != nil {
-		return fmt.Errorf("mkinitcpio -P: %w", err)
+		return fmt.Errorf("%s: %w", name, err)
 	}
 	fmt.Fprintln(c.out)
 	fmt.Fprintln(c.out, "Reboot before enrolling a phone or a remote salt: the phone pins what the")

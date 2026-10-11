@@ -24,7 +24,7 @@ func TestRemoteInitramfs(t *testing.T) {
 	}
 	run := func() (string, error) {
 		var out bytes.Buffer
-		err := RemoteInitramfsCommand(conf, root, "/dev/null", &out)
+		err := RemoteInitramfsCommand(conf, root, "/dev/null", FormatMkinitcpio, &out)
 		return out.String(), err
 	}
 	// The sealing itself is tried on a software TPM (remote_hostkey_swtpm_test.go).
@@ -102,5 +102,65 @@ func TestRemoteInitramfs(t *testing.T) {
 	}
 	if d := runDropIn(SSHConfig{Port: 2222, Hold: 60}); !strings.Contains(d, "TimeoutStartSec=150") || !strings.Contains(d, "--ssh=2222 --ssh-hold=60") {
 		t.Fatalf("a limited hold:\n%s", d)
+	}
+}
+
+// initramfs-tools: the network, the SSH flags in one file for the boot
+// scripts, no systemd-networkd file and no drop-in; the keys as on
+// mkinitcpio.
+func TestRemoteInitramfsTools(t *testing.T) {
+	fakeNet(t, map[string]string{"enp1s0": "aa:bb:cc:dd:ee:01"})
+	dir := t.TempDir()
+	keys, auth, conf, root := filepath.Join(dir, "keys"), filepath.Join(dir, "authorized_keys"), filepath.Join(dir, "control.conf"), filepath.Join(dir, "root")
+	old := sealForImage
+	sealForImage = func(ed25519.PrivateKey, string) ([]byte, error) { return []byte("SEALED"), nil }
+	t.Cleanup(func() { sealForImage = old })
+	createHostKey(keys)
+	_, k, _ := ed25519.GenerateKey(nil)
+	s, _ := ssh.NewSignerFromKey(k)
+	os.WriteFile(auth, ssh.MarshalAuthorizedKey(s.PublicKey()), 0o600)
+	run := func(content string) (string, error) {
+		os.WriteFile(conf, []byte(content+"TPM2_KIRA_SSH_HOSTKEY="+keys+"\nTPM2_KIRA_SSH_AUTHORIZED_KEYS="+auth+"\n"), 0o644)
+		var out bytes.Buffer
+		err := RemoteInitramfsCommand(conf, root, "/dev/null", FormatInitramfsTools, &out)
+		return out.String(), err
+	}
+	if out, err := run(""); err != nil || out != "net off\n" {
+		t.Fatalf("off: %q %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, imageRemoteConf)); err == nil {
+		t.Fatal("off wrote remote.conf")
+	}
+	out, err := run("TPM2_KIRA_NET=static\nTPM2_KIRA_NET_MATCH=aa:bb:cc:dd:ee:01\nTPM2_KIRA_NET_ADDRESS=\"192.0.2.10/24 2001:db8::10/64\"\nTPM2_KIRA_NET_GATEWAY=192.0.2.1\nTPM2_KIRA_SSH=on\nTPM2_KIRA_SSH_PORT=2222\n")
+	if err != nil || !strings.Contains(out, "net static\nmodule drv_enp1s0\nssh 2222\n") {
+		t.Fatalf("static with ssh: %q %v", out, err)
+	}
+	b, _ := os.ReadFile(filepath.Join(root, imageRemoteConf))
+	for _, want := range []string{
+		`TPM2_KIRA_NET="static"`, `TPM2_KIRA_NET_MATCH="aa:bb:cc:dd:ee:01"`,
+		`TPM2_KIRA_NET_ADDRESS="192.0.2.10/24 2001:db8::10/64"`, `TPM2_KIRA_NET_GATEWAY="192.0.2.1"`,
+		`TPM2_KIRA_REMOTE="--ssh=2222 --ssh-hold=0 --ssh-hostkey=/etc/tpm2-kira/ssh/ed25519.sealed"`,
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("remote.conf lacks %s:\n%s", want, b)
+		}
+	}
+	for _, p := range []string{imageNetworkFile, imageRunDropIn} {
+		if _, err := os.Stat(filepath.Join(root, p)); err == nil {
+			t.Errorf("%s in an initramfs-tools image", p)
+		}
+	}
+	for _, p := range []string{ImageSealedHostKey, ImageAuthorizedKeys} {
+		if _, err := os.Stat(filepath.Join(root, p)); err != nil {
+			t.Error(err)
+		}
+	}
+	// The network alone: no SSH flags.
+	os.RemoveAll(root)
+	if _, err := run("TPM2_KIRA_NET=dhcp\n"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, imageRemoteConf)); strings.Contains(string(b), "TPM2_KIRA_REMOTE") || !strings.Contains(string(b), `TPM2_KIRA_NET="dhcp"`) {
+		t.Fatalf("network alone:\n%s", b)
 	}
 }

@@ -393,21 +393,23 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
                    ` + cmd.ImageAuthorizedKeys + `)
 `,
 
-	"remote": `tpm2-kira remote initramfs --buildroot DIR [--conf PATH] [--tpm PATH]
+	"remote": `tpm2-kira remote initramfs --buildroot DIR [--format mkinitcpio|initramfs-tools] [--conf PATH] [--tpm PATH]
 tpm2-kira remote serve
 
 The code screen over SSH (docs/REMOTE-SSH.md). The network and the SSH
 server of the boot image are set in /etc/tpm2-kira/control.conf
 (TPM2_KIRA_NET_*, TPM2_KIRA_SSH_*; 'tpm2-kira control' sets them and
-suggests the network from /etc/systemd/network).
+suggests the network from /etc/systemd/network or /etc/network/interfaces).
+Both are off until set there.
 
   serve      The SSH server itself, started by 'run --ssh' alone: as nobody,
              in namespaces of its own, with no access to any file. It holds
              no host key ('run' signs) and no password; a login becomes a
              session of the code screen in 'run'
-  initramfs  What the mkinitcpio hook calls: writes the systemd-networkd
-             file, the authorized keys and the drop-in of tpm2-kira.service
-             into DIR, seals the SSH host key (TPM2_KIRA_SSH_HOSTKEY, the
+  initramfs  What the hooks call: writes the authorized keys and, for
+             mkinitcpio, the systemd-networkd file and the drop-in of
+             tpm2-kira.service, for initramfs-tools /etc/tpm2-kira/remote.conf
+             for the boot scripts, into DIR; seals the SSH host key (TPM2_KIRA_SSH_HOSTKEY, the
              system's OpenSSH key by default) to this TPM's PCR 0 and 7 as
              they will be at the code screen, and prints the modules and
              binaries the hook adds. Exit 2: nothing to add, and why

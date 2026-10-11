@@ -122,9 +122,9 @@ func fakeNet(t *testing.T, ifaces map[string]string, wireless ...string) (sys, c
 	for _, w := range wireless {
 		os.MkdirAll(filepath.Join(sys, w, "wireless"), 0o755)
 	}
-	oldSys, oldConf := sysClassNet, systemdNetworkDir
-	sysClassNet, systemdNetworkDir = sys, conf
-	t.Cleanup(func() { sysClassNet, systemdNetworkDir = oldSys, oldConf })
+	oldSys, oldConf, oldIfupdown := sysClassNet, systemdNetworkDir, ifupdownFile
+	sysClassNet, systemdNetworkDir, ifupdownFile = sys, conf, filepath.Join(dir, "interfaces")
+	t.Cleanup(func() { sysClassNet, systemdNetworkDir, ifupdownFile = oldSys, oldConf, oldIfupdown })
 	return sys, conf
 }
 
@@ -163,5 +163,38 @@ Address=2001:db8::10/64
 	}
 	if m := (NetConfig{Mode: "dhcp", Match: "aa:bb:cc:dd:ee:09"}).matchedInterfaces(); len(m) != 0 {
 		t.Fatalf("an unknown MAC matched: %+v", m)
+	}
+}
+
+// Without networkd, Debian's ifupdown is read: the first wired interface
+// it brings up, with the files it sources; a netmask becomes the prefix.
+func TestSuggestNetworkFromIfupdown(t *testing.T) {
+	fakeNet(t, map[string]string{"enp1s0": "aa:bb:cc:dd:ee:01", "enp2s0": "aa:bb:cc:dd:ee:02"})
+	os.WriteFile(ifupdownFile, []byte(`source /etc/network/interfaces.d.none/*
+auto lo
+iface lo inet loopback
+
+allow-hotplug enp1s0
+iface enp1s0 inet dhcp
+`), 0o644)
+	if s, from := SuggestNetwork(); s.Mode != "dhcp" || s.Match != "aa:bb:cc:dd:ee:01" || from != ifupdownFile {
+		t.Fatalf("dhcp: %+v from %s", s, from)
+	}
+	d := filepath.Join(filepath.Dir(ifupdownFile), "interfaces.d")
+	os.MkdirAll(d, 0o755)
+	os.WriteFile(filepath.Join(d, "lan"), []byte(`auto enp2s0
+iface enp2s0 inet static
+    address 192.0.2.10
+    netmask 255.255.255.0
+    gateway 192.0.2.1
+    dns-nameservers 192.0.2.53 9.9.9.9
+iface enp2s0 inet6 static
+    address 2001:db8::10/64
+`), 0o644)
+	os.WriteFile(ifupdownFile, []byte("source "+d+"/*\n"), 0o644)
+	s, _ := SuggestNetwork()
+	if s.Mode != "static" || s.Match != "aa:bb:cc:dd:ee:02" || strings.Join(s.Addresses, " ") != "192.0.2.10/24 2001:db8::10/64" ||
+		strings.Join(s.Gateways, " ") != "192.0.2.1" || strings.Join(s.DNS, " ") != "192.0.2.53 9.9.9.9" {
+		t.Fatalf("static: %+v", s)
 	}
 }
