@@ -56,6 +56,8 @@ THE PHONE (the Marify app, over Bluetooth LE)
 REMOTE (SSH in the boot image; set in control)
   remote       session, initramfs: the code screen over SSH, and what the
                image build adds for the network and the SSH server
+  vault        enrol, status, unenrol: the disk's key from this TPM and
+               tpm2-kira-vault, unattended (mode tpm+vault)
 
 THE DISK'S KEY (mode in /etc/tpm2-kira/control.conf)
   luks         status, enrol, remove, mark, route: tpm2-kira's LUKS keyslots,
@@ -90,7 +92,7 @@ FIRST STEPS
                                                      password and the phone's salt
   then rebuild the initramfs: mkinitcpio -P (Arch), update-initramfs -u (Debian)
 
-More: tpm2-kira help status | seal | run | attest | remote-salt | luks | nvram;
+More: tpm2-kira help status | seal | run | attest | remote-salt | vault | luks | nvram;
 docs/ and README.md
 `)
 }
@@ -366,6 +368,9 @@ the phone's code in the slot's line as soon as the phone is in; with
   skip                    nothing; cryptsetup's own prompt (default)
   password+salt           asks a password and a salt; hashpwd2's derivation
   password+remotesalt     asks the password; the salt the phone released
+  tpm+vault               asks nothing: the TPM's local part and the vault's
+                          remote part, opened while the code screen holds; a
+                          key made ends the hold on its own
 
 Ctrl-C at the prompt skips to cryptsetup's own prompt, where the recovery
 passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
@@ -439,20 +444,23 @@ keyscript asks at askpass directly.
 
 	"remote-salt": factorUsage,
 
+	"vault": vaultUsage,
+
 	"luks": `tpm2-kira luks status [<device>…] [--json]
-tpm2-kira luks enrol  <device> --mode password+salt|password+remotesalt [options]
+tpm2-kira luks enrol  <device> --mode password+salt|password+remotesalt|tpm+vault [options]
 tpm2-kira luks remove <device> --keyslot N
 tpm2-kira luks route  [<device>…] [--cmdline FILE]… [--crypttab FILE] [--json]
-tpm2-kira luks mark   <device> --keyslot N --mode password+salt|password+remotesalt [options]
+tpm2-kira luks mark   <device> --keyslot N --mode password+salt|password+remotesalt|tpm+vault [options]
 
 tpm2-kira's LUKS keyslots. Every keyslot it adds is marked with a LUKS2
 token in the header (no secret), whose type carries the mode, so a plain
 luksDump tells them apart: tpm2-kira-salt is password+salt,
-tpm2-kira-remotesalt is password+remotesalt. status, removal and rotation
+tpm2-kira-remotesalt is password+remotesalt, tpm2-kira-vault is tpm+vault
+(docs/VAULT.md). status, removal and rotation
 know the keyslots by it, and the boot reads the key's recipe from it; a
 token of ours without a keyslot is named as a leftover, with the
-'cryptsetup token remove' that takes it. A password+remotesalt keyslot is
-bound by "slot" to the slot whose enrolment releases its salt (0 unless
+'cryptsetup token remove' that takes it. A password+remotesalt or tpm+vault
+keyslot is bound by "slot" to the slot whose enrolment releases its part (0 unless
 --nvram names another): deleting that slot (control, the slot's line)
 deletes the keyslot with it, and a keyslot outliving its slot is dirty.
 A password+salt keyslot is bound to nothing - no TPM is in its key - and
@@ -473,7 +481,9 @@ own, unmarked: cryptsetup's prompt is always the fallback
             when the volume asks. Nothing else is configured.
               --nvram N               the slot the keyslot is bound to (default
                                       0; password+remotesalt: whose phone keeps the salt)
-              --label STR             the remote salt's label (default luks)
+              --label STR             the key's label (default luks)
+              --url --pin --token     tpm+vault: the vault, from 'tpm2-kira-vault
+                                      token create'; --name the machine's name there
               --existing-key-file F   a passphrase file to authorise (scripts)
               --privkey --pubkey --adapter --timeout --adapter-wait  as remote-salt enrol
   remove    'cryptsetup luksKillSlot' for a keyslot tpm2-kira marked, and
@@ -495,6 +505,7 @@ own, unmarked: cryptsetup's prompt is always the fallback
   tpm2-kira luks status
   tpm2-kira luks enrol /dev/sda2 --mode password+salt
   tpm2-kira luks enrol /dev/sda2 --mode password+remotesalt
+  tpm2-kira luks enrol /dev/sda2 --mode tpm+vault --url https://vault:8443 --pin sha256:… --token …
   tpm2-kira luks remove /dev/sda2 --keyslot 1
   tpm2-kira luks route
   tpm2-kira luks mark /dev/sda2 --keyslot 1 --mode password+salt

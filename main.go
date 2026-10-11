@@ -123,6 +123,8 @@ func main() {
 		runAttest(commandArgs, *tpmPath, *debug)
 	case "remote-salt":
 		runRemoteSalt(commandArgs, *tpmPath, *debug)
+	case "vault":
+		runVault(commandArgs, *tpmPath, *debug)
 	case "remote":
 		runRemote(commandArgs, *tpmPath)
 	case "derive":
@@ -537,13 +539,13 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		fs := flag.NewFlagSet("luks mark", flag.ExitOnError)
 		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+remotesalt: the slot's verifier is checked)")
 		keyslot := fs.Int("keyslot", -1, "The LUKS keyslot to mark (required)")
-		mode := fs.String("mode", "", "How its key is made: password+salt or password+remotesalt (required)")
-		nvram := fs.Uint("nvram", 0, "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+remotesalt: the slot whose remote salt it is)")
+		mode := fs.String("mode", "", "How its key is made: password+salt, password+remotesalt or tpm+vault (required)")
+		nvram := fs.Uint("nvram", 0, "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+remotesalt, tpm+vault: the slot whose release it needs)")
 		label := fs.String("label", "luks", "The salt's label (password+remotesalt)")
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		fs.Parse(deviceLast(args[1:]))
 		if fs.NArg() != 1 || *keyslot < 0 || *mode == "" {
-			fail(fmt.Errorf("usage: tpm2-kira luks mark <device> --keyslot N --mode password+salt|password+remotesalt"))
+			fail(fmt.Errorf("usage: tpm2-kira luks mark <device> --keyslot N --mode password+salt|password+remotesalt|tpm+vault"))
 		}
 		if err := cmd.LuksMark(cmd.LuksMarkOptions{TPMPath: *tpm, Device: fs.Arg(0), Keyslot: *keyslot, Mode: *mode,
 			SealIndex: cmd.ResolveNVRAMIndex(uint32(*nvram)), Label: *label, Debug: *debug}); err != nil {
@@ -552,9 +554,13 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 	case "enrol", "enroll":
 		fs := flag.NewFlagSet("luks enrol", flag.ExitOnError)
 		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+remotesalt)")
-		mode := fs.String("mode", "", "How the key is made at boot: password+salt or password+remotesalt (required)")
-		nvram := fs.Uint("nvram", 0, "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+remotesalt: the slot whose phone keeps the salt)")
-		label := fs.String("label", "luks", "The remote salt's label (password+remotesalt)")
+		mode := fs.String("mode", "", "How the key is made at boot: password+salt, password+remotesalt or tpm+vault (required)")
+		nvram := fs.Uint("nvram", 0, "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+remotesalt: the slot whose phone keeps the salt; tpm+vault: the slot enrolled with the vault)")
+		label := fs.String("label", "luks", "The key's label (password+remotesalt, tpm+vault)")
+		vaultURL := fs.String("url", "", "tpm+vault: the vault, https://host:port")
+		vaultPin := fs.String("pin", "", "tpm+vault: the pin of the vault's key, sha256:… as 'tpm2-kira-vault token create' prints it")
+		vaultToken := fs.String("token", "", "tpm+vault: the one-time enrolment token")
+		name := fs.String("name", "", "tpm+vault: the machine's name at the vault (default: the host name)")
 		privKey := fs.String("privkey", "", "Signing key, needed for every hand-over (default: "+cmd.DefaultPrivateKeyPath+")")
 		pubKey := fs.String("pubkey", "", "Signing public key, for the record check (default: "+cmd.DefaultPublicKeyPath+")")
 		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
@@ -564,7 +570,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		fs.Parse(deviceLast(args[1:]))
 		if fs.NArg() != 1 || *mode == "" {
-			fail(fmt.Errorf("usage: tpm2-kira luks enrol <device> --mode password+salt|password+remotesalt"))
+			fail(fmt.Errorf("usage: tpm2-kira luks enrol <device> --mode password+salt|password+remotesalt|tpm+vault"))
 		}
 		var slot uint32
 		if nvramExplicit(args[1:]) {
@@ -574,6 +580,8 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 			Device: fs.Arg(0), Mode: *mode, ExistingKeyFile: *existing,
 			Remote: cmd.FactorEnrolOptions{TPMPath: *tpm, SealIndex: slot, Label: *label, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
 				Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: true, Debug: *debug},
+			Vault: cmd.VaultEnrolOptions{TPMPath: *tpm, SealIndex: cmd.ResolveNVRAMIndex(uint32(*nvram)), URL: *vaultURL, Pin: *vaultPin,
+				Token: *vaultToken, Label: *label, Name: *name, PrivKeyPath: *privKey, Debug: *debug},
 		}); err != nil {
 			fail(err)
 		}
@@ -603,6 +611,76 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		fail(fmt.Errorf("unknown luks subcommand %q", args[0]))
 	}
 }
+
+func runVault(args []string, tpmPath string, debugFlag bool) {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, "vault requires a subcommand.\n\n"+vaultUsage)
+		os.Exit(cmd.ExitUsage)
+	}
+	fs := flag.NewFlagSet("vault "+args[0], flag.ExitOnError)
+	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
+	nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index (default 0)")
+	privKey := fs.String("privkey", "", "Signing key (default: "+cmd.DefaultPrivateKeyPath+")")
+	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	switch args[0] {
+	case "enrol", "enroll":
+		vaultURL := fs.String("url", "", "The vault, https://host:port (required)")
+		pin := fs.String("pin", "", "The pin of the vault's key, sha256:… (required)")
+		token := fs.String("token", "", "The one-time enrolment token from 'tpm2-kira-vault token create' (required)")
+		label := fs.String("label", "luks", "The key's label")
+		name := fs.String("name", "", "The machine's name at the vault (default: the host name)")
+		out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
+		yes := fs.Bool("yes", false, "The recovery passphrase is in a second keyslot already; do not ask")
+		fs.Parse(args[1:])
+		if err := cmd.VaultEnrol(cmd.VaultEnrolOptions{TPMPath: *tpm, SealIndex: cmd.ResolveNVRAMIndex(uint32(*nvram)),
+			URL: *vaultURL, Pin: *pin, Token: *token, Label: *label, Name: *name, PrivKeyPath: *privKey,
+			Out: *out, Yes: *yes, Debug: *debug}); err != nil {
+			fail(err)
+		}
+	case "status":
+		fs.Parse(args[1:])
+		if err := cmd.VaultStatus(*tpm, cmd.ResolveNVRAMIndex(uint32(*nvram)), *debug); err != nil {
+			fail(err)
+		}
+	case "unenrol", "unenroll":
+		fs.Parse(args[1:])
+		if err := cmd.VaultUnenrol(*tpm, cmd.ResolveNVRAMIndex(uint32(*nvram)), *privKey, *debug); err != nil {
+			fail(err)
+		}
+	case "help", "-h", "--help":
+		fmt.Print(vaultUsage)
+	default:
+		fail(fmt.Errorf("unknown vault subcommand %q", args[0]))
+	}
+}
+
+const vaultUsage = `tpm2-kira vault enrol | status | unenrol [options]
+
+The disk's key from two TPMs (docs/VAULT.md, unlock mode tpm+vault): a
+local part kept in this machine's TPM and a remote part kept by
+tpm2-kira-vault, each opening only in a boot state the slot's signing key
+approved. The vault releases its part to a fresh quote of such a state;
+the boot then unlocks unattended. Without the vault, the recovery
+passphrase in its own keyslot opens the disk at cryptsetup's prompt.
+
+  vault enrol    Enrol the slot with the vault and write the key once for
+                 'cryptsetup luksAddKey' ('luks enrol --mode tpm+vault'
+                 does all of it in one step):
+                   --url https://host:port --pin sha256:… --token TOKEN
+                                (all three from 'tpm2-kira-vault token create')
+                   --out PATH   the key file, on tmpfs (required)
+                   --label STR  default luks
+                   --name STR   the machine's name at the vault
+                   --nvram N --privkey PATH --yes
+  vault status   The slot's vault, and whether it answers for this machine
+                 (--nvram N)
+  vault unenrol  Take the vault method and the local part out of the slot's
+                 blob (--nvram N, --privkey PATH); revoke the device on the
+                 vault and remove the keyslot by hand
+
+The image needs its network at boot: TPM2_KIRA_NET in control.conf
+(tpm2-kira control, "Network and SSH at boot").
+`
 
 func runRemoteSalt(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {

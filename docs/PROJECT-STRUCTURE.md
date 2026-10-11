@@ -8,6 +8,7 @@ Where things are in the repository, and how the tests are run.
 ├── main.go                  # CLI entrypoint and command routing
 ├── attest/                  # Remote attestation core: protocol, Noise, Verify(); no device access
 │   └── attesttest/          # Software TPM, in-memory pipe and simulated phone for tests
+├── vaultproto/              # The contract with tpm2-kira-vault: REST messages, the release check
 ├── transport/
 │   ├── frame/               # Record fragmentation for BLE (shared with the phone)
 │   └── ble/                 # Pure-Go BLE peripheral over an HCI user channel
@@ -26,6 +27,7 @@ Where things are in the repository, and how the tests are run.
 │   ├── remote_serve.go      # 'remote serve': the SSH protocol, unprivileged and sandboxed
 │   ├── remote_privsep.go    # run's side of it: start without privileges, sign, take sessions
 │   ├── remote_agent.go      # cryptsetup's own prompt in the session (ask-password, askpass' FIFO)
+│   ├── vault.go             # tpm+vault: enrolment with the vault, the boot's release, the key
 │   ├── control_remote.go    # control's step for them
 │   ├── default_pcrs.go      # What 'seal' seals to by default, and the fallback slot
 │   ├── seal.go              # Create the TOTP key in the TPM and approve PCR values

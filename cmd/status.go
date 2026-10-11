@@ -35,8 +35,9 @@ type StatusSlot struct {
 	GenState   string `json:"generation_state"`
 	Signed     bool   `json:"signed"` // by this machine's signing key
 	SignReason string `json:"sign_reason,omitempty"`
-	Phones     int    `json:"phones"`      // enrolled; the slot then has no TOTP code
-	RemoteSalt bool   `json:"remote_salt"` // the release key is in the blob
+	Phones     int    `json:"phones"`          // enrolled; the slot then has no TOTP code
+	RemoteSalt bool   `json:"remote_salt"`     // the release key is in the blob
+	Vault      string `json:"vault,omitempty"` // the vault's URL: the slot is enrolled with one (tpm+vault)
 }
 
 // StatusReport is the whole report.
@@ -92,6 +93,9 @@ func collectStatus(o StatusOptions) StatusReport {
 			if att := sb.Payload.Attestation; att != nil && att.Phone.Enabled() {
 				s.Phones = len(att.Phone.Verifiers)
 				s.RemoteSalt = len(att.ReleaseKeyPublic) > 0
+			}
+			if att := sb.Payload.Attestation; att != nil && att.Vault.Enabled() {
+				s.Vault = att.Vault.URL
 			}
 			r.Slots = append(r.Slots, s)
 		}
@@ -195,6 +199,17 @@ func statusNotes(r StatusReport) []string {
 				notes = append(notes, fmt.Sprintf("%s keyslot %d is bound to slot %d, which is gone - the slot is dirty: 'tpm2-kira control' (the slot's line) deletes what is left, or tpm2-kira luks remove %s --keyslot %d by hand", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
 				continue
 			}
+			if ks.Token.Mode == LuksModeTPMVault {
+				ok := false
+				for _, s := range r.Slots {
+					if s.Slot == *ks.Token.Slot && s.Vault != "" {
+						ok = true
+					}
+				}
+				if !ok {
+					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the vault of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
+				}
+			}
 			if ks.Token.Mode == LuksModePasswordRemoteSalt {
 				ok := false
 				for _, s := range r.Slots {
@@ -207,6 +222,13 @@ func statusNotes(r StatusReport) []string {
 				}
 			}
 		}
+	}
+	vault := false
+	for _, s := range r.Slots {
+		vault = vault || s.Vault != ""
+	}
+	if vault && headersRead && marked[LuksModeTPMVault] == 0 {
+		notes = append(notes, "a slot is enrolled with a vault, but no LUKS keyslot is marked tpm+vault: its key opens nothing (tpm2-kira luks mark <device> --keyslot N --mode tpm+vault)")
 	}
 	if remoteSalt && headersRead && marked[LuksModePasswordRemoteSalt] == 0 {
 		notes = append(notes, "a remote salt is enrolled, but no LUKS keyslot is marked password+remotesalt: the phone's salt opens nothing (tpm2-kira luks enrol <device> --mode password+remotesalt)")
@@ -237,6 +259,9 @@ func printStatus(r StatusReport) {
 			fmt.Printf("           %s, no TOTP code; remote salt enrolled\n", phonesText(s.Phones))
 		case s.Phones > 0:
 			fmt.Printf("           %s, no TOTP code; no remote salt\n", phonesText(s.Phones))
+		}
+		if s.Vault != "" {
+			fmt.Printf("           enrolled with the vault at %s (tpm+vault)\n", s.Vault)
 		}
 	}
 	fmt.Println()
@@ -278,7 +303,7 @@ func shortKeyslot(ks KeyslotStatus) string {
 	if ks.Token.Obsolete {
 		return "an old token: re-mark (the notes say how)"
 	}
-	if ks.Token.Mode == LuksModePasswordRemoteSalt && ks.Token.Slot != nil {
+	if boundMode(ks.Token.Mode) && ks.Token.Slot != nil {
 		return fmt.Sprintf("%s (slot %d, label %q)", ks.Token.Mode, *ks.Token.Slot, ks.Token.Label)
 	}
 	return ks.Token.Mode

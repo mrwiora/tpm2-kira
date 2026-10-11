@@ -33,6 +33,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -475,6 +476,16 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			}
 		}
 	}
+	// A slot enrolled with a vault: its key is made while the code screen
+	// holds (the parts open only in the approved boot state, before the
+	// separator), and a key made ends the hold on its own. The attempt
+	// lasts as long as the hold.
+	vaultCtx, endVault := context.WithCancel(context.Background())
+	vault := startVaultKeys(vaultCtx, tpmPath, os.Stdout, debug)
+	var vaultKey func(string) ([]byte, error)
+	if vault != nil {
+		vaultKey = vault.forVolume
+	}
 	var unlock *unlockServer
 	// What the next prompt is, for the code screen's words: the recipe of
 	// the first routed volume, read from its LUKS2 header once it is
@@ -505,7 +516,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 				time.Sleep(200 * time.Millisecond)
 			}
 			return svc.Salt()
-		}, recipes.forVolume, ask), unlockLogger(debug))
+		}, vaultKey, recipes.forVolume, ask), unlockLogger(debug))
 	}
 	open := func() (transport.TPMCloser, error) {
 		tpmDev, err := OpenTPM(tpmPath)
@@ -516,6 +527,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		return tpmDev, nil
 	}
 	enter := startEnterReader(0)
+	vaultReady := vault.ready()
 	atConsole := false // the hold ended with Enter at the console
 	var hint *hintPrinter
 	if srv != nil {
@@ -561,6 +573,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			return s
 		},
 		notify: func() {
+			endVault()   // past the hold the parts no longer open
 			enter.stop() // the terminal is the passphrase prompt's from here on
 			if srv != nil {
 				hint.stop()
@@ -632,6 +645,9 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 				return true
 			case <-confirmed:
 				return true
+			case <-vaultReady:
+				vaultReady = nil // tried once; without a key the hold goes on
+				return vault.made()
 			case <-time.After(d):
 				return false
 			}
@@ -799,6 +815,8 @@ func nextPrompt(mode string) string {
 		return "the password and salt prompt"
 	case LuksModePasswordRemoteSalt:
 		return "the password prompt"
+	case LuksModeTPMVault:
+		return "cryptsetup's prompt without the vault"
 	}
 	return "cryptsetup's prompt"
 }

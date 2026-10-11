@@ -22,6 +22,7 @@ func TestBlobFormatReferenceMatchesTheCode(t *testing.T) {
 		"the blob version (field)":   fmt.Sprintf("Version                 uint32      Must be %d", CurrentBlobVersion),
 		"the attestation size limit": fmt.Sprintf("Attestation length    uint32      ≤ %d", MaxAttestationLen),
 		"the phone method's number":  fmt.Sprintf("Method type         uint8       %d = phones over Bluetooth LE", attestMethodPhone),
+		"the vault method's number":  fmt.Sprintf("%d = tpm2-kira-vault over HTTPS", attestMethodVault),
 		"the number of phones":       fmt.Sprintf("Phone count         uint8       ≤ %d", MaxVerifiers),
 		"the PCR selection limit":    fmt.Sprintf("PCRSelection length   uint16      ≤ %d", attest.MaxPCRIndex),
 		"the device id size":         fmt.Sprintf("DeviceID              [%d]byte", attest.DeviceIDSize),

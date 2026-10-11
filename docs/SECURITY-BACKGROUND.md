@@ -53,8 +53,8 @@ stores one serialised `SealedBlob` (format version 14, §10). It holds the
 slot's TOTP key or its phones, never both (*TOTP key or phones*, below).
 Remote attestation is an optional part of the same blob,
 and within that part the way a verifier reaches the machine is a typed
-*method*: today phones over Bluetooth LE; a verification server over the
-network would be another method next to it. The blob contains:
+*method*: phones over Bluetooth LE, and tpm2-kira-vault over HTTPS
+(VAULT.md). The blob contains:
 
 | Field               | Content                                                         | Sensitive? |
 |---------------------|-----------------------------------------------------------------|------------|
@@ -96,6 +96,18 @@ Method 1, phones over Bluetooth LE (`Phone`):
 | `NoisePrivate`  | The machine's static key for the encrypted channel to the phones     | **Yes**⁵   |
 | `AdvKey`        | Key that lets an enrolled phone recognise the machine's advertising  | **Yes**⁵   |
 | `Verifiers`     | Up to 8 phones: id, anchor public key (signs the phone's verdicts), channel public key, policy id; no name | No |
+
+Method 2, tpm2-kira-vault (`Vault`, VAULT.md), created by `vault enrol`:
+
+| Field           | Content                                                              | Sensitive? |
+|-----------------|----------------------------------------------------------------------|------------|
+| `URL`           | The vault, `https://host:port`                                       | No         |
+| `Pin`           | SHA-256 of the vault's TLS key (SubjectPublicKeyInfo)                | No         |
+| `Label`         | The tpm+vault keyslot's label in the key's derivation                | No         |
+| `Local`         | The local part of the key, wrapped (TPM2_MakeCredential) for this TPM's EK and the slot's release key: it opens only through the release key's policy | No⁶ |
+
+⁶ The wrapped part opens only on this TPM, in a boot state the signing key
+approved, before `cap`; and it is half of the key, the vault keeps the other.
 
 **TOTP key or phones.** A slot is checked one way at a time. Without a phone
 its TOTP key shows a code at boot, compared with the authenticator. The first
@@ -1052,14 +1064,14 @@ blob
 └── attestation part           optional: the machine as an attester
     ├── identity, attestation key, quoted PCRs, count
     └── methods                typed blocks; who may ask for a quote, and how
-        └── 1  phones over Bluetooth LE
+        ├── 1  phones over Bluetooth LE
+        └── 2  tpm2-kira-vault over HTTPS
 ```
 
 The attestation part is the same for every method: one attestation key, one
 PCR selection and one count per slot. A method holds only what is particular
-to its verifiers and their transport. A new kind of verifier, such as a server
-reached over the network, is a new method type next to the phone; nothing
-else in the blob changes for it. A blob with a method type this build does
+to its verifiers and their transport; the vault is the second method type,
+next to the phone, and nothing else in the blob changed for it. A blob with a method type this build does
 not know is refused, since carrying it over would mean signing it again
 unseen on the next `reseal`.
 
@@ -1129,6 +1141,7 @@ Offset  Field                   Type        Notes
 ?         Method count          uint8       Each type at most once
           For each method:
             Method type         uint8       1 = phones over Bluetooth LE
+                                            2 = tpm2-kira-vault over HTTPS
             Method length       uint32
             Method data         []byte      By type, below; must fill the length
           Method type 1, phones over Bluetooth LE:
@@ -1143,6 +1156,15 @@ Offset  Field                   Type        Notes
               NoisePub          [32]byte    X25519 static key of the phone
               PolicyID length   uint16      ≤ 64
               PolicyID          string
+          Method type 2, tpm2-kira-vault over HTTPS:
+            URL length          uint16      ≤ 512
+            URL                 string      https://host:port
+            Pin length          uint16      ≤ 128
+            Pin                 string      sha256: and the hex of the TLS key's SPKI digest
+            Label length        uint16      ≤ 64
+            Label               string      The key's label
+            Local credential    uint32 + []byte   ≤ 1024: TPM2B_ID_OBJECT, the local part
+            Local secret        uint32 + []byte   ≤ 1024: TPM2B_ENCRYPTED_SECRET
 ─────────────────────── end of signed region ───────────────────────
 ?       Signature length        uint16      ≤ 1024, must be non-zero
 ?       Signature               []byte      Over [version ‖ payloadLen ‖ payload]

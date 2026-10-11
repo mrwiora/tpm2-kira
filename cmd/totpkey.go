@@ -15,6 +15,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
 
 // The TOTP key is an HMAC key inside the TPM. tpm2-kira never gets it back:
@@ -122,25 +123,6 @@ func ChooseTOTPAlgorithm(tpmDev transport.TPM) (tpm2.TPMAlgID, error) {
 // generation index has been read-locked. The integration tests check them
 // against real policy sessions.
 
-func policyHash(parts ...[]byte) []byte {
-	h := sha256.New()
-	for _, p := range parts {
-		h.Write(p)
-	}
-	return h.Sum(nil)
-}
-
-func commandCode(cc tpm2.TPMCC) []byte {
-	return binary.BigEndian.AppendUint32(nil, uint32(cc))
-}
-
-// policyNVDigest extends a policy digest with
-// PolicyNV(index == operandB at offset 0).
-func policyNVDigest(prev []byte, indexName []byte, operandB []byte) []byte {
-	args := policyHash(operandB, []byte{0, 0}, binary.BigEndian.AppendUint16(nil, uint16(tpm2.TPMEOEq)))
-	return policyHash(prev, commandCode(tpm2.TPMCCPolicyNV), args, indexName)
-}
-
 // policyAuthorizeDigest is the policy of a key object that accepts any
 // policy approved by the key named keyName for policyRef.
 func policyAuthorizeDigest(keyName []byte, policyRef []byte) []byte {
@@ -149,7 +131,7 @@ func policyAuthorizeDigest(keyName []byte, policyRef []byte) []byte {
 
 // approvalDigest is what the signing key signs to approve a policy.
 func approvalDigest(approvedPolicy, policyRef []byte) []byte {
-	return policyHash(approvedPolicy, policyRef)
+	return vaultproto.ApprovalDigest(approvedPolicy, policyRef)
 }
 
 func generationOperand(gen uint64) []byte {
@@ -158,8 +140,9 @@ func generationOperand(gen uint64) []byte {
 
 // ApprovedPolicy is the policy the signing key approves: the PCR values in
 // pcrPolicy (a PolicyPCR digest), and the slot's generation index holding gen.
+// The vault checks a quote against the same computation (vaultproto).
 func ApprovedPolicy(pcrPolicy []byte, genIndexName []byte, gen uint64) []byte {
-	return policyNVDigest(pcrPolicy, genIndexName, generationOperand(gen))
+	return vaultproto.ApprovedPolicy(pcrPolicy, genIndexName, gen)
 }
 
 // ── generation index ────────────────────────────────────────────────────────

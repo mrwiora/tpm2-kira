@@ -1,0 +1,159 @@
+package cmd
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/mrwiora/tpm2-kira/attest/attesttest"
+	"github.com/mrwiora/tpm2-kira/vaultproto"
+)
+
+// The key is fixed by its parts, its label and the pepper: the contract
+// with every enrolled keyslot.
+func TestVaultKey(t *testing.T) {
+	l, r := bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32)
+	k := VaultKey(l, r, "luks", nil)
+	if len(k) != 64 || strings.Trim(string(k), "0123456789abcdef") != "" {
+		t.Fatalf("key %q", k)
+	}
+	if !bytes.Equal(k, VaultKey(l, r, "", nil)) {
+		t.Fatal("the default label is luks")
+	}
+	for name, other := range map[string][]byte{
+		"another label":     VaultKey(l, r, "home", nil),
+		"parts swapped":     VaultKey(r, l, "luks", nil),
+		"with a pepper":     VaultKey(l, r, "luks", []byte("p")),
+		"an empty pepper":   VaultKey(l, r, "luks", []byte{}),
+		"another remote":    VaultKey(l, bytes.Repeat([]byte{3}, 32), "luks", nil),
+		"the remote salt's": FactorSalt(append(append([]byte(nil), l...), r...), "luks"),
+	} {
+		if bytes.Equal(k, other) {
+			t.Errorf("%s gives the same key", name)
+		}
+	}
+}
+
+// The vault method survives the blob: written, read, the same.
+func TestVaultMethodInTheBlob(t *testing.T) {
+	soft, err := attesttest.NewSoftTPM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &Attestation{
+		DeviceID: bytes.Repeat([]byte{7}, 16), FriendlyName: "db-03", AKPublic: soft.AKPub, AKPrivate: []byte{1},
+		PCRAlg: 0x000b, PCRSelection: []uint8{7, 11},
+		Vault: VaultAttestation{URL: "https://vault:8443", Pin: "sha256:" + strings.Repeat("ab", 32), Label: "luks",
+			Local: WrappedFactor{Credential: []byte{1, 2, 3}, EncryptedSecret: []byte{4, 5}}},
+	}
+	raw, err := a.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := unmarshalAttestation(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Phone.Enabled() || !b.Vault.Enabled() || b.Vault.URL != a.Vault.URL || b.Vault.Pin != a.Vault.Pin ||
+		b.Vault.Label != a.Vault.Label || !bytes.Equal(b.Vault.Local.Credential, a.Vault.Local.Credential) ||
+		!bytes.Equal(b.Vault.Local.EncryptedSecret, a.Vault.Local.EncryptedSecret) {
+		t.Fatalf("read back %+v", b.Vault)
+	}
+	js, _ := json.Marshal(b.json())
+	if !strings.Contains(string(js), `"vault":{"url":"https://vault:8443"`) || strings.Contains(string(js), "credential") {
+		t.Fatalf("json %s", js)
+	}
+}
+
+// The client talks to the vault whose key is pinned, and to no other.
+func TestVaultClientPin(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == vaultproto.PathChallenge {
+			json.NewEncoder(w).Encode(vaultproto.ChallengeResponse{RequestID: "r", Nonce: make([]byte, 32), ExpiresIn: 120})
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(vaultproto.ErrorResponse{Error: "unknown device\x1b[2J"})
+	}))
+	defer srv.Close()
+	pin := vaultproto.PinOf(srv.Certificate().RawSubjectPublicKeyInfo)
+
+	c, err := newVaultClient(srv.URL, pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ch vaultproto.ChallengeResponse
+	if err := c.post(context.Background(), vaultproto.PathChallenge, vaultproto.ChallengeRequest{}, &ch); err != nil || ch.RequestID != "r" {
+		t.Fatalf("the pinned vault: %v", err)
+	}
+	err = c.post(context.Background(), vaultproto.PathRelease, vaultproto.ReleaseRequest{}, &ch)
+	if err == nil || !strings.Contains(err.Error(), "unknown device") || strings.Contains(err.Error(), "\x1b") {
+		t.Fatalf("the vault's error, without its escape sequences: %v", err)
+	}
+	if retryableVaultError(err) {
+		t.Fatal("an answer is not a reason to try again")
+	}
+
+	other, _ := newVaultClient(srv.URL, "sha256:"+strings.Repeat("00", 32))
+	err = other.post(context.Background(), vaultproto.PathChallenge, vaultproto.ChallengeRequest{}, &ch)
+	if err == nil || !strings.Contains(err.Error(), "not the pinned one") {
+		t.Fatalf("another key: %v", err)
+	}
+	if retryableVaultError(err) {
+		t.Fatal("a vault with another key is not tried again")
+	}
+
+	srv.Close()
+	err = c.post(context.Background(), vaultproto.PathChallenge, vaultproto.ChallengeRequest{}, &ch)
+	if err == nil || !retryableVaultError(err) {
+		t.Fatalf("a vault not reached is tried again: %v", err)
+	}
+
+	for _, bad := range [][2]string{{"http://vault:80", pin}, {"https://vault/x", pin}, {srv.URL, "sha256:12"}, {srv.URL, ""}} {
+		if _, err := newVaultClient(bad[0], bad[1]); err == nil {
+			t.Errorf("accepted %q %q", bad[0], bad[1])
+		}
+	}
+}
+
+// A volume with a tpm+vault keyslot takes the vault's key, which needs
+// nobody; without one, cryptsetup's own prompt follows.
+func TestDiskKeyFromTheVault(t *testing.T) {
+	if got := recipeOfTokens([]LuksToken{{Mode: LuksModePasswordSalt}, {Mode: LuksModeTPMVault}, {Mode: LuksModePasswordRemoteSalt}}); got != LuksModeTPMVault {
+		t.Fatalf("recipe %q", got)
+	}
+	if got := recipeOfTokens([]LuksToken{{Mode: LuksModePasswordSalt}, {Mode: LuksModePasswordRemoteSalt}}); got != LuksModePasswordRemoteSalt {
+		t.Fatalf("recipe %q", got)
+	}
+	noAsk := func(volume, what, note string) ([]byte, error) {
+		t.Fatalf("asked for %s", what)
+		return nil, nil
+	}
+	key, err := diskKey(nil, func(string) ([]byte, error) { return []byte("k"), nil }, recipeOf(LuksModeTPMVault), noAsk)("cryptroot")
+	if err != nil || string(key) != "k" {
+		t.Fatalf("%q %v", key, err)
+	}
+	_, err = diskKey(nil, func(string) ([]byte, error) { return nil, errors.New("the vault refused") }, recipeOf(LuksModeTPMVault), noAsk)("cryptroot")
+	if !errors.Is(err, errUnlockSkipped) || !strings.Contains(err.Error(), "the vault refused") {
+		t.Fatalf("%v", err)
+	}
+	if _, err := diskKey(nil, nil, recipeOf(LuksModeTPMVault), noAsk)("cryptroot"); !errors.Is(err, errUnlockSkipped) {
+		t.Fatalf("no vault in this boot: %v", err)
+	}
+}
+
+// The token of a tpm+vault keyslot has its own type and is bound to a slot.
+func TestVaultToken(t *testing.T) {
+	tok, ok := parseKiraToken(json.RawMessage(`{"type":"tpm2-kira-vault","keyslots":["2"],"slot":0,"label":"luks","created":"x"}`))
+	if !ok || tok.Mode != LuksModeTPMVault || !tok.BoundTo(0) || tokenTypeOf(LuksModeTPMVault) != LuksTokenTypeVault {
+		t.Fatalf("%+v", tok)
+	}
+	if !strings.Contains(describeKeyslot(KeyslotStatus{Token: &tok}), "nothing typed") {
+		t.Fatal(describeKeyslot(KeyslotStatus{Token: &tok}))
+	}
+}

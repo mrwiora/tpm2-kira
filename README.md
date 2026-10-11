@@ -684,6 +684,26 @@ default, so `known_hosts` needs no second entry - goes into the image only
 sealed to the TPM, bound to PCR 0 and 7, and is unsealed at the code
 screen. Details and limits: [docs/REMOTE-SSH.md](docs/REMOTE-SSH.md).
 
+## Unattended unlock with a vault (experimental)
+
+A keyslot in mode `tpm+vault` opens without anybody typing: its key is
+made from a local part kept in this machine's TPM and a remote part kept
+by [tpm2-kira-vault](../tpm2-kira-vault), a separate service with a TPM of
+its own. Both parts open only in a boot state your signing key approved,
+before the boot is capped. The vault releases its part only to a fresh
+TPM quote of such a state, and stops releasing it for a machine you
+revoke there. Without the vault, the recovery passphrase in its own
+keyslot opens the disk at cryptsetup's prompt.
+
+```bash
+# on the vault:   tpm2-kira-vault token create --name db-03   (prints the line below)
+sudo tpm2-kira luks enrol /dev/sda2 --mode tpm+vault \
+    --url https://vault:8443 --pin sha256:… --token …
+```
+
+The boot image needs its network (`tpm2-kira control`, "Network and SSH at
+boot"). Design, protocol and threats: [docs/VAULT.md](docs/VAULT.md).
+
 ## Early Boot Integration (Arch Linux / mkinitcpio)
 
 tpm2-kira can display TOTP codes during early boot — before you enter your disk encryption passphrase. This way you can verify the system hasn't been tampered with before typing your LUKS password.

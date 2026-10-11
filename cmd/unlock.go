@@ -291,17 +291,30 @@ var errUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own p
 //	password+remotesalt  a typed password and the salt the verifier released in this boot
 //	                     and the TPM opened (factor.go); without one, a typed salt
 //	                     (the password+salt variant), then cryptsetup's own prompt
+//	tpm+vault            nothing typed: the key run made in this boot from the TPM's
+//	                     local part and the vault's remote part (vault.go); without
+//	                     one, cryptsetup's own prompt
 //
-// salt returns the released salt or nil; the key is for the caller to wipe.
+// salt returns the released salt or nil; vault the volume's tpm+vault key
+// or why there is none. The key is for the caller to wipe.
 //
 // ask is where the person is asked: consoleAsk, or the SSH session that
 // confirmed the code screen (remoteServer.ask).
-func diskKey(salt func() []byte, recipe func(volume string) (mode, why string), ask prompter) func(volume string) ([]byte, error) {
+func diskKey(salt func() []byte, vault func(volume string) ([]byte, error), recipe func(volume string) (mode, why string), ask prompter) func(volume string) ([]byte, error) {
 	return func(volume string) ([]byte, error) {
 		var s []byte
 		var note string
 		mode, why := recipe(volume)
 		switch mode {
+		case LuksModeTPMVault:
+			if vault == nil {
+				return nil, fmt.Errorf("%w (no vault in this boot)", errUnlockSkipped)
+			}
+			key, err := vault(volume)
+			if err != nil {
+				return nil, fmt.Errorf("%w (%v)", errUnlockSkipped, err)
+			}
+			return key, nil
 		case LuksModePasswordSalt:
 			note = "the key is derived from your password and your salt, both typed here (Argon2id, some seconds).\n" +
 				"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."

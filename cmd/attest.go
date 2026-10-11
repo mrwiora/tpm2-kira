@@ -402,6 +402,15 @@ func AttestEnrol(o EnrolOptions) error {
 	}
 	blob := slotBlob.Payload.Attestation
 	sealed := slotBlob
+	if blob != nil && !blob.Phone.Enabled() {
+		// The part is there for the vault: the phones join it, with the
+		// attestation key, selection and release key it has.
+		noise, err := attest.GenerateNoiseKeypair(nil)
+		if err != nil {
+			return err
+		}
+		blob.Phone = PhoneAttestation{NoisePrivate: noise.Private, AdvKey: randBytes(32)}
+	}
 	if blob != nil && o.PCRs != "" {
 		if err := checkSamePCRs(blob, o.PCRs, attestSlot(idx)); err != nil {
 			return err
@@ -1473,8 +1482,16 @@ func AttestUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug b
 	}
 	defer tpmDev.Close()
 
-	if _, err := loadAttestBlob(tpmDev, idx); err != nil {
+	att, err := loadAttestBlob(tpmDev, idx)
+	if err != nil {
 		return fmt.Errorf("slot %d has no phone enrolled", slot)
+	}
+	// The vault method stays, and the attestation key and release key with
+	// it: they are its too.
+	var keep *Attestation
+	if att.Vault.Enabled() {
+		att.Phone = PhoneAttestation{}
+		keep = att
 	}
 
 	// The enrolment is part of the slot's blob: taking it out writes and
@@ -1492,7 +1509,7 @@ func AttestUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug b
 	}
 	// The counter is raised with it, so the blob as it was is stale should
 	// anyone put it back.
-	if err := writeAttestBlob(tpmDev, idx, nil, priv); err != nil {
+	if err := writeAttestBlob(tpmDev, idx, keep, priv); err != nil {
 		return err
 	}
 	fmt.Printf("Attestation enrolment removed from slot %d. Its TOTP key is unchanged.\n", slot)

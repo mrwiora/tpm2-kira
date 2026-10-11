@@ -21,10 +21,10 @@ import (
 //	  methods        who may ask for a quote, and over what. Each method is
 //	                 a typed, length-prefixed block of its own:
 //	    1  phone     phones over Bluetooth LE (the Marify app)
+//	    2  vault     tpm2-kira-vault over HTTPS, keeping the remote part of
+//	                 the disk's key (docs/VAULT.md)
 //
-// A further method - a verification server reached over the network, say -
-// is another type next to the phone, with its own data, and uses the same
-// attestation key, selection and count. The layout is documented in
+// Every method uses the same attestation key, release key and count. The layout is documented in
 // docs/SECURITY-BACKGROUND.md §10 and follows the blob's conventions:
 // little-endian length prefixes and an explicit maximum on every
 // variable-length field.
@@ -42,6 +42,7 @@ const (
 
 	// Attestation methods, as they are numbered in the blob.
 	attestMethodPhone = 1
+	attestMethodVault = 2
 )
 
 // Attestation is the optional remote-attestation part of a slot's blob.
@@ -68,8 +69,9 @@ type Attestation struct {
 	// only while it equals the counter, which nobody can turn back.
 	Count uint64
 
-	// The methods. Only one kind exists so far.
+	// The methods.
 	Phone PhoneAttestation
+	Vault VaultAttestation
 }
 
 // PhoneAttestation is the method "phones over Bluetooth LE": the keys of
@@ -82,6 +84,20 @@ type PhoneAttestation struct {
 
 // Enabled reports whether the method is set up.
 func (p *PhoneAttestation) Enabled() bool { return len(p.NoisePrivate) != 0 }
+
+// VaultAttestation is the method "tpm2-kira-vault": where the vault is,
+// the pin of its key, and the local part L of a tpm+vault keyslot's key,
+// wrapped for this TPM's EK and the slot's release key (vault.go). The
+// zero value is "not set up".
+type VaultAttestation struct {
+	URL   string // https://host:port of the vault
+	Pin   string // vaultproto.PinOf the vault's TLS key
+	Label string // the keyslot's label in the key's derivation
+	Local WrappedFactor
+}
+
+// Enabled reports whether the method is set up.
+func (v *VaultAttestation) Enabled() bool { return v.URL != "" }
 
 // AttestIndexForSlot resolves a slot number or index to the NV index of the
 // slot's blob, where its attestation part lives. Attestation needs one of
@@ -205,6 +221,9 @@ func (b *Attestation) marshal() ([]byte, error) {
 		}
 		methods = append(methods, [2][]byte{{attestMethodPhone}, data})
 	}
+	if b.Vault.Enabled() {
+		methods = append(methods, [2][]byte{{attestMethodVault}, b.Vault.marshal()})
+	}
 	w.u8(uint8(len(methods)))
 	for _, m := range methods {
 		w.u8(m[0][0])
@@ -234,6 +253,35 @@ func (p *PhoneAttestation) marshal() ([]byte, error) {
 		w.lp16([]byte(v.PolicyID))
 	}
 	return w.b.Bytes(), nil
+}
+
+func (v *VaultAttestation) marshal() []byte {
+	w := &blobWriter{}
+	w.lp16([]byte(v.URL))
+	w.lp16([]byte(v.Pin))
+	w.lp16([]byte(v.Label))
+	w.lp32(v.Local.Credential)
+	w.lp32(v.Local.EncryptedSecret)
+	return w.b.Bytes()
+}
+
+func (v *VaultAttestation) unmarshal(data []byte) error {
+	r := &blobReader{b: data}
+	v.URL = string(r.lp16(512))
+	v.Pin = string(r.lp16(128))
+	v.Label = string(r.lp16(64))
+	v.Local.Credential = r.lp32(1024)
+	v.Local.EncryptedSecret = r.lp32(1024)
+	if r.err != nil {
+		return r.err
+	}
+	if r.off != len(r.b) {
+		return fmt.Errorf("the vault method has %d trailing bytes", len(r.b)-r.off)
+	}
+	if v.URL == "" || v.Pin == "" || len(v.Local.Credential) == 0 || len(v.Local.EncryptedSecret) == 0 {
+		return fmt.Errorf("the vault method is incomplete")
+	}
+	return nil
 }
 
 // unmarshalAttestation parses the attestation part of a slot's blob. It
@@ -268,6 +316,10 @@ func unmarshalAttestation(data []byte) (*Attestation, error) {
 		switch kind {
 		case attestMethodPhone:
 			if err := b.Phone.unmarshal(body); err != nil {
+				return nil, err
+			}
+		case attestMethodVault:
+			if err := b.Vault.unmarshal(body); err != nil {
 				return nil, err
 			}
 		default:
@@ -357,6 +409,13 @@ type attestationJSON struct {
 
 type attestationMethods struct {
 	Phone *phoneMethodJSON `json:"phone,omitempty"`
+	Vault *vaultMethodJSON `json:"vault,omitempty"`
+}
+
+type vaultMethodJSON struct {
+	URL   string `json:"url"`
+	Pin   string `json:"pin"`
+	Label string `json:"label"`
 }
 
 type phoneMethodJSON struct {
@@ -396,6 +455,9 @@ func (b *Attestation) json() *attestationJSON {
 			})
 		}
 		out.Methods.Phone = m
+	}
+	if b.Vault.Enabled() {
+		out.Methods.Vault = &vaultMethodJSON{URL: b.Vault.URL, Pin: b.Vault.Pin, Label: b.Vault.Label}
 	}
 	return out
 }

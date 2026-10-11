@@ -119,7 +119,13 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	if oldRaw, old, err := readSlot(tpmDev, nvramIndex); err == nil && old.Payload.Attestation != nil {
 		if VerifyBlobSignature(oldRaw, old, signer.Public()) == nil {
 			kept, policyRef = old.Payload.Attestation, old.Payload.PolicyRef
-			fmt.Printf("Phone enrolment: kept (%d phone(s) enrolled for this slot)\n\n", len(kept.Phone.Verifiers))
+			if kept.Phone.Enabled() {
+				fmt.Printf("Phone enrolment: kept (%d phone(s) enrolled for this slot)\n", len(kept.Phone.Verifiers))
+			}
+			if kept.Vault.Enabled() {
+				fmt.Printf("Vault enrolment: kept (%s)\n", kept.Vault.URL)
+			}
+			fmt.Println()
 		} else {
 			fmt.Println("WARNING: this slot carries a phone enrolment that another signing key wrote.")
 			fmt.Println("  It is not carried over. Enrol the phone again: tpm2-kira attest enrol")

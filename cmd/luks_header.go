@@ -191,8 +191,9 @@ func (r *unlockRecipe) forVolume(volume string) (mode, why string) {
 	return mode, ""
 }
 
-// recipeOfTokens is the mode the tokens call for: the phone's salt wins
-// over the typed one (a typed-salt keyslot next to it is the fallback).
+// recipeOfTokens is the mode the tokens call for: the vault's key, which
+// needs nobody, wins; then the phone's salt over the typed one (a
+// typed-salt keyslot next to it is the fallback).
 func recipeOfTokens(toks []LuksToken) string {
 	mode := ""
 	for _, t := range toks {
@@ -200,10 +201,14 @@ func recipeOfTokens(toks []LuksToken) string {
 			continue // the old one-type form: re-marked, never acted on
 		}
 		switch t.Mode {
+		case LuksModeTPMVault:
+			return LuksModeTPMVault
 		case LuksModePasswordRemoteSalt:
-			return LuksModePasswordRemoteSalt
+			mode = LuksModePasswordRemoteSalt
 		case LuksModePasswordSalt:
-			mode = LuksModePasswordSalt
+			if mode == "" {
+				mode = LuksModePasswordSalt
+			}
 		}
 	}
 	return mode
