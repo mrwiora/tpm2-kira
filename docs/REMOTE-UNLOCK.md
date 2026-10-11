@@ -219,7 +219,11 @@ wins: it needs nobody (then password+remotesalt, then password+salt).
 `tpm2-kira-vault`, one binary, no cgo, run by a hardened systemd unit
 (root without capabilities beyond binding the port, only `/dev/tpmrm0`,
 `ProtectSystem=strict`, its state and runtime directories, a system call
-filter, no core dumps).
+filter, no core dumps). Without `CAP_DAC_OVERRIDE`, root reaches the TPM
+through its group: the unit has `SupplementaryGroups=tss`, because
+`/dev/tpmrm0` is `root:tss` on Arch but `tss:tss` on Debian (found when
+the vault first ran on Debian: "permission denied" at the first
+enrolment).
 
 ### 6.1 Release rules
 
@@ -430,6 +434,21 @@ recovery keyslot is mandatory, and the console prompt is always there.
     the image had been rebuilt and resealed in between (generation 4), and
     the vault accepted it without a change.
 
+  Then the other way round (the same day): a second vault on the Debian
+  VM (PCR 7, Secure Boot off), the **Arch VM as the machine** - UKI with
+  Secure Boot, slot 0 sealed to PCR 0,2,7,11, systemd in the initrd, the
+  key over the key socket:
+  - **auto:** back in 32 s with nothing typed. The vault released 2.5 s
+    after the first try, the key was made at 08:05:10.685, the code screen
+    ended (READY) at .811, systemd-cryptsetup had the key at 08:05:11.4,
+    and the separator ran at 08:05:19 - the parts were opened well before
+    it. The vault accepted generation 23 (enrolled at 15, resealed by
+    every image build since);
+  - **revoked:** denied; the code screen held, confirmed over SSH, and
+    systemd-cryptsetup's own question came into the session through
+    ask-password; the session that left it was asked again in the next,
+    and the recovery passphrase opened the disk.
+
   In each boot the first try came before the network was up, and the
   retry worked.
 
@@ -447,8 +466,6 @@ recovery keyslot is mandatory, and the console prompt is always there.
 
 ## 13. Known limits
 
-- Not run on a VM yet: an Arch/UKI machine, where the separator follows
-  the hold and the timing is tightest.
 - On Debian the code screen does not know a volume's recipe before it
   asks (no routing on the kernel command line), so after a refusal it
   says "continue to cryptsetup's prompt" without naming the vault.
