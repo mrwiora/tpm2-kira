@@ -44,8 +44,9 @@ const vaultInfo = "tpm2-kira/vault/v1"
 
 // VaultKey derives a tpm+vault keyslot's key: 64 lowercase hexadecimal
 // characters, HKDF-SHA256(L ‖ R [‖ pepper], info = vaultInfo ‖ lp(label)
-// [‖ "pepper"]). The pepper is reserved for a device the vault releases
-// only with an operator's pepper (docs/REMOTE-UNLOCK.md §12); nil without.
+// [‖ "pepper"]). The pepper is an operator's, for a keyslot enrolled with
+// one: the vault releases only with it (docs/REMOTE-UNLOCK.md §12); nil
+// without.
 func VaultKey(local, remote []byte, label string, pepper []byte) []byte {
 	if label == "" {
 		label = "luks"

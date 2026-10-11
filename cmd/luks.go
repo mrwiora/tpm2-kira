@@ -594,6 +594,11 @@ func LuksEnrol(o LuksEnrolOptions) error {
 	if advice := RouteAdvice(o.Device); advice != "" {
 		fmt.Print(advice)
 	}
+	if o.Mode == LuksModeTPMVault && o.Vault.Pepper {
+		fmt.Println("Every boot waits until an operator approves it on the vault with the pepper;")
+		fmt.Println("without that, the recovery passphrase stays the way in at cryptsetup's own prompt.")
+		return nil
+	}
 	if o.Mode == LuksModeTPMVault {
 		fmt.Println("The next boot opens it unattended, with the vault's remote part; without it, the")
 		fmt.Println("recovery passphrase stays the way in at cryptsetup's own prompt.")
