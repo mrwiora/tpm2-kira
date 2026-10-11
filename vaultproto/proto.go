@@ -86,6 +86,12 @@ type EnrolRequest struct {
 
 	Remote Wrapped `json:"remote"` // R, wrapped for EK and the slot's release key
 	Label  string  `json:"label"`  // the keyslot's label, for the operator
+
+	// Pepper says the key is derived with an operator's pepper as well:
+	// the vault then releases only on an approval that carries it, and
+	// passes it on once (ReleaseResponse.Pepper). The pepper itself is
+	// never sent at enrolment; the vault never keeps it.
+	Pepper bool `json:"pepper,omitempty"`
 }
 
 // EnrolChallenge proves the attestation key lives in the TPM holding the
@@ -108,6 +114,9 @@ type EnrolResult struct {
 	DeviceID []byte `json:"device_id"`
 	Mode     string `json:"mode"`
 }
+
+// MaxPepper bounds a pepper's length in bytes.
+const MaxPepper = 256
 
 // Release modes of a device.
 const (
@@ -150,13 +159,14 @@ const (
 	StatusDenied   = "denied"
 )
 
-// ReleaseResponse is the vault's answer. Released carries Remote (and
-// Pepper for a device enrolled with one); Pending says when to ask again;
-// Denied says why, for the console and the log.
+// ReleaseResponse is the vault's answer. Released carries Remote, and
+// Pepper - the operator's, as given with the approval, once - for a
+// device enrolled with one; Pending says when to ask again; Denied says
+// why, for the console and the log.
 type ReleaseResponse struct {
 	Status     string   `json:"status"`
 	Remote     *Wrapped `json:"remote,omitempty"`
-	Pepper     []byte   `json:"pepper,omitempty"` // reserved: an operator's pepper (docs/REMOTE-UNLOCK.md)
+	Pepper     []byte   `json:"pepper,omitempty"`
 	RetryAfter int      `json:"retry_after,omitempty"`
 	Reason     string   `json:"reason,omitempty"`
 }

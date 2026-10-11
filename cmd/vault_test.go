@@ -65,8 +65,21 @@ func TestVaultMethodInTheBlob(t *testing.T) {
 		t.Fatalf("read back %+v", b.Vault)
 	}
 	js, _ := json.Marshal(b.json())
-	if !strings.Contains(string(js), `"vault":{"url":"https://vault:8443"`) || strings.Contains(string(js), "credential") {
+	if !strings.Contains(string(js), `"vault":{"url":"https://vault:8443"`) || !strings.Contains(string(js), `"pepper":false`) || strings.Contains(string(js), "credential") {
 		t.Fatalf("json %s", js)
+	}
+
+	// With a pepper the check comes along; a check of another size does
+	// not parse.
+	a.Vault.PepperCheck = vaultPepperCheck([]byte("key"))
+	raw, _ = a.marshal()
+	if b, err = unmarshalAttestation(raw); err != nil || !bytes.Equal(b.Vault.PepperCheck, a.Vault.PepperCheck) {
+		t.Fatalf("pepper check: %v", err)
+	}
+	a.Vault.PepperCheck = []byte{1, 2, 3}
+	raw, _ = a.marshal()
+	if _, err := unmarshalAttestation(raw); err == nil {
+		t.Fatal("a 3-byte pepper check parsed")
 	}
 }
 

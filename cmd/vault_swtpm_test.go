@@ -40,6 +40,8 @@ type testVault struct {
 	minGen  uint64
 	nonces  map[string][]byte
 	refused []string
+	peppers [][]byte // given with the releases of a pepper device, in turn
+	gave    int
 }
 
 func (v *testVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +103,12 @@ func (v *testVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		v.minGen = checked.Generation
-		json.NewEncoder(w).Encode(vaultproto.ReleaseResponse{Status: vaultproto.StatusReleased, Remote: &v.remote})
+		rsp := vaultproto.ReleaseResponse{Status: vaultproto.StatusReleased, Remote: &v.remote}
+		if v.enrol.Pepper && v.gave < len(v.peppers) {
+			rsp.Pepper = v.peppers[v.gave]
+		}
+		v.gave++
+		json.NewEncoder(w).Encode(rsp)
 	default:
 		http.NotFound(w, r)
 	}
@@ -230,5 +237,61 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 	defer tpmDev.Close()
 	if _, sb, err := readSlot(tpmDev, slot); err != nil || sb.Payload.Attestation != nil {
 		t.Fatalf("after unenrol: %v %+v", err, sb.Payload.Attestation)
+	}
+}
+
+// A key with an operator's pepper: asked at enrolment and never sent, only
+// its check kept in the blob; at boot the pepper the vault passes on makes
+// the key - a mistyped one is caught by the check and the vault is asked
+// again, a release without one is refused.
+func TestVaultPepper(t *testing.T) {
+	sock := startSWTPM(t)
+	const slot = NVRAMSlotStart + 3
+	privPath, pubPath := signingKeyFiles(t)
+	if err := Seal(sock, "23", slot, pubPath, privPath, false, PCRHashAlgoSHA256, false); err != nil {
+		t.Fatal(err)
+	}
+	tv := &testVault{token: "tok-p", nonces: map[string][]byte{}}
+	srv := httptest.NewTLSServer(tv)
+	defer srv.Close()
+
+	old := terminalAsk
+	terminalAsk = func(string) ([]byte, error) { return []byte("s3cret pepper"), nil }
+	defer func() { terminalAsk = old }()
+	key, _, err := vaultEnrolKey(VaultEnrolOptions{TPMPath: sock, SealIndex: slot, URL: srv.URL,
+		Pin: vaultproto.PinOf(srv.Certificate().RawSubjectPublicKeyInfo), Token: "tok-p", PrivKeyPath: privPath, Pepper: true})
+	if err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+	if !tv.enrol.Pepper {
+		t.Fatal("the vault was not told the key needs a pepper")
+	}
+	if raw, _ := json.Marshal(tv.enrol); bytes.Contains(raw, []byte("s3cret")) {
+		t.Fatal("the pepper went to the vault")
+	}
+
+	tpmDev, err := transport.OpenTPM(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tpmDev.Close()
+	vs := vaultSlots(tpmDev, false)[0]
+	if len(vs.att.Vault.PepperCheck) != 32 {
+		t.Fatal("no pepper check in the blob")
+	}
+
+	tv.peppers = [][]byte{[]byte("s3cret pepprr"), []byte("s3cret pepper")}
+	var said []string
+	got, err := openVaultKey(context.Background(), tpmDev, vs, func(s string) { said = append(said, s) })
+	if err != nil {
+		t.Fatalf("the boot's key: %v", err)
+	}
+	if !bytes.Equal(got, key) || tv.gave != 2 || !strings.Contains(strings.Join(said, "\n"), "does not fit") {
+		t.Fatalf("key equal %v, releases %d, said %q", bytes.Equal(got, key), tv.gave, said)
+	}
+
+	tv.peppers, tv.gave = nil, 0
+	if _, err := openVaultKey(context.Background(), tpmDev, vs, func(string) {}); err == nil || !strings.Contains(err.Error(), "without a pepper") {
+		t.Fatalf("a release without the pepper: %v", err)
 	}
 }

@@ -94,6 +94,10 @@ type VaultAttestation struct {
 	Pin   string // vaultproto.PinOf the vault's TLS key
 	Label string // the keyslot's label in the key's derivation
 	Local WrappedFactor
+	// PepperCheck is set when the key is derived with an operator's pepper
+	// too (vaultPepperCheck of the key): it tells a mistyped pepper from
+	// the right one before cryptsetup sees the key. Empty without.
+	PepperCheck []byte
 }
 
 // Enabled reports whether the method is set up.
@@ -262,6 +266,7 @@ func (v *VaultAttestation) marshal() []byte {
 	w.lp16([]byte(v.Label))
 	w.lp32(v.Local.Credential)
 	w.lp32(v.Local.EncryptedSecret)
+	w.lp16(v.PepperCheck)
 	return w.b.Bytes()
 }
 
@@ -272,6 +277,7 @@ func (v *VaultAttestation) unmarshal(data []byte) error {
 	v.Label = string(r.lp16(64))
 	v.Local.Credential = r.lp32(1024)
 	v.Local.EncryptedSecret = r.lp32(1024)
+	v.PepperCheck = r.lp16(32)
 	if r.err != nil {
 		return r.err
 	}
@@ -280,6 +286,9 @@ func (v *VaultAttestation) unmarshal(data []byte) error {
 	}
 	if v.URL == "" || v.Pin == "" || len(v.Local.Credential) == 0 || len(v.Local.EncryptedSecret) == 0 {
 		return fmt.Errorf("the vault method is incomplete")
+	}
+	if len(v.PepperCheck) != 0 && len(v.PepperCheck) != 32 {
+		return fmt.Errorf("the vault method's pepper check is %d bytes", len(v.PepperCheck))
 	}
 	return nil
 }
@@ -413,9 +422,10 @@ type attestationMethods struct {
 }
 
 type vaultMethodJSON struct {
-	URL   string `json:"url"`
-	Pin   string `json:"pin"`
-	Label string `json:"label"`
+	URL    string `json:"url"`
+	Pin    string `json:"pin"`
+	Label  string `json:"label"`
+	Pepper bool   `json:"pepper"`
 }
 
 type phoneMethodJSON struct {
@@ -457,7 +467,7 @@ func (b *Attestation) json() *attestationJSON {
 		out.Methods.Phone = m
 	}
 	if b.Vault.Enabled() {
-		out.Methods.Vault = &vaultMethodJSON{URL: b.Vault.URL, Pin: b.Vault.Pin, Label: b.Vault.Label}
+		out.Methods.Vault = &vaultMethodJSON{URL: b.Vault.URL, Pin: b.Vault.Pin, Label: b.Vault.Label, Pepper: len(b.Vault.PepperCheck) > 0}
 	}
 	return out
 }

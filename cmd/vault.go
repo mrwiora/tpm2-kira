@@ -14,6 +14,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -243,7 +244,11 @@ func fetchRemote(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, c *vau
 // openVaultKey makes the slot's key in this boot: the local part first -
 // when the TPM does not open it, this boot state is not one the signing
 // key approved, and the vault is not asked - then the remote part from
-// the vault, opened under the same policy. The caller wipes the key.
+// the vault, opened under the same policy. For a keyslot enrolled with a
+// pepper, the vault's release carries the operator's pepper; one that
+// does not fit the slot's check (mistyped at the approval) is not handed
+// to cryptsetup: the vault is asked again, for a new approval. The
+// caller wipes the key.
 func openVaultKey(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, say func(string)) ([]byte, error) {
 	v := &vs.att.Vault
 	local, err := unwrapFactor(tpmDev, vs.sealed, vs.idx, vs.att, &v.Local)
@@ -255,38 +260,81 @@ func openVaultKey(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, say f
 	if err != nil {
 		return nil, err
 	}
-	// The network may still be coming up: connection errors are tried
-	// again until the bound, a refusal is final.
-	var rsp *vaultproto.ReleaseResponse
-	told := false
 	for {
-		rsp, err = fetchRemote(ctx, tpmDev, vs, c, say)
-		if err == nil || !retryableVaultError(err) {
-			break
+		rsp, err := fetchRemoteRetrying(ctx, tpmDev, vs, c, say)
+		if err != nil {
+			return nil, err
 		}
-		if !told {
-			say(fmt.Sprintf("the vault at %s is not reachable yet (%v); trying until it is", v.URL, err))
-			told = true
+		key, err := vaultKeyOf(tpmDev, vs, local, rsp)
+		if errors.Is(err, errPepperMismatch) {
+			say("the pepper given with the approval does not fit this keyslot; asking the vault for a new approval")
+			continue
 		}
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("the code screen ended before the vault at %s was reached: %v", v.URL, err)
-		case <-time.After(time.Second):
-		}
+		return key, err
 	}
-	if err != nil {
-		return nil, err
-	}
-	if rsp.Pepper != nil {
-		wipe(rsp.Pepper)
+}
+
+// errPepperMismatch: the operator's pepper does not make the key the
+// keyslot was enrolled with.
+var errPepperMismatch = errors.New("the pepper does not fit")
+
+// vaultKeyOf opens the released remote part and derives the key, with
+// the pepper the release carries when the keyslot was enrolled with one.
+func vaultKeyOf(tpmDev transport.TPM, vs vaultSlot, local []byte, rsp *vaultproto.ReleaseResponse) ([]byte, error) {
+	v := &vs.att.Vault
+	defer wipe(rsp.Pepper)
+	pepper := len(v.PepperCheck) > 0
+	switch {
+	case !pepper && rsp.Pepper != nil:
 		return nil, errors.New("the vault sent a pepper, and this keyslot was enrolled without one")
+	case pepper && len(rsp.Pepper) == 0:
+		return nil, errors.New("the vault released without a pepper, and this keyslot was enrolled with one")
 	}
 	remote, err := unwrapFactor(tpmDev, vs.sealed, vs.idx, vs.att, &WrappedFactor{Credential: rsp.Remote.Credential, EncryptedSecret: rsp.Remote.EncryptedSecret})
 	if err != nil {
 		return nil, fmt.Errorf("the remote part: %w", err)
 	}
 	defer wipe(remote)
-	return VaultKey(local, remote, v.Label, nil), nil
+	if !pepper {
+		return VaultKey(local, remote, v.Label, nil), nil
+	}
+	key := VaultKey(local, remote, v.Label, rsp.Pepper)
+	if !hmac.Equal(vaultPepperCheck(key), v.PepperCheck) {
+		wipe(key)
+		return nil, errPepperMismatch
+	}
+	return key, nil
+}
+
+// fetchRemoteRetrying is fetchRemote while the network comes up:
+// connection errors are tried again until ctx ends, an answer is final.
+func fetchRemoteRetrying(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, c *vaultClient, say func(string)) (*vaultproto.ReleaseResponse, error) {
+	told := false
+	for {
+		rsp, err := fetchRemote(ctx, tpmDev, vs, c, say)
+		if err == nil || !retryableVaultError(err) {
+			return rsp, err
+		}
+		if !told {
+			say(fmt.Sprintf("the vault at %s is not reachable yet (%v); trying until it is", vs.att.Vault.URL, err))
+			told = true
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("the code screen ended before the vault at %s was reached: %v", vs.att.Vault.URL, err)
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// vaultPepperCheck is what the slot keeps to recognise the key made with
+// the right pepper: HMAC-SHA256(key, "tpm2-kira/vault/pepper-check/v1").
+// It is no help in guessing the pepper without L and R, which only the
+// TPM opens.
+func vaultPepperCheck(key []byte) []byte {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte("tpm2-kira/vault/pepper-check/v1"))
+	return m.Sum(nil)
 }
 
 // retryableVaultError: the vault was not reached (no route, no address
@@ -419,6 +467,7 @@ type VaultEnrolOptions struct {
 	Label       string
 	Name        string
 	PrivKeyPath string
+	Pepper      bool   // the key needs an operator's pepper too, asked here once
 	Out         string // 'vault enrol' only: where the key is written
 	Yes         bool   // the recovery passphrase is in place; do not ask
 	Debug       bool
@@ -542,6 +591,16 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		att.ReleaseKeyPublic, att.ReleaseKeyPrivate = pub, privArea
 	}
 
+	var pepper []byte
+	if o.Pepper {
+		// Asked before anything is sent or written: the operator gives it
+		// with every approval, and nothing but its check is kept here.
+		if pepper, err = askPepper(); err != nil {
+			return nil, 0, err
+		}
+		defer wipe(pepper)
+	}
+
 	local, wLocal, err := wrapFactor(tpmDev, att, nil)
 	if err != nil {
 		return nil, 0, err
@@ -553,7 +612,11 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	}
 	defer wipe(remote)
 	// The blob must still fit its NV index with the vault method in it.
+	key := VaultKey(local, remote, label, pepper)
 	att.Vault = VaultAttestation{URL: strings.TrimSuffix(o.URL, "/"), Pin: strings.ToLower(o.Pin), Label: label, Local: *wLocal}
+	if pepper != nil {
+		att.Vault.PepperCheck = vaultPepperCheck(key)
+	}
 	if err := checkEnrolmentFits(tpmDev, sealed, att, slot); err != nil {
 		return nil, 0, err
 	}
@@ -575,6 +638,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		GenerationIndexName: genName, Generation: p.Generation, Selection: sel,
 		Remote: vaultproto.Wrapped{Credential: wRemote.Credential, EncryptedSecret: wRemote.EncryptedSecret},
 		Label:  label,
+		Pepper: pepper != nil,
 	}
 	if err := req.Check(); err != nil {
 		return nil, 0, err
@@ -602,13 +666,40 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	fmt.Printf("Slot %d is enrolled with the vault at %s as device %x (release mode %s).\n", slot, att.Vault.URL, att.DeviceID, res.Mode)
 	fmt.Println("The local part is in the slot's blob, the remote part only with the vault; both")
 	fmt.Println("open at boot, in the initrd, in the boot state the signing key approved.")
+	if pepper != nil {
+		fmt.Println("The key needs the pepper as well: every boot waits until an operator approves it")
+		fmt.Println("on the vault with that pepper.")
+	}
 	if cfg, err := LoadControlConfig(controlConfigPath()); err == nil && cfg.Remote.Net.Mode == "off" {
 		fmt.Println()
 		fmt.Println("NOTE: the boot image has no network (TPM2_KIRA_NET=off), so it cannot reach the")
 		fmt.Println("      vault: turn it on in 'tpm2-kira control' (Network and SSH at boot) and")
 		fmt.Println("      rebuild the image.")
 	}
-	return VaultKey(local, remote, label, nil), slot, nil
+	return key, slot, nil
+}
+
+// askPepper asks the operator's pepper twice, on the terminal.
+func askPepper() ([]byte, error) {
+	p, err := terminalAsk("Pepper (the operator gives it with every approval on the vault): ")
+	if err != nil {
+		return nil, err
+	}
+	again, err := terminalAsk("The same pepper again: ")
+	if err != nil {
+		wipe(p)
+		return nil, err
+	}
+	defer wipe(again)
+	if !bytes.Equal(p, again) {
+		wipe(p)
+		return nil, errors.New("the peppers differ; nothing was enrolled")
+	}
+	if len(p) > vaultproto.MaxPepper {
+		wipe(p)
+		return nil, fmt.Errorf("a pepper is at most %d bytes", vaultproto.MaxPepper)
+	}
+	return p, nil
 }
 
 // VaultStatus shows a slot's vault method and asks the vault for a
@@ -638,6 +729,9 @@ func VaultStatus(tpmPath string, sealIndex uint32, debug bool) error {
 	fmt.Printf("  pin:       %s\n", v.Pin)
 	fmt.Printf("  device:    %x (%s)\n", att.DeviceID, quoteUntrusted(att.FriendlyName))
 	fmt.Printf("  label:     %s\n", v.Label)
+	if len(v.PepperCheck) > 0 {
+		fmt.Println("  pepper:    yes - every boot waits for an operator's approval with it")
+	}
 	fmt.Printf("  quoted:    %s, generation %d\n", vaultSelectionString(sealedSelection(sb)), sb.Payload.Generation)
 	c, err := newVaultClient(v.URL, v.Pin)
 	if err != nil {

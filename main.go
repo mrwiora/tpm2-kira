@@ -561,6 +561,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		vaultPin := fs.String("pin", "", "tpm+vault: the pin of the vault's key, sha256:… as 'tpm2-kira-vault token create' prints it")
 		vaultToken := fs.String("token", "", "tpm+vault: the one-time enrolment token")
 		name := fs.String("name", "", "tpm+vault: the machine's name at the vault (default: the host name)")
+		pepper := fs.Bool("pepper", false, "tpm+vault: the key needs an operator's pepper too, asked here; every boot waits for an approval with it")
 		privKey := fs.String("privkey", "", "Signing key, needed for every hand-over (default: "+cmd.DefaultPrivateKeyPath+")")
 		pubKey := fs.String("pubkey", "", "Signing public key, for the record check (default: "+cmd.DefaultPublicKeyPath+")")
 		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
@@ -581,7 +582,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 			Remote: cmd.FactorEnrolOptions{TPMPath: *tpm, SealIndex: slot, Label: *label, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
 				Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: true, Debug: *debug},
 			Vault: cmd.VaultEnrolOptions{TPMPath: *tpm, SealIndex: cmd.ResolveNVRAMIndex(uint32(*nvram)), URL: *vaultURL, Pin: *vaultPin,
-				Token: *vaultToken, Label: *label, Name: *name, PrivKeyPath: *privKey, Debug: *debug},
+				Token: *vaultToken, Label: *label, Name: *name, Pepper: *pepper, PrivKeyPath: *privKey, Debug: *debug},
 		}); err != nil {
 			fail(err)
 		}
@@ -631,9 +632,10 @@ func runVault(args []string, tpmPath string, debugFlag bool) {
 		name := fs.String("name", "", "The machine's name at the vault (default: the host name)")
 		out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
 		yes := fs.Bool("yes", false, "The recovery passphrase is in a second keyslot already; do not ask")
+		pepper := fs.Bool("pepper", false, "The key needs an operator's pepper too, asked here; every boot waits for an approval with it")
 		fs.Parse(args[1:])
 		if err := cmd.VaultEnrol(cmd.VaultEnrolOptions{TPMPath: *tpm, SealIndex: cmd.ResolveNVRAMIndex(uint32(*nvram)),
-			URL: *vaultURL, Pin: *pin, Token: *token, Label: *label, Name: *name, PrivKeyPath: *privKey,
+			URL: *vaultURL, Pin: *pin, Token: *token, Label: *label, Name: *name, Pepper: *pepper, PrivKeyPath: *privKey,
 			Out: *out, Yes: *yes, Debug: *debug}); err != nil {
 			fail(err)
 		}
@@ -671,6 +673,9 @@ passphrase in its own keyslot opens the disk at cryptsetup's prompt.
                    --out PATH   the key file, on tmpfs (required)
                    --label STR  default luks
                    --name STR   the machine's name at the vault
+                   --pepper     the key needs an operator's pepper too: asked
+                                here twice, never sent; every boot then waits
+                                until an operator approves on the vault with it
                    --nvram N --privkey PATH --yes
   vault status   The slot's vault, and whether it answers for this machine
                  (--nvram N)

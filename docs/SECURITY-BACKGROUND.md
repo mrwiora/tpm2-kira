@@ -105,6 +105,7 @@ Method 2, tpm2-kira-vault (`Vault`, REMOTE-UNLOCK.md), created by `vault enrol`:
 | `Pin`           | SHA-256 of the vault's TLS key (SubjectPublicKeyInfo)                | No         |
 | `Label`         | The tpm+vault keyslot's label in the key's derivation                | No         |
 | `Local`         | The local part of the key, wrapped (TPM2_MakeCredential) for this TPM's EK and the slot's release key: it opens only through the release key's policy | No⁶ |
+| `PepperCheck`   | With an operator's pepper in the key: an HMAC of the key, to tell a mistyped pepper from the right one at boot; empty without | No⁶ |
 
 ⁶ The wrapped part opens only on this TPM, in a boot state the signing key
 approved, before `cap`; and it is half of the key, the vault keeps the other.
@@ -1165,6 +1166,8 @@ Offset  Field                   Type        Notes
             Label               string      The key's label
             Local credential    uint32 + []byte   ≤ 1024: TPM2B_ID_OBJECT, the local part
             Local secret        uint32 + []byte   ≤ 1024: TPM2B_ENCRYPTED_SECRET
+            PepperCheck         uint16 + []byte   0 or 32: HMAC-SHA256(key, "tpm2-kira/vault/pepper-check/v1")
+                                            when the key needs an operator's pepper
 ─────────────────────── end of signed region ───────────────────────
 ?       Signature length        uint16      ≤ 1024, must be non-zero
 ?       Signature               []byte      Over [version ‖ payloadLen ‖ payload]

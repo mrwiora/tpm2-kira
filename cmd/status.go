@@ -27,17 +27,18 @@ type StatusOptions struct {
 
 // StatusSlot is one slot of the report.
 type StatusSlot struct {
-	Slot       int    `json:"slot_number"`
-	NVRAMIndex string `json:"nvram_index"`
-	PCRs       string `json:"pcrs"`
-	Fallback   bool   `json:"fallback"` // sealed to 0 and 7 alone
-	Generation uint64 `json:"generation"`
-	GenState   string `json:"generation_state"`
-	Signed     bool   `json:"signed"` // by this machine's signing key
-	SignReason string `json:"sign_reason,omitempty"`
-	Phones     int    `json:"phones"`          // enrolled; the slot then has no TOTP code
-	RemoteSalt bool   `json:"remote_salt"`     // the release key is in the blob
-	Vault      string `json:"vault,omitempty"` // the vault's URL: the slot is enrolled with one (tpm+vault)
+	Slot        int    `json:"slot_number"`
+	NVRAMIndex  string `json:"nvram_index"`
+	PCRs        string `json:"pcrs"`
+	Fallback    bool   `json:"fallback"` // sealed to 0 and 7 alone
+	Generation  uint64 `json:"generation"`
+	GenState    string `json:"generation_state"`
+	Signed      bool   `json:"signed"` // by this machine's signing key
+	SignReason  string `json:"sign_reason,omitempty"`
+	Phones      int    `json:"phones"`                 // enrolled; the slot then has no TOTP code
+	RemoteSalt  bool   `json:"remote_salt"`            // the release key is in the blob
+	Vault       string `json:"vault,omitempty"`        // the vault's URL: the slot is enrolled with one (tpm+vault)
+	VaultPepper bool   `json:"vault_pepper,omitempty"` // its key needs an operator's pepper
 }
 
 // StatusReport is the whole report.
@@ -96,6 +97,7 @@ func collectStatus(o StatusOptions) StatusReport {
 			}
 			if att := sb.Payload.Attestation; att != nil && att.Vault.Enabled() {
 				s.Vault = att.Vault.URL
+				s.VaultPepper = len(att.Vault.PepperCheck) > 0
 			}
 			r.Slots = append(r.Slots, s)
 		}
@@ -261,7 +263,11 @@ func printStatus(r StatusReport) {
 			fmt.Printf("           %s, no TOTP code; no remote salt\n", phonesText(s.Phones))
 		}
 		if s.Vault != "" {
-			fmt.Printf("           enrolled with the vault at %s (tpm+vault)\n", s.Vault)
+			pepper := ""
+			if s.VaultPepper {
+				pepper = ", with an operator's pepper"
+			}
+			fmt.Printf("           enrolled with the vault at %s (tpm+vault%s)\n", s.Vault, pepper)
 		}
 	}
 	fmt.Println()

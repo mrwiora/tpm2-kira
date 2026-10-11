@@ -484,6 +484,8 @@ own, unmarked: cryptsetup's prompt is always the fallback
               --label STR             the key's label (default luks)
               --url --pin --token     tpm+vault: the vault, from 'tpm2-kira-vault
                                       token create'; --name the machine's name there
+              --pepper                tpm+vault: an operator's pepper in the key, asked
+                                      here; every boot waits for an approval with it
               --existing-key-file F   a passphrase file to authorise (scripts)
               --privkey --pubkey --adapter --timeout --adapter-wait  as remote-salt enrol
   remove    'cryptsetup luksKillSlot' for a keyslot tpm2-kira marked, and
