@@ -7,7 +7,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/google/go-attestation v0.6.4
 	github.com/google/go-tpm v0.9.8
-	golang.org/x/crypto v0.57.0
+	golang.org/x/crypto v0.58.0
 	golang.org/x/sys v0.49.0
 	rsc.io/qr v0.2.0
 )
