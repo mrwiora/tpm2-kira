@@ -98,3 +98,56 @@ func TestLuksEnrolOnAnImage(t *testing.T) {
 		t.Fatalf("a keyslot that is not ours: %v", err)
 	}
 }
+
+// A disk encrypted with an empty passphrase: the empty answer authorises
+// the enrolment and the removal, it is not refused as "not a password".
+// A file image, so no root is needed.
+//
+//	go test -tags integration -count=1 -run TestLuksEnrolWithAnEmptyPassphrase ./cmd/
+func TestLuksEnrolWithAnEmptyPassphrase(t *testing.T) {
+	if _, err := exec.LookPath("cryptsetup"); err != nil {
+		t.Skip("cryptsetup not installed")
+	}
+	dir := t.TempDir()
+	img := filepath.Join(dir, "disk.img")
+	f, _ := os.Create(img)
+	f.Truncate(20 << 20)
+	f.Close()
+	empty := filepath.Join(dir, "empty")
+	os.WriteFile(empty, nil, 0o600)
+	format := exec.Command("cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "--pbkdf", "pbkdf2", "--pbkdf-force-iterations", "1000", "--key-file", empty, img)
+	if out, err := format.CombinedOutput(); err != nil {
+		t.Fatalf("luksFormat: %v: %s", err, out)
+	}
+
+	answers := []string{"correct-horse", "correct-horse", "test-salt"}
+	oldAsk, oldExisting := terminalAsk, terminalAskExisting
+	terminalAsk = func(string) ([]byte, error) {
+		a := answers[0]
+		answers = answers[1:]
+		return []byte(a), nil
+	}
+	asked := 0
+	terminalAskExisting = func(string) ([]byte, error) { asked++; return nil, nil } // Enter alone
+	defer func() { terminalAsk, terminalAskExisting = oldAsk, oldExisting }()
+
+	if err := LuksEnrol(LuksEnrolOptions{Device: img, Mode: LuksModePasswordSalt}); err != nil {
+		t.Fatalf("luks enrol with an empty passphrase: %v", err)
+	}
+	st := readLuksStatus(img)
+	if st.Error != "" || len(st.Keyslots) != 2 || st.Keyslots[1].Token == nil {
+		t.Fatalf("after enrol: %+v", st)
+	}
+	if empty, err := emptyPassphraseOpens(img, 0); err != nil || !empty {
+		t.Fatalf("the empty passphrase is not found: %v %v", empty, err)
+	}
+	if empty, err := emptyPassphraseOpens(img, 1); err != nil || empty {
+		t.Fatalf("the derived key's keyslot reads as empty: %v %v", empty, err)
+	}
+	if err := LuksRemove(LuksRemoveOptions{Device: img, Keyslot: 1}); err != nil {
+		t.Fatalf("luks remove with an empty passphrase: %v", err)
+	}
+	if st := readLuksStatus(img); len(st.Keyslots) != 1 || asked != 2 {
+		t.Fatalf("after remove: %+v, asked %d", st, asked)
+	}
+}

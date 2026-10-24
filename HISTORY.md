@@ -48,6 +48,33 @@ but sealed to the values before the OS separator, because the code
 screen's server runs ahead of it, and with tpm2-kira's own TPM code in
 place of systemd-creds.
 
+### The image's SSH host key was sealed to the TPM
+
+From 2026-10-10 to 2026-10-23 the host key was an OpenSSH ed25519 key -
+the running system's by default, or one of the image's own
+(TPM2_KIRA_SSH_HOSTKEY) - whose seed every image build sealed to PCR 0+7
+at the measure point; 'run' unsealed it at the code screen and kept it in
+its memory. The key existed as a file on the root filesystem and, at
+boot, in clear in a process: whoever read either once could sign as the
+host anywhere, for good. It was replaced by an SSH CA created inside the
+TPM, signing only in a state the signing key approved, which certifies a
+host key the TPM makes for each boot under its NULL hierarchy: no key and
+no secret is stored, the CA never leaves the TPM, and what a boot holds
+in memory is useless after the next reboot. The clients trust the CA
+(@cert-authority) instead of a key. A step in between, a long-term key in
+the TPM unlocked by a secret sealed to the approved state, was dropped
+before it shipped: the secret, once read from memory, would have kept
+working across reboots.
+
+### The SSH server was part of tpm2-kira
+
+Until 2026-10-23 'remote serve' and run's side of it (the sandbox, the
+control socket, the signing) were tpm2-kira's own files
+(cmd/remote_serve.go, cmd/remote_privsep.go). They moved, with the TPM
+host keys, into aSSH (assh/, a git submodule; github.com/tpm2-trust/assh), a project of its
+own that other projects use too; tpm2-kira keeps what is its code
+screen's (sessions, prompts, the console).
+
 ### The passphrase prompt was systemd's; tpm2-kira only ran before it
 
 Until the key provider (2026-10-07), `tpm2-kira.service` showed the code,
@@ -73,6 +100,78 @@ replaces a distribution hook. The crypttab line was then the documented
 default for a few hours and gave way to `rd.luks.key=` on the kernel
 command line, which is honoured in the initrd only and leaves the running
 system's files alone (docs/UNLOCK-DISK.md §5).
+
+### The existing passphrase went to cryptsetup on a pipe
+
+Until 2026-10-14 the recovery passphrase that authorises luksAddKey and
+luksKillSlot was written into a pipe on descriptor 3, and the prompt
+refused an empty answer as "not a password". A disk encrypted with an
+empty passphrase - an installer's placeholder, say - could then not be
+enrolled at all, and cryptsetup refuses an empty pipe anyway ("Nothing
+to read on input"). It reads an empty regular file as the empty
+passphrase, so the passphrase now goes in a memfd, and the prompt takes
+Enter alone; control flags such a disk red.
+
+## control
+
+### Guided or manual, and the one row
+
+Until 2026-10-14 control asked at its first run how to guide, kept as
+TPM2_KIRA_CONTROL=guided|manual in control.conf, switchable from the
+overview's last entry. Guided put one row on top - the signing key, the
+mkinitcpio configuration, the key's route, the slots, one rebuild, the
+reboot ("part 1 of 2") - and the phone and the disk keys after it ("part
+2"); manual was the same overview as one flat list. Both were one long
+screen whose later steps appeared once the key and the hook were in
+place, the network and SSH step and the debug switch appended at the
+end; each step that changed the image offered its own rebuild, and the
+vault was not in control at all. It became two steps: the boot chain
+with its prerequisites first, then submenus each option of which is
+gated by what the machine has, one rebuild for all of them. The key
+moved to the TOTP codes, which it signs. A file with TPM2_KIRA_CONTROL
+does not load; remove the line.
+
+### The PIN and the SSH keys lived in control.conf's world
+
+Until 2026-10-14 the YubiKey's PIN was a `TPM2_KIRA_PIN='...'` line in
+control.conf (the file then 0600, the line read on its own, whatever the
+other lines said), and the keys that may log in at boot were root's
+`/root/.ssh/authorized_keys`, or a file `TPM2_KIRA_SSH_AUTHORIZED_KEYS`
+named. control called the image out of date when control.conf was newer
+than it - so storing the PIN at a seal asked for a rebuild that changed
+nothing, and a key added to root's file was never noticed. A fingerprint
+of the image's settings recorded at every build was tried the same day
+and dropped as a detour: the PIN moved to `/etc/tpm2-kira/pin`, so
+control.conf holds what the image is built with and its time is right
+again; the keys moved to `/etc/tpm2-kira/authorized_keys`, and the image
+names their SHA-256 in an empty file's name, which its listing shows. A
+signature over the settings with the signing key was weighed and not
+taken: it tells a change since control signed, not whether the image has
+it, and the reseal after each build already signs what the image
+measures. Both old lines are errors that say where the value goes now.
+
+### The image carried everything, and the hooks decided in shell
+
+Until 2026-10-16 every image got the code screen, its wait for
+`/dev/tpmrm0` and `tpm2-kira-cap.service`, whether a slot was sealed or
+the machine had a TPM at all ("a later seal needs no rebuild"). The
+Bluetooth gate went in by a shell decision of each hook - `attest status
+--json` for an enrolled phone, `attest signer`, `attest initramfs-deps`,
+`attest config-check` - and `TPM2_KIRA_ATTEST_BLUETOOTH=always` packed it
+with nothing but `seal.pub` checked, so a machine unlocking by password and
+salt alone, without a TPM, still loaded the adapter's driver and started
+the radio worker at boot. The network and SSH came from `remote
+initramfs`, all or nothing. control told an image out of date by the
+times of control.conf and the host key, the sum of the login keys in an
+empty file's name (`authorized_keys.sha256-<sum>`), and a look for the
+gate's files and firmware; step 1 had a "Build the boot image" step and
+step 2 led with "Rebuild the boot image". It became the boot plan
+(`initramfs plan`): one decision in Go, at the build, of what the image
+carries - the disk unlock always, every other part only while something
+uses it - named in the image with the digest of each part's settings,
+which `run --plan` and the boot scripts follow and control compares with;
+control builds the image once, when it is left. The four commands are
+gone; an image without a plan is out of date.
 
 ## Key material
 
@@ -424,6 +523,23 @@ The default device was `/dev/tpm0`, and every command flushed all loaded
 sessions and transient objects first, including other programs' handles. The
 default is now `/dev/tpmrm0`; the global flush runs only on the raw device or a
 simulator socket, where no other program can hold handles at the same time.
+
+### go-tpm is pinned to an unreleased commit
+
+go-tpm v0.9.8 cut an authorization value at its first zero byte in HMAC
+sessions (`hmacKeyFromAuthValue`), where the TPM drops only trailing zeros
+(Part 1, 19.6.5, Note 2): the HMACs disagreed and the TPM answered
+`TPM_RC_BAD_AUTH`, or `TPM_RC_AUTH_FAIL` with a dictionary-attack count for
+an object without NoDA. aSSH's per-boot host keys have random 32-byte
+authorization values, so about one in eight failed to sign; aSSH worked
+around it by drawing values without a zero byte (`hostkey.authValue`).
+
+Upstream fixed it in google/go-tpm#446 (commit 36f2059, 2026-10-01), after
+v0.9.8 and not yet in a release. Since 2026-10-24 aSSH, tpm2-kira and
+tpm2-kira-vault require `v0.9.9-0.20261001171150-36f205946d7e`, and the
+workaround is gone: host keys use plain random values, and
+`TestHostKeysSign` checks values with zero bytes inside, first and at the
+end. Move to the first go-tpm release that contains #446.
 
 ## Removed functions
 

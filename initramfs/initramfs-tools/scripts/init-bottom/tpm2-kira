@@ -61,7 +61,8 @@ if [ -r /run/tpm2-kira/net-device ]; then
 fi
 
 # Lock code computation until the next boot, so nothing in the running
-# system can compute codes. Never let a failure here stop the boot.
-[ -x /usr/bin/tpm2-kira ] && /usr/bin/tpm2-kira cap >/dev/console 2>&1 || true
+# system can compute codes - when the image shows codes at all. Never let a
+# failure here stop the boot.
+[ -x /usr/bin/tpm2-kira ] && [ -d /etc/tpm2-kira/plan/codes ] && /usr/bin/tpm2-kira cap >/dev/console 2>&1 || true
 
 exit 0

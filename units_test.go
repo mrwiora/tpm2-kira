@@ -102,9 +102,14 @@ func TestGateUnitIsConfined(t *testing.T) {
 		t.Error("the display's terminal and journal wiring")
 	}
 	// $TPM2_KIRA_REMOTE: the SSH server's flags from the image's drop-in,
-	// no argument at all without one.
-	if !has(display, "ExecStart=tpm2-kira run --gate "+socket+" $TPM2_KIRA_REMOTE") {
-		t.Error("the code screen does not listen where the radio worker asks")
+	// no argument at all without one. --plan: what the image carries.
+	if !has(display, "ExecStart=tpm2-kira run --plan /etc/tpm2-kira/plan --gate "+socket+" $TPM2_KIRA_REMOTE") {
+		t.Error("the code screen does not follow the image's plan, or does not listen where the radio worker asks")
+	}
+	// The TPM is waited for by the plan's drop-in alone: a machine without
+	// one, or with nothing that needs it, does not wait.
+	if has(display, "Wants=dev-tpmrm0.device") || has(display, "After=dev-tpmrm0.device") {
+		t.Error("the code screen waits for the TPM whatever the plan says")
 	}
 	if !has(display, "Before=systemd-pcrosseparator.service") || !has(display, "Before=systemd-pcrnvdone.service") || !has(display, "Conflicts=initrd-switch-root.target") {
 		t.Error("the coordinator must hold both separators back and end with the initramfs")

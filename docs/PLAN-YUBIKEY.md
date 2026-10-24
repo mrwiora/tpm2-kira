@@ -596,8 +596,8 @@ post hook and Debian's hook need no variable from their own environment.
 
 The PIN does not reach the image, since an image - a unified kernel image on
 the ESP, say - is not root's alone: nothing of `control.conf` goes into it,
-and no hook sources the file (`attest initramfs-deps` reads the build's two
-settings). The PIN is read from its own line (`storedPIN`), whatever the
+and no hook sources the file (the boot plan, `initramfs plan`, reads
+the settings it needs). The PIN is read from its own line (`storedPIN`), whatever the
 other lines say: a settings line this version refuses never takes the PIN
 with it. Its value goes to the YubiKey signer alone, to sign with the key -
 the blob, the approvals, the authorisations of NV writes; everything else

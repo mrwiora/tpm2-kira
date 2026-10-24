@@ -28,8 +28,20 @@ It may not carry what came before.
 ## Other standing decisions
 
 - **One binary.** Everything is the single `tpm2-kira` executable; processes
-  that must be separated (the confined radio worker) are the same binary run
-  with other arguments, never a second executable.
+  that must be separated (the confined radio worker, the SSH server's
+  unprivileged half) are the same binary run with other arguments, never a
+  second executable.
+- **The SSH server and the TPM host keys are aSSH's**
+  (`assh/`, a git submodule; `github.com/tpm2-trust/assh`, a project of its
+  own that other projects use too): the privilege-separated server
+  (`assh/server`), the SSH CA in the TPM and the per-boot host keys it
+  certifies (`assh/hostkey`). tpm2-kira uses it as a library (`replace`
+  in go.mod to the submodule; clone with `--recurse-submodules`) and
+  keeps only what is its code screen's: sessions, prompts, the console,
+  the CA's approval for the
+  measure point. A change to the SSH protocol side or to how keys are held
+  in the TPM goes into aSSH, with its tests there. No host key and no
+  secret of one is ever stored, in the image or on the disk.
 - **SHA-1 only when asked.** The SHA-1 PCR bank is used only with `--sha1`,
   with a warning at seal and reseal (control's overview carries the risk
   instead, so its steps say nothing twice); nothing falls back to it on
@@ -69,15 +81,19 @@ It may not carry what came before.
   the fallback after a wrong or missing answer (docs/UNLOCK-DISK.md §4).
   Do not build a mode that holds the boot on the phone's verdict.
 - **One configuration file, `/etc/tpm2-kira/control.conf`, and only
-  `control` writes it.** It holds the radio settings, the YubiKey's PIN
-  and the boot image's network and SSH server (TPM2_KIRA_NET_*,
-  TPM2_KIRA_SSH_*: the one part the image build turns into files of the
-  image - a networkd file, a unit drop-in - through `tpm2-kira remote
-  initramfs`; the file itself never goes in, docs/SSH.md)
+  `control` writes it.** It holds what the boot image is built with, and
+  nothing else: the radio settings and the boot image's network and SSH
+  server (TPM2_KIRA_NET_*, TPM2_KIRA_SSH_*: the one part the image build
+  turns into files of the image - a networkd file, a unit drop-in -
+  through the boot plan; the file itself never goes in, docs/SSH.md)
   (nothing else of it reaches the boot image: the gate there takes the
   adapter that comes up, waits as long as the code screen holds, and
   logs every step when "Debug at boot" is on - a switch in the TPM, NV
   index 0x01803000, written by `control` with the signing key).
+  Beside it, also written by `control` alone: the YubiKey's PIN
+  (`/etc/tpm2-kira/pin`, root's alone, never in the image) and the keys
+  that may log in at boot (`/etc/tpm2-kira/authorized_keys`, part of the
+  SSH server's settings in the boot plan).
   How the
   disk's key is made is not configured anywhere: the boot reads it from
   each volume's own LUKS2 header - the tpm2-kira token of a keyslot names
@@ -86,15 +102,34 @@ It may not carry what came before.
   one thing; `tpm2-kira control` checks the prerequisites of a working
   setup. Every other file on the system - the kernel command line,
   crypttab - is advised by `control`, never edited, with two exceptions,
-  each asked for every time: the HOOKS of `/etc/mkinitcpio.conf` (its
-  mkinitcpio step writes sd-tpm2-kira in when the person says so, and runs
-  mkinitcpio -P when asked), and the key's route (the route step writes
-  the shown line into the cmdline file, a boot entry's options or
-  crypttab when the person says so). `control`'s status judges line by line - green
-  what is good, red what is not with the risk in brackets (SHA-1, Secure
-  Boot off or in Setup Mode, an unvouched endorsement key, a selection
-  without the kernel, a loose file holding the PIN); there is no separate
-  risks list.
+  each asked for every time, both in control's step 1 (the boot chain):
+  the HOOKS of `/etc/mkinitcpio.conf` (its mkinitcpio step writes
+  sd-tpm2-kira in when the person says so), and the key's route (the route step writes the shown line into
+  the cmdline file, a boot entry's options or crypttab when the person
+  says so). Step 2 is submenus whose options are greyed with the reason
+  while the machine cannot have them; what changes the image there only
+  marks it out of date, and the image is built once, when `control` is
+  left, after the person says yes. `control`'s status
+  judges line by line - green what is good, red what is not with the
+  risk in brackets (SHA-1, Secure Boot off or in Setup Mode, an unvouched
+  endorsement key, a selection without the kernel, a loose file holding
+  the PIN, an empty passphrase, a vault that does not answer); there is
+  no separate risks list.
+- **The boot image carries what the machine uses, by the boot plan**
+  (cmd/bootplan.go, `tpm2-kira initramfs plan`). The disk unlock is always
+  in it; every other part - the TOTP codes, the phone's Bluetooth gate, the
+  vault, the network, the SSH server - only while something uses it (a
+  sealed slot, an enrolled phone, a setting of control.conf), and what
+  needs the TPM stays out without one. The decision is made once, at the
+  build, from the machine: the hooks add the units and drivers of the parts
+  the plan names, and `run` and the boot scripts start only those
+  (`run --plan`), so the boot touches no TPM and loads no radio it was not
+  built for. The image names its parts in `/etc/tpm2-kira/plan/<part>/<digest
+  of its settings>`; `control` reads that from the image's listing. A part
+  in use and not in the image, or in it with other settings, is a reason
+  to rebuild; a part the image carries for nothing is not - the next build
+  leaves it out. Do not decide what the image carries in a hook's shell
+  or at boot: add the rule to the plan.
 - **Root for everything but the help.** Every command refuses to run as a
   user (`main.go` `requireRoot`); `control` says so on its own screen. The
   test suite's exception is `TPM2_KIRA_UNPRIVILEGED=1` for the binary

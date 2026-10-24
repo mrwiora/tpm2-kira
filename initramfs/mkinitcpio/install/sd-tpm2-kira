@@ -38,185 +38,90 @@ _report_measure_point() {
 }
 
 CONF=${TPM2_KIRA_CONTROL_CONF:-/etc/tpm2-kira/control.conf}
+PLAN=/etc/tpm2-kira/plan
 
-# The configuration file is the running system's alone: it says which
-# adapter's driver goes into the image and when (TPM2_KIRA_ATTEST_ADAPTER,
-# _BLUETOOTH), and holds the YubiKey's PIN. Nothing of it goes into the
-# image, and this hook does not read it either - 'attest initramfs-deps'
-# reads the two settings. A file that does not load is said here, never a
-# reason to stop the build: the image is built with the defaults (a kernel
-# update must not end with a half-built image over a settings line).
-_check_config() {
-    [[ -r $CONF ]] || return 0
-    if ! tpm2-kira attest config-check "$CONF" >/dev/null 2>&1; then
-        warning "tpm2-kira: $CONF is not valid: $(tpm2-kira attest config-check "$CONF" 2>&1 | tail -1)"
-    fi
-    return 0
+# The boot plan (cmd/bootplan.go): what this image carries besides the disk
+# unlock, decided by 'tpm2-kira initramfs plan' from what the machine uses -
+# the slots in the TPM and what they are enrolled with, the signing key,
+# the Bluetooth adapter, the network and SSH settings of control.conf.
+# Each part is in only when something uses it, and the build output says
+# why one is out. The plan writes the image's own files (the signing public
+# key, the network file, the sealed SSH host key, the drop-ins) and names
+# its parts in $PLAN; this hook adds the units and the drivers it lists.
+# control.conf never goes into the image, and this hook does not read it.
+# Nothing here stops the build: a part that cannot be had stays out.
+_plan_has() {
+    [[ -d $BUILDROOT$PLAN/$1 ]]
 }
 
-# Bluetooth for remote attestation (PLAN-BLE.md §3.1), whenever a phone is
-# enrolled. Adds exactly what the configured adapter needs on this machine:
-# its driver modules (with their dependencies) and the firmware files the
-# kernel loaded for it, as reported by 'tpm2-kira attest initramfs-deps'.
-# Nothing is added without an enrolled phone, and nothing when the adapter
-# cannot be found: the image then shows the code and serves the disk's key,
-# and no phone is asked.
-_add_bluetooth() {
-    local adapter deps rc log kind value nfw=0 policy
-    local -a modules=()
-
-    # The firmware the adapter loads is named in the kernel log of a boot
-    # that loaded it - not every boot does (an Intel controller keeps its
-    # firmware over a warm reboot and then names none). So the Bluetooth
-    # lines of every boot the journal keeps go in; the ring buffer may also
-    # have rotated on a long uptime. initramfs-deps also reads the two
-    # settings of control.conf: which adapter, and the policy (auto: only
-    # with an enrolled phone; always: packed into every image).
-    log=$(mktemp)
-    journalctl -k -o cat --no-pager 2> /dev/null | grep -E 'Bluetooth: hci[0-9]+:' > "$log" || true
-    deps=$(tpm2-kira attest initramfs-deps --kernel-log "$log")
-    rc=$?
-    rm -f "$log"
-    policy=$(sed -n 's/^policy //p' <<< "$deps")
-    adapter=$(sed -n 's/^adapter hci//p' <<< "$deps")
-
-    local enrolled
-    enrolled=$(tpm2-kira attest status --json 2>/dev/null)
-    if [[ -z $enrolled || $enrolled == '[]' ]] && [[ $policy != always ]]; then
-        plain "tpm2-kira: no phone is enrolled; Bluetooth not added"
+_add_plan() {
+    local out kind value nfw=0 adapter
+    local -a btmods=() btfw=() netmods=()
+    if ! out=$(tpm2-kira initramfs plan --format mkinitcpio --conf "$CONF" --buildroot "$BUILDROOT"); then
+        warning "tpm2-kira: the installed tpm2-kira made no boot plan: the image unlocks the disk and carries nothing else"
         return 0
     fi
-
-    # The gate checks the enrolment record before it advertises: signed by
-    # this machine's signing key, and current by the TPM's record counter.
-    # For the first it needs the key's public half in the image (public, not
-    # a secret). 'attest signer' prints it after checking the records here,
-    # on the unlocked system: one written by somebody else, or an older one
-    # put back, is refused, and then the gate is not added at all. The image
-    # only changes when the signing key does, not when phones come and go.
-    # Packed ahead of any enrolment (always), the key comes from setup's
-    # seal.pub: there is no record to check yet.
-    local signer
-    if [[ -n $enrolled && $enrolled != '[]' ]]; then
-        signer=$(tpm2-kira attest signer)
-        if (( $? != 0 )) || ! grep -q 'BEGIN PUBLIC KEY' <<< "$signer"; then
-            warning "tpm2-kira: the attestation record was not accepted (see above); Bluetooth not added"
-            return 0
-        fi
-    elif [[ -r /etc/tpm2-kira/keys/seal.pub ]] && grep -q 'BEGIN PUBLIC KEY' /etc/tpm2-kira/keys/seal.pub; then
-        signer=$(cat /etc/tpm2-kira/keys/seal.pub)
-    else
-        warning "tpm2-kira: TPM2_KIRA_ATTEST_BLUETOOTH=always, but no signing public key at /etc/tpm2-kira/keys/seal.pub (tpm2-kira setup); Bluetooth not added"
-        return 0
-    fi
-
-    while read -r kind value; do
-        [[ $kind == warning ]] && warning "tpm2-kira: $value"
-    done <<< "$deps"
-
-    if (( rc != 0 )); then
-        warning "tpm2-kira: a phone is enrolled but its Bluetooth adapter was not found; Bluetooth not added to the image"
-        return 0
-    fi
-    # Every other command exits 0 by design, so an installed binary that
-    # predates initramfs-deps "succeeds" with no output. Only an answer that
-    # names the adapter counts.
-    if ! grep -q '^adapter ' <<< "$deps"; then
-        warning "tpm2-kira: the installed tpm2-kira cannot resolve Bluetooth dependencies (too old?); Bluetooth not added"
-        return 0
-    fi
-
-    # add_module copies every firmware file a module declares: for btusb's
-    # dependencies that is ~60 files for chips this machine does not have.
-    # When the kernel log named the files this adapter really loaded, add
-    # only those; otherwise fall back to the declarations.
-    local saved_add_firmware=''
-    if grep -q '^firmware ' <<< "$deps"; then
-        saved_add_firmware=$(declare -f add_firmware)
-        add_firmware() { return 0; }
-    fi
-    while read -r kind value; do
-        if [[ $kind == module ]]; then
-            add_module "$value"
-            modules+=("$value")
-        fi
-    done <<< "$deps"
-    if [[ -n $saved_add_firmware ]]; then
-        eval "$saved_add_firmware"
-    fi
-    while read -r kind value; do
-        if [[ $kind == firmware ]]; then
-            add_firmware "$value" && nfw=$((nfw + 1))
-        fi
-    done <<< "$deps"
-
-    # The adapter's USB bus lets no new device in by itself
-    # (usbcore.authorized_default=0, as with USBGuard): without a rule the
-    # driver never binds in the image. The rule lets exactly this adapter
-    # in, at its port, and exists in the image alone - the running
-    # system's own policy is not touched.
-    if grep -q '^udev ' <<< "$deps"; then
-        mkdir -p "$BUILDROOT/etc/udev/rules.d"
-        sed -n 's/^udev //p' <<< "$deps" > "$BUILDROOT/etc/udev/rules.d/70-tpm2-kira-bluetooth.rules"
-        plain "tpm2-kira: hci$adapter's USB bus lets no new device in: the image lets the adapter in"
-    fi
-
-    mkdir -p "$BUILDROOT/etc/modules-load.d"
-    printf '%s\n' "${modules[@]}" > "$BUILDROOT/etc/modules-load.d/tpm2-kira-bluetooth.conf"
-    # The signing key's public half, which the gate checks the enrolment
-    # record with: in the image alone, never on the running system.
-    mkdir -p "$BUILDROOT/etc/tpm2-kira"
-    printf '%s\n' "$signer" > "$BUILDROOT/etc/tpm2-kira/attest-signer.pem"
-    add_systemd_unit tpm2-kira-attest.service
-    add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-attest.service \
-        /usr/lib/systemd/system/tpm2-kira-attest.service
-    plain "tpm2-kira: Bluetooth attestation via hci$adapter: ${#modules[@]} modules, $nfw firmware files"
-}
-
-# The network and the SSH server of the image (docs/SSH.md), from
-# control.conf's TPM2_KIRA_NET_* and TPM2_KIRA_SSH_*: independent of
-# /etc/systemd/network, which is the running system's. 'tpm2-kira remote
-# initramfs' writes the files (the systemd-networkd file, the sealed SSH
-# host key and the authorized keys, the drop-in that makes 'tpm2-kira run'
-# the SSH server) and says what is added here: systemd-networkd and the
-# drivers of the matched interface. The SSH server is tpm2-kira itself. A setting
-# that cannot work is said, and the image is built without both - it
-# still boots, with the code screen at the console.
-_add_remote() {
-    local out kind value
-    local -a modules=()
-    if ! out=$(tpm2-kira remote initramfs --conf "$CONF" --buildroot "$BUILDROOT" 2>&1); then
-        warning "tpm2-kira: no network or SSH in the image: ${out##*tpm2-kira: }"
-        return 0
-    fi
-    [[ $out == 'net off' ]] && return 0
-
     while read -r kind value; do
         case $kind in
-            module) add_module "$value" && modules+=("$value") ;;
-            modules-all) add_checked_modules /drivers/net ;;
+            say) plain "tpm2-kira: $value" ;;
             warning) warning "tpm2-kira: $value" ;;
+            bt-module) btmods+=("$value") ;;
+            bt-firmware) btfw+=("$value") ;;
+            net-module) add_module "$value" && netmods+=("$value") ;;
+            net-modules-all) add_checked_modules /drivers/net ;;
         esac
     done <<< "$out"
-    local hostkey
-    hostkey=$(sed -n 's/^hostkey //p' <<< "$out")
 
-    add_systemd_unit systemd-networkd.service
-    add_symlink /usr/lib/systemd/system/sysinit.target.wants/systemd-networkd.service \
-        /usr/lib/systemd/system/systemd-networkd.service
-    local db
-    for db in passwd shadow group; do
-        grep '^systemd-network:' "/etc/$db" >> "$BUILDROOT/etc/$db"
-    done
-    plain "tpm2-kira: network at boot: $(sed -n 's/^net //p' <<< "$out")${modules:+ via ${modules[*]}}"
+    # The codes: the lock of code computation when the initrd is left, so
+    # nothing in the running OS can compute codes until the next boot.
+    if _plan_has codes; then
+        add_systemd_unit tpm2-kira-cap.service
+        add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-cap.service \
+            /usr/lib/systemd/system/tpm2-kira-cap.service
+    fi
 
-    local port
-    port=$(sed -n 's/^ssh //p' <<< "$out")
-    [[ -n $port ]] || return 0
-    # The SSH server is tpm2-kira itself ('run' and its unprivileged
-    # 'remote serve'): nothing more to add.
-    plain "tpm2-kira: SSH at boot on port $port: the codes are confirmed in an SSH session"
-    plain "tpm2-kira: SSH host key $hostkey"
+    # The phone's gate (PLAN-BLE.md §3.1): the adapter's driver modules and
+    # the firmware the kernel loaded for it on this machine. add_module
+    # copies every firmware file a module declares: for btusb's dependencies
+    # that is ~60 files for chips this machine does not have. When the
+    # kernel log named the files this adapter really loaded, only those go
+    # in; otherwise the declarations.
+    if _plan_has phone; then
+        local saved_add_firmware=''
+        if (( ${#btfw[@]} )); then
+            saved_add_firmware=$(declare -f add_firmware)
+            add_firmware() { return 0; }
+        fi
+        for value in "${btmods[@]}"; do
+            add_module "$value"
+        done
+        if [[ -n $saved_add_firmware ]]; then
+            eval "$saved_add_firmware"
+        fi
+        for value in "${btfw[@]}"; do
+            add_firmware "$value" && nfw=$((nfw + 1))
+        done
+        add_systemd_unit tpm2-kira-attest.service
+        add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-attest.service \
+            /usr/lib/systemd/system/tpm2-kira-attest.service
+        plain "tpm2-kira: Bluetooth: ${#btmods[@]} modules, $nfw firmware files"
+    fi
+
+    # The network: systemd-networkd with its user, from the plan's file
+    # alone - /etc/systemd/network is the running system's. The SSH server
+    # is tpm2-kira itself ('run' and its unprivileged 'remote serve'): its
+    # drop-in is the plan's, nothing more to add.
+    if _plan_has net; then
+        add_systemd_unit systemd-networkd.service
+        add_symlink /usr/lib/systemd/system/sysinit.target.wants/systemd-networkd.service \
+            /usr/lib/systemd/system/systemd-networkd.service
+        local db
+        for db in passwd shadow group; do
+            grep '^systemd-network:' "/etc/$db" >> "$BUILDROOT/etc/$db"
+        done
+        (( ${#netmods[@]} )) && plain "tpm2-kira: network drivers: ${netmods[*]}"
+    fi
+    return 0
 }
 
 UNLOCK_SOCKET=/run/tpm2-kira/unlock.sock
@@ -281,92 +186,61 @@ _add_unlock() {
 }
 
 build() {
-    # Add tpm2-kira binary to initramfs
     add_binary tpm2-kira
 
-    # Add systemd service dependency
+    # The display and the key provider, enabled in the image only:
+    # add_systemd_unit only carries over .wants symlinks that already exist
+    # on the host, and the host's own boot stays untouched. It waits for
+    # the TPM only when a part of the plan needs it (the plan's drop-in).
     add_systemd_unit tpm2-kira.service
-    # The display wants the TPM but runs without one (the key provider does
-    # not need it); wait for the device for a bounded time only.
-    mkdir -p "$BUILDROOT/usr/lib/systemd/system/dev-tpmrm0.device.d"
-    printf '[Unit]\nJobTimeoutSec=5\n' > "$BUILDROOT/usr/lib/systemd/system/dev-tpmrm0.device.d/tpm2-kira.conf"
-
-    # add_systemd_unit only carries over .wants symlinks that already exist on
-    # the host. Enabling the unit here keeps the host's own boot untouched.
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira.service \
         /usr/lib/systemd/system/tpm2-kira.service
 
-    # Locks code computation when the initrd is left, so nothing in the
-    # running OS can compute codes (or use the key) until the next boot.
-    add_systemd_unit tpm2-kira-cap.service
-    add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-cap.service \
-        /usr/lib/systemd/system/tpm2-kira-cap.service
-
     _report_measure_point
-
-    _check_config || return 1
 
     _add_unlock
 
-    _add_bluetooth || return 1
-
-    _add_remote
-
-    if [[ ! -d /etc/tpm2-kira/keys ]]; then
-        warning "tpm2-kira: not configured yet; run 'tpm2-kira setup', then 'tpm2-kira seal', and rebuild"
-    fi
+    _add_plan
 }
 
 help() {
     cat <<HELPEOF
-This hook provides systemd-integrated TPM2-based TOTP authentication support
-in early boot using tpm2-kira. It runs 'tpm2-kira run' as a systemd service
-for continuous TOTP display.
+This hook puts tpm2-kira into a systemd-based initramfs: the disk unlock
+always, and what the machine uses besides, by the boot plan
+('tpm2-kira initramfs plan', 'tpm2-kira help initramfs').
 
 The hook will:
-- Install the tpm2-kira binary into the image
-- Add tpm2-kira.service, tpm2-kira-cap.service and tpm2-kira-unlock.socket
-  and enable them inside the image only
-- Start tpm2-kira in continuous run mode during boot
+- Install the tpm2-kira binary into the image, with tpm2-kira.service and
+  tpm2-kira-unlock.socket, enabled inside the image only
 - Report which volumes are unlocked through tpm2-kira: those whose key
   file is /run/tpm2-kira/unlock.sock (crypttab(5), AF_UNIX key files),
   named on the kernel command line as rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock
   or in the key field of an x-initrd.attach line of /etc/crypttab.
-  systemd-cryptsetup reads the key from tpm2-kira, which asks at its
-  prompt once the code screen is confirmed. Nothing is written.
-- With TPM2_KIRA_NET in /etc/tpm2-kira/control.conf: systemd-networkd and
-  the matched interface's driver, configured from control.conf alone; with
-  TPM2_KIRA_SSH=on also tpm2-kira's own SSH server, run unprivileged: the
-  codes are confirmed and the password typed in an SSH session, the console
-  says where to log in (docs/SSH.md). The SSH host key (the system's
-  OpenSSH ed25519 key by default) is sealed to this TPM at every build,
-  bound to PCR 0 and 7; the image holds no usable copy
-- If a phone is enrolled: add the Bluetooth adapter's driver modules and
-  firmware (the adapter from /etc/tpm2-kira/control.conf, hci0 by default),
-  and tpm2-kira-attest.service, which serves attestation requests from the
-  phone beside the TOTP display without holding the boot
-
-Setup is NOT run from here: it generates a new TOTP secret and writes to TPM
-NVRAM, which must not happen while merely building an image. Run
-'tpm2-kira setup' once by hand, then rebuild.
+  systemd-cryptsetup reads the key from tpm2-kira, which makes it as the
+  volume's LUKS2 header says. Nothing is written.
+- Add each part of the boot plan that something uses, and say why the
+  others are out:
+    TOTP codes   a slot is sealed: the code screen waits for the TPM, and
+                 tpm2-kira-cap.service locks the codes when the initrd is left
+    Phone        a phone is enrolled (or TPM2_KIRA_ATTEST_BLUETOOTH=always):
+                 the adapter's driver and firmware, the signing public key,
+                 tpm2-kira-attest.service
+    Vault        a slot is enrolled with a vault, and the image has a network
+    Network      TPM2_KIRA_NET in /etc/tpm2-kira/control.conf: systemd-networkd
+                 and the matched interface's driver
+    SSH server   TPM2_KIRA_SSH=on: tpm2-kira's own, run unprivileged; the
+                 host key sealed to this TPM, bound to PCR 0 and 7
+  A machine without a TPM gets the disk unlock alone.
 
 Post-generation hook (sd-tpm2-kira in /usr/lib/initcpio/post/):
   After the initramfs image is written, 'tpm2-kira reseal' is executed
   automatically. This is necessary because the initramfs content is
-  measured into PCRs at boot — every rebuild may change the expected
+  measured into PCRs at boot - every rebuild may change the expected
   values, so the sealed TOTP secret must be resealed to match.
-
-Created systemd units:
-  tpm2-kira.service       - Runs tpm2-kira in continuous TOTP mode, and
-                            answers systemd-cryptsetup's key requests
-  tpm2-kira-unlock.socket - The key socket systemd-cryptsetup connects to
-  tpm2-kira-cap.service   - Runs 'tpm2-kira cap' when switching to the real
-                            root: no codes until the next boot
 
 Prerequisites:
 - systemd-based initramfs (mkinitcpio with systemd support, sd-encrypt)
 - tpm2-kira binary must be installed
-- TPM 2.0 hardware or firmware TPM must be available
 
 Usage in /etc/mkinitcpio.conf (either order):
   HOOKS=(... sd-tpm2-kira sd-encrypt ...)

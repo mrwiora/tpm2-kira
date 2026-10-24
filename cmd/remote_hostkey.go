@@ -1,301 +1,216 @@
 package cmd
 
-// The SSH host key of the boot image, sealed to the TPM (docs/SSH.md).
+// The SSH server's host key at boot (docs/SSH.md §4), from assh
+// (github.com/tpm2-trust/assh/hostkey).
 //
-// The image is unencrypted, so a host key stored in it serves anyone who
-// can read /boot to impersonate the machine. Instead the image build
-// ('remote initramfs') seals the key's secret half to this TPM, under a
-// policy of PCR 0 (firmware) and PCR 7 (Secure Boot state and keys), and
-// the image holds only the sealed object. 'run' unseals it once, at the
-// start of the code screen, and keeps it in its own memory: it signs the
-// key exchanges 'remote serve' asks it to sign, and is written nowhere.
+// The image is unencrypted, so a key stored in it serves anyone who can
+// read /boot to impersonate the machine. Instead this machine has a
+// certificate authority in its TPM - the SSH CA, created by control, never
+// exported - which signs only while PCR 0 (firmware) and PCR 7 (Secure
+// Boot state and keys) hold values the signing key approved. At every boot
+// 'run' has the TPM make a new host key under its NULL hierarchy, gone at
+// the next reboot, and the CA certify it, at the start of the code screen:
+// the boot holds ahead of the OS separator then, which moves PCR 0 and 7
+// on, so nothing later in this boot gets a certificate. The clients trust
+// the CA (a known_hosts line '@cert-authority'), not a key, so a new key at
+// every boot asks them nothing.
 //
-// The policy is checked before the OS separator - the code screen holds
-// the boot ahead of systemd-pcrosseparator - so the values sealed are
-// those of tpm2-kira's measure point, replayed from the firmware event
-// log, not the registers of the running system (measurepoint.go). They
-// are sealed afresh at every image build: after a firmware or Secure Boot
-// update the image serves a throwaway key until one boot, unlocked at the
-// console, rebuilds it.
-//
-// The key is the running system's OpenSSH host key by default
-// (/etc/ssh/ssh_host_ed25519_key): the image answers as the system does,
-// and the clients need no second known_hosts entry. For a key of the
-// image's own, control creates DefaultOwnHostKey.
+// The approved values are those of tpm2-kira's measure point, replayed
+// from the firmware event log, not the registers of the running system
+// (measurepoint.go). control approves them, with the signing key, when the
+// CA is created and when a firmware or Secure Boot update has changed
+// them; the image carries the approval of the values its boot will meet.
+// Without one the image is built without SSH; an image whose approval no
+// longer fits (an update since the build) serves a throwaway key that the
+// console names.
 
 import (
-	"bytes"
-	"crypto/ed25519"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 
-	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/tpm2-trust/assh/hostkey"
 	"golang.org/x/crypto/ssh"
 )
 
-// hostKeyPCRs are the registers the host key is sealed to: the firmware
-// and the Secure Boot state. Neither changes with the image, so the key
-// survives a kernel update; both are final before tpm2-kira runs.
-var hostKeyPCRs = []int{0, 7}
+const (
+	// DefaultSSHCA is the SSH CA's file, its public key beside it (.pub).
+	DefaultSSHCA = "/etc/tpm2-kira/ssh_ca.json"
+	// ImageSSHCA is the CA in the image, with the one approval its boot
+	// needs.
+	ImageSSHCA = "/etc/tpm2-kira/ssh/ca.json"
+	// sshCARef binds the signing key's approvals to this CA's use.
+	sshCARef = "tpm2-kira ssh ca"
+)
 
-// ImageSealedHostKey is the sealed key's file in the image.
-const ImageSealedHostKey = "/etc/tpm2-kira/ssh/ed25519.sealed"
+// sshCAUnapproved is why the image has no SSH server while the signing key
+// has not approved the next boot's values.
+const sshCAUnapproved = "the SSH CA has no approval of PCR 0 and 7 as the next boot meets them (a new CA, or a firmware or Secure Boot update): signed when you quit control"
 
-// sealedHostKey is the file in the image.
-type sealedHostKey struct {
-	Version   int            `json:"version"`
-	PublicKey []byte         `json:"public_key"` // ed25519, 32 bytes, for the fingerprint
-	Bank      string         `json:"bank"`       // "sha256" or "sha1"
-	PCRs      map[int][]byte `json:"pcrs"`       // the values sealed to, for the diagnosis
-	Public    []byte         `json:"tpm_public"`
-	Private   []byte         `json:"tpm_private"`
-}
+// sshCAPCRs are the registers the CA is bound to: the firmware and the
+// Secure Boot state. Neither changes with the image, so a kernel update
+// needs no new approval; both are final before tpm2-kira runs.
+var sshCAPCRs = []int{0, 7}
 
-const sealedHostKeyVersion = 1
-
-// loadHostKey reads the OpenSSH private key at path (ssh-ed25519,
-// unencrypted).
-func loadHostKey(path string) (ed25519.PrivateKey, error) {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil, fmt.Errorf("no SSH host key at %s: TPM2_KIRA_SSH_HOSTKEY names an OpenSSH ed25519 key (tpm2-kira control offers the system's, or creates one of the image's own)", path)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("SSH host key: %w", err)
-	}
-	raw, err := ssh.ParseRawPrivateKey(data)
-	var missing *ssh.PassphraseMissingError
-	if errors.As(err, &missing) {
-		return nil, fmt.Errorf("SSH host key %s is protected by a passphrase", path)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("SSH host key %s: %w", path, err)
-	}
-	k, ok := raw.(*ed25519.PrivateKey)
-	if !ok {
-		return nil, fmt.Errorf("SSH host key %s is not an ed25519 key, the only kind sealed", path)
-	}
-	return *k, nil
-}
-
-// createHostKey writes a new ed25519 key in OpenSSH's format, with its
-// .pub beside it.
-func createHostKey(path string) error {
-	pub, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return err
-	}
-	block, err := ssh.MarshalPrivateKey(key, "tpm2-kira boot image")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
-		return err
-	}
-	sp, err := ssh.NewPublicKey(pub)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path+".pub", ssh.MarshalAuthorizedKey(sp), 0o644)
-}
-
-// hostKeyFingerprint is the key's SHA256 fingerprint as ssh prints it.
-func hostKeyFingerprint(pub ed25519.PublicKey) string {
-	k, err := ssh.NewPublicKey(pub)
-	if err != nil {
-		return "?"
-	}
-	return ssh.FingerprintSHA256(k)
-}
-
-// hostKeyBank is the PCR bank the key is sealed in: SHA-256 where the TPM
-// has it.
-func hostKeyBank(tpmDev transport.TPM) PCRHashAlgo {
+// sshCABank is the PCR bank the CA is bound to: SHA-256 where the TPM has
+// it.
+func sshCABank(tpmDev transport.TPM) hostkey.Bank {
 	if TPMHasPCRBank(tpmDev, PCRHashAlgoSHA256) {
-		return PCRHashAlgoSHA256
+		return hostkey.SHA256
 	}
-	return PCRHashAlgoSHA1
+	return hostkey.SHA1
 }
 
-// sealHostKey seals key to PCR 0 and 7 as they will be at tpm2-kira's
-// measure point in the next boot.
-func sealHostKey(tpmDev transport.TPM, key ed25519.PrivateKey) (*sealedHostKey, error) {
-	bank := hostKeyBank(tpmDev)
-	specs := make([]PCRSpec, len(hostKeyPCRs))
-	for i, idx := range hostKeyPCRs {
+// sshCAValues are the CA's PCRs as they will be at the next boot's code
+// screen.
+func sshCAValues(tpmDev transport.TPM, ca *hostkey.CA) (map[int][]byte, error) {
+	specs := make([]PCRSpec, len(ca.PCRs))
+	for i, idx := range ca.PCRs {
 		specs[i] = PCRSpec{Index: idx, Source: PCRSourceEventlog}
 	}
-	values, err := ReadPCRValues(tpmDev, specs, bank, MeasurePointModeSetting, MeasurePointBeforeSeparator, false)
+	r, err := ReadPCRValues(tpmDev, specs, PCRHashAlgo(ca.Bank), MeasurePointModeSetting, MeasurePointBeforeSeparator, false)
 	if err != nil {
-		return nil, fmt.Errorf("the values of PCR 0 and 7 at boot cannot be told from the event log: %w", err)
+		return nil, fmt.Errorf("the values of %s at boot cannot be told from the event log: %w", hostkey.PCRList(ca.PCRs), err)
 	}
-	policy, err := ComputePolicyDigestFromPCRValues(tpmDev, hostKeyPCRs, values.Values, bank)
-	if err != nil {
-		return nil, err
-	}
-	primary, err := CreatePrimaryKey(tpmDev)
-	if err != nil {
-		return nil, err
-	}
-	defer FlushHandle(tpmDev, primary.ObjectHandle)
-	// The secret goes to the TPM in a salted, parameter-encrypted session.
-	session := tpm2.HMAC(tpm2.TPMAlgSHA256, 16,
-		tpm2.Salted(primary.ObjectHandle, primary.Public),
-		tpm2.AESEncryption(128, tpm2.EncryptIn))
-	rsp, err := tpm2.Create{
-		ParentHandle: tpm2.AuthHandle{Handle: primary.ObjectHandle, Name: primary.Name, Auth: session},
-		InSensitive: tpm2.TPM2BSensitiveCreate{
-			Sensitive: &tpm2.TPMSSensitiveCreate{
-				Data: tpm2.NewTPMUSensitiveCreate(&tpm2.TPM2BSensitiveData{Buffer: key.Seed()}),
-			},
-		},
-		InPublic: tpm2.New2B(tpm2.TPMTPublic{
-			Type:    tpm2.TPMAlgKeyedHash,
-			NameAlg: tpm2.TPMAlgSHA256,
-			ObjectAttributes: tpm2.TPMAObject{
-				FixedTPM:    true,
-				FixedParent: true,
-				// UserWithAuth not set: the PCR policy alone.
-			},
-			AuthPolicy: policy,
-			Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgKeyedHash,
-				&tpm2.TPMSKeyedHashParms{Scheme: tpm2.TPMTKeyedHashScheme{Scheme: tpm2.TPMAlgNull}}),
-		}),
-	}.Execute(tpmDev)
-	if err != nil {
-		return nil, fmt.Errorf("sealing the SSH host key: %w", err)
-	}
-	s := &sealedHostKey{Version: sealedHostKeyVersion, PublicKey: key.Public().(ed25519.PublicKey),
-		Bank: bank.String(), PCRs: map[int][]byte{},
-		Public: rsp.OutPublic.Bytes(), Private: rsp.OutPrivate.Buffer}
-	for _, idx := range hostKeyPCRs {
-		s.PCRs[idx] = values.Values[idx]
-	}
-	return s, nil
+	return r.Values, nil
 }
 
-// unsealHostKey gets the secret back, if PCR 0 and 7 hold what was sealed.
-// On a mismatch the error names the registers that changed.
-func unsealHostKey(tpmDev transport.TPM, s *sealedHostKey) (ed25519.PrivateKey, error) {
-	if s.Version != sealedHostKeyVersion {
-		return nil, fmt.Errorf("sealed host key of version %d, not %d: rebuild the image", s.Version, sealedHostKeyVersion)
-	}
-	bank := PCRHashAlgoSHA256
-	if s.Bank == PCRHashAlgoSHA1.String() {
-		bank = PCRHashAlgoSHA1
-	}
-	primary, err := CreatePrimaryKey(tpmDev)
+// createSSHCA makes the CA in the TPM, has signer approve the next boot's
+// values, and writes it with its public key.
+func createSSHCA(path, tpmPath string, typ hostkey.Type, signer crypto.Signer) (*hostkey.CA, error) {
+	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		return nil, err
 	}
-	defer FlushHandle(tpmDev, primary.ObjectHandle)
-	loaded, err := tpm2.Load{
-		ParentHandle: tpm2.AuthHandle{Handle: primary.ObjectHandle, Name: primary.Name, Auth: tpm2.PasswordAuth(nil)},
-		InPublic:     tpm2.BytesAs2B[tpm2.TPMTPublic](s.Public),
-		InPrivate:    tpm2.TPM2BPrivate{Buffer: s.Private},
-	}.Execute(tpmDev)
+	defer tpmDev.Close()
+	ca, err := hostkey.CreateCA(tpmDev, typ, sshCABank(tpmDev), sshCAPCRs, signer.Public(), []byte(sshCARef))
 	if err != nil {
-		return nil, fmt.Errorf("the sealed host key does not load in this TPM: %w", err)
+		return nil, err
 	}
-	defer FlushHandle(tpmDev, loaded.ObjectHandle)
-	session := tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm transport.TPM, handle tpm2.TPMISHPolicy, _ tpm2.TPM2BNonce) error {
-		_, err := tpm2.PolicyPCR{
-			PolicySession: handle,
-			Pcrs: tpm2.TPMLPCRSelection{PCRSelections: []tpm2.TPMSPCRSelection{{
-				Hash: bank.TPMAlg(), PCRSelect: PcrsToBitmapBytes(hostKeyPCRs),
-			}}},
-		}.Execute(tpm)
+	values, err := sshCAValues(tpmDev, ca)
+	if err != nil {
+		return nil, err
+	}
+	if err := ca.Approve(signer, values); err != nil {
+		return nil, err
+	}
+	return ca, saveSSHCA(ca, path)
+}
+
+// approveSSHCA has signer approve the next boot's values: the CA keeps
+// that approval alone, the states before it are not met again.
+func approveSSHCA(path, tpmPath string, signer crypto.Signer) (*hostkey.CA, error) {
+	st := readSSHCA(path, tpmPath)
+	if st.CA == nil || st.Values == nil {
+		return nil, errors.New(st.Err)
+	}
+	ca := st.CA.Only(func(hostkey.Approval) bool { return false })
+	if err := ca.Approve(signer, st.Values); err != nil {
+		return nil, err
+	}
+	return ca, saveSSHCA(ca, path)
+}
+
+// saveSSHCA writes the CA and its public key (.pub).
+func saveSSHCA(ca *hostkey.CA, path string) error {
+	if err := ca.Save(path); err != nil {
 		return err
-	}, tpm2.Salted(primary.ObjectHandle, primary.Public), tpm2.AESEncryption(128, tpm2.EncryptOut))
-	rsp, err := tpm2.Unseal{
-		ItemHandle: tpm2.AuthHandle{Handle: loaded.ObjectHandle, Name: loaded.Name, Auth: session},
-	}.Execute(tpmDev)
+	}
+	pub, err := ca.AuthorizedKey()
 	if err != nil {
-		if changed := changedHostKeyPCRs(tpmDev, s, bank); changed != "" {
-			return nil, fmt.Errorf("%s changed since the image was built", changed)
-		}
-		return nil, fmt.Errorf("unsealing the host key: %w", err)
+		return err
 	}
-	if len(rsp.OutData.Buffer) != ed25519.SeedSize {
-		return nil, errors.New("the sealed host key is not an ed25519 seed")
-	}
-	key := ed25519.NewKeyFromSeed(rsp.OutData.Buffer)
-	if !bytes.Equal(key.Public().(ed25519.PublicKey), s.PublicKey) {
-		return nil, errors.New("the unsealed host key does not fit its public key")
-	}
-	return key, nil
+	return os.WriteFile(path+".pub", pub, 0o644)
 }
 
-// changedHostKeyPCRs names the registers that no longer hold the sealed
-// values ("PCR 7", "PCR 0 and 7"), "" when they all do or cannot be read.
-func changedHostKeyPCRs(tpmDev transport.TPM, s *sealedHostKey, bank PCRHashAlgo) string {
-	regs, err := ReadPCRRegisters(tpmDev, hostKeyPCRs, bank, false)
+// sshCAState is what the image build and control know of the CA: whether
+// it loads, and the approval of the next boot's values.
+type sshCAState struct {
+	CA       *hostkey.CA
+	Err      string            // why there is no CA to use
+	Values   map[int][]byte    // the next boot's values
+	Approval *hostkey.Approval // theirs, nil when the signing key has not approved them
+}
+
+// readSSHCA reads the CA at path and the values of the next boot.
+func readSSHCA(path, tpmPath string) sshCAState {
+	ca, err := hostkey.LoadCA(path)
+	if os.IsNotExist(err) {
+		return sshCAState{Err: "no SSH CA: tpm2-kira control creates it in the TPM"}
+	}
 	if err != nil {
-		return ""
+		return sshCAState{Err: err.Error()}
 	}
-	var changed []string
-	for _, idx := range hostKeyPCRs {
-		if !bytes.Equal(regs[idx], s.PCRs[idx]) {
-			changed = append(changed, fmt.Sprint(idx))
-		}
+	tpmDev, err := OpenTPM(tpmPath)
+	if err != nil {
+		return sshCAState{CA: ca, Err: err.Error()}
 	}
-	if len(changed) == 0 {
-		return ""
+	defer tpmDev.Close()
+	values, err := sshCAValues(tpmDev, ca)
+	if err != nil {
+		return sshCAState{CA: ca, Err: err.Error()}
 	}
-	return "PCR " + strings.Join(changed, " and ")
+	return sshCAState{CA: ca, Values: values, Approval: ca.Approved(values)}
 }
 
 // hostKeyAtBoot is what the SSH server serves.
 type hostKeyAtBoot struct {
-	key         ed25519.PrivateKey
-	Fingerprint string
-	Throwaway   string // why the sealed key is not served, "" when it is
+	signer      ssh.Signer
+	Fingerprint string // the host key's
+	CA          string // the CA's fingerprint, "" for a throwaway key
+	Throwaway   string // why the CA did not certify a key, "" when it did
 }
 
-// prepareHostKey unseals the image's host key. When it cannot (a firmware
-// or Secure Boot update since the build, another TPM), a throwaway key is
-// served instead: the ssh client then warns of a changed host key, and the
-// console shows the throwaway's fingerprint to compare.
-func prepareHostKey(tpmPath, sealedPath string) (hostKeyAtBoot, error) {
-	key, why := unsealHostKeyFile(tpmPath, sealedPath)
-	if key == nil {
-		_, sk, err := ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			return hostKeyAtBoot{}, err
-		}
-		key = sk
+// prepareHostKey has the CA in the image certify a new host key in the
+// TPM. When it cannot (a firmware or Secure Boot update since the build,
+// another TPM, no CA), a throwaway key is served instead: the ssh client
+// then warns of an unknown host key, and the console shows the throwaway's
+// fingerprint to compare.
+func prepareHostKey(tpmPath, caPath string) (hostKeyAtBoot, error) {
+	hk, why := certifiedHostKey(tpmPath, caPath)
+	if hk != nil {
+		return *hk, nil
 	}
-	return hostKeyAtBoot{key: key, Fingerprint: hostKeyFingerprint(key.Public().(ed25519.PublicKey)), Throwaway: why}, nil
-}
-
-// unsealHostKeyFile is the key, or nil and why not.
-func unsealHostKeyFile(tpmPath, sealedPath string) (ed25519.PrivateKey, string) {
-	data, err := os.ReadFile(sealedPath)
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, "the image holds no sealed host key"
+		return hostKeyAtBoot{}, err
 	}
-	var s sealedHostKey
-	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, "the sealed host key does not parse"
+	s, err := ssh.NewSignerFromSigner(k)
+	if err != nil {
+		return hostKeyAtBoot{}, err
+	}
+	return hostKeyAtBoot{signer: s, Fingerprint: ssh.FingerprintSHA256(s.PublicKey()), Throwaway: why}, nil
+}
+
+// certifiedHostKey is this boot's host key with the CA's certificate, or
+// nil and why not.
+func certifiedHostKey(tpmPath, caPath string) (*hostKeyAtBoot, string) {
+	ca, err := hostkey.LoadCA(caPath)
+	if os.IsNotExist(err) {
+		return nil, "the image holds no SSH CA"
+	}
+	if err != nil {
+		return nil, err.Error()
 	}
 	tpmDev, err := OpenTPM(tpmPath)
 	if err != nil {
 		return nil, "no TPM: " + err.Error()
 	}
 	defer tpmDev.Close()
-	key, err := unsealHostKey(tpmDev, &s)
+	// The host key's authorization value stays in this process alone.
+	hostkey.NoDump()
+	hk, err := hostkey.Issue(tpmDev, ca, hostkey.IssueOptions{
+		Type:  ca.Type,
+		KeyID: "tpm2-kira boot",
+		Open:  func() (transport.TPMCloser, error) { return OpenTPM(tpmPath) },
+	})
 	if err != nil {
-		return nil, err.Error()
+		return nil, "the SSH CA did not certify a key: " + err.Error()
 	}
-	return key, ""
+	return &hostKeyAtBoot{signer: hk.SSH(), Fingerprint: hk.Fingerprint(), CA: ca.Fingerprint()}, ""
 }

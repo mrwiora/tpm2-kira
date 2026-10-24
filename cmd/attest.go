@@ -1515,6 +1515,6 @@ func AttestUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug b
 	fmt.Printf("Attestation enrolment removed from slot %d. Its TOTP key is unchanged.\n", slot)
 	fmt.Println("The phone still lists this machine; remove it there too.")
 	fmt.Println("The initramfs still carries the Bluetooth gate, which now has nothing to")
-	fmt.Println("serve: rebuild it (mkinitcpio -P / update-initramfs -u) to take it out.")
+	fmt.Println("serve; its next build leaves it out.")
 	return nil
 }

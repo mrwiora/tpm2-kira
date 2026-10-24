@@ -39,6 +39,8 @@ type StatusSlot struct {
 	RemoteSalt  bool   `json:"remote_salt"`            // the release key is in the blob
 	Vault       string `json:"vault,omitempty"`        // the vault's URL: the slot is enrolled with one (tpm+vault)
 	VaultPepper bool   `json:"vault_pepper,omitempty"` // its key needs an operator's pepper
+	VaultPin    string `json:"-"`                      // the vault's key pin, for control's check
+	VaultDevice []byte `json:"-"`                      // the device ID the vault knows this machine by
 }
 
 // StatusReport is the whole report.
@@ -98,6 +100,7 @@ func collectStatus(o StatusOptions) StatusReport {
 			if att := sb.Payload.Attestation; att != nil && att.Vault.Enabled() {
 				s.Vault = att.Vault.URL
 				s.VaultPepper = len(att.Vault.PepperCheck) > 0
+				s.VaultPin, s.VaultDevice = att.Vault.Pin, att.DeviceID
 			}
 			r.Slots = append(r.Slots, s)
 		}

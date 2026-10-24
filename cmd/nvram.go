@@ -712,7 +712,7 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 	fmt.Printf("All %d item(s) deleted successfully\n", total)
 	if enrolled > 0 {
 		fmt.Println("The phones still list this machine; remove it there too.")
-		fmt.Println("The initramfs may still carry the Bluetooth gate: rebuild it (mkinitcpio -P / update-initramfs -u).")
+		fmt.Println("The initramfs may still carry the Bluetooth gate; its next build leaves it out.")
 	}
 	fmt.Print(slotKeyslotAdvice(tpmPath))
 	return nil

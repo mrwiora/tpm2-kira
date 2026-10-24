@@ -6,7 +6,8 @@ require (
 	charm.land/huh/v2 v2.0.3
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/google/go-attestation v0.6.4
-	github.com/google/go-tpm v0.9.8
+	github.com/google/go-tpm v0.9.9-0.20261001171150-36f205946d7e
+	github.com/tpm2-trust/assh v0.0.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0
 	rsc.io/qr v0.2.0
@@ -36,3 +37,5 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/sync v0.22.0 // indirect
 )
+
+replace github.com/tpm2-trust/assh => ./assh

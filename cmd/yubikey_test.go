@@ -518,28 +518,28 @@ func TestPINGuidance(t *testing.T) {
 		t.Errorf("unknown policy: %q", w)
 	}
 
-	conf := filepath.Join(t.TempDir(), "control.conf")
-	t.Setenv("TPM2_KIRA_CONTROL_CONF", conf)
+	t.Setenv("TPM2_KIRA_CONTROL_CONF", filepath.Join(t.TempDir(), "control.conf"))
+	pinFile := pinFilePath()
 
 	// No PIN stored: control stores it; the terminal or the environment meanwhile.
 	var buf bytes.Buffer
 	printPINInstructions(&buf, tokens[0], s9a)
 	t.Logf("instructions:\n%s", buf.String())
-	for _, want := range []string{"tpm2-kira control", "TPM2_KIRA_PIN='<your PIN>' in " + conf, "read -rs TPM2_KIRA_PIN && export TPM2_KIRA_PIN", "SKIPPED"} {
+	for _, want := range []string{"tpm2-kira control", "in " + pinFile + ", the PIN alone", "read -rs TPM2_KIRA_PIN && export TPM2_KIRA_PIN", "SKIPPED"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("instructions lack %q", want)
 		}
 	}
 
 	// Stored: nothing to do, apart from the file mode.
-	os.WriteFile(conf, []byte("TPM2_KIRA_PIN='123456'\n"), 0644)
+	os.WriteFile(pinFile, []byte("123456\n"), 0644)
 	buf.Reset()
 	printPINInstructions(&buf, tokens[0], s9a)
 	if !strings.Contains(buf.String(), "stores the PIN") || !strings.Contains(buf.String(), "chmod 600") ||
 		strings.Contains(buf.String(), "<your PIN>") {
 		t.Errorf("PIN already configured:\n%s", buf.String())
 	}
-	os.Chmod(conf, 0600)
+	os.Chmod(pinFile, 0600)
 	buf.Reset()
 	printPINInstructions(&buf, tokens[0], s9a)
 	if strings.Contains(buf.String(), "chmod") {
@@ -600,7 +600,7 @@ func TestVerifyKeyPairMatchThroughToken(t *testing.T) {
 	}
 }
 
-func TestPINFromControlConf(t *testing.T) {
+func TestPINFromTheFile(t *testing.T) {
 	card := pivtest.New(1)
 	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	fake := &fakeTokens{cards: []*pivtest.Card{card}}
@@ -608,6 +608,7 @@ func TestPINFromControlConf(t *testing.T) {
 	os.Unsetenv(PINEnvVar)
 	conf := filepath.Join(t.TempDir(), "control.conf")
 	t.Setenv("TPM2_KIRA_CONTROL_CONF", conf)
+	pinFile := pinFilePath()
 	signer, _ := LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	digest := sha256.Sum256(nil)
 
@@ -622,8 +623,8 @@ func TestPINFromControlConf(t *testing.T) {
 		return string(out)
 	}
 
-	// PIN in control.conf: used without asking, and no warning.
-	os.WriteFile(conf, []byte("TPM2_KIRA_PIN='123456'\n"), 0600)
+	// The PIN in its file: used without asking, and no warning.
+	os.WriteFile(pinFile, []byte("123456\n"), 0600)
 	out := capture(func() {
 		if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
 			t.Fatal(err)
@@ -635,7 +636,7 @@ func TestPINFromControlConf(t *testing.T) {
 	CloseTokenSessions()
 
 	// The environment wins over the file.
-	os.WriteFile(conf, []byte("TPM2_KIRA_PIN='999999'\n"), 0600)
+	os.WriteFile(pinFile, []byte("999999\n"), 0600)
 	t.Setenv(PINEnvVar, "123456")
 	if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
 		t.Fatalf("environment PIN not preferred: %v", err)
@@ -645,7 +646,7 @@ func TestPINFromControlConf(t *testing.T) {
 
 	// A wrong PIN in the file names the file, and costs one attempt.
 	_, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256)
-	if err == nil || !strings.Contains(err.Error(), "PIN from "+conf) || card.Retries != 2 {
+	if err == nil || !strings.Contains(err.Error(), "PIN from "+pinFile) || card.Retries != 2 {
 		t.Fatalf("wrong PIN from the file: %v, retries %d", err, card.Retries)
 	}
 	card.Retries = 3
@@ -653,11 +654,11 @@ func TestPINFromControlConf(t *testing.T) {
 
 	// A world-readable file with the PIN in it: refused, no attempt spent,
 	// and no fallback to the terminal.
-	os.WriteFile(conf, []byte("TPM2_KIRA_PIN='123456'\n"), 0600)
-	os.Chmod(conf, 0644)
+	os.WriteFile(pinFile, []byte("123456\n"), 0600)
+	os.Chmod(pinFile, 0644)
 	prompts := fake.prompts
 	_, err = signer.Sign(rand.Reader, digest[:], crypto.SHA256)
-	if err == nil || !errors.Is(err, ErrTokenUnavailable) || !strings.Contains(err.Error(), "chmod 600 "+conf) {
+	if err == nil || !errors.Is(err, ErrTokenUnavailable) || !strings.Contains(err.Error(), "chmod 600 "+pinFile) {
 		t.Errorf("world-readable file: err = %v, want an unavailable-token error naming the fix", err)
 	}
 	if card.Retries != 3 || fake.prompts != prompts {
@@ -665,16 +666,16 @@ func TestPINFromControlConf(t *testing.T) {
 	}
 	CloseTokenSessions()
 
-	// A line this version refuses next to the PIN does not take the PIN
-	// with it: it is used, nothing is asked.
+	// A control.conf this version refuses does not take the PIN with it:
+	// it is used, nothing is asked.
 	CloseTokenSessions()
-	os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST_TIMEOUT=0\nTPM2_KIRA_PIN='123456'\n"), 0600)
-	os.Chmod(conf, 0600)
+	os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST_TIMEOUT=0\n"), 0600)
+	os.Chmod(pinFile, 0600)
 	prompts = fake.prompts
 	if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil || fake.prompts != prompts {
 		t.Errorf("a refused line next to the PIN: err = %v, prompts %d → %d", err, prompts, fake.prompts)
 	}
-	if stored, loose := pinStored(conf); !stored || loose {
+	if stored, loose := pinStored(pinFile); !stored || loose {
 		t.Errorf("pinStored = %v, %v", stored, loose)
 	}
 	if _, err := LoadControlConfig(conf); err == nil {
@@ -682,15 +683,15 @@ func TestPINFromControlConf(t *testing.T) {
 	}
 	CloseTokenSessions()
 
-	// No PIN in the file: asked on the terminal, then warned once.
-	os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST_ADAPTER=0\n"), 0600)
+	// No PIN file: asked on the terminal, then warned once.
+	os.Remove(pinFile)
 	fake.typed = "123456"
 	out = capture(func() {
 		if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
 			t.Fatal(err)
 		}
 	})
-	if fake.prompts != 1 || strings.Count(out, "holds no TPM2_KIRA_PIN") != 1 {
+	if fake.prompts != 1 || strings.Count(out, "there is no PIN in") != 1 {
 		t.Errorf("prompts %d, output:\n%s", fake.prompts, out)
 	}
 }

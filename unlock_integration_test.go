@@ -134,7 +134,11 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	if err := os.WriteFile(crypttab, []byte(volume+" "+loop+" none luks\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	run := exec.Command("./tpm2-kira", "run", "--tpm", filepath.Join(dir, "no-tpm"), "--hold", "0", "--unlock", sock)
+	// The image of a machine that unlocks by password and salt alone: its
+	// plan names the disk unlock and nothing else.
+	plan := filepath.Join(dir, "plan")
+	os.MkdirAll(filepath.Join(plan, "unlock"), 0o755)
+	run := exec.Command("./tpm2-kira", "run", "--plan", plan, "--tpm", filepath.Join(dir, "no-tpm"), "--hold", "0", "--unlock", sock)
 	run.Env = append(os.Environ(), "TPM2_KIRA_CONSOLE="+console, "TPM2_KIRA_CONTROL_CONF="+conf, "TPM2_KIRA_CRYPTTAB="+crypttab)
 	var runOut bytes.Buffer
 	run.Stdout, run.Stderr = &runOut, &runOut
@@ -226,5 +230,27 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	}
 	if !bytes.Contains(out, []byte("Password querying disabled via 'headless' option.")) {
 		t.Errorf("after no answer systemd-cryptsetup should fall back to its own prompt:\n%s", out)
+	}
+}
+
+// An image whose plan names the disk unlock alone - a machine without a
+// TPM, or nothing sealed - starts nothing else: 'run' asks no TPM for
+// codes, so there is no error about one, and releases the boot at once.
+// (Without a plan, by hand, it would wait for the TPM to come up.)
+func TestRunStartsWhatThePlanNames(t *testing.T) {
+	dir := t.TempDir()
+	plan := filepath.Join(dir, "plan")
+	os.MkdirAll(filepath.Join(plan, "unlock"), 0o755)
+	runIt := func(args ...string) string {
+		run := exec.Command("./tpm2-kira", append([]string{"run", "--tpm", filepath.Join(dir, "no-tpm"), "--hold", "0"}, args...)...)
+		run.Env = append(os.Environ(), "TPM2_KIRA_UNPRIVILEGED=1")
+		out, err := run.CombinedOutput()
+		if err != nil {
+			t.Fatalf("run %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	if out := runIt("--plan", plan); strings.Contains(out, "TPM") || strings.Contains(out, "no-tpm") {
+		t.Errorf("the disk unlock alone asked the TPM:\n%s", out)
 	}
 }

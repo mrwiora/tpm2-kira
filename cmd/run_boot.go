@@ -138,9 +138,8 @@ func (b *bootDisplay) run() {
 	if allUp {
 		return // every slot was confirmed or at least shown; nothing more can be computed
 	}
-	if errors.Is(err, ErrNoSlots) {
-		// Nothing is sealed: the unit is in every image so that a later
-		// 'seal' needs no rebuild, but until then it has nothing to do.
+	if errors.Is(err, ErrNoSlots) || errors.Is(err, errCodesOut) {
+		// Nothing is sealed, or the image has no codes: nothing to show.
 		return
 	}
 	b.serveAfterRelease(slots)
@@ -148,6 +147,10 @@ func (b *bootDisplay) run() {
 
 // ErrNoSlots: no NVRAM slot holds a TOTP key.
 var ErrNoSlots = errors.New("no TOTP key is sealed")
+
+// errCodesOut: the boot image has no codes in its plan; the TPM is not
+// asked.
+var errCodesOut = errors.New("the boot image shows no codes")
 
 // holdForConfirmation shows a fresh code per window until the boot is
 // confirmed - Enter, or the enrolled phone accepting it - or the hold ends,
@@ -171,7 +174,9 @@ func (b *bootDisplay) holdForConfirmation() ([]NVRAMSlot, bool, error) {
 		now := b.now()
 		s, err := b.scan(now)
 		if err != nil {
-			PrintKIRAError(err)
+			if !errors.Is(err, errCodesOut) {
+				PrintKIRAError(err)
+			}
 			return slots, false, err
 		}
 		slots = s
@@ -456,8 +461,13 @@ func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*gateServi
 // key requests once the hold has ended, and stays until it is stopped.
 // With remote.Port it is also the SSH server (remote_ssh.go): the codes
 // are shown and confirmed in an SSH session, and the console says where.
-func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, remote RemoteOptions, debug bool) {
-	svc, endCoordinator := startCoordinator(tpmPath, gateSocket, DefaultAttestSignerPath, debug)
+// planned is what the boot image carries (bootplan.go): what is not in it
+// is not started, and the TPM is not touched for it.
+func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, remote RemoteOptions, planned Planned, debug bool) {
+	svc, endCoordinator := (*gateService)(nil), func() {}
+	if planned.Phone {
+		svc, endCoordinator = startCoordinator(tpmPath, gateSocket, DefaultAttestSignerPath, debug)
+	}
 	var srv *remoteServer
 	ask := prompter(consoleAsk)
 	if remote.Port > 0 {
@@ -481,7 +491,10 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 	// separator), and a key made ends the hold on its own. The attempt
 	// lasts as long as the hold.
 	vaultCtx, endVault := context.WithCancel(context.Background())
-	vault := startVaultKeys(vaultCtx, tpmPath, os.Stdout, unlockLogger(debug), debug)
+	var vault *vaultKeys
+	if planned.Vault {
+		vault = startVaultKeys(vaultCtx, tpmPath, os.Stdout, unlockLogger(debug), debug)
+	}
 	var vaultKey func(string) ([]byte, error)
 	if vault != nil {
 		vaultKey = vault.forVolume
@@ -543,6 +556,9 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		phonePoll:  500 * time.Millisecond,
 		phoneGrace: time.Minute,
 		scan: func(now time.Time) ([]NVRAMSlot, error) {
+			if !planned.Codes {
+				return nil, errCodesOut
+			}
 			tpmDev, err := open()
 			if err != nil {
 				return nil, err

@@ -17,7 +17,7 @@ import (
 // set for the image alone and do not depend on /etc/systemd/network or
 // /etc/network/interfaces, which configure the running system ('tpm2-kira
 // control' only reads them for a suggestion). The image build ('tpm2-kira
-// remote initramfs', called by the hooks) turns them into a systemd-networkd
+// initramfs plan', called by the hooks) turns them into a systemd-networkd
 // file and a drop-in of tpm2-kira.service (mkinitcpio), or into
 // /etc/tpm2-kira/remote.conf for the boot scripts (initramfs-tools);
 // control.conf itself stays out of the image. The
@@ -38,8 +38,8 @@ type NetConfig struct {
 type SSHConfig struct {
 	On             bool   // TPM2_KIRA_SSH: on or off
 	Port           int    // TPM2_KIRA_SSH_PORT
-	AuthorizedKeys string // TPM2_KIRA_SSH_AUTHORIZED_KEYS: whose keys may log in
-	HostKey        string // TPM2_KIRA_SSH_HOSTKEY: an OpenSSH ed25519 key, sealed to the TPM in the image
+	AuthorizedKeys string // whose keys may log in: authorized_keys next to control.conf, no setting
+	CA             string // the SSH CA in the TPM: ssh_ca.json next to control.conf, no setting
 	Hold           int    // TPM2_KIRA_SSH_HOLD: seconds the boot waits for a confirmation; 0 until one comes
 }
 
@@ -49,19 +49,19 @@ type RemoteConfig struct {
 	SSH SSHConfig
 }
 
-// Default paths of the SSH server's keys.
+// Who may log in to the SSH server at boot.
 const (
-	DefaultSSHAuthorizedKeys = "/root/.ssh/authorized_keys"
-	DefaultSSHHostKey        = "/etc/ssh/ssh_host_ed25519_key"
-	// DefaultOwnHostKey is where control creates a key of the image's own.
-	DefaultOwnHostKey = "/etc/tpm2-kira/ssh_host_ed25519_key"
+	// DefaultSSHAuthorizedKeys is tpm2-kira's own file, not root's: what
+	// may log in at boot is tracked apart from who may log in to the
+	// running system, and control writes it.
+	DefaultSSHAuthorizedKeys = "/etc/tpm2-kira/authorized_keys"
 )
 
 // DefaultRemoteConfig is a file without these lines: no network, no SSH.
 func DefaultRemoteConfig() RemoteConfig {
 	return RemoteConfig{
 		Net: NetConfig{Mode: "off"},
-		SSH: SSHConfig{Port: 22, AuthorizedKeys: DefaultSSHAuthorizedKeys, HostKey: DefaultSSHHostKey},
+		SSH: SSHConfig{Port: 22, AuthorizedKeys: DefaultSSHAuthorizedKeys, CA: DefaultSSHCA},
 	}
 }
 
@@ -134,15 +134,10 @@ func parseRemoteLine(cfg *RemoteConfig, n int, key, val string) (handled bool, e
 			return true, fmt.Errorf("control.conf line %d: TPM2_KIRA_SSH_HOLD must be seconds (0: until a confirmation comes), not %q", n, val)
 		}
 		cfg.SSH.Hold = h
-	case "TPM2_KIRA_SSH_AUTHORIZED_KEYS", "TPM2_KIRA_SSH_HOSTKEY":
-		if !filepath.IsAbs(val) {
-			return true, fmt.Errorf("control.conf line %d: %s must be an absolute path, not %q", n, key, val)
-		}
-		if key == "TPM2_KIRA_SSH_HOSTKEY" {
-			cfg.SSH.HostKey = val
-		} else {
-			cfg.SSH.AuthorizedKeys = val
-		}
+	case "TPM2_KIRA_SSH_HOSTKEY":
+		return true, fmt.Errorf("control.conf line %d: the boot image's SSH host key is made in the TPM at every boot and certified by the SSH CA (%s, tpm2-kira control creates it): remove the line", n, DefaultSSHCA)
+	case "TPM2_KIRA_SSH_AUTHORIZED_KEYS":
+		return true, fmt.Errorf("control.conf line %d: the keys that may log in at boot are in %s, next to control.conf: put them there (tpm2-kira control offers root's), then remove the line", n, DefaultSSHAuthorizedKeys)
 	default:
 		return false, nil
 	}
@@ -153,13 +148,22 @@ func parseRemoteLine(cfg *RemoteConfig, n int, key, val string) (handled bool, e
 // when nothing does: what one line cannot tell (static without an address,
 // SSH without a network).
 func (r RemoteConfig) Problem() string {
-	switch {
-	case r.Net.Mode == "static" && len(r.Net.Addresses) == 0:
-		return "TPM2_KIRA_NET=static needs TPM2_KIRA_NET_ADDRESS"
-	case r.Net.Mode == "static" && r.Net.Match == "":
-		return "TPM2_KIRA_NET=static needs TPM2_KIRA_NET_MATCH (a MAC address or an interface name): one static address on every interface would collide"
-	case r.SSH.On && r.Net.Mode == "off":
+	if p := r.Net.problem(); p != "" {
+		return p
+	}
+	if r.SSH.On && r.Net.Mode == "off" {
 		return "TPM2_KIRA_SSH=on needs a network in the image (TPM2_KIRA_NET=dhcp or static)"
+	}
+	return ""
+}
+
+// problem is what keeps the network's settings from working.
+func (n NetConfig) problem() string {
+	switch {
+	case n.Mode == "static" && len(n.Addresses) == 0:
+		return "TPM2_KIRA_NET=static needs TPM2_KIRA_NET_ADDRESS"
+	case n.Mode == "static" && n.Match == "":
+		return "TPM2_KIRA_NET=static needs TPM2_KIRA_NET_MATCH (a MAC address or an interface name): one static address on every interface would collide"
 	}
 	return ""
 }
@@ -171,7 +175,7 @@ func (n NetConfig) NetworkdFile() string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("# Written by 'tpm2-kira remote initramfs' from /etc/tpm2-kira/control.conf\n")
+	b.WriteString("# Written by 'tpm2-kira initramfs plan' from /etc/tpm2-kira/control.conf\n")
 	b.WriteString("# (TPM2_KIRA_NET_*), for the boot image alone.\n\n[Match]\n")
 	switch {
 	case isMAC(n.Match):
@@ -220,7 +224,6 @@ func (r RemoteConfig) Lines() [][2]string {
 		{"TPM2_KIRA_SSH", onOff[r.SSH.On]},
 		{"TPM2_KIRA_SSH_PORT", strconv.Itoa(r.SSH.Port)},
 		{"TPM2_KIRA_SSH_HOLD", strconv.Itoa(r.SSH.Hold)},
-		{"TPM2_KIRA_SSH_HOSTKEY", r.SSH.HostKey},
 	}
 }
 

@@ -3,7 +3,9 @@ package cmd
 // The SSH server of the code screen (docs/SSH.md). With TPM2_KIRA_SSH
 // on, the image's tpm2-kira.service runs 'tpm2-kira run --ssh=PORT': the
 // process that holds the boot opens the port and starts 'tpm2-kira remote
-// serve' on it, without privileges (remote_serve.go, remote_privsep.go).
+// serve' on it, without privileges (github.com/tpm2-trust/assh/server). Its
+// host key is made in the TPM for this boot and certified by the SSH CA
+// (remote_hostkey.go).
 // That process speaks SSH and hands every login over as a session of the
 // code screen: it sees the codes, and Enter there confirms them and
 // releases the boot, as Enter at the console does. The password prompt
@@ -15,33 +17,54 @@ package cmd
 // session is closed, and the prompt is the console's - no remote
 // confirmation can hold a person at the machine (AGENTS.md, no enforced
 // mode). A release over SSH keeps the server running until switch-root,
-// so a dropped session can come back for the prompt.
+// so a dropped session can come back for the prompt: the host key signs
+// after the separator too, only the CA no longer does.
 
 import (
 	"bytes"
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tpm2-trust/assh/server"
 )
 
 // RemoteOptions are run's SSH settings; Port 0 is no SSH server.
 type RemoteOptions struct {
 	Port           int
 	Hold           time.Duration // 0: until a confirmation comes
-	TPM            string        // the TPM the host key is unsealed with
-	HostKey        string        // the sealed host key (ImageSealedHostKey)
+	TPM            string        // the TPM the host key is made in
+	CA             string        // the SSH CA (ImageSSHCA)
 	AuthorizedKeys string        // who may log in (ImageAuthorizedKeys)
 }
+
+// serveCommand is 'remote serve', the SSH server's unprivileged half: this
+// binary again (one binary, AGENTS.md). A var for the tests, which start
+// their own.
+var serveCommand = func() *exec.Cmd {
+	self, err := os.Executable()
+	if err != nil {
+		self = os.Args[0]
+	}
+	return exec.Command(self, "remote", "serve")
+}
+
+// RemoteServeCommand is 'remote serve' (github.com/tpm2-trust/assh/server): it
+// speaks SSH as nobody, in namespaces of its own, without file access, and
+// holds no key. It only runs as 'run' starts it.
+func RemoteServeCommand() error { return server.ChildMain() }
 
 // remoteServer is the SSH server and its sessions.
 type remoteServer struct {
 	opts    RemoteOptions
-	child   *serveChild
+	child   *server.Server
 	log     func(string)
 	console io.Writer // the console's own lines
 	hostKey hostKeyAtBoot
@@ -79,8 +102,8 @@ func (s *remoteSession) write(b []byte) {
 	}
 }
 
-// startRemote unseals the host key, opens the port and starts 'remote
-// serve' on it. A server that cannot start is said on the console and the
+// startRemote has the CA certify this boot's host key, opens the port and
+// starts 'remote serve' on it. A server that cannot start is said on the console and the
 // code screen goes on without SSH.
 func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteServer, error) {
 	if o.AuthorizedKeys == "" {
@@ -93,10 +116,11 @@ func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteS
 	if len(authorized) == 0 {
 		return nil, fmt.Errorf("%s holds no key: nobody could log in", o.AuthorizedKeys)
 	}
-	// Unsealed now, while the code screen holds the boot ahead of the OS
-	// separator: after it, PCR 0 and 7 no longer fit the policy. The key
-	// stays in this process; 'remote serve' asks it for signatures.
-	hk, err := prepareHostKey(o.TPM, o.HostKey)
+	// Certified now, while the code screen holds the boot ahead of the OS
+	// separator: after it, PCR 0 and 7 no longer fit the CA's policy. The
+	// key stays in the TPM, signing for this process; 'remote serve' asks
+	// it for signatures.
+	hk, err := prepareHostKey(o.TPM, o.CA)
 	if err != nil {
 		return nil, fmt.Errorf("SSH host key: %w", err)
 	}
@@ -112,13 +136,27 @@ func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteS
 	}
 	r := &remoteServer{opts: o, log: log, console: console, hostKey: hk,
 		done: make(chan struct{}), releases: make(chan struct{}, 1), changed: make(chan struct{}, 1)}
-	child, how, err := startServe(tcp.(*net.TCPListener), hk.key, authorized, log, r.addSession)
+	child, err := server.Start(server.Options{
+		Listener:       tcp.(*net.TCPListener),
+		HostKey:        hk.signer,
+		AuthorizedKeys: authorized,
+		Command:        serveCommand,
+		Session:        func(s *server.Session) { r.addSession(s, s.String()) },
+		Log:            func(s string) { log("ssh: " + s) },
+		Version:        "SSH-2.0-tpm2-kira",
+		Name:           "tpm2-kira",
+		Notice:         "only the code screen is served here (ssh without a command)",
+	})
 	if err != nil {
 		return nil, fmt.Errorf("remote serve: %w", err)
 	}
 	r.child = child
-	log(describeServe(child, how))
-	log(fmt.Sprintf("ssh: listening on port %d, host key %s", o.Port, hk.Fingerprint))
+	log(fmt.Sprintf("ssh: remote serve (pid %d) runs with %s", child.Pid(), child.How))
+	if hk.CA != "" {
+		log(fmt.Sprintf("ssh: listening on port %d, host key %s certified by the SSH CA %s", o.Port, hk.Fingerprint, hk.CA))
+	} else {
+		log(fmt.Sprintf("ssh: listening on port %d, host key %s", o.Port, hk.Fingerprint))
+	}
 	go r.answerPasswordQuestions()
 	return r, nil
 }
@@ -260,7 +298,7 @@ func (r *remoteServer) stop(why string) {
 	}
 	// The closed sessions end their relays in the child, which hands the
 	// notice on; then the child goes.
-	r.child.stop()
+	r.child.Stop()
 	r.log("ssh: stopped")
 	close(r.done)
 }
@@ -387,10 +425,10 @@ func consoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int, remai
 		}
 	}
 	if hk.Throwaway != "" {
-		fmt.Fprintf(&b, "         Host key %s: a throwaway key, the sealed one did not unseal\n", hk.Fingerprint)
-		fmt.Fprintf(&b, "         (%s); ssh warns of a changed host key. Rebuild the image after this boot.\n", hk.Throwaway)
-	} else if hk.Fingerprint != "" {
-		fmt.Fprintf(&b, "         Host key %s (unsealed from the TPM)\n", hk.Fingerprint)
+		fmt.Fprintf(&b, "         Host key %s: a throwaway key, the SSH CA did not certify one\n", hk.Fingerprint)
+		fmt.Fprintf(&b, "         (%s); ssh warns of an unknown host key. Quit tpm2-kira control after this boot.\n", hk.Throwaway)
+	} else if hk.CA != "" {
+		fmt.Fprintf(&b, "         Host key certified by the SSH CA %s\n", hk.CA)
 	}
 	b.WriteString("         The codes are shown and confirmed in the SSH session; the boot waits for it")
 	if remaining >= 0 {

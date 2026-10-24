@@ -16,7 +16,7 @@ import (
 )
 
 // The binary as it is run on a machine: the root gate, 'seal' without
-// arguments, 'status' and its notes, 'attest config-check' on control.conf.
+// arguments, 'status' and its notes, 'initramfs plan' on control.conf.
 // The TPM is swtpm; the LUKS headers are not read (no root), so the notes
 // tested here are the ones across the slots and the configuration file.
 
@@ -205,17 +205,18 @@ func TestStatusNotes(t *testing.T) {
 	}
 }
 
-// 'attest config-check' is what the initramfs hooks run before a build
-// reads control.conf: the file as control writes it is valid, a missing
-// file is the defaults, and a line that cannot be used names itself.
-func TestConfigCheck(t *testing.T) {
-	good := writeConf(t, "# written by control\nTPM2_KIRA_ATTEST_ADAPTER=hci1\nTPM2_KIRA_ATTEST_BLUETOOTH=always\nTPM2_KIRA_PIN='123456'\n")
-	stdout, stderr, code := kira(t, nil, "attest", "config-check", good)
-	if code != 0 || !strings.Contains(stdout, good+": valid") {
+// 'initramfs plan' is what the initramfs hooks run to build an image, and
+// it reads control.conf: the file as control writes it loads, a missing
+// file is the defaults, and a line that cannot be used names itself - and
+// never stops the build: the plan is made with the defaults.
+func TestInitramfsPlanReadsTheConfig(t *testing.T) {
+	good := writeConf(t, "# written by control\nTPM2_KIRA_ATTEST_ADAPTER=hci1\n")
+	stdout, stderr, code := kira(t, nil, "initramfs", "plan", "--conf", good)
+	if code != 0 || strings.Contains(stdout, "warning") || !strings.Contains(stdout, "in  Disk unlock") {
 		t.Errorf("a good file: exit %d, %q %q", code, stdout, stderr)
 	}
 	missing := filepath.Join(t.TempDir(), "none")
-	if stdout, _, code := kira(t, nil, "attest", "config-check", missing); code != 0 || !strings.Contains(stdout, ": valid") {
+	if stdout, _, code := kira(t, nil, "initramfs", "plan", "--conf", missing); code != 0 || strings.Contains(stdout, "warning") {
 		t.Errorf("a missing file is the defaults: exit %d, %q", code, stdout)
 	}
 	for content, reason := range map[string]string{
@@ -227,9 +228,9 @@ func TestConfigCheck(t *testing.T) {
 		"just words\n":                      "line 1: expected KEY=VALUE",
 	} {
 		path := writeConf(t, content)
-		stdout, stderr, code := kira(t, nil, "attest", "config-check", path)
-		if code != cmd.ExitUsage || !strings.Contains(stderr, reason) {
-			t.Errorf("%q: exit %d, stdout %q, stderr %q; want exit %d and %q", content, code, stdout, stderr, cmd.ExitUsage, reason)
+		stdout, stderr, code := kira(t, nil, "initramfs", "plan", "--conf", path)
+		if code != 0 || !strings.Contains(stdout, "warning: control.conf does not load") || !strings.Contains(stdout, reason) {
+			t.Errorf("%q: exit %d, stdout %q, stderr %q; want exit 0 and %q", content, code, stdout, stderr, reason)
 		}
 	}
 }

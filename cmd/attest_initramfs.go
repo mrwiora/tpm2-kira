@@ -13,10 +13,10 @@ import (
 
 // Bluetooth inside the initramfs (PLAN-BLE.md §3.1).
 //
-// The initramfs hooks ask `tpm2-kira attest initramfs-deps` what the adapter
-// on the build host needs, and copy exactly that: the driver modules along the
-// adapter's sysfs path and the firmware files the kernel actually loaded for
-// it. One implementation serves mkinitcpio (bash) and initramfs-tools (sh).
+// When the boot plan has the phone in (bootplan.go), the image gets what the
+// adapter on the build host needs, and exactly that: the driver modules along
+// the adapter's sysfs path and the firmware files the kernel actually loaded
+// for it. One implementation serves mkinitcpio (bash) and initramfs-tools (sh).
 //
 // Firmware comes from the kernel log, not from `modinfo -F firmware`: the
 // modules' declarations are incomplete (btintel declares four legacy files,
@@ -27,8 +27,8 @@ import (
 // A boot does not always log its firmware: an Intel controller that kept
 // its firmware over a warm reboot says "Firmware already loaded" and names
 // no file, and an image built in that boot would lack the file the next
-// cold start needs ("firmware missing" in the initrd). So the hooks pass
-// the kernel messages of every boot the journal keeps, and what was found
+// cold start needs ("firmware missing" in the initrd). So the kernel
+// messages of every boot the journal keeps are read, and what was found
 // is remembered per adapter (BTFirmwareStateDir) for a boot whose journal
 // names none.
 
@@ -63,7 +63,7 @@ type USBDevice struct {
 	Port, Vendor, Product string
 }
 
-// BTUdevRuleFile is where the hooks put the rule in the image.
+// BTUdevRuleFile is where the boot plan puts the rule in the image.
 const BTUdevRuleFile = "etc/udev/rules.d/70-tpm2-kira-bluetooth.rules"
 
 // UdevRule is the rule that authorizes the device at its port, and only
@@ -241,22 +241,8 @@ func firmwareExists(fwDir, rel string) bool {
 	return false
 }
 
-// buildSettings are what an image build reads of control.conf: the adapter
-// whose driver goes in, and whether Bluetooth goes in before a phone is
-// enrolled. A file that does not load does not stop the build - a kernel
-// update must never end with a half-built image over a settings line -
-// it is built with the defaults, and the warning says why; control shows
-// the file red.
-func buildSettings(path string) (AttestConfig, string) {
-	cfg, err := LoadAttestConfig(path)
-	if err != nil {
-		return DefaultAttestConfig(), fmt.Sprintf("%s does not load (%v); the image is built with hci0 and Bluetooth only with an enrolled phone", path, err)
-	}
-	return cfg, ""
-}
-
 // readKernelLog returns the kernel ring buffer (needs CAP_SYSLOG, as the
-// initramfs hooks have) plus an optional extra log file, e.g. the output of
+// image build has) plus an optional extra log file, e.g. the output of
 // `journalctl -k -b`, which survives ring-buffer rotation on a long uptime.
 func readKernelLog(extra string) []byte {
 	var out []byte
@@ -275,52 +261,6 @@ func readKernelLog(extra string) []byte {
 	return out
 }
 
-// AttestInitramfsDeps prints the adapter's needs for the initramfs hooks:
-//
-//	policy auto     always: Bluetooth goes in before a phone is enrolled
-//	adapter hci0
-//	module btusb
-//	firmware intel/ibt-0041-0041.sfi
-//	udev <rule>     only when the bus lets no new device in by itself
-//	warning <text>
-//
-// Exit status 0 when the adapter exists, ExitUnavailable when it does not.
-func AttestInitramfsDeps(adapter int, kernelLogPath, fwDir string) int {
-	if fwDir == "" {
-		fwDir = DefaultFirmwareDir
-	}
-	// The build's two settings come from here, not from the hook: it never
-	// reads control.conf, which holds the YubiKey's PIN, itself.
-	settings, warning := buildSettings(controlConfigPath())
-	fmt.Printf("policy %s\n", settings.Bluetooth)
-	if warning != "" {
-		fmt.Printf("warning %s\n", warning)
-	}
-	if adapter < 0 {
-		adapter = settings.Adapter
-	}
-	deps, err := ResolveBTDeps("/sys", fwDir, adapter, readKernelLog(kernelLogPath))
-	if err != nil {
-		fmt.Printf("warning %v\n", err)
-		return ExitUnavailable
-	}
-	rememberedFirmware(deps, fwDir)
-	fmt.Printf("adapter %s\n", deps.Adapter)
-	for _, m := range deps.Modules {
-		fmt.Printf("module %s\n", m)
-	}
-	for _, f := range deps.Firmware {
-		fmt.Printf("firmware %s\n", f)
-	}
-	if deps.Authorize != nil {
-		fmt.Printf("udev %s\n", deps.Authorize.UdevRule())
-	}
-	for _, w := range deps.Warnings {
-		fmt.Printf("warning %s\n", w)
-	}
-	return ExitAttested
-}
-
 // preferResourceManager returns /dev/tpmrm0 for a /dev/tpm0 path when the
 // kernel's resource manager is available. The gate runs next to the OTP
 // display in the initrd; on the raw device only one process may open the TPM,
@@ -336,7 +276,7 @@ func preferResourceManager(path string) string {
 }
 
 // adapterDeps is what the image build would put in for the adapter, by
-// the same resolution the hooks run: the firmware this boot's or an
+// the same resolution the plan runs: the firmware this boot's or an
 // earlier boot's kernel log names (or remembered), and the rule that lets
 // the adapter in when its bus does not. nil when there is no such adapter.
 func adapterDeps(adapter string) *BTDeps {
@@ -353,7 +293,7 @@ func adapterDeps(adapter string) *BTDeps {
 }
 
 // journalBluetoothLines are the Bluetooth kernel messages of every boot
-// the journal keeps, as the hooks pass them.
+// the journal keeps.
 func journalBluetoothLines() []byte {
 	out, err := exec.Command("journalctl", "-k", "-o", "cat", "--no-pager", "-g", `Bluetooth: hci[0-9]+:`).Output()
 	if err == nil {

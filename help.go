@@ -48,23 +48,24 @@ SETTING UP THE MACHINE (what control runs; by hand for specific settings)
   nvram        The TPM's slots: list, status, delete, restore
 
 THE PHONE (the Marify app, over Bluetooth LE)
-  attest       enrol, unenrol, status, gate, signer, ekcert, quote, verify,
-               config-check: the phone verifies this boot
+  attest       enrol, unenrol, status, gate, ekcert, quote, verify: the
+               phone verifies this boot
   remote-salt  enrol, rotate, status, unenrol: the salt of the disk's key,
                kept by the phone, opened only by this TPM in an approved boot
 
 REMOTE (SSH in the boot image; set in control)
-  remote       serve, initramfs: the code screen over SSH, and what the
-               image build adds for the network and the SSH server
+  remote       serve: the code screen over SSH
   vault        enrol, status, unenrol: the disk's key from this TPM and
                tpm2-kira-vault, unattended (mode tpm+vault)
 
-THE DISK'S KEY (mode in /etc/tpm2-kira/control.conf)
+THE DISK'S KEY (the recipe in each volume's LUKS header)
   luks         status, enrol, remove, mark, route: tpm2-kira's LUKS keyslots,
                and where the initrd takes the key from
   derive       hashpwd2 by hand: password and salt to a key file for luksAddKey
 
 AT BOOT (run by the initramfs units and hooks)
+  initramfs    plan: what the boot image carries - the disk unlock, and each
+               part the machine uses (codes, phone, vault, network, SSH)
   run          Show the code, hold for Enter, serve the disk's key, coordinate
                the phone
   cap          Lock the code until the next boot (when the initrd is left)
@@ -84,7 +85,7 @@ GLOBAL OPTIONS (before the command)
   --debug         Debug output
 
 FIRST STEPS
-  tpm2-kira control                                  guided, step by step; or:
+  tpm2-kira control                                  guided, in two steps; or:
   tpm2-kira setup && tpm2-kira seal                  a code at every boot
   tpm2-kira attest enrol                             the phone verifies the boot
   tpm2-kira luks enrol /dev/sda2 --mode password+remotesalt
@@ -92,7 +93,7 @@ FIRST STEPS
                                                      password and the phone's salt
   then rebuild the initramfs: mkinitcpio -P (Arch), update-initramfs -u (Debian)
 
-More: tpm2-kira help status | seal | run | attest | remote-salt | vault | luks | nvram;
+More: tpm2-kira help status | seal | run | initramfs | attest | remote-salt | vault | luks | nvram;
 docs/ and README.md
 `)
 }
@@ -122,75 +123,73 @@ func printHelp(topic string) {
 var helpPages = map[string]string{
 	"control": `tpm2-kira control [--tpm PATH]
 
-The guided way through the protections. The first run asks how: guided -
-one row (the key, mkinitcpio, the route, the slots), one rebuild, the
-reboot, then part 2 (the phone, and the disk's key); or manual - every
-step by hand, the overview saying what is possible and why not. The
-choice is TPM2_KIRA_CONTROL in control.conf; the overview's last entry
-switches it any time. The header carries the version and, guided, the
-part the set-up stands in.
-On top, the machine's status, judged line by line - the TPM and its
-banks, the endorsement key's vendor, Secure Boot, how it booted, the
-slots, the signing key, the initramfs kind and whether sd-tpm2-kira is
-wired into it (the hook installed, and in mkinitcpio's HOOKS), Bluetooth,
-the LUKS devices - green what is good, orange what is open, red what is
-not good with the risk in brackets: the SHA-1 bank, Secure Boot disabled or in Setup Mode, a slot
+The guided way through the protections, in two steps.
+
+Step 1, the boot chain, is the first screen until it is in place. On
+top the prerequisites, each a line - met (green), not met (red, with
+what to do or the risk), or information: a usable TPM (information:
+the disk unlock works without one), the initramfs
+system, tpm2-kira's hook files installed, systemd and sd-encrypt in
+mkinitcpio's HOOKS, the LUKS devices, a recovery passphrase (a keyslot
+that is not tpm2-kira's) on each, no keyslot opening with an empty
+passphrase (red: anybody with the disk opens it), Secure Boot. Under it
+the steps:
+
+  mkinitcpio adoption        sd-tpm2-kira into HOOKS, written when you say so
+  Kernel command line        the key's route: rd.luks.key= names the socket
+    adoption                 (crypttab on Debian), written when you say so
+  Continue to step 2         once both are in place
+
+Step 2 is what the machine combines, in submenus; on top the machine's
+status, judged line by line (green good, red not good with the risk in
+brackets: the SHA-1 bank, Secure Boot disabled or in Setup Mode, a slot
 sealed without the kernel measured, an endorsement key no known vendor
-vouches for (a phone then trusts this TPM on first use), a loose file
-holding the PIN. Under it the protections, as a tree:
+vouches for, a loose file holding the PIN, an empty passphrase, a vault
+that does not answer):
 
-  Signing key                                setup (and the YubiKey's PIN, stored)
-  mkinitcpio configuration                   sd-tpm2-kira in HOOKS, the image rebuilt
-  Unlock at boot (the key's route)           rd.luks.key= names the socket (crypttab on Debian)
-  TOTP codes at boot (slots 0 and 1)         seal; shown while one of the pair is missing,
-                                             slot 0's evaluated PCRs a recommendation to
-                                             acknowledge, or custom PCRs instead
-  Slot 0                                     picking a slot's line deletes it whole
-    Attestation by phone                     attest enrol
-    Disk key from password + remote salt     luks enrol; enrolled, it offers the removal
-  Slot 1
-  Disk key from password + salt              luks enrol (independent of the slots); enrolled,
-                                             it offers the removal
+  Signing key and TOTP codes setup (and the YubiKey's PIN, stored); the
+                             standard sealing, slot 0 to the evaluated PCRs
+                             (or custom ones) and slot 1 the fallback; every
+                             slot a line, picking it deletes the slot whole
+  Attestation by phone       attest enrol; Bluetooth in every boot image
+  Disk unlock                password + salt; password + remote salt (the
+                             phone); this TPM + a vault - each a keyslot,
+                             enrolled it offers the removal
+  Network and SSH at boot    the image's network (DHCP or static), the SSH
+                             server with the code screen
+  Debug at boot              the switch in the TPM
 
-- each done, possible, or blocked with the reason, and the next one
-recommended. The steps run without the commands' advisory warnings (a
-weak selection, SHA-1, Secure Boot off): the status above says the same,
-judged and in red, and nothing is said twice. With no slot at all, the
-standard sealing (slot 0 to this boot's state, slot 1 the fallback) is
-the one step offered; sealing asks slot 0's PCRs as a recommendation -
-the selection evaluated for this machine - to acknowledge, or custom
-PCRs to give instead. Sealed, every
-slot is a line of its own, the options that build on the strong slot
-under it (the remote-salt keyslot's state read from the LUKS header), and
-the unlock stays greyed until a keyslot of tpm2-kira's exists. Picking a
-slot's line deletes the slot whole - the TOTP key, the phones, the remote
-salt, the LUKS keyslots bound to it, the recovery blobs - after a
-confirmation. A slot whose deletion stopped halfway is dirty, marked
-[!] and recommended first, until a run removes the rest; the expert
-commands (nvram delete, luks remove, attest unenrol) stay for taking one
-piece by hand, and leave the slot dirty the same way.
+Every option is open, done, or greyed with the reason this machine
+cannot have it (no TPM, no Bluetooth adapter, no wired interface, no
+recovery passphrase, an option it builds on missing). An option that
+needs another one control can set up offers it on the way: the vault and
+SSH set up the image's network first. The vault is asked before the
+enrolment - does it answer, with the pinned key - and at every look at
+the machine whether it still knows this device. What changes the boot
+image only marks it out of date - the status' "Boot image" line says
+why, against the boot plan ('tpm2-kira help initramfs'): a part in use
+now and not in the image, or in it with other settings. The image is
+built once, when you quit control, after you said yes; step 2 leads
+with "Ready to reboot" once the image is current and this boot did not
+go through it.
+
+The steps run without the commands' advisory warnings (a weak selection,
+SHA-1, Secure Boot off): the status says the same, judged and in red,
+and nothing is said twice. A slot whose deletion stopped halfway is
+dirty, marked [!] and recommended first, until a run removes the rest.
 Control alone writes the one configuration file, /etc/tpm2-kira/control.conf:
-the radio settings and the YubiKey's PIN after checking it on the token
-(the file is then root's alone; the hooks leave the PIN out of the
-initramfs). The route line checks that every device with a keyslot of
-tpm2-kira's takes its key from tpm2-kira; those files, and every other,
-stay yours to edit, with two exceptions, each asked for every time: the
-mkinitcpio step writes sd-tpm2-kira into HOOKS when you say so and runs
-mkinitcpio -P when asked, proposing first - with a Bluetooth adapter at
-hand - to pack its modules into every image (~1.1 MB, deselectable), so
-enrolling phones later never changes the image; and the route step
-writes the line it shows into the cmdline file, a boot entry's options
-or crypttab when you say so. Both are checks: in place, they show green
-and cannot be picked. The overview opens with the signing key and the
-mkinitcpio step alone, and the rest appears once both are done (only a
-dirty slot shows through); the route is the prerequisite of both
-disk-key steps.
+the radio settings and the image's network and SSH server - what the image
+is built with, nothing else. Beside it: the YubiKey's PIN, checked on the
+token, in /etc/tpm2-kira/pin (root's alone), and the keys that may log in
+at boot in /etc/tpm2-kira/authorized_keys.
+Every other file stays yours to edit, with two exceptions, each asked
+for every time: the HOOKS of mkinitcpio.conf and the key's route.
 Sealing both slots, each QR code gets a cleared screen of its own, held
 until the scan is confirmed: it is shown this once.
-Run again later, it shows the state and what is left. On leaving it
-names the initramfs rebuild. Forms: arrow keys and Enter, Esc leaves,
-ACCESSIBLE=1 for plain prompts. Without a terminal it prints the screen
-and leaves (a script's look).
+On leaving it names the initramfs rebuild. Forms: arrow keys and Enter,
+Esc leaves (in a submenu: back to step 2), ACCESSIBLE=1 for plain
+prompts. Without a terminal it prints both steps and leaves (a script's
+look).
 
   tpm2-kira control
 `,
@@ -276,8 +275,8 @@ Approves the current (predicted next) boot state for a slot, with the
 signing key: a new generation, the older approvals revoked. It never needs
 the PCRs to match and never reads the TOTP key. The initramfs hooks run it
 after every image rebuild; a slot sealed with the key on a YubiKey needs
-the token and its PIN (` + cmd.PINEnvVar + `, or the TPM2_KIRA_PIN line of
-/etc/tpm2-kira/control.conf that control stores, root-only; else asked).
+the token and its PIN (` + cmd.PINEnvVar + `, or /etc/tpm2-kira/pin, which
+control stores, root-only; else asked).
 
   --pcrs LIST        A new selection (default: the slot's, with its sources)
   --measure-point M  As for seal: auto (default), on, off
@@ -356,16 +355,16 @@ computes it under the slot's policy: in a boot the signing key approved,
 before the OS separator (after 'cap' there is no code until the next boot).
 `,
 
-	"run": `tpm2-kira run [--hold S] [--gate SOCKET] [--unlock SOCKET] [--ssh PORT ...]
+	"run": `tpm2-kira run [--plan DIR] [--hold S] [--gate SOCKET] [--unlock SOCKET] [--ssh PORT ...]
 
 What the initramfs runs: shows the code of every slot and holds the boot
 for Enter; with a phone enrolled, coordinates the Bluetooth gate and shows
 the phone's code in the slot's line as soon as the phone is in; with
 --unlock, serves the disk's key to systemd-cryptsetup (rd.luks.key=<UUID>=
-/run/tpm2-kira/unlock.sock) or the Debian keyscript, in the mode of
-/etc/tpm2-kira/control.conf:
+/run/tpm2-kira/unlock.sock) or the Debian keyscript, made as the volume's
+LUKS2 header says (the token of tpm2-kira's keyslot):
 
-  skip                    nothing; cryptsetup's own prompt (default)
+  no token                nothing; cryptsetup's own prompt
   password+salt           asks a password and a salt; hashpwd2's derivation
   password+remotesalt     asks the password; the salt the phone released
   tpm+vault               asks nothing: the TPM's local part and the vault's
@@ -376,6 +375,11 @@ Ctrl-C at the prompt skips to cryptsetup's own prompt, where the recovery
 passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
 (Arch), /run/initramfs/tpm2-kira.log (Debian).
 
+  --plan DIR       Start only what the boot image names in DIR (the units pass
+                   ` + cmd.ImagePlanDir + `, 'tpm2-kira help initramfs'): without
+                   the codes in it the TPM is not asked for them, without the
+                   phone no gate is coordinated, without the vault none is
+                   asked. Without --plan, all it finds
   --hold S         Seconds to wait for Enter (default 90; 0: at once). A fresh
                    code every 30 seconds; Enter releases the boot
   --gate SOCKET    Be the coordinator of the gate on this socket: hold the TPM
@@ -389,35 +393,72 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
                    in, and Enter there continues at the console instead
   --ssh-hold S     With --ssh, in place of --hold (default 0: until a
                    confirmation comes)
-  --ssh-hostkey PATH  The host key the image build sealed to the TPM
-                   (PCR 0+7; default ` + cmd.ImageSealedHostKey + `). Unsealed
-                   once at the start, before the OS separator; when it does
-                   not unseal, a throwaway key is served and the console
-                   shows its fingerprint
+  --ssh-ca PATH    The SSH CA (default ` + cmd.ImageSSHCA + `). At the
+                   start, before the OS separator, the TPM makes this boot's
+                   host key and the CA certifies it (PCR 0+7 as approved);
+                   when it does not, a throwaway key is served and the
+                   console shows its fingerprint
   --ssh-authorized-keys PATH  The keys that may log in (default
                    ` + cmd.ImageAuthorizedKeys + `)
 `,
 
-	"remote": `tpm2-kira remote initramfs --buildroot DIR [--format mkinitcpio|initramfs-tools] [--conf PATH] [--tpm PATH]
-tpm2-kira remote serve
+	"remote": `tpm2-kira remote serve
 
 The code screen over SSH (docs/SSH.md). The network and the SSH
 server of the boot image are set in /etc/tpm2-kira/control.conf
 (TPM2_KIRA_NET_*, TPM2_KIRA_SSH_*; 'tpm2-kira control' sets them and
 suggests the network from /etc/systemd/network or /etc/network/interfaces).
-Both are off until set there.
+Both are off until set there; the image build puts them in
+('tpm2-kira help initramfs').
 
   serve      The SSH server itself, started by 'run --ssh' alone: as nobody,
-             in namespaces of its own, with no access to any file. It holds
-             no host key ('run' signs) and no password; a login becomes a
-             session of the code screen in 'run'
-  initramfs  What the hooks call: writes the authorized keys and, for
-             mkinitcpio, the systemd-networkd file and the drop-in of
-             tpm2-kira.service, for initramfs-tools /etc/tpm2-kira/remote.conf
-             for the boot scripts, into DIR; seals the SSH host key (TPM2_KIRA_SSH_HOSTKEY, the
-             system's OpenSSH key by default) to this TPM's PCR 0 and 7 as
-             they will be at the code screen, and prints the modules and
-             binaries the hook adds. Exit 2: nothing to add, and why
+             in namespaces of its own, with no access to any file
+             (github.com/tpm2-trust/assh). It holds no host key ('run' has the
+             TPM sign) and no password; a login becomes a session of the
+             code screen in 'run'
+
+The host key is made in the TPM at every boot and certified by the SSH
+CA, which 'tpm2-kira control' creates in the TPM (` + cmd.DefaultSSHCA + `)
+and which signs only while PCR 0 and 7 hold the values the signing key
+approved. Clients trust the CA once, in known_hosts:
+
+  @cert-authority <the machine's names> <the contents of ` + cmd.DefaultSSHCA + `.pub>
+`,
+
+	"initramfs": `tpm2-kira initramfs plan [--buildroot DIR --format mkinitcpio|initramfs-tools] [--conf PATH] [--tpm PATH]
+
+The boot plan: what the boot image carries, decided from what this
+machine uses. The disk unlock is always in it - how a volume's key is
+made, its LUKS2 header says at boot. Every other part is in only when
+something uses it, and says why it is out otherwise:
+
+  TOTP codes          a slot is sealed in the TPM
+  Phone (Bluetooth)   a phone is enrolled, or TPM2_KIRA_ATTEST_BLUETOOTH=always;
+                      needs the TPM, the signing key and the adapter
+  Vault               a slot is enrolled with a vault; needs the network
+  Network             TPM2_KIRA_NET in control.conf
+  SSH server          TPM2_KIRA_SSH=on; needs the network, the TPM, the SSH
+                      CA approved for PCR 0 and 7 as the next boot meets
+                      them, and a key that may log in
+
+A machine without a TPM gets the disk unlock alone. Without --buildroot
+the plan is shown. With it - what the initramfs hooks call - the image's
+files of the parts that are in are written into DIR (the signing public
+key, the adapter's module list and udev rule, the network's file, the
+SSH CA with its approval, the keys that may log in, the drop-ins), the parts
+are named in ` + cmd.ImagePlanDir + ` (a directory each, with a file named by
+the digest of its settings), and the lines the hook adds by are printed:
+say, warning, bt-module, bt-firmware, net-module, net-modules-all. A part
+that cannot be had stays out; nothing stops the build.
+
+'tpm2-kira control' compares the plan with the image the next boot starts:
+a part in use and not in the image, or in it with other settings, makes it
+rebuild the image when it is left. A part the image carries and nothing
+uses is no reason to rebuild: the next build leaves it out.
+
+  --no-busybox     initramfs-tools: the image has no busybox, so no network
+  --kernel-log F   Extra kernel log naming the adapter's firmware (the
+                   journal is read in any case)
 `,
 
 	"cap": `tpm2-kira cap

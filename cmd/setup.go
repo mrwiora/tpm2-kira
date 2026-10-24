@@ -161,7 +161,7 @@ func printPINInstructions(w io.Writer, t TokenInfo, s TokenSlot) {
 	}
 	fmt.Fprintln(w)
 
-	path := controlConfigPath()
+	path := pinFilePath()
 	if stored, loose := pinStored(path); stored {
 		fmt.Fprintf(w, "%s stores the PIN: sealing, resealing and the automatic reseal\n", path)
 		fmt.Fprintln(w, "after kernel and initramfs updates all take it from there.")
@@ -174,7 +174,7 @@ func printPINInstructions(w io.Writer, t TokenInfo, s TokenSlot) {
 	fmt.Fprintln(w, "Setup did not use the PIN; sealing does. Stored in one place, every step finds")
 	fmt.Fprintln(w, "it - seal, reseal, and the reseal the initramfs hooks run after every kernel")
 	fmt.Fprintln(w, "or initramfs update: 'tpm2-kira control' stores it (the signing key step),")
-	fmt.Fprintf(w, "as %s='<your PIN>' in %s, readable by root alone.\n", PINEnvVar, path)
+	fmt.Fprintf(w, "in %s, the PIN alone, readable by root alone.\n", path)
 	fmt.Fprintln(w, "Without it, seal and reseal ask for the PIN on the terminal (or take it from")
 	fmt.Fprintf(w, "%s: read -rs %s && export %s), and the automatic reseal\n", PINEnvVar, PINEnvVar, PINEnvVar)
 	fmt.Fprintln(w, "reports SKIPPED: the next boot then shows a PCR mismatch until you run")

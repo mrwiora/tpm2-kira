@@ -25,7 +25,7 @@ Last updated 2026-10-05.
 | 2 — peripheral, framing, encrypted session | `transport/frame/`, Noise XX/IK in `attest/noise.go`, `tpm2-kira attest enrol` with SAS | unit tests, fuzzing, interop with the reference `noiseprotocol` library |
 | 3 — mobile core | `mobile/kiracore` (gomobile verifier), `mobile/kiratest` (simulated machine); apps specified in [mobile/](mobile/) | Go tests through the binding API; gobind generates Java and Objective-C cleanly |
 | 4 — attestation round trip, lazy mode | `tpm2-kira attest gate --mode lazy` on a booted system | swtpm integration test (real AK, EK, quotes, ActivateCredential) |
-| 5 — initramfs (part) | `tpm2-kira attest initramfs-deps` resolves the configured adapter's driver modules (the whole sysfs path) and the firmware the kernel loaded for it, from the kernel log. `/etc/tpm2-kira/control.conf` (`TPM2_KIRA_ATTEST=off\|lazy`). mkinitcpio: modules, exact firmware, `modules-load.d`, `tpm2-kira-attest.service` (runs beside the TOTP display, never holds the boot, stopped at switch-root). initramfs-tools: same resolution, `init-premount` loads modules and starts the gate in the background, `init-bottom` stops it. The gate waits for the adapter that comes up as long as the code screen holds, retries while the kernel finishes controller setup, and uses `/dev/tpmrm0` so it can share the TPM with the TOTP display. Hooks add nothing when attestation is off, no phone is enrolled, the adapter is missing, or the installed binary is too old. | resolver unit tests on a fake sysfs (Intel, Realtek, Broadcom log formats); stubbed-hook tests for both hooks; a real `mkinitcpio` image build on Arch containing exactly 6 modules and 1 firmware file (≈1.1 MB) |
+| 5 — initramfs (part) | the boot plan (`tpm2-kira initramfs plan`) resolves the configured adapter's driver modules (the whole sysfs path) and the firmware the kernel loaded for it, from the kernel log. `/etc/tpm2-kira/control.conf` (`TPM2_KIRA_ATTEST=off\|lazy`). mkinitcpio: modules, exact firmware, `modules-load.d`, `tpm2-kira-attest.service` (runs beside the TOTP display, never holds the boot, stopped at switch-root). initramfs-tools: same resolution, `init-premount` loads modules and starts the gate in the background, `init-bottom` stops it. The gate waits for the adapter that comes up as long as the code screen holds, retries while the kernel finishes controller setup, and uses `/dev/tpmrm0` so it can share the TPM with the TOTP display. Hooks add nothing when attestation is off, no phone is enrolled, the adapter is missing, or the installed binary is too old. | resolver unit tests on a fake sysfs (Intel, Realtek, Broadcom log formats); stubbed-hook tests for both hooks; a real `mkinitcpio` image build on Arch containing exactly 6 modules and 1 firmware file (≈1.1 MB) |
 
 ### Open
 
@@ -518,7 +518,7 @@ initramfs ([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.3):
 index refuses in-place writes without the signing key, but the owner
 hierarchy can undefine it and write a blob that lists any phone, and the
 initrd has no key to notice. The anchor therefore comes from the image: the
-hook puts the signing public key there (`attest signer`), and the gate
+boot plan puts the signing public key there, and the gate
 refuses, before it advertises, a blob that key did not sign. Replacing the
 blob then means changing the image too, which Secure Boot or the measured
 PCRs report (PLAN-REMOTEATTESTATION.md §10.2). An older blob, signed all the

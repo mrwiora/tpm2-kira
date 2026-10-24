@@ -36,9 +36,11 @@ What the hook adds, for the adapter `TPM2_KIRA_ATTEST_ADAPTER` (default
 | `/etc/tpm2-kira/attest-signer.pem` | the signing public key, to check the enrolment record |
 | `/etc/udev/rules.d/70-tpm2-kira-bluetooth.rules`, only when the adapter's USB bus lets no new device in by itself | a rule that lets exactly this adapter in, at its port (§4) |
 
-The resolution is `tpm2-kira attest initramfs-deps`; the hook only copies
-what it answers. `control` runs the same resolution and shows its answer
-before the rebuild ("The sd-tpm2-kira hook adds for hci0: ...").
+The resolution is the boot plan's (`tpm2-kira initramfs plan`), and only
+when a phone is enrolled (or `TPM2_KIRA_ATTEST_BLUETOOTH=always`) and the
+machine has a TPM and the signing key; the hook only copies what it
+answers. `control` runs the same resolution and shows its answer before
+the rebuild ("The sd-tpm2-kira hook adds for hci0: ...").
 
 ### Why the hook, and not MODULES= and FILES= in mkinitcpio.conf
 
@@ -64,21 +66,24 @@ of the built image (§2).
 
 `control`'s overview checks the image the next boot starts - the first
 preset's `default_uki` (or `default_image`), Debian's `initrd.img` of the
-running kernel - whenever Bluetooth belongs in it. Fallback images and
-further profiles are not checked yet (PLAN-SUPPORT-MULTIPLE-UKI.md, step
-6); look into them by hand:
+running kernel - against the boot plan: the image names its parts in
+`/etc/tpm2-kira/plan/`, each with the digest of what it was built with
+(for the phone: the modules, the firmware, the udev rule, the signing
+public key). Fallback images and further profiles are not checked yet
+(PLAN-SUPPORT-MULTIPLE-UKI.md, step 6); look into them by hand:
 
 ```
   Bluetooth   hci0 (attestation by phone possible; firmware intel/ibt-0040-0041.sfi, intel/ibt-0040-0041.ddc)
-  Boot image  carries hci0's driver and firmware for the phone's gate
+  Boot image  carries Disk unlock, TOTP codes, Phone (Bluetooth)
 ```
 
-red when an image lacks the gate's part or the adapter's firmware. By hand:
+and orange, "rebuilt when you quit control", when the image lacks the
+gate or carries it with other firmware. By hand:
 
 ```bash
 lsinitcpio /boot/EFI/Linux/arch-linux.efi | grep -E 'tpm2-kira|firmware|bluetooth'   # a UKI or an .img
 lsinitramfs /boot/initrd.img-$(uname -r) | grep -E 'tpm2-kira|firmware|bluetooth'     # Debian
-sudo tpm2-kira attest initramfs-deps --adapter 0     # what the next build will add
+sudo tpm2-kira initramfs plan                         # what the next build will add, and why not
 ```
 
 ## 3. The firmware

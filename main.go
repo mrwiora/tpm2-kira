@@ -125,6 +125,8 @@ func main() {
 		runRemoteSalt(commandArgs, *tpmPath, *debug)
 	case "vault":
 		runVault(commandArgs, *tpmPath, *debug)
+	case "initramfs":
+		runInitramfs(commandArgs, *tpmPath, *debug)
 	case "remote":
 		runRemote(commandArgs, *tpmPath)
 	case "derive":
@@ -434,14 +436,19 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	unlock := fs.String("unlock", "", "Also answer systemd-cryptsetup's key requests on this socket (crypttab(5) AF_UNIX key files): the passphrase is asked at tpm2-kira's prompt once the code screen is confirmed. The initrd's socket unit passes the socket instead (set by the initrd unit)")
 	sshPort := fs.Int("ssh", 0, "Also be the SSH server on this port: the codes are shown and confirmed in an SSH session, the console says where to log in (set by the image's drop-in from TPM2_KIRA_SSH)")
 	sshHold := fs.Uint("ssh-hold", 0, "With --ssh: seconds to wait for a confirmation, in place of --hold (0: until one comes)")
-	sshHostKey := fs.String("ssh-hostkey", cmd.ImageSealedHostKey, "With --ssh: the host key sealed to the TPM by the image build; a throwaway key is served when it does not unseal")
+	sshCA := fs.String("ssh-ca", cmd.ImageSSHCA, "With --ssh: the SSH CA, which certifies a host key made in the TPM for this boot; a throwaway key is served when it does not")
 	sshAuthorized := fs.String("ssh-authorized-keys", cmd.ImageAuthorizedKeys, "With --ssh: the keys that may log in")
+	plan := fs.String("plan", "", "Start only the parts the boot image names in this directory (the codes, the phone's gate, the vault); without it, all it finds (set by the initrd unit: "+cmd.ImagePlanDir+")")
 
 	fs.Parse(args)
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
+	planned := cmd.AllPlanned
+	if *plan != "" {
+		planned = cmd.ReadPlanned(*plan)
+	}
 
-	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, cmd.RemoteOptions{Port: *sshPort, Hold: time.Duration(*sshHold) * time.Second, HostKey: *sshHostKey, AuthorizedKeys: *sshAuthorized}, *debug)
+	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, cmd.RemoteOptions{Port: *sshPort, Hold: time.Duration(*sshHold) * time.Second, CA: *sshCA, AuthorizedKeys: *sshAuthorized}, planned, *debug)
 }
 
 func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
@@ -841,24 +848,6 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 			AdapterWait: *adapterWait, Debug: *debug || cmd.BootDebug(*tpm),
 			Coordinator: *coordinator,
 		}))
-	case "config-check":
-		fs.Parse(args)
-		path := fs.Arg(0)
-		if path == "" {
-			path = cmd.DefaultControlConfigPath
-		}
-		if _, err := cmd.LoadAttestConfig(path); err != nil {
-			failAttest(cmd.ExitUsage, err)
-		}
-		fmt.Printf("%s: valid\n", path)
-	case "initramfs-deps":
-		// Used by the initramfs hooks; prints "module", "firmware" and
-		// "warning" lines for the adapter on this machine.
-		adapter := fs.Int("adapter", -1, "Bluetooth adapter index (hciN); default: TPM2_KIRA_ATTEST_ADAPTER of control.conf")
-		kernelLog := fs.String("kernel-log", "", "Extra kernel log text (e.g. 'journalctl -k -b -o cat' output)")
-		fwDir := fs.String("firmware-dir", cmd.DefaultFirmwareDir, "Firmware directory")
-		fs.Parse(args)
-		os.Exit(cmd.AttestInitramfsDeps(*adapter, *kernelLog, *fwDir))
 	case "status":
 		jsonOut := fs.Bool("json", false, "Output as JSON")
 		fs.Parse(args)
@@ -890,10 +879,6 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 		if !ok {
 			os.Exit(cmd.ExitRejected)
 		}
-	case "signer":
-		pubKey := fs.String("pubkey", "", "Signing public key (default: "+cmd.DefaultPublicKeyPath+")")
-		fs.Parse(args)
-		os.Exit(cmd.AttestSignerCommand(*tpm, *pubKey, os.Stdout, *debug))
 	case "ekcert":
 		fs.Parse(args)
 		if err := cmd.AttestEKCert(*tpm, *debug); err != nil {
@@ -939,12 +924,6 @@ machine's screen (docs/PLAN-REMOTEATTESTATION.md).
                     Without it (by hand) this process uses the TPM itself
   attest status   Show enrolled phones per slot and whether the blob is signed
                   by this machine's signing key (--json); exits 1 if not
-  attest signer   Print this machine's signing public key for the initramfs
-                  (used by the initramfs hooks; public, not a secret), after
-                  checking every enrolled record against it and the TPM's
-                  record counter (exit 6 if one does not pass). At boot the
-                  gate serves only a record signed by that key whose count
-                  equals the counter. --pubkey PATH
   attest ekcert   Show whether the phone will verify this TPM as genuine
                   (EK certificate chain against the vendor roots in the core)
   attest quote    Produce evidence without a phone (--nonce HEX --out FILE)
@@ -952,10 +931,6 @@ machine's screen (docs/PLAN-REMOTEATTESTATION.md).
   attest unenrol  Remove a slot's phones from its blob; the TOTP key stays.
                   Needs the signing key (--privkey PATH). To remove the whole
                   slot without it: nvram delete --nvram N
-  attest initramfs-deps  Modules and firmware the adapter needs (used by the
-                  initramfs hooks)
-  attest config-check [PATH]  Say whether control.conf loads (exit 2 and the
-                  reason if not; used by the initramfs hooks)
 
   EXIT STATUS: unlike every other command, 'attest gate', 'attest verify',
   'attest quote' and 'attest enrol' exit non-zero on failure:
@@ -977,20 +952,31 @@ func runRemote(args []string, tpmPath string) {
 			fmt.Fprintf(os.Stderr, "tpm2-kira remote serve: %v\n", err)
 			os.Exit(1)
 		}
-	case "initramfs":
-		fs := flag.NewFlagSet("remote initramfs", flag.ExitOnError)
-		buildroot := fs.String("buildroot", "", "The image under construction (mkinitcpio's BUILDROOT)")
-		conf := fs.String("conf", cmd.DefaultControlConfigPath, "The configuration file")
-		tpm := fs.String("tpm", tpmPath, "The TPM the SSH host key is sealed to")
-		format := fs.String("format", cmd.FormatMkinitcpio, "The image's kind: mkinitcpio (systemd-networkd and a drop-in of tpm2-kira.service) or initramfs-tools (/etc/tpm2-kira/remote.conf for the boot scripts)")
-		fs.Parse(args[1:])
-		if err := cmd.RemoteInitramfsCommand(*conf, *buildroot, *tpm, *format, os.Stdout); err != nil {
-			fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
-			os.Exit(2) // the hook adds neither network nor SSH
-		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown remote subcommand %q\n\n", args[0])
 		printHelp("remote")
+		os.Exit(cmd.ExitUsage)
+	}
+}
+
+func runInitramfs(args []string, tpmPath string, debugFlag bool) {
+	if len(args) == 0 || args[0] != "plan" {
+		printHelp("initramfs")
+		os.Exit(cmd.ExitUsage)
+	}
+	fs := flag.NewFlagSet("initramfs plan", flag.ExitOnError)
+	buildroot := fs.String("buildroot", "", "The image under construction (mkinitcpio's BUILDROOT, initramfs-tools' DESTDIR): its files are written there and the hook's lines printed; without it the plan alone is shown")
+	format := fs.String("format", cmd.FormatMkinitcpio, "The image's kind: mkinitcpio or initramfs-tools")
+	conf := fs.String("conf", cmd.DefaultControlConfigPath, "The configuration file")
+	tpm := fs.String("tpm", tpmPath, "The TPM whose slots decide the plan, and whose SSH CA the image carries")
+	kernelLog := fs.String("kernel-log", "", "Extra kernel log text naming the Bluetooth adapter's firmware (the journal is read in any case)")
+	fwDir := fs.String("firmware-dir", cmd.DefaultFirmwareDir, "Firmware directory")
+	noBusybox := fs.Bool("no-busybox", false, "initramfs-tools: the image has no busybox, so no network")
+	debug := fs.Bool("debug", debugFlag, "Enable debug output")
+	fs.Parse(args[1:])
+	o := cmd.PlanOptions{TPMPath: *tpm, ConfigPath: *conf, KernelLog: *kernelLog, FwDir: *fwDir, NoBusybox: *noBusybox, Debug: *debug}
+	if err := cmd.InitramfsPlanCommand(o, *buildroot, *format, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
 		os.Exit(cmd.ExitUsage)
 	}
 }

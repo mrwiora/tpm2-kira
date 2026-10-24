@@ -9,6 +9,7 @@ Where things are in the repository, and how the tests are run.
 ├── attest/                  # Remote attestation core: protocol, Noise, Verify(); no device access
 │   └── attesttest/          # Software TPM, in-memory pipe and simulated phone for tests
 ├── vaultproto/              # The contract with tpm2-kira-vault: REST messages, the release check
+├── assh/                    # aSSH, a git submodule: the SSH server, the SSH CA and host keys in the TPM
 ├── transport/
 │   ├── frame/               # Record fragmentation for BLE (shared with the phone)
 │   └── ble/                 # Pure-Go BLE peripheral over an HCI user channel
@@ -16,16 +17,20 @@ Where things are in the repository, and how the tests are run.
 │   ├── kiracore/            # gomobile binding: the phone's verifier core
 │   └── kiratest/            # gomobile binding: a simulated machine for app tests
 ├── cmd/                     # Command implementations
-│   ├── control.go           # The guided way: analysis, the protections, the step to run
+│   ├── control.go           # The guided way: analysis, the screens, the shared steps
 │   │                        #   (forms by huh v2, charm.land, the one TUI dependency)
+│   ├── control_bootchain.go # control's step 1: the prerequisites, the hook, the route
+│   ├── control_hub.go       # control's step 2: the submenus, each option gated by what the machine has
+│   ├── control_vault.go     # control's tpm+vault option, the vault asked before and after
+│   ├── control_remote.go    # control's network and SSH at boot
 │   ├── status.go            # The overview: slots, phone, unlock mode, keyslots, notes
 │   ├── luks.go, route.go    # LUKS keyslots and tokens; where the initrd takes the key from
 │   ├── remote_config.go     # The boot image's network and SSH settings; the networkd file, the suggestion
-│   ├── remote_initramfs.go  # What the image build adds for them ('remote initramfs')
-│   ├── remote_hostkey.go    # The SSH host key sealed to PCR 0+7, unsealed at the code screen
-│   ├── remote_ssh.go        # The SSH server of the code screen: sessions, prompts, the console hint
-│   ├── remote_serve.go      # 'remote serve': the SSH protocol, unprivileged and sandboxed
-│   ├── remote_privsep.go    # run's side of it: start without privileges, sign, take sessions
+│   ├── bootplan.go          # The boot plan: what the image carries, its files, 'initramfs plan'
+│   ├── remote_initramfs.go  # The image's files for the network and SSH (written by the plan)
+│   ├── remote_hostkey.go    # The SSH CA in the TPM (PCR 0+7), the boot's certified host key
+│   ├── remote_ssh.go        # The SSH server of the code screen: sessions, prompts, the console hint;
+│   │                        # the server and 'remote serve' are aSSH's (assh/server)
 │   ├── remote_agent.go      # cryptsetup's own prompt in the session (ask-password, askpass' FIFO)
 │   ├── vault.go             # tpm+vault: enrolment with the vault, the boot's release, the key
 │   ├── control_remote.go    # control's step for them
@@ -69,7 +74,7 @@ Where things are in the repository, and how the tests are run.
 │   ├── pentest1/, pentest2/      # Security review findings and mitigations
 │   └── *.issue                   # Write-ups of specific bugs
 ├── initramfs/               # Everything that goes into, or builds, an initramfs
-│   ├── common/control.conf          # The one configuration file: unlock mode, radio, YubiKey PIN
+│   ├── common/control.conf          # The one configuration file: what the image is built with (radio, network, SSH)
 │   ├── systemd/tpm2-kira.service   # Shows the code in systemd-based images
 │   ├── systemd/tpm2-kira-cap.service  # Runs 'cap' when leaving the initrd
 │   ├── systemd/tpm2-kira-attest.service  # Lazy Bluetooth attestation gate

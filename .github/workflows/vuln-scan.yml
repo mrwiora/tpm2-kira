@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          submodules: true
 
       - name: Set up Go
         uses: ./.github/actions/go-latest
@@ -40,6 +42,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          submodules: true
 
       - name: Set up Go
         uses: ./.github/actions/go-latest

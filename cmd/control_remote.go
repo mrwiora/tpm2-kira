@@ -1,45 +1,85 @@
 package cmd
 
 import (
-	"crypto/ed25519"
+	"crypto"
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 
 	"charm.land/huh/v2"
+	"github.com/tpm2-trust/assh/hostkey"
 )
 
-// control's step for the boot image's network and SSH server
-// (remote_config.go, docs/SSH.md): the settings are asked one by
-// one, proposed from what is set or, the first time, from the running
-// system's network configuration (systemd-networkd or ifupdown), then
-// written into control.conf and the image rebuilt. Nothing of it is on
-// until it is picked here, and the SSH server's question defaults to No.
+// control's options for the boot image's network and SSH server
+// (remote_config.go, docs/SSH.md), under "Network and SSH at boot": the
+// settings are asked one by one, proposed from what is set or, the first
+// time, from the running system's network configuration (systemd-networkd
+// or ifupdown), and written into control.conf; the image takes them at
+// the rebuild when control is left. Nothing of it is on until it is
+// picked here. SSH needs the network: picked without one, it sets the
+// network up first.
 
-// remoteStep is the overview's line.
-func (c *controller) remoteStep() controlStep {
+// netStep is the network's line.
+func (c *controller) netStep() controlStep {
 	f := &c.facts
-	st := controlStep{Key: "remote", Title: "Network and SSH at boot", Optional: true, SelfConfirm: true,
-		Explain: "The boot image brings up its own network (DHCP or a static address, set here and nowhere else) and tpm2-kira starts its own SSH server with the code screen: the codes are confirmed and the password typed in an SSH session, and the console says where to log in - Enter there continues at the console instead. Picking it changes the settings.",
-		Run:     (*controller).runRemote}
+	st := controlStep{Key: "net", Title: "Network in the boot image", Optional: true, SelfConfirm: true,
+		Explain: "The boot image brings up its own network, DHCP or a static address, set here and nowhere else - what the vault and the SSH server at boot reach the machine by. Picking it changes the settings; Off switches the network and SSH off.",
+		Run:     (*controller).runNetwork}
 	switch {
 	case f.Initramfs != "mkinitcpio" && f.Initramfs != "initramfs-tools":
 		st.Blocked = "the boot image is built with mkinitcpio or initramfs-tools only"
 	case f.AttestConf != "":
 		st.Blocked = "control.conf does not load"
 	case f.Remote.Net.Mode != "off":
-		st.Done = strings.Join(RemoteStatusLines(f.Remote), "; ")
-		if p := f.Remote.Problem(); p != "" {
+		st.Done = f.Remote.Net.Describe()
+		if p := f.Remote.Problem(); p != "" && !f.Remote.SSH.On {
 			st.Done, st.Dirty = "", p
+		}
+	case f.Wired == 0:
+		st.Blocked = "no wired network interface (wireless is not supported in the boot image)"
+	}
+	return st
+}
+
+// sshStep is the SSH server's line.
+func (c *controller) sshStep() controlStep {
+	f := &c.facts
+	st := controlStep{Key: "ssh", Title: "SSH server at boot", Optional: true, SelfConfirm: true,
+		Explain: "tpm2-kira starts its own, unprivileged SSH server with the code screen: the codes are confirmed and the passwords typed in an SSH session, and the console says where to log in - Enter there continues at the console instead. It needs the image's network, and sets it up first when there is none. Picking it changes the settings.",
+		Run:     (*controller).runSSH}
+	switch {
+	case f.Initramfs != "mkinitcpio" && f.Initramfs != "initramfs-tools":
+		st.Blocked = "the boot image is built with mkinitcpio or initramfs-tools only"
+	case f.AttestConf != "":
+		st.Blocked = "control.conf does not load"
+	case !f.Remote.SSH.On && f.Remote.Net.Mode == "off" && f.Wired == 0:
+		st.Blocked = "needs the image's network, and this machine has no wired interface"
+	case !f.Remote.SSH.On:
+	case f.Remote.Problem() != "":
+		st.Dirty = f.Remote.Problem()
+	case f.SSHKeys < 0:
+		st.Dirty = f.Remote.SSH.AuthorizedKeys + " cannot be read: nobody can log in"
+	case f.SSHKeys == 0:
+		st.Dirty = f.Remote.SSH.AuthorizedKeys + " holds no key without options: nobody can log in"
+	case f.TPMErr != "":
+		st.Dirty = "no TPM: the host keys are made and certified in it, and the image is built without SSH"
+	case f.SSHCA.CA == nil:
+		st.Dirty = f.SSHCA.Err + ": the image is built without SSH"
+	default:
+		lines := RemoteStatusLines(f.Remote)
+		st.Done = strings.TrimPrefix(lines[len(lines)-1], "SSH at boot: ") + fmt.Sprintf("; %d key(s) may log in; SSH CA %s", f.SSHKeys, f.SSHCA.CA.Fingerprint())
+		if f.SSHCA.Approval == nil {
+			st.Done += "; " + sshCAUnapproved
 		}
 	}
 	return st
 }
 
-// runRemote asks the settings, writes them and offers the rebuild.
-func (c *controller) runRemote() error {
+// runNetwork asks the network's settings and writes them.
+func (c *controller) runNetwork() error {
 	r := c.facts.Remote
 	if r.Net.Mode == "off" {
 		// The first time: what the running system does, as the proposal.
@@ -56,6 +96,15 @@ func (c *controller) runRemote() error {
 		return err
 	}
 	if mode == "off" {
+		for _, s := range c.facts.Status.Slots {
+			if s.Vault == "" {
+				continue
+			}
+			ok, err := c.confirm("Switch the network off?", "Slot "+fmt.Sprint(s.Slot)+"'s keyslot opens with the vault at "+s.Vault+", which the boot then cannot reach: the recovery passphrase is the way in.")
+			if err != nil || !ok {
+				return errors.New("not switched off")
+			}
+		}
 		r.Net.Mode, r.SSH.On = "off", false
 		return c.writeRemote(r)
 	}
@@ -102,7 +151,28 @@ func (c *controller) runRemote() error {
 	} else {
 		r.Net.Addresses, r.Net.Gateways = nil, nil
 	}
+	return c.writeRemote(r)
+}
 
+// runSSH asks the SSH server's settings - the network first, when the
+// image has none - and writes them.
+func (c *controller) runSSH() error {
+	if c.facts.Remote.Net.Mode == "off" {
+		ok, err := c.confirmYes("SSH needs the boot image's network. Set it up now?", "The same as \"Network in the boot image\"; the SSH settings follow.")
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("no network in the boot image: no SSH there")
+		}
+		if err := c.runNetwork(); err != nil {
+			return err
+		}
+		if c.facts.Remote.Net.Mode == "off" {
+			return errors.New("no network in the boot image: no SSH there")
+		}
+	}
+	r := c.facts.Remote
 	on := r.SSH.On // off until somebody says yes
 	if err := c.form(huh.NewConfirm().Title("Start the SSH server with the code screen?").
 		Description("tpm2-kira's own, unprivileged SSH server at boot: log in as root with a key of " + r.SSH.AuthorizedKeys + ", confirm the code, type the password there.").
@@ -132,7 +202,7 @@ func (c *controller) runRemote() error {
 		}
 		r.SSH.Port, _ = strconv.Atoi(port)
 		r.SSH.Hold, _ = strconv.Atoi(hold)
-		if err := c.ensureSSHKeys(&r.SSH); err != nil {
+		if err := c.ensureSSHKeys(r.SSH); err != nil {
 			return err
 		}
 	}
@@ -140,37 +210,14 @@ func (c *controller) runRemote() error {
 }
 
 // ensureSSHKeys checks what the image's SSH server needs on this system:
-// a host key - the system's OpenSSH key, or one of the image's own,
-// created when asked; sealed to the TPM at every image build either way -
-// and a key that may log in.
-func (c *controller) ensureSSHKeys(s *SSHConfig) error {
-	var opts []huh.Option[string]
-	if _, err := loadHostKey(DefaultSSHHostKey); err == nil {
-		opts = append(opts, huh.NewOption("The system's OpenSSH host key: the image answers as the system does", DefaultSSHHostKey))
-	}
-	opts = append(opts, huh.NewOption("A key of the image's own ("+DefaultOwnHostKey+")", DefaultOwnHostKey))
-	if s.HostKey != DefaultSSHHostKey && s.HostKey != DefaultOwnHostKey {
-		opts = append(opts, huh.NewOption("As set: "+s.HostKey, s.HostKey))
-	}
-	choice := s.HostKey
-	if err := c.form(huh.NewSelect[string]().Title("SSH host key of the boot image").
-		Description("Sealed to this TPM at every image build, bound to PCR 0 (firmware) and PCR 7 (Secure Boot): the image holds no usable key, and after a firmware or Secure Boot update it serves a throwaway key until the next rebuild.").
-		Options(opts...).Value(&choice)).Run(); err != nil {
+// the SSH CA in the TPM, created when asked, and a key that may log in.
+func (c *controller) ensureSSHKeys(s SSHConfig) error {
+	if err := c.ensureSSHCA(s.CA); err != nil {
 		return err
 	}
-	s.HostKey = choice
-	if _, err := loadHostKey(s.HostKey); err != nil {
-		if s.HostKey != DefaultOwnHostKey {
-			fmt.Fprintln(c.out, warn(err.Error()+": the image is built without SSH until it can be read."))
-		} else if ok, err := c.confirmYes("Create the SSH host key of the boot image?", "A new ed25519 key at "+s.HostKey+", for the boot image alone."); err != nil {
+	if authorizedKeyCount(s.AuthorizedKeys) <= 0 {
+		if err := c.offerRootKeys(s.AuthorizedKeys); err != nil {
 			return err
-		} else if !ok {
-			fmt.Fprintln(c.out, warn("No host key: the image is built without SSH until "+s.HostKey+" holds one."))
-		} else if err := createHostKey(s.HostKey); err != nil {
-			return err
-		} else {
-			k, _ := loadHostKey(s.HostKey)
-			fmt.Fprintf(c.out, "Created %s: %s\n", s.HostKey, hostKeyFingerprint(k.Public().(ed25519.PublicKey)))
 		}
 	}
 	switch n := authorizedKeyCount(s.AuthorizedKeys); {
@@ -184,8 +231,112 @@ func (c *controller) ensureSSHKeys(s *SSHConfig) error {
 	return nil
 }
 
-// writeRemote writes the settings and offers the rebuild that puts them
-// into the image.
+// ensureSSHCA creates the SSH CA in the TPM when there is none, approved
+// for the next boot with the signing key, and says how clients trust it.
+func (c *controller) ensureSSHCA(path string) error {
+	if st := readSSHCA(path, c.o.TPMPath); st.CA != nil {
+		fmt.Fprintf(c.out, "SSH CA %s: %s", path, st.CA.Describe())
+		return c.sayKnownHosts(st.CA)
+	}
+	if c.facts.TPMErr != "" {
+		fmt.Fprintln(c.out, warn("No TPM: the SSH CA lives in it, and without one the image is built without SSH."))
+		return nil
+	}
+	if c.facts.Keys == "" {
+		fmt.Fprintln(c.out, warn("No signing key (step 1, Set up): it approves the PCR states the SSH CA signs in."))
+		return nil
+	}
+	typ := hostkey.P256
+	if err := c.form(huh.NewSelect[hostkey.Type]().Title("Create the SSH CA in the TPM").
+		Description("The boot image's host key is made in the TPM at every boot and certified by this CA, which never leaves the TPM and signs only while PCR 0 (firmware) and PCR 7 (Secure Boot) hold the values the signing key approved. Clients trust the CA, once.").
+		Options(huh.NewOption("ECDSA P-256 (recommended)", hostkey.P256), huh.NewOption("RSA-2048", hostkey.RSA2048)).
+		Value(&typ)).Run(); err != nil {
+		return err
+	}
+	signer, err := c.signingKey()
+	if err != nil {
+		return err
+	}
+	ca, err := createSSHCA(path, c.o.TPMPath, typ, signer)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "Created %s: %s", path, ca.Describe())
+	return c.sayKnownHosts(ca)
+}
+
+// sayKnownHosts is how a client trusts the CA.
+func (c *controller) sayKnownHosts(ca *hostkey.CA) error {
+	line, err := ca.KnownHosts("*")
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "Clients trust it with this line in ~/.ssh/known_hosts (put the machine's names and addresses for the *):\n  %s\n", line)
+	return nil
+}
+
+// approveSSHCA has the signing key approve PCR 0 and 7 as the next boot
+// meets them.
+func (c *controller) approveSSHCA() error {
+	ok, err := c.confirmYes("Approve the SSH CA for the next boot?",
+		"PCR 0 and 7 as the next boot meets them have no approval yet (a new CA, or a firmware or Secure Boot update). The signing key approves them; without it the image is built without SSH.")
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("not approved")
+	}
+	signer, err := c.signingKey()
+	if err != nil {
+		return err
+	}
+	if _, err := approveSSHCA(c.facts.Remote.SSH.CA, c.o.TPMPath, signer); err != nil {
+		return err
+	}
+	fmt.Fprintln(c.out, "The SSH CA is approved for the next boot.")
+	return nil
+}
+
+// signingKey is the signing key, ready to sign (a token found, its PIN
+// checked).
+func (c *controller) signingKey() (crypto.Signer, error) {
+	signer, err := LoadCheckedSigningPrivateKey(DefaultPrivateKeyPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := PrepareSigningKey(signer); err != nil {
+		return nil, err
+	}
+	return signer, nil
+}
+
+// rootSSHKeys is where offerRootKeys takes keys from; a var for the tests.
+var rootSSHKeys = "/root/.ssh/authorized_keys"
+
+// offerRootKeys fills the image's own authorized_keys, empty or missing,
+// with root's keys, when asked: who may log in at boot is then tracked
+// apart from who may log in to the running system, and later changes to
+// root's file do not reach the image.
+func (c *controller) offerRootKeys(path string) error {
+	keys, _, err := authorizedKeys(rootSSHKeys)
+	if err != nil || len(keys) == 0 {
+		fmt.Fprintln(c.out, warn(path+" holds no key, and "+rootSSHKeys+" none to take: put the keys that may log in at boot into "+path+" (one per line, as in authorized_keys)."))
+		return nil
+	}
+	ok, err := c.confirmYes(fmt.Sprintf("Copy root's %d SSH key(s) to %s?", len(keys), path),
+		"The keys that may log in at boot are tpm2-kira's own file; root's stays as it is, and what changes in it later does not reach the image. Edit "+path+" for other keys; control sees a change and rebuilds the image when you quit it.")
+	if err != nil || !ok {
+		return err
+	}
+	if err := os.WriteFile(path, imageKeys(keys), 0o600); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "%s: %d key(s) copied from %s\n", path, len(keys), rootSSHKeys)
+	return nil
+}
+
+// writeRemote writes the settings; the image takes them at the rebuild
+// when control is left.
 func (c *controller) writeRemote(r RemoteConfig) error {
 	if err := setRemoteConfig(controlConfigPath(), r); err != nil {
 		return err
@@ -197,7 +348,8 @@ func (c *controller) writeRemote(r RemoteConfig) error {
 	if p := r.Problem(); p != "" {
 		fmt.Fprintln(c.out, bad(p))
 	}
-	return c.offerRebuild()
+	fmt.Fprintln(c.out, "The image takes it at its next build, when you quit control.")
+	return nil
 }
 
 // validList checks a field of space-separated addresses: with prefix

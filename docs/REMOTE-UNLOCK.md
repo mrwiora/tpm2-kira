@@ -110,13 +110,18 @@ vault's boot state; init warns about that.
 **For each machine:**
 
 1. The machine's boot image needs its network: `tpm2-kira control`,
-   "Network and SSH at boot" (SSH.md §1); the network is enough, SSH is
-   not needed. `vault enrol` warns when it is off.
+   step 2, "Network and SSH at boot" (SSH.md §1); the network is enough,
+   SSH is not needed. `vault enrol` warns when it is off.
 2. On the vault: `tpm2-kira-vault token create --name NAME [--mode
    approve] [--ttl 1h]`. It prints the token, the URL, the pin and the
    exact command for the machine. A token works once. For a machine the
    vault knows already (a new TPM, a new slot): `--replace DEVICE`.
-3. On the machine, with a recovery passphrase in another keyslot:
+3. On the machine, with a recovery passphrase in another keyslot - in
+   `tpm2-kira control`, step 2, "Disk unlock", "This TPM + a vault": it
+   sets up the network when there is none, asks the URL, the pin and the
+   token, asks the vault whether it answers with the pinned key before
+   anything is enrolled, and shows afterwards, at every look, whether
+   the vault still knows this device. Or by hand:
    `tpm2-kira luks enrol <device> --mode tpm+vault --url … --pin … --token
    … [--nvram N] [--label L] [--name NAME]`. It enrols with the vault,
    adds the keyslot (authorised by the recovery passphrase, asked) and

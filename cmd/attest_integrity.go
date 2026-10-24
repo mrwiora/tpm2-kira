@@ -13,7 +13,7 @@ package cmd
 // before any passphrase is typed and whether or not a phone is there:
 //
 //   - its signature must verify with this machine's signing public key, a
-//     copy of which the hooks put into the image ('attest signer'). That
+//     copy of which the boot plan puts into the image (signerForImage). That
 //     catches a record written by anyone else;
 //   - its count must equal the slot's TPM counter (attest_counter.go), which
 //     catches an older, genuinely signed record put back.
@@ -32,7 +32,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/google/go-tpm/tpm2/transport"
@@ -105,26 +104,10 @@ func (e *recordError) Error() string {
 	return "it is not the current record (" + e.detail + ")"
 }
 
-// AttestSignerCommand implements 'attest signer', run by the initramfs
-// hooks: it checks every enrolled record against this machine's signing
-// public key and the record counters, and prints that key (PEM) for the
-// image. Exit ExitTampered when a record does not pass, ExitUsage when
-// nothing is enrolled; nothing is printed then.
-func AttestSignerCommand(tpmPath, pubKeyPath string, out io.Writer, debug bool) int {
-	tpmDev, err := OpenTPM(tpmPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "tpm2-kira: failed to open TPM at %s: %v\n", tpmPath, err)
-		return ExitInternal
-	}
-	defer tpmDev.Close()
-	pemBytes, code := signerForImage(tpmDev, pubKeyPath, os.Stderr, debug)
-	if code != 0 {
-		return code
-	}
-	_, _ = out.Write(pemBytes)
-	return 0
-}
-
+// signerForImage checks every enrolled record against this machine's
+// signing public key and the record counters, and gives that key (PEM)
+// for the image: ExitTampered when a record does not pass, ExitUsage
+// when nothing is enrolled, with the reason on errOut.
 func signerForImage(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer, debug bool) ([]byte, int) {
 	found := enrolledSlots(tpmDev, debug)
 	if len(found) == 0 {

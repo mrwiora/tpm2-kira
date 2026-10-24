@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // One file holds the radio and the PIN; setAttestBluetooth leaves the
@@ -30,14 +31,8 @@ func TestControlConfigOneFile(t *testing.T) {
 	if _, err := ParseControlConfig([]byte("TPM2_KIRA_ATTEST_BLUETOOTH=sometimes\n")); err == nil {
 		t.Fatal("an unknown bluetooth policy parsed")
 	}
-	if err := setControlGuide(path, "guided"); err != nil {
-		t.Fatal(err)
-	}
-	if cfg, err := LoadControlConfig(path); err != nil || cfg.Control != "guided" {
-		t.Fatalf("the guide choice: %+v %v", cfg, err)
-	}
-	if _, err := ParseControlConfig([]byte("TPM2_KIRA_CONTROL=wizard\n")); err == nil {
-		t.Fatal("an unknown guide mode parsed")
+	if _, err := ParseControlConfig([]byte("TPM2_KIRA_CONTROL=guided\n")); err == nil || !strings.Contains(err.Error(), "Remove the line") {
+		t.Fatalf("the guided/manual choice that is gone: %v", err)
 	}
 	missing, err := LoadControlConfig(filepath.Join(t.TempDir(), "none"))
 	if err != nil || missing.Attest.Bluetooth != "auto" {
@@ -45,49 +40,70 @@ func TestControlConfigOneFile(t *testing.T) {
 	}
 }
 
-// The PIN is read from its own line, in the parser's line syntax, whatever
-// the other lines say; the last line wins; nothing else of the file counts.
-func TestPINLine(t *testing.T) {
-	for content, want := range map[string]string{
-		"TPM2_KIRA_PIN='123456'\n":                                       "123456",
-		"TPM2_KIRA_PIN = \"654321\"\n":                                   "654321",
-		"  TPM2_KIRA_PIN=111111\n":                                       "111111",
-		"# TPM2_KIRA_PIN='000000'\nTPM2_KIRA_PIN=222222\n":               "222222",
-		"TPM2_KIRA_PIN=1\nTPM2_KIRA_PIN=2\n":                             "2",
-		"TPM2_KIRA_ATTEST_DEBUG=1\nTPM2_KIRA_PIN='333333'\njust words\n": "333333",
-		"TPM2_KIRA_PINX='9'\n":                                           "",
-		"TPM2_KIRA_PIN=''\n":                                             "",
-		"":                                                               "",
-	} {
-		got, ok := pinLine([]byte(content))
-		if got != want || ok != (want != "") {
-			t.Errorf("%q: %q %v, want %q", content, got, ok, want)
-		}
+// The PIN has a file of its own: the PIN alone, root's alone; a file
+// others can read gives it as loose. A PIN line in control.conf is an
+// error that never quotes it.
+func TestPINFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TPM2_KIRA_CONTROL_CONF", filepath.Join(dir, "control.conf"))
+	path := pinFilePath()
+	if path != filepath.Join(dir, "pin") {
+		t.Fatalf("the PIN file is %s", path)
+	}
+	if pin, _ := storedPIN(path); pin != "" {
+		t.Fatalf("no file: %q", pin)
+	}
+	if err := storePIN(path, "12\n34"); err == nil {
+		t.Fatal("a newline in the PIN was stored")
+	}
+	os.WriteFile(path, []byte("old"), 0o644)
+	if err := storePIN(path, "123456"); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
+		t.Fatalf("the PIN file is %v", st.Mode().Perm())
+	}
+	if pin, loose := storedPIN(path); pin != "123456" || loose {
+		t.Fatalf("read back %q loose %v", pin, loose)
+	}
+	os.Chmod(path, 0o640)
+	if stored, loose := pinStored(path); !stored || !loose {
+		t.Fatalf("readable by the group: stored %v loose %v", stored, loose)
+	}
+	_, err := ParseControlConfig([]byte("TPM2_KIRA_PIN='secret-1234'\n"))
+	if err == nil || !strings.Contains(err.Error(), "file of its own") || strings.Contains(err.Error(), "secret-1234") {
+		t.Fatalf("a PIN line: %v", err)
 	}
 }
 
-// An image build reads its two settings leniently: a file that does not
-// load gives the defaults and says why.
-func TestBuildSettingsDoNotStopTheBuild(t *testing.T) {
+// control writes control.conf only when a value changes: its time says
+// when the image is out of date.
+func TestSetControlValueKeepsAnUnchangedFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.conf")
-	os.WriteFile(path, []byte("TPM2_KIRA_ATTEST_ADAPTER=hci2\nTPM2_KIRA_ATTEST_BLUETOOTH=always\n"), 0o600)
-	if cfg, w := buildSettings(path); cfg.Adapter != 2 || cfg.Bluetooth != "always" || w != "" {
-		t.Fatalf("%+v %q", cfg, w)
+	if err := setControlValue(path, "TPM2_KIRA_NET", "dhcp"); err != nil {
+		t.Fatal(err)
 	}
-	os.WriteFile(path, []byte("TPM2_KIRA_ATTEST_ADAPTER=hci2\nTPM2_KIRA_ATTEST_TIMEOUT=0\n"), 0o600)
-	if cfg, w := buildSettings(path); cfg.Adapter != 0 || cfg.Bluetooth != "auto" || !strings.Contains(w, "does not load") {
-		t.Fatalf("%+v %q", cfg, w)
+	past := time.Now().Add(-time.Hour)
+	os.Chtimes(path, past, past)
+	if err := setControlValue(path, "TPM2_KIRA_NET", "dhcp"); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := os.Stat(path); !st.ModTime().Equal(past) {
+		t.Fatal("the same value written again")
+	}
+	setControlValue(path, "TPM2_KIRA_NET", "off")
+	if st, _ := os.Stat(path); st.ModTime().Equal(past) {
+		t.Fatal("a new value not written")
 	}
 }
 
 // control checks control.conf before anything else: every line that does
 // not load, with its number and what to do, and then it quits - nothing
-// asked (the guided/manual choice read as "not made" asked every time),
-// nothing written. The PIN is never quoted.
+// asked, nothing written. The PIN is never quoted.
 func TestControlStopsOnAConfigThatDoesNotLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.conf")
 	t.Setenv("TPM2_KIRA_CONTROL_CONF", path)
-	os.WriteFile(path, []byte("TPM2_KIRA_CONTROL=guided\nTPM2_KIRA_ATTEST_TIMEOUT=0\nTPM2_KIRA_PIN='secret-1234'\nTPM2_KIRA_ATTEST_DEBUG=1\n"), 0o600)
+	os.WriteFile(path, []byte("TPM2_KIRA_NET=dhcp\nTPM2_KIRA_ATTEST_TIMEOUT=0\nTPM2_KIRA_PIN='secret-1234'\nTPM2_KIRA_ATTEST_DEBUG=1\n"), 0o600)
 	before, _ := os.ReadFile(path)
 
 	var out bytes.Buffer
@@ -96,25 +112,26 @@ func TestControlStopsOnAConfigThatDoesNotLoad(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not load") {
 		t.Fatalf("control went on: %v\n%s", err, got)
 	}
-	for _, want := range []string{"line 2: TPM2_KIRA_ATTEST_TIMEOUT is gone", "line 4: TPM2_KIRA_ATTEST_DEBUG is gone", "Remove the line", "the PIN\nincluded, stays"} {
+	for _, want := range []string{"line 2: TPM2_KIRA_ATTEST_TIMEOUT is gone", "line 3: the YubiKey's PIN has a file of its own", "line 4: TPM2_KIRA_ATTEST_DEBUG is gone", "Remove the line"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the output lacks %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "secret-1234") || strings.Contains(got, "Looking at this machine") || strings.Contains(got, "Protections") {
+	if strings.Contains(got, "secret-1234") || strings.Contains(got, "Looking at this machine") || strings.Contains(got, "Step 1 of 2") {
 		t.Errorf("control said too much, or went on:\n%s", got)
 	}
 	if after, _ := os.ReadFile(path); !bytes.Equal(before, after) {
 		t.Error("control wrote the file")
 	}
 
-	// Fixed, control goes on, and the choice in the file is taken.
-	os.WriteFile(path, []byte("TPM2_KIRA_CONTROL=guided\nTPM2_KIRA_PIN='secret-1234'\n"), 0o600)
+	// Fixed, control goes on, and the settings in the file are taken.
+	os.WriteFile(path, []byte("TPM2_KIRA_NET=dhcp\n"), 0o600)
 	out.Reset()
-	if err := Control(ControlOptions{TPMPath: filepath.Join(t.TempDir(), "no-tpm"), Out: &out}); err != nil || !strings.Contains(out.String(), "Protections") {
+	if err := Control(ControlOptions{TPMPath: filepath.Join(t.TempDir(), "no-tpm"), Out: &out}); err != nil || !strings.Contains(out.String(), "Step 2 of 2") ||
+		!strings.Contains(out.String(), "Boot network Network at boot: DHCP") {
 		t.Fatalf("a good file: %v\n%s", err, out.String())
 	}
-	if problems := ControlConfigProblems([]byte("TPM2_KIRA_CONTROL=wizard\nx\n")); len(problems) != 2 {
+	if problems := ControlConfigProblems([]byte("TPM2_KIRA_CONTROL=guided\nx\n")); len(problems) != 2 {
 		t.Fatalf("problems %v", problems)
 	}
 }

@@ -696,28 +696,28 @@ func (sess *tokenSession) ensurePIN(s *yubiKeySigner, force bool) error {
 var promptPIN = promptPINOnTTY
 
 // readPIN finds the PIN without asking when it can: TPM2_KIRA_PIN first, then
-// control.conf, where the unattended reseal finds it, and only then the
-// terminal. source names where the PIN came from, for messages.
+// the PIN file control stores, where the unattended reseal finds it, and
+// only then the terminal. source names where the PIN came from, for messages.
 func readPIN(s *yubiKeySigner) (pin, source string, err error) {
 	if pin, ok := os.LookupEnv(PINEnvVar); ok && pin != "" {
 		return pin, "the " + PINEnvVar + " environment variable", nil
 	}
-	pin, ok, err := pinFromConfig()
+	pin, ok, err := pinFromFile()
 	if err != nil {
 		return "", "", err
 	}
 	if ok {
-		return pin, controlConfigPath(), nil
+		return pin, pinFilePath(), nil
 	}
 	pin, err = promptPIN(s)
 	return pin, "the terminal", err
 }
 
-// pinFromConfig returns the PIN control.conf stores, if it may be used. A
+// pinFromFile returns the PIN the PIN file stores, if it may be used. A
 // PIN in a file that others can read, or that root does not own, is refused
 // rather than used: it has to be treated as already disclosed.
-func pinFromConfig() (string, bool, error) {
-	path := controlConfigPath()
+func pinFromFile() (string, bool, error) {
+	path := pinFilePath()
 	pin, loose := storedPIN(path)
 	if pin == "" {
 		return "", false, nil
@@ -734,12 +734,12 @@ func pinFromConfig() (string, bool, error) {
 
 // warnIfNoUnattendedPIN tells the user, right after the PIN was accepted for
 // a manual seal or reseal, when the automatic reseal after an initramfs
-// rebuild will not have it. Silent when control.conf provides the PIN.
+// rebuild will not have it. Silent when the PIN file provides the PIN.
 func warnIfNoUnattendedPIN(w io.Writer) {
-	if stored, _ := pinStored(controlConfigPath()); stored {
+	if stored, _ := pinStored(pinFilePath()); stored {
 		return
 	}
-	fmt.Fprintf(w, "WARNING: %s holds no %s.\n", controlConfigPath(), PINEnvVar)
+	fmt.Fprintf(w, "WARNING: there is no PIN in %s.\n", pinFilePath())
 	fmt.Fprintln(w, "         The automatic reseal after kernel and initramfs updates will therefore")
 	fmt.Fprintln(w, "         have no PIN: it will be SKIPPED, and the next boot will show a PCR")
 	fmt.Fprintln(w, "         mismatch until you reseal by hand. 'tpm2-kira control' stores the PIN")

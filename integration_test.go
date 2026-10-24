@@ -419,11 +419,12 @@ func TestSealWithCustomPCRs(t *testing.T) {
 		{"All common PCRs", "0,1,2,3,4,5,6,7"},
 	}
 
-	for _, tc := range testCases {
+	for i, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Use different NVRAM index for each test
-			// Below 0x01803800, where the generation indices begin.
-			nvramIndex := fmt.Sprintf("0x01803%03X", time.Now().UnixNano()%0x7FF)
+			// An index of its own per case, fixed: a blob index seal takes
+			// (cmd.ValidateBlobIndex refuses some below the generation
+			// indices, and a refusal exits 0).
+			nvramIndex := fmt.Sprintf("0x%08X", 0x01803100+i)
 
 			stdout, stderr, err := runTPMKira(t, tpmPath,
 				"seal",
@@ -440,7 +441,7 @@ func TestSealWithCustomPCRs(t *testing.T) {
 
 			// Verify it worked
 			if !strings.Contains(stdout, "TOTP Secret Generated") {
-				t.Errorf("Expected success message for PCRs %s", tc.pcrs)
+				t.Errorf("Expected success message for PCRs %s at %s\nStdout: %s\nStderr: %s", tc.pcrs, nvramIndex, stdout, stderr)
 			}
 
 			// Clean up - delete the NVRAM index

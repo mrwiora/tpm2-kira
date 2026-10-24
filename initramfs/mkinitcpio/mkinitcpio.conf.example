@@ -8,8 +8,8 @@
 # TPM2-KIRA SIGNING KEY ON A YUBIKEY
 # With 'tpm2-kira setup' on a YubiKey, the reseal that runs after every image
 # build signs on the token. The PIN for it is not here: 'tpm2-kira control'
-# stores it in /etc/tpm2-kira/control.conf (TPM2_KIRA_PIN), readable by root
-# alone, and the install hook leaves that line out of the image.
+# stores it in /etc/tpm2-kira/pin, readable by root alone, and nothing puts it
+# into the image.
 
 # MODULES
 # The following modules are loaded before any boot hooks are run.

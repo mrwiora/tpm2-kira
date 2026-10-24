@@ -2,12 +2,16 @@
 
 > Arch (mkinitcpio, systemd in the initrd) and Debian (initramfs-tools).
 > Off until turned on. Experimental. The superseded designs (tinysshd, an
-> unencrypted host key, mkinitcpio-systemd-extras' hooks) are in
-> HISTORY.md.
+> unencrypted host key, a host key sealed to the TPM, mkinitcpio-systemd-extras'
+> hooks) are in HISTORY.md. The SSH server and the TPM-held host keys are
+> [aSSH](../assh/README.md) (`github.com/tpm2-trust/assh`), a project of
+> its own that tpm2-kira uses as a library, from the git submodule `assh/`.
 
 The boot image can bring up a network of its own, and `tpm2-kira run` -
 the process that holds the boot at the code screen - then also runs an SSH
-server. The SSH protocol runs in a separate process without privileges.
+server. The SSH protocol runs in a separate process without privileges, and
+the host key is made in the TPM at every boot and certified by a
+certificate authority that never leaves the TPM either.
 Whoever logs in sees the codes, confirms them, and types the disk's
 password in the session; when tpm2-kira has no key to give, cryptsetup's
 own prompt is asked there too. The console says where to log in, and
@@ -15,16 +19,19 @@ Enter at the console continues there instead: a person at the machine is
 never held by a remote session.
 
 ```bash
-sudo tpm2-kira control      # "Network and SSH at boot": DHCP or static, proposed
+sudo tpm2-kira control      # step 2, "Network and SSH at boot": DHCP or static, proposed
                             # from /etc/systemd/network or /etc/network/interfaces;
-                            # SSH only when you say yes; rebuilds the image
+                            # SSH only when you say yes, the SSH CA created in the TPM;
+                            # the image is rebuilt when you quit
+# once, on each client: trust the CA (control prints the line)
+echo "@cert-authority host.example,192.0.2.10 $(cat /etc/tpm2-kira/ssh_ca.json.pub)" >> ~/.ssh/known_hosts
 ssh root@<address shown on the console>
 ```
 
 Contents: [1 Configuration](#1-configuration) ·
 [2 The image build](#2-the-image-build) ·
 [3 Privilege separation](#3-privilege-separation) ·
-[4 The host key](#4-the-host-key) · [5 At boot](#5-at-boot) ·
+[4 The host key and the SSH CA](#4-the-host-key-and-the-ssh-ca) · [5 At boot](#5-at-boot) ·
 [6 cryptsetup's own prompt](#6-cryptsetups-own-prompt) ·
 [7 Using it](#7-using-it) · [8 Commands](#8-commands) ·
 [9 The code](#9-the-code) · [10 Tests](#10-tests) ·
@@ -33,7 +40,7 @@ Contents: [1 Configuration](#1-configuration) ·
 ## 1. Configuration
 
 All of it is in `/etc/tpm2-kira/control.conf`, written by `tpm2-kira
-control` (the step "Network and SSH at boot"):
+control` (step 2, the submenu "Network and SSH at boot"):
 
 | Key | Values |
 |---|---|
@@ -44,8 +51,8 @@ control` (the step "Network and SSH at boot"):
 | `TPM2_KIRA_SSH` | `off` (default), `on` (needs a network) |
 | `TPM2_KIRA_SSH_PORT` | 22 |
 | `TPM2_KIRA_SSH_HOLD` | seconds the boot waits for a confirmation; `0` (default): until one comes |
-| `TPM2_KIRA_SSH_AUTHORIZED_KEYS` | `/root/.ssh/authorized_keys`; any key type OpenSSH has. A line with options in front of the key (`from=`, `command=`) is left out: the options are not honoured |
-| `TPM2_KIRA_SSH_HOSTKEY` | `/etc/ssh/ssh_host_ed25519_key` (the system's OpenSSH key), or an ed25519 key of the image's own (control creates `/etc/tpm2-kira/ssh_host_ed25519_key`). Sealed to the TPM, §4 |
+| the login keys | no setting: `/etc/tpm2-kira/authorized_keys`, tpm2-kira's own file - control copies root's keys there when asked, edit it for others; any key type OpenSSH has. A line with options in front of the key (`from=`, `command=`) is left out: the options are not honoured. Their sum is part of the SSH part's digest in the boot plan, so control sees a difference without unpacking the image |
+| the SSH CA | no setting: `/etc/tpm2-kira/ssh_ca.json` (and its public key, `.pub`), created in the TPM by control, ECDSA P-256 or RSA-2048 (§4) |
 
 **Off by default, on Arch and Debian alike.** Both keys default to `off`;
 `run` starts the server only when the image passes `--ssh`; `control`
@@ -55,8 +62,10 @@ with the code screen?" is preselected No.
 **The step in `control`** asks the settings one by one: the network
 (off, DHCP, static), the interface (MAC or name, with this machine's
 interfaces listed), for a static address the addresses, gateway and DNS,
-then whether to start the SSH server, its port, the hold, and the host
-key (the system's OpenSSH key or one of the image's own). The first time,
+then whether to start the SSH server, its port, the hold, and - the first
+time - the SSH CA's key type (P-256 recommended, or RSA-2048): it is
+created in the TPM, approved with the signing key, and control prints the
+`known_hosts` line that makes clients trust it. The first time,
 it proposes the network from the running system's configuration:
 
 - systemd-networkd: the first `.network` file in `/etc/systemd/network`
@@ -83,34 +92,41 @@ network in the image and no SSH server.
 ## 2. The image build
 
 `control.conf` itself never goes into the image. The hook calls `tpm2-kira
-remote initramfs --buildroot DIR [--format mkinitcpio|initramfs-tools]`,
-which turns the settings into files of the image, seals the host key, and
-prints what the hook has to add (modules, warnings):
+initramfs plan --buildroot DIR [--format mkinitcpio|initramfs-tools]`, the
+boot plan (`tpm2-kira help initramfs`): the network is a part of it when
+`TPM2_KIRA_NET` is set and its settings work, the SSH server when
+`TPM2_KIRA_SSH=on`, the network is in, the SSH CA has the signing key's
+approval of PCR 0 and 7 as the next boot meets them (§4), and a key may
+log in - each part on its own, so a vault keeps its network
+when SSH cannot be had. It turns the settings into files of the image,
+copies the CA with that one approval, and prints what the hook has to add (modules,
+warnings); the image names the parts with the digest of their settings,
+so `control` tells an image built with another port or other login keys:
 
 | | Arch (`sd-tpm2-kira`) | Debian (`hooks/tpm2-kira`) |
 |---|---|---|
 | network | `/etc/systemd/network/10-tpm2-kira.network`; with DHCP `ClientIdentifier=mac` (the image has no machine-id for a stable DUID); systemd-networkd enabled with its user | `/etc/tpm2-kira/remote.conf` (`TPM2_KIRA_NET`, `_MATCH`, `_ADDRESS`, `_GATEWAY`, `_DNS`, shell-quoted), read by `init-premount/tpm2-kira` |
-| run's flags | `/etc/systemd/system/tpm2-kira.service.d/remote.conf`: `TPM2_KIRA_REMOTE=--ssh=PORT --ssh-hold=S --ssh-hostkey=…`, and no `TimeoutStartSec` when the hold has no limit | `TPM2_KIRA_REMOTE=…` in the same `remote.conf` |
-| host key | `/etc/tpm2-kira/ssh/ed25519.sealed` (§4) | the same |
-| login keys | `/root/.ssh/authorized_keys` | the same |
+| run's flags | `/etc/systemd/system/tpm2-kira.service.d/remote.conf`: `TPM2_KIRA_REMOTE=--ssh=PORT --ssh-hold=S --ssh-ca=…`, and no `TimeoutStartSec` when the hold has no limit | `TPM2_KIRA_REMOTE=…` in the same `remote.conf` |
+| SSH CA | `/etc/tpm2-kira/ssh/ca.json`: the CA's wrapped key, its authority and the approval of this boot's PCR 0 and 7 (§4) | the same |
+| login keys | `/root/.ssh/authorized_keys`, from `/etc/tpm2-kira/authorized_keys` (their sum is in the SSH part's digest, `/etc/tpm2-kira/plan/ssh/<digest>`) | the same |
 | DHCP | systemd-networkd | initramfs-tools' klibc `ipconfig` (`configure_networking`, as for an NFS root or dropbear-initramfs) |
 | static | systemd-networkd | busybox `ip` |
 | driver | the matched interface's module (every network driver when none matches on the build machine) | the same; `auto_add_modules net` for every driver |
-| needs | - | busybox in the image (`BUSYBOX`, default `auto`); without it the hook adds no network and says so |
+| needs | - | busybox in the image (`BUSYBOX`, default `auto`); without it the hook asks for a plan without network (`--no-busybox`), which says so |
 
 Nothing else goes in: the SSH server is tpm2-kira itself, and no shell, SSH
-daemon or password agent is added. The hook prints what it did:
-`network at boot: dhcp via virtio_net`, `SSH at boot on port 22`, `SSH host
-key SHA256:… sealed to PCR 0+7`. If a setting cannot work - SSH without a
-network, no host key, a key that cannot be sealed, nobody who may log in -
-the build goes on without network and SSH and says why: the image still
-boots, with the code screen at the console.
+daemon or password agent is added. The build prints each part with why
+it is in or out, `SSH server: in - port 22, host keys certified by the SSH
+CA SHA256:…`. If a setting cannot work - SSH without a network, no CA, a
+CA without the approval of the next boot, nobody who may log in - the SSH
+server stays out and says why (the network keeps its part): the image
+still boots, with the code screen at the console.
 
 ## 3. Privilege separation
 
 ```
-tpm2-kira run                              (root: TPM, disk key, code screen, host key)
-  │  opens :PORT, unseals the host key, keeps it in memory
+tpm2-kira run                              (root: TPM, disk key, code screen)
+  │  has the TPM make this boot's host key, the SSH CA certify it; opens :PORT
   │  starts, handing over the listening socket and a control socket:
   ▼
 tpm2-kira remote serve                     (uid 65534; own net/IPC/PID/mount/UTS namespaces;
@@ -144,7 +160,8 @@ before it reads a byte:
 It holds **no host key**: the key exchange is signed by `run`, asked over
 the control socket. It holds **no password**: a login becomes a session of
 the code screen, one end of a socket pair handed to `run` with
-SCM_RIGHTS, and `remote serve` only relays bytes between that and the SSH
+SCM_RIGHTS (this is aSSH's `server` package; `run` hands it the host key as
+a signer and takes the sessions), and `remote serve` only relays bytes between that and the SSH
 channel. Only a terminal session is served: commands, subsystems,
 forwardings and agent requests are refused. At most 8 connections may be
 in the middle of a login (30 s each), and 8 sessions at once.
@@ -152,41 +169,58 @@ in the middle of a login (30 s each), and 8 sessions at once.
 A compromise of the SSH code gets what a login gets: the code screen and
 its prompt. It can ask `run` to sign with the host key while the server
 runs, as a compromised OpenSSH privilege-separated child can ask its
-monitor; it cannot read the key, the TPM or the disk key.
+monitor; it cannot read the key - which is in the TPM - the TPM or the
+disk key.
 
 The log shows what it runs with, for example `ssh: remote serve (pid 412)
 runs with uid 65534, no new privileges, namespaces of its own, Landlock
 ABI 6: no file access` (seen on both test VMs).
 
-## 4. The host key
+## 4. The host key and the SSH CA
 
 The boot image is unencrypted: a host key stored in it lets anyone who
-can read `/boot` impersonate the machine. So the image holds the key only
-sealed to the TPM, bound to **PCR 0** (firmware) and **PCR 7** (Secure
-Boot state and keys):
+can read `/boot` impersonate the machine. So no key is stored anywhere,
+and no secret either: the keys are in the TPM.
 
-- The image build reads the key - by default the running system's
-  OpenSSH host key, so the image answers with the same key as the system
-  and clients need no second `known_hosts` entry - and seals its 32-byte
-  seed to the TPM as a keyed-hash object whose only authorization is a
-  PCR policy (no password).
-- The values sealed are those of tpm2-kira's measure point: the code
+- **The SSH CA** is a certificate authority created inside the TPM by
+  control (ECDSA P-256, or RSA-2048), never exported: `ssh_ca.json` holds
+  only the TPM's wrapped copy, which loads in this TPM alone. Its use
+  needs no password; its policy is `PolicyAuthorize` over a `PolicyPCR`
+  of **PCR 0** (firmware) and **PCR 7** (Secure Boot state and keys): it
+  signs only while these hold values the **signing key** approved
+  (`ssh_ca.json` carries the approvals).
+- **The approved values** are those of tpm2-kira's measure point: the code
   screen holds the boot ahead of `systemd-pcrosseparator`, which extends
   PCR 0-7 in the running system. They are replayed from the firmware
-  event log (`measurepoint.go`), not read from the registers. The build
-  leaves SSH out (and says why) when the event log does not describe PCR
-  0 and 7.
-- `run` unseals the key once, when the SSH server starts - before the
-  separator - through a salted, encrypted session, and keeps it in its
-  own memory. It is written nowhere.
-- The key is sealed afresh at every image build, so a kernel update does
-  not touch it. After a firmware or Secure Boot update it no longer
-  unseals: `run` serves a **throwaway key**, the console shows its
-  fingerprint and which PCR changed, and `ssh` warns of a changed host
-  key. Unlock once, rebuild the image, and the sealed key is back.
+  event log (`measurepoint.go`), not read from the registers. control
+  approves them when the CA is created, and again when a firmware or
+  Secure Boot update has changed them - at quit, before the rebuild, after
+  asking; the CA and the clients' trust in it stay the same. Without the
+  approval of the next boot the SSH server stays out of the image.
+- **At every boot** `run` has the TPM make a new host key (the CA's type)
+  under the TPM's **NULL hierarchy**, whose seed changes at every reboot,
+  and the CA certify it (an OpenSSH host certificate) - when the SSH
+  server starts, before the separator. The host key's authorization value
+  is in `run`'s memory alone (the process is not dumpable); the key signs
+  every key exchange of this boot, after the separator too, so a dropped
+  session can come back; at the next reboot it loads nowhere.
+- **Clients trust the CA, once**: `@cert-authority <the machine's names and
+  addresses> <ssh_ca.json.pub>` in `known_hosts`. The certificate is valid
+  for any host name (principal `*`); the pattern in `known_hosts` chooses
+  the hosts. A new key at every boot asks the clients nothing.
+- **When the CA does not certify** (a firmware or Secure Boot update since
+  the build, another TPM): `run` serves a **throwaway key**, the console
+  shows its fingerprint and which PCR changed, and `ssh` warns of an
+  unknown host key. Quit `tpm2-kira control` once after that boot: it
+  approves the new values and rebuilds.
 
-No `systemd-creds` and no TPM library go into the image: tpm2-kira seals
-and unseals with its own TPM code.
+No `systemd-creds` and no TPM library go into the image: aSSH does the TPM
+work in Go (go-tpm), compiled into tpm2-kira.
+
+The running system's own sshd can use the same idea with a CA of its own
+(`assh agent`, bound to the state after the unlock and closed by a PCR
+extended once it started): see aSSH's README. tpm2-kira does not set that
+up.
 
 ## 5. At boot
 
@@ -194,8 +228,9 @@ and unseals with its own TPM code.
 
 ```
 tpm2-kira.service (holds READY)
-  ├── unseals the host key (PCR 0+7), opens :PORT, starts 'remote serve'
-  ├── console: "ssh root@<address>", the host key's fingerprint, sessions connected,
+  ├── the TPM makes this boot's host key, the SSH CA certifies it (PCR 0+7),
+  │   opens :PORT, starts 'remote serve'
+  ├── console: "ssh root@<address>", the SSH CA's fingerprint, sessions connected,
   │            "Enter here: continue at this console"
   └── sessions: the code screen; Enter confirms, q leaves
 ```
@@ -263,13 +298,17 @@ In the session it reads: `cryptsetup asks: Please unlock disk vda3_crypt
 ## 7. Using it
 
 - **Where to log in.** The console shows `ssh root@<address>` with the
-  host key's fingerprint, and updates it when an address comes up or a
+  SSH CA's fingerprint, and updates it when an address comes up or a
   session comes or goes. DHCP may give the image another address than the
   running system (§11); a reservation by MAC or a static address makes it
   predictable.
-- **known_hosts.** With the default key nothing changes for clients: the
-  image presents the system's own OpenSSH host key. A strict check against
-  the system's entry passes (`ssh -o HostKeyAlias=<system address>`).
+- **known_hosts.** One line per client trusts the CA:
+  `@cert-authority host.example,192.0.2.10 ecdsa-sha2-nistp256 AAAA…`
+  (`tpm2-kira control` prints it; the key is `/etc/tpm2-kira/ssh_ca.json.pub`).
+  A client without it sees an unknown host key at every boot. The running
+  system keeps its own OpenSSH host key; a plain `known_hosts` entry for
+  it does not cover the image (a certificate is checked against the CA
+  line only).
 - **The log.** Arch: `journalctl -b -u tpm2-kira.service`. Debian:
   `/run/initramfs/tpm2-kira.log` (it stays after the boot), with the
   network's lines.
@@ -280,12 +319,12 @@ In the session it reads: `cryptsetup asks: Please unlock disk vda3_crypt
 ## 8. Commands
 
 ```
-tpm2-kira control                       the step "Network and SSH at boot"
-tpm2-kira remote initramfs --buildroot DIR [--format mkinitcpio|initramfs-tools]
+tpm2-kira control                       step 2, "Network and SSH at boot"
+tpm2-kira initramfs plan --buildroot DIR [--format mkinitcpio|initramfs-tools]
                            [--conf PATH] [--tpm PATH]
-                                        what the hooks call (§2); exit 2: nothing to add, and why
+                                        what the hooks call (§2): a part that cannot be had stays out, and says why
 tpm2-kira remote serve                  the SSH protocol, started by 'run --ssh' alone (§3)
-tpm2-kira run --ssh=PORT [--ssh-hold S] [--ssh-hostkey PATH] [--ssh-authorized-keys PATH]
+tpm2-kira run --ssh=PORT [--ssh-hold S] [--ssh-ca PATH] [--ssh-authorized-keys PATH]
                                         set by the image (§2): be the SSH server too
 ```
 
@@ -295,11 +334,12 @@ tpm2-kira run --ssh=PORT [--ssh-hold S] [--ssh-hostkey PATH] [--ssh-authorized-k
 |---|---|
 | `cmd/remote_config.go` | the settings, their check, the networkd file, the proposal from networkd and ifupdown |
 | `cmd/control_remote.go` | control's step |
-| `cmd/remote_initramfs.go` | `remote initramfs`: the image's files for both formats, `remote.conf` |
-| `cmd/remote_hostkey.go` | sealing the host key to PCR 0+7 at the measure point, unsealing at boot, the throwaway key |
+| `cmd/bootplan.go` | the boot plan: whether the network and the SSH server go in, and their files for both formats |
+| `cmd/remote_initramfs.go` | the files' contents: `remote.conf`, the drop-in, the login keys |
+| `cmd/remote_hostkey.go` | the SSH CA: created and approved for PCR 0+7 at the measure point, this boot's certified host key, the throwaway key |
 | `cmd/remote_ssh.go` | the server in `run`: sessions, the code screen, prompts, the console hint, release and stop |
-| `cmd/remote_serve.go` | `remote serve`: the SSH protocol, the sandbox |
-| `cmd/remote_privsep.go` | `run`'s side of it: starting it without privileges, signing, taking sessions |
+| `assh/server` | `remote serve`: the SSH protocol, the sandbox; `run`'s side of it: starting it without privileges, signing, taking sessions |
+| `assh/hostkey` | the CA in the TPM, its approvals, the per-boot host key and its certificate |
 | `cmd/remote_agent.go` | cryptsetup's own prompt in the session (§6) |
 | `initramfs/mkinitcpio/install/sd-tpm2-kira` | the Arch hook's part |
 | `initramfs/initramfs-tools/hooks/tpm2-kira`, `scripts/init-premount/tpm2-kira`, `scripts/init-bottom/tpm2-kira` | the Debian hook and scripts |
@@ -309,15 +349,16 @@ tpm2-kira run --ssh=PORT [--ssh-hold S] [--ssh-hostkey PATH] [--ssh-authorized-k
 - **Unit** (`go test ./...`): the settings and their lines
   (`TestRemoteConfigLines`, `TestSetRemoteConfig`), the networkd file, the
   proposal from networkd and from ifupdown (`TestSuggestNetwork…`), the
-  image's files for both formats (`TestRemoteInitramfs`,
-  `TestRemoteInitramfsTools`), the server: a session confirms and answers,
+  image's files for both formats (`TestWriteImageMkinitcpio`,
+  `TestWriteImageInitramfsTools`), the server: a session confirms and answers,
   leaves the prompt, what is refused, Enter at the console stops it, a
   release elsewhere, the throwaway key, the console hint, `remote serve`
   alone (`cmd/remote_ssh_test.go`); cryptsetup's question through
   ask-password and through askpass' FIFO (`cmd/remote_agent_test.go`); the
   hooks add network and SSH on Arch and Debian (`hook_test.go`).
-- **swtpm** (`-tags integration`): the host key sealed to PCR 0 and 7, not
-  unsealing after a PCR moved (`TestHostKeySealedToPCR0And7`); the whole
+- **swtpm** (`-tags integration`): the CA approved for PCR 0 and 7 at the
+  code screen, certifying there and not after the separator, approved
+  again (`TestSSHCAApprovedForTheCodeScreen`); the whole
   chain with `run --ssh` - SSH to the unprivileged `remote serve`, the
   session handed to `run`, the code screen, the key socket
   (`TestRemoteSSHConfirmsAndUnlocks`, `TestRemoteSSHEnterAtConsoleStops`).
@@ -330,24 +371,26 @@ tpm2-kira run --ssh=PORT [--ssh-hold S] [--ssh-hostkey PATH] [--ssh-authorized-k
   address of the image and no process left.
 
 Not run on a VM yet: a static address on Debian, the throwaway key on
-Debian (the Go code is the same as on Arch, where it was).
+Debian (the Go code is the same as on Arch, where it was), and the SSH CA
+at all (the VM runs above were with the sealed key that came before it).
+aSSH's own tests log in with OpenSSH's client (10.6) through a
+`@cert-authority` line against a software TPM.
 
 ## 11. Known limits
 
-- **PCR 0 and 7 bind the host key to the firmware and the Secure Boot
-  keys, not to the image.** Any image signed with the same key that gives
-  a root shell before the separator (an initramfs with an emergency
-  shell, an older UKI) can unseal it - and with the default, that is the
-  system's own OpenSSH host key. Keep such images unsigned, or use a key
-  of the image's own (`TPM2_KIRA_SSH_HOSTKEY=/etc/tpm2-kira/ssh_host_ed25519_key`).
-  Without Secure Boot, PCR 7 says little: any OS booted on the machine
-  reaches the same values.
-- **On Debian with GRUB nothing extends PCR 0-7 after the image**: the
-  sealed host key unseals in the running system too, and with Secure Boot
-  off in any OS booted on the machine. With the default key that gives
-  nothing away that root does not have already; a key of the image's own
-  is kept out of a readable `/boot` and off other machines, not away from
-  this one.
+- **PCR 0 and 7 bind the CA to the firmware and the Secure Boot keys, not
+  to the image.** Any image signed with the same key that gives a root
+  shell before the separator (an initramfs with an emergency shell, an
+  older UKI) can have the CA certify a key of its own for that boot - not
+  take the CA away. Keep such images unsigned. Without Secure Boot, PCR 7
+  says little: any OS booted on the machine reaches the same values.
+- **On Debian with GRUB nothing extends PCR 0-7 after the image**: root in
+  the running system - and with Secure Boot off any OS booted on the
+  machine - can have the CA certify keys too. The CA never leaves this
+  TPM either way; a certificate made so is good for the machine's names
+  until the clients drop the CA line.
+- **The approvals are the signing key's.** Whoever holds it can approve
+  another state; keep it on the YubiKey.
 - **The throwaway key cannot be checked from afar.** Its fingerprint is
   on the console only; whoever logs in remotely after a firmware update
   has to accept an unknown key for that boot.

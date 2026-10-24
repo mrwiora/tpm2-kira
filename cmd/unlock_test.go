@@ -328,7 +328,19 @@ func TestReadPassphraseOnATerminal(t *testing.T) {
 	}
 	defer ptm.Close()
 	defer pts.Close()
+	// Keys are typed once the prompt made the terminal raw: before that,
+	// the line discipline would take Ctrl-C as a signal and flush the input.
+	raw := func() {
+		for {
+			tio, err := unix.IoctlGetTermios(int(pts.Fd()), unix.TCGETS)
+			if err == nil && tio.Lflag&(unix.ICANON|unix.ISIG) == 0 {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 	go func() {
+		raw()
 		ptm.Write([]byte("abx\x7fc"))
 		ptm.Write(bytes.Repeat([]byte("z"), maxPassphrase))
 		ptm.Write([]byte("\n"))
@@ -338,7 +350,10 @@ func TestReadPassphraseOnATerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Ctrl-C cancels, as a byte: the tty must not turn it into a signal.
-	go func() { ptm.Write([]byte("abc\x03")) }()
+	go func() {
+		raw()
+		ptm.Write([]byte("abc\x03"))
+	}()
 	if _, err := readPassphrase(pts, int(pts.Fd())); !errors.Is(err, errPassphraseCancelled) {
 		t.Fatalf("Ctrl-C: %v", err)
 	}

@@ -62,7 +62,7 @@ For more details on the cryptographic design, see [SECURITY-BACKGROUND.md](docs/
 
 ```bash
 # Build
-git clone https://github.com/mrwiora/tpm2-kira.git
+git clone --recurse-submodules https://github.com/mrwiora/tpm2-kira.git
 cd tpm2-kira
 make build
 
@@ -92,7 +92,7 @@ sudo pacman -S base-devel go git    # Arch
 # or
 sudo apt install build-essential git    # Debian/Ubuntu, with Go from go.dev (see above)
 
-git clone https://github.com/mrwiora/tpm2-kira.git
+git clone --recurse-submodules https://github.com/mrwiora/tpm2-kira.git
 cd tpm2-kira
 make build
 sudo make install
@@ -149,124 +149,146 @@ tpm2-kira version
 
 ## Guided: `tpm2-kira control`
 
-One screen for a person rather than a script. It starts by checking
+For a person rather than a script, in two steps. It starts by checking
 `/etc/tpm2-kira/control.conf`: a file that does not load is not worked on
 - control lists every line it refuses, with its number and what to do, and
-quits before anything is asked or written. The first run asks how to
-guide you - **guided**: one row (the signing key, the mkinitcpio
-configuration, the key's route, the slots), one rebuild, then the reboot,
-and part 2 (the phone, and the disk's key) continues after it; or
-**manual**: every step picked by hand, the overview saying what is
-possible and why not. The choice lives in `control.conf` and the
-overview's last entry switches it any time.
+quits before anything is asked or written. Otherwise control writes the
+file itself, every setting it keeps; you do not edit it.
+
+**Step 1, the boot chain**, is the first screen until it is in place. On
+top the **prerequisites**, each a line, green when met and red with what
+to do when not: a usable TPM, mkinitcpio or initramfs-tools, tpm2-kira's
+hook files installed, systemd and sd-encrypt in HOOKS, the LUKS devices,
+a recovery passphrase (a keyslot that is not tpm2-kira's) on each, and
+no keyslot that opens with an **empty passphrase** - such a disk is
+encrypted, yet anybody with it opens it, so it is red; tpm2-kira still
+takes the empty passphrase where it asks for the recovery one. Under it
+the steps: **mkinitcpio adoption** (sd-tpm2-kira into HOOKS),
+**kernel command line adoption** (the key's route: `rd.luks.key=`
+naming the socket, crypttab on Debian) - each shows the line as it
+should read and writes it only when you say so - and **Build the boot
+image**. **Continue to step 2** opens once the three are in place.
+
+**Step 2** is what the machine combines, in submenus; every option is
+open, done, or greyed with the reason this machine cannot have it - no
+TPM, no Bluetooth adapter, no wired network interface, no recovery
+passphrase, an option it builds on still missing:
+
+| Submenu | Options |
+|---|---|
+| Signing key and TOTP codes | the signing key (and a YubiKey's PIN, stored); the standard sealing - slot 0 to the evaluated PCR selection, acknowledged or custom, and slot 1 the fallback; every slot a line, **picking it deletes the slot whole** |
+| Attestation by phone | enrol a phone; Bluetooth in every boot image |
+| Disk unlock | password + salt; password + remote salt (the phone); this TPM + a vault - each a keyslot of its own, enrolled it offers the removal |
+| Network and SSH at boot | the image's network (DHCP or static, proposed from the running system); the SSH server with the code screen |
+
+An option that needs another one control can set up offers it on the
+way: the vault and SSH set up the image's network first. The vault is
+asked before the enrolment - does it answer, with the pinned key - and
+at every later look at the machine whether it still knows this device;
+one that does not is red.
 
 **Why the TOTP code comes first, and the phone only after a reboot.**
 Enrolling a phone pins the boot it happens in as the good one: every later
 boot is compared with it, and nothing the phone can check itself says that
 this first state is clean. So the phone is enrolled only in a boot you
-verified: part 1 seals slot 0 with a TOTP code, the reboot goes through the
+verified: slot 0 is sealed with a TOTP code, the reboot goes through the
 code screen, you compare the code with your authenticator, and in that boot
-part 2 enrols the phone, which then retires slot 0's code. `attest enrol`
+the phone is enrolled, which then retires slot 0's code. `attest enrol`
 holds to it whichever way it is started: it refuses a boot that did not
 pass the code screen, and one whose PCRs at the code screen were not the
 ones slot 0's code is approved for (no code was shown, nothing verified
 it); then it asks whether you compared the code. A further phone needs a
-boot an enrolled phone attested (SECURITY-BACKGROUND §3.1). On top, the machine's
-status, judged line by line - the TPM and its banks, the endorsement
-key's vendor, Secure Boot, how it booted, the slots, the signing key, the
-initramfs kind and whether sd-tpm2-kira is wired into it (the hook
-files installed, and on Arch sd-tpm2-kira in HOOKS of
-/etc/mkinitcpio.conf or a drop-in), a Bluetooth adapter, the LUKS
-devices -
+boot an enrolled phone attested (SECURITY-BACKGROUND §3.1).
+
+On top of step 2, the machine's status, judged line by line - the TPM and
+its banks, the endorsement key's vendor, Secure Boot, how it booted, the
+slots, the signing key, the initramfs, a Bluetooth adapter, the LUKS
+devices, the boot image's network, the vault -
 **green what is good, orange what is open, red what is not good, with
 the risk in brackets**: the
 SHA-1 bank in use, Secure Boot disabled or in Setup Mode, a slot sealed
 without the kernel measured, a TPM whose endorsement key no known vendor
 vouches for (a phone then trusts it on first use, as it would a software
-TPM), a loose file holding the PIN. The header carries the version.
-
-Under it the protections, as a tree, and because the status above
+TPM), a loose file holding the PIN, an empty passphrase, a vault that
+does not answer. The header carries the version. Because the status
 already says what is not good, the steps repeat none of the commands'
-advisory warnings. The overview opens gated: until the signing key
-exists and the boot integration is wired - and, as the timestamps tell,
-the image rebuilt with it - it is those two steps and Quit, and only a
-dirty slot shows through. Then, with no slot at all, one step is
-offered: the standard sealing - slot 0 to this boot's state and slot 1
-the fallback, where slot 0's evaluated PCR selection is put up as a
-recommendation: acknowledge it, or define custom PCRs for slot 0.
-Sealed, every slot is a line of its own, and the options that
-build on the strong slot (slot 0) nest under it: the attestation by
-phone, and the disk key from password + remote salt, its enrolled state
-read from the LUKS header's tokens. **Picking a slot's line deletes the
-slot whole** - everything it is made of, in one act (see
-[Deleting sealed data](#deleting-sealed-data)), after a confirmation; a
-slot whose deletion stopped halfway shows as dirty, marked `[!]` and
-recommended first, until a run removes the rest. The disk key from
-password + salt is its own step, independent of the slots, and "Unlock at
-boot" stays greyed until a keyslot of tpm2-kira's exists.
+advisory warnings. A slot whose deletion stopped halfway shows as dirty,
+marked `[!]` and recommended first, until a run removes the rest (see
+[Deleting sealed data](#deleting-sealed-data)).
 
-Two hints lead the overview when they apply; both look at the first
-preset's default image (its UKI, else its initramfs) - fallback and further
-profiles are not checked yet. **Rebuild the boot image**
-appears when a file the image is built from (`mkinitcpio.conf` and its
-`.d` files, `/etc/kernel/cmdline`, `crypttab.initramfs`) changed after it,
-or when it lacks the phone's Bluetooth part; picking it rebuilds. **Ready
-to reboot** appears when the image is current but this boot did not go
-through it - after part 1 of the guided set-up, or after a rebuild -
-and picking it reboots, after a confirmation. Leaving `control` asks for
-`mkinitcpio -P` only when the image really is out of date, saying why.
+The boot image is built once, **when you quit `control`**, after
+everything is set up - a build takes its time. It is out of date when a
+file of the boot chain (`mkinitcpio.conf` and its `.d` files,
+`/etc/kernel/cmdline`, `crypttab.initramfs`) changed after it, or when
+the **boot plan** says so: the image carries the disk unlock always, and
+each other part - the TOTP codes, the phone's Bluetooth gate, the vault,
+the network, the SSH server - only while something uses it (a sealed
+slot, an enrolled phone, the settings in `control.conf`), and names its
+parts with the digest of their settings (`tpm2-kira help initramfs`). A
+part in use now and not in the image - the first sealed slot, the first
+phone, SSH switched on - or in it with other settings - another port,
+another login key - makes the image out of date; the status' "Boot
+image" line says which. New TOTP codes for a slot that has some, a
+reseal, a further phone, a LUKS keyslot or the YubiKey's PIN never do.
+A part the image carries and nothing uses any more is no reason to
+rebuild: the next build leaves it out. Quitting then shows the reasons
+and what the build puts in, and runs `mkinitcpio -P` (`update-initramfs
+-u`) when you say yes. The image looked at is the first preset's default
+(its UKI, else its initramfs) - fallback and further profiles are not
+checked yet. **Ready to reboot** leads step 2 when the image is current
+but this boot did not go through it, and picking it reboots, after a
+confirmation.
 
 Every step runs with the same functions the commands below use; run
 `control` again later and it shows the state and what is left. The
 commands below are for specific settings, and they touch no configuration
 file: `control` alone writes `/etc/tpm2-kira/control.conf`, the one
-configuration file - the radio settings and the YubiKey's PIN after
-checking it on the token (readable by root alone; the initramfs gets the
-radio settings alone, written key by key, never the PIN). Next to the mkinitcpio step sits "Unlock at boot (the key's
-route)": both are wiring checks, green and no longer pickable once in
-place, and the route is the prerequisite of both disk-key steps. Every
-file is advised, never edited, with two exceptions, each asked for every
+configuration file - the radio settings and the image's network and SSH
+server, what the image is built with and nothing else (nothing of it goes
+into the image but the network and SSH settings, as files of their own).
+Beside it `control` keeps the YubiKey's PIN, checked on the token, in
+`/etc/tpm2-kira/pin` (root's alone, never in the image), and the keys
+that may log in at boot in `/etc/tpm2-kira/authorized_keys` (root's
+keys copied there when asked; edit it for others). The two wiring steps of step 1
+are checks, green and no longer pickable once in place. Every other file
+is advised, never edited, with two exceptions, each asked for every
 time: the mkinitcpio step writes sd-tpm2-kira into the HOOKS of
 `/etc/mkinitcpio.conf` when you say so (editing it yourself works just as
-well) and runs `mkinitcpio -P` when asked - proposing first, with a
-Bluetooth adapter at hand, to pack its modules into every image (~1.1 MB,
-deselectable), so enrolling phones later never changes the image - and
-the route step writes the line it shows into `/etc/kernel/cmdline` (or
-the cmdline.d file, a boot entry's options line, a crypttab line) the
-same way. The two disk-key steps are toggles: enrolled, picking one
-offers the keyslot's removal instead of a second enrolment. Everything but the help needs root; `control` says
-so on its own screen, the commands in a line.
-The overview is a page of its own, the screen cleared each time it is shown;
-what a step prints stays until "Back to the overview?" is answered. Sealing
-both slots, each QR code gets a cleared screen of its own, held until you
-confirm it is in your authenticator. The
-screens are forms (arrow keys, Enter; Esc leaves; `ACCESSIBLE=1` for
-plain prompts), built with [huh v2](https://github.com/charmbracelet/huh) (module charm.land/huh/v2);
-without a terminal, `control` prints the overview and exits.
+well), and the route step writes the line it shows into
+`/etc/kernel/cmdline` (or the cmdline.d file, a boot entry's options
+line, a crypttab line) the same way. The disk keys are toggles: enrolled,
+picking one offers the keyslot's removal instead of a second enrolment.
+Everything but the help needs root; `control` says so on its own screen,
+the commands in a line.
+Each screen is a page of its own, cleared each time it is shown; what a
+step prints stays until "Back to ..." is answered. Sealing both slots,
+each QR code gets a cleared screen of its own, held until you confirm it
+is in your authenticator. The screens are forms (arrow keys, Enter; Esc
+leaves, in a submenu back to step 2; `ACCESSIBLE=1` for plain prompts),
+built with [huh v2](https://github.com/charmbracelet/huh) (module
+charm.land/huh/v2); without a terminal, `control` prints both steps and
+exits.
 
 ```
   [ KIRA ] control 0.5.0-rc1 - the protections of this machine, step by step
-  What this machine has
-    TPM         /dev/tpmrm0, SHA-256 bank and event log
-    Vendor      Infineon vouches for the endorsement key
-    Secure Boot enabled
-    Boot        a unified kernel image booted: ...: PCRs 0e,2e,7e,11u
-    Slots       0 (0e,2e,7e,11u), 1 (0e,7e, the fallback)
-    Key         local key files in /etc/tpm2-kira/keys
-    Initramfs   mkinitcpio
-    Bluetooth   hci0 (attestation by phone possible)
-    LUKS        /dev/sda2: keyslots 0 not tpm2-kira's; not routed through tpm2-kira
-  Protections
-  Recommended next: Attestation by phone (Marify, Bluetooth LE)
-  The phone checks the boot state against what it pinned and shows a code the machine must show too; ...
-┃   ✓ Signing key  - local key files in /etc/tpm2-kira/keys
-┃   ✓ mkinitcpio configuration  - sd-tpm2-kira in HOOKS of /etc/mkinitcpio.conf, the image rebuilt
-┃   ✓ Unlock at boot (the key's route)  - the key routed
-┃   ✓ Slot 0  - sealed to 0e,2e,7e,11u
-┃ >     Attestation by phone (Marify, Bluetooth LE)
-┃     - Disk key from password + remote salt (the phone)  - needs the attestation by phone
-┃   ✓ Slot 1  - the fallback, sealed to 0e,7e
-┃   • Disk key from password + salt (hashpwd2)
+  Step 1 of 2: the boot chain
+
+  Prerequisites
+    ✓ TPM: /dev/tpmrm0, SHA-256 bank
+    ✓ Initramfs: mkinitcpio
+    ✓ Boot integration: tpm2-kira's hook files are installed
+    ✓ systemd in the initrd: systemd and sd-encrypt in HOOKS
+    ✓ LUKS: /dev/sda2
+    ✓ Recovery passphrase: a keyslot that is not tpm2-kira's on every device
+    ✗ Passphrase: keyslot 0 of /dev/sda2 opens with an empty passphrase (risk: ...)
+    ✓ Secure Boot: enabled
+    1 not met: the steps that need them say so.
+  The boot chain
+  Recommended next: Kernel command line adoption (the key's route)
+  systemd-cryptsetup takes a volume's key from tpm2-kira when its rd.luks.key= names the socket. ...
+┃   ✓ mkinitcpio adoption  - sd-tpm2-kira in HOOKS of /etc/mkinitcpio.conf
+┃ > • Kernel command line adoption (the key's route)
+┃   - Continue to step 2  - first: Kernel command line adoption (the key's route)
 ┃     Quit
 ↑ up • ↓ down • enter submit
 ```
@@ -280,11 +302,11 @@ tpm2-kira runs `reveal`.
 
 | | Commands |
 |---|---|
-| Guided | `control`: one screen, the protections step by step |
+| Guided | `control`: step 1 the boot chain, step 2 what the machine combines |
 | Setting up the machine | `setup` the signing key · `seal` a new TOTP key to the boot state · `reseal` approve the current boot state (the hooks run it) · `status` the overview · `info` a slot's blob · `nvram list\|status\|delete\|restore` |
-| The phone (Marify, Bluetooth LE) | `attest enrol\|unenrol\|status\|gate\|signer\|ekcert\|quote\|verify\|config-check` · `remote-salt enrol\|rotate\|status\|unenrol` |
+| The phone (Marify, Bluetooth LE) | `attest enrol\|unenrol\|status\|gate\|ekcert\|quote\|verify` · `remote-salt enrol\|rotate\|status\|unenrol` |
 | The disk's key | `luks status\|enrol\|remove\|mark\|route` · `derive` (hashpwd2 by hand) · the recipe is the keyslot's token, read from the header at boot |
-| At boot (the units and hooks) | `run` · `cap` · `unlock-key` (Debian keyscript) |
+| At boot (the units and hooks) | `initramfs plan` what the image carries · `run` · `cap` · `unlock-key` (Debian keyscript) |
 | By hand | `reveal` / `reveal-plain` · `yubikey list` · `pcrtips` · `version` |
 
 Global options come before the command: `--tpm PATH` (default `/dev/tpmrm0`),
@@ -633,12 +655,13 @@ Once a phone is enrolled, rebuild the initramfs:
 sudo mkinitcpio -P            # or: sudo update-initramfs -u
 ```
 
-There is no mode to switch on: the hooks ask `tpm2-kira attest
-initramfs-deps` what the adapter needs (`TPM2_KIRA_ATTEST_ADAPTER` in
-`/etc/tpm2-kira/control.conf`, hci0 by default) and copy exactly that: its
-driver modules and the firmware files the kernel loaded for it in the
-current boot (about 1.1 MB on an Intel adapter). Nothing is added while no
-phone is enrolled or the adapter is missing. At boot the gate runs beside
+There is no mode to switch on: the boot plan (`tpm2-kira initramfs plan`)
+puts the phone's gate in once a phone is enrolled, with exactly what the
+adapter needs (`TPM2_KIRA_ATTEST_ADAPTER` in `/etc/tpm2-kira/control.conf`,
+hci0 by default): its driver modules and the firmware files the kernel
+loaded for it (about 1.1 MB on an Intel adapter). Nothing is added while
+no phone is enrolled, without a TPM, or when the adapter is missing; the
+build says why. At boot the gate runs beside
 the TOTP display, waits for the adapter, serves the phone, prints the
 verdict, and never holds the boot.
 
@@ -668,12 +691,13 @@ own, unprivileged SSH server with the code screen: log in as root, confirm
 the code, type the disk's password there. Off until turned on.
 
 ```bash
-sudo tpm2-kira control      # "Network and SSH at boot"
+sudo tpm2-kira control      # step 2, "Network and SSH at boot"
 ssh root@<address shown on the console>
 ```
 
 Everything about it - settings, the image build on both distributions,
-the privilege separation, the host key sealed to PCR 0+7, the boot flow,
+the privilege separation, the host keys made in the TPM and certified by
+the SSH CA (PCR 0+7, [aSSH](assh/README.md)), the boot flow,
 tests and limits: [docs/SSH.md](docs/SSH.md).
 
 ## Unattended unlock with a vault (experimental)

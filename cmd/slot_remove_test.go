@@ -68,9 +68,9 @@ func TestCollectSlotContentsWithoutTPM(t *testing.T) {
 // token and the recovery blob go although the TPM is not there, and the
 // error says the slot stays dirty.
 func TestDeleteSlotTakesWhatItCan(t *testing.T) {
-	oldDir, oldList, oldCS, oldAuth, oldAsk := NVRAMRecoveryDir, listLuksDevices, cryptsetup, cryptsetupAuth, terminalAsk
+	oldDir, oldList, oldCS, oldAuth, oldAsk := NVRAMRecoveryDir, listLuksDevices, cryptsetup, cryptsetupAuth, terminalAskExisting
 	defer func() {
-		NVRAMRecoveryDir, listLuksDevices, cryptsetup, cryptsetupAuth, terminalAsk = oldDir, oldList, oldCS, oldAuth, oldAsk
+		NVRAMRecoveryDir, listLuksDevices, cryptsetup, cryptsetupAuth, terminalAskExisting = oldDir, oldList, oldCS, oldAuth, oldAsk
 	}()
 	NVRAMRecoveryDir = t.TempDir()
 	stash := filepath.Join(NVRAMRecoveryDir, "slot-0x01803010-1759823456.blob")
@@ -97,7 +97,7 @@ func TestDeleteSlotTakesWhatItCan(t *testing.T) {
 		}
 		return nil, nil
 	}
-	terminalAsk = func(prompt string) ([]byte, error) { return []byte("recovery"), nil }
+	terminalAskExisting = func(prompt string) ([]byte, error) { return []byte("recovery"), nil }
 
 	var out bytes.Buffer
 	err := DeleteSlot(DeleteSlotOptions{TPMPath: filepath.Join(t.TempDir(), "no-tpm"), Slot: 0, Out: &out})

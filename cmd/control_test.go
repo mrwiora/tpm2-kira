@@ -8,158 +8,288 @@ import (
 	"time"
 )
 
-// The overview is gated: until the signing key exists and the boot
-// integration is wired, it is those two steps and Quit - only a dirty
-// slot shows through. Then the tree: the standard sealing while a slot of
-// the pair is missing, every slot a line of its own with the strong
-// slot's options under it, the typed-salt keyslot independent of the
-// slots, and the unlock greyed until a keyslot of ours exists.
-func TestControlSteps(t *testing.T) {
+// Step 1, the boot chain: the hook, the route, and the way on to step 2,
+// which opens once both are in place.
+func TestControlBootChain(t *testing.T) {
 	c := &controller{facts: machineFacts{TPM: "/dev/tpmrm0", SHA256Bank: true, LogSHA256: true, PCRs: "0e,2e,7e,11u"}}
-	steps := c.steps()
-	if len(steps) != 3 || steps[0].Key != "setup" || steps[1].Key != "initramfs" ||
-		!strings.Contains(steps[1].Blocked, "neither mkinitcpio nor initramfs-tools") ||
-		steps[2].Key != "guide" || steps[2].Title != "Switch to the guided set-up" {
+	steps := c.chainSteps()
+	if len(steps) != 3 || steps[0].Key != "initramfs" || !strings.Contains(steps[0].Blocked, "neither mkinitcpio nor initramfs-tools") ||
+		steps[2].Key != "continue" || steps[2].Blocked == "" || chainDone(&c.facts) {
 		t.Fatalf("a bare machine: %+v", steps)
 	}
-
-	// The key alone is not enough: the boot integration gates too, and a
-	// dirty slot still shows through the gate.
-	c.facts.Keys = "local key files"
-	c.facts.Initramfs, c.facts.HookState = "mkinitcpio", "sd-tpm2-kira is not in HOOKS of /etc/mkinitcpio.conf - add it next to sd-encrypt, then rebuild"
-	c.facts.Dirt = []SlotContents{{Slot: 2, Index: NVRAMSlotStart + 2, Counter: true}}
-	steps = c.steps()
-	if len(steps) != 4 || steps[1].Key != "initramfs" || steps[1].Done != "" || steps[1].Title != "mkinitcpio configuration" ||
-		steps[2].Key != "slot:2" || steps[2].Dirty == "" || steps[3].Key != "guide" {
-		t.Fatalf("gated with dirt: %+v", steps)
-	}
-	if recommended(steps) != 2 { // dirt first, then the open gate steps
-		t.Fatalf("recommended %d", recommended(steps))
-	}
-	c.facts.Dirt = nil
-	if steps = c.steps(); len(steps) != 3 || recommended(steps) != 1 {
-		t.Fatalf("gated: %+v", steps)
+	if got := c.prereqText(); !strings.Contains(got, "Initramfs: neither mkinitcpio nor initramfs-tools found") || !strings.Contains(got, "not met") {
+		t.Fatalf("the prerequisites of a bare machine:\n%s", got)
 	}
 
-	// Wired: the route check joins the boot step, and the sealing of the
-	// standard pair is the recommendation; no slot-specific option shows
-	// before a slot exists.
-	c.facts.HookState = ""
-	steps = c.steps()
-	if len(steps) != 6 || steps[1].Done != "sd-tpm2-kira in HOOKS of "+mkinitcpioConf+", the image rebuilt" ||
-		steps[2].Key != "route" || !steps[2].Check || steps[3].Key != "seal" || steps[4].Key != "luks-salt" {
-		t.Fatalf("wired, no slot: %+v", steps)
-	}
-	if recommended(steps) != 3 || !strings.Contains(steps[3].Explain, "The standard pair") ||
-		!strings.Contains(steps[2].Blocked, "no LUKS device") {
-		t.Fatalf("no slot yet: %+v", steps[2])
-	}
-
-	// Both slots sealed: the tree replaces the seal step; the strong slot
-	// carries the options, each slot's line removes it. The boot is capped
-	// (it went through the code screen), as an enrolment needs; the route
-	// check is open while nothing is routed, and gates the disk-key steps.
-	c.facts.Capped = true
-	c.facts.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u", Signed: true}, {Slot: 1, PCRs: "0e,7e", Fallback: true, Signed: true}}
+	// mkinitcpio, the hook files installed, not yet in HOOKS: the adoption
+	// is the recommendation.
+	c.facts.Initramfs, c.facts.HookInstalled = "mkinitcpio", true
+	c.facts.Hooks = []string{"base", "systemd", "block", "sd-encrypt", "filesystems"}
+	c.facts.HookState = "sd-tpm2-kira is not in HOOKS of /etc/mkinitcpio.conf - add it next to sd-encrypt, then rebuild"
 	c.facts.Status.Devices = []LuksDeviceStatus{{Device: "/dev/sda2", Keyslots: []KeyslotStatus{{Keyslot: 0}}}}
-	steps = c.steps()
-	if len(steps) != 11 || steps[8].Key != "debug" || steps[9].Key != "remote" || steps[2].Key != "route" || steps[3].Key != "slot:0" || steps[4].Key != "attest" ||
-		steps[5].Key != "luks-remote" || steps[6].Key != "slot:1" || steps[7].Key != "luks-salt" {
-		t.Fatalf("the tree: %+v", steps)
+	steps = c.chainSteps()
+	if steps[0].Title != "mkinitcpio adoption" || steps[0].Blocked != "" || steps[0].Done != "" ||
+		!strings.Contains(steps[2].Blocked, "mkinitcpio adoption") || recommended(steps) != 0 {
+		t.Fatalf("not in HOOKS: %+v", steps)
 	}
-	if steps[2].Done != "" || steps[2].Blocked != "" || recommended(steps) != 2 {
-		t.Fatalf("the open route is the recommendation: %+v", steps[2])
+	// A busybox initramfs: no adoption possible, and the prerequisite says so.
+	c.facts.Hooks = []string{"base", "udev", "encrypt"}
+	if s := c.chainSteps()[0]; !strings.Contains(s.Blocked, "not systemd-based") || !strings.Contains(c.prereqText(), "HOOKS lack systemd") {
+		t.Fatalf("busybox: %+v", s)
 	}
-	if steps[3].Done != "sealed to 0e,2e,7e,11u" || !steps[3].Optional || !steps[3].SelfConfirm ||
-		steps[6].Done != "the fallback, sealed to 0e,7e" {
-		t.Fatalf("the slot lines: %+v %+v", steps[3], steps[6])
-	}
-	if !steps[4].Child || !steps[5].Child || steps[4].Blocked != "no Bluetooth adapter on this machine" ||
-		!strings.Contains(steps[5].Blocked, "needs the key's route") ||
-		!strings.Contains(steps[7].Blocked, "needs the key's route") {
-		t.Fatalf("the route gates the disk-key steps: %+v %+v", steps[5], steps[7])
-	}
+	c.facts.Hooks = []string{"base", "systemd", "sd-tpm2-kira", "sd-encrypt"}
 
-	// Routed: the check is done (and no longer pickable), the gates open.
+	// In HOOKS, the route open: the way on waits for the route alone - the
+	// image is built when control is left, not in a step.
+	c.facts.HookState, c.facts.Rebuild = "", "the image was built before sd-tpm2-kira was in HOOKS"
+	steps = c.chainSteps()
+	if steps[0].Done == "" || steps[1].Done != "" || steps[1].Blocked != "" ||
+		!strings.Contains(steps[2].Blocked, "Kernel command line adoption") || strings.Contains(steps[2].Blocked, "mkinitcpio") {
+		t.Fatalf("hook in, unrouted: %+v", steps)
+	}
+	// Routed: step 2 opens, the way on is the recommendation, the image
+	// out of date or not.
 	c.facts.Routed = map[string]bool{"/dev/sda2": true}
-	steps = c.steps()
-	if steps[2].Done != "the key routed" || steps[5].Blocked != "needs the attestation by phone" || steps[7].Blocked != "" {
-		t.Fatalf("routed: %+v %+v", steps[2], steps[5])
-	}
-	// An uncapped boot, or an image newer than the boot, blocks the
-	// enrolments: the phone would pin what the next boot cannot match.
-	c.facts.Adapter = "hci0"
-	c.facts.Capped = false
-	// ... and the overview leads with the hint that the device is ready to
-	// be rebooted, which can be picked to reboot.
-	if steps := c.steps(); steps[0].Key != "reboot" || !steps[0].Optional || !strings.Contains(steps[0].Explain, "ready to be rebooted") ||
-		!strings.Contains(stepByKey(steps, "attest").Blocked, "did not pass tpm2-kira's code screen") {
-		t.Fatalf("uncapped boot: %+v", steps)
-	}
-	c.facts.Capped = true
-	c.facts.NewImage = "/boot/initramfs-linux.img was rebuilt after this boot started: reboot first - a phone enrolled now would pin values the next boot cannot match"
-	if steps := c.steps(); steps[0].Key != "reboot" || !strings.Contains(stepByKey(steps, "attest").Blocked, "rebuilt after this boot started") {
-		t.Fatalf("new image: %+v", steps)
-	}
-	// An image out of date: rebuild first, no reboot hint yet.
-	c.facts.Pending = []string{"/etc/kernel/cmdline changed after arch-linux.efi was built"}
-	if steps := c.steps(); steps[0].Key != "rebuild" || !strings.Contains(steps[0].Explain, "/etc/kernel/cmdline changed") || steps[1].Key == "reboot" {
-		t.Fatalf("pending rebuild: %+v", steps[:2])
-	}
-	c.facts.Pending = nil
-	c.facts.NewImage = ""
-	if steps := c.steps(); steps[0].Key == "reboot" || steps[0].Key == "rebuild" {
-		t.Fatalf("a boot through the current image needs no hint: %+v", steps[0])
+	steps = c.chainSteps()
+	if !chainDone(&c.facts) || steps[2].Blocked != "" || recommended(steps) != 2 || steps[2].Menu != "hub" {
+		t.Fatalf("in place: %+v", steps)
 	}
 
-	// A phone and a remote-salt keyslot bound to slot 0, read from the
-	// LUKS header: the options under slot 0 are done.
-	c.facts.Phone = true
-	c.facts.Status.Slots[0].Phones = 1
+	// Without a LUKS device the route has nothing to do and holds nothing up.
+	c.facts.Status.Devices = nil
+	if s := c.chainSteps()[1]; s.Blocked == "" || !chainDone(&c.facts) {
+		t.Fatalf("no LUKS: %+v", s)
+	}
+}
+
+// The prerequisites judge the recovery passphrase and an empty one.
+func TestControlPrerequisites(t *testing.T) {
+	c := &controller{facts: machineFacts{TPM: "/dev/tpmrm0", Initramfs: "mkinitcpio", HookInstalled: true,
+		Hooks: []string{"systemd", "sd-encrypt"}, SecureBoot: SecureBootState{Known: true, Enabled: true}}}
+	c.facts.Status.Devices = []LuksDeviceStatus{{Device: "/dev/sda2", Keyslots: []KeyslotStatus{{Keyslot: 0}}}}
+	if got := c.prereqText(); !strings.Contains(got, "All prerequisites are met") || strings.Contains(got, "\033[0;31m") {
+		t.Fatalf("a sound machine:\n%s", got)
+	}
+	c.facts.EmptyPass = []string{"keyslot 0 of /dev/sda2"}
+	c.facts.NoRecovery = []string{"/dev/sdb1"}
+	got := c.prereqText()
+	for _, want := range []string{"keyslot 0 of /dev/sda2 opens with an empty passphrase (risk: anybody with the disk opens it",
+		"Recovery passphrase: none on /dev/sdb1", "2 not met"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the prerequisites lack %q:\n%s", want, got)
+		}
+	}
+	if got := c.factsText(); !strings.Contains(got, "\033[0;31mkeyslot 0 of /dev/sda2 opens with an empty passphrase (risk:") {
+		t.Errorf("the status does not flag the empty passphrase:\n%s", got)
+	}
+}
+
+// wired is a machine whose boot chain is in place, with a LUKS device and
+// its recovery passphrase.
+func wired() *controller {
+	c := &controller{facts: machineFacts{TPM: "/dev/tpmrm0", SHA256Bank: true, LogSHA256: true, PCRs: "0e,2e,7e,11u",
+		Initramfs: "mkinitcpio", HookInstalled: true, Hooks: []string{"systemd", "sd-tpm2-kira", "sd-encrypt"},
+		Wired: 1, Remote: DefaultRemoteConfig()}}
+	c.facts.Status.Devices = []LuksDeviceStatus{{Device: "/dev/sda2", Keyslots: []KeyslotStatus{{Keyslot: 0}}}}
+	c.facts.Routed = map[string]bool{"/dev/sda2": true}
+	return c
+}
+
+// Step 2: a line per submenu, each summing its options up; the options
+// are greyed with the reason this machine cannot have them.
+func TestControlHub(t *testing.T) {
+	c := wired()
+	steps := c.hubSteps()
+	if len(steps) != 6 || steps[0].Key != "chain" || steps[0].Done != "in place" || steps[1].Key != "menu:keys" ||
+		steps[2].Key != "menu:phone" || steps[3].Key != "menu:disk" || steps[4].Key != "menu:remote" || steps[5].Key != "debug" {
+		t.Fatalf("step 2: %+v", steps)
+	}
+	if recommended(steps) != 1 || steps[1].Optional || !steps[2].Optional {
+		t.Fatalf("the keys lead: %d", recommended(steps))
+	}
+	// Nothing of a phone without an adapter; no disk key without a slot
+	// but the typed salt; the network possible.
+	if !strings.Contains(steps[2].Blocked, "no Bluetooth adapter") || steps[3].Blocked != "" || steps[4].Blocked != "" {
+		t.Fatalf("the submenus: %+v", steps[2:5])
+	}
+	keys := c.menuSteps("keys")
+	if keys[0].Key != "setup" || keys[1].Key != "seal" || keys[1].Blocked != "needs the signing key" {
+		t.Fatalf("keys: %+v", keys)
+	}
+	disk := c.menuSteps("disk")
+	if disk[0].Blocked != "" || !strings.Contains(disk[1].Blocked, "needs slot 0") || !strings.Contains(disk[2].Blocked, "needs the signing key") {
+		t.Fatalf("disk: %+v", disk)
+	}
+
+	// Step 1 not in place: every submenu waits for it. An image built
+	// before the hook was in HOOKS is not that: it is rebuilt on leaving.
+	c.facts.Rebuild = "the image was built before sd-tpm2-kira was in HOOKS"
+	if steps := c.hubSteps(); steps[0].Done != "in place" {
+		t.Fatalf("an old image holds step 1 open: %+v", steps[0])
+	}
+	c.facts.Rebuild = ""
+	c.facts.Routed = map[string]bool{}
+	if steps := c.hubSteps(); steps[0].Done != "" || recommended(steps) != 0 || steps[1].Blocked != "needs step 1, the boot chain" {
+		t.Fatalf("chain open: %+v", steps)
+	}
+	c.facts.Routed = map[string]bool{"/dev/sda2": true}
+
+	// The key and both slots: the keys are done, the slot lines remove.
+	c.facts.Keys = "local key files"
+	c.facts.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u", Signed: true}, {Slot: 1, PCRs: "0e,7e", Fallback: true, Signed: true}}
+	keys = c.menuSteps("keys")
+	if len(keys) != 3 || keys[1].Key != "slot:0" || keys[1].Done != "sealed to 0e,2e,7e,11u" || keys[2].Done != "the fallback, sealed to 0e,7e" {
+		t.Fatalf("sealed: %+v", keys)
+	}
+	if st := c.hubSteps()[2]; st.Key != "menu:keys" || st.Done != "Signing key, Slot 0, Slot 1" {
+		t.Fatalf("the keys' line: %+v", st)
+	}
+	// A slot sealed, this boot not through the image: reboot leads.
+	if steps := c.hubSteps(); steps[0].Key != "reboot" {
+		t.Fatalf("uncapped: %+v", steps[0])
+	}
+
+	// The phone: an adapter, the boot capped; the remote salt waits for it.
+	c.facts.Adapter, c.facts.Capped = "hci0", true
+	phone := c.menuSteps("phone")
+	if phone[0].Blocked != "" || phone[0].Done != "" || phone[1].Blocked != "" {
+		t.Fatalf("phone possible: %+v", phone)
+	}
+	if disk := c.menuSteps("disk"); !strings.Contains(disk[1].Blocked, "needs an enrolled phone") {
+		t.Fatalf("remote salt without a phone: %+v", disk[1])
+	}
+	c.facts.NewImage = "/boot/initramfs-linux.img was rebuilt after this boot started"
+	if phone := c.menuSteps("phone"); !strings.Contains(phone[0].Blocked, "rebuilt after this boot started") {
+		t.Fatalf("new image: %+v", phone[0])
+	}
+	c.facts.NewImage = ""
+	c.facts.Phone, c.facts.Status.Slots[0].Phones = true, 1
 	zero := 0
 	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: &zero}})
-	steps = c.steps()
-	if steps[4].Done != "attested by 1 phone (the slot has no TOTP code while a phone is enrolled)" || steps[5].Done != "keyslot 1 of /dev/sda2" {
-		t.Fatalf("phone and remote-salt keyslot: %+v %+v", steps[4], steps[5])
+	if disk := c.menuSteps("disk"); disk[1].Done != "keyslot 1 of /dev/sda2" {
+		t.Fatalf("remote salt enrolled: %+v", disk[1])
+	}
+	if keys := c.menuSteps("keys"); !strings.Contains(keys[1].Done, "attested by 1 phone") || !strings.Contains(keys[1].Done, "keyslot 1 of /dev/sda2") {
+		t.Fatalf("slot 0's line: %+v", keys[1])
 	}
 
-	// The screen: the status, the markers, the tree, the recommendation.
+	// No recovery passphrase: no disk key can be authorised.
+	c.facts.NoRecovery = []string{"/dev/sda2"}
+	if disk := c.menuSteps("disk"); !strings.Contains(disk[0].Blocked, "needs a recovery passphrase") {
+		t.Fatalf("no recovery: %+v", disk[0])
+	}
+	c.facts.NoRecovery = nil
+	// Unrouted: the disk keys wait for the route.
+	c.facts.Routed = map[string]bool{}
+	if disk := c.menuSteps("disk"); !strings.Contains(disk[0].Blocked, "needs the key's route") {
+		t.Fatalf("unrouted: %+v", disk[0])
+	}
+}
+
+// The vault: possible with slot 0 and a wired interface; enrolled, its
+// line says whether it answers and knows this device, red when not.
+func TestControlVault(t *testing.T) {
+	c := wired()
+	c.facts.Keys = "local key files"
+	c.facts.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u", Signed: true}}
+	if v := c.menuSteps("disk")[2]; v.Key != "luks-vault" || v.Blocked != "" || v.Done != "" {
+		t.Fatalf("vault possible: %+v", v)
+	}
+	c.facts.Wired = 0
+	if v := c.menuSteps("disk")[2]; !strings.Contains(v.Blocked, "no wired interface") {
+		t.Fatalf("no wired interface: %+v", v)
+	}
+	c.facts.Wired = 1
+
+	zero := 0
+	c.facts.Status.Slots[0].Vault = "https://vault:8443"
+	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &LuksToken{Mode: LuksModeTPMVault, Slot: &zero}})
+	c.facts.Remote.Net.Mode = "dhcp"
+	c.facts.Vaults = map[int]vaultCheck{0: {Answers: true, Knows: true}}
+	if v := c.menuSteps("disk")[2]; !strings.Contains(v.Done, "the vault answers and knows this device") || !strings.Contains(v.Done, "keyslot 1 of /dev/sda2") {
+		t.Fatalf("vault enrolled: %+v", v)
+	}
+	if got := c.factsText(); !strings.Contains(got, "\033[0;32mslot 0: https://vault:8443 answers") {
+		t.Fatalf("the status:\n%s", got)
+	}
+	c.facts.Vaults[0] = vaultCheck{Problem: "not reachable (connection refused)"}
+	v := c.menuSteps("disk")[2]
+	if !strings.Contains(v.Dirty, "not reachable") {
+		t.Fatalf("vault unreachable: %+v", v)
+	}
+	if st := c.hubSteps(); recommended(st) < 0 || st[recommended(st)].Key != "menu:disk" {
+		t.Fatalf("the unreachable vault leads: %+v", st)
+	}
+	if got := c.factsText(); !strings.Contains(got, "(risk: the disk does not open unattended") {
+		t.Fatalf("the status:\n%s", got)
+	}
+	c.facts.Vaults[0] = vaultCheck{Answers: true, Knows: true}
+	c.facts.Remote.Net.Mode = "off"
+	if v := c.menuSteps("disk")[2]; !strings.Contains(v.Dirty, "no network to reach the vault") {
+		t.Fatalf("vault without network: %+v", v)
+	}
+}
+
+// Network and SSH: SSH offers the network on the way; an SSH server
+// nobody can log in to is red.
+func TestControlRemote(t *testing.T) {
+	c := wired()
+	r := c.menuSteps("remote")
+	if r[0].Key != "net" || r[0].Blocked != "" || r[0].Done != "" || r[1].Key != "ssh" || r[1].Blocked != "" {
+		t.Fatalf("both possible: %+v", r)
+	}
+	c.facts.Wired = 0
+	if r := c.menuSteps("remote"); !strings.Contains(r[0].Blocked, "no wired network interface") || !strings.Contains(r[1].Blocked, "no wired interface") {
+		t.Fatalf("no wired interface: %+v", r)
+	}
+	c.facts.Wired = 1
+	c.facts.Remote.Net.Mode, c.facts.Remote.SSH.On = "dhcp", true
+	c.facts.SSHKeys = 0
+	if r := c.menuSteps("remote"); !strings.Contains(r[0].Done, "DHCP") || !strings.Contains(r[1].Dirty, "nobody can log in") {
+		t.Fatalf("no key: %+v", r)
+	}
+	c.facts.SSHKeys = 2
+	c.facts.SSHCA = sshCAState{Err: "no SSH CA: tpm2-kira control creates it in the TPM"}
+	if r := c.menuSteps("remote"); !strings.Contains(r[1].Dirty, "no SSH CA") {
+		t.Fatalf("no CA: %+v", r[1])
+	}
+	c.facts.SSHCA = testSSHCA(t, false)
+	if r := c.menuSteps("remote"); !strings.Contains(r[1].Done, "signed when you quit control") {
+		t.Fatalf("a CA not approved: %+v", r[1])
+	}
+	c.facts.SSHCA = testSSHCA(t, true)
+	if r := c.menuSteps("remote"); !strings.Contains(r[1].Done, "port 22") || !strings.Contains(r[1].Done, "2 key(s)") || !strings.Contains(r[1].Done, "SSH CA SHA256:") || strings.Contains(r[1].Done, "quit") {
+		t.Fatalf("ssh: %+v", r[1])
+	}
+	// With SSH on, the typed disk keys say they are typed there too.
+	if d := c.menuSteps("disk"); !strings.Contains(d[0].Explain, "typed in the SSH session") {
+		t.Fatalf("typed over SSH: %+v", d[0])
+	}
+}
+
+// The plain screen: both steps, the submenus' options under their line,
+// the recommendation down to the option.
+func TestControlShow(t *testing.T) {
+	c := wired()
 	var out bytes.Buffer
 	c.out = &out
-	c.show(steps)
+	c.show()
 	got := out.String()
-	for _, want := range []string{"SHA-256 bank and event log", "hci0", "[x]", "Slot 0  - sealed to 0e,2e,7e,11u",
-		"  Attestation by phone", "Recommended next:", "8  Disk key from password + salt (hashpwd2)\n",
-		"3  Unlock at boot (the key's route)  - the key routed"} {
+	for _, want := range []string{"Step 1 of 2: the boot chain", "All prerequisites are met", "[x]\033[0m mkinitcpio adoption",
+		"Step 2 of 2: what this machine combines", "Signing key and TOTP codes", "    Signing key", "    Password + salt (hashpwd2)",
+		"Recommended next:\033[0m Signing key and TOTP codes > Signing key"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the screen lacks %q:\n%s", want, got)
 		}
 	}
-
-	// A half-gone slot is a line of its own, dirty and recommended first.
+	// A half-gone slot is red and recommended first.
+	c.facts.Keys = "local key files"
 	c.facts.Dirt = []SlotContents{{Slot: 2, Index: NVRAMSlotStart + 2, Counter: true}}
-	dirty := c.steps()
-	if dirty[7].Key != "slot:2" || dirty[7].Dirty != "dirty: the record counter left" || recommended(dirty) != 7 {
-		t.Fatalf("a dirty slot: %+v", dirty[7])
-	}
 	out.Reset()
-	c.show(dirty)
-	if got := out.String(); !strings.Contains(got, "[!]") || !strings.Contains(got, "Slot 2  - dirty: the record counter left") {
+	c.show()
+	if got := out.String(); !strings.Contains(got, "[!]") || !strings.Contains(got, "Slot 2  - dirty: the record counter left") ||
+		!strings.Contains(got, "Recommended next:\033[0m Signing key and TOTP codes > Slot 2") {
 		t.Fatalf("the dirty screen:\n%s", got)
-	}
-	c.facts.Dirt = nil
-
-	// A missing half of the standard pair brings the seal step back, for
-	// exactly the missing slot.
-	c.facts.Status.Slots = c.facts.Status.Slots[:1]
-	steps = c.steps()
-	if steps[3].Key != "seal" || !strings.Contains(steps[3].Explain, "Slot 1, the fallback, is missing") || steps[4].Key != "slot:0" {
-		t.Fatalf("fallback missing: %+v", steps[3])
-	}
-	c.facts.Status.Slots = []StatusSlot{{Slot: 1, PCRs: "0e,7e", Fallback: true, Signed: true}}
-	steps = c.steps()
-	if steps[3].Key != "seal" || !strings.Contains(steps[3].Explain, "Slot 0 is missing") {
-		t.Fatalf("slot 0 missing: %+v", steps[3])
 	}
 }
 
@@ -233,7 +363,7 @@ func TestControlStatusJudgement(t *testing.T) {
 	// The plain screen carries the judged status and the version header.
 	var out bytes.Buffer
 	c.out = &out
-	c.show(c.steps())
+	c.show()
 	if !strings.Contains(out.String(), "control unknown - the protections") || !strings.Contains(out.String(), "the SHA-1 bank is used (risk:") {
 		t.Errorf("the plain screen:\n%s", out.String())
 	}
@@ -242,16 +372,16 @@ func TestControlStatusJudgement(t *testing.T) {
 // The signing key step with a YubiKey: done only with the PIN stored.
 func TestControlYubiKeyPINStep(t *testing.T) {
 	c := &controller{facts: machineFacts{Keys: "YubiKey 123 slot 9a", YubiKey: true}}
-	s := c.steps()[0]
+	s := c.keysSteps()[0]
 	if s.Done != "" || !strings.Contains(s.Explain, "Its PIN, stored in") {
 		t.Fatalf("without the PIN: %+v", s)
 	}
 	c.facts.PINStored = true
-	if s := c.steps()[0]; !strings.Contains(s.Done, "its PIN in") {
+	if s := c.keysSteps()[0]; !strings.Contains(s.Done, "its PIN in") {
 		t.Fatalf("with the PIN: %+v", s)
 	}
 	c.facts.YubiKey = false
-	if s := c.steps()[0]; s.Done != "YubiKey 123 slot 9a" {
+	if s := c.keysSteps()[0]; s.Done != "YubiKey 123 slot 9a" {
 		t.Fatalf("no PIN wanted: %+v", s)
 	}
 }
@@ -381,56 +511,4 @@ func TestImageNewerThanBoot(t *testing.T) {
 	if got := imageNewerThanBoot(); got != "" {
 		t.Fatalf("an image older than the boot: %q", got)
 	}
-}
-
-// The guided mode leads with the one row while part 1 is open, says which
-// part the set-up stands in, and both modes switch to the other at the
-// bottom. The manual mode keeps every step and every explanation.
-func TestControlGuidedJourney(t *testing.T) {
-	c := &controller{facts: machineFacts{TPM: "/dev/tpmrm0", PCRs: "0e,2e,7e,11u", Guide: "guided"}}
-	steps := c.steps()
-	if steps[0].Key != "journey" || !steps[0].SelfConfirm || recommended(steps) != 0 {
-		t.Fatalf("the row does not lead: %+v", steps[0])
-	}
-	if last := steps[len(steps)-1]; last.Key != "guide" || last.Title != "Switch to the manual set-up" {
-		t.Fatalf("the switch: %+v", last)
-	}
-	if p := c.phase(steps); !strings.Contains(p, "Part 1 of 2") {
-		t.Fatalf("phase: %q", p)
-	}
-
-	// Part 1 done, enrolments open: part 2 is named; the row is gone.
-	c.facts.Keys = "local key files"
-	c.facts.Initramfs, c.facts.HookState = "mkinitcpio", ""
-	c.facts.Capped = true
-	c.facts.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u", Signed: true}, {Slot: 1, PCRs: "0e,7e", Fallback: true, Signed: true}}
-	c.facts.Status.Devices = []LuksDeviceStatus{{Device: "/dev/sda2", Keyslots: []KeyslotStatus{{Keyslot: 0}}}}
-	c.facts.Routed = map[string]bool{"/dev/sda2": true}
-	c.facts.Adapter = "hci0"
-	steps = c.steps()
-	if steps[0].Key == "journey" {
-		t.Fatalf("the row although part 1 is done: %+v", steps[0])
-	}
-	if p := c.phase(steps); !strings.Contains(p, "Part 2 of 2") {
-		t.Fatalf("phase: %q", p)
-	}
-
-	// Manual: no row, no part line, the switch points back.
-	c.facts.Guide = "manual"
-	steps = c.steps()
-	if steps[0].Key == "journey" || c.phase(steps) != "" {
-		t.Fatalf("manual shows the row: %+v", steps[0])
-	}
-	if last := steps[len(steps)-1]; last.Title != "Switch to the guided set-up" {
-		t.Fatalf("the switch: %+v", last)
-	}
-}
-
-func stepByKey(steps []controlStep, key string) controlStep {
-	for _, s := range steps {
-		if s.Key == key {
-			return s
-		}
-	}
-	return controlStep{}
 }

@@ -36,6 +36,31 @@ import urllib.request
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# The unlock mode is no setting: the keyslot's token in the LUKS2 header
+# names it by its type (cmd/luks.go), and the boot reads it from there.
+TOKEN_MODES = {
+    "tpm2-kira-salt": "password+salt",
+    "tpm2-kira-remotesalt": "password+remotesalt",
+    "tpm2-kira-vault": "tpm+vault",
+}
+
+
+def marked_keyslots(status, mode, device=None):
+    """The (device, keyslot) pairs whose token is tpm2-kira's in that mode."""
+    return [(d["device"], ks["keyslot"]) for d in status.get("devices", [])
+            if device is None or d["device"] == device
+            for ks in d.get("keyslots", [])
+            if ks.get("token") and TOKEN_MODES.get(ks["token"].get("type")) == mode]
+
+
+def mode_of(status):
+    """The mode the boot asks in: the first typed one a keyslot is marked
+    with, skip when there is none."""
+    for mode in ("password+salt", "password+remotesalt"):
+        if marked_keyslots(status, mode):
+            return mode
+    return "skip"
+
 # ---------------------------------------------------------------- the log
 
 class Log:
@@ -367,8 +392,12 @@ def check_installed(t, distro, expected, mode_wanted, luks_device, log, rep):
     rc, out = t.run("tpm2-kira help >/dev/null 2>&1; echo rc=$?")
     rep.check("'help' answers as a user", "rc=0" in out)
 
-    rc, out = t.run("tpm2-kira attest config-check 2>&1", root=True)
-    rep.check("control.conf loads (attest config-check)", rc == 0 and ": valid" in out, out.strip())
+    # The boot plan as the next build makes it: control.conf loads, and the
+    # sealed slots put the codes in.
+    rc, out = t.run("tpm2-kira initramfs plan 2>&1", root=True)
+    log.save("initramfs-plan.txt", out)
+    rep.check("control.conf loads (initramfs plan)", rc == 0 and "does not load" not in out, out.strip())
+    rep.check("the boot plan has the codes", rc == 0 and re.search(r"^in\s+TOTP codes", out, re.M) is not None, out.strip())
 
     rc, out = t.run("tpm2-kira status --json", root=True)
     log.save("status-installed.json", out)
@@ -388,17 +417,15 @@ def check_installed(t, distro, expected, mode_wanted, luks_device, log, rep):
                   all("matches" in s["generation_state"] or "read-locked" in s["generation_state"] for s in slots),
                   "; ".join(f"slot {s['slot_number']}: {s['generation_state']}" for s in slots))
         rep.check("status: no notes", not status.get("notes"), "\n".join(status.get("notes", [])))
-        rep.check("status: unlock mode is " + mode_wanted, status.get("unlock_mode") == mode_wanted,
-                  f"mode {status.get('unlock_mode')!r} in {status.get('config')}")
         if mode_wanted != "skip":
-            marked = [(d["device"], ks["keyslot"]) for d in status.get("devices", [])
-                      for ks in d.get("keyslots", []) if ks.get("token") and ks["token"].get("mode") == mode_wanted]
+            marked = marked_keyslots(status, mode_wanted, luks_device)
             rep.check(f"a LUKS keyslot is marked {mode_wanted}", bool(marked), str(marked))
     rc, out = t.run("tpm2-kira status", root=True)
     log.save("status-installed.txt", out)
     log.say(out.rstrip())
 
-    # The initramfs: the binary and control.conf in it, the PIN line not.
+    # The initramfs: the binary in it, its boot plan; control.conf and the
+    # PIN not (the network and SSH go in as files of their own).
     log.head("the initramfs")
     if distro == "arch":
         script = r"""
@@ -414,9 +441,10 @@ else
   cp "$img" initrd
 fi
 lsinitcpio -x initrd >/dev/null
-ls usr/bin/tpm2-kira etc/tpm2-kira/control.conf
-echo '--- control.conf in the image:'
-cat etc/tpm2-kira/control.conf | grep -v '^#' | grep .
+ls usr/bin/tpm2-kira
+echo '--- tpm2-kira files in the image:'
+find etc/tpm2-kira root/.ssh 2>/dev/null || true
+grep -rl 'TPM2_KIRA_PIN' . 2>/dev/null | sed 's/^/PIN LINE IN: /' || true
 cd /; rm -rf "$d"
 """
     else:
@@ -427,22 +455,23 @@ img=/boot/initrd.img-$(uname -r)
 echo "image: $img"
 unmkinitramfs "$img" x
 cd x; [ -d main ] && cd main
-ls usr/bin/tpm2-kira etc/tpm2-kira/control.conf 2>/dev/null || ls bin/tpm2-kira etc/tpm2-kira/control.conf
-echo '--- control.conf in the image:'
-cat etc/tpm2-kira/control.conf | grep -v '^#' | grep .
+ls usr/bin/tpm2-kira 2>/dev/null || ls bin/tpm2-kira
+echo '--- tpm2-kira files in the image:'
+find etc/tpm2-kira root/.ssh 2>/dev/null || true
+grep -rl 'TPM2_KIRA_PIN' . 2>/dev/null | sed 's/^/PIN LINE IN: /' || true
 cd /; rm -rf "$d"
 """
     rc, out = t.run(script, root=True)
     log.save("initramfs.log", out)
     log.say(out.rstrip())
-    rep.check("initramfs holds tpm2-kira and control.conf", rc == 0, out[-400:] if rc else "")
-    rep.check("initramfs copy of control.conf has no PIN line", rc == 0 and "TPM2_KIRA_PIN" not in out)
-    rep.check("initramfs copy of control.conf sets the mode", rc == 0 and f"TPM2_KIRA_UNLOCK={mode_wanted}" in out.replace("'", "").replace('"', ""))
+    rep.check("initramfs holds tpm2-kira", rc == 0, out[-400:] if rc else "")
+    rep.check("initramfs holds no control.conf and no PIN", rc == 0 and "control.conf" not in out and "PIN LINE IN" not in out and "/pin" not in out)
+    rep.check("initramfs names the codes in its plan", "etc/tpm2-kira/plan/codes/" in out, out[-400:])
 
-    rc, out = t.run("ls -la /etc/tpm2-kira/ /etc/tpm2-kira/keys/ 2>&1; stat -c '%U %a %n' /etc/tpm2-kira/control.conf", root=True)
+    rc, out = t.run("ls -la /etc/tpm2-kira/ /etc/tpm2-kira/keys/ 2>&1; stat -c '%U %a %n' /etc/tpm2-kira/pin 2>/dev/null", root=True)
     log.save("etc-tpm2-kira.log", out)
-    if "TPM2_KIRA_PIN" in t.run("cat /etc/tpm2-kira/control.conf", root=True)[1]:
-        rep.check("control.conf with a PIN is root's, mode 600", out.strip().endswith("root 600 /etc/tpm2-kira/control.conf"), out.strip().split("\n")[-1])
+    if out.strip().endswith("/etc/tpm2-kira/pin"):
+        rep.check("the PIN file is root's, mode 600", out.strip().endswith("root 600 /etc/tpm2-kira/pin"), out.strip().split("\n")[-1])
 
     # The codes this boot shows, for the comparison after the reboot.
     rc, out = t.run("for s in 0 1; do echo \"slot $s: $(tpm2-kira reveal-plain --nvram $s 2>&1 | tail -1)\"; done", root=True)
@@ -453,31 +482,18 @@ cd /; rm -rf "$d"
 
 def ensure_luks(t, mode_wanted, luks_device, log, rep):
     """A keyslot for the mode, enrolled by the person at the terminal when
-    there is none; then the mode in control.conf through control's step."""
+    there is none. Its token tells the boot the mode: nothing to configure,
+    no rebuild."""
     if mode_wanted == "skip" or not luks_device:
         return
     rc, out = t.run("tpm2-kira status --json", root=True)
     status = json.loads(out) if rc == 0 else {}
-    marked = [ks for d in status.get("devices", []) if d["device"] == luks_device
-              for ks in d.get("keyslots", []) if ks.get("token") and ks["token"].get("mode") == mode_wanted]
-    if not marked:
+    if not marked_keyslots(status, mode_wanted, luks_device):
         log.head(f"luks enrol {luks_device} --mode {mode_wanted}")
         log.say("No keyslot of tpm2-kira's with that mode. The enrolment asks for the device's")
         log.say("passphrase, then the password and the salt the boot will ask for. Your terminal now:")
         rc = t.interactive(f"sudo tpm2-kira luks enrol {shlex.quote(luks_device)} --mode {mode_wanted}")
         rep.check(f"luks enrol {luks_device} --mode {mode_wanted}", rc == 0, f"exit {rc}")
-    if status.get("unlock_mode") != mode_wanted:
-        log.head(f"TPM2_KIRA_UNLOCK={mode_wanted}")
-        log.say("control sets the mode (its 'Unlock at boot' step): your terminal now. Pick")
-        log.say("'Unlock at boot', confirm, then Leave.")
-        t.interactive("sudo tpm2-kira control")
-        rc, out = t.run("tpm2-kira status --json", root=True)
-        mode = json.loads(out).get("unlock_mode") if rc == 0 else None
-        rep.check(f"control set TPM2_KIRA_UNLOCK={mode_wanted}", mode == mode_wanted, f"mode {mode!r}")
-        if mode == mode_wanted:
-            rc, out = t.run("if [ -x /usr/bin/mkinitcpio ]; then mkinitcpio -P; else update-initramfs -u; fi 2>&1", root=True)
-            log.save("initramfs-rebuild.log", out)
-            rep.check("initramfs rebuilt with the mode", rc == 0 and "SKIPPED" not in out, out[-400:] if rc else "")
 
 
 def reboot_and_ask(t, mode_wanted, log, rep):
@@ -597,7 +613,7 @@ def main():
     p.add_argument("--key", help="an ssh key instead of a password")
     p.add_argument("--rev", default="HEAD", help="the commit to build (default HEAD)")
     p.add_argument("--mode", default=None, choices=["skip", "password+salt", "password+remotesalt"],
-                   help="the unlock mode the boot is expected in (default: what the target has)")
+                   help="the unlock mode the boot is expected in (default: what the target's keyslots are marked with)")
     p.add_argument("--luks", metavar="DEVICE", help="the LUKS device to enrol a keyslot on when --mode needs one and none is there")
     p.add_argument("--no-build", action="store_true", help="test what is installed; no package")
     p.add_argument("--no-reboot", action="store_true", help="stop before the reboot")
@@ -652,7 +668,7 @@ def main():
             return 1
 
     rc, out = t.run("tpm2-kira status --json", root=True)
-    mode_now = json.loads(out).get("unlock_mode", "skip") if rc == 0 else "skip"
+    mode_now = mode_of(json.loads(out)) if rc == 0 else "skip"
     mode_wanted = args.mode or mode_now
     ensure_luks(t, mode_wanted, args.luks, log, rep)
     check_installed(t, args.distro, expected, mode_wanted, args.luks, log, rep)

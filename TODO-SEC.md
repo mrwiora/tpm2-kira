@@ -347,15 +347,15 @@ asserts the QR output for a fixed URI is non-empty.
 
 ## 6. YubiKey PIN in a world-readable file
 
-- [x] done — the PIN lives in `/etc/tpm2-kira/control.conf`
-  (`TPM2_KIRA_PIN`), the one file `control` writes: the Signing key step
-  checks the PIN on the token, writes the line and makes the file 0600.
+- [x] done — the PIN lives in `/etc/tpm2-kira/pin`, the PIN alone,
+  written by `control` only: the Signing key step checks the PIN on the
+  token and writes the file 0600.
   `readPIN` (`cmd/yubikey.go`) reads the environment, then the file, then
   the terminal; a file that is not root's or is group/world-readable is
-  refused on the opened descriptor, not warned about (`configPIN`,
-  `cmd/control_config.go`). The initramfs hooks copy the file without the
-  PIN line. The old place, a line in `/etc/mkinitcpio.conf`, is gone with
-  its parser.
+  refused on the opened descriptor, not warned about (`storedPIN`,
+  `cmd/control_config.go`). Nothing puts the file into the image. The
+  earlier places - a line in `/etc/mkinitcpio.conf`, then a
+  `TPM2_KIRA_PIN` line in control.conf - are gone (HISTORY.md).
 
 **Trade-off** (`docs/PLAN-YUBIKEY.md` §4.4 and §6): an unattended PIN
 makes the token a presence check only; the touch policy decides whether a

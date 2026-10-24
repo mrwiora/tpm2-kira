@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // tpm2-kira's keyslots in a LUKS2 header (PLAN-LUKS.md §2): a token of
@@ -119,6 +122,9 @@ func (t *LuksToken) BoundTo(slot int) bool {
 type luksMetadata struct {
 	Keyslots map[string]struct {
 		Type string `json:"type"`
+		KDF  struct {
+			Salt string `json:"salt"`
+		} `json:"kdf"`
 	} `json:"keyslots"`
 	Tokens map[string]json.RawMessage `json:"tokens"`
 }
@@ -203,6 +209,7 @@ type KeyslotStatus struct {
 	Keyslot int        `json:"keyslot"`
 	Token   *LuksToken `json:"token,omitempty"` // nil: not tpm2-kira's
 	TokenID int        `json:"token_id,omitempty"`
+	Salt    string     `json:"-"` // the KDF's salt: new with every passphrase the keyslot gets
 }
 
 // LuksDeviceStatus is one device.
@@ -236,9 +243,9 @@ func parseLuksMetadata(out []byte) ([]KeyslotStatus, []OrphanToken, error) {
 		return nil, nil, fmt.Errorf("the header's metadata does not parse (LUKS2 only): %w", err)
 	}
 	byKeyslot := map[string]KeyslotStatus{}
-	for num := range md.Keyslots {
+	for num, ks := range md.Keyslots {
 		n, _ := strconv.Atoi(num)
-		byKeyslot[num] = KeyslotStatus{Keyslot: n}
+		byKeyslot[num] = KeyslotStatus{Keyslot: n, Salt: ks.KDF.Salt}
 	}
 	var orphans []OrphanToken
 	for id, raw := range md.Tokens {
@@ -471,12 +478,22 @@ type LuksEnrolOptions struct {
 // terminalAsk asks on the terminal; tests replace it.
 var terminalAsk = terminalPassword
 
+// terminalAskExisting asks for a passphrase the device has already, which
+// may be empty: a disk encrypted with an empty passphrase is authorised by
+// Enter alone (control flags such a disk as a risk). Tests replace it.
+var terminalAskExisting = func(prompt string) ([]byte, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	pw, err := readPassphrase(os.Stdin, int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	return pw, err
+}
+
 // LuksEnrol adds a keyslot whose key tpm2-kira makes at boot (PLAN-LUKS.md
 // §3): the password (and the salt, or the remote salt's round trip with
 // the phone), the derivation, 'cryptsetup luksAddKey' with the key on its
-// stdin and an existing passphrase, asked at the prompt, on a pipe - the
-// recovery keyslot the device must have - the token for the new keyslot,
-// and the mode in control.conf. The key is never on disk.
+// stdin and an existing passphrase, asked at the prompt, in a memfd - the
+// recovery keyslot the device must have, its passphrase empty or not - the
+// token for the new keyslot. The key is never on disk.
 func LuksEnrol(o LuksEnrolOptions) error {
 	if !knownMode(o.Mode) {
 		return errMode
@@ -623,16 +640,20 @@ func checkRemoteSaltReadyOrEnrolable(tpmPath string, idx uint32) (bool, error) {
 	return true, nil
 }
 
-// existingFD is where cryptsetupAuth puts the existing passphrase: a pipe
-// on descriptor 3, named by --key-file. cryptsetup reads a passphrase
-// from stdin when stdin is not a terminal, and stdin carries the new key
-// ('-'), so the two must not share it.
+// existingFD is where cryptsetupAuth puts the existing passphrase: a
+// memfd on descriptor 3, named by --key-file. cryptsetup reads a
+// passphrase from stdin when stdin is not a terminal, and stdin carries
+// the new key ('-'), so the two must not share it. A memfd and not a pipe:
+// cryptsetup refuses an empty pipe ("Nothing to read on input") but reads
+// an empty regular file as the empty passphrase, and the memfd is one that
+// lives in memory alone.
 const existingFD = "/dev/fd/3"
 
 // existingPassphrase is a passphrase of one of the device's other
 // keyslots, which cryptsetup wants before it changes the header: from the
 // file named (scripts), else asked on the terminal. Without a trailing
-// newline, which --key-file would take as part of it.
+// newline, which --key-file would take as part of it. Empty is a
+// passphrase too: cryptsetup takes an empty one from the pipe.
 func existingPassphrase(device, file string) ([]byte, error) {
 	if file != "" {
 		b, err := os.ReadFile(file)
@@ -641,13 +662,56 @@ func existingPassphrase(device, file string) ([]byte, error) {
 		}
 		return b, nil
 	}
-	return terminalAsk("An existing passphrase of " + device + " (the recovery passphrase), to authorise: ")
+	return terminalAskExisting("An existing passphrase of " + device + " (the recovery passphrase; Enter alone for an empty one), to authorise: ")
+}
+
+// existingFile is the existing passphrase as a memfd read from its start
+// (existingFD says why not a pipe).
+func existingFile(existing []byte) (*os.File, error) {
+	fd, err := unix.MemfdCreate("tpm2-kira-existing", unix.MFD_CLOEXEC)
+	if err != nil {
+		return nil, fmt.Errorf("memfd_create: %w", err)
+	}
+	f := os.NewFile(uintptr(fd), "existing")
+	if _, err := f.Write(existing); err != nil {
+		f.Close()
+		return nil, err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// emptyPassphraseOpens says whether a keyslot of the device opens with an
+// empty passphrase - cryptsetup's own test, one key derivation, the empty
+// passphrase in the memfd, as existingPassphrase hands it.
+var emptyPassphraseOpens = func(device string, keyslot int) (bool, error) {
+	r, err := existingFile(nil)
+	if err != nil {
+		return false, err
+	}
+	defer r.Close()
+	c := exec.Command(cryptsetupPath(), "open", "--test-passphrase", "--key-slot", strconv.Itoa(keyslot), "--key-file", existingFD, device)
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	c.ExtraFiles = []*os.File{r}
+	err = c.Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.As(err, &exit) && exit.ExitCode() == 2: // no key with this passphrase
+		return false, nil
+	}
+	return false, fmt.Errorf("cryptsetup open --test-passphrase: %v: %s", err, strings.TrimSpace(stderr.String()))
 }
 
 // cryptsetupAuth runs cryptsetup with key on stdin (nil: nothing) and
 // existing on descriptor 3 (existingFD), its messages on stderr.
 var cryptsetupAuth = func(key, existing []byte, args ...string) ([]byte, error) {
-	r, w, err := os.Pipe()
+	r, err := existingFile(existing)
 	if err != nil {
 		return nil, err
 	}
@@ -656,13 +720,7 @@ var cryptsetupAuth = func(key, existing []byte, args ...string) ([]byte, error) 
 	c.Stdin = bytes.NewReader(key)
 	c.Stdout, c.Stderr = os.Stderr, os.Stderr
 	c.ExtraFiles = []*os.File{r}
-	if err := c.Start(); err != nil {
-		w.Close()
-		return nil, err
-	}
-	w.Write(existing)
-	w.Close()
-	if err := c.Wait(); err != nil {
+	if err := c.Run(); err != nil {
 		return nil, fmt.Errorf("cryptsetup %s: %w", args[0], err)
 	}
 	return nil, nil

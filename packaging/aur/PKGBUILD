@@ -20,14 +20,25 @@ optdepends=('mkinitcpio: for early boot integration'
             'tpm2-tools: for debugging and integration testing'
             'pcsclite: keeping the signing key on a YubiKey (setup --yubikey)')
 conflicts=('tpm2-kira-git')
+# The commit of the assh submodule at the tag (git rev-parse "$_tag:assh"):
+# GitHub's tag tarball leaves submodules out. Set with _tag.
+_assh=4630dcbbb9653b929ec66cef80490b26e7dbb1ed
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
-sha256sums=('SKIP')
+source+=("assh-$_assh.tar.gz::https://github.com/tpm2-trust/assh/archive/$_assh.tar.gz")
+sha256sums=('SKIP' 'SKIP')
 options=('!debug')
 
 # GitHub names the extracted directory after the tag, minus a leading 'v'.
 _srcdir="$pkgname-${_tag#v}"
 
 prepare() {
+    # aSSH's sources where the submodule goes (an archive of the
+    # repository's HEAD carries them already, and has no assh-* source).
+    if [[ -d assh-$_assh ]]; then
+        rm -rf "$_srcdir/assh"
+        mv "assh-$_assh" "$_srcdir/assh"
+    fi
+
     cd "$_srcdir"
 
     export GOPROXY=direct

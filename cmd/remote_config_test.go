@@ -25,7 +25,7 @@ TPM2_KIRA_SSH_HOLD=300
 	r := cfg.Remote
 	if r.Net.Mode != "static" || r.Net.Match != "aa:bb:cc:dd:ee:ff" || len(r.Net.Addresses) != 2 ||
 		r.Net.Gateways[0] != "192.0.2.1" || len(r.Net.DNS) != 2 || !r.SSH.On || r.SSH.Port != 2222 || r.SSH.Hold != 300 ||
-		r.SSH.AuthorizedKeys != DefaultSSHAuthorizedKeys || r.SSH.HostKey != DefaultSSHHostKey || r.Problem() != "" {
+		r.SSH.AuthorizedKeys != DefaultSSHAuthorizedKeys || r.SSH.CA != DefaultSSHCA || r.Problem() != "" {
 		t.Fatalf("%+v %q", r, r.Problem())
 	}
 	if d := DefaultControlConfig().Remote; d.Net.Mode != "off" || d.SSH.On || d.SSH.Port != 22 {
@@ -88,7 +88,7 @@ func TestNetworkdFile(t *testing.T) {
 // control writes the lines and they read back; the rest of the file stays.
 func TestSetRemoteConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.conf")
-	os.WriteFile(path, []byte("TPM2_KIRA_CONTROL=guided\n"), 0o644)
+	os.WriteFile(path, []byte("TPM2_KIRA_ATTEST_BLUETOOTH=always\n"), 0o644)
 	r := DefaultRemoteConfig()
 	r.Net = NetConfig{Mode: "static", Match: "aa:bb:cc:dd:ee:ff", Addresses: []string{"192.0.2.10/24", "2001:db8::10/64"}, DNS: []string{"9.9.9.9"}}
 	r.SSH.On, r.SSH.Port = true, 2222
@@ -99,7 +99,7 @@ func TestSetRemoteConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Control != "guided" || cfg.Remote.Net.Mode != "static" || len(cfg.Remote.Net.Addresses) != 2 ||
+	if cfg.Attest.Bluetooth != "always" || cfg.Remote.Net.Mode != "static" || len(cfg.Remote.Net.Addresses) != 2 ||
 		cfg.Remote.Net.Match != r.Net.Match || !cfg.Remote.SSH.On || cfg.Remote.SSH.Port != 2222 || len(cfg.Remote.Net.Gateways) != 0 {
 		t.Fatalf("read back: %+v", cfg)
 	}

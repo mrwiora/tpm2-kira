@@ -6,24 +6,28 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
-// /etc/tpm2-kira/control.conf is the one configuration file: the radio of
-// the attestation by phone (TPM2_KIRA_ATTEST_*) and the YubiKey's PIN for
-// the unattended reseal (TPM2_KIRA_PIN). How the disk's key is made is not
-// configured anywhere: the boot reads it from the LUKS header's tokens
-// (luks_header.go); and the boot image's network and SSH server
-// (TPM2_KIRA_NET_*, TPM2_KIRA_SSH_*, remote_config.go). KEY=VALUE lines.
-// The file never goes into the boot image, and no script sources it:
-// tpm2-kira reads it, the image build through 'attest initramfs-deps'
-// (the radio) and 'remote initramfs' (which writes the network and SSH
-// settings into the image as files of their own). 'tpm2-kira control' is what
-// writes it; the other commands only read. The PIN is read from its own
-// line (storedPIN), for the signer alone, whatever the other lines say. A
-// file holding the PIN must be root's and readable by root alone, else the
-// PIN in it is treated as disclosed and not used.
+// /etc/tpm2-kira/control.conf is the one configuration file, and it holds
+// what the boot image is built with, nothing else: the radio of the
+// attestation by phone (TPM2_KIRA_ATTEST_*) and the image's network and
+// SSH server (TPM2_KIRA_NET_*, TPM2_KIRA_SSH_*, remote_config.go).
+// KEY=VALUE lines. How the disk's key is made is not configured anywhere:
+// the boot reads it from the LUKS header's tokens (luks_header.go). The
+// file never goes into the boot image, and no script sources it: tpm2-kira
+// reads it, the image build through its boot plan ('initramfs plan',
+// bootplan.go), which writes the network and SSH settings into the image
+// as files of their own and names the settings of every part it put in -
+// so control tells an image built with other settings. 'tpm2-kira
+// control' is what writes it; the other commands only read.
+//
+// Next to it, and written by control too: the YubiKey's PIN for the
+// unattended reseal (pin, root's and readable by root alone, else treated
+// as disclosed and not used) and the keys that may log in to the image's
+// SSH server (authorized_keys).
 
 // DefaultControlConfigPath is the file.
 const DefaultControlConfigPath = "/etc/tpm2-kira/control.conf"
@@ -58,10 +62,6 @@ func DefaultAttestConfig() AttestConfig {
 // ControlConfig is the whole file.
 type ControlConfig struct {
 	Attest AttestConfig
-	// Control is how 'tpm2-kira control' guides: "guided" (the one row,
-	// then the reboot, then part 2), "manual" (every step by hand), or ""
-	// (not chosen yet: the start screen asks). Changeable there any time.
-	Control string // TPM2_KIRA_CONTROL
 	// Remote is the boot image's network and SSH server (remote_config.go):
 	// unlike the rest, the image build turns it into files of the image.
 	Remote RemoteConfig
@@ -75,6 +75,7 @@ func DefaultControlConfig() ControlConfig {
 // LoadControlConfig reads the file; a missing file is the defaults.
 func LoadControlConfig(path string) (ControlConfig, error) {
 	cfg := DefaultControlConfig()
+	cfg.Remote.SSH.AuthorizedKeys, cfg.Remote.SSH.CA = sshAuthorizedKeysPath(path), sshCAPath(path)
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return cfg, nil
@@ -82,7 +83,21 @@ func LoadControlConfig(path string) (ControlConfig, error) {
 	if err != nil {
 		return cfg, err
 	}
-	return ParseControlConfig(data)
+	cfg, err = ParseControlConfig(data)
+	cfg.Remote.SSH.AuthorizedKeys, cfg.Remote.SSH.CA = sshAuthorizedKeysPath(path), sshCAPath(path)
+	return cfg, err
+}
+
+// sshCAPath is the SSH CA next to the control.conf at path: DefaultSSHCA
+// for the real one.
+func sshCAPath(path string) string {
+	return filepath.Join(filepath.Dir(path), "ssh_ca.json")
+}
+
+// sshAuthorizedKeysPath is the SSH server's keys next to the control.conf
+// at path: DefaultSSHAuthorizedKeys for the real one.
+func sshAuthorizedKeysPath(path string) string {
+	return filepath.Join(filepath.Dir(path), "authorized_keys")
 }
 
 // LoadAttestConfig is the radio part of the file at path.
@@ -140,12 +155,7 @@ func parseControlLine(cfg *ControlConfig, n int, line string) error {
 	case "TPM2_KIRA_UNLOCK":
 		return fmt.Errorf("control.conf line %d: there is no unlock mode to set any more; the boot reads how a key is made from the LUKS header's tokens. Remove the line", n)
 	case "TPM2_KIRA_CONTROL":
-		switch val {
-		case "guided", "manual":
-			cfg.Control = val
-		default:
-			return fmt.Errorf("control.conf line %d: TPM2_KIRA_CONTROL must be guided or manual, not %q", n, val)
-		}
+		return fmt.Errorf("control.conf line %d: there is no guided or manual mode to choose any more; control guides in two steps. Remove the line", n)
 	case "TPM2_KIRA_ATTEST_BLUETOOTH":
 		switch val {
 		case "", "auto", "always":
@@ -157,7 +167,7 @@ func parseControlLine(cfg *ControlConfig, n int, line string) error {
 			return fmt.Errorf("control.conf line %d: TPM2_KIRA_ATTEST_BLUETOOTH must be auto or always, not %q", n, val)
 		}
 	case PINEnvVar:
-		// Read by storedPIN alone, for the signer; never kept here.
+		return fmt.Errorf("control.conf line %d: the YubiKey's PIN has a file of its own, %s: remove the line, then store the PIN again with tpm2-kira control (Signing key and TOTP codes)", n, pinFilePath())
 	case "TPM2_KIRA_ATTEST":
 		return fmt.Errorf("control.conf line %d: there is no attestation mode to set; the phone is served whenever one is enrolled. Remove the line", n)
 	case "TPM2_KIRA_ATTEST_ADAPTER":
@@ -199,66 +209,59 @@ func setControlValue(path, key, value string) error {
 		}
 		lines = append(lines, line)
 	}
+	out := []byte(strings.Join(lines, "\n") + "\n")
+	if bytes.Equal(out, data) {
+		return nil // unchanged: nothing to write
+	}
 	mode := os.FileMode(0o644)
 	if st, err := os.Stat(path); err == nil {
 		mode = st.Mode().Perm()
 	}
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), mode)
+	return os.WriteFile(path, out, mode)
 }
 
-// setAttestBluetooth sets whether the hooks pack Bluetooth into every
-// image, enrolled phone or not.
+// setAttestBluetooth sets whether the boot plan packs Bluetooth into
+// every image, enrolled phone or not.
 func setAttestBluetooth(path, value string) error {
 	return setControlValue(path, "TPM2_KIRA_ATTEST_BLUETOOTH", value)
 }
 
-// setControlGuide keeps the guided/manual choice.
-func setControlGuide(path, value string) error {
-	return setControlValue(path, "TPM2_KIRA_CONTROL", value)
+// pinFilePath is the YubiKey's PIN, next to control.conf: the PIN alone,
+// root's and readable by root alone. It is no setting of the image, so it
+// has a file of its own: control.conf holds what the image is built with,
+// and only that.
+func pinFilePath() string {
+	return filepath.Join(filepath.Dir(controlConfigPath()), "pin")
 }
 
-// setControlPIN stores the YubiKey's PIN in control.conf, which is then
-// readable by root alone. Nothing of the file goes into the boot image.
-func setControlPIN(path, pin string) error {
-	if strings.ContainsAny(pin, "'\n") {
-		return fmt.Errorf("the PIN cannot hold a quote or a newline")
+// storePIN writes the PIN, readable by root alone.
+func storePIN(path, pin string) error {
+	if strings.ContainsAny(pin, "\n") {
+		return fmt.Errorf("the PIN cannot hold a newline")
 	}
-	if err := setControlValue(path, PINEnvVar, "'"+pin+"'"); err != nil {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o600)
-}
-
-// The YubiKey's PIN is read from control.conf by storedPIN alone, from its
-// own line, whatever the other lines say: a settings line this version
-// refuses must not take the PIN with it (the signing key would then ask on
-// a terminal, or fail). Its value goes to the signer, to sign with the
-// key, and nowhere else; everything else asks pinStored, which says only
-// whether it is there. control.conf never goes into the boot image.
-
-// pinLine returns the value of the last TPM2_KIRA_PIN line, read with the
-// parser's line syntax (KEY=VALUE, spaces around both, quotes around the
-// value).
-func pinLine(data []byte) (string, bool) {
-	pin, found := "", false
-	for _, l := range strings.Split(string(data), "\n") {
-		l = strings.TrimSpace(l)
-		if l == "" || strings.HasPrefix(l, "#") {
-			continue
-		}
-		key, val, ok := strings.Cut(l, "=")
-		if !ok || strings.TrimSpace(key) != PINEnvVar {
-			continue
-		}
-		pin, found = strings.Trim(strings.TrimSpace(val), `"'`), true
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
 	}
-	return pin, found && pin != ""
+	if _, err := f.WriteString(pin + "\n"); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
-// storedPIN is the PIN control.conf stores: "" when there is none; loose
-// when the file is not root's, or group or others may read it - such a PIN
-// is refused, it has to be treated as already disclosed. For the signer
-// only (pinFromConfig).
+// The PIN's value goes to the signer, to sign with the key, and nowhere
+// else; everything else asks pinStored, which says only whether it is
+// there.
+
+// storedPIN is the PIN the file at path stores: "" when there is none;
+// loose when the file is not root's, or group or others may read it - such
+// a PIN is refused, it has to be treated as already disclosed. For the
+// signer only (pinFromFile).
 func storedPIN(path string) (pin string, loose bool) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -269,19 +272,19 @@ func storedPIN(path string) (pin string, loose bool) {
 	if err != nil || !st.Mode().IsRegular() {
 		return "", false
 	}
-	data, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	data, err := io.ReadAll(io.LimitReader(f, 1<<10))
 	if err != nil {
 		return "", false
 	}
-	pin, ok := pinLine(data)
-	if !ok {
+	pin = strings.TrimRight(string(data), "\r\n")
+	if pin == "" {
 		return "", false
 	}
 	uid, owned := ownerOf(st)
 	return pin, st.Mode().Perm()&0o077 != 0 || !owned || !trustedOwner(uid)
 }
 
-// pinStored says whether control.conf stores a PIN, and whether it is
+// pinStored says whether the file at path stores a PIN, and whether it is
 // loose (readable by others): the PIN's value stays out of it.
 func pinStored(path string) (stored, loose bool) {
 	pin, loose := storedPIN(path)

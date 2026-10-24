@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          submodules: true
 
       - name: Set up Go
         uses: ./.github/actions/go-latest
@@ -45,6 +47,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
+          submodules: true
           fetch-depth: 0
 
       - name: Set up Go
@@ -124,6 +127,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
+          submodules: true
           fetch-depth: 0
 
       - name: Fix ownership for build user
@@ -149,9 +153,14 @@ jobs:
 
           sed -i "s/^pkgver=.*/pkgver=${PKGVER}/" PKGBUILD
           sed -i "s|^_tag=.*|_tag=${TAG}|" PKGBUILD
+          # GitHub's tag tarball has no submodules; the PKGBUILD fetches
+          # aSSH at the commit the tag records.
+          ASSH=$(git rev-parse "HEAD:assh")
+          sed -i "s|^_assh=.*|_assh=${ASSH}|" PKGBUILD
 
           grep -q "^pkgver=${PKGVER}$" PKGBUILD || { echo "ERROR: pkgver not set"; exit 1; }
           grep -q "^_tag=${TAG}$" PKGBUILD || { echo "ERROR: _tag not set"; exit 1; }
+          grep -q "^_assh=${ASSH}$" PKGBUILD || { echo "ERROR: _assh not set"; exit 1; }
 
           # Replaces the SKIP placeholder with the real tarball hash.
           chown builder:builder .
@@ -277,6 +286,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
+          submodules: true
           fetch-depth: 0
 
       - name: Record the toolchain
@@ -475,6 +485,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
+          submodules: true
           fetch-depth: 0
 
       - name: Download binary artifacts

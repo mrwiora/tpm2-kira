@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mrwiora/tpm2-kira/attest/attesttest"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
@@ -168,5 +169,40 @@ func TestVaultToken(t *testing.T) {
 	}
 	if !strings.Contains(describeKeyslot(KeyslotStatus{Token: &tok}), "nothing typed") {
 		t.Fatal(describeKeyslot(KeyslotStatus{Token: &tok}))
+	}
+}
+
+// control's check of a vault: it answers with the pinned key and knows the
+// device; it answers but refuses; another key; not reachable at all.
+func TestCheckVault(t *testing.T) {
+	known := []byte("0123456789abcdef")
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req vaultproto.ChallengeRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		if bytes.Equal(req.DeviceID, known) {
+			json.NewEncoder(w).Encode(vaultproto.ChallengeResponse{RequestID: "r", Nonce: make([]byte, 32), ExpiresIn: 120})
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(vaultproto.ErrorResponse{Error: "unknown device"})
+	}))
+	defer srv.Close()
+	pin := vaultproto.PinOf(srv.Certificate().RawSubjectPublicKeyInfo)
+
+	if v := checkVault(srv.URL, pin, known, 5*time.Second); !v.Answers || !v.Knows || v.Problem != "" {
+		t.Fatalf("the known device: %+v", v)
+	}
+	if v := checkVault(srv.URL, pin, nil, 5*time.Second); !v.Answers || v.Knows || !strings.Contains(v.Problem, "unknown device") {
+		t.Fatalf("before the enrolment, any answer: %+v", v)
+	}
+	if v := checkVault(srv.URL, "sha256:"+strings.Repeat("00", 32), nil, 5*time.Second); v.Answers || !strings.Contains(v.Problem, "another key") {
+		t.Fatalf("another key: %+v", v)
+	}
+	if v := checkVault("https://vault", "sha256:12", nil, 5*time.Second); v.Answers || !strings.Contains(v.Problem, "pin") {
+		t.Fatalf("a bad pin: %+v", v)
+	}
+	srv.Close()
+	if v := checkVault(srv.URL, pin, known, 5*time.Second); v.Answers || !strings.Contains(v.Problem, "not reachable") {
+		t.Fatalf("not reached: %+v", v)
 	}
 }

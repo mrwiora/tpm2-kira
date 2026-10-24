@@ -10,8 +10,8 @@ import (
 )
 
 // control's facts on a software TPM: what it reads from the TPM and the
-// slots, the EK verdict a phone would reach, the risks, and the unlock
-// step writing control.conf (here a file of the test's, through
+// slots, the EK verdict a phone would reach, the risks, the options of
+// step 2, and control.conf written (here a file of the test's, through
 // TPM2_KIRA_CONTROL_CONF). The host's own files (keys, Secure Boot, the
 // initramfs) are facts too, but of the machine the suite runs on, so
 // they are not asserted.
@@ -36,6 +36,14 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	if len(f.Status.Slots) != 1 || f.Status.Slots[0].PCRs != "23" || f.Status.Slots[0].Fallback {
 		t.Fatalf("slots: %+v", f.Status.Slots)
 	}
+	// The boot plan read from the TPM: the sealed slot puts the codes in,
+	// and the TPM with them; no phone, no gate.
+	if !f.planHas(PartCodes) || !f.Plan.TPM || f.planHas(PartPhone) || f.Plan.Part(PartPhone).Why != "no phone is enrolled" {
+		t.Errorf("the plan: %+v", f.Plan.Parts)
+	}
+	if p := ReadBootPlan(PlanOptions{TPMPath: filepath.Join(t.TempDir(), "none"), ConfigPath: conf}); p.Has(PartCodes) || p.TPM {
+		t.Errorf("the plan without a TPM: %+v", p.Parts)
+	}
 	if f.Status.Config != conf || f.PINStored || f.PINLoose || f.AttestConf != "" {
 		t.Errorf("a missing control.conf: config %q, pin %v/%v, attest %q", f.Status.Config, f.PINStored, f.PINLoose, f.AttestConf)
 	}
@@ -48,24 +56,26 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 		}
 	}
 
-	// The steps, with the host's part of the facts (a key, the boot
+	// The options, with the host's part of the facts (a key, the boot
 	// integration, a radio) stubbed: slot 0 exists, the fallback does
-	// not, so the seal step offers exactly that; the unlock step waits
-	// for a keyslot.
+	// not, so the seal step offers exactly that; the phone can be enrolled.
 	f.Keys, f.Adapter = "local key files", "hci0"
 	f.Initramfs, f.HookState, f.Rebuild, f.NewImage = "mkinitcpio", "", "", ""
 	f.Capped = true
 	var out strings.Builder
 	c := &controller{facts: f, out: &out}
-	steps := c.steps()
-	if steps[2].Key != "route" || !strings.Contains(steps[2].Blocked, "no LUKS device") {
-		t.Errorf("the route step: %+v", steps[2])
+	if route := c.routeStep(); !strings.Contains(route.Blocked, "no LUKS device") {
+		t.Errorf("the route step: %+v", route)
 	}
-	if steps[3].Key != "seal" || !strings.Contains(steps[3].Explain, "the fallback, is missing") {
-		t.Errorf("the seal step: %+v", steps[3])
+	keys := c.menuSteps("keys")
+	if keys[1].Key != "seal" || !strings.Contains(keys[1].Explain, "the fallback, is missing") {
+		t.Errorf("the seal step: %+v", keys[1])
 	}
-	if steps[4].Key != "slot:0" || steps[5].Key != "attest" || steps[5].Blocked != "" {
-		t.Errorf("the tree: %+v %+v", steps[4], steps[5])
+	if keys[2].Key != "slot:0" {
+		t.Errorf("the slot line: %+v", keys[2])
+	}
+	if attest := c.menuSteps("phone")[0]; attest.Key != "attest" || attest.Blocked != "" {
+		t.Errorf("the attest step: %+v", attest)
 	}
 
 	// The Bluetooth policy writes the file, the one thing control writes.
@@ -82,24 +92,24 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 
 	// The PIN stored next to it, as the Signing key step does it; the
 	// facts know, and the file is root's alone.
-	if err := setControlPIN(conf, "123456"); err != nil {
+	if err := storePIN(pinFilePath(), "123456"); err != nil {
 		t.Fatal(err)
 	}
 	f = collectFacts(sock, false)
 	if !f.PINStored || f.PINLoose {
 		t.Errorf("the PIN stored: %v loose %v", f.PINStored, f.PINLoose)
 	}
-	if st, _ := os.Stat(conf); st.Mode().Perm() != 0o600 {
-		t.Errorf("control.conf with the PIN is %v", st.Mode().Perm())
+	if st, _ := os.Stat(pinFilePath()); st.Mode().Perm() != 0o600 {
+		t.Errorf("the PIN file is %v", st.Mode().Perm())
 	}
 	if cfg, _ := LoadControlConfig(conf); cfg.Attest.Bluetooth != "always" {
 		t.Errorf("the policy kept next to the PIN: %+v", cfg)
 	}
-	if pin, loose := storedPIN(conf); pin != "123456" || loose {
+	if pin, loose := storedPIN(pinFilePath()); pin != "123456" || loose {
 		t.Errorf("the PIN read back: %q loose %v", pin, loose)
 	}
 	// A line this version refuses: the settings are invalid (red Config
-	// line), the PIN is still stored - storing it again cannot loop.
+	// line), the PIN in its own file is untouched by it.
 	data, _ := os.ReadFile(conf)
 	os.WriteFile(conf, append([]byte("TPM2_KIRA_ATTEST_TIMEOUT=0\n"), data...), 0o600)
 	f = collectFacts(sock, false)
@@ -108,12 +118,12 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	}
 	os.WriteFile(conf, data, 0o600)
 	// Readable by others: the PIN counts as disclosed, and that is a risk.
-	os.Chmod(conf, 0o644)
+	os.Chmod(pinFilePath(), 0o644)
 	f = collectFacts(sock, false)
 	if f.PINStored || !f.PINLoose {
 		t.Errorf("a loose file: stored %v loose %v", f.PINStored, f.PINLoose)
 	}
-	if judged := (&controller{facts: f}).factsText(); !strings.Contains(judged, conf+" holds the PIN, but other users can read it") {
+	if judged := (&controller{facts: f}).factsText(); !strings.Contains(judged, pinFilePath()+" holds the PIN, but other users can read it") {
 		t.Errorf("the loose file is not marked on the status:\n%s", judged)
 	}
 
@@ -129,7 +139,7 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	f.Initramfs, f.HookState, f.Rebuild, f.NewImage = "mkinitcpio", "", "", ""
 	f.Capped = true
 	c = &controller{facts: f, out: &out}
-	if s := c.steps()[5]; s.Key != "attest" || !strings.HasPrefix(s.Blocked, conf+": ") {
+	if s := c.menuSteps("phone")[0]; s.Key != "attest" || !strings.HasPrefix(s.Blocked, conf+": ") {
 		t.Errorf("the attest step with a broken file: %+v", s)
 	}
 }

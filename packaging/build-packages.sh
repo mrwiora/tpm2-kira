@@ -21,7 +21,8 @@
 #   JAVA_HOME    a JDK (for apk: gomobile runs javac, Gradle runs on it)
 #
 # Uncommitted changes are not built: the packages come from 'git archive
-# HEAD', so they always match a commit.
+# HEAD' and, for each submodule (assh), the commit HEAD records, so they
+# always match a commit.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -42,6 +43,22 @@ want() { [[ " ${targets[*]} " == *" $1 "* ]]; }
 
 die() { echo "error: $*" >&2; exit 1; }
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+
+# source_archive OUT.tar.gz: HEAD under tpm2-kira-$short/, with the commit
+# of each submodule that HEAD records ('git archive' leaves submodules out).
+source_archive() {
+    local tar="${1%.gz}" mode sha path
+    git archive --format=tar --prefix="tpm2-kira-$short/" -o "$tar" HEAD
+    while read -r mode _ sha path; do
+        [[ $mode == 160000 ]] || continue
+        git -C "$path" cat-file -e "$sha^{commit}" 2>/dev/null ||
+            die "submodule $path lacks commit $sha: run 'git submodule update --init'"
+        git -C "$path" archive --format=tar --prefix="tpm2-kira-$short/$path/" "$sha" >"$tar.sub"
+        tar --concatenate -f "$tar" "$tar.sub"
+        rm "$tar.sub"
+    done < <(git ls-tree -r HEAD)
+    gzip -nf "$tar"
+}
 
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
     echo "note: uncommitted changes are not in the packages (built from HEAD)"
@@ -71,11 +88,11 @@ if want arch; then
     aur="$root/build/aur"
     mkdir -p "$aur"
     rm -rf "$aur"/tpm2-kira-* "$aur/PKGBUILD" "$aur/src" "$aur/pkg"
-    git archive --format=tar.gz --prefix="tpm2-kira-$short/" -o "$aur/tpm2-kira-$short.tar.gz" HEAD
+    source_archive "$aur/tpm2-kira-$short.tar.gz"
     digest="$(sha256sum "$aur/tpm2-kira-$short.tar.gz" | cut -d' ' -f1)"
-    # The PKGBUILD in packaging/aur fetches the release tag; this one takes
-    # the archive of HEAD instead.
-    sed -e '/^_tag=/d' \
+    # The PKGBUILD in packaging/aur fetches the release tag and aSSH's
+    # commit; this one takes the archive of HEAD, submodules included.
+    sed -e '/^_tag=/d' -e '/^source+=/d' \
         -e "s/^pkgver=.*/pkgver=$version/" \
         -e "s/^source=.*/source=(\"tpm2-kira-$short.tar.gz\")/" \
         -e "s/^sha256sums=.*/sha256sums=('$digest')/" \
@@ -97,7 +114,7 @@ if want deb; then
     deb="$root/build/deb"
     mkdir -p "$deb"
     rm -f "$deb"/*.deb "$deb"/*.changes "$deb"/*.buildinfo "$deb"/tpm2-kira-*.tar.gz
-    git archive --format=tar.gz --prefix="tpm2-kira-$short/" -o "$deb/tpm2-kira-$short.tar.gz" HEAD
+    source_archive "$deb/tpm2-kira-$short.tar.gz"
     # The Go build cache stays in build/deb/.gocache across runs.
     docker run --rm -v "$deb:/out" -e SHORT="$short" -e DEBVER="$debver" -e OWNER="$(id -u):$(id -g)" \
         "$image" bash -ec '

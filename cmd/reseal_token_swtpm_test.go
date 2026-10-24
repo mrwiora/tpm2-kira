@@ -26,7 +26,8 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 	os.Unsetenv(PINEnvVar)
 	conf := filepath.Join(t.TempDir(), "control.conf")
 	t.Setenv("TPM2_KIRA_CONTROL_CONF", conf)
-	os.WriteFile(conf, []byte("TPM2_KIRA_PIN='123456'\n"), 0o600)
+	pinFile := pinFilePath()
+	os.WriteFile(pinFile, []byte("123456\n"), 0o600)
 
 	privPath := writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication))
 	pubPEM, err := PublicKeyToPEM(&key.PublicKey)
@@ -57,7 +58,7 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 	}
 
 	// Without it, and without a terminal: skipped, and the slot as it was.
-	os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST_ADAPTER=0\n"), 0o600)
+	os.Remove(pinFile)
 	err = Reseal(sock, "", idx, pubPath, privPath, false)
 	var skipped *ResealSkippedError
 	if !errors.Is(err, ErrResealSkipped) || !errors.As(err, &skipped) || skipped.NVIndex != idx {
@@ -72,10 +73,10 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 
 	// A PIN the token refuses: skipped too, naming the file the PIN came
 	// from, and no second attempt is spent on it.
-	os.WriteFile(conf, []byte("TPM2_KIRA_PIN='000000'\n"), 0o600)
+	os.WriteFile(pinFile, []byte("000000\n"), 0o600)
 	CloseTokenSessions()
 	err = Reseal(sock, "", idx, pubPath, privPath, false)
-	if !errors.Is(err, ErrResealSkipped) || !strings.Contains(err.Error(), "wrong PIN (2 attempt(s) remaining) (PIN from "+conf+")") {
+	if !errors.Is(err, ErrResealSkipped) || !strings.Contains(err.Error(), "wrong PIN (2 attempt(s) remaining) (PIN from "+pinFile+")") {
 		t.Fatalf("reseal with a wrong PIN: %v", err)
 	}
 	if card.Retries != 2 {

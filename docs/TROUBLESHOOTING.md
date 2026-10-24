@@ -57,12 +57,12 @@ If reseal also fails, check `tpm2-kira info` to see which PCRs changed and verif
 The image has the Bluetooth driver but not the adapter's firmware. The image
 build learns the firmware's name from the kernel log of a boot that loaded
 it, and not every boot does: an Intel controller keeps its firmware over a
-warm reboot and then names none. The hooks read every boot the journal
+warm reboot and then names none. The boot plan reads every boot the journal
 keeps and remember what they found per adapter
 (`/var/lib/tpm2-kira/bt-firmware/`); `control`'s overview shows the
 firmware on its Bluetooth line, red when none is known.
 ```bash
-sudo tpm2-kira attest initramfs-deps --adapter 0      # what the next image gets
+sudo tpm2-kira initramfs plan                         # what the next image gets, and why not
 journalctl -k -o cat | grep -E 'Bluetooth: hci[0-9]+:' # what the kernel logged
 lsinitcpio /boot/EFI/Linux/arch-linux.efi | grep -iE 'firmware|bluetooth|bt'
 ```

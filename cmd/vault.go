@@ -145,6 +145,42 @@ func (c *vaultClient) post(ctx context.Context, path string, in, out any) error 
 	return nil
 }
 
+// vaultCheck is control's look at a vault: whether it answers with the
+// pinned key, and whether it knows this machine.
+type vaultCheck struct {
+	Answers bool   // reached, the pinned key, and it answered
+	Knows   bool   // it handed out a challenge for the device
+	Problem string // why not; "" when it answers and knows the device
+}
+
+// checkVault asks the vault for a challenge for device - nil before the
+// enrolment: an ID of zeros, which no vault hands out, so any answer of
+// the vault's own is the one wanted. From the running system: the image's
+// network may reach it by another route, or not at all.
+func checkVault(rawURL, pin string, device []byte, timeout time.Duration) vaultCheck {
+	c, err := newVaultClient(rawURL, pin)
+	if err != nil {
+		return vaultCheck{Problem: err.Error()}
+	}
+	if device == nil {
+		device = make([]byte, vaultproto.DeviceIDSize)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var ch vaultproto.ChallengeResponse
+	err = c.post(ctx, vaultproto.PathChallenge, vaultproto.ChallengeRequest{DeviceID: device}, &ch)
+	var ue *url.Error
+	switch {
+	case err == nil:
+		return vaultCheck{Answers: true, Knows: true}
+	case strings.Contains(err.Error(), "not the pinned one"):
+		return vaultCheck{Problem: "it answers with another key than the pinned one"}
+	case errors.As(err, &ue):
+		return vaultCheck{Problem: "not reachable (" + ue.Err.Error() + ")"}
+	}
+	return vaultCheck{Answers: true, Problem: err.Error()}
+}
+
 // ── one slot's vault ──────────────────────────────────────────────────────
 
 // vaultSlot is a slot whose blob carries the vault method.

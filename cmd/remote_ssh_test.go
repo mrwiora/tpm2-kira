@@ -52,7 +52,7 @@ func (l *testLog) wait(t *testing.T, want string) {
 
 // testRemote starts the SSH server on a free port, its unprivileged half
 // being this test binary (TestMain), with one key that may log in. There
-// is no sealed key: a throwaway one is served.
+// is no SSH CA: a throwaway key is served.
 func testRemote(t *testing.T) (*remoteServer, ssh.Signer, *testLog) {
 	t.Helper()
 	dir := t.TempDir()
@@ -61,14 +61,14 @@ func testRemote(t *testing.T) (*remoteServer, ssh.Signer, *testLog) {
 	auth := filepath.Join(dir, "authorized_keys")
 	os.WriteFile(auth, ssh.MarshalAuthorizedKey(client.PublicKey()), 0o600)
 	old := serveCommand
-	serveCommand = func(string) *exec.Cmd {
+	serveCommand = func() *exec.Cmd {
 		c := exec.Command(os.Args[0])
 		c.Env = []string{"TPM2_KIRA_TEST_SERVE=1"}
 		return c
 	}
 	t.Cleanup(func() { serveCommand = old })
 	log := &testLog{}
-	srv, err := startRemote(RemoteOptions{Port: 0, HostKey: filepath.Join(dir, "none.sealed"), AuthorizedKeys: auth}, io.Discard, log.add)
+	srv, err := startRemote(RemoteOptions{Port: 0, CA: filepath.Join(dir, "none.json"), AuthorizedKeys: auth}, io.Discard, log.add)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func login(t *testing.T, srv *remoteServer, key ssh.Signer) (io.Writer, *bufio.R
 	c, err := ssh.Dial("tcp", "127.0.0.1:"+strconv.Itoa(srv.opts.Port), &ssh.ClientConfig{
 		User:            "root",
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(key)},
-		HostKeyCallback: ssh.FixedHostKey(mustPublicKey(t, srv.hostKey.key)),
+		HostKeyCallback: ssh.FixedHostKey(srv.hostKey.signer.PublicKey()),
 		Timeout:         10 * time.Second,
 	})
 	if err != nil {
@@ -104,14 +104,6 @@ func login(t *testing.T, srv *remoteServer, key ssh.Signer) (io.Writer, *bufio.R
 		t.Fatal(err)
 	}
 	return in, bufio.NewReader(out), sess
-}
-
-func mustPublicKey(t *testing.T, k ed25519.PrivateKey) ssh.PublicKey {
-	p, err := ssh.NewPublicKey(k.Public())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return p
 }
 
 // until reads the session's output up to and including want.
@@ -270,7 +262,7 @@ func TestRemoteConsoleReleaseStops(t *testing.T) {
 		t.Fatalf("the session was not closed: %v", err)
 	}
 	select {
-	case <-srv.child.exited:
+	case <-srv.child.Exited():
 	default:
 		t.Fatal("remote serve still runs")
 	}
@@ -307,19 +299,19 @@ func TestRemoteReleaseElsewhere(t *testing.T) {
 	<-srv2.done
 }
 
-// A host key that does not unseal (here: none in the image) is replaced by
-// a throwaway key, and the console says so with the fingerprint to compare.
+// Without a CA that certifies a key (here: none in the image) a throwaway
+// key is served, and the console says so with the fingerprint to compare.
 func TestRemoteThrowawayHostKey(t *testing.T) {
 	srv, _, _ := testRemote(t)
 	hk := srv.hostKey
-	if hk.Throwaway == "" || len(hk.key) != ed25519.PrivateKeySize || hk.Fingerprint != hostKeyFingerprint(hk.key.Public().(ed25519.PublicKey)) {
+	if hk.Throwaway == "" || hk.CA != "" || hk.Fingerprint != ssh.FingerprintSHA256(hk.signer.PublicKey()) {
 		t.Fatalf("%+v", hk)
 	}
 	h := consoleHint(22, []string{"192.0.2.10 (enp1s0)"}, hk, 0, -1)
-	if !strings.Contains(h, hk.Fingerprint+": a throwaway key") || !strings.Contains(h, "the image holds no sealed host key") {
+	if !strings.Contains(h, hk.Fingerprint+": a throwaway key") || !strings.Contains(h, "the image holds no SSH CA") {
 		t.Fatalf("hint:\n%s", h)
 	}
-	if h := consoleHint(22, nil, hostKeyAtBoot{Fingerprint: "SHA256:abc"}, 0, -1); !strings.Contains(h, "Host key SHA256:abc (unsealed from the TPM)") {
+	if h := consoleHint(22, nil, hostKeyAtBoot{Fingerprint: "SHA256:key", CA: "SHA256:abc"}, 0, -1); !strings.Contains(h, "Host key certified by the SSH CA SHA256:abc") {
 		t.Fatalf("hint:\n%s", h)
 	}
 }
