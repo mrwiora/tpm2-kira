@@ -286,13 +286,32 @@ def latest_go():
     return go
 
 
+def source_archive(rev, prefix, out):
+    """The tarball of rev under prefix, with the commit of each submodule
+    that rev records (assh): 'git archive' leaves submodules out."""
+    tar = out.removesuffix(".gz")
+    subprocess.check_call(["git", "-C", REPO, "archive", "--format=tar", f"--prefix={prefix}", "-o", tar, rev])
+    for line in git("ls-tree", "-r", rev).splitlines():
+        meta, path = line.split("\t", 1)
+        mode, _, sha = meta.split()
+        if mode != "160000":
+            continue
+        sub = os.path.join(REPO, path)
+        if subprocess.run(["git", "-C", sub, "cat-file", "-e", sha + "^{commit}"]).returncode != 0:
+            sys.exit(f"submodule {path} lacks commit {sha}: run 'git submodule update --init'")
+        part = tar + ".sub"
+        subprocess.check_call(["git", "-C", sub, "archive", "--format=tar", f"--prefix={prefix}{path}/", "-o", part, sha])
+        subprocess.check_call(["tar", "--concatenate", "-f", tar, part])
+        os.remove(part)
+    subprocess.check_call(["gzip", "-nf", tar])
+
+
 def build_and_install(t, distro, rev, log, rep):
     short = git("rev-parse", "--short", rev)
     full = git("rev-parse", rev)
     tarball = f"tpm2-kira-{short}.tar.gz"
     local = os.path.join(log.dir, tarball)
-    subprocess.check_call(["git", "-C", REPO, "archive", "--format=tar.gz", f"--prefix=tpm2-kira-{short}/",
-                           "-o", local, rev])
+    source_archive(rev, f"tpm2-kira-{short}/", local)
     digest = hashlib.sha256(open(local, "rb").read()).hexdigest()
     # The user's home by its path: '~' would be root's in the root commands.
     work = t.run("echo $HOME")[1].strip() + "/tpm2-kira-acceptance"
@@ -309,6 +328,8 @@ def build_and_install(t, distro, rev, log, rep):
             return None
         pkgbuild = open(os.path.join(REPO, "packaging", "aur", "PKGBUILD")).read()
         pkgbuild = re.sub(r"^_tag=.*\n", "", pkgbuild, flags=re.M)
+        # The tarball carries the submodules; no second source.
+        pkgbuild = re.sub(r"^source\+=.*\n", "", pkgbuild, flags=re.M)
         pkgbuild = re.sub(r"^pkgver=.*$", f"pkgver={version}", pkgbuild, flags=re.M)
         pkgbuild = re.sub(r"^source=.*$", f'source=("{tarball}")', pkgbuild, flags=re.M)
         pkgbuild = re.sub(r"^sha256sums=.*$", f"sha256sums=('{digest}')", pkgbuild, flags=re.M)

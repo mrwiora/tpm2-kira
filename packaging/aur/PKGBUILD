@@ -54,7 +54,10 @@ build() {
     # rules out -buildmode=pie: even without cgo a PIE binary still needs
     # glibc's program interpreter, /lib64/ld-linux-x86-64.so.2, to start.
     export CGO_ENABLED=0
-    export GOFLAGS="-trimpath -mod=readonly -modcacherw"
+    # The sources are a tarball; a git repository around the build
+    # directory (build/aur in a checkout) is not theirs, and Go would stamp
+    # its HEAD into the binary. The version is main.Version.
+    export GOFLAGS="-trimpath -mod=readonly -modcacherw -buildvcs=false"
 
     go build -ldflags "-s -w -X main.Version=${pkgver}" -o "$pkgname" .
     go version -m "$pkgname" | grep -q 'CGO_ENABLED=0' || { echo "$pkgname was built with cgo" >&2; return 1; }
