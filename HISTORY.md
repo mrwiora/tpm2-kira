@@ -37,6 +37,16 @@ by 'remote serve' (x/crypto/ssh, as nobody, in namespaces, under
 Landlock, signing delegated to run) and run as the session's password
 agent.
 
+### The SSH CA's file was aSSH's format 1
+
+The storage key the SSH CA is made under, and the CA itself, were
+subject to the TPM's dictionary attack protection: during a lockout -
+wrong PINs of any other object in the TPM - neither loaded, and the
+image's SSH server had no certified host key. aSSH's format 2
+(2026-10-24, with its authority opened by a PIN) makes both noDA. A CA
+file of format 1 is not read: control creates the CA again, and clients
+need its new `@cert-authority` line.
+
 ### The image's SSH host key was stored in clear
 
 The first version (2026-10-10) copied a tinysshd key directory of the

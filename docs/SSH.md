@@ -188,7 +188,9 @@ and no secret either: the keys are in the TPM.
   needs no password; its policy is `PolicyAuthorize` over a `PolicyPCR`
   of **PCR 0** (firmware) and **PCR 7** (Secure Boot state and keys): it
   signs only while these hold values the **signing key** approved
-  (`ssh_ca.json` carries the approvals).
+  (`ssh_ca.json` carries the approvals). The CA and the storage key it
+  is made under are noDA: a dictionary attack lockout of the TPM (wrong
+  PINs of another TPM object) does not stop it.
 - **The approved values** are those of tpm2-kira's measure point: the code
   screen holds the boot ahead of `systemd-pcrosseparator`, which extends
   PCR 0-7 in the running system. They are replayed from the firmware
@@ -391,6 +393,12 @@ aSSH's own tests log in with OpenSSH's client (10.6) through a
   until the clients drop the CA line.
 - **The approvals are the signing key's.** Whoever holds it can approve
   another state; keep it on the YubiKey.
+- **An approval is never revoked.** control keeps only the approval of
+  the next boot in `ssh_ca.json`, but a copy of the file from before a
+  firmware or Secure Boot update still lets the CA sign in the old state,
+  should the machine boot it again (a downgrade). aSSH's authority in the
+  TPM has a counter that revokes old approvals; the signing key, a key
+  elsewhere, has none.
 - **The throwaway key cannot be checked from afar.** Its fingerprint is
   on the console only; whoever logs in remotely after a firmware update
   has to accept an unknown key for that boot.
