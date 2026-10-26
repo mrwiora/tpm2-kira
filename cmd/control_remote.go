@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"charm.land/huh/v2"
+	"github.com/tpm2-trust/assh/config"
 	"github.com/tpm2-trust/assh/hostkey"
 )
 
@@ -61,9 +62,9 @@ func (c *controller) sshStep() controlStep {
 	case f.Remote.Problem() != "":
 		st.Dirty = f.Remote.Problem()
 	case f.SSHKeys < 0:
-		st.Dirty = f.Remote.SSH.AuthorizedKeys + " cannot be read: nobody can log in"
+		st.Dirty = f.Remote.SSH.Assh.AuthorizedKeys + " cannot be read: nobody can log in"
 	case f.SSHKeys == 0:
-		st.Dirty = f.Remote.SSH.AuthorizedKeys + " holds no key without options: nobody can log in"
+		st.Dirty = f.Remote.SSH.Assh.AuthorizedKeys + " holds no key without options: nobody can log in"
 	case f.TPMErr != "":
 		st.Dirty = "no TPM: the host keys are made and certified in it, and the image is built without SSH"
 	case f.SSHCA.CA == nil:
@@ -71,8 +72,10 @@ func (c *controller) sshStep() controlStep {
 	default:
 		lines := RemoteStatusLines(f.Remote)
 		st.Done = strings.TrimPrefix(lines[len(lines)-1], "SSH at boot: ") + fmt.Sprintf("; %d key(s) may log in; SSH CA %s", f.SSHKeys, f.SSHCA.CA.Fingerprint())
-		if f.SSHCA.Approval == nil {
+		if !f.SSHCA.Approved() {
 			st.Done += "; " + sshCAUnapproved
+		} else if n := f.SSHCA.Unapproved(); len(n) > 0 {
+			st.Done += fmt.Sprintf("; the SSH CA's slot %s has no approval of the next boot: approved when you quit control", strings.Trim(fmt.Sprint(n), "[]"))
 		}
 	}
 	return st
@@ -175,13 +178,13 @@ func (c *controller) runSSH() error {
 	r := c.facts.Remote
 	on := r.SSH.On // off until somebody says yes
 	if err := c.form(huh.NewConfirm().Title("Start the SSH server with the code screen?").
-		Description("tpm2-kira's own, unprivileged SSH server at boot: log in as root with a key of " + r.SSH.AuthorizedKeys + ", confirm the code, type the password there.").
+		Description("tpm2-kira's own, unprivileged SSH server at boot: log in as root with a key of " + r.SSH.Assh.AuthorizedKeys + ", confirm the code, type the password there.").
 		Affirmative("Yes").Negative("No: the network alone").Value(&on)).Run(); err != nil {
 		return err
 	}
 	r.SSH.On = on
 	if on {
-		port, hold := strconv.Itoa(r.SSH.Port), strconv.Itoa(r.SSH.Hold)
+		port, hold := strconv.Itoa(r.SSH.Port()), strconv.Itoa(r.SSH.Hold)
 		if err := c.form(
 			huh.NewInput().Title("SSH port").Value(&port).Validate(func(s string) error {
 				if p, err := strconv.Atoi(s); err != nil || p < 1 || p > 65535 {
@@ -200,9 +203,9 @@ func (c *controller) runSSH() error {
 		).Run(); err != nil {
 			return err
 		}
-		r.SSH.Port, _ = strconv.Atoi(port)
+		r.SSH.Assh.Listen = ":" + port
 		r.SSH.Hold, _ = strconv.Atoi(hold)
-		if err := c.ensureSSHKeys(r.SSH); err != nil {
+		if err := c.ensureSSHKeys(&r.SSH); err != nil {
 			return err
 		}
 	}
@@ -210,33 +213,56 @@ func (c *controller) runSSH() error {
 }
 
 // ensureSSHKeys checks what the image's SSH server needs on this system:
-// the SSH CA in the TPM, created when asked, and a key that may log in.
-func (c *controller) ensureSSHKeys(s SSHConfig) error {
-	if err := c.ensureSSHCA(s.CA); err != nil {
+// the SSH CA in the TPM, created when asked (its slots go into s's
+// assh.conf), and a key that may log in.
+func (c *controller) ensureSSHKeys(s *SSHConfig) error {
+	if err := c.ensureSSHCA(&s.Assh); err != nil {
 		return err
 	}
-	if authorizedKeyCount(s.AuthorizedKeys) <= 0 {
-		if err := c.offerRootKeys(s.AuthorizedKeys); err != nil {
+	if authorizedKeyCount(s.Assh.AuthorizedKeys) <= 0 {
+		if err := c.offerRootKeys(s.Assh.AuthorizedKeys); err != nil {
 			return err
 		}
 	}
-	switch n := authorizedKeyCount(s.AuthorizedKeys); {
+	switch n := authorizedKeyCount(s.Assh.AuthorizedKeys); {
 	case n < 0:
-		fmt.Fprintln(c.out, warn(s.AuthorizedKeys+" cannot be read: nobody could log in. Put a key there before the rebuild."))
+		fmt.Fprintln(c.out, warn(s.Assh.AuthorizedKeys+" cannot be read: nobody could log in. Put a key there before the rebuild."))
 	case n == 0:
-		fmt.Fprintln(c.out, warn(s.AuthorizedKeys+" holds no key without options: nobody could log in."))
+		fmt.Fprintln(c.out, warn(s.Assh.AuthorizedKeys+" holds no key without options: nobody could log in."))
 	default:
-		fmt.Fprintf(c.out, "%s: %d key(s) may log in at boot.\n", s.AuthorizedKeys, n)
+		fmt.Fprintf(c.out, "%s: %d key(s) may log in at boot.\n", s.Assh.AuthorizedKeys, n)
 	}
 	return nil
 }
 
-// ensureSSHCA creates the SSH CA in the TPM when there is none, approved
-// for the next boot with the signing key, and says how clients trust it.
-func (c *controller) ensureSSHCA(path string) error {
-	if st := readSSHCA(path, c.o.TPMPath); st.CA != nil {
-		fmt.Fprintf(c.out, "SSH CA %s: %s", path, st.CA.Describe())
-		return c.sayKnownHosts(st.CA)
+// ensureSSHCA creates the SSH CA in the TPM when there is none, or when the
+// one there was made for another signing key and the person says so - with
+// the slots of conf, or when it has none those worked out for this
+// machine, which go into conf - approved for the next boot with the
+// signing key, and says how clients trust it. A CA that stays gives conf
+// its slots when conf has none, so that assh.conf shows them.
+func (c *controller) ensureSSHCA(conf *config.Config) error {
+	path := conf.CA
+	if st := readSSHCA(*conf, c.o.TPMPath); st.CA != nil {
+		pub, err := LoadCheckedSigningPublicKey(DefaultPublicKeyPath)
+		if err != nil || samePublicKey(st.CA.AuthorityKey(), pub) {
+			if len(conf.Slots) == 0 {
+				conf.Slots = map[int][]int{}
+				for _, sl := range st.CA.Slots {
+					conf.Slots[sl.Number] = sl.PCRs
+				}
+			}
+			fmt.Fprintf(c.out, "SSH CA %s: %s", path, st.CA.Describe())
+			return c.sayKnownHosts(st.CA)
+		}
+		fmt.Fprintln(c.out, warn(fmt.Sprintf("The SSH CA %s (%s) was made for another signing key than %s: it cannot be approved for the next boot, which would serve a temporary host key.", path, st.CA.Fingerprint(), DefaultPublicKeyPath)))
+		ok, err := c.confirmYes("Create the SSH CA again, for this signing key?", "A new CA in the TPM in place of the old one: clients need its new known_hosts line.")
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("the SSH CA stays the other signing key's")
+		}
 	}
 	if c.facts.TPMErr != "" {
 		fmt.Fprintln(c.out, warn("No TPM: the SSH CA lives in it, and without one the image is built without SSH."))
@@ -246,9 +272,9 @@ func (c *controller) ensureSSHCA(path string) error {
 		fmt.Fprintln(c.out, warn("No signing key (step 1, Set up): it approves the PCR states the SSH CA signs in."))
 		return nil
 	}
-	typ := hostkey.P256
+	typ := conf.CAType
 	if err := c.form(huh.NewSelect[hostkey.Type]().Title("Create the SSH CA in the TPM").
-		Description("The boot image's host key is made in the TPM at every boot and certified by this CA, which never leaves the TPM and signs only while PCR 0 (firmware) and PCR 7 (Secure Boot) hold the values the signing key approved. Clients trust the CA, once.").
+		Description("The boot image's host key is made in the TPM at every boot and certified by this CA, which never leaves the TPM and signs only while the PCRs hold values the signing key approved: PCR 0 (firmware), 2 (option ROMs), 7 (Secure Boot) and the image's, or PCR 7 alone. It is kept in the EFI variable KIRAasshCA; reseal approves each rebuilt image. Clients trust the CA, once.").
 		Options(huh.NewOption("ECDSA P-256 (recommended)", hostkey.P256), huh.NewOption("RSA-2048", hostkey.RSA2048)).
 		Value(&typ)).Run(); err != nil {
 		return err
@@ -257,11 +283,16 @@ func (c *controller) ensureSSHCA(path string) error {
 	if err != nil {
 		return err
 	}
-	ca, err := createSSHCA(path, c.o.TPMPath, typ, signer)
+	conf.CAType = typ
+	ca, err := createSSHCA(conf, c.o.TPMPath, signer)
 	if err != nil {
 		return err
 	}
+	if err := writeSSHConf(controlConfigPath(), *conf); err != nil {
+		return err
+	}
 	fmt.Fprintf(c.out, "Created %s: %s", path, ca.Describe())
+	fmt.Fprintf(c.out, "Its slots are written in %s: an edit there takes effect at the next reseal.\n", sshConfPath(controlConfigPath()))
 	return c.sayKnownHosts(ca)
 }
 
@@ -275,11 +306,11 @@ func (c *controller) sayKnownHosts(ca *hostkey.CA) error {
 	return nil
 }
 
-// approveSSHCA has the signing key approve PCR 0 and 7 as the next boot
-// meets them.
+// approveSSHCA has the signing key approve the PCRs as the next boot meets
+// them, in every slot of the SSH CA.
 func (c *controller) approveSSHCA() error {
 	ok, err := c.confirmYes("Approve the SSH CA for the next boot?",
-		"PCR 0 and 7 as the next boot meets them have no approval yet (a new CA, or a firmware or Secure Boot update). The signing key approves them; without it the image is built without SSH.")
+		"The PCRs as the next boot meets them have no approval yet in every slot (a new image, or a firmware, option ROM or Secure Boot update). The signing key approves them; without an approval the next boot serves a temporary host key.")
 	if err != nil {
 		return err
 	}
@@ -290,7 +321,7 @@ func (c *controller) approveSSHCA() error {
 	if err != nil {
 		return err
 	}
-	if _, err := approveSSHCA(c.facts.Remote.SSH.CA, c.o.TPMPath, signer); err != nil {
+	if _, err := approveSSHCA(c.facts.Remote.SSH.Assh, c.o.TPMPath, signer); err != nil {
 		return err
 	}
 	fmt.Fprintln(c.out, "The SSH CA is approved for the next boot.")

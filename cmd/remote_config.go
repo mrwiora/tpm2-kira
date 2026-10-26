@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/tpm2-trust/assh/config"
 )
 
 // The network and the SSH server of the boot image (docs/SSH.md):
@@ -31,17 +33,24 @@ type NetConfig struct {
 	Addresses []string // TPM2_KIRA_NET_ADDRESS: static only, CIDR, IPv4 and/or IPv6
 	Gateways  []string // TPM2_KIRA_NET_GATEWAY: static only
 	DNS       []string // TPM2_KIRA_NET_DNS
+	// DHCPID is TPM2_KIRA_NET_DHCP_ID: the client identifier the image
+	// asks the DHCP server with - "auto" (the running system's, read at
+	// the build), "mac", or one in hex (remote_dhcpid.go).
+	DHCPID string
 }
 
 // SSHConfig is the image's SSH server, started by 'tpm2-kira run' while
 // the code screen holds.
 type SSHConfig struct {
-	On             bool   // TPM2_KIRA_SSH: on or off
-	Port           int    // TPM2_KIRA_SSH_PORT
-	AuthorizedKeys string // whose keys may log in: authorized_keys next to control.conf, no setting
-	CA             string // the SSH CA in the TPM: ssh_ca.json next to control.conf, no setting
-	Hold           int    // TPM2_KIRA_SSH_HOLD: seconds the boot waits for a confirmation; 0 until one comes
+	On   bool // TPM2_KIRA_SSH: on or off
+	Hold int  // TPM2_KIRA_SSH_HOLD: seconds the boot waits for a confirmation; 0 until one comes
+	// Assh is assh.conf beside control.conf (remote_assh.go): the SSH CA
+	// and its slots, the port, the keys that may log in.
+	Assh config.Config
 }
+
+// Port is the port the server listens on.
+func (s SSHConfig) Port() int { return listenPort(s.Assh.Listen) }
 
 // RemoteConfig is both.
 type RemoteConfig struct {
@@ -60,8 +69,8 @@ const (
 // DefaultRemoteConfig is a file without these lines: no network, no SSH.
 func DefaultRemoteConfig() RemoteConfig {
 	return RemoteConfig{
-		Net: NetConfig{Mode: "off"},
-		SSH: SSHConfig{Port: 22, AuthorizedKeys: DefaultSSHAuthorizedKeys, CA: DefaultSSHCA},
+		Net: NetConfig{Mode: "off", DHCPID: "auto"},
+		SSH: SSHConfig{Assh: sshConfDefaults(config.Default(), DefaultControlConfigPath)},
 	}
 }
 
@@ -113,6 +122,18 @@ func parseRemoteLine(cfg *RemoteConfig, n int, key, val string) (handled bool, e
 		} else {
 			cfg.Net.DNS = fields
 		}
+	case "TPM2_KIRA_NET_DHCP_ID":
+		switch val {
+		case "", "auto":
+			cfg.Net.DHCPID = "auto"
+		case "mac":
+			cfg.Net.DHCPID = val
+		default:
+			if _, err := parseClientID(val); err != nil {
+				return true, fmt.Errorf("control.conf line %d: TPM2_KIRA_NET_DHCP_ID must be %v", n, err)
+			}
+			cfg.Net.DHCPID = strings.ToLower(val)
+		}
 	case "TPM2_KIRA_SSH":
 		switch val {
 		case "", "off":
@@ -123,11 +144,7 @@ func parseRemoteLine(cfg *RemoteConfig, n int, key, val string) (handled bool, e
 			return true, fmt.Errorf("control.conf line %d: TPM2_KIRA_SSH must be on or off, not %q", n, val)
 		}
 	case "TPM2_KIRA_SSH_PORT":
-		p, err := strconv.Atoi(val)
-		if err != nil || p < 1 || p > 65535 {
-			return true, fmt.Errorf("control.conf line %d: TPM2_KIRA_SSH_PORT must be a port number, not %q", n, val)
-		}
-		cfg.SSH.Port = p
+		return true, fmt.Errorf("control.conf line %d: the SSH server's port is aSSH's setting, ASSH_LISTEN=:PORT in assh.conf beside control.conf (tpm2-kira control sets it): remove the line", n)
 	case "TPM2_KIRA_SSH_HOLD":
 		h, err := strconv.Atoi(val)
 		if err != nil || h < 0 {
@@ -169,8 +186,8 @@ func (n NetConfig) problem() string {
 }
 
 // NetworkdFile is the systemd-networkd configuration of the image's
-// network (systemd.network(5)), "" when it has none.
-func (n NetConfig) NetworkdFile() string {
+// network (systemd.network(5)), asking DHCP with id; "" when it has none.
+func (n NetConfig) NetworkdFile(id dhcpIdentity) string {
 	if n.Mode != "dhcp" && n.Mode != "static" {
 		return ""
 	}
@@ -203,10 +220,14 @@ func (n NetConfig) NetworkdFile() string {
 		fmt.Fprintf(&b, "DNS=%s\n", d)
 	}
 	if n.Mode == "dhcp" {
-		// The image has no machine-id, so the DUID networkd would identify
-		// itself with differs from the running system's at every build:
-		// the MAC is what a DHCP server can keep a reservation for.
-		b.WriteString("\n[DHCPv4]\nClientIdentifier=mac\n")
+		// The image has no machine-id, from which networkd would make a
+		// DUID of its own: it asks as the running system does.
+		mac := n.Match
+		if m := n.matchedInterfaces(); len(m) == 1 {
+			mac = m[0].MAC
+		}
+		section, _ := networkdDHCP(id.ID, mac)
+		b.WriteString("\n" + section)
 	}
 	return b.String()
 }
@@ -221,8 +242,8 @@ func (r RemoteConfig) Lines() [][2]string {
 		{"TPM2_KIRA_NET_ADDRESS", quoteList(r.Net.Addresses)},
 		{"TPM2_KIRA_NET_GATEWAY", quoteList(r.Net.Gateways)},
 		{"TPM2_KIRA_NET_DNS", quoteList(r.Net.DNS)},
+		{"TPM2_KIRA_NET_DHCP_ID", r.Net.DHCPID},
 		{"TPM2_KIRA_SSH", onOff[r.SSH.On]},
-		{"TPM2_KIRA_SSH_PORT", strconv.Itoa(r.SSH.Port)},
 		{"TPM2_KIRA_SSH_HOLD", strconv.Itoa(r.SSH.Hold)},
 	}
 }
@@ -234,15 +255,19 @@ func quoteList(l []string) string {
 	return `"` + strings.Join(l, " ") + `"`
 }
 
-// setRemoteConfig writes r's lines into control.conf; the rest of the
-// file stays as it is.
+// setRemoteConfig writes r's lines into control.conf, and with the SSH
+// server its aSSH settings into assh.conf beside it; the rest of each file
+// stays as it is.
 func setRemoteConfig(path string, r RemoteConfig) error {
 	for _, kv := range r.Lines() {
 		if err := setControlValue(path, kv[0], kv[1]); err != nil {
 			return err
 		}
 	}
-	return nil
+	if !r.SSH.On {
+		return nil
+	}
+	return writeSSHConf(path, r.SSH.Assh)
 }
 
 // Where the running system's interfaces are; vars for the tests.

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tpm2-trust/assh/config"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -52,7 +53,8 @@ func (l *testLog) wait(t *testing.T, want string) {
 
 // testRemote starts the SSH server on a free port, its unprivileged half
 // being this test binary (TestMain), with one key that may log in. There
-// is no SSH CA: a throwaway key is served.
+// is no TPM: the host key is one in software, served as a temporary key
+// would be.
 func testRemote(t *testing.T) (*remoteServer, ssh.Signer, *testLog) {
 	t.Helper()
 	dir := t.TempDir()
@@ -67,8 +69,20 @@ func testRemote(t *testing.T) (*remoteServer, ssh.Signer, *testLog) {
 		return c
 	}
 	t.Cleanup(func() { serveCommand = old })
+	oldKey := makeHostKey
+	makeHostKey = func(string, config.Config) (hostKeyAtBoot, error) {
+		_, k, _ := ed25519.GenerateKey(rand.Reader)
+		s, err := ssh.NewSignerFromKey(k)
+		if err != nil {
+			return hostKeyAtBoot{}, err
+		}
+		return hostKeyAtBoot{signer: s, Fingerprint: ssh.FingerprintSHA256(s.PublicKey()), Slot: -1, Temporary: "the SSH CA did not certify a key: no SSH CA at none.json"}, nil
+	}
+	t.Cleanup(func() { makeHostKey = oldKey })
 	log := &testLog{}
-	srv, err := startRemote(RemoteOptions{Port: 0, CA: filepath.Join(dir, "none.json"), AuthorizedKeys: auth}, io.Discard, log.add)
+	conf := config.Default()
+	conf.Listen, conf.CA, conf.AuthorizedKeys = "127.0.0.1:0", filepath.Join(dir, "none.json"), auth
+	srv, err := startRemote(RemoteOptions{On: true, Assh: conf}, io.Discard, log.add)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,16 +313,16 @@ func TestRemoteReleaseElsewhere(t *testing.T) {
 	<-srv2.done
 }
 
-// Without a CA that certifies a key (here: none in the image) a throwaway
-// key is served, and the console says so with the fingerprint to compare.
-func TestRemoteThrowawayHostKey(t *testing.T) {
+// Without a CA that certifies a key a temporary key is served, and the
+// console says so with the fingerprint to compare.
+func TestRemoteTemporaryHostKey(t *testing.T) {
 	srv, _, _ := testRemote(t)
 	hk := srv.hostKey
-	if hk.Throwaway == "" || hk.CA != "" || hk.Fingerprint != ssh.FingerprintSHA256(hk.signer.PublicKey()) {
+	if hk.Temporary == "" || hk.CA != "" || hk.Fingerprint != ssh.FingerprintSHA256(hk.signer.PublicKey()) {
 		t.Fatalf("%+v", hk)
 	}
 	h := consoleHint(22, []string{"192.0.2.10 (enp1s0)"}, hk, 0, -1)
-	if !strings.Contains(h, hk.Fingerprint+": a throwaway key") || !strings.Contains(h, "the image holds no SSH CA") {
+	if !strings.Contains(h, hk.Fingerprint+": a temporary key") || !strings.Contains(h, "no SSH CA at none.json") {
 		t.Fatalf("hint:\n%s", h)
 	}
 	if h := consoleHint(22, nil, hostKeyAtBoot{Fingerprint: "SHA256:key", CA: "SHA256:abc"}, 0, -1); !strings.Contains(h, "Host key certified by the SSH CA SHA256:abc") {

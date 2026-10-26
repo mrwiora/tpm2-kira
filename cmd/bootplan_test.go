@@ -7,6 +7,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +29,8 @@ func planConfig(t *testing.T, content string) ControlConfig {
 }
 
 // testSSHCA is an SSH CA as the plan reads it, made without a TPM: a CA
-// key's public part and an authority's approval of values, or none.
+// key's public part, tpm2-kira's slots, and an authority's approval of
+// values in every slot, or none. The plan only needs it to load.
 func testSSHCA(t *testing.T, approved bool) sshCAState {
 	t.Helper()
 	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -46,15 +48,16 @@ func testSSHCA(t *testing.T, approved bool) sshCAState {
 			Y: tpm2.TPM2BECCParameter{Buffer: k.Y.FillBytes(make([]byte, 32))},
 		}),
 	}
-	ca := &hostkey.CA{Version: 2, Type: hostkey.P256, Bank: hostkey.SHA256, PCRs: []int{0, 7},
-		Public: tpm2.Marshal(pub), Authority: authDER, PolicyRef: []byte(sshCARef)}
-	values := map[int][]byte{0: bytes.Repeat([]byte{0xA1}, 32), 7: bytes.Repeat([]byte{0xC3}, 32)}
+	ca := &hostkey.CA{Version: 3, Type: hostkey.P256, Bank: hostkey.SHA256,
+		Slots:  []hostkey.Slot{{Number: 0, PCRs: []int{0, 2, 7, 11, sshCAWindow}}, {Number: 1, PCRs: []int{7, sshCAWindow}}},
+		Window: sshCAWindow, Public: tpm2.Marshal(pub), Authority: authDER, PolicyRef: []byte(sshCARef)}
+	values := map[int][]byte{0: bytes.Repeat([]byte{0xA1}, 32), 2: bytes.Repeat([]byte{0xB2}, 32), 7: bytes.Repeat([]byte{0xC3}, 32), 11: bytes.Repeat([]byte{0xD4}, 32), sshCAWindow: make([]byte, 32)}
 	st := sshCAState{CA: ca, Values: values}
 	if approved {
-		if err := ca.Approve(auth, values); err != nil {
+		if err := approveSSHCASlots(ca, auth, values); err != nil {
 			t.Fatal(err)
 		}
-		st.Approval = ca.Approved(values)
+		st.Approvals = nextApprovals(ca, values)
 	}
 	return st
 }
@@ -141,37 +144,42 @@ func TestDecidePlan(t *testing.T) {
 	if p := decidePlan(in); p.Has(PartSSH) || !strings.Contains(p.Part(PartSSH).Why, "control creates it") {
 		t.Fatalf("SSH without a CA: %+v", p.Part(PartSSH))
 	}
+	// The approvals live in the CA's EFI variable, not in the image: the
+	// image does not wait for them, and a new one is not a new image.
 	in.SSHCA = testSSHCA(t, false)
-	if p := decidePlan(in); p.Has(PartSSH) || p.Part(PartSSH).Why != sshCAUnapproved {
-		t.Fatalf("SSH with a CA not approved for the next boot: %+v", p.Part(PartSSH))
-	}
-	in.SSHCA = testSSHCA(t, true)
 	p = decidePlan(in)
-	if got := partsOn(p); got != "unlock codes vault net ssh" || !strings.Contains(p.Part(PartSSH).Why, "certified by the SSH CA SHA256:") {
-		t.Fatalf("SSH: %q %+v", got, p.Part(PartSSH))
+	if got := partsOn(p); got != "unlock codes vault net ssh" || !strings.Contains(p.Part(PartSSH).Why, "certified by the SSH CA SHA256:") || len(p.Warnings) != 0 {
+		t.Fatalf("SSH: %q %+v %q", got, p.Part(PartSSH), p.Warnings)
+	}
+	approved := in.SSHCA
+	approved.CA = approved.CA.Only(func(hostkey.Approval) bool { return true })
+	approved.CA.Approvals = append(approved.CA.Approvals, hostkey.Approval{Slot: 0, Signature: []byte("new")})
+	if other := decidePlan(planInputs{Config: in.Config, Slots: in.Slots, Vaults: in.Vaults, Keys: in.Keys, SSHCA: approved}); other.Part(PartSSH).Digest != p.Part(PartSSH).Digest {
+		t.Error("an approval is another image")
 	}
 	// The digest names the settings: the same twice, another with another
-	// port.
+	// port in assh.conf, or another DHCP identity.
 	if again := decidePlan(in); again.Part(PartSSH).Digest != p.Part(PartSSH).Digest || again.Part(PartNet).Digest != p.Part(PartNet).Digest {
 		t.Error("the same settings, another digest")
 	}
-	in.Config.Remote.SSH.Port = 2222
+	in.Config.Remote.SSH.Assh.Listen = ":2222"
 	if other := decidePlan(in); other.Part(PartSSH).Digest == p.Part(PartSSH).Digest || other.Part(PartNet).Digest != p.Part(PartNet).Digest {
 		t.Error("another port, the same digest")
 	}
+	in.DHCP = dhcpIdentity{ID: []byte{0xff, 1, 2, 3, 4, 0, 2, 9}, From: "a test's"}
+	if other := decidePlan(in); other.Part(PartNet).Digest == p.Part(PartNet).Digest || !strings.Contains(other.Part(PartNet).Why, "asking as a test's (ff:01:02:03:04:00:02:09)") {
+		t.Errorf("another DHCP identity: %+v", other.Part(PartNet))
+	}
+	in.DHCP = dhcpIdentity{From: "unknown: no DHCP client of the running system tells it on eth0"}
+	if other := decidePlan(in); len(other.Warnings) != 1 || !strings.Contains(other.Warnings[0], "may get another address") {
+		t.Errorf("an unknown DHCP identity: %q", other.Warnings)
+	}
+	in.DHCP = dhcpIdentity{}
 	// No busybox on initramfs-tools: no network, and nothing that needs it.
 	in.NoBusybox = true
 	if got := partsOn(decidePlan(in)); got != "unlock codes" {
 		t.Errorf("no busybox: %q", got)
 	}
-	// A new approval (a firmware update) is another digest.
-	approved := in.SSHCA
-	in.SSHCA.CA.Approvals[0].Signature = append([]byte{1}, in.SSHCA.CA.Approvals[0].Signature...)
-	in.SSHCA.Approval = &in.SSHCA.CA.Approvals[0]
-	if other := decidePlan(in); other.Part(PartSSH).Digest == p.Part(PartSSH).Digest {
-		t.Error("another approval, the same digest")
-	}
-	in.SSHCA = approved
 	// SSH without a TPM: its host keys are made in it.
 	in.NoBusybox, in.TPMErr = false, "gone"
 	if p := decidePlan(in); p.Has(PartSSH) || !strings.Contains(p.Part(PartSSH).Why, "made and certified in it") || !p.Has(PartNet) {
@@ -218,7 +226,7 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 	if len(entries) != 1 || entries[0].Name() != PartUnlock {
 		t.Fatalf("the plan names %v", entries)
 	}
-	for _, p := range []string{imageTPMDropIn, "/" + btModulesLoadConf, DefaultAttestSignerPath, imageNetworkFile, ImageSSHCA} {
+	for _, p := range []string{imageTPMDropIn, "/" + btModulesLoadConf, DefaultAttestSignerPath, imageNetworkFile} {
 		if _, err := os.Stat(filepath.Join(root, p)); err == nil {
 			t.Errorf("%s in an image of the disk unlock alone", p)
 		}
@@ -229,15 +237,11 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 
 	admin := loginKey(t, "admin@desk")
 	ca := testSSHCA(t, true)
-	// An approval of other values stays on this machine.
-	other := map[int][]byte{0: bytes.Repeat([]byte{1}, 32), 7: bytes.Repeat([]byte{2}, 32)}
-	ca.CA.Approvals = append(ca.CA.Approvals, hostkey.Approval{PCRs: other, Signature: []byte("old")})
-	ca.Approval = &ca.CA.Approvals[0]
 	bt := &BTDeps{Adapter: "hci0", Modules: []string{"btusb", "btintel", "bluetooth"}, Firmware: []string{"intel/ibt-0180-0041.sfi"},
 		Authorize: &USBDevice{Port: "3-10", Vendor: "8087", Product: "0033"}}
 	in := planInputs{Config: planConfig(t, "TPM2_KIRA_NET=dhcp\nTPM2_KIRA_SSH=on\n"), Slots: 2, Phones: 1, BT: bt,
 		Signer: []byte("-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n"), Keys: []string{admin}, KeysSkipped: 2, SSHCA: ca}
-	in.Config.Remote.SSH.AuthorizedKeys = "/etc/tpm2-kira/authorized_keys"
+	in.Config.Remote.SSH.Assh.AuthorizedKeys = "/etc/tpm2-kira/authorized_keys"
 	p := decidePlan(in)
 	out, root = writePlan(t, p, FormatMkinitcpio)
 	for _, want := range []string{
@@ -246,6 +250,7 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 		"bt-module btusb\nbt-module btintel\nbt-module bluetooth\nbt-firmware intel/ibt-0180-0041.sfi\n",
 		"net-module drv_enp1s0\n",
 		"warning 2 line(s) of /etc/tpm2-kira/authorized_keys left out",
+		"module efivarfs\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -264,33 +269,31 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 		t.Error("the vault is named, and no slot has one")
 	}
 	for path, want := range map[string]string{
-		imageTPMDropIn:          "Wants=dev-tpmrm0.device",
-		imageTPMWaitDropIn:      "JobTimeoutSec=5",
-		"/" + btModulesLoadConf: "btusb\nbtintel\nbluetooth\n",
-		DefaultAttestSignerPath: "BEGIN PUBLIC KEY",
-		"/" + BTUdevRuleFile:    `KERNEL=="3-10"`,
-		imageNetworkFile:        "DHCP=yes",
-		ImageAuthorizedKeys:     admin + "\n",
-		imageRunDropIn:          `"TPM2_KIRA_REMOTE=--ssh=22 --ssh-hold=0 --ssh-ca=/etc/tpm2-kira/ssh/ca.json"`,
+		imageTPMDropIn:                   "Wants=dev-tpmrm0.device",
+		imageTPMWaitDropIn:               "JobTimeoutSec=5",
+		"/" + btModulesLoadConf:          "btusb\nbtintel\nbluetooth\n",
+		DefaultAttestSignerPath:          "BEGIN PUBLIC KEY",
+		"/" + BTUdevRuleFile:             `KERNEL=="3-10"`,
+		imageNetworkFile:                 "DHCP=yes",
+		"/etc/tpm2-kira/authorized_keys": admin + "\n",
+		DefaultSSHConf:                   "ASSH_CA=efi:KIRAasshCA\n",
+		imageRunDropIn:                   `"TPM2_KIRA_REMOTE=--ssh --ssh-hold=0"`,
 	} {
 		if got := readImage(t, root, path); !strings.Contains(got, want) {
 			t.Errorf("%s: %q, want %q", path, got, want)
 		}
 	}
-	imageCA, err := hostkey.ParseCA([]byte(readImage(t, root, ImageSSHCA)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if imageCA.Fingerprint() != ca.CA.Fingerprint() || len(imageCA.Approvals) != 1 || imageCA.Approved(ca.Values) == nil {
-		t.Errorf("the image's CA: %s, %d approvals", imageCA.Fingerprint(), len(imageCA.Approvals))
-	}
-	if st, _ := os.Stat(filepath.Join(root, ImageSSHCA)); st.Mode().Perm() != 0o600 {
-		t.Errorf("SSH CA mode %v", st.Mode().Perm())
-	}
+	// The CA is not in the image: run reads its EFI variable.
+	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if b, _ := os.ReadFile(path); err == nil && !d.IsDir() && bytes.Contains(b, []byte(`"policy_ref"`)) {
+			t.Errorf("the CA in the image: %s", path)
+		}
+		return nil
+	})
 	if d := readImage(t, root, imageRunDropIn); !strings.Contains(d, "TimeoutStartSec=infinity") {
 		t.Errorf("an unlimited hold times out:\n%s", d)
 	}
-	if d := runDropIn(SSHConfig{Port: 2222, Hold: 60}); !strings.Contains(d, "TimeoutStartSec=150") || !strings.Contains(d, "--ssh=2222 --ssh-hold=60") {
+	if d := runDropIn(SSHConfig{Hold: 60}); !strings.Contains(d, "TimeoutStartSec=150") || !strings.Contains(d, "--ssh --ssh-hold=60") {
 		t.Errorf("a limited hold:\n%s", d)
 	}
 
@@ -306,9 +309,10 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 // systemd-networkd file and no drop-ins.
 func TestWriteImageInitramfsTools(t *testing.T) {
 	fakeNet(t, map[string]string{"enp1s0": "aa:bb:cc:dd:ee:01"})
-	in := planInputs{Config: planConfig(t, "TPM2_KIRA_NET=static\nTPM2_KIRA_NET_MATCH=aa:bb:cc:dd:ee:01\nTPM2_KIRA_NET_ADDRESS=\"192.0.2.10/24 2001:db8::10/64\"\nTPM2_KIRA_NET_GATEWAY=192.0.2.1\nTPM2_KIRA_SSH=on\nTPM2_KIRA_SSH_PORT=2222\n"),
+	in := planInputs{Config: planConfig(t, "TPM2_KIRA_NET=static\nTPM2_KIRA_NET_MATCH=aa:bb:cc:dd:ee:01\nTPM2_KIRA_NET_ADDRESS=\"192.0.2.10/24 2001:db8::10/64\"\nTPM2_KIRA_NET_GATEWAY=192.0.2.1\nTPM2_KIRA_SSH=on\n"),
 		Slots: 1, Phones: 1, BT: &BTDeps{Adapter: "hci0", Modules: []string{"btusb"}}, Signer: []byte("PEM"),
 		Keys: []string{loginKey(t, "admin")}, SSHCA: testSSHCA(t, true)}
+	in.Config.Remote.SSH.Assh.Listen = ":2222"
 	out, root := writePlan(t, decidePlan(in), FormatInitramfsTools)
 	if !strings.Contains(out, "net-module drv_enp1s0\n") || !strings.Contains(out, "bt-module btusb\n") {
 		t.Errorf("the lines:\n%s", out)
@@ -317,7 +321,7 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 	for _, want := range []string{
 		`TPM2_KIRA_NET="static"`, `TPM2_KIRA_NET_MATCH="aa:bb:cc:dd:ee:01"`,
 		`TPM2_KIRA_NET_ADDRESS="192.0.2.10/24 2001:db8::10/64"`, `TPM2_KIRA_NET_GATEWAY="192.0.2.1"`,
-		`TPM2_KIRA_REMOTE="--ssh=2222 --ssh-hold=0 --ssh-ca=/etc/tpm2-kira/ssh/ca.json"`,
+		`TPM2_KIRA_REMOTE="--ssh --ssh-hold=0"`,
 	} {
 		if !strings.Contains(conf, want) {
 			t.Errorf("remote.conf lacks %s:\n%s", want, conf)
@@ -331,7 +335,10 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 			t.Errorf("%s in an initramfs-tools image", p)
 		}
 	}
-	for _, p := range []string{ImageSSHCA, ImageAuthorizedKeys, filepath.Join(ImagePlanDir, partTPM)} {
+	if got := readImage(t, root, DefaultSSHConf); !strings.Contains(got, "ASSH_LISTEN=:2222\n") {
+		t.Errorf("the image's assh.conf:\n%s", got)
+	}
+	for _, p := range []string{"/etc/tpm2-kira/authorized_keys", filepath.Join(ImagePlanDir, partTPM)} {
 		if _, err := os.Stat(filepath.Join(root, p)); err != nil {
 			t.Error(err)
 		}

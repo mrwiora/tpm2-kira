@@ -23,8 +23,13 @@ import (
 // The paths, as vars for the tests.
 var (
 	mkinitcpioConf = "/etc/mkinitcpio.conf"
-	mkinitcpioHook = "/usr/lib/initcpio/install/sd-tpm2-kira"
-	debianPremount = "/usr/share/initramfs-tools/scripts/init-premount/tpm2-kira"
+	// Where mkinitcpio looks for the hook: /etc/initcpio (make
+	// install-mkinitcpio), then /usr/lib/initcpio (the package).
+	mkinitcpioHookFiles = []string{"/etc/initcpio/install/sd-tpm2-kira", "/usr/lib/initcpio/install/sd-tpm2-kira"}
+	// Where initramfs-tools looks for the boot script: /etc/initramfs-tools
+	// (make install-initramfs-tools), /usr/share/initramfs-tools (the
+	// package).
+	debianPremounts = []string{"/etc/initramfs-tools/scripts/init-premount/tpm2-kira", "/usr/share/initramfs-tools/scripts/init-premount/tpm2-kira"}
 )
 
 // initramfsHookState says why the boot integration of kind would not run,
@@ -32,18 +37,30 @@ var (
 func initramfsHookState(kind string) string {
 	switch kind {
 	case "mkinitcpio":
-		if !fileExists(mkinitcpioHook) {
+		if !mkinitcpioHookInstalled() {
 			return "the sd-tpm2-kira hook is not installed (sudo make install-mkinitcpio, or the package)"
 		}
 		if !slices.Contains(mkinitcpioHooks(mkinitcpioConf), "sd-tpm2-kira") {
 			return "sd-tpm2-kira is not in HOOKS of " + mkinitcpioConf + " - add it next to sd-encrypt, then rebuild"
 		}
 	case "initramfs-tools":
-		if !fileExists(debianPremount) {
-			return "the tpm2-kira boot scripts are not installed (the .deb installs them)"
+		if !debianScriptInstalled() {
+			return "the tpm2-kira boot scripts are not installed (sudo make install-initramfs-tools, or the package)"
 		}
 	}
 	return ""
+}
+
+// mkinitcpioHookInstalled reports whether the sd-tpm2-kira install hook is
+// in one of the places mkinitcpio looks.
+func mkinitcpioHookInstalled() bool {
+	return slices.ContainsFunc(mkinitcpioHookFiles, fileExists)
+}
+
+// debianScriptInstalled reports whether the init-premount script is in one
+// of the places initramfs-tools looks.
+func debianScriptInstalled() bool {
+	return slices.ContainsFunc(debianPremounts, fileExists)
 }
 
 // mkinitcpioHooks is the HOOKS mkinitcpio would use: the conf and its

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tpm2-trust/assh/config"
 )
 
 // The network and SSH lines load, each refused with its line number, and
@@ -16,25 +18,25 @@ TPM2_KIRA_NET_ADDRESS="192.0.2.10/24 2001:db8::10/64"
 TPM2_KIRA_NET_GATEWAY=192.0.2.1
 TPM2_KIRA_NET_DNS="192.0.2.53 9.9.9.9"
 TPM2_KIRA_SSH=on
-TPM2_KIRA_SSH_PORT=2222
 TPM2_KIRA_SSH_HOLD=300
+TPM2_KIRA_NET_DHCP_ID=mac
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := cfg.Remote
 	if r.Net.Mode != "static" || r.Net.Match != "aa:bb:cc:dd:ee:ff" || len(r.Net.Addresses) != 2 ||
-		r.Net.Gateways[0] != "192.0.2.1" || len(r.Net.DNS) != 2 || !r.SSH.On || r.SSH.Port != 2222 || r.SSH.Hold != 300 ||
-		r.SSH.AuthorizedKeys != DefaultSSHAuthorizedKeys || r.SSH.CA != DefaultSSHCA || r.Problem() != "" {
+		r.Net.Gateways[0] != "192.0.2.1" || len(r.Net.DNS) != 2 || !r.SSH.On || r.SSH.Port() != 22 || r.SSH.Hold != 300 ||
+		r.SSH.Assh.AuthorizedKeys != DefaultSSHAuthorizedKeys || r.SSH.Assh.CA != DefaultSSHCA || r.Net.DHCPID != "mac" || r.Problem() != "" {
 		t.Fatalf("%+v %q", r, r.Problem())
 	}
-	if d := DefaultControlConfig().Remote; d.Net.Mode != "off" || d.SSH.On || d.SSH.Port != 22 {
+	if d := DefaultControlConfig().Remote; d.Net.Mode != "off" || d.SSH.On || d.SSH.Port() != 22 || d.Net.DHCPID != "auto" || d.SSH.Assh.Window != 15 || d.SSH.Assh.KeyID != "tpm2-kira boot" {
 		t.Fatalf("defaults: %+v", d)
 	}
 	for _, bad := range []string{
 		"TPM2_KIRA_NET=wifi", "TPM2_KIRA_NET_MATCH=eth 0", "TPM2_KIRA_NET_ADDRESS=192.0.2.10",
 		"TPM2_KIRA_NET_GATEWAY=gw", "TPM2_KIRA_NET_DNS=1.1.1.1 dns", "TPM2_KIRA_SSH=yes",
-		"TPM2_KIRA_SSH_PORT=70000", "TPM2_KIRA_SSH_HOLD=-1", "TPM2_KIRA_SSH_HOSTKEY=keys",
+		"TPM2_KIRA_SSH_PORT=2222", "TPM2_KIRA_SSH_HOLD=-1", "TPM2_KIRA_SSH_HOSTKEY=keys", "TPM2_KIRA_NET_DHCP_ID=zz",
 	} {
 		if _, err := ParseControlConfig([]byte("# x\n" + bad + "\n")); err == nil || !strings.Contains(err.Error(), "line 2") {
 			t.Errorf("%s: %v", bad, err)
@@ -62,13 +64,13 @@ TPM2_KIRA_SSH_HOLD=300
 // The networkd file: matched by MAC, by name or every wired interface;
 // DHCP with the MAC as the client identifier, or the static addresses.
 func TestNetworkdFile(t *testing.T) {
-	dhcp := NetConfig{Mode: "dhcp", Match: "aa:bb:cc:dd:ee:ff", DNS: []string{"9.9.9.9"}}.NetworkdFile()
+	dhcp := NetConfig{Mode: "dhcp", Match: "aa:bb:cc:dd:ee:ff", DNS: []string{"9.9.9.9"}}.NetworkdFile(dhcpIdentity{})
 	for _, want := range []string{"[Match]\nMACAddress=aa:bb:cc:dd:ee:ff\n", "DHCP=yes\n", "DNS=9.9.9.9\n", "ClientIdentifier=mac\n"} {
 		if !strings.Contains(dhcp, want) {
 			t.Errorf("dhcp lacks %q:\n%s", want, dhcp)
 		}
 	}
-	static := NetConfig{Mode: "static", Match: "enp1s0", Addresses: []string{"192.0.2.10/24", "2001:db8::10/64"}, Gateways: []string{"192.0.2.1"}}.NetworkdFile()
+	static := NetConfig{Mode: "static", Match: "enp1s0", Addresses: []string{"192.0.2.10/24", "2001:db8::10/64"}, Gateways: []string{"192.0.2.1"}}.NetworkdFile(dhcpIdentity{})
 	for _, want := range []string{"Name=enp1s0\n", "Address=192.0.2.10/24\nAddress=2001:db8::10/64\n", "Gateway=192.0.2.1\n"} {
 		if !strings.Contains(static, want) {
 			t.Errorf("static lacks %q:\n%s", want, static)
@@ -77,21 +79,23 @@ func TestNetworkdFile(t *testing.T) {
 	if strings.Contains(static, "DHCP") {
 		t.Errorf("static asks DHCP:\n%s", static)
 	}
-	if any := (NetConfig{Mode: "dhcp"}).NetworkdFile(); !strings.Contains(any, "Type=ether\n") {
+	if any := (NetConfig{Mode: "dhcp"}).NetworkdFile(dhcpIdentity{}); !strings.Contains(any, "Type=ether\n") {
 		t.Errorf("no match: %s", any)
 	}
-	if (NetConfig{Mode: "off"}).NetworkdFile() != "" {
+	if (NetConfig{Mode: "off"}).NetworkdFile(dhcpIdentity{}) != "" {
 		t.Error("off has a file")
 	}
 }
 
-// control writes the lines and they read back; the rest of the file stays.
+// control writes the lines and they read back - control.conf's, and the
+// port in assh.conf beside it; the rest of each file stays.
 func TestSetRemoteConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.conf")
 	os.WriteFile(path, []byte("TPM2_KIRA_ATTEST_BLUETOOTH=always\n"), 0o644)
 	r := DefaultRemoteConfig()
+	r.SSH.Assh = sshConfDefaults(config.Default(), path)
 	r.Net = NetConfig{Mode: "static", Match: "aa:bb:cc:dd:ee:ff", Addresses: []string{"192.0.2.10/24", "2001:db8::10/64"}, DNS: []string{"9.9.9.9"}}
-	r.SSH.On, r.SSH.Port = true, 2222
+	r.SSH.On, r.SSH.Assh.Listen = true, ":2222"
 	if err := setRemoteConfig(path, r); err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +104,19 @@ func TestSetRemoteConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Attest.Bluetooth != "always" || cfg.Remote.Net.Mode != "static" || len(cfg.Remote.Net.Addresses) != 2 ||
-		cfg.Remote.Net.Match != r.Net.Match || !cfg.Remote.SSH.On || cfg.Remote.SSH.Port != 2222 || len(cfg.Remote.Net.Gateways) != 0 {
+		cfg.Remote.Net.Match != r.Net.Match || !cfg.Remote.SSH.On || cfg.Remote.SSH.Port() != 2222 || len(cfg.Remote.Net.Gateways) != 0 {
 		t.Fatalf("read back: %+v", cfg)
+	}
+	if b, _ := os.ReadFile(sshConfPath(path)); !strings.Contains(string(b), "ASSH_LISTEN=:2222\n") || !strings.HasPrefix(string(b), "# aSSH's settings") {
+		t.Fatalf("assh.conf:\n%s", b)
+	}
+	if cfg.Remote.SSH.Assh.CA != sshCAPath(path) || cfg.Remote.SSH.Assh.AuthorizedKeys != sshAuthorizedKeysPath(path) {
+		t.Fatalf("the CA and the keys beside control.conf: %+v", cfg.Remote.SSH.Assh)
+	}
+	// A key of assh's that tpm2-kira has no use for is refused, and says why.
+	os.WriteFile(sshConfPath(path), []byte("ASSH_AUTHORITY=/a.pem\n"), 0o644)
+	if _, err := LoadControlConfig(path); err == nil || !strings.Contains(err.Error(), "the CA's authority is tpm2-kira's signing key") {
+		t.Fatalf("ASSH_AUTHORITY: %v", err)
 	}
 }
 

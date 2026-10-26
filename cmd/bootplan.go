@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tpm2-trust/assh/hostkey"
+	"github.com/tpm2-trust/assh/config"
 )
 
 // The boot plan: what the boot image carries and starts, decided once, when
@@ -115,9 +115,11 @@ type planInputs struct {
 	Keys        []string // the keys that may log in over SSH
 	KeysSkipped int      // lines of the file that let nobody in
 	KeysErr     string
-	SSHCA       sshCAState // the CA and its approval of the next boot's PCR 0 and 7
+	SSHCA       sshCAState // the CA, whether it loads
 
 	NoBusybox bool // initramfs-tools: no busybox in the image, so no ip
+
+	DHCP dhcpIdentity // the identity the image's DHCP asks with
 }
 
 // PlanOptions is what reading the machine for the plan takes.
@@ -145,9 +147,10 @@ func readPlanInputs(o PlanOptions) planInputs {
 	if err != nil {
 		in.ConfigErr = err.Error()
 		cfg = DefaultControlConfig()
-		cfg.Remote.SSH.AuthorizedKeys, cfg.Remote.SSH.CA = sshAuthorizedKeysPath(o.ConfigPath), sshCAPath(o.ConfigPath)
+		cfg.Remote.SSH.Assh = sshConfDefaults(config.Default(), o.ConfigPath)
 	}
 	in.Config = cfg
+	in.DHCP = cfg.Remote.Net.DHCPIdentity()
 
 	tpmDev, err := OpenTPM(o.TPMPath)
 	if err != nil {
@@ -205,19 +208,17 @@ func readPlanInputs(o PlanOptions) planInputs {
 	}
 
 	if cfg.Remote.SSH.On {
-		keys, skipped, err := authorizedKeys(cfg.Remote.SSH.AuthorizedKeys)
+		keys, skipped, err := authorizedKeys(cfg.Remote.SSH.Assh.AuthorizedKeys)
 		switch {
 		case err != nil:
 			in.KeysErr = err.Error()
 		case len(keys) == 0:
-			in.KeysErr = cfg.Remote.SSH.AuthorizedKeys + " holds no key without options: nobody could log in"
+			in.KeysErr = cfg.Remote.SSH.Assh.AuthorizedKeys + " holds no key without options: nobody could log in"
 		default:
 			in.Keys = keys
 		}
 		in.KeysSkipped = skipped
-		if in.TPMErr == "" {
-			in.SSHCA = readSSHCA(cfg.Remote.SSH.CA, o.TPMPath)
-		}
+		in.SSHCA = loadSSHCA(cfg.Remote.SSH.Assh)
 	}
 	return in
 }
@@ -283,7 +284,17 @@ func decidePlan(in planInputs) *BootPlan {
 	case in.NoBusybox:
 		add(PartNet, false, "it needs busybox in the image (apt install busybox, BUSYBOX not n in initramfs.conf)")
 	default:
-		add(PartNet, true, net.Mode, net.Mode, net.Match, strings.Join(net.Addresses, " "), strings.Join(net.Gateways, " "), strings.Join(net.DNS, " "))
+		why := net.Mode
+		if net.Mode == "dhcp" && in.DHCP.From != "" {
+			why += ", asking as " + in.DHCP.From
+			if in.DHCP.ID != nil {
+				why += " (" + colonHex(in.DHCP.ID) + ")"
+			}
+			if in.DHCP.ID == nil && strings.HasPrefix(in.DHCP.From, "unknown") {
+				p.Warnings = append(p.Warnings, "the running system's DHCP identity is "+in.DHCP.From+": the image asks with its MAC and may get another address than the running system (TPM2_KIRA_NET_DHCP_ID sets it)")
+			}
+		}
+		add(PartNet, true, why, net.Mode, net.Match, strings.Join(net.Addresses, " "), strings.Join(net.Gateways, " "), strings.Join(net.DNS, " "), hex.EncodeToString(in.DHCP.ID))
 	}
 
 	switch {
@@ -309,16 +320,13 @@ func decidePlan(in planInputs) *BootPlan {
 		add(PartSSH, false, in.KeysErr)
 	case in.SSHCA.Err != "":
 		add(PartSSH, false, in.SSHCA.Err)
-	case in.SSHCA.Approval == nil:
-		add(PartSSH, false, sshCAUnapproved)
 	default:
-		ca := in.SSHCA.CA
-		fp := ca.Fingerprint()
-		add(PartSSH, true, fmt.Sprintf("port %d, host keys certified by the SSH CA %s", ssh.Port, fp),
-			fmt.Sprint(ssh.Port), fmt.Sprint(ssh.Hold), fp, fmt.Sprintf("%x", in.SSHCA.Approval.Signature), keysSum(imageKeys(in.Keys)))
+		fp := in.SSHCA.CA.Fingerprint()
+		add(PartSSH, true, fmt.Sprintf("port %d, host keys certified by the SSH CA %s", ssh.Port(), fp),
+			fmt.Sprint(ssh.Hold), fp, keysSum(imageKeys(in.Keys)), keysSum(imageSSHConf(ssh.Assh)))
 	}
 	if p.Has(PartSSH) && in.KeysSkipped > 0 {
-		p.Warnings = append(p.Warnings, fmt.Sprintf("%d line(s) of %s left out: options in front of the key are not honoured, and what does not parse is no key", in.KeysSkipped, ssh.AuthorizedKeys))
+		p.Warnings = append(p.Warnings, fmt.Sprintf("%d line(s) of %s left out: options in front of the key are not honoured, and what does not parse is no key", in.KeysSkipped, ssh.Assh.AuthorizedKeys))
 	}
 
 	sort.SliceStable(p.Parts, func(i, j int) bool { return planIndex(p.Parts[i].Name) < planIndex(p.Parts[j].Name) })
@@ -459,11 +467,25 @@ func (p *BootPlan) WriteImage(buildroot, format string, out io.Writer) error {
 			r.SSH.On = false
 		}
 		if format == FormatInitramfsTools {
-			if err := writeImageFile(buildroot, imageRemoteConf, []byte(remoteConf(r)), 0o644); err != nil {
+			if err := writeImageFile(buildroot, imageRemoteConf, []byte(remoteConf(r, in.DHCP)), 0o644); err != nil {
 				return err
 			}
-		} else if err := writeImageFile(buildroot, imageNetworkFile, []byte(r.Net.NetworkdFile()), 0o644); err != nil {
-			return err
+			if in.DHCP.ID != nil {
+				if err := writeImageFile(buildroot, imageUdhcpcScript, []byte(udhcpcScript), 0o755); err != nil {
+					return err
+				}
+			}
+		} else {
+			mac := r.Net.Match
+			if m := r.Net.matchedInterfaces(); len(m) == 1 {
+				mac = m[0].MAC
+			}
+			if _, ok := networkdDHCP(in.DHCP.ID, mac); !ok {
+				fmt.Fprintf(out, "warning the DHCP client identifier %s is none systemd-networkd sends: the image asks with its MAC\n", colonHex(in.DHCP.ID))
+			}
+			if err := writeImageFile(buildroot, imageNetworkFile, []byte(r.Net.NetworkdFile(in.DHCP)), 0o644); err != nil {
+				return err
+			}
 		}
 		matched := r.Net.matchedInterfaces()
 		if len(matched) == 0 {
@@ -482,18 +504,16 @@ func (p *BootPlan) WriteImage(buildroot, format string, out io.Writer) error {
 	}
 
 	if p.Has(PartSSH) {
-		ca, err := in.SSHCA.CA.Only(func(a hostkey.Approval) bool { return a.Equal(in.SSHCA.Approval) }).Marshal()
-		if err != nil {
+		// The CA is read from its EFI variable at boot; initramfs-tools
+		// mounts no efivarfs, run does, with the module where it is one.
+		fmt.Fprintln(out, "module efivarfs")
+		// assh.conf, and the keys where it says: the paths of the image
+		// are the running system's.
+		assh := in.Config.Remote.SSH.Assh
+		if err := writeImageFile(buildroot, DefaultSSHConf, imageSSHConf(assh), 0o644); err != nil {
 			return err
 		}
-		if err := writeImageFile(buildroot, ImageSSHCA, ca, 0o600); err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Join(buildroot, "/root/.ssh"), 0o700); err != nil {
-			return err
-		}
-		os.Chmod(filepath.Join(buildroot, "/root/.ssh"), 0o700)
-		if err := writeImageFile(buildroot, ImageAuthorizedKeys, imageKeys(in.Keys), 0o600); err != nil {
+		if err := writeImageFile(buildroot, assh.AuthorizedKeys, imageKeys(in.Keys), 0o600); err != nil {
 			return err
 		}
 		if format == FormatMkinitcpio {

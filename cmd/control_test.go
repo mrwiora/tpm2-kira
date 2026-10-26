@@ -144,6 +144,16 @@ func TestControlHub(t *testing.T) {
 	if st := c.hubSteps()[2]; st.Key != "menu:keys" || st.Done != "Signing key, Slot 0, Slot 1" {
 		t.Fatalf("the keys' line: %+v", st)
 	}
+	// A slot of another signing key (setup made a new one) is not done:
+	// reseal cannot approve it. Its line and the submenu say so.
+	c.facts.Status.Slots[0].Signed, c.facts.Status.Slots[0].SignReason = false, "another key signed it"
+	if keys := c.menuSteps("keys"); keys[1].Done != "" || !strings.Contains(keys[1].Dirty, "not signed by this machine's signing key (another key signed it)") {
+		t.Fatalf("a slot of another key: %+v", keys[1])
+	}
+	if st := c.hubSteps()[2]; st.Dirty == "" {
+		t.Fatalf("the keys' line with a slot of another key: %+v", st)
+	}
+	c.facts.Status.Slots[0].Signed = true
 	// A slot sealed, this boot not through the image: reboot leads.
 	if steps := c.hubSteps(); steps[0].Key != "reboot" {
 		t.Fatalf("uncapped: %+v", steps[0])
@@ -254,7 +264,7 @@ func TestControlRemote(t *testing.T) {
 		t.Fatalf("no CA: %+v", r[1])
 	}
 	c.facts.SSHCA = testSSHCA(t, false)
-	if r := c.menuSteps("remote"); !strings.Contains(r[1].Done, "signed when you quit control") {
+	if r := c.menuSteps("remote"); !strings.Contains(r[1].Done, "approved when you quit control") {
 		t.Fatalf("a CA not approved: %+v", r[1])
 	}
 	c.facts.SSHCA = testSSHCA(t, true)
@@ -391,15 +401,18 @@ func TestControlYubiKeyPINStep(t *testing.T) {
 // would use - the conf and its drop-ins, the last assignment winning.
 func TestInitramfsHookState(t *testing.T) {
 	dir := t.TempDir()
-	defer func(conf, hook, pre string) { mkinitcpioConf, mkinitcpioHook, debianPremount = conf, hook, pre }(mkinitcpioConf, mkinitcpioHook, debianPremount)
+	defer func(conf string, hooks, pre []string) {
+		mkinitcpioConf, mkinitcpioHookFiles, debianPremounts = conf, hooks, pre
+	}(mkinitcpioConf, mkinitcpioHookFiles, debianPremounts)
 	mkinitcpioConf = dir + "/mkinitcpio.conf"
-	mkinitcpioHook = dir + "/sd-tpm2-kira"
-	debianPremount = dir + "/premount"
+	mkinitcpioHookFiles = []string{dir + "/etc-sd-tpm2-kira", dir + "/sd-tpm2-kira"}
+	debianPremounts = []string{dir + "/etc-premount", dir + "/premount"}
 
 	if s := initramfsHookState("mkinitcpio"); !strings.Contains(s, "hook is not installed") {
 		t.Fatalf("no hook files: %q", s)
 	}
-	os.WriteFile(mkinitcpioHook, []byte("#!/bin/bash\n"), 0o644)
+	// make install-mkinitcpio's place (/etc); the package's counts the same.
+	os.WriteFile(mkinitcpioHookFiles[0], []byte("#!/bin/bash\n"), 0o644)
 	os.WriteFile(mkinitcpioConf, []byte("# comment, not an assignment:\n#HOOKS=(base sd-tpm2-kira)\nHOOKS=(base systemd block\n       sd-encrypt filesystems)\n"), 0o644)
 	if s := initramfsHookState("mkinitcpio"); !strings.Contains(s, "is not in HOOKS of "+mkinitcpioConf) {
 		t.Fatalf("missing from HOOKS: %q", s)
@@ -422,7 +435,8 @@ func TestInitramfsHookState(t *testing.T) {
 	if s := initramfsHookState("initramfs-tools"); !strings.Contains(s, "boot scripts are not installed") {
 		t.Fatalf("no Debian scripts: %q", s)
 	}
-	os.WriteFile(debianPremount, []byte("#!/bin/sh\n"), 0o644)
+	// make install-initramfs-tools' place (/etc); the package's counts the same.
+	os.WriteFile(debianPremounts[0], []byte("#!/bin/sh\n"), 0o644)
 	if s := initramfsHookState("initramfs-tools"); s != "" {
 		t.Fatalf("Debian wired, yet: %q", s)
 	}

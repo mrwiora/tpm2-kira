@@ -75,27 +75,35 @@ func DefaultControlConfig() ControlConfig {
 // LoadControlConfig reads the file; a missing file is the defaults.
 func LoadControlConfig(path string) (ControlConfig, error) {
 	cfg := DefaultControlConfig()
-	cfg.Remote.SSH.AuthorizedKeys, cfg.Remote.SSH.CA = sshAuthorizedKeysPath(path), sshCAPath(path)
 	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return cfg, nil
-	}
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return cfg, err
 	}
-	cfg, err = ParseControlConfig(data)
-	cfg.Remote.SSH.AuthorizedKeys, cfg.Remote.SSH.CA = sshAuthorizedKeysPath(path), sshCAPath(path)
+	if err == nil {
+		cfg, err = ParseControlConfig(data)
+	} else {
+		err = nil
+	}
+	assh, aerr := loadSSHConf(sshConfPath(path), path)
+	cfg.Remote.SSH.Assh = assh
+	if err == nil {
+		err = aerr
+	}
 	return cfg, err
 }
 
-// sshCAPath is the SSH CA next to the control.conf at path: DefaultSSHCA
-// for the real one.
+// sshCAPath is the SSH CA of the control.conf at path: DefaultSSHCA, its
+// EFI variable, for the real one; a file next to another (a test's).
 func sshCAPath(path string) string {
+	if path == DefaultControlConfigPath {
+		return DefaultSSHCA
+	}
 	return filepath.Join(filepath.Dir(path), "ssh_ca.json")
 }
 
 // sshAuthorizedKeysPath is the SSH server's keys next to the control.conf
-// at path: DefaultSSHAuthorizedKeys for the real one.
+// at path, unless assh.conf says otherwise: DefaultSSHAuthorizedKeys for
+// the real one.
 func sshAuthorizedKeysPath(path string) string {
 	return filepath.Join(filepath.Dir(path), "authorized_keys")
 }

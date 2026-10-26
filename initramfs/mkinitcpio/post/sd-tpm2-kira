@@ -13,6 +13,10 @@
 
 KIRA_KEYS_DIR="/etc/tpm2-kira/keys"
 
+# make install puts tpm2-kira in /usr/local/bin, which mkinitcpio's PATH
+# (/usr/bin:/bin) leaves out.
+PATH=$PATH:/usr/local/bin
+
 # Only act when tpm2-kira is installed and has been set up.
 if ! command -v tpm2-kira &> /dev/null; then
     exit 0
@@ -23,9 +27,9 @@ if [[ ! -d "$KIRA_KEYS_DIR" ]]; then
     exit 0
 fi
 
-# Nothing sealed (a machine that unlocks by password and salt alone): no
-# code to keep, nothing to reseal.
-if ! tpm2-kira info --json 2>/dev/null | grep -q '"index"'; then
+# Nothing sealed (a machine that unlocks by password and salt alone) and no
+# SSH CA (its EFI variable): no code to keep, nothing to approve.
+if ! tpm2-kira info --json 2>/dev/null | grep -q '"index"' && [[ ! -e /sys/firmware/efi/efivars/KIRAasshCA-24415b90-39be-45c0-a9a3-d547ebe28ea0 ]]; then
     exit 0
 fi
 
@@ -63,7 +67,7 @@ if grep -q "SKIPPED:" <<< "$output"; then
         grep -A20 "SKIPPED:" <<< "$output"
         echo "tpm2-kira: ================================================================"
     } >&2
-elif grep -q "Successfully resealed" <<< "$output"; then
+elif grep -q "Successfully resealed\|Successfully approved the SSH CA" <<< "$output"; then
     echo "tpm2-kira: reseal completed successfully (measure-point=$measure_point)"
 else
     echo "tpm2-kira: WARNING — reseal did NOT succeed:" >&2

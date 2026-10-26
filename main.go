@@ -434,10 +434,9 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	gate := fs.String("gate", "", "Also be the Bluetooth gate's coordinator on this socket: hold the TPM for 'attest gate --coordinator' and let the phone's verdict release the boot (set by the initrd unit)")
 	hold := fs.Uint("hold", uint(cmd.HoldDefault/time.Second), "Seconds to wait for Enter after showing the code before the boot continues on its own (0: at once)")
 	unlock := fs.String("unlock", "", "Also answer systemd-cryptsetup's key requests on this socket (crypttab(5) AF_UNIX key files): the passphrase is asked at tpm2-kira's prompt once the code screen is confirmed. The initrd's socket unit passes the socket instead (set by the initrd unit)")
-	sshPort := fs.Int("ssh", 0, "Also be the SSH server on this port: the codes are shown and confirmed in an SSH session, the console says where to log in (set by the image's drop-in from TPM2_KIRA_SSH)")
+	ssh := fs.Bool("ssh", false, "Also be the SSH server: the codes are shown and confirmed in an SSH session, the console says where to log in (set by the image's drop-in from TPM2_KIRA_SSH)")
+	sshConf := fs.String("ssh-conf", cmd.DefaultSSHConf, "With --ssh: aSSH's settings - the SSH CA, which certifies a host key made in the TPM for this boot (a temporary key, made in the TPM but not certified, is served when it does not), the address, the keys that may log in")
 	sshHold := fs.Uint("ssh-hold", 0, "With --ssh: seconds to wait for a confirmation, in place of --hold (0: until one comes)")
-	sshCA := fs.String("ssh-ca", cmd.ImageSSHCA, "With --ssh: the SSH CA, which certifies a host key made in the TPM for this boot; a throwaway key is served when it does not")
-	sshAuthorized := fs.String("ssh-authorized-keys", cmd.ImageAuthorizedKeys, "With --ssh: the keys that may log in")
 	plan := fs.String("plan", "", "Start only the parts the boot image names in this directory (the codes, the phone's gate, the vault); without it, all it finds (set by the initrd unit: "+cmd.ImagePlanDir+")")
 
 	fs.Parse(args)
@@ -448,7 +447,14 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 		planned = cmd.ReadPlanned(*plan)
 	}
 
-	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, cmd.RemoteOptions{Port: *sshPort, Hold: time.Duration(*sshHold) * time.Second, CA: *sshCA, AuthorizedKeys: *sshAuthorized}, planned, *debug)
+	var remote cmd.RemoteOptions
+	if *ssh {
+		var err error
+		if remote, err = cmd.RemoteOptionsFrom(*sshConf, time.Duration(*sshHold)*time.Second); err != nil {
+			fmt.Fprintf(os.Stderr, "tpm2-kira: the SSH server is not started: %v - the code screen is at the console\n", err)
+		}
+	}
+	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, remote, planned, *debug)
 }
 
 func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {

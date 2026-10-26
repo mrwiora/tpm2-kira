@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -96,8 +97,10 @@ func startRemoteBoot(t *testing.T) *remoteBoot {
 	l.Close()
 
 	b := &remoteBoot{out: &syncBuffer{}, port: port, unlock: filepath.Join(dir, "unlock.sock"), volume: volume, key: login}
+	asshConf := filepath.Join(dir, "assh.conf")
+	os.WriteFile(asshConf, []byte(fmt.Sprintf("ASSH_LISTEN=127.0.0.1:%d\nASSH_CA=%s\nASSH_AUTHORIZED_KEYS=%s\n", port, filepath.Join(dir, "none.json"), auth)), 0o644)
 	b.run = exec.Command("./tpm2-kira", "run", "--tpm", tpmPath, "--nvram", "0x01803010", "--unlock", b.unlock,
-		"--ssh="+strconv.Itoa(port), "--ssh-ca", filepath.Join(dir, "none.json"), "--ssh-authorized-keys", auth)
+		"--ssh", "--ssh-conf", asshConf)
 	b.run.Env = append(os.Environ(), "TPM2_KIRA_CRYPTTAB="+crypttab,
 		"TPM2_KIRA_CONTROL_CONF="+conf, "TPM2_KIRA_CONSOLE="+filepath.Join(dir, "console"))
 	b.run.Stdout, b.run.Stderr = b.out, b.out
@@ -136,7 +139,7 @@ func (b *remoteBoot) login(t *testing.T) (io.Writer, *bufio.Reader, *ssh.Client)
 	t.Helper()
 	c, err := ssh.Dial("tcp", "127.0.0.1:"+strconv.Itoa(b.port), &ssh.ClientConfig{
 		User: "root", Auth: []ssh.AuthMethod{ssh.PublicKeys(b.key)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // a throwaway key: no sealed one in this test
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // a temporary key: no SSH CA in this test
 		Timeout:         10 * time.Second,
 	})
 	if err != nil {
@@ -200,7 +203,7 @@ func TestRemoteSSHConfirmsAndUnlocks(t *testing.T) {
 		t.Fatalf("the console shows the codes:\n%s", b.out.String())
 	}
 	b.waitOutput(t, "An SSH session is connected")
-	b.waitOutput(t, "a throwaway key, the SSH CA did not certify one") // none in this image
+	b.waitOutput(t, "a temporary key, the SSH CA did not certify one") // none in this image
 
 	key := b.keyRequest(t)
 	c.Write([]byte("\r"))

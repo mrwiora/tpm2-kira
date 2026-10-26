@@ -1,4 +1,4 @@
-.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio deb test test-unit test-integration test-all fuzz fmt vet packages pkgbuild help
+.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio install-initramfs-tools uninstall-initramfs-tools deb test test-unit test-integration test-all fuzz fmt vet packages pkgbuild help
 
 # Binary name
 BINARY_NAME=tpm2-kira
@@ -125,6 +125,48 @@ uninstall-mkinitcpio:
 	@echo "Note: You should rebuild your initramfs after removing hooks:"
 	@echo "      sudo mkinitcpio -P"
 
+## install-initramfs-tools: Install the initramfs-tools hook and boot scripts (Debian, Ubuntu)
+# What the .deb installs, with the hook and the boot scripts in
+# /etc/initramfs-tools - the place initramfs-tools keeps for the local
+# administrator, as /etc/initcpio is mkinitcpio's - beside the binary in
+# /usr/local/bin. The keyscript goes where crypttab names it.
+install-initramfs-tools:
+	@echo "Installing initramfs-tools hook and boot scripts..."
+	@if [ ! -f "$(BINARY_NAME)" ]; then \
+		echo "Error: $(BINARY_NAME) not built. Run 'make build' first."; \
+		exit 1; \
+	fi
+	@if [ ! -d "/etc/initramfs-tools" ]; then \
+		echo "Error: initramfs-tools not found. This system may not use initramfs-tools."; \
+		exit 1; \
+	fi
+	sudo install -Dm755 initramfs/initramfs-tools/hooks/tpm2-kira /etc/initramfs-tools/hooks/tpm2-kira
+	sudo install -Dm755 initramfs/initramfs-tools/scripts/init-premount/tpm2-kira /etc/initramfs-tools/scripts/init-premount/tpm2-kira
+	sudo install -Dm755 initramfs/initramfs-tools/scripts/init-bottom/tpm2-kira /etc/initramfs-tools/scripts/init-bottom/tpm2-kira
+	sudo install -Dm755 initramfs/initramfs-tools/post-update.d/tpm2-kira /etc/initramfs/post-update.d/tpm2-kira
+	sudo install -Dm755 initramfs/initramfs-tools/kernel/zzz-tpm2-kira /etc/kernel/postinst.d/zzz-tpm2-kira
+	sudo install -Dm755 initramfs/initramfs-tools/kernel/zzz-tpm2-kira /etc/kernel/postrm.d/zzz-tpm2-kira
+	sudo install -Dm755 initramfs/initramfs-tools/keyscript/tpm2-kira /lib/cryptsetup/scripts/tpm2-kira
+	@if [ ! -e /etc/tpm2-kira/initramfs.conf ]; then \
+		sudo install -Dm644 initramfs/initramfs-tools/initramfs.conf /etc/tpm2-kira/initramfs.conf; \
+	fi
+	@if [ ! -e /etc/tpm2-kira/control.conf ]; then \
+		sudo install -Dm644 initramfs/common/control.conf /etc/tpm2-kira/control.conf; \
+	fi
+	@echo "initramfs-tools hook and boot scripts installed."
+	@echo ""
+	@echo "Next: sudo tpm2-kira control (the keyscript in /etc/crypttab, the signing key,"
+	@echo "the TOTP codes, network and SSH); it rebuilds the image when you quit."
+
+## uninstall-initramfs-tools: Remove the initramfs-tools hook and boot scripts
+uninstall-initramfs-tools:
+	@echo "Uninstalling initramfs-tools hook and boot scripts..."
+	sudo rm -f /etc/initramfs-tools/hooks/tpm2-kira /etc/initramfs-tools/scripts/init-premount/tpm2-kira /etc/initramfs-tools/scripts/init-bottom/tpm2-kira
+	sudo rm -f /etc/initramfs/post-update.d/tpm2-kira /etc/kernel/postinst.d/zzz-tpm2-kira /etc/kernel/postrm.d/zzz-tpm2-kira
+	sudo rm -f /lib/cryptsetup/scripts/tpm2-kira
+	@echo "Removed. Take keyscript=/lib/cryptsetup/scripts/tpm2-kira out of /etc/crypttab,"
+	@echo "then rebuild the initramfs: sudo update-initramfs -u"
+
 ## deb: Build the Debian package (version derived from git describe)
 deb:
 	@command -v dpkg-buildpackage >/dev/null 2>&1 || { \
@@ -226,6 +268,7 @@ help:
 	@echo "  Integration tests: Requires swtpm, swtpm-tools, and socat"
 	@echo "    Install with: sudo apt-get install swtpm swtpm-tools socat"
 	@echo ""
-	@echo "Mkinitcpio Integration:"
+	@echo "Boot Integration (after make install):"
 	@echo "  install-mkinitcpio: Install early boot hooks for Arch Linux"
-	@echo "  uninstall-mkinitcpio: Remove early boot hooks"
+	@echo "  install-initramfs-tools: Install the hook and boot scripts for Debian, Ubuntu"
+	@echo "  uninstall-mkinitcpio, uninstall-initramfs-tools: Remove them"

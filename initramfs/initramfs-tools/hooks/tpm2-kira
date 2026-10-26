@@ -23,9 +23,12 @@ esac
 
 . /usr/share/initramfs-tools/hook-functions
 
-kira=$(command -v tpm2-kira || true)
+# The binary: the package's in /usr/bin, or make install's in /usr/local/bin,
+# which mkinitramfs' PATH (/usr/bin:/sbin:/bin) leaves out. In the image it
+# is /usr/bin/tpm2-kira, where the scripts run it.
+kira=$(PATH="$PATH:/usr/local/bin" command -v tpm2-kira || true)
 if [ -z "$kira" ]; then
-    echo "tpm2-kira: binary not found in PATH; refusing to build an initramfs" >&2
+    echo "tpm2-kira: the binary is not installed (/usr/bin or /usr/local/bin); refusing to build an initramfs" >&2
     echo "tpm2-kira: that silently shows no TOTP code at boot" >&2
     exit 1
 fi
@@ -52,10 +55,12 @@ fi
 # /etc/tpm2-kira/control.conf. Each part is in only when something uses it,
 # and the output says why one is out. The plan writes the image's own
 # files (the signing public key, the adapter's module list and udev rule,
-# remote.conf, the SSH CA) and names its parts in
+# remote.conf, assh.conf and the keys that may log in, udhcpc's script) and
+# names its parts in
 # /etc/tpm2-kira/plan, which the boot scripts read; this hook adds the
 # drivers and firmware it lists. control.conf never goes into the image.
-# The network needs busybox (ip, and klibc's ipconfig for DHCP).
+# The network needs busybox (ip, and udhcpc for DHCP with the running
+# system's client identifier).
 nobusybox=
 if [ "${BUSYBOX:-auto}" = n ] || ! command -v busybox >/dev/null 2>&1; then
     nobusybox=--no-busybox
@@ -85,6 +90,7 @@ while read -r kind value; do
         nnet="$nnet $value"
         ;;
     net-modules-all) auto_add_modules net ;;
+    module) manual_add_modules "$value" ;;
     esac
 done <<PLAN
 $plan

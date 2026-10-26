@@ -459,7 +459,7 @@ func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*gateServi
 // unlockSocket (or a socket from systemd's socket unit) this process is
 // also the key provider for systemd-cryptsetup: it answers the volumes'
 // key requests once the hold has ended, and stays until it is stopped.
-// With remote.Port it is also the SSH server (remote_ssh.go): the codes
+// With remote.On it is also the SSH server (remote_ssh.go): the codes
 // are shown and confirmed in an SSH session, and the console says where.
 // planned is what the boot image carries (bootplan.go): what is not in it
 // is not started, and the TPM is not touched for it.
@@ -470,7 +470,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 	}
 	var srv *remoteServer
 	ask := prompter(consoleAsk)
-	if remote.Port > 0 {
+	if remote.On {
 		if remote.TPM == "" {
 			remote.TPM = tpmPath
 		}

@@ -80,8 +80,15 @@ It may not carry what came before.
   factor) and informs; it never withholds systemd's own prompt, which is
   the fallback after a wrong or missing answer (docs/UNLOCK-DISK.md §4).
   Do not build a mode that holds the boot on the phone's verdict.
-- **One configuration file, `/etc/tpm2-kira/control.conf`, and only
-  `control` writes it.** It holds what the boot image is built with, and
+- **Two configuration files, tpm2-kira's and aSSH's, and only `control`
+  writes them.** `/etc/tpm2-kira/control.conf` is tpm2-kira's; beside it
+  `/etc/tpm2-kira/assh.conf` is aSSH's own format (`ASSH_*`, parsed by
+  `assh/config`): the SSH CA and its slots and their PCRs, the port, the
+  keys that may log in, the host certificate's name. Keep them apart: a
+  setting of what aSSH does goes into assh.conf (and into aSSH, if it has
+  no key for it), one of tpm2-kira's - the network, whether the server
+  runs, the hold - into control.conf. control.conf holds what the boot
+  image is built with, and
   nothing else: the radio settings and the boot image's network and SSH
   server (TPM2_KIRA_NET_*, TPM2_KIRA_SSH_*: the one part the image build
   turns into files of the image - a networkd file, a unit drop-in -
@@ -93,7 +100,9 @@ It may not carry what came before.
   Beside it, also written by `control` alone: the YubiKey's PIN
   (`/etc/tpm2-kira/pin`, root's alone, never in the image) and the keys
   that may log in at boot (`/etc/tpm2-kira/authorized_keys`, part of the
-  SSH server's settings in the boot plan).
+  SSH server's settings in the boot plan). assh.conf goes into the image
+  as a copy (the SSH part's digest names it); the slots in it are made
+  the CA's by reseal and control before they approve.
   How the
   disk's key is made is not configured anywhere: the boot reads it from
   each volume's own LUKS2 header - the tpm2-kira token of a keyslot names

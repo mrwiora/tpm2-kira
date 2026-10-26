@@ -34,6 +34,7 @@ warning() { echo "WARNING $*"; }
 # 'tpm2-kira luks route' as the test wants it: its lines and its exit status.
 tpm2-kira() { [[ "$1 $2" == "luks route" ]] || return 0; printf '%s' "$ROUTE_OUT"; return "${ROUTE_RC:-0}"; }
 source initramfs/mkinitcpio/install/sd-tpm2-kira
+KIRA=tpm2-kira # the function above
 _add_unlock "$@"
 `
 	run := func(args ...string) string {
@@ -187,6 +188,7 @@ plain() { echo "PLAIN $*"; }
 warning() { echo "WARNING $*"; }
 ` + planStub + `
 source initramfs/mkinitcpio/install/sd-tpm2-kira
+KIRA=tpm2-kira # the function above
 _add_plan
 `
 	run := func(parts, out, rc string) string {
@@ -226,6 +228,10 @@ _add_plan
 	}
 	if got := run("unlock net", "net-modules-all\n", "0"); !strings.Contains(got, "ALLMODULES /drivers/net") || strings.Contains(got, "tpm2-kira-cap") {
 		t.Errorf("every network driver:\n%s", got)
+	}
+	// The SSH server reads its CA from an EFI variable: efivarfs's module.
+	if got := run("unlock net ssh", "module efivarfs\n", "0"); !strings.Contains(got, "MODULE efivarfs") {
+		t.Errorf("efivarfs:\n%s", got)
 	}
 	// An installed tpm2-kira that makes no plan: the disk unlock alone, said.
 	if got := run("", "", "2"); !strings.Contains(got, "WARNING tpm2-kira: the installed tpm2-kira made no boot plan") || strings.Contains(got, "UNIT") {
@@ -275,7 +281,38 @@ busybox() { :; }
 	if got := run("unlock net", "net-modules-all\n", "auto"); !strings.Contains(got, "AUTOMODULES net") {
 		t.Errorf("every network driver:\n%s", got)
 	}
+	if got := run("unlock net ssh", "module efivarfs\n", "auto"); !strings.Contains(got, "MODULE efivarfs") {
+		t.Errorf("efivarfs:\n%s", got)
+	}
 	if got := run("unlock", "", "n"); !strings.Contains(got, "NOBUSYBOX") {
 		t.Errorf("without busybox the plan is not told:\n%s", got)
+	}
+}
+
+// The binary goes into the image from /usr/local/bin too (make install),
+// which mkinitcpio's PATH leaves out: build adds it as /usr/bin/tpm2-kira,
+// and the units go in without add_systemd_unit looking for it again; every
+// other binary they name is added as before, and add_binary is mkinitcpio's
+// again afterwards.
+func TestHookTakesTheBinaryFromUsrLocal(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash")
+	}
+	script := `
+add_binary() { echo "BIN $*"; }
+add_systemd_unit() { echo "UNIT $1"; add_binary tpm2-kira; add_binary sh; }
+source initramfs/mkinitcpio/install/sd-tpm2-kira
+KIRA=/usr/local/bin/tpm2-kira
+add_binary "$KIRA" /usr/bin/tpm2-kira
+_add_kira_unit tpm2-kira.service
+add_binary after
+`
+	out, err := exec.Command("bash", "-c", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	want := "BIN /usr/local/bin/tpm2-kira /usr/bin/tpm2-kira\nUNIT tpm2-kira.service\nBIN sh\nBIN after\n"
+	if string(out) != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", out, want)
 	}
 }

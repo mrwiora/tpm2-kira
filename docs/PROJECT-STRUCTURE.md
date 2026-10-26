@@ -74,7 +74,7 @@ Where things are in the repository, and how the tests are run.
 │   ├── pentest1/, pentest2/      # Security review findings and mitigations
 │   └── *.issue                   # Write-ups of specific bugs
 ├── initramfs/               # Everything that goes into, or builds, an initramfs
-│   ├── common/control.conf          # The one configuration file: what the image is built with (radio, network, SSH)
+│   ├── common/control.conf          # tpm2-kira's configuration: what the image is built with (radio, network, SSH); aSSH's is assh.conf beside it
 │   ├── systemd/tpm2-kira.service   # Shows the code in systemd-based images
 │   ├── systemd/tpm2-kira-cap.service  # Runs 'cap' when leaving the initrd
 │   ├── systemd/tpm2-kira-attest.service  # Lazy Bluetooth attestation gate

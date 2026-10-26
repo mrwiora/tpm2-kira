@@ -269,7 +269,7 @@ func (c *controller) runInitramfs() error {
 		return nil
 	case f.Initramfs != "mkinitcpio":
 		return errors.New("no initramfs system found")
-	case !fileExists(mkinitcpioHook):
+	case !mkinitcpioHookInstalled():
 		return errors.New("the sd-tpm2-kira hook files are not installed: sudo make install-mkinitcpio, or the package; then run this step again")
 	}
 	file, oldLine, newLine, err := AdoptHookLine(mkinitcpioConf)

@@ -9,6 +9,8 @@ import (
 	"io/fs"
 	"os"
 	"strings"
+
+	"github.com/tpm2-trust/assh/hostkey"
 )
 
 // ResealCommand is the top-level entry point for the reseal CLI command.
@@ -34,10 +36,31 @@ func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privK
 	slots := FindPopulatedSlots(tpmDev, debug)
 	tpmDev.Close()
 
+	controlPath := controlConfigPath()
 	if len(slots) == 0 {
+		if conf, _ := loadSSHConf(sshConfPath(controlPath), controlPath); fileExistsCA(conf.CA) {
+			return resealSSHCA(controlPath, tpmPath, privKeyPath)
+		}
 		return fmt.Errorf("no sealed secrets found in NVRAM slots 0x%08X - 0x%08X", NVRAMSlotStart, NVRAMSlotEnd)
 	}
+	return joinReseal(resealSlots(tpmPath, slots, pcrsStr, pubKeyPath, privKeyPath, debug), resealSSHCA(controlPath, tpmPath, privKeyPath))
+}
 
+// joinReseal is the slots' and the SSH CA's outcome: a failure of either
+// wins over a skip of the other, which was reported already.
+func joinReseal(slots, sshCA error) error {
+	skip := func(err error) bool { return errors.Is(err, ErrResealSkipped) }
+	switch {
+	case slots != nil && sshCA != nil && skip(slots) && !skip(sshCA):
+		return sshCA
+	case slots != nil && sshCA != nil && skip(sshCA) && !skip(slots):
+		return slots
+	}
+	return errors.Join(slots, sshCA)
+}
+
+// resealSlots reseals each of slots.
+func resealSlots(tpmPath string, slots []uint32, pcrsStr, pubKeyPath, privKeyPath string, debug bool) error {
 	fmt.Printf("Found %d sealed slot(s) to reseal\n\n", len(slots))
 
 	var failed []uint32
@@ -73,6 +96,69 @@ func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privK
 		return fmt.Errorf("%w: %d of %d slot(s)", ErrResealSkipped, len(skipped), len(slots))
 	}
 	return nil
+}
+
+// resealSSHCA approves the next boot's values in every slot of the SSH CA
+// of the assh.conf beside the control.conf at controlPath - its slots made
+// those of the file first - with the signing key, when one is not approved
+// yet: after an image rebuild, slot 0's PCR 11 (or 8 and 9) has moved. No
+// CA is nothing to do. A token that is not at hand is a skip, as for the
+// slots.
+func resealSSHCA(controlPath, tpmPath, privKeyPath string) error {
+	conf, confErr := loadSSHConf(sshConfPath(controlPath), controlPath)
+	path := conf.CA
+	if !fileExistsCA(path) {
+		return nil
+	}
+	fmt.Printf("\n── SSH CA (%s) ─────────────────────────\n", path)
+	if confErr != nil {
+		return fmt.Errorf("SSH CA: %w", confErr)
+	}
+	st := readSSHCA(conf, tpmPath)
+	if st.CA == nil || st.Values == nil {
+		return fmt.Errorf("SSH CA: %s", st.Err)
+	}
+	if len(st.Unapproved()) == 0 {
+		fmt.Println("SSH CA: every slot is approved for the next boot already")
+		return nil
+	}
+	if privKeyPath == "" {
+		privKeyPath = DefaultPrivateKeyPath
+	}
+	signer, err := LoadCheckedSigningPrivateKey(privKeyPath)
+	if err != nil {
+		return fmt.Errorf("SSH CA: %w", err)
+	}
+	if !samePublicKey(st.CA.AuthorityKey(), signer.Public()) {
+		return fmt.Errorf("SSH CA: its authority is another key than %s: control creates the CA again", privKeyPath)
+	}
+	if err := PrepareSigningKey(signer); err != nil {
+		var cause *TokenUnavailableError
+		if errors.As(err, &cause) {
+			fmt.Printf("tpm2-kira: SKIPPED: the SSH CA is not approved for the next boot - the signing key was not available.\n  Reason: %s\n  The next boot serves a temporary host key unless slot 1 still fits; run 'sudo tpm2-kira reseal' with the key at hand.\n", cause.Reason)
+			return fmt.Errorf("%w: the SSH CA", ErrResealSkipped)
+		}
+		return fmt.Errorf("SSH CA: %w", err)
+	}
+	ca, err := approveSSHCA(conf, tpmPath, signer)
+	if err != nil {
+		return fmt.Errorf("SSH CA: %w", err)
+	}
+	fmt.Printf("Successfully approved the SSH CA %s for the next boot in %d slot(s)\n", ca.Fingerprint(), len(ca.Slots))
+	return nil
+}
+
+// fileExistsCA reports whether there is a CA at path, a file or an EFI
+// variable.
+func fileExistsCA(path string) bool {
+	_, err := hostkey.LoadCA(path)
+	return !os.IsNotExist(err)
+}
+
+// samePublicKey reports whether a and b are the same key.
+func samePublicKey(a, b crypto.PublicKey) bool {
+	k, ok := a.(interface{ Equal(crypto.PublicKey) bool })
+	return ok && k.Equal(b)
 }
 
 // ErrResealSkipped marks a reseal that did not happen because the signing

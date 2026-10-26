@@ -37,6 +37,47 @@ by 'remote serve' (x/crypto/ssh, as nobody, in namespaces, under
 Landlock, signing delegated to run) and run as the session's password
 agent.
 
+### The SSH server's port was in control.conf, its slots in the code
+
+Until 2026-10-26 control.conf held the SSH port (TPM2_KIRA_SSH_PORT), the
+CA's place and the login keys' were no setting, the CA's two slots were
+worked out in the code at every creation, and `run` took `--ssh=PORT
+--ssh-ca --ssh-authorized-keys`. Since then what aSSH does is in aSSH's
+own file, /etc/tpm2-kira/assh.conf (ASSH_*), which control writes and the
+image carries a copy of: the port is ASSH_LISTEN, the slots are
+ASSH_CA_SLOT_<N> (written by control when it creates the CA, followed by
+reseal after an edit), and `run --ssh --ssh-conf` reads it. A
+TPM2_KIRA_SSH_PORT line is refused with where the port is now.
+
+### The image asked DHCP with its MAC
+
+The image's systemd-networkd asked with `ClientIdentifier=mac`, and
+initramfs-tools' ipconfig with none, while the running system asked with
+its DUID: a DHCP server saw two clients, and the code screen came up at
+another address than the machine's (found on a VM, 2026-10-26: .100 for
+.198). Since then the image asks as the running system does
+(TPM2_KIRA_NET_DHCP_ID=auto), read at the build; Debian's image uses
+busybox' udhcpc for it.
+
+### The SSH CA was a file in /etc and in the image, bound to PCR 0 and 7
+
+The SSH CA was `/etc/tpm2-kira/ssh_ca.json` (aSSH's format 2), and the
+image carried a copy with the approval of its boot. It was bound to PCR
+0 and 7 alone, because an approval of a PCR that measures the image
+(11, or 8 and 9) cannot travel inside that image: it would change the
+measurement it approves. It relied on the OS separator to close it,
+which Debian's initramfs-tools never runs. Since 2026-10-25 the CA
+(aSSH's format 3: slots and a window) lives in the EFI variable
+KIRAasshCA, outside the image: slot 0 reads PCR 0, 2, 7 and the image's
+PCRs, slot 1 PCR 7, both PCR 15, the window run extends once the key is
+certified; reseal approves the rebuilt image's values. A CA file of
+format 2 is not read: control creates the CA again in the variable, and
+clients need its new `@cert-authority` line. When the
+CA did not certify, 'run' served an ECDSA key made in software (the
+"throwaway key"); it serves aSSH's temporary key since, made in the TPM
+under the NULL hierarchy, so that no copy of it outlives the reboot.
+Without a TPM there is no SSH server.
+
 ### The SSH CA's file was aSSH's format 1
 
 The storage key the SSH CA is made under, and the CA itself, were

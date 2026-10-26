@@ -84,8 +84,10 @@ tpm2_kira_netdev() {
 }
 
 # tpm2_kira_net brings the network up, in the background: the code screen
-# does not wait for it. DHCP is initramfs-tools' own (klibc's ipconfig, as
-# for an NFS root or dropbear-initramfs), a static address busybox' ip.
+# does not wait for it. DHCP asks as the running system does: with its
+# client identifier (TPM2_KIRA_NET_CLIENTID) busybox' udhcpc, without one
+# initramfs-tools' own (klibc's ipconfig, as for an NFS root or
+# dropbear-initramfs), which sends none. A static address is busybox' ip.
 # The interface is noted for init-bottom, which takes it down again.
 tpm2_kira_net() {
     # ipconfig fails each try it times out, and a static address may be
@@ -103,10 +105,18 @@ tpm2_kira_net() {
     echo "$dev" > /run/tpm2-kira/net-device
     case "$TPM2_KIRA_NET" in
     dhcp)
-        unset BOOTIF
-        DEVICE=$dev
-        IP=dhcp
-        configure_networking
+        if [ -n "${TPM2_KIRA_NET_CLIENTID:-}" ]; then
+            ip link set dev "$dev" up
+            until busybox udhcpc -f -q -n -t 5 -T 3 -i "$dev" -s /etc/tpm2-kira/udhcpc.script \
+                -x "0x3d:$TPM2_KIRA_NET_CLIENTID"; do
+                sleep 1
+            done
+        else
+            unset BOOTIF
+            DEVICE=$dev
+            IP=dhcp
+            configure_networking
+        fi
         ;;
     static)
         ip link set dev "$dev" up
@@ -141,7 +151,8 @@ once)
     # display reports (stderr: the key requests, the phone) goes to a log
     # that survives into the booted system, /run/initramfs/tpm2-kira.log.
     mkdir -p /run/initramfs
-    # TPM2_KIRA_REMOTE (--ssh=PORT ...) makes it the SSH server too.
+    # TPM2_KIRA_REMOTE (--ssh ...) makes it the SSH server too, as the
+    # image's /etc/tpm2-kira/assh.conf says.
     # shellcheck disable=SC2086
     TPM2_KIRA_LOG=/run/initramfs/tpm2-kira.log /usr/bin/tpm2-kira run --plan "$PLAN" --gate "$GATE" --unlock "$UNLOCK" $TPM2_KIRA_REMOTE </dev/console >/dev/console 2>>/run/initramfs/tpm2-kira.log &
     echo $! > /run/tpm2-kira.pid

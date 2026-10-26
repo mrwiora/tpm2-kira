@@ -178,13 +178,13 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	f.HookState = initramfsHookState(f.Initramfs)
 	switch f.Initramfs {
 	case "mkinitcpio":
-		f.HookInstalled = fileExists(mkinitcpioHook)
+		f.HookInstalled = mkinitcpioHookInstalled()
 		f.Hooks = mkinitcpioHooks(mkinitcpioConf)
 		if f.HookState == "" {
 			f.Rebuild = rebuildPending(mkinitcpioConf)
 		}
 	case "initramfs-tools":
-		f.HookInstalled = fileExists(debianPremount)
+		f.HookInstalled = debianScriptInstalled()
 	}
 	for _, it := range physicalInterfaces() {
 		if !it.Wireless {
@@ -204,7 +204,7 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 		f.Remote = cfg.Remote
 	}
 	if f.Remote.SSH.On {
-		f.SSHKeys = authorizedKeyCount(f.Remote.SSH.AuthorizedKeys)
+		f.SSHKeys = authorizedKeyCount(f.Remote.SSH.Assh.AuthorizedKeys)
 	}
 
 	f.Status = collectStatus(StatusOptions{TPMPath: tpmPath, ConfigPath: controlConfigPath(), Debug: debug})
@@ -231,6 +231,11 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	}
 	f.Plan = ReadBootPlan(PlanOptions{TPMPath: tpmPath, ConfigPath: controlConfigPath(), Debug: debug})
 	f.SSHCA = f.Plan.in.SSHCA
+	if f.SSHCA.CA != nil && f.Plan.in.TPMErr == "" {
+		// The plan needs the CA to load; control the approvals of the
+		// next boot's values too.
+		f.SSHCA = readSSHCA(f.Plan.in.Config.Remote.SSH.Assh, tpmPath)
+	}
 	if f.HookState == "" {
 		f.Pending, f.Unused, f.ImageErr = imageState(f.Initramfs, f.Plan)
 		if f.Rebuild != "" {
@@ -938,11 +943,11 @@ func (c *controller) leave() {
 	// What changed since the image was built is looked at, not which
 	// steps ran: a fresh look, as the last step may have changed it.
 	f := collectFacts(c.o.TPMPath, c.o.Debug)
-	if f.SSHCA.CA != nil && f.SSHCA.Values != nil && f.SSHCA.Approval == nil {
-		// The SSH server waits for it: approved first, so the build that
-		// follows carries it.
+	if f.SSHCA.CA != nil && f.SSHCA.Values != nil && len(f.SSHCA.Unapproved()) > 0 {
+		// Approved for the image as it is; a rebuild that follows has its
+		// reseal hook approve the new image's values.
 		if !c.tty {
-			fmt.Fprintln(c.out, "The SSH CA needs the signing key's approval of PCR 0 and 7 at the next boot: run tpm2-kira control at a terminal.")
+			fmt.Fprintln(c.out, "The SSH CA needs the signing key's approval of the PCRs at the next boot: run tpm2-kira control at a terminal.")
 		} else if err := c.approveSSHCA(); err != nil {
 			fmt.Fprintf(c.out, "\033[0;31mNot approved:\033[0m %v - the image is built without SSH\n", err)
 		} else {
@@ -953,7 +958,14 @@ func (c *controller) leave() {
 		c.facts = f
 		if c.tty {
 			if err := c.offerRebuild(); err != nil {
-				fmt.Fprintf(c.out, "\033[0;31mNot rebuilt:\033[0m %v\n", err)
+				// A build hook of the machine's own (fsck without its
+				// helper, say) fails the command after the image is
+				// written: what counts is whether the image is new.
+				if g := collectFacts(c.o.TPMPath, c.o.Debug); len(g.Pending) == 0 {
+					fmt.Fprintf(c.out, "\033[0;33mThe image is built\033[0m, and carries what control set up; %v - an error of the build's own, above.\n", err)
+				} else {
+					fmt.Fprintf(c.out, "\033[0;31mNot rebuilt:\033[0m %v\n", err)
+				}
 			}
 		} else {
 			fmt.Fprintf(c.out, "Rebuild the initramfs for the next boot (%s): %s\n", rebuildCommand(f.Initramfs), strings.Join(f.Pending, "; "))

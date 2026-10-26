@@ -1,11 +1,11 @@
 package cmd
 
 // The SSH server of the code screen (docs/SSH.md). With TPM2_KIRA_SSH
-// on, the image's tpm2-kira.service runs 'tpm2-kira run --ssh=PORT': the
-// process that holds the boot opens the port and starts 'tpm2-kira remote
-// serve' on it, without privileges (github.com/tpm2-trust/assh/server). Its
-// host key is made in the TPM for this boot and certified by the SSH CA
-// (remote_hostkey.go).
+// on, the image's tpm2-kira.service runs 'tpm2-kira run --ssh': the
+// process that holds the boot opens the port of the image's assh.conf
+// (ASSH_LISTEN) and starts 'tpm2-kira remote serve' on it, without
+// privileges (github.com/tpm2-trust/assh/server). Its host key is made in
+// the TPM for this boot and certified by the SSH CA (remote_hostkey.go).
 // That process speaks SSH and hands every login over as a session of the
 // code screen: it sees the codes, and Enter there confirms them and
 // releases the boot, as Enter at the console does. The password prompt
@@ -28,22 +28,37 @@ import (
 	"os"
 	"os/exec"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/tpm2-trust/assh/config"
 	"github.com/tpm2-trust/assh/server"
 )
 
-// RemoteOptions are run's SSH settings; Port 0 is no SSH server.
+// RemoteOptions are run's SSH settings.
 type RemoteOptions struct {
-	Port           int
-	Hold           time.Duration // 0: until a confirmation comes
-	TPM            string        // the TPM the host key is made in
-	CA             string        // the SSH CA (ImageSSHCA)
-	AuthorizedKeys string        // who may log in (ImageAuthorizedKeys)
+	On   bool          // be the SSH server
+	Hold time.Duration // 0: until a confirmation comes
+	TPM  string        // the TPM the host key is made in
+	// Assh is the image's assh.conf: the SSH CA, the address, who may log
+	// in, the host certificate's name.
+	Assh config.Config
+	Port int // the port it listens on, once started
 }
+
+// RemoteOptionsFrom are run's SSH settings from the assh.conf at path.
+func RemoteOptionsFrom(path string, hold time.Duration) (RemoteOptions, error) {
+	c, err := config.Load(path)
+	if err != nil {
+		return RemoteOptions{}, err
+	}
+	return RemoteOptions{On: true, Hold: hold, Assh: c}, nil
+}
+
+// makeHostKey is this boot's host key (prepareHostKey). A var for the
+// tests without a TPM, which serve a key of their own.
+var makeHostKey = prepareHostKey
 
 // serveCommand is 'remote serve', the SSH server's unprivileged half: this
 // binary again (one binary, AGENTS.md). A var for the tests, which start
@@ -106,34 +121,29 @@ func (s *remoteSession) write(b []byte) {
 // starts 'remote serve' on it. A server that cannot start is said on the console and the
 // code screen goes on without SSH.
 func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteServer, error) {
-	if o.AuthorizedKeys == "" {
-		o.AuthorizedKeys = ImageAuthorizedKeys
-	}
-	authorized, _, err := authorizedKeys(o.AuthorizedKeys)
+	authorized, _, err := authorizedKeys(o.Assh.AuthorizedKeys)
 	if err != nil {
 		return nil, err
 	}
 	if len(authorized) == 0 {
-		return nil, fmt.Errorf("%s holds no key: nobody could log in", o.AuthorizedKeys)
+		return nil, fmt.Errorf("%s holds no key: nobody could log in", o.Assh.AuthorizedKeys)
 	}
 	// Certified now, while the code screen holds the boot ahead of the OS
-	// separator: after it, PCR 0 and 7 no longer fit the CA's policy. The
-	// key stays in the TPM, signing for this process; 'remote serve' asks
-	// it for signatures.
-	hk, err := prepareHostKey(o.TPM, o.CA)
+	// separator; the CA's window closes right after. The key stays in the
+	// TPM, signing for this process; 'remote serve' asks it for
+	// signatures.
+	hk, err := makeHostKey(o.TPM, o.Assh)
 	if err != nil {
 		return nil, fmt.Errorf("SSH host key: %w", err)
 	}
-	if hk.Throwaway != "" {
-		log("ssh: serving a throwaway host key: " + hk.Throwaway)
+	if hk.Temporary != "" {
+		log("ssh: serving a temporary host key: " + hk.Temporary)
 	}
-	tcp, err := net.Listen("tcp", ":"+strconv.Itoa(o.Port))
+	tcp, err := net.Listen("tcp", o.Assh.Listen)
 	if err != nil {
 		return nil, err
 	}
-	if o.Port == 0 {
-		o.Port = tcp.Addr().(*net.TCPAddr).Port
-	}
+	o.Port = tcp.Addr().(*net.TCPAddr).Port
 	r := &remoteServer{opts: o, log: log, console: console, hostKey: hk,
 		done: make(chan struct{}), releases: make(chan struct{}, 1), changed: make(chan struct{}, 1)}
 	child, err := server.Start(server.Options{
@@ -153,7 +163,7 @@ func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteS
 	r.child = child
 	log(fmt.Sprintf("ssh: remote serve (pid %d) runs with %s", child.Pid(), child.How))
 	if hk.CA != "" {
-		log(fmt.Sprintf("ssh: listening on port %d, host key %s certified by the SSH CA %s", o.Port, hk.Fingerprint, hk.CA))
+		log(fmt.Sprintf("ssh: listening on port %d, host key %s certified by the SSH CA %s through slot %d", o.Port, hk.Fingerprint, hk.CA, hk.Slot))
 	} else {
 		log(fmt.Sprintf("ssh: listening on port %d, host key %s", o.Port, hk.Fingerprint))
 	}
@@ -424,9 +434,9 @@ func consoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int, remai
 			fmt.Fprintf(&b, "           ssh root@%s%s   %s\n", ip, p, iface)
 		}
 	}
-	if hk.Throwaway != "" {
-		fmt.Fprintf(&b, "         Host key %s: a throwaway key, the SSH CA did not certify one\n", hk.Fingerprint)
-		fmt.Fprintf(&b, "         (%s); ssh warns of an unknown host key. Quit tpm2-kira control after this boot.\n", hk.Throwaway)
+	if hk.Temporary != "" {
+		fmt.Fprintf(&b, "         Host key %s: a temporary key, the SSH CA did not certify one\n", hk.Fingerprint)
+		fmt.Fprintf(&b, "         (%s); ssh warns of an unknown host key. Quit tpm2-kira control after this boot.\n", hk.Temporary)
 	} else if hk.CA != "" {
 		fmt.Fprintf(&b, "         Host key certified by the SSH CA %s\n", hk.CA)
 	}
@@ -455,7 +465,7 @@ func RemoteStatusLines(r RemoteConfig) []string {
 	}
 	out = append(out, "Network at boot: "+r.Net.Describe())
 	if r.SSH.On {
-		s := fmt.Sprintf("SSH at boot: port %d", r.SSH.Port)
+		s := fmt.Sprintf("SSH at boot: port %d", r.SSH.Port())
 		if r.SSH.Hold > 0 {
 			s += fmt.Sprintf(", the boot waits %d s for a confirmation", r.SSH.Hold)
 		} else {

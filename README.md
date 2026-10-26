@@ -95,8 +95,15 @@ sudo apt install build-essential git    # Debian/Ubuntu, with Go from go.dev (se
 git clone --recurse-submodules https://github.com/mrwiora/tpm2-kira.git
 cd tpm2-kira
 make build
-sudo make install
+sudo make install                   # the binary, in /usr/local/bin
+sudo make install-mkinitcpio        # Arch: the hooks, in /etc/initcpio
+sudo make install-initramfs-tools   # Debian/Ubuntu: the hook and boot scripts, in /etc/initramfs-tools
 ```
+
+Built from source or from a package, both systems get the same: the
+hooks find the binary in `/usr/bin` or `/usr/local/bin`, the image has it
+at `/usr/bin/tpm2-kira`, and `tpm2-kira control` does the rest the same
+way on both.
 
 ### Arch Linux (AUR)
 

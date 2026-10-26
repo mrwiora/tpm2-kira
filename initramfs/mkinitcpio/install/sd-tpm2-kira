@@ -38,6 +38,29 @@ _report_measure_point() {
 }
 
 CONF=${TPM2_KIRA_CONTROL_CONF:-/etc/tpm2-kira/control.conf}
+
+# The binary: the package's in /usr/bin, or make install's in /usr/local/bin,
+# which mkinitcpio's PATH (/usr/bin:/bin) leaves out. In the image it is
+# /usr/bin/tpm2-kira, where the units find it.
+KIRA=$(PATH=$PATH:/usr/local/bin type -P tpm2-kira)
+
+# A unit of tpm2-kira's. add_systemd_unit adds the binary of each Exec line
+# as this machine's PATH finds it, which make install's is not on; build
+# has put it into the image already. The rest goes as add_systemd_unit
+# has it.
+_add_kira_unit() {
+    local orig
+    orig=$(declare -f add_binary)
+    if [[ -z $orig ]]; then
+        add_systemd_unit "$1"
+        return
+    fi
+    eval "_kira_$orig"
+    add_binary() { [[ $1 == tpm2-kira ]] || _kira_add_binary "$@"; }
+    add_systemd_unit "$1"
+    eval "$orig"
+    unset -f _kira_add_binary
+}
 PLAN=/etc/tpm2-kira/plan
 
 # The boot plan (cmd/bootplan.go): what this image carries besides the disk
@@ -57,7 +80,7 @@ _plan_has() {
 _add_plan() {
     local out kind value nfw=0 adapter
     local -a btmods=() btfw=() netmods=()
-    if ! out=$(tpm2-kira initramfs plan --format mkinitcpio --conf "$CONF" --buildroot "$BUILDROOT"); then
+    if ! out=$("$KIRA" initramfs plan --format mkinitcpio --conf "$CONF" --buildroot "$BUILDROOT"); then
         warning "tpm2-kira: the installed tpm2-kira made no boot plan: the image unlocks the disk and carries nothing else"
         return 0
     fi
@@ -69,13 +92,14 @@ _add_plan() {
             bt-firmware) btfw+=("$value") ;;
             net-module) add_module "$value" && netmods+=("$value") ;;
             net-modules-all) add_checked_modules /drivers/net ;;
+            module) add_module "$value" ;;
         esac
     done <<< "$out"
 
     # The codes: the lock of code computation when the initrd is left, so
     # nothing in the running OS can compute codes until the next boot.
     if _plan_has codes; then
-        add_systemd_unit tpm2-kira-cap.service
+        _add_kira_unit tpm2-kira-cap.service
         add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-cap.service \
             /usr/lib/systemd/system/tpm2-kira-cap.service
     fi
@@ -101,7 +125,7 @@ _add_plan() {
         for value in "${btfw[@]}"; do
             add_firmware "$value" && nfw=$((nfw + 1))
         done
-        add_systemd_unit tpm2-kira-attest.service
+        _add_kira_unit tpm2-kira-attest.service
         add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-attest.service \
             /usr/lib/systemd/system/tpm2-kira-attest.service
         plain "tpm2-kira: Bluetooth: ${#btmods[@]} modules, $nfw firmware files"
@@ -143,7 +167,7 @@ _add_unlock() {
     (( ${#cmdlines[@]} )) || cmdlines=(/proc/cmdline /etc/kernel/cmdline /etc/cmdline.d/*.conf)
     local f word uuid name key opts routed=0
 
-    add_systemd_unit tpm2-kira-unlock.socket
+    _add_kira_unit tpm2-kira-unlock.socket
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-unlock.socket \
         /usr/lib/systemd/system/tpm2-kira-unlock.socket
     # How the disk's key is made is not configured: the key provider reads
@@ -174,7 +198,7 @@ _add_unlock() {
         routeargs+=(--cmdline "$f")
     done
     local advice line
-    if advice=$(tpm2-kira luks route "${routeargs[@]}" --crypttab "$crypttab" 2>&1); then
+    if advice=$("$KIRA" luks route "${routeargs[@]}" --crypttab "$crypttab" 2>&1); then
         while IFS= read -r line; do [[ -n $line ]] && plain "tpm2-kira: $line"; done <<< "$advice"
     else
         warning "tpm2-kira: the disk's key is not routed through tpm2-kira everywhere - the files below are not edited; change them as shown and rebuild:"
@@ -186,13 +210,17 @@ _add_unlock() {
 }
 
 build() {
-    add_binary tpm2-kira
+    if [[ -z $KIRA ]]; then
+        error "tpm2-kira: the binary is not installed (/usr/bin or /usr/local/bin)"
+        return 1
+    fi
+    add_binary "$KIRA" /usr/bin/tpm2-kira
 
     # The display and the key provider, enabled in the image only:
     # add_systemd_unit only carries over .wants symlinks that already exist
     # on the host, and the host's own boot stays untouched. It waits for
     # the TPM only when a part of the plan needs it (the plan's drop-in).
-    add_systemd_unit tpm2-kira.service
+    _add_kira_unit tpm2-kira.service
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira.service \
         /usr/lib/systemd/system/tpm2-kira.service
 
@@ -229,18 +257,21 @@ The hook will:
     Network      TPM2_KIRA_NET in /etc/tpm2-kira/control.conf: systemd-networkd
                  and the matched interface's driver
     SSH server   TPM2_KIRA_SSH=on: tpm2-kira's own, run unprivileged; the
-                 host key sealed to this TPM, bound to PCR 0 and 7
+                 host key made in the TPM at boot, certified by the SSH CA
+                 of the EFI variable KIRAasshCA (efivarfs)
   A machine without a TPM gets the disk unlock alone.
 
-Post-generation hook (sd-tpm2-kira in /usr/lib/initcpio/post/):
+Post-generation hook (sd-tpm2-kira in /usr/lib/initcpio/post/, or
+/etc/initcpio/post/ from make install-mkinitcpio):
   After the initramfs image is written, 'tpm2-kira reseal' is executed
   automatically. This is necessary because the initramfs content is
   measured into PCRs at boot - every rebuild may change the expected
-  values, so the sealed TOTP secret must be resealed to match.
+  values, so the sealed TOTP secret must be resealed to match, and the
+  SSH CA approved for them.
 
 Prerequisites:
 - systemd-based initramfs (mkinitcpio with systemd support, sd-encrypt)
-- tpm2-kira binary must be installed
+- tpm2-kira binary installed, in /usr/bin or /usr/local/bin
 
 Usage in /etc/mkinitcpio.conf (either order):
   HOOKS=(... sd-tpm2-kira sd-encrypt ...)
