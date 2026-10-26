@@ -461,8 +461,10 @@ func Control(o ControlOptions) error {
 		steps := c.screenSteps()
 		fmt.Fprint(c.out, clearScreen+"\n"+c.header()+"\n  "+c.screenTitle()+"\n\n")
 		key, err := c.pick(steps)
-		sub := c.screen != "chain" && c.screen != "hub"
-		if err != nil && sub { // Esc in a submenu: back to step 2
+		// A submenu, or step 1 once the boot chain is in place (opened
+		// from step 2): Esc goes back to step 2. Elsewhere it leaves.
+		sub := c.screen != "hub" && (c.screen != "chain" || chainDone(&c.facts))
+		if err != nil && sub { // Esc: back to step 2
 			c.screen = "hub"
 			continue
 		}
@@ -904,6 +906,9 @@ func (c *controller) show() {
 	fmt.Fprintln(w)
 	chain := c.chainSteps()
 	for _, s := range chain {
+		if s.Menu == "hub" {
+			continue // the way to step 2 on the screen; step 2 follows here
+		}
 		line(s, "")
 	}
 

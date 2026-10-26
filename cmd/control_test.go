@@ -306,6 +306,10 @@ func TestControlShow(t *testing.T) {
 			t.Errorf("the screen lacks %q:\n%s", want, got)
 		}
 	}
+	// The way to step 2 is the menu's: step 2 follows on this screen.
+	if strings.Contains(got, "Continue to step 2") {
+		t.Errorf("a way to step 2 on the plain screen:\n%s", got)
+	}
 	// A half-gone slot is red and recommended first.
 	c.facts.Keys = "local key files"
 	c.facts.Dirt = []SlotContents{{Slot: 2, Index: NVRAMSlotStart + 2, Counter: true}}
