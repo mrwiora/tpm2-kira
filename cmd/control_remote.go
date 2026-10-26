@@ -69,6 +69,8 @@ func (c *controller) sshStep() controlStep {
 		st.Dirty = "no TPM: the host keys are made and certified in it, and the image is built without SSH"
 	case f.SSHCA.CA == nil:
 		st.Dirty = f.SSHCA.Err + ": the image is built without SSH"
+	case f.SSHCAOtherKey:
+		st.Dirty = "the SSH CA " + f.SSHCA.CA.Fingerprint() + " was made for another signing key: reseal cannot approve it, the next boots serve a temporary host key - pick this to create it again"
 	default:
 		lines := RemoteStatusLines(f.Remote)
 		st.Done = strings.TrimPrefix(lines[len(lines)-1], "SSH at boot: ") + fmt.Sprintf("; %d key(s) may log in; SSH CA %s", f.SSHKeys, f.SSHCA.CA.Fingerprint())

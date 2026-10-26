@@ -167,4 +167,14 @@ func TestSSHCAApprovedForTheCodeScreen(t *testing.T) {
 	if again, err = hostkey.LoadCA(path); err != nil || len(again.Slots) != 3 || len(again.Approvals) != 3 || again.Fingerprint() != ca.Fingerprint() {
 		t.Fatalf("a slot added in assh.conf: %v %s", err, again.Describe())
 	}
+	// Taken away again: reseal takes it from the CA with its approval,
+	// though every slot left is approved and nothing is signed.
+	b, _ := os.ReadFile(sshConfPath(controlPath))
+	os.WriteFile(sshConfPath(controlPath), bytes.ReplaceAll(b, []byte("ASSH_CA_SLOT_2=0,7,15\n"), nil), 0o644)
+	if err := resealSSHCA(controlPath, p.sock, otherKey); err != nil {
+		t.Fatal(err)
+	}
+	if again, err = hostkey.LoadCA(path); err != nil || len(again.Slots) != 2 || len(again.Approvals) != 2 {
+		t.Fatalf("a slot taken away in assh.conf: %v %s", err, again.Describe())
+	}
 }

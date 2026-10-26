@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/mrwiora/tpm2-kira/attest"
@@ -110,6 +111,9 @@ type machineFacts struct {
 	// with SSH on.
 	SSHKeys int
 	SSHCA   sshCAState
+	// SSHCAOtherKey: the SSH CA was made for another signing key than this
+	// machine's, so reseal cannot approve it.
+	SSHCAOtherKey bool
 	// Vaults is each vault-enrolled slot's vault, asked now.
 	Vaults   map[int]vaultCheck
 	Capped   bool   // 'tpm2-kira cap' ran: this boot went through the code screen
@@ -235,6 +239,11 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 		// The plan needs the CA to load; control the approvals of the
 		// next boot's values too.
 		f.SSHCA = readSSHCA(f.Plan.in.Config.Remote.SSH.Assh, tpmPath)
+	}
+	if f.SSHCA.CA != nil {
+		if pub, err := LoadCheckedSigningPublicKey(DefaultPublicKeyPath); err == nil {
+			f.SSHCAOtherKey = !samePublicKey(f.SSHCA.CA.AuthorityKey(), pub)
+		}
 	}
 	if f.HookState == "" {
 		f.Pending, f.Unused, f.ImageErr = imageState(f.Initramfs, f.Plan)
@@ -545,6 +554,9 @@ func (c *controller) theme() huh.Theme {
 func (c *controller) form(fields ...huh.Field) *huh.Form {
 	km := huh.NewDefaultKeyMap()
 	km.Select.Filter.SetEnabled(false) // a handful of entries: no filter
+	// Esc leaves a form as Ctrl-C does: in a submenu back to step 2, in a
+	// step the step ends undone.
+	km.Quit = key.NewBinding(key.WithKeys("ctrl+c", "esc"), key.WithHelp("esc", "leave"))
 	return huh.NewForm(huh.NewGroup(fields...)).WithTheme(c.theme()).WithKeyMap(km).WithShowHelp(true).WithAccessible(os.Getenv("ACCESSIBLE") != "")
 }
 
@@ -943,6 +955,15 @@ func (c *controller) leave() {
 	// What changed since the image was built is looked at, not which
 	// steps ran: a fresh look, as the last step may have changed it.
 	f := collectFacts(c.o.TPMPath, c.o.Debug)
+	// The CA's slots are assh.conf's from here on: one taken away there
+	// goes now, one added is approved below.
+	if f.SSHCA.CA != nil && f.Remote.SSH.On {
+		if changed, err := syncSSHCASlots(f.Remote.SSH.Assh); err != nil {
+			fmt.Fprintf(c.out, "\033[0;31mThe SSH CA's slots:\033[0m %v\n", err)
+		} else if changed {
+			fmt.Fprintf(c.out, "The SSH CA's slots are %s's now.\n", sshConfPath(controlConfigPath()))
+		}
+	}
 	if f.SSHCA.CA != nil && f.SSHCA.Values != nil && len(f.SSHCA.Unapproved()) > 0 {
 		// Approved for the image as it is; a rebuild that follows has its
 		// reseal hook approve the new image's values.
@@ -996,6 +1017,18 @@ func rebuildCommand(initramfs string) string {
 // the analysis settled.
 
 func (c *controller) runSetup() error {
+	if c.facts.Keys != "" {
+		k, err := LoadCheckedSigningPrivateKey(DefaultPrivateKeyPath)
+		if err != nil {
+			return err
+		}
+		if _, ok := YubiKeyDescription(k); !ok {
+			// setup never replaces a signing key: a new one leaves every
+			// slot and the SSH CA to another key's approvals.
+			fmt.Fprintf(c.out, "The signing key is %s: nothing to set again. A new signing key: move %s away, then run this step - every slot is sealed again then, and the SSH CA made again.\n", c.facts.Keys, DefaultKeysDir)
+			return nil
+		}
+	}
 	if c.facts.Keys == "" {
 		if err := Setup(SetupOptions{Debug: c.o.Debug}); err != nil {
 			return err

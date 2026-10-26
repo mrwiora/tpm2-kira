@@ -114,6 +114,11 @@ func resealSSHCA(controlPath, tpmPath, privKeyPath string) error {
 	if confErr != nil {
 		return fmt.Errorf("SSH CA: %w", confErr)
 	}
+	if changed, err := syncSSHCASlots(conf); err != nil {
+		return fmt.Errorf("SSH CA: %w", err)
+	} else if changed {
+		fmt.Printf("SSH CA: its slots are %s's now\n", sshConfPath(controlPath))
+	}
 	st := readSSHCA(conf, tpmPath)
 	if st.CA == nil || st.Values == nil {
 		return fmt.Errorf("SSH CA: %s", st.Err)

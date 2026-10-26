@@ -194,6 +194,24 @@ func approveSSHCA(conf config.Config, tpmPath string, signer crypto.Signer) (*ho
 	return ca, saveSSHCA(ca, conf.CA)
 }
 
+// syncSSHCASlots makes the slots of the CA conf names conf's and writes
+// it when they changed: a slot taken away there goes with its approvals,
+// which needs no signing key; one added or changed is approved by reseal
+// or control after. No CA is nothing to do.
+func syncSSHCASlots(conf config.Config) (changed bool, err error) {
+	ca, err := hostkey.LoadCA(conf.CA)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if changed, err = conf.Match(ca); err != nil || !changed {
+		return false, err
+	}
+	return true, saveSSHCA(ca, conf.CA)
+}
+
 // saveSSHCA writes the CA and its public key (sshCAPub).
 func saveSSHCA(ca *hostkey.CA, path string) error {
 	if err := ca.Save(path); err != nil {

@@ -207,7 +207,7 @@ func (c *controller) keysSteps() []controlStep {
 			Done: desc, Optional: true, SelfConfirm: true,
 			Explain: "Picking a slot deletes it whole: the TOTP key (its codes in the authenticator), the phones, the remote salt, the vault's local part, the LUKS keyslots bound to it, the recovery blobs. Keyslots that are not tpm2-kira's - the recovery passphrase - stay.",
 			Run:     func(c *controller) error { return c.runRemoveSlot(n) }}
-		if !s.Signed {
+		if !s.Signed && f.Keys != "" {
 			// Sealed with another signing key (one setup made before):
 			// reseal cannot approve it, so the next image change takes
 			// its code away. It is not done, whatever it is sealed to.

@@ -153,6 +153,14 @@ func TestControlHub(t *testing.T) {
 	if st := c.hubSteps()[2]; st.Dirty == "" {
 		t.Fatalf("the keys' line with a slot of another key: %+v", st)
 	}
+	// Without a signing key the key's line is what is open: the slots
+	// are not judged.
+	keysDesc := c.facts.Keys
+	c.facts.Keys = ""
+	if keys := c.menuSteps("keys"); keys[1].Dirty != "" {
+		t.Fatalf("a slot judged without a signing key: %+v", keys[1])
+	}
+	c.facts.Keys = keysDesc
 	c.facts.Status.Slots[0].Signed = true
 	// A slot sealed, this boot not through the image: reboot leads.
 	if steps := c.hubSteps(); steps[0].Key != "reboot" {
@@ -271,6 +279,12 @@ func TestControlRemote(t *testing.T) {
 	if r := c.menuSteps("remote"); !strings.Contains(r[1].Done, "port 22") || !strings.Contains(r[1].Done, "2 key(s)") || !strings.Contains(r[1].Done, "SSH CA SHA256:") || strings.Contains(r[1].Done, "quit") {
 		t.Fatalf("ssh: %+v", r[1])
 	}
+	// A CA made for another signing key: not done, and picking it makes it again.
+	c.facts.SSHCAOtherKey = true
+	if r := c.menuSteps("remote"); r[1].Done != "" || !strings.Contains(r[1].Dirty, "made for another signing key") {
+		t.Fatalf("a CA of another key: %+v", r[1])
+	}
+	c.facts.SSHCAOtherKey = false
 	// With SSH on, the typed disk keys say they are typed there too.
 	if d := c.menuSteps("disk"); !strings.Contains(d[0].Explain, "typed in the SSH session") {
 		t.Fatalf("typed over SSH: %+v", d[0])
