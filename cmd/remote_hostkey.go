@@ -300,7 +300,7 @@ func readSSHCA(conf config.Config, tpmPath string) sshCAState {
 func nextApprovals(ca *hostkey.CA, values map[int][]byte) []hostkey.Approval {
 	var as []hostkey.Approval
 	for _, s := range ca.Slots {
-		if a := ca.Only(func(a hostkey.Approval) bool { return a.Slot == s.Number }).Approved(values); a != nil {
+		if a := ca.Only(func(a hostkey.Approval) bool { return a.Slot == s.Number }).Approved(values, nil); a != nil {
 			as = append(as, *a)
 		}
 	}
