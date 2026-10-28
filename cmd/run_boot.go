@@ -46,6 +46,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"github.com/google/go-tpm/tpm2/transport"
@@ -115,10 +116,10 @@ func (h *hintPrinter) stop() {
 
 // bootDisplay is RunCommand with its environment pluggable for tests.
 type bootDisplay struct {
-	scan   func(now time.Time) ([]NVRAMSlot, error) // every slot, with its code for now
-	live   func(NVRAMSlot, time.Time) NVRAMSlot     // one slot's code for now
-	notify func()                                   // tells systemd the boot may go on
-	show   func(slots []NVRAMSlot, codes map[int]string, remaining time.Duration)
+	scan   func(now time.Time) ([]totp.NVRAMSlot, error)  // every slot, with its code for now
+	live   func(totp.NVRAMSlot, time.Time) totp.NVRAMSlot // one slot's code for now
+	notify func()                                         // tells systemd the boot may go on
+	show   func(slots []totp.NVRAMSlot, codes map[int]string, remaining time.Duration)
 	wait   func(d time.Duration) bool // true: Enter was pressed within d
 	sleep  func(time.Duration)
 	now    func() time.Time
@@ -159,9 +160,9 @@ var errCodesOut = errors.New("the boot image shows no codes")
 // confirmed - Enter, or the enrolled phone accepting it - or the hold ends,
 // and reports the last slots and whether all of them had a code. A scan
 // that fails outright releases the boot at once, with its error.
-func (b *bootDisplay) holdForConfirmation() ([]NVRAMSlot, bool, error) {
+func (b *bootDisplay) holdForConfirmation() ([]totp.NVRAMSlot, bool, error) {
 	deadline := b.now().Add(b.hold)
-	var slots []NVRAMSlot
+	var slots []totp.NVRAMSlot
 	var gate GateStatus
 	allUp := false
 	// A phone that is in the middle of its session when the hold ends gets
@@ -178,7 +179,7 @@ func (b *bootDisplay) holdForConfirmation() ([]NVRAMSlot, bool, error) {
 		s, err := b.scan(now)
 		if err != nil {
 			if !errors.Is(err, errCodesOut) {
-				PrintKIRAError(err)
+				totp.PrintKIRAError(err)
 			}
 			return slots, false, err
 		}
@@ -189,7 +190,7 @@ func (b *bootDisplay) holdForConfirmation() ([]NVRAMSlot, bool, error) {
 				allUp = false
 			}
 		}
-		codes, _ := GenerateTOTPCodesForSlots(slots)
+		codes, _ := totp.CodesForSlots(slots)
 		// What the prompt is about to say needs no announcement of its own.
 		if cur, ok := gateStatus(b.phone); ok && cur.Asking() {
 			gate = cur
@@ -255,12 +256,12 @@ func (b *bootDisplay) waitFor(until time.Time, gate *GateStatus) bool {
 // the hold: once the separator has run, a blob sealed against
 // post-separator values yields its codes live. Slots that were fine during
 // the hold are now locked and shown as such.
-func (b *bootDisplay) serveAfterRelease(slots []NVRAMSlot) {
+func (b *bootDisplay) serveAfterRelease(slots []totp.NVRAMSlot) {
 	for len(slots) == 0 {
 		b.sleep(b.scanRetry)
 		s, err := b.scan(b.now())
 		if err != nil {
-			PrintKIRAError(err)
+			totp.PrintKIRAError(err)
 			continue
 		}
 		slots = s
@@ -278,7 +279,7 @@ func (b *bootDisplay) serveAfterRelease(slots []NVRAMSlot) {
 				slots[i].AfterSeparator = true
 			}
 		}
-		codes, _ := GenerateTOTPCodesForSlots(slots)
+		codes, _ := totp.CodesForSlots(slots)
 		b.show(slots, codes, -1)
 		boundary := nextTOTPBoundary(now)
 		for b.now().Before(boundary) {
@@ -296,7 +297,7 @@ func (b *bootDisplay) serveAfterRelease(slots []NVRAMSlot) {
 
 // retryFailed gives every slot that had no code during the hold another
 // try and reports whether one came up.
-func (b *bootDisplay) retryFailed(slots []NVRAMSlot, failed map[int]bool) bool {
+func (b *bootDisplay) retryFailed(slots []totp.NVRAMSlot, failed map[int]bool) bool {
 	changed := false
 	now := b.now()
 	for i, s := range slots {
@@ -558,7 +559,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		phoneEvent: gateEventPrinter(promptMode),
 		phonePoll:  500 * time.Millisecond,
 		phoneGrace: time.Minute,
-		scan: func(now time.Time) ([]NVRAMSlot, error) {
+		scan: func(now time.Time) ([]totp.NVRAMSlot, error) {
 			if !planned.Codes {
 				return nil, errCodesOut
 			}
@@ -567,11 +568,11 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 				return nil, err
 			}
 			defer tpmDev.Close()
-			var slots []NVRAMSlot
+			var slots []totp.NVRAMSlot
 			if nvramIndex == 0 {
-				slots = ScanNVRAMSlots(tpmDev, debug)
+				slots = totp.ScanNVRAMSlots(tpmDev, debug)
 			} else {
-				slots = ScanNVRAMSlot(tpmDev, nvramIndex, debug)
+				slots = totp.ScanNVRAMSlot(tpmDev, nvramIndex, debug)
 			}
 			if len(slots) == 0 {
 				if nvramIndex == 0 {
@@ -581,14 +582,14 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			}
 			return slots, nil
 		},
-		live: func(s NVRAMSlot, now time.Time) NVRAMSlot {
+		live: func(s totp.NVRAMSlot, now time.Time) totp.NVRAMSlot {
 			tpmDev, err := open()
 			if err != nil {
 				s.Code, s.Error = "", err
 				return s
 			}
 			defer tpmDev.Close()
-			s.Code, _, s.Error = SlotCode(tpmDev, s.Index, now, debug)
+			s.Code, _, s.Error = totp.SlotCode(tpmDev, s.Index, now, debug)
 			return s
 		},
 		notify: func() {
@@ -619,7 +620,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 				}()
 			}
 		},
-		show: func(slots []NVRAMSlot, codes map[int]string, remaining time.Duration) {
+		show: func(slots []totp.NVRAMSlot, codes map[int]string, remaining time.Duration) {
 			if unlock != nil && unlock.Prompting() {
 				return // the prompt owns the console; nothing is drawn over it
 			}
@@ -718,7 +719,7 @@ func waitForStop() {
 // phoneCodes puts each phone slot's line into codes: a slot with phones
 // has no TOTP code, and its line says how far the phone's check has got.
 // The slot the gate serves follows the gate; any other phone slot waits.
-func phoneCodes(codes map[int]string, slots []NVRAMSlot, st GateStatus, ok bool) map[int]string {
+func phoneCodes(codes map[int]string, slots []totp.NVRAMSlot, st GateStatus, ok bool) map[int]string {
 	out := make(map[int]string, len(codes))
 	for k, v := range codes {
 		out[k] = v
@@ -881,9 +882,9 @@ func gateEventPrinter(modeOf func() string) func(prev, cur GateStatus) {
 
 // printSlots is the code screen onto w, with the PCR details of a slot
 // that has no code when the TPM can be opened for them.
-func printSlots(w io.Writer, open func() (transport.TPMCloser, error), slots []NVRAMSlot, codes map[int]string) {
+func printSlots(w io.Writer, open func() (transport.TPMCloser, error), slots []totp.NVRAMSlot, codes map[int]string) {
 	if tpmDev, err := open(); err == nil {
-		FprintKIRASlots(w, tpmDev, slots, codes)
+		totp.FprintKIRASlots(w, tpmDev, slots, codes)
 		tpmDev.Close()
 		return
 	}
@@ -892,17 +893,17 @@ func printSlots(w io.Writer, open func() (transport.TPMCloser, error), slots []N
 
 // printSlotsWithoutTPM is the display when the TPM cannot be opened for the
 // PCR details.
-func printSlotsWithoutTPM(w io.Writer, slots []NVRAMSlot, codes map[int]string) {
+func printSlotsWithoutTPM(w io.Writer, slots []totp.NVRAMSlot, codes map[int]string) {
 	fmt.Fprintf(w, "[ \033[1;33mKIRA\033[0m ] Time UTC %s\n", time.Now().UTC().Format("15:04:05"))
 	for _, slot := range slots {
 		if slot.Error != nil {
-			if line := slotErrorLine(slot.Error); line != "" {
+			if line := totp.SlotErrorLine(slot.Error); line != "" {
 				fmt.Fprintf(w, "\033[0;31m#%d\033[0m: %s\n", slot.SlotNumber, line)
 			} else {
 				fmt.Fprintf(w, "\033[0;31m#%d\033[0m: PCR Mismatch\n", slot.SlotNumber)
 			}
 		} else if slot.Phone {
-			fmt.Fprintf(w, "\033[0;33m#%d\033[0m: %s\n", slot.SlotNumber, phoneSlotText(codes, slot))
+			fmt.Fprintf(w, "\033[0;33m#%d\033[0m: %s\n", slot.SlotNumber, totp.PhoneSlotText(codes, slot))
 		} else if code, exists := codes[slot.SlotNumber]; exists {
 			fmt.Fprintf(w, "\033[0;32m#%d\033[0m: %s\n", slot.SlotNumber, code)
 		}

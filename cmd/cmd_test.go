@@ -21,6 +21,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"github.com/google/go-attestation/attest"
@@ -1909,7 +1910,7 @@ func TestGenerateTOTPURI(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			uri := generateTOTPURI(tt.secret, tt.label, tt.issuer, tpm2.TPMAlgSHA1)
+			uri := totp.URI(tt.secret, tt.label, tt.issuer, tpm2.TPMAlgSHA1)
 			for _, want := range tt.wantContains {
 				if !strings.Contains(uri, want) {
 					t.Errorf("URI %q does not contain %q", uri, want)
@@ -1918,7 +1919,7 @@ func TestGenerateTOTPURI(t *testing.T) {
 			if strings.Contains(uri, "algorithm=") {
 				t.Errorf("SHA-1 URI %q should leave the algorithm at its default", uri)
 			}
-			if uri := generateTOTPURI(tt.secret, tt.label, tt.issuer, tpm2.TPMAlgSHA256); !strings.HasSuffix(uri, "&algorithm=SHA256") {
+			if uri := totp.URI(tt.secret, tt.label, tt.issuer, tpm2.TPMAlgSHA256); !strings.HasSuffix(uri, "&algorithm=SHA256") {
 				t.Errorf("SHA-256 URI %q lacks algorithm=SHA256", uri)
 			}
 		})
@@ -1962,7 +1963,7 @@ func TestGenerateHOTPSHA256(t *testing.T) {
 // TestFormatKIRAOutput tests KIRA output formatting
 func TestFormatKIRAOutput(t *testing.T) {
 	// Just ensure it doesn't panic
-	output := FormatKIRAOutput("test message")
+	output := totp.FormatKIRAOutput("test message")
 	if output == "" {
 		t.Error("Expected non-empty output")
 	}
@@ -1972,7 +1973,7 @@ func TestFormatKIRAOutput(t *testing.T) {
 func TestFormatKIRAError(t *testing.T) {
 	// Test with a basic error
 	err := fmt.Errorf("test error message")
-	output := FormatKIRAError(err)
+	output := totp.FormatKIRAError(err)
 	if output == "" {
 		t.Error("Expected non-empty output")
 	}
@@ -2070,31 +2071,31 @@ func TestHandleNVRAMNotFoundError(t *testing.T) {
 func TestHasValidSlots(t *testing.T) {
 	tests := []struct {
 		name     string
-		slots    []NVRAMSlot
+		slots    []totp.NVRAMSlot
 		expected bool
 	}{
 		{
 			name:     "Empty slots",
-			slots:    []NVRAMSlot{},
+			slots:    []totp.NVRAMSlot{},
 			expected: false,
 		},
 		{
 			name: "All errors",
-			slots: []NVRAMSlot{
+			slots: []totp.NVRAMSlot{
 				{Error: fmt.Errorf("error")},
 			},
 			expected: false,
 		},
 		{
 			name: "One valid slot",
-			slots: []NVRAMSlot{
+			slots: []totp.NVRAMSlot{
 				{Code: "123456"},
 			},
 			expected: true,
 		},
 		{
 			name: "Mixed",
-			slots: []NVRAMSlot{
+			slots: []totp.NVRAMSlot{
 				{Error: fmt.Errorf("error")},
 				{Code: "123456"},
 			},
@@ -2104,7 +2105,7 @@ func TestHasValidSlots(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := HasValidSlots(tt.slots)
+			result := totp.HasValidSlots(tt.slots)
 			if result != tt.expected {
 				t.Errorf("Expected %v, got %v", tt.expected, result)
 			}
@@ -2113,13 +2114,13 @@ func TestHasValidSlots(t *testing.T) {
 }
 
 func TestGenerateTOTPCodesForSlots(t *testing.T) {
-	slots := []NVRAMSlot{
+	slots := []totp.NVRAMSlot{
 		{SlotNumber: 1, Code: "111111"},
 		{SlotNumber: 2, Error: fmt.Errorf("error")},
 		{SlotNumber: 3, Code: "333333"},
 	}
 
-	codes, err := GenerateTOTPCodesForSlots(slots)
+	codes, err := totp.CodesForSlots(slots)
 	if err != nil {
 		t.Fatalf("GenerateTOTPCodesForSlots failed: %v", err)
 	}
@@ -2331,10 +2332,10 @@ func TestPCRHashAlgoUnknown(t *testing.T) {
 }
 
 func TestTOTPKeySize(t *testing.T) {
-	if n := totpKeySize(tpm2.TPMAlgSHA1); n != 20 {
+	if n := totp.KeySize(tpm2.TPMAlgSHA1); n != 20 {
 		t.Errorf("SHA-1 key size = %d, want 20", n)
 	}
-	if n := totpKeySize(tpm2.TPMAlgSHA256); n != 32 {
+	if n := totp.KeySize(tpm2.TPMAlgSHA256); n != 32 {
 		t.Errorf("SHA-256 key size = %d, want 32", n)
 	}
 }
@@ -2939,5 +2940,5 @@ func generateHOTP(key []byte, counter int64, newHash func() hash.Hash) string {
 	binary.BigEndian.PutUint64(buf, uint64(counter))
 	mac := hmac.New(newHash, key)
 	mac.Write(buf)
-	return hotpTruncate(mac.Sum(nil))
+	return totp.HOTPTruncate(mac.Sum(nil))
 }

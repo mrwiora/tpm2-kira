@@ -11,6 +11,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/totp"
 
 	"golang.org/x/sys/unix"
 )
@@ -21,21 +22,21 @@ type fakeBoot struct {
 	mu      sync.Mutex
 	clock   time.Time
 	log     []string
-	shown   [][]NVRAMSlot
+	shown   [][]totp.NVRAMSlot
 	enters  []bool // answers for successive waits
 	lives   int
 	stopped chan struct{} // closed when stop() ends the display
 }
 
-func (f *fakeBoot) display(scan func(time.Time) []NVRAMSlot, live func(NVRAMSlot, time.Time) NVRAMSlot, stop func([]NVRAMSlot) bool) *bootDisplay {
+func (f *fakeBoot) display(scan func(time.Time) []totp.NVRAMSlot, live func(totp.NVRAMSlot, time.Time) totp.NVRAMSlot, stop func([]totp.NVRAMSlot) bool) *bootDisplay {
 	return &bootDisplay{
-		scan: func(now time.Time) ([]NVRAMSlot, error) {
+		scan: func(now time.Time) ([]totp.NVRAMSlot, error) {
 			f.mu.Lock()
 			f.log = append(f.log, "scan")
 			f.mu.Unlock()
 			return scan(now), nil
 		},
-		live: func(s NVRAMSlot, now time.Time) NVRAMSlot {
+		live: func(s totp.NVRAMSlot, now time.Time) totp.NVRAMSlot {
 			f.mu.Lock()
 			f.log = append(f.log, "live")
 			f.lives++
@@ -43,10 +44,10 @@ func (f *fakeBoot) display(scan func(time.Time) []NVRAMSlot, live func(NVRAMSlot
 			return live(s, now)
 		},
 		notify: func() { f.mu.Lock(); f.log = append(f.log, "notify"); f.mu.Unlock() },
-		show: func(slots []NVRAMSlot, codes map[int]string, remaining time.Duration) {
+		show: func(slots []totp.NVRAMSlot, codes map[int]string, remaining time.Duration) {
 			f.mu.Lock()
 			f.log = append(f.log, "show")
-			f.shown = append(f.shown, append([]NVRAMSlot(nil), slots...))
+			f.shown = append(f.shown, append([]totp.NVRAMSlot(nil), slots...))
 			f.mu.Unlock()
 			if stop != nil && stop(slots) {
 				close(f.stopped)
@@ -75,8 +76,8 @@ func (f *fakeBoot) display(scan func(time.Time) []NVRAMSlot, live func(NVRAMSlot
 	}
 }
 
-func okSlot(now time.Time) []NVRAMSlot {
-	return []NVRAMSlot{{SlotNumber: 0, Index: nvslot.NVRAMSlotStart, Available: true, Code: now.Format("150405")}}
+func okSlot(now time.Time) []totp.NVRAMSlot {
+	return []totp.NVRAMSlot{{SlotNumber: 0, Index: nvslot.NVRAMSlotStart, Available: true, Code: now.Format("150405")}}
 }
 
 // Enter releases the boot: READY after the code was shown, then the display
@@ -128,13 +129,13 @@ func TestBootDisplayReleasesAfterTheHold(t *testing.T) {
 // marked; a slot that was fine is then locked.
 func TestBootDisplayServesLateSlotsAfterRelease(t *testing.T) {
 	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC), enters: []bool{true}}
-	scan := func(now time.Time) []NVRAMSlot {
-		return []NVRAMSlot{
+	scan := func(now time.Time) []totp.NVRAMSlot {
+		return []totp.NVRAMSlot{
 			{SlotNumber: 0, Index: nvslot.NVRAMSlotStart, Available: true, Code: "111111"},
 			{SlotNumber: 1, Index: nvslot.NVRAMSlotStart + 1, Available: true, Error: errors.New("PCR mismatch")},
 		}
 	}
-	live := func(s NVRAMSlot, now time.Time) NVRAMSlot {
+	live := func(s totp.NVRAMSlot, now time.Time) totp.NVRAMSlot {
 		if s.SlotNumber == 0 {
 			s.Code, s.Error = "", measure.ErrSeparatorLocked
 			return s
@@ -148,7 +149,7 @@ func TestBootDisplayServesLateSlotsAfterRelease(t *testing.T) {
 		s.Code, s.Error = "999999", nil
 		return s
 	}
-	stop := func(slots []NVRAMSlot) bool { return slots[1].Error == nil }
+	stop := func(slots []totp.NVRAMSlot) bool { return slots[1].Error == nil }
 	f.stopped = make(chan struct{})
 	b := f.display(scan, live, stop)
 	go b.run()
@@ -185,7 +186,7 @@ func TestBootDisplayServesLateSlotsAfterRelease(t *testing.T) {
 func TestBootDisplayExitsWhenNothingIsSealed(t *testing.T) {
 	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)}
 	b := f.display(nil, nil, nil)
-	b.scan = func(time.Time) ([]NVRAMSlot, error) {
+	b.scan = func(time.Time) ([]totp.NVRAMSlot, error) {
 		f.mu.Lock()
 		f.log = append(f.log, "scan")
 		f.mu.Unlock()
@@ -497,7 +498,7 @@ func TestPhoneCodeShownAtOnce(t *testing.T) {
 // A phone slot has no TOTP code: its line says how far the phone has got,
 // and never which phone it is. A TOTP slot next to it keeps its code.
 func TestPhoneSlotLines(t *testing.T) {
-	slots := []NVRAMSlot{{SlotNumber: 0, Phone: true}, {SlotNumber: 1, Code: "654321"}}
+	slots := []totp.NVRAMSlot{{SlotNumber: 0, Phone: true}, {SlotNumber: 1, Code: "654321"}}
 	codes := map[int]string{1: "654321"}
 	for _, c := range []struct {
 		st   GateStatus

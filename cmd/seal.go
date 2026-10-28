@@ -14,6 +14,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 
@@ -219,7 +220,7 @@ func addTOTPKey(tpmDev transport.TPM, blob *nvslot.SealedBlob, key []byte, alg t
 		return err
 	}
 	defer tpmdev.FlushHandle(tpmDev, primary.ObjectHandle)
-	obj, err := CreateTOTPKey(tpmDev, primary, key, alg, policy)
+	obj, err := totp.CreateKey(tpmDev, primary, key, alg, policy)
 	if err != nil {
 		return err
 	}
@@ -230,11 +231,11 @@ func addTOTPKey(tpmDev transport.TPM, blob *nvslot.SealedBlob, key []byte, alg t
 // newTOTPSecret makes a TOTP key for this TPM: its HMAC algorithm (SHA-1,
 // or SHA-256 on a TPM without it) and random bytes of the matching size.
 func newTOTPSecret(tpmDev transport.TPM) ([]byte, tpm2.TPMAlgID, error) {
-	alg, err := ChooseTOTPAlgorithm(tpmDev)
+	alg, err := totp.ChooseAlgorithm(tpmDev)
 	if err != nil {
 		return nil, 0, err
 	}
-	key := make([]byte, totpKeySize(alg))
+	key := make([]byte, totp.KeySize(alg))
 	if _, err := rand.Read(key); err != nil {
 		return nil, 0, fmt.Errorf("failed to generate the TOTP key: %w", err)
 	}
@@ -253,7 +254,7 @@ func showTOTPSecret(key []byte, alg tpm2.TPMAlgID, nvramIndex uint32, pcrs strin
 	fmt.Println()
 	fmt.Println("Scan QR Code with authenticator app:")
 	fmt.Println()
-	displayTOTPQRCode(totpSecret, nvramIndex, pcrs, alg)
+	totp.DisplayQRCode(totpSecret, nvramIndex, pcrs, alg)
 	fmt.Println()
 	fmt.Println("To generate TOTP codes:")
 	fmt.Printf("   tpm2-kira reveal --nvram 0x%08X\n", nvramIndex)

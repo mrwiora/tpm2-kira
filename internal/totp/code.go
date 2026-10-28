@@ -1,4 +1,4 @@
-package cmd
+package totp
 
 import (
 	"crypto/sha256"
@@ -62,7 +62,7 @@ func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) 
 		return "", sealedBlob, mismatch
 	}
 
-	code, err := TOTPCode(tpmDev, sealedBlob, nvramIndex, t)
+	code, err := Code(tpmDev, sealedBlob, nvramIndex, t)
 	return code, sealedBlob, err
 }
 
@@ -211,7 +211,7 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 
 // GenerateTOTPCodesForSlots collects the codes of the slots that have one,
 // keyed by slot number. The codes were computed by the TPM during the scan.
-func GenerateTOTPCodesForSlots(slots []NVRAMSlot) (map[int]string, error) {
+func CodesForSlots(slots []NVRAMSlot) (map[int]string, error) {
 	codes := make(map[int]string)
 	for _, slot := range slots {
 		if slot.Error == nil && slot.Code != "" {
@@ -223,7 +223,7 @@ func GenerateTOTPCodesForSlots(slots []NVRAMSlot) (map[int]string, error) {
 
 // slotErrorLine describes why a slot has no code, for the boot console.
 // It returns "" for a PCR mismatch, which is shown with its details.
-func slotErrorLine(err error) string {
+func SlotErrorLine(err error) string {
 	var genErr *nvslot.GenerationMismatchError
 	switch {
 	case errors.Is(err, nvslot.ErrCodesLocked):
@@ -260,7 +260,7 @@ func FprintKIRASlots(w io.Writer, tpmDev transport.TPM, slots []NVRAMSlot, codes
 
 	for _, slot := range slots {
 		if slot.Error != nil {
-			if line := slotErrorLine(slot.Error); line != "" {
+			if line := SlotErrorLine(slot.Error); line != "" {
 				fmt.Fprintf(w, "\033[0;31m#%d\033[0m: %s\n", slot.SlotNumber, line)
 				continue
 			}
@@ -300,7 +300,7 @@ func FprintKIRASlots(w io.Writer, tpmDev transport.TPM, slots []NVRAMSlot, codes
 				}
 			}
 		} else if slot.Phone {
-			fmt.Fprintf(w, "\033[0;33m#%d\033[0m: %s\n", slot.SlotNumber, phoneSlotText(codes, slot))
+			fmt.Fprintf(w, "\033[0;33m#%d\033[0m: %s\n", slot.SlotNumber, PhoneSlotText(codes, slot))
 		} else if code, exists := codes[slot.SlotNumber]; exists {
 			// Green slot number for successful reveal
 			fmt.Fprintf(w, "\033[0;32m#%d\033[0m: %s", slot.SlotNumber, code)
@@ -314,7 +314,7 @@ func FprintKIRASlots(w io.Writer, tpmDev transport.TPM, slots []NVRAMSlot, codes
 
 // phoneSlotText is a phone slot's line: what the boot screen put in codes
 // for it, or phoneSlotDefault.
-func phoneSlotText(codes map[int]string, slot NVRAMSlot) string {
+func PhoneSlotText(codes map[int]string, slot NVRAMSlot) string {
 	if line, ok := codes[slot.SlotNumber]; ok {
 		return line
 	}
@@ -325,14 +325,14 @@ func phoneSlotText(codes map[int]string, slot NVRAMSlot) string {
 func PrintPlainSlots(slots []NVRAMSlot, codes map[int]string) {
 	for _, slot := range slots {
 		if slot.Error != nil {
-			if line := slotErrorLine(slot.Error); line != "" {
+			if line := SlotErrorLine(slot.Error); line != "" {
 				fmt.Printf("#%d: %s\n", slot.SlotNumber, line)
 				continue
 			}
 			// For plain output with errors, show slot number
 			fmt.Printf("#%d: PCR Mismatch\n", slot.SlotNumber)
 		} else if slot.Phone {
-			fmt.Printf("#%d: %s\n", slot.SlotNumber, phoneSlotText(codes, slot))
+			fmt.Printf("#%d: %s\n", slot.SlotNumber, PhoneSlotText(codes, slot))
 		} else if code, exists := codes[slot.SlotNumber]; exists {
 			// For plain output with codes, only show the code without prefix if single slot
 			if len(slots) == 1 {
@@ -386,7 +386,7 @@ func RevealCommand(tpmPath string, nvramIndex uint32, debug bool, plain bool) {
 	}
 
 	// Generate TOTP codes for valid slots
-	codes, _ := GenerateTOTPCodesForSlots(slots)
+	codes, _ := CodesForSlots(slots)
 
 	// Display codes (including slots with PCR mismatches)
 	if plain {
@@ -397,11 +397,11 @@ func RevealCommand(tpmPath string, nvramIndex uint32, debug bool, plain bool) {
 }
 
 // ErrNoTOTPKeyAlgorithm means the TPM supports neither SHA-1 nor SHA-256 HMAC.
-var ErrNoTOTPKeyAlgorithm = errors.New("the TPM supports neither SHA-1 nor SHA-256 for HMAC")
+var ErrNoKeyAlgorithm = errors.New("the TPM supports neither SHA-1 nor SHA-256 for HMAC")
 
 // totpKeySize is the size of a fresh TOTP key: the output size of the HMAC
 // hash, as RFC 4226 recommends for SHA-1.
-func totpKeySize(alg tpm2.TPMAlgID) int {
+func KeySize(alg tpm2.TPMAlgID) int {
 	if alg == tpm2.TPMAlgSHA256 {
 		return sha256.Size
 	}
@@ -410,7 +410,7 @@ func totpKeySize(alg tpm2.TPMAlgID) int {
 
 // ChooseTOTPAlgorithm returns HMAC-SHA1, the TOTP default every authenticator
 // supports, or HMAC-SHA256 when the TPM has no SHA-1.
-func ChooseTOTPAlgorithm(tpmDev transport.TPM) (tpm2.TPMAlgID, error) {
+func ChooseAlgorithm(tpmDev transport.TPM) (tpm2.TPMAlgID, error) {
 	rsp, err := tpm2.GetCapability{
 		Capability:    tpm2.TPMCapAlgs,
 		Property:      uint32(tpm2.TPMAlgSHA1),
@@ -433,13 +433,13 @@ func ChooseTOTPAlgorithm(tpmDev transport.TPM) (tpm2.TPMAlgID, error) {
 	case has[tpm2.TPMAlgSHA256]:
 		return tpm2.TPMAlgSHA256, nil
 	}
-	return 0, ErrNoTOTPKeyAlgorithm
+	return 0, ErrNoKeyAlgorithm
 }
 
 // CreateTOTPKey creates the HMAC key object for key under the primary key.
 // The key is sent to the TPM in a salted, parameter-encrypted session, so it
 // does not cross the bus in the clear.
-func CreateTOTPKey(tpmDev transport.TPM, primary *tpmdev.PrimaryKeyResponse, key []byte, alg tpm2.TPMAlgID, authPolicy []byte) (*tpmdev.CreateSealedObjectResponse, error) {
+func CreateKey(tpmDev transport.TPM, primary *tpmdev.PrimaryKeyResponse, key []byte, alg tpm2.TPMAlgID, authPolicy []byte) (*tpmdev.CreateSealedObjectResponse, error) {
 	session := tpm2.HMAC(tpm2.TPMAlgSHA256, 16,
 		tpm2.Salted(primary.ObjectHandle, primary.Public),
 		tpm2.AESEncryption(128, tpm2.EncryptIn))
@@ -489,7 +489,7 @@ func totpKeyTemplate(alg tpm2.TPMAlgID, authPolicy []byte) tpm2.TPMTPublic {
 // blob is not trusted for anything it could not also have done itself:
 // PolicyAuthorize only accepts the signing key whose Name the key object's
 // policy binds.
-func TOTPCode(tpmDev transport.TPM, blob *nvslot.SealedBlob, blobIndex uint32, t time.Time) (string, error) {
+func Code(tpmDev transport.TPM, blob *nvslot.SealedBlob, blobIndex uint32, t time.Time) (string, error) {
 	p := &blob.Payload
 	if p.TOTPAlgorithm != tpm2.TPMAlgSHA1 && p.TOTPAlgorithm != tpm2.TPMAlgSHA256 {
 		return "", fmt.Errorf("blob has unknown TOTP algorithm 0x%04x", uint16(p.TOTPAlgorithm))
@@ -522,7 +522,7 @@ func TOTPCode(tpmDev transport.TPM, blob *nvslot.SealedBlob, blobIndex uint32, t
 		}
 		return "", fmt.Errorf("failed to compute the code in the TPM: %w", err)
 	}
-	return hotpTruncate(rsp.OutHMAC.Buffer), nil
+	return HOTPTruncate(rsp.OutHMAC.Buffer), nil
 }
 
 // CapCommand implements 'tpm2-kira cap': it read-locks every generation

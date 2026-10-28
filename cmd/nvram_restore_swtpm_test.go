@@ -11,6 +11,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -35,7 +36,7 @@ func TestRestoreBringsTheSlotBack(t *testing.T) {
 	if err := Seal(sock, "0,7", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
-	before, _, err := SlotCode(tpm, slot, at, false)
+	before, _, err := totp.SlotCode(tpm, slot, at, false)
 	if err != nil {
 		t.Fatalf("code after seal: %v", err)
 	}
@@ -60,14 +61,14 @@ func TestRestoreBringsTheSlotBack(t *testing.T) {
 	if err := NVRAMDelete(sock, slot, false); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, _, err := SlotCode(tpm, slot, at, false); err == nil {
+	if _, _, err := totp.SlotCode(tpm, slot, at, false); err == nil {
 		t.Fatal("the slot still computes codes after delete")
 	}
 
 	if err := NVRAMRestore(sock, file, 0, pubPath, privPath, false); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	after, _, err := SlotCode(tpm, slot, at, false)
+	after, _, err := totp.SlotCode(tpm, slot, at, false)
 	if err != nil {
 		t.Fatalf("code after restore: %v", err)
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -85,14 +86,14 @@ func TestCodeBeforeTheSeparatorThenLocked(t *testing.T) {
 
 	// A code per window, as the display asks for them during the hold.
 	at := time.Date(2026, 10, 6, 1, 0, 0, 0, time.UTC)
-	first, blob, err := SlotCode(tpm, nvslot.NVRAMSlotStart, at, false)
+	first, blob, err := totp.SlotCode(tpm, nvslot.NVRAMSlotStart, at, false)
 	if err != nil {
 		t.Fatalf("code during the hold: %v", err)
 	}
 	if extends := blob.MeasurePointExtends(); strings.Contains(extends, measure.OSSeparatorWord) {
 		t.Fatalf("the blob should be sealed before the separator: %q", extends)
 	}
-	next, _, err := SlotCode(tpm, nvslot.NVRAMSlotStart, at.Add(30*time.Second), false)
+	next, _, err := totp.SlotCode(tpm, nvslot.NVRAMSlotStart, at.Add(30*time.Second), false)
 	if err != nil || next == first || len(first) != 6 {
 		t.Fatalf("the next window should give another code: %q then %q (%v)", first, next, err)
 	}
@@ -101,14 +102,14 @@ func TestCodeBeforeTheSeparatorThenLocked(t *testing.T) {
 	for _, pcr := range []int{0, 2, 7} {
 		extendSHA256(t, tpm, pcr, measure.DigestOf(measure.PCRHashAlgoSHA256, []byte(measure.OSSeparatorWord)))
 	}
-	if _, _, err := SlotCode(tpm, nvslot.NVRAMSlotStart, at, false); !errors.Is(err, measure.ErrSeparatorLocked) {
+	if _, _, err := totp.SlotCode(tpm, nvslot.NVRAMSlotStart, at, false); !errors.Is(err, measure.ErrSeparatorLocked) {
 		t.Fatalf("after the separator the slot should be locked, got %v", err)
 	}
-	slots := ScanNVRAMSlot(tpm, nvslot.NVRAMSlotStart, false)
+	slots := totp.ScanNVRAMSlot(tpm, nvslot.NVRAMSlotStart, false)
 	if len(slots) != 1 || !errors.Is(slots[0].Error, measure.ErrSeparatorLocked) {
 		t.Fatalf("reveal should report the lock: %+v", slots)
 	}
-	if line := slotErrorLine(slots[0].Error); line != "Locked until the next boot (the OS separator ran after the measure point)" {
+	if line := totp.SlotErrorLine(slots[0].Error); line != "Locked until the next boot (the OS separator ran after the measure point)" {
 		t.Fatalf("line %q", line)
 	}
 }
@@ -149,7 +150,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	if err := Seal(sock, "0,2,7", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
-	if _, _, err := SlotCode(tpm, slot, at, false); err != nil {
+	if _, _, err := totp.SlotCode(tpm, slot, at, false); err != nil {
 		t.Fatalf("code after seal: %v", err)
 	}
 	sealedSize := func() int { raw, _ := tpmdev.ReadFromNVRAM(tpm, slot); return len(raw) }
@@ -230,7 +231,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	// A slot with a phone has no TOTP code: the phone checks its boots.
 	noCode := func(what string) {
 		t.Helper()
-		if _, sb, err := SlotCode(tpm, slot, at, false); !errors.Is(err, ErrPhoneSlot) || sb.HasTOTPKey() {
+		if _, sb, err := totp.SlotCode(tpm, slot, at, false); !errors.Is(err, totp.ErrPhoneSlot) || sb.HasTOTPKey() {
 			t.Fatalf("%s: the slot still has a TOTP code (%v)", what, err)
 		}
 	}
@@ -270,7 +271,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	if _, sb, err := readSlot(tpm, slot); err != nil || !sb.HasTOTPKey() || sb.Payload.Attestation != nil {
 		t.Fatalf("after the last phone left: %+v %v", sb, err)
 	}
-	if code, _, err := SlotCode(tpm, slot, at, false); err != nil || len(code) != 6 {
+	if code, _, err := totp.SlotCode(tpm, slot, at, false); err != nil || len(code) != 6 {
 		t.Fatalf("the new TOTP key gives no code under the approval in force: %q %v", code, err)
 	}
 	// And a phone again: the boot key, made under the slot's policy, is

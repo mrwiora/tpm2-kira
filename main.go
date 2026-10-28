@@ -13,6 +13,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -293,7 +294,7 @@ func runCap(args []string, tpmPath string) {
 	fs := flag.NewFlagSet("cap", flag.ExitOnError)
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	fs.Parse(args)
-	if err := cmd.CapCommand(*tpm); err != nil {
+	if err := totp.CapCommand(*tpm); err != nil {
 		fail(err)
 	}
 }
@@ -462,7 +463,7 @@ func runReveal(args []string, tpmPath string, debugFlag bool) {
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	cmd.RevealCommand(*tpm, scanIndex, *debug, false)
+	totp.RevealCommand(*tpm, scanIndex, *debug, false)
 }
 
 func runRevealPlain(args []string, tpmPath string, debugFlag bool) {
@@ -476,7 +477,7 @@ func runRevealPlain(args []string, tpmPath string, debugFlag bool) {
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	cmd.RevealCommand(*tpm, scanIndex, *debug, true)
+	totp.RevealCommand(*tpm, scanIndex, *debug, true)
 }
 
 func runRun(args []string, tpmPath string, debugFlag bool) {

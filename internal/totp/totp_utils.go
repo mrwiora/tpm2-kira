@@ -1,4 +1,4 @@
-package cmd
+package totp
 
 import (
 	"encoding/binary"
@@ -99,7 +99,7 @@ func PrintKIRAError(err error) {
 // /proc/<pid>/cmdline while it runs. Two module rows share one text line
 // (half blocks), drawn black on white with ANSI colours so the code scans on
 // dark terminal themes too, and surrounded by the quiet zone scanners need.
-func renderQRCode(data string) (string, error) {
+func RenderQRCode(data string) (string, error) {
 	code, err := qr.Encode(data, qr.M)
 	if err != nil {
 		return "", fmt.Errorf("failed to encode QR code: %w", err)
@@ -130,7 +130,7 @@ func renderQRCode(data string) (string, error) {
 //
 // The algorithm parameter is only added for SHA-256: SHA-1 is the default
 // every authenticator assumes, and some apps reject the parameter.
-func generateTOTPURI(secret, label, issuer string, alg tpm2.TPMAlgID) string {
+func URI(secret, label, issuer string, alg tpm2.TPMAlgID) string {
 	if label == "" {
 		label = "TPM2-KIRA"
 	}
@@ -147,7 +147,7 @@ func generateTOTPURI(secret, label, issuer string, alg tpm2.TPMAlgID) string {
 }
 
 // displayTOTPQRCode displays a QR code for a TOTP secret with slot and PCR info
-func displayTOTPQRCode(secret string, nvramIndex uint32, pcrsStr string, alg tpm2.TPMAlgID) {
+func DisplayQRCode(secret string, nvramIndex uint32, pcrsStr string, alg tpm2.TPMAlgID) {
 	// Get hostname
 	hostname, err := os.Hostname()
 	if err != nil || hostname == "" {
@@ -158,9 +158,9 @@ func displayTOTPQRCode(secret string, nvramIndex uint32, pcrsStr string, alg tpm
 
 	// Create label with slot number and PCRs
 	label := fmt.Sprintf("TPM2-KIRA: %s, PCRs %s (#%d)", hostname, pcrsStr, slotNumber)
-	totpURI := generateTOTPURI(secret, label, "TPM2-KIRA", alg)
+	totpURI := URI(secret, label, "TPM2-KIRA", alg)
 
-	if qrText, err := renderQRCode(totpURI); err != nil {
+	if qrText, err := RenderQRCode(totpURI); err != nil {
 		fmt.Printf("   QR code could not be generated: %v\n", err)
 	} else {
 		fmt.Print(qrText)
@@ -175,7 +175,7 @@ func displayTOTPQRCode(secret string, nvramIndex uint32, pcrsStr string, alg tpm
 // hotpTruncate turns an HMAC into the six-digit code (RFC 4226 dynamic
 // truncation). It works for any HMAC of at least 20 bytes, so for the
 // SHA-256 keys used on TPMs without SHA-1 too (RFC 6238).
-func hotpTruncate(mac []byte) string {
+func HOTPTruncate(mac []byte) string {
 	offset := mac[len(mac)-1] & 0x0F
 	truncated := binary.BigEndian.Uint32(mac[offset:offset+4]) & 0x7FFFFFFF
 	return fmt.Sprintf("%06d", truncated%1000000)

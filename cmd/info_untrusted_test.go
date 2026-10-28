@@ -12,6 +12,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 
@@ -133,7 +134,7 @@ func TestInfoVerifiedBlob(t *testing.T) {
 }
 
 func TestRenderQRCode(t *testing.T) {
-	out, err := renderQRCode("otpauth://totp/TPM2-KIRA?secret=JBSWY3DPEHPK3PXP&issuer=TPM2-KIRA")
+	out, err := totp.RenderQRCode("otpauth://totp/TPM2-KIRA?secret=JBSWY3DPEHPK3PXP&issuer=TPM2-KIRA")
 	if err != nil {
 		t.Fatal(err)
 	}
