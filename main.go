@@ -32,13 +32,13 @@ func fail(err error) {
 // (the TPM, the keys in /etc/tpm2-kira, the LUKS headers, the initramfs).
 // control says so on its own screen. The test suite runs the binary as a
 // user against a software TPM: TPM2_KIRA_UNPRIVILEGED=1 skips the check.
-func requireRoot(command string) {
+func requireRoot(command string, args []string) {
 	switch command {
 	case "version", "-v", "--version", "help", "-h", "--help", "pcrtips":
 		return
 	}
 	// The SSH server's unprivileged half: started by 'run' as nobody.
-	if command == "remote" && len(os.Args) > 2 && os.Args[2] == "serve" {
+	if command == "remote" && len(args) > 0 && args[0] == "serve" {
 		return
 	}
 	if os.Geteuid() == 0 || os.Getenv("TPM2_KIRA_UNPRIVILEGED") != "" {
@@ -56,23 +56,27 @@ func main() {
 	// Set application version in cmd package
 	cmd.AppVersion = Version
 
-	// Global flags (shared across all commands)
-	globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
+	// The global options, before the command: the defaults of the
+	// command's own options of the same names.
+	globalFlags := flag.NewFlagSet("tpm2-kira", flag.ExitOnError)
 	tpmPath := globalFlags.String("tpm", cmd.DefaultTPMPath, "Path to TPM device")
-	nvramIndex := globalFlags.Uint("nvram", 0x01803010, "TPM NVRAM index to use for storage")
+	globalFlags.Func("nvram", "A slot, 0-15, or a full NV index", func(v string) error {
+		n, err := strconv.ParseUint(v, 0, 32)
+		if err != nil {
+			return err
+		}
+		globalNVRAM = &n
+		return nil
+	})
 	debug := globalFlags.Bool("debug", false, "Enable debug output")
+	n := globalArgs(os.Args[1:])
+	globalFlags.Parse(os.Args[1 : 1+n])
 
-	// Default to 'reveal' command if no arguments provided
+	// Without a command: 'reveal'.
 	command := "reveal"
-	argsOffset := 1
-	if len(os.Args) >= 2 {
-		command = os.Args[1]
-		argsOffset = 2
-	}
-
-	var commandArgs []string
-	if len(os.Args) >= argsOffset {
-		commandArgs = os.Args[argsOffset:]
+	commandArgs := os.Args[1+n:]
+	if len(commandArgs) > 0 {
+		command, commandArgs = commandArgs[0], commandArgs[1:]
 	}
 
 	// '<command> help', '-h' or '--help' is that command's page.
@@ -81,17 +85,17 @@ func main() {
 		return
 	}
 
-	requireRoot(command)
+	requireRoot(command, commandArgs)
 
 	switch command {
 	case "setup":
-		runSetup(commandArgs)
+		runSetup(commandArgs, *debug)
 	case "seal":
-		runSeal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+		runSeal(commandArgs, *tpmPath, *debug)
 	case "reseal":
-		runReseal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+		runReseal(commandArgs, *tpmPath, *debug)
 	case "info":
-		runInfo(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+		runInfo(commandArgs, *tpmPath, *debug)
 	case "control":
 		fs := flag.NewFlagSet("control", flag.ExitOnError)
 		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
@@ -112,13 +116,13 @@ func main() {
 			fail(err)
 		}
 	case "nvram":
-		runNVRAM(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+		runNVRAM(commandArgs, *tpmPath, *debug)
 	case "reveal":
-		runReveal(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+		runReveal(commandArgs, *tpmPath, *debug)
 	case "reveal-plain":
-		runRevealPlain(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+		runRevealPlain(commandArgs, *tpmPath, *debug)
 	case "run":
-		runRun(commandArgs, *tpmPath, uint32(*nvramIndex), *debug)
+		runRun(commandArgs, *tpmPath, *debug)
 	case "attest":
 		runAttest(commandArgs, *tpmPath, *debug)
 	case "remote-salt":
@@ -178,9 +182,47 @@ func main() {
 	cmd.CloseTokenSessions()
 }
 
-// nvramExplicit checks whether --nvram (or -nvram) appears in the argument
-// list.  This lets us distinguish "flag absent" from "flag set to default".
+// globalNVRAM is the --nvram before the command, nil without one.
+var globalNVRAM *uint64
+
+// nvramDefault is the default of a command's --nvram: the one before the
+// command, def without one.
+func nvramDefault(def uint32) uint {
+	if globalNVRAM != nil {
+		return uint(*globalNVRAM)
+	}
+	return uint(def)
+}
+
+// globalArgs is how many of args, from the first, are global options
+// (--tpm PATH, --nvram N, --debug, in the forms the flag package takes):
+// the command is the argument after them.
+func globalArgs(args []string) int {
+	i := 0
+	for i < len(args) && strings.HasPrefix(args[i], "-") {
+		name, _, inline := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(args[i], "-"), "-"), "=")
+		switch name {
+		case "debug":
+			i++
+		case "tpm", "nvram":
+			i++
+			if !inline {
+				i++
+			}
+		default:
+			return i
+		}
+	}
+	return min(i, len(args))
+}
+
+// nvramExplicit checks whether --nvram (or -nvram) was given before the
+// command or appears in the argument list. This lets us distinguish "flag
+// absent" from "flag set to default".
 func nvramExplicit(args []string) bool {
+	if globalNVRAM != nil {
+		return true
+	}
 	for _, arg := range args {
 		if arg == "--nvram" || arg == "-nvram" || strings.HasPrefix(arg, "--nvram=") || strings.HasPrefix(arg, "-nvram=") {
 			return true
@@ -233,13 +275,13 @@ func (f *yubiKeyFlag) Set(v string) error {
 	return nil
 }
 
-func runSetup(args []string) {
+func runSetup(args []string, debugFlag bool) {
 	fs := flag.NewFlagSet("setup", flag.ExitOnError)
 	var yk yubiKeyFlag
 	fs.Var(&yk, "yubikey", "Take the signing key from a YubiKey PIV slot (optionally =SERIAL)")
 	slot := fs.String("slot", "", "PIV slot of the key with --yubikey (default: 9a)")
 	local := fs.Bool("local", false, "Create local key files without looking for a YubiKey or asking")
-	debug := fs.Bool("debug", false, "Enable debug output")
+	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	fs.Parse(args)
 
 	if *slot != "" && !yk.set {
@@ -278,16 +320,16 @@ func runYubiKey(args []string) {
 	}
 }
 
-func runSeal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
+func runSeal(args []string, tpmPath string, debugFlag bool) {
 	fs := flag.NewFlagSet("seal", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	pcrs := fs.String("pcrs", "", "PCR indices to use for policy (default: what this boot measured, see 'help seal')")
-	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
+	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
 	pubKeyPath := fs.String("pubkey", cmd.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
-	privKeyPath := fs.String("privkey", cmd.DefaultPrivateKeyPath, "Path to signing private key: PEM, or the YubiKey key file from setup --yubikey (stored in blob for reseal convenience)")
+	privKeyPath := fs.String("privkey", cmd.DefaultPrivateKeyPath, "Path to signing private key: PEM, or the YubiKey key file from setup --yubikey")
 	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
 	verifyUKI := fs.Bool("verify-uki", true, "Check the built-in PCR 11 computation against this boot's event log before sealing")
 
@@ -338,12 +380,12 @@ func pcrsGiven(args []string) bool {
 	return false
 }
 
-func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
+func runReseal(args []string, tpmPath string, debugFlag bool) {
 	fs := flag.NewFlagSet("reseal", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	pcrs := fs.String("pcrs", "", "PCR indices to use for policy (if not specified, preserves original selection)")
-	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
+	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	pubKeyPath := fs.String("pubkey", "", "Path to signing public key PEM (default: derived from --privkey, or preserved from blob)")
 	privKeyPath := fs.String("privkey", "", "Path to signing private key: PEM, or the YubiKey key file from setup --yubikey")
@@ -378,11 +420,11 @@ func runReseal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 	}
 }
 
-func runInfo(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
+func runInfo(args []string, tpmPath string, debugFlag bool) {
 	fs := flag.NewFlagSet("info", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
+	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
@@ -397,11 +439,11 @@ func runInfo(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	}
 }
 
-func runReveal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
+func runReveal(args []string, tpmPath string, debugFlag bool) {
 	fs := flag.NewFlagSet("reveal", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
+	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
@@ -411,11 +453,11 @@ func runReveal(args []string, tpmPath string, nvramIndex uint32, debugFlag bool)
 	cmd.RevealCommand(*tpm, scanIndex, *debug, false)
 }
 
-func runRevealPlain(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
+func runRevealPlain(args []string, tpmPath string, debugFlag bool) {
 	fs := flag.NewFlagSet("reveal-plain", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
+	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
@@ -425,15 +467,15 @@ func runRevealPlain(args []string, tpmPath string, nvramIndex uint32, debugFlag 
 	cmd.RevealCommand(*tpm, scanIndex, *debug, true)
 }
 
-func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
+func runRun(args []string, tpmPath string, debugFlag bool) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
+	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	gate := fs.String("gate", "", "Also be the Bluetooth gate's coordinator on this socket: hold the TPM for 'attest gate --coordinator' and let the phone's verdict release the boot (set by the initrd unit)")
 	hold := fs.Uint("hold", uint(cmd.HoldDefault/time.Second), "Seconds to wait for Enter after showing the code before the boot continues on its own (0: at once)")
-	unlock := fs.String("unlock", "", "Also answer systemd-cryptsetup's key requests on this socket (crypttab(5) AF_UNIX key files): the passphrase is asked at tpm2-kira's prompt once the code screen is confirmed. The initrd's socket unit passes the socket instead (set by the initrd unit)")
+	unlock := fs.String("unlock", "", "Also answer systemd-cryptsetup's key requests on this socket (crypttab(5) AF_UNIX key files): the passphrase is asked at tpm2-kira's prompt once the code screen is confirmed. Under systemd the socket unit hands its socket over instead; Debian's boot script passes this")
 	ssh := fs.Bool("ssh", false, "Also be the SSH server: the codes are shown and confirmed in an SSH session, the console says where to log in (set by the image's drop-in from TPM2_KIRA_SSH)")
 	sshConf := fs.String("ssh-conf", cmd.DefaultSSHConf, "With --ssh: aSSH's settings - the SSH CA, which certifies a host key made in the TPM for this boot (a temporary key, made in the TPM but not certified, is served when it does not), the address, the keys that may log in")
 	sshHold := fs.Uint("ssh-hold", 0, "With --ssh: seconds to wait for a confirmation, in place of --hold (0: until one comes)")
@@ -457,7 +499,7 @@ func runRun(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
 	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, remote, planned, *debug)
 }
 
-func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) {
+func runNVRAM(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, "nvram requires a subcommand.\n\n")
 		printHelp("nvram")
@@ -470,7 +512,7 @@ func runNVRAM(args []string, tpmPath string, nvramIndex uint32, debugFlag bool) 
 	fs := flag.NewFlagSet("nvram", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", uint(nvramIndex), "TPM NVRAM index")
+	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	yes := fs.Bool("yes", false, "delete: confirm deleting every slot (only needed without --nvram)")
 	pubKey := fs.String("pubkey", "", "restore: signing public key (default: derived from the private key)")
@@ -553,7 +595,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+remotesalt: the slot's verifier is checked)")
 		keyslot := fs.Int("keyslot", -1, "The LUKS keyslot to mark (required)")
 		mode := fs.String("mode", "", "How its key is made: password+salt, password+remotesalt or tpm+vault (required)")
-		nvram := fs.Uint("nvram", 0, "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+remotesalt, tpm+vault: the slot whose release it needs)")
+		nvram := fs.Uint("nvram", nvramDefault(0), "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+remotesalt, tpm+vault: the slot whose release it needs)")
 		label := fs.String("label", "luks", "The salt's label (password+remotesalt)")
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		fs.Parse(deviceLast(args[1:]))
@@ -568,7 +610,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		fs := flag.NewFlagSet("luks enrol", flag.ExitOnError)
 		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+remotesalt)")
 		mode := fs.String("mode", "", "How the key is made at boot: password+salt, password+remotesalt or tpm+vault (required)")
-		nvram := fs.Uint("nvram", 0, "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+remotesalt: the slot whose phone keeps the salt; tpm+vault: the slot enrolled with the vault)")
+		nvram := fs.Uint("nvram", nvramDefault(0), "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+remotesalt: the slot whose phone keeps the salt; tpm+vault: the slot enrolled with the vault)")
 		label := fs.String("label", "luks", "The key's label (password+remotesalt, tpm+vault)")
 		vaultURL := fs.String("url", "", "tpm+vault: the vault, https://host:port")
 		vaultPin := fs.String("pin", "", "tpm+vault: the pin of the vault's key, sha256:… as 'tpm2-kira-vault token create' prints it")
@@ -633,7 +675,7 @@ func runVault(args []string, tpmPath string, debugFlag bool) {
 	}
 	fs := flag.NewFlagSet("vault "+args[0], flag.ExitOnError)
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index (default 0)")
+	nvram := fs.Uint("nvram", nvramDefault(0), "Slot (0-15) or sealed-blob NVRAM index (default 0)")
 	privKey := fs.String("privkey", "", "Signing key (default: "+cmd.DefaultPrivateKeyPath+")")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	switch args[0] {
@@ -709,7 +751,7 @@ func runRemoteSalt(args []string, tpmPath string, debugFlag bool) {
 	case "status":
 		fs := flag.NewFlagSet("remote-salt status", flag.ExitOnError)
 		tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-		nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index (default: every enrolled slot)")
+		nvram := fs.Uint("nvram", nvramDefault(0), "Slot (0-15) or sealed-blob NVRAM index (default: every enrolled slot)")
 		jsonOut := fs.Bool("json", false, "Machine-readable output")
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		fs.Parse(args[1:])
@@ -724,7 +766,7 @@ func runRemoteSalt(args []string, tpmPath string, debugFlag bool) {
 	case "unenrol", "unenroll":
 		fs := flag.NewFlagSet("remote-salt unenrol", flag.ExitOnError)
 		tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-		nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index")
+		nvram := fs.Uint("nvram", nvramDefault(0), "Slot (0-15) or sealed-blob NVRAM index")
 		privKey := fs.String("privkey", "", "Signing key (default: "+cmd.DefaultPrivateKeyPath+")")
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		fs.Parse(args[1:])
@@ -741,7 +783,7 @@ func runRemoteSalt(args []string, tpmPath string, debugFlag bool) {
 	}
 	fs := flag.NewFlagSet("remote-salt "+args[0], flag.ExitOnError)
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index (default: the first enrolled slot)")
+	nvram := fs.Uint("nvram", nvramDefault(0), "Slot (0-15) or sealed-blob NVRAM index (default: the first enrolled slot)")
 	label := fs.String("label", "luks", "The factor's label: one factor serves volumes with unrelated salts")
 	out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
 	privKey := fs.String("privkey", "", "Signing key, needed for every hand-over (default: "+cmd.DefaultPrivateKeyPath+")")
@@ -805,7 +847,7 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 	}
 	fs := flag.NewFlagSet("attest "+sub, flag.ExitOnError)
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", 0, "Slot (0-15) or sealed-blob NVRAM index")
+	nvram := fs.Uint("nvram", nvramDefault(0), "Slot (0-15) or sealed-blob NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	switch sub {

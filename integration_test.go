@@ -403,6 +403,43 @@ func TestSealAndReveal(t *testing.T) {
 	}
 }
 
+// TestGlobalOptionsBeforeCommand: --tpm, --nvram and --debug before the
+// command are the command's own: the slot they name is the one read, and
+// an --nvram there is as explicit as one after the command.
+func TestGlobalOptionsBeforeCommand(t *testing.T) {
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+
+	// Slot 3: without --nvram, reveal-plain scans the slots and finds it.
+	if _, _, err := runTPMKira(t, tpmPath, "seal", "--nvram", "3", "--pcrs", testPCRs,
+		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	kira := func(args ...string) string {
+		var out, errb bytes.Buffer
+		c := exec.Command("./tpm2-kira", args...)
+		c.Stdout, c.Stderr = &out, &errb
+		if err := c.Run(); err != nil {
+			t.Fatalf("tpm2-kira %v: %v\n%s", args, err, errb.String())
+		}
+		return strings.TrimSpace(out.String())
+	}
+	isCode := func(s string) bool { return len(s) == 6 && strings.Trim(s, "0123456789") == "" }
+
+	if code := kira("--tpm", tpmPath, "--nvram", "3", "reveal-plain"); !isCode(code) {
+		t.Fatalf("reveal-plain with the options before it: %q", code)
+	}
+	// Slot 4, named before the command, is the only one read: it is empty.
+	if out := kira("--tpm="+tpmPath, "--nvram=4", "--debug", "reveal-plain"); isCode(out) {
+		t.Fatalf("--nvram=4 before the command read slot 3: %q", out)
+	}
+	before := kira("--tpm", tpmPath, "--nvram", "3", "info", "--json")
+	after := kira("info", "--json", "--tpm", tpmPath, "--nvram", "3")
+	if before != after || !strings.Contains(before, `"slot_number": 3`) {
+		t.Fatalf("info with the options before the command:\n%s\nafter it:\n%s", before, after)
+	}
+}
+
 // TestSealWithCustomPCRs tests seal with custom PCR selection
 func TestSealWithCustomPCRs(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)

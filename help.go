@@ -77,12 +77,14 @@ BY HAND
   pcrtips      What each PCR measures
   version      The version
 
-GLOBAL OPTIONS (before the command)
+GLOBAL OPTIONS (before the command, or after it as the command's own)
   --tpm PATH      TPM device (default /dev/tpmrm0; /dev/tpm0 without a kernel
                   resource manager)
   --nvram INDEX   A slot, 0-15, or a full NV index such as 0x01803010. Without
                   it most commands take every populated slot
   --debug         Debug output
+  An option after the command wins over the same one before it; a command
+  without one of them ignores it.
 
 FIRST STEPS
   tpm2-kira control                                  guided, in two steps; or:
@@ -257,8 +259,7 @@ slot: the one named (else 0), the PCRs named (else the selection).
                      before tpm2-kira runs: auto (default), on, off
   --pubkey PATH      The signing key's public half, PEM, X.509 or raw, RSA or
                      ECDSA (default: ` + cmd.DefaultPublicKeyPath + `)
-  --privkey PATH     The private half (default: the key from setup). Both
-                     paths are kept in the blob so reseal finds them
+  --privkey PATH     The private half (default: the key from setup)
   --sha1             The SHA-1 PCR bank: only for a TPM whose event log has
                      no SHA-256 digests
   --verify-uki       Check the PCR 11 computation against this boot's event
@@ -276,8 +277,8 @@ slot: the one named (else 0), the PCRs named (else the selection).
 Approves the current (predicted next) boot state for a slot, with the
 signing key: a new generation, the older approvals revoked. It never needs
 the PCRs to match and never reads the TOTP key. Without --nvram it also
-approves the SSH CA (` + cmd.DefaultSSHCA + `) for the next boot, in both slots,
-when one has no approval. The initramfs hooks run it
+approves the SSH CA (` + cmd.DefaultSSHCA + `) for the next boot, in each of
+its slots (assh.conf's) that has no approval. The initramfs hooks run it
 after every image rebuild; a slot sealed with the key on a YubiKey needs
 the token and its PIN (` + cmd.PINEnvVar + `, or /etc/tpm2-kira/pin, which
 control stores, root-only; else asked).
@@ -286,8 +287,7 @@ control stores, root-only; else asked).
   --measure-point M  As for seal: auto (default), on, off
   --privkey PATH     The signing key (default: the key from setup). It
                      verifies the blob's signature, authorises the write and
-                     approves the PCR values; a path kept in the blob is
-                     never used to find it
+                     approves the PCR values
   --pubkey PATH      Must belong to --privkey (default: derived from it)
   --require-key      With a YubiKey: fail when the token or its PIN is not
                      at hand. By default reseal then prints SKIPPED, leaves
@@ -389,8 +389,9 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
   --gate SOCKET    Be the coordinator of the gate on this socket: hold the TPM
                    for the radio worker ('attest gate --coordinator'), read
                    the phone's receipt, release the boot on its verdict
-  --unlock SOCKET  Serve the disk's key on this socket (the unit sets
-                   ` + cmd.DefaultUnlockSocket + `)
+  --unlock SOCKET  Serve the disk's key on this socket (Debian's boot
+                   script passes ` + cmd.DefaultUnlockSocket + `; under
+                   systemd the socket unit hands its socket over instead)
   --ssh            Be the SSH server ('remote serve', unprivileged): the
                    codes are shown and confirmed in an SSH session, the
                    password is asked there; the console says where to log
@@ -460,8 +461,8 @@ key, the adapter's module list and udev rule, the network's file, the
 SSH CA with its approval, the keys that may log in, the drop-ins), the parts
 are named in ` + cmd.ImagePlanDir + ` (a directory each, with a file named by
 the digest of its settings), and the lines the hook adds by are printed:
-say, warning, bt-module, bt-firmware, net-module, net-modules-all. A part
-that cannot be had stays out; nothing stops the build.
+say, warning, module, bt-module, bt-firmware, net-module, net-modules-all.
+A part that cannot be had stays out; nothing stops the build.
 
 'tpm2-kira control' compares the plan with the image the next boot starts:
 a part in use and not in the image, or in it with other settings, makes it
@@ -484,8 +485,10 @@ left; by hand only for a test.
 
 The Debian keyscript (/lib/cryptsetup/scripts/tpm2-kira runs it, VOLUME
 from CRYPTTAB_NAME): the volume's key from the socket of 'run --unlock' to
-stdout, as systemd-cryptsetup would ask it. Without the socket, or without
-a key to give (mode skip, no remote salt, Ctrl-C), it becomes cryptsetup's
+stdout, as systemd-cryptsetup would ask it. Without the socket (the 'once'
+mode of /etc/tpm2-kira/initramfs.conf, or 'run' failed), or without
+a key to give (no tpm2-kira token on the volume, the remote salt or the
+vault's part not released, Ctrl-C), it becomes cryptsetup's
 own prompt, /lib/cryptsetup/askpass. On the last of cryptroot's tries the
 keyscript asks at askpass directly.
 
