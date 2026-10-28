@@ -10,8 +10,6 @@ enabled on the host, and each carries
 `ConditionPathExists=/etc/initrd-release`, so enabling one there by mistake
 does nothing.
 
-| Unit | In the initramfs image | Does something when |
-|------|------------------------|---------------------|
 What goes in is the **boot plan**'s (`tpm2-kira initramfs plan`,
 `tpm2-kira help initramfs`): the disk unlock always, every other part only
 while something uses it, and what needs the TPM only with one. The image
@@ -38,9 +36,11 @@ without).
 
 On Debian there are no units in the image: the initramfs-tools scripts start
 the display and, with the phone in the plan, the gate, and run `cap` when
-the initramfs is left and the codes are in the plan. The split into coordinator and radio worker and the
-confinement above apply to systemd-based images only; there the gate is one
-process with the TPM, and the phone's verdict does not release the display.
+the initramfs is left and the codes are in the plan. The gate is split
+there too - `run --gate` holds the TPM and releases the display on the
+phone's verdict, `attest gate --coordinator` is the radio worker - but the
+confinement above is the unit's: on Debian the radio worker runs as root,
+unconfined.
 
 ## Display mode
 

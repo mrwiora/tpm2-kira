@@ -11,8 +11,9 @@ import (
 	"strings"
 )
 
-// /etc/tpm2-kira/control.conf is the one configuration file, and it holds
-// what the boot image is built with, nothing else: the radio of the
+// /etc/tpm2-kira/control.conf is tpm2-kira's configuration file (aSSH's,
+// assh.conf, is beside it: remote_assh.go), and it holds what the boot
+// image is built with, nothing else: the radio of the
 // attestation by phone (TPM2_KIRA_ATTEST_*) and the image's network and
 // SSH server (TPM2_KIRA_NET_*, TPM2_KIRA_SSH_*, remote_config.go).
 // KEY=VALUE lines. How the disk's key is made is not configured anywhere:

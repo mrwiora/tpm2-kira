@@ -10,7 +10,7 @@ import (
 // DeriveCommand is hashpwd2 by hand: the password and the salt asked on
 // the terminal, their combination written to a file on tmpfs for
 // 'cryptsetup luksAddKey', so a keyslot can be enrolled for the password+salt
-// mode of control.conf without a phone. The same bytes hashpwd2 itself
+// mode (its token, luks mark) by hand. The same bytes hashpwd2 itself
 // would print; nothing is kept.
 func DeriveCommand(out string) error {
 	if out == "" {

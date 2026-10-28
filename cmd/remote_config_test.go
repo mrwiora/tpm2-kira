@@ -36,7 +36,7 @@ TPM2_KIRA_NET_DHCP_ID=mac
 	for _, bad := range []string{
 		"TPM2_KIRA_NET=wifi", "TPM2_KIRA_NET_MATCH=eth 0", "TPM2_KIRA_NET_ADDRESS=192.0.2.10",
 		"TPM2_KIRA_NET_GATEWAY=gw", "TPM2_KIRA_NET_DNS=1.1.1.1 dns", "TPM2_KIRA_SSH=yes",
-		"TPM2_KIRA_SSH_PORT=2222", "TPM2_KIRA_SSH_HOLD=-1", "TPM2_KIRA_SSH_HOSTKEY=keys", "TPM2_KIRA_NET_DHCP_ID=zz",
+		"TPM2_KIRA_SSH_HOLD=-1", "TPM2_KIRA_NET_DHCP_ID=zz",
 	} {
 		if _, err := ParseControlConfig([]byte("# x\n" + bad + "\n")); err == nil || !strings.Contains(err.Error(), "line 2") {
 			t.Errorf("%s: %v", bad, err)

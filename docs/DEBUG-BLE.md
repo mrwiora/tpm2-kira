@@ -58,8 +58,8 @@ the rebuild ("The sd-tpm2-kira hook adds for hci0: ...").
   `mkinitcpio.conf`.
 
 What makes it visible instead: the plan shown before every rebuild, the
-hook's line in the `mkinitcpio` output (`tpm2-kira: Bluetooth attestation
-via hci0: 6 modules, 2 firmware files`, or a warning), and `control`'s check
+hook's line in the `mkinitcpio` output (`tpm2-kira: Bluetooth: 6 modules,
+2 firmware files`, or a warning), and `control`'s check
 of the built image (§2).
 
 ## 2. Is it in the image?
@@ -90,9 +90,9 @@ sudo tpm2-kira initramfs plan                         # what the next build will
 
 The kernel names the firmware it loads, but not in every boot: an Intel
 controller that kept its firmware over a warm reboot logs "Firmware already
-loaded" and names no file. An image built in such a boot used to get the
-modules' declared files instead, and the next cold start failed in the
-initrd with the firmware missing. Therefore:
+loaded" and names no file. An image built in such a boot with the modules'
+declared files instead would miss the firmware at the next cold start.
+Therefore:
 
 - the hooks read the Bluetooth kernel lines of **every boot the journal
   keeps** (`journalctl -k`), not just the current one;

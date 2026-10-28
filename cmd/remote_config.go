@@ -143,18 +143,12 @@ func parseRemoteLine(cfg *RemoteConfig, n int, key, val string) (handled bool, e
 		default:
 			return true, fmt.Errorf("control.conf line %d: TPM2_KIRA_SSH must be on or off, not %q", n, val)
 		}
-	case "TPM2_KIRA_SSH_PORT":
-		return true, fmt.Errorf("control.conf line %d: the SSH server's port is aSSH's setting, ASSH_LISTEN=:PORT in assh.conf beside control.conf (tpm2-kira control sets it): remove the line", n)
 	case "TPM2_KIRA_SSH_HOLD":
 		h, err := strconv.Atoi(val)
 		if err != nil || h < 0 {
 			return true, fmt.Errorf("control.conf line %d: TPM2_KIRA_SSH_HOLD must be seconds (0: until a confirmation comes), not %q", n, val)
 		}
 		cfg.SSH.Hold = h
-	case "TPM2_KIRA_SSH_HOSTKEY":
-		return true, fmt.Errorf("control.conf line %d: the boot image's SSH host key is made in the TPM at every boot and certified by the SSH CA (%s, tpm2-kira control creates it): remove the line", n, DefaultSSHCA)
-	case "TPM2_KIRA_SSH_AUTHORIZED_KEYS":
-		return true, fmt.Errorf("control.conf line %d: the keys that may log in at boot are in %s, next to control.conf: put them there (tpm2-kira control offers root's), then remove the line", n, DefaultSSHAuthorizedKeys)
 	default:
 		return false, nil
 	}

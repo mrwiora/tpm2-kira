@@ -469,8 +469,7 @@ tpm2-kira run --ssh [--ssh-hold S] [--ssh-conf PATH]
   address of the image and no process left.
 
 Not run on a VM yet: a static address on Debian, the temporary key made
-in the TPM (the software key before it ran on Arch), and the SSH CA
-at all (the VM runs above were with the sealed key that came before it):
+in the TPM, and the SSH CA at all (the VM runs above had none):
 its EFI variable written by reseal and read at the code screen, PCR 11
 and PCR 8/9 approved from the prediction.
 aSSH's own tests log in with OpenSSH's client (10.6) through a

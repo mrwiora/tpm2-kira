@@ -228,9 +228,8 @@ func indentContinuation(s, indent string) string {
 // slot's generation, which revokes the old approval, and has the signing key
 // approve the PCR values for the next boot.
 //
-// The signing key is --privkey, or the default key from setup; key paths
-// stored in the blob are never used to find it (see resolveResealKeys). The
-// public key for the NEW sealed blob is --pubkey, which must belong to that
+// The signing key is --privkey, or the default key from setup (see
+// resolveResealKeys); the blob names no key file. The public key for the NEW sealed blob is --pubkey, which must belong to that
 // private key, or else derived from it.
 func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath string, debug bool) error {
 	// Parse PCRs if provided (we'll use original PCRs if not explicitly overridden)

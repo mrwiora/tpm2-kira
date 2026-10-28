@@ -11,7 +11,7 @@ import (
 
 // 'tpm2-kira status' is the one page a person wants before a reboot: the
 // slots and what they are sealed to, the phones and the remote salt, the
-// unlock mode, the LUKS keyslots that are tpm2-kira's - and the notes
+// LUKS keyslots that are tpm2-kira's with the mode of each - and the notes
 // where these do not fit together (PLAN-LUKS.md §4). It reads; it changes
 // nothing. Without the TPM, or without root for the LUKS headers, it says
 // so for that part and shows the rest.

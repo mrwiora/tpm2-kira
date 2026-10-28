@@ -23,17 +23,18 @@ Where things are in the repository, and how the tests are run.
 │   ├── control_hub.go       # control's step 2: the submenus, each option gated by what the machine has
 │   ├── control_vault.go     # control's tpm+vault option, the vault asked before and after
 │   ├── control_remote.go    # control's network and SSH at boot
-│   ├── status.go            # The overview: slots, phone, unlock mode, keyslots, notes
+│   ├── status.go            # The overview: slots, phone, keyslots and their modes, notes
 │   ├── luks.go, route.go    # LUKS keyslots and tokens; where the initrd takes the key from
 │   ├── remote_config.go     # The boot image's network and SSH settings; the networkd file, the suggestion
 │   ├── bootplan.go          # The boot plan: what the image carries, its files, 'initramfs plan'
 │   ├── remote_initramfs.go  # The image's files for the network and SSH (written by the plan)
-│   ├── remote_hostkey.go    # The SSH CA in the TPM (PCR 0+7), the boot's certified host key
+│   ├── remote_dhcpid.go     # The image's DHCP identity, the running system's client identifier
+│   ├── remote_assh.go       # assh.conf: aSSH's settings for the SSH server at boot, written by control
+│   ├── remote_hostkey.go    # The SSH CA in the TPM (its EFI variable, two slots), the boot's host key
 │   ├── remote_ssh.go        # The SSH server of the code screen: sessions, prompts, the console hint;
 │   │                        # the server and 'remote serve' are aSSH's (assh/server)
 │   ├── remote_agent.go      # cryptsetup's own prompt in the session (ask-password, askpass' FIFO)
 │   ├── vault.go             # tpm+vault: enrolment with the vault, the boot's release, the key
-│   ├── control_remote.go    # control's step for them
 │   ├── default_pcrs.go      # What 'seal' seals to by default, and the fallback slot
 │   ├── seal.go              # Create the TOTP key in the TPM and approve PCR values
 │   ├── reseal.go            # Approve new PCR values, revoke older approvals
@@ -86,7 +87,7 @@ Where things are in the repository, and how the tests are run.
 │       ├── hooks/tpm2-kira         # Build hook: copies the static binary
 │       ├── scripts/init-premount/tpm2-kira  # Shows the code before unlock
 │       ├── scripts/init-bottom/tpm2-kira    # Stops it and caps before switching root
-│       ├── post-update.d/tpm2-kira          # Reseal reminder
+│       ├── post-update.d/tpm2-kira          # Reseals for the new image
 │       └── initramfs.conf          # Display mode (run / once)
 ├── debian/                  # Debian package definition (must sit at the root)
 ├── packaging/

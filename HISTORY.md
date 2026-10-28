@@ -46,8 +46,7 @@ worked out in the code at every creation, and `run` took `--ssh=PORT
 own file, /etc/tpm2-kira/assh.conf (ASSH_*), which control writes and the
 image carries a copy of: the port is ASSH_LISTEN, the slots are
 ASSH_CA_SLOT_<N> (written by control when it creates the CA, followed by
-reseal after an edit), and `run --ssh --ssh-conf` reads it. A
-TPM2_KIRA_SSH_PORT line is refused with where the port is now.
+reseal after an edit), and `run --ssh --ssh-conf` reads it.
 
 ### The image asked DHCP with its MAC
 

@@ -22,7 +22,7 @@ optdepends=('mkinitcpio: for early boot integration'
 conflicts=('tpm2-kira-git')
 # The commit of the assh submodule at the tag (git rev-parse "$_tag:assh"):
 # GitHub's tag tarball leaves submodules out. Set with _tag.
-_assh=4630dcbbb9653b929ec66cef80490b26e7dbb1ed
+_assh=0ce851719c1aa432e84c125e2389438d55140243
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
 source+=("assh-$_assh.tar.gz::https://github.com/tpm2-trust/assh/archive/$_assh.tar.gz")
 sha256sums=('SKIP' 'SKIP')
@@ -91,7 +91,8 @@ package() {
     # when a phone is enrolled.
     install -Dm644 initramfs/systemd/tpm2-kira-attest.service \
         "$pkgdir/usr/lib/systemd/system/tpm2-kira-attest.service"
-    # The one configuration file: the unlock mode, the radio.
+    # tpm2-kira's configuration file: the radio, the image's network and
+    # SSH server (control writes it, and assh.conf beside it).
     install -Dm644 initramfs/common/control.conf \
         "$pkgdir/etc/tpm2-kira/control.conf"
 

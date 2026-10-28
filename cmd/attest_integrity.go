@@ -54,7 +54,7 @@ func VerifyAttestBlobSignature(signed []byte, pubKey crypto.PublicKey) error {
 }
 
 // attestPublicKey loads this machine's signing public key: an explicit
-// path, else the default. A path recorded in a blob is never used to find it.
+// path, else the default; the blob names no key file.
 func attestPublicKey(explicit string) (crypto.PublicKey, string, error) {
 	path := explicit
 	if path == "" {

@@ -26,13 +26,14 @@ import (
 // route, the vault, the boot image's network and SSH server). It guides in
 // two steps. Step 1, the boot chain (control_bootchain.go): the
 // prerequisites, each judged, then the sd-tpm2-kira hook in the image and
-// the key's route on the kernel command line, and the image built with
-// them. Step 2 (control_hub.go): what the machine combines, in submenus -
+// the key's route on the kernel command line. Step 2 (control_hub.go): what the machine combines, in submenus -
 // the signing key with the TOTP codes, the phone, the ways the disk is
 // unlocked, the network and SSH at boot - each option greyed with the
 // reason while this machine cannot have it, and an option that needs
-// another one control can set up offers it on the way. Everything control
-// keeps is written into control.conf by control itself. The steps run the
+// another one control can set up offers it on the way. The image is built
+// once, when control is left, after the person says yes. Everything control
+// keeps is written by control itself, into control.conf and assh.conf
+// (remote_assh.go). The steps run the
 // same functions the expert commands use: nothing here is a third way of
 // doing things.
 

@@ -56,7 +56,7 @@ For more details on the cryptographic design, see [SECURITY-BACKGROUND.md](docs/
   https://go.dev/dl into `/usr/local/go` and put `/usr/local/go/bin` first
   in `PATH`.
 
-**Supported architectures:** x86_64, aarch64
+**Supported architectures:** x86_64, aarch64 (the Arch package is x86_64 only)
 
 ## Quick Start
 
@@ -173,8 +173,9 @@ takes the empty passphrase where it asks for the recovery one. Under it
 the steps: **mkinitcpio adoption** (sd-tpm2-kira into HOOKS),
 **kernel command line adoption** (the key's route: `rd.luks.key=`
 naming the socket, crypttab on Debian) - each shows the line as it
-should read and writes it only when you say so - and **Build the boot
-image**. **Continue to step 2** opens once the three are in place.
+should read and writes it only when you say so. **Continue to step 2**
+opens once both are in place. The boot image is built when you leave
+`control`, once, after you say yes.
 
 **Step 2** is what the machine combines, in submenus; every option is
 open, done, or greyed with the reason this machine cannot have it - no
@@ -249,10 +250,13 @@ confirmation.
 Every step runs with the same functions the commands below use; run
 `control` again later and it shows the state and what is left. The
 commands below are for specific settings, and they touch no configuration
-file: `control` alone writes `/etc/tpm2-kira/control.conf`, the one
-configuration file - the radio settings and the image's network and SSH
-server, what the image is built with and nothing else (nothing of it goes
-into the image but the network and SSH settings, as files of their own).
+file: `control` alone writes the two configuration files.
+`/etc/tpm2-kira/control.conf` is tpm2-kira's - the radio settings and the
+image's network and SSH server, what the image is built with and nothing
+else (nothing of it goes into the image but the network and SSH settings,
+as files of their own). `/etc/tpm2-kira/assh.conf` beside it is
+[aSSH](assh/README.md)'s: the SSH CA and its slots, the port, the keys
+that may log in ([docs/SSH.md](docs/SSH.md)).
 Beside it `control` keeps the YubiKey's PIN, checked on the token, in
 `/etc/tpm2-kira/pin` (root's alone, never in the image), and the keys
 that may log in at boot in `/etc/tpm2-kira/authorized_keys` (root's
@@ -313,12 +317,14 @@ tpm2-kira runs `reveal`.
 | Setting up the machine | `setup` the signing key · `seal` a new TOTP key to the boot state · `reseal` approve the current boot state (the hooks run it) · `status` the overview · `info` a slot's blob · `nvram list\|status\|delete\|restore` |
 | The phone (Marify, Bluetooth LE) | `attest enrol\|unenrol\|status\|gate\|ekcert\|quote\|verify` · `remote-salt enrol\|rotate\|status\|unenrol` |
 | The disk's key | `luks status\|enrol\|remove\|mark\|route` · `derive` (hashpwd2 by hand) · the recipe is the keyslot's token, read from the header at boot |
-| At boot (the units and hooks) | `initramfs plan` what the image carries · `run` · `cap` · `unlock-key` (Debian keyscript) |
+| The disk's key from a vault | `vault enrol\|status\|unenrol` ([docs/REMOTE-UNLOCK.md](docs/REMOTE-UNLOCK.md)) |
+| At boot (the units and hooks) | `initramfs plan` what the image carries · `run` · `cap` · `unlock-key` (Debian keyscript) · `remote serve` (the SSH server, started by `run`) |
 | By hand | `reveal` / `reveal-plain` · `yubikey list` · `pcrtips` · `version` |
 
-Global options come before the command: `--tpm PATH` (default `/dev/tpmrm0`),
-`--nvram INDEX` (a slot 0-15 or a full index such as `0x01803010`; without
-it most commands take every populated slot), `--debug`.
+Global options come before the command, or after it as the command's own
+(after it wins): `--tpm PATH` (default `/dev/tpmrm0`), `--nvram INDEX` (a
+slot 0-15 or a full index such as `0x01803010`; without it most commands
+take every populated slot), `--debug`.
 
 ## Sealing Secrets
 
@@ -505,8 +511,8 @@ blob itself, so consumers never have to branch on the slot count.
 **Deleting a slot is one act**: `tpm2-kira control`, the slot's own line. It
 deletes everything the slot is made of - the blob in the TPM (the TOTP
 key, the phones, the remote salt's release key), its two companion
-indices, the `password+remotesalt` keyslots bound to the slot by their
-token (a `password+salt` keyslot is bound to nothing and stays), the
+indices, the `password+remotesalt` and `tpm+vault` keyslots bound to the
+slot by their token (a `password+salt` keyslot is bound to nothing and stays), the
 recovery blobs stashed for it. If any part fails to go (no remaining
 passphrase for `luksKillSlot`, a TPM that refuses), the rest is still
 removed, and the slot is **dirty**: parts of it exist while its blob is
@@ -633,7 +639,7 @@ measured the initrd, and asks before enrolling a selection that misses them:
 |---|---|---|
 | GRUB, separate initrd | PCR 9 (the file) | `--pcrs 0,2,4,7,9` |
 | systemd-boot / EFI stub, separate initrd (kernel ≥ 5.17) | PCR 9 (tagged "Linux initrd") | `--pcrs 0,2,4,7,9` |
-| Unified kernel image (UKI) | PCR 11 (`.initrd` section) and PCR 4 (the whole image) | the default `0,2,4,7` |
+| Unified kernel image (UKI) | PCR 11 (`.initrd` section) and PCR 4 (the whole image) | the default: the slot's sealed selection (`0,2,4,7` when it has none) |
 
 PCR 9 also changes with every kernel or initrd update; the phone then shows
 *changed* with the diff, and you approve the new state once.
@@ -676,14 +682,14 @@ The new modules and firmware change the initramfs and therefore PCR 11 (UKI)
 or PCR 9 (GRUB): on both, the post hook reseals automatically, on Debian
 with PCR 8/9 predicted for the next boot (below).
 
-The same session will later also release the salt for
+The same session also releases the salt for
 [hashpwd2](https://github.com/mrwiora/hashpwd2) when the LUKS key is derived
-from a password plus a phone-held factor
-([docs/PLAN-FACTORRELEASE.md](docs/PLAN-FACTORRELEASE.md)).
+from a password plus a phone-held factor (`password+remotesalt`,
+[below](#the-remote-salt-your-password-and-the-phone-together)).
 
 Status: the machine side, Bluetooth inside the initramfs and the phone's
 verification core are implemented but not yet tested on real Bluetooth
-hardware; salt release is not implemented yet. The phone's verdict informs;
+hardware. The phone's verdict informs;
 the passphrase can always be entered by hand
 ([UNLOCK-DISK.md](docs/UNLOCK-DISK.md) §4).
 The phone apps are specified in [docs/mobile/](docs/mobile/). The protocol is
@@ -704,7 +710,8 @@ ssh root@<address shown on the console>
 
 Everything about it - settings, the image build on both distributions,
 the privilege separation, the host keys made in the TPM and certified by
-the SSH CA (PCR 0+7, [aSSH](assh/README.md)), the boot flow,
+the SSH CA (in an EFI variable, two slots of PCRs, [aSSH](assh/README.md)),
+the boot flow,
 tests and limits: [docs/SSH.md](docs/SSH.md).
 
 ## Unattended unlock with a vault (experimental)
@@ -838,8 +845,8 @@ keyslot carries `"slot": N` - the slot whose enrolment releases its salt
 (slot 0 unless `--nvram` names another) - and is deleted with that slot
 ([Deleting sealed data](#deleting-sealed-data)). The two coexist on one
 device: at boot the phone's salt is tried first, the typed salt is the
-fallback. The plan for `luks enrol`, which will do
-all of the above in one step, is [docs/PLAN-LUKS.md](docs/PLAN-LUKS.md).
+fallback. `luks enrol` does all of the above in one step; its design is
+[docs/PLAN-LUKS.md](docs/PLAN-LUKS.md).
 
 ### The remote salt: your password and the phone, together
 
@@ -989,8 +996,9 @@ with what you type at `🔐 Passphrase for disk vda3_crypt:`
 `cryptroot` re-runs the keyscript for each of its tries (`tries=`, 3 by
 default): the first ones are tpm2-kira's prompt, the last is cryptsetup's
 own, for the recovery passphrase; Ctrl-C at tpm2-kira's prompt goes
-there at once. Without the socket (no TPM, `once` mode) the keyscript is
-cryptsetup's own prompt, as before tpm2-kira. (On Arch, `systemd-cryptsetup`
+there at once. Without the socket (the `once` mode of `/etc/tpm2-kira/initramfs.conf`,
+or `run` failed) the keyscript is
+cryptsetup's own prompt, as without tpm2-kira. (On Arch, `systemd-cryptsetup`
 tries a key file once: after a wrong answer at tpm2-kira's prompt its own
 prompt follows.)
 

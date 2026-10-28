@@ -377,8 +377,7 @@ func AttestEnrol(o EnrolOptions) error {
 	}
 	// The signing key is needed to write the blob at the end; find out now,
 	// before the radio is taken and a human has compared codes.
-	// --privkey or the default key; a path recorded in a blob is never
-	// used to find a key (a tampered blob could point anywhere).
+	// --privkey or the default key; the blob names no key file.
 	privPath := o.PrivKeyPath
 	if privPath == "" {
 		privPath = DefaultPrivateKeyPath

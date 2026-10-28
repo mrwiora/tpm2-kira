@@ -362,6 +362,7 @@ func planDigest(fields ...string) string {
 //
 //	say TEXT              a line of the build output: a part, in or out
 //	warning TEXT          said as a warning; the build goes on
+//	module NAME           a module the image needs (efivarfs, for the SSH CA)
 //	bt-module NAME        the adapter's driver (with its dependencies)
 //	bt-firmware PATH      the firmware the adapter loads
 //	net-module NAME       the driver of an interface the network matches

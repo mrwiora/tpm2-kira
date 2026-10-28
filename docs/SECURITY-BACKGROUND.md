@@ -161,8 +161,8 @@ needs to find and trust its phone:
 - the phone's channel key, by which the machine recognises it in the
   encrypted handshake, and the id it signs its receipts with;
 - the anchor key, which verifies the phone's verdicts;
-- nothing that names the phone. The phone sends no name (it used to send
-  its model), the machine numbers its phones ("phone 1", "phone 2") and
+- nothing that names the phone. The phone sends no name, not even its
+  model; the machine numbers its phones ("phone 1", "phone 2") and
   says at boot only that "your phone" attested. The machine finds the phone
   by itself, in the handshake, so nobody needs to be told which phone to
   pick up; the person knows their phone.
@@ -1231,8 +1231,8 @@ terminators.
 
 ## 11. Why No Password Fallback
 
-Previous versions of tpm2-kira offered a password-based recovery mechanism.
-This was removed because:
+tpm2-kira has no password-based recovery for a slot; the signing key is the
+only way back in, because:
 
 1. **Passwords are weak.** A password stored alongside the blob (or memorised
    by the user) has far less entropy than an asymmetric key pair.
