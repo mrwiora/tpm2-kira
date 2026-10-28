@@ -46,3 +46,15 @@ func (s GateStatus) Verdict() bool {
 
 // Asking reports whether a phone can verify the slot right now.
 func (s GateStatus) Asking() bool { return s.State == GateWaiting || s.State == GateSession }
+
+// Exit codes of the commands that do not follow the exit-0 rule
+// (PLAN-PHONE.md §12.1). They match PLAN-PHONESALT.md §5.2.
+const (
+	ExitAttested    = 0 // a trusted receipt arrived and verified
+	ExitInternal    = 1 // internal error
+	ExitUsage       = 2 // usage error
+	ExitUnavailable = 3 // no adapter, timeout, nobody in range
+	ExitRejected    = 4 // the verifier rejected the attestation
+	ExitAnchor      = 5 // receipt not signed by the enrolled phone
+	ExitTampered    = 6 // the attestation record was replaced or is not the current one
+)

@@ -30,8 +30,10 @@ package cmd
 import (
 	"crypto"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/google/go-tpm/tpm2/transport"
@@ -199,4 +201,100 @@ func presentBytes(b []byte) string {
 		return "absent"
 	}
 	return fmt.Sprintf("present (%d bytes)", len(b))
+}
+
+// errNotEnrolled: the slot's blob carries no phone enrolment.
+var errNotEnrolled = errors.New("no phone is enrolled for this slot")
+
+// readSlot returns a slot's blob as stored and parsed.
+func readSlot(tpmDev transport.TPM, idx uint32) ([]byte, *nvslot.SealedBlob, error) {
+	raw, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
+	if err != nil {
+		return nil, nil, err
+	}
+	sb, err := nvslot.UnmarshalSealedBlob(raw)
+	if err != nil {
+		return raw, nil, err
+	}
+	return raw, sb, nil
+}
+
+// loadAttestBlob returns the phone enrolment a slot's blob carries.
+func loadAttestBlob(tpmDev transport.TPM, idx uint32) (*nvslot.Attestation, error) {
+	_, sb, err := readSlot(tpmDev, idx)
+	if err != nil {
+		return nil, err
+	}
+	if sb.Payload.Attestation == nil || !sb.Payload.Attestation.Phone.Enabled() {
+		return nil, errNotEnrolled
+	}
+	return sb.Payload.Attestation, nil
+}
+
+// enrolledSlots returns the slots whose blob carries a phone enrolment.
+func enrolledSlots(tpmDev transport.TPM, debug bool) []uint32 {
+	var out []uint32
+	for _, idx := range nvslot.FindPopulatedSlots(tpmDev, debug) {
+		if _, err := loadAttestBlob(tpmDev, idx); err == nil {
+			out = append(out, idx)
+		}
+	}
+	return out
+}
+
+func readSealedSlot(tpmDev transport.TPM, sealIndex uint32) *nvslot.SealedBlob {
+	data, err := tpmdev.ReadFromNVRAM(tpmDev, sealIndex)
+	if err != nil {
+		return nil
+	}
+	sb, err := nvslot.UnmarshalSealedBlob(data)
+	if err != nil {
+		return nil
+	}
+	return sb
+}
+
+func gateFail(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: "+format+"\n", args...)
+}
+
+// gateRecordCheck checks the record in the TPM before anything is
+// advertised: signed by the key this initramfs carries, and current by the
+// TPM's counter. It reports whether the record was verified, or the exit
+// status with which the gate gives up.
+func gateRecordCheck(tpmDev transport.TPM, idx uint32, signerPath string) (bool, int) {
+	if signerPath == "" {
+		signerPath = DefaultAttestSignerPath
+		// Run by hand on the unlocked system, there is no image around
+		// the gate, but the key the image would carry is right here.
+		if _, err := os.Stat(signerPath); os.IsNotExist(err) {
+			if _, err := os.Stat(signing.DefaultPublicKeyPath); err == nil {
+				signerPath = signing.DefaultPublicKeyPath
+			}
+		}
+	}
+	raw, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
+	if err != nil {
+		gateFail("cannot read the attestation record at 0x%08X: %v", idx, err)
+		return false, ExitInternal
+	}
+	if _, err := os.Stat(signerPath); os.IsNotExist(err) {
+		fmt.Printf("tpm2-kira: no signing public key at %s to check the attestation record (in an initramfs: rebuild it)\n", signerPath)
+		return false, 0
+	}
+	pub, _, err := signing.LoadSigningPublicKeyFromPEM(signerPath)
+	if err != nil {
+		gateFail("cannot use the signing public key at %s: %v", signerPath, err)
+		return false, ExitInternal
+	}
+	if err := checkAttestRecord(tpmDev, idx, raw, pub); err != nil {
+		gateFail("the attestation record in the TPM (slot %d) is not accepted:\n"+
+			"tpm2-kira:   %v.\n"+
+			"tpm2-kira:   It was replaced, or an older one was put back: no phone is served, and a\n"+
+			"tpm2-kira:   verdict from any phone means nothing for this boot. To start over, run\n"+
+			"tpm2-kira:   'tpm2-kira phone unenrol' on the unlocked system and enrol again.",
+			nvslot.AttestSlot(idx), err)
+		return false, ExitTampered
+	}
+	return true, 0
 }
