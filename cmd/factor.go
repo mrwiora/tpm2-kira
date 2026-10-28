@@ -92,13 +92,6 @@ func loadReleaseKey(tpmDev transport.TPM, att *Attestation) (*loadedKey, error) 
 	return &loadedKey{handle: rsp.ObjectHandle, name: rsp.Name}, nil
 }
 
-// WrappedFactor is what the phone keeps: a credential only this machine's
-// TPM can open, with the release key loaded under the slot's policy.
-type WrappedFactor struct {
-	Credential      []byte // TPM2B_ID_OBJECT contents
-	EncryptedSecret []byte // TPM2B_ENCRYPTED_SECRET contents
-}
-
 // wrapFactor draws F and wraps it for this TPM's EK and the slot's release
 // key. F is returned for the one-time derivation at enrolment; the caller
 // wipes it. Nothing of it is kept here.

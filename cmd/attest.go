@@ -191,29 +191,6 @@ func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *Attestation, priv cryp
 	return nil
 }
 
-// nvIndexLimit is the largest NV index this TPM stores, or 0 if it does
-// not say.
-func nvIndexLimit(tpmDev transport.TPM) int {
-	rsp, err := tpm2.GetCapability{
-		Capability:    tpm2.TPMCapTPMProperties,
-		Property:      uint32(tpm2.TPMPTNVIndexMax),
-		PropertyCount: 1,
-	}.Execute(tpmDev)
-	if err != nil {
-		return 0
-	}
-	props, err := rsp.CapabilityData.Data.TPMProperties()
-	if err != nil {
-		return 0
-	}
-	for _, p := range props.TPMProperty {
-		if p.Property == tpm2.TPMPTNVIndexMax {
-			return int(p.Value)
-		}
-	}
-	return 0
-}
-
 // enrolmentSize is the size the slot's blob has at least after the
 // enrolment. The phone is not known before it answers: it may be one of the
 // slot's phones enrolling again, which replaces its entry, and its strings
@@ -1423,16 +1400,6 @@ func AttestVerify(evidencePath, recordPath, nonceHex string, jsonOut bool) (bool
 	}
 	printVerdict(v)
 	return v.OK, nil
-}
-
-func ekAlgName(alg uint16) string {
-	switch tpm2.TPMAlgID(alg) {
-	case tpm2.TPMAlgECC:
-		return "ECC P-256"
-	case tpm2.TPMAlgRSA:
-		return "RSA-2048"
-	}
-	return fmt.Sprintf("0x%04x", alg)
 }
 
 func pcrIndicesOf(ev *attest.Evidence) []uint8 {

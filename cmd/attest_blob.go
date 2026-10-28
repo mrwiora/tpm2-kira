@@ -471,3 +471,20 @@ func (b *Attestation) json() *attestationJSON {
 	}
 	return out
 }
+
+func ekAlgName(alg uint16) string {
+	switch tpm2.TPMAlgID(alg) {
+	case tpm2.TPMAlgECC:
+		return "ECC P-256"
+	case tpm2.TPMAlgRSA:
+		return "RSA-2048"
+	}
+	return fmt.Sprintf("0x%04x", alg)
+}
+
+// WrappedFactor is what the phone keeps: a credential only this machine's
+// TPM can open, with the release key loaded under the slot's policy.
+type WrappedFactor struct {
+	Credential      []byte // TPM2B_ID_OBJECT contents
+	EncryptedSecret []byte // TPM2B_ENCRYPTED_SECRET contents
+}

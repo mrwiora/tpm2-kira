@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -54,9 +53,6 @@ func GenerationIndex(blobIndex uint32) uint32 {
 // cap' ran in this boot, so no code can be computed until the next reboot.
 var ErrCodesLocked = errors.New("codes are locked until the next reboot ('tpm2-kira cap' ran when the initrd was left)")
 
-// ErrNoTOTPKeyAlgorithm means the TPM supports neither SHA-1 nor SHA-256 HMAC.
-var ErrNoTOTPKeyAlgorithm = errors.New("the TPM supports neither SHA-1 nor SHA-256 for HMAC")
-
 // GenerationMismatchError is returned when the slot's generation index does
 // not hold the generation the blob's approval requires: the blob was
 // replaced by a later reseal, or the index was deleted.
@@ -81,43 +77,6 @@ func totpAlgorithmName(alg tpm2.TPMAlgID) string {
 		return "SHA256"
 	}
 	return fmt.Sprintf("unknown (0x%04x)", uint16(alg))
-}
-
-// totpKeySize is the size of a fresh TOTP key: the output size of the HMAC
-// hash, as RFC 4226 recommends for SHA-1.
-func totpKeySize(alg tpm2.TPMAlgID) int {
-	if alg == tpm2.TPMAlgSHA256 {
-		return sha256.Size
-	}
-	return 20
-}
-
-// ChooseTOTPAlgorithm returns HMAC-SHA1, the TOTP default every authenticator
-// supports, or HMAC-SHA256 when the TPM has no SHA-1.
-func ChooseTOTPAlgorithm(tpmDev transport.TPM) (tpm2.TPMAlgID, error) {
-	rsp, err := tpm2.GetCapability{
-		Capability:    tpm2.TPMCapAlgs,
-		Property:      uint32(tpm2.TPMAlgSHA1),
-		PropertyCount: 64,
-	}.Execute(tpmDev)
-	if err != nil {
-		return 0, fmt.Errorf("failed to read the TPM's algorithms: %w", err)
-	}
-	algs, err := rsp.CapabilityData.Data.Algorithms()
-	if err != nil {
-		return 0, fmt.Errorf("failed to parse the TPM's algorithms: %w", err)
-	}
-	has := map[tpm2.TPMAlgID]bool{}
-	for _, a := range algs.AlgProperties {
-		has[a.Alg] = true
-	}
-	switch {
-	case has[tpm2.TPMAlgSHA1]:
-		return tpm2.TPMAlgSHA1, nil
-	case has[tpm2.TPMAlgSHA256]:
-		return tpm2.TPMAlgSHA256, nil
-	}
-	return 0, ErrNoTOTPKeyAlgorithm
 }
 
 // ── policy digests ──────────────────────────────────────────────────────────
@@ -313,50 +272,6 @@ func newPolicyRef() ([]byte, error) {
 	return ref, nil
 }
 
-// CreateTOTPKey creates the HMAC key object for key under the primary key.
-// The key is sent to the TPM in a salted, parameter-encrypted session, so it
-// does not cross the bus in the clear.
-func CreateTOTPKey(tpmDev transport.TPM, primary *tpmdev.PrimaryKeyResponse, key []byte, alg tpm2.TPMAlgID, authPolicy []byte) (*tpmdev.CreateSealedObjectResponse, error) {
-	session := tpm2.HMAC(tpm2.TPMAlgSHA256, 16,
-		tpm2.Salted(primary.ObjectHandle, primary.Public),
-		tpm2.AESEncryption(128, tpm2.EncryptIn))
-	rsp, err := tpm2.Create{
-		ParentHandle: tpm2.AuthHandle{Handle: primary.ObjectHandle, Name: primary.Name, Auth: session},
-		InSensitive: tpm2.TPM2BSensitiveCreate{
-			Sensitive: &tpm2.TPMSSensitiveCreate{
-				Data: tpm2.NewTPMUSensitiveCreate(&tpm2.TPM2BSensitiveData{Buffer: key}),
-			},
-		},
-		InPublic: tpm2.New2B(totpKeyTemplate(alg, authPolicy)),
-	}.Execute(tpmDev)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create the TOTP key in the TPM: %w", err)
-	}
-	return &tpmdev.CreateSealedObjectResponse{Public: rsp.OutPublic.Bytes(), Private: rsp.OutPrivate.Buffer}, nil
-}
-
-func totpKeyTemplate(alg tpm2.TPMAlgID, authPolicy []byte) tpm2.TPMTPublic {
-	return tpm2.TPMTPublic{
-		Type:    tpm2.TPMAlgKeyedHash,
-		NameAlg: tpm2.TPMAlgSHA256,
-		ObjectAttributes: tpm2.TPMAObject{
-			FixedTPM:    true,
-			FixedParent: true,
-			SignEncrypt: true,
-			// UserWithAuth deliberately NOT set: policy only.
-			// SensitiveDataOrigin is clear because tpm2-kira supplies the
-			// key, which it must show once for enrolment.
-		},
-		AuthPolicy: tpm2.TPM2BDigest{Buffer: authPolicy},
-		Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgKeyedHash, &tpm2.TPMSKeyedHashParms{
-			Scheme: tpm2.TPMTKeyedHashScheme{
-				Scheme:  tpm2.TPMAlgHMAC,
-				Details: tpm2.NewTPMUSchemeKeyedHash(tpm2.TPMAlgHMAC, &tpm2.TPMSSchemeHMAC{HashAlg: alg}),
-			},
-		}),
-	}
-}
-
 // signApproval signs approvedPolicy for policyRef and returns the
 // TPMT_SIGNATURE that VerifySignature takes.
 func signApproval(signer crypto.Signer, approvedPolicy, policyRef []byte) ([]byte, error) {
@@ -368,51 +283,6 @@ func signApproval(signer crypto.Signer, approvedPolicy, policyRef []byte) ([]byt
 }
 
 // ── computing a code ────────────────────────────────────────────────────────
-
-// TOTPCode computes the TOTP code of the slot whose blob is at blobIndex, for
-// time t, inside the TPM.
-//
-// The policy session satisfies the approved policy (PolicyPCR against the
-// live registers, PolicyNV against the generation index), then PolicyAuthorize
-// with a ticket for the approval signature in the blob. The TPM decides; the
-// blob is not trusted for anything it could not also have done itself:
-// PolicyAuthorize only accepts the signing key whose Name the key object's
-// policy binds.
-func TOTPCode(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, t time.Time) (string, error) {
-	p := &blob.Payload
-	if p.TOTPAlgorithm != tpm2.TPMAlgSHA1 && p.TOTPAlgorithm != tpm2.TPMAlgSHA256 {
-		return "", fmt.Errorf("blob has unknown TOTP algorithm 0x%04x", uint16(p.TOTPAlgorithm))
-	}
-	session, done, err := approvedSession(tpmDev, blob, blobIndex)
-	if err != nil {
-		return "", err
-	}
-	defer done()
-	primary, err := tpmdev.CreatePrimaryKey(tpmDev)
-	if err != nil {
-		return "", err
-	}
-	defer tpmdev.FlushHandle(tpmDev, primary.ObjectHandle)
-	key, err := LoadSealedObject(tpmDev, primary, blob)
-	if err != nil {
-		return "", err
-	}
-	defer tpmdev.FlushHandle(tpmDev, key.ObjectHandle)
-
-	counter := binary.BigEndian.AppendUint64(nil, uint64(t.Unix()/30))
-	rsp, err := tpm2.Hmac{
-		Handle:  tpm2.AuthHandle{Handle: key.ObjectHandle, Name: key.Name, Auth: session},
-		Buffer:  tpm2.TPM2BMaxBuffer{Buffer: counter},
-		HashAlg: p.TOTPAlgorithm,
-	}.Execute(tpmDev)
-	if err != nil {
-		if errors.Is(err, ErrCodesLocked) {
-			return "", ErrCodesLocked
-		}
-		return "", fmt.Errorf("failed to compute the code in the TPM: %w", err)
-	}
-	return hotpTruncate(rsp.OutHMAC.Buffer), nil
-}
 
 // approvedSession returns a policy session that satisfies the slot's policy
 // if the PCRs and the generation are what the signing key approved: the one
@@ -504,21 +374,4 @@ func approvedSessionThen(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint3
 		return nil
 	})
 	return session, done, nil
-}
-
-// CapCommand implements 'tpm2-kira cap': it read-locks every generation
-// index, so that no TOTP code can be computed until the next reboot. Run it
-// when leaving the initrd; the systemd unit and the initramfs-tools script do.
-func CapCommand(tpmPath string) error {
-	tpmDev, err := tpmdev.Open(tpmPath)
-	if err != nil {
-		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
-	}
-	defer tpmDev.Close()
-	n, err := CapCodes(tpmDev)
-	if err != nil {
-		return fmt.Errorf("locked %d generation index(es), but not all: %w", n, err)
-	}
-	fmt.Printf("tpm2-kira: locked %d generation index(es); no codes until the next reboot\n", n)
-	return nil
 }
