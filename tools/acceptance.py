@@ -40,7 +40,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # names it by its type (cmd/luks.go), and the boot reads it from there.
 TOKEN_MODES = {
     "tpm2-kira-salt": "password+salt",
-    "tpm2-kira-remotesalt": "password+remotesalt",
+    "tpm2-kira-phonesalt": "password+phonesalt",
     "tpm2-kira-vault": "tpm+vault",
 }
 
@@ -56,7 +56,7 @@ def marked_keyslots(status, mode, device=None):
 def mode_of(status):
     """The mode the boot asks in: the first typed one a keyslot is marked
     with, skip when there is none."""
-    for mode in ("password+salt", "password+remotesalt"):
+    for mode in ("password+salt", "password+phonesalt"):
         if marked_keyslots(status, mode):
             return mode
     return "skip"
@@ -633,7 +633,7 @@ def main():
     g.add_argument("--ask-password", action="store_true", help="ask for the password at the start")
     p.add_argument("--key", help="an ssh key instead of a password")
     p.add_argument("--rev", default="HEAD", help="the commit to build (default HEAD)")
-    p.add_argument("--mode", default=None, choices=["skip", "password+salt", "password+remotesalt"],
+    p.add_argument("--mode", default=None, choices=["skip", "password+salt", "password+phonesalt"],
                    help="the unlock mode the boot is expected in (default: what the target's keyslots are marked with)")
     p.add_argument("--luks", metavar="DEVICE", help="the LUKS device to enrol a keyslot on when --mode needs one and none is there")
     p.add_argument("--no-build", action="store_true", help="test what is installed; no package")

@@ -130,7 +130,7 @@ hibernation image; the initrd has no swap and no hibernation.
 ## 4. When the answer is wrong: systemd's prompt is the fallback
 
 The chain, from the most convenient to the one that always works: in
-a `password+remotesalt` keyslot (the recipe read from the volume's own
+a `password+phonesalt` keyslot (the recipe read from the volume's own
 header at boot), the password and the salt the phone returned;
 without a salt from the phone (no phone in range, nothing released), the
 password and a **typed** salt - the `password+salt` variant, which opens

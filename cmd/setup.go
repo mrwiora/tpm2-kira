@@ -43,7 +43,7 @@ var setupTerminal = func() *bufio.Reader {
 }
 
 // Setup performs initial tpm2-kira configuration: it creates the signing key
-// pair and nothing else. Sealing a TOTP secret is a separate step ('seal'),
+// pair and nothing else. Sealing a TOTP secret is a separate step ('slot add'),
 // which refuses to run until the keys exist.
 //
 //  1. Checks whether the keys directory already exists.
@@ -64,7 +64,7 @@ func Setup(opts SetupOptions) error {
 	if info, err := os.Stat(DefaultKeysDir); err == nil && info.IsDir() {
 		fmt.Printf("tpm2-kira has been already configured (directory %s exists).\n", DefaultKeysDir)
 		fmt.Println("  Further configuration must be done manually.")
-		fmt.Println("  Use 'tpm2-kira seal', 'tpm2-kira reseal', or edit the keys directly.")
+		fmt.Println("  Use 'tpm2-kira slot add', 'tpm2-kira slot approve', or edit the keys directly.")
 		return nil
 	}
 
@@ -140,7 +140,7 @@ func Setup(opts SetupOptions) error {
 	fmt.Printf("  Private key:    %s (%s)\n", privKeyPath, location)
 	fmt.Println()
 	fmt.Println("Next, seal a TOTP secret and scan the QR code it prints:")
-	fmt.Printf("   tpm2-kira seal --pcrs %s\n", RecommendedPCRs())
+	fmt.Printf("   tpm2-kira slot add --pcrs %s\n", RecommendedPCRs())
 	fmt.Println("   (README \"Choosing PCRs\" explains the selection and its trade-offs)")
 	if chosen != nil {
 		fmt.Println()
@@ -178,7 +178,7 @@ func printPINInstructions(w io.Writer, t TokenInfo, s TokenSlot) {
 	fmt.Fprintln(w, "Without it, seal and reseal ask for the PIN on the terminal (or take it from")
 	fmt.Fprintf(w, "%s: read -rs %s && export %s), and the automatic reseal\n", PINEnvVar, PINEnvVar, PINEnvVar)
 	fmt.Fprintln(w, "reports SKIPPED: the next boot then shows a PCR mismatch until you run")
-	fmt.Fprintln(w, "'tpm2-kira reseal' with the YubiKey plugged in.")
+	fmt.Fprintln(w, "'tpm2-kira slot approve' with the YubiKey plugged in.")
 }
 
 // pinPolicyWarning returns a warning when the key can sign without a PIN, or

@@ -12,7 +12,7 @@ const luksMetadataSample = `{
   "tokens": {
     "0": {"type": "tpm2-kira-salt", "keyslots": ["1"], "created": "2026-10-07T17:30:00Z"},
     "1": {"type": "systemd-tpm2", "keyslots": ["2"], "tpm2-blob": "x"},
-    "2": {"type": "tpm2-kira-remotesalt", "keyslots": ["0"], "slot": 0, "label": "luks", "created": "2026-10-07T18:00:00Z"},
+    "2": {"type": "tpm2-kira-phonesalt", "keyslots": ["0"], "slot": 0, "label": "luks", "created": "2026-10-07T18:00:00Z"},
     "3": {"type": "tpm2-kira", "keyslots": ["9"], "mode": "password+salt", "created": "2026-10-01T00:00:00Z"},
     "4": {"type": "tpm2-kira-salt", "keyslots": ["8"], "created": "2026-10-01T00:00:00Z"}
   },
@@ -35,7 +35,7 @@ func TestParseLuksMetadata(t *testing.T) {
 	if slots[1].Token == nil || slots[1].Token.Mode != LuksModePasswordSalt || slots[1].TokenID != 0 {
 		t.Fatalf("keyslot 1: %+v", slots[1])
 	}
-	if slots[0].Token == nil || slots[0].Token.Mode != LuksModePasswordRemoteSalt || !slots[0].Token.BoundTo(0) || slots[0].TokenID != 2 {
+	if slots[0].Token == nil || slots[0].Token.Mode != LuksModePasswordPhoneSalt || !slots[0].Token.BoundTo(0) || slots[0].TokenID != 2 {
 		t.Fatalf("keyslot 0: %+v", slots[0])
 	}
 	if slots[2].Token != nil {
@@ -47,7 +47,7 @@ func TestParseLuksMetadata(t *testing.T) {
 	if d := describeKeyslot(slots[1]); !strings.Contains(d, "password+salt") || !strings.Contains(d, "bound to no slot") || !strings.Contains(d, "token 0") {
 		t.Error(d)
 	}
-	if d := describeKeyslot(slots[0]); !strings.Contains(d, "password+remotesalt") || !strings.Contains(d, "slot 0") || !strings.Contains(d, `"luks"`) {
+	if d := describeKeyslot(slots[0]); !strings.Contains(d, "password+phonesalt") || !strings.Contains(d, "slot 0") || !strings.Contains(d, `"luks"`) {
 		t.Error(d)
 	}
 	if _, _, err := parseLuksMetadata([]byte("not json")); err == nil {
@@ -102,7 +102,7 @@ func TestLuksStatusReadsTokens(t *testing.T) {
 		t.Fatalf("a mode field written: %s", imported)
 	}
 	// A typed-salt keyslot is bound to nothing: its token carries no slot,
-	// so no slot's deletion takes it (only password+remotesalt binds).
+	// so no slot's deletion takes it (only password+phonesalt binds).
 	if strings.Contains(string(imported), `"slot"`) {
 		t.Fatalf("a password+salt token names a slot: %s", imported)
 	}

@@ -20,7 +20,7 @@ import (
 // an abstract address named /cryptsetup/<volume> - and writes the answer
 // to stdout. Without the socket (the 'once' mode of initramfs.conf, or
 // 'run' failed), or when tpm2-kira has no
-// key to give (no tpm2-kira token on the volume, the remote salt or the
+// key to give (no tpm2-kira token on the volume, the phone salt or the
 // vault's part not released, Ctrl-C), it becomes cryptsetup's own prompt, /lib/cryptsetup/askpass, so the boot
 // is never worse than without tpm2-kira. cryptroot's tries= re-runs the
 // keyscript after a wrong key, which asks at tpm2-kira's prompt again.

@@ -32,7 +32,7 @@ answer when the hold runs out gets up to a minute more.
 The gate is two processes of the one `tpm2-kira` binary. The display is also
 its *coordinator* (`tpm2-kira run --gate`): it holds the TPM, issues the
 quotes and reads the phone's signed receipt. The *radio worker*
-(`tpm2-kira attest gate --coordinator`, in `tpm2-kira-attest.service`) talks
+(`tpm2-kira phone gate --coordinator`, in `tpm2-kira-attest.service`) talks
 to the phone and has no TPM at all; it asks the coordinator over a socket in
 `/run/tpm2-kira`. What listens to the radio can therefore neither have a
 TOTP code computed nor make up a verdict.
@@ -49,7 +49,7 @@ approve a new policy — keep it on a YubiKey, or at least off the machine.)
 
 Because the live registers at seal time already carry the separator, PCRs
 0–7, 9, 12–14 are sealed to values replayed from the firmware event log even
-when given as register source. Where the log cannot be replayed, `seal` warns
+when given as register source. Where the log cannot be replayed, `slot add` warns
 and falls back to the registers: the key's policy then holds only after the
 separator, the display computes codes live after the boot has been released
 (until `cap`), and marks them accordingly.
@@ -65,7 +65,7 @@ controls this:
 | `off` | Reconstruct end-of-firmware values only (and read registers as they are) |
 
 The mkinitcpio install hook inspects the image being built and passes the right
-value to `reseal`, which is what makes the first rebuild after these units
+value to `slot approve`, which is what makes the first rebuild after these units
 appear behave correctly.
 
 ## TPMs whose event log has no SHA-256 digests
@@ -84,7 +84,7 @@ changes - the default selection, the fallback slot, the prediction of PCR
 11 or 8/9 are the same as with SHA-256:
 
 ```bash
-tpm2-kira seal --sha1
+tpm2-kira slot add --sha1
 ```
 
 The SHA-256 value cannot be derived from a SHA-1 log — different banks hold
@@ -96,15 +96,15 @@ hash of the logged payload, so re-hashing the payloads would be wrong.
 By default, `setup` generates keys at `/etc/tpm2-kira/keys/`. You can supply your own (RSA-2048, ECDSA P-256, or ECDSA P-384):
 
 ```bash
-tpm2-kira seal --pubkey /path/to/key.pub --privkey /path/to/key.pem
+tpm2-kira slot add --pubkey /path/to/key.pub --privkey /path/to/key.pem
 ```
 
 Both key files must be mode `0400`, owned by root (or by the user running
-tpm2-kira), not symlinks, and in a directory nobody else can write to; `seal`
-and `reseal` refuse them otherwise.
+tpm2-kira), not symlinks, and in a directory nobody else can write to; `slot add`
+and `slot approve` refuse them otherwise.
 
 The blob names no key file: anyone with TPM access can replace the blob, and
-a planted one would name a key its author holds. `reseal` uses `--privkey`, or
+a planted one would name a key its author holds. `slot approve` uses `--privkey`, or
 the default key from `setup`. With a custom key, always pass `--privkey`.
 
 ECC P-256 is the default and the smallest: the key is stored in every slot
@@ -113,13 +113,13 @@ and signs twice per slot, so an RSA key leaves less of the TPM's NV index
 
 ## Multiple slots
 
-tpm2-kira supports up to 16 NVRAM slots (0–15). A plain `seal` takes two: slot
+tpm2-kira supports up to 16 NVRAM slots (0–15). A plain `slot add` takes two: slot
 0 for what this boot measured and slot 1 for the fallback (`0e,7e`). More, for
 separate secrets or selections:
 
 ```bash
-tpm2-kira seal --nvram 2
-tpm2-kira seal --nvram 3 --pcrs "0e,2e,7e"
+tpm2-kira slot add --nvram 2
+tpm2-kira slot add --nvram 3 --pcrs "0e,2e,7e"
 
 tpm2-kira reveal --nvram 0
 tpm2-kira reveal --nvram 1

@@ -157,7 +157,7 @@ func sourceDevice(source string) string {
 }
 
 // unlockRecipe says how the key of a volume is made, read from its LUKS2
-// header the moment it asks: the remote salt's recipe when a keyslot is
+// header the moment it asks: the phone salt's recipe when a keyslot is
 // bound to it, else the typed salt's, else "" - not tpm2-kira's to answer,
 // and why says so for the journal. Cached per volume: the header does not
 // change while the initrd runs.
@@ -203,8 +203,8 @@ func recipeOfTokens(toks []LuksToken) string {
 		switch t.Mode {
 		case LuksModeTPMVault:
 			return LuksModeTPMVault
-		case LuksModePasswordRemoteSalt:
-			mode = LuksModePasswordRemoteSalt
+		case LuksModePasswordPhoneSalt:
+			mode = LuksModePasswordPhoneSalt
 		case LuksModePasswordSalt:
 			if mode == "" {
 				mode = LuksModePasswordSalt

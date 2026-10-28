@@ -199,7 +199,7 @@ func newPCRMismatchError(sealedBlob *SealedBlob, current []tpm2.TPM2BDigest) *PC
 		currentDigests[i] = d.Buffer
 	}
 	return &PCRMismatchError{
-		Message:         "PCR values have changed. Use 'reseal' with the signing key to approve the new values",
+		Message:         "PCR values have changed. Use 'slot approve' with the signing key to approve the new values",
 		PCRIndices:      sealedBlob.GetPCRIndices(),
 		ExpectedDigests: expectedDigests,
 		CurrentDigests:  currentDigests,

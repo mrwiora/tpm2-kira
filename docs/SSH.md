@@ -179,7 +179,7 @@ tpm2-kira run                              (root: TPM, disk key, code screen)
   │  has the TPM make this boot's host key, the SSH CA certify it; opens :PORT
   │  starts, handing over the listening socket and a control socket:
   ▼
-tpm2-kira remote serve                     (uid 65534; own net/IPC/PID/mount/UTS namespaces;
+tpm2-kira ssh-child                     (uid 65534; own net/IPC/PID/mount/UTS namespaces;
   │                                         no new privileges; Landlock: no file access)
   │  speaks SSH (golang.org/x/crypto/ssh), checks the login keys
   │  ── control socket ──▶ run:  "sign this key exchange"  ◀── signature
@@ -190,7 +190,7 @@ the session in run: the code screen, Enter, the password prompt
 
 `run` must not parse what arrives from the network before a login: it
 holds the TPM, the disk's key and the code screen. So the SSH protocol
-runs in `tpm2-kira remote serve` - the same binary started again by `run`
+runs in `tpm2-kira ssh-child` - the same binary started again by `run`
 (one binary, AGENTS.md) - which gives up everything it does not need
 before it reads a byte:
 
@@ -211,7 +211,7 @@ It holds **no host key**: the key exchange is signed by `run`, asked over
 the control socket. It holds **no password**: a login becomes a session of
 the code screen, one end of a socket pair handed to `run` with
 SCM_RIGHTS (this is aSSH's `server` package; `run` hands it the host key as
-a signer and takes the sessions), and `remote serve` only relays bytes between that and the SSH
+a signer and takes the sessions), and `ssh-child` only relays bytes between that and the SSH
 channel. Only a terminal session is served: commands, subsystems,
 forwardings and agent requests are refused. At most 8 connections may be
 in the middle of a login (30 s each), and 8 sessions at once.
@@ -222,7 +222,7 @@ runs, as a compromised OpenSSH privilege-separated child can ask its
 monitor; it cannot read the key - which is in the TPM - the TPM or the
 disk key.
 
-The log shows what it runs with, for example `ssh: remote serve (pid 412)
+The log shows what it runs with, for example `ssh: ssh-child (pid 412)
 runs with uid 65534, no new privileges, namespaces of its own, Landlock
 ABI 6: no file access` (seen on both test VMs).
 
@@ -247,11 +247,11 @@ and no secret either: the keys are in the TPM.
 
   | Slot | PCRs | Confidence |
   |---|---|---|
-  | 0 | 0 (firmware), 2 (option ROMs), 7 (Secure Boot state and keys), the image - 11 with a unified kernel image, 8 and 9 with GRUB -, 15 (the window) | higher: what `seal` binds its slot 0 to |
+  | 0 | 0 (firmware), 2 (option ROMs), 7 (Secure Boot state and keys), the image - 11 with a unified kernel image, 8 and 9 with GRUB -, 15 (the window) | higher: what `slot add` binds its slot 0 to |
   | 1 | 7, 15 | lower: an image not approved yet, a new option ROM or a firmware update still certify |
 
   Which of 11 or 8 and 9 is decided from the event log when control
-  creates the CA, as `seal` decides. A slot changed, added or taken away
+  creates the CA, as `slot add` decides. A slot changed, added or taken away
   in assh.conf is the CA's at the next reseal or control: a slot is a PCR
   selection the signing key approves states of, not a key, so the CA stays
   and so does its `known_hosts` line; a changed slot's approvals go, and
@@ -276,8 +276,8 @@ and no secret either: the keys are in the TPM.
   PCR 0-7 in the running system. They are replayed from the firmware
   event log (`measurepoint.go`), PCR 11 computed from the unified kernel
   image (`ukipredict.go`), PCR 8 and 9 predicted from grub.cfg and the
-  files GRUB loads (`grub_predict.go`) - as `seal` does -; the window is
-  empty. **`reseal` approves them** in both slots, with the signing key,
+  files GRUB loads (`grub_predict.go`) - as `slot add` does -; the window is
+  empty. **`slot approve` approves them** in both slots, with the signing key,
   whenever a slot has no approval of the next boot: the initramfs hooks
   run it after every image rebuild, so a kernel update needs nothing by
   hand. control approves them when it creates the CA and at quit; the CA
@@ -300,7 +300,7 @@ and no secret either: the keys are in the TPM.
   certified one, gone at the next reboot, but not certified. The console
   shows its fingerprint and, for each slot, which PCR changed, and `ssh` warns of an
   unknown host key. Quit `tpm2-kira control` once after that boot, or run
-  `tpm2-kira reseal`: it approves the new values. Without a TPM there is no SSH
+  `tpm2-kira slot approve`: it approves the new values. Without a TPM there is no SSH
   server.
 
 No `systemd-creds` and no TPM library go into the image: aSSH does the TPM
@@ -318,7 +318,7 @@ up.
 ```
 tpm2-kira.service (holds READY)
   ├── the TPM makes this boot's host key, the SSH CA certifies it (slot 0 or 1),
-  │   PCR 15 is extended (the window closes), opens :PORT, starts 'remote serve'
+  │   PCR 15 is extended (the window closes), opens :PORT, starts 'ssh-child'
   ├── console: "ssh root@<address>", the SSH CA's fingerprint, sessions connected,
   │            "Enter here: continue at this console"
   └── sessions: the code screen; Enter confirms, q leaves
@@ -329,12 +329,12 @@ ordered after the hold.
 
 - **Confirmed in a session.** The boot is released (READY, the separator
   runs). The password prompt (tpm2-kira's: password+salt or
-  password+remotesalt) opens in that session. The server keeps running
+  password+phonesalt) opens in that session. The server keeps running
   until switch-root, so a dropped session can log in again for the
   prompt. If tpm2-kira has no key to give, cryptsetup's own prompt is
   asked in the session too (§6).
 - **Enter at the console.** The boot is released, every session is told
-  and closed, `remote serve` ends and the port with it, and the prompt is
+  and closed, `ssh-child` ends and the port with it, and the prompt is
   the console's. No remote confirmation can hold a person at the machine
   (AGENTS.md: no enforced mode).
 - **Released by the phone, by the vault's key, or by the hold's end.** The
@@ -356,7 +356,7 @@ local-top/cryptroot
   └── keyscript=/lib/cryptsetup/scripts/tpm2-kira: 'tpm2-kira unlock-key' waits on
       run's socket - the hold is there, until the code is confirmed
 init-bottom/tpm2-kira
-  └── SIGTERM to run (sessions told, 'remote serve' ends; KILL after a second),
+  └── SIGTERM to run (sessions told, 'ssh-child' ends; KILL after a second),
       'killall ipconfig', the interface's addresses and routes flushed, the link
       set down, /run/net-<dev>.conf removed
 ```
@@ -413,7 +413,7 @@ tpm2-kira control                       step 2, "Network and SSH at boot"
 tpm2-kira initramfs plan --buildroot DIR [--format mkinitcpio|initramfs-tools]
                            [--conf PATH] [--tpm PATH]
                                         what the hooks call (§2): a part that cannot be had stays out, and says why
-tpm2-kira remote serve                  the SSH protocol, started by 'run --ssh' alone (§3)
+tpm2-kira ssh-child                  the SSH protocol, started by 'run --ssh' alone (§3)
 tpm2-kira run --ssh [--ssh-hold S] [--ssh-conf PATH]
                                         set by the image (§2): be the SSH server too, as the
                                         image's assh.conf says
@@ -430,9 +430,9 @@ tpm2-kira run --ssh [--ssh-hold S] [--ssh-conf PATH]
 | `cmd/bootplan.go` | the boot plan: whether the network and the SSH server go in, and their files for both formats |
 | `cmd/remote_initramfs.go` | the files' contents: `remote.conf`, the drop-in, the image's assh.conf, the login keys, udhcpc's script |
 | `cmd/remote_hostkey.go` | the SSH CA in its EFI variable: its two slots and window, approved at the measure point; this boot's host key, certified or temporary; the window closed |
-| `cmd/reseal.go` | `reseal` approves the SSH CA after the slots |
+| `cmd/reseal.go` | `slot approve` approves the SSH CA after the slots |
 | `cmd/remote_ssh.go` | the server in `run`: sessions, the code screen, prompts, the console hint, release and stop |
-| `assh/server` | `remote serve`: the SSH protocol, the sandbox; `run`'s side of it: starting it without privileges, signing, taking sessions |
+| `assh/server` | `ssh-child`: the SSH protocol, the sandbox; `run`'s side of it: starting it without privileges, signing, taking sessions |
 | `assh/hostkey` | the CA in the TPM, its slots and approvals, the per-boot host key and its certificate, the temporary key |
 | `assh/config` | assh.conf: its keys, writing it, making a CA's slots the file's |
 | `cmd/remote_agent.go` | cryptsetup's own prompt in the session (§6) |
@@ -447,17 +447,17 @@ tpm2-kira run --ssh [--ssh-hold S] [--ssh-conf PATH]
   image's files for both formats (`TestWriteImageMkinitcpio`,
   `TestWriteImageInitramfsTools`), the server: a session confirms and answers,
   leaves the prompt, what is refused, Enter at the console stops it, a
-  release elsewhere, the temporary key's console hint (with a key in software: no TPM in the unit tests), the console hint, `remote serve`
+  release elsewhere, the temporary key's console hint (with a key in software: no TPM in the unit tests), the console hint, `ssh-child`
   alone (`cmd/remote_ssh_test.go`); cryptsetup's question through
   ask-password and through askpass' FIFO (`cmd/remote_agent_test.go`); the
   hooks add network and SSH on Arch and Debian (`hook_test.go`).
 - **swtpm** (`-tags integration`): the CA approved in both slots at the
   code screen, certifying there through slot 0, nothing more once the
   window closed, through slot 1 after a reboot with a firmware update and
-  a new option ROM, approved again by `reseal` and refused with another
+  a new option ROM, approved again by `slot approve` and refused with another
   key (`TestSSHCAApprovedForTheCodeScreen`; a file in place of the EFI
   variable, which aSSH tests); the whole
-  chain with `run --ssh` - SSH to the unprivileged `remote serve`, the
+  chain with `run --ssh` - SSH to the unprivileged `ssh-child`, the
   session handed to `run`, the code screen, the key socket
   (`TestRemoteSSHConfirmsAndUnlocks`, `TestRemoteSSHEnterAtConsoleStops`).
 - **On the test VMs** (2026-10-10): Arch and Debian each booted with the

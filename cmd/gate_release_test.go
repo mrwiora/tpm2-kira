@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// An attested boot with a remote salt expected waits for the Release:
+// An attested boot with a phone salt expected waits for the Release:
 // until it is taken, the session is over, or the bound has passed.
 func TestGateWaitsForTheRelease(t *testing.T) {
 	s := &gateService{expectRelease: true, blob: &Attestation{ReleaseKeyPublic: []byte{1}}}

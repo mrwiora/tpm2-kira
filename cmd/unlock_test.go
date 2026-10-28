@@ -471,7 +471,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 		}
 	}()
 	salt := []byte("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-	key, err := diskKey(func() []byte { return append([]byte(nil), salt...) }, nil, recipeOf(LuksModePasswordRemoteSalt), consoleAsk)("cryptroot")
+	key, err := diskKey(func() []byte { return append([]byte(nil), salt...) }, nil, recipeOf(LuksModePasswordPhoneSalt), consoleAsk)("cryptroot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +503,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 	}
 	// Without a salt from the phone: the password+salt variant, a typed
 	// salt, said so at the prompt.
-	key, err = diskKey(func() []byte { return nil }, nil, recipeOf(LuksModePasswordRemoteSalt), consoleAsk)("cryptroot")
+	key, err = diskKey(func() []byte { return nil }, nil, recipeOf(LuksModePasswordPhoneSalt), consoleAsk)("cryptroot")
 	if err != nil {
 		t.Fatalf("without a salt from the phone: %v", err)
 	}

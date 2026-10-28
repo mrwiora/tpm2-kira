@@ -28,23 +28,23 @@ func writeLuks2Header(t *testing.T, tokensJSON string) string {
 }
 
 // The recipe is read straight from the device's LUKS2 header: the
-// tpm2-kira tokens, a foreign token ignored, the remote salt's recipe
+// tpm2-kira tokens, a foreign token ignored, the phone salt's recipe
 // winning over the typed one.
 func TestReadLuks2TokensAndRecipe(t *testing.T) {
 	dev := writeLuks2Header(t, `{
 	  "0": {"type": "tpm2-kira-salt", "keyslots": ["1"], "created": "2026-10-07T17:30:00Z"},
 	  "1": {"type": "systemd-tpm2", "keyslots": ["2"], "tpm2-blob": "x"},
-	  "2": {"type": "tpm2-kira-remotesalt", "keyslots": ["3"], "slot": 0, "label": "luks", "created": "2026-10-07T18:00:00Z"},
-	  "3": {"type": "tpm2-kira", "keyslots": ["4"], "mode": "password+remotesalt", "slot": 0, "created": "x"}
+	  "2": {"type": "tpm2-kira-phonesalt", "keyslots": ["3"], "slot": 0, "label": "luks", "created": "2026-10-07T18:00:00Z"},
+	  "3": {"type": "tpm2-kira", "keyslots": ["4"], "mode": "password+phonesalt", "slot": 0, "created": "x"}
 	}`)
 	toks, err := ReadLuks2Tokens(dev)
 	if err != nil || len(toks) != 3 {
 		t.Fatalf("%v %+v", err, toks)
 	}
 	// The old one-type token is recognised but never acted on: with only
-	// it as the remote-salt mark, the typed salt's recipe wins.
-	if recipeOfTokens(toks) != LuksModePasswordRemoteSalt {
-		t.Fatalf("the remote salt does not win: %q", recipeOfTokens(toks))
+	// it as the phone salt mark, the typed salt's recipe wins.
+	if recipeOfTokens(toks) != LuksModePasswordPhoneSalt {
+		t.Fatalf("the phone salt does not win: %q", recipeOfTokens(toks))
 	}
 	var fresh []LuksToken
 	for _, tk := range toks {

@@ -37,7 +37,7 @@ func TestSlotContentsDirtyAndRemains(t *testing.T) {
 		t.Fatalf("dirtText: %s", d)
 	}
 	// A recovery blob among the dirt: the other way out is named.
-	if !strings.Contains(d, "nvram restore") || strings.Contains(strings.Split(d, ";")[1], "restore") {
+	if !strings.Contains(d, "slot restore") || strings.Contains(strings.Split(d, ";")[1], "restore") {
 		t.Fatalf("the restore alternative: %s", d)
 	}
 }
@@ -54,8 +54,8 @@ func TestCollectSlotContentsWithoutTPM(t *testing.T) {
 	zero, two := 0, 2
 	devices := []LuksDeviceStatus{{Device: "/dev/x", Keyslots: []KeyslotStatus{
 		{Keyslot: 0},
-		{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: &two}},
-		{Keyslot: 2, Token: &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: &zero}},
+		{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordPhoneSalt, Slot: &two}},
+		{Keyslot: 2, Token: &LuksToken{Mode: LuksModePasswordPhoneSalt, Slot: &zero}},
 		{Keyslot: 3, Token: &LuksToken{Mode: LuksModePasswordSalt}}, // bound to nothing: no slot takes it
 	}}}
 	c := collectSlotContents(nil, devices, 2)
@@ -78,7 +78,7 @@ func TestDeleteSlotTakesWhatItCan(t *testing.T) {
 
 	const meta = `{
 	  "keyslots": {"0": {"type": "luks2"}, "1": {"type": "luks2"}},
-	  "tokens": {"0": {"type": "tpm2-kira-remotesalt", "keyslots": ["1"], "slot": 0, "created": "2026-10-07T17:30:00Z"}}
+	  "tokens": {"0": {"type": "tpm2-kira-phonesalt", "keyslots": ["1"], "slot": 0, "created": "2026-10-07T17:30:00Z"}}
 	}`
 	listLuksDevices = func() ([]string, error) { return []string{"/dev/fake"}, nil }
 	var tokenRemoved, killed []string
@@ -121,7 +121,7 @@ func TestDeleteSlotTakesWhatItCan(t *testing.T) {
 	// stay openable, and the failure says what to add first.
 	const allOurs = `{
 	  "keyslots": {"1": {"type": "luks2"}},
-	  "tokens": {"0": {"type": "tpm2-kira-remotesalt", "keyslots": ["1"], "slot": 0, "created": "2026-10-07T17:30:00Z"}}
+	  "tokens": {"0": {"type": "tpm2-kira-phonesalt", "keyslots": ["1"], "slot": 0, "created": "2026-10-07T17:30:00Z"}}
 	}`
 	cryptsetup = func(stdin []byte, args ...string) ([]byte, error) { return []byte(allOurs), nil }
 	killed = nil

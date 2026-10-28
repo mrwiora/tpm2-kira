@@ -347,7 +347,7 @@ func TestConsoleHint(t *testing.T) {
 // remote serve refuses to run as root, and without run's descriptors.
 func TestRemoteServeAlone(t *testing.T) {
 	if os.Geteuid() == 0 {
-		if err := RemoteServeCommand(); err == nil || !strings.Contains(err.Error(), "refuses to run as root") {
+		if err := SSHChildCommand(); err == nil || !strings.Contains(err.Error(), "refuses to run as root") {
 			t.Fatalf("as root: %v", err)
 		}
 		return

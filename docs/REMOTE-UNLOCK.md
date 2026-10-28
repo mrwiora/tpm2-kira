@@ -168,7 +168,7 @@ key (as reseal):
 6. Derive the key from L and R once, for `luksAddKey`; wipe L and R.
 
 That the TPM opens both parts under the slot's policy is proven by the
-next boot, in the initrd. `seal` and `reseal` keep the vault method (seal
+next boot, in the initrd. `slot add` and `slot approve` keep the vault method (seal
 keeps the slot's policyRef, so the release key stays valid); a phone can
 be enrolled next to it and removed again without touching it.
 
@@ -238,7 +238,7 @@ then `unlock: no key for vda3_crypt: not tpm2-kira's to answer;
 cryptsetup's own prompt follows (…)`.
 
 When a volume has several of tpm2-kira's keyslots, the tpm+vault one
-wins: it needs nobody (then password+remotesalt, then password+salt).
+wins: it needs nobody (then password+phonesalt, then password+salt).
 
 ## 6. The vault
 
@@ -305,7 +305,7 @@ holds the private half.
 ```
 
 Files are 0600, written atomically (temp file, fsync, rename, fsync of
-the directory). `init` and `reseal` work on the directory directly and
+the directory). `init` and `slot approve` work on the directory directly and
 refuse while `serve` holds its lock.
 
 ### 6.5 Recovery
@@ -313,14 +313,14 @@ refuse while `serve` holds its lock.
 - **The vault's boot state changed** (a firmware update, a Secure Boot
   change): `systemctl stop tpm2-kira-vault; tpm2-kira-vault reseal [--pcrs
   7]` (asks the recovery key; from stdin when not a terminal); `systemctl
-  start tpm2-kira-vault`. `reseal` opens the K_dev copies and seals each
+  start tpm2-kira-vault`. `slot approve` opens the K_dev copies and seals each
   to the current PCR values (and a new selection, given `--pcrs`).
 - **The recovery key is lost and the boot state changed:** the records
   cannot be opened. Each machine unlocks with its recovery passphrase and
   is enrolled again with a `--replace` token.
 - **The vault is gone:** machines fall back to cryptsetup's prompt and
   their recovery passphrase. A backup of the state directory needs the
-  same TPM, or the recovery key and `reseal` on the new one.
+  same TPM, or the recovery key and `slot approve` on the new one.
 - **A machine was reported stolen:** `tpm2-kira-vault device revoke
   DEVICE`.
 
@@ -337,7 +337,7 @@ refuse while `serve` holds its lock.
 | `requests` | releases waiting for approval |
 | `request approve\|deny ID` | decide one |
 | `audit [--follow]` | the audit log |
-| `reseal [--dir] [--pcrs 7]` | seal every device key to the vault's current PCRs |
+| `slot approve [--dir] [--pcrs 7]` | seal every device key to the vault's current PCRs |
 | `config set operator-listen ADDR\|"" [--dir]` | turn the operator interface on (an address, e.g. `:8444`) or off; serve stopped |
 | `operator add NAME` | an operator: prints the bearer token once, the pin for curl, the URL and a curl line |
 | `operators`, `operator remove NAME` | list, remove |
@@ -420,7 +420,7 @@ recovery keyslot is mandatory, and the console prompt is always there.
 |---|---|
 | `vaultproto/` | messages, `QualifyingData`, `PinOf`, `VerifyRelease`, the policy digests |
 | `cmd/vault.go` | the key's derivation, the pinned client, the boot's release (`startVaultKeys`, `openVaultKey`, `fetchRemote`), `vault enrol\|status\|unenrol` |
-| `cmd/factor.go`, `attest/releasekey.go` | the release key and the wrap/unwrap shared with the remote salt |
+| `cmd/factor.go`, `attest/releasekey.go` | the release key and the wrap/unwrap shared with the phone salt |
 | `cmd/attest_blob.go` | attestation method 2 |
 | `cmd/luks.go`, `cmd/luks_header.go`, `cmd/unlock.go` | the mode, the token, the recipe, the key provider |
 | `cmd/run_boot.go` | the attempt started with `run`, ended with the hold; a key made ends it |
@@ -462,8 +462,8 @@ recovery keyslot is mandatory, and the console prompt is always there.
   (401s, the endpoints allowed and refused, the body limit, the failed-
   authentication limit, a removed operator); all on an injected clock.
 - **tpm2-kira-vault, swtpm**: the sealer under PolicyPCR, unsealing
-  refused after a PCR moved, `reseal` with the recovery key; the vault end
-  to end with a moved PCR and `reseal`, and a pepper device approved over
+  refused after a PCR moved, `slot approve` with the recovery key; the vault end
+  to end with a moved PCR and `slot approve`, and a pepper device approved over
   the operator interface with a bearer token.
 - **On the test VMs** (2026-10-11): the vault on the Arch VM (PCR 7,
   Secure Boot on), the Debian VM as the machine (slot 0 sealed to PCR

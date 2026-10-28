@@ -572,9 +572,9 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			}
 			if len(slots) == 0 {
 				if nvramIndex == 0 {
-					return nil, fmt.Errorf("%w in NVRAM slots 0x%08X - 0x%08X (run 'tpm2-kira seal')", ErrNoSlots, NVRAMSlotStart, NVRAMSlotEnd)
+					return nil, fmt.Errorf("%w in NVRAM slots 0x%08X - 0x%08X (run 'tpm2-kira slot add')", ErrNoSlots, NVRAMSlotStart, NVRAMSlotEnd)
 				}
-				return nil, fmt.Errorf("%w at NVRAM index 0x%08X (run 'tpm2-kira seal')", ErrNoSlots, nvramIndex)
+				return nil, fmt.Errorf("%w at NVRAM index 0x%08X (run 'tpm2-kira slot add')", ErrNoSlots, nvramIndex)
 			}
 			return slots, nil
 		},
@@ -829,7 +829,7 @@ func nextPrompt(mode string) string {
 	switch mode {
 	case LuksModePasswordSalt:
 		return "the password and salt prompt"
-	case LuksModePasswordRemoteSalt:
+	case LuksModePasswordPhoneSalt:
 		return "the password prompt"
 	case LuksModeTPMVault:
 		return "cryptsetup's prompt without the vault"
@@ -847,7 +847,7 @@ func gateEventPrinter(modeOf func() string) func(prev, cur GateStatus) {
 		switch cur.State {
 		case GateWaiting:
 			if prev.State == "" {
-				if mode == LuksModePasswordRemoteSalt {
+				if mode == LuksModePasswordPhoneSalt {
 					fmt.Printf("%s Slot #%d: open Marify on your phone to attest this boot and return the disk's salt.\n", kiraTag(tagYellow), cur.Slot)
 				} else {
 					fmt.Printf("%s Slot #%d: open Marify on your phone to attest this boot.\n", kiraTag(tagYellow), cur.Slot)

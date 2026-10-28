@@ -44,7 +44,7 @@ func (s *syncBuffer) String() string {
 
 // remoteBoot is 'tpm2-kira run --ssh' against a software TPM with a sealed
 // slot and a LUKS2 header marked password+salt: the chain of the image -
-// SSH to the unprivileged 'remote serve', the session handed to 'run',
+// SSH to the unprivileged 'ssh-child', the session handed to 'run',
 // the code screen, the key socket.
 type remoteBoot struct {
 	run     *exec.Cmd

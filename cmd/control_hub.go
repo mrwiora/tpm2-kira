@@ -108,7 +108,7 @@ func (c *controller) menuSteps(key string) []controlStep {
 }
 
 // slots finds slot 0, the strong slot (the first that is not the
-// fallback: it carries the phone, the remote salt and the vault) and
+// fallback: it carries the phone, the phone salt and the vault) and
 // whether the fallback is there.
 func (c *controller) slots() (slot0, strong *StatusSlot, fallback bool) {
 	for i := range c.facts.Status.Slots {
@@ -197,7 +197,7 @@ func (c *controller) keysSteps() []controlStep {
 		if s.Vault != "" {
 			desc += ", the vault at " + s.Vault
 		}
-		for _, mode := range []string{LuksModePasswordRemoteSalt, LuksModeTPMVault} {
+		for _, mode := range []string{LuksModePasswordPhoneSalt, LuksModeTPMVault} {
 			for _, name := range c.boundKeyslots(mode, s.Slot) {
 				desc += ", " + name
 			}
@@ -205,7 +205,7 @@ func (c *controller) keysSteps() []controlStep {
 		n := s.Slot
 		line := controlStep{Key: fmt.Sprintf("slot:%d", n), Title: fmt.Sprintf("Slot %d", n),
 			Done: desc, Optional: true, SelfConfirm: true,
-			Explain: "Picking a slot deletes it whole: the TOTP key (its codes in the authenticator), the phones, the remote salt, the vault's local part, the LUKS keyslots bound to it, the recovery blobs. Keyslots that are not tpm2-kira's - the recovery passphrase - stay.",
+			Explain: "Picking a slot deletes it whole: the TOTP key (its codes in the authenticator), the phones, the phone salt, the vault's local part, the LUKS keyslots bound to it, the recovery blobs. Keyslots that are not tpm2-kira's - the recovery passphrase - stay.",
 			Run:     func(c *controller) error { return c.runRemoveSlot(n) }}
 		if !s.Signed && f.Keys != "" {
 			// Sealed with another signing key (one setup made before):
@@ -331,16 +331,16 @@ func (c *controller) diskSteps() []controlStep {
 		}
 	}
 
-	remote := controlStep{Key: "luks-remote", Optional: true, SelfConfirm: true, Title: "Password + remote salt (the phone)",
+	remote := controlStep{Key: "luks-remote", Optional: true, SelfConfirm: true, Title: "Password + phone salt (the phone)",
 		Explain: "A LUKS keyslot whose key is derived from your password and the salt the phone hands back after it attested the boot: the disk needs the phone, this TPM in an approved boot, and your password. Enrolled, picking it offers the removal." + typed,
-		Run:     func(c *controller) error { return c.runLuks(LuksModePasswordRemoteSalt) }}
+		Run:     func(c *controller) error { return c.runLuks(LuksModePasswordPhoneSalt) }}
 	switch {
 	case gate != "":
 		remote.Blocked = gate
 	case strong == nil:
 		remote.Blocked = "needs slot 0 (Signing key and TOTP codes)"
-	case len(c.boundKeyslots(LuksModePasswordRemoteSalt, strong.Slot)) > 0:
-		remote.Done = strings.Join(c.boundKeyslots(LuksModePasswordRemoteSalt, strong.Slot), ", ")
+	case len(c.boundKeyslots(LuksModePasswordPhoneSalt, strong.Slot)) > 0:
+		remote.Done = strings.Join(c.boundKeyslots(LuksModePasswordPhoneSalt, strong.Slot), ", ")
 	case f.Adapter == "":
 		remote.Blocked = "needs a phone, and there is no Bluetooth adapter on this machine"
 	case strong.Phones == 0:

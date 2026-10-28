@@ -1,8 +1,8 @@
 # PLAN — Factor Release for External Key Derivation
 
-> **Naming:** what this plan calls the *factor* is the **remote salt** to a
-> person: the command is `tpm2-kira remote-salt …`, the unlock mode
-> `password+remotesalt`, the app says "remote salt". The Go identifiers keep
+> **Naming:** what this plan calls the *factor* is the **phone salt** to a
+> person: the command is `tpm2-kira phone salt …`, the unlock mode
+> `password+phonesalt`, the app says "phone salt". The Go identifiers keep
 > `Factor`.
 >
 > **Status:** in implementation on `feat/hashpwd` (2026-10-07). Done: the
@@ -12,7 +12,7 @@
 > (`cmd/factor.go`), the phone's part (Evidence tags 15-17, the kept
 > factor in the record, Release after the accepted receipt; both apps),
 > the coordinator opening the release before the separator, the provider
-> answering with the derived key (`diskKey`), `remote-salt enrol`, `rotate`,
+> answering with the derived key (`diskKey`), `phone salt enrol`, `rotate`,
 > `status` and `unenrol`. Open: §13. The review of 2026-10-07 changed §1.2,
 > §3.2, §5, §6 and §7 from the first draft; HISTORY.md keeps the draft's
 > shape.
@@ -150,7 +150,7 @@ successful boot puts it in the initrd's memory. Anyone who captures it once —
 root on the running system during the initrd, a cold-boot attack — keeps it.
 What they still lack is the password, and the combiner's cost per guess.
 
-Rotation (`remote-salt rotate`) creates a new `F` and therefore a new LUKS key: the
+Rotation (`phone salt rotate`) creates a new `F` and therefore a new LUKS key: the
 user must enrol the new key through the combiner and remove the old keyslot.
 tpm2-kira prints those steps; it does not perform them.
 
@@ -216,7 +216,7 @@ instant ([PLAN-BLE.md](PLAN-BLE.md) §4.3).
 
 The phone cannot approve a boot state the machine's signing key has not;
 it can only hand the credential back, and the TPM decides. A reviewed
-change is approved where every change is: by `reseal` on the unlocked
+change is approved where every change is: by `slot approve` on the unlocked
 system, which the post hook runs after each image build. The phone's
 `approval` field of the first draft is gone.
 
@@ -253,10 +253,10 @@ either is a new string and a re-enrolment.
 
 ## 6. Enrolment
 
-On the booted, unlocked system, with a phone enrolled (`attest enrol`):
+On the booted, unlocked system, with a phone enrolled (`phone enrol`):
 
 ```
-tpm2-kira remote-salt enrol [--nvram N] [--label STR] --out PATH
+tpm2-kira phone salt enrol [--nvram N] [--label STR] --out PATH
 ```
 
 1. Refuse unless the user confirms a second LUKS keyslot exists (§7.3).
@@ -315,7 +315,7 @@ variant is the same answer written to stdout; not built.
 The phone sends the Release one message after the receipt (ReceiptAck →
 Release → ReleaseAck → Bye), and the coordinator marks the slot attested
 at the receipt - so the code screen used to release the boot before the
-salt had arrived, and the key provider answered "no remote salt" for a
+salt had arrived, and the key provider answered "no phone salt" for a
 salt that landed a moment later (seen on the T450s: once it won the race,
 once not). Now, when the unlock mode needs the salt and the slot has a
 release key, an attested slot is *releasing* until the Release is taken
@@ -400,10 +400,10 @@ rebuild is what keeps the approval on the current image.
 ## 9. CLI
 
 ```
-tpm2-kira remote-salt enrol    [--nvram N] [--label STR] --out PATH
-tpm2-kira remote-salt status   [--nvram N] [--json]
-tpm2-kira remote-salt rotate   [--nvram N] [--label STR] --out PATH
-tpm2-kira remote-salt unenrol  [--nvram N]              # does not touch keyslots
+tpm2-kira phone salt enrol    [--nvram N] [--label STR] --out PATH
+tpm2-kira phone salt status   [--nvram N] [--json]
+tpm2-kira phone salt rotate   [--nvram N] [--label STR] --out PATH
+tpm2-kira phone salt unenrol  [--nvram N]              # does not touch keyslots
 ```
 
 There is no `factor release`: the release is `run`'s answer on the key
@@ -432,7 +432,7 @@ socket (§5).
 | Phase | Deliverable | Done when |
 |---|---|---|
 | 1 | Factor wrap / unwrap on the RK; `PolicySigned` with an externally produced ECDSA signature | the §4.1 note is answered on swtpm and one real TPM |
-| 2 | `remote-salt enrol` / the release with a throwaway CLI verifier over an in-memory transport | the §5.1 golden test passes |
+| 2 | `phone salt enrol` / the release with a throwaway CLI verifier over an in-memory transport | the §5.1 golden test passes |
 | 3 | `Release` message in the core; hashpwd2 changes of §5.3 landed there | the combiner-contract test passes |
 | 4 | Release over BLE from the mobile app | a phone unlocks a real machine together with a typed password |
 | 5 | Example unit, script and hooks for both distributions; failure warnings | the §10 failure matrix passes under QEMU |
@@ -467,7 +467,7 @@ Phase 1 depends on the same go/no-go as
 ## 13. Open
 
 1. **The hardware run** on the T450s: enrol the phone again (record
-   version 3), `remote-salt enrol`, reboot, the password at tpm2-kira's prompt,
+   version 3), `phone salt enrol`, reboot, the password at tpm2-kira's prompt,
    the volume open; then a mistyped password (systemd's prompt follows),
    a boot without the phone (the passphrase prompt, then the recovery
    passphrase at systemd's), and a boot after a kernel update without a
@@ -486,7 +486,7 @@ Phase 1 depends on the same go/no-go as
    prints that. `cryptsetup`'s own retry handles a wrong answer. The
    initramfs-tools hook copies the keyscript. To be built and tested on a
    Debian machine.
-3. **The phone forgetting a factor.** After `remote-salt unenrol` the phone
+3. **The phone forgetting a factor.** After `phone salt unenrol` the phone
    still keeps the old credential and offers it at every check; the
    machine answers "takes no factor". Harmless, but the details screen
    says "kept". A receipt-ack message or a flag in the evidence could tell

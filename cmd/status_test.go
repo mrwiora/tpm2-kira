@@ -8,7 +8,7 @@ import (
 // The notes say what does not fit together, and nothing when all does.
 func TestStatusNotes(t *testing.T) {
 	slot := func(n int, pcrs string, remote bool) StatusSlot {
-		return StatusSlot{Slot: n, PCRs: pcrs, Fallback: pcrs == "0e,7e", GenState: "3 (matches)", Signed: true, RemoteSalt: remote}
+		return StatusSlot{Slot: n, PCRs: pcrs, Fallback: pcrs == "0e,7e", GenState: "3 (matches)", Signed: true, PhoneSalt: remote}
 	}
 	zero, two := 0, 2
 	dev := func(tokens ...*LuksToken) LuksDeviceStatus {
@@ -19,7 +19,7 @@ func TestStatusNotes(t *testing.T) {
 		return d
 	}
 	ok := StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e,11u", true), slot(1, "0e,7e", false)},
-		Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: &zero})}}
+		Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordPhoneSalt, Slot: &zero})}}
 	if n := statusNotes(ok); len(n) != 0 {
 		t.Errorf("a consistent machine has notes: %v", n)
 	}
@@ -34,11 +34,11 @@ func TestStatusNotes(t *testing.T) {
 		{"reseal due", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,7e", Fallback: true, GenState: "4 — does NOT match the blob", Signed: true}}}, "resealed"},
 		{"not signed", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,7e", Fallback: true, GenState: "3 (matches)", SignReason: "no key"}}}, "not signed by this machine"},
 		{"salt without a keyslot", StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e,11u", true), slot(1, "0e,7e", false)},
-			Devices: []LuksDeviceStatus{dev(nil)}}, "no LUKS keyslot is marked password+remotesalt"},
+			Devices: []LuksDeviceStatus{dev(nil)}}, "no LUKS keyslot is marked password+phonesalt"},
 		{"keyslot bound to a gone slot", StatusReport{Slots: []StatusSlot{slot(0, "0e,7e", false)},
-			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: &two})}}, "bound to slot 2, which is gone"},
+			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordPhoneSalt, Slot: &two})}}, "bound to slot 2, which is gone"},
 		{"keyslot's slot lost its salt", StatusReport{Slots: []StatusSlot{slot(0, "0e,7e", false)},
-			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: &zero})}}, "keyslot 1 needs the remote salt of slot 0"},
+			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordPhoneSalt, Slot: &zero})}}, "keyslot 1 needs the phone salt of slot 0"},
 	}
 	for _, c := range cases {
 		notes := strings.Join(statusNotes(c.r), "\n")

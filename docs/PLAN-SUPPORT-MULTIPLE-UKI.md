@@ -2,7 +2,7 @@
 
 > **Status:** concept. Step 1 (a smaller blob, and a size check against
 > the TPM instead of a fixed refusal) is implemented; steps 2–6 are open.
-> **Scope:** the slot blob, `seal`, `reseal`, the boot's policy session,
+> **Scope:** the slot blob, `slot add`, `slot approve`, the boot's policy session,
 > the mkinitcpio post hook and `control`.
 
 ---
@@ -18,7 +18,7 @@ gives PCR 11 its own value.
 Today slot 0's PCR 11 is computed from **one** image: `11u` stands for
 `/boot/EFI/Linux/arch-linux.efi` (or the path after `11u:`), and that path is
 stored in the slot. The post hook runs once per built image and calls
-`tpm2-kira reseal`, which ignores the image it was called for and recomputes
+`tpm2-kira slot approve`, which ignores the image it was called for and recomputes
 PCR 11 from the stored path each time. The outcome:
 
 - booting the image at the stored path: slot 0 matches, the code appears;
@@ -86,8 +86,8 @@ For profiles:
 
 - the first profile, the image `11u` names, is always sealed and resealed;
   a slot without it does not exist;
-- a further profile is added only if the blob with it fits; if not, `seal`,
-  `reseal` and `control` say which profile was left out, how many bytes
+- a further profile is added only if the blob with it fits; if not, `slot add`,
+  `slot approve` and `control` say which profile was left out, how many bytes
   were missing and what would make room (an ECC key, a phone less), and
   that image keeps booting through slot 1;
 - a reseal never fails because of a profile: a profile that no longer fits
@@ -96,7 +96,7 @@ For profiles:
 
 ## 4. Seal and reseal
 
-- **Profiles come from the presets.** `control` and `seal` read
+- **Profiles come from the presets.** `control` and `slot add` read
   `/etc/mkinitcpio.d/*.preset` and list every `<preset>_uki=`. The default
   is the first image and the others in the preset's order, up to three;
   `control` shows the list for acknowledgement, as it does for the PCRs. The
@@ -105,7 +105,7 @@ For profiles:
   profile again, each with PCR 11 computed from its own image. Raising the
   generation revokes all earlier approvals of the slot at once, which keeps
   revocation as simple as it is now.
-- **The post hook passes the image it was called for** (`$2`). `reseal`
+- **The post hook passes the image it was called for** (`$2`). `slot approve`
   still re-signs every profile (the generation is shared), but first
   compares: when every profile's recomputed PCR 11 and the other PCRs equal
   what is approved, nothing is written and nothing signed. During
@@ -124,7 +124,7 @@ signature against that same digest with `TPM2_VerifySignature`, and uses the
 one that verifies. Only the approval of the image that booted can verify,
 since the digest comes from the live PCRs. At most three VerifySignature
 calls, no extra NV reads, no change for the boot key, the release key or the
-remote salt, which all authorize through this session.
+phone salt, which all authorize through this session.
 
 A mismatch is explained as today, against the profile whose PCR 11 is
 closest (all PCRs equal but 11: "an image that is not one of the slot's
@@ -179,8 +179,8 @@ same way. The blob version is raised; existing slots are sealed again
    defaults instead of a record in every blob, and every write is checked
    against the TPM's NV index limit before the old index is touched. A
    phone is refused only when the blob with *that* phone would not fit.
-2. **Profiles in the blob**: format (§8), `seal` and `reseal` signing every
-   profile, the fit check per profile (§3.2), `info` and `status` listing
+2. **Profiles in the blob**: format (§8), `slot add` and `slot approve` signing every
+   profile, the fit check per profile (§3.2), `slot info` and `status` listing
    them.
 3. **The boot**: `approvedSession` choosing the approval that verifies (§5),
    mismatch explanation per profile.

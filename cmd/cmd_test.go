@@ -811,7 +811,7 @@ func TestUnmarshalIncompatibleVersion(t *testing.T) {
 	if !strings.Contains(err.Error(), fmt.Sprintf("v%d", CurrentBlobVersion)) {
 		t.Errorf("Expected error to mention requires v%d, got: %v", CurrentBlobVersion, err)
 	}
-	if !strings.Contains(err.Error(), "tpm2-kira seal") {
+	if !strings.Contains(err.Error(), "tpm2-kira slot add") {
 		t.Errorf("Expected error to suggest re-sealing, got: %v", err)
 	}
 }

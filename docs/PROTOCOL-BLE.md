@@ -90,8 +90,8 @@ tag         := HMAC-SHA256(adv_key, "tpm2-kira/adv/v1" ‖ prand)[0:8]
 
 | flags bit | Meaning |
 |---|---|
-| `0x01` ENROL | the machine runs `attest enrol` and waits for a new phone; `tag` is all zero |
-| `0x02` ATTEST | the machine serves attestation requests (`attest gate`) |
+| `0x01` ENROL | the machine runs `phone enrol` and waits for a new phone; `tag` is all zero |
+| `0x02` ATTEST | the machine serves attestation requests (`phone gate`) |
 
 `adv_key` (32 bytes) is sent to the phone at enrolment (EnrolOffer field 16)
 and stored in the machine record. `prand` is random per boot.
@@ -547,7 +547,7 @@ The machine checks field 7 against pinned Google attestation roots
 (`attest/phoneroots/`): the leaf is for `anchor_pub`, the challenge is this
 session's, the key was generated in StrongBox or the TEE, needs an unlock for
 every use, and the phone booted locked and verified; on the booted machine it
-also consults Google's revocation list. `attest enrol --verify-phone
+also consults Google's revocation list. `phone enrol --verify-phone
 warn|require|off` (default `warn`: show and ask) decides what an unverified
 phone means; a refusal is sent as Error code 8 (policy) and nothing is
 stored. `--verify-tpm` does the same for the machine's own EK certificate
@@ -637,7 +637,7 @@ same policy), and answers with `boot_key_state` 1, `boot_proof =
 HMAC-SHA256(k_mac, "tpm2-kira/boot-proof/v1" ‖ qd)` and `boot_signature`. If
 the TPM refuses, it answers with state 2 and neither. On the booted system,
 where `tpm2-kira cap` has locked the slot until the next boot (a check by
-hand, or a remote salt's enrolment, PLAN-FACTORRELEASE.md §6), it answers with state 4 and
+hand, or a phone salt's enrolment, PLAN-FACTORRELEASE.md §6), it answers with state 4 and
 neither: not a refusal of the boot state, but the key's unavailability by
 design. The code is never sent back.
 
@@ -671,7 +671,7 @@ changed in a diff are those that do not match under these rules.
 
 ## 8. Exchanges
 
-### 8.1 Enrolment (machine runs `tpm2-kira attest enrol`, booted system)
+### 8.1 Enrolment (machine runs `tpm2-kira phone enrol`, booted system)
 
 ```mermaid
 sequenceDiagram
@@ -700,7 +700,7 @@ sequenceDiagram
     P->>M: Bye
 ```
 
-### 8.2 Attestation (machine runs `tpm2-kira attest gate`)
+### 8.2 Attestation (machine runs `tpm2-kira phone gate`)
 
 ```mermaid
 sequenceDiagram
@@ -1016,8 +1016,8 @@ is created: on a phone without biometrics, enrolling a fingerprint later does
 not invalidate the key. Removing the screen lock invalidates it on both
 platforms.
 
-Losing the phone means re-enrolling the machine (`tpm2-kira attest enrol`
-again with the new phone; `attest unenrol` removes the old entry).
+Losing the phone means re-enrolling the machine (`tpm2-kira phone enrol`
+again with the new phone; `phone unenrol` removes the old entry).
 
 ---
 

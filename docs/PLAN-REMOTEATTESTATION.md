@@ -248,7 +248,7 @@ Notes:
   phone and the server run identical code, and so no TPM is needed on the
   verifier side.
 - Enrolment happens on the booted, unlocked system — never in the initrd. It
-  writes NVRAM and needs the signing key, exactly like `seal`.
+  writes NVRAM and needs the signing key, exactly like `slot add`.
 
 ### 6.2 Attestation
 
@@ -467,7 +467,7 @@ different lifecycle: enrolment changes it, sealing does not.
 | | Sealed blob (today) | Attestation blob (new) |
 |---|---|---|
 | Index range | `0x01803010`–`0x0180301F` (slots 0–15) | `0x01803020`–`0x0180302F` (slots 0–15, same slot numbers) |
-| Written by | `seal`, `reseal` | `attest enrol`, `attest rotate` |
+| Written by | `slot add`, `slot approve` | `phone enrol`, `attest rotate` |
 | Contains | sealed object, PCR digests, key paths | AK public + private, EK cert cache, device id, verifier id, policy id, anchor material |
 | Protection | signed payload envelope, `Private` is TPM-wrapped | signed payload envelope, same scheme |
 
@@ -598,15 +598,15 @@ pin public keys instead ([PLAN-BLE.md](PLAN-BLE.md) §5,
 ## 12. CLI surface
 
 ```
-tpm2-kira attest enrol      [--transport ble|tcp] [--nvram N] [--pcrs SPEC] [--name STR]
-tpm2-kira attest status     [--nvram N] [--json]
-tpm2-kira attest quote      [--nvram N] [--nonce HEX] [--out FILE]   # produce evidence, no peer
-tpm2-kira attest verify     --evidence FILE --policy FILE [--json]   # offline, no TPM
-tpm2-kira attest rotate-ak  [--nvram N]
-tpm2-kira attest unenrol    [--nvram N]
+tpm2-kira phone enrol      [--transport ble|tcp] [--nvram N] [--pcrs SPEC] [--name STR]
+tpm2-kira phone status     [--nvram N] [--json]
+tpm2-kira phone quote      [--nvram N] [--nonce HEX] [--out FILE]   # produce evidence, no peer
+tpm2-kira phone verify     --evidence FILE --policy FILE [--json]   # offline, no TPM
+tpm2-kira phone rotate-ak  [--nvram N]
+tpm2-kira phone unenrol    [--nvram N]
 ```
 
-`attest quote` and `attest verify` exist so evidence can be produced on one
+`phone quote` and `phone verify` exist so evidence can be produced on one
 machine, carried on a stick and judged on another. They are also how the golden
 corpus is generated and how a failing field deployment is debugged.
 
@@ -617,7 +617,7 @@ cannot break a boot chain. That rule is right for a tool that *displays* a code
 and wrong for one that *gates* a boot: a gate that exits 0 on failure is not a
 gate.
 
-Therefore: `attest verify`, the gate command defined in
+Therefore: `phone verify`, the gate command defined in
 [PLAN-BLE.md](PLAN-BLE.md) §7, and the commands that hand out a secret —
 `unlock try` ([PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) §10) and
 `factor release` ([PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md) §5.2) —
@@ -649,9 +649,9 @@ The corpus is the important one. Every bug found in the field should arrive in
 
 | Phase | Deliverable | Done when |
 |---|---|---|
-| 1 | AK create/load/persist in the attestation blob; `attest status` | swtpm test creates an AK, reloads it across process restarts |
-| 2 | `TPM2_Quote` + evidence assembly; `attest quote --out` | evidence file produced on real hardware |
-| 3 | `Verify()` + policy + golden corpus; `attest verify` | every corpus case passes, import-graph test green |
+| 1 | AK create/load/persist in the attestation blob; `phone status` | swtpm test creates an AK, reloads it across process restarts |
+| 2 | `TPM2_Quote` + evidence assembly; `phone quote --out` | evidence file produced on real hardware |
+| 3 | `Verify()` + policy + golden corpus; `phone verify` | every corpus case passes, import-graph test green |
 | 4 | `MakeCredential`/`ActivateCredential`; enrolment state machine over an in-memory transport | enrolment completes end to end in tests |
 | 5 | Receipts, anchors, sealed payload v9, config binding | a receipt opens a gate in a test harness; a swapped anchor does not |
 | 6 | `gomobile` binding + corpus run in CI | the same corpus verifies from the Android and iOS bindings |

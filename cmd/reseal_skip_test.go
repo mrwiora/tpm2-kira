@@ -62,7 +62,7 @@ func TestPrintResealSkipped(t *testing.T) {
 		t.Errorf("block does not start with the hook marker:\n%s", out)
 	}
 	for _, want := range []string{"(YubiKey 12345678, slot 9a)", "no YubiKey with serial 12345678 is present",
-		"#0, #1", "nothing was written", "PCR MISMATCH", "sudo tpm2-kira reseal", PINEnvVar} {
+		"#0, #1", "nothing was written", "PCR MISMATCH", "sudo tpm2-kira slot approve", PINEnvVar} {
 		if !strings.Contains(out, want) {
 			t.Errorf("block lacks %q", want)
 		}

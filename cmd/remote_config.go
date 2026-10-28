@@ -24,7 +24,7 @@ import (
 // /etc/tpm2-kira/remote.conf for the boot scripts (initramfs-tools);
 // control.conf itself stays out of the image. The
 // network is its own setting because more than the SSH server will use it
-// (an outgoing request for the remote salt, PLAN-REMOTEUNLOCKING.md).
+// (an outgoing request for the phone salt, PLAN-REMOTEUNLOCKING.md).
 
 // NetConfig is the image's network.
 type NetConfig struct {

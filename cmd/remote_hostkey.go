@@ -17,7 +17,7 @@ package cmd
 //
 // The CA's slots are assh.conf's (remote_assh.go), scanned in order. When
 // control creates the CA it writes two there, worked out for this machine.
-// Slot 0, the higher confidence, reads what 'seal' binds its slot 0 to:
+// Slot 0, the higher confidence, reads what 'slot add' binds its slot 0 to:
 // PCR 0 (firmware), 2 (option ROMs) and 7 (Secure Boot), and the image -
 // PCR 11 with a unified kernel image, PCR 8 and 9 with GRUB. Slot 1, the
 // lower, reads PCR 7 alone: a kernel update not approved yet, a new option
@@ -71,7 +71,7 @@ const sshCAWindowEvent = "tpm2-kira: ssh ca closed"
 
 // sshCASlots are the slots worked out for this machine, each with the
 // window when there is one. Slot 0, the higher confidence, is decided from
-// this boot's event log as 'seal' decides its slot 0: the firmware, the
+// this boot's event log as 'slot add' decides its slot 0: the firmware, the
 // option ROMs, the Secure Boot state, and the image's PCRs (11 with a
 // unified kernel image, 8 and 9 with GRUB). Slot 1, the lower, is the
 // Secure Boot state alone.

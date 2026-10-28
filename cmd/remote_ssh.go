@@ -3,7 +3,7 @@ package cmd
 // The SSH server of the code screen (docs/SSH.md). With TPM2_KIRA_SSH
 // on, the image's tpm2-kira.service runs 'tpm2-kira run --ssh': the
 // process that holds the boot opens the port of the image's assh.conf
-// (ASSH_LISTEN) and starts 'tpm2-kira remote serve' on it, without
+// (ASSH_LISTEN) and starts 'tpm2-kira ssh-child' on it, without
 // privileges (github.com/tpm2-trust/assh/server). Its host key is made in
 // the TPM for this boot and certified by the SSH CA (remote_hostkey.go).
 // That process speaks SSH and hands every login over as a session of the
@@ -60,7 +60,7 @@ func RemoteOptionsFrom(path string, hold time.Duration) (RemoteOptions, error) {
 // tests without a TPM, which serve a key of their own.
 var makeHostKey = prepareHostKey
 
-// serveCommand is 'remote serve', the SSH server's unprivileged half: this
+// serveCommand is 'ssh-child', the SSH server's unprivileged half: this
 // binary again (one binary, AGENTS.md). A var for the tests, which start
 // their own.
 var serveCommand = func() *exec.Cmd {
@@ -68,13 +68,13 @@ var serveCommand = func() *exec.Cmd {
 	if err != nil {
 		self = os.Args[0]
 	}
-	return exec.Command(self, "remote", "serve")
+	return exec.Command(self, "ssh-child")
 }
 
-// RemoteServeCommand is 'remote serve' (github.com/tpm2-trust/assh/server): it
+// SSHChildCommand is 'ssh-child' (github.com/tpm2-trust/assh/server): it
 // speaks SSH as nobody, in namespaces of its own, without file access, and
 // holds no key. It only runs as 'run' starts it.
-func RemoteServeCommand() error { return server.ChildMain() }
+func SSHChildCommand() error { return server.ChildMain() }
 
 // remoteServer is the SSH server and its sessions.
 type remoteServer struct {
@@ -95,7 +95,7 @@ type remoteServer struct {
 	changed  chan struct{}    // a session came or went
 }
 
-// remoteSession is one login, handed over by 'remote serve'.
+// remoteSession is one login, handed over by 'ssh-child'.
 type remoteSession struct {
 	conn   net.Conn
 	keys   chan byte // what is typed once the boot is released, for a prompt
@@ -118,7 +118,7 @@ func (s *remoteSession) write(b []byte) {
 }
 
 // startRemote has the CA certify this boot's host key, opens the port and
-// starts 'remote serve' on it. A server that cannot start is said on the console and the
+// starts 'ssh-child' on it. A server that cannot start is said on the console and the
 // code screen goes on without SSH.
 func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteServer, error) {
 	authorized, _, err := authorizedKeys(o.Assh.AuthorizedKeys)
@@ -130,7 +130,7 @@ func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteS
 	}
 	// Certified now, while the code screen holds the boot ahead of the OS
 	// separator; the CA's window closes right after. The key stays in the
-	// TPM, signing for this process; 'remote serve' asks it for
+	// TPM, signing for this process; 'ssh-child' asks it for
 	// signatures.
 	hk, err := makeHostKey(o.TPM, o.Assh)
 	if err != nil {
@@ -158,10 +158,10 @@ func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteS
 		Notice:         "only the code screen is served here (ssh without a command)",
 	})
 	if err != nil {
-		return nil, fmt.Errorf("remote serve: %w", err)
+		return nil, fmt.Errorf("ssh-child: %w", err)
 	}
 	r.child = child
-	log(fmt.Sprintf("ssh: remote serve (pid %d) runs with %s", child.Pid(), child.How))
+	log(fmt.Sprintf("ssh: ssh-child (pid %d) runs with %s", child.Pid(), child.How))
 	if hk.CA != "" {
 		log(fmt.Sprintf("ssh: listening on port %d, host key %s certified by the SSH CA %s through slot %d", o.Port, hk.Fingerprint, hk.CA, hk.Slot))
 	} else {
@@ -171,7 +171,7 @@ func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteS
 	return r, nil
 }
 
-// addSession takes a login 'remote serve' handed over.
+// addSession takes a login 'ssh-child' handed over.
 func (r *remoteServer) addSession(c net.Conn, who string) {
 	s := &remoteSession{conn: c, keys: make(chan byte, maxPassphrase), closed: make(chan struct{})}
 	r.mu.Lock()
@@ -290,7 +290,7 @@ func (r *remoteServer) release(atConsole bool) bool {
 	return true
 }
 
-// stop tells every session why and closes it, then ends 'remote serve',
+// stop tells every session why and closes it, then ends 'ssh-child',
 // which closes the port.
 func (r *remoteServer) stop(why string) {
 	r.mu.Lock()

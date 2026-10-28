@@ -17,7 +17,7 @@ import (
 
 // The SSH CA is approved, in both slots, for the PCRs as the code screen
 // meets them: the end-of-firmware values replayed from the event log, the
-// window empty. Slot 0 is what 'seal' would bind slot 0 to - here, with
+// window empty. Slot 0 is what 'slot add' would bind slot 0 to - here, with
 // neither a unified kernel image nor GRUB in the log, PCR 0, 2 and 7 -
 // slot 1 PCR 7. At the code screen it certifies this boot's host key
 // through slot 0, and the window closes: a second key of this boot is

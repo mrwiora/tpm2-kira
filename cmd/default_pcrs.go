@@ -9,7 +9,7 @@ import (
 	"github.com/google/go-attestation/attest"
 )
 
-// What 'seal' seals to when nobody says. The boot's own event log decides:
+// What 'slot add' seals to when nobody says. The boot's own event log decides:
 // the firmware, its configuration and the secure boot state always (0, 2,
 // 7); with a unified kernel image, PCR 11 computed from the image, so the
 // code survives a kernel update by prediction; with GRUB, its PCRs 8 and
@@ -110,7 +110,7 @@ func findUKI() string {
 	return ""
 }
 
-// SealDefaults is 'seal' without arguments: slot 0 to what this boot
+// SealDefaults is 'slot add' without arguments: slot 0 to what this boot
 // measured, slot 1 to the fallback selection, both with the signing key
 // at the paths given ("" for the defaults).
 func SealDefaults(tpmPath, pubKeyPath, privKeyPath string, algo PCRHashAlgo, debug bool) error {

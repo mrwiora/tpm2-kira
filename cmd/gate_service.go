@@ -101,14 +101,14 @@ type gateService struct {
 	salt []byte
 	// returned: at enrolment, the phone gave keep back unchanged.
 	returned bool
-	// expectRelease: the unlock mode needs the phone's remote salt, so a
+	// expectRelease: the unlock mode needs the phone's phone salt, so a
 	// receipt is followed by a Release that the boot waits for (bounded by
 	// releaseWait from releaseSince).
 	expectRelease bool
 	releaseSince  time.Time
 }
 
-// releaseWait bounds how long the boot waits for the phone's remote salt
+// releaseWait bounds how long the boot waits for the phone's phone salt
 // after the receipt: the phone writes its record and sends one more
 // message; a phone that has no salt sends Bye instead, which ends the
 // wait at once. The bound is for a session that dies in between.
@@ -146,7 +146,7 @@ func (s *gateService) setup(sealIndex uint32, signerPath string, debug bool) (in
 	} else {
 		found := enrolledSlots(s.tpm, debug)
 		if len(found) == 0 {
-			return ExitUsage, errors.New("no slot is enrolled for attestation (run 'tpm2-kira attest enrol')")
+			return ExitUsage, errors.New("no slot is enrolled for attestation (run 'tpm2-kira phone enrol')")
 		}
 		idx = found[0]
 	}
@@ -310,22 +310,22 @@ func (s *gateService) FactorToKeep() *attest.FactorBlob {
 func (s *gateService) TakeRelease(r *attest.Release) (uint8, string) {
 	<-s.ready
 	if s.code != 0 || s.blob == nil || s.be == nil || s.be.sealed == nil {
-		return attest.ReleaseUnsupported, "this machine has no slot to open a remote salt with"
+		return attest.ReleaseUnsupported, "this machine has no slot to open a phone salt with"
 	}
 	if r == nil || r.Kind != attest.ReleaseKindFactor {
-		return attest.ReleaseUnsupported, "not a remote salt"
+		return attest.ReleaseUnsupported, "not a phone salt"
 	}
 	s.mu.Lock()
 	keep := s.keep
 	s.mu.Unlock()
 	if keep != nil {
 		if !bytes.Equal(r.CredentialBlob, keep.CredentialBlob) || !bytes.Equal(r.EncryptedSecret, keep.EncryptedSecret) || r.Label != keep.Label {
-			return attest.ReleaseTPMRefused, "the remote salt returned is not the one the phone was asked to keep"
+			return attest.ReleaseTPMRefused, "the phone salt returned is not the one the phone was asked to keep"
 		}
 		s.mu.Lock()
 		s.returned = true
 		s.mu.Unlock()
-		return attest.ReleaseOK, "the phone keeps the remote salt; this TPM opens it at the next boot"
+		return attest.ReleaseOK, "the phone keeps the phone salt; this TPM opens it at the next boot"
 	}
 	defer func() {
 		s.mu.Lock()
@@ -339,7 +339,7 @@ func (s *gateService) TakeRelease(r *attest.Release) (uint8, string) {
 		if errors.Is(err, errNoReleaseKey) {
 			return attest.ReleaseUnsupported, err.Error()
 		}
-		return attest.ReleaseTPMRefused, "the TPM did not open the remote salt: " + err.Error()
+		return attest.ReleaseTPMRefused, "the TPM did not open the phone salt: " + err.Error()
 	}
 	salt := FactorSalt(f, r.Label)
 	wipe(f)
@@ -420,7 +420,7 @@ func (s *gateService) JudgeReceipt(r *attest.Receipt, verifierID string) attest.
 	return check
 }
 
-// ExpectRelease says that the disk's key needs the phone's remote salt:
+// ExpectRelease says that the disk's key needs the phone's phone salt:
 // an attested boot waits for the Release that follows the receipt.
 func (s *gateService) ExpectRelease(expect bool) {
 	s.mu.Lock()

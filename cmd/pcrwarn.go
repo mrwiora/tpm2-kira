@@ -109,7 +109,7 @@ func WarnAboutPCRSelection(specs []PCRSpec) {
 		fmt.Println("  unsealed and copied.")
 		if bootedViaSystemdStub() {
 			fmt.Println("  This boot used a unified kernel image. Seal its measurements with PCR 11:")
-			fmt.Printf("      tpm2-kira seal --pcrs \"%s\"\n", suggestWith(specs, "11u"))
+			fmt.Printf("      tpm2-kira slot add --pcrs \"%s\"\n", suggestWith(specs, "11u"))
 		} else {
 			fmt.Println("  With a unified kernel image, add PCR 11 (\"11u\"). With GRUB, add PCRs 8 and 9")
 			fmt.Println("  (\"8e,9e\"); they change on every kernel or initrd update, so reseal after the")

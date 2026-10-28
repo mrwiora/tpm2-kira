@@ -105,7 +105,7 @@ type swtpmSetup struct {
 	be   *tpmBackend
 }
 
-// sealRealSlot seals a real TOTP key into the slot at idx, the way 'seal'
+// sealRealSlot seals a real TOTP key into the slot at idx, the way 'slot add'
 // does, bound to PCR 23 (a register tests can extend to leave the approved
 // boot state). It returns the signing key and its public key file. A phone
 // enrolment needs such a slot: the boot key shares the slot's policy.

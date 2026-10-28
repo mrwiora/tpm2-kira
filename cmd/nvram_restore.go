@@ -63,7 +63,7 @@ func NVRAMRestore(tpmPath, file string, nvramIndex uint32, pubKeyPath, privKeyPa
 	if existing, err := ReadFromNVRAM(tpmDev, nvramIndex); err == nil {
 		if _, err := UnmarshalSealedBlob(existing); err == nil {
 			return fmt.Errorf("cannot restore: slot #%d (0x%08X) holds a blob already.\n"+
-				"  Restoring would replace it. If that is what you want: tpm2-kira nvram delete --nvram %d, then restore again",
+				"  Restoring would replace it. If that is what you want: tpm2-kira slot delete --nvram %d, then restore again",
 				SlotNumber(nvramIndex), nvramIndex, SlotNumber(nvramIndex))
 		}
 		return fmt.Errorf("cannot restore: NVRAM index 0x%08X exists and holds something that is not a tpm2-kira blob; delete it first", nvramIndex)

@@ -583,7 +583,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 
 	raw, sealed, err := readSlot(tpmDev, idx)
 	if err != nil {
-		return nil, 0, fmt.Errorf("slot %d holds no sealed blob (%v): seal first with 'tpm2-kira seal --nvram %d'", slot, err, slot)
+		return nil, 0, fmt.Errorf("slot %d holds no sealed blob (%v): seal first with 'tpm2-kira slot add --nvram %d'", slot, err, slot)
 	}
 	if err := VerifyBlobSignature(raw, sealed, priv.Public()); err != nil {
 		return nil, 0, foreignSlotError(slot, err)

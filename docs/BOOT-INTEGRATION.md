@@ -18,12 +18,12 @@ Debian scripts start only those.
 
 | Unit | In the initramfs image | Does something when |
 |------|------------------------|---------------------|
-| `tpm2-kira.service` (the code at the prompt, the gate's coordinator, and the key provider for `systemd-cryptsetup`) | always, once `sd-tpm2-kira` is in `HOOKS`. It waits for `/dev/tpmrm0` (at most 5 s) only when a part of the plan needs the TPM (the drop-in `tpm2-kira.service.d/tpm.conf`) | a volume asks for its key; with the codes in the plan, a TOTP key is shown. Without them the TPM is not asked, and the boot is released at once. The first `seal` makes the image out of date (`control` rebuilds it when left). The gate ends when the boot is released; the process stays to answer the volumes' key requests and ends at switch-root |
+| `tpm2-kira.service` (the code at the prompt, the gate's coordinator, and the key provider for `systemd-cryptsetup`) | always, once `sd-tpm2-kira` is in `HOOKS`. It waits for `/dev/tpmrm0` (at most 5 s) only when a part of the plan needs the TPM (the drop-in `tpm2-kira.service.d/tpm.conf`) | a volume asks for its key; with the codes in the plan, a TOTP key is shown. Without them the TPM is not asked, and the boot is released at once. The first `slot add` makes the image out of date (`control` rebuilds it when left). The gate ends when the boot is released; the process stays to answer the volumes' key requests and ends at switch-root |
 | `tpm2-kira-unlock.socket` (the key socket) | always, with the display | `systemd-cryptsetup` activates a volume whose key file is the socket |
 | `tpm2-kira-cap.service` (locks codes when the initrd is left) | with the codes in the plan: a slot is sealed | the initrd is left |
 | `tpm2-kira-attest.service` (Bluetooth gate, radio worker) | with the phone in the plan: a TPM, a phone enrolled (or `TPM2_KIRA_ATTEST_BLUETOOTH=always`), its record signed by this machine's key and current, **and** the adapter found when the image was built. The signing public key goes into the image with it. Otherwise neither the unit nor any Bluetooth module or firmware is in the image; the build says which condition failed | a phone connects |
 
-One case leaves a unit in the image with nothing to do: `attest unenrol`
+One case leaves a unit in the image with nothing to do: `phone unenrol`
 without rebuilding the initramfs. The gate then starts at boot, reports that no
 phone is enrolled and fails; the next build leaves it out.
 
@@ -38,7 +38,7 @@ On Debian there are no units in the image: the initramfs-tools scripts start
 the display and, with the phone in the plan, the gate, and run `cap` when
 the initramfs is left and the codes are in the plan. The gate is split
 there too - `run --gate` holds the TPM and releases the display on the
-phone's verdict, `attest gate --coordinator` is the radio worker - but the
+phone's verdict, `phone gate --coordinator` is the radio worker - but the
 confinement above is the unit's: on Debian the radio worker runs as root,
 unconfined.
 
@@ -65,7 +65,7 @@ GRUB measures every command it runs into PCR 8 and every file it reads
 into PCR 9, and the kernel's EFI stub adds its load options and the initrd
 to PCR 9. The event log of the running boot is the complete script of
 that. After an update only the entries of what changed differ, so
-`reseal` replays this boot's log with those entries replaced by what is
+`slot approve` replays this boot's log with those entries replaced by what is
 on disk now - the way SUSE's `pcr-oracle` does it; neither Debian nor
 `systemd-pcrlock` (which knows no GRUB) offers this:
 
@@ -79,7 +79,7 @@ on disk now - the way SUSE's `pcr-oracle` does it; neither Debian nor
 The hooks run it: `/etc/initramfs/post-update.d/tpm2-kira` after every
 `update-initramfs`, and `/etc/kernel/postinst.d/zzz-tpm2-kira` (also
 `postrm.d`) after `zz-update-grub` has written the final `grub.cfg` of a
-kernel install or removal. `reseal` prints what it substituted, for
+kernel install or removal. `slot approve` prints what it substituted, for
 example `PCR9 /initrd.img-6.12.111+deb13-amd64: now /boot/initrd.img-…`.
 The next boot then shows a code at once; no boot without one, no second
 reseal.
@@ -88,7 +88,7 @@ What the prediction cannot know, and what then happens: a different menu
 entry chosen at the GRUB menu, a command line edited there, a `grubenv`
 the boot rewrites (`GRUB_SAVEDEFAULT`, `recordfail`), or a GRUB package
 update that changes the module set. Such a boot shows no code - expected,
-not a compromise - and `sudo tpm2-kira reseal` after it binds to the
+not a compromise - and `sudo tpm2-kira slot approve` after it binds to the
 state you booted, as the reseal always did. The prediction is checked
 against this machine's real log in the test suite
 (`cmd/grub_predict_test.go`, Debian 13, GRUB 2.12).

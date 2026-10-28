@@ -125,7 +125,7 @@ journalctl -b -k | grep -iE 'bluetooth|hci|firmware'
 | no `tpm2-kira-attest.service` at all | the image has no Bluetooth: no phone was enrolled when it was built (`auto`), or the hook warned | `control`'s Boot image line; rebuild |
 | kernel: `Direct firmware load for ... failed`, `firmware missing` | the image lacks the adapter's firmware (§3) | power off, boot, rebuild |
 | `no Bluetooth adapter` / the gate waits for the adapter until the code screen ends | module, firmware or USB authorization missing in the image | `control`'s *Boot image* and *Adapter at boot* lines; `TPM2_KIRA_ATTEST_ADAPTER` says whose driver goes in |
-| `the attestation record is not accepted` | the enrolment in the TPM is not the one the image's signing key vouches for (replaced, or an older one put back) | `tpm2-kira attest status`; enrol again |
+| `the attestation record is not accepted` | the enrolment in the TPM is not the one the image's signing key vouches for (replaced, or an older one put back) | `tpm2-kira phone status`; enrol again |
 | the phone sees no machine | the phone's Bluetooth is off, or Marify has no record for this machine (enrolled again elsewhere) | enrol the phone again |
 
 **USB authorization.** With `usbcore.authorized_default=0` (USBGuard sets
@@ -161,5 +161,5 @@ holds. The gate can be run by hand on the booted system to
 test the radio and the phone without a reboot:
 
 ```bash
-sudo tpm2-kira attest gate     # the verdict is shown; nothing is unlocked
+sudo tpm2-kira phone gate     # the verdict is shown; nothing is unlocked
 ```

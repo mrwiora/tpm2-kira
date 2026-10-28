@@ -133,7 +133,7 @@ _add_plan() {
 
     # The network: systemd-networkd with its user, from the plan's file
     # alone - /etc/systemd/network is the running system's. The SSH server
-    # is tpm2-kira itself ('run' and its unprivileged 'remote serve'): its
+    # is tpm2-kira itself ('run' and its unprivileged 'ssh-child'): its
     # drop-in is the plan's, nothing more to add.
     if _plan_has net; then
         add_systemd_unit systemd-networkd.service
@@ -263,7 +263,7 @@ The hook will:
 
 Post-generation hook (sd-tpm2-kira in /usr/lib/initcpio/post/, or
 /etc/initcpio/post/ from make install-mkinitcpio):
-  After the initramfs image is written, 'tpm2-kira reseal' is executed
+  After the initramfs image is written, 'tpm2-kira slot approve' is executed
   automatically. This is necessary because the initramfs content is
   measured into PCRs at boot - every rebuild may change the expected
   values, so the sealed TOTP secret must be resealed to match, and the

@@ -355,7 +355,7 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 
 	if !multiSlot {
 		fmt.Println()
-		fmt.Println("Note: For security reasons, the 'info' command does not display secrets.")
+		fmt.Println("Note: For security reasons, the 'slot info' command does not display secrets.")
 		fmt.Println("Use 'tpm2-kira reveal' to generate TOTP codes.")
 	}
 }
@@ -488,7 +488,7 @@ func min(a, b int) int {
 func printAttestationTree(prefix string, si *slotInfo) {
 	att := si.Blob.Payload.Attestation
 	if att == nil {
-		fmt.Printf("%s%sRemote attestation: not set up (tpm2-kira attest enrol)\n", prefix, branch(false))
+		fmt.Printf("%s%sRemote attestation: not set up (tpm2-kira phone enrol)\n", prefix, branch(false))
 		return
 	}
 	fmt.Printf("%s%sRemote attestation\n", prefix, branch(false))

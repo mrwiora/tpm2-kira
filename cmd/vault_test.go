@@ -27,12 +27,12 @@ func TestVaultKey(t *testing.T) {
 		t.Fatal("the default label is luks")
 	}
 	for name, other := range map[string][]byte{
-		"another label":     VaultKey(l, r, "home", nil),
-		"parts swapped":     VaultKey(r, l, "luks", nil),
-		"with a pepper":     VaultKey(l, r, "luks", []byte("p")),
-		"an empty pepper":   VaultKey(l, r, "luks", []byte{}),
-		"another remote":    VaultKey(l, bytes.Repeat([]byte{3}, 32), "luks", nil),
-		"the remote salt's": FactorSalt(append(append([]byte(nil), l...), r...), "luks"),
+		"another label":    VaultKey(l, r, "home", nil),
+		"parts swapped":    VaultKey(r, l, "luks", nil),
+		"with a pepper":    VaultKey(l, r, "luks", []byte("p")),
+		"an empty pepper":  VaultKey(l, r, "luks", []byte{}),
+		"another remote":   VaultKey(l, bytes.Repeat([]byte{3}, 32), "luks", nil),
+		"the phone salt's": FactorSalt(append(append([]byte(nil), l...), r...), "luks"),
 	} {
 		if bytes.Equal(k, other) {
 			t.Errorf("%s gives the same key", name)
@@ -138,10 +138,10 @@ func TestVaultClientPin(t *testing.T) {
 // A volume with a tpm+vault keyslot takes the vault's key, which needs
 // nobody; without one, cryptsetup's own prompt follows.
 func TestDiskKeyFromTheVault(t *testing.T) {
-	if got := recipeOfTokens([]LuksToken{{Mode: LuksModePasswordSalt}, {Mode: LuksModeTPMVault}, {Mode: LuksModePasswordRemoteSalt}}); got != LuksModeTPMVault {
+	if got := recipeOfTokens([]LuksToken{{Mode: LuksModePasswordSalt}, {Mode: LuksModeTPMVault}, {Mode: LuksModePasswordPhoneSalt}}); got != LuksModeTPMVault {
 		t.Fatalf("recipe %q", got)
 	}
-	if got := recipeOfTokens([]LuksToken{{Mode: LuksModePasswordSalt}, {Mode: LuksModePasswordRemoteSalt}}); got != LuksModePasswordRemoteSalt {
+	if got := recipeOfTokens([]LuksToken{{Mode: LuksModePasswordSalt}, {Mode: LuksModePasswordPhoneSalt}}); got != LuksModePasswordPhoneSalt {
 		t.Fatalf("recipe %q", got)
 	}
 	noAsk := func(volume, what, note string) ([]byte, error) {

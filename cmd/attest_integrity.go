@@ -129,8 +129,8 @@ func signerForImage(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer, d
 		if err := checkAttestRecord(tpmDev, idx, raw, pub); err != nil {
 			fmt.Fprintf(errOut, "tpm2-kira: slot %d: TAMPERED: the attestation record is not accepted:\n", slot)
 			fmt.Fprintf(errOut, "tpm2-kira:   %v.\n", err)
-			fmt.Fprintf(errOut, "tpm2-kira:   Signing key: %s. Inspect the record with 'tpm2-kira attest status';\n", path)
-			fmt.Fprintf(errOut, "tpm2-kira:   to start over: 'tpm2-kira attest unenrol --nvram %d', then enrol again.\n", slot)
+			fmt.Fprintf(errOut, "tpm2-kira:   Signing key: %s. Inspect the record with 'tpm2-kira phone status';\n", path)
+			fmt.Fprintf(errOut, "tpm2-kira:   to start over: 'tpm2-kira phone unenrol --nvram %d', then enrol again.\n", slot)
 			return nil, ExitTampered
 		}
 	}

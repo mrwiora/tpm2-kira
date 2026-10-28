@@ -167,14 +167,14 @@ func TestControlHub(t *testing.T) {
 		t.Fatalf("uncapped: %+v", steps[0])
 	}
 
-	// The phone: an adapter, the boot capped; the remote salt waits for it.
+	// The phone: an adapter, the boot capped; the phone salt waits for it.
 	c.facts.Adapter, c.facts.Capped = "hci0", true
 	phone := c.menuSteps("phone")
 	if phone[0].Blocked != "" || phone[0].Done != "" || phone[1].Blocked != "" {
 		t.Fatalf("phone possible: %+v", phone)
 	}
 	if disk := c.menuSteps("disk"); !strings.Contains(disk[1].Blocked, "needs an enrolled phone") {
-		t.Fatalf("remote salt without a phone: %+v", disk[1])
+		t.Fatalf("phone salt without a phone: %+v", disk[1])
 	}
 	c.facts.NewImage = "/boot/initramfs-linux.img was rebuilt after this boot started"
 	if phone := c.menuSteps("phone"); !strings.Contains(phone[0].Blocked, "rebuilt after this boot started") {
@@ -183,9 +183,9 @@ func TestControlHub(t *testing.T) {
 	c.facts.NewImage = ""
 	c.facts.Phone, c.facts.Status.Slots[0].Phones = true, 1
 	zero := 0
-	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordRemoteSalt, Slot: &zero}})
+	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordPhoneSalt, Slot: &zero}})
 	if disk := c.menuSteps("disk"); disk[1].Done != "keyslot 1 of /dev/sda2" {
-		t.Fatalf("remote salt enrolled: %+v", disk[1])
+		t.Fatalf("phone salt enrolled: %+v", disk[1])
 	}
 	if keys := c.menuSteps("keys"); !strings.Contains(keys[1].Done, "attested by 1 phone") || !strings.Contains(keys[1].Done, "keyslot 1 of /dev/sda2") {
 		t.Fatalf("slot 0's line: %+v", keys[1])

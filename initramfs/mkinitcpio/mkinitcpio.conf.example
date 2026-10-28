@@ -81,7 +81,7 @@ HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt fi
 # 3. Prerequisites:
 #    - Install tpm2-kira binary: make install
 #    - Install hooks: make install-mkinitcpio
-#    - Seal TOTP secret: tpm2-kira seal
+#    - Seal TOTP secret: tpm2-kira slot add
 #      (You will be prompted to enter an optional password securely)
 #
 # 4. Hook Behavior:

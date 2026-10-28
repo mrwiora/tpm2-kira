@@ -249,7 +249,7 @@ func explainEventlogBankError(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PC
 		return fmt.Errorf("%s"+
 			"PCRs 0-7 do not change between the measure point and seal time, so reading\n"+
 			"them from the TPM registers gives the same value and the same protection.\n\n"+
-			"Try instead:\n\n    tpm2-kira seal --pcrs \"%s\"\n",
+			"Try instead:\n\n    tpm2-kira slot add --pcrs \"%s\"\n",
 			msg, PCRSpecsToString(registerSpecs))
 	}
 
@@ -257,7 +257,7 @@ func explainEventlogBankError(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PC
 		return fmt.Errorf("%s"+
 			"This TPM has no %s PCR bank either, so the register source cannot be used.\n"+
 			"The only remaining option is the SHA-1 bank:\n\n"+
-			"    tpm2-kira seal --sha1 --pcrs \"%s\"\n\n"+
+			"    tpm2-kira slot add --sha1 --pcrs \"%s\"\n\n"+
 			"WARNING: SHA-1 is broken against collision attacks and is deprecated for\n"+
 			"new deployments. Prefer firmware that provides a SHA-256 event log, or a\n"+
 			"TPM with a SHA-256 PCR bank, and treat this as a stopgap.\n",

@@ -98,7 +98,7 @@ func (calc *EventlogPCRCalculator) CalculatePCRsFromEventlogPath(eventlogPath st
 					"eventlog does not contain SHA-256 digests, only SHA-1 is available.\n"+
 						"This firmware does not support SHA-256 PCR bank in its eventlog.\n"+
 						"To use SHA-1 digests instead, pass --sha1 during seal:\n"+
-						"  tpm2-kira seal --sha1 --pcrs \"%s\"",
+						"  tpm2-kira slot add --sha1 --pcrs \"%s\"",
 					pcrIndicesToEventlogString(calc.PCRIndices))
 			}
 			return nil, nil, fmt.Errorf("eventlog contains no SHA-256 events")
@@ -111,7 +111,7 @@ func (calc *EventlogPCRCalculator) CalculatePCRsFromEventlogPath(eventlogPath st
 					"eventlog does not contain SHA-1 digests, only SHA-256 is available.\n"+
 						"This firmware provides SHA-256 but not SHA-1 in its eventlog.\n"+
 						"Re-seal without --sha1 to use SHA-256 (default):\n"+
-						"  tpm2-kira seal --pcrs \"%s\"",
+						"  tpm2-kira slot add --pcrs \"%s\"",
 					pcrIndicesToEventlogString(calc.PCRIndices))
 			}
 		}

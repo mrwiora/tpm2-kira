@@ -72,7 +72,7 @@ the assh commit on aSSH's.
   `tpm2-kira-attest.service`) and `/etc/tpm2-kira/control.conf`.
 - Does **not** enable the units on the host. The mkinitcpio install hook
   enables it inside the initramfs image, which is the only place it should run.
-- Does **not** run `tpm2-kira setup` or `tpm2-kira seal`. Sealing generates a
+- Does **not** run `tpm2-kira setup` or `tpm2-kira slot add`. Sealing generates a
   new TOTP secret and writes to TPM NVRAM, which must never happen as a side
   effect of installing a package or building an image. Run both once by hand,
   then rebuild the initramfs.

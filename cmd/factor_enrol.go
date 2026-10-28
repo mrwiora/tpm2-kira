@@ -17,7 +17,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 )
 
-// FactorEnrolOptions is what 'remote-salt enrol' takes.
+// FactorEnrolOptions is what 'phone salt enrol' takes.
 type FactorEnrolOptions struct {
 	TPMPath     string
 	SealIndex   uint32 // slot (0-15) or its NVRAM index; 0 is slot 0
@@ -67,13 +67,13 @@ func FactorEnrol(o FactorEnrolOptions) error {
 	fmt.Printf("    rm %s\n", o.Out)
 	fmt.Println()
 	if o.Rotate {
-		fmt.Println("The phone now keeps the new remote salt and no longer has the old one. Remove the")
+		fmt.Println("The phone now keeps the new phone salt and no longer has the old one. Remove the")
 		fmt.Println("old keyslot once the new one is in place (cryptsetup luksKillSlot <device> N;")
 		fmt.Println("'cryptsetup luksDump' lists them), or the old key stays valid for whoever")
 		fmt.Println("captured the old salt.")
 		fmt.Println()
 	}
-	fmt.Println("Then: tpm2-kira luks mark <device> --keyslot N --mode password+remotesalt. The mark")
+	fmt.Println("Then: tpm2-kira luks mark <device> --keyslot N --mode password+phonesalt. The mark")
 	fmt.Println("is all the boot needs: it reads the recipe from the header, and once the phone has")
 	fmt.Println("verified the machine, asks for the password and derives this key. The recovery")
 	fmt.Println("passphrase in its own keyslot stays the way in without the phone: at cryptsetup's")
@@ -105,7 +105,7 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 
 	att, err := loadAttestBlob(tpmDev, idx)
 	if err != nil {
-		return nil, 0, fmt.Errorf("slot %d has no phone enrolled: run 'tpm2-kira attest enrol' first", slot)
+		return nil, 0, fmt.Errorf("slot %d has no phone enrolled: run 'tpm2-kira phone enrol' first", slot)
 	}
 	warnUncappedBoot(tpmDev)
 	_, sealed, err := readSlot(tpmDev, idx)
@@ -114,7 +114,7 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	}
 
 	if o.Rotate && len(att.ReleaseKeyPublic) == 0 {
-		return nil, 0, fmt.Errorf("slot %d has no remote salt to rotate; use 'remote-salt enrol'", slot)
+		return nil, 0, fmt.Errorf("slot %d has no phone salt to rotate; use 'phone salt enrol'", slot)
 	}
 
 	// Every hand-over needs the signing key, as reseal does: with the key
@@ -128,7 +128,7 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	}
 	priv, err := LoadCheckedSigningPrivateKey(privKeyPath)
 	if err != nil {
-		return nil, 0, fmt.Errorf("a remote salt is given to the phone with the signing key only: %w", err)
+		return nil, 0, fmt.Errorf("a phone salt is given to the phone with the signing key only: %w", err)
 	}
 	if err := PrepareSigningKey(priv); err != nil {
 		return nil, 0, fmt.Errorf("the signing key is not usable: %w", err)
@@ -165,14 +165,14 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	svc := newGateService(tpmDev, idx, pubKeyPath, o.Debug)
 	svc.Keep(&attest.FactorBlob{CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret, Label: label})
 	fmt.Println("Open Marify on the phone and verify this machine: the verdict screen asks")
-	fmt.Println("to keep the remote salt (no code: after boot the boot key is locked). Continue")
+	fmt.Println("to keep the phone salt (no code: after boot the boot key is locked). Continue")
 	fmt.Println("to keep it.")
 	code := runGateRadio(svc, GateOptions{TPMPath: o.TPMPath, Adapter: o.Adapter, Timeout: o.Timeout, AdapterWait: o.AdapterWait, Debug: o.Debug}, gateSteps(o.Debug), nil)
 	defer svc.Forget()
 	if code != 0 || !svc.Returned() {
-		return nil, 0, fmt.Errorf("the phone did not return the remote salt (gate exit %d); nothing was enrolled. Check the phone's screen and run this again", code)
+		return nil, 0, fmt.Errorf("the phone did not return the phone salt (gate exit %d); nothing was enrolled. Check the phone's screen and run this again", code)
 	}
-	fmt.Println("The phone keeps the remote salt and gave it back unchanged. This TPM opens it at")
+	fmt.Println("The phone keeps the phone salt and gave it back unchanged. This TPM opens it at")
 	fmt.Println("the next boot, under the slot's policy; the boot log says so.")
 
 	pw, err := terminalPassword("Password for the disk (the factor's other half): ")
@@ -310,15 +310,15 @@ func FactorStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 		return enc.Encode(out)
 	}
 	if len(out) == 0 {
-		fmt.Println("No slot has a phone enrolled; a remote salt needs one ('tpm2-kira attest enrol').")
+		fmt.Println("No slot has a phone enrolled; a phone salt needs one ('tpm2-kira phone enrol').")
 		return nil
 	}
 	for _, s := range out {
 		if s.ReleaseKey {
-			fmt.Printf("Slot %d (%s): remote salt enrolled - the release key is in the slot's blob; the\n"+
+			fmt.Printf("Slot %d (%s): phone salt enrolled - the release key is in the slot's blob; the\n"+
 				"  factor itself is kept by the phone (%d enrolled) and opened by this TPM at boot\n", s.Slot, s.NVRAMIndex, s.Phones)
 		} else {
-			fmt.Printf("Slot %d (%s): no remote salt ('tpm2-kira remote-salt enrol --out /run/tpm2-kira/luks.key')\n", s.Slot, s.NVRAMIndex)
+			fmt.Printf("Slot %d (%s): no phone salt ('tpm2-kira phone salt enrol --out /run/tpm2-kira/luks.key')\n", s.Slot, s.NVRAMIndex)
 		}
 	}
 	return nil
@@ -344,14 +344,14 @@ func FactorUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug b
 		return fmt.Errorf("slot %d has no phone enrolled", slot)
 	}
 	if len(att.ReleaseKeyPublic) == 0 {
-		return fmt.Errorf("slot %d has no remote salt enrolled", slot)
+		return fmt.Errorf("slot %d has no phone salt enrolled", slot)
 	}
 	if privKeyPath == "" {
 		privKeyPath = DefaultPrivateKeyPath
 	}
 	priv, err := LoadCheckedSigningPrivateKey(privKeyPath)
 	if err != nil {
-		return fmt.Errorf("removing the remote salt rewrites the slot's blob and needs the signing key: %w", err)
+		return fmt.Errorf("removing the phone salt rewrites the slot's blob and needs the signing key: %w", err)
 	}
 	if err := PrepareSigningKey(priv); err != nil {
 		return fmt.Errorf("the signing key is not usable: %w", err)
@@ -360,8 +360,8 @@ func FactorUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug b
 	if err := writeAttestBlob(tpmDev, idx, att, priv); err != nil {
 		return err
 	}
-	fmt.Printf("Remote salt removed from slot %d: the release key is gone, so what the phone keeps\n", slot)
-	fmt.Println("cannot be opened any more (it answers \"takes no remote salt\" at the next check).")
+	fmt.Printf("Phone salt removed from slot %d: the release key is gone, so what the phone keeps\n", slot)
+	fmt.Println("cannot be opened any more (it answers \"takes no phone salt\" at the next check).")
 	fmt.Println("Remove the salt's keyslot by hand: cryptsetup luksKillSlot <device> N")
 	fmt.Println("('cryptsetup luksDump' lists them). The recovery passphrase stays.")
 	return nil

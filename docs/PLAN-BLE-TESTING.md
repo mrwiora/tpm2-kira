@@ -37,7 +37,7 @@ Three things this gives that the hand-installed VMs cannot:
    secret says (§6), types the password and the salt at tpm2-kira's
    prompt, and knows whether the disk opened - today a person does that
    and answers yes or no.
-3. **The phone without a phone.** The attestation, the remote salt and
+3. **The phone without a phone.** The attestation, the phone salt and
    the gate at boot run against Marify in the emulator (§7); the real
    phone and the T450s stay the last check before a release, not the
    only one.
@@ -229,7 +229,7 @@ asks on the serial console as it does on the VGA one.
 
 ## 6. The codes, verified without a person
 
-`seal` prints the TOTP secret as an `otpauth://` URI
+`slot add` prints the TOTP secret as an `otpauth://` URI
 (`cmd/totp_utils.go`), for the authenticator. On a test machine the
 harness **is** the authenticator: it keeps the URI of every slot from the
 seal's output, and at the code screen computes the code for the time
@@ -335,7 +335,7 @@ The harness drives the app with its instrumented tests
 (`android/app/src/androidTest` holds a session test against a machine
 already: `SwtpmMachineSessionTest` for the demo machine; a
 `RealMachineSessionTest` connects to the advertised machine, binds,
-checks a boot, keeps the remote salt, returns it) and, where a test needs
+checks a boot, keeps the phone salt, returns it) and, where a test needs
 the screens, UI Automator through `adb`. `netsim` (the CLI) lists the
 devices in the air - the phone, and the Linux machine once its bridge
 connected - and `--pcap` in the netsim arguments records every packet of
@@ -352,7 +352,7 @@ Two consequences of the emulator for tpm2-kira's checks:
 
 - the emulator's keystore is software: the phone's key attestation does
   not chain to Google's roots, so the machine enrols with
-  `attest enrol --verify-phone off` on the test host (the `require`
+  `phone enrol --verify-phone off` on the test host (the `require`
   policy is a test of its own: it must refuse this phone);
 - swtpm's EK has no vendor certificate: `--verify-tpm off`, and the
   phone's "unverified TPM" card is what the test expects.
@@ -361,10 +361,10 @@ Two consequences of the emulator for tpm2-kira's checks:
 
 | test | machine | phone |
 |---|---|---|
-| enrol | `attest enrol` over the console/ssh | scans, sees the machine, binds (the six digits compared by the harness: both sides print them) |
+| enrol | `phone enrol` over the console/ssh | scans, sees the machine, binds (the six digits compared by the harness: both sides print them) |
 | gate at boot | the code screen advertises; the harness waits for `Slot #0 attested by` | the app is asked, checks, the code equals the slot's second code |
 | changed state | a resealed kernel update | the orange card with the green check; approve |
-| remote salt | `remote-salt enrol`, mode `password+remotesalt` | keeps the salt; the next boot: `attest and return the salt`, the disk opens with password + released salt, `release_ack` |
+| phone salt | `phone salt enrol`, mode `password+phonesalt` | keeps the salt; the next boot: `attest and return the salt`, the disk opens with password + released salt, `release_ack` |
 | rejection | | the red cross; the machine shows the rejection and falls back to the passphrase |
 | stop while connecting | | the machine is told, the console says so |
 
@@ -386,7 +386,7 @@ reboot, checks, report) and gains:
 - the codes compared (§6);
 - `--phone` for the BLE scenarios (§7), which start the emulator and
   the bridge chardev;
-- scenarios as named sets of steps (`seal`, `luks-salt`, `luks-remote`,
+- scenarios as named sets of steps (`slot add`, `luks-salt`, `luks-remote`,
   `kernel-update`, `ble-enrol`, ...), each a function, run in order,
   each writing its own log; `--scenario` picks;
 - a run directory under `runs/` holding everything: console, journal,

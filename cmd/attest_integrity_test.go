@@ -102,7 +102,7 @@ func signedAttestBlob(t *testing.T, key *ecdsa.PrivateKey, name string) []byte {
 }
 
 // writeTestSlot puts a slot's blob (TOTP key stand-in, no phones) into the
-// TPM at idx, the way 'seal' leaves it.
+// TPM at idx, the way 'slot add' leaves it.
 func writeTestSlot(t *testing.T, tpmDev transport.TPM, idx uint32, key crypto.Signer) {
 	t.Helper()
 	if err := WriteToNVRAM(tpmDev, idx, signSlot(t, testSlotBlob(), key), key.Public(), key); err != nil {
@@ -324,7 +324,7 @@ func TestAttestBlobCarriesItsCount(t *testing.T) {
 
 func TestForeignSlotIsNamedAsSuch(t *testing.T) {
 	err := foreignSlotError(2, bytes.ErrTooLarge)
-	if !strings.Contains(err.Error(), "nvram delete --nvram 2") || !strings.Contains(err.Error(), "another signing key") {
+	if !strings.Contains(err.Error(), "slot delete --nvram 2") || !strings.Contains(err.Error(), "another signing key") {
 		t.Fatalf("%v", err)
 	}
 }

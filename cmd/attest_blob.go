@@ -401,7 +401,7 @@ func (b *Attestation) UpsertVerifier(v attest.EnrolledVerifier) error {
 	return nil
 }
 
-// attestationJSON is the attestation part as 'info --json' shows it: what
+// attestationJSON is the attestation part as 'slot info --json' shows it: what
 // identifies the machine and its verifiers. The channel and advertising
 // keys and the attestation key's private area are left out.
 type attestationJSON struct {

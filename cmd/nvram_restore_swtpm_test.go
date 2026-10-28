@@ -48,7 +48,7 @@ func TestRestoreBringsTheSlotBack(t *testing.T) {
 
 	// With the slot in place, restore refuses and names the way.
 	err = NVRAMRestore(sock, file, 0, pubPath, privPath, false)
-	if err == nil || !strings.Contains(err.Error(), "holds a blob already") || !strings.Contains(err.Error(), "nvram delete --nvram 2") {
+	if err == nil || !strings.Contains(err.Error(), "holds a blob already") || !strings.Contains(err.Error(), "slot delete --nvram 2") {
 		t.Fatalf("restore over a slot: %v", err)
 	}
 

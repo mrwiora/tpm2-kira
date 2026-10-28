@@ -10,7 +10,7 @@ import (
 	"github.com/google/go-tpm/tpm2"
 )
 
-// 'info' reads the blob's attestation part for a human: the machine as an
+// 'slot info' reads the blob's attestation part for a human: the machine as an
 // attester, and the phones of the Bluetooth method. The keys of the channel
 // are present in the blob and are not printed.
 func TestInfoShowsTheAttestationPart(t *testing.T) {

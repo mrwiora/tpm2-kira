@@ -19,7 +19,7 @@ func TestWarnAboutBootChainCoverage(t *testing.T) {
 		{"0,7,11u", false, ""},
 		{"0,7,8e,9e", false, ""},
 		{"0,7,9,12", false, ""},
-		{"0,7", true, `tpm2-kira seal --pcrs "0,7,11u"`},
+		{"0,7", true, `tpm2-kira slot add --pcrs "0,7,11u"`},
 	} {
 		specs, err := ParsePCRSpecs(tc.pcrs)
 		if err != nil {

@@ -334,7 +334,7 @@ func (m *appMachine) acceptData(l net.Listener) {
 	}
 }
 
-// serve runs one session over c, exactly as `attest enrol` / `attest gate`
+// serve runs one session over c, exactly as `phone enrol` / `phone gate`
 // do over BLE, and posts the machine's outcome.
 func (m *appMachine) serve(c net.Conn, mode string, mtu int) {
 	defer c.Close()

@@ -140,7 +140,7 @@ func resealSSHCA(controlPath, tpmPath, privKeyPath string) error {
 	if err := PrepareSigningKey(signer); err != nil {
 		var cause *TokenUnavailableError
 		if errors.As(err, &cause) {
-			fmt.Printf("tpm2-kira: SKIPPED: the SSH CA is not approved for the next boot - the signing key was not available.\n  Reason: %s\n  The next boot serves a temporary host key unless slot 1 still fits; run 'sudo tpm2-kira reseal' with the key at hand.\n", cause.Reason)
+			fmt.Printf("tpm2-kira: SKIPPED: the SSH CA is not approved for the next boot - the signing key was not available.\n  Reason: %s\n  The next boot serves a temporary host key unless slot 1 still fits; run 'sudo tpm2-kira slot approve' with the key at hand.\n", cause.Reason)
 			return fmt.Errorf("%w: the SSH CA", ErrResealSkipped)
 		}
 		return fmt.Errorf("SSH CA: %w", err)
@@ -215,7 +215,7 @@ func PrintResealSkipped(w io.Writer, skipped []*ResealSkippedError) {
 	fmt.Fprintln(w, "                 TOTP code. That is expected here; it is not evidence of tampering.")
 	fmt.Fprintln(w, "  To fix:        plug in the YubiKey and run, with the PIN typed when asked")
 	fmt.Fprintf(w, "                 or set in %s:\n", PINEnvVar)
-	fmt.Fprintln(w, "                     sudo tpm2-kira reseal")
+	fmt.Fprintln(w, "                     sudo tpm2-kira slot approve")
 }
 
 func indentContinuation(s, indent string) string {
@@ -262,7 +262,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 				"cannot reseal: the stored blob is version %d but this build writes version %d.\n"+
 					"reseal preserves the existing blob, so it cannot upgrade the format.\n"+
 					"Seal again to replace it (this generates a NEW TOTP secret, so re-enrol your authenticator):\n"+
-					"    tpm2-kira seal --nvram 0x%08X",
+					"    tpm2-kira slot add --nvram 0x%08X",
 				bve.FoundVersion, bve.RequiredVersion, nvramIndex)
 		}
 		return fmt.Errorf("failed to unmarshal sealed data: %w", err)

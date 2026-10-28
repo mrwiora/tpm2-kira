@@ -60,7 +60,7 @@ func TestBootSettingsOnSWTPM(t *testing.T) {
 		t.Fatal("debug off left the index")
 	}
 
-	// 'nvram delete' without an index removes it with everything else.
+	// 'slot delete' without an index removes it with everything else.
 	if err := WriteBootSettings(tpmDev, BootSettings{Debug: true}, key); err != nil {
 		t.Fatal(err)
 	}

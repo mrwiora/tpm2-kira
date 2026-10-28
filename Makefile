@@ -109,7 +109,7 @@ install-mkinitcpio:
 	@echo ""
 	@echo "2. Set up and seal (if not already done; see README \"Choosing PCRs\"):"
 	@echo "   tpm2-kira setup"
-	@echo "   tpm2-kira seal --pcrs 0,7,11u"
+	@echo "   tpm2-kira slot add --pcrs 0,7,11u"
 	@echo ""
 	@echo "3. Rebuild initramfs:"
 	@echo "   sudo mkinitcpio -P"

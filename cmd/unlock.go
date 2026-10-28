@@ -288,7 +288,7 @@ var errUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own p
 //
 //	no token             no answer: cryptsetup's own prompt, tpm2-kira untouched
 //	password+salt        a typed password and a typed salt, combined (hashpwd2's derivation)
-//	password+remotesalt  a typed password and the salt the verifier released in this boot
+//	password+phonesalt  a typed password and the salt the verifier released in this boot
 //	                     and the TPM opened (factor.go); without one, a typed salt
 //	                     (the password+salt variant), then cryptsetup's own prompt
 //	tpm+vault            nothing typed: the key run made in this boot from the TPM's
@@ -318,7 +318,7 @@ func diskKey(salt func() []byte, vault func(volume string) ([]byte, error), reci
 		case LuksModePasswordSalt:
 			note = "the key is derived from your password and your salt, both typed here (Argon2id, some seconds).\n" +
 				"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
-		case LuksModePasswordRemoteSalt:
+		case LuksModePasswordPhoneSalt:
 			if s = salt(); s == nil {
 				// No phone, or no salt from it: the password+salt variant,
 				// which opens a keyslot enrolled that way; Ctrl-C, or a

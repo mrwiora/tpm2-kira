@@ -129,7 +129,7 @@ exit 0
 // authorizedKeys are the keys of an authorized_keys file that may log in,
 // one per line as the file has them, and how many lines were left out: a
 // line with options in front of the key (from="...", command="...") is
-// not honoured by 'remote serve', so it does not let anyone in either.
+// not honoured by 'ssh-child', so it does not let anyone in either.
 func authorizedKeys(path string) ([]string, int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

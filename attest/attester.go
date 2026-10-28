@@ -283,7 +283,7 @@ func ServeAttestation(conn Conn, id *AttestIdentity, be AttesterBackend, progres
 			if err != nil {
 				return res, err
 			}
-			ack := &ReleaseAck{Status: ReleaseUnsupported, Message: "this machine takes no remote salt"}
+			ack := &ReleaseAck{Status: ReleaseUnsupported, Message: "this machine takes no phone salt"}
 			switch {
 			case res.Receipt == nil || !res.Check.Authentic || res.Check.Ack != AckAccepted:
 				ack = &ReleaseAck{Status: ReleaseNoReceipt, Message: "no accepted receipt before the release"}
@@ -291,7 +291,7 @@ func ServeAttestation(conn Conn, id *AttestIdentity, be AttesterBackend, progres
 				res.Release = r
 				ack.Status, ack.Message = fb.TakeRelease(r)
 			}
-			progress.good("Remote salt released by the phone: %s", ack.Message)
+			progress.good("The salt released by the phone: %s", ack.Message)
 			b, err := ack.Encode()
 			if err != nil {
 				return res, err

@@ -32,10 +32,10 @@ Where things are in the repository, and how the tests are run.
 │   ├── remote_assh.go       # assh.conf: aSSH's settings for the SSH server at boot, written by control
 │   ├── remote_hostkey.go    # The SSH CA in the TPM (its EFI variable, two slots), the boot's host key
 │   ├── remote_ssh.go        # The SSH server of the code screen: sessions, prompts, the console hint;
-│   │                        # the server and 'remote serve' are aSSH's (assh/server)
+│   │                        # the server and 'ssh-child' are aSSH's (assh/server)
 │   ├── remote_agent.go      # cryptsetup's own prompt in the session (ask-password, askpass' FIFO)
 │   ├── vault.go             # tpm+vault: enrolment with the vault, the boot's release, the key
-│   ├── default_pcrs.go      # What 'seal' seals to by default, and the fallback slot
+│   ├── default_pcrs.go      # What 'slot add' seals to by default, and the fallback slot
 │   ├── seal.go              # Create the TOTP key in the TPM and approve PCR values
 │   ├── reseal.go            # Approve new PCR values, revoke older approvals
 │   ├── setup.go             # First-time setup (keygen)
@@ -51,7 +51,7 @@ Where things are in the repository, and how the tests are run.
 │   ├── ukipredict.go        # Native PCR 11 computation from a UKI
 │   ├── pcr.go               # PCR spec parsing, reading and comparison
 │   ├── pcrwarn.go           # Warnings for PCR selections that attest little
-│   ├── attest.go            # attest enrol/gate/status/quote/verify/unenrol
+│   ├── attest.go            # phone enrol/gate/status/quote/verify/unenrol, phone salt
 │   ├── attest_blob.go       # A slot's phone enrolment (AK, pinned phones), a section of its blob
 │   ├── attest_tpm.go        # AK/EK, TPM2_Quote, ActivateCredential
 │   ├── nvram.go             # NVRAM read/write/scan operations

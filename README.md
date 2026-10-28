@@ -36,7 +36,7 @@ they match, your boot chain is intact.
 
 When a system update changes PCR values (kernel update, initramfs rebuild,
 Secure Boot key rotation, etc.), the TPM refuses until you approve the new
-values with `reseal` and your signing key. The key itself stays the same, so
+values with `slot approve` and your signing key. The key itself stays the same, so
 there is nothing to re-enrol.
 
 For more details on the cryptographic design, see [SECURITY-BACKGROUND.md](docs/SECURITY-BACKGROUND.md).
@@ -54,9 +54,9 @@ flowchart TB
     KEY["setup<br/>signing key: a file or a YubiKey"]
     SEAL["seal / reseal<br/>a slot approved for PCR values<br/>slot 0 the evaluated selection, slot 1 the fallback<br/>a reseal revokes the older approvals"]
     PCR["PCR prediction<br/>event log (e), UKI PCR 11 (u), GRUB 8/9, register (r)"]
-    PHONE["attest enrol<br/>a phone (Marify) over Bluetooth LE"]
+    PHONE["phone enrol<br/>a phone (Marify) over Bluetooth LE"]
     LUKS["luks enrol<br/>a keyslot and its token: how its key is made"]
-    SALT["remote-salt enrol<br/>password + the phone's salt"]
+    SALT["phone salt enrol<br/>password + the phone's salt"]
     VAULT["vault enrol<br/>this TPM + tpm2-kira-vault"]
     INSPECT["status, info, nvram, reveal, pcrtips"]
   end
@@ -69,8 +69,8 @@ flowchart TB
 
   subgraph BOOT["In the initrd"]
     RUN["run<br/>code screen: the TOTP code of every slot"]
-    ATT["attest gate<br/>the phone checks a TPM quote"]
-    SSH["remote serve<br/>the code screen over SSH (aSSH)"]
+    ATT["phone gate<br/>the phone checks a TPM quote"]
+    SSH["SSH server<br/>the code screen over SSH (aSSH, ssh-child)"]
     UNLOCK["unlock socket / Debian keyscript<br/>the disk's key, as its LUKS2 token says"]
     CAP["cap<br/>when the initrd is left: no codes until reboot"]
   end
@@ -125,13 +125,13 @@ sudo tpm2-kira setup
 # Seal a TOTP key to what this boot measured: firmware and Secure Boot
 # state, plus the unified kernel image or GRUB's PCRs - and a fallback
 # slot sealed to firmware and Secure Boot state alone
-sudo tpm2-kira seal
+sudo tpm2-kira slot add
 
 # Show the current TOTP code
 tpm2-kira reveal
 ```
 
-`setup` makes the signing key that approves every PCR policy, and nothing else. It looks for a YubiKey first: with one plugged in it offers to take the key from a PIV slot (`--yubikey`, optionally `=SERIAL`, `--slot`, default 9a) so the private key never exists on the machine; without one, or with `--local`, it creates an ECDSA P-256 key pair at `/etc/tpm2-kira/keys/` (`seal.pub`, `seal.key`, root-only). `tpm2-kira yubikey list` shows the candidates; the trade-offs are in [docs/PLAN-YUBIKEY.md](docs/PLAN-YUBIKEY.md). `seal` creates a TOTP key inside the TPM, approved for what this boot measured (see [Basic seal](#basic-seal)); scan the QR codes it prints with your authenticator app, the fallback slot's too. A selection that leaves out the kernel, initrd and command line lets a modified initrd show a valid code, see [Choosing PCRs](#choosing-pcrs). `seal` refuses to run until `setup` has created the keys (or you pass your own with `--privkey` / `--pubkey`).
+`setup` makes the signing key that approves every PCR policy, and nothing else. It looks for a YubiKey first: with one plugged in it offers to take the key from a PIV slot (`--yubikey`, optionally `=SERIAL`, `--slot`, default 9a) so the private key never exists on the machine; without one, or with `--local`, it creates an ECDSA P-256 key pair at `/etc/tpm2-kira/keys/` (`seal.pub`, `seal.key`, root-only). `tpm2-kira yubikey list` shows the candidates; the trade-offs are in [docs/PLAN-YUBIKEY.md](docs/PLAN-YUBIKEY.md). `slot add` creates a TOTP key inside the TPM, approved for what this boot measured (see [Basic seal](#basic-seal)); scan the QR codes it prints with your authenticator app, the fallback slot's too. A selection that leaves out the kernel, initrd and command line lets a modified initrd show a valid code, see [Choosing PCRs](#choosing-pcrs). `slot add` refuses to run until `setup` has created the keys (or you pass your own with `--privkey` / `--pubkey`).
 
 ## Installation
 
@@ -170,7 +170,7 @@ After installing, run setup and seal once, then rebuild the initramfs:
 
 ```bash
 sudo tpm2-kira setup
-sudo tpm2-kira seal --pcrs 0,7,11u    # with a unified kernel image
+sudo tpm2-kira slot add --pcrs 0,7,11u    # with a unified kernel image
 sudo mkinitcpio -P
 ```
 
@@ -186,12 +186,12 @@ sudo apt install ../tpm2-kira_*_amd64.deb
 checkout produces something like `0.2.3+9.g9d32210`.
 
 The package installs the binary, the initramfs-tools hook and boot scripts, and
-rebuilds the initramfs. It does **not** run `setup` or `seal`, because sealing
+rebuilds the initramfs. It does **not** run `setup` or `slot add`, because sealing
 generates a new TOTP secret and prints a QR code you need to scan:
 
 ```bash
 sudo tpm2-kira setup
-sudo tpm2-kira seal --pcrs "0e,2e,4e,7e,8e,9e"
+sudo tpm2-kira slot add --pcrs "0e,2e,4e,7e,8e,9e"
 sudo update-initramfs -u
 ```
 
@@ -236,7 +236,7 @@ passphrase, an option it builds on still missing:
 |---|---|
 | Signing key and TOTP codes | the signing key (and a YubiKey's PIN, stored); the standard sealing - slot 0 to the evaluated PCR selection, acknowledged or custom, and slot 1 the fallback; every slot a line, **picking it deletes the slot whole** |
 | Attestation by phone | enrol a phone; Bluetooth in every boot image |
-| Disk unlock | password + salt; password + remote salt (the phone); this TPM + a vault - each a keyslot of its own, enrolled it offers the removal |
+| Disk unlock | password + salt; password + phone salt (the phone); this TPM + a vault - each a keyslot of its own, enrolled it offers the removal |
 | Network and SSH at boot | the image's network (DHCP or static, proposed from the running system); the SSH server with the code screen |
 
 An option that needs another one control can set up offers it on the
@@ -251,7 +251,7 @@ boot is compared with it, and nothing the phone can check itself says that
 this first state is clean. So the phone is enrolled only in a boot you
 verified: slot 0 is sealed with a TOTP code, the reboot goes through the
 code screen, you compare the code with your authenticator, and in that boot
-the phone is enrolled, which then retires slot 0's code. `attest enrol`
+the phone is enrolled, which then retires slot 0's code. `phone enrol`
 holds to it whichever way it is started: it refuses a boot that did not
 pass the code screen, and one whose PCRs at the code screen were not the
 ones slot 0's code is approved for (no code was shown, nothing verified
@@ -364,11 +364,11 @@ tpm2-kira runs `reveal`.
 | | Commands |
 |---|---|
 | Guided | `control`: step 1 the boot chain, step 2 what the machine combines |
-| Setting up the machine | `setup` the signing key · `seal` a new TOTP key to the boot state · `reseal` approve the current boot state (the hooks run it) · `status` the overview · `info` a slot's blob · `nvram list\|status\|delete\|restore` |
-| The phone (Marify, Bluetooth LE) | `attest enrol\|unenrol\|status\|gate\|ekcert\|quote\|verify` · `remote-salt enrol\|rotate\|status\|unenrol` |
-| The disk's key | `luks status\|enrol\|remove\|mark\|route` · `derive` (hashpwd2 by hand) · the recipe is the keyslot's token, read from the header at boot |
+| Setting up the machine | `setup` the signing key · `slot add` a new TOTP key to the boot state · `slot approve` approve the current boot state (the hooks run it) · `status` the overview · `slot info` a slot's blob · `slot list\|status\|delete\|restore` |
+| The phone (Marify, Bluetooth LE) | `phone enrol\|unenrol\|status\|gate\|ekcert\|quote\|verify` · `phone salt enrol\|rotate\|status\|unenrol` |
+| The disk's key | `luks status\|enrol\|remove\|mark\|route` · `luks derive` (hashpwd2 by hand) · the recipe is the keyslot's token, read from the header at boot |
 | The disk's key from a vault | `vault enrol\|status\|unenrol` ([docs/REMOTE-UNLOCK.md](docs/REMOTE-UNLOCK.md)) |
-| At boot (the units and hooks) | `initramfs plan` what the image carries · `run` · `cap` · `unlock-key` (Debian keyscript) · `remote serve` (the SSH server, started by `run`) |
+| At boot (the units and hooks) | `initramfs plan` what the image carries · `run` · `cap` · `unlock-key` (Debian keyscript) · `ssh-child` (the SSH server, started by `run`) |
 | By hand | `reveal` / `reveal-plain` · `yubikey list` · `pcrtips` · `version` |
 
 Global options come before the command, or after it as the command's own
@@ -381,7 +381,7 @@ take every populated slot), `--debug`.
 ### Basic seal
 
 ```bash
-tpm2-kira seal
+tpm2-kira slot add
 ```
 
 Without `--pcrs`, the selection is what this boot measured, read from the
@@ -418,10 +418,10 @@ You can mix sources freely:
 
 ```bash
 # PCR 0 and 7 from eventlog, PCR 2 from register
-tpm2-kira seal --pcrs "0e,2,7e"
+tpm2-kira slot add --pcrs "0e,2,7e"
 
 # Add a UKI-computed PCR 11
-tpm2-kira seal --pcrs "0e,2e,7e,11u"
+tpm2-kira slot add --pcrs "0e,2e,7e,11u"
 ```
 
 The `u` source parses the unified kernel image directly and reproduces what
@@ -429,7 +429,7 @@ systemd-stub measures: for each section, `H(name + NUL)` followed by
 `H(section bytes)`, then the `enter-initrd` boot phase. It needs neither
 `objcopy` nor `systemd-measure`, and nothing is executed as a subprocess.
 
-`seal` checks that computation against the current boot's firmware event log,
+`slot add` checks that computation against the current boot's firmware event log,
 measurement by measurement. What happens on a mismatch depends on what kind it
 is:
 
@@ -461,7 +461,7 @@ Firmware-only selections such as `0,7` or `0e,2e,4e,7e` survive kernel updates
 untouched, but a replaced initrd, or a shell from an edited command line, then
 still gets a valid code — and from such a shell the TPM can be made to compute
 codes for any future time. PCRs 8 and 9 change on every kernel or initramfs
-update; `reseal` predicts them from the files on disk, see
+update; `slot approve` predicts them from the files on disk, see
 [docs/BOOT-INTEGRATION.md](docs/BOOT-INTEGRATION.md#pcr-8-and-9-are-predicted-for-the-next-boot).
 
 ### Hardening the boot path
@@ -482,7 +482,7 @@ A selection is only as good as the ways into a shell that it measures. Also:
 
 ### Warnings about weak selections
 
-`seal` and `reseal` report selections that attest less than they appear to.
+`slot add` and `slot approve` report selections that attest less than they appear to.
 These are advisory — the secret is still sealed.
 
 **No PCR for the kernel, initrd or command line.** See
@@ -525,28 +525,28 @@ When PCR values change (kernel update, initramfs rebuild, firmware update), the 
 
 ```bash
 # Uses the default signing key from setup
-tpm2-kira reseal
+tpm2-kira slot approve
 
 # Or specify the key explicitly
-tpm2-kira reseal --privkey /etc/tpm2-kira/keys/seal.key
+tpm2-kira slot approve --privkey /etc/tpm2-kira/keys/seal.key
 ```
 
 You can also change the PCR selection during reseal:
 
 ```bash
-tpm2-kira reseal --pcrs "0e,2,4,7e"
+tpm2-kira slot approve --pcrs "0e,2,4,7e"
 ```
 
 ## Inspecting Sealed Data
 
 ```bash
-tpm2-kira info
-tpm2-kira info --nvram 0
-tpm2-kira info --json          # machine-readable
-tpm2-kira info --privkey /path/to/key.pem   # verify with a custom key
+tpm2-kira slot info
+tpm2-kira slot info --nvram 0
+tpm2-kira slot info --json          # machine-readable
+tpm2-kira slot info --privkey /path/to/key.pem   # verify with a custom key
 ```
 
-`info` first checks each blob's signature with the signing key (`--privkey`,
+`slot info` first checks each blob's signature with the signing key (`--privkey`,
 or the default key). The result is the first line of the output, and
 `signature_verified` in JSON. A blob that does not verify is still shown, but
 marked untrusted: its strings are printed escaped, and the files it names are
@@ -560,8 +560,8 @@ blob itself, so consumers never have to branch on the slot count.
 
 **Deleting a slot is one act**: `tpm2-kira control`, the slot's own line. It
 deletes everything the slot is made of - the blob in the TPM (the TOTP
-key, the phones, the remote salt's release key), its two companion
-indices, the `password+remotesalt` and `tpm+vault` keyslots bound to the
+key, the phones, the phone salt's release key), its two companion
+indices, the `password+phonesalt` and `tpm+vault` keyslots bound to the
 slot by their token (a `password+salt` keyslot is bound to nothing and stays), the
 recovery blobs stashed for it. If any part fails to go (no remaining
 passphrase for `luksKillSlot`, a TPM that refuses), the rest is still
@@ -573,53 +573,53 @@ The pieces can still be taken by hand - these leave the slot dirty the
 same way where something of it remains:
 
 ```bash
-tpm2-kira nvram delete              # everything tpm2-kira keeps in the TPM: asks to type 'yes'
-tpm2-kira nvram delete --yes        # the same, without asking
-tpm2-kira nvram delete --nvram 0    # one slot's indices in the TPM: TOTP key and phones
+tpm2-kira slot delete              # everything tpm2-kira keeps in the TPM: asks to type 'yes'
+tpm2-kira slot delete --yes        # the same, without asking
+tpm2-kira slot delete --nvram 0    # one slot's indices in the TPM: TOTP key and phones
 tpm2-kira luks remove /dev/sda2 --keyslot 1   # one LUKS keyslot of tpm2-kira's, with its token
-tpm2-kira attest unenrol --nvram 0  # only the phones of one slot (needs the signing key)
+tpm2-kira phone unenrol --nvram 0  # only the phones of one slot (needs the signing key)
 ```
 
 A slot is one blob in the TPM: it holds the slot's TOTP key or, once a phone
 is enrolled, the phones instead, under one signature. Two small companions belong
 to it, because they are mechanisms of the TPM and not data: an index the TPM
 can lock for the rest of the boot, and a counter the TPM only lets count up.
-`nvram list` labels all three, and the machine's boot settings next to them:
+`slot list` labels all three, and the machine's boot settings next to them:
 
 | NV index (slot *n*) | What it holds | Written by |
 |---|---|---|
-| `0x01803010` + *n* | the slot's blob: TOTP key or phone enrolment | `seal`, `reseal`, `attest enrol`, `attest unenrol` |
-| `0x01803810` + *n* | the generation index of the TOTP key's policy | `seal`, `reseal` |
-| `0x01803820` + *n* | the record counter of the phone enrolment | `attest enrol`, `attest unenrol` |
+| `0x01803010` + *n* | the slot's blob: TOTP key or phone enrolment | `slot add`, `slot approve`, `phone enrol`, `phone unenrol` |
+| `0x01803810` + *n* | the generation index of the TOTP key's policy | `slot add`, `slot approve` |
+| `0x01803820` + *n* | the record counter of the phone enrolment | `phone enrol`, `phone unenrol` |
 | `0x01803000` | the boot settings: "Debug at boot" (one per machine, only while it is on) | `control` |
 
 Because the phones live in the slot's blob,
 
-- `attest enrol` needs a sealed slot, and checks the PCRs that slot is sealed
+- `phone enrol` needs a sealed slot, and checks the PCRs that slot is sealed
   to unless `--pcrs` says otherwise;
-- `reseal` (after every kernel update) and sealing a slot again keep its
+- `slot approve` (after every kernel update) and sealing a slot again keep its
   phones. A slot sealed by *another* signing key does not take over the
   phones the old key vouched for;
 - the first phone retires the slot's TOTP code: the boot screen then shows
   "mobile attestation locked - please connect" for the slot until the phone
   is in. Remove the slot's entry from your authenticator; slot 1, the
   fallback, keeps its code for a boot without the phone;
-- `attest unenrol` rewrites the blob without the phones and gives the slot a
+- `phone unenrol` rewrites the blob without the phones and gives the slot a
   new TOTP key (its QR code is shown), and therefore needs the signing key;
-  `nvram delete --nvram N` removes the slot whole and needs none;
+  `slot delete --nvram N` removes the slot whole and needs none;
 - every further phone makes the blob larger (about 170 bytes), and a TPM
   limits the size of an NV index (2048 bytes on many). Whether a phone fits
   is checked for the blob as it would be written.
 
-`nvram delete` without `--nvram` removes every slot and what belongs to no
+`slot delete` without `--nvram` removes every slot and what belongs to no
 slot any more: a companion index whose slot is gone. What it never touches
 is the LUKS header: a keyslot bound to a deleted slot is named as dirty,
 and `control` (or `luks remove`) takes it.
 
 ### If a rewrite of the slot fails
 
-A TPM cannot replace an NV index in place: `reseal`, `attest enrol` and
-`attest unenrol` undefine the slot and write it again, and for a moment
+A TPM cannot replace an NV index in place: `slot approve`, `phone enrol` and
+`phone unenrol` undefine the slot and write it again, and for a moment
 the TPM holds no blob. Everything that can fail without touching the TPM
 (loading the key, the token's PIN, the signer) is exercised before that
 moment. If a step after it fails anyway — the TPM refuses the define, a
@@ -630,7 +630,7 @@ wrapped it, which only this TPM can load, so the secret is not lost with
 the index. Once the cause is fixed:
 
 ```bash
-tpm2-kira nvram restore /etc/tpm2-kira/recovery/slot-0x01803010-1759823456.blob
+tpm2-kira slot restore /etc/tpm2-kira/recovery/slot-0x01803010-1759823456.blob
 ```
 
 verifies the blob with the signing key, needs the slot to be empty (it
@@ -656,14 +656,14 @@ machines, none of which can tell that the others share it.
 
 ```bash
 # Once, on the booted system (needs the signing key and a Bluetooth adapter):
-sudo tpm2-kira attest enrol --name "Thinkpad-X1"
+sudo tpm2-kira phone enrol --name "Thinkpad-X1"
 #   compare the 6-digit code on the console with the app, confirm on both
 #   A TPM without a SHA-256 PCR bank, or a slot sealed with --sha1, needs
 #   --sha1 here as well: SHA-1 is never chosen without being asked for.
 
 # Serve an attestation by hand (shows the verdict, never blocks):
-sudo tpm2-kira attest gate
-sudo tpm2-kira attest status
+sudo tpm2-kira phone gate
+sudo tpm2-kira phone status
 
 ```
 
@@ -672,7 +672,7 @@ that this machine's TPM is genuine (its EK certificate against vendor roots
 built into the app; Intel signs each product family's EKs under its own
 issuing CA, which the machine fetches from the URL the chain names and
 sends along - trust still comes from the embedded root alone, and
-`tpm2-kira attest ekcert` shows the chain and where it breaks off); `attest enrol` runs the same check on itself first
+`tpm2-kira phone ekcert` shows the chain and where it breaks off); `phone enrol` runs the same check on itself first
 (`--verify-tpm`). The machine checks the phone's key attestation against
 Google's attestation roots and revocation list: key in StrongBox or the TEE,
 an unlock for every use, a locked and verified phone (`--verify-phone`).
@@ -682,7 +682,7 @@ check). `require` refuses, `off` skips.
 
 **Choose PCRs that cover the initrd.** The initrd is where a passphrase
 logger would sit; if no quoted PCR measures it, a modified initrd attests as
-unchanged. `attest enrol` reads this boot's event log, says which PCRs
+unchanged. `phone enrol` reads this boot's event log, says which PCRs
 measured the initrd, and asks before enrolling a selection that misses them:
 
 | Boot path | Initrd measured into | For example |
@@ -734,8 +734,8 @@ with PCR 8/9 predicted for the next boot (below).
 
 The same session also releases the salt for
 [hashpwd2](https://github.com/mrwiora/hashpwd2) when the LUKS key is derived
-from a password plus a phone-held factor (`password+remotesalt`,
-[below](#the-remote-salt-your-password-and-the-phone-together)).
+from a password plus a phone-held factor (`password+phonesalt`,
+[below](#the-phone salt-your-password-and-the-phone-together)).
 
 Status: the machine side, Bluetooth inside the initramfs and the phone's
 verification core are implemented but not yet tested on real Bluetooth
@@ -791,7 +791,7 @@ sudo make install-mkinitcpio
 
 This installs:
 - `sd-tpm2-kira` — mkinitcpio install hook (systemd-based initramfs)
-- A **post-generation hook** that automatically runs `tpm2-kira reseal` after every initramfs rebuild
+- A **post-generation hook** that automatically runs `tpm2-kira slot approve` after every initramfs rebuild
 
 ### Configure mkinitcpio
 
@@ -815,7 +815,7 @@ What the image does at boot depends on two things, both optional:
 |---|---|
 | nothing but the hook | the code screen, then `sd-encrypt`'s own passphrase prompt (systemd's), as if tpm2-kira were not there once the code is confirmed |
 | `rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock` on the kernel command line | the code screen, then tpm2-kira's passphrase prompt; a typo falls back to systemd's prompt |
-| a phone enrolled (`attest enrol`) and the adapter found at build time | the code screen also asks the phone and shows its verdict; the passphrase prompt is never held |
+| a phone enrolled (`phone enrol`) and the adapter found at build time | the code screen also asks the phone and shows its verdict; the passphrase prompt is never held |
 
 ### Configure the disk unlock
 
@@ -865,7 +865,7 @@ the same on Arch and Debian, and no rebuild follows an enrolment:
 |---|---|
 | *(no token of tpm2-kira's)* | tpm2-kira stays out of it: cryptsetup's own prompt asks for the LUKS passphrase |
 | `password+salt` | tpm2-kira asks for a **password** and a **salt** and hands over [hashpwd2](https://github.com/mrwiora/hashpwd2)'s derivation of the two - the same bytes hashpwd2 prints, so a keyslot enrolled with hashpwd2 opens as it is |
-| `password+remotesalt` | tpm2-kira asks for the **password**; the salt is the one the phone released after verifying the machine and this TPM opened (next section). Only with an attestation set up. Without a salt from the phone (no phone in range, nothing released) it asks for a typed salt as in `password+salt`, which opens a keyslot enrolled that way; Ctrl-C then leads to cryptsetup's own prompt |
+| `password+phonesalt` | tpm2-kira asks for the **password**; the salt is the one the phone released after verifying the machine and this TPM opened (next section). Only with an attestation set up. Without a salt from the phone (no phone in range, nothing released) it asks for a typed salt as in `password+salt`, which opens a keyslot enrolled that way; Ctrl-C then leads to cryptsetup's own prompt |
 
 In every case a wrong answer, or Ctrl-C at tpm2-kira's prompt, goes to
 cryptsetup's own prompt, where the recovery passphrase works - keep one
@@ -878,7 +878,7 @@ A keyslot for `password+salt`, made on the unlocked system:
 
 ```bash
 sudo mkdir -m 700 -p /run/tpm2-kira
-sudo tpm2-kira derive --out /run/tpm2-kira/luks.key     # asks password (twice) and salt
+sudo tpm2-kira luks derive --out /run/tpm2-kira/luks.key     # asks password (twice) and salt
 sudo cryptsetup luksAddKey /dev/nvme0n1p2 /run/tpm2-kira/luks.key
 sudo cryptsetup open --test-passphrase /dev/nvme0n1p2 --key-file /run/tpm2-kira/luks.key
 sudo rm /run/tpm2-kira/luks.key
@@ -888,9 +888,9 @@ sudo tpm2-kira luks mark /dev/nvme0n1p2 --keyslot 1 --mode password+salt
 The last line marks the keyslot as tpm2-kira's with a LUKS2 token in the
 header (no key material). The token's type carries the mode, so a plain
 `cryptsetup luksDump` tells them apart: `tpm2-kira-salt` for
-`password+salt`, `tpm2-kira-remotesalt` for `password+remotesalt` (`+` is
+`password+salt`, `tpm2-kira-phonesalt` for `password+phonesalt` (`+` is
 not allowed in a token type, so the type spells it out). A `password+salt` keyslot is bound to nothing: no TPM is
-in its key, and no slot's deletion takes it. A `password+remotesalt`
+in its key, and no slot's deletion takes it. A `password+phonesalt`
 keyslot carries `"slot": N` - the slot whose enrolment releases its salt
 (slot 0 unless `--nvram` names another) - and is deleted with that slot
 ([Deleting sealed data](#deleting-sealed-data)). The two coexist on one
@@ -898,14 +898,14 @@ device: at boot the phone's salt is tried first, the typed salt is the
 fallback. `luks enrol` does all of the above in one step; its design is
 [docs/PLAN-LUKS.md](docs/PLAN-LUKS.md).
 
-### The remote salt: your password and the phone, together
+### The phone salt: your password and the phone, together
 
 With a phone enrolled, the disk can need **both** your password and a
-salt the phone keeps - the *remote salt*
+salt the phone keeps - the *phone salt*
 ([PLAN-FACTORRELEASE.md](docs/PLAN-FACTORRELEASE.md)): a value only this
 machine's TPM can open, and only in a boot your signing key approved. It
 is released by the attestation and by nothing else: the phone enrolled
-with `attest enrol`, over Bluetooth LE, hands it back after a verdict you
+with `phone enrol`, over Bluetooth LE, hands it back after a verdict you
 accept. The key in the LUKS keyslot is hashpwd2's derivation of password
 and salt, as in `password+salt` - only that nobody types the salt.
 Whoever has the disk and the password still needs the phone and this
@@ -914,22 +914,22 @@ machine; whoever has the phone and the machine still needs the password.
 1. **Recovery passphrase first**, in its own keyslot, typed at
    cryptsetup's prompt - long, not the password below, written down
    somewhere safe. It is the way in without the phone, at cryptsetup's
-   own prompt. `remote-salt enrol` asks whether it exists.
+   own prompt. `phone salt enrol` asks whether it exists.
 
    ```bash
    sudo cryptsetup luksAddKey /dev/nvme0n1p2
    ```
 
-2. **Enrol the remote salt.** On the unlocked system, with Marify open on
+2. **Enrol the phone salt.** On the unlocked system, with Marify open on
    the phone:
 
    ```bash
    sudo mkdir -m 700 -p /run/tpm2-kira
-   sudo tpm2-kira remote-salt enrol --out /run/tpm2-kira/luks.key
+   sudo tpm2-kira phone salt enrol --out /run/tpm2-kira/luks.key
    ```
 
    The phone shows the ordinary verdict screen with a card "Keep this
-   machine's remote salt"; accepting the verdict keeps it. The phone
+   machine's phone salt"; accepting the verdict keeps it. The phone
    hands it straight back, the TPM opens it, and only if the round trip
    gives back what was sent does tpm2-kira ask for your password and
    write the derived key - once, to tmpfs. The first enrolment of a slot
@@ -942,7 +942,7 @@ machine; whoever has the phone and the machine still needs the password.
    sudo cryptsetup luksAddKey /dev/nvme0n1p2 /run/tpm2-kira/luks.key
    sudo cryptsetup open --test-passphrase /dev/nvme0n1p2 --key-file /run/tpm2-kira/luks.key
    sudo rm /run/tpm2-kira/luks.key
-   sudo tpm2-kira luks mark /dev/nvme0n1p2 --keyslot 2 --mode password+remotesalt
+   sudo tpm2-kira luks mark /dev/nvme0n1p2 --keyslot 2 --mode password+phonesalt
    ```
 
 At boot: code screen, the phone verifies and hands the salt back, the
@@ -951,10 +951,10 @@ verifier released the disk's salt` and asks for the *password*. It
 derives the key (1 GiB of memory, some seconds) and gives it to
 `systemd-cryptsetup`. No phone, no verdict, or a TPM that refused: no
 answer from tpm2-kira, cryptsetup's own prompt, the recovery passphrase.
-`remote-salt status` says which slots have one (`--json` for scripts);
-`remote-salt rotate` gives the phone a new salt and derives the new key,
+`phone salt status` says which slots have one (`--json` for scripts);
+`phone salt rotate` gives the phone a new salt and derives the new key,
 after which the old keyslot is removed by hand (`cryptsetup luksKillSlot`);
-`remote-salt unenrol` takes the release key out of the slot, so what the
+`phone salt unenrol` takes the release key out of the slot, so what the
 phone keeps can never be opened again, and the keyslot is removed by
 hand. The phone side runs on Android; the iOS app is tested separately.
 
@@ -992,7 +992,7 @@ sequenceDiagram
     K->>K: show it: you compare it with your authenticator
   else a slot with a phone enrolled
     K->>P: a TPM quote over Bluetooth LE
-    P-->>K: the verdict (and the salt, for password+remotesalt)
+    P-->>K: the verdict (and the salt, for password+phonesalt)
   end
   opt the SSH server in the image
     S->>K: connect: a host certificate from the CA in the TPM (aSSH)
@@ -1022,7 +1022,7 @@ in, and what happens after a typo: [UNLOCK-DISK.md](docs/UNLOCK-DISK.md).
 When the initrd hands over to the real root, `tpm2-kira-cap.service` runs
 `tpm2-kira cap`. From then until the next reboot the TPM computes no codes,
 for anyone, root included — `tpm2-kira reveal` in the running system reports
-"Locked until reboot". `reseal` still works.
+"Locked until reboot". `slot approve` still works.
 
 A matching code is evidence only if the clock was not tampered with: the
 codes depend on the real-time clock, which nothing measures. Someone with the
@@ -1102,22 +1102,22 @@ apply. GRUB carries the equivalent measurements instead:
 
 ```bash
 # Measures kernel, initrd and command line; predicted across updates (below)
-tpm2-kira seal --pcrs "0e,2e,4e,7e,8e,9e"
+tpm2-kira slot add --pcrs "0e,2e,4e,7e,8e,9e"
 
 # Stable across kernel updates, but a modified initrd or command line
 # still shows a valid code (seal prints a warning)
-tpm2-kira seal --pcrs "0e,2e,4e,7e"
+tpm2-kira slot add --pcrs "0e,2e,4e,7e"
 ```
 
 ### PCR 8 and 9 are predicted for the next boot
 
-`reseal` predicts PCR 8 and 9 from this boot's event log and the files on disk, so an update needs no boot without a code; the hooks run it. What it cannot foresee, and the state of the art: [docs/BOOT-INTEGRATION.md](docs/BOOT-INTEGRATION.md#pcr-8-and-9-are-predicted-for-the-next-boot).
+`slot approve` predicts PCR 8 and 9 from this boot's event log and the files on disk, so an update needs no boot without a code; the hooks run it. What it cannot foresee, and the state of the art: [docs/BOOT-INTEGRATION.md](docs/BOOT-INTEGRATION.md#pcr-8-and-9-are-predicted-for-the-next-boot).
 
 ## Uninstall
 
 ```bash
 # Remove sealed data first
-tpm2-kira nvram delete --yes
+tpm2-kira slot delete --yes
 
 # Remove binary
 sudo make uninstall
@@ -1132,13 +1132,13 @@ sudo rm -rf /etc/tpm2-kira/keys
 
 On Arch:
 ```bash
-tpm2-kira nvram delete --yes
+tpm2-kira slot delete --yes
 sudo pacman -R tpm2-kira
 ```
 
 On Debian:
 ```bash
-tpm2-kira nvram delete --yes
+tpm2-kira slot delete --yes
 sudo apt remove tpm2-kira
 ```
 

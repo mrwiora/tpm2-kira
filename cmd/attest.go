@@ -114,7 +114,7 @@ func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *Attestation, priv cryp
 	raw, sb, err := readSlot(tpmDev, idx)
 	if err != nil {
 		return fmt.Errorf("slot %d holds no sealed TOTP key (%v). A phone enrolment is stored with the slot's key: "+
-			"run 'tpm2-kira seal --nvram %d' first", slot, err, slot)
+			"run 'tpm2-kira slot add --nvram %d' first", slot, err, slot)
 	}
 	if err := VerifyBlobSignature(raw, sb, priv.Public()); err != nil {
 		return foreignSlotError(slot, err)
@@ -162,7 +162,7 @@ func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *Attestation, priv cryp
 		var tooLarge *BlobTooLargeError
 		if errors.As(err, &tooLarge) {
 			return fmt.Errorf("slot %d's blob would be %d bytes with this enrolment, and this TPM stores at most %d in one NV index; "+
-				"nothing was written. Its phones share the blob with the TOTP key: remove one with 'tpm2-kira attest unenrol --nvram %d' "+
+				"nothing was written. Its phones share the blob with the TOTP key: remove one with 'tpm2-kira phone unenrol --nvram %d' "+
 				"(that removes all phones of the slot) and enrol the ones you need", slot, tooLarge.Size, tooLarge.Limit, slot)
 		}
 		// The index was replaced for the write; the TOTP key lives in it.
@@ -251,7 +251,7 @@ func checkEnrolmentFits(tpmDev transport.TPM, slotBlob *SealedBlob, enrolment *A
 	}
 	if size > limit {
 		return fmt.Errorf("slot %d's blob would grow to at least %d bytes with another phone, and this TPM stores at most %d per NV index.\n"+
-			"Its phones share the blob with the TOTP key: remove one with 'tpm2-kira attest unenrol --nvram %d' "+
+			"Its phones share the blob with the TOTP key: remove one with 'tpm2-kira phone unenrol --nvram %d' "+
 			"(that removes all phones of the slot) and enrol the ones you need", slot, size, limit, slot)
 	}
 	return nil
@@ -273,8 +273,8 @@ func imagePCRs(sel []uint8) string {
 // foreignSlotError: the slot's blob was not written by this signing key.
 func foreignSlotError(slot uint32, cause error) error {
 	return fmt.Errorf("slot %d is not signed by your signing key (%v): it was replaced outside tpm2-kira, "+
-		"or is left over from an installation with another signing key. Inspect it with 'tpm2-kira info --nvram %d'; "+
-		"to start over, run 'tpm2-kira nvram delete --nvram %d' and seal again", slot, cause, slot, slot)
+		"or is left over from an installation with another signing key. Inspect it with 'tpm2-kira slot info --nvram %d'; "+
+		"to start over, run 'tpm2-kira slot delete --nvram %d' and add it again", slot, cause, slot, slot)
 }
 
 // checkSamePCRs refuses a --pcrs that differs from an existing blob's
@@ -297,7 +297,7 @@ func checkSamePCRs(blob *Attestation, pcrs string, slot uint32) error {
 	}
 	return fmt.Errorf("slot %d is already enrolled with PCRs %s; --pcrs %s would be ignored.\n"+
 		"Every phone enrolled on this machine checks the same PCRs. To change them, run\n"+
-		"'tpm2-kira attest unenrol' (enrolled phones must then be enrolled again), or\n"+
+		"'tpm2-kira phone unenrol' (enrolled phones must then be enrolled again), or\n"+
 		"enrol without --pcrs to keep %s", slot, have, pcrs, have)
 }
 
@@ -342,7 +342,7 @@ func readSealedSlot(tpmDev transport.TPM, sealIndex uint32) *SealedBlob {
 	return sb
 }
 
-// EnrolOptions configures `attest enrol`.
+// EnrolOptions configures `phone enrol`.
 type EnrolOptions struct {
 	TPMPath     string
 	SealIndex   uint32
@@ -361,7 +361,7 @@ type EnrolOptions struct {
 }
 
 // AttestEnrol binds a phone to this machine over BLE. It runs on the booted,
-// unlocked system: it writes NVRAM and needs the signing key, like `seal`.
+// unlocked system: it writes NVRAM and needs the signing key, like `slot add`.
 func AttestEnrol(o EnrolOptions) error {
 	tpmDev, err := OpenTPM(o.TPMPath)
 	if err != nil {
@@ -394,7 +394,7 @@ func AttestEnrol(o EnrolOptions) error {
 	if err != nil {
 		return fmt.Errorf("slot %d holds no sealed TOTP key (%v).\n"+
 			"A phone enrolment is stored with the slot's key and checks the same boot: seal first with\n\n"+
-			"    tpm2-kira seal --nvram %d", attestSlot(idx), err, attestSlot(idx))
+			"    tpm2-kira slot add --nvram %d", attestSlot(idx), err, attestSlot(idx))
 	}
 	if err := VerifyBlobSignature(raw, slotBlob, priv.Public()); err != nil {
 		return foreignSlotError(attestSlot(idx), err)
@@ -417,7 +417,7 @@ func AttestEnrol(o EnrolOptions) error {
 	}
 	if blob != nil && o.SHA1 && blob.PCRAlg != attest.AlgSHA1 {
 		return fmt.Errorf("slot %d is already enrolled with the SHA-256 bank, which every phone of the slot shares; "+
-			"drop --sha1, or start over with 'tpm2-kira attest unenrol --nvram %d'", attestSlot(idx), attestSlot(idx))
+			"drop --sha1, or start over with 'tpm2-kira phone unenrol --nvram %d'", attestSlot(idx), attestSlot(idx))
 	}
 
 	if blob == nil {
@@ -438,7 +438,7 @@ func AttestEnrol(o EnrolOptions) error {
 		if pcrs == "" {
 			pcrs = "0,2,4,7"
 		}
-		// SHA-256, unless --sha1 says otherwise: like 'seal', SHA-1 is
+		// SHA-256, unless --sha1 says otherwise: like 'slot add', SHA-1 is
 		// never picked for the user, not even where nothing else works.
 		alg, err := chooseAttestBank(o.SHA1, sealedAlg, func(a PCRHashAlgo) bool { return TPMHasPCRBank(tpmDev, a) })
 		if err != nil {
@@ -504,7 +504,7 @@ func AttestEnrol(o EnrolOptions) error {
 	}
 
 	// The header is two lines: what the phone sees in detail is its own
-	// screen's job ('attest status' and 'info' say it here), and the
+	// screen's job ('phone status' and 'slot info' say it here), and the
 	// overview already judges the machine.
 	mp := predictMeasurePoint(tpmDev, sealed, sel, o.Debug)
 	fmt.Printf("Enrolling %q (slot %d) over hci%d. The adapter is taken over until this\n", blob.FriendlyName, SlotNumber(sealIndex), o.Adapter)
@@ -684,7 +684,7 @@ func confirmCode(in *bufio.Reader, code string) (bool, error) {
 	}
 }
 
-// GateOptions configures `attest gate`.
+// GateOptions configures `phone gate`.
 type GateOptions struct {
 	TPMPath     string
 	SignerPath  string        // the signing public key in the initramfs; "" = DefaultAttestSignerPath
@@ -747,7 +747,7 @@ func chooseAttestBank(sha1 bool, sealedAlg uint16, has func(PCRHashAlgo) bool) (
 	}
 	if sealedAlg == attest.AlgSHA1 && !sha1 {
 		return 0, fmt.Errorf("the slot is sealed against the SHA-1 PCR bank, and its phone enrolment quotes the same registers.\n"+
-			"Say so explicitly:\n\n    tpm2-kira attest enrol --sha1\n\n%s", stopgap)
+			"Say so explicitly:\n\n    tpm2-kira phone enrol --sha1\n\n%s", stopgap)
 	}
 	if sealedAlg == attest.AlgSHA256 && sha1 {
 		return 0, errors.New("the slot is sealed against the SHA-256 PCR bank, and its phone enrolment quotes the same registers; drop --sha1")
@@ -757,7 +757,7 @@ func chooseAttestBank(sha1 bool, sealedAlg uint16, has func(PCRHashAlgo) bool) (
 	}
 	if !sha1 && has(PCRHashAlgoSHA1) {
 		return 0, fmt.Errorf("this TPM has no SHA-256 PCR bank to quote.\n"+
-			"The only remaining option is the SHA-1 bank:\n\n    tpm2-kira attest enrol --sha1\n\n%s", stopgap)
+			"The only remaining option is the SHA-1 bank:\n\n    tpm2-kira phone enrol --sha1\n\n%s", stopgap)
 	}
 	return 0, fmt.Errorf("this TPM has no %s PCR bank to quote", hashAlgo.DisplayString())
 }
@@ -810,7 +810,7 @@ func requireVerifiedBoot(tpmDev transport.TPM, sealed *SealedBlob, slot uint32) 
 	case len(differ) > 0:
 		return false, fmt.Errorf("this boot is not the state slot %d's code is approved for (PCR %s differ), so the\n"+
 			"code screen showed no code for it and nothing verified this boot. Reseal for the current\n"+
-			"boot chain ('tpm2-kira reseal', after a kernel update the hook does it), reboot, compare the\n"+
+			"boot chain ('tpm2-kira slot approve', after a kernel update the hook does it), reboot, compare the\n"+
 			"code with your authenticator, then enrol", slot, joinInts(differ))
 	}
 	return true, nil
@@ -1143,7 +1143,7 @@ func gateRecordCheck(tpmDev transport.TPM, idx uint32, signerPath string) (bool,
 			"tpm2-kira:   %v.\n"+
 			"tpm2-kira:   It was replaced, or an older one was put back: no phone is served, and a\n"+
 			"tpm2-kira:   verdict from any phone means nothing for this boot. To start over, run\n"+
-			"tpm2-kira:   'tpm2-kira attest unenrol' on the unlocked system and enrol again.",
+			"tpm2-kira:   'tpm2-kira phone unenrol' on the unlocked system and enrol again.",
 			attestSlot(idx), err)
 		return false, ExitTampered
 	}
@@ -1273,7 +1273,7 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 		return tamperedErr(invalid)
 	}
 	if len(out) == 0 {
-		fmt.Println("No slot is enrolled for attestation. Run: tpm2-kira attest enrol")
+		fmt.Println("No slot is enrolled for attestation. Run: tpm2-kira phone enrol")
 		return nil
 	}
 	for _, s := range out {
@@ -1316,7 +1316,7 @@ func tamperedErr(invalid int) error {
 }
 
 // AttestQuote produces evidence without a peer, for carrying to another
-// machine and judging there with `attest verify`.
+// machine and judging there with `phone verify`.
 func AttestQuote(tpmPath string, sealIndex uint32, nonceHex, pcrs, outPath string, debug bool) error {
 	nonce, err := hex.DecodeString(nonceHex)
 	if err != nil || len(nonce) < 16 || len(nonce) > 64 {
@@ -1382,7 +1382,7 @@ func AttestQuote(tpmPath string, sealIndex uint32, nonceHex, pcrs, outPath strin
 func AttestVerify(evidencePath, recordPath, nonceHex string, jsonOut bool) (bool, error) {
 	nonce, err := hex.DecodeString(nonceHex)
 	if err != nil || len(nonce) < 16 || len(nonce) > 64 {
-		return false, fmt.Errorf("--nonce must be the 16-64 bytes of hex given to 'attest quote'")
+		return false, fmt.Errorf("--nonce must be the 16-64 bytes of hex given to 'phone quote'")
 	}
 	evData, err := os.ReadFile(evidencePath)
 	if err != nil {
@@ -1501,7 +1501,7 @@ func AttestUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug b
 	priv, err := LoadCheckedSigningPrivateKey(privKeyPath)
 	if err != nil {
 		return fmt.Errorf("removing the enrolment rewrites the slot's blob and needs the signing key: %w\n"+
-			"Without the key, 'tpm2-kira nvram delete --nvram %d' removes the whole slot, TOTP key included", err, slot)
+			"Without the key, 'tpm2-kira slot delete --nvram %d' removes the whole slot, TOTP key included", err, slot)
 	}
 	if err := PrepareSigningKey(priv); err != nil {
 		return fmt.Errorf("the signing key is not usable: %w", err)

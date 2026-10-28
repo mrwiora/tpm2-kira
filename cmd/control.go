@@ -72,7 +72,7 @@ type machineFacts struct {
 	Status   StatusReport   // the slots, the unlock mode, the LUKS devices, the notes
 	Dirt     []SlotContents // slots whose blob is gone but of which parts remain
 	Phone    bool           // a phone is enrolled for some slot
-	Salt     bool           // a remote salt is enrolled for some slot
+	Salt     bool           // a phone salt is enrolled for some slot
 	BTAlways bool           // Bluetooth is packed into every image (control.conf)
 	// BTFirmware is the adapter's firmware as the image build will find it
 	// (attest_initramfs.go); empty when no log named it and none is
@@ -228,7 +228,7 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 			f.Vaults[s.Slot] = checkVault(s.Vault, s.VaultPin, s.VaultDevice, 5*time.Second)
 		}
 		f.Phone = f.Phone || s.Phones > 0
-		f.Salt = f.Salt || s.RemoteSalt
+		f.Salt = f.Salt || s.PhoneSalt
 		f.Capped = f.Capped || strings.Contains(s.GenState, "read-locked until reboot")
 	}
 	if f.Initramfs == "mkinitcpio" {
@@ -1151,7 +1151,7 @@ func (c *controller) confirmPCRs() (string, error) {
 	}
 	pcrs := f.PCRs
 	if err := c.form(huh.NewInput().Title("PCRs for slot 0").
-		Description("Indices with a source each: none or r the register, e the event log, u the unified kernel image - such as 0e,2e,7e,11u (tpm2-kira help seal).").
+		Description("Indices with a source each: none or r the register, e the event log, u the unified kernel image - such as 0e,2e,7e,11u (tpm2-kira help slot).").
 		Value(&pcrs).
 		Validate(func(s string) error {
 			_, err := ParsePCRSpecs(s)
@@ -1272,7 +1272,7 @@ func (c *controller) offerRebuild() error {
 		return fmt.Errorf("%s: %w", name, err)
 	}
 	fmt.Fprintln(c.out)
-	fmt.Fprintln(c.out, "Reboot before enrolling a phone or a remote salt: the phone pins what the")
+	fmt.Fprintln(c.out, "Reboot before enrolling a phone or a phone salt: the phone pins what the")
 	fmt.Fprintln(c.out, "next boot shows, and the boot key answers only in a boot through this image.")
 	return nil
 }
@@ -1347,8 +1347,8 @@ func (c *controller) runRemoveSlot(slot int) error {
 		if s.Phones > 0 {
 			label += ", " + phonesText(s.Phones)
 		}
-		if s.RemoteSalt {
-			label += ", remote salt"
+		if s.PhoneSalt {
+			label += ", phone salt"
 		}
 		for _, d := range f.Status.Devices {
 			for _, ks := range d.Keyslots {

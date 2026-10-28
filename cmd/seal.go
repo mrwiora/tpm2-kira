@@ -128,7 +128,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 			fmt.Println()
 		} else {
 			fmt.Println("WARNING: this slot carries a phone enrolment that another signing key wrote.")
-			fmt.Println("  It is not carried over. Enrol the phone again: tpm2-kira attest enrol")
+			fmt.Println("  It is not carried over. Enrol the phone again: tpm2-kira phone enrol")
 			fmt.Println()
 		}
 	}

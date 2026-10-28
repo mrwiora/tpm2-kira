@@ -274,7 +274,7 @@ value an operator approved in advance while the machine was still reachable.
 
 ```mermaid
 flowchart LR
-    U["kernel / initramfs update"] --> P["tpm2-kira attest predict --upload"]
+    U["kernel / initramfs update"] --> P["tpm2-kira phone predict --upload"]
     P --> A{"operator approves<br/>the predicted state"}
     A -->|yes| W["server stores profile<br/>uses_left=1, valid 2h"]
     A -->|no| X["reboot will require<br/>live approval"]
@@ -399,7 +399,7 @@ tpm2-kira unlock status  [--json]
 tpm2-kira unlock try     [--timeout 60s]        # the initrd path, also runnable by hand
 tpm2-kira unlock rotate  [--new-passphrase]     # rewrap, add a keyslot, retire the old one
 tpm2-kira unlock unenrol                        # remove the device; does not touch keyslots
-tpm2-kira attest predict --upload               # pre-register the next boot's PCR values (§6.3)
+tpm2-kira phone predict --upload               # pre-register the next boot's PCR values (§6.3)
 ```
 
 `/etc/tpm2-kira/control.conf` holds the server address, the timeout and the

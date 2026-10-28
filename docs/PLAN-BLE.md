@@ -22,9 +22,9 @@ Last updated 2026-10-05.
 | Phase | What exists | Verified by |
 |---|---|---|
 | 1 — BLE stack | **Decided: in-tree.** `transport/ble/`: pure-Go HCI user channel peripheral — advertising, ACL fragmentation and flow control, L2CAP, ATT/GATT server, pairing refused — about 1,500 lines, no dependency beyond `golang.org/x/sys`. `go-ble/ble` rejected (unmaintained, dependency surface). | fake-controller tests: iOS-style discovery, MTU 23/185, records both ways, framing errors, idle deadline, re-advertising |
-| 2 — peripheral, framing, encrypted session | `transport/frame/`, Noise XX/IK in `attest/noise.go`, `tpm2-kira attest enrol` with SAS | unit tests, fuzzing, interop with the reference `noiseprotocol` library |
+| 2 — peripheral, framing, encrypted session | `transport/frame/`, Noise XX/IK in `attest/noise.go`, `tpm2-kira phone enrol` with SAS | unit tests, fuzzing, interop with the reference `noiseprotocol` library |
 | 3 — mobile core | `mobile/kiracore` (gomobile verifier), `mobile/kiratest` (simulated machine); apps specified in [mobile/](mobile/) | Go tests through the binding API; gobind generates Java and Objective-C cleanly |
-| 4 — attestation round trip | `tpm2-kira attest gate` on a booted system | swtpm integration test (real AK, EK, quotes, ActivateCredential) |
+| 4 — attestation round trip | `tpm2-kira phone gate` on a booted system | swtpm integration test (real AK, EK, quotes, ActivateCredential) |
 | 5 — initramfs (part) | the boot plan (`tpm2-kira initramfs plan`) resolves the configured adapter's driver modules (the whole sysfs path) and the firmware the kernel loaded for it, from the kernel log. The boot plan takes the phone part in while a phone is enrolled (or with `TPM2_KIRA_ATTEST_BLUETOOTH=always` in control.conf). mkinitcpio: modules, exact firmware, `modules-load.d`, `tpm2-kira-attest.service` (runs beside the TOTP display, never holds the boot, stopped at switch-root). initramfs-tools: same resolution, `init-premount` loads modules and starts the gate in the background, `init-bottom` stops it. The gate waits for the adapter that comes up as long as the code screen holds, retries while the kernel finishes controller setup, and uses `/dev/tpmrm0` so it can share the TPM with the TOTP display. Hooks add nothing when no phone is enrolled or the adapter is missing. | resolver unit tests on a fake sysfs (Intel, Realtek, Broadcom log formats); stubbed-hook tests for both hooks; a real `mkinitcpio` image build on Arch containing exactly 6 modules and 1 firmware file (≈1.1 MB) |
 
 ### Open
@@ -35,12 +35,12 @@ Last updated 2026-10-05.
 | **Boot test** (§8) | QEMU + swtpm boot of an image with the gate; needs a passed-through or virtual (`hci_vhci`, root) controller. |
 | **Debian firmware size** | `manual_add_modules` queues modules for `dracut-install`, which copies every firmware file the modules *declare* (dozens for btusb's dependencies) on top of the exact files. mkinitcpio avoids this; on Debian it costs space until initramfs-tools offers a way to skip declared firmware. Measure on a Debian box. |
 | **Debian measured PCRs** | Adding Bluetooth changes PCR 9 on GRUB machines; the existing post-update reminder covers resealing, but has not been re-checked with the new files. |
-| 6 — enforced mode | `attest gate --mode enforced` is refused; needs the image anchor, sealed payload v9 and the fail-closed matrix (§7.5). |
+| 6 — enforced mode | `phone gate --mode enforced` is refused; needs the image anchor, sealed payload v9 and the fail-closed matrix (§7.5). |
 | Salt release | `Release` is defined in the protocol; the attester answers "unsupported" (PLAN-FACTORRELEASE.md). |
 | Break-glass tokens (§7.6) | not started |
 | 7 — verdict UX | the shared PCR explanation exists (`attest/explain.go`); the UI belongs to the apps |
 | Phone apps | specified as agent prompts in [mobile/](mobile/), not built |
-| Lost-phone ceremony (§6.2, open question 3) | today: `attest enrol` with the new phone, `attest unenrol` to drop all; no per-phone removal command yet |
+| Lost-phone ceremony (§6.2, open question 3) | today: `phone enrol` with the new phone, `phone unenrol` to drop all; no per-phone removal command yet |
 | EK certificate chain | parsed and stored by the phone, not validated against vendor roots |
 
 Decisions taken while implementing, superseding the text below where they differ:
@@ -158,7 +158,7 @@ those. Copying all of `linux-firmware` is not acceptable for an initramfs.
 
 If no adapter is found at build time, the hook warns and installs nothing; a
 machine configured for `enforced` that then cannot find an adapter at boot
-fails closed, which is why `attest enrol` refuses to enable enforced mode
+fails closed, which is why `phone enrol` refuses to enable enforced mode
 unless the hook has confirmed the firmware is in the image.
 
 ### 3.2 No BlueZ, no D-Bus
@@ -212,7 +212,7 @@ do not change between its question and its answer.
 The gate is two processes of the one binary. The display is its
 *coordinator* (`tpm2-kira run --gate SOCKET`): it holds the TPM, checks the
 enrolment record, issues the quotes, and reads the phone's receipt against
-the anchors and the quotes it issued. The *radio worker* (`tpm2-kira attest
+the anchors and the quotes it issued. The *radio worker* (`tpm2-kira phone
 gate --coordinator SOCKET`, the confined unit) advertises and runs the
 session; it has no TPM and asks the coordinator over the socket: identity,
 quote, boot context, event log, receipt, progress report - length-prefixed
@@ -227,7 +227,7 @@ console past the hold in any case: `StandardInput=tty` makes it the owner of
 the terminal, and systemd's password agent waits for the console to be free
 before it shows the passphrase prompt.
 
-The enrolment baseline must describe the same point: `attest enrol` runs in
+The enrolment baseline must describe the same point: `phone enrol` runs in
 the booted system, where PCR 11 already carries systemd's later phases, so it
 predicts the measure-point values with the seal's own code (`ReadPCRValues`)
 and sends them as `measure_point_values` (PROTOCOL-BLE.md §7.3.11). The phone
@@ -359,7 +359,7 @@ digits — the same act the OTP asks for daily, but performed once, in a
 controlled situation, with the user physically holding both devices.
 
 ```
-=== tpm2-kira attest enrol ===
+=== tpm2-kira phone enrol ===
 Adapter:       hci0 (Intel AX201)
 Advertising:   waiting for a phone to connect ...
 Connected:     iPhone (anonymous)
@@ -374,7 +374,7 @@ Connected:     iPhone (anonymous)
 ### 5.4 What enrolment transfers, and what it costs
 
 Enrolment runs on the **booted, unlocked system**, not in the initrd: it writes
-NVRAM and needs the signing key, exactly like `seal`. The exchange is defined
+NVRAM and needs the signing key, exactly like `slot add`. The exchange is defined
 in [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §6.1; the phone ends
 up holding the EK public key (and EK certificate where present), the AK name,
 the device id, a friendly name, the baseline PCR profile and the event log; the
@@ -389,7 +389,7 @@ doubles as the approval key for the TPM's `PolicySigned` branch
 
 Operational cost worth documenting: taking the adapter through an HCI user
 channel **disconnects everything else using Bluetooth** for the duration —
-mice, headphones, keyboards. `attest enrol` says so before it starts, offers
+mice, headphones, keyboards. `phone enrol` says so before it starts, offers
 `--adapter hciN` to use a second adapter, and restores the adapter afterwards.
 
 ### 5.5 Where the anchor is stored
@@ -405,7 +405,7 @@ Anchor written to /etc/tpm2-kira/verifier.pub
 
 Next steps — the anchor only takes effect once it is inside the boot image:
     sudo mkinitcpio -P          # or: sudo update-initramfs -u
-    sudo tpm2-kira reseal
+    sudo tpm2-kira slot approve
 ```
 
 ---
@@ -552,7 +552,7 @@ Before=systemd-ask-password-console.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=tpm2-kira attest gate
+ExecStart=tpm2-kira phone gate
 StandardOutput=tty
 StandardError=tty
 ```
@@ -568,7 +568,7 @@ in the foreground and, on failure, calls `panic` from `/scripts/functions`
 rather than returning.
 
 **The exit-status exception.** README.md's rule is that tpm2-kira always exits
-0 so a failure cannot break a boot chain. `attest gate` is the one command
+0 so a failure cannot break a boot chain. `phone gate` is the one command
 where that rule inverts: a gate that exits 0 on failure is not a gate. It exits
 non-zero, its help says so, README.md gains a sentence next to the existing
 rule, and there is a test that asserts it — because getting this wrong turns
@@ -604,7 +604,7 @@ protects the image containing it:
   usability feature: it stops *you* from being careless. It does not stop an
   attacker.
 
-`attest enrol --mode=enforced` therefore inspects the platform and says which
+`phone enrol --mode=enforced` therefore inspects the platform and says which
 of these two situations the machine is in, in those words. It refuses without
 `--allow-sealed-anchor` when there is no image anchor
 ([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.2).
@@ -666,7 +666,7 @@ In order of preference:
 | Gate ordering (systemd) | boot a test initramfs under QEMU with swtpm; assert no password prompt appears before the gate unit completes |
 | Gate ordering (Debian) | the same under initramfs-tools; assert `panic` is reached on gate failure |
 | Enforced fails closed | matrix over: no adapter, no firmware, no phone, wrong anchor, rejecting verdict, replayed receipt |
-| Exit status | `attest gate` returns non-zero on every failure in that matrix |
+| Exit status | `phone gate` returns non-zero on every failure in that matrix |
 | Mobile | the golden corpus through the FFI boundary; UI tests for the three verdict states |
 | Interop | a real iPhone and a real Android device against a real machine — MTU, background behaviour and reconnection are not simulable |
 
@@ -681,7 +681,7 @@ ever settled by booting.
 | Phase | Deliverable | Done when |
 |---|---|---|
 | 1 | BLE spike: `go-ble/ble` vs. in-tree HCI, on real hardware | a Linux box advertises and exchanges frames with a phone; the library decision is recorded here |
-| 2 | Peripheral + framing + encrypted session, on a booted system | `attest enrol` completes with a throwaway CLI verifier over BLE |
+| 2 | Peripheral + framing + encrypted session, on a booted system | `phone enrol` completes with a throwaway CLI verifier over BLE |
 | 3 | Mobile app skeleton: scan, connect, Go core via FFI, enrolment with SAS | a phone enrols a machine and stores the profile |
 | 4 | Attestation round trip and receipts; `lazy` mode in the initrd | a phone verifies a real boot and the console shows the verdict |
 | 5 | Initramfs hooks: modules, firmware resolution, adapter bring-up | BLE works in the initrd on both Arch and Debian test machines |

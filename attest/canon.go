@@ -163,7 +163,7 @@ func EnrolQualifyingData(cb []byte) []byte {
 	return h.Sum(nil)
 }
 
-// OfflineQualifyingData is used by `attest quote` / `attest verify`, where
+// OfflineQualifyingData is used by `phone quote` / `phone verify`, where
 // evidence is carried on a stick instead of a session:
 // SHA-256("tpm2-kira/offline-qd/v1" ‖ nonce). The nonce is chosen by whoever
 // will verify, so the quote is fresh for them; there is no channel to bind.

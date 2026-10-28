@@ -72,7 +72,7 @@ type BlobVersionError struct {
 }
 
 func (e *BlobVersionError) Error() string {
-	return fmt.Sprintf("tpm2-kira: incompatible blob version (found v%d, requires v%d). Re-seal with: tpm2-kira seal", e.FoundVersion, e.RequiredVersion)
+	return fmt.Sprintf("tpm2-kira: incompatible blob version (found v%d, requires v%d). Re-seal with: tpm2-kira slot add", e.FoundVersion, e.RequiredVersion)
 }
 
 // IsBlobVersionError checks if an error (or its wrapped chain) is a BlobVersionError

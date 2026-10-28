@@ -78,7 +78,7 @@ Known residual risks:
   Whoever can replace the image can replace the key with it, and then sign a
   record of their own. That is noticed when the image is a unified kernel
   image signed for Secure Boot, or when the PCRs that the TOTP seal or the
-  phone checks cover the initrd (`attest enrol` and `seal` warn when they do
+  phone checks cover the initrd (`phone enrol` and `slot add` warn when they do
   not). With neither - a seal on PCRs 0, 2, 7 only, say, and no Secure Boot -
   a replaced record goes unnoticed, as would any other change to the
   initramfs. Nothing checks the record after the disk is unlocked: by then
@@ -106,10 +106,10 @@ Known residual risks:
   tamper-evident marking of the device, and salt release (PLAN-FACTORRELEASE.md),
   after which the passphrase alone no longer opens the disk.
 - **A machine compromised before enrolment.** Enrolment pins whatever TPM
-  answers. `attest ekcert` and the phone show whether the TPM's endorsement
+  answers. `phone ekcert` and the phone show whether the TPM's endorsement
   key is certified by its vendor (currently Intel PTT); "not verified" means
   this protection is absent.
-- **The initrd must be covered by the quoted PCRs.** `attest enrol` warns
+- **The initrd must be covered by the quoted PCRs.** `phone enrol` warns
   when it is not; see README.md, "Choose PCRs that cover the initrd".
 
 ## The Bluetooth gate's process

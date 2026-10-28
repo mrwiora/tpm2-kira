@@ -50,9 +50,9 @@ sudo tpm2-kira status
 
 **TOTP code doesn't match after update:**
 ```bash
-tpm2-kira reseal
+tpm2-kira slot approve
 ```
-If reseal also fails, check `tpm2-kira info` to see which PCRs changed and verify you have the correct signing key available.
+If reseal also fails, check `tpm2-kira slot info` to see which PCRs changed and verify you have the correct signing key available.
 
 **The phone is not asked at boot; the kernel says hci0's firmware is missing:**
 The image has the Bluetooth driver but not the adapter's firmware. The image
@@ -78,7 +78,7 @@ tpm2-kira --debug reveal
 
 **Check current PCR values vs. sealed values:**
 ```bash
-tpm2-kira info            # shows what was sealed
+tpm2-kira slot info            # shows what was sealed
 tpm2-kira pcrtips         # explains what each PCR measures
 ```
 
@@ -130,8 +130,8 @@ tpm2-kira: (exit status is 0 by design; this command did NOT succeed)
 The mkinitcpio post hook does exactly this — it greps the output for the success
 line rather than testing `$?`.
 
-**Exception: the attestation commands.** `attest gate`, `attest verify`,
-`attest quote` and `attest enrol` gate or judge something, and a gate that
+**Exception: the attestation commands.** `phone gate`, `phone verify`,
+`phone quote` and `phone enrol` gate or judge something, and a gate that
 exits 0 on failure is not a gate. They exit non-zero on failure: `1` internal
 error, `2` usage, `3` no phone or no adapter, `4` the phone rejected this boot
 (do not type a passphrase before checking further), `5` the receipt was not
@@ -140,4 +140,4 @@ signed by the enrolled phone.
 **The other non-zero exits:** `1` when a command runs as a user (root is
 needed), `2` for a missing or unknown subcommand, and `1` from the three
 commands a script reads the status of - `unlock-key` (cryptroot's
-keyscript), `luks route` (the hook) and `remote serve` (`run` watches it).
+keyscript), `luks route` (the hook) and `ssh-child` (`run` watches it).

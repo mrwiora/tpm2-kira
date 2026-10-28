@@ -45,15 +45,15 @@ finish it, tick it off here.
 | 6 | Med | yubikey | PIN read from a world-readable file | M |
 | 7 | Med | tpm | Unseal/Create parameters cross the TPM bus in cleartext | M |
 | 8 | Med | tpm | Raw `/dev/tpm0` default plus global handle flush | S |
-| 9 | Low | info | `info` prints and opens unverified blob strings | S |
+| 9 | Low | info | `slot info` prints and opens unverified blob strings | S |
 | 10 | Low | tests | No fuzz target for the blob parser | S |
-| 11 | Low | nvram | `nvram delete` wipes all slots without confirmation | S |
+| 11 | Low | nvram | `slot delete` wipes all slots without confirmation | S |
 | 12 | Doc | docs | RTC pre-recording attack missing from the threat model | S |
 | 13 | Low | initrd | systemd unit runs unsandboxed | S |
 
 Suggested order: 3+4 together, 5, 8, 9, 10, 1, 6, then 14, then 2, then the
 rest. Decide on 14 before starting 7 or 2: it replaces the unseal path that 7
-encrypts and changes how `reseal` works, so doing 7 or 2 first means doing
+encrypts and changes how `slot approve` works, so doing 7 or 2 first means doing
 parts of them twice.
 
 How the three High items fit together — none is sufficient alone:
@@ -72,12 +72,12 @@ How the three High items fit together — none is sufficient alone:
 - [x] done — steps 1–4 (warning, UKI detection, README "Choosing PCRs" and "Hardening the boot path", setup hint via `RecommendedPCRs`). Step 5 (flag default) left for the OWNER DECISION.
 
 **Where**
-- `main.go:184` — `seal --pcrs` default `0,2,7`
+- `main.go:184` — `slot add --pcrs` default `0,2,7`
 - `cmd/pcrwarn.go:59` — `WarnAboutPCRSelection` (only warns for PCR 0 alone
   and PCR 7 without Secure Boot)
 - `README.md` — Quick Start uses `--pcrs 0,7`; the Debian section calls
   `0e,2e,4e,7e` "a good default"
-- `cmd/setup.go` — prints `tpm2-kira seal --pcrs 0,7` as the next step
+- `cmd/setup.go` — prints `tpm2-kira slot add --pcrs 0,7` as the next step
 
 **Problem.** PCRs 0, 2, 4 and 7 measure firmware, the bootloader binary and
 the Secure Boot policy. Outside a unified kernel image the initrd is never
@@ -130,8 +130,8 @@ derived from the code and PCR semantics, not reproduced on hardware.
    silently changes what existing scripts seal. **OWNER DECISION:** whether
    the default becomes platform-detected (`0e,2e,7e,11u` when a UKI is found).
 
-**Done when** `seal --pcrs 0,7` and `--pcrs 0,7,9e` (initrd but no command
-line) print the new warning, `seal --pcrs 0,7,11u` and `--pcrs 0,7,8e,9e` do
+**Done when** `slot add --pcrs 0,7` and `--pcrs 0,7,9e` (initrd but no command
+line) print the new warning, `slot add --pcrs 0,7,11u` and `--pcrs 0,7,8e,9e` do
 not, unit tests cover all four, and no doc recommends a selection without
 saying what it leaves out.
 
@@ -153,7 +153,7 @@ saying what it leaves out.
 after boot. Any process with TPM access (root, members of `tss`) can run
 `tpm2-kira reveal` or unseal the secret itself and copy it out. A stolen TOTP
 secret lets a tampered boot chain show correct codes forever; the user cannot
-detect it and the only fix is a fresh `seal`. This is the "misuse in the
+detect it and the only fix is a fresh `slot add`. This is the "misuse in the
 started OS" case.
 
 **What already works.** On a UKI + systemd-initrd system, sealing with `11u`
@@ -175,7 +175,7 @@ non-UKI Arch).
    `os-separator` into PCRs 0–7. No new source type is needed.
    - PCR 0 must then be sealed with the eventlog source (`0e`). The register
      source reads the capped value in the running OS, which the next boot
-     never shows at the measure point: `seal`/`reseal` must refuse `0`/`0r`
+     never shows at the measure point: `slot add`/`slot approve` must refuse `0`/`0r`
      once capping is active and say to use `0e`. On firmware whose event log
      has no digests in the selected bank (README "TPMs whose event log has no
      SHA-256 digests") option A is unavailable; say so in the error.
@@ -216,25 +216,25 @@ non-UKI Arch).
      after the `kill`.
    - The cap must fail closed in the sense that a failed extend is printed
      loudly on the console; it must not block boot.
-5. `seal`/`reseal`: warn (item 1 style) when the policy contains no PCR that
+5. `slot add`/`slot approve`: warn (item 1 style) when the policy contains no PCR that
    is extended after the measure point — i.e. neither PCR 11 with pcrphase
    present nor the cap PCR.
-6. `reseal` in the running OS then always takes the PolicySigned branch. That
+6. `slot approve` in the running OS then always takes the PolicySigned branch. That
    path exists and the key is required anyway for the NV write. `reveal` in
    the running OS reports a PCR mismatch on the cap PCR — document this as the
    intended result, and make the message say so instead of suggesting reseal.
-   (If item 14 has landed, `reseal` no longer unseals at all and only the
+   (If item 14 has landed, `slot approve` no longer unseals at all and only the
    `reveal` part of this step applies.)
 
 **Done when** an integration test (swtpm) seals with the cap PCR, shows
-`reveal` succeeding, runs `cap`, shows `reveal` failing and `reseal`
+`reveal` succeeding, runs `cap`, shows `reveal` failing and `slot approve`
 succeeding via the signing key; and SECURITY-BACKGROUND §8 moves the "root on
 a running system" row to the mitigated table with the remaining limits
 (root can still steal a local signing key; see item 6 for the YubiKey case).
 
 ---
 
-## 3. `reseal` verifies the blob with a key the blob names
+## 3. `slot approve` verifies the blob with a key the blob names
 
 - [x] done — `resolveResealKeys` in `cmd/reseal.go`; reseal also unseals the verified blob instead of re-reading NVRAM, and refuses a `--pubkey` that does not match. Step 5 (key path for the post hook) left for the OWNER DECISION.
 
@@ -250,7 +250,7 @@ stored PCR specs or key paths", but the trust anchor comes from the blob.
 The NV index can be deleted and redefined by anyone with TPM access (owner
 auth is empty, SECURITY-BACKGROUND §9.4). Such a user plants a blob signed
 with their own key, with `PrivateKeyPath` pointing at their own 0400 PEM file
-in any directory they can write. The next root `reseal` (the mkinitcpio post
+in any directory they can write. The next root `slot approve` (the mkinitcpio post
 hook runs it automatically) verifies the planted blob successfully, reseals
 the attacker's secret under the attacker's key and prints
 "Successfully resealed" instead of the tamper error. Root also parses
@@ -271,7 +271,7 @@ attacker-chosen files (key file, then the UKI path from `spec.Command`).
    derived from the verified private key. Do not load
    `sealedBlob.Payload.PublicKeyPath` unless it was verified.
 5. The mkinitcpio post hook (`initramfs/mkinitcpio/post/sd-tpm2-kira`) calls
-   plain `tpm2-kira reseal`; users with a non-default key need a place to
+   plain `tpm2-kira slot approve`; users with a non-default key need a place to
    configure the path. **OWNER DECISION:** a `TPM2_KIRA_PRIVKEY=` line read
    the same way as the PIN (see item 6), or a small `/etc/tpm2-kira/` config.
 
@@ -286,7 +286,7 @@ SECURITY-BACKGROUND §5.5 describe the new resolution order.
 
 ## 4. Key files are checked for mode only
 
-- [x] done — `ReadSigningKeyFile` / `LoadChecked*` in `cmd/keyfile.go`, `cmd/signingkey.go` (was `policy_or.go`); `info` reports the same checks.
+- [x] done — `ReadSigningKeyFile` / `LoadChecked*` in `cmd/keyfile.go`, `cmd/signingkey.go` (was `policy_or.go`); `slot info` reports the same checks.
 
 **Where** `cmd/keyfile.go:43` — `CheckSigningKeyFileMode` uses `os.Stat` and
 compares `Perm()` with `0400`. Callers: `cmd/seal.go` (`Seal`),
@@ -310,7 +310,7 @@ check and use.
    take the checked content; do not stat by path and re-open by path.
 
 **Done when** `cmd/keyfile_test.go` covers symlink, foreign owner (skip when
-not root), writable parent and the happy path, and `info`'s
+not root), writable parent and the happy path, and `slot info`'s
 `printKeyFileModes` (`cmd/info.go:304`) reports the same conditions.
 
 ---
@@ -325,7 +325,7 @@ where `data` is the `otpauth://` URI containing the secret.
 
 **Problem.** Command-line arguments are readable by every local user through
 `/proc/<pid>/cmdline` while the process runs. Any unprivileged user polling
-the process list during `seal` gets the TOTP secret. The binary is also
+the process list during `slot add` gets the TOTP secret. The binary is also
 resolved through `PATH`.
 
 **Resolution (preferred).** Drop the subprocess: render the QR code in the
@@ -372,7 +372,7 @@ non-root-owned file, with tests for each refusal (`cmd/yubikey_test.go`
 - [x] done — after item 14 only step 3 remained: `CreateTOTPKey` sends the key in a session salted with the primary key, with parameter encryption. Steps 2 and 4 are obsolete (no unseal); step 5 is documented in SECURITY-BACKGROUND §8.
 
 **Check item 14 first.** If the HMAC moves into the TPM, only step 3 below
-(encrypting the key on its way in at `seal`) is still needed.
+(encrypting the key on its way in at `slot add`) is still needed.
 
 **Where**
 - `cmd/policy_or.go:580` `UnsealWithPCRBranch`, `:663`
@@ -452,9 +452,9 @@ did not obtain itself.
 
 ---
 
-## 9. `info` trusts unverified blob contents
+## 9. `slot info` trusts unverified blob contents
 
-- [x] done — `info --privkey`; `quoteUntrusted` in `cmd/untrusted.go`, also used for blob strings in reseal, scan, nvram and `PCRSpecsToString`.
+- [x] done — `slot info --privkey`; `quoteUntrusted` in `cmd/untrusted.go`, also used for blob strings in reseal, scan, nvram and `PCRSpecsToString`.
 
 **Where** `cmd/info.go`:
 - `:200` prints `AppVersion`; `:265`, `:276`, `:325` print key paths; `:336`,
@@ -462,11 +462,11 @@ did not obtain itself.
   all straight from the blob with `%s`
 - `:260` `printSigningKeyInfo`, `:288` `printSigningKeyLocation` open and
   parse whatever files the blob's paths name
-- `initramfs/initramfs-tools/post-update.d/tpm2-kira` runs `info --json` as
+- `initramfs/initramfs-tools/post-update.d/tpm2-kira` runs `slot info --json` as
   root after every initramfs rebuild
 
 **Problem.** The blob is attacker-writable (SECURITY-BACKGROUND §9.4) and
-`info` never checks its signature. Blob strings can carry terminal escape
+`slot info` never checks its signature. Blob strings can carry terminal escape
 sequences, and root opens attacker-named paths.
 
 **Resolution.**
@@ -478,7 +478,7 @@ sequences, and root opens attacker-named paths.
 3. Always print blob-derived strings through one helper that replaces
    non-printable bytes (`strconv.Quote`-style). JSON output is already
    escaped by `encoding/json`.
-4. Also route the UKI path printed by `reseal` (`cmd/reseal.go:438`,
+4. Also route the UKI path printed by `slot approve` (`cmd/reseal.go:438`,
    `spec.Command`) through the helper.
 
 **Done when** a test feeds a blob whose `AppVersion` and paths contain
@@ -535,13 +535,13 @@ passes locally and in CI.
 
 ---
 
-## 11. `nvram delete` wipes every slot without asking
+## 11. `slot delete` wipes every slot without asking
 
 - [x] done — `--yes`, or typing 'yes' on a terminal. The owner-auth follow-up remains an OWNER DECISION.
 
 **Where** `cmd/nvram.go:540` `NVRAMDeleteCommand`; `main.go` `runNVRAM`.
 
-**Problem.** `tpm2-kira nvram delete` with no `--nvram` deletes all populated
+**Problem.** `tpm2-kira slot delete` with no `--nvram` deletes all populated
 slots immediately. Deletion is irreversible and forces re-enrolment. (That
 anyone with TPM access can undefine the index through the owner hierarchy is
 a TPM property and already documented in SECURITY-BACKGROUND §9.3; it cannot
@@ -659,20 +659,20 @@ to stop the oracle itself. Put exactly this in SECURITY-BACKGROUND §8.
 2. Each code: `TPM2_HMAC(handle, 8-byte big-endian counter, SHA1)` authorised
    by the policy session; truncate the 20-byte result with the existing
    dynamic-truncation code. Remove `NVRAMSlot.Secret` and every path that
-   holds the key after `seal`. `RunCommand` calls the TPM once per window,
+   holds the key after `slot add`. `RunCommand` calls the TPM once per window,
    which it effectively does already.
 3. Before sealing, check `TPM2_GetCapability` for `TPM_CC_HMAC` and a SHA-1
    HMAC. Some TPMs ship without SHA-1. **OWNER DECISION** for that case:
    refuse, or fall back to HMAC-SHA256 with `algorithm=SHA256` in the
    `otpauth://` URI (not every authenticator app honours it).
-4. `seal` still handles the key once in process memory and sends it to the
+4. `slot add` still handles the key once in process memory and sends it to the
    TPM in `TPM2_Create`; encrypt that parameter (item 7 step 3). Item 7
    step 2 and 4 (unseal encryption, unseal-once) become obsolete — the HMAC
    result on the bus is not secret.
 
 *B. PolicyAuthorize instead of PolicyOR*
 
-With a non-extractable key, `reseal` cannot re-create the object for new PCR
+With a non-extractable key, `slot approve` cannot re-create the object for new PCR
 values. Replace the object's fixed policy with one that trusts the signing
 key to approve PCR states:
 
@@ -693,7 +693,7 @@ key to approve PCR states:
    current `LoadExternalPublicKey` uses — a ticket from a NULL-hierarchy key
    may not be accepted by `PolicyAuthorize` (tpm2-tools examples load with
    `-C o` for this reason). Not verified here; confirm on swtpm first.
-8. `reseal` becomes: read PCR values for the next boot (unchanged logic),
+8. `slot approve` becomes: read PCR values for the next boot (unchanged logic),
    compute the PolicyPCR digest, sign it, write the blob. It never touches
    the key object and never unseals anything. `UnsealWithSignedBranch`,
    `UnsealWithSignedBranchFromBlob` and the PolicyOR code go away. The NV
@@ -711,7 +711,7 @@ key to approve PCR states:
     old kernel/initrd and get codes. To revoke: keep a generation number in a
     second NV index defined exactly like the blob index (PolicySigned write,
     open read) and make the approved policy `PolicyPCR` **then**
-    `PolicyNV(genIndex == G)`. `reseal` writes `G+1` and signs the policy for
+    `PolicyNV(genIndex == G)`. `slot approve` writes `G+1` and signs the policy for
     `G+1`. Deleting and re-creating the index does not help an attacker:
     `PolicyNV` binds the index *Name*, which includes its attributes and
     write policy, so a look-alike must have the same PolicySigned write
@@ -725,13 +725,13 @@ key to approve PCR states:
     and §10, README "How It Works".
 
 **Done when**
-- swtpm integration test: `seal` with a known key, `reveal` matches
-  `generateHOTP` computed in the test for the same counter; `reseal` after a
+- swtpm integration test: `slot add` with a known key, `reveal` matches
+  `generateHOTP` computed in the test for the same counter; `slot approve` after a
   PCR change works with the signing key and without any unseal; a blob whose
   approval signature is from another key yields no code.
 - `grep -rn "tpm2.Unseal" cmd/` finds nothing outside tests.
 - No struct or variable holds the TOTP key after `Seal` returns.
-- If C is in scope: an old blob stops producing codes after one `reseal`.
+- If C is in scope: an old blob stops producing codes after one `slot approve`.
 
 ---
 

@@ -245,7 +245,7 @@ func decidePlan(in planInputs) *BootPlan {
 	case in.TPMErr != "":
 		add(PartCodes, false, noTPM)
 	case in.Slots == 0:
-		add(PartCodes, false, "nothing is sealed (tpm2-kira seal)")
+		add(PartCodes, false, "nothing is sealed (tpm2-kira slot add)")
 	default:
 		add(PartCodes, true, plural(in.Slots, "slot")+" sealed")
 	}

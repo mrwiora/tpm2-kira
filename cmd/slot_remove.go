@@ -11,11 +11,11 @@ import (
 )
 
 // Deleting a slot is one act that removes everything the slot is made of:
-// the blob in the TPM (the TOTP key, the phones, the remote salt's release
+// the blob in the TPM (the TOTP key, the phones, the phone salt's release
 // key) with its generation index and record counter, the LUKS keyslots
 // bound to the slot by their token, and the recovery blobs stashed for it.
 // 'control' offers exactly this one way to delete a slot; the expert
-// commands (nvram delete, luks remove, attest unenrol, remote-salt unenrol)
+// commands (slot delete, luks remove, phone unenrol, phone salt unenrol)
 // stay for taking one piece by hand. A deletion that fails halfway, or a
 // piece taken by hand while the rest stays, leaves the slot *dirty*: parts
 // of it exist while its blob is gone. status and control say so until a
@@ -45,7 +45,7 @@ func (c SlotContents) Any() bool {
 
 // Dirty says whether parts of the slot exist while its blob is gone: a
 // deletion stopped halfway, a rewrite failed, or one piece was taken by
-// hand. When a recovery blob is among the parts, 'nvram restore' is the
+// hand. When a recovery blob is among the parts, 'slot restore' is the
 // other way out, and dirtText says so.
 func (c SlotContents) Dirty() bool {
 	return !c.Blob && c.Any()
@@ -120,7 +120,7 @@ func dirtText(dirt []SlotContents) string {
 	for _, d := range dirt {
 		line := fmt.Sprintf("slot %d is dirty: %s left", d.Slot, d.Remains())
 		if len(d.Recovery) > 0 {
-			line += " ('tpm2-kira nvram restore' puts a recovery blob back instead)"
+			line += " ('tpm2-kira slot restore' puts a recovery blob back instead)"
 		}
 		parts = append(parts, line)
 	}
@@ -260,7 +260,7 @@ func DeleteSlot(o DeleteSlotOptions) error {
 	return nil
 }
 
-// slotKeyslotAdvice says, after a manual 'nvram delete', which slots are
+// slotKeyslotAdvice says, after a manual 'slot delete', which slots are
 // dirty now - a LUKS keyslot or a companion index outliving its blob - and
 // where the cleanup is. Best effort: "" when nothing is or nothing can be
 // read.

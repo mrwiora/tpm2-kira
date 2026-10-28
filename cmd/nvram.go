@@ -61,9 +61,9 @@ func HandleNVRAMNotFoundError(err error, debug bool) error {
 		strings.Contains(errStr, "does not exist") ||
 		strings.Contains(errStr, "TPM_RC_NV_UNINITIALIZED") {
 		if debug {
-			return fmt.Errorf("tpm2-kira has not been configured yet. Run 'tpm2-kira seal' to set it up (debug: %w)", err)
+			return fmt.Errorf("tpm2-kira has not been configured yet. Run 'tpm2-kira slot add' to set it up (debug: %w)", err)
 		}
-		return fmt.Errorf("tpm2-kira has not been configured yet. Run 'tpm2-kira seal' to set it up")
+		return fmt.Errorf("tpm2-kira has not been configured yet. Run 'tpm2-kira slot add' to set it up")
 	}
 	return err
 }
@@ -382,15 +382,15 @@ func stashUnwrittenBlob(index uint32, data []byte, cause error) error {
 
 func stashUnwrittenBlobFile(index uint32, data []byte, cause error) error {
 	if mkErr := os.MkdirAll(NVRAMRecoveryDir, 0700); mkErr != nil {
-		return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY and the blob could not be saved either (%v).\n  The sealed secret is lost; run 'tpm2-kira seal' and re-enrol your authenticator", cause, index, mkErr)
+		return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY and the blob could not be saved either (%v).\n  The sealed secret is lost; run 'tpm2-kira slot add' and re-enrol your authenticator", cause, index, mkErr)
 	}
 
 	path := fmt.Sprintf("%s/slot-0x%08X-%d.blob", NVRAMRecoveryDir, index, time.Now().Unix())
 	if wrErr := os.WriteFile(path, data, 0600); wrErr != nil {
-		return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY and the blob could not be saved either (%v).\n  The sealed secret is lost; run 'tpm2-kira seal' and re-enrol your authenticator", cause, index, wrErr)
+		return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY and the blob could not be saved either (%v).\n  The sealed secret is lost; run 'tpm2-kira slot add' and re-enrol your authenticator", cause, index, wrErr)
 	}
 
-	return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY. The blob that was about to be written has been saved to:\n      %s\n  Keep this file: it holds the sealed object and is the only remaining copy of the secret.\n  Fix the cause above, then put it back:\n      tpm2-kira nvram restore %s\n  If you discard it, the secret is gone and you must run 'tpm2-kira seal' and re-enrol\n  your authenticator", cause, index, path, path)
+	return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY. The blob that was about to be written has been saved to:\n      %s\n  Keep this file: it holds the sealed object and is the only remaining copy of the secret.\n  Fix the cause above, then put it back:\n      tpm2-kira slot restore %s\n  If you discard it, the secret is gone and you must run 'tpm2-kira slot add' and re-enrol\n  your authenticator", cause, index, path, path)
 }
 
 // NVRAMList lists all defined NVRAM indices in the TPM
@@ -620,7 +620,7 @@ func undefineIndex(tpmDev transport.TPM, index uint32) error {
 	return err
 }
 
-// NVRAMDeleteCommand implements 'nvram delete'. A slot is one thing: its
+// NVRAMDeleteCommand implements 'slot delete'. A slot is one thing: its
 // blob holds the TOTP key and the phone enrolment, and its generation index
 // and record counter go with it. With an index that slot is deleted;
 // without one, every slot and whatever an interrupted command left behind.
@@ -728,7 +728,7 @@ func confirmDeleteAll(slots, enrolled, leftovers int, yes bool) error {
 		return fmt.Errorf("refusing to delete all %d item(s) without confirmation; nothing was deleted.\n"+
 			"  Each deleted slot means re-enrolling its authenticator and its phones.\n"+
 			"  To go ahead, run:\n"+
-			"      tpm2-kira nvram delete --yes\n"+
+			"      tpm2-kira slot delete --yes\n"+
 			"  or delete one slot with --nvram <slot>", total)
 	}
 	if slots > 0 {

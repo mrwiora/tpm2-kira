@@ -243,7 +243,7 @@ func mustPoint(t *testing.T, a *Attestation) []byte {
 	return p
 }
 
-// TestOfflineQuoteVerifies covers `attest quote` / `attest verify`'s path:
+// TestOfflineQuoteVerifies covers `phone quote` / `phone verify`'s path:
 // a real quote with offline qualifying data checked by Verify.
 func TestOfflineQuoteVerifies(t *testing.T) {
 	s := newSWTPMSetup(t)
@@ -445,7 +445,7 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 
 // TestCoordinatorAndWorker runs the two halves of the gate the way the units
 // start them - the coordinator of 'tpm2-kira run --gate' and the worker of
-// 'attest gate --coordinator' - up to the point where the worker needs a
+// 'phone gate --coordinator' - up to the point where the worker needs a
 // Bluetooth adapter, which a test machine does not have.
 func TestCoordinatorAndWorker(t *testing.T) {
 	sock := startSWTPM(t)
@@ -572,14 +572,14 @@ func TestStaleSlotCanBeRemoved(t *testing.T) {
 	// The new installation's key cannot add a phone to, or take one out
 	// of, what the previous one signed.
 	err := writeAttestBlob(s.tpm, slot0, s.blob, current)
-	if err == nil || !strings.Contains(err.Error(), "nvram delete --nvram 0") {
+	if err == nil || !strings.Contains(err.Error(), "slot delete --nvram 0") {
 		t.Fatalf("enrol into a foreign slot: %v", err)
 	}
 	if err := writeAttestBlob(s.tpm, slot0, nil, current); err == nil {
 		t.Fatal("a foreign slot's phones were removed by re-signing it")
 	}
 	// Nor into a slot that has no TOTP key.
-	if err := writeAttestBlob(s.tpm, NVRAMSlotStart+2, s.blob, current); err == nil || !strings.Contains(err.Error(), "seal --nvram 2") {
+	if err := writeAttestBlob(s.tpm, NVRAMSlotStart+2, s.blob, current); err == nil || !strings.Contains(err.Error(), "slot add --nvram 2") {
 		t.Fatalf("enrol without a sealed slot: %v", err)
 	}
 	exists := func(idx uint32) bool {
@@ -593,7 +593,7 @@ func TestStaleSlotCanBeRemoved(t *testing.T) {
 	}
 	s.tpm.Close() // the commands open the TPM themselves; swtpm serves one client
 
-	// One slot: 'nvram delete --nvram 0' takes the blob and its counter.
+	// One slot: 'slot delete --nvram 0' takes the blob and its counter.
 	if err := NVRAMDeleteCommand(sock, slot0, false, false); err != nil {
 		t.Fatalf("deleting a foreign slot: %v", err)
 	}
@@ -605,7 +605,7 @@ func TestStaleSlotCanBeRemoved(t *testing.T) {
 	}
 	// Without the signing key the phones cannot be taken out of a slot;
 	// the slot can only go whole.
-	if err := AttestUnenrol(sock, slot5, filepath.Join(t.TempDir(), "no-key"), false); err == nil || !strings.Contains(err.Error(), "nvram delete --nvram 5") {
+	if err := AttestUnenrol(sock, slot5, filepath.Join(t.TempDir(), "no-key"), false); err == nil || !strings.Contains(err.Error(), "slot delete --nvram 5") {
 		t.Fatalf("unenrol without the signing key: %v", err)
 	}
 
@@ -615,7 +615,7 @@ func TestStaleSlotCanBeRemoved(t *testing.T) {
 	}
 	for idx := uint32(AppNVRAMStart); idx <= AppNVRAMEnd; idx++ {
 		if role := kiraIndexRole(idx); role != "" && exists(idx) {
-			t.Fatalf("0x%08X (%s) survived 'nvram delete'", idx, role)
+			t.Fatalf("0x%08X (%s) survived 'slot delete'", idx, role)
 		}
 	}
 	// Nothing left: it says so instead of claiming success.

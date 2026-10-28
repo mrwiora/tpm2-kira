@@ -71,7 +71,7 @@ and within that part the way a verifier reaches the machine is a typed
 | `Attestation`       | The optional remote-attestation part (fields below)             | Partly⁵    |
 | `BlobSignature`     | Signature over everything above                                 | No⁴        |
 
-The attestation part (`Attestation`), created by `attest enrol`. It describes
+The attestation part (`Attestation`), created by `phone enrol`. It describes
 the machine as an attester, whatever the method:
 
 | Field           | Content                                                              | Sensitive? |
@@ -134,14 +134,14 @@ check itself says that this first state is clean; a boot chain that was
 tampered with before the enrolment would be pinned as good. Only a check
 made before the phone existed can say it, so the order is fixed:
 
-1. The slot is sealed with a TOTP key (`control`, "Signing key and TOTP codes", or `seal`).
+1. The slot is sealed with a TOTP key (`control`, "Signing key and TOTP codes", or `slot add`).
 2. The machine boots through tpm2-kira's code screen. The code exists only
    while the PCRs are the ones the signing key approved, and the person
    compares it with the authenticator: this boot is verified.
-3. In that boot the phone is enrolled (`control`, "Attestation by phone", or `attest enrol`), and with
+3. In that boot the phone is enrolled (`control`, "Attestation by phone", or `phone enrol`), and with
    that the slot's TOTP key is retired.
 
-`attest enrol` enforces what the machine can know of this (`requireVerifiedBoot`
+`phone enrol` enforces what the machine can know of this (`requireVerifiedBoot`
 in `cmd/attest.go`): the boot passed the code screen (`cap` read-locked
 the generation indices, which happens only there), and, for a slot with a
 TOTP key, the slot's PCRs at the code screen - recomputed from this boot's
@@ -152,7 +152,7 @@ screen. What the machine cannot know, that someone compared the code, it
 asks before the phone is involved. A further phone for a slot that
 already has phones needs a boot an enrolled phone attested ("mobile
 attestation passed"); the machine keeps no record of that verdict, so it
-asks. The rule holds for `control` and for `attest enrol` by hand alike.
+asks. The rule holds for `control` and for `phone enrol` by hand alike.
 
 **What the machine keeps of a phone, and why no more.** The blob is readable
 by anyone who can talk to the TPM (§9), so it holds only what the machine
@@ -187,7 +187,7 @@ tpm2-kira: there is no `TPM2_Unseal`. The same holds for `AKPrivate` and
 files are not reachable in the initrd.
 
 ³ Which extends were applied follows from the eventlog PCRs: the seal folds
-the same words into each of them (§5.8), so the blob keeps one flag and `info`
+the same words into each of them (§5.8), so the blob keeps one flag and `slot info`
 spells the extends out from the selection. The blob holds nothing that only
 describes how it was made (the tool's version, the event log's path, the time
 of the calculation, the key files' paths): what is not needed to compute a
@@ -198,7 +198,7 @@ the blob (§5.5).
 
 ⁴ The blob carries a detached signature over `[version ‖ payloadLen ‖ payload]`,
 made with the same signing key. Unsigned blobs are rejected outright. It
-protects the *metadata* (PCR selection and sources, UKI paths) that `reseal`
+protects the *metadata* (PCR selection and sources, UKI paths) that `slot approve`
 acts on; the TPM enforces the rest by itself. It also covers the attestation
 part: which verifiers are enrolled cannot be changed without the signing
 key, and the Bluetooth gate verifies the signature in the initrd with a copy
@@ -231,15 +231,15 @@ A slot with an attestation part has a third NV index, at `0x01803820` + *n*: an
 It is a revision number for the attestation part, kept by the TPM. It does
 **not** count attestations: nothing is written to the TPM's NV storage when
 the machine boots or is attested. It moves only when the verifiers of the
-slot change (`attest enrol`, `attest unenrol`), typically a handful of times
+slot change (`phone enrol`, `phone unenrol`), typically a handful of times
 in a machine's life.
 
 It answers a question a signature cannot: is this blob the *current* one? An
 older blob, still naming a phone that was removed since, verifies just as well.
 So the attestation part carries a `Count`, and the gate accepts the blob only
-while `Count` equals the counter. `attest enrol` and `attest unenrol` write the
-blob with the counter's next value and then increment the counter; `reseal`
-and `seal` carry the part over with its `Count` unchanged.
+while `Count` equals the counter. `phone enrol` and `phone unenrol` write the
+blob with the counter's next value and then increment the counter; `slot approve`
+and `slot add` carry the part over with its `Count` unchanged.
 
 A TPM counter can only be incremented. Deleting the index does not help
 either: the TPM starts a new counter above the highest value any counter in
@@ -271,8 +271,8 @@ for signing and key agreement, created inside the TPM (`sensitiveDataOrigin`,
 the slot's TOTP key**: PolicyAuthorize by the signing key with the slot's policy
 reference. So it is usable exactly when a TOTP code can be computed - in a
 boot state the signing key approved, at the slot's current generation, before
-`cap` - and one approval covers both keys; `reseal` needs to know nothing
-about it. `seal` on an existing slot keeps the slot's policy reference when it
+`cap` - and one approval covers both keys; `slot approve` needs to know nothing
+about it. `slot add` on an existing slot keeps the slot's policy reference when it
 carries the attestation part over, so that the boot key stays under the new
 TOTP key's approvals.
 
@@ -380,7 +380,7 @@ What the TPM itself keeps, and never gives out:
 PIV slot. Any RSA-2048 or ECC P-256/P-384 key works instead, including the
 sbctl Secure Boot DB key, via `--pubkey` / `--privkey`.
 
-`setup` writes both key files with mode `0400`. `seal` and `reseal` read a
+`setup` writes both key files with mode `0400`. `slot add` and `slot approve` read a
 key file only through `ReadSigningKeyFile` (`cmd/keyfile.go`), which refuses:
 
 - a symlink (the file is opened with `O_NOFOLLOW`),
@@ -777,9 +777,9 @@ which is the event payload — but the measured digest is over the ASCII form.
 > `Section.VirtualSize`. Measuring the padded length yields a PCR 11 value the
 > machine will never present. See `docs/UKI-PCR11-PADDING.issue`.
 
-`tpm2-kira seal` guards this by recomputing PCR 11 from the image and comparing
+`tpm2-kira slot add` guards this by recomputing PCR 11 from the image and comparing
 it against the current boot's event log, refusing to seal on mismatch
-(`--verify-uki=false` overrides). `reseal` skips the check because it runs
+(`--verify-uki=false` overrides). `slot approve` skips the check because it runs
 when the image on disk is legitimately not the one that booted.
 
 **Useful constants for diagnosis.** PCRs 2, 3 and 6 normally contain only the
@@ -823,7 +823,7 @@ Three properties make this safe:
   the case where these units first appear in the initramfs.
 - **The blob is self-describing.** What was applied is stored, so verification
   recomputes the sealed values rather than re-deriving them from a system that
-  may have changed. `tpm2-kira info` shows it.
+  may have changed. `tpm2-kira slot info` shows it.
 
 Ordering is enforced so the measure point is deterministic:
 `tpm2-kira.service` declares `After=systemd-pcrphase-initrd.service` and
@@ -896,7 +896,7 @@ trial session, with the signing key loaded via `TPM2_LoadExternal`.
 
 The TPM must load the signing public key to verify approvals
 (`TPM2_VerifySignature`) and NV write authorisations (`TPM2_PolicySigned`).
-`seal` loads it before creating anything, so a key the TPM cannot load is
+`slot add` loads it before creating anything, so a key the TPM cannot load is
 refused up front.
 
 ### Key scheme
@@ -926,7 +926,7 @@ reseal and boot.
 | Rollback to an older approved state         | Every reseal raises the generation; older approvals stop working |
 | TPM bus sniffing at seal time               | The key goes into the TPM over a salted, parameter-encrypted session |
 | Blob tampering in NVRAM                     | `Private` area is integrity-protected by TPM; tampering causes `TPM2_Load` to fail; a substituted signing key fails PolicyAuthorize |
-| Planted blob steering `reseal`              | `reseal` verifies the blob with a key it takes from `--privkey` or the default location, never from the blob (§5.5) |
+| Planted blob steering `slot approve`              | `slot approve` verifies the blob with a key it takes from `--privkey` or the default location, never from the blob (§5.5) |
 | Approving a new state without the owner     | Requires the signing private key (or the YubiKey and its PIN) |
 
 ### What the TPM does NOT protect against
@@ -943,7 +943,7 @@ reseal and boot.
 ### PCR selections that attest less than they appear to
 
 A policy is only as meaningful as the registers it binds. These selections look
-protective but are not, and `seal`/`reseal` warn about each:
+protective but are not, and `slot add`/`slot approve` warn about each:
 
 | Selection | Why it is weak |
 |-----------|----------------|
@@ -1009,7 +1009,7 @@ What this means in practice:
 3. **Deleting the index does not need the signing key.** `TPM2_NV_UndefineSpace`
    is authorised by the owner hierarchy, not by the index's policy. tpm2-kira
    uses the owner hierarchy with an empty auth value throughout — for
-   `TPM2_CreatePrimary`, for defining the index and for `nvram delete` — so on
+   `TPM2_CreatePrimary`, for defining the index and for `slot delete` — so on
    a typical system any process with TPM access can delete a slot. That is a
    denial of service: the key object is gone, and the user must seal again
    and re-enrol the authenticator. Deleting the generation index is a denial
@@ -1017,8 +1017,8 @@ What this means in practice:
 4. **Delete-and-redefine lets an attacker plant a blob of their own**, under a
    write policy of their choosing. The index definition therefore does not
    authenticate the blob's content; the blob signature does (§3.1, note ⁴).
-   `reseal` verifies it before acting on any field, with a key it does not take
-   from the blob (§5.5). `info` verifies it too, and shows an unverified blob
+   `slot approve` verifies it before acting on any field, with a key it does not take
+   from the blob (§5.5). `slot info` verifies it too, and shows an unverified blob
    as untrusted without opening the paths it names. `reveal` does not verify it,
    since the signing key is not available in the initrd. A planted blob can
    carry the user's key object only with an approval signed by the user's key
@@ -1028,7 +1028,7 @@ What this means in practice:
 5. **The real access control is on the key object**, not the NVRAM index.
    Its `authPolicy` (PolicyAuthorize) is what prevents unauthorised use.
 6. **tpm2-kira's own rewrites pass through the same gap.** There is no
-   atomic replace: `reseal`, `attest enrol` and `attest unenrol` undefine
+   atomic replace: `slot approve`, `phone enrol` and `phone unenrol` undefine
    the slot and define and write it again, and between the two the TPM
    holds no blob. Everything that can fail without touching the TPM -
    loading the signing key, a token's PIN, the signer itself on a dummy
@@ -1040,7 +1040,7 @@ What this means in practice:
    as the index was: it holds the key object's public and private areas,
    the private one wrapped under this TPM's storage primary, which is
    re-derived from the owner seed, so only this TPM can load it and only
-   under the object's policy. `nvram restore FILE` verifies the blob's
+   under the object's policy. `slot restore FILE` verifies the blob's
    signature with the signing key (never with a key the file names),
    requires the slot to be empty, approves the blob again for the PCRs it
    was sealed to at a new generation, writes it as reseal does, and
@@ -1074,7 +1074,7 @@ PCR selection and one count per slot. A method holds only what is particular
 to its verifiers and their transport; the vault is the second method type,
 next to the phone, and nothing else in the blob changed for it. A blob with a method type this build does
 not know is refused, since carrying it over would mean signing it again
-unseen on the next `reseal`.
+unseen on the next `slot approve`.
 
 **Only this version is read.** There is no migration and no compatibility
 with earlier formats: a blob of another version is an error that says to seal
@@ -1182,12 +1182,12 @@ the payload exactly, as each method's length must be filled exactly by its
 data: nothing can follow unsigned, and a truncated or padded part does not
 parse.
 
-**Who writes what.** `seal` creates the blob. `reseal` reads it, verifies it
+**Who writes what.** `slot add` creates the blob. `slot approve` reads it, verifies it
 with the signing key, changes the PCR digests, generation and approval, and
-writes it back, attestation part included and unchanged. `seal` on an existing
+writes it back, attestation part included and unchanged. `slot add` on an existing
 slot keeps the attestation part if the same signing key wrote the old blob,
 and drops it otherwise: it does not sign verifiers it cannot vouch for.
-`attest enrol` and `attest unenrol` read the blob, verify it, change the
+`phone enrol` and `phone unenrol` read the blob, verify it, change the
 attestation part and write it back, TOTP part unchanged; if that write fails, the previous blob is
 put back. Every write replaces the NV index (`TPM2_NV_UndefineSpace`, then
 define and PolicySigned writes, §9).
@@ -1213,9 +1213,9 @@ There is no fixed limit on phones beyond the format's eight: whether a blob
 fits is decided for the blob at hand, against the TPM it is written to.
 `WriteToNVRAM` compares the signed blob with `TPM2_PT_NV_INDEX_MAX` before the
 old index is touched, and refuses with the number of bytes missing; the slot
-keeps what it held. `seal` and `reseal` check the same before they raise the
+keeps what it held. `slot add` and `slot approve` check the same before they raise the
 generation, with the largest signatures the key can make, so a blob that
-would not fit never costs the slot its approval. `attest enrol` checks before
+would not fit never costs the slot its approval. `phone enrol` checks before
 the phone is involved only what is certain (a slot without phones gains at
 least one), and the write decides for the phone that actually enrolled.
 
@@ -1251,7 +1251,7 @@ only way back in, because:
 
 1. **Protect the signing private key.** It is the recovery master key. Store
    it with restrictive permissions (`chmod 400`, owned by root, in a directory
-   only root can write to; `seal` and `reseal` refuse anything else, §3.6).
+   only root can write to; `slot add` and `slot approve` refuse anything else, §3.6).
    Consider keeping a backup in a secure offline location.
 2. **Use RSA-2048 or ECC P-256.** These are universally supported by TPM 2.0
    hardware. RSA-4096 may not work on all TPMs.
@@ -1259,10 +1259,10 @@ only way back in, because:
    boot chain may have been tampered with. Do not enter disk decryption
    passwords until the TOTP code is verified.
 4. **Re-seal after planned changes.** After firmware updates, bootloader
-   changes, or Secure Boot key rotations, run `tpm2-kira reseal` to approve
+   changes, or Secure Boot key rotations, run `tpm2-kira slot approve` to approve
    the new PCR values.
 5. **Keep the cap in the boot integration.** It is what keeps the running OS
-   from computing codes; check that `tpm2-kira info` reports the generation
+   from computing codes; check that `tpm2-kira slot info` reports the generation
    index as read-locked after boot.
 6. **NVRAM index range.** tpm2-kira uses blob indices `0x01803000–0x018037FF`
    and generation indices `0x01803800–0x01803FFF` (TPM2 owner-defined NV
@@ -1291,7 +1291,7 @@ them.
 
 Everything the phone later trusts about a machine is *trust on first use*:
 whatever it pins at enrolment, it holds the machine to afterwards. So enrol
-only a machine whose current state you trust (`attest enrol` says so).
+only a machine whose current state you trust (`phone enrol` says so).
 
 ### 13.2 At enrolment
 

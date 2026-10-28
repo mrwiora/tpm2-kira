@@ -38,7 +38,7 @@ does not match, and on certificates that do not parse.
    sends them (`readEKCertChain` in `cmd/attest_tpm.go`; Intel uses
    `0x01C00100`).
 5. `go test ./attest/` — then check a real TPM of that vendor with
-   `sudo tpm2-kira attest ekcert`.
+   `sudo tpm2-kira phone ekcert`.
 6. Rebuild the app's core (`android/scripts/build-core.sh` in the app
    repository, after updating its pinned commit). Until then the app still
    carries the old list.

@@ -203,7 +203,7 @@ func slotErrorLine(err error) string {
 		return fmt.Sprintf("Approval revoked (blob generation %d, slot at %d) - reseal", genErr.BlobGeneration, genErr.IndexGeneration)
 	}
 	if bve, ok := IsBlobVersionError(err); ok {
-		return fmt.Sprintf("Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira seal", bve.FoundVersion, bve.RequiredVersion)
+		return fmt.Sprintf("Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira slot add", bve.FoundVersion, bve.RequiredVersion)
 	}
 	if _, ok := err.(*PCRMismatchError); ok || IsTPMPolicyFailure(err) {
 		return ""

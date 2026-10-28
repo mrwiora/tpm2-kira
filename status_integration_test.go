@@ -15,7 +15,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/cmd"
 )
 
-// The binary as it is run on a machine: the root gate, 'seal' without
+// The binary as it is run on a machine: the root gate, 'slot add' without
 // arguments, 'status' and its notes, 'initramfs plan' on control.conf.
 // The TPM is swtpm; the LUKS headers are not read (no root), so the notes
 // tested here are the ones across the slots and the configuration file.
@@ -78,7 +78,7 @@ func TestRootIsRequired(t *testing.T) {
 		t.Skip("running as root: the gate is open")
 	}
 	unprivileged := "TPM2_KIRA_UNPRIVILEGED="
-	for _, args := range [][]string{{"status"}, {"seal", "--pcrs", "0"}, {"nvram", "list"}, {"info"}, {"attest", "status"}, {"luks", "status"}} {
+	for _, args := range [][]string{{"status"}, {"slot", "add", "--pcrs", "0"}, {"slot", "list"}, {"slot", "info"}, {"phone", "status"}, {"luks", "status"}} {
 		stdout, stderr, code := kira(t, []string{unprivileged}, args...)
 		want := "tpm2-kira " + args[0] + ": root is needed - sudo tpm2-kira " + strings.Join(args, " ")
 		if code != 1 || !strings.Contains(stderr, want) || stdout != "" {
@@ -90,7 +90,7 @@ func TestRootIsRequired(t *testing.T) {
 	if code != 1 || !strings.Contains(stderr, "tpm2-kira control: root is needed - sudo tpm2-kira control") {
 		t.Errorf("control as a user: exit %d, stderr %q", code, stderr)
 	}
-	for _, args := range [][]string{{"help"}, {"help", "seal"}, {"version"}, {"pcrtips"}} {
+	for _, args := range [][]string{{"help"}, {"help", "slot"}, {"version"}, {"pcrtips"}} {
 		stdout, stderr, code := kira(t, []string{unprivileged}, args...)
 		if code != 0 || stdout == "" || strings.Contains(stderr, "root is needed") {
 			t.Errorf("%v as a user: exit %d, stdout %d bytes, stderr %q; want an answer", args, code, len(stdout), stderr)
@@ -98,7 +98,7 @@ func TestRootIsRequired(t *testing.T) {
 	}
 }
 
-// 'seal' without --nvram and --pcrs seals slot 0 to what the machine can
+// 'slot add' without --nvram and --pcrs seals slot 0 to what the machine can
 // vouch for and slot 1 to the fallback; without an event log (swtpm) both
 // are read from the registers, so the policy can be satisfied and the
 // codes show. 'status' then reports both slots signed, the fallback marked,
@@ -107,7 +107,7 @@ func TestSealDefaultsAndStatus(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
 
-	stdout, stderr, code := kira(t, nil, "seal", "--tpm", tpmPath, "--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath)
+	stdout, stderr, code := kira(t, nil, "slot", "add", "--tpm", tpmPath, "--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath)
 	if code != 0 {
 		t.Fatalf("seal: exit %d\n%s%s", code, stdout, stderr)
 	}
@@ -150,7 +150,7 @@ func TestSealDefaultsAndStatus(t *testing.T) {
 }
 
 // The notes name what does not fit: a slot not signed by the key given, a
-// missing fallback, a mode without the remote salt it needs, and a file
+// missing fallback, a mode without the phone salt it needs, and a file
 // that does not parse.
 func TestStatusNotes(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
@@ -158,19 +158,19 @@ func TestStatusNotes(t *testing.T) {
 
 	empty := writeConf(t, "")
 	r := statusJSON(t, tpmPath, testPrivKeyPath, empty)
-	if len(r.Slots) != 0 || !hasNote(r.Notes, "no slot is sealed: tpm2-kira seal") {
+	if len(r.Slots) != 0 || !hasNote(r.Notes, "no slot is sealed: tpm2-kira slot add") {
 		t.Errorf("nothing sealed, an empty file: %d slots, notes %q", len(r.Slots), r.Notes)
 	}
 
 	// Slot 0 alone, to a selection that is not the fallback.
-	if _, stderr, code := kira(t, nil, "seal", "--tpm", tpmPath, "--nvram", "0", "--pcrs", "0,23", "--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); code != 0 {
+	if _, stderr, code := kira(t, nil, "slot", "add", "--tpm", tpmPath, "--nvram", "0", "--pcrs", "0,23", "--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); code != 0 {
 		t.Fatalf("seal: exit %d: %s", code, stderr)
 	}
 	r = statusJSON(t, tpmPath, testPrivKeyPath, empty)
 	if len(r.Slots) != 1 || !r.Slots[0].Signed || r.Slots[0].Fallback {
 		t.Fatalf("slots: %+v", r.Slots)
 	}
-	if !hasNote(r.Notes, "no fallback slot (PCRs 0e,7e alone)") || !hasNote(r.Notes, "tpm2-kira seal --nvram 1 --pcrs 0e,7e") {
+	if !hasNote(r.Notes, "no fallback slot (PCRs 0e,7e alone)") || !hasNote(r.Notes, "tpm2-kira slot add --nvram 1 --pcrs 0e,7e") {
 		t.Errorf("no fallback: notes %q", r.Notes)
 	}
 

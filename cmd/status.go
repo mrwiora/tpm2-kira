@@ -10,7 +10,7 @@ import (
 )
 
 // 'tpm2-kira status' is the one page a person wants before a reboot: the
-// slots and what they are sealed to, the phones and the remote salt, the
+// slots and what they are sealed to, the phones and the phone salt, the
 // LUKS keyslots that are tpm2-kira's with the mode of each - and the notes
 // where these do not fit together (PLAN-LUKS.md §4). It reads; it changes
 // nothing. Without the TPM, or without root for the LUKS headers, it says
@@ -36,7 +36,7 @@ type StatusSlot struct {
 	Signed      bool   `json:"signed"` // by this machine's signing key
 	SignReason  string `json:"sign_reason,omitempty"`
 	Phones      int    `json:"phones"`                 // enrolled; the slot then has no TOTP code
-	RemoteSalt  bool   `json:"remote_salt"`            // the release key is in the blob
+	PhoneSalt   bool   `json:"remote_salt"`            // the release key is in the blob
 	Vault       string `json:"vault,omitempty"`        // the vault's URL: the slot is enrolled with one (tpm+vault)
 	VaultPepper bool   `json:"vault_pepper,omitempty"` // its key needs an operator's pepper
 	VaultPin    string `json:"-"`                      // the vault's key pin, for control's check
@@ -95,7 +95,7 @@ func collectStatus(o StatusOptions) StatusReport {
 			s.Signed, s.SignReason = v.Verified, v.Reason
 			if att := sb.Payload.Attestation; att != nil && att.Phone.Enabled() {
 				s.Phones = len(att.Phone.Verifiers)
-				s.RemoteSalt = len(att.ReleaseKeyPublic) > 0
+				s.PhoneSalt = len(att.ReleaseKeyPublic) > 0
 			}
 			if att := sb.Payload.Attestation; att != nil && att.Vault.Enabled() {
 				s.Vault = att.Vault.URL
@@ -158,7 +158,7 @@ func isFallbackSelection(specs []PCRSpec) bool {
 func statusNotes(r StatusReport) []string {
 	var notes []string
 	if r.TPMError == "" && len(r.Slots) == 0 {
-		notes = append(notes, "no slot is sealed: tpm2-kira seal")
+		notes = append(notes, "no slot is sealed: tpm2-kira slot add")
 	}
 	remoteSalt, fallback := false, false
 	for _, s := range r.Slots {
@@ -166,13 +166,13 @@ func statusNotes(r StatusReport) []string {
 			notes = append(notes, fmt.Sprintf("slot %d is not signed by this machine's key (%s): the hooks will not reseal it and the gate serves no phone for it", s.Slot, s.SignReason))
 		}
 		if strings.Contains(s.GenState, "NOT") || strings.Contains(s.GenState, "unavailable") {
-			notes = append(notes, fmt.Sprintf("slot %d shows no code until it is resealed: tpm2-kira reseal --nvram %d", s.Slot, s.Slot))
+			notes = append(notes, fmt.Sprintf("slot %d shows no code until it is resealed: tpm2-kira slot approve --nvram %d", s.Slot, s.Slot))
 		}
-		remoteSalt = remoteSalt || s.RemoteSalt
+		remoteSalt = remoteSalt || s.PhoneSalt
 		fallback = fallback || s.Fallback
 	}
 	if r.TPMError == "" && len(r.Slots) > 0 && !fallback {
-		notes = append(notes, fmt.Sprintf("no fallback slot (PCRs %s alone) for a boot whose kernel changed unpredicted: tpm2-kira seal --nvram %d --pcrs %s", FallbackPCRSelection, FallbackSlot, FallbackPCRSelection))
+		notes = append(notes, fmt.Sprintf("no fallback slot (PCRs %s alone) for a boot whose kernel changed unpredicted: tpm2-kira slot add --nvram %d --pcrs %s", FallbackPCRSelection, FallbackSlot, FallbackPCRSelection))
 	}
 
 	slotThere := map[int]bool{}
@@ -215,15 +215,15 @@ func statusNotes(r StatusReport) []string {
 					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the vault of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
 				}
 			}
-			if ks.Token.Mode == LuksModePasswordRemoteSalt {
+			if ks.Token.Mode == LuksModePasswordPhoneSalt {
 				ok := false
 				for _, s := range r.Slots {
-					if s.Slot == *ks.Token.Slot && s.RemoteSalt {
+					if s.Slot == *ks.Token.Slot && s.PhoneSalt {
 						ok = true
 					}
 				}
 				if !ok {
-					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the remote salt of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
+					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the phone salt of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
 				}
 			}
 		}
@@ -235,8 +235,8 @@ func statusNotes(r StatusReport) []string {
 	if vault && headersRead && marked[LuksModeTPMVault] == 0 {
 		notes = append(notes, "a slot is enrolled with a vault, but no LUKS keyslot is marked tpm+vault: its key opens nothing (tpm2-kira luks mark <device> --keyslot N --mode tpm+vault)")
 	}
-	if remoteSalt && headersRead && marked[LuksModePasswordRemoteSalt] == 0 {
-		notes = append(notes, "a remote salt is enrolled, but no LUKS keyslot is marked password+remotesalt: the phone's salt opens nothing (tpm2-kira luks enrol <device> --mode password+remotesalt)")
+	if remoteSalt && headersRead && marked[LuksModePasswordPhoneSalt] == 0 {
+		notes = append(notes, "a phone salt is enrolled, but no LUKS keyslot is marked password+phonesalt: the phone's salt opens nothing (tpm2-kira luks enrol <device> --mode password+phonesalt)")
 	}
 	return notes
 }
@@ -260,10 +260,10 @@ func printStatus(r StatusReport) {
 		}
 		fmt.Printf("  slot %-2d  sealed to %s; generation %s; %s\n", s.Slot, pcrs, s.GenState, signed)
 		switch {
-		case s.Phones > 0 && s.RemoteSalt:
-			fmt.Printf("           %s, no TOTP code; remote salt enrolled\n", phonesText(s.Phones))
+		case s.Phones > 0 && s.PhoneSalt:
+			fmt.Printf("           %s, no TOTP code; phone salt enrolled\n", phonesText(s.Phones))
 		case s.Phones > 0:
-			fmt.Printf("           %s, no TOTP code; no remote salt\n", phonesText(s.Phones))
+			fmt.Printf("           %s, no TOTP code; no phone salt\n", phonesText(s.Phones))
 		}
 		if s.Vault != "" {
 			pepper := ""

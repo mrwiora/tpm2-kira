@@ -38,7 +38,7 @@ func requireRoot(command string, args []string) {
 		return
 	}
 	// The SSH server's unprivileged half: started by 'run' as nobody.
-	if command == "remote" && len(args) > 0 && args[0] == "serve" {
+	if command == "ssh-child" {
 		return
 	}
 	if os.Geteuid() == 0 || os.Getenv("TPM2_KIRA_UNPRIVILEGED") != "" {
@@ -90,12 +90,8 @@ func main() {
 	switch command {
 	case "setup":
 		runSetup(commandArgs, *debug)
-	case "seal":
-		runSeal(commandArgs, *tpmPath, *debug)
-	case "reseal":
-		runReseal(commandArgs, *tpmPath, *debug)
-	case "info":
-		runInfo(commandArgs, *tpmPath, *debug)
+	case "slot":
+		runSlot(commandArgs, *tpmPath, *debug)
 	case "control":
 		fs := flag.NewFlagSet("control", flag.ExitOnError)
 		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
@@ -115,30 +111,22 @@ func main() {
 		if err := cmd.Status(cmd.StatusOptions{TPMPath: *tpm, PrivKeyPath: *privKey, ConfigPath: *conf, JSON: *jsonOut, Debug: *dbg}); err != nil {
 			fail(err)
 		}
-	case "nvram":
-		runNVRAM(commandArgs, *tpmPath, *debug)
 	case "reveal":
 		runReveal(commandArgs, *tpmPath, *debug)
 	case "reveal-plain":
 		runRevealPlain(commandArgs, *tpmPath, *debug)
 	case "run":
 		runRun(commandArgs, *tpmPath, *debug)
-	case "attest":
-		runAttest(commandArgs, *tpmPath, *debug)
-	case "remote-salt":
-		runRemoteSalt(commandArgs, *tpmPath, *debug)
+	case "phone":
+		runPhone(commandArgs, *tpmPath, *debug)
 	case "vault":
 		runVault(commandArgs, *tpmPath, *debug)
 	case "initramfs":
 		runInitramfs(commandArgs, *tpmPath, *debug)
-	case "remote":
-		runRemote(commandArgs, *tpmPath)
-	case "derive":
-		fs := flag.NewFlagSet("derive", flag.ExitOnError)
-		out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
-		fs.Parse(commandArgs)
-		if err := cmd.DeriveCommand(*out); err != nil {
-			fail(err)
+	case "ssh-child":
+		if err := cmd.SSHChildCommand(); err != nil {
+			fmt.Fprintf(os.Stderr, "tpm2-kira ssh-child: %v\n", err)
+			os.Exit(1)
 		}
 	case "luks":
 		runLuks(commandArgs, *tpmPath, *debug)
@@ -320,11 +308,31 @@ func runYubiKey(args []string) {
 	}
 }
 
-func runSeal(args []string, tpmPath string, debugFlag bool) {
-	fs := flag.NewFlagSet("seal", flag.ExitOnError)
+// runSlot is the slot: an approved boot state in the TPM, and what is
+// sealed to it.
+func runSlot(args []string, tpmPath string, debugFlag bool) {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, "slot requires a subcommand.\n\n")
+		printHelp("slot")
+		os.Exit(cmd.ExitUsage)
+	}
+	switch args[0] {
+	case "add":
+		runSlotAdd(args[1:], tpmPath, debugFlag)
+	case "approve":
+		runSlotApprove(args[1:], tpmPath, debugFlag)
+	case "info":
+		runSlotInfo(args[1:], tpmPath, debugFlag)
+	default:
+		runSlotNVRAM(args, tpmPath, debugFlag)
+	}
+}
+
+func runSlotAdd(args []string, tpmPath string, debugFlag bool) {
+	fs := flag.NewFlagSet("slot add", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	pcrs := fs.String("pcrs", "", "PCR indices to use for policy (default: what this boot measured, see 'help seal')")
+	pcrs := fs.String("pcrs", "", "PCR indices to use for policy (default: what this boot measured, see 'help slot')")
 	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
@@ -380,8 +388,8 @@ func pcrsGiven(args []string) bool {
 	return false
 }
 
-func runReseal(args []string, tpmPath string, debugFlag bool) {
-	fs := flag.NewFlagSet("reseal", flag.ExitOnError)
+func runSlotApprove(args []string, tpmPath string, debugFlag bool) {
+	fs := flag.NewFlagSet("slot approve", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	pcrs := fs.String("pcrs", "", "PCR indices to use for policy (if not specified, preserves original selection)")
@@ -420,8 +428,8 @@ func runReseal(args []string, tpmPath string, debugFlag bool) {
 	}
 }
 
-func runInfo(args []string, tpmPath string, debugFlag bool) {
-	fs := flag.NewFlagSet("info", flag.ExitOnError)
+func runSlotInfo(args []string, tpmPath string, debugFlag bool) {
+	fs := flag.NewFlagSet("slot info", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
@@ -473,7 +481,7 @@ func runRun(args []string, tpmPath string, debugFlag bool) {
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
-	gate := fs.String("gate", "", "Also be the Bluetooth gate's coordinator on this socket: hold the TPM for 'attest gate --coordinator' and let the phone's verdict release the boot (set by the initrd unit)")
+	gate := fs.String("gate", "", "Also be the Bluetooth gate's coordinator on this socket: hold the TPM for 'phone gate --coordinator' and let the phone's verdict release the boot (set by the initrd unit)")
 	hold := fs.Uint("hold", uint(cmd.HoldDefault/time.Second), "Seconds to wait for Enter after showing the code before the boot continues on its own (0: at once)")
 	unlock := fs.String("unlock", "", "Also answer systemd-cryptsetup's key requests on this socket (crypttab(5) AF_UNIX key files): the passphrase is asked at tpm2-kira's prompt once the code screen is confirmed. Under systemd the socket unit hands its socket over instead; Debian's boot script passes this")
 	ssh := fs.Bool("ssh", false, "Also be the SSH server: the codes are shown and confirmed in an SSH session, the console says where to log in (set by the image's drop-in from TPM2_KIRA_SSH)")
@@ -499,17 +507,11 @@ func runRun(args []string, tpmPath string, debugFlag bool) {
 	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, remote, planned, *debug)
 }
 
-func runNVRAM(args []string, tpmPath string, debugFlag bool) {
-	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, "nvram requires a subcommand.\n\n")
-		printHelp("nvram")
-		os.Exit(cmd.ExitUsage)
-	}
-
+func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
 	subcommand := args[0]
 	args = args[1:]
 
-	fs := flag.NewFlagSet("nvram", flag.ExitOnError)
+	fs := flag.NewFlagSet("slot "+subcommand, flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
@@ -540,14 +542,14 @@ func runNVRAM(args []string, tpmPath string, debugFlag bool) {
 		}
 	case "restore":
 		if fs.NArg() != 1 {
-			fail(fmt.Errorf("nvram restore takes the stashed blob's file: tpm2-kira nvram restore %s/slot-0x<index>-<time>.blob", cmd.NVRAMRecoveryDir))
+			fail(fmt.Errorf("slot restore takes the stashed blob's file: tpm2-kira slot restore %s/slot-0x<index>-<time>.blob", cmd.NVRAMRecoveryDir))
 		}
 		restoreIndex := resolveOrScanAll(uint32(*nvram), provided)
 		if err := cmd.NVRAMRestore(*tpm, fs.Arg(0), restoreIndex, *pubKey, *privKey, *debug); err != nil {
 			fail(err)
 		}
 	default:
-		fail(fmt.Errorf("unknown nvram subcommand %q", subcommand))
+		fail(fmt.Errorf("unknown slot subcommand %q", subcommand))
 	}
 }
 
@@ -583,6 +585,13 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		os.Exit(cmd.ExitUsage)
 	}
 	switch args[0] {
+	case "derive":
+		fs := flag.NewFlagSet("luks derive", flag.ExitOnError)
+		out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
+		fs.Parse(args[1:])
+		if err := cmd.DeriveCommand(*out); err != nil {
+			fail(err)
+		}
 	case "status":
 		fs := flag.NewFlagSet("luks status", flag.ExitOnError)
 		jsonOut := fs.Bool("json", false, "Machine-readable output")
@@ -592,15 +601,15 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		}
 	case "mark":
 		fs := flag.NewFlagSet("luks mark", flag.ExitOnError)
-		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+remotesalt: the slot's verifier is checked)")
+		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+phonesalt: the slot's verifier is checked)")
 		keyslot := fs.Int("keyslot", -1, "The LUKS keyslot to mark (required)")
-		mode := fs.String("mode", "", "How its key is made: password+salt, password+remotesalt or tpm+vault (required)")
-		nvram := fs.Uint("nvram", nvramDefault(0), "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+remotesalt, tpm+vault: the slot whose release it needs)")
-		label := fs.String("label", "luks", "The salt's label (password+remotesalt)")
+		mode := fs.String("mode", "", "How its key is made: password+salt, password+phonesalt or tpm+vault (required)")
+		nvram := fs.Uint("nvram", nvramDefault(0), "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+phonesalt, tpm+vault: the slot whose release it needs)")
+		label := fs.String("label", "luks", "The salt's label (password+phonesalt)")
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		fs.Parse(deviceLast(args[1:]))
 		if fs.NArg() != 1 || *keyslot < 0 || *mode == "" {
-			fail(fmt.Errorf("usage: tpm2-kira luks mark <device> --keyslot N --mode password+salt|password+remotesalt|tpm+vault"))
+			fail(fmt.Errorf("usage: tpm2-kira luks mark <device> --keyslot N --mode password+salt|password+phonesalt|tpm+vault"))
 		}
 		if err := cmd.LuksMark(cmd.LuksMarkOptions{TPMPath: *tpm, Device: fs.Arg(0), Keyslot: *keyslot, Mode: *mode,
 			SealIndex: cmd.ResolveNVRAMIndex(uint32(*nvram)), Label: *label, Debug: *debug}); err != nil {
@@ -608,10 +617,10 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		}
 	case "enrol", "enroll":
 		fs := flag.NewFlagSet("luks enrol", flag.ExitOnError)
-		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+remotesalt)")
-		mode := fs.String("mode", "", "How the key is made at boot: password+salt, password+remotesalt or tpm+vault (required)")
-		nvram := fs.Uint("nvram", nvramDefault(0), "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+remotesalt: the slot whose phone keeps the salt; tpm+vault: the slot enrolled with the vault)")
-		label := fs.String("label", "luks", "The key's label (password+remotesalt, tpm+vault)")
+		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+phonesalt)")
+		mode := fs.String("mode", "", "How the key is made at boot: password+salt, password+phonesalt or tpm+vault (required)")
+		nvram := fs.Uint("nvram", nvramDefault(0), "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+phonesalt: the slot whose phone keeps the salt; tpm+vault: the slot enrolled with the vault)")
+		label := fs.String("label", "luks", "The key's label (password+phonesalt, tpm+vault)")
 		vaultURL := fs.String("url", "", "tpm+vault: the vault, https://host:port")
 		vaultPin := fs.String("pin", "", "tpm+vault: the pin of the vault's key, sha256:… as 'tpm2-kira-vault token create' prints it")
 		vaultToken := fs.String("token", "", "tpm+vault: the one-time enrolment token")
@@ -626,7 +635,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		fs.Parse(deviceLast(args[1:]))
 		if fs.NArg() != 1 || *mode == "" {
-			fail(fmt.Errorf("usage: tpm2-kira luks enrol <device> --mode password+salt|password+remotesalt|tpm+vault"))
+			fail(fmt.Errorf("usage: tpm2-kira luks enrol <device> --mode password+salt|password+phonesalt|tpm+vault"))
 		}
 		var slot uint32
 		if nvramExplicit(args[1:]) {
@@ -742,14 +751,14 @@ The image needs its network at boot: TPM2_KIRA_NET in control.conf
 (tpm2-kira control, "Network and SSH at boot").
 `
 
-func runRemoteSalt(args []string, tpmPath string, debugFlag bool) {
+func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, "remote-salt requires a subcommand.\n\n"+factorUsage)
+		fmt.Fprint(os.Stderr, "phone salt requires a subcommand.\n\n"+factorUsage)
 		os.Exit(cmd.ExitUsage)
 	}
 	switch args[0] {
 	case "status":
-		fs := flag.NewFlagSet("remote-salt status", flag.ExitOnError)
+		fs := flag.NewFlagSet("phone salt status", flag.ExitOnError)
 		tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 		nvram := fs.Uint("nvram", nvramDefault(0), "Slot (0-15) or sealed-blob NVRAM index (default: every enrolled slot)")
 		jsonOut := fs.Bool("json", false, "Machine-readable output")
@@ -764,7 +773,7 @@ func runRemoteSalt(args []string, tpmPath string, debugFlag bool) {
 		}
 		return
 	case "unenrol", "unenroll":
-		fs := flag.NewFlagSet("remote-salt unenrol", flag.ExitOnError)
+		fs := flag.NewFlagSet("phone salt unenrol", flag.ExitOnError)
 		tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 		nvram := fs.Uint("nvram", nvramDefault(0), "Slot (0-15) or sealed-blob NVRAM index")
 		privKey := fs.String("privkey", "", "Signing key (default: "+cmd.DefaultPrivateKeyPath+")")
@@ -779,9 +788,9 @@ func runRemoteSalt(args []string, tpmPath string, debugFlag bool) {
 		fmt.Print(factorUsage)
 		return
 	default:
-		fail(fmt.Errorf("unknown remote-salt subcommand %q", args[0]))
+		fail(fmt.Errorf("unknown phone salt subcommand %q", args[0]))
 	}
-	fs := flag.NewFlagSet("remote-salt "+args[0], flag.ExitOnError)
+	fs := flag.NewFlagSet("phone salt "+args[0], flag.ExitOnError)
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", nvramDefault(0), "Slot (0-15) or sealed-blob NVRAM index (default: the first enrolled slot)")
 	label := fs.String("label", "luks", "The factor's label: one factor serves volumes with unrelated salts")
@@ -807,45 +816,51 @@ func runRemoteSalt(args []string, tpmPath string, debugFlag bool) {
 	}
 }
 
-const factorUsage = `tpm2-kira remote-salt enrol | rotate | status | unenrol [options]
+const factorUsage = `tpm2-kira phone salt enrol | rotate | status | unenrol [options]
 
-The remote salt (docs/PLAN-FACTORRELEASE.md): the salt of the disk's key,
+The phone salt (docs/PLAN-FACTORRELEASE.md): the salt of the disk's key,
 kept by the verifier that attests this machine - today the phone enrolled
-with 'attest enrol', over Bluetooth LE - as a value only this machine's
+with 'phone enrol', over Bluetooth LE - as a value only this machine's
 TPM can open, in a boot its signing key approved. The phone hands it back
 after a verdict you accept; at boot tpm2-kira asks for your password and
 derives the key from both (hashpwd2's derivation, unlock mode
-password+remotesalt). Without the phone, the recovery passphrase in its
+password+phonesalt). Without the phone, the recovery passphrase in its
 own keyslot opens the disk at cryptsetup's prompt.
 
-  remote-salt enrol    Give the phone a salt, prove the round trip, derive
+  phone salt enrol    Give the phone a salt, prove the round trip, derive
                        the key once for 'cryptsetup luksAddKey' ('luks enrol
-                       --mode password+remotesalt' does all of it in one step):
+                       --mode password+phonesalt' does all of it in one step):
                          --out PATH   the key file, on tmpfs (required)
                          --label STR  default luks
                          --nvram N --privkey PATH --pubkey PATH --adapter N
                          --timeout DUR --adapter-wait DUR --yes
                        Have a recovery passphrase in a second keyslot first:
                          cryptsetup luksAddKey <device>
-  remote-salt rotate   The same with a new salt for a slot that has one; the
+  phone salt rotate   The same with a new salt for a slot that has one; the
                        old keyslot is then to be removed by hand
-  remote-salt status   Which slots have a remote salt enrolled (--nvram N, --json)
-  remote-salt unenrol  Take the release key out of the slot's blob (--nvram N,
+  phone salt status   Which slots have a phone salt enrolled (--nvram N, --json)
+  phone salt unenrol  Take the release key out of the slot's blob (--nvram N,
                        --privkey PATH): what the phone keeps can then not be
                        opened; remove the salt's keyslot by hand
 `
 
-func runAttest(args []string, tpmPath string, debugFlag bool) {
+// runPhone is the phone: it verifies this boot, and it can keep the salt
+// of the disk's key (phone salt).
+func runPhone(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, "attest requires a subcommand.\n\n"+attestUsage)
+		fmt.Fprint(os.Stderr, "phone requires a subcommand.\n\n"+attestUsage)
 		os.Exit(cmd.ExitUsage)
 	}
 	sub, args := args[0], args[1:]
+	if sub == "salt" {
+		runPhoneSalt(args, tpmPath, debugFlag)
+		return
+	}
 	if sub == "help" || sub == "-h" || sub == "--help" {
 		fmt.Print(attestUsage)
 		return
 	}
-	fs := flag.NewFlagSet("attest "+sub, flag.ExitOnError)
+	fs := flag.NewFlagSet("phone "+sub, flag.ExitOnError)
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", nvramDefault(0), "Slot (0-15) or sealed-blob NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
@@ -915,9 +930,9 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 			failAttest(cmd.ExitInternal, err)
 		}
 	case "verify":
-		evidence := fs.String("evidence", "", "Evidence file from 'attest quote'")
+		evidence := fs.String("evidence", "", "Evidence file from 'phone quote'")
 		record := fs.String("record", "", "Machine record JSON exported from a verifier")
-		nonce := fs.String("nonce", "", "The nonce given to 'attest quote'")
+		nonce := fs.String("nonce", "", "The nonce given to 'phone quote'")
 		jsonOut := fs.Bool("json", false, "Output the verdict as JSON")
 		fs.Parse(args)
 		ok, err := cmd.AttestVerify(*evidence, *record, *nonce, *jsonOut)
@@ -939,73 +954,54 @@ func runAttest(args []string, tpmPath string, debugFlag bool) {
 			fail(err)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown attest subcommand %q\n", sub)
+		fmt.Fprintf(os.Stderr, "unknown phone subcommand %q\n", sub)
 		os.Exit(cmd.ExitUsage)
 	}
 }
 
-// attestUsage is the page of 'tpm2-kira help attest'.
-const attestUsage = `tpm2-kira attest <subcommand> [options]
+// attestUsage is the page of 'tpm2-kira help phone'.
+const attestUsage = `tpm2-kira phone <subcommand> [options]
 
 Remote attestation: a phone with the Marify app verifies this boot over
 Bluetooth LE - the TPM quotes the PCRs, the phone judges them against the
 record it was given at enrolment, and shows a code that must match the
 machine's screen (docs/PLAN-REMOTEATTESTATION.md).
 
-  attest enrol    Bind a phone to this slot over BLE (booted system; needs the
+  phone enrol     Bind a phone to this slot over BLE (booted system; needs the
                   signing key and a sealed slot: the phones are stored in the
                   slot's blob, next to its TOTP key, and survive reseal).
                   Prints a 6-digit code to compare with the app.
                   --name STR --pcrs LIST --adapter N --privkey PATH --timeout DUR
                   --sha1  quote the SHA-1 PCR bank instead of SHA-256. Required,
-                          as for 'seal', where nothing else works: a TPM without
+                          as for 'slot add', where nothing else works: a TPM without
                           a SHA-256 bank, or a slot sealed with --sha1
                   --verify-tpm warn|require|off    this machine's TPM genuine (EK certificate)?
                   --verify-phone warn|require|off  the phone's key in genuine secure hardware
                                                    (Android key attestation, Google roots)?
-  attest gate     Serve attestation requests until a phone returns a receipt;
+  phone gate      Serve attestation requests until a phone returns a receipt;
                   the boot is never held. Defaults from /etc/tpm2-kira/control.conf.
                   --adapter N --timeout DUR --adapter-wait DUR
                   --coordinator SOCKET  be the radio worker only: no TPM in
                     this process; quotes and the reading of the receipt come
                     from 'tpm2-kira run --gate SOCKET' (the initrd units).
                     Without it (by hand) this process uses the TPM itself
-  attest status   Show enrolled phones per slot and whether the blob is signed
+  phone status    Show enrolled phones per slot and whether the blob is signed
                   by this machine's signing key (--json); exits 1 if not
-  attest ekcert   Show whether the phone will verify this TPM as genuine
+  phone ekcert    Show whether the phone will verify this TPM as genuine
                   (EK certificate chain against the vendor roots in the core)
-  attest quote    Produce evidence without a phone (--nonce HEX --out FILE)
-  attest verify   Judge evidence offline (--evidence FILE --record FILE --nonce HEX)
-  attest unenrol  Remove a slot's phones from its blob; the TOTP key stays.
+  phone quote     Produce evidence without a phone (--nonce HEX --out FILE)
+  phone verify    Judge evidence offline (--evidence FILE --record FILE --nonce HEX)
+  phone unenrol   Remove a slot's phones from its blob; the TOTP key stays.
                   Needs the signing key (--privkey PATH). To remove the whole
-                  slot without it: nvram delete --nvram N
+                  slot without it: slot delete --nvram N
 
-  EXIT STATUS: unlike every other command, 'attest gate', 'attest verify',
-  'attest quote' and 'attest enrol' exit non-zero on failure:
+  EXIT STATUS: unlike every other command, 'phone gate', 'phone verify',
+  'phone quote' and 'phone enrol' exit non-zero on failure:
     0 attested   1 internal error   2 usage   3 no phone / no adapter
     4 rejected (do not type a passphrase before checking)   5 anchor mismatch
     6 the attestation record was replaced, or an older one was put back
 
 `
-
-func runRemote(args []string, tpmPath string) {
-	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, "remote requires a subcommand.\n\n")
-		printHelp("remote")
-		os.Exit(cmd.ExitUsage)
-	}
-	switch args[0] {
-	case "serve":
-		if err := cmd.RemoteServeCommand(); err != nil {
-			fmt.Fprintf(os.Stderr, "tpm2-kira remote serve: %v\n", err)
-			os.Exit(1)
-		}
-	default:
-		fmt.Fprintf(os.Stderr, "unknown remote subcommand %q\n\n", args[0])
-		printHelp("remote")
-		os.Exit(cmd.ExitUsage)
-	}
-}
 
 func runInitramfs(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 || args[0] != "plan" {

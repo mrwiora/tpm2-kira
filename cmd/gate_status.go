@@ -26,7 +26,7 @@ type GateStatus struct {
 	// Code is the code of the phone's boot challenge, while its session
 	// lasts: the person compares it with what the phone shows.
 	Code string
-	// Releasing: attested, and the phone's remote salt is expected but
+	// Releasing: attested, and the phone's phone salt is expected but
 	// not yet taken. The phone sends it one step after the receipt; the
 	// boot is not released before it has arrived, the session has ended,
 	// or releaseWait has passed.
