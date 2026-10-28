@@ -1,3 +1,6 @@
+// Package diskkey makes the disk's key at boot, as the keyslot's LUKS2 token
+// says: the token and its recipe, the combiner, the unlock socket for
+// systemd-cryptsetup, the passphrase prompt and Debian's keyscript.
 package diskkey
 
 import (

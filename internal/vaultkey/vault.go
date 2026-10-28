@@ -1,3 +1,5 @@
+// Package vaultkey makes the disk's key from a vault at boot: the remote part
+// released under the slot's approval, joined with this TPM's local part.
 package vaultkey
 
 // The disk's key from two TPMs: the local part in this machine's TPM, the

@@ -27,7 +27,7 @@ if command -v wait_for_udev >/dev/null 2>&1; then
     wait_for_udev 10
 fi
 
-# The parts the image carries (cmd/bootplan.go): written by the hook, one
+# The parts the image carries (internal/admin/bootplan.go): written by the hook, one
 # directory each. The TPM is waited for only when a part needs it; the key
 # provider needs none: the prompt is tpm2-kira's on every machine.
 PLAN=/etc/tpm2-kira/plan

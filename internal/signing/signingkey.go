@@ -1,3 +1,5 @@
+// Package signing is the signing key that approves boot states: its files,
+// the YubiKey that may hold it, and the PIN file.
 package signing
 
 import (

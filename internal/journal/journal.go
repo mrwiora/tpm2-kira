@@ -1,3 +1,5 @@
+// Package journal is the boot's narration: into the journal, or the log file
+// where there is none.
 package journal
 
 import (

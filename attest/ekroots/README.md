@@ -35,7 +35,7 @@ does not match, and on certificates that do not parse.
    `roots` / `intermediates` with `file`, `subject` and
    `sha256` (`sha256sum <vendor>/*.der`).
 4. If the vendor's TPMs store intermediates in NV, make sure the machine
-   sends them (`readEKCertChain` in `cmd/attest_tpm.go`; Intel uses
+   sends them (`readEKCertChain` in `internal/phonegate/attest_tpm.go`; Intel uses
    `0x01C00100`).
 5. `go test ./attest/` — then check a real TPM of that vendor with
    `sudo tpm2-kira phone ekcert`.

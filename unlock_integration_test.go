@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/admin"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 )
 
@@ -73,7 +73,7 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	}
 	loop := strings.TrimSpace(string(loopOut))
 	defer exec.Command("losetup", "-d", loop).Run()
-	if err := cmd.LuksMark(cmd.LuksMarkOptions{Device: loop, Keyslot: 0, Mode: "password+salt"}); err != nil {
+	if err := admin.LuksMark(admin.LuksMarkOptions{Device: loop, Keyslot: 0, Mode: "password+salt"}); err != nil {
 		t.Fatalf("luks mark: %v", err)
 	}
 

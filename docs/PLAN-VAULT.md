@@ -267,7 +267,7 @@ cannot attest, so it cannot unlock, so nobody can log in to fix it.
 Resolved with **pre-registered profiles**
 ([PLAN-PHONE.md](PLAN-PHONE.md) §8): before rebooting,
 the machine computes the PCR values its *next* boot will present — for PCR 11
-this is exactly what `cmd/ukipredict.go` already does from the unified kernel
+this is exactly what `internal/measure/ukipredict.go` already does from the unified kernel
 image on disk — and uploads them as a candidate profile with `uses_left = 1`
 and a short `valid_until`. The reboot then attests cleanly, once, against a
 value an operator approved in advance while the machine was still reachable.
@@ -284,7 +284,7 @@ flowchart LR
 ```
 
 Where a value cannot be predicted — on Debian PCR 8/9 are predicted from
-the running boot's log and the files on disk (`cmd/grub_predict.go`), which
+the running boot's log and the files on disk (`internal/measure/grub_predict.go`), which
 covers updates but not a menu choice, an edited command line or a grubenv
 rewrite — the honest answer is that unattended reboots need live approval,
 and the documentation should say which PCR selections buy unattended reboots

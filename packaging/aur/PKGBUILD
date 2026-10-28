@@ -66,7 +66,7 @@ build() {
 check() {
     cd "$_srcdir"
 
-    go test -tags=unit ./cmd/...
+    go test -tags=unit ./internal/... ./attest/... ./transport/... ./mobile/...
 }
 
 backup=(etc/tpm2-kira/control.conf)

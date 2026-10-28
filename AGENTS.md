@@ -106,7 +106,7 @@ It may not carry what came before.
   How the
   disk's key is made is not configured anywhere: the boot reads it from
   each volume's own LUKS2 header - the tpm2-kira token of a keyslot names
-  the recipe (cmd/luks_header.go), so an enrolment needs no mode set and
+  the recipe (internal/diskkey/luks_header.go), so an enrolment needs no mode set and
   no rebuild for one. `setup`, `slot add`, `luks enrol` and the rest do their
   one thing; `tpm2-kira control` checks the prerequisites of a working
   setup. Every other file on the system - the kernel command line,
@@ -125,7 +125,7 @@ It may not carry what came before.
   the PIN, an empty passphrase, a vault that does not answer); there is
   no separate risks list.
 - **The boot image carries what the machine uses, by the boot plan**
-  (cmd/bootplan.go, `tpm2-kira initramfs plan`). The disk unlock is always
+  (internal/admin/bootplan.go, `tpm2-kira initramfs plan`). The disk unlock is always
   in it; every other part - the TOTP codes, the phone's Bluetooth gate, the
   vault, the network, the SSH server - only while something uses it (a
   sealed slot, an enrolled phone, a setting of control.conf), and what

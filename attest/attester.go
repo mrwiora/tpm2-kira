@@ -10,7 +10,7 @@ import (
 
 // The attester side of both exchanges. It runs on the machine, blocks on a
 // Conn, and reaches the TPM only through the backend interfaces below, which
-// cmd/ implements. Nothing here decides whether the machine is trustworthy;
+// internal/phonegate implements. Nothing here decides whether the machine is trustworthy;
 // it produces evidence and reads receipts.
 
 // QuoteResult is what a backend returns for one TPM2_Quote.

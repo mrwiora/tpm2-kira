@@ -59,11 +59,11 @@ three places where private key material is touched, and all three are "sign one
 | # | Call site | Purpose | Signature format |
 |---|-----------|---------|------------------|
 | 1 | `cmd/policy_or.go` → `signForTPM()` | `TPM2_PolicySigned` aHash, for recovery unseal | TPM-native: RSASSA blob, or ECDSA **raw r‖s** |
-| 2 | `cmd/blob.go` → `SignBlobPayload()` | detached signature over the blob metadata | RSA PKCS#1 v1.5, or ECDSA **ASN.1 DER** |
-| 3 | `cmd/nvram.go` → `WriteToNVRAM()` (per 1024-byte chunk) | `TPM2_PolicySigned` for the NV write policy | same as #1 (reuses `signForTPM`) |
+| 2 | `internal/nvslot/blob.go` → `SignBlobPayload()` | detached signature over the blob metadata | RSA PKCS#1 v1.5, or ECDSA **ASN.1 DER** |
+| 3 | `internal/nvslot/nvram.go` → `WriteToNVRAM()` (per 1024-byte chunk) | `TPM2_PolicySigned` for the NV write policy | same as #1 (reuses `signForTPM`) |
 
 A fourth use is **not** signing: `slot approve` loads the private key merely to derive
-the *public* key (`cmd/reseal.go:165`, `:257`) for blob signature verification
+the *public* key (`internal/admin/reseal.go:165`, `:257`) for blob signature verification
 and for the new blob's PolicyOR digest. That needs no PIN and no token — it must
 be served from a cached public key on disk.
 
@@ -91,7 +91,7 @@ file (§5), no new key-reference type is needed: the loader returns a different
 // cmd/policy_or.go — was LoadSigningPrivateKeyFromPEM
 func LoadSigningPrivateKey(path string) (crypto.Signer, error)
 //   PEM   → *rsa.PrivateKey / *ecdsa.PrivateKey, as before
-//   stub  → *yubiKeySigner (cmd/yubikey.go): Public() from the stub, token
+//   stub  → *yubiKeySigner (internal/signing/yubikey.go): Public() from the stub, token
 //           opened lazily on the first Sign(), errors wrap ErrTokenUnavailable
 ```
 
@@ -339,7 +339,7 @@ degradation path: `SKIPPED:`, and the NV index is left untouched.
 
 ### Sources, in priority order
 
-Implemented in `readPIN` (`cmd/yubikey.go`):
+Implemented in `readPIN` (`internal/signing/yubikey.go`):
 
 1. `TPM2_KIRA_PIN` environment variable — an explicit override.
 2. The `TPM2_KIRA_PIN` line in `/etc/tpm2-kira/control.conf` (§9.1), the
@@ -417,7 +417,7 @@ holds a different key than the key file names: that is a configuration error
 and stays a `FAILED:`. In code, every such reason is a `TokenUnavailableError`
 (`errors.Is(err, ErrTokenUnavailable)`).
 
-`slot approve` then (**implemented**, `cmd/reseal.go`):
+`slot approve` then (**implemented**, `internal/admin/reseal.go`):
 
 1. **Does not attempt an approval at all.** It cannot: the NV write policy needs a
    signature (§2). `PrepareSigningKey` runs right after the blob signature is
@@ -796,7 +796,7 @@ Two consequences, one of them a genuine operational trap:
 
 Ranked by how much I think they matter.
 
-1. ~~**Approve must be atomic, or must not start.**~~ **Done** — `cmd/nvram.go`.
+1. ~~**Approve must be atomic, or must not start.**~~ **Done** — `internal/nvslot/nvram.go`.
    `WriteToNVRAM` undefined the NV index *before* loading the key, computing the
    write policy and producing the first signature, so any of those failing
    destroyed the sealed secret. All three now run first, plus a test signature
@@ -889,16 +889,16 @@ Branch `feat/yubikey-v2`, 2026-09-30.
 |---|---|---|
 | pcscd client (pure Go): version handshake with 4:6 → 4:4 fallback, context, reader states, connect, transactions, transmit, reset on disconnect | `internal/pcsc` | golden byte vectors and struct sizes; a scripted fake daemon (4:6, 4:4, refused 4:3, silent daemon timeout); **live against pcscd 2.5.2** (`TestLiveDaemon`, handshake, reader list and a connect error round trip) |
 | PIV read-and-sign: SELECT, GET VERSION, GET SERIAL, GET METADATA, GET DATA (certificate), VERIFY, GENERAL AUTHENTICATE; command and response chaining; PKCS #1 v1.5 padding for RSA | `internal/piv` | against `internal/piv/pivtest`, a software YubiKey that answers APDUs |
-| Key file stub, `LoadSigningPrivateKey`, lazy token signer | `cmd/yubikey.go`, `cmd/signingkey.go` | `cmd/yubikey_test.go` |
-| PIN: `TPM2_KIRA_PIN` or a no-echo prompt on `/dev/tty`; one session per process; wrong PIN poisons the session; nothing tried with one attempt left; retries shown when below 3; PIN policy `always` re-verified transparently; card reset on exit | `cmd/yubikey.go`, `main.go` | wrong PIN over four "slots" costs one attempt; last attempt never sent; no PIN costs none; policy `always` keeps the counter at 3 |
-| Key check before the PIN: slot key compared with the stub; every token signature verified against the stub key | `cmd/yubikey.go` | regenerated slot key and wrong serial are reported by name |
-| `signForTPM`, `SignBlobPayload`, `verifyKeyPairMatch` on the public key | `cmd/signingkey.go`, `cmd/blob.go` | token-signed TPMT signatures and blob signatures verify; r/s padding over 20 runs |
-| Interactive `setup` (menu of usable slots plus local files; default `9a`, never a shared slot), `--yubikey[=SERIAL] [--slot]`, `--local`, no-terminal fallback; `yubikey list` | `cmd/setup.go`, `main.go` | menu, default, retries, EOF, single non-`9a` candidate, no terminal; binary run against the live pcscd |
-| PIN-policy warning (report, menu, after choosing); PIN instructions and the hint at `/etc/tpm2-kira/pin` | `cmd/setup.go`, `cmd/yubikey.go` | `TestPINGuidance` |
-| PIN taken from `/etc/tpm2-kira/pin`, root's alone (after the environment, before the prompt); warning after a manual seal/approve only when that file does not provide the PIN; `control` stores it after checking it on the token | `cmd/control_config.go`, `cmd/yubikey.go`, `cmd/control.go` | `TestPINFile`, `TestPINFromTheFile`, `TestControlConfigOneFile`, `TestControlYubiKeyPINStep` |
-| §7 degradation: `PrepareSigningKey` pre-flight, `ResealSkippedError`, `ErrNVIndexReplaced` guard, one `SKIPPED:` block for all slots, `--require-key` | `cmd/reseal.go`, `cmd/nvram.go`, `main.go` | classification (skip before the write, never after it), block content, pre-flight with no PIN / unplugged / present |
+| Key file stub, `LoadSigningPrivateKey`, lazy token signer | `internal/signing/yubikey.go`, `internal/signing/signingkey.go` | `internal/admin/yubikey_test.go` |
+| PIN: `TPM2_KIRA_PIN` or a no-echo prompt on `/dev/tty`; one session per process; wrong PIN poisons the session; nothing tried with one attempt left; retries shown when below 3; PIN policy `always` re-verified transparently; card reset on exit | `internal/signing/yubikey.go`, `main.go` | wrong PIN over four "slots" costs one attempt; last attempt never sent; no PIN costs none; policy `always` keeps the counter at 3 |
+| Key check before the PIN: slot key compared with the stub; every token signature verified against the stub key | `internal/signing/yubikey.go` | regenerated slot key and wrong serial are reported by name |
+| `signForTPM`, `SignBlobPayload`, `verifyKeyPairMatch` on the public key | `internal/signing/signingkey.go`, `internal/nvslot/blob.go` | token-signed TPMT signatures and blob signatures verify; r/s padding over 20 runs |
+| Interactive `setup` (menu of usable slots plus local files; default `9a`, never a shared slot), `--yubikey[=SERIAL] [--slot]`, `--local`, no-terminal fallback; `yubikey list` | `internal/admin/setup.go`, `main.go` | menu, default, retries, EOF, single non-`9a` candidate, no terminal; binary run against the live pcscd |
+| PIN-policy warning (report, menu, after choosing); PIN instructions and the hint at `/etc/tpm2-kira/pin` | `internal/admin/setup.go`, `internal/signing/yubikey.go` | `TestPINGuidance` |
+| PIN taken from `/etc/tpm2-kira/pin`, root's alone (after the environment, before the prompt); warning after a manual seal/approve only when that file does not provide the PIN; `control` stores it after checking it on the token | `internal/admin/control_config.go`, `internal/signing/yubikey.go`, `internal/admin/control.go` | `TestPINFile`, `TestPINFromTheFile`, `TestControlConfigOneFile`, `TestControlYubiKeyPINStep` |
+| §7 degradation: `PrepareSigningKey` pre-flight, `ResealSkippedError`, `ErrNVIndexReplaced` guard, one `SKIPPED:` block for all slots, `--require-key` | `internal/admin/reseal.go`, `internal/nvslot/nvram.go`, `main.go` | classification (skip before the write, never after it), block content, pre-flight with no PIN / unplugged / present |
 | mkinitcpio post hook `SKIPPED:` branch; example config line | `initramfs/mkinitcpio/` | hook run with a stand-in `tpm2-kira` |
-| `slot add` refuses a mismatched key pair; `slot add` and `slot info` name the token | `cmd/seal.go`, `cmd/info.go` | — |
+| `slot add` refuses a mismatched key pair; `slot add` and `slot info` name the token | `internal/admin/seal.go`, `internal/admin/info.go` | — |
 | Packaging: `Suggests: pcscd` (not `Recommends`: the token is opt-in) and `optdepends` `pcsclite` | `debian/control`, `packaging/aur/PKGBUILD` | — |
 
 **Not done yet**

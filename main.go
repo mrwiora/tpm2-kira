@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/admin"
 	"github.com/mrwiora/tpm2-kira/internal/bootrun"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
@@ -55,7 +55,7 @@ func requireRoot(command string, args []string) {
 		return
 	}
 	if command == "control" {
-		cmd.ControlNeedsRoot()
+		admin.ControlNeedsRoot()
 	} else {
 		fmt.Fprintf(os.Stderr, "tpm2-kira %s: root is needed - sudo tpm2-kira %s\n", command, strings.Join(os.Args[1:], " "))
 	}
@@ -107,18 +107,18 @@ func main() {
 		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
 		dbg := fs.Bool("debug", *debug, "Enable debug output")
 		fs.Parse(commandArgs)
-		if err := cmd.Control(cmd.ControlOptions{TPMPath: *tpm, Debug: *dbg}); err != nil {
+		if err := admin.Control(admin.ControlOptions{TPMPath: *tpm, Debug: *dbg}); err != nil {
 			fail(err)
 		}
 	case "status":
 		fs := flag.NewFlagSet("status", flag.ExitOnError)
 		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
 		privKey := fs.String("privkey", "", "Signing key the blobs are checked with (default: "+signing.DefaultPrivateKeyPath+")")
-		conf := fs.String("conf", cmd.DefaultControlConfigPath, "The configuration file")
+		conf := fs.String("conf", admin.DefaultControlConfigPath, "The configuration file")
 		jsonOut := fs.Bool("json", false, "Machine-readable output")
 		dbg := fs.Bool("debug", *debug, "Enable debug output")
 		fs.Parse(commandArgs)
-		if err := cmd.Status(cmd.StatusOptions{TPMPath: *tpm, PrivKeyPath: *privKey, ConfigPath: *conf, JSON: *jsonOut, Debug: *dbg}); err != nil {
+		if err := admin.Status(admin.StatusOptions{TPMPath: *tpm, PrivKeyPath: *privKey, ConfigPath: *conf, JSON: *jsonOut, Debug: *dbg}); err != nil {
 			fail(err)
 		}
 	case "reveal":
@@ -289,8 +289,8 @@ func runSetup(args []string, debugFlag bool) {
 		fail(fmt.Errorf("--local and --yubikey exclude each other"))
 	}
 
-	opts := cmd.SetupOptions{UseYubiKey: yk.set, Serial: yk.serial, Slot: *slot, Local: *local, Debug: *debug}
-	if err := cmd.Setup(opts); err != nil {
+	opts := admin.SetupOptions{UseYubiKey: yk.set, Serial: yk.serial, Slot: *slot, Local: *local, Debug: *debug}
+	if err := admin.Setup(opts); err != nil {
 		fail(err)
 	}
 }
@@ -310,7 +310,7 @@ func runYubiKey(args []string) {
 	}
 	switch args[0] {
 	case "list":
-		if err := cmd.YubiKeyList(); err != nil {
+		if err := admin.YubiKeyList(); err != nil {
 			fail(err)
 		}
 	default:
@@ -370,20 +370,20 @@ func runSlotAdd(args []string, tpmPath string, debugFlag bool) {
 	// With either, one slot: the one named (else 0), the PCRs named (else
 	// the selection).
 	if !nvramExplicit(args) && !pcrsGiven(args) {
-		if err := cmd.SealDefaults(*tpm, *pubKeyPath, *privKeyPath, hashAlgo, *debug); err != nil {
+		if err := admin.SealDefaults(*tpm, *pubKeyPath, *privKeyPath, hashAlgo, *debug); err != nil {
 			fail(err)
 		}
 		return
 	}
 	if *pcrs == "" {
-		sel, why := cmd.DefaultPCRSelection("", hashAlgo)
+		sel, why := admin.DefaultPCRSelection("", hashAlgo)
 		fmt.Printf("PCRs: %s (%s)\n\n", sel, why)
 		*pcrs = sel
 	}
 	if _, err := measure.ParsePCRSpecs(*pcrs); err != nil {
 		fail(err)
 	}
-	if err := cmd.Seal(*tpm, *pcrs, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
+	if err := admin.Seal(*tpm, *pcrs, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
 		fail(err)
 	}
 }
@@ -427,11 +427,11 @@ func runSlotApprove(args []string, tpmPath string, debugFlag bool) {
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	if err := cmd.ResealCommand(*tpm, scanIndex, *pcrs, *pubKeyPath, *privKeyPath, *debug); err != nil {
+	if err := admin.ResealCommand(*tpm, scanIndex, *pcrs, *pubKeyPath, *privKeyPath, *debug); err != nil {
 		// A skip has already been reported with its SKIPPED block; it is
 		// the expected outcome with the token unplugged, not a failure,
 		// unless the caller asked for the key to be required.
-		if errors.Is(err, cmd.ErrResealSkipped) && !*requireKey {
+		if errors.Is(err, admin.ErrResealSkipped) && !*requireKey {
 			return
 		}
 		fail(err)
@@ -452,7 +452,7 @@ func runSlotInfo(args []string, tpmPath string, debugFlag bool) {
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	if err := cmd.InfoCommand(*tpm, scanIndex, *privKeyPath, *debug, *jsonOutput); err != nil {
+	if err := admin.InfoCommand(*tpm, scanIndex, *privKeyPath, *debug, *jsonOutput); err != nil {
 		fail(err)
 	}
 }
@@ -495,7 +495,7 @@ func runRun(args []string, tpmPath string, debugFlag bool) {
 	hold := fs.Uint("hold", uint(bootrun.HoldDefault/time.Second), "Seconds to wait for Enter after showing the code before the boot continues on its own (0: at once)")
 	unlock := fs.String("unlock", "", "Also answer systemd-cryptsetup's key requests on this socket (crypttab(5) AF_UNIX key files): the passphrase is asked at tpm2-kira's prompt once the code screen is confirmed. Under systemd the socket unit hands its socket over instead; Debian's boot script passes this")
 	ssh := fs.Bool("ssh", false, "Also be the SSH server: the codes are shown and confirmed in an SSH session, the console says where to log in (set by the image's drop-in from TPM2_KIRA_SSH)")
-	sshConf := fs.String("ssh-conf", cmd.DefaultSSHConf, "With --ssh: aSSH's settings - the SSH CA, which certifies a host key made in the TPM for this boot (a temporary key, made in the TPM but not certified, is served when it does not), the address, the keys that may log in")
+	sshConf := fs.String("ssh-conf", admin.DefaultSSHConf, "With --ssh: aSSH's settings - the SSH CA, which certifies a host key made in the TPM for this boot (a temporary key, made in the TPM but not certified, is served when it does not), the address, the keys that may log in")
 	sshHold := fs.Uint("ssh-hold", 0, "With --ssh: seconds to wait for a confirmation, in place of --hold (0: until one comes)")
 	plan := fs.String("plan", "", "Start only the parts the boot image names in this directory (the codes, the phone's gate, the vault); without it, all it finds (set by the initrd unit: "+imageplan.Dir+")")
 
@@ -537,17 +537,17 @@ func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
 	switch subcommand {
 	case "list":
 		listIndex := nvslot.ResolveNVRAMIndex(uint32(*nvram))
-		if err := cmd.NVRAMList(*tpm, listIndex, *debug); err != nil {
+		if err := admin.NVRAMList(*tpm, listIndex, *debug); err != nil {
 			fail(err)
 		}
 	case "status":
 		statusIndex := nvslot.ResolveNVRAMIndex(uint32(*nvram))
-		if err := cmd.NVRAMStatus(*tpm, statusIndex, *debug); err != nil {
+		if err := admin.NVRAMStatus(*tpm, statusIndex, *debug); err != nil {
 			fail(err)
 		}
 	case "delete":
 		deleteIndex := resolveOrScanAll(uint32(*nvram), provided)
-		if err := cmd.NVRAMDeleteCommand(*tpm, deleteIndex, *yes, *debug); err != nil {
+		if err := admin.NVRAMDeleteCommand(*tpm, deleteIndex, *yes, *debug); err != nil {
 			fail(err)
 		}
 	case "restore":
@@ -555,7 +555,7 @@ func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
 			fail(fmt.Errorf("slot restore takes the stashed blob's file: tpm2-kira slot restore %s/slot-0x<index>-<time>.blob", nvslot.NVRAMRecoveryDir))
 		}
 		restoreIndex := resolveOrScanAll(uint32(*nvram), provided)
-		if err := cmd.NVRAMRestore(*tpm, fs.Arg(0), restoreIndex, *pubKey, *privKey, *debug); err != nil {
+		if err := admin.NVRAMRestore(*tpm, fs.Arg(0), restoreIndex, *pubKey, *privKey, *debug); err != nil {
 			fail(err)
 		}
 	default:
@@ -599,14 +599,14 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		fs := flag.NewFlagSet("luks derive", flag.ExitOnError)
 		out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
 		fs.Parse(args[1:])
-		if err := cmd.DeriveCommand(*out); err != nil {
+		if err := admin.DeriveCommand(*out); err != nil {
 			fail(err)
 		}
 	case "status":
 		fs := flag.NewFlagSet("luks status", flag.ExitOnError)
 		jsonOut := fs.Bool("json", false, "Machine-readable output")
 		fs.Parse(args[1:])
-		if err := cmd.LuksStatus(fs.Args(), *jsonOut); err != nil {
+		if err := admin.LuksStatus(fs.Args(), *jsonOut); err != nil {
 			fail(err)
 		}
 	case "mark":
@@ -621,7 +621,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		if fs.NArg() != 1 || *keyslot < 0 || *mode == "" {
 			fail(fmt.Errorf("usage: tpm2-kira luks mark <device> --keyslot N --mode password+salt|password+phonesalt|tpm+vault"))
 		}
-		if err := cmd.LuksMark(cmd.LuksMarkOptions{TPMPath: *tpm, Device: fs.Arg(0), Keyslot: *keyslot, Mode: *mode,
+		if err := admin.LuksMark(admin.LuksMarkOptions{TPMPath: *tpm, Device: fs.Arg(0), Keyslot: *keyslot, Mode: *mode,
 			SealIndex: nvslot.ResolveNVRAMIndex(uint32(*nvram)), Label: *label, Debug: *debug}); err != nil {
 			fail(err)
 		}
@@ -651,11 +651,11 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		if nvramExplicit(args[1:]) {
 			slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
 		}
-		if err := cmd.LuksEnrol(cmd.LuksEnrolOptions{
+		if err := admin.LuksEnrol(admin.LuksEnrolOptions{
 			Device: fs.Arg(0), Mode: *mode, ExistingKeyFile: *existing,
-			Remote: cmd.FactorEnrolOptions{TPMPath: *tpm, SealIndex: slot, Label: *label, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
+			Remote: admin.FactorEnrolOptions{TPMPath: *tpm, SealIndex: slot, Label: *label, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
 				Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: true, Debug: *debug},
-			Vault: cmd.VaultEnrolOptions{TPMPath: *tpm, SealIndex: nvslot.ResolveNVRAMIndex(uint32(*nvram)), URL: *vaultURL, Pin: *vaultPin,
+			Vault: admin.VaultEnrolOptions{TPMPath: *tpm, SealIndex: nvslot.ResolveNVRAMIndex(uint32(*nvram)), URL: *vaultURL, Pin: *vaultPin,
 				Token: *vaultToken, Label: *label, Name: *name, Pepper: *pepper, PrivKeyPath: *privKey, Debug: *debug},
 		}); err != nil {
 			fail(err)
@@ -667,7 +667,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		crypttab := fs.String("crypttab", "", "The crypttab to judge (default /etc/crypttab)")
 		jsonOut := fs.Bool("json", false, "Machine-readable output")
 		fs.Parse(args[1:])
-		if err := cmd.LuksRoute(fs.Args(), cmdlines, *crypttab, *jsonOut); err != nil {
+		if err := admin.LuksRoute(fs.Args(), cmdlines, *crypttab, *jsonOut); err != nil {
 			fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
 			os.Exit(1) // the hook reads it
 		}
@@ -679,7 +679,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		if fs.NArg() != 1 || *keyslot < 0 {
 			fail(fmt.Errorf("usage: tpm2-kira luks remove <device> --keyslot N"))
 		}
-		if err := cmd.LuksRemove(cmd.LuksRemoveOptions{Device: fs.Arg(0), Keyslot: *keyslot, ExistingKeyFile: *existing}); err != nil {
+		if err := admin.LuksRemove(admin.LuksRemoveOptions{Device: fs.Arg(0), Keyslot: *keyslot, ExistingKeyFile: *existing}); err != nil {
 			fail(err)
 		}
 	default:
@@ -708,19 +708,19 @@ func runVault(args []string, tpmPath string, debugFlag bool) {
 		yes := fs.Bool("yes", false, "The recovery passphrase is in a second keyslot already; do not ask")
 		pepper := fs.Bool("pepper", false, "The key needs an operator's pepper too, asked here; every boot waits for an approval with it")
 		fs.Parse(args[1:])
-		if err := cmd.VaultEnrol(cmd.VaultEnrolOptions{TPMPath: *tpm, SealIndex: nvslot.ResolveNVRAMIndex(uint32(*nvram)),
+		if err := admin.VaultEnrol(admin.VaultEnrolOptions{TPMPath: *tpm, SealIndex: nvslot.ResolveNVRAMIndex(uint32(*nvram)),
 			URL: *vaultURL, Pin: *pin, Token: *token, Label: *label, Name: *name, Pepper: *pepper, PrivKeyPath: *privKey,
 			Out: *out, Yes: *yes, Debug: *debug}); err != nil {
 			fail(err)
 		}
 	case "status":
 		fs.Parse(args[1:])
-		if err := cmd.VaultStatus(*tpm, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *debug); err != nil {
+		if err := admin.VaultStatus(*tpm, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *debug); err != nil {
 			fail(err)
 		}
 	case "unenrol", "unenroll":
 		fs.Parse(args[1:])
-		if err := cmd.VaultUnenrol(*tpm, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *privKey, *debug); err != nil {
+		if err := admin.VaultUnenrol(*tpm, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *privKey, *debug); err != nil {
 			fail(err)
 		}
 	case "help", "-h", "--help":
@@ -778,7 +778,7 @@ func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 		if nvramExplicit(args[1:]) {
 			slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
 		}
-		if err := cmd.FactorStatus(*tpm, slot, *jsonOut, *debug); err != nil {
+		if err := admin.FactorStatus(*tpm, slot, *jsonOut, *debug); err != nil {
 			fail(err)
 		}
 		return
@@ -789,7 +789,7 @@ func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 		privKey := fs.String("privkey", "", "Signing key (default: "+signing.DefaultPrivateKeyPath+")")
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		fs.Parse(args[1:])
-		if err := cmd.FactorUnenrol(*tpm, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *privKey, *debug); err != nil {
+		if err := admin.FactorUnenrol(*tpm, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *privKey, *debug); err != nil {
 			fail(err)
 		}
 		return
@@ -817,7 +817,7 @@ func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 	if nvramExplicit(args[1:]) {
 		slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
 	}
-	if err := cmd.FactorEnrol(cmd.FactorEnrolOptions{
+	if err := admin.FactorEnrol(admin.FactorEnrolOptions{
 		TPMPath: *tpm, SealIndex: slot, Label: *label, Out: *out, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
 		Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: *yes, Debug: *debug,
 		Rotate: args[0] == "rotate",
@@ -894,7 +894,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		if err != nil {
 			failAttest(phonegate.ExitUsage, err)
 		}
-		err = cmd.AttestEnrol(cmd.EnrolOptions{
+		err = admin.AttestEnrol(admin.EnrolOptions{
 			TPMPath: *tpm, SealIndex: uint32(*nvram), Name: *name, PCRs: *pcrs, SHA1: *sha1,
 			Adapter: *adapter, PrivKeyPath: *privKey, Timeout: *timeout, Debug: *debug,
 			VerifyTPM: vt, VerifyPhone: vp,
@@ -909,14 +909,14 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		// the boot settings in the TPM say debug (bootsettings.go).
 		adapter := fs.Int("adapter", -1, "Bluetooth adapter index (hciN); default: the first that comes up")
 		timeout := fs.Duration("timeout", 0, "Give up after this long (0 = as long as the code screen holds, or forever without one)")
-		adapterWait := fs.Duration("adapter-wait", cmd.GateAdapterWait, "Wait this long for the adapter to appear")
+		adapterWait := fs.Duration("adapter-wait", admin.GateAdapterWait, "Wait this long for the adapter to appear")
 		coordinator := fs.String("coordinator", "", "Socket of the coordinator ('tpm2-kira run --gate') that holds the TPM; without it this process uses the TPM itself")
 		fs.Parse(args)
 		var slot uint32
 		if nvramExplicit(args) {
 			slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
 		}
-		os.Exit(cmd.AttestGate(cmd.GateOptions{
+		os.Exit(admin.AttestGate(admin.GateOptions{
 			TPMPath: *tpm, SealIndex: slot, Adapter: *adapter, Timeout: *timeout,
 			AdapterWait: *adapterWait, Debug: *debug || nvslot.BootDebug(*tpm),
 			Coordinator: *coordinator,
@@ -928,7 +928,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		if nvramExplicit(args) {
 			slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
 		}
-		if err := cmd.AttestStatus(*tpm, slot, *jsonOut, *debug); err != nil {
+		if err := admin.AttestStatus(*tpm, slot, *jsonOut, *debug); err != nil {
 			fail(err)
 		}
 	case "quote":
@@ -936,7 +936,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		pcrs := fs.String("pcrs", "", "PCRs to quote (default: the enrolled selection)")
 		out := fs.String("out", "", "Write evidence to this file (default: stdout)")
 		fs.Parse(args)
-		if err := cmd.AttestQuote(*tpm, uint32(*nvram), *nonce, *pcrs, *out, *debug); err != nil {
+		if err := admin.AttestQuote(*tpm, uint32(*nvram), *nonce, *pcrs, *out, *debug); err != nil {
 			failAttest(phonegate.ExitInternal, err)
 		}
 	case "verify":
@@ -945,7 +945,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		nonce := fs.String("nonce", "", "The nonce given to 'phone quote'")
 		jsonOut := fs.Bool("json", false, "Output the verdict as JSON")
 		fs.Parse(args)
-		ok, err := cmd.AttestVerify(*evidence, *record, *nonce, *jsonOut)
+		ok, err := admin.AttestVerify(*evidence, *record, *nonce, *jsonOut)
 		if err != nil {
 			failAttest(phonegate.ExitInternal, err)
 		}
@@ -960,7 +960,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 	case "unenrol", "unenroll":
 		privKey := fs.String("privkey", "", "Signing key: removing a phone rewrites and signs the slot's blob (default: "+signing.DefaultPrivateKeyPath+")")
 		fs.Parse(args)
-		if err := cmd.AttestUnenrol(*tpm, uint32(*nvram), *privKey, *debug); err != nil {
+		if err := admin.AttestUnenrol(*tpm, uint32(*nvram), *privKey, *debug); err != nil {
 			fail(err)
 		}
 	default:
@@ -1020,16 +1020,16 @@ func runInitramfs(args []string, tpmPath string, debugFlag bool) {
 	}
 	fs := flag.NewFlagSet("initramfs plan", flag.ExitOnError)
 	buildroot := fs.String("buildroot", "", "The image under construction (mkinitcpio's BUILDROOT, initramfs-tools' DESTDIR): its files are written there and the hook's lines printed; without it the plan alone is shown")
-	format := fs.String("format", cmd.FormatMkinitcpio, "The image's kind: mkinitcpio or initramfs-tools")
-	conf := fs.String("conf", cmd.DefaultControlConfigPath, "The configuration file")
+	format := fs.String("format", admin.FormatMkinitcpio, "The image's kind: mkinitcpio or initramfs-tools")
+	conf := fs.String("conf", admin.DefaultControlConfigPath, "The configuration file")
 	tpm := fs.String("tpm", tpmPath, "The TPM whose slots decide the plan, and whose SSH CA the image carries")
 	kernelLog := fs.String("kernel-log", "", "Extra kernel log text naming the Bluetooth adapter's firmware (the journal is read in any case)")
-	fwDir := fs.String("firmware-dir", cmd.DefaultFirmwareDir, "Firmware directory")
+	fwDir := fs.String("firmware-dir", admin.DefaultFirmwareDir, "Firmware directory")
 	noBusybox := fs.Bool("no-busybox", false, "initramfs-tools: the image has no busybox, so no network")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	fs.Parse(args[1:])
-	o := cmd.PlanOptions{TPMPath: *tpm, ConfigPath: *conf, KernelLog: *kernelLog, FwDir: *fwDir, NoBusybox: *noBusybox, Debug: *debug}
-	if err := cmd.InitramfsPlanCommand(o, *buildroot, *format, os.Stdout); err != nil {
+	o := admin.PlanOptions{TPMPath: *tpm, ConfigPath: *conf, KernelLog: *kernelLog, FwDir: *fwDir, NoBusybox: *noBusybox, Debug: *debug}
+	if err := admin.InitramfsPlanCommand(o, *buildroot, *format, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
 		os.Exit(phonegate.ExitUsage)
 	}

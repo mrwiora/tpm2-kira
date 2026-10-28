@@ -6,10 +6,10 @@
 > `Factor`.
 >
 > **Status:** in implementation on `feat/hashpwd` (2026-10-07). Done: the
-> combiner inside tpm2-kira (`cmd/combine.go`, the password+salt
+> combiner inside tpm2-kira (`internal/diskkey/combine.go`, the password+salt
 > derivation), the release key under the slot's approval
 > (`attest/releasekey.go`), wrap, unwrap and the salt derivation
-> (`cmd/factor.go`), the phone's part (Evidence tags 15-17, the kept
+> (`internal/phonegate/factor.go`), the phone's part (Evidence tags 15-17, the kept
 > factor in the record, Release after the accepted receipt; both apps),
 > the coordinator opening the release before the separator, the provider
 > answering with the derived key (`diskKey`), `phone salt enrol`, `rotate`,
@@ -76,7 +76,7 @@ one.
 
 ### 1.2 One program
 
-The combiner is inside tpm2-kira (`cmd/combine.go`): the password+salt
+The combiner is inside tpm2-kira (`internal/diskkey/combine.go`): the password+salt
 derivation - Argon2id (1 GiB, 16 passes, 4 lanes, 64 bytes), base64
 without padding, the trailing newline that is part of the key (the
 compatibility it keeps: SECURITY-BACKGROUND.md §5.9). The decision of 2026-10-07: the password, the salt and the derived
@@ -179,7 +179,7 @@ approval from the phone would open the factor in a boot state the
 machine's own signing key never saw, which is the one thing the design
 must not allow (§8.4).
 
-Verified on swtpm (`cmd/factor_swtpm_test.go`): the credential opens to
+Verified on swtpm (`internal/admin/factor_swtpm_test.go`): the credential opens to
 the same F in the approved state; not on another TPM; not with the slot's
 policy alone (the command code is required); not after a PCR of the
 selection moved.

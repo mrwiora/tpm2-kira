@@ -1,3 +1,5 @@
+// Package totp is who checks the boot by its code: the TOTP key sealed to a
+// slot, its code, and the code screen's lines.
 package totp
 
 import (

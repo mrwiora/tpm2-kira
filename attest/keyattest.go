@@ -13,7 +13,7 @@ package attest
 // lives on a phone that booted a locked, verified system.
 //
 // The result is shown to the person enrolling, who decides (policy in
-// cmd/attest.go). Many legitimate phones fail one check: custom ROMs boot
+// internal/admin/attest.go). Many legitimate phones fail one check: custom ROMs boot
 // "self-signed", some ROMs cannot attest at all.
 
 import (

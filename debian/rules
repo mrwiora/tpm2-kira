@@ -22,7 +22,7 @@ override_dh_auto_build:
 	go version -m tpm2-kira | grep -q 'CGO_ENABLED=0' || { echo "tpm2-kira was built with cgo" >&2; exit 1; }
 
 override_dh_auto_test:
-	go test -tags=unit ./cmd/...
+	go test -tags=unit ./internal/... ./attest/... ./transport/... ./mobile/...
 
 override_dh_auto_install:
 

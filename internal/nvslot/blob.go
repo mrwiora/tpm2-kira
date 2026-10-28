@@ -1,3 +1,7 @@
+// Package nvslot is the slot: the blob in its NV index and its attestation
+// part, the generation index and the approved policy (PolicyAuthorize over
+// the PCRs and the generation), the cap, signed NV writes, the recovery
+// stash and the boot settings.
 package nvslot
 
 import (

@@ -1,3 +1,5 @@
+// Package tpmdev opens the TPM and does what needs no slot: the storage
+// primary, flushing, reading and undefining NV indices.
 package tpmdev
 
 import (

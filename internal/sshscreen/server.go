@@ -1,3 +1,6 @@
+// Package sshscreen is the code screen over SSH: aSSH's server inside run,
+// its sessions and the console's hint, the agent for sshd's host key, and
+// the per-boot host key certified by the SSH CA.
 package sshscreen
 
 // The SSH server of the code screen (docs/SSH.md). With TPM2_KIRA_SSH

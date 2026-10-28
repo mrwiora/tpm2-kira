@@ -1,3 +1,4 @@
+// Package screen is the [ KIRA ] tag of the boot's lines.
 package screen
 
 // Tag is the "[ KIRA ]" tag in a colour: yellow for the screen and its

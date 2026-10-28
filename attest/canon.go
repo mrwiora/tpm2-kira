@@ -32,7 +32,7 @@ const NonceSize = 32
 // DeviceIDSize is the size of a device identifier.
 const DeviceIDSize = 16
 
-// lp is u32le(len(x)) ‖ x, as in cmd/blob.go.
+// lp is u32le(len(x)) ‖ x, as in internal/nvslot/blob.go.
 func lp(x []byte) []byte {
 	out := make([]byte, 4+len(x))
 	binary.LittleEndian.PutUint32(out, uint32(len(x)))

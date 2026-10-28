@@ -211,7 +211,7 @@ the anchors and the quotes it issued. The *radio worker* (`tpm2-kira phone
 gate --coordinator SOCKET`, the confined unit) advertises and runs the
 session; it has no TPM and asks the coordinator over the socket: identity,
 quote, boot context, event log, receipt, progress report - length-prefixed
-JSON, one request at a time (`cmd/gate_ipc.go`). Before the separator the
+JSON, one request at a time (`internal/phonegate/gate_ipc.go`). Before the separator the
 TPM computes TOTP codes for any process that can reach it, so the process
 that parses radio input must not be able to.
 
@@ -292,7 +292,7 @@ Frame := u16 total_len ‖ u8 flags ‖ u16 seq ‖ payload
 
 Rules, each with a failure it prevents:
 
-- A maximum message size is enforced on both ends (mirroring `cmd/blob.go`'s
+- A maximum message size is enforced on both ends (mirroring `internal/nvslot/blob.go`'s
   explicit limits) — a peer cannot make the initrd allocate unbounded memory.
 - Reassembly buffers are pre-sized from `total_len`, and a message exceeding
   the limit is rejected before any allocation.
@@ -469,7 +469,7 @@ passphrase. Three states:
 
 Producing the middle row's sentence is real work: it means classifying PCR
 diffs against what each register measures, which is knowledge the repo already
-holds in `cmd/pcrtips.go` and README's Debian PCR table. That table should move
+holds in `internal/measure/pcrtips.go` and README's Debian PCR table. That table should move
 into the shared core so the app and the CLI explain a diff identically.
 
 ### 6.4 Platform specifics to plan for

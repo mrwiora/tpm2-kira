@@ -5,7 +5,7 @@ Where things are in the repository, and how the tests are run.
 ## Project Structure
 
 ```
-├── main.go                  # CLI entrypoint and command routing
+├── main.go, help.go         # The command line: routing and the help pages
 ├── attest/                  # Phone attestation core: protocol, Noise, Verify(); no device access
 │   └── attesttest/          # Software TPM, in-memory pipe and simulated phone for tests
 ├── vaultproto/              # The contract with tpm2-kira-vault: REST messages, the release check
@@ -16,49 +16,30 @@ Where things are in the repository, and how the tests are run.
 ├── mobile/
 │   ├── kiracore/            # gomobile binding: the phone's verifier core
 │   └── kiratest/            # gomobile binding: a simulated machine for app tests
-├── cmd/                     # Command implementations
-│   ├── control.go           # The guided way: analysis, the screens, the shared steps
-│   │                        #   (forms by huh v2, charm.land, the one TUI dependency)
-│   ├── control_bootchain.go # control's step 1: the prerequisites, the hook, the route
-│   ├── control_hub.go       # control's step 2: the submenus, each option gated by what the machine has
-│   ├── control_vault.go     # control's tpm+vault option, the vault asked before and after
-│   ├── control_remote.go    # control's network and SSH at boot
-│   ├── status.go            # The overview: slots, phone, keyslots and their modes, notes
-│   ├── luks.go, route.go    # LUKS keyslots and tokens; where the initrd takes the key from
-│   ├── remote_config.go     # The boot image's network and SSH settings; the networkd file, the suggestion
-│   ├── bootplan.go          # The boot plan: what the image carries, its files, 'initramfs plan'
-│   ├── remote_initramfs.go  # The image's files for the network and SSH (written by the plan)
-│   ├── remote_dhcpid.go     # The image's DHCP identity, the running system's client identifier
-│   ├── remote_assh.go       # assh.conf: aSSH's settings for the SSH server at boot, written by control
-│   ├── remote_hostkey.go    # The SSH CA in the TPM (its EFI variable, two slots), the boot's host key
-│   ├── remote_ssh.go        # The SSH server of the code screen: sessions, prompts, the console hint;
-│   │                        # the server and 'ssh-child' are aSSH's (assh/server)
-│   ├── remote_agent.go      # cryptsetup's own prompt in the session (ask-password, askpass' FIFO)
-│   ├── vault.go             # tpm+vault: enrolment with the vault, the boot's release, the key
-│   ├── default_pcrs.go      # What 'slot add' seals to by default, and the fallback slot
-│   ├── seal.go              # Create the TOTP key in the TPM and approve PCR values
-│   ├── reseal.go             # slot approve: new PCR values, revoke older approvals
-│   ├── setup.go             # First-time setup (keygen)
-│   ├── info.go              # Inspect sealed blob metadata
-│   ├── scan.go              # Multi-slot NVRAM scanning
-│   ├── blob.go              # Sealed blob serialization format
-│   ├── totpkey.go           # TOTP key object, PolicyAuthorize, generation, cap
-│   ├── signingkey.go        # Signing key loading, PolicySigned for NV writes
-│   ├── keyfile.go           # Key file checks (owner, mode, symlinks)
-│   ├── untrusted.go         # Printing strings from unverified blobs
-│   ├── eventlog_utils.go    # TPM eventlog parsing
-│   ├── measurepoint.go      # Userspace extends before tpm2-kira reads PCRs
-│   ├── ukipredict.go        # Native PCR 11 computation from a UKI
-│   ├── pcr.go               # PCR spec parsing, reading and comparison
-│   ├── pcrwarn.go           # Warnings for PCR selections that attest little
-│   ├── attest.go            # phone enrol/gate/status/quote/verify/unenrol, phone salt
-│   ├── attest_blob.go       # A slot's phone enrolment (AK, pinned phones), a section of its blob
-│   ├── attest_tpm.go        # AK/EK, TPM2_Quote, ActivateCredential
-│   ├── nvram.go             # NVRAM read/write/scan operations
-│   ├── totp_utils.go        # Code truncation, QR code and display
-│   ├── tpm_utils.go         # Low-level TPM operations
-│   ├── pcrtips.go           # PCR reference information
-│   └── constants.go         # Default paths and constants
+├── internal/                # The packages, by layer; each knows only those below it
+│   ├── tpmdev/              # Opening the TPM, the storage primary, flushing, NV reads
+│   ├── measure/             # PCR specs and banks, the event log, the measure point,
+│   │                        #   the UKI and GRUB predictions, PCR descriptions and warnings
+│   ├── signing/             # The signing key: files, YubiKey, the PIN file
+│   ├── nvslot/              # The slot: blob format, NV layout, generation, approved policy,
+│   │                        #   cap, signed NV writes, the boot settings
+│   ├── totp/                # Who checks the boot by its code: the TOTP key, the code screen's lines
+│   ├── phonegate/           # The phone at boot: the coordinator, quotes, boot key, EK,
+│   │                        #   the record check, the factor of the phone salt
+│   ├── diskkey/             # The disk's key: the LUKS2 token and its recipe, the combiner,
+│   │                        #   the unlock socket, the passphrase prompt, the Debian keyscript
+│   ├── vaultkey/            # The disk's key from a vault at boot
+│   ├── sshscreen/           # The code screen over SSH: aSSH's server, sessions, the agent,
+│   │                        #   the per-boot host key; ssh-child, the unprivileged half
+│   ├── imageplan/           # What a boot image carries (its parts) and what run starts
+│   ├── bootrun/             # 'run': the code screen's hold and what it starts
+│   ├── journal/, screen/    # The boot's narration; the [ KIRA ] tag
+│   ├── untrusted/, wipe/    # Quoting unverified strings; overwriting secrets
+│   ├── piv/, pcsc/          # The YubiKey's PIV applet over PC/SC
+│   └── admin/               # Everything on the installed system: control (the guided
+│                            #   way), setup, slot add/approve/delete, status, info, phone
+│                            #   and phone salt enrolment, luks, vault enrolment, the boot
+│                            #   plan and the image build ('initramfs plan')
 ├── tools/
 │   ├── acceptance.py         # The acceptance run on a machine: package, install, checks, reboot, report
 │   ├── pcrtool.py            # PCR replay and full-chain diagnosis

@@ -431,19 +431,19 @@ tpm2-kira run --ssh [--ssh-hold S] [--ssh-conf PATH]
 
 | File | What |
 |---|---|
-| `cmd/remote_config.go` | the settings, their check, the networkd file, the proposal from networkd and ifupdown |
-| `cmd/remote_assh.go` | assh.conf: tpm2-kira's defaults, the keys it refuses |
-| `cmd/remote_dhcpid.go` | the image's DHCP identity: the running system's, read from its DHCP client |
-| `cmd/control_remote.go` | control's step |
-| `cmd/bootplan.go` | the boot plan: whether the network and the SSH server go in, and their files for both formats |
-| `cmd/remote_initramfs.go` | the files' contents: `remote.conf`, the drop-in, the image's assh.conf, the login keys, udhcpc's script |
-| `cmd/remote_hostkey.go` | the SSH CA in its EFI variable: its two slots and window, approved at the measure point; this boot's host key, certified or temporary; the window closed |
-| `cmd/reseal.go` | `slot approve` approves the SSH CA after the slots |
-| `cmd/remote_ssh.go` | the server in `run`: sessions, the code screen, prompts, the console hint, release and stop |
+| `internal/admin/remote_config.go` | the settings, their check, the networkd file, the proposal from networkd and ifupdown |
+| `internal/admin/remote_assh.go` | assh.conf: tpm2-kira's defaults, the keys it refuses |
+| `internal/admin/remote_dhcpid.go` | the image's DHCP identity: the running system's, read from its DHCP client |
+| `internal/admin/control_remote.go` | control's step |
+| `internal/admin/bootplan.go` | the boot plan: whether the network and the SSH server go in, and their files for both formats |
+| `internal/admin/remote_initramfs.go` | the files' contents: `remote.conf`, the drop-in, the image's assh.conf, the login keys, udhcpc's script |
+| `internal/admin/remote_hostkey.go` | the SSH CA in its EFI variable: its two slots and window, approved at the measure point; this boot's host key, certified or temporary; the window closed |
+| `internal/admin/reseal.go` | `slot approve` approves the SSH CA after the slots |
+| `internal/sshscreen/server.go` | the server in `run`: sessions, the code screen, prompts, the console hint, release and stop |
 | `assh/server` | `ssh-child`: the SSH protocol, the sandbox; `run`'s side of it: starting it without privileges, signing, taking sessions |
 | `assh/hostkey` | the CA in the TPM, its slots and approvals, the per-boot host key and its certificate, the temporary key |
 | `assh/config` | assh.conf: its keys, writing it, making a CA's slots the file's |
-| `cmd/remote_agent.go` | cryptsetup's own prompt in the session (§6) |
+| `internal/sshscreen/agent.go` | cryptsetup's own prompt in the session (§6) |
 | `initramfs/mkinitcpio/install/sd-tpm2-kira` | the Arch hook's part |
 | `initramfs/initramfs-tools/hooks/tpm2-kira`, `scripts/init-premount/tpm2-kira`, `scripts/init-bottom/tpm2-kira` | the Debian hook and scripts |
 
@@ -456,8 +456,8 @@ tpm2-kira run --ssh [--ssh-hold S] [--ssh-conf PATH]
   `TestWriteImageInitramfsTools`), the server: a session confirms and answers,
   leaves the prompt, what is refused, Enter at the console stops it, a
   release elsewhere, the temporary key's console hint (with a key in software: no TPM in the unit tests), the console hint, `ssh-child`
-  alone (`cmd/remote_ssh_test.go`); cryptsetup's question through
-  ask-password and through askpass' FIFO (`cmd/remote_agent_test.go`); the
+  alone (`internal/sshscreen/server_test.go`); cryptsetup's question through
+  ask-password and through askpass' FIFO (`internal/sshscreen/agent_test.go`); the
   hooks add network and SSH on Arch and Debian (`hook_test.go`).
 - **swtpm** (`-tags integration`): the CA approved in both slots at the
   code screen, certifying there through slot 0, nothing more once the

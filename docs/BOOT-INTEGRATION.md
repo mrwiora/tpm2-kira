@@ -91,7 +91,7 @@ update that changes the module set. Such a boot shows no code - expected,
 not a compromise - and `sudo tpm2-kira slot approve` after it binds to the
 state you booted, as the approval always did. The prediction is checked
 against this machine's real log in the test suite
-(`cmd/grub_predict_test.go`, Debian 13, GRUB 2.12).
+(`internal/measure/grub_predict_test.go`, Debian 13, GRUB 2.12).
 
 Approving is still never automatic at *boot*: a tampered kernel does not
 become a trusted baseline by being booted once. The hooks run on the

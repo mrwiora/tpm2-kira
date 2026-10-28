@@ -142,7 +142,7 @@ made before the phone existed can say it, so the order is fixed:
    that the slot's TOTP key is retired.
 
 `phone enrol` enforces what the machine can know of this (`requireVerifiedBoot`
-in `cmd/attest.go`): the boot passed the code screen (`cap` read-locked
+in `internal/admin/attest.go`): the boot passed the code screen (`cap` read-locked
 the generation indices, which happens only there), and, for a slot with a
 TOTP key, the slot's PCRs at the code screen - recomputed from this boot's
 event log, before the OS separator, with `enter-initrd` on PCR 11 - are
@@ -381,7 +381,7 @@ PIV slot. Any RSA-2048 or ECC P-256/P-384 key works instead, including the
 sbctl Secure Boot DB key, via `--pubkey` / `--privkey`.
 
 `setup` writes both key files with mode `0400`. `slot add` and `slot approve` read a
-key file only through `ReadSigningKeyFile` (`cmd/keyfile.go`), which refuses:
+key file only through `ReadSigningKeyFile` (`internal/signing/keyfile.go`), which refuses:
 
 - a symlink (the file is opened with `O_NOFOLLOW`),
 - anything but a regular file with exactly mode `0400`,
@@ -563,7 +563,7 @@ What is systemd's, used as installed by sd-encrypt: `systemd-cryptsetup`,
 its generator, `cryptsetup.target` and `cryptsetup-pre.target`, the
 generated `systemd-cryptsetup@*.service` units, the dm-crypt modules and
 udev rules, the crypttab in the image. What is tpm2-kira's: the socket
-unit and the provider (`cmd/unlock.go`), whose key source is one function
+unit and the provider (`internal/diskkey/unlock.go`), whose key source is one function
 of the volume name - factor release replaces that function, not the
 transfer. The configuration is the administrator's
 `rd.luks.key=` on the kernel command line.
@@ -640,7 +640,7 @@ approve would report success instead of tampering. So the key comes from the
 command line or tpm2-kira's default location, and a slot sealed with a
 non-default key always needs `--privkey` on approve.
 
-`resolveResealKeys` in `cmd/reseal.go` implements this.
+`resolveResealKeys` in `internal/admin/reseal.go` implements this.
 
 ### 5.6 The measure point
 
@@ -751,7 +751,7 @@ policy: `leave-initrd`, `sysinit`, `ready` (PCR 11), `machine-id:<id>` (PCR 15),
 > stub's digest conventions are known (a file event is the file's SHA-256, a
 > `grub_cmd` the command text's, the load options the UTF-16 of
 > `BOOT_IMAGE=` plus the command line), so the entries of what changed on disk
-> are replaced and the log replayed (`cmd/grub_predict.go`, with the
+> are replaced and the log replayed (`internal/measure/grub_predict.go`, with the
 > `menuentry`/`submenu` commands rebuilt from the new grub.cfg, since GRUB
 > measures them with their body). What it cannot foresee - a menu choice, an
 > edited command line, a grubenv the boot rewrites - leaves a boot without a
@@ -858,11 +858,11 @@ has that power.
 ### 5.9 The password+salt derivation
 
 `password+salt` and `password+phonesalt` keyslots hold the key
-`Combine(password, salt)` (`cmd/combine.go`): Argon2id with 1 GiB of
+`Combine(password, salt)` (`internal/diskkey/combine.go`): Argon2id with 1 GiB of
 memory, 16 passes, 4 lanes and a 64-byte output, encoded as base64
 without padding and followed by a newline, which is part of the key. The
 salt of `password+phonesalt` is not the phone's factor itself but an HKDF
-of it (`cmd/factor.go`), so the factor never meets the password. The
+of it (`internal/phonegate/factor.go`), so the factor never meets the password. The
 parameters are a contract with every enrolled keyslot and do not change.
 For compatibility, the bytes are the same as
 [hashpwd2](https://github.com/mrwiora/hashpwd2)'s, checked in a test: a
@@ -874,7 +874,7 @@ the other way round.
 ## 6. Policy Digests: Software vs TPM Computation
 
 The PolicyPCR digest is computed by the TPM in a trial session. The PolicyNV
-and PolicyAuthorize digests are computed in software (`cmd/totpkey.go`):
+and PolicyAuthorize digests are computed in software (`internal/nvslot/totpkey.go`):
 
 ```
 PolicyNV:        H(prev ‖ 0x00000149 ‖ H(operandB ‖ offset:2 ‖ operation:2) ‖ indexName)
@@ -997,7 +997,7 @@ be read at all, tpm2-kira says so rather than staying silent.
 
 ## 9. NVRAM Index Security
 
-`WriteToNVRAM` (`cmd/nvram.go`) defines the index as follows:
+`WriteToNVRAM` (`internal/nvslot/nvram.go`) defines the index as follows:
 
 | Attribute | Set | Effect |
 |---|---|---|

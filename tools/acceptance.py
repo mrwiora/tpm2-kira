@@ -37,7 +37,7 @@ import urllib.request
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The unlock mode is no setting: the keyslot's token in the LUKS2 header
-# names it by its type (cmd/luks.go), and the boot reads it from there.
+# names it by its type (internal/admin/luks.go), and the boot reads it from there.
 TOKEN_MODES = {
     "tpm2-kira-salt": "password+salt",
     "tpm2-kira-phonesalt": "password+phonesalt",

@@ -230,7 +230,7 @@ asks on the serial console as it does on the VGA one.
 ## 6. The codes, verified without a person
 
 `slot add` prints the TOTP secret as an `otpauth://` URI
-(`cmd/totp_utils.go`), for the authenticator. On a test machine the
+(`internal/totp/totp_utils.go`), for the authenticator. On a test machine the
 harness **is** the authenticator: it keeps the URI of every slot from the
 seal's output, and at the code screen computes the code for the time
 the screen shows (`[ KIRA ] Time UTC`) with `oathtool --totp -b <secret>

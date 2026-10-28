@@ -1,3 +1,4 @@
+// Package untrusted quotes strings from an unverified source for printing.
 package untrusted
 
 import (

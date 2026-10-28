@@ -194,7 +194,7 @@ same way. The blob version is raised; existing slots are sealed again
    image checks - the hook built in, the image newer than the boot, a
    file it is built from changed after it, the phone's Bluetooth part in
    it - look at the first preset's `default_uki` (or `default_image`)
-   alone (`mkinitcpioImages`, `cmd/initramfs_hooks.go`); a fallback or a
+   alone (`mkinitcpioImages`, `internal/admin/initramfs_hooks.go`); a fallback or a
    further profile is not looked at, so a stale one goes unnoticed and an
    image outside the presets' build list cannot raise a false alarm. With
    profiles every image matters. Proposed: the overview's Boot image line

@@ -1,3 +1,6 @@
+// Package phonegate is the phone at boot: the coordinator the radio worker
+// asks, the TPM's side of an attestation (quotes, the boot key, the EK), the
+// record check, and the factor the phone releases for the phone salt.
 package phonegate
 
 // The gate's coordinator: the half of remote attestation that holds the TPM.

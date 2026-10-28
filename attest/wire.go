@@ -15,7 +15,7 @@ import (
 //   - tags appear in strictly ascending order, so there is exactly one
 //     encoding of a given message and no duplicate fields;
 //   - integers inside a value are little-endian and fixed width, as in
-//     cmd/blob.go;
+//     internal/nvslot/blob.go;
 //   - unknown tags are skipped, so a newer peer may add optional fields
 //     without a version bump; a field the reader requires is never unknown;
 //   - every variable-length field has an explicit maximum, checked before

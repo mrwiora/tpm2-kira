@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/admin"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
@@ -291,7 +291,7 @@ approve
 Approves the current (predicted next) boot state for a slot, with the
 signing key: a new generation, the older approvals revoked. It never needs
 the PCRs to match and never reads the TOTP key. Without --nvram it also
-approves the SSH CA (` + cmd.DefaultSSHCA + `) for the next boot, in each of
+approves the SSH CA (` + admin.DefaultSSHCA + `) for the next boot, in each of
 its slots (assh.conf's) that has no approval. The initramfs hooks run it
 after every image rebuild; a slot sealed with the key on a YubiKey needs
 the token and its PIN (` + signing.PINEnvVar + `, or /etc/tpm2-kira/pin, which
@@ -359,7 +359,7 @@ slot, a slot that needs an approval. Root for the LUKS headers.
 
   --json              Machine-readable
   --privkey PATH      The signing key the blobs are checked with
-  --conf PATH         The configuration file (default ` + cmd.DefaultControlConfigPath + `)
+  --conf PATH         The configuration file (default ` + admin.DefaultControlConfigPath + `)
 `,
 
 	"reveal": `tpm2-kira reveal [--nvram N]          tpm2-kira reveal-plain [--nvram N]
@@ -408,10 +408,10 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
                    in, and Enter there continues at the console instead
   --ssh-hold S     With --ssh, in place of --hold (default 0: until a
                    confirmation comes)
-  --ssh-conf PATH  aSSH's settings (default ` + cmd.DefaultSSHConf + `, the
+  --ssh-conf PATH  aSSH's settings (default ` + admin.DefaultSSHConf + `, the
                    image's copy): the address (ASSH_LISTEN), the keys that
                    may log in (ASSH_AUTHORIZED_KEYS), the SSH CA (ASSH_CA,
-                   ` + cmd.DefaultSSHCA + `, an EFI variable). At the start,
+                   ` + admin.DefaultSSHCA + `, an EFI variable). At the start,
                    before the OS separator, the TPM makes this boot's host
                    key and the CA certifies it through the first slot whose
                    PCRs hold an approved state, then the window (PCR 15) is
@@ -430,7 +430,7 @@ server of the boot image are set in /etc/tpm2-kira/control.conf
 (TPM2_KIRA_NET_*, TPM2_KIRA_SSH_*; 'tpm2-kira control' sets them and
 suggests the network from /etc/systemd/network or /etc/network/interfaces);
 what aSSH does - the SSH CA and its slots, the port, the keys that may log
-in - in ` + cmd.DefaultSSHConf + ` (ASSH_*). Both are off until set; the
+in - in ` + admin.DefaultSSHConf + ` (ASSH_*). Both are off until set; the
 image build puts them in ('tpm2-kira help initramfs').
 
 The SSH server is a library (github.com/tpm2-trust/assh/server) inside
@@ -443,14 +443,14 @@ runs 'ssh-child' by hand.
 
 The host key is made in the TPM at every boot and certified by the SSH
 CA, which 'tpm2-kira control' creates in the TPM and keeps in the EFI
-variable ` + cmd.DefaultSSHCA + `, and which signs only while the PCRs of one of its slots
+variable ` + admin.DefaultSSHCA + `, and which signs only while the PCRs of one of its slots
 hold values the signing key approved. control writes two slots into
 assh.conf when it creates the CA: PCR 0, 2, 7 and the image's (11, or 8
 and 9 with GRUB), and PCR 7 alone - each with PCR 15, the window, which run
 extends. slot approve approves them after every image rebuild, and makes the
 CA's slots assh.conf's first (ASSH_CA_SLOT_<N>=PCRs). Clients trust the CA once, in known_hosts:
 
-  @cert-authority <the machine's names> <the contents of ` + cmd.DefaultSSHCAPub + `>
+  @cert-authority <the machine's names> <the contents of ` + admin.DefaultSSHCAPub + `>
 `,
 
 	"initramfs": `tpm2-kira initramfs plan [--buildroot DIR --format mkinitcpio|initramfs-tools] [--conf PATH] [--tpm PATH]

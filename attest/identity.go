@@ -4,7 +4,7 @@ import (
 	"github.com/google/go-tpm/tpm2"
 )
 
-// Key templates. Pure data: the TPM-facing code in cmd/ creates keys from
+// Key templates. Pure data: the TPM-facing code in internal/phonegate creates keys from
 // these, and the verifier checks received public areas against the same
 // attribute requirements (ParseAKPublic, ValidateEKPublic).
 

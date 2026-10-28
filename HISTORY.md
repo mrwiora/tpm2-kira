@@ -681,6 +681,16 @@ docs/REMOTE-UNLOCK.md). The plans were renamed with them:
 PLAN-REMOTEATTESTATION.md is PLAN-PHONE.md, PLAN-FACTORRELEASE.md is
 PLAN-PHONESALT.md, PLAN-REMOTEUNLOCKING.md is PLAN-VAULT.md.
 
+All of the code was one package, `cmd` (37 000 lines), in which the slot,
+the code, the phone, the disk's key, SSH and the administration called
+each other freely. It is split by layer into `internal/` (tpmdev, measure,
+signing, nvslot, totp, phonegate, diskkey, vaultkey, sshscreen, imageplan,
+bootrun, and admin for everything on the installed system), each package
+knowing only those below it, so that the boot's code can be built without
+the administration's. control.conf lines of settings that no longer exist
+are unknown keys like any other; they used to be refused with what had
+replaced them.
+
 ---
 
 ## Related records

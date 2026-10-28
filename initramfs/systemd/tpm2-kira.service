@@ -48,7 +48,7 @@ Type=notify
 # that is in the middle of its answer; a hung TPM must not hold the boot for
 # longer than this. Raise it together with --hold.
 TimeoutStartSec=180
-# --plan: the parts the image carries (cmd/bootplan.go); what is not in it
+# --plan: the parts the image carries (internal/admin/bootplan.go); what is not in it
 # is not started. --gate: where the radio worker reaches this process, with
 # the phone in the plan. The key socket comes from the socket unit
 # (Sockets=), not from a flag. TPM2_KIRA_REMOTE is set by the

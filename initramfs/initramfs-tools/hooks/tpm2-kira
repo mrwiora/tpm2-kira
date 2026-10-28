@@ -48,7 +48,7 @@ else
     echo "$advice" | sed 's/^/    /' >&2
 fi
 
-# The boot plan (cmd/bootplan.go): what this image carries besides the disk
+# The boot plan (internal/admin/bootplan.go): what this image carries besides the disk
 # unlock, decided by 'tpm2-kira initramfs plan' from what the machine uses -
 # the slots in the TPM and what they are enrolled with, the signing key,
 # the Bluetooth adapter, the network and SSH settings of

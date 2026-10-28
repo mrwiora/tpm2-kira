@@ -147,7 +147,7 @@ anywhere$ curl -k --pinnedpubkey sha256//<pin, base64> -H "Authorization: Bearer
 
 ## 4. Enrolment
 
-`vaultEnrolKey` (`cmd/vault.go`), on the booted machine, with the signing
+`vaultEnrolKey` (`internal/vaultkey/vault.go`), on the booted machine, with the signing
 key (as slot approve):
 
 1. Refuse unless the recovery keyslot is confirmed (`luks enrol` checks
@@ -395,7 +395,7 @@ covers exactly the pinned selection, and the values reproduce its digest;
 the generation is not below the minimum; the signing key's approval
 verifies over `H(ApprovedPolicy(PolicyPCR(values), genIndexName, gen) ‖
 policyRef)`. The policy digests are computed in software and are the very
-functions tpm2-kira seals with (`cmd/totpkey.go` calls them).
+functions tpm2-kira seals with (`internal/nvslot/totpkey.go` calls them).
 
 ## 9. Threats
 
@@ -420,11 +420,11 @@ recovery keyslot is mandatory, and the console prompt is always there.
 | Where | What |
 |---|---|
 | `vaultproto/` | messages, `QualifyingData`, `PinOf`, `VerifyRelease`, the policy digests |
-| `cmd/vault.go` | the key's derivation, the pinned client, the boot's release (`startVaultKeys`, `openVaultKey`, `fetchRemote`), `vault enrol\|status\|unenrol` |
-| `cmd/factor.go`, `attest/releasekey.go` | the release key and the wrap/unwrap shared with the phone salt |
-| `cmd/attest_blob.go` | attestation method 2 |
-| `cmd/luks.go`, `cmd/luks_header.go`, `cmd/unlock.go` | the mode, the token, the recipe, the key provider |
-| `cmd/run_boot.go` | the attempt started with `run`, ended with the hold; a key made ends it |
+| `internal/vaultkey/vault.go` | the key's derivation, the pinned client, the boot's release (`startVaultKeys`, `openVaultKey`, `fetchRemote`), `vault enrol\|status\|unenrol` |
+| `internal/phonegate/factor.go`, `attest/releasekey.go` | the release key and the wrap/unwrap shared with the phone salt |
+| `internal/nvslot/attest_blob.go` | attestation method 2 |
+| `internal/admin/luks.go`, `internal/diskkey/luks_header.go`, `internal/diskkey/unlock.go` | the mode, the token, the recipe, the key provider |
+| `internal/bootrun/run.go` | the attempt started with `run`, ended with the hold; a key made ends it |
 | `../tpm2-kira-vault/internal/server` | the machine-facing protocol and the rules (§6.1), the admin interface |
 | `../tpm2-kira-vault/internal/keys` | AES-GCM, the recovery key, the TPM sealer |
 | `../tpm2-kira-vault/internal/state` | the state directory, tokens, the lock, the audit log |
@@ -438,7 +438,7 @@ recovery keyslot is mandatory, and the console prompt is always there.
   approval is not for, another selection, a quote by another key,
   something that is not a quote; a slot approve is accepted without a change on
   the vault; the JSON field names.
-- **tpm2-kira, unit** (`cmd/vault_test.go`): the key's derivation
+- **tpm2-kira, unit** (`internal/admin/vault_test.go`): the key's derivation
   (labels, order, pepper), the vault method in the blob, the pinned client
   (the right key, another key, a vault not reached, its error words
   without escape sequences), the key provider and the recipe's order, the

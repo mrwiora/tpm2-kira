@@ -1,7 +1,7 @@
 # PLAN — Phone attestation: the attestation core
 
 > **Status:** phases 1–4 and the receipt half of phase 5 are implemented
-> (`attest/`, `cmd/attest*.go`); see "Implementation notes" at the end.
+> (`attest/`, `internal/phonegate`, `internal/admin/attest.go`); see "Implementation notes" at the end.
 > **Scope:** the reusable attestation core (`attest/`). Transport-independent,
 > verifier-independent, UI-independent.
 >
@@ -109,7 +109,7 @@ flowchart TD
 |---|---|---|
 | Algorithm | ECDSA P-256 / SHA-256, with RSA-2048 / RSASSA as fallback | Matches the key types SECURITY-BACKGROUND.md §7 already establishes as universally loadable |
 | Attributes | `Restricted`, `Sign`, `FixedTPM`, `FixedParent`, `SensitiveDataOrigin`, `UserWithAuth` | `Restricted` is the load-bearing one: the TPM then refuses to sign anything that is not a TPM-generated structure with the `TPM_GENERATED_VALUE` magic, so an AK signature cannot be produced over attacker-chosen bytes |
-| Parent | the existing deterministic storage primary (`CreatePrimaryKey`, `cmd/tpm_utils.go`) | Re-derived on every boot already; no new persistent handle, no handle exhaustion |
+| Parent | the existing deterministic storage primary (`CreatePrimaryKey`, `internal/tpmdev/tpmdev.go`) | Re-derived on every boot already; no new persistent handle, no handle exhaustion |
 | Persistence | `TPM2B_PUBLIC` + `TPM2B_PRIVATE` stored in the attestation blob (§10), `TPM2_Load`ed on use | Mirrors how the sealed object is already handled. No `TPM2_EvictControl`, so nothing to clean up on uninstall |
 | Auth | empty auth value, **no policy** | See §4 |
 
@@ -292,7 +292,7 @@ receipt_tbs := "tpm2-kira/receipt/v1" ‖ u8(verdict) ‖
                lp(device_id) ‖ lp(ak_name) ‖ lp(qd) ‖ lp(sha256(quoted)) ‖
                lp(policy_id) ‖ u64(issued_at) ‖ u64(expires_at) ‖ lp(verifier_id)
 
-lp(x) := u32(len(x)) ‖ x            // little-endian, as in cmd/blob.go
+lp(x) := u32(len(x)) ‖ x            // little-endian, as in internal/nvslot/blob.go
 ```
 
 `issued_at` / `expires_at` are Unix seconds. The attester cannot check them
@@ -370,7 +370,7 @@ not a re-seal per transition.
 
 **Pre-registering the *next* state.** Before rebooting into a new kernel, the
 operator computes what PCR 11 will be from the unified kernel image on disk —
-tpm2-kira already does this natively in `cmd/ukipredict.go` — and registers it
+tpm2-kira already does this natively in `internal/measure/ukipredict.go` — and registers it
 as a profile with `uses_left = 1` and a short `valid_until`. The machine then
 attests successfully on the first boot into the new image, with no human at the
 console. This is the mechanism that makes unattended reboots possible in
@@ -405,8 +405,8 @@ attest/
    `evidence.go` **must not import** `go-tpm/tpm2/transport`, `net`, `os`, or
    any BLE package. `go build` tags are not the mechanism — an import-graph
    test is (`TestCoreHasNoDeviceDeps` walks the package imports and fails).
-2. `attest/` **must not import** `cmd/`. Data it needs from the sealed blob is
-   passed in as plain values. The dependency points one way: `cmd/` → `attest/`.
+2. `attest/` **must not import** `internal/`. Data it needs from the sealed blob is
+   passed in as plain values. The dependency points one way: `internal/` → `attest/`.
 3. No transport, no BLE, no HTTP, no D-Bus and no UI ever appears under
    `attest/`. Those live in `transport/ble/`, `transport/tcp/`, and in the
    mobile app.
@@ -471,7 +471,7 @@ different lifecycle: enrolment changes it, sealing does not.
 | Contains | sealed object, PCR digests, key paths | AK public + private, EK cert cache, device id, verifier id, policy id, anchor material |
 | Protection | signed payload envelope, `Private` is TPM-wrapped | signed payload envelope, same scheme |
 
-It reuses `cmd/blob.go`'s conventions exactly — little-endian length prefixes,
+It reuses `internal/nvslot/blob.go`'s conventions exactly — little-endian length prefixes,
 explicit maximum sizes on every variable-length field, a detached signature by
 the same signing key over `[version ‖ payloadLen ‖ payload]`, and **no
 migration between versions**. A blob with an unknown version is an error that
@@ -613,7 +613,7 @@ enforced mode into a decoration, so it is an explicit test case.
 | Layer | How | Needs |
 |---|---|---|
 | `Verify()` | golden corpus in `attest/testdata/`: good, replayed, wrong selection, wrong magic, non-quote attest type, forged `pcr_values`, downgraded PCR bank, `resetCount` going backwards, expired profile, exhausted pre-registered profile | nothing |
-| Encoding | round-trip and fuzz over the TLV decoder, with the same maximum-size limits `cmd/blob.go` uses | nothing |
+| Encoding | round-trip and fuzz over the TLV decoder, with the same maximum-size limits `internal/nvslot/blob.go` uses | nothing |
 | AK + quote | swtpm, as the existing integration tests already do | swtpm |
 | Credential activation | swtpm; `MakeCredential` in Go, `ActivateCredential` on the simulated TPM | swtpm |
 | Import graph | `TestCoreHasNoDeviceDeps` asserts §9.1 rule 1 mechanically | nothing |
@@ -675,12 +675,12 @@ What was built, and where it departs from the sections above.
 | Topic | As implemented |
 |---|---|
 | **AK parent (§3.1)** | A storage primary in the **endorsement** hierarchy, not the owner-hierarchy primary of `CreatePrimaryKey`. TPM 2.0 Part 1 §36.7 obfuscates `resetCount`, `restartCount` and `firmwareVersion` in quotes signed by keys outside the endorsement/platform hierarchies; with an owner-hierarchy AK the reset-count replay check of §5 would compare masked values. Found on swtpm, which reported a reset count of 4157272019. Side effect: the AK survives `TPM2_Clear`, after which the verifier sees the counter go backwards and asks a human. |
-| **Package layout (§9)** | `attest/` is the pure core (no TPM, filesystem or network). The TPM-facing parts listed as `identity.go`/`quote.go` live in `cmd/attest_tpm.go`, behind the `attest.AttesterBackend` / `attest.EnrolBackend` interfaces; `attest/identity.go` holds only key templates. `TestCoreHasNoDeviceDeps` enforces the rule on `attest/`, `transport/frame/` and `mobile/`. |
+| **Package layout (§9)** | `attest/` is the pure core (no TPM, filesystem or network). The TPM-facing parts listed as `identity.go`/`quote.go` live in `internal/phonegate/attest_tpm.go`, behind the `attest.AttesterBackend` / `attest.EnrolBackend` interfaces; `attest/identity.go` holds only key templates. `TestCoreHasNoDeviceDeps` enforces the rule on `attest/`, `transport/frame/` and `mobile/`. |
 | **Verifier as a state machine (§6, §9.2)** | `attest.Verifier` is event-driven: every input returns records to send and events to show, so the phone needs no threads and no callbacks. `mobile/kiracore` wraps it for gomobile. |
 | **Enrolment (§6.1)** | `EnrolOffer` additionally carries a baseline quote bound to the session (`enrol_qd`), so the baseline profile is TPM-signed rather than claimed, and `adv_key` for advertising. `EnrolAccept` carries a required `anchor_sig` proving possession of the anchor key. |
 | **Wire encoding (§9.3)** | TLV as planned, with ascending tags and per-field limits ([PROTOCOL-BLE.md](PROTOCOL-BLE.md) §7). Golden vectors for every canonical string are in `attest/vectors_test.go`. |
 | **Release message (PLAN-PHONESALT.md §4)** | Defined in the core; the attester answers `ReleaseAck{unsupported}` until factor enrolment exists. |
-| **Attestation blob (§10.1)** | NV `0x01803020`+slot, signed envelope, PolicySigned writes, a verifier *list* (up to 8) from day one (§15.5). Also holds the machine's Noise static key and advertising key, which identify the transport endpoint only — see `cmd/attest_blob.go` for why exposing them does not weaken the verdict. |
+| **Attestation blob (§10.1)** | NV `0x01803020`+slot, signed envelope, PolicySigned writes, a verifier *list* (up to 8) from day one (§15.5). Also holds the machine's Noise static key and advertising key, which identify the transport endpoint only — see `internal/nvslot/attest_blob.go` for why exposing them does not weaken the verdict. |
 | **Not yet implemented** | Sealed payload v9 and config binding (§10.3), image anchor (§10.2), `attest rotate-ak`, EK certificate chain validation (the certificate is parsed and passed on, not validated against vendor roots). |
 | **§15.1** | ECC AK first, RSA-2048 fallback, both implemented. |
 | **§15.4** | Stripped static binary: 5.98 MB → 6.54 MB with the whole attestation and BLE stack. Bluetooth firmware in the initramfs is still unmeasured. |

@@ -188,14 +188,14 @@ test: test-unit
 ## test-unit: Run unit tests only
 test-unit:
 	@echo "Running unit tests..."
-	$(GOTEST) -v -tags=unit ./cmd/... ./attest/... ./transport/... ./mobile/...
+	$(GOTEST) -v -tags=unit ./internal/... ./attest/... ./transport/... ./mobile/...
 
 ## fuzz: Fuzz the parsers of untrusted input (FUZZTIME per target, default 30s)
 FUZZTIME ?= 30s
 fuzz:
 	@for t in FuzzUnmarshalSealedBlob FuzzParseYubiKeyStub FuzzEventlogReplay; do \
 		echo "Fuzzing $$t for $(FUZZTIME)..."; \
-		$(GOTEST) -tags=unit ./cmd -run '^$$' -fuzz "^$$t\$$" -fuzztime $(FUZZTIME) || exit 1; \
+		$(GOTEST) -tags=unit ./internal/admin -run '^$$' -fuzz "^$$t\$$" -fuzztime $(FUZZTIME) || exit 1; \
 	done
 	@echo "Fuzzing FuzzDecode for $(FUZZTIME)..."
 	$(GOTEST) ./internal/pcsc -run '^$$' -fuzz '^FuzzDecode$$' -fuzztime $(FUZZTIME)
@@ -211,7 +211,7 @@ test-integration:
 test-all:
 	@echo "Running all tests..."
 	@echo "Unit tests:"
-	$(GOTEST) -v -tags=unit ./cmd/... ./attest/... ./transport/... ./mobile/...
+	$(GOTEST) -v -tags=unit ./internal/... ./attest/... ./transport/... ./mobile/...
 	@echo ""
 	@echo "Integration tests:"
 	@echo "Note: Requires swtpm (software TPM) to be installed"

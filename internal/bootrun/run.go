@@ -1,3 +1,5 @@
+// Package bootrun is 'run' in the boot image: the code screen's hold and
+// the parts it starts from the image's plan.
 package bootrun
 
 // The TOTP display at the passphrase prompt (tpm2-kira run).

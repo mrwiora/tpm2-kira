@@ -13,14 +13,14 @@ import (
 // TestCoreHasNoDeviceDeps enforces PLAN-PHONE.md §9.1: the
 // packages compiled into the phone and the server — the protocol core, the
 // framing and the mobile binding — import nothing that reaches a device, the
-// filesystem or the network, and never import cmd/ or a transport.
+// filesystem or the network, and never import internal/ or a transport.
 func TestCoreHasNoDeviceDeps(t *testing.T) {
 	forbidden := []string{
 		"os", "os/exec", "net", "net/http", "syscall", "unsafe",
 		"github.com/google/go-tpm/tpm2/transport",
 		"github.com/google/go-attestation",
 		"golang.org/x/sys",
-		"github.com/mrwiora/tpm2-kira/cmd",
+		"github.com/mrwiora/tpm2-kira/internal",
 		"github.com/mrwiora/tpm2-kira/transport/ble",
 	}
 	pure := []string{".", "../transport/frame", "../mobile/kiracore", "../mobile/kiratest", "attesttest"}

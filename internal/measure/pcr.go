@@ -1,3 +1,6 @@
+// Package measure is the PCR side: PCR specs, banks and sources, the event
+// log replay, the measure point, the UKI and GRUB predictions, the PCR
+// descriptions and the warnings about weak selections. It knows no slot.
 package measure
 
 import (

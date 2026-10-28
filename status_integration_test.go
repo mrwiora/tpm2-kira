@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/admin"
 )
 
 // The binary as it is run on a machine: the root gate, 'slot add' without
@@ -48,13 +48,13 @@ func writeConf(t *testing.T, content string) string {
 }
 
 // statusJSON runs 'status --json' and decodes the report.
-func statusJSON(t *testing.T, tpmPath, privKey, conf string) cmd.StatusReport {
+func statusJSON(t *testing.T, tpmPath, privKey, conf string) admin.StatusReport {
 	t.Helper()
 	stdout, stderr, code := kira(t, nil, "status", "--json", "--tpm", tpmPath, "--privkey", privKey, "--conf", conf)
 	if code != 0 {
 		t.Fatalf("status --json exit %d: %s%s", code, stdout, stderr)
 	}
-	var r cmd.StatusReport
+	var r admin.StatusReport
 	if err := json.Unmarshal([]byte(stdout), &r); err != nil {
 		t.Fatalf("status --json: %v\n%s", err, stdout)
 	}

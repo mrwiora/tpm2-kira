@@ -24,7 +24,7 @@ finish it, tick it off here.
   blob format §10 are the usual places).
 - **Tests.** `make test-unit` must pass. Before pushing also run
   `go vet ./...`, `go vet -tags=unit ./...` and `go vet -tags=integration ./...`
-  — `cmd/cmd_test.go` is `//go:build unit || !integration`, so helpers defined
+  — `internal/admin/cmd_test.go` is `//go:build unit || !integration`, so helpers defined
   there do not exist under the integration tag. Integration tests need `swtpm`
   (`make test-integration`); the harness only rebuilds `./tpm2-kira` when it is
   missing, so `rm -f tpm2-kira` first.
@@ -73,11 +73,11 @@ How the three High items fit together — none is sufficient alone:
 
 **Where**
 - `main.go:184` — `slot add --pcrs` default `0,2,7`
-- `cmd/pcrwarn.go:59` — `WarnAboutPCRSelection` (only warns for PCR 0 alone
+- `internal/measure/pcrwarn.go:59` — `WarnAboutPCRSelection` (only warns for PCR 0 alone
   and PCR 7 without Secure Boot)
 - `README.md` — Quick Start uses `--pcrs 0,7`; the Debian section calls
   `0e,2e,4e,7e` "a good default"
-- `cmd/setup.go` — prints `tpm2-kira slot add --pcrs 0,7` as the next step
+- `internal/admin/setup.go` — prints `tpm2-kira slot add --pcrs 0,7` as the next step
 
 **Problem.** PCRs 0, 2, 4 and 7 measure firmware, the bootloader binary and
 the Secure Boot policy. Outside a unified kernel image the initrd is never
@@ -120,7 +120,7 @@ derived from the code and PCR semantics, not reproduced on hardware.
    (systemd-boot `editor no`, GRUB password), `panic=0` on Debian so a failed
    unlock does not drop to a shell, firmware setup password and locked boot
    order, own Secure Boot keys so foreign media change PCR 7.
-3. Detect a UKI boot (the `u` source code in `cmd/ukipredict.go` already knows
+3. Detect a UKI boot (the `u` source code in `internal/measure/ukipredict.go` already knows
    how to find the image) and name the concrete suggestion in the warning.
 4. Change README Quick Start, the AUR/Debian post-install snippets and the
    `setup` "next step" hint so the first command a user copies covers the
@@ -179,7 +179,7 @@ non-UKI Arch).
      once capping is active and say to use `0e`. On firmware whose event log
      has no digests in the selected bank (README "TPMs whose event log has no
      SHA-256 digests") option A is unavailable; say so in the error.
-   - `--measure-point=auto` (`cmd/measurepoint.go`) probes stable PCRs with
+   - `--measure-point=auto` (`internal/measure/measurepoint.go`) probes stable PCRs with
      "register == replay" / "register == replay + words". Add the capped
      candidates (`… + capDigest`) or the probe will refuse with "ambiguous".
    - Side effects outside tpm2-kira, to document: anything that reads the
@@ -196,7 +196,7 @@ non-UKI Arch).
 3. Option B only: new PCR source for the cap PCR (suggested suffix `c`, a new
    `PCRSource` value — source byte 2 is retired, do not reuse it). Its
    measure-point value is computed, not read: reset value (zeros) plus the
-   measure-point extends from `cmd/measurepoint.go` (`os-separator` on systemd
+   measure-point extends from `internal/measure/measurepoint.go` (`os-separator` on systemd
    initrds, nothing on Debian). At seal time in the running OS the register is
    already capped, so verify the prediction:
    `register == Extend(predicted, capDigest)`; refuse to seal otherwise
@@ -236,9 +236,9 @@ a running system" row to the mitigated table with the remaining limits
 
 ## 3. `slot approve` verifies the blob with a key the blob names
 
-- [x] done — `resolveResealKeys` in `cmd/reseal.go`; reseal also unseals the verified blob instead of re-reading NVRAM, and refuses a `--pubkey` that does not match. Step 5 (key path for the post hook) left for the OWNER DECISION.
+- [x] done — `resolveResealKeys` in `internal/admin/reseal.go`; reseal also unseals the verified blob instead of re-reading NVRAM, and refuses a `--pubkey` that does not match. Step 5 (key path for the post hook) left for the OWNER DECISION.
 
-**Where** `cmd/reseal.go`, function `Reseal`:
+**Where** `internal/admin/reseal.go`, function `Reseal`:
 - lines 199–213: `effectivePrivKeyPath` / `effectivePubKeyPath` fall back to
   `sealedBlob.Payload.PrivateKeyPath` / `PublicKeyPath` — fields of the
   **unverified** blob
@@ -286,11 +286,11 @@ SECURITY-BACKGROUND §5.5 describe the new resolution order.
 
 ## 4. Key files are checked for mode only
 
-- [x] done — `ReadSigningKeyFile` / `LoadChecked*` in `cmd/keyfile.go`, `cmd/signingkey.go` (was `policy_or.go`); `slot info` reports the same checks.
+- [x] done — `ReadSigningKeyFile` / `LoadChecked*` in `internal/signing/keyfile.go`, `internal/signing/signingkey.go` (was `policy_or.go`); `slot info` reports the same checks.
 
-**Where** `cmd/keyfile.go:43` — `CheckSigningKeyFileMode` uses `os.Stat` and
-compares `Perm()` with `0400`. Callers: `cmd/seal.go` (`Seal`),
-`cmd/reseal.go` (`Reseal`).
+**Where** `internal/signing/keyfile.go:43` — `CheckSigningKeyFileMode` uses `os.Stat` and
+compares `Perm()` with `0400`. Callers: `internal/admin/seal.go` (`Seal`),
+`internal/admin/reseal.go` (`Reseal`).
 
 **Problem.** A file owned by any user, reached through a symlink, in a
 world-writable directory passes. That is what makes item 3 practical, and it
@@ -309,9 +309,9 @@ check and use.
    `LoadSigningPrivateKey` / `LoadSigningPublicKeyFromPEM` get variants that
    take the checked content; do not stat by path and re-open by path.
 
-**Done when** `cmd/keyfile_test.go` covers symlink, foreign owner (skip when
+**Done when** `internal/admin/keyfile_test.go` covers symlink, foreign owner (skip when
 not root), writable parent and the happy path, and `slot info`'s
-`printKeyFileModes` (`cmd/info.go:304`) reports the same conditions.
+`printKeyFileModes` (`internal/admin/info.go:304`) reports the same conditions.
 
 ---
 
@@ -319,7 +319,7 @@ not root), writable parent and the happy path, and `slot info`'s
 
 - [x] done — built-in encoder (`rsc.io/qr`, BSD-3, pure Go); no external program is run any more.
 
-**Where** `cmd/totp_utils.go:144` — `generateQRCode`:
+**Where** `internal/totp/totp_utils.go:144` — `generateQRCode`:
 `exec.LookPath("qrencode")` then `exec.Command(path, "-t", "ANSIUTF8", data)`
 where `data` is the `otpauth://` URI containing the secret.
 
@@ -350,10 +350,10 @@ asserts the QR output for a fixed URI is non-empty.
 - [x] done — the PIN lives in `/etc/tpm2-kira/pin`, the PIN alone,
   written by `control` only: the Signing key step checks the PIN on the
   token and writes the file 0600.
-  `readPIN` (`cmd/yubikey.go`) reads the environment, then the file, then
+  `readPIN` (`internal/signing/yubikey.go`) reads the environment, then the file, then
   the terminal; a file that is not root's or is group/world-readable is
   refused on the opened descriptor, not warned about (`storedPIN`,
-  `cmd/control_config.go`). Nothing puts the file into the image. The
+  `internal/admin/control_config.go`). Nothing puts the file into the image. The
   earlier places - a line in `/etc/mkinitcpio.conf`, then a
   `TPM2_KIRA_PIN` line in control.conf - are gone (HISTORY.md).
 
@@ -362,7 +362,7 @@ makes the token a presence check only; the touch policy decides whether a
 reseal needs a hand on the key.
 
 **Done when** `readPIN` never returns a PIN from a group/world-readable or
-non-root-owned file, with tests for each refusal (`cmd/yubikey_test.go`
+non-root-owned file, with tests for each refusal (`internal/admin/yubikey_test.go`
 `TestPINFromControlConf`).
 
 ---
@@ -380,7 +380,7 @@ non-root-owned file, with tests for each refusal (`cmd/yubikey_test.go`
   with no encryption option; `Unseal` returns the secret in the clear
 - `cmd/policy_or.go:999` `CreateSealedObjectPolicyOR` — the secret goes in as
   `InSensitive` in the clear (`tpm2.PasswordAuth(nil)` on the parent)
-- `cmd/scan.go:451` `RunCommand` — unseals every 30 s for as long as the
+- `internal/nvslot/scan.go:451` `RunCommand` — unseals every 30 s for as long as the
   passphrase prompt is up
 
 **Problem.** On a discrete TPM a passive probe on the LPC/SPI bus reads the
@@ -388,7 +388,7 @@ TOTP secret from the first unseal. SECURITY-BACKGROUND §8 lists this as
 unmitigated; passive sniffing is cheap to stop.
 
 **Resolution.**
-1. Have `CreatePrimaryKey` (`cmd/tpm_utils.go:187`) also return
+1. Have `CreatePrimaryKey` (`internal/tpmdev/tpmdev.go:187`) also return
    `OutPublic`. The primary is a restricted decrypt ECC key, so it can salt a
    session.
 2. Unseal: add `tpm2.Salted(primary.ObjectHandle, primaryPublic)` and
@@ -415,13 +415,13 @@ command log for the encrypt attribute).
 
 ## 8. Raw `/dev/tpm0` default and global flush
 
-- [x] done — `OpenTPM` in `cmd/tpm_utils.go`. Deviation: `CleanupTPM` is kept for unmanaged paths (raw device, swtpm socket) where the raw device admits one opener, so it cannot hit another program's handles.
+- [x] done — `OpenTPM` in `internal/tpmdev/tpmdev.go`. Deviation: `CleanupTPM` is kept for unmanaged paths (raw device, swtpm socket) where the raw device admits one opener, so it cannot hit another program's handles.
 
 **Where**
 - `main.go:34` — `--tpm` default `/dev/tpm0`
-- `cmd/tpm_utils.go:14` `CleanupTPM`, called from `cmd/scan.go` (`RevealCommand`,
-  `RunCommand`, `ScanNVRAMSlotsRange` before every slot), `cmd/seal.go`,
-  `cmd/reseal.go`
+- `internal/tpmdev/tpmdev.go:14` `CleanupTPM`, called from `internal/nvslot/scan.go` (`RevealCommand`,
+  `RunCommand`, `ScanNVRAMSlotsRange` before every slot), `internal/admin/seal.go`,
+  `internal/admin/reseal.go`
 - `initramfs/systemd/tpm2-kira.service` — `Requires=/After=dev-tpm0.device`
 - `initramfs/initramfs-tools/scripts/init-premount/tpm2-kira` — waits for
   `/dev/tpmrm0`, then runs a binary that opens `/dev/tpm0`
@@ -454,9 +454,9 @@ did not obtain itself.
 
 ## 9. `slot info` trusts unverified blob contents
 
-- [x] done — `slot info --privkey`; `quoteUntrusted` in `cmd/untrusted.go`, also used for blob strings in reseal, scan, nvram and `PCRSpecsToString`.
+- [x] done — `slot info --privkey`; `quoteUntrusted` in `internal/untrusted/untrusted.go`, also used for blob strings in reseal, scan, nvram and `PCRSpecsToString`.
 
-**Where** `cmd/info.go`:
+**Where** `internal/admin/info.go`:
 - `:200` prints `AppVersion`; `:265`, `:276`, `:325` print key paths; `:336`,
   `:338` print measure-point strings; the eventlog path and timestamp nearby —
   all straight from the blob with `%s`
@@ -478,7 +478,7 @@ sequences, and root opens attacker-named paths.
 3. Always print blob-derived strings through one helper that replaces
    non-printable bytes (`strconv.Quote`-style). JSON output is already
    escaped by `encoding/json`.
-4. Also route the UKI path printed by `slot approve` (`cmd/reseal.go:438`,
+4. Also route the UKI path printed by `slot approve` (`internal/admin/reseal.go:438`,
    `spec.Command`) through the helper.
 
 **Done when** a test feeds a blob whose `AppVersion` and paths contain
@@ -489,9 +489,9 @@ output and no file open on the unverified path.
 
 ## 10. Fuzz target for the blob parser
 
-- [x] done — `cmd/fuzz_test.go`, `internal/pcsc/fuzz_test.go`, `make fuzz`, CI step. The pcsc decoders need their fixed wire size, which every caller guarantees with `io.ReadFull`; the target pads accordingly.
+- [x] done — `internal/admin/fuzz_test.go`, `internal/pcsc/fuzz_test.go`, `make fuzz`, CI step. The pcsc decoders need their fixed wire size, which every caller guarantees with `io.ReadFull`; the target pads accordingly.
 
-**Where** `cmd/blob.go` — `UnmarshalSealedBlob`, `UnmarshalPayload`,
+**Where** `internal/nvslot/blob.go` — `UnmarshalSealedBlob`, `UnmarshalPayload`,
 `PeekBlobVersion`. No `func Fuzz…` exists in the repo.
 
 **Problem.** This parser runs as root in the initrd on data anyone with TPM
@@ -499,7 +499,7 @@ access can replace. A 40 s ad-hoc fuzz run (about 1M executions) found no
 panic, but nothing keeps it that way.
 
 **Resolution.** Add `cmd/blob_fuzz_test.go` with the `unit || !integration`
-build constraint used by `cmd/cmd_test.go`:
+build constraint used by `internal/admin/cmd_test.go`:
 
 ```go
 func FuzzUnmarshalSealedBlob(f *testing.F) {
@@ -525,12 +525,12 @@ func FuzzUnmarshalSealedBlob(f *testing.F) {
 }
 ```
 
-Add equivalent targets for `ParseYubiKeyStub` (`cmd/yubikey.go:59`), the
-event-log parser (`cmd/eventlog_utils.go`) and the pcsc wire decoder
+Add equivalent targets for `ParseYubiKeyStub` (`internal/signing/yubikey.go:59`), the
+event-log parser (`internal/measure/eventlog_utils.go`) and the pcsc wire decoder
 (`internal/pcsc/wire.go`). Add a `make fuzz` target (30 s each) and a short
 fuzz step to `.github/workflows/unit-tests.yml`.
 
-**Done when** `go test ./cmd -run '^$' -fuzz FuzzUnmarshalSealedBlob -fuzztime 30s`
+**Done when** `go test ./internal/admin -run '^$' -fuzz FuzzUnmarshalSealedBlob -fuzztime 30s`
 passes locally and in CI.
 
 ---
@@ -539,7 +539,7 @@ passes locally and in CI.
 
 - [x] done — `--yes`, or typing 'yes' on a terminal. The owner-auth follow-up remains an OWNER DECISION.
 
-**Where** `cmd/nvram.go:540` `NVRAMDeleteCommand`; `main.go` `runNVRAM`.
+**Where** `internal/nvslot/nvram.go:540` `NVRAMDeleteCommand`; `main.go` `runNVRAM`.
 
 **Problem.** `tpm2-kira slot delete` with no `--nvram` deletes all populated
 slots immediately. Deletion is irreversible and forces re-enrolment. (That
@@ -620,17 +620,17 @@ there is no equivalent; leave it.
 
 ## 14. Compute the HMAC inside the TPM; authorise PCR states by signature
 
-- [x] done — blob v9 (`cmd/totpkey.go`); with revocation (owner decision). Without SHA-1 the key falls back to HMAC-SHA256 with a notice and `algorithm=SHA256` in the URI (owner decision). Integration tests: `TestCodeMatchesAuthenticator`, `TestResealRevokesOldBlob`, `TestCompleteWorkflow` (reseal after a PCR change).
+- [x] done — blob v9 (`internal/nvslot/totpkey.go`); with revocation (owner decision). Without SHA-1 the key falls back to HMAC-SHA256 with a notice and `algorithm=SHA256` in the URI (owner decision). Integration tests: `TestCodeMatchesAuthenticator`, `TestResealRevokesOldBlob`, `TestCompleteWorkflow` (reseal after a PCR change).
 
 **Where**
 - `cmd/policy_or.go:999` `CreateSealedObjectPolicyOR` — the TOTP key is
   stored as *sealed data* (`TPMAlgKeyedHash`, no `SignEncrypt`)
 - `cmd/policy_or.go:580` / `:663` — `TPM2_Unseal` hands the key to the process
-- `cmd/scan.go:152` `ScanNVRAMSlotsRange` — keeps it in `NVRAMSlot.Secret`;
-  `cmd/totp_utils.go` `generateTOTPCode` / `generateHOTP` do the HMAC in Go
-- `cmd/reseal.go` `Reseal` — unseals the key and creates a new object for the
+- `internal/nvslot/scan.go:152` `ScanNVRAMSlotsRange` — keeps it in `NVRAMSlot.Secret`;
+  `internal/totp/totp_utils.go` `generateTOTPCode` / `generateHOTP` do the HMAC in Go
+- `internal/admin/reseal.go` `Reseal` — unseals the key and creates a new object for the
   new PCR values
-- `cmd/seal.go` `generateTOTPSecret` — seals the *base32 text* of 32 random
+- `internal/admin/seal.go` `generateTOTPSecret` — seals the *base32 text* of 32 random
   bytes, not the raw key
 
 **Problem.** A TOTP code is `Truncate(HMAC-SHA1(key, time/30))`. Because
@@ -737,9 +737,9 @@ key to approve PCR states:
 
 ## Checked and found sound — do not redo
 
-- **Blob parser bounds**: every length field is capped (`cmd/blob.go:183`
+- **Blob parser bounds**: every length field is capped (`internal/nvslot/blob.go:183`
   constants); fuzzing found no panic.
-- **Boot display and planted blobs**: `PrintKIRASlots` (`cmd/scan.go`) prints
+- **Boot display and planted blobs**: `PrintKIRASlots` (`internal/nvslot/scan.go`) prints
   only integers and hex from the blob, so a planted blob cannot inject
   terminal escapes into the pre-unlock console. A planted blob can only show
   codes for a secret the attacker chose, which do not match the owner's
@@ -753,7 +753,7 @@ key to approve PCR states:
   undefine and stashes the blob on failure.
 - **No command execution from blob data**: the `p:COMMAND` source is gone
   (HISTORY.md), and since item 5 tpm2-kira runs no external program at all.
-- **PIN retry handling** (`cmd/yubikey.go` `ensurePIN`): one VERIFY per need,
+- **PIN retry handling** (`internal/signing/yubikey.go` `ensurePIN`): one VERIFY per need,
   never retries a rejected PIN, refuses to spend the last attempt, resets the
   card on exit.
 - **Policy failures do not feed TPM dictionary-attack lockout**, so the
