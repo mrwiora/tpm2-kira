@@ -1,4 +1,4 @@
-package cmd
+package tpmdev
 
 import (
 	"errors"
@@ -7,9 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
-
-	"github.com/mrwiora/tpm2-kira/internal/measure"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -20,21 +17,21 @@ import (
 // DefaultTPMPath is the kernel's resource-managed TPM device. Through it each
 // process sees only its own handles, and the kernel flushes them when the
 // device is closed.
-const DefaultTPMPath = "/dev/tpmrm0"
+const DefaultPath = "/dev/tpmrm0"
 
 // rawTPMPath is used only when the kernel provides no resource manager.
 const rawTPMPath = "/dev/tpm0"
 
 // openedTPM remembers whether the TPM was opened through a resource manager.
-type openedTPM struct {
+type Opened struct {
 	transport.TPMCloser
-	managed bool
+	Managed bool
 }
 
 // OpenTPM opens the TPM at path. The default path falls back to the raw
 // device when the kernel has no resource manager node.
-func OpenTPM(path string) (transport.TPMCloser, error) {
-	if path == DefaultTPMPath {
+func Open(path string) (transport.TPMCloser, error) {
+	if path == DefaultPath {
 		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 			if _, rawErr := os.Stat(rawTPMPath); rawErr == nil {
 				path = rawTPMPath
@@ -45,7 +42,7 @@ func OpenTPM(path string) (transport.TPMCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &openedTPM{TPMCloser: tpm, managed: strings.HasPrefix(filepath.Base(path), "tpmrm")}, nil
+	return &Opened{TPMCloser: tpm, Managed: strings.HasPrefix(filepath.Base(path), "tpmrm")}, nil
 }
 
 // CleanupTPM flushes leftover transient handles and sessions to free TPM
@@ -56,8 +53,8 @@ func OpenTPM(path string) (transport.TPMCloser, error) {
 // on close. Flushing globally on the raw device or a simulator socket is
 // safe, because the raw device admits one opener at a time, so whatever is
 // loaded was left behind by a process that is gone.
-func CleanupTPM(tpmDev transport.TPM, debug bool) {
-	if t, ok := tpmDev.(*openedTPM); ok && t.managed {
+func Cleanup(tpmDev transport.TPM, debug bool) {
+	if t, ok := tpmDev.(*Opened); ok && t.Managed {
 		return
 	}
 	if err := flushAllTransientHandles(tpmDev); err != nil {
@@ -139,76 +136,6 @@ func IsTPMPolicyFailure(err error) bool {
 		strings.Contains(errStr, "session 1): a policy check failed")
 }
 
-// ErrPhoneSlot: the slot is attested by its phones and has no TOTP code.
-var ErrPhoneSlot = errors.New("the slot is attested by its phone and has no TOTP code")
-
-// SlotCode reads the blob at nvramIndex and computes its current TOTP code.
-//
-// Before asking the TPM it compares the blob with the live state, purely to
-// explain a failure: a PCRMismatchError when the registers differ from the
-// sealed values, ErrSeparatorLocked when they differ only by the OS
-// separator that ran after the measure point, a GenerationMismatchError
-// when a later reseal revoked this blob's approval, ErrCodesLocked after
-// 'tpm2-kira cap'. None of these checks is the gate; the TPM is.
-func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) (string, *SealedBlob, error) {
-	sealedData, err := ReadFromNVRAM(tpmDev, nvramIndex)
-	if err != nil {
-		return "", nil, HandleNVRAMNotFoundError(err, debug)
-	}
-	sealedBlob, err := UnmarshalSealedBlob(sealedData)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
-	}
-	if !sealedBlob.HasTOTPKey() {
-		return "", sealedBlob, ErrPhoneSlot
-	}
-
-	gen, err := ReadGeneration(tpmDev, GenerationIndex(nvramIndex))
-	switch {
-	case errors.Is(err, ErrCodesLocked):
-		return "", sealedBlob, ErrCodesLocked
-	case err != nil:
-		return "", sealedBlob, &GenerationMismatchError{BlobGeneration: sealedBlob.Payload.Generation, IndexMissing: true}
-	case gen != sealedBlob.Payload.Generation:
-		return "", sealedBlob, &GenerationMismatchError{BlobGeneration: sealedBlob.Payload.Generation, IndexGeneration: gen}
-	}
-
-	currentPCRValues, err := GetCurrentPCRValuesFromRegisters(tpmDev, sealedBlob, debug)
-	if err != nil {
-		return "", sealedBlob, err
-	}
-	if !measure.VerifyPCRValues(sealedBlob.GetPCRDigestValues(), currentPCRValues) {
-		mismatch := newPCRMismatchError(sealedBlob, currentPCRValues)
-		if mismatch.SeparatorLocked() {
-			return "", sealedBlob, measure.ErrSeparatorLocked
-		}
-		return "", sealedBlob, mismatch
-	}
-
-	code, err := TOTPCode(tpmDev, sealedBlob, nvramIndex, t)
-	return code, sealedBlob, err
-}
-
-func newPCRMismatchError(sealedBlob *SealedBlob, current []tpm2.TPM2BDigest) *measure.PCRMismatchError {
-	expectedDigests := make([][]byte, len(sealedBlob.Payload.PCRDigests))
-	pcrSources := make([]measure.PCRSource, len(sealedBlob.Payload.PCRDigests))
-	for i, d := range sealedBlob.Payload.PCRDigests {
-		expectedDigests[i] = d.Digest.Buffer
-		pcrSources[i] = d.Source
-	}
-	currentDigests := make([][]byte, len(current))
-	for i, d := range current {
-		currentDigests[i] = d.Buffer
-	}
-	return &measure.PCRMismatchError{
-		Message:         "PCR values have changed. Use 'slot approve' with the signing key to approve the new values",
-		PCRIndices:      sealedBlob.GetPCRIndices(),
-		ExpectedDigests: expectedDigests,
-		CurrentDigests:  currentDigests,
-		PCRSources:      pcrSources,
-	}
-}
-
 // PrimaryKeyResponse contains the result of creating a primary key
 type PrimaryKeyResponse struct {
 	ObjectHandle tpm2.TPMHandle
@@ -218,7 +145,7 @@ type PrimaryKeyResponse struct {
 
 // storagePrimaryTemplate is the deterministic ECC P-256 storage key that
 // parents tpm2-kira's objects. Re-created on every use, never persisted.
-func storagePrimaryTemplate() tpm2.TPMTPublic {
+func StoragePrimaryTemplate() tpm2.TPMTPublic {
 	return tpm2.TPMTPublic{
 		Type:    tpm2.TPMAlgECC,
 		NameAlg: tpm2.TPMAlgSHA256,
@@ -257,7 +184,7 @@ func storagePrimaryTemplate() tpm2.TPMTPublic {
 func CreatePrimaryKey(tpmDev transport.TPM) (*PrimaryKeyResponse, error) {
 	createPrimaryCmd := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHOwner,
-		InPublic:      tpm2.New2B(storagePrimaryTemplate()),
+		InPublic:      tpm2.New2B(StoragePrimaryTemplate()),
 	}
 
 	createPrimaryRsp, err := createPrimaryCmd.Execute(tpmDev)
@@ -283,39 +210,115 @@ type CreateSealedObjectResponse struct {
 	Private []byte
 }
 
-// LoadSealedObjectResponse contains the result of loading a sealed object
-type LoadSealedObjectResponse struct {
-	ObjectHandle tpm2.TPMHandle
-	Name         tpm2.TPM2BName
-}
-
-// LoadSealedObject loads the blob's key object into the TPM
-func LoadSealedObject(tpmDev transport.TPM, primaryKey *PrimaryKeyResponse, sealedBlob *SealedBlob) (*LoadSealedObjectResponse, error) {
-	loadCmd := tpm2.Load{
-		ParentHandle: tpm2.AuthHandle{
-			Handle: primaryKey.ObjectHandle,
-			Name:   primaryKey.Name,
-			Auth:   tpm2.PasswordAuth(nil),
-		},
-		InPublic: tpm2.BytesAs2B[tpm2.TPMTPublic](sealedBlob.Payload.Public),
-		InPrivate: tpm2.TPM2BPrivate{
-			Buffer: sealedBlob.Payload.Private,
-		},
-	}
-
-	loadRsp, err := loadCmd.Execute(tpmDev)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load sealed object: %w", err)
-	}
-
-	return &LoadSealedObjectResponse{
-		ObjectHandle: loadRsp.ObjectHandle,
-		Name:         loadRsp.Name,
-	}, nil
-}
-
 // FlushHandle flushes a TPM handle
 func FlushHandle(tpmDev transport.TPM, handle tpm2.TPMHandle) {
 	flushCmd := tpm2.FlushContext{FlushHandle: handle}
 	_, _ = flushCmd.Execute(tpmDev)
+}
+
+// HandleNVRAMNotFoundError converts NVRAM errors to user-friendly messages
+func HandleNVRAMNotFoundError(err error, debug bool) error {
+	if err == nil {
+		return nil
+	}
+
+	errStr := err.Error()
+	if strings.Contains(errStr, "TPM_RC_HANDLE") ||
+		strings.Contains(errStr, "does not exist") ||
+		strings.Contains(errStr, "TPM_RC_NV_UNINITIALIZED") {
+		if debug {
+			return fmt.Errorf("tpm2-kira has not been configured yet. Run 'tpm2-kira slot add' to set it up (debug: %w)", err)
+		}
+		return fmt.Errorf("tpm2-kira has not been configured yet. Run 'tpm2-kira slot add' to set it up")
+	}
+	return err
+}
+
+// ReadFromNVRAM reads data from a TPM NVRAM index
+func ReadFromNVRAM(tpmDev transport.TPM, index uint32) ([]byte, error) {
+	nvIndex := tpm2.TPMHandle(index)
+
+	// Read public area to get size
+	readPublic := tpm2.NVReadPublic{
+		NVIndex: nvIndex,
+	}
+
+	readPublicResp, err := readPublic.Execute(tpmDev)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read NVRAM public area (index may not exist): %w", err)
+	}
+
+	nvPublic, err := readPublicResp.NVPublic.Contents()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse NVRAM public area: %w", err)
+	}
+
+	dataSize := nvPublic.DataSize
+	data := make([]byte, dataSize)
+
+	// Read data from NVRAM in chunks
+	maxChunkSize := uint16(1024)
+	offset := uint16(0)
+
+	for offset < dataSize {
+		chunkSize := maxChunkSize
+		if offset+chunkSize > dataSize {
+			chunkSize = dataSize - offset
+		}
+
+		read := tpm2.NVRead{
+			AuthHandle: tpm2.AuthHandle{
+				Handle: nvIndex,
+				Name:   readPublicResp.NVName,
+				Auth:   tpm2.PasswordAuth(nil),
+			},
+			NVIndex: tpm2.NamedHandle{
+				Handle: nvIndex,
+				Name:   readPublicResp.NVName,
+			},
+			Size:   chunkSize,
+			Offset: offset,
+		}
+
+		readResp, err := read.Execute(tpmDev)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read from NVRAM at offset %d: %w", offset, err)
+		}
+
+		copy(data[offset:], readResp.Data.Buffer)
+		offset += chunkSize
+	}
+
+	return data, nil
+}
+
+func UndefineIndex(tpmDev transport.TPM, index uint32) error {
+	h := tpm2.TPMHandle(index)
+	pub, err := (tpm2.NVReadPublic{NVIndex: h}).Execute(tpmDev)
+	if err != nil {
+		return err
+	}
+	_, err = (tpm2.NVUndefineSpace{
+		AuthHandle: tpm2.TPMRHOwner,
+		NVIndex:    tpm2.NamedHandle{Handle: h, Name: pub.NVName},
+	}).Execute(tpmDev)
+	return err
+}
+
+// NVRAMIndexExists performs a lightweight check whether the given NVRAM index
+// is defined and contains data.  It only reads the NV public area — no
+// unsealing or authorization is attempted.
+func NVRAMIndexExists(tpmDev transport.TPM, index uint32) bool {
+	readPublic := tpm2.NVReadPublic{
+		NVIndex: tpm2.TPMHandle(index),
+	}
+	resp, err := readPublic.Execute(tpmDev)
+	if err != nil {
+		return false
+	}
+	nvPub, err := resp.NVPublic.Contents()
+	if err != nil {
+		return false
+	}
+	return nvPub.DataSize > 0
 }

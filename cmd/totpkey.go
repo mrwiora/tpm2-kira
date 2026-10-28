@@ -17,6 +17,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
 
@@ -188,7 +189,7 @@ func generationIndexName(tpmDev transport.TPM, index uint32) ([]byte, error) {
 // ReadGeneration returns the value of a generation index. It returns
 // ErrCodesLocked when the index is read-locked.
 func ReadGeneration(tpmDev transport.TPM, index uint32) (uint64, error) {
-	data, err := ReadFromNVRAM(tpmDev, index)
+	data, err := tpmdev.ReadFromNVRAM(tpmDev, index)
 	if err != nil {
 		if strings.Contains(err.Error(), "TPM_RC_NV_LOCKED") {
 			return 0, ErrCodesLocked
@@ -209,7 +210,7 @@ func writeGeneration(tpmDev transport.TPM, index uint32, gen uint64, pubKey cryp
 	if err != nil {
 		return nil, fmt.Errorf("failed to load signing key for the generation index: %w", err)
 	}
-	defer FlushHandle(tpmDev, loadRsp.ObjectHandle)
+	defer tpmdev.FlushHandle(tpmDev, loadRsp.ObjectHandle)
 	writePolicy, err := signing.ComputeNVWritePolicyDigestWithHandle(tpmDev, loadRsp.ObjectHandle, loadRsp.Name, pubKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute the generation index write policy: %w", err)
@@ -315,7 +316,7 @@ func newPolicyRef() ([]byte, error) {
 // CreateTOTPKey creates the HMAC key object for key under the primary key.
 // The key is sent to the TPM in a salted, parameter-encrypted session, so it
 // does not cross the bus in the clear.
-func CreateTOTPKey(tpmDev transport.TPM, primary *PrimaryKeyResponse, key []byte, alg tpm2.TPMAlgID, authPolicy []byte) (*CreateSealedObjectResponse, error) {
+func CreateTOTPKey(tpmDev transport.TPM, primary *tpmdev.PrimaryKeyResponse, key []byte, alg tpm2.TPMAlgID, authPolicy []byte) (*tpmdev.CreateSealedObjectResponse, error) {
 	session := tpm2.HMAC(tpm2.TPMAlgSHA256, 16,
 		tpm2.Salted(primary.ObjectHandle, primary.Public),
 		tpm2.AESEncryption(128, tpm2.EncryptIn))
@@ -331,7 +332,7 @@ func CreateTOTPKey(tpmDev transport.TPM, primary *PrimaryKeyResponse, key []byte
 	if err != nil {
 		return nil, fmt.Errorf("failed to create the TOTP key in the TPM: %w", err)
 	}
-	return &CreateSealedObjectResponse{Public: rsp.OutPublic.Bytes(), Private: rsp.OutPrivate.Buffer}, nil
+	return &tpmdev.CreateSealedObjectResponse{Public: rsp.OutPublic.Bytes(), Private: rsp.OutPrivate.Buffer}, nil
 }
 
 func totpKeyTemplate(alg tpm2.TPMAlgID, authPolicy []byte) tpm2.TPMTPublic {
@@ -387,16 +388,16 @@ func TOTPCode(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, t time.T
 		return "", err
 	}
 	defer done()
-	primary, err := CreatePrimaryKey(tpmDev)
+	primary, err := tpmdev.CreatePrimaryKey(tpmDev)
 	if err != nil {
 		return "", err
 	}
-	defer FlushHandle(tpmDev, primary.ObjectHandle)
+	defer tpmdev.FlushHandle(tpmDev, primary.ObjectHandle)
 	key, err := LoadSealedObject(tpmDev, primary, blob)
 	if err != nil {
 		return "", err
 	}
-	defer FlushHandle(tpmDev, key.ObjectHandle)
+	defer tpmdev.FlushHandle(tpmDev, key.ObjectHandle)
 
 	counter := binary.BigEndian.AppendUint64(nil, uint64(t.Unix()/30))
 	rsp, err := tpm2.Hmac{
@@ -448,7 +449,7 @@ func approvedSessionThen(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint3
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load the signing public key: %w", err)
 	}
-	done := func() { FlushHandle(tpmDev, signKey.ObjectHandle) }
+	done := func() { tpmdev.FlushHandle(tpmDev, signKey.ObjectHandle) }
 
 	hashAlgo := blob.GetHashAlgo()
 	session := tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm transport.TPM, handle tpm2.TPMISHPolicy, _ tpm2.TPM2BNonce) error {
@@ -509,7 +510,7 @@ func approvedSessionThen(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint3
 // index, so that no TOTP code can be computed until the next reboot. Run it
 // when leaving the initrd; the systemd unit and the initramfs-tools script do.
 func CapCommand(tpmPath string) error {
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}

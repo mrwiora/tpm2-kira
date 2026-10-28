@@ -13,6 +13,7 @@ import (
 	"github.com/google/go-tpm/tpm2"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // The factor's round trip on swtpm: wrapped for this TPM's EK and the
@@ -107,7 +108,7 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 	// A different TPM (a second swtpm) with the same blob: the EK is
 	// another, and the credential does not open.
 	other := startSWTPM(t)
-	otherTPM, err := OpenTPM(other)
+	otherTPM, err := tpmdev.Open(other)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,8 +138,8 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 		Secret:         tpm2.TPM2BEncryptedSecret{Buffer: w.EncryptedSecret},
 	}.Execute(tpm)
 	done()
-	FlushHandle(tpm, rk.handle)
-	FlushHandle(tpm, ek.handle)
+	tpmdev.FlushHandle(tpm, rk.handle)
+	tpmdev.FlushHandle(tpm, ek.handle)
 	if err == nil {
 		t.Fatal("the slot's policy alone opened the credential")
 	}
@@ -192,7 +193,7 @@ func TestFactorStatusAndUnenrol(t *testing.T) {
 		t.Fatalf("unenrol without a factor: %v", err)
 	}
 
-	tpmDev, err := OpenTPM(sock)
+	tpmDev, err := tpmdev.Open(sock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +229,7 @@ func TestFactorStatusAndUnenrol(t *testing.T) {
 	if err := FactorUnenrol(sock, 1, privPath, false); err != nil {
 		t.Fatalf("unenrol: %v", err)
 	}
-	tpmDev, _ = OpenTPM(sock)
+	tpmDev, _ = tpmdev.Open(sock)
 	defer tpmDev.Close()
 	_, sb, _ := readSlot(tpmDev, slot)
 	if len(sb.Payload.Attestation.ReleaseKeyPublic) != 0 {

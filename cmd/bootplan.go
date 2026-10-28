@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"github.com/tpm2-trust/assh/config"
 )
@@ -154,7 +155,7 @@ func readPlanInputs(o PlanOptions) planInputs {
 	in.Config = cfg
 	in.DHCP = cfg.Remote.Net.DHCPIdentity()
 
-	tpmDev, err := OpenTPM(o.TPMPath)
+	tpmDev, err := tpmdev.Open(o.TPMPath)
 	if err != nil {
 		in.TPMErr = err.Error()
 	} else {

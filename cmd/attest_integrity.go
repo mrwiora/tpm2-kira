@@ -38,6 +38,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // DefaultAttestSignerPath is the signing public key inside the initramfs.
@@ -122,7 +123,7 @@ func signerForImage(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer, d
 	}
 	for _, idx := range found {
 		slot := attestSlot(idx)
-		raw, err := ReadFromNVRAM(tpmDev, idx)
+		raw, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
 		if err != nil {
 			fmt.Fprintf(errOut, "tpm2-kira: slot %d: cannot read the attestation record: %v\n", slot, err)
 			return nil, ExitInternal
@@ -147,18 +148,18 @@ func signerForImage(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer, d
 // enrolment: which EK is offered, whether it has a vendor certificate, and
 // whether that certificate verifies against the roots embedded in the core.
 func AttestEKCert(tpmPath string, debug bool) error {
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
 	defer tpmDev.Close()
-	defer CleanupTPM(tpmDev, debug)
+	defer tpmdev.Cleanup(tpmDev, debug)
 
 	alg, ek, pub, err := pickCertifiedEK(tpmDev)
 	if err != nil {
 		return err
 	}
-	FlushHandle(tpmDev, ek.handle)
+	tpmdev.FlushHandle(tpmDev, ek.handle)
 	cert := readEKCert(tpmDev, alg)
 	chain := readEKCertChain(tpmDev, cert)
 	fmt.Printf("EK offered at enrolment: %s\n", ekAlgName(alg))

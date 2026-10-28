@@ -20,6 +20,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // TPM-facing half of attestation: AK and EK handling, quotes and credential
@@ -45,8 +46,8 @@ const (
 //
 // Side effect, also wanted: the endorsement seed survives TPM2_Clear, so the
 // AK does too, while resetCount restarts — which the verifier then flags.
-func createAKParent(tpmDev transport.TPM) (*PrimaryKeyResponse, error) {
-	tmpl := storagePrimaryTemplate()
+func createAKParent(tpmDev transport.TPM) (*tpmdev.PrimaryKeyResponse, error) {
+	tmpl := tpmdev.StoragePrimaryTemplate()
 	rsp, err := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.AuthHandle{Handle: tpm2.TPMRHEndorsement, Auth: tpm2.PasswordAuth(nil)},
 		InPublic:      tpm2.New2B(tmpl),
@@ -54,7 +55,7 @@ func createAKParent(tpmDev transport.TPM) (*PrimaryKeyResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create the attestation key's parent in the endorsement hierarchy (endorsement auth set?): %w", err)
 	}
-	return &PrimaryKeyResponse{ObjectHandle: rsp.ObjectHandle, Name: rsp.Name}, nil
+	return &tpmdev.PrimaryKeyResponse{ObjectHandle: rsp.ObjectHandle, Name: rsp.Name}, nil
 }
 
 // CreateAK creates an attestation key under the endorsement-hierarchy
@@ -66,7 +67,7 @@ func CreateAK(tpmDev transport.TPM) (pub, priv, name []byte, err error) {
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	defer FlushHandle(tpmDev, primary.ObjectHandle)
+	defer tpmdev.FlushHandle(tpmDev, primary.ObjectHandle)
 
 	var lastErr error
 	for _, tmpl := range []tpm2.TPMTPublic{attest.AKTemplateECC(), attest.AKTemplateRSA()} {
@@ -103,7 +104,7 @@ func loadAK(tpmDev transport.TPM, b *Attestation) (*loadedKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer FlushHandle(tpmDev, primary.ObjectHandle)
+	defer tpmdev.FlushHandle(tpmDev, primary.ObjectHandle)
 	pub, err := tpm2.Unmarshal[tpm2.TPMTPublic](b.AKPublic)
 	if err != nil {
 		return nil, fmt.Errorf("stored AK public area is corrupt: %w", err)
@@ -117,7 +118,7 @@ func loadAK(tpmDev transport.TPM, b *Attestation) (*loadedKey, error) {
 		return nil, fmt.Errorf("failed to load the attestation key (was the TPM cleared?): %w", err)
 	}
 	if !bytes.Equal(rsp.Name.Buffer, b.AKName) {
-		FlushHandle(tpmDev, rsp.ObjectHandle)
+		tpmdev.FlushHandle(tpmDev, rsp.ObjectHandle)
 		return nil, fmt.Errorf("loaded attestation key does not match the stored Name")
 	}
 	return &loadedKey{handle: rsp.ObjectHandle, name: rsp.Name}, nil
@@ -139,7 +140,7 @@ func createEK(tpmDev transport.TPM, alg uint16) (*loadedKey, []byte, error) {
 	}
 	pub, err := rsp.OutPublic.Contents()
 	if err != nil {
-		FlushHandle(tpmDev, rsp.ObjectHandle)
+		tpmdev.FlushHandle(tpmDev, rsp.ObjectHandle)
 		return nil, nil, err
 	}
 	return &loadedKey{handle: rsp.ObjectHandle, name: rsp.Name}, tpm2.Marshal(*pub), nil
@@ -175,7 +176,7 @@ func pickCertifiedEK(tpmDev transport.TPM) (uint16, *loadedKey, []byte, error) {
 // readEKCertChain reads the TPM's intermediates for the EK certificate (Intel
 // PTT keeps them concatenated in EKCertChainNVIndex); nil when absent.
 func readEKCertChain(tpmDev transport.TPM, leaf []byte) []byte {
-	data, err := ReadFromNVRAM(tpmDev, attest.EKCertChainNVIndex)
+	data, err := tpmdev.ReadFromNVRAM(tpmDev, attest.EKCertChainNVIndex)
 	if err != nil || len(data) > attest.MaxEKCertChain {
 		data = nil
 	}
@@ -237,7 +238,7 @@ func readEKCert(tpmDev transport.TPM, alg uint16) []byte {
 	if alg == uint16(tpm2.TPMAlgRSA) {
 		idx = ekCertNVRSA
 	}
-	data, err := ReadFromNVRAM(tpmDev, idx)
+	data, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
 	if err != nil || len(data) == 0 {
 		return nil
 	}
@@ -314,7 +315,7 @@ func (b *tpmBackend) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteRes
 	if err != nil {
 		return nil, err
 	}
-	defer FlushHandle(b.tpm, ak.handle)
+	defer tpmdev.FlushHandle(b.tpm, ak.handle)
 
 	// PCRs are read after the quote. If one is extended in between, the
 	// values no longer reproduce the quoted digest: retry rather than send
@@ -428,7 +429,7 @@ func (b *tpmBackend) EKPublic() ([]byte, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	FlushHandle(b.tpm, ek.handle)
+	tpmdev.FlushHandle(b.tpm, ek.handle)
 	b.ekAlg = alg
 	b.blob.EKAlg = alg
 	return pub, readEKCert(b.tpm, alg), nil
@@ -445,12 +446,12 @@ func (b *tpmBackend) ActivateCredential(blob, encSecret []byte) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer FlushHandle(b.tpm, ak.handle)
+	defer tpmdev.FlushHandle(b.tpm, ak.handle)
 	ek, _, err := createEK(b.tpm, b.ekAlg)
 	if err != nil {
 		return nil, err
 	}
-	defer FlushHandle(b.tpm, ek.handle)
+	defer tpmdev.FlushHandle(b.tpm, ek.handle)
 	rsp, err := tpm2.ActivateCredential{
 		ActivateHandle: tpm2.AuthHandle{Handle: ak.handle, Name: ak.name, Auth: tpm2.PasswordAuth(nil)},
 		KeyHandle:      tpm2.AuthHandle{Handle: ek.handle, Name: ek.name, Auth: endorsementPolicy()},

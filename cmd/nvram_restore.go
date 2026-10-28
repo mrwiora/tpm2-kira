@@ -10,6 +10,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // NVRAMRestore puts a blob that WriteToNVRAM stashed under NVRAMRecoveryDir
@@ -56,14 +57,14 @@ func NVRAMRestore(tpmPath, file string, nvramIndex uint32, pubKeyPath, privKeyPa
 		return fmt.Errorf("cannot restore: %w", err)
 	}
 
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
 	defer tpmDev.Close()
-	CleanupTPM(tpmDev, debug)
+	tpmdev.Cleanup(tpmDev, debug)
 
-	if existing, err := ReadFromNVRAM(tpmDev, nvramIndex); err == nil {
+	if existing, err := tpmdev.ReadFromNVRAM(tpmDev, nvramIndex); err == nil {
 		if _, err := UnmarshalSealedBlob(existing); err == nil {
 			return fmt.Errorf("cannot restore: slot #%d (0x%08X) holds a blob already.\n"+
 				"  Restoring would replace it. If that is what you want: tpm2-kira slot delete --nvram %d, then restore again",

@@ -12,6 +12,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 
 	"github.com/tpm2-trust/assh/hostkey"
@@ -33,7 +34,7 @@ func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privK
 	}
 
 	// Multi-slot mode – discover populated slots, then reseal each one
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -248,16 +249,16 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		userSpecifiedPCRs = true
 	}
 
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
 	defer tpmDev.Close()
-	CleanupTPM(tpmDev, debug)
+	tpmdev.Cleanup(tpmDev, debug)
 
-	sealedData, err := ReadFromNVRAM(tpmDev, nvramIndex)
+	sealedData, err := tpmdev.ReadFromNVRAM(tpmDev, nvramIndex)
 	if err != nil {
-		return HandleNVRAMNotFoundError(err, debug)
+		return tpmdev.HandleNVRAMNotFoundError(err, debug)
 	}
 	sealedBlob, err := UnmarshalSealedBlob(sealedData)
 	if err != nil {

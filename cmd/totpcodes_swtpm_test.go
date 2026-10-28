@@ -20,6 +20,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // writeTestKeyPair writes a P-256 signing key the way setup does (SEC 1 PEM,
@@ -49,7 +50,7 @@ func writeTestKeyPair(t *testing.T) (pubPath, privPath string) {
 // them, the slot reports itself locked until the next boot.
 func TestCodeBeforeTheSeparatorThenLocked(t *testing.T) {
 	sock := startSWTPM(t)
-	tpm, err := OpenTPM(sock)
+	tpm, err := tpmdev.Open(sock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +118,7 @@ func TestCodeBeforeTheSeparatorThenLocked(t *testing.T) {
 // slot again - unless another signing key does the sealing.
 func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	sock := startSWTPM(t)
-	tpm, err := OpenTPM(sock)
+	tpm, err := tpmdev.Open(sock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +151,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	if _, _, err := SlotCode(tpm, slot, at, false); err != nil {
 		t.Fatalf("code after seal: %v", err)
 	}
-	sealedSize := func() int { raw, _ := ReadFromNVRAM(tpm, slot); return len(raw) }
+	sealedSize := func() int { raw, _ := tpmdev.ReadFromNVRAM(tpm, slot); return len(raw) }
 	plain := sealedSize()
 
 	// Enrol: the phone goes into the slot's blob.

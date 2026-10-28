@@ -17,6 +17,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"golang.org/x/sys/unix"
 )
 
@@ -130,7 +131,7 @@ type machineFacts struct {
 func collectFacts(tpmPath string, debug bool) machineFacts {
 	f := machineFacts{TPM: tpmPath, Routed: map[string]bool{}}
 
-	if tpmDev, err := OpenTPM(tpmPath); err != nil {
+	if tpmDev, err := tpmdev.Open(tpmPath); err != nil {
 		f.TPMErr = err.Error()
 	} else {
 		f.SHA256Bank = measure.TPMHasPCRBank(tpmDev, measure.PCRHashAlgoSHA256)
@@ -334,17 +335,17 @@ func weakSlots(f *machineFacts) []int {
 // ekVerdict is what a phone concludes about this TPM's endorsement key:
 // the vendor whose certificate chain vouches for it, or why none does.
 func ekVerdict(tpmPath string, debug bool) (by, note string) {
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return "", err.Error()
 	}
 	defer tpmDev.Close()
-	defer CleanupTPM(tpmDev, debug)
+	defer tpmdev.Cleanup(tpmDev, debug)
 	alg, ek, pub, err := pickCertifiedEK(tpmDev)
 	if err != nil {
 		return "", err.Error()
 	}
-	FlushHandle(tpmDev, ek.handle)
+	tpmdev.FlushHandle(tpmDev, ek.handle)
 	leaf := readEKCert(tpmDev, alg)
 	by, err = attest.VerifyEKCertificate(pub, leaf, readEKCertChain(tpmDev, leaf), time.Now())
 	if err != nil {
@@ -1526,7 +1527,7 @@ func (c *controller) runBootDebug() error {
 	if err := signing.PrepareSigningKey(signer); err != nil {
 		return err
 	}
-	tpmDev, err := OpenTPM(c.o.TPMPath)
+	tpmDev, err := tpmdev.Open(c.o.TPMPath)
 	if err != nil {
 		return err
 	}

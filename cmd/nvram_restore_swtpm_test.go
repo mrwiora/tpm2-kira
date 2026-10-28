@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // A blob stashed when the rewrite of its slot failed goes back into the
@@ -19,7 +20,7 @@ import (
 // over.
 func TestRestoreBringsTheSlotBack(t *testing.T) {
 	sock := startSWTPM(t)
-	tpm, err := OpenTPM(sock)
+	tpm, err := tpmdev.Open(sock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +38,7 @@ func TestRestoreBringsTheSlotBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("code after seal: %v", err)
 	}
-	stashed, err := ReadFromNVRAM(tpm, slot)
+	stashed, err := tpmdev.ReadFromNVRAM(tpm, slot)
 	if err != nil {
 		t.Fatal(err)
 	}

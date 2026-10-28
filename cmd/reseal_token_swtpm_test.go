@@ -13,6 +13,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/piv"
 	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // The reseal the hooks run after a kernel update, with the signing key on
@@ -92,7 +93,7 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 // readGenerationAt is the generation counter of the slot at idx.
 func readGenerationAt(t *testing.T, sock string, idx uint32) (uint64, error) {
 	t.Helper()
-	tpmDev, err := OpenTPM(sock)
+	tpmDev, err := tpmdev.Open(sock)
 	if err != nil {
 		return 0, err
 	}

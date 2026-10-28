@@ -24,6 +24,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/transport/ble"
 	"github.com/mrwiora/tpm2-kira/transport/frame"
 )
@@ -66,7 +67,7 @@ var errNotEnrolled = errors.New("no phone is enrolled for this slot")
 
 // readSlot returns a slot's blob as stored and parsed.
 func readSlot(tpmDev transport.TPM, idx uint32) ([]byte, *SealedBlob, error) {
-	raw, err := ReadFromNVRAM(tpmDev, idx)
+	raw, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -333,7 +334,7 @@ func randBytes(n int) []byte {
 }
 
 func readSealedSlot(tpmDev transport.TPM, sealIndex uint32) *SealedBlob {
-	data, err := ReadFromNVRAM(tpmDev, sealIndex)
+	data, err := tpmdev.ReadFromNVRAM(tpmDev, sealIndex)
 	if err != nil {
 		return nil
 	}
@@ -365,12 +366,12 @@ type EnrolOptions struct {
 // AttestEnrol binds a phone to this machine over BLE. It runs on the booted,
 // unlocked system: it writes NVRAM and needs the signing key, like `slot add`.
 func AttestEnrol(o EnrolOptions) error {
-	tpmDev, err := OpenTPM(o.TPMPath)
+	tpmDev, err := tpmdev.Open(o.TPMPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", o.TPMPath, err)
 	}
 	defer tpmDev.Close()
-	defer CleanupTPM(tpmDev, o.Debug)
+	defer tpmdev.Cleanup(tpmDev, o.Debug)
 
 	sealIndex := ResolveNVRAMIndex(o.SealIndex)
 	idx, err := AttestIndexForSlot(sealIndex)
@@ -726,13 +727,13 @@ func AttestGate(o GateOptions) int {
 	// process does both halves.
 	tpmPath := preferResourceManager(o.TPMPath)
 	step("version %s; opening the TPM at %s", AppVersion, tpmPath)
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		gateFail("failed to open TPM at %s: %v", tpmPath, err)
 		return ExitInternal
 	}
 	defer tpmDev.Close()
-	defer CleanupTPM(tpmDev, o.Debug)
+	defer tpmdev.Cleanup(tpmDev, o.Debug)
 	return runGateRadio(newGateService(tpmDev, o.SealIndex, o.SignerPath, o.Debug), o, step, nil)
 }
 
@@ -1126,7 +1127,7 @@ func gateRecordCheck(tpmDev transport.TPM, idx uint32, signerPath string) (bool,
 			}
 		}
 	}
-	raw, err := ReadFromNVRAM(tpmDev, idx)
+	raw, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
 	if err != nil {
 		gateFail("cannot read the attestation record at 0x%08X: %v", idx, err)
 		return false, ExitInternal
@@ -1185,7 +1186,7 @@ func reportReceipt(res *attest.AttestResult, recordVerified bool) int {
 
 // AttestStatus shows the enrolment of one slot or all slots.
 func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) error {
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -1247,7 +1248,7 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 			s.Current = "no"
 			invalid++
 		}
-		if raw, err := ReadFromNVRAM(tpmDev, idx); err == nil {
+		if raw, err := tpmdev.ReadFromNVRAM(tpmDev, idx); err == nil {
 			if pub, path, err := attestPublicKey(""); err == nil {
 				s.SigningKey = path
 				if VerifyAttestBlobSignature(raw, pub) == nil {
@@ -1324,12 +1325,12 @@ func AttestQuote(tpmPath string, sealIndex uint32, nonceHex, pcrs, outPath strin
 	if err != nil || len(nonce) < 16 || len(nonce) > 64 {
 		return fmt.Errorf("--nonce must be 16-64 bytes of hex, chosen by the verifier")
 	}
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
 	defer tpmDev.Close()
-	defer CleanupTPM(tpmDev, debug)
+	defer tpmdev.Cleanup(tpmDev, debug)
 
 	idx, err := AttestIndexForSlot(sealIndex)
 	if err != nil {
@@ -1477,7 +1478,7 @@ func AttestUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug b
 		return err
 	}
 	slot := attestSlot(idx)
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}

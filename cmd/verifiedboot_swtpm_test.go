@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // A phone is enrolled only in a boot that the slot's code verified: one
@@ -18,7 +19,7 @@ import (
 // that the person says they checked.
 func TestEnrolmentNeedsAVerifiedBoot(t *testing.T) {
 	sock := startSWTPM(t)
-	tpm, err := OpenTPM(sock)
+	tpm, err := tpmdev.Open(sock)
 	if err != nil {
 		t.Fatal(err)
 	}

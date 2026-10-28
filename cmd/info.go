@@ -13,6 +13,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 )
 
@@ -87,7 +88,7 @@ type SlotInfoJSON struct {
 // it is empty. A blob that cannot be verified is still shown, marked as
 // untrusted, and no file it names is opened.
 func InfoCommand(tpmPath string, nvramIndex uint32, privKeyPath string, debug bool, jsonOutput bool) error {
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -149,7 +150,7 @@ func readSlotInfo(tpmDev transport.TPM, nvramIndex uint32) (*slotInfo, error) {
 		return nil, fmt.Errorf("failed to parse NVRAM public area: %w", err)
 	}
 
-	sealedData, err := ReadFromNVRAM(tpmDev, nvramIndex)
+	sealedData, err := tpmdev.ReadFromNVRAM(tpmDev, nvramIndex)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read from NVRAM: %w", err)
 	}

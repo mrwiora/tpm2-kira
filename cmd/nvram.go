@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -50,82 +51,6 @@ func ValidateBlobIndex(index uint32) error {
 			index, AppNVRAMStart, GenerationIndex(AppNVRAMStart)-1)
 	}
 	return nil
-}
-
-// HandleNVRAMNotFoundError converts NVRAM errors to user-friendly messages
-func HandleNVRAMNotFoundError(err error, debug bool) error {
-	if err == nil {
-		return nil
-	}
-
-	errStr := err.Error()
-	if strings.Contains(errStr, "TPM_RC_HANDLE") ||
-		strings.Contains(errStr, "does not exist") ||
-		strings.Contains(errStr, "TPM_RC_NV_UNINITIALIZED") {
-		if debug {
-			return fmt.Errorf("tpm2-kira has not been configured yet. Run 'tpm2-kira slot add' to set it up (debug: %w)", err)
-		}
-		return fmt.Errorf("tpm2-kira has not been configured yet. Run 'tpm2-kira slot add' to set it up")
-	}
-	return err
-}
-
-// ReadFromNVRAM reads data from a TPM NVRAM index
-func ReadFromNVRAM(tpmDev transport.TPM, index uint32) ([]byte, error) {
-	nvIndex := tpm2.TPMHandle(index)
-
-	// Read public area to get size
-	readPublic := tpm2.NVReadPublic{
-		NVIndex: nvIndex,
-	}
-
-	readPublicResp, err := readPublic.Execute(tpmDev)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read NVRAM public area (index may not exist): %w", err)
-	}
-
-	nvPublic, err := readPublicResp.NVPublic.Contents()
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse NVRAM public area: %w", err)
-	}
-
-	dataSize := nvPublic.DataSize
-	data := make([]byte, dataSize)
-
-	// Read data from NVRAM in chunks
-	maxChunkSize := uint16(1024)
-	offset := uint16(0)
-
-	for offset < dataSize {
-		chunkSize := maxChunkSize
-		if offset+chunkSize > dataSize {
-			chunkSize = dataSize - offset
-		}
-
-		read := tpm2.NVRead{
-			AuthHandle: tpm2.AuthHandle{
-				Handle: nvIndex,
-				Name:   readPublicResp.NVName,
-				Auth:   tpm2.PasswordAuth(nil),
-			},
-			NVIndex: tpm2.NamedHandle{
-				Handle: nvIndex,
-				Name:   readPublicResp.NVName,
-			},
-			Size:   chunkSize,
-			Offset: offset,
-		}
-
-		readResp, err := read.Execute(tpmDev)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read from NVRAM at offset %d: %w", offset, err)
-		}
-
-		copy(data[offset:], readResp.Data.Buffer)
-		offset += chunkSize
-	}
-
-	return data, nil
 }
 
 // MaxNVRAMBlobSize is the largest blob an NV index can hold: TPMS_NV_PUBLIC
@@ -201,7 +126,7 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 	if err != nil {
 		return fmt.Errorf("failed to load signing key for NV write policy: %w", err)
 	}
-	defer FlushHandle(tpmDev, loadRsp.ObjectHandle)
+	defer tpmdev.FlushHandle(tpmDev, loadRsp.ObjectHandle)
 
 	keyHandle := loadRsp.ObjectHandle
 	keyName := loadRsp.Name
@@ -300,7 +225,7 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 	// sized by a uint16 in the NV public area, so a size or offset mistake
 	// would otherwise surface as an unreadable blob at the next boot rather
 	// than here, where the bytes are still in hand.
-	written, err := ReadFromNVRAM(tpmDev, index)
+	written, err := tpmdev.ReadFromNVRAM(tpmDev, index)
 	if err != nil {
 		return stashUnwrittenBlob(index, data, fmt.Errorf("wrote the blob but could not read it back: %w", err))
 	}
@@ -398,7 +323,7 @@ func stashUnwrittenBlobFile(index uint32, data []byte, cause error) error {
 // NVRAMList lists all defined NVRAM indices in the TPM
 func NVRAMList(tpmPath string, nvramIndex uint32, debug bool) error {
 	// Open TPM
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -504,7 +429,7 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 	}
 
 	// Open TPM
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -549,8 +474,8 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 	// the slot is accepted by the gate again, and a new counter starts
 	// above every value this one had.)
 	if nvramIndex >= NVRAMSlotStart && nvramIndex <= NVRAMSlotEnd {
-		if counter := AttestCounterIndex(nvramIndex); NVRAMIndexExists(tpmDev, counter) {
-			if err := undefineIndex(tpmDev, counter); err != nil {
+		if counter := AttestCounterIndex(nvramIndex); tpmdev.NVRAMIndexExists(tpmDev, counter) {
+			if err := tpmdev.UndefineIndex(tpmDev, counter); err != nil {
 				return fmt.Errorf("deleted the slot, but not its record counter 0x%08X: %w", counter, err)
 			}
 		}
@@ -593,33 +518,20 @@ func kiraIndexRole(index uint32) string {
 // interrupted command leaves them, and the boot settings.
 func kiraLeftovers(tpmDev transport.TPM, debug bool) []uint32 {
 	var out []uint32
-	if NVRAMIndexExists(tpmDev, BootSettingsIndex) {
+	if tpmdev.NVRAMIndexExists(tpmDev, BootSettingsIndex) {
 		out = append(out, BootSettingsIndex)
 	}
 	for idx := uint32(NVRAMSlotStart); idx <= NVRAMSlotEnd; idx++ {
-		if NVRAMIndexExists(tpmDev, idx) {
+		if tpmdev.NVRAMIndexExists(tpmDev, idx) {
 			continue
 		}
 		for _, companion := range []uint32{GenerationIndex(idx), AttestCounterIndex(idx)} {
-			if NVRAMIndexExists(tpmDev, companion) {
+			if tpmdev.NVRAMIndexExists(tpmDev, companion) {
 				out = append(out, companion)
 			}
 		}
 	}
 	return out
-}
-
-func undefineIndex(tpmDev transport.TPM, index uint32) error {
-	h := tpm2.TPMHandle(index)
-	pub, err := (tpm2.NVReadPublic{NVIndex: h}).Execute(tpmDev)
-	if err != nil {
-		return err
-	}
-	_, err = (tpm2.NVUndefineSpace{
-		AuthHandle: tpm2.TPMRHOwner,
-		NVIndex:    tpm2.NamedHandle{Handle: h, Name: pub.NVName},
-	}).Execute(tpmDev)
-	return err
 }
 
 // NVRAMDeleteCommand implements 'slot delete'. A slot is one thing: its
@@ -638,7 +550,7 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 	}
 
 	// Everything mode - discover what there is, then delete each.
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -688,16 +600,16 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 		}
 	}
 	if len(leftovers) > 0 {
-		tpmDev, err := OpenTPM(tpmPath)
+		tpmDev, err := tpmdev.Open(tpmPath)
 		if err != nil {
 			return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 		}
 		for _, idx := range leftovers {
-			if !NVRAMIndexExists(tpmDev, idx) {
+			if !tpmdev.NVRAMIndexExists(tpmDev, idx) {
 				continue // went with its slot
 			}
 			fmt.Printf("Deleting leftover 0x%08X... ", idx)
-			if err := undefineIndex(tpmDev, idx); err != nil {
+			if err := tpmdev.UndefineIndex(tpmDev, idx); err != nil {
 				fmt.Printf("FAILED: %v\n", err)
 				failed++
 				continue
@@ -750,7 +662,7 @@ func confirmDeleteAll(slots, enrolled, leftovers int, yes bool) error {
 // NVRAMStatus shows detailed status of the specified NVRAM index
 func NVRAMStatus(tpmPath string, nvramIndex uint32, debug bool) error {
 	// Open TPM
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -799,7 +711,7 @@ func NVRAMStatus(tpmPath string, nvramIndex uint32, debug bool) error {
 
 	// Try to determine if it contains sealed data
 	if nvPublic.Attributes.Written {
-		data, readErr := ReadFromNVRAM(tpmDev, nvramIndex)
+		data, readErr := tpmdev.ReadFromNVRAM(tpmDev, nvramIndex)
 		switch {
 		case readErr != nil:
 			fmt.Printf("Contents: unreadable (%v)\n", readErr)

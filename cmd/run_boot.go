@@ -45,6 +45,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+
 	"github.com/google/go-tpm/tpm2/transport"
 	"golang.org/x/sys/unix"
 )
@@ -437,7 +439,7 @@ func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*gateServi
 		return nil, nil // no gate in this image
 	}
 	path := preferResourceManager(tpmPath)
-	tpmDev, err := OpenTPM(path)
+	tpmDev, err := tpmdev.Open(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: cannot open the TPM at %s: %v\n", path, err)
 		return nil, nil
@@ -532,11 +534,11 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		}, vaultKey, recipes.forVolume, ask), unlockLogger(debug))
 	}
 	open := func() (transport.TPMCloser, error) {
-		tpmDev, err := OpenTPM(tpmPath)
+		tpmDev, err := tpmdev.Open(tpmPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 		}
-		CleanupTPM(tpmDev, debug)
+		tpmdev.Cleanup(tpmDev, debug)
 		return tpmDev, nil
 	}
 	enter := startEnterReader(0)

@@ -12,6 +12,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/cmd"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // Version is the application version, set by build flags
@@ -61,7 +62,7 @@ func main() {
 	// The global options, before the command: the defaults of the
 	// command's own options of the same names.
 	globalFlags := flag.NewFlagSet("tpm2-kira", flag.ExitOnError)
-	tpmPath := globalFlags.String("tpm", cmd.DefaultTPMPath, "Path to TPM device")
+	tpmPath := globalFlags.String("tpm", tpmdev.DefaultPath, "Path to TPM device")
 	globalFlags.Func("nvram", "A slot, 0-15, or a full NV index", func(v string) error {
 		n, err := strconv.ParseUint(v, 0, 32)
 		if err != nil {

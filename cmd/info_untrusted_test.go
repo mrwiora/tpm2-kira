@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 
 	"github.com/google/go-tpm/tpm2"
@@ -176,11 +177,11 @@ func (c *countingTPM) Close() error                { return nil }
 
 func TestCleanupTPMSkipsManagedDevice(t *testing.T) {
 	inner := &countingTPM{}
-	CleanupTPM(&openedTPM{TPMCloser: inner, managed: true}, false)
+	tpmdev.Cleanup(&tpmdev.Opened{TPMCloser: inner, Managed: true}, false)
 	if inner.sent != 0 {
 		t.Errorf("CleanupTPM sent %d command(s) through the resource manager, want none", inner.sent)
 	}
-	CleanupTPM(&openedTPM{TPMCloser: inner, managed: false}, false)
+	tpmdev.Cleanup(&tpmdev.Opened{TPMCloser: inner, Managed: false}, false)
 	if inner.sent == 0 {
 		t.Error("CleanupTPM sent nothing on an unmanaged device")
 	}

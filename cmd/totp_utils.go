@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"github.com/google/go-tpm/tpm2"
 	"rsc.io/qr"
@@ -73,7 +74,7 @@ func PrintKIRAError(err error) {
 
 		fmt.Println()
 		fmt.Println("To fix this, run: tpm2-kira slot approve --privkey /path/to/private.key")
-	} else if IsTPMPolicyFailure(err) {
+	} else if tpmdev.IsTPMPolicyFailure(err) {
 		// Handle TPM policy failures with helpful guidance
 		fmt.Println(FormatKIRAError(err))
 		fmt.Println()

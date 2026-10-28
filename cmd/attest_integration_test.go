@@ -21,6 +21,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/attest/attesttest"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // TestAttestationOnSWTPM runs enrolment (real EK, PolicySecret session,
@@ -277,7 +278,7 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 	mine, attacker := testSigner(t), testSigner(t)
 	idx := uint32(NVRAMSlotStart + 4)
 	writeTestSlot(t, s.tpm, idx, mine)
-	sealedOnly, _ := ReadFromNVRAM(s.tpm, idx)
+	sealedOnly, _ := tpmdev.ReadFromNVRAM(s.tpm, idx)
 	counterIdx := AttestCounterIndex(idx)
 
 	// The initramfs: built once, carrying this machine's signing public key.
@@ -323,7 +324,7 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 	if err := writeAttestBlob(s.tpm, idx, s.blob, mine); err != nil {
 		t.Fatal(err)
 	}
-	onePhone, _ := ReadFromNVRAM(s.tpm, idx)
+	onePhone, _ := tpmdev.ReadFromNVRAM(s.tpm, idx)
 	// One blob: the phone went in and retired the TOTP key; the approval
 	// is as it was.
 	if before, _ := UnmarshalSealedBlob(sealedOnly); before.Payload.Attestation != nil {
@@ -348,7 +349,7 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 	if err := writeAttestBlob(s.tpm, idx, s.blob, mine); err != nil {
 		t.Fatal(err)
 	}
-	twoPhones, _ := ReadFromNVRAM(s.tpm, idx)
+	twoPhones, _ := tpmdev.ReadFromNVRAM(s.tpm, idx)
 	accepted("second phone, same image")
 
 	// 1. The attacker's own blob for the slot, with the attacker's phone
@@ -425,14 +426,14 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	accepted("re-enrolled")
-	last, _ := ReadFromNVRAM(s.tpm, idx)
+	last, _ := tpmdev.ReadFromNVRAM(s.tpm, idx)
 
 	// 5. The phones are removed (the blob rewritten without them, the
 	// counter raised) and the blob that was current until then is put back.
 	if err := writeAttestBlob(s.tpm, idx, nil, mine); err != nil {
 		t.Fatal(err)
 	}
-	unenrolled, _ := ReadFromNVRAM(s.tpm, idx)
+	unenrolled, _ := tpmdev.ReadFromNVRAM(s.tpm, idx)
 	if a, err := UnmarshalSealedBlob(unenrolled); err != nil || a.Payload.Attestation != nil || !a.HasTOTPKey() {
 		t.Fatalf("removing the phones did not give the slot a TOTP key back: %+v %v", a, err)
 	}
@@ -562,7 +563,7 @@ func TestStaleSlotCanBeRemoved(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	oldBlob, _ := ReadFromNVRAM(s.tpm, slot0)
+	oldBlob, _ := tpmdev.ReadFromNVRAM(s.tpm, slot0)
 	// A record counter whose slot is gone, as an interrupted command leaves it.
 	orphan := AttestCounterIndex(NVRAMSlotStart + 7)
 	if _, err := bumpAttestCounter(s.tpm, orphan); err != nil {
@@ -589,7 +590,7 @@ func TestStaleSlotCanBeRemoved(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer tpmDev.Close()
-		return NVRAMIndexExists(tpmDev, idx)
+		return tpmdev.NVRAMIndexExists(tpmDev, idx)
 	}
 	s.tpm.Close() // the commands open the TPM themselves; swtpm serves one client
 

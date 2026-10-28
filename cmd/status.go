@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // 'tpm2-kira status' is the one page a person wants before a reboot: the
@@ -78,7 +79,7 @@ func collectStatus(o StatusOptions) StatusReport {
 		r.Version = "unknown"
 	}
 
-	tpmDev, err := OpenTPM(o.TPMPath)
+	tpmDev, err := tpmdev.Open(o.TPMPath)
 	if err != nil {
 		r.TPMError = fmt.Sprintf("the TPM at %s cannot be opened: %v", o.TPMPath, err)
 	} else {

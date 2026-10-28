@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"github.com/google/go-attestation/attest"
 	"github.com/google/go-tpm/tpm2"
@@ -2018,7 +2019,7 @@ func TestIsTPMPolicyFailure(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := IsTPMPolicyFailure(tt.err)
+			result := tpmdev.IsTPMPolicyFailure(tt.err)
 			if result != tt.expected {
 				t.Errorf("Expected %v, got %v", tt.expected, result)
 			}
@@ -2051,7 +2052,7 @@ func TestHandleNVRAMNotFoundError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := HandleNVRAMNotFoundError(tt.err, tt.debug)
+			result := tpmdev.HandleNVRAMNotFoundError(tt.err, tt.debug)
 			if tt.expectNil {
 				if result != nil {
 					t.Errorf("Expected nil, got %v", result)

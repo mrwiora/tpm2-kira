@@ -16,6 +16,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // errBootKeyRefused: the TPM did not let the boot key be used, because the
@@ -28,11 +29,11 @@ func createBootKey(tpmDev transport.TPM, sealed *SealedBlob) (public, private []
 	if err != nil {
 		return nil, nil, err
 	}
-	primary, err := CreatePrimaryKey(tpmDev)
+	primary, err := tpmdev.CreatePrimaryKey(tpmDev)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer FlushHandle(tpmDev, primary.ObjectHandle)
+	defer tpmdev.FlushHandle(tpmDev, primary.ObjectHandle)
 	rsp, err := tpm2.Create{
 		ParentHandle: tpm2.AuthHandle{Handle: primary.ObjectHandle, Name: primary.Name, Auth: tpm2.PasswordAuth(nil)},
 		InPublic:     tpm2.New2B(attest.BootKeyTemplate(policy)),
@@ -49,11 +50,11 @@ func createBootKey(tpmDev transport.TPM, sealed *SealedBlob) (public, private []
 
 // loadBootKey loads the slot's boot key; the caller flushes the handle.
 func loadBootKey(tpmDev transport.TPM, att *Attestation) (*loadedKey, error) {
-	primary, err := CreatePrimaryKey(tpmDev)
+	primary, err := tpmdev.CreatePrimaryKey(tpmDev)
 	if err != nil {
 		return nil, err
 	}
-	defer FlushHandle(tpmDev, primary.ObjectHandle)
+	defer tpmdev.FlushHandle(tpmDev, primary.ObjectHandle)
 	rsp, err := tpm2.Load{
 		ParentHandle: tpm2.AuthHandle{Handle: primary.ObjectHandle, Name: primary.Name, Auth: tpm2.PasswordAuth(nil)},
 		InPublic:     tpm2.BytesAs2B[tpm2.TPMTPublic](att.BootKeyPublic),
@@ -72,12 +73,12 @@ func certifyBootKey(tpmDev transport.TPM, att *Attestation, qd []byte) (info, si
 	if err != nil {
 		return nil, nil, err
 	}
-	defer FlushHandle(tpmDev, ak.handle)
+	defer tpmdev.FlushHandle(tpmDev, ak.handle)
 	boot, err := loadBootKey(tpmDev, att)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer FlushHandle(tpmDev, boot.handle)
+	defer tpmdev.FlushHandle(tpmDev, boot.handle)
 	rsp, err := tpm2.Certify{
 		// Certifying is an ADMIN-role use of the key, which its (empty)
 		// auth value allows; using it for key agreement is not.
@@ -116,7 +117,7 @@ func signWithBootKey(tpmDev transport.TPM, sealed *SealedBlob, blobIndex uint32,
 	if err != nil {
 		return nil, err
 	}
-	defer FlushHandle(tpmDev, boot.handle)
+	defer tpmdev.FlushHandle(tpmDev, boot.handle)
 	session, done, err := approvedSession(tpmDev, sealed, blobIndex)
 	if err != nil {
 		return nil, fmt.Errorf("%w (%w)", errBootKeyRefused, err)
@@ -155,7 +156,7 @@ func openBootChallenge(tpmDev transport.TPM, sealed *SealedBlob, blobIndex uint3
 	if err != nil {
 		return "", nil, err
 	}
-	defer FlushHandle(tpmDev, boot.handle)
+	defer tpmdev.FlushHandle(tpmDev, boot.handle)
 	session, done, err := approvedSession(tpmDev, sealed, blobIndex)
 	if err != nil {
 		return "", nil, fmt.Errorf("%w (%w)", errBootKeyRefused, err)

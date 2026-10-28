@@ -36,6 +36,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
@@ -407,7 +408,7 @@ type vaultKeys struct {
 // out (the console) and to log (the boot's log). Nil when no slot has the
 // method.
 func startVaultKeys(ctx context.Context, tpmPath string, out io.Writer, log func(string), debug bool) *vaultKeys {
-	tpmDev, err := OpenTPM(preferResourceManager(tpmPath))
+	tpmDev, err := tpmdev.Open(preferResourceManager(tpmPath))
 	if err != nil {
 		return nil
 	}
@@ -576,12 +577,12 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		return nil, 0, fmt.Errorf("the signing key is not usable: %w", err)
 	}
 
-	tpmDev, err := OpenTPM(o.TPMPath)
+	tpmDev, err := tpmdev.Open(o.TPMPath)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to open TPM at %s: %w", o.TPMPath, err)
 	}
 	defer tpmDev.Close()
-	defer CleanupTPM(tpmDev, o.Debug)
+	defer tpmdev.Cleanup(tpmDev, o.Debug)
 
 	raw, sealed, err := readSlot(tpmDev, idx)
 	if err != nil {
@@ -619,7 +620,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		if err != nil {
 			return nil, 0, err
 		}
-		FlushHandle(tpmDev, ek.handle)
+		tpmdev.FlushHandle(tpmDev, ek.handle)
 		att.EKAlg = alg
 	}
 	if len(att.ReleaseKeyPublic) == 0 {
@@ -664,7 +665,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	FlushHandle(tpmDev, ek.handle)
+	tpmdev.FlushHandle(tpmDev, ek.handle)
 	genName, err := generationIndexName(tpmDev, GenerationIndex(idx))
 	if err != nil {
 		return nil, 0, err
@@ -750,7 +751,7 @@ func VaultStatus(tpmPath string, sealIndex uint32, debug bool) error {
 		return err
 	}
 	slot := attestSlot(idx)
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -796,7 +797,7 @@ func VaultUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug bo
 		return err
 	}
 	slot := attestSlot(idx)
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}

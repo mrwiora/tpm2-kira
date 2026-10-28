@@ -28,6 +28,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/mrwiora/tpm2-kira/cmd"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 const (
@@ -1547,7 +1548,7 @@ func TestResealRevokesOldBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldBlob, err := cmd.ReadFromNVRAM(tpm, index)
+	oldBlob, err := tpmdev.ReadFromNVRAM(tpm, index)
 	tpm.Close()
 	if err != nil {
 		t.Fatal(err)

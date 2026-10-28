@@ -5,6 +5,8 @@ package cmd
 import (
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+
 	"github.com/google/go-tpm/tpm2"
 )
 
@@ -13,7 +15,7 @@ import (
 // signing key's holder can write it.
 func TestBootSettingsOnSWTPM(t *testing.T) {
 	sock := startSWTPM(t)
-	tpmDev, err := OpenTPM(sock)
+	tpmDev, err := tpmdev.Open(sock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,9 +36,9 @@ func TestBootSettingsOnSWTPM(t *testing.T) {
 
 	// Another key cannot write it: the index's write policy names the key
 	// that wrote it (PolicySigned).
-	tpmDev, _ = OpenTPM(sock)
+	tpmDev, _ = tpmdev.Open(sock)
 	defer tpmDev.Close()
-	data, _ := ReadFromNVRAM(tpmDev, BootSettingsIndex)
+	data, _ := tpmdev.ReadFromNVRAM(tpmDev, BootSettingsIndex)
 	pub, _ := tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(BootSettingsIndex)}.Execute(tpmDev)
 	if _, err := (tpm2.NVWrite{
 		AuthHandle: tpm2.AuthHandle{Handle: tpm2.TPMRHOwner, Auth: tpm2.PasswordAuth(nil)},
@@ -45,7 +47,7 @@ func TestBootSettingsOnSWTPM(t *testing.T) {
 	}).Execute(tpmDev); err == nil {
 		t.Fatal("the owner wrote the boot settings without the signing key")
 	}
-	if again, _ := ReadFromNVRAM(tpmDev, BootSettingsIndex); string(again) != string(data) {
+	if again, _ := tpmdev.ReadFromNVRAM(tpmDev, BootSettingsIndex); string(again) != string(data) {
 		t.Fatal("the boot settings changed")
 	}
 	if role := kiraIndexRole(BootSettingsIndex); role == "" {
@@ -56,7 +58,7 @@ func TestBootSettingsOnSWTPM(t *testing.T) {
 	if err := WriteBootSettings(tpmDev, BootSettings{}, key); err != nil {
 		t.Fatal(err)
 	}
-	if NVRAMIndexExists(tpmDev, BootSettingsIndex) {
+	if tpmdev.NVRAMIndexExists(tpmDev, BootSettingsIndex) {
 		t.Fatal("debug off left the index")
 	}
 

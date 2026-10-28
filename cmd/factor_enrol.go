@@ -16,6 +16,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // FactorEnrolOptions is what 'phone salt enrol' takes.
@@ -97,12 +98,12 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 		return nil, 0, err
 	}
 	slot := attestSlot(idx)
-	tpmDev, err := OpenTPM(o.TPMPath)
+	tpmDev, err := tpmdev.Open(o.TPMPath)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to open TPM at %s: %w", o.TPMPath, err)
 	}
 	defer tpmDev.Close()
-	CleanupTPM(tpmDev, o.Debug)
+	tpmdev.Cleanup(tpmDev, o.Debug)
 
 	att, err := loadAttestBlob(tpmDev, idx)
 	if err != nil {
@@ -269,7 +270,7 @@ func writeKeyOut(path string, key []byte) error {
 // is the phone's; the machine keeps nothing of it, so nothing more can be
 // said here. --json for scripts.
 func FactorStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) error {
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -335,7 +336,7 @@ func FactorUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug b
 		return err
 	}
 	slot := attestSlot(idx)
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}

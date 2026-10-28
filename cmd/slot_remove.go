@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
@@ -82,9 +84,9 @@ func (c SlotContents) Remains() string {
 func collectSlotContents(tpmDev transport.TPM, devices []LuksDeviceStatus, slot int) SlotContents {
 	c := SlotContents{Slot: slot, Index: NVRAMSlotStart + uint32(slot)}
 	if tpmDev != nil {
-		c.Blob = NVRAMIndexExists(tpmDev, c.Index)
-		c.Generation = NVRAMIndexExists(tpmDev, GenerationIndex(c.Index))
-		c.Counter = NVRAMIndexExists(tpmDev, AttestCounterIndex(c.Index))
+		c.Blob = tpmdev.NVRAMIndexExists(tpmDev, c.Index)
+		c.Generation = tpmdev.NVRAMIndexExists(tpmDev, GenerationIndex(c.Index))
+		c.Counter = tpmdev.NVRAMIndexExists(tpmDev, AttestCounterIndex(c.Index))
 	}
 	for _, d := range devices {
 		for _, ks := range d.Keyslots {
@@ -100,7 +102,7 @@ func collectSlotContents(tpmDev transport.TPM, devices []LuksDeviceStatus, slot 
 // collectDirt is the dirty slots, for control's overview and the advice
 // after a manual delete.
 func collectDirt(tpmPath string, devices []LuksDeviceStatus) []SlotContents {
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return nil // without the TPM, "the blob is gone" cannot be told from "cannot look"
 	}
@@ -164,7 +166,7 @@ func DeleteSlot(o DeleteSlotOptions) error {
 	if devErr != nil {
 		fail("the LUKS devices cannot be listed: %v - a keyslot bound to the slot may remain", devErr)
 	}
-	tpmDev, tpmErr := OpenTPM(o.TPMPath)
+	tpmDev, tpmErr := tpmdev.Open(o.TPMPath)
 	if tpmErr != nil {
 		tpmDev = nil
 		fail("the TPM at %s cannot be opened: %v - what the slot keeps there was not removed", o.TPMPath, tpmErr)
@@ -229,7 +231,7 @@ func DeleteSlot(o DeleteSlotOptions) error {
 			if !part.there {
 				continue
 			}
-			if err := undefineIndex(tpmDev, part.index); err != nil {
+			if err := tpmdev.UndefineIndex(tpmDev, part.index); err != nil {
 				fail("the %s (0x%08X): %v", part.what, part.index, err)
 				continue
 			}

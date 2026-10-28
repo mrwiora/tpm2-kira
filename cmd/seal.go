@@ -13,6 +13,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 
 	"github.com/google/go-tpm/tpm2"
@@ -100,12 +101,12 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 		return fmt.Errorf("cannot seal: %w", err)
 	}
 
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
 	defer tpmDev.Close()
-	CleanupTPM(tpmDev, debug)
+	tpmdev.Cleanup(tpmDev, debug)
 
 	// A key on a token must be able to sign before anything is created.
 	if err := signing.PrepareSigningKey(signer); err != nil {
@@ -188,7 +189,7 @@ func newSlot(tpmDev transport.TPM, pubKey crypto.PublicKey, policyRef []byte) (*
 	if err != nil {
 		return nil, fmt.Errorf("signing key incompatible with this TPM: %w", err)
 	}
-	FlushHandle(tpmDev, loadRsp.ObjectHandle)
+	tpmdev.FlushHandle(tpmDev, loadRsp.ObjectHandle)
 
 	signingPublic, _, err := signing.PublicKeyToTPM2BPublic(pubKey)
 	if err != nil {
@@ -212,11 +213,11 @@ func addTOTPKey(tpmDev transport.TPM, blob *SealedBlob, key []byte, alg tpm2.TPM
 	if err != nil {
 		return err
 	}
-	primary, err := CreatePrimaryKey(tpmDev)
+	primary, err := tpmdev.CreatePrimaryKey(tpmDev)
 	if err != nil {
 		return err
 	}
-	defer FlushHandle(tpmDev, primary.ObjectHandle)
+	defer tpmdev.FlushHandle(tpmDev, primary.ObjectHandle)
 	obj, err := CreateTOTPKey(tpmDev, primary, key, alg, policy)
 	if err != nil {
 		return err

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -370,7 +372,7 @@ func boundSlotIndex(sealIndex uint32) (uint32, error) {
 // checkRemoteSaltReady says whether the slot can release a phone salt at
 // all: a verifier is enrolled and the release key exists.
 func checkRemoteSaltReady(tpmPath string, sealIndex uint32) error {
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -388,7 +390,7 @@ func checkRemoteSaltReady(tpmPath string, sealIndex uint32) error {
 // checkVaultReady says whether the slot is enrolled with a vault, and
 // returns the label its key is derived with.
 func checkVaultReady(tpmPath string, sealIndex uint32) (string, error) {
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
@@ -629,7 +631,7 @@ func LuksEnrol(o LuksEnrolOptions) error {
 // checkRemoteSaltReadyOrEnrolable is checkRemoteSaltReady without the
 // release key: a phone enrolled is enough, remoteSaltKey makes the key.
 func checkRemoteSaltReadyOrEnrolable(tpmPath string, idx uint32) (bool, error) {
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return false, fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}

@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/hkdf"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // The factor: one half of the disk's key, held by the phone, opened by this
@@ -51,11 +52,11 @@ func createReleaseKey(tpmDev transport.TPM, sealed *SealedBlob) (public, private
 	if err != nil {
 		return nil, nil, err
 	}
-	primary, err := CreatePrimaryKey(tpmDev)
+	primary, err := tpmdev.CreatePrimaryKey(tpmDev)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer FlushHandle(tpmDev, primary.ObjectHandle)
+	defer tpmdev.FlushHandle(tpmDev, primary.ObjectHandle)
 	rsp, err := tpm2.Create{
 		ParentHandle: tpm2.AuthHandle{Handle: primary.ObjectHandle, Name: primary.Name, Auth: tpm2.PasswordAuth(nil)},
 		InPublic:     tpm2.New2B(attest.ReleaseKeyTemplate(attest.ReleaseKeyPolicy(policy))),
@@ -75,11 +76,11 @@ func loadReleaseKey(tpmDev transport.TPM, att *Attestation) (*loadedKey, error) 
 	if att == nil || len(att.ReleaseKeyPublic) == 0 {
 		return nil, errNoReleaseKey
 	}
-	primary, err := CreatePrimaryKey(tpmDev)
+	primary, err := tpmdev.CreatePrimaryKey(tpmDev)
 	if err != nil {
 		return nil, err
 	}
-	defer FlushHandle(tpmDev, primary.ObjectHandle)
+	defer tpmdev.FlushHandle(tpmDev, primary.ObjectHandle)
 	rsp, err := tpm2.Load{
 		ParentHandle: tpm2.AuthHandle{Handle: primary.ObjectHandle, Name: primary.Name, Auth: tpm2.PasswordAuth(nil)},
 		InPublic:     tpm2.BytesAs2B[tpm2.TPMTPublic](att.ReleaseKeyPublic),
@@ -109,12 +110,12 @@ func wrapFactor(tpmDev transport.TPM, att *Attestation, rng io.Reader) (f []byte
 	if err != nil {
 		return nil, nil, err
 	}
-	FlushHandle(tpmDev, rk.handle) // only its name is needed
+	tpmdev.FlushHandle(tpmDev, rk.handle) // only its name is needed
 	ek, ekPub, err := createEK(tpmDev, att.EKAlg)
 	if err != nil {
 		return nil, nil, err
 	}
-	FlushHandle(tpmDev, ek.handle)
+	tpmdev.FlushHandle(tpmDev, ek.handle)
 
 	f = make([]byte, FactorSize)
 	if _, err := io.ReadFull(rng, f); err != nil {
@@ -140,12 +141,12 @@ func unwrapFactor(tpmDev transport.TPM, sealed *SealedBlob, blobIndex uint32, at
 	if err != nil {
 		return nil, err
 	}
-	defer FlushHandle(tpmDev, rk.handle)
+	defer tpmdev.FlushHandle(tpmDev, rk.handle)
 	ek, _, err := createEK(tpmDev, att.EKAlg)
 	if err != nil {
 		return nil, err
 	}
-	defer FlushHandle(tpmDev, ek.handle)
+	defer tpmdev.FlushHandle(tpmDev, ek.handle)
 
 	session, done, err := approvedSessionThen(tpmDev, sealed, blobIndex, func(tpm transport.TPM, handle tpm2.TPMISHPolicy) error {
 		_, err := tpm2.PolicyCommandCode{PolicySession: handle, Code: tpm2.TPMCCActivateCredential}.Execute(tpm)

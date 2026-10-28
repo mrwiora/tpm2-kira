@@ -41,6 +41,7 @@ import (
 	"slices"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/tpm2-trust/assh/config"
@@ -147,7 +148,7 @@ func approveSSHCASlots(ca *hostkey.CA, signer crypto.Signer, values map[int][]by
 // policy ref - has signer approve the next boot's values, and writes it
 // with its public key.
 func createSSHCA(conf *config.Config, tpmPath string, signer crypto.Signer) (*hostkey.CA, error) {
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +286,7 @@ func readSSHCA(conf config.Config, tpmPath string) sshCAState {
 		return st
 	}
 	ca := st.CA
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return sshCAState{CA: ca, Err: err.Error()}
 	}
@@ -326,7 +327,7 @@ type hostKeyAtBoot struct {
 // CA's window is closed after. Without a TPM there is no key.
 func prepareHostKey(tpmPath string, conf config.Config) (hostKeyAtBoot, error) {
 	caPath := conf.CA
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return hostKeyAtBoot{}, fmt.Errorf("no TPM: %w", err)
 	}
@@ -337,7 +338,7 @@ func prepareHostKey(tpmPath string, conf config.Config) (hostKeyAtBoot, error) {
 		Type:       conf.HostKeyType,
 		KeyID:      conf.KeyID,
 		Principals: conf.Principals,
-		Open:       func() (transport.TPMCloser, error) { return OpenTPM(tpmPath) },
+		Open:       func() (transport.TPMCloser, error) { return tpmdev.Open(tpmPath) },
 	}
 	var hk *hostkey.HostKey
 	if hostkey.IsVar(caPath) {

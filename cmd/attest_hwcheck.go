@@ -17,6 +17,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // HWCheckPolicy says what enrolment does when a hardware check fails.
@@ -93,7 +94,7 @@ func ownEKVerdict(tpmDev transport.TPM) (vendor, note string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	FlushHandle(tpmDev, ek.handle)
+	tpmdev.FlushHandle(tpmDev, ek.handle)
 	leaf := readEKCert(tpmDev, alg)
 	by, verr := attest.VerifyEKCertificate(pub, leaf, readEKCertChain(tpmDev, leaf), time.Now())
 	return by, attest.EKCertNote(verr), nil

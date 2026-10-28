@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
-	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
@@ -41,31 +41,13 @@ type NVRAMSlot struct {
 // phoneSlotDefault is a phone slot's line where no gate reports on it.
 const phoneSlotDefault = "mobile attestation (a phone is enrolled; no TOTP code)"
 
-// NVRAMIndexExists performs a lightweight check whether the given NVRAM index
-// is defined and contains data.  It only reads the NV public area — no
-// unsealing or authorization is attempted.
-func NVRAMIndexExists(tpmDev transport.TPM, index uint32) bool {
-	readPublic := tpm2.NVReadPublic{
-		NVIndex: tpm2.TPMHandle(index),
-	}
-	resp, err := readPublic.Execute(tpmDev)
-	if err != nil {
-		return false
-	}
-	nvPub, err := resp.NVPublic.Contents()
-	if err != nil {
-		return false
-	}
-	return nvPub.DataSize > 0
-}
-
 // FindPopulatedSlotsInRange probes every index from startIndex to endIndex
 // (inclusive) and returns those that contain data.  The check is lightweight —
 // it only reads the NV public area (no unsealing).
 func FindPopulatedSlotsInRange(tpmDev transport.TPM, startIndex, endIndex uint32, debug bool) []uint32 {
 	var populated []uint32
 	for idx := startIndex; idx <= endIndex; idx++ {
-		if !NVRAMIndexExists(tpmDev, idx) {
+		if !tpmdev.NVRAMIndexExists(tpmDev, idx) {
 			continue
 		}
 		if debug {
@@ -139,11 +121,11 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 		}
 
 		// Cleanup TPM state before each unseal attempt
-		CleanupTPM(tpmDev, debug)
+		tpmdev.Cleanup(tpmDev, debug)
 
 		// In debug mode, peek at the raw NVRAM data before attempting full unseal
 		if debug {
-			rawData, peekErr := ReadFromNVRAM(tpmDev, i)
+			rawData, peekErr := tpmdev.ReadFromNVRAM(tpmDev, i)
 			if peekErr == nil {
 				peek := PeekBlobVersion(rawData)
 				fmt.Printf("  Slot %d: NVRAM data found (%d bytes), blob version: %d\n", slotNumber, peek.DataSize, peek.Version)
@@ -151,7 +133,7 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 				fmt.Printf("  Slot %d: no NVRAM data (%v)\n", slotNumber, peekErr)
 			}
 			// Re-cleanup after the peek read
-			CleanupTPM(tpmDev, debug)
+			tpmdev.Cleanup(tpmDev, debug)
 		}
 
 		code, _, err := SlotCode(tpmDev, i, time.Now(), debug)
@@ -207,7 +189,7 @@ func slotErrorLine(err error) string {
 	if bve, ok := IsBlobVersionError(err); ok {
 		return fmt.Sprintf("Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira slot add", bve.FoundVersion, bve.RequiredVersion)
 	}
-	if _, ok := err.(*measure.PCRMismatchError); ok || IsTPMPolicyFailure(err) {
+	if _, ok := err.(*measure.PCRMismatchError); ok || tpmdev.IsTPMPolicyFailure(err) {
 		return ""
 	}
 	return fmt.Sprintf("No code: %v", err)
@@ -238,7 +220,7 @@ func FprintKIRASlots(w io.Writer, tpmDev transport.TPM, slots []NVRAMSlot, codes
 
 			// Try to read the sealed blob to get PCR details
 			// Read the sealed blob and current register values for comparison
-			sealedData, err := ReadFromNVRAM(tpmDev, slot.Index)
+			sealedData, err := tpmdev.ReadFromNVRAM(tpmDev, slot.Index)
 			if err == nil {
 				sealedBlob, err := UnmarshalSealedBlob(sealedData)
 				if err == nil {
@@ -325,7 +307,7 @@ func HasValidSlots(slots []NVRAMSlot) bool {
 // RevealCommand implements the reveal command functionality
 func RevealCommand(tpmPath string, nvramIndex uint32, debug bool, plain bool) {
 	// Open TPM
-	tpmDev, err := OpenTPM(tpmPath)
+	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		PrintKIRAError(fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err))
 		return
@@ -333,7 +315,7 @@ func RevealCommand(tpmPath string, nvramIndex uint32, debug bool, plain bool) {
 	defer tpmDev.Close()
 
 	// Cleanup TPM memory
-	CleanupTPM(tpmDev, debug)
+	tpmdev.Cleanup(tpmDev, debug)
 
 	// Determine if we should scan all slots or just one
 	var slots []NVRAMSlot

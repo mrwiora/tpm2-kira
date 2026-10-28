@@ -7,6 +7,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
@@ -27,7 +29,7 @@ func TestOversizedBlobLeavesTheSlotAlone(t *testing.T) {
 	key := newKey(t)
 	idx := uint32(NVRAMSlotStart + 3)
 	writeTestSlot(t, tpmDev, idx, key)
-	before, err := ReadFromNVRAM(tpmDev, idx)
+	before, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +39,7 @@ func TestOversizedBlobLeavesTheSlotAlone(t *testing.T) {
 	if !errors.As(err, &tooLarge) || tooLarge.Size != limit+1 || tooLarge.Limit != limit {
 		t.Fatalf("a blob over the limit: %v", err)
 	}
-	after, err := ReadFromNVRAM(tpmDev, idx)
+	after, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatalf("the slot changed although nothing was to be written: %v", err)
 	}
@@ -46,7 +48,7 @@ func TestOversizedBlobLeavesTheSlotAlone(t *testing.T) {
 	if err := WriteToNVRAM(tpmDev, idx, full, key.Public(), key); err != nil {
 		t.Fatalf("a blob of exactly the limit (%d bytes): %v", limit, err)
 	}
-	if got, err := ReadFromNVRAM(tpmDev, idx); err != nil || !bytes.Equal(got, full) {
+	if got, err := tpmdev.ReadFromNVRAM(tpmDev, idx); err != nil || !bytes.Equal(got, full) {
 		t.Fatalf("reading back the full-size blob: %v", err)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // DeleteSlot on a software TPM: the blob, its generation index and the
@@ -20,7 +21,7 @@ import (
 //	go test -tags integration -count=1 -run TestDeleteSlotOnSWTPM ./cmd/
 func TestDeleteSlotOnSWTPM(t *testing.T) {
 	sock := startSWTPM(t)
-	tpm, err := OpenTPM(sock)
+	tpm, err := tpmdev.Open(sock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +47,7 @@ func TestDeleteSlotOnSWTPM(t *testing.T) {
 		t.Fatalf("delete: %v\n%s", err, out.String())
 	}
 	for _, i := range []uint32{idx, GenerationIndex(idx)} {
-		if NVRAMIndexExists(tpm, i) {
+		if tpmdev.NVRAMIndexExists(tpm, i) {
 			t.Errorf("0x%08X is still there", i)
 		}
 	}
@@ -65,7 +66,7 @@ func TestDeleteSlotOnSWTPM(t *testing.T) {
 	if err := Seal(sock, "0,7", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal again: %v", err)
 	}
-	if err := undefineIndex(tpm, idx); err != nil {
+	if err := tpmdev.UndefineIndex(tpm, idx); err != nil {
 		t.Fatal(err)
 	}
 	dirt := collectDirt(sock, nil)

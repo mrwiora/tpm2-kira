@@ -18,6 +18,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
@@ -55,10 +57,10 @@ func parseBootSettings(b []byte) (BootSettings, error) {
 
 // ReadBootSettings reads the boot settings; no index means all off.
 func ReadBootSettings(tpmDev transport.TPM) (BootSettings, error) {
-	if !NVRAMIndexExists(tpmDev, BootSettingsIndex) {
+	if !tpmdev.NVRAMIndexExists(tpmDev, BootSettingsIndex) {
 		return BootSettings{}, nil
 	}
-	data, err := ReadFromNVRAM(tpmDev, BootSettingsIndex)
+	data, err := tpmdev.ReadFromNVRAM(tpmDev, BootSettingsIndex)
 	if err != nil {
 		return BootSettings{}, err
 	}
@@ -72,10 +74,10 @@ func WriteBootSettings(tpmDev transport.TPM, s BootSettings, signer crypto.Signe
 		return errors.New("the boot settings are written with the signing key")
 	}
 	if s == (BootSettings{}) {
-		if !NVRAMIndexExists(tpmDev, BootSettingsIndex) {
+		if !tpmdev.NVRAMIndexExists(tpmDev, BootSettingsIndex) {
 			return nil
 		}
-		return undefineIndex(tpmDev, BootSettingsIndex)
+		return tpmdev.UndefineIndex(tpmDev, BootSettingsIndex)
 	}
 	return WriteToNVRAM(tpmDev, BootSettingsIndex, s.marshal(), signer.Public(), signer)
 }
@@ -84,7 +86,7 @@ func WriteBootSettings(tpmDev transport.TPM, s BootSettings, signer crypto.Signe
 // resource manager when there is one: the code screen holds the TPM too).
 // Any failure is "off": debug only adds output.
 func BootDebug(tpmPath string) bool {
-	tpmDev, err := OpenTPM(preferResourceManager(tpmPath))
+	tpmDev, err := tpmdev.Open(preferResourceManager(tpmPath))
 	if err != nil {
 		return false
 	}
