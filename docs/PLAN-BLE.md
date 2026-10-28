@@ -3,9 +3,9 @@
 > **Status:** partially implemented — phases 1–4, and phase 5 (Bluetooth in
 > the initramfs); nothing yet verified on real hardware. The wire
 > contract is [PROTOCOL-BLE.md](PROTOCOL-BLE.md); "Implementation status" below
-> lists what is done and what is open. What this plan calls "lazy mode" is
-> the only behaviour there is (§7): a phone is served whenever one is
-> enrolled, no mode is set anywhere, and the boot is never held.
+> lists what is done and what is open. The gate informs and never holds the
+> boot (§7): a phone is served whenever one is enrolled, and no mode is set
+> anywhere.
 > **Depends on:** [PLAN-PHONE.md](PLAN-PHONE.md)
 > phases 1–5. This document adds a *transport* (Bluetooth LE), a *verifier*
 > (an Android/iOS app) and a *gate* (what happens at the passphrase prompt).
@@ -35,9 +35,7 @@ Last updated 2026-10-05.
 | **Boot test** (§8) | QEMU + swtpm boot of an image with the gate; needs a passed-through or virtual (`hci_vhci`, root) controller. |
 | **Debian firmware size** | `manual_add_modules` queues modules for `dracut-install`, which copies every firmware file the modules *declare* (dozens for btusb's dependencies) on top of the exact files. mkinitcpio avoids this; on Debian it costs space until initramfs-tools offers a way to skip declared firmware. Measure on a Debian box. |
 | **Debian measured PCRs** | Adding Bluetooth changes PCR 9 on GRUB machines; the existing post-update reminder covers approving, but has not been re-checked with the new files. |
-| 6 — enforced mode | `phone gate --mode enforced` is refused; needs the image anchor, sealed payload v9 and the fail-closed matrix (§7.5). |
 | Salt release | `Release` is defined in the protocol; the attester answers "unsupported" (PLAN-PHONESALT.md). |
-| Break-glass tokens (§7.6) | not started |
 | 7 — verdict UX | the shared PCR explanation exists (`attest/explain.go`); the UI belongs to the apps |
 | Phone apps | specified as agent prompts in [mobile/](mobile/), not built |
 | Lost-phone ceremony (§6.2, open question 3) | today: `phone enrol` with the new phone, `phone unenrol` to drop all; no per-phone removal command yet |
@@ -64,7 +62,7 @@ Decisions taken while implementing, superseding the text below where they differ
 - **Rejects are unsigned** (§6.2): a reject needs no biometric prompt, because
   believing a false "no" costs a check, never trust. OK and approved receipts
   are always signed.
-- **The machine's anchor in lazy mode** is the attestation blob, which the
+- **The machine's anchor** is the attestation blob, which the
   initrd cannot authenticate; the console verdict is therefore advisory and the
   phone's display is authoritative. The image anchor arrives with phase 6.
 - Attestation and salt release share one session: release is an optional
@@ -84,8 +82,7 @@ With this plan: at seal time the machine is **bound** to your phone. At the
 passphrase prompt the machine advertises over BLE, your phone connects,
 demands a fresh TPM quote, checks it against what it recorded at binding time,
 and — if it is satisfied — hands back a signed receipt. The machine verifies
-the receipt against a pinned key and either notes it (lazy) or opens the gate
-(enforced).
+the receipt against a pinned key and shows it; the boot is never held (§7).
 
 The manual OTP path is untouched and remains the default fallback (§7.3).
 
@@ -156,10 +153,8 @@ those. Copying all of `linux-firmware` is not acceptable for an initramfs.
 > holds no firmware line (rotated, or an adapter without firmware), the hooks
 > fall back to the declarations and say so.
 
-If no adapter is found at build time, the hook warns and installs nothing; a
-machine configured for `enforced` that then cannot find an adapter at boot
-fails closed, which is why `phone enrol` refuses to enable enforced mode
-unless the hook has confirmed the firmware is in the image.
+If no adapter is found at build time, the hook warns and installs nothing;
+the boot then shows the code alone.
 
 ### 3.2 No BlueZ, no D-Bus
 
@@ -205,7 +200,7 @@ code gives different registers before the separator and after it alike.
 A slot that is enrolled with a phone is verified by the phone instead of by
 comparing the code: the phone's verdict releases the boot the way Enter does.
 The code stays on the screen as the fallback, and so does the end of the hold
-(lazy mode never holds the boot). A phone that is in the middle of its
+(the phone never holds the boot). A phone that is in the middle of its
 session when the hold ends extends it by at most a minute, so the registers
 do not change between its question and its answer.
 
@@ -220,7 +215,7 @@ JSON, one request at a time (`cmd/gate_ipc.go`). Before the separator the
 TPM computes TOTP codes for any process that can reach it, so the process
 that parses radio input must not be able to.
 
-Lazy mode ends with the hold: the coordinator closes its socket when it
+The phone check ends with the hold: the coordinator closes its socket when it
 releases the boot and exits, and the worker, which watches the connection,
 stops advertising and exits too. The display's process must not stay on the
 console past the hold in any case: `StandardInput=tty` makes it the owner of
@@ -489,170 +484,80 @@ into the shared core so the app and the CLI explain a diff identically.
 
 ---
 
-## 7. The gate: lazy, and why not enforced
+## 7. The gate informs; it never holds the boot
 
-**Decision (2026-10-07): there is no enforced mode.** tpm2-kira does its
-work and informs; the passphrase can always be entered by hand. The disk
-unlock goes through systemd-cryptsetup's key-file socket, and a wrong or
-missing answer from tpm2-kira sends systemd-cryptsetup to its own prompt
-for the remaining tries (DISK-KEY.md, "When the answer is wrong") - so "holding the boot" would
-mean never answering, a local software gate of the kind §7.4 already
-calls worthless on a machine whose image is not authenticated. What
-enforces, if anything, is the missing factor of PLAN-PHONESALT.md.
-The `enforced` rows and §7.2's gate unit below stay as the record of the
-design that was not built; `control.conf` refuses the value.
+tpm2-kira does its work and informs; the passphrase can always be entered
+by hand. A phone is served whenever one is enrolled for a slot and the
+hook found the adapter; nothing is set anywhere to turn it on or off. An
+enforced gate, which would hold the boot until the phone's verdict is
+`ok`, was designed and dropped (HISTORY.md, "An enforced mode was
+planned"); §7.4 says why.
 
-### 7.1 Modes
+### 7.1 What the gate does
 
-`/etc/tpm2-kira/control.conf`, with its digest bound into the sealed object so
-it cannot be silently downgraded on a machine that does not measure its
-initramfs ([PLAN-PHONE.md](PLAN-PHONE.md) §10.3):
-
-| Mode | Behaviour at the prompt |
-|---|---|
-| `off` | No radio, no advertising. Exactly today's behaviour. |
-| `lazy` | Advertise and serve attestation requests. Display the verdict when one arrives. **Boot proceeds regardless**; the passphrase prompt is never blocked. |
-| `enforced` | Advertise and **hold the boot** until a valid receipt with `verdict = ok` arrives. The passphrase prompt does not appear before then. |
-
-**The attestation blob is not a trust anchor for enforced mode.** Its NV
-index refuses in-place writes without the signing key, but the owner
-hierarchy can undefine it and write a blob that lists any phone, and the
-initrd has no key to notice. The anchor therefore comes from the image: the
-boot plan puts the signing public key there, and the gate
-refuses, before it advertises, a blob that key did not sign. Replacing the
-blob then means changing the image too, which Secure Boot or the measured
-PCRs report (PLAN-PHONE.md §10.2). An older blob, signed all the
-same, is refused by its count: each blob carries the value of a TPM NV counter
-for the slot, which cannot be turned back. The console verdict stays advisory and the
-phone's screen authoritative.
+It advertises and serves attestation requests while the code screen
+holds, shows the verdict in the slot's line when one arrives, and a
+verdict `ok` releases the boot the way Enter does. The boot proceeds
+regardless: no verdict, a rejection or no phone at all, and the hold ends
+as it always does.
 
 ### 7.2 How the hold is implemented
 
-**Arch / systemd initramfs, as built.** tpm2-kira is the key provider of
-the volumes the initrd unlocks: `tpm2-kira-unlock.socket` is the key file
-of each of them (crypttab(5), AF_UNIX key files, named by `rd.luks.key=`
-on the kernel command line), `systemd-cryptsetup` connects to it when it
+**Arch / systemd initramfs.** tpm2-kira is the key provider of the volumes
+the initrd unlocks: `tpm2-kira-unlock.socket` is the key file of each of
+them (crypttab(5), AF_UNIX key files, named by `rd.luks.key=` on the
+kernel command line), `systemd-cryptsetup` connects to it when it
 activates the volume and reads the key, and `tpm2-kira.service` answers
 once the code screen's hold has ended. The TPM side of the attestation
-still happens before the OS separator, where the boot key's policy holds.
-The original design of a separate oneshot gate unit, for the enforced
-mode that is not built, follows for the record:
+happens before the OS separator, where the boot key's policy holds.
 
-```ini
-[Unit]
-Description=tpm2-kira phone attestation gate
-DefaultDependencies=no
-Requires=dev-tpm0.device
-After=dev-tpm0.device
-After=systemd-pcrosseparator.service
-After=systemd-pcrphase-initrd.service
-Before=cryptsetup-pre.target
-Before=systemd-ask-password-console.service
+**Debian / initramfs-tools.** The boot script starts `run` with its gate
+in `init-premount`; the keyscript asks `run`'s socket once the hold has
+ended.
 
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=tpm2-kira phone gate
-StandardOutput=tty
-StandardError=tty
-```
-
-plus a drop-in making it a *requirement* of `cryptsetup-pre.target` — ordering
-alone would let a failed gate be skipped rather than blocking. A failed gate
-then fails the target, no cryptsetup job runs, and the initrd drops to its
-emergency shell.
-
-**Debian / initramfs-tools.** `init-premount` already runs synchronously in
-`/init`, before `mountroot` reaches `local-top/cryptroot`. The gate runs there
-in the foreground and, on failure, calls `panic` from `/scripts/functions`
-rather than returning.
-
-**The exit-status exception.** README.md's rule is that tpm2-kira always exits
-0 so a failure cannot break a boot chain. `phone gate` is the one command
-where that rule inverts: a gate that exits 0 on failure is not a gate. It exits
-non-zero, its help says so, README.md gains a sentence next to the existing
-rule, and there is a test that asserts it — because getting this wrong turns
-enforced mode into a decoration that still prints reassuring messages.
+**The exit status.** `phone gate` exits non-zero on failure (its help lists
+the codes), so the unit shows a failed gate on the console; nothing
+requires the unit, so the boot goes on.
 
 ### 7.3 What is displayed
 
-| Mode | OTP | Attestation line |
-|---|---|---|
-| `off` | always | — |
-| `lazy` | always (default; `--otp=never` available) | added when a receipt arrives |
-| `enforced` | `never` by default, `--otp=always` to keep both | the primary output |
+The code stays on the screen as the fallback in every case; the phone's
+line is added when the phone connects and shows its verdict. The fallback
+matters most for the boot where the phone is flat.
 
-The OTP default stays "shown" in lazy mode on purpose: lazy exists precisely
-for the boot where the phone is flat, and removing the fallback in the mode
-designed for degraded conditions would be perverse.
+### 7.4 Why no software gate
 
-### 7.4 What enforced mode is actually worth
+A gate that holds the boot is code in the initramfs that declines to
+proceed. Anyone who can modify that initramfs can delete it, so it is
+worth exactly as much as the measured, signed boot chain that protects
+the image: with Secure Boot and a signed UKI, removing it is detectable;
+without, an attacker who can write to `/boot` ships an image without it.
+And the disk unlock goes through systemd-cryptsetup's key-file socket,
+where a wrong or missing answer falls back to systemd's own prompt, so
+holding would mean never answering.
 
-Stated plainly, because the gap between what this feels like and what it
-guarantees is the thing most likely to mislead:
+What enforces, where enforcement is wanted, is a missing secret instead of
+software that withholds one: [PLAN-PHONESALT.md](PLAN-PHONESALT.md) has
+the phone release one factor of the LUKS key after a successful
+attestation (`password+phonesalt`), and the vault does the same for
+unattended machines ([VAULT.md](VAULT.md)). Neither can lock you out:
+another medium boots and the recovery passphrase opens the disk.
 
-**Enforced mode is a local software gate.** It is code in the initramfs that
-declines to proceed. Anyone who can modify that initramfs can delete it. The
-gate is therefore worth exactly as much as the measured, signed boot chain that
-protects the image containing it:
+### 7.5 Failure behaviour
 
-- With Secure Boot and a signed UKI, modifying the image breaks the signature
-  or moves PCR 11, so removing the gate is detectable and the anchor inside the
-  image is authenticated. Here enforced mode is a real control.
-- Without Secure Boot, or with an unmeasured initramfs, an attacker who can
-  write to `/boot` simply ships an image with no gate. Here enforced mode is a
-  usability feature: it stops *you* from being careless. It does not stop an
-  attacker.
-
-`phone enrol --mode=enforced` therefore inspects the platform and says which
-of these two situations the machine is in, in those words. It refuses without
-`--allow-sealed-anchor` when there is no image anchor
-([PLAN-PHONE.md](PLAN-PHONE.md) §10.2).
-
-The way to make the gate real on either kind of machine is to stop asking
-software to hold and withhold a secret instead:
-[PLAN-PHONESALT.md](PLAN-PHONESALT.md) has the phone release one
-factor of the LUKS key after a successful attestation. It runs in `lazy` mode,
-because the missing factor does the enforcing.
-
-The second thing to be plain about: enforced mode **cannot lock you out of your
-data**. It holds one initramfs. Boot any rescue medium and the disk unlocks
-with the passphrase you already have. That also caps its value — an attacker
-can boot a rescue medium too — but it means the failure mode of this feature is
-an inconvenience, never a loss. Keep a second LUKS keyslot regardless.
-
-### 7.5 Failure and timeout behaviour
-
-| Situation | `lazy` | `enforced` |
-|---|---|---|
-| No adapter / firmware missing | warn once, show OTP, continue | fail closed, name the missing firmware |
-| No phone in range | silent, continue | keep advertising in 30 s rounds, reporting "phone not reachable yet, still waiting" after each; with a timeout, fail with "phone not reachable" (not a TPM failure) |
-| Phone connects, verdict is "reject" | display it, continue | fail closed immediately; do not keep waiting for a better answer |
-| Receipt signature does not verify | display an error, continue | fail closed, and say **anchor mismatch** explicitly — this is either a wrong phone or an attack |
-| PCRs changed (kernel update) | OTP is absent as today; the phone can still attest and show the diff | the phone shows the diff and a human approves; this is the designed path, not an exception |
-
-Waiting forever is the default for "no phone in range" because a hard timeout
-on an attended machine just moves the failure five minutes later.
-`--attest-timeout` exists for unattended machines that would rather fail into a
-monitored state.
+| Situation | What happens |
+|---|---|
+| No adapter / firmware missing | a warning once; the code is shown; the boot continues |
+| No phone in range | silent; the boot continues when the hold ends |
+| The phone rejects the boot | the rejection is shown; the boot continues when the hold ends |
+| The receipt's signature does not verify | an anchor mismatch is shown (a wrong phone, or an attack); the boot continues |
+| PCRs changed (kernel update) | no code (as without a phone); the phone can still attest and show the difference |
 
 ### 7.6 Break-glass
 
-In order of preference:
-
-1. **Boot another medium.** Your passphrase still works. This is the answer for
-   a laptop in front of you and needs no feature at all.
-2. **A signed bypass token**, for headless or remote machines. The app produces
-   a short signed statement (`verdict = bypass`, covering the device id and a
-   counter) which the user types at the console. Replay is prevented by a TPM
-   monotonic counter NV index: a token must carry a counter strictly greater
-   than the stored value, and using it increments the counter. The token is
-   ~110 base32 characters, which is unpleasant to type and correct for
-   something used approximately never.
-3. **Not** a kernel command-line switch. `kira.attest=off` would be a bypass
-   available to exactly the person the gate exists to stop, and on a UKI the
-   cmdline is fixed and measured anyway, so it would also be a lie on the
-   platform where enforced mode is worth something.
+With no gate there is nothing to bypass: another medium boots, and the
+passphrase works at the prompt. The verdict `bypass` stays reserved in the
+protocol (PROTOCOL-BLE.md) for a signed token, should a gate ever exist.
 
 ---
 
@@ -683,9 +588,9 @@ ever settled by booting.
 | 1 | BLE spike: `go-ble/ble` vs. in-tree HCI, on real hardware | a Linux box advertises and exchanges frames with a phone; the library decision is recorded here |
 | 2 | Peripheral + framing + encrypted session, on a booted system | `phone enrol` completes with a throwaway CLI verifier over BLE |
 | 3 | Mobile app skeleton: scan, connect, Go core via FFI, enrolment with SAS | a phone enrols a machine and stores the profile |
-| 4 | Attestation round trip and receipts; `lazy` mode in the initrd | a phone verifies a real boot and the console shows the verdict |
+| 4 | Attestation round trip and receipts; the gate in the initrd | a phone verifies a real boot and the console shows the verdict |
 | 5 | Initramfs hooks: modules, firmware resolution, adapter bring-up | BLE works in the initrd on both Arch and Debian test machines |
-| 6 | `enforced` mode, gate units, fail-closed matrix, break-glass | the QEMU test suite passes the whole §7.5 matrix |
+| 6 | (dropped: an enforced gate, §7) | — |
 | 7 | Verdict UX: PCR diff explanation shared with `pcrtips`, approval flows | the middle row of §6.3 reads like a sentence a person can act on |
 
 Phases 1 and 5 carry the schedule risk. Everything else is ordinary work;
@@ -704,7 +609,7 @@ Bluetooth firmware in an initramfs is where this plan meets hardware reality.
 3. **How many phones per machine, and how is a lost one replaced?** Needs the
    anchor-rotation ceremony from the core plan, and the answer determines
    whether the anchor file holds one key or a list.
-4. **Should `lazy` mode keep advertising after the disk is unlocked?** Useful
+4. **Should the gate keep advertising after the disk is unlocked?** Useful
    for attesting a running system on demand; also an always-on radio and a
    privacy question. Currently: no, the gate stops with the initrd, and
    attesting a running system is a separate, explicit command.

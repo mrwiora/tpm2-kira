@@ -33,9 +33,6 @@ func TestControlConfigOneFile(t *testing.T) {
 	if _, err := ParseControlConfig([]byte("TPM2_KIRA_ATTEST_BLUETOOTH=sometimes\n")); err == nil {
 		t.Fatal("an unknown bluetooth policy parsed")
 	}
-	if _, err := ParseControlConfig([]byte("TPM2_KIRA_CONTROL=guided\n")); err == nil || !strings.Contains(err.Error(), "Remove the line") {
-		t.Fatalf("the guided/manual choice that is gone: %v", err)
-	}
 	missing, err := LoadControlConfig(filepath.Join(t.TempDir(), "none"))
 	if err != nil || missing.Attest.Bluetooth != "auto" {
 		t.Fatalf("missing file: %+v %v", missing, err)
@@ -73,7 +70,7 @@ func TestPINFile(t *testing.T) {
 		t.Fatalf("readable by the group: stored %v loose %v", stored, loose)
 	}
 	_, err := ParseControlConfig([]byte("TPM2_KIRA_PIN='secret-1234'\n"))
-	if err == nil || !strings.Contains(err.Error(), "file of its own") || strings.Contains(err.Error(), "secret-1234") {
+	if err == nil || !strings.Contains(err.Error(), "unknown key") || strings.Contains(err.Error(), "secret-1234") {
 		t.Fatalf("a PIN line: %v", err)
 	}
 }
@@ -105,7 +102,7 @@ func TestSetControlValueKeepsAnUnchangedFile(t *testing.T) {
 func TestControlStopsOnAConfigThatDoesNotLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.conf")
 	t.Setenv("TPM2_KIRA_CONTROL_CONF", path)
-	os.WriteFile(path, []byte("TPM2_KIRA_NET=dhcp\nTPM2_KIRA_ATTEST_TIMEOUT=0\nTPM2_KIRA_PIN='secret-1234'\nTPM2_KIRA_ATTEST_DEBUG=1\n"), 0o600)
+	os.WriteFile(path, []byte("TPM2_KIRA_NET=dhcp\nTPM2_KIRA_NOSUCH=0\nTPM2_KIRA_PIN='secret-1234'\nTPM2_KIRA_ALSO_NOT=1\n"), 0o600)
 	before, _ := os.ReadFile(path)
 
 	var out bytes.Buffer
@@ -114,7 +111,7 @@ func TestControlStopsOnAConfigThatDoesNotLoad(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not load") {
 		t.Fatalf("control went on: %v\n%s", err, got)
 	}
-	for _, want := range []string{"line 2: TPM2_KIRA_ATTEST_TIMEOUT is gone", "line 3: the YubiKey's PIN has a file of its own", "line 4: TPM2_KIRA_ATTEST_DEBUG is gone", "Remove the line"} {
+	for _, want := range []string{`line 2: unknown key "TPM2_KIRA_NOSUCH"`, `line 3: unknown key "TPM2_KIRA_PIN"`, `line 4: unknown key "TPM2_KIRA_ALSO_NOT"`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the output lacks %q:\n%s", want, got)
 		}
@@ -133,15 +130,7 @@ func TestControlStopsOnAConfigThatDoesNotLoad(t *testing.T) {
 		!strings.Contains(out.String(), "Boot network Network at boot: DHCP") {
 		t.Fatalf("a good file: %v\n%s", err, out.String())
 	}
-	if problems := ControlConfigProblems([]byte("TPM2_KIRA_CONTROL=guided\nx\n")); len(problems) != 2 {
+	if problems := ControlConfigProblems([]byte("TPM2_KIRA_NOSUCH=1\nx\n")); len(problems) != 2 {
 		t.Fatalf("problems %v", problems)
-	}
-}
-
-// There is no unlock mode to configure: a TPM2_KIRA_UNLOCK line is an
-// error that says what to do now.
-func TestUnlockModeLineIsGone(t *testing.T) {
-	if _, err := ParseControlConfig([]byte("TPM2_KIRA_UNLOCK=password+salt\n")); err == nil || !strings.Contains(err.Error(), "Remove the line") {
-		t.Fatalf("a mode line parsed: %v", err)
 	}
 }

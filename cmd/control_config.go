@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 // /etc/tpm2-kira/control.conf is tpm2-kira's configuration file (aSSH's,
@@ -162,10 +160,6 @@ func parseControlLine(cfg *ControlConfig, n int, line string) error {
 		return err
 	}
 	switch key {
-	case "TPM2_KIRA_UNLOCK":
-		return fmt.Errorf("control.conf line %d: there is no unlock mode to set any more; the boot reads how a key is made from the LUKS header's tokens. Remove the line", n)
-	case "TPM2_KIRA_CONTROL":
-		return fmt.Errorf("control.conf line %d: there is no guided or manual mode to choose any more; control guides in two steps. Remove the line", n)
 	case "TPM2_KIRA_ATTEST_BLUETOOTH":
 		switch val {
 		case "", "auto", "always":
@@ -176,20 +170,12 @@ func parseControlLine(cfg *ControlConfig, n int, line string) error {
 		default:
 			return fmt.Errorf("control.conf line %d: TPM2_KIRA_ATTEST_BLUETOOTH must be auto or always, not %q", n, val)
 		}
-	case signing.PINEnvVar:
-		return fmt.Errorf("control.conf line %d: the YubiKey's PIN has a file of its own, %s: remove the line, then store the PIN again with tpm2-kira control (Signing key and TOTP codes)", n, signing.PINPath())
-	case "TPM2_KIRA_ATTEST":
-		return fmt.Errorf("control.conf line %d: there is no attestation mode to set; the phone is served whenever one is enrolled. Remove the line", n)
 	case "TPM2_KIRA_ATTEST_ADAPTER":
 		v, err := strconv.Atoi(strings.TrimPrefix(val, "hci"))
 		if err != nil || v < 0 || v > 255 {
 			return fmt.Errorf("control.conf line %d: invalid adapter %q", n, val)
 		}
 		cfg.Attest.Adapter = v
-	case "TPM2_KIRA_ATTEST_TIMEOUT", "TPM2_KIRA_ATTEST_ADAPTER_WAIT":
-		return fmt.Errorf("control.conf line %d: %s is gone: the gate in the boot image waits for the adapter and a phone as long as the code screen holds. Remove the line", n, key)
-	case "TPM2_KIRA_ATTEST_DEBUG":
-		return fmt.Errorf("control.conf line %d: TPM2_KIRA_ATTEST_DEBUG is gone: switch \"Debug at boot\" in 'tpm2-kira control' instead (a setting in the TPM; nothing of control.conf goes into the boot image). Remove the line", n)
 	default:
 		return fmt.Errorf("control.conf line %d: unknown key %q", n, key)
 	}

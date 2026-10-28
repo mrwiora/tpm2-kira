@@ -139,19 +139,6 @@ TPM2_KIRA_ATTEST_ADAPTER="hci1"
 	if err != nil || cfg.Adapter != 1 {
 		t.Fatalf("parsed %+v %v", cfg, err)
 	}
-	// What the boot image used to read from the file is gone: the gate
-	// waits as long as the code screen holds, and debug is a kernel
-	// command line switch. Each says what replaces it.
-	for line, want := range map[string]string{
-		"TPM2_KIRA_ATTEST_TIMEOUT=90\n":      "as long as the code screen holds",
-		"TPM2_KIRA_ATTEST_ADAPTER_WAIT=1m\n": "as long as the code screen holds",
-		"TPM2_KIRA_ATTEST_DEBUG=1\n":         "Debug at boot",
-		"TPM2_KIRA_ATTEST=lazy\n":            "no attestation mode",
-	} {
-		if _, err := parseAttest([]byte(line)); err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("%q: %v", line, err)
-		}
-	}
 	if _, err := parseAttest([]byte("TPM2_KIRA_SOMETHING=1\n")); err == nil {
 		t.Fatal("unknown key accepted")
 	}

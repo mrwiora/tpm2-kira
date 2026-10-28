@@ -154,9 +154,9 @@ func TestHookPutsNoConfigIntoTheImage(t *testing.T) {
 		return nil
 	})
 	old := filepath.Join(dir, "old.conf")
-	os.WriteFile(old, []byte("TPM2_KIRA_ATTEST_DEBUG=1\n"), 0o600)
-	if out, _ := plan(old); !strings.Contains(out, "warning control.conf does not load") || !strings.Contains(out, "Debug at boot") {
-		t.Fatalf("a file with a gone setting:\n%s", out)
+	os.WriteFile(old, []byte("TPM2_KIRA_NOSUCH=1\n"), 0o600)
+	if out, _ := plan(old); !strings.Contains(out, "warning control.conf does not load") || !strings.Contains(out, "unknown key") {
+		t.Fatalf("a file with an unknown setting:\n%s", out)
 	}
 }
 

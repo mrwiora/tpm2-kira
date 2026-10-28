@@ -671,7 +671,7 @@ func TestPINFromTheFile(t *testing.T) {
 	// A control.conf this version refuses does not take the PIN with it:
 	// it is used, nothing is asked.
 	signing.CloseTokenSessions()
-	os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST_TIMEOUT=0\n"), 0600)
+	os.WriteFile(conf, []byte("TPM2_KIRA_NOSUCH=0\n"), 0600)
 	os.Chmod(pinFile, 0600)
 	prompts = fake.prompts
 	if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil || fake.prompts != prompts {

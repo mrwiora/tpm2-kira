@@ -929,7 +929,7 @@ func runGateRadio(host phonegate.GateHost, o GateOptions, step func(string, ...a
 		return phonegate.ExitUnavailable
 	}
 	if err != nil && isOver() {
-		// Lazy mode: the phone check lasts as long as the code screen.
+		// The phone check lasts as long as the code screen.
 		journal.Narrate("tpm2-kira: the code screen has ended; the phone was not asked in time for this boot")
 		return phonegate.ExitUnavailable
 	}

@@ -265,6 +265,15 @@ adapter and the timeouts, and a `TPM2_KIRA_ATTEST=` line is refused.
 `run` knows the gate is in the image by the signer the hook put there
 (`/etc/tpm2-kira/attest-signer.pem`).
 
+### A configuration digest in the sealed payload was planned
+
+PLAN-PHONE.md §10.3 designed a sealed payload v9 carrying the SHA-256 of
+the canonicalised control.conf (with the attestation mode, the timeout
+and the policy id), so that on a machine whose PCRs do not measure the
+initramfs an edited file would be noticed. Not built: there is no
+attestation mode or timeout left to protect, and control.conf does not go
+into the boot image.
+
 ### An enforced mode was planned
 
 PLAN-BLE.md §7 designed `TPM2_KIRA_ATTEST=enforced`: hold the boot until

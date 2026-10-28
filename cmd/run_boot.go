@@ -608,8 +608,8 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 					fmt.Printf("%s Confirmed over SSH: the password is asked in the SSH session.\n", screen.Tag(screen.TagYellow))
 				}
 			}
-			// Lazy mode: the phone check ends with the hold, and the
-			// radio worker with it.
+			// The phone check ends with the hold, and the radio worker
+			// with it.
 			endCoordinator()
 			// A display that goes on (codes that only compute after the
 			// separator) writes to the terminal but must not own it.

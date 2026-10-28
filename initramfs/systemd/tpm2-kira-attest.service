@@ -13,14 +13,14 @@ Wants=tpm2-kira.service
 # A slot enrolled with a phone is verified by the phone while the code is
 # shown, and the phone's verdict releases the boot like Enter does. When the
 # code screen ends, so does the coordinator's service, and this worker exits
-# (lazy mode: nothing listens to the radio at the passphrase prompt). Its
+# (nothing listens to the radio at the passphrase prompt). Its
 # quotes come from before systemd-pcrosseparator.service; the phone knows
 # the registers from after it and treats both as the same boot (PLAN-BLE.md
 # §3.3). enter-initrd is in PCR 11 by then.
 After=systemd-pcrphase-initrd.service
 # The image lists the adapter's driver modules in modules-load.d.
 After=systemd-modules-load.service
-# Started before the prompt, but never waited for: lazy mode must not hold
+# Started before the prompt, but never waited for: the phone never holds
 # the boot. Type=simple returns as soon as the process runs.
 Before=systemd-ask-password-console.service
 # The adapter is released when the initramfs ends.
@@ -40,7 +40,7 @@ ExecStart=/usr/bin/tpm2-kira phone gate --coordinator /run/tpm2-kira/gate.sock
 # says what the gate did, or why it did nothing.
 StandardOutput=journal
 StandardError=journal+console
-# No phone in range (3) is normal in lazy mode. A rejected boot (4) or an
+# No phone in range (3) is normal: the boot never waits for one. A rejected boot (4) or an
 # anchor mismatch (5) is left to fail the unit, so the console shows a red
 # FAILED line next to the warning; nothing requires this unit, so the boot
 # carries on either way.

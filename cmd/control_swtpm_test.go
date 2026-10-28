@@ -114,7 +114,7 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	// A line this version refuses: the settings are invalid (red Config
 	// line), the PIN in its own file is untouched by it.
 	data, _ := os.ReadFile(conf)
-	os.WriteFile(conf, append([]byte("TPM2_KIRA_ATTEST_TIMEOUT=0\n"), data...), 0o600)
+	os.WriteFile(conf, append([]byte("TPM2_KIRA_NOSUCH=0\n"), data...), 0o600)
 	f = collectFacts(sock, false)
 	if !f.PINStored || f.AttestConf == "" {
 		t.Errorf("a refused line next to the PIN: stored %v, config %q", f.PINStored, f.AttestConf)
@@ -131,11 +131,11 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	}
 
 	// A file that does not load blocks the attestation step and names itself.
-	if err := os.WriteFile(conf, []byte("TPM2_KIRA_ATTEST=lazy\n"), 0o600); err != nil {
+	if err := os.WriteFile(conf, []byte("TPM2_KIRA_NOSUCH=1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f = collectFacts(sock, false)
-	if !strings.Contains(f.AttestConf, "no attestation mode") || f.Status.ConfigError == "" {
+	if !strings.Contains(f.AttestConf, "unknown key") || f.Status.ConfigError == "" {
 		t.Errorf("a broken file: attest %q, config %q", f.AttestConf, f.Status.ConfigError)
 	}
 	f.Keys, f.Adapter = "local key files", "hci0"

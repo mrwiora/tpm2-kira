@@ -510,31 +510,11 @@ trusts.)
 
 ### 10.3 Binding the configuration
 
-Attestation mode (`off` / `lazy`), the timeout and the policy id
-live in `/etc/tpm2-kira/control.conf` inside the initramfs. On a system that
-seals PCR 11 (UKI) or PCR 9 (Debian/GRUB), editing that file changes a measured
-value and the change is caught. On a system that seals neither — `--pcrs "0,7"`
-is a documented and reasonable selection — the file is *not* measured, and
-`lazy` could be turned `off` by editing a text file.
-
-So the SHA-256 of the effective configuration is carried **inside the sealed
-object**, alongside the TOTP seed. A mismatch between the sealed digest and the
-file on disk is reported.
-
-This extends the sealed payload from "a TOTP seed" to a small structure, which
-means a **sealed blob format version bump to 9** and a re-seal + authenticator
-re-enrolment for existing users. Consistent with the project's stated
-no-backwards-compatibility policy; it must still be called out in HISTORY.md
-and in the release notes.
-
-```
-SealedPayload v9 := {
-    totp_secret     []byte      // as today
-    device_id       [16]byte    // zero when not enrolled
-    anchor_digest   [32]byte    // SHA-256 of the pinned verifier public key, zero when none
-    config_digest   [32]byte    // SHA-256 of the canonicalised control.conf, zero when none
-}
-```
+There is no attestation setting to bind: a phone is served whenever one is
+enrolled for a slot, and `control.conf` does not go into the boot image
+(the image's parts carry the digests of the settings they were built with,
+`tpm2-kira initramfs plan`). The configuration digest in the sealed
+payload that this section once designed was not built (HISTORY.md).
 
 ---
 

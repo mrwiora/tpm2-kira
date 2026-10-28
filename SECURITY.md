@@ -149,7 +149,7 @@ Enter does, and is where later consumers of "this boot was verified by the
 phone" will ask. The console remains advisory all the same: what counts is
 the phone's screen.
 
-In lazy mode the phone check lasts as long as the code screen: when the hold
+The phone check lasts as long as the code screen: when the hold
 ends (Enter, the phone's verdict, or 90 seconds; a phone in the middle of
 its answer gets up to a minute more), the coordinator's service ends and the
 worker with it. Nothing listens to the radio at the passphrase prompt.

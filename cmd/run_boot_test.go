@@ -286,7 +286,7 @@ func TestPhoneVerdictReleasesTheBoot(t *testing.T) {
 }
 
 // A phone that rejects the boot does not release it early; the hold runs
-// its course, as it does when nobody answers (lazy mode holds nothing back).
+// its course, as it does when nobody answers (the phone never holds the boot back).
 func TestPhoneRejectionDoesNotReleaseEarly(t *testing.T) {
 	for _, state := range []phonegate.GateState{phonegate.GateRejected, phonegate.GateRefused, phonegate.GateUnavailable, phonegate.GateWaiting} {
 		f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)}

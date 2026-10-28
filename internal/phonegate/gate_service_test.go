@@ -227,8 +227,8 @@ func startTestGateServer(t *testing.T, host GateHost) (string, *GateServer) {
 	return path, g
 }
 
-// Lazy mode: the coordinator's service ends with the code screen's hold, and
-// the worker learns of it at once, also while it is only waiting for a phone.
+// The coordinator's service ends with the code screen's hold, and the
+// worker learns of it at once, also while it is only waiting for a phone.
 func TestWorkerLearnsThatTheCoordinatorEnded(t *testing.T) {
 	path, server := startTestGateServer(t, &fakeHost{identity: &gateIdentity{FriendlyName: "box"}})
 	c, err := DialGate(path, time.Second)

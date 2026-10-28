@@ -51,7 +51,7 @@ func TestLuksEnrolOnAnImage(t *testing.T) {
 	}
 	defer func() { terminalAsk = oldAsk }()
 	conf := filepath.Join(dir, "control.conf")
-	os.WriteFile(conf, []byte("# comment\nTPM2_KIRA_UNLOCK=skip\n"), 0o644)
+	os.WriteFile(conf, []byte("# comment\nTPM2_KIRA_NOSUCH=skip\n"), 0o644)
 
 	if err := LuksEnrol(LuksEnrolOptions{Device: loop, Mode: diskkey.LuksModePasswordSalt, ExistingKeyFile: existing}); err != nil {
 		t.Fatalf("luks enrol: %v", err)

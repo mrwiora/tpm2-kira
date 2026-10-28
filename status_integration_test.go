@@ -187,14 +187,14 @@ func TestStatusNotes(t *testing.T) {
 		t.Errorf("another key: notes %q", r.Notes)
 	}
 
-	// A leftover mode line: the error that says what to do now.
-	bad := writeConf(t, "TPM2_KIRA_UNLOCK=password+salt\n")
+	// A line it does not know: the error names it.
+	bad := writeConf(t, "TPM2_KIRA_NOSUCH=password+salt\n")
 	r = statusJSON(t, tpmPath, testPrivKeyPath, bad)
-	if !strings.Contains(r.ConfigError, "no unlock mode to set any more") {
+	if !strings.Contains(r.ConfigError, "unknown key") {
 		t.Errorf("bad file: error %q", r.ConfigError)
 	}
 	stdout, _, _ := kira(t, nil, "status", "--tpm", tpmPath, "--privkey", testPrivKeyPath, "--conf", bad)
-	if !strings.Contains(stdout, "no unlock mode to set any more") {
+	if !strings.Contains(stdout, "unknown key") {
 		t.Errorf("bad file, plain: %s", stdout)
 	}
 
@@ -220,11 +220,8 @@ func TestInitramfsPlanReadsTheConfig(t *testing.T) {
 		t.Errorf("a missing file is the defaults: exit %d, %q", code, stdout)
 	}
 	for content, reason := range map[string]string{
-		"TPM2_KIRA_UNLOCK=skip\n":           "line 1: there is no unlock mode to set any more",
-		"TPM2_KIRA_ATTEST=lazy\n":           "line 1: there is no attestation mode to set",
+		"TPM2_KIRA_NOSUCH=skip\n":           "line 1: unknown key",
 		"\nTPM2_KIRA_ATTEST_ADAPTER=eth0\n": "line 2: invalid adapter",
-		"TPM2_KIRA_ATTEST_TIMEOUT=45\n":     "line 1: TPM2_KIRA_ATTEST_TIMEOUT is gone",
-		"TPM2_KIRA_ATTEST_DEBUG=1\n":        "Debug at boot",
 		"just words\n":                      "line 1: expected KEY=VALUE",
 	} {
 		path := writeConf(t, content)

@@ -291,12 +291,12 @@ Next steps - tpm2-kira does not touch your keyslots:
 
 ### 7.1 No software hold is needed
 
-[PLAN-BLE.md](PLAN-BLE.md) §7.4 is blunt that `enforced` mode is a local
-software gate, worth what the measured boot chain is worth. Factor release
+[PLAN-BLE.md](PLAN-BLE.md) §7.4 is blunt that a gate holding the boot is a
+local software gate, worth what the measured boot chain is worth. Factor release
 does not need it: **the enforcement is the missing factor.** Delete the gate
 from the initramfs and the primary keyslot still cannot be opened.
 
-Factor release therefore runs with the gate in `lazy` mode. The boot is never
+Factor release therefore runs with a gate that informs. The boot is never
 held by software, and a failed release ends at the ordinary console prompt
 rather than an emergency shell.
 
