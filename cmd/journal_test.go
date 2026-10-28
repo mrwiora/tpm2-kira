@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/mrwiora/tpm2-kira/internal/journal"
 )
 
 // Under systemd the narrative goes to journald's socket with a priority
@@ -19,16 +21,20 @@ func TestNarrateGoesToTheJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	oldSock, oldOut := journalSocket, narrateOut
-	journalSocket = sock
+	oldSock, oldOut := journal.JournalSocket, journal.NarrateOut
+	journal.JournalSocket = sock
 	var out bytes.Buffer
-	narrateOut = &out
-	journalOnce = sync.Once{}
-	journalConn = nil
-	defer func() { journalSocket, narrateOut = oldSock, oldOut; journalOnce = sync.Once{}; journalConn = nil }()
+	journal.NarrateOut = &out
+	journal.JournalOnce = sync.Once{}
+	journal.JournalConn = nil
+	defer func() {
+		journal.JournalSocket, journal.NarrateOut = oldSock, oldOut
+		journal.JournalOnce = sync.Once{}
+		journal.JournalConn = nil
+	}()
 
 	t.Setenv("JOURNAL_STREAM", "9:12345")
-	narrate("tpm2-kira: %s asks for its key", "cryptroot")
+	journal.Narrate("tpm2-kira: %s asks for its key", "cryptroot")
 	buf := make([]byte, 4096)
 	n, _, err := l.ReadFromUnix(buf)
 	if err != nil {
@@ -43,32 +49,32 @@ func TestNarrateGoesToTheJournal(t *testing.T) {
 	if out.Len() != 0 {
 		t.Errorf("the narrative reached stdout under systemd: %q", out.String())
 	}
-	narrateAt(prioDebug, "two\nlines")
+	journal.NarrateAt(journal.PrioDebug, "two\nlines")
 	n, _, _ = l.ReadFromUnix(buf)
 	if got := buf[:n]; !bytes.Contains(got, []byte("PRIORITY=7\n")) || !bytes.Contains(got, []byte("MESSAGE\n\x09\x00\x00\x00\x00\x00\x00\x00two\nlines\n")) {
 		t.Errorf("a two-line message is not in the binary form:\n%q", got)
 	}
 
 	// By hand: stdout.
-	journalOnce = sync.Once{}
-	journalConn = nil
+	journal.JournalOnce = sync.Once{}
+	journal.JournalConn = nil
 	t.Setenv("JOURNAL_STREAM", "")
-	narrate("by hand")
+	journal.Narrate("by hand")
 	if out.String() != "by hand\n" {
 		t.Errorf("by hand: %q", out.String())
 	}
 
 	// An initramfs without a journal (Debian): the log file, and nothing
 	// on stdout.
-	journalOnce = sync.Once{}
+	journal.JournalOnce = sync.Once{}
 	logPath := filepath.Join(t.TempDir(), "tpm2-kira.log")
 	t.Setenv("TPM2_KIRA_LOG", logPath)
 	t.Setenv("JOURNAL_STREAM", "9:1")
 	out.Reset()
-	narrate("to the file")
-	logFile.Close()
-	logFile = nil
-	journalOnce = sync.Once{}
+	journal.Narrate("to the file")
+	journal.LogFile.Close()
+	journal.LogFile = nil
+	journal.JournalOnce = sync.Once{}
 	if b, _ := os.ReadFile(logPath); string(b) != "to the file\n" || out.Len() != 0 {
 		t.Errorf("log file: %q, stdout: %q", b, out.String())
 	}

@@ -1,4 +1,4 @@
-package cmd
+package diskkey
 
 import (
 	"bytes"
@@ -13,7 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/journal"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/mrwiora/tpm2-kira/internal/screen"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 
 	"golang.org/x/sys/unix"
@@ -72,8 +74,8 @@ func parseUnlockPeer(name string) (unlockRequest, error) {
 	return unlockRequest{Volume: volume, Kind: kind}, nil
 }
 
-// unlockServer answers systemd-cryptsetup's key requests on one socket.
-type unlockServer struct {
+// UnlockServer answers systemd-cryptsetup's key requests on one socket.
+type UnlockServer struct {
 	l    net.Listener
 	key  func(volume string) ([]byte, error) // the key for a volume, or why not
 	log  func(string)
@@ -86,20 +88,20 @@ type unlockServer struct {
 }
 
 // Prompting reports whether a prompt is open on the console right now.
-func (s *unlockServer) Prompting() bool { return s.prompting.Load() }
+func (s *UnlockServer) Prompting() bool { return s.prompting.Load() }
 
-// serveUnlock answers on l. Requests wait until release is called (the
+// ServeUnlock answers on l. Requests wait until release is called (the
 // hold: the code screen is confirmed) and are then answered one after the
 // other with key.
-func serveUnlock(l net.Listener, key func(volume string) ([]byte, error), log func(string)) *unlockServer {
+func ServeUnlock(l net.Listener, key func(volume string) ([]byte, error), log func(string)) *UnlockServer {
 	noCoreDump()
-	s := &unlockServer{l: l, key: key, log: log, gate: make(chan struct{}), done: make(chan struct{})}
+	s := &UnlockServer{l: l, key: key, log: log, gate: make(chan struct{}), done: make(chan struct{})}
 	go s.run()
 	return s
 }
 
-// release lets requests be answered from now on.
-func (s *unlockServer) release() {
+// Release lets requests be answered from now on.
+func (s *UnlockServer) Release() {
 	select {
 	case <-s.gate:
 	default:
@@ -109,12 +111,12 @@ func (s *unlockServer) release() {
 }
 
 // Close stops answering; connections in progress are cut.
-func (s *unlockServer) Close() {
+func (s *UnlockServer) Close() {
 	s.l.Close()
 	<-s.done
 }
 
-func (s *unlockServer) run() {
+func (s *UnlockServer) run() {
 	defer close(s.done)
 	var wg sync.WaitGroup
 	for {
@@ -131,7 +133,7 @@ func (s *unlockServer) run() {
 	wg.Wait()
 }
 
-func (s *unlockServer) answer(c net.Conn) {
+func (s *UnlockServer) answer(c net.Conn) {
 	defer c.Close()
 	if err := peerIsUs(c); err != nil {
 		s.log("unlock: refusing a connection: " + err.Error())
@@ -205,10 +207,10 @@ func noCoreDump() {
 	unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0)
 }
 
-// listenUnlock is the key socket: the one systemd passed with the socket
+// ListenUnlock is the key socket: the one systemd passed with the socket
 // unit (LISTEN_FDS, tpm2-kira-unlock.socket) when it did, else a new one at
 // path. Nil with no error when neither is wanted.
-func listenUnlock(path string) (net.Listener, error) {
+func ListenUnlock(path string) (net.Listener, error) {
 	if l := listenFromSystemd(); l != nil {
 		return l, nil
 	}
@@ -270,12 +272,12 @@ func openConsole() (io.ReadWriteCloser, int, error) {
 	return f, int(f.Fd()), nil
 }
 
-// errUnlockSkipped: no keyslot of tpm2-kira's on the volume, or its
+// ErrUnlockSkipped: no keyslot of tpm2-kira's on the volume, or its
 // header not readable: tpm2-kira gives no key, and cryptsetup's own
 // prompt follows.
-var errUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own prompt follows")
+var ErrUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own prompt follows")
 
-// diskKey is the key provider's answer, as the volume's own LUKS2 header
+// DiskKey is the key provider's answer, as the volume's own LUKS2 header
 // says (unlockRecipe reads its tpm2-kira tokens the moment it asks):
 //
 //	no token             no answer: cryptsetup's own prompt, tpm2-kira untouched
@@ -292,7 +294,7 @@ var errUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own p
 //
 // ask is where the person is asked: consoleAsk, or the SSH session that
 // confirmed the code screen (remoteServer.ask).
-func diskKey(salt func() []byte, vault func(volume string) ([]byte, error), recipe func(volume string) (mode, why string), ask prompter) func(volume string) ([]byte, error) {
+func DiskKey(salt func() []byte, vault func(volume string) ([]byte, error), recipe func(volume string) (mode, why string), ask Prompter) func(volume string) ([]byte, error) {
 	return func(volume string) ([]byte, error) {
 		var s []byte
 		var note string
@@ -300,11 +302,11 @@ func diskKey(salt func() []byte, vault func(volume string) ([]byte, error), reci
 		switch mode {
 		case LuksModeTPMVault:
 			if vault == nil {
-				return nil, fmt.Errorf("%w (no vault in this boot)", errUnlockSkipped)
+				return nil, fmt.Errorf("%w (no vault in this boot)", ErrUnlockSkipped)
 			}
 			key, err := vault(volume)
 			if err != nil {
-				return nil, fmt.Errorf("%w (%v)", errUnlockSkipped, err)
+				return nil, fmt.Errorf("%w (%v)", ErrUnlockSkipped, err)
 			}
 			return key, nil
 		case LuksModePasswordSalt:
@@ -325,9 +327,9 @@ func diskKey(salt func() []byte, vault func(volume string) ([]byte, error), reci
 				"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
 		default:
 			if why != "" {
-				return nil, fmt.Errorf("%w (%s)", errUnlockSkipped, why)
+				return nil, fmt.Errorf("%w (%s)", ErrUnlockSkipped, why)
 			}
-			return nil, errUnlockSkipped
+			return nil, ErrUnlockSkipped
 		}
 		pw, err := ask(volume, "Password", note)
 		if err != nil {
@@ -344,11 +346,11 @@ func diskKey(salt func() []byte, vault func(volume string) ([]byte, error), reci
 	}
 }
 
-// prompter asks for a volume's password or salt, with a note above the
+// Prompter asks for a volume's password or salt, with a note above the
 // question when there is one.
-type prompter func(volume, what, note string) ([]byte, error)
+type Prompter func(volume, what, note string) ([]byte, error)
 
-// consoleAsk asks on the console for a volume's passphrase or password,
+// ConsoleAsk asks on the console for a volume's passphrase or password,
 // with a note above the prompt when there is one.
 // The prompt, as the person sees it: a note under the code screen's own
 // tag saying what the key is made of and where Ctrl-C leads, then the
@@ -360,7 +362,7 @@ type prompter func(volume, what, note string) ([]byte, error)
 //	         Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works.
 //
 //	[ KIRA ] Password for disk cryptroot:          (the tag in blue, the question in bold)
-func consoleAsk(volume, what, note string) ([]byte, error) {
+func ConsoleAsk(volume, what, note string) ([]byte, error) {
 	con, fd, err := openConsole()
 	if err != nil {
 		return nil, fmt.Errorf("cannot open the console: %w", err)
@@ -368,14 +370,14 @@ func consoleAsk(volume, what, note string) ([]byte, error) {
 	defer con.Close()
 	if note != "" {
 		lines := strings.Split(note, "\n")
-		fmt.Fprintf(con, "\n%s Disk %s: %s\n", kiraTag(tagYellow), volume, lines[0])
+		fmt.Fprintf(con, "\n%s Disk %s: %s\n", screen.Tag(screen.TagYellow), volume, lines[0])
 		for _, l := range lines[1:] {
 			fmt.Fprintf(con, "         %s\n", l)
 		}
 	}
 	for {
-		fmt.Fprintf(con, "\n%s \033[1m%s for disk %s:\033[0m ", kiraTag(tagBlue), what, volume)
-		pw, err := readPassphrase(con, fd)
+		fmt.Fprintf(con, "\n%s \033[1m%s for disk %s:\033[0m ", screen.Tag(screen.TagBlue), what, volume)
+		pw, err := ReadPassphrase(con, fd)
 		fmt.Fprintln(con)
 		if err != nil {
 			return nil, err
@@ -388,9 +390,9 @@ func consoleAsk(volume, what, note string) ([]byte, error) {
 
 var errPassphraseCancelled = errors.New("cancelled at the prompt")
 
-// readPassphrase reads one line with echo off from a terminal (fd), or a
+// ReadPassphrase reads one line with echo off from a terminal (fd), or a
 // plain line from anything else (tests, a pipe, a socket: fd < 0).
-func readPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
+func ReadPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 	var old *unix.Termios
 	if fd >= 0 {
 		if t, err := unix.IoctlGetTermios(fd, unix.TCGETS); err == nil {
@@ -433,7 +435,7 @@ func readPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 	}
 	defer unix.IoctlSetTermios(fd, unix.TCSETS, old)
 	one := make([]byte, 1)
-	return readRawPassphrase(func() (byte, error) {
+	return ReadRawPassphrase(func() (byte, error) {
 		n, err := f.Read(one)
 		if err == nil && n == 0 {
 			err = io.EOF
@@ -442,16 +444,16 @@ func readPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 	}, f)
 }
 
-// readRawPassphrase reads a passphrase key by key from a terminal without
+// ReadRawPassphrase reads a passphrase key by key from a terminal without
 // echo or line discipline - the console, or an SSH session (remote_ssh.go)
 // - and echoes a '*' per key to echo.
-func readRawPassphrase(next func() (byte, error), echo io.Writer) ([]byte, error) {
+func ReadRawPassphrase(next func() (byte, error), echo io.Writer) ([]byte, error) {
 	// One buffer of the final size, so the passphrase is in one place
 	// only: no growing slice leaves earlier copies behind for the garbage
 	// collector to find. Locked in memory, as libcryptsetup locks its key
 	// buffers; a page that the initrd could not swap out anyway.
-	pw := make([]byte, 0, maxPassphrase)
-	unix.Mlock(pw[:maxPassphrase])
+	pw := make([]byte, 0, MaxPassphrase)
+	unix.Mlock(pw[:MaxPassphrase])
 	for {
 		c, err := next()
 		if err != nil {
@@ -474,7 +476,7 @@ func readRawPassphrase(next func() (byte, error), echo io.Writer) ([]byte, error
 				fmt.Fprint(echo, "\b \b")
 			}
 		default:
-			if len(pw) == maxPassphrase {
+			if len(pw) == MaxPassphrase {
 				fmt.Fprint(echo, "\a")
 				continue
 			}
@@ -484,13 +486,13 @@ func readRawPassphrase(next func() (byte, error), echo io.Writer) ([]byte, error
 	}
 }
 
-// maxPassphrase is cryptsetup's own limit for a typed passphrase.
-const maxPassphrase = 512
+// MaxPassphrase is cryptsetup's own limit for a typed passphrase.
+const MaxPassphrase = 512
 
-// unlockLogger writes to stderr, with the time: the journal or the
+// UnlockLogger writes to stderr, with the time: the journal or the
 // initramfs log (Debian) is read after the boot.
-func unlockLogger(debug bool) func(string) {
+func UnlockLogger(debug bool) func(string) {
 	return func(msg string) {
-		narrate("tpm2-kira: %s %s", time.Now().UTC().Format("15:04:05.000"), msg)
+		journal.Narrate("tpm2-kira: %s %s", time.Now().UTC().Format("15:04:05.000"), msg)
 	}
 }

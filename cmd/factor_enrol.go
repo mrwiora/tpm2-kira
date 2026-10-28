@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
@@ -194,7 +195,7 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 		return nil, 0, errors.New("the passwords differ; nothing was written")
 	}
 	fmt.Fprintln(os.Stderr, "Deriving the key (Argon2id, 1 GiB, a few seconds) ...")
-	key, err := Combine(pw, want)
+	key, err := diskkey.Combine(pw, want)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -213,7 +214,7 @@ func confirmRecoveryKeyslot() bool {
 // terminalPassword asks on the terminal, echo off.
 func terminalPassword(prompt string) ([]byte, error) {
 	fmt.Fprint(os.Stderr, prompt)
-	pw, err := readPassphrase(os.Stdin, int(os.Stdin.Fd()))
+	pw, err := diskkey.ReadPassphrase(os.Stdin, int(os.Stdin.Fd()))
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		return nil, err

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
@@ -199,7 +200,7 @@ func (c *controller) keysSteps() []controlStep {
 		if s.Vault != "" {
 			desc += ", the vault at " + s.Vault
 		}
-		for _, mode := range []string{LuksModePasswordPhoneSalt, LuksModeTPMVault} {
+		for _, mode := range []string{diskkey.LuksModePasswordPhoneSalt, diskkey.LuksModeTPMVault} {
 			for _, name := range c.boundKeyslots(mode, s.Slot) {
 				desc += ", " + name
 			}
@@ -319,14 +320,14 @@ func (c *controller) diskSteps() []controlStep {
 	// and the vault are tried first, the typed salt is the fallback.
 	salt := controlStep{Key: "luks-salt", Optional: true, SelfConfirm: true, Title: "Password + salt (Argon2id)",
 		Explain: "A LUKS keyslot whose key is derived at boot from a password and a salt you type (Argon2id, 1 GiB). Bound to no slot - deleting a slot leaves it untouched. Enrolled, picking it offers the removal." + typed,
-		Run:     func(c *controller) error { return c.runLuks(LuksModePasswordSalt) }}
+		Run:     func(c *controller) error { return c.runLuks(diskkey.LuksModePasswordSalt) }}
 	switch {
 	case gate != "":
 		salt.Blocked = gate
 	default:
 		for _, d := range f.Status.Devices {
 			for _, ks := range d.Keyslots {
-				if ks.Token != nil && ks.Token.Mode == LuksModePasswordSalt {
+				if ks.Token != nil && ks.Token.Mode == diskkey.LuksModePasswordSalt {
 					salt.Done = fmt.Sprintf("keyslot %d of %s", ks.Keyslot, d.Device)
 				}
 			}
@@ -335,14 +336,14 @@ func (c *controller) diskSteps() []controlStep {
 
 	remote := controlStep{Key: "luks-remote", Optional: true, SelfConfirm: true, Title: "Password + phone salt (the phone)",
 		Explain: "A LUKS keyslot whose key is derived from your password and the salt the phone hands back after it attested the boot: the disk needs the phone, this TPM in an approved boot, and your password. Enrolled, picking it offers the removal." + typed,
-		Run:     func(c *controller) error { return c.runLuks(LuksModePasswordPhoneSalt) }}
+		Run:     func(c *controller) error { return c.runLuks(diskkey.LuksModePasswordPhoneSalt) }}
 	switch {
 	case gate != "":
 		remote.Blocked = gate
 	case strong == nil:
 		remote.Blocked = "needs slot 0 (Signing key and TOTP codes)"
-	case len(c.boundKeyslots(LuksModePasswordPhoneSalt, strong.Slot)) > 0:
-		remote.Done = strings.Join(c.boundKeyslots(LuksModePasswordPhoneSalt, strong.Slot), ", ")
+	case len(c.boundKeyslots(diskkey.LuksModePasswordPhoneSalt, strong.Slot)) > 0:
+		remote.Done = strings.Join(c.boundKeyslots(diskkey.LuksModePasswordPhoneSalt, strong.Slot), ", ")
 	case f.Adapter == "":
 		remote.Blocked = "needs a phone, and there is no Bluetooth adapter on this machine"
 	case strong.Phones == 0:

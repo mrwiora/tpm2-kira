@@ -35,8 +35,10 @@ import (
 	"golang.org/x/crypto/hkdf"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/mrwiora/tpm2-kira/internal/screen"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
@@ -427,19 +429,19 @@ func startVaultKeys(ctx context.Context, tpmPath string, out io.Writer, log func
 		for _, vs := range slots {
 			n := nvslot.SlotNumber(vs.idx)
 			say := func(s string) {
-				fmt.Fprintf(out, "%s Slot #%d: %s\n", kiraTag(tagYellow), n, s)
+				fmt.Fprintf(out, "%s Slot #%d: %s\n", screen.Tag(screen.TagYellow), n, s)
 				log(fmt.Sprintf("vault: slot %d: %s", n, s))
 			}
 			say(fmt.Sprintf("asking the vault at %s for the disk's remote part ...", vs.att.Vault.URL))
 			key, err := openVaultKey(ctx, tpmDev, vs, say)
 			if err != nil {
 				vk.errs[n] = err
-				fmt.Fprintf(out, "%s \033[0;31mSlot #%d: no key from the vault:\033[0m %v\n", kiraTag(tagYellow), n, err)
+				fmt.Fprintf(out, "%s \033[0;31mSlot #%d: no key from the vault:\033[0m %v\n", screen.Tag(screen.TagYellow), n, err)
 				log(fmt.Sprintf("vault: slot %d: no key: %v", n, err))
 				continue
 			}
 			vk.keys[n] = key
-			fmt.Fprintf(out, "%s \033[0;32mSlot #%d: the vault released the remote part; the disk's key is made.\033[0m\n", kiraTag(tagYellow), n)
+			fmt.Fprintf(out, "%s \033[0;32mSlot #%d: the vault released the remote part; the disk's key is made.\033[0m\n", screen.Tag(screen.TagYellow), n)
 			log(fmt.Sprintf("vault: slot %d: released; the key is made", n))
 		}
 	}()
@@ -474,16 +476,16 @@ func (vk *vaultKeys) forVolume(volume string) ([]byte, error) {
 		return nil, errors.New("no slot of this machine has a vault")
 	}
 	<-vk.done
-	dev, err := volumeDevice(volume)
+	dev, err := diskkey.VolumeDevice(volume)
 	if err != nil {
 		return nil, err
 	}
-	toks, err := ReadLuks2Tokens(dev)
+	toks, err := diskkey.ReadLuks2Tokens(dev)
 	if err != nil {
 		return nil, err
 	}
 	for _, t := range toks {
-		if t.Mode != LuksModeTPMVault || t.Slot == nil {
+		if t.Mode != diskkey.LuksModeTPMVault || t.Slot == nil {
 			continue
 		}
 		if key, ok := vk.keys[*t.Slot]; ok {
@@ -540,7 +542,7 @@ func VaultEnrol(o VaultEnrolOptions) error {
 	fmt.Printf("\nKey written to %s\n\n", o.Out)
 	fmt.Println("Next steps:")
 	fmt.Printf("    cryptsetup luksAddKey <device> %s\n", o.Out)
-	fmt.Printf("    tpm2-kira luks mark <device> --keyslot <the new keyslot> --mode %s --nvram %d\n", LuksModeTPMVault, slot)
+	fmt.Printf("    tpm2-kira luks mark <device> --keyslot <the new keyslot> --mode %s --nvram %d\n", diskkey.LuksModeTPMVault, slot)
 	fmt.Printf("    rm %s\n", o.Out)
 	fmt.Println("('tpm2-kira luks enrol <device> --mode tpm+vault ...' does all of it at once.)")
 	return nil

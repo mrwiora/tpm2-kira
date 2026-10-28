@@ -1,4 +1,4 @@
-package cmd
+package diskkey
 
 // How a volume's key is made is written in its own LUKS2 header: the
 // tpm2-kira token carries the mode and the slot (luks.go). At boot the key
@@ -65,7 +65,7 @@ func ReadLuks2Tokens(device string) ([]LuksToken, error) {
 	}
 	var out []LuksToken
 	for _, raw := range md.Tokens {
-		if tok, ok := parseKiraToken(raw); ok {
+		if tok, ok := ParseKiraToken(raw); ok {
 			out = append(out, tok)
 		}
 	}
@@ -79,11 +79,11 @@ var (
 	bootByUUIDDir     = "/dev/disk/by-uuid"
 )
 
-// volumeDevice finds the block device behind a crypttab volume name, the
+// VolumeDevice finds the block device behind a crypttab volume name, the
 // way the initrd names it: rd.luks.name=<UUID>=<name> (or luks.name=) on
 // the kernel command line, a crypttab line (systemd's /etc/crypttab in the
 // initrd), or cryptsetup-initramfs's target=/source= lines on Debian.
-func volumeDevice(volume string) (string, error) {
+func VolumeDevice(volume string) (string, error) {
 	// TPM2_KIRA_CRYPTTAB names an extra crypttab, for the integration
 	// tests, whose volumes live on no kernel command line.
 	if extra := os.Getenv("TPM2_KIRA_CRYPTTAB"); extra != "" {
@@ -156,23 +156,23 @@ func sourceDevice(source string) string {
 	return source
 }
 
-// unlockRecipe says how the key of a volume is made, read from its LUKS2
+// UnlockRecipe says how the key of a volume is made, read from its LUKS2
 // header the moment it asks: the phone salt's recipe when a keyslot is
 // bound to it, else the typed salt's, else "" - not tpm2-kira's to answer,
 // and why says so for the journal. Cached per volume: the header does not
 // change while the initrd runs.
-type unlockRecipe struct {
+type UnlockRecipe struct {
 	mu    sync.Mutex
 	cache map[string]string
 }
 
-func (r *unlockRecipe) forVolume(volume string) (mode, why string) {
+func (r *UnlockRecipe) ForVolume(volume string) (mode, why string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if mode, ok := r.cache[volume]; ok {
 		return mode, ""
 	}
-	dev, err := volumeDevice(volume)
+	dev, err := VolumeDevice(volume)
 	if err != nil {
 		return "", err.Error()
 	}
@@ -180,7 +180,7 @@ func (r *unlockRecipe) forVolume(volume string) (mode, why string) {
 	if err != nil {
 		return "", err.Error()
 	}
-	mode = recipeOfTokens(toks)
+	mode = RecipeOfTokens(toks)
 	if r.cache == nil {
 		r.cache = map[string]string{}
 	}
@@ -191,10 +191,10 @@ func (r *unlockRecipe) forVolume(volume string) (mode, why string) {
 	return mode, ""
 }
 
-// recipeOfTokens is the mode the tokens call for: the vault's key, which
+// RecipeOfTokens is the mode the tokens call for: the vault's key, which
 // needs nobody, wins; then the phone's salt over the typed one (a
 // typed-salt keyslot next to it is the fallback).
-func recipeOfTokens(toks []LuksToken) string {
+func RecipeOfTokens(toks []LuksToken) string {
 	mode := ""
 	for _, t := range toks {
 		if t.Obsolete {
@@ -233,11 +233,11 @@ func routedUUIDs(cmdline, socket string) []string {
 	return uuids
 }
 
-// screenRecipe is the recipe of the first routed volume, for the code
+// ScreenRecipe is the recipe of the first routed volume, for the code
 // screen's words ("continue to ..."): resolved lazily, cached once known,
 // "" while no routed header is readable yet (the prompt then names
 // cryptsetup's).
-func screenRecipe(socket string) func() string {
+func ScreenRecipe(socket string) func() string {
 	var mu sync.Mutex
 	known := ""
 	return func() string {
@@ -252,7 +252,7 @@ func screenRecipe(socket string) func() string {
 		}
 		for _, uuid := range routedUUIDs(string(data), socket) {
 			if toks, err := ReadLuks2Tokens(bootByUUIDDir + "/" + uuid); err == nil {
-				if mode := recipeOfTokens(toks); mode != "" {
+				if mode := RecipeOfTokens(toks); mode != "" {
 					known = mode
 					return known
 				}

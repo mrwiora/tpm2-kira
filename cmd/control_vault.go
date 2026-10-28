@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+
 	"charm.land/huh/v2"
 )
 
@@ -38,7 +40,7 @@ func (c *controller) vaultStep(gate string, strong *StatusSlot) controlStep {
 	}
 	switch {
 	case enrolled != nil:
-		keyslots := c.boundKeyslots(LuksModeTPMVault, enrolled.Slot)
+		keyslots := c.boundKeyslots(diskkey.LuksModeTPMVault, enrolled.Slot)
 		v := f.Vaults[enrolled.Slot]
 		desc := fmt.Sprintf("slot %d with %s", enrolled.Slot, enrolled.Vault)
 		if len(keyslots) > 0 {
@@ -159,7 +161,7 @@ func (c *controller) runVault() error {
 		return err
 	}
 	name, _ := os.Hostname()
-	if err := LuksEnrol(LuksEnrolOptions{Device: dev, Mode: LuksModeTPMVault,
+	if err := LuksEnrol(LuksEnrolOptions{Device: dev, Mode: diskkey.LuksModeTPMVault,
 		Vault: VaultEnrolOptions{TPMPath: c.o.TPMPath, SealIndex: uint32(strong.Slot), URL: url, Pin: pin, Token: token,
 			Name: name, Pepper: pepper, Yes: true, Debug: c.o.Debug}}); err != nil {
 		return err
@@ -195,7 +197,7 @@ func (c *controller) vaultEnrolled(s StatusSlot) error {
 	}
 	for _, d := range c.facts.Status.Devices {
 		for _, ks := range d.Keyslots {
-			if ks.Token != nil && ks.Token.Mode == LuksModeTPMVault && ks.Token.Slot != nil && *ks.Token.Slot == s.Slot {
+			if ks.Token != nil && ks.Token.Mode == diskkey.LuksModeTPMVault && ks.Token.Slot != nil && *ks.Token.Slot == s.Slot {
 				if err := LuksRemove(LuksRemoveOptions{Device: d.Device, Keyslot: ks.Keyslot}); err != nil {
 					return err
 				}

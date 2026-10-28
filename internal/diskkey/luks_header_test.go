@@ -1,4 +1,4 @@
-package cmd
+package diskkey
 
 import (
 	"encoding/binary"
@@ -43,8 +43,8 @@ func TestReadLuks2TokensAndRecipe(t *testing.T) {
 	}
 	// The old one-type token is recognised but never acted on: with only
 	// it as the phone salt mark, the typed salt's recipe wins.
-	if recipeOfTokens(toks) != LuksModePasswordPhoneSalt {
-		t.Fatalf("the phone salt does not win: %q", recipeOfTokens(toks))
+	if RecipeOfTokens(toks) != LuksModePasswordPhoneSalt {
+		t.Fatalf("the phone salt does not win: %q", RecipeOfTokens(toks))
 	}
 	var fresh []LuksToken
 	for _, tk := range toks {
@@ -55,13 +55,13 @@ func TestReadLuks2TokensAndRecipe(t *testing.T) {
 			fresh = append(fresh, tk)
 		}
 	}
-	if recipeOfTokens(fresh) != LuksModePasswordSalt {
-		t.Fatalf("an obsolete token was acted on: %q", recipeOfTokens(fresh))
+	if RecipeOfTokens(fresh) != LuksModePasswordSalt {
+		t.Fatalf("an obsolete token was acted on: %q", RecipeOfTokens(fresh))
 	}
 	// The tokens come in no fixed order (a JSON object): find the salt's.
 	salt := false
 	for _, tk := range toks {
-		salt = salt || (!tk.Obsolete && recipeOfTokens([]LuksToken{tk}) == LuksModePasswordSalt)
+		salt = salt || (!tk.Obsolete && RecipeOfTokens([]LuksToken{tk}) == LuksModePasswordSalt)
 	}
 	if !salt {
 		t.Fatal("the typed salt's token was not read")
@@ -88,18 +88,18 @@ func TestVolumeDevice(t *testing.T) {
 	bootCrypttabPaths = []string{filepath.Join(dir, "crypttab"), filepath.Join(dir, "cryptroot")}
 
 	os.WriteFile(bootCmdlinePath, []byte("quiet rd.luks.name=ABCD-1234=cryptroot rd.luks.key=ABCD-1234=/run/tpm2-kira/unlock.sock\n"), 0o644)
-	if dev, err := volumeDevice("cryptroot"); err != nil || dev != bootByUUIDDir+"/abcd-1234" {
+	if dev, err := VolumeDevice("cryptroot"); err != nil || dev != bootByUUIDDir+"/abcd-1234" {
 		t.Fatalf("cmdline: %q %v", dev, err)
 	}
 	os.WriteFile(bootCrypttabPaths[0], []byte("# c\nother UUID=EEFF-0011 none luks\n"), 0o644)
-	if dev, err := volumeDevice("other"); err != nil || dev != bootByUUIDDir+"/eeff-0011" {
+	if dev, err := VolumeDevice("other"); err != nil || dev != bootByUUIDDir+"/eeff-0011" {
 		t.Fatalf("crypttab: %q %v", dev, err)
 	}
 	os.WriteFile(bootCrypttabPaths[1], []byte("target=vda3_crypt,source=/dev/vda3,key=none,rootdev\n"), 0o644)
-	if dev, err := volumeDevice("vda3_crypt"); err != nil || dev != "/dev/vda3" {
+	if dev, err := VolumeDevice("vda3_crypt"); err != nil || dev != "/dev/vda3" {
 		t.Fatalf("cryptroot: %q %v", dev, err)
 	}
-	if _, err := volumeDevice("unknown"); err == nil {
+	if _, err := VolumeDevice("unknown"); err == nil {
 		t.Fatal("an unknown volume resolved")
 	}
 
@@ -121,14 +121,14 @@ func TestUnlockRecipe(t *testing.T) {
 	dev := writeLuks2Header(t, `{"0": {"type": "tpm2-kira-salt", "keyslots": ["1"], "created": "x"}}`)
 	os.WriteFile(bootCrypttabPaths[0], []byte("cryptroot "+dev+" none luks\n"), 0o644)
 
-	r := &unlockRecipe{}
-	if mode, why := r.forVolume("cryptroot"); mode != LuksModePasswordSalt || why != "" {
+	r := &UnlockRecipe{}
+	if mode, why := r.ForVolume("cryptroot"); mode != LuksModePasswordSalt || why != "" {
 		t.Fatalf("recipe: %q %q", mode, why)
 	}
-	if mode, _ := r.forVolume("cryptroot"); mode != LuksModePasswordSalt { // cached
+	if mode, _ := r.ForVolume("cryptroot"); mode != LuksModePasswordSalt { // cached
 		t.Fatalf("cached recipe: %q", mode)
 	}
-	if mode, why := r.forVolume("stranger"); mode != "" || why == "" {
+	if mode, why := r.ForVolume("stranger"); mode != "" || why == "" {
 		t.Fatalf("a stranger's volume: %q %q", mode, why)
 	}
 }

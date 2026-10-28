@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 )
 
 // The real systemd-cryptsetup unlocks a LUKS2 volume with the key it reads
@@ -56,7 +57,7 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	if err := os.WriteFile(conf, []byte("# nothing to configure\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	key, err := cmd.Combine([]byte(password), []byte(salt))
+	key, err := diskkey.Combine([]byte(password), []byte(salt))
 	if err != nil {
 		t.Fatal(err)
 	}

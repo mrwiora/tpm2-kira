@@ -30,6 +30,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/screen"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -298,11 +300,11 @@ func (r *remoteServer) askQuestion(s *remoteSession, q passwordQuestion) bool {
 		}
 	}()
 	r.log("ssh: asking cryptsetup's own question in the session")
-	fmt.Fprintf(r.console, "%s cryptsetup's own prompt: asked in the SSH session too.\n", kiraTag(tagYellow))
-	header := fmt.Sprintf("\r\n%s cryptsetup asks: %s\r\n         (the console asks it too; the first answer counts)\r\n", kiraTag(tagYellow), q.message)
+	fmt.Fprintf(r.console, "%s cryptsetup's own prompt: asked in the SSH session too.\n", screen.Tag(screen.TagYellow))
+	header := fmt.Sprintf("\r\n%s cryptsetup asks: %s\r\n         (the console asks it too; the first answer counts)\r\n", screen.Tag(screen.TagYellow), q.message)
 	pw, err := askIn(s, header, "Passphrase:", gone)
 	if errors.Is(err, errAskCancelled) {
-		s.write([]byte(fmt.Sprintf("%s Answered at the console.\r\n", kiraTag(tagYellow))))
+		s.write([]byte(fmt.Sprintf("%s Answered at the console.\r\n", screen.Tag(screen.TagYellow))))
 		return true
 	}
 	if err != nil {

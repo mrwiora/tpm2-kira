@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 )
 
 // The route of the disk's key: how the initrd is told to take the key
@@ -127,21 +129,21 @@ func AdviseCmdline(file, cmdline, uuid string) (RouteFinding, bool) {
 	case strings.HasPrefix(words[names[0]][strings.LastIndex(words[names[0]], "=")+1:], "/"):
 		f.Problem = fmt.Sprintf("rd.luks.name= for %s names the volume %q, a path: the socket belongs into rd.luks.key=, the volume keeps its name", uuid, words[names[0]][strings.LastIndex(words[names[0]], "=")+1:])
 		fixed[names[0]] = "rd.luks.name=" + uuid + "=cryptroot"
-		fixed = append(fixed[:names[0]+1], append([]string{"rd.luks.key=" + uuid + "=" + DefaultUnlockSocket}, fixed[names[0]+1:]...)...)
-	case len(keys) == 0 && defaultKey == DefaultUnlockSocket:
+		fixed = append(fixed[:names[0]+1], append([]string{"rd.luks.key=" + uuid + "=" + diskkey.DefaultUnlockSocket}, fixed[names[0]+1:]...)...)
+	case len(keys) == 0 && defaultKey == diskkey.DefaultUnlockSocket:
 		f.Routed, f.Note = true, "rd.luks.key= without a UUID in "+file+", for every volume named there"
 		return f, true
 	case len(keys) == 0:
 		f.Problem = fmt.Sprintf("rd.luks.key= for %s is missing: the initrd asks at systemd's own prompt", uuid)
-		fixed = append(fixed[:names[0]+1], append([]string{"rd.luks.key=" + uuid + "=" + DefaultUnlockSocket}, fixed[names[0]+1:]...)...)
+		fixed = append(fixed[:names[0]+1], append([]string{"rd.luks.key=" + uuid + "=" + diskkey.DefaultUnlockSocket}, fixed[names[0]+1:]...)...)
 	default:
 		path := words[keys[0]][strings.LastIndex(words[keys[0]], "=")+1:]
-		if path == DefaultUnlockSocket {
+		if path == diskkey.DefaultUnlockSocket {
 			f.Routed, f.Note = true, "rd.luks.key= in "+file
 			return f, true
 		}
 		f.Problem = fmt.Sprintf("rd.luks.key= for %s is %s, not tpm2-kira's socket", uuid, path)
-		fixed[keys[0]] = "rd.luks.key=" + uuid + "=" + DefaultUnlockSocket
+		fixed[keys[0]] = "rd.luks.key=" + uuid + "=" + diskkey.DefaultUnlockSocket
 	}
 	f.Should = strings.Join(fixed, " ")
 	return f, true
@@ -189,11 +191,11 @@ func AdviseCrypttab(file string, data []byte, uuid, device string, debian bool) 
 			f.Should = fields[0] + " " + dev + " " + key + " " + strings.Join(kept, ",")
 			return f, true
 		}
-		if key == DefaultUnlockSocket && strings.Contains(","+opts+",", ",x-initrd.attach,") {
+		if key == diskkey.DefaultUnlockSocket && strings.Contains(","+opts+",", ",x-initrd.attach,") {
 			f.Routed, f.Note = true, "the key file of "+fields[0]+" in "+file
 			return f, true
 		}
-		if key == DefaultUnlockSocket {
+		if key == diskkey.DefaultUnlockSocket {
 			f.Problem = fmt.Sprintf("the line for %s has the socket as its key file but no x-initrd.attach: the initrd does not read it", fields[0])
 		} else {
 			f.Problem = fmt.Sprintf("the line for %s has %s as its key file, not tpm2-kira's socket", fields[0], key)
@@ -208,7 +210,7 @@ func AdviseCrypttab(file string, data []byte, uuid, device string, debian bool) 
 		if !strings.Contains(","+opts+",", ",x-initrd.attach,") {
 			kept = append(kept, "x-initrd.attach")
 		}
-		f.Should = fields[0] + " " + dev + " " + DefaultUnlockSocket + " " + strings.Join(kept, ",")
+		f.Should = fields[0] + " " + dev + " " + diskkey.DefaultUnlockSocket + " " + strings.Join(kept, ",")
 		return f, true
 	}
 	return f, false
@@ -285,7 +287,7 @@ func RouteFindings(devices []string, cmdlines []string, crypttab string) ([]Rout
 					f.File = cmdlines[0]
 				}
 				f.Problem = "the volume is not named on the kernel command line, nor in " + crypttab
-				f.Should = "rd.luks.name=" + uuid + "=cryptroot rd.luks.key=" + uuid + "=" + DefaultUnlockSocket + " root=/dev/mapper/cryptroot ..."
+				f.Should = "rd.luks.name=" + uuid + "=cryptroot rd.luks.key=" + uuid + "=" + diskkey.DefaultUnlockSocket + " root=/dev/mapper/cryptroot ..."
 			}
 			out = append(out, f)
 		}

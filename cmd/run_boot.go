@@ -45,8 +45,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/mrwiora/tpm2-kira/internal/journal"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/mrwiora/tpm2-kira/internal/screen"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
@@ -222,7 +225,7 @@ func (b *bootDisplay) holdForConfirmation() ([]totp.NVRAMSlot, bool, error) {
 			if gate.Code != before && gate.Code != "" {
 				// The phone is in: its code, at once, on its own line (the
 				// slot's line carries it from the next window on).
-				fmt.Printf("%s %s  (the phone must show the same)\n", kiraTag(tagPurple), gate.Code)
+				fmt.Printf("%s %s  (the phone must show the same)\n", screen.Tag(screen.TagPurple), gate.Code)
 			}
 		}
 	}
@@ -448,7 +451,7 @@ func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*phonegate
 		return nil, nil
 	}
 	if s, err := ReadBootSettings(tpmDev); err == nil && s.Debug {
-		debug, narrateDebug = true, true // the boot settings' debug: the narrative on the console too
+		debug, journal.NarrateDebug = true, true // the boot settings' debug: the narrative on the console too
 	}
 	l, err := phonegate.ListenGate(socket)
 	if err != nil {
@@ -474,13 +477,13 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		svc, endCoordinator = startCoordinator(tpmPath, gateSocket, phonegate.DefaultAttestSignerPath, debug)
 	}
 	var srv *remoteServer
-	ask := prompter(consoleAsk)
+	ask := diskkey.Prompter(diskkey.ConsoleAsk)
 	if remote.On {
 		if remote.TPM == "" {
 			remote.TPM = tpmPath
 		}
 		var err error
-		if srv, err = startRemote(remote, os.Stdout, unlockLogger(debug)); err != nil {
+		if srv, err = startRemote(remote, os.Stdout, diskkey.UnlockLogger(debug)); err != nil {
 			fmt.Fprintf(os.Stderr, "tpm2-kira: the SSH server is not started: %v - the code screen is at the console\n", err)
 		} else {
 			stopRemoteOnSignal(srv)
@@ -498,29 +501,29 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 	vaultCtx, endVault := context.WithCancel(context.Background())
 	var vault *vaultKeys
 	if planned.Vault {
-		vault = startVaultKeys(vaultCtx, tpmPath, os.Stdout, unlockLogger(debug), debug)
+		vault = startVaultKeys(vaultCtx, tpmPath, os.Stdout, diskkey.UnlockLogger(debug), debug)
 	}
 	var vaultKey func(string) ([]byte, error)
 	if vault != nil {
 		vaultKey = vault.forVolume
 	}
-	var unlock *unlockServer
+	var unlock *diskkey.UnlockServer
 	// What the next prompt is, for the code screen's words: the recipe of
 	// the first routed volume, read from its LUKS2 header once it is
 	// readable. The key itself is made per volume (unlockRecipe): nothing
 	// is configured, the header is the truth.
 	promptMode := func() string { return "" }
-	if l, err := listenUnlock(unlockSocket); err != nil {
+	if l, err := diskkey.ListenUnlock(unlockSocket); err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the disk unlock is not served: %v\n", err)
 	} else if l != nil {
-		promptMode = screenRecipe(DefaultUnlockSocket)
+		promptMode = diskkey.ScreenRecipe(diskkey.DefaultUnlockSocket)
 		if svc != nil {
 			// A slot whose enrolment holds a release key waits for the
 			// salt that follows the phone's receipt.
 			svc.ExpectRelease(true)
 		}
-		recipes := &unlockRecipe{}
-		unlock = serveUnlock(l, diskKey(func() []byte {
+		recipes := &diskkey.UnlockRecipe{}
+		unlock = diskkey.ServeUnlock(l, diskkey.DiskKey(func() []byte {
 			if svc == nil {
 				return nil
 			}
@@ -534,7 +537,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 				time.Sleep(200 * time.Millisecond)
 			}
 			return svc.Salt()
-		}, vaultKey, recipes.forVolume, ask), unlockLogger(debug))
+		}, vaultKey, recipes.ForVolume, ask), diskkey.UnlockLogger(debug))
 	}
 	open := func() (transport.TPMCloser, error) {
 		tpmDev, err := tpmdev.Open(tpmPath)
@@ -601,7 +604,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 				// Enter at the console stops the SSH server; otherwise the
 				// session that confirmed (or the newest one) has the prompt.
 				if srv.release(atConsole) {
-					fmt.Printf("%s Confirmed over SSH: the password is asked in the SSH session.\n", kiraTag(tagYellow))
+					fmt.Printf("%s Confirmed over SSH: the password is asked in the SSH session.\n", screen.Tag(screen.TagYellow))
 				}
 			}
 			// Lazy mode: the phone check ends with the hold, and the
@@ -617,7 +620,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			if unlock != nil {
 				go func() {
 					waitPromptTurn()
-					unlock.release()
+					unlock.Release()
 				}()
 			}
 		},
@@ -816,27 +819,17 @@ func waitPromptTurn() {
 	}
 }
 
-// kiraTag is the "[ KIRA ]" tag in a colour: yellow for the screen and its
-// lines, blue for the prompt, purple for the phone's code.
-func kiraTag(colour string) string { return "[ \033[1;" + colour + "mKIRA\033[0m ]" }
-
-const (
-	tagYellow = "33"
-	tagBlue   = "34"
-	tagPurple = "35"
-)
-
 // nextPrompt names what follows the code screen, in the words of the
 // routed volume's recipe: "the password prompt" when tpm2-kira asks (the
 // password is what the person types; the salt is typed too, or comes from
 // the phone), "cryptsetup's prompt" when nothing of tpm2-kira's answers.
 func nextPrompt(mode string) string {
 	switch mode {
-	case LuksModePasswordSalt:
+	case diskkey.LuksModePasswordSalt:
 		return "the password and salt prompt"
-	case LuksModePasswordPhoneSalt:
+	case diskkey.LuksModePasswordPhoneSalt:
 		return "the password prompt"
-	case LuksModeTPMVault:
+	case diskkey.LuksModeTPMVault:
 		return "cryptsetup's prompt without the vault"
 	}
 	return "cryptsetup's prompt"
@@ -852,31 +845,31 @@ func gateEventPrinter(modeOf func() string) func(prev, cur phonegate.GateStatus)
 		switch cur.State {
 		case phonegate.GateWaiting:
 			if prev.State == "" {
-				if mode == LuksModePasswordPhoneSalt {
-					fmt.Printf("%s Slot #%d: open Marify on your phone to attest this boot and return the disk's salt.\n", kiraTag(tagYellow), cur.Slot)
+				if mode == diskkey.LuksModePasswordPhoneSalt {
+					fmt.Printf("%s Slot #%d: open Marify on your phone to attest this boot and return the disk's salt.\n", screen.Tag(screen.TagYellow), cur.Slot)
 				} else {
-					fmt.Printf("%s Slot #%d: open Marify on your phone to attest this boot.\n", kiraTag(tagYellow), cur.Slot)
+					fmt.Printf("%s Slot #%d: open Marify on your phone to attest this boot.\n", screen.Tag(screen.TagYellow), cur.Slot)
 				}
 			}
 		case phonegate.GateSession:
 			// The phone code goes into the slot's own line (phoneCodes);
 			// here only the fact that a phone is in.
 			if prev.State != phonegate.GateSession {
-				fmt.Printf("%s A phone is connected: answer there. The boot waits for it.\n", kiraTag(tagYellow))
+				fmt.Printf("%s A phone is connected: answer there. The boot waits for it.\n", screen.Tag(screen.TagYellow))
 			}
 		case phonegate.GateAttested:
 			switch {
 			case cur.Releasing:
-				fmt.Printf("%s \033[0;32mSlot #%d attested by your phone.\033[0m Waiting for the salt from the phone ...\n", kiraTag(tagYellow), cur.Slot)
+				fmt.Printf("%s \033[0;32mSlot #%d attested by your phone.\033[0m Waiting for the salt from the phone ...\n", screen.Tag(screen.TagYellow), cur.Slot)
 			case prev.Releasing && cur.SaltTaken:
-				fmt.Printf("%s \033[0;32mThe phone returned the salt.\033[0m Continuing to %s.\n", kiraTag(tagYellow), nextPrompt(mode))
+				fmt.Printf("%s \033[0;32mThe phone returned the salt.\033[0m Continuing to %s.\n", screen.Tag(screen.TagYellow), nextPrompt(mode))
 			case prev.Releasing:
-				fmt.Printf("%s \033[0;33mNo salt came from the phone.\033[0m Continuing to the password and salt prompt (a typed salt; Ctrl-C there: cryptsetup's own prompt).\n", kiraTag(tagYellow))
+				fmt.Printf("%s \033[0;33mNo salt came from the phone.\033[0m Continuing to the password and salt prompt (a typed salt; Ctrl-C there: cryptsetup's own prompt).\n", screen.Tag(screen.TagYellow))
 			case prev.State != phonegate.GateAttested:
-				fmt.Printf("%s \033[0;32mSlot #%d attested by your phone.\033[0m Continuing to %s.\n", kiraTag(tagYellow), cur.Slot, nextPrompt(mode))
+				fmt.Printf("%s \033[0;32mSlot #%d attested by your phone.\033[0m Continuing to %s.\n", screen.Tag(screen.TagYellow), cur.Slot, nextPrompt(mode))
 			}
 		case phonegate.GateRejected, phonegate.GateRefused:
-			fmt.Printf("%s \033[0;31mSlot #%d was NOT attested by the phone (see above).\033[0m Do not type your password unless you know why.\n", kiraTag(tagYellow), cur.Slot)
+			fmt.Printf("%s \033[0;31mSlot #%d was NOT attested by the phone (see above).\033[0m Do not type your password unless you know why.\n", screen.Tag(screen.TagYellow), cur.Slot)
 		}
 	}
 }

@@ -3,6 +3,8 @@ package cmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 )
 
 // A header's metadata as cryptsetup dumps it: two keyslots, one of them
@@ -32,10 +34,10 @@ func TestParseLuksMetadata(t *testing.T) {
 	if len(slots) != 3 || slots[0].Keyslot != 0 || slots[1].Keyslot != 1 || slots[2].Keyslot != 2 {
 		t.Fatalf("%+v", slots)
 	}
-	if slots[1].Token == nil || slots[1].Token.Mode != LuksModePasswordSalt || slots[1].TokenID != 0 {
+	if slots[1].Token == nil || slots[1].Token.Mode != diskkey.LuksModePasswordSalt || slots[1].TokenID != 0 {
 		t.Fatalf("keyslot 1: %+v", slots[1])
 	}
-	if slots[0].Token == nil || slots[0].Token.Mode != LuksModePasswordPhoneSalt || !slots[0].Token.BoundTo(0) || slots[0].TokenID != 2 {
+	if slots[0].Token == nil || slots[0].Token.Mode != diskkey.LuksModePasswordPhoneSalt || !slots[0].Token.BoundTo(0) || slots[0].TokenID != 2 {
 		t.Fatalf("keyslot 0: %+v", slots[0])
 	}
 	if slots[2].Token != nil {
@@ -89,11 +91,11 @@ func TestLuksStatusReadsTokens(t *testing.T) {
 		t.Fatalf("%+v", st)
 	}
 	// Marking keyslot 2 (another kind's token is not ours, so it is free).
-	if err := LuksMark(LuksMarkOptions{Device: "/dev/fake", Keyslot: 2, Mode: LuksModePasswordSalt}); err != nil {
+	if err := LuksMark(LuksMarkOptions{Device: "/dev/fake", Keyslot: 2, Mode: diskkey.LuksModePasswordSalt}); err != nil {
 		t.Fatal(err)
 	}
-	tok, ok := parseKiraToken(imported)
-	if !ok || tok.Type != LuksTokenTypeSalt || tok.Keyslots[0] != "2" || tok.Mode != LuksModePasswordSalt || tok.Created == "" {
+	tok, ok := diskkey.ParseKiraToken(imported)
+	if !ok || tok.Type != diskkey.LuksTokenTypeSalt || tok.Keyslots[0] != "2" || tok.Mode != diskkey.LuksModePasswordSalt || tok.Created == "" {
 		t.Fatalf("imported %s", imported)
 	}
 	// The type alone tells the modes apart in a plain luksDump; the old
@@ -107,10 +109,10 @@ func TestLuksStatusReadsTokens(t *testing.T) {
 		t.Fatalf("a password+salt token names a slot: %s", imported)
 	}
 	// A keyslot marked already is refused; a keyslot that is not there too.
-	if err := LuksMark(LuksMarkOptions{Device: "/dev/fake", Keyslot: 1, Mode: LuksModePasswordSalt}); err == nil || !strings.Contains(err.Error(), "marked already") {
+	if err := LuksMark(LuksMarkOptions{Device: "/dev/fake", Keyslot: 1, Mode: diskkey.LuksModePasswordSalt}); err == nil || !strings.Contains(err.Error(), "marked already") {
 		t.Fatalf("marked twice: %v", err)
 	}
-	if err := LuksMark(LuksMarkOptions{Device: "/dev/fake", Keyslot: 7, Mode: LuksModePasswordSalt}); err == nil || !strings.Contains(err.Error(), "no keyslot 7") {
+	if err := LuksMark(LuksMarkOptions{Device: "/dev/fake", Keyslot: 7, Mode: diskkey.LuksModePasswordSalt}); err == nil || !strings.Contains(err.Error(), "no keyslot 7") {
 		t.Fatalf("missing keyslot: %v", err)
 	}
 	if err := LuksMark(LuksMarkOptions{Device: "/dev/fake", Keyslot: 2, Mode: "hashpwd2"}); err == nil {

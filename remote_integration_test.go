@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -69,7 +69,7 @@ func startRemoteBoot(t *testing.T) *remoteBoot {
 	img := filepath.Join(dir, "disk.img")
 	os.WriteFile(img, nil, 0o600)
 	os.Truncate(img, 20<<20)
-	key, _ := cmd.Combine([]byte("correct horse"), []byte("battery staple"))
+	key, _ := diskkey.Combine([]byte("correct horse"), []byte("battery staple"))
 	format := exec.Command("cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode",
 		"--pbkdf", "pbkdf2", "--pbkdf-force-iterations", "1000", "--key-file", "-", img)
 	format.Stdin = bytes.NewReader(key)
@@ -211,7 +211,7 @@ func TestRemoteSSHConfirmsAndUnlocks(t *testing.T) {
 	c.Write([]byte("correct horse\r"))
 	readUntil(t, r, "Salt for disk "+b.volume)
 	c.Write([]byte("battery staple\r"))
-	want, _ := cmd.Combine([]byte("correct horse"), []byte("battery staple"))
+	want, _ := diskkey.Combine([]byte("correct horse"), []byte("battery staple"))
 	select {
 	case k := <-key:
 		if !bytes.Equal(k, want) {

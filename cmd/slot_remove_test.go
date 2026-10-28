@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 )
 
@@ -56,9 +57,9 @@ func TestCollectSlotContentsWithoutTPM(t *testing.T) {
 	zero, two := 0, 2
 	devices := []LuksDeviceStatus{{Device: "/dev/x", Keyslots: []KeyslotStatus{
 		{Keyslot: 0},
-		{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordPhoneSalt, Slot: &two}},
-		{Keyslot: 2, Token: &LuksToken{Mode: LuksModePasswordPhoneSalt, Slot: &zero}},
-		{Keyslot: 3, Token: &LuksToken{Mode: LuksModePasswordSalt}}, // bound to nothing: no slot takes it
+		{Keyslot: 1, Token: &diskkey.LuksToken{Mode: diskkey.LuksModePasswordPhoneSalt, Slot: &two}},
+		{Keyslot: 2, Token: &diskkey.LuksToken{Mode: diskkey.LuksModePasswordPhoneSalt, Slot: &zero}},
+		{Keyslot: 3, Token: &diskkey.LuksToken{Mode: diskkey.LuksModePasswordSalt}}, // bound to nothing: no slot takes it
 	}}}
 	c := collectSlotContents(nil, devices, 2)
 	if c.Blob || c.Generation || c.Counter || len(c.Keyslots) != 1 || c.Keyslots[0].Keyslot != 1 || len(c.Recovery) != 1 {

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 )
 
 const routeUUID = "099267cb-957a-4c7f-91cf-c25c450767bb"
@@ -76,7 +78,7 @@ func TestWriteRouteFix(t *testing.T) {
 
 	cmdline := filepath.Join(dir, "cmdline")
 	os.WriteFile(cmdline, []byte("quiet rd.luks.name=AB=cryptroot root=/dev/mapper/cryptroot\n"), 0o644)
-	f := RouteFinding{File: cmdline, Kind: "cmdline", Should: "quiet rd.luks.name=AB=cryptroot rd.luks.key=AB=" + DefaultUnlockSocket + " root=/dev/mapper/cryptroot"}
+	f := RouteFinding{File: cmdline, Kind: "cmdline", Should: "quiet rd.luks.name=AB=cryptroot rd.luks.key=AB=" + diskkey.DefaultUnlockSocket + " root=/dev/mapper/cryptroot"}
 	if err := WriteRouteFix(f); err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +88,7 @@ func TestWriteRouteFix(t *testing.T) {
 
 	entry := filepath.Join(dir, "arch.conf")
 	os.WriteFile(entry, []byte("title Arch\nlinux /vmlinuz\noptions quiet rd.luks.name=AB=cryptroot\n"), 0o644)
-	f = RouteFinding{File: "/boot/loader/entries/arch.conf", Kind: "entry", Should: "quiet rd.luks.name=AB=cryptroot rd.luks.key=AB=" + DefaultUnlockSocket}
+	f = RouteFinding{File: "/boot/loader/entries/arch.conf", Kind: "entry", Should: "quiet rd.luks.name=AB=cryptroot rd.luks.key=AB=" + diskkey.DefaultUnlockSocket}
 	f.File = entry
 	if err := WriteRouteFix(f); err != nil {
 		t.Fatal(err)
@@ -97,7 +99,7 @@ func TestWriteRouteFix(t *testing.T) {
 
 	crypttab := filepath.Join(dir, "crypttab")
 	os.WriteFile(crypttab, []byte("# c\nother UUID=XY none luks\ncryptroot UUID=AB none luks\n"), 0o644)
-	f = RouteFinding{File: crypttab, Kind: "crypttab", UUID: "AB", Should: "cryptroot UUID=AB " + DefaultUnlockSocket + " luks,x-initrd.attach"}
+	f = RouteFinding{File: crypttab, Kind: "crypttab", UUID: "AB", Should: "cryptroot UUID=AB " + diskkey.DefaultUnlockSocket + " luks,x-initrd.attach"}
 	if err := WriteRouteFix(f); err != nil {
 		t.Fatal(err)
 	}

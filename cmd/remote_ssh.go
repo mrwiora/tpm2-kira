@@ -32,6 +32,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/mrwiora/tpm2-kira/internal/screen"
+
 	"github.com/tpm2-trust/assh/config"
 	"github.com/tpm2-trust/assh/server"
 )
@@ -173,7 +176,7 @@ func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteS
 
 // addSession takes a login 'ssh-child' handed over.
 func (r *remoteServer) addSession(c net.Conn, who string) {
-	s := &remoteSession{conn: c, keys: make(chan byte, maxPassphrase), closed: make(chan struct{})}
+	s := &remoteSession{conn: c, keys: make(chan byte, diskkey.MaxPassphrase), closed: make(chan struct{})}
 	r.mu.Lock()
 	if r.stopped {
 		r.mu.Unlock()
@@ -181,14 +184,14 @@ func (r *remoteServer) addSession(c net.Conn, who string) {
 		return
 	}
 	r.sessions = append(r.sessions, s)
-	screen, released := r.screen, r.released
+	last, released := r.screen, r.released
 	r.mu.Unlock()
 	r.log("ssh: a session is in: " + who)
 	r.signal(r.changed)
 	if released {
-		s.write([]byte(fmt.Sprintf("%s The boot is released; the password is asked here when a disk asks for its key.\r\n", kiraTag(tagYellow))))
-	} else if len(screen) > 0 {
-		s.write(screen)
+		s.write([]byte(fmt.Sprintf("%s The boot is released; the password is asked here when a disk asks for its key.\r\n", screen.Tag(screen.TagYellow))))
+	} else if len(last) > 0 {
+		s.write(last)
 	}
 	go r.read(s)
 }
@@ -286,7 +289,7 @@ func (r *remoteServer) release(atConsole bool) bool {
 		r.stop("The boot continues at the console; the SSH server stops.")
 		return false
 	}
-	target.write([]byte(fmt.Sprintf("\r\n%s Confirmed. The password is asked here when the disk asks for its key.\r\n", kiraTag(tagYellow))))
+	target.write([]byte(fmt.Sprintf("\r\n%s Confirmed. The password is asked here when the disk asks for its key.\r\n", screen.Tag(screen.TagYellow))))
 	return true
 }
 
@@ -303,7 +306,7 @@ func (r *remoteServer) stop(why string) {
 	r.sessions = nil
 	r.mu.Unlock()
 	for _, s := range sessions {
-		s.write([]byte(fmt.Sprintf("\r\n%s %s\r\n", kiraTag(tagYellow), why)))
+		s.write([]byte(fmt.Sprintf("\r\n%s %s\r\n", screen.Tag(screen.TagYellow), why)))
 		s.close()
 	}
 	// The closed sessions end their relays in the child, which hands the
@@ -340,14 +343,14 @@ func (r *remoteServer) promptTarget() *remoteSession {
 func (r *remoteServer) ask(volume, what, note string) ([]byte, error) {
 	s := r.promptTarget()
 	if s == nil {
-		return consoleAsk(volume, what, note)
+		return diskkey.ConsoleAsk(volume, what, note)
 	}
 	r.log(fmt.Sprintf("ssh: asking for the %s of %s in the session", strings.ToLower(what), volume))
-	fmt.Fprintf(r.console, "%s %s for disk %s: asked in the SSH session.\n", kiraTag(tagYellow), what, volume)
+	fmt.Fprintf(r.console, "%s %s for disk %s: asked in the SSH session.\n", screen.Tag(screen.TagYellow), what, volume)
 	var b strings.Builder
 	if note != "" {
 		lines := strings.Split(note, "\n")
-		fmt.Fprintf(&b, "\r\n%s Disk %s: %s\r\n", kiraTag(tagYellow), volume, lines[0])
+		fmt.Fprintf(&b, "\r\n%s Disk %s: %s\r\n", screen.Tag(screen.TagYellow), volume, lines[0])
 		for _, l := range lines[1:] {
 			fmt.Fprintf(&b, "         %s\r\n", l)
 		}
@@ -367,9 +370,9 @@ func askIn(s *remoteSession, header, prompt string, cancel <-chan struct{}) ([]b
 		}
 	}
 	for {
-		s.write([]byte(header + fmt.Sprintf("\r\n%s \033[1m%s\033[0m ", kiraTag(tagBlue), prompt)))
+		s.write([]byte(header + fmt.Sprintf("\r\n%s \033[1m%s\033[0m ", screen.Tag(screen.TagBlue), prompt)))
 		header = ""
-		pw, err := readRawPassphrase(func() (byte, error) {
+		pw, err := diskkey.ReadRawPassphrase(func() (byte, error) {
 			select {
 			case c := <-s.keys:
 				return c, nil
@@ -424,7 +427,7 @@ func consoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int, remai
 	if port != 22 {
 		p = fmt.Sprintf(" -p %d", port)
 	}
-	fmt.Fprintf(&b, "%s Phone attestation over SSH:", kiraTag(tagYellow))
+	fmt.Fprintf(&b, "%s Phone attestation over SSH:", screen.Tag(screen.TagYellow))
 	if len(addrs) == 0 {
 		fmt.Fprintf(&b, " waiting for a network address (port %d) ...\n", port)
 	} else {

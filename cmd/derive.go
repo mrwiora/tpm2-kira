@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 )
 
@@ -40,7 +41,7 @@ func DeriveCommand(out string) error {
 	}
 	defer wipe.Bytes(salt)
 	fmt.Fprintln(os.Stderr, "Deriving the key (Argon2id, 1 GiB, a few seconds) ...")
-	key, err := Combine(pw, salt)
+	key, err := diskkey.Combine(pw, salt)
 	if err != nil {
 		return err
 	}

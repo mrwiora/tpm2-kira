@@ -137,3 +137,11 @@ func TestControlStopsOnAConfigThatDoesNotLoad(t *testing.T) {
 		t.Fatalf("problems %v", problems)
 	}
 }
+
+// There is no unlock mode to configure: a TPM2_KIRA_UNLOCK line is an
+// error that says what to do now.
+func TestUnlockModeLineIsGone(t *testing.T) {
+	if _, err := ParseControlConfig([]byte("TPM2_KIRA_UNLOCK=password+salt\n")); err == nil || !strings.Contains(err.Error(), "Remove the line") {
+		t.Fatalf("a mode line parsed: %v", err)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
@@ -198,7 +199,7 @@ func statusNotes(r StatusReport) []string {
 				continue
 			}
 			if ks.Token.Obsolete {
-				notes = append(notes, fmt.Sprintf("%s keyslot %d carries the old token type %s: cryptsetup token remove --token-id %d %s, then tpm2-kira luks mark %s --keyslot %d --mode <its mode>", d.Device, ks.Keyslot, luksTokenTypeOld, ks.TokenID, d.Device, d.Device, ks.Keyslot))
+				notes = append(notes, fmt.Sprintf("%s keyslot %d carries the old token type %s: cryptsetup token remove --token-id %d %s, then tpm2-kira luks mark %s --keyslot %d --mode <its mode>", d.Device, ks.Keyslot, diskkey.LuksTokenTypeOld, ks.TokenID, d.Device, d.Device, ks.Keyslot))
 				continue
 			}
 			marked[ks.Token.Mode]++
@@ -209,7 +210,7 @@ func statusNotes(r StatusReport) []string {
 				notes = append(notes, fmt.Sprintf("%s keyslot %d is bound to slot %d, which is gone - the slot is dirty: 'tpm2-kira control' (the slot's line) deletes what is left, or tpm2-kira luks remove %s --keyslot %d by hand", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
 				continue
 			}
-			if ks.Token.Mode == LuksModeTPMVault {
+			if ks.Token.Mode == diskkey.LuksModeTPMVault {
 				ok := false
 				for _, s := range r.Slots {
 					if s.Slot == *ks.Token.Slot && s.Vault != "" {
@@ -220,7 +221,7 @@ func statusNotes(r StatusReport) []string {
 					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the vault of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
 				}
 			}
-			if ks.Token.Mode == LuksModePasswordPhoneSalt {
+			if ks.Token.Mode == diskkey.LuksModePasswordPhoneSalt {
 				ok := false
 				for _, s := range r.Slots {
 					if s.Slot == *ks.Token.Slot && s.PhoneSalt {
@@ -237,10 +238,10 @@ func statusNotes(r StatusReport) []string {
 	for _, s := range r.Slots {
 		vault = vault || s.Vault != ""
 	}
-	if vault && headersRead && marked[LuksModeTPMVault] == 0 {
+	if vault && headersRead && marked[diskkey.LuksModeTPMVault] == 0 {
 		notes = append(notes, "a slot is enrolled with a vault, but no LUKS keyslot is marked tpm+vault: its key opens nothing (tpm2-kira luks mark <device> --keyslot N --mode tpm+vault)")
 	}
-	if remoteSalt && headersRead && marked[LuksModePasswordPhoneSalt] == 0 {
+	if remoteSalt && headersRead && marked[diskkey.LuksModePasswordPhoneSalt] == 0 {
 		notes = append(notes, "a phone salt is enrolled, but no LUKS keyslot is marked password+phonesalt: the phone's salt opens nothing (tpm2-kira luks enrol <device> --mode password+phonesalt)")
 	}
 	return notes
@@ -317,7 +318,7 @@ func shortKeyslot(ks KeyslotStatus) string {
 	if ks.Token.Obsolete {
 		return "an old token: re-mark (the notes say how)"
 	}
-	if boundMode(ks.Token.Mode) && ks.Token.Slot != nil {
+	if diskkey.BoundMode(ks.Token.Mode) && ks.Token.Slot != nil {
 		return fmt.Sprintf("%s (slot %d, label %q)", ks.Token.Mode, *ks.Token.Slot, ks.Token.Label)
 	}
 	return ks.Token.Mode

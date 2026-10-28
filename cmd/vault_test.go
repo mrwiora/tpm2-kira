@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/attest/attesttest"
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
@@ -140,33 +141,33 @@ func TestVaultClientPin(t *testing.T) {
 // A volume with a tpm+vault keyslot takes the vault's key, which needs
 // nobody; without one, cryptsetup's own prompt follows.
 func TestDiskKeyFromTheVault(t *testing.T) {
-	if got := recipeOfTokens([]LuksToken{{Mode: LuksModePasswordSalt}, {Mode: LuksModeTPMVault}, {Mode: LuksModePasswordPhoneSalt}}); got != LuksModeTPMVault {
+	if got := diskkey.RecipeOfTokens([]diskkey.LuksToken{{Mode: diskkey.LuksModePasswordSalt}, {Mode: diskkey.LuksModeTPMVault}, {Mode: diskkey.LuksModePasswordPhoneSalt}}); got != diskkey.LuksModeTPMVault {
 		t.Fatalf("recipe %q", got)
 	}
-	if got := recipeOfTokens([]LuksToken{{Mode: LuksModePasswordSalt}, {Mode: LuksModePasswordPhoneSalt}}); got != LuksModePasswordPhoneSalt {
+	if got := diskkey.RecipeOfTokens([]diskkey.LuksToken{{Mode: diskkey.LuksModePasswordSalt}, {Mode: diskkey.LuksModePasswordPhoneSalt}}); got != diskkey.LuksModePasswordPhoneSalt {
 		t.Fatalf("recipe %q", got)
 	}
 	noAsk := func(volume, what, note string) ([]byte, error) {
 		t.Fatalf("asked for %s", what)
 		return nil, nil
 	}
-	key, err := diskKey(nil, func(string) ([]byte, error) { return []byte("k"), nil }, recipeOf(LuksModeTPMVault), noAsk)("cryptroot")
+	key, err := diskkey.DiskKey(nil, func(string) ([]byte, error) { return []byte("k"), nil }, recipeOf(diskkey.LuksModeTPMVault), noAsk)("cryptroot")
 	if err != nil || string(key) != "k" {
 		t.Fatalf("%q %v", key, err)
 	}
-	_, err = diskKey(nil, func(string) ([]byte, error) { return nil, errors.New("the vault refused") }, recipeOf(LuksModeTPMVault), noAsk)("cryptroot")
-	if !errors.Is(err, errUnlockSkipped) || !strings.Contains(err.Error(), "the vault refused") {
+	_, err = diskkey.DiskKey(nil, func(string) ([]byte, error) { return nil, errors.New("the vault refused") }, recipeOf(diskkey.LuksModeTPMVault), noAsk)("cryptroot")
+	if !errors.Is(err, diskkey.ErrUnlockSkipped) || !strings.Contains(err.Error(), "the vault refused") {
 		t.Fatalf("%v", err)
 	}
-	if _, err := diskKey(nil, nil, recipeOf(LuksModeTPMVault), noAsk)("cryptroot"); !errors.Is(err, errUnlockSkipped) {
+	if _, err := diskkey.DiskKey(nil, nil, recipeOf(diskkey.LuksModeTPMVault), noAsk)("cryptroot"); !errors.Is(err, diskkey.ErrUnlockSkipped) {
 		t.Fatalf("no vault in this boot: %v", err)
 	}
 }
 
 // The token of a tpm+vault keyslot has its own type and is bound to a slot.
 func TestVaultToken(t *testing.T) {
-	tok, ok := parseKiraToken(json.RawMessage(`{"type":"tpm2-kira-vault","keyslots":["2"],"slot":0,"label":"luks","created":"x"}`))
-	if !ok || tok.Mode != LuksModeTPMVault || !tok.BoundTo(0) || tokenTypeOf(LuksModeTPMVault) != LuksTokenTypeVault {
+	tok, ok := diskkey.ParseKiraToken(json.RawMessage(`{"type":"tpm2-kira-vault","keyslots":["2"],"slot":0,"label":"luks","created":"x"}`))
+	if !ok || tok.Mode != diskkey.LuksModeTPMVault || !tok.BoundTo(0) || diskkey.TokenTypeOf(diskkey.LuksModeTPMVault) != diskkey.LuksTokenTypeVault {
 		t.Fatalf("%+v", tok)
 	}
 	if !strings.Contains(describeKeyslot(KeyslotStatus{Token: &tok}), "nothing typed") {
@@ -207,4 +208,9 @@ func TestCheckVault(t *testing.T) {
 	if v := checkVault(srv.URL, pin, known, 5*time.Second); v.Answers || !strings.Contains(v.Problem, "not reachable") {
 		t.Fatalf("not reached: %+v", v)
 	}
+}
+
+// recipeOf is a volume-independent recipe, for the prompt tests.
+func recipeOf(mode string) func(string) (string, string) {
+	return func(string) (string, string) { return mode, "" }
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
@@ -398,7 +399,7 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
                    for the radio worker ('phone gate --coordinator'), read
                    the phone's receipt, release the boot on its verdict
   --unlock SOCKET  Serve the disk's key on this socket (Debian's boot
-                   script passes ` + cmd.DefaultUnlockSocket + `; under
+                   script passes ` + diskkey.DefaultUnlockSocket + `; under
                    systemd the socket unit hands its socket over instead)
   --ssh            Be the SSH server ('ssh-child', unprivileged): the
                    codes are shown and confirmed in an SSH session, the
@@ -504,7 +505,7 @@ vault's part not released, Ctrl-C), it becomes cryptsetup's
 own prompt, /lib/cryptsetup/askpass. On the last of cryptroot's tries the
 keyscript asks at askpass directly.
 
-  --socket PATH  (default ` + cmd.DefaultUnlockSocket + `)
+  --socket PATH  (default ` + diskkey.DefaultUnlockSocket + `)
   --wait DUR     How long to wait for the socket (default 5s)
 `,
 

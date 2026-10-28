@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
@@ -138,14 +139,14 @@ func main() {
 		runLuks(commandArgs, *tpmPath, *debug)
 	case "unlock-key":
 		fs := flag.NewFlagSet("unlock-key", flag.ExitOnError)
-		socket := fs.String("socket", cmd.DefaultUnlockSocket, "The key socket of 'tpm2-kira run --unlock'")
+		socket := fs.String("socket", diskkey.DefaultUnlockSocket, "The key socket of 'tpm2-kira run --unlock'")
 		wait := fs.Duration("wait", 5*time.Second, "How long to wait for the socket to appear")
 		fs.Parse(commandArgs)
 		volume := fs.Arg(0)
 		if volume == "" {
 			volume = os.Getenv("CRYPTTAB_NAME")
 		}
-		if err := cmd.UnlockKeyCommand(*socket, volume, *wait); err != nil {
+		if err := diskkey.UnlockKeyCommand(*socket, volume, *wait); err != nil {
 			fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
 			os.Exit(1) // a keyscript's exit status is what cryptroot reads
 		}

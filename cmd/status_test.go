@@ -3,6 +3,8 @@ package cmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 )
 
 // The notes say what does not fit together, and nothing when all does.
@@ -11,7 +13,7 @@ func TestStatusNotes(t *testing.T) {
 		return StatusSlot{Slot: n, PCRs: pcrs, Fallback: pcrs == "0e,7e", GenState: "3 (matches)", Signed: true, PhoneSalt: remote}
 	}
 	zero, two := 0, 2
-	dev := func(tokens ...*LuksToken) LuksDeviceStatus {
+	dev := func(tokens ...*diskkey.LuksToken) LuksDeviceStatus {
 		d := LuksDeviceStatus{Device: "/dev/x"}
 		for i, tok := range tokens {
 			d.Keyslots = append(d.Keyslots, KeyslotStatus{Keyslot: i, Token: tok})
@@ -19,7 +21,7 @@ func TestStatusNotes(t *testing.T) {
 		return d
 	}
 	ok := StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e,11u", true), slot(1, "0e,7e", false)},
-		Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordPhoneSalt, Slot: &zero})}}
+		Devices: []LuksDeviceStatus{dev(nil, &diskkey.LuksToken{Mode: diskkey.LuksModePasswordPhoneSalt, Slot: &zero})}}
 	if n := statusNotes(ok); len(n) != 0 {
 		t.Errorf("a consistent machine has notes: %v", n)
 	}
@@ -36,9 +38,9 @@ func TestStatusNotes(t *testing.T) {
 		{"salt without a keyslot", StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e,11u", true), slot(1, "0e,7e", false)},
 			Devices: []LuksDeviceStatus{dev(nil)}}, "no LUKS keyslot is marked password+phonesalt"},
 		{"keyslot bound to a gone slot", StatusReport{Slots: []StatusSlot{slot(0, "0e,7e", false)},
-			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordPhoneSalt, Slot: &two})}}, "bound to slot 2, which is gone"},
+			Devices: []LuksDeviceStatus{dev(nil, &diskkey.LuksToken{Mode: diskkey.LuksModePasswordPhoneSalt, Slot: &two})}}, "bound to slot 2, which is gone"},
 		{"keyslot's slot lost its salt", StatusReport{Slots: []StatusSlot{slot(0, "0e,7e", false)},
-			Devices: []LuksDeviceStatus{dev(nil, &LuksToken{Mode: LuksModePasswordPhoneSalt, Slot: &zero})}}, "keyslot 1 needs the phone salt of slot 0"},
+			Devices: []LuksDeviceStatus{dev(nil, &diskkey.LuksToken{Mode: diskkey.LuksModePasswordPhoneSalt, Slot: &zero})}}, "keyslot 1 needs the phone salt of slot 0"},
 	}
 	for _, c := range cases {
 		notes := strings.Join(statusNotes(c.r), "\n")

@@ -18,6 +18,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/mrwiora/tpm2-kira/internal/screen"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"golang.org/x/sys/unix"
@@ -426,7 +427,7 @@ func (c *controller) header() string {
 	if v == "" {
 		v = "unknown"
 	}
-	return fmt.Sprintf("%s control %s - the protections of this machine, step by step", kiraTag(tagYellow), v)
+	return fmt.Sprintf("%s control %s - the protections of this machine, step by step", screen.Tag(screen.TagYellow), v)
 }
 
 // Control runs the guided workflow: step 1 until the boot chain is in

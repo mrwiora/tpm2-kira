@@ -1,4 +1,4 @@
-package cmd
+package diskkey
 
 import (
 	"bytes"
@@ -66,7 +66,7 @@ func askLike(t *testing.T, path, kind, volume string) net.Conn {
 
 func TestUnlockServerAnswersAfterRelease(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "unlock.sock")
-	l, err := listenUnlock(path)
+	l, err := ListenUnlock(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +74,8 @@ func TestUnlockServerAnswersAfterRelease(t *testing.T) {
 	var asked []string
 	var logs []string
 	var sawPrompting atomic.Bool
-	var s *unlockServer
-	s = serveUnlock(l, func(v string) ([]byte, error) {
+	var s *UnlockServer
+	s = ServeUnlock(l, func(v string) ([]byte, error) {
 		sawPrompting.Store(s.Prompting())
 		mu.Lock()
 		defer mu.Unlock()
@@ -103,8 +103,8 @@ func TestUnlockServerAnswersAfterRelease(t *testing.T) {
 	if s.Prompting() {
 		t.Fatal("prompting before any request was answered")
 	}
-	s.release()
-	s.release() // twice is fine
+	s.Release()
+	s.Release() // twice is fine
 	c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	got, err := io.ReadAll(c)
 	if err != nil || string(got) != "secret-for-cryptroot" {
@@ -151,16 +151,16 @@ func TestUnlockServerAnswersAfterRelease(t *testing.T) {
 
 func TestUnlockServerRefusesStrangers(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "unlock.sock")
-	l, err := listenUnlock(path)
+	l, err := ListenUnlock(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var mu sync.Mutex
 	var logs []string
-	s := serveUnlock(l, func(v string) ([]byte, error) { t.Error("asked"); return nil, nil },
+	s := ServeUnlock(l, func(v string) ([]byte, error) { t.Error("asked"); return nil, nil },
 		func(m string) { mu.Lock(); logs = append(logs, m); mu.Unlock() })
 	defer s.Close()
-	s.release()
+	s.Release()
 	// A plain client without systemd-cryptsetup's abstract name.
 	c, err := net.Dial("unix", path)
 	if err != nil {
@@ -228,13 +228,13 @@ func TestPeerIsUs(t *testing.T) {
 func TestListenUnlockWithoutASocketIsNothing(t *testing.T) {
 	os.Unsetenv("LISTEN_PID")
 	os.Unsetenv("LISTEN_FDS")
-	if l, err := listenUnlock(""); l != nil || err != nil {
+	if l, err := ListenUnlock(""); l != nil || err != nil {
 		t.Fatalf("%v %v", l, err)
 	}
 	// LISTEN_FDS for another process is ignored.
 	t.Setenv("LISTEN_PID", "1")
 	t.Setenv("LISTEN_FDS", "1")
-	if l, err := listenUnlock(""); l != nil || err != nil {
+	if l, err := ListenUnlock(""); l != nil || err != nil {
 		t.Fatalf("%v %v", l, err)
 	}
 }
@@ -287,7 +287,7 @@ func TestReadPassphraseFromAPipe(t *testing.T) {
 		w.Write([]byte("hunter2\r\n"))
 		w.Close()
 	}()
-	pw, err := readPassphrase(r, int(r.Fd()))
+	pw, err := ReadPassphrase(r, int(r.Fd()))
 	if err != nil || string(pw) != "hunter2" {
 		t.Fatalf("%q %v", pw, err)
 	}
@@ -295,13 +295,13 @@ func TestReadPassphraseFromAPipe(t *testing.T) {
 	r2, w2, _ := os.Pipe()
 	defer r2.Close()
 	go func() { w2.Write([]byte("tail")); w2.Close() }()
-	if pw, err := readPassphrase(r2, int(r2.Fd())); err != nil || string(pw) != "tail" {
+	if pw, err := ReadPassphrase(r2, int(r2.Fd())); err != nil || string(pw) != "tail" {
 		t.Fatalf("%q %v", pw, err)
 	}
 	r3, w3, _ := os.Pipe()
 	defer r3.Close()
 	w3.Close()
-	if _, err := readPassphrase(r3, int(r3.Fd())); err == nil {
+	if _, err := ReadPassphrase(r3, int(r3.Fd())); err == nil {
 		t.Fatal("an empty pipe gave a passphrase")
 	}
 }
@@ -344,10 +344,10 @@ func TestReadPassphraseOnATerminal(t *testing.T) {
 	go func() {
 		raw()
 		ptm.Write([]byte("abx\x7fc"))
-		ptm.Write(bytes.Repeat([]byte("z"), maxPassphrase))
+		ptm.Write(bytes.Repeat([]byte("z"), MaxPassphrase))
 		ptm.Write([]byte("\n"))
 	}()
-	pw, err := readPassphrase(pts, int(pts.Fd()))
+	pw, err := ReadPassphrase(pts, int(pts.Fd()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,14 +356,14 @@ func TestReadPassphraseOnATerminal(t *testing.T) {
 		raw()
 		ptm.Write([]byte("abc\x03"))
 	}()
-	if _, err := readPassphrase(pts, int(pts.Fd())); !errors.Is(err, errPassphraseCancelled) {
+	if _, err := ReadPassphrase(pts, int(pts.Fd())); !errors.Is(err, errPassphraseCancelled) {
 		t.Fatalf("Ctrl-C: %v", err)
 	}
-	want := "abc" + strings.Repeat("z", maxPassphrase-3)
+	want := "abc" + strings.Repeat("z", MaxPassphrase-3)
 	if string(pw) != want {
 		t.Fatalf("got %d bytes %q...", len(pw), pw[:8])
 	}
-	if cap(pw) != maxPassphrase {
+	if cap(pw) != MaxPassphrase {
 		t.Fatalf("capacity %d: the buffer grew", cap(pw))
 	}
 	var echo []byte
@@ -426,7 +426,7 @@ func TestConsolePassphraseOnASocket(t *testing.T) {
 		c.Write([]byte("open sesame\n"))
 		io.Copy(io.Discard, c)
 	}()
-	pw, err := consoleAsk("vol", "Passphrase", "")
+	pw, err := ConsoleAsk("vol", "Passphrase", "")
 	if err != nil || string(pw) != "open sesame" {
 		t.Fatalf("%q %v", pw, err)
 	}
@@ -473,7 +473,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 		}
 	}()
 	salt := []byte("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-	key, err := diskKey(func() []byte { return append([]byte(nil), salt...) }, nil, recipeOf(LuksModePasswordPhoneSalt), consoleAsk)("cryptroot")
+	key, err := DiskKey(func() []byte { return append([]byte(nil), salt...) }, nil, recipeOf(LuksModePasswordPhoneSalt), ConsoleAsk)("cryptroot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +505,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 	}
 	// Without a salt from the phone: the password+salt variant, a typed
 	// salt, said so at the prompt.
-	key, err = diskKey(func() []byte { return nil }, nil, recipeOf(LuksModePasswordPhoneSalt), consoleAsk)("cryptroot")
+	key, err = DiskKey(func() []byte { return nil }, nil, recipeOf(LuksModePasswordPhoneSalt), ConsoleAsk)("cryptroot")
 	if err != nil {
 		t.Fatalf("without a salt from the phone: %v", err)
 	}
@@ -530,7 +530,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 			drained = true
 		}
 	}
-	if _, err := diskKey(func() []byte { return append([]byte(nil), salt...) }, nil, recipeOf(""), consoleAsk)("cryptroot"); !errors.Is(err, errUnlockSkipped) {
+	if _, err := DiskKey(func() []byte { return append([]byte(nil), salt...) }, nil, recipeOf(""), ConsoleAsk)("cryptroot"); !errors.Is(err, ErrUnlockSkipped) {
 		t.Fatalf("no keyslot of ours: %v", err)
 	}
 	select {
@@ -545,14 +545,14 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 // after the wait (and would become askpass).
 func TestAskUnlockSocket(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "unlock.sock")
-	l, err := listenUnlock(path)
+	l, err := ListenUnlock(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var asked string
-	s := serveUnlock(l, func(v string) ([]byte, error) { asked = v; return []byte("key\n"), nil }, func(string) {})
+	s := ServeUnlock(l, func(v string) ([]byte, error) { asked = v; return []byte("key\n"), nil }, func(string) {})
 	defer s.Close()
-	s.release()
+	s.Release()
 	key, err := askUnlockSocket(path, "vda3_crypt", time.Second)
 	if err != nil || string(key) != "key\n" || asked != "vda3_crypt" {
 		t.Fatalf("%q %v (asked %q)", key, err, asked)
@@ -604,7 +604,7 @@ func TestDiskKeyPasswordSaltMode(t *testing.T) {
 			}()
 		}
 	}()
-	key, err := diskKey(func() []byte { return nil }, nil, recipeOf(LuksModePasswordSalt), consoleAsk)("cryptroot")
+	key, err := DiskKey(func() []byte { return nil }, nil, recipeOf(LuksModePasswordSalt), ConsoleAsk)("cryptroot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,14 +626,6 @@ func TestDiskKeyPasswordSaltMode(t *testing.T) {
 	}
 }
 
-// There is no unlock mode to configure: a TPM2_KIRA_UNLOCK line is an
-// error that says what to do now.
-func TestUnlockModeLineIsGone(t *testing.T) {
-	if _, err := ParseControlConfig([]byte("TPM2_KIRA_UNLOCK=password+salt\n")); err == nil || !strings.Contains(err.Error(), "Remove the line") {
-		t.Fatalf("a mode line parsed: %v", err)
-	}
-}
-
 // Several answers on one pipe, one prompt each: a prompt takes its line
 // and nothing more (derive asks three times from the same stdin).
 func TestReadPassphraseTakesOneLineOfAPipe(t *testing.T) {
@@ -647,7 +639,7 @@ func TestReadPassphraseTakesOneLineOfAPipe(t *testing.T) {
 		w.Close()
 	}()
 	for _, want := range []string{"first", "second", "third"} {
-		got, err := readPassphrase(r, int(r.Fd()))
+		got, err := ReadPassphrase(r, int(r.Fd()))
 		if err != nil || string(got) != want {
 			t.Fatalf("%q %v, want %q", got, err, want)
 		}

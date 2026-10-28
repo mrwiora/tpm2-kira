@@ -22,6 +22,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/journal"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
@@ -575,7 +576,7 @@ func debugLogf(debug bool) func(string, ...any) {
 		return nil
 	}
 	return func(format string, args ...any) {
-		narrateAt(prioDebug, "ble: %s "+format, append([]any{time.Now().Format("15:04:05.000")}, args...)...)
+		journal.NarrateAt(journal.PrioDebug, "ble: %s "+format, append([]any{time.Now().Format("15:04:05.000")}, args...)...)
 	}
 }
 
@@ -625,7 +626,7 @@ type GateOptions struct {
 // on this machine the verdict line is advisory; the authoritative display is
 // the phone's (PLAN-PHONE.md §10.2).
 func AttestGate(o GateOptions) int {
-	narrateDebug = o.Debug
+	journal.NarrateDebug = o.Debug
 	step := gateSteps(o.Debug)
 	if o.Coordinator != "" {
 		// The radio worker: no TPM here. Everything that needs one, and
@@ -901,7 +902,7 @@ func runGateRadio(host phonegate.GateHost, o GateOptions, step func(string, ...a
 		ServiceData: attest.BuildServiceData(attest.AdvFlagAttest, randBytes(4), ident.AdvKey),
 		Info:        attestInfo(infoModeAttest, id.Capabilities),
 	}
-	narrate("tpm2-kira: waiting for attestation of %q (open the app on your phone)", ident.FriendlyName)
+	journal.Narrate("tpm2-kira: waiting for attestation of %q (open the app on your phone)", ident.FriendlyName)
 	host.Report(phonegate.GateWaiting)
 
 	res, err := waitForReceipt(p, adv, o.Timeout, func(conn *frame.Conn) (*attest.AttestResult, error) {
@@ -919,7 +920,7 @@ func runGateRadio(host phonegate.GateHost, o GateOptions, step func(string, ...a
 			host.Report(phonegate.GateSessionOver) // nothing more comes: no release to wait for
 		}
 		return res, err
-	}, narrator{prioInfo}, time.Now)
+	}, journal.Narrator{Prio: journal.PrioInfo}, time.Now)
 	if errors.Is(err, errNoPhoneReachable) {
 		phonegate.GateFail("phone not reachable: no phone connected over Bluetooth within %s.\n"+
 			"tpm2-kira:   This is not a TPM or boot-integrity failure. Check that the phone\n"+
@@ -929,7 +930,7 @@ func runGateRadio(host phonegate.GateHost, o GateOptions, step func(string, ...a
 	}
 	if err != nil && isOver() {
 		// Lazy mode: the phone check lasts as long as the code screen.
-		narrate("tpm2-kira: the code screen has ended; the phone was not asked in time for this boot")
+		journal.Narrate("tpm2-kira: the code screen has ended; the phone was not asked in time for this boot")
 		return phonegate.ExitUnavailable
 	}
 	if err != nil {
@@ -1007,7 +1008,7 @@ func debugProgress(debug bool) attest.Progress {
 		return nil
 	}
 	return func(_ attest.ProgressLevel, format string, args ...any) {
-		narrateAt(prioDebug, "tpm2-kira: "+format, args...)
+		journal.NarrateAt(journal.PrioDebug, "tpm2-kira: "+format, args...)
 	}
 }
 
@@ -1020,7 +1021,7 @@ func gateSteps(debug bool) func(string, ...any) {
 	}
 	start := time.Now()
 	return func(format string, args ...any) {
-		narrateAt(prioDebug, "tpm2-kira: gate +%.1fs: "+format, append([]any{time.Since(start).Seconds()}, args...)...)
+		journal.NarrateAt(journal.PrioDebug, "tpm2-kira: gate +%.1fs: "+format, append([]any{time.Since(start).Seconds()}, args...)...)
 	}
 }
 
@@ -1028,18 +1029,18 @@ func reportReceipt(res *attest.AttestResult, recordVerified bool) int {
 	// Even a verified record is only as good as the initramfs holding the
 	// key it was verified with (SECURITY.md); the phone's screen is the verdict.
 	if recordVerified {
-		defer narrate("tpm2-kira:   (enrolment record verified: signed by this machine's key and current; your phone's screen is authoritative)")
+		defer journal.Narrate("tpm2-kira:   (enrolment record verified: signed by this machine's key and current; your phone's screen is authoritative)")
 	} else {
-		defer narrate("tpm2-kira:   (not verified on this machine: your phone's screen is authoritative)")
+		defer journal.Narrate("tpm2-kira:   (not verified on this machine: your phone's screen is authoritative)")
 	}
 	who := "your phone"
 	c := res.Check
 	switch {
 	case c.Authentic && c.Verdict == attest.VerdictOK:
-		narrate("tpm2-kira: ATTESTED by %s: boot state matches a known-good profile", who)
+		journal.Narrate("tpm2-kira: ATTESTED by %s: boot state matches a known-good profile", who)
 		return phonegate.ExitAttested
 	case c.Authentic && c.Verdict == attest.VerdictApproved:
-		narrate("tpm2-kira: APPROVED on %s: boot state changed and was approved by you", who)
+		journal.Narrate("tpm2-kira: APPROVED on %s: boot state changed and was approved by you", who)
 		return phonegate.ExitAttested
 	case c.Verdict == attest.VerdictReject && (c.Authentic || c.Ack == attest.AckRejectNoted):
 		fmt.Fprintf(os.Stderr, "tpm2-kira: REJECTED by %s: the phone does not trust this boot.\n", who)

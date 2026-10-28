@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 )
 
 // luks enrol on a LUKS2 image: the keyslot added through cryptsetup with
@@ -51,14 +53,14 @@ func TestLuksEnrolOnAnImage(t *testing.T) {
 	conf := filepath.Join(dir, "control.conf")
 	os.WriteFile(conf, []byte("# comment\nTPM2_KIRA_UNLOCK=skip\n"), 0o644)
 
-	if err := LuksEnrol(LuksEnrolOptions{Device: loop, Mode: LuksModePasswordSalt, ExistingKeyFile: existing}); err != nil {
+	if err := LuksEnrol(LuksEnrolOptions{Device: loop, Mode: diskkey.LuksModePasswordSalt, ExistingKeyFile: existing}); err != nil {
 		t.Fatalf("luks enrol: %v", err)
 	}
 	st := readLuksStatus(loop)
-	if st.Error != "" || len(st.Keyslots) != 2 || st.Keyslots[1].Token == nil || st.Keyslots[1].Token.Mode != LuksModePasswordSalt || st.Keyslots[0].Token != nil {
+	if st.Error != "" || len(st.Keyslots) != 2 || st.Keyslots[1].Token == nil || st.Keyslots[1].Token.Mode != diskkey.LuksModePasswordSalt || st.Keyslots[0].Token != nil {
 		t.Fatalf("after enrol: %+v", st)
 	}
-	key, _ := Combine([]byte("correct-horse"), []byte("test-salt"))
+	key, _ := diskkey.Combine([]byte("correct-horse"), []byte("test-salt"))
 	keyFile := filepath.Join(dir, "key")
 	os.WriteFile(keyFile, key, 0o600)
 	if out, err := exec.Command("cryptsetup", "open", "--test-passphrase", loop, "--key-file", keyFile).CombinedOutput(); err != nil {
@@ -70,11 +72,11 @@ func TestLuksEnrolOnAnImage(t *testing.T) {
 
 	// A device whose every keyslot is tpm2-kira's gets no second one: the
 	// recovery passphrase must stay.
-	if err := LuksMark(LuksMarkOptions{Device: loop, Keyslot: 0, Mode: LuksModePasswordSalt}); err != nil {
+	if err := LuksMark(LuksMarkOptions{Device: loop, Keyslot: 0, Mode: diskkey.LuksModePasswordSalt}); err != nil {
 		t.Fatal(err)
 	}
 	answers = []string{"x", "x", "y"}
-	if err := LuksEnrol(LuksEnrolOptions{Device: loop, Mode: LuksModePasswordSalt, ExistingKeyFile: existing}); err == nil || !strings.Contains(err.Error(), "recovery passphrase") {
+	if err := LuksEnrol(LuksEnrolOptions{Device: loop, Mode: diskkey.LuksModePasswordSalt, ExistingKeyFile: existing}); err == nil || !strings.Contains(err.Error(), "recovery passphrase") {
 		t.Fatalf("without a recovery keyslot: %v", err)
 	}
 
@@ -131,7 +133,7 @@ func TestLuksEnrolWithAnEmptyPassphrase(t *testing.T) {
 	terminalAskExisting = func(string) ([]byte, error) { asked++; return nil, nil } // Enter alone
 	defer func() { terminalAsk, terminalAskExisting = oldAsk, oldExisting }()
 
-	if err := LuksEnrol(LuksEnrolOptions{Device: img, Mode: LuksModePasswordSalt}); err != nil {
+	if err := LuksEnrol(LuksEnrolOptions{Device: img, Mode: diskkey.LuksModePasswordSalt}); err != nil {
 		t.Fatalf("luks enrol with an empty passphrase: %v", err)
 	}
 	st := readLuksStatus(img)

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 )
@@ -186,7 +187,7 @@ func TestControlHub(t *testing.T) {
 	c.facts.NewImage = ""
 	c.facts.Phone, c.facts.Status.Slots[0].Phones = true, 1
 	zero := 0
-	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &LuksToken{Mode: LuksModePasswordPhoneSalt, Slot: &zero}})
+	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &diskkey.LuksToken{Mode: diskkey.LuksModePasswordPhoneSalt, Slot: &zero}})
 	if disk := c.menuSteps("disk"); disk[1].Done != "keyslot 1 of /dev/sda2" {
 		t.Fatalf("phone salt enrolled: %+v", disk[1])
 	}
@@ -224,7 +225,7 @@ func TestControlVault(t *testing.T) {
 
 	zero := 0
 	c.facts.Status.Slots[0].Vault = "https://vault:8443"
-	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &LuksToken{Mode: LuksModeTPMVault, Slot: &zero}})
+	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &diskkey.LuksToken{Mode: diskkey.LuksModeTPMVault, Slot: &zero}})
 	c.facts.Remote.Net.Mode = "dhcp"
 	c.facts.Vaults = map[int]vaultCheck{0: {Answers: true, Knows: true}}
 	if v := c.menuSteps("disk")[2]; !strings.Contains(v.Done, "the vault answers and knows this device") || !strings.Contains(v.Done, "keyslot 1 of /dev/sda2") {
