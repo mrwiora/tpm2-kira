@@ -14,6 +14,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"github.com/tpm2-trust/assh/config"
@@ -213,7 +214,7 @@ func readPlanInputs(o PlanOptions) planInputs {
 	}
 
 	if cfg.Remote.SSH.On {
-		keys, skipped, err := authorizedKeys(cfg.Remote.SSH.Assh.AuthorizedKeys)
+		keys, skipped, err := sshscreen.AuthorizedKeys(cfg.Remote.SSH.Assh.AuthorizedKeys)
 		switch {
 		case err != nil:
 			in.KeysErr = err.Error()

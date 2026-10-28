@@ -1,4 +1,4 @@
-package cmd
+package sshscreen
 
 // cryptsetup's own prompt in the SSH session. When tpm2-kira has no key to
 // give (no token on the volume, Ctrl-C, a wrong answer), cryptsetup asks
@@ -53,8 +53,8 @@ var (
 // passwordQuestion is one ask.* file, or one askpass process (pid > 0).
 type passwordQuestion struct {
 	path     string // the ask.* file; for askpass, its /proc directory
-	socket   string
-	message  string
+	Socket   string
+	Message  string
 	notAfter uint64 // CLOCK_MONOTONIC µs, 0: no limit
 	pid      int    // askpass
 	start    string // askpass: its start time, so a reused pid is no question
@@ -74,7 +74,7 @@ func (q passwordQuestion) gone() bool {
 		return processStart(q.path) != q.start
 	}
 	_, err := os.Stat(q.path)
-	return err != nil || q.expired()
+	return err != nil || q.Expired()
 }
 
 // readPasswordQuestion parses an ask.* file ([Ask] Socket=, Message=,
@@ -94,21 +94,21 @@ func readPasswordQuestion(path string) (passwordQuestion, error) {
 		}
 		switch k {
 		case "Socket":
-			q.socket = v
+			q.Socket = v
 		case "Message":
-			q.message = v
+			q.Message = v
 		case "NotAfter":
 			q.notAfter, _ = strconv.ParseUint(v, 10, 64)
 		}
 	}
-	if q.socket == "" {
+	if q.Socket == "" {
 		return q, fmt.Errorf("%s names no socket", path)
 	}
 	return q, sc.Err()
 }
 
-// expired says whether the question's time is up.
-func (q passwordQuestion) expired() bool {
+// Expired says whether the question's time is up.
+func (q passwordQuestion) Expired() bool {
 	if q.notAfter == 0 {
 		return false
 	}
@@ -133,7 +133,7 @@ func (q passwordQuestion) answer(pw []byte) error {
 		_, err = f.Write(pw)
 		return err
 	}
-	c, err := net.DialUnix("unixgram", nil, &net.UnixAddr{Name: q.socket, Net: "unixgram"})
+	c, err := net.DialUnix("unixgram", nil, &net.UnixAddr{Name: q.Socket, Net: "unixgram"})
 	if err != nil {
 		return err
 	}
@@ -204,11 +204,11 @@ func pendingAskpass() []passwordQuestion {
 		// askpass PROMPT: the prompt is its argument.
 		if b, err := os.ReadFile(filepath.Join(dir, "cmdline")); err == nil {
 			if args := strings.Split(strings.TrimRight(string(b), "\x00"), "\x00"); len(args) > 1 {
-				q.message = strings.TrimSuffix(strings.TrimSpace(args[1]), ":")
+				q.Message = strings.TrimSuffix(strings.TrimSpace(args[1]), ":")
 			}
 		}
-		if q.message == "" {
-			q.message = "the disk's passphrase"
+		if q.Message == "" {
+			q.Message = "the disk's passphrase"
 		}
 		out = append(out, q)
 	}
@@ -231,7 +231,7 @@ func pendingQuestions() []passwordQuestion {
 	var out []passwordQuestion
 	for _, path := range pendingPasswordQuestions() {
 		q, err := readPasswordQuestion(path)
-		if err != nil || q.expired() {
+		if err != nil || q.Expired() {
 			continue
 		}
 		out = append(out, q)
@@ -242,13 +242,13 @@ func pendingQuestions() []passwordQuestion {
 // answerPasswordQuestions is the session's agent: from the release until
 // the server stops, every question systemd asks while a session has the
 // prompt is asked there, one at a time.
-func (r *remoteServer) answerPasswordQuestions() {
+func (r *Server) answerPasswordQuestions() {
 	seen := map[string]bool{}
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		select {
-		case <-r.done:
+		case <-r.Done:
 			return
 		case <-tick.C:
 		}
@@ -262,7 +262,7 @@ func (r *remoteServer) answerPasswordQuestions() {
 			if seen[q.id()] {
 				continue
 			}
-			s := r.promptTarget()
+			s := r.PromptTarget()
 			if s == nil {
 				break // the console's agent asks
 			}
@@ -278,7 +278,7 @@ func (r *remoteServer) answerPasswordQuestions() {
 // askQuestion asks one question in session s, and answers it unless the
 // session left or the question was answered elsewhere meanwhile. It
 // reports false when the session left without an answer.
-func (r *remoteServer) askQuestion(s *remoteSession, q passwordQuestion) bool {
+func (r *Server) askQuestion(s *remoteSession, q passwordQuestion) bool {
 	gone := make(chan struct{})
 	stopWatch := make(chan struct{})
 	defer close(stopWatch)
@@ -289,7 +289,7 @@ func (r *remoteServer) askQuestion(s *remoteSession, q passwordQuestion) bool {
 			select {
 			case <-stopWatch:
 				return
-			case <-r.done:
+			case <-r.Done:
 			case <-t.C:
 				if !q.gone() {
 					continue
@@ -301,7 +301,7 @@ func (r *remoteServer) askQuestion(s *remoteSession, q passwordQuestion) bool {
 	}()
 	r.log("ssh: asking cryptsetup's own question in the session")
 	fmt.Fprintf(r.console, "%s cryptsetup's own prompt: asked in the SSH session too.\n", screen.Tag(screen.TagYellow))
-	header := fmt.Sprintf("\r\n%s cryptsetup asks: %s\r\n         (the console asks it too; the first answer counts)\r\n", screen.Tag(screen.TagYellow), q.message)
+	header := fmt.Sprintf("\r\n%s cryptsetup asks: %s\r\n         (the console asks it too; the first answer counts)\r\n", screen.Tag(screen.TagYellow), q.Message)
 	pw, err := askIn(s, header, "Passphrase:", gone)
 	if errors.Is(err, errAskCancelled) {
 		s.write([]byte(fmt.Sprintf("%s Answered at the console.\r\n", screen.Tag(screen.TagYellow))))

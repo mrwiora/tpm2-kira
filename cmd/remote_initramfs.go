@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/tpm2-trust/assh/config"
-	"github.com/tpm2-trust/assh/server"
 )
 
 // The image's files for the network and the SSH server (control.conf's
@@ -125,19 +124,6 @@ bound | renew)
 esac
 exit 0
 `
-
-// authorizedKeys are the keys of an authorized_keys file that may log in,
-// one per line as the file has them, and how many lines were left out: a
-// line with options in front of the key (from="...", command="...") is
-// not honoured by 'ssh-child', so it does not let anyone in either.
-func authorizedKeys(path string) ([]string, int, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, 0, fmt.Errorf("the keys that may log in over SSH: %w", err)
-	}
-	keys, skipped := server.ParseAuthorizedKeys(data)
-	return keys, skipped, nil
-}
 
 func writeImageFile(buildroot, path string, data []byte, mode os.FileMode) error {
 	dst := filepath.Join(buildroot, path)

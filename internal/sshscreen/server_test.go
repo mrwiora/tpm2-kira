@@ -1,4 +1,4 @@
-package cmd
+package sshscreen
 
 import (
 	"bufio"
@@ -55,7 +55,7 @@ func (l *testLog) wait(t *testing.T, want string) {
 // being this test binary (TestMain), with one key that may log in. There
 // is no TPM: the host key is one in software, served as a temporary key
 // would be.
-func testRemote(t *testing.T) (*remoteServer, ssh.Signer, *testLog) {
+func testRemote(t *testing.T) (*Server, ssh.Signer, *testLog) {
 	t.Helper()
 	dir := t.TempDir()
 	_, sk, _ := ed25519.GenerateKey(rand.Reader)
@@ -76,29 +76,29 @@ func testRemote(t *testing.T) (*remoteServer, ssh.Signer, *testLog) {
 		if err != nil {
 			return hostKeyAtBoot{}, err
 		}
-		return hostKeyAtBoot{signer: s, Fingerprint: ssh.FingerprintSHA256(s.PublicKey()), Slot: -1, Temporary: "the SSH CA did not certify a key: no SSH CA at none.json"}, nil
+		return hostKeyAtBoot{Signer: s, Fingerprint: ssh.FingerprintSHA256(s.PublicKey()), Slot: -1, Temporary: "the SSH CA did not certify a key: no SSH CA at none.json"}, nil
 	}
 	t.Cleanup(func() { makeHostKey = oldKey })
 	log := &testLog{}
 	conf := config.Default()
 	conf.Listen, conf.CA, conf.AuthorizedKeys = "127.0.0.1:0", filepath.Join(dir, "none.json"), auth
-	srv, err := startRemote(RemoteOptions{On: true, Assh: conf}, io.Discard, log.add)
+	srv, err := Start(Options{On: true, Assh: conf}, io.Discard, log.add)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { srv.stop("test over") })
+	t.Cleanup(func() { srv.Stop("test over") })
 	return srv, client, log
 }
 
 // login logs in with a terminal and the shell, as 'ssh root@host' does,
 // trusting only run's host key - which run holds and the unprivileged
 // half has never seen.
-func login(t *testing.T, srv *remoteServer, key ssh.Signer) (io.Writer, *bufio.Reader, *ssh.Session) {
+func login(t *testing.T, srv *Server, key ssh.Signer) (io.Writer, *bufio.Reader, *ssh.Session) {
 	t.Helper()
-	c, err := ssh.Dial("tcp", "127.0.0.1:"+strconv.Itoa(srv.opts.Port), &ssh.ClientConfig{
+	c, err := ssh.Dial("tcp", "127.0.0.1:"+strconv.Itoa(srv.Opts.Port), &ssh.ClientConfig{
 		User:            "root",
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(key)},
-		HostKeyCallback: ssh.FixedHostKey(srv.hostKey.signer.PublicKey()),
+		HostKeyCallback: ssh.FixedHostKey(srv.HostKey.Signer.PublicKey()),
 		Timeout:         10 * time.Second,
 	})
 	if err != nil {
@@ -156,19 +156,19 @@ func until(t *testing.T, r *bufio.Reader, want string) string {
 func TestRemoteSessionConfirmsAndAnswers(t *testing.T) {
 	srv, key, log := testRemote(t)
 	log.wait(t, "no new privileges")
-	srv.show([]byte("#0: 123456\n"))
+	srv.Show([]byte("#0: 123456\n"))
 	in, r, _ := login(t, srv, key)
 	until(t, r, "#0: 123456\r\n")
 	log.wait(t, "a session is in: root from 127.0.0.1")
-	srv.show([]byte("#0: 654321\n"))
+	srv.Show([]byte("#0: 654321\n"))
 	until(t, r, "#0: 654321\r\n")
 	in.Write([]byte("\r"))
 	select {
-	case <-srv.releases:
+	case <-srv.Releases:
 	case <-time.After(10 * time.Second):
 		t.Fatal("Enter in the session did not confirm")
 	}
-	if !srv.release(false) {
+	if !srv.Release(false) {
 		t.Fatal("the confirming session has no prompt")
 	}
 	until(t, r, "Confirmed.")
@@ -179,7 +179,7 @@ func TestRemoteSessionConfirmsAndAnswers(t *testing.T) {
 	}
 	got := make(chan answer, 1)
 	go func() {
-		pw, err := srv.ask("cryptroot", "Password", "the key is derived from your password.")
+		pw, err := srv.Ask("cryptroot", "Password", "the key is derived from your password.")
 		got <- answer{pw, err}
 	}()
 	until(t, r, "Password for disk cryptroot:")
@@ -198,15 +198,15 @@ func TestRemoteSessionConfirmsAndAnswers(t *testing.T) {
 func TestRemoteSessionLeavesPrompt(t *testing.T) {
 	srv, key, _ := testRemote(t)
 	in, r, sess := login(t, srv, key)
-	for srv.count() < 1 {
+	for srv.Count() < 1 {
 		time.Sleep(10 * time.Millisecond)
 	}
 	in.Write([]byte("\r"))
-	<-srv.releases
-	srv.release(false)
+	<-srv.Releases
+	srv.Release(false)
 	errc := make(chan error, 1)
 	go func() {
-		_, err := srv.ask("cryptroot", "Password", "")
+		_, err := srv.Ask("cryptroot", "Password", "")
 		errc <- err
 	}()
 	until(t, r, "Password for disk cryptroot:")
@@ -227,7 +227,7 @@ func TestRemoteRefuses(t *testing.T) {
 	srv, key, log := testRemote(t)
 	_, other, _ := ed25519.GenerateKey(rand.Reader)
 	stranger, _ := ssh.NewSignerFromKey(other)
-	addr := "127.0.0.1:" + strconv.Itoa(srv.opts.Port)
+	addr := "127.0.0.1:" + strconv.Itoa(srv.Opts.Port)
 	cfg := func(k ssh.Signer) *ssh.ClientConfig {
 		return &ssh.ClientConfig{User: "root", Auth: []ssh.AuthMethod{ssh.PublicKeys(k)},
 			HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 10 * time.Second}
@@ -255,7 +255,7 @@ func TestRemoteRefuses(t *testing.T) {
 	if _, err := c.Dial("tcp", "127.0.0.1:1"); err == nil {
 		t.Fatal("a forwarding was opened")
 	}
-	if srv.count() != 0 {
+	if srv.Count() != 0 {
 		t.Fatal("a refused request became a session")
 	}
 }
@@ -266,9 +266,9 @@ func TestRemoteRefuses(t *testing.T) {
 func TestRemoteConsoleReleaseStops(t *testing.T) {
 	srv, key, _ := testRemote(t)
 	_, r, _ := login(t, srv, key)
-	srv.show([]byte("#0: 123456\n"))
+	srv.Show([]byte("#0: 123456\n"))
 	until(t, r, "123456")
-	if srv.release(true) {
+	if srv.Release(true) {
 		t.Fatal("a session kept the prompt after Enter at the console")
 	}
 	until(t, r, "the SSH server stops")
@@ -276,15 +276,15 @@ func TestRemoteConsoleReleaseStops(t *testing.T) {
 		t.Fatalf("the session was not closed: %v", err)
 	}
 	select {
-	case <-srv.child.Exited():
+	case <-srv.Child.Exited():
 	default:
 		t.Fatal("remote serve still runs")
 	}
-	if c, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(srv.opts.Port)); err == nil {
+	if c, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(srv.Opts.Port)); err == nil {
 		c.Close()
 		t.Fatal("the port still answers")
 	}
-	if srv.promptTarget() != nil {
+	if srv.PromptTarget() != nil {
 		t.Fatal("a prompt target after the stop")
 	}
 }
@@ -294,38 +294,38 @@ func TestRemoteConsoleReleaseStops(t *testing.T) {
 func TestRemoteReleaseElsewhere(t *testing.T) {
 	srv, key, _ := testRemote(t)
 	login(t, srv, key)
-	for srv.count() < 1 {
+	for srv.Count() < 1 {
 		time.Sleep(10 * time.Millisecond)
 	}
 	_, r2, _ := login(t, srv, key)
-	for srv.count() < 2 {
+	for srv.Count() < 2 {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if !srv.release(false) {
+	if !srv.Release(false) {
 		t.Fatal("no session took the prompt")
 	}
 	until(t, r2, "Confirmed.")
 
 	srv2, _, _ := testRemote(t)
-	if srv2.release(false) {
+	if srv2.Release(false) {
 		t.Fatal("a prompt target without a session")
 	}
-	<-srv2.done
+	<-srv2.Done
 }
 
 // Without a CA that certifies a key a temporary key is served, and the
 // console says so with the fingerprint to compare.
 func TestRemoteTemporaryHostKey(t *testing.T) {
 	srv, _, _ := testRemote(t)
-	hk := srv.hostKey
-	if hk.Temporary == "" || hk.CA != "" || hk.Fingerprint != ssh.FingerprintSHA256(hk.signer.PublicKey()) {
+	hk := srv.HostKey
+	if hk.Temporary == "" || hk.CA != "" || hk.Fingerprint != ssh.FingerprintSHA256(hk.Signer.PublicKey()) {
 		t.Fatalf("%+v", hk)
 	}
-	h := consoleHint(22, []string{"192.0.2.10 (enp1s0)"}, hk, 0, -1)
+	h := ConsoleHint(22, []string{"192.0.2.10 (enp1s0)"}, hk, 0, -1)
 	if !strings.Contains(h, hk.Fingerprint+": a temporary key") || !strings.Contains(h, "no SSH CA at none.json") {
 		t.Fatalf("hint:\n%s", h)
 	}
-	if h := consoleHint(22, nil, hostKeyAtBoot{Fingerprint: "SHA256:key", CA: "SHA256:abc"}, 0, -1); !strings.Contains(h, "Host key certified by the SSH CA SHA256:abc") {
+	if h := ConsoleHint(22, nil, hostKeyAtBoot{Fingerprint: "SHA256:key", CA: "SHA256:abc"}, 0, -1); !strings.Contains(h, "Host key certified by the SSH CA SHA256:abc") {
 		t.Fatalf("hint:\n%s", h)
 	}
 }
@@ -333,13 +333,13 @@ func TestRemoteTemporaryHostKey(t *testing.T) {
 // The console names every address to log in at, the port when it is not
 // 22, and that Enter continues there.
 func TestConsoleHint(t *testing.T) {
-	h := consoleHint(2222, []string{"192.0.2.10 (enp1s0)", "2001:db8::10 (enp1s0)"}, hostKeyAtBoot{}, 1, 30*time.Second)
+	h := ConsoleHint(2222, []string{"192.0.2.10 (enp1s0)", "2001:db8::10 (enp1s0)"}, hostKeyAtBoot{}, 1, 30*time.Second)
 	for _, want := range []string{"ssh root@192.0.2.10 -p 2222   (enp1s0)", "ssh root@2001:db8::10 -p 2222", "(30 s)", "An SSH session is connected", "Enter here: continue at this console"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("hint lacks %q:\n%s", want, h)
 		}
 	}
-	if h := consoleHint(22, nil, hostKeyAtBoot{}, 0, -1); !strings.Contains(h, "waiting for a network address (port 22)") || strings.Contains(h, "-p 22") || strings.Contains(h, " s)") {
+	if h := ConsoleHint(22, nil, hostKeyAtBoot{}, 0, -1); !strings.Contains(h, "waiting for a network address (port 22)") || strings.Contains(h, "-p 22") || strings.Contains(h, " s)") {
 		t.Errorf("no address, no limit:\n%s", h)
 	}
 }

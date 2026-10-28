@@ -1,4 +1,4 @@
-package cmd
+package sshscreen
 
 import (
 	"fmt"
@@ -39,12 +39,12 @@ func TestRemoteAnswersCryptsetupsQuestion(t *testing.T) {
 	t.Cleanup(func() { askPasswordDir = old })
 	srv, key, _ := testRemote(t)
 	in, r, sess := login(t, srv, key)
-	for srv.count() < 1 {
+	for srv.Count() < 1 {
 		time.Sleep(10 * time.Millisecond)
 	}
 	in.Write([]byte("\r"))
-	<-srv.releases
-	srv.release(false)
+	<-srv.Releases
+	srv.Release(false)
 
 	_, sock := askFile(t, dir, "1")
 	until(t, r, "cryptsetup asks: Please enter passphrase for disk cryptroot:")
@@ -96,7 +96,7 @@ func TestReadPasswordQuestion(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(dir, "ask.old"), []byte("[Ask]\nSocket=/x\nNotAfter=1\nMessage=m\n"), 0o600)
 	q, err := readPasswordQuestion(filepath.Join(dir, "ask.old"))
-	if err != nil || q.socket != "/x" || q.message != "m" || !q.expired() {
+	if err != nil || q.Socket != "/x" || q.Message != "m" || !q.Expired() {
 		t.Fatalf("%+v %v", q, err)
 	}
 }
@@ -127,7 +127,9 @@ func TestRemoteAnswersAskpass(t *testing.T) {
 	dir, _ := filepath.EvalSymlinks(t.TempDir())
 	oldProc, oldBin, oldFIFO, oldDir := procDir, askpassBin, askpassFIFO, askPasswordDir
 	procDir, askpassBin, askpassFIFO, askPasswordDir = filepath.Join(dir, "proc"), filepath.Join(dir, "askpass"), filepath.Join(dir, "passfifo"), filepath.Join(dir, "none")
-	t.Cleanup(func() { procDir, askpassBin, askpassFIFO, askPasswordDir = oldProc, oldBin, oldFIFO, oldDir })
+	t.Cleanup(func() {
+		procDir, askpassBin, askpassFIFO, askPasswordDir = oldProc, oldBin, oldFIFO, oldDir
+	})
 	os.WriteFile(askpassBin, nil, 0o755)
 	if err := unix.Mkfifo(askpassFIFO, 0o600); err != nil {
 		t.Fatal(err)
@@ -142,12 +144,12 @@ func TestRemoteAnswersAskpass(t *testing.T) {
 
 	srv, key, _ := testRemote(t)
 	in, r, _ := login(t, srv, key)
-	for srv.count() < 1 {
+	for srv.Count() < 1 {
 		time.Sleep(10 * time.Millisecond)
 	}
 	in.Write([]byte("\r"))
-	<-srv.releases
-	srv.release(false)
+	<-srv.Releases
+	srv.Release(false)
 
 	fakeAskpass(t, dir, 4242, "777", "Please unlock disk vda3_crypt (recovery passphrase): ")
 	until(t, r, "cryptsetup asks: Please unlock disk vda3_crypt (recovery passphrase)")

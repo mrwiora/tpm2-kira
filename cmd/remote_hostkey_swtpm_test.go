@@ -13,6 +13,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/tpm2-trust/assh/hostkey"
@@ -97,19 +98,19 @@ func TestSSHCAApprovedForTheCodeScreen(t *testing.T) {
 	if st := readSSHCA(conf, p.sock); len(st.Approvals) != 2 || st.Unapproved() != nil || st.CA.Fingerprint() != ca.Fingerprint() {
 		t.Fatalf("not approved for the next boot: %+v", st)
 	}
-	hk, err := prepareHostKey(p.sock, conf)
+	hk, err := sshscreen.PrepareHostKey(p.sock, conf)
 	if err != nil || hk.CA != ca.Fingerprint() || hk.Slot != 0 || hk.Temporary != "" {
 		t.Fatalf("at the code screen: %+v %v", hk, err)
 	}
 
 	// The window is closed: the CA certifies nothing more in this boot,
 	// and a temporary key is served, made in the TPM.
-	if hk, err := prepareHostKey(p.sock, conf); err != nil || hk.CA != "" || !strings.Contains(hk.Temporary, "slot 0: PCR 15 not as approved; slot 1: PCR 15 not as approved") {
+	if hk, err := sshscreen.PrepareHostKey(p.sock, conf); err != nil || hk.CA != "" || !strings.Contains(hk.Temporary, "slot 0: PCR 15 not as approved; slot 1: PCR 15 not as approved") {
 		t.Fatalf("after the window closed: %+v %v", hk, err)
 	}
 	none := conf
 	none.CA = filepath.Join(t.TempDir(), "none.json")
-	if hk, err := prepareHostKey(p.sock, none); err != nil || !strings.Contains(hk.Temporary, "no SSH CA at") {
+	if hk, err := sshscreen.PrepareHostKey(p.sock, none); err != nil || !strings.Contains(hk.Temporary, "no SSH CA at") {
 		t.Fatalf("without a CA: %+v %v", hk, err)
 	}
 	// The approvals are still the next boot's: made from the event log,
@@ -132,7 +133,7 @@ func TestSSHCAApprovedForTheCodeScreen(t *testing.T) {
 	if len(st.Approvals) != 1 || st.Approvals[0].Slot != 1 || len(st.Unapproved()) != 1 || st.Unapproved()[0] != 0 {
 		t.Fatalf("a firmware update: %+v", st)
 	}
-	if hk, err := prepareHostKey(p.sock, conf); err != nil || hk.CA != ca.Fingerprint() || hk.Slot != 1 {
+	if hk, err := sshscreen.PrepareHostKey(p.sock, conf); err != nil || hk.CA != ca.Fingerprint() || hk.Slot != 1 {
 		t.Fatalf("a firmware update: %+v %v", hk, err)
 	}
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 
 	"charm.land/huh/v2"
 	"github.com/tpm2-trust/assh/config"
@@ -353,7 +354,7 @@ var rootSSHKeys = "/root/.ssh/authorized_keys"
 // apart from who may log in to the running system, and later changes to
 // root's file do not reach the image.
 func (c *controller) offerRootKeys(path string) error {
-	keys, _, err := authorizedKeys(rootSSHKeys)
+	keys, _, err := sshscreen.AuthorizedKeys(rootSSHKeys)
 	if err != nil || len(keys) == 0 {
 		fmt.Fprintln(c.out, warn(path+" holds no key, and "+rootSSHKeys+" none to take: put the keys that may log in at boot into "+path+" (one per line, as in authorized_keys)."))
 		return nil
@@ -406,4 +407,34 @@ func validList(cidr, required bool) func(string) error {
 		}
 		return nil
 	}
+}
+
+// RemoteStatusLines is control's view of the image's network and SSH
+// settings: one line each, and what is missing for them.
+func RemoteStatusLines(r RemoteConfig) []string {
+	var out []string
+	if r.Net.Mode == "off" {
+		return []string{"Network at boot: off"}
+	}
+	out = append(out, "Network at boot: "+r.Net.Describe())
+	if r.SSH.On {
+		s := fmt.Sprintf("SSH at boot: port %d", r.SSH.Port())
+		if r.SSH.Hold > 0 {
+			s += fmt.Sprintf(", the boot waits %d s for a confirmation", r.SSH.Hold)
+		} else {
+			s += ", the boot waits until it is confirmed (or Enter at the console)"
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// authorizedKeyCount is the number of keys that may log in from the file,
+// -1 when it cannot be read.
+func authorizedKeyCount(path string) int {
+	keys, _, err := sshscreen.AuthorizedKeys(path)
+	if err != nil {
+		return -1
+	}
+	return len(keys)
 }

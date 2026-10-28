@@ -1,4 +1,4 @@
-package cmd
+package sshscreen
 
 // The SSH server of the code screen (docs/SSH.md). With TPM2_KIRA_SSH
 // on, the image's tpm2-kira.service runs 'tpm2-kira run --ssh': the
@@ -40,7 +40,7 @@ import (
 )
 
 // RemoteOptions are run's SSH settings.
-type RemoteOptions struct {
+type Options struct {
 	On   bool          // be the SSH server
 	Hold time.Duration // 0: until a confirmation comes
 	TPM  string        // the TPM the host key is made in
@@ -51,17 +51,17 @@ type RemoteOptions struct {
 }
 
 // RemoteOptionsFrom are run's SSH settings from the assh.conf at path.
-func RemoteOptionsFrom(path string, hold time.Duration) (RemoteOptions, error) {
+func OptionsFrom(path string, hold time.Duration) (Options, error) {
 	c, err := config.Load(path)
 	if err != nil {
-		return RemoteOptions{}, err
+		return Options{}, err
 	}
-	return RemoteOptions{On: true, Hold: hold, Assh: c}, nil
+	return Options{On: true, Hold: hold, Assh: c}, nil
 }
 
 // makeHostKey is this boot's host key (prepareHostKey). A var for the
 // tests without a TPM, which serve a key of their own.
-var makeHostKey = prepareHostKey
+var makeHostKey = PrepareHostKey
 
 // serveCommand is 'ssh-child', the SSH server's unprivileged half: this
 // binary again (one binary, AGENTS.md). A var for the tests, which start
@@ -80,12 +80,12 @@ var serveCommand = func() *exec.Cmd {
 func SSHChildCommand() error { return server.ChildMain() }
 
 // remoteServer is the SSH server and its sessions.
-type remoteServer struct {
-	opts    RemoteOptions
-	child   *server.Server
+type Server struct {
+	Opts    Options
+	Child   *server.Server
 	log     func(string)
 	console io.Writer // the console's own lines
-	hostKey hostKeyAtBoot
+	HostKey hostKeyAtBoot
 
 	mu       sync.Mutex
 	sessions []*remoteSession // in the order they came
@@ -93,9 +93,9 @@ type remoteServer struct {
 	released bool             // the boot is released; keys go to prompts now
 	stopped  bool             // released at the console: nothing is served
 	target   *remoteSession   // the session that released, for the prompt
-	done     chan struct{}    // closed when stop has ended
-	releases chan struct{}    // a session confirmed
-	changed  chan struct{}    // a session came or went
+	Done     chan struct{}    // closed when stop has ended
+	Releases chan struct{}    // a session confirmed
+	Changed  chan struct{}    // a session came or went
 }
 
 // remoteSession is one login, handed over by 'ssh-child'.
@@ -123,8 +123,8 @@ func (s *remoteSession) write(b []byte) {
 // startRemote has the CA certify this boot's host key, opens the port and
 // starts 'ssh-child' on it. A server that cannot start is said on the console and the
 // code screen goes on without SSH.
-func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteServer, error) {
-	authorized, _, err := authorizedKeys(o.Assh.AuthorizedKeys)
+func Start(o Options, console io.Writer, log func(string)) (*Server, error) {
+	authorized, _, err := AuthorizedKeys(o.Assh.AuthorizedKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -147,11 +147,11 @@ func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteS
 		return nil, err
 	}
 	o.Port = tcp.Addr().(*net.TCPAddr).Port
-	r := &remoteServer{opts: o, log: log, console: console, hostKey: hk,
-		done: make(chan struct{}), releases: make(chan struct{}, 1), changed: make(chan struct{}, 1)}
+	r := &Server{Opts: o, log: log, console: console, HostKey: hk,
+		Done: make(chan struct{}), Releases: make(chan struct{}, 1), Changed: make(chan struct{}, 1)}
 	child, err := server.Start(server.Options{
 		Listener:       tcp.(*net.TCPListener),
-		HostKey:        hk.signer,
+		HostKey:        hk.Signer,
 		AuthorizedKeys: authorized,
 		Command:        serveCommand,
 		Session:        func(s *server.Session) { r.addSession(s, s.String()) },
@@ -163,7 +163,7 @@ func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteS
 	if err != nil {
 		return nil, fmt.Errorf("ssh-child: %w", err)
 	}
-	r.child = child
+	r.Child = child
 	log(fmt.Sprintf("ssh: ssh-child (pid %d) runs with %s", child.Pid(), child.How))
 	if hk.CA != "" {
 		log(fmt.Sprintf("ssh: listening on port %d, host key %s certified by the SSH CA %s through slot %d", o.Port, hk.Fingerprint, hk.CA, hk.Slot))
@@ -175,7 +175,7 @@ func startRemote(o RemoteOptions, console io.Writer, log func(string)) (*remoteS
 }
 
 // addSession takes a login 'ssh-child' handed over.
-func (r *remoteServer) addSession(c net.Conn, who string) {
+func (r *Server) addSession(c net.Conn, who string) {
 	s := &remoteSession{conn: c, keys: make(chan byte, diskkey.MaxPassphrase), closed: make(chan struct{})}
 	r.mu.Lock()
 	if r.stopped {
@@ -187,7 +187,7 @@ func (r *remoteServer) addSession(c net.Conn, who string) {
 	last, released := r.screen, r.released
 	r.mu.Unlock()
 	r.log("ssh: a session is in: " + who)
-	r.signal(r.changed)
+	r.signal(r.Changed)
 	if released {
 		s.write([]byte(fmt.Sprintf("%s The boot is released; the password is asked here when a disk asks for its key.\r\n", screen.Tag(screen.TagYellow))))
 	} else if len(last) > 0 {
@@ -199,7 +199,7 @@ func (r *remoteServer) addSession(c net.Conn, who string) {
 // read follows what is typed in a session: while the boot is held, Enter
 // confirms and q (or Ctrl-C, Ctrl-D) leaves; afterwards every byte is for
 // the prompt.
-func (r *remoteServer) read(s *remoteSession) {
+func (r *Server) read(s *remoteSession) {
 	defer func() {
 		s.close()
 		r.mu.Lock()
@@ -211,7 +211,7 @@ func (r *remoteServer) read(s *remoteSession) {
 		}
 		r.mu.Unlock()
 		r.log("ssh: a session has left")
-		r.signal(r.changed)
+		r.signal(r.Changed)
 	}()
 	buf := make([]byte, 64)
 	for {
@@ -234,7 +234,7 @@ func (r *remoteServer) read(s *remoteSession) {
 				}
 			case c == '\r' || c == '\n':
 				r.log("ssh: the code screen was confirmed in a session")
-				r.signal(r.releases)
+				r.signal(r.Releases)
 			case c == 'q' || c == 3 || c == 4:
 				s.write([]byte("\r\n"))
 				return
@@ -243,16 +243,16 @@ func (r *remoteServer) read(s *remoteSession) {
 	}
 }
 
-func (r *remoteServer) signal(ch chan struct{}) {
+func (r *Server) signal(ch chan struct{}) {
 	select {
 	case ch <- struct{}{}:
 	default:
 	}
 }
 
-// show sends the code screen to every session, and keeps it for those that
+// Show sends the code screen to every session, and keeps it for those that
 // come in later. Line ends become CRLF: the session's terminal is raw.
-func (r *remoteServer) show(screen []byte) {
+func (r *Server) Show(screen []byte) {
 	screen = bytes.ReplaceAll(screen, []byte("\n"), []byte("\r\n"))
 	r.mu.Lock()
 	r.screen = screen
@@ -263,19 +263,19 @@ func (r *remoteServer) show(screen []byte) {
 	}
 }
 
-// count is the number of sessions in.
-func (r *remoteServer) count() int {
+// Count is the number of sessions in.
+func (r *Server) Count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.sessions)
 }
 
-// release ends the hold on the server's side: the boot is
+// Release ends the hold on the server's side: the boot is
 // released, and when nobody confirmed in a session (the console, the
 // phone) the newest session takes the prompt - or none is in, and the
 // server stops: the prompt is the console's. Reports whether a session
 // has the prompt.
-func (r *remoteServer) release(atConsole bool) bool {
+func (r *Server) Release(atConsole bool) bool {
 	r.mu.Lock()
 	r.released = true
 	if atConsole {
@@ -286,16 +286,16 @@ func (r *remoteServer) release(atConsole bool) bool {
 	target := r.target
 	r.mu.Unlock()
 	if target == nil {
-		r.stop("The boot continues at the console; the SSH server stops.")
+		r.Stop("The boot continues at the console; the SSH server stops.")
 		return false
 	}
 	target.write([]byte(fmt.Sprintf("\r\n%s Confirmed. The password is asked here when the disk asks for its key.\r\n", screen.Tag(screen.TagYellow))))
 	return true
 }
 
-// stop tells every session why and closes it, then ends 'ssh-child',
+// Stop tells every session why and closes it, then ends 'ssh-child',
 // which closes the port.
-func (r *remoteServer) stop(why string) {
+func (r *Server) Stop(why string) {
 	r.mu.Lock()
 	if r.stopped {
 		r.mu.Unlock()
@@ -311,14 +311,14 @@ func (r *remoteServer) stop(why string) {
 	}
 	// The closed sessions end their relays in the child, which hands the
 	// notice on; then the child goes.
-	r.child.Stop()
+	r.Child.Stop()
 	r.log("ssh: stopped")
-	close(r.done)
+	close(r.Done)
 }
 
-// promptTarget is the session the password is asked in, nil for the
+// PromptTarget is the session the password is asked in, nil for the
 // console: the one that confirmed, or after it left the newest one.
-func (r *remoteServer) promptTarget() *remoteSession {
+func (r *Server) PromptTarget() *remoteSession {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.stopped {
@@ -338,10 +338,10 @@ func (r *remoteServer) promptTarget() *remoteSession {
 	return r.target
 }
 
-// ask is consoleAsk in the session that has the prompt, or at the console
+// Ask is consoleAsk in the session that has the prompt, or at the console
 // when none has it.
-func (r *remoteServer) ask(volume, what, note string) ([]byte, error) {
-	s := r.promptTarget()
+func (r *Server) Ask(volume, what, note string) ([]byte, error) {
+	s := r.PromptTarget()
 	if s == nil {
 		return diskkey.ConsoleAsk(volume, what, note)
 	}
@@ -392,9 +392,9 @@ func askIn(s *remoteSession, header, prompt string, cancel <-chan struct{}) ([]b
 	}
 }
 
-// addresses are the machine's addresses an SSH client can reach, as the
+// Addresses are the machine's addresses an SSH client can reach, as the
 // console names them: IPv4 first, no link-local ones.
-func addresses() []string {
+func Addresses() []string {
 	ifs, _ := net.Interfaces()
 	var v4, v6 []string
 	for _, it := range ifs {
@@ -419,9 +419,9 @@ func addresses() []string {
 	return append(v4, v6...)
 }
 
-// consoleHint is what the console shows instead of the codes: where to log
+// ConsoleHint is what the console shows instead of the codes: where to log
 // in, that the boot waits for it, and that Enter continues here.
-func consoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int, remaining time.Duration) string {
+func ConsoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int, remaining time.Duration) string {
 	var b strings.Builder
 	p := ""
 	if port != 22 {
@@ -457,34 +457,4 @@ func consoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int, remai
 	}
 	b.WriteString("         Enter here: continue at this console instead - the SSH server stops.\n")
 	return b.String()
-}
-
-// RemoteStatusLines is control's view of the image's network and SSH
-// settings: one line each, and what is missing for them.
-func RemoteStatusLines(r RemoteConfig) []string {
-	var out []string
-	if r.Net.Mode == "off" {
-		return []string{"Network at boot: off"}
-	}
-	out = append(out, "Network at boot: "+r.Net.Describe())
-	if r.SSH.On {
-		s := fmt.Sprintf("SSH at boot: port %d", r.SSH.Port())
-		if r.SSH.Hold > 0 {
-			s += fmt.Sprintf(", the boot waits %d s for a confirmation", r.SSH.Hold)
-		} else {
-			s += ", the boot waits until it is confirmed (or Enter at the console)"
-		}
-		out = append(out, s)
-	}
-	return out
-}
-
-// authorizedKeyCount is the number of keys that may log in from the file,
-// -1 when it cannot be read.
-func authorizedKeyCount(path string) int {
-	keys, _, err := authorizedKeys(path)
-	if err != nil {
-		return -1
-	}
-	return len(keys)
 }

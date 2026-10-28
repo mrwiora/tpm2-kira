@@ -50,6 +50,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/screen"
+	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
@@ -69,7 +70,7 @@ const holdUnlimited = 100 * 365 * 24 * time.Hour
 // the boot: at every new window, and as soon as an address comes up or a
 // session comes or goes.
 type hintPrinter struct {
-	srv  *remoteServer
+	srv  *sshscreen.Server
 	mu   sync.Mutex
 	last string // the addresses and sessions it last showed
 	left time.Duration
@@ -77,7 +78,7 @@ type hintPrinter struct {
 	once sync.Once
 }
 
-func startHintPrinter(srv *remoteServer) *hintPrinter {
+func startHintPrinter(srv *sshscreen.Server) *hintPrinter {
 	h := &hintPrinter{srv: srv, left: -1, quit: make(chan struct{})}
 	go func() {
 		t := time.NewTicker(500 * time.Millisecond)
@@ -87,13 +88,13 @@ func startHintPrinter(srv *remoteServer) *hintPrinter {
 			case <-h.quit:
 				return
 			case <-t.C:
-			case <-srv.changed:
+			case <-srv.Changed:
 			}
 			h.mu.Lock()
-			addrs, n := addresses(), srv.count()
+			addrs, n := sshscreen.Addresses(), srv.Count()
 			if key := fmt.Sprint(addrs, n); key != h.last && h.last != "" {
 				h.last = key
-				fmt.Print("\n" + consoleHint(srv.opts.Port, addrs, srv.hostKey, n, h.left))
+				fmt.Print("\n" + sshscreen.ConsoleHint(srv.Opts.Port, addrs, srv.HostKey, n, h.left))
 			}
 			h.mu.Unlock()
 		}
@@ -109,9 +110,9 @@ func (h *hintPrinter) print(remaining time.Duration) {
 		remaining = -1
 	}
 	h.left = remaining
-	addrs, n := addresses(), h.srv.count()
+	addrs, n := sshscreen.Addresses(), h.srv.Count()
 	h.last = fmt.Sprint(addrs, n)
-	fmt.Print("\n" + consoleHint(h.srv.opts.Port, addrs, h.srv.hostKey, n, remaining))
+	fmt.Print("\n" + sshscreen.ConsoleHint(h.srv.Opts.Port, addrs, h.srv.HostKey, n, remaining))
 }
 
 func (h *hintPrinter) stop() {
@@ -471,23 +472,23 @@ func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*phonegate
 // are shown and confirmed in an SSH session, and the console says where.
 // planned is what the boot image carries (bootplan.go): what is not in it
 // is not started, and the TPM is not touched for it.
-func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, remote RemoteOptions, planned Planned, debug bool) {
+func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, remote sshscreen.Options, planned Planned, debug bool) {
 	svc, endCoordinator := (*phonegate.GateService)(nil), func() {}
 	if planned.Phone {
 		svc, endCoordinator = startCoordinator(tpmPath, gateSocket, phonegate.DefaultAttestSignerPath, debug)
 	}
-	var srv *remoteServer
+	var srv *sshscreen.Server
 	ask := diskkey.Prompter(diskkey.ConsoleAsk)
 	if remote.On {
 		if remote.TPM == "" {
 			remote.TPM = tpmPath
 		}
 		var err error
-		if srv, err = startRemote(remote, os.Stdout, diskkey.UnlockLogger(debug)); err != nil {
+		if srv, err = sshscreen.Start(remote, os.Stdout, diskkey.UnlockLogger(debug)); err != nil {
 			fmt.Fprintf(os.Stderr, "tpm2-kira: the SSH server is not started: %v - the code screen is at the console\n", err)
 		} else {
 			stopRemoteOnSignal(srv)
-			ask = srv.ask
+			ask = srv.Ask
 			hold = remote.Hold
 			if hold == 0 {
 				hold = holdUnlimited
@@ -603,7 +604,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 				hint.stop()
 				// Enter at the console stops the SSH server; otherwise the
 				// session that confirmed (or the newest one) has the prompt.
-				if srv.release(atConsole) {
+				if srv.Release(atConsole) {
 					fmt.Printf("%s Confirmed over SSH: the password is asked in the SSH session.\n", screen.Tag(screen.TagYellow))
 				}
 			}
@@ -643,7 +644,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 				} else {
 					fmt.Fprintf(&screen, "\n   Does the code match your authenticator? Enter: continue to %s, asked here%s; q: leave.\n\n", nextPrompt(promptMode()), left)
 				}
-				srv.show(screen.Bytes())
+				srv.Show(screen.Bytes())
 				hint.print(remaining)
 				return
 			}
@@ -661,7 +662,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		wait: func(d time.Duration) bool {
 			var confirmed chan struct{} // nil without SSH: never ready
 			if srv != nil {
-				confirmed = srv.releases
+				confirmed = srv.Releases
 			}
 			select {
 			case <-enter.presses:
@@ -689,7 +690,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		// the service at switch-root.
 		waitForStop()
 		if srv != nil {
-			<-srv.done // its socket removed before the process ends
+			<-srv.Done // its socket removed before the process ends
 		}
 		unlock.Close()
 	}
@@ -702,12 +703,12 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 // at switch-root - whatever run is doing then - so that its socket does
 // not stay in /run, which is carried over into the booted system, then
 // ends the process by the signal as it would have ended without this.
-func stopRemoteOnSignal(srv *remoteServer) {
+func stopRemoteOnSignal(srv *sshscreen.Server) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		sig := <-ch
-		srv.stop("The machine boots; the SSH server stops.")
+		srv.Stop("The machine boots; the SSH server stops.")
 		signal.Reset(syscall.SIGTERM, syscall.SIGINT)
 		syscall.Kill(os.Getpid(), sig.(syscall.Signal))
 	}()

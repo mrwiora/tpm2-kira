@@ -15,6 +15,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
@@ -131,7 +132,7 @@ func main() {
 	case "initramfs":
 		runInitramfs(commandArgs, *tpmPath, *debug)
 	case "ssh-child":
-		if err := cmd.SSHChildCommand(); err != nil {
+		if err := sshscreen.SSHChildCommand(); err != nil {
 			fmt.Fprintf(os.Stderr, "tpm2-kira ssh-child: %v\n", err)
 			os.Exit(1)
 		}
@@ -504,10 +505,10 @@ func runRun(args []string, tpmPath string, debugFlag bool) {
 		planned = cmd.ReadPlanned(*plan)
 	}
 
-	var remote cmd.RemoteOptions
+	var remote sshscreen.Options
 	if *ssh {
 		var err error
-		if remote, err = cmd.RemoteOptionsFrom(*sshConf, time.Duration(*sshHold)*time.Second); err != nil {
+		if remote, err = sshscreen.OptionsFrom(*sshConf, time.Duration(*sshHold)*time.Second); err != nil {
 			fmt.Fprintf(os.Stderr, "tpm2-kira: the SSH server is not started: %v - the code screen is at the console\n", err)
 		}
 	}
