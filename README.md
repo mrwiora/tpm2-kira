@@ -41,6 +41,56 @@ there is nothing to re-enrol.
 
 For more details on the cryptographic design, see [SECURITY-BACKGROUND.md](docs/SECURITY-BACKGROUND.md).
 
+### What it does, and when
+
+On the installed system you set it up (`control` guides through all of it);
+the boot image carries only the parts something uses (`initramfs plan`);
+in the initrd they run, and `cap` ends them.
+
+```mermaid
+flowchart TB
+  subgraph SETUP["On the running system (root)"]
+    CTRL["control<br/>guided: 1 boot chain, 2 what the machine combines<br/>writes control.conf + assh.conf, builds the image on leaving"]
+    KEY["setup<br/>signing key: a file or a YubiKey"]
+    SEAL["seal / reseal<br/>a slot approved for PCR values<br/>slot 0 the evaluated selection, slot 1 the fallback<br/>a reseal revokes the older approvals"]
+    PCR["PCR prediction<br/>event log (e), UKI PCR 11 (u), GRUB 8/9, register (r)"]
+    PHONE["attest enrol<br/>a phone (Marify) over Bluetooth LE"]
+    LUKS["luks enrol<br/>a keyslot and its token: how its key is made"]
+    SALT["remote-salt enrol<br/>password + the phone's salt"]
+    VAULT["vault enrol<br/>this TPM + tpm2-kira-vault"]
+    INSPECT["status, info, nvram, reveal, pcrtips"]
+  end
+
+  subgraph BUILD["Image build (hooks)"]
+    PLAN["initramfs plan<br/>parts: unlock, codes, phone, vault, net, ssh"]
+    HOOKS["mkinitcpio (systemd) / initramfs-tools (Debian)"]
+    POST["post-update hooks: reseal for the new image"]
+  end
+
+  subgraph BOOT["In the initrd"]
+    RUN["run<br/>code screen: the TOTP code of every slot"]
+    ATT["attest gate<br/>the phone checks a TPM quote"]
+    SSH["remote serve<br/>the code screen over SSH (aSSH)"]
+    UNLOCK["unlock socket / Debian keyscript<br/>the disk's key, as its LUKS2 token says"]
+    CAP["cap<br/>when the initrd is left: no codes until reboot"]
+  end
+
+  KEY --> SEAL
+  PCR --> SEAL
+  CTRL --> KEY & SEAL & PHONE & LUKS & SALT & VAULT
+  CTRL --> PLAN --> HOOKS
+  POST --> SEAL
+  HOOKS --> RUN
+  RUN --> ATT
+  RUN --> SSH
+  RUN --> UNLOCK
+  LUKS -. token .-> UNLOCK
+  SALT -. salt over Bluetooth .-> UNLOCK
+  VAULT -. the vault's part .-> UNLOCK
+  PHONE -. enrolment .-> ATT
+  UNLOCK --> CAP
+```
+
 ## Requirements
 
 **Hardware:**
@@ -926,6 +976,31 @@ sudo mkinitcpio -P
 The post-generation hook will automatically reseal so the next boot matches.
 
 ### How it works at boot
+
+```mermaid
+sequenceDiagram
+  participant FW as Firmware / boot loader
+  participant TPM
+  participant K as tpm2-kira (initrd)
+  participant P as Phone (Marify)
+  participant S as SSH client
+  participant D as LUKS volume
+  FW->>TPM: measure the boot chain into the PCRs
+  alt a slot with a TOTP key
+    K->>TPM: the code (approved PCR values, latest generation, not capped)
+    TPM-->>K: 6 digits, only in the approved boot state
+    K->>K: show it: you compare it with your authenticator
+  else a slot with a phone enrolled
+    K->>P: a TPM quote over Bluetooth LE
+    P-->>K: the verdict (and the salt, for password+remotesalt)
+  end
+  opt the SSH server in the image
+    S->>K: connect: a host certificate from the CA in the TPM (aSSH)
+    K-->>S: the same code screen and the passphrase prompt
+  end
+  K->>D: the key, as the keyslot's token says (password, salt, vault)
+  K->>TPM: cap at switch-root: no more codes in this boot
+```
 
 A systemd service (`tpm2-kira.service`) starts before the disk unlock and runs `tpm2-kira run`, which shows a fresh TOTP code every 30 seconds. Compare what's on screen with your authenticator app. If they match, your boot chain is clean — press Enter and type your LUKS passphrase. Without Enter the boot continues by itself after 90 seconds; once it has continued, no code can be computed until the next boot.
 
