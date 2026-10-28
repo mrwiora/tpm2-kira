@@ -17,7 +17,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -106,22 +105,6 @@ func readGateFrame(r io.Reader, v any, limit int) error {
 		return err
 	}
 	return json.Unmarshal(data, v)
-}
-
-// ListenGate creates the coordinator's socket: a directory and a socket
-// only its own user can enter.
-func ListenGate(path string) (net.Listener, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
-	}
-	_ = os.Remove(path) // a leftover of an earlier run
-	old := unix.Umask(0o177)
-	l, err := net.Listen("unix", path)
-	unix.Umask(old)
-	if err != nil {
-		return nil, err
-	}
-	return l, nil
 }
 
 // GateServer is the coordinator's listening side.

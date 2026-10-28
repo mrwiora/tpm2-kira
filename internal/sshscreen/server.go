@@ -13,7 +13,7 @@ package sshscreen
 // code screen: it sees the codes, and Enter there confirms them and
 // releases the boot, as Enter at the console does. The password prompt
 // then opens in the session that released, and cryptsetup's own prompt,
-// should it follow, is answered there too (remote_agent.go).
+// should it follow, is answered there too (agent.go).
 //
 // The console is told where to log in instead of being shown the codes,
 // and Enter there continues at the console: the SSH server stops, every

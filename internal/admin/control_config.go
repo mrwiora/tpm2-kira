@@ -16,7 +16,7 @@ import (
 // attestation by phone (TPM2_KIRA_ATTEST_*) and the image's network and
 // SSH server (TPM2_KIRA_NET_*, TPM2_KIRA_SSH_*, remote_config.go).
 // KEY=VALUE lines. How the disk's key is made is not configured anywhere:
-// the boot reads it from the LUKS header's tokens (luks_header.go). The
+// the boot reads it from the LUKS header's tokens (internal/diskkey/header.go). The
 // file never goes into the boot image, and no script sources it: tpm2-kira
 // reads it, the image build through its boot plan ('initramfs plan',
 // bootplan.go), which writes the network and SSH settings into the image

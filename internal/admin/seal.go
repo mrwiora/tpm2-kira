@@ -24,7 +24,7 @@ import (
 )
 
 // Seal creates a new TOTP key inside the TPM and approves the current PCR
-// values for it (see internal/nvslot/totpkey.go).
+// values for it (see internal/nvslot/policy.go).
 func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath string, debug bool, hashAlgo measure.PCRHashAlgo, verifyUKI bool) error {
 	// Fall back to default key paths when not provided by the user
 	if pubKeyPath == "" {

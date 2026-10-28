@@ -10,10 +10,11 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 )
 
-// The remote-attestation part of a slot's blob.
+// The attestation part of a slot's blob.
 //
-// A slot's blob (blob.go) always holds a TOTP key. Remote attestation is
-// optional, and how a verifier reaches the machine is a choice within it:
+// A slot's blob (blob.go) holds a TOTP key, or the phones enrolled for it
+// (HasTOTPKey). The attestation part is optional, and how a verifier
+// reaches the machine is a choice within it:
 //
 //	Attestation      the machine as an attester: its identity for verifiers,
 //	                 the attestation key in the TPM, the PCRs that are
@@ -31,7 +32,7 @@ import (
 
 const (
 	// AttestCounterStart is slot 0's record counter; slot N is at +N
-	// (attest_counter.go).
+	// (counter.go).
 	AttestCounterStart = 0x01803820
 
 	// MaxVerifiers bounds the phones of one slot.
@@ -56,14 +57,14 @@ type Attestation struct {
 	// The boot key (bootkey.go): usable only under the slot's policy.
 	BootKeyPublic  []byte // marshalled TPMT_PUBLIC
 	BootKeyPrivate []byte // TPM2B_PRIVATE contents, wrapped by the storage primary
-	// The release key (factor.go): the object a wrapped factor is made
+	// The release key (internal/phonegate/factor.go): the object a wrapped factor is made
 	// for, under the slot's policy plus PolicyCommandCode(ActivateCredential).
 	ReleaseKeyPublic  []byte // marshalled TPMT_PUBLIC
 	ReleaseKeyPrivate []byte // TPM2B_PRIVATE contents, wrapped by the storage primary
 	PCRAlg            uint16
 	PCRSelection      []uint8
 	// Count is the revision of the attestation part: the value of the
-	// slot's TPM counter when the part was last changed (attest_counter.go).
+	// slot's TPM counter when the part was last changed (counter.go).
 	// It does not count attestations; it moves when verifiers are added or
 	// removed. It is signed with the rest of the blob: the part is current
 	// only while it equals the counter, which nobody can turn back.
@@ -87,7 +88,7 @@ func (p *PhoneAttestation) Enabled() bool { return len(p.NoisePrivate) != 0 }
 
 // VaultAttestation is the method "tpm2-kira-vault": where the vault is,
 // the pin of its key, and the local part L of a tpm+vault keyslot's key,
-// wrapped for this TPM's EK and the slot's release key (vault.go). The
+// wrapped for this TPM's EK and the slot's release key (internal/vaultkey/vault.go). The
 // zero value is "not set up".
 type VaultAttestation struct {
 	URL   string // https://host:port of the vault

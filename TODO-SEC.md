@@ -319,7 +319,7 @@ not root), writable parent and the happy path, and `slot info`'s
 
 - [x] done — built-in encoder (`rsc.io/qr`, BSD-3, pure Go); no external program is run any more.
 
-**Where** `internal/totp/totp_utils.go:144` — `generateQRCode`:
+**Where** `internal/totp/display.go:144` — `generateQRCode`:
 `exec.LookPath("qrencode")` then `exec.Command(path, "-t", "ANSIUTF8", data)`
 where `data` is the `otpauth://` URI containing the secret.
 
@@ -526,7 +526,7 @@ func FuzzUnmarshalSealedBlob(f *testing.F) {
 ```
 
 Add equivalent targets for `ParseYubiKeyStub` (`internal/signing/yubikey.go:59`), the
-event-log parser (`internal/measure/eventlog_utils.go`) and the pcsc wire decoder
+event-log parser (`internal/measure/eventlog.go`) and the pcsc wire decoder
 (`internal/pcsc/wire.go`). Add a `make fuzz` target (30 s each) and a short
 fuzz step to `.github/workflows/unit-tests.yml`.
 
@@ -620,14 +620,14 @@ there is no equivalent; leave it.
 
 ## 14. Compute the HMAC inside the TPM; authorise PCR states by signature
 
-- [x] done — blob v9 (`internal/nvslot/totpkey.go`); with revocation (owner decision). Without SHA-1 the key falls back to HMAC-SHA256 with a notice and `algorithm=SHA256` in the URI (owner decision). Integration tests: `TestCodeMatchesAuthenticator`, `TestResealRevokesOldBlob`, `TestCompleteWorkflow` (reseal after a PCR change).
+- [x] done — blob v9 (`internal/nvslot/policy.go`); with revocation (owner decision). Without SHA-1 the key falls back to HMAC-SHA256 with a notice and `algorithm=SHA256` in the URI (owner decision). Integration tests: `TestCodeMatchesAuthenticator`, `TestResealRevokesOldBlob`, `TestCompleteWorkflow` (reseal after a PCR change).
 
 **Where**
 - `cmd/policy_or.go:999` `CreateSealedObjectPolicyOR` — the TOTP key is
   stored as *sealed data* (`TPMAlgKeyedHash`, no `SignEncrypt`)
 - `cmd/policy_or.go:580` / `:663` — `TPM2_Unseal` hands the key to the process
 - `internal/nvslot/scan.go:152` `ScanNVRAMSlotsRange` — keeps it in `NVRAMSlot.Secret`;
-  `internal/totp/totp_utils.go` `generateTOTPCode` / `generateHOTP` do the HMAC in Go
+  `internal/totp/display.go` `generateTOTPCode` / `generateHOTP` do the HMAC in Go
 - `internal/admin/reseal.go` `Reseal` — unseals the key and creates a new object for the
   new PCR values
 - `internal/admin/seal.go` `generateTOTPSecret` — seals the *base32 text* of 32 random

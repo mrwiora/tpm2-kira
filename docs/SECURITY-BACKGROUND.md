@@ -874,7 +874,7 @@ the other way round.
 ## 6. Policy Digests: Software vs TPM Computation
 
 The PolicyPCR digest is computed by the TPM in a trial session. The PolicyNV
-and PolicyAuthorize digests are computed in software (`internal/nvslot/totpkey.go`):
+and PolicyAuthorize digests are computed in software (`internal/nvslot/policy.go`):
 
 ```
 PolicyNV:        H(prev ‖ 0x00000149 ‖ H(operandB ‖ offset:2 ‖ operation:2) ‖ indexName)

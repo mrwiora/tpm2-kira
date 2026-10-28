@@ -106,7 +106,7 @@ It may not carry what came before.
   How the
   disk's key is made is not configured anywhere: the boot reads it from
   each volume's own LUKS2 header - the tpm2-kira token of a keyslot names
-  the recipe (internal/diskkey/luks_header.go), so an enrolment needs no mode set and
+  the recipe (internal/diskkey/header.go), so an enrolment needs no mode set and
   no rebuild for one. `setup`, `slot add`, `luks enrol` and the rest do their
   one thing; `tpm2-kira control` checks the prerequisites of a working
   setup. Every other file on the system - the kernel command line,

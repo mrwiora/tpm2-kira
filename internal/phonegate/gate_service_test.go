@@ -17,6 +17,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/unixsock"
 )
 
 // A coordinator for one slot with one enrolled phone and no TPM behind it:
@@ -218,7 +219,7 @@ func startTestGate(t *testing.T, host GateHost) string {
 func startTestGateServer(t *testing.T, host GateHost) (string, *GateServer) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "run", "gate.sock")
-	l, err := ListenGate(path)
+	l, err := unixsock.Listen(path)
 	if err != nil {
 		t.Fatal(err)
 	}

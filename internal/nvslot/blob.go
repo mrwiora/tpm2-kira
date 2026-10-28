@@ -132,7 +132,7 @@ type SealedBlobPayload struct {
 	// without eventlog PCRs.
 	MeasurePointApplied bool `json:"measure_point_applied"`
 	// Attestation is the slot's remote-attestation part, or nil without
-	// one (attest_blob.go). It lives in the slot's blob, under the same
+	// one (attestation.go). It lives in the slot's blob, under the same
 	// signature, so that a slot is one thing: sealed, resealed, enrolled
 	// and deleted together.
 	Attestation *Attestation `json:"-"`

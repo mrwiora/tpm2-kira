@@ -13,7 +13,7 @@ import (
 // byte for byte. A LUKS keyslot enrolled with hashpwd2 opens with what this
 // file derives from the same password and salt, and the other way round;
 // nothing crosses a process boundary. The salt is the factor the phone
-// released (factor.go); the password is typed at tpm2-kira's prompt; the
+// released (internal/phonegate/factor.go); the password is typed at tpm2-kira's prompt; the
 // result is the key file systemd-cryptsetup reads from the unlock socket.
 
 // Argon2id as hashpwd2 sets it: 1 GiB, 16 passes, 4 lanes, 64 bytes. The

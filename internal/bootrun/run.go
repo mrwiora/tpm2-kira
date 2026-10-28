@@ -20,7 +20,7 @@ package bootrun
 // verdict from the phone releases the boot the way Enter does. The code
 // stays on the screen all the same, as the fallback when the phone is not at
 // hand. For that this process is also the gate's coordinator
-// (gate_service.go): it holds the TPM for the radio worker
+// (internal/phonegate/gate_service.go): it holds the TPM for the radio worker
 // (tpm2-kira-attest.service), which has none, and reads the phone's receipt
 // itself. Its service ends with the hold (the phone has as long
 // as the code is asked about, plus the time to finish an answer it has
@@ -35,7 +35,6 @@ package bootrun
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -56,7 +55,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
-	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
+	"github.com/mrwiora/tpm2-kira/internal/unixsock"
 
 	"github.com/google/go-tpm/tpm2/transport"
 	"golang.org/x/sys/unix"
@@ -458,7 +457,7 @@ func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*phonegate
 	if s, err := nvslot.ReadBootSettings(tpmDev); err == nil && s.Debug {
 		debug, journal.NarrateDebug = true, true // the boot settings' debug: the narrative on the console too
 	}
-	l, err := phonegate.ListenGate(socket)
+	l, err := unixsock.Listen(socket)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: %v\n", err)
 		tpmDev.Close()
@@ -468,82 +467,21 @@ func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*phonegate
 	return svc, phonegate.ServeGate(l, svc)
 }
 
-// RunCommand implements the run command (the display at boot). With
-// unlockSocket (or a socket from systemd's socket unit) this process is
-// also the key provider for systemd-cryptsetup: it answers the volumes'
-// key requests once the hold has ended, and stays until it is stopped.
-// With remote.On it is also the SSH server (remote_ssh.go): the codes
-// are shown and confirmed in an SSH session, and the console says where.
-// planned is what the boot image carries (bootplan.go): what is not in it
-// is not started, and the TPM is not touched for it.
+// Run is 'run', the code screen at boot. It starts the parts the image's
+// plan names (parts.go) - the phone's gate, the SSH server, the vault, the
+// disk's key provider - and nothing else: what is not in the plan is not
+// started, and the TPM is not touched for it. Then it shows the codes and
+// holds the boot until it is confirmed or the hold ends, tells the parts,
+// and with the disk's key provider stays until it is stopped.
 func Run(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, remote sshscreen.Options, planned imageplan.Planned, debug bool) {
-	svc, endCoordinator := (*phonegate.GateService)(nil), func() {}
-	if planned.Phone {
-		svc, endCoordinator = StartCoordinator(tpmPath, gateSocket, phonegate.DefaultAttestSignerPath, debug)
+	bd := &board{tpmPath: tpmPath, debug: debug, hold: hold, confirm: make(chan string), ask: diskkey.Prompter(diskkey.ConsoleAsk),
+		prompting: func() bool { return false }, promptMode: func() string { return "" }}
+	ps := plannedParts(planned, remote, gateSocket, unlockSocket)
+	started := ps.inOrder()
+	for _, p := range started {
+		p.start(bd)
 	}
-	var srv *sshscreen.Server
-	ask := diskkey.Prompter(diskkey.ConsoleAsk)
-	if remote.On {
-		if remote.TPM == "" {
-			remote.TPM = tpmPath
-		}
-		var err error
-		if srv, err = sshscreen.Start(remote, os.Stdout, diskkey.UnlockLogger(debug)); err != nil {
-			fmt.Fprintf(os.Stderr, "tpm2-kira: the SSH server is not started: %v - the code screen is at the console\n", err)
-		} else {
-			stopRemoteOnSignal(srv)
-			ask = srv.Ask
-			hold = remote.Hold
-			if hold == 0 {
-				hold = holdUnlimited
-			}
-		}
-	}
-	// A slot enrolled with a vault: its key is made while the code screen
-	// holds (the parts open only in the approved boot state, before the
-	// separator), and a key made ends the hold on its own. The attempt
-	// lasts as long as the hold.
-	vaultCtx, endVault := context.WithCancel(context.Background())
-	var vault *vaultkey.Keys
-	if planned.Vault {
-		vault = vaultkey.Start(vaultCtx, tpmPath, os.Stdout, diskkey.UnlockLogger(debug), debug)
-	}
-	var vaultKey func(string) ([]byte, error)
-	if vault != nil {
-		vaultKey = vault.ForVolume
-	}
-	var unlock *diskkey.UnlockServer
-	// What the next prompt is, for the code screen's words: the recipe of
-	// the first routed volume, read from its LUKS2 header once it is
-	// readable. The key itself is made per volume (unlockRecipe): nothing
-	// is configured, the header is the truth.
-	promptMode := func() string { return "" }
-	if l, err := diskkey.ListenUnlock(unlockSocket); err != nil {
-		fmt.Fprintf(os.Stderr, "tpm2-kira: the disk unlock is not served: %v\n", err)
-	} else if l != nil {
-		promptMode = diskkey.ScreenRecipe(diskkey.DefaultUnlockSocket)
-		if svc != nil {
-			// A slot whose enrolment holds a release key waits for the
-			// salt that follows the phone's receipt.
-			svc.ExpectRelease(true)
-		}
-		recipes := &diskkey.UnlockRecipe{}
-		unlock = diskkey.ServeUnlock(l, diskkey.DiskKey(func() []byte {
-			if svc == nil {
-				return nil
-			}
-			// The phone's salt follows its receipt by one message: give
-			// it the time, bounded (gate_service.go releaseWait).
-			for {
-				st, _ := svc.Status()
-				if !st.Releasing {
-					break
-				}
-				time.Sleep(200 * time.Millisecond)
-			}
-			return svc.Salt()
-		}, vaultKey, recipes.ForVolume, ask), diskkey.UnlockLogger(debug))
-	}
+
 	open := func() (transport.TPMCloser, error) {
 		tpmDev, err := tpmdev.Open(tpmPath)
 		if err != nil {
@@ -552,20 +490,10 @@ func Run(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlo
 		tpmdev.Cleanup(tpmDev, debug)
 		return tpmDev, nil
 	}
-	enter := startEnterReader(0)
-	vaultReady := vault.Ready()
-	atConsole := false // the hold ended with Enter at the console
-	var hint *hintPrinter
-	if srv != nil {
-		hint = startHintPrinter(srv)
-	}
-	var phone func() (phonegate.GateStatus, bool)
-	if svc != nil {
-		phone = svc.Status
-	}
+	confirmedBy := ""
 	b := &bootDisplay{
-		Phone:      phone,
-		PhoneEvent: gateEventPrinter(promptMode),
+		Phone:      bd.phone,
+		PhoneEvent: gateEventPrinter(func() string { return bd.promptMode() }),
 		PhonePoll:  500 * time.Millisecond,
 		PhoneGrace: time.Minute,
 		Scan: func(now time.Time) ([]totp.NVRAMSlot, error) {
@@ -602,105 +530,78 @@ func Run(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlo
 			return s
 		},
 		Notify: func() {
-			endVault()   // past the hold the parts no longer open
-			enter.Stop() // the terminal is the passphrase prompt's from here on
-			if srv != nil {
-				hint.stop()
-				// Enter at the console stops the SSH server; otherwise the
-				// session that confirmed (or the newest one) has the prompt.
-				if srv.Release(atConsole) {
-					fmt.Printf("%s Confirmed over SSH: the password is asked in the SSH session.\n", screen.Tag(screen.TagYellow))
+			for _, p := range []part{ps.vault, ps.console, ps.ssh, ps.phone} {
+				if p != nil {
+					p.released(bd, confirmedBy)
 				}
 			}
-			// The phone check ends with the hold, and the radio worker
-			// with it.
-			endCoordinator()
 			// A display that goes on (codes that only compute after the
 			// separator) writes to the terminal but must not own it.
 			releaseTerminal(0)
 			sdNotifyReady()
-			// From here on systemd-cryptsetup's key requests are answered -
-			// once the units READY let loose have printed their lines,
-			// which would otherwise land in the prompt (waitPromptTurn).
-			if unlock != nil {
-				go func() {
-					waitPromptTurn()
-					unlock.Release()
-				}()
-			}
+			ps.unlock.released(bd, confirmedBy)
 		},
 		Show: func(slots []totp.NVRAMSlot, codes map[int]string, remaining time.Duration) {
-			if unlock != nil && unlock.Prompting() {
+			if bd.prompting() {
 				return // the prompt owns the console; nothing is drawn over it
 			}
-			st, ok := gateStatus(phone)
-			codes = phoneCodes(codes, slots, st, ok)
-			if srv != nil && remaining >= 0 {
-				// The codes go to the SSH sessions; the console says where.
-				var screen bytes.Buffer
-				printSlots(&screen, open, slots, codes)
-				left := ""
-				if remaining < holdUnlimited/2 {
-					left = fmt.Sprintf(" (on its own in %d s)", int(remaining.Round(time.Second)/time.Second))
-				}
-				if st, ok := gateStatus(phone); ok && st.Asking() {
-					fmt.Fprintf(&screen, "\n   Enter: continue without the phone%s; q: leave.\n\n", left)
-				} else {
-					fmt.Fprintf(&screen, "\n   Does the code match your authenticator? Enter: continue to %s, asked here%s; q: leave.\n\n", nextPrompt(promptMode()), left)
-				}
-				srv.Show(screen.Bytes())
-				hint.print(remaining)
-				return
-			}
-			printSlots(os.Stdout, open, slots, codes)
-			if remaining >= 0 {
-				fmt.Println()
-				if st, ok := gateStatus(phone); ok && st.Asking() {
-					fmt.Printf("   Enter: continue without the phone (on its own in %d s).\n", int(remaining.Round(time.Second)/time.Second))
-				} else {
-					fmt.Printf("   Does the code match your authenticator? Enter: continue to %s (on its own in %d s).\n", nextPrompt(promptMode()), int(remaining.Round(time.Second)/time.Second))
-				}
-			}
-			fmt.Println()
+			showScreen(bd, open, slots, codes, remaining)
 		},
 		Wait: func(d time.Duration) bool {
-			var confirmed chan struct{} // nil without SSH: never ready
-			if srv != nil {
-				confirmed = srv.Releases
-			}
 			select {
-			case <-enter.Presses:
-				atConsole = true
+			case by := <-bd.confirm:
+				confirmedBy = by
 				return true
-			case <-confirmed:
-				return true
-			case <-vaultReady:
-				vaultReady = nil // tried once; without a key the hold goes on
-				return vault.Made()
 			case <-time.After(d):
 				return false
 			}
 		},
 		Sleep:         time.Sleep,
 		Now:           time.Now,
-		Hold:          hold,
+		Hold:          bd.hold,
 		ScanRetry:     30 * time.Second,
 		QuickRetryFor: time.Minute,
 		RetryEvery:    2 * time.Second,
 	}
 	b.Run()
-	if unlock != nil {
-		// The display is done; the key provider stays until systemd stops
-		// the service at switch-root.
-		waitForStop()
-		if srv != nil {
-			<-srv.Done // its socket removed before the process ends
+	for i := len(started) - 1; i >= 0; i-- {
+		started[i].end(bd)
+	}
+}
+
+// showScreen is the code screen: in the SSH sessions while the hold lasts
+// when the SSH server runs (the console then says where), else on the
+// console.
+func showScreen(bd *board, open func() (transport.TPMCloser, error), slots []totp.NVRAMSlot, codes map[int]string, remaining time.Duration) {
+	st, ok := gateStatus(bd.phone)
+	codes = phoneCodes(codes, slots, st, ok)
+	asking := ok && st.Asking()
+	if bd.remote != nil && remaining >= 0 {
+		var out bytes.Buffer
+		printSlots(&out, open, slots, codes)
+		left := ""
+		if remaining < holdUnlimited/2 {
+			left = fmt.Sprintf(" (on its own in %d s)", int(remaining.Round(time.Second)/time.Second))
 		}
-		unlock.Close()
+		if asking {
+			fmt.Fprintf(&out, "\n   Enter: continue without the phone%s; q: leave.\n\n", left)
+		} else {
+			fmt.Fprintf(&out, "\n   Does the code match your authenticator? Enter: continue to %s, asked here%s; q: leave.\n\n", nextPrompt(bd.promptMode()), left)
+		}
+		bd.remote(out.Bytes())
+		bd.hint(remaining)
+		return
 	}
-	if svc != nil {
-		svc.Forget()
+	printSlots(os.Stdout, open, slots, codes)
+	if remaining >= 0 {
+		fmt.Println()
+		if asking {
+			fmt.Printf("   Enter: continue without the phone (on its own in %d s).\n", int(remaining.Round(time.Second)/time.Second))
+		} else {
+			fmt.Printf("   Does the code match your authenticator? Enter: continue to %s (on its own in %d s).\n", nextPrompt(bd.promptMode()), int(remaining.Round(time.Second)/time.Second))
+		}
 	}
+	fmt.Println()
 }
 
 // stopRemoteOnSignal stops the SSH server when systemd stops the service

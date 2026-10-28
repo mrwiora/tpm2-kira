@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/journal"
-	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/screen"
+	"github.com/mrwiora/tpm2-kira/internal/unixsock"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 
 	"golang.org/x/sys/unix"
@@ -220,7 +220,7 @@ func ListenUnlock(path string) (net.Listener, error) {
 	if path == "" {
 		return nil, nil
 	}
-	return phonegate.ListenGate(path)
+	return unixsock.Listen(path)
 }
 
 // listenFromSystemd returns the first socket systemd handed over, if this
@@ -286,10 +286,10 @@ var ErrUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own p
 //	no token             no answer: cryptsetup's own prompt, tpm2-kira untouched
 //	password+salt        a typed password and a typed salt, combined (Argon2id, combine.go)
 //	password+phonesalt  a typed password and the salt the verifier released in this boot
-//	                     and the TPM opened (factor.go); without one, a typed salt
+//	                     and the TPM opened (internal/phonegate/factor.go); without one, a typed salt
 //	                     (the password+salt variant), then cryptsetup's own prompt
 //	tpm+vault            nothing typed: the key run made in this boot from the TPM's
-//	                     local part and the vault's remote part (vault.go); without
+//	                     local part and the vault's remote part (internal/vaultkey/vault.go); without
 //	                     one, cryptsetup's own prompt
 //
 // salt returns the released salt or nil; vault the volume's tpm+vault key
@@ -448,7 +448,7 @@ func ReadPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 }
 
 // ReadRawPassphrase reads a passphrase key by key from a terminal without
-// echo or line discipline - the console, or an SSH session (remote_ssh.go)
+// echo or line discipline - the console, or an SSH session (internal/sshscreen/server.go)
 // - and echoes a '*' per key to echo.
 func ReadRawPassphrase(next func() (byte, error), echo io.Writer) ([]byte, error) {
 	// One buffer of the final size, so the passphrase is in one place

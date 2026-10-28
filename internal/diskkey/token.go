@@ -30,12 +30,12 @@ func TokenTypeOf(mode string) string {
 }
 
 // The modes a keyslot's key is made in, as the token names them. The boot
-// reads them from the header itself (luks_header.go): there is no
+// reads them from the header itself (header.go): there is no
 // configured unlock mode any more.
 const (
 	LuksModePasswordSalt      = "password+salt"      // a typed password and a typed salt, combined
 	LuksModePasswordPhoneSalt = "password+phonesalt" // a typed password and the salt a verifier released
-	LuksModeTPMVault          = "tpm+vault"          // a local part from the TPM and a remote part from the vault, nothing typed (vault.go)
+	LuksModeTPMVault          = "tpm+vault"          // a local part from the TPM and a remote part from the vault, nothing typed (internal/vaultkey/vault.go)
 )
 
 // boundModes are the modes whose keyslot is bound to a slot: its key needs

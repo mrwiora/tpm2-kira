@@ -25,6 +25,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/mrwiora/tpm2-kira/internal/unixsock"
 )
 
 // TestAttestationOnSWTPM runs enrolment (real EK, PolicySecret session,
@@ -682,7 +683,7 @@ func TestOwnTPMCheckOnSWTPM(t *testing.T) {
 func startTestGate(t *testing.T, host phonegate.GateHost) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "run", "gate.sock")
-	l, err := phonegate.ListenGate(path)
+	l, err := unixsock.Listen(path)
 	if err != nil {
 		t.Fatal(err)
 	}

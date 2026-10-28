@@ -395,7 +395,7 @@ covers exactly the pinned selection, and the values reproduce its digest;
 the generation is not below the minimum; the signing key's approval
 verifies over `H(ApprovedPolicy(PolicyPCR(values), genIndexName, gen) ‖
 policyRef)`. The policy digests are computed in software and are the very
-functions tpm2-kira seals with (`internal/nvslot/totpkey.go` calls them).
+functions tpm2-kira seals with (`internal/nvslot/policy.go` calls them).
 
 ## 9. Threats
 
@@ -422,8 +422,8 @@ recovery keyslot is mandatory, and the console prompt is always there.
 | `vaultproto/` | messages, `QualifyingData`, `PinOf`, `VerifyRelease`, the policy digests |
 | `internal/vaultkey/vault.go` | the key's derivation, the pinned client, the boot's release (`startVaultKeys`, `openVaultKey`, `fetchRemote`), `vault enrol\|status\|unenrol` |
 | `internal/phonegate/factor.go`, `attest/releasekey.go` | the release key and the wrap/unwrap shared with the phone salt |
-| `internal/nvslot/attest_blob.go` | attestation method 2 |
-| `internal/admin/luks.go`, `internal/diskkey/luks_header.go`, `internal/diskkey/unlock.go` | the mode, the token, the recipe, the key provider |
+| `internal/nvslot/attestation.go` | attestation method 2 |
+| `internal/admin/luks.go`, `internal/diskkey/header.go`, `internal/diskkey/unlock.go` | the mode, the token, the recipe, the key provider |
 | `internal/bootrun/run.go` | the attempt started with `run`, ended with the hold; a key made ends it |
 | `../tpm2-kira-vault/internal/server` | the machine-facing protocol and the rules (§6.1), the admin interface |
 | `../tpm2-kira-vault/internal/keys` | AES-GCM, the recovery key, the TPM sealer |

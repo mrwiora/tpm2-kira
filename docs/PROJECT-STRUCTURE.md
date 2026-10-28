@@ -32,9 +32,12 @@ Where things are in the repository, and how the tests are run.
 │   ├── sshscreen/           # The code screen over SSH: aSSH's server, sessions, the agent,
 │   │                        #   the per-boot host key; ssh-child, the unprivileged half
 │   ├── imageplan/           # What a boot image carries (its parts) and what run starts
-│   ├── bootrun/             # 'run': the code screen's hold and what it starts
+│   ├── bootrun/             # 'run': the code screen's hold, and the parts the plan names
+│   │                        #   (parts.go: phone, SSH, vault, the disk's key, the console),
+│   │                        #   which share what they offer on a board, not by calling each other
 │   ├── journal/, screen/    # The boot's narration; the [ KIRA ] tag
 │   ├── untrusted/, wipe/    # Quoting unverified strings; overwriting secrets
+│   ├── unixsock/            # The boot's private sockets (the gate's, the disk key's)
 │   ├── piv/, pcsc/          # The YubiKey's PIV applet over PC/SC
 │   └── admin/               # Everything on the installed system: control (the guided
 │                            #   way), setup, slot add/approve/delete, status, info, phone
