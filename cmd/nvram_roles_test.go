@@ -13,7 +13,7 @@ func TestKiraIndexRole(t *testing.T) {
 		nvslot.NVRAMSlotEnd:                                  "slot #15: its TOTP key",
 		nvslot.GenerationIndex(nvslot.NVRAMSlotStart + 2):    "generation index of slot #2",
 		nvslot.AttestCounterIndex(nvslot.NVRAMSlotStart + 3): "record counter of slot #3",
-		BootSettingsIndex:                                    "the boot settings",
+		nvslot.BootSettingsIndex:                             "the boot settings",
 	} {
 		if got := kiraIndexRole(idx); !strings.Contains(got, want) {
 			t.Errorf("0x%08X: %q, want %q", idx, got, want)

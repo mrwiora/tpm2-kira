@@ -192,7 +192,7 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 // index that is not one of its own.
 func kiraIndexRole(index uint32) string {
 	switch {
-	case index == BootSettingsIndex:
+	case index == nvslot.BootSettingsIndex:
 		return "the boot settings (debug at boot)"
 	case index >= nvslot.NVRAMSlotStart && index <= nvslot.NVRAMSlotEnd:
 		return fmt.Sprintf("slot #%d: its TOTP key and, if set up, its attestation part", nvslot.SlotNumber(index))
@@ -209,8 +209,8 @@ func kiraIndexRole(index uint32) string {
 // interrupted command leaves them, and the boot settings.
 func kiraLeftovers(tpmDev transport.TPM, debug bool) []uint32 {
 	var out []uint32
-	if tpmdev.NVRAMIndexExists(tpmDev, BootSettingsIndex) {
-		out = append(out, BootSettingsIndex)
+	if tpmdev.NVRAMIndexExists(tpmDev, nvslot.BootSettingsIndex) {
+		out = append(out, nvslot.BootSettingsIndex)
 	}
 	for idx := uint32(nvslot.NVRAMSlotStart); idx <= nvslot.NVRAMSlotEnd; idx++ {
 		if tpmdev.NVRAMIndexExists(tpmDev, idx) {

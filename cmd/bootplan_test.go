@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 
 	"github.com/google/go-tpm/tpm2"
@@ -94,19 +95,19 @@ func TestDecidePlan(t *testing.T) {
 	if got := partsOn(p); got != "unlock" || p.TPM {
 		t.Fatalf("no TPM: %q, TPM %v", got, p.TPM)
 	}
-	if why := p.Part(PartPhone).Why; !strings.Contains(why, "no TPM") || !strings.Contains(why, "a phone cannot attest") {
+	if why := p.Part(imageplan.PartPhone).Why; !strings.Contains(why, "no TPM") || !strings.Contains(why, "a phone cannot attest") {
 		t.Errorf("the phone without a TPM: %q", why)
 	}
-	if why := p.Part(PartCodes).Why; !strings.Contains(why, "no /dev/tpmrm0") {
+	if why := p.Part(imageplan.PartCodes).Why; !strings.Contains(why, "no /dev/tpmrm0") {
 		t.Errorf("the codes without a TPM: %q", why)
 	}
 
 	// A TPM with nothing sealed: still the disk unlock alone.
 	p = decidePlan(planInputs{Config: DefaultControlConfig()})
-	if got := partsOn(p); got != "unlock" || p.TPM || !strings.Contains(p.Part(PartCodes).Why, "nothing is sealed") {
-		t.Fatalf("nothing sealed: %q %+v", got, p.Part(PartCodes))
+	if got := partsOn(p); got != "unlock" || p.TPM || !strings.Contains(p.Part(imageplan.PartCodes).Why, "nothing is sealed") {
+		t.Fatalf("nothing sealed: %q %+v", got, p.Part(imageplan.PartCodes))
 	}
-	if why := p.Part(PartPhone).Why; why != "no phone is enrolled" {
+	if why := p.Part(imageplan.PartPhone).Why; why != "no phone is enrolled" {
 		t.Errorf("no phone: %q", why)
 	}
 
@@ -118,59 +119,59 @@ func TestDecidePlan(t *testing.T) {
 	}
 	// The record not accepted, or no adapter: the gate stays out.
 	in.SignerErr = "slot 0: TAMPERED"
-	if p := decidePlan(in); p.Has(PartPhone) || !strings.Contains(p.Part(PartPhone).Why, "TAMPERED") {
-		t.Errorf("a refused record: %+v", p.Part(PartPhone))
+	if p := decidePlan(in); p.Has(imageplan.PartPhone) || !strings.Contains(p.Part(imageplan.PartPhone).Why, "TAMPERED") {
+		t.Errorf("a refused record: %+v", p.Part(imageplan.PartPhone))
 	}
 	in.SignerErr, in.BT, in.BTErr = "", nil, "no Bluetooth adapter hci0 on this machine"
-	if p := decidePlan(in); p.Has(PartPhone) || !strings.Contains(p.Part(PartPhone).Why, "no Bluetooth adapter") {
-		t.Errorf("no adapter: %+v", p.Part(PartPhone))
+	if p := decidePlan(in); p.Has(imageplan.PartPhone) || !strings.Contains(p.Part(imageplan.PartPhone).Why, "no Bluetooth adapter") {
+		t.Errorf("no adapter: %+v", p.Part(imageplan.PartPhone))
 	}
 	// Packed ahead of any enrolment.
 	p = decidePlan(planInputs{Config: planConfig(t, "TPM2_KIRA_ATTEST_BLUETOOTH=always\n"), BT: bt, Signer: []byte("PEM")})
-	if !p.Has(PartPhone) || !strings.Contains(p.Part(PartPhone).Why, "every image") || p.Has(PartCodes) || !p.TPM {
+	if !p.Has(imageplan.PartPhone) || !strings.Contains(p.Part(imageplan.PartPhone).Why, "every image") || p.Has(imageplan.PartCodes) || !p.TPM {
 		t.Errorf("always: %+v", p.Parts)
 	}
 
 	// The vault is asked over the network; SSH needs it too.
 	in = planInputs{Config: DefaultControlConfig(), Slots: 1, Vaults: 1}
-	if p := decidePlan(in); p.Has(PartVault) || !strings.Contains(p.Part(PartVault).Why, "network") {
-		t.Errorf("a vault without a network: %+v", p.Part(PartVault))
+	if p := decidePlan(in); p.Has(imageplan.PartVault) || !strings.Contains(p.Part(imageplan.PartVault).Why, "network") {
+		t.Errorf("a vault without a network: %+v", p.Part(imageplan.PartVault))
 	}
 	in.Config = planConfig(t, "TPM2_KIRA_NET=dhcp\nTPM2_KIRA_SSH=on\n")
 	in.KeysErr = "authorized_keys holds no key without options: nobody could log in"
 	p = decidePlan(in)
-	if got := partsOn(p); got != "unlock codes vault net" || !strings.Contains(p.Part(PartSSH).Why, "nobody could log in") {
-		t.Fatalf("a vault, SSH without keys: %q %+v", got, p.Part(PartSSH))
+	if got := partsOn(p); got != "unlock codes vault net" || !strings.Contains(p.Part(imageplan.PartSSH).Why, "nobody could log in") {
+		t.Fatalf("a vault, SSH without keys: %q %+v", got, p.Part(imageplan.PartSSH))
 	}
 	in.KeysErr, in.Keys, in.SSHCA = "", []string{loginKey(t, "admin")}, sshCAState{Err: "no SSH CA: tpm2-kira control creates it in the TPM"}
-	if p := decidePlan(in); p.Has(PartSSH) || !strings.Contains(p.Part(PartSSH).Why, "control creates it") {
-		t.Fatalf("SSH without a CA: %+v", p.Part(PartSSH))
+	if p := decidePlan(in); p.Has(imageplan.PartSSH) || !strings.Contains(p.Part(imageplan.PartSSH).Why, "control creates it") {
+		t.Fatalf("SSH without a CA: %+v", p.Part(imageplan.PartSSH))
 	}
 	// The approvals live in the CA's EFI variable, not in the image: the
 	// image does not wait for them, and a new one is not a new image.
 	in.SSHCA = testSSHCA(t, false)
 	p = decidePlan(in)
-	if got := partsOn(p); got != "unlock codes vault net ssh" || !strings.Contains(p.Part(PartSSH).Why, "certified by the SSH CA SHA256:") || len(p.Warnings) != 0 {
-		t.Fatalf("SSH: %q %+v %q", got, p.Part(PartSSH), p.Warnings)
+	if got := partsOn(p); got != "unlock codes vault net ssh" || !strings.Contains(p.Part(imageplan.PartSSH).Why, "certified by the SSH CA SHA256:") || len(p.Warnings) != 0 {
+		t.Fatalf("SSH: %q %+v %q", got, p.Part(imageplan.PartSSH), p.Warnings)
 	}
 	approved := in.SSHCA
 	approved.CA = approved.CA.Only(func(hostkey.Approval) bool { return true })
 	approved.CA.Approvals = append(approved.CA.Approvals, hostkey.Approval{Slot: 0, Signature: []byte("new")})
-	if other := decidePlan(planInputs{Config: in.Config, Slots: in.Slots, Vaults: in.Vaults, Keys: in.Keys, SSHCA: approved}); other.Part(PartSSH).Digest != p.Part(PartSSH).Digest {
+	if other := decidePlan(planInputs{Config: in.Config, Slots: in.Slots, Vaults: in.Vaults, Keys: in.Keys, SSHCA: approved}); other.Part(imageplan.PartSSH).Digest != p.Part(imageplan.PartSSH).Digest {
 		t.Error("an approval is another image")
 	}
 	// The digest names the settings: the same twice, another with another
 	// port in assh.conf, or another DHCP identity.
-	if again := decidePlan(in); again.Part(PartSSH).Digest != p.Part(PartSSH).Digest || again.Part(PartNet).Digest != p.Part(PartNet).Digest {
+	if again := decidePlan(in); again.Part(imageplan.PartSSH).Digest != p.Part(imageplan.PartSSH).Digest || again.Part(imageplan.PartNet).Digest != p.Part(imageplan.PartNet).Digest {
 		t.Error("the same settings, another digest")
 	}
 	in.Config.Remote.SSH.Assh.Listen = ":2222"
-	if other := decidePlan(in); other.Part(PartSSH).Digest == p.Part(PartSSH).Digest || other.Part(PartNet).Digest != p.Part(PartNet).Digest {
+	if other := decidePlan(in); other.Part(imageplan.PartSSH).Digest == p.Part(imageplan.PartSSH).Digest || other.Part(imageplan.PartNet).Digest != p.Part(imageplan.PartNet).Digest {
 		t.Error("another port, the same digest")
 	}
 	in.DHCP = dhcpIdentity{ID: []byte{0xff, 1, 2, 3, 4, 0, 2, 9}, From: "a test's"}
-	if other := decidePlan(in); other.Part(PartNet).Digest == p.Part(PartNet).Digest || !strings.Contains(other.Part(PartNet).Why, "asking as a test's (ff:01:02:03:04:00:02:09)") {
-		t.Errorf("another DHCP identity: %+v", other.Part(PartNet))
+	if other := decidePlan(in); other.Part(imageplan.PartNet).Digest == p.Part(imageplan.PartNet).Digest || !strings.Contains(other.Part(imageplan.PartNet).Why, "asking as a test's (ff:01:02:03:04:00:02:09)") {
+		t.Errorf("another DHCP identity: %+v", other.Part(imageplan.PartNet))
 	}
 	in.DHCP = dhcpIdentity{From: "unknown: no DHCP client of the running system tells it on eth0"}
 	if other := decidePlan(in); len(other.Warnings) != 1 || !strings.Contains(other.Warnings[0], "may get another address") {
@@ -184,7 +185,7 @@ func TestDecidePlan(t *testing.T) {
 	}
 	// SSH without a TPM: its host keys are made in it.
 	in.NoBusybox, in.TPMErr = false, "gone"
-	if p := decidePlan(in); p.Has(PartSSH) || !strings.Contains(p.Part(PartSSH).Why, "made and certified in it") || !p.Has(PartNet) {
+	if p := decidePlan(in); p.Has(imageplan.PartSSH) || !strings.Contains(p.Part(imageplan.PartSSH).Why, "made and certified in it") || !p.Has(imageplan.PartNet) {
 		t.Errorf("SSH without a TPM: %+v", p.Parts)
 	}
 
@@ -224,8 +225,8 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 
 	// The disk unlock alone: the plan names it, nothing else is written.
 	out, root := writePlan(t, decidePlan(planInputs{TPMErr: "none", Config: DefaultControlConfig()}), FormatMkinitcpio)
-	entries, _ := os.ReadDir(filepath.Join(root, ImagePlanDir))
-	if len(entries) != 1 || entries[0].Name() != PartUnlock {
+	entries, _ := os.ReadDir(filepath.Join(root, imageplan.Dir))
+	if len(entries) != 1 || entries[0].Name() != imageplan.PartUnlock {
 		t.Fatalf("the plan names %v", entries)
 	}
 	for _, p := range []string{imageTPMDropIn, "/" + btModulesLoadConf, phonegate.DefaultAttestSignerPath, imageNetworkFile} {
@@ -258,16 +259,16 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
-	for _, name := range []string{PartUnlock, PartCodes, PartPhone, PartNet, PartSSH, partTPM} {
-		digest := planDigest(partTPM)
-		if name != partTPM {
+	for _, name := range []string{imageplan.PartUnlock, imageplan.PartCodes, imageplan.PartPhone, imageplan.PartNet, imageplan.PartSSH, imageplan.PartTPM} {
+		digest := planDigest(imageplan.PartTPM)
+		if name != imageplan.PartTPM {
 			digest = p.Part(name).Digest
 		}
-		if _, err := os.Stat(filepath.Join(root, ImagePlanDir, name, digest)); err != nil {
+		if _, err := os.Stat(filepath.Join(root, imageplan.Dir, name, digest)); err != nil {
 			t.Errorf("the plan does not name %s: %v", name, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(root, ImagePlanDir, PartVault)); err == nil {
+	if _, err := os.Stat(filepath.Join(root, imageplan.Dir, imageplan.PartVault)); err == nil {
 		t.Error("the vault is named, and no slot has one")
 	}
 	for path, want := range map[string]string{
@@ -340,7 +341,7 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 	if got := readImage(t, root, DefaultSSHConf); !strings.Contains(got, "ASSH_LISTEN=:2222\n") {
 		t.Errorf("the image's assh.conf:\n%s", got)
 	}
-	for _, p := range []string{"/etc/tpm2-kira/authorized_keys", filepath.Join(ImagePlanDir, partTPM)} {
+	for _, p := range []string{"/etc/tpm2-kira/authorized_keys", filepath.Join(imageplan.Dir, imageplan.PartTPM)} {
 		if _, err := os.Stat(filepath.Join(root, p)); err != nil {
 			t.Error(err)
 		}
@@ -378,7 +379,7 @@ func TestImagePlanPending(t *testing.T) {
 		return files, nil
 	}
 	parts, err := imagePlan(img)
-	if err != nil || len(parts) != 5 || parts[PartSSH] != decidePlan(in).Part(PartSSH).Digest {
+	if err != nil || len(parts) != 5 || parts[imageplan.PartSSH] != decidePlan(in).Part(imageplan.PartSSH).Digest {
 		t.Fatalf("the image's plan: %v %v", parts, err)
 	}
 	if p := planPending(decidePlan(in), parts, img); len(p) != 0 {
@@ -415,16 +416,16 @@ func TestImagePlanPending(t *testing.T) {
 // 'run --plan' starts what the image names, and nothing else.
 func TestReadPlanned(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, PartUnlock), 0o755)
-	if got := ReadPlanned(dir); got != (Planned{}) {
+	os.MkdirAll(filepath.Join(dir, imageplan.PartUnlock), 0o755)
+	if got := imageplan.Read(dir); got != (imageplan.Planned{}) {
 		t.Errorf("the disk unlock alone: %+v", got)
 	}
-	os.MkdirAll(filepath.Join(dir, PartCodes, "abc"), 0o755)
-	os.MkdirAll(filepath.Join(dir, PartPhone), 0o755)
-	if got := ReadPlanned(dir); got != (Planned{Codes: true, Phone: true}) {
+	os.MkdirAll(filepath.Join(dir, imageplan.PartCodes, "abc"), 0o755)
+	os.MkdirAll(filepath.Join(dir, imageplan.PartPhone), 0o755)
+	if got := imageplan.Read(dir); got != (imageplan.Planned{Codes: true, Phone: true}) {
 		t.Errorf("codes and phone: %+v", got)
 	}
-	if got := ReadPlanned(filepath.Join(dir, "none")); got != (Planned{}) {
+	if got := imageplan.Read(filepath.Join(dir, "none")); got != (imageplan.Planned{}) {
 		t.Errorf("no plan: %+v", got)
 	}
 }

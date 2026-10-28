@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
@@ -41,10 +42,10 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	}
 	// The boot plan read from the TPM: the sealed slot puts the codes in,
 	// and the TPM with them; no phone, no gate.
-	if !f.planHas(PartCodes) || !f.Plan.TPM || f.planHas(PartPhone) || f.Plan.Part(PartPhone).Why != "no phone is enrolled" {
+	if !f.planHas(imageplan.PartCodes) || !f.Plan.TPM || f.planHas(imageplan.PartPhone) || f.Plan.Part(imageplan.PartPhone).Why != "no phone is enrolled" {
 		t.Errorf("the plan: %+v", f.Plan.Parts)
 	}
-	if p := ReadBootPlan(PlanOptions{TPMPath: filepath.Join(t.TempDir(), "none"), ConfigPath: conf}); p.Has(PartCodes) || p.TPM {
+	if p := ReadBootPlan(PlanOptions{TPMPath: filepath.Join(t.TempDir(), "none"), ConfigPath: conf}); p.Has(imageplan.PartCodes) || p.TPM {
 		t.Errorf("the plan without a TPM: %+v", p.Parts)
 	}
 	if f.Status.Config != conf || f.PINStored || f.PINLoose || f.AttestConf != "" {

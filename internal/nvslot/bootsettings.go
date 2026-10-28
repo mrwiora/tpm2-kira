@@ -1,4 +1,4 @@
-package cmd
+package nvslot
 
 // The machine's boot settings: one small NV index the code screen and the
 // phone check read at boot. Today it holds one switch, debug, which makes
@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"github.com/google/go-tpm/tpm2/transport"
@@ -38,7 +37,7 @@ type BootSettings struct {
 	Debug bool // the code screen and the phone check log every step
 }
 
-func (s BootSettings) marshal() []byte {
+func (s BootSettings) Marshal() []byte {
 	var flags byte
 	if s.Debug {
 		flags |= bootFlagDebug
@@ -46,7 +45,7 @@ func (s BootSettings) marshal() []byte {
 	return []byte{bootSettingsVersion, flags}
 }
 
-func parseBootSettings(b []byte) (BootSettings, error) {
+func ParseBootSettings(b []byte) (BootSettings, error) {
 	if len(b) != 2 || b[0] != bootSettingsVersion {
 		return BootSettings{}, fmt.Errorf("the boot settings at 0x%08X are not in this version's format", BootSettingsIndex)
 	}
@@ -65,7 +64,7 @@ func ReadBootSettings(tpmDev transport.TPM) (BootSettings, error) {
 	if err != nil {
 		return BootSettings{}, err
 	}
-	return parseBootSettings(data)
+	return ParseBootSettings(data)
 }
 
 // WriteBootSettings writes the boot settings with the signing key. With
@@ -80,7 +79,7 @@ func WriteBootSettings(tpmDev transport.TPM, s BootSettings, signer crypto.Signe
 		}
 		return tpmdev.UndefineIndex(tpmDev, BootSettingsIndex)
 	}
-	return nvslot.WriteToNVRAM(tpmDev, BootSettingsIndex, s.marshal(), signer.Public(), signer)
+	return WriteToNVRAM(tpmDev, BootSettingsIndex, s.Marshal(), signer.Public(), signer)
 }
 
 // BootDebug reports the debug switch, read through the TPM at tpmPath (the

@@ -15,6 +15,7 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
@@ -221,7 +222,7 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 
 	f.Status = collectStatus(StatusOptions{TPMPath: tpmPath, ConfigPath: controlConfigPath(), Debug: debug})
 	if f.TPMErr == "" {
-		f.BootDebug = BootDebug(tpmPath)
+		f.BootDebug = nvslot.BootDebug(tpmPath)
 	}
 	if f.TPMErr == "" {
 		f.Dirt = collectDirt(tpmPath, f.Status.Devices)
@@ -794,7 +795,7 @@ func (c *controller) factsText() string {
 	default:
 		fmt.Fprintf(&w, "  Initramfs   %s\n", good(f.Initramfs))
 	}
-	phone := f.planHas(PartPhone)
+	phone := f.planHas(imageplan.PartPhone)
 	switch {
 	case f.Adapter != "" && len(f.BTFirmware) == 0 && phone:
 		// It goes into the image: without its firmware the adapter does
@@ -1263,7 +1264,7 @@ func (c *controller) offerRebuild() error {
 		fmt.Fprintf(c.out, "  - %s\n", p)
 	}
 	fmt.Fprintf(c.out, "\n\033[1mWhat %s puts in\033[0m\n%s", name, planText(f.Plan))
-	if f.planHas(PartPhone) {
+	if f.planHas(imageplan.PartPhone) {
 		fmt.Fprintln(c.out, "\n"+btImagePlan(f.Adapter))
 	}
 	fmt.Fprintln(c.out)
@@ -1536,7 +1537,7 @@ func (c *controller) runBootDebug() error {
 		return err
 	}
 	defer tpmDev.Close()
-	if err := WriteBootSettings(tpmDev, BootSettings{Debug: on}, signer); err != nil {
+	if err := nvslot.WriteBootSettings(tpmDev, nvslot.BootSettings{Debug: on}, signer); err != nil {
 		return err
 	}
 	c.facts.BootDebug = on

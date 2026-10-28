@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/bootrun"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
@@ -490,19 +492,19 @@ func runRun(args []string, tpmPath string, debugFlag bool) {
 	nvram := fs.Uint("nvram", nvramDefault(nvslot.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	gate := fs.String("gate", "", "Also be the Bluetooth gate's coordinator on this socket: hold the TPM for 'phone gate --coordinator' and let the phone's verdict release the boot (set by the initrd unit)")
-	hold := fs.Uint("hold", uint(cmd.HoldDefault/time.Second), "Seconds to wait for Enter after showing the code before the boot continues on its own (0: at once)")
+	hold := fs.Uint("hold", uint(bootrun.HoldDefault/time.Second), "Seconds to wait for Enter after showing the code before the boot continues on its own (0: at once)")
 	unlock := fs.String("unlock", "", "Also answer systemd-cryptsetup's key requests on this socket (crypttab(5) AF_UNIX key files): the passphrase is asked at tpm2-kira's prompt once the code screen is confirmed. Under systemd the socket unit hands its socket over instead; Debian's boot script passes this")
 	ssh := fs.Bool("ssh", false, "Also be the SSH server: the codes are shown and confirmed in an SSH session, the console says where to log in (set by the image's drop-in from TPM2_KIRA_SSH)")
 	sshConf := fs.String("ssh-conf", cmd.DefaultSSHConf, "With --ssh: aSSH's settings - the SSH CA, which certifies a host key made in the TPM for this boot (a temporary key, made in the TPM but not certified, is served when it does not), the address, the keys that may log in")
 	sshHold := fs.Uint("ssh-hold", 0, "With --ssh: seconds to wait for a confirmation, in place of --hold (0: until one comes)")
-	plan := fs.String("plan", "", "Start only the parts the boot image names in this directory (the codes, the phone's gate, the vault); without it, all it finds (set by the initrd unit: "+cmd.ImagePlanDir+")")
+	plan := fs.String("plan", "", "Start only the parts the boot image names in this directory (the codes, the phone's gate, the vault); without it, all it finds (set by the initrd unit: "+imageplan.Dir+")")
 
 	fs.Parse(args)
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
-	planned := cmd.AllPlanned
+	planned := imageplan.All
 	if *plan != "" {
-		planned = cmd.ReadPlanned(*plan)
+		planned = imageplan.Read(*plan)
 	}
 
 	var remote sshscreen.Options
@@ -512,7 +514,7 @@ func runRun(args []string, tpmPath string, debugFlag bool) {
 			fmt.Fprintf(os.Stderr, "tpm2-kira: the SSH server is not started: %v - the code screen is at the console\n", err)
 		}
 	}
-	cmd.RunCommand(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, remote, planned, *debug)
+	bootrun.Run(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, remote, planned, *debug)
 }
 
 func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
@@ -916,7 +918,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		}
 		os.Exit(cmd.AttestGate(cmd.GateOptions{
 			TPMPath: *tpm, SealIndex: slot, Adapter: *adapter, Timeout: *timeout,
-			AdapterWait: *adapterWait, Debug: *debug || cmd.BootDebug(*tpm),
+			AdapterWait: *adapterWait, Debug: *debug || nvslot.BootDebug(*tpm),
 			Coordinator: *coordinator,
 		}))
 	case "status":

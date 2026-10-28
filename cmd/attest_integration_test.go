@@ -21,6 +21,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/attest/attesttest"
+	"github.com/mrwiora/tpm2-kira/internal/bootrun"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
@@ -479,14 +480,14 @@ func TestCoordinatorAndWorker(t *testing.T) {
 		{filepath.Join(dir, "a", "gate.sock"), noSigner},
 		{"", signer},
 	} {
-		if svc, end := startCoordinator(sock, c[0], c[1], false); svc != nil {
+		if svc, end := bootrun.StartCoordinator(sock, c[0], c[1], false); svc != nil {
 			t.Fatalf("a coordinator without a gate to coordinate (%v)", c)
 		} else {
 			end() // nothing to end, and no harm in asking
 		}
 	}
 	gate := filepath.Join(dir, "run", "gate.sock")
-	svc, endCoordinator := startCoordinator(sock, gate, signer, false)
+	svc, endCoordinator := bootrun.StartCoordinator(sock, gate, signer, false)
 	if svc == nil {
 		t.Fatal("no coordinator")
 	}

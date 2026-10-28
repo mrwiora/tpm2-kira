@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
@@ -40,32 +41,16 @@ import (
 // changed. A part the image carries but nothing uses any more is no
 // reason to rebuild: the next build leaves it out.
 
-// The parts, in the order they are told.
-const (
-	PartUnlock = "unlock" // the key provider: always
-	PartCodes  = "codes"  // the TOTP code screen
-	PartPhone  = "phone"  // the Bluetooth gate for an enrolled phone
-	PartVault  = "vault"  // a slot's key from the vault
-	PartNet    = "net"    // the image's network
-	PartSSH    = "ssh"    // tpm2-kira's SSH server
-	// partTPM is derived: the TPM device is waited for at boot when a part
-	// needs it. It is a marker, not a part of its own.
-	partTPM = "tpm"
-)
-
-var planOrder = []string{PartUnlock, PartCodes, PartPhone, PartVault, PartNet, PartSSH}
+var planOrder = []string{imageplan.PartUnlock, imageplan.PartCodes, imageplan.PartPhone, imageplan.PartVault, imageplan.PartNet, imageplan.PartSSH}
 
 var partTitles = map[string]string{
-	PartUnlock: "Disk unlock",
-	PartCodes:  "TOTP codes",
-	PartPhone:  "Phone (Bluetooth)",
-	PartVault:  "Vault",
-	PartNet:    "Network",
-	PartSSH:    "SSH server",
+	imageplan.PartUnlock: "Disk unlock",
+	imageplan.PartCodes:  "TOTP codes",
+	imageplan.PartPhone:  "Phone (Bluetooth)",
+	imageplan.PartVault:  "Vault",
+	imageplan.PartNet:    "Network",
+	imageplan.PartSSH:    "SSH server",
 }
-
-// ImagePlanDir is where the image names its parts.
-const ImagePlanDir = "/etc/tpm2-kira/plan"
 
 // PlanPart is one part of the plan: in or out, and why.
 type PlanPart struct {
@@ -245,27 +230,27 @@ func decidePlan(in planInputs) *BootPlan {
 		p.Parts = append(p.Parts, pt)
 	}
 
-	add(PartUnlock, true, "the key of every volume routed through tpm2-kira, made as its LUKS2 header says")
+	add(imageplan.PartUnlock, true, "the key of every volume routed through tpm2-kira, made as its LUKS2 header says")
 
 	switch {
 	case in.TPMErr != "":
-		add(PartCodes, false, noTPM)
+		add(imageplan.PartCodes, false, noTPM)
 	case in.Slots == 0:
-		add(PartCodes, false, "nothing is sealed (tpm2-kira slot add)")
+		add(imageplan.PartCodes, false, "nothing is sealed (tpm2-kira slot add)")
 	default:
-		add(PartCodes, true, plural(in.Slots, "slot")+" sealed")
+		add(imageplan.PartCodes, true, plural(in.Slots, "slot")+" sealed")
 	}
 
 	always := cfg.Attest.Bluetooth == "always"
 	switch {
 	case in.TPMErr != "":
-		add(PartPhone, false, noTPM+": a phone cannot attest this machine")
+		add(imageplan.PartPhone, false, noTPM+": a phone cannot attest this machine")
 	case in.Phones == 0 && !always:
-		add(PartPhone, false, "no phone is enrolled")
+		add(imageplan.PartPhone, false, "no phone is enrolled")
 	case in.SignerErr != "":
-		add(PartPhone, false, "the enrolment is not accepted: "+in.SignerErr)
+		add(imageplan.PartPhone, false, "the enrolment is not accepted: "+in.SignerErr)
 	case in.BT == nil:
-		add(PartPhone, false, in.BTErr)
+		add(imageplan.PartPhone, false, in.BTErr)
 	default:
 		why := plural(in.Phones, "phone") + " enrolled, via " + in.BT.Adapter
 		if in.Phones == 0 {
@@ -275,20 +260,20 @@ func decidePlan(in planInputs) *BootPlan {
 		if in.BT.Authorize != nil {
 			rule = in.BT.Authorize.UdevRule()
 		}
-		add(PartPhone, true, why, strings.Join(in.BT.Modules, " "), strings.Join(in.BT.Firmware, " "), rule, string(in.Signer))
+		add(imageplan.PartPhone, true, why, strings.Join(in.BT.Modules, " "), strings.Join(in.BT.Firmware, " "), rule, string(in.Signer))
 	}
-	if in.BT != nil && p.Has(PartPhone) {
+	if in.BT != nil && p.Has(imageplan.PartPhone) {
 		p.Warnings = append(p.Warnings, in.BT.Warnings...)
 	}
 
 	net := cfg.Remote.Net
 	switch {
 	case net.Mode == "off":
-		add(PartNet, false, "off (Network and SSH at boot)")
+		add(imageplan.PartNet, false, "off (Network and SSH at boot)")
 	case net.problem() != "":
-		add(PartNet, false, net.problem())
+		add(imageplan.PartNet, false, net.problem())
 	case in.NoBusybox:
-		add(PartNet, false, "it needs busybox in the image (apt install busybox, BUSYBOX not n in initramfs.conf)")
+		add(imageplan.PartNet, false, "it needs busybox in the image (apt install busybox, BUSYBOX not n in initramfs.conf)")
 	default:
 		why := net.Mode
 		if net.Mode == "dhcp" && in.DHCP.From != "" {
@@ -300,43 +285,43 @@ func decidePlan(in planInputs) *BootPlan {
 				p.Warnings = append(p.Warnings, "the running system's DHCP identity is "+in.DHCP.From+": the image asks with its MAC and may get another address than the running system (TPM2_KIRA_NET_DHCP_ID sets it)")
 			}
 		}
-		add(PartNet, true, why, net.Mode, net.Match, strings.Join(net.Addresses, " "), strings.Join(net.Gateways, " "), strings.Join(net.DNS, " "), hex.EncodeToString(in.DHCP.ID))
+		add(imageplan.PartNet, true, why, net.Mode, net.Match, strings.Join(net.Addresses, " "), strings.Join(net.Gateways, " "), strings.Join(net.DNS, " "), hex.EncodeToString(in.DHCP.ID))
 	}
 
 	switch {
 	case in.Vaults == 0:
-		add(PartVault, false, "no slot is enrolled with a vault")
+		add(imageplan.PartVault, false, "no slot is enrolled with a vault")
 	case in.TPMErr != "":
-		add(PartVault, false, noTPM)
-	case !p.Has(PartNet):
-		add(PartVault, false, "the vault is asked over the network, and the image has none")
+		add(imageplan.PartVault, false, noTPM)
+	case !p.Has(imageplan.PartNet):
+		add(imageplan.PartVault, false, "the vault is asked over the network, and the image has none")
 	default:
-		add(PartVault, true, plural(in.Vaults, "slot")+" enrolled with a vault")
+		add(imageplan.PartVault, true, plural(in.Vaults, "slot")+" enrolled with a vault")
 	}
 
 	ssh := cfg.Remote.SSH
 	switch {
 	case !ssh.On:
-		add(PartSSH, false, "off (Network and SSH at boot)")
-	case !p.Has(PartNet):
-		add(PartSSH, false, "it needs the image's network")
+		add(imageplan.PartSSH, false, "off (Network and SSH at boot)")
+	case !p.Has(imageplan.PartNet):
+		add(imageplan.PartSSH, false, "it needs the image's network")
 	case in.TPMErr != "":
-		add(PartSSH, false, noTPM+": the host key is made and certified in it")
+		add(imageplan.PartSSH, false, noTPM+": the host key is made and certified in it")
 	case in.KeysErr != "":
-		add(PartSSH, false, in.KeysErr)
+		add(imageplan.PartSSH, false, in.KeysErr)
 	case in.SSHCA.Err != "":
-		add(PartSSH, false, in.SSHCA.Err)
+		add(imageplan.PartSSH, false, in.SSHCA.Err)
 	default:
 		fp := in.SSHCA.CA.Fingerprint()
-		add(PartSSH, true, fmt.Sprintf("port %d, host keys certified by the SSH CA %s", ssh.Port(), fp),
+		add(imageplan.PartSSH, true, fmt.Sprintf("port %d, host keys certified by the SSH CA %s", ssh.Port(), fp),
 			fmt.Sprint(ssh.Hold), fp, keysSum(imageKeys(in.Keys)), keysSum(imageSSHConf(ssh.Assh)))
 	}
-	if p.Has(PartSSH) && in.KeysSkipped > 0 {
+	if p.Has(imageplan.PartSSH) && in.KeysSkipped > 0 {
 		p.Warnings = append(p.Warnings, fmt.Sprintf("%d line(s) of %s left out: options in front of the key are not honoured, and what does not parse is no key", in.KeysSkipped, ssh.Assh.AuthorizedKeys))
 	}
 
 	sort.SliceStable(p.Parts, func(i, j int) bool { return planIndex(p.Parts[i].Name) < planIndex(p.Parts[j].Name) })
-	p.TPM = p.Has(PartCodes) || p.Has(PartPhone) || p.Has(PartVault) || p.Has(PartSSH)
+	p.TPM = p.Has(imageplan.PartCodes) || p.Has(imageplan.PartPhone) || p.Has(imageplan.PartVault) || p.Has(imageplan.PartSSH)
 	return p
 }
 
@@ -398,17 +383,17 @@ func (p *BootPlan) WriteImage(buildroot, format string, out io.Writer) error {
 	}
 	in := p.in
 
-	dir := filepath.Join(buildroot, ImagePlanDir)
+	dir := filepath.Join(buildroot, imageplan.Dir)
 	if err := os.RemoveAll(dir); err != nil {
 		return err
 	}
 	markers := append([]PlanPart{}, p.Parts...)
 	if p.TPM {
-		markers = append(markers, PlanPart{Name: partTPM, On: true, Digest: planDigest(partTPM)})
+		markers = append(markers, PlanPart{Name: imageplan.PartTPM, On: true, Digest: planDigest(imageplan.PartTPM)})
 	}
 	for _, pt := range markers {
 		if pt.On {
-			if err := writeImageFile(buildroot, filepath.Join(ImagePlanDir, pt.Name, pt.Digest), nil, 0o644); err != nil {
+			if err := writeImageFile(buildroot, filepath.Join(imageplan.Dir, pt.Name, pt.Digest), nil, 0o644); err != nil {
 				return err
 			}
 		}
@@ -438,7 +423,7 @@ func (p *BootPlan) WriteImage(buildroot, format string, out io.Writer) error {
 		}
 	}
 
-	if p.Has(PartPhone) {
+	if p.Has(imageplan.PartPhone) {
 		bt := in.BT
 		modules := []byte(strings.Join(bt.Modules, "\n") + "\n")
 		list := "/" + btModulesLoadConf
@@ -468,9 +453,9 @@ func (p *BootPlan) WriteImage(buildroot, format string, out io.Writer) error {
 		}
 	}
 
-	if p.Has(PartNet) {
+	if p.Has(imageplan.PartNet) {
 		r := in.Config.Remote
-		if !p.Has(PartSSH) {
+		if !p.Has(imageplan.PartSSH) {
 			r.SSH.On = false
 		}
 		if format == FormatInitramfsTools {
@@ -510,7 +495,7 @@ func (p *BootPlan) WriteImage(buildroot, format string, out io.Writer) error {
 		}
 	}
 
-	if p.Has(PartSSH) {
+	if p.Has(imageplan.PartSSH) {
 		// The CA is read from its EFI variable at boot; initramfs-tools
 		// mounts no efivarfs, run does, with the module where it is one.
 		fmt.Fprintln(out, "module efivarfs")
@@ -540,7 +525,7 @@ func (p *BootPlan) drop(name, why string) {
 			p.Parts[i] = PlanPart{Name: name, Why: why}
 		}
 	}
-	p.TPM = p.Has(PartCodes) || p.Has(PartPhone) || p.Has(PartVault) || p.Has(PartSSH)
+	p.TPM = p.Has(imageplan.PartCodes) || p.Has(imageplan.PartPhone) || p.Has(imageplan.PartVault) || p.Has(imageplan.PartSSH)
 }
 
 // InitramfsPlanCommand implements 'initramfs plan': with a build root the
@@ -572,7 +557,7 @@ func imagePlan(img string) (map[string]string, error) {
 		return nil, err
 	}
 	parts := map[string]string{}
-	prefix := strings.TrimPrefix(ImagePlanDir, "/") + "/"
+	prefix := strings.TrimPrefix(imageplan.Dir, "/") + "/"
 	for f := range files {
 		rest, ok := strings.CutPrefix(strings.TrimSuffix(f, "/"), prefix)
 		if !ok || rest == "" {
@@ -616,21 +601,4 @@ func planUnused(p *BootPlan, image map[string]string) []string {
 		}
 	}
 	return out
-}
-
-// Planned is what 'run' starts, from the image's ImagePlanDir.
-type Planned struct {
-	Codes, Phone, Vault bool
-}
-
-// AllPlanned is 'run' without a plan, by hand: everything it finds.
-var AllPlanned = Planned{Codes: true, Phone: true, Vault: true}
-
-// ReadPlanned reads the parts an image names in dir.
-func ReadPlanned(dir string) Planned {
-	has := func(name string) bool {
-		st, err := os.Stat(filepath.Join(dir, name))
-		return err == nil && st.IsDir()
-	}
-	return Planned{Codes: has(PartCodes), Phone: has(PartPhone), Vault: has(PartVault)}
 }

@@ -1,4 +1,4 @@
-package cmd
+package bootrun
 
 // The TOTP display at the passphrase prompt (tpm2-kira run).
 //
@@ -46,6 +46,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/journal"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
@@ -122,29 +123,29 @@ func (h *hintPrinter) stop() {
 
 // bootDisplay is RunCommand with its environment pluggable for tests.
 type bootDisplay struct {
-	scan   func(now time.Time) ([]totp.NVRAMSlot, error)  // every slot, with its code for now
-	live   func(totp.NVRAMSlot, time.Time) totp.NVRAMSlot // one slot's code for now
-	notify func()                                         // tells systemd the boot may go on
-	show   func(slots []totp.NVRAMSlot, codes map[int]string, remaining time.Duration)
-	wait   func(d time.Duration) bool // true: Enter was pressed within d
-	sleep  func(time.Duration)
-	now    func() time.Time
+	Scan   func(now time.Time) ([]totp.NVRAMSlot, error)  // every slot, with its code for now
+	Live   func(totp.NVRAMSlot, time.Time) totp.NVRAMSlot // one slot's code for now
+	Notify func()                                         // tells systemd the boot may go on
+	Show   func(slots []totp.NVRAMSlot, codes map[int]string, remaining time.Duration)
+	Wait   func(d time.Duration) bool // true: Enter was pressed within d
+	Sleep  func(time.Duration)
+	Now    func() time.Time
 
 	// The Bluetooth gate, when one runs next to the display; nil otherwise.
-	phone      func() (phonegate.GateStatus, bool)  // its state for the slot it serves
-	phoneEvent func(prev, cur phonegate.GateStatus) // tells the user about a change
-	phonePoll  time.Duration                        // how often the state is looked at
-	phoneGrace time.Duration                        // how far a session in progress may extend the hold
+	Phone      func() (phonegate.GateStatus, bool)  // its state for the slot it serves
+	PhoneEvent func(prev, cur phonegate.GateStatus) // tells the user about a change
+	PhonePoll  time.Duration                        // how often the state is looked at
+	PhoneGrace time.Duration                        // how far a session in progress may extend the hold
 
-	hold          time.Duration // how long to wait for Enter
-	scanRetry     time.Duration // between attempts while nothing can be shown
-	quickRetryFor time.Duration // after the release, failed slots are retried every retryEvery this long,
-	retryEvery    time.Duration // then once per TOTP window
+	Hold          time.Duration // how long to wait for Enter
+	ScanRetry     time.Duration // between attempts while nothing can be shown
+	QuickRetryFor time.Duration // after the release, failed slots are retried every retryEvery this long,
+	RetryEvery    time.Duration // then once per TOTP window
 }
 
-func (b *bootDisplay) run() {
+func (b *bootDisplay) Run() {
 	slots, allUp, err := b.holdForConfirmation()
-	b.notify()
+	b.Notify()
 	if allUp {
 		return // every slot was confirmed or at least shown; nothing more can be computed
 	}
@@ -167,7 +168,7 @@ var errCodesOut = errors.New("the boot image shows no codes")
 // and reports the last slots and whether all of them had a code. A scan
 // that fails outright releases the boot at once, with its error.
 func (b *bootDisplay) holdForConfirmation() ([]totp.NVRAMSlot, bool, error) {
-	deadline := b.now().Add(b.hold)
+	deadline := b.Now().Add(b.Hold)
 	var slots []totp.NVRAMSlot
 	var gate phonegate.GateStatus
 	allUp := false
@@ -176,13 +177,13 @@ func (b *bootDisplay) holdForConfirmation() ([]totp.NVRAMSlot, bool, error) {
 	// between its question and its answer.
 	limit := func() time.Time {
 		if gate.State == phonegate.GateSession {
-			return deadline.Add(b.phoneGrace)
+			return deadline.Add(b.PhoneGrace)
 		}
 		return deadline
 	}
 	for {
-		now := b.now()
-		s, err := b.scan(now)
+		now := b.Now()
+		s, err := b.Scan(now)
 		if err != nil {
 			if !errors.Is(err, errCodesOut) {
 				totp.PrintKIRAError(err)
@@ -198,14 +199,14 @@ func (b *bootDisplay) holdForConfirmation() ([]totp.NVRAMSlot, bool, error) {
 		}
 		codes, _ := totp.CodesForSlots(slots)
 		// What the prompt is about to say needs no announcement of its own.
-		if cur, ok := gateStatus(b.phone); ok && cur.Asking() {
+		if cur, ok := gateStatus(b.Phone); ok && cur.Asking() {
 			gate = cur
 		}
 		remaining := limit().Sub(now)
 		if remaining < 0 {
 			remaining = 0
 		}
-		b.show(slots, codes, remaining)
+		b.Show(slots, codes, remaining)
 		boundary := nextTOTPBoundary(now)
 		for {
 			until := boundary
@@ -217,7 +218,7 @@ func (b *bootDisplay) holdForConfirmation() ([]totp.NVRAMSlot, bool, error) {
 			if enter || gate.Released() {
 				return slots, allUp, nil
 			}
-			now := b.now()
+			now := b.Now()
 			if !now.Before(limit()) {
 				return slots, allUp, nil
 			}
@@ -237,22 +238,22 @@ func (b *bootDisplay) holdForConfirmation() ([]totp.NVRAMSlot, bool, error) {
 // follows the gate: a change of its state is announced and ends the wait.
 func (b *bootDisplay) waitFor(until time.Time, gate *phonegate.GateStatus) bool {
 	for {
-		if cur, ok := gateStatus(b.phone); ok && cur != *gate {
+		if cur, ok := gateStatus(b.Phone); ok && cur != *gate {
 			prev := *gate
 			*gate = cur
-			if b.phoneEvent != nil {
-				b.phoneEvent(prev, cur)
+			if b.PhoneEvent != nil {
+				b.PhoneEvent(prev, cur)
 			}
 			return false
 		}
-		left := until.Sub(b.now())
+		left := until.Sub(b.Now())
 		if left <= 0 {
 			return false
 		}
-		if b.phone != nil && b.phonePoll > 0 && left > b.phonePoll {
-			left = b.phonePoll
+		if b.Phone != nil && b.PhonePoll > 0 && left > b.PhonePoll {
+			left = b.PhonePoll
 		}
-		if b.wait(left) {
+		if b.Wait(left) {
 			return true
 		}
 	}
@@ -264,8 +265,8 @@ func (b *bootDisplay) waitFor(until time.Time, gate *phonegate.GateStatus) bool 
 // the hold are now locked and shown as such.
 func (b *bootDisplay) serveAfterRelease(slots []totp.NVRAMSlot) {
 	for len(slots) == 0 {
-		b.sleep(b.scanRetry)
-		s, err := b.scan(b.now())
+		b.Sleep(b.ScanRetry)
+		s, err := b.Scan(b.Now())
 		if err != nil {
 			totp.PrintKIRAError(err)
 			continue
@@ -276,25 +277,25 @@ func (b *bootDisplay) serveAfterRelease(slots []totp.NVRAMSlot) {
 	for _, s := range slots {
 		failed[s.SlotNumber] = s.Error != nil
 	}
-	quickUntil := b.now().Add(b.quickRetryFor)
+	quickUntil := b.Now().Add(b.QuickRetryFor)
 	for {
-		now := b.now()
+		now := b.Now()
 		for i := range slots {
-			slots[i] = b.live(slots[i], now)
+			slots[i] = b.Live(slots[i], now)
 			if slots[i].Error == nil && failed[slots[i].SlotNumber] {
 				slots[i].AfterSeparator = true
 			}
 		}
 		codes, _ := totp.CodesForSlots(slots)
-		b.show(slots, codes, -1)
+		b.Show(slots, codes, -1)
 		boundary := nextTOTPBoundary(now)
-		for b.now().Before(boundary) {
-			step := boundary.Sub(b.now())
-			if b.now().Before(quickUntil) && step > b.retryEvery {
-				step = b.retryEvery
+		for b.Now().Before(boundary) {
+			step := boundary.Sub(b.Now())
+			if b.Now().Before(quickUntil) && step > b.RetryEvery {
+				step = b.RetryEvery
 			}
-			b.sleep(step)
-			if b.now().Before(quickUntil) && b.retryFailed(slots, failed) {
+			b.Sleep(step)
+			if b.Now().Before(quickUntil) && b.retryFailed(slots, failed) {
 				break // a slot came up: show it now
 			}
 		}
@@ -305,7 +306,7 @@ func (b *bootDisplay) serveAfterRelease(slots []totp.NVRAMSlot) {
 // try and reports whether one came up.
 func (b *bootDisplay) retryFailed(slots []totp.NVRAMSlot, failed map[int]bool) bool {
 	changed := false
-	now := b.now()
+	now := b.Now()
 	for i, s := range slots {
 		if s.Error == nil || !failed[s.SlotNumber] {
 			continue
@@ -313,7 +314,7 @@ func (b *bootDisplay) retryFailed(slots []totp.NVRAMSlot, failed map[int]bool) b
 		if _, ok := nvslot.IsBlobVersionError(s.Error); ok {
 			continue
 		}
-		if again := b.live(s, now); again.Error == nil {
+		if again := b.Live(s, now); again.Error == nil {
 			again.AfterSeparator = true
 			slots[i] = again
 			changed = true
@@ -355,16 +356,16 @@ func sdNotifyReady() {
 // terminal next, and no key typed there may end up here. So it never sits
 // in a read: it polls, and reads only what is already waiting.
 type enterReader struct {
-	presses chan struct{}
+	Presses chan struct{}
 	quit    chan struct{}
-	done    chan struct{}
+	Done    chan struct{}
 	once    sync.Once
 }
 
 func startEnterReader(fd int) *enterReader {
-	e := &enterReader{presses: make(chan struct{}), quit: make(chan struct{}), done: make(chan struct{})}
+	e := &enterReader{Presses: make(chan struct{}), quit: make(chan struct{}), Done: make(chan struct{})}
 	go func() {
-		defer close(e.done)
+		defer close(e.Done)
 		buf := make([]byte, 256)
 		for {
 			select {
@@ -393,7 +394,7 @@ func startEnterReader(fd int) *enterReader {
 				continue
 			}
 			select {
-			case e.presses <- struct{}{}:
+			case e.Presses <- struct{}{}:
 			case <-e.quit:
 				return
 			}
@@ -402,10 +403,10 @@ func startEnterReader(fd int) *enterReader {
 	return e
 }
 
-// stop ends the reader and returns once it can no longer touch the terminal.
-func (e *enterReader) stop() {
+// Stop ends the reader and returns once it can no longer touch the terminal.
+func (e *enterReader) Stop() {
 	e.once.Do(func() { close(e.quit) })
-	<-e.done
+	<-e.Done
 }
 
 // releaseTerminal gives up the controlling terminal that StandardInput=tty
@@ -419,11 +420,11 @@ func releaseTerminal(fd int) {
 	_ = unix.IoctlSetInt(fd, unix.TIOCNOTTY, 0)
 }
 
-// startCoordinator makes this process the gate's coordinator when the image
+// StartCoordinator makes this process the gate's coordinator when the image
 // carries a gate for an enrolled phone - the hook puts the signing public
 // key at signerPath with the gate and not otherwise: it opens the TPM for
 // it and listens on socket. Nil when there is nothing to coordinate.
-func startCoordinator(tpmPath, socket, signerPath string, debug bool) (*phonegate.GateService, func()) {
+func StartCoordinator(tpmPath, socket, signerPath string, debug bool) (*phonegate.GateService, func()) {
 	svc, server := openCoordinator(tpmPath, socket, signerPath, debug)
 	if svc == nil {
 		return nil, func() {}
@@ -452,7 +453,7 @@ func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*phonegate
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: cannot open the TPM at %s: %v\n", path, err)
 		return nil, nil
 	}
-	if s, err := ReadBootSettings(tpmDev); err == nil && s.Debug {
+	if s, err := nvslot.ReadBootSettings(tpmDev); err == nil && s.Debug {
 		debug, journal.NarrateDebug = true, true // the boot settings' debug: the narrative on the console too
 	}
 	l, err := phonegate.ListenGate(socket)
@@ -473,10 +474,10 @@ func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*phonegate
 // are shown and confirmed in an SSH session, and the console says where.
 // planned is what the boot image carries (bootplan.go): what is not in it
 // is not started, and the TPM is not touched for it.
-func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, remote sshscreen.Options, planned Planned, debug bool) {
+func Run(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, remote sshscreen.Options, planned imageplan.Planned, debug bool) {
 	svc, endCoordinator := (*phonegate.GateService)(nil), func() {}
 	if planned.Phone {
-		svc, endCoordinator = startCoordinator(tpmPath, gateSocket, phonegate.DefaultAttestSignerPath, debug)
+		svc, endCoordinator = StartCoordinator(tpmPath, gateSocket, phonegate.DefaultAttestSignerPath, debug)
 	}
 	var srv *sshscreen.Server
 	ask := diskkey.Prompter(diskkey.ConsoleAsk)
@@ -561,11 +562,11 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		phone = svc.Status
 	}
 	b := &bootDisplay{
-		phone:      phone,
-		phoneEvent: gateEventPrinter(promptMode),
-		phonePoll:  500 * time.Millisecond,
-		phoneGrace: time.Minute,
-		scan: func(now time.Time) ([]totp.NVRAMSlot, error) {
+		Phone:      phone,
+		PhoneEvent: gateEventPrinter(promptMode),
+		PhonePoll:  500 * time.Millisecond,
+		PhoneGrace: time.Minute,
+		Scan: func(now time.Time) ([]totp.NVRAMSlot, error) {
 			if !planned.Codes {
 				return nil, errCodesOut
 			}
@@ -588,7 +589,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			}
 			return slots, nil
 		},
-		live: func(s totp.NVRAMSlot, now time.Time) totp.NVRAMSlot {
+		Live: func(s totp.NVRAMSlot, now time.Time) totp.NVRAMSlot {
 			tpmDev, err := open()
 			if err != nil {
 				s.Code, s.Error = "", err
@@ -598,9 +599,9 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			s.Code, _, s.Error = totp.SlotCode(tpmDev, s.Index, now, debug)
 			return s
 		},
-		notify: func() {
+		Notify: func() {
 			endVault()   // past the hold the parts no longer open
-			enter.stop() // the terminal is the passphrase prompt's from here on
+			enter.Stop() // the terminal is the passphrase prompt's from here on
 			if srv != nil {
 				hint.stop()
 				// Enter at the console stops the SSH server; otherwise the
@@ -626,7 +627,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 				}()
 			}
 		},
-		show: func(slots []totp.NVRAMSlot, codes map[int]string, remaining time.Duration) {
+		Show: func(slots []totp.NVRAMSlot, codes map[int]string, remaining time.Duration) {
 			if unlock != nil && unlock.Prompting() {
 				return // the prompt owns the console; nothing is drawn over it
 			}
@@ -660,13 +661,13 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			}
 			fmt.Println()
 		},
-		wait: func(d time.Duration) bool {
+		Wait: func(d time.Duration) bool {
 			var confirmed chan struct{} // nil without SSH: never ready
 			if srv != nil {
 				confirmed = srv.Releases
 			}
 			select {
-			case <-enter.presses:
+			case <-enter.Presses:
 				atConsole = true
 				return true
 			case <-confirmed:
@@ -678,14 +679,14 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 				return false
 			}
 		},
-		sleep:         time.Sleep,
-		now:           time.Now,
-		hold:          hold,
-		scanRetry:     30 * time.Second,
-		quickRetryFor: time.Minute,
-		retryEvery:    2 * time.Second,
+		Sleep:         time.Sleep,
+		Now:           time.Now,
+		Hold:          hold,
+		ScanRetry:     30 * time.Second,
+		QuickRetryFor: time.Minute,
+		RetryEvery:    2 * time.Second,
 	}
-	b.run()
+	b.Run()
 	if unlock != nil {
 		// The display is done; the key provider stays until systemd stops
 		// the service at switch-root.

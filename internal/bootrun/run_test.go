@@ -1,4 +1,4 @@
-package cmd
+package bootrun
 
 import (
 	"errors"
@@ -31,21 +31,21 @@ type fakeBoot struct {
 
 func (f *fakeBoot) display(scan func(time.Time) []totp.NVRAMSlot, live func(totp.NVRAMSlot, time.Time) totp.NVRAMSlot, stop func([]totp.NVRAMSlot) bool) *bootDisplay {
 	return &bootDisplay{
-		scan: func(now time.Time) ([]totp.NVRAMSlot, error) {
+		Scan: func(now time.Time) ([]totp.NVRAMSlot, error) {
 			f.mu.Lock()
 			f.log = append(f.log, "scan")
 			f.mu.Unlock()
 			return scan(now), nil
 		},
-		live: func(s totp.NVRAMSlot, now time.Time) totp.NVRAMSlot {
+		Live: func(s totp.NVRAMSlot, now time.Time) totp.NVRAMSlot {
 			f.mu.Lock()
 			f.log = append(f.log, "live")
 			f.lives++
 			f.mu.Unlock()
 			return live(s, now)
 		},
-		notify: func() { f.mu.Lock(); f.log = append(f.log, "notify"); f.mu.Unlock() },
-		show: func(slots []totp.NVRAMSlot, codes map[int]string, remaining time.Duration) {
+		Notify: func() { f.mu.Lock(); f.log = append(f.log, "notify"); f.mu.Unlock() },
+		Show: func(slots []totp.NVRAMSlot, codes map[int]string, remaining time.Duration) {
 			f.mu.Lock()
 			f.log = append(f.log, "show")
 			f.shown = append(f.shown, append([]totp.NVRAMSlot(nil), slots...))
@@ -55,7 +55,7 @@ func (f *fakeBoot) display(scan func(time.Time) []totp.NVRAMSlot, live func(totp
 				runtime.Goexit()
 			}
 		},
-		wait: func(d time.Duration) bool {
+		Wait: func(d time.Duration) bool {
 			f.mu.Lock()
 			defer f.mu.Unlock()
 			f.log = append(f.log, "wait")
@@ -70,10 +70,10 @@ func (f *fakeBoot) display(scan func(time.Time) []totp.NVRAMSlot, live func(totp
 			f.clock = f.clock.Add(d)
 			return false
 		},
-		sleep: func(d time.Duration) { f.mu.Lock(); f.clock = f.clock.Add(d); f.mu.Unlock() },
-		now:   func() time.Time { f.mu.Lock(); defer f.mu.Unlock(); return f.clock },
+		Sleep: func(d time.Duration) { f.mu.Lock(); f.clock = f.clock.Add(d); f.mu.Unlock() },
+		Now:   func() time.Time { f.mu.Lock(); defer f.mu.Unlock(); return f.clock },
 
-		hold: 90 * time.Second, scanRetry: 30 * time.Second, quickRetryFor: time.Minute, retryEvery: 2 * time.Second,
+		Hold: 90 * time.Second, ScanRetry: 30 * time.Second, QuickRetryFor: time.Minute, RetryEvery: 2 * time.Second,
 	}
 }
 
@@ -87,7 +87,7 @@ func TestBootDisplayEnterReleasesTheBoot(t *testing.T) {
 	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC), enters: []bool{false, true}}
 	b := f.display(okSlot, nil, nil)
 	done := make(chan struct{})
-	go func() { b.run(); close(done) }()
+	go func() { b.Run(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
@@ -112,7 +112,7 @@ func TestBootDisplayReleasesAfterTheHold(t *testing.T) {
 	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)}
 	b := f.display(okSlot, nil, nil)
 	done := make(chan struct{})
-	go func() { b.run(); close(done) }()
+	go func() { b.Run(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
@@ -153,7 +153,7 @@ func TestBootDisplayServesLateSlotsAfterRelease(t *testing.T) {
 	stop := func(slots []totp.NVRAMSlot) bool { return slots[1].Error == nil }
 	f.stopped = make(chan struct{})
 	b := f.display(scan, live, stop)
-	go b.run()
+	go b.Run()
 	select {
 	case <-f.stopped:
 	case <-time.After(5 * time.Second):
@@ -187,14 +187,14 @@ func TestBootDisplayServesLateSlotsAfterRelease(t *testing.T) {
 func TestBootDisplayExitsWhenNothingIsSealed(t *testing.T) {
 	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)}
 	b := f.display(nil, nil, nil)
-	b.scan = func(time.Time) ([]totp.NVRAMSlot, error) {
+	b.Scan = func(time.Time) ([]totp.NVRAMSlot, error) {
 		f.mu.Lock()
 		f.log = append(f.log, "scan")
 		f.mu.Unlock()
 		return nil, ErrNoSlots
 	}
 	done := make(chan struct{})
-	go func() { b.run(); close(done) }()
+	go func() { b.Run(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
@@ -219,21 +219,21 @@ func TestNextTOTPBoundary(t *testing.T) {
 func (f *fakeBoot) withGate(b *bootDisplay, at func(elapsed time.Duration) (phonegate.GateStatus, bool)) (*[]phonegate.GateStatus, time.Time) {
 	start := f.clock
 	events := &[]phonegate.GateStatus{}
-	b.phone = func() (phonegate.GateStatus, bool) {
+	b.Phone = func() (phonegate.GateStatus, bool) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		return at(f.clock.Sub(start))
 	}
-	b.phoneEvent = func(_, cur phonegate.GateStatus) { *events = append(*events, cur) }
-	b.phonePoll = time.Second
-	b.phoneGrace = time.Minute
+	b.PhoneEvent = func(_, cur phonegate.GateStatus) { *events = append(*events, cur) }
+	b.PhonePoll = time.Second
+	b.PhoneGrace = time.Minute
 	return events, start
 }
 
 func runDisplay(t *testing.T, b *bootDisplay) {
 	t.Helper()
 	done := make(chan struct{})
-	go func() { b.run(); close(done) }()
+	go func() { b.Run(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
@@ -360,25 +360,25 @@ func TestEnterReaderLetsGoOfTheTerminal(t *testing.T) {
 
 	w.Write([]byte("abc")) // typing without Enter is not a confirmation
 	select {
-	case <-e.presses:
+	case <-e.Presses:
 		t.Fatal("reported Enter without one")
 	case <-time.After(300 * time.Millisecond):
 	}
 	w.Write([]byte("\n"))
 	select {
-	case <-e.presses:
+	case <-e.Presses:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Enter not reported")
 	}
 
 	stopped := make(chan struct{})
-	go func() { e.stop(); close(stopped) }()
+	go func() { e.Stop(); close(stopped) }()
 	select {
 	case <-stopped:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the reader did not stop")
 	}
-	e.stop() // twice is fine
+	e.Stop() // twice is fine
 
 	// What is typed now is still there for the next reader.
 	w.Write([]byte("my passphrase\n"))
@@ -396,11 +396,11 @@ func TestEnterReaderLetsGoOfTheTerminal(t *testing.T) {
 	w2.Close()
 	e2 := startEnterReader(int(r2.Fd()))
 	select {
-	case <-e2.done:
+	case <-e2.Done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the reader kept polling a closed input")
 	}
-	e2.stop()
+	e2.Stop()
 	r2.Close()
 }
 
@@ -441,23 +441,23 @@ func TestEnterReaderOnATerminal(t *testing.T) {
 
 	keyboard.Write([]byte("no"))
 	select {
-	case <-e.presses:
+	case <-e.Presses:
 		t.Fatal("reported Enter without one")
 	case <-time.After(400 * time.Millisecond):
 	}
 	keyboard.Write([]byte("\r")) // the Enter key
 	select {
-	case <-e.presses:
+	case <-e.Presses:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Enter on a terminal not reported")
 	}
 	keyboard.Write([]byte("\r")) // and again, as an impatient user does
 	select {
-	case <-e.presses:
+	case <-e.Presses:
 	case <-time.After(2 * time.Second):
 		t.Fatal("second Enter not reported")
 	}
-	e.stop()
+	e.Stop()
 
 	keyboard.Write([]byte("correct horse\r"))
 	time.Sleep(400 * time.Millisecond)
@@ -528,7 +528,9 @@ func TestPhoneSlotLines(t *testing.T) {
 // promptDelay at the latest when the unit never turns active.
 func TestWaitPromptTurn(t *testing.T) {
 	oldDelay, oldPoll, oldActive, oldSystemd := promptDelay, promptPoll, unitActive, underSystemd
-	defer func() { promptDelay, promptPoll, unitActive, underSystemd = oldDelay, oldPoll, oldActive, oldSystemd }()
+	defer func() {
+		promptDelay, promptPoll, unitActive, underSystemd = oldDelay, oldPoll, oldActive, oldSystemd
+	}()
 	promptDelay, promptPoll = 200*time.Millisecond, time.Millisecond
 
 	// Without systemd nothing prints after READY: no unit is asked for.

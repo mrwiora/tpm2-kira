@@ -8,6 +8,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/cmd"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
@@ -389,7 +390,7 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
 (Arch), /run/initramfs/tpm2-kira.log (Debian).
 
   --plan DIR       Start only what the boot image names in DIR (the units pass
-                   ` + cmd.ImagePlanDir + `, 'tpm2-kira help initramfs'): without
+                   ` + imageplan.Dir + `, 'tpm2-kira help initramfs'): without
                    the codes in it the TPM is not asked for them, without the
                    phone no gate is coordinated, without the vault none is
                    asked. Without --plan, all it finds
@@ -472,7 +473,7 @@ the plan is shown. With it - what the initramfs hooks call - the image's
 files of the parts that are in are written into DIR (the signing public
 key, the adapter's module list and udev rule, the network's file, the
 SSH CA with its approval, the keys that may log in, the drop-ins), the parts
-are named in ` + cmd.ImagePlanDir + ` (a directory each, with a file named by
+are named in ` + imageplan.Dir + ` (a directory each, with a file named by
 the digest of its settings), and the lines the hook adds by are printed:
 say, warning, module, bt-module, bt-firmware, net-module, net-modules-all.
 A part that cannot be had stays out; nothing stops the build.

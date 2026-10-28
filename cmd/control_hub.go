@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
@@ -267,8 +268,8 @@ func (c *controller) phoneSteps() []controlStep {
 	switch {
 	case f.BTAlways:
 		bt.Done = "packed for " + f.Adapter
-		if !f.planHas(PartPhone) {
-			bt.Done = "set, but the image leaves it out: " + f.Plan.Part(PartPhone).Why
+		if !f.planHas(imageplan.PartPhone) {
+			bt.Done = "set, but the image leaves it out: " + f.Plan.Part(imageplan.PartPhone).Why
 		}
 	case f.Adapter == "":
 		bt.Blocked = "no Bluetooth adapter on this machine"
