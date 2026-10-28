@@ -12,6 +12,7 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -26,12 +27,12 @@ var ErrPhoneSlot = errors.New("the slot is attested by its phone and has no TOTP
 // separator that ran after the measure point, a GenerationMismatchError
 // when a later reseal revoked this blob's approval, ErrCodesLocked after
 // 'tpm2-kira cap'. None of these checks is the gate; the TPM is.
-func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) (string, *SealedBlob, error) {
+func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) (string, *nvslot.SealedBlob, error) {
 	sealedData, err := tpmdev.ReadFromNVRAM(tpmDev, nvramIndex)
 	if err != nil {
 		return "", nil, tpmdev.HandleNVRAMNotFoundError(err, debug)
 	}
-	sealedBlob, err := UnmarshalSealedBlob(sealedData)
+	sealedBlob, err := nvslot.UnmarshalSealedBlob(sealedData)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
@@ -39,17 +40,17 @@ func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) 
 		return "", sealedBlob, ErrPhoneSlot
 	}
 
-	gen, err := ReadGeneration(tpmDev, GenerationIndex(nvramIndex))
+	gen, err := nvslot.ReadGeneration(tpmDev, nvslot.GenerationIndex(nvramIndex))
 	switch {
-	case errors.Is(err, ErrCodesLocked):
-		return "", sealedBlob, ErrCodesLocked
+	case errors.Is(err, nvslot.ErrCodesLocked):
+		return "", sealedBlob, nvslot.ErrCodesLocked
 	case err != nil:
-		return "", sealedBlob, &GenerationMismatchError{BlobGeneration: sealedBlob.Payload.Generation, IndexMissing: true}
+		return "", sealedBlob, &nvslot.GenerationMismatchError{BlobGeneration: sealedBlob.Payload.Generation, IndexMissing: true}
 	case gen != sealedBlob.Payload.Generation:
-		return "", sealedBlob, &GenerationMismatchError{BlobGeneration: sealedBlob.Payload.Generation, IndexGeneration: gen}
+		return "", sealedBlob, &nvslot.GenerationMismatchError{BlobGeneration: sealedBlob.Payload.Generation, IndexGeneration: gen}
 	}
 
-	currentPCRValues, err := GetCurrentPCRValuesFromRegisters(tpmDev, sealedBlob, debug)
+	currentPCRValues, err := nvslot.GetCurrentPCRValuesFromRegisters(tpmDev, sealedBlob, debug)
 	if err != nil {
 		return "", sealedBlob, err
 	}
@@ -65,7 +66,7 @@ func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) 
 	return code, sealedBlob, err
 }
 
-func newPCRMismatchError(sealedBlob *SealedBlob, current []tpm2.TPM2BDigest) *measure.PCRMismatchError {
+func newPCRMismatchError(sealedBlob *nvslot.SealedBlob, current []tpm2.TPM2BDigest) *measure.PCRMismatchError {
 	expectedDigests := make([][]byte, len(sealedBlob.Payload.PCRDigests))
 	pcrSources := make([]measure.PCRSource, len(sealedBlob.Payload.PCRDigests))
 	for i, d := range sealedBlob.Payload.PCRDigests {
@@ -92,7 +93,7 @@ type LoadSealedObjectResponse struct {
 }
 
 // LoadSealedObject loads the blob's key object into the TPM
-func LoadSealedObject(tpmDev transport.TPM, primaryKey *tpmdev.PrimaryKeyResponse, sealedBlob *SealedBlob) (*LoadSealedObjectResponse, error) {
+func LoadSealedObject(tpmDev transport.TPM, primaryKey *tpmdev.PrimaryKeyResponse, sealedBlob *nvslot.SealedBlob) (*LoadSealedObjectResponse, error) {
 	loadCmd := tpm2.Load{
 		ParentHandle: tpm2.AuthHandle{
 			Handle: primaryKey.ObjectHandle,
@@ -141,7 +142,7 @@ const phoneSlotDefault = "mobile attestation (a phone is enrolled; no TOTP code)
 // ScanNVRAMSlots scans all NVRAM indices from 0x01803010 to 0x0180301F
 // and returns a list of slots containing valid TOTP secrets
 func ScanNVRAMSlots(tpmDev transport.TPM, debug bool) []NVRAMSlot {
-	return ScanNVRAMSlotsRange(tpmDev, NVRAMSlotStart, NVRAMSlotEnd, debug)
+	return ScanNVRAMSlotsRange(tpmDev, nvslot.NVRAMSlotStart, nvslot.NVRAMSlotEnd, debug)
 }
 
 // ScanNVRAMSlot scans a single NVRAM index and returns it as a slot if valid
@@ -155,7 +156,7 @@ func ScanNVRAMSlot(tpmDev transport.TPM, nvramIndex uint32, debug bool) []NVRAMS
 // are skipped without incurring the cost of a full unseal attempt.
 func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debug bool) []NVRAMSlot {
 	// Pre-filter: discover which indices actually hold data.
-	populated := FindPopulatedSlotsInRange(tpmDev, startIndex, endIndex, debug)
+	populated := nvslot.FindPopulatedSlotsInRange(tpmDev, startIndex, endIndex, debug)
 	if len(populated) == 0 {
 		return nil
 	}
@@ -163,7 +164,7 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 	var slots []NVRAMSlot
 
 	for _, i := range populated {
-		slotNumber := SlotNumber(i)
+		slotNumber := nvslot.SlotNumber(i)
 
 		if debug {
 			fmt.Printf("Scanning NVRAM slot %d (0x%08X)...\n", slotNumber, i)
@@ -176,7 +177,7 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 		if debug {
 			rawData, peekErr := tpmdev.ReadFromNVRAM(tpmDev, i)
 			if peekErr == nil {
-				peek := PeekBlobVersion(rawData)
+				peek := nvslot.PeekBlobVersion(rawData)
 				fmt.Printf("  Slot %d: NVRAM data found (%d bytes), blob version: %d\n", slotNumber, peek.DataSize, peek.Version)
 			} else if debug {
 				fmt.Printf("  Slot %d: no NVRAM data (%v)\n", slotNumber, peekErr)
@@ -223,9 +224,9 @@ func GenerateTOTPCodesForSlots(slots []NVRAMSlot) (map[int]string, error) {
 // slotErrorLine describes why a slot has no code, for the boot console.
 // It returns "" for a PCR mismatch, which is shown with its details.
 func slotErrorLine(err error) string {
-	var genErr *GenerationMismatchError
+	var genErr *nvslot.GenerationMismatchError
 	switch {
-	case errors.Is(err, ErrCodesLocked):
+	case errors.Is(err, nvslot.ErrCodesLocked):
 		return "Locked until reboot (codes are only shown before the disk is unlocked)"
 	case errors.Is(err, measure.ErrSeparatorLocked):
 		return "Locked until the next boot (the OS separator ran after the measure point)"
@@ -235,7 +236,7 @@ func slotErrorLine(err error) string {
 		}
 		return fmt.Sprintf("Approval revoked (blob generation %d, slot at %d) - slot approve", genErr.BlobGeneration, genErr.IndexGeneration)
 	}
-	if bve, ok := IsBlobVersionError(err); ok {
+	if bve, ok := nvslot.IsBlobVersionError(err); ok {
 		return fmt.Sprintf("Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira slot add", bve.FoundVersion, bve.RequiredVersion)
 	}
 	if _, ok := err.(*measure.PCRMismatchError); ok || tpmdev.IsTPMPolicyFailure(err) {
@@ -271,11 +272,11 @@ func FprintKIRASlots(w io.Writer, tpmDev transport.TPM, slots []NVRAMSlot, codes
 			// Read the sealed blob and current register values for comparison
 			sealedData, err := tpmdev.ReadFromNVRAM(tpmDev, slot.Index)
 			if err == nil {
-				sealedBlob, err := UnmarshalSealedBlob(sealedData)
+				sealedBlob, err := nvslot.UnmarshalSealedBlob(sealedData)
 				if err == nil {
 					// Read current PCR values from TPM registers only
 					// (no eventlog or UKI dependency)
-					currentPCRValues, err := GetCurrentPCRValuesFromRegisters(tpmDev, sealedBlob, false)
+					currentPCRValues, err := nvslot.GetCurrentPCRValuesFromRegisters(tpmDev, sealedBlob, false)
 					if err == nil {
 						pcrIndices := sealedBlob.GetPCRIndices()
 						expectedDigests := sealedBlob.GetPCRDigestValues()
@@ -372,7 +373,7 @@ func RevealCommand(tpmPath string, nvramIndex uint32, debug bool, plain bool) {
 		// Scan all slots in the default range when nvramIndex is 0
 		slots = ScanNVRAMSlots(tpmDev, debug)
 		if len(slots) == 0 {
-			PrintKIRAError(fmt.Errorf("no TOTP secrets found in NVRAM slots 0x%08X - 0x%08X", NVRAMSlotStart, NVRAMSlotEnd))
+			PrintKIRAError(fmt.Errorf("no TOTP secrets found in NVRAM slots 0x%08X - 0x%08X", nvslot.NVRAMSlotStart, nvslot.NVRAMSlotEnd))
 			return
 		}
 	} else {
@@ -488,12 +489,12 @@ func totpKeyTemplate(alg tpm2.TPMAlgID, authPolicy []byte) tpm2.TPMTPublic {
 // blob is not trusted for anything it could not also have done itself:
 // PolicyAuthorize only accepts the signing key whose Name the key object's
 // policy binds.
-func TOTPCode(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, t time.Time) (string, error) {
+func TOTPCode(tpmDev transport.TPM, blob *nvslot.SealedBlob, blobIndex uint32, t time.Time) (string, error) {
 	p := &blob.Payload
 	if p.TOTPAlgorithm != tpm2.TPMAlgSHA1 && p.TOTPAlgorithm != tpm2.TPMAlgSHA256 {
 		return "", fmt.Errorf("blob has unknown TOTP algorithm 0x%04x", uint16(p.TOTPAlgorithm))
 	}
-	session, done, err := approvedSession(tpmDev, blob, blobIndex)
+	session, done, err := nvslot.ApprovedSession(tpmDev, blob, blobIndex)
 	if err != nil {
 		return "", err
 	}
@@ -516,8 +517,8 @@ func TOTPCode(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, t time.T
 		HashAlg: p.TOTPAlgorithm,
 	}.Execute(tpmDev)
 	if err != nil {
-		if errors.Is(err, ErrCodesLocked) {
-			return "", ErrCodesLocked
+		if errors.Is(err, nvslot.ErrCodesLocked) {
+			return "", nvslot.ErrCodesLocked
 		}
 		return "", fmt.Errorf("failed to compute the code in the TPM: %w", err)
 	}
@@ -533,7 +534,7 @@ func CapCommand(tpmPath string) error {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
 	defer tpmDev.Close()
-	n, err := CapCodes(tpmDev)
+	n, err := nvslot.CapCodes(tpmDev)
 	if err != nil {
 		return fmt.Errorf("locked %d generation index(es), but not all: %w", n, err)
 	}

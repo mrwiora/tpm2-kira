@@ -16,6 +16,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"golang.org/x/sys/unix"
@@ -420,7 +421,7 @@ func ControlNeedsRoot() {
 // what this is. Printed once per screen, outside the form, so a redraw of
 // the form cannot double it.
 func (c *controller) header() string {
-	v := AppVersion
+	v := nvslot.AppVersion
 	if v == "" {
 		v = "unknown"
 	}
@@ -1112,7 +1113,7 @@ func (c *controller) runSeal() error {
 		return err
 	}
 	fmt.Fprint(c.out, clearScreen)
-	if err := Seal(c.o.TPMPath, sel, ResolveNVRAMIndex(0), "", "", c.o.Debug, algo, true); err != nil {
+	if err := Seal(c.o.TPMPath, sel, nvslot.ResolveNVRAMIndex(0), "", "", c.o.Debug, algo, true); err != nil {
 		return err
 	}
 	if fallback {

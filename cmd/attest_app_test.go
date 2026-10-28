@@ -41,6 +41,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/transport/frame"
 )
 
@@ -114,7 +115,7 @@ func newAppMachine(t *testing.T) *appMachine {
 	m := &appMachine{
 		t:    t,
 		proc: proc,
-		idx:  uint32(NVRAMSlotStart + 9),
+		idx:  uint32(nvslot.NVRAMSlotStart + 9),
 		snap: t.TempDir(),
 		// A fixed event log: the host's own log is neither readable nor
 		// reproducible here, and the app should transfer a real-sized one.
@@ -371,7 +372,7 @@ func (m *appMachine) serve(c net.Conn, mode string, mtu int) {
 				DeviceID: blob.DeviceID, FriendlyName: blob.FriendlyName,
 				AKPub: blob.AKPublic, AKName: blob.AKName, NoiseStatic: noise,
 				AdvKey: blob.Phone.AdvKey, Selection: sel, AppVersion: "apptest",
-				Slot: uint8(SlotNumber(NVRAMSlotStart)),
+				Slot: uint8(nvslot.SlotNumber(nvslot.NVRAMSlotStart)),
 			}, be, nil)
 			if err != nil {
 				return "error: " + err.Error()

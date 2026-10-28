@@ -24,6 +24,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 )
 
 // measurePoint is the boot-check prediction for one enrolment: the values,
@@ -36,7 +37,7 @@ type measurePoint struct {
 
 // predictMeasurePoint computes the PCR values the boot check will see for
 // the attested selection, the way the seal does for its policy.
-func predictMeasurePoint(tpmDev transport.TPM, sealed *SealedBlob, sel attest.PCRSelection, debug bool) *measurePoint {
+func predictMeasurePoint(tpmDev transport.TPM, sealed *nvslot.SealedBlob, sel attest.PCRSelection, debug bool) *measurePoint {
 	mode := measure.MeasurePointAuto
 	if sealed != nil {
 		if sealed.HasEventlogPCRs() {

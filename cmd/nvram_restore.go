@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
@@ -33,12 +34,12 @@ func NVRAMRestore(tpmPath, file string, nvramIndex uint32, pubKeyPath, privKeyPa
 			return fmt.Errorf("cannot restore: %w", err)
 		}
 	}
-	if err := ValidateBlobIndex(nvramIndex); err != nil {
+	if err := nvslot.ValidateBlobIndex(nvramIndex); err != nil {
 		return fmt.Errorf("cannot restore: %w", err)
 	}
-	blob, err := UnmarshalSealedBlob(data)
+	blob, err := nvslot.UnmarshalSealedBlob(data)
 	if err != nil {
-		if bve, ok := IsBlobVersionError(err); ok {
+		if bve, ok := nvslot.IsBlobVersionError(err); ok {
 			return fmt.Errorf("cannot restore: %s holds a version %d blob and this build writes version %d; seal again (new TOTP secret, re-enrol)",
 				file, bve.FoundVersion, bve.RequiredVersion)
 		}
@@ -65,17 +66,17 @@ func NVRAMRestore(tpmPath, file string, nvramIndex uint32, pubKeyPath, privKeyPa
 	tpmdev.Cleanup(tpmDev, debug)
 
 	if existing, err := tpmdev.ReadFromNVRAM(tpmDev, nvramIndex); err == nil {
-		if _, err := UnmarshalSealedBlob(existing); err == nil {
+		if _, err := nvslot.UnmarshalSealedBlob(existing); err == nil {
 			return fmt.Errorf("cannot restore: slot #%d (0x%08X) holds a blob already.\n"+
 				"  Restoring would replace it. If that is what you want: tpm2-kira slot delete --nvram %d, then restore again",
-				SlotNumber(nvramIndex), nvramIndex, SlotNumber(nvramIndex))
+				nvslot.SlotNumber(nvramIndex), nvramIndex, nvslot.SlotNumber(nvramIndex))
 		}
 		return fmt.Errorf("cannot restore: NVRAM index 0x%08X exists and holds something that is not a tpm2-kira blob; delete it first", nvramIndex)
 	}
 
 	specs := blob.GetPCRSpecs()
 	hashAlgo := blob.GetHashAlgo()
-	fmt.Printf("Restoring slot #%d (0x%08X) from %s\n", SlotNumber(nvramIndex), nvramIndex, file)
+	fmt.Printf("Restoring slot #%d (0x%08X) from %s\n", nvslot.SlotNumber(nvramIndex), nvramIndex, file)
 	fmt.Printf("PCR selection as sealed: %s, %s\n", measure.PCRSpecsToString(specs), hashAlgo.DisplayString())
 	pub := signer.Public()
 	fmt.Printf("Signing key: %s (%s, fingerprint: %s)\n", keys.privKeyPath, signing.PublicKeyDescription(pub), signing.PublicKeyFingerprint(pub))
@@ -89,7 +90,7 @@ func NVRAMRestore(tpmPath, file string, nvramIndex uint32, pubKeyPath, privKeyPa
 		phones = "its phone"
 	}
 	fmt.Printf("\nRestored slot #%d: the TOTP key and %s, approved for PCRs %s at generation %d\n",
-		SlotNumber(nvramIndex), phones, measure.PCRSpecsToString(specs), blob.Payload.Generation)
+		nvslot.SlotNumber(nvramIndex), phones, measure.PCRSpecsToString(specs), blob.Payload.Generation)
 	if err := os.Remove(file); err != nil {
 		fmt.Printf("The slot holds the blob again; %s could not be removed (%v) and may be deleted\n", file, err)
 	} else {

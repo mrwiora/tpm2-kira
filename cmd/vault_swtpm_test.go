@@ -25,6 +25,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
@@ -147,7 +148,7 @@ func signingKeyFiles(t *testing.T) (privPath, pubPath string) {
 // the one that says no.
 func TestVaultKeyRoundTrip(t *testing.T) {
 	sock := startSWTPM(t)
-	const slot = NVRAMSlotStart + 2
+	const slot = nvslot.NVRAMSlotStart + 2
 	privPath, pubPath := signingKeyFiles(t)
 	if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatal(err)
@@ -168,7 +169,7 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
-	if n != slot-NVRAMSlotStart || len(key) != 64 {
+	if n != slot-nvslot.NVRAMSlotStart || len(key) != 64 {
 		t.Fatalf("slot %d, key %d bytes", n, len(key))
 	}
 	if _, _, err := vaultEnrolKey(opts); err == nil || !strings.Contains(err.Error(), "already") {
@@ -248,7 +249,7 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 // again, a release without one is refused.
 func TestVaultPepper(t *testing.T) {
 	sock := startSWTPM(t)
-	const slot = NVRAMSlotStart + 3
+	const slot = nvslot.NVRAMSlotStart + 3
 	privPath, pubPath := signingKeyFiles(t)
 	if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatal(err)

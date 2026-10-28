@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 
 	"github.com/google/go-tpm/tpm2"
@@ -54,23 +55,23 @@ func newTestKeyDir(t *testing.T, name string) string {
 }
 
 // signedTestBlob returns a blob signed by key.
-func signedTestBlob(t *testing.T, key *ecdsa.PrivateKey) ([]byte, *SealedBlob) {
+func signedTestBlob(t *testing.T, key *ecdsa.PrivateKey) ([]byte, *nvslot.SealedBlob) {
 	t.Helper()
-	sb := &SealedBlob{Version: CurrentBlobVersion, Payload: SealedBlobPayload{
+	sb := &nvslot.SealedBlob{Version: nvslot.CurrentBlobVersion, Payload: nvslot.SealedBlobPayload{
 		Public: []byte{1}, Private: []byte{2},
 		TOTPAlgorithm: tpm2.TPMAlgSHA1,
-		PCRDigests:    []PCRDigestPair{{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}}},
+		PCRDigests:    []nvslot.PCRDigestPair{{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}}},
 		PolicyRef:     make([]byte, 32),
 	}}
 	unsigned, err := sb.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := SignBlobPayload(unsigned, key)
+	data, err := nvslot.SignBlobPayload(unsigned, key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := UnmarshalSealedBlob(data)
+	parsed, err := nvslot.UnmarshalSealedBlob(data)
 	if err != nil {
 		t.Fatal(err)
 	}

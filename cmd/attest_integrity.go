@@ -37,6 +37,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
@@ -48,11 +49,11 @@ const DefaultAttestSignerPath = "/etc/tpm2-kira/attest-signer.pem"
 // NV contents), which covers the phone enrolment in it, against pubKey.
 // The key must come from the machine's own key files, never from the blob.
 func VerifyAttestBlobSignature(signed []byte, pubKey crypto.PublicKey) error {
-	sb, err := UnmarshalSealedBlob(signed)
+	sb, err := nvslot.UnmarshalSealedBlob(signed)
 	if err != nil {
 		return err
 	}
-	return VerifyBlobSignature(signed, sb, pubKey)
+	return nvslot.VerifyBlobSignature(signed, sb, pubKey)
 }
 
 // attestPublicKey loads this machine's signing public key: an explicit
@@ -74,7 +75,7 @@ func checkAttestRecord(tpmDev transport.TPM, idx uint32, raw []byte, pubKey cryp
 	if err := VerifyAttestBlobSignature(raw, pubKey); err != nil {
 		return &recordError{foreign: true, detail: err.Error()}
 	}
-	sb, err := UnmarshalSealedBlob(raw)
+	sb, err := nvslot.UnmarshalSealedBlob(raw)
 	if err != nil {
 		return &recordError{foreign: true, detail: err.Error()}
 	}
@@ -82,7 +83,7 @@ func checkAttestRecord(tpmDev transport.TPM, idx uint32, raw []byte, pubKey cryp
 	if b == nil || !b.Phone.Enabled() {
 		return &recordError{detail: "the slot's blob carries no phone enrolment"}
 	}
-	counter, err := readAttestCounter(tpmDev, AttestCounterIndex(idx))
+	counter, err := nvslot.ReadAttestCounter(tpmDev, nvslot.AttestCounterIndex(idx))
 	if err != nil {
 		return &recordError{detail: err.Error()}
 	}
@@ -122,7 +123,7 @@ func signerForImage(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer, d
 		return nil, ExitInternal
 	}
 	for _, idx := range found {
-		slot := attestSlot(idx)
+		slot := nvslot.AttestSlot(idx)
 		raw, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
 		if err != nil {
 			fmt.Fprintf(errOut, "tpm2-kira: slot %d: cannot read the attestation record: %v\n", slot, err)
@@ -162,7 +163,7 @@ func AttestEKCert(tpmPath string, debug bool) error {
 	tpmdev.FlushHandle(tpmDev, ek.handle)
 	cert := readEKCert(tpmDev, alg)
 	chain := readEKCertChain(tpmDev, cert)
-	fmt.Printf("EK offered at enrolment: %s\n", ekAlgName(alg))
+	fmt.Printf("EK offered at enrolment: %s\n", nvslot.EKAlgName(alg))
 	fmt.Printf("EK certificate:          %s\n", presentBytes(cert))
 	// The chain as the phone receives it: the TPM's intermediates (NV
 	// 0x01C00100) and what was fetched from caIssuers URLs, each with

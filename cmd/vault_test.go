@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/attest/attesttest"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
 
@@ -46,17 +47,17 @@ func TestVaultMethodInTheBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &Attestation{
+	a := &nvslot.Attestation{
 		DeviceID: bytes.Repeat([]byte{7}, 16), FriendlyName: "db-03", AKPublic: soft.AKPub, AKPrivate: []byte{1},
 		PCRAlg: 0x000b, PCRSelection: []uint8{7, 11},
-		Vault: VaultAttestation{URL: "https://vault:8443", Pin: "sha256:" + strings.Repeat("ab", 32), Label: "luks",
-			Local: WrappedFactor{Credential: []byte{1, 2, 3}, EncryptedSecret: []byte{4, 5}}},
+		Vault: nvslot.VaultAttestation{URL: "https://vault:8443", Pin: "sha256:" + strings.Repeat("ab", 32), Label: "luks",
+			Local: nvslot.WrappedFactor{Credential: []byte{1, 2, 3}, EncryptedSecret: []byte{4, 5}}},
 	}
-	raw, err := a.marshal()
+	raw, err := a.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := unmarshalAttestation(raw)
+	b, err := nvslot.UnmarshalAttestation(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +66,7 @@ func TestVaultMethodInTheBlob(t *testing.T) {
 		!bytes.Equal(b.Vault.Local.EncryptedSecret, a.Vault.Local.EncryptedSecret) {
 		t.Fatalf("read back %+v", b.Vault)
 	}
-	js, _ := json.Marshal(b.json())
+	js, _ := json.Marshal(b.Json())
 	if !strings.Contains(string(js), `"vault":{"url":"https://vault:8443"`) || !strings.Contains(string(js), `"pepper":false`) || strings.Contains(string(js), "credential") {
 		t.Fatalf("json %s", js)
 	}
@@ -73,13 +74,13 @@ func TestVaultMethodInTheBlob(t *testing.T) {
 	// With a pepper the check comes along; a check of another size does
 	// not parse.
 	a.Vault.PepperCheck = vaultPepperCheck([]byte("key"))
-	raw, _ = a.marshal()
-	if b, err = unmarshalAttestation(raw); err != nil || !bytes.Equal(b.Vault.PepperCheck, a.Vault.PepperCheck) {
+	raw, _ = a.Marshal()
+	if b, err = nvslot.UnmarshalAttestation(raw); err != nil || !bytes.Equal(b.Vault.PepperCheck, a.Vault.PepperCheck) {
 		t.Fatalf("pepper check: %v", err)
 	}
 	a.Vault.PepperCheck = []byte{1, 2, 3}
-	raw, _ = a.marshal()
-	if _, err := unmarshalAttestation(raw); err == nil {
+	raw, _ = a.Marshal()
+	if _, err := nvslot.UnmarshalAttestation(raw); err == nil {
 		t.Fatal("a 3-byte pepper check parsed")
 	}
 }

@@ -1,4 +1,4 @@
-package cmd
+package nvslot
 
 import (
 	"fmt"

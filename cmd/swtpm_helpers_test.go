@@ -26,6 +26,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
@@ -103,7 +104,7 @@ func startSWTPM(t *testing.T) string {
 type swtpmSetup struct {
 	sock string
 	tpm  transport.TPMCloser
-	blob *Attestation
+	blob *nvslot.Attestation
 	be   *tpmBackend
 }
 
@@ -166,7 +167,7 @@ func newSWTPMSetupAt(t *testing.T, sock, name string) *swtpmSetup {
 	}
 	noise, _ := attest.GenerateNoiseKeypair(nil)
 	sel, _ := attest.NewPCRSelection(attest.AlgSHA256, []int{0, 2, 4, 7, 8, 9, 10, 11, 14})
-	s.blob = &Attestation{
+	s.blob = &nvslot.Attestation{
 		DeviceID:     randBytes(16),
 		FriendlyName: name,
 		AKPublic:     pub,
@@ -174,9 +175,9 @@ func newSWTPMSetupAt(t *testing.T, sock, name string) *swtpmSetup {
 		AKName:       akName,
 		PCRAlg:       sel.Alg,
 		PCRSelection: sel.Indices,
-		Phone:        PhoneAttestation{NoisePrivate: noise.Private, AdvKey: randBytes(32)},
+		Phone:        nvslot.PhoneAttestation{NoisePrivate: noise.Private, AdvKey: randBytes(32)},
 	}
-	s.be = &tpmBackend{tpm: tpmDev, blob: s.blob, sealIndex: NVRAMSlotStart}
+	s.be = &tpmBackend{tpm: tpmDev, blob: s.blob, sealIndex: nvslot.NVRAMSlotStart}
 	return s
 }
 

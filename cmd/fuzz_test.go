@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 
 	"github.com/google/go-attestation/attest"
@@ -19,10 +20,10 @@ import (
 //	go test ./cmd -run '^$' -fuzz FuzzUnmarshalSealedBlob -fuzztime 30s
 
 func FuzzUnmarshalSealedBlob(f *testing.F) {
-	sb := &SealedBlob{Version: CurrentBlobVersion, Payload: SealedBlobPayload{
+	sb := &nvslot.SealedBlob{Version: nvslot.CurrentBlobVersion, Payload: nvslot.SealedBlobPayload{
 		Public: []byte{1, 2}, Private: []byte{3},
 		TOTPAlgorithm: tpm2.TPMAlgSHA1,
-		PCRDigests: []PCRDigestPair{
+		PCRDigests: []nvslot.PCRDigestPair{
 			{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/x.efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 		},
@@ -32,8 +33,8 @@ func FuzzUnmarshalSealedBlob(f *testing.F) {
 	}
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, data []byte) {
-		PeekBlobVersion(data)
-		b, err := UnmarshalSealedBlob(data)
+		nvslot.PeekBlobVersion(data)
+		b, err := nvslot.UnmarshalSealedBlob(data)
 		if err != nil {
 			return
 		}

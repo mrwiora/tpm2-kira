@@ -45,6 +45,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"github.com/google/go-tpm/tpm2/transport"
@@ -302,7 +303,7 @@ func (b *bootDisplay) retryFailed(slots []NVRAMSlot, failed map[int]bool) bool {
 		if s.Error == nil || !failed[s.SlotNumber] {
 			continue
 		}
-		if _, ok := IsBlobVersionError(s.Error); ok {
+		if _, ok := nvslot.IsBlobVersionError(s.Error); ok {
 			continue
 		}
 		if again := b.live(s, now); again.Error == nil {
@@ -574,7 +575,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 			}
 			if len(slots) == 0 {
 				if nvramIndex == 0 {
-					return nil, fmt.Errorf("%w in NVRAM slots 0x%08X - 0x%08X (run 'tpm2-kira slot add')", ErrNoSlots, NVRAMSlotStart, NVRAMSlotEnd)
+					return nil, fmt.Errorf("%w in NVRAM slots 0x%08X - 0x%08X (run 'tpm2-kira slot add')", ErrNoSlots, nvslot.NVRAMSlotStart, nvslot.NVRAMSlotEnd)
 				}
 				return nil, fmt.Errorf("%w at NVRAM index 0x%08X (run 'tpm2-kira slot add')", ErrNoSlots, nvramIndex)
 			}

@@ -1,4 +1,4 @@
-package cmd
+package nvslot
 
 import (
 	"bytes"
@@ -69,7 +69,7 @@ func (e *GenerationMismatchError) Error() string {
 	return fmt.Sprintf("the approval in the blob is for generation %d, but the slot is at generation %d: it was revoked by a later approval", e.BlobGeneration, e.IndexGeneration)
 }
 
-func totpAlgorithmName(alg tpm2.TPMAlgID) string {
+func TOTPAlgorithmName(alg tpm2.TPMAlgID) string {
 	switch alg {
 	case tpm2.TPMAlgSHA1:
 		return "SHA1"
@@ -128,7 +128,7 @@ func generationIndexPublic(index uint32, writePolicy tpm2.TPM2BDigest) tpm2.TPMS
 // generationIndexName returns the Name the index has while it is written and
 // not read-locked: the Name PolicyNV checks in the initrd. Read-locking sets
 // TPMA_NV_READLOCKED, which changes the current Name, so it is cleared here.
-func generationIndexName(tpmDev transport.TPM, index uint32) ([]byte, error) {
+func GenerationIndexName(tpmDev transport.TPM, index uint32) ([]byte, error) {
 	rsp, err := tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(index)}.Execute(tpmDev)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read generation index 0x%08X: %w", index, err)
@@ -164,7 +164,7 @@ func ReadGeneration(tpmDev transport.TPM, index uint32) (uint64, error) {
 // writeGeneration sets the slot's generation index to gen, defining it first
 // when it is missing or was defined differently, and returns its Name for
 // PolicyNV. The write is authorized by the signing key, like the blob's.
-func writeGeneration(tpmDev transport.TPM, index uint32, gen uint64, pubKey crypto.PublicKey, signer crypto.Signer) ([]byte, error) {
+func WriteGeneration(tpmDev transport.TPM, index uint32, gen uint64, pubKey crypto.PublicKey, signer crypto.Signer) ([]byte, error) {
 	loadRsp, err := signing.LoadExternalPublicKey(tpmDev, pubKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load signing key for the generation index: %w", err)
@@ -201,7 +201,7 @@ func writeGeneration(tpmDev transport.TPM, index uint32, gen uint64, pubKey cryp
 	if err := policySignedNVWrite(tpmDev, nvIndex, 0, generationOperand(gen), loadRsp.ObjectHandle, loadRsp.Name, signer); err != nil {
 		return nil, fmt.Errorf("failed to write generation index 0x%08X: %w", index, err)
 	}
-	return generationIndexName(tpmDev, index)
+	return GenerationIndexName(tpmDev, index)
 }
 
 // sameGenerationIndex reports whether an existing index was defined as want,
@@ -264,7 +264,7 @@ func CapCodes(tpmDev transport.TPM) (int, error) {
 
 // newPolicyRef returns a random policyRef for a new key object, so that its
 // approvals fit no other object, even one made with the same signing key.
-func newPolicyRef() ([]byte, error) {
+func NewPolicyRef() ([]byte, error) {
 	ref := make([]byte, sha256.Size)
 	if _, err := rand.Read(ref); err != nil {
 		return nil, fmt.Errorf("failed to generate policy reference: %w", err)
@@ -274,7 +274,7 @@ func newPolicyRef() ([]byte, error) {
 
 // signApproval signs approvedPolicy for policyRef and returns the
 // TPMT_SIGNATURE that VerifySignature takes.
-func signApproval(signer crypto.Signer, approvedPolicy, policyRef []byte) ([]byte, error) {
+func SignApproval(signer crypto.Signer, approvedPolicy, policyRef []byte) ([]byte, error) {
 	sig, err := signing.SignForTPM(signer, approvalDigest(approvedPolicy, policyRef))
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign the approved policy: %w", err)
@@ -289,14 +289,14 @@ func signApproval(signer crypto.Signer, approvedPolicy, policyRef []byte) ([]byt
 // authorization for everything bound to the slot (the TOTP key, the boot
 // key). The session runs its policy when a command uses it. The caller calls
 // done once that command has been executed.
-func approvedSession(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32) (tpm2.Session, func(), error) {
-	return approvedSessionThen(tpmDev, blob, blobIndex, nil)
+func ApprovedSession(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32) (tpm2.Session, func(), error) {
+	return ApprovedSessionThen(tpmDev, blob, blobIndex, nil)
 }
 
 // approvedSessionThen is approvedSession with one more policy command run
 // after PolicyAuthorize, for an object whose policy extends the slot's
 // (the release key: PolicyCommandCode, attest.ReleaseKeyPolicy).
-func approvedSessionThen(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, then func(transport.TPM, tpm2.TPMISHPolicy) error) (tpm2.Session, func(), error) {
+func ApprovedSessionThen(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, then func(transport.TPM, tpm2.TPMISHPolicy) error) (tpm2.Session, func(), error) {
 	p := &blob.Payload
 	signingPublic, err := tpm2.Unmarshal[tpm2.TPMTPublic](p.SigningPublic)
 	if err != nil {

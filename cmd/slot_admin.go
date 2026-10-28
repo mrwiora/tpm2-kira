@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -113,7 +114,7 @@ func NVRAMList(tpmPath string, nvramIndex uint32, debug bool) error {
 // NVRAMDelete deletes the specified NVRAM index
 func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 	// Validate index is within the safe application range
-	if err := ValidateNVRAMIndex(nvramIndex); err != nil {
+	if err := nvslot.ValidateNVRAMIndex(nvramIndex); err != nil {
 		return fmt.Errorf("invalid NVRAM index: %w", err)
 	}
 
@@ -162,8 +163,8 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 	// A slot is deleted whole: its record counter goes with it. (Without its counter no blob of
 	// the slot is accepted by the gate again, and a new counter starts
 	// above every value this one had.)
-	if nvramIndex >= NVRAMSlotStart && nvramIndex <= NVRAMSlotEnd {
-		if counter := AttestCounterIndex(nvramIndex); tpmdev.NVRAMIndexExists(tpmDev, counter) {
+	if nvramIndex >= nvslot.NVRAMSlotStart && nvramIndex <= nvslot.NVRAMSlotEnd {
+		if counter := nvslot.AttestCounterIndex(nvramIndex); tpmdev.NVRAMIndexExists(tpmDev, counter) {
 			if err := tpmdev.UndefineIndex(tpmDev, counter); err != nil {
 				return fmt.Errorf("deleted the slot, but not its record counter 0x%08X: %w", counter, err)
 			}
@@ -171,8 +172,8 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 	}
 
 	// A slot's generation index goes with it.
-	if ValidateBlobIndex(nvramIndex) == nil {
-		genIndex := tpm2.TPMHandle(GenerationIndex(nvramIndex))
+	if nvslot.ValidateBlobIndex(nvramIndex) == nil {
+		genIndex := tpm2.TPMHandle(nvslot.GenerationIndex(nvramIndex))
 		if genPub, err := (tpm2.NVReadPublic{NVIndex: genIndex}).Execute(tpmDev); err == nil {
 			if _, err := (tpm2.NVUndefineSpace{
 				AuthHandle: tpm2.TPMRHOwner,
@@ -192,12 +193,12 @@ func kiraIndexRole(index uint32) string {
 	switch {
 	case index == BootSettingsIndex:
 		return "the boot settings (debug at boot)"
-	case index >= NVRAMSlotStart && index <= NVRAMSlotEnd:
-		return fmt.Sprintf("slot #%d: its TOTP key and, if set up, its attestation part", SlotNumber(index))
-	case index >= GenerationIndex(NVRAMSlotStart) && index <= GenerationIndex(NVRAMSlotEnd):
-		return fmt.Sprintf("generation index of slot #%d", SlotNumber(index-GenerationIndexOffset))
-	case index >= AttestCounterIndex(NVRAMSlotStart) && index <= AttestCounterIndex(NVRAMSlotEnd):
-		return fmt.Sprintf("record counter of slot #%d's attestation part", index-attestCounterStart)
+	case index >= nvslot.NVRAMSlotStart && index <= nvslot.NVRAMSlotEnd:
+		return fmt.Sprintf("slot #%d: its TOTP key and, if set up, its attestation part", nvslot.SlotNumber(index))
+	case index >= nvslot.GenerationIndex(nvslot.NVRAMSlotStart) && index <= nvslot.GenerationIndex(nvslot.NVRAMSlotEnd):
+		return fmt.Sprintf("generation index of slot #%d", nvslot.SlotNumber(index-nvslot.GenerationIndexOffset))
+	case index >= nvslot.AttestCounterIndex(nvslot.NVRAMSlotStart) && index <= nvslot.AttestCounterIndex(nvslot.NVRAMSlotEnd):
+		return fmt.Sprintf("record counter of slot #%d's attestation part", index-nvslot.AttestCounterStart)
 	}
 	return ""
 }
@@ -210,11 +211,11 @@ func kiraLeftovers(tpmDev transport.TPM, debug bool) []uint32 {
 	if tpmdev.NVRAMIndexExists(tpmDev, BootSettingsIndex) {
 		out = append(out, BootSettingsIndex)
 	}
-	for idx := uint32(NVRAMSlotStart); idx <= NVRAMSlotEnd; idx++ {
+	for idx := uint32(nvslot.NVRAMSlotStart); idx <= nvslot.NVRAMSlotEnd; idx++ {
 		if tpmdev.NVRAMIndexExists(tpmDev, idx) {
 			continue
 		}
-		for _, companion := range []uint32{GenerationIndex(idx), AttestCounterIndex(idx)} {
+		for _, companion := range []uint32{nvslot.GenerationIndex(idx), nvslot.AttestCounterIndex(idx)} {
 			if tpmdev.NVRAMIndexExists(tpmDev, companion) {
 				out = append(out, companion)
 			}
@@ -243,7 +244,7 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
-	slots := FindPopulatedSlots(tpmDev, debug)
+	slots := nvslot.FindPopulatedSlots(tpmDev, debug)
 	enrolled := 0
 	for _, idx := range slots {
 		if _, err := loadAttestBlob(tpmDev, idx); err == nil {
@@ -256,13 +257,13 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 	total := len(slots) + len(leftovers)
 	if total == 0 {
 		return fmt.Errorf("nothing of tpm2-kira found in the TPM: no sealed secrets in NVRAM slots 0x%08X – 0x%08X and no leftover indices",
-			NVRAMSlotStart, NVRAMSlotEnd)
+			nvslot.NVRAMSlotStart, nvslot.NVRAMSlotEnd)
 	}
 
 	if len(slots) > 0 {
 		fmt.Printf("Found %d sealed slot(s) to delete:", len(slots))
 		for _, slotIdx := range slots {
-			fmt.Printf(" #%d", SlotNumber(slotIdx))
+			fmt.Printf(" #%d", nvslot.SlotNumber(slotIdx))
 		}
 		if enrolled > 0 {
 			fmt.Printf(" (%d with phones enrolled)", enrolled)
@@ -282,7 +283,7 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 
 	failed := 0
 	for _, slotIdx := range slots {
-		fmt.Printf("Deleting slot #%d (0x%08X)... ", SlotNumber(slotIdx), slotIdx)
+		fmt.Printf("Deleting slot #%d (0x%08X)... ", nvslot.SlotNumber(slotIdx), slotIdx)
 		if err := NVRAMDelete(tpmPath, slotIdx, debug); err != nil {
 			fmt.Printf("FAILED: %v\n", err)
 			failed++
@@ -405,7 +406,7 @@ func NVRAMStatus(tpmPath string, nvramIndex uint32, debug bool) error {
 		case readErr != nil:
 			fmt.Printf("Contents: unreadable (%v)\n", readErr)
 		default:
-			blob, unmarshalErr := UnmarshalSealedBlob(data)
+			blob, unmarshalErr := nvslot.UnmarshalSealedBlob(data)
 			if unmarshalErr == nil {
 				fmt.Printf("Contains Sealed Data:\n")
 				fmt.Printf("  PCR Indices: %v\n", blob.GetPCRIndices())
@@ -419,9 +420,9 @@ func NVRAMStatus(tpmPath string, nvramIndex uint32, debug bool) error {
 			}
 			fmt.Printf("Data Format: Unknown (not a sealed blob)\n")
 			if debug {
-				peek := PeekBlobVersion(data)
+				peek := nvslot.PeekBlobVersion(data)
 				fmt.Printf("  Raw size: %d bytes\n", peek.DataSize)
-				fmt.Printf("  Version field: %d (supported: %d)\n", peek.Version, CurrentBlobVersion)
+				fmt.Printf("  Version field: %d (supported: %d)\n", peek.Version, nvslot.CurrentBlobVersion)
 				fmt.Printf("  Parse error: %v\n", unmarshalErr)
 				fmt.Printf("  First bytes: %x\n", data[:min(32, len(data))])
 			}

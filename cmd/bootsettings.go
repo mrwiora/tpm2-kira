@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"github.com/google/go-tpm/tpm2/transport"
@@ -79,7 +80,7 @@ func WriteBootSettings(tpmDev transport.TPM, s BootSettings, signer crypto.Signe
 		}
 		return tpmdev.UndefineIndex(tpmDev, BootSettingsIndex)
 	}
-	return WriteToNVRAM(tpmDev, BootSettingsIndex, s.marshal(), signer.Public(), signer)
+	return nvslot.WriteToNVRAM(tpmDev, BootSettingsIndex, s.marshal(), signer.Public(), signer)
 }
 
 // BootDebug reports the debug switch, read through the TPM at tpmPath (the

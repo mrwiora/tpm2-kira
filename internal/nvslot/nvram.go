@@ -1,4 +1,4 @@
-package cmd
+package nvslot
 
 import (
 	"bytes"
@@ -43,7 +43,7 @@ func ValidateBlobIndex(index uint32) error {
 	}
 	if g := GenerationIndex(index); g >= AttestCounterIndex(NVRAMSlotStart) && g <= AttestCounterIndex(NVRAMSlotEnd) {
 		return fmt.Errorf("NVRAM index 0x%08X cannot hold a blob: its generation index 0x%08X is the record counter of slot %d",
-			index, g, g-attestCounterStart)
+			index, g, g-AttestCounterStart)
 	}
 	if index >= GenerationIndex(AppNVRAMStart) {
 		return fmt.Errorf("NVRAM index 0x%08X is reserved for generation indices; blobs go at 0x%08X-0x%08X",
@@ -101,7 +101,7 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 	}
 	// The TPM's own limit decides, for the blob as it is: what fits
 	// depends on the signing key, the phones and the PCRs together.
-	if limit := nvIndexLimit(tpmDev); limit > 0 && len(data) > limit {
+	if limit := NvIndexLimit(tpmDev); limit > 0 && len(data) > limit {
 		return &BlobTooLargeError{Index: index, Size: len(data), Limit: limit}
 	}
 
@@ -297,13 +297,13 @@ func policySignedNVWrite(tpmDev transport.TPM, nvIndex tpm2.TPMHandle, offset ui
 // never present such an error as harmless.
 var ErrNVIndexReplaced = errors.New("NVRAM index was replaced")
 
-type nvReplacedError struct{ err error }
+type NvReplacedError struct{ Err error }
 
-func (e *nvReplacedError) Error() string   { return e.err.Error() }
-func (e *nvReplacedError) Unwrap() []error { return []error{e.err, ErrNVIndexReplaced} }
+func (e *NvReplacedError) Error() string   { return e.Err.Error() }
+func (e *NvReplacedError) Unwrap() []error { return []error{e.Err, ErrNVIndexReplaced} }
 
 func stashUnwrittenBlob(index uint32, data []byte, cause error) error {
-	return &nvReplacedError{err: stashUnwrittenBlobFile(index, data, cause)}
+	return &NvReplacedError{Err: stashUnwrittenBlobFile(index, data, cause)}
 }
 
 func stashUnwrittenBlobFile(index uint32, data []byte, cause error) error {
@@ -321,7 +321,7 @@ func stashUnwrittenBlobFile(index uint32, data []byte, cause error) error {
 
 // nvIndexLimit is the largest NV index this TPM stores, or 0 if it does
 // not say.
-func nvIndexLimit(tpmDev transport.TPM) int {
+func NvIndexLimit(tpmDev transport.TPM) int {
 	rsp, err := tpm2.GetCapability{
 		Capability:    tpm2.TPMCapTPMProperties,
 		Property:      uint32(tpm2.TPMPTNVIndexMax),

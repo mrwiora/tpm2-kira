@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 
 	"golang.org/x/sys/unix"
 )
@@ -75,7 +76,7 @@ func (f *fakeBoot) display(scan func(time.Time) []NVRAMSlot, live func(NVRAMSlot
 }
 
 func okSlot(now time.Time) []NVRAMSlot {
-	return []NVRAMSlot{{SlotNumber: 0, Index: NVRAMSlotStart, Available: true, Code: now.Format("150405")}}
+	return []NVRAMSlot{{SlotNumber: 0, Index: nvslot.NVRAMSlotStart, Available: true, Code: now.Format("150405")}}
 }
 
 // Enter releases the boot: READY after the code was shown, then the display
@@ -129,8 +130,8 @@ func TestBootDisplayServesLateSlotsAfterRelease(t *testing.T) {
 	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC), enters: []bool{true}}
 	scan := func(now time.Time) []NVRAMSlot {
 		return []NVRAMSlot{
-			{SlotNumber: 0, Index: NVRAMSlotStart, Available: true, Code: "111111"},
-			{SlotNumber: 1, Index: NVRAMSlotStart + 1, Available: true, Error: errors.New("PCR mismatch")},
+			{SlotNumber: 0, Index: nvslot.NVRAMSlotStart, Available: true, Code: "111111"},
+			{SlotNumber: 1, Index: nvslot.NVRAMSlotStart + 1, Available: true, Error: errors.New("PCR mismatch")},
 		}
 	}
 	live := func(s NVRAMSlot, now time.Time) NVRAMSlot {

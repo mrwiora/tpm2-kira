@@ -34,6 +34,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 )
 
 // gateIdentity is what the radio worker needs to advertise and to run the
@@ -85,7 +86,7 @@ type gateService struct {
 
 	tpm            transport.TPM
 	idx            uint32
-	blob           *Attestation
+	blob           *nvslot.Attestation
 	be             *tpmBackend
 	recordVerified bool
 
@@ -140,7 +141,7 @@ func (s *gateService) setup(sealIndex uint32, signerPath string, debug bool) (in
 	var idx uint32
 	var err error
 	if sealIndex != 0 {
-		if idx, err = AttestIndexForSlot(sealIndex); err != nil {
+		if idx, err = nvslot.AttestIndexForSlot(sealIndex); err != nil {
 			return ExitUsage, err
 		}
 	} else {
@@ -152,7 +153,7 @@ func (s *gateService) setup(sealIndex uint32, signerPath string, debug bool) (in
 	}
 	s.mu.Lock()
 	s.idx = idx
-	s.status.Slot = int(attestSlot(idx))
+	s.status.Slot = int(nvslot.AttestSlot(idx))
 	s.mu.Unlock()
 
 	verified, code := gateRecordCheck(s.tpm, idx, signerPath) // prints its own failure
@@ -164,7 +165,7 @@ func (s *gateService) setup(sealIndex uint32, signerPath string, debug bool) (in
 		return ExitInternal, fmt.Errorf("cannot read the attestation blob at 0x%08X: %w", idx, err)
 	}
 	if len(blob.Phone.Verifiers) == 0 {
-		return ExitUsage, fmt.Errorf("no phone is enrolled for slot %d", attestSlot(idx))
+		return ExitUsage, fmt.Errorf("no phone is enrolled for slot %d", nvslot.AttestSlot(idx))
 	}
 	if _, err := attest.NoiseKeypairFromPrivate(blob.Phone.NoisePrivate); err != nil {
 		return ExitInternal, err
@@ -185,7 +186,7 @@ func (s *gateService) Identity() (*gateIdentity, int, error) {
 		return nil, s.code, s.reason
 	}
 	id := &gateIdentity{
-		Slot:           int(attestSlot(s.idx)),
+		Slot:           int(nvslot.AttestSlot(s.idx)),
 		FriendlyName:   s.blob.FriendlyName,
 		DeviceID:       s.blob.DeviceID,
 		AKName:         s.blob.AKName,
@@ -333,7 +334,7 @@ func (s *gateService) TakeRelease(r *attest.Release) (uint8, string) {
 		s.mu.Unlock()
 	}()
 	s.tpmMu.Lock()
-	f, err := unwrapFactor(s.tpm, s.be.sealed, s.be.sealIndex, s.blob, &WrappedFactor{Credential: r.CredentialBlob, EncryptedSecret: r.EncryptedSecret})
+	f, err := unwrapFactor(s.tpm, s.be.sealed, s.be.sealIndex, s.blob, &nvslot.WrappedFactor{Credential: r.CredentialBlob, EncryptedSecret: r.EncryptedSecret})
 	s.tpmMu.Unlock()
 	if err != nil {
 		if errors.Is(err, errNoReleaseKey) {

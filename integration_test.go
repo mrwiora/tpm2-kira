@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/google/go-tpm/tpm2/transport"
-	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
@@ -1572,7 +1572,7 @@ func TestResealRevokesOldBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = cmd.WriteToNVRAM(tpm, index, oldBlob, signer.Public(), signer)
+	err = nvslot.WriteToNVRAM(tpm, index, oldBlob, signer.Public(), signer)
 	tpm.Close()
 	if err != nil {
 		t.Fatalf("restoring the old blob: %v", err)

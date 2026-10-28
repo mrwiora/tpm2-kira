@@ -1,4 +1,4 @@
-package cmd
+package nvslot
 
 import (
 	"crypto"
@@ -434,7 +434,7 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 	if p.Attestation == nil {
 		buf = append(buf, 0)
 	} else {
-		att, err := p.Attestation.marshal()
+		att, err := p.Attestation.Marshal()
 		if err != nil {
 			return nil, err
 		}
@@ -622,7 +622,7 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 		if n <= 0 || n > MaxAttestationLen || offset+n != len(data) {
 			return nil, fmt.Errorf("attestation part of %d bytes does not end the payload", n)
 		}
-		att, err := unmarshalAttestation(data[offset : offset+n])
+		att, err := UnmarshalAttestation(data[offset : offset+n])
 		if err != nil {
 			return nil, err
 		}
@@ -874,7 +874,7 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 		Private:           hex.EncodeToString(sb.Payload.Private),
 		PrivateSize:       len(sb.Payload.Private),
 		PCRDigests:        pcrDigests,
-		TOTPAlgorithm:     totpAlgorithmName(sb.Payload.TOTPAlgorithm),
+		TOTPAlgorithm:     TOTPAlgorithmName(sb.Payload.TOTPAlgorithm),
 		Generation:        sb.Payload.Generation,
 		PolicyRef:         hex.EncodeToString(sb.Payload.PolicyRef),
 		SigningPublic:     hex.EncodeToString(sb.Payload.SigningPublic),
@@ -882,7 +882,7 @@ func (sb *SealedBlob) MarshalJSON() ([]byte, error) {
 		MeasurePoint:      sb.MeasurePointExtends(),
 		BlobSignature:     hex.EncodeToString(sb.BlobSignature),
 		BlobSignatureSize: len(sb.BlobSignature),
-		Attestation:       sb.Payload.Attestation.json(),
+		Attestation:       sb.Payload.Attestation.Json(),
 	}
 
 	return json.Marshal(jsonBlob)

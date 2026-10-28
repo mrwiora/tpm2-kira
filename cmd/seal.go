@@ -12,6 +12,7 @@ import (
 	"os"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
@@ -92,12 +93,12 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	fmt.Println()
 
 	// The fallback slot is sealed to 0 and 7 alone by design (default_pcrs.go).
-	if !(pcrsStr == FallbackPCRSelection && nvramIndex == ResolveNVRAMIndex(FallbackSlot)) {
+	if !(pcrsStr == FallbackPCRSelection && nvramIndex == nvslot.ResolveNVRAMIndex(FallbackSlot)) {
 		measure.WarnAboutPCRSelection(specs)
 	}
 	measure.WarnAboutHashAlgo(hashAlgo)
 
-	if err := ValidateBlobIndex(nvramIndex); err != nil {
+	if err := nvslot.ValidateBlobIndex(nvramIndex); err != nil {
 		return fmt.Errorf("cannot seal: %w", err)
 	}
 
@@ -119,10 +120,10 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	// The boot key in it is bound to the slot's policy by the policy
 	// reference, which is kept. A slot with phones gets no TOTP key: the
 	// phones check its boots (SealedBlobPayload).
-	var kept *Attestation
+	var kept *nvslot.Attestation
 	var policyRef []byte
 	if oldRaw, old, err := readSlot(tpmDev, nvramIndex); err == nil && old.Payload.Attestation != nil {
-		if VerifyBlobSignature(oldRaw, old, signer.Public()) == nil {
+		if nvslot.VerifyBlobSignature(oldRaw, old, signer.Public()) == nil {
 			kept, policyRef = old.Payload.Attestation, old.Payload.PolicyRef
 			if kept.Phone.Enabled() {
 				fmt.Printf("Phone enrolment: kept (%d phone(s) enrolled for this slot)\n", len(kept.Phone.Verifiers))
@@ -167,7 +168,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	}
 	if key == nil {
 		fmt.Println()
-		fmt.Printf("Slot %d is attested by its phone(s): it has no TOTP code while a phone is enrolled.\n", SlotNumber(nvramIndex))
+		fmt.Printf("Slot %d is attested by its phone(s): it has no TOTP code while a phone is enrolled.\n", nvslot.SlotNumber(nvramIndex))
 		fmt.Println("The new PCR values are approved for the phone's check at boot.")
 		return nil
 	}
@@ -183,7 +184,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 // use them. A fresh policyRef is made unless the slot's existing one is
 // passed in, which keeps the slot's other keys (the boot key, the release
 // key) under the same approvals.
-func newSlot(tpmDev transport.TPM, pubKey crypto.PublicKey, policyRef []byte) (*SealedBlob, error) {
+func newSlot(tpmDev transport.TPM, pubKey crypto.PublicKey, policyRef []byte) (*nvslot.SealedBlob, error) {
 	// Loading the key checks that this TPM can verify its signatures.
 	loadRsp, err := signing.LoadExternalPublicKey(tpmDev, pubKey)
 	if err != nil {
@@ -196,19 +197,19 @@ func newSlot(tpmDev transport.TPM, pubKey crypto.PublicKey, policyRef []byte) (*
 		return nil, err
 	}
 	if len(policyRef) == 0 {
-		if policyRef, err = newPolicyRef(); err != nil {
+		if policyRef, err = nvslot.NewPolicyRef(); err != nil {
 			return nil, err
 		}
 	}
-	return &SealedBlob{
-		Version: CurrentBlobVersion,
-		Payload: SealedBlobPayload{PolicyRef: policyRef, SigningPublic: signingPublic.Bytes()},
+	return &nvslot.SealedBlob{
+		Version: nvslot.CurrentBlobVersion,
+		Payload: nvslot.SealedBlobPayload{PolicyRef: policyRef, SigningPublic: signingPublic.Bytes()},
 	}, nil
 }
 
 // addTOTPKey creates the TOTP key object for key under the slot's policy
 // and puts it into blob.
-func addTOTPKey(tpmDev transport.TPM, blob *SealedBlob, key []byte, alg tpm2.TPMAlgID) error {
+func addTOTPKey(tpmDev transport.TPM, blob *nvslot.SealedBlob, key []byte, alg tpm2.TPMAlgID) error {
 	policy, err := blob.SlotPolicy()
 	if err != nil {
 		return err
@@ -248,7 +249,7 @@ func showTOTPSecret(key []byte, alg tpm2.TPMAlgID, nvramIndex uint32, pcrs strin
 	fmt.Println("=== TOTP Secret Generated ===")
 	fmt.Println("The key is now inside the TPM, which computes every code; it is shown here")
 	fmt.Println("once, for your authenticator, and cannot be read back later.")
-	fmt.Printf("Secret: %s (HMAC-%s)\n", totpSecret, totpAlgorithmName(alg))
+	fmt.Printf("Secret: %s (HMAC-%s)\n", totpSecret, nvslot.TOTPAlgorithmName(alg))
 	fmt.Println()
 	fmt.Println("Scan QR Code with authenticator app:")
 	fmt.Println()
@@ -266,8 +267,8 @@ var ErrGenerationRaised = errors.New("the slot's generation was raised")
 // checkBlobFits fails with a BlobTooLargeError when blob, with the given
 // PCR values and generation and signatures of the largest size pub makes,
 // would not fit this TPM's NV index.
-func checkBlobFits(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, pcrDigests []PCRDigestPair, measurePoint bool, gen uint64, pub crypto.PublicKey) error {
-	limit := nvIndexLimit(tpmDev)
+func checkBlobFits(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.SealedBlob, pcrDigests []nvslot.PCRDigestPair, measurePoint bool, gen uint64, pub crypto.PublicKey) error {
+	limit := nvslot.NvIndexLimit(tpmDev)
 	if limit == 0 {
 		return nil
 	}
@@ -276,7 +277,7 @@ func checkBlobFits(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, pc
 		return err
 	}
 	trial := *blob
-	trial.Version = CurrentBlobVersion
+	trial.Version = nvslot.CurrentBlobVersion
 	trial.Payload.PCRDigests = pcrDigests
 	trial.Payload.MeasurePointApplied = measurePoint
 	trial.Payload.Generation = gen
@@ -286,7 +287,7 @@ func checkBlobFits(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, pc
 		return err
 	}
 	if size := len(unsigned) + 2 + blobSigMax; size > limit {
-		return &BlobTooLargeError{Index: nvramIndex, Size: size, Limit: limit}
+		return &nvslot.BlobTooLargeError{Index: nvramIndex, Size: size, Limit: limit}
 	}
 	return nil
 }
@@ -318,14 +319,14 @@ func signatureSizes(pub crypto.PublicKey) (approval, blob int, err error) {
 // the slot, signs PolicyPCR(values) + PolicyNV(generation) with signer, and
 // writes the signed blob. The key object in blob is not touched: only its
 // approval changes, so the TOTP key never has to leave the TPM.
-func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, specs []measure.PCRSpec, hashAlgo measure.PCRHashAlgo, verifyUKI bool, signer crypto.Signer, debug bool) error {
+func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.SealedBlob, specs []measure.PCRSpec, hashAlgo measure.PCRHashAlgo, verifyUKI bool, signer crypto.Signer, debug bool) error {
 	if len(specs) == 0 {
 		return fmt.Errorf("no PCRs specified")
 	}
 	if signer == nil {
 		return fmt.Errorf("no signing private key provided")
 	}
-	if err := ValidateBlobIndex(nvramIndex); err != nil {
+	if err := nvslot.ValidateBlobIndex(nvramIndex); err != nil {
 		return err
 	}
 
@@ -360,9 +361,9 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, 
 		return fmt.Errorf("failed to compute the PCR policy: %w", err)
 	}
 
-	pcrDigests := make([]PCRDigestPair, len(specs))
+	pcrDigests := make([]nvslot.PCRDigestPair, len(specs))
 	for i, spec := range specs {
-		pcrDigests[i] = PCRDigestPair{
+		pcrDigests[i] = nvslot.PCRDigestPair{
 			Index:   spec.Index,
 			Source:  spec.Source,
 			Command: spec.Command,
@@ -378,19 +379,19 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, 
 		return err
 	}
 
-	genName, err := writeGeneration(tpmDev, GenerationIndex(nvramIndex), gen, signer.Public(), signer)
+	genName, err := nvslot.WriteGeneration(tpmDev, nvslot.GenerationIndex(nvramIndex), gen, signer.Public(), signer)
 	if err != nil {
 		return err
 	}
 	raised := func(err error) error { return fmt.Errorf("%w (to generation %d): %w", ErrGenerationRaised, gen, err) }
 
-	approved := ApprovedPolicy(pcrPolicy.Buffer, genName, gen)
-	approval, err := signApproval(signer, approved, blob.Payload.PolicyRef)
+	approved := nvslot.ApprovedPolicy(pcrPolicy.Buffer, genName, gen)
+	approval, err := nvslot.SignApproval(signer, approved, blob.Payload.PolicyRef)
 	if err != nil {
 		return raised(err)
 	}
 
-	blob.Version = CurrentBlobVersion
+	blob.Version = nvslot.CurrentBlobVersion
 	blob.Payload.PCRDigests = pcrDigests
 	blob.Payload.MeasurePointApplied = measurePoint
 	blob.Payload.Generation = gen
@@ -399,7 +400,7 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, 
 	if debug {
 		fmt.Println("=== Policy Details ===")
 		fmt.Printf("PCR policy:       %x\n", pcrPolicy.Buffer)
-		fmt.Printf("Generation:       %d (index 0x%08X)\n", gen, GenerationIndex(nvramIndex))
+		fmt.Printf("Generation:       %d (index 0x%08X)\n", gen, nvslot.GenerationIndex(nvramIndex))
 		fmt.Printf("Approved policy:  %x\n", approved)
 		fmt.Printf("Policy reference: %x\n", blob.Payload.PolicyRef)
 		for _, spec := range specs {
@@ -417,11 +418,11 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, 
 		return raised(fmt.Errorf("failed to marshal sealed data: %w", err))
 	}
 	// The signature covers Version + PayloadLen + all payload fields.
-	data, err := SignBlobPayload(unsignedBlob, signer)
+	data, err := nvslot.SignBlobPayload(unsignedBlob, signer)
 	if err != nil {
 		return raised(fmt.Errorf("failed to sign sealed blob: %w", err))
 	}
-	if err := WriteToNVRAM(tpmDev, nvramIndex, data, signer.Public(), signer); err != nil {
+	if err := nvslot.WriteToNVRAM(tpmDev, nvramIndex, data, signer.Public(), signer); err != nil {
 		return raised(fmt.Errorf("failed to write to NVRAM: %w", err))
 	}
 	return nil

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 
@@ -61,10 +62,10 @@ func TestInfoDoesNotTrustPlantedBlob(t *testing.T) {
 	// one string, the image path.
 	attackerKey, _, _ := writeTestKeyPair(t, newTestKeyDir(t, "attacker"))
 	esc := "\x1b[2J"
-	sb := &SealedBlob{Version: CurrentBlobVersion, Payload: SealedBlobPayload{
+	sb := &nvslot.SealedBlob{Version: nvslot.CurrentBlobVersion, Payload: nvslot.SealedBlobPayload{
 		Public: []byte{1}, Private: []byte{2},
 		TOTPAlgorithm: tpm2.TPMAlgSHA1,
-		PCRDigests: []PCRDigestPair{
+		PCRDigests: []nvslot.PCRDigestPair{
 			{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/x" + esc + ".efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 		},
@@ -74,16 +75,16 @@ func TestInfoDoesNotTrustPlantedBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := SignBlobPayload(unsigned, attackerKey)
+	data, err := nvslot.SignBlobPayload(unsigned, attackerKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	blob, err := UnmarshalSealedBlob(data)
+	blob, err := nvslot.UnmarshalSealedBlob(data)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	si := slotInfo{Index: NVRAMSlotStart, NVPublic: &tpm2.TPMSNVPublic{DataSize: uint16(len(data))}, Blob: blob, raw: data}
+	si := slotInfo{Index: nvslot.NVRAMSlotStart, NVPublic: &tpm2.TPMSNVPublic{DataSize: uint16(len(data))}, Blob: blob, raw: data}
 	si.Verify = newBlobVerifier(ownPriv).verify(si.raw, si.Blob)
 	if si.Verify.Verified {
 		t.Fatal("a blob signed by another key was reported as verified")
@@ -118,7 +119,7 @@ func TestInfoDoesNotTrustPlantedBlob(t *testing.T) {
 func TestInfoVerifiedBlob(t *testing.T) {
 	key, priv, _ := writeTestKeyPair(t, newTestKeyDir(t, "owner"))
 	data, blob := signedTestBlob(t, key)
-	si := slotInfo{Index: NVRAMSlotStart, NVPublic: &tpm2.TPMSNVPublic{DataSize: uint16(len(data))}, Blob: blob, raw: data}
+	si := slotInfo{Index: nvslot.NVRAMSlotStart, NVPublic: &tpm2.TPMSNVPublic{DataSize: uint16(len(data))}, Blob: blob, raw: data}
 	si.Verify = newBlobVerifier(priv).verify(si.raw, si.Blob)
 	if !si.Verify.Verified {
 		t.Fatalf("own blob not verified: %s", si.Verify.Reason)

@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
@@ -93,11 +94,11 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 		label = "luks"
 	}
 
-	idx, err := AttestIndexForSlot(o.SealIndex)
+	idx, err := nvslot.AttestIndexForSlot(o.SealIndex)
 	if err != nil {
 		return nil, 0, err
 	}
-	slot := attestSlot(idx)
+	slot := nvslot.AttestSlot(idx)
 	tpmDev, err := tpmdev.Open(o.TPMPath)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to open TPM at %s: %w", o.TPMPath, err)
@@ -277,7 +278,7 @@ func FactorStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 	defer tpmDev.Close()
 	var indices []uint32
 	if sealIndex != 0 {
-		idx, err := AttestIndexForSlot(sealIndex)
+		idx, err := nvslot.AttestIndexForSlot(sealIndex)
 		if err != nil {
 			return err
 		}
@@ -296,11 +297,11 @@ func FactorStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 		b, err := loadAttestBlob(tpmDev, idx)
 		if err != nil {
 			if sealIndex != 0 {
-				return fmt.Errorf("slot %d has no phone enrolled", attestSlot(idx))
+				return fmt.Errorf("slot %d has no phone enrolled", nvslot.AttestSlot(idx))
 			}
 			continue
 		}
-		out = append(out, slotJSON{Slot: int(attestSlot(idx)), NVRAMIndex: fmt.Sprintf("0x%08X", idx),
+		out = append(out, slotJSON{Slot: int(nvslot.AttestSlot(idx)), NVRAMIndex: fmt.Sprintf("0x%08X", idx),
 			ReleaseKey: len(b.ReleaseKeyPublic) > 0, Phones: len(b.Phone.Verifiers)})
 	}
 	if jsonOut {
@@ -331,11 +332,11 @@ func FactorStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 // is dead weight the user removes by hand. Needs the signing key, like
 // every rewrite of the blob.
 func FactorUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug bool) error {
-	idx, err := AttestIndexForSlot(sealIndex)
+	idx, err := nvslot.AttestIndexForSlot(sealIndex)
 	if err != nil {
 		return err
 	}
-	slot := attestSlot(idx)
+	slot := nvslot.AttestSlot(idx)
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)

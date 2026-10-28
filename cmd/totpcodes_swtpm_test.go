@@ -19,6 +19,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
@@ -78,20 +79,20 @@ func TestCodeBeforeTheSeparatorThenLocked(t *testing.T) {
 	defer func() { measure.DefaultEventlogPath = old }()
 
 	pubPath, privPath := writeTestKeyPair(t)
-	if err := Seal(sock, "0,2,7", NVRAMSlotStart, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "0,2,7", nvslot.NVRAMSlotStart, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
 
 	// A code per window, as the display asks for them during the hold.
 	at := time.Date(2026, 10, 6, 1, 0, 0, 0, time.UTC)
-	first, blob, err := SlotCode(tpm, NVRAMSlotStart, at, false)
+	first, blob, err := SlotCode(tpm, nvslot.NVRAMSlotStart, at, false)
 	if err != nil {
 		t.Fatalf("code during the hold: %v", err)
 	}
 	if extends := blob.MeasurePointExtends(); strings.Contains(extends, measure.OSSeparatorWord) {
 		t.Fatalf("the blob should be sealed before the separator: %q", extends)
 	}
-	next, _, err := SlotCode(tpm, NVRAMSlotStart, at.Add(30*time.Second), false)
+	next, _, err := SlotCode(tpm, nvslot.NVRAMSlotStart, at.Add(30*time.Second), false)
 	if err != nil || next == first || len(first) != 6 {
 		t.Fatalf("the next window should give another code: %q then %q (%v)", first, next, err)
 	}
@@ -100,10 +101,10 @@ func TestCodeBeforeTheSeparatorThenLocked(t *testing.T) {
 	for _, pcr := range []int{0, 2, 7} {
 		extendSHA256(t, tpm, pcr, measure.DigestOf(measure.PCRHashAlgoSHA256, []byte(measure.OSSeparatorWord)))
 	}
-	if _, _, err := SlotCode(tpm, NVRAMSlotStart, at, false); !errors.Is(err, measure.ErrSeparatorLocked) {
+	if _, _, err := SlotCode(tpm, nvslot.NVRAMSlotStart, at, false); !errors.Is(err, measure.ErrSeparatorLocked) {
 		t.Fatalf("after the separator the slot should be locked, got %v", err)
 	}
-	slots := ScanNVRAMSlot(tpm, NVRAMSlotStart, false)
+	slots := ScanNVRAMSlot(tpm, nvslot.NVRAMSlotStart, false)
 	if len(slots) != 1 || !errors.Is(slots[0].Error, measure.ErrSeparatorLocked) {
 		t.Fatalf("reveal should report the lock: %+v", slots)
 	}
@@ -142,7 +143,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	measure.DefaultEventlogPath = logPath
 	defer func() { measure.DefaultEventlogPath = old }()
 
-	const slot = NVRAMSlotStart + 1
+	const slot = nvslot.NVRAMSlotStart + 1
 	at := time.Date(2026, 10, 6, 1, 0, 0, 0, time.UTC)
 	pubPath, privPath := writeTestKeyPair(t)
 	if err := Seal(sock, "0,2,7", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
@@ -214,7 +215,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	if err := bootKey("after enrolling"); err != nil {
 		t.Fatalf("the boot key does not answer in the sealed boot state: %v", err)
 	}
-	enrolled := func(what string) *Attestation {
+	enrolled := func(what string) *nvslot.Attestation {
 		t.Helper()
 		a, err := loadAttestBlob(tpm, slot)
 		if err != nil || len(a.Phone.Verifiers) != 1 || a.Phone.Verifiers[0].ID != "phone" || a.FriendlyName != "box" {

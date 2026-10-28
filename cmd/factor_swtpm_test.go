@@ -13,6 +13,7 @@ import (
 	"github.com/google/go-tpm/tpm2"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -22,7 +23,7 @@ import (
 // TPM, and not without the command code the release key's policy ends in.
 func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 	sock := startSWTPM(t)
-	const slot = NVRAMSlotStart + 1
+	const slot = nvslot.NVRAMSlotStart + 1
 	signer, pubPath := sealRealSlot(t, sock, slot) // sealed to PCR 23
 	s := newSWTPMSetupAt(t, sock, "box")
 	tpm := s.tpm
@@ -127,7 +128,7 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, done, err := approvedSession(tpm, sb, slot)
+	session, done, err := nvslot.ApprovedSession(tpm, sb, slot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +170,7 @@ func TestFactorNeedsAReleaseKey(t *testing.T) {
 // takes it out, after which the phone's kept factor cannot be opened.
 func TestFactorStatusAndUnenrol(t *testing.T) {
 	sock := startSWTPM(t)
-	const slot = NVRAMSlotStart + 1
+	const slot = nvslot.NVRAMSlotStart + 1
 	signer, pubPath := sealRealSlot(t, sock, slot)
 	privPath := strings.TrimSuffix(pubPath, "seal.pub") + "seal.key"
 	s := newSWTPMSetupAt(t, sock, "box")

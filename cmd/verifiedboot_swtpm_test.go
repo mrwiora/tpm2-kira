@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -43,7 +44,7 @@ func TestEnrolmentNeedsAVerifiedBoot(t *testing.T) {
 	measure.DefaultEventlogPath = logPath
 	defer func() { measure.DefaultEventlogPath = old }()
 
-	const slot = NVRAMSlotStart
+	const slot = nvslot.NVRAMSlotStart
 	pubPath, privPath := writeTestKeyPair(t)
 	if err := Seal(sock, "0e,2e,7e", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal: %v", err)
@@ -59,7 +60,7 @@ func TestEnrolmentNeedsAVerifiedBoot(t *testing.T) {
 	}
 
 	// Through the code screen, in the approved state: the code was shown.
-	if _, err := CapCodes(tpm); err != nil {
+	if _, err := nvslot.CapCodes(tpm); err != nil {
 		t.Fatal(err)
 	}
 	matched, err := requireVerifiedBoot(tpm, sealed, 0)

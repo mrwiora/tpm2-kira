@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 )
 
 // A coordinator for one slot with one enrolled phone and no TPM behind it:
@@ -27,10 +28,10 @@ func testCoordinator(t *testing.T) (*gateService, *ecdsa.PrivateKey) {
 		t.Fatal(err)
 	}
 	anchor, _ := x509.MarshalPKIXPublicKey(&phone.PublicKey)
-	s := &gateService{ready: make(chan struct{}), issued: map[string][]byte{}, idx: NVRAMSlotStart + 2}
-	s.blob = &Attestation{
+	s := &gateService{ready: make(chan struct{}), issued: map[string][]byte{}, idx: nvslot.NVRAMSlotStart + 2}
+	s.blob = &nvslot.Attestation{
 		DeviceID: []byte("0123456789abcdef"), AKName: []byte("ak-name"), FriendlyName: "box",
-		Phone: PhoneAttestation{
+		Phone: nvslot.PhoneAttestation{
 			NoisePrivate: make([]byte, 32), AdvKey: make([]byte, 32),
 			Verifiers: []attest.EnrolledVerifier{{ID: "phone-1", AnchorPub: anchor, NoisePub: make([]byte, 32)}},
 		},

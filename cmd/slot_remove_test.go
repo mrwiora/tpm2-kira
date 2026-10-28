@@ -6,11 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 )
 
 // What a slot is made of, and when it is dirty: parts without the blob.
 func TestSlotContentsDirtyAndRemains(t *testing.T) {
-	c := SlotContents{Slot: 2, Index: NVRAMSlotStart + 2}
+	c := SlotContents{Slot: 2, Index: nvslot.NVRAMSlotStart + 2}
 	if c.Any() || c.Dirty() || c.Remains() != "nothing" {
 		t.Fatalf("an empty slot: %+v", c)
 	}
@@ -45,10 +47,10 @@ func TestSlotContentsDirtyAndRemains(t *testing.T) {
 // collectSlotContents without a TPM still sees the keyslots and the
 // recovery blobs; the TPM parts stay absent for the caller to explain.
 func TestCollectSlotContentsWithoutTPM(t *testing.T) {
-	oldDir := NVRAMRecoveryDir
-	NVRAMRecoveryDir = t.TempDir()
-	defer func() { NVRAMRecoveryDir = oldDir }()
-	stash := filepath.Join(NVRAMRecoveryDir, "slot-0x01803012-1759823456.blob")
+	oldDir := nvslot.NVRAMRecoveryDir
+	nvslot.NVRAMRecoveryDir = t.TempDir()
+	defer func() { nvslot.NVRAMRecoveryDir = oldDir }()
+	stash := filepath.Join(nvslot.NVRAMRecoveryDir, "slot-0x01803012-1759823456.blob")
 	os.WriteFile(stash, []byte("x"), 0o600)
 
 	zero, two := 0, 2
@@ -68,12 +70,12 @@ func TestCollectSlotContentsWithoutTPM(t *testing.T) {
 // token and the recovery blob go although the TPM is not there, and the
 // error says the slot stays dirty.
 func TestDeleteSlotTakesWhatItCan(t *testing.T) {
-	oldDir, oldList, oldCS, oldAuth, oldAsk := NVRAMRecoveryDir, listLuksDevices, cryptsetup, cryptsetupAuth, terminalAskExisting
+	oldDir, oldList, oldCS, oldAuth, oldAsk := nvslot.NVRAMRecoveryDir, listLuksDevices, cryptsetup, cryptsetupAuth, terminalAskExisting
 	defer func() {
-		NVRAMRecoveryDir, listLuksDevices, cryptsetup, cryptsetupAuth, terminalAskExisting = oldDir, oldList, oldCS, oldAuth, oldAsk
+		nvslot.NVRAMRecoveryDir, listLuksDevices, cryptsetup, cryptsetupAuth, terminalAskExisting = oldDir, oldList, oldCS, oldAuth, oldAsk
 	}()
-	NVRAMRecoveryDir = t.TempDir()
-	stash := filepath.Join(NVRAMRecoveryDir, "slot-0x01803010-1759823456.blob")
+	nvslot.NVRAMRecoveryDir = t.TempDir()
+	stash := filepath.Join(nvslot.NVRAMRecoveryDir, "slot-0x01803010-1759823456.blob")
 	os.WriteFile(stash, []byte("x"), 0o600)
 
 	const meta = `{

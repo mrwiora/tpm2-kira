@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"golang.org/x/sys/unix"
@@ -362,8 +363,8 @@ var errNoPhoneSalt = errors.New("password+phonesalt needs an attestation: a phon
 // a blob index - to the blob index, refusing anything outside the sixteen
 // slots: a keyslot is deleted with its slot, so it must name one.
 func boundSlotIndex(sealIndex uint32) (uint32, error) {
-	idx := ResolveNVRAMIndex(sealIndex)
-	if idx < NVRAMSlotStart || idx > NVRAMSlotEnd {
+	idx := nvslot.ResolveNVRAMIndex(sealIndex)
+	if idx < nvslot.NVRAMSlotStart || idx > nvslot.NVRAMSlotEnd {
 		return 0, fmt.Errorf("a keyslot is bound to one of the sixteen slots (0-15), got 0x%08X", idx)
 	}
 	return idx, nil
@@ -379,10 +380,10 @@ func checkRemoteSaltReady(tpmPath string, sealIndex uint32) error {
 	defer tpmDev.Close()
 	att, err := loadAttestBlob(tpmDev, sealIndex)
 	if err != nil {
-		return fmt.Errorf("%w (slot %d has no phone enrolled)", errNoPhoneSalt, attestSlot(sealIndex))
+		return fmt.Errorf("%w (slot %d has no phone enrolled)", errNoPhoneSalt, nvslot.AttestSlot(sealIndex))
 	}
 	if len(att.ReleaseKeyPublic) == 0 {
-		return fmt.Errorf("%w (slot %d has no release key yet)", errNoPhoneSalt, attestSlot(sealIndex))
+		return fmt.Errorf("%w (slot %d has no release key yet)", errNoPhoneSalt, nvslot.AttestSlot(sealIndex))
 	}
 	return nil
 }
@@ -397,7 +398,7 @@ func checkVaultReady(tpmPath string, sealIndex uint32) (string, error) {
 	defer tpmDev.Close()
 	_, sb, err := readSlot(tpmDev, sealIndex)
 	if err != nil || sb.Payload.Attestation == nil || !sb.Payload.Attestation.Vault.Enabled() {
-		return "", fmt.Errorf("slot %d is not enrolled with a vault: tpm2-kira vault enrol first, or luks enrol --mode %s", attestSlot(sealIndex), LuksModeTPMVault)
+		return "", fmt.Errorf("slot %d is not enrolled with a vault: tpm2-kira vault enrol first, or luks enrol --mode %s", nvslot.AttestSlot(sealIndex), LuksModeTPMVault)
 	}
 	return sb.Payload.Attestation.Vault.Label, nil
 }
@@ -418,7 +419,7 @@ func LuksMark(o LuksMarkOptions) error {
 		if err != nil {
 			return err
 		}
-		slot = SlotNumber(idx)
+		slot = nvslot.SlotNumber(idx)
 		if mode == LuksModeTPMVault {
 			// The label is the vault method's: the key was derived with it.
 			if label, err = checkVaultReady(o.TPMPath, idx); err != nil {
@@ -637,7 +638,7 @@ func checkRemoteSaltReadyOrEnrolable(tpmPath string, idx uint32) (bool, error) {
 	}
 	defer tpmDev.Close()
 	if _, err := loadAttestBlob(tpmDev, idx); err != nil {
-		return false, fmt.Errorf("%w (slot %d has no phone enrolled)", errNoPhoneSalt, attestSlot(idx))
+		return false, fmt.Errorf("%w (slot %d has no phone enrolled)", errNoPhoneSalt, nvslot.AttestSlot(idx))
 	}
 	return true, nil
 }

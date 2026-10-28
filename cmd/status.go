@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -74,7 +75,7 @@ func Status(o StatusOptions) error {
 // collectStatus gathers the report; every part that cannot be read says
 // so in its error field, and the notes are the checks across the parts.
 func collectStatus(o StatusOptions) StatusReport {
-	r := StatusReport{Version: AppVersion, TPM: o.TPMPath, Slots: []StatusSlot{}, Devices: []LuksDeviceStatus{}, Notes: []string{}}
+	r := StatusReport{Version: nvslot.AppVersion, TPM: o.TPMPath, Slots: []StatusSlot{}, Devices: []LuksDeviceStatus{}, Notes: []string{}}
 	if r.Version == "" {
 		r.Version = "unknown"
 	}
@@ -84,13 +85,13 @@ func collectStatus(o StatusOptions) StatusReport {
 		r.TPMError = fmt.Sprintf("the TPM at %s cannot be opened: %v", o.TPMPath, err)
 	} else {
 		verifier := newBlobVerifier(o.PrivKeyPath)
-		for _, idx := range FindPopulatedSlots(tpmDev, o.Debug) {
+		for _, idx := range nvslot.FindPopulatedSlots(tpmDev, o.Debug) {
 			raw, sb, err := readSlot(tpmDev, idx)
 			if err != nil {
-				r.Notes = append(r.Notes, fmt.Sprintf("slot %d (0x%08X) does not read as a blob: %v", SlotNumber(idx), idx, err))
+				r.Notes = append(r.Notes, fmt.Sprintf("slot %d (0x%08X) does not read as a blob: %v", nvslot.SlotNumber(idx), idx, err))
 				continue
 			}
-			s := StatusSlot{Slot: SlotNumber(idx), NVRAMIndex: fmt.Sprintf("0x%08X", idx),
+			s := StatusSlot{Slot: nvslot.SlotNumber(idx), NVRAMIndex: fmt.Sprintf("0x%08X", idx),
 				PCRs: measure.PCRSpecsToString(sb.GetPCRSpecs()), Generation: sb.Payload.Generation,
 				GenState: generationState(tpmDev, idx, sb.Payload.Generation)}
 			s.Fallback = isFallbackSelection(sb.GetPCRSpecs())

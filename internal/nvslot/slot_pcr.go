@@ -1,4 +1,4 @@
-package cmd
+package nvslot
 
 import (
 	"github.com/google/go-tpm/tpm2"

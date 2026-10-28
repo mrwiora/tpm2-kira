@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+
 	"github.com/google/go-tpm/tpm2"
 )
 
@@ -18,7 +20,7 @@ func TestInfoShowsTheAttestationPart(t *testing.T) {
 	withPhones(sb, testEnrolment("my laptop"))
 	sb.Payload.Attestation.Count = 4
 	si := &slotInfo{
-		Index: NVRAMSlotStart, SlotNumber: 0, Blob: sb, NVPublic: &tpm2.TPMSNVPublic{},
+		Index: nvslot.NVRAMSlotStart, SlotNumber: 0, Blob: sb, NVPublic: &tpm2.TPMSNVPublic{},
 		CounterState: "4 (matches: this is the current blob)",
 	}
 	out := captureStdout(t, func() { printAttestationTree("", si) })
@@ -56,7 +58,7 @@ func TestInfoShowsTheAttestationPart(t *testing.T) {
 	}
 	bare := testSlotBlob()
 	withPhones(bare, testEnrolment("x"))
-	bare.Payload.Attestation.Phone = PhoneAttestation{}
+	bare.Payload.Attestation.Phone = nvslot.PhoneAttestation{}
 	si.Blob = bare
 	if out := captureStdout(t, func() { printAttestationTree("", si) }); !strings.Contains(out, "(none set up)") {
 		t.Errorf("info with an attestation part without methods:\n%s", out)
@@ -101,7 +103,7 @@ func TestInfoJSONShowsTheAttestationPart(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := got.Attestation
-	if got.Version != CurrentBlobVersion || a == nil || a.FriendlyName != "my laptop" || a.Revision != 4 || a.PCRSelection != "sha256:[0 7]" ||
+	if got.Version != nvslot.CurrentBlobVersion || a == nil || a.FriendlyName != "my laptop" || a.Revision != 4 || a.PCRSelection != "sha256:[0 7]" ||
 		a.Methods.Phone == nil || a.Methods.Phone.Transport != "bluetooth-le" || len(a.Methods.Phone.Verifiers) != 1 ||
 		a.Methods.Phone.Verifiers[0].ID != "phone" || len(a.Methods.Phone.Verifiers[0].AnchorDigest) != 64 {
 		t.Fatalf("attestation in JSON: %s", raw)

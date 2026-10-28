@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"github.com/google/go-tpm/tpm2"
@@ -153,7 +154,7 @@ func displayTOTPQRCode(secret string, nvramIndex uint32, pcrsStr string, alg tpm
 		hostname = "unknown"
 	}
 
-	slotNumber := SlotNumber(nvramIndex)
+	slotNumber := nvslot.SlotNumber(nvramIndex)
 
 	// Create label with slot number and PCRs
 	label := fmt.Sprintf("TPM2-KIRA: %s, PCRs %s (#%d)", hostname, pcrsStr, slotNumber)

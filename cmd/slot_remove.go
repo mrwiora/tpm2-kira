@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"github.com/google/go-tpm/tpm2/transport"
@@ -82,11 +83,11 @@ func (c SlotContents) Remains() string {
 // collectSlotContents looks at one slot. tpmDev may be nil: the TPM parts
 // are then reported as absent, and the caller says why the TPM is not there.
 func collectSlotContents(tpmDev transport.TPM, devices []LuksDeviceStatus, slot int) SlotContents {
-	c := SlotContents{Slot: slot, Index: NVRAMSlotStart + uint32(slot)}
+	c := SlotContents{Slot: slot, Index: nvslot.NVRAMSlotStart + uint32(slot)}
 	if tpmDev != nil {
 		c.Blob = tpmdev.NVRAMIndexExists(tpmDev, c.Index)
-		c.Generation = tpmdev.NVRAMIndexExists(tpmDev, GenerationIndex(c.Index))
-		c.Counter = tpmdev.NVRAMIndexExists(tpmDev, AttestCounterIndex(c.Index))
+		c.Generation = tpmdev.NVRAMIndexExists(tpmDev, nvslot.GenerationIndex(c.Index))
+		c.Counter = tpmdev.NVRAMIndexExists(tpmDev, nvslot.AttestCounterIndex(c.Index))
 	}
 	for _, d := range devices {
 		for _, ks := range d.Keyslots {
@@ -95,7 +96,7 @@ func collectSlotContents(tpmDev transport.TPM, devices []LuksDeviceStatus, slot 
 			}
 		}
 	}
-	c.Recovery, _ = filepath.Glob(fmt.Sprintf("%s/slot-0x%08X-*.blob", NVRAMRecoveryDir, c.Index))
+	c.Recovery, _ = filepath.Glob(fmt.Sprintf("%s/slot-0x%08X-*.blob", nvslot.NVRAMRecoveryDir, c.Index))
 	return c
 }
 
@@ -108,7 +109,7 @@ func collectDirt(tpmPath string, devices []LuksDeviceStatus) []SlotContents {
 	}
 	defer tpmDev.Close()
 	var out []SlotContents
-	for slot := 0; slot <= int(MaxSlotNumber); slot++ {
+	for slot := 0; slot <= int(nvslot.MaxSlotNumber); slot++ {
 		if c := collectSlotContents(tpmDev, devices, slot); c.Dirty() {
 			out = append(out, c)
 		}
@@ -225,8 +226,8 @@ func DeleteSlot(o DeleteSlotOptions) error {
 			what  string
 		}{
 			{c.Blob, c.Index, "blob (TOTP key and phones)"},
-			{c.Generation, GenerationIndex(c.Index), "generation index"},
-			{c.Counter, AttestCounterIndex(c.Index), "record counter"},
+			{c.Generation, nvslot.GenerationIndex(c.Index), "generation index"},
+			{c.Counter, nvslot.AttestCounterIndex(c.Index), "record counter"},
 		} {
 			if !part.there {
 				continue

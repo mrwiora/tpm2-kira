@@ -35,6 +35,7 @@ import (
 	"golang.org/x/crypto/hkdf"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
@@ -189,14 +190,14 @@ func checkVault(rawURL, pin string, device []byte, timeout time.Duration) vaultC
 // vaultSlot is a slot whose blob carries the vault method.
 type vaultSlot struct {
 	idx    uint32
-	sealed *SealedBlob
-	att    *Attestation
+	sealed *nvslot.SealedBlob
+	att    *nvslot.Attestation
 }
 
 // vaultSlots lists the slots with the vault method.
 func vaultSlots(tpmDev transport.TPM, debug bool) []vaultSlot {
 	var out []vaultSlot
-	for _, idx := range FindPopulatedSlots(tpmDev, debug) {
+	for _, idx := range nvslot.FindPopulatedSlots(tpmDev, debug) {
 		_, sb, err := readSlot(tpmDev, idx)
 		if err != nil || sb.Payload.Attestation == nil || !sb.Payload.Attestation.Vault.Enabled() {
 			continue
@@ -208,7 +209,7 @@ func vaultSlots(tpmDev transport.TPM, debug bool) []vaultSlot {
 
 // sealedSelection is the slot's sealed PCR selection: what the approval
 // covers, and so what is quoted for the vault.
-func sealedSelection(sb *SealedBlob) vaultproto.Selection {
+func sealedSelection(sb *nvslot.SealedBlob) vaultproto.Selection {
 	var idx []uint8
 	for _, i := range sb.GetPCRIndices() {
 		idx = append(idx, uint8(i))
@@ -330,7 +331,7 @@ func vaultKeyOf(tpmDev transport.TPM, vs vaultSlot, local []byte, rsp *vaultprot
 	case pepper && len(rsp.Pepper) == 0:
 		return nil, errors.New("the vault released without a pepper, and this keyslot was enrolled with one")
 	}
-	remote, err := unwrapFactor(tpmDev, vs.sealed, vs.idx, vs.att, &WrappedFactor{Credential: rsp.Remote.Credential, EncryptedSecret: rsp.Remote.EncryptedSecret})
+	remote, err := unwrapFactor(tpmDev, vs.sealed, vs.idx, vs.att, &nvslot.WrappedFactor{Credential: rsp.Remote.Credential, EncryptedSecret: rsp.Remote.EncryptedSecret})
 	if err != nil {
 		return nil, fmt.Errorf("the remote part: %w", err)
 	}
@@ -422,7 +423,7 @@ func startVaultKeys(ctx context.Context, tpmPath string, out io.Writer, log func
 		defer close(vk.done)
 		defer tpmDev.Close()
 		for _, vs := range slots {
-			n := SlotNumber(vs.idx)
+			n := nvslot.SlotNumber(vs.idx)
 			say := func(s string) {
 				fmt.Fprintf(out, "%s Slot #%d: %s\n", kiraTag(tagYellow), n, s)
 				log(fmt.Sprintf("vault: slot %d: %s", n, s))
@@ -553,11 +554,11 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	if label == "" {
 		label = "luks"
 	}
-	idx, err := AttestIndexForSlot(o.SealIndex)
+	idx, err := nvslot.AttestIndexForSlot(o.SealIndex)
 	if err != nil {
 		return nil, 0, err
 	}
-	slot := attestSlot(idx)
+	slot := nvslot.AttestSlot(idx)
 	client, err := newVaultClient(o.URL, o.Pin)
 	if err != nil {
 		return nil, 0, err
@@ -588,7 +589,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	if err != nil {
 		return nil, 0, fmt.Errorf("slot %d holds no sealed blob (%v): seal first with 'tpm2-kira slot add --nvram %d'", slot, err, slot)
 	}
-	if err := VerifyBlobSignature(raw, sealed, priv.Public()); err != nil {
+	if err := nvslot.VerifyBlobSignature(raw, sealed, priv.Public()); err != nil {
 		return nil, 0, foreignSlotError(slot, err)
 	}
 	att := sealed.Payload.Attestation
@@ -609,7 +610,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		if len(name) > 64 {
 			name = name[:64]
 		}
-		att = &Attestation{
+		att = &nvslot.Attestation{
 			DeviceID: randBytes(attest.DeviceIDSize), FriendlyName: name,
 			AKPublic: akPub, AKPrivate: akPriv, AKName: akName,
 			PCRAlg: sel.Alg, PCRSelection: sel.Indices,
@@ -653,7 +654,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	defer wipe(remote)
 	// The blob must still fit its NV index with the vault method in it.
 	key := VaultKey(local, remote, label, pepper)
-	att.Vault = VaultAttestation{URL: strings.TrimSuffix(o.URL, "/"), Pin: strings.ToLower(o.Pin), Label: label, Local: *wLocal}
+	att.Vault = nvslot.VaultAttestation{URL: strings.TrimSuffix(o.URL, "/"), Pin: strings.ToLower(o.Pin), Label: label, Local: *wLocal}
 	if pepper != nil {
 		att.Vault.PepperCheck = vaultPepperCheck(key)
 	}
@@ -666,7 +667,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		return nil, 0, err
 	}
 	tpmdev.FlushHandle(tpmDev, ek.handle)
-	genName, err := generationIndexName(tpmDev, GenerationIndex(idx))
+	genName, err := nvslot.GenerationIndexName(tpmDev, nvslot.GenerationIndex(idx))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -746,11 +747,11 @@ func askPepper() ([]byte, error) {
 // challenge: it answers one only for a device it knows. (A release is not
 // possible here: after 'cap' the parts do not open.)
 func VaultStatus(tpmPath string, sealIndex uint32, debug bool) error {
-	idx, err := AttestIndexForSlot(sealIndex)
+	idx, err := nvslot.AttestIndexForSlot(sealIndex)
 	if err != nil {
 		return err
 	}
-	slot := attestSlot(idx)
+	slot := nvslot.AttestSlot(idx)
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
@@ -792,11 +793,11 @@ func VaultStatus(tpmPath string, sealIndex uint32, debug bool) error {
 // part is gone with it, so a tpm+vault keyslot of this slot no longer
 // opens. The vault keeps its record until the operator revokes it.
 func VaultUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug bool) error {
-	idx, err := AttestIndexForSlot(sealIndex)
+	idx, err := nvslot.AttestIndexForSlot(sealIndex)
 	if err != nil {
 		return err
 	}
-	slot := attestSlot(idx)
+	slot := nvslot.AttestSlot(idx)
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
@@ -821,7 +822,7 @@ func VaultUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug bo
 		return fmt.Errorf("the signing key is not usable: %w", err)
 	}
 	id, url := att.DeviceID, att.Vault.URL
-	att.Vault = VaultAttestation{}
+	att.Vault = nvslot.VaultAttestation{}
 	if !att.Phone.Enabled() {
 		att = nil // nothing else uses the attestation part
 	}

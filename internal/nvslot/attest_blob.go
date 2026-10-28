@@ -1,4 +1,4 @@
-package cmd
+package nvslot
 
 import (
 	"bytes"
@@ -32,7 +32,7 @@ import (
 const (
 	// attestCounterStart is slot 0's record counter; slot N is at +N
 	// (attest_counter.go).
-	attestCounterStart = 0x01803820
+	AttestCounterStart = 0x01803820
 
 	// MaxVerifiers bounds the phones of one slot.
 	MaxVerifiers = 8
@@ -41,8 +41,8 @@ const (
 	MaxAttestationLen = 16 * 1024
 
 	// Attestation methods, as they are numbered in the blob.
-	attestMethodPhone = 1
-	attestMethodVault = 2
+	AttestMethodPhone = 1
+	AttestMethodVault = 2
 )
 
 // Attestation is the optional remote-attestation part of a slot's blob.
@@ -115,7 +115,7 @@ func AttestIndexForSlot(sealIndex uint32) (uint32, error) {
 }
 
 // attestSlot is the slot number of a slot's blob index.
-func attestSlot(idx uint32) uint32 { return idx - NVRAMSlotStart }
+func AttestSlot(idx uint32) uint32 { return idx - NVRAMSlotStart }
 
 type blobWriter struct{ b bytes.Buffer }
 
@@ -198,7 +198,7 @@ func (r *blobReader) lp32(max int) []byte {
 }
 
 // marshal encodes the attestation part of a slot's blob.
-func (b *Attestation) marshal() ([]byte, error) {
+func (b *Attestation) Marshal() ([]byte, error) {
 	if len(b.DeviceID) != attest.DeviceIDSize {
 		return nil, fmt.Errorf("attestation data is incomplete")
 	}
@@ -219,14 +219,14 @@ func (b *Attestation) marshal() ([]byte, error) {
 	// The methods: [count:1] then per method [type:1][len:4][data].
 	var methods [][2][]byte
 	if b.Phone.Enabled() {
-		data, err := b.Phone.marshal()
+		data, err := b.Phone.Marshal()
 		if err != nil {
 			return nil, err
 		}
-		methods = append(methods, [2][]byte{{attestMethodPhone}, data})
+		methods = append(methods, [2][]byte{{AttestMethodPhone}, data})
 	}
 	if b.Vault.Enabled() {
-		methods = append(methods, [2][]byte{{attestMethodVault}, b.Vault.marshal()})
+		methods = append(methods, [2][]byte{{AttestMethodVault}, b.Vault.marshal()})
 	}
 	w.u8(uint8(len(methods)))
 	for _, m := range methods {
@@ -236,7 +236,7 @@ func (b *Attestation) marshal() ([]byte, error) {
 	return w.b.Bytes(), nil
 }
 
-func (p *PhoneAttestation) marshal() ([]byte, error) {
+func (p *PhoneAttestation) Marshal() ([]byte, error) {
 	if len(p.NoisePrivate) != 32 || len(p.AdvKey) != 32 {
 		return nil, fmt.Errorf("the phone method's keys are incomplete")
 	}
@@ -295,7 +295,7 @@ func (v *VaultAttestation) unmarshal(data []byte) error {
 
 // unmarshalAttestation parses the attestation part of a slot's blob. It
 // carries no signature of its own: the blob's covers it.
-func unmarshalAttestation(data []byte) (*Attestation, error) {
+func UnmarshalAttestation(data []byte) (*Attestation, error) {
 	r := &blobReader{b: data}
 	b := &Attestation{}
 	b.DeviceID = r.take(attest.DeviceIDSize)
@@ -323,11 +323,11 @@ func unmarshalAttestation(data []byte) (*Attestation, error) {
 		}
 		seen[kind] = true
 		switch kind {
-		case attestMethodPhone:
+		case AttestMethodPhone:
 			if err := b.Phone.unmarshal(body); err != nil {
 				return nil, err
 			}
-		case attestMethodVault:
+		case AttestMethodVault:
 			if err := b.Vault.unmarshal(body); err != nil {
 				return nil, err
 			}
@@ -440,7 +440,7 @@ type phoneEntryJSON struct {
 	NoisePublic  string `json:"noise_public_hex"`
 }
 
-func (b *Attestation) json() *attestationJSON {
+func (b *Attestation) Json() *attestationJSON {
 	if b == nil {
 		return nil
 	}
@@ -450,7 +450,7 @@ func (b *Attestation) json() *attestationJSON {
 		FriendlyName: b.FriendlyName,
 		AKName:       hex.EncodeToString(b.AKName),
 		AKPublic:     hex.EncodeToString(b.AKPublic),
-		EKAlg:        ekAlgName(b.EKAlg),
+		EKAlg:        EKAlgName(b.EKAlg),
 		BootKey:      hex.EncodeToString(b.BootKeyPublic),
 		PCRSelection: sel.String(),
 		Revision:     b.Count,
@@ -472,7 +472,7 @@ func (b *Attestation) json() *attestationJSON {
 	return out
 }
 
-func ekAlgName(alg uint16) string {
+func EKAlgName(alg uint16) string {
 	switch tpm2.TPMAlgID(alg) {
 	case tpm2.TPMAlgECC:
 		return "ECC P-256"

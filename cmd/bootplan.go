@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
@@ -159,7 +160,7 @@ func readPlanInputs(o PlanOptions) planInputs {
 	if err != nil {
 		in.TPMErr = err.Error()
 	} else {
-		for _, idx := range FindPopulatedSlots(tpmDev, o.Debug) {
+		for _, idx := range nvslot.FindPopulatedSlots(tpmDev, o.Debug) {
 			_, sb, err := readSlot(tpmDev, idx)
 			if err != nil {
 				continue

@@ -1,4 +1,4 @@
-package cmd
+package nvslot
 
 // The record counter: which signed enrolment record is the current one.
 //
@@ -28,14 +28,14 @@ import (
 // AttestCounterIndex is the NV index of the record counter for a slot's
 // blob index: 0x01803820 + slot, next to the generation indices.
 func AttestCounterIndex(slotIndex uint32) uint32 {
-	return attestCounterStart + attestSlot(slotIndex)
+	return AttestCounterStart + AttestSlot(slotIndex)
 }
 
 // ErrNoRecordCounter: the slot has no usable counter. Since a counter
 // cannot be turned back, a missing one is never a reason to accept a record.
 var ErrNoRecordCounter = errors.New("the record counter is missing or is not a TPM counter")
 
-func attestCounterPublic(index uint32) tpm2.TPMSNVPublic {
+func AttestCounterPublic(index uint32) tpm2.TPMSNVPublic {
 	return tpm2.TPMSNVPublic{
 		NVIndex: tpm2.TPMHandle(index),
 		NameAlg: tpm2.TPMAlgSHA256,
@@ -52,7 +52,7 @@ func attestCounterPublic(index uint32) tpm2.TPMSNVPublic {
 
 // readAttestCounter returns the counter's value. It insists on a real
 // counter index: an ordinary index at the same handle could hold any number.
-func readAttestCounter(tpmDev transport.TPM, index uint32) (uint64, error) {
+func ReadAttestCounter(tpmDev transport.TPM, index uint32) (uint64, error) {
 	nvIndex := tpm2.TPMHandle(index)
 	pubRsp, err := tpm2.NVReadPublic{NVIndex: nvIndex}.Execute(tpmDev)
 	if err != nil {
@@ -76,9 +76,9 @@ func readAttestCounter(tpmDev transport.TPM, index uint32) (uint64, error) {
 
 // bumpAttestCounter raises the slot's counter by one, creating it first when
 // it is missing or is not a counter, and returns the new value.
-func bumpAttestCounter(tpmDev transport.TPM, index uint32) (uint64, error) {
+func BumpAttestCounter(tpmDev transport.TPM, index uint32) (uint64, error) {
 	nvIndex := tpm2.TPMHandle(index)
-	want := attestCounterPublic(index)
+	want := AttestCounterPublic(index)
 	if rsp, err := (tpm2.NVReadPublic{NVIndex: nvIndex}).Execute(tpmDev); err == nil {
 		have, perr := rsp.NVPublic.Contents()
 		if perr != nil || have.Attributes.NT != tpm2.TPMNTCounter || have.DataSize != 8 || !have.Attributes.OwnerWrite {
@@ -109,5 +109,5 @@ func bumpAttestCounter(tpmDev transport.TPM, index uint32) (uint64, error) {
 	}).Execute(tpmDev); err != nil {
 		return 0, fmt.Errorf("failed to raise the record counter 0x%08X: %w", index, err)
 	}
-	return readAttestCounter(tpmDev, index)
+	return ReadAttestCounter(tpmDev, index)
 }

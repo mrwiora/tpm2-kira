@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"github.com/google/go-attestation/attest"
@@ -49,13 +50,13 @@ func testGenRSAKey(t *testing.T) *rsa.PrivateKey {
 }
 
 // testSignBlob marshals, signs, and returns the signed blob bytes.
-func testSignBlob(t *testing.T, blob *SealedBlob, privKey crypto.Signer) []byte {
+func testSignBlob(t *testing.T, blob *nvslot.SealedBlob, privKey crypto.Signer) []byte {
 	t.Helper()
 	unsigned, err := blob.Marshal()
 	if err != nil {
 		t.Fatalf("Marshal failed: %v", err)
 	}
-	signed, err := SignBlobPayload(unsigned, privKey)
+	signed, err := nvslot.SignBlobPayload(unsigned, privKey)
 	if err != nil {
 		t.Fatalf("SignBlobPayload failed: %v", err)
 	}
@@ -352,17 +353,17 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 
 	tests := []struct {
 		name string
-		blob *SealedBlob
+		blob *nvslot.SealedBlob
 	}{
 		{
 			name: "Basic blob (all register)",
-			blob: &SealedBlob{
+			blob: &nvslot.SealedBlob{
 				Version: 6,
-				Payload: SealedBlobPayload{
+				Payload: nvslot.SealedBlobPayload{
 					Public:        []byte("public-data-test"),
 					Private:       []byte("private-data-test"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
-					PCRDigests: []PCRDigestPair{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest0")}},
 						{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest2")}},
 					},
@@ -372,13 +373,13 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		},
 		{
 			name: "Blob with predict PCR source",
-			blob: &SealedBlob{
+			blob: &nvslot.SealedBlob{
 				Version: 6,
-				Payload: SealedBlobPayload{
+				Payload: nvslot.SealedBlobPayload{
 					Public:        []byte("public-predict"),
 					Private:       []byte("private-predict"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
-					PCRDigests: []PCRDigestPair{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 7, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -391,13 +392,13 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		},
 		{
 			name: "Blob without signed branch digest",
-			blob: &SealedBlob{
+			blob: &nvslot.SealedBlob{
 				Version: 6,
-				Payload: SealedBlobPayload{
+				Payload: nvslot.SealedBlobPayload{
 					Public:        []byte("public"),
 					Private:       []byte("private"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
-					PCRDigests: []PCRDigestPair{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest7")}},
 					},
 				},
@@ -405,13 +406,13 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		},
 		{
 			name: "Blob with multiple PCRs (all register)",
-			blob: &SealedBlob{
+			blob: &nvslot.SealedBlob{
 				Version: 6,
-				Payload: SealedBlobPayload{
+				Payload: nvslot.SealedBlobPayload{
 					Public:        []byte("test-public-key-data"),
 					Private:       []byte("test-private-key-data"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
-					PCRDigests: []PCRDigestPair{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 1, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -424,25 +425,25 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		},
 		{
 			name: "Blob with empty PCR list",
-			blob: &SealedBlob{
+			blob: &nvslot.SealedBlob{
 				Version: 6,
-				Payload: SealedBlobPayload{
+				Payload: nvslot.SealedBlobPayload{
 					Public:        []byte("pub"),
 					Private:       []byte("priv"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
-					PCRDigests:    []PCRDigestPair{},
+					PCRDigests:    []nvslot.PCRDigestPair{},
 				},
 			},
 		},
 		{
 			name: "Blob with all eventlog PCRs and eventlog info",
-			blob: &SealedBlob{
+			blob: &nvslot.SealedBlob{
 				Version: 6,
-				Payload: SealedBlobPayload{
+				Payload: nvslot.SealedBlobPayload{
 					Public:        []byte("public-data"),
 					Private:       []byte("private-data"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
-					PCRDigests: []PCRDigestPair{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 2, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 7, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -454,13 +455,13 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		},
 		{
 			name: "Blob with mixed register and eventlog PCRs",
-			blob: &SealedBlob{
+			blob: &nvslot.SealedBlob{
 				Version: 6,
-				Payload: SealedBlobPayload{
+				Payload: nvslot.SealedBlobPayload{
 					Public:        []byte("public-mixed"),
 					Private:       []byte("private-mixed"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
-					PCRDigests: []PCRDigestPair{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 4, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -473,13 +474,13 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		},
 		{
 			name: "Blob with single eventlog PCR",
-			blob: &SealedBlob{
+			blob: &nvslot.SealedBlob{
 				Version: 6,
-				Payload: SealedBlobPayload{
+				Payload: nvslot.SealedBlobPayload{
 					Public:        []byte("pub"),
 					Private:       []byte("priv"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
-					PCRDigests: []PCRDigestPair{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 7, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
 					MeasurePointApplied: true,
@@ -488,13 +489,13 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 		},
 		{
 			name: "Blob with a register PCR and a policy reference",
-			blob: &SealedBlob{
+			blob: &nvslot.SealedBlob{
 				Version: 6,
-				Payload: SealedBlobPayload{
+				Payload: nvslot.SealedBlobPayload{
 					Public:        []byte("pub-kp"),
 					Private:       []byte("priv-kp"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
-					PCRDigests: []PCRDigestPair{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
 					PolicyRef: make([]byte, 32),
@@ -509,14 +510,14 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			signedData := testSignBlob(t, tt.blob, privKey)
 
 			// Unmarshal
-			unmarshaled, err := UnmarshalSealedBlob(signedData)
+			unmarshaled, err := nvslot.UnmarshalSealedBlob(signedData)
 			if err != nil {
 				t.Fatalf("Unmarshal failed: %v", err)
 			}
 
 			// Compare
-			if unmarshaled.Version != CurrentBlobVersion {
-				t.Errorf("Version should be %d, got %d", CurrentBlobVersion, unmarshaled.Version)
+			if unmarshaled.Version != nvslot.CurrentBlobVersion {
+				t.Errorf("Version should be %d, got %d", nvslot.CurrentBlobVersion, unmarshaled.Version)
 			}
 
 			if !bytes.Equal(unmarshaled.Payload.Public, tt.blob.Payload.Public) {
@@ -569,7 +570,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 			}
 
 			// Verify signature
-			if err := VerifyBlobSignature(signedData, unmarshaled, &privKey.PublicKey); err != nil {
+			if err := nvslot.VerifyBlobSignature(signedData, unmarshaled, &privKey.PublicKey); err != nil {
 				t.Errorf("VerifyBlobSignature failed: %v", err)
 			}
 		})
@@ -636,7 +637,7 @@ func TestUnmarshalSealedBlobInvalid(t *testing.T) {
 			name: "Truncated payload length",
 			data: func() []byte {
 				d := make([]byte, 10)
-				binary.LittleEndian.PutUint32(d[0:4], CurrentBlobVersion)
+				binary.LittleEndian.PutUint32(d[0:4], nvslot.CurrentBlobVersion)
 				binary.LittleEndian.PutUint32(d[4:8], 100) // payloadLen=100 but only 2 bytes left
 				return d
 			}(),
@@ -646,7 +647,7 @@ func TestUnmarshalSealedBlobInvalid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := UnmarshalSealedBlob(tt.data)
+			_, err := nvslot.UnmarshalSealedBlob(tt.data)
 			if err == nil {
 				t.Errorf("Expected error unmarshaling invalid data, got nil")
 				return
@@ -666,11 +667,11 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 	makeSignedBlob := func(payloadBytes []byte) []byte {
 		// [version:4][payloadLen:4][payload...][sigLen:2][sig...]
 		header := make([]byte, 8)
-		binary.LittleEndian.PutUint32(header[0:4], CurrentBlobVersion)
+		binary.LittleEndian.PutUint32(header[0:4], nvslot.CurrentBlobVersion)
 		binary.LittleEndian.PutUint32(header[4:8], uint32(len(payloadBytes)))
 		unsigned := append(header, payloadBytes...)
 
-		signed, _ := SignBlobPayload(unsigned, privKey)
+		signed, _ := nvslot.SignBlobPayload(unsigned, privKey)
 		return signed
 	}
 
@@ -704,7 +705,7 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 		{
 			name: "oversized public blob length",
 			blobMaker: func() []byte {
-				payload := makePayload(MaxPublicLen+1, 0, 0)
+				payload := makePayload(nvslot.MaxPublicLen+1, 0, 0)
 				return makeSignedBlob(payload)
 			},
 			expectErr: "exceeds maximum",
@@ -712,7 +713,7 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 		{
 			name: "oversized private blob length",
 			blobMaker: func() []byte {
-				payload := makePayload(0, MaxPrivateLen+1, 0)
+				payload := makePayload(0, nvslot.MaxPrivateLen+1, 0)
 				return makeSignedBlob(payload)
 			},
 			expectErr: "exceeds maximum",
@@ -720,7 +721,7 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 		{
 			name: "oversized PCR digest count",
 			blobMaker: func() []byte {
-				payload := makePayload(0, 0, MaxPCRDigests+1)
+				payload := makePayload(0, 0, nvslot.MaxPCRDigests+1)
 				return makeSignedBlob(payload)
 			},
 			expectErr: "exceeds maximum",
@@ -729,8 +730,8 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 			name: "oversized total blob",
 			blobMaker: func() []byte {
 				// Create a blob larger than MaxBlobSize
-				blob := make([]byte, MaxBlobSize+1)
-				binary.LittleEndian.PutUint32(blob[0:4], CurrentBlobVersion) // version
+				blob := make([]byte, nvslot.MaxBlobSize+1)
+				binary.LittleEndian.PutUint32(blob[0:4], nvslot.CurrentBlobVersion) // version
 				return blob
 			},
 			expectErr: "exceeds maximum",
@@ -738,13 +739,13 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 		{
 			name: "valid small blob still accepted",
 			blobMaker: func() []byte {
-				sb := &SealedBlob{
-					Version: CurrentBlobVersion,
-					Payload: SealedBlobPayload{
+				sb := &nvslot.SealedBlob{
+					Version: nvslot.CurrentBlobVersion,
+					Payload: nvslot.SealedBlobPayload{
 						Public:        []byte{1, 2, 3},
 						Private:       []byte{4, 5, 6},
 						TOTPAlgorithm: tpm2.TPMAlgSHA1,
-						PCRDigests: []PCRDigestPair{
+						PCRDigests: []nvslot.PCRDigestPair{
 							{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						},
 					},
@@ -758,7 +759,7 @@ func TestUnmarshalSealedBlob_OversizedFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			blob := tt.blobMaker()
-			_, err := UnmarshalSealedBlob(blob)
+			_, err := nvslot.UnmarshalSealedBlob(blob)
 
 			if tt.expectErr == "" {
 				if err != nil {
@@ -787,21 +788,21 @@ func TestUnmarshalIncompatibleVersion(t *testing.T) {
 	data[2] = 0x00
 	data[3] = 0x00
 
-	_, err := UnmarshalSealedBlob(data)
+	_, err := nvslot.UnmarshalSealedBlob(data)
 	if err == nil {
 		t.Fatal("Expected error for incompatible version, got nil")
 	}
 
 	// Verify it's a BlobVersionError
-	bve, ok := IsBlobVersionError(err)
+	bve, ok := nvslot.IsBlobVersionError(err)
 	if !ok {
 		t.Fatalf("Expected BlobVersionError, got: %T: %v", err, err)
 	}
 	if bve.FoundVersion != 1 {
 		t.Errorf("Expected FoundVersion 1, got %d", bve.FoundVersion)
 	}
-	if bve.RequiredVersion != CurrentBlobVersion {
-		t.Errorf("Expected RequiredVersion %d, got %d", CurrentBlobVersion, bve.RequiredVersion)
+	if bve.RequiredVersion != nvslot.CurrentBlobVersion {
+		t.Errorf("Expected RequiredVersion %d, got %d", nvslot.CurrentBlobVersion, bve.RequiredVersion)
 	}
 
 	// Verify error message contains useful info
@@ -811,8 +812,8 @@ func TestUnmarshalIncompatibleVersion(t *testing.T) {
 	if !strings.Contains(err.Error(), "v1") {
 		t.Errorf("Expected error to mention found v1, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), fmt.Sprintf("v%d", CurrentBlobVersion)) {
-		t.Errorf("Expected error to mention requires v%d, got: %v", CurrentBlobVersion, err)
+	if !strings.Contains(err.Error(), fmt.Sprintf("v%d", nvslot.CurrentBlobVersion)) {
+		t.Errorf("Expected error to mention requires v%d, got: %v", nvslot.CurrentBlobVersion, err)
 	}
 	if !strings.Contains(err.Error(), "tpm2-kira slot add") {
 		t.Errorf("Expected error to suggest re-sealing, got: %v", err)
@@ -821,10 +822,10 @@ func TestUnmarshalIncompatibleVersion(t *testing.T) {
 
 // TestBlobVersionErrorWrapped tests that IsBlobVersionError detects wrapped BlobVersionErrors
 func TestBlobVersionErrorWrapped(t *testing.T) {
-	original := &BlobVersionError{FoundVersion: 2, RequiredVersion: 3, DataSize: 500}
+	original := &nvslot.BlobVersionError{FoundVersion: 2, RequiredVersion: 3, DataSize: 500}
 	wrapped := fmt.Errorf("failed to unmarshal sealed data: %w", original)
 
-	bve, ok := IsBlobVersionError(wrapped)
+	bve, ok := nvslot.IsBlobVersionError(wrapped)
 	if !ok {
 		t.Fatalf("Expected to detect wrapped BlobVersionError, got false")
 	}
@@ -841,12 +842,12 @@ func TestBlobVersionErrorWrapped(t *testing.T) {
 
 // TestBlobVersionErrorNotDetected tests that IsBlobVersionError returns false for non-version errors
 func TestBlobVersionErrorNotDetected(t *testing.T) {
-	_, ok := IsBlobVersionError(fmt.Errorf("some other error"))
+	_, ok := nvslot.IsBlobVersionError(fmt.Errorf("some other error"))
 	if ok {
 		t.Error("Expected false for non-BlobVersionError")
 	}
 
-	_, ok = IsBlobVersionError(nil)
+	_, ok = nvslot.IsBlobVersionError(nil)
 	if ok {
 		t.Error("Expected false for nil error")
 	}
@@ -880,11 +881,11 @@ func TestPeekBlobVersion(t *testing.T) {
 			name: "Current version blob",
 			data: func() []byte {
 				d := make([]byte, 30)
-				binary.LittleEndian.PutUint32(d[0:4], CurrentBlobVersion)
+				binary.LittleEndian.PutUint32(d[0:4], nvslot.CurrentBlobVersion)
 				binary.LittleEndian.PutUint32(d[4:8], 20) // payloadLen (doesn't matter for peek)
 				return d
 			}(),
-			expectedVersion: CurrentBlobVersion,
+			expectedVersion: nvslot.CurrentBlobVersion,
 			expectedSize:    30,
 		},
 		{
@@ -897,7 +898,7 @@ func TestPeekBlobVersion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			peek := PeekBlobVersion(tt.data)
+			peek := nvslot.PeekBlobVersion(tt.data)
 			if peek.DataSize != tt.expectedSize {
 				t.Errorf("DataSize: expected %d, got %d", tt.expectedSize, peek.DataSize)
 			}
@@ -910,9 +911,9 @@ func TestPeekBlobVersion(t *testing.T) {
 
 // TestGetPCRIndices tests extracting PCR indices from SealedBlob
 func TestGetPCRIndices(t *testing.T) {
-	blob := &SealedBlob{
-		Payload: SealedBlobPayload{
-			PCRDigests: []PCRDigestPair{
+	blob := &nvslot.SealedBlob{
+		Payload: nvslot.SealedBlobPayload{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte("d0")}},
 				{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("d2")}},
 				{Index: 4, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("d4")}},
@@ -940,9 +941,9 @@ func TestGetPCRDigestValues(t *testing.T) {
 	digest0 := []byte("digest0-value")
 	digest2 := []byte("digest2-value")
 
-	blob := &SealedBlob{
-		Payload: SealedBlobPayload{
-			PCRDigests: []PCRDigestPair{
+	blob := &nvslot.SealedBlob{
+		Payload: nvslot.SealedBlobPayload{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: digest0}},
 				{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: digest2}},
 			},
@@ -968,14 +969,14 @@ func TestGetPCRDigestValues(t *testing.T) {
 func TestHasEventlogPCRs(t *testing.T) {
 	tests := []struct {
 		name     string
-		blob     *SealedBlob
+		blob     *nvslot.SealedBlob
 		expected bool
 	}{
 		{
 			name: "All register",
-			blob: &SealedBlob{
-				Payload: SealedBlobPayload{
-					PCRDigests: []PCRDigestPair{
+			blob: &nvslot.SealedBlob{
+				Payload: nvslot.SealedBlobPayload{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 0, Source: measure.PCRSourceRegister},
 						{Index: 2, Source: measure.PCRSourceRegister},
 					},
@@ -985,9 +986,9 @@ func TestHasEventlogPCRs(t *testing.T) {
 		},
 		{
 			name: "All eventlog",
-			blob: &SealedBlob{
-				Payload: SealedBlobPayload{
-					PCRDigests: []PCRDigestPair{
+			blob: &nvslot.SealedBlob{
+				Payload: nvslot.SealedBlobPayload{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 0, Source: measure.PCRSourceEventlog},
 						{Index: 2, Source: measure.PCRSourceEventlog},
 					},
@@ -997,9 +998,9 @@ func TestHasEventlogPCRs(t *testing.T) {
 		},
 		{
 			name: "Mixed",
-			blob: &SealedBlob{
-				Payload: SealedBlobPayload{
-					PCRDigests: []PCRDigestPair{
+			blob: &nvslot.SealedBlob{
+				Payload: nvslot.SealedBlobPayload{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 0, Source: measure.PCRSourceEventlog},
 						{Index: 2, Source: measure.PCRSourceRegister},
 					},
@@ -1009,9 +1010,9 @@ func TestHasEventlogPCRs(t *testing.T) {
 		},
 		{
 			name: "UKI only does not count as eventlog",
-			blob: &SealedBlob{
-				Payload: SealedBlobPayload{
-					PCRDigests: []PCRDigestPair{
+			blob: &nvslot.SealedBlob{
+				Payload: nvslot.SealedBlobPayload{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/uki.efi"},
 					},
 				},
@@ -1020,9 +1021,9 @@ func TestHasEventlogPCRs(t *testing.T) {
 		},
 		{
 			name: "Empty",
-			blob: &SealedBlob{
-				Payload: SealedBlobPayload{
-					PCRDigests: []PCRDigestPair{},
+			blob: &nvslot.SealedBlob{
+				Payload: nvslot.SealedBlobPayload{
+					PCRDigests: []nvslot.PCRDigestPair{},
 				},
 			},
 			expected: false,
@@ -1043,14 +1044,14 @@ func TestHasEventlogPCRs(t *testing.T) {
 func TestHasUKIPCRs(t *testing.T) {
 	tests := []struct {
 		name     string
-		blob     *SealedBlob
+		blob     *nvslot.SealedBlob
 		expected bool
 	}{
 		{
 			name: "All register",
-			blob: &SealedBlob{
-				Payload: SealedBlobPayload{
-					PCRDigests: []PCRDigestPair{
+			blob: &nvslot.SealedBlob{
+				Payload: nvslot.SealedBlobPayload{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 0, Source: measure.PCRSourceRegister},
 						{Index: 2, Source: measure.PCRSourceRegister},
 					},
@@ -1060,9 +1061,9 @@ func TestHasUKIPCRs(t *testing.T) {
 		},
 		{
 			name: "All eventlog",
-			blob: &SealedBlob{
-				Payload: SealedBlobPayload{
-					PCRDigests: []PCRDigestPair{
+			blob: &nvslot.SealedBlob{
+				Payload: nvslot.SealedBlobPayload{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 0, Source: measure.PCRSourceEventlog},
 						{Index: 2, Source: measure.PCRSourceEventlog},
 					},
@@ -1072,9 +1073,9 @@ func TestHasUKIPCRs(t *testing.T) {
 		},
 		{
 			name: "Has UKI",
-			blob: &SealedBlob{
-				Payload: SealedBlobPayload{
-					PCRDigests: []PCRDigestPair{
+			blob: &nvslot.SealedBlob{
+				Payload: nvslot.SealedBlobPayload{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 0, Source: measure.PCRSourceEventlog},
 						{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/uki.efi"},
 					},
@@ -1084,9 +1085,9 @@ func TestHasUKIPCRs(t *testing.T) {
 		},
 		{
 			name: "UKI only",
-			blob: &SealedBlob{
-				Payload: SealedBlobPayload{
-					PCRDigests: []PCRDigestPair{
+			blob: &nvslot.SealedBlob{
+				Payload: nvslot.SealedBlobPayload{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/uki.efi"},
 					},
 				},
@@ -1095,9 +1096,9 @@ func TestHasUKIPCRs(t *testing.T) {
 		},
 		{
 			name: "Empty",
-			blob: &SealedBlob{
-				Payload: SealedBlobPayload{
-					PCRDigests: []PCRDigestPair{},
+			blob: &nvslot.SealedBlob{
+				Payload: nvslot.SealedBlobPayload{
+					PCRDigests: []nvslot.PCRDigestPair{},
 				},
 			},
 			expected: false,
@@ -1116,9 +1117,9 @@ func TestHasUKIPCRs(t *testing.T) {
 
 // TestGetEventlogPCRIndices tests extracting eventlog PCR indices
 func TestGetEventlogPCRIndices(t *testing.T) {
-	blob := &SealedBlob{
-		Payload: SealedBlobPayload{
-			PCRDigests: []PCRDigestPair{
+	blob := &nvslot.SealedBlob{
+		Payload: nvslot.SealedBlobPayload{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 0, Source: measure.PCRSourceEventlog},
 				{Index: 2, Source: measure.PCRSourceRegister},
 				{Index: 4, Source: measure.PCRSourceRegister},
@@ -1146,9 +1147,9 @@ func TestGetEventlogPCRIndices(t *testing.T) {
 
 // TestGetUKIPCRIndices tests extracting UKI PCR indices
 func TestGetUKIPCRIndices(t *testing.T) {
-	blob := &SealedBlob{
-		Payload: SealedBlobPayload{
-			PCRDigests: []PCRDigestPair{
+	blob := &nvslot.SealedBlob{
+		Payload: nvslot.SealedBlobPayload{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 0, Source: measure.PCRSourceEventlog},
 				{Index: 2, Source: measure.PCRSourceRegister},
 				{Index: 7, Source: measure.PCRSourceEventlog},
@@ -1181,9 +1182,9 @@ func TestGetUKIPCRIndices(t *testing.T) {
 
 // TestGetPCRSpecs tests reconstructing PCRSpecs from a SealedBlob
 func TestGetPCRSpecs(t *testing.T) {
-	blob := &SealedBlob{
-		Payload: SealedBlobPayload{
-			PCRDigests: []PCRDigestPair{
+	blob := &nvslot.SealedBlob{
+		Payload: nvslot.SealedBlobPayload{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 0, Source: measure.PCRSourceEventlog},
 				{Index: 2, Source: measure.PCRSourceRegister},
 				{Index: 7, Source: measure.PCRSourceEventlog},
@@ -1311,12 +1312,12 @@ func TestPcrsToBitmapBytes(t *testing.T) {
 
 // TestSealedBlobMarshalJSON tests JSON serialization
 func TestSealedBlobMarshalJSON(t *testing.T) {
-	blob := &SealedBlob{
+	blob := &nvslot.SealedBlob{
 		Version: 6,
-		Payload: SealedBlobPayload{
+		Payload: nvslot.SealedBlobPayload{
 			Public:  []byte{0x01, 0x02, 0x03},
 			Private: []byte{0x04, 0x05, 0x06},
-			PCRDigests: []PCRDigestPair{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA, 0xBB}}},
 				{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xCC, 0xDD}}},
 			},
@@ -1402,13 +1403,13 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 // TestSealedBlobMarshalJSONWithMeasurePoint: the extends the blob only
 // flags are spelt out, derived from its eventlog PCRs.
 func TestSealedBlobMarshalJSONWithMeasurePoint(t *testing.T) {
-	blob := &SealedBlob{
+	blob := &nvslot.SealedBlob{
 		Version: 6,
-		Payload: SealedBlobPayload{
+		Payload: nvslot.SealedBlobPayload{
 			Public:        []byte{0x01},
 			Private:       []byte{0x02},
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
-			PCRDigests: []PCRDigestPair{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA}}},
 				{Index: 11, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xBB}}},
 			},
@@ -1473,15 +1474,15 @@ func TestCreatePCRSelection(t *testing.T) {
 func TestGetHashAlgo(t *testing.T) {
 	tests := []struct {
 		name     string
-		blob     *SealedBlob
+		blob     *nvslot.SealedBlob
 		expected measure.PCRHashAlgo
 	}{
 		{
 			name: "SHA256 digests (32 bytes)",
-			blob: &SealedBlob{
+			blob: &nvslot.SealedBlob{
 				Version: 6,
-				Payload: SealedBlobPayload{
-					PCRDigests: []PCRDigestPair{
+				Payload: nvslot.SealedBlobPayload{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 						{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
@@ -1491,10 +1492,10 @@ func TestGetHashAlgo(t *testing.T) {
 		},
 		{
 			name: "SHA1 digests (20 bytes)",
-			blob: &SealedBlob{
+			blob: &nvslot.SealedBlob{
 				Version: 6,
-				Payload: SealedBlobPayload{
-					PCRDigests: []PCRDigestPair{
+				Payload: nvslot.SealedBlobPayload{
+					PCRDigests: []nvslot.PCRDigestPair{
 						{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 20)}},
 						{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 20)}},
 					},
@@ -1504,19 +1505,19 @@ func TestGetHashAlgo(t *testing.T) {
 		},
 		{
 			name: "Empty digests defaults to SHA256",
-			blob: &SealedBlob{
+			blob: &nvslot.SealedBlob{
 				Version: 6,
-				Payload: SealedBlobPayload{
-					PCRDigests: []PCRDigestPair{},
+				Payload: nvslot.SealedBlobPayload{
+					PCRDigests: []nvslot.PCRDigestPair{},
 				},
 			},
 			expected: measure.PCRHashAlgoSHA256,
 		},
 		{
 			name: "No PCR digests defaults to SHA256",
-			blob: &SealedBlob{
+			blob: &nvslot.SealedBlob{
 				Version: 6,
-				Payload: SealedBlobPayload{},
+				Payload: nvslot.SealedBlobPayload{},
 			},
 			expected: measure.PCRHashAlgoSHA256,
 		},
@@ -1570,13 +1571,13 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 	privKey := testGenECDSAKey(t)
 
 	// Create a blob with realistic TPM data sizes and mixed sources
-	original := &SealedBlob{
+	original := &nvslot.SealedBlob{
 		Version: 6,
-		Payload: SealedBlobPayload{
+		Payload: nvslot.SealedBlobPayload{
 			Public:        make([]byte, 100), // Typical public key size
 			Private:       make([]byte, 150), // Typical private key size
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
-			PCRDigests: []PCRDigestPair{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				{Index: 4, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -1606,14 +1607,14 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 	t.Logf("Signed blob size: %d bytes", len(signedData))
 
 	// Unmarshal
-	restored, err := UnmarshalSealedBlob(signedData)
+	restored, err := nvslot.UnmarshalSealedBlob(signedData)
 	if err != nil {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
 
 	// Verify all fields match
-	if restored.Version != CurrentBlobVersion {
-		t.Errorf("Version should be %d, got %d", CurrentBlobVersion, restored.Version)
+	if restored.Version != nvslot.CurrentBlobVersion {
+		t.Errorf("Version should be %d, got %d", nvslot.CurrentBlobVersion, restored.Version)
 	}
 	if !bytes.Equal(restored.Payload.Public, original.Payload.Public) {
 		t.Error("Public data mismatch")
@@ -1643,7 +1644,7 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 	if len(restored.BlobSignature) == 0 {
 		t.Error("BlobSignature should not be empty")
 	}
-	if err := VerifyBlobSignature(signedData, restored, &privKey.PublicKey); err != nil {
+	if err := nvslot.VerifyBlobSignature(signedData, restored, &privKey.PublicKey); err != nil {
 		t.Errorf("VerifyBlobSignature failed: %v", err)
 	}
 }
@@ -1652,13 +1653,13 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 func TestSealedBlobRoundTripNoEventlog(t *testing.T) {
 	privKey := testGenECDSAKey(t)
 
-	original := &SealedBlob{
+	original := &nvslot.SealedBlob{
 		Version: 6,
-		Payload: SealedBlobPayload{
+		Payload: nvslot.SealedBlobPayload{
 			Public:        []byte("pub-data"),
 			Private:       []byte("priv-data"),
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
-			PCRDigests: []PCRDigestPair{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -1668,7 +1669,7 @@ func TestSealedBlobRoundTripNoEventlog(t *testing.T) {
 
 	signedData := testSignBlob(t, original, privKey)
 
-	restored, err := UnmarshalSealedBlob(signedData)
+	restored, err := nvslot.UnmarshalSealedBlob(signedData)
 	if err != nil {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
@@ -1749,12 +1750,12 @@ func TestValidateNVRAMIndex(t *testing.T) {
 		},
 		{
 			name:      "Valid: range start 0x01803000",
-			index:     AppNVRAMStart,
+			index:     nvslot.AppNVRAMStart,
 			shouldErr: false,
 		},
 		{
 			name:      "Valid: range end 0x01803FFF",
-			index:     AppNVRAMEnd,
+			index:     nvslot.AppNVRAMEnd,
 			shouldErr: false,
 		},
 		{
@@ -1769,12 +1770,12 @@ func TestValidateNVRAMIndex(t *testing.T) {
 		},
 		{
 			name:      "Rejected: just below range 0x01802FFF",
-			index:     AppNVRAMStart - 1,
+			index:     nvslot.AppNVRAMStart - 1,
 			shouldErr: true,
 		},
 		{
 			name:      "Rejected: just above range 0x01804000",
-			index:     AppNVRAMEnd + 1,
+			index:     nvslot.AppNVRAMEnd + 1,
 			shouldErr: true,
 		},
 		{
@@ -1821,7 +1822,7 @@ func TestValidateNVRAMIndex(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateNVRAMIndex(tt.index)
+			err := nvslot.ValidateNVRAMIndex(tt.index)
 
 			if tt.shouldErr {
 				if err == nil {
@@ -1838,8 +1839,8 @@ func TestValidateNVRAMIndex(t *testing.T) {
 }
 
 func TestCurrentBlobVersion(t *testing.T) {
-	if CurrentBlobVersion != 14 {
-		t.Errorf("CurrentBlobVersion should be 14, got %d", CurrentBlobVersion)
+	if nvslot.CurrentBlobVersion != 14 {
+		t.Errorf("CurrentBlobVersion should be 14, got %d", nvslot.CurrentBlobVersion)
 	}
 }
 
@@ -2344,7 +2345,7 @@ func TestApproveAndWriteValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	specs := []measure.PCRSpec{{Index: 0, Source: measure.PCRSourceRegister}}
-	blob := &SealedBlob{}
+	blob := &nvslot.SealedBlob{}
 
 	// All of these are refused before the TPM is used (it is nil here).
 	for _, tc := range []struct {
@@ -2354,9 +2355,9 @@ func TestApproveAndWriteValidation(t *testing.T) {
 		signer crypto.Signer
 		want   string
 	}{
-		{"no PCRs", NVRAMSlotStart, nil, signer, "no PCRs specified"},
-		{"no signing key", NVRAMSlotStart, specs, nil, "no signing private key provided"},
-		{"generation range", GenerationIndex(NVRAMSlotStart), specs, signer, "reserved for generation indices"},
+		{"no PCRs", nvslot.NVRAMSlotStart, nil, signer, "no PCRs specified"},
+		{"no signing key", nvslot.NVRAMSlotStart, specs, nil, "no signing private key provided"},
+		{"generation range", nvslot.GenerationIndex(nvslot.NVRAMSlotStart), specs, signer, "reserved for generation indices"},
 		{"outside the application range", 0x01000000, specs, signer, "outside the safe application range"},
 	} {
 		err := approveAndWrite(nil, tc.index, blob, tc.specs, measure.PCRHashAlgoSHA256, false, tc.signer, false)
@@ -2375,12 +2376,12 @@ func TestResolveNVRAMIndex(t *testing.T) {
 		{
 			name:     "Zero returns default",
 			input:    0,
-			expected: NVRAMSlotStart,
+			expected: nvslot.NVRAMSlotStart,
 		},
 		{
 			name:     "Small number maps to slot",
 			input:    1,
-			expected: NVRAMSlotStart + 1,
+			expected: nvslot.NVRAMSlotStart + 1,
 		},
 		{
 			name:     "Full index passed through",
@@ -2391,7 +2392,7 @@ func TestResolveNVRAMIndex(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ResolveNVRAMIndex(tt.input)
+			result := nvslot.ResolveNVRAMIndex(tt.input)
 			if result != tt.expected {
 				t.Errorf("ResolveNVRAMIndex(%d) = 0x%08X, want 0x%08X", tt.input, result, tt.expected)
 			}
@@ -2407,29 +2408,29 @@ func TestSlotNumber(t *testing.T) {
 	}{
 		{
 			name:     "First slot",
-			index:    NVRAMSlotStart,
+			index:    nvslot.NVRAMSlotStart,
 			expected: 0,
 		},
 		{
 			name:     "Second slot",
-			index:    NVRAMSlotStart + 1,
+			index:    nvslot.NVRAMSlotStart + 1,
 			expected: 1,
 		},
 		{
 			name:     "Last slot",
-			index:    NVRAMSlotEnd,
-			expected: int(NVRAMSlotEnd - NVRAMSlotStart),
+			index:    nvslot.NVRAMSlotEnd,
+			expected: int(nvslot.NVRAMSlotEnd - nvslot.NVRAMSlotStart),
 		},
 		{
 			name:     "Outside the shorthand range has no slot number",
-			index:    NVRAMSlotEnd + 1,
+			index:    nvslot.NVRAMSlotEnd + 1,
 			expected: -1,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := SlotNumber(tt.index)
+			result := nvslot.SlotNumber(tt.index)
 			if result != tt.expected {
 				t.Errorf("SlotNumber(0x%08X) = %d, want %d", tt.index, result, tt.expected)
 			}
@@ -2438,8 +2439,8 @@ func TestSlotNumber(t *testing.T) {
 }
 
 func TestMaxSlotNumber(t *testing.T) {
-	if MaxSlotNumber != 15 {
-		t.Errorf("MaxSlotNumber = %d, want 15", MaxSlotNumber)
+	if nvslot.MaxSlotNumber != 15 {
+		t.Errorf("MaxSlotNumber = %d, want 15", nvslot.MaxSlotNumber)
 	}
 }
 
@@ -2448,13 +2449,13 @@ func TestMaxSlotNumber(t *testing.T) {
 func TestSignBlobPayload(t *testing.T) {
 	privKey := testGenECDSAKey(t)
 
-	blob := &SealedBlob{
-		Version: CurrentBlobVersion,
-		Payload: SealedBlobPayload{
+	blob := &nvslot.SealedBlob{
+		Version: nvslot.CurrentBlobVersion,
+		Payload: nvslot.SealedBlobPayload{
 			Public:        []byte("public-data"),
 			Private:       []byte("private-data"),
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
-			PCRDigests: []PCRDigestPair{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 				{Index: 7, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
@@ -2469,7 +2470,7 @@ func TestSignBlobPayload(t *testing.T) {
 	}
 
 	// Sign
-	signed, err := SignBlobPayload(unsigned, privKey)
+	signed, err := nvslot.SignBlobPayload(unsigned, privKey)
 	if err != nil {
 		t.Fatalf("SignBlobPayload failed: %v", err)
 	}
@@ -2480,7 +2481,7 @@ func TestSignBlobPayload(t *testing.T) {
 	}
 
 	// Unmarshal the signed blob — should succeed and populate BlobSignature
-	parsed, err := UnmarshalSealedBlob(signed)
+	parsed, err := nvslot.UnmarshalSealedBlob(signed)
 	if err != nil {
 		t.Fatalf("UnmarshalSealedBlob failed: %v", err)
 	}
@@ -2489,7 +2490,7 @@ func TestSignBlobPayload(t *testing.T) {
 	}
 
 	// Verify the signature is correct
-	if err := VerifyBlobSignature(signed, parsed, &privKey.PublicKey); err != nil {
+	if err := nvslot.VerifyBlobSignature(signed, parsed, &privKey.PublicKey); err != nil {
 		t.Errorf("VerifyBlobSignature failed: %v", err)
 	}
 }
@@ -2497,13 +2498,13 @@ func TestSignBlobPayload(t *testing.T) {
 func TestVerifyBlobSignature(t *testing.T) {
 	privKey := testGenECDSAKey(t)
 
-	blob := &SealedBlob{
-		Version: CurrentBlobVersion,
-		Payload: SealedBlobPayload{
+	blob := &nvslot.SealedBlob{
+		Version: nvslot.CurrentBlobVersion,
+		Payload: nvslot.SealedBlobPayload{
 			Public:        []byte("public-data"),
 			Private:       []byte("private-data"),
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
-			PCRDigests: []PCRDigestPair{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
 			PolicyRef: make([]byte, 32),
@@ -2514,13 +2515,13 @@ func TestVerifyBlobSignature(t *testing.T) {
 	signedData := testSignBlob(t, blob, privKey)
 
 	// Parse back
-	parsed, err := UnmarshalSealedBlob(signedData)
+	parsed, err := nvslot.UnmarshalSealedBlob(signedData)
 	if err != nil {
 		t.Fatalf("UnmarshalSealedBlob failed: %v", err)
 	}
 
 	t.Run("Valid signature succeeds", func(t *testing.T) {
-		if err := VerifyBlobSignature(signedData, parsed, &privKey.PublicKey); err != nil {
+		if err := nvslot.VerifyBlobSignature(signedData, parsed, &privKey.PublicKey); err != nil {
 			t.Errorf("VerifyBlobSignature failed: %v", err)
 		}
 	})
@@ -2533,27 +2534,27 @@ func TestVerifyBlobSignature(t *testing.T) {
 			tampered[12] ^= 0xFF
 		}
 		// Re-parse (may or may not succeed — we just need the signature)
-		if err := VerifyBlobSignature(tampered, parsed, &privKey.PublicKey); err == nil {
+		if err := nvslot.VerifyBlobSignature(tampered, parsed, &privKey.PublicKey); err == nil {
 			t.Error("Expected verification to fail for tampered payload")
 		}
 	})
 
 	t.Run("Tampered signature bytes fail", func(t *testing.T) {
-		tamperedParsed := &SealedBlob{
+		tamperedParsed := &nvslot.SealedBlob{
 			Version:       parsed.Version,
 			Payload:       parsed.Payload,
 			BlobSignature: make([]byte, len(parsed.BlobSignature)),
 		}
 		copy(tamperedParsed.BlobSignature, parsed.BlobSignature)
 		tamperedParsed.BlobSignature[0] ^= 0xFF
-		if err := VerifyBlobSignature(signedData, tamperedParsed, &privKey.PublicKey); err == nil {
+		if err := nvslot.VerifyBlobSignature(signedData, tamperedParsed, &privKey.PublicKey); err == nil {
 			t.Error("Expected verification to fail for tampered signature")
 		}
 	})
 
 	t.Run("Wrong key fails", func(t *testing.T) {
 		wrongKey := testGenECDSAKey(t)
-		if err := VerifyBlobSignature(signedData, parsed, &wrongKey.PublicKey); err == nil {
+		if err := nvslot.VerifyBlobSignature(signedData, parsed, &wrongKey.PublicKey); err == nil {
 			t.Error("Expected verification to fail with wrong key")
 		}
 	})
@@ -2562,13 +2563,13 @@ func TestVerifyBlobSignature(t *testing.T) {
 func TestVerifyBlobSignatureRSA(t *testing.T) {
 	privKey := testGenRSAKey(t)
 
-	blob := &SealedBlob{
-		Version: CurrentBlobVersion,
-		Payload: SealedBlobPayload{
+	blob := &nvslot.SealedBlob{
+		Version: nvslot.CurrentBlobVersion,
+		Payload: nvslot.SealedBlobPayload{
 			Public:        []byte("rsa-public-data"),
 			Private:       []byte("rsa-private-data"),
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
-			PCRDigests: []PCRDigestPair{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
 			PolicyRef: make([]byte, 32),
@@ -2579,18 +2580,18 @@ func TestVerifyBlobSignatureRSA(t *testing.T) {
 	signedData := testSignBlob(t, blob, privKey)
 
 	// Parse and verify
-	parsed, err := UnmarshalSealedBlob(signedData)
+	parsed, err := nvslot.UnmarshalSealedBlob(signedData)
 	if err != nil {
 		t.Fatalf("UnmarshalSealedBlob failed: %v", err)
 	}
 
-	if err := VerifyBlobSignature(signedData, parsed, &privKey.PublicKey); err != nil {
+	if err := nvslot.VerifyBlobSignature(signedData, parsed, &privKey.PublicKey); err != nil {
 		t.Errorf("RSA VerifyBlobSignature failed: %v", err)
 	}
 
 	// Wrong key should fail
 	wrongKey := testGenRSAKey(t)
-	if err := VerifyBlobSignature(signedData, parsed, &wrongKey.PublicKey); err == nil {
+	if err := nvslot.VerifyBlobSignature(signedData, parsed, &wrongKey.PublicKey); err == nil {
 		t.Error("Expected verification to fail with wrong RSA key")
 	}
 
@@ -2601,13 +2602,13 @@ func TestVerifyBlobSignatureRSA(t *testing.T) {
 }
 
 func TestUnsignedBlobRejected(t *testing.T) {
-	blob := &SealedBlob{
-		Version: CurrentBlobVersion,
-		Payload: SealedBlobPayload{
+	blob := &nvslot.SealedBlob{
+		Version: nvslot.CurrentBlobVersion,
+		Payload: nvslot.SealedBlobPayload{
 			Public:        []byte("pub"),
 			Private:       []byte("priv"),
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
-			PCRDigests: []PCRDigestPair{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
 		},
@@ -2621,7 +2622,7 @@ func TestUnsignedBlobRejected(t *testing.T) {
 	}
 
 	// Attempt unmarshal — should fail because there's no signature trailer
-	_, err = UnmarshalSealedBlob(unsigned)
+	_, err = nvslot.UnmarshalSealedBlob(unsigned)
 	if err == nil {
 		t.Error("Expected error unmarshaling unsigned blob, got nil")
 	}
@@ -2631,13 +2632,13 @@ func TestUnsignedBlobRejected(t *testing.T) {
 }
 
 func TestEmptySignatureRejected(t *testing.T) {
-	blob := &SealedBlob{
-		Version: CurrentBlobVersion,
-		Payload: SealedBlobPayload{
+	blob := &nvslot.SealedBlob{
+		Version: nvslot.CurrentBlobVersion,
+		Payload: nvslot.SealedBlobPayload{
 			Public:        []byte("pub"),
 			Private:       []byte("priv"),
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
-			PCRDigests: []PCRDigestPair{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
 		},
@@ -2655,7 +2656,7 @@ func TestEmptySignatureRejected(t *testing.T) {
 	withEmptySig := append(unsigned, emptySigTrailer...)
 
 	// Attempt unmarshal — should fail because signature is empty
-	_, err = UnmarshalSealedBlob(withEmptySig)
+	_, err = nvslot.UnmarshalSealedBlob(withEmptySig)
 	if err == nil {
 		t.Error("Expected error unmarshaling blob with empty signature, got nil")
 	}
@@ -2668,7 +2669,7 @@ func TestSignBlobPayloadTooShort(t *testing.T) {
 	privKey := testGenECDSAKey(t)
 
 	// Try to sign data that's too short
-	_, err := SignBlobPayload([]byte{0x01, 0x02}, privKey)
+	_, err := nvslot.SignBlobPayload([]byte{0x01, 0x02}, privKey)
 	if err == nil {
 		t.Error("Expected error for too-short blob")
 	}
@@ -2678,18 +2679,18 @@ func TestSignBlobPayloadTooShort(t *testing.T) {
 }
 
 func TestVerifyBlobSignatureEmptySignature(t *testing.T) {
-	blob := &SealedBlob{
-		Version:       CurrentBlobVersion,
-		Payload:       SealedBlobPayload{},
+	blob := &nvslot.SealedBlob{
+		Version:       nvslot.CurrentBlobVersion,
+		Payload:       nvslot.SealedBlobPayload{},
 		BlobSignature: []byte{}, // empty
 	}
 
 	key := testGenECDSAKey(t)
 	dummyData := make([]byte, 20)
-	binary.LittleEndian.PutUint32(dummyData[0:4], CurrentBlobVersion)
+	binary.LittleEndian.PutUint32(dummyData[0:4], nvslot.CurrentBlobVersion)
 	binary.LittleEndian.PutUint32(dummyData[4:8], 10)
 
-	err := VerifyBlobSignature(dummyData, blob, &key.PublicKey)
+	err := nvslot.VerifyBlobSignature(dummyData, blob, &key.PublicKey)
 	if err == nil {
 		t.Error("Expected error for empty signature")
 	}
@@ -2701,17 +2702,17 @@ func TestVerifyBlobSignatureEmptySignature(t *testing.T) {
 func TestVerifyBlobSignatureUnsupportedKeyType(t *testing.T) {
 	type weirdKey struct{}
 
-	blob := &SealedBlob{
-		Version:       CurrentBlobVersion,
-		Payload:       SealedBlobPayload{},
+	blob := &nvslot.SealedBlob{
+		Version:       nvslot.CurrentBlobVersion,
+		Payload:       nvslot.SealedBlobPayload{},
 		BlobSignature: []byte{0x01, 0x02, 0x03},
 	}
 
 	dummyData := make([]byte, 20)
-	binary.LittleEndian.PutUint32(dummyData[0:4], CurrentBlobVersion)
+	binary.LittleEndian.PutUint32(dummyData[0:4], nvslot.CurrentBlobVersion)
 	binary.LittleEndian.PutUint32(dummyData[4:8], 10)
 
-	err := VerifyBlobSignature(dummyData, blob, &weirdKey{})
+	err := nvslot.VerifyBlobSignature(dummyData, blob, &weirdKey{})
 	if err == nil {
 		t.Error("Expected error for unsupported key type")
 	}
@@ -2730,13 +2731,13 @@ func TestSignBlobPayloadUnsupportedKeyType(t *testing.T) {
 	ecKey := testGenECDSAKey(t)
 	rsaKey := testGenRSAKey(t)
 
-	blob := &SealedBlob{
-		Version: CurrentBlobVersion,
-		Payload: SealedBlobPayload{
+	blob := &nvslot.SealedBlob{
+		Version: nvslot.CurrentBlobVersion,
+		Payload: nvslot.SealedBlobPayload{
 			Public:        []byte("pub"),
 			Private:       []byte("priv"),
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
-			PCRDigests: []PCRDigestPair{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
 		},
@@ -2747,12 +2748,12 @@ func TestSignBlobPayloadUnsupportedKeyType(t *testing.T) {
 		t.Fatalf("Marshal failed: %v", err)
 	}
 
-	signedEC, err := SignBlobPayload(unsigned, ecKey)
+	signedEC, err := nvslot.SignBlobPayload(unsigned, ecKey)
 	if err != nil {
 		t.Fatalf("ECDSA sign failed: %v", err)
 	}
 
-	signedRSA, err := SignBlobPayload(unsigned, rsaKey)
+	signedRSA, err := nvslot.SignBlobPayload(unsigned, rsaKey)
 	if err != nil {
 		t.Fatalf("RSA sign failed: %v", err)
 	}
@@ -2779,13 +2780,13 @@ func TestSignBlobPayloadUnsupportedKeyType(t *testing.T) {
 func TestSignedBlobVersionInSignedRegion(t *testing.T) {
 	privKey := testGenECDSAKey(t)
 
-	blob := &SealedBlob{
-		Version: CurrentBlobVersion,
-		Payload: SealedBlobPayload{
+	blob := &nvslot.SealedBlob{
+		Version: nvslot.CurrentBlobVersion,
+		Payload: nvslot.SealedBlobPayload{
 			Public:        []byte("pub"),
 			Private:       []byte("priv"),
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
-			PCRDigests: []PCRDigestPair{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
 			PolicyRef: make([]byte, 32),
@@ -2794,7 +2795,7 @@ func TestSignedBlobVersionInSignedRegion(t *testing.T) {
 
 	signedData := testSignBlob(t, blob, privKey)
 
-	parsed, err := UnmarshalSealedBlob(signedData)
+	parsed, err := nvslot.UnmarshalSealedBlob(signedData)
 	if err != nil {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
@@ -2805,17 +2806,17 @@ func TestSignedBlobVersionInSignedRegion(t *testing.T) {
 	copy(tampered, signedData)
 	tampered[0] ^= 0x01 // flip one bit in version
 
-	if err := VerifyBlobSignature(tampered, parsed, &privKey.PublicKey); err == nil {
+	if err := nvslot.VerifyBlobSignature(tampered, parsed, &privKey.PublicKey); err == nil {
 		t.Error("Expected verification to fail when version byte is tampered")
 	}
 }
 
 func TestMarshalPayloadUnmarshalPayloadRoundTrip(t *testing.T) {
-	original := &SealedBlobPayload{
+	original := &nvslot.SealedBlobPayload{
 		Public:        []byte("test-public-key-blob"),
 		Private:       []byte("test-private-key-blob"),
 		TOTPAlgorithm: tpm2.TPMAlgSHA1,
-		PCRDigests: []PCRDigestPair{
+		PCRDigests: []nvslot.PCRDigestPair{
 			{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/uki.efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
@@ -2829,7 +2830,7 @@ func TestMarshalPayloadUnmarshalPayloadRoundTrip(t *testing.T) {
 		t.Fatalf("MarshalPayload failed: %v", err)
 	}
 
-	restored, err := UnmarshalPayload(data)
+	restored, err := nvslot.UnmarshalPayload(data)
 	if err != nil {
 		t.Fatalf("UnmarshalPayload failed: %v", err)
 	}
@@ -2866,13 +2867,13 @@ func TestSignBlobPayloadSignedRegionCoverage(t *testing.T) {
 	// Verify that the signed region exactly covers [version:4][payloadLen:4][payload...]
 	privKey := testGenECDSAKey(t)
 
-	blob := &SealedBlob{
-		Version: CurrentBlobVersion,
-		Payload: SealedBlobPayload{
+	blob := &nvslot.SealedBlob{
+		Version: nvslot.CurrentBlobVersion,
+		Payload: nvslot.SealedBlobPayload{
 			Public:        []byte("pub"),
 			Private:       []byte("priv"),
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
-			PCRDigests: []PCRDigestPair{
+			PCRDigests: []nvslot.PCRDigestPair{
 				{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
 			PolicyRef: make([]byte, 32),
@@ -2889,8 +2890,8 @@ func TestSignBlobPayloadSignedRegionCoverage(t *testing.T) {
 		t.Fatalf("Unsigned blob too short: %d", len(unsigned))
 	}
 	version := binary.LittleEndian.Uint32(unsigned[0:4])
-	if version != CurrentBlobVersion {
-		t.Errorf("Version in unsigned blob: %d, want %d", version, CurrentBlobVersion)
+	if version != nvslot.CurrentBlobVersion {
+		t.Errorf("Version in unsigned blob: %d, want %d", version, nvslot.CurrentBlobVersion)
 	}
 	payloadLen := binary.LittleEndian.Uint32(unsigned[4:8])
 	expectedLen := uint32(len(unsigned) - 8)
@@ -2899,7 +2900,7 @@ func TestSignBlobPayloadSignedRegionCoverage(t *testing.T) {
 	}
 
 	// Sign it
-	signed, err := SignBlobPayload(unsigned, privKey)
+	signed, err := nvslot.SignBlobPayload(unsigned, privKey)
 	if err != nil {
 		t.Fatalf("SignBlobPayload failed: %v", err)
 	}
@@ -2912,7 +2913,7 @@ func TestSignBlobPayloadSignedRegionCoverage(t *testing.T) {
 
 	// Manually verify: compute SHA-256 of unsigned, verify with the parsed signature
 	digest := sha256.Sum256(unsigned)
-	parsed, err := UnmarshalSealedBlob(signed)
+	parsed, err := nvslot.UnmarshalSealedBlob(signed)
 	if err != nil {
 		t.Fatalf("UnmarshalSealedBlob failed: %v", err)
 	}

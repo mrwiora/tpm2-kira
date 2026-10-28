@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/piv"
 	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
@@ -41,7 +42,7 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 	if err := signing.WriteSigningKeyFile(pubPath, pubPEM); err != nil {
 		t.Fatal(err)
 	}
-	idx := ResolveNVRAMIndex(0)
+	idx := nvslot.ResolveNVRAMIndex(0)
 	if err := Seal(sock, "23", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal through the token: %v", err)
 	}
@@ -98,5 +99,5 @@ func readGenerationAt(t *testing.T, sock string, idx uint32) (uint64, error) {
 		return 0, err
 	}
 	defer tpmDev.Close()
-	return ReadGeneration(tpmDev, GenerationIndex(idx))
+	return nvslot.ReadGeneration(tpmDev, nvslot.GenerationIndex(idx))
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -99,7 +100,7 @@ type loadedKey struct {
 
 // loadAK loads the AK from the blob under a freshly derived storage primary.
 // The caller must flush the returned handle.
-func loadAK(tpmDev transport.TPM, b *Attestation) (*loadedKey, error) {
+func loadAK(tpmDev transport.TPM, b *nvslot.Attestation) (*loadedKey, error) {
 	primary, err := createAKParent(tpmDev)
 	if err != nil {
 		return nil, err
@@ -292,9 +293,9 @@ func readPCRBank(tpmDev transport.TPM, sel attest.PCRSelection) ([]attest.PCRVal
 // tpmBackend implements attest.EnrolBackend on a real TPM.
 type tpmBackend struct {
 	tpm       transport.TPM
-	blob      *Attestation
+	blob      *nvslot.Attestation
 	sealIndex uint32
-	sealed    *SealedBlob // may be nil
+	sealed    *nvslot.SealedBlob // may be nil
 	debug     bool
 	bootCode  string // the code of the last boot challenge the TPM opened
 
@@ -356,7 +357,7 @@ func (b *tpmBackend) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteRes
 
 // BootContext implements attest.AttesterBackend.
 func (b *tpmBackend) BootContext() attest.BootContext {
-	bc := attest.BootContext{BlobVersion: CurrentBlobVersion, NVRAMIndex: b.sealIndex, UptimeMS: uptimeMS()}
+	bc := attest.BootContext{BlobVersion: nvslot.CurrentBlobVersion, NVRAMIndex: b.sealIndex, UptimeMS: uptimeMS()}
 	if b.sealed != nil {
 		bc.BlobVersion = b.sealed.Version
 	}
@@ -510,7 +511,7 @@ func (b *tpmBackend) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest
 		sig, err = signWithBootKey(b.tpm, b.sealed, b.sealIndex, b.blob, d[:])
 	}
 	switch {
-	case errors.Is(err, ErrCodesLocked):
+	case errors.Is(err, nvslot.ErrCodesLocked):
 		// The booted system: 'cap' locked the slot until the next boot.
 		if b.debug {
 			fmt.Printf("tpm2-kira: boot key: %v\n", err)

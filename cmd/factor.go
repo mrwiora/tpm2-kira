@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/hkdf"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -47,7 +48,7 @@ var errFactorRefused = errors.New("the TPM refused to open the factor: this boot
 
 // createReleaseKey makes the slot's release key under the slot's policy
 // extended by PolicyCommandCode(ActivateCredential).
-func createReleaseKey(tpmDev transport.TPM, sealed *SealedBlob) (public, private []byte, err error) {
+func createReleaseKey(tpmDev transport.TPM, sealed *nvslot.SealedBlob) (public, private []byte, err error) {
 	policy, err := sealed.SlotPolicy()
 	if err != nil {
 		return nil, nil, err
@@ -72,7 +73,7 @@ func createReleaseKey(tpmDev transport.TPM, sealed *SealedBlob) (public, private
 }
 
 // loadReleaseKey loads the slot's release key; the caller flushes the handle.
-func loadReleaseKey(tpmDev transport.TPM, att *Attestation) (*loadedKey, error) {
+func loadReleaseKey(tpmDev transport.TPM, att *nvslot.Attestation) (*loadedKey, error) {
 	if att == nil || len(att.ReleaseKeyPublic) == 0 {
 		return nil, errNoReleaseKey
 	}
@@ -95,7 +96,7 @@ func loadReleaseKey(tpmDev transport.TPM, att *Attestation) (*loadedKey, error) 
 // wrapFactor draws F and wraps it for this TPM's EK and the slot's release
 // key. F is returned for the one-time derivation at enrolment; the caller
 // wipes it. Nothing of it is kept here.
-func wrapFactor(tpmDev transport.TPM, att *Attestation, rng io.Reader) (f []byte, w *WrappedFactor, err error) {
+func wrapFactor(tpmDev transport.TPM, att *nvslot.Attestation, rng io.Reader) (f []byte, w *nvslot.WrappedFactor, err error) {
 	if rng == nil {
 		rng = rand.Reader
 	}
@@ -119,14 +120,14 @@ func wrapFactor(tpmDev transport.TPM, att *Attestation, rng io.Reader) (f []byte
 		wipe(f)
 		return nil, nil, err
 	}
-	return f, &WrappedFactor{Credential: cred, EncryptedSecret: enc}, nil
+	return f, &nvslot.WrappedFactor{Credential: cred, EncryptedSecret: enc}, nil
 }
 
 // unwrapFactor opens a credential the phone returned: the release key is
 // loaded and authorised through the slot's approved policy for this boot
 // state plus PolicyCommandCode, the EK through the endorsement hierarchy.
 // The result is F; the caller wipes it.
-func unwrapFactor(tpmDev transport.TPM, sealed *SealedBlob, blobIndex uint32, att *Attestation, w *WrappedFactor) ([]byte, error) {
+func unwrapFactor(tpmDev transport.TPM, sealed *nvslot.SealedBlob, blobIndex uint32, att *nvslot.Attestation, w *nvslot.WrappedFactor) ([]byte, error) {
 	if w == nil || len(w.Credential) == 0 || len(w.EncryptedSecret) == 0 {
 		return nil, errors.New("no credential to open")
 	}
@@ -141,7 +142,7 @@ func unwrapFactor(tpmDev transport.TPM, sealed *SealedBlob, blobIndex uint32, at
 	}
 	defer tpmdev.FlushHandle(tpmDev, ek.handle)
 
-	session, done, err := approvedSessionThen(tpmDev, sealed, blobIndex, func(tpm transport.TPM, handle tpm2.TPMISHPolicy) error {
+	session, done, err := nvslot.ApprovedSessionThen(tpmDev, sealed, blobIndex, func(tpm transport.TPM, handle tpm2.TPMISHPolicy) error {
 		_, err := tpm2.PolicyCommandCode{PolicySession: handle, Code: tpm2.TPMCCActivateCredential}.Execute(tpm)
 		return err
 	})
@@ -157,7 +158,7 @@ func unwrapFactor(tpmDev transport.TPM, sealed *SealedBlob, blobIndex uint32, at
 		Secret:         tpm2.TPM2BEncryptedSecret{Buffer: w.EncryptedSecret},
 	}.Execute(tpmDev)
 	if err != nil {
-		if errors.Is(err, ErrCodesLocked) {
+		if errors.Is(err, nvslot.ErrCodesLocked) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: %v", errFactorRefused, err)

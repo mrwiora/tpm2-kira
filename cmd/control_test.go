@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 )
 
 // Step 1, the boot chain: the hook, the route, and the way on to step 2,
@@ -314,7 +315,7 @@ func TestControlShow(t *testing.T) {
 	}
 	// A half-gone slot is red and recommended first.
 	c.facts.Keys = "local key files"
-	c.facts.Dirt = []SlotContents{{Slot: 2, Index: NVRAMSlotStart + 2, Counter: true}}
+	c.facts.Dirt = []SlotContents{{Slot: 2, Index: nvslot.NVRAMSlotStart + 2, Counter: true}}
 	out.Reset()
 	c.show()
 	if got := out.String(); !strings.Contains(got, "[!]") || !strings.Contains(got, "Slot 2  - dirty: the record counter left") ||

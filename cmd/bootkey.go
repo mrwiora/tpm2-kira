@@ -16,6 +16,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -24,7 +25,7 @@ import (
 var errBootKeyRefused = errors.New("the TPM refused the boot key: this boot state is not one the signing key approved")
 
 // createBootKey makes the slot's boot key under the slot's policy.
-func createBootKey(tpmDev transport.TPM, sealed *SealedBlob) (public, private []byte, err error) {
+func createBootKey(tpmDev transport.TPM, sealed *nvslot.SealedBlob) (public, private []byte, err error) {
 	policy, err := sealed.SlotPolicy()
 	if err != nil {
 		return nil, nil, err
@@ -49,7 +50,7 @@ func createBootKey(tpmDev transport.TPM, sealed *SealedBlob) (public, private []
 }
 
 // loadBootKey loads the slot's boot key; the caller flushes the handle.
-func loadBootKey(tpmDev transport.TPM, att *Attestation) (*loadedKey, error) {
+func loadBootKey(tpmDev transport.TPM, att *nvslot.Attestation) (*loadedKey, error) {
 	primary, err := tpmdev.CreatePrimaryKey(tpmDev)
 	if err != nil {
 		return nil, err
@@ -68,7 +69,7 @@ func loadBootKey(tpmDev transport.TPM, att *Attestation) (*loadedKey, error) {
 
 // certifyBootKey has the attestation key state, for qd, that the boot key
 // is an object of this TPM with exactly this public area (TPM2_Certify).
-func certifyBootKey(tpmDev transport.TPM, att *Attestation, qd []byte) (info, sig []byte, err error) {
+func certifyBootKey(tpmDev transport.TPM, att *nvslot.Attestation, qd []byte) (info, sig []byte, err error) {
 	ak, err := loadAK(tpmDev, att)
 	if err != nil {
 		return nil, nil, err
@@ -94,7 +95,7 @@ func certifyBootKey(tpmDev transport.TPM, att *Attestation, qd []byte) (info, si
 }
 
 // bootKeyPoint is the boot key's public point, uncompressed.
-func bootKeyPoint(att *Attestation) ([]byte, error) {
+func bootKeyPoint(att *nvslot.Attestation) ([]byte, error) {
 	pub, err := tpm2.Unmarshal[tpm2.TPMTPublic](att.BootKeyPublic)
 	if err != nil {
 		return nil, err
@@ -112,13 +113,13 @@ func bootKeyPoint(att *Attestation) ([]byte, error) {
 
 // signWithBootKey signs digest with the boot key, which the TPM allows if
 // the slot's policy holds.
-func signWithBootKey(tpmDev transport.TPM, sealed *SealedBlob, blobIndex uint32, att *Attestation, digest []byte) ([]byte, error) {
+func signWithBootKey(tpmDev transport.TPM, sealed *nvslot.SealedBlob, blobIndex uint32, att *nvslot.Attestation, digest []byte) ([]byte, error) {
 	boot, err := loadBootKey(tpmDev, att)
 	if err != nil {
 		return nil, err
 	}
 	defer tpmdev.FlushHandle(tpmDev, boot.handle)
-	session, done, err := approvedSession(tpmDev, sealed, blobIndex)
+	session, done, err := nvslot.ApprovedSession(tpmDev, sealed, blobIndex)
 	if err != nil {
 		return nil, fmt.Errorf("%w (%w)", errBootKeyRefused, err)
 	}
@@ -141,7 +142,7 @@ func signWithBootKey(tpmDev transport.TPM, sealed *SealedBlob, blobIndex uint32,
 // openBootChallenge answers the phone's challenge with the boot key: the
 // TPM computes the shared secret if the slot's policy holds, and from it
 // come the code for the screen and the proof for the phone.
-func openBootChallenge(tpmDev transport.TPM, sealed *SealedBlob, blobIndex uint32, att *Attestation, ch *attest.BootChallenge, context []byte) (code string, proof []byte, err error) {
+func openBootChallenge(tpmDev transport.TPM, sealed *nvslot.SealedBlob, blobIndex uint32, att *nvslot.Attestation, ch *attest.BootChallenge, context []byte) (code string, proof []byte, err error) {
 	if sealed == nil || len(att.BootKeyPublic) == 0 {
 		return "", nil, errors.New("the slot has no boot key")
 	}
@@ -157,7 +158,7 @@ func openBootChallenge(tpmDev transport.TPM, sealed *SealedBlob, blobIndex uint3
 		return "", nil, err
 	}
 	defer tpmdev.FlushHandle(tpmDev, boot.handle)
-	session, done, err := approvedSession(tpmDev, sealed, blobIndex)
+	session, done, err := nvslot.ApprovedSession(tpmDev, sealed, blobIndex)
 	if err != nil {
 		return "", nil, fmt.Errorf("%w (%w)", errBootKeyRefused, err)
 	}

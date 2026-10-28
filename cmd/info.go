@@ -12,6 +12,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
@@ -50,7 +51,7 @@ type slotInfo struct {
 	Index      uint32
 	SlotNumber int
 	NVPublic   *tpm2.TPMSNVPublic
-	Blob       *SealedBlob
+	Blob       *nvslot.SealedBlob
 	Verify     blobVerification
 	raw        []byte
 	// GenState describes the slot's generation index as the TPM holds it.
@@ -104,9 +105,9 @@ func InfoCommand(tpmPath string, nvramIndex uint32, privKeyPath string, debug bo
 		}
 		slots = append(slots, *si)
 	} else {
-		populated := FindPopulatedSlots(tpmDev, debug)
+		populated := nvslot.FindPopulatedSlots(tpmDev, debug)
 		if len(populated) == 0 {
-			return fmt.Errorf("no sealed secrets found in NVRAM slots 0x%08X – 0x%08X", NVRAMSlotStart, NVRAMSlotEnd)
+			return fmt.Errorf("no sealed secrets found in NVRAM slots 0x%08X – 0x%08X", nvslot.NVRAMSlotStart, nvslot.NVRAMSlotEnd)
 		}
 		for _, idx := range populated {
 			si, err := readSlotInfo(tpmDev, idx)
@@ -154,20 +155,20 @@ func readSlotInfo(tpmDev transport.TPM, nvramIndex uint32) (*slotInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read from NVRAM: %w", err)
 	}
-	sealedBlob, err := UnmarshalSealedBlob(sealedData)
+	sealedBlob, err := nvslot.UnmarshalSealedBlob(sealedData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
 
 	si := &slotInfo{
 		Index:      nvramIndex,
-		SlotNumber: SlotNumber(nvramIndex),
+		SlotNumber: nvslot.SlotNumber(nvramIndex),
 		NVPublic:   nvPublic,
 		Blob:       sealedBlob,
 		raw:        sealedData,
 		GenState:   generationState(tpmDev, nvramIndex, sealedBlob.Payload.Generation),
 	}
-	if att := sealedBlob.Payload.Attestation; att != nil && nvramIndex >= NVRAMSlotStart && nvramIndex <= NVRAMSlotEnd {
+	if att := sealedBlob.Payload.Attestation; att != nil && nvramIndex >= nvslot.NVRAMSlotStart && nvramIndex <= nvslot.NVRAMSlotEnd {
 		si.CounterState = counterState(tpmDev, nvramIndex, att.Count)
 	}
 	return si, nil
@@ -176,7 +177,7 @@ func readSlotInfo(tpmDev transport.TPM, nvramIndex uint32) (*slotInfo, error) {
 // counterState compares the slot's record counter with the count in the
 // blob's attestation part.
 func counterState(tpmDev transport.TPM, nvramIndex uint32, count uint64) string {
-	counter, err := readAttestCounter(tpmDev, AttestCounterIndex(nvramIndex))
+	counter, err := nvslot.ReadAttestCounter(tpmDev, nvslot.AttestCounterIndex(nvramIndex))
 	switch {
 	case err != nil:
 		return fmt.Sprintf("unavailable (%v): the gate serves no verifier until you enrol again", err)
@@ -189,9 +190,9 @@ func counterState(tpmDev transport.TPM, nvramIndex uint32, count uint64) string 
 // generationState compares the slot's generation index with the generation
 // the blob's approval requires.
 func generationState(tpmDev transport.TPM, nvramIndex uint32, blobGen uint64) string {
-	gen, err := ReadGeneration(tpmDev, GenerationIndex(nvramIndex))
+	gen, err := nvslot.ReadGeneration(tpmDev, nvslot.GenerationIndex(nvramIndex))
 	switch {
-	case errors.Is(err, ErrCodesLocked):
+	case errors.Is(err, nvslot.ErrCodesLocked):
 		return "read-locked until reboot ('tpm2-kira cap' ran): no codes in this boot"
 	case err != nil:
 		return fmt.Sprintf("unavailable (%v): no codes until slot approve", err)
@@ -217,11 +218,11 @@ func newBlobVerifier(privKeyPath string) *blobVerifier {
 	return v
 }
 
-func (v *blobVerifier) verify(raw []byte, blob *SealedBlob) blobVerification {
+func (v *blobVerifier) verify(raw []byte, blob *nvslot.SealedBlob) blobVerification {
 	if v.loadErr != nil {
 		return blobVerification{KeyPath: v.keyPath, Reason: fmt.Sprintf("no signing key to check it with (%v)", v.loadErr)}
 	}
-	if err := VerifyBlobSignature(raw, blob, v.key.Public()); err != nil {
+	if err := nvslot.VerifyBlobSignature(raw, blob, v.key.Public()); err != nil {
 		return blobVerification{KeyPath: v.keyPath, Reason: fmt.Sprintf("signature does not verify with %s (%v)", v.keyPath, err)}
 	}
 	return blobVerification{Verified: true, Key: v.key, KeyPath: v.keyPath}
@@ -326,12 +327,12 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 	fmt.Printf("%s%sAuthentication: PolicyAuthorize (PCR values + generation, approved by the signing key)\n", prefix, branch(false))
 	sub = prefix + cont(false)
 	if blob.HasTOTPKey() {
-		fmt.Printf("%s%sTOTP Key: HMAC-%s, inside the TPM\n", sub, branch(false), totpAlgorithmName(blob.Payload.TOTPAlgorithm))
+		fmt.Printf("%s%sTOTP Key: HMAC-%s, inside the TPM\n", sub, branch(false), nvslot.TOTPAlgorithmName(blob.Payload.TOTPAlgorithm))
 	} else {
 		fmt.Printf("%s%sTOTP Key: none - the slot is attested by its phone(s)\n", sub, branch(false))
 	}
 	fmt.Printf("%s%sApproved Generation: %d\n", sub, branch(false), blob.Payload.Generation)
-	fmt.Printf("%s%sGeneration Index: 0x%08X = %s\n", sub, branch(false), GenerationIndex(si.Index), si.GenState)
+	fmt.Printf("%s%sGeneration Index: 0x%08X = %s\n", sub, branch(false), nvslot.GenerationIndex(si.Index), si.GenState)
 	printSigningKeyInfo(sub, blob, si.Verify)
 
 	// ── 5. TPM Objects ──────────────────────────────────────────────
@@ -370,7 +371,7 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 // the blob is described and checked; key paths recorded in the blob are
 // printed quoted and never opened, since the blob may have been planted.
 // Closes the branch.
-func printSigningKeyInfo(sub string, blob *SealedBlob, v blobVerification) {
+func printSigningKeyInfo(sub string, blob *nvslot.SealedBlob, v blobVerification) {
 	if v.Verified {
 		pubKey := v.Key.Public()
 		fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), signing.PublicKeyDescription(pubKey), signing.PublicKeyFingerprint(pubKey))
@@ -392,7 +393,7 @@ func keyFileStatus(path string) string {
 	return "ok (mode 0400, trusted owner and directory)"
 }
 
-func printPCRSources(sub string, blob *SealedBlob) {
+func printPCRSources(sub string, blob *nvslot.SealedBlob) {
 	hasEventlog := blob.HasEventlogPCRs()
 	hasUKI := blob.HasUKIPCRs()
 	regPCRs := blob.GetRegisterPCRIndices()
@@ -496,7 +497,7 @@ func printAttestationTree(prefix string, si *slotInfo) {
 	ak := sub + cont(false)
 	fmt.Printf("%s%sName: %x\n", ak, branch(false), att.AKName)
 	fmt.Printf("%s%sPublic: %d bytes, private: %d bytes\n", ak, branch(false), len(att.AKPublic), len(att.AKPrivate))
-	fmt.Printf("%s%sEndorsement key used at enrolment: %s\n", ak, branch(true), ekAlgName(att.EKAlg))
+	fmt.Printf("%s%sEndorsement key used at enrolment: %s\n", ak, branch(true), nvslot.EKAlgName(att.EKAlg))
 	if sel, err := att.Selection(); err == nil {
 		fmt.Printf("%s%sPCRs quoted: %s\n", sub, branch(false), sel)
 	} else {
@@ -506,7 +507,7 @@ func printAttestationTree(prefix string, si *slotInfo) {
 	// slot change, and says which blob is the current one.
 	fmt.Printf("%s%sRevision: %d (changes when verifiers are added or removed, not when the machine is attested)\n", sub, branch(false), att.Count)
 	if si.CounterState != "" {
-		fmt.Printf("%s%sRevision counter in the TPM (0x%08X): %s\n", sub, branch(false), AttestCounterIndex(si.Index), si.CounterState)
+		fmt.Printf("%s%sRevision counter in the TPM (0x%08X): %s\n", sub, branch(false), nvslot.AttestCounterIndex(si.Index), si.CounterState)
 	}
 	fmt.Printf("%s%sMethods\n", sub, branch(true))
 	methods := sub + cont(true)

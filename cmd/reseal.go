@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
@@ -38,7 +39,7 @@ func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privK
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
-	slots := FindPopulatedSlots(tpmDev, debug)
+	slots := nvslot.FindPopulatedSlots(tpmDev, debug)
 	tpmDev.Close()
 
 	controlPath := controlConfigPath()
@@ -46,7 +47,7 @@ func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privK
 		if conf, _ := loadSSHConf(sshConfPath(controlPath), controlPath); fileExistsCA(conf.CA) {
 			return resealSSHCA(controlPath, tpmPath, privKeyPath)
 		}
-		return fmt.Errorf("no sealed secrets found in NVRAM slots 0x%08X - 0x%08X", NVRAMSlotStart, NVRAMSlotEnd)
+		return fmt.Errorf("no sealed secrets found in NVRAM slots 0x%08X - 0x%08X", nvslot.NVRAMSlotStart, nvslot.NVRAMSlotEnd)
 	}
 	return joinReseal(resealSlots(tpmPath, slots, pcrsStr, pubKeyPath, privKeyPath, debug), resealSSHCA(controlPath, tpmPath, privKeyPath))
 }
@@ -71,7 +72,7 @@ func resealSlots(tpmPath string, slots []uint32, pcrsStr, pubKeyPath, privKeyPat
 	var failed []uint32
 	var skipped []*ResealSkippedError
 	for i, slotIdx := range slots {
-		slotNum := SlotNumber(slotIdx)
+		slotNum := nvslot.SlotNumber(slotIdx)
 		fmt.Printf("── Slot #%d (0x%08X) ─────────────────────────\n", slotNum, slotIdx)
 
 		err := Reseal(tpmPath, pcrsStr, slotIdx, pubKeyPath, privKeyPath, debug)
@@ -193,9 +194,9 @@ func (e *ResealSkippedError) Unwrap() []error { return []error{ErrResealSkipped,
 // asResealSkipped turns an error into a skip when, and only when, the
 // signing key was unavailable and the NVRAM index was not touched. A failure
 // after the index was replaced is never a skip, whatever caused it.
-func asResealSkipped(err error, nvIndex uint32, keyFile string, blob *SealedBlob) error {
+func asResealSkipped(err error, nvIndex uint32, keyFile string, blob *nvslot.SealedBlob) error {
 	var cause *signing.TokenUnavailableError
-	if err == nil || errors.Is(err, ErrNVIndexReplaced) || errors.Is(err, ErrGenerationRaised) || !errors.As(err, &cause) {
+	if err == nil || errors.Is(err, nvslot.ErrNVIndexReplaced) || errors.Is(err, ErrGenerationRaised) || !errors.As(err, &cause) {
 		return err
 	}
 	return &ResealSkippedError{NVIndex: nvIndex, KeyFile: keyFile, Cause: cause, SealedPCRs: blob.GetPCRSpecs()}
@@ -207,7 +208,7 @@ func PrintResealSkipped(w io.Writer, skipped []*ResealSkippedError) {
 	first := skipped[0]
 	var slots []string
 	for _, s := range skipped {
-		slots = append(slots, fmt.Sprintf("#%d", SlotNumber(s.NVIndex)))
+		slots = append(slots, fmt.Sprintf("#%d", nvslot.SlotNumber(s.NVIndex)))
 	}
 	fmt.Fprintln(w, "tpm2-kira: SKIPPED: the approval did not happen — the signing key was not available.")
 	fmt.Fprintf(w, "  Key file:      %s (%s)\n", first.KeyFile, first.Cause.Token)
@@ -260,9 +261,9 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	if err != nil {
 		return tpmdev.HandleNVRAMNotFoundError(err, debug)
 	}
-	sealedBlob, err := UnmarshalSealedBlob(sealedData)
+	sealedBlob, err := nvslot.UnmarshalSealedBlob(sealedData)
 	if err != nil {
-		if bve, ok := IsBlobVersionError(err); ok {
+		if bve, ok := nvslot.IsBlobVersionError(err); ok {
 			return fmt.Errorf(
 				"cannot approve: the stored blob is version %d but this build writes version %d.\n"+
 					"slot approve preserves the existing blob, so it cannot upgrade the format.\n"+
@@ -330,7 +331,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 
 // checkObjectSigningKey fails unless pub is the key the blob's key object
 // accepts approvals from.
-func checkObjectSigningKey(blob *SealedBlob, pub crypto.PublicKey) error {
+func checkObjectSigningKey(blob *nvslot.SealedBlob, pub crypto.PublicKey) error {
 	want, _, err := signing.PublicKeyToTPM2BPublic(pub)
 	if err != nil {
 		return err
@@ -365,7 +366,7 @@ type resealKeys struct {
 // TPM access can replace it (SECURITY-BACKGROUND §9). The key that verifies
 // it therefore comes from --privkey or tpm2-kira's default location; the
 // blob names no key file.
-func resolveResealKeys(sealedData []byte, sealedBlob *SealedBlob, privKeyPath, pubKeyPath string, debug bool) (*resealKeys, error) {
+func resolveResealKeys(sealedData []byte, sealedBlob *nvslot.SealedBlob, privKeyPath, pubKeyPath string, debug bool) (*resealKeys, error) {
 	keys := &resealKeys{privKeyPath: privKeyPath}
 	if keys.privKeyPath == "" {
 		keys.privKeyPath = signing.DefaultPrivateKeyPath
@@ -403,7 +404,7 @@ func resolveResealKeys(sealedData []byte, sealedBlob *SealedBlob, privKeyPath, p
 
 	// The signature MUST be verified BEFORE any blob field is acted on, so a
 	// tampered blob cannot steer reseal via its stored PCR specs.
-	if err := VerifyBlobSignature(sealedData, sealedBlob, signer.Public()); err != nil {
+	if err := nvslot.VerifyBlobSignature(sealedData, sealedBlob, signer.Public()); err != nil {
 		return nil, fmt.Errorf("blob integrity check failed — the NVRAM blob may have been tampered with: %w", err)
 	}
 	if debug {

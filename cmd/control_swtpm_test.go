@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
@@ -21,7 +22,7 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	sock := startSWTPM(t)
 	conf := filepath.Join(t.TempDir(), "control.conf")
 	t.Setenv("TPM2_KIRA_CONTROL_CONF", conf)
-	sealRealSlot(t, sock, ResolveNVRAMIndex(0))
+	sealRealSlot(t, sock, nvslot.ResolveNVRAMIndex(0))
 
 	f := collectFacts(sock, false)
 	if f.TPMErr != "" || !f.SHA256Bank || f.UseSHA1 {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -28,7 +29,7 @@ func TestRestoreBringsTheSlotBack(t *testing.T) {
 	extendPCR(tpm, 0, "firmware")
 	extendPCR(tpm, 7, "secure boot")
 
-	const slot = NVRAMSlotStart + 2
+	const slot = nvslot.NVRAMSlotStart + 2
 	at := time.Date(2026, 10, 7, 8, 0, 0, 0, time.UTC)
 	pubPath, privPath := writeTestKeyPair(t)
 	if err := Seal(sock, "0,7", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/cmd"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
@@ -57,7 +58,7 @@ func requireRoot(command string, args []string) {
 
 func main() {
 	// Set application version in cmd package
-	cmd.AppVersion = Version
+	nvslot.AppVersion = Version
 
 	// The global options, before the command: the defaults of the
 	// command's own options of the same names.
@@ -228,7 +229,7 @@ func resolveOrScanAll(rawValue uint32, provided bool) uint32 {
 	if !provided {
 		return 0 // scan all slots
 	}
-	return cmd.ResolveNVRAMIndex(rawValue)
+	return nvslot.ResolveNVRAMIndex(rawValue)
 }
 
 // yubiKeyFlag is --yubikey or --yubikey=<serial>: a boolean flag that may
@@ -336,7 +337,7 @@ func runSlotAdd(args []string, tpmPath string, debugFlag bool) {
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	pcrs := fs.String("pcrs", "", "PCR indices to use for policy (default: what this boot measured, see 'help slot')")
-	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
+	nvram := fs.Uint("nvram", nvramDefault(nvslot.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
 	pubKeyPath := fs.String("pubkey", signing.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
@@ -376,7 +377,7 @@ func runSlotAdd(args []string, tpmPath string, debugFlag bool) {
 	if _, err := measure.ParsePCRSpecs(*pcrs); err != nil {
 		fail(err)
 	}
-	if err := cmd.Seal(*tpm, *pcrs, cmd.ResolveNVRAMIndex(uint32(*nvram)), *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
+	if err := cmd.Seal(*tpm, *pcrs, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
 		fail(err)
 	}
 }
@@ -396,7 +397,7 @@ func runSlotApprove(args []string, tpmPath string, debugFlag bool) {
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	pcrs := fs.String("pcrs", "", "PCR indices to use for policy (if not specified, preserves original selection)")
-	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
+	nvram := fs.Uint("nvram", nvramDefault(nvslot.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	pubKeyPath := fs.String("pubkey", "", "Path to signing public key PEM (default: derived from --privkey, or preserved from blob)")
 	privKeyPath := fs.String("privkey", "", "Path to signing private key: PEM, or the YubiKey key file from setup --yubikey")
@@ -435,7 +436,7 @@ func runSlotInfo(args []string, tpmPath string, debugFlag bool) {
 	fs := flag.NewFlagSet("slot info", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
+	nvram := fs.Uint("nvram", nvramDefault(nvslot.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
@@ -454,7 +455,7 @@ func runReveal(args []string, tpmPath string, debugFlag bool) {
 	fs := flag.NewFlagSet("reveal", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
+	nvram := fs.Uint("nvram", nvramDefault(nvslot.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
@@ -468,7 +469,7 @@ func runRevealPlain(args []string, tpmPath string, debugFlag bool) {
 	fs := flag.NewFlagSet("reveal-plain", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
+	nvram := fs.Uint("nvram", nvramDefault(nvslot.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	fs.Parse(args)
@@ -482,7 +483,7 @@ func runRun(args []string, tpmPath string, debugFlag bool) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
+	nvram := fs.Uint("nvram", nvramDefault(nvslot.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	gate := fs.String("gate", "", "Also be the Bluetooth gate's coordinator on this socket: hold the TPM for 'phone gate --coordinator' and let the phone's verdict release the boot (set by the initrd unit)")
 	hold := fs.Uint("hold", uint(cmd.HoldDefault/time.Second), "Seconds to wait for Enter after showing the code before the boot continues on its own (0: at once)")
@@ -517,7 +518,7 @@ func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
 	fs := flag.NewFlagSet("slot "+subcommand, flag.ExitOnError)
 
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
+	nvram := fs.Uint("nvram", nvramDefault(nvslot.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	yes := fs.Bool("yes", false, "delete: confirm deleting every slot (only needed without --nvram)")
 	pubKey := fs.String("pubkey", "", "restore: signing public key (default: derived from the private key)")
@@ -529,12 +530,12 @@ func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
 
 	switch subcommand {
 	case "list":
-		listIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
+		listIndex := nvslot.ResolveNVRAMIndex(uint32(*nvram))
 		if err := cmd.NVRAMList(*tpm, listIndex, *debug); err != nil {
 			fail(err)
 		}
 	case "status":
-		statusIndex := cmd.ResolveNVRAMIndex(uint32(*nvram))
+		statusIndex := nvslot.ResolveNVRAMIndex(uint32(*nvram))
 		if err := cmd.NVRAMStatus(*tpm, statusIndex, *debug); err != nil {
 			fail(err)
 		}
@@ -545,7 +546,7 @@ func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
 		}
 	case "restore":
 		if fs.NArg() != 1 {
-			fail(fmt.Errorf("slot restore takes the stashed blob's file: tpm2-kira slot restore %s/slot-0x<index>-<time>.blob", cmd.NVRAMRecoveryDir))
+			fail(fmt.Errorf("slot restore takes the stashed blob's file: tpm2-kira slot restore %s/slot-0x<index>-<time>.blob", nvslot.NVRAMRecoveryDir))
 		}
 		restoreIndex := resolveOrScanAll(uint32(*nvram), provided)
 		if err := cmd.NVRAMRestore(*tpm, fs.Arg(0), restoreIndex, *pubKey, *privKey, *debug); err != nil {
@@ -615,7 +616,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 			fail(fmt.Errorf("usage: tpm2-kira luks mark <device> --keyslot N --mode password+salt|password+phonesalt|tpm+vault"))
 		}
 		if err := cmd.LuksMark(cmd.LuksMarkOptions{TPMPath: *tpm, Device: fs.Arg(0), Keyslot: *keyslot, Mode: *mode,
-			SealIndex: cmd.ResolveNVRAMIndex(uint32(*nvram)), Label: *label, Debug: *debug}); err != nil {
+			SealIndex: nvslot.ResolveNVRAMIndex(uint32(*nvram)), Label: *label, Debug: *debug}); err != nil {
 			fail(err)
 		}
 	case "enrol", "enroll":
@@ -642,13 +643,13 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		}
 		var slot uint32
 		if nvramExplicit(args[1:]) {
-			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+			slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
 		}
 		if err := cmd.LuksEnrol(cmd.LuksEnrolOptions{
 			Device: fs.Arg(0), Mode: *mode, ExistingKeyFile: *existing,
 			Remote: cmd.FactorEnrolOptions{TPMPath: *tpm, SealIndex: slot, Label: *label, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
 				Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: true, Debug: *debug},
-			Vault: cmd.VaultEnrolOptions{TPMPath: *tpm, SealIndex: cmd.ResolveNVRAMIndex(uint32(*nvram)), URL: *vaultURL, Pin: *vaultPin,
+			Vault: cmd.VaultEnrolOptions{TPMPath: *tpm, SealIndex: nvslot.ResolveNVRAMIndex(uint32(*nvram)), URL: *vaultURL, Pin: *vaultPin,
 				Token: *vaultToken, Label: *label, Name: *name, Pepper: *pepper, PrivKeyPath: *privKey, Debug: *debug},
 		}); err != nil {
 			fail(err)
@@ -701,19 +702,19 @@ func runVault(args []string, tpmPath string, debugFlag bool) {
 		yes := fs.Bool("yes", false, "The recovery passphrase is in a second keyslot already; do not ask")
 		pepper := fs.Bool("pepper", false, "The key needs an operator's pepper too, asked here; every boot waits for an approval with it")
 		fs.Parse(args[1:])
-		if err := cmd.VaultEnrol(cmd.VaultEnrolOptions{TPMPath: *tpm, SealIndex: cmd.ResolveNVRAMIndex(uint32(*nvram)),
+		if err := cmd.VaultEnrol(cmd.VaultEnrolOptions{TPMPath: *tpm, SealIndex: nvslot.ResolveNVRAMIndex(uint32(*nvram)),
 			URL: *vaultURL, Pin: *pin, Token: *token, Label: *label, Name: *name, Pepper: *pepper, PrivKeyPath: *privKey,
 			Out: *out, Yes: *yes, Debug: *debug}); err != nil {
 			fail(err)
 		}
 	case "status":
 		fs.Parse(args[1:])
-		if err := cmd.VaultStatus(*tpm, cmd.ResolveNVRAMIndex(uint32(*nvram)), *debug); err != nil {
+		if err := cmd.VaultStatus(*tpm, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *debug); err != nil {
 			fail(err)
 		}
 	case "unenrol", "unenroll":
 		fs.Parse(args[1:])
-		if err := cmd.VaultUnenrol(*tpm, cmd.ResolveNVRAMIndex(uint32(*nvram)), *privKey, *debug); err != nil {
+		if err := cmd.VaultUnenrol(*tpm, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *privKey, *debug); err != nil {
 			fail(err)
 		}
 	case "help", "-h", "--help":
@@ -769,7 +770,7 @@ func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 		fs.Parse(args[1:])
 		var slot uint32
 		if nvramExplicit(args[1:]) {
-			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+			slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
 		}
 		if err := cmd.FactorStatus(*tpm, slot, *jsonOut, *debug); err != nil {
 			fail(err)
@@ -782,7 +783,7 @@ func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 		privKey := fs.String("privkey", "", "Signing key (default: "+signing.DefaultPrivateKeyPath+")")
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		fs.Parse(args[1:])
-		if err := cmd.FactorUnenrol(*tpm, cmd.ResolveNVRAMIndex(uint32(*nvram)), *privKey, *debug); err != nil {
+		if err := cmd.FactorUnenrol(*tpm, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *privKey, *debug); err != nil {
 			fail(err)
 		}
 		return
@@ -808,7 +809,7 @@ func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 	fs.Parse(args[1:])
 	var slot uint32
 	if nvramExplicit(args[1:]) {
-		slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+		slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
 	}
 	if err := cmd.FactorEnrol(cmd.FactorEnrolOptions{
 		TPMPath: *tpm, SealIndex: slot, Label: *label, Out: *out, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
@@ -907,7 +908,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		fs.Parse(args)
 		var slot uint32
 		if nvramExplicit(args) {
-			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+			slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
 		}
 		os.Exit(cmd.AttestGate(cmd.GateOptions{
 			TPMPath: *tpm, SealIndex: slot, Adapter: *adapter, Timeout: *timeout,
@@ -919,7 +920,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		fs.Parse(args)
 		var slot uint32
 		if nvramExplicit(args) {
-			slot = cmd.ResolveNVRAMIndex(uint32(*nvram))
+			slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
 		}
 		if err := cmd.AttestStatus(*tpm, slot, *jsonOut, *debug); err != nil {
 			fail(err)

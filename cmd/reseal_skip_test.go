@@ -11,13 +11,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/piv"
 	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
-func testBlob() *SealedBlob {
-	return &SealedBlob{Payload: SealedBlobPayload{PCRDigests: []PCRDigestPair{{Index: 0}, {Index: 7}}}}
+func testBlob() *nvslot.SealedBlob {
+	return &nvslot.SealedBlob{Payload: nvslot.SealedBlobPayload{PCRDigests: []nvslot.PCRDigestPair{{Index: 0}, {Index: 7}}}}
 }
 
 func TestAsResealSkipped(t *testing.T) {
@@ -48,7 +49,7 @@ func TestAsResealSkipped(t *testing.T) {
 }
 
 // stashUnwrittenBlobMarker wraps like stashUnwrittenBlob without writing.
-func stashUnwrittenBlobMarker(err error) error { return &nvReplacedError{err: err} }
+func stashUnwrittenBlobMarker(err error) error { return &nvslot.NvReplacedError{Err: err} }
 
 func TestPrintResealSkipped(t *testing.T) {
 	cause := &signing.TokenUnavailableError{Token: "YubiKey 12345678, slot 9a", Reason: "no YubiKey with serial 12345678 is present"}

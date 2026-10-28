@@ -7,6 +7,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
 	"github.com/google/go-tpm/tpm2/transport"
@@ -22,20 +23,20 @@ func TestOversizedBlobLeavesTheSlotAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tpmDev.Close()
-	limit := nvIndexLimit(tpmDev)
+	limit := nvslot.NvIndexLimit(tpmDev)
 	if limit == 0 {
 		t.Skip("this TPM does not report TPM2_PT_NV_INDEX_MAX")
 	}
 	key := newKey(t)
-	idx := uint32(NVRAMSlotStart + 3)
+	idx := uint32(nvslot.NVRAMSlotStart + 3)
 	writeTestSlot(t, tpmDev, idx, key)
 	before, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = WriteToNVRAM(tpmDev, idx, make([]byte, limit+1), key.Public(), key)
-	var tooLarge *BlobTooLargeError
+	err = nvslot.WriteToNVRAM(tpmDev, idx, make([]byte, limit+1), key.Public(), key)
+	var tooLarge *nvslot.BlobTooLargeError
 	if !errors.As(err, &tooLarge) || tooLarge.Size != limit+1 || tooLarge.Limit != limit {
 		t.Fatalf("a blob over the limit: %v", err)
 	}
@@ -45,7 +46,7 @@ func TestOversizedBlobLeavesTheSlotAlone(t *testing.T) {
 	}
 
 	full := bytes.Repeat([]byte{0x5a}, limit)
-	if err := WriteToNVRAM(tpmDev, idx, full, key.Public(), key); err != nil {
+	if err := nvslot.WriteToNVRAM(tpmDev, idx, full, key.Public(), key); err != nil {
 		t.Fatalf("a blob of exactly the limit (%d bytes): %v", limit, err)
 	}
 	if got, err := tpmdev.ReadFromNVRAM(tpmDev, idx); err != nil || !bytes.Equal(got, full) {

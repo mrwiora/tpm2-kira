@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
@@ -332,7 +333,7 @@ The TPM's slots: 0-15 are the NV indices 0x01803010-0x0180301F.
                    the slot dirty; 'tpm2-kira control' (the slot's line)
                    deletes a slot whole
   restore FILE     Put back a blob that a failed write stashed in
-                   ` + cmd.NVRAMRecoveryDir + `/ (slot-0x<index>-<time>.blob):
+                   ` + nvslot.NVRAMRecoveryDir + `/ (slot-0x<index>-<time>.blob):
                    the sealed TOTP key survives a lost index. It is approved
                    and written as approve does it, with the signing key
                    (--privkey PATH, --pubkey PATH; default: the key from
@@ -340,7 +341,7 @@ The TPM's slots: 0-15 are the NV indices 0x01803010-0x0180301F.
 
   tpm2-kira slot list
   tpm2-kira slot delete --nvram 0
-  tpm2-kira slot restore ` + cmd.NVRAMRecoveryDir + `/slot-0x01803010-1759823456.blob
+  tpm2-kira slot restore ` + nvslot.NVRAMRecoveryDir + `/slot-0x01803010-1759823456.blob
 `,
 
 	"status": `tpm2-kira status [--json] [--privkey PATH] [--conf PATH]

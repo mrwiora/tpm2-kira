@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 
 	"github.com/google/go-attestation/attest"
 )
@@ -118,7 +119,7 @@ func findUKI() string {
 func SealDefaults(tpmPath, pubKeyPath, privKeyPath string, algo measure.PCRHashAlgo, debug bool) error {
 	sel, why := DefaultPCRSelection("", algo)
 	fmt.Printf("PCRs: %s (%s)\n\n", sel, why)
-	if err := Seal(tpmPath, sel, ResolveNVRAMIndex(0), pubKeyPath, privKeyPath, debug, algo, true); err != nil {
+	if err := Seal(tpmPath, sel, nvslot.ResolveNVRAMIndex(0), pubKeyPath, privKeyPath, debug, algo, true); err != nil {
 		return err
 	}
 	return SealFallback(tpmPath, pubKeyPath, privKeyPath, algo, debug)
@@ -132,5 +133,5 @@ func SealFallback(tpmPath, pubKeyPath, privKeyPath string, algo measure.PCRHashA
 	fmt.Println("as the firmware and the secure boot state are the same; it says the machine is")
 	fmt.Println("not simply lost. Pair this one with your authenticator too.")
 	fmt.Println()
-	return Seal(tpmPath, fallback, ResolveNVRAMIndex(FallbackSlot), pubKeyPath, privKeyPath, debug, algo, true)
+	return Seal(tpmPath, fallback, nvslot.ResolveNVRAMIndex(FallbackSlot), pubKeyPath, privKeyPath, debug, algo, true)
 }

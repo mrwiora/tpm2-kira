@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/go-tpm/tpm2"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/piv"
 	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
@@ -238,24 +239,24 @@ func TestBlobSignatureThroughToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blob := &SealedBlob{Version: CurrentBlobVersion, Payload: SealedBlobPayload{
+	blob := &nvslot.SealedBlob{Version: nvslot.CurrentBlobVersion, Payload: nvslot.SealedBlobPayload{
 		Public: []byte("pub"), Private: []byte("priv"),
 		TOTPAlgorithm: tpm2.TPMAlgSHA1,
-		PCRDigests:    []PCRDigestPair{{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}}},
+		PCRDigests:    []nvslot.PCRDigestPair{{Index: 0, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}}},
 	}}
 	unsigned, err := blob.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	signed, err := SignBlobPayload(unsigned, signer)
+	signed, err := nvslot.SignBlobPayload(unsigned, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := UnmarshalSealedBlob(signed)
+	parsed, err := nvslot.UnmarshalSealedBlob(signed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyBlobSignature(signed, parsed, signer.Public()); err != nil {
+	if err := nvslot.VerifyBlobSignature(signed, parsed, signer.Public()); err != nil {
 		t.Fatalf("blob signed on the token does not verify: %v", err)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -30,23 +31,23 @@ func TestDeleteSlotOnSWTPM(t *testing.T) {
 	extendPCR(tpm, 7, "secure boot")
 	pubPath, privPath := writeTestKeyPair(t)
 
-	oldDir, oldList := NVRAMRecoveryDir, listLuksDevices
-	defer func() { NVRAMRecoveryDir, listLuksDevices = oldDir, oldList }()
-	NVRAMRecoveryDir = t.TempDir()
+	oldDir, oldList := nvslot.NVRAMRecoveryDir, listLuksDevices
+	defer func() { nvslot.NVRAMRecoveryDir, listLuksDevices = oldDir, oldList }()
+	nvslot.NVRAMRecoveryDir = t.TempDir()
 	listLuksDevices = func() ([]string, error) { return nil, nil }
 
-	const idx = NVRAMSlotStart + 1
+	const idx = nvslot.NVRAMSlotStart + 1
 	if err := Seal(sock, "0,7", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
-	stash := filepath.Join(NVRAMRecoveryDir, fmt.Sprintf("slot-0x%08X-1759823456.blob", uint32(idx)))
+	stash := filepath.Join(nvslot.NVRAMRecoveryDir, fmt.Sprintf("slot-0x%08X-1759823456.blob", uint32(idx)))
 	os.WriteFile(stash, []byte("x"), 0o600)
 
 	var out bytes.Buffer
 	if err := DeleteSlot(DeleteSlotOptions{TPMPath: sock, Slot: 1, Out: &out}); err != nil {
 		t.Fatalf("delete: %v\n%s", err, out.String())
 	}
-	for _, i := range []uint32{idx, GenerationIndex(idx)} {
+	for _, i := range []uint32{idx, nvslot.GenerationIndex(idx)} {
 		if tpmdev.NVRAMIndexExists(tpm, i) {
 			t.Errorf("0x%08X is still there", i)
 		}
