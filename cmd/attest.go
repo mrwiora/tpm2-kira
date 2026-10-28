@@ -642,7 +642,7 @@ func AttestGate(o GateOptions) int {
 	}
 	// Run by hand, or where no coordinator runs (initramfs-tools): one
 	// process does both halves.
-	tpmPath := preferResourceManager(o.TPMPath)
+	tpmPath := tpmdev.PreferResourceManager(o.TPMPath)
 	step("version %s; opening the TPM at %s", nvslot.AppVersion, tpmPath)
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {

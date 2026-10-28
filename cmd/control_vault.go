@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
 
 	"charm.land/huh/v2"
 )
@@ -112,7 +113,7 @@ func (c *controller) runVault() error {
 			if err := c.form(
 				huh.NewInput().Title("The vault's address").Description("https://host[:port], as 'tpm2-kira-vault token create' prints it.").
 					Value(&url).Validate(func(s string) error {
-					_, err := newVaultClient(strings.TrimSpace(s), "sha256:"+strings.Repeat("0", 64))
+					_, err := vaultkey.NewClient(strings.TrimSpace(s), "sha256:"+strings.Repeat("0", 64))
 					return err
 				}),
 				huh.NewInput().Title("The vault's key pin").Description("sha256: and 64 hexadecimal characters: the vault is taken for real only with this key.").
@@ -135,7 +136,7 @@ func (c *controller) runVault() error {
 			url, pin, token = strings.TrimSpace(url), strings.ToLower(strings.TrimSpace(pin)), strings.TrimSpace(token)
 		}
 		fmt.Fprintf(c.out, "Asking the vault at %s ...\n", url)
-		v := checkVault(url, pin, nil, 10*time.Second)
+		v := vaultkey.Check(url, pin, nil, 10*time.Second)
 		if v.Answers {
 			fmt.Fprintln(c.out, good("The vault answers, with the pinned key."))
 			break

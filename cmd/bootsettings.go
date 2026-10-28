@@ -87,7 +87,7 @@ func WriteBootSettings(tpmDev transport.TPM, s BootSettings, signer crypto.Signe
 // resource manager when there is one: the code screen holds the TPM too).
 // Any failure is "off": debug only adds output.
 func BootDebug(tpmPath string) bool {
-	tpmDev, err := tpmdev.Open(preferResourceManager(tpmPath))
+	tpmDev, err := tpmdev.Open(tpmdev.PreferResourceManager(tpmPath))
 	if err != nil {
 		return false
 	}

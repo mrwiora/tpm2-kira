@@ -10,6 +10,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
 )
 
 // Step 1, the boot chain: the hook, the route, and the way on to step 2,
@@ -227,14 +228,14 @@ func TestControlVault(t *testing.T) {
 	c.facts.Status.Slots[0].Vault = "https://vault:8443"
 	c.facts.Status.Devices[0].Keyslots = append(c.facts.Status.Devices[0].Keyslots, KeyslotStatus{Keyslot: 1, Token: &diskkey.LuksToken{Mode: diskkey.LuksModeTPMVault, Slot: &zero}})
 	c.facts.Remote.Net.Mode = "dhcp"
-	c.facts.Vaults = map[int]vaultCheck{0: {Answers: true, Knows: true}}
+	c.facts.Vaults = map[int]vaultkey.CheckResult{0: {Answers: true, Knows: true}}
 	if v := c.menuSteps("disk")[2]; !strings.Contains(v.Done, "the vault answers and knows this device") || !strings.Contains(v.Done, "keyslot 1 of /dev/sda2") {
 		t.Fatalf("vault enrolled: %+v", v)
 	}
 	if got := c.factsText(); !strings.Contains(got, "\033[0;32mslot 0: https://vault:8443 answers") {
 		t.Fatalf("the status:\n%s", got)
 	}
-	c.facts.Vaults[0] = vaultCheck{Problem: "not reachable (connection refused)"}
+	c.facts.Vaults[0] = vaultkey.CheckResult{Problem: "not reachable (connection refused)"}
 	v := c.menuSteps("disk")[2]
 	if !strings.Contains(v.Dirty, "not reachable") {
 		t.Fatalf("vault unreachable: %+v", v)
@@ -245,7 +246,7 @@ func TestControlVault(t *testing.T) {
 	if got := c.factsText(); !strings.Contains(got, "(risk: the disk does not open unattended") {
 		t.Fatalf("the status:\n%s", got)
 	}
-	c.facts.Vaults[0] = vaultCheck{Answers: true, Knows: true}
+	c.facts.Vaults[0] = vaultkey.CheckResult{Answers: true, Knows: true}
 	c.facts.Remote.Net.Mode = "off"
 	if v := c.menuSteps("disk")[2]; !strings.Contains(v.Dirty, "no network to reach the vault") {
 		t.Fatalf("vault without network: %+v", v)

@@ -21,6 +21,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/screen"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
 	"golang.org/x/sys/unix"
 )
 
@@ -122,7 +123,7 @@ type machineFacts struct {
 	// machine's, so reseal cannot approve it.
 	SSHCAOtherKey bool
 	// Vaults is each vault-enrolled slot's vault, asked now.
-	Vaults   map[int]vaultCheck
+	Vaults   map[int]vaultkey.CheckResult
 	Capped   bool   // 'tpm2-kira cap' ran: this boot went through the code screen
 	NewImage string // an image was rebuilt after this boot started; "" when not
 	Routed   map[string]bool
@@ -229,9 +230,9 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	for _, s := range f.Status.Slots {
 		if s.Vault != "" {
 			if f.Vaults == nil {
-				f.Vaults = map[int]vaultCheck{}
+				f.Vaults = map[int]vaultkey.CheckResult{}
 			}
-			f.Vaults[s.Slot] = checkVault(s.Vault, s.VaultPin, s.VaultDevice, 5*time.Second)
+			f.Vaults[s.Slot] = vaultkey.Check(s.Vault, s.VaultPin, s.VaultDevice, 5*time.Second)
 		}
 		f.Phone = f.Phone || s.Phones > 0
 		f.Salt = f.Salt || s.PhoneSalt

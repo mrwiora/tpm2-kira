@@ -15,6 +15,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
 
@@ -22,19 +23,19 @@ import (
 // with every enrolled keyslot.
 func TestVaultKey(t *testing.T) {
 	l, r := bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32)
-	k := VaultKey(l, r, "luks", nil)
+	k := vaultkey.Key(l, r, "luks", nil)
 	if len(k) != 64 || strings.Trim(string(k), "0123456789abcdef") != "" {
 		t.Fatalf("key %q", k)
 	}
-	if !bytes.Equal(k, VaultKey(l, r, "", nil)) {
+	if !bytes.Equal(k, vaultkey.Key(l, r, "", nil)) {
 		t.Fatal("the default label is luks")
 	}
 	for name, other := range map[string][]byte{
-		"another label":    VaultKey(l, r, "home", nil),
-		"parts swapped":    VaultKey(r, l, "luks", nil),
-		"with a pepper":    VaultKey(l, r, "luks", []byte("p")),
-		"an empty pepper":  VaultKey(l, r, "luks", []byte{}),
-		"another remote":   VaultKey(l, bytes.Repeat([]byte{3}, 32), "luks", nil),
+		"another label":    vaultkey.Key(l, r, "home", nil),
+		"parts swapped":    vaultkey.Key(r, l, "luks", nil),
+		"with a pepper":    vaultkey.Key(l, r, "luks", []byte("p")),
+		"an empty pepper":  vaultkey.Key(l, r, "luks", []byte{}),
+		"another remote":   vaultkey.Key(l, bytes.Repeat([]byte{3}, 32), "luks", nil),
 		"the phone salt's": phonegate.FactorSalt(append(append([]byte(nil), l...), r...), "luks"),
 	} {
 		if bytes.Equal(k, other) {
@@ -75,7 +76,7 @@ func TestVaultMethodInTheBlob(t *testing.T) {
 
 	// With a pepper the check comes along; a check of another size does
 	// not parse.
-	a.Vault.PepperCheck = vaultPepperCheck([]byte("key"))
+	a.Vault.PepperCheck = vaultkey.PepperCheck([]byte("key"))
 	raw, _ = a.Marshal()
 	if b, err = nvslot.UnmarshalAttestation(raw); err != nil || !bytes.Equal(b.Vault.PepperCheck, a.Vault.PepperCheck) {
 		t.Fatalf("pepper check: %v", err)
@@ -100,39 +101,39 @@ func TestVaultClientPin(t *testing.T) {
 	defer srv.Close()
 	pin := vaultproto.PinOf(srv.Certificate().RawSubjectPublicKeyInfo)
 
-	c, err := newVaultClient(srv.URL, pin)
+	c, err := vaultkey.NewClient(srv.URL, pin)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var ch vaultproto.ChallengeResponse
-	if err := c.post(context.Background(), vaultproto.PathChallenge, vaultproto.ChallengeRequest{}, &ch); err != nil || ch.RequestID != "r" {
+	if err := c.Post(context.Background(), vaultproto.PathChallenge, vaultproto.ChallengeRequest{}, &ch); err != nil || ch.RequestID != "r" {
 		t.Fatalf("the pinned vault: %v", err)
 	}
-	err = c.post(context.Background(), vaultproto.PathRelease, vaultproto.ReleaseRequest{}, &ch)
+	err = c.Post(context.Background(), vaultproto.PathRelease, vaultproto.ReleaseRequest{}, &ch)
 	if err == nil || !strings.Contains(err.Error(), "unknown device") || strings.Contains(err.Error(), "\x1b") {
 		t.Fatalf("the vault's error, without its escape sequences: %v", err)
 	}
-	if retryableVaultError(err) {
+	if vaultkey.Retryable(err) {
 		t.Fatal("an answer is not a reason to try again")
 	}
 
-	other, _ := newVaultClient(srv.URL, "sha256:"+strings.Repeat("00", 32))
-	err = other.post(context.Background(), vaultproto.PathChallenge, vaultproto.ChallengeRequest{}, &ch)
+	other, _ := vaultkey.NewClient(srv.URL, "sha256:"+strings.Repeat("00", 32))
+	err = other.Post(context.Background(), vaultproto.PathChallenge, vaultproto.ChallengeRequest{}, &ch)
 	if err == nil || !strings.Contains(err.Error(), "not the pinned one") {
 		t.Fatalf("another key: %v", err)
 	}
-	if retryableVaultError(err) {
+	if vaultkey.Retryable(err) {
 		t.Fatal("a vault with another key is not tried again")
 	}
 
 	srv.Close()
-	err = c.post(context.Background(), vaultproto.PathChallenge, vaultproto.ChallengeRequest{}, &ch)
-	if err == nil || !retryableVaultError(err) {
+	err = c.Post(context.Background(), vaultproto.PathChallenge, vaultproto.ChallengeRequest{}, &ch)
+	if err == nil || !vaultkey.Retryable(err) {
 		t.Fatalf("a vault not reached is tried again: %v", err)
 	}
 
 	for _, bad := range [][2]string{{"http://vault:80", pin}, {"https://vault/x", pin}, {srv.URL, "sha256:12"}, {srv.URL, ""}} {
-		if _, err := newVaultClient(bad[0], bad[1]); err == nil {
+		if _, err := vaultkey.NewClient(bad[0], bad[1]); err == nil {
 			t.Errorf("accepted %q %q", bad[0], bad[1])
 		}
 	}
@@ -192,20 +193,20 @@ func TestCheckVault(t *testing.T) {
 	defer srv.Close()
 	pin := vaultproto.PinOf(srv.Certificate().RawSubjectPublicKeyInfo)
 
-	if v := checkVault(srv.URL, pin, known, 5*time.Second); !v.Answers || !v.Knows || v.Problem != "" {
+	if v := vaultkey.Check(srv.URL, pin, known, 5*time.Second); !v.Answers || !v.Knows || v.Problem != "" {
 		t.Fatalf("the known device: %+v", v)
 	}
-	if v := checkVault(srv.URL, pin, nil, 5*time.Second); !v.Answers || v.Knows || !strings.Contains(v.Problem, "unknown device") {
+	if v := vaultkey.Check(srv.URL, pin, nil, 5*time.Second); !v.Answers || v.Knows || !strings.Contains(v.Problem, "unknown device") {
 		t.Fatalf("before the enrolment, any answer: %+v", v)
 	}
-	if v := checkVault(srv.URL, "sha256:"+strings.Repeat("00", 32), nil, 5*time.Second); v.Answers || !strings.Contains(v.Problem, "another key") {
+	if v := vaultkey.Check(srv.URL, "sha256:"+strings.Repeat("00", 32), nil, 5*time.Second); v.Answers || !strings.Contains(v.Problem, "another key") {
 		t.Fatalf("another key: %+v", v)
 	}
-	if v := checkVault("https://vault", "sha256:12", nil, 5*time.Second); v.Answers || !strings.Contains(v.Problem, "pin") {
+	if v := vaultkey.Check("https://vault", "sha256:12", nil, 5*time.Second); v.Answers || !strings.Contains(v.Problem, "pin") {
 		t.Fatalf("a bad pin: %+v", v)
 	}
 	srv.Close()
-	if v := checkVault(srv.URL, pin, known, 5*time.Second); v.Answers || !strings.Contains(v.Problem, "not reachable") {
+	if v := vaultkey.Check(srv.URL, pin, known, 5*time.Second); v.Answers || !strings.Contains(v.Problem, "not reachable") {
 		t.Fatalf("not reached: %+v", v)
 	}
 }

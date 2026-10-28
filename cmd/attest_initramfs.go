@@ -261,20 +261,6 @@ func readKernelLog(extra string) []byte {
 	return out
 }
 
-// preferResourceManager returns /dev/tpmrm0 for a /dev/tpm0 path when the
-// kernel's resource manager is available. The gate runs next to the OTP
-// display in the initrd; on the raw device only one process may open the TPM,
-// and the display's per-cycle cleanup would flush the gate's loaded AK.
-func preferResourceManager(path string) string {
-	if path != "/dev/tpm0" {
-		return path
-	}
-	if st, err := os.Stat("/dev/tpmrm0"); err == nil && st.Mode()&os.ModeCharDevice != 0 {
-		return "/dev/tpmrm0"
-	}
-	return path
-}
-
 // adapterDeps is what the image build would put in for the adapter, by
 // the same resolution the plan runs: the firmware this boot's or an
 // earlier boot's kernel log names (or remembered), and the rule that lets

@@ -28,6 +28,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
 
@@ -182,8 +183,8 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tpmDev.Close()
-	slots := vaultSlots(tpmDev, false)
-	if len(slots) != 1 || slots[0].idx != slot || !slots[0].att.Vault.Enabled() || slots[0].att.Phone.Enabled() {
+	slots := vaultkey.Slots(tpmDev, false)
+	if len(slots) != 1 || slots[0].Idx != slot || !slots[0].Att.Vault.Enabled() || slots[0].Att.Phone.Enabled() {
 		t.Fatalf("vault slots %+v", slots)
 	}
 	vs := slots[0]
@@ -198,13 +199,13 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if soft := vaultproto.PolicyPCRDigest(sealedSelection(vs.sealed), []vaultproto.PCRValue{{Index: 23, Value: vals[0].Digest}}); !bytes.Equal(trial.Buffer, soft) {
+	if soft := vaultproto.PolicyPCRDigest(vaultkey.SealedSelection(vs.Sealed), []vaultproto.PCRValue{{Index: 23, Value: vals[0].Digest}}); !bytes.Equal(trial.Buffer, soft) {
 		t.Fatalf("PolicyPCR: the TPM %x, vaultproto %x", trial.Buffer, soft)
 	}
 
 	var said []string
 	say := func(s string) { said = append(said, s) }
-	got, err := openVaultKey(context.Background(), tpmDev, vs, say)
+	got, err := vaultkey.OpenKey(context.Background(), tpmDev, vs, say)
 	if err != nil {
 		t.Fatalf("the boot's key: %v (vault refused: %v)", err, tv.refused)
 	}
@@ -218,7 +219,7 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 	if err := extendPCR(tpmDev, 23, "a kernel nobody approved"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openVaultKey(context.Background(), tpmDev, vs, say); err == nil || !strings.Contains(err.Error(), "the local part") {
+	if _, err := vaultkey.OpenKey(context.Background(), tpmDev, vs, say); err == nil || !strings.Contains(err.Error(), "the local part") {
 		t.Fatalf("after a PCR moved: %v", err)
 	}
 	if len(tv.nonces) != asked {
@@ -227,8 +228,8 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 
 	// The vault refuses that state on its own as well: the quote's values
 	// are not the approved ones. (Asked directly, past the local part.)
-	c, _ := newVaultClient(srv.URL, pin)
-	if _, err := fetchRemote(context.Background(), tpmDev, vs, c, say); err == nil || !strings.Contains(err.Error(), "approval does not cover") {
+	c, _ := vaultkey.NewClient(srv.URL, pin)
+	if _, err := vaultkey.FetchRemote(context.Background(), tpmDev, vs, c, say); err == nil || !strings.Contains(err.Error(), "approval does not cover") {
 		t.Fatalf("the vault on a moved PCR: %v", err)
 	}
 	tpmDev.Close()
@@ -279,14 +280,14 @@ func TestVaultPepper(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tpmDev.Close()
-	vs := vaultSlots(tpmDev, false)[0]
-	if len(vs.att.Vault.PepperCheck) != 32 {
+	vs := vaultkey.Slots(tpmDev, false)[0]
+	if len(vs.Att.Vault.PepperCheck) != 32 {
 		t.Fatal("no pepper check in the blob")
 	}
 
 	tv.peppers = [][]byte{[]byte("s3cret pepprr"), []byte("s3cret pepper")}
 	var said []string
-	got, err := openVaultKey(context.Background(), tpmDev, vs, func(s string) { said = append(said, s) })
+	got, err := vaultkey.OpenKey(context.Background(), tpmDev, vs, func(s string) { said = append(said, s) })
 	if err != nil {
 		t.Fatalf("the boot's key: %v", err)
 	}
@@ -295,7 +296,7 @@ func TestVaultPepper(t *testing.T) {
 	}
 
 	tv.peppers, tv.gave = nil, 0
-	if _, err := openVaultKey(context.Background(), tpmDev, vs, func(string) {}); err == nil || !strings.Contains(err.Error(), "without a pepper") {
+	if _, err := vaultkey.OpenKey(context.Background(), tpmDev, vs, func(string) {}); err == nil || !strings.Contains(err.Error(), "without a pepper") {
 		t.Fatalf("a release without the pepper: %v", err)
 	}
 }

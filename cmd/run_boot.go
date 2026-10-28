@@ -53,6 +53,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
 
 	"github.com/google/go-tpm/tpm2/transport"
 	"golang.org/x/sys/unix"
@@ -445,7 +446,7 @@ func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*phonegate
 	if _, err := os.Stat(signerPath); err != nil {
 		return nil, nil // no gate in this image
 	}
-	path := preferResourceManager(tpmPath)
+	path := tpmdev.PreferResourceManager(tpmPath)
 	tpmDev, err := tpmdev.Open(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: cannot open the TPM at %s: %v\n", path, err)
@@ -500,13 +501,13 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 	// separator), and a key made ends the hold on its own. The attempt
 	// lasts as long as the hold.
 	vaultCtx, endVault := context.WithCancel(context.Background())
-	var vault *vaultKeys
+	var vault *vaultkey.Keys
 	if planned.Vault {
-		vault = startVaultKeys(vaultCtx, tpmPath, os.Stdout, diskkey.UnlockLogger(debug), debug)
+		vault = vaultkey.Start(vaultCtx, tpmPath, os.Stdout, diskkey.UnlockLogger(debug), debug)
 	}
 	var vaultKey func(string) ([]byte, error)
 	if vault != nil {
-		vaultKey = vault.forVolume
+		vaultKey = vault.ForVolume
 	}
 	var unlock *diskkey.UnlockServer
 	// What the next prompt is, for the code screen's words: the recipe of
@@ -549,7 +550,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 		return tpmDev, nil
 	}
 	enter := startEnterReader(0)
-	vaultReady := vault.ready()
+	vaultReady := vault.Ready()
 	atConsole := false // the hold ended with Enter at the console
 	var hint *hintPrinter
 	if srv != nil {
@@ -672,7 +673,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 				return true
 			case <-vaultReady:
 				vaultReady = nil // tried once; without a key the hold goes on
-				return vault.made()
+				return vault.Made()
 			case <-time.After(d):
 				return false
 			}
