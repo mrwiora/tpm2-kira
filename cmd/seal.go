@@ -13,6 +13,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
@@ -123,7 +124,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	// phones check its boots (SealedBlobPayload).
 	var kept *nvslot.Attestation
 	var policyRef []byte
-	if oldRaw, old, err := readSlot(tpmDev, nvramIndex); err == nil && old.Payload.Attestation != nil {
+	if oldRaw, old, err := phonegate.ReadSlot(tpmDev, nvramIndex); err == nil && old.Payload.Attestation != nil {
 		if nvslot.VerifyBlobSignature(oldRaw, old, signer.Public()) == nil {
 			kept, policyRef = old.Payload.Attestation, old.Payload.PolicyRef
 			if kept.Phone.Enabled() {

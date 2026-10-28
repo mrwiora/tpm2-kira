@@ -22,6 +22,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/attest/attesttest"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -49,9 +50,9 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	// boot key shares that key's policy: the slot is really sealed.
 	idx := uint32(nvslot.NVRAMSlotStart + 9)
 	signer, signerPath := sealRealSlot(t, s.sock, idx)
-	s.be.sealIndex, s.be.sealed = idx, readSealedSlot(s.tpm, idx)
-	s.be.confirmSAS = func(code string) (bool, error) { return true, nil }
-	s.be.commit = func(v attest.EnrolledVerifier) error {
+	s.be.SealIndex, s.be.Sealed = idx, phonegate.ReadSealedSlot(s.tpm, idx)
+	s.be.OnConfirmSAS = func(code string) (bool, error) { return true, nil }
+	s.be.OnCommit = func(v attest.EnrolledVerifier) error {
 		if err := s.blob.UpsertVerifier(v); err != nil {
 			return err
 		}
@@ -87,7 +88,7 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	t.Logf("enrolled: EK %s, AK %s, reset count %d", nvslot.EKAlgName(s.blob.EKAlg), hex.EncodeToString(rec.AKName[:8]), rec.ResetCount)
 
 	// The blob round-trips through NVRAM.
-	stored, err := loadAttestBlob(s.tpm, idx)
+	stored, err := phonegate.LoadAttestBlob(s.tpm, idx)
 	if err != nil {
 		t.Fatalf("reading back the attestation blob: %v", err)
 	}
@@ -131,9 +132,9 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	res := attestRound()
 	// The TPM released the boot key for this boot state: the phone shows
 	// the code this machine recovered.
-	if vd := phone.Last(attest.EvVerdict).Verdict; vd.BootKey != attest.BootKeyResultProved || s.be.bootCode == "" ||
-		vd.Code != attest.FormatBootCode(s.be.bootCode) || !bytes.Equal(rec.BootKeyPub, mustPoint(t, stored)) {
-		t.Fatalf("boot key: verdict %q code %q, machine recovered %q", vd.BootKey, vd.Code, s.be.bootCode)
+	if vd := phone.Last(attest.EvVerdict).Verdict; vd.BootKey != attest.BootKeyResultProved || s.be.BootCode == "" ||
+		vd.Code != attest.FormatBootCode(s.be.BootCode) || !bytes.Equal(rec.BootKeyPub, mustPoint(t, stored)) {
+		t.Fatalf("boot key: verdict %q code %q, machine recovered %q", vd.BootKey, vd.Code, s.be.BootCode)
 	}
 	if res.Check.Verdict != attest.VerdictOK || !res.Check.Authentic {
 		t.Fatalf("unchanged machine not attested: %+v (verdict %+v)", res.Check, phone.Last(attest.EvVerdict).Verdict)
@@ -142,8 +143,8 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	// The same exchange as the units run it: the session in a radio worker
 	// that has nothing but the coordinator's socket, the TPM and the
 	// reading of the receipt in the coordinator.
-	svc := newGateService(s.tpm, idx, signerPath, false)
-	worker, err := dialGate(startTestGate(t, svc), 5*time.Second)
+	svc := phonegate.NewGateService(s.tpm, idx, signerPath, false)
+	worker, err := phonegate.DialGate(startTestGate(t, svc), 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +188,7 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	}
 	res = viaCoordinator()
 	st, _ := svc.Status()
-	if res.Check.Verdict != attest.VerdictOK || !res.Check.Authentic || st.State != GateAttested || st.Slot != 9 {
+	if res.Check.Verdict != attest.VerdictOK || !res.Check.Authentic || st.State != phonegate.GateAttested || st.Slot != 9 {
 		t.Fatalf("through the coordinator: %+v, status %+v", res.Check, st)
 	}
 	// The worker asked the coordinator's TPM for the proof; the phone got a
@@ -206,8 +207,8 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 		t.Fatal(err)
 	}
 	attestRound()
-	if vd := phone.Last(attest.EvVerdict).Verdict; vd.BootKey != attest.BootKeyResultRefused || vd.Code != "" || s.be.bootCode != "" {
-		t.Fatalf("boot key outside the approved state: %+v, machine recovered %q", vd, s.be.bootCode)
+	if vd := phone.Last(attest.EvVerdict).Verdict; vd.BootKey != attest.BootKeyResultRefused || vd.Code != "" || s.be.BootCode != "" {
+		t.Fatalf("boot key outside the approved state: %+v, machine recovered %q", vd, s.be.BootCode)
 	}
 	// A worker gone wrong asks for a quote of its own and presents the
 	// phone's genuine receipt for it: the receipt belongs to another quote.
@@ -238,7 +239,7 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 
 func mustPoint(t *testing.T, a *nvslot.Attestation) []byte {
 	t.Helper()
-	p, err := bootKeyPoint(a)
+	p, err := phonegate.BootKeyPoint(a)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +292,7 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 	}
 	buildImage := func() (int, string) { // what the hook does
 		var errOut strings.Builder
-		pemBytes, code := signerForImage(s.tpm, hostKey, &errOut, false)
+		pemBytes, code := phonegate.SignerForImage(s.tpm, hostKey, &errOut, false)
 		if code == 0 {
 			if err := os.WriteFile(signerPath, pemBytes, 0o600); err != nil {
 				t.Fatal(err)
@@ -299,10 +300,10 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 		}
 		return code, errOut.String()
 	}
-	gate := func() (bool, int) { return gateRecordCheck(s.tpm, idx, signerPath) }
+	gate := func() (bool, int) { return phonegate.GateRecordCheck(s.tpm, idx, signerPath) }
 	refused := func(what string) {
 		t.Helper()
-		if verified, code := gate(); verified || code != ExitTampered {
+		if verified, code := gate(); verified || code != phonegate.ExitTampered {
 			t.Fatalf("%s: not refused (verified=%v, exit %d)", what, verified, code)
 		}
 	}
@@ -337,7 +338,7 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 	}
 
 	// An image from before the key was put into it: served, not verified.
-	if verified, code := gateRecordCheck(s.tpm, idx, filepath.Join(t.TempDir(), "none")); verified || code != 0 {
+	if verified, code := phonegate.GateRecordCheck(s.tpm, idx, filepath.Join(t.TempDir(), "none")); verified || code != 0 {
 		t.Fatalf("image without the key: %v %d", verified, code)
 	}
 	if code, out := buildImage(); code != 0 {
@@ -365,7 +366,7 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 	withPhones(forgedSlot, &forged)
 	plant(signSlot(t, forgedSlot, attacker))
 	refused("attacker's record")
-	if code, out := buildImage(); code != ExitTampered || !strings.Contains(out, "TAMPERED") {
+	if code, out := buildImage(); code != phonegate.ExitTampered || !strings.Contains(out, "TAMPERED") {
 		t.Fatalf("the image build accepted a foreign record: %d %s", code, out)
 	}
 
@@ -438,7 +439,7 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 	if a, err := nvslot.UnmarshalSealedBlob(unenrolled); err != nil || a.Payload.Attestation != nil || !a.HasTOTPKey() {
 		t.Fatalf("removing the phones did not give the slot a TOTP key back: %+v %v", a, err)
 	}
-	if verified, code := gate(); verified || code != ExitTampered {
+	if verified, code := gate(); verified || code != phonegate.ExitTampered {
 		t.Fatalf("a slot without phones was served (verified=%v, exit %d)", verified, code)
 	}
 	plant(last)
@@ -491,14 +492,14 @@ func TestCoordinatorAndWorker(t *testing.T) {
 	}
 	// The worker: no TPM path, only the socket. It gets as far as the radio.
 	code := AttestGate(GateOptions{Coordinator: gate, Adapter: 250, TPMPath: "/nonexistent/tpm"})
-	if code != ExitUnavailable {
-		t.Fatalf("worker exit %d, want %d (no adapter)", code, ExitUnavailable)
+	if code != phonegate.ExitUnavailable {
+		t.Fatalf("worker exit %d, want %d (no adapter)", code, phonegate.ExitUnavailable)
 	}
-	if st, ok := svc.Status(); !ok || st.State != GateUnavailable || st.Slot != 3 {
+	if st, ok := svc.Status(); !ok || st.State != phonegate.GateUnavailable || st.Slot != 3 {
 		t.Fatalf("coordinator status %+v", st)
 	}
 	// The TPM half works through the socket.
-	worker, err := dialGate(gate, time.Second)
+	worker, err := phonegate.DialGate(gate, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -525,12 +526,12 @@ func TestCoordinatorAndWorker(t *testing.T) {
 	// fails with the same status as before.
 	forged := *s.blob
 	forged.Phone.Verifiers = []attest.EnrolledVerifier{{ID: "attackers-phone", AnchorPub: []byte{9}, NoisePub: make([]byte, 32)}}
-	forged.Count, _ = nvslot.ReadAttestCounter(svc.tpm, nvslot.AttestCounterIndex(idx))
+	forged.Count, _ = nvslot.ReadAttestCounter(svc.TPM, nvslot.AttestCounterIndex(idx))
 	forgedSlot := testSlotBlob()
 	withPhones(forgedSlot, &forged)
-	svc.tpmMu.Lock()
-	err = nvslot.WriteToNVRAM(svc.tpm, idx, signSlot(t, forgedSlot, attacker), attacker.Public(), attacker)
-	svc.tpmMu.Unlock()
+	svc.TPMMu.Lock()
+	err = nvslot.WriteToNVRAM(svc.TPM, idx, signSlot(t, forgedSlot, attacker), attacker.Public(), attacker)
+	svc.TPMMu.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -539,11 +540,11 @@ func TestCoordinatorAndWorker(t *testing.T) {
 	if err := os.WriteFile(hostKey, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	refused := newGateService(svc.tpm, 0, hostKey, false)
-	if code := AttestGate(GateOptions{Coordinator: startTestGate(t, refused), Adapter: 250}); code != ExitTampered {
-		t.Fatalf("worker exit %d for a replaced record, want %d", code, ExitTampered)
+	refused := phonegate.NewGateService(svc.TPM, 0, hostKey, false)
+	if code := AttestGate(GateOptions{Coordinator: startTestGate(t, refused), Adapter: 250}); code != phonegate.ExitTampered {
+		t.Fatalf("worker exit %d for a replaced record, want %d", code, phonegate.ExitTampered)
 	}
-	if st, _ := refused.Status(); st.State != GateRefused {
+	if st, _ := refused.Status(); st.State != phonegate.GateRefused {
 		t.Fatalf("coordinator status %+v", st)
 	}
 }
@@ -645,7 +646,7 @@ func TestStaleSlotCanBeRemoved(t *testing.T) {
 	if err := nvslot.WriteToNVRAM(tpmDev, slot0, oldBlob, previous.Public(), previous); err != nil {
 		t.Fatal(err)
 	}
-	if verified, code := gateRecordCheck(tpmDev, slot0, oldKey); verified || code != ExitTampered {
+	if verified, code := phonegate.GateRecordCheck(tpmDev, slot0, oldKey); verified || code != phonegate.ExitTampered {
 		t.Fatalf("the blob from before the cleanup was accepted again (verified=%v, exit %d)", verified, code)
 	}
 }
@@ -654,24 +655,37 @@ func TestStaleSlotCanBeRemoved(t *testing.T) {
 // warns, asks, and stops on "no" or under --verify-tpm=require.
 func TestOwnTPMCheckOnSWTPM(t *testing.T) {
 	s := newSWTPMSetup(t)
-	run := func(p HWCheckPolicy, answer string) (bool, string) {
+	run := func(p phonegate.HWCheckPolicy, answer string) (bool, string) {
 		var out strings.Builder
-		ok, err := checkOwnTPM(s.tpm, p, bufio.NewReader(strings.NewReader(answer)), &out)
+		ok, err := phonegate.CheckOwnTPM(s.tpm, p, bufio.NewReader(strings.NewReader(answer)), &out)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return ok, out.String()
 	}
-	if ok, out := run(CheckWarn, "\n"); ok || !strings.Contains(out, "NOT VERIFIED as genuine hardware: the TPM has no vendor certificate") {
+	if ok, out := run(phonegate.CheckWarn, "\n"); ok || !strings.Contains(out, "NOT VERIFIED as genuine hardware: the TPM has no vendor certificate") {
 		t.Fatalf("warn/no: %v %s", ok, out)
 	}
-	if ok, _ := run(CheckWarn, "y\n"); !ok {
+	if ok, _ := run(phonegate.CheckWarn, "y\n"); !ok {
 		t.Fatal("warn/yes refused")
 	}
-	if ok, _ := run(CheckRequire, "y\n"); ok {
+	if ok, _ := run(phonegate.CheckRequire, "y\n"); ok {
 		t.Fatal("require accepted")
 	}
-	if ok, out := run(CheckOff, ""); !ok || out != "" {
+	if ok, out := run(phonegate.CheckOff, ""); !ok || out != "" {
 		t.Fatal("off checked")
 	}
+}
+
+// startTestGate serves host as the coordinator's socket, for a worker.
+func startTestGate(t *testing.T, host phonegate.GateHost) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "run", "gate.sock")
+	l, err := phonegate.ListenGate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := phonegate.ServeGate(l, host)
+	t.Cleanup(g.Close)
+	return path
 }

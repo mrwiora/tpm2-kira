@@ -1,4 +1,4 @@
-package cmd
+package phonegate
 
 import (
 	"crypto/ecdsa"
@@ -21,36 +21,36 @@ import (
 
 // A coordinator for one slot with one enrolled phone and no TPM behind it:
 // quotes are registered by hand, as Quote would after the TPM signed one.
-func testCoordinator(t *testing.T) (*gateService, *ecdsa.PrivateKey) {
+func testCoordinator(t *testing.T) (*GateService, *ecdsa.PrivateKey) {
 	t.Helper()
 	phone, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	anchor, _ := x509.MarshalPKIXPublicKey(&phone.PublicKey)
-	s := &gateService{ready: make(chan struct{}), issued: map[string][]byte{}, idx: nvslot.NVRAMSlotStart + 2}
-	s.blob = &nvslot.Attestation{
+	s := &GateService{Ready: make(chan struct{}), Issued: map[string][]byte{}, Idx: nvslot.NVRAMSlotStart + 2}
+	s.Blob = &nvslot.Attestation{
 		DeviceID: []byte("0123456789abcdef"), AKName: []byte("ak-name"), FriendlyName: "box",
 		Phone: nvslot.PhoneAttestation{
 			NoisePrivate: make([]byte, 32), AdvKey: make([]byte, 32),
 			Verifiers: []attest.EnrolledVerifier{{ID: "phone-1", AnchorPub: anchor, NoisePub: make([]byte, 32)}},
 		},
 	}
-	s.status.Slot = 2
-	close(s.ready)
+	s.Current.Slot = 2
+	close(s.Ready)
 	return s, phone
 }
 
-func (s *gateService) issue(quoted, qd []byte) []byte {
+func (s *GateService) issue(quoted, qd []byte) []byte {
 	sum := sha256.Sum256(quoted)
-	s.issued[hex.EncodeToString(sum[:])] = qd
+	s.Issued[hex.EncodeToString(sum[:])] = qd
 	return sum[:]
 }
 
-func signedReceipt(t *testing.T, s *gateService, key *ecdsa.PrivateKey, verdict attest.VerdictCode, digest, qd []byte) *attest.Receipt {
+func signedReceipt(t *testing.T, s *GateService, key *ecdsa.PrivateKey, verdict attest.VerdictCode, digest, qd []byte) *attest.Receipt {
 	t.Helper()
 	r := &attest.Receipt{
-		Verdict: verdict, DeviceID: s.blob.DeviceID, AKName: s.blob.AKName,
+		Verdict: verdict, DeviceID: s.Blob.DeviceID, AKName: s.Blob.AKName,
 		QD: qd, QuoteDigest: digest, VerifierID: "phone-1",
 	}
 	if key != nil {
@@ -141,9 +141,9 @@ func TestRejectionsAreNoted(t *testing.T) {
 
 // A coordinator that found the record replaced serves nothing, and says why.
 func TestRefusedCoordinatorServesNothing(t *testing.T) {
-	s := &gateService{ready: make(chan struct{}), issued: map[string][]byte{}, code: ExitTampered, reason: errors.New("not accepted")}
-	s.status.State = GateRefused
-	close(s.ready)
+	s := &GateService{Ready: make(chan struct{}), Issued: map[string][]byte{}, Code: ExitTampered, Reason: errors.New("not accepted")}
+	s.Current.State = GateRefused
+	close(s.Ready)
 	if _, code, err := s.Identity(); code != ExitTampered || err == nil {
 		t.Fatalf("identity: %d %v", code, err)
 	}
@@ -209,20 +209,20 @@ func (f *fakeHost) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest [
 	return &attest.BootAnswer{Proof: append([]byte("proof:"), context...), Signature: append([]byte("sig:"), quoteDigest...)}, attest.BootKeyProved
 }
 
-func startTestGate(t *testing.T, host gateHost) string {
+func startTestGate(t *testing.T, host GateHost) string {
 	t.Helper()
 	path, _ := startTestGateServer(t, host)
 	return path
 }
 
-func startTestGateServer(t *testing.T, host gateHost) (string, *gateServer) {
+func startTestGateServer(t *testing.T, host GateHost) (string, *GateServer) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "run", "gate.sock")
-	l, err := listenGate(path)
+	l, err := ListenGate(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := serveGate(l, host)
+	g := ServeGate(l, host)
 	t.Cleanup(g.Close)
 	return path, g
 }
@@ -231,7 +231,7 @@ func startTestGateServer(t *testing.T, host gateHost) (string, *gateServer) {
 // the worker learns of it at once, also while it is only waiting for a phone.
 func TestWorkerLearnsThatTheCoordinatorEnded(t *testing.T) {
 	path, server := startTestGateServer(t, &fakeHost{identity: &gateIdentity{FriendlyName: "box"}})
-	c, err := dialGate(path, time.Second)
+	c, err := DialGate(path, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestWorkerLearnsThatTheCoordinatorEnded(t *testing.T) {
 		t.Fatal("a closed coordinator quoted")
 	}
 	// Nobody new is served either.
-	if _, err := dialGate(path, 300*time.Millisecond); err == nil {
+	if _, err := DialGate(path, 300*time.Millisecond); err == nil {
 		t.Fatal("a closed coordinator accepted a worker")
 	}
 	server.Close() // twice is fine
@@ -280,7 +280,7 @@ func TestWorkerReachesTheCoordinator(t *testing.T) {
 		t.Fatalf("directory mode %v", st.Mode())
 	}
 
-	c, err := dialGate(path, time.Second)
+	c, err := DialGate(path, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func TestWorkerReachesTheCoordinator(t *testing.T) {
 
 	// A refusal carries the coordinator's exit status to the worker's unit.
 	refusing := startTestGate(t, &fakeHost{code: ExitTampered})
-	c2, err := dialGate(refusing, time.Second)
+	c2, err := DialGate(refusing, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestWorkerReachesTheCoordinator(t *testing.T) {
 	}
 
 	// Without a coordinator the worker gives up; it has no TPM to fall back to.
-	if _, err := dialGate(filepath.Join(t.TempDir(), "nobody"), 300*time.Millisecond); err == nil {
+	if _, err := DialGate(filepath.Join(t.TempDir(), "nobody"), 300*time.Millisecond); err == nil {
 		t.Fatal("dialled nothing")
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"golang.org/x/sys/unix"
@@ -342,13 +343,13 @@ func ekVerdict(tpmPath string, debug bool) (by, note string) {
 	}
 	defer tpmDev.Close()
 	defer tpmdev.Cleanup(tpmDev, debug)
-	alg, ek, pub, err := pickCertifiedEK(tpmDev)
+	alg, ek, pub, err := phonegate.PickCertifiedEK(tpmDev)
 	if err != nil {
 		return "", err.Error()
 	}
-	tpmdev.FlushHandle(tpmDev, ek.handle)
-	leaf := readEKCert(tpmDev, alg)
-	by, err = attest.VerifyEKCertificate(pub, leaf, readEKCertChain(tpmDev, leaf), time.Now())
+	tpmdev.FlushHandle(tpmDev, ek.Handle)
+	leaf := phonegate.ReadEKCert(tpmDev, alg)
+	by, err = attest.VerifyEKCertificate(pub, leaf, phonegate.ReadEKCertChain(tpmDev, leaf), time.Now())
 	if err != nil {
 		return "", attest.EKCertNote(err)
 	}
@@ -1173,7 +1174,7 @@ func (c *controller) runAttest() error {
 	// verdict and no ask here. The phone's key is still checked.
 	if err := AttestEnrol(EnrolOptions{
 		TPMPath: c.o.TPMPath, Name: name, SHA1: c.facts.UseSHA1, Timeout: 10 * time.Minute, Debug: c.o.Debug,
-		VerifyTPM: CheckOff, VerifyPhone: CheckWarn,
+		VerifyTPM: phonegate.CheckOff, VerifyPhone: phonegate.CheckWarn,
 	}); err != nil {
 		return err
 	}

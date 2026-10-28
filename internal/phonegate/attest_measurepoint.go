@@ -1,4 +1,4 @@
-package cmd
+package phonegate
 
 // The enrolment baseline: which PCR values the phone pins.
 //
@@ -32,12 +32,12 @@ import (
 // "changed" once).
 type measurePoint struct {
 	values []attest.PCRValue
-	err    error
+	Err    error
 }
 
-// predictMeasurePoint computes the PCR values the boot check will see for
+// PredictMeasurePoint computes the PCR values the boot check will see for
 // the attested selection, the way the seal does for its policy.
-func predictMeasurePoint(tpmDev transport.TPM, sealed *nvslot.SealedBlob, sel attest.PCRSelection, debug bool) *measurePoint {
+func PredictMeasurePoint(tpmDev transport.TPM, sealed *nvslot.SealedBlob, sel attest.PCRSelection, debug bool) *measurePoint {
 	mode := measure.MeasurePointAuto
 	if sealed != nil {
 		if sealed.HasEventlogPCRs() {
@@ -57,22 +57,22 @@ func predictMeasurePoint(tpmDev transport.TPM, sealed *nvslot.SealedBlob, sel at
 	// phone takes both for the same boot (attest.SameBootState).
 	res, err := measure.ReadPCRValues(tpmDev, specs, algo, mode, measure.MeasurePointAfterSeparator, debug)
 	if err != nil {
-		return &measurePoint{err: err}
+		return &measurePoint{Err: err}
 	}
 	vals := make([]attest.PCRValue, 0, len(sel.Indices))
 	for _, i := range sel.Indices {
 		v, ok := res.Values[int(i)]
 		if !ok {
-			return &measurePoint{err: fmt.Errorf("no value for PCR %d", i)}
+			return &measurePoint{Err: fmt.Errorf("no value for PCR %d", i)}
 		}
 		vals = append(vals, attest.PCRValue{Index: i, Digest: v})
 	}
-	live, err := readPCRBank(tpmDev, sel)
+	live, err := ReadPCRBank(tpmDev, sel)
 	if err != nil {
-		return &measurePoint{err: err}
+		return &measurePoint{Err: err}
 	}
 	if err := attest.CheckMeasurePointValues(sel.Alg, live, vals); err != nil {
-		return &measurePoint{err: fmt.Errorf("the prediction does not fit the running system: %w", err)}
+		return &measurePoint{Err: fmt.Errorf("the prediction does not fit the running system: %w", err)}
 	}
 	return &measurePoint{values: vals}
 }
@@ -96,9 +96,9 @@ func measurePointSpecs(indices []uint8) []measure.PCRSpec {
 }
 
 // MeasurePointValues implements attest.MeasurePointProvider.
-func (b *tpmBackend) MeasurePointValues(sel attest.PCRSelection) ([]attest.PCRValue, error) {
-	if b.mp == nil {
-		b.mp = predictMeasurePoint(b.tpm, b.sealed, sel, b.debug)
+func (b *TPMBackend) MeasurePointValues(sel attest.PCRSelection) ([]attest.PCRValue, error) {
+	if b.Baseline == nil {
+		b.Baseline = PredictMeasurePoint(b.TPM, b.Sealed, sel, b.Debug)
 	}
-	return b.mp.values, b.mp.err
+	return b.Baseline.values, b.Baseline.Err
 }

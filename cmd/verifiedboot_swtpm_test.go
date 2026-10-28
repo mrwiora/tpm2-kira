@@ -12,6 +12,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -49,7 +50,7 @@ func TestEnrolmentNeedsAVerifiedBoot(t *testing.T) {
 	if err := Seal(sock, "0e,2e,7e", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
-	_, sealed, err := readSlot(tpm, slot)
+	_, sealed, err := phonegate.ReadSlot(tpm, slot)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -86,7 +87,7 @@ func collectStatus(o StatusOptions) StatusReport {
 	} else {
 		verifier := newBlobVerifier(o.PrivKeyPath)
 		for _, idx := range nvslot.FindPopulatedSlots(tpmDev, o.Debug) {
-			raw, sb, err := readSlot(tpmDev, idx)
+			raw, sb, err := phonegate.ReadSlot(tpmDev, idx)
 			if err != nil {
 				r.Notes = append(r.Notes, fmt.Sprintf("slot %d (0x%08X) does not read as a blob: %v", nvslot.SlotNumber(idx), idx, err))
 				continue

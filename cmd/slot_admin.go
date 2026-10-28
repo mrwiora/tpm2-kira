@@ -7,6 +7,7 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -247,7 +248,7 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 	slots := nvslot.FindPopulatedSlots(tpmDev, debug)
 	enrolled := 0
 	for _, idx := range slots {
-		if _, err := loadAttestBlob(tpmDev, idx); err == nil {
+		if _, err := phonegate.LoadAttestBlob(tpmDev, idx); err == nil {
 			enrolled++
 		}
 	}

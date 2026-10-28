@@ -36,6 +36,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
@@ -199,7 +200,7 @@ type vaultSlot struct {
 func vaultSlots(tpmDev transport.TPM, debug bool) []vaultSlot {
 	var out []vaultSlot
 	for _, idx := range nvslot.FindPopulatedSlots(tpmDev, debug) {
-		_, sb, err := readSlot(tpmDev, idx)
+		_, sb, err := phonegate.ReadSlot(tpmDev, idx)
 		if err != nil || sb.Payload.Attestation == nil || !sb.Payload.Attestation.Vault.Enabled() {
 			continue
 		}
@@ -232,7 +233,7 @@ func fetchRemote(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, c *vau
 		return nil, errors.New("the vault's challenge is malformed")
 	}
 	sel := sealedSelection(vs.sealed)
-	be := &tpmBackend{tpm: tpmDev, blob: vs.att}
+	be := &phonegate.TPMBackend{TPM: tpmDev, Blob: vs.att}
 	q, err := be.Quote(vaultproto.QualifyingData(id, ch.RequestID, ch.Nonce), attest.PCRSelection{Alg: sel.Alg, Indices: sel.Indices})
 	if err != nil {
 		return nil, err
@@ -293,7 +294,7 @@ func fetchRemote(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, c *vau
 // caller wipes the key.
 func openVaultKey(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, say func(string)) ([]byte, error) {
 	v := &vs.att.Vault
-	local, err := unwrapFactor(tpmDev, vs.sealed, vs.idx, vs.att, &v.Local)
+	local, err := phonegate.UnwrapFactor(tpmDev, vs.sealed, vs.idx, vs.att, &v.Local)
 	if err != nil {
 		return nil, fmt.Errorf("the local part: %w", err)
 	}
@@ -332,7 +333,7 @@ func vaultKeyOf(tpmDev transport.TPM, vs vaultSlot, local []byte, rsp *vaultprot
 	case pepper && len(rsp.Pepper) == 0:
 		return nil, errors.New("the vault released without a pepper, and this keyslot was enrolled with one")
 	}
-	remote, err := unwrapFactor(tpmDev, vs.sealed, vs.idx, vs.att, &nvslot.WrappedFactor{Credential: rsp.Remote.Credential, EncryptedSecret: rsp.Remote.EncryptedSecret})
+	remote, err := phonegate.UnwrapFactor(tpmDev, vs.sealed, vs.idx, vs.att, &nvslot.WrappedFactor{Credential: rsp.Remote.Credential, EncryptedSecret: rsp.Remote.EncryptedSecret})
 	if err != nil {
 		return nil, fmt.Errorf("the remote part: %w", err)
 	}
@@ -586,7 +587,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	defer tpmDev.Close()
 	defer tpmdev.Cleanup(tpmDev, o.Debug)
 
-	raw, sealed, err := readSlot(tpmDev, idx)
+	raw, sealed, err := phonegate.ReadSlot(tpmDev, idx)
 	if err != nil {
 		return nil, 0, fmt.Errorf("slot %d holds no sealed blob (%v): seal first with 'tpm2-kira slot add --nvram %d'", slot, err, slot)
 	}
@@ -600,7 +601,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	sel := sealedSelection(sealed)
 	if att == nil {
 		fmt.Println("Creating an attestation key in the TPM ...")
-		akPub, akPriv, akName, err := CreateAK(tpmDev)
+		akPub, akPriv, akName, err := phonegate.CreateAK(tpmDev)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -618,15 +619,15 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		}
 	}
 	if att.EKAlg == 0 {
-		alg, ek, _, err := pickCertifiedEK(tpmDev)
+		alg, ek, _, err := phonegate.PickCertifiedEK(tpmDev)
 		if err != nil {
 			return nil, 0, err
 		}
-		tpmdev.FlushHandle(tpmDev, ek.handle)
+		tpmdev.FlushHandle(tpmDev, ek.Handle)
 		att.EKAlg = alg
 	}
 	if len(att.ReleaseKeyPublic) == 0 {
-		pub, privArea, err := createReleaseKey(tpmDev, sealed)
+		pub, privArea, err := phonegate.CreateReleaseKey(tpmDev, sealed)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -643,12 +644,12 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		defer wipe.Bytes(pepper)
 	}
 
-	local, wLocal, err := wrapFactor(tpmDev, att, nil)
+	local, wLocal, err := phonegate.WrapFactor(tpmDev, att, nil)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer wipe.Bytes(local)
-	remote, wRemote, err := wrapFactor(tpmDev, att, nil)
+	remote, wRemote, err := phonegate.WrapFactor(tpmDev, att, nil)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -663,11 +664,11 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		return nil, 0, err
 	}
 
-	ek, ekPub, err := createEK(tpmDev, att.EKAlg)
+	ek, ekPub, err := phonegate.CreateEK(tpmDev, att.EKAlg)
 	if err != nil {
 		return nil, 0, err
 	}
-	tpmdev.FlushHandle(tpmDev, ek.handle)
+	tpmdev.FlushHandle(tpmDev, ek.Handle)
 	genName, err := nvslot.GenerationIndexName(tpmDev, nvslot.GenerationIndex(idx))
 	if err != nil {
 		return nil, 0, err
@@ -675,7 +676,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	p := &sealed.Payload
 	req := vaultproto.EnrolRequest{
 		Token: o.Token, DeviceID: att.DeviceID, Name: att.FriendlyName,
-		EKPublic: ekPub, EKCert: readEKCert(tpmDev, att.EKAlg), AKPublic: att.AKPublic,
+		EKPublic: ekPub, EKCert: phonegate.ReadEKCert(tpmDev, att.EKAlg), AKPublic: att.AKPublic,
 		SigningPublic: p.SigningPublic, PolicyRef: p.PolicyRef,
 		GenerationIndexName: genName, Generation: p.Generation, Selection: sel,
 		Remote: vaultproto.Wrapped{Credential: wRemote.Credential, EncryptedSecret: wRemote.EncryptedSecret},
@@ -691,7 +692,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	if err := client.post(ctx, vaultproto.PathEnrol, req, &ch); err != nil {
 		return nil, 0, err
 	}
-	be := &tpmBackend{tpm: tpmDev, blob: att, ekAlg: att.EKAlg}
+	be := &phonegate.TPMBackend{TPM: tpmDev, Blob: att, EKAlgorithm: att.EKAlg}
 	secret, err := be.ActivateCredential(ch.Challenge.Credential, ch.Challenge.EncryptedSecret)
 	if err != nil {
 		return nil, 0, fmt.Errorf("proving the attestation key to the vault: %w", err)
@@ -758,7 +759,7 @@ func VaultStatus(tpmPath string, sealIndex uint32, debug bool) error {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
 	defer tpmDev.Close()
-	_, sb, err := readSlot(tpmDev, idx)
+	_, sb, err := phonegate.ReadSlot(tpmDev, idx)
 	if err != nil {
 		return err
 	}
@@ -804,7 +805,7 @@ func VaultUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug bo
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
 	defer tpmDev.Close()
-	_, sb, err := readSlot(tpmDev, idx)
+	_, sb, err := phonegate.ReadSlot(tpmDev, idx)
 	if err != nil {
 		return err
 	}

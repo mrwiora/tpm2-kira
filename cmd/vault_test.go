@@ -13,6 +13,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest/attesttest"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
 
@@ -33,7 +34,7 @@ func TestVaultKey(t *testing.T) {
 		"with a pepper":    VaultKey(l, r, "luks", []byte("p")),
 		"an empty pepper":  VaultKey(l, r, "luks", []byte{}),
 		"another remote":   VaultKey(l, bytes.Repeat([]byte{3}, 32), "luks", nil),
-		"the phone salt's": FactorSalt(append(append([]byte(nil), l...), r...), "luks"),
+		"the phone salt's": phonegate.FactorSalt(append(append([]byte(nil), l...), r...), "luks"),
 	} {
 		if bytes.Equal(k, other) {
 			t.Errorf("%s gives the same key", name)

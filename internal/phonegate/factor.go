@@ -1,4 +1,4 @@
-package cmd
+package phonegate
 
 import (
 	"crypto/rand"
@@ -39,17 +39,17 @@ const FactorSize = 32
 // §5.1): part of the contract between an enrolled keyslot and this code.
 const factorInfo = "tpm2-kira/factor/v1"
 
-// errNoReleaseKey: the slot has no release key, so no factor was enrolled.
-var errNoReleaseKey = errors.New("the slot has no release key: no factor is enrolled for it")
+// ErrNoReleaseKey: the slot has no release key, so no factor was enrolled.
+var ErrNoReleaseKey = errors.New("the slot has no release key: no factor is enrolled for it")
 
-// errFactorRefused: the TPM did not open the credential, because the slot's
+// ErrFactorRefused: the TPM did not open the credential, because the slot's
 // policy does not hold in this boot state (or the credential is not for
 // this TPM and key).
-var errFactorRefused = errors.New("the TPM refused to open the factor: this boot state is not one the signing key approved, or the credential is not for this machine")
+var ErrFactorRefused = errors.New("the TPM refused to open the factor: this boot state is not one the signing key approved, or the credential is not for this machine")
 
-// createReleaseKey makes the slot's release key under the slot's policy
+// CreateReleaseKey makes the slot's release key under the slot's policy
 // extended by PolicyCommandCode(ActivateCredential).
-func createReleaseKey(tpmDev transport.TPM, sealed *nvslot.SealedBlob) (public, private []byte, err error) {
+func CreateReleaseKey(tpmDev transport.TPM, sealed *nvslot.SealedBlob) (public, private []byte, err error) {
 	policy, err := sealed.SlotPolicy()
 	if err != nil {
 		return nil, nil, err
@@ -73,10 +73,10 @@ func createReleaseKey(tpmDev transport.TPM, sealed *nvslot.SealedBlob) (public, 
 	return tpm2.Marshal(*pub), rsp.OutPrivate.Buffer, nil
 }
 
-// loadReleaseKey loads the slot's release key; the caller flushes the handle.
-func loadReleaseKey(tpmDev transport.TPM, att *nvslot.Attestation) (*loadedKey, error) {
+// LoadReleaseKey loads the slot's release key; the caller flushes the handle.
+func LoadReleaseKey(tpmDev transport.TPM, att *nvslot.Attestation) (*loadedKey, error) {
 	if att == nil || len(att.ReleaseKeyPublic) == 0 {
-		return nil, errNoReleaseKey
+		return nil, ErrNoReleaseKey
 	}
 	primary, err := tpmdev.CreatePrimaryKey(tpmDev)
 	if err != nil {
@@ -91,32 +91,32 @@ func loadReleaseKey(tpmDev transport.TPM, att *nvslot.Attestation) (*loadedKey, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to load the release key (was the TPM cleared?): %w", err)
 	}
-	return &loadedKey{handle: rsp.ObjectHandle, name: rsp.Name}, nil
+	return &loadedKey{Handle: rsp.ObjectHandle, Name: rsp.Name}, nil
 }
 
-// wrapFactor draws F and wraps it for this TPM's EK and the slot's release
+// WrapFactor draws F and wraps it for this TPM's EK and the slot's release
 // key. F is returned for the one-time derivation at enrolment; the caller
 // wipes it. Nothing of it is kept here.
-func wrapFactor(tpmDev transport.TPM, att *nvslot.Attestation, rng io.Reader) (f []byte, w *nvslot.WrappedFactor, err error) {
+func WrapFactor(tpmDev transport.TPM, att *nvslot.Attestation, rng io.Reader) (f []byte, w *nvslot.WrappedFactor, err error) {
 	if rng == nil {
 		rng = rand.Reader
 	}
-	rk, err := loadReleaseKey(tpmDev, att)
+	rk, err := LoadReleaseKey(tpmDev, att)
 	if err != nil {
 		return nil, nil, err
 	}
-	tpmdev.FlushHandle(tpmDev, rk.handle) // only its name is needed
-	ek, ekPub, err := createEK(tpmDev, att.EKAlg)
+	tpmdev.FlushHandle(tpmDev, rk.Handle) // only its name is needed
+	ek, ekPub, err := CreateEK(tpmDev, att.EKAlg)
 	if err != nil {
 		return nil, nil, err
 	}
-	tpmdev.FlushHandle(tpmDev, ek.handle)
+	tpmdev.FlushHandle(tpmDev, ek.Handle)
 
 	f = make([]byte, FactorSize)
 	if _, err := io.ReadFull(rng, f); err != nil {
 		return nil, nil, fmt.Errorf("no randomness for the factor: %w", err)
 	}
-	cred, enc, err := attest.MakeCredential(rng, ekPub, rk.name.Buffer, f)
+	cred, enc, err := attest.MakeCredential(rng, ekPub, rk.Name.Buffer, f)
 	if err != nil {
 		wipe.Bytes(f)
 		return nil, nil, err
@@ -124,24 +124,24 @@ func wrapFactor(tpmDev transport.TPM, att *nvslot.Attestation, rng io.Reader) (f
 	return f, &nvslot.WrappedFactor{Credential: cred, EncryptedSecret: enc}, nil
 }
 
-// unwrapFactor opens a credential the phone returned: the release key is
+// UnwrapFactor opens a credential the phone returned: the release key is
 // loaded and authorised through the slot's approved policy for this boot
 // state plus PolicyCommandCode, the EK through the endorsement hierarchy.
 // The result is F; the caller wipes it.
-func unwrapFactor(tpmDev transport.TPM, sealed *nvslot.SealedBlob, blobIndex uint32, att *nvslot.Attestation, w *nvslot.WrappedFactor) ([]byte, error) {
+func UnwrapFactor(tpmDev transport.TPM, sealed *nvslot.SealedBlob, blobIndex uint32, att *nvslot.Attestation, w *nvslot.WrappedFactor) ([]byte, error) {
 	if w == nil || len(w.Credential) == 0 || len(w.EncryptedSecret) == 0 {
 		return nil, errors.New("no credential to open")
 	}
-	rk, err := loadReleaseKey(tpmDev, att)
+	rk, err := LoadReleaseKey(tpmDev, att)
 	if err != nil {
 		return nil, err
 	}
-	defer tpmdev.FlushHandle(tpmDev, rk.handle)
-	ek, _, err := createEK(tpmDev, att.EKAlg)
+	defer tpmdev.FlushHandle(tpmDev, rk.Handle)
+	ek, _, err := CreateEK(tpmDev, att.EKAlg)
 	if err != nil {
 		return nil, err
 	}
-	defer tpmdev.FlushHandle(tpmDev, ek.handle)
+	defer tpmdev.FlushHandle(tpmDev, ek.Handle)
 
 	session, done, err := nvslot.ApprovedSessionThen(tpmDev, sealed, blobIndex, func(tpm transport.TPM, handle tpm2.TPMISHPolicy) error {
 		_, err := tpm2.PolicyCommandCode{PolicySession: handle, Code: tpm2.TPMCCActivateCredential}.Execute(tpm)
@@ -153,8 +153,8 @@ func unwrapFactor(tpmDev transport.TPM, sealed *nvslot.SealedBlob, blobIndex uin
 	defer done()
 
 	rsp, err := tpm2.ActivateCredential{
-		ActivateHandle: tpm2.AuthHandle{Handle: rk.handle, Name: rk.name, Auth: session},
-		KeyHandle:      tpm2.AuthHandle{Handle: ek.handle, Name: ek.name, Auth: endorsementPolicy()},
+		ActivateHandle: tpm2.AuthHandle{Handle: rk.Handle, Name: rk.Name, Auth: session},
+		KeyHandle:      tpm2.AuthHandle{Handle: ek.Handle, Name: ek.Name, Auth: EndorsementPolicy()},
 		CredentialBlob: tpm2.TPM2BIDObject{Buffer: w.Credential},
 		Secret:         tpm2.TPM2BEncryptedSecret{Buffer: w.EncryptedSecret},
 	}.Execute(tpmDev)
@@ -162,7 +162,7 @@ func unwrapFactor(tpmDev transport.TPM, sealed *nvslot.SealedBlob, blobIndex uin
 		if errors.Is(err, nvslot.ErrCodesLocked) {
 			return nil, err
 		}
-		return nil, fmt.Errorf("%w: %v", errFactorRefused, err)
+		return nil, fmt.Errorf("%w: %v", ErrFactorRefused, err)
 	}
 	if len(rsp.CertInfo.Buffer) != FactorSize {
 		wipe.Bytes(rsp.CertInfo.Buffer)

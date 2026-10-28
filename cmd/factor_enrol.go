@@ -16,6 +16,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
@@ -107,12 +108,12 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	defer tpmDev.Close()
 	tpmdev.Cleanup(tpmDev, o.Debug)
 
-	att, err := loadAttestBlob(tpmDev, idx)
+	att, err := phonegate.LoadAttestBlob(tpmDev, idx)
 	if err != nil {
 		return nil, 0, fmt.Errorf("slot %d has no phone enrolled: run 'tpm2-kira phone enrol' first", slot)
 	}
 	warnUncappedBoot(tpmDev)
-	_, sealed, err := readSlot(tpmDev, idx)
+	_, sealed, err := phonegate.ReadSlot(tpmDev, idx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -138,7 +139,7 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 		return nil, 0, fmt.Errorf("the signing key is not usable: %w", err)
 	}
 	if len(att.ReleaseKeyPublic) == 0 {
-		pub, privArea, err := createReleaseKey(tpmDev, sealed)
+		pub, privArea, err := phonegate.CreateReleaseKey(tpmDev, sealed)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -149,12 +150,12 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 		fmt.Printf("Release key created for slot %d, under the slot's policy\n", slot)
 	}
 
-	f, w, err := wrapFactor(tpmDev, att, nil)
+	f, w, err := phonegate.WrapFactor(tpmDev, att, nil)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer wipe.Bytes(f)
-	want := FactorSalt(f, label)
+	want := phonegate.FactorSalt(f, label)
 	defer wipe.Bytes(want)
 
 	// The phone keeps the credential in an ordinary check of the booted
@@ -166,7 +167,7 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	if pubKeyPath == "" {
 		pubKeyPath = signing.DefaultPublicKeyPath
 	}
-	svc := newGateService(tpmDev, idx, pubKeyPath, o.Debug)
+	svc := phonegate.NewGateService(tpmDev, idx, pubKeyPath, o.Debug)
 	svc.Keep(&attest.FactorBlob{CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret, Label: label})
 	fmt.Println("Open Marify on the phone and verify this machine: the verdict screen asks")
 	fmt.Println("to keep the phone salt (no code: after boot the boot key is locked). Continue")
@@ -285,7 +286,7 @@ func FactorStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 		}
 		indices = []uint32{idx}
 	} else {
-		indices = enrolledSlots(tpmDev, debug)
+		indices = phonegate.EnrolledSlots(tpmDev, debug)
 	}
 	type slotJSON struct {
 		Slot       int    `json:"slot_number"`
@@ -295,7 +296,7 @@ func FactorStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 	}
 	var out []slotJSON
 	for _, idx := range indices {
-		b, err := loadAttestBlob(tpmDev, idx)
+		b, err := phonegate.LoadAttestBlob(tpmDev, idx)
 		if err != nil {
 			if sealIndex != 0 {
 				return fmt.Errorf("slot %d has no phone enrolled", nvslot.AttestSlot(idx))
@@ -343,7 +344,7 @@ func FactorUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug b
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
 	defer tpmDev.Close()
-	att, err := loadAttestBlob(tpmDev, idx)
+	att, err := phonegate.LoadAttestBlob(tpmDev, idx)
 	if err != nil {
 		return fmt.Errorf("slot %d has no phone enrolled", slot)
 	}

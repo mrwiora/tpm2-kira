@@ -20,6 +20,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
@@ -162,12 +163,12 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 		t.Fatal(err)
 	}
 	// With the boot key, as enrolment makes it: under the TOTP key's policy.
-	_, sealedBlob, err := readSlot(tpm, slot)
+	_, sealedBlob, err := phonegate.ReadSlot(tpm, slot)
 	if err != nil {
 		t.Fatal(err)
 	}
 	enrolment := testEnrolment("box")
-	if enrolment.BootKeyPublic, enrolment.BootKeyPrivate, err = createBootKey(tpm, sealedBlob); err != nil {
+	if enrolment.BootKeyPublic, enrolment.BootKeyPrivate, err = phonegate.CreateBootKey(tpm, sealedBlob); err != nil {
 		t.Fatalf("boot key: %v", err)
 	}
 	if err := writeAttestBlob(tpm, slot, enrolment, priv); err != nil {
@@ -176,12 +177,12 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	// bootKey answers a phone's challenge with the slot as it is stored now.
 	bootKey := func(what string) error {
 		t.Helper()
-		_, sb, err := readSlot(tpm, slot)
+		_, sb, err := phonegate.ReadSlot(tpm, slot)
 		if err != nil {
 			t.Fatal(err)
 		}
 		att := sb.Payload.Attestation
-		point, err := bootKeyPoint(att)
+		point, err := phonegate.BootKeyPoint(att)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -190,7 +191,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		code, proof, err := openBootChallenge(tpm, sb, slot, att, ch, ctx)
+		code, proof, err := phonegate.OpenBootChallenge(tpm, sb, slot, att, ch, ctx)
 		if err != nil {
 			return err
 		}
@@ -201,7 +202,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 		// phone verifies with the point it pinned.
 		quoteDigest := bytes.Repeat([]byte{0x77}, 32)
 		d := sha256.Sum256(attest.BootSignatureMessage(ctx, quoteDigest))
-		sig, err := signWithBootKey(tpm, sb, slot, att, d[:])
+		sig, err := phonegate.SignWithBootKey(tpm, sb, slot, att, d[:])
 		if err != nil {
 			return err
 		}
@@ -218,11 +219,11 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	}
 	enrolled := func(what string) *nvslot.Attestation {
 		t.Helper()
-		a, err := loadAttestBlob(tpm, slot)
+		a, err := phonegate.LoadAttestBlob(tpm, slot)
 		if err != nil || len(a.Phone.Verifiers) != 1 || a.Phone.Verifiers[0].ID != "phone" || a.FriendlyName != "box" {
 			t.Fatalf("%s: the phone is gone: %+v %v", what, a, err)
 		}
-		if verified, exit := gateRecordCheck(tpm, slot, pubPath); !verified || exit != 0 {
+		if verified, exit := phonegate.GateRecordCheck(tpm, slot, pubPath); !verified || exit != 0 {
 			t.Fatalf("%s: the gate does not accept the slot (verified=%v, exit %d)", what, verified, exit)
 		}
 		return a
@@ -268,7 +269,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	if err := writeAttestBlob(tpm, slot, nil, priv); err != nil {
 		t.Fatalf("removing the phone: %v", err)
 	}
-	if _, sb, err := readSlot(tpm, slot); err != nil || !sb.HasTOTPKey() || sb.Payload.Attestation != nil {
+	if _, sb, err := phonegate.ReadSlot(tpm, slot); err != nil || !sb.HasTOTPKey() || sb.Payload.Attestation != nil {
 		t.Fatalf("after the last phone left: %+v %v", sb, err)
 	}
 	if code, _, err := totp.SlotCode(tpm, slot, at, false); err != nil || len(code) != 6 {
@@ -287,7 +288,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	// The boot state leaves what was approved, as after the OS separator:
 	// the TPM refuses the boot key.
 	extendSHA256(t, tpm, 7, bytes.Repeat([]byte{0x99}, 32))
-	if err := bootKey("outside the approved state"); !errors.Is(err, errBootKeyRefused) {
+	if err := bootKey("outside the approved state"); !errors.Is(err, phonegate.ErrBootKeyRefused) {
 		t.Fatalf("the boot key answered outside the approved boot state: %v", err)
 	}
 
@@ -297,10 +298,10 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	if err := Seal(sock, "0,2,7", slot, otherPub, otherPriv, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal with another key: %v", err)
 	}
-	if _, err := loadAttestBlob(tpm, slot); !errors.Is(err, errNotEnrolled) {
+	if _, err := phonegate.LoadAttestBlob(tpm, slot); !errors.Is(err, phonegate.ErrNotEnrolled) {
 		t.Fatalf("a foreign enrolment was carried over: %v", err)
 	}
-	if _, sb, err := readSlot(tpm, slot); err != nil || sb.Payload.Attestation != nil {
+	if _, sb, err := phonegate.ReadSlot(tpm, slot); err != nil || sb.Payload.Attestation != nil {
 		t.Fatalf("slot sealed by another key: %+v, %v", sb, err)
 	}
 }

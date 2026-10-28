@@ -24,6 +24,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/transport/ble"
@@ -64,7 +65,7 @@ const (
 // between the two steps the new blob is merely not accepted yet.
 func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *nvslot.Attestation, priv crypto.Signer) error {
 	slot := nvslot.AttestSlot(idx)
-	raw, sb, err := readSlot(tpmDev, idx)
+	raw, sb, err := phonegate.ReadSlot(tpmDev, idx)
 	if err != nil {
 		return fmt.Errorf("slot %d holds no sealed TOTP key (%v). A phone enrolment is stored with the slot's key: "+
 			"run 'tpm2-kira slot add --nvram %d' first", slot, err, slot)
@@ -274,8 +275,8 @@ type EnrolOptions struct {
 	In          io.Reader // console input for the confirmation; default stdin
 	// VerifyTPM / VerifyPhone: what to do when this machine's TPM, or the
 	// phone's key, cannot be verified as genuine hardware (default warn).
-	VerifyTPM   HWCheckPolicy
-	VerifyPhone HWCheckPolicy
+	VerifyTPM   phonegate.HWCheckPolicy
+	VerifyPhone phonegate.HWCheckPolicy
 }
 
 // AttestEnrol binds a phone to this machine over BLE. It runs on the booted,
@@ -308,7 +309,7 @@ func AttestEnrol(o EnrolOptions) error {
 	// The enrolment is part of the slot's blob, next to the TOTP key, and
 	// adding a phone signs that blob again: there has to be one, and this
 	// signing key has to be the one that wrote it.
-	raw, slotBlob, err := readSlot(tpmDev, idx)
+	raw, slotBlob, err := phonegate.ReadSlot(tpmDev, idx)
 	if err != nil {
 		return fmt.Errorf("slot %d holds no sealed TOTP key (%v).\n"+
 			"A phone enrolment is stored with the slot's key and checks the same boot: seal first with\n\n"+
@@ -367,7 +368,7 @@ func AttestEnrol(o EnrolOptions) error {
 			return err
 		}
 		fmt.Println("Creating an attestation key in the TPM ...")
-		akPub, akPriv, akName, err := CreateAK(tpmDev)
+		akPub, akPriv, akName, err := phonegate.CreateAK(tpmDev)
 		if err != nil {
 			return err
 		}
@@ -401,7 +402,7 @@ func AttestEnrol(o EnrolOptions) error {
 	}
 	// Find out now whether the TPM can quote this selection, not after the
 	// radio is taken and a human has compared codes.
-	if _, err := readPCRBank(tpmDev, sel); err != nil {
+	if _, err := phonegate.ReadPCRBank(tpmDev, sel); err != nil {
 		return fmt.Errorf("this TPM cannot quote %s: %w", sel, err)
 	}
 	// And whether the slot's blob still fits its NV index with one more
@@ -424,17 +425,17 @@ func AttestEnrol(o EnrolOptions) error {
 	// The header is two lines: what the phone sees in detail is its own
 	// screen's job ('phone status' and 'slot info' say it here), and the
 	// overview already judges the machine.
-	mp := predictMeasurePoint(tpmDev, sealed, sel, o.Debug)
+	mp := phonegate.PredictMeasurePoint(tpmDev, sealed, sel, o.Debug)
 	fmt.Printf("Enrolling %q (slot %d) over hci%d. The adapter is taken over until this\n", blob.FriendlyName, nvslot.SlotNumber(sealIndex), o.Adapter)
 	fmt.Println("finishes: its Bluetooth devices disconnect meanwhile (--adapter N for another).")
 	fmt.Println()
-	if mp.err != nil {
+	if mp.Err != nil {
 		// Without a prediction the phone pins the running system's values,
 		// which the boot check cannot match. The reason is printed: it is
 		// what a bug report needs.
 		fmt.Println("NOTE: the values at the boot check could not be predicted: the phone will show")
 		fmt.Println("      \"changed\" at the first boot - check and approve it there once. Reason:")
-		for _, line := range strings.Split(mp.err.Error(), "\n") {
+		for _, line := range strings.Split(mp.Err.Error(), "\n") {
 			fmt.Printf("      %s\n", line)
 		}
 		fmt.Println()
@@ -450,14 +451,14 @@ func AttestEnrol(o EnrolOptions) error {
 	} else if !ok {
 		return errors.New("enrolment needs a boot you verified: reboot, compare the code at the code screen (or let an enrolled phone attest the boot), then enrol")
 	}
-	ok, err := confirmInitrdCoverage(console, sel, measure.DefaultEventlogPath)
+	ok, err := phonegate.ConfirmInitrdCoverage(console, sel, measure.DefaultEventlogPath)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return errors.New("enrolment cancelled: choose PCRs that cover the initrd with --pcrs")
 	}
-	if ok, err := checkOwnTPM(tpmDev, o.VerifyTPM, console, os.Stdout); err != nil {
+	if ok, err := phonegate.CheckOwnTPM(tpmDev, o.VerifyTPM, console, os.Stdout); err != nil {
 		return err
 	} else if !ok {
 		return errors.New("enrolment cancelled: this machine's TPM is not verified as genuine (--verify-tpm)")
@@ -469,27 +470,27 @@ func AttestEnrol(o EnrolOptions) error {
 		return err
 	}
 	defer p.Close()
-	be := &tpmBackend{
-		tpm:       tpmDev,
-		blob:      blob,
-		sealIndex: sealIndex,
-		sealed:    sealed,
-		debug:     o.Debug,
-		mp:        mp,
-		confirmSAS: func(code string) (bool, error) {
+	be := &phonegate.TPMBackend{
+		TPM:       tpmDev,
+		Blob:      blob,
+		SealIndex: sealIndex,
+		Sealed:    sealed,
+		Debug:     o.Debug,
+		Baseline:  mp,
+		OnConfirmSAS: func(code string) (bool, error) {
 			return confirmCode(console, code)
 		},
 	}
-	be.commit = func(v attest.EnrolledVerifier) error {
+	be.OnCommit = func(v attest.EnrolledVerifier) error {
 		if err := blob.UpsertVerifier(v); err != nil {
 			return err
 		}
 		return writeAttestBlob(tpmDev, idx, blob, priv)
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
-	be.phoneJudge = &phoneJudge{
-		policy: o.VerifyPhone, console: console, out: os.Stdout,
-		revoked: func() (map[string]string, error) { return revokedSerials(client) },
+	be.PhoneJudge = &phonegate.PhoneJudge{
+		Policy: o.VerifyPhone, Console: console, Out: os.Stdout,
+		Revoked: func() (map[string]string, error) { return phonegate.RevokedSerials(client) },
 	}
 
 	id := &attest.EnrolIdentity{
@@ -630,10 +631,10 @@ func AttestGate(o GateOptions) int {
 		// The radio worker: no TPM here. Everything that needs one, and
 		// the reading of the phone's receipt, is the coordinator's.
 		step("version %s; radio worker, asking the coordinator at %s", nvslot.AppVersion, o.Coordinator)
-		client, err := dialGate(o.Coordinator, gateCoordinatorWait)
+		client, err := phonegate.DialGate(o.Coordinator, gateCoordinatorWait)
 		if err != nil {
-			gateFail("%v", err)
-			return ExitUnavailable
+			phonegate.GateFail("%v", err)
+			return phonegate.ExitUnavailable
 		}
 		defer client.Close()
 		return runGateRadio(client, o, step, client.Gone())
@@ -644,12 +645,12 @@ func AttestGate(o GateOptions) int {
 	step("version %s; opening the TPM at %s", nvslot.AppVersion, tpmPath)
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
-		gateFail("failed to open TPM at %s: %v", tpmPath, err)
-		return ExitInternal
+		phonegate.GateFail("failed to open TPM at %s: %v", tpmPath, err)
+		return phonegate.ExitInternal
 	}
 	defer tpmDev.Close()
 	defer tpmdev.Cleanup(tpmDev, o.Debug)
-	return runGateRadio(newGateService(tpmDev, o.SealIndex, o.SignerPath, o.Debug), o, step, nil)
+	return runGateRadio(phonegate.NewGateService(tpmDev, o.SealIndex, o.SignerPath, o.Debug), o, step, nil)
 }
 
 // chooseAttestBank settles the PCR bank of a new enrolment: SHA-256, or
@@ -829,23 +830,23 @@ const gateCoordinatorWait = 30 * time.Second
 // print what it said. The TPM half is behind host; when ended is closed,
 // that half is gone (the code screen has released the boot) and the radio
 // stops.
-func runGateRadio(host gateHost, o GateOptions, step func(string, ...any), ended <-chan struct{}) int {
+func runGateRadio(host phonegate.GateHost, o GateOptions, step func(string, ...any), ended <-chan struct{}) int {
 	ident, code, err := host.Identity()
 	if code != 0 || err != nil {
 		if code == 0 {
-			code = ExitInternal
+			code = phonegate.ExitInternal
 		}
 		// A refused record was reported in full by whoever checked it.
-		if code != ExitTampered || o.Coordinator != "" {
-			gateFail("%v", err)
+		if code != phonegate.ExitTampered || o.Coordinator != "" {
+			phonegate.GateFail("%v", err)
 		}
 		return code
 	}
 	step("serving slot %d (record verified: %v), %d phone(s) enrolled", ident.Slot, ident.RecordVerified, len(ident.Verifiers))
 	noise, err := attest.NoiseKeypairFromPrivate(ident.NoisePrivate)
 	if err != nil {
-		gateFail("%v", err)
-		return ExitInternal
+		phonegate.GateFail("%v", err)
+		return phonegate.ExitInternal
 	}
 	id := &attest.AttestIdentity{
 		DeviceID:     ident.DeviceID,
@@ -866,9 +867,9 @@ func runGateRadio(host gateHost, o GateOptions, step func(string, ...any), ended
 	}
 	p, err := ble.Open(ble.Config{Adapter: o.Adapter, UnblockRFKill: true, Wait: o.AdapterWait, Cancel: ended, Logf: debugLogf(o.Debug)})
 	if err != nil {
-		gateFail("%v", err)
-		host.Report(GateUnavailable)
-		return ExitUnavailable
+		phonegate.GateFail("%v", err)
+		host.Report(phonegate.GateUnavailable)
+		return phonegate.ExitUnavailable
 	}
 	var closeOnce sync.Once
 	closeRadio := func() { closeOnce.Do(func() { p.Close() }) }
@@ -901,40 +902,40 @@ func runGateRadio(host gateHost, o GateOptions, step func(string, ...any), ended
 		Info:        attestInfo(infoModeAttest, id.Capabilities),
 	}
 	narrate("tpm2-kira: waiting for attestation of %q (open the app on your phone)", ident.FriendlyName)
-	host.Report(GateWaiting)
+	host.Report(phonegate.GateWaiting)
 
 	res, err := waitForReceipt(p, adv, o.Timeout, func(conn *frame.Conn) (*attest.AttestResult, error) {
-		host.Report(GateSession)
+		host.Report(phonegate.GateSession)
 		res, err := attest.ServeAttestation(conn, id, host, debugProgress(o.Debug))
-		if svc, ok := host.(*gateService); ok {
+		if svc, ok := host.(*phonegate.GateService); ok {
 			// No code screen next to a gate run by hand: say it here.
 			if st, _ := svc.Status(); st.Code != "" {
 				fmt.Printf("tpm2-kira: code for your phone: %s (the phone must show the same)\n", st.Code)
 			}
 		}
 		if res == nil || res.Receipt == nil {
-			host.Report(GateWaiting) // the gate advertises again
+			host.Report(phonegate.GateWaiting) // the gate advertises again
 		} else {
-			host.Report(GateSessionOver) // nothing more comes: no release to wait for
+			host.Report(phonegate.GateSessionOver) // nothing more comes: no release to wait for
 		}
 		return res, err
 	}, narrator{prioInfo}, time.Now)
 	if errors.Is(err, errNoPhoneReachable) {
-		gateFail("phone not reachable: no phone connected over Bluetooth within %s.\n"+
+		phonegate.GateFail("phone not reachable: no phone connected over Bluetooth within %s.\n"+
 			"tpm2-kira:   This is not a TPM or boot-integrity failure. Check that the phone\n"+
 			"tpm2-kira:   is close to this machine, Bluetooth is on and the Marify app is open.", o.Timeout)
-		host.Report(GateUnavailable)
-		return ExitUnavailable
+		host.Report(phonegate.GateUnavailable)
+		return phonegate.ExitUnavailable
 	}
 	if err != nil && isOver() {
 		// Lazy mode: the phone check lasts as long as the code screen.
 		narrate("tpm2-kira: the code screen has ended; the phone was not asked in time for this boot")
-		return ExitUnavailable
+		return phonegate.ExitUnavailable
 	}
 	if err != nil {
-		gateFail("%v", err)
-		host.Report(GateUnavailable)
-		return ExitUnavailable
+		phonegate.GateFail("%v", err)
+		host.Report(phonegate.GateUnavailable)
+		return phonegate.ExitUnavailable
 	}
 	return reportReceipt(res, ident.RecordVerified)
 }
@@ -1036,21 +1037,21 @@ func reportReceipt(res *attest.AttestResult, recordVerified bool) int {
 	switch {
 	case c.Authentic && c.Verdict == attest.VerdictOK:
 		narrate("tpm2-kira: ATTESTED by %s: boot state matches a known-good profile", who)
-		return ExitAttested
+		return phonegate.ExitAttested
 	case c.Authentic && c.Verdict == attest.VerdictApproved:
 		narrate("tpm2-kira: APPROVED on %s: boot state changed and was approved by you", who)
-		return ExitAttested
+		return phonegate.ExitAttested
 	case c.Verdict == attest.VerdictReject && (c.Authentic || c.Ack == attest.AckRejectNoted):
 		fmt.Fprintf(os.Stderr, "tpm2-kira: REJECTED by %s: the phone does not trust this boot.\n", who)
 		fmt.Fprintln(os.Stderr, "tpm2-kira: Do not type a passphrase before checking further (compare the TOTP code).")
-		return ExitRejected
+		return phonegate.ExitRejected
 	case c.Ack == attest.AckBadSignature:
 		fmt.Fprintf(os.Stderr, "tpm2-kira: ANCHOR MISMATCH: the receipt was not signed by the enrolled phone (%s).\n", c.Detail)
 		fmt.Fprintln(os.Stderr, "tpm2-kira: This is either a wrong phone or an attack.")
-		return ExitAnchor
+		return phonegate.ExitAnchor
 	default:
 		fmt.Fprintf(os.Stderr, "tpm2-kira: receipt not accepted: %s\n", c.Detail)
-		return ExitInternal
+		return phonegate.ExitInternal
 	}
 }
 
@@ -1070,7 +1071,7 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 		}
 		indices = []uint32{idx}
 	} else {
-		indices = enrolledSlots(tpmDev, debug)
+		indices = phonegate.EnrolledSlots(tpmDev, debug)
 	}
 	type verifierJSON struct {
 		ID           string `json:"id"`
@@ -1093,7 +1094,7 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 	invalid := 0
 	var out []slotJSON
 	for _, idx := range indices {
-		b, err := loadAttestBlob(tpmDev, idx)
+		b, err := phonegate.LoadAttestBlob(tpmDev, idx)
 		if err != nil {
 			if sealIndex != 0 {
 				return fmt.Errorf("slot is not enrolled for attestation: %w", err)
@@ -1119,9 +1120,9 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 			invalid++
 		}
 		if raw, err := tpmdev.ReadFromNVRAM(tpmDev, idx); err == nil {
-			if pub, path, err := attestPublicKey(""); err == nil {
+			if pub, path, err := phonegate.AttestPublicKey(""); err == nil {
 				s.SigningKey = path
-				if VerifyAttestBlobSignature(raw, pub) == nil {
+				if phonegate.VerifyAttestBlobSignature(raw, pub) == nil {
 					s.Signature = "valid"
 				} else {
 					s.Signature = "invalid"
@@ -1206,7 +1207,7 @@ func AttestQuote(tpmPath string, sealIndex uint32, nonceHex, pcrs, outPath strin
 	if err != nil {
 		return err
 	}
-	blob, err := loadAttestBlob(tpmDev, idx)
+	blob, err := phonegate.LoadAttestBlob(tpmDev, idx)
 	if err != nil {
 		return fmt.Errorf("slot is not enrolled for attestation: %w", err)
 	}
@@ -1219,7 +1220,7 @@ func AttestQuote(tpmPath string, sealIndex uint32, nonceHex, pcrs, outPath strin
 			return err
 		}
 	}
-	be := &tpmBackend{tpm: tpmDev, blob: blob, sealIndex: nvslot.ResolveNVRAMIndex(sealIndex), sealed: readSealedSlot(tpmDev, nvslot.ResolveNVRAMIndex(sealIndex)), debug: debug}
+	be := &phonegate.TPMBackend{TPM: tpmDev, Blob: blob, SealIndex: nvslot.ResolveNVRAMIndex(sealIndex), Sealed: phonegate.ReadSealedSlot(tpmDev, nvslot.ResolveNVRAMIndex(sealIndex)), Debug: debug}
 	q, err := be.Quote(attest.OfflineQualifyingData(nonce), sel)
 	if err != nil {
 		return err
@@ -1344,7 +1345,7 @@ func AttestUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug b
 	}
 	defer tpmDev.Close()
 
-	att, err := loadAttestBlob(tpmDev, idx)
+	att, err := phonegate.LoadAttestBlob(tpmDev, idx)
 	if err != nil {
 		return fmt.Errorf("slot %d has no phone enrolled", slot)
 	}

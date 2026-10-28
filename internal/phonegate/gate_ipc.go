@@ -1,4 +1,4 @@
-package cmd
+package phonegate
 
 // The connection between the radio worker and the coordinator
 // (gate_service.go): a Unix socket in /run, one request and one answer at a
@@ -108,9 +108,9 @@ func readGateFrame(r io.Reader, v any, limit int) error {
 	return json.Unmarshal(data, v)
 }
 
-// listenGate creates the coordinator's socket: a directory and a socket
+// ListenGate creates the coordinator's socket: a directory and a socket
 // only its own user can enter.
-func listenGate(path string) (net.Listener, error) {
+func ListenGate(path string) (net.Listener, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
@@ -124,18 +124,18 @@ func listenGate(path string) (net.Listener, error) {
 	return l, nil
 }
 
-// gateServer is the coordinator's listening side.
-type gateServer struct {
+// GateServer is the coordinator's listening side.
+type GateServer struct {
 	l     net.Listener
 	mu    sync.Mutex
 	conns map[net.Conn]struct{}
 	done  bool
 }
 
-// serveGate answers radio workers until Close. Requests are handled one at
+// ServeGate answers radio workers until Close. Requests are handled one at
 // a time, whichever connection they come from.
-func serveGate(l net.Listener, host gateHost) *gateServer {
-	g := &gateServer{l: l, conns: map[net.Conn]struct{}{}}
+func ServeGate(l net.Listener, host GateHost) *GateServer {
+	g := &GateServer{l: l, conns: map[net.Conn]struct{}{}}
 	go g.run(host)
 	return g
 }
@@ -143,7 +143,7 @@ func serveGate(l net.Listener, host gateHost) *gateServer {
 // Close ends the coordinator's service: the socket goes away and every
 // worker's connection is closed, which is how a worker learns that the
 // phone check is over for this boot.
-func (g *gateServer) Close() {
+func (g *GateServer) Close() {
 	g.mu.Lock()
 	g.done = true
 	conns := g.conns
@@ -155,7 +155,7 @@ func (g *gateServer) Close() {
 	}
 }
 
-func (g *gateServer) run(host gateHost) {
+func (g *GateServer) run(host GateHost) {
 	var one sync.Mutex
 	for {
 		conn, err := g.l.Accept()
@@ -214,7 +214,7 @@ func sameUser(conn net.Conn) bool {
 	return same
 }
 
-func answerGate(host gateHost, req *gateRequest) *gateResponse {
+func answerGate(host GateHost, req *gateRequest) *gateResponse {
 	switch req.Op {
 	case gateOpIdentity:
 		id, code, err := host.Identity()
@@ -277,9 +277,9 @@ type gateClient struct {
 	gone  chan struct{} // closed then
 }
 
-// dialGate connects to the coordinator, which starts at the same moment as
+// DialGate connects to the coordinator, which starts at the same moment as
 // the worker and may not be listening yet.
-func dialGate(path string, wait time.Duration) (*gateClient, error) {
+func DialGate(path string, wait time.Duration) (*gateClient, error) {
 	deadline := time.Now().Add(wait)
 	for {
 		conn, err := net.Dial("unix", path)

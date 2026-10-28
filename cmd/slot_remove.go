@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 
@@ -182,7 +183,7 @@ func DeleteSlot(o DeleteSlotOptions) error {
 	}
 	phones := 0
 	if c.Blob {
-		if att, err := loadAttestBlob(tpmDev, c.Index); err == nil {
+		if att, err := phonegate.LoadAttestBlob(tpmDev, c.Index); err == nil {
 			phones = len(att.Phone.Verifiers)
 		}
 	}

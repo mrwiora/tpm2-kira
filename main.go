@@ -12,6 +12,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/cmd"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
@@ -319,7 +320,7 @@ func runSlot(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, "slot requires a subcommand.\n\n")
 		printHelp("slot")
-		os.Exit(cmd.ExitUsage)
+		os.Exit(phonegate.ExitUsage)
 	}
 	switch args[0] {
 	case "add":
@@ -587,7 +588,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, "luks requires a subcommand.\n\n")
 		printHelp("luks")
-		os.Exit(cmd.ExitUsage)
+		os.Exit(phonegate.ExitUsage)
 	}
 	switch args[0] {
 	case "derive":
@@ -685,7 +686,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 func runVault(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, "vault requires a subcommand.\n\n"+vaultUsage)
-		os.Exit(cmd.ExitUsage)
+		os.Exit(phonegate.ExitUsage)
 	}
 	fs := flag.NewFlagSet("vault "+args[0], flag.ExitOnError)
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
@@ -759,7 +760,7 @@ The image needs its network at boot: TPM2_KIRA_NET in control.conf
 func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, "phone salt requires a subcommand.\n\n"+factorUsage)
-		os.Exit(cmd.ExitUsage)
+		os.Exit(phonegate.ExitUsage)
 	}
 	switch args[0] {
 	case "status":
@@ -854,7 +855,7 @@ own keyslot opens the disk at cryptsetup's prompt.
 func runPhone(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, "phone requires a subcommand.\n\n"+attestUsage)
-		os.Exit(cmd.ExitUsage)
+		os.Exit(phonegate.ExitUsage)
 	}
 	sub, args := args[0], args[1:]
 	if sub == "salt" {
@@ -881,13 +882,13 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		verifyTPM := fs.String("verify-tpm", "warn", "If this machine's TPM is not verified as genuine: warn (ask), require (refuse) or off")
 		verifyPhone := fs.String("verify-phone", "warn", "If the phone's key is not attested by genuine secure hardware: warn (ask), require (refuse) or off")
 		fs.Parse(args)
-		vt, err := cmd.ParseHWCheckPolicy(*verifyTPM)
+		vt, err := phonegate.ParseHWCheckPolicy(*verifyTPM)
 		if err != nil {
-			failAttest(cmd.ExitUsage, err)
+			failAttest(phonegate.ExitUsage, err)
 		}
-		vp, err := cmd.ParseHWCheckPolicy(*verifyPhone)
+		vp, err := phonegate.ParseHWCheckPolicy(*verifyPhone)
 		if err != nil {
-			failAttest(cmd.ExitUsage, err)
+			failAttest(phonegate.ExitUsage, err)
 		}
 		err = cmd.AttestEnrol(cmd.EnrolOptions{
 			TPMPath: *tpm, SealIndex: uint32(*nvram), Name: *name, PCRs: *pcrs, SHA1: *sha1,
@@ -895,7 +896,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 			VerifyTPM: vt, VerifyPhone: vp,
 		})
 		if err != nil {
-			failAttest(cmd.ExitInternal, err)
+			failAttest(phonegate.ExitInternal, err)
 		}
 	case "gate":
 		// Nothing is configured: the gate takes the adapter that comes up
@@ -932,7 +933,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		out := fs.String("out", "", "Write evidence to this file (default: stdout)")
 		fs.Parse(args)
 		if err := cmd.AttestQuote(*tpm, uint32(*nvram), *nonce, *pcrs, *out, *debug); err != nil {
-			failAttest(cmd.ExitInternal, err)
+			failAttest(phonegate.ExitInternal, err)
 		}
 	case "verify":
 		evidence := fs.String("evidence", "", "Evidence file from 'phone quote'")
@@ -942,14 +943,14 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		fs.Parse(args)
 		ok, err := cmd.AttestVerify(*evidence, *record, *nonce, *jsonOut)
 		if err != nil {
-			failAttest(cmd.ExitInternal, err)
+			failAttest(phonegate.ExitInternal, err)
 		}
 		if !ok {
-			os.Exit(cmd.ExitRejected)
+			os.Exit(phonegate.ExitRejected)
 		}
 	case "ekcert":
 		fs.Parse(args)
-		if err := cmd.AttestEKCert(*tpm, *debug); err != nil {
+		if err := phonegate.AttestEKCert(*tpm, *debug); err != nil {
 			fail(err)
 		}
 	case "unenrol", "unenroll":
@@ -960,7 +961,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown phone subcommand %q\n", sub)
-		os.Exit(cmd.ExitUsage)
+		os.Exit(phonegate.ExitUsage)
 	}
 }
 
@@ -1011,7 +1012,7 @@ machine's screen (docs/PLAN-PHONE.md).
 func runInitramfs(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 || args[0] != "plan" {
 		printHelp("initramfs")
-		os.Exit(cmd.ExitUsage)
+		os.Exit(phonegate.ExitUsage)
 	}
 	fs := flag.NewFlagSet("initramfs plan", flag.ExitOnError)
 	buildroot := fs.String("buildroot", "", "The image under construction (mkinitcpio's BUILDROOT, initramfs-tools' DESTDIR): its files are written there and the hook's lines printed; without it the plan alone is shown")
@@ -1026,6 +1027,6 @@ func runInitramfs(args []string, tpmPath string, debugFlag bool) {
 	o := cmd.PlanOptions{TPMPath: *tpm, ConfigPath: *conf, KernelLog: *kernelLog, FwDir: *fwDir, NoBusybox: *noBusybox, Debug: *debug}
 	if err := cmd.InitramfsPlanCommand(o, *buildroot, *format, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
-		os.Exit(cmd.ExitUsage)
+		os.Exit(phonegate.ExitUsage)
 	}
 }

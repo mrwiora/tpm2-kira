@@ -14,6 +14,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 )
@@ -29,11 +30,11 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 	s := newSWTPMSetupAt(t, sock, "box")
 	tpm := s.tpm
 	s.blob.EKAlg = uint16(tpm2.TPMAlgECC)
-	_, sealed, err := readSlot(tpm, slot)
+	_, sealed, err := phonegate.ReadSlot(tpm, slot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pub, priv, err := createReleaseKey(tpm, sealed)
+	pub, priv, err := phonegate.CreateReleaseKey(tpm, sealed)
 	if err != nil {
 		t.Fatalf("release key: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 	if err := writeAttestBlob(tpm, slot, s.blob, signer); err != nil {
 		t.Fatal(err)
 	}
-	_, sb, err := readSlot(tpm, slot)
+	_, sb, err := phonegate.ReadSlot(tpm, slot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,25 +52,25 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 		t.Fatal("the release key did not survive the blob")
 	}
 
-	f, w, err := wrapFactor(tpm, att, nil)
+	f, w, err := phonegate.WrapFactor(tpm, att, nil)
 	if err != nil {
 		t.Fatalf("wrap: %v", err)
 	}
-	if len(f) != FactorSize || len(w.Credential) == 0 || len(w.EncryptedSecret) == 0 {
+	if len(f) != phonegate.FactorSize || len(w.Credential) == 0 || len(w.EncryptedSecret) == 0 {
 		t.Fatalf("wrapped: %d bytes, %d, %d", len(f), len(w.Credential), len(w.EncryptedSecret))
 	}
-	got, err := unwrapFactor(tpm, sb, slot, att, w)
+	got, err := phonegate.UnwrapFactor(tpm, sb, slot, att, w)
 	if err != nil {
 		t.Fatalf("unwrap in the approved state: %v", err)
 	}
 	if !bytes.Equal(got, f) {
 		t.Fatal("the TPM opened the credential to something else")
 	}
-	salt := FactorSalt(f, "")
+	salt := phonegate.FactorSalt(f, "")
 	if len(salt) != 64 || strings.Trim(string(salt), "0123456789abcdef") != "" {
 		t.Fatalf("salt %q", salt)
 	}
-	if bytes.Equal(salt, FactorSalt(f, "home")) || !bytes.Equal(salt, FactorSalt(f, "luks")) {
+	if bytes.Equal(salt, phonegate.FactorSalt(f, "home")) || !bytes.Equal(salt, phonegate.FactorSalt(f, "luks")) {
 		t.Fatal("labels")
 	}
 
@@ -79,7 +80,7 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 	if err := writeAttestBlob(tpm, slot, s.blob, signer); err != nil {
 		t.Fatal(err)
 	}
-	svc := newGateService(tpm, slot, pubPath, false)
+	svc := phonegate.NewGateService(tpm, slot, pubPath, false)
 	status, msg := svc.TakeRelease(&attest.Release{Kind: attest.ReleaseKindFactor, CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret})
 	if status != attest.ReleaseOK {
 		t.Fatalf("the coordinator did not open the factor: %d %s", status, msg)
@@ -115,17 +116,17 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer otherTPM.Close()
-	if _, err := unwrapFactor(otherTPM, sb, slot, att, w); err == nil {
+	if _, err := phonegate.UnwrapFactor(otherTPM, sb, slot, att, w); err == nil {
 		t.Fatal("another TPM opened the credential")
 	}
 
 	// Without the command code the policy is the slot's, not the release
 	// key's: the TPM refuses the ADMIN action.
-	rk, err := loadReleaseKey(tpm, att)
+	rk, err := phonegate.LoadReleaseKey(tpm, att)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ek, _, err := createEK(tpm, att.EKAlg)
+	ek, _, err := phonegate.CreateEK(tpm, att.EKAlg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,14 +135,14 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = tpm2.ActivateCredential{
-		ActivateHandle: tpm2.AuthHandle{Handle: rk.handle, Name: rk.name, Auth: session},
-		KeyHandle:      tpm2.AuthHandle{Handle: ek.handle, Name: ek.name, Auth: endorsementPolicy()},
+		ActivateHandle: tpm2.AuthHandle{Handle: rk.Handle, Name: rk.Name, Auth: session},
+		KeyHandle:      tpm2.AuthHandle{Handle: ek.Handle, Name: ek.Name, Auth: phonegate.EndorsementPolicy()},
 		CredentialBlob: tpm2.TPM2BIDObject{Buffer: w.Credential},
 		Secret:         tpm2.TPM2BEncryptedSecret{Buffer: w.EncryptedSecret},
 	}.Execute(tpm)
 	done()
-	tpmdev.FlushHandle(tpm, rk.handle)
-	tpmdev.FlushHandle(tpm, ek.handle)
+	tpmdev.FlushHandle(tpm, rk.Handle)
+	tpmdev.FlushHandle(tpm, ek.Handle)
 	if err == nil {
 		t.Fatal("the slot's policy alone opened the credential")
 	}
@@ -149,7 +150,7 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 	// The boot state moves: PCR 23 is extended, and the approval no longer
 	// holds. The factor is not released.
 	s.extend(t, 23, "something else booted")
-	if _, err := unwrapFactor(tpm, sb, slot, att, w); !errors.Is(err, errFactorRefused) {
+	if _, err := phonegate.UnwrapFactor(tpm, sb, slot, att, w); !errors.Is(err, phonegate.ErrFactorRefused) {
 		t.Fatalf("after a PCR change: %v", err)
 	}
 	if status, _ := svc.TakeRelease(&attest.Release{Kind: attest.ReleaseKindFactor, CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret}); status != attest.ReleaseTPMRefused || svc.Salt() != nil {
@@ -162,7 +163,7 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 func TestFactorNeedsAReleaseKey(t *testing.T) {
 	sock := startSWTPM(t)
 	s := newSWTPMSetupAt(t, sock, "box")
-	if _, _, err := wrapFactor(s.tpm, s.blob, nil); !errors.Is(err, errNoReleaseKey) {
+	if _, _, err := phonegate.WrapFactor(s.tpm, s.blob, nil); !errors.Is(err, phonegate.ErrNoReleaseKey) {
 		t.Fatalf("%v", err)
 	}
 }
@@ -199,11 +200,11 @@ func TestFactorStatusAndUnenrol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, sealed, err := readSlot(tpmDev, slot)
+	_, sealed, err := phonegate.ReadSlot(tpmDev, slot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pub, priv, err := createReleaseKey(tpmDev, sealed)
+	pub, priv, err := phonegate.CreateReleaseKey(tpmDev, sealed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,8 +212,8 @@ func TestFactorStatusAndUnenrol(t *testing.T) {
 	if err := writeAttestBlob(tpmDev, slot, s.blob, signer); err != nil {
 		t.Fatal(err)
 	}
-	att, _ := loadAttestBlob(tpmDev, slot)
-	f, w, err := wrapFactor(tpmDev, att, nil)
+	att, _ := phonegate.LoadAttestBlob(tpmDev, slot)
+	f, w, err := phonegate.WrapFactor(tpmDev, att, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,11 +234,11 @@ func TestFactorStatusAndUnenrol(t *testing.T) {
 	}
 	tpmDev, _ = tpmdev.Open(sock)
 	defer tpmDev.Close()
-	_, sb, _ := readSlot(tpmDev, slot)
+	_, sb, _ := phonegate.ReadSlot(tpmDev, slot)
 	if len(sb.Payload.Attestation.ReleaseKeyPublic) != 0 {
 		t.Fatal("the release key is still in the blob")
 	}
-	if _, err := unwrapFactor(tpmDev, sb, slot, sb.Payload.Attestation, w); !errors.Is(err, errNoReleaseKey) {
+	if _, err := phonegate.UnwrapFactor(tpmDev, sb, slot, sb.Payload.Attestation, w); !errors.Is(err, phonegate.ErrNoReleaseKey) {
 		t.Fatalf("the kept factor after unenrol: %v", err)
 	}
 }

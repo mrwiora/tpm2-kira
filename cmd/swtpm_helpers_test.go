@@ -27,6 +27,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
@@ -105,7 +106,7 @@ type swtpmSetup struct {
 	sock string
 	tpm  transport.TPMCloser
 	blob *nvslot.Attestation
-	be   *tpmBackend
+	be   *phonegate.TPMBackend
 }
 
 // sealRealSlot seals a real TOTP key into the slot at idx, the way 'slot add'
@@ -158,7 +159,7 @@ func newSWTPMSetupAt(t *testing.T, sock, name string) *swtpmSetup {
 	s := &swtpmSetup{sock: sock, tpm: tpmDev}
 	t.Cleanup(func() { s.tpm.Close() })
 
-	pub, priv, akName, err := CreateAK(tpmDev)
+	pub, priv, akName, err := phonegate.CreateAK(tpmDev)
 	if err != nil {
 		t.Fatalf("CreateAK: %v", err)
 	}
@@ -177,7 +178,7 @@ func newSWTPMSetupAt(t *testing.T, sock, name string) *swtpmSetup {
 		PCRSelection: sel.Indices,
 		Phone:        nvslot.PhoneAttestation{NoisePrivate: noise.Private, AdvKey: randBytes(32)},
 	}
-	s.be = &tpmBackend{tpm: tpmDev, blob: s.blob, sealIndex: nvslot.NVRAMSlotStart}
+	s.be = &phonegate.TPMBackend{TPM: tpmDev, Blob: s.blob, SealIndex: nvslot.NVRAMSlotStart}
 	return s
 }
 

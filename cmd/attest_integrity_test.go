@@ -16,6 +16,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
@@ -262,20 +263,20 @@ func TestBlobIndexCannotCollideWithACounter(t *testing.T) {
 func TestAttestBlobSignature(t *testing.T) {
 	mine, theirs := newKey(t), newKey(t)
 	blob := signedAttestBlob(t, mine, "box")
-	if err := VerifyAttestBlobSignature(blob, &mine.PublicKey); err != nil {
+	if err := phonegate.VerifyAttestBlobSignature(blob, &mine.PublicKey); err != nil {
 		t.Fatalf("own blob rejected: %v", err)
 	}
-	if VerifyAttestBlobSignature(blob, &theirs.PublicKey) == nil {
+	if phonegate.VerifyAttestBlobSignature(blob, &theirs.PublicKey) == nil {
 		t.Fatal("blob accepted with another machine's key")
 	}
-	if VerifyAttestBlobSignature(signedAttestBlob(t, theirs, "box"), &mine.PublicKey) == nil {
+	if phonegate.VerifyAttestBlobSignature(signedAttestBlob(t, theirs, "box"), &mine.PublicKey) == nil {
 		t.Fatal("attacker-signed blob accepted")
 	}
 	for _, target := range []string{"box", "phone"} {
 		edited := append([]byte(nil), blob...)
 		i := bytes.LastIndex(edited, []byte(target))
 		edited[i] ^= 0x01 // the enrolment changed after signing
-		if VerifyAttestBlobSignature(edited, &mine.PublicKey) == nil {
+		if phonegate.VerifyAttestBlobSignature(edited, &mine.PublicKey) == nil {
 			t.Fatalf("edited %q accepted", target)
 		}
 	}
@@ -295,7 +296,7 @@ func TestAttestBlobSignature(t *testing.T) {
 	if b, err := nvslot.UnmarshalSealedBlob(grafted); err != nil || b.Payload.Attestation == nil {
 		t.Fatalf("test construction: %v", err)
 	}
-	if VerifyAttestBlobSignature(grafted, &mine.PublicKey) == nil {
+	if phonegate.VerifyAttestBlobSignature(grafted, &mine.PublicKey) == nil {
 		t.Fatal("an attestation part grafted onto a signed blob was accepted")
 	}
 }
@@ -320,7 +321,7 @@ func TestAttestBlobCarriesItsCount(t *testing.T) {
 	if got, err := nvslot.UnmarshalSealedBlob(tampered); err != nil || got.Payload.Attestation.Count != 42 {
 		t.Fatalf("test construction: %v", err)
 	}
-	if VerifyAttestBlobSignature(tampered, &key.PublicKey) == nil {
+	if phonegate.VerifyAttestBlobSignature(tampered, &key.PublicKey) == nil {
 		t.Fatal("a blob with an altered count still verifies")
 	}
 }

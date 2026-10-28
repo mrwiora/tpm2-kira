@@ -1,4 +1,4 @@
-package cmd
+package phonegate
 
 import (
 	"bufio"
@@ -9,11 +9,11 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 )
 
-func judge(policy HWCheckPolicy, answer string, revoked map[string]string, rerr error) (*phoneJudge, *strings.Builder) {
+func judge(policy HWCheckPolicy, answer string, revoked map[string]string, rerr error) (*PhoneJudge, *strings.Builder) {
 	out := &strings.Builder{}
-	j := &phoneJudge{policy: policy, console: bufio.NewReader(strings.NewReader(answer)), out: out}
+	j := &PhoneJudge{Policy: policy, Console: bufio.NewReader(strings.NewReader(answer)), Out: out}
 	if revoked != nil || rerr != nil {
-		j.revoked = func() (map[string]string, error) { return revoked, rerr }
+		j.Revoked = func() (map[string]string, error) { return revoked, rerr }
 	}
 	return j, out
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
@@ -189,7 +190,7 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 
 	// The vault's policy computation is the TPM's: PolicyPCR over the
 	// sealed values, computed in a trial session, equals vaultproto's.
-	vals, err := readPCRBank(tpmDev, attest.PCRSelection{Alg: attest.AlgSHA256, Indices: []uint8{23}})
+	vals, err := phonegate.ReadPCRBank(tpmDev, attest.PCRSelection{Alg: attest.AlgSHA256, Indices: []uint8{23}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +239,7 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 	}
 	tpmDev, _ = transport.OpenTPM(sock)
 	defer tpmDev.Close()
-	if _, sb, err := readSlot(tpmDev, slot); err != nil || sb.Payload.Attestation != nil {
+	if _, sb, err := phonegate.ReadSlot(tpmDev, slot); err != nil || sb.Payload.Attestation != nil {
 		t.Fatalf("after unenrol: %v %+v", err, sb.Payload.Attestation)
 	}
 }

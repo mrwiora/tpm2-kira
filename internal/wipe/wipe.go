@@ -3,7 +3,7 @@ package wipe
 
 import "runtime"
 
-// wipe overwrites a key where it is; the full capacity, in case a shorter
+// Bytes overwrites a key where it is; the full capacity, in case a shorter
 // view of it is handed in.
 func Bytes(b []byte) {
 	b = b[:cap(b)]

@@ -1,4 +1,4 @@
-package cmd
+package phonegate
 
 // Enrolment checks of the other side's hardware, on the machine: is this
 // machine's own TPM genuine (EK certificate), and is the phone's anchor key
@@ -69,9 +69,9 @@ func decide(policy HWCheckPolicy, console *bufio.Reader, out io.Writer) (bool, e
 	return askContinue(console, out)
 }
 
-// checkOwnTPM runs the phone's EK verification on this machine before
+// CheckOwnTPM runs the phone's EK verification on this machine before
 // enrolling, so a problem shows up here first.
-func checkOwnTPM(tpmDev transport.TPM, policy HWCheckPolicy, console *bufio.Reader, out io.Writer) (bool, error) {
+func CheckOwnTPM(tpmDev transport.TPM, policy HWCheckPolicy, console *bufio.Reader, out io.Writer) (bool, error) {
 	if policy == CheckOff {
 		return true, nil
 	}
@@ -90,21 +90,21 @@ func checkOwnTPM(tpmDev transport.TPM, policy HWCheckPolicy, console *bufio.Read
 }
 
 func ownEKVerdict(tpmDev transport.TPM) (vendor, note string, err error) {
-	alg, ek, pub, err := pickCertifiedEK(tpmDev)
+	alg, ek, pub, err := PickCertifiedEK(tpmDev)
 	if err != nil {
 		return "", "", err
 	}
-	tpmdev.FlushHandle(tpmDev, ek.handle)
-	leaf := readEKCert(tpmDev, alg)
-	by, verr := attest.VerifyEKCertificate(pub, leaf, readEKCertChain(tpmDev, leaf), time.Now())
+	tpmdev.FlushHandle(tpmDev, ek.Handle)
+	leaf := ReadEKCert(tpmDev, alg)
+	by, verr := attest.VerifyEKCertificate(pub, leaf, ReadEKCertChain(tpmDev, leaf), time.Now())
 	return by, attest.EKCertNote(verr), nil
 }
 
 // AttestationStatusURL is Google's revocation list for attestation certificates.
 const AttestationStatusURL = "https://android.googleapis.com/attestation/status"
 
-// revokedSerials fetches the revocation list; an error means "not checked".
-func revokedSerials(client *http.Client) (map[string]string, error) {
+// RevokedSerials fetches the revocation list; an error means "not checked".
+func RevokedSerials(client *http.Client) (map[string]string, error) {
 	resp, err := client.Get(AttestationStatusURL)
 	if err != nil {
 		return nil, err
@@ -129,23 +129,23 @@ func revokedSerials(client *http.Client) (map[string]string, error) {
 	return out, nil
 }
 
-// phoneJudge decides on the phone's key attestation at enrolment.
-type phoneJudge struct {
-	policy  HWCheckPolicy
-	console *bufio.Reader
-	out     io.Writer
-	revoked func() (map[string]string, error) // nil: not checked
+// PhoneJudge decides on the phone's key attestation at enrolment.
+type PhoneJudge struct {
+	Policy  HWCheckPolicy
+	Console *bufio.Reader
+	Out     io.Writer
+	Revoked func() (map[string]string, error) // nil: not checked
 }
 
-func (j *phoneJudge) JudgePhone(a attest.PhoneAttestation) (bool, error) {
-	if j.policy == CheckOff {
+func (j *PhoneJudge) JudgePhone(a attest.PhoneAttestation) (bool, error) {
+	if j.Policy == CheckOff {
 		return true, nil
 	}
-	fmt.Fprintln(j.out, "Checking the phone's key attestation in the background (its certificate")
-	fmt.Fprintln(j.out, "chain against Google's roots, its serials against the revocation list) ...")
-	if j.revoked != nil && a.Root != "" {
-		if list, err := j.revoked(); err != nil {
-			fmt.Fprintf(j.out, "Phone key:     revocation not checked (%v)\n", err)
+	fmt.Fprintln(j.Out, "Checking the phone's key attestation in the background (its certificate")
+	fmt.Fprintln(j.Out, "chain against Google's roots, its serials against the revocation list) ...")
+	if j.Revoked != nil && a.Root != "" {
+		if list, err := j.Revoked(); err != nil {
+			fmt.Fprintf(j.Out, "Phone key:     revocation not checked (%v)\n", err)
 		} else {
 			for _, s := range a.Serials {
 				if why, bad := list[s]; bad {
@@ -156,14 +156,14 @@ func (j *phoneJudge) JudgePhone(a attest.PhoneAttestation) (bool, error) {
 		}
 	}
 	if a.Verified {
-		fmt.Fprintf(j.out, "Phone key:     verified by %s: %s\n", a.Root, a.Summary())
+		fmt.Fprintf(j.Out, "Phone key:     verified by %s: %s\n", a.Root, a.Summary())
 		return true, nil
 	}
-	fmt.Fprintf(j.out, "Phone key:     NOT VERIFIED (%s)\n", a.Summary())
+	fmt.Fprintf(j.Out, "Phone key:     NOT VERIFIED (%s)\n", a.Summary())
 	for _, p := range a.Problems {
-		fmt.Fprintf(j.out, "               - %s\n", p)
+		fmt.Fprintf(j.Out, "               - %s\n", p)
 	}
-	fmt.Fprintln(j.out, "               Its receipts then prove only that this phone's key signed them, not that")
-	fmt.Fprintln(j.out, "               the key is protected by secure hardware on an untampered phone.")
-	return decide(j.policy, j.console, j.out)
+	fmt.Fprintln(j.Out, "               Its receipts then prove only that this phone's key signed them, not that")
+	fmt.Fprintln(j.Out, "               the key is protected by secure hardware on an untampered phone.")
+	return decide(j.Policy, j.Console, j.Out)
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 
@@ -379,7 +380,7 @@ func checkRemoteSaltReady(tpmPath string, sealIndex uint32) error {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
 	defer tpmDev.Close()
-	att, err := loadAttestBlob(tpmDev, sealIndex)
+	att, err := phonegate.LoadAttestBlob(tpmDev, sealIndex)
 	if err != nil {
 		return fmt.Errorf("%w (slot %d has no phone enrolled)", errNoPhoneSalt, nvslot.AttestSlot(sealIndex))
 	}
@@ -397,7 +398,7 @@ func checkVaultReady(tpmPath string, sealIndex uint32) (string, error) {
 		return "", fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
 	defer tpmDev.Close()
-	_, sb, err := readSlot(tpmDev, sealIndex)
+	_, sb, err := phonegate.ReadSlot(tpmDev, sealIndex)
 	if err != nil || sb.Payload.Attestation == nil || !sb.Payload.Attestation.Vault.Enabled() {
 		return "", fmt.Errorf("slot %d is not enrolled with a vault: tpm2-kira vault enrol first, or luks enrol --mode %s", nvslot.AttestSlot(sealIndex), LuksModeTPMVault)
 	}
@@ -638,7 +639,7 @@ func checkRemoteSaltReadyOrEnrolable(tpmPath string, idx uint32) (bool, error) {
 		return false, fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
 	defer tpmDev.Close()
-	if _, err := loadAttestBlob(tpmDev, idx); err != nil {
+	if _, err := phonegate.LoadAttestBlob(tpmDev, idx); err != nil {
 		return false, fmt.Errorf("%w (slot %d has no phone enrolled)", errNoPhoneSalt, nvslot.AttestSlot(idx))
 	}
 	return true, nil

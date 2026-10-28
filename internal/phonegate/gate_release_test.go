@@ -1,4 +1,4 @@
-package cmd
+package phonegate
 
 import (
 	"testing"
@@ -10,9 +10,9 @@ import (
 // An attested boot with a phone salt expected waits for the Release:
 // until it is taken, the session is over, or the bound has passed.
 func TestGateWaitsForTheRelease(t *testing.T) {
-	s := &gateService{expectRelease: true, blob: &nvslot.Attestation{ReleaseKeyPublic: []byte{1}}}
-	s.status = GateStatus{Slot: 0, State: GateAttested, Releasing: true}
-	s.releaseSince = time.Now()
+	s := &GateService{ExpectingRelease: true, Blob: &nvslot.Attestation{ReleaseKeyPublic: []byte{1}}}
+	s.Current = GateStatus{Slot: 0, State: GateAttested, Releasing: true}
+	s.ReleaseSince = time.Now()
 	if st, _ := s.Status(); st.Released() {
 		t.Fatal("released before the salt arrived")
 	}
@@ -26,8 +26,8 @@ func TestGateWaitsForTheRelease(t *testing.T) {
 	}
 
 	// The bound.
-	s.status.Releasing = true
-	s.releaseSince = time.Now().Add(-releaseWait - time.Second)
+	s.Current.Releasing = true
+	s.ReleaseSince = time.Now().Add(-releaseWait - time.Second)
 	if st, _ := s.Status(); !st.Released() {
 		t.Fatalf("the bound did not release the boot: %+v", st)
 	}

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+
 	"github.com/google/go-tpm/tpm2"
 	"github.com/tpm2-trust/assh/hostkey"
 	"golang.org/x/crypto/ssh"
@@ -226,7 +228,7 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 	if len(entries) != 1 || entries[0].Name() != PartUnlock {
 		t.Fatalf("the plan names %v", entries)
 	}
-	for _, p := range []string{imageTPMDropIn, "/" + btModulesLoadConf, DefaultAttestSignerPath, imageNetworkFile} {
+	for _, p := range []string{imageTPMDropIn, "/" + btModulesLoadConf, phonegate.DefaultAttestSignerPath, imageNetworkFile} {
 		if _, err := os.Stat(filepath.Join(root, p)); err == nil {
 			t.Errorf("%s in an image of the disk unlock alone", p)
 		}
@@ -269,15 +271,15 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 		t.Error("the vault is named, and no slot has one")
 	}
 	for path, want := range map[string]string{
-		imageTPMDropIn:                   "Wants=dev-tpmrm0.device",
-		imageTPMWaitDropIn:               "JobTimeoutSec=5",
-		"/" + btModulesLoadConf:          "btusb\nbtintel\nbluetooth\n",
-		DefaultAttestSignerPath:          "BEGIN PUBLIC KEY",
-		"/" + BTUdevRuleFile:             `KERNEL=="3-10"`,
-		imageNetworkFile:                 "DHCP=yes",
-		"/etc/tpm2-kira/authorized_keys": admin + "\n",
-		DefaultSSHConf:                   "ASSH_CA=efi:KIRAasshCA\n",
-		imageRunDropIn:                   `"TPM2_KIRA_REMOTE=--ssh --ssh-hold=0"`,
+		imageTPMDropIn:                    "Wants=dev-tpmrm0.device",
+		imageTPMWaitDropIn:                "JobTimeoutSec=5",
+		"/" + btModulesLoadConf:           "btusb\nbtintel\nbluetooth\n",
+		phonegate.DefaultAttestSignerPath: "BEGIN PUBLIC KEY",
+		"/" + BTUdevRuleFile:              `KERNEL=="3-10"`,
+		imageNetworkFile:                  "DHCP=yes",
+		"/etc/tpm2-kira/authorized_keys":  admin + "\n",
+		DefaultSSHConf:                    "ASSH_CA=efi:KIRAasshCA\n",
+		imageRunDropIn:                    `"TPM2_KIRA_REMOTE=--ssh --ssh-hold=0"`,
 	} {
 		if got := readImage(t, root, path); !strings.Contains(got, want) {
 			t.Errorf("%s: %q, want %q", path, got, want)

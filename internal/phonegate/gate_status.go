@@ -1,4 +1,4 @@
-package cmd
+package phonegate
 
 // The gate's state for the slot it serves, as the coordinator
 // (gate_service.go) keeps it and the code screen shows it.

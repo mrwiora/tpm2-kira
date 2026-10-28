@@ -11,6 +11,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
 
 	"golang.org/x/sys/unix"
@@ -215,15 +216,15 @@ func TestNextTOTPBoundary(t *testing.T) {
 }
 
 // A gate next to the display: its state is scripted by the fake clock.
-func (f *fakeBoot) withGate(b *bootDisplay, at func(elapsed time.Duration) (GateStatus, bool)) (*[]GateStatus, time.Time) {
+func (f *fakeBoot) withGate(b *bootDisplay, at func(elapsed time.Duration) (phonegate.GateStatus, bool)) (*[]phonegate.GateStatus, time.Time) {
 	start := f.clock
-	events := &[]GateStatus{}
-	b.phone = func() (GateStatus, bool) {
+	events := &[]phonegate.GateStatus{}
+	b.phone = func() (phonegate.GateStatus, bool) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		return at(f.clock.Sub(start))
 	}
-	b.phoneEvent = func(_, cur GateStatus) { *events = append(*events, cur) }
+	b.phoneEvent = func(_, cur phonegate.GateStatus) { *events = append(*events, cur) }
 	b.phonePoll = time.Second
 	b.phoneGrace = time.Minute
 	return events, start
@@ -254,16 +255,16 @@ func notified(f *fakeBoot) bool {
 func TestPhoneVerdictReleasesTheBoot(t *testing.T) {
 	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)}
 	b := f.display(okSlot, nil, nil)
-	events, start := f.withGate(b, func(e time.Duration) (GateStatus, bool) {
+	events, start := f.withGate(b, func(e time.Duration) (phonegate.GateStatus, bool) {
 		switch {
 		case e < 3*time.Second:
-			return GateStatus{}, false // the gate is still starting
+			return phonegate.GateStatus{}, false // the gate is still starting
 		case e < 8*time.Second:
-			return GateStatus{Slot: 0, State: GateWaiting}, true
+			return phonegate.GateStatus{Slot: 0, State: phonegate.GateWaiting}, true
 		case e < 12*time.Second:
-			return GateStatus{Slot: 0, State: GateSession}, true
+			return phonegate.GateStatus{Slot: 0, State: phonegate.GateSession}, true
 		}
-		return GateStatus{Slot: 0, State: GateAttested}, true
+		return phonegate.GateStatus{Slot: 0, State: phonegate.GateAttested}, true
 	})
 	runDisplay(t, b)
 	if got := f.clock.Sub(start); got < 12*time.Second || got > 14*time.Second {
@@ -272,11 +273,11 @@ func TestPhoneVerdictReleasesTheBoot(t *testing.T) {
 	if len(f.shown) == 0 || f.shown[0][0].Code == "" {
 		t.Fatal("the code was not shown while the phone was asked")
 	}
-	var states []GateState
+	var states []phonegate.GateState
 	for _, e := range *events {
 		states = append(states, e.State)
 	}
-	if len(states) != 3 || states[0] != GateWaiting || states[1] != GateSession || states[2] != GateAttested {
+	if len(states) != 3 || states[0] != phonegate.GateWaiting || states[1] != phonegate.GateSession || states[2] != phonegate.GateAttested {
 		t.Fatalf("announced %v", states)
 	}
 	if !notified(f) {
@@ -287,14 +288,14 @@ func TestPhoneVerdictReleasesTheBoot(t *testing.T) {
 // A phone that rejects the boot does not release it early; the hold runs
 // its course, as it does when nobody answers (lazy mode holds nothing back).
 func TestPhoneRejectionDoesNotReleaseEarly(t *testing.T) {
-	for _, state := range []GateState{GateRejected, GateRefused, GateUnavailable, GateWaiting} {
+	for _, state := range []phonegate.GateState{phonegate.GateRejected, phonegate.GateRefused, phonegate.GateUnavailable, phonegate.GateWaiting} {
 		f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)}
 		b := f.display(okSlot, nil, nil)
-		_, start := f.withGate(b, func(e time.Duration) (GateStatus, bool) {
+		_, start := f.withGate(b, func(e time.Duration) (phonegate.GateStatus, bool) {
 			if e < 5*time.Second {
-				return GateStatus{Slot: 0, State: GateWaiting}, true
+				return phonegate.GateStatus{Slot: 0, State: phonegate.GateWaiting}, true
 			}
-			return GateStatus{Slot: 0, State: state}, true
+			return phonegate.GateStatus{Slot: 0, State: state}, true
 		})
 		runDisplay(t, b)
 		if got := f.clock.Sub(start); got != 90*time.Second {
@@ -306,15 +307,15 @@ func TestPhoneRejectionDoesNotReleaseEarly(t *testing.T) {
 // A phone in the middle of its session when the hold ends may finish, for a
 // bounded time.
 func TestPhoneSessionExtendsTheHold(t *testing.T) {
-	gate := func(verdictAt time.Duration) func(time.Duration) (GateStatus, bool) {
-		return func(e time.Duration) (GateStatus, bool) {
+	gate := func(verdictAt time.Duration) func(time.Duration) (phonegate.GateStatus, bool) {
+		return func(e time.Duration) (phonegate.GateStatus, bool) {
 			switch {
 			case e < 85*time.Second:
-				return GateStatus{Slot: 0, State: GateWaiting}, true
+				return phonegate.GateStatus{Slot: 0, State: phonegate.GateWaiting}, true
 			case verdictAt > 0 && e >= verdictAt:
-				return GateStatus{Slot: 0, State: GateAttested}, true
+				return phonegate.GateStatus{Slot: 0, State: phonegate.GateAttested}, true
 			}
-			return GateStatus{Slot: 0, State: GateSession}, true
+			return phonegate.GateStatus{Slot: 0, State: phonegate.GateSession}, true
 		}
 	}
 	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)}
@@ -337,7 +338,9 @@ func TestPhoneSessionExtendsTheHold(t *testing.T) {
 	// Enter still works while a phone is connected.
 	f = &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC), enters: []bool{false, false, true}}
 	b = f.display(okSlot, nil, nil)
-	_, start = f.withGate(b, func(time.Duration) (GateStatus, bool) { return GateStatus{Slot: 0, State: GateSession}, true })
+	_, start = f.withGate(b, func(time.Duration) (phonegate.GateStatus, bool) {
+		return phonegate.GateStatus{Slot: 0, State: phonegate.GateSession}, true
+	})
 	runDisplay(t, b)
 	if got := f.clock.Sub(start); got > 5*time.Second {
 		t.Fatalf("Enter released after %s", got)
@@ -479,14 +482,14 @@ func TestEnterReaderOnATerminal(t *testing.T) {
 func TestPhoneCodeShownAtOnce(t *testing.T) {
 	f := &fakeBoot{clock: time.Date(2026, 10, 6, 0, 0, 5, 0, time.UTC)}
 	b := f.display(okSlot, nil, nil)
-	f.withGate(b, func(e time.Duration) (GateStatus, bool) {
+	f.withGate(b, func(e time.Duration) (phonegate.GateStatus, bool) {
 		switch {
 		case e < 4*time.Second:
-			return GateStatus{Slot: 0, State: GateWaiting}, true
+			return phonegate.GateStatus{Slot: 0, State: phonegate.GateWaiting}, true
 		case e < 9*time.Second:
-			return GateStatus{Slot: 0, State: GateSession, Code: "K7QM-2XHD"}, true
+			return phonegate.GateStatus{Slot: 0, State: phonegate.GateSession, Code: "K7QM-2XHD"}, true
 		}
-		return GateStatus{Slot: 0, State: GateAttested}, true
+		return phonegate.GateStatus{Slot: 0, State: phonegate.GateAttested}, true
 	})
 	runDisplay(t, b)
 	// The code's arrival prints its own line; the frames are the windows'.
@@ -501,17 +504,17 @@ func TestPhoneSlotLines(t *testing.T) {
 	slots := []totp.NVRAMSlot{{SlotNumber: 0, Phone: true}, {SlotNumber: 1, Code: "654321"}}
 	codes := map[int]string{1: "654321"}
 	for _, c := range []struct {
-		st   GateStatus
+		st   phonegate.GateStatus
 		ok   bool
 		want string
 	}{
-		{GateStatus{}, false, "mobile attestation locked - please connect"},
-		{GateStatus{Slot: 0, State: GateWaiting}, true, "mobile attestation locked - please connect"},
-		{GateStatus{Slot: 0, State: GateSession}, true, "mobile attestation - phone connected, answer there"},
-		{GateStatus{Slot: 0, State: GateSession, Code: "K7QM-2XHD"}, true, "mobile attestation - phone code K7QM-2XHD (the phone must show the same)"},
-		{GateStatus{Slot: 0, State: GateAttested}, true, "\033[0;32mmobile attestation passed\033[0m"},
-		{GateStatus{Slot: 0, State: GateRejected}, true, "\033[0;31mmobile attestation FAILED\033[0m"},
-		{GateStatus{Slot: 3, State: GateAttested}, true, "mobile attestation locked - please connect"},
+		{phonegate.GateStatus{}, false, "mobile attestation locked - please connect"},
+		{phonegate.GateStatus{Slot: 0, State: phonegate.GateWaiting}, true, "mobile attestation locked - please connect"},
+		{phonegate.GateStatus{Slot: 0, State: phonegate.GateSession}, true, "mobile attestation - phone connected, answer there"},
+		{phonegate.GateStatus{Slot: 0, State: phonegate.GateSession, Code: "K7QM-2XHD"}, true, "mobile attestation - phone code K7QM-2XHD (the phone must show the same)"},
+		{phonegate.GateStatus{Slot: 0, State: phonegate.GateAttested}, true, "\033[0;32mmobile attestation passed\033[0m"},
+		{phonegate.GateStatus{Slot: 0, State: phonegate.GateRejected}, true, "\033[0;31mmobile attestation FAILED\033[0m"},
+		{phonegate.GateStatus{Slot: 3, State: phonegate.GateAttested}, true, "mobile attestation locked - please connect"},
 	} {
 		got := phoneCodes(codes, slots, c.st, c.ok)
 		if got[0] != c.want || got[1] != "654321" {

@@ -1,4 +1,4 @@
-package cmd
+package phonegate
 
 // Does the PCR selection a phone will check cover the initrd? The initrd is
 // where a passphrase logger
@@ -113,9 +113,9 @@ func (c initrdCoverage) coveredBy(sel []uint8) bool {
 	return false
 }
 
-// confirmInitrdCoverage tells the person enrolling whether the selection
+// ConfirmInitrdCoverage tells the person enrolling whether the selection
 // covers the initrd, and asks before enrolling a selection that does not.
-func confirmInitrdCoverage(console *bufio.Reader, sel attest.PCRSelection, eventlogPath string) (bool, error) {
+func ConfirmInitrdCoverage(console *bufio.Reader, sel attest.PCRSelection, eventlogPath string) (bool, error) {
 	cov, err := readInitrdCoverage(eventlogPath)
 	return decideInitrdCoverage(console, sel, cov, err)
 }

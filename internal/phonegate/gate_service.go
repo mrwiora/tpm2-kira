@@ -1,4 +1,4 @@
-package cmd
+package phonegate
 
 // The gate's coordinator: the half of remote attestation that holds the TPM.
 //
@@ -58,10 +58,10 @@ type gateVerifier struct {
 	NoisePub []byte `json:"noise_pub"`
 }
 
-// gateHost is what the radio side of the gate needs from the TPM side:
+// GateHost is what the radio side of the gate needs from the TPM side:
 // implemented by the coordinator itself (gateService) and, for the worker,
 // by its connection to the coordinator (gateClient).
-type gateHost interface {
+type GateHost interface {
 	// Identity returns the slot to serve, or the exit status with which
 	// the gate gives up.
 	Identity() (*gateIdentity, int, error)
@@ -76,24 +76,24 @@ type gateHost interface {
 // maxIssuedQuotes bounds what the coordinator remembers about its quotes.
 const maxIssuedQuotes = 32
 
-// gateService is the coordinator for one enrolled slot.
-type gateService struct {
+// GateService is the coordinator for one enrolled slot.
+type GateService struct {
 	mu    sync.Mutex // status and the issued quotes
-	tpmMu sync.Mutex // one TPM operation at a time; the code screen never waits for it
+	TPMMu sync.Mutex // one TPM operation at a time; the code screen never waits for it
 
-	ready  chan struct{} // closed when the slot is set up, or refused
-	code   int           // why there is no slot to serve (an exit status), or 0
-	reason error
+	Ready  chan struct{} // closed when the slot is set up, or refused
+	Code   int           // why there is no slot to serve (an exit status), or 0
+	Reason error
 
-	tpm            transport.TPM
-	idx            uint32
-	blob           *nvslot.Attestation
-	be             *tpmBackend
+	TPM            transport.TPM
+	Idx            uint32
+	Blob           *nvslot.Attestation
+	be             *TPMBackend
 	recordVerified bool
 
-	issued      map[string][]byte // SHA-256 of a quote issued this boot -> its qualifying data
+	Issued      map[string][]byte // SHA-256 of a quote issued this boot -> its qualifying data
 	issuedOrder []string
-	status      GateStatus
+	Current     GateStatus
 
 	// The factor (factor.go). keep is what 'factor enrol' asks the phone
 	// to keep, sent in the evidence; salt is the combiner's salt from the
@@ -106,8 +106,8 @@ type gateService struct {
 	// expectRelease: the unlock mode needs the phone's phone salt, so a
 	// receipt is followed by a Release that the boot waits for (bounded by
 	// releaseWait from releaseSince).
-	expectRelease bool
-	releaseSince  time.Time
+	ExpectingRelease bool
+	ReleaseSince     time.Time
 }
 
 // releaseWait bounds how long the boot waits for the phone's phone salt
@@ -116,21 +116,21 @@ type gateService struct {
 // wait at once. The bound is for a session that dies in between.
 const releaseWait = 15 * time.Second
 
-// newGateService sets the coordinator up in the background (the TPM can be
+// NewGateService sets the coordinator up in the background (the TPM can be
 // slow, and the code screen must not wait for it): finds the enrolled slot,
 // checks its record and loads it. tpmDev is used from then on and never
 // closed here.
-func newGateService(tpmDev transport.TPM, sealIndex uint32, signerPath string, debug bool) *gateService {
-	s := &gateService{ready: make(chan struct{}), tpm: tpmDev, issued: map[string][]byte{}}
+func NewGateService(tpmDev transport.TPM, sealIndex uint32, signerPath string, debug bool) *GateService {
+	s := &GateService{Ready: make(chan struct{}), TPM: tpmDev, Issued: map[string][]byte{}}
 	go func() {
-		defer close(s.ready)
-		s.code, s.reason = s.setup(sealIndex, signerPath, debug)
-		if s.code != 0 {
+		defer close(s.Ready)
+		s.Code, s.Reason = s.setup(sealIndex, signerPath, debug)
+		if s.Code != 0 {
 			s.mu.Lock()
-			if s.code == ExitTampered {
-				s.status.State = GateRefused
+			if s.Code == ExitTampered {
+				s.Current.State = GateRefused
 			} else {
-				s.status.State = GateUnavailable
+				s.Current.State = GateUnavailable
 			}
 			s.mu.Unlock()
 		}
@@ -138,7 +138,7 @@ func newGateService(tpmDev transport.TPM, sealIndex uint32, signerPath string, d
 	return s
 }
 
-func (s *gateService) setup(sealIndex uint32, signerPath string, debug bool) (int, error) {
+func (s *GateService) setup(sealIndex uint32, signerPath string, debug bool) (int, error) {
 	var idx uint32
 	var err error
 	if sealIndex != 0 {
@@ -146,22 +146,22 @@ func (s *gateService) setup(sealIndex uint32, signerPath string, debug bool) (in
 			return ExitUsage, err
 		}
 	} else {
-		found := enrolledSlots(s.tpm, debug)
+		found := EnrolledSlots(s.TPM, debug)
 		if len(found) == 0 {
 			return ExitUsage, errors.New("no slot is enrolled for attestation (run 'tpm2-kira phone enrol')")
 		}
 		idx = found[0]
 	}
 	s.mu.Lock()
-	s.idx = idx
-	s.status.Slot = int(nvslot.AttestSlot(idx))
+	s.Idx = idx
+	s.Current.Slot = int(nvslot.AttestSlot(idx))
 	s.mu.Unlock()
 
-	verified, code := gateRecordCheck(s.tpm, idx, signerPath) // prints its own failure
+	verified, code := GateRecordCheck(s.TPM, idx, signerPath) // prints its own failure
 	if code != 0 {
 		return code, errors.New("the attestation record is not accepted")
 	}
-	blob, err := loadAttestBlob(s.tpm, idx)
+	blob, err := LoadAttestBlob(s.TPM, idx)
 	if err != nil {
 		return ExitInternal, fmt.Errorf("cannot read the attestation blob at 0x%08X: %w", idx, err)
 	}
@@ -173,29 +173,29 @@ func (s *gateService) setup(sealIndex uint32, signerPath string, debug bool) (in
 	}
 	sealIdx := idx // the enrolment lives in the slot's own blob
 	s.mu.Lock()
-	s.blob = blob
+	s.Blob = blob
 	s.recordVerified = verified
-	s.be = &tpmBackend{tpm: s.tpm, blob: blob, sealIndex: sealIdx, sealed: readSealedSlot(s.tpm, sealIdx), debug: debug}
+	s.be = &TPMBackend{TPM: s.TPM, Blob: blob, SealIndex: sealIdx, Sealed: ReadSealedSlot(s.TPM, sealIdx), Debug: debug}
 	s.mu.Unlock()
 	return 0, nil
 }
 
 // Identity implements gateHost.
-func (s *gateService) Identity() (*gateIdentity, int, error) {
-	<-s.ready
-	if s.code != 0 {
-		return nil, s.code, s.reason
+func (s *GateService) Identity() (*gateIdentity, int, error) {
+	<-s.Ready
+	if s.Code != 0 {
+		return nil, s.Code, s.Reason
 	}
 	id := &gateIdentity{
-		Slot:           int(nvslot.AttestSlot(s.idx)),
-		FriendlyName:   s.blob.FriendlyName,
-		DeviceID:       s.blob.DeviceID,
-		AKName:         s.blob.AKName,
-		NoisePrivate:   s.blob.Phone.NoisePrivate,
-		AdvKey:         s.blob.Phone.AdvKey,
+		Slot:           int(nvslot.AttestSlot(s.Idx)),
+		FriendlyName:   s.Blob.FriendlyName,
+		DeviceID:       s.Blob.DeviceID,
+		AKName:         s.Blob.AKName,
+		NoisePrivate:   s.Blob.Phone.NoisePrivate,
+		AdvKey:         s.Blob.Phone.AdvKey,
 		RecordVerified: s.recordVerified,
 	}
-	for _, v := range s.blob.Phone.Verifiers {
+	for _, v := range s.Blob.Phone.Verifiers {
 		id.Verifiers = append(id.Verifiers, gateVerifier{ID: v.ID, NoisePub: v.NoisePub})
 	}
 	return id, 0, nil
@@ -206,9 +206,9 @@ var errGateNotServing = errors.New("the coordinator has no slot to serve")
 // Quote implements attest.AttesterBackend. It is the one TPM operation the
 // radio side can cause: a quote by the attestation key, which says what the
 // registers are and gives nothing away.
-func (s *gateService) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteResult, error) {
-	<-s.ready
-	if s.code != 0 {
+func (s *GateService) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteResult, error) {
+	<-s.Ready
+	if s.Code != 0 {
 		return nil, errGateNotServing
 	}
 	if len(qd) == 0 || len(qd) > 64 {
@@ -217,9 +217,9 @@ func (s *gateService) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteRe
 	if err := sel.Validate(); err != nil {
 		return nil, err
 	}
-	s.tpmMu.Lock()
+	s.TPMMu.Lock()
 	q, err := s.be.Quote(qd, sel)
-	s.tpmMu.Unlock()
+	s.TPMMu.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -228,57 +228,57 @@ func (s *gateService) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteRe
 	key := hex.EncodeToString(sum[:])
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.issued[key]; !ok {
+	if _, ok := s.Issued[key]; !ok {
 		s.issuedOrder = append(s.issuedOrder, key)
 		if len(s.issuedOrder) > maxIssuedQuotes {
-			delete(s.issued, s.issuedOrder[0])
+			delete(s.Issued, s.issuedOrder[0])
 			s.issuedOrder = s.issuedOrder[1:]
 		}
 	}
-	s.issued[key] = append([]byte(nil), qd...)
+	s.Issued[key] = append([]byte(nil), qd...)
 	return q, nil
 }
 
 // ProveBootKey implements attest.AttesterBackend. The code the challenge
 // carries goes to the code screen through Status; the radio side gets the
 // proof and never the code.
-func (s *gateService) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest []byte) (*attest.BootAnswer, uint8) {
-	<-s.ready
-	if s.code != 0 || ch == nil {
+func (s *GateService) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest []byte) (*attest.BootAnswer, uint8) {
+	<-s.Ready
+	if s.Code != 0 || ch == nil {
 		return nil, attest.BootKeyFailed
 	}
-	s.tpmMu.Lock()
+	s.TPMMu.Lock()
 	answer, state := s.be.ProveBootKey(ch, context, quoteDigest)
-	code := s.be.bootCode
-	s.tpmMu.Unlock()
+	code := s.be.BootCode
+	s.TPMMu.Unlock()
 	s.mu.Lock()
-	s.status.Code = attest.FormatBootCode(code)
+	s.Current.Code = attest.FormatBootCode(code)
 	if state != attest.BootKeyProved {
-		s.status.Code = ""
+		s.Current.Code = ""
 	}
 	s.mu.Unlock()
 	return answer, state
 }
 
 // BootContext implements attest.AttesterBackend.
-func (s *gateService) BootContext() attest.BootContext {
-	<-s.ready
-	if s.code != 0 {
+func (s *GateService) BootContext() attest.BootContext {
+	<-s.Ready
+	if s.Code != 0 {
 		return attest.BootContext{}
 	}
-	s.tpmMu.Lock()
-	defer s.tpmMu.Unlock()
+	s.TPMMu.Lock()
+	defer s.TPMMu.Unlock()
 	return s.be.BootContext()
 }
 
 // Eventlog implements attest.AttesterBackend.
-func (s *gateService) Eventlog() ([]byte, error) {
-	<-s.ready
-	if s.code != 0 {
+func (s *GateService) Eventlog() ([]byte, error) {
+	<-s.Ready
+	if s.Code != 0 {
 		return nil, errGateNotServing
 	}
-	s.tpmMu.Lock()
-	defer s.tpmMu.Unlock()
+	s.TPMMu.Lock()
+	defer s.TPMMu.Unlock()
 	return s.be.Eventlog()
 }
 
@@ -287,14 +287,14 @@ func (s *gateService) Eventlog() ([]byte, error) {
 // phone's signature. What the radio side believes about its session plays
 // no part.
 // Keep sets the factor the next evidence asks the phone to keep.
-func (s *gateService) Keep(f *attest.FactorBlob) {
+func (s *GateService) Keep(f *attest.FactorBlob) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.keep = f
 }
 
 // FactorToKeep implements attest.FactorBackend.
-func (s *gateService) FactorToKeep() *attest.FactorBlob {
+func (s *GateService) FactorToKeep() *attest.FactorBlob {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.keep
@@ -309,9 +309,9 @@ func (s *gateService) FactorToKeep() *attest.FactorBlob {
 // the slot is locked until the next boot, so nothing is opened: the phone
 // must give back exactly what it was asked to keep, which says it kept it.
 // That this TPM opens it is the next boot's proof.
-func (s *gateService) TakeRelease(r *attest.Release) (uint8, string) {
-	<-s.ready
-	if s.code != 0 || s.blob == nil || s.be == nil || s.be.sealed == nil {
+func (s *GateService) TakeRelease(r *attest.Release) (uint8, string) {
+	<-s.Ready
+	if s.Code != 0 || s.Blob == nil || s.be == nil || s.be.Sealed == nil {
 		return attest.ReleaseUnsupported, "this machine has no slot to open a phone salt with"
 	}
 	if r == nil || r.Kind != attest.ReleaseKindFactor {
@@ -331,14 +331,14 @@ func (s *gateService) TakeRelease(r *attest.Release) (uint8, string) {
 	}
 	defer func() {
 		s.mu.Lock()
-		s.status.Releasing = false // taken, one way or the other
+		s.Current.Releasing = false // taken, one way or the other
 		s.mu.Unlock()
 	}()
-	s.tpmMu.Lock()
-	f, err := unwrapFactor(s.tpm, s.be.sealed, s.be.sealIndex, s.blob, &nvslot.WrappedFactor{Credential: r.CredentialBlob, EncryptedSecret: r.EncryptedSecret})
-	s.tpmMu.Unlock()
+	s.TPMMu.Lock()
+	f, err := UnwrapFactor(s.TPM, s.be.Sealed, s.be.SealIndex, s.Blob, &nvslot.WrappedFactor{Credential: r.CredentialBlob, EncryptedSecret: r.EncryptedSecret})
+	s.TPMMu.Unlock()
 	if err != nil {
-		if errors.Is(err, errNoReleaseKey) {
+		if errors.Is(err, ErrNoReleaseKey) {
 			return attest.ReleaseUnsupported, err.Error()
 		}
 		return attest.ReleaseTPMRefused, "the TPM did not open the phone salt: " + err.Error()
@@ -348,14 +348,14 @@ func (s *gateService) TakeRelease(r *attest.Release) (uint8, string) {
 	s.mu.Lock()
 	wipe.Bytes(s.salt)
 	s.salt = salt
-	s.status.SaltTaken = true
+	s.Current.SaltTaken = true
 	s.mu.Unlock()
 	return attest.ReleaseOK, "the TPM opened the salt; the disk's key is derived from it and the password typed at the machine"
 }
 
 // Salt returns a copy of the combiner's salt from the released factor,
 // or nil when no factor was released in this boot.
-func (s *gateService) Salt() []byte {
+func (s *GateService) Salt() []byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.salt == nil {
@@ -366,37 +366,37 @@ func (s *gateService) Salt() []byte {
 
 // Returned says whether the phone gave back, at enrolment, what it was
 // asked to keep.
-func (s *gateService) Returned() bool {
+func (s *GateService) Returned() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.returned
 }
 
 // Forget wipes the salt; called when the key provider is done with it.
-func (s *gateService) Forget() {
+func (s *GateService) Forget() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	wipe.Bytes(s.salt)
 	s.salt = nil
 }
 
-func (s *gateService) JudgeReceipt(r *attest.Receipt, verifierID string) attest.ReceiptCheck {
-	<-s.ready
-	if s.code != 0 || r == nil {
+func (s *GateService) JudgeReceipt(r *attest.Receipt, verifierID string) attest.ReceiptCheck {
+	<-s.Ready
+	if s.Code != 0 || r == nil {
 		return attest.ReceiptCheck{Ack: attest.AckMalformed, Detail: "no slot is being served"}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var verifier *attest.EnrolledVerifier
-	for i := range s.blob.Phone.Verifiers {
-		if s.blob.Phone.Verifiers[i].ID == verifierID {
-			verifier = &s.blob.Phone.Verifiers[i]
+	for i := range s.Blob.Phone.Verifiers {
+		if s.Blob.Phone.Verifiers[i].ID == verifierID {
+			verifier = &s.Blob.Phone.Verifiers[i]
 		}
 	}
 	if verifier == nil {
 		return attest.ReceiptCheck{Verdict: r.Verdict, Ack: attest.AckBindingMismatch, Detail: "receipt from a phone that is not enrolled"}
 	}
-	qd, ok := s.issued[hex.EncodeToString(r.QuoteDigest)]
+	qd, ok := s.Issued[hex.EncodeToString(r.QuoteDigest)]
 	if !ok {
 		return attest.ReceiptCheck{Verdict: r.Verdict, Ack: attest.AckBindingMismatch, Detail: "receipt is not bound to a quote of this boot"}
 	}
@@ -405,18 +405,18 @@ func (s *gateService) JudgeReceipt(r *attest.Receipt, verifierID string) attest.
 		anchor = nil
 	}
 	check := attest.CheckReceipt(r, anchor, attest.ReceiptExpectation{
-		DeviceID:    s.blob.DeviceID,
-		AKName:      s.blob.AKName,
+		DeviceID:    s.Blob.DeviceID,
+		AKName:      s.Blob.AKName,
 		QD:          qd,
 		QuoteDigest: r.QuoteDigest,
 		VerifierID:  verifier.ID,
 	})
 	if state := receiptState(check); state != "" {
-		s.status.State = state
-		s.status.Code = "" // the session it belonged to is answered
-		if state == GateAttested && s.expectRelease && len(s.blob.ReleaseKeyPublic) > 0 {
-			s.status.Releasing = true
-			s.releaseSince = time.Now()
+		s.Current.State = state
+		s.Current.Code = "" // the session it belonged to is answered
+		if state == GateAttested && s.ExpectingRelease && len(s.Blob.ReleaseKeyPublic) > 0 {
+			s.Current.Releasing = true
+			s.ReleaseSince = time.Now()
 		}
 	}
 	return check
@@ -424,17 +424,17 @@ func (s *gateService) JudgeReceipt(r *attest.Receipt, verifierID string) attest.
 
 // ExpectRelease says that the disk's key needs the phone's phone salt:
 // an attested boot waits for the Release that follows the receipt.
-func (s *gateService) ExpectRelease(expect bool) {
+func (s *GateService) ExpectRelease(expect bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.expectRelease = expect
+	s.ExpectingRelease = expect
 }
 
 // Report implements gateHost. A verdict, once given, stays.
-func (s *gateService) Report(state GateState) {
+func (s *GateService) Report(state GateState) {
 	if state == GateSessionOver {
 		s.mu.Lock()
-		s.status.Releasing = false // nothing more comes from that session
+		s.Current.Releasing = false // nothing more comes from that session
 		s.mu.Unlock()
 		return
 	}
@@ -443,24 +443,24 @@ func (s *gateService) Report(state GateState) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.status.Verdict() || s.status.State == GateRefused {
+	if s.Current.Verdict() || s.Current.State == GateRefused {
 		return
 	}
 	if state != GateSession {
-		s.status.Code = "" // no session, no code to compare
+		s.Current.Code = "" // no session, no code to compare
 	}
-	s.status.State = state
+	s.Current.State = state
 }
 
 // Status is the gate's state for the code screen, and for whatever else
 // acts on the outcome. False until there is something to say.
-func (s *gateService) Status() (GateStatus, bool) {
+func (s *GateService) Status() (GateStatus, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.status.Releasing && time.Since(s.releaseSince) > releaseWait {
-		s.status.Releasing = false // the bound: the boot never hangs on it
+	if s.Current.Releasing && time.Since(s.ReleaseSince) > releaseWait {
+		s.Current.Releasing = false // the bound: the boot never hangs on it
 	}
-	return s.status, s.status.State != ""
+	return s.Current, s.Current.State != ""
 }
 
 // receiptState is what a checked receipt means for the slot: the same

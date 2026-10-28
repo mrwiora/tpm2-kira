@@ -46,6 +46,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
@@ -125,10 +126,10 @@ type bootDisplay struct {
 	now    func() time.Time
 
 	// The Bluetooth gate, when one runs next to the display; nil otherwise.
-	phone      func() (GateStatus, bool)  // its state for the slot it serves
-	phoneEvent func(prev, cur GateStatus) // tells the user about a change
-	phonePoll  time.Duration              // how often the state is looked at
-	phoneGrace time.Duration              // how far a session in progress may extend the hold
+	phone      func() (phonegate.GateStatus, bool)  // its state for the slot it serves
+	phoneEvent func(prev, cur phonegate.GateStatus) // tells the user about a change
+	phonePoll  time.Duration                        // how often the state is looked at
+	phoneGrace time.Duration                        // how far a session in progress may extend the hold
 
 	hold          time.Duration // how long to wait for Enter
 	scanRetry     time.Duration // between attempts while nothing can be shown
@@ -163,13 +164,13 @@ var errCodesOut = errors.New("the boot image shows no codes")
 func (b *bootDisplay) holdForConfirmation() ([]totp.NVRAMSlot, bool, error) {
 	deadline := b.now().Add(b.hold)
 	var slots []totp.NVRAMSlot
-	var gate GateStatus
+	var gate phonegate.GateStatus
 	allUp := false
 	// A phone that is in the middle of its session when the hold ends gets
 	// to finish: releasing the boot under it would change the registers
 	// between its question and its answer.
 	limit := func() time.Time {
-		if gate.State == GateSession {
+		if gate.State == phonegate.GateSession {
 			return deadline.Add(b.phoneGrace)
 		}
 		return deadline
@@ -229,7 +230,7 @@ func (b *bootDisplay) holdForConfirmation() ([]totp.NVRAMSlot, bool, error) {
 
 // waitFor waits until the given time, and reports Enter. While it waits it
 // follows the gate: a change of its state is announced and ends the wait.
-func (b *bootDisplay) waitFor(until time.Time, gate *GateStatus) bool {
+func (b *bootDisplay) waitFor(until time.Time, gate *phonegate.GateStatus) bool {
 	for {
 		if cur, ok := gateStatus(b.phone); ok && cur != *gate {
 			prev := *gate
@@ -417,7 +418,7 @@ func releaseTerminal(fd int) {
 // carries a gate for an enrolled phone - the hook puts the signing public
 // key at signerPath with the gate and not otherwise: it opens the TPM for
 // it and listens on socket. Nil when there is nothing to coordinate.
-func startCoordinator(tpmPath, socket, signerPath string, debug bool) (*gateService, func()) {
+func startCoordinator(tpmPath, socket, signerPath string, debug bool) (*phonegate.GateService, func()) {
 	svc, server := openCoordinator(tpmPath, socket, signerPath, debug)
 	if svc == nil {
 		return nil, func() {}
@@ -433,7 +434,7 @@ func startCoordinator(tpmPath, socket, signerPath string, debug bool) (*gateServ
 	}
 }
 
-func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*gateService, *gateServer) {
+func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*phonegate.GateService, *phonegate.GateServer) {
 	if socket == "" {
 		return nil, nil
 	}
@@ -449,14 +450,14 @@ func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*gateServi
 	if s, err := ReadBootSettings(tpmDev); err == nil && s.Debug {
 		debug, narrateDebug = true, true // the boot settings' debug: the narrative on the console too
 	}
-	l, err := listenGate(socket)
+	l, err := phonegate.ListenGate(socket)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: %v\n", err)
 		tpmDev.Close()
 		return nil, nil
 	}
-	svc := newGateService(tpmDev, 0, "", debug)
-	return svc, serveGate(l, svc)
+	svc := phonegate.NewGateService(tpmDev, 0, "", debug)
+	return svc, phonegate.ServeGate(l, svc)
 }
 
 // RunCommand implements the run command (the display at boot). With
@@ -468,9 +469,9 @@ func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*gateServi
 // planned is what the boot image carries (bootplan.go): what is not in it
 // is not started, and the TPM is not touched for it.
 func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, remote RemoteOptions, planned Planned, debug bool) {
-	svc, endCoordinator := (*gateService)(nil), func() {}
+	svc, endCoordinator := (*phonegate.GateService)(nil), func() {}
 	if planned.Phone {
-		svc, endCoordinator = startCoordinator(tpmPath, gateSocket, DefaultAttestSignerPath, debug)
+		svc, endCoordinator = startCoordinator(tpmPath, gateSocket, phonegate.DefaultAttestSignerPath, debug)
 	}
 	var srv *remoteServer
 	ask := prompter(consoleAsk)
@@ -550,7 +551,7 @@ func RunCommand(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocke
 	if srv != nil {
 		hint = startHintPrinter(srv)
 	}
-	var phone func() (GateStatus, bool)
+	var phone func() (phonegate.GateStatus, bool)
 	if svc != nil {
 		phone = svc.Status
 	}
@@ -719,7 +720,7 @@ func waitForStop() {
 // phoneCodes puts each phone slot's line into codes: a slot with phones
 // has no TOTP code, and its line says how far the phone's check has got.
 // The slot the gate serves follows the gate; any other phone slot waits.
-func phoneCodes(codes map[int]string, slots []totp.NVRAMSlot, st GateStatus, ok bool) map[int]string {
+func phoneCodes(codes map[int]string, slots []totp.NVRAMSlot, st phonegate.GateStatus, ok bool) map[int]string {
 	out := make(map[int]string, len(codes))
 	for k, v := range codes {
 		out[k] = v
@@ -743,26 +744,26 @@ const phoneLineLocked = "mobile attestation locked - please connect"
 // phoneLine is the line of the slot the gate serves, by the gate's state.
 // Which phone answered is not said: the person knows their phone, and the
 // screen is no place to tell anyone else (docs/SECURITY-BACKGROUND.md §3.1).
-func phoneLine(st GateStatus) string {
+func phoneLine(st phonegate.GateStatus) string {
 	switch st.State {
-	case GateSession:
+	case phonegate.GateSession:
 		if st.Code != "" {
 			return "mobile attestation - phone code " + st.Code + " (the phone must show the same)"
 		}
 		return "mobile attestation - phone connected, answer there"
-	case GateAttested:
+	case phonegate.GateAttested:
 		return "\033[0;32mmobile attestation passed\033[0m"
-	case GateRejected, GateRefused:
+	case phonegate.GateRejected, phonegate.GateRefused:
 		return "\033[0;31mmobile attestation FAILED\033[0m"
-	case GateUnavailable:
+	case phonegate.GateUnavailable:
 		return "mobile attestation unavailable (no Bluetooth adapter) - the passphrase by hand"
 	}
 	return phoneLineLocked
 }
 
-func gateStatus(phone func() (GateStatus, bool)) (GateStatus, bool) {
+func gateStatus(phone func() (phonegate.GateStatus, bool)) (phonegate.GateStatus, bool) {
 	if phone == nil {
-		return GateStatus{}, false
+		return phonegate.GateStatus{}, false
 	}
 	return phone()
 }
@@ -845,11 +846,11 @@ func nextPrompt(mode string) string {
 // of state means for them, in the routed volume's words (resolved lazily:
 // the header may not be readable when the screen starts). The verdict
 // itself is the gate's to print.
-func gateEventPrinter(modeOf func() string) func(prev, cur GateStatus) {
-	return func(prev, cur GateStatus) {
+func gateEventPrinter(modeOf func() string) func(prev, cur phonegate.GateStatus) {
+	return func(prev, cur phonegate.GateStatus) {
 		mode := modeOf()
 		switch cur.State {
-		case GateWaiting:
+		case phonegate.GateWaiting:
 			if prev.State == "" {
 				if mode == LuksModePasswordPhoneSalt {
 					fmt.Printf("%s Slot #%d: open Marify on your phone to attest this boot and return the disk's salt.\n", kiraTag(tagYellow), cur.Slot)
@@ -857,13 +858,13 @@ func gateEventPrinter(modeOf func() string) func(prev, cur GateStatus) {
 					fmt.Printf("%s Slot #%d: open Marify on your phone to attest this boot.\n", kiraTag(tagYellow), cur.Slot)
 				}
 			}
-		case GateSession:
+		case phonegate.GateSession:
 			// The phone code goes into the slot's own line (phoneCodes);
 			// here only the fact that a phone is in.
-			if prev.State != GateSession {
+			if prev.State != phonegate.GateSession {
 				fmt.Printf("%s A phone is connected: answer there. The boot waits for it.\n", kiraTag(tagYellow))
 			}
-		case GateAttested:
+		case phonegate.GateAttested:
 			switch {
 			case cur.Releasing:
 				fmt.Printf("%s \033[0;32mSlot #%d attested by your phone.\033[0m Waiting for the salt from the phone ...\n", kiraTag(tagYellow), cur.Slot)
@@ -871,10 +872,10 @@ func gateEventPrinter(modeOf func() string) func(prev, cur GateStatus) {
 				fmt.Printf("%s \033[0;32mThe phone returned the salt.\033[0m Continuing to %s.\n", kiraTag(tagYellow), nextPrompt(mode))
 			case prev.Releasing:
 				fmt.Printf("%s \033[0;33mNo salt came from the phone.\033[0m Continuing to the password and salt prompt (a typed salt; Ctrl-C there: cryptsetup's own prompt).\n", kiraTag(tagYellow))
-			case prev.State != GateAttested:
+			case prev.State != phonegate.GateAttested:
 				fmt.Printf("%s \033[0;32mSlot #%d attested by your phone.\033[0m Continuing to %s.\n", kiraTag(tagYellow), cur.Slot, nextPrompt(mode))
 			}
-		case GateRejected, GateRefused:
+		case phonegate.GateRejected, phonegate.GateRefused:
 			fmt.Printf("%s \033[0;31mSlot #%d was NOT attested by the phone (see above).\033[0m Do not type your password unless you know why.\n", kiraTag(tagYellow), cur.Slot)
 		}
 	}

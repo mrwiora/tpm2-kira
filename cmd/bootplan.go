@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 
@@ -161,7 +162,7 @@ func readPlanInputs(o PlanOptions) planInputs {
 		in.TPMErr = err.Error()
 	} else {
 		for _, idx := range nvslot.FindPopulatedSlots(tpmDev, o.Debug) {
-			_, sb, err := readSlot(tpmDev, idx)
+			_, sb, err := phonegate.ReadSlot(tpmDev, idx)
 			if err != nil {
 				continue
 			}
@@ -182,13 +183,13 @@ func readPlanInputs(o PlanOptions) planInputs {
 		switch {
 		case in.Phones > 0:
 			var why bytes.Buffer
-			pem, code := signerForImage(tpmDev, "", &why, o.Debug)
+			pem, code := phonegate.SignerForImage(tpmDev, "", &why, o.Debug)
 			if code != 0 {
 				in.SignerErr = strings.Join(strings.Fields(strings.ReplaceAll(why.String(), "tpm2-kira: ", "")), " ")
 			}
 			in.Signer = pem
 		case cfg.Attest.Bluetooth == "always":
-			if pub, path, err := attestPublicKey(""); err != nil {
+			if pub, path, err := phonegate.AttestPublicKey(""); err != nil {
 				in.SignerErr = fmt.Sprintf("no signing public key at %s (tpm2-kira setup)", path)
 			} else if in.Signer, err = signing.PublicKeyToPEM(pub); err != nil {
 				in.SignerErr = err.Error()
@@ -448,7 +449,7 @@ func (p *BootPlan) WriteImage(buildroot, format string, out io.Writer) error {
 		}
 		// The signing key's public half, which the gate checks the
 		// enrolment with: in the image alone, never on the running system.
-		if err := writeImageFile(buildroot, DefaultAttestSignerPath, in.Signer, 0o644); err != nil {
+		if err := writeImageFile(buildroot, phonegate.DefaultAttestSignerPath, in.Signer, 0o644); err != nil {
 			return err
 		}
 		// The adapter's USB bus lets no new device in by itself: the rule

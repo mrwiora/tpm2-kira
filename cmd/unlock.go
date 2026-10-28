@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 
 	"golang.org/x/sys/unix"
@@ -214,7 +215,7 @@ func listenUnlock(path string) (net.Listener, error) {
 	if path == "" {
 		return nil, nil
 	}
-	return listenGate(path)
+	return phonegate.ListenGate(path)
 }
 
 // listenFromSystemd returns the first socket systemd handed over, if this

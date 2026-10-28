@@ -1,4 +1,4 @@
-package cmd
+package phonegate
 
 import (
 	"bytes"
@@ -94,8 +94,8 @@ func CreateAK(tpmDev transport.TPM) (pub, priv, name []byte, err error) {
 }
 
 type loadedKey struct {
-	handle tpm2.TPMHandle
-	name   tpm2.TPM2BName
+	Handle tpm2.TPMHandle
+	Name   tpm2.TPM2BName
 }
 
 // loadAK loads the AK from the blob under a freshly derived storage primary.
@@ -122,12 +122,12 @@ func loadAK(tpmDev transport.TPM, b *nvslot.Attestation) (*loadedKey, error) {
 		tpmdev.FlushHandle(tpmDev, rsp.ObjectHandle)
 		return nil, fmt.Errorf("loaded attestation key does not match the stored Name")
 	}
-	return &loadedKey{handle: rsp.ObjectHandle, name: rsp.Name}, nil
+	return &loadedKey{Handle: rsp.ObjectHandle, Name: rsp.Name}, nil
 }
 
-// createEK creates the endorsement key from the TCG template for alg.
+// CreateEK creates the endorsement key from the TCG template for alg.
 // The caller must flush the returned handle.
-func createEK(tpmDev transport.TPM, alg uint16) (*loadedKey, []byte, error) {
+func CreateEK(tpmDev transport.TPM, alg uint16) (*loadedKey, []byte, error) {
 	tmpl := attest.EKTemplateECC
 	if alg == uint16(tpm2.TPMAlgRSA) {
 		tmpl = attest.EKTemplateRSA
@@ -144,39 +144,39 @@ func createEK(tpmDev transport.TPM, alg uint16) (*loadedKey, []byte, error) {
 		tpmdev.FlushHandle(tpmDev, rsp.ObjectHandle)
 		return nil, nil, err
 	}
-	return &loadedKey{handle: rsp.ObjectHandle, name: rsp.Name}, tpm2.Marshal(*pub), nil
+	return &loadedKey{Handle: rsp.ObjectHandle, Name: rsp.Name}, tpm2.Marshal(*pub), nil
 }
 
 // pickEK creates the ECC EK if the TPM supports it, otherwise the RSA EK.
 func pickEK(tpmDev transport.TPM) (uint16, *loadedKey, []byte, error) {
-	if k, pub, err := createEK(tpmDev, uint16(tpm2.TPMAlgECC)); err == nil {
+	if k, pub, err := CreateEK(tpmDev, uint16(tpm2.TPMAlgECC)); err == nil {
 		return uint16(tpm2.TPMAlgECC), k, pub, nil
 	}
-	k, pub, err := createEK(tpmDev, uint16(tpm2.TPMAlgRSA))
+	k, pub, err := CreateEK(tpmDev, uint16(tpm2.TPMAlgRSA))
 	if err != nil {
 		return 0, nil, nil, err
 	}
 	return uint16(tpm2.TPMAlgRSA), k, pub, nil
 }
 
-// pickCertifiedEK prefers the EK whose algorithm has a vendor certificate,
+// PickCertifiedEK prefers the EK whose algorithm has a vendor certificate,
 // so the phone can verify it: Intel PTT, for one, often certifies only the
 // RSA EK. Without any certificate it falls back to pickEK.
-func pickCertifiedEK(tpmDev transport.TPM) (uint16, *loadedKey, []byte, error) {
+func PickCertifiedEK(tpmDev transport.TPM) (uint16, *loadedKey, []byte, error) {
 	for _, alg := range []uint16{uint16(tpm2.TPMAlgECC), uint16(tpm2.TPMAlgRSA)} {
-		if len(readEKCert(tpmDev, alg)) == 0 {
+		if len(ReadEKCert(tpmDev, alg)) == 0 {
 			continue
 		}
-		if k, pub, err := createEK(tpmDev, alg); err == nil {
+		if k, pub, err := CreateEK(tpmDev, alg); err == nil {
 			return alg, k, pub, nil
 		}
 	}
 	return pickEK(tpmDev)
 }
 
-// readEKCertChain reads the TPM's intermediates for the EK certificate (Intel
+// ReadEKCertChain reads the TPM's intermediates for the EK certificate (Intel
 // PTT keeps them concatenated in EKCertChainNVIndex); nil when absent.
-func readEKCertChain(tpmDev transport.TPM, leaf []byte) []byte {
+func ReadEKCertChain(tpmDev transport.TPM, leaf []byte) []byte {
 	data, err := tpmdev.ReadFromNVRAM(tpmDev, attest.EKCertChainNVIndex)
 	if err != nil || len(data) > attest.MaxEKCertChain {
 		data = nil
@@ -185,56 +185,56 @@ func readEKCertChain(tpmDev transport.TPM, leaf []byte) []byte {
 	// this product family - from the caIssuers URL, cached: the phone has
 	// no network, the machine sends what it found. Trust comes from the
 	// embedded root alone (attest.CompleteEKChain).
-	return attest.CompleteEKChain(leaf, data, fetchEKIssuer)
+	return attest.CompleteEKChain(leaf, data, FetchEKIssuer)
 }
 
-// ekIssuerCacheDir keeps the issuers fetched for the EK chain; a var for
+// EKIssuerCacheDir keeps the issuers fetched for the EK chain; a var for
 // the tests. Anything in it is an untrusted intermediate like the TPM's.
-var ekIssuerCacheDir = "/var/cache/tpm2-kira/ek-issuers"
+var EKIssuerCacheDir = "/var/cache/tpm2-kira/ek-issuers"
 
-// ekFetchFailed remembers, for this process, the URLs that failed: an
+// EKFetchFailed remembers, for this process, the URLs that failed: an
 // offline machine pays the timeout once per run, not per overview.
-var ekFetchFailed sync.Map
+var EKFetchFailed sync.Map
 
-// fetchEKIssuer fetches a certificate from a caIssuers URL: the cache
+// FetchEKIssuer fetches a certificate from a caIssuers URL: the cache
 // first, then the network (http or https, 5 s, 64 KiB at most).
-var fetchEKIssuer = func(url string) ([]byte, error) {
+var FetchEKIssuer = func(url string) ([]byte, error) {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return nil, fmt.Errorf("not an http URL: %q", url)
 	}
 	sum := sha256.Sum256([]byte(url))
-	cached := filepath.Join(ekIssuerCacheDir, hex.EncodeToString(sum[:])+".der")
+	cached := filepath.Join(EKIssuerCacheDir, hex.EncodeToString(sum[:])+".der")
 	if b, err := os.ReadFile(cached); err == nil {
 		return b, nil
 	}
-	if _, failed := ekFetchFailed.Load(url); failed {
+	if _, failed := EKFetchFailed.Load(url); failed {
 		return nil, errors.New("fetched before, and it failed")
 	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		ekFetchFailed.Store(url, true)
+		EKFetchFailed.Store(url, true)
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		ekFetchFailed.Store(url, true)
+		EKFetchFailed.Store(url, true)
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err != nil {
-		ekFetchFailed.Store(url, true)
+		EKFetchFailed.Store(url, true)
 		return nil, err
 	}
-	if os.MkdirAll(ekIssuerCacheDir, 0o755) == nil {
+	if os.MkdirAll(EKIssuerCacheDir, 0o755) == nil {
 		_ = os.WriteFile(cached, b, 0o644) // a cache: losing it costs a fetch
 	}
 	return b, nil
 }
 
-// readEKCert reads the vendor EK certificate, if the TPM has one. Firmware
+// ReadEKCert reads the vendor EK certificate, if the TPM has one. Firmware
 // TPMs frequently do not; that is reported, never required.
-func readEKCert(tpmDev transport.TPM, alg uint16) []byte {
+func ReadEKCert(tpmDev transport.TPM, alg uint16) []byte {
 	idx := uint32(ekCertNVECC)
 	if alg == uint16(tpm2.TPMAlgRSA) {
 		idx = ekCertNVRSA
@@ -252,10 +252,10 @@ func readEKCert(tpmDev transport.TPM, alg uint16) []byte {
 	return data
 }
 
-// endorsementPolicy satisfies the TCG EK's authPolicy:
+// EndorsementPolicy satisfies the TCG EK's authPolicy:
 // TPM2_PolicySecret(TPM_RH_ENDORSEMENT) with an empty endorsement auth.
 // Using the EK with a plain password session fails with TPM_RC_AUTH_UNAVAILABLE.
-func endorsementPolicy() tpm2.Session {
+func EndorsementPolicy() tpm2.Session {
 	return tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm transport.TPM, handle tpm2.TPMISHPolicy, nonce tpm2.TPM2BNonce) error {
 		_, err := tpm2.PolicySecret{
 			AuthHandle:    tpm2.AuthHandle{Handle: tpm2.TPMRHEndorsement, Auth: tpm2.PasswordAuth(nil)},
@@ -266,9 +266,9 @@ func endorsementPolicy() tpm2.Session {
 	})
 }
 
-// readPCRBank reads PCRs in chunks of at most 8 (the most a TPM returns per
+// ReadPCRBank reads PCRs in chunks of at most 8 (the most a TPM returns per
 // PCR_Read) and checks the TPM returned exactly what was asked for.
-func readPCRBank(tpmDev transport.TPM, sel attest.PCRSelection) ([]attest.PCRValue, error) {
+func ReadPCRBank(tpmDev transport.TPM, sel attest.PCRSelection) ([]attest.PCRValue, error) {
 	var out []attest.PCRValue
 	for i := 0; i < len(sel.Indices); i += 8 {
 		end := i + 8
@@ -290,44 +290,44 @@ func readPCRBank(tpmDev transport.TPM, sel attest.PCRSelection) ([]attest.PCRVal
 	return out, nil
 }
 
-// tpmBackend implements attest.EnrolBackend on a real TPM.
-type tpmBackend struct {
-	tpm       transport.TPM
-	blob      *nvslot.Attestation
-	sealIndex uint32
-	sealed    *nvslot.SealedBlob // may be nil
-	debug     bool
-	bootCode  string // the code of the last boot challenge the TPM opened
+// TPMBackend implements attest.EnrolBackend on a real TPM.
+type TPMBackend struct {
+	TPM       transport.TPM
+	Blob      *nvslot.Attestation
+	SealIndex uint32
+	Sealed    *nvslot.SealedBlob // may be nil
+	Debug     bool
+	BootCode  string // the code of the last boot challenge the TPM opened
 
 	// enrolment only
-	mp         *measurePoint // the baseline prediction, computed once
-	confirmSAS func(code string) (bool, error)
-	commit     func(v attest.EnrolledVerifier) error
-	phoneJudge attest.PhoneAttestationJudge // nil: no check of the phone's key
-	ekAlg      uint16
-	evlog      []byte
-	evlogRead  bool
-	initrd     *initrdCoverage // read once from the event log
+	Baseline     *measurePoint // the baseline prediction, computed once
+	OnConfirmSAS func(code string) (bool, error)
+	OnCommit     func(v attest.EnrolledVerifier) error
+	PhoneJudge   attest.PhoneAttestationJudge // nil: no check of the phone's key
+	EKAlgorithm  uint16
+	EventlogData []byte
+	EventlogRead bool
+	initrd       *initrdCoverage // read once from the event log
 }
 
 // Quote implements attest.AttesterBackend.
-func (b *tpmBackend) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteResult, error) {
-	ak, err := loadAK(b.tpm, b.blob)
+func (b *TPMBackend) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteResult, error) {
+	ak, err := loadAK(b.TPM, b.Blob)
 	if err != nil {
 		return nil, err
 	}
-	defer tpmdev.FlushHandle(b.tpm, ak.handle)
+	defer tpmdev.FlushHandle(b.TPM, ak.Handle)
 
 	// PCRs are read after the quote. If one is extended in between, the
 	// values no longer reproduce the quoted digest: retry rather than send
 	// evidence the verifier would reject.
 	for attempt := 0; attempt < 3; attempt++ {
 		rsp, err := tpm2.Quote{
-			SignHandle:     tpm2.AuthHandle{Handle: ak.handle, Name: ak.name, Auth: tpm2.PasswordAuth(nil)},
+			SignHandle:     tpm2.AuthHandle{Handle: ak.Handle, Name: ak.Name, Auth: tpm2.PasswordAuth(nil)},
 			QualifyingData: tpm2.TPM2BData{Buffer: qd},
 			InScheme:       tpm2.TPMTSigScheme{Scheme: tpm2.TPMAlgNull},
 			PCRSelect:      sel.ToTPM(),
-		}.Execute(b.tpm)
+		}.Execute(b.TPM)
 		if err != nil {
 			return nil, fmt.Errorf("TPM2_Quote failed: %w", err)
 		}
@@ -340,12 +340,12 @@ func (b *tpmBackend) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteRes
 		if err != nil {
 			return nil, err
 		}
-		vals, err := readPCRBank(b.tpm, sel)
+		vals, err := ReadPCRBank(b.TPM, sel)
 		if err != nil {
 			return nil, err
 		}
 		if !bytes.Equal(attest.CompositeDigest(sel, vals), info.PCRDigest.Buffer) {
-			if b.debug {
+			if b.Debug {
 				fmt.Println("PCRs changed between quote and read; quoting again")
 			}
 			continue
@@ -356,14 +356,14 @@ func (b *tpmBackend) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteRes
 }
 
 // BootContext implements attest.AttesterBackend.
-func (b *tpmBackend) BootContext() attest.BootContext {
-	bc := attest.BootContext{BlobVersion: nvslot.CurrentBlobVersion, NVRAMIndex: b.sealIndex, UptimeMS: uptimeMS()}
-	if b.sealed != nil {
-		bc.BlobVersion = b.sealed.Version
+func (b *TPMBackend) BootContext() attest.BootContext {
+	bc := attest.BootContext{BlobVersion: nvslot.CurrentBlobVersion, NVRAMIndex: b.SealIndex, UptimeMS: uptimeMS()}
+	if b.Sealed != nil {
+		bc.BlobVersion = b.Sealed.Version
 	}
-	if b.sealed != nil {
-		bc.MeasurePoint = b.sealed.MeasurePointExtends()
-		for _, i := range b.sealed.GetPCRIndices() {
+	if b.Sealed != nil {
+		bc.MeasurePoint = b.Sealed.MeasurePointExtends()
+		for _, i := range b.Sealed.GetPCRIndices() {
 			if i >= 0 && i < attest.MaxPCRIndex {
 				bc.SealPCRSelection = append(bc.SealPCRSelection, uint8(i))
 			}
@@ -413,52 +413,52 @@ func uptimeMS() uint64 {
 
 // Eventlog implements attest.AttesterBackend. The log is only ever read from
 // DefaultEventlogPath, never from a path supplied by a blob or a peer.
-func (b *tpmBackend) Eventlog() ([]byte, error) {
-	if !b.evlogRead {
-		b.evlogRead = true
+func (b *TPMBackend) Eventlog() ([]byte, error) {
+	if !b.EventlogRead {
+		b.EventlogRead = true
 		data, err := os.ReadFile(measure.DefaultEventlogPath)
 		if err == nil && len(data) <= attest.MaxEventlogSize {
-			b.evlog = data
+			b.EventlogData = data
 		}
 	}
-	return b.evlog, nil
+	return b.EventlogData, nil
 }
 
 // EKPublic implements attest.EnrolBackend.
-func (b *tpmBackend) EKPublic() ([]byte, []byte, error) {
-	alg, ek, pub, err := pickCertifiedEK(b.tpm)
+func (b *TPMBackend) EKPublic() ([]byte, []byte, error) {
+	alg, ek, pub, err := PickCertifiedEK(b.TPM)
 	if err != nil {
 		return nil, nil, err
 	}
-	tpmdev.FlushHandle(b.tpm, ek.handle)
-	b.ekAlg = alg
-	b.blob.EKAlg = alg
-	return pub, readEKCert(b.tpm, alg), nil
+	tpmdev.FlushHandle(b.TPM, ek.Handle)
+	b.EKAlgorithm = alg
+	b.Blob.EKAlg = alg
+	return pub, ReadEKCert(b.TPM, alg), nil
 }
 
 // EKCertChain implements attest.EKChainProvider.
-func (b *tpmBackend) EKCertChain() []byte {
-	return readEKCertChain(b.tpm, readEKCert(b.tpm, b.ekAlg))
+func (b *TPMBackend) EKCertChain() []byte {
+	return ReadEKCertChain(b.TPM, ReadEKCert(b.TPM, b.EKAlgorithm))
 }
 
 // ActivateCredential implements attest.EnrolBackend.
-func (b *tpmBackend) ActivateCredential(blob, encSecret []byte) ([]byte, error) {
-	ak, err := loadAK(b.tpm, b.blob)
+func (b *TPMBackend) ActivateCredential(blob, encSecret []byte) ([]byte, error) {
+	ak, err := loadAK(b.TPM, b.Blob)
 	if err != nil {
 		return nil, err
 	}
-	defer tpmdev.FlushHandle(b.tpm, ak.handle)
-	ek, _, err := createEK(b.tpm, b.ekAlg)
+	defer tpmdev.FlushHandle(b.TPM, ak.Handle)
+	ek, _, err := CreateEK(b.TPM, b.EKAlgorithm)
 	if err != nil {
 		return nil, err
 	}
-	defer tpmdev.FlushHandle(b.tpm, ek.handle)
+	defer tpmdev.FlushHandle(b.TPM, ek.Handle)
 	rsp, err := tpm2.ActivateCredential{
-		ActivateHandle: tpm2.AuthHandle{Handle: ak.handle, Name: ak.name, Auth: tpm2.PasswordAuth(nil)},
-		KeyHandle:      tpm2.AuthHandle{Handle: ek.handle, Name: ek.name, Auth: endorsementPolicy()},
+		ActivateHandle: tpm2.AuthHandle{Handle: ak.Handle, Name: ak.Name, Auth: tpm2.PasswordAuth(nil)},
+		KeyHandle:      tpm2.AuthHandle{Handle: ek.Handle, Name: ek.Name, Auth: EndorsementPolicy()},
 		CredentialBlob: tpm2.TPM2BIDObject{Buffer: blob},
 		Secret:         tpm2.TPM2BEncryptedSecret{Buffer: encSecret},
-	}.Execute(b.tpm)
+	}.Execute(b.TPM)
 	if err != nil {
 		return nil, fmt.Errorf("TPM2_ActivateCredential failed: %w", err)
 	}
@@ -466,71 +466,71 @@ func (b *tpmBackend) ActivateCredential(blob, encSecret []byte) ([]byte, error) 
 }
 
 // ConfirmSAS implements attest.EnrolBackend.
-func (b *tpmBackend) ConfirmSAS(code string) (bool, error) { return b.confirmSAS(code) }
+func (b *TPMBackend) ConfirmSAS(code string) (bool, error) { return b.OnConfirmSAS(code) }
 
 // JudgePhone implements attest.PhoneAttestationJudge.
-func (b *tpmBackend) JudgePhone(a attest.PhoneAttestation) (bool, error) {
-	if b.phoneJudge == nil {
+func (b *TPMBackend) JudgePhone(a attest.PhoneAttestation) (bool, error) {
+	if b.PhoneJudge == nil {
 		return true, nil
 	}
-	return b.phoneJudge.JudgePhone(a)
+	return b.PhoneJudge.JudgePhone(a)
 }
 
 // BootKey implements attest.EnrolBackend: the slot's boot key, made at the
 // first enrolment under the policy of the slot's TOTP key, and certified by
 // the attestation key.
-func (b *tpmBackend) BootKey(qd []byte) (*attest.BootKeyOffer, error) {
-	if b.sealed == nil {
+func (b *TPMBackend) BootKey(qd []byte) (*attest.BootKeyOffer, error) {
+	if b.Sealed == nil {
 		return nil, errors.New("the slot has no sealed TOTP key whose policy the boot key could share")
 	}
-	if len(b.blob.BootKeyPublic) == 0 {
-		pub, priv, err := createBootKey(b.tpm, b.sealed)
+	if len(b.Blob.BootKeyPublic) == 0 {
+		pub, priv, err := CreateBootKey(b.TPM, b.Sealed)
 		if err != nil {
 			return nil, err
 		}
-		b.blob.BootKeyPublic, b.blob.BootKeyPrivate = pub, priv
+		b.Blob.BootKeyPublic, b.Blob.BootKeyPrivate = pub, priv
 	}
-	info, sig, err := certifyBootKey(b.tpm, b.blob, qd)
+	info, sig, err := certifyBootKey(b.TPM, b.Blob, qd)
 	if err != nil {
 		return nil, err
 	}
 	return &attest.BootKeyOffer{
-		PubArea: b.blob.BootKeyPublic, CertifyInfo: info, CertifySig: sig,
-		SigningPub: b.sealed.Payload.SigningPublic, PolicyRef: b.sealed.Payload.PolicyRef,
+		PubArea: b.Blob.BootKeyPublic, CertifyInfo: info, CertifySig: sig,
+		SigningPub: b.Sealed.Payload.SigningPublic, PolicyRef: b.Sealed.Payload.PolicyRef,
 	}, nil
 }
 
 // ProveBootKey implements attest.AttesterBackend. The code is kept for
 // whoever shows it to the person at the machine (BootCode).
-func (b *tpmBackend) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest []byte) (*attest.BootAnswer, uint8) {
-	b.bootCode = ""
-	code, proof, err := openBootChallenge(b.tpm, b.sealed, b.sealIndex, b.blob, ch, context)
+func (b *TPMBackend) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest []byte) (*attest.BootAnswer, uint8) {
+	b.BootCode = ""
+	code, proof, err := OpenBootChallenge(b.TPM, b.Sealed, b.SealIndex, b.Blob, ch, context)
 	var sig []byte
 	if err == nil {
 		d := sha256.Sum256(attest.BootSignatureMessage(context, quoteDigest))
-		sig, err = signWithBootKey(b.tpm, b.sealed, b.sealIndex, b.blob, d[:])
+		sig, err = SignWithBootKey(b.TPM, b.Sealed, b.SealIndex, b.Blob, d[:])
 	}
 	switch {
 	case errors.Is(err, nvslot.ErrCodesLocked):
 		// The booted system: 'cap' locked the slot until the next boot.
-		if b.debug {
+		if b.Debug {
 			fmt.Printf("tpm2-kira: boot key: %v\n", err)
 		}
 		return nil, attest.BootKeyLocked
-	case errors.Is(err, errBootKeyRefused):
-		if b.debug {
+	case errors.Is(err, ErrBootKeyRefused):
+		if b.Debug {
 			fmt.Printf("tpm2-kira: boot key: %v\n", err)
 		}
 		return nil, attest.BootKeyRefused
 	case err != nil:
-		if b.debug {
+		if b.Debug {
 			fmt.Printf("tpm2-kira: boot key: %v\n", err)
 		}
 		return nil, attest.BootKeyFailed
 	}
-	b.bootCode = code
+	b.BootCode = code
 	return &attest.BootAnswer{Proof: proof, Signature: sig}, attest.BootKeyProved
 }
 
 // Commit implements attest.EnrolBackend.
-func (b *tpmBackend) Commit(v attest.EnrolledVerifier) error { return b.commit(v) }
+func (b *TPMBackend) Commit(v attest.EnrolledVerifier) error { return b.OnCommit(v) }

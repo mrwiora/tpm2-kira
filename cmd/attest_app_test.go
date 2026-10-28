@@ -42,6 +42,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/transport/frame"
 )
 
@@ -133,30 +134,30 @@ func newAppMachine(t *testing.T) *appMachine {
 
 // newBackend builds the machine's TPM backend over the current connection.
 func (m *appMachine) newBackend() {
-	be := &tpmBackend{
-		tpm:       m.s.tpm,
-		blob:      m.s.blob,
-		sealIndex: m.idx,
-		sealed:    readSealedSlot(m.s.tpm, m.idx),
-		evlogRead: true,
-		evlog:     m.evlog,
+	be := &phonegate.TPMBackend{
+		TPM:          m.s.tpm,
+		Blob:         m.s.blob,
+		SealIndex:    m.idx,
+		Sealed:       phonegate.ReadSealedSlot(m.s.tpm, m.idx),
+		EventlogRead: true,
+		EventlogData: m.evlog,
 	}
 	// The console's "y": the machine user always confirms; the app test
 	// compares the code it showed with this one.
-	be.confirmSAS = func(code string) (bool, error) {
+	be.OnConfirmSAS = func(code string) (bool, error) {
 		m.mu.Lock()
 		m.sas = code
 		m.mu.Unlock()
 		return true, nil
 	}
 	tpm := m.s.tpm
-	be.commit = func(v attest.EnrolledVerifier) error {
+	be.OnCommit = func(v attest.EnrolledVerifier) error {
 		if err := m.s.blob.UpsertVerifier(v); err != nil {
 			return err
 		}
 		return writeAttestBlob(tpm, m.idx, m.s.blob, m.signer)
 	}
-	be.phoneJudge = phoneRecorder{m}
+	be.PhoneJudge = phoneRecorder{m}
 	m.s.be = be
 }
 
@@ -379,7 +380,7 @@ func (m *appMachine) serve(c net.Conn, mode string, mtu int) {
 			}
 			return "enrolled"
 		}
-		stored, err := loadAttestBlob(tpm, m.idx)
+		stored, err := phonegate.LoadAttestBlob(tpm, m.idx)
 		if err != nil {
 			return "error: not enrolled: " + err.Error()
 		}
