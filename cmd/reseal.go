@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 
 	"github.com/tpm2-trust/assh/hostkey"
@@ -131,17 +132,17 @@ func resealSSHCA(controlPath, tpmPath, privKeyPath string) error {
 		return nil
 	}
 	if privKeyPath == "" {
-		privKeyPath = DefaultPrivateKeyPath
+		privKeyPath = signing.DefaultPrivateKeyPath
 	}
-	signer, err := LoadCheckedSigningPrivateKey(privKeyPath)
+	signer, err := signing.LoadCheckedSigningPrivateKey(privKeyPath)
 	if err != nil {
 		return fmt.Errorf("SSH CA: %w", err)
 	}
 	if !samePublicKey(st.CA.AuthorityKey(), signer.Public()) {
 		return fmt.Errorf("SSH CA: its authority is another key than %s: control creates the CA again", privKeyPath)
 	}
-	if err := PrepareSigningKey(signer); err != nil {
-		var cause *TokenUnavailableError
+	if err := signing.PrepareSigningKey(signer); err != nil {
+		var cause *signing.TokenUnavailableError
 		if errors.As(err, &cause) {
 			fmt.Printf("tpm2-kira: SKIPPED: the SSH CA is not approved for the next boot - the signing key was not available.\n  Reason: %s\n  The next boot serves a temporary host key unless slot 1 still fits; run 'sudo tpm2-kira slot approve' with the key at hand.\n", cause.Reason)
 			return fmt.Errorf("%w: the SSH CA", ErrResealSkipped)
@@ -178,7 +179,7 @@ var ErrResealSkipped = errors.New("approval skipped")
 type ResealSkippedError struct {
 	NVIndex    uint32
 	KeyFile    string
-	Cause      *TokenUnavailableError
+	Cause      *signing.TokenUnavailableError
 	SealedPCRs []measure.PCRSpec
 }
 
@@ -192,7 +193,7 @@ func (e *ResealSkippedError) Unwrap() []error { return []error{ErrResealSkipped,
 // signing key was unavailable and the NVRAM index was not touched. A failure
 // after the index was replaced is never a skip, whatever caused it.
 func asResealSkipped(err error, nvIndex uint32, keyFile string, blob *SealedBlob) error {
-	var cause *TokenUnavailableError
+	var cause *signing.TokenUnavailableError
 	if err == nil || errors.Is(err, ErrNVIndexReplaced) || errors.Is(err, ErrGenerationRaised) || !errors.As(err, &cause) {
 		return err
 	}
@@ -217,7 +218,7 @@ func PrintResealSkipped(w io.Writer, skipped []*ResealSkippedError) {
 	fmt.Fprintln(w, "                 update — the next boot reports a PCR MISMATCH and shows no")
 	fmt.Fprintln(w, "                 TOTP code. That is expected here; it is not evidence of tampering.")
 	fmt.Fprintln(w, "  To fix:        plug in the YubiKey and run, with the PIN typed when asked")
-	fmt.Fprintf(w, "                 or set in %s:\n", PINEnvVar)
+	fmt.Fprintf(w, "                 or set in %s:\n", signing.PINEnvVar)
 	fmt.Fprintln(w, "                     sudo tpm2-kira slot approve")
 }
 
@@ -289,7 +290,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	// ── Make sure the key can sign before anything is changed ──
 	// For a key on a token this finds an absent token or a missing PIN now,
 	// while the slot is untouched, and reports a skip rather than a failure.
-	if err := PrepareSigningKey(signer); err != nil {
+	if err := signing.PrepareSigningKey(signer); err != nil {
 		if skip := asResealSkipped(err, nvramIndex, keys.privKeyPath, sealedBlob); skip != err {
 			return skip
 		}
@@ -313,7 +314,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	printResealSources(specsToUse)
 
 	pub := signer.Public()
-	fmt.Printf("Signing key: %s (%s, fingerprint: %s)\n", keys.privKeyPath, PublicKeyDescription(pub), PublicKeyFingerprint(pub))
+	fmt.Printf("Signing key: %s (%s, fingerprint: %s)\n", keys.privKeyPath, signing.PublicKeyDescription(pub), signing.PublicKeyFingerprint(pub))
 
 	if err := approveAndWrite(tpmDev, nvramIndex, sealedBlob, specsToUse, hashAlgo, false, signer, debug); err != nil {
 		return asResealSkipped(fmt.Errorf("failed to approve: %w", err), nvramIndex, keys.privKeyPath, sealedBlob)
@@ -329,7 +330,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 // checkObjectSigningKey fails unless pub is the key the blob's key object
 // accepts approvals from.
 func checkObjectSigningKey(blob *SealedBlob, pub crypto.PublicKey) error {
-	want, _, err := PublicKeyToTPM2BPublic(pub)
+	want, _, err := signing.PublicKeyToTPM2BPublic(pub)
 	if err != nil {
 		return err
 	}
@@ -366,7 +367,7 @@ type resealKeys struct {
 func resolveResealKeys(sealedData []byte, sealedBlob *SealedBlob, privKeyPath, pubKeyPath string, debug bool) (*resealKeys, error) {
 	keys := &resealKeys{privKeyPath: privKeyPath}
 	if keys.privKeyPath == "" {
-		keys.privKeyPath = DefaultPrivateKeyPath
+		keys.privKeyPath = signing.DefaultPrivateKeyPath
 	}
 	if _, err := os.Lstat(keys.privKeyPath); errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("cannot approve: no signing private key at %s.\n"+
@@ -378,7 +379,7 @@ func resolveResealKeys(sealedData []byte, sealedBlob *SealedBlob, privKeyPath, p
 	// Loaded from a checked file (mode 0400, trusted owner and directory,
 	// no symlink). A key that fails to load is an error, not a reason to
 	// skip the signature check.
-	signer, err := LoadCheckedSigningPrivateKey(keys.privKeyPath)
+	signer, err := signing.LoadCheckedSigningPrivateKey(keys.privKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("cannot approve: %w", err)
 	}
@@ -389,11 +390,11 @@ func resolveResealKeys(sealedData []byte, sealedBlob *SealedBlob, privKeyPath, p
 	// with the private key, so a mismatch would only surface once the TPM
 	// refuses the write, after the old index was undefined.
 	if pubKeyPath != "" {
-		pub, err := LoadCheckedSigningPublicKey(pubKeyPath)
+		pub, err := signing.LoadCheckedSigningPublicKey(pubKeyPath)
 		if err != nil {
 			return nil, fmt.Errorf("cannot approve: %w", err)
 		}
-		if err := verifyKeyPairMatch(pub, signer); err != nil {
+		if err := signing.VerifyKeyPairMatch(pub, signer); err != nil {
 			return nil, fmt.Errorf("cannot approve: %s and %s are not a key pair: %w", pubKeyPath, keys.privKeyPath, err)
 		}
 		keys.pubKey = pub

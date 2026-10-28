@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/signing"
+
 	"github.com/google/go-tpm/tpm2"
 )
 
@@ -29,14 +31,14 @@ func writeTestKeyPair(t *testing.T, dir string) (*ecdsa.PrivateKey, string, stri
 	}
 	priv := filepath.Join(dir, "seal.key")
 	pub := filepath.Join(dir, "seal.pub")
-	if err := WriteSigningKeyFile(priv, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})); err != nil {
+	if err := signing.WriteSigningKeyFile(priv, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})); err != nil {
 		t.Fatal(err)
 	}
-	pubPEM, err := PublicKeyToPEM(&key.PublicKey)
+	pubPEM, err := signing.PublicKeyToPEM(&key.PublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteSigningKeyFile(pub, pubPEM); err != nil {
+	if err := signing.WriteSigningKeyFile(pub, pubPEM); err != nil {
 		t.Fatal(err)
 	}
 	return key, priv, pub
@@ -98,7 +100,7 @@ func TestResolveResealKeysAcceptsOwnBlob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveResealKeys() error = %v", err)
 	}
-	if keys.privKeyPath != priv || keys.pubKey == nil || !publicKeysEqual(keys.signer.Public(), &key.PublicKey) {
+	if keys.privKeyPath != priv || keys.pubKey == nil || !signing.PublicKeysEqual(keys.signer.Public(), &key.PublicKey) {
 		t.Errorf("unexpected keys: %+v", keys)
 	}
 }

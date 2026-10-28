@@ -16,6 +16,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"golang.org/x/sys/unix"
 )
 
@@ -159,16 +160,16 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	}
 	f.PCRs, f.PCRsWhy = DefaultPCRSelection("", algo)
 
-	if _, err := os.Stat(DefaultPrivateKeyPath); err == nil {
-		f.Keys = "local key files in " + DefaultKeysDir
-		if k, err := LoadCheckedSigningPrivateKey(DefaultPrivateKeyPath); err == nil {
-			if desc, ok := YubiKeyDescription(k); ok {
+	if _, err := os.Stat(signing.DefaultPrivateKeyPath); err == nil {
+		f.Keys = "local key files in " + signing.DefaultKeysDir
+		if k, err := signing.LoadCheckedSigningPrivateKey(signing.DefaultPrivateKeyPath); err == nil {
+			if desc, ok := signing.YubiKeyDescription(k); ok {
 				f.Keys = desc
-				f.YubiKey = yubiKeyWantsPIN(k)
+				f.YubiKey = signing.YubiKeyWantsPIN(k)
 			}
 		}
 	}
-	if stored, loose := pinStored(pinFilePath()); stored {
+	if stored, loose := signing.PINStored(signing.PINPath()); stored {
 		f.PINStored, f.PINLoose = !loose, loose
 	}
 	f.SecureBoot = measure.ReadSecureBootState()
@@ -243,7 +244,7 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 		f.SSHCA = readSSHCA(f.Plan.in.Config.Remote.SSH.Assh, tpmPath)
 	}
 	if f.SSHCA.CA != nil {
-		if pub, err := LoadCheckedSigningPublicKey(DefaultPublicKeyPath); err == nil {
+		if pub, err := signing.LoadCheckedSigningPublicKey(signing.DefaultPublicKeyPath); err == nil {
 			f.SSHCAOtherKey = !samePublicKey(f.SSHCA.CA.AuthorityKey(), pub)
 		}
 	}
@@ -772,7 +773,7 @@ func (c *controller) factsText() string {
 	}
 	switch {
 	case f.PINLoose: // a disclosed PIN is a risk whatever key the files describe
-		fmt.Fprintf(&w, "  Key         %s\n", bad(fmt.Sprintf("%s (risk: %s holds the PIN, but other users can read it, or root does not own it - chown root:, chmod 600, consider a new PIN)", keyDesc, pinFilePath())))
+		fmt.Fprintf(&w, "  Key         %s\n", bad(fmt.Sprintf("%s (risk: %s holds the PIN, but other users can read it, or root does not own it - chown root:, chmod 600, consider a new PIN)", keyDesc, signing.PINPath())))
 	case f.Keys == "":
 		fmt.Fprintf(&w, "  Key         %s\n", keyDesc)
 	default:
@@ -1025,14 +1026,14 @@ func rebuildCommand(initramfs string) string {
 
 func (c *controller) runSetup() error {
 	if c.facts.Keys != "" {
-		k, err := LoadCheckedSigningPrivateKey(DefaultPrivateKeyPath)
+		k, err := signing.LoadCheckedSigningPrivateKey(signing.DefaultPrivateKeyPath)
 		if err != nil {
 			return err
 		}
-		if _, ok := YubiKeyDescription(k); !ok {
+		if _, ok := signing.YubiKeyDescription(k); !ok {
 			// setup never replaces a signing key: a new one leaves every
 			// slot and the SSH CA to another key's approvals.
-			fmt.Fprintf(c.out, "The signing key is %s: nothing to set again. A new signing key: move %s away, then run this step - every slot is sealed again then, and the SSH CA made again.\n", c.facts.Keys, DefaultKeysDir)
+			fmt.Fprintf(c.out, "The signing key is %s: nothing to set again. A new signing key: move %s away, then run this step - every slot is sealed again then, and the SSH CA made again.\n", c.facts.Keys, signing.DefaultKeysDir)
 			return nil
 		}
 	}
@@ -1040,11 +1041,11 @@ func (c *controller) runSetup() error {
 		if err := Setup(SetupOptions{Debug: c.o.Debug}); err != nil {
 			return err
 		}
-		k, err := LoadCheckedSigningPrivateKey(DefaultPrivateKeyPath)
+		k, err := signing.LoadCheckedSigningPrivateKey(signing.DefaultPrivateKeyPath)
 		if err != nil {
 			return err
 		}
-		if _, ok := YubiKeyDescription(k); !ok || !yubiKeyWantsPIN(k) {
+		if _, ok := signing.YubiKeyDescription(k); !ok || !signing.YubiKeyWantsPIN(k) {
 			return nil
 		}
 	}
@@ -1054,14 +1055,14 @@ func (c *controller) runSetup() error {
 // storePIN asks the YubiKey's PIN, checks it on the token and stores it
 // in control.conf for the unattended reseal.
 func (c *controller) storePIN() error {
-	key, err := LoadCheckedSigningPrivateKey(DefaultPrivateKeyPath)
+	key, err := signing.LoadCheckedSigningPrivateKey(signing.DefaultPrivateKeyPath)
 	if err != nil {
 		return err
 	}
-	desc, _ := YubiKeyDescription(key)
+	desc, _ := signing.YubiKeyDescription(key)
 	pin := ""
 	err = c.form(huh.NewInput().Title("PIN of " + desc).
-		Description("Checked on the token, then stored in " + pinFilePath() + " for the approval the hooks run; readable by root alone, never in the initramfs.").
+		Description("Checked on the token, then stored in " + signing.PINPath() + " for the approval the hooks run; readable by root alone, never in the initramfs.").
 		EchoMode(huh.EchoModePassword).Value(&pin).
 		Validate(func(s string) error {
 			if s == "" {
@@ -1072,13 +1073,13 @@ func (c *controller) storePIN() error {
 	if err != nil {
 		return err
 	}
-	if err := VerifyYubiKeyPIN(key, pin); err != nil {
+	if err := signing.VerifyYubiKeyPIN(key, pin); err != nil {
 		return err
 	}
-	if err := storePIN(pinFilePath(), pin); err != nil {
+	if err := signing.StorePIN(signing.PINPath(), pin); err != nil {
 		return err
 	}
-	fmt.Fprintf(c.out, "%s: the PIN stored, readable by root alone\n", pinFilePath())
+	fmt.Fprintf(c.out, "%s: the PIN stored, readable by root alone\n", signing.PINPath())
 	return nil
 }
 
@@ -1518,11 +1519,11 @@ func (c *controller) runBootDebug() error {
 	if err != nil || !ok {
 		return errors.New("not switched")
 	}
-	signer, err := LoadCheckedSigningPrivateKey(DefaultPrivateKeyPath)
+	signer, err := signing.LoadCheckedSigningPrivateKey(signing.DefaultPrivateKeyPath)
 	if err != nil {
 		return err
 	}
-	if err := PrepareSigningKey(signer); err != nil {
+	if err := signing.PrepareSigningKey(signer); err != nil {
 		return err
 	}
 	tpmDev, err := OpenTPM(c.o.TPMPath)

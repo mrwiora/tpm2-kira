@@ -12,6 +12,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 )
 
@@ -209,9 +210,9 @@ type blobVerifier struct {
 func newBlobVerifier(privKeyPath string) *blobVerifier {
 	v := &blobVerifier{keyPath: privKeyPath}
 	if v.keyPath == "" {
-		v.keyPath = DefaultPrivateKeyPath
+		v.keyPath = signing.DefaultPrivateKeyPath
 	}
-	v.key, v.loadErr = LoadCheckedSigningPrivateKey(v.keyPath)
+	v.key, v.loadErr = signing.LoadCheckedSigningPrivateKey(v.keyPath)
 	return v
 }
 
@@ -371,8 +372,8 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 func printSigningKeyInfo(sub string, blob *SealedBlob, v blobVerification) {
 	if v.Verified {
 		pubKey := v.Key.Public()
-		fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey))
-		if desc, ok := YubiKeyDescription(v.Key); ok {
+		fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), signing.PublicKeyDescription(pubKey), signing.PublicKeyFingerprint(pubKey))
+		if desc, ok := signing.YubiKeyDescription(v.Key); ok {
 			fmt.Printf("%s%sSigning Key Location: %s\n", sub, branch(false), desc)
 		}
 	} else {
@@ -384,7 +385,7 @@ func printSigningKeyInfo(sub string, blob *SealedBlob, v blobVerification) {
 
 // keyFileStatus reports whether seal and reseal would accept a key file.
 func keyFileStatus(path string) string {
-	if err := CheckSigningKeyFile(path); err != nil {
+	if err := signing.CheckSigningKeyFile(path); err != nil {
 		return "WARNING: " + strings.ReplaceAll(err.Error(), "\n", " ")
 	}
 	return "ok (mode 0400, trusted owner and directory)"

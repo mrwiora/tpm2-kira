@@ -35,6 +35,7 @@ import (
 	"golang.org/x/crypto/hkdf"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
@@ -565,13 +566,13 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	}
 	privKeyPath := o.PrivKeyPath
 	if privKeyPath == "" {
-		privKeyPath = DefaultPrivateKeyPath
+		privKeyPath = signing.DefaultPrivateKeyPath
 	}
-	priv, err := LoadCheckedSigningPrivateKey(privKeyPath)
+	priv, err := signing.LoadCheckedSigningPrivateKey(privKeyPath)
 	if err != nil {
 		return nil, 0, fmt.Errorf("the vault method is written into the slot's blob with the signing key only: %w", err)
 	}
-	if err := PrepareSigningKey(priv); err != nil {
+	if err := signing.PrepareSigningKey(priv); err != nil {
 		return nil, 0, fmt.Errorf("the signing key is not usable: %w", err)
 	}
 
@@ -809,13 +810,13 @@ func VaultUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug bo
 		return fmt.Errorf("slot %d is not enrolled with a vault", slot)
 	}
 	if privKeyPath == "" {
-		privKeyPath = DefaultPrivateKeyPath
+		privKeyPath = signing.DefaultPrivateKeyPath
 	}
-	priv, err := LoadCheckedSigningPrivateKey(privKeyPath)
+	priv, err := signing.LoadCheckedSigningPrivateKey(privKeyPath)
 	if err != nil {
 		return fmt.Errorf("removing the vault method rewrites the slot's blob and needs the signing key: %w", err)
 	}
-	if err := PrepareSigningKey(priv); err != nil {
+	if err := signing.PrepareSigningKey(priv); err != nil {
 		return fmt.Errorf("the signing key is not usable: %w", err)
 	}
 	id, url := att.DeviceID, att.Vault.URL

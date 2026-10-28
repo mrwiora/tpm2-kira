@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 // The help in two layers: 'tpm2-kira help' is one screen - the commands
@@ -271,7 +272,7 @@ slot: the one named (else 0), the PCRs named (else the selection).
   --measure-point M  systemd's enter-initrd extend of PCR 11, which happens
                      before tpm2-kira runs: auto (default), on, off
   --pubkey PATH      The signing key's public half, PEM, X.509 or raw, RSA or
-                     ECDSA (default: ` + cmd.DefaultPublicKeyPath + `)
+                     ECDSA (default: ` + signing.DefaultPublicKeyPath + `)
   --privkey PATH     The private half (default: the key from setup)
   --sha1             The SHA-1 PCR bank: only for a TPM whose event log has
                      no SHA-256 digests
@@ -290,7 +291,7 @@ the PCRs to match and never reads the TOTP key. Without --nvram it also
 approves the SSH CA (` + cmd.DefaultSSHCA + `) for the next boot, in each of
 its slots (assh.conf's) that has no approval. The initramfs hooks run it
 after every image rebuild; a slot sealed with the key on a YubiKey needs
-the token and its PIN (` + cmd.PINEnvVar + `, or /etc/tpm2-kira/pin, which
+the token and its PIN (` + signing.PINEnvVar + `, or /etc/tpm2-kira/pin, which
 control stores, root-only; else asked).
 
   --pcrs LIST        A new selection (default: the slot's, with its sources)

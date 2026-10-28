@@ -15,6 +15,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 // testSigningPublic is a well-formed signing key public area, so that the
@@ -24,7 +25,7 @@ var testSigningPublic = func() []byte {
 	if err != nil {
 		panic(err)
 	}
-	pub, _, err := PublicKeyToTPM2BPublic(&k.PublicKey)
+	pub, _, err := signing.PublicKeyToTPM2BPublic(&k.PublicKey)
 	if err != nil {
 		panic(err)
 	}

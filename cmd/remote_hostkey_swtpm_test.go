@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/tpm2-trust/assh/hostkey"
@@ -73,7 +74,7 @@ func TestSSHCAApprovedForTheCodeScreen(t *testing.T) {
 	}
 	path := conf.CA
 	_, keyPath := writeTestKeyPair(t)
-	signer, err := LoadCheckedSigningPrivateKey(keyPath)
+	signer, err := signing.LoadCheckedSigningPrivateKey(keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}

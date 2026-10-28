@@ -25,6 +25,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
 
@@ -128,11 +129,11 @@ func signingKeyFiles(t *testing.T) (privPath, pubPath string) {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	der, _ := x509.MarshalECPrivateKey(key)
 	privPath, pubPath = filepath.Join(dir, "seal.key"), filepath.Join(dir, "seal.pub")
-	if err := WriteSigningKeyFile(privPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})); err != nil {
+	if err := signing.WriteSigningKeyFile(privPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})); err != nil {
 		t.Fatal(err)
 	}
-	pubPEM, _ := PublicKeyToPEM(&key.PublicKey)
-	if err := WriteSigningKeyFile(pubPath, pubPEM); err != nil {
+	pubPEM, _ := signing.PublicKeyToPEM(&key.PublicKey)
+	if err := signing.WriteSigningKeyFile(pubPath, pubPEM); err != nil {
 		t.Fatal(err)
 	}
 	return privPath, pubPath

@@ -19,6 +19,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 // writeTestKeyPair writes a P-256 signing key the way setup does (SEC 1 PEM,
@@ -153,7 +154,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	plain := sealedSize()
 
 	// Enrol: the phone goes into the slot's blob.
-	priv, err := LoadCheckedSigningPrivateKey(privPath)
+	priv, err := signing.LoadCheckedSigningPrivateKey(privPath)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/piv"
 	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 func testBlob() *SealedBlob {
@@ -20,7 +21,7 @@ func testBlob() *SealedBlob {
 }
 
 func TestAsResealSkipped(t *testing.T) {
-	cause := &TokenUnavailableError{Token: "YubiKey 1, slot 9a", Reason: "no YubiKey with serial 1 is present"}
+	cause := &signing.TokenUnavailableError{Token: "YubiKey 1, slot 9a", Reason: "no YubiKey with serial 1 is present"}
 	blob := testBlob()
 
 	// Token missing before anything was written: a skip.
@@ -50,7 +51,7 @@ func TestAsResealSkipped(t *testing.T) {
 func stashUnwrittenBlobMarker(err error) error { return &nvReplacedError{err: err} }
 
 func TestPrintResealSkipped(t *testing.T) {
-	cause := &TokenUnavailableError{Token: "YubiKey 12345678, slot 9a", Reason: "no YubiKey with serial 12345678 is present"}
+	cause := &signing.TokenUnavailableError{Token: "YubiKey 12345678, slot 9a", Reason: "no YubiKey with serial 12345678 is present"}
 	var buf bytes.Buffer
 	PrintResealSkipped(&buf, []*ResealSkippedError{
 		{NVIndex: 0x01803010, KeyFile: "/etc/tpm2-kira/keys/seal.key", Cause: cause, SealedPCRs: testBlob().GetPCRSpecs()},
@@ -62,7 +63,7 @@ func TestPrintResealSkipped(t *testing.T) {
 		t.Errorf("block does not start with the hook marker:\n%s", out)
 	}
 	for _, want := range []string{"(YubiKey 12345678, slot 9a)", "no YubiKey with serial 12345678 is present",
-		"#0, #1", "nothing was written", "PCR MISMATCH", "sudo tpm2-kira slot approve", PINEnvVar} {
+		"#0, #1", "nothing was written", "PCR MISMATCH", "sudo tpm2-kira slot approve", signing.PINEnvVar} {
 		if !strings.Contains(out, want) {
 			t.Errorf("block lacks %q", want)
 		}
@@ -75,37 +76,37 @@ func TestPrepareSigningKey(t *testing.T) {
 	fake := &fakeTokens{cards: []*pivtest.Card{card}}
 	fake.install(t)
 	path := writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication))
-	signer, _ := LoadSigningPrivateKey(path)
+	signer, _ := signing.LoadSigningPrivateKey(path)
 
 	// Software keys are always ready.
 	software, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := PrepareSigningKey(software); err != nil {
+	if err := signing.PrepareSigningKey(software); err != nil {
 		t.Fatal(err)
 	}
 
 	// No PIN: unavailable, and no attempt spent.
-	os.Unsetenv(PINEnvVar)
-	if err := PrepareSigningKey(signer); !errors.Is(err, ErrTokenUnavailable) || card.Retries != 3 {
+	os.Unsetenv(signing.PINEnvVar)
+	if err := signing.PrepareSigningKey(signer); !errors.Is(err, signing.ErrTokenUnavailable) || card.Retries != 3 {
 		t.Fatalf("no PIN: %v, retries %d", err, card.Retries)
 	}
-	CloseTokenSessions()
+	signing.CloseTokenSessions()
 	fake.install(t)
 
 	// Token unplugged: unavailable, with the reason the SKIPPED block shows.
 	fake.cards = nil
-	err = PrepareSigningKey(signer)
-	var tu *TokenUnavailableError
+	err = signing.PrepareSigningKey(signer)
+	var tu *signing.TokenUnavailableError
 	if !errors.As(err, &tu) || !strings.Contains(tu.Reason, "no YubiKey with serial 1") {
 		t.Fatalf("unplugged: %v", err)
 	}
 
 	// Present with the PIN: verified up front, then signing needs no new PIN.
 	fake.cards = []*pivtest.Card{card}
-	t.Setenv(PINEnvVar, "123456")
-	if err := PrepareSigningKey(signer); err != nil {
+	t.Setenv(signing.PINEnvVar, "123456")
+	if err := signing.PrepareSigningKey(signer); err != nil {
 		t.Fatal(err)
 	}
 	if !card.Sent(0x20) {

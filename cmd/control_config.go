@@ -4,11 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 // /etc/tpm2-kira/control.conf is tpm2-kira's configuration file (aSSH's,
@@ -175,8 +176,8 @@ func parseControlLine(cfg *ControlConfig, n int, line string) error {
 		default:
 			return fmt.Errorf("control.conf line %d: TPM2_KIRA_ATTEST_BLUETOOTH must be auto or always, not %q", n, val)
 		}
-	case PINEnvVar:
-		return fmt.Errorf("control.conf line %d: the YubiKey's PIN has a file of its own, %s: remove the line, then store the PIN again with tpm2-kira control (Signing key and TOTP codes)", n, pinFilePath())
+	case signing.PINEnvVar:
+		return fmt.Errorf("control.conf line %d: the YubiKey's PIN has a file of its own, %s: remove the line, then store the PIN again with tpm2-kira control (Signing key and TOTP codes)", n, signing.PINPath())
 	case "TPM2_KIRA_ATTEST":
 		return fmt.Errorf("control.conf line %d: there is no attestation mode to set; the phone is served whenever one is enrolled. Remove the line", n)
 	case "TPM2_KIRA_ATTEST_ADAPTER":
@@ -235,67 +236,6 @@ func setAttestBluetooth(path, value string) error {
 	return setControlValue(path, "TPM2_KIRA_ATTEST_BLUETOOTH", value)
 }
 
-// pinFilePath is the YubiKey's PIN, next to control.conf: the PIN alone,
-// root's and readable by root alone. It is no setting of the image, so it
-// has a file of its own: control.conf holds what the image is built with,
-// and only that.
-func pinFilePath() string {
-	return filepath.Join(filepath.Dir(controlConfigPath()), "pin")
-}
-
-// storePIN writes the PIN, readable by root alone.
-func storePIN(path, pin string) error {
-	if strings.ContainsAny(pin, "\n") {
-		return fmt.Errorf("the PIN cannot hold a newline")
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	if err := f.Chmod(0o600); err != nil {
-		f.Close()
-		return err
-	}
-	if _, err := f.WriteString(pin + "\n"); err != nil {
-		f.Close()
-		return err
-	}
-	return f.Close()
-}
-
 // The PIN's value goes to the signer, to sign with the key, and nowhere
 // else; everything else asks pinStored, which says only whether it is
 // there.
-
-// storedPIN is the PIN the file at path stores: "" when there is none;
-// loose when the file is not root's, or group or others may read it - such
-// a PIN is refused, it has to be treated as already disclosed. For the
-// signer only (pinFromFile).
-func storedPIN(path string) (pin string, loose bool) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", false
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil || !st.Mode().IsRegular() {
-		return "", false
-	}
-	data, err := io.ReadAll(io.LimitReader(f, 1<<10))
-	if err != nil {
-		return "", false
-	}
-	pin = strings.TrimRight(string(data), "\r\n")
-	if pin == "" {
-		return "", false
-	}
-	uid, owned := ownerOf(st)
-	return pin, st.Mode().Perm()&0o077 != 0 || !owned || !trustedOwner(uid)
-}
-
-// pinStored says whether the file at path stores a PIN, and whether it is
-// loose (readable by others): the PIN's value stays out of it.
-func pinStored(path string) (stored, loose bool) {
-	pin, loose := storedPIN(path)
-	return pin != "", loose
-}

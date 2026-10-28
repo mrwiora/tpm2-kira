@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mrwiora/tpm2-kira/internal/signing"
+
 	"github.com/tpm2-trust/assh/config"
 )
 
@@ -186,7 +188,7 @@ func readPlanInputs(o PlanOptions) planInputs {
 		case cfg.Attest.Bluetooth == "always":
 			if pub, path, err := attestPublicKey(""); err != nil {
 				in.SignerErr = fmt.Sprintf("no signing public key at %s (tpm2-kira setup)", path)
-			} else if in.Signer, err = PublicKeyToPEM(pub); err != nil {
+			} else if in.Signer, err = signing.PublicKeyToPEM(pub); err != nil {
 				in.SignerErr = err.Error()
 			}
 		}

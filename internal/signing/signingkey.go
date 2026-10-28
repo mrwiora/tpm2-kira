@@ -1,4 +1,4 @@
-package cmd
+package signing
 
 import (
 	"crypto"
@@ -36,7 +36,7 @@ func LoadSigningPublicKeyFromPEM(pemPath string) (crypto.PublicKey, []byte, erro
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read public key file %s: %w", pemPath, err)
 	}
-	pubKey, err := parseSigningPublicKeyPEM(pemData, pemPath)
+	pubKey, err := ParseSigningPublicKeyPEM(pemData, pemPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -51,10 +51,10 @@ func LoadCheckedSigningPublicKey(pemPath string) (crypto.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseSigningPublicKeyPEM(pemData, pemPath)
+	return ParseSigningPublicKeyPEM(pemData, pemPath)
 }
 
-func parseSigningPublicKeyPEM(pemData []byte, pemPath string) (crypto.PublicKey, error) {
+func ParseSigningPublicKeyPEM(pemData []byte, pemPath string) (crypto.PublicKey, error) {
 	block, _ := pem.Decode(pemData)
 	if block == nil {
 		return nil, fmt.Errorf("failed to decode PEM data from %s", pemPath)
@@ -91,7 +91,7 @@ func LoadSigningPrivateKey(pemPath string) (crypto.Signer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read private key file %s: %w", pemPath, err)
 	}
-	return parseSigningPrivateKey(pemData, pemPath)
+	return ParseSigningPrivateKey(pemData, pemPath)
 }
 
 // LoadCheckedSigningPrivateKey reads a private key file through
@@ -102,16 +102,16 @@ func LoadCheckedSigningPrivateKey(pemPath string) (crypto.Signer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseSigningPrivateKey(pemData, pemPath)
+	return ParseSigningPrivateKey(pemData, pemPath)
 }
 
-func parseSigningPrivateKey(pemData []byte, pemPath string) (crypto.Signer, error) {
-	if isYubiKeyStub(pemData) {
+func ParseSigningPrivateKey(pemData []byte, pemPath string) (crypto.Signer, error) {
+	if IsYubiKeyStub(pemData) {
 		stub, pub, slot, err := ParseYubiKeyStub(pemData)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", pemPath, err)
 		}
-		return &yubiKeySigner{path: pemPath, stub: stub, pub: pub, slot: slot}, nil
+		return &YubiKeySigner{path: pemPath, stub: stub, pub: pub, slot: slot}, nil
 	}
 
 	block, _ := pem.Decode(pemData)
@@ -403,7 +403,7 @@ func dummySignatureForKey(pubKey crypto.PublicKey) (tpm2.TPMTSignature, error) {
 // It dispatches on the public key and goes through crypto.Signer, so a key
 // held on a token signs exactly like a software key. Both produce ASN.1 DER
 // for ECDSA, which the TPM wants as raw r and s padded to the curve size.
-func signForTPM(privKey crypto.Signer, digest []byte) (tpm2.TPMTSignature, error) {
+func SignForTPM(privKey crypto.Signer, digest []byte) (tpm2.TPMTSignature, error) {
 	switch pub := privKey.Public().(type) {
 	case *rsa.PublicKey:
 		sig, err := privKey.Sign(rand.Reader, digest, crypto.SHA256)
@@ -459,13 +459,13 @@ func signForTPM(privKey crypto.Signer, digest []byte) (tpm2.TPMTSignature, error
 
 // verifyKeyPairMatch checks that a public key belongs to a private key.
 // It compares public keys only, so it works for keys held on a token.
-func verifyKeyPairMatch(pubKey crypto.PublicKey, privKey crypto.Signer) error {
+func VerifyKeyPairMatch(pubKey crypto.PublicKey, privKey crypto.Signer) error {
 	switch pubKey.(type) {
 	case *rsa.PublicKey, *ecdsa.PublicKey:
 	default:
 		return fmt.Errorf("unsupported public key type %T", pubKey)
 	}
-	if !publicKeysEqual(pubKey, privKey.Public()) {
+	if !PublicKeysEqual(pubKey, privKey.Public()) {
 		return fmt.Errorf("public key (fingerprint %s) does not belong to the private key (fingerprint %s)",
 			PublicKeyFingerprint(pubKey), PublicKeyFingerprint(privKey.Public()))
 	}

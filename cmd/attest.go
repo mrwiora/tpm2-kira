@@ -23,6 +23,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/transport/ble"
 	"github.com/mrwiora/tpm2-kira/transport/frame"
 )
@@ -381,9 +382,9 @@ func AttestEnrol(o EnrolOptions) error {
 	// --privkey or the default key; the blob names no key file.
 	privPath := o.PrivKeyPath
 	if privPath == "" {
-		privPath = DefaultPrivateKeyPath
+		privPath = signing.DefaultPrivateKeyPath
 	}
-	priv, err := LoadCheckedSigningPrivateKey(privPath)
+	priv, err := signing.LoadCheckedSigningPrivateKey(privPath)
 	if err != nil {
 		return fmt.Errorf("enrolment needs the signing key to write the attestation blob: %w", err)
 	}
@@ -1120,8 +1121,8 @@ func gateRecordCheck(tpmDev transport.TPM, idx uint32, signerPath string) (bool,
 		// Run by hand on the unlocked system, there is no image around
 		// the gate, but the key the image would carry is right here.
 		if _, err := os.Stat(signerPath); os.IsNotExist(err) {
-			if _, err := os.Stat(DefaultPublicKeyPath); err == nil {
-				signerPath = DefaultPublicKeyPath
+			if _, err := os.Stat(signing.DefaultPublicKeyPath); err == nil {
+				signerPath = signing.DefaultPublicKeyPath
 			}
 		}
 	}
@@ -1134,7 +1135,7 @@ func gateRecordCheck(tpmDev transport.TPM, idx uint32, signerPath string) (bool,
 		fmt.Printf("tpm2-kira: no signing public key at %s to check the attestation record (in an initramfs: rebuild it)\n", signerPath)
 		return false, 0
 	}
-	pub, _, err := LoadSigningPublicKeyFromPEM(signerPath)
+	pub, _, err := signing.LoadSigningPublicKeyFromPEM(signerPath)
 	if err != nil {
 		gateFail("cannot use the signing public key at %s: %v", signerPath, err)
 		return false, ExitInternal
@@ -1497,14 +1498,14 @@ func AttestUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug b
 	// The enrolment is part of the slot's blob: taking it out writes and
 	// signs that blob again, which needs the signing key.
 	if privKeyPath == "" {
-		privKeyPath = DefaultPrivateKeyPath
+		privKeyPath = signing.DefaultPrivateKeyPath
 	}
-	priv, err := LoadCheckedSigningPrivateKey(privKeyPath)
+	priv, err := signing.LoadCheckedSigningPrivateKey(privKeyPath)
 	if err != nil {
 		return fmt.Errorf("removing the enrolment rewrites the slot's blob and needs the signing key: %w\n"+
 			"Without the key, 'tpm2-kira slot delete --nvram %d' removes the whole slot, TOTP key included", err, slot)
 	}
-	if err := PrepareSigningKey(priv); err != nil {
+	if err := signing.PrepareSigningKey(priv); err != nil {
 		return fmt.Errorf("the signing key is not usable: %w", err)
 	}
 	// The counter is raised with it, so the blob as it was is stale should

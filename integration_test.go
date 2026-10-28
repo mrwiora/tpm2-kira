@@ -27,6 +27,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 const (
@@ -1562,7 +1563,7 @@ func TestResealRevokesOldBlob(t *testing.T) {
 
 	// Put the old blob back. An attacker can do this without the key by
 	// deleting and redefining the index; the test uses the key for brevity.
-	signer, err := cmd.LoadSigningPrivateKey(testPrivKeyPath)
+	signer, err := signing.LoadSigningPrivateKey(testPrivKeyPath)
 	if err != nil {
 		t.Fatal(err)
 	}

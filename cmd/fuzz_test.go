@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 
 	"github.com/google/go-attestation/attest"
 	"github.com/google/go-tpm/tpm2"
@@ -52,10 +53,10 @@ func FuzzParseYubiKeyStub(f *testing.F) {
 	f.Add([]byte(`{"backend":"yubikey","version":1,"serial":1,"slot":"9a","algorithm":"ECCP256","pinPolicy":"once","touchPolicy":"never","publicKey":"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE"}`))
 	f.Add([]byte(`{}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
-		isYubiKeyStub(data)
-		ParseYubiKeyStub(data)
-		parseSigningPrivateKey(data, "fuzz")
-		parseSigningPublicKeyPEM(data, "fuzz")
+		signing.IsYubiKeyStub(data)
+		signing.ParseYubiKeyStub(data)
+		signing.ParseSigningPrivateKey(data, "fuzz")
+		signing.ParseSigningPublicKeyPEM(data, "fuzz")
 	})
 }
 

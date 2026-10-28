@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/signing"
+
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 )
@@ -195,7 +197,7 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 	// sessions, avoiding redundant LoadExternal round-trips.  Some TPMs
 	// reject key sizes here (RSA-4096 in particular), and that must be
 	// found out before the existing index is destroyed.
-	loadRsp, err := LoadExternalPublicKey(tpmDev, pubKey)
+	loadRsp, err := signing.LoadExternalPublicKey(tpmDev, pubKey)
 	if err != nil {
 		return fmt.Errorf("failed to load signing key for NV write policy: %w", err)
 	}
@@ -207,7 +209,7 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 	// Compute the PolicySigned digest that will be the AuthPolicy on this
 	// NV index.  Any future NVWrite must satisfy a PolicySigned session
 	// proving possession of the corresponding private key.
-	nvWritePolicy, err := ComputeNVWritePolicyDigestWithHandle(tpmDev, keyHandle, keyName, pubKey)
+	nvWritePolicy, err := signing.ComputeNVWritePolicyDigestWithHandle(tpmDev, keyHandle, keyName, pubKey)
 	if err != nil {
 		return fmt.Errorf("failed to compute NV write policy digest: %w", err)
 	}
@@ -217,7 +219,7 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 	// present device, an unlocked PIN and — depending on the slot's touch
 	// policy — a user.  A failure here costs nothing; the same failure after
 	// the undefine costs the sealed secret.
-	if _, err := signForTPM(privKey, make([]byte, 32)); err != nil {
+	if _, err := signing.SignForTPM(privKey, make([]byte, 32)); err != nil {
 		return fmt.Errorf("signing key is not usable for NV write authorization: %w", err)
 	}
 
@@ -328,7 +330,7 @@ func policySignedNVWrite(tpmDev transport.TPM, nvIndex tpm2.TPMHandle, offset ui
 		// aHash = SHA-256(nonceTPM || expiration(0)); cpHashA and
 		// policyRef are empty.
 		aHash := sha256.Sum256(append(append([]byte(nil), nonceTPM.Buffer...), 0, 0, 0, 0))
-		tpmSig, signErr := signForTPM(privKey, aHash[:])
+		tpmSig, signErr := signing.SignForTPM(privKey, aHash[:])
 		if signErr != nil {
 			return fmt.Errorf("failed to sign NV write policy nonce: %w", signErr)
 		}

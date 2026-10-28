@@ -1,4 +1,4 @@
-package cmd
+package signing
 
 const (
 	// DefaultKeysDir is the directory where tpm2-kira stores its signing keys:

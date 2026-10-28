@@ -12,6 +12,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/piv"
 	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 // The reseal the hooks run after a kernel update, with the signing key on
@@ -24,26 +25,26 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 	key := card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	fake := &fakeTokens{cards: []*pivtest.Card{card}} // typed "": no terminal
 	fake.install(t)
-	os.Unsetenv(PINEnvVar)
+	os.Unsetenv(signing.PINEnvVar)
 	conf := filepath.Join(t.TempDir(), "control.conf")
 	t.Setenv("TPM2_KIRA_CONTROL_CONF", conf)
-	pinFile := pinFilePath()
+	pinFile := signing.PINPath()
 	os.WriteFile(pinFile, []byte("123456\n"), 0o600)
 
 	privPath := writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication))
-	pubPEM, err := PublicKeyToPEM(&key.PublicKey)
+	pubPEM, err := signing.PublicKeyToPEM(&key.PublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	pubPath := filepath.Join(t.TempDir(), "seal.pub")
-	if err := WriteSigningKeyFile(pubPath, pubPEM); err != nil {
+	if err := signing.WriteSigningKeyFile(pubPath, pubPEM); err != nil {
 		t.Fatal(err)
 	}
 	idx := ResolveNVRAMIndex(0)
 	if err := Seal(sock, "23", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal through the token: %v", err)
 	}
-	CloseTokenSessions()
+	signing.CloseTokenSessions()
 
 	// With the PIN stored: the reseal signs, nobody is asked.
 	if err := Reseal(sock, "", idx, pubPath, privPath, false); err != nil {
@@ -52,7 +53,7 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 	if fake.prompts != 0 || card.Retries != 3 {
 		t.Errorf("prompts %d, attempts left %d", fake.prompts, card.Retries)
 	}
-	CloseTokenSessions()
+	signing.CloseTokenSessions()
 	gen1, err := readGenerationAt(t, sock, idx)
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +76,7 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 	// A PIN the token refuses: skipped too, naming the file the PIN came
 	// from, and no second attempt is spent on it.
 	os.WriteFile(pinFile, []byte("000000\n"), 0o600)
-	CloseTokenSessions()
+	signing.CloseTokenSessions()
 	err = Reseal(sock, "", idx, pubPath, privPath, false)
 	if !errors.Is(err, ErrResealSkipped) || !strings.Contains(err.Error(), "wrong PIN (2 attempt(s) remaining) (PIN from "+pinFile+")") {
 		t.Fatalf("reseal with a wrong PIN: %v", err)

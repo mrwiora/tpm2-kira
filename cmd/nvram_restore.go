@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 // NVRAMRestore puts a blob that WriteToNVRAM stashed under NVRAMRecoveryDir
@@ -51,7 +52,7 @@ func NVRAMRestore(tpmPath, file string, nvramIndex uint32, pubKeyPath, privKeyPa
 	if err := checkObjectSigningKey(blob, signer.Public()); err != nil {
 		return fmt.Errorf("cannot restore: %w", err)
 	}
-	if err := PrepareSigningKey(signer); err != nil {
+	if err := signing.PrepareSigningKey(signer); err != nil {
 		return fmt.Errorf("cannot restore: %w", err)
 	}
 
@@ -76,7 +77,7 @@ func NVRAMRestore(tpmPath, file string, nvramIndex uint32, pubKeyPath, privKeyPa
 	fmt.Printf("Restoring slot #%d (0x%08X) from %s\n", SlotNumber(nvramIndex), nvramIndex, file)
 	fmt.Printf("PCR selection as sealed: %s, %s\n", measure.PCRSpecsToString(specs), hashAlgo.DisplayString())
 	pub := signer.Public()
-	fmt.Printf("Signing key: %s (%s, fingerprint: %s)\n", keys.privKeyPath, PublicKeyDescription(pub), PublicKeyFingerprint(pub))
+	fmt.Printf("Signing key: %s (%s, fingerprint: %s)\n", keys.privKeyPath, signing.PublicKeyDescription(pub), signing.PublicKeyFingerprint(pub))
 
 	if err := approveAndWrite(tpmDev, nvramIndex, blob, specs, hashAlgo, false, signer, debug); err != nil {
 		return fmt.Errorf("failed to restore: %w", err)

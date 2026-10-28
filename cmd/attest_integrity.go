@@ -37,6 +37,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 // DefaultAttestSignerPath is the signing public key inside the initramfs.
@@ -58,9 +59,9 @@ func VerifyAttestBlobSignature(signed []byte, pubKey crypto.PublicKey) error {
 func attestPublicKey(explicit string) (crypto.PublicKey, string, error) {
 	path := explicit
 	if path == "" {
-		path = DefaultPublicKeyPath
+		path = signing.DefaultPublicKeyPath
 	}
-	pub, _, err := LoadSigningPublicKeyFromPEM(path)
+	pub, _, err := signing.LoadSigningPublicKeyFromPEM(path)
 	if err != nil {
 		return nil, path, err
 	}
@@ -134,7 +135,7 @@ func signerForImage(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer, d
 			return nil, ExitTampered
 		}
 	}
-	pemBytes, err := PublicKeyToPEM(pub)
+	pemBytes, err := signing.PublicKeyToPEM(pub)
 	if err != nil {
 		fmt.Fprintf(errOut, "tpm2-kira: cannot encode the signing public key: %v\n", err)
 		return nil, ExitInternal

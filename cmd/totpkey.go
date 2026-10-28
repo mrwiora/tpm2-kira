@@ -16,6 +16,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
 
@@ -204,12 +205,12 @@ func ReadGeneration(tpmDev transport.TPM, index uint32) (uint64, error) {
 // when it is missing or was defined differently, and returns its Name for
 // PolicyNV. The write is authorized by the signing key, like the blob's.
 func writeGeneration(tpmDev transport.TPM, index uint32, gen uint64, pubKey crypto.PublicKey, signer crypto.Signer) ([]byte, error) {
-	loadRsp, err := LoadExternalPublicKey(tpmDev, pubKey)
+	loadRsp, err := signing.LoadExternalPublicKey(tpmDev, pubKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load signing key for the generation index: %w", err)
 	}
 	defer FlushHandle(tpmDev, loadRsp.ObjectHandle)
-	writePolicy, err := ComputeNVWritePolicyDigestWithHandle(tpmDev, loadRsp.ObjectHandle, loadRsp.Name, pubKey)
+	writePolicy, err := signing.ComputeNVWritePolicyDigestWithHandle(tpmDev, loadRsp.ObjectHandle, loadRsp.Name, pubKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute the generation index write policy: %w", err)
 	}
@@ -358,7 +359,7 @@ func totpKeyTemplate(alg tpm2.TPMAlgID, authPolicy []byte) tpm2.TPMTPublic {
 // signApproval signs approvedPolicy for policyRef and returns the
 // TPMT_SIGNATURE that VerifySignature takes.
 func signApproval(signer crypto.Signer, approvedPolicy, policyRef []byte) ([]byte, error) {
-	sig, err := signForTPM(signer, approvalDigest(approvedPolicy, policyRef))
+	sig, err := signing.SignForTPM(signer, approvalDigest(approvedPolicy, policyRef))
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign the approved policy: %w", err)
 	}

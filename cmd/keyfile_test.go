@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 func TestWriteSigningKeyFile(t *testing.T) {
@@ -16,7 +17,7 @@ func TestWriteSigningKeyFile(t *testing.T) {
 		defer syscall.Umask(old)
 
 		path := filepath.Join(t.TempDir(), "seal.key")
-		if err := WriteSigningKeyFile(path, []byte("key")); err != nil {
+		if err := signing.WriteSigningKeyFile(path, []byte("key")); err != nil {
 			t.Fatalf("WriteSigningKeyFile() error = %v", err)
 		}
 		info, err := os.Stat(path)
@@ -36,7 +37,7 @@ func TestWriteSigningKeyFile(t *testing.T) {
 		if err := os.WriteFile(path, []byte("original"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if err := WriteSigningKeyFile(path, []byte("new")); err == nil {
+		if err := signing.WriteSigningKeyFile(path, []byte("new")); err == nil {
 			t.Error("WriteSigningKeyFile() expected error for existing file, got nil")
 		}
 		if data, _ := os.ReadFile(path); string(data) != "original" {
@@ -56,7 +57,7 @@ func TestCheckSigningKeyFile(t *testing.T) {
 		if err := os.Chmod(path, mode); err != nil {
 			t.Fatal(err)
 		}
-		err := CheckSigningKeyFile(path)
+		err := signing.CheckSigningKeyFile(path)
 		if mode == 0400 && err != nil {
 			t.Errorf("mode %04o: unexpected error %v", mode, err)
 		}
@@ -71,10 +72,10 @@ func TestCheckSigningKeyFile(t *testing.T) {
 		}
 	}
 
-	if err := CheckSigningKeyFile(filepath.Join(dir, "missing")); err == nil {
+	if err := signing.CheckSigningKeyFile(filepath.Join(dir, "missing")); err == nil {
 		t.Error("expected error for missing file, got nil")
 	}
-	if err := CheckSigningKeyFile(dir); err == nil {
+	if err := signing.CheckSigningKeyFile(dir); err == nil {
 		t.Error("expected error for directory, got nil")
 	}
 }
@@ -117,7 +118,7 @@ func TestSealRequiresUsableSigningKey(t *testing.T) {
 	t.Run("Missing private key asks for setup", func(t *testing.T) {
 		dir := t.TempDir()
 		pub := filepath.Join(dir, "seal.pub")
-		if err := WriteSigningKeyFile(pub, []byte("k")); err != nil {
+		if err := signing.WriteSigningKeyFile(pub, []byte("k")); err != nil {
 			t.Fatal(err)
 		}
 		err := Seal("/nonexistent/tpm", "0,7", NVRAMSlotStart, pub, filepath.Join(dir, "seal.key"), false, measure.PCRHashAlgoSHA256, false)
@@ -131,7 +132,7 @@ func TestSealRequiresUsableSigningKey(t *testing.T) {
 		priv := filepath.Join(dir, "seal.key")
 		pub := filepath.Join(dir, "seal.pub")
 		for _, p := range []string{priv, pub} {
-			if err := WriteSigningKeyFile(p, []byte("not a key")); err != nil {
+			if err := signing.WriteSigningKeyFile(p, []byte("not a key")); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -153,10 +154,10 @@ func TestReadSigningKeyFile(t *testing.T) {
 
 	t.Run("Returns the content of an acceptable file", func(t *testing.T) {
 		path := filepath.Join(newKeyDir(t), "seal.key")
-		if err := WriteSigningKeyFile(path, []byte("key")); err != nil {
+		if err := signing.WriteSigningKeyFile(path, []byte("key")); err != nil {
 			t.Fatal(err)
 		}
-		data, err := ReadSigningKeyFile(path)
+		data, err := signing.ReadSigningKeyFile(path)
 		if err != nil || string(data) != "key" {
 			t.Fatalf("ReadSigningKeyFile() = %q, %v; want \"key\", nil", data, err)
 		}
@@ -165,14 +166,14 @@ func TestReadSigningKeyFile(t *testing.T) {
 	t.Run("Refuses a symlink", func(t *testing.T) {
 		dir := newKeyDir(t)
 		target := filepath.Join(dir, "real.key")
-		if err := WriteSigningKeyFile(target, []byte("key")); err != nil {
+		if err := signing.WriteSigningKeyFile(target, []byte("key")); err != nil {
 			t.Fatal(err)
 		}
 		link := filepath.Join(dir, "seal.key")
 		if err := os.Symlink(target, link); err != nil {
 			t.Fatal(err)
 		}
-		_, err := ReadSigningKeyFile(link)
+		_, err := signing.ReadSigningKeyFile(link)
 		if err == nil || !strings.Contains(err.Error(), "symbolic link") {
 			t.Errorf("ReadSigningKeyFile(symlink) error = %v, want a symlink refusal", err)
 		}
@@ -182,13 +183,13 @@ func TestReadSigningKeyFile(t *testing.T) {
 		for _, mode := range []os.FileMode{0770, 0757, 0777} {
 			dir := newKeyDir(t)
 			path := filepath.Join(dir, "seal.key")
-			if err := WriteSigningKeyFile(path, []byte("key")); err != nil {
+			if err := signing.WriteSigningKeyFile(path, []byte("key")); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.Chmod(dir, mode); err != nil {
 				t.Fatal(err)
 			}
-			_, err := ReadSigningKeyFile(path)
+			_, err := signing.ReadSigningKeyFile(path)
 			if err == nil || !strings.Contains(err.Error(), "chmod go-w") {
 				t.Errorf("directory mode %04o: error = %v, want a directory refusal", mode, err)
 			}
@@ -200,7 +201,7 @@ func TestReadSigningKeyFile(t *testing.T) {
 		if err := syscall.Mkfifo(path, 0400); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := ReadSigningKeyFile(path); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		if _, err := signing.ReadSigningKeyFile(path); err == nil || !strings.Contains(err.Error(), "not a regular file") {
 			t.Errorf("ReadSigningKeyFile(fifo) error = %v, want 'not a regular file'", err)
 		}
 	})
@@ -210,13 +211,13 @@ func TestReadSigningKeyFile(t *testing.T) {
 			t.Skip("needs root to chown")
 		}
 		path := filepath.Join(newKeyDir(t), "seal.key")
-		if err := WriteSigningKeyFile(path, []byte("key")); err != nil {
+		if err := signing.WriteSigningKeyFile(path, []byte("key")); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chown(path, 65534, 65534); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := ReadSigningKeyFile(path); err == nil || !strings.Contains(err.Error(), "owned by uid 65534") {
+		if _, err := signing.ReadSigningKeyFile(path); err == nil || !strings.Contains(err.Error(), "owned by uid 65534") {
 			t.Errorf("ReadSigningKeyFile(foreign owner) error = %v, want an owner refusal", err)
 		}
 	})
@@ -227,13 +228,13 @@ func TestReadSigningKeyFile(t *testing.T) {
 		}
 		dir := newKeyDir(t)
 		path := filepath.Join(dir, "seal.key")
-		if err := WriteSigningKeyFile(path, []byte("key")); err != nil {
+		if err := signing.WriteSigningKeyFile(path, []byte("key")); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chown(dir, 65534, 65534); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := ReadSigningKeyFile(path); err == nil || !strings.Contains(err.Error(), "owned by uid 65534") {
+		if _, err := signing.ReadSigningKeyFile(path); err == nil || !strings.Contains(err.Error(), "owned by uid 65534") {
 			t.Errorf("ReadSigningKeyFile(foreign directory) error = %v, want an owner refusal", err)
 		}
 	})

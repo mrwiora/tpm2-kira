@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 // Step 2 of control: what the machine combines, in submenus. Each option
@@ -151,11 +153,11 @@ func (c *controller) keysSteps() []controlStep {
 	switch {
 	case f.Keys == "":
 	case f.YubiKey && f.PINStored:
-		keys.Done = f.Keys + "; its PIN in " + pinFilePath()
+		keys.Done = f.Keys + "; its PIN in " + signing.PINPath()
 	case f.YubiKey:
 		// The key is there, the PIN not: the hooks' reseal after a kernel
 		// update is skipped until it is. The step stores it.
-		keys.Explain = f.Keys + ". Its PIN, stored in " + pinFilePath() + " (readable by root alone; never in the boot image), lets the hooks approve unattended after a kernel or initramfs update; without it that approval is skipped and the next boot shows a PCR mismatch."
+		keys.Explain = f.Keys + ". Its PIN, stored in " + signing.PINPath() + " (readable by root alone; never in the boot image), lets the hooks approve unattended after a kernel or initramfs update; without it that approval is skipped and the next boot shows a PCR mismatch."
 	default:
 		keys.Done = f.Keys
 	}

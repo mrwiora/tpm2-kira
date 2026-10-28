@@ -26,6 +26,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 // swtpmProc is one swtpm process over a state directory. Stopping and
@@ -122,20 +123,20 @@ func sealRealSlot(t *testing.T, sock string, idx uint32) (crypto.Signer, string)
 		t.Fatal(err)
 	}
 	privPath, pubPath := filepath.Join(dir, "seal.key"), filepath.Join(dir, "seal.pub")
-	if err := WriteSigningKeyFile(privPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})); err != nil {
+	if err := signing.WriteSigningKeyFile(privPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})); err != nil {
 		t.Fatal(err)
 	}
-	pubPEM, err := PublicKeyToPEM(&key.PublicKey)
+	pubPEM, err := signing.PublicKeyToPEM(&key.PublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteSigningKeyFile(pubPath, pubPEM); err != nil {
+	if err := signing.WriteSigningKeyFile(pubPath, pubPEM); err != nil {
 		t.Fatal(err)
 	}
 	if err := Seal(sock, "23", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("sealing the test slot: %v", err)
 	}
-	signer, err := LoadCheckedSigningPrivateKey(privPath)
+	signer, err := signing.LoadCheckedSigningPrivateKey(privPath)
 	if err != nil {
 		t.Fatal(err)
 	}

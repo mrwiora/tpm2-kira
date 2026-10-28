@@ -1,4 +1,4 @@
-package cmd
+package signing
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -49,7 +50,7 @@ type YubiKeyStub struct {
 }
 
 // isYubiKeyStub reports whether key file content is a stub rather than PEM.
-func isYubiKeyStub(data []byte) bool {
+func IsYubiKeyStub(data []byte) bool {
 	trimmed := bytes.TrimLeft(data, " \t\r\n")
 	return len(trimmed) > 0 && trimmed[0] == '{'
 }
@@ -102,8 +103,8 @@ func MarshalYubiKeyStub(serial uint32, s TokenSlot) ([]byte, error) {
 		Serial:      serial,
 		Slot:        s.Slot.String(),
 		Algorithm:   s.Algorithm.String(),
-		PINPolicy:   s.pinPolicyString(),
-		TouchPolicy: s.touchPolicyString(),
+		PINPolicy:   s.PinPolicyString(),
+		TouchPolicy: s.TouchPolicyString(),
 		PublicKey:   base64.StdEncoding.EncodeToString(der),
 	}
 	out, err := json.MarshalIndent(stub, "", "  ")
@@ -141,18 +142,18 @@ func tokenKeyUnsuitable(pub crypto.PublicKey) string {
 const TokenProbeTimeout = 2 * time.Second
 
 // tokenConn is one card reachable for PIV commands.
-type tokenConn struct {
-	reader    string
-	transport piv.Transport
+type TokenConn struct {
+	Reader    string
+	Transport piv.Transport
 	begin     func() error // start an exclusive transaction; nil if not needed
 	end       func() error
-	close     func(reset bool) error
+	Close     func(reset bool) error
 }
 
 // dialTokens opens every card present. Tests replace it with emulated cards.
-var dialTokens = dialPCSCTokens
+var DialTokens = dialPCSCTokens
 
-func dialPCSCTokens(timeout time.Duration) ([]*tokenConn, func(), error) {
+func dialPCSCTokens(timeout time.Duration) ([]*TokenConn, func(), error) {
 	client, err := pcsc.Dial(timeout)
 	if err != nil {
 		return nil, nil, err
@@ -162,7 +163,7 @@ func dialPCSCTokens(timeout time.Duration) ([]*tokenConn, func(), error) {
 		client.Close()
 		return nil, nil, err
 	}
-	var conns []*tokenConn
+	var conns []*TokenConn
 	for _, r := range readers {
 		if !r.CardPresent {
 			continue
@@ -171,12 +172,12 @@ func dialPCSCTokens(timeout time.Duration) ([]*tokenConn, func(), error) {
 		if err != nil {
 			continue
 		}
-		conns = append(conns, &tokenConn{
-			reader:    r.Name,
-			transport: card,
+		conns = append(conns, &TokenConn{
+			Reader:    r.Name,
+			Transport: card,
 			begin:     card.BeginTransaction,
 			end:       card.EndTransaction,
-			close: func(reset bool) error {
+			Close: func(reset bool) error {
 				if reset {
 					return card.DisconnectReset()
 				}
@@ -186,7 +187,7 @@ func dialPCSCTokens(timeout time.Duration) ([]*tokenConn, func(), error) {
 	}
 	return conns, func() {
 		for _, c := range conns {
-			c.close(false)
+			c.Close(false)
 		}
 		client.Close()
 	}, nil
@@ -236,7 +237,7 @@ func (t TokenInfo) SlotByID(id piv.Slot) (TokenSlot, bool) {
 	return TokenSlot{}, false
 }
 
-func (s TokenSlot) effectivePINPolicy() piv.PINPolicy {
+func (s TokenSlot) EffectivePINPolicy() piv.PINPolicy {
 	if s.PINPolicy != piv.PINPolicyDefault {
 		return s.PINPolicy
 	}
@@ -256,14 +257,14 @@ func (s TokenSlot) effectiveTouchPolicy() piv.TouchPolicy {
 	return s.TouchPolicy
 }
 
-func (s TokenSlot) pinPolicyString() string {
+func (s TokenSlot) PinPolicyString() string {
 	if !s.PoliciesKnown {
 		return "unknown"
 	}
-	return s.effectivePINPolicy().String()
+	return s.EffectivePINPolicy().String()
 }
 
-func (s TokenSlot) touchPolicyString() string {
+func (s TokenSlot) TouchPolicyString() string {
 	if !s.PoliciesKnown {
 		return "unknown"
 	}
@@ -277,7 +278,7 @@ func (s TokenSlot) touchPolicyString() string {
 // cannot cost a PIN attempt. The error is non-nil only when no token could be
 // looked for at all (no pcscd, for example).
 func ProbeYubiKeys(timeout time.Duration) ([]TokenInfo, error) {
-	conns, closeAll, err := dialTokens(timeout)
+	conns, closeAll, err := DialTokens(timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -289,9 +290,9 @@ func ProbeYubiKeys(timeout time.Duration) ([]TokenInfo, error) {
 	return infos, nil
 }
 
-func inspectToken(c *tokenConn) TokenInfo {
-	info := TokenInfo{Reader: c.reader}
-	card, err := piv.Open(c.transport)
+func inspectToken(c *TokenConn) TokenInfo {
+	info := TokenInfo{Reader: c.Reader}
+	card, err := piv.Open(c.Transport)
 	if err != nil {
 		info.Err = err
 		return info
@@ -360,7 +361,7 @@ func algorithmOf(pub crypto.PublicKey) piv.Algorithm {
 // recommendedSlot picks the slot setup uses without --slot: 9a, the slot the
 // documentation tells people to create for tpm2-kira. Another slot is never
 // picked implicitly, because it is likely shared (9c with sbctl, typically).
-func recommendedSlot(t TokenInfo) (TokenSlot, bool) {
+func RecommendedSlot(t TokenInfo) (TokenSlot, bool) {
 	s, ok := t.SlotByID(piv.SlotAuthentication)
 	return s, ok && s.Unsuitable == ""
 }
@@ -380,9 +381,9 @@ func PrintTokenReport(w io.Writer, infos []TokenInfo) {
 			fmt.Fprintln(w, "    no keys in any PIV slot")
 			continue
 		}
-		rec, hasRec := recommendedSlot(t)
+		rec, hasRec := RecommendedSlot(t)
 		for _, s := range t.Slots {
-			policies := fmt.Sprintf("PIN %-7s touch %-7s", s.pinPolicyString(), s.touchPolicyString())
+			policies := fmt.Sprintf("PIN %-7s touch %-7s", s.PinPolicyString(), s.TouchPolicyString())
 			var notes []string
 			switch {
 			case s.Unsuitable != "":
@@ -390,7 +391,7 @@ func PrintTokenReport(w io.Writer, infos []TokenInfo) {
 			case hasRec && s.Slot == rec.Slot:
 				notes = append(notes, "<- recommended")
 			}
-			if s.Unsuitable == "" && s.PoliciesKnown && s.effectivePINPolicy() == piv.PINPolicyNever {
+			if s.Unsuitable == "" && s.PoliciesKnown && s.EffectivePINPolicy() == piv.PINPolicyNever {
 				notes = append(notes, "WARNING: no PIN required (insecure)")
 			}
 			note := strings.Join(notes, "  ")
@@ -410,7 +411,7 @@ const PINEnvVar = "TPM2_KIRA_PIN"
 // Loading the key file does not touch the token: Public() is served from the
 // stub, so blob verification and policy computation work with the token
 // unplugged. The token is opened on the first Sign.
-type yubiKeySigner struct {
+type YubiKeySigner struct {
 	path string
 	stub *YubiKeyStub
 	pub  crypto.PublicKey
@@ -418,16 +419,16 @@ type yubiKeySigner struct {
 }
 
 // Public returns the public key recorded in the key file.
-func (s *yubiKeySigner) Public() crypto.PublicKey { return s.pub }
+func (s *YubiKeySigner) Public() crypto.PublicKey { return s.pub }
 
 // Describe names the token and slot, for messages.
-func (s *yubiKeySigner) Describe() string {
+func (s *YubiKeySigner) Describe() string {
 	return fmt.Sprintf("YubiKey %d, slot %s", s.stub.Serial, s.slot)
 }
 
 // YubiKeyDescription returns "YubiKey N, slot S" when key is token-backed.
 func YubiKeyDescription(key crypto.Signer) (string, bool) {
-	if s, ok := key.(*yubiKeySigner); ok {
+	if s, ok := key.(*YubiKeySigner); ok {
 		return s.Describe(), true
 	}
 	return "", false
@@ -435,7 +436,7 @@ func YubiKeyDescription(key crypto.Signer) (string, bool) {
 
 // Sign signs a SHA-256 digest on the token. The result has the same format as
 // the software keys produce: ASN.1 DER for ECDSA, PKCS #1 v1.5 for RSA.
-func (s *yubiKeySigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+func (s *YubiKeySigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
 	if opts.HashFunc() != crypto.SHA256 || len(digest) != 32 {
 		return nil, fmt.Errorf("token signing supports SHA-256 digests only")
 	}
@@ -455,7 +456,7 @@ func (s *yubiKeySigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts)
 // one attempt is left.
 type tokenSession struct {
 	serial    uint32
-	conn      *tokenConn
+	conn      *TokenConn
 	card      *piv.Card
 	closeAll  func()
 	pin       string
@@ -485,24 +486,24 @@ func (e *TokenUnavailableError) Error() string {
 
 func (e *TokenUnavailableError) Unwrap() error { return ErrTokenUnavailable }
 
-func unavailable(s *yubiKeySigner, format string, a ...any) error {
+func unavailable(s *YubiKeySigner, format string, a ...any) error {
 	return &TokenUnavailableError{Token: s.Describe(), Reason: fmt.Sprintf(format, a...)}
 }
 
-func tokenSessionFor(s *yubiKeySigner) (*tokenSession, error) {
+func tokenSessionFor(s *YubiKeySigner) (*tokenSession, error) {
 	if sess, ok := tokenSessions[s.stub.Serial]; ok {
 		if sess.fatal != nil {
 			return nil, sess.fatal
 		}
 		return sess, nil
 	}
-	conns, closeAll, err := dialTokens(TokenProbeTimeout)
+	conns, closeAll, err := DialTokens(TokenProbeTimeout)
 	if err != nil {
 		return nil, unavailable(s, "%v", err)
 	}
 	var seen []string
 	for _, c := range conns {
-		card, err := piv.Open(c.transport)
+		card, err := piv.Open(c.Transport)
 		if err != nil {
 			continue
 		}
@@ -532,7 +533,7 @@ func tokenSessionFor(s *yubiKeySigner) (*tokenSession, error) {
 // checkKey compares the key in the slot with the key file before any PIN is
 // sent, when the card can tell (metadata, or a certificate). A replaced slot
 // key is then reported as such, not as an obscure TPM policy failure later.
-func (sess *tokenSession) checkKey(s *yubiKeySigner) error {
+func (sess *tokenSession) checkKey(s *YubiKeySigner) error {
 	var onCard crypto.PublicKey
 	if md, err := sess.card.Metadata(s.slot); err == nil {
 		onCard = md.PublicKey
@@ -544,14 +545,14 @@ func (sess *tokenSession) checkKey(s *yubiKeySigner) error {
 	if onCard == nil {
 		return nil // checked after the first signature instead
 	}
-	if !publicKeysEqual(onCard, s.pub) {
+	if !PublicKeysEqual(onCard, s.pub) {
 		return fmt.Errorf("the key in slot %s of YubiKey %d is not the key in %s — "+
 			"the slot was regenerated or the key file belongs to a different setup", s.slot, s.stub.Serial, s.path)
 	}
 	return nil
 }
 
-func publicKeysEqual(a, b crypto.PublicKey) bool {
+func PublicKeysEqual(a, b crypto.PublicKey) bool {
 	type equaler interface{ Equal(crypto.PublicKey) bool }
 	ea, ok := a.(equaler)
 	return ok && ea.Equal(b)
@@ -562,7 +563,7 @@ func publicKeysEqual(a, b crypto.PublicKey) bool {
 // with the key file and verifies the PIN, so an absent token or a missing PIN
 // is found while nothing has been touched. Software keys are always ready.
 func PrepareSigningKey(key crypto.Signer) error {
-	s, ok := key.(*yubiKeySigner)
+	s, ok := key.(*YubiKeySigner)
 	if !ok {
 		return nil
 	}
@@ -575,7 +576,7 @@ func PrepareSigningKey(key crypto.Signer) error {
 
 // transaction runs fn with exclusive use of the card and the PIV applet
 // selected.
-func (sess *tokenSession) transaction(s *yubiKeySigner, fn func() error) error {
+func (sess *tokenSession) transaction(s *YubiKeySigner, fn func() error) error {
 	if sess.fatal != nil {
 		return sess.fatal
 	}
@@ -587,13 +588,13 @@ func (sess *tokenSession) transaction(s *yubiKeySigner, fn func() error) error {
 	}
 	// Another process may have selected a different applet since the last
 	// transaction; select PIV again inside this one.
-	if _, err := piv.Open(sess.conn.transport); err != nil {
+	if _, err := piv.Open(sess.conn.Transport); err != nil {
 		return unavailable(s, "%v", err)
 	}
 	return fn()
 }
 
-func (sess *tokenSession) sign(s *yubiKeySigner, digest []byte) (sig []byte, err error) {
+func (sess *tokenSession) sign(s *YubiKeySigner, digest []byte) (sig []byte, err error) {
 	err = sess.transaction(s, func() error {
 		sig, err = sess.signLocked(s, digest)
 		return err
@@ -601,7 +602,7 @@ func (sess *tokenSession) sign(s *yubiKeySigner, digest []byte) (sig []byte, err
 	return sig, err
 }
 
-func (sess *tokenSession) signLocked(s *yubiKeySigner, digest []byte) (sig []byte, err error) {
+func (sess *tokenSession) signLocked(s *YubiKeySigner, digest []byte) (sig []byte, err error) {
 	// With PIN policy 'always' every signature needs its own VERIFY.
 	force := s.stub.PINPolicy == piv.PINPolicyAlways.String()
 	for attempt := 0; attempt < 2; attempt++ {
@@ -642,7 +643,7 @@ func (sess *tokenSession) signLocked(s *yubiKeySigner, digest []byte) (sig []byt
 // A key with PIN policy 'always' needs that: the card keeps answering an
 // empty VERIFY with "verified" after the first signature, yet refuses the
 // next one until the PIN is verified again.
-func (sess *tokenSession) ensurePIN(s *yubiKeySigner, force bool) error {
+func (sess *tokenSession) ensurePIN(s *YubiKeySigner, force bool) error {
 	if s.stub.PINPolicy == piv.PINPolicyNever.String() && !force {
 		return nil
 	}
@@ -693,12 +694,12 @@ func (sess *tokenSession) ensurePIN(s *yubiKeySigner, force bool) error {
 }
 
 // promptPIN asks for the PIN on the terminal; tests replace it.
-var promptPIN = promptPINOnTTY
+var PromptPIN = promptPINOnTTY
 
 // readPIN finds the PIN without asking when it can: TPM2_KIRA_PIN first, then
 // the PIN file control stores, where the unattended reseal finds it, and
 // only then the terminal. source names where the PIN came from, for messages.
-func readPIN(s *yubiKeySigner) (pin, source string, err error) {
+func readPIN(s *YubiKeySigner) (pin, source string, err error) {
 	if pin, ok := os.LookupEnv(PINEnvVar); ok && pin != "" {
 		return pin, "the " + PINEnvVar + " environment variable", nil
 	}
@@ -707,9 +708,9 @@ func readPIN(s *yubiKeySigner) (pin, source string, err error) {
 		return "", "", err
 	}
 	if ok {
-		return pin, pinFilePath(), nil
+		return pin, PINPath(), nil
 	}
-	pin, err = promptPIN(s)
+	pin, err = PromptPIN(s)
 	return pin, "the terminal", err
 }
 
@@ -717,8 +718,8 @@ func readPIN(s *yubiKeySigner) (pin, source string, err error) {
 // PIN in a file that others can read, or that root does not own, is refused
 // rather than used: it has to be treated as already disclosed.
 func pinFromFile() (string, bool, error) {
-	path := pinFilePath()
-	pin, loose := storedPIN(path)
+	path := PINPath()
+	pin, loose := StoredPIN(path)
 	if pin == "" {
 		return "", false, nil
 	}
@@ -736,10 +737,10 @@ func pinFromFile() (string, bool, error) {
 // a manual seal or reseal, when the automatic reseal after an initramfs
 // rebuild will not have it. Silent when the PIN file provides the PIN.
 func warnIfNoUnattendedPIN(w io.Writer) {
-	if stored, _ := pinStored(pinFilePath()); stored {
+	if stored, _ := PINStored(PINPath()); stored {
 		return
 	}
-	fmt.Fprintf(w, "WARNING: there is no PIN in %s.\n", pinFilePath())
+	fmt.Fprintf(w, "WARNING: there is no PIN in %s.\n", PINPath())
 	fmt.Fprintln(w, "         The automatic approval after kernel and initramfs updates will therefore")
 	fmt.Fprintln(w, "         have no PIN: it will be SKIPPED, and the next boot will show a PCR")
 	fmt.Fprintln(w, "         mismatch until you approve by hand. 'tpm2-kira control' stores the PIN")
@@ -751,7 +752,7 @@ func warnIfNoUnattendedPIN(w io.Writer) {
 // token's attempts, which is why fewer than two left is refused. On
 // success the session is unlocked for the signatures that follow.
 func VerifyYubiKeyPIN(key crypto.Signer, pin string) error {
-	s, ok := key.(*yubiKeySigner)
+	s, ok := key.(*YubiKeySigner)
 	if !ok {
 		return errors.New("the signing key is not on a YubiKey")
 	}
@@ -773,7 +774,7 @@ func VerifyYubiKeyPIN(key crypto.Signer, pin string) error {
 	return nil
 }
 
-func promptPINOnTTY(s *yubiKeySigner) (string, error) {
+func promptPINOnTTY(s *YubiKeySigner) (string, error) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		return "", fmt.Errorf("no PIN: set %s or store it with tpm2-kira control (there is no terminal to ask on)", PINEnvVar)
@@ -826,7 +827,7 @@ func readNoEcho(tty *os.File) (string, error) {
 func CloseTokenSessions() {
 	for serial, sess := range tokenSessions {
 		if sess.unlocked {
-			sess.conn.close(true)
+			sess.conn.Close(true)
 		}
 		sess.closeAll()
 		sess.pin = ""
@@ -837,10 +838,77 @@ func CloseTokenSessions() {
 // yubiKeyWantsPIN says whether signing with key, on a YubiKey, takes a PIN
 // (the slot's policy as the key file records it; an unknown policy counts
 // as wanting one).
-func yubiKeyWantsPIN(key crypto.Signer) bool {
-	s, ok := key.(*yubiKeySigner)
+func YubiKeyWantsPIN(key crypto.Signer) bool {
+	s, ok := key.(*YubiKeySigner)
 	if !ok {
 		return false
 	}
 	return s.stub.PINPolicy != piv.PINPolicyNever.String()
+}
+
+// pinFilePath is the YubiKey's PIN, next to control.conf: the PIN alone,
+// root's and readable by root alone. It is no setting of the image, so it
+// has a file of its own: control.conf holds what the image is built with,
+// and only that.
+func PINPath() string {
+	// TPM2_KIRA_CONTROL_CONF moves control.conf for the tests, and the PIN
+	// with it.
+	conf := "/etc/tpm2-kira/control.conf"
+	if p := os.Getenv("TPM2_KIRA_CONTROL_CONF"); p != "" {
+		conf = p
+	}
+	return filepath.Join(filepath.Dir(conf), "pin")
+}
+
+// storePIN writes the PIN, readable by root alone.
+func StorePIN(path, pin string) error {
+	if strings.ContainsAny(pin, "\n") {
+		return fmt.Errorf("the PIN cannot hold a newline")
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.WriteString(pin + "\n"); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// storedPIN is the PIN the file at path stores: "" when there is none;
+// loose when the file is not root's, or group or others may read it - such
+// a PIN is refused, it has to be treated as already disclosed. For the
+// signer only (pinFromFile).
+func StoredPIN(path string) (pin string, loose bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		return "", false
+	}
+	data, err := io.ReadAll(io.LimitReader(f, 1<<10))
+	if err != nil {
+		return "", false
+	}
+	pin = strings.TrimRight(string(data), "\r\n")
+	if pin == "" {
+		return "", false
+	}
+	uid, owned := ownerOf(st)
+	return pin, st.Mode().Perm()&0o077 != 0 || !owned || !trustedOwner(uid)
+}
+
+// pinStored says whether the file at path stores a PIN, and whether it is
+// loose (readable by others): the PIN's value stays out of it.
+func PINStored(path string) (stored, loose bool) {
+	pin, loose := StoredPIN(path)
+	return pin != "", loose
 }

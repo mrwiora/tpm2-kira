@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mrwiora/tpm2-kira/internal/signing"
+
 	"charm.land/huh/v2"
 	"github.com/tpm2-trust/assh/config"
 	"github.com/tpm2-trust/assh/hostkey"
@@ -246,7 +248,7 @@ func (c *controller) ensureSSHKeys(s *SSHConfig) error {
 func (c *controller) ensureSSHCA(conf *config.Config) error {
 	path := conf.CA
 	if st := readSSHCA(*conf, c.o.TPMPath); st.CA != nil {
-		pub, err := LoadCheckedSigningPublicKey(DefaultPublicKeyPath)
+		pub, err := signing.LoadCheckedSigningPublicKey(signing.DefaultPublicKeyPath)
 		if err != nil || samePublicKey(st.CA.AuthorityKey(), pub) {
 			if len(conf.Slots) == 0 {
 				conf.Slots = map[int][]int{}
@@ -257,7 +259,7 @@ func (c *controller) ensureSSHCA(conf *config.Config) error {
 			fmt.Fprintf(c.out, "SSH CA %s: %s", path, st.CA.Describe())
 			return c.sayKnownHosts(st.CA)
 		}
-		fmt.Fprintln(c.out, warn(fmt.Sprintf("The SSH CA %s (%s) was made for another signing key than %s: it cannot be approved for the next boot, which would serve a temporary host key.", path, st.CA.Fingerprint(), DefaultPublicKeyPath)))
+		fmt.Fprintln(c.out, warn(fmt.Sprintf("The SSH CA %s (%s) was made for another signing key than %s: it cannot be approved for the next boot, which would serve a temporary host key.", path, st.CA.Fingerprint(), signing.DefaultPublicKeyPath)))
 		ok, err := c.confirmYes("Create the SSH CA again, for this signing key?", "A new CA in the TPM in place of the old one: clients need its new known_hosts line.")
 		if err != nil {
 			return err
@@ -333,11 +335,11 @@ func (c *controller) approveSSHCA() error {
 // signingKey is the signing key, ready to sign (a token found, its PIN
 // checked).
 func (c *controller) signingKey() (crypto.Signer, error) {
-	signer, err := LoadCheckedSigningPrivateKey(DefaultPrivateKeyPath)
+	signer, err := signing.LoadCheckedSigningPrivateKey(signing.DefaultPrivateKeyPath)
 	if err != nil {
 		return nil, err
 	}
-	if err := PrepareSigningKey(signer); err != nil {
+	if err := signing.PrepareSigningKey(signer); err != nil {
 		return nil, err
 	}
 	return signer, nil

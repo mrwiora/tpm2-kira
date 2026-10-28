@@ -11,6 +11,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/cmd"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 // Version is the application version, set by build flags
@@ -22,7 +23,7 @@ var Version = "dev"
 // not stop the commands after it. Scripts must therefore detect failure from
 // the output, not the exit status — grep for the FAILED marker below.
 func fail(err error) {
-	cmd.CloseTokenSessions()
+	signing.CloseTokenSessions()
 	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: %v\n", err)
 	fmt.Fprintln(os.Stderr, "tpm2-kira: (exit status is 0 by design; this command did NOT succeed)")
 	os.Exit(0)
@@ -104,7 +105,7 @@ func main() {
 	case "status":
 		fs := flag.NewFlagSet("status", flag.ExitOnError)
 		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
-		privKey := fs.String("privkey", "", "Signing key the blobs are checked with (default: "+cmd.DefaultPrivateKeyPath+")")
+		privKey := fs.String("privkey", "", "Signing key the blobs are checked with (default: "+signing.DefaultPrivateKeyPath+")")
 		conf := fs.String("conf", cmd.DefaultControlConfigPath, "The configuration file")
 		jsonOut := fs.Bool("json", false, "Machine-readable output")
 		dbg := fs.Bool("debug", *debug, "Enable debug output")
@@ -168,7 +169,7 @@ func main() {
 
 	// Reset any token this process unlocked, so its PIN does not stay
 	// verified for other processes.
-	cmd.CloseTokenSessions()
+	signing.CloseTokenSessions()
 }
 
 // globalNVRAM is the --nvram before the command, nil without one.
@@ -337,8 +338,8 @@ func runSlotAdd(args []string, tpmPath string, debugFlag bool) {
 	nvram := fs.Uint("nvram", nvramDefault(cmd.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	useSHA1 := fs.Bool("sha1", false, "Use SHA-1 PCR bank instead of SHA-256 (use only if firmware does not support SHA-256 eventlog)")
-	pubKeyPath := fs.String("pubkey", cmd.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
-	privKeyPath := fs.String("privkey", cmd.DefaultPrivateKeyPath, "Path to signing private key: PEM, or the YubiKey key file from setup --yubikey")
+	pubKeyPath := fs.String("pubkey", signing.DefaultPublicKeyPath, "Path to signing public key PEM (X.509 certificate or raw public key)")
+	privKeyPath := fs.String("privkey", signing.DefaultPrivateKeyPath, "Path to signing private key: PEM, or the YubiKey key file from setup --yubikey")
 	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
 	verifyUKI := fs.Bool("verify-uki", true, "Check the built-in PCR 11 computation against this boot's event log before sealing")
 
@@ -437,7 +438,7 @@ func runSlotInfo(args []string, tpmPath string, debugFlag bool) {
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
-	privKeyPath := fs.String("privkey", "", "Signing private key to verify the blob with (default: "+cmd.DefaultPrivateKeyPath+")")
+	privKeyPath := fs.String("privkey", "", "Signing private key to verify the blob with (default: "+signing.DefaultPrivateKeyPath+")")
 
 	fs.Parse(args)
 
@@ -519,7 +520,7 @@ func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	yes := fs.Bool("yes", false, "delete: confirm deleting every slot (only needed without --nvram)")
 	pubKey := fs.String("pubkey", "", "restore: signing public key (default: derived from the private key)")
-	privKey := fs.String("privkey", "", "restore: signing private key (default: "+cmd.DefaultPrivateKeyPath+")")
+	privKey := fs.String("privkey", "", "restore: signing private key (default: "+signing.DefaultPrivateKeyPath+")")
 
 	fs.Parse(args)
 
@@ -627,8 +628,8 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		vaultToken := fs.String("token", "", "tpm+vault: the one-time enrolment token")
 		name := fs.String("name", "", "tpm+vault: the machine's name at the vault (default: the host name)")
 		pepper := fs.Bool("pepper", false, "tpm+vault: the key needs an operator's pepper too, asked here; every boot waits for an approval with it")
-		privKey := fs.String("privkey", "", "Signing key, needed for every hand-over (default: "+cmd.DefaultPrivateKeyPath+")")
-		pubKey := fs.String("pubkey", "", "Signing public key, for the record check (default: "+cmd.DefaultPublicKeyPath+")")
+		privKey := fs.String("privkey", "", "Signing key, needed for every hand-over (default: "+signing.DefaultPrivateKeyPath+")")
+		pubKey := fs.String("pubkey", "", "Signing public key, for the record check (default: "+signing.DefaultPublicKeyPath+")")
 		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
 		timeout := fs.Duration("timeout", 10*time.Minute, "Give up waiting for the phone after this long (0 = wait forever)")
 		adapterWait := fs.Duration("adapter-wait", 30*time.Second, "Wait this long for the adapter to appear")
@@ -686,7 +687,7 @@ func runVault(args []string, tpmPath string, debugFlag bool) {
 	fs := flag.NewFlagSet("vault "+args[0], flag.ExitOnError)
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", nvramDefault(0), "Slot (0-15) or sealed-blob NVRAM index (default 0)")
-	privKey := fs.String("privkey", "", "Signing key (default: "+cmd.DefaultPrivateKeyPath+")")
+	privKey := fs.String("privkey", "", "Signing key (default: "+signing.DefaultPrivateKeyPath+")")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	switch args[0] {
 	case "enrol", "enroll":
@@ -777,7 +778,7 @@ func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 		fs := flag.NewFlagSet("phone salt unenrol", flag.ExitOnError)
 		tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 		nvram := fs.Uint("nvram", nvramDefault(0), "Slot (0-15) or sealed-blob NVRAM index")
-		privKey := fs.String("privkey", "", "Signing key (default: "+cmd.DefaultPrivateKeyPath+")")
+		privKey := fs.String("privkey", "", "Signing key (default: "+signing.DefaultPrivateKeyPath+")")
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		fs.Parse(args[1:])
 		if err := cmd.FactorUnenrol(*tpm, cmd.ResolveNVRAMIndex(uint32(*nvram)), *privKey, *debug); err != nil {
@@ -796,8 +797,8 @@ func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 	nvram := fs.Uint("nvram", nvramDefault(0), "Slot (0-15) or sealed-blob NVRAM index (default: the first enrolled slot)")
 	label := fs.String("label", "luks", "The factor's label: one factor serves volumes with unrelated salts")
 	out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
-	privKey := fs.String("privkey", "", "Signing key, needed for every hand-over (default: "+cmd.DefaultPrivateKeyPath+")")
-	pubKey := fs.String("pubkey", "", "Signing public key, for the record check (default: "+cmd.DefaultPublicKeyPath+")")
+	privKey := fs.String("privkey", "", "Signing key, needed for every hand-over (default: "+signing.DefaultPrivateKeyPath+")")
+	pubKey := fs.String("pubkey", "", "Signing public key, for the record check (default: "+signing.DefaultPublicKeyPath+")")
 	adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
 	timeout := fs.Duration("timeout", 10*time.Minute, "Give up waiting for the phone after this long (0 = wait forever)")
 	adapterWait := fs.Duration("adapter-wait", 30*time.Second, "Wait this long for the adapter to appear")
@@ -872,7 +873,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		pcrs := fs.String("pcrs", "", "PCRs to quote (default: the slot's sealed selection)")
 		sha1 := fs.Bool("sha1", false, "Quote the SHA-1 PCR bank instead of SHA-256 (only for a TPM without a SHA-256 bank, or a slot sealed with --sha1)")
 		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
-		privKey := fs.String("privkey", "", "Signing key for the attestation blob (default: the slot's, else "+cmd.DefaultPrivateKeyPath+")")
+		privKey := fs.String("privkey", "", "Signing key for the attestation blob (default: the slot's, else "+signing.DefaultPrivateKeyPath+")")
 		timeout := fs.Duration("timeout", 10*time.Minute, "Give up after this long (0 = wait forever)")
 		verifyTPM := fs.String("verify-tpm", "warn", "If this machine's TPM is not verified as genuine: warn (ask), require (refuse) or off")
 		verifyPhone := fs.String("verify-phone", "warn", "If the phone's key is not attested by genuine secure hardware: warn (ask), require (refuse) or off")
@@ -949,7 +950,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 			fail(err)
 		}
 	case "unenrol", "unenroll":
-		privKey := fs.String("privkey", "", "Signing key: removing a phone rewrites and signs the slot's blob (default: "+cmd.DefaultPrivateKeyPath+")")
+		privKey := fs.String("privkey", "", "Signing key: removing a phone rewrites and signs the slot's blob (default: "+signing.DefaultPrivateKeyPath+")")
 		fs.Parse(args)
 		if err := cmd.AttestUnenrol(*tpm, uint32(*nvram), *privKey, *debug); err != nil {
 			fail(err)

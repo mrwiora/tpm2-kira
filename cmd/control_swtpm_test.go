@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 // control's facts on a software TPM: what it reads from the TPM and the
@@ -92,20 +94,20 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 
 	// The PIN stored next to it, as the Signing key step does it; the
 	// facts know, and the file is root's alone.
-	if err := storePIN(pinFilePath(), "123456"); err != nil {
+	if err := signing.StorePIN(signing.PINPath(), "123456"); err != nil {
 		t.Fatal(err)
 	}
 	f = collectFacts(sock, false)
 	if !f.PINStored || f.PINLoose {
 		t.Errorf("the PIN stored: %v loose %v", f.PINStored, f.PINLoose)
 	}
-	if st, _ := os.Stat(pinFilePath()); st.Mode().Perm() != 0o600 {
+	if st, _ := os.Stat(signing.PINPath()); st.Mode().Perm() != 0o600 {
 		t.Errorf("the PIN file is %v", st.Mode().Perm())
 	}
 	if cfg, _ := LoadControlConfig(conf); cfg.Attest.Bluetooth != "always" {
 		t.Errorf("the policy kept next to the PIN: %+v", cfg)
 	}
-	if pin, loose := storedPIN(pinFilePath()); pin != "123456" || loose {
+	if pin, loose := signing.StoredPIN(signing.PINPath()); pin != "123456" || loose {
 		t.Errorf("the PIN read back: %q loose %v", pin, loose)
 	}
 	// A line this version refuses: the settings are invalid (red Config
@@ -118,12 +120,12 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	}
 	os.WriteFile(conf, data, 0o600)
 	// Readable by others: the PIN counts as disclosed, and that is a risk.
-	os.Chmod(pinFilePath(), 0o644)
+	os.Chmod(signing.PINPath(), 0o644)
 	f = collectFacts(sock, false)
 	if f.PINStored || !f.PINLoose {
 		t.Errorf("a loose file: stored %v loose %v", f.PINStored, f.PINLoose)
 	}
-	if judged := (&controller{facts: f}).factsText(); !strings.Contains(judged, pinFilePath()+" holds the PIN, but other users can read it") {
+	if judged := (&controller{facts: f}).factsText(); !strings.Contains(judged, signing.PINPath()+" holds the PIN, but other users can read it") {
 		t.Errorf("the loose file is not marked on the status:\n%s", judged)
 	}
 

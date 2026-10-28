@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
 // One file holds the radio and the PIN; setAttestBluetooth leaves the
@@ -46,28 +48,28 @@ func TestControlConfigOneFile(t *testing.T) {
 func TestPINFile(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TPM2_KIRA_CONTROL_CONF", filepath.Join(dir, "control.conf"))
-	path := pinFilePath()
+	path := signing.PINPath()
 	if path != filepath.Join(dir, "pin") {
 		t.Fatalf("the PIN file is %s", path)
 	}
-	if pin, _ := storedPIN(path); pin != "" {
+	if pin, _ := signing.StoredPIN(path); pin != "" {
 		t.Fatalf("no file: %q", pin)
 	}
-	if err := storePIN(path, "12\n34"); err == nil {
+	if err := signing.StorePIN(path, "12\n34"); err == nil {
 		t.Fatal("a newline in the PIN was stored")
 	}
 	os.WriteFile(path, []byte("old"), 0o644)
-	if err := storePIN(path, "123456"); err != nil {
+	if err := signing.StorePIN(path, "123456"); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
 		t.Fatalf("the PIN file is %v", st.Mode().Perm())
 	}
-	if pin, loose := storedPIN(path); pin != "123456" || loose {
+	if pin, loose := signing.StoredPIN(path); pin != "123456" || loose {
 		t.Fatalf("read back %q loose %v", pin, loose)
 	}
 	os.Chmod(path, 0o640)
-	if stored, loose := pinStored(path); !stored || !loose {
+	if stored, loose := signing.PINStored(path); !stored || !loose {
 		t.Fatalf("readable by the group: stored %v loose %v", stored, loose)
 	}
 	_, err := ParseControlConfig([]byte("TPM2_KIRA_PIN='secret-1234'\n"))
