@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 )
 
 // Version is the application version, set by build flags
@@ -148,7 +149,7 @@ func main() {
 	case "cap":
 		runCap(commandArgs, *tpmPath)
 	case "pcrtips":
-		if err := cmd.PCRTips(); err != nil {
+		if err := measure.PCRTips(); err != nil {
 			fail(err)
 		}
 	case "version", "-v", "--version":
@@ -343,15 +344,15 @@ func runSlotAdd(args []string, tpmPath string, debugFlag bool) {
 
 	fs.Parse(args)
 
-	mode, err := cmd.ParseMeasurePointMode(*measurePoint)
+	mode, err := measure.ParseMeasurePointMode(*measurePoint)
 	if err != nil {
 		fail(err)
 	}
-	cmd.MeasurePointModeSetting = mode
+	measure.MeasurePointModeSetting = mode
 
-	hashAlgo := cmd.PCRHashAlgoSHA256
+	hashAlgo := measure.PCRHashAlgoSHA256
 	if *useSHA1 {
-		hashAlgo = cmd.PCRHashAlgoSHA1
+		hashAlgo = measure.PCRHashAlgoSHA1
 	}
 
 	// Without --pcrs, the selection is what this boot measured. Without
@@ -370,7 +371,7 @@ func runSlotAdd(args []string, tpmPath string, debugFlag bool) {
 		fmt.Printf("PCRs: %s (%s)\n\n", sel, why)
 		*pcrs = sel
 	}
-	if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
+	if _, err := measure.ParsePCRSpecs(*pcrs); err != nil {
 		fail(err)
 	}
 	if err := cmd.Seal(*tpm, *pcrs, cmd.ResolveNVRAMIndex(uint32(*nvram)), *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
@@ -402,15 +403,15 @@ func runSlotApprove(args []string, tpmPath string, debugFlag bool) {
 
 	fs.Parse(args)
 
-	mode, err := cmd.ParseMeasurePointMode(*measurePoint)
+	mode, err := measure.ParseMeasurePointMode(*measurePoint)
 	if err != nil {
 		fail(err)
 	}
-	cmd.MeasurePointModeSetting = mode
+	measure.MeasurePointModeSetting = mode
 
 	// Validate PCR specs before proceeding (only if explicitly provided)
 	if *pcrs != "" {
-		if _, err := cmd.ParsePCRSpecs(*pcrs); err != nil {
+		if _, err := measure.ParsePCRSpecs(*pcrs); err != nil {
 			fail(err)
 		}
 	}

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 )
 
 // DeleteSlot on a software TPM: the blob, its generation index and the
@@ -33,7 +35,7 @@ func TestDeleteSlotOnSWTPM(t *testing.T) {
 	listLuksDevices = func() ([]string, error) { return nil, nil }
 
 	const idx = NVRAMSlotStart + 1
-	if err := Seal(sock, "0,7", idx, pubPath, privPath, false, PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "0,7", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
 	stash := filepath.Join(NVRAMRecoveryDir, fmt.Sprintf("slot-0x%08X-1759823456.blob", uint32(idx)))
@@ -60,7 +62,7 @@ func TestDeleteSlotOnSWTPM(t *testing.T) {
 
 	// The blob taken by hand leaves the generation index: the slot is
 	// dirty, and the deletion takes the rest.
-	if err := Seal(sock, "0,7", idx, pubPath, privPath, false, PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "0,7", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal again: %v", err)
 	}
 	if err := undefineIndex(tpm, idx); err != nil {

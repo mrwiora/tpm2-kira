@@ -17,6 +17,7 @@ import (
 	evlog "github.com/google/go-attestation/attest"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 )
 
 // Event types used below (TCG PC Client Platform Firmware Profile).
@@ -87,7 +88,7 @@ func initrdCoverageFromEvents(events []evlog.Event) initrdCoverage {
 }
 
 func readInitrdCoverage(path string) (initrdCoverage, error) {
-	raw, err := readRawEventLogFromPath(path)
+	raw, err := measure.ReadRawEventLogFromPath(path)
 	if err != nil {
 		return initrdCoverage{}, err
 	}
@@ -138,7 +139,7 @@ func decideInitrdCoverage(console *bufio.Reader, sel attest.PCRSelection, cov in
 		fmt.Printf("         On this boot, %s.\n", h)
 	}
 	fmt.Println("         A modified initrd - for example one that records your passphrase - would")
-	fmt.Println("         then attest as unchanged. Enrol with --pcrs including one of:", formatPCRList(cov.PCRs))
+	fmt.Println("         then attest as unchanged. Enrol with --pcrs including one of:", measure.FormatPCRList(cov.PCRs))
 	fmt.Println()
 	for {
 		fmt.Print("    Enrol anyway? [y/N]: ")

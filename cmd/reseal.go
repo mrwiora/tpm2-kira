@@ -10,6 +10,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/untrusted"
+
 	"github.com/tpm2-trust/assh/hostkey"
 )
 
@@ -176,7 +179,7 @@ type ResealSkippedError struct {
 	NVIndex    uint32
 	KeyFile    string
 	Cause      *TokenUnavailableError
-	SealedPCRs []PCRSpec
+	SealedPCRs []measure.PCRSpec
 }
 
 func (e *ResealSkippedError) Error() string {
@@ -208,7 +211,7 @@ func PrintResealSkipped(w io.Writer, skipped []*ResealSkippedError) {
 	fmt.Fprintf(w, "  Key file:      %s (%s)\n", first.KeyFile, first.Cause.Token)
 	fmt.Fprintf(w, "  Reason:        %s\n", indentContinuation(first.Cause.Reason, "                 "))
 	fmt.Fprintf(w, "  Slots:         %s (nothing was written; the sealed secrets are intact)\n", strings.Join(slots, ", "))
-	fmt.Fprintf(w, "  Sealed PCRs:   %s\n", PCRSpecsToString(first.SealedPCRs))
+	fmt.Fprintf(w, "  Sealed PCRs:   %s\n", measure.PCRSpecsToString(first.SealedPCRs))
 	fmt.Fprintln(w, "  Consequence:   the sealed policy still binds the PCR values of the last seal.")
 	fmt.Fprintln(w, "                 If they have changed — as they do after a kernel or initramfs")
 	fmt.Fprintln(w, "                 update — the next boot reports a PCR MISMATCH and shows no")
@@ -233,11 +236,11 @@ func indentContinuation(s, indent string) string {
 // private key, or else derived from it.
 func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath string, debug bool) error {
 	// Parse PCRs if provided (we'll use original PCRs if not explicitly overridden)
-	var userProvidedSpecs []PCRSpec
+	var userProvidedSpecs []measure.PCRSpec
 	var userSpecifiedPCRs bool
 	var err error
 	if pcrsStr != "" {
-		userProvidedSpecs, err = ParsePCRSpecs(pcrsStr)
+		userProvidedSpecs, err = measure.ParsePCRSpecs(pcrsStr)
 		if err != nil {
 			return fmt.Errorf("invalid PCRs: %w", err)
 		}
@@ -293,20 +296,20 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		return fmt.Errorf("cannot approve: %w", err)
 	}
 
-	var specsToUse []PCRSpec
+	var specsToUse []measure.PCRSpec
 	if userSpecifiedPCRs {
 		specsToUse = userProvidedSpecs
-		fmt.Printf("\nResealing with user-specified PCRs: %s\n", PCRSpecsToString(specsToUse))
+		fmt.Printf("\nResealing with user-specified PCRs: %s\n", measure.PCRSpecsToString(specsToUse))
 	} else {
 		specsToUse = sealedBlob.GetPCRSpecs()
-		fmt.Printf("\nPreserving original PCR selection: %s\n", PCRSpecsToString(specsToUse))
+		fmt.Printf("\nPreserving original PCR selection: %s\n", measure.PCRSpecsToString(specsToUse))
 	}
 
 	hashAlgo := sealedBlob.GetHashAlgo()
 	fmt.Printf("Hash algorithm: %s (%d-byte PCR digests)\n", hashAlgo.DisplayString(), hashAlgo.DigestSize())
 
-	WarnAboutPCRSelection(specsToUse)
-	WarnAboutHashAlgo(hashAlgo)
+	measure.WarnAboutPCRSelection(specsToUse)
+	measure.WarnAboutHashAlgo(hashAlgo)
 	printResealSources(specsToUse)
 
 	pub := signer.Public()
@@ -316,7 +319,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		return asResealSkipped(fmt.Errorf("failed to approve: %w", err), nvramIndex, keys.privKeyPath, sealedBlob)
 	}
 
-	fmt.Printf("\nSuccessfully approved the boot state with PCRs: %s\n", PCRSpecsToString(specsToUse))
+	fmt.Printf("\nSuccessfully approved the boot state with PCRs: %s\n", measure.PCRSpecsToString(specsToUse))
 	fmt.Printf("Generation: %d (every earlier approval for this slot is revoked)\n", sealedBlob.Payload.Generation)
 	fmt.Printf("Authentication: PolicyAuthorize (PCR values + generation, approved by the signing key)\n")
 
@@ -337,11 +340,11 @@ func checkObjectSigningKey(blob *SealedBlob, pub crypto.PublicKey) error {
 	return nil
 }
 
-func printResealSources(specs []PCRSpec) {
+func printResealSources(specs []measure.PCRSpec) {
 	for _, spec := range specs {
-		fmt.Printf("  PCR%-2d (%s): %s\n", spec.Index, spec.Source.String(), GetPCRDescription(spec.Index))
-		if spec.Source == PCRSourceUKI {
-			fmt.Printf("         recomputed from the unified kernel image %s\n", quoteUntrusted(spec.Command))
+		fmt.Printf("  PCR%-2d (%s): %s\n", spec.Index, spec.Source.String(), measure.GetPCRDescription(spec.Index))
+		if spec.Source == measure.PCRSourceUKI {
+			fmt.Printf("         recomputed from the unified kernel image %s\n", untrusted.Quote(spec.Command))
 		}
 	}
 }

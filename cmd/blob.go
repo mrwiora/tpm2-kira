@@ -11,58 +11,10 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+
 	"github.com/google/go-tpm/tpm2"
 )
-
-// PCRHashAlgo represents the hash algorithm used for PCR bank selection
-type PCRHashAlgo string
-
-const (
-	// PCRHashAlgoSHA256 is the default SHA-256 hash algorithm (32-byte digests)
-	PCRHashAlgoSHA256 PCRHashAlgo = "sha256"
-	// PCRHashAlgoSHA1 is the legacy SHA-1 hash algorithm (20-byte digests)
-	PCRHashAlgoSHA1 PCRHashAlgo = "sha1"
-)
-
-// TPMAlg returns the corresponding TPM algorithm ID for this hash algorithm
-func (h PCRHashAlgo) TPMAlg() tpm2.TPMAlgID {
-	switch h {
-	case PCRHashAlgoSHA1:
-		return tpm2.TPMAlgSHA1
-	default:
-		return tpm2.TPMAlgSHA256
-	}
-}
-
-// DigestSize returns the digest size in bytes for this hash algorithm
-func (h PCRHashAlgo) DigestSize() int {
-	switch h {
-	case PCRHashAlgoSHA1:
-		return 20
-	default:
-		return 32
-	}
-}
-
-// String returns a short identifier for this hash algorithm (e.g. "sha256")
-func (h PCRHashAlgo) String() string {
-	switch h {
-	case PCRHashAlgoSHA1:
-		return "sha1"
-	default:
-		return "sha256"
-	}
-}
-
-// DisplayString returns a human-readable display name (e.g. "SHA-256")
-func (h PCRHashAlgo) DisplayString() string {
-	switch h {
-	case PCRHashAlgoSHA1:
-		return "SHA-1"
-	default:
-		return "SHA-256"
-	}
-}
 
 // BlobVersionError is returned when a sealed blob has an incompatible version
 type BlobVersionError struct {
@@ -117,47 +69,6 @@ const CurrentBlobVersion = 14
 // Generous: RSA-4096 PKCS#1 v1.5 = 512 bytes, ECDSA P-384 DER ≈ 104 bytes.
 const MaxBlobSignatureLen = 1024
 
-// PCRSource indicates where a PCR value was obtained from
-type PCRSource byte
-
-const (
-	// PCRSourceRegister means the PCR value was read from TPM registers ('r' suffix or default)
-	PCRSourceRegister PCRSource = 0
-	// PCRSourceEventlog means the PCR value was calculated from the TPM eventlog ('e' suffix)
-	PCRSourceEventlog PCRSource = 1
-	// Source byte 2 is retired and must not be reused; see HISTORY.md.
-	// PCRSourceUKI means the PCR value was computed from a unified kernel image ('u' suffix)
-	PCRSourceUKI PCRSource = 3
-)
-
-// String returns a human-readable label for the PCR source
-func (s PCRSource) String() string {
-	switch s {
-	case PCRSourceEventlog:
-		return "eventlog"
-	case PCRSourceRegister:
-		return "register"
-	case PCRSourceUKI:
-		return "uki"
-	default:
-		return "unknown"
-	}
-}
-
-// Suffix returns the single-character suffix for the PCR source
-func (s PCRSource) Suffix() string {
-	switch s {
-	case PCRSourceEventlog:
-		return "e"
-	case PCRSourceUKI:
-		return "u"
-	case PCRSourceRegister:
-		return ""
-	default:
-		return ""
-	}
-}
-
 // PCRDigestPair represents a PCR index paired with its source and digest value
 // Maximum size constraints for blob deserialization to prevent memory exhaustion.
 // These limits are generous for legitimate use while blocking malicious allocations.
@@ -175,24 +86,10 @@ const (
 
 // PCRDigestPair represents a PCR index paired with its digest value
 type PCRDigestPair struct {
-	Index   int              `json:"index"`             // PCR index
-	Source  PCRSource        `json:"source"`            // Where the PCR value was obtained from
-	Command string           `json:"command,omitempty"` // Unified kernel image path (only when Source == PCRSourceUKI)
-	Digest  tpm2.TPM2BDigest `json:"digest"`            // PCR digest value at seal time
-}
-
-// EventlogInfo describes an eventlog-based PCR calculation. It is not
-// stored: the blob keeps only whether the measure-point extends were applied.
-type EventlogInfo struct {
-	EventlogPath    string `json:"eventlog_path"`    // Path the eventlog was read from (never reopened from the blob)
-	CalculationTime string `json:"calculation_time"` // When calculation was performed
-	TotalEvents     int    `json:"total_events"`     // Total number of events processed
-	ProcessedEvents int    `json:"processed_events"` // Number of events that extended PCRs
-	// MeasurePointExtends records the userspace extends applied on top of the
-	// event log replay, as "word:pcr,pcr;word:pcr". Empty means none were applied.
-	MeasurePointExtends string `json:"measure_point_extends,omitempty"`
-	// MeasurePointDetection records how that decision was reached.
-	MeasurePointDetection string `json:"measure_point_detection,omitempty"`
+	Index   int               `json:"index"`             // PCR index
+	Source  measure.PCRSource `json:"source"`            // Where the PCR value was obtained from
+	Command string            `json:"command,omitempty"` // Unified kernel image path (only when Source == PCRSourceUKI)
+	Digest  tpm2.TPM2BDigest  `json:"digest"`            // PCR digest value at seal time
 }
 
 // SealedBlobPayload contains every field that is covered by the blob
@@ -297,18 +194,18 @@ func (sb *SealedBlob) SlotPolicy() ([]byte, error) {
 
 // GetHashAlgo infers the PCR hash algorithm from the stored digest sizes.
 // Returns SHA-256 by default, SHA-1 if all digests are 20 bytes.
-func (sb *SealedBlob) GetHashAlgo() PCRHashAlgo {
+func (sb *SealedBlob) GetHashAlgo() measure.PCRHashAlgo {
 	for _, pcrDigest := range sb.Payload.PCRDigests {
 		digestLen := len(pcrDigest.Digest.Buffer)
 		if digestLen == 20 {
-			return PCRHashAlgoSHA1
+			return measure.PCRHashAlgoSHA1
 		}
 		if digestLen == 32 {
-			return PCRHashAlgoSHA256
+			return measure.PCRHashAlgoSHA256
 		}
 	}
 	// Default to SHA256 if no digests or unrecognized sizes
-	return PCRHashAlgoSHA256
+	return measure.PCRHashAlgoSHA256
 }
 
 // GetPCRIndices returns a slice of PCR indices from the PCRDigests
@@ -331,11 +228,11 @@ func (sb *SealedBlob) GetPCRDigestValues() []tpm2.TPM2BDigest {
 
 // MeasurePointMode reproduces the measure-point handling this blob was sealed
 // with, so verification recomputes exactly the values the policy was bound to.
-func (sb *SealedBlob) MeasurePointMode() MeasurePointMode {
+func (sb *SealedBlob) MeasurePointMode() measure.MeasurePointMode {
 	if sb.Payload.MeasurePointApplied {
-		return MeasurePointOn
+		return measure.MeasurePointOn
 	}
-	return MeasurePointOff
+	return measure.MeasurePointOff
 }
 
 // MeasurePointExtends describes the extends folded into the eventlog PCRs,
@@ -347,17 +244,17 @@ func (sb *SealedBlob) MeasurePointExtends() string {
 	}
 	byWord := map[string][]int{}
 	for _, pcr := range sb.GetEventlogPCRIndices() {
-		for _, word := range MeasurePointWordsAt(MeasurePointBeforeSeparator, pcr) {
+		for _, word := range measure.MeasurePointWordsAt(measure.MeasurePointBeforeSeparator, pcr) {
 			byWord[word] = append(byWord[word], pcr)
 		}
 	}
-	return FormatMeasurePointExtends(byWord)
+	return measure.FormatMeasurePointExtends(byWord)
 }
 
 // HasEventlogPCRs returns true if any PCR in this blob uses eventlog as its source
 func (sb *SealedBlob) HasEventlogPCRs() bool {
 	for _, pair := range sb.Payload.PCRDigests {
-		if pair.Source == PCRSourceEventlog {
+		if pair.Source == measure.PCRSourceEventlog {
 			return true
 		}
 	}
@@ -368,7 +265,7 @@ func (sb *SealedBlob) HasEventlogPCRs() bool {
 func (sb *SealedBlob) GetEventlogPCRIndices() []int {
 	var indices []int
 	for _, pair := range sb.Payload.PCRDigests {
-		if pair.Source == PCRSourceEventlog {
+		if pair.Source == measure.PCRSourceEventlog {
 			indices = append(indices, pair.Index)
 		}
 	}
@@ -379,7 +276,7 @@ func (sb *SealedBlob) GetEventlogPCRIndices() []int {
 func (sb *SealedBlob) GetRegisterPCRIndices() []int {
 	var indices []int
 	for _, pair := range sb.Payload.PCRDigests {
-		if pair.Source == PCRSourceRegister {
+		if pair.Source == measure.PCRSourceRegister {
 			indices = append(indices, pair.Index)
 		}
 	}
@@ -389,7 +286,7 @@ func (sb *SealedBlob) GetRegisterPCRIndices() []int {
 // HasUKIPCRs returns true if any PCR in this blob is computed from a unified kernel image
 func (sb *SealedBlob) HasUKIPCRs() bool {
 	for _, pair := range sb.Payload.PCRDigests {
-		if pair.Source == PCRSourceUKI {
+		if pair.Source == measure.PCRSourceUKI {
 			return true
 		}
 	}
@@ -400,7 +297,7 @@ func (sb *SealedBlob) HasUKIPCRs() bool {
 func (sb *SealedBlob) GetUKIPCRIndices() []int {
 	var indices []int
 	for _, pair := range sb.Payload.PCRDigests {
-		if pair.Source == PCRSourceUKI {
+		if pair.Source == measure.PCRSourceUKI {
 			indices = append(indices, pair.Index)
 		}
 	}
@@ -408,10 +305,10 @@ func (sb *SealedBlob) GetUKIPCRIndices() []int {
 }
 
 // GetPCRSpecs reconstructs PCRSpec slice from the sealed blob's PCR digests
-func (sb *SealedBlob) GetPCRSpecs() []PCRSpec {
-	specs := make([]PCRSpec, len(sb.Payload.PCRDigests))
+func (sb *SealedBlob) GetPCRSpecs() []measure.PCRSpec {
+	specs := make([]measure.PCRSpec, len(sb.Payload.PCRDigests))
 	for i, pair := range sb.Payload.PCRDigests {
-		specs[i] = PCRSpec{Index: pair.Index, Source: pair.Source, Command: pair.Command}
+		specs[i] = measure.PCRSpec{Index: pair.Index, Source: pair.Source, Command: pair.Command}
 	}
 	return specs
 }
@@ -419,7 +316,7 @@ func (sb *SealedBlob) GetPCRSpecs() []PCRSpec {
 // hasEventlogPCRsInPayload checks whether any PCR digest pair in the payload uses eventlog source.
 func hasEventlogPCRsInPayload(p *SealedBlobPayload) bool {
 	for _, pair := range p.PCRDigests {
-		if pair.Source == PCRSourceEventlog {
+		if pair.Source == measure.PCRSourceEventlog {
 			return true
 		}
 	}
@@ -460,7 +357,7 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		size += 4 + // PCR index
 			1 + // source byte
 			2 + len(pcrDigest.Digest.Buffer) // 2 bytes for length + digest data
-		if pcrDigest.Source == PCRSourceUKI {
+		if pcrDigest.Source == measure.PCRSourceUKI {
 			size += 2 + len(pcrDigest.Command) // 2 bytes for path length + path string
 		}
 		if size < 0 || size > MaxBlobSize {
@@ -501,7 +398,7 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		offset++
 
 		// Command string (only for UKI source)
-		if pcrDigest.Source == PCRSourceUKI {
+		if pcrDigest.Source == measure.PCRSourceUKI {
 			binary.LittleEndian.PutUint16(buf[offset:], uint16(len(pcrDigest.Command)))
 			offset += 2
 			copy(buf[offset:], pcrDigest.Command)
@@ -616,11 +513,11 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 		if offset+1 > len(data) {
 			return nil, fmt.Errorf("data too short for PCR source")
 		}
-		p.PCRDigests[i].Source = PCRSource(data[offset])
+		p.PCRDigests[i].Source = measure.PCRSource(data[offset])
 		offset++
 
 		// Command string (only for UKI source)
-		if p.PCRDigests[i].Source == PCRSourceUKI {
+		if p.PCRDigests[i].Source == measure.PCRSourceUKI {
 			if offset+2 > len(data) {
 				return nil, fmt.Errorf("data too short for UKI path length")
 			}

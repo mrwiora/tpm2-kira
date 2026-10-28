@@ -35,6 +35,7 @@ import (
 	"golang.org/x/crypto/hkdf"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
 
@@ -135,7 +136,7 @@ func (c *vaultClient) post(ctx context.Context, path string, in, out any) error 
 	if rsp.StatusCode/100 != 2 {
 		var e vaultproto.ErrorResponse
 		if json.Unmarshal(data, &e) == nil && e.Error != "" {
-			return fmt.Errorf("the vault: %s", quoteUntrusted(e.Error))
+			return fmt.Errorf("the vault: %s", untrusted.Quote(e.Error))
 		}
 		return fmt.Errorf("the vault answered %s", rsp.Status)
 	}
@@ -257,7 +258,7 @@ func fetchRemote(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, c *vau
 			}
 			return &rsp, nil
 		case vaultproto.StatusDenied:
-			return nil, fmt.Errorf("the vault refused: %s", quoteUntrusted(rsp.Reason))
+			return nil, fmt.Errorf("the vault refused: %s", untrusted.Quote(rsp.Reason))
 		case vaultproto.StatusPending:
 			if !toldPending {
 				say("the vault waits for an operator's approval of this boot")
@@ -273,7 +274,7 @@ func fetchRemote(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, c *vau
 			case <-time.After(wait):
 			}
 		default:
-			return nil, fmt.Errorf("the vault answered %q", quoteUntrusted(rsp.Status))
+			return nil, fmt.Errorf("the vault answered %q", untrusted.Quote(rsp.Status))
 		}
 	}
 }
@@ -764,7 +765,7 @@ func VaultStatus(tpmPath string, sealIndex uint32, debug bool) error {
 	v := &att.Vault
 	fmt.Printf("Slot %d: vault %s\n", slot, v.URL)
 	fmt.Printf("  pin:       %s\n", v.Pin)
-	fmt.Printf("  device:    %x (%s)\n", att.DeviceID, quoteUntrusted(att.FriendlyName))
+	fmt.Printf("  device:    %x (%s)\n", att.DeviceID, untrusted.Quote(att.FriendlyName))
 	fmt.Printf("  label:     %s\n", v.Label)
 	if len(v.PepperCheck) > 0 {
 		fmt.Println("  pepper:    yes - every boot waits for an operator's approval with it")

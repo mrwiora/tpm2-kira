@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+
 	"github.com/google/go-tpm/tpm2"
 	"rsc.io/qr"
 )
@@ -39,7 +41,7 @@ func FormatKIRAError(err error) string {
 // eventlog or UKI reconstruction is shown.
 func PrintKIRAError(err error) {
 	// Check if it's a PCR mismatch error for special formatting
-	if pcrErr, ok := err.(*PCRMismatchError); ok {
+	if pcrErr, ok := err.(*measure.PCRMismatchError); ok {
 		// Print KIRA error line first
 		fmt.Println(FormatKIRAError(pcrErr))
 		fmt.Println()
@@ -57,14 +59,14 @@ func PrintKIRAError(err error) {
 			expected := pcrErr.ExpectedDigests[i]
 			current := pcrErr.CurrentDigests[i]
 
-			status := PCRStatus(expected, current)
+			status := measure.PCRStatus(expected, current)
 
 			source := ""
 			if i < len(pcrErr.PCRSources) {
 				source = pcrErr.PCRSources[i].String()
 			}
 
-			fmt.Printf("  PCR%-2d (%s): %s - %s\n", pcrIndex, source, GetPCRDescription(pcrIndex), status)
+			fmt.Printf("  PCR%-2d (%s): %s - %s\n", pcrIndex, source, measure.GetPCRDescription(pcrIndex), status)
 			fmt.Printf("    Expected (blob):    %x\n", expected)
 			fmt.Printf("    Current (register): %x\n", current)
 		}
@@ -86,21 +88,6 @@ func PrintKIRAError(err error) {
 	} else {
 		fmt.Println(FormatKIRAError(err))
 	}
-}
-
-// PCRMismatchError represents a PCR mismatch error with detailed information.
-// CurrentDigests always contains values read from TPM registers (the unseal
-// path never uses eventlog or UKI reconstruction).
-type PCRMismatchError struct {
-	Message         string
-	PCRIndices      []int
-	ExpectedDigests [][]byte    // Digest values stored in the sealed blob
-	CurrentDigests  [][]byte    // Current TPM register values
-	PCRSources      []PCRSource // Original source used at seal time (informational)
-}
-
-func (e *PCRMismatchError) Error() string {
-	return e.Message
 }
 
 // renderQRCode renders data as a QR code for a terminal.

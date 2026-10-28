@@ -40,6 +40,8 @@ import (
 	"os"
 	"slices"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/tpm2-trust/assh/config"
 	"github.com/tpm2-trust/assh/hostkey"
@@ -75,9 +77,9 @@ const sshCAWindowEvent = "tpm2-kira: ssh ca closed"
 // option ROMs, the Secure Boot state, and the image's PCRs (11 with a
 // unified kernel image, 8 and 9 with GRUB). Slot 1, the lower, is the
 // Secure Boot state alone.
-func sshCASlots(algo PCRHashAlgo, window int) (map[int][]int, error) {
+func sshCASlots(algo measure.PCRHashAlgo, window int) (map[int][]int, error) {
 	sel, _ := DefaultPCRSelection("", algo)
-	specs, err := ParsePCRSpecs(sel)
+	specs, err := measure.ParsePCRSpecs(sel)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +97,7 @@ func sshCASlots(algo PCRHashAlgo, window int) (map[int][]int, error) {
 // sshCABank is the PCR bank the CA is bound to: SHA-256 where the TPM has
 // it.
 func sshCABank(tpmDev transport.TPM) hostkey.Bank {
-	if TPMHasPCRBank(tpmDev, PCRHashAlgoSHA256) {
+	if measure.TPMHasPCRBank(tpmDev, measure.PCRHashAlgoSHA256) {
 		return hostkey.SHA256
 	}
 	return hostkey.SHA1
@@ -105,26 +107,26 @@ func sshCABank(tpmDev transport.TPM) hostkey.Bank {
 // screen: replayed from the event log (PCR 8 and 9 with GRUB's prediction),
 // PCR 11 computed from the unified kernel image, the window empty.
 func sshCAValues(tpmDev transport.TPM, ca *hostkey.CA) (map[int][]byte, error) {
-	var specs []PCRSpec
+	var specs []measure.PCRSpec
 	for _, idx := range ca.PCRs() {
 		switch idx {
 		case ca.Window:
-		case TPM2PCRKernelBoot:
+		case measure.TPM2PCRKernelBoot:
 			uki := findUKI()
 			if uki == "" {
-				uki = DefaultUKIPath
+				uki = measure.DefaultUKIPath
 			}
-			specs = append(specs, PCRSpec{Index: idx, Source: PCRSourceUKI, Command: uki})
+			specs = append(specs, measure.PCRSpec{Index: idx, Source: measure.PCRSourceUKI, Command: uki})
 		default:
-			specs = append(specs, PCRSpec{Index: idx, Source: PCRSourceEventlog})
+			specs = append(specs, measure.PCRSpec{Index: idx, Source: measure.PCRSourceEventlog})
 		}
 	}
-	r, err := ReadPCRValues(tpmDev, specs, PCRHashAlgo(ca.Bank), MeasurePointModeSetting, MeasurePointBeforeSeparator, false)
+	r, err := measure.ReadPCRValues(tpmDev, specs, measure.PCRHashAlgo(ca.Bank), measure.MeasurePointModeSetting, measure.MeasurePointBeforeSeparator, false)
 	if err != nil {
 		return nil, fmt.Errorf("the values of %s at boot cannot be told: %w", hostkey.PCRList(ca.PCRs()), err)
 	}
 	if ca.Window != 0 {
-		r.Values[ca.Window] = make([]byte, newHashFor(PCRHashAlgo(ca.Bank)).Size())
+		r.Values[ca.Window] = make([]byte, measure.NewHashFor(measure.PCRHashAlgo(ca.Bank)).Size())
 	}
 	return r.Values, nil
 }
@@ -154,7 +156,7 @@ func createSSHCA(conf *config.Config, tpmPath string, signer crypto.Signer) (*ho
 		conf.Bank = sshCABank(tpmDev)
 	}
 	if len(conf.Slots) == 0 {
-		if conf.Slots, err = sshCASlots(PCRHashAlgo(conf.Bank), conf.Window); err != nil {
+		if conf.Slots, err = sshCASlots(measure.PCRHashAlgo(conf.Bank), conf.Window); err != nil {
 			return nil, err
 		}
 	}

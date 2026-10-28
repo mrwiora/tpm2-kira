@@ -7,6 +7,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 )
@@ -194,7 +196,7 @@ func slotErrorLine(err error) string {
 	switch {
 	case errors.Is(err, ErrCodesLocked):
 		return "Locked until reboot (codes are only shown before the disk is unlocked)"
-	case errors.Is(err, ErrSeparatorLocked):
+	case errors.Is(err, measure.ErrSeparatorLocked):
 		return "Locked until the next boot (the OS separator ran after the measure point)"
 	case errors.As(err, &genErr):
 		if genErr.IndexMissing {
@@ -205,7 +207,7 @@ func slotErrorLine(err error) string {
 	if bve, ok := IsBlobVersionError(err); ok {
 		return fmt.Sprintf("Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira slot add", bve.FoundVersion, bve.RequiredVersion)
 	}
-	if _, ok := err.(*PCRMismatchError); ok || IsTPMPolicyFailure(err) {
+	if _, ok := err.(*measure.PCRMismatchError); ok || IsTPMPolicyFailure(err) {
 		return ""
 	}
 	return fmt.Sprintf("No code: %v", err)
@@ -255,10 +257,10 @@ func FprintKIRASlots(w io.Writer, tpmDev transport.TPM, slots []NVRAMSlot, codes
 							expected := expectedDigests[idx].Buffer
 							current := currentPCRValues[idx].Buffer
 
-							status := PCRStatus(expected, current)
+							status := measure.PCRStatus(expected, current)
 
 							source := sealedBlob.Payload.PCRDigests[idx].Source
-							fmt.Fprintf(w, "  PCR%-2d (%s): %s - %s\n", pcrIndex, source.String(), GetPCRDescription(pcrIndex), status)
+							fmt.Fprintf(w, "  PCR%-2d (%s): %s - %s\n", pcrIndex, source.String(), measure.GetPCRDescription(pcrIndex), status)
 							fmt.Fprintf(w, "    Expected (blob):    %x\n", expected)
 							fmt.Fprintf(w, "    Current (register): %x\n", current)
 						}

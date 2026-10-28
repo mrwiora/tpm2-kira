@@ -23,6 +23,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 )
 
 // measurePoint is the boot-check prediction for one enrolment: the values,
@@ -36,7 +37,7 @@ type measurePoint struct {
 // predictMeasurePoint computes the PCR values the boot check will see for
 // the attested selection, the way the seal does for its policy.
 func predictMeasurePoint(tpmDev transport.TPM, sealed *SealedBlob, sel attest.PCRSelection, debug bool) *measurePoint {
-	mode := MeasurePointAuto
+	mode := measure.MeasurePointAuto
 	if sealed != nil {
 		if sealed.HasEventlogPCRs() {
 			// The seal already probed whether systemd's measure-point
@@ -45,15 +46,15 @@ func predictMeasurePoint(tpmDev transport.TPM, sealed *SealedBlob, sel attest.PC
 		}
 	}
 	specs := measurePointSpecs(sel.Indices)
-	algo := PCRHashAlgoSHA256
+	algo := measure.PCRHashAlgoSHA256
 	if sel.Alg == attest.AlgSHA1 {
-		algo = PCRHashAlgoSHA1
+		algo = measure.PCRHashAlgoSHA1
 	}
 	// The baseline is the state after the OS separator: that is the one the
 	// running system's registers can vouch for (CheckMeasurePointValues).
 	// The gate quotes before the separator, while the code is shown; the
 	// phone takes both for the same boot (attest.SameBootState).
-	res, err := ReadPCRValues(tpmDev, specs, algo, mode, MeasurePointAfterSeparator, debug)
+	res, err := measure.ReadPCRValues(tpmDev, specs, algo, mode, measure.MeasurePointAfterSeparator, debug)
 	if err != nil {
 		return &measurePoint{err: err}
 	}
@@ -81,12 +82,12 @@ func predictMeasurePoint(tpmDev transport.TPM, sealed *SealedBlob, sel attest.PC
 // that is running, so the seal's unified kernel image (a file that may
 // already be newer than the booted one) is deliberately not used; the seal
 // contributes its measure-point probe result instead.
-func measurePointSpecs(indices []uint8) []PCRSpec {
-	specs := make([]PCRSpec, 0, len(indices))
+func measurePointSpecs(indices []uint8) []measure.PCRSpec {
+	specs := make([]measure.PCRSpec, 0, len(indices))
 	for _, i := range indices {
-		spec := PCRSpec{Index: int(i), Source: PCRSourceRegister}
+		spec := measure.PCRSpec{Index: int(i), Source: measure.PCRSourceRegister}
 		if i <= 12 {
-			spec.Source = PCRSourceEventlog
+			spec.Source = measure.PCRSourceEventlog
 		}
 		specs = append(specs, spec)
 	}

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 )
 
 // writeTestKeyPair writes a P-256 signing key the way setup does (SEC 1 PEM,
@@ -70,12 +71,12 @@ func TestCodeBeforeTheSeparatorThenLocked(t *testing.T) {
 	if err := os.WriteFile(logPath, tcg2Log(entries), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	old := DefaultEventlogPath
-	DefaultEventlogPath = logPath
-	defer func() { DefaultEventlogPath = old }()
+	old := measure.DefaultEventlogPath
+	measure.DefaultEventlogPath = logPath
+	defer func() { measure.DefaultEventlogPath = old }()
 
 	pubPath, privPath := writeTestKeyPair(t)
-	if err := Seal(sock, "0,2,7", NVRAMSlotStart, pubPath, privPath, false, PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "0,2,7", NVRAMSlotStart, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
 
@@ -85,7 +86,7 @@ func TestCodeBeforeTheSeparatorThenLocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("code during the hold: %v", err)
 	}
-	if extends := blob.MeasurePointExtends(); strings.Contains(extends, OSSeparatorWord) {
+	if extends := blob.MeasurePointExtends(); strings.Contains(extends, measure.OSSeparatorWord) {
 		t.Fatalf("the blob should be sealed before the separator: %q", extends)
 	}
 	next, _, err := SlotCode(tpm, NVRAMSlotStart, at.Add(30*time.Second), false)
@@ -95,13 +96,13 @@ func TestCodeBeforeTheSeparatorThenLocked(t *testing.T) {
 
 	// systemd-pcrosseparator runs: the sealed values are unreachable now.
 	for _, pcr := range []int{0, 2, 7} {
-		extendSHA256(t, tpm, pcr, DigestOf(PCRHashAlgoSHA256, []byte(OSSeparatorWord)))
+		extendSHA256(t, tpm, pcr, measure.DigestOf(measure.PCRHashAlgoSHA256, []byte(measure.OSSeparatorWord)))
 	}
-	if _, _, err := SlotCode(tpm, NVRAMSlotStart, at, false); !errors.Is(err, ErrSeparatorLocked) {
+	if _, _, err := SlotCode(tpm, NVRAMSlotStart, at, false); !errors.Is(err, measure.ErrSeparatorLocked) {
 		t.Fatalf("after the separator the slot should be locked, got %v", err)
 	}
 	slots := ScanNVRAMSlot(tpm, NVRAMSlotStart, false)
-	if len(slots) != 1 || !errors.Is(slots[0].Error, ErrSeparatorLocked) {
+	if len(slots) != 1 || !errors.Is(slots[0].Error, measure.ErrSeparatorLocked) {
 		t.Fatalf("reveal should report the lock: %+v", slots)
 	}
 	if line := slotErrorLine(slots[0].Error); line != "Locked until the next boot (the OS separator ran after the measure point)" {
@@ -135,14 +136,14 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	if err := os.WriteFile(logPath, tcg2Log(entries), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	old := DefaultEventlogPath
-	DefaultEventlogPath = logPath
-	defer func() { DefaultEventlogPath = old }()
+	old := measure.DefaultEventlogPath
+	measure.DefaultEventlogPath = logPath
+	defer func() { measure.DefaultEventlogPath = old }()
 
 	const slot = NVRAMSlotStart + 1
 	at := time.Date(2026, 10, 6, 1, 0, 0, 0, time.UTC)
 	pubPath, privPath := writeTestKeyPair(t)
-	if err := Seal(sock, "0,2,7", slot, pubPath, privPath, false, PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "0,2,7", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
 	if _, _, err := SlotCode(tpm, slot, at, false); err != nil {
@@ -247,7 +248,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	}
 
 	// Seal the slot again: the same phones, still no TOTP key.
-	if err := Seal(sock, "0,2,7", slot, pubPath, privPath, false, PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "0,2,7", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("second seal: %v", err)
 	}
 	enrolled("after sealing again")
@@ -289,7 +290,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	// Another signing key seals the slot: it does not adopt phones it
 	// cannot vouch for: the blob has no attestation part.
 	otherPub, otherPriv := writeTestKeyPair(t)
-	if err := Seal(sock, "0,2,7", slot, otherPub, otherPriv, false, PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "0,2,7", slot, otherPub, otherPriv, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal with another key: %v", err)
 	}
 	if _, err := loadAttestBlob(tpm, slot); !errors.Is(err, errNotEnrolled) {

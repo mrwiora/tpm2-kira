@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/piv"
 	"golang.org/x/sys/unix"
 )
@@ -140,7 +141,7 @@ func Setup(opts SetupOptions) error {
 	fmt.Printf("  Private key:    %s (%s)\n", privKeyPath, location)
 	fmt.Println()
 	fmt.Println("Next, seal a TOTP secret and scan the QR code it prints:")
-	fmt.Printf("   tpm2-kira slot add --pcrs %s\n", RecommendedPCRs())
+	fmt.Printf("   tpm2-kira slot add --pcrs %s\n", measure.RecommendedPCRs())
 	fmt.Println("   (docs/SLOT.md, \"Choosing PCRs\", explains the selection and its trade-offs)")
 	if chosen != nil {
 		fmt.Println()

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 )
 
 // NVRAMRestore puts a blob that WriteToNVRAM stashed under NVRAMRecoveryDir
@@ -72,7 +74,7 @@ func NVRAMRestore(tpmPath, file string, nvramIndex uint32, pubKeyPath, privKeyPa
 	specs := blob.GetPCRSpecs()
 	hashAlgo := blob.GetHashAlgo()
 	fmt.Printf("Restoring slot #%d (0x%08X) from %s\n", SlotNumber(nvramIndex), nvramIndex, file)
-	fmt.Printf("PCR selection as sealed: %s, %s\n", PCRSpecsToString(specs), hashAlgo.DisplayString())
+	fmt.Printf("PCR selection as sealed: %s, %s\n", measure.PCRSpecsToString(specs), hashAlgo.DisplayString())
 	pub := signer.Public()
 	fmt.Printf("Signing key: %s (%s, fingerprint: %s)\n", keys.privKeyPath, PublicKeyDescription(pub), PublicKeyFingerprint(pub))
 
@@ -85,7 +87,7 @@ func NVRAMRestore(tpmPath, file string, nvramIndex uint32, pubKeyPath, privKeyPa
 		phones = "its phone"
 	}
 	fmt.Printf("\nRestored slot #%d: the TOTP key and %s, approved for PCRs %s at generation %d\n",
-		SlotNumber(nvramIndex), phones, PCRSpecsToString(specs), blob.Payload.Generation)
+		SlotNumber(nvramIndex), phones, measure.PCRSpecsToString(specs), blob.Payload.Generation)
 	if err := os.Remove(file); err != nil {
 		fmt.Printf("The slot holds the blob again; %s could not be removed (%v) and may be deleted\n", file, err)
 	} else {

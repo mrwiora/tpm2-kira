@@ -1,4 +1,4 @@
-package cmd
+package untrusted
 
 import (
 	"strconv"
@@ -14,7 +14,7 @@ import (
 // is, which keeps ordinary paths and versions readable and copyable; anything
 // else is Go-quoted, so control bytes show up as \x1b and never reach the
 // terminal.
-func quoteUntrusted(s string) string {
+func Quote(s string) string {
 	if s != "" && strings.IndexFunc(s, needsQuoting) < 0 {
 		return s
 	}

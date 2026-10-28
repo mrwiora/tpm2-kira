@@ -1,4 +1,4 @@
-package cmd
+package measure
 
 import (
 	"bytes"
@@ -43,7 +43,7 @@ func debianEvents(t *testing.T) []attest.Event {
 
 func replay89(events []attest.Event) (pcr8, pcr9 string) {
 	calc := &EventlogPCRCalculator{PCRIndices: []int{8, 9}, HashAlgo: PCRHashAlgoSHA256}
-	pcrs, _, _, _, _ := calc.replayEventLog(events)
+	pcrs, _, _, _, _ := calc.ReplayEventLog(events)
 	return hex.EncodeToString(pcrs[8]), hex.EncodeToString(pcrs[9])
 }
 
@@ -88,11 +88,11 @@ func TestGrubMenuCommandMatchesTheLog(t *testing.T) {
 	}
 	n := 0
 	for _, e := range debianEvents(t) {
-		_, cmd, _ := strings.Cut(eventText(e), ": ")
+		_, cmd, _ := strings.Cut(EventText(e), ": ")
 		if e.Index != 8 || !(strings.HasPrefix(cmd, "menuentry ") || strings.HasPrefix(cmd, "submenu ")) {
 			continue
 		}
-		rebuilt, ok := grubMenuCommand(cfg, menuID(cmd))
+		rebuilt, ok := GRUBMenuCommand(cfg, menuID(cmd))
 		if !ok {
 			t.Fatalf("not found in grub.cfg: %q", menuID(cmd))
 		}
@@ -126,9 +126,9 @@ func TestPredictGRUBReproducesTheBoot(t *testing.T) {
 		if e.Index != 8 {
 			continue
 		}
-		_, cmd, _ := strings.Cut(eventText(e), ": ")
+		_, cmd, _ := strings.Cut(EventText(e), ": ")
 		if d := sha256.Sum256([]byte(cmd)); !bytes.Equal(d[:], e.Digest) {
-			t.Errorf("PCR8 %q does not hash as its text", eventText(e))
+			t.Errorf("PCR8 %q does not hash as its text", EventText(e))
 		}
 	}
 }

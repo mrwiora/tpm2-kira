@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/untrusted"
+
 	"github.com/google/go-tpm/tpm2"
 	"rsc.io/qr"
 )
@@ -44,7 +47,7 @@ func TestQuoteUntrusted(t *testing.T) {
 		"x\nFAKE LINE":                 `"x\nFAKE LINE"`,
 		"\xff":                         `"\xff"`,
 	} {
-		if got := quoteUntrusted(in); got != want {
+		if got := untrusted.Quote(in); got != want {
 			t.Errorf("quoteUntrusted(%q) = %s, want %s", in, got, want)
 		}
 	}
@@ -62,7 +65,7 @@ func TestInfoDoesNotTrustPlantedBlob(t *testing.T) {
 		TOTPAlgorithm: tpm2.TPMAlgSHA1,
 		PCRDigests: []PCRDigestPair{
 			{Index: 7, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-			{Index: 11, Source: PCRSourceUKI, Command: "/boot/x" + esc + ".efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+			{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/x" + esc + ".efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 		},
 		PolicyRef: make([]byte, 32),
 	}}

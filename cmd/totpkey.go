@@ -15,6 +15,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
 
@@ -454,7 +455,7 @@ func approvedSessionThen(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint3
 			PolicySession: handle,
 			Pcrs: tpm2.TPMLPCRSelection{PCRSelections: []tpm2.TPMSPCRSelection{{
 				Hash:      hashAlgo.TPMAlg(),
-				PCRSelect: PcrsToBitmapBytes(blob.GetPCRIndices()),
+				PCRSelect: measure.PcrsToBitmapBytes(blob.GetPCRIndices()),
 			}}},
 		}).Execute(tpm); err != nil {
 			return fmt.Errorf("PolicyPCR: %w", err)

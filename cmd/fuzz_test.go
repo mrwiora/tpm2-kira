@@ -5,6 +5,8 @@ package cmd
 import (
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+
 	"github.com/google/go-attestation/attest"
 	"github.com/google/go-tpm/tpm2"
 )
@@ -20,8 +22,8 @@ func FuzzUnmarshalSealedBlob(f *testing.F) {
 		Public: []byte{1, 2}, Private: []byte{3},
 		TOTPAlgorithm: tpm2.TPMAlgSHA1,
 		PCRDigests: []PCRDigestPair{
-			{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-			{Index: 11, Source: PCRSourceUKI, Command: "/boot/x.efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+			{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+			{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/x.efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 		},
 		PolicyRef: make([]byte, 32), MeasurePointApplied: true}}
 	if b, err := sb.Marshal(); err == nil {
@@ -35,8 +37,8 @@ func FuzzUnmarshalSealedBlob(f *testing.F) {
 			return
 		}
 		b.GetHashAlgo()
-		PcrsToBitmapBytes(b.GetPCRIndices())
-		PCRSpecsToString(b.GetPCRSpecs())
+		measure.PcrsToBitmapBytes(b.GetPCRIndices())
+		measure.PCRSpecsToString(b.GetPCRSpecs())
 		b.GetPCRDigestValues()
 		b.MeasurePointMode()
 		_, _ = b.MarshalJSON()
@@ -65,9 +67,9 @@ func FuzzEventlogReplay(f *testing.F) {
 		if err != nil {
 			return
 		}
-		for _, algo := range []PCRHashAlgo{PCRHashAlgoSHA256, PCRHashAlgoSHA1} {
-			calc := NewEventlogPCRCalculator(nil, []int{0, 2, 4, 7, 9, 11}, algo, false)
-			calc.replayEventLog(log.Events(attestHash(algo)))
+		for _, algo := range []measure.PCRHashAlgo{measure.PCRHashAlgoSHA256, measure.PCRHashAlgoSHA1} {
+			calc := measure.NewEventlogPCRCalculator(nil, []int{0, 2, 4, 7, 9, 11}, algo, false)
+			calc.ReplayEventLog(log.Events(measure.AttestHash(algo)))
 		}
 	})
 }

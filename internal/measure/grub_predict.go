@@ -1,4 +1,4 @@
-package cmd
+package measure
 
 import (
 	"bytes"
@@ -80,7 +80,7 @@ func predictGRUB(events []attest.Event, files grubFiles, kernels []string) *grub
 	booted := ""
 	for _, e := range events {
 		if e.Index == 9 {
-			if m := kernelVersion.FindStringSubmatch(eventText(e)); m != nil && m[1] == "vmlinuz" {
+			if m := kernelVersion.FindStringSubmatch(EventText(e)); m != nil && m[1] == "vmlinuz" {
 				booted = m[2]
 			}
 		}
@@ -104,7 +104,7 @@ func predictGRUB(events []attest.Event, files grubFiles, kernels []string) *grub
 		if e.Index != 9 || e.Type != attest.EventType(0x0d) { // EV_IPL
 			continue
 		}
-		m := grubFileEvent.FindStringSubmatch(eventText(e))
+		m := grubFileEvent.FindStringSubmatch(EventText(e))
 		if m == nil || m[1] == "" {
 			continue
 		}
@@ -127,7 +127,7 @@ func predictGRUB(events []attest.Event, files grubFiles, kernels []string) *grub
 		if e.Index != 9 || e.Type != attest.EventType(0x0d) {
 			continue
 		}
-		m := grubFileEvent.FindStringSubmatch(eventText(e))
+		m := grubFileEvent.FindStringSubmatch(EventText(e))
 		if m == nil || filepath.Base(m[2]) != "grub.cfg" || m[1] == "" {
 			continue
 		}
@@ -142,7 +142,7 @@ func predictGRUB(events []attest.Event, files grubFiles, kernels []string) *grub
 	var initrdDigest []byte
 	for i := range events {
 		e := &events[i]
-		text := eventText(*e)
+		text := EventText(*e)
 		switch {
 		case e.Index == 9 && e.Type == attest.EventType(0x0d):
 			m := grubFileEvent.FindStringSubmatch(text)
@@ -179,7 +179,7 @@ func predictGRUB(events []attest.Event, files grubFiles, kernels []string) *grub
 			if prefix == "grub_cmd" && (strings.HasPrefix(cmd, "menuentry ") || strings.HasPrefix(cmd, "submenu ")) {
 				// From the file, not by substitution: the body lists
 				// every kernel, and a version swap cannot know the list.
-				rebuilt, ok := grubMenuCommand(grubCfg, menuID(cmd))
+				rebuilt, ok := GRUBMenuCommand(grubCfg, menuID(cmd))
 				if !ok {
 					continue
 				}
@@ -228,7 +228,7 @@ func menuID(cmd string) string {
 // $menuentry_id_option expanded to --id) joined by single spaces, " {",
 // then the body's lines and the closing brace exactly as in the file,
 // indentation included.
-func grubMenuCommand(cfg []byte, id string) (string, bool) {
+func GRUBMenuCommand(cfg []byte, id string) (string, bool) {
 	if id == "" || cfg == nil {
 		return "", false
 	}
@@ -286,7 +286,7 @@ func grubArgs(s string) []string {
 	return args
 }
 
-func eventText(e attest.Event) string {
+func EventText(e attest.Event) string {
 	return string(bytes.TrimRight(e.Data, "\x00"))
 }
 

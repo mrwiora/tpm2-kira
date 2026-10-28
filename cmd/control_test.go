@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 )
 
 // Step 1, the boot chain: the hook, the route, and the way on to step 2,
@@ -65,7 +67,7 @@ func TestControlBootChain(t *testing.T) {
 // The prerequisites judge the recovery passphrase and an empty one.
 func TestControlPrerequisites(t *testing.T) {
 	c := &controller{facts: machineFacts{TPM: "/dev/tpmrm0", Initramfs: "mkinitcpio", HookInstalled: true,
-		Hooks: []string{"systemd", "sd-encrypt"}, SecureBoot: SecureBootState{Known: true, Enabled: true}}}
+		Hooks: []string{"systemd", "sd-encrypt"}, SecureBoot: measure.SecureBootState{Known: true, Enabled: true}}}
 	c.facts.Status.Devices = []LuksDeviceStatus{{Device: "/dev/sda2", Keyslots: []KeyslotStatus{{Keyslot: 0}}}}
 	if got := c.prereqText(); !strings.Contains(got, "All prerequisites are met") || strings.Contains(got, "\033[0;31m") {
 		t.Fatalf("a sound machine:\n%s", got)
@@ -333,7 +335,7 @@ func TestNoteTextEscapesMarkupAndDropsIndent(t *testing.T) {
 // not with the risk in brackets; there is no separate risks list.
 func TestControlStatusJudgement(t *testing.T) {
 	f := machineFacts{TPM: "/dev/tpmrm0", LogSHA256: true, Keys: "local key files",
-		SecureBoot: SecureBootState{Known: true, Enabled: true}, EKBy: "Infineon", Initramfs: "mkinitcpio"}
+		SecureBoot: measure.SecureBootState{Known: true, Enabled: true}, EKBy: "Infineon", Initramfs: "mkinitcpio"}
 	f.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u"}, {Slot: 1, PCRs: "0e,7e", Fallback: true}}
 	c := &controller{facts: f}
 	got := c.factsText()
@@ -354,7 +356,7 @@ func TestControlStatusJudgement(t *testing.T) {
 	}
 
 	c.facts.UseSHA1, c.facts.SHA1Why = true, "no SHA-256 bank"
-	c.facts.SecureBoot = SecureBootState{Known: true, SetupMode: true}
+	c.facts.SecureBoot = measure.SecureBootState{Known: true, SetupMode: true}
 	c.facts.Status.Slots[0].PCRs = "0,2,7"
 	c.facts.EKBy, c.facts.EKNote, c.facts.Phone = "", "the TPM has no vendor certificate for its endorsement key", true
 	c.facts.PINLoose = true
@@ -377,11 +379,11 @@ func TestControlStatusJudgement(t *testing.T) {
 		t.Errorf("the unwired hook is not marked:\n%s", got)
 	}
 	c.facts.Initramfs, c.facts.HookState = "", ""
-	c.facts.SecureBoot = SecureBootState{Known: true}
+	c.facts.SecureBoot = measure.SecureBootState{Known: true}
 	if got := c.factsText(); !strings.Contains(got, "disabled (risk: the boot loader and the kernel run unsigned") {
 		t.Errorf("disabled: %s", got)
 	}
-	c.facts.SecureBoot = SecureBootState{}
+	c.facts.SecureBoot = measure.SecureBootState{}
 	if got := c.factsText(); !strings.Contains(got, "state unknown, no efivars (risk:") {
 		t.Errorf("unknown: %s", got)
 	}

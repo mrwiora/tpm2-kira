@@ -5,15 +5,16 @@ import (
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 )
 
 // The bank of a new enrolment is SHA-256 unless --sha1 is given, as for
 // 'slot add': SHA-1 is never chosen for the user. Where SHA-256 cannot work,
 // enrolment stops and names the command.
 func TestChooseAttestBank(t *testing.T) {
-	bank := func(sha1, sha256 bool) func(PCRHashAlgo) bool {
-		return func(a PCRHashAlgo) bool {
-			if a == PCRHashAlgoSHA1 {
+	bank := func(sha1, sha256 bool) func(measure.PCRHashAlgo) bool {
+		return func(a measure.PCRHashAlgo) bool {
+			if a == measure.PCRHashAlgoSHA1 {
 				return sha1
 			}
 			return sha256

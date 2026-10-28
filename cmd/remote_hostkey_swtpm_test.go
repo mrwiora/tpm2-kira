@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/tpm2-trust/assh/hostkey"
 )
@@ -40,9 +42,9 @@ func TestSSHCAApprovedForTheCodeScreen(t *testing.T) {
 	}
 	t.Cleanup(func() { p.stop(tpmDev) })
 	logPath := filepath.Join(t.TempDir(), "binary_bios_measurements")
-	old := DefaultEventlogPath
-	DefaultEventlogPath = logPath
-	defer func() { DefaultEventlogPath = old }()
+	old := measure.DefaultEventlogPath
+	measure.DefaultEventlogPath = logPath
+	defer func() { measure.DefaultEventlogPath = old }()
 	// boot measures the firmware, an option ROM and the Secure Boot state,
 	// and writes the event log of it.
 	boot := func(fw, rom byte) {

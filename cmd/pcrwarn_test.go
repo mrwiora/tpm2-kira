@@ -5,6 +5,8 @@ package cmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 )
 
 func TestWarnAboutBootChainCoverage(t *testing.T) {
@@ -21,14 +23,14 @@ func TestWarnAboutBootChainCoverage(t *testing.T) {
 		{"0,7,9,12", false, ""},
 		{"0,7", true, `tpm2-kira slot add --pcrs "0,7,11u"`},
 	} {
-		specs, err := ParsePCRSpecs(tc.pcrs)
+		specs, err := measure.ParsePCRSpecs(tc.pcrs)
 		if err != nil {
 			t.Fatal(err)
 		}
-		old := bootedViaSystemdStub
-		bootedViaSystemdStub = func() bool { return tc.uki }
-		out := captureStdout(t, func() { WarnAboutPCRSelection(specs) })
-		bootedViaSystemdStub = old
+		old := measure.BootedViaSystemdStub
+		measure.BootedViaSystemdStub = func() bool { return tc.uki }
+		out := captureStdout(t, func() { measure.WarnAboutPCRSelection(specs) })
+		measure.BootedViaSystemdStub = old
 
 		gotWarning := strings.Contains(out, "WARNING: the selected PCRs")
 		switch {
@@ -43,21 +45,21 @@ func TestWarnAboutBootChainCoverage(t *testing.T) {
 // control switches the advisory warnings off: its overview judges the
 // same, in red, and nothing is said twice.
 func TestAdvisoryWarningsSwitch(t *testing.T) {
-	specs, err := ParsePCRSpecs("0,7")
+	specs, err := measure.ParsePCRSpecs("0,7")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func(old bool) { AdvisoryWarnings = old }(AdvisoryWarnings)
-	AdvisoryWarnings = false
+	defer func(old bool) { measure.AdvisoryWarnings = old }(measure.AdvisoryWarnings)
+	measure.AdvisoryWarnings = false
 	out := captureStdout(t, func() {
-		WarnAboutPCRSelection(specs)
-		WarnAboutHashAlgo(PCRHashAlgoSHA1)
+		measure.WarnAboutPCRSelection(specs)
+		measure.WarnAboutHashAlgo(measure.PCRHashAlgoSHA1)
 	})
 	if out != "" {
 		t.Fatalf("advisories although switched off:\n%s", out)
 	}
-	AdvisoryWarnings = true
-	out = captureStdout(t, func() { WarnAboutHashAlgo(PCRHashAlgoSHA1) })
+	measure.AdvisoryWarnings = true
+	out = captureStdout(t, func() { measure.WarnAboutHashAlgo(measure.PCRHashAlgoSHA1) })
 	if !strings.Contains(out, "SHA-1") {
 		t.Fatalf("the SHA-1 note is gone:\n%s", out)
 	}

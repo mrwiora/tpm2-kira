@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 )
 
 // 'tpm2-kira status' is the one page a person wants before a reboot: the
@@ -88,7 +90,7 @@ func collectStatus(o StatusOptions) StatusReport {
 				continue
 			}
 			s := StatusSlot{Slot: SlotNumber(idx), NVRAMIndex: fmt.Sprintf("0x%08X", idx),
-				PCRs: PCRSpecsToString(sb.GetPCRSpecs()), Generation: sb.Payload.Generation,
+				PCRs: measure.PCRSpecsToString(sb.GetPCRSpecs()), Generation: sb.Payload.Generation,
 				GenState: generationState(tpmDev, idx, sb.Payload.Generation)}
 			s.Fallback = isFallbackSelection(sb.GetPCRSpecs())
 			v := verifier.verify(raw, sb)
@@ -144,7 +146,7 @@ func collectStatus(o StatusOptions) StatusReport {
 }
 
 // isFallbackSelection says whether specs are PCRs 0 and 7 alone.
-func isFallbackSelection(specs []PCRSpec) bool {
+func isFallbackSelection(specs []measure.PCRSpec) bool {
 	if len(specs) != 2 {
 		return false
 	}

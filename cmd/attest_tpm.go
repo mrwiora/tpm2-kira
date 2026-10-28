@@ -19,6 +19,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 )
 
 // TPM-facing half of attestation: AK and EK handling, quotes and credential
@@ -367,7 +368,7 @@ func (b *tpmBackend) BootContext() attest.BootContext {
 		}
 	}
 	if b.initrd == nil {
-		cov, _ := readInitrdCoverage(DefaultEventlogPath)
+		cov, _ := readInitrdCoverage(measure.DefaultEventlogPath)
 		b.initrd = &cov
 	}
 	// Only a recognised measurement is reported; "none found" may just be a
@@ -378,7 +379,7 @@ func (b *tpmBackend) BootContext() attest.BootContext {
 			bc.InitrdPCRs = append(bc.InitrdPCRs, uint8(p))
 		}
 	}
-	sb := ReadSecureBootState()
+	sb := measure.ReadSecureBootState()
 	switch {
 	case !sb.Known:
 		bc.SecureBootState = attest.SecureBootUnknown
@@ -413,7 +414,7 @@ func uptimeMS() uint64 {
 func (b *tpmBackend) Eventlog() ([]byte, error) {
 	if !b.evlogRead {
 		b.evlogRead = true
-		data, err := os.ReadFile(DefaultEventlogPath)
+		data, err := os.ReadFile(measure.DefaultEventlogPath)
 		if err == nil && len(data) <= attest.MaxEventlogSize {
 			b.evlog = data
 		}

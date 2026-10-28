@@ -11,13 +11,16 @@ import (
 	"io/fs"
 	"os"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/untrusted"
+
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
 // Seal creates a new TOTP key inside the TPM and approves the current PCR
 // values for it (see cmd/totpkey.go).
-func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath string, debug bool, hashAlgo PCRHashAlgo, verifyUKI bool) error {
+func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath string, debug bool, hashAlgo measure.PCRHashAlgo, verifyUKI bool) error {
 	// Fall back to default key paths when not provided by the user
 	if pubKeyPath == "" {
 		pubKeyPath = DefaultPublicKeyPath
@@ -27,7 +30,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	}
 
 	// Parse PCR specs first to display them
-	specs, err := ParsePCRSpecs(pcrsStr)
+	specs, err := measure.ParsePCRSpecs(pcrsStr)
 	if err != nil {
 		return fmt.Errorf("invalid PCRs: %w", err)
 	}
@@ -77,20 +80,20 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	// Display which PCRs are being used
 	fmt.Println("=== Sealing Configuration ===")
 	fmt.Printf("Hash Algorithm: %s (%d-byte PCR digests)\n", hashAlgo.DisplayString(), hashAlgo.DigestSize())
-	fmt.Printf("PCRs used for sealing: %s\n", PCRSpecsToString(specs))
+	fmt.Printf("PCRs used for sealing: %s\n", measure.PCRSpecsToString(specs))
 	fmt.Printf("Signing Key: %s (%s, fingerprint: %s)%s\n", pubKeyPath, PublicKeyDescription(pubKey), PublicKeyFingerprint(pubKey), keyLocation)
 	fmt.Printf("Authentication: PolicyAuthorize (PCR values + generation, approved by the signing key)\n")
 	fmt.Println()
 	for _, spec := range specs {
-		fmt.Printf("  PCR%-2d (%s): %s\n", spec.Index, spec.Source.String(), GetPCRDescription(spec.Index))
+		fmt.Printf("  PCR%-2d (%s): %s\n", spec.Index, spec.Source.String(), measure.GetPCRDescription(spec.Index))
 	}
 	fmt.Println()
 
 	// The fallback slot is sealed to 0 and 7 alone by design (default_pcrs.go).
 	if !(pcrsStr == FallbackPCRSelection && nvramIndex == ResolveNVRAMIndex(FallbackSlot)) {
-		WarnAboutPCRSelection(specs)
+		measure.WarnAboutPCRSelection(specs)
 	}
-	WarnAboutHashAlgo(hashAlgo)
+	measure.WarnAboutHashAlgo(hashAlgo)
 
 	if err := ValidateBlobIndex(nvramIndex); err != nil {
 		return fmt.Errorf("cannot seal: %w", err)
@@ -166,7 +169,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 		fmt.Println("The new PCR values are approved for the phone's check at boot.")
 		return nil
 	}
-	showTOTPSecret(key, alg, nvramIndex, PCRSpecsToString(specs))
+	showTOTPSecret(key, alg, nvramIndex, measure.PCRSpecsToString(specs))
 	return nil
 }
 
@@ -313,7 +316,7 @@ func signatureSizes(pub crypto.PublicKey) (approval, blob int, err error) {
 // the slot, signs PolicyPCR(values) + PolicyNV(generation) with signer, and
 // writes the signed blob. The key object in blob is not touched: only its
 // approval changes, so the TOTP key never has to leave the TPM.
-func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, specs []PCRSpec, hashAlgo PCRHashAlgo, verifyUKI bool, signer crypto.Signer, debug bool) error {
+func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, specs []measure.PCRSpec, hashAlgo measure.PCRHashAlgo, verifyUKI bool, signer crypto.Signer, debug bool) error {
 	if len(specs) == 0 {
 		return fmt.Errorf("no PCRs specified")
 	}
@@ -328,7 +331,7 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, 
 	// PCRs the separator touches are read from the event log even when
 	// given as register source (the registers already carry the separator
 	// by the time anything can seal); the blob records the source used.
-	readResult, err := ReadPCRValues(tpmDev, specs, hashAlgo, MeasurePointModeSetting, MeasurePointBeforeSeparator, debug)
+	readResult, err := measure.ReadPCRValues(tpmDev, specs, hashAlgo, measure.MeasurePointModeSetting, measure.MeasurePointBeforeSeparator, debug)
 	if err != nil {
 		return err
 	}
@@ -345,12 +348,12 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, 
 	// Reseal runs right after an initramfs rebuild, where the image on disk is
 	// expected to differ from the booted one, so only seal can check this.
 	if verifyUKI {
-		if err := VerifyUKISpecsAgainstEventlog(specs, hashAlgo, debug); err != nil {
+		if err := measure.VerifyUKISpecsAgainstEventlog(specs, hashAlgo, debug); err != nil {
 			return err
 		}
 	}
 
-	pcrPolicy, err := ComputePolicyDigestFromPCRValues(tpmDev, PCRSpecIndices(specs), readResult.Values, hashAlgo)
+	pcrPolicy, err := measure.ComputePolicyDigestFromPCRValues(tpmDev, measure.PCRSpecIndices(specs), readResult.Values, hashAlgo)
 	if err != nil {
 		return fmt.Errorf("failed to compute the PCR policy: %w", err)
 	}
@@ -399,8 +402,8 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *SealedBlob, 
 		fmt.Printf("Policy reference: %x\n", blob.Payload.PolicyRef)
 		for _, spec := range specs {
 			sourceLabel := spec.Source.String()
-			if spec.Source == PCRSourceUKI {
-				sourceLabel = fmt.Sprintf("uki [%s]", quoteUntrusted(spec.Command))
+			if spec.Source == measure.PCRSourceUKI {
+				sourceLabel = fmt.Sprintf("uki [%s]", untrusted.Quote(spec.Command))
 			}
 			fmt.Printf("  PCR%-2d (%s): %x\n", spec.Index, sourceLabel, readResult.Values[spec.Index])
 		}

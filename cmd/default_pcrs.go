@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+
 	"github.com/google/go-attestation/attest"
 )
 
@@ -38,11 +40,11 @@ var ukiDirs = []string{"/boot/EFI/Linux", "/efi/EFI/Linux", "/boot/efi/EFI/Linux
 // (--sha1 changes the bank, nothing else). Without an event log to read
 // (a software TPM, a run without root) the selection is the registers as
 // they are: nothing can be computed.
-func DefaultPCRSelection(eventlogPath string, algo PCRHashAlgo) (string, string) {
+func DefaultPCRSelection(eventlogPath string, algo measure.PCRHashAlgo) (string, string) {
 	if eventlogPath == "" {
-		eventlogPath = DefaultEventlogPath
+		eventlogPath = measure.DefaultEventlogPath
 	}
-	raw, err := readRawEventLogFromPath(eventlogPath)
+	raw, err := measure.ReadRawEventLogFromPath(eventlogPath)
 	if err != nil {
 		return "0,2,7", "no event log to read: the firmware and the secure boot state, as the registers hold them"
 	}
@@ -50,16 +52,16 @@ func DefaultPCRSelection(eventlogPath string, algo PCRHashAlgo) (string, string)
 	if err != nil {
 		return "0,2,7", "the event log does not parse: the firmware and the secure boot state, as the registers hold them"
 	}
-	return defaultPCRSelection(log.Events(attestHash(algo)), findUKI())
+	return defaultPCRSelection(log.Events(measure.AttestHash(algo)), findUKI())
 }
 
 // defaultFallbackSelection is the fallback slot's selection, from the
 // event log when there is one to read.
 func defaultFallbackSelection(eventlogPath string) string {
 	if eventlogPath == "" {
-		eventlogPath = DefaultEventlogPath
+		eventlogPath = measure.DefaultEventlogPath
 	}
-	if _, err := readRawEventLogFromPath(eventlogPath); err != nil {
+	if _, err := measure.ReadRawEventLogFromPath(eventlogPath); err != nil {
 		return FallbackRegisterSelection
 	}
 	return FallbackPCRSelection
@@ -72,12 +74,12 @@ func defaultPCRSelection(events []attest.Event, uki string) (string, string) {
 	stub, grub := false, false
 	for _, e := range events {
 		switch e.Index {
-		case TPM2PCRKernelBoot:
-			if t := eventText(e); strings.HasPrefix(t, ".") || t == EnterInitrdWord {
+		case measure.TPM2PCRKernelBoot:
+			if t := measure.EventText(e); strings.HasPrefix(t, ".") || t == measure.EnterInitrdWord {
 				stub = true
 			}
 		case 8:
-			if strings.HasPrefix(eventText(e), "grub_cmd:") {
+			if strings.HasPrefix(measure.EventText(e), "grub_cmd:") {
 				grub = true
 			}
 		}
@@ -85,7 +87,7 @@ func defaultPCRSelection(events []attest.Event, uki string) (string, string) {
 	switch {
 	case stub:
 		spec := "11u"
-		if uki != "" && uki != DefaultUKIPath {
+		if uki != "" && uki != measure.DefaultUKIPath {
 			spec += ":" + uki
 		}
 		return "0e,2e,7e," + spec, "a unified kernel image booted: the firmware, the secure boot state, and PCR 11 computed from the image"
@@ -98,8 +100,8 @@ func defaultPCRSelection(events []attest.Event, uki string) (string, string) {
 // findUKI is the unified kernel image's path: the default one when it
 // exists, else the only .efi in one of the usual directories, else "".
 func findUKI() string {
-	if _, err := os.Stat(DefaultUKIPath); err == nil {
-		return DefaultUKIPath
+	if _, err := os.Stat(measure.DefaultUKIPath); err == nil {
+		return measure.DefaultUKIPath
 	}
 	for _, dir := range ukiDirs {
 		matches, _ := filepath.Glob(filepath.Join(dir, "*.efi"))
@@ -113,7 +115,7 @@ func findUKI() string {
 // SealDefaults is 'slot add' without arguments: slot 0 to what this boot
 // measured, slot 1 to the fallback selection, both with the signing key
 // at the paths given ("" for the defaults).
-func SealDefaults(tpmPath, pubKeyPath, privKeyPath string, algo PCRHashAlgo, debug bool) error {
+func SealDefaults(tpmPath, pubKeyPath, privKeyPath string, algo measure.PCRHashAlgo, debug bool) error {
 	sel, why := DefaultPCRSelection("", algo)
 	fmt.Printf("PCRs: %s (%s)\n\n", sel, why)
 	if err := Seal(tpmPath, sel, ResolveNVRAMIndex(0), pubKeyPath, privKeyPath, debug, algo, true); err != nil {
@@ -123,7 +125,7 @@ func SealDefaults(tpmPath, pubKeyPath, privKeyPath string, algo PCRHashAlgo, deb
 }
 
 // SealFallback seals slot 1, the fallback, and says what it is for.
-func SealFallback(tpmPath, pubKeyPath, privKeyPath string, algo PCRHashAlgo, debug bool) error {
+func SealFallback(tpmPath, pubKeyPath, privKeyPath string, algo measure.PCRHashAlgo, debug bool) error {
 	fallback := defaultFallbackSelection("")
 	fmt.Printf("\n=== Slot %d: the fallback, sealed to PCRs %s alone ===\n", FallbackSlot, fallback)
 	fmt.Println("Its code shows in a boot whose kernel or boot loader changed unpredicted, as long")

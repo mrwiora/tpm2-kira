@@ -19,6 +19,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+
 	"github.com/google/go-attestation/attest"
 	"github.com/google/go-tpm/tpm2"
 )
@@ -64,62 +66,62 @@ func TestParsePCRSpecs(t *testing.T) {
 	tests := []struct {
 		name      string
 		input     string
-		expected  []PCRSpec
+		expected  []measure.PCRSpec
 		shouldErr bool
 	}{
 		{
 			name:  "Single PCR register (default)",
 			input: "7",
-			expected: []PCRSpec{
-				{Index: 7, Source: PCRSourceRegister},
+			expected: []measure.PCRSpec{
+				{Index: 7, Source: measure.PCRSourceRegister},
 			},
 		},
 		{
 			name:  "Single PCR with explicit register suffix",
 			input: "7r",
-			expected: []PCRSpec{
-				{Index: 7, Source: PCRSourceRegister},
+			expected: []measure.PCRSpec{
+				{Index: 7, Source: measure.PCRSourceRegister},
 			},
 		},
 		{
 			name:  "Single PCR with eventlog suffix",
 			input: "7e",
-			expected: []PCRSpec{
-				{Index: 7, Source: PCRSourceEventlog},
+			expected: []measure.PCRSpec{
+				{Index: 7, Source: measure.PCRSourceEventlog},
 			},
 		},
 		{
 			name:  "Multiple PCRs mixed sources",
 			input: "0e,2,4r,7e",
-			expected: []PCRSpec{
-				{Index: 0, Source: PCRSourceEventlog},
-				{Index: 2, Source: PCRSourceRegister},
-				{Index: 4, Source: PCRSourceRegister},
-				{Index: 7, Source: PCRSourceEventlog},
+			expected: []measure.PCRSpec{
+				{Index: 0, Source: measure.PCRSourceEventlog},
+				{Index: 2, Source: measure.PCRSourceRegister},
+				{Index: 4, Source: measure.PCRSourceRegister},
+				{Index: 7, Source: measure.PCRSourceEventlog},
 			},
 		},
 		{
 			name:  "Single UKI PCR with explicit path",
 			input: "11u:/boot/EFI/Linux/arch-linux.efi",
-			expected: []PCRSpec{
-				{Index: 11, Source: PCRSourceUKI, Command: "/boot/EFI/Linux/arch-linux.efi"},
+			expected: []measure.PCRSpec{
+				{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/EFI/Linux/arch-linux.efi"},
 			},
 		},
 		{
 			name:  "UKI PCR with default path",
 			input: "11u",
-			expected: []PCRSpec{
-				{Index: 11, Source: PCRSourceUKI, Command: DefaultUKIPath},
+			expected: []measure.PCRSpec{
+				{Index: 11, Source: measure.PCRSourceUKI, Command: measure.DefaultUKIPath},
 			},
 		},
 		{
 			name:  "Multiple PCRs with UKI",
 			input: "0e,2,7e,11u",
-			expected: []PCRSpec{
-				{Index: 0, Source: PCRSourceEventlog},
-				{Index: 2, Source: PCRSourceRegister},
-				{Index: 7, Source: PCRSourceEventlog},
-				{Index: 11, Source: PCRSourceUKI, Command: DefaultUKIPath},
+			expected: []measure.PCRSpec{
+				{Index: 0, Source: measure.PCRSourceEventlog},
+				{Index: 2, Source: measure.PCRSourceRegister},
+				{Index: 7, Source: measure.PCRSourceEventlog},
+				{Index: 11, Source: measure.PCRSourceUKI, Command: measure.DefaultUKIPath},
 			},
 		},
 		{
@@ -165,45 +167,45 @@ func TestParsePCRSpecs(t *testing.T) {
 		{
 			name:  "Whitespace around values",
 			input: " 0 , 7e , 2r ",
-			expected: []PCRSpec{
-				{Index: 0, Source: PCRSourceRegister},
-				{Index: 7, Source: PCRSourceEventlog},
-				{Index: 2, Source: PCRSourceRegister},
+			expected: []measure.PCRSpec{
+				{Index: 0, Source: measure.PCRSourceRegister},
+				{Index: 7, Source: measure.PCRSourceEventlog},
+				{Index: 2, Source: measure.PCRSourceRegister},
 			},
 		},
 		{
 			name:  "PCR 0 register",
 			input: "0",
-			expected: []PCRSpec{
-				{Index: 0, Source: PCRSourceRegister},
+			expected: []measure.PCRSpec{
+				{Index: 0, Source: measure.PCRSourceRegister},
 			},
 		},
 		{
 			name:  "Multiple register PCRs",
 			input: "0,2,4,7",
-			expected: []PCRSpec{
-				{Index: 0, Source: PCRSourceRegister},
-				{Index: 2, Source: PCRSourceRegister},
-				{Index: 4, Source: PCRSourceRegister},
-				{Index: 7, Source: PCRSourceRegister},
+			expected: []measure.PCRSpec{
+				{Index: 0, Source: measure.PCRSourceRegister},
+				{Index: 2, Source: measure.PCRSourceRegister},
+				{Index: 4, Source: measure.PCRSourceRegister},
+				{Index: 7, Source: measure.PCRSourceRegister},
 			},
 		},
 		{
 			name:  "All eventlog",
 			input: "0e,2e,7e",
-			expected: []PCRSpec{
-				{Index: 0, Source: PCRSourceEventlog},
-				{Index: 2, Source: PCRSourceEventlog},
-				{Index: 7, Source: PCRSourceEventlog},
+			expected: []measure.PCRSpec{
+				{Index: 0, Source: measure.PCRSourceEventlog},
+				{Index: 2, Source: measure.PCRSourceEventlog},
+				{Index: 7, Source: measure.PCRSourceEventlog},
 			},
 		},
 		{
 			name:  "All PCR indices",
 			input: "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23",
-			expected: func() []PCRSpec {
-				specs := make([]PCRSpec, 24)
+			expected: func() []measure.PCRSpec {
+				specs := make([]measure.PCRSpec, 24)
 				for i := range specs {
-					specs[i] = PCRSpec{Index: i, Source: PCRSourceRegister}
+					specs[i] = measure.PCRSpec{Index: i, Source: measure.PCRSourceRegister}
 				}
 				return specs
 			}(),
@@ -212,7 +214,7 @@ func TestParsePCRSpecs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := ParsePCRSpecs(tt.input)
+			result, err := measure.ParsePCRSpecs(tt.input)
 			if tt.shouldErr {
 				if err == nil {
 					t.Errorf("Expected error for input %q, got nil", tt.input)
@@ -246,43 +248,43 @@ func TestParsePCRSpecs(t *testing.T) {
 func TestPCRSpecsToString(t *testing.T) {
 	tests := []struct {
 		name     string
-		specs    []PCRSpec
+		specs    []measure.PCRSpec
 		expected string
 	}{
 		{
 			name: "All register",
-			specs: []PCRSpec{
-				{Index: 0, Source: PCRSourceRegister},
-				{Index: 7, Source: PCRSourceRegister},
+			specs: []measure.PCRSpec{
+				{Index: 0, Source: measure.PCRSourceRegister},
+				{Index: 7, Source: measure.PCRSourceRegister},
 			},
 			expected: "0,7",
 		},
 		{
 			name: "Mixed sources",
-			specs: []PCRSpec{
-				{Index: 0, Source: PCRSourceEventlog},
-				{Index: 2, Source: PCRSourceRegister},
-				{Index: 7, Source: PCRSourceEventlog},
+			specs: []measure.PCRSpec{
+				{Index: 0, Source: measure.PCRSourceEventlog},
+				{Index: 2, Source: measure.PCRSourceRegister},
+				{Index: 7, Source: measure.PCRSourceEventlog},
 			},
 			expected: "0e,2,7e",
 		},
 		{
 			name: "With UKI",
-			specs: []PCRSpec{
-				{Index: 0, Source: PCRSourceEventlog},
-				{Index: 11, Source: PCRSourceUKI, Command: "/boot/EFI/Linux/arch-linux.efi"},
+			specs: []measure.PCRSpec{
+				{Index: 0, Source: measure.PCRSourceEventlog},
+				{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/EFI/Linux/arch-linux.efi"},
 			},
 			expected: "0e,11u:/boot/EFI/Linux/arch-linux.efi",
 		},
 		{
 			name:     "Empty",
-			specs:    []PCRSpec{},
+			specs:    []measure.PCRSpec{},
 			expected: "",
 		},
 		{
 			name: "Single register",
-			specs: []PCRSpec{
-				{Index: 7, Source: PCRSourceRegister},
+			specs: []measure.PCRSpec{
+				{Index: 7, Source: measure.PCRSourceRegister},
 			},
 			expected: "7",
 		},
@@ -290,7 +292,7 @@ func TestPCRSpecsToString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := PCRSpecsToString(tt.specs)
+			result := measure.PCRSpecsToString(tt.specs)
 			if result != tt.expected {
 				t.Errorf("Expected %q, got %q", tt.expected, result)
 			}
@@ -300,39 +302,39 @@ func TestPCRSpecsToString(t *testing.T) {
 
 // TestPCRSourceString tests PCR source display
 func TestPCRSourceString(t *testing.T) {
-	if PCRSourceRegister.String() != "register" {
-		t.Errorf("Register String() = %q, want \"register\"", PCRSourceRegister.String())
+	if measure.PCRSourceRegister.String() != "register" {
+		t.Errorf("Register String() = %q, want \"register\"", measure.PCRSourceRegister.String())
 	}
-	if PCRSourceEventlog.String() != "eventlog" {
-		t.Errorf("Eventlog String() = %q, want \"eventlog\"", PCRSourceEventlog.String())
+	if measure.PCRSourceEventlog.String() != "eventlog" {
+		t.Errorf("Eventlog String() = %q, want \"eventlog\"", measure.PCRSourceEventlog.String())
 	}
-	if PCRSourceUKI.String() != "uki" {
-		t.Errorf("UKI String() = %q, want \"uki\"", PCRSourceUKI.String())
+	if measure.PCRSourceUKI.String() != "uki" {
+		t.Errorf("UKI String() = %q, want \"uki\"", measure.PCRSourceUKI.String())
 	}
 }
 
 // TestPCRSourceSuffix tests PCR source suffix
 func TestPCRSourceSuffix(t *testing.T) {
-	if PCRSourceRegister.Suffix() != "" {
-		t.Errorf("Register Suffix() = %q, want empty", PCRSourceRegister.Suffix())
+	if measure.PCRSourceRegister.Suffix() != "" {
+		t.Errorf("Register Suffix() = %q, want empty", measure.PCRSourceRegister.Suffix())
 	}
-	if PCRSourceEventlog.Suffix() != "e" {
-		t.Errorf("Eventlog Suffix() = %q, want \"e\"", PCRSourceEventlog.Suffix())
+	if measure.PCRSourceEventlog.Suffix() != "e" {
+		t.Errorf("Eventlog Suffix() = %q, want \"e\"", measure.PCRSourceEventlog.Suffix())
 	}
-	if PCRSourceUKI.Suffix() != "u" {
-		t.Errorf("UKI Suffix() = %q, want \"u\"", PCRSourceUKI.Suffix())
+	if measure.PCRSourceUKI.Suffix() != "u" {
+		t.Errorf("UKI Suffix() = %q, want \"u\"", measure.PCRSourceUKI.Suffix())
 	}
 }
 
 // TestPCRSpecIndices tests extracting indices from specs
 func TestPCRSpecIndices(t *testing.T) {
-	specs := []PCRSpec{
-		{Index: 0, Source: PCRSourceEventlog},
-		{Index: 2, Source: PCRSourceRegister},
-		{Index: 7, Source: PCRSourceEventlog},
+	specs := []measure.PCRSpec{
+		{Index: 0, Source: measure.PCRSourceEventlog},
+		{Index: 2, Source: measure.PCRSourceRegister},
+		{Index: 7, Source: measure.PCRSourceEventlog},
 	}
 
-	indices := PCRSpecIndices(specs)
+	indices := measure.PCRSpecIndices(specs)
 	expected := []int{0, 2, 7}
 	if len(indices) != len(expected) {
 		t.Fatalf("Expected %d indices, got %d", len(expected), len(indices))
@@ -360,8 +362,8 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					Private:       []byte("private-data-test"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
-						{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest0")}},
-						{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest2")}},
+						{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest0")}},
+						{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest2")}},
 					},
 					PolicyRef: make([]byte, 32),
 				},
@@ -376,10 +378,10 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					Private:       []byte("private-predict"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
-						{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-						{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-						{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-						{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 7, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/uki.efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
 					PolicyRef:           make([]byte, 32),
 					MeasurePointApplied: true,
@@ -395,7 +397,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					Private:       []byte("private"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
-						{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest7")}},
+						{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("digest7")}},
 					},
 				},
 			},
@@ -409,11 +411,11 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					Private:       []byte("test-private-key-data"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
-						{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-						{Index: 1, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-						{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-						{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-						{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 1, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 4, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
 					PolicyRef: make([]byte, 32),
 				},
@@ -440,9 +442,9 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					Private:       []byte("private-data"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
-						{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-						{Index: 2, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-						{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 2, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 7, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
 					PolicyRef:           make([]byte, 32),
 					MeasurePointApplied: true,
@@ -458,10 +460,10 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					Private:       []byte("private-mixed"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
-						{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-						{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-						{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-						{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 4, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 7, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
 					PolicyRef:           make([]byte, 32),
 					MeasurePointApplied: true,
@@ -477,7 +479,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					Private:       []byte("priv"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
-						{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 7, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
 					MeasurePointApplied: true,
 				},
@@ -492,7 +494,7 @@ func TestSealedBlobMarshalUnmarshal(t *testing.T) {
 					Private:       []byte("priv-kp"),
 					TOTPAlgorithm: tpm2.TPMAlgSHA1,
 					PCRDigests: []PCRDigestPair{
-						{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
 					PolicyRef: make([]byte, 32),
 				},
@@ -910,10 +912,10 @@ func TestGetPCRIndices(t *testing.T) {
 	blob := &SealedBlob{
 		Payload: SealedBlobPayload{
 			PCRDigests: []PCRDigestPair{
-				{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte("d0")}},
-				{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("d2")}},
-				{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("d4")}},
-				{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte("d7")}},
+				{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte("d0")}},
+				{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("d2")}},
+				{Index: 4, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte("d4")}},
+				{Index: 7, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte("d7")}},
 			},
 		},
 	}
@@ -940,8 +942,8 @@ func TestGetPCRDigestValues(t *testing.T) {
 	blob := &SealedBlob{
 		Payload: SealedBlobPayload{
 			PCRDigests: []PCRDigestPair{
-				{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: digest0}},
-				{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: digest2}},
+				{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: digest0}},
+				{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: digest2}},
 			},
 		},
 	}
@@ -973,8 +975,8 @@ func TestHasEventlogPCRs(t *testing.T) {
 			blob: &SealedBlob{
 				Payload: SealedBlobPayload{
 					PCRDigests: []PCRDigestPair{
-						{Index: 0, Source: PCRSourceRegister},
-						{Index: 2, Source: PCRSourceRegister},
+						{Index: 0, Source: measure.PCRSourceRegister},
+						{Index: 2, Source: measure.PCRSourceRegister},
 					},
 				},
 			},
@@ -985,8 +987,8 @@ func TestHasEventlogPCRs(t *testing.T) {
 			blob: &SealedBlob{
 				Payload: SealedBlobPayload{
 					PCRDigests: []PCRDigestPair{
-						{Index: 0, Source: PCRSourceEventlog},
-						{Index: 2, Source: PCRSourceEventlog},
+						{Index: 0, Source: measure.PCRSourceEventlog},
+						{Index: 2, Source: measure.PCRSourceEventlog},
 					},
 				},
 			},
@@ -997,8 +999,8 @@ func TestHasEventlogPCRs(t *testing.T) {
 			blob: &SealedBlob{
 				Payload: SealedBlobPayload{
 					PCRDigests: []PCRDigestPair{
-						{Index: 0, Source: PCRSourceEventlog},
-						{Index: 2, Source: PCRSourceRegister},
+						{Index: 0, Source: measure.PCRSourceEventlog},
+						{Index: 2, Source: measure.PCRSourceRegister},
 					},
 				},
 			},
@@ -1009,7 +1011,7 @@ func TestHasEventlogPCRs(t *testing.T) {
 			blob: &SealedBlob{
 				Payload: SealedBlobPayload{
 					PCRDigests: []PCRDigestPair{
-						{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi"},
+						{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/uki.efi"},
 					},
 				},
 			},
@@ -1048,8 +1050,8 @@ func TestHasUKIPCRs(t *testing.T) {
 			blob: &SealedBlob{
 				Payload: SealedBlobPayload{
 					PCRDigests: []PCRDigestPair{
-						{Index: 0, Source: PCRSourceRegister},
-						{Index: 2, Source: PCRSourceRegister},
+						{Index: 0, Source: measure.PCRSourceRegister},
+						{Index: 2, Source: measure.PCRSourceRegister},
 					},
 				},
 			},
@@ -1060,8 +1062,8 @@ func TestHasUKIPCRs(t *testing.T) {
 			blob: &SealedBlob{
 				Payload: SealedBlobPayload{
 					PCRDigests: []PCRDigestPair{
-						{Index: 0, Source: PCRSourceEventlog},
-						{Index: 2, Source: PCRSourceEventlog},
+						{Index: 0, Source: measure.PCRSourceEventlog},
+						{Index: 2, Source: measure.PCRSourceEventlog},
 					},
 				},
 			},
@@ -1072,8 +1074,8 @@ func TestHasUKIPCRs(t *testing.T) {
 			blob: &SealedBlob{
 				Payload: SealedBlobPayload{
 					PCRDigests: []PCRDigestPair{
-						{Index: 0, Source: PCRSourceEventlog},
-						{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi"},
+						{Index: 0, Source: measure.PCRSourceEventlog},
+						{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/uki.efi"},
 					},
 				},
 			},
@@ -1084,7 +1086,7 @@ func TestHasUKIPCRs(t *testing.T) {
 			blob: &SealedBlob{
 				Payload: SealedBlobPayload{
 					PCRDigests: []PCRDigestPair{
-						{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi"},
+						{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/uki.efi"},
 					},
 				},
 			},
@@ -1116,10 +1118,10 @@ func TestGetEventlogPCRIndices(t *testing.T) {
 	blob := &SealedBlob{
 		Payload: SealedBlobPayload{
 			PCRDigests: []PCRDigestPair{
-				{Index: 0, Source: PCRSourceEventlog},
-				{Index: 2, Source: PCRSourceRegister},
-				{Index: 4, Source: PCRSourceRegister},
-				{Index: 7, Source: PCRSourceEventlog},
+				{Index: 0, Source: measure.PCRSourceEventlog},
+				{Index: 2, Source: measure.PCRSourceRegister},
+				{Index: 4, Source: measure.PCRSourceRegister},
+				{Index: 7, Source: measure.PCRSourceEventlog},
 			},
 		},
 	}
@@ -1146,10 +1148,10 @@ func TestGetUKIPCRIndices(t *testing.T) {
 	blob := &SealedBlob{
 		Payload: SealedBlobPayload{
 			PCRDigests: []PCRDigestPair{
-				{Index: 0, Source: PCRSourceEventlog},
-				{Index: 2, Source: PCRSourceRegister},
-				{Index: 7, Source: PCRSourceEventlog},
-				{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi"},
+				{Index: 0, Source: measure.PCRSourceEventlog},
+				{Index: 2, Source: measure.PCRSourceRegister},
+				{Index: 7, Source: measure.PCRSourceEventlog},
+				{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/uki.efi"},
 			},
 		},
 	}
@@ -1181,10 +1183,10 @@ func TestGetPCRSpecs(t *testing.T) {
 	blob := &SealedBlob{
 		Payload: SealedBlobPayload{
 			PCRDigests: []PCRDigestPair{
-				{Index: 0, Source: PCRSourceEventlog},
-				{Index: 2, Source: PCRSourceRegister},
-				{Index: 7, Source: PCRSourceEventlog},
-				{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi"},
+				{Index: 0, Source: measure.PCRSourceEventlog},
+				{Index: 2, Source: measure.PCRSourceRegister},
+				{Index: 7, Source: measure.PCRSourceEventlog},
+				{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/uki.efi"},
 			},
 		},
 	}
@@ -1194,11 +1196,11 @@ func TestGetPCRSpecs(t *testing.T) {
 		t.Fatalf("Expected 4 specs, got %d", len(specs))
 	}
 
-	expected := []PCRSpec{
-		{Index: 0, Source: PCRSourceEventlog},
-		{Index: 2, Source: PCRSourceRegister},
-		{Index: 7, Source: PCRSourceEventlog},
-		{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi"},
+	expected := []measure.PCRSpec{
+		{Index: 0, Source: measure.PCRSourceEventlog},
+		{Index: 2, Source: measure.PCRSourceRegister},
+		{Index: 7, Source: measure.PCRSourceEventlog},
+		{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/uki.efi"},
 	}
 
 	for i, spec := range specs {
@@ -1254,7 +1256,7 @@ func TestVerifyPCRValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := VerifyPCRValues(tt.sealed, tt.current)
+			result := measure.VerifyPCRValues(tt.sealed, tt.current)
 			if result != tt.expected {
 				t.Errorf("Expected %v, got %v", tt.expected, result)
 			}
@@ -1298,7 +1300,7 @@ func TestPcrsToBitmapBytes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := PcrsToBitmapBytes(tt.pcrs)
+			result := measure.PcrsToBitmapBytes(tt.pcrs)
 			if !bytes.Equal(result, tt.expected) {
 				t.Errorf("Expected %v, got %v", tt.expected, result)
 			}
@@ -1314,8 +1316,8 @@ func TestSealedBlobMarshalJSON(t *testing.T) {
 			Public:  []byte{0x01, 0x02, 0x03},
 			Private: []byte{0x04, 0x05, 0x06},
 			PCRDigests: []PCRDigestPair{
-				{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA, 0xBB}}},
-				{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xCC, 0xDD}}},
+				{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA, 0xBB}}},
+				{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xCC, 0xDD}}},
 			},
 			PolicyRef: []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20},
 		},
@@ -1406,8 +1408,8 @@ func TestSealedBlobMarshalJSONWithMeasurePoint(t *testing.T) {
 			Private:       []byte{0x02},
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
-				{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA}}},
-				{Index: 11, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xBB}}},
+				{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xAA}}},
+				{Index: 11, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: []byte{0xBB}}},
 			},
 			PolicyRef:           make([]byte, 32),
 			MeasurePointApplied: true,
@@ -1419,7 +1421,7 @@ func TestSealedBlobMarshalJSONWithMeasurePoint(t *testing.T) {
 		t.Fatalf("MarshalJSON failed: %v", err)
 	}
 
-	want := `"measure_point_extends":"` + EnterInitrdWord + `:11"`
+	want := `"measure_point_extends":"` + measure.EnterInitrdWord + `:11"`
 	if !bytes.Contains(jsonData, []byte(want)) {
 		t.Errorf("JSON lacks %s: %s", want, jsonData)
 	}
@@ -1430,7 +1432,7 @@ func TestCreatePCRSelection(t *testing.T) {
 	pcrs := []int{0, 2, 4, 7}
 
 	// Test SHA256 (default)
-	selection := CreatePCRSelection(pcrs, PCRHashAlgoSHA256)
+	selection := measure.CreatePCRSelection(pcrs, measure.PCRHashAlgoSHA256)
 
 	if len(selection.PCRSelections) == 0 {
 		t.Fatal("Expected at least one PCR selection")
@@ -1443,13 +1445,13 @@ func TestCreatePCRSelection(t *testing.T) {
 	}
 
 	// Verify bitmap is set correctly
-	bitmap := PcrsToBitmapBytes(pcrs)
+	bitmap := measure.PcrsToBitmapBytes(pcrs)
 	if !bytes.Equal(pcrSel.PCRSelect, bitmap) {
 		t.Error("PCR selection bitmap mismatch")
 	}
 
 	// Test SHA1
-	selectionSHA1 := CreatePCRSelection(pcrs, PCRHashAlgoSHA1)
+	selectionSHA1 := measure.CreatePCRSelection(pcrs, measure.PCRHashAlgoSHA1)
 
 	if len(selectionSHA1.PCRSelections) == 0 {
 		t.Fatal("Expected at least one PCR selection for SHA1")
@@ -1471,7 +1473,7 @@ func TestGetHashAlgo(t *testing.T) {
 	tests := []struct {
 		name     string
 		blob     *SealedBlob
-		expected PCRHashAlgo
+		expected measure.PCRHashAlgo
 	}{
 		{
 			name: "SHA256 digests (32 bytes)",
@@ -1479,12 +1481,12 @@ func TestGetHashAlgo(t *testing.T) {
 				Version: 6,
 				Payload: SealedBlobPayload{
 					PCRDigests: []PCRDigestPair{
-						{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-						{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+						{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 					},
 				},
 			},
-			expected: PCRHashAlgoSHA256,
+			expected: measure.PCRHashAlgoSHA256,
 		},
 		{
 			name: "SHA1 digests (20 bytes)",
@@ -1492,12 +1494,12 @@ func TestGetHashAlgo(t *testing.T) {
 				Version: 6,
 				Payload: SealedBlobPayload{
 					PCRDigests: []PCRDigestPair{
-						{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 20)}},
-						{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 20)}},
+						{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 20)}},
+						{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 20)}},
 					},
 				},
 			},
-			expected: PCRHashAlgoSHA1,
+			expected: measure.PCRHashAlgoSHA1,
 		},
 		{
 			name: "Empty digests defaults to SHA256",
@@ -1507,7 +1509,7 @@ func TestGetHashAlgo(t *testing.T) {
 					PCRDigests: []PCRDigestPair{},
 				},
 			},
-			expected: PCRHashAlgoSHA256,
+			expected: measure.PCRHashAlgoSHA256,
 		},
 		{
 			name: "No PCR digests defaults to SHA256",
@@ -1515,7 +1517,7 @@ func TestGetHashAlgo(t *testing.T) {
 				Version: 6,
 				Payload: SealedBlobPayload{},
 			},
-			expected: PCRHashAlgoSHA256,
+			expected: measure.PCRHashAlgoSHA256,
 		},
 	}
 
@@ -1532,7 +1534,7 @@ func TestGetHashAlgo(t *testing.T) {
 // TestPCRHashAlgoMethods tests the PCRHashAlgo type methods
 func TestPCRHashAlgoMethods(t *testing.T) {
 	// SHA256
-	sha256 := PCRHashAlgoSHA256
+	sha256 := measure.PCRHashAlgoSHA256
 	if sha256.DigestSize() != 32 {
 		t.Errorf("SHA256 DigestSize() = %d, want 32", sha256.DigestSize())
 	}
@@ -1547,7 +1549,7 @@ func TestPCRHashAlgoMethods(t *testing.T) {
 	}
 
 	// SHA1
-	sha1 := PCRHashAlgoSHA1
+	sha1 := measure.PCRHashAlgoSHA1
 	if sha1.DigestSize() != 20 {
 		t.Errorf("SHA1 DigestSize() = %d, want 20", sha1.DigestSize())
 	}
@@ -1574,10 +1576,10 @@ func TestSealedBlobRoundTrip(t *testing.T) {
 			Private:       make([]byte, 150), // Typical private key size
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
-				{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-				{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-				{Index: 4, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-				{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				{Index: 4, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				{Index: 7, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
 			PolicyRef:           make([]byte, 32),
 			MeasurePointApplied: true,
@@ -1656,9 +1658,9 @@ func TestSealedBlobRoundTripNoEventlog(t *testing.T) {
 			Private:       []byte("priv-data"),
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
-				{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-				{Index: 2, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-				{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				{Index: 2, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
 		},
 	}
@@ -1677,7 +1679,7 @@ func TestSealedBlobRoundTripNoEventlog(t *testing.T) {
 		t.Error("an all-register blob has no measure-point extends")
 	}
 	for i, pair := range restored.Payload.PCRDigests {
-		if pair.Source != PCRSourceRegister {
+		if pair.Source != measure.PCRSourceRegister {
 			t.Errorf("PCR[%d] should be register source, got %v", i, pair.Source)
 		}
 	}
@@ -1843,13 +1845,13 @@ func TestCurrentBlobVersion(t *testing.T) {
 // TestGetPCRDescription tests PCR description lookup
 func TestGetPCRDescription(t *testing.T) {
 	// PCR 0 should return a non-empty description
-	desc := GetPCRDescription(0)
+	desc := measure.GetPCRDescription(0)
 	if desc == "" {
 		t.Error("Expected non-empty description for PCR 0")
 	}
 
 	// PCR 7 should return a non-empty description
-	desc = GetPCRDescription(7)
+	desc = measure.GetPCRDescription(7)
 	if desc == "" {
 		t.Error("Expected non-empty description for PCR 7")
 	}
@@ -1877,7 +1879,7 @@ func TestGetPCRDescription(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := GetPCRDescription(tt.index)
+			d := measure.GetPCRDescription(tt.index)
 			if d == "" {
 				t.Errorf("Expected non-empty description for PCR %d", tt.index)
 			}
@@ -1978,7 +1980,7 @@ func TestFormatKIRAError(t *testing.T) {
 }
 
 func TestPCRMismatchErrorError(t *testing.T) {
-	err := &PCRMismatchError{
+	err := &measure.PCRMismatchError{
 		Message: "test mismatch",
 	}
 	if !strings.Contains(err.Error(), "test mismatch") {
@@ -2157,7 +2159,7 @@ func TestPcrIndicesToEventlogString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := pcrIndicesToEventlogString(tt.indices)
+			result := measure.PCRIndicesToEventlogString(tt.indices)
 			if result != tt.expected {
 				t.Errorf("Expected %q, got %q", tt.expected, result)
 			}
@@ -2180,11 +2182,11 @@ func TestBuildPCRDigest(t *testing.T) {
 		pcrValues[7][i] = byte(i * 2)
 	}
 
-	digest1, err := buildPCRDigest([]int{0, 7}, pcrValues, PCRHashAlgoSHA256)
+	digest1, err := measure.BuildPCRDigest([]int{0, 7}, pcrValues, measure.PCRHashAlgoSHA256)
 	if err != nil {
 		t.Fatalf("buildPCRDigest failed: %v", err)
 	}
-	digest2, err := buildPCRDigest([]int{0, 7}, pcrValues, PCRHashAlgoSHA256)
+	digest2, err := measure.BuildPCRDigest([]int{0, 7}, pcrValues, measure.PCRHashAlgoSHA256)
 	if err != nil {
 		t.Fatalf("buildPCRDigest failed: %v", err)
 	}
@@ -2195,7 +2197,7 @@ func TestBuildPCRDigest(t *testing.T) {
 
 	// Different PCR values should produce different digests
 	pcrValues[0][0] = 0xFF
-	digest3, err := buildPCRDigest([]int{0, 7}, pcrValues, PCRHashAlgoSHA256)
+	digest3, err := measure.BuildPCRDigest([]int{0, 7}, pcrValues, measure.PCRHashAlgoSHA256)
 	if err != nil {
 		t.Fatalf("buildPCRDigest failed: %v", err)
 	}
@@ -2207,24 +2209,24 @@ func TestBuildPCRDigest(t *testing.T) {
 func TestAttestHash(t *testing.T) {
 	tests := []struct {
 		name     string
-		algo     PCRHashAlgo
+		algo     measure.PCRHashAlgo
 		expected attest.HashAlg
 	}{
 		{
 			name:     "SHA256",
-			algo:     PCRHashAlgoSHA256,
+			algo:     measure.PCRHashAlgoSHA256,
 			expected: attest.HashSHA256,
 		},
 		{
 			name:     "SHA1",
-			algo:     PCRHashAlgoSHA1,
+			algo:     measure.PCRHashAlgoSHA1,
 			expected: attest.HashSHA1,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := attestHash(tt.algo)
+			result := measure.AttestHash(tt.algo)
 			if result != tt.expected {
 				t.Errorf("Expected %v, got %v", tt.expected, result)
 			}
@@ -2252,7 +2254,7 @@ func TestMin(t *testing.T) {
 }
 
 func TestPCRSourceUnknown(t *testing.T) {
-	unknown := PCRSource(99)
+	unknown := measure.PCRSource(99)
 	if unknown.String() != "unknown" {
 		t.Errorf("Unknown source String() = %q, want \"unknown\"", unknown.String())
 	}
@@ -2262,7 +2264,7 @@ func TestPCRSourceUnknown(t *testing.T) {
 }
 
 func TestPCRSourceUKI(t *testing.T) {
-	u := PCRSourceUKI
+	u := measure.PCRSourceUKI
 	if u.String() != "uki" {
 		t.Errorf("UKI String() = %q, want \"uki\"", u.String())
 	}
@@ -2273,11 +2275,11 @@ func TestPCRSourceUKI(t *testing.T) {
 
 func TestParsePCRSpecsUKIRoundTrip(t *testing.T) {
 	input := "0e,2,11u:/boot/EFI/Linux/arch-linux.efi"
-	specs, err := ParsePCRSpecs(input)
+	specs, err := measure.ParsePCRSpecs(input)
 	if err != nil {
 		t.Fatalf("ParsePCRSpecs failed: %v", err)
 	}
-	output := PCRSpecsToString(specs)
+	output := measure.PCRSpecsToString(specs)
 	if output != input {
 		t.Errorf("Round trip failed: %q -> %q", input, output)
 	}
@@ -2285,7 +2287,7 @@ func TestParsePCRSpecsUKIRoundTrip(t *testing.T) {
 
 func TestParsePCRSpecsUKIAbsolutePath(t *testing.T) {
 	input := "11u:/boot/EFI/Linux/other.efi"
-	specs, err := ParsePCRSpecs(input)
+	specs, err := measure.ParsePCRSpecs(input)
 	if err != nil {
 		t.Fatalf("ParsePCRSpecs failed: %v", err)
 	}
@@ -2295,7 +2297,7 @@ func TestParsePCRSpecsUKIAbsolutePath(t *testing.T) {
 	if specs[0].Index != 11 {
 		t.Errorf("Index = %d, want 11", specs[0].Index)
 	}
-	if specs[0].Source != PCRSourceUKI {
+	if specs[0].Source != measure.PCRSourceUKI {
 		t.Errorf("Source = %v, want uki", specs[0].Source)
 	}
 	if specs[0].Command != "/boot/EFI/Linux/other.efi" {
@@ -2304,13 +2306,13 @@ func TestParsePCRSpecsUKIAbsolutePath(t *testing.T) {
 }
 
 func TestParsePCRSpecsRejectsRemovedPredictSource(t *testing.T) {
-	if _, err := ParsePCRSpecs("11p:/usr/bin/tpm2-pcr11predict"); err == nil {
+	if _, err := measure.ParsePCRSpecs("11p:/usr/bin/tpm2-pcr11predict"); err == nil {
 		t.Error("Expected the removed predict source to be rejected, got nil")
 	}
 }
 
 func TestPCRHashAlgoUnknown(t *testing.T) {
-	unknown := PCRHashAlgo("unknown")
+	unknown := measure.PCRHashAlgo("unknown")
 	// Unknown should default to SHA256 behavior
 	if unknown.DigestSize() != 32 {
 		t.Errorf("Unknown DigestSize() = %d, want 32", unknown.DigestSize())
@@ -2340,14 +2342,14 @@ func TestApproveAndWriteValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	specs := []PCRSpec{{Index: 0, Source: PCRSourceRegister}}
+	specs := []measure.PCRSpec{{Index: 0, Source: measure.PCRSourceRegister}}
 	blob := &SealedBlob{}
 
 	// All of these are refused before the TPM is used (it is nil here).
 	for _, tc := range []struct {
 		name   string
 		index  uint32
-		specs  []PCRSpec
+		specs  []measure.PCRSpec
 		signer crypto.Signer
 		want   string
 	}{
@@ -2356,7 +2358,7 @@ func TestApproveAndWriteValidation(t *testing.T) {
 		{"generation range", GenerationIndex(NVRAMSlotStart), specs, signer, "reserved for generation indices"},
 		{"outside the application range", 0x01000000, specs, signer, "outside the safe application range"},
 	} {
-		err := approveAndWrite(nil, tc.index, blob, tc.specs, PCRHashAlgoSHA256, false, tc.signer, false)
+		err := approveAndWrite(nil, tc.index, blob, tc.specs, measure.PCRHashAlgoSHA256, false, tc.signer, false)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: error = %v, want %q", tc.name, err, tc.want)
 		}
@@ -2452,8 +2454,8 @@ func TestSignBlobPayload(t *testing.T) {
 			Private:       []byte("private-data"),
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
-				{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-				{Index: 7, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				{Index: 7, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
 			PolicyRef: make([]byte, 32),
 		},
@@ -2501,7 +2503,7 @@ func TestVerifyBlobSignature(t *testing.T) {
 			Private:       []byte("private-data"),
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
-				{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
 			PolicyRef: make([]byte, 32),
 		},
@@ -2566,7 +2568,7 @@ func TestVerifyBlobSignatureRSA(t *testing.T) {
 			Private:       []byte("rsa-private-data"),
 			TOTPAlgorithm: tpm2.TPMAlgSHA1,
 			PCRDigests: []PCRDigestPair{
-				{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+				{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 			},
 			PolicyRef: make([]byte, 32),
 		},
@@ -2813,9 +2815,9 @@ func TestMarshalPayloadUnmarshalPayloadRoundTrip(t *testing.T) {
 		Private:       []byte("test-private-key-blob"),
 		TOTPAlgorithm: tpm2.TPMAlgSHA1,
 		PCRDigests: []PCRDigestPair{
-			{Index: 0, Source: PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-			{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
-			{Index: 11, Source: PCRSourceUKI, Command: "/boot/uki.efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+			{Index: 0, Source: measure.PCRSourceEventlog, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+			{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
+			{Index: 11, Source: measure.PCRSourceUKI, Command: "/boot/uki.efi", Digest: tpm2.TPM2BDigest{Buffer: make([]byte, 32)}},
 		},
 		PolicyRef:           make([]byte, 32),
 		MeasurePointApplied: true,

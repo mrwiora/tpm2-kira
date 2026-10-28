@@ -1,4 +1,4 @@
-package cmd
+package measure
 
 import (
 	"bytes"
@@ -20,7 +20,7 @@ const TPM2PCRKernelBoot = 11
 // Order in which systemd-stub measures unified kernel image sections into
 // PCR 11. ".pcrsig" is deliberately absent: it carries the signature over
 // these very measurements and is therefore never itself measured.
-var ukiMeasuredSections = []string{
+var UKIMeasuredSections = []string{
 	".linux",
 	".osrel",
 	".cmdline",
@@ -62,7 +62,7 @@ func ukiSectionMeasurements(ukiPath string, algo PCRHashAlgo) ([]ukiMeasurement,
 	defer file.Close()
 
 	var measurements []ukiMeasurement
-	for _, name := range ukiMeasuredSections {
+	for _, name := range UKIMeasuredSections {
 		section := file.Section(name)
 		if section == nil {
 			continue
@@ -77,7 +77,7 @@ func ukiSectionMeasurements(ukiPath string, algo PCRHashAlgo) ([]ukiMeasurement,
 			continue
 		}
 
-		hasher := newHashFor(algo)
+		hasher := NewHashFor(algo)
 		if _, err := io.CopyN(hasher, section.Open(), size); err != nil {
 			return nil, fmt.Errorf("failed to read section %s of %s: %w", name, ukiPath, err)
 		}

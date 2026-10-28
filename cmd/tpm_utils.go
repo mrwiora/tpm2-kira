@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 )
@@ -175,10 +177,10 @@ func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) 
 	if err != nil {
 		return "", sealedBlob, err
 	}
-	if !VerifyPCRValues(sealedBlob.GetPCRDigestValues(), currentPCRValues) {
+	if !measure.VerifyPCRValues(sealedBlob.GetPCRDigestValues(), currentPCRValues) {
 		mismatch := newPCRMismatchError(sealedBlob, currentPCRValues)
 		if mismatch.SeparatorLocked() {
-			return "", sealedBlob, ErrSeparatorLocked
+			return "", sealedBlob, measure.ErrSeparatorLocked
 		}
 		return "", sealedBlob, mismatch
 	}
@@ -187,9 +189,9 @@ func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) 
 	return code, sealedBlob, err
 }
 
-func newPCRMismatchError(sealedBlob *SealedBlob, current []tpm2.TPM2BDigest) *PCRMismatchError {
+func newPCRMismatchError(sealedBlob *SealedBlob, current []tpm2.TPM2BDigest) *measure.PCRMismatchError {
 	expectedDigests := make([][]byte, len(sealedBlob.Payload.PCRDigests))
-	pcrSources := make([]PCRSource, len(sealedBlob.Payload.PCRDigests))
+	pcrSources := make([]measure.PCRSource, len(sealedBlob.Payload.PCRDigests))
 	for i, d := range sealedBlob.Payload.PCRDigests {
 		expectedDigests[i] = d.Digest.Buffer
 		pcrSources[i] = d.Source
@@ -198,7 +200,7 @@ func newPCRMismatchError(sealedBlob *SealedBlob, current []tpm2.TPM2BDigest) *PC
 	for i, d := range current {
 		currentDigests[i] = d.Buffer
 	}
-	return &PCRMismatchError{
+	return &measure.PCRMismatchError{
 		Message:         "PCR values have changed. Use 'slot approve' with the signing key to approve the new values",
 		PCRIndices:      sealedBlob.GetPCRIndices(),
 		ExpectedDigests: expectedDigests,

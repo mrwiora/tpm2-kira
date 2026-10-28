@@ -1,4 +1,4 @@
-package cmd
+package measure
 
 import (
 	"bytes"
@@ -17,9 +17,9 @@ func TestPredictPCR11UsesUnpaddedSections(t *testing.T) {
 	}
 	defer file.Close()
 
-	measure := func(padded bool) []byte {
+	pcr11Of := func(padded bool) []byte {
 		pcr := make([]byte, 32)
-		for _, name := range ukiMeasuredSections {
+		for _, name := range UKIMeasuredSections {
 			section := file.Section(name)
 			if section == nil {
 				continue
@@ -36,7 +36,7 @@ func TestPredictPCR11UsesUnpaddedSections(t *testing.T) {
 			}
 			pcr = ExtendDigest(PCRHashAlgoSHA256, pcr,
 				DigestOf(PCRHashAlgoSHA256, append([]byte(name), 0)))
-			hasher := newHashFor(PCRHashAlgoSHA256)
+			hasher := NewHashFor(PCRHashAlgoSHA256)
 			if _, err := io.CopyN(hasher, section.Open(), size); err != nil {
 				t.Fatalf("section %s: %v", name, err)
 			}
@@ -46,7 +46,7 @@ func TestPredictPCR11UsesUnpaddedSections(t *testing.T) {
 			DigestOf(PCRHashAlgoSHA256, []byte(EnterInitrdWord)))
 	}
 
-	unpadded, paddedValue := measure(false), measure(true)
+	unpadded, paddedValue := pcr11Of(false), pcr11Of(true)
 	if bytes.Equal(unpadded, paddedValue) {
 		t.Skip("no measured section is padded in this image; the test cannot distinguish")
 	}

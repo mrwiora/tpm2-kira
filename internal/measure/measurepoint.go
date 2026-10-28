@@ -12,7 +12,7 @@
 // So eventlog-derived values get the userspace extends below folded in, and
 // only PCRs that stop changing at the measure point may be used to validate
 // that decision. See SECURITY-BACKGROUND.md sections 5.6-5.8.
-package cmd
+package measure
 
 import (
 	"bytes"
@@ -127,22 +127,6 @@ func MeasurePointWordsAt(point MeasurePoint, pcr int) []string {
 // separator ran, and nothing can satisfy it again until the next boot.
 var ErrSeparatorLocked = errors.New("codes are locked until the next boot (the OS separator ran after the measure point)")
 
-// SeparatorLocked reports whether every differing PCR is the sealed value
-// plus the os-separator.
-func (e *PCRMismatchError) SeparatorLocked() bool {
-	differ := false
-	for i := range e.ExpectedDigests {
-		if i >= len(e.CurrentDigests) || bytes.Equal(e.ExpectedDigests[i], e.CurrentDigests[i]) {
-			continue
-		}
-		if !SeparatorLocked(e.ExpectedDigests[i], e.CurrentDigests[i]) {
-			return false
-		}
-		differ = true
-	}
-	return differ
-}
-
 // SeparatorLocked reports whether current is expected plus the os-separator:
 // the value was sealed before the separator and the separator has run since.
 func SeparatorLocked(expected, current []byte) bool {
@@ -166,7 +150,7 @@ func PCRStatus(expected, current []byte) string {
 	}
 }
 
-func newHashFor(algo PCRHashAlgo) hash.Hash {
+func NewHashFor(algo PCRHashAlgo) hash.Hash {
 	if algo == PCRHashAlgoSHA1 {
 		return sha1.New()
 	}
@@ -175,14 +159,14 @@ func newHashFor(algo PCRHashAlgo) hash.Hash {
 
 // DigestOf returns H(data) in the given PCR bank.
 func DigestOf(algo PCRHashAlgo, data []byte) []byte {
-	h := newHashFor(algo)
+	h := NewHashFor(algo)
 	h.Write(data)
 	return h.Sum(nil)
 }
 
 // ExtendDigest returns the PCR value after extending current with next.
 func ExtendDigest(algo PCRHashAlgo, current, next []byte) []byte {
-	h := newHashFor(algo)
+	h := NewHashFor(algo)
 	h.Write(current)
 	h.Write(next)
 	return h.Sum(nil)

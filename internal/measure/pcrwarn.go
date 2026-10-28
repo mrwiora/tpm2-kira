@@ -1,4 +1,4 @@
-package cmd
+package measure
 
 import (
 	"fmt"
@@ -63,7 +63,7 @@ const loaderInfoGUID = "4a67b082-0a4c-41cf-b6c7-440b29bb8c4f"
 
 // bootedViaSystemdStub reports whether this boot went through systemd-stub,
 // i.e. a unified kernel image. systemd-stub sets StubInfo. Tests replace it.
-var bootedViaSystemdStub = func() bool {
+var BootedViaSystemdStub = func() bool {
 	_, err := os.Stat("/sys/firmware/efi/efivars/StubInfo-" + loaderInfoGUID)
 	return err == nil
 }
@@ -78,7 +78,7 @@ var bootedViaSystemdStub = func() bool {
 //   - PCR 8: every GRUB command, which includes the kernel command line.
 //   - PCR 12: the command line systemd-stub/systemd-boot passes when it is
 //     not part of a UKI.
-func bootChainCoverage(indices []int) (kernelInitrd, cmdline bool) {
+func BootChainCoverage(indices []int) (kernelInitrd, cmdline bool) {
 	has := func(i int) bool { return slices.Contains(indices, i) }
 	return has(11) || has(9), has(11) || has(8) || has(12)
 }
@@ -91,7 +91,7 @@ func WarnAboutPCRSelection(specs []PCRSpec) {
 	}
 	indices := PCRSpecIndices(specs)
 
-	if kernelInitrd, cmdline := bootChainCoverage(indices); !kernelInitrd || !cmdline {
+	if kernelInitrd, cmdline := BootChainCoverage(indices); !kernelInitrd || !cmdline {
 		var missing string
 		switch {
 		case !kernelInitrd && !cmdline:
@@ -107,7 +107,7 @@ func WarnAboutPCRSelection(specs []PCRSpec) {
 		fmt.Println("  a shell from an edited command line (rd.break, break=) — and this machine")
 		fmt.Println("  still shows a valid code. From such a shell the TOTP secret itself can be")
 		fmt.Println("  unsealed and copied.")
-		if bootedViaSystemdStub() {
+		if BootedViaSystemdStub() {
 			fmt.Println("  This boot used a unified kernel image. Seal its measurements with PCR 11:")
 			fmt.Printf("      tpm2-kira slot add --pcrs \"%s\"\n", suggestWith(specs, "11u"))
 		} else {
@@ -164,7 +164,7 @@ func suggestWith(specs []PCRSpec, extra string) string {
 // that is PCR 11; otherwise the GRUB measurements in PCRs 8 and 9, which need
 // a reseal after the reboot that follows each kernel or initrd update.
 func RecommendedPCRs() string {
-	if bootedViaSystemdStub() {
+	if BootedViaSystemdStub() {
 		return "0,7,11u"
 	}
 	return "0e,2e,4e,7e,8e,9e"

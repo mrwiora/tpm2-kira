@@ -24,6 +24,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
 
@@ -147,7 +148,7 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 	sock := startSWTPM(t)
 	const slot = NVRAMSlotStart + 2
 	privPath, pubPath := signingKeyFiles(t)
-	if err := Seal(sock, "23", slot, pubPath, privPath, false, PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -190,7 +191,7 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	trial, err := ComputePolicyDigestFromPCRValues(tpmDev, []int{23}, map[int][]byte{23: vals[0].Digest}, PCRHashAlgoSHA256)
+	trial, err := measure.ComputePolicyDigestFromPCRValues(tpmDev, []int{23}, map[int][]byte{23: vals[0].Digest}, measure.PCRHashAlgoSHA256)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +249,7 @@ func TestVaultPepper(t *testing.T) {
 	sock := startSWTPM(t)
 	const slot = NVRAMSlotStart + 3
 	privPath, pubPath := signingKeyFiles(t)
-	if err := Seal(sock, "23", slot, pubPath, privPath, false, PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatal(err)
 	}
 	tv := &testVault{token: "tok-p", nonces: map[string][]byte{}}

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 )
 
 // A phone is enrolled only in a boot that the slot's code verified: one
@@ -36,13 +38,13 @@ func TestEnrolmentNeedsAVerifiedBoot(t *testing.T) {
 	if err := os.WriteFile(logPath, tcg2Log(entries), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	old := DefaultEventlogPath
-	DefaultEventlogPath = logPath
-	defer func() { DefaultEventlogPath = old }()
+	old := measure.DefaultEventlogPath
+	measure.DefaultEventlogPath = logPath
+	defer func() { measure.DefaultEventlogPath = old }()
 
 	const slot = NVRAMSlotStart
 	pubPath, privPath := writeTestKeyPair(t)
-	if err := Seal(sock, "0e,2e,7e", slot, pubPath, privPath, false, PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "0e,2e,7e", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
 	_, sealed, err := readSlot(tpm, slot)

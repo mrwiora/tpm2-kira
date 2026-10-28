@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/piv"
 	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
 )
@@ -39,7 +40,7 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 		t.Fatal(err)
 	}
 	idx := ResolveNVRAMIndex(0)
-	if err := Seal(sock, "23", idx, pubPath, privPath, false, PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "23", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal through the token: %v", err)
 	}
 	CloseTokenSessions()

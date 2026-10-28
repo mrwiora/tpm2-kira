@@ -6,6 +6,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 )
 
 func TestWriteSigningKeyFile(t *testing.T) {
@@ -100,7 +102,7 @@ func TestSealRejectsKeyFileMode(t *testing.T) {
 				}
 			}
 
-			err := Seal("/nonexistent/tpm", "0,7", NVRAMSlotStart, pub, priv, false, PCRHashAlgoSHA256, false)
+			err := Seal("/nonexistent/tpm", "0,7", NVRAMSlotStart, pub, priv, false, measure.PCRHashAlgoSHA256, false)
 			if err == nil {
 				t.Fatal("Seal() expected error, got nil")
 			}
@@ -118,7 +120,7 @@ func TestSealRequiresUsableSigningKey(t *testing.T) {
 		if err := WriteSigningKeyFile(pub, []byte("k")); err != nil {
 			t.Fatal(err)
 		}
-		err := Seal("/nonexistent/tpm", "0,7", NVRAMSlotStart, pub, filepath.Join(dir, "seal.key"), false, PCRHashAlgoSHA256, false)
+		err := Seal("/nonexistent/tpm", "0,7", NVRAMSlotStart, pub, filepath.Join(dir, "seal.key"), false, measure.PCRHashAlgoSHA256, false)
 		if err == nil || !strings.Contains(err.Error(), "tpm2-kira setup") {
 			t.Errorf("Seal() error = %v, want it to ask for 'tpm2-kira setup'", err)
 		}
@@ -133,7 +135,7 @@ func TestSealRequiresUsableSigningKey(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		err := Seal("/nonexistent/tpm", "0,7", NVRAMSlotStart, pub, priv, false, PCRHashAlgoSHA256, false)
+		err := Seal("/nonexistent/tpm", "0,7", NVRAMSlotStart, pub, priv, false, measure.PCRHashAlgoSHA256, false)
 		if err == nil || !strings.Contains(err.Error(), "signing private key is not usable") {
 			t.Errorf("Seal() error = %v, want 'signing private key is not usable'", err)
 		}

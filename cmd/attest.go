@@ -22,6 +22,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/transport/ble"
 	"github.com/mrwiora/tpm2-kira/transport/frame"
 )
@@ -183,7 +184,7 @@ func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *Attestation, priv cryp
 	}
 	if newKey != nil {
 		fmt.Printf("Slot %d has no phone any more, so it has a TOTP code again (a new one):\n", slot)
-		showTOTPSecret(newKey, newAlg, idx, PCRSpecsToString(sb.GetPCRSpecs()))
+		showTOTPSecret(newKey, newAlg, idx, measure.PCRSpecsToString(sb.GetPCRSpecs()))
 	}
 	return nil
 }
@@ -425,7 +426,7 @@ func AttestEnrol(o EnrolOptions) error {
 		// unless --pcrs asks for others.
 		pcrs := o.PCRs
 		sealedAlg := uint16(attest.AlgSHA256)
-		if sealed.GetHashAlgo() == PCRHashAlgoSHA1 {
+		if sealed.GetHashAlgo() == measure.PCRHashAlgoSHA1 {
 			sealedAlg = attest.AlgSHA1
 		}
 		if pcrs == "" {
@@ -440,7 +441,7 @@ func AttestEnrol(o EnrolOptions) error {
 		}
 		// SHA-256, unless --sha1 says otherwise: like 'slot add', SHA-1 is
 		// never picked for the user, not even where nothing else works.
-		alg, err := chooseAttestBank(o.SHA1, sealedAlg, func(a PCRHashAlgo) bool { return TPMHasPCRBank(tpmDev, a) })
+		alg, err := chooseAttestBank(o.SHA1, sealedAlg, func(a measure.PCRHashAlgo) bool { return measure.TPMHasPCRBank(tpmDev, a) })
 		if err != nil {
 			return err
 		}
@@ -532,7 +533,7 @@ func AttestEnrol(o EnrolOptions) error {
 	} else if !ok {
 		return errors.New("enrolment needs a boot you verified: reboot, compare the code at the code screen (or let an enrolled phone attest the boot), then enrol")
 	}
-	ok, err := confirmInitrdCoverage(console, sel, DefaultEventlogPath)
+	ok, err := confirmInitrdCoverage(console, sel, measure.DefaultEventlogPath)
 	if err != nil {
 		return err
 	}
@@ -738,12 +739,12 @@ func AttestGate(o GateOptions) int {
 // SHA-1 when --sha1 was given. The slot's seal (sealedAlg, 0 without one)
 // and the TPM must agree; where they do not, the answer is the command to
 // run instead, never another bank.
-func chooseAttestBank(sha1 bool, sealedAlg uint16, has func(PCRHashAlgo) bool) (uint16, error) {
+func chooseAttestBank(sha1 bool, sealedAlg uint16, has func(measure.PCRHashAlgo) bool) (uint16, error) {
 	const stopgap = "WARNING: SHA-1 is broken against collision attacks and is deprecated for\n" +
 		"new deployments. Prefer a TPM with a SHA-256 PCR bank, and treat this as a stopgap."
-	alg, hashAlgo := uint16(attest.AlgSHA256), PCRHashAlgoSHA256
+	alg, hashAlgo := uint16(attest.AlgSHA256), measure.PCRHashAlgoSHA256
 	if sha1 {
-		alg, hashAlgo = attest.AlgSHA1, PCRHashAlgoSHA1
+		alg, hashAlgo = attest.AlgSHA1, measure.PCRHashAlgoSHA1
 	}
 	if sealedAlg == attest.AlgSHA1 && !sha1 {
 		return 0, fmt.Errorf("the slot is sealed against the SHA-1 PCR bank, and its phone enrolment quotes the same registers.\n"+
@@ -755,7 +756,7 @@ func chooseAttestBank(sha1 bool, sealedAlg uint16, has func(PCRHashAlgo) bool) (
 	if has(hashAlgo) {
 		return alg, nil
 	}
-	if !sha1 && has(PCRHashAlgoSHA1) {
+	if !sha1 && has(measure.PCRHashAlgoSHA1) {
 		return 0, fmt.Errorf("this TPM has no SHA-256 PCR bank to quote.\n"+
 			"The only remaining option is the SHA-1 bank:\n\n    tpm2-kira phone enrol --sha1\n\n%s", stopgap)
 	}
@@ -823,20 +824,20 @@ func requireVerifiedBoot(tpmDev transport.TPM, sealed *SealedBlob, slot uint32) 
 // describe is read from its register, which only works for one that has
 // not changed since; for one that has (9, 11, 15 above 12) it cannot tell.
 func bootMatchesApproval(tpmDev transport.TPM, sealed *SealedBlob) ([]int, error) {
-	specs := make([]PCRSpec, 0, len(sealed.Payload.PCRDigests))
+	specs := make([]measure.PCRSpec, 0, len(sealed.Payload.PCRDigests))
 	for _, pd := range sealed.Payload.PCRDigests {
-		spec := PCRSpec{Index: pd.Index, Source: PCRSourceRegister}
+		spec := measure.PCRSpec{Index: pd.Index, Source: measure.PCRSourceRegister}
 		switch {
 		case pd.Index <= 12:
-			spec.Source = PCRSourceEventlog
+			spec.Source = measure.PCRSourceEventlog
 		default:
-			if reason, volatile := IsVolatileAfterMeasurePoint(pd.Index); volatile {
+			if reason, volatile := measure.IsVolatileAfterMeasurePoint(pd.Index); volatile {
 				return nil, fmt.Errorf("PCR %d is not in the event log and changes after the code screen: %s", pd.Index, reason)
 			}
 		}
 		specs = append(specs, spec)
 	}
-	res, err := ReadPCRValues(tpmDev, specs, sealed.GetHashAlgo(), MeasurePointOn, MeasurePointBeforeSeparator, false)
+	res, err := measure.ReadPCRValues(tpmDev, specs, sealed.GetHashAlgo(), measure.MeasurePointOn, measure.MeasurePointBeforeSeparator, false)
 	if err != nil {
 		return nil, err
 	}

@@ -25,6 +25,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 )
 
 // swtpmProc is one swtpm process over a state directory. Stopping and
@@ -131,7 +132,7 @@ func sealRealSlot(t *testing.T, sock string, idx uint32) (crypto.Signer, string)
 	if err := WriteSigningKeyFile(pubPath, pubPEM); err != nil {
 		t.Fatal(err)
 	}
-	if err := Seal(sock, "23", idx, pubPath, privPath, false, PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "23", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("sealing the test slot: %v", err)
 	}
 	signer, err := LoadCheckedSigningPrivateKey(privPath)

@@ -11,6 +11,8 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 )
 
 // ── tree-drawing helpers ────────────────────────────────────────────────
@@ -315,7 +317,7 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 	fmt.Printf("%s%sCount: %d\n", sub, branch(false), len(blob.Payload.PCRDigests))
 	for j, pd := range blob.Payload.PCRDigests {
 		isLast := j == len(blob.Payload.PCRDigests)-1
-		fmt.Printf("%s%sPCR %-2d (%s): %s\n", sub, branch(isLast), pd.Index, pd.Source.String(), GetPCRDescription(pd.Index))
+		fmt.Printf("%s%sPCR %-2d (%s): %s\n", sub, branch(isLast), pd.Index, pd.Source.String(), measure.GetPCRDescription(pd.Index))
 	}
 
 	// ── 4. Authentication ───────────────────────────────────────────
@@ -475,13 +477,6 @@ func formatNVAttributes(nvPub *tpm2.TPMSNVPublic) string {
 	return result
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // printAttestationTree renders the blob's remote-attestation part: who the
 // machine is to its verifiers, which key signs its quotes, which PCRs are
 // quoted, and the methods by which a verifier reaches it.
@@ -493,7 +488,7 @@ func printAttestationTree(prefix string, si *slotInfo) {
 	}
 	fmt.Printf("%s%sPhone attestation\n", prefix, branch(false))
 	sub := prefix + cont(false)
-	fmt.Printf("%s%sMachine name: %s\n", sub, branch(false), quoteUntrusted(att.FriendlyName))
+	fmt.Printf("%s%sMachine name: %s\n", sub, branch(false), untrusted.Quote(att.FriendlyName))
 	fmt.Printf("%s%sDevice ID: %x\n", sub, branch(false), att.DeviceID)
 	fmt.Printf("%s%sAttestation key (signs the quotes; private part wrapped by this TPM)\n", sub, branch(false))
 	ak := sub + cont(false)
@@ -524,11 +519,11 @@ func printAttestationTree(prefix string, si *slotInfo) {
 		last := i == len(phones)-1
 		fmt.Printf("%s%sphone %d\n", list, branch(last), i+1)
 		d := list + cont(last)
-		fmt.Printf("%s%sID: %s\n", d, branch(false), quoteUntrusted(v.ID))
+		fmt.Printf("%s%sID: %s\n", d, branch(false), untrusted.Quote(v.ID))
 		fmt.Printf("%s%sAnchor key (signs its verdicts): SHA-256 %x\n", d, branch(false), attest.AnchorDigest(v.AnchorPub))
 		fmt.Printf("%s%sChannel key: %x\n", d, branch(v.PolicyID == ""), v.NoisePub)
 		if v.PolicyID != "" {
-			fmt.Printf("%s%sPolicy: %s\n", d, branch(true), quoteUntrusted(v.PolicyID))
+			fmt.Printf("%s%sPolicy: %s\n", d, branch(true), untrusted.Quote(v.PolicyID))
 		}
 	}
 }

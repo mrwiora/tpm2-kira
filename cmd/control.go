@@ -15,6 +15,7 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"golang.org/x/sys/unix"
 )
 
@@ -62,7 +63,7 @@ type machineFacts struct {
 	PINLoose   bool   // the PIN file holds the PIN, but others can read it
 	EKBy       string // the vendor whose chain vouches for this TPM's EK; "" when none does
 	EKNote     string // why none does
-	SecureBoot SecureBootState
+	SecureBoot measure.SecureBootState
 	Initramfs  string // mkinitcpio, initramfs-tools, or ""
 	HookState  string // why the boot integration would not run; "" when wired
 	Rebuild    string // mkinitcpio: why the image still lacks the hook; "" when it carries it
@@ -131,13 +132,13 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	if tpmDev, err := OpenTPM(tpmPath); err != nil {
 		f.TPMErr = err.Error()
 	} else {
-		f.SHA256Bank = TPMHasPCRBank(tpmDev, PCRHashAlgoSHA256)
-		f.SHA1Bank = TPMHasPCRBank(tpmDev, PCRHashAlgoSHA1)
+		f.SHA256Bank = measure.TPMHasPCRBank(tpmDev, measure.PCRHashAlgoSHA256)
+		f.SHA1Bank = measure.TPMHasPCRBank(tpmDev, measure.PCRHashAlgoSHA1)
 		tpmDev.Close()
 	}
-	if _, err := readRawEventLogFromPath(DefaultEventlogPath); err == nil {
+	if _, err := measure.ReadRawEventLogFromPath(measure.DefaultEventlogPath); err == nil {
 		f.LogRead = true
-		if d, err := EventDigestsForPCR(DefaultEventlogPath, 0, PCRHashAlgoSHA256); err == nil && len(d) > 0 {
+		if d, err := measure.EventDigestsForPCR(measure.DefaultEventlogPath, 0, measure.PCRHashAlgoSHA256); err == nil && len(d) > 0 {
 			f.LogSHA256 = true
 		}
 	}
@@ -152,9 +153,9 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	case f.LogRead && !f.LogSHA256:
 		f.UseSHA1, f.SHA1Why = true, "the event log has no SHA-256 digests"
 	}
-	algo := PCRHashAlgoSHA256
+	algo := measure.PCRHashAlgoSHA256
 	if f.UseSHA1 {
-		algo = PCRHashAlgoSHA1
+		algo = measure.PCRHashAlgoSHA1
 	}
 	f.PCRs, f.PCRsWhy = DefaultPCRSelection("", algo)
 
@@ -170,7 +171,7 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	if stored, loose := pinStored(pinFilePath()); stored {
 		f.PINStored, f.PINLoose = !loose, loose
 	}
-	f.SecureBoot = ReadSecureBootState()
+	f.SecureBoot = measure.ReadSecureBootState()
 	if f.TPMErr == "" {
 		f.EKBy, f.EKNote = ekVerdict(tpmPath, debug)
 	}
@@ -318,11 +319,11 @@ func weakSlots(f *machineFacts) []int {
 		if s.Fallback {
 			continue
 		}
-		specs, err := ParsePCRSpecs(s.PCRs)
+		specs, err := measure.ParsePCRSpecs(s.PCRs)
 		if err != nil {
 			continue
 		}
-		if kernelInitrd, cmdline := bootChainCoverage(PCRSpecIndices(specs)); !kernelInitrd || !cmdline {
+		if kernelInitrd, cmdline := measure.BootChainCoverage(measure.PCRSpecIndices(specs)); !kernelInitrd || !cmdline {
 			weak = append(weak, s.Slot)
 		}
 	}
@@ -442,8 +443,8 @@ func Control(o ControlOptions) error {
 	// The overview judges the risks itself, in red on the status, so the
 	// steps run without the commands' advisory warnings: nothing is said
 	// twice. Run by hand, seal and reseal keep them.
-	defer func(old bool) { AdvisoryWarnings = old }(AdvisoryWarnings)
-	AdvisoryWarnings = false
+	defer func(old bool) { measure.AdvisoryWarnings = old }(measure.AdvisoryWarnings)
+	measure.AdvisoryWarnings = false
 	for {
 		if c.tty { // the overview is a page of its own: what the last step printed was read before "Continue"
 			fmt.Fprint(c.out, clearScreen+"\n\033[2mLooking at this machine ...\033[0m\n")
@@ -1087,9 +1088,9 @@ func (c *controller) storePIN() error {
 // analysis evaluated, put up as a recommendation: the person acknowledges
 // it, or gives custom PCRs instead (confirmPCRs).
 func (c *controller) runSeal() error {
-	algo := PCRHashAlgoSHA256
+	algo := measure.PCRHashAlgoSHA256
 	if c.facts.UseSHA1 {
-		algo = PCRHashAlgoSHA1
+		algo = measure.PCRHashAlgoSHA1
 	}
 	slot0, fallback := false, false
 	for _, s := range c.facts.Status.Slots {
@@ -1154,7 +1155,7 @@ func (c *controller) confirmPCRs() (string, error) {
 		Description("Indices with a source each: none or r the register, e the event log, u the unified kernel image - such as 0e,2e,7e,11u (tpm2-kira help slot).").
 		Value(&pcrs).
 		Validate(func(s string) error {
-			_, err := ParsePCRSpecs(s)
+			_, err := measure.ParsePCRSpecs(s)
 			return err
 		})).Run(); err != nil {
 		return "", err

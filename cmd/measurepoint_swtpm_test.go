@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 )
@@ -82,33 +84,33 @@ func TestSealReadsSeparatorPCRsFromTheLog(t *testing.T) {
 	if err := os.WriteFile(logPath, tcg2Log(entries), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	old := DefaultEventlogPath
-	DefaultEventlogPath = logPath
-	defer func() { DefaultEventlogPath = old }()
+	old := measure.DefaultEventlogPath
+	measure.DefaultEventlogPath = logPath
+	defer func() { measure.DefaultEventlogPath = old }()
 
-	specs, err := ParsePCRSpecs("0,2,7") // register source, as users type it
+	specs, err := measure.ParsePCRSpecs("0,2,7") // register source, as users type it
 	if err != nil {
 		t.Fatal(err)
 	}
-	endOfFirmware, err := ReadPCRRegisters(s.tpm, []int{0, 2, 7}, PCRHashAlgoSHA256, false)
+	endOfFirmware, err := measure.ReadPCRRegisters(s.tpm, []int{0, 2, 7}, measure.PCRHashAlgoSHA256, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	read := func(mode MeasurePointMode, point MeasurePoint) *ReadPCRValuesResult {
+	read := func(mode measure.MeasurePointMode, point measure.MeasurePoint) *measure.ReadPCRValuesResult {
 		t.Helper()
-		res, err := ReadPCRValues(s.tpm, specs, PCRHashAlgoSHA256, mode, point, false)
+		res, err := measure.ReadPCRValues(s.tpm, specs, measure.PCRHashAlgoSHA256, mode, point, false)
 		if err != nil {
 			t.Fatalf("mode %v, %v: %v", mode, point, err)
 		}
 		return res
 	}
-	sources := func(res *ReadPCRValuesResult) (out []PCRSource) {
+	sources := func(res *measure.ReadPCRValuesResult) (out []measure.PCRSource) {
 		for _, sp := range res.Specs {
 			out = append(out, sp.Source)
 		}
 		return
 	}
-	same := func(res *ReadPCRValuesResult, want map[int][]byte) bool {
+	same := func(res *measure.ReadPCRValuesResult, want map[int][]byte) bool {
 		for pcr, v := range want {
 			if !bytes.Equal(res.Values[pcr], v) {
 				return false
@@ -116,22 +118,22 @@ func TestSealReadsSeparatorPCRsFromTheLog(t *testing.T) {
 		}
 		return true
 	}
-	allEventlog := []PCRSource{PCRSourceEventlog, PCRSourceEventlog, PCRSourceEventlog}
-	allRegister := []PCRSource{PCRSourceRegister, PCRSourceRegister, PCRSourceRegister}
+	allEventlog := []measure.PCRSource{measure.PCRSourceEventlog, measure.PCRSourceEventlog, measure.PCRSourceEventlog}
+	allRegister := []measure.PCRSource{measure.PCRSourceRegister, measure.PCRSourceRegister, measure.PCRSourceRegister}
 
 	// No separator on this system yet: the replay equals the registers.
-	res := read(MeasurePointAuto, MeasurePointBeforeSeparator)
+	res := read(measure.MeasurePointAuto, measure.MeasurePointBeforeSeparator)
 	if !same(res, endOfFirmware) || res.AfterSeparator != "" || !bytes.Equal([]byte(sourcesString(sources(res))), []byte(sourcesString(allEventlog))) {
 		t.Fatalf("before any separator: %+v (sources %v)", res.Values, sources(res))
 	}
 
 	// systemd-pcrosseparator runs.
 	for _, pcr := range []int{0, 2, 7} {
-		extendSHA256(t, s.tpm, pcr, DigestOf(PCRHashAlgoSHA256, []byte(OSSeparatorWord)))
+		extendSHA256(t, s.tpm, pcr, measure.DigestOf(measure.PCRHashAlgoSHA256, []byte(measure.OSSeparatorWord)))
 	}
-	live, _ := ReadPCRRegisters(s.tpm, []int{0, 2, 7}, PCRHashAlgoSHA256, false)
+	live, _ := measure.ReadPCRRegisters(s.tpm, []int{0, 2, 7}, measure.PCRHashAlgoSHA256, false)
 
-	res = read(MeasurePointAuto, MeasurePointBeforeSeparator)
+	res = read(measure.MeasurePointAuto, measure.MeasurePointBeforeSeparator)
 	if !same(res, endOfFirmware) || res.AfterSeparator != "" {
 		t.Fatalf("before the separator: want the end-of-firmware values, got %+v (%q)", res.Values, res.AfterSeparator)
 	}
@@ -139,7 +141,7 @@ func TestSealReadsSeparatorPCRsFromTheLog(t *testing.T) {
 		t.Fatalf("nothing is applied to PCRs 0-7 before the separator: %+v", res.EventlogInfo)
 	}
 	for _, pcr := range []int{0, 2, 7} {
-		if !SeparatorLocked(res.Values[pcr], live[pcr]) {
+		if !measure.SeparatorLocked(res.Values[pcr], live[pcr]) {
 			t.Fatalf("PCR %d: the live register should be the sealed value plus os-separator", pcr)
 		}
 	}
@@ -148,20 +150,20 @@ func TestSealReadsSeparatorPCRsFromTheLog(t *testing.T) {
 	}
 
 	// The gate quotes after the separator: the registers as they are.
-	res = read(MeasurePointAuto, MeasurePointAfterSeparator)
+	res = read(measure.MeasurePointAuto, measure.MeasurePointAfterSeparator)
 	if !same(res, live) {
 		t.Fatalf("after the separator: want the live registers, got %+v", res.Values)
 	}
 
 	// --measure-point=off leaves registers alone.
-	res = read(MeasurePointOff, MeasurePointBeforeSeparator)
+	res = read(measure.MeasurePointOff, measure.MeasurePointBeforeSeparator)
 	if !same(res, live) || sourcesString(sources(res)) != sourcesString(allRegister) {
 		t.Fatalf("off: %+v %v", res.Values, sources(res))
 	}
 
 	// No usable log: the registers after all, flagged.
-	DefaultEventlogPath = filepath.Join(t.TempDir(), "missing")
-	res = read(MeasurePointAuto, MeasurePointBeforeSeparator)
+	measure.DefaultEventlogPath = filepath.Join(t.TempDir(), "missing")
+	res = read(measure.MeasurePointAuto, measure.MeasurePointBeforeSeparator)
 	if res.AfterSeparator == "" || !same(res, live) || sourcesString(sources(res)) != sourcesString(allRegister) {
 		t.Fatalf("no log: %+v %q %v", res.Values, res.AfterSeparator, sources(res))
 	}
@@ -176,14 +178,14 @@ func TestSealReadsSeparatorPCRsFromTheLog(t *testing.T) {
 	if err := os.WriteFile(otherLog, tcg2Log(other), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	DefaultEventlogPath = otherLog
-	res = read(MeasurePointAuto, MeasurePointBeforeSeparator)
+	measure.DefaultEventlogPath = otherLog
+	res = read(measure.MeasurePointAuto, measure.MeasurePointBeforeSeparator)
 	if res.AfterSeparator == "" || !same(res, live) || sourcesString(sources(res)) != sourcesString(allRegister) {
 		t.Fatalf("foreign log: %+v %q %v", res.Values, res.AfterSeparator, sources(res))
 	}
 	// An explicitly requested eventlog source still fails on it.
-	explicit, _ := ParsePCRSpecs("0e,2e,7e")
-	if _, err := ReadPCRValues(s.tpm, explicit, PCRHashAlgoSHA256, MeasurePointAuto, MeasurePointBeforeSeparator, false); err == nil {
+	explicit, _ := measure.ParsePCRSpecs("0e,2e,7e")
+	if _, err := measure.ReadPCRValues(s.tpm, explicit, measure.PCRHashAlgoSHA256, measure.MeasurePointAuto, measure.MeasurePointBeforeSeparator, false); err == nil {
 		t.Fatal("an explicit eventlog source must not fall back to the registers")
 	}
 }
@@ -196,14 +198,14 @@ func TestSealReadsSeparatorPCRsFromTheLog(t *testing.T) {
 func TestRegistersAreReadInAnyOrder(t *testing.T) {
 	s := newSWTPMSetup(t)
 	extendSHA256(t, s.tpm, 23, bytes.Repeat([]byte{0x99}, 32))
-	asc, err := ReadPCRRegisters(s.tpm, []int{0, 23}, PCRHashAlgoSHA256, false)
+	asc, err := measure.ReadPCRRegisters(s.tpm, []int{0, 23}, measure.PCRHashAlgoSHA256, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Equal(asc[0], asc[23]) {
 		t.Fatal("the test needs PCR 0 and PCR 23 to differ")
 	}
-	desc, err := ReadPCRRegisters(s.tpm, []int{23, 0}, PCRHashAlgoSHA256, false)
+	desc, err := measure.ReadPCRRegisters(s.tpm, []int{23, 0}, measure.PCRHashAlgoSHA256, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,11 +214,11 @@ func TestRegistersAreReadInAnyOrder(t *testing.T) {
 	}
 
 	// The sealing path for "0,23" without a usable event log.
-	old := DefaultEventlogPath
-	DefaultEventlogPath = filepath.Join(t.TempDir(), "missing")
-	defer func() { DefaultEventlogPath = old }()
-	specs, _ := ParsePCRSpecs("0,23")
-	res, err := ReadPCRValues(s.tpm, specs, PCRHashAlgoSHA256, MeasurePointAuto, MeasurePointBeforeSeparator, false)
+	old := measure.DefaultEventlogPath
+	measure.DefaultEventlogPath = filepath.Join(t.TempDir(), "missing")
+	defer func() { measure.DefaultEventlogPath = old }()
+	specs, _ := measure.ParsePCRSpecs("0,23")
+	res, err := measure.ReadPCRValues(s.tpm, specs, measure.PCRHashAlgoSHA256, measure.MeasurePointAuto, measure.MeasurePointBeforeSeparator, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +227,7 @@ func TestRegistersAreReadInAnyOrder(t *testing.T) {
 	}
 }
 
-func sourcesString(s []PCRSource) string {
+func sourcesString(s []measure.PCRSource) string {
 	var b bytes.Buffer
 	for _, x := range s {
 		b.WriteString(x.String())

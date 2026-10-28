@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -133,7 +135,7 @@ func TestBootDisplayServesLateSlotsAfterRelease(t *testing.T) {
 	}
 	live := func(s NVRAMSlot, now time.Time) NVRAMSlot {
 		if s.SlotNumber == 0 {
-			s.Code, s.Error = "", ErrSeparatorLocked
+			s.Code, s.Error = "", measure.ErrSeparatorLocked
 			return s
 		}
 		f.mu.Lock()
@@ -158,7 +160,7 @@ func TestBootDisplayServesLateSlotsAfterRelease(t *testing.T) {
 	if !last[1].AfterSeparator || last[1].Code != "999999" {
 		t.Fatalf("the late slot should be served live and marked: %+v", last[1])
 	}
-	if !errors.Is(last[0].Error, ErrSeparatorLocked) {
+	if !errors.Is(last[0].Error, measure.ErrSeparatorLocked) {
 		t.Fatalf("the confirmed slot is locked after the release: %+v", last[0])
 	}
 	seen := false

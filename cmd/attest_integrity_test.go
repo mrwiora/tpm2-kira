@@ -14,6 +14,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 )
 
 // testSigningPublic is a well-formed signing key public area, so that the
@@ -38,8 +39,8 @@ func testSlotBlob() *SealedBlob {
 		Payload: SealedBlobPayload{
 			Public: []byte{1, 2, 3}, Private: []byte{4, 5},
 			PCRDigests: []PCRDigestPair{
-				{Index: 0, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: bytes.Repeat([]byte{0xA0}, 32)}},
-				{Index: 7, Source: PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: bytes.Repeat([]byte{0xA7}, 32)}},
+				{Index: 0, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: bytes.Repeat([]byte{0xA0}, 32)}},
+				{Index: 7, Source: measure.PCRSourceRegister, Digest: tpm2.TPM2BDigest{Buffer: bytes.Repeat([]byte{0xA7}, 32)}},
 			},
 			TOTPAlgorithm: tpm2.TPMAlgSHA1, Generation: 3,
 			PolicyRef: []byte("policy-ref"), SigningPublic: testSigningPublic, ApprovalSignature: []byte{7},

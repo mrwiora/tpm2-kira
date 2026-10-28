@@ -1,4 +1,4 @@
-package cmd
+package measure
 
 import (
 	"bytes"
@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -133,7 +135,7 @@ func PCRSpecsToString(specs []PCRSpec) string {
 	for i, spec := range specs {
 		switch spec.Source {
 		case PCRSourceUKI:
-			parts[i] = fmt.Sprintf("%du:%s", spec.Index, quoteUntrusted(spec.Command))
+			parts[i] = fmt.Sprintf("%du:%s", spec.Index, untrusted.Quote(spec.Command))
 		default:
 			parts[i] = fmt.Sprintf("%d%s", spec.Index, spec.Source.Suffix())
 		}
@@ -243,7 +245,7 @@ func explainEventlogBankError(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PC
 		"cannot reconstruct PCR %s from the event log: %s.\n"+
 			"Replaying them would yield each PCR's all-zero reset value, which this\n"+
 			"system will never produce, so the sealed policy could never be satisfied.\n\n",
-		formatPCRList(bankErr.PCRIndices), bankErr.Error())
+		FormatPCRList(bankErr.PCRIndices), bankErr.Error())
 
 	if TPMHasPCRBank(tpmDev, hashAlgo) {
 		return fmt.Errorf("%s"+
@@ -459,27 +461,138 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 	return result, nil
 }
 
-// GetCurrentPCRValuesFromRegisters reads current PCR values directly from TPM
-// registers, regardless of the original PCR source stored in the blob. This is
-// used on the unseal/reveal/run path so that neither the eventlog file nor
-// the unified kernel image are required (critical for early-boot).
-// Results are returned in the same order as the blob's PCR digests.
-func GetCurrentPCRValuesFromRegisters(tpmDev transport.TPM, sealedBlob *SealedBlob, debug bool) ([]tpm2.TPM2BDigest, error) {
-	hashAlgo := sealedBlob.GetHashAlgo()
-	pcrIndices := sealedBlob.GetPCRIndices()
+// PCRHashAlgo represents the hash algorithm used for PCR bank selection
+type PCRHashAlgo string
 
-	regValues, err := ReadPCRRegisters(tpmDev, pcrIndices, hashAlgo, debug)
-	if err != nil {
-		return nil, err
+const (
+	// PCRHashAlgoSHA256 is the default SHA-256 hash algorithm (32-byte digests)
+	PCRHashAlgoSHA256 PCRHashAlgo = "sha256"
+	// PCRHashAlgoSHA1 is the legacy SHA-1 hash algorithm (20-byte digests)
+	PCRHashAlgoSHA1 PCRHashAlgo = "sha1"
+)
+
+// TPMAlg returns the corresponding TPM algorithm ID for this hash algorithm
+func (h PCRHashAlgo) TPMAlg() tpm2.TPMAlgID {
+	switch h {
+	case PCRHashAlgoSHA1:
+		return tpm2.TPMAlgSHA1
+	default:
+		return tpm2.TPMAlgSHA256
 	}
+}
 
-	// Map results back to blob PCR digest order
-	currentPCRValues := make([]tpm2.TPM2BDigest, len(sealedBlob.Payload.PCRDigests))
-	for i, pair := range sealedBlob.Payload.PCRDigests {
-		if val, ok := regValues[pair.Index]; ok {
-			currentPCRValues[i] = tpm2.TPM2BDigest{Buffer: val}
+// DigestSize returns the digest size in bytes for this hash algorithm
+func (h PCRHashAlgo) DigestSize() int {
+	switch h {
+	case PCRHashAlgoSHA1:
+		return 20
+	default:
+		return 32
+	}
+}
+
+// String returns a short identifier for this hash algorithm (e.g. "sha256")
+func (h PCRHashAlgo) String() string {
+	switch h {
+	case PCRHashAlgoSHA1:
+		return "sha1"
+	default:
+		return "sha256"
+	}
+}
+
+// DisplayString returns a human-readable display name (e.g. "SHA-256")
+func (h PCRHashAlgo) DisplayString() string {
+	switch h {
+	case PCRHashAlgoSHA1:
+		return "SHA-1"
+	default:
+		return "SHA-256"
+	}
+}
+
+// PCRSource indicates where a PCR value was obtained from
+type PCRSource byte
+
+const (
+	// PCRSourceRegister means the PCR value was read from TPM registers ('r' suffix or default)
+	PCRSourceRegister PCRSource = 0
+	// PCRSourceEventlog means the PCR value was calculated from the TPM eventlog ('e' suffix)
+	PCRSourceEventlog PCRSource = 1
+	// Source byte 2 is retired and must not be reused; see HISTORY.md.
+	// PCRSourceUKI means the PCR value was computed from a unified kernel image ('u' suffix)
+	PCRSourceUKI PCRSource = 3
+)
+
+// String returns a human-readable label for the PCR source
+func (s PCRSource) String() string {
+	switch s {
+	case PCRSourceEventlog:
+		return "eventlog"
+	case PCRSourceRegister:
+		return "register"
+	case PCRSourceUKI:
+		return "uki"
+	default:
+		return "unknown"
+	}
+}
+
+// Suffix returns the single-character suffix for the PCR source
+func (s PCRSource) Suffix() string {
+	switch s {
+	case PCRSourceEventlog:
+		return "e"
+	case PCRSourceUKI:
+		return "u"
+	case PCRSourceRegister:
+		return ""
+	default:
+		return ""
+	}
+}
+
+// EventlogInfo describes an eventlog-based PCR calculation. It is not
+// stored: the blob keeps only whether the measure-point extends were applied.
+type EventlogInfo struct {
+	EventlogPath    string `json:"eventlog_path"`    // Path the eventlog was read from (never reopened from the blob)
+	CalculationTime string `json:"calculation_time"` // When calculation was performed
+	TotalEvents     int    `json:"total_events"`     // Total number of events processed
+	ProcessedEvents int    `json:"processed_events"` // Number of events that extended PCRs
+	// MeasurePointExtends records the userspace extends applied on top of the
+	// event log replay, as "word:pcr,pcr;word:pcr". Empty means none were applied.
+	MeasurePointExtends string `json:"measure_point_extends,omitempty"`
+	// MeasurePointDetection records how that decision was reached.
+	MeasurePointDetection string `json:"measure_point_detection,omitempty"`
+}
+
+// SeparatorLocked reports whether every differing PCR is the sealed value
+// plus the os-separator.
+func (e *PCRMismatchError) SeparatorLocked() bool {
+	differ := false
+	for i := range e.ExpectedDigests {
+		if i >= len(e.CurrentDigests) || bytes.Equal(e.ExpectedDigests[i], e.CurrentDigests[i]) {
+			continue
 		}
+		if !SeparatorLocked(e.ExpectedDigests[i], e.CurrentDigests[i]) {
+			return false
+		}
+		differ = true
 	}
+	return differ
+}
 
-	return currentPCRValues, nil
+// PCRMismatchError represents a PCR mismatch error with detailed information.
+// CurrentDigests always contains values read from TPM registers (the unseal
+// path never uses eventlog or UKI reconstruction).
+type PCRMismatchError struct {
+	Message         string
+	PCRIndices      []int
+	ExpectedDigests [][]byte    // Digest values stored in the sealed blob
+	CurrentDigests  [][]byte    // Current TPM register values
+	PCRSources      []PCRSource // Original source used at seal time (informational)
+}
+
+func (e *PCRMismatchError) Error() string {
+	return e.Message
 }
