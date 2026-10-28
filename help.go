@@ -96,8 +96,8 @@ FIRST STEPS
                                                      password and the phone's salt
   then rebuild the initramfs: mkinitcpio -P (Arch), update-initramfs -u (Debian)
 
-More: tpm2-kira help slot | status | phone | luks | vault | run | initramfs | ssh-child;
-docs/ and README.md
+More: tpm2-kira help slot | status | phone | luks | vault | run | initramfs |
+ssh-child; docs/ and README.md
 `)
 }
 
@@ -208,7 +208,7 @@ whether to use it or local key files (without a terminal: local files).
 With a YubiKey, seal.key only names the token and the PIV slot and seal.pub
 is the token's public key: no private key is written, and setup needs no
 PIN. An existing keys directory stops setup; changes after that are made
-with seal and reseal.
+with slot add and slot approve.
 
   --yubikey[=SERIAL]  Take the key from a YubiKey without asking; SERIAL
                       picks the token when several are in. The slot must hold
@@ -217,19 +217,20 @@ with seal and reseal.
                       in 9c only when named)
   --local             Local key files, without looking for a YubiKey
 
-The signing key can also be the sbctl secure boot DB key: point seal and
-reseal's --privkey at it to approve the boot state with the key that signs
-the boot components.
+The signing key can also be the sbctl secure boot DB key: point the
+--privkey of slot add and slot approve at it to approve the boot state
+with the key that signs the boot components.
 
   tpm2-kira setup
   tpm2-kira setup --yubikey
   tpm2-kira setup --yubikey=12345678 --slot 9c
 `,
 
-	"slot": `tpm2-kira slot add     [--nvram N] [--pcrs LIST] [--measure-point M] [--pubkey PATH]
-                       [--privkey PATH] [--sha1] [--verify-uki=false]
-tpm2-kira slot approve [--nvram N] [--pcrs LIST] [--measure-point M] [--privkey PATH]
-                       [--pubkey PATH] [--require-key]
+	"slot": `tpm2-kira slot add     [--nvram N] [--pcrs LIST] [--measure-point M]
+                       [--pubkey PATH] [--privkey PATH] [--sha1]
+                       [--verify-uki=false]
+tpm2-kira slot approve [--nvram N] [--pcrs LIST] [--measure-point M]
+                       [--privkey PATH] [--pubkey PATH] [--require-key]
 tpm2-kira slot info    [--nvram N] [--json] [--privkey PATH]
 tpm2-kira slot list | status | delete [--yes] | restore FILE   [--nvram N]
 
@@ -277,8 +278,8 @@ slot: the one named (else 0), the PCRs named (else the selection).
   --verify-uki       Check the PCR 11 computation against this boot's event
                      log first (default true)
 
-  tpm2-kira slot add                          slot 0 as measured, slot 1 the fallback
-  tpm2-kira slot add --pcrs "0e,2e,7e,11u"    slot 0 with these
+  tpm2-kira slot add                        slot 0 as measured, 1 the fallback
+  tpm2-kira slot add --pcrs "0e,2e,7e,11u"  slot 0 with these
   tpm2-kira slot add --nvram 2 --pcrs "0e,7e"
   tpm2-kira slot add --sha1 --pcrs "0e,2e,7e"
 
@@ -308,7 +309,7 @@ control stores, root-only; else asked).
 
 info
 Shows a slot's blob: the TOTP key's policy (PCRs, sources, generation), the
-remote attestation set up for it (attestation key, phones, release key for
+phone attestation set up for it (attestation key, phones, release key for
 the phone salt), and whether the blob is signed by this machine's key.
 
   --json          Machine-readable
@@ -344,13 +345,13 @@ The TPM's slots: 0-15 are the NV indices 0x01803010-0x0180301F.
 	"status": `tpm2-kira status [--json] [--privkey PATH] [--conf PATH]
 
 The overview, read-only: every slot with what it is sealed to, its
-generation (does the TPM's index match, or is a reseal due), whether this
+generation (does the TPM's index match, or is an approval due), whether this
 machine's key signed it, its phones and whether a phone salt is enrolled;
 every LUKS device's keyslots and which are tpm2-kira's (how a key is made
 is each keyslot's token, read from the header at boot). Then the notes:
 what does not fit together and what to run - a phone salt without a
 keyslot for it, a keyslot bound to a slot that is gone, no fallback
-slot, a slot that needs a reseal. Root for the LUKS headers.
+slot, a slot that needs an approval. Root for the LUKS headers.
 
   --json              Machine-readable
   --privkey PATH      The signing key the blobs are checked with
@@ -374,7 +375,7 @@ the phone's code in the slot's line as soon as the phone is in; with
 LUKS2 header says (the token of tpm2-kira's keyslot):
 
   no token                nothing; cryptsetup's own prompt
-  password+salt           asks a password and a salt; hashpwd2's derivation
+  password+salt           asks a password and a salt; Argon2id
   password+phonesalt     asks the password; the salt the phone released
   tpm+vault               asks nothing: the TPM's local part and the vault's
                           remote part, opened while the code screen holds; a
@@ -442,7 +443,7 @@ variable ` + cmd.DefaultSSHCA + `, and which signs only while the PCRs of one of
 hold values the signing key approved. control writes two slots into
 assh.conf when it creates the CA: PCR 0, 2, 7 and the image's (11, or 8
 and 9 with GRUB), and PCR 7 alone - each with PCR 15, the window, which run
-extends. reseal approves them after every image rebuild, and makes the
+extends. slot approve approves them after every image rebuild, and makes the
 CA's slots assh.conf's first (ASSH_CA_SLOT_<N>=PCRs). Clients trust the CA once, in known_hosts:
 
   @cert-authority <the machine's names> <the contents of ` + cmd.DefaultSSHCAPub + `>
@@ -522,7 +523,7 @@ tpm2-kira's LUKS keyslots. Every keyslot it adds is marked with a LUKS2
 token in the header (no secret), whose type carries the mode, so a plain
 luksDump tells them apart: tpm2-kira-salt is password+salt,
 tpm2-kira-phonesalt is password+phonesalt, tpm2-kira-vault is tpm+vault
-(docs/REMOTE-UNLOCK.md). status, removal and rotation
+(docs/VAULT.md). status, removal and rotation
 know the keyslots by it, and the boot reads the key's recipe from it; a
 token of ours without a keyslot is named as a leftover, with the
 'cryptsetup token remove' that takes it. A password+phonesalt or tpm+vault
@@ -589,7 +590,7 @@ own, unmarked: cryptsetup's prompt is always the fallback
 
 The YubiKeys plugged in and the keys in their PIV slots, and which of them
 tpm2-kira can use as the signing key. Read-only; no PIN. With the signing
-key on a YubiKey, seal and reseal need the token and its PIN (see
+key on a YubiKey, slot add and slot approve need the token and its PIN (see
 'help slot'); reveal, run and info never do.
 `,
 

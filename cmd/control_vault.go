@@ -12,7 +12,7 @@ import (
 )
 
 // control's option for the disk key from this TPM and a vault (tpm+vault,
-// docs/REMOTE-UNLOCK.md): the vault's address, key pin and one-time token
+// docs/VAULT.md): the vault's address, key pin and one-time token
 // as 'tpm2-kira-vault token create' prints them, asked here; the vault is
 // asked before anything is enrolled - does it answer, with the pinned key -
 // and on every look at the machine afterwards, whether it still knows this

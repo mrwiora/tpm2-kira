@@ -1,6 +1,6 @@
 # Sealing in depth
 
-The parts of sealing that matter once the basic selection is chosen: the measure point, TPMs without SHA-256 event logs, your own signing keys, several slots. The short form is in the README.
+The parts of sealing that matter once the basic selection is chosen: the measure point, TPMs without SHA-256 event logs, your own signing keys, several slots. The slot itself, and choosing its PCRs, are in [SLOT.md](SLOT.md).
 
 ## The measure point
 
@@ -16,7 +16,7 @@ the end of the hold (90 seconds by default, `tpm2-kira run --hold`), so a
 boot nobody watches goes on by itself. READY is sent then, the separator
 runs, and no code can be computed until the next boot.
 
-A slot that is enrolled with a phone (see *Remote attestation*) is verified
+A slot that is enrolled with a phone (see *Phone attestation*) is verified
 by the phone instead: the Bluetooth gate runs next to the display from the
 start, and the phone's verdict continues to the passphrase like Enter does.
 The code stays on the screen for when the phone is not at hand. While the

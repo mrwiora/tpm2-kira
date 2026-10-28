@@ -9,7 +9,7 @@ import (
 )
 
 // Canonical, domain-separated byte strings that are hashed or signed.
-// PLAN-REMOTEATTESTATION.md §6.3: nothing is ever signed via its transport
+// PLAN-PHONE.md §6.3: nothing is ever signed via its transport
 // encoding. Every string here starts with a label that names its purpose and
 // version, and every variable-length part is length-prefixed with lp().
 
@@ -333,7 +333,7 @@ func MatchServiceData(sd, advKey []byte) bool {
 	return hmac.Equal(sd[5:], AdvertisingTag(advKey, sd[1:5]))
 }
 
-// FactorFromSecret derives the factor line of PLAN-FACTORRELEASE.md §3 from F:
+// FactorFromSecret derives the factor line of PLAN-PHONESALT.md §3 from F:
 // HKDF-SHA256(ikm = F, salt = "", info = "tpm2-kira/factor/v1" ‖ lp(label), 32).
 // Defined here so the derivation string is fixed in one place; the release
 // path itself is not implemented yet.

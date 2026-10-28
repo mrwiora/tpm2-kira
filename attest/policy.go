@@ -7,7 +7,7 @@ import (
 )
 
 // Policy is everything a verifier decides with, expressed as data
-// (PLAN-REMOTEATTESTATION.md §8). It is stored on the verifier, in the
+// (PLAN-PHONE.md §8). It is stored on the verifier, in the
 // machine record, and never on the attester.
 type Policy struct {
 	ID                      string    `json:"id"`

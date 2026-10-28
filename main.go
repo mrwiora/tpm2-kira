@@ -555,7 +555,7 @@ func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
 
 // failAttest reports a failure of an attest command that gates or judges
 // something. These are the documented exceptions to the exit-0 rule
-// (PLAN-REMOTEATTESTATION.md §12.1): a gate that exits 0 on failure is not a
+// (PLAN-PHONE.md §12.1): a gate that exits 0 on failure is not a
 // gate, and a verifier that exits 0 on a failed check is not a verifier.
 func failAttest(code int, err error) {
 	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: %v\n", err)
@@ -722,7 +722,7 @@ func runVault(args []string, tpmPath string, debugFlag bool) {
 
 const vaultUsage = `tpm2-kira vault enrol | status | unenrol [options]
 
-The disk's key from two TPMs (docs/REMOTE-UNLOCK.md, unlock mode tpm+vault): a
+The disk's key from two TPMs (docs/VAULT.md, unlock mode tpm+vault): a
 local part kept in this machine's TPM and a remote part kept by
 tpm2-kira-vault, each opening only in a boot state the slot's signing key
 approved. The vault releases its part to a fresh quote of such a state;
@@ -818,12 +818,12 @@ func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 
 const factorUsage = `tpm2-kira phone salt enrol | rotate | status | unenrol [options]
 
-The phone salt (docs/PLAN-FACTORRELEASE.md): the salt of the disk's key,
+The phone salt (docs/PLAN-PHONESALT.md): the salt of the disk's key,
 kept by the verifier that attests this machine - today the phone enrolled
 with 'phone enrol', over Bluetooth LE - as a value only this machine's
 TPM can open, in a boot its signing key approved. The phone hands it back
 after a verdict you accept; at boot tpm2-kira asks for your password and
-derives the key from both (hashpwd2's derivation, unlock mode
+derives the key from both (Argon2id, the mode
 password+phonesalt). Without the phone, the recovery passphrase in its
 own keyslot opens the disk at cryptsetup's prompt.
 
@@ -962,19 +962,19 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 // attestUsage is the page of 'tpm2-kira help phone'.
 const attestUsage = `tpm2-kira phone <subcommand> [options]
 
-Remote attestation: a phone with the Marify app verifies this boot over
+Phone attestation: a phone with the Marify app verifies this boot over
 Bluetooth LE - the TPM quotes the PCRs, the phone judges them against the
 record it was given at enrolment, and shows a code that must match the
-machine's screen (docs/PLAN-REMOTEATTESTATION.md).
+machine's screen (docs/PLAN-PHONE.md).
 
   phone enrol     Bind a phone to this slot over BLE (booted system; needs the
                   signing key and a sealed slot: the phones are stored in the
-                  slot's blob, next to its TOTP key, and survive reseal).
+                  slot's blob, next to its TOTP key, and survive approve).
                   Prints a 6-digit code to compare with the app.
                   --name STR --pcrs LIST --adapter N --privkey PATH --timeout DUR
                   --sha1  quote the SHA-1 PCR bank instead of SHA-256. Required,
-                          as for 'slot add', where nothing else works: a TPM without
-                          a SHA-256 bank, or a slot sealed with --sha1
+                          as for 'slot add', where nothing else works: a TPM
+                          without a SHA-256 bank, or a slot sealed with --sha1
                   --verify-tpm warn|require|off    this machine's TPM genuine (EK certificate)?
                   --verify-phone warn|require|off  the phone's key in genuine secure hardware
                                                    (Android key attestation, Google roots)?

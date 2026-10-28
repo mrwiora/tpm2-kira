@@ -31,7 +31,7 @@ func TestStatusNotes(t *testing.T) {
 	}{
 		{"nothing sealed", StatusReport{}, "no slot is sealed"},
 		{"no fallback", StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e", false)}}, "no fallback slot"},
-		{"reseal due", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,7e", Fallback: true, GenState: "4 — does NOT match the blob", Signed: true}}}, "resealed"},
+		{"reseal due", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,7e", Fallback: true, GenState: "4 — does NOT match the blob", Signed: true}}}, "until it is approved"},
 		{"not signed", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,7e", Fallback: true, GenState: "3 (matches)", SignReason: "no key"}}}, "not signed by this machine"},
 		{"salt without a keyslot", StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e,11u", true), slot(1, "0e,7e", false)},
 			Devices: []LuksDeviceStatus{dev(nil)}}, "no LUKS keyslot is marked password+phonesalt"},

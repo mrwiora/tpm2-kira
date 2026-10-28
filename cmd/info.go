@@ -190,9 +190,9 @@ func generationState(tpmDev transport.TPM, nvramIndex uint32, blobGen uint64) st
 	case errors.Is(err, ErrCodesLocked):
 		return "read-locked until reboot ('tpm2-kira cap' ran): no codes in this boot"
 	case err != nil:
-		return fmt.Sprintf("unavailable (%v): no codes until reseal", err)
+		return fmt.Sprintf("unavailable (%v): no codes until slot approve", err)
 	case gen != blobGen:
-		return fmt.Sprintf("%d — does NOT match the blob: this approval is revoked; reseal", gen)
+		return fmt.Sprintf("%d — does NOT match the blob: this approval is revoked; slot approve", gen)
 	}
 	return fmt.Sprintf("%d (matches)", gen)
 }
@@ -488,10 +488,10 @@ func min(a, b int) int {
 func printAttestationTree(prefix string, si *slotInfo) {
 	att := si.Blob.Payload.Attestation
 	if att == nil {
-		fmt.Printf("%s%sRemote attestation: not set up (tpm2-kira phone enrol)\n", prefix, branch(false))
+		fmt.Printf("%s%sPhone attestation: not set up (tpm2-kira phone enrol)\n", prefix, branch(false))
 		return
 	}
-	fmt.Printf("%s%sRemote attestation\n", prefix, branch(false))
+	fmt.Printf("%s%sPhone attestation\n", prefix, branch(false))
 	sub := prefix + cont(false)
 	fmt.Printf("%s%sMachine name: %s\n", sub, branch(false), quoteUntrusted(att.FriendlyName))
 	fmt.Printf("%s%sDevice ID: %x\n", sub, branch(false), att.DeviceID)

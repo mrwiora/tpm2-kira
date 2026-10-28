@@ -107,7 +107,7 @@ install-mkinitcpio:
 	@echo "   root volume (see README \"Configure the disk unlock\"):"
 	@echo "     rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock"
 	@echo ""
-	@echo "2. Set up and seal (if not already done; see README \"Choosing PCRs\"):"
+	@echo "2. Set up and seal (if not already done; see docs/SLOT.md \"Choosing PCRs\"):"
 	@echo "   tpm2-kira setup"
 	@echo "   tpm2-kira slot add --pcrs 0,7,11u"
 	@echo ""

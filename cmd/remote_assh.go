@@ -30,7 +30,7 @@ const DefaultSSHConf = "/etc/tpm2-kira/assh.conf"
 const sshConfHeader = `aSSH's settings for tpm2-kira's SSH server at boot (ASSH_*,
 github.com/tpm2-trust/assh config): the SSH CA, its slots and their PCRs,
 the port, the keys that may log in. Written by 'tpm2-kira control'; an
-edit of the slots takes effect at the next reseal or control, which make
+edit of the slots takes effect at the next approval or control, which make
 the CA's slots these. Whether the server runs is control.conf's.`
 
 // sshConfPath is the assh.conf beside the control.conf at path.
@@ -47,7 +47,7 @@ var notTpm2Kiras = map[string]string{
 	"ASSH_PIN_HANDLE":     "the CA's authority is tpm2-kira's signing key",
 	"ASSH_COUNTER_HANDLE": "the CA's authority is tpm2-kira's signing key",
 	"ASSH_CLOSE_PCR":      "the CA's window, ASSH_CA_WINDOW, is what closes it",
-	"ASSH_STATE":          "reseal approves the values the next boot will have, not a recorded state",
+	"ASSH_STATE":          "slot approve approves the values the next boot will have, not a recorded state",
 	"ASSH_USER":           "a login is a session of the code screen",
 	"ASSH_SOCKET":         "a login is a session of the code screen",
 	"ASSH_AGENT_DIR":      "tpm2-kira runs no agent",

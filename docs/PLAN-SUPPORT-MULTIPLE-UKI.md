@@ -84,24 +84,24 @@ phones already: `WriteToNVRAM` compares the signed blob with
 
 For profiles:
 
-- the first profile, the image `11u` names, is always sealed and resealed;
+- the first profile, the image `11u` names, is always sealed and approved;
   a slot without it does not exist;
 - a further profile is added only if the blob with it fits; if not, `slot add`,
   `slot approve` and `control` say which profile was left out, how many bytes
   were missing and what would make room (an ECC key, a phone less), and
   that image keeps booting through slot 1;
-- a reseal never fails because of a profile: a profile that no longer fits
+- an approval never fails because of a profile: a profile that no longer fits
   (a phone was added since) is dropped with that message, and the rest is
   written.
 
-## 4. Seal and reseal
+## 4. Slot add and slot approve
 
 - **Profiles come from the presets.** `control` and `slot add` read
   `/etc/mkinitcpio.d/*.preset` and list every `<preset>_uki=`. The default
   is the first image and the others in the preset's order, up to three;
   `control` shows the list for acknowledgement, as it does for the PCRs. The
   paths are stored in the blob (signed), not in a configuration file.
-- **The generation is shared**, so a reseal raises it once and signs every
+- **The generation is shared**, so an approval raises it once and signs every
   profile again, each with PCR 11 computed from its own image. Raising the
   generation revokes all earlier approvals of the slot at once, which keeps
   revocation as simple as it is now.
@@ -109,10 +109,10 @@ For profiles:
   still re-signs every profile (the generation is shared), but first
   compares: when every profile's recomputed PCR 11 and the other PCRs equal
   what is approved, nothing is written and nothing signed. During
-  `mkinitcpio -P` the first run reseals, a later run whose image did not
+  `mkinitcpio -P` the first run approves, a later run whose image did not
   change the outcome is skipped.
 - **A missing image** (a preset removed, a path renamed) drops that profile
-  at the next reseal, with a message; the first profile's image missing is
+  at the next approval, with a message; the first profile's image missing is
   an error, as today.
 
 ## 5. The boot
@@ -149,7 +149,7 @@ later improvement, not part of this plan.
 - **Three profiles.** Enough for default and fallback with room to spare;
   the per-index limit makes more impractical anyway.
 - **One kernel per image.** A profile is an image path. A kernel update
-  rewrites the image in place and the reseal follows, as today.
+  rewrites the image in place and the approval follows, as today.
 
 ## 8. Blob format (step 2)
 

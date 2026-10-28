@@ -243,10 +243,10 @@ What this checks on every boot, both slots:
 - the code of slot 0 is the one the secret gives (the policy was
   satisfied: the boot state is the sealed one);
 - the fallback slot shows its code too;
-- after an unapproved change (a kernel update not resealed, simulated by
+- after an unapproved change (a kernel update not approved, simulated by
   extending a PCR or editing the command line) slot 0 shows the mismatch
   and the fallback still shows;
-- after the hooks' reseal, the next boot shows codes again (the
+- after the hooks' approval, the next boot shows codes again (the
   generation moved: `status` after boot).
 
 The real authenticator on a phone then only confirms what is confirmed
@@ -363,7 +363,7 @@ Two consequences of the emulator for tpm2-kira's checks:
 |---|---|---|
 | enrol | `phone enrol` over the console/ssh | scans, sees the machine, binds (the six digits compared by the harness: both sides print them) |
 | gate at boot | the code screen advertises; the harness waits for `Slot #0 attested by` | the app is asked, checks, the code equals the slot's second code |
-| changed state | a resealed kernel update | the orange card with the green check; approve |
+| changed state | an approved kernel update | the orange card with the green check; approve |
 | phone salt | `phone salt enrol`, mode `password+phonesalt` | keeps the salt; the next boot: `attest and return the salt`, the disk opens with password + released salt, `release_ack` |
 | rejection | | the red cross; the machine shows the rejection and falls back to the passphrase |
 | stop while connecting | | the machine is told, the console says so |
@@ -406,7 +406,7 @@ The rule stays: wait for states, never for times; nothing twice.
    the password and the salt typed, the codes computed and compared; the
    questions to the person gone for `--machine` runs. *Result: the boot
    path tested without a person.*
-3. **Scenarios** (§8): `kernel-update` (the hooks' reseal), `luks-salt`,
+3. **Scenarios** (§8): `kernel-update` (the hooks' approval), `luks-salt`,
    `pcr-mismatch`, the YubiKey PIN from control.conf with the token
    emulator is a unit test and stays one.
 4. **The phone** (§7): `android-setup.sh` and the frozen AVD, the bridge

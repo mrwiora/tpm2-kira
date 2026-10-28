@@ -183,7 +183,7 @@ func TestStatusNotes(t *testing.T) {
 	if r.Slots[0].Signed || r.Slots[0].SignReason == "" {
 		t.Errorf("another key: %+v", r.Slots[0])
 	}
-	if !hasNote(r.Notes, "slot 0 is not signed by this machine's key") || !hasNote(r.Notes, "the hooks will not reseal it") {
+	if !hasNote(r.Notes, "slot 0 is not signed by this machine's key") || !hasNote(r.Notes, "the hooks will not approve it") {
 		t.Errorf("another key: notes %q", r.Notes)
 	}
 

@@ -155,7 +155,7 @@ func (c *controller) keysSteps() []controlStep {
 	case f.YubiKey:
 		// The key is there, the PIN not: the hooks' reseal after a kernel
 		// update is skipped until it is. The step stores it.
-		keys.Explain = f.Keys + ". Its PIN, stored in " + pinFilePath() + " (readable by root alone; never in the boot image), lets the hooks reseal unattended after a kernel or initramfs update; without it that reseal is skipped and the next boot shows a PCR mismatch."
+		keys.Explain = f.Keys + ". Its PIN, stored in " + pinFilePath() + " (readable by root alone; never in the boot image), lets the hooks approve unattended after a kernel or initramfs update; without it that approval is skipped and the next boot shows a PCR mismatch."
 	default:
 		keys.Done = f.Keys
 	}
@@ -212,7 +212,7 @@ func (c *controller) keysSteps() []controlStep {
 			// reseal cannot approve it, so the next image change takes
 			// its code away. It is not done, whatever it is sealed to.
 			line.Done, line.Optional = "", false
-			line.Dirty = desc + " - not signed by this machine's signing key (" + s.SignReason + "): reseal cannot approve it; pick it to delete it, then seal again"
+			line.Dirty = desc + " - not signed by this machine's signing key (" + s.SignReason + "): slot approve cannot approve it; pick it to delete it, then seal again"
 		}
 		lines[n] = line
 		order = append(order, n)
@@ -315,7 +315,7 @@ func (c *controller) diskSteps() []controlStep {
 	// in its key, no slot binding in its token, and deleting a slot leaves
 	// it untouched. It coexists with the others: at boot the phone's salt
 	// and the vault are tried first, the typed salt is the fallback.
-	salt := controlStep{Key: "luks-salt", Optional: true, SelfConfirm: true, Title: "Password + salt (hashpwd2)",
+	salt := controlStep{Key: "luks-salt", Optional: true, SelfConfirm: true, Title: "Password + salt (Argon2id)",
 		Explain: "A LUKS keyslot whose key is derived at boot from a password and a salt you type (Argon2id, 1 GiB). Bound to no slot - deleting a slot leaves it untouched. Enrolled, picking it offers the removal." + typed,
 		Run:     func(c *controller) error { return c.runLuks(LuksModePasswordSalt) }}
 	switch {

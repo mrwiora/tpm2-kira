@@ -21,7 +21,7 @@ HISTORY.md):
 | the keyslot's token says | what tpm2-kira does | without a released salt |
 |---|---|---|
 | *(no token)* | nothing: cryptsetup's own prompt asks for the LUKS passphrase | - |
-| `password+salt` | asks for a password and a salt, hands over hashpwd2's derivation | - |
+| `password+salt` | asks for a password and a salt, hands over their derivation (Argon2id) | - |
 | `password+phonesalt` | asks for the password; the salt is the one the verifier released and the TPM opened | asks for a typed salt (the `password+salt` variant, a keyslot enrolled that way); Ctrl-C: cryptsetup's prompt, the recovery keyslot |
 
 `password+phonesalt` exists only with an attestation: a verifier enrolled
@@ -31,7 +31,7 @@ says so at boot. The same words name the token's `mode` (§2). What the
 phone keeps is the **phone salt**; the command for it is
 `tpm2-kira phone salt enrol|status|rotate|unenrol` (renamed from `factor …`).
 "Factor" stays in the Go identifiers until the
-rename of the code is its own change; PLAN-FACTORRELEASE.md is the design
+rename of the code is its own change; PLAN-PHONESALT.md is the design
 of the mechanism and keeps its title. Later, with more than one verifier
 able to hold a salt, the mode may name the source - `password+phone:salt`,
 `password+server:salt`, an `identifier:salt` form; not yet.
@@ -84,7 +84,7 @@ tpm2-kira luks remove <device> --keyslot N
   `not tpm2-kira's` - the recovery passphrase, or a key enrolled by other
   means.
 - `mark` writes the token for a keyslot that exists - made with `luks derive`
-  or hashpwd2 and `luksAddKey` by hand, or before tokens existed.
+  or `luks derive` and `luksAddKey` by hand, or before tokens existed.
 - `enrol` is the whole thing: ask the password (and the salt, or run the
   phone salt's round trip with the verifier), derive, `cryptsetup
   luksAddKey` (which asks an existing passphrase to authorise - the
@@ -111,7 +111,7 @@ tpm2-kira status
 which is what a person wants to know before a reboot - and the notes
 under it: what does not fit together (`password+phonesalt` without a
 phone salt, a keyslot bound to a slot that is gone, no fallback slot, a
-reseal due) with the command to run. `--json` for scripts.
+approve due) with the command to run. `--json` for scripts.
 
 ## 4a. Open: the inputs from files
 

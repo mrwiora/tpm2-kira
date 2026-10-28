@@ -6,7 +6,7 @@
 # Copy the relevant HOOKS line to your /etc/mkinitcpio.conf and adjust as needed.
 
 # TPM2-KIRA SIGNING KEY ON A YUBIKEY
-# With 'tpm2-kira setup' on a YubiKey, the reseal that runs after every image
+# With 'tpm2-kira setup' on a YubiKey, the approval that runs after every image
 # build signs on the token. The PIN for it is not here: 'tpm2-kira control'
 # stores it in /etc/tpm2-kira/pin, readable by root alone, and nothing puts it
 # into the image.

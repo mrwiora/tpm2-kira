@@ -52,7 +52,7 @@ sudo tpm2-kira status
 ```bash
 tpm2-kira slot approve
 ```
-If reseal also fails, check `tpm2-kira slot info` to see which PCRs changed and verify you have the correct signing key available.
+If approve also fails, check `tpm2-kira slot info` to see which PCRs changed and verify you have the correct signing key available.
 
 **The phone is not asked at boot; the kernel says hci0's firmware is missing:**
 The image has the Bluetooth driver but not the adapter's firmware. The image

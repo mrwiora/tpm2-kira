@@ -26,9 +26,9 @@ import (
 // of the disk is a question to tpm2-kira and not a prompt of its own:
 // today it answers with what the person types at its own prompt, later
 // with a key derived from that and a factor the phone released
-// (PLAN-FACTORRELEASE.md). systemd-cryptsetup waits for the answer for as
+// (PLAN-PHONESALT.md). systemd-cryptsetup waits for the answer for as
 // long as it takes, and a wrong or missing answer sends it to its own
-// prompt for the remaining tries (UNLOCK-DISK.md §4): the passphrase can
+// prompt for the remaining tries (DISK-KEY.md, "When the answer is wrong"): the passphrase can
 // always be entered by hand, which is why there is no enforced mode.
 
 // DefaultUnlockSocket is where the initrd units put the key socket.
@@ -287,7 +287,7 @@ var errUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own p
 // says (unlockRecipe reads its tpm2-kira tokens the moment it asks):
 //
 //	no token             no answer: cryptsetup's own prompt, tpm2-kira untouched
-//	password+salt        a typed password and a typed salt, combined (hashpwd2's derivation)
+//	password+salt        a typed password and a typed salt, combined (Argon2id, combine.go)
 //	password+phonesalt  a typed password and the salt the verifier released in this boot
 //	                     and the TPM opened (factor.go); without one, a typed salt
 //	                     (the password+salt variant), then cryptsetup's own prompt

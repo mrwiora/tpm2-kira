@@ -141,7 +141,7 @@ func Setup(opts SetupOptions) error {
 	fmt.Println()
 	fmt.Println("Next, seal a TOTP secret and scan the QR code it prints:")
 	fmt.Printf("   tpm2-kira slot add --pcrs %s\n", RecommendedPCRs())
-	fmt.Println("   (README \"Choosing PCRs\" explains the selection and its trade-offs)")
+	fmt.Println("   (docs/SLOT.md, \"Choosing PCRs\", explains the selection and its trade-offs)")
 	if chosen != nil {
 		fmt.Println()
 		printPINInstructions(os.Stdout, *chosen, chosenSlot)
@@ -153,7 +153,7 @@ func Setup(opts SetupOptions) error {
 // printPINInstructions explains when the token and its PIN are needed and how
 // to hand the PIN to tpm2-kira, including for the unattended reseal.
 func printPINInstructions(w io.Writer, t TokenInfo, s TokenSlot) {
-	fmt.Fprintf(w, "The YubiKey (serial %d) signs whenever tpm2-kira seals or reseals; keep it\n", t.Serial)
+	fmt.Fprintf(w, "The YubiKey (serial %d) signs whenever tpm2-kira adds or approves a slot; keep it\n", t.Serial)
 	fmt.Fprintln(w, "plugged in for those. Booting and showing codes never need it.")
 	if s.PoliciesKnown && s.effectivePINPolicy() == piv.PINPolicyNever {
 		fmt.Fprintln(w, "This key needs no PIN, so there is nothing to configure — see the warning above.")
@@ -163,7 +163,7 @@ func printPINInstructions(w io.Writer, t TokenInfo, s TokenSlot) {
 
 	path := pinFilePath()
 	if stored, loose := pinStored(path); stored {
-		fmt.Fprintf(w, "%s stores the PIN: sealing, resealing and the automatic reseal\n", path)
+		fmt.Fprintf(w, "%s stores the PIN: adding a slot, approving and the automatic approval\n", path)
 		fmt.Fprintln(w, "after kernel and initramfs updates all take it from there.")
 		if loose {
 			fmt.Fprintf(w, "The file can be read by other users, so tpm2-kira refuses to use the PIN until\n"+
@@ -172,11 +172,11 @@ func printPINInstructions(w io.Writer, t TokenInfo, s TokenSlot) {
 		return
 	}
 	fmt.Fprintln(w, "Setup did not use the PIN; sealing does. Stored in one place, every step finds")
-	fmt.Fprintln(w, "it - seal, reseal, and the reseal the initramfs hooks run after every kernel")
+	fmt.Fprintln(w, "it - slot add, slot approve, and the approval the initramfs hooks run after every kernel")
 	fmt.Fprintln(w, "or initramfs update: 'tpm2-kira control' stores it (the signing key step),")
 	fmt.Fprintf(w, "in %s, the PIN alone, readable by root alone.\n", path)
-	fmt.Fprintln(w, "Without it, seal and reseal ask for the PIN on the terminal (or take it from")
-	fmt.Fprintf(w, "%s: read -rs %s && export %s), and the automatic reseal\n", PINEnvVar, PINEnvVar, PINEnvVar)
+	fmt.Fprintln(w, "Without it, slot add and slot approve ask for the PIN on the terminal (or take it from")
+	fmt.Fprintf(w, "%s: read -rs %s && export %s), and the automatic approval\n", PINEnvVar, PINEnvVar, PINEnvVar)
 	fmt.Fprintln(w, "reports SKIPPED: the next boot then shows a PCR mismatch until you run")
 	fmt.Fprintln(w, "'tpm2-kira slot approve' with the YubiKey plugged in.")
 }
@@ -190,7 +190,7 @@ func pinPolicyWarning(s TokenSlot) string {
 	}
 	if s.effectivePINPolicy() == piv.PINPolicyNever {
 		return fmt.Sprintf("  WARNING: the key in slot %s needs no PIN (PIN policy 'never'). Anyone holding\n"+
-			"  the YubiKey can then authorise a reseal, which is the way around a PCR mismatch.\n"+
+			"  the YubiKey can then authorise an approval, which is the way around a PCR mismatch.\n"+
 			"  Consider a key with PIN policy 'once' (see 'ykman piv keys generate --pin-policy').", s.Slot)
 	}
 	return ""

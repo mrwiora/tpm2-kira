@@ -6,7 +6,7 @@ Where things are in the repository, and how the tests are run.
 
 ```
 ├── main.go                  # CLI entrypoint and command routing
-├── attest/                  # Remote attestation core: protocol, Noise, Verify(); no device access
+├── attest/                  # Phone attestation core: protocol, Noise, Verify(); no device access
 │   └── attesttest/          # Software TPM, in-memory pipe and simulated phone for tests
 ├── vaultproto/              # The contract with tpm2-kira-vault: REST messages, the release check
 ├── assh/                    # aSSH, a git submodule: the SSH server, the SSH CA and host keys in the TPM
@@ -37,7 +37,7 @@ Where things are in the repository, and how the tests are run.
 │   ├── vault.go             # tpm+vault: enrolment with the vault, the boot's release, the key
 │   ├── default_pcrs.go      # What 'slot add' seals to by default, and the fallback slot
 │   ├── seal.go              # Create the TOTP key in the TPM and approve PCR values
-│   ├── reseal.go            # Approve new PCR values, revoke older approvals
+│   ├── reseal.go             # slot approve: new PCR values, revoke older approvals
 │   ├── setup.go             # First-time setup (keygen)
 │   ├── info.go              # Inspect sealed blob metadata
 │   ├── scan.go              # Multi-slot NVRAM scanning
@@ -66,10 +66,15 @@ Where things are in the repository, and how the tests are run.
 │   ├── vulncheck.py          # govulncheck that fails on what the code calls into, minus vulncheck-ignore
 │   └── vulncheck-ignore      # Records the Go vulnerability database has wrong, with the proof
 ├── docs/
-│   ├── PROTOCOL-BLE.md           # Phone <-> machine protocol: the interface definition
+│   ├── SLOT.md                   # The slot: a boot state the signing key approved; choosing PCRs, approving, deleting
+│   ├── SEALING.md                # The details of sealing: the measure point, SHA-1, own keys, several slots
+│   ├── CODE.md                   # The TOTP code: when the TPM computes it, the code screen, the cap, the clock
+│   ├── PHONE.md                  # The phone (Marify) verifies the boot over Bluetooth LE
 │   ├── SSH.md                    # SSH in the boot image: the code screen over the network
-│   ├── REMOTE-UNLOCK.md          # tpm+vault: the disk's key from this TPM and tpm2-kira-vault
-│   ├── PLAN-*.md                 # Designs: remote attestation, BLE, remote unlocking, factor release, the test host (PLAN-BLE-TESTING)
+│   ├── DISK-KEY.md               # The disk's key: the four cases, the token, the route, how systemd takes the key
+│   ├── VAULT.md                  # tpm+vault: the disk's key from this TPM and tpm2-kira-vault
+│   ├── PROTOCOL-BLE.md           # Phone <-> machine protocol: the interface definition
+│   ├── PLAN-*.md                 # Designs: the phone (PLAN-PHONE, PLAN-BLE), the phone salt, the vault, LUKS, YubiKey, the test host (PLAN-BLE-TESTING)
 │   ├── mobile/                   # Agent prompts for the Android and iOS apps
 │   ├── PLATFORM-OBSERVATIONS.md  # Measured facts about Arch and Debian boots
 │   ├── pentest1/, pentest2/      # Security review findings and mitigations
@@ -78,16 +83,16 @@ Where things are in the repository, and how the tests are run.
 │   ├── common/control.conf          # tpm2-kira's configuration: what the image is built with (radio, network, SSH); aSSH's is assh.conf beside it
 │   ├── systemd/tpm2-kira.service   # Shows the code in systemd-based images
 │   ├── systemd/tpm2-kira-cap.service  # Runs 'cap' when leaving the initrd
-│   ├── systemd/tpm2-kira-attest.service  # Lazy Bluetooth attestation gate
+│   ├── systemd/tpm2-kira-attest.service  # The phone's Bluetooth gate (the radio worker)
 │   ├── mkinitcpio/                 # Arch
 │   │   ├── install/sd-tpm2-kira    # Build hook: puts the binary in the image
-│   │   ├── post/sd-tpm2-kira       # Reseal after the image is written
+│   │   ├── post/sd-tpm2-kira       # Approve after the image is written
 │   │   └── mkinitcpio.conf.example
 │   └── initramfs-tools/            # Debian
 │       ├── hooks/tpm2-kira         # Build hook: copies the static binary
 │       ├── scripts/init-premount/tpm2-kira  # Shows the code before unlock
 │       ├── scripts/init-bottom/tpm2-kira    # Stops it and caps before switching root
-│       ├── post-update.d/tpm2-kira          # Reseals for the new image
+│       ├── post-update.d/tpm2-kira          # slot approve for the new image
 │       └── initramfs.conf          # Display mode (run / once)
 ├── debian/                  # Debian package definition (must sit at the root)
 ├── packaging/

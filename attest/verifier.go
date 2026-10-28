@@ -60,7 +60,7 @@ type MachineRecord struct {
 	EKVerifiedBy string     `json:"ek_verified_by,omitempty"`
 	EnrolledAt   time.Time  `json:"enrolled_at"`
 	LastAttested *time.Time `json:"last_attested,omitempty"`
-	// Factor is the machine's wrapped disk factor (PLAN-FACTORRELEASE.md),
+	// Factor is the machine's wrapped disk factor (PLAN-PHONESALT.md),
 	// kept since the person accepted a verdict whose evidence carried it,
 	// and returned after every trusted receipt. The phone cannot open it.
 	Factor *FactorRecord `json:"factor,omitempty"`

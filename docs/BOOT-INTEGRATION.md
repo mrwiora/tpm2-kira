@@ -82,17 +82,17 @@ The hooks run it: `/etc/initramfs/post-update.d/tpm2-kira` after every
 kernel install or removal. `slot approve` prints what it substituted, for
 example `PCR9 /initrd.img-6.12.111+deb13-amd64: now /boot/initrd.img-…`.
 The next boot then shows a code at once; no boot without one, no second
-reseal.
+approve.
 
 What the prediction cannot know, and what then happens: a different menu
 entry chosen at the GRUB menu, a command line edited there, a `grubenv`
 the boot rewrites (`GRUB_SAVEDEFAULT`, `recordfail`), or a GRUB package
 update that changes the module set. Such a boot shows no code - expected,
 not a compromise - and `sudo tpm2-kira slot approve` after it binds to the
-state you booted, as the reseal always did. The prediction is checked
+state you booted, as the approval always did. The prediction is checked
 against this machine's real log in the test suite
 (`cmd/grub_predict_test.go`, Debian 13, GRUB 2.12).
 
-Resealing is still never automatic at *boot*: a tampered kernel does not
+Approving is still never automatic at *boot*: a tampered kernel does not
 become a trusted baseline by being booted once. The hooks run on the
 unlocked system, after a change you made.

@@ -58,7 +58,7 @@ const (
 
 // sshCAUnapproved is why the next boot serves a temporary key: no slot is
 // approved for its values.
-const sshCAUnapproved = "the SSH CA has no approval of the PCRs as the next boot meets them: approved when you quit control, and by reseal after every image rebuild"
+const sshCAUnapproved = "the SSH CA has no approval of the PCRs as the next boot meets them: approved when you quit control, and by slot approve after every image rebuild"
 
 // sshCAWindow is the CA's window by default (ASSH_CA_WINDOW): every slot
 // reads it, and run extends it once the host key is made. Nothing measures

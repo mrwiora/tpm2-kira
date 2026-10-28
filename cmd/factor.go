@@ -16,7 +16,7 @@ import (
 )
 
 // The factor: one half of the disk's key, held by the phone, opened by this
-// TPM (PLAN-FACTORRELEASE.md).
+// TPM (PLAN-PHONESALT.md).
 //
 // At enrolment the machine draws F (32 bytes), wraps it with
 // TPM2_MakeCredential - in software, attest.MakeCredential - for its own
@@ -32,7 +32,7 @@ import (
 // FactorSize is the size of F: what TPM2_MakeCredential carries directly.
 const FactorSize = 32
 
-// factorInfo is the derivation string of the salt (PLAN-FACTORRELEASE.md
+// factorInfo is the derivation string of the salt (PLAN-PHONESALT.md
 // §5.1): part of the contract between an enrolled keyslot and this code.
 const factorInfo = "tpm2-kira/factor/v1"
 

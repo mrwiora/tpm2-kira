@@ -56,7 +56,7 @@ type ReceiptJudge interface {
 }
 
 // FactorBackend is an optional AttesterBackend extension for factor
-// release (PLAN-FACTORRELEASE.md). FactorToKeep is sent in the evidence
+// release (PLAN-PHONESALT.md). FactorToKeep is sent in the evidence
 // when the backend has a new factor the phone should keep ('factor enrol');
 // nil at boot. TakeRelease receives what the phone released after a
 // trusted receipt and says what became of it (a ReleaseAck status); the

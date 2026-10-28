@@ -65,9 +65,9 @@ type GenerationMismatchError struct {
 
 func (e *GenerationMismatchError) Error() string {
 	if e.IndexMissing {
-		return fmt.Sprintf("the slot's generation index is missing, so the approval in the blob (generation %d) cannot be used; reseal to recreate it", e.BlobGeneration)
+		return fmt.Sprintf("the slot's generation index is missing, so the approval in the blob (generation %d) cannot be used; approve to recreate it", e.BlobGeneration)
 	}
-	return fmt.Sprintf("the approval in the blob is for generation %d, but the slot is at generation %d: it was revoked by a later reseal", e.BlobGeneration, e.IndexGeneration)
+	return fmt.Sprintf("the approval in the blob is for generation %d, but the slot is at generation %d: it was revoked by a later approval", e.BlobGeneration, e.IndexGeneration)
 }
 
 func totpAlgorithmName(alg tpm2.TPMAlgID) string {

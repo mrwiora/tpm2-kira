@@ -9,7 +9,7 @@ import (
 // attribute requirements (ParseAKPublic, ValidateEKPublic).
 
 // AKTemplateECC is the attestation key: ECDSA P-256 with SHA-256, restricted
-// to signing TPM-generated structures (PLAN-REMOTEATTESTATION.md §3.1).
+// to signing TPM-generated structures (PLAN-PHONE.md §3.1).
 //
 // It has an empty auth value and no policy on purpose (§4): the AK must be
 // able to sign in *any* PCR state, so that a changed machine still reports
@@ -45,7 +45,7 @@ func AKTemplateECC() tpm2.TPMTPublic {
 }
 
 // AKTemplateRSA is the RSA-2048 / RSASSA-SHA256 fallback for TPMs whose ECC
-// quotes are unusable (PLAN-REMOTEATTESTATION.md §15.1).
+// quotes are unusable (PLAN-PHONE.md §15.1).
 func AKTemplateRSA() tpm2.TPMTPublic {
 	return tpm2.TPMTPublic{
 		Type:    tpm2.TPMAlgRSA,

@@ -185,7 +185,7 @@ the bytes. PCR 8 stayed put because grub.cfg's commands were untouched.
 
 **Consequence:** PCR 9 changes on every kernel or initramfs update, and no
 source can predict its next value (every Debian source reads the *running*
-system). Sealing PCR 8/9 means resealing *after* the reboot, never at rebuild
+system). Sealing PCR 8/9 means approving *after* the reboot, never at rebuild
 time. This is why the Debian post-update hook only prints a reminder.
 
 ### PCR 10 is Linux IMA, with a single measurement
@@ -250,7 +250,7 @@ Boot, and applies equally to a rack of identical servers.
 
 A machine in either state is still useful, and validates most of this document:
 hook ordering, initramfs contents, what the bootloader measures into which PCR,
-and the reseal flow. What it cannot establish is the *security* property, which
+and the approval flow. What it cannot establish is the *security* property, which
 needs Secure Boot enabled with keys enrolled, and firmware not shared with
 everyone else.
 

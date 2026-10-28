@@ -1,5 +1,5 @@
 // Package vaultproto is the contract between tpm2-kira and tpm2-kira-vault
-// (docs/REMOTE-UNLOCK.md): the messages of the vault's REST interface, and the
+// (docs/VAULT.md): the messages of the vault's REST interface, and the
 // check the vault makes before it releases a machine's remote part.
 //
 // The disk's key of a keyslot in mode tpm+vault is made of two parts. The

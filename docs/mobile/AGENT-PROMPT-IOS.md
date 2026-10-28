@@ -31,8 +31,8 @@ gomobile into an `.xcframework` and call.
    disagree, the document wins; report the discrepancy.
 2. `docs/PLAN-BLE.md` §1, §5.3, §6 — the user story, enrolment confirmation,
    the three verdict states and what the user sees.
-3. `docs/PLAN-FACTORRELEASE.md` §1, §4 — a future step (salt release for
-   hashpwd2) that your session flow must be able to grow into. Do not
+3. `docs/PLAN-PHONESALT.md` §1, §4 — a future step (salt release for
+   the password+salt derivation) that your session flow must be able to grow into. Do not
    implement it now.
 4. `mobile/kiracore/kiracore.go` and `mobile/kiratest/kiratest.go` — the Go
    API you call.
@@ -330,7 +330,7 @@ notification, connect immediately.
 
 When the machine advertises `CAP_RELEASE_FACTOR` (Hello capabilities), a
 future core version will emit an event after `receipt_ack` asking the app to
-release the stored factor blob for hashpwd2 (PROTOCOL-BLE.md §7.3.7). Keep the
+release the stored factor blob, the phone salt, (PROTOCOL-BLE.md §7.3.7). Keep the
 session loop event-driven so this is one more `case`, and keep `MachineStore`
 able to hold one more opaque blob per machine.
 

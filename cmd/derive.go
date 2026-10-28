@@ -7,11 +7,11 @@ import (
 	"os"
 )
 
-// DeriveCommand is hashpwd2 by hand: the password and the salt asked on
-// the terminal, their combination written to a file on tmpfs for
-// 'cryptsetup luksAddKey', so a keyslot can be enrolled for the password+salt
-// mode (its token, luks mark) by hand. The same bytes hashpwd2 itself
-// would print; nothing is kept.
+// DeriveCommand is the password+salt key by hand: the password and the
+// salt asked on the terminal, their combination (Combine) written to a
+// file on tmpfs for 'cryptsetup luksAddKey', so a keyslot can be enrolled
+// for the password+salt mode (its token, luks mark) by hand. Nothing is
+// kept.
 func DeriveCommand(out string) error {
 	if out == "" {
 		return errors.New("--out PATH is required: the derived key is written there, on tmpfs, for cryptsetup luksAddKey")

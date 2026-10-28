@@ -70,7 +70,7 @@ func PCRTips() error {
 	fmt.Println("  GRUB + non-systemd initramfs (Debian):")
 	fmt.Println("    0e,2e,4e,7e,8e,9e - Adds grub.cfg, kernel and initramfs (recommended).")
 	fmt.Println("                       PCR 8/9 are predicted for the next boot from the")
-	fmt.Println("                       files on disk; the hooks reseal after each update.")
+	fmt.Println("                       files on disk; the hooks approve after each update.")
 	fmt.Println("    0e,2e,4e,7e      - Without them: a modified initrd or command line")
 	fmt.Println("                       still shows a valid code.")
 	fmt.Println()

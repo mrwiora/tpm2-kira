@@ -61,7 +61,7 @@ func joinReseal(slots, sshCA error) error {
 
 // resealSlots reseals each of slots.
 func resealSlots(tpmPath string, slots []uint32, pcrsStr, pubKeyPath, privKeyPath string, debug bool) error {
-	fmt.Printf("Found %d sealed slot(s) to reseal\n\n", len(slots))
+	fmt.Printf("Found %d sealed slot(s) to approve\n\n", len(slots))
 
 	var failed []uint32
 	var skipped []*ResealSkippedError
@@ -76,7 +76,7 @@ func resealSlots(tpmPath string, slots []uint32, pcrsStr, pubKeyPath, privKeyPat
 			fmt.Printf("Slot #%d (0x%08X) skipped: %v\n", slotNum, slotIdx, skip.Cause)
 			skipped = append(skipped, skip)
 		case err != nil:
-			fmt.Printf("Error resealing slot #%d (0x%08X): %v\n", slotNum, slotIdx, err)
+			fmt.Printf("Error approving slot #%d (0x%08X): %v\n", slotNum, slotIdx, err)
 			failed = append(failed, slotIdx)
 		}
 
@@ -90,7 +90,7 @@ func resealSlots(tpmPath string, slots []uint32, pcrsStr, pubKeyPath, privKeyPat
 		PrintResealSkipped(os.Stdout, skipped)
 	}
 	if len(failed) > 0 {
-		return fmt.Errorf("%d of %d slot(s) failed to reseal", len(failed), len(slots))
+		return fmt.Errorf("%d of %d slot(s) failed to approve", len(failed), len(slots))
 	}
 	if len(skipped) > 0 {
 		return fmt.Errorf("%w: %d of %d slot(s)", ErrResealSkipped, len(skipped), len(slots))
@@ -169,7 +169,7 @@ func samePublicKey(a, b crypto.PublicKey) bool {
 // ErrResealSkipped marks a reseal that did not happen because the signing
 // key was unavailable. Nothing was written: the old blob is intact and still
 // opens through PolicySigned once the key is back.
-var ErrResealSkipped = errors.New("reseal skipped")
+var ErrResealSkipped = errors.New("approval skipped")
 
 // ResealSkippedError reports one slot whose reseal was skipped.
 type ResealSkippedError struct {
@@ -180,7 +180,7 @@ type ResealSkippedError struct {
 }
 
 func (e *ResealSkippedError) Error() string {
-	return fmt.Sprintf("reseal of slot 0x%08X skipped: %v", e.NVIndex, e.Cause)
+	return fmt.Sprintf("approval of slot 0x%08X skipped: %v", e.NVIndex, e.Cause)
 }
 
 func (e *ResealSkippedError) Unwrap() []error { return []error{ErrResealSkipped, e.Cause} }
@@ -204,7 +204,7 @@ func PrintResealSkipped(w io.Writer, skipped []*ResealSkippedError) {
 	for _, s := range skipped {
 		slots = append(slots, fmt.Sprintf("#%d", SlotNumber(s.NVIndex)))
 	}
-	fmt.Fprintln(w, "tpm2-kira: SKIPPED: resealing did not happen — the signing key was not available.")
+	fmt.Fprintln(w, "tpm2-kira: SKIPPED: the approval did not happen — the signing key was not available.")
 	fmt.Fprintf(w, "  Key file:      %s (%s)\n", first.KeyFile, first.Cause.Token)
 	fmt.Fprintf(w, "  Reason:        %s\n", indentContinuation(first.Cause.Reason, "                 "))
 	fmt.Fprintf(w, "  Slots:         %s (nothing was written; the sealed secrets are intact)\n", strings.Join(slots, ", "))
@@ -259,8 +259,8 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	if err != nil {
 		if bve, ok := IsBlobVersionError(err); ok {
 			return fmt.Errorf(
-				"cannot reseal: the stored blob is version %d but this build writes version %d.\n"+
-					"reseal preserves the existing blob, so it cannot upgrade the format.\n"+
+				"cannot approve: the stored blob is version %d but this build writes version %d.\n"+
+					"slot approve preserves the existing blob, so it cannot upgrade the format.\n"+
 					"Seal again to replace it (this generates a NEW TOTP secret, so re-enrol your authenticator):\n"+
 					"    tpm2-kira slot add --nvram 0x%08X",
 				bve.FoundVersion, bve.RequiredVersion, nvramIndex)
@@ -280,7 +280,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	// with a key pair that was later replaced; its approvals would be
 	// refused by the TPM, so say so now.
 	if err := checkObjectSigningKey(sealedBlob, signer.Public()); err != nil {
-		return fmt.Errorf("cannot reseal: %w", err)
+		return fmt.Errorf("cannot approve: %w", err)
 	}
 
 	// ── Make sure the key can sign before anything is changed ──
@@ -290,7 +290,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		if skip := asResealSkipped(err, nvramIndex, keys.privKeyPath, sealedBlob); skip != err {
 			return skip
 		}
-		return fmt.Errorf("cannot reseal: %w", err)
+		return fmt.Errorf("cannot approve: %w", err)
 	}
 
 	var specsToUse []PCRSpec
@@ -313,10 +313,10 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	fmt.Printf("Signing key: %s (%s, fingerprint: %s)\n", keys.privKeyPath, PublicKeyDescription(pub), PublicKeyFingerprint(pub))
 
 	if err := approveAndWrite(tpmDev, nvramIndex, sealedBlob, specsToUse, hashAlgo, false, signer, debug); err != nil {
-		return asResealSkipped(fmt.Errorf("failed to reseal: %w", err), nvramIndex, keys.privKeyPath, sealedBlob)
+		return asResealSkipped(fmt.Errorf("failed to approve: %w", err), nvramIndex, keys.privKeyPath, sealedBlob)
 	}
 
-	fmt.Printf("\nSuccessfully resealed with PCRs: %s\n", PCRSpecsToString(specsToUse))
+	fmt.Printf("\nSuccessfully approved the boot state with PCRs: %s\n", PCRSpecsToString(specsToUse))
 	fmt.Printf("Generation: %d (every earlier approval for this slot is revoked)\n", sealedBlob.Payload.Generation)
 	fmt.Printf("Authentication: PolicyAuthorize (PCR values + generation, approved by the signing key)\n")
 
@@ -366,8 +366,8 @@ func resolveResealKeys(sealedData []byte, sealedBlob *SealedBlob, privKeyPath, p
 		keys.privKeyPath = DefaultPrivateKeyPath
 	}
 	if _, err := os.Lstat(keys.privKeyPath); errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("cannot reseal: no signing private key at %s.\n"+
-			"  The key verifies the blob and authorizes the NV write, so reseal needs it.\n"+
+		return nil, fmt.Errorf("cannot approve: no signing private key at %s.\n"+
+			"  The key verifies the blob and authorizes the NV write, so slot approve needs it.\n"+
 			"  Pass --privkey <path>, or create the default key pair with 'tpm2-kira setup'.",
 			keys.privKeyPath)
 	}
@@ -377,7 +377,7 @@ func resolveResealKeys(sealedData []byte, sealedBlob *SealedBlob, privKeyPath, p
 	// skip the signature check.
 	signer, err := LoadCheckedSigningPrivateKey(keys.privKeyPath)
 	if err != nil {
-		return nil, fmt.Errorf("cannot reseal: %w", err)
+		return nil, fmt.Errorf("cannot approve: %w", err)
 	}
 	keys.signer = signer
 
@@ -388,10 +388,10 @@ func resolveResealKeys(sealedData []byte, sealedBlob *SealedBlob, privKeyPath, p
 	if pubKeyPath != "" {
 		pub, err := LoadCheckedSigningPublicKey(pubKeyPath)
 		if err != nil {
-			return nil, fmt.Errorf("cannot reseal: %w", err)
+			return nil, fmt.Errorf("cannot approve: %w", err)
 		}
 		if err := verifyKeyPairMatch(pub, signer); err != nil {
-			return nil, fmt.Errorf("cannot reseal: %s and %s are not a key pair: %w", pubKeyPath, keys.privKeyPath, err)
+			return nil, fmt.Errorf("cannot approve: %s and %s are not a key pair: %w", pubKeyPath, keys.privKeyPath, err)
 		}
 		keys.pubKey = pub
 	}

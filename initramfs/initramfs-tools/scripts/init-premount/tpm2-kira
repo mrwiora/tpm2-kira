@@ -166,7 +166,7 @@ dhcp | static)
     ;;
 esac
 
-# Remote attestation over Bluetooth: the radio worker serves the enrolled
+# Phone attestation over Bluetooth: the radio worker serves the enrolled
 # phone beside the code screen, with the coordinator's TPM. It never holds
 # the boot; init-bottom stops it. Only with the phone in the plan.
 if [ "$mode" != once ] && [ -d "$PLAN/phone" ] && [ -r /etc/tpm2-kira/bluetooth-modules ]; then

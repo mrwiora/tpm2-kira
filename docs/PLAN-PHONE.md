@@ -1,4 +1,4 @@
-# PLAN — Remote Attestation Core
+# PLAN — Phone attestation: the attestation core
 
 > **Status:** phases 1–4 and the receipt half of phase 5 are implemented
 > (`attest/`, `cmd/attest*.go`); see "Implementation notes" at the end.
@@ -9,9 +9,9 @@
 >
 > - [PLAN-BLE.md](PLAN-BLE.md) — a phone verifies the machine over Bluetooth LE
 >   before the passphrase prompt.
-> - [PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) — a server verifies the
+> - [PLAN-VAULT.md](PLAN-VAULT.md) — a server verifies the
 >   machine and hands out the LUKS passphrase.
-> - [PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md) — a verifier hands out one
+> - [PLAN-PHONESALT.md](PLAN-PHONESALT.md) — a verifier hands out one
 >   factor of the passphrase, which an external tool combines with a typed
 >   password.
 >
@@ -25,14 +25,14 @@
 tpm2-kira today proves boot integrity by *equality of a shared secret*: the TPM
 releases a TOTP seed only when the PCRs match, so a matching code means the PCRs
 matched. That is a real proof, and it stays (see §1.2). But it has four limits,
-and each one is a thing remote attestation fixes:
+and each one is a thing phone attestation fixes:
 
 | Limit of the TOTP comparison | What attestation does instead |
 |---|---|
 | **A human compares six digits.** Tired people at 07:00 accept "close enough", and nothing records that the check happened. | A verifier compares cryptographic material and produces a signed, logged verdict. |
 | **The predicate is bit-equality of PCRs, and nothing else.** A boot can be entirely legitimate and still fail, or be subtly wrong and still pass (PCR 7 with Secure Boot off — see SECURITY-BACKGROUND.md §8). | The verifier sees the *values*, the event log, the firmware version and the TPM reset counter, and applies a policy it can change without re-sealing anything. |
 | **After a kernel update you are simply locked out of the check.** The PCR branch fails, no code appears, and the documented advice is "type the passphrase anyway". That trains users to ignore the one signal the tool exists to give. | The attestation key is **not** PCR-bound (§4), so a changed machine can still attest — honestly, reporting its new values. A verifier can show the diff and let a human approve it. The check degrades into a decision, not into silence. |
-| **The decision is made on the machine being judged.** | The decision moves off the machine. That is the property that makes [remote unlocking](PLAN-REMOTEUNLOCKING.md) possible at all: the passphrase need not exist on the box. |
+| **The decision is made on the machine being judged.** | The decision moves off the machine. That is the property that makes [the vault](PLAN-VAULT.md) possible at all: the passphrase need not exist on the box. |
 
 ### 1.1 What attestation is not
 
@@ -57,7 +57,7 @@ either is required, is per-machine configuration — see
 | Term | Meaning here |
 |---|---|
 | **Attester** | The machine with the TPM: tpm2-kira. Produces evidence. Never decides. |
-| **Verifier** | Whoever judges the evidence: the phone ([BLE](PLAN-BLE.md)) or the server ([remote unlocking](PLAN-REMOTEUNLOCKING.md)). |
+| **Verifier** | Whoever judges the evidence: the phone ([BLE](PLAN-BLE.md)) or the server ([the vault](PLAN-VAULT.md)). |
 | **Relying party** | Whoever acts on the verdict. Usually the attester itself (it opens or holds its own gate), sometimes the server (it releases or withholds a passphrase). |
 | **EK** | Endorsement Key. Unique per TPM, created from the Endorsement Primary Seed, often accompanied by a vendor certificate. The TPM's identity. |
 | **AK** | Attestation Key. A restricted signing key that signs quotes. The TPM will only sign TPM-generated structures with it, which is what makes a quote trustworthy. |
@@ -374,7 +374,7 @@ tpm2-kira already does this natively in `cmd/ukipredict.go` — and registers it
 as a profile with `uses_left = 1` and a short `valid_until`. The machine then
 attests successfully on the first boot into the new image, with no human at the
 console. This is the mechanism that makes unattended reboots possible in
-[PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) §6, and it is worth noticing
+[PLAN-VAULT.md](PLAN-VAULT.md) §6, and it is worth noticing
 that it reuses a component that exists today for an entirely different reason.
 
 A pre-registered profile is a deliberate, scoped weakening: for one boot,
@@ -562,7 +562,7 @@ SealedPayload v9 := {
 | **The box in front of you is the box that attested** | A quote attests *a TPM*. An attacker's laptop can relay the exchange to the genuine machine elsewhere — the classic cuckoo attack — and present a valid verdict for hardware you are not touching. §11.3. |
 | **The local gate cannot be removed** | A gate is software in the initramfs. Whoever can edit the initramfs can delete it. That edit changes the PCRs only if the image is measured, so the gate is worth exactly what the measured boot chain protecting it is worth. [PLAN-BLE.md](PLAN-BLE.md) §7.4. |
 | **Bus interposition** | Quote signatures are made inside the TPM and an interposer cannot forge them, but it can observe traffic and, on a machine without session encryption, tamper with commands. Unchanged. |
-| **A compromised verifier** | A phone or server that signs a "trusted" receipt for anything opens every gate anchored to it. Anchor rotation and the blast radius are the verifier's problem — [PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) §8. |
+| **A compromised verifier** | A phone or server that signs a "trusted" receipt for anything opens every gate anchored to it. Anchor rotation and the blast radius are the verifier's problem — [PLAN-VAULT.md](PLAN-VAULT.md) §8. |
 
 ### 11.3 The relay (cuckoo) problem, stated honestly
 
@@ -571,15 +571,15 @@ would have to run a gate it controls, and an attacker who can do that can also
 just not run the gate. The gate is a check the honest machine performs on
 itself; relaying it deceives nobody who matters.
 
-For **remote unlocking** it is the central attack, because there the verifier
+For **the vault** it is the central attack, because there the verifier
 hands out a secret. A relayed quote from the genuine machine would earn an
 attacker the passphrase. The mitigation is not proximity and not the network
 channel: the passphrase is released via `TPM2_MakeCredential` against the
 device's pinned EK, bound to the AK Name, so only the TPM that produced the
-quote can unwrap it. See [PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) §5.
+quote can unwrap it. See [PLAN-VAULT.md](PLAN-VAULT.md) §5.
 Channel binding (§6.2) is a second, weaker layer on top.
 
-The same holds for [factor release](PLAN-FACTORRELEASE.md), including over
+The same holds for [factor release](PLAN-PHONESALT.md), including over
 BLE: as soon as the phone hands out a secret, the relay is the central attack
 there too, and the same hardware binding is the answer.
 
@@ -591,7 +591,7 @@ time: receipt freshness is established by `nonce_a`, not by `expires_at`.
 Verifiers *do* have clocks and use them. This also rules out PKI certificate
 validation on the attester side, which is one of the reasons both transports
 pin public keys instead ([PLAN-BLE.md](PLAN-BLE.md) §5,
-[PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) §3.1).
+[PLAN-VAULT.md](PLAN-VAULT.md) §3.1).
 
 ---
 
@@ -619,8 +619,8 @@ gate.
 
 Therefore: `phone verify`, the gate command defined in
 [PLAN-BLE.md](PLAN-BLE.md) §7, and the commands that hand out a secret —
-`unlock try` ([PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md) §10) and
-`factor release` ([PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md) §5.2) —
+`unlock try` ([PLAN-VAULT.md](PLAN-VAULT.md) §10) and
+`factor release` ([PLAN-PHONESALT.md](PLAN-PHONESALT.md) §5.2) —
 **exit non-zero on failure**, and this is stated
 in their help text and in README.md next to the existing rule. Every other
 command keeps the existing behaviour. Getting this wrong silently converts
@@ -657,7 +657,7 @@ The corpus is the important one. Every bug found in the field should arrive in
 | 6 | `gomobile` binding + corpus run in CI | the same corpus verifies from the Android and iOS bindings |
 
 Phases 1–5 are prerequisites for both [PLAN-BLE.md](PLAN-BLE.md) and
-[PLAN-REMOTEUNLOCKING.md](PLAN-REMOTEUNLOCKING.md); neither should start before
+[PLAN-VAULT.md](PLAN-VAULT.md); neither should start before
 phase 3 is green.
 
 ---
@@ -699,7 +699,7 @@ What was built, and where it departs from the sections above.
 | **Verifier as a state machine (§6, §9.2)** | `attest.Verifier` is event-driven: every input returns records to send and events to show, so the phone needs no threads and no callbacks. `mobile/kiracore` wraps it for gomobile. |
 | **Enrolment (§6.1)** | `EnrolOffer` additionally carries a baseline quote bound to the session (`enrol_qd`), so the baseline profile is TPM-signed rather than claimed, and `adv_key` for advertising. `EnrolAccept` carries a required `anchor_sig` proving possession of the anchor key. |
 | **Wire encoding (§9.3)** | TLV as planned, with ascending tags and per-field limits ([PROTOCOL-BLE.md](PROTOCOL-BLE.md) §7). Golden vectors for every canonical string are in `attest/vectors_test.go`. |
-| **Release message (PLAN-FACTORRELEASE.md §4)** | Defined in the core; the attester answers `ReleaseAck{unsupported}` until factor enrolment exists. |
+| **Release message (PLAN-PHONESALT.md §4)** | Defined in the core; the attester answers `ReleaseAck{unsupported}` until factor enrolment exists. |
 | **Attestation blob (§10.1)** | NV `0x01803020`+slot, signed envelope, PolicySigned writes, a verifier *list* (up to 8) from day one (§15.5). Also holds the machine's Noise static key and advertising key, which identify the transport endpoint only — see `cmd/attest_blob.go` for why exposing them does not weaken the verdict. |
 | **Not yet implemented** | Sealed payload v9 and config binding (§10.3), image anchor (§10.2), `attest rotate-ak`, EK certificate chain validation (the certificate is parsed and passed on, not validated against vendor roots). |
 | **§15.1** | ECC AK first, RSA-2048 fallback, both implemented. |

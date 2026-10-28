@@ -5,11 +5,11 @@
 
 ## 1. What it would add
 
-Today the binding between "the tpm2-kira that resealed the slot" and the
+Today the binding between "the tpm2-kira that approved the slot" and the
 TPM is the measured image: `systemd-stub` extends PCR 11 with the initrd,
 `slot add`/`slot approve` sign a policy over that value, and the TPM admits the
 policy only if the signature verifies for the PCRs it recorded
-(SECURITY-BACKGROUND.md §4, PLAN-FACTORRELEASE.md §8.4). A changed binary
+(SECURITY-BACKGROUND.md §4, PLAN-PHONESALT.md §8.4). A changed binary
 gets no code and no factor. What it still gets is *to run*: the initrd
 executes whatever is in it, and refusing is left to the TPM.
 

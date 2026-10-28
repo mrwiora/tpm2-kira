@@ -198,9 +198,9 @@ func slotErrorLine(err error) string {
 		return "Locked until the next boot (the OS separator ran after the measure point)"
 	case errors.As(err, &genErr):
 		if genErr.IndexMissing {
-			return "Generation index missing - reseal"
+			return "Generation index missing - slot approve"
 		}
-		return fmt.Sprintf("Approval revoked (blob generation %d, slot at %d) - reseal", genErr.BlobGeneration, genErr.IndexGeneration)
+		return fmt.Sprintf("Approval revoked (blob generation %d, slot at %d) - slot approve", genErr.BlobGeneration, genErr.IndexGeneration)
 	}
 	if bve, ok := IsBlobVersionError(err); ok {
 		return fmt.Sprintf("Incompatible blob version (found v%d, requires v%d) - re-seal with: tpm2-kira slot add", bve.FoundVersion, bve.RequiredVersion)
@@ -271,7 +271,7 @@ func FprintKIRASlots(w io.Writer, tpmDev transport.TPM, slots []NVRAMSlot, codes
 			// Green slot number for successful reveal
 			fmt.Fprintf(w, "\033[0;32m#%d\033[0m: %s", slot.SlotNumber, code)
 			if slot.AfterSeparator {
-				fmt.Fprint(w, "  (computed after the boot was released: reseal to lock it before the OS separator)")
+				fmt.Fprint(w, "  (computed after the boot was released: approve to lock it before the OS separator)")
 			}
 			fmt.Fprintln(w)
 		}

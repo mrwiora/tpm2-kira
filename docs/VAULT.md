@@ -1,4 +1,4 @@
-# Remote unlock: the disk's key from this TPM and a vault (`tpm+vault`)
+# The vault: the disk's key from this TPM and a vault (`tpm+vault`)
 
 > Arch and Debian. Experimental. The machine unlocks unattended when the
 > vault's checks pass, or once an operator approves the boot - on the
@@ -8,8 +8,9 @@
 > Two programs: **tpm2-kira** on the machine, and **tpm2-kira-vault**, a
 > separate service with a TPM of its own, in its own repository beside this
 > one (`../tpm2-kira-vault`). Their contract is the Go package
-> `vaultproto` in this repository. The broader, earlier plan is
-> PLAN-REMOTEUNLOCKING.md.
+> `vaultproto` in this repository. What is planned beyond it is
+> [PLAN-VAULT.md](PLAN-VAULT.md); how the four ways of making the disk's key
+> compare, [DISK-KEY.md](DISK-KEY.md).
 
 A keyslot in mode `tpm+vault` opens without anybody typing: its key is
 made from a part kept in this machine's TPM and a part kept by the vault.
@@ -74,8 +75,8 @@ Three layers, each depending on PCR state:
    values and verifies the signature with the signing key it pinned at
    enrolment. So it releases R exactly for the boot states the machine's
    own signing key approved - no list of PCR values on the vault, and a
-   reseal after a kernel update needs nothing there - and refuses a
-   generation lower than the highest it has seen (an approval a reseal
+   approve after a kernel update needs nothing there - and refuses a
+   generation lower than the highest it has seen (an approval an approval
    revoked). It also refuses a revoked device, rate-limits, locks a device
    after repeated failures, and logs every request.
 3. **The vault's TPM.** Each device record is encrypted with a key sealed
@@ -147,7 +148,7 @@ anywhere$ curl -k --pinnedpubkey sha256//<pin, base64> -H "Authorization: Bearer
 ## 4. Enrolment
 
 `vaultEnrolKey` (`cmd/vault.go`), on the booted machine, with the signing
-key (as reseal):
+key (as slot approve):
 
 1. Refuse unless the recovery keyslot is confirmed (`luks enrol` checks
    the device has a keyslot that is not tpm2-kira's).
@@ -262,7 +263,7 @@ enrolment).
 | rate | at most 10 challenges per device per minute |
 | generation | the highest verified generation is kept; a lower one is refused |
 | revoked | denied, "the device is revoked" |
-| the vault's own boot state changed | denied, "the vault's own boot state changed: run reseal"; not counted against the device |
+| the vault's own boot state changed | denied, "the vault's own boot state changed: run approve"; not counted against the device |
 | audit | every enrolment, challenge, verification, release, denial and admin action, append-only, synced after each line |
 
 Pending requests live in memory only: after a restart, the machine starts
@@ -311,7 +312,7 @@ refuse while `serve` holds its lock.
 ### 6.5 Recovery
 
 - **The vault's boot state changed** (a firmware update, a Secure Boot
-  change): `systemctl stop tpm2-kira-vault; tpm2-kira-vault reseal [--pcrs
+  change): `systemctl stop tpm2-kira-vault; tpm2-kira-vault approve [--pcrs
   7]` (asks the recovery key; from stdin when not a terminal); `systemctl
   start tpm2-kira-vault`. `slot approve` opens the K_dev copies and seals each
   to the current PCR values (and a new selection, given `--pcrs`).
@@ -435,7 +436,7 @@ recovery keyslot is mandatory, and the console prompt is always there.
   refused are another nonce, request or device, a moved PCR, values that
   are not the quoted ones, a rolled-back generation, a generation the
   approval is not for, another selection, a quote by another key,
-  something that is not a quote; a reseal is accepted without a change on
+  something that is not a quote; a slot approve is accepted without a change on
   the vault; the JSON field names.
 - **tpm2-kira, unit** (`cmd/vault_test.go`): the key's derivation
   (labels, order, pepper), the vault method in the blob, the pinned client
@@ -475,7 +476,7 @@ recovery keyslot is mandatory, and the console prompt is always there.
     confirmed over the initrd's SSH, cryptsetup's own prompt answered there
     with the recovery passphrase;
   - **approve mode:** pending until `request approve`, then on its own;
-    the image had been rebuilt and resealed in between (generation 4), and
+    the image had been rebuilt and approved in between (generation 4), and
     the vault accepted it without a change.
 
   Then the other way round (the same day): a second vault on the Debian
@@ -486,7 +487,7 @@ recovery keyslot is mandatory, and the console prompt is always there.
     after the first try, the key was made at 08:05:10.685, the code screen
     ended (READY) at .811, systemd-cryptsetup had the key at 08:05:11.4,
     and the separator ran at 08:05:19 - the parts were opened well before
-    it. The vault accepted generation 23 (enrolled at 15, resealed by
+    it. The vault accepted generation 23 (enrolled at 15, approved by
     every image build since);
   - **revoked:** denied; the code screen held, confirmed over SSH, and
     systemd-cryptsetup's own question came into the session through

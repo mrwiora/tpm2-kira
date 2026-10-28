@@ -14,11 +14,11 @@ PATH=$PATH:/usr/local/bin
 
 command -v tpm2-kira >/dev/null 2>&1 || exit 0
 [ -d /etc/tpm2-kira/keys ] || exit 0
-# Something to reseal: a sealed slot, or the SSH CA (its EFI variable).
+# Something to approve: a sealed slot, or the SSH CA (its EFI variable).
 tpm2-kira slot info --json 2>/dev/null | grep -q '"index"' || [ -e /sys/firmware/efi/efivars/KIRAasshCA-24415b90-39be-45c0-a9a3-d547ebe28ea0 ] || exit 0
 
-echo "tpm2-kira: kernel $1 and grub.cfg changed; resealing for the next boot" >&2
+echo "tpm2-kira: kernel $1 and grub.cfg changed; approving for the next boot" >&2
 # No terminal (setsid): a PIN it cannot read from /etc/tpm2-kira/pin ends the
-# reseal with the reason instead of a prompt that would hold the update.
-setsid -w tpm2-kira slot approve </dev/null || echo "tpm2-kira: reseal did not succeed; the next boot shows no code until 'tpm2-kira slot approve' does" >&2
+# approve with the reason instead of a prompt that would hold the update.
+setsid -w tpm2-kira slot approve </dev/null || echo "tpm2-kira: the approval did not succeed; the next boot shows no code until 'tpm2-kira slot approve' does" >&2
 exit 0

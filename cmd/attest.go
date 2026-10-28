@@ -26,16 +26,16 @@ import (
 	"github.com/mrwiora/tpm2-kira/transport/frame"
 )
 
-// Remote attestation commands (PLAN-REMOTEATTESTATION.md §12, PLAN-BLE.md).
+// Remote attestation commands (PLAN-PHONE.md §12, PLAN-BLE.md).
 //
 // Attestation stands on its own: the phone verifies the boot and returns a
-// signed verdict, which the console shows. Releasing a factor (the hashpwd2
-// salt, PLAN-FACTORRELEASE.md) is an optional step on top of a trusted
+// signed verdict, which the console shows. Releasing a factor (the phone
+// salt, PLAN-PHONESALT.md) is an optional step on top of a trusted
 // receipt in the same session; this version of the attester answers such a
 // request with "unsupported".
 
 // Exit codes of the commands that do not follow the exit-0 rule
-// (PLAN-REMOTEATTESTATION.md §12.1). They match PLAN-FACTORRELEASE.md §5.2.
+// (PLAN-PHONE.md §12.1). They match PLAN-PHONESALT.md §5.2.
 const (
 	ExitAttested    = 0 // a trusted receipt arrived and verified
 	ExitInternal    = 1 // internal error
@@ -631,7 +631,7 @@ func AttestEnrol(o EnrolOptions) error {
 			fmt.Printf("NOTE: that rebuild changes the boot image, and with it PCR %s, which the phone checks.\n", changing)
 			fmt.Println("      At the first boot of the new image the phone will therefore show \"changed\", once.")
 			fmt.Println("      Check that it lists only these registers, then approve and remember.")
-			fmt.Println("      The TOTP code keeps matching all the same: the reseal hook approves the new image")
+			fmt.Println("      The TOTP code keeps matching all the same: the approval hook approves the new image")
 			fmt.Println("      with your signing key. The phone does not take the machine's word for it.")
 		}
 		return nil
@@ -704,7 +704,7 @@ type GateOptions struct {
 // The receipt is checked against the anchor in the attestation blob. In the
 // initrd that blob cannot be authenticated (the signing key is not there), so
 // on this machine the verdict line is advisory; the authoritative display is
-// the phone's (PLAN-REMOTEATTESTATION.md §10.2).
+// the phone's (PLAN-PHONE.md §10.2).
 func AttestGate(o GateOptions) int {
 	narrateDebug = o.Debug
 	step := gateSteps(o.Debug)
@@ -809,7 +809,7 @@ func requireVerifiedBoot(tpmDev transport.TPM, sealed *SealedBlob, slot uint32) 
 		return false, nil
 	case len(differ) > 0:
 		return false, fmt.Errorf("this boot is not the state slot %d's code is approved for (PCR %s differ), so the\n"+
-			"code screen showed no code for it and nothing verified this boot. Reseal for the current\n"+
+			"code screen showed no code for it and nothing verified this boot. Approve the current\n"+
 			"boot chain ('tpm2-kira slot approve', after a kernel update the hook does it), reboot, compare the\n"+
 			"code with your authenticator, then enrol", slot, joinInts(differ))
 	}

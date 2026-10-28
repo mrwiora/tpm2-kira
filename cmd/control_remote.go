@@ -70,7 +70,7 @@ func (c *controller) sshStep() controlStep {
 	case f.SSHCA.CA == nil:
 		st.Dirty = f.SSHCA.Err + ": the image is built without SSH"
 	case f.SSHCAOtherKey:
-		st.Dirty = "the SSH CA " + f.SSHCA.CA.Fingerprint() + " was made for another signing key: reseal cannot approve it, the next boots serve a temporary host key - pick this to create it again"
+		st.Dirty = "the SSH CA " + f.SSHCA.CA.Fingerprint() + " was made for another signing key: slot approve cannot approve it, the next boots serve a temporary host key - pick this to create it again"
 	default:
 		lines := RemoteStatusLines(f.Remote)
 		st.Done = strings.TrimPrefix(lines[len(lines)-1], "SSH at boot: ") + fmt.Sprintf("; %d key(s) may log in; SSH CA %s", f.SSHKeys, f.SSHCA.CA.Fingerprint())
@@ -276,7 +276,7 @@ func (c *controller) ensureSSHCA(conf *config.Config) error {
 	}
 	typ := conf.CAType
 	if err := c.form(huh.NewSelect[hostkey.Type]().Title("Create the SSH CA in the TPM").
-		Description("The boot image's host key is made in the TPM at every boot and certified by this CA, which never leaves the TPM and signs only while the PCRs hold values the signing key approved: PCR 0 (firmware), 2 (option ROMs), 7 (Secure Boot) and the image's, or PCR 7 alone. It is kept in the EFI variable KIRAasshCA; reseal approves each rebuilt image. Clients trust the CA, once.").
+		Description("The boot image's host key is made in the TPM at every boot and certified by this CA, which never leaves the TPM and signs only while the PCRs hold values the signing key approved: PCR 0 (firmware), 2 (option ROMs), 7 (Secure Boot) and the image's, or PCR 7 alone. It is kept in the EFI variable KIRAasshCA; slot approve approves each rebuilt image. Clients trust the CA, once.").
 		Options(huh.NewOption("ECDSA P-256 (recommended)", hostkey.P256), huh.NewOption("RSA-2048", hostkey.RSA2048)).
 		Value(&typ)).Run(); err != nil {
 		return err
@@ -294,7 +294,7 @@ func (c *controller) ensureSSHCA(conf *config.Config) error {
 		return err
 	}
 	fmt.Fprintf(c.out, "Created %s: %s", path, ca.Describe())
-	fmt.Fprintf(c.out, "Its slots are written in %s: an edit there takes effect at the next reseal.\n", sshConfPath(controlConfigPath()))
+	fmt.Fprintf(c.out, "Its slots are written in %s: an edit there takes effect at the next approval.\n", sshConfPath(controlConfigPath()))
 	return c.sayKnownHosts(ca)
 }
 

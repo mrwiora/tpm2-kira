@@ -54,7 +54,7 @@ type ReceiptCheck struct {
 }
 
 // CheckReceipt validates a receipt against the pinned anchor and this
-// session. It never consults a clock (PLAN-REMOTEATTESTATION.md §11.4):
+// session. It never consults a clock (PLAN-PHONE.md §11.4):
 // freshness comes from qd, which covers nonce_a, chosen by the attester this
 // boot.
 func CheckReceipt(r *Receipt, anchor *ecdsa.PublicKey, exp ReceiptExpectation) ReceiptCheck {

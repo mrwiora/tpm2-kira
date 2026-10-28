@@ -1,7 +1,7 @@
 package cmd
 
-// Integrity of the attestation record (SECURITY.md, "Remote attestation with a
-// phone: what it does not protect against").
+// Integrity of the attestation record (SECURITY.md, "Phone attestation: what it does not
+// protect against").
 //
 // The record's NV index refuses in-place writes without the signing key
 // (PolicySigned), but the owner hierarchy can undefine it and define a new

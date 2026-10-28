@@ -141,7 +141,7 @@ func VerifyRelease(dev *Device, nonce []byte, req *ReleaseRequest, minGeneration
 	}
 
 	if req.Generation < minGeneration {
-		return nil, fmt.Errorf("generation %d is older than %d: an approval a reseal revoked", req.Generation, minGeneration)
+		return nil, fmt.Errorf("generation %d is older than %d: an approval a later one revoked", req.Generation, minGeneration)
 	}
 	signer, err := signingKey(dev.SigningPublic)
 	if err != nil {

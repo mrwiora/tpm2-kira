@@ -163,10 +163,10 @@ func statusNotes(r StatusReport) []string {
 	remoteSalt, fallback := false, false
 	for _, s := range r.Slots {
 		if !s.Signed {
-			notes = append(notes, fmt.Sprintf("slot %d is not signed by this machine's key (%s): the hooks will not reseal it and the gate serves no phone for it", s.Slot, s.SignReason))
+			notes = append(notes, fmt.Sprintf("slot %d is not signed by this machine's key (%s): the hooks will not approve it and the gate serves no phone for it", s.Slot, s.SignReason))
 		}
 		if strings.Contains(s.GenState, "NOT") || strings.Contains(s.GenState, "unavailable") {
-			notes = append(notes, fmt.Sprintf("slot %d shows no code until it is resealed: tpm2-kira slot approve --nvram %d", s.Slot, s.Slot))
+			notes = append(notes, fmt.Sprintf("slot %d shows no code until it is approved: tpm2-kira slot approve --nvram %d", s.Slot, s.Slot))
 		}
 		remoteSalt = remoteSalt || s.PhoneSalt
 		fallback = fallback || s.Fallback

@@ -2,7 +2,7 @@
 
 # Units that measure into PCRs before tpm2-kira runs. Their presence changes the
 # values tpm2-kira must seal against, so the verdict is reported and handed to
-# the post hook rather than being guessed at reseal time.
+# the post hook rather than being guessed at approve time.
 MEASURE_POINT_STATE=/run/tpm2-kira/measure-point.state
 
 _unit_wired() {
@@ -266,7 +266,7 @@ Post-generation hook (sd-tpm2-kira in /usr/lib/initcpio/post/, or
   After the initramfs image is written, 'tpm2-kira slot approve' is executed
   automatically. This is necessary because the initramfs content is
   measured into PCRs at boot - every rebuild may change the expected
-  values, so the sealed TOTP secret must be resealed to match, and the
+  values, so the sealed TOTP secret must be approved to match, and the
   SSH CA approved for them.
 
 Prerequisites:

@@ -643,6 +643,37 @@ caught.
 
 ---
 
+## Names and documents by layer (2026-10-28)
+
+The commands were named after what tpm2-kira did first, a TOTP code, and
+"remote" stood for three unrelated things. They are named by the layers
+now: the slot (`seal`, `reseal`, `info` and `nvram list|status|delete|
+restore` became `slot add|approve|info|list|status|delete|restore`; "to
+reseal" is "to approve the boot state"), who checks the boot (`attest`
+became `phone`), the disk's key (`remote-salt` became `phone salt`, the
+mode `password+remotesalt` and its token type `tpm2-kira-remotesalt`
+became `password+phonesalt` and `tpm2-kira-phonesalt`, `derive` became
+`luks derive`). `remote serve`, the SSH server's unprivileged half, is
+`ssh-child`. "Remote unlock" was the vault, "remote attestation" the
+phone, "the remote salt" the phone salt. A keyslot marked with the old
+token type is marked again (`luks mark`); nothing reads the old names.
+
+The user-facing name of the password+salt derivation was hashpwd2's, the
+program it is compatible with; it is "password+salt (Argon2id)" now, and
+the compatibility is a note in SECURITY-BACKGROUND.md §5.9.
+
+The README carried every feature's whole description. It is the map now,
+and each layer has its page: docs/SLOT.md (the README's sealing,
+resealing, inspecting and deleting sections), docs/CODE.md, docs/PHONE.md
+(the README's phone section), docs/DISK-KEY.md (the README's disk unlock
+sections and the former docs/UNLOCK-DISK.md, whose "what was tried and
+dropped" is "The hook rewrote the image's crypttab" above), docs/VAULT.md (the former
+docs/REMOTE-UNLOCK.md). The plans were renamed with them:
+PLAN-REMOTEATTESTATION.md is PLAN-PHONE.md, PLAN-FACTORRELEASE.md is
+PLAN-PHONESALT.md, PLAN-REMOTEUNLOCKING.md is PLAN-VAULT.md.
+
+---
+
 ## Related records
 
 - `docs/SYSTEMD-PCROSSEPARATOR.issue` — systemd's userspace measure-point

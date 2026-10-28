@@ -1,10 +1,10 @@
-# PLAN — Remote Unlocking
+# PLAN — The vault, beyond `tpm+vault`
 
 > **Status:** draft / design. Its first shape is implemented differently, as
-> [REMOTE-UNLOCK.md](REMOTE-UNLOCK.md): the disk's key from a local part in the machine's TPM
+> [VAULT.md](VAULT.md): the disk's key from a local part in the machine's TPM
 > and a remote part the vault releases, both under the slot's approved
 > policy; no passphrase is handed out.
-> **Depends on:** [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md)
+> **Depends on:** [PLAN-PHONE.md](PLAN-PHONE.md)
 > phases 1–5, and reuses the encrypted session from
 > [PLAN-BLE.md](PLAN-BLE.md) §5.2 over TCP instead of BLE.
 >
@@ -61,7 +61,7 @@ a secret rather than by asking software to behave.
 
 | Component | Source |
 |---|---|
-| AK, quotes, evidence, `Verify()`, policy, profiles, receipts | [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) — unchanged |
+| AK, quotes, evidence, `Verify()`, policy, profiles, receipts | [PLAN-PHONE.md](PLAN-PHONE.md) — unchanged |
 | Encrypted, mutually authenticated session with channel binding | [PLAN-BLE.md](PLAN-BLE.md) §5.2, over TCP instead of an ATT stream |
 | Verdict explanation and the approval UI | the mobile app from [PLAN-BLE.md](PLAN-BLE.md) §6, with a second screen |
 | **Release key (RK) and the passphrase wrap** | new, §5 |
@@ -97,7 +97,7 @@ against a clock the machine does not have.
 
 The server's identity is therefore a **pinned public key**, recorded at
 enrolment, exactly as the phone's anchor is
-([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.2). The transport
+([PLAN-PHONE.md](PLAN-PHONE.md) §10.2). The transport
 is the project's own encrypted session over TCP, not TLS, which also avoids
 carrying a TLS stack and a trust store into the initramfs. The server may sit
 behind TLS for its operator-facing API; the machine-facing protocol does not
@@ -111,7 +111,7 @@ freshness, approval windows, profile expiry.
 ## 4. Identity and enrolment
 
 Enrolment runs once, on the booted machine, with an operator present. It
-extends [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §6.1 with three
+extends [PLAN-PHONE.md](PLAN-PHONE.md) §6.1 with three
 additional steps:
 
 1. **Create the release key (RK)** — §5.1 — and send its public area and Name.
@@ -147,7 +147,7 @@ This section is the load-bearing one. Everything else is plumbing.
 
 A second TPM key, separate from the AK, so that the core's rule — *the AK signs
 statements and authorises nothing*
-([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §4) — stays true.
+([PLAN-PHONE.md](PLAN-PHONE.md) §4) — stays true.
 
 | Property | Value |
 |---|---|
@@ -204,7 +204,7 @@ Properties that follow, each one worth the complexity:
 |---|---|
 | The server never learns the passphrase | it only ever receives `credential` and `ciphertext`; `K` is inside a blob encrypted to the EK |
 | A stolen server database yields nothing | every entry can only be opened by one specific TPM |
-| **A relayed quote does not earn a passphrase** | the credential is encrypted to *that* EK and bound to *that* RK Name. The cuckoo attacker of [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §11.3 can relay a quote and receive the blob — and cannot open it |
+| **A relayed quote does not earn a passphrase** | the credential is encrypted to *that* EK and bound to *that* RK Name. The cuckoo attacker of [PLAN-PHONE.md](PLAN-PHONE.md) §11.3 can relay a quote and receive the blob — and cannot open it |
 | A captured blob on its own is useless | opening it needs the TPM **and** either matching PCRs or a fresh server signature |
 
 That third row is the reason this design is not simply "TLS plus a quote".
@@ -212,7 +212,7 @@ Channel binding alone would leave the relay attack open; binding the secret to
 the hardware closes it.
 
 The release key and this wrap are shared with
-[PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md), which releases a 32-byte factor
+[PLAN-PHONESALT.md](PLAN-PHONESALT.md), which releases a 32-byte factor
 instead of a passphrase and so needs no AES-GCM layer. Both use the one
 `Release` message defined there (§4); the "server key" of §5.1 is, generically,
 the verifier's approval key.
@@ -265,7 +265,7 @@ The chicken-and-egg problem: a kernel update changes the PCRs, so the machine
 cannot attest, so it cannot unlock, so nobody can log in to fix it.
 
 Resolved with **pre-registered profiles**
-([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §8): before rebooting,
+([PLAN-PHONE.md](PLAN-PHONE.md) §8): before rebooting,
 the machine computes the PCR values its *next* boot will present — for PCR 11
 this is exactly what `cmd/ukipredict.go` already does from the unified kernel
 image on disk — and uploads them as a candidate profile with `uses_left = 1`
@@ -404,12 +404,12 @@ tpm2-kira phone predict --upload               # pre-register the next boot's PC
 
 `/etc/tpm2-kira/control.conf` holds the server address, the timeout and the
 fallback behaviour; like `control.conf` its digest is bound into the sealed
-object ([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.3), so a
+object ([PLAN-PHONE.md](PLAN-PHONE.md) §10.3), so a
 machine that does not measure its initramfs still detects an edited server
 address.
 
 `unlock try` follows the exit-status exception in
-[PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §12.1: it exits non-zero
+[PLAN-PHONE.md](PLAN-PHONE.md) §12.1: it exits non-zero
 when it did not obtain a passphrase.
 
 ---
@@ -466,7 +466,7 @@ should be presented as such rather than shipped quietly.
    laptop that unlocks from a phone at home and from the server in the office
    is an attractive story and a policy-precedence problem. The blob format
    should allow more than one verifier from the start. The phone side of that
-   story is [PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md).
+   story is [PLAN-PHONESALT.md](PLAN-PHONESALT.md).
 5. **Passphrase rotation at scale.** `unlock rotate` on one machine is easy; a
    fleet-wide rotation with keyslot management, partial failures and rollback
    is a project of its own.

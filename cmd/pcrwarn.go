@@ -112,10 +112,10 @@ func WarnAboutPCRSelection(specs []PCRSpec) {
 			fmt.Printf("      tpm2-kira slot add --pcrs \"%s\"\n", suggestWith(specs, "11u"))
 		} else {
 			fmt.Println("  With a unified kernel image, add PCR 11 (\"11u\"). With GRUB, add PCRs 8 and 9")
-			fmt.Println("  (\"8e,9e\"); they change on every kernel or initrd update, so reseal after the")
-			fmt.Println("  reboot that follows one (README, \"If you seal PCR 8 or 9\").")
+			fmt.Println("  (\"8e,9e\"); they change on every kernel or initrd update, so approve after the")
+			fmt.Println("  reboot that follows one (docs/BOOT-INTEGRATION.md, \"PCR 8 and 9 are predicted for the next boot\").")
 		}
-		fmt.Println("  README \"Hardening the boot path\" lists what else keeps a shell out of reach.")
+		fmt.Println("  docs/SLOT.md, \"Hardening the boot path\", lists what else keeps a shell out of reach.")
 		fmt.Println()
 	}
 

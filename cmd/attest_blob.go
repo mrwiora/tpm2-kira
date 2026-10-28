@@ -22,7 +22,7 @@ import (
 //	                 a typed, length-prefixed block of its own:
 //	    1  phone     phones over Bluetooth LE (the Marify app)
 //	    2  vault     tpm2-kira-vault over HTTPS, keeping the remote part of
-//	                 the disk's key (docs/REMOTE-UNLOCK.md)
+//	                 the disk's key (docs/VAULT.md)
 //
 // Every method uses the same attestation key, release key and count. The layout is documented in
 // docs/SECURITY-BACKGROUND.md §10 and follows the blob's conventions:

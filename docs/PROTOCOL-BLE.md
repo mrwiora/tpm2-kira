@@ -6,8 +6,8 @@
 > machine and a phone app. The key words MUST, MUST NOT, SHOULD and MAY are
 > used as in RFC 2119.
 >
-> Background and rationale: [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md),
-> [PLAN-BLE.md](PLAN-BLE.md), [PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md).
+> Background and rationale: [PLAN-PHONE.md](PLAN-PHONE.md),
+> [PLAN-BLE.md](PLAN-BLE.md), [PLAN-PHONESALT.md](PLAN-PHONESALT.md).
 > App build instructions: [mobile/AGENT-PROMPT-ANDROID.md](mobile/AGENT-PROMPT-ANDROID.md),
 > [mobile/AGENT-PROMPT-IOS.md](mobile/AGENT-PROMPT-IOS.md).
 
@@ -27,7 +27,7 @@ The protocol serves two purposes, both over the same session:
 | Purpose | When | Status |
 |---|---|---|
 | **Attestation** | Always. The phone shows *match* / *changed* / *failed*, the user decides on changes, the machine's console shows the signed verdict. | Implemented |
-| **Salt release** | Additionally, when the machine uses [hashpwd2](https://github.com/mrwiora/hashpwd2) to derive the LUKS key. After a trusted receipt, the phone sends a TPM-bound *factor*; the machine unwraps it and hands it to hashpwd2 as the salt (PLAN-FACTORRELEASE.md). | Message defined (§7.3.7); machine replies "unsupported" in this version |
+| **Salt release** | Additionally, when the LUKS key is derived from a password and the phone salt (`password+phonesalt`). After a trusted receipt, the phone sends a TPM-bound *factor*; the machine unwraps it and uses it as the salt of the derivation (PLAN-PHONESALT.md). | Message defined (§7.3.7); machine replies "unsupported" in this version |
 
 Attestation stands on its own. Salt release is an optional step on top of a
 trusted receipt and never replaces it.
@@ -438,12 +438,12 @@ phone, decides whether a released factor opens.
 
 | Tag | Name | Type | | Notes |
 |---|---|---|---|---|
-| 1 | kind | u8 | R | 1 passphrase (remote unlocking), 2 factor (hashpwd2 salt) |
+| 1 | kind | u8 | R | 1 passphrase (the vault), 2 factor (the phone salt) |
 | 2 | slot | u8 | R | |
 | 3 | credential_blob | bytes ≤1024 | R | `TPM2_MakeCredential` credentialBlob, made at factor enrolment |
 | 4 | encrypted_secret | bytes ≤1024 | R | `TPM2_MakeCredential` secret |
 | 5 | ciphertext | bytes ≤4096 | O | kind 1 only |
-| 6 | approval | bytes ≤600 | O | unused: the release key has no branch the phone could open (PLAN-FACTORRELEASE.md §4.1) |
+| 6 | approval | bytes ≤600 | O | unused: the release key has no branch the phone could open (PLAN-PHONESALT.md §4.1) |
 | 7 | label | string ≤64 | O | factor label, default `luks` |
 
 The phone never holds the factor itself — only this blob, which only the
@@ -578,7 +578,7 @@ Bye has no fields. Error: 1 `code` u16 R · 2 `message` string ≤256 O.
 | Bit | Name |
 |---|---|
 | 0 | `CAP_EVENTLOG` — the event log can be requested |
-| 1 | `CAP_RELEASE_FACTOR` — Release kind 2 (hashpwd2 salt) is configured |
+| 1 | `CAP_RELEASE_FACTOR` — Release kind 2 (the phone salt) is configured |
 | 2 | `CAP_RELEASE_PASSPHRASE` — Release kind 1 is configured |
 
 ### 7.5 Verdict codes
@@ -637,7 +637,7 @@ same policy), and answers with `boot_key_state` 1, `boot_proof =
 HMAC-SHA256(k_mac, "tpm2-kira/boot-proof/v1" ‖ qd)` and `boot_signature`. If
 the TPM refuses, it answers with state 2 and neither. On the booted system,
 where `tpm2-kira cap` has locked the slot until the next boot (a check by
-hand, or a phone salt's enrolment, PLAN-FACTORRELEASE.md §6), it answers with state 4 and
+hand, or a phone salt's enrolment, PLAN-PHONESALT.md §6), it answers with state 4 and
 neither: not a refusal of the boot state, but the key's unavailability by
 design. The code is never sent back.
 
@@ -723,7 +723,7 @@ sequenceDiagram
     P->>M: Receipt
     M->>M: check signature against pinned anchor and binding to this session
     M->>P: ReceiptAck
-    opt salt release (hashpwd2), trusted verdict, CAP_RELEASE_FACTOR
+    opt salt release (the phone salt), trusted verdict, CAP_RELEASE_FACTOR
         P->>M: Release (kind 2)
         M->>P: ReleaseAck
     end
@@ -784,14 +784,14 @@ enrol_accept_tbs := "tpm2-kira/enrol-accept/v1" ‖ lp(device_id) ‖ lp(cb) ‖
 
 ### 9.5 SAS — see §6.4.  9.6 Advertising tag — see §2.2.
 
-### 9.7 Factor (salt for hashpwd2)
+### 9.7 Factor (the phone salt)
 
 ```
 factor := hex( HKDF-SHA256(ikm = F, salt = "", info = "tpm2-kira/factor/v1" ‖ lp(label), L = 32) )
 ```
 
 `F` is the 32-byte secret recovered by `TPM2_ActivateCredential` from a
-Release. The 64 lowercase hex characters are the salt (PLAN-FACTORRELEASE.md §5.1).
+Release. The 64 lowercase hex characters are the salt (PLAN-PHONESALT.md §5.1).
 
 ### 9.8 Test vectors
 
@@ -1070,8 +1070,8 @@ wants to see why a boot changed.
 
 | Item | Where specified |
 |---|---|
-| Releasing the hashpwd2 salt (factor enrolment, Release handling) | PLAN-FACTORRELEASE.md |
-| No enforced mode: the passphrase can always be entered by hand; enforcement, where wanted, is a missing factor | UNLOCK-DISK.md §4, PLAN-BLE.md §7 |
+| Releasing the phone salt (factor enrolment, Release handling) | PLAN-PHONESALT.md |
+| No enforced mode: the passphrase can always be entered by hand; enforcement, where wanted, is a missing factor | DISK-KEY.md, "When the answer is wrong", PLAN-BLE.md §7 |
 | Bluetooth inside the initramfs: implemented (hooks, `control.conf` for the adapter), not yet tested on hardware | PLAN-BLE.md §3.1, phase 5 |
 | Break-glass bypass tokens | PLAN-BLE.md §7.6 |
 

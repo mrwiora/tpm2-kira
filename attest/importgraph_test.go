@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// TestCoreHasNoDeviceDeps enforces PLAN-REMOTEATTESTATION.md §9.1: the
+// TestCoreHasNoDeviceDeps enforces PLAN-PHONE.md §9.1: the
 // packages compiled into the phone and the server — the protocol core, the
 // framing and the mobile binding — import nothing that reaches a device, the
 // filesystem or the network, and never import cmd/ or a transport.

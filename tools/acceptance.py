@@ -395,9 +395,9 @@ def build_and_install(t, distro, rev, log, rep):
 
     # What the install's hook did with the slots.
     if "SKIPPED" in out:
-        rep.issues.append("the install's reseal was SKIPPED (install.log)")
-    rep.check("install hook resealed", "reseal completed successfully" in out or "Successfully resealed" in out,
-              "no reseal in the install output" if "resealed" not in out else "")
+        rep.issues.append("the install's approve was SKIPPED (install.log)")
+    rep.check("install hook approved", "approval completed successfully" in out or "Successfully approved" in out,
+              "no approval in the install output" if "approved" not in out else "")
     return expected
 
 
@@ -434,7 +434,7 @@ def check_installed(t, distro, expected, mode_wanted, luks_device, log, rep):
         rep.check("status: every slot signed by this machine's key", all(s["signed"] for s in slots),
                   "; ".join(f"slot {s['slot_number']}: {s.get('sign_reason', '')}" for s in slots if not s["signed"]))
         rep.check("status: a fallback slot (PCRs 0 and 7)", any(s["fallback"] for s in slots))
-        rep.check("status: every slot's generation matches (no reseal due)",
+        rep.check("status: every slot's generation matches (no approval due)",
                   all("matches" in s["generation_state"] or "read-locked" in s["generation_state"] for s in slots),
                   "; ".join(f"slot {s['slot_number']}: {s['generation_state']}" for s in slots))
         rep.check("status: no notes", not status.get("notes"), "\n".join(status.get("notes", [])))
@@ -564,7 +564,7 @@ def check_booted(t, distro, expected, mode_wanted, log, rep):
         rep.check("after boot: slot 0 is read-locked (cap ran at the code screen)",
                   any(s["slot_number"] == 0 and "read-locked" in s["generation_state"] for s in slots),
                   "; ".join(f"slot {s['slot_number']}: {s['generation_state']}" for s in slots))
-        rep.check("after boot: no slot needs a reseal", not any("NOT" in s["generation_state"] or "unavailable" in s["generation_state"] for s in slots))
+        rep.check("after boot: no slot needs an approval", not any("NOT" in s["generation_state"] or "unavailable" in s["generation_state"] for s in slots))
         rep.check("after boot: no notes", not status.get("notes"), "\n".join(status.get("notes", [])))
     rc, out = t.run("tpm2-kira status", root=True)
     log.save("status-booted.txt", out)

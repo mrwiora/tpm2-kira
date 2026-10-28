@@ -6,7 +6,7 @@
 > lists what is done and what is open. What this plan calls "lazy mode" is
 > the only behaviour there is (§7): a phone is served whenever one is
 > enrolled, no mode is set anywhere, and the boot is never held.
-> **Depends on:** [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md)
+> **Depends on:** [PLAN-PHONE.md](PLAN-PHONE.md)
 > phases 1–5. This document adds a *transport* (Bluetooth LE), a *verifier*
 > (an Android/iOS app) and a *gate* (what happens at the passphrase prompt).
 > Everything cryptographic lives in the core and is not restated here.
@@ -34,9 +34,9 @@ Last updated 2026-10-05.
 | **Real hardware** | Nothing has run against a physical adapter or phone yet — the development machine has none. First boot test: an Intel/Realtek USB adapter on Arch, then Debian. |
 | **Boot test** (§8) | QEMU + swtpm boot of an image with the gate; needs a passed-through or virtual (`hci_vhci`, root) controller. |
 | **Debian firmware size** | `manual_add_modules` queues modules for `dracut-install`, which copies every firmware file the modules *declare* (dozens for btusb's dependencies) on top of the exact files. mkinitcpio avoids this; on Debian it costs space until initramfs-tools offers a way to skip declared firmware. Measure on a Debian box. |
-| **Debian measured PCRs** | Adding Bluetooth changes PCR 9 on GRUB machines; the existing post-update reminder covers resealing, but has not been re-checked with the new files. |
+| **Debian measured PCRs** | Adding Bluetooth changes PCR 9 on GRUB machines; the existing post-update reminder covers approving, but has not been re-checked with the new files. |
 | 6 — enforced mode | `phone gate --mode enforced` is refused; needs the image anchor, sealed payload v9 and the fail-closed matrix (§7.5). |
-| Salt release | `Release` is defined in the protocol; the attester answers "unsupported" (PLAN-FACTORRELEASE.md). |
+| Salt release | `Release` is defined in the protocol; the attester answers "unsupported" (PLAN-PHONESALT.md). |
 | Break-glass tokens (§7.6) | not started |
 | 7 — verdict UX | the shared PCR explanation exists (`attest/explain.go`); the UI belongs to the apps |
 | Phone apps | specified as agent prompts in [mobile/](mobile/), not built |
@@ -183,7 +183,7 @@ MTU exchange, attribute discovery, write-without-response and notifications.
 already speaks the HCI user channel, and supports the peripheral role, which
 would save several thousand lines. If its maintenance state or dependency
 surface does not hold up against this project's two-dependency budget
-([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §9.3), write a minimal
+([PLAN-PHONE.md](PLAN-PHONE.md) §9.3), write a minimal
 in-tree HCI/L2CAP/ATT peripheral: the subset actually needed is small, because
 there is exactly one service, two characteristics and no security manager
 (§5.1). Decide in phase 1, with a spike against real hardware, not on paper.
@@ -236,7 +236,7 @@ pins those, not the live registers.
 Loading a Bluetooth module does not extend a PCR, so bringing the radio up does
 not itself move the measure point. But the modules and firmware are *content of
 the initramfs*, so they change PCR 11 (UKI) or PCR 9 (Debian/GRUB) — that is,
-adding BLE support requires a reseal, like any other initramfs change.
+adding BLE support requires an approval, like any other initramfs change.
 
 ---
 
@@ -285,7 +285,7 @@ handle it.
 
 Which is the concrete reason the core makes the event log
 opt-in and hash-addressed
-([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §5.1): the phone
+([PLAN-PHONE.md](PLAN-PHONE.md) §5.1): the phone
 requests it only when the PCR values fail to match a profile and a human needs
 to see *what* changed. On the happy path nothing large is ever transferred.
 
@@ -328,9 +328,9 @@ Reasons, in order of weight:
    and legacy pairing is broken.
 3. An application-layer handshake gives a **channel binding value** for free,
    which the core needs anyway
-   ([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §6.2).
+   ([PLAN-PHONE.md](PLAN-PHONE.md) §6.2).
 4. The same handshake then works unchanged over TCP for
-   [remote unlocking](PLAN-REMOTEUNLOCKING.md), so there is one channel
+   [the vault](PLAN-VAULT.md), so there is one channel
    implementation rather than two.
 
 ### 5.2 The session handshake
@@ -375,17 +375,17 @@ Connected:     iPhone (anonymous)
 
 Enrolment runs on the **booted, unlocked system**, not in the initrd: it writes
 NVRAM and needs the signing key, exactly like `slot add`. The exchange is defined
-in [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §6.1; the phone ends
+in [PLAN-PHONE.md](PLAN-PHONE.md) §6.1; the phone ends
 up holding the EK public key (and EK certificate where present), the AK name,
 the device id, a friendly name, the baseline PCR profile and the event log; the
 machine ends up holding the phone's receipt-signing public key as its pinned
 anchor.
 
-With [factor release](PLAN-FACTORRELEASE.md) enrolled, the phone additionally
+With [factor release](PLAN-PHONESALT.md) enrolled, the phone additionally
 holds a wrapped factor: a blob that only this machine's TPM can open. That is
 the first secret-bearing item on the phone, and the receipt-signing key then
 doubles as the approval key for the TPM's `PolicySigned` branch
-([PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md) §4.1).
+([PLAN-PHONESALT.md](PLAN-PHONESALT.md) §4.1).
 
 Operational cost worth documenting: taking the adapter through an HCI user
 channel **disconnects everything else using Bluetooth** for the duration —
@@ -394,10 +394,10 @@ mice, headphones, keyboards. `phone enrol` says so before it starts, offers
 
 ### 5.5 Where the anchor is stored
 
-Per [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.2: the
+Per [PLAN-PHONE.md](PLAN-PHONE.md) §10.2: the
 recommended placement is `image` — a file inside the initramfs/UKI, authenticated
 by Secure Boot and measured into PCR 11. `enrol` writes it there and then tells
-the user to rebuild the initramfs and reseal, because an anchor that is not in
+the user to rebuild the initramfs and approve, because an anchor that is not in
 the image is not the anchor the gate will use.
 
 ```
@@ -435,7 +435,7 @@ Next steps — the anchor only takes effect once it is inside the boot image:
 
 The security decision is the Go core, byte for byte the same code that runs on
 the server and in CI against the golden corpus
-([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §9.2). Flutter carries
+([PLAN-PHONE.md](PLAN-PHONE.md) §9.2). Flutter carries
 pixels and BLE frames; it must never decide whether a boot is trustworthy.
 
 The alternative — native Kotlin and Swift apps with a verifier written twice —
@@ -457,7 +457,7 @@ every bound machine — the key cannot leave the hardware.
 
 Losing the phone still costs an anchor rotation, which requires the signing key
 and a rebuild. That ceremony is an open question in the core plan
-([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §15.5) and must be
+([PLAN-PHONE.md](PLAN-PHONE.md) §15.5) and must be
 answered before this ships, because "my phone fell in a lake" is a Tuesday, not
 an edge case.
 
@@ -495,10 +495,10 @@ into the shared core so the app and the CLI explain a diff identically.
 work and informs; the passphrase can always be entered by hand. The disk
 unlock goes through systemd-cryptsetup's key-file socket, and a wrong or
 missing answer from tpm2-kira sends systemd-cryptsetup to its own prompt
-for the remaining tries (UNLOCK-DISK.md §4) - so "holding the boot" would
+for the remaining tries (DISK-KEY.md, "When the answer is wrong") - so "holding the boot" would
 mean never answering, a local software gate of the kind §7.4 already
 calls worthless on a machine whose image is not authenticated. What
-enforces, if anything, is the missing factor of PLAN-FACTORRELEASE.md.
+enforces, if anything, is the missing factor of PLAN-PHONESALT.md.
 The `enforced` rows and §7.2's gate unit below stay as the record of the
 design that was not built; `control.conf` refuses the value.
 
@@ -506,7 +506,7 @@ design that was not built; `control.conf` refuses the value.
 
 `/etc/tpm2-kira/control.conf`, with its digest bound into the sealed object so
 it cannot be silently downgraded on a machine that does not measure its
-initramfs ([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.3):
+initramfs ([PLAN-PHONE.md](PLAN-PHONE.md) §10.3):
 
 | Mode | Behaviour at the prompt |
 |---|---|
@@ -521,7 +521,7 @@ initrd has no key to notice. The anchor therefore comes from the image: the
 boot plan puts the signing public key there, and the gate
 refuses, before it advertises, a blob that key did not sign. Replacing the
 blob then means changing the image too, which Secure Boot or the measured
-PCRs report (PLAN-REMOTEATTESTATION.md §10.2). An older blob, signed all the
+PCRs report (PLAN-PHONE.md §10.2). An older blob, signed all the
 same, is refused by its count: each blob carries the value of a TPM NV counter
 for the slot, which cannot be turned back. The console verdict stays advisory and the
 phone's screen authoritative.
@@ -540,7 +540,7 @@ mode that is not built, follows for the record:
 
 ```ini
 [Unit]
-Description=tpm2-kira remote attestation gate
+Description=tpm2-kira phone attestation gate
 DefaultDependencies=no
 Requires=dev-tpm0.device
 After=dev-tpm0.device
@@ -607,11 +607,11 @@ protects the image containing it:
 `phone enrol --mode=enforced` therefore inspects the platform and says which
 of these two situations the machine is in, in those words. It refuses without
 `--allow-sealed-anchor` when there is no image anchor
-([PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md) §10.2).
+([PLAN-PHONE.md](PLAN-PHONE.md) §10.2).
 
 The way to make the gate real on either kind of machine is to stop asking
 software to hold and withhold a secret instead:
-[PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md) has the phone release one
+[PLAN-PHONESALT.md](PLAN-PHONESALT.md) has the phone release one
 factor of the LUKS key after a successful attestation. It runs in `lazy` mode,
 because the missing factor does the enforcing.
 

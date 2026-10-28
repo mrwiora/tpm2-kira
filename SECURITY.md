@@ -48,7 +48,7 @@ Results are uploaded as a GitHub Actions artifact (`strix-security-report`, reta
 
 The scan report artifact (`strix-security-report`, 23.7 KB) is downloadable from the Actions run linked above.
 
-## Remote attestation with a phone: what it does not protect against
+## Phone attestation: what it does not protect against
 
 The phone's screen is the only authoritative verdict; the machine's console
 line is advisory.
@@ -103,14 +103,14 @@ Known residual risks:
   Bluetooth to the real one (kept elsewhere, booted cleanly) gets a green
   check, and the passphrase is typed into the fake. The TOTP check has the
   same limit, and Bluetooth LE offers no secure distance bounding. Mitigations:
-  tamper-evident marking of the device, and salt release (PLAN-FACTORRELEASE.md),
+  tamper-evident marking of the device, and salt release (PLAN-PHONESALT.md),
   after which the passphrase alone no longer opens the disk.
 - **A machine compromised before enrolment.** Enrolment pins whatever TPM
   answers. `phone ekcert` and the phone show whether the TPM's endorsement
   key is certified by its vendor (currently Intel PTT); "not verified" means
   this protection is absent.
 - **The initrd must be covered by the quoted PCRs.** `phone enrol` warns
-  when it is not; see README.md, "Choose PCRs that cover the initrd".
+  when it is not; see docs/PHONE.md, "Choose PCRs that cover the initrd".
 
 ## The Bluetooth gate's process
 
@@ -202,7 +202,7 @@ Two things fall outside that lock:
 - **Blobs whose policy holds after the separator.** Blobs from versions that
   ran after the separator, and blobs sealed from registers because the event
   log could not be replayed, get their codes live after the boot has been
-  released, until `cap`. They work, the display marks their code, and a reseal
+  released, until `cap`. They work, the display marks their code, and an approval
   moves them before the separator where the log allows it.
 
 ## Security Design

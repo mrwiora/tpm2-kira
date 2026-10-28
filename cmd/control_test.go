@@ -300,7 +300,7 @@ func TestControlShow(t *testing.T) {
 	c.show()
 	got := out.String()
 	for _, want := range []string{"Step 1 of 2: the boot chain", "All prerequisites are met", "[x]\033[0m mkinitcpio adoption",
-		"Step 2 of 2: what this machine combines", "Signing key and TOTP codes", "    Signing key", "    Password + salt (hashpwd2)",
+		"Step 2 of 2: what this machine combines", "Signing key and TOTP codes", "    Signing key", "    Password + salt (Argon2id)",
 		"Recommended next:\033[0m Signing key and TOTP codes > Signing key"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the screen lacks %q:\n%s", want, got)

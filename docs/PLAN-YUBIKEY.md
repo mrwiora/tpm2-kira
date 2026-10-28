@@ -72,8 +72,8 @@ Two consequences that shape the whole design:
 - **`slot approve` always needs the key, even when the PCRs still match.** Unsealing
   may succeed through the PCR branch, but writing the new blob back is gated by
   the NV index's PolicySigned write policy (SECURITY-BACKGROUND §9). There is no
-  "PCRs matched, so no key needed" shortcut for reseal.
-- **A reseal costs ~3 signatures per slot** (recovery unseal + blob signature +
+  "PCRs matched, so no key needed" shortcut for slot approve.
+- **An approval costs ~3 signatures per slot** (recovery unseal + blob signature +
   one NV write chunk). `slot approve` with no `--nvram` walks every populated slot, so
   a 4-slot machine is ~12 signature operations in one run. PIN policy and touch
   policy must be chosen accordingly (§6).
@@ -242,7 +242,7 @@ handled rather than warned about:
 |---|---|---|
 | PIN policy `ALWAYS` (mandatory on `9c`) | a PIN verification before **every** signature | §6.2 — the PIN is held for the process and re-verified per signature |
 | Touch policy `ALWAYS` | one physical touch per signature | "Touch the YubiKey" is printed before each signature; a touch count up front is still to do |
-| Touch policy `CACHED` | one touch per 15-second window | usually one touch for a whole reseal |
+| Touch policy `CACHED` | one touch per 15-second window | usually one touch for a whole approve |
 | RSA-2048 | ~100 ms per signature instead of ~10 ms | irrelevant at ~3 signatures per slot |
 | RSA-4096 | `TPM2_LoadExternal` may reject it | reported as not usable by `setup` and `yubikey list`, and caught again by the NV write pre-flight before anything is destroyed |
 
@@ -271,7 +271,7 @@ recognise the second format.
 tpm2-kira does the same with `seal.key`, and adds the one thing sbctl leaves
 out: **the serial number**. sbctl always uses whichever card it finds first in
 the signature slot, which is fine for a tool that runs interactively but not
-for a reseal hook. With the serial in the file, "wrong YubiKey plugged in" is
+for an approval hook. With the serial in the file, "wrong YubiKey plugged in" is
 diagnosed before any PIN is sent.
 
 ### 5.1 Stub format
@@ -345,8 +345,8 @@ Implemented in `readPIN` (`cmd/yubikey.go`):
 2. The `TPM2_KIRA_PIN` line in `/etc/tpm2-kira/control.conf` (§9.1), the
    one configuration file, which `tpm2-kira control` writes (the signing key
    step: the PIN is checked on the token first). The same line serves the
-   unattended reseal the hooks run, so the PIN lives in one place and a
-   manual seal or reseal does not ask for it again. When the file can be
+   unattended approve the hooks run, so the PIN lives in one place and a
+   manual slot add or slot approve does not ask for it again. When the file can be
    read by group or others, or is not owned by root, the PIN is refused
    (reported as an unavailable token, so the hook prints SKIPPED) and the
    error says `chmod 600`.
@@ -373,7 +373,7 @@ Rules:
   next NVRAM slot, do not retry.
 - **Read the retry counter before verifying** and refuse to try at all when it
   is 1, printing the PUK recovery instructions instead. Losing the ability to
-  reseal is recoverable; bricking the slot is not.
+  slot approve is recoverable; bricking the slot is not.
 - **Never print the PIN**, and scrub it from `--debug` output, which is
   otherwise very talkative.
 - Print "PIN retries remaining: N" whenever N < 3. People do not check
@@ -419,7 +419,7 @@ and stays a `FAILED:`. In code, every such reason is a `TokenUnavailableError`
 
 `slot approve` then (**implemented**, `cmd/reseal.go`):
 
-1. **Does not attempt a reseal at all.** It cannot: the NV write policy needs a
+1. **Does not attempt an approval at all.** It cannot: the NV write policy needs a
    signature (§2). `PrepareSigningKey` runs right after the blob signature is
    verified and before anything is unsealed or written: it finds the token,
    compares the slot key with the key file and verifies the PIN.
@@ -433,7 +433,7 @@ and stays a `FAILED:`. In code, every such reason is a `TokenUnavailableError`
    the `FAILED:` marker:
 
 ```
-tpm2-kira: SKIPPED: resealing did not happen — the signing key was not available.
+tpm2-kira: SKIPPED: the approval did not happen — the signing key was not available.
   Key file:      /etc/tpm2-kira/keys/seal.key (YubiKey 12345678, slot 9a)
   Reason:        no YubiKey with serial 12345678 is present
   Slots:         #0, #1 (nothing was written; the sealed secrets are intact)
@@ -460,11 +460,11 @@ there is nothing to preserve, and a half-sealed slot is worse than no slot.
 
 - **Done:** `initramfs/mkinitcpio/post/sd-tpm2-kira` has a `SKIPPED:` branch
   that prints the block framed, to stderr, and still exits 0.
-- Debian's `post-update.d` hook never reseals (every PCR source there is read
-  from the running system, so only a reseal after the next boot is correct);
-  it needs no change. The manual reseal after boot asks for the PIN.
+- Debian's `post-update.d` hook never approves (every PCR source there is read
+  from the running system, so only an approval after the next boot is correct);
+  it needs no change. The manual approve after boot asks for the PIN.
 - Not done: a stamp file for the skip, and **`tpm2-kira slot info` reporting
-  staleness** — the natural place to notice "I forgot to reseal" before
+  staleness** — the natural place to notice "I forgot to approve" before
   rebooting.
 
 ---
@@ -537,7 +537,7 @@ non-interactively.
 
 **PIN policy.** A key with PIN policy `never` is flagged in the report and the
 menu, and choosing it prints a warning: anyone holding the token could then
-authorise a reseal, which is the way around a PCR mismatch. On firmware before
+authorise an approval, which is the way around a PCR mismatch. On firmware before
 5.3 the policy cannot be read, and setup says so.
 
 **After choosing the token**, setup explains the PIN, which it did not use
@@ -545,11 +545,11 @@ itself:
 
 ```
 Setup did not use the PIN; sealing does. Stored in one place, every step finds
-it - seal, reseal, and the reseal the initramfs hooks run after every kernel
+it - slot add, slot approve, and the approval the initramfs hooks run after every kernel
 or initramfs update: 'tpm2-kira control' stores it (the signing key step),
 as TPM2_KIRA_PIN='<your PIN>' in /etc/tpm2-kira/control.conf, readable by root alone.
-Without it, seal and reseal ask for the PIN on the terminal (or take it from
-TPM2_KIRA_PIN: read -rs TPM2_KIRA_PIN && export TPM2_KIRA_PIN), and the automatic reseal
+Without it, slot add and slot approve ask for the PIN on the terminal (or take it from
+TPM2_KIRA_PIN: read -rs TPM2_KIRA_PIN && export TPM2_KIRA_PIN), and the automatic approval
 reports SKIPPED: the next boot then shows a PCR mismatch until you run
 'tpm2-kira slot approve' with the YubiKey plugged in.
 ```
@@ -583,14 +583,14 @@ Much smaller than it would have been with a split binary:
 | `initramfs/*/hooks/*` | unchanged |
 | `initramfs/mkinitcpio/post/sd-tpm2-kira` | `SKIPPED:` branch (done) |
 | `initramfs/mkinitcpio/mkinitcpio.conf.example` | says the PIN is in `control.conf`, not here (done) |
-| `initramfs/initramfs-tools/post-update.d/tpm2-kira` | unchanged: it does not reseal |
+| `initramfs/initramfs-tools/post-update.d/tpm2-kira` | unchanged: it does not approve |
 
-### 9.1 Where the PIN lives for unattended resealing
+### 9.1 Where the PIN lives for unattended approving
 
 **`/etc/tpm2-kira/control.conf`, as a plain `TPM2_KIRA_PIN='...'` line**,
 next to the unlock mode and the radio settings: the one configuration file,
 written by `tpm2-kira control` and read by everything else. tpm2-kira reads
-the file itself (§6), in a manual seal or reseal and in the reseal the hooks
+the file itself (§6), in a manual slot add or slot approve and in the approval the hooks
 run after an image rebuild, which runs as root on the host; the mkinitcpio
 post hook and Debian's hook need no variable from their own environment.
 
@@ -605,7 +605,7 @@ the blob, the approvals, the authorisations of NV writes; everything else
 file that does not load is shown red by `control` and warned about by the
 image build, which then builds with the defaults rather than stopping.
 
-**Warning when the automatic reseal will lack the PIN (implemented).** Right
+**Warning when the automatic approval will lack the PIN (implemented).** Right
 after a manual `slot add` or `slot approve` has had the PIN accepted, tpm2-kira warns,
 once per run, **only** when `control.conf` holds no usable PIN. `setup` says
 "stores the PIN" instead of the instructions when the line exists, and tells
@@ -630,7 +630,7 @@ the initramfs has no use for it.
 
 **What *would* belong in `initramfs.conf`** is a display concern: a variable
 such as `TPM2_KIRA_EXPLAIN_MISMATCH=yes|no` letting the boot-time display
-distinguish "no code because you skipped a reseal" from "no code, and you did
+distinguish "no code because you skipped an approval" from "no code, and you did
 not expect that". It carries no secret.
 
 The PC/SC and PIV code adds on the order of 50–100 KB to the static binary,
@@ -681,7 +681,7 @@ The integration suite runs against `swtpm` with no card reader, so:
 ## 11. Documentation
 
 - `README.md`: a YubiKey section (the `ykman` enrolment command, `setup --yubikey`,
-  reseal, what happens without the token), what `setup` prints when it finds
+  approve, what happens without the token), what `setup` prints when it finds
   a token, and the `seal.key` stub format.
 - `docs/SECURITY-BACKGROUND.md`:
   - §3.1 — unchanged.
@@ -740,9 +740,9 @@ Two consequences, one of them a genuine operational trap:
   key at a time. Rotating closes both PolicyOR doors at once: enrolling new
   Secure Boot keys moves PCR 7, and replacing the slot key invalidates the
   PolicySigned branch, which is bound to the old key's Name. If both happen
-  before a reseal, nothing can unseal the blob and the secret is gone.
+  before an approval, nothing can unseal the blob and the secret is gone.
 
-  The fix is ordering, and it works because a reseal needs the *old* key only
+  The fix is ordering, and it works because a slot approve needs the *old* key only
   to unseal and the *new* key only to write:
 
   ```
@@ -771,14 +771,14 @@ Two consequences, one of them a genuine operational trap:
 
 **New exposure.**
 
-- *Token plugged in during reseal.* With PIN policy `ONCE`, any root process can
+- *Token plugged in during approve.* With PIN policy `ONCE`, any root process can
   ask the card to sign for the lifetime of the card session. Closing the session
   explicitly when the command finishes is cheap and should be done.
   `CACHED` or `ALWAYS` shrink the window further at a usability cost.
 - *Token plugged in at boot.* tpm2-kira never touches the key in `reveal`, but
   an attacker with physical access to a machine that has the token permanently
   inserted is in a different position than one facing a bare machine. Docs
-  should say: remove the token when you are not resealing. That is the entire
+  should say: remove the token when you are not approving. That is the entire
   point of it being removable.
 - *PIN capture.* A root-level attacker on a machine where the PIN sits in
   `/etc/tpm2-kira/control.conf` has the PIN. They
@@ -796,7 +796,7 @@ Two consequences, one of them a genuine operational trap:
 
 Ranked by how much I think they matter.
 
-1. ~~**Reseal must be atomic, or must not start.**~~ **Done** — `cmd/nvram.go`.
+1. ~~**Approve must be atomic, or must not start.**~~ **Done** — `cmd/nvram.go`.
    `WriteToNVRAM` undefined the NV index *before* loading the key, computing the
    write policy and producing the first signature, so any of those failing
    destroyed the sealed secret. All three now run first, plus a test signature
@@ -813,7 +813,7 @@ Ranked by how much I think they matter.
    stashed blob back. Deferred deliberately — it needs the key resolution that
    step 1 of §15 is about to rewrite.
 2. **`tpm2-kira slot info` should say whether the blob is stale.** The direct
-   consequence of "reseal may legitimately be skipped" is that users need a way
+   consequence of "approve may legitimately be skipped" is that users need a way
    to ask "am I about to reboot into a mismatch?" that is not "reboot and see".
 3. **Key fingerprint and serial pinning in the key file** (the stub's `serial`
    and `publicKey`, §5.1). Checked whenever the token is opened, it turns "wrong YubiKey" from a
@@ -845,7 +845,7 @@ Ranked by how much I think they matter.
 | 4 | Token must be pre-populated | **decided: yes — tpm2-kira never writes to the token** |
 | 4a | Touch policy | detected, not dictated; `NEVER` recommended for a dedicated slot |
 | 5 | Backup for a lost token | proposed: PEM backup + switch procedure; three-branch PolicyOR would need its own blob bump |
-| 6 | Where the PIN for unattended resealing lives | **a plain `TPM2_KIRA_PIN=` line in `/etc/tpm2-kira/control.conf`, written by `control`, `chmod 600`, never in the image, read from its own line for the signer alone** (§9.1) |
+| 6 | Where the PIN for unattended approving lives | **a plain `TPM2_KIRA_PIN=` line in `/etc/tpm2-kira/control.conf`, written by `control`, `chmod 600`, never in the image, read from its own line for the signer alone** (§9.1) |
 | 8 | File-backed key remains the default | **decided: yes — the token is opt-in** |
 | 9 | `TPM2_KIRA_EXPLAIN_MISMATCH` in `initramfs.conf` | proposed; carries no secret, unlike the PIN |
 | 7 | Token detection in `setup` | **decided: always probe, read-only and PIN-free; with a usable key, ask on the terminal (token slot or local files), even for one candidate; report "none found" and create local files otherwise** (§8.1) |
@@ -895,7 +895,7 @@ Branch `feat/yubikey-v2`, 2026-09-30.
 | `signForTPM`, `SignBlobPayload`, `verifyKeyPairMatch` on the public key | `cmd/signingkey.go`, `cmd/blob.go` | token-signed TPMT signatures and blob signatures verify; r/s padding over 20 runs |
 | Interactive `setup` (menu of usable slots plus local files; default `9a`, never a shared slot), `--yubikey[=SERIAL] [--slot]`, `--local`, no-terminal fallback; `yubikey list` | `cmd/setup.go`, `main.go` | menu, default, retries, EOF, single non-`9a` candidate, no terminal; binary run against the live pcscd |
 | PIN-policy warning (report, menu, after choosing); PIN instructions and the hint at `/etc/tpm2-kira/pin` | `cmd/setup.go`, `cmd/yubikey.go` | `TestPINGuidance` |
-| PIN taken from `/etc/tpm2-kira/pin`, root's alone (after the environment, before the prompt); warning after a manual seal/reseal only when that file does not provide the PIN; `control` stores it after checking it on the token | `cmd/control_config.go`, `cmd/yubikey.go`, `cmd/control.go` | `TestPINFile`, `TestPINFromTheFile`, `TestControlConfigOneFile`, `TestControlYubiKeyPINStep` |
+| PIN taken from `/etc/tpm2-kira/pin`, root's alone (after the environment, before the prompt); warning after a manual seal/approve only when that file does not provide the PIN; `control` stores it after checking it on the token | `cmd/control_config.go`, `cmd/yubikey.go`, `cmd/control.go` | `TestPINFile`, `TestPINFromTheFile`, `TestControlConfigOneFile`, `TestControlYubiKeyPINStep` |
 | §7 degradation: `PrepareSigningKey` pre-flight, `ResealSkippedError`, `ErrNVIndexReplaced` guard, one `SKIPPED:` block for all slots, `--require-key` | `cmd/reseal.go`, `cmd/nvram.go`, `main.go` | classification (skip before the write, never after it), block content, pre-flight with no PIN / unplugged / present |
 | mkinitcpio post hook `SKIPPED:` branch; example config line | `initramfs/mkinitcpio/` | hook run with a stand-in `tpm2-kira` |
 | `slot add` refuses a mismatched key pair; `slot add` and `slot info` name the token | `cmd/seal.go`, `cmd/info.go` | — |
@@ -919,5 +919,5 @@ Branch `feat/yubikey-v2`, 2026-09-30.
   and without the token) is the next thing to do.
 - The swtpm integration suite runs with file-backed keys (all tests pass on
   the development machine except the two that need `tpm2_pcrextend`), but no
-  test drives seal or reseal with a token-backed key, so the `SKIPPED:` path
-  inside a real reseal has not run end to end.
+  test drives slot add or slot approve with a token-backed key, so the `SKIPPED:` path
+  inside a real approve has not run end to end.

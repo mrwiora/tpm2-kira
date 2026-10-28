@@ -759,7 +759,7 @@ func (c *controller) factsText() string {
 		case len(parts) == 0:
 			fmt.Fprintln(&w, "  Slots       none sealed")
 		case len(weak) > 0:
-			fmt.Fprintf(&w, "  Slots       %s\n", bad(fmt.Sprintf("%s - slot %s leaves the kernel, the initrd or the command line unmeasured (risk: a replaced initrd or an edited command line still shows a valid code - reseal with 11u, or 8e,9e)",
+			fmt.Fprintf(&w, "  Slots       %s\n", bad(fmt.Sprintf("%s - slot %s leaves the kernel, the initrd or the command line unmeasured (risk: a replaced initrd or an edited command line still shows a valid code - approve with 11u, or 8e,9e)",
 				strings.Join(parts, ", "), joinInts(weak))))
 		default:
 			fmt.Fprintf(&w, "  Slots       %s\n", good(strings.Join(parts, ", ")))
@@ -1060,7 +1060,7 @@ func (c *controller) storePIN() error {
 	desc, _ := YubiKeyDescription(key)
 	pin := ""
 	err = c.form(huh.NewInput().Title("PIN of " + desc).
-		Description("Checked on the token, then stored in " + pinFilePath() + " for the reseal the hooks run; readable by root alone, never in the initramfs.").
+		Description("Checked on the token, then stored in " + pinFilePath() + " for the approval the hooks run; readable by root alone, never in the initramfs.").
 		EchoMode(huh.EchoModePassword).Value(&pin).
 		Validate(func(s string) error {
 			if s == "" {

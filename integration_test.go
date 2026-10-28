@@ -917,7 +917,7 @@ func testResealSuccess(t *testing.T, tpmPath, nvramIndex string) {
 	if err != nil {
 		t.Fatalf("✗ Reseal failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "Successfully resealed") {
+	if !strings.Contains(stdout, "Successfully approved the boot state") {
 		t.Fatalf("✗ Reseal output missing success message: %s", stdout)
 	}
 	t.Log("✓ Reseal successful")
@@ -1140,7 +1140,7 @@ func TestCompleteWorkflow(t *testing.T) {
 		"--nvram", nvramIndexPCR,
 	)
 	combinedOutput := stdout + stderr
-	if strings.Contains(stdout, "Successfully resealed") {
+	if strings.Contains(stdout, "Successfully approved the boot state") {
 		t.Fatalf("✗ Reseal succeeded without --privkey, using a key the blob named: %s", combinedOutput)
 	} else {
 		t.Logf("✓ Reseal without --privkey refused: %s", strings.TrimSpace(combinedOutput))
@@ -1154,7 +1154,7 @@ func TestCompleteWorkflow(t *testing.T) {
 		"--nvram", nvramIndexPCR,
 		"--privkey", testPrivKeyPath,
 	)
-	if !strings.Contains(stdout, "Successfully resealed") {
+	if !strings.Contains(stdout, "Successfully approved the boot state") {
 		t.Fatalf("✗ Reseal after a PCR change failed:\nStdout: %s\nStderr: %s", stdout, stderr)
 	}
 	if !strings.Contains(stdout, "Generation: 2") {
@@ -1376,7 +1376,7 @@ func TestResealNeedsItsKeyGiven(t *testing.T) {
 		"slot", "approve",
 		"--nvram", nvramIndex,
 	)
-	if strings.Contains(stdout, "Successfully resealed") {
+	if strings.Contains(stdout, "Successfully approved the boot state") {
 		t.Fatalf("Reseal succeeded without the slot's key:\n%s", stdout)
 	}
 	if !strings.Contains(stdout+stderr, "--privkey <path>") {
@@ -1512,7 +1512,7 @@ func TestCapLocksCodesUntilReboot(t *testing.T) {
 
 	// reseal in the running OS works while the index is read-locked.
 	stdout, stderr, _ = runTPMKira(t, tpmPath, "slot", "approve", "--nvram", nvramIndex, "--privkey", testPrivKeyPath)
-	if !strings.Contains(stdout, "Successfully resealed") {
+	if !strings.Contains(stdout, "Successfully approved the boot state") {
 		t.Fatalf("reseal while capped failed:\n%s\n%s", stdout, stderr)
 	}
 	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code != "" {
@@ -1553,7 +1553,7 @@ func TestResealRevokesOldBlob(t *testing.T) {
 	}
 
 	stdout, stderr, _ := runTPMKira(t, tpmPath, "slot", "approve", "--nvram", nvramIndex, "--privkey", testPrivKeyPath)
-	if !strings.Contains(stdout, "Successfully resealed") {
+	if !strings.Contains(stdout, "Successfully approved the boot state") {
 		t.Fatalf("reseal failed:\n%s\n%s", stdout, stderr)
 	}
 	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code == "" {

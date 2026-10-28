@@ -66,7 +66,7 @@ key, the window closes the CA, a login is a session of the code screen):
 |---|---|
 | `ASSH_CA` | `efi:KIRAasshCA` (default): the SSH CA's EFI variable (its public key in `/etc/tpm2-kira/ssh_ca.pub`), created in the TPM by control (§4) |
 | `ASSH_CA_TYPE` | `p256` (default) or `rsa2048`: what control asked when it created the CA |
-| `ASSH_CA_SLOT_<N>` | a slot's PCRs, `0,2,7,11,15`; control writes two, worked out for this machine (§4). An edit takes effect at the next reseal or control, which make the CA's slots these and approve them |
+| `ASSH_CA_SLOT_<N>` | a slot's PCRs, `0,2,7,11,15`; control writes two, worked out for this machine (§4). An edit takes effect at the next approval or control, which make the CA's slots these and approve them |
 | `ASSH_CA_WINDOW` | `15` (default): the PCR every slot reads and run extends |
 | `ASSH_CA_REF` | `tpm2-kira ssh ca` (default): what the signing key's approvals are bound to |
 | `ASSH_LISTEN` | `:22` (default): the address the server listens on |
@@ -76,7 +76,7 @@ key, the window closes the CA, a login is a session of the code screen):
 The window, the type, the bank and the ref are the CA's for good: a
 different value in assh.conf is an error that says to create the CA again
 (control offers it). So is a CA made for another signing key - after
-`setup` made a new one: control offers to create the CA again, as reseal
+`setup` made a new one: control offers to create the CA again, as slot approve
 could not approve it.
 
 **Off by default, on Arch and Debian alike.** Both keys default to `off`;
@@ -111,7 +111,7 @@ image with neither.
 only to propose. In the image interfaces keep their kernel names (`eth0`
 on Arch), not the predictable names of the running system - hence the
 MAC. The network has its own setting apart from SSH because the vault
-uses it too ([REMOTE-UNLOCK.md](REMOTE-UNLOCK.md)): a machine may have a
+uses it too ([VAULT.md](VAULT.md)): a machine may have a
 network in the image and no SSH server.
 
 ## 2. The image build
@@ -173,6 +173,14 @@ server stays out and says why (the network keeps its part): the image
 still boots, with the code screen at the console.
 
 ## 3. Privilege separation
+
+aSSH is a library, not a program tpm2-kira calls: `run` imports
+`github.com/tpm2-trust/assh/server` and starts the server itself
+(`server.Start`). What the library does then is split the server in two
+processes of the same binary, and the socket pair between them is a
+security boundary, not an interface: the half that parses what arrives
+from the network holds nothing worth taking, the half that holds the TPM
+never parses a byte from the network.
 
 ```
 tpm2-kira run                              (root: TPM, disk key, code screen)
@@ -252,7 +260,7 @@ and no secret either: the keys are in the TPM.
 
   Which of 11 or 8 and 9 is decided from the event log when control
   creates the CA, as `slot add` decides. A slot changed, added or taken away
-  in assh.conf is the CA's at the next reseal or control: a slot is a PCR
+  in assh.conf is the CA's at the next approval or control: a slot is a PCR
   selection the signing key approves states of, not a key, so the CA stays
   and so does its `known_hosts` line; a changed slot's approvals go, and
   the new selection is approved.
@@ -281,7 +289,7 @@ and no secret either: the keys are in the TPM.
   whenever a slot has no approval of the next boot: the initramfs hooks
   run it after every image rebuild, so a kernel update needs nothing by
   hand. control approves them when it creates the CA and at quit; the CA
-  and the clients' trust in it stay the same. A reseal that is skipped
+  and the clients' trust in it stay the same. An approval that is skipped
   (the YubiKey not plugged in) leaves slot 1, which reads no image.
 - **At every boot** `run` has the TPM make a new host key (the CA's type)
   under the TPM's **NULL hierarchy**, whose seed changes at every reboot,
@@ -470,7 +478,7 @@ tpm2-kira run --ssh [--ssh-hold S] [--ssh-conf PATH]
 
 Not run on a VM yet: a static address on Debian, the temporary key made
 in the TPM, and the SSH CA at all (the VM runs above had none):
-its EFI variable written by reseal and read at the code screen, PCR 11
+its EFI variable written by slot approve and read at the code screen, PCR 11
 and PCR 8/9 approved from the prediction.
 aSSH's own tests log in with OpenSSH's client (10.6) through a
 `@cert-authority` line against a software TPM.
@@ -495,7 +503,7 @@ aSSH's own tests log in with OpenSSH's client (10.6) through a
   `tpm2-measure-pcr=`) meets no slot: the key is temporary.
 - **The approvals are the signing key's.** Whoever holds it can approve
   another state; keep it on the YubiKey.
-- **An approval is never revoked.** reseal and control keep only the
+- **An approval is never revoked.** approve and control keep only the
   approvals of the next boot in the variable, but root can write back a
   copy from before an update, which lets the CA sign in the old state,
   should the machine boot it again (an older signed kernel). aSSH's authority in the

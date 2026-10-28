@@ -35,7 +35,7 @@ type FactorEnrolOptions struct {
 
 // FactorEnrol gives the enrolled phone a factor to keep and derives the
 // disk's key from it and the password, once, for 'cryptsetup luksAddKey'
-// (PLAN-FACTORRELEASE.md §6). The release key is made for the slot when it
+// (PLAN-PHONESALT.md §6). The release key is made for the slot when it
 // has none; F is drawn and wrapped for this TPM's EK and that key; the
 // phone is asked to keep the credential in an ordinary check (the verdict
 // screen says so); the phone returns it after the accepted receipt, the

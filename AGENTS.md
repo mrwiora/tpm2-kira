@@ -43,7 +43,7 @@ It may not carry what came before.
   in the TPM goes into aSSH, with its tests there. No host key and no
   secret of one is ever stored, in the image or on the disk.
 - **SHA-1 only when asked.** The SHA-1 PCR bank is used only with `--sha1`,
-  with a warning at seal and reseal (control's overview carries the risk
+  with a warning at slot add and slot approve (control's overview carries the risk
   instead, so its steps say nothing twice); nothing falls back to it on
   its own. Workarounds for old
   TPMs must not change the SHA-256 path.
@@ -78,7 +78,7 @@ It may not carry what came before.
 - **No enforced mode; the passphrase can always be entered by hand.**
   tpm2-kira adds ways to unlock (its prompt, later a phone-released
   factor) and informs; it never withholds systemd's own prompt, which is
-  the fallback after a wrong or missing answer (docs/UNLOCK-DISK.md §4).
+  the fallback after a wrong or missing answer (docs/DISK-KEY.md, "When the answer is wrong").
   Do not build a mode that holds the boot on the phone's verdict.
 - **Two configuration files, tpm2-kira's and aSSH's, and only `control`
   writes them.** `/etc/tpm2-kira/control.conf` is tpm2-kira's; beside it
@@ -102,7 +102,7 @@ It may not carry what came before.
   that may log in at boot (`/etc/tpm2-kira/authorized_keys`, part of the
   SSH server's settings in the boot plan). assh.conf goes into the image
   as a copy (the SSH part's digest names it); the slots in it are made
-  the CA's by reseal and control before they approve.
+  the CA's by slot approve and control before they approve.
   How the
   disk's key is made is not configured anywhere: the boot reads it from
   each volume's own LUKS2 header - the tpm2-kira token of a keyslot names

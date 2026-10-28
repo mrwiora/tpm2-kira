@@ -25,7 +25,7 @@ import (
 // implemented; there is no negotiation, so there is nothing to downgrade.
 //
 // After the handshake the handshake hash h is the channel binding value `cb`
-// of PLAN-REMOTEATTESTATION.md §6.2: both ends of one session hold the same h,
+// of PLAN-PHONE.md §6.2: both ends of one session hold the same h,
 // and nobody outside the session can produce it.
 
 // NoisePrologue is mixed into every handshake. A peer speaking another

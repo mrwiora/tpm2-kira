@@ -424,7 +424,7 @@ func consoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int, remai
 	if port != 22 {
 		p = fmt.Sprintf(" -p %d", port)
 	}
-	fmt.Fprintf(&b, "%s Remote attestation over SSH:", kiraTag(tagYellow))
+	fmt.Fprintf(&b, "%s Phone attestation over SSH:", kiraTag(tagYellow))
 	if len(addrs) == 0 {
 		fmt.Fprintf(&b, " waiting for a network address (port %d) ...\n", port)
 	} else {

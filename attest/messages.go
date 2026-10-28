@@ -235,7 +235,7 @@ func DecodeRequest(d *Decoder) (*Request, error) {
 	return m, m.Selection.Validate()
 }
 
-// Evidence is the attester's answer to a Request (PLAN-REMOTEATTESTATION.md §5).
+// Evidence is the attester's answer to a Request (PLAN-PHONE.md §5).
 type Evidence struct {
 	Schema         uint16
 	DeviceID       []byte
@@ -254,7 +254,7 @@ type Evidence struct {
 	BootProof     []byte
 	BootSignature []byte // marshalled TPMT_SIGNATURE by the boot key (bootkey.go)
 	// FactorKeep asks the verifier to keep this wrapped factor for the
-	// machine (PLAN-FACTORRELEASE.md §6): sent by 'factor enrol' on the
+	// machine (PLAN-PHONESALT.md §6): sent by 'factor enrol' on the
 	// booted system, never at boot. The verifier stores it with the
 	// record once the person has accepted the verdict, and returns it in
 	// a Release after every trusted receipt from then on.
@@ -449,7 +449,7 @@ func DecodeReceipt(d *Decoder) (*Receipt, error) {
 	return m, d.Err()
 }
 
-// Release kinds (PLAN-FACTORRELEASE.md §4).
+// Release kinds (PLAN-PHONESALT.md §4).
 const (
 	ReleaseKindPassphrase uint8 = 1
 	ReleaseKindFactor     uint8 = 2

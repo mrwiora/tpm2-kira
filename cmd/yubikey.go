@@ -740,9 +740,9 @@ func warnIfNoUnattendedPIN(w io.Writer) {
 		return
 	}
 	fmt.Fprintf(w, "WARNING: there is no PIN in %s.\n", pinFilePath())
-	fmt.Fprintln(w, "         The automatic reseal after kernel and initramfs updates will therefore")
+	fmt.Fprintln(w, "         The automatic approval after kernel and initramfs updates will therefore")
 	fmt.Fprintln(w, "         have no PIN: it will be SKIPPED, and the next boot will show a PCR")
-	fmt.Fprintln(w, "         mismatch until you reseal by hand. 'tpm2-kira control' stores the PIN")
+	fmt.Fprintln(w, "         mismatch until you approve by hand. 'tpm2-kira control' stores the PIN")
 	fmt.Fprintln(w, "         (the signing key step), readable by root alone.")
 }
 

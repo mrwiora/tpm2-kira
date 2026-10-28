@@ -23,7 +23,7 @@ func TestInfoShowsTheAttestationPart(t *testing.T) {
 	}
 	out := captureStdout(t, func() { printAttestationTree("", si) })
 	for _, want := range []string{
-		"Remote attestation",
+		"Phone attestation",
 		`Machine name: "my laptop"`,
 		"Device ID: d1d1d1d1",
 		"Attestation key",
