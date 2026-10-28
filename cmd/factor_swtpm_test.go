@@ -15,6 +15,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
 )
 
 // The factor's round trip on swtpm: wrapped for this TPM's EK and the
@@ -215,7 +216,7 @@ func TestFactorStatusAndUnenrol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wipe(f)
+	wipe.Bytes(f)
 	tpmDev.Close()
 
 	out = grabStdout(t, func() {

@@ -39,6 +39,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
 	"github.com/mrwiora/tpm2-kira/vaultproto"
 )
 
@@ -56,7 +57,7 @@ func VaultKey(local, remote []byte, label string, pepper []byte) []byte {
 		label = "luks"
 	}
 	ikm := append(append(append([]byte(nil), local...), remote...), pepper...)
-	defer wipe(ikm)
+	defer wipe.Bytes(ikm)
 	info := append([]byte(vaultInfo), byte(len(label)>>8), byte(len(label)))
 	info = append(info, label...)
 	if pepper != nil {
@@ -66,7 +67,7 @@ func VaultKey(local, remote []byte, label string, pepper []byte) []byte {
 	if _, err := io.ReadFull(hkdf.New(sha256.New, ikm, nil, info), out); err != nil {
 		panic(err) // HKDF with a fixed length cannot fail
 	}
-	defer wipe(out)
+	defer wipe.Bytes(out)
 	return []byte(hex.EncodeToString(out))
 }
 
@@ -296,7 +297,7 @@ func openVaultKey(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, say f
 	if err != nil {
 		return nil, fmt.Errorf("the local part: %w", err)
 	}
-	defer wipe(local)
+	defer wipe.Bytes(local)
 	c, err := newVaultClient(v.URL, v.Pin)
 	if err != nil {
 		return nil, err
@@ -323,7 +324,7 @@ var errPepperMismatch = errors.New("the pepper does not fit")
 // the pepper the release carries when the keyslot was enrolled with one.
 func vaultKeyOf(tpmDev transport.TPM, vs vaultSlot, local []byte, rsp *vaultproto.ReleaseResponse) ([]byte, error) {
 	v := &vs.att.Vault
-	defer wipe(rsp.Pepper)
+	defer wipe.Bytes(rsp.Pepper)
 	pepper := len(v.PepperCheck) > 0
 	switch {
 	case !pepper && rsp.Pepper != nil:
@@ -335,13 +336,13 @@ func vaultKeyOf(tpmDev transport.TPM, vs vaultSlot, local []byte, rsp *vaultprot
 	if err != nil {
 		return nil, fmt.Errorf("the remote part: %w", err)
 	}
-	defer wipe(remote)
+	defer wipe.Bytes(remote)
 	if !pepper {
 		return VaultKey(local, remote, v.Label, nil), nil
 	}
 	key := VaultKey(local, remote, v.Label, rsp.Pepper)
 	if !hmac.Equal(vaultPepperCheck(key), v.PepperCheck) {
-		wipe(key)
+		wipe.Bytes(key)
 		return nil, errPepperMismatch
 	}
 	return key, nil
@@ -531,7 +532,7 @@ func VaultEnrol(o VaultEnrolOptions) error {
 	if err != nil {
 		return err
 	}
-	defer wipe(key)
+	defer wipe.Bytes(key)
 	if err := writeKeyOut(o.Out, key); err != nil {
 		return err
 	}
@@ -639,19 +640,19 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		if pepper, err = askPepper(); err != nil {
 			return nil, 0, err
 		}
-		defer wipe(pepper)
+		defer wipe.Bytes(pepper)
 	}
 
 	local, wLocal, err := wrapFactor(tpmDev, att, nil)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer wipe(local)
+	defer wipe.Bytes(local)
 	remote, wRemote, err := wrapFactor(tpmDev, att, nil)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer wipe(remote)
+	defer wipe.Bytes(remote)
 	// The blob must still fit its NV index with the vault method in it.
 	key := VaultKey(local, remote, label, pepper)
 	att.Vault = nvslot.VaultAttestation{URL: strings.TrimSuffix(o.URL, "/"), Pin: strings.ToLower(o.Pin), Label: label, Local: *wLocal}
@@ -695,7 +696,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	if err != nil {
 		return nil, 0, fmt.Errorf("proving the attestation key to the vault: %w", err)
 	}
-	defer wipe(secret)
+	defer wipe.Bytes(secret)
 	var res vaultproto.EnrolResult
 	if err := client.post(ctx, vaultproto.PathEnrolConfirm, vaultproto.EnrolConfirm{EnrolID: ch.EnrolID, Secret: secret}, &res); err != nil {
 		return nil, 0, err
@@ -728,16 +729,16 @@ func askPepper() ([]byte, error) {
 	}
 	again, err := terminalAsk("The same pepper again: ")
 	if err != nil {
-		wipe(p)
+		wipe.Bytes(p)
 		return nil, err
 	}
-	defer wipe(again)
+	defer wipe.Bytes(again)
 	if !bytes.Equal(p, again) {
-		wipe(p)
+		wipe.Bytes(p)
 		return nil, errors.New("the peppers differ; nothing was enrolled")
 	}
 	if len(p) > vaultproto.MaxPepper {
-		wipe(p)
+		wipe.Bytes(p)
 		return nil, fmt.Errorf("a pepper is at most %d bytes", vaultproto.MaxPepper)
 	}
 	return p, nil

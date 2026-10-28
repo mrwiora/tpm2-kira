@@ -30,7 +30,7 @@ import (
 // variable-length field.
 
 const (
-	// attestCounterStart is slot 0's record counter; slot N is at +N
+	// AttestCounterStart is slot 0's record counter; slot N is at +N
 	// (attest_counter.go).
 	AttestCounterStart = 0x01803820
 
@@ -114,7 +114,7 @@ func AttestIndexForSlot(sealIndex uint32) (uint32, error) {
 	return idx, nil
 }
 
-// attestSlot is the slot number of a slot's blob index.
+// AttestSlot is the slot number of a slot's blob index.
 func AttestSlot(idx uint32) uint32 { return idx - NVRAMSlotStart }
 
 type blobWriter struct{ b bytes.Buffer }
@@ -197,7 +197,7 @@ func (r *blobReader) lp32(max int) []byte {
 	return r.take(int(n))
 }
 
-// marshal encodes the attestation part of a slot's blob.
+// Marshal encodes the attestation part of a slot's blob.
 func (b *Attestation) Marshal() ([]byte, error) {
 	if len(b.DeviceID) != attest.DeviceIDSize {
 		return nil, fmt.Errorf("attestation data is incomplete")
@@ -293,7 +293,7 @@ func (v *VaultAttestation) unmarshal(data []byte) error {
 	return nil
 }
 
-// unmarshalAttestation parses the attestation part of a slot's blob. It
+// UnmarshalAttestation parses the attestation part of a slot's blob. It
 // carries no signature of its own: the blob's covers it.
 func UnmarshalAttestation(data []byte) (*Attestation, error) {
 	r := &blobReader{b: data}

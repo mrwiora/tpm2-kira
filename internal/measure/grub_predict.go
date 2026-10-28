@@ -223,7 +223,7 @@ func menuID(cmd string) string {
 	return id
 }
 
-// grubMenuCommand rebuilds a menuentry or submenu command as GRUB measures
+// GRUBMenuCommand rebuilds a menuentry or submenu command as GRUB measures
 // it, from grub.cfg: the header with its arguments parsed (quotes gone,
 // $menuentry_id_option expanded to --id) joined by single spaces, " {",
 // then the body's lines and the closing brace exactly as in the file,

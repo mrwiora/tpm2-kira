@@ -35,6 +35,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
 )
 
 // gateIdentity is what the radio worker needs to advertise and to run the
@@ -343,9 +344,9 @@ func (s *gateService) TakeRelease(r *attest.Release) (uint8, string) {
 		return attest.ReleaseTPMRefused, "the TPM did not open the phone salt: " + err.Error()
 	}
 	salt := FactorSalt(f, r.Label)
-	wipe(f)
+	wipe.Bytes(f)
 	s.mu.Lock()
-	wipe(s.salt)
+	wipe.Bytes(s.salt)
 	s.salt = salt
 	s.status.SaltTaken = true
 	s.mu.Unlock()
@@ -375,7 +376,7 @@ func (s *gateService) Returned() bool {
 func (s *gateService) Forget() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	wipe(s.salt)
+	wipe.Bytes(s.salt)
 	s.salt = nil
 }
 

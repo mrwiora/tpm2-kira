@@ -48,7 +48,7 @@ func NewEventlogPCRCalculator(tpmDev transport.TPM, pcrIndices []int, hashAlgo P
 	}
 }
 
-// attestHash converts a PCRHashAlgo to the corresponding attest hash type
+// AttestHash converts a PCRHashAlgo to the corresponding attest hash type
 func AttestHash(algo PCRHashAlgo) attest.HashAlg {
 	switch algo {
 	case PCRHashAlgoSHA1:
@@ -89,7 +89,7 @@ func (calc *EventlogPCRCalculator) CalculatePCRsFromEventlogPath(eventlogPath st
 	events := eventLog.Events(requestedHash)
 
 	if len(events) == 0 {
-		// If SHA256 was requested but not available, check if SHA1 is available
+		// if SHA256 was requested but not available, check if SHA1 is available
 		// and give the user a helpful error message
 		if calc.HashAlgo == PCRHashAlgoSHA256 {
 			sha1Events := eventLog.Events(attest.HashSHA1)
@@ -256,7 +256,7 @@ func EventDigestsForPCR(eventlogPath string, pcr int, algo PCRHashAlgo) ([][]byt
 	return digests, nil
 }
 
-// pcrIndicesToEventlogString formats PCR indices with 'e' suffix for error messages
+// PCRIndicesToEventlogString formats PCR indices with 'e' suffix for error messages
 func PCRIndicesToEventlogString(indices []int) string {
 	result := ""
 	for i, idx := range indices {
@@ -268,7 +268,7 @@ func PCRIndicesToEventlogString(indices []int) string {
 	return result
 }
 
-// readRawEventLogFromPath reads the raw binary eventlog from a specific path
+// ReadRawEventLogFromPath reads the raw binary eventlog from a specific path
 func ReadRawEventLogFromPath(path string) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -279,7 +279,7 @@ func ReadRawEventLogFromPath(path string) ([]byte, error) {
 	return io.ReadAll(file)
 }
 
-// replayEventLog replays the eventlog to calculate PCR values.
+// ReplayEventLog replays the eventlog to calculate PCR values.
 // The returned map counts how many events actually extended each PCR, which
 // distinguishes "left at its reset value" from "no digests in this bank".
 func (calc *EventlogPCRCalculator) ReplayEventLog(events []attest.Event) (map[int][]byte, map[int]int, int, int, error) {
@@ -291,7 +291,7 @@ func (calc *EventlogPCRCalculator) ReplayEventLog(events []attest.Event) (map[in
 	// Initialize PCRs to zero (except PCR0 which may have locality)
 	for _, pcrIndex := range calc.PCRIndices {
 		if pcrIndex == 0 {
-			// PCR0 starts with locality value only if StartupLocality event exists
+			// pcr0 starts with locality value only if StartupLocality event exists
 			pcr0 := make([]byte, digestSize)
 			// Look for StartupLocality event to determine initial value
 			locality, found := calc.findStartupLocality(events)
@@ -392,7 +392,7 @@ func (calc *EventlogPCRCalculator) findStartupLocality(events []attest.Event) (b
 	if calc.Debug {
 		fmt.Printf("  No StartupLocality event found\n")
 	}
-	// Return 0 and false if not found - PCR0 should start with all zeros
+	// return 0 and false if not found - PCR0 should start with all zeros
 	return 0, false
 }
 
@@ -441,7 +441,7 @@ func ComputePolicyDigestFromPCRValues(tpmDev transport.TPM, pcrIndices []int, pc
 	return pgd.PolicyDigest, nil
 }
 
-// buildPCRDigest creates a TPM PCR digest from individual PCR values
+// BuildPCRDigest creates a TPM PCR digest from individual PCR values
 // According to TPM 2.0 specification Part 3, section 23.7 (PolicyPCR):
 // The digest is the hash of the concatenated PCR values in the order specified.
 // The hash used here matches the policy session hash (always SHA256), not the PCR bank hash.
@@ -461,7 +461,7 @@ func BuildPCRDigest(pcrIndices []int, pcrValues map[int][]byte, hashAlgo PCRHash
 		concatenated = append(concatenated, pcrValue...)
 	}
 
-	// Hash the concatenated values using SHA256 (matches policy session hash)
+	// hash the concatenated values using SHA256 (matches policy session hash)
 	hash := sha256.Sum256(concatenated)
 
 	return tpm2.TPM2BDigest{

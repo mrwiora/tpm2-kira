@@ -61,14 +61,14 @@ func WarnAboutHashAlgo(hashAlgo PCRHashAlgo) {
 // systemd-stub set for the OS.
 const loaderInfoGUID = "4a67b082-0a4c-41cf-b6c7-440b29bb8c4f"
 
-// bootedViaSystemdStub reports whether this boot went through systemd-stub,
+// BootedViaSystemdStub reports whether this boot went through systemd-stub,
 // i.e. a unified kernel image. systemd-stub sets StubInfo. Tests replace it.
 var BootedViaSystemdStub = func() bool {
 	_, err := os.Stat("/sys/firmware/efi/efivars/StubInfo-" + loaderInfoGUID)
 	return err == nil
 }
 
-// bootChainCoverage reports whether a PCR selection measures the kernel and
+// BootChainCoverage reports whether a PCR selection measures the kernel and
 // initrd, and the kernel command line:
 //
 //   - PCR 11: a unified kernel image, which embeds kernel, initrd and command

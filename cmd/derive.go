@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
 )
 
 // DeriveCommand is the password+salt key by hand: the password and the
@@ -23,12 +25,12 @@ func DeriveCommand(out string) error {
 	if err != nil {
 		return err
 	}
-	defer wipe(pw)
+	defer wipe.Bytes(pw)
 	again, err := terminalPassword("The same password again: ")
 	if err != nil {
 		return err
 	}
-	defer wipe(again)
+	defer wipe.Bytes(again)
 	if !bytes.Equal(pw, again) {
 		return errors.New("the passwords differ; nothing was written")
 	}
@@ -36,13 +38,13 @@ func DeriveCommand(out string) error {
 	if err != nil {
 		return err
 	}
-	defer wipe(salt)
+	defer wipe.Bytes(salt)
 	fmt.Fprintln(os.Stderr, "Deriving the key (Argon2id, 1 GiB, a few seconds) ...")
 	key, err := Combine(pw, salt)
 	if err != nil {
 		return err
 	}
-	defer wipe(key)
+	defer wipe.Bytes(key)
 	if err := writeKeyOut(out, key); err != nil {
 		return err
 	}

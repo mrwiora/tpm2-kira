@@ -7,12 +7,13 @@ import (
 	"io"
 	"net"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
 
 	"golang.org/x/sys/unix"
 )
@@ -159,7 +160,7 @@ func (s *unlockServer) answer(c net.Conn) {
 		s.log(fmt.Sprintf("unlock: no key for %s: %v", req.Volume, err))
 		return
 	}
-	defer wipe(key)
+	defer wipe.Bytes(key)
 	if _, err := c.Write(key); err != nil {
 		s.log(fmt.Sprintf("unlock: writing the key for %s failed: %v", req.Volume, err))
 		return
@@ -194,16 +195,6 @@ func peerIsUs(c net.Conn) error {
 		return fmt.Errorf("peer is uid %d, not %d", cred.Uid, os.Getuid())
 	}
 	return nil
-}
-
-// wipe overwrites a key where it is; the full capacity, in case a shorter
-// view of it is handed in.
-func wipe(b []byte) {
-	b = b[:cap(b)]
-	for i := range b {
-		b[i] = 0
-	}
-	runtime.KeepAlive(b)
 }
 
 // noCoreDump keeps a crash of this process from writing its memory, with
@@ -341,13 +332,13 @@ func diskKey(salt func() []byte, vault func(volume string) ([]byte, error), reci
 		if err != nil {
 			return nil, err
 		}
-		defer wipe(pw)
+		defer wipe.Bytes(pw)
 		if s == nil {
 			if s, err = ask(volume, "Salt", ""); err != nil {
 				return nil, err
 			}
 		}
-		defer wipe(s)
+		defer wipe.Bytes(s)
 		return Combine(pw, s)
 	}
 }
@@ -424,7 +415,7 @@ func readPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 				if errors.Is(err, io.EOF) && len(line) > 0 {
 					break
 				}
-				wipe(line)
+				wipe.Bytes(line)
 				return nil, err
 			}
 		}
@@ -463,7 +454,7 @@ func readRawPassphrase(next func() (byte, error), echo io.Writer) ([]byte, error
 	for {
 		c, err := next()
 		if err != nil {
-			wipe(pw)
+			wipe.Bytes(pw)
 			if errors.Is(err, io.EOF) {
 				return nil, errPassphraseCancelled
 			}
@@ -473,7 +464,7 @@ func readRawPassphrase(next func() (byte, error), echo io.Writer) ([]byte, error
 		case '\n', '\r':
 			return pw, nil
 		case 3, 4: // Ctrl-C, Ctrl-D
-			wipe(pw)
+			wipe.Bytes(pw)
 			return nil, errPassphraseCancelled
 		case 127, 8: // Backspace
 			if len(pw) > 0 {

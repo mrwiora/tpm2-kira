@@ -92,7 +92,7 @@ func PrintKIRAError(err error) {
 	}
 }
 
-// renderQRCode renders data as a QR code for a terminal.
+// RenderQRCode renders data as a QR code for a terminal.
 //
 // The encoder is built in: an external qrencode would receive the TOTP
 // secret on its command line, which every local user can read from
@@ -126,7 +126,7 @@ func RenderQRCode(data string) (string, error) {
 	return b.String(), nil
 }
 
-// generateTOTPURI creates an otpauth URI for TOTP
+// URI creates an otpauth URI for TOTP
 //
 // The algorithm parameter is only added for SHA-256: SHA-1 is the default
 // every authenticator assumes, and some apps reject the parameter.
@@ -146,7 +146,7 @@ func URI(secret, label, issuer string, alg tpm2.TPMAlgID) string {
 	return uri
 }
 
-// displayTOTPQRCode displays a QR code for a TOTP secret with slot and PCR info
+// DisplayQRCode displays a QR code for a TOTP secret with slot and PCR info
 func DisplayQRCode(secret string, nvramIndex uint32, pcrsStr string, alg tpm2.TPMAlgID) {
 	// Get hostname
 	hostname, err := os.Hostname()
@@ -172,7 +172,7 @@ func DisplayQRCode(secret string, nvramIndex uint32, pcrsStr string, alg tpm2.TP
 	fmt.Printf("   %s\n", totpURI)
 }
 
-// hotpTruncate turns an HMAC into the six-digit code (RFC 4226 dynamic
+// HOTPTruncate turns an HMAC into the six-digit code (RFC 4226 dynamic
 // truncation). It works for any HMAC of at least 20 bytes, so for the
 // SHA-256 keys used on TPMs without SHA-1 too (RFC 6238).
 func HOTPTruncate(mac []byte) string {

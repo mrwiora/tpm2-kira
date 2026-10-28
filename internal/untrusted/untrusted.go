@@ -6,7 +6,7 @@ import (
 	"unicode"
 )
 
-// quoteUntrusted makes a string from an unverified source safe to print.
+// Quote makes a string from an unverified source safe to print.
 //
 // Anyone with TPM access can replace the blob, so its strings may carry
 // terminal escape sequences or control characters. A string made only of

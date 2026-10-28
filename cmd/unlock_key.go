@@ -10,6 +10,8 @@ import (
 	"os"
 	"syscall"
 	"time"
+
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
 )
 
 // The Debian side of the key provider (initramfs-tools, cryptsetup's
@@ -39,7 +41,7 @@ func UnlockKeyCommand(socket, volume string, wait time.Duration) error {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: %v; asking at cryptsetup's prompt\n", err)
 		return execAskpass(volume)
 	}
-	defer wipe(key)
+	defer wipe.Bytes(key)
 	if _, err := os.Stdout.Write(key); err != nil {
 		return err
 	}

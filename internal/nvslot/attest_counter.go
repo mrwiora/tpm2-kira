@@ -50,7 +50,7 @@ func AttestCounterPublic(index uint32) tpm2.TPMSNVPublic {
 	}
 }
 
-// readAttestCounter returns the counter's value. It insists on a real
+// ReadAttestCounter returns the counter's value. It insists on a real
 // counter index: an ordinary index at the same handle could hold any number.
 func ReadAttestCounter(tpmDev transport.TPM, index uint32) (uint64, error) {
 	nvIndex := tpm2.TPMHandle(index)
@@ -74,7 +74,7 @@ func ReadAttestCounter(tpmDev transport.TPM, index uint32) (uint64, error) {
 	return binary.BigEndian.Uint64(rsp.Data.Buffer), nil
 }
 
-// bumpAttestCounter raises the slot's counter by one, creating it first when
+// BumpAttestCounter raises the slot's counter by one, creating it first when
 // it is missing or is not a counter, and returns the new value.
 func BumpAttestCounter(tpmDev transport.TPM, index uint32) (uint64, error) {
 	nvIndex := tpm2.TPMHandle(index)

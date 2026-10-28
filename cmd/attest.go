@@ -50,7 +50,7 @@ const (
 	ExitTampered    = 6 // the attestation record was replaced or is not the current one
 )
 
-// AttestInfo is the INFO characteristic: u8 protocol ‖ u8 mode ‖ u16le schema ‖ u32le capabilities.
+// attestInfo is the INFO characteristic: u8 protocol ‖ u8 mode ‖ u16le schema ‖ u32le capabilities.
 func attestInfo(mode uint8, caps uint32) []byte {
 	b := []byte{1, mode, byte(attest.SchemaVersion), byte(attest.SchemaVersion >> 8), 0, 0, 0, 0}
 	b[4], b[5], b[6], b[7] = byte(caps), byte(caps>>8), byte(caps>>16), byte(caps>>24)

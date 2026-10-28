@@ -15,6 +15,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
 )
 
 // The factor: one half of the disk's key, held by the phone, opened by this
@@ -117,7 +118,7 @@ func wrapFactor(tpmDev transport.TPM, att *nvslot.Attestation, rng io.Reader) (f
 	}
 	cred, enc, err := attest.MakeCredential(rng, ekPub, rk.name.Buffer, f)
 	if err != nil {
-		wipe(f)
+		wipe.Bytes(f)
 		return nil, nil, err
 	}
 	return f, &nvslot.WrappedFactor{Credential: cred, EncryptedSecret: enc}, nil
@@ -164,7 +165,7 @@ func unwrapFactor(tpmDev transport.TPM, sealed *nvslot.SealedBlob, blobIndex uin
 		return nil, fmt.Errorf("%w: %v", errFactorRefused, err)
 	}
 	if len(rsp.CertInfo.Buffer) != FactorSize {
-		wipe(rsp.CertInfo.Buffer)
+		wipe.Bytes(rsp.CertInfo.Buffer)
 		return nil, fmt.Errorf("the credential opened to %d bytes, not a factor", len(rsp.CertInfo.Buffer))
 	}
 	return rsp.CertInfo.Buffer, nil
@@ -184,6 +185,6 @@ func FactorSalt(f []byte, label string) []byte {
 	if _, err := io.ReadFull(hkdf.New(sha256.New, f, nil, info), out); err != nil {
 		panic(err) // HKDF with a fixed length cannot fail
 	}
-	defer wipe(out)
+	defer wipe.Bytes(out)
 	return []byte(hex.EncodeToString(out))
 }

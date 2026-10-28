@@ -18,6 +18,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
 )
 
 // FactorEnrolOptions is what 'phone salt enrol' takes.
@@ -58,7 +59,7 @@ func FactorEnrol(o FactorEnrolOptions) error {
 	if err != nil {
 		return err
 	}
-	defer wipe(key)
+	defer wipe.Bytes(key)
 	if err := writeKeyOut(o.Out, key); err != nil {
 		return err
 	}
@@ -152,9 +153,9 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	defer wipe(f)
+	defer wipe.Bytes(f)
 	want := FactorSalt(f, label)
-	defer wipe(want)
+	defer wipe.Bytes(want)
 
 	// The phone keeps the credential in an ordinary check of the booted
 	// system (the quote says which boot this is; the boot key is locked
@@ -182,12 +183,12 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	defer wipe(pw)
+	defer wipe.Bytes(pw)
 	again, err := terminalPassword("The same password again: ")
 	if err != nil {
 		return nil, 0, err
 	}
-	defer wipe(again)
+	defer wipe.Bytes(again)
 	if !bytes.Equal(pw, again) {
 		return nil, 0, errors.New("the passwords differ; nothing was written")
 	}

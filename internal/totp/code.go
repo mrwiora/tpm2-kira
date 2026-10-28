@@ -209,7 +209,7 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 	return slots
 }
 
-// GenerateTOTPCodesForSlots collects the codes of the slots that have one,
+// CodesForSlots collects the codes of the slots that have one,
 // keyed by slot number. The codes were computed by the TPM during the scan.
 func CodesForSlots(slots []NVRAMSlot) (map[int]string, error) {
 	codes := make(map[int]string)
@@ -221,7 +221,7 @@ func CodesForSlots(slots []NVRAMSlot) (map[int]string, error) {
 	return codes, nil
 }
 
-// slotErrorLine describes why a slot has no code, for the boot console.
+// SlotErrorLine describes why a slot has no code, for the boot console.
 // It returns "" for a PCR mismatch, which is shown with its details.
 func SlotErrorLine(err error) string {
 	var genErr *nvslot.GenerationMismatchError
@@ -312,7 +312,7 @@ func FprintKIRASlots(w io.Writer, tpmDev transport.TPM, slots []NVRAMSlot, codes
 	}
 }
 
-// phoneSlotText is a phone slot's line: what the boot screen put in codes
+// PhoneSlotText is a phone slot's line: what the boot screen put in codes
 // for it, or phoneSlotDefault.
 func PhoneSlotText(codes map[int]string, slot NVRAMSlot) string {
 	if line, ok := codes[slot.SlotNumber]; ok {
@@ -396,10 +396,10 @@ func RevealCommand(tpmPath string, nvramIndex uint32, debug bool, plain bool) {
 	}
 }
 
-// ErrNoTOTPKeyAlgorithm means the TPM supports neither SHA-1 nor SHA-256 HMAC.
+// ErrNoKeyAlgorithm means the TPM supports neither SHA-1 nor SHA-256 HMAC.
 var ErrNoKeyAlgorithm = errors.New("the TPM supports neither SHA-1 nor SHA-256 for HMAC")
 
-// totpKeySize is the size of a fresh TOTP key: the output size of the HMAC
+// KeySize is the size of a fresh TOTP key: the output size of the HMAC
 // hash, as RFC 4226 recommends for SHA-1.
 func KeySize(alg tpm2.TPMAlgID) int {
 	if alg == tpm2.TPMAlgSHA256 {
@@ -408,7 +408,7 @@ func KeySize(alg tpm2.TPMAlgID) int {
 	return 20
 }
 
-// ChooseTOTPAlgorithm returns HMAC-SHA1, the TOTP default every authenticator
+// ChooseAlgorithm returns HMAC-SHA1, the TOTP default every authenticator
 // supports, or HMAC-SHA256 when the TPM has no SHA-1.
 func ChooseAlgorithm(tpmDev transport.TPM) (tpm2.TPMAlgID, error) {
 	rsp, err := tpm2.GetCapability{
@@ -436,7 +436,7 @@ func ChooseAlgorithm(tpmDev transport.TPM) (tpm2.TPMAlgID, error) {
 	return 0, ErrNoKeyAlgorithm
 }
 
-// CreateTOTPKey creates the HMAC key object for key under the primary key.
+// CreateKey creates the HMAC key object for key under the primary key.
 // The key is sent to the TPM in a salted, parameter-encrypted session, so it
 // does not cross the bus in the clear.
 func CreateKey(tpmDev transport.TPM, primary *tpmdev.PrimaryKeyResponse, key []byte, alg tpm2.TPMAlgID, authPolicy []byte) (*tpmdev.CreateSealedObjectResponse, error) {
@@ -480,7 +480,7 @@ func totpKeyTemplate(alg tpm2.TPMAlgID, authPolicy []byte) tpm2.TPMTPublic {
 	}
 }
 
-// TOTPCode computes the TOTP code of the slot whose blob is at blobIndex, for
+// Code computes the TOTP code of the slot whose blob is at blobIndex, for
 // time t, inside the TPM.
 //
 // The policy session satisfies the approved policy (PolicyPCR against the

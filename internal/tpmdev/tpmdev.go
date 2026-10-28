@@ -14,7 +14,7 @@ import (
 
 // TPM device, session and object primitives.
 
-// DefaultTPMPath is the kernel's resource-managed TPM device. Through it each
+// DefaultPath is the kernel's resource-managed TPM device. Through it each
 // process sees only its own handles, and the kernel flushes them when the
 // device is closed.
 const DefaultPath = "/dev/tpmrm0"
@@ -22,13 +22,13 @@ const DefaultPath = "/dev/tpmrm0"
 // rawTPMPath is used only when the kernel provides no resource manager.
 const rawTPMPath = "/dev/tpm0"
 
-// openedTPM remembers whether the TPM was opened through a resource manager.
+// Opened remembers whether the TPM was opened through a resource manager.
 type Opened struct {
 	transport.TPMCloser
 	Managed bool
 }
 
-// OpenTPM opens the TPM at path. The default path falls back to the raw
+// Open opens the TPM at path. The default path falls back to the raw
 // device when the kernel has no resource manager node.
 func Open(path string) (transport.TPMCloser, error) {
 	if path == DefaultPath {
@@ -45,7 +45,7 @@ func Open(path string) (transport.TPMCloser, error) {
 	return &Opened{TPMCloser: tpm, Managed: strings.HasPrefix(filepath.Base(path), "tpmrm")}, nil
 }
 
-// CleanupTPM flushes leftover transient handles and sessions to free TPM
+// Cleanup flushes leftover transient handles and sessions to free TPM
 // memory.
 //
 // It does nothing on a resource-managed device: there the process only sees
@@ -143,7 +143,7 @@ type PrimaryKeyResponse struct {
 	Public       tpm2.TPMTPublic // used to salt sessions
 }
 
-// storagePrimaryTemplate is the deterministic ECC P-256 storage key that
+// StoragePrimaryTemplate is the deterministic ECC P-256 storage key that
 // parents tpm2-kira's objects. Re-created on every use, never persisted.
 func StoragePrimaryTemplate() tpm2.TPMTPublic {
 	return tpm2.TPMTPublic{

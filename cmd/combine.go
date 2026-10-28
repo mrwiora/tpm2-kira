@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"errors"
 
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
+
 	"golang.org/x/crypto/argon2"
 )
 
@@ -37,7 +39,7 @@ func Combine(password, salt []byte) ([]byte, error) {
 		return nil, errCombineEmpty
 	}
 	hash := argon2.IDKey(password, salt, combineIterations, combineMemoryKiB, combineParallelism, combineKeyLength)
-	defer wipe(hash)
+	defer wipe.Bytes(hash)
 	out := make([]byte, base64.RawStdEncoding.EncodedLen(len(hash))+1)
 	base64.RawStdEncoding.Encode(out, hash)
 	out[len(out)-1] = '\n'

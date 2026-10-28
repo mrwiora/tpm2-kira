@@ -170,7 +170,7 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 	}
 	// If checkErr != nil, index doesn't exist, which is fine
 
-	// Define NVRAM space with PolicySigned-protected writes: no owner or
+	// define NVRAM space with PolicySigned-protected writes: no owner or
 	// unauthenticated write path, so only a holder of the signing key can
 	// replace the blob. Reads stay open — the secret itself is protected by the
 	// sealed object's own policy, not by NV read control.
@@ -319,7 +319,7 @@ func stashUnwrittenBlobFile(index uint32, data []byte, cause error) error {
 	return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY. The blob that was about to be written has been saved to:\n      %s\n  Keep this file: it holds the sealed object and is the only remaining copy of the secret.\n  Fix the cause above, then put it back:\n      tpm2-kira slot restore %s\n  If you discard it, the secret is gone and you must run 'tpm2-kira slot add' and re-enrol\n  your authenticator", cause, index, path, path)
 }
 
-// nvIndexLimit is the largest NV index this TPM stores, or 0 if it does
+// NvIndexLimit is the largest NV index this TPM stores, or 0 if it does
 // not say.
 func NvIndexLimit(tpmDev transport.TPM) int {
 	rsp, err := tpm2.GetCapability{

@@ -397,7 +397,7 @@ func dummySignatureForKey(pubKey crypto.PublicKey) (tpm2.TPMTSignature, error) {
 	}
 }
 
-// signForTPM signs a digest with the private key and returns a TPM-compatible
+// SignForTPM signs a digest with the private key and returns a TPM-compatible
 // signature structure.
 //
 // It dispatches on the public key and goes through crypto.Signer, so a key
@@ -457,7 +457,7 @@ func SignForTPM(privKey crypto.Signer, digest []byte) (tpm2.TPMTSignature, error
 	}
 }
 
-// verifyKeyPairMatch checks that a public key belongs to a private key.
+// VerifyKeyPairMatch checks that a public key belongs to a private key.
 // It compares public keys only, so it works for keys held on a token.
 func VerifyKeyPairMatch(pubKey crypto.PublicKey, privKey crypto.Signer) error {
 	switch pubKey.(type) {

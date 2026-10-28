@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -306,13 +308,13 @@ func TestReadPassphraseFromAPipe(t *testing.T) {
 
 func TestWipe(t *testing.T) {
 	b := []byte("secret")
-	wipe(b)
+	wipe.Bytes(b)
 	if !bytes.Equal(b, make([]byte, 6)) {
 		t.Fatal("not wiped")
 	}
 	// The whole backing array, not only the part in view.
 	full := []byte("secret-and-more")
-	wipe(full[:3])
+	wipe.Bytes(full[:3])
 	if !bytes.Equal(full, make([]byte, len(full))) {
 		t.Fatalf("only the view was wiped: %q", full)
 	}

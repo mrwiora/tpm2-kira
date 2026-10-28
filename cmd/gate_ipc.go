@@ -56,7 +56,7 @@ type gateRequest struct {
 	EphemeralPub []byte `json:"ephemeral_pub,omitempty"`
 	Sealed       []byte `json:"sealed,omitempty"`
 	QuoteDigest  []byte `json:"quote_digest,omitempty"`
-	// release: what the phone released; the coordinator opens it.
+	// Release: what the phone released; the coordinator opens it.
 	Release *attest.Release `json:"release,omitempty"`
 }
 

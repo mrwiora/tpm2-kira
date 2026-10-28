@@ -1,4 +1,4 @@
-// Package piv implements the read-and-sign subset of the PIV smart card
+// package piv implements the read-and-sign subset of the PIV smart card
 // applet, with the YubiKey extensions tpm2-kira needs to identify a token.
 //
 // It never writes to a card: there is no key generation, no certificate

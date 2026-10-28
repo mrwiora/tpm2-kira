@@ -125,7 +125,7 @@ func generationIndexPublic(index uint32, writePolicy tpm2.TPM2BDigest) tpm2.TPMS
 	}
 }
 
-// generationIndexName returns the Name the index has while it is written and
+// GenerationIndexName returns the Name the index has while it is written and
 // not read-locked: the Name PolicyNV checks in the initrd. Read-locking sets
 // TPMA_NV_READLOCKED, which changes the current Name, so it is cleared here.
 func GenerationIndexName(tpmDev transport.TPM, index uint32) ([]byte, error) {
@@ -161,7 +161,7 @@ func ReadGeneration(tpmDev transport.TPM, index uint32) (uint64, error) {
 	return binary.BigEndian.Uint64(data), nil
 }
 
-// writeGeneration sets the slot's generation index to gen, defining it first
+// WriteGeneration sets the slot's generation index to gen, defining it first
 // when it is missing or was defined differently, and returns its Name for
 // PolicyNV. The write is authorized by the signing key, like the blob's.
 func WriteGeneration(tpmDev transport.TPM, index uint32, gen uint64, pubKey crypto.PublicKey, signer crypto.Signer) ([]byte, error) {
@@ -262,7 +262,7 @@ func CapCodes(tpmDev transport.TPM) (int, error) {
 
 // ── key object ──────────────────────────────────────────────────────────────
 
-// newPolicyRef returns a random policyRef for a new key object, so that its
+// NewPolicyRef returns a random policyRef for a new key object, so that its
 // approvals fit no other object, even one made with the same signing key.
 func NewPolicyRef() ([]byte, error) {
 	ref := make([]byte, sha256.Size)
@@ -272,7 +272,7 @@ func NewPolicyRef() ([]byte, error) {
 	return ref, nil
 }
 
-// signApproval signs approvedPolicy for policyRef and returns the
+// SignApproval signs approvedPolicy for policyRef and returns the
 // TPMT_SIGNATURE that VerifySignature takes.
 func SignApproval(signer crypto.Signer, approvedPolicy, policyRef []byte) ([]byte, error) {
 	sig, err := signing.SignForTPM(signer, approvalDigest(approvedPolicy, policyRef))
@@ -284,7 +284,7 @@ func SignApproval(signer crypto.Signer, approvedPolicy, policyRef []byte) ([]byt
 
 // ── computing a code ────────────────────────────────────────────────────────
 
-// approvedSession returns a policy session that satisfies the slot's policy
+// ApprovedSession returns a policy session that satisfies the slot's policy
 // if the PCRs and the generation are what the signing key approved: the one
 // authorization for everything bound to the slot (the TOTP key, the boot
 // key). The session runs its policy when a command uses it. The caller calls
@@ -293,7 +293,7 @@ func ApprovedSession(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32) (
 	return ApprovedSessionThen(tpmDev, blob, blobIndex, nil)
 }
 
-// approvedSessionThen is approvedSession with one more policy command run
+// ApprovedSessionThen is approvedSession with one more policy command run
 // after PolicyAuthorize, for an object whose policy extends the slot's
 // (the release key: PolicyCommandCode, attest.ReleaseKeyPolicy).
 func ApprovedSessionThen(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32, then func(transport.TPM, tpm2.TPMISHPolicy) error) (tpm2.Session, func(), error) {

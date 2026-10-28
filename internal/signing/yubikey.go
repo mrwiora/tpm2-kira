@@ -49,7 +49,7 @@ type YubiKeyStub struct {
 	PublicKey   string `json:"publicKey"` // base64 PKIX DER
 }
 
-// isYubiKeyStub reports whether key file content is a stub rather than PEM.
+// IsYubiKeyStub reports whether key file content is a stub rather than PEM.
 func IsYubiKeyStub(data []byte) bool {
 	trimmed := bytes.TrimLeft(data, " \t\r\n")
 	return len(trimmed) > 0 && trimmed[0] == '{'
@@ -141,7 +141,7 @@ func tokenKeyUnsuitable(pub crypto.PublicKey) string {
 // so a wedged daemon cannot hang setup.
 const TokenProbeTimeout = 2 * time.Second
 
-// tokenConn is one card reachable for PIV commands.
+// TokenConn is one card reachable for PIV commands.
 type TokenConn struct {
 	Reader    string
 	Transport piv.Transport
@@ -150,7 +150,7 @@ type TokenConn struct {
 	Close     func(reset bool) error
 }
 
-// dialTokens opens every card present. Tests replace it with emulated cards.
+// DialTokens opens every card present. Tests replace it with emulated cards.
 var DialTokens = dialPCSCTokens
 
 func dialPCSCTokens(timeout time.Duration) ([]*TokenConn, func(), error) {
@@ -358,7 +358,7 @@ func algorithmOf(pub crypto.PublicKey) piv.Algorithm {
 	return 0
 }
 
-// recommendedSlot picks the slot setup uses without --slot: 9a, the slot the
+// RecommendedSlot picks the slot setup uses without --slot: 9a, the slot the
 // documentation tells people to create for tpm2-kira. Another slot is never
 // picked implicitly, because it is likely shared (9c with sbctl, typically).
 func RecommendedSlot(t TokenInfo) (TokenSlot, bool) {
@@ -406,7 +406,7 @@ func PrintTokenReport(w io.Writer, infos []TokenInfo) {
 // PINEnvVar supplies the PIV PIN for unattended use.
 const PINEnvVar = "TPM2_KIRA_PIN"
 
-// yubiKeySigner is a crypto.Signer whose private key lives in a PIV slot.
+// YubiKeySigner is a crypto.Signer whose private key lives in a PIV slot.
 //
 // Loading the key file does not touch the token: Public() is served from the
 // stub, so blob verification and policy computation work with the token
@@ -693,7 +693,7 @@ func (sess *tokenSession) ensurePIN(s *YubiKeySigner, force bool) error {
 	return nil
 }
 
-// promptPIN asks for the PIN on the terminal; tests replace it.
+// PromptPIN asks for the PIN on the terminal; tests replace it.
 var PromptPIN = promptPINOnTTY
 
 // readPIN finds the PIN without asking when it can: TPM2_KIRA_PIN first, then
@@ -835,7 +835,7 @@ func CloseTokenSessions() {
 	}
 }
 
-// yubiKeyWantsPIN says whether signing with key, on a YubiKey, takes a PIN
+// YubiKeyWantsPIN says whether signing with key, on a YubiKey, takes a PIN
 // (the slot's policy as the key file records it; an unknown policy counts
 // as wanting one).
 func YubiKeyWantsPIN(key crypto.Signer) bool {
@@ -846,7 +846,7 @@ func YubiKeyWantsPIN(key crypto.Signer) bool {
 	return s.stub.PINPolicy != piv.PINPolicyNever.String()
 }
 
-// pinFilePath is the YubiKey's PIN, next to control.conf: the PIN alone,
+// PINPath is the YubiKey's PIN, next to control.conf: the PIN alone,
 // root's and readable by root alone. It is no setting of the image, so it
 // has a file of its own: control.conf holds what the image is built with,
 // and only that.
@@ -860,7 +860,7 @@ func PINPath() string {
 	return filepath.Join(filepath.Dir(conf), "pin")
 }
 
-// storePIN writes the PIN, readable by root alone.
+// StorePIN writes the PIN, readable by root alone.
 func StorePIN(path, pin string) error {
 	if strings.ContainsAny(pin, "\n") {
 		return fmt.Errorf("the PIN cannot hold a newline")
@@ -880,7 +880,7 @@ func StorePIN(path, pin string) error {
 	return f.Close()
 }
 
-// storedPIN is the PIN the file at path stores: "" when there is none;
+// StoredPIN is the PIN the file at path stores: "" when there is none;
 // loose when the file is not root's, or group or others may read it - such
 // a PIN is refused, it has to be treated as already disclosed. For the
 // signer only (pinFromFile).
@@ -906,7 +906,7 @@ func StoredPIN(path string) (pin string, loose bool) {
 	return pin, st.Mode().Perm()&0o077 != 0 || !owned || !trustedOwner(uid)
 }
 
-// pinStored says whether the file at path stores a PIN, and whether it is
+// PINStored says whether the file at path stores a PIN, and whether it is
 // loose (readable by others): the PIN's value stays out of it.
 func PINStored(path string) (stored, loose bool) {
 	pin, loose := StoredPIN(path)

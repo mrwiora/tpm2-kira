@@ -9,6 +9,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
 
 	"github.com/google/go-tpm/tpm2/transport"
 )
@@ -215,7 +216,7 @@ func DeleteSlot(o DeleteSlotOptions) error {
 			}
 			fmt.Fprintf(out, "%s keyslot %d removed (was %s)\n", d.Device, ks.Keyslot, describeKeyslot(ks.KeyslotStatus))
 		}
-		wipe(existing)
+		wipe.Bytes(existing)
 	}
 
 	// The slot in the TPM: the blob, then its companions.
