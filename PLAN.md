@@ -331,9 +331,16 @@ flowchart LR
    the plan's files), the vault part carries the bundle's digest (a
    changed root is a rebuild) and is out without a bundle, saying so.
    Tested: the rule, the digest, the image's file.
-4. [ ] vault: root CA + leaf in `tlsutil`; `tls root` command; an own
-   certificate and chain in the state directory; `PinnedConfig` via the
-   core's function; its tests.
+4. [x] vault: a root (P-256, 20 years) and a leaf it signs (1 year) in
+   `tls/` (`ca.pem`, `ca-key.pem`, `cert.pem`, `key.pem`); served leaf and
+   root through `GetCertificate`, the leaf made again from the root with
+   fewer than 30 days left (at start and while serving); the pin is the
+   root's; `tpm2-kira-vault tls root` prints it; the test clients verify
+   with the core's `ClientConfig`; operators' curl `--cacert`;
+   `CurlPin` gone. No `InsecureSkipVerify` in the vault. Tested: the
+   served chain, the renewal (pin kept, client verifies), an old state
+   directory, the vault's suites. (An own PKI's certificate in the state
+   directory: not built - the vault's root serves the plan's need.)
 5. [ ] docs (vault setup, SECURITY-BACKGROUND), HISTORY.md (a security fix).
 6. [ ] SHA-1: the legacy and test notes (below).
 7. [ ] tests: `make test-all`, the vault's tests, `tools/vmtest.py` (its
