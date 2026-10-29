@@ -217,8 +217,7 @@ with what you type at `🔐 Passphrase for disk vda3_crypt:`
 `cryptroot` re-runs the keyscript for each of its tries (`tries=`, 3 by
 default): the first ones are tpm2-kira's prompt, the last is cryptsetup's
 own, for the recovery passphrase; Ctrl-C at tpm2-kira's prompt goes
-there at once. Without the socket (the `once` mode of `/etc/tpm2-kira/initramfs.conf`,
-or `run` failed) the keyscript is
+there at once. Without the socket (`run` failed) the keyscript is
 cryptsetup's own prompt, as without tpm2-kira. (On Arch, `systemd-cryptsetup`
 tries a key file once: after a wrong answer at tpm2-kira's prompt its own
 prompt follows.)

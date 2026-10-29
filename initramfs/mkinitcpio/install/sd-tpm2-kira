@@ -127,9 +127,6 @@ _add_plan() {
         for value in "${btfw[@]}"; do
             add_firmware "$value" && nfw=$((nfw + 1))
         done
-        _add_kira_unit tpm2-kira-attest.service
-        add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-attest.service \
-            /usr/lib/systemd/system/tpm2-kira-attest.service
         plain "tpm2-kira: Bluetooth: ${#btmods[@]} modules, $nfw firmware files"
     fi
 
@@ -250,11 +247,11 @@ The hook will:
   volume's LUKS2 header says. Nothing is written.
 - Add each part of the boot plan that something uses, and say why the
   others are out:
-    TOTP codes   a slot is sealed: the code screen waits for the TPM, and
+    TOTP codes   a slot is sealed: run waits for the TPM (5 s), and
                  tpm2-kira-cap.service locks the codes when the initrd is left
     Phone        a phone is enrolled (or TPM2_KIRA_ATTEST_BLUETOOTH=always):
-                 the adapter's driver and firmware, the signing public key,
-                 tpm2-kira-attest.service
+                 the adapter's driver and firmware, the signing public key;
+                 run starts the radio worker (gate-child) itself
     Vault        a slot is enrolled with a vault, and the image has a network
     Network      TPM2_KIRA_NET in /etc/tpm2-kira/control.conf: systemd-networkd
                  and the matched interface's driver

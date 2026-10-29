@@ -193,7 +193,8 @@ tpm2-kira-boot run                              (root: TPM, disk key, code scree
   │  starts, handing over the listening socket and a control socket:
   ▼
 tpm2-kira-boot ssh-child                     (uid 65534; own net/IPC/PID/mount/UTS namespaces;
-  │                                         no new privileges; Landlock: no file access)
+  │                                         sandbox on every thread: no new privileges,
+  │                                         no executable memory, no file, seccomp)
   │  speaks SSH (golang.org/x/crypto/ssh), checks the login keys
   │  ── control socket ──▶ run:  "sign this key exchange"  ◀── signature
   │  per login: a socket pair; one end goes to run (SCM_RIGHTS) as a session
@@ -203,8 +204,9 @@ the session in run: the code screen, Enter, the password prompt
 
 `run` must not parse what arrives from the network before a login: it
 holds the TPM, the disk's key and the code screen. So the SSH protocol
-runs in `tpm2-kira-boot ssh-child` - the same binary started again by `run`
-(one binary, AGENTS.md) - which gives up everything it does not need
+runs in `tpm2-kira-boot ssh-child` - the same binary started again by `run`,
+as the phone's radio worker is (`gate-child`, docs/BOOT-INTEGRATION.md) -
+which gives up everything it does not need
 before it reads a byte:
 
 - **nobody** (uid/gid 65534, no supplementary groups, so no capabilities):
@@ -214,10 +216,16 @@ before it reads a byte:
   no network but the listening socket it was handed: it cannot connect
   anywhere. A kernel without one of them starts it without namespaces,
   and says so in the log.
-- **No new privileges** (`PR_SET_NO_NEW_PRIVS`), then **Landlock**: a
-  ruleset that handles every file access right and allows none (and, on
-  newer kernels, no TCP bind or connect, no signals or abstract sockets
-  outside it). Without Landlock the log says so.
+- **aSSH's `sandbox`, on every thread** (Go runs a program on several
+  threads, and these steps act on the thread that asks): **no new
+  privileges** (`PR_SET_NO_NEW_PRIVS`), **no executable memory**
+  (`PR_SET_MDWE`), **Landlock** with a ruleset that handles every file
+  access right and allows none (and, on newer kernels, no TCP bind or
+  connect, no signals or abstract sockets outside it), and a **seccomp**
+  filter that refuses the system calls that administer the machine -
+  mounts, modules, the clock, other processes' memory, namespaces, user
+  IDs, keyrings, BPF, running a program - with EPERM. A kernel without
+  Landlock, seccomp or the memory protection is said in the log.
 - It refuses to run as root.
 
 It holds **no host key**: the key exchange is signed by `run`, asked over
@@ -236,8 +244,9 @@ monitor; it cannot read the key - which is in the TPM - the TPM or the
 disk key.
 
 The log shows what it runs with, for example `ssh: ssh-child (pid 412)
-runs with uid 65534, no new privileges, namespaces of its own, Landlock
-ABI 6: no file access` (seen on both test VMs).
+runs with uid 65534, namespaces of its own, no new privileges, no
+executable memory, Landlock ABI 6: no file access, 68 system calls
+refused`.
 
 ## 4. The host key and the SSH CA
 

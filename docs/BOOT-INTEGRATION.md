@@ -23,46 +23,62 @@ Debian scripts start only those.
 
 | Unit | In the initramfs image | Does something when |
 |------|------------------------|---------------------|
-| `tpm2-kira.service` (the code at the prompt, the gate's coordinator, and the key provider for `systemd-cryptsetup`) | always, once `sd-tpm2-kira` is in `HOOKS`. It waits for `/dev/tpmrm0` (at most 5 s) only when a part of the plan needs the TPM (the drop-in `tpm2-kira.service.d/tpm.conf`) | a volume asks for its key; with the codes in the plan, a TOTP key is shown. Without them the TPM is not asked, and the boot is released at once. The first `slot add` makes the image out of date (`control` rebuilds it when left). The gate ends when the boot is released; the process stays to answer the volumes' key requests and ends at switch-root |
+| `tpm2-kira.service` (`run`: the code at the prompt, the gate's coordinator, the SSH server, and the key provider for `systemd-cryptsetup`) | always, once `sd-tpm2-kira` is in `HOOKS`. `run` waits for the TPM's device (at most 5 s) only when a part of the plan needs it | a volume asks for its key; with the codes in the plan, a TOTP key is shown. Without them the TPM is not asked, and the boot is released at once. The first `slot add` makes the image out of date (`control` rebuilds it when left). The gate ends when the boot is released; the process stays to answer the volumes' key requests and ends at switch-root |
 | `tpm2-kira-unlock.socket` (the key socket) | always, with the display | `systemd-cryptsetup` activates a volume whose key file is the socket |
 | `tpm2-kira-cap.service` (locks codes when the initrd is left) | with the codes in the plan: a slot is sealed | the initrd is left |
-| `tpm2-kira-attest.service` (Bluetooth gate, radio worker) | with the phone in the plan: a TPM, a phone enrolled (or `TPM2_KIRA_ATTEST_BLUETOOTH=always`), its record signed by this machine's key and current, **and** the adapter found when the image was built. The signing public key goes into the image with it. Otherwise neither the unit nor any Bluetooth module or firmware is in the image; the build says which condition failed | a phone connects |
 
-One case leaves a unit in the image with nothing to do: `phone unenrol`
-without rebuilding the initramfs. The gate then starts at boot, reports that no
-phone is enrolled and fails; the next build leaves it out.
+The phone's gate is no unit: with the phone in the plan, `run` starts its
+radio worker itself. The phone is in the plan with a TPM, a phone enrolled
+(or `TPM2_KIRA_ATTEST_BLUETOOTH=always`), its record signed by this
+machine's key and current, **and** the adapter found when the image was
+built; the signing public key and the adapter's modules and firmware go
+into the image with it. Otherwise no Bluetooth module or firmware is in the
+image, and the build says which condition failed. `phone unenrol` without
+rebuilding the image leaves the gate in it with nothing to do: it reports
+at boot that no phone is enrolled, and the next build leaves it out.
 
-The radio worker parses what the radio delivers before the disk is
-unlocked, so its unit confines it: Bluetooth and
-Unix sockets only, the capabilities for the adapter and no others, rfkill and
-the console as its only devices and no TPM, a read-only file system, and a
-system call filter (`systemd-analyze security` rates the unit 2.2, from 9.4
-without).
+### The child processes of run
 
-On Debian there are no units in the image: the initramfs-tools scripts start
-the display and, with the phone in the plan, the gate, and run `cap` when
-the initramfs is left and the codes are in the plan. The gate is split
-there too - `run --gate` holds the TPM and releases the display on the
-phone's verdict, `gate --coordinator` is the radio worker - but the
-confinement above is the unit's: on Debian the radio worker runs as root,
-unconfined.
+Two parts parse what arrives from outside before the disk is unlocked,
+and `run` starts each as a process of its own - the same on Arch and
+Debian, with nothing of it in a unit or a script:
 
-## Display mode
+| | `ssh-child` (the SSH server) | `gate-child` (the phone's radio worker) |
+|---|---|---|
+| user | nobody | nobody, with `CAP_NET_ADMIN` and `CAP_NET_RAW` alone (the HCI user channel) |
+| namespaces of its own | network, IPC, PID, mount, UTS | IPC, PID, mount, UTS (Bluetooth sockets exist only in the first network namespace) |
+| open files | the listening socket, a socket pair to `run` | two socket pairs to `run`, `/dev/rfkill` |
+| files it can reach (Landlock) | none | reads beneath `/sys` (the adapter's and rfkill's state) |
+| TPM | none: `run` signs | none: `run` quotes, opens the boot key and the phone salt, reads the receipt |
 
-`/etc/tpm2-kira/initramfs.conf` selects what happens at boot:
+Each then confines itself with aSSH's `sandbox`, on every thread (Go runs
+a program on several threads, and prctl, Landlock and seccomp act on the
+thread that asks): no new privileges, no executable memory, Landlock as
+above (no TCP bind or connect either), and none of the system calls that
+administer the machine - mounts, modules, the clock, other processes'
+memory, namespaces, user IDs, keyrings, BPF, running a program (seccomp,
+EPERM; another architecture's ABI ends the process). `tpm2-kira help
+ssh-child`, `tpm2-kira help gate-child`.
 
-| `TPM2_KIRA_INITRAMFS_MODE` | Behaviour |
-|---|---|
-| `run` (default) | Keeps showing codes until the disk is unlocked |
-| `once` | Prints a single code and carries on booting |
+### Arch and Debian
 
-In `run` mode the display refreshes once per 30-second TOTP window, writing to
-the same console as the passphrase prompt. The prompt scrolls up as codes
-arrive; typing is unaffected, since the passphrase is not echoed anyway. The
-`init-bottom` script stops the process before `run-init` replaces the initramfs,
-so nothing is left holding it open, and then runs `tpm2-kira-boot cap`.
+The boot is one process tree on both: `run` and its children, started
+with the same arguments. What differs is what the distribution's boot
+does around it:
 
-Edit the file and run `sudo update-initramfs -u` to apply a change.
+| | Arch (mkinitcpio, systemd) | Debian (initramfs-tools) |
+|---|---|---|
+| `run` is started by | `tpm2-kira.service` | `scripts/init-premount/tpm2-kira`, in the background |
+| the disk's key | `systemd-cryptsetup` reads `tpm2-kira-unlock.socket` (`rd.luks.key=`, crypttab(5) AF_UNIX key files) | cryptroot runs the keyscript `unlock-key`, which asks the socket `run --unlock` made |
+| the adapter's modules | loaded by `systemd-modules-load` (`modules-load.d`) | loaded by the image's init (`conf/modules`, the hook's `force_load`) |
+| the image's network | `systemd-networkd`, the plan's `.network` file | the script: initramfs-tools' `configure_networking`, or busybox' `udhcpc` / `ip` (`remote.conf`) |
+| the narrative | the journal: `journalctl -b -u tpm2-kira.service` | `/run/initramfs/tpm2-kira.log` |
+| stopped, and the codes locked | at `initrd-switch-root`: the units' stop, `cap` in `tpm2-kira-cap.service` | `scripts/init-bottom/tpm2-kira`: TERM to `run` (5 s), then `cap` |
+| the measure point | ordered before systemd's PCR separators | before cryptroot (no separator) |
+
+The display refreshes once per 30-second TOTP window, writing to the same
+console as the passphrase prompt. The prompt scrolls up as codes arrive;
+typing is unaffected, since the passphrase is not echoed anyway.
 
 ## PCR 8 and 9 are predicted for the next boot
 

@@ -573,7 +573,7 @@ def check_booted(t, distro, expected, mode_wanted, log, rep):
     log.save("status-booted.txt", out)
     log.say(out.rstrip())
 
-    units = "tpm2-kira.service tpm2-kira-cap.service tpm2-kira-unlock.socket tpm2-kira-unlock.service tpm2-kira-attest.service"
+    units = "tpm2-kira.service tpm2-kira-cap.service tpm2-kira-unlock.socket tpm2-kira-unlock.service"
     rc, out = t.run(f"journalctl -b -o short-iso --no-pager -t tpm2-kira $(for u in {units}; do echo -u $u; done) 2>&1", root=True)
     log.save("journal-tpm2-kira.log", out)
     rc, errs = t.run("journalctl -b -o short-iso --no-pager -p err 2>&1", root=True)

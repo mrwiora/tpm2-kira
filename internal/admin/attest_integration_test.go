@@ -25,7 +25,6 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
-	"github.com/mrwiora/tpm2-kira/internal/unixsock"
 )
 
 // TestAttestationOnSWTPM runs enrolment (real EK, PolicySecret session,
@@ -146,11 +145,7 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 	// that has nothing but the coordinator's socket, the TPM and the
 	// reading of the receipt in the coordinator.
 	svc := phonegate.NewGateService(s.tpm, idx, signerPath, false)
-	worker, err := phonegate.DialGate(startTestGate(t, svc), 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer worker.Close()
+	worker := startTestGate(t, svc)
 	ident, code, err := worker.Identity()
 	if err != nil || code != 0 || !ident.RecordVerified || ident.Slot != 9 {
 		t.Fatalf("coordinator identity: %+v %d %v", ident, code, err)
@@ -448,10 +443,10 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 	refused("blob put back after unenrol")
 }
 
-// TestCoordinatorAndWorker runs the two halves of the gate the way the units
-// start them - the coordinator of 'tpm2-kira-boot run --gate' and the worker of
-// 'gate --coordinator' - up to the point where the worker needs a
-// Bluetooth adapter, which a test machine does not have.
+// TestCoordinatorAndWorker runs the two halves of the gate the way 'run'
+// starts them - the coordinator, and the radio worker as a process of its
+// own ('gate-child', this test binary) - up to the point where the worker
+// needs a Bluetooth adapter, which a test machine does not have.
 func TestCoordinatorAndWorker(t *testing.T) {
 	sock := startSWTPM(t)
 	s := newSWTPMSetupAt(t, sock, "swtpm-box")
@@ -476,63 +471,46 @@ func TestCoordinatorAndWorker(t *testing.T) {
 	// The coordinator opens the TPM itself; swtpm serves one client.
 	s.tpm.Close()
 
-	// No gate in the image, or no socket asked for: nothing to coordinate.
-	for _, c := range [][2]string{
-		{filepath.Join(dir, "a", "gate.sock"), noSigner},
-		{"", signer},
-	} {
-		if svc, end := bootrun.StartCoordinator(sock, c[0], c[1], false); svc != nil {
-			t.Fatalf("a coordinator without a gate to coordinate (%v)", c)
-		} else {
-			end() // nothing to end, and no harm in asking
-		}
+	// No gate in the image: nothing to coordinate.
+	if svc, end := bootrun.StartCoordinator(sock, noSigner, false); svc != nil {
+		t.Fatal("a coordinator without a gate to coordinate")
+	} else {
+		end() // nothing to end, and no harm in asking
 	}
-	gate := filepath.Join(dir, "run", "gate.sock")
-	svc, endCoordinator := bootrun.StartCoordinator(sock, gate, signer, false)
+	svc, endCoordinator := bootrun.StartCoordinator(sock, signer, false)
 	if svc == nil {
 		t.Fatal("no coordinator")
 	}
-	// The worker: no TPM path, only the socket. It gets as far as the radio.
-	code := phonegate.AttestGate(phonegate.GateOptions{Coordinator: gate, Adapter: 250, TPMPath: "/nonexistent/tpm"})
+	// The started worker waits for an adapter; one in this process with an
+	// adapter that is not there gets as far as the radio.
+	worker := startTestGate(t, svc)
+	code := phonegate.RunGateRadio(worker, phonegate.GateOptions{Adapter: 250, Worker: true}, func(string, ...any) {}, worker.Gone())
 	if code != phonegate.ExitUnavailable {
 		t.Fatalf("worker exit %d, want %d (no adapter)", code, phonegate.ExitUnavailable)
 	}
 	if st, ok := svc.Status(); !ok || st.State != phonegate.GateUnavailable || st.Slot != 3 {
 		t.Fatalf("coordinator status %+v", st)
 	}
-	// The TPM half works through the socket.
-	worker, err := phonegate.DialGate(gate, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer worker.Close()
+	// The TPM half works through the connection.
 	sel, _ := s.blob.Selection()
 	if q, err := worker.Quote(bytes.Repeat([]byte{1}, 32), sel); err != nil || len(q.Quoted) == 0 || len(q.Values) != len(sel.Indices) {
 		t.Fatalf("quote through the coordinator: %+v %v", q, err)
 	}
 
-	// The hold ends: so does the coordinator's service, and a worker that
-	// comes now finds nobody (it has no TPM of its own to fall back to).
+	// The hold ends: so does the coordinator's service, and the started
+	// worker with it (endCoordinator waits for it).
 	endCoordinator()
-	select {
-	case <-worker.Gone():
-	case <-time.After(2 * time.Second):
-		t.Fatal("the worker did not learn that the hold ended")
-	}
-	if _, err := os.Stat(gate); err == nil {
-		t.Fatal("the socket outlived the coordinator's service")
-	}
 	endCoordinator()
 
-	// A replaced record: the coordinator refuses, and the worker's unit
-	// fails with the same status as before.
+	// A replaced record: the coordinator refuses, and the worker ends with
+	// the same status as before.
 	forged := *s.blob
 	forged.Phone.Verifiers = []attest.EnrolledVerifier{{ID: "attackers-phone", AnchorPub: []byte{9}, NoisePub: make([]byte, 32)}}
 	forged.Count, _ = nvslot.ReadAttestCounter(svc.TPM, nvslot.AttestCounterIndex(idx))
 	forgedSlot := testSlotBlob()
 	withPhones(forgedSlot, &forged)
 	svc.TPMMu.Lock()
-	err = nvslot.WriteToNVRAM(svc.TPM, idx, signSlot(t, forgedSlot, attacker), attacker.Public(), attacker)
+	err := nvslot.WriteToNVRAM(svc.TPM, idx, signSlot(t, forgedSlot, attacker), attacker.Public(), attacker)
 	svc.TPMMu.Unlock()
 	if err != nil {
 		t.Fatal(err)
@@ -543,7 +521,8 @@ func TestCoordinatorAndWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	refused := phonegate.NewGateService(svc.TPM, 0, hostKey, false)
-	if code := phonegate.AttestGate(phonegate.GateOptions{Coordinator: startTestGate(t, refused), Adapter: 250}); code != phonegate.ExitTampered {
+	w := startTestGate(t, refused)
+	if code := phonegate.RunGateRadio(w, phonegate.GateOptions{Adapter: 250, Worker: true}, func(string, ...any) {}, w.Gone()); code != phonegate.ExitTampered {
 		t.Fatalf("worker exit %d for a replaced record, want %d", code, phonegate.ExitTampered)
 	}
 	if st, _ := refused.Status(); st.State != phonegate.GateRefused {
@@ -679,15 +658,18 @@ func TestOwnTPMCheckOnSWTPM(t *testing.T) {
 	}
 }
 
-// startTestGate serves host as the coordinator's socket, for a worker.
-func startTestGate(t *testing.T, host phonegate.GateHost) string {
+// startTestGate links a coordinator serving host to a worker's client.
+func startTestGate(t *testing.T, host phonegate.GateHost) *phonegate.GateClient {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "run", "gate.sock")
-	l, err := unixsock.Listen(path)
+	g, files, err := phonegate.LinkGate(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := phonegate.ServeGate(l, host)
 	t.Cleanup(g.Close)
-	return path
+	c, err := phonegate.GateClientFromFiles(files[0], files[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	return c
 }

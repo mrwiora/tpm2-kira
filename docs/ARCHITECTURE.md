@@ -108,7 +108,7 @@ flowchart BT
 | Binary | Commands | Pages |
 |---|---|---|
 | `tpm2-kira` | `control`, `setup`, `slot …`, `status`, `phone …`, `luks …`, `vault …`, `initramfs plan`, `reveal`, `yubikey`, `pcrtips` | [README.md](../README.md) "Commands", `tpm2-kira help <command>` |
-| `tpm2-kira-boot` | `run`, `cap`, `unlock-key`, `gate`, `ssh-child`, `reveal` | `tpm2-kira-boot help`; the pages: `tpm2-kira help run`, `cap`, `unlock-key`, `ssh-child`; [BOOT-INTEGRATION.md](BOOT-INTEGRATION.md) |
+| `tpm2-kira-boot` | `run`, `cap`, `unlock-key`, `ssh-child`, `gate-child`, `reveal` | `tpm2-kira-boot help`; the pages: `tpm2-kira help run`, `cap`, `unlock-key`, `ssh-child`, `gate-child`; [BOOT-INTEGRATION.md](BOOT-INTEGRATION.md) |
 
 ## At boot
 
@@ -116,20 +116,26 @@ flowchart BT
 (`/etc/tpm2-kira/plan/<part>`, decided when the image is built) and
 nothing else. The parts give each other what they need through a board,
 not by calling each other ([PROJECT-STRUCTURE.md](PROJECT-STRUCTURE.md),
-`internal/bootrun/parts.go`).
+`internal/bootrun/parts.go`). The two parts that parse input from outside
+are child processes `run` starts itself, as nobody, confined by aSSH's
+`sandbox` on every thread - so the process tree is the same on Arch and
+Debian; only what starts `run`, hands the disk's key to cryptsetup, brings
+up the network and keeps the log differs
+([BOOT-INTEGRATION.md](BOOT-INTEGRATION.md#arch-and-debian)).
 
 ```mermaid
 flowchart LR
   subgraph INITRD["the boot image (Arch: systemd units; Debian: initramfs-tools scripts)"]
     RUN["tpm2-kira-boot run (root)<br/>tpm2-kira.service / init-premount<br/>code screen, hold, board;<br/>the gate's coordinator: the phone's TPM side"]
-    CHILD["tpm2-kira-boot ssh-child<br/>nobody, namespaces, Landlock"]
-    GATE["tpm2-kira-boot gate --coordinator<br/>the radio worker, tpm2-kira-attest.service<br/>opens no TPM; confined by its unit (Arch only)"]
+    CHILD["tpm2-kira-boot ssh-child<br/>nobody; net, IPC, PID, mount, UTS ns;<br/>sandbox: no file, seccomp"]
+    GATE["tpm2-kira-boot gate-child<br/>the radio worker: nobody + NET_ADMIN, NET_RAW;<br/>IPC, PID, mount, UTS ns;<br/>sandbox: reads /sys, seccomp; no TPM"]
     CRYPT["systemd-cryptsetup<br/>(Debian: the keyscript, unlock-key)"]
     CAP["tpm2-kira-boot cap<br/>tpm2-kira-cap.service / init-bottom"]
   end
   TPM[("TPM")]
   RUN <-->|socket pair: signatures, sessions| CHILD
-  GATE <-->|gate.sock: quotes, boot key, receipt, phone salt| RUN
+  RUN -->|starts| CHILD & GATE
+  GATE <-->|socket pairs: quotes, boot key, receipt, phone salt| RUN
   CRYPT <-->|/run/tpm2-kira/unlock.sock| RUN
   RUN --- TPM
   CAP --- TPM
@@ -142,7 +148,7 @@ flowchart LR
 |---|---|---|
 | `unlock` | always | `run` answers the key socket (Arch) or the keyscript (Debian) |
 | `codes` | a slot is sealed | `run` shows the codes |
-| `phone` | a phone is enrolled and the adapter found | `gate` is the radio worker and opens no TPM; everything the phone check needs from the TPM - the record check, quotes, the boot key (certify, sign, its challenge), the EK, opening the phone salt - `run` does as the gate's coordinator, and it reads the receipt itself ([BOOT-INTEGRATION.md](BOOT-INTEGRATION.md), `internal/phonegate/gate_service.go`) |
+| `phone` | a phone is enrolled and the adapter found | `run` starts `gate-child`, the radio worker, which has no TPM; everything the phone check needs from the TPM - the record check, quotes, the boot key (certify, sign, its challenge), the EK, opening the phone salt - `run` does as the gate's coordinator, and it reads the receipt itself ([BOOT-INTEGRATION.md](BOOT-INTEGRATION.md), `internal/phonegate/gate_service.go`) |
 | `vault` | a slot is enrolled with a vault | `run` asks the vault while the screen holds |
 | `net`, `ssh` | set in `control` | the image's network; `run` starts the SSH server, `ssh-child` speaks SSH |
 

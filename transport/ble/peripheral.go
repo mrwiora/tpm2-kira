@@ -3,6 +3,7 @@ package ble
 import (
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/transport/frame"
@@ -17,6 +18,9 @@ type Config struct {
 	DeviceName string
 	// UnblockRFKill clears a soft rfkill block on the adapter before use.
 	UnblockRFKill bool
+	// RFKill is /dev/rfkill, opened by a process that may (a confined one
+	// may not). Nil: opened here when a soft block is to be cleared.
+	RFKill io.Writer
 	// Wait is how long to wait for the adapter to appear and become free.
 	// In an initramfs the adapter shows up only after its module and
 	// firmware have loaded, and the kernel holds it busy while it runs the
@@ -47,7 +51,7 @@ func Open(cfg Config) (*Peripheral, error) {
 	if cfg.DeviceName == "" {
 		cfg.DeviceName = "tpm2-kira"
 	}
-	tr, release, err := openUserChannelWait(cfg.Adapter, cfg.UnblockRFKill, cfg.Wait, cfg.Cancel, cfg.Logf)
+	tr, release, err := openUserChannelWait(cfg.Adapter, cfg.UnblockRFKill, cfg.RFKill, cfg.Wait, cfg.Cancel, cfg.Logf)
 	if err != nil {
 		return nil, err
 	}

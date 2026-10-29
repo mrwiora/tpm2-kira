@@ -9,15 +9,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/unixsock"
 )
 
 // A coordinator for one slot with one enrolled phone and no TPM behind it:
@@ -210,33 +207,26 @@ func (f *fakeHost) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest [
 	return &attest.BootAnswer{Proof: append([]byte("proof:"), context...), Signature: append([]byte("sig:"), quoteDigest...)}, attest.BootKeyProved
 }
 
-func startTestGate(t *testing.T, host GateHost) string {
+// startTestGate links a coordinator serving host to a worker's client.
+func startTestGate(t *testing.T, host GateHost) (*GateClient, *GateServer) {
 	t.Helper()
-	path, _ := startTestGateServer(t, host)
-	return path
-}
-
-func startTestGateServer(t *testing.T, host GateHost) (string, *GateServer) {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "run", "gate.sock")
-	l, err := unixsock.Listen(path)
+	g, files, err := LinkGate(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := ServeGate(l, host)
 	t.Cleanup(g.Close)
-	return path, g
+	c, err := GateClientFromFiles(files[0], files[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	return c, g
 }
 
 // The coordinator's service ends with the code screen's hold, and the
 // worker learns of it at once, also while it is only waiting for a phone.
 func TestWorkerLearnsThatTheCoordinatorEnded(t *testing.T) {
-	path, server := startTestGateServer(t, &fakeHost{identity: &gateIdentity{FriendlyName: "box"}})
-	c, err := DialGate(path, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
+	c, server := startTestGate(t, &fakeHost{identity: &gateIdentity{FriendlyName: "box"}})
 	if _, _, err := c.Identity(); err != nil {
 		t.Fatal(err)
 	}
@@ -257,10 +247,6 @@ func TestWorkerLearnsThatTheCoordinatorEnded(t *testing.T) {
 	if _, err := c.Quote(make([]byte, 32), attest.PCRSelection{Alg: attest.AlgSHA256, Indices: []uint8{0}}); err == nil {
 		t.Fatal("a closed coordinator quoted")
 	}
-	// Nobody new is served either.
-	if _, err := DialGate(path, 300*time.Millisecond); err == nil {
-		t.Fatal("a closed coordinator accepted a worker")
-	}
 	server.Close() // twice is fine
 }
 
@@ -271,21 +257,7 @@ func TestWorkerReachesTheCoordinator(t *testing.T) {
 			Verifiers: []gateVerifier{{ID: "p", NoisePub: []byte("np")}}},
 		evlog: make([]byte, 300_000),
 	}
-	path := startTestGate(t, host)
-
-	// Only the coordinator's user can enter.
-	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
-		t.Fatalf("socket mode %v %v", st.Mode(), err)
-	}
-	if st, _ := os.Stat(filepath.Dir(path)); st.Mode().Perm() != 0o700 {
-		t.Fatalf("directory mode %v", st.Mode())
-	}
-
-	c, err := DialGate(path, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
+	c, _ := startTestGate(t, host)
 	id, code, err := c.Identity()
 	if err != nil || code != 0 || id.FriendlyName != "box" || !id.RecordVerified || len(id.Verifiers) != 1 || id.Verifiers[0].ID != "p" {
 		t.Fatalf("identity: %+v %d %v", id, code, err)
@@ -334,19 +306,9 @@ func TestWorkerReachesTheCoordinator(t *testing.T) {
 	}
 
 	// A refusal carries the coordinator's exit status to the worker's unit.
-	refusing := startTestGate(t, &fakeHost{code: ExitTampered})
-	c2, err := DialGate(refusing, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c2.Close()
+	c2, _ := startTestGate(t, &fakeHost{code: ExitTampered})
 	if _, code, err := c2.Identity(); code != ExitTampered || err == nil {
 		t.Fatalf("refusal: %d %v", code, err)
-	}
-
-	// Without a coordinator the worker gives up; it has no TPM to fall back to.
-	if _, err := DialGate(filepath.Join(t.TempDir(), "nobody"), 300*time.Millisecond); err == nil {
-		t.Fatal("dialled nothing")
 	}
 }
 
@@ -354,9 +316,15 @@ func TestWorkerReachesTheCoordinator(t *testing.T) {
 // malformed messages get no service.
 func TestCoordinatorTreatsRequestsAsInput(t *testing.T) {
 	host := &fakeHost{identity: &gateIdentity{}}
-	path := startTestGate(t, host)
 	dial := func() net.Conn {
-		conn, err := net.Dial("unix", path)
+		g, files, err := LinkGate(host)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(g.Close)
+		files[1].Close()
+		conn, err := net.FileConn(files[0])
+		files[0].Close()
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -96,7 +96,6 @@ install-mkinitcpio:
 	sudo chmod +x /etc/initcpio/post/sd-tpm2-kira
 	sudo mkdir -p /usr/lib/systemd/system
 	sudo install -m644 initramfs/systemd/tpm2-kira.service initramfs/systemd/tpm2-kira-cap.service initramfs/systemd/tpm2-kira-unlock.socket /usr/lib/systemd/system/
-	sudo install -m644 initramfs/systemd/tpm2-kira-attest.service /usr/lib/systemd/system/
 	@if [ ! -e /etc/tpm2-kira/control.conf ]; then \
 		sudo install -Dm644 initramfs/common/control.conf /etc/tpm2-kira/control.conf; \
 	fi
@@ -122,7 +121,6 @@ install-mkinitcpio:
 uninstall-mkinitcpio:
 	@echo "Uninstalling mkinitcpio hooks..."
 	sudo rm -f /etc/initcpio/install/sd-tpm2-kira
-	sudo rm -f /usr/lib/systemd/system/tpm2-kira-attest.service
 	sudo rm -f /etc/initcpio/post/sd-tpm2-kira
 	sudo rm -f /usr/lib/systemd/system/tpm2-kira.service /usr/lib/systemd/system/tpm2-kira-cap.service /usr/lib/systemd/system/tpm2-kira-unlock.socket
 	@echo "Mkinitcpio hooks uninstalled!"
@@ -151,9 +149,6 @@ install-initramfs-tools:
 	sudo install -Dm755 initramfs/initramfs-tools/kernel/zzz-tpm2-kira /etc/kernel/postinst.d/zzz-tpm2-kira
 	sudo install -Dm755 initramfs/initramfs-tools/kernel/zzz-tpm2-kira /etc/kernel/postrm.d/zzz-tpm2-kira
 	sudo install -Dm755 initramfs/initramfs-tools/keyscript/tpm2-kira /lib/cryptsetup/scripts/tpm2-kira
-	@if [ ! -e /etc/tpm2-kira/initramfs.conf ]; then \
-		sudo install -Dm644 initramfs/initramfs-tools/initramfs.conf /etc/tpm2-kira/initramfs.conf; \
-	fi
 	@if [ ! -e /etc/tpm2-kira/control.conf ]; then \
 		sudo install -Dm644 initramfs/common/control.conf /etc/tpm2-kira/control.conf; \
 	fi

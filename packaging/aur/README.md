@@ -68,8 +68,8 @@ the assh commit on aSSH's.
 ## What the package does and does not do
 
 - Installs the binary, the mkinitcpio install and post hooks, the initrd units
-  (`tpm2-kira.service`, `tpm2-kira-cap.service`, `tpm2-kira-unlock.socket`,
-  `tpm2-kira-attest.service`) and `/etc/tpm2-kira/control.conf`.
+  (`tpm2-kira.service`, `tpm2-kira-cap.service`, `tpm2-kira-unlock.socket`)
+  and `/etc/tpm2-kira/control.conf`.
 - Does **not** enable the units on the host. The mkinitcpio install hook
   enables it inside the initramfs image, which is the only place it should run.
 - Does **not** run `tpm2-kira setup` or `tpm2-kira slot add`. Sealing generates a

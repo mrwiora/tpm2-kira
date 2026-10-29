@@ -31,9 +31,9 @@ scripts run it; on the installed system it is 'tpm2-kira')
                phone's gate, the SSH server, the vault, the disk's key
   cap          Lock the codes until the next boot (when the initrd is left)
   unlock-key   Debian's keyscript: the disk's key from run's socket, else askpass
-  gate         The phone's radio worker, beside run's coordinator
   reveal       The current code (reveal-plain: without colour)
   ssh-child    The SSH server's unprivileged half, started by run
+  gate-child   The phone's radio worker, started by run
   version      The version
 
 Options are the command's own (tpm2-kira-boot <command> -h).
@@ -60,6 +60,12 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	case "gate-child":
+		// The phone's radio worker: started by 'run' as nobody.
+		fs := flag.NewFlagSet("gate-child", flag.ExitOnError)
+		debug := fs.Bool("debug", false, "Narrate every step")
+		fs.Parse(args)
+		os.Exit(phonegate.RadioWorkerMain(*debug))
 	}
 	if os.Geteuid() != 0 && os.Getenv("TPM2_KIRA_UNPRIVILEGED") == "" {
 		fmt.Fprintf(os.Stderr, "tpm2-kira-boot %s: root is needed\n", command)
@@ -88,25 +94,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "tpm2-kira-boot: %v\n", err)
 			os.Exit(1) // a keyscript's exit status is what cryptroot reads
 		}
-	case "gate":
-		fs := flag.NewFlagSet("gate", flag.ExitOnError)
-		tpm := fs.String("tpm", tpmdev.DefaultPath, "Path to TPM device")
-		adapter := fs.Int("adapter", -1, "Bluetooth adapter index (hciN); default: the first that comes up")
-		adapterWait := fs.Duration("adapter-wait", phonegate.GateAdapterWait, "Wait this long for the adapter to appear")
-		coordinator := fs.String("coordinator", "", "Socket of the coordinator ('run --gate') that holds the TPM")
-		debug := fs.Bool("debug", false, "Enable debug output")
-		fs.Parse(args)
-		if *coordinator == "" {
-			fmt.Fprintln(os.Stderr, "tpm2-kira-boot gate: --coordinator is required; by hand, 'tpm2-kira phone gate' serves the phone")
-			os.Exit(phonegate.ExitUsage)
-		}
-		// Nothing is configured: the gate takes the adapter that comes up,
-		// waits for it and for a phone as long as the code screen holds,
-		// and logs every step when the boot settings in the TPM say debug.
-		os.Exit(phonegate.AttestGate(phonegate.GateOptions{
-			TPMPath: *tpm, Adapter: *adapter, AdapterWait: *adapterWait,
-			Debug: *debug || nvslot.BootDebug(*tpm), Coordinator: *coordinator,
-		}))
 	case "reveal", "reveal-plain":
 		fs := flag.NewFlagSet(command, flag.ExitOnError)
 		tpm := fs.String("tpm", tpmdev.DefaultPath, "Path to TPM device")
@@ -125,7 +112,6 @@ func runRun(args []string) {
 	tpm := fs.String("tpm", tpmdev.DefaultPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", 0, "A slot, 0-15, or a full NV index (default: every populated slot)")
 	debug := fs.Bool("debug", false, "Enable debug output")
-	gate := fs.String("gate", "", "Also be the Bluetooth gate's coordinator on this socket: hold the TPM for 'gate --coordinator' and let the phone's verdict release the boot (set by the initrd unit)")
 	hold := fs.Uint("hold", uint(bootrun.HoldDefault/time.Second), "Seconds to wait for Enter after showing the code before the boot continues on its own (0: at once)")
 	unlock := fs.String("unlock", "", "Also answer the disk's key requests on this socket: Debian's boot script passes it; under systemd the socket unit hands its socket over instead")
 	ssh := fs.Bool("ssh", false, "Also be the SSH server: the codes are shown and confirmed in an SSH session, the console says where to log in (set by the image's drop-in)")
@@ -145,7 +131,7 @@ func runRun(args []string) {
 			fmt.Fprintf(os.Stderr, "tpm2-kira-boot: the SSH server is not started: %v - the code screen is at the console\n", err)
 		}
 	}
-	bootrun.Run(*tpm, slotIndex(fs, *nvram), time.Duration(*hold)*time.Second, *gate, *unlock, remote, planned, *debug)
+	bootrun.Run(*tpm, slotIndex(fs, *nvram), time.Duration(*hold)*time.Second, *unlock, remote, planned, *debug)
 }
 
 // slotIndex is the blob index of the slot --nvram names (0-15 or a full NV

@@ -3,12 +3,10 @@ Description=tpm2-kira code screen and disk unlock
 # An initrd unit. The package also puts this file on the host, where the
 # mkinitcpio hook picks it up from; enabled there by mistake it does nothing.
 ConditionPathExists=/etc/initrd-release
-# The TPM is waited for only when the image's boot plan has a part that
-# needs it (the codes, the phone, the vault, the SSH CA's host key): the
-# plan's drop-in, tpm2-kira.service.d/tpm.conf, wants the resource-managed
-# node, where tpm2-kira only sees and flushes its own handles, and bounds
-# the wait (dev-tpmrm0.device.d, JobTimeoutSec=5). The key provider needs
-# no TPM: the prompt is tpm2-kira's on every machine.
+# The TPM is waited for by run itself, at most 5 s, and only when the
+# image's boot plan has a part that needs it (the codes, the phone, the
+# vault, the SSH CA's host key) - as on Debian. The key provider needs no
+# TPM: the prompt is tpm2-kira's on every machine.
 # The measure point: after systemd's enter-initrd phase (PCR 11) and before
 # the OS separator extends PCRs 0-7, 9, 12-14. Type=notify: a fresh code is
 # shown every 30 s until Enter is pressed on the console or the hold (90 s)
@@ -25,10 +23,10 @@ Before=systemd-pcrnvdone.service
 Before=systemd-ask-password-console.service
 Conflicts=multi-user.target
 # With a phone enrolled, this process is also the coordinator of the
-# Bluetooth gate (tpm2-kira-attest.service): it holds the TPM for the radio
-# worker, which has none, and reads the phone's receipt itself. That service
-# ends when the boot is released, and normally the process with it. It must
-# not stay on the console: StandardInput=tty makes it the terminal's owner,
+# Bluetooth gate: it starts the radio worker (gate-child, confined by the
+# binary itself, as on Debian), holds the TPM for it, and reads the phone's
+# receipt itself. The worker ends when the boot is released. The process
+# must not stay on the console: StandardInput=tty makes it the terminal's owner,
 # and the passphrase prompt waits for the console to be free. (A display
 # that goes on for codes that only compute after the separator gives the
 # terminal up first.)
@@ -49,13 +47,12 @@ Type=notify
 # longer than this. Raise it together with --hold.
 TimeoutStartSec=180
 # --plan: the parts the image carries (internal/admin/bootplan.go); what is not in it
-# is not started. --gate: where the radio worker reaches this process, with
-# the phone in the plan. The key socket comes from the socket unit
+# is not started. The key socket comes from the socket unit
 # (Sockets=), not from a flag. TPM2_KIRA_REMOTE is set by the
 # image's drop-in (tpm2-kira.service.d/remote.conf) when control.conf turns
 # the SSH server on: --ssh and its hold (the port is assh.conf's); unset,
 # it is no argument.
-ExecStart=tpm2-kira-boot run --plan /etc/tpm2-kira/plan --gate /run/tpm2-kira/gate.sock $TPM2_KIRA_REMOTE
+ExecStart=tpm2-kira-boot run --plan /etc/tpm2-kira/plan $TPM2_KIRA_REMOTE
 # Enter on the console releases the boot.
 StandardInput=tty
 StandardOutput=tty

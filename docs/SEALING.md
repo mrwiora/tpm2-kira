@@ -29,12 +29,12 @@ verdict, or the end of the hold), the gate ends too, and nothing listens to
 the radio at the passphrase prompt. A phone that is in the middle of its
 answer when the hold runs out gets up to a minute more.
 
-The gate is two processes of the one `tpm2-kira` binary. The display is also
-its *coordinator* (`tpm2-kira-boot run --gate`): it holds the TPM, issues the
-quotes and reads the phone's signed receipt. The *radio worker*
-(`tpm2-kira-boot gate --coordinator`, in `tpm2-kira-attest.service`) talks
-to the phone and has no TPM at all; it asks the coordinator over a socket in
-`/run/tpm2-kira`. What listens to the radio can therefore neither have a
+The gate is two processes of the one `tpm2-kira-boot` binary. The display
+is also its *coordinator* (`tpm2-kira-boot run`): it holds the TPM, issues
+the quotes and reads the phone's signed receipt. The *radio worker*
+(`tpm2-kira-boot gate-child`, which `run` starts as nobody, confined) talks
+to the phone and has no TPM at all; it asks the coordinator over the socket
+pairs it was started with. What listens to the radio can therefore neither have a
 TOTP code computed nor make up a verdict.
 
 That order is what locks the key for the rest of the boot. PCR extends are

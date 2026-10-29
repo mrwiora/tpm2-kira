@@ -230,7 +230,7 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 	if len(entries) != 1 || entries[0].Name() != imageplan.PartUnlock {
 		t.Fatalf("the plan names %v", entries)
 	}
-	for _, p := range []string{imageTPMDropIn, "/" + btModulesLoadConf, phonegate.DefaultAttestSignerPath, imageNetworkFile} {
+	for _, p := range []string{"/" + btModulesLoadConf, phonegate.DefaultAttestSignerPath, imageNetworkFile} {
 		if _, err := os.Stat(filepath.Join(root, p)); err == nil {
 			t.Errorf("%s in an image of the disk unlock alone", p)
 		}
@@ -273,8 +273,6 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 		t.Error("the vault is named, and no slot has one")
 	}
 	for path, want := range map[string]string{
-		imageTPMDropIn:                    "Wants=dev-tpmrm0.device",
-		imageTPMWaitDropIn:                "JobTimeoutSec=5",
 		"/" + btModulesLoadConf:           "btusb\nbtintel\nbluetooth\n",
 		phonegate.DefaultAttestSignerPath: "BEGIN PUBLIC KEY",
 		"/" + BTUdevRuleFile:              `KERNEL=="3-10"`,
@@ -309,8 +307,8 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 }
 
 // initramfs-tools: the network and the SSH flags in remote.conf for the
-// boot scripts, the adapter's modules in a list of their own; no
-// systemd-networkd file and no drop-ins.
+// boot scripts, the adapter's modules for the hook to force_load; no
+// systemd-networkd file, no drop-ins and no module list.
 func TestWriteImageInitramfsTools(t *testing.T) {
 	fakeNet(t, map[string]string{"enp1s0": "aa:bb:cc:dd:ee:01"})
 	in := planInputs{Config: planConfig(t, "TPM2_KIRA_NET=static\nTPM2_KIRA_NET_MATCH=aa:bb:cc:dd:ee:01\nTPM2_KIRA_NET_ADDRESS=\"192.0.2.10/24 2001:db8::10/64\"\nTPM2_KIRA_NET_GATEWAY=192.0.2.1\nTPM2_KIRA_SSH=on\n"),
@@ -331,10 +329,7 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 			t.Errorf("remote.conf lacks %s:\n%s", want, conf)
 		}
 	}
-	if got := readImage(t, root, btModulesList); got != "btusb\n" {
-		t.Errorf("the module list: %q", got)
-	}
-	for _, p := range []string{imageNetworkFile, imageRunDropIn, imageTPMDropIn, "/" + btModulesLoadConf} {
+	for _, p := range []string{imageNetworkFile, imageRunDropIn, "/" + btModulesLoadConf} {
 		if _, err := os.Stat(filepath.Join(root, p)); err == nil {
 			t.Errorf("%s in an initramfs-tools image", p)
 		}

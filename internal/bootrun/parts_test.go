@@ -11,7 +11,7 @@ import (
 // Only what the plan names is started: an image without the phone, the
 // vault and SSH starts the disk's key provider and the console alone.
 func TestOnlyThePlannedPartsStart(t *testing.T) {
-	ps := plannedParts(imageplan.Planned{Codes: true}, sshscreen.Options{}, "/run/gate.sock", "/run/unlock.sock")
+	ps := plannedParts(imageplan.Planned{Codes: true}, sshscreen.Options{}, "/run/unlock.sock")
 	if ps.phone != nil || ps.ssh != nil || ps.vault != nil {
 		t.Fatalf("parts the plan does not name: %+v", ps)
 	}
@@ -19,7 +19,7 @@ func TestOnlyThePlannedPartsStart(t *testing.T) {
 		t.Fatalf("started %v", got)
 	}
 
-	ps = plannedParts(imageplan.All, sshscreen.Options{On: true}, "/run/gate.sock", "/run/unlock.sock")
+	ps = plannedParts(imageplan.All, sshscreen.Options{On: true}, "/run/unlock.sock")
 	got := ps.inOrder()
 	want := []part{ps.phone, ps.ssh, ps.vault, ps.unlock, ps.console}
 	if len(got) != len(want) {

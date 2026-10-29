@@ -361,17 +361,6 @@ func planDigest(fields ...string) string {
 //
 // The units are the hook's: it adds them by the parts ImagePlanDir names.
 
-// btModulesList is initramfs-tools' list of the adapter's modules, loaded
-// by the init-premount script; mkinitcpio's is btModulesLoadConf.
-const btModulesList = "/etc/tpm2-kira/bluetooth-modules"
-
-// The mkinitcpio drop-ins for a plan that needs the TPM: the display waits
-// for the device, for a bounded time only.
-const (
-	imageTPMDropIn     = "/etc/systemd/system/tpm2-kira.service.d/tpm.conf"
-	imageTPMWaitDropIn = "/etc/systemd/system/dev-tpmrm0.device.d/tpm2-kira.conf"
-)
-
 // WriteImage writes the plan's files into the image under construction
 // and says what the hook adds.
 func (p *BootPlan) WriteImage(buildroot, format string, out io.Writer) error {
@@ -412,26 +401,16 @@ func (p *BootPlan) WriteImage(buildroot, format string, out io.Writer) error {
 		fmt.Fprintf(out, "warning %s\n", w)
 	}
 
-	if p.TPM && format == FormatMkinitcpio {
-		if err := writeImageFile(buildroot, imageTPMDropIn, []byte("# Written by 'tpm2-kira initramfs plan': a part of the plan needs the TPM.\n[Unit]\nWants=dev-tpmrm0.device\nAfter=dev-tpmrm0.device\n"), 0o644); err != nil {
-			return err
-		}
-		// The display runs without the TPM too: the disk unlock does not
-		// need it.
-		if err := writeImageFile(buildroot, imageTPMWaitDropIn, []byte("[Unit]\nJobTimeoutSec=5\n"), 0o644); err != nil {
-			return err
-		}
-	}
-
 	if p.Has(imageplan.PartPhone) {
 		bt := in.BT
-		modules := []byte(strings.Join(bt.Modules, "\n") + "\n")
-		list := "/" + btModulesLoadConf
-		if format == FormatInitramfsTools {
-			list = btModulesList
-		}
-		if err := writeImageFile(buildroot, list, modules, 0o644); err != nil {
-			return err
+		// The adapter's modules are loaded by the image's init, before
+		// run: mkinitcpio's systemd-modules-load reads this list,
+		// initramfs-tools' init the hook's (bt-module, force_load).
+		if format == FormatMkinitcpio {
+			modules := []byte(strings.Join(bt.Modules, "\n") + "\n")
+			if err := writeImageFile(buildroot, "/"+btModulesLoadConf, modules, 0o644); err != nil {
+				return err
+			}
 		}
 		// The signing key's public half, which the gate checks the
 		// enrolment with: in the image alone, never on the running system.

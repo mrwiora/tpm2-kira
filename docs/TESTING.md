@@ -104,12 +104,14 @@ transcript, a log per command and session (`session-*-control.log`,
    The key that may log in at boot is a test key the run makes; the CA's
    `@cert-authority` line goes into the run's own known_hosts.
 7. **The image:** `tpm2-kira-boot` and no `tpm2-kira`, no control.conf,
-   the plan's parts.
+   the plan's parts, no unit or script that starts a gate (`run` starts
+   its children itself).
 8. **Reboots** (`--cycles`): the boot SSH server answers; its host key is
    checked against the CA (`StrictHostKeyChecking=yes`); both slots'
    codes against the computed ones; Enter, the password and the salt in
    the session; the session ends with the server's last line; after the
-   boot the cap ran, the key was answered, `ssh-child` ran confined, and
+   boot the cap ran, the key was answered, `ssh-child` ran confined
+   (nobody, no new privileges, no executable memory, Landlock, seccomp), and
    the boot's log has no error.
 9. **Remote attestation over TLS, the vault:** a token from the vault,
    `luks enrol --mode tpm+vault`, the image rebuilt with the vault; a boot

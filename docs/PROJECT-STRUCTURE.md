@@ -73,7 +73,6 @@ Where things are in the repository, and how the tests are run.
 │   ├── common/control.conf          # tpm2-kira's configuration: what the image is built with (radio, network, SSH); aSSH's is assh.conf beside it
 │   ├── systemd/tpm2-kira.service   # Shows the code in systemd-based images
 │   ├── systemd/tpm2-kira-cap.service  # Runs 'cap' when leaving the initrd
-│   ├── systemd/tpm2-kira-attest.service  # The phone's Bluetooth gate (the radio worker)
 │   ├── mkinitcpio/                 # Arch
 │   │   ├── install/sd-tpm2-kira    # Build hook: puts the binary in the image
 │   │   ├── post/sd-tpm2-kira       # Approve after the image is written
@@ -82,8 +81,7 @@ Where things are in the repository, and how the tests are run.
 │       ├── hooks/tpm2-kira         # Build hook: copies the static binary
 │       ├── scripts/init-premount/tpm2-kira  # Shows the code before unlock
 │       ├── scripts/init-bottom/tpm2-kira    # Stops it and caps before switching root
-│       ├── post-update.d/tpm2-kira          # slot approve for the new image
-│       └── initramfs.conf          # Display mode (run / once)
+│       └── post-update.d/tpm2-kira          # slot approve for the new image
 ├── debian/                  # Debian package definition (must sit at the root)
 ├── packaging/
 │   ├── aur/                 # Arch Linux PKGBUILD

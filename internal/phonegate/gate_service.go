@@ -6,13 +6,14 @@ package phonegate
 // The gate's coordinator: the half of phone attestation that holds the TPM.
 //
 // Attestation over Bluetooth is done by two processes of this one binary.
-// The radio worker (tpm2-kira-attest.service) advertises, speaks the
-// protocol with the phone and parses whatever the radio delivers; its unit
-// gives it Bluetooth sockets and nothing else. The coordinator is the
-// process that already owns the console and the TPM at boot (tpm2-kira-boot run):
-// it checks the enrolment record, produces the quotes, and reads the phone's
-// receipt itself. The worker reaches it over a Unix socket (gate_ipc.go) and
-// can ask for exactly that.
+// The radio worker (gate-child, gate_child.go) advertises, speaks the
+// protocol with the phone and parses whatever the radio delivers; it is
+// started with the adapter's capabilities and nothing else, and confines
+// itself. The coordinator is the process that already owns the console and
+// the TPM at boot (tpm2-kira-boot run), and starts the worker: it checks
+// the enrolment record, produces the quotes, and reads the phone's receipt
+// itself. The worker reaches it over the socket pairs it was started with
+// (gate_ipc.go) and can ask for exactly that.
 //
 // So a flaw in the radio path stays where the radio is. The worker has no
 // TPM: it cannot have a TOTP code computed while the code screen is up, and
@@ -63,7 +64,7 @@ type gateVerifier struct {
 
 // GateHost is what the radio side of the gate needs from the TPM side:
 // implemented by the coordinator itself (gateService) and, for the worker,
-// by its connection to the coordinator (gateClient).
+// by its connection to the coordinator (GateClient).
 type GateHost interface {
 	// Identity returns the slot to serve, or the exit status with which
 	// the gate gives up.

@@ -144,6 +144,16 @@ It may not carry what came before.
   to rebuild; a part the image carries for nothing is not - the next build
   leaves it out. Do not decide what the image carries in a hook's shell
   or at boot: add the rule to the plan.
+- **One boot on every distribution.** Arch's unit and Debian's
+  init-premount script start the same `run`, and `run` starts everything
+  else of tpm2-kira's at boot itself: the parts of the plan, the TPM wait,
+  and the processes that parse outside input - `ssh-child` and the phone's
+  `gate-child` - as nobody, confined in code by assh's `sandbox` on every
+  thread. A unit or script of tpm2-kira's does only what the distribution
+  needs around `run`: start and stop it, hand the disk's key to
+  cryptsetup, bring up the image's network, keep the log
+  (docs/BOOT-INTEGRATION.md, "Arch and Debian"). Do not add a second
+  process, a confinement or a wait to one of them: add it to `run`.
 - **Root for everything but the help.** Every command refuses to run as a
   user (`main.go` `requireRoot`); `control` says so on its own screen. The
   test suite's exception is `TPM2_KIRA_UNPRIVILEGED=1` for the binary

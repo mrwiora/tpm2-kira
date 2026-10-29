@@ -5,7 +5,11 @@ package imageplan
 import (
 	"os"
 	"path/filepath"
+	"time"
 )
+
+// TPMWait is how long run waits for the TPM's device to appear.
+const TPMWait = 5 * time.Second
 
 // ImagePlanDir is where the image names its parts.
 const Dir = "/etc/tpm2-kira/plan"
@@ -13,10 +17,12 @@ const Dir = "/etc/tpm2-kira/plan"
 // Planned is what 'run' starts, from the image's ImagePlanDir.
 type Planned struct {
 	Codes, Phone, Vault bool
+	// TPM: a part needs the TPM, and run waits for its device first.
+	TPM bool
 }
 
 // AllPlanned is 'run' without a plan, by hand: everything it finds.
-var All = Planned{Codes: true, Phone: true, Vault: true}
+var All = Planned{Codes: true, Phone: true, Vault: true, TPM: true}
 
 // ReadPlanned reads the parts an image names in dir.
 func Read(dir string) Planned {
@@ -24,7 +30,7 @@ func Read(dir string) Planned {
 		st, err := os.Stat(filepath.Join(dir, name))
 		return err == nil && st.IsDir()
 	}
-	return Planned{Codes: has(PartCodes), Phone: has(PartPhone), Vault: has(PartVault)}
+	return Planned{Codes: has(PartCodes), Phone: has(PartPhone), Vault: has(PartVault), TPM: has(PartTPM)}
 }
 
 // The parts, in the order they are told.
@@ -35,7 +41,7 @@ const (
 	PartVault  = "vault"  // a slot's key from the vault
 	PartNet    = "net"    // the image's network
 	PartSSH    = "ssh"    // tpm2-kira's SSH server
-	// partTPM is derived: the TPM device is waited for at boot when a part
-	// needs it. It is a marker, not a part of its own.
+	// PartTPM is derived: run waits for the TPM's device (TPMWait) when a
+	// part needs it. It is a marker, not a part of its own.
 	PartTPM = "tpm"
 )

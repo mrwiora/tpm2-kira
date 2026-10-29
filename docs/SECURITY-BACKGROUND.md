@@ -844,7 +844,7 @@ the codes on the screen are the design. `tpm2-kira-boot cap` at
 `initrd-switch-root` read-locks the generation index on top of that, which
 also covers blobs whose policy holds after the separator.
 
-The attestation gate (`tpm2-kira-attest.service`) stays *after* the
+The attestation gate (`run`'s radio worker, `gate-child`) stays *after* the
 separator: a quote is not a secret, post-separator values are a fixed function
 of pre-separator ones, and the gate advertises for a while during which it
 could not hold the separator back. Its baseline is predicted for that point.

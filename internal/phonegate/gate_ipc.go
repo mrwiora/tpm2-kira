@@ -1,13 +1,15 @@
 package phonegate
 
 // The connection between the radio worker and the coordinator
-// (gate_service.go): a Unix socket in /run, one request and one answer at a
-// time, each a length-prefixed JSON object.
+// (gate_service.go): two socket pairs the coordinator makes and hands the
+// worker as it starts it (gate_child.go) - one for one request and one
+// answer at a time, each a length-prefixed JSON object, and one that stays
+// silent and ends when the coordinator does. Nothing is in the file
+// system, so nothing else can connect.
 //
 // The coordinator treats what arrives as input from the process that
-// listens to the radio: requests are small and bounded, name one of five
-// operations, and every operation checks its own arguments. Only a process
-// of the coordinator's own user (root) may connect.
+// listens to the radio: requests are small and bounded, name one of the
+// operations below, and every operation checks its own arguments.
 
 import (
 	"encoding/binary"
@@ -18,15 +20,11 @@ import (
 	"net"
 	"os"
 	"sync"
-	"time"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/mrwiora/tpm2-kira/attest"
 )
-
-// DefaultGateSocketPath is where the units put the coordinator's socket.
-const DefaultGateSocketPath = "/run/tpm2-kira/gate.sock"
 
 const (
 	gateOpIdentity   = "identity"
@@ -107,94 +105,79 @@ func readGateFrame(r io.Reader, v any, limit int) error {
 	return json.Unmarshal(data, v)
 }
 
-// GateServer is the coordinator's listening side.
+// GateServer is the coordinator's side of the connection.
 type GateServer struct {
-	l     net.Listener
 	mu    sync.Mutex
-	conns map[net.Conn]struct{}
-	done  bool
+	conns []net.Conn
 }
 
-// ServeGate answers radio workers until Close. Requests are handled one at
-// a time, whichever connection they come from.
-func ServeGate(l net.Listener, host GateHost) *GateServer {
-	g := &GateServer{l: l, conns: map[net.Conn]struct{}{}}
-	go g.run(host)
-	return g
+// LinkGate makes the connection and serves host on the coordinator's ends,
+// one request at a time, until Close. The worker's ends are returned as
+// files: ExtraFiles of the worker's process, or GateClientFromFiles.
+func LinkGate(host GateHost) (*GateServer, [2]*os.File, error) {
+	var worker [2]*os.File
+	g := &GateServer{}
+	var one sync.Mutex
+	for i := range worker {
+		mine, theirs, err := socketPair()
+		if err != nil {
+			g.Close()
+			for _, f := range worker[:i] {
+				f.Close()
+			}
+			return nil, worker, err
+		}
+		g.conns = append(g.conns, mine)
+		worker[i] = theirs
+		go g.serve(mine, host, &one)
+	}
+	return g, worker, nil
 }
 
-// Close ends the coordinator's service: the socket goes away and every
-// worker's connection is closed, which is how a worker learns that the
-// phone check is over for this boot.
+// socketPair is a connected pair of stream sockets: this process's end as
+// a connection, the other as a file.
+func socketPair() (net.Conn, *os.File, error) {
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the gate's socket pair: %w", err)
+	}
+	f := os.NewFile(uintptr(fds[0]), "gate")
+	conn, err := net.FileConn(f)
+	f.Close()
+	if err != nil {
+		unix.Close(fds[1])
+		return nil, nil, err
+	}
+	return conn, os.NewFile(uintptr(fds[1]), "gate"), nil
+}
+
+// Close ends the coordinator's service: both connections are closed,
+// which is how the worker learns that the phone check is over for this
+// boot.
 func (g *GateServer) Close() {
 	g.mu.Lock()
-	g.done = true
 	conns := g.conns
-	g.conns = map[net.Conn]struct{}{}
+	g.conns = nil
 	g.mu.Unlock()
-	g.l.Close()
-	for c := range conns {
+	for _, c := range conns {
 		c.Close()
 	}
 }
 
-func (g *GateServer) run(host GateHost) {
-	var one sync.Mutex
+func (g *GateServer) serve(conn net.Conn, host GateHost, one *sync.Mutex) {
+	defer conn.Close()
 	for {
-		conn, err := g.l.Accept()
-		if err != nil {
+		var req gateRequest
+		if err := readGateFrame(conn, &req, maxGateRequest); err != nil {
 			return
 		}
-		g.mu.Lock()
-		if g.done {
-			g.mu.Unlock()
-			conn.Close()
+		one.Lock()
+		resp := answerGate(host, &req)
+		one.Unlock()
+		if err := writeGateFrame(conn, resp, maxGateResponse); err != nil {
 			return
 		}
-		g.conns[conn] = struct{}{}
-		g.mu.Unlock()
-		go func() {
-			defer func() {
-				g.mu.Lock()
-				delete(g.conns, conn)
-				g.mu.Unlock()
-				conn.Close()
-			}()
-			if !sameUser(conn) {
-				return
-			}
-			for {
-				var req gateRequest
-				if err := readGateFrame(conn, &req, maxGateRequest); err != nil {
-					return
-				}
-				one.Lock()
-				resp := answerGate(host, &req)
-				one.Unlock()
-				if err := writeGateFrame(conn, resp, maxGateResponse); err != nil {
-					return
-				}
-			}
-		}()
 	}
-}
-
-// sameUser reports whether the peer runs as the coordinator's own user.
-func sameUser(conn net.Conn) bool {
-	uc, ok := conn.(*net.UnixConn)
-	if !ok {
-		return false
-	}
-	raw, err := uc.SyscallConn()
-	if err != nil {
-		return false
-	}
-	same := false
-	_ = raw.Control(func(fd uintptr) {
-		cred, err := unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
-		same = err == nil && int(cred.Uid) == os.Getuid()
-	})
-	return same
 }
 
 func answerGate(host GateHost, req *gateRequest) *gateResponse {
@@ -251,51 +234,47 @@ func answerGate(host GateHost, req *gateRequest) *gateResponse {
 	return &gateResponse{Err: "unknown operation"}
 }
 
-// gateClient is the radio worker's side: a gateHost whose every method is
+// GateClient is the radio worker's side: a gateHost whose every method is
 // a question to the coordinator.
-type gateClient struct {
+type GateClient struct {
 	mu    sync.Mutex
 	conn  net.Conn
 	watch net.Conn      // a second, silent connection: it ends when the coordinator does
 	gone  chan struct{} // closed then
 }
 
-// DialGate connects to the coordinator, which starts at the same moment as
-// the worker and may not be listening yet.
-func DialGate(path string, wait time.Duration) (*gateClient, error) {
-	deadline := time.Now().Add(wait)
-	for {
-		conn, err := net.Dial("unix", path)
-		if err == nil {
-			c := &gateClient{conn: conn, gone: make(chan struct{})}
-			if c.watch, err = net.Dial("unix", path); err != nil {
-				conn.Close()
-				return nil, fmt.Errorf("coordinator at %s: %w", path, err)
-			}
-			go func() {
-				// Nothing is ever sent here; the read returns when the
-				// coordinator closes its side or exits.
-				_, _ = c.watch.Read(make([]byte, 1))
-				close(c.gone)
-			}()
-			return c, nil
-		}
-		if !time.Now().Before(deadline) {
-			return nil, fmt.Errorf("no coordinator at %s (is tpm2-kira.service running?): %w", path, err)
-		}
-		time.Sleep(200 * time.Millisecond)
+// GateClientFromFiles is the worker's side of LinkGate: the connection's
+// two ends, as LinkGate returned them or the worker inherited them.
+func GateClientFromFiles(conn, watch *os.File) (*GateClient, error) {
+	c := &GateClient{gone: make(chan struct{})}
+	var err error
+	if c.conn, err = net.FileConn(conn); err != nil {
+		return nil, fmt.Errorf("the coordinator's connection: %w", err)
 	}
+	conn.Close()
+	if c.watch, err = net.FileConn(watch); err != nil {
+		c.conn.Close()
+		return nil, fmt.Errorf("the coordinator's connection: %w", err)
+	}
+	watch.Close()
+	go func() {
+		// Nothing is ever sent here; the read returns when the
+		// coordinator closes its side or exits.
+		_, _ = c.watch.Read(make([]byte, 1))
+		close(c.gone)
+	}()
+	return c, nil
 }
 
-func (c *gateClient) Close() error {
+func (c *GateClient) Close() error {
 	c.watch.Close()
 	return c.conn.Close()
 }
 
 // Gone is closed when the coordinator has ended its service.
-func (c *gateClient) Gone() <-chan struct{} { return c.gone }
+func (c *GateClient) Gone() <-chan struct{} { return c.gone }
 
-func (c *gateClient) ask(req *gateRequest) (*gateResponse, error) {
+func (c *GateClient) ask(req *gateRequest) (*gateResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := writeGateFrame(c.conn, req, maxGateRequest); err != nil {
@@ -309,7 +288,7 @@ func (c *gateClient) ask(req *gateRequest) (*gateResponse, error) {
 }
 
 // Identity implements gateHost.
-func (c *gateClient) Identity() (*gateIdentity, int, error) {
+func (c *GateClient) Identity() (*gateIdentity, int, error) {
 	resp, err := c.ask(&gateRequest{Op: gateOpIdentity})
 	if err != nil {
 		return nil, ExitUnavailable, err
@@ -325,7 +304,7 @@ func (c *gateClient) Identity() (*gateIdentity, int, error) {
 }
 
 // Quote implements attest.AttesterBackend.
-func (c *gateClient) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteResult, error) {
+func (c *GateClient) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteResult, error) {
 	resp, err := c.ask(&gateRequest{Op: gateOpQuote, QD: qd, Alg: sel.Alg, PCRs: sel.Indices})
 	if err != nil {
 		return nil, err
@@ -337,7 +316,7 @@ func (c *gateClient) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteRes
 }
 
 // BootContext implements attest.AttesterBackend.
-func (c *gateClient) BootContext() attest.BootContext {
+func (c *GateClient) BootContext() attest.BootContext {
 	resp, err := c.ask(&gateRequest{Op: gateOpBoot})
 	if err != nil || resp.Boot == nil {
 		return attest.BootContext{}
@@ -346,7 +325,7 @@ func (c *gateClient) BootContext() attest.BootContext {
 }
 
 // Eventlog implements attest.AttesterBackend.
-func (c *gateClient) Eventlog() ([]byte, error) {
+func (c *GateClient) Eventlog() ([]byte, error) {
 	resp, err := c.ask(&gateRequest{Op: gateOpEventlog})
 	if err != nil {
 		return nil, err
@@ -358,7 +337,7 @@ func (c *gateClient) Eventlog() ([]byte, error) {
 }
 
 // JudgeReceipt implements attest.ReceiptJudge: the coordinator decides.
-func (c *gateClient) JudgeReceipt(r *attest.Receipt, verifierID string) attest.ReceiptCheck {
+func (c *GateClient) JudgeReceipt(r *attest.Receipt, verifierID string) attest.ReceiptCheck {
 	resp, err := c.ask(&gateRequest{Op: gateOpReceipt, Receipt: r, VerifierID: verifierID})
 	if err != nil || resp.Check == nil {
 		return attest.ReceiptCheck{Verdict: r.Verdict, Ack: attest.AckMalformed, Detail: "the coordinator did not answer"}
@@ -368,7 +347,7 @@ func (c *gateClient) JudgeReceipt(r *attest.Receipt, verifierID string) attest.R
 
 // ProveBootKey implements attest.AttesterBackend: the coordinator's TPM
 // answers, and keeps the code.
-func (c *gateClient) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest []byte) (*attest.BootAnswer, uint8) {
+func (c *GateClient) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest []byte) (*attest.BootAnswer, uint8) {
 	resp, err := c.ask(&gateRequest{Op: gateOpBootKey, EphemeralPub: ch.EphemeralPub, Sealed: ch.Sealed, QD: context, QuoteDigest: quoteDigest})
 	if err != nil {
 		return nil, attest.BootKeyFailed
@@ -377,7 +356,7 @@ func (c *gateClient) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest
 }
 
 // FactorToKeep implements attest.FactorBackend: the coordinator's.
-func (c *gateClient) FactorToKeep() *attest.FactorBlob {
+func (c *GateClient) FactorToKeep() *attest.FactorBlob {
 	resp, err := c.ask(&gateRequest{Op: gateOpFactorKeep})
 	if err != nil {
 		return nil
@@ -386,7 +365,7 @@ func (c *gateClient) FactorToKeep() *attest.FactorBlob {
 }
 
 // TakeRelease implements attest.FactorBackend: the coordinator's TPM opens it.
-func (c *gateClient) TakeRelease(r *attest.Release) (uint8, string) {
+func (c *GateClient) TakeRelease(r *attest.Release) (uint8, string) {
 	resp, err := c.ask(&gateRequest{Op: gateOpRelease, Release: r})
 	if err != nil {
 		return attest.ReleaseTPMRefused, "the coordinator did not answer"
@@ -398,6 +377,6 @@ func (c *gateClient) TakeRelease(r *attest.Release) (uint8, string) {
 }
 
 // Report implements gateHost.
-func (c *gateClient) Report(state GateState) {
+func (c *GateClient) Report(state GateState) {
 	_, _ = c.ask(&gateRequest{Op: gateOpReport, State: state})
 }

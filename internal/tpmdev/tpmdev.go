@@ -32,6 +32,31 @@ type Opened struct {
 	Managed bool
 }
 
+// AwaitNode waits up to wait for the TPM's device node to appear: at boot
+// the driver can still be probing when the first part asks for it. It
+// reports whether the node is there; a path that is not a device's (a
+// simulator's socket) is not waited for.
+func AwaitNode(path string, wait time.Duration) bool {
+	if !strings.HasPrefix(path, "/dev/") {
+		return true
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+		if path == DefaultPath {
+			if _, err := os.Stat(rawTPMPath); err == nil {
+				return true
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(openRetry)
+	}
+}
+
 // Open opens the TPM at path - a device, or a simulator's socket. The
 // default path falls back to the raw device when the kernel has no
 // resource manager node.

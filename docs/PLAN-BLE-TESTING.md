@@ -290,7 +290,7 @@ Marify ─ the emulator's virtual controller ─ netsimd / rootcanal (the virtua
   packets between `/dev/virtio-ports/hci` and `/dev/vhci`, re-framed -
   `/dev/vhci` takes exactly one packet per `write()`, and a stream
   (`socat`, `cat`) cannot keep the boundaries. In the initramfs with the
-  `hci_vhci` module and a unit `Before=tpm2-kira-attest.service`, added
+  `hci_vhci` module and a unit `Before=tpm2-kira.service`, added
   by the hooks only when `TPM2_KIRA_TEST_HCI=1` is in the build's
   environment - never on a machine that is not a test machine.
 - **control.conf** on the machine: `TPM2_KIRA_ATTEST_ADAPTER=0`.

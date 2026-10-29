@@ -216,7 +216,7 @@ _add_plan
 	got = run("unlock codes phone net ssh tpm",
 		"bt-module btusb\nbt-module btintel\nbt-firmware intel/ibt-0180-0041.sfi\nnet-module e1000e\nwarning no firmware named\n", "0")
 	for _, want := range []string{
-		"UNIT tpm2-kira-cap.service", "UNIT tpm2-kira-attest.service", "UNIT systemd-networkd.service",
+		"UNIT tpm2-kira-cap.service", "UNIT systemd-networkd.service",
 		"MODULE btusb", "MODULE btintel", "FIRMWARE intel/ibt-0180-0041.sfi", "MODULE e1000e", "FIRMWARE fw-of-e1000e",
 		"PLAIN tpm2-kira: Bluetooth: 2 modules, 1 firmware files", "WARNING tpm2-kira: no firmware named",
 	} {
@@ -258,6 +258,7 @@ func TestDebianHookAddsThePlan(t *testing.T) {
 copy_exec() { :; }
 copy_file() { :; }
 manual_add_modules() { echo "MODULE $1"; }
+force_load() { echo "FORCELOAD $1"; }
 auto_add_modules() { echo "AUTOMODULES $1"; }
 add_firmware() { echo "FIRMWARE $1"; }
 busybox() { :; }
@@ -274,7 +275,7 @@ busybox() { :; }
 		t.Fatalf("the disk unlock alone:\n%s", got)
 	}
 	got := run("unlock codes phone net tpm", "bt-module btusb\nbt-firmware intel/ibt.sfi\nnet-module e1000e\n", "auto")
-	for _, want := range []string{"MODULE tpm_tis", "MODULE tpm_crb", "MODULE btusb", "FIRMWARE intel/ibt.sfi", "MODULE e1000e",
+	for _, want := range []string{"MODULE tpm_tis", "MODULE tpm_crb", "FORCELOAD btusb", "FIRMWARE intel/ibt.sfi", "MODULE e1000e",
 		"tpm2-kira: Bluetooth: 1 modules, 1 firmware files", "tpm2-kira: network drivers: e1000e"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q:\n%s", want, got)

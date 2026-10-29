@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -48,7 +49,7 @@ func (e errRetry) Unwrap() error { return e.err }
 
 // openUserChannelWait retries openUserChannel until the adapter exists and
 // the kernel lets go of it, or wait expires.
-func openUserChannelWait(dev int, unblock bool, wait time.Duration, cancel <-chan struct{}, logf func(string, ...any)) (hciTransport, func(), error) {
+func openUserChannelWait(dev int, unblock bool, rfkill io.Writer, wait time.Duration, cancel <-chan struct{}, logf func(string, ...any)) (hciTransport, func(), error) {
 	deadline := time.Now().Add(wait)
 	announced := false
 	for {
@@ -62,7 +63,7 @@ func openUserChannelWait(dev int, unblock bool, wait time.Duration, cancel <-cha
 		if d < 0 {
 			err = errRetry{errors.New("ble: no Bluetooth adapter (kernel module, firmware or USB authorization missing?)")}
 		} else {
-			tr, release, err = openUserChannel(d, unblock, logf)
+			tr, release, err = openUserChannel(d, unblock, rfkill, logf)
 		}
 		var r errRetry
 		if err == nil || !errors.As(err, &r) || !time.Now().Before(deadline) {
@@ -99,14 +100,14 @@ func firstAdapter() int {
 // openUserChannel brings the adapter down in the kernel and binds an HCI
 // user channel to it, which gives this process exclusive raw access. The
 // returned release function brings the adapter back up if it was up before.
-func openUserChannel(dev int, unblock bool, logf func(string, ...any)) (hciTransport, func(), error) {
+func openUserChannel(dev int, unblock bool, rfkill io.Writer, logf func(string, ...any)) (hciTransport, func(), error) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
 	if _, err := os.Stat(fmt.Sprintf("/sys/class/bluetooth/hci%d", dev)); err != nil {
 		return nil, nil, errRetry{fmt.Errorf("ble: no Bluetooth adapter hci%d (kernel module or firmware missing?)", dev)}
 	}
-	if err := checkRFKill(dev, unblock, logf); err != nil {
+	if err := checkRFKill(dev, unblock, rfkill, logf); err != nil {
 		return nil, nil, err
 	}
 
@@ -161,7 +162,7 @@ func openUserChannel(dev int, unblock bool, logf func(string, ...any)) (hciTrans
 }
 
 // checkRFKill reports a hard block and, if asked, clears a soft block.
-func checkRFKill(dev int, unblock bool, logf func(string, ...any)) error {
+func checkRFKill(dev int, unblock bool, rfkill io.Writer, logf func(string, ...any)) error {
 	matches, _ := filepath.Glob(fmt.Sprintf("/sys/class/bluetooth/hci%d/rfkill*", dev))
 	for _, m := range matches {
 		read := func(name string) string {
@@ -181,17 +182,20 @@ func checkRFKill(dev int, unblock bool, logf func(string, ...any)) error {
 		if err != nil {
 			return fmt.Errorf("ble: cannot read rfkill index for hci%d", dev)
 		}
-		f, err := os.OpenFile("/dev/rfkill", os.O_WRONLY, 0)
-		if err != nil {
-			return fmt.Errorf("ble: hci%d is soft-blocked and /dev/rfkill is unavailable: %w", dev, err)
+		w := rfkill
+		if w == nil {
+			f, err := os.OpenFile("/dev/rfkill", os.O_WRONLY, 0)
+			if err != nil {
+				return fmt.Errorf("ble: hci%d is soft-blocked and /dev/rfkill is unavailable: %w", dev, err)
+			}
+			defer f.Close()
+			w = f
 		}
 		// struct rfkill_event { u32 idx; u8 type; u8 op; u8 soft; u8 hard; }
 		ev := make([]byte, 8)
 		binary.LittleEndian.PutUint32(ev, uint32(idx))
 		ev[5] = rfkillOpChange
-		_, err = f.Write(ev)
-		f.Close()
-		if err != nil {
+		if _, err := w.Write(ev); err != nil {
 			return fmt.Errorf("ble: could not clear the rfkill soft block on hci%d: %w", dev, err)
 		}
 		logf("cleared rfkill soft block on hci%d", dev)

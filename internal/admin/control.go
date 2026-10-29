@@ -1410,7 +1410,7 @@ func btImagePlan(adapter string) string {
 	} else {
 		fmt.Fprintf(&b, "  firmware:  none known - only what the modules declare\n")
 	}
-	fmt.Fprintf(&b, "  and:       /%s, the gate's unit tpm2-kira-attest.service, the signing public key", btModulesLoadConf)
+	fmt.Fprintf(&b, "  and:       /%s, the signing public key", btModulesLoadConf)
 	if deps.Authorize != nil {
 		fmt.Fprintf(&b, "\n  and:       /%s, as the adapter's USB bus lets no new device in by itself:\n             %s", BTUdevRuleFile, deps.Authorize.UdevRule())
 	}

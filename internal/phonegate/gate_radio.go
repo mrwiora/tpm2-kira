@@ -21,18 +21,23 @@ import (
 type GateOptions struct {
 	TPMPath     string
 	SignerPath  string        // the signing public key in the initramfs; "" = DefaultAttestSignerPath
-	Coordinator string        // the coordinator's socket; "" = this process holds the TPM itself
 	SealIndex   uint32        // 0 = first enrolled slot
 	Adapter     int           // hciN, or ble.AnyAdapter: the first that comes up
 	Timeout     time.Duration // 0 = wait forever
 	AdapterWait time.Duration // how long to wait for the adapter to appear; the code screen's end stops it earlier
 	Debug       bool
+	// Worker: the radio worker of a coordinator (gate_child.go), not one
+	// process that holds the TPM itself.
+	Worker bool
+	// RFKill is /dev/rfkill, opened by whoever may: the worker cannot open
+	// it. Nil: opened when a soft block is to be cleared.
+	RFKill *os.File
 }
 
-// AttestGate serves attestation requests until a phone returns a receipt,
-// and reports the outcome as an exit code. The unit that runs it does not
-// hold the boot: the result is shown, and the passphrase prompt appears
-// regardless.
+// AttestGate is 'tpm2-kira phone gate': one process that holds the TPM
+// and serves attestation requests until a phone returns a receipt, and
+// reports the outcome as an exit code. At boot the gate is two processes
+// instead (gate_child.go).
 //
 // The receipt is checked against the anchor in the attestation blob. In the
 // initrd that blob cannot be authenticated (the signing key is not there), so
@@ -41,20 +46,6 @@ type GateOptions struct {
 func AttestGate(o GateOptions) int {
 	journal.NarrateDebug = o.Debug
 	step := GateSteps(o.Debug)
-	if o.Coordinator != "" {
-		// The radio worker: no TPM here. Everything that needs one, and
-		// the reading of the phone's receipt, is the coordinator's.
-		step("version %s; radio worker, asking the coordinator at %s", nvslot.AppVersion, o.Coordinator)
-		client, err := DialGate(o.Coordinator, gateCoordinatorWait)
-		if err != nil {
-			GateFail("%v", err)
-			return ExitUnavailable
-		}
-		defer client.Close()
-		return RunGateRadio(client, o, step, client.Gone())
-	}
-	// Run by hand, or where no coordinator runs (initramfs-tools): one
-	// process does both halves.
 	tpmPath := tpmdev.PreferResourceManager(o.TPMPath)
 	step("version %s; opening the TPM at %s", nvslot.AppVersion, tpmPath)
 	tpmDev, err := tpmdev.Open(tpmPath)
@@ -67,10 +58,6 @@ func AttestGate(o GateOptions) int {
 	return RunGateRadio(NewGateService(tpmDev, o.SealIndex, o.SignerPath, o.Debug), o, step, nil)
 }
 
-// gateCoordinatorWait is how long the worker waits for the coordinator's
-// socket: both are started at the same moment.
-const gateCoordinatorWait = 30 * time.Second
-
 // runGateRadio is the radio half of the gate: advertise, serve the phone,
 // print what it said. The TPM half is behind host; when ended is closed,
 // that half is gone (the code screen has released the boot) and the radio
@@ -82,7 +69,7 @@ func RunGateRadio(host GateHost, o GateOptions, step func(string, ...any), ended
 			code = ExitInternal
 		}
 		// A refused record was reported in full by whoever checked it.
-		if code != ExitTampered || o.Coordinator != "" {
+		if code != ExitTampered || o.Worker {
 			GateFail("%v", err)
 		}
 		return code
@@ -110,7 +97,7 @@ func RunGateRadio(host GateHost, o GateOptions, step func(string, ...any), ended
 	} else {
 		step("opening hci%d (waiting up to %s for it)", o.Adapter, o.AdapterWait)
 	}
-	p, err := ble.Open(ble.Config{Adapter: o.Adapter, UnblockRFKill: true, Wait: o.AdapterWait, Cancel: ended, Logf: DebugLogf(o.Debug)})
+	p, err := ble.Open(ble.Config{Adapter: o.Adapter, UnblockRFKill: true, RFKill: o.RFKill, Wait: o.AdapterWait, Cancel: ended, Logf: DebugLogf(o.Debug)})
 	if err != nil {
 		GateFail("%v", err)
 		host.Report(GateUnavailable)

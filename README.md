@@ -555,10 +555,12 @@ does not apply. The `.deb` installs two scripts instead:
 | `/usr/share/initramfs-tools/scripts/init-premount/tpm2-kira` | starts the display at boot |
 | `/usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira` | stops it and runs `tpm2-kira-boot cap` before the real root takes over |
 | `/lib/cryptsetup/scripts/tpm2-kira` | cryptsetup keyscript: the volume's key from tpm2-kira's prompt |
-| `/etc/tpm2-kira/initramfs.conf` | display mode |
 
 `/init` runs `init-premount` before `local-top/cryptroot` asks for the
-passphrase, which is what puts the code on screen first.
+passphrase, which is what puts the code on screen first. The script starts
+the same `run` as Arch's unit, which starts the phone's radio worker and
+the SSH server's unprivileged half itself: what differs between the two is
+listed in [docs/BOOT-INTEGRATION.md](docs/BOOT-INTEGRATION.md#arch-and-debian).
 
 ### Configure the disk unlock (Debian)
 
@@ -571,10 +573,6 @@ vda3_crypt UUID=… none luks,discard,keyscript=/lib/cryptsetup/scripts/tpm2-kir
 
 The keyscript asks the same socket `systemd-cryptsetup` does on Arch, and
 cryptsetup's own prompt is its last try: [docs/DISK-KEY.md](docs/DISK-KEY.md#debian-initramfs-tools).
-
-### Display mode
-
-`/etc/tpm2-kira/initramfs.conf`, `run` or `once`: [docs/BOOT-INTEGRATION.md](docs/BOOT-INTEGRATION.md#display-mode).
 
 ### Choosing PCRs on Debian
 

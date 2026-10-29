@@ -93,10 +93,6 @@ package() {
     install -Dm644 initramfs/systemd/tpm2-kira-unlock.socket \
         "$pkgdir/usr/lib/systemd/system/tpm2-kira-unlock.socket"
 
-    # The attestation by phone; added to the image by the install hook
-    # when a phone is enrolled.
-    install -Dm644 initramfs/systemd/tpm2-kira-attest.service \
-        "$pkgdir/usr/lib/systemd/system/tpm2-kira-attest.service"
     # tpm2-kira's configuration file: the radio, the image's network and
     # SSH server (control writes it, and assh.conf beside it).
     install -Dm644 initramfs/common/control.conf \

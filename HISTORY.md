@@ -10,6 +10,23 @@ formats and CLI flags may change without migration paths.
 
 ## Boot integration
 
+### The phone's radio worker had a unit of its own
+
+Until 2026-10-29 the radio worker was `tpm2-kira-boot gate --coordinator
+/run/tpm2-kira/gate.sock`, started by `tpm2-kira-attest.service` on Arch,
+whose unit sandbox confined it (root with two capabilities, a system call
+filter, no TPM device), and by the init-premount script on Debian, where
+it ran as root, unconfined; `run --gate` listened on the socket. Debian's
+script also waited for /dev/tpmrm0, loaded the adapter's modules from
+/etc/tpm2-kira/bluetooth-modules, and had a display mode of its own
+(`TPM2_KIRA_INITRAMFS_MODE=once` in /etc/tpm2-kira/initramfs.conf: one
+code and no key provider); Arch waited for the TPM by a drop-in. Now
+`run` starts the worker as `gate-child`, confined in code the same on
+both, and waits for the TPM itself; the modules are loaded by the image's
+init on both. The confinement of `ssh-child` then covered one thread
+only (a plain prctl and landlock_restrict_self in a Go program); assh's
+`sandbox` takes each step on every thread.
+
 ### SSH in the initrd came from mkinitcpio-systemd-extras
 
 Until the code screen got its own SSH server (2026-10-10), remote unlock

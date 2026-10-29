@@ -35,65 +35,22 @@ func has(lines []string, want string) bool {
 // The initrd units are installed on the host too (the mkinitcpio hook takes
 // them from there). Enabled on the host by mistake they must do nothing.
 func TestInitrdUnitsOnlyRunInTheInitrd(t *testing.T) {
-	for _, unit := range []string{"tpm2-kira.service", "tpm2-kira-cap.service", "tpm2-kira-attest.service", "tpm2-kira-unlock.socket"} {
+	for _, unit := range []string{"tpm2-kira.service", "tpm2-kira-cap.service", "tpm2-kira-unlock.socket"} {
 		if !has(directives(t, "initramfs/systemd/"+unit), "ConditionPathExists=/etc/initrd-release") {
 			t.Errorf("%s lacks ConditionPathExists=/etc/initrd-release", unit)
 		}
 	}
 }
 
-// The Bluetooth gate parses radio input as root before the disk is unlocked.
-// Its unit confines it to what it needs; this pins the parts that matter, so
-// a later edit cannot quietly drop them.
-func TestGateUnitIsConfined(t *testing.T) {
-	lines := directives(t, "initramfs/systemd/tpm2-kira-attest.service")
-	for _, want := range []string{
-		"NoNewPrivileges=yes",
-		"CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW",
-		"RestrictAddressFamilies=AF_BLUETOOTH AF_UNIX",
-		"IPAddressDeny=any",
-		"DevicePolicy=closed",
-		"ProtectSystem=strict",
-		"ProtectKernelTunables=yes",
-		"MemoryDenyWriteExecute=yes",
-		"SystemCallFilter=@system-service",
-		"SystemCallFilter=~@privileged",
-		"SystemCallErrorNumber=EPERM",
-	} {
-		if !has(lines, want) {
-			t.Errorf("gate unit lacks %q", want)
-		}
-	}
-	// What the gate did must be readable after the boot; its narrative
-	// stays off the console, where the code screen is, and what needs
-	// eyes (stderr) reaches it.
-	if !has(lines, "StandardOutput=journal") || !has(lines, "StandardError=journal+console") {
-		t.Error("the gate's output: narrative to the journal, failures to the console too")
-	}
-	// The gate runs next to the code screen, not after it: a slot enrolled
-	// with a phone is verified while the code is shown.
-	if has(lines, "After=systemd-pcrosseparator.service") || has(lines, "After=tpm2-kira.service") {
-		t.Error("the gate waits for the code screen to end")
-	}
-	if !has(lines, "After=systemd-pcrphase-initrd.service") {
-		t.Error("the gate may quote before enter-initrd is in PCR 11")
-	}
-	// The radio worker has no TPM (it would compute TOTP codes while the
-	// code screen is up); the coordinator in tpm2-kira.service has it.
-	for _, l := range lines {
-		if strings.HasPrefix(l, "DeviceAllow=") && strings.Contains(l, "tpm") {
-			t.Errorf("the radio worker is given a TPM: %s", l)
-		}
-		if strings.Contains(l, "dev-tpm") {
-			t.Errorf("the radio worker depends on a TPM device: %s", l)
-		}
-		if strings.HasPrefix(l, "RuntimeDirectory") || strings.HasPrefix(l, "ReadWritePaths") {
-			t.Errorf("the radio worker can write to the file system: %s", l)
-		}
-	}
-	const socket = "/run/tpm2-kira/gate.sock"
-	if !has(lines, "ExecStart=/usr/bin/tpm2-kira-boot gate --coordinator "+socket) {
-		t.Error("the radio worker is not pointed at its coordinator")
+// The boot is one process tree on every distribution: the unit (Arch) and
+// the init-premount script (Debian) start the same run, which starts the
+// phone's radio worker and the SSH server's unprivileged half itself and
+// confines them in code (phonegate/gate_child.go, assh/sandbox). Neither
+// starts a gate of its own, waits for the TPM itself or loads the
+// adapter's modules itself.
+func TestTheBootIsRunOnBothDistributions(t *testing.T) {
+	if _, err := os.Stat("initramfs/systemd/tpm2-kira-attest.service"); err == nil {
+		t.Error("a unit of the gate's own: run starts the radio worker")
 	}
 	display := directives(t, "initramfs/systemd/tpm2-kira.service")
 	// The code screen owns the terminal; what the key provider reports
@@ -103,29 +60,47 @@ func TestGateUnitIsConfined(t *testing.T) {
 	}
 	// $TPM2_KIRA_REMOTE: the SSH server's flags from the image's drop-in,
 	// no argument at all without one. --plan: what the image carries.
-	if !has(display, "ExecStart=tpm2-kira-boot run --plan /etc/tpm2-kira/plan --gate "+socket+" $TPM2_KIRA_REMOTE") {
-		t.Error("the code screen does not follow the image's plan, or does not listen where the radio worker asks")
+	const arch = "ExecStart=tpm2-kira-boot run --plan /etc/tpm2-kira/plan $TPM2_KIRA_REMOTE"
+	if !has(display, arch) {
+		t.Error("the code screen does not follow the image's plan")
 	}
-	// The TPM is waited for by the plan's drop-in alone: a machine without
-	// one, or with nothing that needs it, does not wait.
-	if has(display, "Wants=dev-tpmrm0.device") || has(display, "After=dev-tpmrm0.device") {
-		t.Error("the code screen waits for the TPM whatever the plan says")
+	// run waits for the TPM itself, when the plan needs it.
+	for _, l := range display {
+		if strings.Contains(l, "dev-tpm") {
+			t.Errorf("the code screen's unit waits for the TPM: %s", l)
+		}
 	}
 	if !has(display, "Before=systemd-pcrosseparator.service") || !has(display, "Before=systemd-pcrnvdone.service") || !has(display, "Conflicts=initrd-switch-root.target") {
 		t.Error("the coordinator must hold both separators back and end with the initramfs")
 	}
-	// What the gate cannot work without.
-	for _, want := range []string{"DeviceAllow=/dev/rfkill rw", "DeviceAllow=/dev/console rw"} {
-		if !has(lines, want) {
-			t.Errorf("gate unit lacks %q", want)
+
+	// Debian: the same run, with the key socket of its own (systemd's
+	// socket unit hands it over instead), and nothing else of tpm2-kira's.
+	script, err := os.ReadFile("initramfs/initramfs-tools/scripts/init-premount/tpm2-kira")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started []string
+	for _, l := range strings.Split(string(script), "\n") {
+		if l = strings.TrimSpace(l); !strings.HasPrefix(l, "#") && !strings.HasPrefix(l, "[") && strings.Contains(l, "tpm2-kira-boot ") {
+			started = append(started, l)
 		}
 	}
-	// Bluetooth sockets exist only in the initial network namespace, and
-	// the TPM is a device.
-	for _, bad := range []string{"PrivateNetwork=yes", "PrivateDevices=yes"} {
-		if has(lines, bad) {
-			t.Errorf("gate unit has %q, which breaks it", bad)
+	const debian = `/usr/bin/tpm2-kira-boot run --plan "$PLAN" --unlock "$UNLOCK" $TPM2_KIRA_REMOTE `
+	if len(started) != 1 || !strings.Contains(started[0], debian) {
+		t.Errorf("Debian starts %q, want run alone as %q", started, debian)
+	}
+	for _, bad := range []string{"modprobe", "/dev/tpmrm0", "gate-child", "--gate", "INITRAMFS_MODE"} {
+		if strings.Contains(string(script), bad) {
+			t.Errorf("Debian's script has %q: run, or the image's init, does that on both", bad)
 		}
+	}
+	hook, err := os.ReadFile("initramfs/initramfs-tools/hooks/tpm2-kira")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(hook), `force_load "$value"`) {
+		t.Error("Debian's image does not load the adapter's modules by its init")
 	}
 }
 

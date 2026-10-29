@@ -39,10 +39,10 @@ type parts struct {
 // plannedParts is the parts the image's plan and the SSH settings name. The
 // disk's key provider and the console are always there: the first serves
 // nothing without a socket, the second is Enter.
-func plannedParts(planned imageplan.Planned, remote sshscreen.Options, gateSocket, unlockSocket string) parts {
+func plannedParts(planned imageplan.Planned, remote sshscreen.Options, unlockSocket string) parts {
 	ps := parts{unlock: &unlockPart{socket: unlockSocket}, console: &consolePart{}}
 	if planned.Phone {
-		ps.phone = &phonePart{socket: gateSocket}
+		ps.phone = &phonePart{}
 	}
 	if remote.On {
 		ps.ssh = &sshPart{opts: remote}
@@ -114,16 +114,15 @@ func (bd *board) offer(by string, stop <-chan struct{}) bool {
 	}
 }
 
-// phonePart is the coordinator of the phone's gate: the radio worker
-// (tpm2-kira-attest.service) asks it for quotes and hands it the receipt.
+// phonePart is the coordinator of the phone's gate: the radio worker it
+// starts (gate-child) asks it for quotes and hands it the receipt.
 type phonePart struct {
-	socket string
-	svc    *phonegate.GateService
-	stop   func()
+	svc  *phonegate.GateService
+	stop func()
 }
 
 func (p *phonePart) start(bd *board) {
-	svc, stop := StartCoordinator(bd.tpmPath, p.socket, phonegate.DefaultAttestSignerPath, bd.debug)
+	svc, stop := StartCoordinator(bd.tpmPath, phonegate.DefaultAttestSignerPath, bd.debug)
 	if svc == nil {
 		return
 	}

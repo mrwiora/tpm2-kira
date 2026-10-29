@@ -25,7 +25,7 @@ Last updated 2026-10-05.
 | 2 — peripheral, framing, encrypted session | `transport/frame/`, Noise XX/IK in `attest/noise.go`, `tpm2-kira phone enrol` with SAS | unit tests, fuzzing, interop with the reference `noiseprotocol` library |
 | 3 — mobile core | `mobile/kiracore` (gomobile verifier), `mobile/kiratest` (simulated machine); apps specified in [mobile/](mobile/) | Go tests through the binding API; gobind generates Java and Objective-C cleanly |
 | 4 — attestation round trip | `tpm2-kira phone gate` on a booted system | swtpm integration test (real AK, EK, quotes, ActivateCredential) |
-| 5 — initramfs (part) | the boot plan (`tpm2-kira initramfs plan`) resolves the configured adapter's driver modules (the whole sysfs path) and the firmware the kernel loaded for it, from the kernel log. The boot plan takes the phone part in while a phone is enrolled (or with `TPM2_KIRA_ATTEST_BLUETOOTH=always` in control.conf). mkinitcpio: modules, exact firmware, `modules-load.d`, `tpm2-kira-attest.service` (runs beside the TOTP display, never holds the boot, stopped at switch-root). initramfs-tools: same resolution, `init-premount` loads modules and starts the gate in the background, `init-bottom` stops it. The gate waits for the adapter that comes up as long as the code screen holds, retries while the kernel finishes controller setup, and uses `/dev/tpmrm0` so it can share the TPM with the TOTP display. Hooks add nothing when no phone is enrolled or the adapter is missing. | resolver unit tests on a fake sysfs (Intel, Realtek, Broadcom log formats); stubbed-hook tests for both hooks; a real `mkinitcpio` image build on Arch containing exactly 6 modules and 1 firmware file (≈1.1 MB) |
+| 5 — initramfs (part) | the boot plan (`tpm2-kira initramfs plan`) resolves the configured adapter's driver modules (the whole sysfs path) and the firmware the kernel loaded for it, from the kernel log. The boot plan takes the phone part in while a phone is enrolled (or with `TPM2_KIRA_ATTEST_BLUETOOTH=always` in control.conf). mkinitcpio: modules, exact firmware, `modules-load.d`; initramfs-tools: the same resolution, the modules by `force_load` (the image's `conf/modules`). On both, `run` starts the radio worker (`gate-child`) beside the TOTP display; it never holds the boot and ends with the hold. The gate waits for the adapter that comes up as long as the code screen holds and retries while the kernel finishes controller setup; the TPM is `run`'s. Hooks add nothing when no phone is enrolled or the adapter is missing. | resolver unit tests on a fake sysfs (Intel, Realtek, Broadcom log formats); stubbed-hook tests for both hooks; a real `mkinitcpio` image build on Arch containing exactly 6 modules and 1 firmware file (≈1.1 MB) |
 
 ### Open
 
@@ -205,11 +205,12 @@ session when the hold ends extends it by at most a minute, so the registers
 do not change between its question and its answer.
 
 The gate is two processes of the one binary. The display is its
-*coordinator* (`tpm2-kira-boot run --gate SOCKET`): it holds the TPM, checks the
+*coordinator* (`tpm2-kira-boot run`): it holds the TPM, checks the
 enrolment record, issues the quotes, and reads the phone's receipt against
-the anchors and the quotes it issued. The *radio worker* (`tpm2-kira phone
-gate --coordinator SOCKET`, the confined unit) advertises and runs the
-session; it has no TPM and asks the coordinator over the socket: identity,
+the anchors and the quotes it issued. The *radio worker* (`tpm2-kira-boot
+gate-child`, which `run` starts as nobody and which confines itself)
+advertises and runs the session; it has no TPM and asks the coordinator
+over the socket pairs it was started with: identity,
 quote, boot context, event log, receipt, progress report - length-prefixed
 JSON, one request at a time (`internal/phonegate/gate_ipc.go`). Before the separator the
 TPM computes TOTP codes for any process that can reach it, so the process

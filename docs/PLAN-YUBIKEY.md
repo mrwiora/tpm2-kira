@@ -20,8 +20,8 @@ Decisions already taken (§14 records the rest):
 - **No backwards compatibility.** The project is in developer mode, so there is
   no migration path from a PEM key to a token beyond running setup again and
   sealing again.
-- **`TPM2_KIRA_PIN`** is the environment variable, matching the existing
-  `TPM2_KIRA_INITRAMFS_MODE` convention.
+- **`TPM2_KIRA_PIN`** is the environment variable, matching the
+  `TPM2_KIRA_*` convention of control.conf.
 - **A key file on disk stays the default.** The YubiKey is opt-in. `setup`
   with no flags generates a PEM pair exactly as it does today, `--privkey`
   without a scheme is still a path, and nothing about an existing installation
@@ -617,21 +617,10 @@ then); `control` makes it `0600` the moment it stores the PIN. The earlier
 place, a line in `/etc/mkinitcpio.conf`, is gone: it tied the PIN to one
 distribution's tool and left Debian without a place.
 
-**It must not go in `initramfs.conf`.** Debian's hook copies that file *into
-the image*:
-
-```
-copy_file config /etc/tpm2-kira/initramfs.conf /etc/tpm2-kira/initramfs.conf
-```
-
-The image lives on unencrypted `/boot`, so a PIN there would be readable by
-anyone with physical access - the attacker the tool exists to detect - and
-the initramfs has no use for it.
-
-**What *would* belong in `initramfs.conf`** is a display concern: a variable
-such as `TPM2_KIRA_EXPLAIN_MISMATCH=yes|no` letting the boot-time display
-distinguish "no code because you skipped an approval" from "no code, and you did
-not expect that". It carries no secret.
+**It must not go into the image.** The image lives on unencrypted
+`/boot`, so a PIN there would be readable by anyone with physical access -
+the attacker the tool exists to detect - and the initramfs has no use for
+it. control.conf never goes into the image; only the plan's files do.
 
 The PC/SC and PIV code adds on the order of 50–100 KB to the static binary,
 which also lands in the initramfs. That is negligible against the image size and

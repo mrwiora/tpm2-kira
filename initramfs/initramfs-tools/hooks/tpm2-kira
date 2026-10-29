@@ -37,9 +37,6 @@ fi
 
 copy_exec "$kira_boot" /usr/bin/tpm2-kira-boot
 
-if [ -r /etc/tpm2-kira/initramfs.conf ]; then
-    copy_file config /etc/tpm2-kira/initramfs.conf /etc/tpm2-kira/initramfs.conf
-fi
 # The devices with a keyslot of tpm2-kira's: does /etc/crypttab route each
 # through the keyscript, and if not, what the line should read
 # ('tpm2-kira luks route'; it edits nothing).
@@ -80,7 +77,9 @@ while read -r kind value; do
     say) echo "tpm2-kira: $value" ;;
     warning) echo "tpm2-kira: WARNING: $value" >&2 ;;
     bt-module)
-        manual_add_modules "$value"
+        # Loaded by the image's init before init-premount, as
+        # systemd-modules-load does under mkinitcpio.
+        force_load "$value"
         nbt=$((nbt + 1))
         ;;
     bt-firmware)

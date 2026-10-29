@@ -31,8 +31,7 @@ What the hook adds, for the adapter `TPM2_KIRA_ATTEST_ADAPTER` (default
 |---|---|
 | the driver modules along the adapter's sysfs path (`btusb`, `btintel`, `xhci_pci`, ..., `bluetooth`) with their dependencies | `/sys/class/bluetooth/hciN` |
 | the firmware files the adapter loads (e.g. `intel/ibt-0040-0041.sfi` and its `.ddc`) | the kernel log of every boot the journal keeps; remembered per adapter in `/var/lib/tpm2-kira/bt-firmware/` (§3) |
-| `/etc/modules-load.d/tpm2-kira-bluetooth.conf` | the module list, loaded early in the initrd |
-| `tpm2-kira-attest.service` | the gate's unit |
+| `/etc/modules-load.d/tpm2-kira-bluetooth.conf` (Arch); the image's `conf/modules` (Debian) | the module list, loaded early in the initrd |
 | `/etc/tpm2-kira/attest-signer.pem` | the signing public key, to check the enrolment record |
 | `/etc/udev/rules.d/70-tpm2-kira-bluetooth.rules`, only when the adapter's USB bus lets no new device in by itself | a rule that lets exactly this adapter in, at its port (§4) |
 
@@ -115,14 +114,14 @@ ls /var/lib/tpm2-kira/bt-firmware/ && cat /var/lib/tpm2-kira/bt-firmware/*
 After the boot, on the unlocked system:
 
 ```bash
-journalctl -b -u tpm2-kira-attest.service -u tpm2-kira.service   # Debian: /run/initramfs/tpm2-kira.log
+journalctl -b -u tpm2-kira.service     # the radio worker's narrative is run's; Debian: /run/initramfs/tpm2-kira.log
 journalctl -b -k | grep -iE 'bluetooth|hci|firmware'
 ```
 
 | What the log says | Cause | What to do |
 |---|---|---|
 | kernel: `usb 3-10: Device is not authorized for usage`, later `authorized to connect` once the system is up | the USB bus lets no new device in by itself (`usbcore.authorized_default=0`, as USBGuard sets it), and the image had no rule that lets the adapter in | rebuild: the hook now adds the rule (below) |
-| no `tpm2-kira-attest.service` at all | the image has no Bluetooth: no phone was enrolled when it was built (`auto`), or the hook warned | `control`'s Boot image line; rebuild |
+| no `gate +` lines and no `phone` in `/etc/tpm2-kira/plan` of the image | the image has no Bluetooth: no phone was enrolled when it was built (`auto`), or the hook warned | `control`'s Boot image line; rebuild |
 | kernel: `Direct firmware load for ... failed`, `firmware missing` | the image lacks the adapter's firmware (§3) | power off, boot, rebuild |
 | `no Bluetooth adapter` / the gate waits for the adapter until the code screen ends | module, firmware or USB authorization missing in the image | `control`'s *Boot image* and *Adapter at boot* lines; `TPM2_KIRA_ATTEST_ADAPTER` says whose driver goes in |
 | `the attestation record is not accepted` | the enrolment in the TPM is not the one the image's signing key vouches for (replaced, or an older one put back) | `tpm2-kira phone status`; enrol again |

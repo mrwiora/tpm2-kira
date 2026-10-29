@@ -486,11 +486,14 @@ class Machine:
             listing = ("uki=$(sed -n 's/^default_uki=\"\\(.*\\)\"/\\1/p' /etc/mkinitcpio.d/*.preset | head -1); "
                        "objcopy -O binary --only-section=.initrd \"$uki\" initrd && lsinitcpio -x initrd >/dev/null")
         rc, out = self.run(f"set -e; d=$(mktemp -d); cd $d; {listing}; ls usr/bin | grep kira; "
-                           "find etc/tpm2-kira -maxdepth 2 | sort; ls etc/tpm2-kira/control.conf 2>&1 || true; cd /; rm -rf $d", save="image.log")
+                           "find etc/tpm2-kira -maxdepth 2 | sort; ls etc/tpm2-kira/control.conf 2>&1 || true; "
+                           "grep -rlE 'tpm2-kira-boot gate|tpm2-kira-attest' etc usr/lib/systemd scripts 2>/dev/null | sed 's/^/STARTS-GATE /'; "
+                           "cd /; rm -rf $d", save="image.log")
         bins = [l for l in out.split("\n") if l.strip().startswith("tpm2-kira")]
         self.check("the image carries tpm2-kira-boot", "tpm2-kira-boot" in bins, out[-500:])
         self.check("the image carries no tpm2-kira (the administration)", "tpm2-kira" not in bins, str(bins))
         self.check("the image carries no control.conf", "No such file" in out or "cannot access" in out, out[-300:])
+        self.check("no unit or script of the image starts a gate: run starts its children itself", "STARTS-GATE" not in out, out[-300:])
         for part in ("unlock", "codes", "net", "ssh", "tpm"):
             self.check(f"the image's plan names '{part}'", f"etc/tpm2-kira/plan/{part}" in out, out[-500:])
 
@@ -536,7 +539,8 @@ class Machine:
                "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service -u tpm2-kira-cap.service")
         rc, out = self.run(log + " 2>&1", save=f"boot{n}-tpm2-kira.log")
         self.check(f"boot {n}: the key was answered", re.search(r"unlock: answered for", out) is not None, out[-500:])
-        self.check(f"boot {n}: ssh-child ran confined", "uid 65534, no new privileges" in out, out[-500:])
+        confined = re.search(r"ssh-child \(pid \d+\) runs with uid 65534, .*no new privileges, no executable memory, Landlock ABI \d+: no file access, \d+ system calls refused", out)
+        self.check(f"boot {n}: ssh-child ran confined (nobody, no new privileges, no executable memory, Landlock, seccomp)", confined is not None, out[-500:])
         bad = [l for l in out.split("\n") if re.search(r"ERROR|FAILED|does not answer|cannot", l)]
         self.check(f"boot {n}: no tpm2-kira error in the boot's log", not bad, "\n".join(bad[:5]))
 

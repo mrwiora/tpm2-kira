@@ -79,8 +79,8 @@ THE BOOT IMAGE
     cap          Lock the code until the next boot (when the initrd is left)
     unlock-key   Debian keyscript: the disk's key from 'run --unlock', else
                  askpass
-    gate         The phone's radio worker, beside run
     ssh-child    The SSH server's unprivileged half, started by run
+    gate-child   The phone's radio worker, started by run
 
 BY HAND
   yubikey      list: the YubiKeys and the keys in their PIV slots
@@ -106,7 +106,7 @@ FIRST STEPS
   then rebuild the initramfs: mkinitcpio -P (Arch), update-initramfs -u (Debian)
 
 More: tpm2-kira help slot | status | phone | luks | vault | run | initramfs |
-ssh-child; docs/ and README.md
+ssh-child | gate-child; docs/ and README.md
 `)
 }
 
@@ -375,10 +375,12 @@ computes it under the slot's policy: in a boot the signing key approved,
 before the OS separator (after 'cap' there is no code until the next boot).
 `,
 
-	"run": `tpm2-kira-boot run [--plan DIR] [--hold S] [--gate SOCKET] [--unlock SOCKET] [--ssh [--ssh-conf PATH] ...]
+	"run": `tpm2-kira-boot run [--plan DIR] [--hold S] [--unlock SOCKET] [--ssh [--ssh-conf PATH] ...]
 
-What the initramfs runs: shows the code of every slot and holds the boot
-for Enter; with a phone enrolled, coordinates the Bluetooth gate and shows
+What the initramfs runs, the same on Arch and Debian: shows the code of
+every slot and holds the boot for Enter; waits up to 5 s for the TPM when
+a part of the plan needs it; with a phone enrolled, starts the Bluetooth
+gate's radio worker ('gate-child', nobody, confined), coordinates it and shows
 the phone's code in the slot's line as soon as the phone is in; with
 --unlock, serves the disk's key to systemd-cryptsetup (rd.luks.key=<UUID>=
 /run/tpm2-kira/unlock.sock) or the Debian keyscript, made as the volume's
@@ -402,10 +404,6 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
                    asked. Without --plan, all it finds
   --hold S         Seconds to wait for Enter (default 90; 0: at once). A fresh
                    code every 30 seconds; Enter releases the boot
-  --gate SOCKET    Be the coordinator of the gate on this socket: hold the TPM
-                   for the radio worker ('tpm2-kira-boot gate
-                   --coordinator'), read the phone's receipt, release the
-                   boot on its verdict
   --unlock SOCKET  Serve the disk's key on this socket (Debian's boot
                    script passes ` + diskkey.DefaultUnlockSocket + `; under
                    systemd the socket unit hands its socket over instead)
@@ -430,6 +428,26 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
 
 	"phone": attestUsage + "\n" + factorUsage,
 
+	"gate-child": `tpm2-kira-boot gate-child [--debug]
+
+The phone's radio worker at boot (docs/PHONE.md). With a phone in the
+image's plan, 'run' is the gate's coordinator: it holds the TPM, issues
+the quotes, opens the boot key and the phone salt, and reads the phone's
+receipt. It starts this binary again as 'gate-child', the half that
+listens to the radio: as nobody with CAP_NET_ADMIN and CAP_NET_RAW alone
+(the HCI user channel), in IPC, PID, mount and UTS namespaces of its own
+(not a network namespace: Bluetooth sockets exist only in the first),
+with two socket pairs to 'run' and /dev/rfkill as its only open files.
+It then confines itself on every thread: no new privileges, no
+executable memory, no file but /sys (Landlock), none of the system calls
+that administer the machine (seccomp). It has no TPM. The same on Arch
+and Debian; nobody runs it by hand ('tpm2-kira phone gate' is the gate
+on the unlocked system).
+
+Its narrative goes to run's (the journal, or Debian's
+/run/initramfs/tpm2-kira.log); what needs eyes, to run's stderr.
+`,
+
 	"ssh-child": `tpm2-kira-boot ssh-child
 
 The code screen over SSH (docs/SSH.md). The network and the SSH
@@ -443,7 +461,9 @@ image build puts them in ('tpm2-kira help initramfs').
 The SSH server is a library (github.com/tpm2-trust/assh/server) inside
 'run', split in two processes. 'run' opens the port and starts this
 binary again as 'ssh-child', the half that speaks SSH: as nobody, in
-namespaces of its own, with no access to any file. It holds no host key
+namespaces of its own, confined on every thread (no new privileges, no
+executable memory, no file, none of the system calls that administer the
+machine; assh's sandbox). It holds no host key
 ('run' has the TPM sign, over a socket pair between the two) and no
 password; a login becomes a session of the code screen in 'run'. Nobody
 runs 'ssh-child' by hand.
@@ -506,8 +526,8 @@ left; by hand only for a test.
 
 The Debian keyscript (/lib/cryptsetup/scripts/tpm2-kira runs it, VOLUME
 from CRYPTTAB_NAME): the volume's key from the socket of 'run --unlock' to
-stdout, as systemd-cryptsetup would ask it. Without the socket (the 'once'
-mode of /etc/tpm2-kira/initramfs.conf, or 'run' failed), or without
+stdout, as systemd-cryptsetup would ask it. Without the socket ('run'
+failed), or without
 a key to give (no tpm2-kira token on the volume, the phone salt or the
 vault's part not released, Ctrl-C), it becomes cryptsetup's
 own prompt, /lib/cryptsetup/askpass. On the last of cryptroot's tries the

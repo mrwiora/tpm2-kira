@@ -21,7 +21,7 @@ package bootrun
 // stays on the screen all the same, as the fallback when the phone is not at
 // hand. For that this process is also the gate's coordinator
 // (internal/phonegate/gate_service.go): it holds the TPM for the radio worker
-// (tpm2-kira-attest.service), which has none, and reads the phone's receipt
+// it starts (gate-child), which has none, and reads the phone's receipt
 // itself. Its service ends with the hold (the phone has as long
 // as the code is asked about, plus the time to finish an answer it has
 // begun), and the worker ends with it. The process must not outlive the
@@ -56,7 +56,6 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
-	"github.com/mrwiora/tpm2-kira/internal/unixsock"
 
 	"github.com/google/go-tpm/tpm2/transport"
 	"golang.org/x/sys/unix"
@@ -425,47 +424,32 @@ func releaseTerminal(fd int) {
 // StartCoordinator makes this process the gate's coordinator when the image
 // carries a gate for an enrolled phone - the hook puts the signing public
 // key at signerPath with the gate and not otherwise: it opens the TPM for
-// it and listens on socket. Nil when there is nothing to coordinate.
-func StartCoordinator(tpmPath, socket, signerPath string, debug bool) (*phonegate.GateService, func()) {
-	svc, server := openCoordinator(tpmPath, socket, signerPath, debug)
-	if svc == nil {
-		return nil, func() {}
-	}
-	var once sync.Once
-	// The TPM handle is left to the end of the process: an operation for
-	// the worker may still be running on it.
-	return svc, func() {
-		once.Do(func() {
-			server.Close()
-			os.Remove(socket)
-		})
-	}
-}
-
-func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*phonegate.GateService, *phonegate.GateServer) {
-	if socket == "" {
-		return nil, nil
-	}
+// it and starts the radio worker (phonegate/gate_child.go). Nil when there
+// is nothing to coordinate; stop ends the worker.
+func StartCoordinator(tpmPath, signerPath string, debug bool) (*phonegate.GateService, func()) {
 	if _, err := os.Stat(signerPath); err != nil {
-		return nil, nil // no gate in this image
+		return nil, func() {} // no gate in this image
 	}
 	path := tpmdev.PreferResourceManager(tpmPath)
 	tpmDev, err := tpmdev.Open(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: cannot open the TPM at %s: %v\n", path, err)
-		return nil, nil
+		return nil, func() {}
 	}
 	if s, err := nvslot.ReadBootSettings(tpmDev); err == nil && s.Debug {
 		debug, journal.NarrateDebug = true, true // the boot settings' debug: the narrative on the console too
 	}
-	l, err := unixsock.Listen(socket)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: %v\n", err)
-		tpmDev.Close()
-		return nil, nil
-	}
 	svc := phonegate.NewGateService(tpmDev, 0, "", debug)
-	return svc, phonegate.ServeGate(l, svc)
+	stopWorker, err := phonegate.StartRadioWorker(svc, debug)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tpm2-kira: the phone check is unavailable: the radio worker does not start: %v\n", err)
+		tpmDev.Close()
+		return nil, func() {}
+	}
+	var once sync.Once
+	// The TPM handle is left to the end of the process: an operation for
+	// the worker may still be running on it.
+	return svc, func() { once.Do(stopWorker) }
 }
 
 // Run is 'run', the code screen at boot. It starts the parts the image's
@@ -474,10 +458,13 @@ func openCoordinator(tpmPath, socket, signerPath string, debug bool) (*phonegate
 // started, and the TPM is not touched for it. Then it shows the codes and
 // holds the boot until it is confirmed or the hold ends, tells the parts,
 // and with the disk's key provider stays until it is stopped.
-func Run(tpmPath string, nvramIndex uint32, hold time.Duration, gateSocket, unlockSocket string, remote sshscreen.Options, planned imageplan.Planned, debug bool) {
+func Run(tpmPath string, nvramIndex uint32, hold time.Duration, unlockSocket string, remote sshscreen.Options, planned imageplan.Planned, debug bool) {
 	bd := &board{tpmPath: tpmPath, debug: debug, hold: hold, confirm: make(chan string), ask: diskkey.Prompter(diskkey.ConsoleAsk),
 		prompting: func() bool { return false }, promptMode: func() []string { return nil }}
-	ps := plannedParts(planned, remote, gateSocket, unlockSocket)
+	if planned.TPM && !tpmdev.AwaitNode(tpmPath, imageplan.TPMWait) {
+		fmt.Fprintf(os.Stderr, "tpm2-kira: %s did not appear within %s; no code this boot\n", tpmPath, imageplan.TPMWait)
+	}
+	ps := plannedParts(planned, remote, unlockSocket)
 	started := ps.inOrder()
 	for _, p := range started {
 		p.start(bd)
