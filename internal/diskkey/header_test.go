@@ -122,12 +122,12 @@ func TestScreenRecipeFollowsBothRoutes(t *testing.T) {
 	os.WriteFile(bootCmdlinePath, []byte("quiet\n"), 0o644)
 
 	os.WriteFile(bootCrypttabPaths[0], []byte("vda3_crypt "+dev+" none luks,discard\n"), 0o644)
-	if mode := ScreenRecipe(DefaultUnlockSocket)(); mode != "" {
-		t.Fatalf("a volume not routed through tpm2-kira: %q", mode)
+	if modes := ScreenRecipe(DefaultUnlockSocket)(); len(modes) != 0 {
+		t.Fatalf("a volume not routed through tpm2-kira: %q", modes)
 	}
 	os.WriteFile(bootCrypttabPaths[0], []byte("vda3_crypt "+dev+" none luks,discard,keyscript="+DebianKeyscript+"\n"), 0o644)
-	if mode := ScreenRecipe(DefaultUnlockSocket)(); mode != LuksModePasswordSalt {
-		t.Fatalf("routed by the keyscript: %q", mode)
+	if modes := ScreenRecipe(DefaultUnlockSocket)(); len(modes) != 1 || modes[0] != LuksModePasswordSalt {
+		t.Fatalf("routed by the keyscript: %q", modes)
 	}
 }
 
@@ -143,13 +143,13 @@ func TestUnlockRecipe(t *testing.T) {
 	os.WriteFile(bootCrypttabPaths[0], []byte("cryptroot "+dev+" none luks\n"), 0o644)
 
 	r := &UnlockRecipe{}
-	if mode, why := r.ForVolume("cryptroot"); mode != LuksModePasswordSalt || why != "" {
-		t.Fatalf("recipe: %q %q", mode, why)
+	if modes, why := r.ForVolume("cryptroot"); len(modes) != 1 || modes[0] != LuksModePasswordSalt || why != "" {
+		t.Fatalf("recipe: %q %q", modes, why)
 	}
-	if mode, _ := r.ForVolume("cryptroot"); mode != LuksModePasswordSalt { // cached
-		t.Fatalf("cached recipe: %q", mode)
+	if modes, _ := r.ForVolume("cryptroot"); len(modes) != 1 || modes[0] != LuksModePasswordSalt { // cached
+		t.Fatalf("cached recipe: %q", modes)
 	}
-	if mode, why := r.ForVolume("stranger"); mode != "" || why == "" {
-		t.Fatalf("a stranger's volume: %q %q", mode, why)
+	if modes, why := r.ForVolume("stranger"); len(modes) != 0 || why == "" {
+		t.Fatalf("a stranger's volume: %q %q", modes, why)
 	}
 }

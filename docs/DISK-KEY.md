@@ -136,7 +136,10 @@ A keyslot in mode `tpm+vault` opens without anybody typing: a local part
 in this machine's TPM and a remote part from
 [tpm2-kira-vault](../../tpm2-kira-vault), both opening only in a boot state
 your signing key approved. Revoked on the vault, the machine no longer
-unlocks; without the vault, the recovery passphrase does.
+unlocks unattended; without the vault's key, a password+salt (or
+password+phonesalt) keyslot of the same volume is asked at tpm2-kira's
+prompt - at the console or over SSH - and without one, the recovery
+passphrase at cryptsetup's.
 
 ```bash
 sudo tpm2-kira luks enrol /dev/sda2 --mode tpm+vault --url https://vault:8443 --pin sha256:… --token …

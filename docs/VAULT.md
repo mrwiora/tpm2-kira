@@ -239,12 +239,16 @@ unlock: making the key for vda3_crypt, as its header says
 unlock: answered for vda3_crypt (64 bytes)
 ```
 
-or `vault: slot 0: no key: the vault refused: "the device is revoked"`,
-then `unlock: no key for vda3_crypt: not tpm2-kira's to answer;
-cryptsetup's own prompt follows (…)`.
+or `vault: slot 0: no key: the vault refused: "the device is revoked"`.
+Then a password+salt or password+phonesalt keyslot of the same volume is
+the fallback: tpm2-kira asks for it at its own prompt (at the console, or
+in the SSH session), saying "no key from the vault (…)"; a volume without
+one gets `unlock: no key for vda3_crypt: …; cryptsetup's own prompt
+follows`, where the recovery passphrase works.
 
-When a volume has several of tpm2-kira's keyslots, the tpm+vault one
-wins: it needs nobody (then password+phonesalt, then password+salt).
+When a volume has several of tpm2-kira's keyslots, they are tried in this
+order: tpm+vault (it needs nobody), then password+phonesalt, then
+password+salt.
 
 ## 6. The vault
 

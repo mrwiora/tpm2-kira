@@ -290,63 +290,89 @@ var ErrUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own p
 //	                     (the password+salt variant), then cryptsetup's own prompt
 //	tpm+vault            nothing typed: the key run made in this boot from the TPM's
 //	                     local part and the vault's remote part (internal/vaultkey/vault.go); without
-//	                     one, cryptsetup's own prompt
+//	                     one, the volume's typed recipe when it has one (its phone salt's,
+//	                     else its password+salt keyslot's), else cryptsetup's own prompt
+//
+// A volume with several keyslots of tpm2-kira's tries them in that order:
+// the vault, the phone's salt, the typed salt.
 //
 // salt returns the released salt or nil; vault the volume's tpm+vault key
 // or why there is none. The key is for the caller to wipe.
 //
 // ask is where the person is asked: consoleAsk, or the SSH session that
 // confirmed the code screen (remoteServer.ask).
-func DiskKey(salt func() []byte, vault func(volume string) ([]byte, error), recipe func(volume string) (mode, why string), ask Prompter) func(volume string) ([]byte, error) {
+func DiskKey(salt func() []byte, vault func(volume string) ([]byte, error), recipe func(volume string) (modes []string, why string), ask Prompter) func(volume string) ([]byte, error) {
 	return func(volume string) ([]byte, error) {
-		var s []byte
-		var note string
-		mode, why := recipe(volume)
-		switch mode {
-		case LuksModeTPMVault:
-			if vault == nil {
-				return nil, fmt.Errorf("%w (no vault in this boot)", ErrUnlockSkipped)
+		modes, why := recipe(volume)
+		var vaultErr error
+		for _, mode := range modes {
+			if mode == LuksModeTPMVault {
+				if vault == nil {
+					vaultErr = errors.New("no vault in this boot")
+					continue
+				}
+				key, err := vault(volume)
+				if err != nil {
+					vaultErr = err
+					continue
+				}
+				return key, nil
 			}
-			key, err := vault(volume)
-			if err != nil {
-				return nil, fmt.Errorf("%w (%v)", ErrUnlockSkipped, err)
-			}
-			return key, nil
-		case LuksModePasswordSalt:
-			note = "the key is derived from your password and your salt, both typed here (Argon2id, some seconds).\n" +
-				"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
-		case LuksModePasswordPhoneSalt:
-			if s = salt(); s == nil {
-				// No phone, or no salt from it: the password+salt variant,
-				// which opens a keyslot enrolled that way; Ctrl-C, or a
-				// key that opens nothing, then leads to cryptsetup's own
-				// prompt and the recovery passphrase.
-				note = "no salt came from the phone: the key is derived from your password and a salt you type,\n" +
-					"as for a keyslot enrolled with password+salt (Argon2id, some seconds).\n" +
-					"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
-				break
-			}
-			note = "the key is derived from your password and the salt your phone returned.\n" +
-				"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
-		default:
-			if why != "" {
-				return nil, fmt.Errorf("%w (%s)", ErrUnlockSkipped, why)
-			}
-			return nil, ErrUnlockSkipped
+			// A typed recipe: the first the volume has, after a vault that
+			// gave no key.
+			return typedKey(volume, mode, vaultErr, salt, ask)
 		}
-		pw, err := ask(volume, "Password", note)
-		if err != nil {
+		if vaultErr != nil {
+			return nil, fmt.Errorf("%w (%v)", ErrUnlockSkipped, vaultErr)
+		}
+		if why != "" {
+			return nil, fmt.Errorf("%w (%s)", ErrUnlockSkipped, why)
+		}
+		return nil, ErrUnlockSkipped
+	}
+}
+
+// typedKey makes the key of a typed recipe: the password asked, and the
+// salt asked or the phone's. A vault that gave no key before it is said
+// in the note.
+func typedKey(volume, mode string, vaultErr error, salt func() []byte, ask Prompter) ([]byte, error) {
+	var s []byte
+	var note string
+	switch mode {
+	case LuksModePasswordSalt:
+		note = "the key is derived from your password and your salt, both typed here (Argon2id, some seconds).\n" +
+			"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
+	case LuksModePasswordPhoneSalt:
+		if s = salt(); s == nil {
+			// No phone, or no salt from it: the password+salt variant,
+			// which opens a keyslot enrolled that way; Ctrl-C, or a key
+			// that opens nothing, then leads to cryptsetup's own prompt
+			// and the recovery passphrase.
+			note = "no salt came from the phone: the key is derived from your password and a salt you type,\n" +
+				"as for a keyslot enrolled with password+salt (Argon2id, some seconds).\n" +
+				"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
+			break
+		}
+		note = "the key is derived from your password and the salt your phone returned.\n" +
+			"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
+	default:
+		return nil, ErrUnlockSkipped
+	}
+	if vaultErr != nil {
+		note = fmt.Sprintf("no key from the vault (%v):\n", vaultErr) + note
+	}
+	pw, err := ask(volume, "Password", note)
+	if err != nil {
+		return nil, err
+	}
+	defer wipe.Bytes(pw)
+	if s == nil {
+		if s, err = ask(volume, "Salt", ""); err != nil {
 			return nil, err
 		}
-		defer wipe.Bytes(pw)
-		if s == nil {
-			if s, err = ask(volume, "Salt", ""); err != nil {
-				return nil, err
-			}
-		}
-		defer wipe.Bytes(s)
-		return Combine(pw, s)
 	}
+	defer wipe.Bytes(s)
+	return Combine(pw, s)
 }
 
 // Prompter asks for a volume's password or salt, with a note above the

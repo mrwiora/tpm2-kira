@@ -3,6 +3,7 @@ package bootrun
 import (
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 )
@@ -47,5 +48,23 @@ func TestOfferGivesUpWhenReleased(t *testing.T) {
 	close(stop)
 	if bd.offer(confirmedByVault, stop) {
 		t.Fatal("taken after the release")
+	}
+}
+
+// The screen names the prompt that follows, also behind a vault: a typed
+// keyslot is asked only when the vault gives no key.
+func TestNextPromptNamesTheVaultsFallback(t *testing.T) {
+	for _, c := range []struct {
+		modes []string
+		want  string
+	}{
+		{nil, "cryptsetup's prompt"},
+		{[]string{diskkey.LuksModePasswordSalt}, "the password and salt prompt"},
+		{[]string{diskkey.LuksModeTPMVault}, "cryptsetup's prompt without the vault"},
+		{[]string{diskkey.LuksModeTPMVault, diskkey.LuksModePasswordSalt}, "the password and salt prompt if the vault gives no key"},
+	} {
+		if got := nextPrompt(c.modes); got != c.want {
+			t.Errorf("%q: %q, want %q", c.modes, got, c.want)
+		}
 	}
 }

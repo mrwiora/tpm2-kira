@@ -100,7 +100,7 @@ type board struct {
 	// prompting says the passphrase prompt owns the console; promptMode is
 	// the recipe of the volume asked next, for the screen's words.
 	prompting  func() bool
-	promptMode func() string
+	promptMode func() []string
 }
 
 // offer sends a confirmation unless the board has one waiting already, or

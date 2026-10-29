@@ -157,61 +157,66 @@ func sourceDevice(source string) string {
 }
 
 // UnlockRecipe says how the key of a volume is made, read from its LUKS2
-// header the moment it asks: the phone salt's recipe when a keyslot is
-// bound to it, else the typed salt's, else "" - not tpm2-kira's to answer,
-// and why says so for the journal. Cached per volume: the header does not
-// change while the initrd runs.
+// header the moment it asks: the modes of its keyslots in the order they
+// are tried (RecipesOfTokens), none - not tpm2-kira's to answer, and why
+// says so for the journal. Cached per volume: the header does not change
+// while the initrd runs.
 type UnlockRecipe struct {
 	mu    sync.Mutex
-	cache map[string]string
+	cache map[string][]string
 }
 
-func (r *UnlockRecipe) ForVolume(volume string) (mode, why string) {
+func (r *UnlockRecipe) ForVolume(volume string) (modes []string, why string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if mode, ok := r.cache[volume]; ok {
-		return mode, ""
+	if modes, ok := r.cache[volume]; ok {
+		return modes, ""
 	}
 	dev, err := VolumeDevice(volume)
 	if err != nil {
-		return "", err.Error()
+		return nil, err.Error()
 	}
 	toks, err := ReadLuks2Tokens(dev)
 	if err != nil {
-		return "", err.Error()
+		return nil, err.Error()
 	}
-	mode = RecipeOfTokens(toks)
+	modes = RecipesOfTokens(toks)
 	if r.cache == nil {
-		r.cache = map[string]string{}
+		r.cache = map[string][]string{}
 	}
-	r.cache[volume] = mode
-	if mode == "" {
-		return "", dev + " has no keyslot of tpm2-kira's"
+	r.cache[volume] = modes
+	if len(modes) == 0 {
+		return nil, dev + " has no keyslot of tpm2-kira's"
 	}
-	return mode, ""
+	return modes, ""
 }
 
-// RecipeOfTokens is the mode the tokens call for: the vault's key, which
-// needs nobody, wins; then the phone's salt over the typed one (a
-// typed-salt keyslot next to it is the fallback).
-func RecipeOfTokens(toks []LuksToken) string {
-	mode := ""
+// RecipesOfTokens are the modes of the tokens, in the order they are tried:
+// the vault's key, which needs nobody; then the phone's salt; then the
+// typed salt - each a fallback for the ones before it (an unreachable or
+// refusing vault, a phone that is not there).
+func RecipesOfTokens(toks []LuksToken) []string {
+	has := map[string]bool{}
 	for _, t := range toks {
-		if t.Obsolete {
-			continue // the old one-type form: re-marked, never acted on
-		}
-		switch t.Mode {
-		case LuksModeTPMVault:
-			return LuksModeTPMVault
-		case LuksModePasswordPhoneSalt:
-			mode = LuksModePasswordPhoneSalt
-		case LuksModePasswordSalt:
-			if mode == "" {
-				mode = LuksModePasswordSalt
-			}
+		if !t.Obsolete { // the old one-type form: re-marked, never acted on
+			has[t.Mode] = true
 		}
 	}
-	return mode
+	var modes []string
+	for _, m := range []string{LuksModeTPMVault, LuksModePasswordPhoneSalt, LuksModePasswordSalt} {
+		if has[m] {
+			modes = append(modes, m)
+		}
+	}
+	return modes
+}
+
+// RecipeOfTokens is the mode tried first, or "".
+func RecipeOfTokens(toks []LuksToken) string {
+	if modes := RecipesOfTokens(toks); len(modes) > 0 {
+		return modes[0]
+	}
+	return ""
 }
 
 // routedUUIDs are the volumes the kernel command line routes to the
@@ -266,27 +271,27 @@ func routedDevices(socket string) []string {
 	return devs
 }
 
-// ScreenRecipe is the recipe of the first routed volume, for the code
-// screen's words ("continue to ..."): resolved lazily, cached once known,
-// "" while no routed header is readable yet (the prompt then names
-// cryptsetup's).
-func ScreenRecipe(socket string) func() string {
+// ScreenRecipe is the recipe of the first routed volume, its modes in the
+// order they are tried, for the code screen's words ("continue to ..."):
+// resolved lazily, cached once known, none while no routed header is
+// readable yet (the prompt then names cryptsetup's).
+func ScreenRecipe(socket string) func() []string {
 	var mu sync.Mutex
-	known := ""
-	return func() string {
+	var known []string
+	return func() []string {
 		mu.Lock()
 		defer mu.Unlock()
-		if known != "" {
+		if known != nil {
 			return known
 		}
 		for _, dev := range routedDevices(socket) {
 			if toks, err := ReadLuks2Tokens(dev); err == nil {
-				if mode := RecipeOfTokens(toks); mode != "" {
-					known = mode
+				if modes := RecipesOfTokens(toks); len(modes) > 0 {
+					known = modes
 					return known
 				}
 			}
 		}
-		return ""
+		return nil
 	}
 }

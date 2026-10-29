@@ -647,6 +647,12 @@ func TestReadPassphraseTakesOneLineOfAPipe(t *testing.T) {
 }
 
 // recipeOf is a volume-independent recipe, for the prompt tests.
-func recipeOf(mode string) func(string) (string, string) {
-	return func(string) (string, string) { return mode, "" }
+func recipeOf(modes ...string) func(string) ([]string, string) {
+	var ms []string
+	for _, m := range modes {
+		if m != "" {
+			ms = append(ms, m)
+		}
+	}
+	return func(string) ([]string, string) { return ms, "" }
 }

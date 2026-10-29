@@ -165,6 +165,38 @@ func TestDiskKeyFromTheVault(t *testing.T) {
 	}
 }
 
+// A volume with a password+salt keyslot beside its tpm+vault one: when
+// the vault gives no key, tpm2-kira asks for the password and the salt at
+// its own prompt (at the console or over SSH), and says why - not
+// cryptsetup's prompt with the recovery passphrase.
+func TestTheTypedKeyslotIsTheVaultsFallback(t *testing.T) {
+	modes := diskkey.RecipesOfTokens([]diskkey.LuksToken{{Mode: diskkey.LuksModePasswordSalt}, {Mode: diskkey.LuksModeTPMVault}})
+	if len(modes) != 2 || modes[0] != diskkey.LuksModeTPMVault || modes[1] != diskkey.LuksModePasswordSalt {
+		t.Fatalf("the order: %q", modes)
+	}
+	var asked []string
+	var note string
+	ask := func(volume, what, n string) ([]byte, error) {
+		asked = append(asked, what)
+		if what == "Password" {
+			note = n
+		}
+		return []byte("typed-" + what), nil
+	}
+	refused := func(string) ([]byte, error) { return nil, errors.New("the device is revoked") }
+	key, err := diskkey.DiskKey(nil, refused, recipeOf(modes...), ask)("cryptroot")
+	if err != nil || len(key) == 0 {
+		t.Fatalf("no key from the typed keyslot: %v", err)
+	}
+	if strings.Join(asked, ",") != "Password,Salt" || !strings.Contains(note, "no key from the vault (the device is revoked)") {
+		t.Fatalf("asked %q, note %q", asked, note)
+	}
+	want, _ := diskkey.DiskKey(nil, nil, recipeOf(diskkey.LuksModePasswordSalt), ask)("cryptroot")
+	if string(key) != string(want) {
+		t.Fatal("the fallback's key is not the password+salt key")
+	}
+}
+
 // The token of a tpm+vault keyslot has its own type and is bound to a slot.
 func TestVaultToken(t *testing.T) {
 	tok, ok := diskkey.ParseKiraToken(json.RawMessage(`{"type":"tpm2-kira-vault","keyslots":["2"],"slot":0,"label":"luks","created":"x"}`))
@@ -212,6 +244,12 @@ func TestCheckVault(t *testing.T) {
 }
 
 // recipeOf is a volume-independent recipe, for the prompt tests.
-func recipeOf(mode string) func(string) (string, string) {
-	return func(string) (string, string) { return mode, "" }
+func recipeOf(modes ...string) func(string) ([]string, string) {
+	var ms []string
+	for _, m := range modes {
+		if m != "" {
+			ms = append(ms, m)
+		}
+	}
+	return func(string) ([]string, string) { return ms, "" }
 }
