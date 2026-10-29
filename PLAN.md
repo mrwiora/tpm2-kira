@@ -151,7 +151,9 @@ flowchart LR
    TESTING, PROJECT-STRUCTURE, the vault's README; the PLAN-*.md design
    records carry a note mapping the old mode names to the recipes;
    HISTORY.md (the mode names, the dropped TPM check, blob version 15).
-8. [ ] tests: every recipe - unit (each ID's derivation against the
+8. [x] (vmtest-20261029-223448: 126 checks on Arch and Debian, all
+   passed; 0x1400 and 0x1300 are covered by the unit and swtpm tests, not
+   on the VMs) tests: every recipe - unit (each ID's derivation against the
    known answer, the refused ones), swtpm (T as the unattended password;
    the vault with and without a pepper), the vault's tests (the CLI
    queue), vmtest on every machine, every recipe.
