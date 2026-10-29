@@ -42,9 +42,9 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/mrwiora/tpm2-kira/core/transport/frame"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
-	"github.com/mrwiora/tpm2-kira/core/transport/frame"
 )
 
 func TestAppMachine(t *testing.T) {

@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/core/attest/attesttest"
+	"github.com/mrwiora/tpm2-kira/core/vaultproto"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
-	"github.com/mrwiora/tpm2-kira/core/vaultproto"
 )
 
 // The key is fixed by its parts, its label and the pepper: the contract

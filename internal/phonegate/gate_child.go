@@ -32,9 +32,9 @@ import (
 
 	"github.com/tpm2-trust/assh/sandbox"
 
+	"github.com/mrwiora/tpm2-kira/core/transport/ble"
 	"github.com/mrwiora/tpm2-kira/internal/journal"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/core/transport/ble"
 )
 
 // The worker's files, as the coordinator hands them over (ExtraFiles).

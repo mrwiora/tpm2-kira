@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/core/attest"
-	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/core/transport/ble"
 	"github.com/mrwiora/tpm2-kira/core/transport/frame"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 )
 
 // fakeAcceptor plays the BLE peripheral: each Accept either times out after

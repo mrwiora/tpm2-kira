@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/mrwiora/tpm2-kira/core/vaultproto"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
@@ -19,7 +20,6 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
-	"github.com/mrwiora/tpm2-kira/core/vaultproto"
 )
 
 // VaultEnrolOptions is what 'vault enrol' and 'luks enrol --mode tpm+vault'

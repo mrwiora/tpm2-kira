@@ -35,6 +35,7 @@ import (
 	"golang.org/x/crypto/hkdf"
 
 	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/mrwiora/tpm2-kira/core/vaultproto"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
@@ -42,7 +43,6 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
-	"github.com/mrwiora/tpm2-kira/core/vaultproto"
 )
 
 // vaultInfo is the derivation string of the key: part of the contract

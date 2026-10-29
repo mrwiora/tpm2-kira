@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/mrwiora/tpm2-kira/core/transport/ble"
+	"github.com/mrwiora/tpm2-kira/core/transport/frame"
 	"github.com/mrwiora/tpm2-kira/internal/journal"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
-	"github.com/mrwiora/tpm2-kira/core/transport/ble"
-	"github.com/mrwiora/tpm2-kira/core/transport/frame"
 )
 
 // GateOptions configures `phone gate`.

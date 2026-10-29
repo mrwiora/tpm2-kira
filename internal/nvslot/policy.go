@@ -14,10 +14,10 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/mrwiora/tpm2-kira/core/vaultproto"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
-	"github.com/mrwiora/tpm2-kira/core/vaultproto"
 )
 
 // The TOTP key is an HMAC key inside the TPM. tpm2-kira never gets it back:
