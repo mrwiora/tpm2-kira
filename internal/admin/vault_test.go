@@ -3,10 +3,19 @@ package admin
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -112,6 +121,7 @@ func TestVaultClientPin(t *testing.T) {
 		json.NewEncoder(w).Encode(vaultproto.ErrorResponse{Error: "unknown device\x1b[2J"})
 	}))
 	defer srv.Close()
+	trustTestVault(t, srv)
 	pin := vaultproto.PinOf(srv.Certificate().RawSubjectPublicKeyInfo)
 
 	c, err := vaultkey.NewClient(srv.URL, pin)
@@ -132,12 +142,27 @@ func TestVaultClientPin(t *testing.T) {
 
 	other, _ := vaultkey.NewClient(srv.URL, "sha256:"+strings.Repeat("00", 32))
 	err = other.Post(context.Background(), vaultproto.PathChallenge, vaultproto.ChallengeRequest{}, &ch)
-	if err == nil || !strings.Contains(err.Error(), "not the pinned one") {
+	if err == nil || !strings.Contains(err.Error(), "pinned key") {
 		t.Fatalf("another key: %v", err)
 	}
 	if vaultkey.Retryable(err) {
 		t.Fatal("a vault with another key is not tried again")
 	}
+
+	// A vault whose chain ends at no root of the bundle is refused like one
+	// with another key; without a bundle there is no client.
+	path := vaultkey.RootsPath
+	vaultkey.RootsPath = writeTestRoot(t)
+	foreign, _ := vaultkey.NewClient(srv.URL, pin)
+	err = foreign.Post(context.Background(), vaultproto.PathChallenge, vaultproto.ChallengeRequest{}, &ch)
+	if err == nil || vaultkey.Retryable(err) || !strings.Contains(vaultkey.Problem(err), "does not end at a root") {
+		t.Fatalf("another root: %v (%s)", err, vaultkey.Problem(err))
+	}
+	vaultkey.RootsPath = filepath.Join(t.TempDir(), "none.pem")
+	if _, err := vaultkey.NewClient(srv.URL, pin); err == nil || !strings.Contains(err.Error(), "--ca FILE") {
+		t.Fatalf("no bundle: %v", err)
+	}
+	vaultkey.RootsPath = path
 
 	srv.Close()
 	err = c.Post(context.Background(), vaultproto.PathChallenge, vaultproto.ChallengeRequest{}, &ch)
@@ -237,6 +262,7 @@ func TestCheckVault(t *testing.T) {
 		json.NewEncoder(w).Encode(vaultproto.ErrorResponse{Error: "unknown device"})
 	}))
 	defer srv.Close()
+	trustTestVault(t, srv)
 	pin := vaultproto.PinOf(srv.Certificate().RawSubjectPublicKeyInfo)
 
 	if v := vaultkey.Check(srv.URL, pin, known, 5*time.Second); !v.Answers || !v.Knows || v.Problem != "" {
@@ -245,9 +271,14 @@ func TestCheckVault(t *testing.T) {
 	if v := vaultkey.Check(srv.URL, pin, nil, 5*time.Second); !v.Answers || v.Knows || !strings.Contains(v.Problem, "unknown device") {
 		t.Fatalf("before the enrolment, any answer: %+v", v)
 	}
-	if v := vaultkey.Check(srv.URL, "sha256:"+strings.Repeat("00", 32), nil, 5*time.Second); v.Answers || !strings.Contains(v.Problem, "another key") {
+	if v := vaultkey.Check(srv.URL, "sha256:"+strings.Repeat("00", 32), nil, 5*time.Second); v.Answers || !strings.Contains(v.Problem, "without the pinned key") {
 		t.Fatalf("another key: %+v", v)
 	}
+	vaultkey.RootsPath = writeTestRoot(t)
+	if v := vaultkey.Check(srv.URL, pin, nil, 5*time.Second); v.Answers || !strings.Contains(v.Problem, "does not end at a root") {
+		t.Fatalf("another root: %+v", v)
+	}
+	trustTestVault(t, srv)
 	if v := vaultkey.Check("https://vault", "sha256:12", nil, 5*time.Second); v.Answers || !strings.Contains(v.Problem, "pin") {
 		t.Fatalf("a bad pin: %+v", v)
 	}
@@ -260,4 +291,69 @@ func TestCheckVault(t *testing.T) {
 // recipeOf is a volume-independent recipe, for the prompt tests.
 func recipeOf(recipes ...diskkey.Recipe) func(string) ([]diskkey.Recipe, string) {
 	return func(string) ([]diskkey.Recipe, string) { return recipes, "" }
+}
+
+// trustTestVault makes the test server's certificate - a self-signed CA
+// for 127.0.0.1 - the root of the machine's vaults, for this test.
+func trustTestVault(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "vault-ca.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := vaultkey.RootsPath
+	vaultkey.RootsPath = path
+	t.Cleanup(func() { vaultkey.RootsPath = old })
+}
+
+// writeTestRoot writes a bundle with a root nobody's vault ends at.
+func writeTestRoot(t *testing.T) string {
+	t.Helper()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "another root"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().AddDate(1, 0, 0), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "other-ca.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// AddRoot takes from a file the root whose key is the pin, and only it,
+// into the bundle, once; a file without the pin's root changes nothing.
+func TestAddRoot(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	pin := vaultproto.PinOf(srv.Certificate().RawSubjectPublicKeyInfo)
+	other := writeTestRoot(t)
+	file := filepath.Join(t.TempDir(), "from-the-vault.pem")
+	otherPEM, _ := os.ReadFile(other)
+	os.WriteFile(file, append(otherPEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})...), 0o644)
+
+	old := vaultkey.RootsPath
+	vaultkey.RootsPath = filepath.Join(t.TempDir(), "etc", "vault-ca.pem")
+	defer func() { vaultkey.RootsPath = old }()
+	if err := vaultkey.AddRoot(other, pin); err == nil || !strings.Contains(err.Error(), "not this vault's") {
+		t.Fatalf("a file without the pin's root: %v", err)
+	}
+	if _, err := os.Stat(vaultkey.RootsPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a refused root left a bundle")
+	}
+	for i := 0; i < 2; i++ {
+		if err := vaultkey.AddRoot(file, pin); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, _ := os.ReadFile(vaultkey.RootsPath)
+	_, certs, err := vaultproto.ParseRoots(b)
+	if err != nil || len(certs) != 1 || !certs[0].Equal(srv.Certificate()) {
+		t.Fatalf("the bundle: %d roots, %v", len(certs), err)
+	}
+	if c, err := vaultkey.NewClient(srv.URL, pin); err != nil || c == nil {
+		t.Fatalf("a client with the added root: %v", err)
+	}
 }

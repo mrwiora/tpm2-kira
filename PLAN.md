@@ -317,9 +317,16 @@ flowchart LR
    the root's and the leaf's pin taken, another root, host or pin, an
    expired leaf and one not valid yet refused; bundles that are empty, not
    PEM, a key, a leaf, or with trailing text refused.
-2. [ ] tpm2-kira: `vaultkey.NewClient` reads the roots
-   (`/etc/tpm2-kira/vault-ca.pem`, a variable for the tests); enrol,
-   status and control report a missing or failing root.
+2. [x] tpm2-kira: `vaultkey.NewClient` reads the roots
+   (`vaultkey.RootsPath`, `/etc/tpm2-kira/vault-ca.pem`) and uses the
+   core's `ClientConfig` - no `InsecureSkipVerify` left in tpm2-kira;
+   `vaultkey.AddRoot` takes the pin's root from a file into the bundle;
+   `--ca FILE` on `luks enrol` and `vault enrol`, the root's file in
+   control's vault step; `vaultkey.Problem` names a refusal (no root of
+   the bundle, another name, outside the dates or a wrong clock, no pinned
+   key) for status, control and the boot's console. Tested: unit (a vault
+   of another root, no bundle, AddRoot), the swtpm vault tests with the
+   test server's CA as the bundle.
 3. [ ] initrd: both hooks copy the file; `control`'s rebuild check covers it.
 4. [ ] vault: root CA + leaf in `tlsutil`; `tls root` command; an own
    certificate and chain in the state directory; `PinnedConfig` via the

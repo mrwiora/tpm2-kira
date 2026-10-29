@@ -38,10 +38,13 @@ type VaultEnrolOptions struct {
 	Label         string
 	Name          string
 	PrivKeyPath   string
-	Pepper        bool   // the key needs an operator's pepper too, asked here once
-	Out           string // 'vault enrol' only: where the key is written
-	Yes           bool   // the recovery passphrase is in place; do not ask
-	Debug         bool
+	// CA is a file with the vault\'s root (\'tpm2-kira-vault tls root\'):
+	// added to vaultkey.RootsPath when its key is the pin.
+	CA     string
+	Pepper bool   // the key needs an operator's pepper too, asked here once
+	Out    string // 'vault enrol' only: where the key is written
+	Yes    bool   // the recovery passphrase is in place; do not ask
+	Debug  bool
 }
 
 // VaultEnrol enrols the slot with the vault and writes the key to o.Out
@@ -151,6 +154,11 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		return nil, 0, err
 	}
 	slot := nvslot.AttestSlot(idx)
+	if o.CA != "" {
+		if err := vaultkey.AddRoot(o.CA, o.Pin); err != nil {
+			return nil, 0, err
+		}
+	}
 	client, err := vaultkey.NewClient(o.URL, o.Pin)
 	if err != nil {
 		return nil, 0, err

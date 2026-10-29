@@ -18,6 +18,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
 )
 
 // Version is the application version, set by build flags
@@ -570,6 +571,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		vaultURL := fs.String("url", "", "the vault's salt: the vault, https://host:port")
 		vaultPin := fs.String("pin", "", "the vault's salt: the pin of the vault's key, sha256:… as 'tpm2-kira-vault token create' prints it")
 		vaultToken := fs.String("token", "", "the vault's salt: the one-time enrolment token")
+		vaultCA := fs.String("ca", "", "the vault's salt: a file with the vault's root certificate ('tpm2-kira-vault tls root'), added to "+vaultkey.RootsPath+" when its key is the pin")
 		name := fs.String("name", "", "the vault's salt: the machine's name at the vault (default: the host name)")
 		privKey := fs.String("privkey", "", "Signing key, needed for every hand-over (default: "+signing.DefaultPrivateKeyPath+")")
 		pubKey := fs.String("pubkey", "", "Signing public key, for the record check (default: "+signing.DefaultPublicKeyPath+")")
@@ -595,7 +597,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 			Remote: admin.FactorEnrolOptions{TPMPath: *tpm, SealIndex: slot, Label: *label, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
 				Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: true, Debug: *debug},
 			Vault: admin.VaultEnrolOptions{TPMPath: *tpm, SealIndex: nvslot.ResolveNVRAMIndex(uint32(*nvram)), URL: *vaultURL, Pin: *vaultPin,
-				Token: *vaultToken, Label: *label, Name: *name, PrivKeyPath: *privKey, Debug: *debug},
+				Token: *vaultToken, Label: *label, Name: *name, PrivKeyPath: *privKey, CA: *vaultCA, Debug: *debug},
 		}); err != nil {
 			fail(err)
 		}
@@ -643,6 +645,7 @@ func runVault(args []string, tpmPath string, debugFlag bool) {
 		vaultURL := fs.String("url", "", "The vault, https://host:port (required)")
 		pin := fs.String("pin", "", "The pin of the vault's key, sha256:… (required)")
 		token := fs.String("token", "", "The one-time enrolment token from 'tpm2-kira-vault token create' (required)")
+		ca := fs.String("ca", "", "A file with the vault's root certificate ('tpm2-kira-vault tls root'), added to "+vaultkey.RootsPath+" when its key is the pin")
 		label := fs.String("label", "luks", "The key's label")
 		name := fs.String("name", "", "The machine's name at the vault (default: the host name)")
 		out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
@@ -651,7 +654,7 @@ func runVault(args []string, tpmPath string, debugFlag bool) {
 		fs.Parse(args[1:])
 		if err := admin.VaultEnrol(admin.VaultEnrolOptions{TPMPath: *tpm, SealIndex: nvslot.ResolveNVRAMIndex(uint32(*nvram)),
 			URL: *vaultURL, Pin: *pin, Token: *token, Label: *label, Name: *name, Pepper: *pepper, PrivKeyPath: *privKey,
-			Out: *out, Yes: *yes, Debug: *debug}); err != nil {
+			CA: *ca, Out: *out, Yes: *yes, Debug: *debug}); err != nil {
 			fail(err)
 		}
 	case "status":

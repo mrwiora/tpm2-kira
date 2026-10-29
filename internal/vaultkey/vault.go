@@ -22,11 +22,14 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -95,47 +98,145 @@ func hkdfHex(secret, salt []byte, what, label string) []byte {
 
 // ── the client ─────────────────────────────────────────────────────────────
 
-// vaultClient speaks to the vault over HTTPS with its key pinned: TLS 1.3,
-// the certificate's SubjectPublicKeyInfo must hash to the pin. There is no
-// chain and no expiry to check - the initrd has no clock to check one with
-// - and a key that does not match is a refused vault, not a warning.
+// RootsPath is where the machine keeps the roots of its vaults: one PEM
+// bundle, copied into the boot image when a slot uses a vault. The pin of
+// each vault, in the slot's signed blob, is the key of a certificate of
+// its chain - so a root put here by somebody else gets no other vault
+// accepted.
+var RootsPath = "/etc/tpm2-kira/vault-ca.pem"
+
+// vaultClient speaks to the vault over HTTPS (vaultproto.ClientConfig):
+// TLS 1.3, the vault's chain to a root of RootsPath for the URL's host,
+// within the certificates' dates, then the pin. A vault that does not
+// verify is a refused vault, not a warning.
 type vaultClient struct {
 	base string
 	hc   *http.Client
 }
 
-func NewClient(rawURL, pin string) (*vaultClient, error) {
+// CheckURL says whether rawURL is a vault's URL: https://host[:port].
+func CheckURL(rawURL string) (*url.URL, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") {
 		return nil, fmt.Errorf("the vault's URL must be https://host[:port], not %q", rawURL)
 	}
+	return u, nil
+}
+
+// CheckPin says whether pin is a vault's pin.
+func CheckPin(pin string) error {
 	if !strings.HasPrefix(pin, "sha256:") || len(pin) != 7+64 {
-		return nil, fmt.Errorf("the vault's pin must be sha256: and 64 hexadecimal characters, as 'tpm2-kira-vault token create' prints it")
+		return fmt.Errorf("the vault's pin must be sha256: and 64 hexadecimal characters, as 'tpm2-kira-vault token create' prints it")
 	}
-	tlsConf := &tls.Config{
-		MinVersion:         tls.VersionTLS13,
-		InsecureSkipVerify: true, // the pin below is the check
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return errors.New("the vault presented no certificate")
-			}
-			return checkVaultPin(cs.PeerCertificates[0], pin)
-		},
+	return nil
+}
+
+func NewClient(rawURL, pin string) (*vaultClient, error) {
+	u, err := CheckURL(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	if err := CheckPin(pin); err != nil {
+		return nil, err
+	}
+	roots, err := loadRoots()
+	if err != nil {
+		return nil, err
 	}
 	return &vaultClient{
 		base: "https://" + u.Host,
 		hc: &http.Client{
-			Transport: &http.Transport{TLSClientConfig: tlsConf, Proxy: nil, ForceAttemptHTTP2: false},
+			Transport: &http.Transport{TLSClientConfig: vaultproto.ClientConfig(roots, u.Hostname(), pin), Proxy: nil, ForceAttemptHTTP2: false},
 			Timeout:   15 * time.Second,
 		},
 	}, nil
 }
 
-func checkVaultPin(cert *x509.Certificate, pin string) error {
-	if got := vaultproto.PinOf(cert.RawSubjectPublicKeyInfo); got != strings.ToLower(pin) {
-		return fmt.Errorf("the vault's key is not the pinned one (%s, pinned %s)", got, pin)
+// loadRoots reads the bundle of RootsPath.
+func loadRoots() (*x509.CertPool, error) {
+	b, err := os.ReadFile(RootsPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("no root certificate of a vault in %s: place it there ('tpm2-kira-vault tls root' prints it), or enrol with --ca FILE", RootsPath)
 	}
+	if err != nil {
+		return nil, err
+	}
+	pool, _, err := vaultproto.ParseRoots(b)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", RootsPath, err)
+	}
+	return pool, nil
+}
+
+// AddRoot puts the vault's root into the bundle of RootsPath: of the
+// certificates in file, the one whose key is the pin - the pin, given out
+// of band with the token, authenticates it. A root there already is left
+// as it is.
+func AddRoot(file, pin string) error {
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	_, certs, err := vaultproto.ParseRoots(b)
+	if err != nil {
+		return fmt.Errorf("%s: %w", file, err)
+	}
+	var root *x509.Certificate
+	for _, c := range certs {
+		if vaultproto.PinOf(c.RawSubjectPublicKeyInfo) == strings.ToLower(pin) {
+			root = c
+		}
+	}
+	if root == nil {
+		return fmt.Errorf("%s holds no root whose key is the pin %s: not this vault's", file, pin)
+	}
+	var bundle []byte
+	if have, err := os.ReadFile(RootsPath); err == nil {
+		_, haveCerts, err := vaultproto.ParseRoots(have)
+		if err != nil {
+			return fmt.Errorf("%s: %w", RootsPath, err)
+		}
+		for _, c := range haveCerts {
+			if c.Equal(root) {
+				return nil
+			}
+		}
+		bundle = have
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw})...)
+	if err := os.MkdirAll(filepath.Dir(RootsPath), 0o755); err != nil {
+		return err
+	}
+	tmp := RootsPath + ".new"
+	if err := os.WriteFile(tmp, bundle, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, RootsPath); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	fmt.Printf("The vault's root %q is in %s; the boot image takes it at the next rebuild.\n", root.Subject.CommonName, RootsPath)
 	return nil
+}
+
+// Problem names why a vault was refused, for a person.
+func Problem(err error) string {
+	var unknown x509.UnknownAuthorityError
+	var invalid x509.CertificateInvalidError
+	var host x509.HostnameError
+	switch {
+	case errors.As(err, &unknown):
+		return "answers with a certificate that does not end at a root of " + RootsPath
+	case errors.As(err, &host):
+		return "answers with a certificate for another name or address (" + host.Error() + ")"
+	case errors.As(err, &invalid) && invalid.Reason == x509.Expired:
+		return "answers with a certificate outside its dates (" + invalid.Error() + ") - or this machine's clock is wrong"
+	case strings.Contains(err.Error(), "pinned key"):
+		return "answers with a chain without the pinned key"
+	}
+	return err.Error()
 }
 
 // Post sends in as JSON and decodes the answer into out; an answer that is
@@ -200,8 +301,8 @@ func Check(rawURL, pin string, device []byte, timeout time.Duration) CheckResult
 	switch {
 	case err == nil:
 		return CheckResult{Answers: true, Knows: true}
-	case strings.Contains(err.Error(), "not the pinned one"):
-		return CheckResult{Problem: "it answers with another key than the pinned one"}
+	case isVerification(err):
+		return CheckResult{Problem: "it " + Problem(err)}
 	case errors.As(err, &ue):
 		return CheckResult{Problem: "not reachable (" + ue.Err.Error() + ")"}
 	}
@@ -436,11 +537,16 @@ func Retryable(err error) bool {
 	if !errors.As(err, &ue) {
 		return false
 	}
-	var tlsErr *tls.CertificateVerificationError
-	if errors.As(err, &tlsErr) || strings.Contains(err.Error(), "not the pinned one") {
+	if isVerification(err) {
 		return false // reached, and it is not our vault
 	}
 	return true
+}
+
+// isVerification says the vault was reached and did not verify.
+func isVerification(err error) bool {
+	var tlsErr *tls.CertificateVerificationError
+	return errors.As(err, &tlsErr) || strings.Contains(err.Error(), "pinned key")
 }
 
 // ── at boot ───────────────────────────────────────────────────────────────
@@ -484,8 +590,8 @@ func Start(ctx context.Context, tpmPath string, out io.Writer, log func(string),
 			key, salt, err := Open(ctx, tpmDev, vs, say)
 			if err != nil {
 				vk.errs[n] = err
-				fmt.Fprintf(out, "%s \033[0;31mSlot #%d: nothing from the vault:\033[0m %v\n", screen.Tag(screen.TagYellow), n, err)
-				log(fmt.Sprintf("vault: slot %d: no key: %v", n, err))
+				fmt.Fprintf(out, "%s \033[0;31mSlot #%d: nothing from the vault:\033[0m %s\n", screen.Tag(screen.TagYellow), n, Problem(err))
+				log(fmt.Sprintf("vault: slot %d: no key: %s", n, Problem(err)))
 				continue
 			}
 			if salt != nil {

@@ -169,6 +169,7 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 	tv := &testVault{token: "tok-1", nonces: map[string][]byte{}}
 	srv := httptest.NewTLSServer(tv)
 	defer srv.Close()
+	trustTestVault(t, srv)
 	pin := vaultproto.PinOf(srv.Certificate().RawSubjectPublicKeyInfo)
 
 	opts := VaultEnrolOptions{TPMPath: sock, SealIndex: slot, URL: srv.URL, Pin: pin, Token: "tok-1", Name: "box", PrivKeyPath: privPath}
@@ -269,6 +270,7 @@ func TestVaultPepper(t *testing.T) {
 	tv := &testVault{token: "tok-p", nonces: map[string][]byte{}}
 	srv := httptest.NewTLSServer(tv)
 	defer srv.Close()
+	trustTestVault(t, srv)
 
 	old := terminalAsk
 	terminalAsk = func(string) ([]byte, error) { return []byte("s3cret pepper"), nil }
@@ -325,6 +327,7 @@ func TestVaultTypedPassword(t *testing.T) {
 	tv := &testVault{token: "tok-t", nonces: map[string][]byte{}}
 	srv := httptest.NewTLSServer(tv)
 	defer srv.Close()
+	trustTestVault(t, srv)
 
 	old := terminalAsk
 	answers := map[string]string{"Pepper": "s3cret pepper", "The same pepper": "s3cret pepper", "Password": "hunter2", "The same password": "hunter2"}
@@ -382,6 +385,7 @@ func TestVaultBesideATPMSalt(t *testing.T) {
 	tv := &testVault{token: "tok-n", nonces: map[string][]byte{}}
 	srv := httptest.NewTLSServer(tv)
 	defer srv.Close()
+	trustTestVault(t, srv)
 	if _, _, err := vaultEnrolKey(VaultEnrolOptions{TPMPath: sock, SealIndex: slot, URL: srv.URL, Name: "box",
 		Pin: vaultproto.PinOf(srv.Certificate().RawSubjectPublicKeyInfo), Token: "tok-n", PrivKeyPath: privPath}); err != nil {
 		t.Fatalf("enrol: %v", err)

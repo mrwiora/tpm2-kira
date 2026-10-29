@@ -106,14 +106,14 @@ func (c *controller) runVault() error {
 		}
 	}
 
-	var url, pin, token string
+	var url, pin, token, ca string
 	pepper := false
 	for edit := true; ; {
 		if edit {
 			if err := c.form(
 				huh.NewInput().Title("The vault's address").Description("https://host[:port], as 'tpm2-kira-vault token create' prints it.").
 					Value(&url).Validate(func(s string) error {
-					_, err := vaultkey.NewClient(strings.TrimSpace(s), "sha256:"+strings.Repeat("0", 64))
+					_, err := vaultkey.CheckURL(strings.TrimSpace(s))
 					return err
 				}),
 				huh.NewInput().Title("The vault's key pin").Description("sha256: and 64 hexadecimal characters: the vault is taken for real only with this key.").
@@ -122,6 +122,15 @@ func (c *controller) runVault() error {
 						return errors.New("sha256: and 64 hexadecimal characters")
 					}
 					return nil
+				}),
+				huh.NewInput().Title("The vault's root certificate").
+					Description("A file with it, as 'tpm2-kira-vault tls root' prints it; empty when "+vaultkey.RootsPath+" holds it already. Taken only when its key is the pin.").
+					Value(&ca).Validate(func(s string) error {
+					if s = strings.TrimSpace(s); s == "" {
+						return nil
+					}
+					_, err := os.Stat(s)
+					return err
 				}),
 				huh.NewInput().Title("The one-time token").EchoMode(huh.EchoModePassword).
 					Value(&token).Validate(func(s string) error {
@@ -133,7 +142,13 @@ func (c *controller) runVault() error {
 			).Run(); err != nil {
 				return err
 			}
-			url, pin, token = strings.TrimSpace(url), strings.ToLower(strings.TrimSpace(pin)), strings.TrimSpace(token)
+			url, pin, token, ca = strings.TrimSpace(url), strings.ToLower(strings.TrimSpace(pin)), strings.TrimSpace(token), strings.TrimSpace(ca)
+			if ca != "" {
+				if err := vaultkey.AddRoot(ca, pin); err != nil {
+					fmt.Fprintln(c.out, bad("The root certificate: "+err.Error()))
+					continue
+				}
+			}
 		}
 		fmt.Fprintf(c.out, "Asking the vault at %s ...\n", url)
 		v := vaultkey.Check(url, pin, nil, 10*time.Second)
