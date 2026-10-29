@@ -512,12 +512,12 @@ class Machine:
             s.send("\r")
             s.expect(r"Password for disk \S+: ?$", 120); s.send(TEST_PASSWORD + "\r")
             s.expect(r"Salt for disk \S+: ?$", 60); s.send(TEST_SALT + "\r")
-            # The session ends when the system leaves the initrd; the
-            # server's last line can be cut off by that (the checks after
-            # the boot say whether the key was answered).
+            # The session ends when the system leaves the initrd, after the
+            # server's last line (the checks after the boot say whether the
+            # key was answered).
             rest = s.wait_end(600)
-            if "The machine boots; the SSH server stops." not in rest:
-                self.rep.issues.append(f"boot {n}: the session ended without the server's last line ('The machine boots; ...')")
+            self.check(f"boot {n}: the session ends with the server's last line ('The machine boots; ...')",
+                       "The machine boots; the SSH server stops." in rest, rest[-300:])
         except Fail as e:
             self.check(f"boot {n}: the code screen over SSH", False, str(e))
             raise
