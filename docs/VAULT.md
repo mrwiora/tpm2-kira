@@ -115,11 +115,14 @@ systemctl enable --now tpm2-kira-vault
 ```
 
 `init` checks that the TPM can seal and unseal, and creates
-`/var/lib/tpm2-kira-vault` (0700): the TLS key with a self-signed ECDSA
-P-256 certificate (valid 100 years), the configuration. It prints the
-**pin** (`sha256:` over the certificate's SubjectPublicKeyInfo) and the
-**vault recovery key**, shown once: write it down and keep it offline
-(§6.5). `--pcrs ""` binds the device keys to the TPM only, not to the
+`/var/lib/tpm2-kira-vault` (0700): the vault's TLS root (ECDSA P-256,
+valid 20 years) and a leaf it signs for the vault's host or address
+(valid a year, made again from the root with fewer than 30 days left, at
+start and while serving), the configuration. It prints the **pin**
+(`sha256:` over the root's SubjectPublicKeyInfo) and the **vault recovery
+key**, shown once: write it down and keep it offline (§6.5).
+`tpm2-kira-vault tls root` prints the root, for the machines and the
+operators: each verifies the vault's chain against it. `--pcrs ""` binds the device keys to the TPM only, not to the
 vault's boot state; init warns about that.
 
 **For each machine:**
@@ -131,22 +134,30 @@ vault's boot state; init warns about that.
    approve] [--ttl 1h]`. It prints the token, the URL, the pin and the
    exact command for the machine. A token works once. For a machine the
    vault knows already (a new TPM, a new slot): `--replace DEVICE`.
-3. On the machine, with a recovery passphrase in another keyslot - in
+3. The root to the machine: `tpm2-kira-vault tls root > vault-ca.pem`,
+   copied over (it is no secret). On the machine it goes into
+   `/etc/tpm2-kira/vault-ca.pem` - by hand, or with `--ca vault-ca.pem`
+   at the enrolment below, which takes it only when its key is the pin:
+   the pin, which comes with the token, authenticates the root. The boot
+   image carries the bundle; without it the image has no vault part, and
+   `control` says so.
+4. On the machine, with a recovery passphrase in another keyslot - in
    `tpm2-kira control`, step 2, "Disk unlock", "Salt from a vault": it
    sets up the network when there is none, asks the URL, the pin and the
    token, whether the password is held by the TPM (unattended) or typed,
-   and the pepper; asks the vault whether it answers with the pinned key
+   and the pepper, and the root's file; asks the vault whether it answers,
+   verified against the root and the pin,
    before anything is enrolled, and shows afterwards, at every look,
    whether the vault still knows this device. Or by hand:
    `tpm2-kira luks enrol <device> [--password tpm] --salt vault [--pepper]
-   --url … --pin … --token … [--nvram N] [--label L] [--name NAME]`. It
+   --url … --pin … --token … [--ca FILE] [--nvram N] [--label L] [--name NAME]`. It
    enrols with the vault, asks the password (typed recipes) and the
    pepper, adds the keyslot (authorised by the recovery passphrase,
    asked) and marks it. Or in steps (unattended): `tpm2-kira vault enrol …
    --out /run/tpm2-kira/luks.key`, `cryptsetup luksAddKey`, `tpm2-kira
    luks mark <device> --keyslot N --password tpm --salt vault`.
-4. Nothing to rebuild for the key itself: the vault's address is in the
-   slot's blob. The next boot unlocks unattended (`0x2400`), or asks the
+5. The image is rebuilt (the root bundle goes in): the vault's address
+   and pin are in the slot's blob. The next boot unlocks unattended (`0x2400`), or asks the
    password after the code screen (`0x1400`).
 
 **With operator approval and a pepper** (§12):
@@ -157,9 +168,10 @@ vault#    tpm2-kira-vault operator add alice                  # the bearer token
 machine#  tpm2-kira luks enrol /dev/sda2 --password tpm --salt vault --pepper --url … --pin … --token …
                                                               # asks the pepper twice
 vault#    tpm2-kira-vault requests answer                     # approve, deny or skip; asks the pepper
-anywhere$ curl -k --pinnedpubkey sha256//<pin, base64> -H "Authorization: Bearer $TOKEN" \
+vault#    tpm2-kira-vault tls root > vault-ca.pem             # the operators' copy, no secret
+anywhere$ curl --cacert vault-ca.pem -H "Authorization: Bearer $TOKEN" \
               https://vault:8444/v1/requests
-anywhere$ curl -k --pinnedpubkey sha256//<pin, base64> -H "Authorization: Bearer $TOKEN" \
+anywhere$ curl --cacert vault-ca.pem -H "Authorization: Bearer $TOKEN" \
               -d '{"pepper":"…"}' https://vault:8444/v1/requests/<id>/approve
 ```
 
@@ -242,8 +254,14 @@ sequenceDiagram
 - **The network coming up.** A vault not reachable yet is tried again each
   second; an answer - a refusal, a vault whose key is not the pinned one -
   is final.
-- **The pin.** TLS 1.3; the certificate's SubjectPublicKeyInfo must hash
-  to the pin; no chain, no expiry (the initrd has no clock).
+- **The vault's TLS.** TLS 1.3; the chain must end at a root of
+  `/etc/tpm2-kira/vault-ca.pem` (in the image), be for the vault's host
+  or address and within its dates against the machine's clock (the RTC:
+  a wrong clock refuses the vault, and says so); then a key of the
+  verified chain must be the pin (`vaultproto.ClientConfig`). The bundle
+  lies unsigned in the image; the pin is in the slot's signed blob, so a
+  root put there by somebody else gets no other vault accepted. A vault
+  that does not verify is not tried again.
 - **Without a key** (no network, refused, revoked, pending too long, the
   TPM refused): the code screen holds as without a vault, Enter or the
   SSH session continues, and cryptsetup's own prompt follows - also in
@@ -335,7 +353,8 @@ auto and approve.
 ```
 /var/lib/tpm2-kira-vault/
   config.json           listen address, URL, the vault's PCRs, TPM path, admin socket, recovery public key
-  tls/key.pem, cert.pem
+  tls/ca.pem, ca-key.pem the root (20 years) and its key: the vault's identity, the pin's key
+  tls/cert.pem, key.pem the leaf it serves (1 year), made again from the root when due
   devices/<id>.json     pinned device data, release state, the encrypted wrapped R,
                         sealed K_dev, K_dev encrypted to the recovery key
   tokens/<sha256>.json  unused tokens, stored only as their hash
@@ -379,7 +398,8 @@ refuse while `serve` holds its lock.
 | `audit [--follow]` | the audit log |
 | `reseal [--dir] [--pcrs 7]` | seal every device key to the vault's current PCRs |
 | `config set operator-listen ADDR\|"" [--dir]` | turn the operator interface on (an address, e.g. `:8444`) or off; serve stopped |
-| `operator add NAME` | an operator: prints the bearer token once, the pin for curl, the URL and a curl line |
+| `operator add NAME` | an operator: prints the bearer token once, the URL and a curl line (`--cacert`) |
+| `tls root [--dir]` | the vault's root certificate (PEM), for machines and operators; also while serve runs |
 | `operators`, `operator remove NAME` | list, remove |
 
 DEVICE is a hex device ID or a unique name. The admin commands take
@@ -407,10 +427,10 @@ approval; the operator interface carries it as `{"pepper":"…"}`.
 - **Commands:**
 
 ```
-tpm2-kira luks enrol <device> [--password tpm] --salt vault --url URL --pin PIN --token T
+tpm2-kira luks enrol <device> [--password tpm] --salt vault --url URL --pin PIN --token T [--ca FILE]
                      [--pepper] [--nvram N] [--label L] [--name NAME] [--existing-key-file F]
 tpm2-kira luks mark  <device> --keyslot N [--password tpm] --salt vault [--pepper] [--nvram N]
-tpm2-kira vault enrol   --url URL --pin PIN --token T --out PATH [--pepper] [--nvram N] [--label L] [--name NAME] [--yes]
+tpm2-kira vault enrol   --url URL --pin PIN --token T [--ca FILE] --out PATH [--pepper] [--nvram N] [--label L] [--name NAME] [--yes]
 tpm2-kira vault status  [--nvram N]     the slot's vault, and whether it answers for this machine
 tpm2-kira vault unenrol [--nvram N]     the vault method and L out of the blob; revoke on the vault,
                                         remove the keyslot by hand
@@ -450,7 +470,9 @@ functions tpm2-kira seals with (`internal/nvslot/policy.go` calls them).
 | the vault's disk or a backup | records encrypted under keys sealed in the vault's TPM |
 | root on the running vault | the wrapped R of every device: useless without each machine's TPM in an approved state; can deny service |
 | a relay or a recorded answer | opens only on the machine's TPM, under its policy |
-| a vault impersonated on the network | the pin fails; it could only withhold R, which the real one may too |
+| a vault impersonated on the network | its chain does not end at the vault's root, or its key is not the pin; it could only withhold R, which the real one may too |
+| a root of their own in the boot image's bundle | still not the pin: the pin is in the slot's signed blob |
+| the machine's clock set back or ahead | a certificate outside its dates refuses the vault; the fallbacks stay |
 | the machine and root on the vault, a keyslot with a pepper | still no key: the pepper is with the operators, the vault never keeps it (a pepper given to a compromised running vault is seen, though) |
 | an operator's token | can approve releases and read requests and devices, nothing else; cannot revoke, enrol or read the audit |
 | root on the running machine | the disk is open already; after `cap` no part opens again |
@@ -557,8 +579,9 @@ recovery keyslot is mandatory, and the console prompt is always there.
 from the machines' so the two can be firewalled apart, off until
 `operator_listen` is set (`init --operator-listen :8444`, or `config set
 operator-listen :8444` with serve stopped). Same certificate, TLS 1.3:
-operators pin it as machines do (curl: `-k --pinnedpubkey
-sha256//<base64>`, which `operator add` and `init` print).
+operators verify it against the vault's root (curl: `--cacert
+vault-ca.pem`, from `tpm2-kira-vault tls root`, as `operator add`
+prints).
 
 | Endpoint | |
 |---|---|

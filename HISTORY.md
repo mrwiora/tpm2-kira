@@ -268,6 +268,22 @@ socket, and the release key's policy is the slot's approval plus the
 command code, with no branch the phone can open: only a boot the
 machine's signing key approved at seal or reseal gets the factor.
 
+### The vault's TLS was its pinned key alone (InsecureSkipVerify)
+
+Until 2026-10-29 the vault had one self-signed certificate (100 years), and
+its clients - the machine at boot and at enrolment, the vault's own test
+client - turned Go's verification off (`InsecureSkipVerify`) and checked
+in `VerifyConnection` only that the certificate's key was the pin. Not
+spoofable as such - TLS 1.3 proves the key - but no chain, no host name and
+no dates were checked, and code scanning (CodeQL) rightly flagged the
+disabled verification. Now the vault has a root of its own (20 years) and
+serves a leaf it signs (a year, renewed from the root), the machines keep
+the root in `/etc/tpm2-kira/vault-ca.pem` (in the boot image), every client
+verifies the chain, the host name and the dates against it, and then that
+a key of the verified chain is the pin - the root's, in the slot's signed
+blob. Operators use `curl --cacert` instead of `-k --pinnedpubkey`. Vault
+state directories are made again; machines enrol again.
+
 ### The unlock modes had names: password+salt, password+phonesalt, tpm+vault
 
 Until 2026-10-29 a keyslot's token named one of three modes, by its type

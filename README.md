@@ -306,7 +306,8 @@ passphrase, an option it builds on still missing:
 
 An option that needs another one control can set up offers it on the
 way: the vault and SSH set up the image's network first. The vault is
-asked before the enrolment - does it answer, with the pinned key - and
+asked before the enrolment - does it answer, verified against its root
+and its pinned key - and
 at every later look at the machine whether it still knows this device;
 one that does not is red.
 
@@ -518,7 +519,7 @@ sequenceDiagram
     P-->>K: the verdict (and the salt, for the phone's recipe)
   end
   opt a keyslot with the vault's salt
-    K->>V: a TPM quote over TLS (pinned key)
+    K->>V: a TPM quote over TLS (the vault's root, then its pinned key)
     V-->>K: the salt, only for the approved boot state - unattended, the hold ends by itself
   end
   opt the SSH server in the image

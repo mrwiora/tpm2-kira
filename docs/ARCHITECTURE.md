@@ -61,7 +61,7 @@ flowchart TB
 |---|---|---|---|
 | the code | at the console, or in an SSH session to the boot image | nothing by itself: the person confirms and types | [CODE.md](CODE.md), [SSH.md](SSH.md) |
 | the phone | next to the machine, over Bluetooth LE | the boot's release; for the phone's recipe (`0x1300`), the salt | [PHONE.md](PHONE.md) |
-| the vault | over the network, TLS with a pinned key | the salt of the vault recipes (`0x1400`, `0x2400`: unattended) | [VAULT.md](VAULT.md) |
+| the vault | over the network, TLS verified against the vault's root, then its pinned key | the salt of the vault recipes (`0x1400`, `0x2400`: unattended) | [VAULT.md](VAULT.md) |
 
 How a volume's key is made is named by its LUKS2 token; with several of
 tpm2-kira's keyslots they are tried in order - the vault, the phone's
@@ -141,7 +141,7 @@ flowchart LR
   CAP --- TPM
   SSHC["SSH client"] <-->|SSH, host cert by the CA| CHILD
   PHONEB["phone"] <-->|Bluetooth LE| GATE
-  VAULTS["tpm2-kira-vault"] <-->|HTTPS, pinned key| RUN
+  VAULTS["tpm2-kira-vault"] <-->|HTTPS, its root, pinned key| RUN
 ```
 
 | Part (plan) | In the image when | Process |

@@ -341,7 +341,11 @@ flowchart LR
    served chain, the renewal (pin kept, client verifies), an old state
    directory, the vault's suites. (An own PKI's certificate in the state
    directory: not built - the vault's root serves the plan's need.)
-5. [ ] docs (vault setup, SECURITY-BACKGROUND), HISTORY.md (a security fix).
+5. [x] docs: VAULT.md (init's root and leaf, the root to the machine -
+   `tls root`, `--ca`, the bundle in the image -, the boot's TLS check,
+   the state directory, operators' `curl --cacert`, the commands, the
+   threats), SECURITY-BACKGROUND (the pin is the root's), the READMEs,
+   ARCHITECTURE; HISTORY.md (the pinned key alone, InsecureSkipVerify).
 6. [ ] SHA-1: the legacy and test notes (below).
 7. [ ] tests: `make test-all`, the vault's tests, `tools/vmtest.py` (its
    vault steps place the root on the VMs).

@@ -103,7 +103,7 @@ Method 2, tpm2-kira-vault (`Vault`, VAULT.md), created by `vault enrol`:
 | Field           | Content                                                              | Sensitive? |
 |-----------------|----------------------------------------------------------------------|------------|
 | `URL`           | The vault, `https://host:port`                                       | No         |
-| `Pin`           | SHA-256 of the vault's TLS key (SubjectPublicKeyInfo)                | No         |
+| `Pin`           | SHA-256 of the vault's TLS root's key (SubjectPublicKeyInfo): a key of the vault's verified chain must be it - the chain itself is verified against `/etc/tpm2-kira/vault-ca.pem` | No |
 | `Label`         | The vault keyslot's label in the key's derivation                    | No         |
 | `Local`         | The local part L, the unattended recipes' password, wrapped (TPM2_MakeCredential) for this TPM's EK and the slot's release key: it opens only through the release key's policy; empty with a typed password | No⁶ |
 | `Pepper`        | The salt is made with an operator's pepper                            | No⁶ |
@@ -1182,7 +1182,7 @@ Offset  Field                   Type        Notes
             URL length          uint16      ≤ 512
             URL                 string      https://host:port
             Pin length          uint16      ≤ 128
-            Pin                 string      sha256: and the hex of the TLS key's SPKI digest
+            Pin                 string      sha256: and the hex of the vault's TLS root's SPKI digest
             Label length        uint16      ≤ 64
             Label               string      The key's label
             Local credential    uint32 + []byte   ≤ 1024: TPM2B_ID_OBJECT, the local part L (the
