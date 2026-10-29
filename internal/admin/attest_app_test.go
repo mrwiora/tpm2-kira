@@ -14,7 +14,8 @@ package admin
 //	                             big-endian u16 length
 //
 // Commands: enrol <mtu> | attest <mtu> (serve the next data connection) |
-// reboot | extend <pcr> | snapshot | rollback | sas | phone | outcome <ms> | quit.
+// reset (no phone enrolled: each test starts from it) | reboot | extend <pcr> |
+// snapshot | rollback | sas | phone | outcome <ms> | quit.
 // Replies: "ok", a value, or "error: …".
 //
 // It runs only when asked:
@@ -264,6 +265,18 @@ func (m *appMachine) command(f []string) (reply string, quit bool) {
 			m.sas = ""
 		}
 		m.mu.Unlock()
+		return "ok", false
+	case "reset":
+		// The slot without phones, as after 'phone unenrol': the enrolments
+		// of earlier tests would fill the slot's blob.
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.s.blob.Phone.Verifiers = nil
+		if err := writeAttestBlob(m.s.tpm, m.idx, m.s.blob, m.signer); err != nil {
+			return fail(err)
+		}
+		m.sas, m.phone = "", nil
+		m.newBackend()
 		return "ok", false
 	case "reboot", "snapshot", "rollback":
 		m.mu.Lock()
