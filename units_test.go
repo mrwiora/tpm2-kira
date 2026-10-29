@@ -70,6 +70,12 @@ func TestTheBootIsRunOnBothDistributions(t *testing.T) {
 			t.Errorf("the code screen's unit waits for the TPM: %s", l)
 		}
 	}
+	// The stop is run's to pass on to its children, as on Debian: a
+	// SIGTERM to ssh-child at the same moment cuts the sessions before
+	// they are told.
+	if !has(display, "KillMode=mixed") {
+		t.Error("the stop's SIGTERM reaches run's children too")
+	}
 	if !has(display, "Before=systemd-pcrosseparator.service") || !has(display, "Before=systemd-pcrnvdone.service") || !has(display, "Conflicts=initrd-switch-root.target") {
 		t.Error("the coordinator must hold both separators back and end with the initramfs")
 	}

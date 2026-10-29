@@ -42,6 +42,11 @@ Sockets=tpm2-kira-unlock.socket
 
 [Service]
 Type=notify
+# The stop's SIGTERM goes to run alone, as Debian's init-bottom sends it:
+# run tells the SSH sessions that the machine boots, and ssh-child relays
+# that before it ends; the radio worker ends with run's service. What is
+# left when run has exited is killed.
+KillMode=mixed
 # The hold is 90 s (tpm2-kira-boot run --hold), plus at most 60 s for a phone
 # that is in the middle of its answer; a hung TPM must not hold the boot for
 # longer than this. Raise it together with --hold.
