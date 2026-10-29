@@ -268,7 +268,7 @@ enrolment).
 | rate | at most 10 challenges per device per minute |
 | generation | the highest verified generation is kept; a lower one is refused |
 | revoked | denied, "the device is revoked" |
-| the vault's own boot state changed | denied, "the vault's own boot state changed: run approve"; not counted against the device |
+| the vault's own boot state changed | denied, "the vault's own boot state changed: run reseal"; not counted against the device |
 | audit | every enrolment, challenge, verification, release, denial and admin action, append-only, synced after each line |
 
 Pending requests live in memory only: after a restart, the machine starts
@@ -311,22 +311,22 @@ holds the private half.
 ```
 
 Files are 0600, written atomically (temp file, fsync, rename, fsync of
-the directory). `init` and `slot approve` work on the directory directly and
+the directory). `init` and `reseal` work on the directory directly and
 refuse while `serve` holds its lock.
 
 ### 6.5 Recovery
 
 - **The vault's boot state changed** (a firmware update, a Secure Boot
-  change): `systemctl stop tpm2-kira-vault; tpm2-kira-vault approve [--pcrs
+  change): `systemctl stop tpm2-kira-vault; tpm2-kira-vault reseal [--pcrs
   7]` (asks the recovery key; from stdin when not a terminal); `systemctl
-  start tpm2-kira-vault`. `slot approve` opens the K_dev copies and seals each
+  start tpm2-kira-vault`. `reseal` opens the K_dev copies and seals each
   to the current PCR values (and a new selection, given `--pcrs`).
 - **The recovery key is lost and the boot state changed:** the records
   cannot be opened. Each machine unlocks with its recovery passphrase and
   is enrolled again with a `--replace` token.
 - **The vault is gone:** machines fall back to cryptsetup's prompt and
   their recovery passphrase. A backup of the state directory needs the
-  same TPM, or the recovery key and `slot approve` on the new one.
+  same TPM, or the recovery key and `reseal` on the new one.
 - **A machine was reported stolen:** `tpm2-kira-vault device revoke
   DEVICE`.
 
@@ -343,7 +343,7 @@ refuse while `serve` holds its lock.
 | `requests` | releases waiting for approval |
 | `request approve\|deny ID` | decide one |
 | `audit [--follow]` | the audit log |
-| `slot approve [--dir] [--pcrs 7]` | seal every device key to the vault's current PCRs |
+| `reseal [--dir] [--pcrs 7]` | seal every device key to the vault's current PCRs |
 | `config set operator-listen ADDR\|"" [--dir]` | turn the operator interface on (an address, e.g. `:8444`) or off; serve stopped |
 | `operator add NAME` | an operator: prints the bearer token once, the pin for curl, the URL and a curl line |
 | `operators`, `operator remove NAME` | list, remove |
@@ -441,7 +441,7 @@ recovery keyslot is mandatory, and the console prompt is always there.
   refused are another nonce, request or device, a moved PCR, values that
   are not the quoted ones, a rolled-back generation, a generation the
   approval is not for, another selection, a quote by another key,
-  something that is not a quote; a slot approve is accepted without a change on
+  something that is not a quote; an approval of the slot is accepted without a change on
   the vault; the JSON field names.
 - **tpm2-kira, unit** (`internal/admin/vault_test.go`): the key's derivation
   (labels, order, pepper), the vault method in the blob, the pinned client
@@ -468,8 +468,8 @@ recovery keyslot is mandatory, and the console prompt is always there.
   (401s, the endpoints allowed and refused, the body limit, the failed-
   authentication limit, a removed operator); all on an injected clock.
 - **tpm2-kira-vault, swtpm**: the sealer under PolicyPCR, unsealing
-  refused after a PCR moved, `slot approve` with the recovery key; the vault end
-  to end with a moved PCR and `slot approve`, and a pepper device approved over
+  refused after a PCR moved, `reseal` with the recovery key; the vault end
+  to end with a moved PCR and `reseal`, and a pepper device approved over
   the operator interface with a bearer token.
 - **On the test VMs** (2026-10-11): the vault on the Arch VM (PCR 7,
   Secure Boot on), the Debian VM as the machine (slot 0 sealed to PCR
