@@ -16,6 +16,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
+	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/tpm2-trust/assh/hostkey"
@@ -442,5 +443,30 @@ func TestReadPlanned(t *testing.T) {
 	}
 	if got := imageplan.Read(filepath.Join(dir, "none")); got != (imageplan.Planned{}) {
 		t.Errorf("no plan: %+v", got)
+	}
+}
+
+// The vault's part needs the vaults' roots: without them it is out, saying
+// so; the bundle is in its settings, so a changed root is a rebuild; and
+// the image carries the bundle where the boot reads it.
+func TestVaultPartCarriesTheRoots(t *testing.T) {
+	cfg := planConfig(t, "TPM2_KIRA_NET=dhcp\n")
+	in := planInputs{Config: cfg, Slots: 1, Vaults: 1, VaultRootsErr: "no root of a vault in " + vaultkey.RootsPath}
+	if p := decidePlan(in); p.Has(imageplan.PartVault) || !strings.Contains(p.Part(imageplan.PartVault).Why, "no root of a vault") {
+		t.Fatalf("without roots: %+v", p.Part(imageplan.PartVault))
+	}
+	in.VaultRootsErr, in.VaultRoots = "", []byte("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")
+	p := decidePlan(in)
+	if !p.Has(imageplan.PartVault) {
+		t.Fatalf("with roots: %+v", p.Part(imageplan.PartVault))
+	}
+	other := in
+	other.VaultRoots = []byte("-----BEGIN CERTIFICATE-----\nBBBB\n-----END CERTIFICATE-----\n")
+	if decidePlan(other).Part(imageplan.PartVault).Digest == p.Part(imageplan.PartVault).Digest {
+		t.Fatal("another root, the same digest: no rebuild")
+	}
+	_, root := writePlan(t, p, FormatMkinitcpio)
+	if got := readImage(t, root, vaultkey.RootsPath); got != string(in.VaultRoots) {
+		t.Fatalf("the image's bundle: %q", got)
 	}
 }

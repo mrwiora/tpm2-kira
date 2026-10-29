@@ -12,12 +12,14 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mrwiora/tpm2-kira/core/vaultproto"
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
 
 	"github.com/tpm2-trust/assh/config"
 )
@@ -101,6 +103,9 @@ type planInputs struct {
 	Vaults   int // slots enrolled with a vault
 	TPMSalts int // slots holding a TPM salt (recipe 0x1200)
 
+	VaultRoots    []byte // the bundle of the vaults' roots (vaultkey.RootsPath)
+	VaultRootsErr string
+
 	Signer    []byte // the signing public key the gate checks the enrolments with (PEM)
 	SignerErr string
 	BT        *BTDeps // the adapter's driver and firmware
@@ -145,6 +150,13 @@ func readPlanInputs(o PlanOptions) planInputs {
 	}
 	in.Config = cfg
 	in.DHCP = cfg.Remote.Net.DHCPIdentity()
+	if b, err := os.ReadFile(vaultkey.RootsPath); err != nil {
+		in.VaultRootsErr = "no root of a vault in " + vaultkey.RootsPath + " ('tpm2-kira-vault tls root' prints it; luks enrol --ca FILE puts it there)"
+	} else if _, _, err := vaultproto.ParseRoots(b); err != nil {
+		in.VaultRootsErr = vaultkey.RootsPath + ": " + err.Error()
+	} else {
+		in.VaultRoots = b
+	}
 
 	tpmDev, err := tpmdev.Open(o.TPMPath)
 	if err != nil {
@@ -301,8 +313,12 @@ func decidePlan(in planInputs) *BootPlan {
 		add(imageplan.PartVault, false, noTPM)
 	case !p.Has(imageplan.PartNet):
 		add(imageplan.PartVault, false, "the vault is asked over the network, and the image has none")
+	case in.VaultRootsErr != "":
+		add(imageplan.PartVault, false, in.VaultRootsErr)
 	default:
-		add(imageplan.PartVault, true, plural(in.Vaults, "slot")+" enrolled with a vault")
+		// The bundle is in the part's settings: a changed root is a rebuild.
+		sum := sha256.Sum256(in.VaultRoots)
+		add(imageplan.PartVault, true, plural(in.Vaults, "slot")+" enrolled with a vault", hex.EncodeToString(sum[:]))
 	}
 
 	switch {
@@ -447,6 +463,12 @@ func (p *BootPlan) WriteImage(buildroot, format string, out io.Writer) error {
 		}
 	}
 
+	if p.Has(imageplan.PartVault) {
+		// The vaults' roots: the boot verifies the vault's chain against them.
+		if err := writeImageFile(buildroot, vaultkey.RootsPath, in.VaultRoots, 0o644); err != nil {
+			return err
+		}
+	}
 	if p.Has(imageplan.PartNet) {
 		r := in.Config.Remote
 		if !p.Has(imageplan.PartSSH) {

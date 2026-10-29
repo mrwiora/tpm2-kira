@@ -327,7 +327,10 @@ flowchart LR
    key) for status, control and the boot's console. Tested: unit (a vault
    of another root, no bundle, AddRoot), the swtpm vault tests with the
    test server's CA as the bundle.
-3. [ ] initrd: both hooks copy the file; `control`'s rebuild check covers it.
+3. [x] initrd: the plan writes the bundle into the image (both hooks take
+   the plan's files), the vault part carries the bundle's digest (a
+   changed root is a rebuild) and is out without a bundle, saying so.
+   Tested: the rule, the digest, the image's file.
 4. [ ] vault: root CA + leaf in `tlsutil`; `tls root` command; an own
    certificate and chain in the state directory; `PinnedConfig` via the
    core's function; its tests.
