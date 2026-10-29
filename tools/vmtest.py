@@ -689,15 +689,27 @@ class Machine:
             self.check("control asks before it removes the SSH CA when SSH is switched off", True)
             pick(r"Back to step 2")
             pick(r"^\s*Quit$")
-            s.expect(r"Run (mkinitcpio -P|update-initramfs -u) now\? \[Y/n\] ?$", 120); s.send("y\n")
-            self.log.save("control-ssh-off-rebuild.log", s.wait_end(900))
+            # A part switched off is no reason of its own to rebuild (the
+            # next build leaves it out): control may end without asking.
+            text, m = s.expect(r"(Run (mkinitcpio -P|update-initramfs -u) now\? \[Y/n\] ?$|Connection to \S+ closed)", 120)
+            if m.group(1).startswith("Run"):
+                s.send("y\n")
+                text = s.wait_end(900)
+            self.log.save("control-ssh-off-end.log", text)
         except Fail as e:
             self.check("control: SSH off, the SSH CA kept on No", False, str(e))
             raise
         finally:
             s.close()
-        self.check("No keeps the SSH CA: its EFI variable and ssh_ca.pub", there(ca_var) and there("/etc/tpm2-kira/ssh_ca.pub"))
+        self.removal_all()
 
+    CA_VAR = "/sys/firmware/efi/efivars/KIRAasshCA-24415b90-39be-45c0-a9a3-d547ebe28ea0"
+
+    def removal_all(self):
+        """The SSH CA kept, then slot delete --yes: everything goes."""
+        ca_var = self.CA_VAR
+        there = lambda path: "yes" in self.run(f"test -e {path} && echo yes")[1]
+        self.check("No keeps the SSH CA: its EFI variable and ssh_ca.pub", there(ca_var) and there("/etc/tpm2-kira/ssh_ca.pub"))
         rc, out = self.run("tpm2-kira slot delete --yes 2>&1", save="slot-delete-all.log")
         self.check("slot delete without --nvram names the SSH CA and deletes everything",
                    "Found the SSH CA efi:KIRAasshCA" in out and "item(s) deleted successfully" in out, out[-800:])
