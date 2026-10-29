@@ -180,11 +180,8 @@ func WriteGeneration(tpmDev transport.TPM, index uint32, gen uint64, pubKey cryp
 	if rsp, err := (tpm2.NVReadPublic{NVIndex: nvIndex}).Execute(tpmDev); err == nil {
 		have, perr := rsp.NVPublic.Contents()
 		if perr != nil || !sameGenerationIndex(have, &want) {
-			if _, err := (tpm2.NVUndefineSpace{
-				AuthHandle: tpm2.TPMRHOwner,
-				NVIndex:    tpm2.NamedHandle{Handle: nvIndex, Name: rsp.NVName},
-			}).Execute(tpmDev); err != nil {
-				return nil, fmt.Errorf("failed to replace generation index 0x%08X: %w", index, err)
+			if err := replaceAt(tpmDev, index); err != nil {
+				return nil, err
 			}
 		}
 	}

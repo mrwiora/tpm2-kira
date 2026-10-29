@@ -10,6 +10,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/tpm2-trust/assh/config"
 	"github.com/tpm2-trust/assh/hostkey"
+	"github.com/tpm2-trust/assh/persist"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/sys/unix"
 )
@@ -45,7 +46,7 @@ func PrepareHostKey(tpmPath string, conf config.Config) (hostKeyAtBoot, error) {
 		Open:       func() (transport.TPMCloser, error) { return tpmdev.Open(tpmPath) },
 	}
 	var hk *hostkey.HostKey
-	if hostkey.IsVar(caPath) {
+	if persist.IsVar(caPath) {
 		if err := mountEfivarfs(); err != nil {
 			return hostKeyAtBoot{}, err
 		}

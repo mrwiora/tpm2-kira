@@ -212,7 +212,7 @@ The pieces can still be taken by hand - these leave the slot dirty the
 same way where something of it remains:
 
 ```bash
-tpm2-kira slot delete              # everything tpm2-kira keeps in the TPM: asks to type 'yes'
+tpm2-kira slot delete              # everything tpm2-kira keeps in the TPM and the SSH CA: asks to type 'yes'
 tpm2-kira slot delete --yes        # the same, without asking
 tpm2-kira slot delete --nvram 0    # one slot's indices in the TPM: TOTP key and phones
 tpm2-kira luks remove /dev/sda2 --keyslot 1   # one LUKS keyslot of tpm2-kira's, with its token
@@ -250,10 +250,19 @@ Because the phones live in the slot's blob,
   limits the size of an NV index (2048 bytes on many). Whether a phone fits
   is checked for the blob as it would be written.
 
-`slot delete` without `--nvram` removes every slot and what belongs to no
-slot any more: a companion index whose slot is gone. What it never touches
-is the LUKS header: a keyslot bound to a deleted slot is named as dirty,
-and `control` (or `luks remove`) takes it.
+`slot delete` without `--nvram` removes everything of tpm2-kira's outside
+the disk: every slot, what belongs to no slot any more (a companion index
+whose slot is gone), the boot settings, and the SSH CA - its EFI variable
+`KIRAasshCA` and `/etc/tpm2-kira/ssh_ca.pub` (docs/SSH.md §4). What it
+never touches is the LUKS header: a keyslot bound to a deleted slot is
+named as dirty, and `control` (or `luks remove`) takes it.
+
+Every removal - `slot delete`, `control`'s, the SSH CA's - goes the one way
+aSSH removes what it keeps (its `persist` package): an NV index goes only
+when it has the public area tpm2-kira defines at that place, and anything
+else at a handle of tpm2-kira's range is left and named; what is not there
+is no error. Writing a slot is the other case: the handle is tpm2-kira's,
+and whatever is at it is replaced.
 
 ### If a rewrite of the slot fails
 

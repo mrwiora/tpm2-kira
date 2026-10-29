@@ -351,19 +351,6 @@ func ReadFromNVRAM(tpmDev transport.TPM, index uint32) ([]byte, error) {
 	return data, nil
 }
 
-func UndefineIndex(tpmDev transport.TPM, index uint32) error {
-	h := tpm2.TPMHandle(index)
-	pub, err := (tpm2.NVReadPublic{NVIndex: h}).Execute(tpmDev)
-	if err != nil {
-		return err
-	}
-	_, err = (tpm2.NVUndefineSpace{
-		AuthHandle: tpm2.TPMRHOwner,
-		NVIndex:    tpm2.NamedHandle{Handle: h, Name: pub.NVName},
-	}).Execute(tpmDev)
-	return err
-}
-
 // NVRAMIndexExists performs a lightweight check whether the given NVRAM index
 // is defined and contains data.  It only reads the NV public area — no
 // unsealing or authorization is attempted.

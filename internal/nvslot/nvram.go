@@ -25,6 +25,24 @@ const (
 	AppNVRAMEnd = 0x01803FFF
 )
 
+// blobPublic is a blob's index (a slot's, the boot settings'): written
+// only under the signing key's PolicySigned, no owner or unauthenticated
+// write path, so only a holder of that key can replace it. Reads stay open:
+// the secret is protected by the sealed object's own policy.
+func blobPublic(index uint32, writePolicy tpm2.TPM2BDigest, size uint16) tpm2.TPMSNVPublic {
+	return tpm2.TPMSNVPublic{
+		NVIndex: tpm2.TPMHandle(index),
+		NameAlg: tpm2.TPMAlgSHA256,
+		Attributes: tpm2.TPMANV{
+			OwnerRead:   true,
+			PolicyWrite: true,
+			AuthRead:    true,
+		},
+		AuthPolicy: writePolicy,
+		DataSize:   size,
+	}
+}
+
 // ValidateNVRAMIndex checks that the given NVRAM index is within the safe application range.
 // Indices outside this range may belong to platform firmware, other applications, or
 // reserved TPM hierarchy ranges and must not be accessed to prevent data destruction.
@@ -149,26 +167,12 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 
 	// ── Point of no return: the index is replaced from here on ──
 
-	// Try to undefine existing NVRAM space (if it exists).
-	// NVUndefineSpace is an owner-hierarchy operation and works regardless
-	// of the NV index's read/write attributes.
-	readPub := tpm2.NVReadPublic{
-		NVIndex: nvIndex,
+	// What is at the index goes, whatever it is: the index is tpm2-kira's
+	// own place (replace, remove.go). NVUndefineSpace is the owner's and
+	// works whatever the index's read/write attributes.
+	if err := replaceAt(tpmDev, index); err != nil {
+		return err
 	}
-	if readPubResp, checkErr := readPub.Execute(tpmDev); checkErr == nil {
-		// Index exists, undefine it
-		undefine := tpm2.NVUndefineSpace{
-			AuthHandle: tpm2.TPMRHOwner,
-			NVIndex: tpm2.NamedHandle{
-				Handle: nvIndex,
-				Name:   readPubResp.NVName,
-			},
-		}
-		if _, err := undefine.Execute(tpmDev); err != nil {
-			return fmt.Errorf("failed to undefine existing NVRAM index 0x%08X: %w", index, err)
-		}
-	}
-	// If checkErr != nil, index doesn't exist, which is fine
 
 	// define NVRAM space with PolicySigned-protected writes: no owner or
 	// unauthenticated write path, so only a holder of the signing key can
@@ -179,18 +183,7 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 		Auth: tpm2.TPM2BAuth{
 			Buffer: []byte{},
 		},
-		PublicInfo: tpm2.New2B(tpm2.TPMSNVPublic{
-			NVIndex: nvIndex,
-			NameAlg: tpm2.TPMAlgSHA256,
-			Attributes: tpm2.TPMANV{
-				OwnerWrite:  false,
-				OwnerRead:   true,
-				PolicyWrite: true,
-				AuthRead:    true,
-			},
-			AuthPolicy: nvWritePolicy,
-			DataSize:   uint16(len(data)),
-		}),
+		PublicInfo: tpm2.New2B(blobPublic(index, nvWritePolicy, uint16(len(data)))),
 	}
 
 	if _, err = define.Execute(tpmDev); err != nil {

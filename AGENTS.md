@@ -156,6 +156,15 @@ It may not carry what came before.
   cryptsetup, bring up the image's network, keep the log
   (docs/BOOT-INTEGRATION.md, "Arch and Debian"). Do not add a second
   process, a confinement or a wait to one of them: add it to `run`.
+- **What is kept outside the disk is written and removed one way: aSSH's
+  `persist`.** No NVUndefineSpace and no efivarfs write of tpm2-kira's own:
+  `nvslot.RemoveIndex` / `RemoveSlot` take an index only when it has the
+  public area tpm2-kira defines at that place (anything else at a handle of
+  its range is left and named), absent is no error, and a write at one of
+  its own handles replaces what is there (`replaceAt`). Whatever tpm2-kira
+  creates it can remove: `slot delete` without `--nvram` takes every slot,
+  the leftovers, the boot settings and the SSH CA; `control` asks before it
+  removes the SSH CA when SSH is switched off (No unless said).
 - **Root for everything but the help.** Every command refuses to run as a
   user (`main.go` `requireRoot`); `control` says so on its own screen. The
   test suite's exception is `TPM2_KIRA_UNPRIVILEGED=1` for the binary

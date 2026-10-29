@@ -603,7 +603,8 @@ tpm2-kira slot add --pcrs "0e,2e,4e,7e"
 ## Uninstall
 
 ```bash
-# Remove sealed data first
+# Everything of tpm2-kira outside the disk first: the slots in the TPM,
+# the boot settings, the SSH CA (EFI variable and ssh_ca.pub)
 tpm2-kira slot delete --yes
 
 # Remove binary

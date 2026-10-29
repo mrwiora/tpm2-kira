@@ -160,7 +160,7 @@ flowchart LR
 | a slot's generation | TPM NV `0x01803810` + n | `slot add`, `slot approve` |
 | the phone record counter | TPM NV `0x01803820` + n | `phone enrol`, `phone unenrol` |
 | the boot settings ("Debug at boot") | TPM NV `0x01803000` | `control` |
-| the SSH CA | EFI variable `KIRAasshCA` (the key itself in the TPM) | `control` |
+| the SSH CA | EFI variable `KIRAasshCA` (the key itself in the TPM) | `control`; removed by `control` (when SSH is switched off, if you say so) and `slot delete` |
 | the signing key | `/etc/tpm2-kira/keys/` (or a YubiKey) | `setup` |
 | tpm2-kira's settings | `/etc/tpm2-kira/control.conf` | `control` |
 | aSSH's settings | `/etc/tpm2-kira/assh.conf` | `control` |

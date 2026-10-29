@@ -67,7 +67,7 @@ func TestDeleteSlotOnSWTPM(t *testing.T) {
 	if err := Seal(sock, "0,7", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal again: %v", err)
 	}
-	if err := tpmdev.UndefineIndex(tpm, idx); err != nil {
+	if _, err := nvslot.RemoveIndex(tpm, idx); err != nil {
 		t.Fatal(err)
 	}
 	dirt := collectDirt(sock, nil)

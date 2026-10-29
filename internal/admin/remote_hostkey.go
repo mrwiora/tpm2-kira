@@ -46,11 +46,12 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/tpm2-trust/assh/config"
 	"github.com/tpm2-trust/assh/hostkey"
+	"github.com/tpm2-trust/assh/persist"
 )
 
 const (
 	// DefaultSSHCA is the SSH CA: an EFI variable, assh's GUID.
-	DefaultSSHCA = hostkey.VarPrefix + "KIRAasshCA"
+	DefaultSSHCA = persist.VarPrefix + "KIRAasshCA"
 	// DefaultSSHCAPub is the CA's public key, what clients trust.
 	DefaultSSHCAPub = "/etc/tpm2-kira/ssh_ca.pub"
 	// sshCARef binds the signing key's approvals to this CA's use.
@@ -222,10 +223,42 @@ func saveSSHCA(ca *hostkey.CA, path string) error {
 	return os.WriteFile(sshCAPub(path), pub, 0o644)
 }
 
+// sshCAThere says whether a CA is at path (in its EFI variable, or a file).
+func sshCAThere(path string) bool {
+	if persist.IsVar(path) {
+		_, err := persist.ReadVar(path)
+		return err == nil
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// removeSSHCA removes the SSH CA at path the way aSSH removes a CA
+// (hostkey.RemoveCA: the variable or file, and in the TPM only what is
+// the CA's), then its public key. It gives what went.
+func removeSSHCA(tpmPath, path string) ([]string, error) {
+	tpmDev, err := tpmdev.Open(tpmPath)
+	if err != nil {
+		return nil, err
+	}
+	defer tpmDev.Close()
+	removed, err := hostkey.RemoveCA(tpmDev, path, nil)
+	if err != nil {
+		return removed, err
+	}
+	pub := sshCAPub(path)
+	if err := os.Remove(pub); err == nil {
+		removed = append(removed, pub)
+	} else if !os.IsNotExist(err) {
+		return removed, err
+	}
+	return removed, nil
+}
+
 // sshCAPub is where the public key of the CA at path goes: DefaultSSHCAPub
 // for the variable, beside a file (.pub).
 func sshCAPub(path string) string {
-	if hostkey.IsVar(path) {
+	if persist.IsVar(path) {
 		return DefaultSSHCAPub
 	}
 	return path + ".pub"

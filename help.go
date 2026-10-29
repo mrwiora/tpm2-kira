@@ -335,10 +335,15 @@ The TPM's slots: 0-15 are the NV indices 0x01803010-0x0180301F.
 
   list             Every NV index the TPM holds
   status           A slot's NV index: size, attributes, written
-  delete           Delete the slot's indices in the TPM - or every populated
-                   slot's without --nvram, which asks on a terminal or needs
-                   --yes. A LUKS keyslot bound to the slot stays and leaves
-                   the slot dirty; 'tpm2-kira control' (the slot's line)
+  delete           Delete the slot's indices in the TPM: its blob, generation
+                   index and record counter. Without --nvram: everything of
+                   tpm2-kira - every slot, the leftover indices, the boot
+                   settings and the SSH CA (its EFI variable and
+                   /etc/tpm2-kira/ssh_ca.pub) - after asking on a terminal,
+                   or with --yes. Only an index with tpm2-kira's shape is
+                   taken; anything else at its handles is left and named.
+                   A LUKS keyslot bound to the slot stays and leaves the
+                   slot dirty; 'tpm2-kira control' (the slot's line)
                    deletes a slot whole
   restore FILE     Put back a blob that a failed write stashed in
                    ` + nvslot.NVRAMRecoveryDir + `/ (slot-0x<index>-<time>.blob):

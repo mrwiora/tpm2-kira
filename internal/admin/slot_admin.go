@@ -114,77 +114,43 @@ func NVRAMList(tpmPath string, nvramIndex uint32, debug bool) error {
 
 // NVRAMDelete deletes the specified NVRAM index
 func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
-	// Validate index is within the safe application range
 	if err := nvslot.ValidateNVRAMIndex(nvramIndex); err != nil {
 		return fmt.Errorf("invalid NVRAM index: %w", err)
 	}
-
-	// Open TPM
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
 	}
 	defer tpmDev.Close()
 
-	nvIndex := tpm2.TPMHandle(nvramIndex)
-
-	// Check if index exists
-	readPublic := tpm2.NVReadPublic{
-		NVIndex: nvIndex,
-	}
-
-	readPublicResp, err := readPublic.Execute(tpmDev)
-	if err != nil {
-		return fmt.Errorf("NVRAM index 0x%08X does not exist: %w", nvramIndex, err)
-	}
-
-	if debug {
-		fmt.Printf("NV name: %x\n", readPublicResp.NVName.Buffer)
-		if nvPublic, pubErr := readPublicResp.NVPublic.Contents(); pubErr == nil {
-			fmt.Printf("Deleting 0x%08X: %d bytes, written=%v\n", nvramIndex, nvPublic.DataSize, nvPublic.Attributes.Written)
-		}
-	}
-
-	// Undefine NVRAM space
-	undefine := tpm2.NVUndefineSpace{
-		AuthHandle: tpm2.TPMRHOwner,
-		NVIndex: tpm2.NamedHandle{
-			Handle: nvIndex,
-			Name:   readPublicResp.NVName,
-		},
-	}
-
-	_, err = undefine.Execute(tpmDev)
-	if err != nil {
-		return fmt.Errorf("failed to delete NVRAM index 0x%08X: %w", nvramIndex, err)
-	}
-
-	fmt.Printf("Successfully deleted NVRAM index 0x%08X\n", nvramIndex)
-
-	// A slot is deleted whole: its record counter goes with it. (Without its counter no blob of
-	// the slot is accepted by the gate again, and a new counter starts
-	// above every value this one had.)
-	if nvramIndex >= nvslot.NVRAMSlotStart && nvramIndex <= nvslot.NVRAMSlotEnd {
-		if counter := nvslot.AttestCounterIndex(nvramIndex); tpmdev.NVRAMIndexExists(tpmDev, counter) {
-			if err := tpmdev.UndefineIndex(tpmDev, counter); err != nil {
-				return fmt.Errorf("deleted the slot, but not its record counter 0x%08X: %w", counter, err)
+	// A slot is deleted whole (nvslot.RemoveSlot): its blob, then its
+	// generation index and record counter. Without its counter no blob of
+	// the slot is accepted by the gate again, and a new counter starts above
+	// every value this one had. A companion index named by itself goes
+	// alone. Only what has tpm2-kira's shape is taken.
+	var removed []nvslot.Removed
+	if nvslot.ValidateBlobIndex(nvramIndex) == nil && nvramIndex != nvslot.BootSettingsIndex {
+		removed, err = nvslot.RemoveSlot(tpmDev, nvramIndex)
+	} else {
+		ok, rerr := nvslot.RemoveIndex(tpmDev, nvramIndex)
+		if ok {
+			what := kiraIndexRole(nvramIndex)
+			if what == "" {
+				what = "an index of tpm2-kira's"
 			}
+			removed = append(removed, nvslot.Removed{Index: nvramIndex, What: what})
 		}
+		err = rerr
 	}
-
-	// A slot's generation index goes with it.
-	if nvslot.ValidateBlobIndex(nvramIndex) == nil {
-		genIndex := tpm2.TPMHandle(nvslot.GenerationIndex(nvramIndex))
-		if genPub, err := (tpm2.NVReadPublic{NVIndex: genIndex}).Execute(tpmDev); err == nil {
-			if _, err := (tpm2.NVUndefineSpace{
-				AuthHandle: tpm2.TPMRHOwner,
-				NVIndex:    tpm2.NamedHandle{Handle: genIndex, Name: genPub.NVName},
-			}).Execute(tpmDev); err != nil {
-				return fmt.Errorf("deleted the blob, but not its generation index 0x%08X: %w", uint32(genIndex), err)
-			}
-		}
+	for _, r := range removed {
+		fmt.Printf("Successfully deleted NVRAM index 0x%08X: %s\n", r.Index, r.What)
 	}
-
+	if err != nil {
+		return err
+	}
+	if len(removed) == 0 {
+		return fmt.Errorf("NVRAM index 0x%08X: nothing to delete (it does not exist)", nvramIndex)
+	}
 	return nil
 }
 
@@ -254,10 +220,18 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 	}
 	leftovers := kiraLeftovers(tpmDev, debug)
 	tpmDev.Close()
+	// The SSH CA is tpm2-kira's too: everything of tpm2-kira takes it.
+	caPath := ""
+	if conf, err := loadSSHConf(sshConfPath(controlConfigPath()), controlConfigPath()); err == nil && sshCAThere(conf.CA) {
+		caPath = conf.CA
+	}
 
 	total := len(slots) + len(leftovers)
+	if caPath != "" {
+		total++
+	}
 	if total == 0 {
-		return fmt.Errorf("nothing of tpm2-kira found in the TPM: no sealed secrets in NVRAM slots 0x%08X – 0x%08X and no leftover indices",
+		return fmt.Errorf("nothing of tpm2-kira found: no sealed secrets in NVRAM slots 0x%08X – 0x%08X, no leftover indices, no SSH CA",
 			nvslot.NVRAMSlotStart, nvslot.NVRAMSlotEnd)
 	}
 
@@ -277,7 +251,10 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 			fmt.Printf("  0x%08X  %s\n", idx, kiraIndexRole(idx))
 		}
 	}
-	if err := confirmDeleteAll(len(slots), enrolled, len(leftovers), yes); err != nil {
+	if caPath != "" {
+		fmt.Printf("Found the SSH CA %s (and %s)\n", caPath, sshCAPub(caPath))
+	}
+	if err := confirmDeleteAll(len(slots), enrolled, len(leftovers), caPath != "", yes); err != nil {
 		return err
 	}
 	fmt.Println()
@@ -300,7 +277,7 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 				continue // went with its slot
 			}
 			fmt.Printf("Deleting leftover 0x%08X... ", idx)
-			if err := tpmdev.UndefineIndex(tpmDev, idx); err != nil {
+			if _, err := nvslot.RemoveIndex(tpmDev, idx); err != nil {
 				fmt.Printf("FAILED: %v\n", err)
 				failed++
 				continue
@@ -308,6 +285,15 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 			fmt.Println("done")
 		}
 		tpmDev.Close()
+	}
+	if caPath != "" {
+		fmt.Printf("Deleting the SSH CA %s... ", caPath)
+		if removed, err := removeSSHCA(tpmPath, caPath); err != nil {
+			fmt.Printf("FAILED: %v\n", err)
+			failed++
+		} else {
+			fmt.Printf("done (%s)\n", strings.Join(removed, ", "))
+		}
 	}
 
 	fmt.Println()
@@ -323,11 +309,14 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 	return nil
 }
 
-func confirmDeleteAll(slots, enrolled, leftovers int, yes bool) error {
+func confirmDeleteAll(slots, enrolled, leftovers int, ca, yes bool) error {
 	if yes {
 		return nil
 	}
 	total := slots + leftovers
+	if ca {
+		total++
+	}
 	tty := setupTerminal()
 	if tty == nil {
 		return fmt.Errorf("refusing to delete all %d item(s) without confirmation; nothing was deleted.\n"+
@@ -341,6 +330,9 @@ func confirmDeleteAll(slots, enrolled, leftovers int, yes bool) error {
 	}
 	if enrolled > 0 {
 		fmt.Println("The phones enrolled for those slots go with them; each must then be enrolled again.")
+	}
+	if ca {
+		fmt.Println("The SSH CA goes too: clients that trust it must trust a new one, which control makes when SSH is set up again.")
 	}
 	fmt.Printf("Type 'yes' to delete all %d item(s): ", total)
 	answer, _ := tty.ReadString('\n')

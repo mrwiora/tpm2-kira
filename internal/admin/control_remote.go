@@ -113,8 +113,15 @@ func (c *controller) runNetwork() error {
 				return errors.New("not switched off")
 			}
 		}
+		wasOn := r.SSH.On
 		r.Net.Mode, r.SSH.On = "off", false
-		return c.writeRemote(r)
+		if err := c.writeRemote(r); err != nil {
+			return err
+		}
+		if wasOn {
+			return c.offerRemoveSSHCA(r.SSH.Assh.CA)
+		}
+		return nil
 	}
 	r.Net.Mode = mode
 
@@ -187,7 +194,14 @@ func (c *controller) runSSH() error {
 		Affirmative("Yes").Negative("No: the network alone").Value(&on)).Run(); err != nil {
 		return err
 	}
+	wasOn := r.SSH.On
 	r.SSH.On = on
+	if !on && wasOn {
+		if err := c.writeRemote(r); err != nil {
+			return err
+		}
+		return c.offerRemoveSSHCA(r.SSH.Assh.CA)
+	}
 	if on {
 		port, hold := strconv.Itoa(r.SSH.Port()), strconv.Itoa(r.SSH.Hold)
 		if err := c.form(
@@ -215,6 +229,26 @@ func (c *controller) runSSH() error {
 		}
 	}
 	return c.writeRemote(r)
+}
+
+// offerRemoveSSHCA asks, once the SSH server is switched off, whether the
+// SSH CA goes too - No unless said. Kept, it serves again when SSH is
+// switched on, and the clients' known_hosts line stays good; removed, the
+// CA made then is a new one, which every client must trust again.
+func (c *controller) offerRemoveSSHCA(path string) error {
+	if !sshCAThere(path) {
+		return nil
+	}
+	ok, err := c.confirm("Remove the SSH CA too?",
+		"The SSH server is off. Kept, the CA "+path+" serves again when SSH is switched on, and the clients' known_hosts line stays good. Removed (the EFI variable and "+sshCAPub(path)+"), a CA made later is a new one that every client must trust again.")
+	if err != nil || !ok {
+		return err
+	}
+	removed, err := removeSSHCA(c.o.TPMPath, path)
+	for _, r := range removed {
+		fmt.Fprintf(c.out, "Removed %s\n", r)
+	}
+	return err
 }
 
 // ensureSSHKeys checks what the image's SSH server needs on this system:

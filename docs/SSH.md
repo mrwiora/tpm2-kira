@@ -324,6 +324,13 @@ and no secret either: the keys are in the TPM.
   unknown host key. Quit `tpm2-kira control` once after that boot, or run
   `tpm2-kira slot approve`: it approves the new values. Without a TPM there is no SSH
   server.
+- **Removing the CA**: switching the SSH server off in `control` asks
+  whether the CA goes too - No unless you say so: kept, it serves again
+  when SSH is switched on and the clients' `known_hosts` line stays good;
+  removed, the CA made later is a new one every client has to trust.
+  `slot delete` without `--nvram` (everything of tpm2-kira) takes it as
+  well, after its confirmation. Both remove it as aSSH's `ca remove` does:
+  the EFI variable, in the TPM only what is the CA's, and `ssh_ca.pub`.
 
 No `systemd-creds` and no TPM library go into the image: aSSH does the TPM
 work in Go (go-tpm), compiled into tpm2-kira.

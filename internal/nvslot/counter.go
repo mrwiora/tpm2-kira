@@ -82,11 +82,8 @@ func BumpAttestCounter(tpmDev transport.TPM, index uint32) (uint64, error) {
 	if rsp, err := (tpm2.NVReadPublic{NVIndex: nvIndex}).Execute(tpmDev); err == nil {
 		have, perr := rsp.NVPublic.Contents()
 		if perr != nil || have.Attributes.NT != tpm2.TPMNTCounter || have.DataSize != 8 || !have.Attributes.OwnerWrite {
-			if _, err := (tpm2.NVUndefineSpace{
-				AuthHandle: tpm2.TPMRHOwner,
-				NVIndex:    tpm2.NamedHandle{Handle: nvIndex, Name: rsp.NVName},
-			}).Execute(tpmDev); err != nil {
-				return 0, fmt.Errorf("failed to replace the record counter 0x%08X: %w", index, err)
+			if err := replaceAt(tpmDev, index); err != nil {
+				return 0, err
 			}
 		}
 	}

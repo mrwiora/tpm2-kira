@@ -74,10 +74,8 @@ func WriteBootSettings(tpmDev transport.TPM, s BootSettings, signer crypto.Signe
 		return errors.New("the boot settings are written with the signing key")
 	}
 	if s == (BootSettings{}) {
-		if !tpmdev.NVRAMIndexExists(tpmDev, BootSettingsIndex) {
-			return nil
-		}
-		return tpmdev.UndefineIndex(tpmDev, BootSettingsIndex)
+		_, err := RemoveIndex(tpmDev, BootSettingsIndex)
+		return err
 	}
 	return WriteToNVRAM(tpmDev, BootSettingsIndex, s.Marshal(), signer.Public(), signer)
 }

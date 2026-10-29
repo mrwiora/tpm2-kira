@@ -220,25 +220,15 @@ func DeleteSlot(o DeleteSlotOptions) error {
 		wipe.Bytes(existing)
 	}
 
-	// The slot in the TPM: the blob, then its companions.
+	// The slot in the TPM, as 'slot delete' takes it: the blob, then its
+	// companions.
 	if tpmDev != nil {
-		for _, part := range []struct {
-			there bool
-			index uint32
-			what  string
-		}{
-			{c.Blob, c.Index, "blob (TOTP key and phones)"},
-			{c.Generation, nvslot.GenerationIndex(c.Index), "generation index"},
-			{c.Counter, nvslot.AttestCounterIndex(c.Index), "record counter"},
-		} {
-			if !part.there {
-				continue
-			}
-			if err := tpmdev.UndefineIndex(tpmDev, part.index); err != nil {
-				fail("the %s (0x%08X): %v", part.what, part.index, err)
-				continue
-			}
-			fmt.Fprintf(out, "0x%08X removed (the %s)\n", part.index, part.what)
+		removed, err := nvslot.RemoveSlot(tpmDev, c.Index)
+		for _, r := range removed {
+			fmt.Fprintf(out, "0x%08X removed: %s\n", r.Index, r.What)
+		}
+		if err != nil {
+			fail("%v", err)
 		}
 	}
 
