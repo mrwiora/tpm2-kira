@@ -55,6 +55,10 @@ func keysSum(b []byte) string {
 
 // runDropIn makes tpm2-kira.service start the SSH server, and hold as long
 // as the setting says - without a limit, the unit may not time out either.
+// It is ordered after systemd-networkd: at switch-root systemd stops the
+// units in the reverse order, so the network stays until the SSH server
+// has told the sessions that the machine boots and ssh-child has relayed
+// it (Server.Stop waits for that), instead of going down beside it.
 func runDropIn(s SSHConfig) string {
 	timeout := "infinity"
 	if s.Hold > 0 {
@@ -65,6 +69,7 @@ func runDropIn(s SSHConfig) string {
 # (TPM2_KIRA_SSH_*), for the boot image alone; the rest is assh.conf's.
 [Unit]
 Wants=systemd-networkd.service
+After=systemd-networkd.service
 
 [Service]
 TimeoutStartSec=%s

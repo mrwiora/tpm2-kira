@@ -20,14 +20,15 @@ prereqs)
 esac
 
 # The TOTP display, which may be the SSH server too: asked to stop first,
-# so the SSH sessions are told and its unprivileged half ends with it; a
-# second later it is killed.
+# while the network is still up, so the SSH sessions are told and its
+# unprivileged half relays that and ends with it (the server waits for
+# that up to 3 s); after 5 s it is killed.
 if [ -r /run/tpm2-kira.pid ]; then
     read -r pid < /run/tpm2-kira.pid
     rm -f /run/tpm2-kira.pid
     if [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null; then
         i=0
-        while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 10 ]; do
+        while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 50 ]; do
             sleep 0.1 2>/dev/null || sleep 1
             i=$((i + 1))
         done

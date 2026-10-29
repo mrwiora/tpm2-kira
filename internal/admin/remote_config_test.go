@@ -213,3 +213,15 @@ iface enp2s0 inet6 static
 		t.Fatalf("static: %+v", s)
 	}
 }
+
+// The SSH server's drop-in orders the code screen after the image's
+// network: at switch-root the network then goes down only after the
+// server has told the sessions that the machine boots.
+func TestSSHDropInStopsBeforeTheNetwork(t *testing.T) {
+	d := runDropIn(SSHConfig{Hold: 600})
+	for _, want := range []string{"Wants=systemd-networkd.service", "After=systemd-networkd.service", "TimeoutStartSec=690", "--ssh-hold=600"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("the drop-in lacks %q:\n%s", want, d)
+		}
+	}
+}
