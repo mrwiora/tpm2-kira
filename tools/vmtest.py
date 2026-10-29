@@ -719,13 +719,19 @@ class Machine:
             s.wait_end(120)
         finally:
             s.close()
-        out = vault.admin("token", "create", "--name", self.name, "--replace", device)
+        # Unenrolled, the slot's attestation part went with the vault: the
+        # next enrolment is a new device. The old one is revoked, as the
+        # unenrol says, by its ID.
+        out = vault.admin("device", "revoke", device)
+        self.check("the vault revokes the old device by its ID", "revoked" in out, out[-300:])
+        name = self.name + "-pepper"
+        out = vault.admin("token", "create", "--name", name)
         self.log.save("vault-token-pepper.log", out)
         m = re.search(r"--url (\S+) --pin (\S+) --token (\S+)", out)
-        if not self.check("the vault makes a token that replaces the device", m is not None, out[-400:]):
+        if not self.check("the vault makes a token for the new device", m is not None, out[-400:]):
             raise Fail("no token")
         url, pin, token = m.groups()
-        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --password tpm --salt vault --pepper --url {url} --pin {pin} --token {token} --name {self.name}", "luks-enrol-vault-pepper")
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --password tpm --salt vault --pepper --url {url} --pin {pin} --token {token} --name {name}", "luks-enrol-vault-pepper")
         try:
             s.expect(r"Pepper \(the operator gives it with every approval on the vault\): ?$", 300); s.send(self.PEPPER + "\n")
             s.expect(r"The same pepper again: ?$", 60); s.send(self.PEPPER + "\n")
@@ -739,14 +745,14 @@ class Machine:
             raise
         finally:
             s.close()
-        out = vault.admin("device", "show", self.name)
+        out = vault.admin("device", "show", name)
         self.check("the vault's device needs a pepper and waits for approvals", "pepper:          yes" in out and "approve" in out, out[-400:])
         self.rebuild()
 
         self.log.head("a boot approved with a wrong pepper, then the right one")
         self.run("systemctl reboot")
         self.wait_port(22, False, 120)
-        rid = vault.pending(self.name, 300)
+        rid = vault.pending(name, 300)
         if not self.check("the boot asks the vault and waits for an operator", rid is not None):
             raise Fail("no pending request")
         rc, body = vault.admin_input("not the pepper\n", "request", "approve", rid)
@@ -754,7 +760,7 @@ class Machine:
         rid2 = None
         deadline = time.time() + 120
         while time.time() < deadline:
-            rid2 = vault.pending(self.name, 10)
+            rid2 = vault.pending(name, 10)
             if rid2 and rid2 != rid:
                 break
             rid2 = None
@@ -878,12 +884,15 @@ class Machine:
             raise Fail("vault unenrol")
         device = m.group(1)
         self.luks_remove(self.vault_keyslot, "luks-remove-vault-pepper")
-        out = vault.admin("token", "create", "--name", self.name, "--replace", device)
+        out = vault.admin("device", "revoke", device)
+        self.check("the vault revokes the pepper device by its ID", "revoked" in out, out[-300:])
+        name = self.name + "-typed"
+        out = vault.admin("token", "create", "--name", name)
         m = re.search(r"--url (\S+) --pin (\S+) --token (\S+)", out)
-        if not self.check("a token that replaces the device again", m is not None, out[-400:]):
+        if not self.check("a token for the typed recipe's device", m is not None, out[-400:]):
             raise Fail("no token")
         url, pin, token = m.groups()
-        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt vault --pepper --url {url} --pin {pin} --token {token} --name {self.name}", "luks-enrol-vault-typed")
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt vault --pepper --url {url} --pin {pin} --token {token} --name {name}", "luks-enrol-vault-typed")
         try:
             s.expect(r"Pepper \(the operator gives it with every approval on the vault\): ?$", 300); s.send(self.PEPPER + "\n")
             s.expect(r"The same pepper again: ?$", 60); s.send(self.PEPPER + "\n")
@@ -907,12 +916,12 @@ class Machine:
         released_before = releases()
 
         def approve():
-            rid = vault.pending(self.name, 300)
+            rid = vault.pending(name, 300)
             if not self.check("typed vault: the boot waits for an operator", rid is not None):
                 raise Fail("no pending request")
             rc, out = vault.admin_input("a\n" + self.PEPPER + "\n", "requests", "answer")
             self.log.save("vault-requests-answer.log", out)
-            self.check("the vault's CLI answers the queue (requests answer, the pepper asked)", rc == 0 and self.name in out and "approved" in out, out[-400:])
+            self.check("the vault's CLI answers the queue (requests answer, the pepper asked)", rc == 0 and name in out and "approved" in out, out[-400:])
             deadline = time.time() + 120
             while time.time() < deadline and releases() <= released_before:
                 time.sleep(2)
