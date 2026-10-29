@@ -142,8 +142,11 @@ type Event struct {
 	// to this enrolment (AnchorAttestationChallenge).
 	AttestationChallenge HexStr `json:"attestation_challenge,omitempty"`
 	EKNote               string `json:"ek_note,omitempty"`
-	InitrdCoverage       string `json:"initrd_coverage,omitempty"` // covered | not_covered | no_initrd | unknown
-	InitrdPCRs           []int  `json:"initrd_pcrs,omitempty"`
+	// EKVendorUnknown: the EK root store has no root of the TPM's vendor
+	// yet - not untrusted, a risk to weigh (EKNote says which vendor).
+	EKVendorUnknown bool   `json:"ek_vendor_unknown,omitempty"`
+	InitrdCoverage  string `json:"initrd_coverage,omitempty"` // covered | not_covered | no_initrd | unknown
+	InitrdPCRs      []int  `json:"initrd_pcrs,omitempty"`
 }
 
 // InitrdCoverage values in need_anchor_key events.
@@ -254,6 +257,7 @@ type Verifier struct {
 	ekBy              string // vendor that vouched for the EK, or ""
 	anchorAttestation []byte
 	ekNote            string // why the EK is not verified
+	ekVendorUnknown   bool   // ... because its vendor is not in the EK root store yet
 
 	// attestation
 	hello    *Hello
@@ -548,7 +552,7 @@ func (v *Verifier) handleEnrol(out *Output, d *Decoder) (*Output, error) {
 		cov, pcrs := initrdCoverage(v.offer)
 		out.Events = append(out.Events, Event{
 			Type: EvNeedAnchorKey, DeviceID: v.offer.DeviceID, FriendlyName: v.offer.FriendlyName,
-			EKVerifiedBy: v.ekBy, EKNote: v.ekNote, InitrdCoverage: cov, InitrdPCRs: pcrs,
+			EKVerifiedBy: v.ekBy, EKNote: v.ekNote, EKVendorUnknown: v.ekVendorUnknown, InitrdCoverage: cov, InitrdPCRs: pcrs,
 			AttestationChallenge: AnchorAttestationChallenge(v.sess.ChannelBinding()),
 		})
 		return out, nil
@@ -668,7 +672,7 @@ func (v *Verifier) checkOffer(o *EnrolOffer) error {
 	if by, err := VerifyEKCertificate(o.EKPub, o.EKCert, o.EKCertChain, v.cfg.now()); err == nil {
 		v.ekBy = by
 	} else {
-		v.ekNote = EKCertNote(err)
+		v.ekNote, v.ekVendorUnknown = EKCertNote(err), IsVendorUnknown(err)
 	}
 	return nil
 }
