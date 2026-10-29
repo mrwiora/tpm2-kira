@@ -636,7 +636,7 @@ the person at its console, signs `SHA-256("tpm2-kira/boot-signature/v1" ‖ qd
 same policy), and answers with `boot_key_state` 1, `boot_proof =
 HMAC-SHA256(k_mac, "tpm2-kira/boot-proof/v1" ‖ qd)` and `boot_signature`. If
 the TPM refuses, it answers with state 2 and neither. On the booted system,
-where `tpm2-kira cap` has locked the slot until the next boot (a check by
+where `tpm2-kira-boot cap` has locked the slot until the next boot (a check by
 hand, or a phone salt's enrolment, PLAN-PHONESALT.md §6), it answers with state 4 and
 neither: not a refusal of the boot state, but the key's unavailability by
 design. The code is never sent back.

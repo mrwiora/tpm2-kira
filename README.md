@@ -28,7 +28,7 @@ The TPM computes a code only under a policy your signing key has approved:
 |-----------|----------------|
 | **PCR values** | Boot measurements match the values approved at slot add or slot approve time |
 | **Generation** | The approval is the latest one: every approval revokes the older ones |
-| **Not capped** | `tpm2-kira cap` has not run in this boot — it runs when the initrd is left, so the running system cannot compute codes |
+| **Not capped** | `tpm2-kira-boot cap` has not run in this boot — it runs when the initrd is left, so the running system cannot compute codes |
 
 On every boot, tpm2-kira asks the TPM for the current code before the
 passphrase prompt. Compare it with the code in your authenticator app — if
@@ -194,15 +194,18 @@ sudo apt install build-essential git    # Debian/Ubuntu, with Go from go.dev (se
 git clone --recurse-submodules https://github.com/mrwiora/tpm2-kira.git
 cd tpm2-kira
 make build
-sudo make install                   # the binary, in /usr/local/bin
+sudo make install                   # tpm2-kira and tpm2-kira-boot, in /usr/local/bin
 sudo make install-mkinitcpio        # Arch: the hooks, in /etc/initcpio
 sudo make install-initramfs-tools   # Debian/Ubuntu: the hook and boot scripts, in /etc/initramfs-tools
 ```
 
-Built from source or from a package, both systems get the same: the
-hooks find the binary in `/usr/bin` or `/usr/local/bin`, the image has it
-at `/usr/bin/tpm2-kira`, and `tpm2-kira control` does the rest the same
-way on both.
+There are two binaries: `tpm2-kira`, everything on the installed system,
+and `tpm2-kira-boot`, what the boot image carries (the code screen and the
+parts the image's plan names, the cap, the keyscript) and nothing of the
+administration. Built from source or from a package, both systems get the
+same: the hooks find the binaries in `/usr/bin` or `/usr/local/bin`, the
+image has `/usr/bin/tpm2-kira-boot` alone, and `tpm2-kira control` does the
+rest the same way on both.
 
 ### Arch Linux (AUR)
 
@@ -416,7 +419,7 @@ tpm2-kira runs `reveal`.
 | The slot | `setup` the signing key · `slot add` a slot and its TOTP key · `slot approve` the current boot state (the hooks run it) · `slot info` a slot's blob · `slot list\|status\|delete\|restore` · `status` the overview |
 | Who checks the boot | `reveal` / `reveal-plain` the code · `phone enrol\|unenrol\|status\|gate\|ekcert\|quote\|verify` the phone (Marify, Bluetooth LE) |
 | The disk's key | `luks status\|enrol\|remove\|mark\|route\|derive` · `phone salt enrol\|rotate\|status\|unenrol` · `vault enrol\|status\|unenrol` |
-| At boot (the units and hooks) | `initramfs plan` what the image carries · `run` · `cap` · `unlock-key` (Debian keyscript) · `ssh-child` (the SSH server's unprivileged half, started by `run`) |
+| At boot (the units and hooks) | `initramfs plan` what the image carries; in the image, `tpm2-kira-boot`: `run` · `cap` · `unlock-key` (Debian keyscript) · `gate` (the phone's radio worker) · `ssh-child` (the SSH server's unprivileged half, started by `run`) |
 | By hand | `yubikey list` · `pcrtips` · `version` |
 
 Global options come before the command, or after it as the command's own
@@ -530,7 +533,7 @@ does not apply. The `.deb` installs two scripts instead:
 |---|---|
 | `/usr/share/initramfs-tools/hooks/tpm2-kira` | copies the binary into the image |
 | `/usr/share/initramfs-tools/scripts/init-premount/tpm2-kira` | starts the display at boot |
-| `/usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira` | stops it and runs `tpm2-kira cap` before the real root takes over |
+| `/usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira` | stops it and runs `tpm2-kira-boot cap` before the real root takes over |
 | `/lib/cryptsetup/scripts/tpm2-kira` | cryptsetup keyscript: the volume's key from tpm2-kira's prompt |
 | `/etc/tpm2-kira/initramfs.conf` | display mode |
 

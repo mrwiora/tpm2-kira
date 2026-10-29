@@ -16,7 +16,7 @@ Only under a policy your signing key approved:
 |-----------|----------------|
 | **PCR values** | Boot measurements match the values approved by `slot add` or `slot approve` |
 | **Generation** | The approval is the latest one: every approval revokes the older ones |
-| **Not capped** | `tpm2-kira cap` has not run in this boot - it runs when the initrd is left, so the running system cannot compute codes |
+| **Not capped** | `tpm2-kira-boot cap` has not run in this boot - it runs when the initrd is left, so the running system cannot compute codes |
 
 When an update changes the PCR values, the TPM refuses until `slot
 approve` approves the new boot state with your signing key (the hooks run
@@ -25,7 +25,7 @@ nothing to enrol again.
 
 ## At boot: the code screen
 
-`tpm2-kira run` (on Arch `tpm2-kira.service`, on Debian the init-premount
+`tpm2-kira-boot run` (on Arch `tpm2-kira.service`, on Debian the init-premount
 script) shows a fresh code of every slot every 30 seconds, before the
 disk's passphrase is asked. Compare it with your authenticator: if it
 matches, the boot chain is the one you approved - press Enter, and the
@@ -40,7 +40,7 @@ initrd.
 ## The cap
 
 When the initrd hands over to the real root, `tpm2-kira-cap.service`
-(Debian: the init-bottom script) runs `tpm2-kira cap`. From then until the
+(Debian: the init-bottom script) runs `tpm2-kira-boot cap`. From then until the
 next reboot the TPM computes no codes, for anyone, root included -
 `tpm2-kira reveal` in the running system reports "Locked until reboot".
 `slot approve` still works.

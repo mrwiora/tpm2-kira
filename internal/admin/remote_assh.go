@@ -23,9 +23,6 @@ import (
 	"github.com/tpm2-trust/assh/config"
 )
 
-// DefaultSSHConf is assh.conf, on the running system and in the image.
-const DefaultSSHConf = "/etc/tpm2-kira/assh.conf"
-
 // sshConfHeader heads a new assh.conf.
 const sshConfHeader = `aSSH's settings for tpm2-kira's SSH server at boot (ASSH_*,
 github.com/tpm2-trust/assh config): the SSH CA, its slots and their PCRs,

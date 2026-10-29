@@ -27,10 +27,15 @@ It may not carry what came before.
 
 ## Other standing decisions
 
-- **One binary.** Everything is the single `tpm2-kira` executable; processes
-  that must be separated (the confined radio worker, the SSH server's
-  unprivileged half) are the same binary run with other arguments, never a
-  second executable.
+- **Two binaries: one for the installed system, one for the boot image.**
+  `tpm2-kira` (the module root's `main`) is everything on the installed
+  system; `tpm2-kira-boot` (`cmd/tpm2-kira-boot`) is what the boot image
+  carries, and the hooks put nothing else in. It must not import
+  `internal/admin` or the TUI (`boot_binary_test.go`). Processes that must
+  be separated at boot (the confined radio worker, the SSH server's
+  unprivileged half) are `tpm2-kira-boot` run with other arguments, never a
+  third executable. Code lives in `internal/`, by layer; a package knows
+  only those below it.
 - **The SSH server and the TPM host keys are aSSH's**
   (`assh/`, a git submodule; `github.com/tpm2-trust/assh`, a project of its
   own that other projects use too): the privilege-separated server

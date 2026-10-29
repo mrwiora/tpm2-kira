@@ -28,7 +28,7 @@ var ErrPhoneSlot = errors.New("the slot is attested by its phone and has no TOTP
 // sealed values, ErrSeparatorLocked when they differ only by the OS
 // separator that ran after the measure point, a GenerationMismatchError
 // when a later reseal revoked this blob's approval, ErrCodesLocked after
-// 'tpm2-kira cap'. None of these checks is the gate; the TPM is.
+// 'tpm2-kira-boot cap'. None of these checks is the gate; the TPM is.
 func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) (string, *nvslot.SealedBlob, error) {
 	sealedData, err := tpmdev.ReadFromNVRAM(tpmDev, nvramIndex)
 	if err != nil {
@@ -128,7 +128,7 @@ type NVRAMSlot struct {
 	Available  bool   // Whether the slot has data (even if no code could be computed)
 
 	// AfterSeparator marks a slot that got its first code only after the
-	// boot display released the boot (tpm2-kira run), i.e. a blob whose
+	// boot display released the boot (tpm2-kira-boot run), i.e. a blob whose
 	// policy holds after the OS separator: its codes are computed live for
 	// as long as the policy holds, and the display says so.
 	AfterSeparator bool
@@ -527,7 +527,7 @@ func Code(tpmDev transport.TPM, blob *nvslot.SealedBlob, blobIndex uint32, t tim
 	return HOTPTruncate(rsp.OutHMAC.Buffer), nil
 }
 
-// CapCommand implements 'tpm2-kira cap': it read-locks every generation
+// CapCommand implements 'tpm2-kira-boot cap': it read-locks every generation
 // index, so that no TOTP code can be computed until the next reboot. Run it
 // when leaving the initrd; the systemd unit and the initramfs-tools script do.
 func CapCommand(tpmPath string) error {

@@ -223,7 +223,7 @@ system, which the post hook runs after each image build. The phone's
 ## 5. The answer
 
 There is no provider interface: the factor is consumed where it is
-produced. `tpm2-kira run` serves the volume's key to `systemd-cryptsetup`
+produced. `tpm2-kira-boot run` serves the volume's key to `systemd-cryptsetup`
 on `/run/tpm2-kira/unlock.sock` (DISK-KEY.md). With a factor enrolled,
 its answer for a volume is:
 
@@ -304,7 +304,7 @@ rather than an emergency shell.
 
 The key socket already orders everything: `tpm2-kira-unlock.socket` is
 `Before=cryptsetup-pre.target`, the request arrives after the separator,
-and `tpm2-kira run` answers it (§5). No derivation unit, no key file in
+and `tpm2-kira-boot run` answers it (§5). No derivation unit, no key file in
 `/run/cryptsetup-keys.d`, no `keyfile-erase`. The Debian `keyscript=`
 variant is the same answer written to stdout; not built.
 
@@ -478,7 +478,7 @@ Phase 1 depends on the same go/no-go as
    display ends before `cryptroot` runs - the salt has to outlive it. The
    plan: `run` writes the salt to `/run/tpm2-kira/salt` (tmpfs in the
    initramfs, mode 0600) when a factor was opened; a `keyscript=` of the
-   `crypttab` entry, `tpm2-kira unlock-key <volume>`, reads it, asks for
+   `crypttab` entry, `tpm2-kira-boot unlock-key <volume>`, reads it, asks for
    the password on the console, derives the key, prints it to stdout and
    removes the file; without the file it asks for the passphrase and
    prints that. `cryptsetup`'s own retry handles a wrong answer. The

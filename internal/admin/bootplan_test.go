@@ -15,6 +15,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/tpm2-trust/assh/hostkey"
@@ -279,7 +280,7 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 		"/" + BTUdevRuleFile:              `KERNEL=="3-10"`,
 		imageNetworkFile:                  "DHCP=yes",
 		"/etc/tpm2-kira/authorized_keys":  admin + "\n",
-		DefaultSSHConf:                    "ASSH_CA=efi:KIRAasshCA\n",
+		sshscreen.DefaultConf:             "ASSH_CA=efi:KIRAasshCA\n",
 		imageRunDropIn:                    `"TPM2_KIRA_REMOTE=--ssh --ssh-hold=0"`,
 	} {
 		if got := readImage(t, root, path); !strings.Contains(got, want) {
@@ -338,7 +339,7 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 			t.Errorf("%s in an initramfs-tools image", p)
 		}
 	}
-	if got := readImage(t, root, DefaultSSHConf); !strings.Contains(got, "ASSH_LISTEN=:2222\n") {
+	if got := readImage(t, root, sshscreen.DefaultConf); !strings.Contains(got, "ASSH_LISTEN=:2222\n") {
 		t.Errorf("the image's assh.conf:\n%s", got)
 	}
 	for _, p := range []string{"/etc/tpm2-kira/authorized_keys", filepath.Join(imageplan.Dir, imageplan.PartTPM)} {
@@ -404,7 +405,7 @@ func TestImagePlanPending(t *testing.T) {
 		t.Errorf("unused: %q", u)
 	}
 	// An image of no plan at all: everything in use is missing.
-	listImage = func(string) ([]string, error) { return []string{"./usr/bin/tpm2-kira"}, nil }
+	listImage = func(string) ([]string, error) { return []string{"./usr/bin/tpm2-kira-boot"}, nil }
 	st, _ := os.Stat(img)
 	os.Chtimes(img, st.ModTime().Add(1e9), st.ModTime().Add(1e9)) // a new build: the listing is cached by time
 	parts, _ = imagePlan(img)

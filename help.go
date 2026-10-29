@@ -11,6 +11,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 )
 
 // The help in two layers: 'tpm2-kira help' is one screen - the commands
@@ -68,14 +69,18 @@ THE DISK'S KEY (the recipe in each volume's LUKS header)
   vault        enrol, status, unenrol: the key from this TPM and
                tpm2-kira-vault, unattended (mode tpm+vault)
 
-AT BOOT (run by the initramfs units and hooks)
+THE BOOT IMAGE
   initramfs    plan: what the boot image carries - the disk unlock, and each
                part the machine uses (codes, phone, vault, network, SSH)
-  run          Show the code, hold for Enter, serve the disk's key, coordinate
-               the phone, serve SSH
-  cap          Lock the code until the next boot (when the initrd is left)
-  unlock-key   Debian keyscript: the disk's key from 'run --unlock', else askpass
-  ssh-child    The SSH server's unprivileged half, started by run
+  The image carries tpm2-kira-boot alone, which the units and scripts run
+  (its pages are here too: tpm2-kira help run):
+    run          Show the code, hold for Enter, start the parts the image's
+                 plan names: the phone's gate, SSH, the vault, the disk's key
+    cap          Lock the code until the next boot (when the initrd is left)
+    unlock-key   Debian keyscript: the disk's key from 'run --unlock', else
+                 askpass
+    gate         The phone's radio worker, beside run
+    ssh-child    The SSH server's unprivileged half, started by run
 
 BY HAND
   yubikey      list: the YubiKeys and the keys in their PIV slots
@@ -369,7 +374,7 @@ computes it under the slot's policy: in a boot the signing key approved,
 before the OS separator (after 'cap' there is no code until the next boot).
 `,
 
-	"run": `tpm2-kira run [--plan DIR] [--hold S] [--gate SOCKET] [--unlock SOCKET] [--ssh [--ssh-conf PATH] ...]
+	"run": `tpm2-kira-boot run [--plan DIR] [--hold S] [--gate SOCKET] [--unlock SOCKET] [--ssh [--ssh-conf PATH] ...]
 
 What the initramfs runs: shows the code of every slot and holds the boot
 for Enter; with a phone enrolled, coordinates the Bluetooth gate and shows
@@ -397,8 +402,9 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
   --hold S         Seconds to wait for Enter (default 90; 0: at once). A fresh
                    code every 30 seconds; Enter releases the boot
   --gate SOCKET    Be the coordinator of the gate on this socket: hold the TPM
-                   for the radio worker ('phone gate --coordinator'), read
-                   the phone's receipt, release the boot on its verdict
+                   for the radio worker ('tpm2-kira-boot gate
+                   --coordinator'), read the phone's receipt, release the
+                   boot on its verdict
   --unlock SOCKET  Serve the disk's key on this socket (Debian's boot
                    script passes ` + diskkey.DefaultUnlockSocket + `; under
                    systemd the socket unit hands its socket over instead)
@@ -408,7 +414,7 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
                    in, and Enter there continues at the console instead
   --ssh-hold S     With --ssh, in place of --hold (default 0: until a
                    confirmation comes)
-  --ssh-conf PATH  aSSH's settings (default ` + admin.DefaultSSHConf + `, the
+  --ssh-conf PATH  aSSH's settings (default ` + sshscreen.DefaultConf + `, the
                    image's copy): the address (ASSH_LISTEN), the keys that
                    may log in (ASSH_AUTHORIZED_KEYS), the SSH CA (ASSH_CA,
                    ` + admin.DefaultSSHCA + `, an EFI variable). At the start,
@@ -423,14 +429,14 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
 
 	"phone": attestUsage + "\n" + factorUsage,
 
-	"ssh-child": `tpm2-kira ssh-child
+	"ssh-child": `tpm2-kira-boot ssh-child
 
 The code screen over SSH (docs/SSH.md). The network and the SSH
 server of the boot image are set in /etc/tpm2-kira/control.conf
 (TPM2_KIRA_NET_*, TPM2_KIRA_SSH_*; 'tpm2-kira control' sets them and
 suggests the network from /etc/systemd/network or /etc/network/interfaces);
 what aSSH does - the SSH CA and its slots, the port, the keys that may log
-in - in ` + admin.DefaultSSHConf + ` (ASSH_*). Both are off until set; the
+in - in ` + sshscreen.DefaultConf + ` (ASSH_*). Both are off until set; the
 image build puts them in ('tpm2-kira help initramfs').
 
 The SSH server is a library (github.com/tpm2-trust/assh/server) inside
@@ -488,14 +494,14 @@ uses is no reason to rebuild: the next build leaves it out.
                    journal is read in any case)
 `,
 
-	"cap": `tpm2-kira cap
+	"cap": `tpm2-kira-boot cap
 
 Read-locks every slot's generation until the next boot: no code can be
 computed in the running OS. The boot integration runs it when the initrd is
 left; by hand only for a test.
 `,
 
-	"unlock-key": `tpm2-kira unlock-key [--socket PATH] [--wait DUR] [VOLUME]
+	"unlock-key": `tpm2-kira-boot unlock-key [--socket PATH] [--wait DUR] [VOLUME]
 
 The Debian keyscript (/lib/cryptsetup/scripts/tpm2-kira runs it, VOLUME
 from CRYPTTAB_NAME): the volume's key from the socket of 'run --unlock' to

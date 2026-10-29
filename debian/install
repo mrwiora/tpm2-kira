@@ -1,4 +1,5 @@
 tpm2-kira                                                  usr/bin
+tpm2-kira-boot                                             usr/bin
 initramfs/initramfs-tools/hooks/tpm2-kira                  usr/share/initramfs-tools/hooks
 initramfs/initramfs-tools/scripts/init-premount/tpm2-kira  usr/share/initramfs-tools/scripts/init-premount
 initramfs/initramfs-tools/scripts/init-bottom/tpm2-kira    usr/share/initramfs-tools/scripts/init-bottom

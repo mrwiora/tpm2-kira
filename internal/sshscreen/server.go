@@ -4,9 +4,9 @@
 package sshscreen
 
 // The SSH server of the code screen (docs/SSH.md). With TPM2_KIRA_SSH
-// on, the image's tpm2-kira.service runs 'tpm2-kira run --ssh': the
+// on, the image's tpm2-kira.service runs 'tpm2-kira-boot run --ssh': the
 // process that holds the boot opens the port of the image's assh.conf
-// (ASSH_LISTEN) and starts 'tpm2-kira ssh-child' on it, without
+// (ASSH_LISTEN) and starts 'tpm2-kira-boot ssh-child' on it, without
 // privileges (github.com/tpm2-trust/assh/server). Its host key is made in
 // the TPM for this boot and certified by the SSH CA (remote_hostkey.go).
 // That process speaks SSH and hands every login over as a session of the
@@ -461,3 +461,6 @@ func ConsoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int, remai
 	b.WriteString("         Enter here: continue at this console instead - the SSH server stops.\n")
 	return b.String()
 }
+
+// DefaultConf is assh.conf, on the running system and in the image.
+const DefaultConf = "/etc/tpm2-kira/assh.conf"

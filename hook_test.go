@@ -161,8 +161,10 @@ func TestHookPutsNoConfigIntoTheImage(t *testing.T) {
 }
 
 // planStub is 'tpm2-kira initramfs plan' as a hook test wants it: it names
-// the parts in $PLAN_PARTS in the image and prints $PLAN_OUT.
+// the parts in $PLAN_PARTS in the image and prints $PLAN_OUT. The boot
+// binary is there to be found, and does nothing.
 const planStub = `
+tpm2-kira-boot() { :; }
 tpm2-kira() {
     [ "$1 $2" = "initramfs plan" ] || return 0
     root=${BUILDROOT:-$DESTDIR}
@@ -289,9 +291,9 @@ busybox() { :; }
 	}
 }
 
-// The binary goes into the image from /usr/local/bin too (make install),
-// which mkinitcpio's PATH leaves out: build adds it as /usr/bin/tpm2-kira,
-// and the units go in without add_systemd_unit looking for it again; every
+// The boot binary goes into the image from /usr/local/bin too (make
+// install), which mkinitcpio's PATH leaves out: build adds it as
+// /usr/bin/tpm2-kira-boot, and the units go in without add_systemd_unit looking for it again; every
 // other binary they name is added as before, and add_binary is mkinitcpio's
 // again afterwards.
 func TestHookTakesTheBinaryFromUsrLocal(t *testing.T) {
@@ -300,10 +302,10 @@ func TestHookTakesTheBinaryFromUsrLocal(t *testing.T) {
 	}
 	script := `
 add_binary() { echo "BIN $*"; }
-add_systemd_unit() { echo "UNIT $1"; add_binary tpm2-kira; add_binary sh; }
+add_systemd_unit() { echo "UNIT $1"; add_binary tpm2-kira-boot; add_binary sh; }
 source initramfs/mkinitcpio/install/sd-tpm2-kira
-KIRA=/usr/local/bin/tpm2-kira
-add_binary "$KIRA" /usr/bin/tpm2-kira
+KIRA_BOOT=/usr/local/bin/tpm2-kira-boot
+add_binary "$KIRA_BOOT" /usr/bin/tpm2-kira-boot
 _add_kira_unit tpm2-kira.service
 add_binary after
 `
@@ -311,7 +313,7 @@ add_binary after
 	if err != nil {
 		t.Fatalf("%v: %s", err, out)
 	}
-	want := "BIN /usr/local/bin/tpm2-kira /usr/bin/tpm2-kira\nUNIT tpm2-kira.service\nBIN sh\nBIN after\n"
+	want := "BIN /usr/local/bin/tpm2-kira-boot /usr/bin/tpm2-kira-boot\nUNIT tpm2-kira.service\nBIN sh\nBIN after\n"
 	if string(out) != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", out, want)
 	}

@@ -193,7 +193,7 @@ func generationState(tpmDev transport.TPM, nvramIndex uint32, blobGen uint64) st
 	gen, err := nvslot.ReadGeneration(tpmDev, nvslot.GenerationIndex(nvramIndex))
 	switch {
 	case errors.Is(err, nvslot.ErrCodesLocked):
-		return "read-locked until reboot ('tpm2-kira cap' ran): no codes in this boot"
+		return "read-locked until reboot ('tpm2-kira-boot cap' ran): no codes in this boot"
 	case err != nil:
 		return fmt.Sprintf("unavailable (%v): no codes until slot approve", err)
 	case gen != blobGen:

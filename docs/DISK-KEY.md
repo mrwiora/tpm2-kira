@@ -207,7 +207,7 @@ vda3_crypt UUID=… none luks,discard,keyscript=/lib/cryptsetup/scripts/tpm2-kir
 ```
 
 and `sudo update-initramfs -u`. The keyscript asks the same socket
-`systemd-cryptsetup` would on Arch (`tpm2-kira unlock-key`): the display
+`systemd-cryptsetup` would on Arch (`tpm2-kira-boot unlock-key`): the display
 started by `init-premount` answers once the code screen is confirmed,
 with what you type at `🔐 Passphrase for disk vda3_crypt:`
 (or, with a phone and a factor, the key derived from your password).

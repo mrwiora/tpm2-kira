@@ -39,10 +39,12 @@ _report_measure_point() {
 
 CONF=${TPM2_KIRA_CONTROL_CONF:-/etc/tpm2-kira/control.conf}
 
-# The binary: the package's in /usr/bin, or make install's in /usr/local/bin,
-# which mkinitcpio's PATH (/usr/bin:/bin) leaves out. In the image it is
-# /usr/bin/tpm2-kira, where the units find it.
+# The binaries: the package's in /usr/bin, or make install's in
+# /usr/local/bin, which mkinitcpio's PATH (/usr/bin:/bin) leaves out.
+# tpm2-kira decides the plan here; the image carries tpm2-kira-boot alone,
+# as /usr/bin/tpm2-kira-boot, where the units find it.
 KIRA=$(PATH=$PATH:/usr/local/bin type -P tpm2-kira)
+KIRA_BOOT=$(PATH=$PATH:/usr/local/bin type -P tpm2-kira-boot)
 
 # A unit of tpm2-kira's. add_systemd_unit adds the binary of each Exec line
 # as this machine's PATH finds it, which make install's is not on; build
@@ -56,7 +58,7 @@ _add_kira_unit() {
         return
     fi
     eval "_kira_$orig"
-    add_binary() { [[ $1 == tpm2-kira ]] || _kira_add_binary "$@"; }
+    add_binary() { [[ $1 == tpm2-kira-boot ]] || _kira_add_binary "$@"; }
     add_systemd_unit "$1"
     eval "$orig"
     unset -f _kira_add_binary
@@ -210,11 +212,11 @@ _add_unlock() {
 }
 
 build() {
-    if [[ -z $KIRA ]]; then
-        error "tpm2-kira: the binary is not installed (/usr/bin or /usr/local/bin)"
+    if [[ -z $KIRA || -z $KIRA_BOOT ]]; then
+        error "tpm2-kira: tpm2-kira and tpm2-kira-boot are not both installed (/usr/bin or /usr/local/bin)"
         return 1
     fi
-    add_binary "$KIRA" /usr/bin/tpm2-kira
+    add_binary "$KIRA_BOOT" /usr/bin/tpm2-kira-boot
 
     # The display and the key provider, enabled in the image only:
     # add_systemd_unit only carries over .wants symlinks that already exist

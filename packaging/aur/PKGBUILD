@@ -59,8 +59,13 @@ build() {
     # its HEAD into the binary. The version is main.Version.
     export GOFLAGS="-trimpath -mod=readonly -modcacherw -buildvcs=false"
 
+    # tpm2-kira on the installed system; tpm2-kira-boot, what the boot image
+    # carries, put in by the hook.
     go build -ldflags "-s -w -X main.Version=${pkgver}" -o "$pkgname" .
-    go version -m "$pkgname" | grep -q 'CGO_ENABLED=0' || { echo "$pkgname was built with cgo" >&2; return 1; }
+    go build -ldflags "-s -w -X main.Version=${pkgver}" -o "$pkgname-boot" ./cmd/tpm2-kira-boot
+    for b in "$pkgname" "$pkgname-boot"; do
+        go version -m "$b" | grep -q 'CGO_ENABLED=0' || { echo "$b was built with cgo" >&2; return 1; }
+    done
 }
 
 check() {
@@ -75,6 +80,7 @@ package() {
     cd "$_srcdir"
 
     install -Dm755 "$pkgname" "$pkgdir/usr/bin/$pkgname"
+    install -Dm755 "$pkgname-boot" "$pkgdir/usr/bin/$pkgname-boot"
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 

@@ -462,7 +462,8 @@ else
   cp "$img" initrd
 fi
 lsinitcpio -x initrd >/dev/null
-ls usr/bin/tpm2-kira
+ls usr/bin/tpm2-kira-boot
+test ! -e usr/bin/tpm2-kira || echo 'ADMIN BINARY IN THE IMAGE: usr/bin/tpm2-kira'
 echo '--- tpm2-kira files in the image:'
 find etc/tpm2-kira root/.ssh 2>/dev/null || true
 grep -rl 'TPM2_KIRA_PIN' . 2>/dev/null | sed 's/^/PIN LINE IN: /' || true
@@ -476,7 +477,8 @@ img=/boot/initrd.img-$(uname -r)
 echo "image: $img"
 unmkinitramfs "$img" x
 cd x; [ -d main ] && cd main
-ls usr/bin/tpm2-kira 2>/dev/null || ls bin/tpm2-kira
+ls usr/bin/tpm2-kira-boot 2>/dev/null || ls bin/tpm2-kira-boot
+test ! -e usr/bin/tpm2-kira || echo 'ADMIN BINARY IN THE IMAGE: usr/bin/tpm2-kira'
 echo '--- tpm2-kira files in the image:'
 find etc/tpm2-kira root/.ssh 2>/dev/null || true
 grep -rl 'TPM2_KIRA_PIN' . 2>/dev/null | sed 's/^/PIN LINE IN: /' || true
@@ -485,7 +487,8 @@ cd /; rm -rf "$d"
     rc, out = t.run(script, root=True)
     log.save("initramfs.log", out)
     log.say(out.rstrip())
-    rep.check("initramfs holds tpm2-kira", rc == 0, out[-400:] if rc else "")
+    rep.check("initramfs holds tpm2-kira-boot", rc == 0, out[-400:] if rc else "")
+    rep.check("initramfs holds no tpm2-kira (the administration)", "ADMIN BINARY IN THE IMAGE" not in out)
     rep.check("initramfs holds no control.conf and no PIN", rc == 0 and "control.conf" not in out and "PIN LINE IN" not in out and "/pin" not in out)
     rep.check("initramfs names the codes in its plan", "etc/tpm2-kira/plan/codes/" in out, out[-400:])
 

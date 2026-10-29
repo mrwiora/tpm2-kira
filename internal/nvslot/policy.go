@@ -34,7 +34,7 @@ import (
 // can write. reseal raises G, which revokes every earlier approval, and signs
 // a new approvedPolicy for the new PCR values; it never needs the key.
 //
-// The generation index is defined with TPMA_NV_READ_STCLEAR. 'tpm2-kira cap',
+// The generation index is defined with TPMA_NV_READ_STCLEAR. 'tpm2-kira-boot cap',
 // run when leaving the initrd, read-locks it; PolicyNV then fails until the
 // next TPM reset (reboot), so nothing in the running OS can compute codes.
 
@@ -51,7 +51,7 @@ func GenerationIndex(blobIndex uint32) uint32 {
 
 // ErrCodesLocked marks a slot whose generation index is read-locked: 'tpm2-kira
 // cap' ran in this boot, so no code can be computed until the next reboot.
-var ErrCodesLocked = errors.New("codes are locked until the next reboot ('tpm2-kira cap' ran when the initrd was left)")
+var ErrCodesLocked = errors.New("codes are locked until the next reboot ('tpm2-kira-boot cap' ran when the initrd was left)")
 
 // GenerationMismatchError is returned when the slot's generation index does
 // not hold the generation the blob's approval requires: the blob was

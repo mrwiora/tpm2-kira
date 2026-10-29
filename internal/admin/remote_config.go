@@ -39,7 +39,7 @@ type NetConfig struct {
 	DHCPID string
 }
 
-// SSHConfig is the image's SSH server, started by 'tpm2-kira run' while
+// SSHConfig is the image's SSH server, started by 'tpm2-kira-boot run' while
 // the code screen holds.
 type SSHConfig struct {
 	On   bool // TPM2_KIRA_SSH: on or off

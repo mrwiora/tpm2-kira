@@ -453,7 +453,7 @@ makes first (PCR values, generation) only produce readable errors.
 - **Revocation.** Each approve raises `G`. Older approvals require an older `G`
   and stop working, so an attacker who kept an old blob cannot roll the
   machine back to an old kernel or initrd.
-- **The cap.** `tpm2-kira cap`, run when the initrd is left, read-locks the
+- **The cap.** `tpm2-kira-boot cap`, run when the initrd is left, read-locks the
   generation index. `PolicyNV` fails until the next reboot, so nothing in the
   running OS can compute a code, root included. Deleting and recreating the
   index does not help: the policy binds the index's Name, and a recreated
@@ -646,7 +646,7 @@ non-default key always needs `--privkey` on approve.
 
 A PCR policy is checked against **live registers at the instant a code is computed**.
 For tpm2-kira that instant is one specific point in the boot: the moment
-`tpm2-kira run` reads the TPM in the initrd, before the LUKS passphrase prompt.
+`tpm2-kira-boot run` reads the TPM in the initrd, before the LUKS passphrase prompt.
 Everything sealing does must answer one question:
 
 > What will PCR *i* be at the measure point of the *next* boot?
@@ -832,7 +832,7 @@ edges the measure point could land on either side of the extends, which would
 make an identical machine pass or fail across identical boots.
 
 Running *before* the separator is what makes the codes boot-time codes.
-`tpm2-kira run` shows a fresh code every 30 seconds and asks whether it
+`tpm2-kira-boot run` shows a fresh code every 30 seconds and asks whether it
 matches the authenticator; Enter, or the end of the 90-second hold, sends
 `READY=1` and the display exits; the separator runs after READY and extends
 PCRs 0–7, 9, 12–14. Extends are one-way, so from then on no process in the
@@ -840,7 +840,7 @@ booted system can satisfy the key's policy: the key never left the TPM, the
 display only ever held the code it was showing, and a runtime compromise
 cannot turn into a forged code at the next boot. Holding the boot costs
 nothing in security: during the hold only the measured initramfs runs, and
-the codes on the screen are the design. `tpm2-kira cap` at
+the codes on the screen are the design. `tpm2-kira-boot cap` at
 `initrd-switch-root` read-locks the generation index on top of that, which
 also covers blobs whose policy holds after the separator.
 
@@ -936,7 +936,7 @@ approve and boot.
 | Offline disk theft                          | The key object is TPM-wrapped; useless without the specific TPM chip |
 | Boot chain tampering (evil maid)            | PCR values change → PolicyPCR fails → no code → user detects compromise |
 | Copying the TOTP key                        | No unseal exists; the TPM computes codes and the key never leaves it after enrolment (§4.5) |
-| Using the TPM from the running OS (root, `tss`) | `tpm2-kira cap` read-locks the generation index when the initrd is left; PolicyNV fails until reboot (§4.5) |
+| Using the TPM from the running OS (root, `tss`) | `tpm2-kira-boot cap` read-locks the generation index when the initrd is left; PolicyNV fails until reboot (§4.5) |
 | Rollback to an older approved state         | Every approval raises the generation; older approvals stop working |
 | TPM bus sniffing at seal time               | The key goes into the TPM over a salted, parameter-encrypted session |
 | Blob tampering in NVRAM                     | `Private` area is integrity-protected by TPM; tampering causes `TPM2_Load` to fail; a substituted signing key fails PolicyAuthorize |

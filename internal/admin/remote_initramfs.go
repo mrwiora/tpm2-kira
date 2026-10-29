@@ -45,7 +45,7 @@ func imageKeys(keys []string) []byte {
 
 // imageSSHConf is the image's assh.conf: the running system's settings.
 func imageSSHConf(c config.Config) []byte {
-	return config.Format(c, "Written by 'tpm2-kira initramfs plan' from /etc/tpm2-kira/assh.conf,\nfor the boot image alone; read by 'tpm2-kira run --ssh'.")
+	return config.Format(c, "Written by 'tpm2-kira initramfs plan' from /etc/tpm2-kira/assh.conf,\nfor the boot image alone; read by 'tpm2-kira-boot run --ssh'.")
 }
 
 func keysSum(b []byte) string {

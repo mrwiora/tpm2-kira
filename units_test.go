@@ -92,7 +92,7 @@ func TestGateUnitIsConfined(t *testing.T) {
 		}
 	}
 	const socket = "/run/tpm2-kira/gate.sock"
-	if !has(lines, "ExecStart=/usr/bin/tpm2-kira phone gate --coordinator "+socket) {
+	if !has(lines, "ExecStart=/usr/bin/tpm2-kira-boot gate --coordinator "+socket) {
 		t.Error("the radio worker is not pointed at its coordinator")
 	}
 	display := directives(t, "initramfs/systemd/tpm2-kira.service")
@@ -103,7 +103,7 @@ func TestGateUnitIsConfined(t *testing.T) {
 	}
 	// $TPM2_KIRA_REMOTE: the SSH server's flags from the image's drop-in,
 	// no argument at all without one. --plan: what the image carries.
-	if !has(display, "ExecStart=tpm2-kira run --plan /etc/tpm2-kira/plan --gate "+socket+" $TPM2_KIRA_REMOTE") {
+	if !has(display, "ExecStart=tpm2-kira-boot run --plan /etc/tpm2-kira/plan --gate "+socket+" $TPM2_KIRA_REMOTE") {
 		t.Error("the code screen does not follow the image's plan, or does not listen where the radio worker asks")
 	}
 	// The TPM is waited for by the plan's drop-in alone: a machine without

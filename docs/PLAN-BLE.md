@@ -205,7 +205,7 @@ session when the hold ends extends it by at most a minute, so the registers
 do not change between its question and its answer.
 
 The gate is two processes of the one binary. The display is its
-*coordinator* (`tpm2-kira run --gate SOCKET`): it holds the TPM, checks the
+*coordinator* (`tpm2-kira-boot run --gate SOCKET`): it holds the TPM, checks the
 enrolment record, issues the quotes, and reads the phone's receipt against
 the anchors and the quotes it issued. The *radio worker* (`tpm2-kira phone
 gate --coordinator SOCKET`, the confined unit) advertises and runs the

@@ -29,7 +29,7 @@ Before=initrd-switch-root.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/tpm2-kira phone gate --coordinator /run/tpm2-kira/gate.sock
+ExecStart=/usr/bin/tpm2-kira-boot gate --coordinator /run/tpm2-kira/gate.sock
 # The worker's narrative (waiting, rounds, a phone connected, the verdict,
 # and with "Debug at boot" switched on in control every step) is written to the journal
 # directly, never to the console: the code screen of tpm2-kira.service is

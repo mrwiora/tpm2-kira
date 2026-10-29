@@ -44,7 +44,7 @@ Sockets=tpm2-kira-unlock.socket
 
 [Service]
 Type=notify
-# The hold is 90 s (tpm2-kira run --hold), plus at most 60 s for a phone
+# The hold is 90 s (tpm2-kira-boot run --hold), plus at most 60 s for a phone
 # that is in the middle of its answer; a hung TPM must not hold the boot for
 # longer than this. Raise it together with --hold.
 TimeoutStartSec=180
@@ -55,7 +55,7 @@ TimeoutStartSec=180
 # image's drop-in (tpm2-kira.service.d/remote.conf) when control.conf turns
 # the SSH server on: --ssh and its hold (the port is assh.conf's); unset,
 # it is no argument.
-ExecStart=tpm2-kira run --plan /etc/tpm2-kira/plan --gate /run/tpm2-kira/gate.sock $TPM2_KIRA_REMOTE
+ExecStart=tpm2-kira-boot run --plan /etc/tpm2-kira/plan --gate /run/tpm2-kira/gate.sock $TPM2_KIRA_REMOTE
 # Enter on the console releases the boot.
 StandardInput=tty
 StandardOutput=tty

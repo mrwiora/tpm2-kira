@@ -23,17 +23,19 @@ esac
 
 . /usr/share/initramfs-tools/hook-functions
 
-# The binary: the package's in /usr/bin, or make install's in /usr/local/bin,
-# which mkinitramfs' PATH (/usr/bin:/sbin:/bin) leaves out. In the image it
-# is /usr/bin/tpm2-kira, where the scripts run it.
+# The binaries: the package's in /usr/bin, or make install's in
+# /usr/local/bin, which mkinitramfs' PATH (/usr/bin:/sbin:/bin) leaves out.
+# tpm2-kira decides the plan here; the image carries tpm2-kira-boot alone,
+# as /usr/bin/tpm2-kira-boot, where the scripts run it.
 kira=$(PATH="$PATH:/usr/local/bin" command -v tpm2-kira || true)
-if [ -z "$kira" ]; then
-    echo "tpm2-kira: the binary is not installed (/usr/bin or /usr/local/bin); refusing to build an initramfs" >&2
+kira_boot=$(PATH="$PATH:/usr/local/bin" command -v tpm2-kira-boot || true)
+if [ -z "$kira" ] || [ -z "$kira_boot" ]; then
+    echo "tpm2-kira: tpm2-kira and tpm2-kira-boot are not both installed (/usr/bin or /usr/local/bin); refusing to build an initramfs" >&2
     echo "tpm2-kira: that silently shows no TOTP code at boot" >&2
     exit 1
 fi
 
-copy_exec "$kira" /usr/bin/tpm2-kira
+copy_exec "$kira_boot" /usr/bin/tpm2-kira-boot
 
 if [ -r /etc/tpm2-kira/initramfs.conf ]; then
     copy_file config /etc/tpm2-kira/initramfs.conf /etc/tpm2-kira/initramfs.conf

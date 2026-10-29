@@ -85,7 +85,7 @@ HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt fi
 #      (You will be prompted to enter an optional password securely)
 #
 # 4. Hook Behavior:
-#    - The hook installs a systemd unit that runs 'tpm2-kira run' during boot
+#    - The hook installs a systemd unit that runs 'tpm2-kira-boot run' during boot
 #    - This provides continuous TOTP code display
 #    - No kernel parameters or manual intervention needed
 #

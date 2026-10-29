@@ -84,12 +84,14 @@ func TestMain(m *testing.M) {
 	// The suite runs the binary as a user against a software TPM; the
 	// binary refuses anything but help as a user unless told so.
 	os.Setenv("TPM2_KIRA_UNPRIVILEGED", "1")
-	fmt.Println("Building tpm2-kira binary for testing...")
-	buildCmd := exec.Command("go", "build", "-o", "tpm2-kira")
-	buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if output, err := buildCmd.CombinedOutput(); err != nil {
-		fmt.Printf("Failed to build binary: %v\nOutput: %s\n", err, output)
-		os.Exit(1)
+	fmt.Println("Building tpm2-kira and tpm2-kira-boot for testing...")
+	for _, b := range [][2]string{{"tpm2-kira", "."}, {"tpm2-kira-boot", "./cmd/tpm2-kira-boot"}} {
+		buildCmd := exec.Command("go", "build", "-o", b[0], b[1])
+		buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+		if output, err := buildCmd.CombinedOutput(); err != nil {
+			fmt.Printf("Failed to build %s: %v\nOutput: %s\n", b[0], err, output)
+			os.Exit(1)
+		}
 	}
 
 	// Generate test signing keys
@@ -881,7 +883,7 @@ func testReveal(t *testing.T, tpmPath, nvramIndex string) string {
 // testRun executes the run command for a specified duration and then kills it
 func testRun(t *testing.T, tpmPath, nvramIndex string, duration time.Duration) {
 	t.Helper()
-	runCmd := exec.Command("./tpm2-kira", "run", "--tpm", tpmPath, "--nvram", nvramIndex)
+	runCmd := exec.Command("./tpm2-kira-boot", "run", "--tpm", tpmPath, "--nvram", nvramIndex)
 	var runOut bytes.Buffer
 	runCmd.Stdout = &runOut
 	runCmd.Stderr = &runOut
@@ -1497,7 +1499,7 @@ func TestCapLocksCodesUntilReboot(t *testing.T) {
 		t.Fatalf("no code before cap:\n%s", out)
 	}
 
-	stdout, stderr, _ := runTPMKira(t, tpmPath, "cap")
+	stdout, stderr, _ := runBoot(t, "cap", "--tpm", tpmPath)
 	if !strings.Contains(stdout, "locked 1 generation index") {
 		t.Fatalf("cap did not lock the generation index:\n%s\n%s", stdout, stderr)
 	}
@@ -1508,7 +1510,7 @@ func TestCapLocksCodesUntilReboot(t *testing.T) {
 	t.Log("✓ No code after cap")
 
 	// A second cap is harmless.
-	if stdout, _, _ := runTPMKira(t, tpmPath, "cap"); !strings.Contains(stdout, "locked 1 generation index") {
+	if stdout, _, _ := runBoot(t, "cap", "--tpm", tpmPath); !strings.Contains(stdout, "locked 1 generation index") {
 		t.Errorf("second cap: %s", stdout)
 	}
 
@@ -1584,4 +1586,14 @@ func TestResealRevokesOldBlob(t *testing.T) {
 	}
 	t.Log("✓ The blob from before the reseal is revoked")
 	runTPMKira(t, tpmPath, "slot", "delete", "--nvram", nvramIndex)
+}
+
+// runBoot runs the boot binary, tpm2-kira-boot.
+func runBoot(t *testing.T, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	c := exec.Command("./tpm2-kira-boot", args...)
+	c.Stdout, c.Stderr = &out, &errb
+	err = c.Run()
+	return out.String(), errb.String(), err
 }

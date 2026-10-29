@@ -129,7 +129,7 @@ type machineFacts struct {
 	SSHCAOtherKey bool
 	// Vaults is each vault-enrolled slot's vault, asked now.
 	Vaults   map[int]vaultkey.CheckResult
-	Capped   bool   // 'tpm2-kira cap' ran: this boot went through the code screen
+	Capped   bool   // 'tpm2-kira-boot cap' ran: this boot went through the code screen
 	NewImage string // an image was rebuilt after this boot started; "" when not
 	Routed   map[string]bool
 	Route    []RouteFinding // the route's findings, for the step that writes the fixes

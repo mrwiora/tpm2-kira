@@ -253,7 +253,7 @@ func mustPoint(t *testing.T, a *nvslot.Attestation) []byte {
 func TestOfflineQuoteVerifies(t *testing.T) {
 	s := newSWTPMSetup(t)
 	sel, _ := s.blob.Selection()
-	nonce := randBytes(32)
+	nonce := phonegate.RandBytes(32)
 	q, err := s.be.Quote(attest.OfflineQualifyingData(nonce), sel)
 	if err != nil {
 		t.Fatal(err)
@@ -266,7 +266,7 @@ func TestOfflineQuoteVerifies(t *testing.T) {
 	if v := attest.Verify(ev, pol, pin, attest.OfflineQualifyingData(nonce), time.Now()); v.State != attest.StateMatch {
 		t.Fatalf("real quote does not verify: %+v", v.Reasons)
 	}
-	if v := attest.Verify(ev, pol, pin, attest.OfflineQualifyingData(randBytes(32)), time.Now()); v.State != attest.StateFailed {
+	if v := attest.Verify(ev, pol, pin, attest.OfflineQualifyingData(phonegate.RandBytes(32)), time.Now()); v.State != attest.StateFailed {
 		t.Fatal("quote verified against the wrong nonce")
 	}
 }
@@ -449,8 +449,8 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 }
 
 // TestCoordinatorAndWorker runs the two halves of the gate the way the units
-// start them - the coordinator of 'tpm2-kira run --gate' and the worker of
-// 'phone gate --coordinator' - up to the point where the worker needs a
+// start them - the coordinator of 'tpm2-kira-boot run --gate' and the worker of
+// 'gate --coordinator' - up to the point where the worker needs a
 // Bluetooth adapter, which a test machine does not have.
 func TestCoordinatorAndWorker(t *testing.T) {
 	sock := startSWTPM(t)
@@ -493,7 +493,7 @@ func TestCoordinatorAndWorker(t *testing.T) {
 		t.Fatal("no coordinator")
 	}
 	// The worker: no TPM path, only the socket. It gets as far as the radio.
-	code := AttestGate(GateOptions{Coordinator: gate, Adapter: 250, TPMPath: "/nonexistent/tpm"})
+	code := phonegate.AttestGate(phonegate.GateOptions{Coordinator: gate, Adapter: 250, TPMPath: "/nonexistent/tpm"})
 	if code != phonegate.ExitUnavailable {
 		t.Fatalf("worker exit %d, want %d (no adapter)", code, phonegate.ExitUnavailable)
 	}
@@ -543,7 +543,7 @@ func TestCoordinatorAndWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	refused := phonegate.NewGateService(svc.TPM, 0, hostKey, false)
-	if code := AttestGate(GateOptions{Coordinator: startTestGate(t, refused), Adapter: 250}); code != phonegate.ExitTampered {
+	if code := phonegate.AttestGate(phonegate.GateOptions{Coordinator: startTestGate(t, refused), Adapter: 250}); code != phonegate.ExitTampered {
 		t.Fatalf("worker exit %d for a replaced record, want %d", code, phonegate.ExitTampered)
 	}
 	if st, _ := refused.Status(); st.State != phonegate.GateRefused {

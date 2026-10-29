@@ -17,7 +17,7 @@ import (
 // The Debian side of the key provider (initramfs-tools, cryptsetup's
 // local-top/cryptroot). There systemd-cryptsetup does not run; a
 // keyscript= in crypttab does, and its stdout is the key. The keyscript
-// /lib/cryptsetup/scripts/tpm2-kira runs 'tpm2-kira unlock-key <volume>',
+// /lib/cryptsetup/scripts/tpm2-kira runs 'tpm2-kira-boot unlock-key <volume>',
 // which asks the same socket the same way systemd-cryptsetup would - from
 // an abstract address named /cryptsetup/<volume> - and writes the answer
 // to stdout. Without the socket (the 'once' mode of initramfs.conf, or

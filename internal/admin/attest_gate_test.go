@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/transport/ble"
 	"github.com/mrwiora/tpm2-kira/transport/frame"
 )
@@ -43,7 +44,7 @@ func (f *fakeAcceptor) Accept(_ ble.Advertisement, _ frame.Budget, timeout time.
 func gateHarness(timeout time.Duration, acc *fakeAcceptor, serve func(*frame.Conn) (*attest.AttestResult, error)) (*attest.AttestResult, error, string) {
 	var out bytes.Buffer
 	now := func() time.Time { return *acc.clock }
-	res, err := waitForReceipt(acc, ble.Advertisement{}, timeout, serve, &out, now)
+	res, err := phonegate.WaitForReceipt(acc, ble.Advertisement{}, timeout, serve, &out, now)
 	return res, err, out.String()
 }
 
@@ -55,7 +56,7 @@ func TestGateWaitsInRoundsUntilTimeout(t *testing.T) {
 	clock := time.Unix(0, 0)
 	acc := &fakeAcceptor{clock: &clock}
 	res, err, out := gateHarness(70*time.Second, acc, receiptServe)
-	if res != nil || !errors.Is(err, errNoPhoneReachable) {
+	if res != nil || !errors.Is(err, phonegate.ErrNoPhoneReachable) {
 		t.Fatalf("got %v, %v; want errNoPhoneReachable", res, err)
 	}
 	want := []time.Duration{30 * time.Second, 30 * time.Second, 10 * time.Second}
@@ -123,7 +124,7 @@ func TestGateAdapterFailureIsNotNoPhone(t *testing.T) {
 	clock := time.Unix(0, 0)
 	acc := &fakeAcceptor{clock: &clock, err: errors.New("hci0: adapter gone")}
 	_, err, _ := gateHarness(time.Minute, acc, receiptServe)
-	if err == nil || errors.Is(err, errNoPhoneReachable) {
+	if err == nil || errors.Is(err, phonegate.ErrNoPhoneReachable) {
 		t.Fatalf("adapter failure reported as %v", err)
 	}
 }

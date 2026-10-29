@@ -56,8 +56,9 @@ jobs:
           gh release download \
             --repo ${{ github.repository }} \
             --pattern "tpm2-kira-linux-amd64" \
+            --pattern "tpm2-kira-boot-linux-amd64" \
             --dir ./bin
-          chmod +x ./bin/tpm2-kira-linux-amd64
+          chmod +x ./bin/*-linux-amd64
           go version -m ./bin/tpm2-kira-linux-amd64 | head -3
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -65,4 +66,6 @@ jobs:
       # The binary keeps its symbol table (release.yml builds without -s),
       # so the scan sees the functions it holds, not just the modules.
       - name: Scan the binary
-        run: tools/vulncheck.py -mode binary ./bin/tpm2-kira-linux-amd64
+        run: |
+          tools/vulncheck.py -mode binary ./bin/tpm2-kira-linux-amd64
+          tools/vulncheck.py -mode binary ./bin/tpm2-kira-boot-linux-amd64

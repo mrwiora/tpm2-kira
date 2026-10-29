@@ -2,7 +2,7 @@
 // the parts it starts from the image's plan.
 package bootrun
 
-// The TOTP display at the passphrase prompt (tpm2-kira run).
+// The TOTP display at the passphrase prompt (tpm2-kira-boot run).
 //
 // tpm2-kira.service orders itself after systemd-pcrphase-initrd.service
 // (enter-initrd on PCR 11) and before systemd-pcrosseparator.service, and is
@@ -13,7 +13,7 @@ package bootrun
 // watches continues on its own. The separator then extends os-separator into
 // PCRs 0-7, 9, 12-14, after which the key's policy cannot be satisfied again
 // until the next boot; the key never left the TPM, and the display has
-// nothing left to show, so it exits. 'tpm2-kira cap' at initrd-switch-root
+// nothing left to show, so it exits. 'tpm2-kira-boot cap' at initrd-switch-root
 // read-locks the generation index on top of that.
 //
 // A slot that is enrolled with a phone is verified by that phone instead: a

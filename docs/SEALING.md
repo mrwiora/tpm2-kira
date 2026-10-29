@@ -12,7 +12,7 @@ PCRs 0–7, 9, 12, 13, 14. `tpm2-kira.service` is ordered between the two and
 is `Type=notify`: while it holds READY back, the PCRs still hold the sealed
 values, so it shows a fresh code every 30 seconds and asks whether it
 matches your authenticator. Enter continues to the passphrase, and so does
-the end of the hold (90 seconds by default, `tpm2-kira run --hold`), so a
+the end of the hold (90 seconds by default, `tpm2-kira-boot run --hold`), so a
 boot nobody watches goes on by itself. READY is sent then, the separator
 runs, and no code can be computed until the next boot.
 
@@ -30,9 +30,9 @@ the radio at the passphrase prompt. A phone that is in the middle of its
 answer when the hold runs out gets up to a minute more.
 
 The gate is two processes of the one `tpm2-kira` binary. The display is also
-its *coordinator* (`tpm2-kira run --gate`): it holds the TPM, issues the
+its *coordinator* (`tpm2-kira-boot run --gate`): it holds the TPM, issues the
 quotes and reads the phone's signed receipt. The *radio worker*
-(`tpm2-kira phone gate --coordinator`, in `tpm2-kira-attest.service`) talks
+(`tpm2-kira-boot gate --coordinator`, in `tpm2-kira-attest.service`) talks
 to the phone and has no TPM at all; it asks the coordinator over a socket in
 `/run/tpm2-kira`. What listens to the radio can therefore neither have a
 TOTP code computed nor make up a verdict.
@@ -43,7 +43,7 @@ satisfy the key's policy again — not root, not malware — until the next boot
 The key never leaves the TPM; the display holds nothing but the code it is
 showing, good for 30 seconds. `tpm2-kira reveal` on a running system reports the
 slot as *locked until the next boot*, which is the intended state, and
-`tpm2-kira cap` read-locks the generation index at `initrd-switch-root` on
+`tpm2-kira-boot cap` read-locks the generation index at `initrd-switch-root` on
 top of that. (The signing key is outside the lock: whoever can use it can
 approve a new policy — keep it on a YubiKey, or at least off the machine.)
 

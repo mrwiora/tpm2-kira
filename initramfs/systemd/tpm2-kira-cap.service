@@ -18,7 +18,7 @@ Type=oneshot
 RemainAfterExit=yes
 # Read-locks the generation indices: no code can be computed in the running
 # OS until the next reboot. tpm2-kira exits 0 by design; failures are shown.
-ExecStop=tpm2-kira cap
+ExecStop=tpm2-kira-boot cap
 StandardOutput=journal+console
 StandardError=journal+console
 

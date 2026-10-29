@@ -169,14 +169,14 @@ func newSWTPMSetupAt(t *testing.T, sock, name string) *swtpmSetup {
 	noise, _ := attest.GenerateNoiseKeypair(nil)
 	sel, _ := attest.NewPCRSelection(attest.AlgSHA256, []int{0, 2, 4, 7, 8, 9, 10, 11, 14})
 	s.blob = &nvslot.Attestation{
-		DeviceID:     randBytes(16),
+		DeviceID:     phonegate.RandBytes(16),
 		FriendlyName: name,
 		AKPublic:     pub,
 		AKPrivate:    priv,
 		AKName:       akName,
 		PCRAlg:       sel.Alg,
 		PCRSelection: sel.Indices,
-		Phone:        nvslot.PhoneAttestation{NoisePrivate: noise.Private, AdvKey: randBytes(32)},
+		Phone:        nvslot.PhoneAttestation{NoisePrivate: noise.Private, AdvKey: phonegate.RandBytes(32)},
 	}
 	s.be = &phonegate.TPMBackend{TPM: tpmDev, Blob: s.blob, SealIndex: nvslot.NVRAMSlotStart}
 	return s

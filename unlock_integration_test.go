@@ -77,7 +77,7 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 		t.Fatalf("luks mark: %v", err)
 	}
 
-	// tpm2-kira run without a TPM: nothing to show, the hold ends at once,
+	// tpm2-kira-boot run without a TPM: nothing to show, the hold ends at once,
 	// the key socket is served. The prompt goes to a socket the test answers.
 	sock := filepath.Join(dir, "unlock.sock")
 	console := filepath.Join(dir, "console.sock")
@@ -139,7 +139,7 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	// plan names the disk unlock and nothing else.
 	plan := filepath.Join(dir, "plan")
 	os.MkdirAll(filepath.Join(plan, "unlock"), 0o755)
-	run := exec.Command("./tpm2-kira", "run", "--plan", plan, "--tpm", filepath.Join(dir, "no-tpm"), "--hold", "0", "--unlock", sock)
+	run := exec.Command("./tpm2-kira-boot", "run", "--plan", plan, "--tpm", filepath.Join(dir, "no-tpm"), "--hold", "0", "--unlock", sock)
 	run.Env = append(os.Environ(), "TPM2_KIRA_CONSOLE="+console, "TPM2_KIRA_CONTROL_CONF="+conf, "TPM2_KIRA_CRYPTTAB="+crypttab)
 	var runOut bytes.Buffer
 	run.Stdout, run.Stderr = &runOut, &runOut
@@ -153,7 +153,7 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
-			t.Errorf("tpm2-kira run did not end on SIGINT within 5 s; killed. Its output:\n%s", runOut.String())
+			t.Errorf("tpm2-kira-boot run did not end on SIGINT within 5 s; killed. Its output:\n%s", runOut.String())
 			run.Process.Kill()
 			<-done
 		}
@@ -243,7 +243,7 @@ func TestRunStartsWhatThePlanNames(t *testing.T) {
 	plan := filepath.Join(dir, "plan")
 	os.MkdirAll(filepath.Join(plan, "unlock"), 0o755)
 	runIt := func(args ...string) string {
-		run := exec.Command("./tpm2-kira", append([]string{"run", "--tpm", filepath.Join(dir, "no-tpm"), "--hold", "0"}, args...)...)
+		run := exec.Command("./tpm2-kira-boot", append([]string{"run", "--tpm", filepath.Join(dir, "no-tpm"), "--hold", "0"}, args...)...)
 		run.Env = append(os.Environ(), "TPM2_KIRA_UNPRIVILEGED=1")
 		out, err := run.CombinedOutput()
 		if err != nil {

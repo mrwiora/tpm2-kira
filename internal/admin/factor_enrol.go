@@ -173,7 +173,7 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	fmt.Println("Open Marify on the phone and verify this machine: the verdict screen asks")
 	fmt.Println("to keep the phone salt (no code: after boot the boot key is locked). Continue")
 	fmt.Println("to keep it.")
-	code := runGateRadio(svc, GateOptions{TPMPath: o.TPMPath, Adapter: o.Adapter, Timeout: o.Timeout, AdapterWait: o.AdapterWait, Debug: o.Debug}, gateSteps(o.Debug), nil)
+	code := phonegate.RunGateRadio(svc, phonegate.GateOptions{TPMPath: o.TPMPath, Adapter: o.Adapter, Timeout: o.Timeout, AdapterWait: o.AdapterWait, Debug: o.Debug}, phonegate.GateSteps(o.Debug), nil)
 	defer svc.Forget()
 	if code != 0 || !svc.Returned() {
 		return nil, 0, fmt.Errorf("the phone did not return the phone salt (gate exit %d); nothing was enrolled. Check the phone's screen and run this again", code)

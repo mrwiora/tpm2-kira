@@ -2,6 +2,8 @@
 
 # Binary name
 BINARY_NAME=tpm2-kira
+# What the boot image carries (cmd/tpm2-kira-boot); the hooks put it in.
+BOOT_NAME=tpm2-kira-boot
 INSTALL_PATH=/usr/local/bin
 
 # Go parameters
@@ -38,12 +40,15 @@ LDFLAGS=-ldflags "-s -w -X main.Version=$(VERSION)"
 
 all: build
 
-## build: Build the binary (static, CGO_ENABLED=0)
+## build: Build both binaries (static, CGO_ENABLED=0)
 build:
-	@echo "Building $(BINARY_NAME) version $(VERSION)..."
-	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v
-	@$(GOCMD) version -m $(BINARY_NAME) | grep -q 'CGO_ENABLED=0' || \
-		{ echo "Error: $(BINARY_NAME) was built with cgo"; exit 1; }
+	@echo "Building $(BINARY_NAME) and $(BOOT_NAME) version $(VERSION)..."
+	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v .
+	$(GOBUILD) $(LDFLAGS) -o $(BOOT_NAME) -v ./cmd/$(BOOT_NAME)
+	@for b in $(BINARY_NAME) $(BOOT_NAME); do \
+		$(GOCMD) version -m $$b | grep -q 'CGO_ENABLED=0' || \
+			{ echo "Error: $$b was built with cgo"; exit 1; }; \
+	done
 
 ## build-static: Alias for build, which is always static
 build-static: build
@@ -55,20 +60,19 @@ build-optimized: build
 clean:
 	@echo "Cleaning..."
 	$(GOCLEAN)
-	rm -f $(BINARY_NAME)
+	rm -f $(BINARY_NAME) $(BOOT_NAME)
 	rm -rf build/
 
 ## install: Install binary to system
 install: build-optimized
-	@echo "Installing $(BINARY_NAME) to $(INSTALL_PATH)..."
-	sudo cp $(BINARY_NAME) $(INSTALL_PATH)/
-	sudo chmod 755 $(INSTALL_PATH)/$(BINARY_NAME)
+	@echo "Installing $(BINARY_NAME) and $(BOOT_NAME) to $(INSTALL_PATH)..."
+	sudo install -m755 $(BINARY_NAME) $(BOOT_NAME) $(INSTALL_PATH)/
 	@echo "Installation complete!"
 
 ## uninstall: Remove binary from system
 uninstall:
 	@echo "Uninstalling $(BINARY_NAME)..."
-	sudo rm -f $(INSTALL_PATH)/$(BINARY_NAME)
+	sudo rm -f $(INSTALL_PATH)/$(BINARY_NAME) $(INSTALL_PATH)/$(BOOT_NAME)
 	@echo "Uninstallation complete!"
 
 ## install-mkinitcpio: Install mkinitcpio hooks for early boot integration

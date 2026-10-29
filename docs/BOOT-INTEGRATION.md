@@ -10,10 +10,15 @@ enabled on the host, and each carries
 `ConditionPathExists=/etc/initrd-release`, so enabling one there by mistake
 does nothing.
 
+The image carries one binary, `/usr/bin/tpm2-kira-boot`: the code screen
+and the parts of the plan, the cap, the keyscript, the phone's radio worker
+and the SSH server's unprivileged half. `tpm2-kira`, the administration,
+stays on the installed system; the hooks run it to decide the plan.
+
 What goes in is the **boot plan**'s (`tpm2-kira initramfs plan`,
 `tpm2-kira help initramfs`): the disk unlock always, every other part only
 while something uses it, and what needs the TPM only with one. The image
-names its parts in `/etc/tpm2-kira/plan/`; `tpm2-kira run --plan` and the
+names its parts in `/etc/tpm2-kira/plan/`; `tpm2-kira-boot run --plan` and the
 Debian scripts start only those.
 
 | Unit | In the initramfs image | Does something when |
@@ -38,7 +43,7 @@ On Debian there are no units in the image: the initramfs-tools scripts start
 the display and, with the phone in the plan, the gate, and run `cap` when
 the initramfs is left and the codes are in the plan. The gate is split
 there too - `run --gate` holds the TPM and releases the display on the
-phone's verdict, `phone gate --coordinator` is the radio worker - but the
+phone's verdict, `gate --coordinator` is the radio worker - but the
 confinement above is the unit's: on Debian the radio worker runs as root,
 unconfined.
 
@@ -55,7 +60,7 @@ In `run` mode the display refreshes once per 30-second TOTP window, writing to
 the same console as the passphrase prompt. The prompt scrolls up as codes
 arrive; typing is unaffected, since the passphrase is not echoed anyway. The
 `init-bottom` script stops the process before `run-init` replaces the initramfs,
-so nothing is left holding it open, and then runs `tpm2-kira cap`.
+so nothing is left holding it open, and then runs `tpm2-kira-boot cap`.
 
 Edit the file and run `sudo update-initramfs -u` to apply a change.
 

@@ -7,7 +7,7 @@
 > [aSSH](../assh/README.md) (`github.com/tpm2-trust/assh`), a project of
 > its own that tpm2-kira uses as a library, from the git submodule `assh/`.
 
-The boot image can bring up a network of its own, and `tpm2-kira run` -
+The boot image can bring up a network of its own, and `tpm2-kira-boot run` -
 the process that holds the boot at the code screen - then also runs an SSH
 server. The SSH protocol runs in a separate process without privileges, and
 the host key is made in the TPM at every boot and certified by a
@@ -183,11 +183,11 @@ from the network holds nothing worth taking, the half that holds the TPM
 never parses a byte from the network.
 
 ```
-tpm2-kira run                              (root: TPM, disk key, code screen)
+tpm2-kira-boot run                              (root: TPM, disk key, code screen)
   │  has the TPM make this boot's host key, the SSH CA certify it; opens :PORT
   │  starts, handing over the listening socket and a control socket:
   ▼
-tpm2-kira ssh-child                     (uid 65534; own net/IPC/PID/mount/UTS namespaces;
+tpm2-kira-boot ssh-child                     (uid 65534; own net/IPC/PID/mount/UTS namespaces;
   │                                         no new privileges; Landlock: no file access)
   │  speaks SSH (golang.org/x/crypto/ssh), checks the login keys
   │  ── control socket ──▶ run:  "sign this key exchange"  ◀── signature
@@ -198,7 +198,7 @@ the session in run: the code screen, Enter, the password prompt
 
 `run` must not parse what arrives from the network before a login: it
 holds the TPM, the disk's key and the code screen. So the SSH protocol
-runs in `tpm2-kira ssh-child` - the same binary started again by `run`
+runs in `tpm2-kira-boot ssh-child` - the same binary started again by `run`
 (one binary, AGENTS.md) - which gives up everything it does not need
 before it reads a byte:
 
@@ -355,13 +355,13 @@ ordered after the hold.
 
 ```
 init-premount/tpm2-kira
-  ├── tpm2-kira run --ssh ...              (background, as on Arch)
+  ├── tpm2-kira-boot run --ssh ...              (background, as on Arch)
   └── the network, in the background: waits up to 180 s for the interface (MAC,
       name, or the first wired one), then udhcpc with the client identifier
       or ipconfig without one (DHCP), or ip (static);
       log /run/initramfs/tpm2-kira.log, device in /run/tpm2-kira/net-device
 local-top/cryptroot
-  └── keyscript=/lib/cryptsetup/scripts/tpm2-kira: 'tpm2-kira unlock-key' waits on
+  └── keyscript=/lib/cryptsetup/scripts/tpm2-kira: 'tpm2-kira-boot unlock-key' waits on
       run's socket - the hold is there, until the code is confirmed
 init-bottom/tpm2-kira
   └── SIGTERM to run (sessions told, 'ssh-child' ends; KILL after a second),
@@ -421,8 +421,8 @@ tpm2-kira control                       step 2, "Network and SSH at boot"
 tpm2-kira initramfs plan --buildroot DIR [--format mkinitcpio|initramfs-tools]
                            [--conf PATH] [--tpm PATH]
                                         what the hooks call (§2): a part that cannot be had stays out, and says why
-tpm2-kira ssh-child                  the SSH protocol, started by 'run --ssh' alone (§3)
-tpm2-kira run --ssh [--ssh-hold S] [--ssh-conf PATH]
+tpm2-kira-boot ssh-child                  the SSH protocol, started by 'run --ssh' alone (§3)
+tpm2-kira-boot run --ssh [--ssh-hold S] [--ssh-conf PATH]
                                         set by the image (§2): be the SSH server too, as the
                                         image's assh.conf says
 ```

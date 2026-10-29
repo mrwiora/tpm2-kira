@@ -356,9 +356,9 @@ func (m *appMachine) serve(c net.Conn, mode string, mtu int) {
 		infoMode, caps, budget := uint8(infoModeEnrol), uint32(0),
 			frame.Budget{MaxRecord: frame.MaxRecord, MaxBytes: 1 << 20, Deadline: 5 * time.Minute}
 		if mode == "attest" {
-			infoMode, caps, budget = infoModeAttest, attest.CapEventlog, frame.DefaultBudget
+			infoMode, caps, budget = phonegate.InfoModeAttest, attest.CapEventlog, frame.DefaultBudget
 		}
-		if _, err := c.Write(attestInfo(infoMode, caps)); err != nil {
+		if _, err := c.Write(phonegate.AttestInfo(infoMode, caps)); err != nil {
 			return "error: " + err.Error()
 		}
 		fc, err := frame.NewConn(&tcpLink{c: c, max: mtu - 3}, budget)

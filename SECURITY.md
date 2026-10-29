@@ -187,7 +187,7 @@ fresh code every 30 seconds until Enter or 90 seconds), the policy is still
 satisfiable, and the moment it releases the boot it exits. PCR extends are
 one-way: once the
 separator has run, no process in the booted system — root included — can
-satisfy the key's policy again until the next boot; `tpm2-kira cap` read-locks
+satisfy the key's policy again until the next boot; `tpm2-kira-boot cap` read-locks
 the generation index at `initrd-switch-root` on top of that. `tpm2-kira
 reveal` on the running system reports the slot as *locked until the next
 boot*. A runtime compromise can therefore neither read the key nor compute a

@@ -10,6 +10,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/attest"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 )
 
 // signatureSizes bounds what the keys really produce: the size check before
@@ -24,7 +25,7 @@ func TestSignatureSizesBoundRealSignatures(t *testing.T) {
 			t.Fatal(err)
 		}
 		for i := 0; i < 64; i++ {
-			approval, err := nvslot.SignApproval(key, randBytes(32), randBytes(32))
+			approval, err := nvslot.SignApproval(key, phonegate.RandBytes(32), phonegate.RandBytes(32))
 			if err != nil {
 				t.Fatal(err)
 			}

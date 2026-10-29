@@ -5,7 +5,8 @@ Where things are in the repository, and how the tests are run.
 ## Project Structure
 
 ```
-├── main.go, help.go         # The command line: routing and the help pages
+├── main.go, help.go         # tpm2-kira, the installed system's command line: routing and the help pages
+├── cmd/tpm2-kira-boot/      # tpm2-kira-boot, what the boot image carries: run, cap, unlock-key, gate, ssh-child
 ├── attest/                  # Phone attestation core: protocol, Noise, Verify(); no device access
 │   └── attesttest/          # Software TPM, in-memory pipe and simulated phone for tests
 ├── vaultproto/              # The contract with tpm2-kira-vault: REST messages, the release check

@@ -136,7 +136,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 			name = name[:64]
 		}
 		att = &nvslot.Attestation{
-			DeviceID: randBytes(attest.DeviceIDSize), FriendlyName: name,
+			DeviceID: phonegate.RandBytes(attest.DeviceIDSize), FriendlyName: name,
 			AKPublic: akPub, AKPrivate: akPriv, AKName: akName,
 			PCRAlg: sel.Alg, PCRSelection: sel.Indices,
 		}

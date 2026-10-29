@@ -502,7 +502,7 @@ func (p *BootPlan) WriteImage(buildroot, format string, out io.Writer) error {
 		// assh.conf, and the keys where it says: the paths of the image
 		// are the running system's.
 		assh := in.Config.Remote.SSH.Assh
-		if err := writeImageFile(buildroot, DefaultSSHConf, imageSSHConf(assh), 0o644); err != nil {
+		if err := writeImageFile(buildroot, sshscreen.DefaultConf, imageSSHConf(assh), 0o644); err != nil {
 			return err
 		}
 		if err := writeImageFile(buildroot, assh.AuthorizedKeys, imageKeys(in.Keys), 0o600); err != nil {

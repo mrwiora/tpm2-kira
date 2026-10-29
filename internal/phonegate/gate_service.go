@@ -9,7 +9,7 @@ package phonegate
 // The radio worker (tpm2-kira-attest.service) advertises, speaks the
 // protocol with the phone and parses whatever the radio delivers; its unit
 // gives it Bluetooth sockets and nothing else. The coordinator is the
-// process that already owns the console and the TPM at boot (tpm2-kira run):
+// process that already owns the console and the TPM at boot (tpm2-kira-boot run):
 // it checks the enrolment record, produces the quotes, and reads the phone's
 // receipt itself. The worker reaches it over a Unix socket (gate_ipc.go) and
 // can ask for exactly that.

@@ -691,6 +691,16 @@ the administration's. control.conf lines of settings that no longer exist
 are unknown keys like any other; they used to be refused with what had
 replaced them.
 
+Until then everything was one executable, `tpm2-kira`, and the boot image
+carried all of it - control's terminal UI, enrolment, PCR prediction -
+to run the code screen. The image carries `tpm2-kira-boot` now
+(cmd/tpm2-kira-boot), built from the boot's packages alone; `tpm2-kira`
+lost `run`, `cap`, `unlock-key` and `ssh-child`, and its `phone gate` has
+no `--coordinator` (the radio worker is `tpm2-kira-boot gate`). `run`
+became a supervisor that starts only the parts the image's plan names,
+which give each other what they need through a board, not by calling
+each other.
+
 ---
 
 ## Related records

@@ -10,14 +10,10 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/admin"
-	"github.com/mrwiora/tpm2-kira/internal/bootrun"
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
-	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
-	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
@@ -45,10 +41,6 @@ func fail(err error) {
 func requireRoot(command string, args []string) {
 	switch command {
 	case "version", "-v", "--version", "help", "-h", "--help", "pcrtips":
-		return
-	}
-	// The SSH server's unprivileged half: started by 'run' as nobody.
-	if command == "ssh-child" {
 		return
 	}
 	if os.Geteuid() == 0 || os.Getenv("TPM2_KIRA_UNPRIVILEGED") != "" {
@@ -125,38 +117,16 @@ func main() {
 		runReveal(commandArgs, *tpmPath, *debug)
 	case "reveal-plain":
 		runRevealPlain(commandArgs, *tpmPath, *debug)
-	case "run":
-		runRun(commandArgs, *tpmPath, *debug)
 	case "phone":
 		runPhone(commandArgs, *tpmPath, *debug)
 	case "vault":
 		runVault(commandArgs, *tpmPath, *debug)
 	case "initramfs":
 		runInitramfs(commandArgs, *tpmPath, *debug)
-	case "ssh-child":
-		if err := sshscreen.SSHChildCommand(); err != nil {
-			fmt.Fprintf(os.Stderr, "tpm2-kira ssh-child: %v\n", err)
-			os.Exit(1)
-		}
 	case "luks":
 		runLuks(commandArgs, *tpmPath, *debug)
-	case "unlock-key":
-		fs := flag.NewFlagSet("unlock-key", flag.ExitOnError)
-		socket := fs.String("socket", diskkey.DefaultUnlockSocket, "The key socket of 'tpm2-kira run --unlock'")
-		wait := fs.Duration("wait", 5*time.Second, "How long to wait for the socket to appear")
-		fs.Parse(commandArgs)
-		volume := fs.Arg(0)
-		if volume == "" {
-			volume = os.Getenv("CRYPTTAB_NAME")
-		}
-		if err := diskkey.UnlockKeyCommand(*socket, volume, *wait); err != nil {
-			fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
-			os.Exit(1) // a keyscript's exit status is what cryptroot reads
-		}
 	case "yubikey":
 		runYubiKey(commandArgs)
-	case "cap":
-		runCap(commandArgs, *tpmPath)
 	case "pcrtips":
 		if err := measure.PCRTips(); err != nil {
 			fail(err)
@@ -291,15 +261,6 @@ func runSetup(args []string, debugFlag bool) {
 
 	opts := admin.SetupOptions{UseYubiKey: yk.set, Serial: yk.serial, Slot: *slot, Local: *local, Debug: *debug}
 	if err := admin.Setup(opts); err != nil {
-		fail(err)
-	}
-}
-
-func runCap(args []string, tpmPath string) {
-	fs := flag.NewFlagSet("cap", flag.ExitOnError)
-	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	fs.Parse(args)
-	if err := totp.CapCommand(*tpm); err != nil {
 		fail(err)
 	}
 }
@@ -483,38 +444,6 @@ func runRevealPlain(args []string, tpmPath string, debugFlag bool) {
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
 	totp.RevealCommand(*tpm, scanIndex, *debug, true)
-}
-
-func runRun(args []string, tpmPath string, debugFlag bool) {
-	fs := flag.NewFlagSet("run", flag.ExitOnError)
-
-	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", nvramDefault(nvslot.NVRAMSlotStart), "TPM NVRAM index")
-	debug := fs.Bool("debug", debugFlag, "Enable debug output")
-	gate := fs.String("gate", "", "Also be the Bluetooth gate's coordinator on this socket: hold the TPM for 'phone gate --coordinator' and let the phone's verdict release the boot (set by the initrd unit)")
-	hold := fs.Uint("hold", uint(bootrun.HoldDefault/time.Second), "Seconds to wait for Enter after showing the code before the boot continues on its own (0: at once)")
-	unlock := fs.String("unlock", "", "Also answer systemd-cryptsetup's key requests on this socket (crypttab(5) AF_UNIX key files): the passphrase is asked at tpm2-kira's prompt once the code screen is confirmed. Under systemd the socket unit hands its socket over instead; Debian's boot script passes this")
-	ssh := fs.Bool("ssh", false, "Also be the SSH server: the codes are shown and confirmed in an SSH session, the console says where to log in (set by the image's drop-in from TPM2_KIRA_SSH)")
-	sshConf := fs.String("ssh-conf", admin.DefaultSSHConf, "With --ssh: aSSH's settings - the SSH CA, which certifies a host key made in the TPM for this boot (a temporary key, made in the TPM but not certified, is served when it does not), the address, the keys that may log in")
-	sshHold := fs.Uint("ssh-hold", 0, "With --ssh: seconds to wait for a confirmation, in place of --hold (0: until one comes)")
-	plan := fs.String("plan", "", "Start only the parts the boot image names in this directory (the codes, the phone's gate, the vault); without it, all it finds (set by the initrd unit: "+imageplan.Dir+")")
-
-	fs.Parse(args)
-
-	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
-	planned := imageplan.All
-	if *plan != "" {
-		planned = imageplan.Read(*plan)
-	}
-
-	var remote sshscreen.Options
-	if *ssh {
-		var err error
-		if remote, err = sshscreen.OptionsFrom(*sshConf, time.Duration(*sshHold)*time.Second); err != nil {
-			fmt.Fprintf(os.Stderr, "tpm2-kira: the SSH server is not started: %v - the code screen is at the console\n", err)
-		}
-	}
-	bootrun.Run(*tpm, scanIndex, time.Duration(*hold)*time.Second, *gate, *unlock, remote, planned, *debug)
 }
 
 func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
@@ -909,17 +838,15 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		// the boot settings in the TPM say debug (bootsettings.go).
 		adapter := fs.Int("adapter", -1, "Bluetooth adapter index (hciN); default: the first that comes up")
 		timeout := fs.Duration("timeout", 0, "Give up after this long (0 = as long as the code screen holds, or forever without one)")
-		adapterWait := fs.Duration("adapter-wait", admin.GateAdapterWait, "Wait this long for the adapter to appear")
-		coordinator := fs.String("coordinator", "", "Socket of the coordinator ('tpm2-kira run --gate') that holds the TPM; without it this process uses the TPM itself")
+		adapterWait := fs.Duration("adapter-wait", phonegate.GateAdapterWait, "Wait this long for the adapter to appear")
 		fs.Parse(args)
 		var slot uint32
 		if nvramExplicit(args) {
 			slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
 		}
-		os.Exit(admin.AttestGate(admin.GateOptions{
+		os.Exit(phonegate.AttestGate(phonegate.GateOptions{
 			TPMPath: *tpm, SealIndex: slot, Adapter: *adapter, Timeout: *timeout,
 			AdapterWait: *adapterWait, Debug: *debug || nvslot.BootDebug(*tpm),
-			Coordinator: *coordinator,
 		}))
 	case "status":
 		jsonOut := fs.Bool("json", false, "Output as JSON")
@@ -988,13 +915,10 @@ machine's screen (docs/PLAN-PHONE.md).
                   --verify-tpm warn|require|off    this machine's TPM genuine (EK certificate)?
                   --verify-phone warn|require|off  the phone's key in genuine secure hardware
                                                    (Android key attestation, Google roots)?
-  phone gate      Serve attestation requests until a phone returns a receipt;
-                  the boot is never held. Defaults from /etc/tpm2-kira/control.conf.
+  phone gate      Serve attestation requests by hand until a phone returns a
+                  receipt; this process uses the TPM itself. In the boot image
+                  the radio worker is 'tpm2-kira-boot gate', beside run.
                   --adapter N --timeout DUR --adapter-wait DUR
-                  --coordinator SOCKET  be the radio worker only: no TPM in
-                    this process; quotes and the reading of the receipt come
-                    from 'tpm2-kira run --gate SOCKET' (the initrd units).
-                    Without it (by hand) this process uses the TPM itself
   phone status    Show enrolled phones per slot and whether the blob is signed
                   by this machine's signing key (--json); exits 1 if not
   phone ekcert    Show whether the phone will verify this TPM as genuine
