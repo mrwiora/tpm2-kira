@@ -318,8 +318,9 @@ control stores, root-only; else asked).
 
 info
 Shows a slot's blob: the TOTP key's policy (PCRs, sources, generation), the
-phone attestation set up for it (attestation key, phones, release key for
-the phone salt), and whether the blob is signed by this machine's key.
+attestation set up for it - the phone at the machine, the vault over TLS
+(attestation key, phones, the vault, release key) - and whether the blob is
+signed by this machine's key.
 
   --json          Machine-readable
   --privkey PATH  The signing key the blobs are verified with (default: the

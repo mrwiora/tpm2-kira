@@ -1,5 +1,10 @@
 # The vault: the disk's key from this TPM and a vault (`tpm+vault`)
 
+The vault is remote attestation over TLS: before it releases its part of
+the disk's key, tpm2-kira-vault verifies a quote of this TPM against the
+slot's approved boot state. The code (at the console or over SSH) and the
+phone (at the machine) are the other two ways the boot is checked.
+
 > Arch and Debian. Experimental. The machine unlocks unattended when the
 > vault's checks pass, or once an operator approves the boot - on the
 > vault, or over the vault's operator REST interface, where the approval

@@ -3,7 +3,7 @@
 // record check, and the factor the phone releases for the phone salt.
 package phonegate
 
-// The gate's coordinator: the half of remote attestation that holds the TPM.
+// The gate's coordinator: the half of phone attestation that holds the TPM.
 //
 // Attestation over Bluetooth is done by two processes of this one binary.
 // The radio worker (tpm2-kira-attest.service) advertises, speaks the

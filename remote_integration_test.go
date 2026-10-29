@@ -121,7 +121,7 @@ func startRemoteBoot(t *testing.T) *remoteBoot {
 		stopTPM()
 	}
 	t.Cleanup(b.cleanup)
-	b.waitOutput(t, "Phone attestation over SSH")
+	b.waitOutput(t, "The code screen over SSH")
 	return b
 }
 

@@ -18,6 +18,11 @@ own prompt is asked there too. The console says where to log in, and
 Enter at the console continues there instead: a person at the machine is
 never held by a remote session.
 
+Over SSH, the code is what attests the boot: you compare it with your
+authenticator as at the console. The phone attests at the machine only
+(Bluetooth LE); remote attestation over the network is the vault's, over
+TLS ([VAULT.md](VAULT.md)).
+
 ```bash
 sudo tpm2-kira control      # step 2, "Network and SSH at boot": DHCP or static, proposed
                             # from /etc/systemd/network or /etc/network/interfaces;

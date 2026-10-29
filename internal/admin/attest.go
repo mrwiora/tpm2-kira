@@ -29,7 +29,8 @@ import (
 	"github.com/mrwiora/tpm2-kira/transport/frame"
 )
 
-// Remote attestation commands (PLAN-PHONE.md §12, PLAN-BLE.md).
+// Phone attestation commands: the phone at the machine, over Bluetooth LE
+// (PLAN-PHONE.md §12, PLAN-BLE.md).
 //
 // Attestation stands on its own: the phone verifies the boot and returns a
 // signed verdict, which the console shows. Releasing a factor (the phone

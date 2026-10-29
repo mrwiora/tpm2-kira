@@ -100,8 +100,8 @@ from each only what it uses: the boot image carries only those parts
 | Layer | The choice | Commands | In detail |
 |---|---|---|---|
 | **The slot** | a boot state your signing key approved; what everything below that needs the TPM stands on | `setup`, `slot add\|approve\|info\|list\|status\|delete\|restore` | [docs/SLOT.md](docs/SLOT.md) |
-| **Who checks the boot** | the code on the screen, compared with your authenticator - or a phone (Marify) that verifies a TPM quote, in its place | `reveal`, `phone …` | [docs/CODE.md](docs/CODE.md), [docs/PHONE.md](docs/PHONE.md) |
-| **Where the code screen is** | the console, always; SSH in the boot image, with the host key certified by an SSH CA in the TPM, when you turn it on | `control` (step 2) | [docs/SSH.md](docs/SSH.md) |
+| **Who checks the boot** | the code (TOTP), compared with your authenticator at the console or over SSH; a phone (Marify) at the machine, over Bluetooth LE, that verifies a TPM quote in the code's place; the vault, remote attestation over TLS, that verifies a TPM quote before it releases its part of the disk's key | `reveal`, `phone …`, `vault …` | [docs/CODE.md](docs/CODE.md), [docs/PHONE.md](docs/PHONE.md), [docs/VAULT.md](docs/VAULT.md) |
+| **Where the code screen is** | the console, always; SSH in the boot image, with the host key certified by an SSH CA in the TPM, when you turn it on - over SSH the code is what attests the boot | `control` (step 2) | [docs/SSH.md](docs/SSH.md) |
 | **The disk's key** | per LUKS keyslot, named by its token: cryptsetup's own passphrase (no token), `password+salt`, `password+phonesalt` (the phone keeps the salt), `tpm+vault` (nothing typed) | `luks …`, `phone salt …`, `vault …` | [docs/DISK-KEY.md](docs/DISK-KEY.md), [docs/VAULT.md](docs/VAULT.md) |
 
 ### The slot
@@ -113,18 +113,25 @@ an update the hooks run `slot approve`: the TPM's key stays, so nothing is
 enrolled again. Which PCRs to choose and why, the boot path's hardening,
 inspecting and deleting a slot: [docs/SLOT.md](docs/SLOT.md).
 
-### Who checks the boot: the code, or the phone
+### Who checks the boot: the code, the phone, the vault
 
-The code is a TOTP code the TPM computes only in the approved boot state,
-before the cap at switch-root: [docs/CODE.md](docs/CODE.md). The phone
-(experimental) verifies a TPM quote over Bluetooth LE instead and shows
-its verdict; the slot it attests shows no code any more, the fallback
-slot keeps its own: [docs/PHONE.md](docs/PHONE.md).
+- **The code** is a TOTP code the TPM computes only in the approved boot
+  state, before the cap at switch-root; you compare it with your
+  authenticator, at the console or over SSH: [docs/CODE.md](docs/CODE.md).
+- **The phone** (experimental) attests at the machine: it verifies a TPM
+  quote over Bluetooth LE and shows its verdict; the slot it attests shows
+  no code any more, the fallback slot keeps its own:
+  [docs/PHONE.md](docs/PHONE.md).
+- **The vault** (experimental) is remote attestation over TLS:
+  tpm2-kira-vault verifies a TPM quote of the slot's approved boot state
+  before it releases its part of the disk's key, so an unattended machine
+  unlocks only in that state: [docs/VAULT.md](docs/VAULT.md).
 
 ### Where the code screen is: the console, and SSH
 
 The boot image can bring up its own network, and `run` then also serves
-the code screen over SSH, with the disk's prompt in the session
+the code screen over SSH - the code is what attests the boot there; the
+phone attests at the machine only - with the disk's prompt in the session
 (experimental, off until set in `control`). The SSH server is
 [aSSH](assh/README.md)'s, a library inside `run`: its half that speaks SSH
 runs as nobody, without a key; the host key is made in the TPM at every

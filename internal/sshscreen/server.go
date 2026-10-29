@@ -430,7 +430,7 @@ func ConsoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int, remai
 	if port != 22 {
 		p = fmt.Sprintf(" -p %d", port)
 	}
-	fmt.Fprintf(&b, "%s Phone attestation over SSH:", screen.Tag(screen.TagYellow))
+	fmt.Fprintf(&b, "%s The code screen over SSH:", screen.Tag(screen.TagYellow))
 	if len(addrs) == 0 {
 		fmt.Fprintf(&b, " waiting for a network address (port %d) ...\n", port)
 	} else {

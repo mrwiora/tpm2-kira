@@ -346,7 +346,7 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 	sub = prefix + cont(false)
 	printPCRSources(sub, blob)
 
-	// ── Remote attestation (optional part of the blob) ───────────────
+	// ── Attestation (optional part of the blob): the phone, the vault ─
 	printAttestationTree(prefix, si)
 
 	// ── 7. PCR Digests (last section) ───────────────────────────────
@@ -480,16 +480,17 @@ func formatNVAttributes(nvPub *tpm2.TPMSNVPublic) string {
 	return result
 }
 
-// printAttestationTree renders the blob's remote-attestation part: who the
+// printAttestationTree renders the blob's attestation part: who the
 // machine is to its verifiers, which key signs its quotes, which PCRs are
-// quoted, and the methods by which a verifier reaches it.
+// quoted, and the methods by which a verifier reaches it - the phone at
+// the machine (Bluetooth LE), the vault over TLS.
 func printAttestationTree(prefix string, si *slotInfo) {
 	att := si.Blob.Payload.Attestation
 	if att == nil {
-		fmt.Printf("%s%sPhone attestation: not set up (tpm2-kira phone enrol)\n", prefix, branch(false))
+		fmt.Printf("%s%sAttestation: not set up (tpm2-kira phone enrol: the phone at the machine; tpm2-kira vault enrol: the vault over TLS)\n", prefix, branch(false))
 		return
 	}
-	fmt.Printf("%s%sPhone attestation\n", prefix, branch(false))
+	fmt.Printf("%s%sAttestation (the phone at the machine, the vault over TLS)\n", prefix, branch(false))
 	sub := prefix + cont(false)
 	fmt.Printf("%s%sMachine name: %s\n", sub, branch(false), untrusted.Quote(att.FriendlyName))
 	fmt.Printf("%s%sDevice ID: %x\n", sub, branch(false), att.DeviceID)
