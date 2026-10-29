@@ -58,6 +58,9 @@ build() {
     # directory (build/aur in a checkout) is not theirs, and Go would stamp
     # its HEAD into the binary. The version is main.Version.
     export GOFLAGS="-trimpath -mod=readonly -modcacherw -buildvcs=false"
+    # A go.work above build/aur (a development workspace) is not theirs
+    # either: the package builds the archive's sources, aSSH as pinned.
+    export GOWORK=off
 
     # tpm2-kira on the installed system; tpm2-kira-boot, what the boot image
     # carries, put in by the hook.

@@ -17,6 +17,9 @@ VERSION := $(shell dpkg-parsechangelog -SVersion)
 # calls sudo. Every dh_auto_* step is therefore stated explicitly.
 override_dh_auto_configure:
 
+# The package builds its own sources, aSSH as pinned: never a go.work around them.
+export GOWORK := off
+
 override_dh_auto_build:
 	go build -ldflags "-s -w -X main.Version=$(VERSION)" -o tpm2-kira .
 	go build -ldflags "-s -w -X main.Version=$(VERSION)" -o tpm2-kira-boot ./cmd/tpm2-kira-boot

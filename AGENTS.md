@@ -41,7 +41,9 @@ It may not carry what came before.
   own that other projects use too): the privilege-separated server
   (`assh/server`), the SSH CA in the TPM and the per-boot host keys it
   certifies (`assh/hostkey`). tpm2-kira uses it as a library (`replace`
-  in go.mod to the submodule; clone with `--recurse-submodules`) and
+  in go.mod to the submodule; clone with `--recurse-submodules`; in the
+  tpm2-trust workspace, `go.work` builds against `../assh` and `../pin
+  assh` moves the submodule - never edit inside `assh/` here) and
   keeps only what is its code screen's: sessions, prompts, the console,
   the CA's approval for the
   measure point. A change to the SSH protocol side or to how keys are held
