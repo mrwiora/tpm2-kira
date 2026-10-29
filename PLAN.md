@@ -346,7 +346,12 @@ flowchart LR
    the state directory, operators' `curl --cacert`, the commands, the
    threats), SECURITY-BACKGROUND (the pin is the root's), the READMEs,
    ARCHITECTURE; HISTORY.md (the pinned key alone, InsecureSkipVerify).
-6. [ ] SHA-1: the legacy and test notes (below).
+6. [x] SHA-1: the PCR bank's hash helpers (core/attest, vaultproto,
+   internal/measure) say the SHA-1 bank is legacy, used only where no
+   SHA-256 bank is extended (slot add --sha1), reproducing what the TPM
+   hashes; its display name is "legacy SHA-1" (messages, status, the
+   vault's selection); cmd_test says its SHA-1 is the test's subject.
+   TOTP's HMAC-SHA1 stays.
 7. [ ] tests: `make test-all`, the vault's tests, `tools/vmtest.py` (its
    vault steps place the root on the VMs).
 

@@ -425,11 +425,12 @@ func VaultUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug bo
 	return nil
 }
 
-// vaultSelectionString names a selection: "sha256:0,7,11".
+// vaultSelectionString names a selection: "sha256:0,7,11", or for the
+// legacy SHA-1 bank "sha1 (legacy):0,7".
 func vaultSelectionString(s vaultproto.Selection) string {
 	bank := "sha256"
 	if tpm2.TPMAlgID(s.Alg) == tpm2.TPMAlgSHA1 {
-		bank = "sha1"
+		bank = "sha1 (legacy)"
 	}
 	var parts []string
 	for _, i := range s.Indices {

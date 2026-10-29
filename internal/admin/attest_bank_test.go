@@ -40,7 +40,7 @@ func TestChooseAttestBank(t *testing.T) {
 		{"sealed with SHA-1 without --sha1", false, s1, true, false, 0, "phone enrol --sha1"},
 		{"sealed with SHA-1 without --sha1, TPM has both", false, s1, true, true, 0, "phone enrol --sha1"},
 		{"--sha1 against a SHA-256 seal", true, s256, true, true, 0, "drop --sha1"},
-		{"--sha1 on a TPM without SHA-1", true, none, false, true, 0, "no SHA-1 PCR bank"},
+		{"--sha1 on a TPM without SHA-1", true, none, false, true, 0, "no legacy SHA-1 PCR bank"},
 		{"no bank at all", false, none, false, false, 0, "no SHA-256 PCR bank"},
 	} {
 		got, err := chooseAttestBank(c.flag, c.sealed, bank(c.sha1, c.sha256))

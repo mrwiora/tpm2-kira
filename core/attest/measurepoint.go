@@ -19,7 +19,9 @@ import (
 // nvpcr-separator.
 var PCR11Phases = []string{"enter-initrd", "nvpcr-separator", "leave-initrd", "sysinit", "ready"}
 
-// bankHash returns the hash of a PCR bank.
+// bankHash returns the hash of a PCR bank. SHA-1 is the legacy bank, used
+// only where the TPM or the firmware extends no SHA-256 bank (slot add
+// --sha1): it reproduces what the TPM hashes; it chooses nothing.
 func bankHash(alg uint16) (func() hash.Hash, error) {
 	switch alg {
 	case AlgSHA1:

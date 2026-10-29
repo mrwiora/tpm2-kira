@@ -1551,7 +1551,8 @@ func TestPCRHashAlgoMethods(t *testing.T) {
 		t.Errorf("SHA256 TPMAlg() mismatch")
 	}
 
-	// SHA1
+	// SHA1: the legacy PCR bank (slot add --sha1). The SHA-1 here is the
+	// test's subject, not a choice of the code's.
 	sha1 := measure.PCRHashAlgoSHA1
 	if sha1.DigestSize() != 20 {
 		t.Errorf("SHA1 DigestSize() = %d, want 20", sha1.DigestSize())
@@ -1559,8 +1560,8 @@ func TestPCRHashAlgoMethods(t *testing.T) {
 	if sha1.String() != "sha1" {
 		t.Errorf("SHA1 String() = %q, want \"sha1\"", sha1.String())
 	}
-	if sha1.DisplayString() != "SHA-1" {
-		t.Errorf("SHA1 DisplayString() = %q, want \"SHA-1\"", sha1.DisplayString())
+	if sha1.DisplayString() != "legacy SHA-1" {
+		t.Errorf("SHA1 DisplayString() = %q, want \"legacy SHA-1\"", sha1.DisplayString())
 	}
 	if sha1.TPMAlg() != tpm2.TPMAlgSHA1 {
 		t.Errorf("SHA1 TPMAlg() mismatch")

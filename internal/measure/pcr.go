@@ -508,7 +508,7 @@ func (h PCRHashAlgo) String() string {
 func (h PCRHashAlgo) DisplayString() string {
 	switch h {
 	case PCRHashAlgoSHA1:
-		return "SHA-1"
+		return "legacy SHA-1"
 	default:
 		return "SHA-256"
 	}

@@ -150,6 +150,9 @@ func PCRStatus(expected, current []byte) string {
 	}
 }
 
+// NewHashFor is the hash of a PCR bank: SHA-256, or the legacy SHA-1 bank
+// where the TPM or the firmware extends no SHA-256 one (slot add --sha1).
+// It reproduces what the TPM hashes; it chooses nothing.
 func NewHashFor(algo PCRHashAlgo) hash.Hash {
 	if algo == PCRHashAlgoSHA1 {
 		return sha1.New()

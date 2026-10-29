@@ -213,6 +213,8 @@ func compositeDigest(vals []PCRValue) []byte {
 
 // ── selections ─────────────────────────────────────────────────────────────
 
+// digestSize is the size of a selection's PCR values. SHA-1 is the legacy
+// bank, taken only for a slot sealed to it (slot add --sha1).
 func (s Selection) digestSize() int {
 	switch tpm2.TPMAlgID(s.Alg) {
 	case tpm2.TPMAlgSHA256:
