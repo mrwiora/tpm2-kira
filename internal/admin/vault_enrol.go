@@ -124,6 +124,18 @@ func ensureAttestation(tpmDev transport.TPM, sealed *nvslot.SealedBlob, name str
 	return att, nil
 }
 
+// vaultName is the machine's name at the vault: the one given (--name),
+// else the attestation part's.
+func vaultName(given, attName string) string {
+	if given == "" {
+		return attName
+	}
+	if len(given) > 64 {
+		given = given[:64]
+	}
+	return given
+}
+
 // vaultEnrolKey hands the slot to the vault and returns the key of the
 // keyslot and the slot's number. The slot gets what it lacks - the
 // attestation part (device ID, attestation key), the release key - and,
@@ -242,7 +254,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	}
 	p := &sealed.Payload
 	req := vaultproto.EnrolRequest{
-		Token: o.Token, DeviceID: att.DeviceID, Name: att.FriendlyName,
+		Token: o.Token, DeviceID: att.DeviceID, Name: vaultName(o.Name, att.FriendlyName),
 		EKPublic: ekPub, EKCert: phonegate.ReadEKCert(tpmDev, att.EKAlg), AKPublic: att.AKPublic,
 		SigningPublic: p.SigningPublic, PolicyRef: p.PolicyRef,
 		GenerationIndexName: genName, Generation: p.Generation, Selection: sel,
@@ -393,7 +405,7 @@ func VaultUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug bo
 	}
 	id, url := att.DeviceID, att.Vault.URL
 	att.Vault = nvslot.VaultAttestation{}
-	if !att.Phone.Enabled() {
+	if !att.Phone.Enabled() && len(att.TPMSalt.Credential) == 0 {
 		att = nil // nothing else uses the attestation part
 	}
 	if err := writeAttestBlob(tpmDev, idx, att, priv); err != nil {

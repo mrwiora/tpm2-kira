@@ -131,6 +131,12 @@ tpm2_kira_net() {
 mkdir -p /run/initramfs
 case "$TPM2_KIRA_NET" in
 dhcp | static)
+    # The variable is read through efivarfs, which initramfs-tools does not
+    # mount (systemd does on Arch).
+    if [ -d /sys/firmware/efi/efivars ] && ! grep -qs ' /sys/firmware/efi/efivars efivarfs ' /proc/mounts; then
+        mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>>/run/initramfs/tpm2-kira.log ||
+            echo "tpm2-kira: efivarfs is not mounted: no machine-id" >>/run/initramfs/tpm2-kira.log
+    fi
     TPM2_KIRA_LOG=/run/initramfs/tpm2-kira.log /usr/bin/tpm2-kira-boot machine-id 2>>/run/initramfs/tpm2-kira.log
     ;;
 esac

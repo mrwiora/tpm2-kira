@@ -98,9 +98,13 @@ $plan
 PLAN
 
 # The TPM's drivers: built in on most kernels, but modules on some machines.
+# efivarfs with them, loaded by the image's init: the sealed machine-id is an
+# EFI variable, and Debian's kernel has efivarfs as a module its initramfs
+# neither loads nor mounts (the premount script mounts it).
 if [ -d "$DESTDIR/etc/tpm2-kira/plan/tpm" ]; then
     manual_add_modules tpm_tis
     manual_add_modules tpm_crb
+    force_load efivarfs
 fi
 [ -d "$DESTDIR/etc/tpm2-kira/plan/phone" ] && echo "tpm2-kira: Bluetooth: $nbt modules, $nfw firmware files"
 [ -n "$nnet" ] && echo "tpm2-kira: network drivers:$nnet"

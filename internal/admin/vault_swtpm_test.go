@@ -361,3 +361,56 @@ func TestVaultTypedPassword(t *testing.T) {
 		t.Fatal("password and released salt do not make the enrolled key")
 	}
 }
+
+// A slot with a TPM salt and a vault: the vault is told the name given
+// at its enrolment, and unenrolling the vault keeps the attestation part -
+// the TPM salt and the device ID stay.
+func TestVaultBesideATPMSalt(t *testing.T) {
+	sock := startSWTPM(t)
+	const slot = nvslot.NVRAMSlotStart
+	privPath, pubPath := signingKeyFiles(t)
+	if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+		t.Fatal(err)
+	}
+	old := terminalAsk
+	terminalAsk = func(string) ([]byte, error) { return []byte("hunter2"), nil }
+	defer func() { terminalAsk = old }()
+	if _, _, err := tpmSaltKey(FactorEnrolOptions{TPMPath: sock, SealIndex: slot, PrivKeyPath: privPath}); err != nil {
+		t.Fatalf("the TPM salt: %v", err)
+	}
+
+	tv := &testVault{token: "tok-n", nonces: map[string][]byte{}}
+	srv := httptest.NewTLSServer(tv)
+	defer srv.Close()
+	if _, _, err := vaultEnrolKey(VaultEnrolOptions{TPMPath: sock, SealIndex: slot, URL: srv.URL, Name: "box",
+		Pin: vaultproto.PinOf(srv.Certificate().RawSubjectPublicKeyInfo), Token: "tok-n", PrivKeyPath: privPath}); err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+	if tv.enrol.Name != "box" {
+		t.Fatalf("the vault was told the name %q, not the one given", tv.enrol.Name)
+	}
+	tpmDev, err := transport.OpenTPM(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sb, err := phonegate.ReadSlot(tpmDev, slot)
+	tpmDev.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sb.Payload.Attestation.DeviceID
+
+	if err := VaultUnenrol(sock, slot, privPath, false); err != nil {
+		t.Fatal(err)
+	}
+	tpmDev, _ = transport.OpenTPM(sock)
+	defer tpmDev.Close()
+	_, sb, err = phonegate.ReadSlot(tpmDev, slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	att := sb.Payload.Attestation
+	if att == nil || att.Vault.Enabled() || len(att.TPMSalt.Credential) == 0 || !bytes.Equal(att.DeviceID, id) {
+		t.Fatalf("after the vault's unenrol: %+v", att)
+	}
+}
