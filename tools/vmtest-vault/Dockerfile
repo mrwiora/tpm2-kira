@@ -5,5 +5,5 @@ FROM archlinux:latest
 RUN pacman -Sy --noconfirm --needed swtpm && pacman -Scc --noconfirm
 COPY tpm2-kira-vault /usr/bin/tpm2-kira-vault
 COPY entrypoint.sh /entrypoint.sh
-EXPOSE 8443
+EXPOSE 8443 8444
 ENTRYPOINT ["/entrypoint.sh"]

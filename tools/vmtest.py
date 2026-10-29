@@ -46,7 +46,11 @@ What it does, each step a check in the report:
      token it made; the image rebuilt with the vault; a boot that nobody
      touches, unlocked by the vault's release to the TPM's quote; a boot
      with the device revoked on the vault, where the password+salt keyslot
-     is the fallback, typed over SSH
+     is the fallback, typed over SSH; the keyslot enrolled again with
+     --pepper, and a boot that waits for an operator: approved first with a
+     wrong pepper (refused by the machine's pepper check, a new approval
+     asked), then with the right one, over the operator interface (curl,
+     the vault's key pinned) - the pepper travels wrapped for the TPM
   9. a slot's life: approve, add slot 2, delete it whole
  10. removal: control switches SSH off and asks before it removes the SSH
      CA (No keeps it); slot delete --yes takes everything of tpm2-kira -
@@ -219,8 +223,8 @@ class Vault:
 
     NAME = "tpm2-kira-vmtest-vault"
 
-    def __init__(self, src, url, port, run_dir):
-        self.src, self.url, self.port = src, url, port
+    def __init__(self, src, url, port, op_port, run_dir):
+        self.src, self.url, self.port, self.op_port = src, url, port, op_port
         self.dir = os.path.join(run_dir, "vault")
         os.makedirs(self.dir, exist_ok=True)
         self.lock = threading.Lock()
@@ -244,7 +248,9 @@ class Vault:
         # container is the host's to get right, and is not always.
         self._sh(["docker", "build", "--network", "host", "-q", "-t", self.NAME, ctx])
         self._sh(["docker", "rm", "-f", self.NAME], check=False)
-        self._sh(["docker", "run", "-d", "--name", self.NAME, "-p", f"{self.port}:8443", "-e", f"VAULT_URL={self.url}", self.NAME])
+        # The operator interface only on this machine's loopback.
+        self._sh(["docker", "run", "-d", "--name", self.NAME, "-p", f"{self.port}:8443", "-p", f"127.0.0.1:{self.op_port}:8444",
+                  "-e", f"VAULT_URL={self.url}", self.NAME])
         deadline = time.time() + 60
         while time.time() < deadline:
             if "serving " in self._sh(["docker", "logs", self.NAME], check=False):
@@ -252,6 +258,32 @@ class Vault:
             time.sleep(1)
         else:
             raise Fail("the vault does not serve:\n" + self._sh(["docker", "logs", self.NAME], check=False)[-800:])
+        out = self.admin("operator", "add", "vmtest")
+        tok = re.search(r"token \(shown this once\):\s+(\S+)", out)
+        pin = re.search(r"--pinnedpubkey (\S+)", out)
+        if not tok or not pin:
+            raise Fail("operator add: " + out[-400:])
+        self.op_token, self.op_pin = tok.group(1), pin.group(1)
+
+    def approve(self, request_id, pepper):
+        """Approves a request with a pepper over the operator interface,
+        as an operator does: curl, the vault's key pinned."""
+        p = subprocess.run(["curl", "-sS", "-k", "--pinnedpubkey", self.op_pin, "-H", "Authorization: Bearer " + self.op_token,
+                            "-H", "Content-Type: application/json", "-X", "POST", "--data-binary", json.dumps({"pepper": pepper}),
+                            "-w", "\n%{http_code}", f"https://127.0.0.1:{self.op_port}/v1/requests/{request_id}/approve"],
+                           capture_output=True, text=True)
+        body, _, code = p.stdout.rpartition("\n")
+        return code.strip(), body + p.stderr
+
+    def pending(self, name, timeout):
+        """The ID of the device's request waiting for an operator."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            m = re.search(r"^(\S+)\s+\S+\s+" + re.escape(name) + r"\s+pending\s", self.admin("requests"), re.M)
+            if m:
+                return m.group(1)
+            time.sleep(2)
+        return None
 
     def admin(self, *args):
         with self.lock:
@@ -588,7 +620,8 @@ class Machine:
         s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --mode tpm+vault --url {url} --pin {pin} --token {token} --name {self.name}", "luks-enrol-vault")
         try:
             s.expect(r"to authorise: ?$", 300); s.send(self.luks_pass + "\n")
-            s.expect(r"keyslot (\d+) added: tpm2-kira, tpm\+vault", 300)
+            _, m = s.expect(r"keyslot (\d+) added: tpm2-kira, tpm\+vault", 300)
+            self.vault_keyslot = m.group(1)
             s.wait_end(120)
             self.check("luks enrol --mode tpm+vault: the vault knows the device, a keyslot is added", True)
         except Fail as e:
@@ -646,6 +679,83 @@ class Machine:
         rc, out = self.run(log + " 2>&1", save="boot-revoked-tpm2-kira.log")
         self.check("revoked: the vault refused, the key was answered from the typed keyslot", "the device is revoked" in out and "unlock: answered for" in out, out[-600:])
         vault.admin("device", "unrevoke", self.name)
+
+    PEPPER = "vmtest pepper 7f3a"
+
+    def vault_pepper(self, vault):
+        """The keyslot enrolled again with an operator's pepper: a boot
+        waits for an approval; a wrong pepper is caught by the slot's pepper
+        check and a new approval asked; the right one unlocks. The pepper
+        reaches the machine wrapped for its TPM, opened through the slot's
+        approval like R."""
+        self.log.head("the vault with an operator's pepper")
+        rc, out = self.run("tpm2-kira vault unenrol --nvram 1 2>&1", save="vault-unenrol.log")
+        m = re.search(r"tpm2-kira-vault device revoke ([0-9a-f]+)", out)
+        if not self.check("vault unenrol: the slot's vault method is gone", m is not None, out[-400:]):
+            raise Fail("vault unenrol")
+        device = m.group(1)
+        s = self.session(f"sudo tpm2-kira luks remove {self.luks_dev} --keyslot {self.vault_keyslot}", "luks-remove-vault")
+        try:
+            s.expect(r"to authorise: ?$", 120); s.send(self.luks_pass + "\n")
+            s.wait_end(120)
+        finally:
+            s.close()
+        out = vault.admin("token", "create", "--name", self.name, "--replace", device)
+        self.log.save("vault-token-pepper.log", out)
+        m = re.search(r"--url (\S+) --pin (\S+) --token (\S+)", out)
+        if not self.check("the vault makes a token that replaces the device", m is not None, out[-400:]):
+            raise Fail("no token")
+        url, pin, token = m.groups()
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --mode tpm+vault --pepper --url {url} --pin {pin} --token {token} --name {self.name}", "luks-enrol-vault-pepper")
+        try:
+            s.expect(r"Pepper \(the operator gives it with every approval on the vault\): ?$", 300); s.send(self.PEPPER + "\n")
+            s.expect(r"The same pepper again: ?$", 60); s.send(self.PEPPER + "\n")
+            s.expect(r"to authorise: ?$", 300); s.send(self.luks_pass + "\n")
+            _, m = s.expect(r"keyslot (\d+) added: tpm2-kira, tpm\+vault", 300)
+            self.vault_keyslot = m.group(1)
+            text = s.wait_end(120)
+            self.check("luks enrol --pepper: a keyslot that waits for an operator", "approves it on the vault with the pepper" in text, text[-400:])
+        except Fail as e:
+            self.check("luks enrol --mode tpm+vault --pepper", False, str(e))
+            raise
+        finally:
+            s.close()
+        out = vault.admin("device", "show", self.name)
+        self.check("the vault's device needs a pepper and waits for approvals", "pepper:          yes" in out and "approve" in out, out[-400:])
+        self.rebuild()
+
+        self.log.head("a boot approved with a wrong pepper, then the right one")
+        self.run("systemctl reboot")
+        self.wait_port(22, False, 120)
+        rid = vault.pending(self.name, 300)
+        if not self.check("the boot asks the vault and waits for an operator", rid is not None):
+            raise Fail("no pending request")
+        code, body = vault.approve(rid, "not the pepper")
+        self.check("an operator approves with a wrong pepper", code == "200", f"{code} {body[-300:]}")
+        rid2 = None
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            rid2 = vault.pending(self.name, 10)
+            if rid2 and rid2 != rid:
+                break
+            rid2 = None
+        if not self.check("the machine refuses the wrong pepper and asks for a new approval", rid2 is not None):
+            raise Fail("no second request")
+        code, body = vault.approve(rid2, self.PEPPER)
+        self.check("an operator approves with the pepper", code == "200", f"{code} {body[-300:]}")
+        up = self.wait_port(22, True, 420)
+        if not self.check("the pepper's boot: the system comes up with nobody at the console", up):
+            raise Fail("the pepper's boot did not come up")
+        time.sleep(5)
+        log = ("cat /run/initramfs/tpm2-kira.log" if self.distro == "debian" else
+               "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service")
+        rc, out = self.run(log + " 2>&1", save="boot-vault-pepper-tpm2-kira.log")
+        self.check("the wrong pepper did not fit the slot's pepper check", "does not fit this keyslot" in out, out[-600:])
+        self.check("with the right pepper the key was made and answered", "released; the key is made" in out and "unlock: answered for" in out, out[-600:])
+        out = vault.admin("audit")
+        self.log.save("vault-audit-pepper.log", out)
+        self.check("the vault's audit: released with a pepper, the pepper itself nowhere",
+                   "with a pepper" in out and self.PEPPER not in out and "not the pepper" not in out, out[-600:])
 
     def slot_life(self):
         self.log.head("a slot's life")
@@ -745,6 +855,7 @@ class Machine:
                 self.cycle(n)
             if vault:
                 self.vault(vault)
+                self.vault_pepper(vault)
             self.slot_life()
             self.removal()
         except Fail as e:
@@ -823,7 +934,7 @@ def main():
     if not args.no_vault:
         vc = cfg["vault"] if cfg.has_section("vault") else {}
         vault = Vault(os.path.abspath(os.path.join(REPO, vc.get("src", "../tpm2-kira-vault"))),
-                      vc.get("url", "https://172.17.2.174"), int(vc.get("port", "443")), run_dir)
+                      vc.get("url", "https://172.17.2.174"), int(vc.get("port", "443")), int(vc.get("operator_port", "8444")), run_dir)
         try:
             vault.start()
         except Fail as e:
