@@ -87,10 +87,15 @@ type EnrolRequest struct {
 	Remote Wrapped `json:"remote"` // R, wrapped for EK and the slot's release key
 	Label  string  `json:"label"`  // the keyslot's label, for the operator
 
+	// ReleaseKeyPublic is the TPMT_PUBLIC of the slot's release key, the
+	// key R is wrapped for. The vault checks it is the slot's
+	// (attest.ReleaseKeyName) and wraps a pepper for its Name.
+	ReleaseKeyPublic []byte `json:"release_key_public"`
+
 	// Pepper says the key is derived with an operator's pepper as well:
 	// the vault then releases only on an approval that carries it, and
-	// passes it on once (ReleaseResponse.Pepper). The pepper itself is
-	// never sent at enrolment; the vault never keeps it.
+	// passes it on once, wrapped for the TPM (ReleaseResponse.Pepper). The
+	// pepper itself is never sent at enrolment; the vault never keeps it.
 	Pepper bool `json:"pepper,omitempty"`
 }
 
@@ -160,15 +165,15 @@ const (
 )
 
 // ReleaseResponse is the vault's answer. Released carries Remote, and
-// Pepper - the operator's, as given with the approval, once - for a
-// device enrolled with one; Pending says when to ask again; Denied says
-// why, for the console and the log.
+// Pepper - the operator's, as given with the approval, once, wrapped for
+// the machine's TPM - for a device enrolled with one; Pending says when to
+// ask again; Denied says why, for the console and the log.
 type ReleaseResponse struct {
-	Status     string   `json:"status"`
-	Remote     *Wrapped `json:"remote,omitempty"`
-	Pepper     []byte   `json:"pepper,omitempty"`
-	RetryAfter int      `json:"retry_after,omitempty"`
-	Reason     string   `json:"reason,omitempty"`
+	Status     string         `json:"status"`
+	Remote     *Wrapped       `json:"remote,omitempty"`
+	Pepper     *WrappedPepper `json:"pepper,omitempty"`
+	RetryAfter int            `json:"retry_after,omitempty"`
+	Reason     string         `json:"reason,omitempty"`
 }
 
 // ErrorResponse is the body of every non-2xx answer.

@@ -268,6 +268,18 @@ socket, and the release key's policy is the slot's approval plus the
 command code, with no branch the phone can open: only a boot the
 machine's signing key approved at seal or reseal gets the factor.
 
+### The vault's release carried the pepper in the clear
+
+Until 2026-10-29 `ReleaseResponse.Pepper` was the operator's pepper as
+bytes, protected only by the TLS connection to the vault (its key pinned):
+whatever terminated or broke that connection read it. R was wrapped for
+the TPM from the start - the machine wraps it itself at enrolment - but
+the pepper exists only from the approval on, and the vault had no release
+key Name to wrap for. The enrolment now carries the slot's release key
+(checked against the slot's policy, fixedTPM), and the release carries
+the pepper wrapped like R (`vaultproto.WrappedPepper`). Pepper devices
+enrolled before must enrol again.
+
 ## Attestation
 
 ### attest.conf had a mode: TPM2_KIRA_ATTEST=off|lazy

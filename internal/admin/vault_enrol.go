@@ -202,9 +202,10 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		EKPublic: ekPub, EKCert: phonegate.ReadEKCert(tpmDev, att.EKAlg), AKPublic: att.AKPublic,
 		SigningPublic: p.SigningPublic, PolicyRef: p.PolicyRef,
 		GenerationIndexName: genName, Generation: p.Generation, Selection: sel,
-		Remote: vaultproto.Wrapped{Credential: wRemote.Credential, EncryptedSecret: wRemote.EncryptedSecret},
-		Label:  label,
-		Pepper: pepper != nil,
+		Remote:           vaultproto.Wrapped{Credential: wRemote.Credential, EncryptedSecret: wRemote.EncryptedSecret},
+		Label:            label,
+		Pepper:           pepper != nil,
+		ReleaseKeyPublic: att.ReleaseKeyPublic,
 	}
 	if err := req.Check(); err != nil {
 		return nil, 0, err

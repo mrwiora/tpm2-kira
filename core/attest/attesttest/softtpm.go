@@ -266,6 +266,41 @@ func (s *SoftTPM) EKPublic() ([]byte, []byte, error) { return s.EKPub, nil, nil 
 
 // ActivateCredential reverses tpm2.CreateCredential with the EK private key.
 func (s *SoftTPM) ActivateCredential(idObject, encSecret []byte) ([]byte, error) {
+	return s.ActivateCredentialFor(s.AKName, idObject, encSecret)
+}
+
+// ReleaseKey makes a release key for the slot of signingPublic and
+// policyRef, as the machine's TPM does at enrolment: its TPMT_PUBLIC and
+// its Name, for ActivateCredentialFor.
+func (s *SoftTPM) ReleaseKey(signingPublic, policyRef []byte) (public, name []byte, err error) {
+	signing, err := tpm2.Unmarshal[tpm2.TPMTPublic](signingPublic)
+	if err != nil {
+		return nil, nil, err
+	}
+	signingName, err := tpm2.ObjectName(signing)
+	if err != nil {
+		return nil, nil, err
+	}
+	k, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	pt := k.PublicKey().Bytes()
+	tmpl := attest.ReleaseKeyTemplate(attest.ReleaseKeyPolicy(attest.PolicyAuthorizeDigest(signingName.Buffer, policyRef)))
+	tmpl.Unique = tpm2.NewTPMUPublicID(tpm2.TPMAlgECC, &tpm2.TPMSECCPoint{
+		X: tpm2.TPM2BECCParameter{Buffer: pt[1:33]},
+		Y: tpm2.TPM2BECCParameter{Buffer: pt[33:]},
+	})
+	n, err := tpm2.ObjectName(&tmpl)
+	if err != nil {
+		return nil, nil, err
+	}
+	return tpm2.Marshal(tmpl), n.Buffer, nil
+}
+
+// ActivateCredentialFor is ActivateCredential with the object named
+// objectName loaded instead of the AK: a release key.
+func (s *SoftTPM) ActivateCredentialFor(objectName, idObject, encSecret []byte) ([]byte, error) {
 	pt, err := tpm2.Unmarshal[tpm2.TPMSECCPoint](encSecret)
 	if err != nil {
 		return nil, err
@@ -291,11 +326,11 @@ func (s *SoftTPM) ActivateCredential(idObject, encSecret []byte) ([]byte, error)
 	integrity, encIdentity := idObject[2:2+hl], idObject[2+hl:]
 	mac := hmac.New(sha256.New, tpm2.KDFa(crypto.SHA256, seed, "INTEGRITY", nil, nil, 256))
 	mac.Write(encIdentity)
-	mac.Write(s.AKName)
+	mac.Write(objectName)
 	if !hmac.Equal(mac.Sum(nil), integrity) {
 		return nil, errors.New("TPM_RC_INTEGRITY: credential not for this AK/EK")
 	}
-	block, err := aes.NewCipher(tpm2.KDFa(crypto.SHA256, seed, "STORAGE", s.AKName, nil, 128))
+	block, err := aes.NewCipher(tpm2.KDFa(crypto.SHA256, seed, "STORAGE", objectName, nil, 128))
 	if err != nil {
 		return nil, err
 	}

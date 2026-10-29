@@ -66,7 +66,16 @@ func (r *EnrolRequest) Check() error {
 	if len(r.Remote.Credential) == 0 || len(r.Remote.EncryptedSecret) == 0 {
 		return errors.New("no wrapped remote part")
 	}
+	if _, err := r.ReleaseKeyName(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// ReleaseKeyName is the Name of the request's release key, once it is
+// checked to be the slot's.
+func (r *EnrolRequest) ReleaseKeyName() ([]byte, error) {
+	return attest.ReleaseKeyName(r.ReleaseKeyPublic, r.SigningPublic, r.PolicyRef)
 }
 
 // Checked is what a verified release request says about the boot.

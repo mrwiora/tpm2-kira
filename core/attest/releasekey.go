@@ -1,8 +1,12 @@
 package attest
 
 import (
+	"bytes"
+	"crypto/ecdh"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
+	"fmt"
 
 	"github.com/google/go-tpm/tpm2"
 )
@@ -71,4 +75,47 @@ func ReleaseKeyTemplate(authPolicy []byte) tpm2.TPMTPublic {
 			Y: tpm2.TPM2BECCParameter{Buffer: make([]byte, 32)},
 		}),
 	}
+}
+
+// ReleaseKeyName checks a release key's public area against the slot it
+// was made for - signingPublic (TPMT_PUBLIC of the slot's signing key) and
+// policyRef - and returns its Name. The area must be ReleaseKeyTemplate
+// under ReleaseKeyPolicy of the slot's policy, byte for byte but for its
+// public point: so the key is usable only through the slot's approval, and
+// is fixedTPM, which no key loaded or imported from outside a TPM can be.
+// A credential made for this Name then opens only in the machine's TPM, in
+// a boot the slot's signing key approved.
+func ReleaseKeyName(public, signingPublic, policyRef []byte) ([]byte, error) {
+	pub, err := tpm2.Unmarshal[tpm2.TPMTPublic](public)
+	if err != nil {
+		return nil, fmt.Errorf("the release key's public area does not parse: %w", err)
+	}
+	signing, err := tpm2.Unmarshal[tpm2.TPMTPublic](signingPublic)
+	if err != nil {
+		return nil, fmt.Errorf("the signing key's public area does not parse: %w", err)
+	}
+	signingName, err := tpm2.ObjectName(signing)
+	if err != nil {
+		return nil, err
+	}
+	point, err := pub.Unique.ECC()
+	if err != nil {
+		return nil, errors.New("the release key is not an ECC key")
+	}
+	if len(point.X.Buffer) != 32 || len(point.Y.Buffer) != 32 {
+		return nil, errors.New("the release key's point is not a P-256 point")
+	}
+	if _, err := ecdh.P256().NewPublicKey(append(append([]byte{0x04}, point.X.Buffer...), point.Y.Buffer...)); err != nil {
+		return nil, fmt.Errorf("the release key's point: %w", err)
+	}
+	want := ReleaseKeyTemplate(ReleaseKeyPolicy(PolicyAuthorizeDigest(signingName.Buffer, policyRef)))
+	want.Unique = pub.Unique
+	if !bytes.Equal(tpm2.Marshal(want), public) {
+		return nil, errors.New("the release key is not the slot's: its attributes or its policy differ")
+	}
+	name, err := tpm2.ObjectName(pub)
+	if err != nil {
+		return nil, err
+	}
+	return name.Buffer, nil
 }

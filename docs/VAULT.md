@@ -54,7 +54,7 @@ and the label are the contract with every enrolled keyslot.
 |---|---|---|
 | **L**, local, 32 bytes | in the slot's blob in the machine's TPM NV (attestation method 2), wrapped with `TPM2_MakeCredential` for the TPM's EK and the slot's release key | this TPM, in a boot state the slot's signing key approved, before `cap` |
 | **R**, remote, 32 bytes | only in the vault, wrapped the same way, encrypted there under a key sealed in the **vault's** TPM | the vault releases it (§5); then only this machine's TPM opens it, under the same policy as L |
-| **P**, pepper (optional, per keyslot) | with an operator; typed once on the machine at enrolment, never sent then, never stored by the vault | given with each approval over the operator interface; the vault passes it on once (§12) |
+| **P**, pepper (optional, per keyslot) | with an operator; typed once on the machine at enrolment, never sent then, never stored by the vault | given with each approval over the operator interface; the vault passes it on once, wrapped for the machine's TPM like R (§12) |
 
 R is drawn on the machine at enrolment; the vault never sees it in the
 clear. With a pepper, the slot's blob keeps an HMAC of the key (the
@@ -212,8 +212,13 @@ sequenceDiagram
 - **L first.** When the TPM does not open the local part, this boot state
   is not one the signing key approved, and the vault is not asked.
 - **With a pepper.** The keyslot's key needs the pepper the approval
-  carries; one that does not fit the slot's pepper check is never handed
-  to cryptsetup: `run` says so and asks the vault again, for a new
+  carries. The release brings it wrapped like R: a fresh key K made for
+  the TPM's EK and the slot's release key, and the pepper under K
+  (AES-256-GCM, the device ID bound in); the TPM opens K with a second
+  ActivateCredential through the slot's approval, so the pepper opens only
+  where R opens, and does not rely on the connection to the vault. A
+  pepper that does not fit the slot's pepper check is never handed to
+  cryptsetup: `run` says so and asks the vault again, for a new
   approval, while the code screen holds. A release without a pepper for
   such a keyslot, or with one for a keyslot without, is refused.
 - **The network coming up.** A vault not reachable yet is tried again each
@@ -390,10 +395,10 @@ JSON over HTTPS, `[]byte` as base64 (`core/vaultproto/proto.go`):
 
 | Path | Request | Answer |
 |---|---|---|
-| `POST /v1/enrol` | `EnrolRequest`: token, device ID, name, EK, EK certificate, AK, signing key, policyRef, generation index Name, generation, selection, wrapped R, label, whether the key needs a pepper (never the pepper) | `EnrolChallenge`: enrol ID, a credential for (EK, AK Name) |
+| `POST /v1/enrol` | `EnrolRequest`: token, device ID, name, EK, EK certificate, AK, signing key, policyRef, generation index Name, generation, selection, wrapped R, label, whether the key needs a pepper (never the pepper), the slot's release key (TPMT_PUBLIC; the vault checks it is made under the slot's policy and fixedTPM, and keeps its Name) | `EnrolChallenge`: enrol ID, a credential for (EK, AK Name) |
 | `POST /v1/enrol/confirm` | `EnrolConfirm`: enrol ID, the opened secret | `EnrolResult`: device ID, mode |
 | `POST /v1/challenge` | `ChallengeRequest`: device ID | `ChallengeResponse`: request ID, 32-byte nonce, seconds valid |
-| `POST /v1/release` | `ReleaseRequest`: request ID, device ID, the quote (TPMS_ATTEST and its signature), the PCR values, generation, approval signature | `ReleaseResponse`: `released` with the wrapped R (and, for a pepper device, the operator's pepper), `pending` with `retry_after`, or `denied` with the reason |
+| `POST /v1/release` | `ReleaseRequest`: request ID, device ID, the quote (TPMS_ATTEST and its signature), the PCR values, generation, approval signature | `ReleaseResponse`: `released` with the wrapped R (and, for a pepper device, the operator's pepper wrapped for the TPM: K by MakeCredential for (EK, release key Name), the pepper under K), `pending` with `retry_after`, or `denied` with the reason |
 
 Errors are 4xx with `{"error": …}`. The quote's qualifying data is
 `SHA-256("tpm2-kira/vault/release/v1" ‖ lp(device ID) ‖ lp(request ID) ‖

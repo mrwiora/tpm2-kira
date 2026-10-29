@@ -110,7 +110,15 @@ func (v *testVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		v.minGen = checked.Generation
 		rsp := vaultproto.ReleaseResponse{Status: vaultproto.StatusReleased, Remote: &v.remote}
 		if v.enrol.Pepper && v.gave < len(v.peppers) {
-			rsp.Pepper = v.peppers[v.gave]
+			name, err := v.enrol.ReleaseKeyName()
+			if err != nil {
+				fail(err.Error())
+				return
+			}
+			if rsp.Pepper, err = vaultproto.WrapPepper(rand.Reader, v.enrol.EKPublic, name, v.enrol.DeviceID, v.peppers[v.gave]); err != nil {
+				fail(err.Error())
+				return
+			}
 		}
 		v.gave++
 		json.NewEncoder(w).Encode(rsp)

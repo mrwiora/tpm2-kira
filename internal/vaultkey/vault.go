@@ -324,14 +324,15 @@ var errPepperMismatch = errors.New("the pepper does not fit")
 
 // vaultKeyOf opens the released remote part and derives the key, with
 // the pepper the release carries when the keyslot was enrolled with one.
+// R and the pepper's key K open alike: ActivateCredential with the slot's
+// release key, through the slot's approval for this boot.
 func vaultKeyOf(tpmDev transport.TPM, vs vaultSlot, local []byte, rsp *vaultproto.ReleaseResponse) ([]byte, error) {
 	v := &vs.Att.Vault
-	defer wipe.Bytes(rsp.Pepper)
 	pepper := len(v.PepperCheck) > 0
 	switch {
 	case !pepper && rsp.Pepper != nil:
 		return nil, errors.New("the vault sent a pepper, and this keyslot was enrolled without one")
-	case pepper && len(rsp.Pepper) == 0:
+	case pepper && rsp.Pepper == nil:
 		return nil, errors.New("the vault released without a pepper, and this keyslot was enrolled with one")
 	}
 	remote, err := phonegate.UnwrapFactor(tpmDev, vs.Sealed, vs.Idx, vs.Att, &nvslot.WrappedFactor{Credential: rsp.Remote.Credential, EncryptedSecret: rsp.Remote.EncryptedSecret})
@@ -342,12 +343,31 @@ func vaultKeyOf(tpmDev transport.TPM, vs vaultSlot, local []byte, rsp *vaultprot
 	if !pepper {
 		return Key(local, remote, v.Label, nil), nil
 	}
-	key := Key(local, remote, v.Label, rsp.Pepper)
+	p, err := openPepper(tpmDev, vs, rsp.Pepper)
+	if err != nil {
+		return nil, err
+	}
+	defer wipe.Bytes(p)
+	key := Key(local, remote, v.Label, p)
 	if !hmac.Equal(PepperCheck(key), v.PepperCheck) {
 		wipe.Bytes(key)
 		return nil, errPepperMismatch
 	}
 	return key, nil
+}
+
+// openPepper opens the pepper's key K in the TPM and the pepper with it.
+func openPepper(tpmDev transport.TPM, vs vaultSlot, w *vaultproto.WrappedPepper) ([]byte, error) {
+	k, err := phonegate.UnwrapFactor(tpmDev, vs.Sealed, vs.Idx, vs.Att, &nvslot.WrappedFactor{Credential: w.Key.Credential, EncryptedSecret: w.Key.EncryptedSecret})
+	if err != nil {
+		return nil, fmt.Errorf("the pepper: %w", err)
+	}
+	defer wipe.Bytes(k)
+	p, err := vaultproto.OpenPepper(k, vs.Att.DeviceID, w)
+	if err != nil {
+		return nil, fmt.Errorf("the pepper: %w", err)
+	}
+	return p, nil
 }
 
 // fetchRemoteRetrying is fetchRemote while the network comes up:
