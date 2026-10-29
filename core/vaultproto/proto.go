@@ -26,8 +26,8 @@ import (
 )
 
 // The machine-facing paths. The vault serves them over HTTPS; the machine
-// pins the vault's public key (PinOf) instead of checking a certificate
-// chain, because the initrd has no clock to check one with.
+// verifies the chain to one of its roots, the host name and the dates, and
+// then the pin of a key of that chain (ClientConfig).
 const (
 	PathEnrol        = "/v1/enrol"         // EnrolRequest → EnrolChallenge
 	PathEnrolConfirm = "/v1/enrol/confirm" // EnrolConfirm → EnrolResult

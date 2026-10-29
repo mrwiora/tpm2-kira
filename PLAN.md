@@ -310,8 +310,13 @@ flowchart LR
    done; vmtest written, not run.) `EnrolRequest` carries the release
    key's public area; the vault wraps a fresh K with `MakeCredential` for
    (EK, RK Name) and the pepper under K with AES-256-GCM.
-1. [ ] core: `vaultproto.ClientConfig`, `LoadRoots(path)`; unit tests:
-   good chain, unknown root, wrong host, wrong pin, expired, no file.
+1. [x] core: `vaultproto.ClientConfig(roots, host, pin)` (TLS 1.3, the
+   standard verification, then the pin of any certificate of the verified
+   chain) and `ParseRoots(bundle)` (CA certificates only; reading the file
+   is tpm2-kira's, the core stays pure); tested against a real TLS server:
+   the root's and the leaf's pin taken, another root, host or pin, an
+   expired leaf and one not valid yet refused; bundles that are empty, not
+   PEM, a key, a leaf, or with trailing text refused.
 2. [ ] tpm2-kira: `vaultkey.NewClient` reads the roots
    (`/etc/tpm2-kira/vault-ca.pem`, a variable for the tests); enrol,
    status and control report a missing or failing root.
