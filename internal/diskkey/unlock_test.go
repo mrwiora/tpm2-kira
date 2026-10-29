@@ -610,7 +610,7 @@ func TestDiskKeyPasswordSaltMode(t *testing.T) {
 	}
 	want, _ := Combine([]byte("hunter2"), []byte("my-salt"))
 	if !bytes.Equal(key, want) {
-		t.Fatal("the key is not hashpwd2's derivation of password and salt")
+		t.Fatal("the key is not the derivation of password and salt")
 	}
 	seen := ""
 	for done := false; !done; {

@@ -115,7 +115,7 @@ func TestLuksStatusReadsTokens(t *testing.T) {
 	if err := LuksMark(LuksMarkOptions{Device: "/dev/fake", Keyslot: 7, Mode: diskkey.LuksModePasswordSalt}); err == nil || !strings.Contains(err.Error(), "no keyslot 7") {
 		t.Fatalf("missing keyslot: %v", err)
 	}
-	if err := LuksMark(LuksMarkOptions{Device: "/dev/fake", Keyslot: 2, Mode: "hashpwd2"}); err == nil {
+	if err := LuksMark(LuksMarkOptions{Device: "/dev/fake", Keyslot: 2, Mode: "no-such-mode"}); err == nil {
 		t.Fatal("an unknown mode was taken")
 	}
 }

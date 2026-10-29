@@ -864,10 +864,9 @@ without padding and followed by a newline, which is part of the key. The
 salt of `password+phonesalt` is not the phone's factor itself but an HKDF
 of it (`internal/phonegate/factor.go`), so the factor never meets the password. The
 parameters are a contract with every enrolled keyslot and do not change.
-For compatibility, the bytes are the same as
-[hashpwd2](https://github.com/mrwiora/hashpwd2)'s, checked in a test: a
-keyslot enrolled with hashpwd2 opens with tpm2-kira's `password+salt`, and
-the other way round.
+The bytes are fixed by a known answer in a test (taken from the earlier
+separate combiner, hashpwd2): a keyslot enrolled with it opens with
+tpm2-kira's `password+salt`, and the other way round.
 
 ---
 
