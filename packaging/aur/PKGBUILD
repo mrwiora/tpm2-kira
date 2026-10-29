@@ -74,7 +74,8 @@ build() {
 check() {
     cd "$_srcdir"
 
-    go test -tags=unit ./internal/... ./attest/... ./transport/... ./mobile/...
+    go test -tags=unit ./internal/...
+    (cd core && go test ./...)
 }
 
 backup=(etc/tpm2-kira/control.conf)

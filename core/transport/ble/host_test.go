@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/transport/frame"
+	"github.com/mrwiora/tpm2-kira/core/transport/frame"
 )
 
 // fakeController plays the controller and a central at the HCI level.

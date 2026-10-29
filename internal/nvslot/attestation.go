@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/google/go-tpm/tpm2"
-	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/core/attest"
 )
 
 // The attestation part of a slot's blob.

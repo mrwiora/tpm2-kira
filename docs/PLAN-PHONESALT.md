@@ -8,7 +8,7 @@
 > **Status:** in implementation on `feat/hashpwd` (2026-10-07). Done: the
 > combiner inside tpm2-kira (`internal/diskkey/combine.go`, the password+salt
 > derivation), the release key under the slot's approval
-> (`attest/releasekey.go`), wrap, unwrap and the salt derivation
+> (`core/attest/releasekey.go`), wrap, unwrap and the salt derivation
 > (`internal/phonegate/factor.go`), the phone's part (Evidence tags 15-17, the kept
 > factor in the record, Release after the accepted receipt; both apps),
 > the coordinator opening the release before the separator, the provider
@@ -156,7 +156,7 @@ tpm2-kira prints those steps; it does not perform them.
 
 ### 3.2 The release key
 
-The object the credential is made for (`attest/releasekey.go`). It lives
+The object the credential is made for (`core/attest/releasekey.go`). It lives
 in the slot's blob beside the boot key, and its policy is the slot's own,
 extended by one step:
 
@@ -199,7 +199,7 @@ Release := {
 }
 ```
 
-It is defined once, in `attest/`, for both this plan and
+It is defined once, in `core/attest/`, for both this plan and
 [PLAN-VAULT.md](PLAN-VAULT.md) — a factor-only or
 unlocking-only variant inside the core would be the design failure that plan's
 §2 warns about. A `Release` for kind 2 is a few hundred bytes; over BLE it is

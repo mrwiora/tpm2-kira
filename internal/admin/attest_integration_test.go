@@ -19,8 +19,8 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/mrwiora/tpm2-kira/attest"
-	"github.com/mrwiora/tpm2-kira/attest/attesttest"
+	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/mrwiora/tpm2-kira/core/attest/attesttest"
 	"github.com/mrwiora/tpm2-kira/internal/bootrun"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"

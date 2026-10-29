@@ -1289,7 +1289,7 @@ only way back in, because:
 Phone attestation rests on a handful of signatures and one key agreement.
 This section lists them in the order they are given, what each one proves,
 and on what the phone's trust in it rests. The phone verifies everything
-itself, in the Go core it shares with the machine (`attest/`); the app only
+itself, in the Go core it shares with the machine (`core/attest/`); the app only
 moves bytes and shows results.
 
 ### 13.1 Roots

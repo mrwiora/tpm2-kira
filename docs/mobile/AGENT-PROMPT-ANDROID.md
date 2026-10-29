@@ -32,7 +32,7 @@ with gomobile and call.
 3. `docs/PLAN-PHONESALT.md` §1, §4 — a future step (salt release for
    the password+salt derivation) that your session flow must be able to grow into. Do not
    implement it now.
-4. `mobile/kiracore/kiracore.go` and `mobile/kiratest/kiratest.go` — the Go
+4. `core/mobile/kiracore/kiracore.go` and `core/mobile/kiratest/kiratest.go` — the Go
    API you call.
 
 ## Non-negotiable rules

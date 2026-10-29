@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	. "github.com/mrwiora/tpm2-kira/attest"
-	"github.com/mrwiora/tpm2-kira/attest/attesttest"
+	. "github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/mrwiora/tpm2-kira/core/attest/attesttest"
 )
 
 // factorBackend wraps the soft TPM as a FactorBackend: it offers a factor

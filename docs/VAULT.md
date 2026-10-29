@@ -66,7 +66,7 @@ only in the moment it is derived and handed to cryptsetup.
 Three layers, each depending on PCR state:
 
 1. **The machine's TPM.** L and R open only through the release key's
-   policy (`attest/releasekey.go`): the slot's approval - PolicyPCR over
+   policy (`core/attest/releasekey.go`): the slot's approval - PolicyPCR over
    the sealed selection, PolicyNV over the generation, the signing key's
    signature, PolicyAuthorize (SECURITY-BACKGROUND.md §4) - then
    PolicyCommandCode(ActivateCredential). After `cap` the generation index
@@ -386,7 +386,7 @@ tpm2-kira status                        "enrolled with the vault at …"; notes 
 
 ## 8. The protocol
 
-JSON over HTTPS, `[]byte` as base64 (`vaultproto/proto.go`):
+JSON over HTTPS, `[]byte` as base64 (`core/vaultproto/proto.go`):
 
 | Path | Request | Answer |
 |---|---|---|
@@ -428,9 +428,9 @@ recovery keyslot is mandatory, and the console prompt is always there.
 
 | Where | What |
 |---|---|
-| `vaultproto/` | messages, `QualifyingData`, `PinOf`, `VerifyRelease`, the policy digests |
+| `core/vaultproto/` | messages, `QualifyingData`, `PinOf`, `VerifyRelease`, the policy digests |
 | `internal/vaultkey/vault.go` | the key's derivation, the pinned client, the boot's release (`startVaultKeys`, `openVaultKey`, `fetchRemote`), `vault enrol\|status\|unenrol` |
-| `internal/phonegate/factor.go`, `attest/releasekey.go` | the release key and the wrap/unwrap shared with the phone salt |
+| `internal/phonegate/factor.go`, `core/attest/releasekey.go` | the release key and the wrap/unwrap shared with the phone salt |
 | `internal/nvslot/attestation.go` | attestation method 2 |
 | `internal/admin/luks.go`, `internal/diskkey/header.go`, `internal/diskkey/unlock.go` | the mode, the token, the recipe, the key provider |
 | `internal/bootrun/run.go` | the attempt started with `run`, ended with the hold; a key made ends it |

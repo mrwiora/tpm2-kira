@@ -21,9 +21,9 @@ Last updated 2026-10-05.
 
 | Phase | What exists | Verified by |
 |---|---|---|
-| 1 — BLE stack | **Decided: in-tree.** `transport/ble/`: pure-Go HCI user channel peripheral — advertising, ACL fragmentation and flow control, L2CAP, ATT/GATT server, pairing refused — about 1,500 lines, no dependency beyond `golang.org/x/sys`. `go-ble/ble` rejected (unmaintained, dependency surface). | fake-controller tests: iOS-style discovery, MTU 23/185, records both ways, framing errors, idle deadline, re-advertising |
-| 2 — peripheral, framing, encrypted session | `transport/frame/`, Noise XX/IK in `attest/noise.go`, `tpm2-kira phone enrol` with SAS | unit tests, fuzzing, interop with the reference `noiseprotocol` library |
-| 3 — mobile core | `mobile/kiracore` (gomobile verifier), `mobile/kiratest` (simulated machine); apps specified in [mobile/](mobile/) | Go tests through the binding API; gobind generates Java and Objective-C cleanly |
+| 1 — BLE stack | **Decided: in-tree.** `core/transport/ble/`: pure-Go HCI user channel peripheral — advertising, ACL fragmentation and flow control, L2CAP, ATT/GATT server, pairing refused — about 1,500 lines, no dependency beyond `golang.org/x/sys`. `go-ble/ble` rejected (unmaintained, dependency surface). | fake-controller tests: iOS-style discovery, MTU 23/185, records both ways, framing errors, idle deadline, re-advertising |
+| 2 — peripheral, framing, encrypted session | `core/transport/frame/`, Noise XX/IK in `core/attest/noise.go`, `tpm2-kira phone enrol` with SAS | unit tests, fuzzing, interop with the reference `noiseprotocol` library |
+| 3 — mobile core | `core/mobile/kiracore` (gomobile verifier), `core/mobile/kiratest` (simulated machine); apps specified in [mobile/](mobile/) | Go tests through the binding API; gobind generates Java and Objective-C cleanly |
 | 4 — attestation round trip | `tpm2-kira phone gate` on a booted system | swtpm integration test (real AK, EK, quotes, ActivateCredential) |
 | 5 — initramfs (part) | the boot plan (`tpm2-kira initramfs plan`) resolves the configured adapter's driver modules (the whole sysfs path) and the firmware the kernel loaded for it, from the kernel log. The boot plan takes the phone part in while a phone is enrolled (or with `TPM2_KIRA_ATTEST_BLUETOOTH=always` in control.conf). mkinitcpio: modules, exact firmware, `modules-load.d`; initramfs-tools: the same resolution, the modules by `force_load` (the image's `conf/modules`). On both, `run` starts the radio worker (`gate-child`) beside the TOTP display; it never holds the boot and ends with the hold. The gate waits for the adapter that comes up as long as the code screen holds and retries while the kernel finishes controller setup; the TPM is `run`'s. Hooks add nothing when no phone is enrolled or the adapter is missing. | resolver unit tests on a fake sysfs (Intel, Realtek, Broadcom log formats); stubbed-hook tests for both hooks; a real `mkinitcpio` image build on Arch containing exactly 6 modules and 1 firmware file (≈1.1 MB) |
 
@@ -36,7 +36,7 @@ Last updated 2026-10-05.
 | **Debian firmware size** | `manual_add_modules` queues modules for `dracut-install`, which copies every firmware file the modules *declare* (dozens for btusb's dependencies) on top of the exact files. mkinitcpio avoids this; on Debian it costs space until initramfs-tools offers a way to skip declared firmware. Measure on a Debian box. |
 | **Debian measured PCRs** | Adding Bluetooth changes PCR 9 on GRUB machines; the existing post-update reminder covers approving, but has not been re-checked with the new files. |
 | Salt release | `Release` is defined in the protocol; the attester answers "unsupported" (PLAN-PHONESALT.md). |
-| 7 — verdict UX | the shared PCR explanation exists (`attest/explain.go`); the UI belongs to the apps |
+| 7 — verdict UX | the shared PCR explanation exists (`core/attest/explain.go`); the UI belongs to the apps |
 | Phone apps | specified as agent prompts in [mobile/](mobile/), not built |
 | Lost-phone ceremony (§6.2, open question 3) | today: `phone enrol` with the new phone, `phone unenrol` to drop all; no per-phone removal command yet |
 | EK certificate chain | parsed and stored by the phone, not validated against vendor roots |
@@ -418,7 +418,7 @@ Next steps — the anchor only takes effect once it is inside the boot image:
 │  BLE layer — flutter_blue_plus (central)     │
 │   scan by service UUID, connect, MTU, notify │
 ├──────────────────────────────────────────────┤
-│  Core — Go, compiled from attest/            │
+│  Core — Go, compiled from core/attest/            │
 │   handshake, MakeCredential, Verify, receipt │
 │   Android: c-shared .so   iOS: c-archive     │
 │   reached through dart:ffi                   │

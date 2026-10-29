@@ -6,17 +6,20 @@ Where things are in the repository, and how the tests are run.
 
 ```
 ├── main.go, help.go         # tpm2-kira, the installed system's command line: routing and the help pages
-├── cmd/tpm2-kira-boot/      # tpm2-kira-boot, what the boot image carries: run, cap, unlock-key, gate, ssh-child
-├── attest/                  # Phone attestation core: protocol, Noise, Verify(); no device access
-│   └── attesttest/          # Software TPM, in-memory pipe and simulated phone for tests
-├── vaultproto/              # The contract with tpm2-kira-vault: REST messages, the release check
+├── cmd/tpm2-kira-boot/      # tpm2-kira-boot, what the boot image carries: run, cap, machine-id, unlock-key, ssh-child, gate-child
+├── core/                    # The shared core: a Go module of its own (github.com/mrwiora/tpm2-kira/core),
+│   │                        #   what the phone (Marify) and the vault require alone: go-tpm and x/crypto,
+│   │                        #   nothing of internal/ or aSSH (the module boundary keeps it so)
+│   ├── attest/              # Phone attestation core: protocol, Noise, Verify(); no device access
+│   │   └── attesttest/      # Software TPM, in-memory pipe and simulated phone for tests
+│   ├── vaultproto/          # The contract with tpm2-kira-vault: REST messages, the release check
+│   ├── transport/
+│   │   ├── frame/           # Record fragmentation for BLE (shared with the phone)
+│   │   └── ble/             # Pure-Go BLE peripheral over an HCI user channel
+│   └── mobile/
+│       ├── kiracore/        # gomobile binding: the phone's verifier core
+│       └── kiratest/        # gomobile binding: a simulated machine for app tests
 ├── assh/                    # aSSH, a git submodule: the SSH server, the SSH CA and host keys in the TPM
-├── transport/
-│   ├── frame/               # Record fragmentation for BLE (shared with the phone)
-│   └── ble/                 # Pure-Go BLE peripheral over an HCI user channel
-├── mobile/
-│   ├── kiracore/            # gomobile binding: the phone's verifier core
-│   └── kiratest/            # gomobile binding: a simulated machine for app tests
 ├── internal/                # The packages, by layer; each knows only those below it
 │   ├── tpmdev/              # Opening the TPM, the storage primary, flushing, NV reads
 │   ├── measure/             # PCR specs and banks, the event log, the measure point,

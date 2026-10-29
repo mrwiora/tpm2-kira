@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/attest"
-	"github.com/mrwiora/tpm2-kira/transport/frame"
+	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/mrwiora/tpm2-kira/core/transport/frame"
 )
 
 // ProtocolVersion is the INFO characteristic's protocol byte this core speaks.

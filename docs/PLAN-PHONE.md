@@ -1,8 +1,8 @@
 # PLAN — Phone attestation: the attestation core
 
 > **Status:** phases 1–4 and the receipt half of phase 5 are implemented
-> (`attest/`, `internal/phonegate`, `internal/admin/attest.go`); see "Implementation notes" at the end.
-> **Scope:** the reusable attestation core (`attest/`). Transport-independent,
+> (`core/attest/`, `internal/phonegate`, `internal/admin/attest.go`); see "Implementation notes" at the end.
+> **Scope:** the reusable attestation core (`core/attest/`). Transport-independent,
 > verifier-independent, UI-independent.
 >
 > Three consumers are planned on top of it:
@@ -66,7 +66,7 @@ either is required, is per-machine configuration — see
 | **Profile** | A named set of expected PCR values, one per known-good system state. |
 
 The role split matters for one reason: **the attester must contain no code that
-can decide it is trustworthy.** Everything under `attest/verify*` runs on the
+can decide it is trustworthy.** Everything under `core/attest/verify*` runs on the
 verifier and is never consulted to authorise a local action, except when
 checking a receipt's signature.
 
@@ -304,7 +304,7 @@ misuse elsewhere, not to protect the gate; the gate relies on `qd`.
 ## 7. Verification is a pure function
 
 ```go
-// attest/verify.go — no TPM, no network, no filesystem, no clock reads.
+// core/attest/verify.go — no TPM, no network, no filesystem, no clock reads.
 func Verify(ev *Evidence, pol *Policy, pin *PinnedIdentity, now time.Time) *Verdict
 ```
 
@@ -386,7 +386,7 @@ It must be logged as such and must never be the *only* profile.
 ## 9. Package layout and dependency rules
 
 ```
-attest/
+core/attest/
 ├── evidence.go     # wire types + canonical TLV encoding (shared by all peers)
 ├── identity.go     # EK/AK templates, AK create/load, credential activation   [needs TPM]
 ├── quote.go        # TPM2_Quote, evidence assembly                            [needs TPM]
@@ -405,10 +405,10 @@ attest/
    `evidence.go` **must not import** `go-tpm/tpm2/transport`, `net`, `os`, or
    any BLE package. `go build` tags are not the mechanism — an import-graph
    test is (`TestCoreHasNoDeviceDeps` walks the package imports and fails).
-2. `attest/` **must not import** `internal/`. Data it needs from the sealed blob is
-   passed in as plain values. The dependency points one way: `internal/` → `attest/`.
+2. `core/attest/` **must not import** `internal/`. Data it needs from the sealed blob is
+   passed in as plain values. The dependency points one way: `internal/` → `core/attest/`.
 3. No transport, no BLE, no HTTP, no D-Bus and no UI ever appears under
-   `attest/`. Those live in `transport/ble/`, `transport/tcp/`, and in the
+   `core/attest/`. Those live in `core/transport/ble/`, `core/transport/tcp/`, and in the
    mobile app.
 4. Everything the verifier decides is expressed as data (`Policy`), never as
    code branches inside the attester.
@@ -416,11 +416,11 @@ attest/
 ### 9.2 One verifier implementation, three platforms
 
 The mobile app does **not** re-implement verification in Kotlin and Swift.
-`attest/` is compiled for mobile with `gomobile bind` (an `.aar` for Android, an
+`core/attest/` is compiled for mobile with `gomobile bind` (an `.aar` for Android, an
 `.xcframework` for iOS) and the app calls into it. Reasons:
 
 - A security check written twice is a security check that differs once.
-- The golden corpus in `attest/testdata/` then tests the phone's verifier too.
+- The golden corpus in `core/attest/testdata/` then tests the phone's verifier too.
 - Credential activation (`makecred.go`) is fiddly TPM-specific crypto that
   nobody should write three times.
 
@@ -612,7 +612,7 @@ enforced mode into a decoration, so it is an explicit test case.
 
 | Layer | How | Needs |
 |---|---|---|
-| `Verify()` | golden corpus in `attest/testdata/`: good, replayed, wrong selection, wrong magic, non-quote attest type, forged `pcr_values`, downgraded PCR bank, `resetCount` going backwards, expired profile, exhausted pre-registered profile | nothing |
+| `Verify()` | golden corpus in `core/attest/testdata/`: good, replayed, wrong selection, wrong magic, non-quote attest type, forged `pcr_values`, downgraded PCR bank, `resetCount` going backwards, expired profile, exhausted pre-registered profile | nothing |
 | Encoding | round-trip and fuzz over the TLV decoder, with the same maximum-size limits `internal/nvslot/blob.go` uses | nothing |
 | AK + quote | swtpm, as the existing integration tests already do | swtpm |
 | Credential activation | swtpm; `MakeCredential` in Go, `ActivateCredential` on the simulated TPM | swtpm |
@@ -675,10 +675,10 @@ What was built, and where it departs from the sections above.
 | Topic | As implemented |
 |---|---|
 | **AK parent (§3.1)** | A storage primary in the **endorsement** hierarchy, not the owner-hierarchy primary of `CreatePrimaryKey`. TPM 2.0 Part 1 §36.7 obfuscates `resetCount`, `restartCount` and `firmwareVersion` in quotes signed by keys outside the endorsement/platform hierarchies; with an owner-hierarchy AK the reset-count replay check of §5 would compare masked values. Found on swtpm, which reported a reset count of 4157272019. Side effect: the AK survives `TPM2_Clear`, after which the verifier sees the counter go backwards and asks a human. |
-| **Package layout (§9)** | `attest/` is the pure core (no TPM, filesystem or network). The TPM-facing parts listed as `identity.go`/`quote.go` live in `internal/phonegate/tpm.go`, behind the `attest.AttesterBackend` / `attest.EnrolBackend` interfaces; `attest/identity.go` holds only key templates. `TestCoreHasNoDeviceDeps` enforces the rule on `attest/`, `transport/frame/` and `mobile/`. |
-| **Verifier as a state machine (§6, §9.2)** | `attest.Verifier` is event-driven: every input returns records to send and events to show, so the phone needs no threads and no callbacks. `mobile/kiracore` wraps it for gomobile. |
+| **Package layout (§9)** | `core/attest/` is the pure core (no TPM, filesystem or network). The TPM-facing parts listed as `identity.go`/`quote.go` live in `internal/phonegate/tpm.go`, behind the `attest.AttesterBackend` / `attest.EnrolBackend` interfaces; `core/attest/identity.go` holds only key templates. `TestCoreHasNoDeviceDeps` enforces the rule on `core/attest/`, `core/transport/frame/` and `mobile/`. |
+| **Verifier as a state machine (§6, §9.2)** | `attest.Verifier` is event-driven: every input returns records to send and events to show, so the phone needs no threads and no callbacks. `core/mobile/kiracore` wraps it for gomobile. |
 | **Enrolment (§6.1)** | `EnrolOffer` additionally carries a baseline quote bound to the session (`enrol_qd`), so the baseline profile is TPM-signed rather than claimed, and `adv_key` for advertising. `EnrolAccept` carries a required `anchor_sig` proving possession of the anchor key. |
-| **Wire encoding (§9.3)** | TLV as planned, with ascending tags and per-field limits ([PROTOCOL-BLE.md](PROTOCOL-BLE.md) §7). Golden vectors for every canonical string are in `attest/vectors_test.go`. |
+| **Wire encoding (§9.3)** | TLV as planned, with ascending tags and per-field limits ([PROTOCOL-BLE.md](PROTOCOL-BLE.md) §7). Golden vectors for every canonical string are in `core/attest/vectors_test.go`. |
 | **Release message (PLAN-PHONESALT.md §4)** | Defined in the core; the attester answers `ReleaseAck{unsupported}` until factor enrolment exists. |
 | **Attestation blob (§10.1)** | NV `0x01803020`+slot, signed envelope, PolicySigned writes, a verifier *list* (up to 8) from day one (§15.5). Also holds the machine's Noise static key and advertising key, which identify the transport endpoint only — see `internal/nvslot/attestation.go` for why exposing them does not weaken the verdict. |
 | **Not yet implemented** | Sealed payload v9 and config binding (§10.3), image anchor (§10.2), `attest rotate-ak`, EK certificate chain validation (the certificate is parsed and passed on, not validated against vendor roots). |

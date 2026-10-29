@@ -87,7 +87,7 @@ root steps are `sudo` lines in it), idempotent, with every version in
    `ANDROID_HOME`, `ANDROID_USER_HOME=/srv/testhost/android/home`
    (the AVDs and netsim's artifacts) and the `PATH` go into
    `conf/env.sh`, sourced by every other script.
-5. **Standalone rootcanal**, for `transport/ble`'s tests without Android
+5. **Standalone rootcanal**, for `core/transport/ble`'s tests without Android
    (§7.2): a virtual environment, so nothing of it touches the host's
    Python:
    ```
@@ -284,7 +284,7 @@ Marify ─ the emulator's virtual controller ─ netsimd / rootcanal (the virtua
 - **The machine's adapter.** The kernel's `hci_vhci`: a process that
   opens `/dev/vhci` is a controller `hci0`, with the process at the HCI
   level. tpm2-kira's gate works on an HCI user channel with legacy LE
-  advertising and its own ATT (`transport/ble/host.go`, `att.go`), so a
+  advertising and its own ATT (`core/transport/ble/host.go`, `att.go`), so a
   vhci adapter is a USB dongle to it.
 - **The bridge** (`tools/hcibridge`, ~150 lines of Go, static): copies H4
   packets between `/dev/virtio-ports/hci` and `/dev/vhci`, re-framed -
@@ -346,7 +346,7 @@ google/rootcanal) is the same controller without Android: two machines,
 or a machine and a Go test, on one rootcanal give tpm2-kira's own BLE
 transport a controller-level integration test in CI, without the
 emulator. The emulator is for Marify; rootcanal alone is for
-`transport/ble`.
+`core/transport/ble`.
 
 Two consequences of the emulator for tpm2-kira's checks:
 

@@ -134,7 +134,7 @@ profiles booted").
 
 The phone pins PCR values per *profile* already: an unexpected change asks
 for approval, and an approved state is added to the machine's record
-(`attest/verifier.go`). The first boot of a second image therefore asks once
+(`core/attest/verifier.go`). The first boot of a second image therefore asks once
 on the phone and is known afterwards. Announcing the profiles at enrolment
 (the machine predicts each image's values, the phone pins them all) is a
 later improvement, not part of this plan.

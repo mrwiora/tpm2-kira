@@ -1,8 +1,8 @@
 # tpm2-kira BLE Attestation Protocol — Interface Definition
 
 > **Protocol version 1, schema 2.** Status: implemented on the machine side
-> (`attest/`, `transport/frame/`, `transport/ble/`) and in the phone core
-> (`mobile/kiracore/`). This document is the contract between a tpm2-kira
+> (`core/attest/`, `core/transport/frame/`, `core/transport/ble/`) and in the phone core
+> (`core/mobile/kiracore/`). This document is the contract between a tpm2-kira
 > machine and a phone app. The key words MUST, MUST NOT, SHOULD and MAY are
 > used as in RFC 2119.
 >
@@ -40,7 +40,7 @@ trusted receipt and never replaces it.
 ├────────────────────────────────────────────────────────────┤  │ implemented ONCE,
 │ Records (§5) + Noise session (§6)  XX at enrolment, IK after│  │ in Go, shared by
 ├────────────────────────────────────────────────────────────┤  │ machine and phone
-│ Framing (§4)                       fragments ⇄ records      │  ┘ (mobile/kiracore)
+│ Framing (§4)                       fragments ⇄ records      │  ┘ (core/mobile/kiracore)
 ├────────────────────────────────────────────────────────────┤
 │ GATT (§3)                          RX write, TX notify      │  ┐ implemented by
 ├────────────────────────────────────────────────────────────┤  │ the app (native
@@ -49,7 +49,7 @@ trusted receipt and never replaces it.
 ```
 
 **The phone app MUST NOT re-implement the upper three layers.** It links the
-Go core (`mobile/kiracore`, built with `gomobile bind`) and only moves bytes
+Go core (`core/mobile/kiracore`, built with `gomobile bind`) and only moves bytes
 between the BLE stack and the core, and events between the core and the UI
 (§10). Every check that decides whether a boot is trustworthy runs in the
 core, byte for byte the code the machine's test suite runs. The wire format
@@ -518,7 +518,7 @@ enrolment. Without the field the phone pins `pcr_values` (`added_by` =
 `enrolment`), as before.
 
 The phone verifies `ek_cert` against vendor roots built into the core
-(`attest/ekroots/`, one directory per vendor listed with pinned SHA-256 values in `vendors.json`; currently Intel PTT — `attest/ekroots/README.md` says how to add a vendor) with `ek_cert_chain` as
+(`core/attest/ekroots/`, one directory per vendor listed with pinned SHA-256 values in `vendors.json`; currently Intel PTT — `core/attest/ekroots/README.md` says how to add a vendor) with `ek_cert_chain` as
 intermediates, and requires the certificate's key to be `ek_pub`. The result
 is shown to the user before binding ("TPM verified: Intel PTT" or "not
 verified as genuine hardware") and stored in the record; it never blocks
@@ -544,7 +544,7 @@ chain (Android Key Attestation), concatenated DER, leaf first, made with the
 challenge `SHA-256("tpm2-kira/anchor-attest/v1" ‖ cb)`.
 
 The machine checks field 7 against pinned Google attestation roots
-(`attest/phoneroots/`): the leaf is for `anchor_pub`, the challenge is this
+(`core/attest/phoneroots/`): the leaf is for `anchor_pub`, the challenge is this
 session's, the key was generated in StrongBox or the TEE, needs an unlock for
 every use, and the phone booted locked and verified; on the booted machine it
 also consults Google's revocation list. `phone enrol --verify-phone
@@ -824,11 +824,11 @@ selection SHA-256 {0, 2, 4, 7}, `device_id = a0 … af`,
 07000000 64656661756c74 803bb16a00000000 ac3cb16a00000000 07000000 706978656c2d31
 ```
 
-These values are asserted by `attest/vectors_test.go`.
+These values are asserted by `core/attest/vectors_test.go`.
 
 ---
 
-## 10. The phone core API (`mobile/kiracore`)
+## 10. The phone core API (`core/mobile/kiracore`)
 
 Built with `gomobile bind`. Java/Kotlin package `kiracore`, Swift prefix
 `Kiracore`. Only `String`, `[]byte`, `long`/`Int`, `Boolean` and opaque
@@ -938,7 +938,7 @@ counters, timestamps, `ek_verified_by`). The app stores it encrypted and hands i
 unchanged. It contains no private key, but `adv_key` and `machine_noise_pub`
 identify the machine, so treat it as private data.
 
-### 10.6 Demo machine for tests (`mobile/kiratest`)
+### 10.6 Demo machine for tests (`core/mobile/kiratest`)
 
 A second gomobile library, **for debug and test builds only**, runs the real
 machine-side protocol over a software TPM, with the BLE link replaced by

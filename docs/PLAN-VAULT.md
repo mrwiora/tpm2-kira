@@ -71,7 +71,7 @@ a secret rather than by asking software to behave.
 
 If any of the first three rows needs a change to serve this plan, the change
 belongs in the core, phrased generically. A `if remoteUnlocking {}` branch
-inside `attest/` is a design failure.
+inside `core/attest/` is a design failure.
 
 ---
 

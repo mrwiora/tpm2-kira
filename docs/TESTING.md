@@ -12,7 +12,7 @@ Four levels, from seconds to a whole boot:
 ## Unit and integration tests
 
 ```bash
-make test-unit              # no TPM
+make test-unit              # no TPM; tpm2-kira's packages, then the core's (core/, a module of its own)
 make test-integration       # swtpm and socat: sudo pacman -S swtpm socat (apt install swtpm swtpm-tools socat)
 make test-all
 make fuzz                   # the parsers of untrusted input, FUZZTIME per target (30s)

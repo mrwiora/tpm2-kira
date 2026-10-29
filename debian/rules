@@ -28,7 +28,8 @@ override_dh_auto_build:
 	done
 
 override_dh_auto_test:
-	go test -tags=unit ./internal/... ./attest/... ./transport/... ./mobile/...
+	go test -tags=unit ./internal/...
+	cd core && go test ./...
 
 override_dh_auto_install:
 

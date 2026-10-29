@@ -12,7 +12,7 @@ flowchart LR
   subgraph KIRA["tpm2-kira (this repository)"]
     ADMIN["tpm2-kira<br/>the installed system"]
     BOOT["tpm2-kira-boot<br/>the boot image"]
-    CORE["attest/, transport/, vaultproto/<br/>shared with the phone and the vault"]
+    CORE["core/: attest, transport, vaultproto, mobile<br/>a module of its own, shared with the phone and the vault"]
   end
   ASSH["aSSH (submodule assh/)<br/>SSH server, SSH CA in the TPM,<br/>per-boot host keys"]
   VAULT["tpm2-kira-vault<br/>the vault: remote attestation over TLS"]
@@ -22,7 +22,7 @@ flowchart LR
   ADMIN & BOOT --> CORE
   ADMIN & BOOT -->|library| ASSH
   VAULT -->|vaultproto| CORE
-  MARIFY -->|gomobile: mobile/kiracore| CORE
+  MARIFY -->|gomobile: core/mobile/kiracore| CORE
   SAFEARCH -->|library and assh binary| ASSH
   ADMIN & BOOT & VAULT & ASSH --> GOTPM
 ```

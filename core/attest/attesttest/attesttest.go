@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/core/attest"
 )
 
 // Pipe is one end of an in-memory record pipe implementing attest.Conn.

@@ -23,13 +23,13 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/mrwiora/tpm2-kira/attest"
+	"github.com/mrwiora/tpm2-kira/core/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
-	"github.com/mrwiora/tpm2-kira/vaultproto"
+	"github.com/mrwiora/tpm2-kira/core/vaultproto"
 )
 
 // testVault is the vault's protocol and nothing else: the token, the AK

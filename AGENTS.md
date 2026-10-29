@@ -148,6 +148,13 @@ It may not carry what came before.
   next boot without them); another part the image carries for nothing is
   not - the next build leaves it out. Do not decide what the image carries in a hook's shell
   or at boot: add the rule to the plan.
+- **The shared core is a module of its own: `core/`**
+  (`github.com/mrwiora/tpm2-kira/core`: `attest/`, `transport/`,
+  `vaultproto/`, `mobile/`). The phone (Marify, through gomobile) and the
+  vault require it alone; tpm2-kira requires it through `replace ./core`.
+  It requires go-tpm and x/crypto and nothing of `internal/`, `cmd/` or
+  aSSH - the module boundary enforces that - and its tests run in `core/`
+  (`make test-unit`). A change there is the phone's and the vault's too.
 - **One boot on every distribution.** Arch's unit and Debian's
   init-premount script start the same `run` - and the same two short
   steps at fixed points, `machine-id` before the network and `cap` when
