@@ -334,6 +334,15 @@ accepts a self-signed certificate that is itself in `RootCAs`.
 1. Dates checked against the system clock.
 2. The vault generates its root and keeps it in its state directory.
 3. One bundle, `/etc/tpm2-kira/vault-ca.pem`.
+4. (2026-10-29, at the start of part B) The root reaches the machine by
+   hand - `tpm2-kira-vault tls root` prints it - placed in the bundle, or
+   with `luks enrol ... --ca FILE`, which adds it only when its key is the
+   pin's: the pin, given out of band with the token, authenticates the
+   root. The pin `token create` prints is the root's. The boot plan's
+   vault part carries the bundle's digest (a changed bundle is a rebuild)
+   and is out without a bundle, saying so. Operators verify with curl
+   `--cacert ca.pem`. Breaks: the vault's state directory is made again
+   (`init`), and machines enrol again.
 
 ### Also in this change: SHA-1 notes
 
