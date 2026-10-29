@@ -137,11 +137,13 @@ flowchart LR
    the vault (asks: password held by the TPM or typed, the pepper); the
    red line when every keyslot of a volume is tpm2-kira's says why (the
    OS prompt then opens nothing), and `tpm2-kira status` notes it too.
-5. [ ] boot: the prompts by recipe (console and boot SSH), the fallback
+5. [x] (with steps 1-3, tested in diskkey and bootrun) boot: the prompts by recipe (console and boot SSH), the fallback
    order (recipe, recovery recipe, the OS prompt), a typed password while
    the vault is asked.
-6. [ ] the vault: the CLI answers the queue (`request approve` with the
-   pepper asked, `requests answer`).
+6. [x] the vault: the CLI answers the queue - `request approve ID` asks a
+   pepper device's pepper (no echo on a terminal, a line from a pipe) and
+   sends it with the approval; `requests answer` goes through what waits
+   (approve, deny, skip). Tested in the vault's CLI tests.
 7. [ ] docs (DISK-KEY, VAULT, SECURITY-BACKGROUND), HISTORY.md.
 8. [ ] tests: every recipe - unit (each ID's derivation against the
    known answer, the refused ones), swtpm (T as the unattended password;
