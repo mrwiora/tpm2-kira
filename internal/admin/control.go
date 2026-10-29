@@ -1235,7 +1235,7 @@ func (c *controller) runLuks(recipe diskkey.Recipe) error {
 		if err != nil || !ok {
 			return errors.New("not confirmed")
 		}
-		return LuksRemove(LuksRemoveOptions{Device: e.device, Keyslot: e.ks.Keyslot})
+		return LuksRemove(LuksRemoveOptions{Device: e.device, Keyslot: e.ks.Keyslot, TPMPath: c.o.TPMPath})
 	}
 	dev, err := c.pickDevice()
 	if err != nil {

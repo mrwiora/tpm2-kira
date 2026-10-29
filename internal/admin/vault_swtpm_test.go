@@ -413,4 +413,30 @@ func TestVaultBesideATPMSalt(t *testing.T) {
 	if att == nil || att.Vault.Enabled() || len(att.TPMSalt.Credential) == 0 || !bytes.Equal(att.DeviceID, id) {
 		t.Fatalf("after the vault's unenrol: %+v", att)
 	}
+	tpmDev.Close()
+
+	// The TPM salt out as well (its last keyslot removed): nothing uses
+	// the attestation part any more.
+	if err := removeTPMSalt(sock, 0, privPath); err != nil {
+		t.Fatal(err)
+	}
+	tpmDev, _ = transport.OpenTPM(sock)
+	if _, sb, err = phonegate.ReadSlot(tpmDev, slot); err != nil || sb.Payload.Attestation != nil {
+		t.Fatalf("after the TPM salt's removal: %v %+v", err, sb.Payload.Attestation)
+	}
+}
+
+// A blob that would not fit is named before anything is sent, with what
+// the slot holds and how to make room.
+func TestBlobFullSaysWhatTheSlotHolds(t *testing.T) {
+	att := &nvslot.Attestation{Vault: nvslot.VaultAttestation{URL: "https://v"}, TPMSalt: nvslot.WrappedFactor{Credential: []byte{1}}}
+	err := blobFull(0, 2065, 2048, att)
+	for _, want := range []string{"2065 bytes", "at most 2048", "the vault method", "a TPM salt", "another slot", "luks remove"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q not in %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "phone") {
+		t.Errorf("phones named for a slot without any: %v", err)
+	}
 }

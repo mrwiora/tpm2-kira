@@ -106,9 +106,7 @@ func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *nvslot.Attestation, pr
 	if err := nvslot.WriteToNVRAM(tpmDev, idx, signed, priv.Public(), priv); err != nil {
 		var tooLarge *nvslot.BlobTooLargeError
 		if errors.As(err, &tooLarge) {
-			return fmt.Errorf("slot %d's blob would be %d bytes with this enrolment, and this TPM stores at most %d in one NV index; "+
-				"nothing was written. Its phones share the blob with the TOTP key: remove one with 'tpm2-kira phone unenrol --nvram %d' "+
-				"(that removes all phones of the slot) and enrol the ones you need", slot, tooLarge.Size, tooLarge.Limit, slot)
+			return blobFull(slot, tooLarge.Size, tooLarge.Limit, b)
 		}
 		// The index was replaced for the write; the TOTP key lives in it.
 		if rerr := nvslot.WriteToNVRAM(tpmDev, idx, raw, priv.Public(), priv); rerr != nil {
@@ -177,6 +175,57 @@ func checkEnrolmentFits(tpmDev transport.TPM, slotBlob *nvslot.SealedBlob, enrol
 			"(that removes all phones of the slot) and enrol the ones you need", slot, size, limit, slot)
 	}
 	return nil
+}
+
+// checkEnrolmentFitsWithKey refuses, before anything is sent or made, an enrolment
+// without a phone (the vault, the TPM salt) whose blob would not fit the
+// slot's NV index: the blob as writeAttestBlob writes it, the TOTP key in
+// it as it is.
+func checkEnrolmentFitsWithKey(tpmDev transport.TPM, slotBlob *nvslot.SealedBlob, att *nvslot.Attestation, slot uint32) error {
+	copyBlob := *slotBlob
+	copyBlob.Payload.Attestation = att
+	unsigned, err := copyBlob.Marshal()
+	if err != nil {
+		return err
+	}
+	sig := len(slotBlob.BlobSignature)
+	if sig == 0 {
+		sig = 512
+	}
+	size := len(unsigned) + 2 + sig
+	limit := nvslot.NvIndexLimit(tpmDev)
+	if limit > nvslot.MaxNVRAMBlobSize || limit == 0 {
+		limit = nvslot.MaxNVRAMBlobSize
+	}
+	if size > limit {
+		return blobFull(slot, size, limit, att)
+	}
+	return nil
+}
+
+// blobFull says that a slot's blob would not fit its NV index, and what
+// the slot holds that could make room.
+func blobFull(slot uint32, size, limit int, att *nvslot.Attestation) error {
+	var holds []string
+	advice := "use another slot (--nvram N)"
+	if att != nil {
+		if n := len(att.Phone.Verifiers); n > 0 {
+			holds = append(holds, phonesText(n))
+			advice = fmt.Sprintf("its phones share the blob with the TOTP key: remove them with 'tpm2-kira phone unenrol --nvram %d' and enrol the ones you need, or %s", slot, advice)
+		}
+		if att.Vault.Enabled() {
+			holds = append(holds, "the vault method")
+		}
+		if len(att.TPMSalt.Credential) > 0 {
+			holds = append(holds, "a TPM salt")
+			advice += ", or take out what no keyslot needs any more (the TPM salt goes with its last keyslot: tpm2-kira luks remove)"
+		}
+	}
+	what := ""
+	if len(holds) > 0 {
+		what = " It holds " + strings.Join(holds, ", ") + " beside its key."
+	}
+	return fmt.Errorf("slot %d's blob would be %d bytes with this enrolment, and this TPM stores at most %d in one NV index; nothing was written.%s To make room: %s", slot, size, limit, what, advice)
 }
 
 // imagePCRs names the PCRs of a selection that an initramfs rebuild moves:

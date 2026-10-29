@@ -613,7 +613,7 @@ class Machine:
             slots = []
         self.check(f"boot {n}: the cap ran (every slot read-locked)", slots and all("read-locked" in s["generation_state"] for s in slots), out[-300:])
         log = ("cat /run/initramfs/tpm2-kira.log" if self.distro == "debian" else
-               "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service -u tpm2-kira-cap.service")
+               "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service -u tpm2-kira-cap.service -u tpm2-kira-machine-id.service")
         rc, out = self.run(log + " 2>&1", save=f"boot{n}-tpm2-kira.log")
         self.check(f"boot {n}: the key was answered", re.search(r"unlock: answered for", out) is not None, out[-500:])
         self.check(f"boot {n}: the machine-id was released before the network (slot 0's policy held)",
@@ -862,6 +862,8 @@ class Machine:
         self.check("TPM salt: opened while the code screen held, the key answered", "tpm salt: slot 0: opened" in out and "unlock: answered for" in out, out[-600:])
         out = self.luks_remove(keyslot, "luks-remove-tpm-salt")
         self.check("luks remove takes the TPM salt's keyslot", "0x1200" not in out, out[-400:])
+        rc, out = self.run("tpm2-kira status --json 2>&1")
+        self.check("the TPM salt went with its last keyslot", '"tpm_salt": true' not in out, out[-400:])
 
     def vault_typed(self, vault):
         """The vault's salt with a typed password and a pepper (0x1401): the

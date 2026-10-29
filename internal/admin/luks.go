@@ -671,6 +671,10 @@ var cryptsetupAuth = func(key, existing []byte, args ...string) ([]byte, error) 
 type LuksRemoveOptions struct {
 	Device  string
 	Keyslot int
+	// TPMPath and PrivKeyPath: the TPM salt of the slot goes with its last
+	// keyslot, written with the signing key.
+	TPMPath     string
+	PrivKeyPath string
 	// ExistingKeyFile authorises luksKillSlot instead of cryptsetup's
 	// prompt for a remaining passphrase (scripts and tests).
 	ExistingKeyFile string
@@ -710,6 +714,19 @@ func LuksRemove(o LuksRemoveOptions) error {
 		return err
 	}
 	fmt.Printf("%s keyslot %d removed (was %s)\n", o.Device, o.Keyslot, describeKeyslot(*have))
+	if t := have.Token; !t.Obsolete && t.Recipe == diskkey.RecipeTPMSalt && t.Slot != nil {
+		others := false
+		for _, s := range st.Keyslots {
+			others = others || s.Keyslot != o.Keyslot && s.Token != nil && !s.Token.Obsolete && s.Token.Recipe == diskkey.RecipeTPMSalt && s.Token.BoundTo(*t.Slot)
+		}
+		if !others {
+			if err := removeTPMSalt(o.TPMPath, uint32(*t.Slot), o.PrivKeyPath); err != nil {
+				fmt.Printf("The TPM salt of slot %d stays in its blob (%v): 'tpm2-kira slot delete --nvram %d' takes it with the slot.\n", *t.Slot, err, *t.Slot)
+			} else {
+				fmt.Printf("Slot %d's TPM salt is gone with its last keyslot.\n", *t.Slot)
+			}
+		}
+	}
 	left := 0
 	for _, s := range st.Keyslots {
 		if s.Token != nil && s.Keyslot != o.Keyslot {

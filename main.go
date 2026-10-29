@@ -614,11 +614,13 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		fs := flag.NewFlagSet("luks remove", flag.ExitOnError)
 		keyslot := fs.Int("keyslot", -1, "The keyslot to remove, one tpm2-kira marked (required)")
 		existing := fs.String("existing-key-file", "", "A file with a remaining passphrase to authorise luksKillSlot (scripts; by default asked)")
+		tpm := fs.String("tpm", tpmPath, "Path to TPM device (the TPM salt goes with its last keyslot)")
+		privKey := fs.String("privkey", "", "Signing key, for the slot's blob (default: "+signing.DefaultPrivateKeyPath+")")
 		fs.Parse(deviceLast(args[1:]))
 		if fs.NArg() != 1 || *keyslot < 0 {
 			fail(fmt.Errorf("usage: tpm2-kira luks remove <device> --keyslot N"))
 		}
-		if err := admin.LuksRemove(admin.LuksRemoveOptions{Device: fs.Arg(0), Keyslot: *keyslot, ExistingKeyFile: *existing}); err != nil {
+		if err := admin.LuksRemove(admin.LuksRemoveOptions{Device: fs.Arg(0), Keyslot: *keyslot, ExistingKeyFile: *existing, TPMPath: *tpm, PrivKeyPath: *privKey}); err != nil {
 			fail(err)
 		}
 	default:

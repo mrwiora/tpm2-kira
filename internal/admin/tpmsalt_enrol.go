@@ -84,6 +84,9 @@ func tpmSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	salt := phonegate.FactorSalt(t, label)
 	defer wipe.Bytes(salt)
 	att.TPMSalt = *w
+	if err := checkEnrolmentFitsWithKey(tpmDev, sealed, att, slot); err != nil {
+		return nil, 0, err
+	}
 	if err := writeAttestBlob(tpmDev, idx, att, priv); err != nil {
 		return nil, 0, err
 	}
@@ -115,4 +118,41 @@ func askNewPassword() ([]byte, error) {
 		return nil, errors.New("the passwords differ; nothing was written")
 	}
 	return pw, nil
+}
+
+// removeTPMSalt takes the TPM salt out of a slot's blob, and the
+// attestation part with it when nothing else uses it.
+func removeTPMSalt(tpmPath string, slot uint32, privKeyPath string) error {
+	idx, err := nvslot.AttestIndexForSlot(slot)
+	if err != nil {
+		return err
+	}
+	if privKeyPath == "" {
+		privKeyPath = signing.DefaultPrivateKeyPath
+	}
+	priv, err := signing.LoadCheckedSigningPrivateKey(privKeyPath)
+	if err != nil {
+		return err
+	}
+	if err := signing.PrepareSigningKey(priv); err != nil {
+		return err
+	}
+	tpmDev, err := tpmdev.Open(tpmPath)
+	if err != nil {
+		return err
+	}
+	defer tpmDev.Close()
+	_, sealed, err := phonegate.ReadSlot(tpmDev, idx)
+	if err != nil {
+		return err
+	}
+	att := sealed.Payload.Attestation
+	if att == nil || len(att.TPMSalt.Credential) == 0 {
+		return nil
+	}
+	att.TPMSalt = nvslot.WrappedFactor{}
+	if !att.Phone.Enabled() && !att.Vault.Enabled() {
+		att = nil // nothing else uses the attestation part
+	}
+	return writeAttestBlob(tpmDev, idx, att, priv)
 }
