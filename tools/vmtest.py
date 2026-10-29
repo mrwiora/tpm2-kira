@@ -45,7 +45,10 @@ What it does, each step a check in the report:
      luksDump name the recipe, the plan takes the part; a boot asks the
      password alone over SSH (the TPM opened the salt during the hold);
      luks remove takes the keyslot again
- 8. remote attestation over TLS, the vault: tpm2-kira-vault runs here, in
+ 8. remote attestation over TLS, the vault (verified against its own root,
+    from 'tpm2-kira-vault tls root', then its pin): an enrolment without a
+    root refused; the root brought to the machine, luks enrol --ca puts it
+    into /etc/tpm2-kira/vault-ca.pem; tpm2-kira-vault runs here, in
      a container with a software TPM of its own (tools/vmtest-vault/),
      published on the [vault] port; luks enrol --password tpm --salt vault with a
      token it made; the image rebuilt with the vault; a boot that nobody
@@ -71,6 +74,7 @@ every session's transcript land in the run's directory.
 """
 
 import argparse
+import urllib.parse
 import base64
 import configparser
 import datetime
@@ -271,17 +275,27 @@ class Vault:
             raise Fail("the vault does not serve:\n" + self._sh(["docker", "logs", self.NAME], check=False)[-800:])
         out = self.admin("operator", "add", "vmtest")
         tok = re.search(r"token \(shown this once\):\s+(\S+)", out)
-        pin = re.search(r"--pinnedpubkey (\S+)", out)
-        if not tok or not pin:
+        if not tok or "--cacert" not in out:
             raise Fail("operator add: " + out[-400:])
-        self.op_token, self.op_pin = tok.group(1), pin.group(1)
+        self.op_token = tok.group(1)
+        # The vault's root: what machines and operators verify it against.
+        self.root = self.admin("tls", "root")
+        if not self.root.startswith("-----BEGIN CERTIFICATE-----"):
+            raise Fail("tls root: " + self.root[-400:])
+        self.root_file = os.path.join(self.dir, "vault-ca.pem")
+        with open(self.root_file, "w") as f:
+            f.write(self.root)
 
     def approve(self, request_id, pepper):
         """Approves a request with a pepper over the operator interface,
-        as an operator does: curl, the vault's key pinned."""
-        p = subprocess.run(["curl", "-sS", "-k", "--pinnedpubkey", self.op_pin, "-H", "Authorization: Bearer " + self.op_token,
+        as an operator does: curl, verifying the vault against its root.
+        The leaf is for the vault's address; the operator port is on this
+        machine's loopback, so curl is pointed there for that address."""
+        host = urllib.parse.urlparse(self.url).hostname
+        p = subprocess.run(["curl", "-sS", "--cacert", self.root_file, "--connect-to", f"{host}:{self.op_port}:127.0.0.1:{self.op_port}",
+                            "-H", "Authorization: Bearer " + self.op_token,
                             "-H", "Content-Type: application/json", "-X", "POST", "--data-binary", json.dumps({"pepper": pepper}),
-                            "-w", "\n%{http_code}", f"https://127.0.0.1:{self.op_port}/v1/requests/{request_id}/approve"],
+                            "-w", "\n%{http_code}", f"https://{host}:{self.op_port}/v1/requests/{request_id}/approve"],
                            capture_output=True, text=True)
         body, _, code = p.stdout.rpartition("\n")
         return code.strip(), body + p.stderr
@@ -628,15 +642,23 @@ class Machine:
         rc, out = self.run(cmd + " 2>&1", save="rebuild.log")
         return out
 
+    CA_FILE = "/root/vault-ca.pem"
+
     def vault(self, vault):
         self.log.head("remote attestation over TLS: the vault")
+        # Without a root of the vault the enrolment is refused before the
+        # vault is asked; the root comes over as an operator brings it.
+        rc, out = self.run("tpm2-kira luks enrol " + self.luks_dev + " --password tpm --salt vault --url " + vault.url +
+                           " --pin sha256:" + "0" * 64 + " --token none 2>&1", save="luks-enrol-vault-no-root.log")
+        self.check("luks enrol without a root of the vault is refused, naming --ca", "no root certificate of a vault" in out and "--ca FILE" in out, out[-400:])
+        self.run(f"echo {base64.b64encode(vault.root.encode()).decode()} | base64 -d > {self.CA_FILE}")
         out = vault.admin("token", "create", "--name", self.name)
         self.log.save("vault-token.log", out)
         m = re.search(r"--url (\S+) --pin (\S+) --token (\S+)", out)
         if not self.check("the vault makes an enrolment token", m is not None, out[-400:]):
             raise Fail("no token")
         url, pin, token = m.groups()
-        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --password tpm --salt vault --url {url} --pin {pin} --token {token} --name {self.name}", "luks-enrol-vault")
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --password tpm --salt vault --url {url} --pin {pin} --token {token} --ca {self.CA_FILE} --name {self.name}", "luks-enrol-vault")
         try:
             s.expect(r"to authorise: ?$", 300); s.send(self.luks_pass + "\n")
             _, m = s.expect(r"keyslot (\d+) added: tpm2-kira, 0x240[01] ", 300)
@@ -650,6 +672,8 @@ class Machine:
             s.close()
         out = vault.admin("devices")
         self.check("the vault lists the device", self.name in out, out[-400:])
+        rc, out = self.run("cat /etc/tpm2-kira/vault-ca.pem 2>&1")
+        self.check("--ca put the vault's root into /etc/tpm2-kira/vault-ca.pem", out.strip() == vault.root.strip(), out[-300:])
         out = self.rebuild()
         self.check("the image is rebuilt with the vault in its plan", re.search(r"Vault:\s+in", out) is not None, out[-800:])
 
@@ -731,7 +755,7 @@ class Machine:
         if not self.check("the vault makes a token for the new device", m is not None, out[-400:]):
             raise Fail("no token")
         url, pin, token = m.groups()
-        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --password tpm --salt vault --pepper --url {url} --pin {pin} --token {token} --name {name}", "luks-enrol-vault-pepper")
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --password tpm --salt vault --pepper --url {url} --pin {pin} --token {token} --ca {self.CA_FILE} --name {name}", "luks-enrol-vault-pepper")
         try:
             s.expect(r"Pepper \(the operator gives it with every approval on the vault\): ?$", 300); s.send(self.PEPPER + "\n")
             s.expect(r"The same pepper again: ?$", 60); s.send(self.PEPPER + "\n")
@@ -892,7 +916,7 @@ class Machine:
         if not self.check("a token for the typed recipe's device", m is not None, out[-400:]):
             raise Fail("no token")
         url, pin, token = m.groups()
-        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt vault --pepper --url {url} --pin {pin} --token {token} --name {name}", "luks-enrol-vault-typed")
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt vault --pepper --url {url} --pin {pin} --token {token} --ca {self.CA_FILE} --name {name}", "luks-enrol-vault-typed")
         try:
             s.expect(r"Pepper \(the operator gives it with every approval on the vault\): ?$", 300); s.send(self.PEPPER + "\n")
             s.expect(r"The same pepper again: ?$", 60); s.send(self.PEPPER + "\n")
