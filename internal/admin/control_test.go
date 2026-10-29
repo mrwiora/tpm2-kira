@@ -125,6 +125,9 @@ func TestControlHub(t *testing.T) {
 	if disk[0].Blocked != "" || !strings.Contains(disk[1].Blocked, "needs slot 0") || !strings.Contains(disk[2].Blocked, "needs the signing key") {
 		t.Fatalf("disk: %+v", disk)
 	}
+	if disk[3].Key != "luks-tpm" || !strings.Contains(disk[3].Title, "0x1200") || !strings.Contains(disk[3].Blocked, "needs the signing key") {
+		t.Fatalf("the TPM salt's step: %+v", disk[3])
+	}
 
 	// Step 1 not in place: every submenu waits for it. An image built
 	// before the hook was in HOOKS is not that: it is rebuilt on leaving.
@@ -305,7 +308,7 @@ func TestControlShow(t *testing.T) {
 	c.show()
 	got := out.String()
 	for _, want := range []string{"Step 1 of 2: the boot chain", "All prerequisites are met", "[x]\033[0m mkinitcpio adoption",
-		"Step 2 of 2: what this machine combines", "Signing key and TOTP codes", "    Signing key", "    Password + salt (Argon2id)",
+		"Step 2 of 2: what this machine combines", "Signing key and TOTP codes", "    Signing key", "    Recovery: password and salt typed (0x1100)",
 		"Recommended next:\033[0m Signing key and TOTP codes > Signing key"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the screen lacks %q:\n%s", want, got)

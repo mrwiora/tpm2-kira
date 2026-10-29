@@ -131,9 +131,12 @@ flowchart LR
    `vaultproto.ReleaseMode` (0x01 auto, 0x02 approve; the words on the
    command line). Tested: unit, swtpm (0x2400, 0x2401, 0x1401), the
    vault's tests.
-4. [ ] enrolment: `luks enrol --password … --salt … [--pepper]`, refused
-   combinations named; `control`'s named choices; its red warning when
-   every keyslot of a volume is tpm2-kira's.
+4. [x] enrolment: `luks enrol --password … --salt … [--pepper]`, refused
+   combinations named (step 1); `control`'s choices named by recipe -
+   recovery (0x1100), salt in this TPM (0x1200, new), the phone (0x1300),
+   the vault (asks: password held by the TPM or typed, the pepper); the
+   red line when every keyslot of a volume is tpm2-kira's says why (the
+   OS prompt then opens nothing), and `tpm2-kira status` notes it too.
 5. [ ] boot: the prompts by recipe (console and boot SSH), the fallback
    order (recipe, recovery recipe, the OS prompt), a typed password while
    the vault is asked.

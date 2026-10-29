@@ -77,7 +77,7 @@ func (c *controller) prereqs() []prereq {
 		}
 		add(prereqMet, "LUKS: %s", strings.Join(names, ", "))
 		if len(f.NoRecovery) > 0 {
-			add(prereqNot, "Recovery passphrase: none on %s - every keyslot is tpm2-kira's (cryptsetup luksAddKey)", strings.Join(f.NoRecovery, ", "))
+			add(prereqNot, "Recovery passphrase: none on %s - every keyslot is tpm2-kira's, so the operating system's own prompt, the last way in when tpm2-kira itself fails, opens nothing (cryptsetup luksAddKey)", strings.Join(f.NoRecovery, ", "))
 		} else {
 			add(prereqMet, "Recovery passphrase: a keyslot that is not tpm2-kira's on every device")
 		}

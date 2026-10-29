@@ -14,8 +14,8 @@ import (
 	"charm.land/huh/v2"
 )
 
-// control's option for the disk key from this TPM and a vault (the recipe 0x2400,
-// docs/VAULT.md): the vault's address, key pin and one-time token
+// control's option for the disk key with the vault's salt (docs/VAULT.md):
+// unattended (0x2400, 0x2401) or with a typed password (0x1400, 0x1401); the vault's address, key pin and one-time token
 // as 'tpm2-kira-vault token create' prints them, asked here; the vault is
 // asked before anything is enrolled - does it answer, with the pinned key -
 // and on every look at the machine afterwards, whether it still knows this
@@ -27,8 +27,8 @@ var vaultPinRe = regexp.MustCompile(`^sha256:[0-9a-fA-F]{64}$`)
 // vaultStep is the option's line under Disk unlock.
 func (c *controller) vaultStep(gate string, strong *StatusSlot) controlStep {
 	f := &c.facts
-	st := controlStep{Key: "luks-vault", Optional: true, SelfConfirm: true, Title: "Unattended: this TPM and a vault (0x2400)",
-		Explain: "A LUKS keyslot that opens unattended: its key is made from a part in this TPM and a part the vault (tpm2-kira-vault) releases to a fresh quote of an approved boot - or once an operator approves the boot. Nothing is typed; the recovery passphrase stays the way in when the vault refuses. The boot image reaches the vault over its own network. Enrolled, picking it checks the vault again or removes the keyslot.",
+	st := controlStep{Key: "luks-vault", Optional: true, SelfConfirm: true, Title: "Salt from a vault: unattended (0x2400) or with your password (0x1400)",
+		Explain: "A LUKS keyslot whose salt the vault (tpm2-kira-vault) releases to a fresh quote of an approved boot - at once, or once an operator approves the boot, with a pepper if you choose. Its password is held by this TPM (the boot opens unattended) or typed at the machine after the code screen. Without the vault, the recovery recipe and the recovery passphrase stay the way in. The boot image reaches the vault over its own network. Enrolled, picking it checks the vault again or removes the keyslot.",
 		Run:     (*controller).runVault}
 	if f.Remote.SSH.On {
 		st.Explain += " SSH at boot stays for the recovery passphrase when the vault does not answer."
@@ -151,6 +151,13 @@ func (c *controller) runVault() error {
 		}
 		edit = choice == "edit"
 	}
+	typedPassword := false
+	if err := c.form(huh.NewSelect[bool]().Title("The password").
+		Description("Held by this TPM, the boot opens unattended once the vault releases the salt. Typed at the machine after the code screen, the disk needs a person as well.").
+		Options(huh.NewOption("Held by this TPM: unattended (0x2400)", false), huh.NewOption("Typed at the machine (0x1400)", true)).
+		Value(&typedPassword)).Run(); err != nil {
+		return err
+	}
 	if err := c.form(huh.NewConfirm().Title("With an operator's pepper?").
 		Description("The key then needs a secret an operator gives with each approval on the vault: every boot waits for that approval. Typed here once, never sent at enrolment, never stored by the vault.").
 		Affirmative("Yes, with a pepper").Negative("No").Value(&pepper)).Run(); err != nil {
@@ -163,8 +170,11 @@ func (c *controller) runVault() error {
 	}
 	name, _ := os.Hostname()
 	recipe := diskkey.RecipeUnattendedVault
+	if typedPassword {
+		recipe = diskkey.RecipeVaultSalt
+	}
 	if pepper {
-		recipe = diskkey.RecipeUnattendedVaultPepper
+		recipe |= diskkey.Recipe(diskkey.FlagPepper)
 	}
 	if err := LuksEnrol(LuksEnrolOptions{Device: dev, Recipe: recipe,
 		Vault: VaultEnrolOptions{TPMPath: c.o.TPMPath, SealIndex: uint32(strong.Slot), URL: url, Pin: pin, Token: token,

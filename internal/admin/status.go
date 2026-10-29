@@ -197,6 +197,13 @@ func statusNotes(r StatusReport) []string {
 		if d.Error != "" {
 			headersRead = false // a header not read: the keyslot checks would be guesses
 		}
+		plain := false
+		for _, ks := range d.Keyslots {
+			plain = plain || ks.Token == nil
+		}
+		if d.Error == "" && len(d.Keyslots) > 0 && !plain {
+			notes = append(notes, fmt.Sprintf("%s: every keyslot is tpm2-kira's - the operating system's own prompt, the last way in when tpm2-kira itself fails, opens nothing: add a plain passphrase (cryptsetup luksAddKey %s)", d.Device, d.Device))
+		}
 		for _, o := range d.Orphans {
 			notes = append(notes, fmt.Sprintf("%s token %d (%s) points at no existing keyslot - a leftover: cryptsetup token remove --token-id %d %s", d.Device, o.ID, o.Type, o.ID, d.Device))
 		}

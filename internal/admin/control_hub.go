@@ -303,8 +303,9 @@ func (c *controller) diskGate() string {
 	return ""
 }
 
-// diskSteps: the keyslot from a typed salt, the one from the phone's
-// salt, the one from this TPM and a vault.
+// diskSteps: the keyslots by recipe - the recovery recipe, the salt in
+// this TPM, the phone's salt, the vault's (with a typed password or
+// unattended).
 func (c *controller) diskSteps() []controlStep {
 	f := &c.facts
 	_, strong, _ := c.slots()
@@ -318,8 +319,8 @@ func (c *controller) diskSteps() []controlStep {
 	// in its key, no slot binding in its token, and deleting a slot leaves
 	// it untouched. It coexists with the others: at boot the phone's salt
 	// and the vault are tried first, the typed salt is the fallback.
-	salt := controlStep{Key: "luks-salt", Optional: true, SelfConfirm: true, Title: "Password + salt (Argon2id)",
-		Explain: "A LUKS keyslot whose key is derived at boot from a password and a salt you type (Argon2id, 1 GiB). Bound to no slot - deleting a slot leaves it untouched. Enrolled, picking it offers the removal." + typed,
+	salt := controlStep{Key: "luks-salt", Optional: true, SelfConfirm: true, Title: "Recovery: password and salt typed (0x1100)",
+		Explain: "A LUKS keyslot whose key is derived at boot from a password and a salt you type (Argon2id, 1 GiB): the way in when the other recipes give no salt, at tpm2-kira's prompt. Bound to no slot - deleting a slot leaves it untouched. Enrolled, picking it offers the removal." + typed,
 		Run:     func(c *controller) error { return c.runLuks(diskkey.RecipeRecovery) }}
 	switch {
 	case gate != "":
@@ -334,7 +335,23 @@ func (c *controller) diskSteps() []controlStep {
 		}
 	}
 
-	remote := controlStep{Key: "luks-remote", Optional: true, SelfConfirm: true, Title: "Password + phone salt (the phone)",
+	tpmSalt := controlStep{Key: "luks-tpm", Optional: true, SelfConfirm: true, Title: "Password, salt in this TPM (0x1200)",
+		Explain: "A LUKS keyslot whose key is derived from your password and a salt this TPM keeps and opens only in a boot the signing key approved: the disk's header and the password alone open nothing. The password is typed at boot. Enrolled, picking it offers the removal." + typed,
+		Run:     func(c *controller) error { return c.runLuks(diskkey.RecipeTPMSalt) }}
+	switch {
+	case gate != "":
+		tpmSalt.Blocked = gate
+	case f.TPMErr != "":
+		tpmSalt.Blocked = "no TPM: " + f.TPMErr
+	case f.Keys == "":
+		tpmSalt.Blocked = "needs the signing key"
+	case strong == nil:
+		tpmSalt.Blocked = "needs slot 0 (Signing key and TOTP codes)"
+	case len(c.boundKeyslots(strong.Slot, diskkey.RecipeTPMSalt)) > 0:
+		tpmSalt.Done = strings.Join(c.boundKeyslots(strong.Slot, diskkey.RecipeTPMSalt), ", ")
+	}
+
+	remote := controlStep{Key: "luks-remote", Optional: true, SelfConfirm: true, Title: "Password, salt from the phone (0x1300)",
 		Explain: "A LUKS keyslot whose key is derived from your password and the salt the phone hands back after it attested the boot: the disk needs the phone, this TPM in an approved boot, and your password. Enrolled, picking it offers the removal." + typed,
 		Run:     func(c *controller) error { return c.runLuks(diskkey.RecipePhoneSalt) }}
 	switch {
@@ -353,7 +370,7 @@ func (c *controller) diskSteps() []controlStep {
 	case !f.Capped:
 		remote.Blocked = "this boot did not pass tpm2-kira's code screen: reboot, then enrol the salt - the phone would otherwise call the boot key refused instead of locked"
 	}
-	return []controlStep{salt, remote, c.vaultStep(gate, strong)}
+	return []controlStep{salt, remote, c.vaultStep(gate, strong), tpmSalt}
 }
 
 // debugStep is the boot settings' debug switch, on step 2 itself.

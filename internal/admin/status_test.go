@@ -41,6 +41,10 @@ func TestStatusNotes(t *testing.T) {
 			Devices: []LuksDeviceStatus{dev(nil, &diskkey.LuksToken{Recipe: diskkey.RecipePhoneSalt, Slot: &two})}}, "bound to slot 2, which is gone"},
 		{"keyslot's slot lost its salt", StatusReport{Slots: []StatusSlot{slot(0, "0e,7e", false)},
 			Devices: []LuksDeviceStatus{dev(nil, &diskkey.LuksToken{Recipe: diskkey.RecipePhoneSalt, Slot: &zero})}}, "keyslot 1 needs the phone salt of slot 0"},
+		{"keyslot's slot holds no TPM salt", StatusReport{Slots: []StatusSlot{slot(0, "0e,7e", false)},
+			Devices: []LuksDeviceStatus{dev(nil, &diskkey.LuksToken{Recipe: diskkey.RecipeTPMSalt, Slot: &zero})}}, "keyslot 1 needs the TPM salt of slot 0"},
+		{"every keyslot tpm2-kira's", StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e,11u", true), slot(1, "0e,7e", false)},
+			Devices: []LuksDeviceStatus{dev(&diskkey.LuksToken{Recipe: diskkey.RecipeRecovery}, &diskkey.LuksToken{Recipe: diskkey.RecipePhoneSalt, Slot: &zero})}}, "every keyslot is tpm2-kira's"},
 	}
 	for _, c := range cases {
 		notes := strings.Join(statusNotes(c.r), "\n")
