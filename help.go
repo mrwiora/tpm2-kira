@@ -77,6 +77,8 @@ THE BOOT IMAGE
     run          Show the code, hold for Enter, start the parts the image's
                  plan names: the phone's gate, SSH, the vault, the disk's key
     cap          Lock the code until the next boot (when the initrd is left)
+    machine-id   Release the installed system's machine-id, sealed under
+                 slot 0's policy (KIRAmachineID), before the image's network
     unlock-key   Debian keyscript: the disk's key from 'run --unlock', else
                  askpass
     ssh-child    The SSH server's unprivileged half, started by run
@@ -338,8 +340,9 @@ The TPM's slots: 0-15 are the NV indices 0x01803010-0x0180301F.
   delete           Delete the slot's indices in the TPM: its blob, generation
                    index and record counter. Without --nvram: everything of
                    tpm2-kira - every slot, the leftover indices, the boot
-                   settings and the SSH CA (its EFI variable and
-                   /etc/tpm2-kira/ssh_ca.pub) - after asking on a terminal,
+                   settings, the sealed machine-id (KIRAmachineID) and the
+                   SSH CA (its EFI variable and /etc/tpm2-kira/ssh_ca.pub) -
+                   after asking on a terminal,
                    or with --yes. Only an index with tpm2-kira's shape is
                    taken; anything else at its handles is left and named.
                    A LUKS keyslot bound to the slot stays and leaves the

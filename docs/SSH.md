@@ -150,16 +150,40 @@ network's the DHCP identity):
 ### 2.1 The address at boot
 
 A DHCP server hands out addresses by the client identifier it is asked
-with. The image has no machine-id, from which systemd-networkd makes its
-DUID, and no dhcpcd DUID file: asking as itself it would be another client
-and get another address than the running system - the code screen would
-be where nobody looks for it. So it asks as the running system does on the
-matched interface, read at every image build (`TPM2_KIRA_NET_DHCP_ID=auto`)
-from the running system's DHCP client:
+with; asking as another client, the image would get another address than
+the running system - the code screen would be where nobody looks for it.
+The image asks as the running system does, two ways at once:
+
+- **The machine-id, sealed** (as safearch keeps its own): the installed
+  system's `/etc/machine-id`, sealed in the TPM under slot 0's policy and
+  kept in the EFI variable `KIRAmachineID` (vendor GUID
+  `67f474ef-94a1-4412-88df-d62349d430a9`). `slot add` seals it for slot 0,
+  `slot approve` (the hooks run it after every build) seals it again when
+  slot 0 was made again, the signing key or `/etc/machine-id` changed. At
+  boot `tpm2-kira-machine-id.service` (Debian: the init-premount script)
+  runs `tpm2-kira-boot machine-id` before the network: in a boot state the
+  signing key approved, before the separator, the TPM unseals it, and it
+  is written in place to `/run/machine-id` and `/etc/machine-id`. The image
+  then has the installed system's machine-id, as safearch's has its own:
+  systemd-networkd, started after, derives its default DUID from it - the
+  running system's where that is networkd's default - and whatever else
+  in the image reads the machine-id gets the same as the installed system.
+  Where the image carries the copied identity below, networkd asks with
+  that one, for DHCPv4 and DHCPv6. No process of the installed system can
+  unseal it (the separator closes the policy), and the variable holds the
+  TPM-wrapped object, its policy and a hash, never the machine-id. A boot
+  in a state nobody approved releases none, and says so; `slot delete`
+  (slot 0, or everything) removes the variable.
+- **The identity copied into the image**, read at every image build
+  (`TPM2_KIRA_NET_DHCP_ID=auto`) from the running system's DHCP client on
+  the matched interface - what networkd and Debian's udhcpc ask with
+  where the running system's client has an identifier of its own (another
+  DUID than networkd's default, NetworkManager's, dhcpcd's), and in a boot
+  that releases no machine-id:
 
 | the running system's client | its identity | the image asks with |
 |---|---|---|
-| systemd-networkd | `networkctl status --json`: the IAID and the DUID (RFC 4361) | networkd: `ClientIdentifier=duid`, `IAID=`, `DUIDType=`, `DUIDRawData=`; Debian: `udhcpc -x 0x3d:…` |
+| systemd-networkd | `networkctl status --json`: the IAID and the DUID (RFC 4361) | networkd: `ClientIdentifier=duid`, `IAID=`, `DUIDType=`, `DUIDRawData=`, for `[DHCPv4]` and `[DHCPv6]` alike; Debian: `udhcpc -x 0x3d:…` |
 | NetworkManager (its own client) | `CLIENTID=` of its lease file | the same |
 | dhcpcd (Debian 13) | `dhcpcd.conf` (`duid`, `clientid`, `iaid`) and `/var/lib/dhcpcd/duid`; the IAID the MAC's last four bytes | the same |
 | none of them (ISC dhclient, by default without an identifier) | unknown: the build warns that the address may differ | networkd: the MAC; Debian: `ipconfig`, none |

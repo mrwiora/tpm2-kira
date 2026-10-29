@@ -252,7 +252,8 @@ Because the phones live in the slot's blob,
 
 `slot delete` without `--nvram` removes everything of tpm2-kira's outside
 the disk: every slot, what belongs to no slot any more (a companion index
-whose slot is gone), the boot settings, and the SSH CA - its EFI variable
+whose slot is gone), the boot settings, the sealed machine-id
+(`KIRAmachineID`, docs/SSH.md §2.1; it goes with slot 0 too), and the SSH CA - its EFI variable
 `KIRAasshCA` and `/etc/tpm2-kira/ssh_ca.pub` (docs/SSH.md §4). What it
 never touches is the LUKS header: a keyslot bound to a deleted slot is
 named as dirty, and `control` (or `luks remove`) takes it.

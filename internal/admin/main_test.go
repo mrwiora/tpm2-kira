@@ -2,9 +2,13 @@ package admin
 
 import (
 	"os"
+	"path/filepath"
 	"syscall"
 	"testing"
 
+	"github.com/tpm2-trust/assh/persist"
+
+	"github.com/mrwiora/tpm2-kira/internal/machineid"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 )
 
@@ -18,5 +22,18 @@ func TestMain(m *testing.M) {
 		os.Exit(phonegate.RadioWorkerMain(false))
 	}
 	syscall.Umask(0o22)
-	os.Exit(m.Run())
+	// The EFI variables and the machine-id the tests seal are theirs: never
+	// the host's efivarfs or /etc/machine-id.
+	dir, err := os.MkdirTemp("", "tpm2-kira-admin-tests-")
+	if err != nil {
+		panic(err)
+	}
+	persist.VarDir = filepath.Join(dir, "efivars")
+	os.MkdirAll(persist.VarDir, 0o755)
+	machineid.EtcPath = filepath.Join(dir, "machine-id")
+	machineid.RunPath = filepath.Join(dir, "run-machine-id")
+	os.WriteFile(machineid.EtcPath, []byte("0123456789abcdef0123456789abcdef\n"), 0o644)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }

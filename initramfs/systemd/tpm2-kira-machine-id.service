@@ -1,0 +1,31 @@
+[Unit]
+Description=tpm2-kira machine-id for the boot image's network
+Documentation=file:///usr/share/doc/tpm2-kira/README.md
+DefaultDependencies=no
+# An initrd unit. The package also puts this file on the host, where the
+# mkinitcpio hook picks it up from; enabled there by mistake it does nothing.
+ConditionPathExists=/etc/initrd-release
+# The installed system's machine-id, sealed under slot 0's policy in the EFI
+# variable KIRAmachineID (internal/machineid): released here, in a boot state
+# the signing key approved, before systemd-networkd starts, which derives
+# its default DHCP DUID from it (a DUID the image carries, copied from the
+# installed system's client, is asked with instead). Slot 0's policy holds after enter-initrd (PCR 11) and before
+# the separators, like the code screen's. In the image with its network
+# alone (the hook adds it with systemd-networkd).
+After=systemd-pcrphase-initrd.service
+Before=systemd-networkd.service
+Before=systemd-pcrosseparator.service
+Before=systemd-pcrnvdone.service
+Conflicts=initrd-switch-root.target
+Before=initrd-switch-root.target
+
+[Service]
+Type=oneshot
+# It waits for the TPM itself (5 s at most), as run does; whatever fails is
+# said, and the boot goes on (exit status 0).
+ExecStart=tpm2-kira-boot machine-id
+StandardOutput=journal
+StandardError=journal+console
+
+[Install]
+WantedBy=sysinit.target

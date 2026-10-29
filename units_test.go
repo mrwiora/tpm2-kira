@@ -35,7 +35,7 @@ func has(lines []string, want string) bool {
 // The initrd units are installed on the host too (the mkinitcpio hook takes
 // them from there). Enabled on the host by mistake they must do nothing.
 func TestInitrdUnitsOnlyRunInTheInitrd(t *testing.T) {
-	for _, unit := range []string{"tpm2-kira.service", "tpm2-kira-cap.service", "tpm2-kira-unlock.socket"} {
+	for _, unit := range []string{"tpm2-kira.service", "tpm2-kira-cap.service", "tpm2-kira-machine-id.service", "tpm2-kira-unlock.socket"} {
 		if !has(directives(t, "initramfs/systemd/"+unit), "ConditionPathExists=/etc/initrd-release") {
 			t.Errorf("%s lacks ConditionPathExists=/etc/initrd-release", unit)
 		}
@@ -45,7 +45,8 @@ func TestInitrdUnitsOnlyRunInTheInitrd(t *testing.T) {
 // The boot is one process tree on every distribution: the unit (Arch) and
 // the init-premount script (Debian) start the same run, which starts the
 // phone's radio worker and the SSH server's unprivileged half itself and
-// confines them in code (phonegate/gate_child.go, assh/sandbox). Neither
+// confines them in code (phonegate/gate_child.go, assh/sandbox), and the
+// same short step before the network (machine-id). Neither
 // starts a gate of its own, waits for the TPM itself or loads the
 // adapter's modules itself.
 func TestTheBootIsRunOnBothDistributions(t *testing.T) {
@@ -93,8 +94,17 @@ func TestTheBootIsRunOnBothDistributions(t *testing.T) {
 		}
 	}
 	const debian = `/usr/bin/tpm2-kira-boot run --plan "$PLAN" --unlock "$UNLOCK" $TPM2_KIRA_REMOTE `
-	if len(started) != 1 || !strings.Contains(started[0], debian) {
-		t.Errorf("Debian starts %q, want run alone as %q", started, debian)
+	const machineID = `/usr/bin/tpm2-kira-boot machine-id `
+	if len(started) != 2 || !strings.Contains(started[0], machineID) || !strings.Contains(started[1], debian) {
+		t.Errorf("Debian starts %q, want the machine-id's release, then run as %q", started, debian)
+	}
+	// Arch: the same release, before the network and the separators.
+	mid := directives(t, "initramfs/systemd/tpm2-kira-machine-id.service")
+	for _, want := range []string{"ExecStart=tpm2-kira-boot machine-id", "Type=oneshot", "Before=systemd-networkd.service",
+		"Before=systemd-pcrosseparator.service", "After=systemd-pcrphase-initrd.service"} {
+		if !has(mid, want) {
+			t.Errorf("tpm2-kira-machine-id.service lacks %q", want)
+		}
 	}
 	for _, bad := range []string{"modprobe", "/dev/tpmrm0", "gate-child", "--gate", "INITRAMFS_MODE"} {
 		if strings.Contains(string(script), bad) {

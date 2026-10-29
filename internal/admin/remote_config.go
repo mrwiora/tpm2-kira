@@ -214,8 +214,8 @@ func (n NetConfig) NetworkdFile(id dhcpIdentity) string {
 		fmt.Fprintf(&b, "DNS=%s\n", d)
 	}
 	if n.Mode == "dhcp" {
-		// The image has no machine-id, from which networkd would make a
-		// DUID of its own: it asks as the running system does.
+		// The running system's identity, copied: networkd asks with it
+		// rather than the DUID it derives from the released machine-id.
 		mac := n.Match
 		if m := n.matchedInterfaces(); len(m) == 1 {
 			mac = m[0].MAC

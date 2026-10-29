@@ -108,7 +108,7 @@ flowchart BT
 | Binary | Commands | Pages |
 |---|---|---|
 | `tpm2-kira` | `control`, `setup`, `slot …`, `status`, `phone …`, `luks …`, `vault …`, `initramfs plan`, `reveal`, `yubikey`, `pcrtips` | [README.md](../README.md) "Commands", `tpm2-kira help <command>` |
-| `tpm2-kira-boot` | `run`, `cap`, `unlock-key`, `ssh-child`, `gate-child`, `reveal` | `tpm2-kira-boot help`; the pages: `tpm2-kira help run`, `cap`, `unlock-key`, `ssh-child`, `gate-child`; [BOOT-INTEGRATION.md](BOOT-INTEGRATION.md) |
+| `tpm2-kira-boot` | `run`, `cap`, `machine-id`, `unlock-key`, `ssh-child`, `gate-child`, `reveal` | `tpm2-kira-boot help`; the pages: `tpm2-kira help run`, `cap`, `unlock-key`, `ssh-child`, `gate-child`; [BOOT-INTEGRATION.md](BOOT-INTEGRATION.md) |
 
 ## At boot
 
@@ -160,6 +160,7 @@ flowchart LR
 | a slot's generation | TPM NV `0x01803810` + n | `slot add`, `slot approve` |
 | the phone record counter | TPM NV `0x01803820` + n | `phone enrol`, `phone unenrol` |
 | the boot settings ("Debug at boot") | TPM NV `0x01803000` | `control` |
+| the machine-id, sealed under slot 0's policy | EFI variable `KIRAmachineID` (tpm2-kira's GUID) | `slot add` (slot 0), `slot approve`; removed with slot 0 and by `slot delete` |
 | the SSH CA | EFI variable `KIRAasshCA` (the key itself in the TPM) | `control`; removed by `control` (when SSH is switched off, if you say so) and `slot delete` |
 | the signing key | `/etc/tpm2-kira/keys/` (or a YubiKey) | `setup` |
 | tpm2-kira's settings | `/etc/tpm2-kira/control.conf` | `control` |

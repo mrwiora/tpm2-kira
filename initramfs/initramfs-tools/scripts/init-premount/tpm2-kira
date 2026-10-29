@@ -124,6 +124,17 @@ tpm2_kira_net() {
     echo "tpm2-kira: network: $TPM2_KIRA_NET on $dev: $(ip -o address show dev "$dev" 2>/dev/null | awk '{print $4}' | tr '\n' ' ')"
 }
 
+# The installed system's machine-id, sealed under slot 0's policy, released
+# before the network as under systemd (tpm2-kira-machine-id.service): written
+# where the image's /etc/machine-id is. Whatever fails is said, the boot
+# goes on.
+mkdir -p /run/initramfs
+case "$TPM2_KIRA_NET" in
+dhcp | static)
+    TPM2_KIRA_LOG=/run/initramfs/tpm2-kira.log /usr/bin/tpm2-kira-boot machine-id 2>>/run/initramfs/tpm2-kira.log
+    ;;
+esac
+
 # The code screen, the gate's coordinator and the key provider in one
 # process; it stays for the keyscript until init-bottom stops it. A
 # background job of a non-interactive shell would get /dev/null as stdin;

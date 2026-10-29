@@ -26,6 +26,7 @@ Debian scripts start only those.
 | `tpm2-kira.service` (`run`: the code at the prompt, the gate's coordinator, the SSH server, and the key provider for `systemd-cryptsetup`) | always, once `sd-tpm2-kira` is in `HOOKS`. `run` waits for the TPM's device (at most 5 s) only when a part of the plan needs it | a volume asks for its key; with the codes in the plan, a TOTP key is shown. Without them the TPM is not asked, and the boot is released at once. The first `slot add` makes the image out of date (`control` rebuilds it when left). The gate ends when the boot is released; the process stays to answer the volumes' key requests and ends at switch-root |
 | `tpm2-kira-unlock.socket` (the key socket) | always, with the display | `systemd-cryptsetup` activates a volume whose key file is the socket |
 | `tpm2-kira-cap.service` (locks codes when the initrd is left) | with the codes in the plan: a slot is sealed | the initrd is left |
+| `tpm2-kira-machine-id.service` (releases the sealed machine-id, `tpm2-kira-boot machine-id`) | with the image's network | before systemd-networkd starts: slot 0's policy holds, `KIRAmachineID` unseals ([SSH.md](SSH.md) §2.1) |
 
 The phone's gate is no unit: with the phone in the plan, `run` starts its
 radio worker itself. The phone is in the plan with a TPM, a phone enrolled
@@ -71,7 +72,7 @@ does around it:
 | `run` is started by | `tpm2-kira.service` | `scripts/init-premount/tpm2-kira`, in the background |
 | the disk's key | `systemd-cryptsetup` reads `tpm2-kira-unlock.socket` (`rd.luks.key=`, crypttab(5) AF_UNIX key files) | cryptroot runs the keyscript `unlock-key`, which asks the socket `run --unlock` made |
 | the adapter's modules | loaded by `systemd-modules-load` (`modules-load.d`) | loaded by the image's init (`conf/modules`, the hook's `force_load`) |
-| the image's network | `systemd-networkd`, the plan's `.network` file | the script: initramfs-tools' `configure_networking`, or busybox' `udhcpc` / `ip` (`remote.conf`) |
+| the image's network | `systemd-networkd`, the plan's `.network` file; the sealed machine-id released before it (`tpm2-kira-machine-id.service`), from which networkd derives its default DUID (a copied identity wins) | the script: initramfs-tools' `configure_networking`, or busybox' `udhcpc` / `ip` (`remote.conf`) with the copied identity; the machine-id is released all the same, before it |
 | the narrative | the journal: `journalctl -b -u tpm2-kira.service` | `/run/initramfs/tpm2-kira.log` |
 | stopped, and the codes locked | at `initrd-switch-root`: the units' stop, `cap` in `tpm2-kira-cap.service` | `scripts/init-bottom/tpm2-kira`: TERM to `run` (5 s), then `cap` |
 | the measure point | ordered before systemd's PCR separators | before cryptroot (no separator) |

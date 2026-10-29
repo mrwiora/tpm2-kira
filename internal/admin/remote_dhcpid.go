@@ -4,10 +4,14 @@ package admin
 // boot image asks the DHCP server with. A server hands out its addresses
 // by it, so an image that asks as someone else gets another address than
 // the running system - the code screen is somewhere the person does not
-// look. The image has no machine-id, from which systemd-networkd makes its
-// DUID, and no dhcpcd DUID file: the identity is the running system's,
-// read when the image is built (TPM2_KIRA_NET_DHCP_ID=auto, the default),
-// or set in control.conf (mac, or the identifier in hex).
+// look. The image releases the running system's machine-id, sealed under
+// slot 0's policy (internal/machineid), before networkd starts, which
+// derives its default DUID from it; this copied identity is what the image
+// asks with where the running system's client has an identifier of its own
+// (and on Debian, whose image has no networkd): the running system's, read
+// when the image is built
+// (TPM2_KIRA_NET_DHCP_ID=auto, the default), or set in control.conf (mac,
+// or the identifier in hex).
 //
 // What the running system asks with is read from its DHCP client, for the
 // interface the image's network is for: systemd-networkd (networkctl's
@@ -228,8 +232,11 @@ func networkdDHCP(id []byte, mac string) (section string, ok bool) {
 	switch {
 	case len(id) >= 7 && id[0] == 0xff:
 		// RFC 4361: the IAID, then the DUID - its type, then the rest.
-		return fmt.Sprintf("[DHCPv4]\nClientIdentifier=duid\nIAID=0x%s\nDUIDType=%d\nDUIDRawData=%s\n",
-			hex.EncodeToString(id[1:5]), int(id[5])<<8|int(id[6]), colonHex(id[7:])), true
+		// DHCPv6 asks with the same DUID and IAID, as the running system's
+		// networkd does: the same lease for IPv6 as for IPv4.
+		iaid, duidType, raw := hex.EncodeToString(id[1:5]), int(id[5])<<8|int(id[6]), colonHex(id[7:])
+		return fmt.Sprintf("[DHCPv4]\nClientIdentifier=duid\nIAID=0x%s\nDUIDType=%d\nDUIDRawData=%s\n\n"+
+			"[DHCPv6]\nIAID=0x%s\nDUIDType=%d\nDUIDRawData=%s\n", iaid, duidType, raw, iaid, duidType, raw), true
 	case id == nil:
 		return "[DHCPv4]\nClientIdentifier=mac\n", true
 	}

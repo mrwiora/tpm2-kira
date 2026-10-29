@@ -16,6 +16,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 
+	"github.com/mrwiora/tpm2-kira/internal/machineid"
 	"github.com/tpm2-trust/assh/hostkey"
 )
 
@@ -26,6 +27,9 @@ func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privK
 	if nvramIndex != 0 {
 		// Single-slot mode – same behaviour as before
 		err := Reseal(tpmPath, pcrsStr, nvramIndex, pubKeyPath, privKeyPath, debug)
+		if nvramIndex == machineid.Slot {
+			keepMachineIDAt(tpmPath)
+		}
 		var skip *ResealSkippedError
 		if errors.As(err, &skip) {
 			fmt.Println()
@@ -49,7 +53,9 @@ func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privK
 		}
 		return fmt.Errorf("no sealed secrets found in NVRAM slots 0x%08X - 0x%08X", nvslot.NVRAMSlotStart, nvslot.NVRAMSlotEnd)
 	}
-	return joinReseal(resealSlots(tpmPath, slots, pcrsStr, pubKeyPath, privKeyPath, debug), resealSSHCA(controlPath, tpmPath, privKeyPath))
+	slotsErr := resealSlots(tpmPath, slots, pcrsStr, pubKeyPath, privKeyPath, debug)
+	keepMachineIDAt(tpmPath)
+	return joinReseal(slotsErr, resealSSHCA(controlPath, tpmPath, privKeyPath))
 }
 
 // joinReseal is the slots' and the SSH CA's outcome: a failure of either

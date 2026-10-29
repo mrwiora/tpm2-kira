@@ -95,7 +95,7 @@ install-mkinitcpio:
 	sudo cp initramfs/mkinitcpio/post/sd-tpm2-kira /etc/initcpio/post/
 	sudo chmod +x /etc/initcpio/post/sd-tpm2-kira
 	sudo mkdir -p /usr/lib/systemd/system
-	sudo install -m644 initramfs/systemd/tpm2-kira.service initramfs/systemd/tpm2-kira-cap.service initramfs/systemd/tpm2-kira-unlock.socket /usr/lib/systemd/system/
+	sudo install -m644 initramfs/systemd/tpm2-kira.service initramfs/systemd/tpm2-kira-cap.service initramfs/systemd/tpm2-kira-machine-id.service initramfs/systemd/tpm2-kira-unlock.socket /usr/lib/systemd/system/
 	@if [ ! -e /etc/tpm2-kira/control.conf ]; then \
 		sudo install -Dm644 initramfs/common/control.conf /etc/tpm2-kira/control.conf; \
 	fi
@@ -122,7 +122,7 @@ uninstall-mkinitcpio:
 	@echo "Uninstalling mkinitcpio hooks..."
 	sudo rm -f /etc/initcpio/install/sd-tpm2-kira
 	sudo rm -f /etc/initcpio/post/sd-tpm2-kira
-	sudo rm -f /usr/lib/systemd/system/tpm2-kira.service /usr/lib/systemd/system/tpm2-kira-cap.service /usr/lib/systemd/system/tpm2-kira-unlock.socket
+	sudo rm -f /usr/lib/systemd/system/tpm2-kira.service /usr/lib/systemd/system/tpm2-kira-cap.service /usr/lib/systemd/system/tpm2-kira-machine-id.service /usr/lib/systemd/system/tpm2-kira-unlock.socket
 	@echo "Mkinitcpio hooks uninstalled!"
 	@echo "Note: You should rebuild your initramfs after removing hooks:"
 	@echo "      sudo mkinitcpio -P"

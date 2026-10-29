@@ -57,7 +57,8 @@ func TestDHCPIdentity(t *testing.T) {
 		t.Fatalf("networkd: %s %s", colonHex(id.ID), id.From)
 	}
 	f := n.NetworkdFile(id)
-	if !strings.Contains(f, "[DHCPv4]\nClientIdentifier=duid\nIAID=0x56504d98\nDUIDType=2\nDUIDRawData=00:00:ab:11:4d:86:53:19:b5:6f:f3:00\n") {
+	if !strings.Contains(f, "[DHCPv4]\nClientIdentifier=duid\nIAID=0x56504d98\nDUIDType=2\nDUIDRawData=00:00:ab:11:4d:86:53:19:b5:6f:f3:00\n") ||
+		!strings.Contains(f, "[DHCPv6]\nIAID=0x56504d98\nDUIDType=2\nDUIDRawData=00:00:ab:11:4d:86:53:19:b5:6f:f3:00\n") {
 		t.Fatalf("the networkd file:\n%s", f)
 	}
 

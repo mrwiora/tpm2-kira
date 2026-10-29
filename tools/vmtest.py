@@ -382,6 +382,8 @@ class Machine:
         self.secrets = re.findall(r"^Secret: ([A-Z2-7]+)", out, re.M)
         if not self.check("slot add seals slots 0 and 1, each with its secret", len(self.secrets) == 2, out[-600:]):
             raise Fail("no slots")
+        rc, mid = self.run(f"test -e {self.MID_VAR} && echo sealed")
+        self.check("slot 0 seals the machine-id in the EFI variable KIRAmachineID", "sealed" in mid and "Sealed the machine-id" in out, out[-400:])
         rc, out = self.run("tpm2-kira reveal-plain --nvram 1 2>&1 | tail -1", save="reveal.log")
         at = time.time()
         m = re.search(r"\b(\d{6})\b", out)
@@ -563,6 +565,8 @@ class Machine:
                "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service -u tpm2-kira-cap.service")
         rc, out = self.run(log + " 2>&1", save=f"boot{n}-tpm2-kira.log")
         self.check(f"boot {n}: the key was answered", re.search(r"unlock: answered for", out) is not None, out[-500:])
+        self.check(f"boot {n}: the machine-id was released before the network (slot 0's policy held)",
+                   "the machine-id is released" in out, out[-500:])
         confined = re.search(r"ssh-child \(pid \d+\) runs with uid 65534, .*no new privileges, no executable memory, Landlock ABI \d+: no file access, \d+ system calls refused", out)
         self.check(f"boot {n}: ssh-child ran confined (nobody, no new privileges, no executable memory, Landlock, seccomp)", confined is not None, out[-500:])
         bad = [l for l in out.split("\n") if re.search(r"ERROR|FAILED|does not answer|cannot", l)]
@@ -707,6 +711,7 @@ class Machine:
         self.removal_all()
 
     CA_VAR = "/sys/firmware/efi/efivars/KIRAasshCA-24415b90-39be-45c0-a9a3-d547ebe28ea0"
+    MID_VAR = "/sys/firmware/efi/efivars/KIRAmachineID-67f474ef-94a1-4412-88df-d62349d430a9"
 
     def removal_all(self):
         """The SSH CA kept, then slot delete --yes: everything goes."""
@@ -720,6 +725,7 @@ class Machine:
         left = re.findall(r"0x01803[0-9A-Fa-f]{3}", out)
         self.check("no index of tpm2-kira's is left in the TPM (slots, generations, counters, boot settings)", not left, ", ".join(sorted(set(left))))
         self.check("the SSH CA's EFI variable is gone", not there(ca_var))
+        self.check("the sealed machine-id's EFI variable is gone", not there(self.MID_VAR))
         self.check("its public key /etc/tpm2-kira/ssh_ca.pub is gone", not there("/etc/tpm2-kira/ssh_ca.pub"))
         rc, out = self.run("tpm2-kira slot delete --yes 2>&1")
         self.check("slot delete again: nothing of tpm2-kira is found", "nothing of tpm2-kira found" in out, out[-300:])

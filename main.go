@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/admin"
+	"github.com/mrwiora/tpm2-kira/internal/machineid"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
@@ -39,6 +40,7 @@ func fail(err error) {
 // control says so on its own screen. The test suite runs the binary as a
 // user against a software TPM: TPM2_KIRA_UNPRIVILEGED=1 skips the check.
 func requireRoot(command string, args []string) {
+	machineid.TestPaths()
 	switch command {
 	case "version", "-v", "--version", "help", "-h", "--help", "pcrtips":
 		return

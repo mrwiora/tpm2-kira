@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/mrwiora/tpm2-kira/internal/machineid"
 )
 
 // Seal creates a new TOTP key inside the TPM and approves the current PCR
@@ -167,6 +168,9 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 
 	if err := approveAndWrite(tpmDev, nvramIndex, blob, specs, hashAlgo, verifyUKI, signer, debug); err != nil {
 		return err
+	}
+	if nvramIndex == machineid.Slot {
+		keepMachineID(tpmDev, os.Stdout)
 	}
 	if key == nil {
 		fmt.Println()

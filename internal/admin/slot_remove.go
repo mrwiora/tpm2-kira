@@ -13,6 +13,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 
 	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/mrwiora/tpm2-kira/internal/machineid"
 )
 
 // Deleting a slot is one act that removes everything the slot is made of:
@@ -229,6 +230,10 @@ func DeleteSlot(o DeleteSlotOptions) error {
 		}
 		if err != nil {
 			fail("%v", err)
+		} else if c.Index == machineid.Slot {
+			if err := removeMachineID(out); err != nil {
+				fail("the sealed machine-id: %v", err)
+			}
 		}
 	}
 

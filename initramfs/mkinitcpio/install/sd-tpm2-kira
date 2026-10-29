@@ -138,6 +138,11 @@ _add_plan() {
         add_systemd_unit systemd-networkd.service
         add_symlink /usr/lib/systemd/system/sysinit.target.wants/systemd-networkd.service \
             /usr/lib/systemd/system/systemd-networkd.service
+        # The installed system's machine-id, released before networkd starts:
+        # it asks DHCP as the installed system does (v4 and v6).
+        _add_kira_unit tpm2-kira-machine-id.service
+        add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-machine-id.service \
+            /usr/lib/systemd/system/tpm2-kira-machine-id.service
         local db
         for db in passwd shadow group; do
             grep '^systemd-network:' "/etc/$db" >> "$BUILDROOT/etc/$db"

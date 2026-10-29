@@ -84,6 +84,14 @@ func TestMain(m *testing.M) {
 	// The suite runs the binary as a user against a software TPM; the
 	// binary refuses anything but help as a user unless told so.
 	os.Setenv("TPM2_KIRA_UNPRIVILEGED", "1")
+	// The binaries' EFI variables and machine-id: the suite's own.
+	testDir, dirErr := os.MkdirTemp("", "tpm2-kira-integration-")
+	if dirErr != nil {
+		panic(dirErr)
+	}
+	os.MkdirAll(testDir+"/efivars", 0o755)
+	os.WriteFile(testDir+"/machine-id", []byte("0123456789abcdef0123456789abcdef\n"), 0o444)
+	os.Setenv("TPM2_KIRA_TEST_DIR", testDir)
 	fmt.Println("Building tpm2-kira and tpm2-kira-boot for testing...")
 	for _, b := range [][2]string{{"tpm2-kira", "."}, {"tpm2-kira-boot", "./cmd/tpm2-kira-boot"}} {
 		buildCmd := exec.Command("go", "build", "-o", b[0], b[1])

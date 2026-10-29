@@ -13,6 +13,8 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/bootrun"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
+	"github.com/mrwiora/tpm2-kira/internal/journal"
+	"github.com/mrwiora/tpm2-kira/internal/machineid"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
@@ -31,6 +33,7 @@ scripts run it; on the installed system it is 'tpm2-kira')
                phone's gate, the SSH server, the vault, the disk's key
   cap          Lock the codes until the next boot (when the initrd is left)
   unlock-key   Debian's keyscript: the disk's key from run's socket, else askpass
+  machine-id   Release the sealed machine-id before the network (slot 0's policy)
   reveal       The current code (reveal-plain: without colour)
   ssh-child    The SSH server's unprivileged half, started by run
   gate-child   The phone's radio worker, started by run
@@ -67,6 +70,7 @@ func main() {
 		fs.Parse(args)
 		os.Exit(phonegate.RadioWorkerMain(*debug))
 	}
+	machineid.TestPaths()
 	if os.Geteuid() != 0 && os.Getenv("TPM2_KIRA_UNPRIVILEGED") == "" {
 		fmt.Fprintf(os.Stderr, "tpm2-kira-boot %s: root is needed\n", command)
 		os.Exit(1)
@@ -93,6 +97,20 @@ func main() {
 		if err := diskkey.UnlockKeyCommand(*socket, volume, *wait); err != nil {
 			fmt.Fprintf(os.Stderr, "tpm2-kira-boot: %v\n", err)
 			os.Exit(1) // a keyscript's exit status is what cryptroot reads
+		}
+	case "machine-id":
+		fs := flag.NewFlagSet("machine-id", flag.ExitOnError)
+		tpm := fs.String("tpm", tpmdev.DefaultPath, "Path to TPM device")
+		fs.Parse(args)
+		// The boot never depends on it: what went wrong is said, the exit
+		// status is 0.
+		switch released, err := machineid.Boot(*tpm); {
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "tpm2-kira: the machine-id is not released: %v\n", err)
+		case released:
+			journal.Narrate("tpm2-kira: the machine-id is released (slot 0's policy held)")
+		default:
+			journal.Narrate("tpm2-kira: no sealed machine-id")
 		}
 	case "reveal", "reveal-plain":
 		fs := flag.NewFlagSet(command, flag.ExitOnError)

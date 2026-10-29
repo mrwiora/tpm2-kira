@@ -149,8 +149,10 @@ It may not carry what came before.
   not - the next build leaves it out. Do not decide what the image carries in a hook's shell
   or at boot: add the rule to the plan.
 - **One boot on every distribution.** Arch's unit and Debian's
-  init-premount script start the same `run`, and `run` starts everything
-  else of tpm2-kira's at boot itself: the parts of the plan, the TPM wait,
+  init-premount script start the same `run` - and the same two short
+  steps at fixed points, `machine-id` before the network and `cap` when
+  the initrd is left - and `run` starts everything else of tpm2-kira's at
+  boot itself: the parts of the plan, the TPM wait,
   and the processes that parse outside input - `ssh-child` and the phone's
   `gate-child` - as nobody, confined in code by assh's `sandbox` on every
   thread. A unit or script of tpm2-kira's does only what the distribution
@@ -165,7 +167,8 @@ It may not carry what came before.
   its range is left and named), absent is no error, and a write at one of
   its own handles replaces what is there (`replaceAt`). Whatever tpm2-kira
   creates it can remove: `slot delete` without `--nvram` takes every slot,
-  the leftovers, the boot settings and the SSH CA; `control` asks before it
+  the leftovers, the boot settings, the sealed machine-id and the SSH CA
+  (the machine-id goes with slot 0 too); `control` asks before it
   removes the SSH CA when SSH is switched off (No unless said).
 - **Root for everything but the help.** Every command refuses to run as a
   user (`main.go` `requireRoot`); `control` says so on its own screen. The

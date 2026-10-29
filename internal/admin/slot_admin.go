@@ -2,10 +2,12 @@ package admin
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/mrwiora/tpm2-kira/internal/machineid"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
@@ -145,6 +147,10 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 	for _, r := range removed {
 		fmt.Printf("Successfully deleted NVRAM index 0x%08X: %s\n", r.Index, r.What)
 	}
+	// The sealed machine-id goes with slot 0: its policy is the slot's.
+	if nvramIndex == machineid.Slot && err == nil {
+		err = removeMachineID(os.Stdout)
+	}
 	if err != nil {
 		return err
 	}
@@ -226,12 +232,17 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 		caPath = conf.CA
 	}
 
+	_, midErr := machineid.Load()
+	mid := midErr == nil
 	total := len(slots) + len(leftovers)
 	if caPath != "" {
 		total++
 	}
+	if mid {
+		total++
+	}
 	if total == 0 {
-		return fmt.Errorf("nothing of tpm2-kira found: no sealed secrets in NVRAM slots 0x%08X – 0x%08X, no leftover indices, no SSH CA",
+		return fmt.Errorf("nothing of tpm2-kira found: no sealed secrets in NVRAM slots 0x%08X – 0x%08X, no leftover indices, no SSH CA, no sealed machine-id",
 			nvslot.NVRAMSlotStart, nvslot.NVRAMSlotEnd)
 	}
 
@@ -253,6 +264,9 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 	}
 	if caPath != "" {
 		fmt.Printf("Found the SSH CA %s (and %s)\n", caPath, sshCAPub(caPath))
+	}
+	if mid {
+		fmt.Println("Found the sealed machine-id (the EFI variable KIRAmachineID)")
 	}
 	if err := confirmDeleteAll(len(slots), enrolled, len(leftovers), caPath != "", yes); err != nil {
 		return err
@@ -285,6 +299,12 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 			fmt.Println("done")
 		}
 		tpmDev.Close()
+	}
+	if mid {
+		if err := removeMachineID(os.Stdout); err != nil {
+			fmt.Printf("Deleting the sealed machine-id FAILED: %v\n", err)
+			failed++
+		}
 	}
 	if caPath != "" {
 		fmt.Printf("Deleting the SSH CA %s... ", caPath)

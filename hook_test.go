@@ -216,7 +216,7 @@ _add_plan
 	got = run("unlock codes phone net ssh tpm",
 		"bt-module btusb\nbt-module btintel\nbt-firmware intel/ibt-0180-0041.sfi\nnet-module e1000e\nwarning no firmware named\n", "0")
 	for _, want := range []string{
-		"UNIT tpm2-kira-cap.service", "UNIT systemd-networkd.service",
+		"UNIT tpm2-kira-cap.service", "UNIT systemd-networkd.service", "UNIT tpm2-kira-machine-id.service",
 		"MODULE btusb", "MODULE btintel", "FIRMWARE intel/ibt-0180-0041.sfi", "MODULE e1000e", "FIRMWARE fw-of-e1000e",
 		"PLAIN tpm2-kira: Bluetooth: 2 modules, 1 firmware files", "WARNING tpm2-kira: no firmware named",
 	} {
