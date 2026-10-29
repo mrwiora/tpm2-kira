@@ -65,8 +65,8 @@ Where things are in the repository, and how the tests are run.
 │   ├── CODE.md                   # The TOTP code: when the TPM computes it, the code screen, the cap, the clock
 │   ├── PHONE.md                  # The phone (Marify) verifies the boot over Bluetooth LE
 │   ├── SSH.md                    # SSH in the boot image: the code screen over the network
-│   ├── DISK-KEY.md               # The disk's key: the four cases, the token, the route, how systemd takes the key
-│   ├── VAULT.md                  # tpm+vault: the disk's key from this TPM and tpm2-kira-vault
+│   ├── DISK-KEY.md               # The disk's key: the recipes, the token, the route, how systemd takes the key
+│   ├── VAULT.md                  # The vault: the disk's salt from tpm2-kira-vault
 │   ├── PROTOCOL-BLE.md           # Phone <-> machine protocol: the interface definition
 │   ├── PLAN-*.md                 # Designs: the phone (PLAN-PHONE, PLAN-BLE), the phone salt, the vault, LUKS, YubiKey, the test host (PLAN-BLE-TESTING)
 │   ├── mobile/                   # Agent prompts for the Android and iOS apps

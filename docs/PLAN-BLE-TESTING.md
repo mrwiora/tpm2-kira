@@ -1,5 +1,11 @@
 # PLAN — the test host: machines in a defined state, their consoles, and the phone in an emulator
 
+> The unlock modes this plan names - `password+salt`, `password+phonesalt`,
+> `tpm+vault` - are keyslot recipes by number now: `0x1100`, `0x1300` and
+> `0x2400` (`--salt typed|phone`, `--password tpm --salt vault`), beside
+> `0x1200`, `0x1400`/`0x1401` and `0x2401`; every recipe's key is the
+> combiner's ([DISK-KEY.md](DISK-KEY.md#the-recipes), HISTORY.md).
+
 > **Status:** planning (2026-10-08). Nothing of this exists yet except
 > `tools/acceptance.py`, which runs against two hand-installed VMs and
 > needs a person at the console. This plan replaces those VMs with

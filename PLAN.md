@@ -144,7 +144,13 @@ flowchart LR
    pepper device's pepper (no echo on a terminal, a line from a pipe) and
    sends it with the approval; `requests answer` goes through what waits
    (approve, deny, skip). Tested in the vault's CLI tests.
-7. [ ] docs (DISK-KEY, VAULT, SECURITY-BACKGROUND), HISTORY.md.
+7. [x] docs: DISK-KEY (the recipes, the token, one section per recipe, the
+   fallback order), VAULT (the salt, the password, the combiner, the CLI
+   queue, numeric release modes), SECURITY-BACKGROUND (the combiner for
+   every recipe, blob version 15), README, ARCHITECTURE, PHONE, SLOT, SSH,
+   TESTING, PROJECT-STRUCTURE, the vault's README; the PLAN-*.md design
+   records carry a note mapping the old mode names to the recipes;
+   HISTORY.md (the mode names, the dropped TPM check, blob version 15).
 8. [ ] tests: every recipe - unit (each ID's derivation against the
    known answer, the refused ones), swtpm (T as the unattended password;
    the vault with and without a pepper), the vault's tests (the CLI

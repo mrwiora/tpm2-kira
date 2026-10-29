@@ -1,5 +1,11 @@
 # PLAN — tpm2-kira and the LUKS keyslots
 
+> The unlock modes this plan names - `password+salt`, `password+phonesalt`,
+> `tpm+vault` - are keyslot recipes by number now: `0x1100`, `0x1300` and
+> `0x2400` (`--salt typed|phone`, `--password tpm --salt vault`), beside
+> `0x1200`, `0x1400`/`0x1401` and `0x2401`; every recipe's key is the
+> combiner's ([DISK-KEY.md](DISK-KEY.md#the-recipes), HISTORY.md).
+
 > **Status:** in implementation. Done: the keyslot token, `luks status`,
 > `luks mark`, `luks enrol` (both modes), `luks remove` (§2, §3), the
 > unlock modes (§1), the `phone salt` command name, `tpm2-kira status`

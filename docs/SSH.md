@@ -381,8 +381,8 @@ The network comes up in parallel with the code screen: networkd is not
 ordered after the hold.
 
 - **Confirmed in a session.** The boot is released (READY, the separator
-  runs). The password prompt (tpm2-kira's: password+salt or
-  password+phonesalt) opens in that session. The server keeps running
+  runs). The password prompt (tpm2-kira's, for every recipe
+  with a typed password) opens in that session. The server keeps running
   until switch-root, so a dropped session can log in again for the
   prompt. If tpm2-kira has no key to give, cryptsetup's own prompt is
   asked in the session too (§6).

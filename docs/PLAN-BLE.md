@@ -1,5 +1,11 @@
 # PLAN — BLE Attestation with a Mobile Device
 
+> The unlock modes this plan names - `password+salt`, `password+phonesalt`,
+> `tpm+vault` - are keyslot recipes by number now: `0x1100`, `0x1300` and
+> `0x2400` (`--salt typed|phone`, `--password tpm --salt vault`), beside
+> `0x1200`, `0x1400`/`0x1401` and `0x2401`; every recipe's key is the
+> combiner's ([DISK-KEY.md](DISK-KEY.md#the-recipes), HISTORY.md).
+
 > **Status:** partially implemented — phases 1–4, and phase 5 (Bluetooth in
 > the initramfs); nothing yet verified on real hardware. The wire
 > contract is [PROTOCOL-BLE.md](PROTOCOL-BLE.md); "Implementation status" below

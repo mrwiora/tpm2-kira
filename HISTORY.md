@@ -268,6 +268,21 @@ socket, and the release key's policy is the slot's approval plus the
 command code, with no branch the phone can open: only a boot the
 machine's signing key approved at seal or reseal gets the factor.
 
+### The unlock modes had names: password+salt, password+phonesalt, tpm+vault
+
+Until 2026-10-29 a keyslot's token named one of three modes, by its type
+(`tpm2-kira-salt`, `tpm2-kira-phonesalt`, `tpm2-kira-vault`), and `luks
+enrol --mode` took the names. Now a keyslot has a recipe, a number 0xPSFF
+- where its password comes from (typed, this TPM) and where its salt comes
+from (typed, this TPM, the phone, the vault), and the pepper - stored in
+the token and repeated in its type (`tpm2-kira-1300`); `luks enrol` takes
+`--password`, `--salt`, `--pepper`. The three modes are the recipes
+0x1100, 0x1300 and 0x2400. A TPM check of the typed password (the
+password key: PolicyAuthValue, a DA-counted authValue derived from the
+password) was built and dropped: on Arch the separator ends the slot's
+policy with the code screen's hold, before the password is typed, and
+asking it during the hold was not wanted.
+
 ### The vault's key was an HKDF of both parts and the pepper
 
 Until 2026-10-29 a tpm+vault keyslot's key was HKDF-SHA256(L ‖ R ‖
@@ -377,6 +392,13 @@ the slot being dirty. A token written before this change reads as bound to
 slot 0, which is where every keyslot of a one-slot machine belonged anyway.
 
 ## Blob format
+
+### Version 15 - the TPM salt; the vault method's password and pepper
+
+The attestation part carries the salt part of recipe 0x1200 (wrapped for
+the EK and the release key), and the vault method says whether its salt
+takes a pepper; its local part L is there only for the unattended
+recipes. Version 14 blobs are sealed again.
 
 ### Version 14 — a slot with phones has no TOTP key; phones carry no name
 

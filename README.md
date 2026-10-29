@@ -57,7 +57,7 @@ flowchart TB
     PCR["PCR prediction<br/>event log (e), UKI PCR 11 (u), GRUB 8/9, register (r)"]
     PHONE["phone enrol, phone salt enrol<br/>Marify at the machine, Bluetooth LE"]
     LUKS["luks enrol<br/>a keyslot and its token: how its key is made"]
-    VAULT["luks enrol --mode tpm+vault<br/>this TPM + tpm2-kira-vault, over TLS"]
+    VAULT["luks enrol --salt vault<br/>this TPM + tpm2-kira-vault, over TLS"]
     INSPECT["status, slot info, slot list, reveal, pcrtips"]
   end
 
@@ -108,7 +108,7 @@ from each only what it uses: the boot image carries only those parts
 | **The slot** | a boot state your signing key approved; what everything below that needs the TPM stands on | `setup`, `slot add\|approve\|info\|list\|status\|delete\|restore` | [docs/SLOT.md](docs/SLOT.md) |
 | **Who checks the boot** | the code (TOTP), compared with your authenticator at the console or over SSH; a phone (Marify) at the machine, over Bluetooth LE, that verifies a TPM quote in the code's place; the vault, remote attestation over TLS, that verifies a TPM quote before it releases its part of the disk's key | `reveal`, `phone …`, `vault …` | [docs/CODE.md](docs/CODE.md), [docs/PHONE.md](docs/PHONE.md), [docs/VAULT.md](docs/VAULT.md) |
 | **Where the code screen is** | the console, always; SSH in the boot image, with the host key certified by an SSH CA in the TPM, when you turn it on - over SSH the code is what attests the boot | `control` (step 2) | [docs/SSH.md](docs/SSH.md) |
-| **The disk's key** | per LUKS keyslot, named by its token: cryptsetup's own passphrase (no token), `password+salt`, `password+phonesalt` (the phone keeps the salt), `tpm+vault` (nothing typed) | `luks …`, `phone salt …`, `vault …` | [docs/DISK-KEY.md](docs/DISK-KEY.md), [docs/VAULT.md](docs/VAULT.md) |
+| **The disk's key** | per LUKS keyslot, named by its token: cryptsetup's own passphrase (no token), or a recipe - always the combiner's (Argon2id) of a password, typed at the machine or held by this TPM (unattended), and a salt held by this TPM, the phone or the vault, or typed (the recovery recipe) | `luks …`, `phone salt …`, `vault …` | [docs/DISK-KEY.md](docs/DISK-KEY.md), [docs/VAULT.md](docs/VAULT.md) |
 
 ### The slot
 
@@ -515,11 +515,11 @@ sequenceDiagram
     K->>K: show it (console, or SSH): you compare it with your authenticator
   else a slot with a phone enrolled
     K->>P: a TPM quote over Bluetooth LE, at the machine
-    P-->>K: the verdict (and the salt, for password+phonesalt)
+    P-->>K: the verdict (and the salt, for the phone's recipe)
   end
-  opt a tpm+vault keyslot
+  opt a keyslot with the vault's salt
     K->>V: a TPM quote over TLS (pinned key)
-    V-->>K: the remote part, only for the approved boot state - the hold ends by itself
+    V-->>K: the salt, only for the approved boot state - unattended, the hold ends by itself
   end
   opt the SSH server in the image
     S->>K: connect: a host certificate from the CA in the TPM (aSSH)

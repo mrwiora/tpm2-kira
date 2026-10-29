@@ -7,7 +7,7 @@ to it works only in a boot whose PCRs match the approval:
 
 - a TOTP key, the code on the screen ([CODE.md](CODE.md)) - or, once a
   phone is enrolled, the phone's enrolment in its place ([PHONE.md](PHONE.md));
-- the phone salt's release key ([DISK-KEY.md](DISK-KEY.md#password--phone-salt-passwordphonesalt));
+- the phone salt's release key ([DISK-KEY.md](DISK-KEY.md#password-typed-salt-from-the-phone-0x1300));
 - the vault's local part ([VAULT.md](VAULT.md));
 - the SSH CA in the TPM approves its own slots the same way ([SSH.md](SSH.md)).
 
@@ -200,8 +200,8 @@ blob itself, so consumers never have to branch on the slot count.
 **Deleting a slot is one act**: `tpm2-kira control`, the slot's own line. It
 deletes everything the slot is made of - the blob in the TPM (the TOTP
 key, the phones, the phone salt's release key), its two companion
-indices, the `password+phonesalt` and `tpm+vault` keyslots bound to the
-slot by their token (a `password+salt` keyslot is bound to nothing and stays), the
+indices, the keyslots bound to the slot by their token (every recipe
+but the recovery recipe, which is bound to nothing and stays), the
 recovery blobs stashed for it. If any part fails to go (no remaining
 passphrase for `luksKillSlot`, a TPM that refuses), the rest is still
 removed, and the slot is **dirty**: parts of it exist while its blob is

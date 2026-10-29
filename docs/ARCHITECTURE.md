@@ -31,7 +31,7 @@ flowchart LR
 |---|---|---|
 | tpm2-kira | `tpm2-kira` on the installed system, `tpm2-kira-boot` in the boot image | [README.md](../README.md), `tpm2-kira help` |
 | aSSH | the SSH server tpm2-kira's code screen runs on, the SSH CA held in the TPM, the per-boot host keys it certifies; a project of its own | [assh/README.md](../assh/README.md), [SSH.md](SSH.md) |
-| tpm2-kira-vault | keeps the remote part of a `tpm+vault` keyslot's key and releases it to a fresh TPM quote of an approved boot | [VAULT.md](VAULT.md), `../tpm2-kira-vault/README.md` |
+| tpm2-kira-vault | keeps the salt of a vault recipe's keyslot and releases it to a fresh TPM quote of an approved boot | [VAULT.md](VAULT.md), `../tpm2-kira-vault/README.md` |
 | Marify | the phone app that verifies a boot over Bluetooth LE and can keep the phone salt | [PHONE.md](PHONE.md), [PROTOCOL-BLE.md](PROTOCOL-BLE.md), `../marify` |
 | safearch | a read-only Arch image that uses aSSH for its host keys | `../safearch/README.md` |
 
@@ -60,8 +60,8 @@ flowchart TB
 | Check | Where it happens | What it unlocks | Page |
 |---|---|---|---|
 | the code | at the console, or in an SSH session to the boot image | nothing by itself: the person confirms and types | [CODE.md](CODE.md), [SSH.md](SSH.md) |
-| the phone | next to the machine, over Bluetooth LE | the boot's release; with `password+phonesalt`, the salt | [PHONE.md](PHONE.md) |
-| the vault | over the network, TLS with a pinned key | with `tpm+vault`, the key without anybody typing | [VAULT.md](VAULT.md) |
+| the phone | next to the machine, over Bluetooth LE | the boot's release; for the phone's recipe (`0x1300`), the salt | [PHONE.md](PHONE.md) |
+| the vault | over the network, TLS with a pinned key | the salt of the vault recipes (`0x1400`, `0x2400`: unattended) | [VAULT.md](VAULT.md) |
 
 How a volume's key is made is named by its LUKS2 token; with several of
 tpm2-kira's keyslots they are tried in order - the vault, the phone's

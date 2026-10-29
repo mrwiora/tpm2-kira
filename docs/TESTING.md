@@ -112,7 +112,7 @@ transcript, a log per command and session (`session-*-control.log`,
    locked until the next boot, by design).
 4. The commands that read: `status`, `slot info|list|status`, `phone
    ekcert`, `luks status`, `initramfs plan`, help pages.
-5. **`luks enrol --mode password+salt`** with a test password and salt.
+5. **`luks enrol --salt typed`** (the recovery recipe) with a test password and salt.
 6. **`control`, answered line by line** (`ACCESSIBLE=1`): step 1's
    adoptions (the mkinitcpio hook, the key's route), the image's network
    (DHCP, as proposed), the SSH server at boot (port 2222, a 600 s hold)
@@ -130,11 +130,13 @@ transcript, a log per command and session (`session-*-control.log`,
    (nobody, no new privileges, no executable memory, Landlock, seccomp), and
    the boot's log has no error.
 9. **Remote attestation over TLS, the vault:** a token from the vault,
-   `luks enrol --mode tpm+vault`, the image rebuilt with the vault; a boot
+   `luks enrol --password tpm --salt vault`, the image rebuilt with the vault; a boot
    that nobody touches, unlocked by the vault's release to the TPM's
    quote; a boot with the device revoked on the vault, where the screen
-   and the prompt say the vault gave no key and the password+salt keyslot
-   is the fallback, typed over SSH; then unrevoked.
+   and the prompt say the vault gave no key and the recovery recipe's
+   keyslot is the fallback, typed over SSH; then unrevoked; the keyslot
+   enrolled again with a pepper, a boot approved over the operator
+   interface first with a wrong pepper, then with the right one.
 10. **A slot's life:** `slot approve`, `slot add --nvram 2`, `slot delete`
     (blob and generation index gone).
 11. **Removal:** `control` switches the SSH server off and asks before it

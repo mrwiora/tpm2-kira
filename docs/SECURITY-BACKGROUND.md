@@ -49,7 +49,7 @@ TPM after enrolment.
 ### 3.1 TPM NVRAM (the "blob")
 
 Each slot's NV index (default `0x01803010`; slot *n* is `0x01803010` + *n*)
-stores one serialised `SealedBlob` (format version 14, §10). It holds the
+stores one serialised `SealedBlob` (format version 15, §10). It holds the
 slot's TOTP key or its phones, never both (*TOTP key or phones*, below).
 Phone attestation is an optional part of the same blob,
 and within that part the way a verifier reaches the machine is a typed
@@ -85,6 +85,7 @@ the machine as an attester, whatever the method:
 | `BootKeyPrivate`| TPM2B_PRIVATE of the boot key (TPM-wrapped)                          | **Yes**¹   |
 | `ReleaseKeyPublic` | TPMT_PUBLIC of the release key (§3.7)                             | No         |
 | `ReleaseKeyPrivate`| TPM2B_PRIVATE of the release key (TPM-wrapped)                    | **Yes**¹   |
+| `TPMSalt`       | The salt part of recipe 0x1200, wrapped (TPM2_MakeCredential) for this TPM's EK and the release key: it opens only through the release key's policy; empty without | No⁶ |
 | `PCRAlg`, `PCRSelection` | The PCR bank and registers that are quoted                  | No         |
 | `Count`         | Value of the slot's record counter when the part last changed (§3.3) | No         |
 | methods         | Who may ask for a quote, and over what: typed blocks, below          | Partly⁵    |
@@ -103,9 +104,10 @@ Method 2, tpm2-kira-vault (`Vault`, VAULT.md), created by `vault enrol`:
 |-----------------|----------------------------------------------------------------------|------------|
 | `URL`           | The vault, `https://host:port`                                       | No         |
 | `Pin`           | SHA-256 of the vault's TLS key (SubjectPublicKeyInfo)                | No         |
-| `Label`         | The tpm+vault keyslot's label in the key's derivation                | No         |
-| `Local`         | The local part of the key, wrapped (TPM2_MakeCredential) for this TPM's EK and the slot's release key: it opens only through the release key's policy | No⁶ |
-| `PepperCheck`   | With an operator's pepper in the key: an HMAC of the key, to tell a mistyped pepper from the right one at boot; empty without | No⁶ |
+| `Label`         | The vault keyslot's label in the key's derivation                    | No         |
+| `Local`         | The local part L, the unattended recipes' password, wrapped (TPM2_MakeCredential) for this TPM's EK and the slot's release key: it opens only through the release key's policy; empty with a typed password | No⁶ |
+| `Pepper`        | The salt is made with an operator's pepper                            | No⁶ |
+| `PepperCheck`   | An unattended recipe with a pepper: an HMAC of the key (behind Argon2id), to tell a mistyped pepper from the right one at boot; empty otherwise | No⁶ |
 
 ⁶ The wrapped part opens only on this TPM, in a boot state the signing key
 approved, before `cap`; and it is half of the key, the vault keeps the other.
@@ -855,18 +857,22 @@ Keep it on a YubiKey (the intended setup), or at least off the machine; a key
 file in `/etc/tpm2-kira/keys` is the fallback, and with it a runtime root
 has that power.
 
-### 5.9 The password+salt derivation
+### 5.9 The combiner
 
-`password+salt` and `password+phonesalt` keyslots hold the key
-`Combine(password, salt)` (`internal/diskkey/combine.go`): Argon2id with 1 GiB of
+Every recipe's keyslot holds the key `Combine(password, salt)` (`internal/diskkey/combine.go`): Argon2id with 1 GiB of
 memory, 16 passes, 4 lanes and a 64-byte output, encoded as base64
-without padding and followed by a newline, which is part of the key. The
-salt of `password+phonesalt` is not the phone's factor itself but an HKDF
-of it (`internal/phonegate/factor.go`), so the factor never meets the password. The
+without padding and followed by a newline, which is part of the key. A
+device-held salt is not the device's part itself but an HKDF of it - the
+phone's factor and the TPM's part (`internal/phonegate/factor.go`), the
+vault's part with the pepper as HKDF's salt (`internal/vaultkey/vault.go`)
+- so the part never meets the password; the unattended recipes' password
+is an HKDF of the TPM's part L. The TPM does not check the typed
+password: after a stolen machine boots normally, it can be guessed
+offline at Argon2id's cost, and its strength is the limit. The
 parameters are a contract with every enrolled keyslot and do not change.
 The bytes are fixed by a known answer in a test (taken from the earlier
 separate combiner, hashpwd2): a keyslot enrolled with it opens with
-tpm2-kira's `password+salt`, and the other way round.
+tpm2-kira's recovery recipe, and the other way round.
 
 ---
 
@@ -1065,7 +1071,7 @@ on such a system. Supporting owner auth is outside the current design.
 
 ---
 
-## 10. Blob Format (Version 14)
+## 10. Blob Format (Version 15)
 
 The blob is a binary-serialised structure with explicit length prefixes and
 maximum size limits to prevent memory exhaustion during deserialisation.
@@ -1148,6 +1154,8 @@ Offset  Field                   Type        Notes
 ?         ReleaseKeyPublic      []byte      TPMT_PUBLIC of the release key (§3.7); empty until a factor is enrolled
 ?         ReleaseKeyPrivate length uint32   ≤ 4096
 ?         ReleaseKeyPrivate     []byte      TPM2B_PRIVATE (TPM-wrapped)
+?         TPMSalt credential    uint32 + []byte   ≤ 1024: TPM2B_ID_OBJECT, the salt part of recipe 0x1200; empty without
+?         TPMSalt secret        uint32 + []byte   ≤ 1024: TPM2B_ENCRYPTED_SECRET
 ?         PCRAlg                uint16      TPM_ALG_SHA256 or TPM_ALG_SHA1
 ?         PCRSelection length   uint16      ≤ 24
 ?         PCRSelection          []uint8     PCR indices that are quoted
@@ -1177,10 +1185,12 @@ Offset  Field                   Type        Notes
             Pin                 string      sha256: and the hex of the TLS key's SPKI digest
             Label length        uint16      ≤ 64
             Label               string      The key's label
-            Local credential    uint32 + []byte   ≤ 1024: TPM2B_ID_OBJECT, the local part
+            Local credential    uint32 + []byte   ≤ 1024: TPM2B_ID_OBJECT, the local part L (the
+                                                  unattended recipes' password); empty with a typed password
             Local secret        uint32 + []byte   ≤ 1024: TPM2B_ENCRYPTED_SECRET
+            Pepper              uint8       1: the salt is made with an operator's pepper
             PepperCheck         uint16 + []byte   0 or 32: HMAC-SHA256(key, "tpm2-kira/vault/pepper-check/v1")
-                                            when the key needs an operator's pepper
+                                            for an unattended recipe with a pepper
 ─────────────────────── end of signed region ───────────────────────
 ?       Signature length        uint16      ≤ 1024, must be non-zero
 ?       Signature               []byte      Over [version ‖ payloadLen ‖ payload]

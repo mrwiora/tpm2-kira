@@ -1,33 +1,35 @@
-# The vault: the disk's key from this TPM and a vault (`tpm+vault`)
+# The vault: the disk's salt from a vault
 
 The vault is remote attestation over TLS: before it releases its part of
 the disk's key, tpm2-kira-vault verifies a quote of this TPM against the
 slot's approved boot state. The code (at the console or over SSH) and the
 phone (at the machine) are the other two ways the boot is checked.
 
-> Arch and Debian. Experimental. The machine unlocks unattended when the
-> vault's checks pass, or once an operator approves the boot - on the
-> vault, or over the vault's operator REST interface, where the approval
-> can carry an operator's **pepper** that is part of the key (§12).
+> Arch and Debian. Experimental. The vault releases its part when its
+> checks pass, or once an operator approves the boot - on the vault's
+> command line, or over its operator REST interface, where the approval
+> can carry an operator's **pepper** that goes into the key (§12).
 >
 > Two programs: **tpm2-kira** on the machine, and **tpm2-kira-vault**, a
 > separate service with a TPM of its own, in its own repository beside this
 > one (`../tpm2-kira-vault`). Their contract is the Go package
 > `vaultproto` in this repository. What is planned beyond it is
-> [PLAN-VAULT.md](PLAN-VAULT.md); how the four ways of making the disk's key
+> [PLAN-VAULT.md](PLAN-VAULT.md); how the recipes of the disk's key
 > compare, [DISK-KEY.md](DISK-KEY.md).
 
-A keyslot in mode `tpm+vault` opens without anybody typing: its key is
-made from a part kept in this machine's TPM and a part kept by the vault.
-Both parts open only in a boot state the slot's signing key approved, and
-only before the boot is capped. The vault releases its part only to a
-fresh TPM quote of such a state, and stops releasing it for a machine an
-operator revokes. Without the vault, the recovery passphrase in its own
-keyslot opens the disk at cryptsetup's prompt.
+The vault keeps a keyslot's **salt**: a part only this machine's TPM opens,
+and only in a boot state the slot's signing key approved, before the boot
+is capped. The vault releases it only to a fresh TPM quote of such a
+state, and stops releasing it for a machine an operator revokes. The
+keyslot's **password** is the TPM's own part - nothing is typed, the
+machine unlocks unattended (`0x2400`, with a pepper `0x2401`) - or typed by
+the person at the machine after the code screen (`0x1400`, `0x1401`).
+Without the vault, the recovery recipe and the recovery passphrase stay
+the way in.
 
 ```bash
 vault#    tpm2-kira-vault token create --name db-03     # prints the line below
-machine#  tpm2-kira luks enrol /dev/sda2 --mode tpm+vault \
+machine#  tpm2-kira luks enrol /dev/sda2 --password tpm --salt vault \
               --url https://vault:8443 --pin sha256:… --token …
 ```
 
@@ -43,23 +45,30 @@ Contents: [1 The idea](#1-the-idea) ·
 ## 1. The idea
 
 ```
-key = hex( HKDF-SHA256(ikm = L ‖ R [‖ P], salt = "",
-                       info = "tpm2-kira/vault/v1" ‖ lp(label) [‖ "pepper"], len = 32) )
+salt     = hex( HKDF-SHA256(ikm = R, salt = P or none,
+                            info = "tpm2-kira/vault/salt/v1" ‖ lp(label), len = 32) )
+password = typed at the machine                                   (0x1400, 0x1401)
+         | hex( HKDF-SHA256(ikm = L, info = "tpm2-kira/vault/password/v1" ‖ lp(label)) )
+                                                                  (0x2400, 0x2401)
+key      = the combiner's: Argon2id(password, salt), base64 and a newline
 ```
 
-64 hexadecimal characters, the keyslot's passphrase. The derivation string
-and the label are the contract with every enrolled keyslot.
+The keyslot's passphrase is the combiner's, as for every recipe
+([DISK-KEY.md](DISK-KEY.md)): a guessed pepper costs a whole Argon2id. The
+derivation strings and the label are the contract with every enrolled
+keyslot.
 
 | Part | Where it is kept | Who can open it |
 |---|---|---|
-| **L**, local, 32 bytes | in the slot's blob in the machine's TPM NV (attestation method 2), wrapped with `TPM2_MakeCredential` for the TPM's EK and the slot's release key | this TPM, in a boot state the slot's signing key approved, before `cap` |
+| **L**, local, 32 bytes (unattended recipes only) | in the slot's blob in the machine's TPM NV (attestation method 2), wrapped with `TPM2_MakeCredential` for the TPM's EK and the slot's release key | this TPM, in a boot state the slot's signing key approved, before `cap` |
 | **R**, remote, 32 bytes | only in the vault, wrapped the same way, encrypted there under a key sealed in the **vault's** TPM | the vault releases it (§5); then only this machine's TPM opens it, under the same policy as L |
-| **P**, pepper (optional, per keyslot) | with an operator; typed once on the machine at enrolment, never sent then, never stored by the vault | given with each approval over the operator interface; the vault passes it on once, wrapped for the machine's TPM like R (§12) |
+| **P**, pepper (optional, per keyslot) | with an operator; typed once on the machine at enrolment, never sent then, never stored by the vault | given with each approval (the vault's CLI or its operator interface); the vault passes it on once, wrapped for the machine's TPM like R (§12) |
 
 R is drawn on the machine at enrolment; the vault never sees it in the
-clear. With a pepper, the slot's blob keeps an HMAC of the key (the
-pepper check) to tell a mistyped pepper from the right one at boot. Neither part is ever stored in the clear anywhere; the key exists
-only in the moment it is derived and handed to cryptsetup.
+clear. With a pepper and an unattended recipe, the slot's blob keeps an
+HMAC of the key (the pepper check) to tell a mistyped pepper from the
+right one at boot. Neither part is ever stored in the clear anywhere; the
+key exists only in the moment it is derived and handed to cryptsetup.
 
 ## 2. What protects the key
 
@@ -123,27 +132,31 @@ vault's boot state; init warns about that.
    exact command for the machine. A token works once. For a machine the
    vault knows already (a new TPM, a new slot): `--replace DEVICE`.
 3. On the machine, with a recovery passphrase in another keyslot - in
-   `tpm2-kira control`, step 2, "Disk unlock", "This TPM + a vault": it
+   `tpm2-kira control`, step 2, "Disk unlock", "Salt from a vault": it
    sets up the network when there is none, asks the URL, the pin and the
-   token, asks the vault whether it answers with the pinned key before
-   anything is enrolled, and shows afterwards, at every look, whether
-   the vault still knows this device. Or by hand:
-   `tpm2-kira luks enrol <device> --mode tpm+vault --url … --pin … --token
-   … [--nvram N] [--label L] [--name NAME]`. It enrols with the vault,
-   adds the keyslot (authorised by the recovery passphrase, asked) and
-   marks it. Or in steps: `tpm2-kira vault enrol … --out
-   /run/tpm2-kira/luks.key`, `cryptsetup luksAddKey`, `tpm2-kira luks mark
-   <device> --keyslot N --mode tpm+vault`.
+   token, whether the password is held by the TPM (unattended) or typed,
+   and the pepper; asks the vault whether it answers with the pinned key
+   before anything is enrolled, and shows afterwards, at every look,
+   whether the vault still knows this device. Or by hand:
+   `tpm2-kira luks enrol <device> [--password tpm] --salt vault [--pepper]
+   --url … --pin … --token … [--nvram N] [--label L] [--name NAME]`. It
+   enrols with the vault, asks the password (typed recipes) and the
+   pepper, adds the keyslot (authorised by the recovery passphrase,
+   asked) and marks it. Or in steps (unattended): `tpm2-kira vault enrol …
+   --out /run/tpm2-kira/luks.key`, `cryptsetup luksAddKey`, `tpm2-kira
+   luks mark <device> --keyslot N --password tpm --salt vault`.
 4. Nothing to rebuild for the key itself: the vault's address is in the
-   slot's blob. The next boot unlocks unattended.
+   slot's blob. The next boot unlocks unattended (`0x2400`), or asks the
+   password after the code screen (`0x1400`).
 
 **With operator approval and a pepper** (§12):
 
 ```bash
 vault#    tpm2-kira-vault config set operator-listen :8444    # serve stopped; or init --operator-listen :8444
 vault#    tpm2-kira-vault operator add alice                  # the bearer token, once, and a curl line
-machine#  tpm2-kira luks enrol /dev/sda2 --mode tpm+vault --pepper --url … --pin … --token …
+machine#  tpm2-kira luks enrol /dev/sda2 --password tpm --salt vault --pepper --url … --pin … --token …
                                                               # asks the pepper twice
+vault#    tpm2-kira-vault requests answer                     # approve, deny or skip; asks the pepper
 anywhere$ curl -k --pinnedpubkey sha256//<pin, base64> -H "Authorization: Bearer $TOKEN" \
               https://vault:8444/v1/requests
 anywhere$ curl -k --pinnedpubkey sha256//<pin, base64> -H "Authorization: Bearer $TOKEN" \
@@ -198,29 +211,34 @@ sequenceDiagram
     else
         V->>M: denied {reason}
     end
-    M->>T: ActivateCredential: R
-    M->>M: key = HKDF(L ‖ R); the hold ends; cryptsetup asks, gets the key
+    M->>T: ActivateCredential: R (and the pepper's key)
+    M->>M: salt from R; unattended: key = combiner(L's password, salt), the hold ends;<br/>typed: the salt is kept, the password asked after the hold
 ```
 
 - **While the code screen holds.** On a UKI system the separator extends
   the PCRs right after the hold, and the parts open only before it. So
   `run` starts the attempt for every slot with the vault method as soon as
   it starts, and the attempt lasts exactly as long as the hold (90 s by
-  default; until confirmed with the SSH server's hold 0). A key made ends
-  the hold on its own; the key provider then answers the volume (Arch:
-  systemd-cryptsetup on the key socket; Debian: the keyscript) with it.
-- **L first.** When the TPM does not open the local part, this boot state
-  is not one the signing key approved, and the vault is not asked.
-- **With a pepper.** The keyslot's key needs the pepper the approval
+  default; until confirmed with the SSH server's hold 0). An unattended
+  recipe's key made ends the hold on its own; the key provider then
+  answers the volume (Arch: systemd-cryptsetup on the key socket; Debian:
+  the keyscript) with it. With a typed password, the salt is kept and
+  the password asked at tpm2-kira's prompt after the hold.
+- **L first** (unattended recipes). When the TPM does not open the local
+  part, this boot state is not one the signing key approved, and the
+  vault is not asked.
+- **With a pepper.** The keyslot's salt needs the pepper the approval
   carries. The release brings it wrapped like R: a fresh key K made for
   the TPM's EK and the slot's release key, and the pepper under K
   (AES-256-GCM, the device ID bound in); the TPM opens K with a second
   ActivateCredential through the slot's approval, so the pepper opens only
-  where R opens, and does not rely on the connection to the vault. A
-  pepper that does not fit the slot's pepper check is never handed to
-  cryptsetup: `run` says so and asks the vault again, for a new
-  approval, while the code screen holds. A release without a pepper for
-  such a keyslot, or with one for a keyslot without, is refused.
+  where R opens, and does not rely on the connection to the vault. For an
+  unattended recipe, a pepper that does not fit the slot's pepper check is
+  never handed to cryptsetup: `run` says so and asks the vault again, for
+  a new approval, while the code screen holds; with a typed password a
+  wrong pepper and a wrong password cannot be told apart, and the key
+  simply opens nothing. A release without a pepper for such a keyslot, or
+  with one for a keyslot without, is refused.
 - **The network coming up.** A vault not reachable yet is tried again each
   second; an answer - a refusal, a vault whose key is not the pinned one -
   is final.
@@ -241,19 +259,22 @@ vault: slot 0: the pepper given with the approval does not fit this keyslot; ask
 vault: slot 0: the vault waits for an operator's approval of this boot
 vault: slot 0: released; the key is made
 unlock: making the key for vda3_crypt, as its header says
-unlock: answered for vda3_crypt (64 bytes)
+unlock: answered for vda3_crypt (87 bytes)
 ```
 
 or `vault: slot 0: no key: the vault refused: "the device is revoked"`.
-Then a password+salt or password+phonesalt keyslot of the same volume is
-the fallback: tpm2-kira asks for it at its own prompt (at the console, or
-in the SSH session), saying "no key from the vault (…)"; a volume without
-one gets `unlock: no key for vda3_crypt: …; cryptsetup's own prompt
-follows`, where the recovery passphrase works.
+With a typed password the line is `vault: slot 0: released; the salt is
+opened`, and the password is asked after the code screen. Without
+anything from the vault, the volume's next recipe is the fallback -
+another device-held salt, then the recovery recipe at tpm2-kira's prompt
+(at the console, or in the SSH session), saying "no key from the vault
+(…)"; a volume without one gets `unlock: no key for vda3_crypt: …;
+cryptsetup's own prompt follows`, where a plain passphrase works.
 
-When a volume has several of tpm2-kira's keyslots, they are tried in this
-order: tpm+vault (it needs nobody), then password+phonesalt, then
-password+salt.
+When a volume has several of tpm2-kira's keyslots, they are tried in the
+recipes' order ([DISK-KEY.md](DISK-KEY.md#the-recipes)): the unattended
+recipes (they need nobody), then the device-held salts with a typed
+password, the recovery recipe last.
 
 ## 6. The vault
 
@@ -302,7 +323,10 @@ holds the private half.
 /v1/devices[/{id}]`, `POST /v1/devices/{id}/revoke|unrevoke|unlock|mode`,
 `GET /v1/requests`, `POST /v1/requests/{id}/approve|deny`, `POST
 /v1/tokens`, `GET /v1/audit[?follow=1]`, `GET|POST /v1/operators`,
-`DELETE /v1/operators/{name}`. The audit names the actor "admin".
+`DELETE /v1/operators/{name}`. The audit names the actor "admin". A
+device's release mode is a number there (`"mode": 1` at once, `2` after an
+approval: `vaultproto.ReleaseMode`); the CLI takes and shows the words
+auto and approve.
 
 **Operator:** the REST interface over the network, §12.
 
@@ -350,7 +374,8 @@ refuse while `serve` holds its lock.
 | `device show\|revoke\|unrevoke\|unlock DEVICE` | one machine |
 | `device mode DEVICE auto\|approve` | release at once, or after an operator's approval |
 | `requests` | releases waiting for approval |
-| `request approve\|deny ID` | decide one |
+| `requests answer` | go through them one by one: approve, deny or skip; the pepper asked where needed |
+| `request approve\|deny ID` | decide one; a pepper device's approval asks the pepper |
 | `audit [--follow]` | the audit log |
 | `reseal [--dir] [--pcrs 7]` | seal every device key to the vault's current PCRs |
 | `config set operator-listen ADDR\|"" [--dir]` | turn the operator interface on (an address, e.g. `:8444`) or off; serve stopped |
@@ -359,9 +384,10 @@ refuse while `serve` holds its lock.
 
 DEVICE is a hex device ID or a unique name. The admin commands take
 `--socket`, or `--dir` for the socket of that directory's configuration.
-`devices` and `requests` show whether a device needs a pepper. `request
-approve` sends none: a pepper device is approved over the operator
-interface.
+`devices` and `requests` show whether a device needs a pepper. For such a
+device, `request approve` and `requests answer` ask the pepper on the
+terminal (without echo; one line from a pipe) and send it with the
+approval; the operator interface carries it as `{"pepper":"…"}`.
 
 ## 7. The machine's side
 
@@ -370,22 +396,25 @@ interface.
   network is the image's (`TPM2_KIRA_NET_*`, SSH.md). The image may have no
   resolver: an IP address in the URL needs none.
 - **The blob.** Attestation method 2 (SECURITY-BACKGROUND.md §10): URL,
-  pin, label, the wrapped L, and with a pepper the pepper check. The attestation part carries the device ID,
+  pin, label, the wrapped L (unattended recipes), whether a pepper goes
+  into the salt, and for an unattended recipe with a pepper the pepper
+  check. The attestation part carries the device ID,
   the attestation key and the release key, shared with the phone method.
-- **The LUKS token.** Type `tpm2-kira-vault`, mode `tpm+vault`, bound to
-  the slot (`"slot"`) and carrying the label. `luks status` and `status`
+- **The LUKS token.** Type `tpm2-kira-2400` (`-2401`, `-1400`, `-1401`),
+  the recipe's number, bound to the slot (`"slot"`) and carrying the
+  label. `luks status` and `status`
   describe it; deleting the slot makes the keyslot dirty.
 - **Commands:**
 
 ```
-tpm2-kira luks enrol <device> --mode tpm+vault --url URL --pin PIN --token T
+tpm2-kira luks enrol <device> [--password tpm] --salt vault --url URL --pin PIN --token T
                      [--pepper] [--nvram N] [--label L] [--name NAME] [--existing-key-file F]
-tpm2-kira luks mark  <device> --keyslot N --mode tpm+vault [--nvram N]
+tpm2-kira luks mark  <device> --keyslot N [--password tpm] --salt vault [--pepper] [--nvram N]
 tpm2-kira vault enrol   --url URL --pin PIN --token T --out PATH [--pepper] [--nvram N] [--label L] [--name NAME] [--yes]
 tpm2-kira vault status  [--nvram N]     the slot's vault, and whether it answers for this machine
 tpm2-kira vault unenrol [--nvram N]     the vault method and L out of the blob; revoke on the vault,
                                         remove the keyslot by hand
-tpm2-kira status                        "enrolled with the vault at …"; notes a tpm+vault keyslot
+tpm2-kira status                        "enrolled with the vault at …"; notes a vault keyslot
                                         whose slot has no vault, and a vault without a keyslot
 ```
 
@@ -437,7 +466,7 @@ recovery keyslot is mandatory, and the console prompt is always there.
 | `internal/vaultkey/vault.go` | the key's derivation, the pinned client, the boot's release (`startVaultKeys`, `openVaultKey`, `fetchRemote`), `vault enrol\|status\|unenrol` |
 | `internal/phonegate/factor.go`, `core/attest/releasekey.go` | the release key and the wrap/unwrap shared with the phone salt |
 | `internal/nvslot/attestation.go` | attestation method 2 |
-| `internal/admin/luks.go`, `internal/diskkey/header.go`, `internal/diskkey/unlock.go` | the mode, the token, the recipe, the key provider |
+| `internal/admin/luks.go`, `internal/diskkey/recipe.go`, `internal/diskkey/header.go`, `internal/diskkey/unlock.go` | the recipe, the token, the key provider |
 | `internal/bootrun/run.go` | the attempt started with `run`, ended with the hold; a key made ends it |
 | `../tpm2-kira-vault/internal/server` | the machine-facing protocol and the rules (§6.1), the admin interface |
 | `../tpm2-kira-vault/internal/keys` | AES-GCM, the recovery key, the TPM sealer |
@@ -482,7 +511,7 @@ recovery keyslot is mandatory, and the console prompt is always there.
   the operator interface with a bearer token.
 - **On the test VMs** (2026-10-11): the vault on the Arch VM (PCR 7,
   Secure Boot on), the Debian VM as the machine (slot 0 sealed to PCR
-  0,2,7,8,9; `luks enrol --mode tpm+vault` added keyslot 2). Three boots:
+  0,2,7,8,9; `luks enrol`, then the recipe tpm+vault, added keyslot 2). Three boots:
   - **auto:** back in 45 s with nothing typed; the vault released at
     generation 3, the hold ended a second later, `run` answered with the
     64-byte key;

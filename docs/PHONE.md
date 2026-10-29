@@ -4,7 +4,7 @@ The second way to check the boot, in place of the code: the slot's
 enrolment holds a phone instead of a TOTP key ([SLOT.md](SLOT.md)).
 `tpm2-kira phone enrol | unenrol | status | gate | ekcert | quote | verify`;
 the phone can also keep the salt of the disk's key (`phone salt`,
-[DISK-KEY.md](DISK-KEY.md#password--phone-salt-passwordphonesalt)).
+[DISK-KEY.md](DISK-KEY.md#password-typed-salt-from-the-phone-0x1300)).
 
 ## What the phone checks
 
@@ -102,8 +102,8 @@ with PCR 8/9 predicted for the next boot
 ([BOOT-INTEGRATION.md](BOOT-INTEGRATION.md#pcr-8-and-9-are-predicted-for-the-next-boot)).
 
 The same session also releases the phone salt when a LUKS keyslot is
-made from your password and a salt the phone keeps (`password+phonesalt`,
-[DISK-KEY.md](DISK-KEY.md#password--phone-salt-passwordphonesalt)).
+made from your password and a salt the phone keeps (recipe `0x1300`,
+[DISK-KEY.md](DISK-KEY.md#password-typed-salt-from-the-phone-0x1300)).
 
 Status: the machine side, Bluetooth inside the initramfs and the phone's
 verification core are implemented but not yet tested on real Bluetooth

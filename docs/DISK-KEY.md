@@ -11,46 +11,76 @@ fallback.
 `tpm2-kira luks status | enrol | remove | mark | route | derive`, and
 `vault` for the vault's side.
 
-## The four cases
+## The recipes
 
-| the keyslot's token says | at boot, after the code screen |
-|---|---|
-| *(no token of tpm2-kira's)* | tpm2-kira stays out of it: cryptsetup's own prompt asks for the LUKS passphrase |
-| `password+salt` | tpm2-kira asks for a **password** and a **salt** and hands over their derivation (Argon2id, 1 GiB) |
-| `password+phonesalt` | tpm2-kira asks for the **password**; the salt is the one the phone released after verifying the machine and this TPM opened ([below](#password--phone-salt-passwordphonesalt)). Only with an attestation set up. Without a salt from the phone (no phone in range, nothing released) it asks for a typed salt as in `password+salt`, which opens a keyslot enrolled that way; Ctrl-C then leads to cryptsetup's own prompt |
-| `tpm+vault` | nothing is asked: a local part from this TPM and a remote part from the vault, both opened only in an approved boot state, while the code screen holds; a key made ends the hold on its own ([VAULT.md](VAULT.md)) |
+A keyslot's key is always the **combiner's**: Argon2id (1 GiB, 16 passes,
+4 lanes, 64 bytes) of a **password** and a **salt**, written as hashpwd2
+wrote it - base64 and a newline. Security comes from where the two are
+kept. The **password** is typed by the person in front of the machine
+(at the console, or in the boot SSH session) - nothing on the machine
+holds it - or, in an unattended recipe, held by this TPM. The **salt** is
+held by a device - this TPM, the phone, the vault - or typed, in the
+recovery recipe alone. A **pepper** is a person's, entered at the vault's
+approval, and goes into the salt.
 
-In every case a wrong answer, or Ctrl-C at tpm2-kira's prompt, goes to
-cryptsetup's own prompt, where the recovery passphrase works - keep one
-in its own keyslot. The derivation needs 1 GiB of memory in the initramfs
-and takes some seconds; the keyboard layout in the initramfs must be the
-one the password was typed with (`sd-vconsole` on Arch, the `keymap`
-hook on Debian).
+A keyslot's recipe is a number, `0xPSFF`: P the password (`1` typed, `2`
+this TPM), S the salt (`1` typed, `2` this TPM, `3` the phone, `4` the
+vault), flag `0x01` the pepper.
+
+| recipe | `luks enrol` | at boot |
+|---|---|---|
+| *(no token of tpm2-kira's)* | - | tpm2-kira stays out of it: cryptsetup's own prompt asks for the LUKS passphrase |
+| `0x2400` unattended: this TPM and the vault | `--password tpm --salt vault` | nothing is asked: the TPM's part and the vault's, both opened only in an approved boot state while the code screen holds; a key made ends the hold on its own ([VAULT.md](VAULT.md)) |
+| `0x2401` ... with a pepper | `--password tpm --salt vault --pepper` | the same, once an operator approved the boot with the pepper |
+| `0x1400` password typed, salt from the vault | `--salt vault` | the vault releases the salt while the code screen holds; the password is asked after it |
+| `0x1401` ... with a pepper | `--salt vault --pepper` | the same, once an operator approved with the pepper |
+| `0x1300` password typed, salt from the phone | `--salt phone` | the phone verifies the boot and hands back the salt, the TPM opens it; the password is asked after the code screen |
+| `0x1200` password typed, salt in this TPM | `--salt tpm` | the TPM opens the salt while the code screen holds; the password is asked after it |
+| `0x1100` recovery: password and salt typed | `--salt typed` | both are asked at tpm2-kira's prompt |
+
+A volume's recipes are tried in that order, each the fallback of the ones
+before it, and always in this order: the keyslot's own recipe (the vault,
+the phone, the TPM); without a salt from it, a **typed** salt at the same
+prompt - the recovery recipe, which opens a keyslot enrolled that way;
+then, at Ctrl-C or with a key that opens nothing, cryptsetup's own
+prompt with a **plain passphrase** - the only way in when tpm2-kira itself
+fails, since the combiner's key ends in a newline that a passphrase
+prompt cannot take. Keep one in its own keyslot: `control` shows it red
+when every keyslot of a volume is tpm2-kira's.
+
+The TPM does not check the typed password. A device-held salt opens in a
+boot the signing key approved, while the code screen holds; after a
+stolen machine boots normally, the password can be guessed offline at
+Argon2id's cost (about a second a guess, with LUKS's own KDF on top): its
+strength is the limit. The derivation needs 1 GiB of memory in the
+initramfs and takes some seconds; the keyboard layout in the initramfs
+must be the one the password was typed with (`sd-vconsole` on Arch, the
+`keymap` hook on Debian).
 
 ## The token
 
-`luks mark` marks a keyslot as tpm2-kira's with a LUKS2 token in the
-header (no key material). The token's type carries the mode, so a plain
-`cryptsetup luksDump` tells them apart: `tpm2-kira-salt` for
-`password+salt`, `tpm2-kira-phonesalt` for `password+phonesalt` (`+` is
-not allowed in a token type, so the type spells it out). A `password+salt` keyslot is bound to nothing: no TPM is
-in its key, and no slot's deletion takes it. A `password+phonesalt`
-keyslot carries `"slot": N` - the slot whose enrolment releases its salt
-(slot 0 unless `--nvram` names another) - and is deleted with that slot
-([SLOT.md](SLOT.md#deleting-a-slot)). The two coexist on one
-device: at boot the phone's salt is tried first, the typed salt is the
-fallback. `luks enrol` adds the keyslot and marks it in one step; its design is
+`luks enrol` adds the keyslot and marks it, `luks mark` marks one made by
+hand - with a LUKS2 token in the header (no key material). The token
+stores the recipe's number, and its type repeats it, so a plain
+`cryptsetup luksDump` names the recipe too:
+
+```json
+{"type": "tpm2-kira-1300", "keyslots": ["2"], "recipe": 4864, "slot": 0, "label": "luks", "created": "..."}
+```
+
+The recovery recipe is bound to nothing: no TPM is in its key, and no
+slot's deletion takes it. Every other recipe carries `"slot": N` - the slot
+whose TPM part, phone or vault it needs (slot 0 unless `--nvram` names
+another) - and is deleted with that slot
+([SLOT.md](SLOT.md#deleting-a-slot)). A token of another version is named
+as such, never acted on: enrol the keyslot again. The design is
 [PLAN-LUKS.md](PLAN-LUKS.md).
 
-## password + salt (`password+salt`)
+## Recovery: password and salt typed (`0x1100`)
 
-Nothing but what you type: a password and a salt, combined with Argon2id
-(1 GiB, 16 passes, 4 lanes, 64 bytes). No TPM is in the key, so the
-keyslot survives every slot, and it is the fallback of a
-`password+phonesalt` keyslot when the phone is not there. `luks derive`
-makes the key by hand, `luks enrol --mode password+salt` in one step.
-
-A keyslot for `password+salt`, made on the unlocked system:
+Nothing but what you type, combined. No TPM is in the key, so the keyslot
+survives every slot, and it is the fallback of every other recipe at
+tpm2-kira's prompt. `luks enrol --salt typed` in one step, or by hand:
 
 ```bash
 sudo mkdir -m 700 -p /run/tpm2-kira
@@ -58,10 +88,26 @@ sudo tpm2-kira luks derive --out /run/tpm2-kira/luks.key     # asks password (tw
 sudo cryptsetup luksAddKey /dev/nvme0n1p2 /run/tpm2-kira/luks.key
 sudo cryptsetup open --test-passphrase /dev/nvme0n1p2 --key-file /run/tpm2-kira/luks.key
 sudo rm /run/tpm2-kira/luks.key
-sudo tpm2-kira luks mark /dev/nvme0n1p2 --keyslot 1 --mode password+salt
+sudo tpm2-kira luks mark /dev/nvme0n1p2 --keyslot 1 --salt typed
 ```
 
-## password + phone salt (`password+phonesalt`)
+## Password typed, salt in this TPM (`0x1200`)
+
+A salt this TPM keeps: a part T drawn at enrolment, wrapped for the TPM's
+endorsement key and the slot's release key, kept in the slot's blob. The
+TPM opens it only in a boot your signing key approved, while the code
+screen holds (the boot plan's part *TPM salt*); the password is typed
+after it. Whoever has the disk and the password still needs this
+machine in an approved boot.
+
+```bash
+sudo tpm2-kira luks enrol /dev/nvme0n1p2 --salt tpm      # asks the password twice
+```
+
+One per slot; a new one replaces the old, and a keyslot enrolled with the
+old one opens no more. The image is rebuilt once for the part.
+
+## Password typed, salt from the phone (`0x1300`)
 
 With a phone enrolled, the disk can need **both** your password and a
 salt the phone keeps - the *phone salt*
@@ -69,10 +115,9 @@ salt the phone keeps - the *phone salt*
 machine's TPM can open, and only in a boot your signing key approved. It
 is released by the attestation and by nothing else: the phone enrolled
 with `phone enrol`, over Bluetooth LE, hands it back after a verdict you
-accept. The key in the LUKS keyslot is the derivation of password and salt,
-as in `password+salt` - only that nobody types the salt.
-Whoever has the disk and the password still needs the phone and this
-machine; whoever has the phone and the machine still needs the password.
+accept. Whoever has the disk and the password still needs the phone and
+this machine; whoever has the phone and the machine still needs the
+password.
 
 1. **Recovery passphrase first**, in its own keyslot, typed at
    cryptsetup's prompt - long, not the password below, written down
@@ -83,8 +128,8 @@ machine; whoever has the phone and the machine still needs the password.
    sudo cryptsetup luksAddKey /dev/nvme0n1p2
    ```
 
-2. **Enrol the phone salt.** On the unlocked system, with Marify open on
-   the phone:
+2. **Enrol the phone salt** - `luks enrol --salt phone` does all of it, or
+   by hand, on the unlocked system, with Marify open on the phone:
 
    ```bash
    sudo mkdir -m 700 -p /run/tpm2-kira
@@ -93,10 +138,10 @@ machine; whoever has the phone and the machine still needs the password.
 
    The phone shows the ordinary verdict screen with a card "Keep this
    machine's phone salt"; accepting the verdict keeps it. The phone
-   hands it straight back, the TPM opens it, and only if the round trip
-   gives back what was sent does tpm2-kira ask for your password and
-   write the derived key - once, to tmpfs. The first enrolment of a slot
-   also adds the release key to its blob (needs the signing key).
+   hands it straight back, and only if the round trip gives back what
+   was sent does tpm2-kira ask for your password and write the derived
+   key - once, to tmpfs. The first enrolment of a slot also adds the
+   release key to its blob (needs the signing key).
 
 3. **Add the derived key**, remove the file, mark the keyslot - the mark
    is all the boot needs, it reads the header:
@@ -105,21 +150,20 @@ machine; whoever has the phone and the machine still needs the password.
    sudo cryptsetup luksAddKey /dev/nvme0n1p2 /run/tpm2-kira/luks.key
    sudo cryptsetup open --test-passphrase /dev/nvme0n1p2 --key-file /run/tpm2-kira/luks.key
    sudo rm /run/tpm2-kira/luks.key
-   sudo tpm2-kira luks mark /dev/nvme0n1p2 --keyslot 2 --mode password+phonesalt
+   sudo tpm2-kira luks mark /dev/nvme0n1p2 --keyslot 2 --salt phone
    ```
 
 At boot: code screen, the phone verifies and hands the salt back, the
-TPM opens it before the OS separator, and tpm2-kira's prompt says `The
-verifier released the disk's salt` and asks for the *password*. It
-derives the key (1 GiB of memory, some seconds) and gives it to
-`systemd-cryptsetup`. No phone, no verdict, or a TPM that refused: no
-answer from tpm2-kira, cryptsetup's own prompt, the recovery passphrase.
-`phone salt status` says which slots have one (`--json` for scripts);
-`phone salt rotate` gives the phone a new salt and derives the new key,
-after which the old keyslot is removed by hand (`cryptsetup luksKillSlot`);
-`phone salt unenrol` takes the release key out of the slot, so what the
-phone keeps can never be opened again, and the keyslot is removed by
-hand. The phone side runs on Android; the iOS app is tested separately.
+TPM opens it before the OS separator, and tpm2-kira's prompt says the
+salt came from the phone and asks for the *password*. No phone, no
+verdict, or a TPM that refused: a typed salt (the recovery recipe), then
+cryptsetup's own prompt. `phone salt status` says which slots have one
+(`--json` for scripts); `phone salt rotate` gives the phone a new salt and
+derives the new key, after which the old keyslot is removed by hand
+(`cryptsetup luksKillSlot`); `phone salt unenrol` takes the release key out
+of the slot, so what the phone keeps can never be opened again, and the
+keyslot is removed by hand. The phone side runs on Android; the iOS app
+is tested separately.
 
 `/etc/crypttab` is not touched and does not need to be: only if a volume
 is kept there with `x-initrd.attach` instead of on the command line, the
@@ -130,19 +174,21 @@ same socket goes into that line's key field
 volumes with a key file or a token (`tpm2-device=`, `fido2-device=`,
 `pkcs11-uri=`) are not tpm2-kira's.
 
-## TPM + vault (`tpm+vault`)
+## The salt from the vault (`0x1400`, `0x1401`, `0x2400`, `0x2401`)
 
-A keyslot in mode `tpm+vault` opens without anybody typing: a local part
-in this machine's TPM and a remote part from
-[tpm2-kira-vault](../../tpm2-kira-vault), both opening only in a boot state
-your signing key approved. Revoked on the vault, the machine no longer
-unlocks unattended; without the vault's key, a password+salt (or
-password+phonesalt) keyslot of the same volume is asked at tpm2-kira's
-prompt - at the console or over SSH - and without one, the recovery
-passphrase at cryptsetup's.
+The vault ([tpm2-kira-vault](../../tpm2-kira-vault)) keeps a part R that
+only this machine's TPM opens, and releases it to a fresh quote of a boot
+your signing key approved - at once, or once an operator approves, with
+a pepper if the keyslot was enrolled with one. R is the salt (the pepper
+goes into it); the password is typed after the code screen (`0x1400`,
+`0x1401`) or is the TPM's own part L (`0x2400`, `0x2401`: nothing typed,
+the boot opens unattended). Revoked on the vault, the machine gets no
+salt; the recovery recipe is asked at tpm2-kira's prompt - at the console
+or over SSH - and without one, the recovery passphrase at cryptsetup's.
 
 ```bash
-sudo tpm2-kira luks enrol /dev/sda2 --mode tpm+vault --url https://vault:8443 --pin sha256:… --token …
+sudo tpm2-kira luks enrol /dev/sda2 --password tpm --salt vault --url https://vault:8443 --pin sha256:… --token …
+sudo tpm2-kira luks enrol /dev/sda2 --salt vault --pepper --url https://vault:8443 --pin sha256:… --token …
 ```
 
 Setting up both sides, the protocol, the vault's rules and recovery:
@@ -345,7 +391,7 @@ their console lines - the last of them `systemd-pcrnvdone.service`, "TPM
 PCR NvPCR Initialization Separator", watched until active with a cap of
 3 s for a machine where it never runs - one volume at a time at its own
 prompt.
-A derived key (password+salt, password+phonesalt) or the vault's key
+A recipe's key (the combiner's)
 goes the same way: the transfer never changes.
 
 **Treat the bytes like libcryptsetup does.** `systemd-cryptsetup` locks
@@ -359,13 +405,13 @@ hibernation image; the initrd has no swap and no hibernation.
 
 ### When the answer is wrong: systemd's prompt is the fallback
 
-The chain, from the most convenient to the one that always works: in
-a `password+phonesalt` keyslot (the recipe read from the volume's own
-header at boot), the password and the salt the phone returned;
-without a salt from the phone (no phone in range, nothing released), the
-password and a **typed** salt - the `password+salt` variant, which opens
-a keyslot enrolled that way, if there is one; and at Ctrl-C, or when the
-derived key opens nothing, systemd's own prompt and the recovery
+The chain, from the most convenient to the one that always works: the
+keyslot's own recipe (read from the volume's own header at boot) - for
+the phone's salt, the password and the salt the phone returned; without
+a salt from the device (no phone in range, a vault that refused, nothing
+released), the password and a **typed** salt - the recovery recipe, which
+opens a keyslot enrolled that way, if there is one; and at Ctrl-C, or
+when the derived key opens nothing, systemd's own prompt and a plain
 passphrase. Each step is offered at tpm2-kira's prompt and says which it
 is.
 
@@ -413,7 +459,7 @@ What this means for tpm2-kira:
   §7.4). The intention is the opposite: tpm2-kira does its work, the
   phone's verdict informs the person at the keyboard, and the passphrase
   can always be entered by hand. What enforces, if anything, is a missing
-  phone salt ([below](#password--phone-salt-passwordphonesalt)): a key the disk needs and the machine
+  phone salt ([below](#password-typed-salt-from-the-phone-0x1300)): a key the disk needs and the machine
   does not have until the phone releases it, with the recovery passphrase
   as the manual way in.
 - **Prompt options** of `crypttab(5)` - `timeout`, `verify`,

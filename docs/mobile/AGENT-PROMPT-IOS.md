@@ -32,7 +32,7 @@ gomobile into an `.xcframework` and call.
 2. `docs/PLAN-BLE.md` §1, §5.3, §6 — the user story, enrolment confirmation,
    the three verdict states and what the user sees.
 3. `docs/PLAN-PHONESALT.md` §1, §4 — a future step (salt release for
-   the password+salt derivation) that your session flow must be able to grow into. Do not
+   the combiner of password and salt) that your session flow must be able to grow into. Do not
    implement it now.
 4. `core/mobile/kiracore/kiracore.go` and `core/mobile/kiratest/kiratest.go` — the Go
    API you call.
