@@ -233,6 +233,39 @@ func routedUUIDs(cmdline, socket string) []string {
 	return uuids
 }
 
+// DebianKeyscript is the keyscript cryptsetup-initramfs runs for a volume
+// whose crypttab line routes it through tpm2-kira.
+const DebianKeyscript = "/lib/cryptsetup/scripts/tpm2-kira"
+
+// routedDevices are the devices of the volumes routed through tpm2-kira:
+// on the kernel command line (rd.luks.key=<UUID>=socket; a systemd
+// initrd), or by a crypttab line that names tpm2-kira's keyscript
+// (Debian's image).
+func routedDevices(socket string) []string {
+	var devs []string
+	if data, err := os.ReadFile(bootCmdlinePath); err == nil {
+		for _, uuid := range routedUUIDs(string(data), socket) {
+			devs = append(devs, bootByUUIDDir+"/"+uuid)
+		}
+	}
+	for _, path := range bootCrypttabPaths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 4 || strings.HasPrefix(fields[0], "#") {
+				continue
+			}
+			if strings.Contains(","+fields[3]+",", ",keyscript="+DebianKeyscript+",") {
+				devs = append(devs, sourceDevice(fields[1]))
+			}
+		}
+	}
+	return devs
+}
+
 // ScreenRecipe is the recipe of the first routed volume, for the code
 // screen's words ("continue to ..."): resolved lazily, cached once known,
 // "" while no routed header is readable yet (the prompt then names
@@ -246,12 +279,8 @@ func ScreenRecipe(socket string) func() string {
 		if known != "" {
 			return known
 		}
-		data, err := os.ReadFile(bootCmdlinePath)
-		if err != nil {
-			return ""
-		}
-		for _, uuid := range routedUUIDs(string(data), socket) {
-			if toks, err := ReadLuks2Tokens(bootByUUIDDir + "/" + uuid); err == nil {
+		for _, dev := range routedDevices(socket) {
+			if toks, err := ReadLuks2Tokens(dev); err == nil {
 				if mode := RecipeOfTokens(toks); mode != "" {
 					known = mode
 					return known

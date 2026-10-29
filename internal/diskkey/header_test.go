@@ -110,6 +110,27 @@ func TestVolumeDevice(t *testing.T) {
 	}
 }
 
+// The code screen names the next prompt by the routed volume's recipe;
+// Debian's image routes the volume by its crypttab's keyscript, not on
+// the kernel command line.
+func TestScreenRecipeFollowsBothRoutes(t *testing.T) {
+	dir := t.TempDir()
+	defer func(c string, ct []string) { bootCmdlinePath, bootCrypttabPaths = c, ct }(bootCmdlinePath, bootCrypttabPaths)
+	bootCmdlinePath = filepath.Join(dir, "cmdline")
+	bootCrypttabPaths = []string{filepath.Join(dir, "crypttab")}
+	dev := writeLuks2Header(t, `{"0": {"type": "tpm2-kira-salt", "keyslots": ["1"], "created": "x"}}`)
+	os.WriteFile(bootCmdlinePath, []byte("quiet\n"), 0o644)
+
+	os.WriteFile(bootCrypttabPaths[0], []byte("vda3_crypt "+dev+" none luks,discard\n"), 0o644)
+	if mode := ScreenRecipe(DefaultUnlockSocket)(); mode != "" {
+		t.Fatalf("a volume not routed through tpm2-kira: %q", mode)
+	}
+	os.WriteFile(bootCrypttabPaths[0], []byte("vda3_crypt "+dev+" none luks,discard,keyscript="+DebianKeyscript+"\n"), 0o644)
+	if mode := ScreenRecipe(DefaultUnlockSocket)(); mode != LuksModePasswordSalt {
+		t.Fatalf("routed by the keyscript: %q", mode)
+	}
+}
+
 // unlockRecipe ties the two: the volume's device from the command line,
 // the recipe from its header, cached; a volume of nobody's answers "" and
 // says why.

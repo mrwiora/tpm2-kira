@@ -24,9 +24,6 @@ import (
 // person changes exactly that. 'luks route' is the command, 'luks enrol'
 // ends with it, 'status' notes it, and the mkinitcpio hook runs it.
 
-// DebianKeyscript is the keyscript cryptsetup-initramfs runs for a volume.
-const DebianKeyscript = "/lib/cryptsetup/scripts/tpm2-kira"
-
 // RouteFinding is one file's verdict for one volume.
 type RouteFinding struct {
 	File    string `json:"file"`
@@ -175,11 +172,11 @@ func AdviseCrypttab(file string, data []byte, uuid, device string, debian bool) 
 			opts = fields[3]
 		}
 		if debian {
-			if strings.Contains(","+opts+",", ",keyscript="+DebianKeyscript+",") {
+			if strings.Contains(","+opts+",", ",keyscript="+diskkey.DebianKeyscript+",") {
 				f.Routed, f.Note = true, "keyscript= in "+file
 				return f, true
 			}
-			f.Problem = fmt.Sprintf("the line for %s has no keyscript=%s: the initrd asks at cryptsetup's own prompt", fields[0], DebianKeyscript)
+			f.Problem = fmt.Sprintf("the line for %s has no keyscript=%s: the initrd asks at cryptsetup's own prompt", fields[0], diskkey.DebianKeyscript)
 			o := strings.Split(opts, ",")
 			var kept []string
 			for _, x := range o {
@@ -187,7 +184,7 @@ func AdviseCrypttab(file string, data []byte, uuid, device string, debian bool) 
 					kept = append(kept, x)
 				}
 			}
-			kept = append(kept, "keyscript="+DebianKeyscript)
+			kept = append(kept, "keyscript="+diskkey.DebianKeyscript)
 			f.Should = fields[0] + " " + dev + " " + key + " " + strings.Join(kept, ",")
 			return f, true
 		}
@@ -280,7 +277,7 @@ func RouteFindings(devices []string, cmdlines []string, crypttab string) ([]Rout
 			if debian {
 				f.File = crypttab
 				f.Problem = "no line names this volume"
-				f.Should = "cryptroot UUID=" + uuid + " none luks,discard,keyscript=" + DebianKeyscript
+				f.Should = "cryptroot UUID=" + uuid + " none luks,discard,keyscript=" + diskkey.DebianKeyscript
 			} else {
 				f.File = "the kernel command line"
 				if len(cmdlines) > 0 {
