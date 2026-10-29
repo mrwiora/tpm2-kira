@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -550,12 +551,25 @@ func imagePlan(img string) (map[string]string, error) {
 	return parts, nil
 }
 
+// switchedOffRebuilds are the parts that, switched off, are a reason to
+// rebuild at once: they open the machine to the network at boot, and
+// switching them off means the next boot without them - not one that still
+// listens until some later build.
+var switchedOffRebuilds = []string{imageplan.PartSSH, imageplan.PartNet}
+
 // planPending compares the plan with an image's parts: what is in use now
 // and not in the image, or in it with other settings, is a reason to
-// rebuild. A part the image carries and nothing uses is not.
+// rebuild, and so is the SSH server or the network switched off while the
+// image still carries it. Another part the image carries and nothing uses
+// is not: the next build leaves it out.
 func planPending(p *BootPlan, image map[string]string, img string) []string {
 	var out []string
 	name := filepath.Base(img)
+	for _, part := range switchedOffRebuilds {
+		if _, ok := image[part]; ok && !p.Has(part) {
+			out = append(out, fmt.Sprintf("%s: switched off, still in %s - the next boot would start it", partTitles[part], name))
+		}
+	}
 	for _, pt := range p.Parts {
 		if !pt.On {
 			continue
@@ -570,12 +584,13 @@ func planPending(p *BootPlan, image map[string]string, img string) []string {
 	return out
 }
 
-// planUnused are the parts an image carries that nothing uses any more:
-// the next build leaves them out.
+// planUnused are the parts an image carries that nothing uses any more,
+// other than those switched off that planPending names: the next build
+// leaves them out.
 func planUnused(p *BootPlan, image map[string]string) []string {
 	var out []string
 	for _, name := range planOrder {
-		if _, ok := image[name]; ok && !p.Has(name) {
+		if _, ok := image[name]; ok && !p.Has(name) && !slices.Contains(switchedOffRebuilds, name) {
 			out = append(out, partTitles[name])
 		}
 	}

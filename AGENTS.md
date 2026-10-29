@@ -143,8 +143,10 @@ It may not carry what came before.
   built for. The image names its parts in `/etc/tpm2-kira/plan/<part>/<digest
   of its settings>`; `control` reads that from the image's listing. A part
   in use and not in the image, or in it with other settings, is a reason
-  to rebuild; a part the image carries for nothing is not - the next build
-  leaves it out. Do not decide what the image carries in a hook's shell
+  to rebuild, and so is the SSH server or the network switched off while
+  the image still carries it (they open the machine at boot: off means the
+  next boot without them); another part the image carries for nothing is
+  not - the next build leaves it out. Do not decide what the image carries in a hook's shell
   or at boot: add the rule to the plan.
 - **One boot on every distribution.** Arch's unit and Debian's
   init-premount script start the same `run`, and `run` starts everything

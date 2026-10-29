@@ -391,13 +391,19 @@ func TestImagePlanPending(t *testing.T) {
 	if p := planPending(decidePlan(in), parts, img); !strings.Contains(strings.Join(p, "\n"), "Phone (Bluetooth): in use now, not in initramfs-linux.img yet (1 phone enrolled, via hci0)") {
 		t.Errorf("a phone enrolled: %q", p)
 	}
-	// SSH switched off: the image carries it for nothing, no reason to rebuild.
+	// SSH switched off: a reason to rebuild at once - the image would
+	// start it at the next boot.
 	in = planInputs{Config: planConfig(t, "TPM2_KIRA_NET=dhcp\n"), Slots: 1}
-	if p := planPending(decidePlan(in), parts, img); len(p) != 0 {
+	if p := planPending(decidePlan(in), parts, img); len(p) != 1 || !strings.Contains(p[0], "SSH server: switched off, still in initramfs-linux.img") {
 		t.Errorf("SSH off: %q", p)
 	}
-	if u := planUnused(decidePlan(in), parts); strings.Join(u, ",") != "SSH server" {
+	if u := planUnused(decidePlan(in), parts); len(u) != 0 {
 		t.Errorf("unused: %q", u)
+	}
+	// The network off as well: both are named.
+	off := planInputs{Config: planConfig(t, ""), Slots: 1}
+	if p := planPending(decidePlan(off), parts, img); len(p) != 2 {
+		t.Errorf("network and SSH off: %q", p)
 	}
 	// An image of no plan at all: everything in use is missing.
 	listImage = func(string) ([]string, error) { return []string{"./usr/bin/tpm2-kira-boot"}, nil }

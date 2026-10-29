@@ -353,7 +353,9 @@ phone, SSH switched on - or in it with other settings - another port,
 another login key - makes the image out of date; the status' "Boot
 image" line says which. New TOTP codes for a slot that has some, a
 approve, a further phone, a LUKS keyslot or the YubiKey's PIN never do.
-A part the image carries and nothing uses any more is no reason to
+The SSH server or the network switched off while the image still carries
+it makes the image out of date too: the next boot must not start them.
+Another part the image carries and nothing uses any more is no reason to
 rebuild: the next build leaves it out. Quitting then shows the reasons
 and what the build puts in, and runs `mkinitcpio -P` (`update-initramfs
 -u`) when you say yes. The image looked at is the first preset's default

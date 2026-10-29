@@ -512,8 +512,10 @@ A part that cannot be had stays out; nothing stops the build.
 
 'tpm2-kira control' compares the plan with the image the next boot starts:
 a part in use and not in the image, or in it with other settings, makes it
-rebuild the image when it is left. A part the image carries and nothing
-uses is no reason to rebuild: the next build leaves it out.
+rebuild the image when it is left, and so does the SSH server or the
+network switched off while the image still carries it: the next boot must
+not start them. Another part the image carries and nothing uses is no
+reason to rebuild: the next build leaves it out.
 
   --no-busybox     initramfs-tools: the image has no busybox, so no network
   --kernel-log F   Extra kernel log naming the adapter's firmware (the

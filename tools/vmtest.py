@@ -689,13 +689,16 @@ class Machine:
             self.check("control asks before it removes the SSH CA when SSH is switched off", True)
             pick(r"Back to step 2")
             pick(r"^\s*Quit$")
-            # A part switched off is no reason of its own to rebuild (the
-            # next build leaves it out): control may end without asking.
+            # SSH switched off makes the image out of date: the next boot
+            # must not start the server.
             text, m = s.expect(r"(Run (mkinitcpio -P|update-initramfs -u) now\? \[Y/n\] ?$|Connection to \S+ closed)", 120)
+            self.check("SSH switched off: control offers the rebuild (the next boot without the server)",
+                       m.group(1).startswith("Run") and "SSH server: switched off" in text, text[-800:])
             if m.group(1).startswith("Run"):
                 s.send("y\n")
                 text = s.wait_end(900)
-            self.log.save("control-ssh-off-end.log", text)
+                self.check("the rebuilt image leaves the SSH server out", re.search(r"SSH server:\s+out", text) is not None, text[-800:])
+            self.log.save("control-ssh-off-rebuild.log", text)
         except Fail as e:
             self.check("control: SSH off, the SSH CA kept on No", False, str(e))
             raise
