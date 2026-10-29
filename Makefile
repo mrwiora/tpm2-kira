@@ -1,7 +1,9 @@
-.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio deb test test-unit test-integration test-all fuzz fmt vet packages pkgbuild help
+.PHONY: all build build-static clean install uninstall install-mkinitcpio uninstall-mkinitcpio install-initramfs-tools uninstall-initramfs-tools deb test test-unit test-integration test-all fuzz fmt vet packages pkgbuild help
 
 # Binary name
 BINARY_NAME=tpm2-kira
+# What the boot image carries (cmd/tpm2-kira-boot); the hooks put it in.
+BOOT_NAME=tpm2-kira-boot
 INSTALL_PATH=/usr/local/bin
 
 # Go parameters
@@ -38,12 +40,15 @@ LDFLAGS=-ldflags "-s -w -X main.Version=$(VERSION)"
 
 all: build
 
-## build: Build the binary (static, CGO_ENABLED=0)
+## build: Build both binaries (static, CGO_ENABLED=0)
 build:
-	@echo "Building $(BINARY_NAME) version $(VERSION)..."
-	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v
-	@$(GOCMD) version -m $(BINARY_NAME) | grep -q 'CGO_ENABLED=0' || \
-		{ echo "Error: $(BINARY_NAME) was built with cgo"; exit 1; }
+	@echo "Building $(BINARY_NAME) and $(BOOT_NAME) version $(VERSION)..."
+	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v .
+	$(GOBUILD) $(LDFLAGS) -o $(BOOT_NAME) -v ./cmd/$(BOOT_NAME)
+	@for b in $(BINARY_NAME) $(BOOT_NAME); do \
+		$(GOCMD) version -m $$b | grep -q 'CGO_ENABLED=0' || \
+			{ echo "Error: $$b was built with cgo"; exit 1; }; \
+	done
 
 ## build-static: Alias for build, which is always static
 build-static: build
@@ -55,20 +60,19 @@ build-optimized: build
 clean:
 	@echo "Cleaning..."
 	$(GOCLEAN)
-	rm -f $(BINARY_NAME)
+	rm -f $(BINARY_NAME) $(BOOT_NAME)
 	rm -rf build/
 
 ## install: Install binary to system
 install: build-optimized
-	@echo "Installing $(BINARY_NAME) to $(INSTALL_PATH)..."
-	sudo cp $(BINARY_NAME) $(INSTALL_PATH)/
-	sudo chmod 755 $(INSTALL_PATH)/$(BINARY_NAME)
+	@echo "Installing $(BINARY_NAME) and $(BOOT_NAME) to $(INSTALL_PATH)..."
+	sudo install -m755 $(BINARY_NAME) $(BOOT_NAME) $(INSTALL_PATH)/
 	@echo "Installation complete!"
 
 ## uninstall: Remove binary from system
 uninstall:
 	@echo "Uninstalling $(BINARY_NAME)..."
-	sudo rm -f $(INSTALL_PATH)/$(BINARY_NAME)
+	sudo rm -f $(INSTALL_PATH)/$(BINARY_NAME) $(INSTALL_PATH)/$(BOOT_NAME)
 	@echo "Uninstallation complete!"
 
 ## install-mkinitcpio: Install mkinitcpio hooks for early boot integration
@@ -91,8 +95,7 @@ install-mkinitcpio:
 	sudo cp initramfs/mkinitcpio/post/sd-tpm2-kira /etc/initcpio/post/
 	sudo chmod +x /etc/initcpio/post/sd-tpm2-kira
 	sudo mkdir -p /usr/lib/systemd/system
-	sudo install -m644 initramfs/systemd/tpm2-kira.service initramfs/systemd/tpm2-kira-cap.service initramfs/systemd/tpm2-kira-unlock.socket /usr/lib/systemd/system/
-	sudo install -m644 initramfs/systemd/tpm2-kira-attest.service /usr/lib/systemd/system/
+	sudo install -m644 initramfs/systemd/tpm2-kira.service initramfs/systemd/tpm2-kira-cap.service initramfs/systemd/tpm2-kira-machine-id.service initramfs/systemd/tpm2-kira-unlock.socket /usr/lib/systemd/system/
 	@if [ ! -e /etc/tpm2-kira/control.conf ]; then \
 		sudo install -Dm644 initramfs/common/control.conf /etc/tpm2-kira/control.conf; \
 	fi
@@ -107,9 +110,9 @@ install-mkinitcpio:
 	@echo "   root volume (see README \"Configure the disk unlock\"):"
 	@echo "     rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock"
 	@echo ""
-	@echo "2. Set up and seal (if not already done; see README \"Choosing PCRs\"):"
+	@echo "2. Set up and seal (if not already done; see docs/SLOT.md \"Choosing PCRs\"):"
 	@echo "   tpm2-kira setup"
-	@echo "   tpm2-kira seal --pcrs 0,7,11u"
+	@echo "   tpm2-kira slot add --pcrs 0,7,11u"
 	@echo ""
 	@echo "3. Rebuild initramfs:"
 	@echo "   sudo mkinitcpio -P"
@@ -118,12 +121,50 @@ install-mkinitcpio:
 uninstall-mkinitcpio:
 	@echo "Uninstalling mkinitcpio hooks..."
 	sudo rm -f /etc/initcpio/install/sd-tpm2-kira
-	sudo rm -f /usr/lib/systemd/system/tpm2-kira-attest.service
 	sudo rm -f /etc/initcpio/post/sd-tpm2-kira
-	sudo rm -f /usr/lib/systemd/system/tpm2-kira.service /usr/lib/systemd/system/tpm2-kira-cap.service /usr/lib/systemd/system/tpm2-kira-unlock.socket
+	sudo rm -f /usr/lib/systemd/system/tpm2-kira.service /usr/lib/systemd/system/tpm2-kira-cap.service /usr/lib/systemd/system/tpm2-kira-machine-id.service /usr/lib/systemd/system/tpm2-kira-unlock.socket
 	@echo "Mkinitcpio hooks uninstalled!"
 	@echo "Note: You should rebuild your initramfs after removing hooks:"
 	@echo "      sudo mkinitcpio -P"
+
+## install-initramfs-tools: Install the initramfs-tools hook and boot scripts (Debian, Ubuntu)
+# What the .deb installs, with the hook and the boot scripts in
+# /etc/initramfs-tools - the place initramfs-tools keeps for the local
+# administrator, as /etc/initcpio is mkinitcpio's - beside the binary in
+# /usr/local/bin. The keyscript goes where crypttab names it.
+install-initramfs-tools:
+	@echo "Installing initramfs-tools hook and boot scripts..."
+	@if [ ! -f "$(BINARY_NAME)" ]; then \
+		echo "Error: $(BINARY_NAME) not built. Run 'make build' first."; \
+		exit 1; \
+	fi
+	@if [ ! -d "/etc/initramfs-tools" ]; then \
+		echo "Error: initramfs-tools not found. This system may not use initramfs-tools."; \
+		exit 1; \
+	fi
+	sudo install -Dm755 initramfs/initramfs-tools/hooks/tpm2-kira /etc/initramfs-tools/hooks/tpm2-kira
+	sudo install -Dm755 initramfs/initramfs-tools/scripts/init-premount/tpm2-kira /etc/initramfs-tools/scripts/init-premount/tpm2-kira
+	sudo install -Dm755 initramfs/initramfs-tools/scripts/init-bottom/tpm2-kira /etc/initramfs-tools/scripts/init-bottom/tpm2-kira
+	sudo install -Dm755 initramfs/initramfs-tools/post-update.d/tpm2-kira /etc/initramfs/post-update.d/tpm2-kira
+	sudo install -Dm755 initramfs/initramfs-tools/kernel/zzz-tpm2-kira /etc/kernel/postinst.d/zzz-tpm2-kira
+	sudo install -Dm755 initramfs/initramfs-tools/kernel/zzz-tpm2-kira /etc/kernel/postrm.d/zzz-tpm2-kira
+	sudo install -Dm755 initramfs/initramfs-tools/keyscript/tpm2-kira /lib/cryptsetup/scripts/tpm2-kira
+	@if [ ! -e /etc/tpm2-kira/control.conf ]; then \
+		sudo install -Dm644 initramfs/common/control.conf /etc/tpm2-kira/control.conf; \
+	fi
+	@echo "initramfs-tools hook and boot scripts installed."
+	@echo ""
+	@echo "Next: sudo tpm2-kira control (the keyscript in /etc/crypttab, the signing key,"
+	@echo "the TOTP codes, network and SSH); it rebuilds the image when you quit."
+
+## uninstall-initramfs-tools: Remove the initramfs-tools hook and boot scripts
+uninstall-initramfs-tools:
+	@echo "Uninstalling initramfs-tools hook and boot scripts..."
+	sudo rm -f /etc/initramfs-tools/hooks/tpm2-kira /etc/initramfs-tools/scripts/init-premount/tpm2-kira /etc/initramfs-tools/scripts/init-bottom/tpm2-kira
+	sudo rm -f /etc/initramfs/post-update.d/tpm2-kira /etc/kernel/postinst.d/zzz-tpm2-kira /etc/kernel/postrm.d/zzz-tpm2-kira
+	sudo rm -f /lib/cryptsetup/scripts/tpm2-kira
+	@echo "Removed. Take keyscript=/lib/cryptsetup/scripts/tpm2-kira out of /etc/crypttab,"
+	@echo "then rebuild the initramfs: sudo update-initramfs -u"
 
 ## deb: Build the Debian package (version derived from git describe)
 deb:
@@ -146,14 +187,15 @@ test: test-unit
 ## test-unit: Run unit tests only
 test-unit:
 	@echo "Running unit tests..."
-	$(GOTEST) -v -tags=unit ./cmd/... ./attest/... ./transport/... ./mobile/...
+	$(GOTEST) -v -tags=unit ./internal/...
+	cd core && $(GOTEST) -v ./...
 
 ## fuzz: Fuzz the parsers of untrusted input (FUZZTIME per target, default 30s)
 FUZZTIME ?= 30s
 fuzz:
 	@for t in FuzzUnmarshalSealedBlob FuzzParseYubiKeyStub FuzzEventlogReplay; do \
 		echo "Fuzzing $$t for $(FUZZTIME)..."; \
-		$(GOTEST) -tags=unit ./cmd -run '^$$' -fuzz "^$$t\$$" -fuzztime $(FUZZTIME) || exit 1; \
+		$(GOTEST) -tags=unit ./internal/admin -run '^$$' -fuzz "^$$t\$$" -fuzztime $(FUZZTIME) || exit 1; \
 	done
 	@echo "Fuzzing FuzzDecode for $(FUZZTIME)..."
 	$(GOTEST) ./internal/pcsc -run '^$$' -fuzz '^FuzzDecode$$' -fuzztime $(FUZZTIME)
@@ -164,12 +206,14 @@ test-integration:
 	@echo "Note: Requires swtpm (software TPM) to be installed"
 	@echo "Install with: sudo apt-get install swtpm swtpm-tools socat"
 	$(GOTEST) -v -tags=integration -timeout 10m ./...
+	cd core && $(GOTEST) -v ./...
 
 ## test-all: Run all tests (unit + integration)
 test-all:
 	@echo "Running all tests..."
 	@echo "Unit tests:"
-	$(GOTEST) -v -tags=unit ./cmd/... ./attest/... ./transport/... ./mobile/...
+	$(GOTEST) -v -tags=unit ./internal/...
+	cd core && $(GOTEST) -v ./...
 	@echo ""
 	@echo "Integration tests:"
 	@echo "Note: Requires swtpm (software TPM) to be installed"
@@ -226,6 +270,7 @@ help:
 	@echo "  Integration tests: Requires swtpm, swtpm-tools, and socat"
 	@echo "    Install with: sudo apt-get install swtpm swtpm-tools socat"
 	@echo ""
-	@echo "Mkinitcpio Integration:"
+	@echo "Boot Integration (after make install):"
 	@echo "  install-mkinitcpio: Install early boot hooks for Arch Linux"
-	@echo "  uninstall-mkinitcpio: Remove early boot hooks"
+	@echo "  install-initramfs-tools: Install the hook and boot scripts for Debian, Ubuntu"
+	@echo "  uninstall-mkinitcpio, uninstall-initramfs-tools: Remove them"

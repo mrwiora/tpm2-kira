@@ -1,5 +1,6 @@
 #!/bin/sh
-# initramfs-tools hook: place tpm2-kira into the initramfs image.
+# initramfs-tools hook: place tpm2-kira into the initramfs image - the disk
+# unlock always, and what the machine uses besides, by the boot plan.
 #
 # No key material is copied. 'reveal' reads the sealed blob from TPM NVRAM and
 # unseals it via the PCR policy branch, so the signing keys stay on the
@@ -22,28 +23,19 @@ esac
 
 . /usr/share/initramfs-tools/hook-functions
 
-kira=$(command -v tpm2-kira || true)
-if [ -z "$kira" ]; then
-    echo "tpm2-kira: binary not found in PATH; refusing to build an initramfs" >&2
+# The binaries: the package's in /usr/bin, or make install's in
+# /usr/local/bin, which mkinitramfs' PATH (/usr/bin:/sbin:/bin) leaves out.
+# tpm2-kira decides the plan here; the image carries tpm2-kira-boot alone,
+# as /usr/bin/tpm2-kira-boot, where the scripts run it.
+kira=$(PATH="$PATH:/usr/local/bin" command -v tpm2-kira || true)
+kira_boot=$(PATH="$PATH:/usr/local/bin" command -v tpm2-kira-boot || true)
+if [ -z "$kira" ] || [ -z "$kira_boot" ]; then
+    echo "tpm2-kira: tpm2-kira and tpm2-kira-boot are not both installed (/usr/bin or /usr/local/bin); refusing to build an initramfs" >&2
     echo "tpm2-kira: that silently shows no TOTP code at boot" >&2
     exit 1
 fi
 
-copy_exec "$kira" /usr/bin/tpm2-kira
-
-if [ -r /etc/tpm2-kira/initramfs.conf ]; then
-    copy_file config /etc/tpm2-kira/initramfs.conf /etc/tpm2-kira/initramfs.conf
-fi
-# The configuration file is the running system's alone (which adapter's
-# driver goes into the image, and the YubiKey's PIN): nothing of it goes
-# into the image, and this hook does not read it - 'attest initramfs-deps'
-# does. A file that does not load is said, never a reason to stop the
-# build: it is built with the defaults. How the disk's key is made is read
-# from each volume's LUKS2 header at boot.
-conf=/etc/tpm2-kira/control.conf
-if [ -r "$conf" ] && ! "$kira" attest config-check "$conf" >/dev/null 2>&1; then
-    echo "tpm2-kira: WARNING: $conf is not valid: $("$kira" attest config-check "$conf" 2>&1 | tail -1)" >&2
-fi
+copy_exec "$kira_boot" /usr/bin/tpm2-kira-boot
 
 # The devices with a keyslot of tpm2-kira's: does /etc/crypttab route each
 # through the keyscript, and if not, what the line should read
@@ -55,78 +47,61 @@ else
     echo "$advice" | sed 's/^/    /' >&2
 fi
 
-# Built in on most kernels, but a module on some machines.
-manual_add_modules tpm_tis
-manual_add_modules tpm_crb
-
-# Bluetooth for remote attestation (PLAN-BLE.md §3.1), whenever a phone is
-# enrolled. 'tpm2-kira attest initramfs-deps' names the configured adapter's
-# driver modules and the firmware files the kernel loaded for it on this
-# machine; nothing else is copied. Without an enrolled phone, or without the
-# adapter, the image shows the code and serves the disk's key and asks no
-# phone.
-enrolled=$("$kira" attest status --json 2>/dev/null)
-if [ -z "$enrolled" ] || [ "$enrolled" = "[]" ]; then
-    echo "tpm2-kira: no phone is enrolled; Bluetooth not added"
-# The gate checks the enrolment record before it advertises: signed
-# by this machine's signing key, and current by the TPM's record
-# counter. 'attest signer' prints the key's public half (public, not
-# a secret) for the image after checking the records; one written by
-# somebody else, or an older one put back, is refused, and then the
-# gate is not added.
-elif ! signer=$("$kira" attest signer) || ! printf '%s\n' "$signer" | grep -q 'BEGIN PUBLIC KEY'; then
-    echo "tpm2-kira: the attestation record was not accepted (see above); Bluetooth not added" >&2
-else
-    # The Bluetooth lines of every boot the journal keeps: not every boot
-    # names the firmware (an Intel controller keeps it over a warm reboot).
-    log=$(mktemp)
-    journalctl -k -o cat --no-pager 2>/dev/null | grep -E 'Bluetooth: hci[0-9]+:' >"$log" || true
-    rc=0
-    deps=$("$kira" attest initramfs-deps --kernel-log "$log") || rc=$?
-    rm -f "$log"
-    adapter=$(printf '%s\n' "$deps" | sed -n 's/^adapter hci//p')
-
-    if [ "$rc" -ne 0 ]; then
-        printf '%s\n' "$deps" | sed -n 's/^warning /tpm2-kira: /p' >&2
-        echo "tpm2-kira: a phone is enrolled but its Bluetooth adapter was not found; Bluetooth not added" >&2
-    elif ! printf '%s\n' "$deps" | grep -q '^adapter '; then
-        # Every other command exits 0 by design, so a binary that
-        # predates initramfs-deps "succeeds" with no output.
-        echo "tpm2-kira: the installed tpm2-kira cannot resolve Bluetooth dependencies (too old?); Bluetooth not added" >&2
-    else
-        mkdir -p "$DESTDIR/etc/tpm2-kira"
-        : >"$DESTDIR/etc/tpm2-kira/bluetooth-modules"
-        nmod=0
-        nfw=0
-        # A here-document keeps the loop in this shell, so the
-        # counters survive it.
-        while read -r kind value; do
-            case "$kind" in
-            module)
-                manual_add_modules "$value"
-                echo "$value" >>"$DESTDIR/etc/tpm2-kira/bluetooth-modules"
-                nmod=$((nmod + 1))
-                ;;
-            firmware)
-                add_firmware "$value"
-                nfw=$((nfw + 1))
-                ;;
-            udev)
-                # The bus lets no new device in by itself: this rule
-                # lets exactly the adapter in, in the image alone.
-                mkdir -p "$DESTDIR/etc/udev/rules.d"
-                echo "$value" >>"$DESTDIR/etc/udev/rules.d/70-tpm2-kira-bluetooth.rules"
-                echo "tpm2-kira: hci$adapter's USB bus lets no new device in: the image lets the adapter in"
-                ;;
-            warning)
-                echo "tpm2-kira: $value" >&2
-                ;;
-            esac
-        done <<DEPS
-$deps
-DEPS
-        mkdir -p "$DESTDIR/etc/tpm2-kira"
-        printf '%s\n' "$signer" > "$DESTDIR/etc/tpm2-kira/attest-signer.pem"
-        echo "tpm2-kira: Bluetooth attestation via hci$adapter: $nmod modules, $nfw firmware files"
-    fi
+# The boot plan (internal/admin/bootplan.go): what this image carries besides the disk
+# unlock, decided by 'tpm2-kira initramfs plan' from what the machine uses -
+# the slots in the TPM and what they are enrolled with, the signing key,
+# the Bluetooth adapter, the network and SSH settings of
+# /etc/tpm2-kira/control.conf. Each part is in only when something uses it,
+# and the output says why one is out. The plan writes the image's own
+# files (the signing public key, the adapter's module list and udev rule,
+# remote.conf, assh.conf and the keys that may log in, udhcpc's script) and
+# names its parts in
+# /etc/tpm2-kira/plan, which the boot scripts read; this hook adds the
+# drivers and firmware it lists. control.conf never goes into the image.
+# The network needs busybox (ip, and udhcpc for DHCP with the running
+# system's client identifier).
+nobusybox=
+if [ "${BUSYBOX:-auto}" = n ] || ! command -v busybox >/dev/null 2>&1; then
+    nobusybox=--no-busybox
 fi
+if ! plan=$("$kira" initramfs plan --format initramfs-tools --buildroot "$DESTDIR" $nobusybox); then
+    echo "tpm2-kira: the installed tpm2-kira made no boot plan: the image unlocks the disk and carries nothing else" >&2
+    exit 0
+fi
+nbt=0
+nfw=0
+nnet=""
+# A here-document keeps the loop in this shell, so the counters survive it.
+while read -r kind value; do
+    case "$kind" in
+    say) echo "tpm2-kira: $value" ;;
+    warning) echo "tpm2-kira: WARNING: $value" >&2 ;;
+    bt-module)
+        # Loaded by the image's init before init-premount, as
+        # systemd-modules-load does under mkinitcpio.
+        force_load "$value"
+        nbt=$((nbt + 1))
+        ;;
+    bt-firmware)
+        add_firmware "$value"
+        nfw=$((nfw + 1))
+        ;;
+    net-module)
+        manual_add_modules "$value"
+        nnet="$nnet $value"
+        ;;
+    net-modules-all) auto_add_modules net ;;
+    module) manual_add_modules "$value" ;;
+    esac
+done <<PLAN
+$plan
+PLAN
+
+# The TPM's drivers: built in on most kernels, but modules on some machines.
+if [ -d "$DESTDIR/etc/tpm2-kira/plan/tpm" ]; then
+    manual_add_modules tpm_tis
+    manual_add_modules tpm_crb
+fi
+[ -d "$DESTDIR/etc/tpm2-kira/plan/phone" ] && echo "tpm2-kira: Bluetooth: $nbt modules, $nfw firmware files"
+[ -n "$nnet" ] && echo "tpm2-kira: network drivers:$nnet"
+exit 0

@@ -1,0 +1,297 @@
+package diskkey
+
+// How a volume's key is made is written in its own LUKS2 header: the
+// tpm2-kira token carries the mode and the slot (luks.go). At boot the key
+// provider reads the header of the volume that asks - there is no
+// configured unlock mode, nothing to copy into the initramfs and nothing
+// to rebuild after an enrolment. The initrd has no cryptsetup binary to
+// ask, so the header is read directly: the primary binary header names the
+// JSON area, and the JSON area holds the tokens, exactly what
+// 'cryptsetup luksDump --dump-json-metadata' would print.
+
+import (
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
+	"sync"
+)
+
+// luks2Magic opens every LUKS2 primary header.
+var luks2Magic = []byte("LUKS\xba\xbe")
+
+// maxLuks2Header caps the JSON area read: the specification's largest
+// header size is 4 MiB.
+const maxLuks2Header = 4 << 20
+
+// ReadLuks2Tokens reads the tpm2-kira tokens of a LUKS2 device straight
+// from its header, without cryptsetup: for the initrd, where there is
+// none. Keyslot numbers are not resolved here; the tokens alone say how a
+// key is made and which slot it is bound to.
+func ReadLuks2Tokens(device string) ([]LuksToken, error) {
+	f, err := os.Open(device)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	bin := make([]byte, 4096)
+	if _, err := f.ReadAt(bin, 0); err != nil {
+		return nil, fmt.Errorf("%s: reading the LUKS header: %w", device, err)
+	}
+	// The primary binary header: magic[6], version be16, hdr_size be64.
+	if string(bin[:6]) != string(luks2Magic) {
+		return nil, fmt.Errorf("%s holds no LUKS2 header", device)
+	}
+	if v := binary.BigEndian.Uint16(bin[6:8]); v != 2 {
+		return nil, fmt.Errorf("%s: LUKS version %d, not 2", device, v)
+	}
+	hdrSize := binary.BigEndian.Uint64(bin[8:16])
+	if hdrSize <= 4096 || hdrSize > maxLuks2Header {
+		return nil, fmt.Errorf("%s: implausible LUKS2 header size %d", device, hdrSize)
+	}
+	area := make([]byte, hdrSize-4096)
+	if _, err := f.ReadAt(area, 4096); err != nil {
+		return nil, fmt.Errorf("%s: reading the LUKS2 JSON area: %w", device, err)
+	}
+	if i := strings.IndexByte(string(area), 0); i >= 0 {
+		area = area[:i]
+	}
+	var md struct {
+		Tokens map[string]json.RawMessage `json:"tokens"`
+	}
+	if err := json.Unmarshal(area, &md); err != nil {
+		return nil, fmt.Errorf("%s: the LUKS2 JSON area does not parse: %w", device, err)
+	}
+	var out []LuksToken
+	for _, raw := range md.Tokens {
+		if tok, ok := ParseKiraToken(raw); ok {
+			out = append(out, tok)
+		}
+	}
+	return out, nil
+}
+
+// The files a volume's device is found through at boot; vars for the tests.
+var (
+	bootCmdlinePath   = "/proc/cmdline"
+	bootCrypttabPaths = []string{"/etc/crypttab", "/cryptroot/crypttab", "/conf/conf.d/cryptroot"}
+	bootByUUIDDir     = "/dev/disk/by-uuid"
+)
+
+// VolumeDevice finds the block device behind a crypttab volume name, the
+// way the initrd names it: rd.luks.name=<UUID>=<name> (or luks.name=) on
+// the kernel command line, a crypttab line (systemd's /etc/crypttab in the
+// initrd), or cryptsetup-initramfs's target=/source= lines on Debian.
+func VolumeDevice(volume string) (string, error) {
+	// TPM2_KIRA_CRYPTTAB names an extra crypttab, for the integration
+	// tests, whose volumes live on no kernel command line.
+	if extra := os.Getenv("TPM2_KIRA_CRYPTTAB"); extra != "" {
+		if data, err := os.ReadFile(extra); err == nil {
+			if dev := crypttabDevice(string(data), volume); dev != "" {
+				return dev, nil
+			}
+		}
+	}
+	if data, err := os.ReadFile(bootCmdlinePath); err == nil {
+		for _, word := range strings.Fields(string(data)) {
+			for _, key := range []string{"rd.luks.name=", "luks.name="} {
+				if v, ok := strings.CutPrefix(word, key); ok {
+					if uuid, name, ok := strings.Cut(v, "="); ok && name == volume {
+						return bootByUUIDDir + "/" + strings.ToLower(uuid), nil
+					}
+				}
+			}
+		}
+	}
+	for _, path := range bootCrypttabPaths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if dev := crypttabDevice(string(data), volume); dev != "" {
+			return dev, nil
+		}
+	}
+	return "", fmt.Errorf("no device found for volume %q on the kernel command line or in a crypttab", volume)
+}
+
+// crypttabDevice finds volume's source in a crypttab: the systemd form
+// ("name source ..."), or cryptsetup-initramfs's key=value lines
+// ("target=name,source=...").
+func crypttabDevice(data, volume string) string {
+	for _, line := range strings.Split(data, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.Contains(line, "target=") {
+			var name, source string
+			for _, kv := range strings.Split(line, ",") {
+				if v, ok := strings.CutPrefix(kv, "target="); ok {
+					name = v
+				}
+				if v, ok := strings.CutPrefix(kv, "source="); ok {
+					source = v
+				}
+			}
+			if name == volume {
+				return sourceDevice(source)
+			}
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == volume {
+			return sourceDevice(fields[1])
+		}
+	}
+	return ""
+}
+
+// sourceDevice turns a crypttab source field into a device path.
+func sourceDevice(source string) string {
+	if v, ok := strings.CutPrefix(source, "UUID="); ok {
+		return bootByUUIDDir + "/" + strings.ToLower(v)
+	}
+	return source
+}
+
+// UnlockRecipe says how the key of a volume is made, read from its LUKS2
+// header the moment it asks: the modes of its keyslots in the order they
+// are tried (RecipesOfTokens), none - not tpm2-kira's to answer, and why
+// says so for the journal. Cached per volume: the header does not change
+// while the initrd runs.
+type UnlockRecipe struct {
+	mu    sync.Mutex
+	cache map[string][]string
+}
+
+func (r *UnlockRecipe) ForVolume(volume string) (modes []string, why string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if modes, ok := r.cache[volume]; ok {
+		return modes, ""
+	}
+	dev, err := VolumeDevice(volume)
+	if err != nil {
+		return nil, err.Error()
+	}
+	toks, err := ReadLuks2Tokens(dev)
+	if err != nil {
+		return nil, err.Error()
+	}
+	modes = RecipesOfTokens(toks)
+	if r.cache == nil {
+		r.cache = map[string][]string{}
+	}
+	r.cache[volume] = modes
+	if len(modes) == 0 {
+		return nil, dev + " has no keyslot of tpm2-kira's"
+	}
+	return modes, ""
+}
+
+// RecipesOfTokens are the modes of the tokens, in the order they are tried:
+// the vault's key, which needs nobody; then the phone's salt; then the
+// typed salt - each a fallback for the ones before it (an unreachable or
+// refusing vault, a phone that is not there).
+func RecipesOfTokens(toks []LuksToken) []string {
+	has := map[string]bool{}
+	for _, t := range toks {
+		if !t.Obsolete { // the old one-type form: re-marked, never acted on
+			has[t.Mode] = true
+		}
+	}
+	var modes []string
+	for _, m := range []string{LuksModeTPMVault, LuksModePasswordPhoneSalt, LuksModePasswordSalt} {
+		if has[m] {
+			modes = append(modes, m)
+		}
+	}
+	return modes
+}
+
+// RecipeOfTokens is the mode tried first, or "".
+func RecipeOfTokens(toks []LuksToken) string {
+	if modes := RecipesOfTokens(toks); len(modes) > 0 {
+		return modes[0]
+	}
+	return ""
+}
+
+// routedUUIDs are the volumes the kernel command line routes to the
+// unlock socket (rd.luks.key=<UUID>=<socket>), for the code screen's
+// words before any volume has asked.
+func routedUUIDs(cmdline, socket string) []string {
+	var uuids []string
+	for _, word := range strings.Fields(cmdline) {
+		for _, key := range []string{"rd.luks.key=", "luks.key="} {
+			v, ok := strings.CutPrefix(word, key)
+			if !ok {
+				continue
+			}
+			if uuid, sock, ok := strings.Cut(v, "="); ok && sock == socket {
+				uuids = append(uuids, strings.ToLower(uuid))
+			}
+		}
+	}
+	return uuids
+}
+
+// DebianKeyscript is the keyscript cryptsetup-initramfs runs for a volume
+// whose crypttab line routes it through tpm2-kira.
+const DebianKeyscript = "/lib/cryptsetup/scripts/tpm2-kira"
+
+// routedDevices are the devices of the volumes routed through tpm2-kira:
+// on the kernel command line (rd.luks.key=<UUID>=socket; a systemd
+// initrd), or by a crypttab line that names tpm2-kira's keyscript
+// (Debian's image).
+func routedDevices(socket string) []string {
+	var devs []string
+	if data, err := os.ReadFile(bootCmdlinePath); err == nil {
+		for _, uuid := range routedUUIDs(string(data), socket) {
+			devs = append(devs, bootByUUIDDir+"/"+uuid)
+		}
+	}
+	for _, path := range bootCrypttabPaths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 4 || strings.HasPrefix(fields[0], "#") {
+				continue
+			}
+			if strings.Contains(","+fields[3]+",", ",keyscript="+DebianKeyscript+",") {
+				devs = append(devs, sourceDevice(fields[1]))
+			}
+		}
+	}
+	return devs
+}
+
+// ScreenRecipe is the recipe of the first routed volume, its modes in the
+// order they are tried, for the code screen's words ("continue to ..."):
+// resolved lazily, cached once known, none while no routed header is
+// readable yet (the prompt then names cryptsetup's).
+func ScreenRecipe(socket string) func() []string {
+	var mu sync.Mutex
+	var known []string
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		if known != nil {
+			return known
+		}
+		for _, dev := range routedDevices(socket) {
+			if toks, err := ReadLuks2Tokens(dev); err == nil {
+				if modes := RecipesOfTokens(toks); len(modes) > 0 {
+					known = modes
+					return known
+				}
+			}
+		}
+		return nil
+	}
+}

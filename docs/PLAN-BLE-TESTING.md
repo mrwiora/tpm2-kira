@@ -37,7 +37,7 @@ Three things this gives that the hand-installed VMs cannot:
    secret says (§6), types the password and the salt at tpm2-kira's
    prompt, and knows whether the disk opened - today a person does that
    and answers yes or no.
-3. **The phone without a phone.** The attestation, the remote salt and
+3. **The phone without a phone.** The attestation, the phone salt and
    the gate at boot run against Marify in the emulator (§7); the real
    phone and the T450s stay the last check before a release, not the
    only one.
@@ -87,7 +87,7 @@ root steps are `sudo` lines in it), idempotent, with every version in
    `ANDROID_HOME`, `ANDROID_USER_HOME=/srv/testhost/android/home`
    (the AVDs and netsim's artifacts) and the `PATH` go into
    `conf/env.sh`, sourced by every other script.
-5. **Standalone rootcanal**, for `transport/ble`'s tests without Android
+5. **Standalone rootcanal**, for `core/transport/ble`'s tests without Android
    (§7.2): a virtual environment, so nothing of it touches the host's
    Python:
    ```
@@ -229,8 +229,8 @@ asks on the serial console as it does on the VGA one.
 
 ## 6. The codes, verified without a person
 
-`seal` prints the TOTP secret as an `otpauth://` URI
-(`cmd/totp_utils.go`), for the authenticator. On a test machine the
+`slot add` prints the TOTP secret as an `otpauth://` URI
+(`internal/totp/display.go`), for the authenticator. On a test machine the
 harness **is** the authenticator: it keeps the URI of every slot from the
 seal's output, and at the code screen computes the code for the time
 the screen shows (`[ KIRA ] Time UTC`) with `oathtool --totp -b <secret>
@@ -243,10 +243,10 @@ What this checks on every boot, both slots:
 - the code of slot 0 is the one the secret gives (the policy was
   satisfied: the boot state is the sealed one);
 - the fallback slot shows its code too;
-- after an unapproved change (a kernel update not resealed, simulated by
+- after an unapproved change (a kernel update not approved, simulated by
   extending a PCR or editing the command line) slot 0 shows the mismatch
   and the fallback still shows;
-- after the hooks' reseal, the next boot shows codes again (the
+- after the hooks' approval, the next boot shows codes again (the
   generation moved: `status` after boot).
 
 The real authenticator on a phone then only confirms what is confirmed
@@ -284,13 +284,13 @@ Marify ─ the emulator's virtual controller ─ netsimd / rootcanal (the virtua
 - **The machine's adapter.** The kernel's `hci_vhci`: a process that
   opens `/dev/vhci` is a controller `hci0`, with the process at the HCI
   level. tpm2-kira's gate works on an HCI user channel with legacy LE
-  advertising and its own ATT (`transport/ble/host.go`, `att.go`), so a
+  advertising and its own ATT (`core/transport/ble/host.go`, `att.go`), so a
   vhci adapter is a USB dongle to it.
 - **The bridge** (`tools/hcibridge`, ~150 lines of Go, static): copies H4
   packets between `/dev/virtio-ports/hci` and `/dev/vhci`, re-framed -
   `/dev/vhci` takes exactly one packet per `write()`, and a stream
   (`socat`, `cat`) cannot keep the boundaries. In the initramfs with the
-  `hci_vhci` module and a unit `Before=tpm2-kira-attest.service`, added
+  `hci_vhci` module and a unit `Before=tpm2-kira.service`, added
   by the hooks only when `TPM2_KIRA_TEST_HCI=1` is in the build's
   environment - never on a machine that is not a test machine.
 - **control.conf** on the machine: `TPM2_KIRA_ATTEST_ADAPTER=0`.
@@ -335,7 +335,7 @@ The harness drives the app with its instrumented tests
 (`android/app/src/androidTest` holds a session test against a machine
 already: `SwtpmMachineSessionTest` for the demo machine; a
 `RealMachineSessionTest` connects to the advertised machine, binds,
-checks a boot, keeps the remote salt, returns it) and, where a test needs
+checks a boot, keeps the phone salt, returns it) and, where a test needs
 the screens, UI Automator through `adb`. `netsim` (the CLI) lists the
 devices in the air - the phone, and the Linux machine once its bridge
 connected - and `--pcap` in the netsim arguments records every packet of
@@ -346,13 +346,13 @@ google/rootcanal) is the same controller without Android: two machines,
 or a machine and a Go test, on one rootcanal give tpm2-kira's own BLE
 transport a controller-level integration test in CI, without the
 emulator. The emulator is for Marify; rootcanal alone is for
-`transport/ble`.
+`core/transport/ble`.
 
 Two consequences of the emulator for tpm2-kira's checks:
 
 - the emulator's keystore is software: the phone's key attestation does
   not chain to Google's roots, so the machine enrols with
-  `attest enrol --verify-phone off` on the test host (the `require`
+  `phone enrol --verify-phone off` on the test host (the `require`
   policy is a test of its own: it must refuse this phone);
 - swtpm's EK has no vendor certificate: `--verify-tpm off`, and the
   phone's "unverified TPM" card is what the test expects.
@@ -361,10 +361,10 @@ Two consequences of the emulator for tpm2-kira's checks:
 
 | test | machine | phone |
 |---|---|---|
-| enrol | `attest enrol` over the console/ssh | scans, sees the machine, binds (the six digits compared by the harness: both sides print them) |
+| enrol | `phone enrol` over the console/ssh | scans, sees the machine, binds (the six digits compared by the harness: both sides print them) |
 | gate at boot | the code screen advertises; the harness waits for `Slot #0 attested by` | the app is asked, checks, the code equals the slot's second code |
-| changed state | a resealed kernel update | the orange card with the green check; approve |
-| remote salt | `remote-salt enrol`, mode `password+remotesalt` | keeps the salt; the next boot: `attest and return the salt`, the disk opens with password + released salt, `release_ack` |
+| changed state | an approved kernel update | the orange card with the green check; approve |
+| phone salt | `phone salt enrol`, mode `password+phonesalt` | keeps the salt; the next boot: `attest and return the salt`, the disk opens with password + released salt, `release_ack` |
 | rejection | | the red cross; the machine shows the rejection and falls back to the passphrase |
 | stop while connecting | | the machine is told, the console says so |
 
@@ -386,7 +386,7 @@ reboot, checks, report) and gains:
 - the codes compared (§6);
 - `--phone` for the BLE scenarios (§7), which start the emulator and
   the bridge chardev;
-- scenarios as named sets of steps (`seal`, `luks-salt`, `luks-remote`,
+- scenarios as named sets of steps (`slot add`, `luks-salt`, `luks-remote`,
   `kernel-update`, `ble-enrol`, ...), each a function, run in order,
   each writing its own log; `--scenario` picks;
 - a run directory under `runs/` holding everything: console, journal,
@@ -406,7 +406,7 @@ The rule stays: wait for states, never for times; nothing twice.
    the password and the salt typed, the codes computed and compared; the
    questions to the person gone for `--machine` runs. *Result: the boot
    path tested without a person.*
-3. **Scenarios** (§8): `kernel-update` (the hooks' reseal), `luks-salt`,
+3. **Scenarios** (§8): `kernel-update` (the hooks' approval), `luks-salt`,
    `pcr-mismatch`, the YubiKey PIN from control.conf with the token
    emulator is a unit test and stays one.
 4. **The phone** (§7): `android-setup.sh` and the frozen AVD, the bridge

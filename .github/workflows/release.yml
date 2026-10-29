@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          submodules: true
 
       - name: Set up Go
         uses: ./.github/actions/go-latest
@@ -30,7 +32,9 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: Run unit tests
-        run: go test -tags=unit ./cmd/... ./attest/... ./transport/... ./mobile/...
+        run: |
+          go test -tags=unit ./internal/...
+          cd core && go test ./...
 
   build-binaries:
     runs-on: ubuntu-latest
@@ -45,6 +49,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
+          submodules: true
           fetch-depth: 0
 
       - name: Set up Go
@@ -83,10 +88,13 @@ jobs:
           VERSION=${{ steps.get_version.outputs.VERSION }}
           LDFLAGS="-w -X main.Version=${VERSION}"
 
-          # Build for Linux amd64. Static and cgo-free: the same binary is
+          # Build for Linux amd64. Static and cgo-free: tpm2-kira-boot is
           # copied into the initramfs, which has no libc.
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/tpm2-kira-linux-amd64 .
-          go version -m dist/tpm2-kira-linux-amd64 | grep -q 'CGO_ENABLED=0' || { echo "built with cgo" >&2; exit 1; }
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/tpm2-kira-boot-linux-amd64 ./cmd/tpm2-kira-boot
+          for b in dist/tpm2-kira-linux-amd64 dist/tpm2-kira-boot-linux-amd64; do
+            go version -m "$b" | grep -q 'CGO_ENABLED=0' || { echo "$b built with cgo" >&2; exit 1; }
+          done
 
       - name: Create checksums
         run: |
@@ -99,6 +107,7 @@ jobs:
           name: linux-binaries
           path: |
             dist/tpm2-kira-linux-amd64
+            dist/tpm2-kira-boot-linux-amd64
             dist/checksums.txt
           retention-days: 1
 
@@ -124,6 +133,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
+          submodules: true
           fetch-depth: 0
 
       - name: Fix ownership for build user
@@ -149,9 +159,14 @@ jobs:
 
           sed -i "s/^pkgver=.*/pkgver=${PKGVER}/" PKGBUILD
           sed -i "s|^_tag=.*|_tag=${TAG}|" PKGBUILD
+          # GitHub's tag tarball has no submodules; the PKGBUILD fetches
+          # aSSH at the commit the tag records.
+          ASSH=$(git rev-parse "HEAD:assh")
+          sed -i "s|^_assh=.*|_assh=${ASSH}|" PKGBUILD
 
           grep -q "^pkgver=${PKGVER}$" PKGBUILD || { echo "ERROR: pkgver not set"; exit 1; }
           grep -q "^_tag=${TAG}$" PKGBUILD || { echo "ERROR: _tag not set"; exit 1; }
+          grep -q "^_assh=${ASSH}$" PKGBUILD || { echo "ERROR: _assh not set"; exit 1; }
 
           # Replaces the SKIP placeholder with the real tarball hash.
           chown builder:builder .
@@ -208,6 +223,7 @@ jobs:
 
           for path in \
             usr/bin/tpm2-kira \
+            usr/bin/tpm2-kira-boot \
             usr/lib/systemd/system/tpm2-kira.service \
             usr/lib/initcpio/install/sd-tpm2-kira \
             usr/lib/initcpio/post/sd-tpm2-kira
@@ -230,6 +246,7 @@ jobs:
           fi
 
           "/tmp/package-test/usr/bin/tpm2-kira" version
+          "/tmp/package-test/usr/bin/tpm2-kira-boot" version
 
           # Built with the current Go release, not pacman's.
           BUILT=$(go version -m /tmp/package-test/usr/bin/tpm2-kira | head -1 | awk '{print $2}')
@@ -277,6 +294,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
+          submodules: true
           fetch-depth: 0
 
       - name: Record the toolchain
@@ -334,6 +352,7 @@ jobs:
 
           for path in \
             ./usr/bin/tpm2-kira \
+            ./usr/bin/tpm2-kira-boot \
             ./usr/share/initramfs-tools/hooks/tpm2-kira \
             ./usr/share/initramfs-tools/scripts/init-premount/tpm2-kira \
             ./usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira \
@@ -349,9 +368,9 @@ jobs:
           # The initramfs carries no libraries, so the binary must be static.
           mkdir -p /tmp/debcheck
           dpkg-deb -x "$DEB" /tmp/debcheck
-          file /tmp/debcheck/usr/bin/tpm2-kira
-          file /tmp/debcheck/usr/bin/tpm2-kira | grep -q "statically linked" || {
-            echo "ERROR: the packaged binary is not statically linked"
+          file /tmp/debcheck/usr/bin/tpm2-kira-boot
+          file /tmp/debcheck/usr/bin/tpm2-kira-boot | grep -q "statically linked" || {
+            echo "ERROR: the boot binary is not statically linked"
             exit 1
           }
           test -x /tmp/debcheck/usr/share/initramfs-tools/hooks/tpm2-kira || {
@@ -359,6 +378,7 @@ jobs:
             exit 1
           }
           /tmp/debcheck/usr/bin/tpm2-kira version
+          /tmp/debcheck/usr/bin/tpm2-kira-boot version
 
       - name: Create package checksums
         run: |
@@ -475,6 +495,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
+          submodules: true
           fetch-depth: 0
 
       - name: Download binary artifacts
@@ -554,6 +575,7 @@ jobs:
 
             # Upload binary artifacts
             gh release upload ${VERSION} dist/tpm2-kira-linux-amd64 --clobber --repo ${GH_REPO}
+            gh release upload ${VERSION} dist/tpm2-kira-boot-linux-amd64 --clobber --repo ${GH_REPO}
             gh release upload ${VERSION} dist/checksums.txt --clobber --repo ${GH_REPO}
 
             # Upload package artifacts
@@ -575,9 +597,9 @@ jobs:
 
           ### Downloads
 
-          #### Linux Binary
-          - **Binary**: \`tpm2-kira-linux-amd64\`
-          - **Usage**: Download, make executable, and run
+          #### Linux Binaries
+          - **Binaries**: \`tpm2-kira-linux-amd64\` (the installed system) and \`tpm2-kira-boot-linux-amd64\` (what the boot image carries; the hooks put it in)
+          - **Usage**: Download both, make them executable, install them as \`tpm2-kira\` and \`tpm2-kira-boot\`
 
           #### Arch Linux Package
           - **Package**: \`${PACKAGE_FILE}\`
@@ -594,8 +616,9 @@ jobs:
           #### From Binary
           \`\`\`bash
           wget https://github.com/mrwiora/tpm2-kira/releases/download/${VERSION}/tpm2-kira-linux-amd64
-          chmod +x tpm2-kira-linux-amd64
-          sudo mv tpm2-kira-linux-amd64 /usr/local/bin/tpm2-kira
+          wget https://github.com/mrwiora/tpm2-kira/releases/download/${VERSION}/tpm2-kira-boot-linux-amd64
+          sudo install -m755 tpm2-kira-linux-amd64 /usr/local/bin/tpm2-kira
+          sudo install -m755 tpm2-kira-boot-linux-amd64 /usr/local/bin/tpm2-kira-boot
           \`\`\`
 
           #### Arch Linux
@@ -609,7 +632,7 @@ jobs:
           wget https://github.com/mrwiora/tpm2-kira/releases/download/${VERSION}/${DEB_FILE}
           sudo apt install ./${DEB_FILE}
           sudo tpm2-kira setup
-          sudo tpm2-kira seal --pcrs 0,7
+          sudo tpm2-kira slot add --pcrs 0,7
           sudo update-initramfs -u
           \`\`\`
 
@@ -626,6 +649,7 @@ jobs:
 
             # Add all artifacts
             RELEASE_CMD="$RELEASE_CMD dist/tpm2-kira-linux-amd64"
+            RELEASE_CMD="$RELEASE_CMD dist/tpm2-kira-boot-linux-amd64"
             RELEASE_CMD="$RELEASE_CMD dist/checksums.txt"
             RELEASE_CMD="$RELEASE_CMD archlinux/${PACKAGE_FILE}"
             RELEASE_CMD="$RELEASE_CMD archlinux/package-checksums.txt"

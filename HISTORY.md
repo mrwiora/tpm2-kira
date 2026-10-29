@@ -10,6 +10,138 @@ formats and CLI flags may change without migration paths.
 
 ## Boot integration
 
+### The phone's radio worker had a unit of its own
+
+Until 2026-10-29 the radio worker was `tpm2-kira-boot gate --coordinator
+/run/tpm2-kira/gate.sock`, started by `tpm2-kira-attest.service` on Arch,
+whose unit sandbox confined it (root with two capabilities, a system call
+filter, no TPM device), and by the init-premount script on Debian, where
+it ran as root, unconfined; `run --gate` listened on the socket. Debian's
+script also waited for /dev/tpmrm0, loaded the adapter's modules from
+/etc/tpm2-kira/bluetooth-modules, and had a display mode of its own
+(`TPM2_KIRA_INITRAMFS_MODE=once` in /etc/tpm2-kira/initramfs.conf: one
+code and no key provider); Arch waited for the TPM by a drop-in. Now
+`run` starts the worker as `gate-child`, confined in code the same on
+both, and waits for the TPM itself; the modules are loaded by the image's
+init on both. The confinement of `ssh-child` then covered one thread
+only (a plain prctl and landlock_restrict_self in a Go program); assh's
+`sandbox` takes each step on every thread.
+
+### SSH in the initrd came from mkinitcpio-systemd-extras
+
+Until the code screen got its own SSH server (2026-10-10), remote unlock
+used the sd-network and sd-tinyssh hooks of mkinitcpio-systemd-extras:
+the image copied the running system's /etc/systemd/network, tinysshd was
+socket-activated by its own unit, and its command was
+`tpm2-kira && systemd-tty-ask-password-agent --query --watch`. That
+assumed a code could be computed whenever the admin arrived; after the
+hold the OS separator had made the key's policy unsatisfiable, and the
+remote admin got no code. Now the process that holds the boot listens
+itself, so the confirmation in a session is the release, and the
+network is configured for the image alone in control.conf
+(docs/SSH.md).
+
+### The SSH server was tinysshd
+
+The first two versions (2026-10-10) had 'run' spawn a tinysshd per
+connection whose command, 'tpm2-kira remote session', relayed the
+terminal to run over /run/tpm2-kira/remote.sock and ran
+systemd-tty-ask-password-agent for cryptsetup's own prompt. tinysshd and
+the session ran as root, so the separate process isolated nothing; the
+image needed tinysshd, a shell and the agent; the host key had to sit in
+a file for tinysshd; logins were ssh-ed25519 only. Replaced the same day
+by 'ssh-child' (x/crypto/ssh, as nobody, in namespaces, under
+Landlock, signing delegated to run) and run as the session's password
+agent.
+
+### The SSH server's port was in control.conf, its slots in the code
+
+Until 2026-10-26 control.conf held the SSH port (TPM2_KIRA_SSH_PORT), the
+CA's place and the login keys' were no setting, the CA's two slots were
+worked out in the code at every creation, and `run` took `--ssh=PORT
+--ssh-ca --ssh-authorized-keys`. Since then what aSSH does is in aSSH's
+own file, /etc/tpm2-kira/assh.conf (ASSH_*), which control writes and the
+image carries a copy of: the port is ASSH_LISTEN, the slots are
+ASSH_CA_SLOT_<N> (written by control when it creates the CA, followed by
+reseal after an edit), and `run --ssh --ssh-conf` reads it.
+
+### The image asked DHCP with its MAC
+
+The image's systemd-networkd asked with `ClientIdentifier=mac`, and
+initramfs-tools' ipconfig with none, while the running system asked with
+its DUID: a DHCP server saw two clients, and the code screen came up at
+another address than the machine's (found on a VM, 2026-10-26: .100 for
+.198). Since then the image asks as the running system does
+(TPM2_KIRA_NET_DHCP_ID=auto), read at the build; Debian's image uses
+busybox' udhcpc for it.
+
+### The SSH CA was a file in /etc and in the image, bound to PCR 0 and 7
+
+The SSH CA was `/etc/tpm2-kira/ssh_ca.json` (aSSH's format 2), and the
+image carried a copy with the approval of its boot. It was bound to PCR
+0 and 7 alone, because an approval of a PCR that measures the image
+(11, or 8 and 9) cannot travel inside that image: it would change the
+measurement it approves. It relied on the OS separator to close it,
+which Debian's initramfs-tools never runs. Since 2026-10-25 the CA
+(aSSH's format 3: slots and a window) lives in the EFI variable
+KIRAasshCA, outside the image: slot 0 reads PCR 0, 2, 7 and the image's
+PCRs, slot 1 PCR 7, both PCR 15, the window run extends once the key is
+certified; reseal approves the rebuilt image's values. A CA file of
+format 2 is not read: control creates the CA again in the variable, and
+clients need its new `@cert-authority` line. When the
+CA did not certify, 'run' served an ECDSA key made in software (the
+"throwaway key"); it serves aSSH's temporary key since, made in the TPM
+under the NULL hierarchy, so that no copy of it outlives the reboot.
+Without a TPM there is no SSH server.
+
+### The SSH CA's file was aSSH's format 1
+
+The storage key the SSH CA is made under, and the CA itself, were
+subject to the TPM's dictionary attack protection: during a lockout -
+wrong PINs of any other object in the TPM - neither loaded, and the
+image's SSH server had no certified host key. aSSH's format 2
+(2026-10-24, with its authority opened by a PIN) makes both noDA. A CA
+file of format 1 is not read: control creates the CA again, and clients
+need its new `@cert-authority` line.
+
+### The image's SSH host key was stored in clear
+
+The first version (2026-10-10) copied a tinysshd key directory of the
+image's own (TPM2_KIRA_SSH_HOSTKEYS) into the image unencrypted, as every
+initramfs SSH server does. The same day it was replaced by a key sealed
+to PCR 0+7 (TPM2_KIRA_SSH_HOSTKEY), the system's OpenSSH key by default,
+following the sd-tinyssh TPM2 variants of mkinitcpio-systemd-extras -
+but sealed to the values before the OS separator, because the code
+screen's server runs ahead of it, and with tpm2-kira's own TPM code in
+place of systemd-creds.
+
+### The image's SSH host key was sealed to the TPM
+
+From 2026-10-10 to 2026-10-23 the host key was an OpenSSH ed25519 key -
+the running system's by default, or one of the image's own
+(TPM2_KIRA_SSH_HOSTKEY) - whose seed every image build sealed to PCR 0+7
+at the measure point; 'run' unsealed it at the code screen and kept it in
+its memory. The key existed as a file on the root filesystem and, at
+boot, in clear in a process: whoever read either once could sign as the
+host anywhere, for good. It was replaced by an SSH CA created inside the
+TPM, signing only in a state the signing key approved, which certifies a
+host key the TPM makes for each boot under its NULL hierarchy: no key and
+no secret is stored, the CA never leaves the TPM, and what a boot holds
+in memory is useless after the next reboot. The clients trust the CA
+(@cert-authority) instead of a key. A step in between, a long-term key in
+the TPM unlocked by a secret sealed to the approved state, was dropped
+before it shipped: the secret, once read from memory, would have kept
+working across reboots.
+
+### The SSH server was part of tpm2-kira
+
+Until 2026-10-23 'ssh-child' and run's side of it (the sandbox, the
+control socket, the signing) were tpm2-kira's own files
+(cmd/remote_serve.go, cmd/remote_privsep.go). They moved, with the TPM
+host keys, into aSSH (assh/, a git submodule; github.com/tpm2-trust/assh), a project of its
+own that other projects use too; tpm2-kira keeps what is its code
+screen's (sessions, prompts, the console).
+
 ### The passphrase prompt was systemd's; tpm2-kira only ran before it
 
 Until the key provider (2026-10-07), `tpm2-kira.service` showed the code,
@@ -36,6 +168,78 @@ default for a few hours and gave way to `rd.luks.key=` on the kernel
 command line, which is honoured in the initrd only and leaves the running
 system's files alone (docs/UNLOCK-DISK.md §5).
 
+### The existing passphrase went to cryptsetup on a pipe
+
+Until 2026-10-14 the recovery passphrase that authorises luksAddKey and
+luksKillSlot was written into a pipe on descriptor 3, and the prompt
+refused an empty answer as "not a password". A disk encrypted with an
+empty passphrase - an installer's placeholder, say - could then not be
+enrolled at all, and cryptsetup refuses an empty pipe anyway ("Nothing
+to read on input"). It reads an empty regular file as the empty
+passphrase, so the passphrase now goes in a memfd, and the prompt takes
+Enter alone; control flags such a disk red.
+
+## control
+
+### Guided or manual, and the one row
+
+Until 2026-10-14 control asked at its first run how to guide, kept as
+TPM2_KIRA_CONTROL=guided|manual in control.conf, switchable from the
+overview's last entry. Guided put one row on top - the signing key, the
+mkinitcpio configuration, the key's route, the slots, one rebuild, the
+reboot ("part 1 of 2") - and the phone and the disk keys after it ("part
+2"); manual was the same overview as one flat list. Both were one long
+screen whose later steps appeared once the key and the hook were in
+place, the network and SSH step and the debug switch appended at the
+end; each step that changed the image offered its own rebuild, and the
+vault was not in control at all. It became two steps: the boot chain
+with its prerequisites first, then submenus each option of which is
+gated by what the machine has, one rebuild for all of them. The key
+moved to the TOTP codes, which it signs. A file with TPM2_KIRA_CONTROL
+does not load; remove the line.
+
+### The PIN and the SSH keys lived in control.conf's world
+
+Until 2026-10-14 the YubiKey's PIN was a `TPM2_KIRA_PIN='...'` line in
+control.conf (the file then 0600, the line read on its own, whatever the
+other lines said), and the keys that may log in at boot were root's
+`/root/.ssh/authorized_keys`, or a file `TPM2_KIRA_SSH_AUTHORIZED_KEYS`
+named. control called the image out of date when control.conf was newer
+than it - so storing the PIN at a seal asked for a rebuild that changed
+nothing, and a key added to root's file was never noticed. A fingerprint
+of the image's settings recorded at every build was tried the same day
+and dropped as a detour: the PIN moved to `/etc/tpm2-kira/pin`, so
+control.conf holds what the image is built with and its time is right
+again; the keys moved to `/etc/tpm2-kira/authorized_keys`, and the image
+names their SHA-256 in an empty file's name, which its listing shows. A
+signature over the settings with the signing key was weighed and not
+taken: it tells a change since control signed, not whether the image has
+it, and the reseal after each build already signs what the image
+measures. Both old lines are errors that say where the value goes now.
+
+### The image carried everything, and the hooks decided in shell
+
+Until 2026-10-16 every image got the code screen, its wait for
+`/dev/tpmrm0` and `tpm2-kira-cap.service`, whether a slot was sealed or
+the machine had a TPM at all ("a later seal needs no rebuild"). The
+Bluetooth gate went in by a shell decision of each hook - `phone status
+--json` for an enrolled phone, `attest signer`, `attest initramfs-deps`,
+`attest config-check` - and `TPM2_KIRA_ATTEST_BLUETOOTH=always` packed it
+with nothing but `seal.pub` checked, so a machine unlocking by password and
+salt alone, without a TPM, still loaded the adapter's driver and started
+the radio worker at boot. The network and SSH came from `remote
+initramfs`, all or nothing. control told an image out of date by the
+times of control.conf and the host key, the sum of the login keys in an
+empty file's name (`authorized_keys.sha256-<sum>`), and a look for the
+gate's files and firmware; step 1 had a "Build the boot image" step and
+step 2 led with "Rebuild the boot image". It became the boot plan
+(`initramfs plan`): one decision in Go, at the build, of what the image
+carries - the disk unlock always, every other part only while something
+uses it - named in the image with the digest of each part's settings,
+which `run --plan` and the boot scripts follow and control compares with;
+control builds the image once, when it is left. The four commands are
+gone; an image without a plan is out of date.
+
 ## Key material
 
 ### The signing keys lived in /var/lib/tpm2-kira/keys
@@ -46,7 +250,7 @@ seal.key), and a failed NVRAM rewrite stashed the blob under
 `recovery/`), where systemd keeps its own key material
 (`/etc/systemd/tpm2-pcr-*`); nothing of tpm2-kira's is left under
 `/var/lib`. No migration: an installed system moves the keys directory by
-hand before the next `reseal`.
+hand before the next `slot approve`.
 
 ## Factor release
 
@@ -58,7 +262,7 @@ PLAN-FACTORRELEASE.md as drafted kept hashpwd2 a separate program: a
 fed it with the password into hashpwd2, and the key file went to
 `/run/cryptsetup-keys.d`. The release key had a `PolicyOR` with a
 `PolicySigned` branch the phone could open after a PCR change. Reviewed
-on 2026-10-07: the combiner is inside tpm2-kira (`cmd/combine.go`,
+on 2026-10-07: the combiner is inside tpm2-kira (`internal/diskkey/combine.go`,
 hashpwd2's bytes), the answer goes to systemd-cryptsetup over the key
 socket, and the release key's policy is the slot's approval plus the
 command code, with no branch the phone can open: only a boot the
@@ -70,13 +274,22 @@ machine's signing key approved at seal or reseal gets the factor.
 
 Until 2026-10-07 the phone was served at boot only with
 `TPM2_KIRA_ATTEST=lazy` in `/etc/tpm2-kira/attest.conf` (`off` by
-default), `attest gate` took `--mode lazy`, and `tpm2-kira run` decided
+default), `phone gate` took `--mode lazy`, and `tpm2-kira-boot run` decided
 whether to coordinate a gate by that line. Removed with the enforced mode
 below: there was nothing left to choose. A phone is served whenever one
 is enrolled and the hook found the adapter; `attest.conf` keeps the
 adapter and the timeouts, and a `TPM2_KIRA_ATTEST=` line is refused.
 `run` knows the gate is in the image by the signer the hook put there
 (`/etc/tpm2-kira/attest-signer.pem`).
+
+### A configuration digest in the sealed payload was planned
+
+PLAN-PHONE.md §10.3 designed a sealed payload v9 carrying the SHA-256 of
+the canonicalised control.conf (with the attestation mode, the timeout
+and the policy id), so that on a machine whose PCRs do not measure the
+initramfs an edited file would be noticed. Not built: there is no
+attestation mode or timeout left to protect, and control.conf does not go
+into the boot image.
 
 ### An enforced mode was planned
 
@@ -95,13 +308,13 @@ wanted, is a missing factor (PLAN-FACTORRELEASE.md).
 ### TPM2_KIRA_UNLOCK in control.conf
 
 How the disk's key was made at boot was configured: TPM2_KIRA_UNLOCK in
-/etc/tpm2-kira/control.conf (skip, password+salt, password+remotesalt),
+/etc/tpm2-kira/control.conf (skip, password+salt, password+phonesalt),
 copied into the initramfs, so an enrolment needed the mode set and a
 rebuild, and a mode that did not fit the keyslots derived a key that
 opened nothing - status had three notes only for such mismatches. Now the
 keyslot's token in the volume's own LUKS2 header names the recipe, and the
 key provider reads the header the moment the volume asks
-(cmd/luks_header.go): nothing to configure, nothing to copy, nothing to
+(internal/diskkey/header.go): nothing to configure, nothing to copy, nothing to
 mismatch, and no rebuild after an enrolment. A leftover TPM2_KIRA_UNLOCK
 line is an error that says to remove it. The mode names live on as the
 token's mode values.
@@ -112,8 +325,8 @@ token's mode values.
 
 The token's type was "tpm2-kira" for both modes, the mode a JSON field: a
 plain 'cryptsetup luksDump', which shows only the types, could not tell a
-password+salt keyslot from a password+remotesalt one. Now the type
-carries the mode - tpm2-kira-salt and tpm2-kira-remotesalt ('+' is not
+password+salt keyslot from a password+phonesalt one. Now the type
+carries the mode - tpm2-kira-salt and tpm2-kira-phonesalt ('+' is not
 allowed in a token type) - and the mode field is gone. A token of the old
 type is recognised only to say what to do now: remove it (cryptsetup
 token remove --token-id N) and mark the keyslot anew.
@@ -124,14 +337,14 @@ For a short while every token carried `slot` (0 by default), whatever the
 mode, and deleting a slot took every keyslot bound to it - the typed-salt
 keyslot included, although no TPM is in its key. That made removing a
 slot overwrite protection that did not depend on it. Now only
-`password+remotesalt` binds (the slot whose enrolment releases its salt);
+`password+phonesalt` binds (the slot whose enrolment releases its salt);
 a `password+salt` token carries no `slot`, survives every slot, and
-coexists with the remote-salt keyslot as the typed fallback.
+coexists with the phone salt keyslot as the typed fallback.
 
-### `slot` only for the remote salt
+### `slot` only for the phone salt
 
 The LUKS2 token (`type: tpm2-kira`) first carried its `slot` field only in
-`password+remotesalt` mode, as "the slot whose remote salt it is"; a
+`password+phonesalt` mode, as "the slot whose phone salt it is"; a
 `password+salt` token named no slot. So nothing tied a typed-salt keyslot
 to the slot whose protections it rode on, deleting a slot could not take
 its keyslots with it, and a keyslot left behind was invisible as such. Now
@@ -171,12 +384,12 @@ attestation key's Name (computed from its public area). About 100 bytes for
 a slot of register PCRs, more with eventlog PCRs, all of it room for phones
 and, next, several kernel images per slot (docs/PLAN-SUPPORT-MULTIPLE-UKI.md).
 
-`attest enrol` refused a phone when the blob would not fit with another
+`phone enrol` refused a phone when the blob would not fit with another
 phone of the largest size the format allows, and assumed a 512-byte blob
 signature when it had none: a second phone was refused on a TPM with room
 for it. Now every write is compared with the TPM's `TPM2_PT_NV_INDEX_MAX`
-for the blob at hand, before the old index is touched, and `seal` and
-`reseal` check the same before raising the generation.
+for the blob at hand, before the old index is touched, and `slot add` and
+`slot approve` check the same before raising the generation.
 
 ### Version 11 — the boot key
 
@@ -200,8 +413,8 @@ Version 10 puts it into the slot's blob, under the blob's signature. The
 payload ends with an optional *attestation part* (identity, attestation key,
 quoted PCRs, revision count) that holds typed *methods*; the phones over
 Bluetooth LE are method 1, and another kind of verifier is another method.
-`attest enrol` therefore needs a sealed slot, `attest unenrol` rewrites the
-blob and needs the signing key, `reseal` and `seal` carry the part over, and
+`phone enrol` therefore needs a sealed slot, `phone unenrol` rewrites the
+blob and needs the signing key, `slot approve` and `slot add` carry the part over, and
 deleting a slot deletes everything. The record counter (`0x01803820` + slot)
 stays an NV index: "can only count up" is a property of an index's type.
 
@@ -216,18 +429,18 @@ branch for boot, and a PolicySigned branch for recovery. Every code meant a
 `TPM2_Unseal`, so the secret crossed the TPM bus every 30 seconds, and anyone
 who satisfied the PCR branch — root in the running system, or a shell in an
 initrd booted with the sealed PCRs intact — could copy it out and produce
-codes forever. `reseal` had to unseal it too, through the PolicySigned branch
+codes forever. `slot approve` had to unseal it too, through the PolicySigned branch
 when the PCRs had changed.
 
 Version 9 creates the key as an HMAC key object; the TPM computes each code
 with `TPM2_HMAC`, and the key is never returned. The object's policy is
-PolicyAuthorize by the signing key, so `reseal` approves new PCR values by
+PolicyAuthorize by the signing key, so `slot approve` approves new PCR values by
 signing instead of unsealing. Added with it:
 
 - a per-slot **generation index** (`GenerationIndex`): the approved policy
   includes PolicyNV on it, and each reseal raises it, revoking every older
   approval;
-- **`tpm2-kira cap`**, which read-locks the generation indices
+- **`tpm2-kira-boot cap`**, which read-locks the generation indices
   (`READ_STCLEAR`) when the initrd is left, so nothing can compute codes
   until the next reboot. A PCR cap was considered and rejected: PCR 23, the
   one free choice, can be reset from locality 0 by any process with TPM
@@ -260,9 +473,9 @@ string into a file-access vector.
 - Added the `u` PCR source (unified kernel image) and the `EventlogInfo` fields
   `measure_point_extends` / `measure_point_detection`.
 - **Removed the external predict source (`p:COMMAND`).** The blob used to store
-  a command string that `reseal` executed, so a planted blob meant arbitrary
+  a command string that `slot approve` executed, so a planted blob meant arbitrary
   code execution as root — `docs/pentest2/vulnerabilities/vuln-0001.md`.
-  PCR 11 is now computed in-process from the image (`cmd/ukipredict.go`).
+  PCR 11 is now computed in-process from the image (`internal/measure/ukipredict.go`).
 - Blob `PCRSource` byte **2** is retired and must not be reused; it identified
   the predict source. 0 = register, 1 = eventlog, 3 = uki.
 - `ParsePCRSpecs` carried an explicit rejection of the `p:` suffix with a
@@ -281,7 +494,7 @@ string into a file-access vector.
 - Replaced the `SigningKeyPEM` field from version 4 with the 32-byte
   `SignedBranchDigest`. The public key is no longer stored in the blob: it is
   loaded from the filesystem or derived from the private key when needed.
-- Consequences still visible in the code: `reseal` and the PolicySigned unseal
+- Consequences still visible in the code: `slot approve` and the PolicySigned unseal
   path require a key source on the filesystem, because the blob cannot supply
   one.
 
@@ -305,7 +518,7 @@ Current definition, and why each attribute is set that way:
 Read attributes are deliberately unchanged: reading the raw blob is harmless,
 since the TPM still protects the secret itself via the sealed object's policy.
 
-`reseal` verifies the blob signature **before** acting on any field. The
+`slot approve` verifies the blob signature **before** acting on any field. The
 original reason was to prevent execution of predict commands from a tampered
 blob; that specific risk is gone with the predict source, but the ordering
 requirement stands, because a tampered blob can still steer reseal through its
@@ -315,9 +528,9 @@ stored PCR specs and key paths.
 
 ## Signing key handling
 
-### `reseal` no longer finds its key through the blob
+### `slot approve` no longer finds its key through the blob
 
-`reseal` used to fall back to the `PrivateKeyPath` / `PublicKeyPath` stored in
+`slot approve` used to fall back to the `PrivateKeyPath` / `PublicKeyPath` stored in
 the blob when no `--privkey` / `--pubkey` was given, and then verified the
 blob's signature with the key it found there. Since anyone with TPM access can
 delete and redefine the NV index, a planted blob could name its author's key
@@ -375,7 +588,7 @@ firmware the image will get.
 
 ### `qrencode`
 
-`seal` rendered the enrolment QR code by running `qrencode` with the
+`slot add` rendered the enrolment QR code by running `qrencode` with the
 `otpauth://` URI, TOTP secret included, as a command-line argument — readable
 by every local user through `/proc/<pid>/cmdline`. The code is now rendered
 in-process with `rsc.io/qr`. tpm2-kira runs no external program any more.
@@ -386,6 +599,23 @@ The default device was `/dev/tpm0`, and every command flushed all loaded
 sessions and transient objects first, including other programs' handles. The
 default is now `/dev/tpmrm0`; the global flush runs only on the raw device or a
 simulator socket, where no other program can hold handles at the same time.
+
+### go-tpm is pinned to an unreleased commit
+
+go-tpm v0.9.8 cut an authorization value at its first zero byte in HMAC
+sessions (`hmacKeyFromAuthValue`), where the TPM drops only trailing zeros
+(Part 1, 19.6.5, Note 2): the HMACs disagreed and the TPM answered
+`TPM_RC_BAD_AUTH`, or `TPM_RC_AUTH_FAIL` with a dictionary-attack count for
+an object without NoDA. aSSH's per-boot host keys have random 32-byte
+authorization values, so about one in eight failed to sign; aSSH worked
+around it by drawing values without a zero byte (`hostkey.authValue`).
+
+Upstream fixed it in google/go-tpm#446 (commit 36f2059, 2026-10-01), after
+v0.9.8 and not yet in a release. Since 2026-10-24 aSSH, tpm2-kira and
+tpm2-kira-vault require `v0.9.9-0.20261001171150-36f205946d7e`, and the
+workaround is gone: host keys use plain random values, and
+`TestHostKeysSign` checks values with zero bytes inside, first and at the
+end. Move to the first go-tpm release that contains #446.
 
 ## Removed functions
 
@@ -436,6 +666,57 @@ an *independent* cross-check of the built-in PCR 11 computation, using
 `systemd-measure` instead of tpm2-kira's own implementation. That independence
 is the point: see `docs/UKI-PCR11-PADDING.issue` for the bug it would have
 caught.
+
+---
+
+## Names and documents by layer (2026-10-28)
+
+The commands were named after what tpm2-kira did first, a TOTP code, and
+"remote" stood for three unrelated things. They are named by the layers
+now: the slot (`seal`, `reseal`, `info` and `nvram list|status|delete|
+restore` became `slot add|approve|info|list|status|delete|restore`; "to
+reseal" is "to approve the boot state"), who checks the boot (`attest`
+became `phone`), the disk's key (`remote-salt` became `phone salt`, the
+mode `password+remotesalt` and its token type `tpm2-kira-remotesalt`
+became `password+phonesalt` and `tpm2-kira-phonesalt`, `derive` became
+`luks derive`). `remote serve`, the SSH server's unprivileged half, is
+`ssh-child`. "Remote unlock" was the vault, "remote attestation" the
+phone, "the remote salt" the phone salt. A keyslot marked with the old
+token type is marked again (`luks mark`); nothing reads the old names.
+
+The user-facing name of the password+salt derivation was hashpwd2's, the
+program it is compatible with; it is "password+salt (Argon2id)" now, and
+the compatibility is a note in SECURITY-BACKGROUND.md §5.9.
+
+The README carried every feature's whole description. It is the map now,
+and each layer has its page: docs/SLOT.md (the README's sealing,
+resealing, inspecting and deleting sections), docs/CODE.md, docs/PHONE.md
+(the README's phone section), docs/DISK-KEY.md (the README's disk unlock
+sections and the former docs/UNLOCK-DISK.md, whose "what was tried and
+dropped" is "The hook rewrote the image's crypttab" above), docs/VAULT.md (the former
+docs/REMOTE-UNLOCK.md). The plans were renamed with them:
+PLAN-REMOTEATTESTATION.md is PLAN-PHONE.md, PLAN-FACTORRELEASE.md is
+PLAN-PHONESALT.md, PLAN-REMOTEUNLOCKING.md is PLAN-VAULT.md.
+
+All of the code was one package, `cmd` (37 000 lines), in which the slot,
+the code, the phone, the disk's key, SSH and the administration called
+each other freely. It is split by layer into `internal/` (tpmdev, measure,
+signing, nvslot, totp, phonegate, diskkey, vaultkey, sshscreen, imageplan,
+bootrun, and admin for everything on the installed system), each package
+knowing only those below it, so that the boot's code can be built without
+the administration's. control.conf lines of settings that no longer exist
+are unknown keys like any other; they used to be refused with what had
+replaced them.
+
+Until then everything was one executable, `tpm2-kira`, and the boot image
+carried all of it - control's terminal UI, enrolment, PCR prediction -
+to run the code screen. The image carries `tpm2-kira-boot` now
+(cmd/tpm2-kira-boot), built from the boot's packages alone; `tpm2-kira`
+lost `run`, `cap`, `unlock-key` and `ssh-child`, and its `phone gate` has
+no `--coordinator` (the radio worker is `tpm2-kira-boot gate`). `run`
+became a supervisor that starts only the parts the image's plan names,
+which give each other what they need through a board, not by calling
+each other.
 
 ---
 

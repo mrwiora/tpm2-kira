@@ -1,6 +1,7 @@
 #!/bin/sh
-# Stop the background TOTP display and lock code computation before the real
-# root takes over.
+# Stop run and lock code computation before the real root takes over:
+# what systemd's stop of tpm2-kira.service and tpm2-kira-cap.service does
+# at initrd-switch-root.
 #
 # run-init wipes the initramfs, so a process still running from it has to go.
 
@@ -19,18 +20,49 @@ prereqs)
     ;;
 esac
 
-# The TOTP display and, if enabled, the Bluetooth attestation gate. Neither
-# has anything to flush or save, so there is no reason to wait for a graceful
-# exit; the kernel releases the adapter when the gate's socket closes.
-for PIDFILE in /run/tpm2-kira.pid /run/tpm2-kira-attest.pid; do
-    [ -r "$PIDFILE" ] || continue
-    read -r pid < "$PIDFILE"
-    rm -f "$PIDFILE"
+# run, which may be the SSH server and the phone's coordinator too: asked
+# to stop first, while the network is still up, so the SSH sessions are
+# told and its unprivileged half relays that and ends with it (the server
+# waits for that up to 3 s); its children end with it. After 5 s it is
+# killed.
+if [ -r /run/tpm2-kira.pid ]; then
+    read -r pid < /run/tpm2-kira.pid
+    rm -f /run/tpm2-kira.pid
+    if [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null; then
+        i=0
+        while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 50 ]; do
+            sleep 0.1 2>/dev/null || sleep 1
+            i=$((i + 1))
+        done
+        kill -9 "$pid" 2>/dev/null || true
+    fi
+fi
+
+# The network's setup, if still at it: nothing to flush or save.
+if [ -r /run/tpm2-kira-net.pid ]; then
+    read -r pid < /run/tpm2-kira-net.pid
+    rm -f /run/tpm2-kira-net.pid
     [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
-done
+fi
+
+# The image's network goes down: the running system configures the
+# interface itself (ifupdown, NetworkManager), and an address left from
+# here would stay beside its own.
+if [ -r /run/tpm2-kira/net-device ]; then
+    read -r dev < /run/tpm2-kira/net-device
+    rm -f /run/tpm2-kira/net-device
+    killall -q ipconfig 2>/dev/null || true
+    if [ -n "$dev" ] && command -v ip >/dev/null 2>&1; then
+        ip address flush dev "$dev" 2>/dev/null || true
+        ip route flush dev "$dev" 2>/dev/null || true
+        ip link set dev "$dev" down 2>/dev/null || true
+    fi
+    rm -f "/run/net-$dev.conf"
+fi
 
 # Lock code computation until the next boot, so nothing in the running
-# system can compute codes. Never let a failure here stop the boot.
-[ -x /usr/bin/tpm2-kira ] && /usr/bin/tpm2-kira cap >/dev/console 2>&1 || true
+# system can compute codes - when the image shows codes at all. Never let a
+# failure here stop the boot.
+[ -x /usr/bin/tpm2-kira-boot ] && [ -d /etc/tpm2-kira/plan/codes ] && /usr/bin/tpm2-kira-boot cap >/dev/console 2>&1 || true
 
 exit 0

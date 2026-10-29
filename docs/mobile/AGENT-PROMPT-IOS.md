@@ -31,10 +31,10 @@ gomobile into an `.xcframework` and call.
    disagree, the document wins; report the discrepancy.
 2. `docs/PLAN-BLE.md` §1, §5.3, §6 — the user story, enrolment confirmation,
    the three verdict states and what the user sees.
-3. `docs/PLAN-FACTORRELEASE.md` §1, §4 — a future step (salt release for
-   hashpwd2) that your session flow must be able to grow into. Do not
+3. `docs/PLAN-PHONESALT.md` §1, §4 — a future step (salt release for
+   the password+salt derivation) that your session flow must be able to grow into. Do not
    implement it now.
-4. `mobile/kiracore/kiracore.go` and `mobile/kiratest/kiratest.go` — the Go
+4. `core/mobile/kiracore/kiracore.go` and `core/mobile/kiratest/kiratest.go` — the Go
    API you call.
 
 ## Non-negotiable rules
@@ -242,7 +242,7 @@ simulator has no Secure Enclave — tests inject a software key, see Testing).
   `.completeFileProtection`, `isExcludedFromBackup = true`. Never edit the
   JSON; parse display fields via `KiracoreRecordSummary`.
 - Deleting a machine: delete the record and its Keychain items; tell the user
-  to run `sudo tpm2-kira attest unenrol` on the machine.
+  to run `sudo tpm2-kira phone unenrol` on the machine.
 
 ## Screens
 
@@ -251,7 +251,7 @@ simulator has no Secure Enclave — tests inject a software key, see Testing).
 2. **Machines** — enrolled machines with last-attested time; "Enrol a
    machine"; a banner "<machine> is asking for attestation" when its
    advertisement is seen (tap → session).
-3. **Enrol** — instructions ("run `sudo tpm2-kira attest enrol` on the
+3. **Enrol** — instructions ("run `sudo tpm2-kira phone enrol` on the
    machine"), ENROL-mode advertisements, then the **SAS screen**: six large
    digits, "Does this match the number on your computer's screen?" *Matches* /
    *Does not match*. Then Face ID "Bind", then success.
@@ -308,8 +308,8 @@ notification, connect immediately.
 3. **SwiftUI previews and snapshot/UI tests** for the three verdict screens
    with fixed JSON.
 4. **Real hardware checklist** (`TESTING.md`): a Linux machine with a
-   Bluetooth adapter running `sudo tpm2-kira attest enrol` and
-   `sudo tpm2-kira attest gate`; an iPhone with Face ID and one with Touch ID;
+   Bluetooth adapter running `sudo tpm2-kira phone enrol` and
+   `sudo tpm2-kira phone gate`; an iPhone with Face ID and one with Touch ID;
    background discovery; Bluetooth toggled mid-session; app killed
    mid-session; two machines in range.
 
@@ -330,7 +330,7 @@ notification, connect immediately.
 
 When the machine advertises `CAP_RELEASE_FACTOR` (Hello capabilities), a
 future core version will emit an event after `receipt_ack` asking the app to
-release the stored factor blob for hashpwd2 (PROTOCOL-BLE.md §7.3.7). Keep the
+release the stored factor blob, the phone salt, (PROTOCOL-BLE.md §7.3.7). Keep the
 session loop event-driven so this is one more `case`, and keep `MachineStore`
 able to hold one more opaque blob per machine.
 

@@ -44,25 +44,26 @@ Ensure TPM 2.0 is enabled in your BIOS/UEFI settings.
 # Check current permissions
 ls -la /dev/tpmrm0
 
-# Your user needs access — either run as root or add a udev rule
+# tpm2-kira runs as root: every command but the help refuses otherwise
+sudo tpm2-kira status
 ```
 
 **TOTP code doesn't match after update:**
 ```bash
-tpm2-kira reseal
+tpm2-kira slot approve
 ```
-If reseal also fails, check `tpm2-kira info` to see which PCRs changed and verify you have the correct signing key available.
+If approve also fails, check `tpm2-kira slot info` to see which PCRs changed and verify you have the correct signing key available.
 
 **The phone is not asked at boot; the kernel says hci0's firmware is missing:**
 The image has the Bluetooth driver but not the adapter's firmware. The image
 build learns the firmware's name from the kernel log of a boot that loaded
 it, and not every boot does: an Intel controller keeps its firmware over a
-warm reboot and then names none. The hooks read every boot the journal
+warm reboot and then names none. The boot plan reads every boot the journal
 keeps and remember what they found per adapter
 (`/var/lib/tpm2-kira/bt-firmware/`); `control`'s overview shows the
 firmware on its Bluetooth line, red when none is known.
 ```bash
-sudo tpm2-kira attest initramfs-deps --adapter 0      # what the next image gets
+sudo tpm2-kira initramfs plan                         # what the next image gets, and why not
 journalctl -k -o cat | grep -E 'Bluetooth: hci[0-9]+:' # what the kernel logged
 lsinitcpio /boot/EFI/Linux/arch-linux.efi | grep -iE 'firmware|bluetooth|bt'
 ```
@@ -77,7 +78,7 @@ tpm2-kira --debug reveal
 
 **Check current PCR values vs. sealed values:**
 ```bash
-tpm2-kira info            # shows what was sealed
+tpm2-kira slot info            # shows what was sealed
 tpm2-kira pcrtips         # explains what each PCR measures
 ```
 
@@ -105,14 +106,14 @@ Two things to keep in mind while reading any PCR output:
   15. They keep being extended after the initrd, so a mismatch there is expected
   and not evidence of tampering.
 
-See [SECURITY-BACKGROUND.md](docs/SECURITY-BACKGROUND.md) §5.6–5.8 for the full
+See [SECURITY-BACKGROUND.md](SECURITY-BACKGROUND.md) §5.6–5.8 for the full
 reconstruction rules and constants.
 
 ## Exit status
 
-**tpm2-kira always exits 0, including on failure.** This is deliberate: it is
-meant to be chainable in a boot sequence, so a TPM or NVRAM problem must not
-stop the commands after it.
+**A failed command exits 0.** This is deliberate: tpm2-kira is meant to be
+chainable in a boot sequence, so a TPM or NVRAM problem must not stop the
+commands after it.
 
 ```bash
 tpm2-kira && cryptsetup open /dev/nvme0n1p2 cryptroot
@@ -129,9 +130,14 @@ tpm2-kira: (exit status is 0 by design; this command did NOT succeed)
 The mkinitcpio post hook does exactly this — it greps the output for the success
 line rather than testing `$?`.
 
-**Exception: the attestation commands.** `attest gate`, `attest verify`,
-`attest quote` and `attest enrol` gate or judge something, and a gate that
+**Exception: the attestation commands.** `phone gate`, `phone verify`,
+`phone quote` and `phone enrol` gate or judge something, and a gate that
 exits 0 on failure is not a gate. They exit non-zero on failure: `1` internal
 error, `2` usage, `3` no phone or no adapter, `4` the phone rejected this boot
 (do not type a passphrase before checking further), `5` the receipt was not
 signed by the enrolled phone.
+
+**The other non-zero exits:** `1` when a command runs as a user (root is
+needed), `2` for a missing or unknown subcommand, and `1` from the three
+commands a script reads the status of - `unlock-key` (cryptroot's
+keyscript), `luks route` (the hook) and `ssh-child` (`run` watches it).

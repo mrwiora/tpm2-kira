@@ -5,11 +5,11 @@
 
 ## 1. What it would add
 
-Today the binding between "the tpm2-kira that resealed the slot" and the
+Today the binding between "the tpm2-kira that approved the slot" and the
 TPM is the measured image: `systemd-stub` extends PCR 11 with the initrd,
-`seal`/`reseal` sign a policy over that value, and the TPM admits the
+`slot add`/`slot approve` sign a policy over that value, and the TPM admits the
 policy only if the signature verifies for the PCRs it recorded
-(SECURITY-BACKGROUND.md §4, PLAN-FACTORRELEASE.md §8.4). A changed binary
+(SECURITY-BACKGROUND.md §4, PLAN-PHONESALT.md §8.4). A changed binary
 gets no code and no factor. What it still gets is *to run*: the initrd
 executes whatever is in it, and refusing is left to the TPM.
 
@@ -73,7 +73,7 @@ TPM would not unseal for it".
 
 ## 4. Where it would show in tpm2-kira
 
-- `tpm2-kira info` / `attest status`: report whether IMA appraisal is
+- `tpm2-kira slot info` / `phone status`: report whether IMA appraisal is
   enforcing (`/sys/kernel/security/ima/policy` readable and
   `ima_appraise=enforce` on `/proc/cmdline`), as a line of the platform
   report, the way the measure point is reported today.
