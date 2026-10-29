@@ -79,7 +79,7 @@ func FactorEnrol(o FactorEnrolOptions) error {
 		fmt.Println("captured the old salt.")
 		fmt.Println()
 	}
-	fmt.Println("Then: tpm2-kira luks mark <device> --keyslot N --mode password+phonesalt. The mark")
+	fmt.Println("Then: tpm2-kira luks mark <device> --keyslot N --salt phone. The mark")
 	fmt.Println("is all the boot needs: it reads the recipe from the header, and once the phone has")
 	fmt.Println("verified the machine, asks for the password and derives this key. The recovery")
 	fmt.Println("passphrase in its own keyslot stays the way in without the phone: at cryptsetup's")

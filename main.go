@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/admin"
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/machineid"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
@@ -542,31 +543,34 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		}
 	case "mark":
 		fs := flag.NewFlagSet("luks mark", flag.ExitOnError)
-		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+phonesalt: the slot's verifier is checked)")
+		tpm := fs.String("tpm", tpmPath, "Path to TPM device (a bound recipe: the slot is checked)")
 		keyslot := fs.Int("keyslot", -1, "The LUKS keyslot to mark (required)")
-		mode := fs.String("mode", "", "How its key is made: password+salt, password+phonesalt or tpm+vault (required)")
-		nvram := fs.Uint("nvram", nvramDefault(0), "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+phonesalt, tpm+vault: the slot whose release it needs)")
-		label := fs.String("label", "luks", "The salt's label (password+phonesalt)")
+		password, salt, pepper := recipeFlags(fs)
+		nvram := fs.Uint("nvram", nvramDefault(0), "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; a bound recipe: the slot whose part, phone or vault it needs)")
+		label := fs.String("label", "luks", "The key's label (a bound recipe)")
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		fs.Parse(deviceLast(args[1:]))
-		if fs.NArg() != 1 || *keyslot < 0 || *mode == "" {
-			fail(fmt.Errorf("usage: tpm2-kira luks mark <device> --keyslot N --mode password+salt|password+phonesalt|tpm+vault"))
+		if fs.NArg() != 1 || *keyslot < 0 {
+			fail(fmt.Errorf("usage: tpm2-kira luks mark <device> --keyslot N --password typed|tpm --salt typed|tpm|phone|vault [--pepper]"))
 		}
-		if err := admin.LuksMark(admin.LuksMarkOptions{TPMPath: *tpm, Device: fs.Arg(0), Keyslot: *keyslot, Mode: *mode,
+		recipe, err := diskkey.RecipeOf(*password, *salt, *pepper)
+		if err != nil {
+			fail(err)
+		}
+		if err := admin.LuksMark(admin.LuksMarkOptions{TPMPath: *tpm, Device: fs.Arg(0), Keyslot: *keyslot, Recipe: recipe,
 			SealIndex: nvslot.ResolveNVRAMIndex(uint32(*nvram)), Label: *label, Debug: *debug}); err != nil {
 			fail(err)
 		}
 	case "enrol", "enroll":
 		fs := flag.NewFlagSet("luks enrol", flag.ExitOnError)
-		tpm := fs.String("tpm", tpmPath, "Path to TPM device (password+phonesalt)")
-		mode := fs.String("mode", "", "How the key is made at boot: password+salt, password+phonesalt or tpm+vault (required)")
-		nvram := fs.Uint("nvram", nvramDefault(0), "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; password+phonesalt: the slot whose phone keeps the salt; tpm+vault: the slot enrolled with the vault)")
-		label := fs.String("label", "luks", "The key's label (password+phonesalt, tpm+vault)")
-		vaultURL := fs.String("url", "", "tpm+vault: the vault, https://host:port")
-		vaultPin := fs.String("pin", "", "tpm+vault: the pin of the vault's key, sha256:… as 'tpm2-kira-vault token create' prints it")
-		vaultToken := fs.String("token", "", "tpm+vault: the one-time enrolment token")
-		name := fs.String("name", "", "tpm+vault: the machine's name at the vault (default: the host name)")
-		pepper := fs.Bool("pepper", false, "tpm+vault: the key needs an operator's pepper too, asked here; every boot waits for an approval with it")
+		tpm := fs.String("tpm", tpmPath, "Path to TPM device (a bound recipe)")
+		password, salt, pepper := recipeFlags(fs)
+		nvram := fs.Uint("nvram", nvramDefault(0), "The tpm2-kira slot the keyslot is bound to, deleted with it (default 0; the phone's salt: the slot whose phone keeps it; the vault's: the slot enrolled with the vault)")
+		label := fs.String("label", "luks", "The key's label (a bound recipe)")
+		vaultURL := fs.String("url", "", "the vault's salt: the vault, https://host:port")
+		vaultPin := fs.String("pin", "", "the vault's salt: the pin of the vault's key, sha256:… as 'tpm2-kira-vault token create' prints it")
+		vaultToken := fs.String("token", "", "the vault's salt: the one-time enrolment token")
+		name := fs.String("name", "", "the vault's salt: the machine's name at the vault (default: the host name)")
 		privKey := fs.String("privkey", "", "Signing key, needed for every hand-over (default: "+signing.DefaultPrivateKeyPath+")")
 		pubKey := fs.String("pubkey", "", "Signing public key, for the record check (default: "+signing.DefaultPublicKeyPath+")")
 		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
@@ -575,19 +579,23 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		existing := fs.String("existing-key-file", "", "A file with an existing passphrase to authorise luksAddKey (scripts; by default asked)")
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		fs.Parse(deviceLast(args[1:]))
-		if fs.NArg() != 1 || *mode == "" {
-			fail(fmt.Errorf("usage: tpm2-kira luks enrol <device> --mode password+salt|password+phonesalt|tpm+vault"))
+		if fs.NArg() != 1 {
+			fail(fmt.Errorf("usage: tpm2-kira luks enrol <device> --password typed|tpm --salt typed|tpm|phone|vault [--pepper]"))
+		}
+		recipe, err := diskkey.RecipeOf(*password, *salt, *pepper)
+		if err != nil {
+			fail(err)
 		}
 		var slot uint32
 		if nvramExplicit(args[1:]) {
 			slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
 		}
 		if err := admin.LuksEnrol(admin.LuksEnrolOptions{
-			Device: fs.Arg(0), Mode: *mode, ExistingKeyFile: *existing,
+			Device: fs.Arg(0), Recipe: recipe, ExistingKeyFile: *existing,
 			Remote: admin.FactorEnrolOptions{TPMPath: *tpm, SealIndex: slot, Label: *label, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
 				Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: true, Debug: *debug},
 			Vault: admin.VaultEnrolOptions{TPMPath: *tpm, SealIndex: nvslot.ResolveNVRAMIndex(uint32(*nvram)), URL: *vaultURL, Pin: *vaultPin,
-				Token: *vaultToken, Label: *label, Name: *name, Pepper: *pepper, PrivKeyPath: *privKey, Debug: *debug},
+				Token: *vaultToken, Label: *label, Name: *name, PrivKeyPath: *privKey, Debug: *debug},
 		}); err != nil {
 			fail(err)
 		}
@@ -663,7 +671,7 @@ func runVault(args []string, tpmPath string, debugFlag bool) {
 
 const vaultUsage = `tpm2-kira vault enrol | status | unenrol [options]
 
-The disk's key from two TPMs (docs/VAULT.md, unlock mode tpm+vault): a
+The disk's key from two TPMs (docs/VAULT.md, the recipe --password tpm --salt vault): a
 local part kept in this machine's TPM and a remote part kept by
 tpm2-kira-vault, each opening only in a boot state the slot's signing key
 approved. The vault releases its part to a fresh quote of such a state;
@@ -671,7 +679,7 @@ the boot then unlocks unattended. Without the vault, the recovery
 passphrase in its own keyslot opens the disk at cryptsetup's prompt.
 
   vault enrol    Enrol the slot with the vault and write the key once for
-                 'cryptsetup luksAddKey' ('luks enrol --mode tpm+vault'
+                 'cryptsetup luksAddKey' ('luks enrol --password tpm --salt vault'
                  does all of it in one step):
                    --url https://host:port --pin sha256:… --token TOKEN
                                 (all three from 'tpm2-kira-vault token create')
@@ -691,6 +699,15 @@ passphrase in its own keyslot opens the disk at cryptsetup's prompt.
 The image needs its network at boot: TPM2_KIRA_NET in control.conf
 (tpm2-kira control, "Network and SSH at boot").
 `
+
+// recipeFlags are a keyslot's recipe on the command line: where the
+// password and the salt come from, and the pepper (diskkey.RecipeOf).
+func recipeFlags(fs *flag.FlagSet) (password, salt *string, pepper *bool) {
+	password = fs.String("password", "typed", "Where the password comes from: typed (at the machine, its console or the boot SSH server) or tpm (held by this TPM: unattended)")
+	salt = fs.String("salt", "", "Where the salt comes from: typed (the recovery recipe), tpm, phone or vault (required)")
+	pepper = fs.Bool("pepper", false, "The vault releases the salt only with an operator's pepper, entered at its approval")
+	return password, salt, pepper
+}
 
 func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 	if len(args) == 0 {
@@ -764,13 +781,13 @@ kept by the verifier that attests this machine - today the phone enrolled
 with 'phone enrol', over Bluetooth LE - as a value only this machine's
 TPM can open, in a boot its signing key approved. The phone hands it back
 after a verdict you accept; at boot tpm2-kira asks for your password and
-derives the key from both (Argon2id, the mode
-password+phonesalt). Without the phone, the recovery passphrase in its
+derives the key from both (Argon2id, the recipe
+0x1302). Without the phone, the recovery passphrase in its
 own keyslot opens the disk at cryptsetup's prompt.
 
   phone salt enrol    Give the phone a salt, prove the round trip, derive
                        the key once for 'cryptsetup luksAddKey' ('luks enrol
-                       --mode password+phonesalt' does all of it in one step):
+                       --salt phone' does all of it in one step):
                          --out PATH   the key file, on tmpfs (required)
                          --label STR  default luks
                          --nvram N --privkey PATH --pubkey PATH --adapter N

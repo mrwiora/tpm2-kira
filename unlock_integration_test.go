@@ -49,7 +49,7 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	// A password+salt keyslot: the provider reads the recipe from the
+	// A recovery recipe (0x1100) keyslot: the provider reads the recipe from the
 	// volume's own header (the token luks mark writes below) and derives
 	// the key from what is typed at its prompts.
 	const password, salt = "correct horse", "battery staple"
@@ -73,7 +73,7 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	}
 	loop := strings.TrimSpace(string(loopOut))
 	defer exec.Command("losetup", "-d", loop).Run()
-	if err := admin.LuksMark(admin.LuksMarkOptions{Device: loop, Keyslot: 0, Mode: "password+salt"}); err != nil {
+	if err := admin.LuksMark(admin.LuksMarkOptions{Device: loop, Keyslot: 0, Recipe: diskkey.RecipeRecovery}); err != nil {
 		t.Fatalf("luks mark: %v", err)
 	}
 

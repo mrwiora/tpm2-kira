@@ -36,13 +36,18 @@ import urllib.request
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# The unlock mode is no setting: the keyslot's token in the LUKS2 header
-# names it by its type (internal/admin/luks.go), and the boot reads it from there.
+# The recipe is no setting: the keyslot's token in the LUKS2 header names
+# it by its type, tpm2-kira-<number> (internal/diskkey/recipe.go), and the
+# boot reads it from there. Here by the words of this script's --mode.
 TOKEN_MODES = {
-    "tpm2-kira-salt": "password+salt",
-    "tpm2-kira-phonesalt": "password+phonesalt",
-    "tpm2-kira-vault": "tpm+vault",
+    "tpm2-kira-1100": "recovery",
+    "tpm2-kira-1302": "phone",
+    "tpm2-kira-2400": "vault",
+    "tpm2-kira-2401": "vault",
 }
+
+# The recipe flags of luks enrol for a mode of this script.
+ENROL_FLAGS = {"recovery": "--salt typed", "phone": "--salt phone"}
 
 
 def marked_keyslots(status, mode, device=None):
@@ -56,7 +61,7 @@ def marked_keyslots(status, mode, device=None):
 def mode_of(status):
     """The mode the boot asks in: the first typed one a keyslot is marked
     with, skip when there is none."""
-    for mode in ("password+salt", "password+phonesalt"):
+    for mode in ("recovery", "phone"):
         if marked_keyslots(status, mode):
             return mode
     return "skip"
@@ -513,11 +518,11 @@ def ensure_luks(t, mode_wanted, luks_device, log, rep):
     rc, out = t.run("tpm2-kira status --json", root=True)
     status = json.loads(out) if rc == 0 else {}
     if not marked_keyslots(status, mode_wanted, luks_device):
-        log.head(f"luks enrol {luks_device} --mode {mode_wanted}")
+        log.head(f"luks enrol {luks_device} {ENROL_FLAGS[mode_wanted]}")
         log.say("No keyslot of tpm2-kira's with that mode. The enrolment asks for the device's")
         log.say("passphrase, then the password and the salt the boot will ask for. Your terminal now:")
-        rc = t.interactive(f"sudo tpm2-kira luks enrol {shlex.quote(luks_device)} --mode {mode_wanted}")
-        rep.check(f"luks enrol {luks_device} --mode {mode_wanted}", rc == 0, f"exit {rc}")
+        rc = t.interactive(f"sudo tpm2-kira luks enrol {shlex.quote(luks_device)} {ENROL_FLAGS[mode_wanted]}")
+        rep.check(f"luks enrol {luks_device} {ENROL_FLAGS[mode_wanted]}", rc == 0, f"exit {rc}")
 
 
 def reboot_and_ask(t, mode_wanted, log, rep):
@@ -636,7 +641,7 @@ def main():
     g.add_argument("--ask-password", action="store_true", help="ask for the password at the start")
     p.add_argument("--key", help="an ssh key instead of a password")
     p.add_argument("--rev", default="HEAD", help="the commit to build (default HEAD)")
-    p.add_argument("--mode", default=None, choices=["skip", "password+salt", "password+phonesalt"],
+    p.add_argument("--mode", default=None, choices=["skip", "recovery", "phone"],
                    help="the unlock mode the boot is expected in (default: what the target's keyslots are marked with)")
     p.add_argument("--luks", metavar="DEVICE", help="the LUKS device to enrol a keyslot on when --mode needs one and none is there")
     p.add_argument("--no-build", action="store_true", help="test what is installed; no package")

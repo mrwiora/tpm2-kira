@@ -19,6 +19,7 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
@@ -1201,9 +1202,9 @@ func (c *controller) runAttest() error {
 	return nil
 }
 
-// runLuks enrols a keyslot of the mode - or, with one enrolled already,
+// runLuks enrols a keyslot of the recipe - or, with one enrolled already,
 // offers its removal: the step is a toggle, a second enrolment is not.
-func (c *controller) runLuks(mode string) error {
+func (c *controller) runLuks(recipe diskkey.Recipe) error {
 	type enrolled struct {
 		device string
 		ks     KeyslotStatus
@@ -1211,7 +1212,7 @@ func (c *controller) runLuks(mode string) error {
 	var have []enrolled
 	for _, d := range c.facts.Status.Devices {
 		for _, ks := range d.Keyslots {
-			if ks.Token != nil && ks.Token.Mode == mode {
+			if ks.Token != nil && !ks.Token.Obsolete && ks.Token.Recipe == recipe {
 				have = append(have, enrolled{d.Device, ks})
 			}
 		}
@@ -1230,7 +1231,7 @@ func (c *controller) runLuks(mode string) error {
 		}
 		e := have[i]
 		ok, err := c.confirm(fmt.Sprintf("Remove keyslot %d of %s?", e.ks.Keyslot, e.device),
-			"This keyslot is enrolled already ("+mode+"), so picking the step offers its removal. The key opens nothing afterwards; a remaining passphrase (the recovery one) authorises it, and enrolling anew is this same step.")
+			"This keyslot is enrolled already ("+recipe.Describe()+"), so picking the step offers its removal. The key opens nothing afterwards; a remaining passphrase (the recovery one) authorises it, and enrolling anew is this same step.")
 		if err != nil || !ok {
 			return errors.New("not confirmed")
 		}
@@ -1241,7 +1242,7 @@ func (c *controller) runLuks(mode string) error {
 		return err
 	}
 	if err := LuksEnrol(LuksEnrolOptions{
-		Device: dev, Mode: mode,
+		Device: dev, Recipe: recipe,
 		Remote: FactorEnrolOptions{TPMPath: c.o.TPMPath, Timeout: 10 * time.Minute, AdapterWait: 30 * time.Second, Yes: true, Debug: c.o.Debug},
 	}); err != nil {
 		return err

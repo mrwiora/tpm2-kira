@@ -14,7 +14,7 @@ import (
 	"charm.land/huh/v2"
 )
 
-// control's option for the disk key from this TPM and a vault (tpm+vault,
+// control's option for the disk key from this TPM and a vault (the recipe 0x2400,
 // docs/VAULT.md): the vault's address, key pin and one-time token
 // as 'tpm2-kira-vault token create' prints them, asked here; the vault is
 // asked before anything is enrolled - does it answer, with the pinned key -
@@ -27,7 +27,7 @@ var vaultPinRe = regexp.MustCompile(`^sha256:[0-9a-fA-F]{64}$`)
 // vaultStep is the option's line under Disk unlock.
 func (c *controller) vaultStep(gate string, strong *StatusSlot) controlStep {
 	f := &c.facts
-	st := controlStep{Key: "luks-vault", Optional: true, SelfConfirm: true, Title: "This TPM + a vault (tpm+vault)",
+	st := controlStep{Key: "luks-vault", Optional: true, SelfConfirm: true, Title: "Unattended: this TPM and a vault (0x2400)",
 		Explain: "A LUKS keyslot that opens unattended: its key is made from a part in this TPM and a part the vault (tpm2-kira-vault) releases to a fresh quote of an approved boot - or once an operator approves the boot. Nothing is typed; the recovery passphrase stays the way in when the vault refuses. The boot image reaches the vault over its own network. Enrolled, picking it checks the vault again or removes the keyslot.",
 		Run:     (*controller).runVault}
 	if f.Remote.SSH.On {
@@ -41,7 +41,7 @@ func (c *controller) vaultStep(gate string, strong *StatusSlot) controlStep {
 	}
 	switch {
 	case enrolled != nil:
-		keyslots := c.boundKeyslots(diskkey.LuksModeTPMVault, enrolled.Slot)
+		keyslots := c.boundKeyslots(enrolled.Slot, diskkey.RecipeUnattendedVault, diskkey.RecipeUnattendedVaultPepper)
 		v := f.Vaults[enrolled.Slot]
 		desc := fmt.Sprintf("slot %d with %s", enrolled.Slot, enrolled.Vault)
 		if len(keyslots) > 0 {
@@ -162,7 +162,11 @@ func (c *controller) runVault() error {
 		return err
 	}
 	name, _ := os.Hostname()
-	if err := LuksEnrol(LuksEnrolOptions{Device: dev, Mode: diskkey.LuksModeTPMVault,
+	recipe := diskkey.RecipeUnattendedVault
+	if pepper {
+		recipe = diskkey.RecipeUnattendedVaultPepper
+	}
+	if err := LuksEnrol(LuksEnrolOptions{Device: dev, Recipe: recipe,
 		Vault: VaultEnrolOptions{TPMPath: c.o.TPMPath, SealIndex: uint32(strong.Slot), URL: url, Pin: pin, Token: token,
 			Name: name, Pepper: pepper, Yes: true, Debug: c.o.Debug}}); err != nil {
 		return err
@@ -184,7 +188,7 @@ func (c *controller) vaultEnrolled(s StatusSlot) error {
 	choice := "check"
 	if err := c.form(huh.NewSelect[string]().Title("The vault of slot "+fmt.Sprint(s.Slot)).
 		Options(huh.NewOption("Ask the vault again", "check"),
-			huh.NewOption("Remove: the tpm+vault keyslots, and the vault's part of the slot", "remove")).
+			huh.NewOption("Remove: the vault's keyslots, and the vault's part of the slot", "remove")).
 		Value(&choice)).Run(); err != nil {
 		return err
 	}
@@ -192,13 +196,13 @@ func (c *controller) vaultEnrolled(s StatusSlot) error {
 		return nil // the overview asks it again
 	}
 	ok, err := c.confirm("Remove the vault from slot "+fmt.Sprint(s.Slot)+"?",
-		"The tpm+vault keyslots go - removing a keyslot asks for a remaining passphrase (the recovery one) - and the slot's local part with them. The vault keeps its record until its operator revokes the device.")
+		"The vault's keyslots go - removing a keyslot asks for a remaining passphrase (the recovery one) - and the slot's local part with them. The vault keeps its record until its operator revokes the device.")
 	if err != nil || !ok {
 		return errors.New("not confirmed")
 	}
 	for _, d := range c.facts.Status.Devices {
 		for _, ks := range d.Keyslots {
-			if ks.Token != nil && ks.Token.Mode == diskkey.LuksModeTPMVault && ks.Token.Slot != nil && *ks.Token.Slot == s.Slot {
+			if ks.Token != nil && !ks.Token.Obsolete && ks.Token.Recipe.Unattended() && ks.Token.Slot != nil && *ks.Token.Slot == s.Slot {
 				if err := LuksRemove(LuksRemoveOptions{Device: d.Device, Keyslot: ks.Keyslot}); err != nil {
 					return err
 				}

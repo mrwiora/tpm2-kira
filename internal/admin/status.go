@@ -43,7 +43,7 @@ type StatusSlot struct {
 	SignReason  string `json:"sign_reason,omitempty"`
 	Phones      int    `json:"phones"`                 // enrolled; the slot then has no TOTP code
 	PhoneSalt   bool   `json:"remote_salt"`            // the release key is in the blob
-	Vault       string `json:"vault,omitempty"`        // the vault's URL: the slot is enrolled with one (tpm+vault)
+	Vault       string `json:"vault,omitempty"`        // the vault's URL: the slot is enrolled with one
 	VaultPepper bool   `json:"vault_pepper,omitempty"` // its key needs an operator's pepper
 	VaultPin    string `json:"-"`                      // the vault's key pin, for control's check
 	VaultDevice []byte `json:"-"`                      // the device ID the vault knows this machine by
@@ -185,7 +185,7 @@ func statusNotes(r StatusReport) []string {
 	for _, s := range r.Slots {
 		slotThere[s.Slot] = true
 	}
-	marked := map[string]int{} // mode -> keyslots marked with it, over every device
+	marked := map[diskkey.Recipe]int{} // recipe -> keyslots marked with it, over every device
 	headersRead := r.DevicesError == ""
 	for _, d := range r.Devices {
 		if d.Error != "" {
@@ -199,10 +199,10 @@ func statusNotes(r StatusReport) []string {
 				continue
 			}
 			if ks.Token.Obsolete {
-				notes = append(notes, fmt.Sprintf("%s keyslot %d carries the old token type %s: cryptsetup token remove --token-id %d %s, then tpm2-kira luks mark %s --keyslot %d --mode <its mode>", d.Device, ks.Keyslot, diskkey.LuksTokenTypeOld, ks.TokenID, d.Device, d.Device, ks.Keyslot))
+				notes = append(notes, fmt.Sprintf("%s keyslot %d carries another version's token (type %s): cryptsetup token remove --token-id %d %s, then enrol the keyslot again (tpm2-kira luks remove, luks enrol)", d.Device, ks.Keyslot, ks.Token.Type, ks.TokenID, d.Device))
 				continue
 			}
-			marked[ks.Token.Mode]++
+			marked[ks.Token.Recipe]++
 			if r.TPMError != "" || ks.Token.Slot == nil {
 				continue // bound to no slot: nothing of the TPM to check
 			}
@@ -210,7 +210,7 @@ func statusNotes(r StatusReport) []string {
 				notes = append(notes, fmt.Sprintf("%s keyslot %d is bound to slot %d, which is gone - the slot is dirty: 'tpm2-kira control' (the slot's line) deletes what is left, or tpm2-kira luks remove %s --keyslot %d by hand", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
 				continue
 			}
-			if ks.Token.Mode == diskkey.LuksModeTPMVault {
+			if ks.Token.Recipe.Unattended() {
 				ok := false
 				for _, s := range r.Slots {
 					if s.Slot == *ks.Token.Slot && s.Vault != "" {
@@ -221,7 +221,7 @@ func statusNotes(r StatusReport) []string {
 					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the vault of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
 				}
 			}
-			if ks.Token.Mode == diskkey.LuksModePasswordPhoneSalt {
+			if ks.Token.Recipe == diskkey.RecipePhoneSalt {
 				ok := false
 				for _, s := range r.Slots {
 					if s.Slot == *ks.Token.Slot && s.PhoneSalt {
@@ -238,11 +238,11 @@ func statusNotes(r StatusReport) []string {
 	for _, s := range r.Slots {
 		vault = vault || s.Vault != ""
 	}
-	if vault && headersRead && marked[diskkey.LuksModeTPMVault] == 0 {
-		notes = append(notes, "a slot is enrolled with a vault, but no LUKS keyslot is marked tpm+vault: its key opens nothing (tpm2-kira luks mark <device> --keyslot N --mode tpm+vault)")
+	if vault && headersRead && marked[diskkey.RecipeUnattendedVault]+marked[diskkey.RecipeUnattendedVaultPepper] == 0 {
+		notes = append(notes, "a slot is enrolled with a vault, but no LUKS keyslot is marked with a vault recipe: its key opens nothing (tpm2-kira luks mark <device> --keyslot N "+diskkey.RecipeUnattendedVault.Words()+")")
 	}
-	if remoteSalt && headersRead && marked[diskkey.LuksModePasswordPhoneSalt] == 0 {
-		notes = append(notes, "a phone salt is enrolled, but no LUKS keyslot is marked password+phonesalt: the phone's salt opens nothing (tpm2-kira luks enrol <device> --mode password+phonesalt)")
+	if remoteSalt && headersRead && marked[diskkey.RecipePhoneSalt] == 0 {
+		notes = append(notes, "a phone salt is enrolled, but no LUKS keyslot is marked with the phone's salt: the phone's salt opens nothing (tpm2-kira luks enrol <device> "+diskkey.RecipePhoneSalt.Words()+")")
 	}
 	return notes
 }
@@ -276,7 +276,7 @@ func printStatus(r StatusReport) {
 			if s.VaultPepper {
 				pepper = ", with an operator's pepper"
 			}
-			fmt.Printf("           enrolled with the vault at %s (tpm+vault%s)\n", s.Vault, pepper)
+			fmt.Printf("           enrolled with the vault at %s (%s%s)\n", s.Vault, diskkey.RecipeUnattendedVault, pepper)
 		}
 	}
 	fmt.Println()
@@ -316,12 +316,12 @@ func shortKeyslot(ks KeyslotStatus) string {
 		return "not tpm2-kira's"
 	}
 	if ks.Token.Obsolete {
-		return "an old token: re-mark (the notes say how)"
+		return "another version's token: enrol again (the notes say how)"
 	}
-	if diskkey.BoundMode(ks.Token.Mode) && ks.Token.Slot != nil {
-		return fmt.Sprintf("%s (slot %d, label %q)", ks.Token.Mode, *ks.Token.Slot, ks.Token.Label)
+	if ks.Token.Slot != nil {
+		return fmt.Sprintf("%s (slot %d, label %q)", ks.Token.Recipe.Describe(), *ks.Token.Slot, ks.Token.Label)
 	}
-	return ks.Token.Mode
+	return ks.Token.Recipe.Describe()
 }
 
 func quoted(names []string) string {

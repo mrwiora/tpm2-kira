@@ -43,7 +43,7 @@ func (s *syncBuffer) String() string {
 }
 
 // remoteBoot is 'tpm2-kira-boot run --ssh' against a software TPM with a sealed
-// slot and a LUKS2 header marked password+salt: the chain of the image -
+// slot and a LUKS2 header marked recovery recipe (0x1100): the chain of the image -
 // SSH to the unprivileged 'ssh-child', the session handed to 'run',
 // the code screen, the key socket.
 type remoteBoot struct {
@@ -76,7 +76,7 @@ func startRemoteBoot(t *testing.T) *remoteBoot {
 	if out, err := format.CombinedOutput(); err != nil {
 		t.Fatalf("luksFormat: %v: %s", err, out)
 	}
-	if out, err := exec.Command("./tpm2-kira", "luks", "mark", "--keyslot", "0", "--mode", "password+salt", img).CombinedOutput(); err != nil || !bytes.Contains(out, []byte("marked")) {
+	if out, err := exec.Command("./tpm2-kira", "luks", "mark", "--keyslot", "0", "--salt", "typed", img).CombinedOutput(); err != nil || !bytes.Contains(out, []byte("marked")) {
 		t.Fatalf("luks mark: %v: %s", err, out)
 	}
 	volume := "cryptroot"

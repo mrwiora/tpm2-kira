@@ -87,7 +87,7 @@ type PhoneAttestation struct {
 func (p *PhoneAttestation) Enabled() bool { return len(p.NoisePrivate) != 0 }
 
 // VaultAttestation is the method "tpm2-kira-vault": where the vault is,
-// the pin of its key, and the local part L of a tpm+vault keyslot's key,
+// the pin of its key, and the local part L of a vault keyslot's key,
 // wrapped for this TPM's EK and the slot's release key (internal/vaultkey/vault.go). The
 // zero value is "not set up".
 type VaultAttestation struct {

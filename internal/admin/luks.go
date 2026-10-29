@@ -23,8 +23,8 @@ import (
 )
 
 // tpm2-kira's keyslots in a LUKS2 header (PLAN-LUKS.md §2): a token of
-// type "tpm2-kira" bound to the keyslot says how the key in it is made at
-// the prompt. No key material is in it; cryptsetup needs no handler for
+// type "tpm2-kira-XXXX" bound to the keyslot names the recipe its key is
+// made by (diskkey.Recipe, XXXX its number). No key material is in it; cryptsetup needs no handler for
 // it, since the key comes through the socket or the keyscript, not
 // through the token. Read with luksDump --dump-json-metadata, written
 // with token import.
@@ -230,25 +230,28 @@ func describeKeyslot(s KeyslotStatus) string {
 	}
 	t := s.Token
 	if t.Obsolete {
-		return fmt.Sprintf("tpm2-kira, an old token (type %s): remove it and mark the keyslot anew - cryptsetup token remove --token-id %d <device>, then tpm2-kira luks mark", diskkey.LuksTokenTypeOld, s.TokenID)
+		return fmt.Sprintf("tpm2-kira, another version's token (type %s): enrol the keyslot again - tpm2-kira luks remove, then tpm2-kira luks enrol", t.Type)
 	}
-	switch t.Mode {
-	case diskkey.LuksModePasswordSalt:
-		return fmt.Sprintf("tpm2-kira, password+salt: a typed password and a typed salt, bound to no slot (token %d, %s)", s.TokenID, t.Created)
-	case diskkey.LuksModePasswordPhoneSalt:
-		slot := "?"
-		if t.Slot != nil {
-			slot = strconv.Itoa(*t.Slot)
-		}
-		return fmt.Sprintf("tpm2-kira, password+phonesalt: a typed password and the verifier's salt, bound to slot %s, label %q (token %d, %s)", slot, t.Label, s.TokenID, t.Created)
-	case diskkey.LuksModeTPMVault:
-		slot := "?"
-		if t.Slot != nil {
-			slot = strconv.Itoa(*t.Slot)
-		}
-		return fmt.Sprintf("tpm2-kira, tpm+vault: the TPM's local part and the vault's remote part, nothing typed, bound to slot %s, label %q (token %d, %s)", slot, t.Label, s.TokenID, t.Created)
+	d := "tpm2-kira, " + t.Recipe.Describe()
+	if t.Slot != nil {
+		d += fmt.Sprintf(", bound to slot %d, label %q", *t.Slot, t.Label)
+	} else {
+		d += ", bound to no slot"
 	}
-	return fmt.Sprintf("tpm2-kira, mode %q (token %d)", t.Mode, s.TokenID)
+	return d + fmt.Sprintf(" (token %d, %s)", s.TokenID, t.Created)
+}
+
+// enrollable says whether this build enrols recipe r: the recovery
+// recipe, the phone's salt and the unattended vault recipes.
+func enrollable(r diskkey.Recipe) error {
+	if err := r.Check(); err != nil {
+		return err
+	}
+	switch r {
+	case diskkey.RecipeRecovery, diskkey.RecipePhoneSalt, diskkey.RecipeUnattendedVault, diskkey.RecipeUnattendedVaultPepper:
+		return nil
+	}
+	return fmt.Errorf("recipe %s (%s) is not enrolled by this build yet", r, r.Words())
 }
 
 // LuksMarkOptions is what luks mark takes.
@@ -256,16 +259,16 @@ type LuksMarkOptions struct {
 	TPMPath   string
 	Device    string
 	Keyslot   int
-	Mode      string
-	SealIndex uint32 // the slot the keyslot is bound to (password+phonesalt: the slot whose phone salt it is)
+	Recipe    diskkey.Recipe
+	SealIndex uint32 // the slot a bound recipe's keyslot is bound to
 	Label     string
 	Debug     bool
 }
 
-// errNoPhoneSalt: password+phonesalt is only ever available with an
+// errNoPhoneSalt: the phone's salt is only ever available with an
 // attestation set up: a verifier enrolled for the slot, and the slot's
 // phone salt enrolled with it.
-var errNoPhoneSalt = errors.New("password+phonesalt needs an attestation: a phone enrolled for the slot ('tpm2-kira phone enrol') and the phone salt enrolled with it ('tpm2-kira phonesalt enrol')")
+var errNoPhoneSalt = errors.New("the phone's salt needs an attestation: a phone enrolled for the slot ('tpm2-kira phone enrol') and the phone salt enrolled with it ('tpm2-kira phonesalt enrol')")
 
 // boundSlotIndex resolves the slot a keyslot is bound to - a slot number or
 // a blob index - to the blob index, refusing anything outside the sixteen
@@ -306,29 +309,28 @@ func checkVaultReady(tpmPath string, sealIndex uint32) (string, error) {
 	defer tpmDev.Close()
 	_, sb, err := phonegate.ReadSlot(tpmDev, sealIndex)
 	if err != nil || sb.Payload.Attestation == nil || !sb.Payload.Attestation.Vault.Enabled() {
-		return "", fmt.Errorf("slot %d is not enrolled with a vault: tpm2-kira vault enrol first, or luks enrol --mode %s", nvslot.AttestSlot(sealIndex), diskkey.LuksModeTPMVault)
+		return "", fmt.Errorf("slot %d is not enrolled with a vault: tpm2-kira vault enrol first, or luks enrol %s", nvslot.AttestSlot(sealIndex), diskkey.RecipeUnattendedVault.Words())
 	}
 	return sb.Payload.Attestation.Vault.Label, nil
 }
 
-// LuksMark writes the token for an existing keyslot. A password+phonesalt
-// or tpm+vault keyslot is bound to the slot whose release it needs
-// (--nvram, slot 0 unless named), which must be able to give one
-// (checkRemoteSaltReady, checkVaultReady); a password+salt keyslot is
-// bound to nothing.
+// LuksMark writes the token for an existing keyslot. A bound recipe's
+// keyslot is bound to the slot whose release it needs (--nvram, slot 0
+// unless named), which must be able to give one (checkRemoteSaltReady,
+// checkVaultReady); the recovery recipe's is bound to nothing.
 func LuksMark(o LuksMarkOptions) error {
-	device, keyslot, mode, label := o.Device, o.Keyslot, o.Mode, o.Label
-	if !diskkey.KnownMode(mode) {
-		return diskkey.ErrMode
+	device, keyslot, recipe, label := o.Device, o.Keyslot, o.Recipe, o.Label
+	if err := enrollable(recipe); err != nil {
+		return err
 	}
 	slot := 0
-	if diskkey.BoundMode(mode) {
+	if recipe.Bound() {
 		idx, err := boundSlotIndex(o.SealIndex)
 		if err != nil {
 			return err
 		}
 		slot = nvslot.SlotNumber(idx)
-		if mode == diskkey.LuksModeTPMVault {
+		if recipe.Unattended() {
 			// The label is the vault method's: the key was derived with it.
 			if label, err = checkVaultReady(o.TPMPath, idx); err != nil {
 				return err
@@ -351,19 +353,15 @@ func LuksMark(o LuksMarkOptions) error {
 		return fmt.Errorf("%s has no keyslot %d", device, keyslot)
 	}
 	if have.Token != nil && have.Token.Obsolete {
-		return fmt.Errorf("keyslot %d carries the old token type %s: cryptsetup token remove --token-id %d %s, then mark it anew", keyslot, diskkey.LuksTokenTypeOld, have.TokenID, device)
+		return fmt.Errorf("keyslot %d carries another version's token (type %s): cryptsetup token remove --token-id %d %s, then mark it anew", keyslot, have.Token.Type, have.TokenID, device)
 	}
 	if have.Token != nil {
-		return fmt.Errorf("keyslot %d is marked already (token %d, %s); remove it first: tpm2-kira luks remove", keyslot, have.TokenID, have.Token.Mode)
+		return fmt.Errorf("keyslot %d is marked already (token %d, %s); remove it first: tpm2-kira luks remove", keyslot, have.TokenID, have.Token.Recipe)
 	}
-	tok := diskkey.LuksToken{Type: diskkey.TokenTypeOf(mode), Keyslots: []string{strconv.Itoa(keyslot)}, Mode: mode, Created: time.Now().UTC().Format(time.RFC3339)}
-	if diskkey.BoundMode(mode) {
-		tok.Slot = &slot
-		if label == "" {
-			label = "luks"
-		}
-		tok.Label = label
+	if recipe.Bound() && label == "" {
+		label = "luks"
 	}
+	tok := diskkey.NewLuksToken(recipe, strconv.Itoa(keyslot), slot, label, time.Now().UTC().Format(time.RFC3339))
 	b, err := json.Marshal(tok)
 	if err != nil {
 		return err
@@ -378,12 +376,12 @@ func LuksMark(o LuksMarkOptions) error {
 // LuksEnrolOptions is what luks enrol takes.
 type LuksEnrolOptions struct {
 	Device string
-	Mode   string
+	Recipe diskkey.Recipe
 	// ExistingKeyFile authorises luksAddKey instead of cryptsetup's prompt
 	// for an existing passphrase (scripts and tests).
 	ExistingKeyFile string
-	Remote          FactorEnrolOptions // password+phonesalt: the slot, the phone, the keys
-	Vault           VaultEnrolOptions  // tpm+vault: the slot, the vault, the keys
+	Remote          FactorEnrolOptions // the phone's salt: the slot, the phone, the keys
+	Vault           VaultEnrolOptions  // the vault's salt: the slot, the vault, the keys
 }
 
 // terminalAsk asks on the terminal; tests replace it.
@@ -406,8 +404,8 @@ var terminalAskExisting = func(prompt string) ([]byte, error) {
 // recovery keyslot the device must have, its passphrase empty or not - the
 // token for the new keyslot. The key is never on disk.
 func LuksEnrol(o LuksEnrolOptions) error {
-	if !diskkey.KnownMode(o.Mode) {
-		return diskkey.ErrMode
+	if err := enrollable(o.Recipe); err != nil {
+		return err
 	}
 	before := readLuksStatus(o.Device)
 	if before.Error != "" {
@@ -426,8 +424,8 @@ func LuksEnrol(o LuksEnrolOptions) error {
 	var key []byte
 	slot := 0
 	label := ""
-	switch o.Mode {
-	case diskkey.LuksModePasswordSalt:
+	switch o.Recipe {
+	case diskkey.RecipeRecovery:
 		pw, err := terminalAsk("Password: ")
 		if err != nil {
 			return err
@@ -450,7 +448,7 @@ func LuksEnrol(o LuksEnrolOptions) error {
 		if key, err = diskkey.Combine(pw, salt); err != nil {
 			return err
 		}
-	case diskkey.LuksModePasswordPhoneSalt:
+	case diskkey.RecipePhoneSalt:
 		idx, err := boundSlotIndex(o.Remote.SealIndex)
 		if err != nil {
 			return err
@@ -467,7 +465,8 @@ func LuksEnrol(o LuksEnrolOptions) error {
 		if label == "" {
 			label = "luks"
 		}
-	case diskkey.LuksModeTPMVault:
+	case diskkey.RecipeUnattendedVault, diskkey.RecipeUnattendedVaultPepper:
+		o.Vault.Pepper = o.Recipe.Pepper()
 		k, s, err := vaultEnrolKey(o.Vault)
 		if err != nil {
 			return err
@@ -505,16 +504,13 @@ func LuksEnrol(o LuksEnrolOptions) error {
 	if newSlot < 0 {
 		return errors.New("cryptsetup added no keyslot")
 	}
-	tok := diskkey.LuksToken{Type: diskkey.TokenTypeOf(o.Mode), Keyslots: []string{strconv.Itoa(newSlot)}, Mode: o.Mode, Created: time.Now().UTC().Format(time.RFC3339)}
-	if diskkey.BoundMode(o.Mode) {
-		tok.Slot, tok.Label = &slot, label
-	}
+	tok := diskkey.NewLuksToken(o.Recipe, strconv.Itoa(newSlot), slot, label, time.Now().UTC().Format(time.RFC3339))
 	b, err := json.Marshal(tok)
 	if err != nil {
 		return err
 	}
 	if _, err := cryptsetup(b, "token", "import", "--json-file", "-", o.Device); err != nil {
-		return fmt.Errorf("the keyslot %d is added, but its token is not: %w (tpm2-kira luks mark %s --keyslot %d --mode %s)", newSlot, err, o.Device, newSlot, o.Mode)
+		return fmt.Errorf("the keyslot %d is added, but its token is not: %w (tpm2-kira luks mark %s --keyslot %d %s)", newSlot, err, o.Device, newSlot, o.Recipe.Words())
 	}
 	fmt.Printf("%s keyslot %d added: %s\n", o.Device, newSlot, describeKeyslot(KeyslotStatus{Keyslot: newSlot, Token: &tok}))
 	// Nothing is configured: at boot the key provider reads the token just
@@ -522,12 +518,12 @@ func LuksEnrol(o LuksEnrolOptions) error {
 	if advice := RouteAdvice(o.Device); advice != "" {
 		fmt.Print(advice)
 	}
-	if o.Mode == diskkey.LuksModeTPMVault && o.Vault.Pepper {
+	if o.Recipe == diskkey.RecipeUnattendedVaultPepper {
 		fmt.Println("Every boot waits until an operator approves it on the vault with the pepper;")
 		fmt.Println("without that, the recovery passphrase stays the way in at cryptsetup's own prompt.")
 		return nil
 	}
-	if o.Mode == diskkey.LuksModeTPMVault {
+	if o.Recipe.Unattended() {
 		fmt.Println("The next boot opens it unattended, with the vault's remote part; without it, the")
 		fmt.Println("recovery passphrase stays the way in at cryptsetup's own prompt.")
 		return nil

@@ -460,7 +460,7 @@ func StartCoordinator(tpmPath, signerPath string, debug bool) (*phonegate.GateSe
 // and with the disk's key provider stays until it is stopped.
 func Run(tpmPath string, nvramIndex uint32, hold time.Duration, unlockSocket string, remote sshscreen.Options, planned imageplan.Planned, debug bool) {
 	bd := &board{tpmPath: tpmPath, debug: debug, hold: hold, confirm: make(chan string), ask: diskkey.Prompter(diskkey.ConsoleAsk),
-		prompting: func() bool { return false }, promptMode: func() []string { return nil }}
+		prompting: func() bool { return false }, promptMode: func() []diskkey.Recipe { return nil }}
 	if planned.TPM && !tpmdev.AwaitNode(tpmPath, imageplan.TPMWait) {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: %s did not appear within %s; no code this boot\n", tpmPath, imageplan.TPMWait)
 	}
@@ -481,7 +481,7 @@ func Run(tpmPath string, nvramIndex uint32, hold time.Duration, unlockSocket str
 	confirmedBy := ""
 	b := &bootDisplay{
 		Phone:      bd.phone,
-		PhoneEvent: gateEventPrinter(func() []string { return bd.promptMode() }),
+		PhoneEvent: gateEventPrinter(func() []diskkey.Recipe { return bd.promptMode() }),
 		PhonePoll:  500 * time.Millisecond,
 		PhoneGrace: time.Minute,
 		Scan: func(now time.Time) ([]totp.NVRAMSlot, error) {
@@ -714,23 +714,23 @@ func waitPromptTurn() {
 }
 
 // nextPrompt names what follows the code screen, in the words of the
-// routed volume's recipe, its modes in the order they are tried: "the
-// password prompt" when tpm2-kira asks (the password is what the person
-// types; the salt is typed too, or comes from the phone), "cryptsetup's
-// prompt" when nothing of tpm2-kira's answers; a vault's key comes first
-// when the volume has one, and what follows it is asked only without it.
-func nextPrompt(modes []string) string {
-	if len(modes) == 0 {
+// routed volume's recipes in the order they are tried: "the password
+// prompt" when tpm2-kira asks (the password is what the person types; the
+// salt is typed too, or comes from the phone), "cryptsetup's prompt" when
+// nothing of tpm2-kira's answers; an unattended recipe comes first when
+// the volume has one, and what follows it is asked only without its key.
+func nextPrompt(recipes []diskkey.Recipe) string {
+	if len(recipes) == 0 {
 		return "cryptsetup's prompt"
 	}
-	switch modes[0] {
-	case diskkey.LuksModePasswordSalt:
+	switch r := recipes[0]; {
+	case r == diskkey.RecipeRecovery:
 		return "the password and salt prompt"
-	case diskkey.LuksModePasswordPhoneSalt:
+	case r == diskkey.RecipePhoneSalt:
 		return "the password prompt"
-	case diskkey.LuksModeTPMVault:
-		if len(modes) > 1 {
-			return nextPrompt(modes[1:]) + " if the vault gives no key"
+	case r.Unattended():
+		if len(recipes) > 1 {
+			return nextPrompt(recipes[1:]) + " if the vault gives no key"
 		}
 		return "cryptsetup's prompt without the vault"
 	}
@@ -741,10 +741,10 @@ func nextPrompt(modes []string) string {
 // of state means for them, in the routed volume's words (resolved lazily:
 // the header may not be readable when the screen starts). The verdict
 // itself is the gate's to print.
-func gateEventPrinter(modeOf func() []string) func(prev, cur phonegate.GateStatus) {
+func gateEventPrinter(modeOf func() []diskkey.Recipe) func(prev, cur phonegate.GateStatus) {
 	return func(prev, cur phonegate.GateStatus) {
 		mode := modeOf()
-		phoneSalt := slices.Contains(mode, diskkey.LuksModePasswordPhoneSalt)
+		phoneSalt := slices.Contains(mode, diskkey.RecipePhoneSalt)
 		switch cur.State {
 		case phonegate.GateWaiting:
 			if prev.State == "" {

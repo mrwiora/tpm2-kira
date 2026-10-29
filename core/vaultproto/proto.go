@@ -2,7 +2,7 @@
 // (docs/VAULT.md): the messages of the vault's REST interface, and the
 // check the vault makes before it releases a machine's remote part.
 //
-// The disk's key of a keyslot in mode tpm+vault is made of two parts. The
+// The disk's key of a keyslot with the vault's salt is made of two parts. The
 // local part L stays in the machine's TPM (in the slot's blob, wrapped for
 // the TPM's endorsement key and the slot's release key). The remote part R
 // is kept by the vault, wrapped the same way: a credential only this

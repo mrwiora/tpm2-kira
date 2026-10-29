@@ -55,16 +55,17 @@ func TestOfferGivesUpWhenReleased(t *testing.T) {
 // keyslot is asked only when the vault gives no key.
 func TestNextPromptNamesTheVaultsFallback(t *testing.T) {
 	for _, c := range []struct {
-		modes []string
-		want  string
+		recipes []diskkey.Recipe
+		want    string
 	}{
 		{nil, "cryptsetup's prompt"},
-		{[]string{diskkey.LuksModePasswordSalt}, "the password and salt prompt"},
-		{[]string{diskkey.LuksModeTPMVault}, "cryptsetup's prompt without the vault"},
-		{[]string{diskkey.LuksModeTPMVault, diskkey.LuksModePasswordSalt}, "the password and salt prompt if the vault gives no key"},
+		{[]diskkey.Recipe{diskkey.RecipeRecovery}, "the password and salt prompt"},
+		{[]diskkey.Recipe{diskkey.RecipeUnattendedVault}, "cryptsetup's prompt without the vault"},
+		{[]diskkey.Recipe{diskkey.RecipeUnattendedVault, diskkey.RecipeRecovery}, "the password and salt prompt if the vault gives no key"},
+		{[]diskkey.Recipe{diskkey.RecipePhoneSalt}, "the password prompt"},
 	} {
-		if got := nextPrompt(c.modes); got != c.want {
-			t.Errorf("%q: %q, want %q", c.modes, got, c.want)
+		if got := nextPrompt(c.recipes); got != c.want {
+			t.Errorf("%v: %q, want %q", c.recipes, got, c.want)
 		}
 	}
 }

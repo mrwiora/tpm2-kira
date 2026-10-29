@@ -22,7 +22,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 )
 
-// VaultEnrolOptions is what 'vault enrol' and 'luks enrol --mode tpm+vault'
+// VaultEnrolOptions is what 'vault enrol' and 'luks enrol --password tpm --salt vault'
 // take.
 type VaultEnrolOptions struct {
 	TPMPath     string
@@ -40,7 +40,7 @@ type VaultEnrolOptions struct {
 }
 
 // VaultEnrol enrols the slot with the vault and writes the key to o.Out
-// (tmpfs) for 'cryptsetup luksAddKey'; 'luks enrol --mode tpm+vault' does
+// (tmpfs) for 'cryptsetup luksAddKey'; 'luks enrol --password tpm --salt vault' does
 // the keyslot as well.
 func VaultEnrol(o VaultEnrolOptions) error {
 	if o.Out == "" {
@@ -50,7 +50,7 @@ func VaultEnrol(o VaultEnrolOptions) error {
 		return err
 	}
 	if !o.Yes && !confirmRecoveryKeyslot() {
-		return errors.New("a tpm+vault keyslot must never be the disk's only one: add a recovery passphrase first")
+		return errors.New("a keyslot with the vault's salt must never be the disk's only one: add a recovery passphrase first")
 	}
 	key, slot, err := vaultEnrolKey(o)
 	if err != nil {
@@ -63,9 +63,13 @@ func VaultEnrol(o VaultEnrolOptions) error {
 	fmt.Printf("\nKey written to %s\n\n", o.Out)
 	fmt.Println("Next steps:")
 	fmt.Printf("    cryptsetup luksAddKey <device> %s\n", o.Out)
-	fmt.Printf("    tpm2-kira luks mark <device> --keyslot <the new keyslot> --mode %s --nvram %d\n", diskkey.LuksModeTPMVault, slot)
+	recipe := diskkey.RecipeUnattendedVault
+	if o.Pepper {
+		recipe = diskkey.RecipeUnattendedVaultPepper
+	}
+	fmt.Printf("    tpm2-kira luks mark <device> --keyslot <the new keyslot> %s --nvram %d\n", recipe.Words(), slot)
 	fmt.Printf("    rm %s\n", o.Out)
-	fmt.Println("('tpm2-kira luks enrol <device> --mode tpm+vault ...' does all of it at once.)")
+	fmt.Printf("('tpm2-kira luks enrol <device> %s ...' does all of it at once.)\n", recipe.Words())
 	return nil
 }
 
@@ -316,7 +320,7 @@ func VaultStatus(tpmPath string, sealIndex uint32, debug bool) error {
 }
 
 // VaultUnenrol takes the vault method out of the slot's blob: the local
-// part is gone with it, so a tpm+vault keyslot of this slot no longer
+// part is gone with it, so a vault keyslot of this slot no longer
 // opens. The vault keeps its record until the operator revokes it.
 func VaultUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug bool) error {
 	idx, err := nvslot.AttestIndexForSlot(sealIndex)
@@ -356,7 +360,7 @@ func VaultUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug bo
 		return err
 	}
 	fmt.Printf("Slot %d is no longer enrolled with the vault at %s; its local part is gone.\n", slot, url)
-	fmt.Println("Its tpm+vault keyslot opens no more: remove it with 'tpm2-kira luks remove'.")
+	fmt.Println("Its vault keyslot opens no more: remove it with 'tpm2-kira luks remove'.")
 	fmt.Printf("On the vault: tpm2-kira-vault device revoke %x\n", id)
 	return nil
 }

@@ -281,32 +281,32 @@ func openConsole() (io.ReadWriteCloser, int, error) {
 var ErrUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own prompt follows")
 
 // DiskKey is the key provider's answer, as the volume's own LUKS2 header
-// says (unlockRecipe reads its tpm2-kira tokens the moment it asks):
+// says (unlockRecipe reads its tpm2-kira tokens the moment it asks), its
+// recipes tried in their order (Recipes):
 //
-//	no token             no answer: cryptsetup's own prompt, tpm2-kira untouched
-//	password+salt        a typed password and a typed salt, combined (Argon2id, combine.go)
-//	password+phonesalt  a typed password and the salt the verifier released in this boot
-//	                     and the TPM opened (internal/phonegate/factor.go); without one, a typed salt
-//	                     (the password+salt variant), then cryptsetup's own prompt
-//	tpm+vault            nothing typed: the key run made in this boot from the TPM's
-//	                     local part and the vault's remote part (internal/vaultkey/vault.go); without
-//	                     one, the volume's typed recipe when it has one (its phone salt's,
-//	                     else its password+salt keyslot's), else cryptsetup's own prompt
+//	no token                  no answer: cryptsetup's own prompt, tpm2-kira untouched
+//	0x2400, 0x2401 unattended nothing typed: the key run made in this boot from the TPM's
+//	                          part and the vault's (internal/vaultkey/vault.go); without one,
+//	                          the volume's next recipe
+//	0x1302 salt from the phone a typed password and the salt the verifier released in this
+//	                          boot and the TPM opened (internal/phonegate/factor.go); without
+//	                          one, a typed salt - the recovery recipe
+//	0x1100 recovery           a typed password and a typed salt, combined (Argon2id, combine.go)
 //
-// A volume with several keyslots of tpm2-kira's tries them in that order:
-// the vault, the phone's salt, the typed salt.
+// and after them, at Ctrl-C or with a key that opens nothing, cryptsetup's
+// own prompt, where a plain passphrase works.
 //
-// salt returns the released salt or nil; vault the volume's tpm+vault key
+// salt returns the released salt or nil; vault the volume's unattended key
 // or why there is none. The key is for the caller to wipe.
 //
 // ask is where the person is asked: consoleAsk, or the SSH session that
 // confirmed the code screen (remoteServer.ask).
-func DiskKey(salt func() []byte, vault func(volume string) ([]byte, error), recipe func(volume string) (modes []string, why string), ask Prompter) func(volume string) ([]byte, error) {
+func DiskKey(salt func() []byte, vault func(volume string) ([]byte, error), recipe func(volume string) (recipes []Recipe, why string), ask Prompter) func(volume string) ([]byte, error) {
 	return func(volume string) ([]byte, error) {
-		modes, why := recipe(volume)
+		recipes, why := recipe(volume)
 		var vaultErr error
-		for _, mode := range modes {
-			if mode == LuksModeTPMVault {
+		for _, r := range recipes {
+			if r.Unattended() {
 				if vault == nil {
 					vaultErr = errors.New("no vault in this boot")
 					continue
@@ -320,7 +320,7 @@ func DiskKey(salt func() []byte, vault func(volume string) ([]byte, error), reci
 			}
 			// A typed recipe: the first the volume has, after a vault that
 			// gave no key.
-			return typedKey(volume, mode, vaultErr, salt, ask)
+			return typedKey(volume, r, vaultErr, salt, ask)
 		}
 		if vaultErr != nil {
 			return nil, fmt.Errorf("%w (%v)", ErrUnlockSkipped, vaultErr)
@@ -335,21 +335,21 @@ func DiskKey(salt func() []byte, vault func(volume string) ([]byte, error), reci
 // typedKey makes the key of a typed recipe: the password asked, and the
 // salt asked or the phone's. A vault that gave no key before it is said
 // in the note.
-func typedKey(volume, mode string, vaultErr error, salt func() []byte, ask Prompter) ([]byte, error) {
+func typedKey(volume string, r Recipe, vaultErr error, salt func() []byte, ask Prompter) ([]byte, error) {
 	var s []byte
 	var note string
-	switch mode {
-	case LuksModePasswordSalt:
+	switch r {
+	case RecipeRecovery:
 		note = "the key is derived from your password and your salt, both typed here (Argon2id, some seconds).\n" +
 			"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
-	case LuksModePasswordPhoneSalt:
+	case RecipePhoneSalt:
 		if s = salt(); s == nil {
-			// No phone, or no salt from it: the password+salt variant,
-			// which opens a keyslot enrolled that way; Ctrl-C, or a key
-			// that opens nothing, then leads to cryptsetup's own prompt
-			// and the recovery passphrase.
+			// No phone, or no salt from it: the recovery recipe, which
+			// opens a keyslot enrolled that way; Ctrl-C, or a key that
+			// opens nothing, then leads to cryptsetup's own prompt and
+			// the recovery passphrase.
 			note = "no salt came from the phone: the key is derived from your password and a salt you type,\n" +
-				"as for a keyslot enrolled with password+salt (Argon2id, some seconds).\n" +
+				"as for a keyslot of the recovery recipe (Argon2id, some seconds).\n" +
 				"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
 			break
 		}
@@ -384,7 +384,7 @@ type Prompter func(volume, what, note string) ([]byte, error)
 // The prompt, as the person sees it: a note under the code screen's own
 // tag saying what the key is made of and where Ctrl-C leads, then the
 // question in bold, as systemd's own prompt is - "Password" is what the
-// person types, "Salt" the second part they type in mode password+salt;
+// person types, "Salt" the second part they type in the recovery recipe;
 // the phone's salt is never asked for.
 //
 //	[ KIRA ] Disk cryptroot: the key is derived from your password and the salt your phone returned.

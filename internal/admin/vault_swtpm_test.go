@@ -150,7 +150,7 @@ func signingKeyFiles(t *testing.T) (privPath, pubPath string) {
 	return privPath, pubPath
 }
 
-// The whole tpm+vault path on swtpm: enrolment with a vault (the AK
+// The whole unattended vault recipe (0x2400) path on swtpm: enrolment with a vault (the AK
 // proven, the slot's approval pinned), then the boot's release - the
 // local part from the blob, the remote part from the vault after it
 // verified the quote against the approval - to the same key as at

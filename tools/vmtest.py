@@ -30,7 +30,8 @@ What it does, each step a check in the report:
      the secret slot add shows (the person's authenticator)
   3. the commands that read: status, slot info/list/status, phone ekcert,
      luks status, initramfs plan, help
-  4. luks enrol --mode password+salt (a password, a salt, the passphrase)
+  4. luks enrol --salt typed, the recovery recipe 0x1100 (a password, a
+     salt, the passphrase)
   5. control, as a person would answer it (ACCESSIBLE=1, line by line):
      the boot chain's adoptions, the boot image's network (DHCP), the SSH
      server at boot with its SSH CA, debug at boot, the image rebuilt; the
@@ -42,10 +43,10 @@ What it does, each step a check in the report:
      after each boot: the cap ran, the key was answered, no tpm2-kira error
   8. remote attestation over TLS, the vault: tpm2-kira-vault runs here, in
      a container with a software TPM of its own (tools/vmtest-vault/),
-     published on the [vault] port; luks enrol --mode tpm+vault with a
+     published on the [vault] port; luks enrol --password tpm --salt vault with a
      token it made; the image rebuilt with the vault; a boot that nobody
      touches, unlocked by the vault's release to the TPM's quote; a boot
-     with the device revoked on the vault, where the password+salt keyslot
+     with the device revoked on the vault, where the recovery recipe's keyslot
      is the fallback, typed over SSH; the keyslot enrolled again with
      --pepper, and a boot that waits for an operator: approved first with a
      wrong pepper (refused by the machine's pepper check, a new approval
@@ -89,7 +90,7 @@ _spec.loader.exec_module(acceptance)
 ANSI = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\r")
 
 # The answers the test gives where a person would type: the disk's
-# password+salt keyslot it enrols, and the boot SSH server's settings.
+# recovery recipe's keyslot it enrols, and the boot SSH server's settings.
 TEST_PASSWORD = "kira-vmtest-pw"
 TEST_SALT = "kira-vmtest-salt"
 SSH_PORT = 2222
@@ -444,8 +445,8 @@ class Machine:
             self.check(f"'{name}' answers", re.search(want, out) is not None, out[-400:])
 
     def enrol(self):
-        self.log.head(f"luks enrol {self.luks_dev} --mode password+salt")
-        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --mode password+salt", "luks-enrol")
+        self.log.head(f"luks enrol {self.luks_dev} --salt typed")
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt typed", "luks-enrol")
         try:
             s.expect(r"^Password: ?$", 60); s.send(TEST_PASSWORD + "\n")
             s.expect(r"The same password again: ?$"); s.send(TEST_PASSWORD + "\n")
@@ -453,11 +454,11 @@ class Machine:
             t0 = time.time()
             s.expect(r"to authorise: ?$", 900); s.send(self.luks_pass + "\n")
             self.log.say(f"Argon2id took {time.time() - t0:.0f} s here")
-            text, _ = s.expect(r"keyslot (\d+) added: tpm2-kira, password\+salt", 300)
+            text, _ = s.expect(r"keyslot (\d+) added: tpm2-kira, 0x1100 ", 300)
             out = s.wait_end(120)
-            self.check("luks enrol adds a password+salt keyslot", True)
+            self.check("luks enrol adds a keyslot of the recovery recipe (0x1100)", True)
         except Fail as e:
-            self.check("luks enrol adds a password+salt keyslot", False, str(e))
+            self.check("luks enrol adds a keyslot of the recovery recipe (0x1100)", False, str(e))
             raise
         finally:
             s.close()
@@ -617,15 +618,15 @@ class Machine:
         if not self.check("the vault makes an enrolment token", m is not None, out[-400:]):
             raise Fail("no token")
         url, pin, token = m.groups()
-        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --mode tpm+vault --url {url} --pin {pin} --token {token} --name {self.name}", "luks-enrol-vault")
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --password tpm --salt vault --url {url} --pin {pin} --token {token} --name {self.name}", "luks-enrol-vault")
         try:
             s.expect(r"to authorise: ?$", 300); s.send(self.luks_pass + "\n")
-            _, m = s.expect(r"keyslot (\d+) added: tpm2-kira, tpm\+vault", 300)
+            _, m = s.expect(r"keyslot (\d+) added: tpm2-kira, 0x240[01] ", 300)
             self.vault_keyslot = m.group(1)
             s.wait_end(120)
-            self.check("luks enrol --mode tpm+vault: the vault knows the device, a keyslot is added", True)
+            self.check("luks enrol 0x2400: the vault knows the device, a keyslot is added", True)
         except Fail as e:
-            self.check("luks enrol --mode tpm+vault", False, str(e))
+            self.check("luks enrol 0x2400", False, str(e))
             raise
         finally:
             s.close()
@@ -706,17 +707,17 @@ class Machine:
         if not self.check("the vault makes a token that replaces the device", m is not None, out[-400:]):
             raise Fail("no token")
         url, pin, token = m.groups()
-        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --mode tpm+vault --pepper --url {url} --pin {pin} --token {token} --name {self.name}", "luks-enrol-vault-pepper")
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --password tpm --salt vault --pepper --url {url} --pin {pin} --token {token} --name {self.name}", "luks-enrol-vault-pepper")
         try:
             s.expect(r"Pepper \(the operator gives it with every approval on the vault\): ?$", 300); s.send(self.PEPPER + "\n")
             s.expect(r"The same pepper again: ?$", 60); s.send(self.PEPPER + "\n")
             s.expect(r"to authorise: ?$", 300); s.send(self.luks_pass + "\n")
-            _, m = s.expect(r"keyslot (\d+) added: tpm2-kira, tpm\+vault", 300)
+            _, m = s.expect(r"keyslot (\d+) added: tpm2-kira, 0x240[01] ", 300)
             self.vault_keyslot = m.group(1)
             text = s.wait_end(120)
             self.check("luks enrol --pepper: a keyslot that waits for an operator", "approves it on the vault with the pepper" in text, text[-400:])
         except Fail as e:
-            self.check("luks enrol --mode tpm+vault --pepper", False, str(e))
+            self.check("luks enrol 0x2401 (pepper)", False, str(e))
             raise
         finally:
             s.close()

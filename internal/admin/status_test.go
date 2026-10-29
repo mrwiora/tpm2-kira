@@ -21,7 +21,7 @@ func TestStatusNotes(t *testing.T) {
 		return d
 	}
 	ok := StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e,11u", true), slot(1, "0e,7e", false)},
-		Devices: []LuksDeviceStatus{dev(nil, &diskkey.LuksToken{Mode: diskkey.LuksModePasswordPhoneSalt, Slot: &zero})}}
+		Devices: []LuksDeviceStatus{dev(nil, &diskkey.LuksToken{Recipe: diskkey.RecipePhoneSalt, Slot: &zero})}}
 	if n := statusNotes(ok); len(n) != 0 {
 		t.Errorf("a consistent machine has notes: %v", n)
 	}
@@ -36,11 +36,11 @@ func TestStatusNotes(t *testing.T) {
 		{"reseal due", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,7e", Fallback: true, GenState: "4 — does NOT match the blob", Signed: true}}}, "until it is approved"},
 		{"not signed", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,7e", Fallback: true, GenState: "3 (matches)", SignReason: "no key"}}}, "not signed by this machine"},
 		{"salt without a keyslot", StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e,11u", true), slot(1, "0e,7e", false)},
-			Devices: []LuksDeviceStatus{dev(nil)}}, "no LUKS keyslot is marked password+phonesalt"},
+			Devices: []LuksDeviceStatus{dev(nil)}}, "no LUKS keyslot is marked with the phone's salt"},
 		{"keyslot bound to a gone slot", StatusReport{Slots: []StatusSlot{slot(0, "0e,7e", false)},
-			Devices: []LuksDeviceStatus{dev(nil, &diskkey.LuksToken{Mode: diskkey.LuksModePasswordPhoneSalt, Slot: &two})}}, "bound to slot 2, which is gone"},
+			Devices: []LuksDeviceStatus{dev(nil, &diskkey.LuksToken{Recipe: diskkey.RecipePhoneSalt, Slot: &two})}}, "bound to slot 2, which is gone"},
 		{"keyslot's slot lost its salt", StatusReport{Slots: []StatusSlot{slot(0, "0e,7e", false)},
-			Devices: []LuksDeviceStatus{dev(nil, &diskkey.LuksToken{Mode: diskkey.LuksModePasswordPhoneSalt, Slot: &zero})}}, "keyslot 1 needs the phone salt of slot 0"},
+			Devices: []LuksDeviceStatus{dev(nil, &diskkey.LuksToken{Recipe: diskkey.RecipePhoneSalt, Slot: &zero})}}, "keyslot 1 needs the phone salt of slot 0"},
 	}
 	for _, c := range cases {
 		notes := strings.Join(statusNotes(c.r), "\n")

@@ -64,10 +64,10 @@ WHERE THE CODE SCREEN IS
 
 THE DISK'S KEY (the recipe in each volume's LUKS header)
   luks         status, enrol, remove, mark, route, derive: tpm2-kira's LUKS
-               keyslots - password+salt, password+phonesalt, tpm+vault - and
-               where the initrd takes the key from
+               keyslots - each a recipe: where its password and its salt
+               come from - and where the initrd takes the key from
   vault        enrol, status, unenrol: the key from this TPM and
-               tpm2-kira-vault, unattended (mode tpm+vault)
+               tpm2-kira-vault, unattended (--password tpm --salt vault)
 
 THE BOOT IMAGE
   initramfs    plan: what the boot image carries - the disk unlock, and each
@@ -102,7 +102,7 @@ FIRST STEPS
   tpm2-kira control                                  guided, in two steps; or:
   tpm2-kira setup && tpm2-kira slot add             a code at every boot
   tpm2-kira phone enrol                              the phone verifies the boot
-  tpm2-kira luks enrol /dev/sda2 --mode password+phonesalt
+  tpm2-kira luks enrol /dev/sda2 --salt phone
                                                      the disk's key from your
                                                      password and the phone's salt
   then rebuild the initramfs: mkinitcpio -P (Arch), update-initramfs -u (Debian)
@@ -395,11 +395,12 @@ the phone's code in the slot's line as soon as the phone is in; with
 LUKS2 header says (the token of tpm2-kira's keyslot):
 
   no token                nothing; cryptsetup's own prompt
-  password+salt           asks a password and a salt; Argon2id
-  password+phonesalt     asks the password; the salt the phone released
-  tpm+vault               asks nothing: the TPM's local part and the vault's
-                          remote part, opened while the code screen holds; a
-                          key made ends the hold on its own
+  0x2400, 0x2401          asks nothing: the TPM's part and the vault's, opened
+                          while the code screen holds; a key made ends the
+                          hold on its own
+  0x1302                  asks the password; the salt the phone released
+  0x1100 recovery         asks a password and a salt; Argon2id
+  (a volume's recipes in this order, each the fallback of the ones before)
 
 Ctrl-C at the prompt skips to cryptsetup's own prompt, where the recovery
 passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
@@ -554,46 +555,59 @@ keyscript asks at askpass directly.
 	"vault": vaultUsage,
 
 	"luks": `tpm2-kira luks status [<device>…] [--json]
-tpm2-kira luks enrol  <device> --mode password+salt|password+phonesalt|tpm+vault [options]
+tpm2-kira luks enrol  <device> [--password typed|tpm] --salt typed|tpm|phone|vault [--pepper] [options]
 tpm2-kira luks remove <device> --keyslot N
 tpm2-kira luks route  [<device>…] [--cmdline FILE]… [--crypttab FILE] [--json]
-tpm2-kira luks mark   <device> --keyslot N --mode password+salt|password+phonesalt|tpm+vault [options]
+tpm2-kira luks mark   <device> --keyslot N [--password typed|tpm] --salt typed|tpm|phone|vault [--pepper] [options]
 tpm2-kira luks derive --out PATH
 
-tpm2-kira's LUKS keyslots. Every keyslot it adds is marked with a LUKS2
-token in the header (no secret), whose type carries the mode, so a plain
-luksDump tells them apart: tpm2-kira-salt is password+salt,
-tpm2-kira-phonesalt is password+phonesalt, tpm2-kira-vault is tpm+vault
-(docs/VAULT.md). status, removal and rotation
-know the keyslots by it, and the boot reads the key's recipe from it; a
-token of ours without a keyslot is named as a leftover, with the
-'cryptsetup token remove' that takes it. A password+phonesalt or tpm+vault
-keyslot is bound by "slot" to the slot whose enrolment releases its part (0 unless
---nvram names another): deleting that slot (control, the slot's line)
-deletes the keyslot with it, and a keyslot outliving its slot is dirty.
-A password+salt keyslot is bound to nothing - no TPM is in its key - and
-survives every slot; the two coexist, the typed salt the fallback when
-the phone is not there. The recovery passphrase stays in a keyslot of its
-own, unmarked: cryptsetup's prompt is always the fallback
-(docs/PLAN-LUKS.md).
+tpm2-kira's LUKS keyslots. A keyslot's key is always the combiner's
+(Argon2id) of a password and a salt; its recipe says where each comes
+from, as a number 0xPSFF - P the password (1 typed at the machine, 2 held
+by this TPM: unattended), S the salt (1 typed: the recovery recipe, 2 this
+TPM, 3 the phone, 4 the vault), flags 0x01 the vault's pepper and 0x02 the
+TPM checking a typed password:
+
+  0x1100  --salt typed                     recovery: password and salt typed
+  0x1202  --salt tpm                       password typed, salt in this TPM
+  0x1302  --salt phone                     password typed, salt from the phone
+  0x1402  --salt vault                     password typed, salt from the vault
+  0x1403  --salt vault --pepper            ... with an operator's pepper
+  0x2400  --password tpm --salt vault      unattended: this TPM and the vault
+  0x2401  --password tpm --salt vault --pepper
+
+This build enrols 0x1100, 0x1302, 0x2400 and 0x2401. Every keyslot it adds
+is marked with a LUKS2 token in the header (no secret), of type
+tpm2-kira-<number>, so a plain luksDump names the recipe too
+(docs/VAULT.md). status, removal and rotation know the keyslots by it,
+and the boot reads the key's recipe from it; a token of ours without a
+keyslot is named as a leftover, with the 'cryptsetup token remove' that
+takes it. A keyslot whose recipe needs a slot - its TPM part, its phone,
+its vault - is bound by "slot" to it (0 unless --nvram names another):
+deleting that slot (control, the slot's line) deletes the keyslot with
+it, and a keyslot outliving its slot is dirty. The recovery recipe is
+bound to nothing and survives every slot; at boot a volume's recipes are
+tried in the order above, the recovery recipe the fallback of the
+others. A plain passphrase stays in a keyslot of its own, unmarked:
+cryptsetup's prompt is always the last way in (docs/PLAN-LUKS.md).
 
   status    Every crypto_LUKS device (or the ones named): per keyslot whose
-            it is - tpm2-kira, password+salt (slot 0); tpm2-kira,
-            password+phonesalt (slot 0); or not tpm2-kira's
+            it is - tpm2-kira and its recipe (and slot), or not tpm2-kira's
   enrol     The whole thing in one step: asks the password and the salt (or
-            runs the phone salt's hand-over with the phone), derives the
-            key, asks an existing passphrase of the device (the recovery
-            one) to authorise, 'cryptsetup luksAddKey' (a device whose every
-            keyslot is tpm2-kira's is refused), imports the token - which
-            is all the boot needs: it reads the recipe from the header
-            when the volume asks. Nothing else is configured.
+            runs the phone salt's hand-over with the phone, or enrols with
+            the vault), derives the key, asks an existing passphrase of the
+            device (the recovery one) to authorise, 'cryptsetup luksAddKey'
+            (a device whose every keyslot is tpm2-kira's is refused),
+            imports the token - which is all the boot needs: it reads the
+            recipe from the header when the volume asks. Nothing else is
+            configured.
+              --password, --salt, --pepper  the recipe (above)
               --nvram N               the slot the keyslot is bound to (default
-                                      0; password+phonesalt: whose phone keeps the salt)
+                                      0; the phone's salt: whose phone keeps it)
               --label STR             the key's label (default luks)
-              --url --pin --token     tpm+vault: the vault, from 'tpm2-kira-vault
-                                      token create'; --name the machine's name there
-              --pepper                tpm+vault: an operator's pepper in the key, asked
-                                      here; every boot waits for an approval with it
+              --url --pin --token     the vault's salt: the vault, from
+                                      'tpm2-kira-vault token create'; --name the
+                                      machine's name there
               --existing-key-file F   a passphrase file to authorise (scripts)
               --privkey --pubkey --adapter --timeout --adapter-wait  as phone salt enrol
   remove    'cryptsetup luksKillSlot' for a keyslot tpm2-kira marked, and
@@ -601,7 +615,8 @@ own, unmarked: cryptsetup's prompt is always the fallback
             (--existing-key-file F for scripts). Never the last keyslot,
             never one that is not tpm2-kira's
   mark      The token for a keyslot made by hand (derive or phone salt enrol
-            --out, then luksAddKey): --keyslot N --mode M [--nvram N --label STR]
+            --out, then luksAddKey): --keyslot N, the recipe's flags
+            [--nvram N --label STR]
   route     Where the initrd is told to take the key from tpm2-kira, for
             every device with a keyslot of ours (or the ones named): the
             kernel command line (/etc/cmdline.d/*.conf or /etc/kernel/cmdline,
@@ -611,19 +626,18 @@ own, unmarked: cryptsetup's prompt is always the fallback
             Nothing is edited: a wrong line is named and the line is printed
             as it should read. Exit 1 while something is wrong. 'luks enrol'
             ends with it, 'status' notes it, the mkinitcpio hook runs it
-  derive    The password+salt key by hand: asks a password and a salt and
-            writes the derived key (Argon2id, 1 GiB, 16 passes; base64) to
-            PATH on tmpfs, for 'cryptsetup luksAddKey <device> PATH' and
-            'luks mark' afterwards - the password+salt mode without 'luks
-            enrol'. Remove the file after use.
+  derive    The recovery recipe's key by hand: asks a password and a salt
+            and writes the derived key (Argon2id, 1 GiB, 16 passes; base64)
+            to PATH on tmpfs, for 'cryptsetup luksAddKey <device> PATH' and
+            'luks mark --salt typed' afterwards. Remove the file after use.
 
   tpm2-kira luks status
-  tpm2-kira luks enrol /dev/sda2 --mode password+salt
-  tpm2-kira luks enrol /dev/sda2 --mode password+phonesalt
-  tpm2-kira luks enrol /dev/sda2 --mode tpm+vault --url https://vault:8443 --pin sha256:… --token …
+  tpm2-kira luks enrol /dev/sda2 --salt typed
+  tpm2-kira luks enrol /dev/sda2 --salt phone
+  tpm2-kira luks enrol /dev/sda2 --password tpm --salt vault --url https://vault:8443 --pin sha256:… --token …
   tpm2-kira luks remove /dev/sda2 --keyslot 1
   tpm2-kira luks route
-  tpm2-kira luks mark /dev/sda2 --keyslot 1 --mode password+salt
+  tpm2-kira luks mark /dev/sda2 --keyslot 1 --salt typed
   tpm2-kira luks derive --out /run/tpm2-kira/luks.key
 `,
 

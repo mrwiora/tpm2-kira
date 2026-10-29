@@ -29,39 +29,39 @@ func writeLuks2Header(t *testing.T, tokensJSON string) string {
 
 // The recipe is read straight from the device's LUKS2 header: the
 // tpm2-kira tokens, a foreign token ignored, the phone salt's recipe
-// winning over the typed one.
+// winning over the recovery recipe, another version's token obsolete.
 func TestReadLuks2TokensAndRecipe(t *testing.T) {
 	dev := writeLuks2Header(t, `{
-	  "0": {"type": "tpm2-kira-salt", "keyslots": ["1"], "created": "2026-10-07T17:30:00Z"},
+	  "0": {"type": "tpm2-kira-1100", "keyslots": ["1"], "recipe": 4352, "created": "2026-10-07T17:30:00Z"},
 	  "1": {"type": "systemd-tpm2", "keyslots": ["2"], "tpm2-blob": "x"},
-	  "2": {"type": "tpm2-kira-phonesalt", "keyslots": ["3"], "slot": 0, "label": "luks", "created": "2026-10-07T18:00:00Z"},
-	  "3": {"type": "tpm2-kira", "keyslots": ["4"], "mode": "password+phonesalt", "slot": 0, "created": "x"}
+	  "2": {"type": "tpm2-kira-1302", "keyslots": ["3"], "recipe": 4866, "slot": 0, "label": "luks", "created": "2026-10-07T18:00:00Z"},
+	  "3": {"type": "tpm2-kira-1302", "keyslots": ["4"], "recipe": 4866, "slot": 0, "created": "x"}
 	}`)
 	toks, err := ReadLuks2Tokens(dev)
 	if err != nil || len(toks) != 3 {
 		t.Fatalf("%v %+v", err, toks)
 	}
-	// The old one-type token is recognised but never acted on: with only
-	// it as the phone salt mark, the typed salt's recipe wins.
-	if RecipeOfTokens(toks) != LuksModePasswordPhoneSalt {
+	// Another version's token is recognised but never acted on: with only
+	// it as the phone salt mark, the recovery recipe wins.
+	if RecipeOfTokens(toks) != RecipePhoneSalt {
 		t.Fatalf("the phone salt does not win: %q", RecipeOfTokens(toks))
 	}
 	var fresh []LuksToken
 	for _, tk := range toks {
-		if !tk.Obsolete && tk.Mode == LuksModePasswordSalt {
+		if !tk.Obsolete && tk.Recipe == RecipeRecovery {
 			fresh = append(fresh, tk)
 		}
 		if tk.Obsolete {
 			fresh = append(fresh, tk)
 		}
 	}
-	if RecipeOfTokens(fresh) != LuksModePasswordSalt {
+	if RecipeOfTokens(fresh) != RecipeRecovery {
 		t.Fatalf("an obsolete token was acted on: %q", RecipeOfTokens(fresh))
 	}
 	// The tokens come in no fixed order (a JSON object): find the salt's.
 	salt := false
 	for _, tk := range toks {
-		salt = salt || (!tk.Obsolete && RecipeOfTokens([]LuksToken{tk}) == LuksModePasswordSalt)
+		salt = salt || (!tk.Obsolete && RecipeOfTokens([]LuksToken{tk}) == RecipeRecovery)
 	}
 	if !salt {
 		t.Fatal("the typed salt's token was not read")
@@ -118,7 +118,7 @@ func TestScreenRecipeFollowsBothRoutes(t *testing.T) {
 	defer func(c string, ct []string) { bootCmdlinePath, bootCrypttabPaths = c, ct }(bootCmdlinePath, bootCrypttabPaths)
 	bootCmdlinePath = filepath.Join(dir, "cmdline")
 	bootCrypttabPaths = []string{filepath.Join(dir, "crypttab")}
-	dev := writeLuks2Header(t, `{"0": {"type": "tpm2-kira-salt", "keyslots": ["1"], "created": "x"}}`)
+	dev := writeLuks2Header(t, `{"0": {"type": "tpm2-kira-1100", "keyslots": ["1"], "recipe": 4352, "created": "x"}}`)
 	os.WriteFile(bootCmdlinePath, []byte("quiet\n"), 0o644)
 
 	os.WriteFile(bootCrypttabPaths[0], []byte("vda3_crypt "+dev+" none luks,discard\n"), 0o644)
@@ -126,7 +126,7 @@ func TestScreenRecipeFollowsBothRoutes(t *testing.T) {
 		t.Fatalf("a volume not routed through tpm2-kira: %q", modes)
 	}
 	os.WriteFile(bootCrypttabPaths[0], []byte("vda3_crypt "+dev+" none luks,discard,keyscript="+DebianKeyscript+"\n"), 0o644)
-	if modes := ScreenRecipe(DefaultUnlockSocket)(); len(modes) != 1 || modes[0] != LuksModePasswordSalt {
+	if modes := ScreenRecipe(DefaultUnlockSocket)(); len(modes) != 1 || modes[0] != RecipeRecovery {
 		t.Fatalf("routed by the keyscript: %q", modes)
 	}
 }
@@ -139,14 +139,14 @@ func TestUnlockRecipe(t *testing.T) {
 	defer func(c string, ct []string) { bootCmdlinePath, bootCrypttabPaths = c, ct }(bootCmdlinePath, bootCrypttabPaths)
 	bootCmdlinePath = filepath.Join(dir, "cmdline")
 	bootCrypttabPaths = []string{filepath.Join(dir, "crypttab")}
-	dev := writeLuks2Header(t, `{"0": {"type": "tpm2-kira-salt", "keyslots": ["1"], "created": "x"}}`)
+	dev := writeLuks2Header(t, `{"0": {"type": "tpm2-kira-1100", "keyslots": ["1"], "recipe": 4352, "created": "x"}}`)
 	os.WriteFile(bootCrypttabPaths[0], []byte("cryptroot "+dev+" none luks\n"), 0o644)
 
 	r := &UnlockRecipe{}
-	if modes, why := r.ForVolume("cryptroot"); len(modes) != 1 || modes[0] != LuksModePasswordSalt || why != "" {
+	if modes, why := r.ForVolume("cryptroot"); len(modes) != 1 || modes[0] != RecipeRecovery || why != "" {
 		t.Fatalf("recipe: %q %q", modes, why)
 	}
-	if modes, _ := r.ForVolume("cryptroot"); len(modes) != 1 || modes[0] != LuksModePasswordSalt { // cached
+	if modes, _ := r.ForVolume("cryptroot"); len(modes) != 1 || modes[0] != RecipeRecovery { // cached
 		t.Fatalf("cached recipe: %q", modes)
 	}
 	if modes, why := r.ForVolume("stranger"); len(modes) != 0 || why == "" {

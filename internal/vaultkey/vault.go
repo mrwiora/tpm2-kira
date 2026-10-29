@@ -49,7 +49,7 @@ import (
 // between an enrolled keyslot and this code.
 const vaultInfo = "tpm2-kira/vault/v1"
 
-// VaultKey derives a tpm+vault keyslot's key: 64 lowercase hexadecimal
+// VaultKey derives an unattended vault keyslot's key: 64 lowercase hexadecimal
 // characters, HKDF-SHA256(L ‖ R [‖ pepper], info = vaultInfo ‖ lp(label)
 // [‖ "pepper"]). The pepper is an operator's, for a keyslot enrolled with
 // one: the vault releases only with it (docs/VAULT.md §12); nil
@@ -488,7 +488,7 @@ func (vk *Keys) Made() bool {
 	}
 }
 
-// ForVolume is the key for a volume whose keyslot is marked tpm+vault: the
+// ForVolume is the key for a volume whose keyslot has an unattended vault recipe: the
 // key of the slot its token is bound to. It waits for the attempt to end.
 func (vk *Keys) ForVolume(volume string) ([]byte, error) {
 	if vk == nil {
@@ -504,7 +504,7 @@ func (vk *Keys) ForVolume(volume string) ([]byte, error) {
 		return nil, err
 	}
 	for _, t := range toks {
-		if t.Mode != diskkey.LuksModeTPMVault || t.Slot == nil {
+		if t.Obsolete || !t.Recipe.Unattended() || t.Slot == nil {
 			continue
 		}
 		if key, ok := vk.keys[*t.Slot]; ok {
@@ -515,7 +515,7 @@ func (vk *Keys) ForVolume(volume string) ([]byte, error) {
 		}
 		return nil, fmt.Errorf("slot %d has no vault", *t.Slot)
 	}
-	return nil, errors.New("no keyslot of the volume is marked tpm+vault")
+	return nil, errors.New("no keyslot of the volume has an unattended vault recipe")
 }
 
 // ── enrolment, status, removal ────────────────────────────────────────────

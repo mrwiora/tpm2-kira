@@ -1,6 +1,257 @@
-# PLAN: the vault's pepper wrapped for the TPM; its TLS certificate verified against a root certificate
+# PLAN
 
-## Goal
+- **A. One derivation for every keyslot:** the disk's key is always the
+  combiner's (the hashpwd2-compatible `Combine(password, salt)`, Argon2id);
+  a keyslot only says where its password and its salt come from.
+- **B. The vault's TLS certificate** verified against a root certificate.
+
+Done before this plan: the operator's pepper travels wrapped for the
+machine's TPM (tpm2-kira `10b9066`, the vault `00d0482`); vmtest's pepper
+step is written (`671aa51`), not yet run. Part A changes how the pepper
+enters the key, so that step changes with it.
+
+---
+
+## A. One derivation, the secrets distributed
+
+### Goal
+
+Security comes only from how the secrets are distributed: the key is
+always computed from a password and a salt, the same way, and a keyslot
+names the source of each. The owner's eight scenarios:
+
+| # | Password | Salt | Today |
+|---|---|---|---|
+| 1 | typed | typed | `password+salt` (Combine) |
+| 2 | typed | in this TPM | - |
+| 3 | typed | the vault, released at once | - |
+| 4 | typed | the vault, after an operator's approval | - |
+| 5 | typed | the vault, after an approval with the pepper | - |
+| 6 | in this TPM | the vault, released at once | `tpm+vault` (HKDF, not Combine) |
+| 7 | in this TPM | the vault, after an approval | `tpm+vault`, device in approve mode (HKDF) |
+| 8 | in this TPM | the vault, after an approval with the pepper | `tpm+vault --pepper` (HKDF, the pepper not stretched) |
+| - | typed | the phone, after its attestation | `password+phonesalt` (Combine) - kept |
+
+```mermaid
+flowchart LR
+  subgraph P["password"]
+    PT["typed at the device<br/>(console, boot SSH)"]
+    PM["in this TPM<br/>T, wrapped for EK + release key"]
+  end
+  subgraph S["salt"]
+    ST["typed"]
+    SM["in this TPM<br/>T, wrapped for EK + release key"]
+    SP["the phone<br/>after its attestation"]
+    SV["the vault: R, wrapped for EK + release key<br/>at once / approved / approved + pepper"]
+  end
+  P --> C["Combine (hashpwd2)<br/>Argon2id 1 GiB, 16 passes, 4 lanes"]
+  S --> C
+  C --> K["the keyslot's key"]
+```
+
+### Assessment
+
+- **Sound, and no variant of today is more secure.** 6-8 keep today's
+  distribution (a TPM part and a vault part, both opening only in a boot
+  the slot's signing key approved, before the cap); only the derivation
+  changes. With two random 32-byte parts HKDF and Argon2id are equally
+  strong; with a pepper Argon2id is stronger - today the pepper enters
+  HKDF unstretched and the slot's pepper check (an HMAC of the key) is a
+  fast guessing oracle for whoever already has both parts. 3-5 are
+  stronger than 6-8: they add something a person knows, at the price of
+  an unattended boot.
+- **What must stay:** a part held for the TPM opens only in an approved
+  boot before the cap (the TPM checks it again after the vault); the vault
+  never sees a salt in the clear; a keyslot is never the disk's only one;
+  the recovery passphrase is always the way in by hand (AGENTS.md).
+- **"hashpwd2-compatible" is the format, not a way in.** A salt held by
+  the TPM or the vault is known to nobody, by design, and a TPM-held
+  password likewise: nothing is shown or exported at enrolment. Whoever
+  kept a copy would reduce that keyslot to the copy. Recovery stays its
+  own keyslot (the recovery passphrase, or a `typed+typed` keyslot).
+- **2 (typed password, salt in the TPM):** the disk's header and the
+  password alone are not enough - the salt needs this TPM in an approved
+  boot. But once such a boot is had, the TPM gives the salt out at will,
+  and the password can be guessed offline at Argon2id's cost (about a
+  second a guess): its strength is the limit. The vault variants add
+  revocation, a log and approval before any salt leaves.
+- **The cost:** Argon2id with 1 GiB at every unattended boot (6-8), as the
+  typed modes have it today: the boot image needs that memory free.
+- **Both parts on the device** (password and salt in the TPM) distribute
+  nothing: refused.
+
+### Design
+
+- **A keyslot's recipe** is a number (below, "Recipes by number"): the
+  password's source, the salt's, the pepper, the TPM's password check.
+  Stored in the keyslot's own LUKS2 token - the header is the one place,
+  nothing is configured (AGENTS.md). The names `password+salt`,
+  `password+phonesalt`, `tpm+vault` and `--mode` go.
+- **The command line:** `tpm2-kira luks enrol /dev/sda2 --password typed
+  --salt vault --pepper --url … --pin … --token …`; a combination not in
+  the table is refused with the ones that are.
+- **Shown** the same way everywhere (control, `luks status`, the code
+  screen): `0x1403 password typed · salt from the vault (pepper)`.
+- **control** offers the recipes as named choices, with what each needs
+  at boot (a person typing, the phone near, the vault, an operator).
+- **The TPM part T:** 32 random bytes in the slot's blob, wrapped for the
+  EK and the slot's release key - today's L. The password of the
+  unattended recipes, the salt of `0x1202`, as 64 hexadecimal characters.
+- **The vault part R:** the salt of the vault recipes, 64 hexadecimal
+  characters; with a pepper `hex(HKDF-SHA256(R, pepper))`, so every
+  guessed pepper costs a whole Argon2id. The release carries R and the
+  pepper wrapped for the TPM, as now.
+- **Approval** is the vault device's release mode (at once, after an
+  approval); a pepper forces the approval, as now.
+- **The pepper check** stays an HMAC of the key - now behind Argon2id.
+
+### Steps
+
+1. [x] diskkey: `Recipe` (IDs, checks, names for display), the token
+   (`recipe`, type `tpm2-kira-XXXX`); the old modes and `--mode` go
+   (`--password`/`--salt`/`--pepper`), in the code, `control`, the help,
+   acceptance.py and vmtest. This build enrols 0x1100, 0x1302, 0x2400,
+   0x2401; 0x1302 has no TPM check of the password until step 2, 0x2400/1
+   keep the HKDF derivation until step 3, 0x1202 and 0x1402/3 come with
+   steps 2 and 3. README and docs: step 7.
+2. [ ] the TPM-held parts: T in the slot's blob (wrapped like L);
+   the release key with `PolicyAuthValue` and an Argon2id authValue for
+   the typed recipes (B1), DA-protected, a salted session; the blob still
+   fits its NV index.
+3. [ ] vaultkey: R as the salt, the pepper into it (HKDF), `Key` (HKDF over
+   L ‖ R) goes; the pepper check over the combined key; the vault's
+   release mode as an ID in `vaultproto`.
+4. [ ] enrolment: `luks enrol --password … --salt … [--pepper]`, refused
+   combinations named; `control`'s named choices; its red warning when
+   every keyslot of a volume is tpm2-kira's.
+5. [ ] boot: the prompts by recipe (console and boot SSH), the fallback
+   order (recipe, recovery recipe, the OS prompt), a typed password while
+   the vault is asked.
+6. [ ] the vault: the CLI answers the queue (`request approve` with the
+   pepper asked, `requests answer`).
+7. [ ] docs (DISK-KEY, VAULT, SECURITY-BACKGROUND), HISTORY.md.
+8. [ ] tests: every recipe - unit (each ID's derivation against the
+   known answer, the refused ones), swtpm (B1: right password, wrong
+   password counted, lockout; T as password; the vault with and without a
+   pepper), the vault's tests (the CLI queue), vmtest on every machine.
+
+**Breaks:** every tpm2-kira keyslot is enrolled again (the token format,
+and `tpm+vault`'s derivation); the vault's devices enrol again.
+
+### Decided
+
+1. The pepper goes into the salt: `salt = hex(HKDF-SHA256(S, pepper))`.
+2. No phone salt with a TPM-held password; salt = what a device holds, pepper = what a person enters.
+4. vmtest runs every test on every machine, every run.
+
+### The assignment (decided)
+
+- **Password:** typed by the person in front of the machine - nothing on
+  the machine holds it - and then always the combiner's password. Held by
+  this TPM only in a fully unattended recipe.
+- **Salt:** held by a device - this TPM, the vault (its TPM), or the
+  phone. A typed salt is the recovery recipe alone.
+- **Pepper:** entered by a person, into the salt.
+
+### Entering (decided)
+
+- **The pepper** is entered at the vault's approval: the REST operator
+  interface (as now), the vault's CLI on the vault machine (asked on its
+  terminal, never an argument - today the CLI refuses a pepper), and a
+  phone app as the operator's client (a new client of the same operator
+  interface; its own plan).
+- **What is typed at the machine** (the password, the recovery recipe's
+  password and salt) can also be typed over the boot SSH server, when the
+  person switched it on in `control` - as the code screen's prompts are
+  today; every new prompt of part A goes the same way.
+
+### Fallbacks (decided), in this order, always
+
+1. The keyslot's own recipe (the vault, the phone, ...).
+2. The recovery recipe at tpm2-kira's prompt: password and salt typed,
+   the combiner (hashpwd2) - it opens a keyslot enrolled that way.
+3. The operating system's prompt with a plain passphrase (systemd's
+   agent, Debian's askpass) - the only way in when tpm2-kira itself fails.
+
+A plain passphrase keyslot may be removed; `control` warns (red) when
+every keyslot of a volume is tpm2-kira's.
+
+### The TPM and a typed password: options
+
+| | The TPM opens the device-held salt ... | Guessing the password after a stolen device boots |
+|---|---|---|
+| A | on an approved boot, without the password (today's way for the phone and the vault) | offline, Argon2id's cost - about a second a guess |
+| **B** | only with the password too: `PolicyAuthValue` on the release key, authValue = Argon2id(password), DA-protected, over a session salted to the slot's primary key | through the TPM only: a few tries, then its lockout |
+| C | password held by the TPM (unattended): no password to check | - (the salt's device is the gate) |
+
+Recommended: **B for every recipe with a typed password**, whatever holds
+the salt - this TPM, the vault (an approved boot of a stolen device is an
+approved boot: a vault in auto mode releases), the phone. C for the
+unattended recipes. The fallbacks stay: the recovery recipe at tpm2-kira's
+prompt, and the operating system's prompt with a plain passphrase.
+
+### Found while checking the fallbacks
+
+- **The combiner's key ends in a newline** (hashpwd2's format). A
+  passphrase prompt - systemd's, Debian's askpass - ends at the newline,
+  so a recipe's key cannot be typed at the operating system's prompt:
+  step 2 is tpm2-kira's prompt, step 3 needs a plain passphrase keyslot.
+
+### The TPM checks the typed password (decided: B1)
+
+A device-held salt opens only when the boot is approved (the slot's
+policy over the PCRs) **and** the typed password is right: the release
+key's policy adds `PolicyAuthValue`, its authValue is Argon2id of the
+password (one-way; the password itself is nowhere on the machine), the
+key is DA-protected (no `NoDA`), and the password is proven over a session
+salted to the slot's primary key. Then the key is `Combine(password,
+salt)` as always. A changed password is a new enrolment. About a second
+more at boot. Unattended recipes (password held by the TPM) have no
+authValue.
+
+### Recipes by number (decided)
+
+A recipe is a 16-bit identifier, `0xPSFF`: P the password's source, S
+the salt's, FF flags. Code uses the constants (`diskkey.Recipe`, a
+uint16), the token stores the number, names are for display only.
+
+| Nibble / bit | Value |
+|---|---|
+| P: password | `1` typed, `2` held by this TPM (unattended) |
+| S: salt | `1` typed (the recovery recipe), `2` this TPM, `3` the phone, `4` the vault |
+| flag `0x01` | pepper (entered at the vault's approval) |
+| flag `0x02` | the TPM checks the typed password (B1; set with P = 1 and a device-held salt) |
+
+| ID | Recipe |
+|---|---|
+| `0x1100` | recovery: password and salt typed |
+| `0x1202` | password typed, salt in this TPM |
+| `0x1302` | password typed, salt from the phone |
+| `0x1402` / `0x1403` | password typed, salt from the vault / with a pepper |
+| `0x2400` / `0x2401` | unattended: this TPM and the vault / with a pepper |
+
+Refused: P = 2 with S = 1, 2 or 3; the pepper without S = 4; flag
+`0x02` with P = 2 or S = 1. The token:
+`{"type": "tpm2-kira-1403", "recipe": 5123, "slot": 1, ...}` - the type
+repeats the ID in hexadecimal, so `cryptsetup luksDump` names it too.
+`--password`/`--salt`/`--pepper` on the command line and control's named
+choices map to the ID; the vault's release modes become IDs alike in
+`vaultproto` (`0x01` at once, `0x02` after an approval).
+
+### The vault's queue (decided)
+
+`tpm2-kira-vault requests` is the queue of releases waiting for an
+operator; the CLI answers it: `request approve ID` (asks the pepper on the
+terminal, echo off, when the device needs one), `request deny ID`, and
+`requests answer`, which goes through the queue one by one (approve or
+deny each, the pepper asked where needed). The REST operator interface
+and a phone app (its own plan) answer the same queue.
+
+---
+
+## B. The vault's TLS certificate verified against a root certificate
+
+### Goal
 
 CodeQL (code scanning) flags `InsecureSkipVerify: true` in the vault
 client (`internal/vaultkey/vault.go`, and the same pattern in the vault's
@@ -17,7 +268,7 @@ flowchart LR
   INITRD["vault client<br/>core/vaultproto.ClientConfig"] -->|"TLS 1.3: chain to a root,<br/>host name, dates, then the pin"| VAULT["tpm2-kira-vault<br/>leaf + chain"]
 ```
 
-## Design
+### Design
 
 - **The location:** `/etc/tpm2-kira/vault-ca.pem`, root-owned, a PEM bundle
   (one or more root certificates; every vault of every slot). Both initrd
@@ -46,17 +297,12 @@ flowchart LR
   the RTC. A machine whose clock is outside a certificate's validity
   refuses the vault and says so, with both dates.
 
-## Steps
+### Steps
 
-0. [x] **Pepper wrapped for the TPM.** (Code, unit, vault and swtpm tests done; vmtest pending.) Today the operator's pepper travels
-   in the clear inside TLS (`ReleaseResponse.Pepper`). `EnrolRequest`
-   carries the release key's Name; the vault draws a fresh 32-byte K, wraps
-   it with `MakeCredential` for (EK, RK Name) and encrypts the pepper under
-   K with AES-256-GCM; `ReleaseResponse.PepperWrapped` replaces `Pepper`.
-   tpm2-kira opens K with a second `ActivateCredential` under the slot's
-   policy - the pepper opens only in the approved boot, like R. Tests: the
-   core, the vault, swtpm, vmtest with a pepper. Breaks: pepper devices
-   enrol again (the vault has no RK Name for them).
+0. [x] **Pepper wrapped for the TPM.** (Code, unit, vault and swtpm tests
+   done; vmtest written, not run.) `EnrolRequest` carries the release
+   key's public area; the vault wraps a fresh K with `MakeCredential` for
+   (EK, RK Name) and the pepper under K with AES-256-GCM.
 1. [ ] core: `vaultproto.ClientConfig`, `LoadRoots(path)`; unit tests:
    good chain, unknown root, wrong host, wrong pin, expired, no file.
 2. [ ] tpm2-kira: `vaultkey.NewClient` reads the roots
@@ -76,13 +322,13 @@ is placed (and the vault's certificate reissued under its root). The old
 self-signed vault certificate works as its own root in the meantime: Go
 accepts a self-signed certificate that is itself in `RootCAs`.
 
-## Decided
+### Decided
 
 1. Dates checked against the system clock.
 2. The vault generates its root and keeps it in its state directory.
 3. One bundle, `/etc/tpm2-kira/vault-ca.pem`.
 
-## Also in this change: SHA-1 notes
+### Also in this change: SHA-1 notes
 
 - PCR SHA-1 bank (`core/attest/measurepoint.go`, `internal/measure`,
   `core/vaultproto/verify.go`, `admin/vault_enrol.go`): a comment that the

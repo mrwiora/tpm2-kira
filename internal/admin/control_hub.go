@@ -2,6 +2,7 @@ package admin
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -128,13 +129,13 @@ func (c *controller) slots() (slot0, strong *StatusSlot, fallback bool) {
 	return slot0, strong, fallback
 }
 
-// boundKeyslots are the keyslots of a mode bound to a slot, from the LUKS
-// headers: "keyslot N of /dev/x".
-func (c *controller) boundKeyslots(mode string, slot int) []string {
+// boundKeyslots are the keyslots of the recipes bound to a slot, from the
+// LUKS headers: "keyslot N of /dev/x".
+func (c *controller) boundKeyslots(slot int, recipes ...diskkey.Recipe) []string {
 	var out []string
 	for _, d := range c.facts.Status.Devices {
 		for _, ks := range d.Keyslots {
-			if ks.Token != nil && ks.Token.Mode == mode && ks.Token.Slot != nil && *ks.Token.Slot == slot {
+			if ks.Token != nil && !ks.Token.Obsolete && slices.Contains(recipes, ks.Token.Recipe) && ks.Token.Slot != nil && *ks.Token.Slot == slot {
 				out = append(out, fmt.Sprintf("keyslot %d of %s", ks.Keyslot, d.Device))
 			}
 		}
@@ -201,10 +202,8 @@ func (c *controller) keysSteps() []controlStep {
 		if s.Vault != "" {
 			desc += ", the vault at " + s.Vault
 		}
-		for _, mode := range []string{diskkey.LuksModePasswordPhoneSalt, diskkey.LuksModeTPMVault} {
-			for _, name := range c.boundKeyslots(mode, s.Slot) {
-				desc += ", " + name
-			}
+		for _, name := range c.boundKeyslots(s.Slot, diskkey.RecipePhoneSalt, diskkey.RecipeUnattendedVault, diskkey.RecipeUnattendedVaultPepper) {
+			desc += ", " + name
 		}
 		n := s.Slot
 		line := controlStep{Key: fmt.Sprintf("slot:%d", n), Title: fmt.Sprintf("Slot %d", n),
@@ -321,14 +320,14 @@ func (c *controller) diskSteps() []controlStep {
 	// and the vault are tried first, the typed salt is the fallback.
 	salt := controlStep{Key: "luks-salt", Optional: true, SelfConfirm: true, Title: "Password + salt (Argon2id)",
 		Explain: "A LUKS keyslot whose key is derived at boot from a password and a salt you type (Argon2id, 1 GiB). Bound to no slot - deleting a slot leaves it untouched. Enrolled, picking it offers the removal." + typed,
-		Run:     func(c *controller) error { return c.runLuks(diskkey.LuksModePasswordSalt) }}
+		Run:     func(c *controller) error { return c.runLuks(diskkey.RecipeRecovery) }}
 	switch {
 	case gate != "":
 		salt.Blocked = gate
 	default:
 		for _, d := range f.Status.Devices {
 			for _, ks := range d.Keyslots {
-				if ks.Token != nil && ks.Token.Mode == diskkey.LuksModePasswordSalt {
+				if ks.Token != nil && !ks.Token.Obsolete && ks.Token.Recipe == diskkey.RecipeRecovery {
 					salt.Done = fmt.Sprintf("keyslot %d of %s", ks.Keyslot, d.Device)
 				}
 			}
@@ -337,14 +336,14 @@ func (c *controller) diskSteps() []controlStep {
 
 	remote := controlStep{Key: "luks-remote", Optional: true, SelfConfirm: true, Title: "Password + phone salt (the phone)",
 		Explain: "A LUKS keyslot whose key is derived from your password and the salt the phone hands back after it attested the boot: the disk needs the phone, this TPM in an approved boot, and your password. Enrolled, picking it offers the removal." + typed,
-		Run:     func(c *controller) error { return c.runLuks(diskkey.LuksModePasswordPhoneSalt) }}
+		Run:     func(c *controller) error { return c.runLuks(diskkey.RecipePhoneSalt) }}
 	switch {
 	case gate != "":
 		remote.Blocked = gate
 	case strong == nil:
 		remote.Blocked = "needs slot 0 (Signing key and TOTP codes)"
-	case len(c.boundKeyslots(diskkey.LuksModePasswordPhoneSalt, strong.Slot)) > 0:
-		remote.Done = strings.Join(c.boundKeyslots(diskkey.LuksModePasswordPhoneSalt, strong.Slot), ", ")
+	case len(c.boundKeyslots(strong.Slot, diskkey.RecipePhoneSalt)) > 0:
+		remote.Done = strings.Join(c.boundKeyslots(strong.Slot, diskkey.RecipePhoneSalt), ", ")
 	case f.Adapter == "":
 		remote.Blocked = "needs a phone, and there is no Bluetooth adapter on this machine"
 	case strong.Phones == 0:
