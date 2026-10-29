@@ -9,9 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/google/go-tpm/tpmutil"
 )
 
 // TPM device, session and object primitives.
@@ -30,8 +32,15 @@ type Opened struct {
 	Managed bool
 }
 
-// Open opens the TPM at path. The default path falls back to the raw
-// device when the kernel has no resource manager node.
+// Open opens the TPM at path - a device, or a simulator's socket. The
+// default path falls back to the raw device when the kernel has no
+// resource manager node.
+//
+// It asks the TPM for its manufacturer before handing it out, as a check
+// that a TPM 2.0 answers there. A TPM that does not answer yet - right
+// after a reset it can still be busy with its startup or self-test while
+// the boot already opens it - is asked again for up to openWait; one that
+// still does not answer is an error with the TPM's own answer.
 func Open(path string) (transport.TPMCloser, error) {
 	if path == DefaultPath {
 		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
@@ -40,12 +49,35 @@ func Open(path string) (transport.TPMCloser, error) {
 			}
 		}
 	}
-	tpm, err := transport.OpenTPM(path)
-	if err != nil {
-		return nil, err
+	deadline := time.Now().Add(openWait)
+	for {
+		rwc, err := tpmutil.OpenTPM(path)
+		if err != nil {
+			return nil, err
+		}
+		tpm := transport.FromReadWriteCloser(rwc)
+		_, err = tpm2.GetCapability{
+			Capability:    tpm2.TPMCapTPMProperties,
+			Property:      uint32(tpm2.TPMPTManufacturer),
+			PropertyCount: 1,
+		}.Execute(tpm)
+		if err == nil {
+			return &Opened{TPMCloser: tpm, Managed: strings.HasPrefix(filepath.Base(path), "tpmrm")}, nil
+		}
+		tpm.Close()
+		if !time.Now().Before(deadline) {
+			return nil, fmt.Errorf("the TPM at %s does not answer (asked for %s): %w", path, openWait, err)
+		}
+		time.Sleep(openRetry)
 	}
-	return &Opened{TPMCloser: tpm, Managed: strings.HasPrefix(filepath.Base(path), "tpmrm")}, nil
 }
+
+// openWait is how long Open asks a TPM that does not answer, and openRetry
+// how often; vars, for the tests.
+var (
+	openWait  = 5 * time.Second
+	openRetry = 200 * time.Millisecond
+)
 
 // Cleanup flushes leftover transient handles and sessions to free TPM
 // memory.
