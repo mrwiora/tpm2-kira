@@ -1,19 +1,28 @@
 # The test VMs of tools/vmtest.py. Copy to tools/vmtest.conf (not in git).
-# Each VM: fresh (go back to its snapshot before a run), its root on LUKS,
-# a TPM, sshd, and a user with sudo. The user's password comes from
+# Each VM: fresh (reset, below), its root on LUKS, a TPM, sshd, and a user
+# with sudo. The user's password comes from
 # password_file, --password-file or $VMTEST_PASSWORD; the LUKS passphrase
 # from luks_passphrase, $VMTEST_LUKS_PASSPHRASE, or else the same password.
 
 [defaults]
 # password_file = ~/.vm-pw
 
+# reset: a shell command that puts the machine back into its defined
+# state before the run - its snapshot on the hypervisor - with
+# VMTEST_NAME and VMTEST_HOST in its environment. The run then waits for
+# the machine's ssh. Without one, the machine must be fresh already. For
+# example:
+#   libvirt:  reset = virsh -c qemu+ssh://root@hv/system snapshot-revert vmtest-arch fresh --running
+#   Proxmox:  reset = ssh root@pve 'qm rollback 198 fresh && qm start 198'
 [arch]
 host = 172.17.2.198
 user = pix
+# reset =
 
 [debian]
 host = 172.17.2.196
 user = pix
+# reset =
 
 # The vault (remote attestation over TLS) runs on the machine of the run,
 # in a container (docker; tools/vmtest-vault), built from src; the VMs

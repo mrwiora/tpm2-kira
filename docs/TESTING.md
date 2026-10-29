@@ -34,15 +34,13 @@ writes a report per machine with every session's transcript.
 
 - **The VMs.** Each with its root on LUKS (the passphrase known), a TPM
   2.0 (swtpm is fine), sshd, and a user with sudo; tpm2-kira not
-  installed. Keep a snapshot and go back to it before every run: the run
-  installs packages, writes the TPM's NV, an SSH CA into an EFI variable,
-  keyslots and a new boot image. (The EFI variable survives most
-  snapshots; the run then makes the SSH CA again, and says so.)
-- **The packages under test**, built here - nothing is built on a VM:
-
-  ```bash
-  packaging/build-packages.sh arch deb      # build/packages/*.pkg.tar.zst, *.deb
-  ```
+  installed, kept as a snapshot the run goes back to (`reset` below): the
+  run installs packages, writes the TPM's NV, an SSH CA into an EFI
+  variable, keyslots and a new boot image. (The EFI variable survives
+  most snapshots; the run then makes the SSH CA again, and says so.)
+- **What the packages are built with**: makepkg here, docker for the
+  Debian package (`packaging/build-packages.sh`, which the run calls) -
+  nothing is built on a VM.
 
 - **docker**, and the tpm2-kira-vault source beside this repository
   (`../tpm2-kira-vault`): the run starts the vault itself (below).
@@ -56,10 +54,13 @@ writes a report per machine with every session's transcript.
   [arch]
   host = 172.17.2.198
   user = pix
+  # back to the snapshot, on the hypervisor; VMTEST_NAME, VMTEST_HOST are set
+  reset = virsh -c qemu+ssh://root@hv/system snapshot-revert vmtest-arch fresh --running
 
   [debian]
   host = 172.17.2.196
   user = pix
+  reset = ssh root@pve 'qm rollback 196 fresh && qm start 196'
 
   [vault]
   src = ../tpm2-kira-vault
@@ -73,12 +74,27 @@ writes a report per machine with every session's transcript.
 ### Running it
 
 ```bash
-tools/vmtest.py --target debian             # or arch, or both (in parallel)
+tools/vmtest.py --target both               # or arch, or debian (in parallel)
 tools/vmtest.py --target both --cycles 3    # reboots unlocked over SSH (default 2)
 tools/vmtest.py --target arch --no-vault    # without the vault
 ```
 
-It ends with `ALL PASS` or `FAILED` and the run's directory
+A run needs nobody at the keyboard, and starts from a defined state:
+
+1. **The packages of HEAD**: it builds them (`packaging/build-packages.sh`:
+   the committed state, aSSH as pinned) and installs exactly those - by
+   the commit in their names, never a package of another commit.
+   Uncommitted changes are not tested; it says so. `--no-build` takes
+   HEAD's packages already in `build/packages`.
+2. **Each machine reset**: the `reset` command of its section in
+   `vmtest.conf` - going back to its snapshot on the hypervisor - and
+   then its ssh is waited for. Without one (or with `--no-reset`) the
+   machine must be fresh already; one that is not is refused before
+   anything is changed.
+3. The steps below, both machines at once, and the vault in its
+   container.
+
+It ends with `ALL PASS` (exit 0) or `FAILED` and the run's directory
 (`./vmtest-<time>`, or `--run-dir`): per machine `report.txt`, the
 transcript, a log per command and session (`session-*-control.log`,
 `boot-1.log`, ...), and the boot logs; the vault's log and audit in

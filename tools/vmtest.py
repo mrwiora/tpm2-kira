@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
 """The VM test: tpm2-kira's whole life on a fresh, encrypted test VM.
 
-    packaging/build-packages.sh arch deb       # the packages under test
-    tools/vmtest.py --target debian            # or arch, or both
-    tools/vmtest.py --target both --cycles 3 --password-file ~/.vm-pw
+    tools/vmtest.py --target both              # or arch, or debian
+    tools/vmtest.py --target both --cycles 3 --no-vault
+
+It runs with nobody at the keyboard and ends with ALL PASS (exit 0) or
+FAILED. Before the machines are touched it builds the packages of the
+committed state (packaging/build-packages.sh: HEAD, aSSH as pinned) and
+installs exactly those - never a package of another commit; --no-build
+takes the ones of HEAD already in build/packages.
 
 The machines are described in tools/vmtest.conf (an address, a user with
-sudo, the LUKS device's passphrase; see vmtest.conf.example). Each must be
-fresh: tpm2-kira not installed, /etc/tpm2-kira absent, a LUKS-encrypted
-root whose passphrase is known, a TPM, and an ssh server for the user. A
-snapshot to go back to between runs is what makes the run repeatable;
-the run changes the machine (packages, slots in its TPM, an SSH CA in an
-EFI variable, a keyslot, the boot image).
+sudo, the LUKS device's passphrase, and how to reset it; see
+vmtest.conf.example). Each is put back into its defined state first: the
+machine's `reset` command (going back to its snapshot on the hypervisor,
+for example) runs, and the run waits for its ssh. Fresh means: tpm2-kira
+not installed, /etc/tpm2-kira absent, a LUKS-encrypted root whose
+passphrase is known, a TPM, and an ssh server for the user; a machine
+that is not is refused. Without a `reset` command (or with --no-reset)
+the machine must be fresh already. The run changes the machine
+(packages, slots in its TPM, an SSH CA in an EFI variable, a keyslot, the
+boot image).
 
 What it does, each step a check in the report:
 
@@ -304,6 +313,17 @@ class Machine:
         return False
 
     # -- the steps ------------------------------------------------------------
+
+    def reset(self, command):
+        """Puts the machine back into its defined state: the configured
+        command (VMTEST_NAME and VMTEST_HOST in its environment), then the
+        machine must go away and come back on ssh."""
+        self.log.head("reset: " + command)
+        env = dict(os.environ, VMTEST_NAME=self.name, VMTEST_HOST=self.host)
+        r = subprocess.run(command, shell=True, env=env, capture_output=True, text=True, timeout=900)
+        self.log.save("reset.log", r.stdout + r.stderr)
+        if not self.check("the reset command succeeds", r.returncode == 0, (r.stdout + r.stderr)[-500:]):
+            raise Fail("reset failed")
 
     def preflight(self):
         self.log.head("preflight")
@@ -631,8 +651,10 @@ class Machine:
         rc, out = self.run("tpm2-kira slot list 2>&1", save="slot-list-after-delete.log")
         self.check("slot 2 is gone whole (its blob and its generation index)", "0x01803012" not in out and "0x01803812" not in out, out[-500:])
 
-    def all(self, package, vault=None):
+    def all(self, package, vault=None, reset=None):
         try:
+            if reset:
+                self.reset(reset)
             self.preflight()
             self.install(package)
             self.seal()
@@ -663,9 +685,13 @@ class Machine:
         return not failed, text
 
 
-def newest(pattern):
-    found = sorted(glob.glob(pattern), key=os.path.getmtime)
-    return found[-1] if found else None
+def head_packages(directory):
+    """The packages of HEAD in directory: the Arch package names the commit
+    as .g<short>-, the Debian one as +<n>.g<short>_."""
+    short = subprocess.run(["git", "-C", REPO, "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    pick = lambda pattern: (sorted(glob.glob(os.path.join(directory, pattern)), key=os.path.getmtime) or [None])[-1]
+    return short, {"debian": pick(f"tpm2-kira_*.g{short}_amd64.deb"),
+                   "arch": pick(f"tpm2-kira-*.g{short}-*-x86_64.pkg.tar.zst")}
 
 
 def main():
@@ -677,6 +703,8 @@ def main():
     p.add_argument("--cycles", type=int, default=2, help="reboots, each unlocked over the boot SSH server (default 2)")
     p.add_argument("--run-dir", help="default: ./vmtest-<time>")
     p.add_argument("--no-vault", action="store_true", help="leave out remote attestation over TLS (the vault)")
+    p.add_argument("--no-build", action="store_true", help="take HEAD's packages already in --packages instead of building them")
+    p.add_argument("--no-reset", action="store_true", help="do not run the machines' reset commands: they must be fresh already")
     args = p.parse_args()
 
     cfg = configparser.ConfigParser()
@@ -689,17 +717,28 @@ def main():
         print("the VMs' password: --password-file, password_file in the config, or VMTEST_PASSWORD", file=sys.stderr)
         return 2
     run_dir = args.run_dir or os.path.join(os.getcwd(), "vmtest-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
-    packages = {"debian": newest(os.path.join(args.packages, "tpm2-kira_*_amd64.deb")),
-                "arch": newest(os.path.join(args.packages, "tpm2-kira-*-x86_64.pkg.tar.zst"))}
     names = ["arch", "debian"] if args.target == "both" else [args.target]
-    machines = []
+    if subprocess.run(["git", "-C", REPO, "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True).stdout.strip():
+        print("note: uncommitted changes are not tested: the packages are HEAD's", file=sys.stderr)
+    if not args.no_build:
+        os.makedirs(run_dir, exist_ok=True)
+        targets = ["arch" if n == "arch" else "deb" for n in names]
+        print(f"building the packages of HEAD ({' '.join(targets)}), log: {run_dir}/build-packages.log", flush=True)
+        with open(os.path.join(run_dir, "build-packages.log"), "w") as log:
+            if subprocess.run([os.path.join(REPO, "packaging", "build-packages.sh")] + targets, cwd=REPO, stdout=log, stderr=subprocess.STDOUT).returncode != 0:
+                print(f"the packages do not build: {run_dir}/build-packages.log", file=sys.stderr)
+                return 1
+    short, packages = head_packages(args.packages)
+    machines, resets = [], {}
     for name in names:
         if not packages[name]:
-            print(f"no {name} package in {args.packages}: packaging/build-packages.sh {'arch' if name == 'arch' else 'deb'}", file=sys.stderr)
+            print(f"no {name} package of HEAD ({short}) in {args.packages} (leave out --no-build)", file=sys.stderr)
             return 2
         sec = cfg[name]
         luks = sec.get("luks_passphrase") or os.environ.get("VMTEST_LUKS_PASSPHRASE") or password
         machines.append(Machine(name, name, sec["host"], sec.get("user", "pix"), password, luks, run_dir, args.cycles))
+        if not args.no_reset and sec.get("reset"):
+            resets[name] = sec["reset"]
     vault = None
     if not args.no_vault:
         vc = cfg["vault"] if cfg.has_section("vault") else {}
@@ -711,7 +750,8 @@ def main():
             print("the vault does not start:", e, file=sys.stderr)
             return 1
     results = {}
-    threads = [threading.Thread(target=lambda m=m: results.__setitem__(m.name, m.all(packages[m.name], vault))) for m in machines]
+    print(f"tpm2-kira {short}: " + ", ".join(f"{m.name} {os.path.basename(packages[m.name])}" + (" (reset)" if m.name in resets else "") for m in machines), flush=True)
+    threads = [threading.Thread(target=lambda m=m: results.__setitem__(m.name, m.all(packages[m.name], vault, resets.get(m.name)))) for m in machines]
     for th in threads:
         th.start()
     for th in threads:
