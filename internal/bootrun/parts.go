@@ -155,10 +155,16 @@ func (p *phonePart) start(bd *board) {
 	}
 }
 
-// The phone check ends with the hold, and the radio worker with it.
+// The phone check ends with the hold, and the radio worker with it. An
+// opening of the phone's salt already begun (TakeRelease, holding the TPM)
+// is waited for: READY lets the separator end the slot's policy under it.
 func (p *phonePart) released(*board, string) {
 	if p.stop != nil {
 		p.stop()
+	}
+	if p.svc != nil {
+		p.svc.TPMMu.Lock()
+		p.svc.TPMMu.Unlock()
 	}
 }
 
