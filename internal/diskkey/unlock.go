@@ -288,20 +288,24 @@ var ErrUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own p
 //	0x2400, 0x2401 unattended nothing typed: the key run made in this boot from the TPM's
 //	                          part and the vault's (internal/vaultkey/vault.go); without one,
 //	                          the volume's next recipe
-//	0x1302 salt from the phone a typed password and the salt the verifier released in this
+//	0x1300 salt from the phone a typed password and the salt the verifier released in this
 //	                          boot and the TPM opened (internal/phonegate/factor.go); without
 //	                          one, a typed salt - the recovery recipe
+//	0x1200 salt in this TPM   a typed password and the salt the TPM opened while the code
+//	                          screen held (internal/admin/tpmsalt_enrol.go); without one, a
+//	                          typed salt - the recovery recipe
 //	0x1100 recovery           a typed password and a typed salt, combined (Argon2id, combine.go)
 //
 // and after them, at Ctrl-C or with a key that opens nothing, cryptsetup's
 // own prompt, where a plain passphrase works.
 //
-// salt returns the released salt or nil; vault the volume's unattended key
-// or why there is none. The key is for the caller to wipe.
+// salt returns the device-held salt of a volume's recipe - the phone's,
+// the TPM's - or nil; vault the volume's unattended key or why there is
+// none. The key is for the caller to wipe.
 //
 // ask is where the person is asked: consoleAsk, or the SSH session that
 // confirmed the code screen (remoteServer.ask).
-func DiskKey(salt func() []byte, vault func(volume string) ([]byte, error), recipe func(volume string) (recipes []Recipe, why string), ask Prompter) func(volume string) ([]byte, error) {
+func DiskKey(salt func(volume string, r Recipe) []byte, vault func(volume string) ([]byte, error), recipe func(volume string) (recipes []Recipe, why string), ask Prompter) func(volume string) ([]byte, error) {
 	return func(volume string) ([]byte, error) {
 		recipes, why := recipe(volume)
 		var vaultErr error
@@ -333,27 +337,28 @@ func DiskKey(salt func() []byte, vault func(volume string) ([]byte, error), reci
 }
 
 // typedKey makes the key of a typed recipe: the password asked, and the
-// salt asked or the phone's. A vault that gave no key before it is said
+// salt asked or the device's. A vault that gave no key before it is said
 // in the note.
-func typedKey(volume string, r Recipe, vaultErr error, salt func() []byte, ask Prompter) ([]byte, error) {
+func typedKey(volume string, r Recipe, vaultErr error, salt func(volume string, r Recipe) []byte, ask Prompter) ([]byte, error) {
 	var s []byte
 	var note string
 	switch r {
 	case RecipeRecovery:
 		note = "the key is derived from your password and your salt, both typed here (Argon2id, some seconds).\n" +
 			"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
-	case RecipePhoneSalt:
-		if s = salt(); s == nil {
-			// No phone, or no salt from it: the recovery recipe, which
-			// opens a keyslot enrolled that way; Ctrl-C, or a key that
-			// opens nothing, then leads to cryptsetup's own prompt and
-			// the recovery passphrase.
-			note = "no salt came from the phone: the key is derived from your password and a salt you type,\n" +
+	case RecipePhoneSalt, RecipeTPMSalt:
+		from := map[Recipe]string{RecipePhoneSalt: "your phone returned", RecipeTPMSalt: "this TPM opened"}[r]
+		if s = salt(volume, r); s == nil {
+			// No salt from the device: the recovery recipe, which opens a
+			// keyslot enrolled that way; Ctrl-C, or a key that opens
+			// nothing, then leads to cryptsetup's own prompt and the
+			// recovery passphrase.
+			note = "no salt that " + from + ": the key is derived from your password and a salt you type,\n" +
 				"as for a keyslot of the recovery recipe (Argon2id, some seconds).\n" +
 				"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
 			break
 		}
-		note = "the key is derived from your password and the salt your phone returned.\n" +
+		note = "the key is derived from your password and the salt " + from + ".\n" +
 			"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
 	default:
 		return nil, ErrUnlockSkipped

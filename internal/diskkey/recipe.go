@@ -34,19 +34,15 @@ const (
 	// FlagPepper: the vault releases the salt with an operator's pepper,
 	// which goes into the salt.
 	FlagPepper uint8 = 0x01
-	// FlagTPMChecksPassword: the TPM opens the device-held salt only with
-	// the typed password as well (an authValue derived from it, counted by
-	// the TPM's dictionary-attack protection).
-	FlagTPMChecksPassword uint8 = 0x02
 )
 
 // The recipes. Every other number is refused (Recipe.Check).
 const (
 	RecipeRecovery              Recipe = 0x1100 // password and salt typed
-	RecipeTPMSalt               Recipe = 0x1202 // password typed, salt in this TPM
-	RecipePhoneSalt             Recipe = 0x1302 // password typed, salt from the phone
-	RecipeVaultSalt             Recipe = 0x1402 // password typed, salt from the vault
-	RecipeVaultSaltPepper       Recipe = 0x1403 // password typed, salt from the vault with a pepper
+	RecipeTPMSalt               Recipe = 0x1200 // password typed, salt in this TPM
+	RecipePhoneSalt             Recipe = 0x1300 // password typed, salt from the phone
+	RecipeVaultSalt             Recipe = 0x1400 // password typed, salt from the vault
+	RecipeVaultSaltPepper       Recipe = 0x1401 // password typed, salt from the vault with a pepper
 	RecipeUnattendedVault       Recipe = 0x2400 // password in this TPM, salt from the vault
 	RecipeUnattendedVaultPepper Recipe = 0x2401 // password in this TPM, salt from the vault with a pepper
 )
@@ -71,10 +67,6 @@ func (r Recipe) flags() uint8 { return uint8(r) }
 // Pepper says the vault releases the salt with an operator's pepper.
 func (r Recipe) Pepper() bool { return r.flags()&FlagPepper != 0 }
 
-// TPMChecksPassword says the TPM opens the salt only with the typed
-// password as well.
-func (r Recipe) TPMChecksPassword() bool { return r.flags()&FlagTPMChecksPassword != 0 }
-
 // Unattended says nothing is typed: the password is held by this TPM.
 func (r Recipe) Unattended() bool { return r.Password() == PasswordTPM }
 
@@ -91,23 +83,18 @@ func (r Recipe) Check() error {
 		return fmt.Errorf("recipe %s: no password source %#x", r, p)
 	case s < SaltTyped || s > SaltVault:
 		return fmt.Errorf("recipe %s: no salt source %#x", r, s)
-	case f&^(FlagPepper|FlagTPMChecksPassword) != 0:
+	case f&^FlagPepper != 0:
 		return fmt.Errorf("recipe %s: unknown flags %#02x", r, f)
 	case p == PasswordTPM && s != SaltVault:
 		return fmt.Errorf("recipe %s: a password held by this TPM needs a salt from the vault - password and salt both on the machine distribute nothing", r)
 	case r.Pepper() && s != SaltVault:
 		return fmt.Errorf("recipe %s: a pepper is entered at the vault's approval and needs a salt from the vault", r)
-	case p == PasswordTyped && s != SaltTyped && !r.TPMChecksPassword():
-		return fmt.Errorf("recipe %s: a typed password with a device-held salt is always checked by the TPM (flag 0x02)", r)
-	case r.TPMChecksPassword() && (p != PasswordTyped || s == SaltTyped):
-		return fmt.Errorf("recipe %s: the TPM checks a typed password only where it opens a device-held salt", r)
 	}
 	return nil
 }
 
 // RecipeOf is the recipe of the command line's words: the password's
 // source (typed, tpm), the salt's (typed, tpm, phone, vault), the pepper.
-// The TPM's check of a typed password comes with a device-held salt.
 func RecipeOf(password, salt string, pepper bool) (Recipe, error) {
 	var p, s uint8
 	switch password {
@@ -134,9 +121,6 @@ func RecipeOf(password, salt string, pepper bool) (Recipe, error) {
 	if pepper {
 		f |= FlagPepper
 	}
-	if p == PasswordTyped && s != SaltTyped {
-		f |= FlagTPMChecksPassword
-	}
 	r := Recipe(uint16(p)<<12 | uint16(s)<<8 | uint16(f))
 	if err := r.Check(); err != nil {
 		var ok []string
@@ -148,17 +132,17 @@ func RecipeOf(password, salt string, pepper bool) (Recipe, error) {
 	return r, nil
 }
 
-// ParseRecipe reads a recipe's number as String writes it ("0x1403").
+// ParseRecipe reads a recipe's number as String writes it ("0x1401").
 func ParseRecipe(s string) (Recipe, error) {
 	v, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(s), "0x"), 16, 16)
 	if err != nil {
-		return 0, fmt.Errorf("a recipe is a number like 0x1403, not %q", s)
+		return 0, fmt.Errorf("a recipe is a number like 0x1401, not %q", s)
 	}
 	r := Recipe(v)
 	return r, r.Check()
 }
 
-// String is the recipe's number, "0x1403".
+// String is the recipe's number, "0x1401".
 func (r Recipe) String() string { return fmt.Sprintf("0x%04x", uint16(r)) }
 
 // TokenType is the LUKS2 token type of a keyslot of r: the number in it,
@@ -176,7 +160,7 @@ func (r Recipe) Words() string {
 	return w
 }
 
-// Describe names the recipe for a person: "0x1403 password typed · salt
+// Describe names the recipe for a person: "0x1401 password typed · salt
 // from the vault (pepper)".
 func (r Recipe) Describe() string {
 	pw := map[uint8]string{PasswordTyped: "password typed", PasswordTPM: "password in this TPM"}[r.Password()]
@@ -184,9 +168,6 @@ func (r Recipe) Describe() string {
 	var notes []string
 	if r.Pepper() {
 		notes = append(notes, "pepper")
-	}
-	if r.TPMChecksPassword() {
-		notes = append(notes, "the TPM checks the password")
 	}
 	d := r.String() + " " + pw + " · " + salt
 	if len(notes) > 0 {

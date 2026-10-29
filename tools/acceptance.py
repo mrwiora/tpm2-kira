@@ -41,7 +41,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # boot reads it from there. Here by the words of this script's --mode.
 TOKEN_MODES = {
     "tpm2-kira-1100": "recovery",
-    "tpm2-kira-1302": "phone",
+    "tpm2-kira-1300": "phone",
     "tpm2-kira-2400": "vault",
     "tpm2-kira-2401": "vault",
 }

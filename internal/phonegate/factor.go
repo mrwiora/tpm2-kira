@@ -188,3 +188,26 @@ func FactorSalt(f []byte, label string) []byte {
 	defer wipe.Bytes(out)
 	return []byte(hex.EncodeToString(out))
 }
+
+// OpenTPMSalts opens the TPM salt of every slot that holds one (recipe
+// 0x1200): while the code screen holds, the only time the slot's policy
+// holds. The result maps a slot's number to its part T, for FactorSalt
+// with the keyslot's label; the caller wipes them. A slot whose TPM salt
+// does not open is named in failed, with why.
+func OpenTPMSalts(tpmDev transport.TPM, debug bool) (opened map[int][]byte, failed map[int]error) {
+	opened, failed = map[int][]byte{}, map[int]error{}
+	for _, idx := range nvslot.FindPopulatedSlots(tpmDev, debug) {
+		_, sb, err := ReadSlot(tpmDev, idx)
+		if err != nil || sb.Payload.Attestation == nil || len(sb.Payload.Attestation.TPMSalt.Credential) == 0 {
+			continue
+		}
+		att := sb.Payload.Attestation
+		t, err := UnwrapFactor(tpmDev, sb, idx, att, &att.TPMSalt)
+		if err != nil {
+			failed[nvslot.SlotNumber(idx)] = err
+			continue
+		}
+		opened[nvslot.SlotNumber(idx)] = t
+	}
+	return opened, failed
+}

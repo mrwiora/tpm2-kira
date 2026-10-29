@@ -47,6 +47,7 @@ type StatusSlot struct {
 	VaultPepper bool   `json:"vault_pepper,omitempty"` // its key needs an operator's pepper
 	VaultPin    string `json:"-"`                      // the vault's key pin, for control's check
 	VaultDevice []byte `json:"-"`                      // the device ID the vault knows this machine by
+	TPMSalt     bool   `json:"tpm_salt,omitempty"`     // the slot holds the salt of recipe 0x1200
 }
 
 // StatusReport is the whole report.
@@ -102,6 +103,9 @@ func collectStatus(o StatusOptions) StatusReport {
 			if att := sb.Payload.Attestation; att != nil && att.Phone.Enabled() {
 				s.Phones = len(att.Phone.Verifiers)
 				s.PhoneSalt = len(att.ReleaseKeyPublic) > 0
+			}
+			if att := sb.Payload.Attestation; att != nil {
+				s.TPMSalt = len(att.TPMSalt.Credential) > 0
 			}
 			if att := sb.Payload.Attestation; att != nil && att.Vault.Enabled() {
 				s.Vault = att.Vault.URL
@@ -219,6 +223,17 @@ func statusNotes(r StatusReport) []string {
 				}
 				if !ok {
 					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the vault of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
+				}
+			}
+			if ks.Token.Recipe == diskkey.RecipeTPMSalt {
+				ok := false
+				for _, s := range r.Slots {
+					if s.Slot == *ks.Token.Slot && s.TPMSalt {
+						ok = true
+					}
+				}
+				if !ok {
+					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the TPM salt of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
 				}
 			}
 			if ks.Token.Recipe == diskkey.RecipePhoneSalt {

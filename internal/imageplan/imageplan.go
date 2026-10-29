@@ -16,13 +16,13 @@ const Dir = "/etc/tpm2-kira/plan"
 
 // Planned is what 'run' starts, from the image's ImagePlanDir.
 type Planned struct {
-	Codes, Phone, Vault bool
+	Codes, Phone, Vault, TPMSalt bool
 	// TPM: a part needs the TPM, and run waits for its device first.
 	TPM bool
 }
 
 // AllPlanned is 'run' without a plan, by hand: everything it finds.
-var All = Planned{Codes: true, Phone: true, Vault: true, TPM: true}
+var All = Planned{Codes: true, Phone: true, Vault: true, TPMSalt: true, TPM: true}
 
 // ReadPlanned reads the parts an image names in dir.
 func Read(dir string) Planned {
@@ -30,7 +30,7 @@ func Read(dir string) Planned {
 		st, err := os.Stat(filepath.Join(dir, name))
 		return err == nil && st.IsDir()
 	}
-	return Planned{Codes: has(PartCodes), Phone: has(PartPhone), Vault: has(PartVault), TPM: has(PartTPM)}
+	return Planned{Codes: has(PartCodes), Phone: has(PartPhone), Vault: has(PartVault), TPMSalt: has(PartTPMSalt), TPM: has(PartTPM)}
 }
 
 // The parts, in the order they are told.
@@ -39,8 +39,11 @@ const (
 	PartCodes  = "codes"  // the TOTP code screen
 	PartPhone  = "phone"  // the Bluetooth gate for an enrolled phone
 	PartVault  = "vault"  // a slot's key from the vault
-	PartNet    = "net"    // the image's network
-	PartSSH    = "ssh"    // tpm2-kira's SSH server
+	// PartTPMSalt is a slot's salt held by this TPM (recipe 0x1200), opened
+	// while the code screen holds.
+	PartTPMSalt = "tpmsalt"
+	PartNet     = "net" // the image's network
+	PartSSH     = "ssh" // tpm2-kira's SSH server
 	// PartTPM is derived: run waits for the TPM's device (TPMWait) when a
 	// part needs it. It is a marker, not a part of its own.
 	PartTPM = "tpm"

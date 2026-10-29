@@ -262,3 +262,46 @@ func grabStdout(t *testing.T, fn func()) string {
 	w.Close()
 	return string(<-done)
 }
+
+// The TPM salt on swtpm: kept in the slot's blob, wrapped for the EK and
+// the release key, the boot opens it in the approved boot state - and,
+// once a PCR of the selection moved, names the slot as not opened.
+func TestTPMSaltOpensInTheApprovedBootState(t *testing.T) {
+	sock := startSWTPM(t)
+	const slot = nvslot.NVRAMSlotStart + 1
+	signer, _ := sealRealSlot(t, sock, slot) // sealed to PCR 23
+	s := newSWTPMSetupAt(t, sock, "box")
+	tpm := s.tpm
+	s.blob.EKAlg = uint16(tpm2.TPMAlgECC)
+	_, sealed, err := phonegate.ReadSlot(tpm, slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, priv, err := phonegate.CreateReleaseKey(tpm, sealed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.blob.ReleaseKeyPublic, s.blob.ReleaseKeyPrivate = pub, priv
+	f, w, err := phonegate.WrapFactor(tpm, s.blob, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wipe.Bytes(f)
+	s.blob.TPMSalt = *w
+	if err := writeAttestBlob(tpm, slot, s.blob, signer); err != nil {
+		t.Fatal(err)
+	}
+	n := nvslot.SlotNumber(slot)
+
+	opened, failed := phonegate.OpenTPMSalts(tpm, false)
+	if len(failed) != 0 || !bytes.Equal(opened[n], f) {
+		t.Fatalf("in the approved state: opened %d, failed %v", len(opened), failed)
+	}
+	wipe.Bytes(opened[n])
+
+	s.extend(t, 23, "something else booted")
+	opened, failed = phonegate.OpenTPMSalts(tpm, false)
+	if len(opened) != 0 || failed[n] == nil {
+		t.Fatalf("after a PCR change: opened %d, failed %v", len(opened), failed)
+	}
+}

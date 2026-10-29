@@ -398,7 +398,7 @@ LUKS2 header says (the token of tpm2-kira's keyslot):
   0x2400, 0x2401          asks nothing: the TPM's part and the vault's, opened
                           while the code screen holds; a key made ends the
                           hold on its own
-  0x1302                  asks the password; the salt the phone released
+  0x1300                  asks the password; the salt the phone released
   0x1100 recovery         asks a password and a salt; Argon2id
   (a volume's recipes in this order, each the fallback of the ones before)
 
@@ -565,18 +565,17 @@ tpm2-kira's LUKS keyslots. A keyslot's key is always the combiner's
 (Argon2id) of a password and a salt; its recipe says where each comes
 from, as a number 0xPSFF - P the password (1 typed at the machine, 2 held
 by this TPM: unattended), S the salt (1 typed: the recovery recipe, 2 this
-TPM, 3 the phone, 4 the vault), flags 0x01 the vault's pepper and 0x02 the
-TPM checking a typed password:
+TPM, 3 the phone, 4 the vault), flag 0x01 the vault's pepper:
 
   0x1100  --salt typed                     recovery: password and salt typed
-  0x1202  --salt tpm                       password typed, salt in this TPM
-  0x1302  --salt phone                     password typed, salt from the phone
-  0x1402  --salt vault                     password typed, salt from the vault
-  0x1403  --salt vault --pepper            ... with an operator's pepper
+  0x1200  --salt tpm                       password typed, salt in this TPM
+  0x1300  --salt phone                     password typed, salt from the phone
+  0x1400  --salt vault                     password typed, salt from the vault
+  0x1401  --salt vault --pepper            ... with an operator's pepper
   0x2400  --password tpm --salt vault      unattended: this TPM and the vault
   0x2401  --password tpm --salt vault --pepper
 
-This build enrols 0x1100, 0x1302, 0x2400 and 0x2401. Every keyslot it adds
+This build enrols 0x1100, 0x1300, 0x2400 and 0x2401. Every keyslot it adds
 is marked with a LUKS2 token in the header (no secret), of type
 tpm2-kira-<number>, so a plain luksDump names the recipe too
 (docs/VAULT.md). status, removal and rotation know the keyslots by it,

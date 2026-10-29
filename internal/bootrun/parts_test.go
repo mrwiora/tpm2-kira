@@ -9,10 +9,11 @@ import (
 )
 
 // Only what the plan names is started: an image without the phone, the
-// vault and SSH starts the disk's key provider and the console alone.
+// vault, the TPM salt and SSH starts the disk's key provider and the
+// console alone.
 func TestOnlyThePlannedPartsStart(t *testing.T) {
 	ps := plannedParts(imageplan.Planned{Codes: true}, sshscreen.Options{}, "/run/unlock.sock")
-	if ps.phone != nil || ps.ssh != nil || ps.vault != nil {
+	if ps.phone != nil || ps.ssh != nil || ps.vault != nil || ps.tpmSalt != nil {
 		t.Fatalf("parts the plan does not name: %+v", ps)
 	}
 	if got := ps.inOrder(); len(got) != 2 || got[0] != ps.unlock || got[1] != ps.console {
@@ -21,13 +22,13 @@ func TestOnlyThePlannedPartsStart(t *testing.T) {
 
 	ps = plannedParts(imageplan.All, sshscreen.Options{On: true}, "/run/unlock.sock")
 	got := ps.inOrder()
-	want := []part{ps.phone, ps.ssh, ps.vault, ps.unlock, ps.console}
+	want := []part{ps.phone, ps.ssh, ps.vault, ps.tpmSalt, ps.unlock, ps.console}
 	if len(got) != len(want) {
 		t.Fatalf("started %v", got)
 	}
 	for i := range want {
 		if want[i] == nil || got[i] != want[i] {
-			t.Fatalf("part %d: %v, want %v (the layers' order: phone, SSH, vault, the disk's key, the console)", i, got[i], want[i])
+			t.Fatalf("part %d: %v, want %v (the layers' order: phone, SSH, vault, TPM salt, the disk's key, the console)", i, got[i], want[i])
 		}
 	}
 }

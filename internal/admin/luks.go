@@ -242,13 +242,14 @@ func describeKeyslot(s KeyslotStatus) string {
 }
 
 // enrollable says whether this build enrols recipe r: the recovery
-// recipe, the phone's salt and the unattended vault recipes.
+// recipe, the TPM's salt, the phone's salt and the unattended vault
+// recipes.
 func enrollable(r diskkey.Recipe) error {
 	if err := r.Check(); err != nil {
 		return err
 	}
 	switch r {
-	case diskkey.RecipeRecovery, diskkey.RecipePhoneSalt, diskkey.RecipeUnattendedVault, diskkey.RecipeUnattendedVaultPepper:
+	case diskkey.RecipeRecovery, diskkey.RecipeTPMSalt, diskkey.RecipePhoneSalt, diskkey.RecipeUnattendedVault, diskkey.RecipeUnattendedVaultPepper:
 		return nil
 	}
 	return fmt.Errorf("recipe %s (%s) is not enrolled by this build yet", r, r.Words())
@@ -322,6 +323,9 @@ func LuksMark(o LuksMarkOptions) error {
 	device, keyslot, recipe, label := o.Device, o.Keyslot, o.Recipe, o.Label
 	if err := enrollable(recipe); err != nil {
 		return err
+	}
+	if recipe == diskkey.RecipeTPMSalt {
+		return fmt.Errorf("recipe %s's salt is made in the TPM at its enrolment, and no key of it is made by hand: tpm2-kira luks enrol %s %s", recipe, device, recipe.Words())
 	}
 	slot := 0
 	if recipe.Bound() {
@@ -447,6 +451,16 @@ func LuksEnrol(o LuksEnrolOptions) error {
 		fmt.Fprintln(os.Stderr, "Deriving the key (Argon2id, 1 GiB, a few seconds) ...")
 		if key, err = diskkey.Combine(pw, salt); err != nil {
 			return err
+		}
+	case diskkey.RecipeTPMSalt:
+		k, s, err := tpmSaltKey(o.Remote)
+		if err != nil {
+			return err
+		}
+		key, slot = k, int(s)
+		label = o.Remote.Label
+		if label == "" {
+			label = "luks"
 		}
 	case diskkey.RecipePhoneSalt:
 		idx, err := boundSlotIndex(o.Remote.SealIndex)

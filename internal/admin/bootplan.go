@@ -42,15 +42,16 @@ import (
 // changed. A part the image carries but nothing uses any more is no
 // reason to rebuild: the next build leaves it out.
 
-var planOrder = []string{imageplan.PartUnlock, imageplan.PartCodes, imageplan.PartPhone, imageplan.PartVault, imageplan.PartNet, imageplan.PartSSH}
+var planOrder = []string{imageplan.PartUnlock, imageplan.PartCodes, imageplan.PartPhone, imageplan.PartVault, imageplan.PartTPMSalt, imageplan.PartNet, imageplan.PartSSH}
 
 var partTitles = map[string]string{
-	imageplan.PartUnlock: "Disk unlock",
-	imageplan.PartCodes:  "TOTP codes",
-	imageplan.PartPhone:  "Phone (Bluetooth)",
-	imageplan.PartVault:  "Vault",
-	imageplan.PartNet:    "Network",
-	imageplan.PartSSH:    "SSH server",
+	imageplan.PartUnlock:  "Disk unlock",
+	imageplan.PartCodes:   "TOTP codes",
+	imageplan.PartPhone:   "Phone (Bluetooth)",
+	imageplan.PartVault:   "Vault",
+	imageplan.PartTPMSalt: "TPM salt",
+	imageplan.PartNet:     "Network",
+	imageplan.PartSSH:     "SSH server",
 }
 
 // PlanPart is one part of the plan: in or out, and why.
@@ -94,10 +95,11 @@ type planInputs struct {
 	Config    ControlConfig
 	ConfigErr string
 
-	TPMErr string
-	Slots  int // populated slots: their codes are shown at boot
-	Phones int // phones enrolled, over all slots
-	Vaults int // slots enrolled with a vault
+	TPMErr   string
+	Slots    int // populated slots: their codes are shown at boot
+	Phones   int // phones enrolled, over all slots
+	Vaults   int // slots enrolled with a vault
+	TPMSalts int // slots holding a TPM salt (recipe 0x1200)
 
 	Signer    []byte // the signing public key the gate checks the enrolments with (PEM)
 	SignerErr string
@@ -160,6 +162,9 @@ func readPlanInputs(o PlanOptions) planInputs {
 				}
 				if att.Vault.Enabled() {
 					in.Vaults++
+				}
+				if len(att.TPMSalt.Credential) != 0 {
+					in.TPMSalts++
 				}
 			}
 		}
@@ -300,6 +305,15 @@ func decidePlan(in planInputs) *BootPlan {
 		add(imageplan.PartVault, true, plural(in.Vaults, "slot")+" enrolled with a vault")
 	}
 
+	switch {
+	case in.TPMSalts == 0:
+		add(imageplan.PartTPMSalt, false, "no slot holds a TPM salt")
+	case in.TPMErr != "":
+		add(imageplan.PartTPMSalt, false, noTPM)
+	default:
+		add(imageplan.PartTPMSalt, true, plural(in.TPMSalts, "slot")+" holding a TPM salt")
+	}
+
 	ssh := cfg.Remote.SSH
 	switch {
 	case !ssh.On:
@@ -322,7 +336,7 @@ func decidePlan(in planInputs) *BootPlan {
 	}
 
 	sort.SliceStable(p.Parts, func(i, j int) bool { return planIndex(p.Parts[i].Name) < planIndex(p.Parts[j].Name) })
-	p.TPM = p.Has(imageplan.PartCodes) || p.Has(imageplan.PartPhone) || p.Has(imageplan.PartVault) || p.Has(imageplan.PartSSH)
+	p.TPM = p.Has(imageplan.PartCodes) || p.Has(imageplan.PartPhone) || p.Has(imageplan.PartVault) || p.Has(imageplan.PartTPMSalt) || p.Has(imageplan.PartSSH)
 	return p
 }
 
@@ -505,7 +519,7 @@ func (p *BootPlan) drop(name, why string) {
 			p.Parts[i] = PlanPart{Name: name, Why: why}
 		}
 	}
-	p.TPM = p.Has(imageplan.PartCodes) || p.Has(imageplan.PartPhone) || p.Has(imageplan.PartVault) || p.Has(imageplan.PartSSH)
+	p.TPM = p.Has(imageplan.PartCodes) || p.Has(imageplan.PartPhone) || p.Has(imageplan.PartVault) || p.Has(imageplan.PartTPMSalt) || p.Has(imageplan.PartSSH)
 }
 
 // InitramfsPlanCommand implements 'initramfs plan': with a build root the

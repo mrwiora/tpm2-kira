@@ -91,12 +91,12 @@ flowchart LR
   --salt vault --pepper --url … --pin … --token …`; a combination not in
   the table is refused with the ones that are.
 - **Shown** the same way everywhere (control, `luks status`, the code
-  screen): `0x1403 password typed · salt from the vault (pepper)`.
+  screen): `0x1401 password typed · salt from the vault (pepper)`.
 - **control** offers the recipes as named choices, with what each needs
   at boot (a person typing, the phone near, the vault, an operator).
 - **The TPM part T:** 32 random bytes in the slot's blob, wrapped for the
   EK and the slot's release key - today's L. The password of the
-  unattended recipes, the salt of `0x1202`, as 64 hexadecimal characters.
+  unattended recipes, the salt of `0x1200`, as `FactorSalt(T, label)`.
 - **The vault part R:** the salt of the vault recipes, 64 hexadecimal
   characters; with a pepper `hex(HKDF-SHA256(R, pepper))`, so every
   guessed pepper costs a whole Argon2id. The release carries R and the
@@ -110,14 +110,18 @@ flowchart LR
 1. [x] diskkey: `Recipe` (IDs, checks, names for display), the token
    (`recipe`, type `tpm2-kira-XXXX`); the old modes and `--mode` go
    (`--password`/`--salt`/`--pepper`), in the code, `control`, the help,
-   acceptance.py and vmtest. This build enrols 0x1100, 0x1302, 0x2400,
-   0x2401; 0x1302 has no TPM check of the password until step 2, 0x2400/1
-   keep the HKDF derivation until step 3, 0x1202 and 0x1402/3 come with
+   acceptance.py and vmtest. This build enrolled 0x1100, 0x1302, 0x2400,
+   0x2401 then (renumbered in step 2: 0x1300); 0x2400/1
+   keep the HKDF derivation until step 3, 0x1200 and 0x1400/1 came with
    steps 2 and 3. README and docs: step 7.
-2. [ ] the TPM-held parts: T in the slot's blob (wrapped like L);
-   the release key with `PolicyAuthValue` and an Argon2id authValue for
-   the typed recipes (B1), DA-protected, a salted session; the blob still
-   fits its NV index.
+2. [x] the TPM salt (0x1200): T in the slot's blob, wrapped for the EK and
+   the release key (blob version 15); `luks enrol --salt tpm`; the boot
+   plan's part `tpmsalt`, which opens it while the code screen holds; the
+   key provider asks the password after the hold. The slot's preparation
+   (attestation part, EK, release key) is shared with the vault's
+   enrolment. Tested: unit, swtpm (opens in the approved state, not after
+   a PCR moved), the plan rule; vmtest in step 8. `control`'s choice for
+   it: step 4.
 3. [ ] vaultkey: R as the salt, the pepper into it (HKDF), `Key` (HKDF over
    L ‖ R) goes; the pepper check over the combined key; the vault's
    release mode as an ID in `vaultproto`.
@@ -131,9 +135,9 @@ flowchart LR
    pepper asked, `requests answer`).
 7. [ ] docs (DISK-KEY, VAULT, SECURITY-BACKGROUND), HISTORY.md.
 8. [ ] tests: every recipe - unit (each ID's derivation against the
-   known answer, the refused ones), swtpm (B1: right password, wrong
-   password counted, lockout; T as password; the vault with and without a
-   pepper), the vault's tests (the CLI queue), vmtest on every machine.
+   known answer, the refused ones), swtpm (T as the unattended password;
+   the vault with and without a pepper), the vault's tests (the CLI
+   queue), vmtest on every machine, every recipe.
 
 **Breaks:** every tpm2-kira keyslot is enrolled again (the token format,
 and `tpm+vault`'s derivation); the vault's devices enrol again.
@@ -176,19 +180,17 @@ and `tpm+vault`'s derivation); the vault's devices enrol again.
 A plain passphrase keyslot may be removed; `control` warns (red) when
 every keyslot of a volume is tpm2-kira's.
 
-### The TPM and a typed password: options
+### The TPM and a typed password (decided: C, no check)
 
-| | The TPM opens the device-held salt ... | Guessing the password after a stolen device boots |
-|---|---|---|
-| A | on an approved boot, without the password (today's way for the phone and the vault) | offline, Argon2id's cost - about a second a guess |
-| **B** | only with the password too: `PolicyAuthValue` on the release key, authValue = Argon2id(password), DA-protected, over a session salted to the slot's primary key | through the TPM only: a few tries, then its lockout |
-| C | password held by the TPM (unattended): no password to check | - (the salt's device is the gate) |
-
-Recommended: **B for every recipe with a typed password**, whatever holds
-the salt - this TPM, the vault (an approved boot of a stolen device is an
-approved boot: a vault in auto mode releases), the phone. C for the
-unattended recipes. The fallbacks stay: the recovery recipe at tpm2-kira's
-prompt, and the operating system's prompt with a plain passphrase.
+The TPM does not check the typed password. A device-held salt opens in a
+boot the slot's signing key approved, while the code screen holds (on
+Arch the separator ends the policy when the hold ends; the password
+prompt comes after it), and the password is typed after the hold. After
+a stolen machine boots, the password can be guessed offline at the
+combiner's cost (Argon2id, about a second a guess, and LUKS's own KDF on
+top): its strength is the limit. Options A (the TPM's check, the
+password asked during the hold) and B (Debian only) were weighed and
+not taken (2026-10-29).
 
 ### Found while checking the fallbacks
 
@@ -196,18 +198,6 @@ prompt, and the operating system's prompt with a plain passphrase.
   passphrase prompt - systemd's, Debian's askpass - ends at the newline,
   so a recipe's key cannot be typed at the operating system's prompt:
   step 2 is tpm2-kira's prompt, step 3 needs a plain passphrase keyslot.
-
-### The TPM checks the typed password (decided: B1)
-
-A device-held salt opens only when the boot is approved (the slot's
-policy over the PCRs) **and** the typed password is right: the release
-key's policy adds `PolicyAuthValue`, its authValue is Argon2id of the
-password (one-way; the password itself is nowhere on the machine), the
-key is DA-protected (no `NoDA`), and the password is proven over a session
-salted to the slot's primary key. Then the key is `Combine(password,
-salt)` as always. A changed password is a new enrolment. About a second
-more at boot. Unattended recipes (password held by the TPM) have no
-authValue.
 
 ### Recipes by number (decided)
 
@@ -220,19 +210,17 @@ uint16), the token stores the number, names are for display only.
 | P: password | `1` typed, `2` held by this TPM (unattended) |
 | S: salt | `1` typed (the recovery recipe), `2` this TPM, `3` the phone, `4` the vault |
 | flag `0x01` | pepper (entered at the vault's approval) |
-| flag `0x02` | the TPM checks the typed password (B1; set with P = 1 and a device-held salt) |
 
 | ID | Recipe |
 |---|---|
 | `0x1100` | recovery: password and salt typed |
-| `0x1202` | password typed, salt in this TPM |
-| `0x1302` | password typed, salt from the phone |
-| `0x1402` / `0x1403` | password typed, salt from the vault / with a pepper |
+| `0x1200` | password typed, salt in this TPM |
+| `0x1300` | password typed, salt from the phone |
+| `0x1400` / `0x1401` | password typed, salt from the vault / with a pepper |
 | `0x2400` / `0x2401` | unattended: this TPM and the vault / with a pepper |
 
-Refused: P = 2 with S = 1, 2 or 3; the pepper without S = 4; flag
-`0x02` with P = 2 or S = 1. The token:
-`{"type": "tpm2-kira-1403", "recipe": 5123, "slot": 1, ...}` - the type
+Refused: P = 2 with S = 1, 2 or 3; the pepper without S = 4. The token:
+`{"type": "tpm2-kira-1401", "recipe": 5121, "slot": 1, ...}` - the type
 repeats the ID in hexadecimal, so `cryptsetup luksDump` names it too.
 `--password`/`--salt`/`--pepper` on the command line and control's named
 choices map to the ID; the vault's release modes become IDs alike in

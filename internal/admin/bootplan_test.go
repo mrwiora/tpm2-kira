@@ -133,6 +133,19 @@ func TestDecidePlan(t *testing.T) {
 		t.Errorf("always: %+v", p.Parts)
 	}
 
+	// A slot's TPM salt needs the TPM alone: no network, no phone.
+	in = planInputs{Config: DefaultControlConfig(), Slots: 1, TPMSalts: 1}
+	if p := decidePlan(in); !p.Has(imageplan.PartTPMSalt) || !p.TPM || !strings.Contains(p.Part(imageplan.PartTPMSalt).Why, "1 slot holding a TPM salt") {
+		t.Errorf("a TPM salt: %+v", p.Part(imageplan.PartTPMSalt))
+	}
+	if p := decidePlan(planInputs{Config: DefaultControlConfig(), Slots: 1}); p.Has(imageplan.PartTPMSalt) {
+		t.Errorf("no TPM salt, the part in: %+v", p.Part(imageplan.PartTPMSalt))
+	}
+	in.TPMErr = "no TPM"
+	if p := decidePlan(in); p.Has(imageplan.PartTPMSalt) {
+		t.Errorf("a TPM salt without a TPM: %+v", p.Part(imageplan.PartTPMSalt))
+	}
+
 	// The vault is asked over the network; SSH needs it too.
 	in = planInputs{Config: DefaultControlConfig(), Slots: 1, Vaults: 1}
 	if p := decidePlan(in); p.Has(imageplan.PartVault) || !strings.Contains(p.Part(imageplan.PartVault).Why, "network") {

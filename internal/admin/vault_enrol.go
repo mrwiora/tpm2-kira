@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/google/go-tpm/tpm2/transport"
 	"os"
 	"strings"
 	"time"
@@ -73,6 +74,49 @@ func VaultEnrol(o VaultEnrolOptions) error {
 	return nil
 }
 
+// ensureAttestation gives the slot what a part held for its TPM needs
+// and it lacks: the attestation part (device ID, attestation key, the
+// quoted PCRs), the EK's algorithm, the release key. Nothing is written:
+// the caller signs the blob once, at the end.
+func ensureAttestation(tpmDev transport.TPM, sealed *nvslot.SealedBlob, name string) (*nvslot.Attestation, error) {
+	att := sealed.Payload.Attestation
+	sel := vaultkey.SealedSelection(sealed)
+	if att == nil {
+		fmt.Println("Creating an attestation key in the TPM ...")
+		akPub, akPriv, akName, err := phonegate.CreateAK(tpmDev)
+		if err != nil {
+			return nil, err
+		}
+		if name == "" {
+			name, _ = os.Hostname()
+		}
+		if len(name) > 64 {
+			name = name[:64]
+		}
+		att = &nvslot.Attestation{
+			DeviceID: phonegate.RandBytes(attest.DeviceIDSize), FriendlyName: name,
+			AKPublic: akPub, AKPrivate: akPriv, AKName: akName,
+			PCRAlg: sel.Alg, PCRSelection: sel.Indices,
+		}
+	}
+	if att.EKAlg == 0 {
+		alg, ek, _, err := phonegate.PickCertifiedEK(tpmDev)
+		if err != nil {
+			return nil, err
+		}
+		tpmdev.FlushHandle(tpmDev, ek.Handle)
+		att.EKAlg = alg
+	}
+	if len(att.ReleaseKeyPublic) == 0 {
+		pub, privArea, err := phonegate.CreateReleaseKey(tpmDev, sealed)
+		if err != nil {
+			return nil, err
+		}
+		att.ReleaseKeyPublic, att.ReleaseKeyPrivate = pub, privArea
+	}
+	return att, nil
+}
+
 // vaultEnrolKey hands the slot to the vault and returns the key of the
 // keyslot and the slot's number. The slot gets what it lacks - the
 // attestation part (device ID, attestation key), the release key - and,
@@ -125,41 +169,10 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	if att != nil && att.Vault.Enabled() {
 		return nil, 0, fmt.Errorf("slot %d is enrolled with the vault at %s already; 'tpm2-kira vault unenrol --nvram %d' first", slot, att.Vault.URL, slot)
 	}
+	if att, err = ensureAttestation(tpmDev, sealed, o.Name); err != nil {
+		return nil, 0, err
+	}
 	sel := vaultkey.SealedSelection(sealed)
-	if att == nil {
-		fmt.Println("Creating an attestation key in the TPM ...")
-		akPub, akPriv, akName, err := phonegate.CreateAK(tpmDev)
-		if err != nil {
-			return nil, 0, err
-		}
-		name := o.Name
-		if name == "" {
-			name, _ = os.Hostname()
-		}
-		if len(name) > 64 {
-			name = name[:64]
-		}
-		att = &nvslot.Attestation{
-			DeviceID: phonegate.RandBytes(attest.DeviceIDSize), FriendlyName: name,
-			AKPublic: akPub, AKPrivate: akPriv, AKName: akName,
-			PCRAlg: sel.Alg, PCRSelection: sel.Indices,
-		}
-	}
-	if att.EKAlg == 0 {
-		alg, ek, _, err := phonegate.PickCertifiedEK(tpmDev)
-		if err != nil {
-			return nil, 0, err
-		}
-		tpmdev.FlushHandle(tpmDev, ek.Handle)
-		att.EKAlg = alg
-	}
-	if len(att.ReleaseKeyPublic) == 0 {
-		pub, privArea, err := phonegate.CreateReleaseKey(tpmDev, sealed)
-		if err != nil {
-			return nil, 0, err
-		}
-		att.ReleaseKeyPublic, att.ReleaseKeyPrivate = pub, privArea
-	}
 
 	var pepper []byte
 	if o.Pepper {

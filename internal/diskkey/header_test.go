@@ -34,8 +34,8 @@ func TestReadLuks2TokensAndRecipe(t *testing.T) {
 	dev := writeLuks2Header(t, `{
 	  "0": {"type": "tpm2-kira-1100", "keyslots": ["1"], "recipe": 4352, "created": "2026-10-07T17:30:00Z"},
 	  "1": {"type": "systemd-tpm2", "keyslots": ["2"], "tpm2-blob": "x"},
-	  "2": {"type": "tpm2-kira-1302", "keyslots": ["3"], "recipe": 4866, "slot": 0, "label": "luks", "created": "2026-10-07T18:00:00Z"},
-	  "3": {"type": "tpm2-kira-1302", "keyslots": ["4"], "recipe": 4866, "slot": 0, "created": "x"}
+	  "2": {"type": "tpm2-kira-1300", "keyslots": ["3"], "recipe": 4864, "slot": 0, "label": "luks", "created": "2026-10-07T18:00:00Z"},
+	  "3": {"type": "tpm2-kira-1300", "keyslots": ["4"], "recipe": 4864, "slot": 0, "created": "x"}
 	}`)
 	toks, err := ReadLuks2Tokens(dev)
 	if err != nil || len(toks) != 3 {

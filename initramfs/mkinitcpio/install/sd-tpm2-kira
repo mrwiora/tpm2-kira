@@ -258,6 +258,8 @@ The hook will:
                  the adapter's driver and firmware, the signing public key;
                  run starts the radio worker (gate-child) itself
     Vault        a slot is enrolled with a vault, and the image has a network
+    TPM salt     a slot holds a TPM salt (recipe 0x1200): run opens it while
+                 the code screen holds
     Network      TPM2_KIRA_NET in /etc/tpm2-kira/control.conf: systemd-networkd
                  and the matched interface's driver
     SSH server   TPM2_KIRA_SSH=on: tpm2-kira's own, run unprivileged; the

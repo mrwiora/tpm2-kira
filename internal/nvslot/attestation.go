@@ -61,8 +61,11 @@ type Attestation struct {
 	// for, under the slot's policy plus PolicyCommandCode(ActivateCredential).
 	ReleaseKeyPublic  []byte // marshalled TPMT_PUBLIC
 	ReleaseKeyPrivate []byte // TPM2B_PRIVATE contents, wrapped by the storage primary
-	PCRAlg            uint16
-	PCRSelection      []uint8
+	// TPMSalt is the salt part of the recipe 0x1200 (password typed, salt in
+	// this TPM), wrapped for the EK and the release key. Empty without.
+	TPMSalt      WrappedFactor
+	PCRAlg       uint16
+	PCRSelection []uint8
 	// Count is the revision of the attestation part: the value of the
 	// slot's TPM counter when the part was last changed (counter.go).
 	// It does not count attestations; it moves when verifiers are added or
@@ -213,6 +216,8 @@ func (b *Attestation) Marshal() ([]byte, error) {
 	w.lp32(b.BootKeyPrivate)
 	w.lp32(b.ReleaseKeyPublic)
 	w.lp32(b.ReleaseKeyPrivate)
+	w.lp32(b.TPMSalt.Credential)
+	w.lp32(b.TPMSalt.EncryptedSecret)
 	w.u16(b.PCRAlg)
 	w.lp16(b.PCRSelection)
 	w.u64(b.Count)
@@ -308,6 +313,8 @@ func UnmarshalAttestation(data []byte) (*Attestation, error) {
 	b.BootKeyPrivate = r.lp32(4096)
 	b.ReleaseKeyPublic = r.lp32(4096)
 	b.ReleaseKeyPrivate = r.lp32(4096)
+	b.TPMSalt.Credential = r.lp32(1024)
+	b.TPMSalt.EncryptedSecret = r.lp32(1024)
 	b.PCRAlg = r.u16()
 	b.PCRSelection = r.lp16(attest.MaxPCRIndex)
 	b.Count = r.u64()
@@ -413,6 +420,7 @@ type attestationJSON struct {
 	EKAlg        string             `json:"ek_alg"`
 	BootKey      string             `json:"boot_key_public_hex"`
 	PCRSelection string             `json:"pcr_selection"`
+	TPMSalt      bool               `json:"tpm_salt"` // the slot holds the salt of recipe 0x1200
 	Revision     uint64             `json:"revision"` // changes with the verifiers, not with attestations
 	Methods      attestationMethods `json:"methods"`
 }
@@ -454,6 +462,7 @@ func (b *Attestation) Json() *attestationJSON {
 		EKAlg:        EKAlgName(b.EKAlg),
 		BootKey:      hex.EncodeToString(b.BootKeyPublic),
 		PCRSelection: sel.String(),
+		TPMSalt:      len(b.TPMSalt.Credential) > 0,
 		Revision:     b.Count,
 	}
 	if b.Phone.Enabled() {

@@ -3,7 +3,10 @@ package bootrun
 import (
 	"context"
 	"fmt"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
@@ -33,7 +36,7 @@ type part interface {
 
 // parts are the parts of one boot; nil is a part the plan does not name.
 type parts struct {
-	phone, ssh, vault, unlock, console part
+	phone, ssh, vault, tpmSalt, unlock, console part
 }
 
 // plannedParts is the parts the image's plan and the SSH settings name. The
@@ -50,13 +53,16 @@ func plannedParts(planned imageplan.Planned, remote sshscreen.Options, unlockSoc
 	if planned.Vault {
 		ps.vault = &vaultPart{}
 	}
+	if planned.TPMSalt {
+		ps.tpmSalt = &tpmSaltPart{}
+	}
 	return ps
 }
 
 // inOrder is the parts there are, in the order they start.
 func (ps parts) inOrder() []part {
 	var out []part
-	for _, p := range []part{ps.phone, ps.ssh, ps.vault, ps.unlock, ps.console} {
+	for _, p := range []part{ps.phone, ps.ssh, ps.vault, ps.tpmSalt, ps.unlock, ps.console} {
 		if p != nil {
 			out = append(out, p)
 		}
@@ -91,6 +97,9 @@ type board struct {
 	expectRelease func(bool)
 	// vaultKey is a volume's key from the vault; nil without one.
 	vaultKey func(volume string) ([]byte, error)
+	// tpmSalt is the part T of a slot's TPM salt, opened while the code
+	// screen held; nil without one.
+	tpmSalt func(slot int) []byte
 	// remote shows the code screen in the SSH sessions, and hint says on the
 	// console where they are; nil: the code screen is the console's.
 	remote func(screen []byte)
@@ -253,6 +262,53 @@ func (p *vaultPart) released(*board, string) {
 
 func (p *vaultPart) end(*board) {}
 
+// tpmSaltPart opens the TPM salts (recipe 0x1200) as the boot starts,
+// while the code screen holds - the only time the slot's policy holds -
+// and keeps them for the key provider, which asks the password after the
+// hold. They are wiped when run ends.
+type tpmSaltPart struct {
+	mu    sync.Mutex
+	salts map[int][]byte
+}
+
+func (p *tpmSaltPart) start(bd *board) {
+	tpmDev, err := tpmdev.Open(tpmdev.PreferResourceManager(bd.tpmPath))
+	if err != nil {
+		return
+	}
+	opened, failed := phonegate.OpenTPMSalts(tpmDev, bd.debug)
+	tpmDev.Close()
+	log := diskkey.UnlockLogger(bd.debug)
+	for n := range opened {
+		fmt.Printf("%s Slot #%d: the TPM opened the disk's salt; the password is asked after the code screen.\n", screen.Tag(screen.TagYellow), n)
+		log(fmt.Sprintf("tpm salt: slot %d: opened", n))
+	}
+	for n, err := range failed {
+		fmt.Printf("%s \033[0;31mSlot #%d: the TPM did not open the disk's salt:\033[0m %v\n", screen.Tag(screen.TagYellow), n, err)
+		log(fmt.Sprintf("tpm salt: slot %d: not opened: %v", n, err))
+	}
+	p.salts = opened
+	bd.tpmSalt = func(slot int) []byte {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if t := p.salts[slot]; t != nil {
+			return append([]byte(nil), t...)
+		}
+		return nil
+	}
+}
+
+func (p *tpmSaltPart) released(*board, string) {}
+
+func (p *tpmSaltPart) end(*board) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, t := range p.salts {
+		wipe.Bytes(t)
+	}
+	p.salts = nil
+}
+
 // unlockPart is the key provider for systemd-cryptsetup (or Debian's
 // keyscript): it answers the volumes' key requests once the hold has
 // ended, and stays until it is stopped. How a key is made is read from
@@ -280,9 +336,28 @@ func (p *unlockPart) start(bd *board) {
 		// that follows the phone's receipt.
 		bd.expectRelease(true)
 	}
-	salt := bd.salt
-	if salt == nil {
-		salt = func() []byte { return nil }
+	salt := func(volume string, r diskkey.Recipe) []byte {
+		switch r {
+		case diskkey.RecipePhoneSalt:
+			if bd.salt != nil {
+				return bd.salt()
+			}
+		case diskkey.RecipeTPMSalt:
+			if bd.tpmSalt == nil {
+				return nil
+			}
+			tok, err := diskkey.TokenOf(volume, r)
+			if err != nil || tok.Slot == nil {
+				return nil
+			}
+			t := bd.tpmSalt(*tok.Slot)
+			if t == nil {
+				return nil
+			}
+			defer wipe.Bytes(t)
+			return phonegate.FactorSalt(t, tok.Label)
+		}
+		return nil
 	}
 	recipes := &diskkey.UnlockRecipe{}
 	p.unlock = diskkey.ServeUnlock(l, diskkey.DiskKey(salt, bd.vaultKey, recipes.ForVolume, bd.ask), diskkey.UnlockLogger(bd.debug))

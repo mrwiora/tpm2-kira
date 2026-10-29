@@ -22,8 +22,7 @@ func TestRecipesAreExactlyTheTable(t *testing.T) {
 	}
 }
 
-// The command line's words name a recipe; the TPM's check of the typed
-// password comes with every device-held salt; what distributes nothing is
+// The command line's words name a recipe; what distributes nothing is
 // refused with the recipes that are.
 func TestRecipeOfWords(t *testing.T) {
 	for _, c := range []struct {
@@ -72,22 +71,22 @@ func TestRecipeOfWords(t *testing.T) {
 
 func TestRecipeNumbers(t *testing.T) {
 	r := RecipeVaultSaltPepper
-	if r.String() != "0x1403" || r.TokenType() != "tpm2-kira-1403" {
+	if r.String() != "0x1401" || r.TokenType() != "tpm2-kira-1401" {
 		t.Fatalf("%s %s", r, r.TokenType())
 	}
-	if r.Password() != PasswordTyped || r.Salt() != SaltVault || !r.Pepper() || !r.TPMChecksPassword() || r.Unattended() || !r.Bound() {
+	if r.Password() != PasswordTyped || r.Salt() != SaltVault || !r.Pepper() || r.Unattended() || !r.Bound() {
 		t.Fatalf("%s's parts", r)
 	}
 	if !RecipeUnattendedVault.Unattended() || RecipeRecovery.Bound() {
 		t.Fatal("unattended or bound")
 	}
-	if got, err := ParseRecipe("0x1403"); err != nil || got != r {
+	if got, err := ParseRecipe("0x1401"); err != nil || got != r {
 		t.Fatalf("ParseRecipe: %v %v", got, err)
 	}
-	if _, err := ParseRecipe("0x1400"); err == nil {
-		t.Fatal("0x1400 parsed: a typed password with the vault's salt is always checked by the TPM")
+	if _, err := ParseRecipe("0x1301"); err == nil {
+		t.Fatal("0x1301 parsed: a pepper is the vault's")
 	}
-	if d := r.Describe(); d != "0x1403 password typed · salt from the vault (pepper, the TPM checks the password)" {
+	if d := r.Describe(); d != "0x1401 password typed · salt from the vault (pepper)" {
 		t.Fatalf("Describe: %q", d)
 	}
 }
@@ -98,7 +97,7 @@ func TestRecipeNumbers(t *testing.T) {
 func TestParseKiraToken(t *testing.T) {
 	tok := NewLuksToken(RecipeVaultSalt, "2", 1, "root", "2026-10-29T18:00:00Z")
 	raw, _ := json.Marshal(tok)
-	if !strings.Contains(string(raw), `"type":"tpm2-kira-1402"`) || !strings.Contains(string(raw), `"recipe":5122`) || !strings.Contains(string(raw), `"slot":1`) {
+	if !strings.Contains(string(raw), `"type":"tpm2-kira-1400"`) || !strings.Contains(string(raw), `"recipe":5120`) || !strings.Contains(string(raw), `"slot":1`) {
 		t.Fatalf("token JSON %s", raw)
 	}
 	got, ours := ParseKiraToken(raw)
@@ -111,9 +110,9 @@ func TestParseKiraToken(t *testing.T) {
 	for what, js := range map[string]string{
 		"another version's":      `{"type": "tpm2-kira-vault", "keyslots": ["2"], "slot": 1}`,
 		"the one-type form":      `{"type": "tpm2-kira", "keyslots": ["2"], "mode": "tpm+vault", "slot": 1}`,
-		"type and recipe differ": `{"type": "tpm2-kira-1402", "keyslots": ["2"], "recipe": 5123, "slot": 1}`,
-		"no recipe":              `{"type": "tpm2-kira-1400", "keyslots": ["2"], "recipe": 5120, "slot": 1}`,
-		"bound without its slot": `{"type": "tpm2-kira-1402", "keyslots": ["2"], "recipe": 5122}`,
+		"type and recipe differ": `{"type": "tpm2-kira-1400", "keyslots": ["2"], "recipe": 5121, "slot": 1}`,
+		"no recipe":              `{"type": "tpm2-kira-1402", "keyslots": ["2"], "recipe": 5122, "slot": 1}`,
+		"bound without its slot": `{"type": "tpm2-kira-1400", "keyslots": ["2"], "recipe": 5120}`,
 	} {
 		got, ours := ParseKiraToken(json.RawMessage(js))
 		if !ours || !got.Obsolete || got.BoundTo(1) {

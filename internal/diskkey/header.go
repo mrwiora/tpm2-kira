@@ -296,3 +296,22 @@ func ScreenRecipe(socket string) func() []Recipe {
 		return nil
 	}
 }
+
+// TokenOf is the volume's token of recipe r, read from its LUKS2 header:
+// the slot and the label its salt is made with.
+func TokenOf(volume string, r Recipe) (*LuksToken, error) {
+	dev, err := VolumeDevice(volume)
+	if err != nil {
+		return nil, err
+	}
+	toks, err := ReadLuks2Tokens(dev)
+	if err != nil {
+		return nil, err
+	}
+	for i := range toks {
+		if !toks[i].Obsolete && toks[i].Recipe == r {
+			return &toks[i], nil
+		}
+	}
+	return nil, fmt.Errorf("%s has no keyslot of recipe %s", dev, r)
+}

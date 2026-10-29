@@ -782,7 +782,7 @@ with 'phone enrol', over Bluetooth LE - as a value only this machine's
 TPM can open, in a boot its signing key approved. The phone hands it back
 after a verdict you accept; at boot tpm2-kira asks for your password and
 derives the key from both (Argon2id, the recipe
-0x1302). Without the phone, the recovery passphrase in its
+0x1300). Without the phone, the recovery passphrase in its
 own keyslot opens the disk at cryptsetup's prompt.
 
   phone salt enrol    Give the phone a salt, prove the round trip, derive

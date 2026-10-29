@@ -473,7 +473,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 		}
 	}()
 	salt := []byte("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-	key, err := DiskKey(func() []byte { return append([]byte(nil), salt...) }, nil, recipeOf(RecipePhoneSalt), ConsoleAsk)("cryptroot")
+	key, err := DiskKey(func(string, Recipe) []byte { return append([]byte(nil), salt...) }, nil, recipeOf(RecipePhoneSalt), ConsoleAsk)("cryptroot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +505,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 	}
 	// Without a salt from the phone: the recovery recipe (0x1100) variant, a typed
 	// salt, said so at the prompt.
-	key, err = DiskKey(func() []byte { return nil }, nil, recipeOf(RecipePhoneSalt), ConsoleAsk)("cryptroot")
+	key, err = DiskKey(func(string, Recipe) []byte { return nil }, nil, recipeOf(RecipePhoneSalt), ConsoleAsk)("cryptroot")
 	if err != nil {
 		t.Fatalf("without a salt from the phone: %v", err)
 	}
@@ -520,7 +520,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
-	if !strings.Contains(seen, "no salt came from the phone") {
+	if !strings.Contains(seen, "no salt that your phone returned") {
 		t.Errorf("the fallback was not explained: %q", seen)
 	}
 	for drained := false; !drained; { // the echo after the salt
@@ -530,7 +530,35 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 			drained = true
 		}
 	}
-	if _, err := DiskKey(func() []byte { return append([]byte(nil), salt...) }, nil, recipeOf(), ConsoleAsk)("cryptroot"); !errors.Is(err, ErrUnlockSkipped) {
+	// The salt in this TPM: asked of the TPM's part for this volume and
+	// recipe, the password typed.
+	var asked Recipe
+	key, err = DiskKey(func(_ string, r Recipe) []byte { asked = r; return append([]byte(nil), salt...) }, nil, recipeOf(RecipeTPMSalt), ConsoleAsk)("cryptroot")
+	if err != nil || asked != RecipeTPMSalt {
+		t.Fatalf("the TPM's salt: %v (asked for %v)", err, asked)
+	}
+	if want, _ := Combine([]byte("hunter2"), salt); !bytes.Equal(key, want) {
+		t.Fatal("the TPM salt's key is not the combination of password and salt")
+	}
+	seen = ""
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(seen, "Password for disk cryptroot") && time.Now().Before(deadline); {
+		select {
+		case p := <-prompts:
+			seen += p
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	if !strings.Contains(seen, "the salt this TPM opened") || strings.Contains(seen, "Salt for disk") {
+		t.Errorf("the TPM salt's prompt: %q", seen)
+	}
+	for drained := false; !drained; {
+		select {
+		case <-prompts:
+		case <-time.After(300 * time.Millisecond):
+			drained = true
+		}
+	}
+	if _, err := DiskKey(func(string, Recipe) []byte { return append([]byte(nil), salt...) }, nil, recipeOf(), ConsoleAsk)("cryptroot"); !errors.Is(err, ErrUnlockSkipped) {
 		t.Fatalf("no keyslot of ours: %v", err)
 	}
 	select {
@@ -604,7 +632,7 @@ func TestDiskKeyPasswordSaltMode(t *testing.T) {
 			}()
 		}
 	}()
-	key, err := DiskKey(func() []byte { return nil }, nil, recipeOf(RecipeRecovery), ConsoleAsk)("cryptroot")
+	key, err := DiskKey(func(string, Recipe) []byte { return nil }, nil, recipeOf(RecipeRecovery), ConsoleAsk)("cryptroot")
 	if err != nil {
 		t.Fatal(err)
 	}
