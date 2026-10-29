@@ -32,8 +32,8 @@ One case leaves a unit in the image with nothing to do: `phone unenrol`
 without rebuilding the initramfs. The gate then starts at boot, reports that no
 phone is enrolled and fails; the next build leaves it out.
 
-The radio worker is the only process that takes input from outside the
-machine before the disk is unlocked, so its unit confines it: Bluetooth and
+The radio worker parses what the radio delivers before the disk is
+unlocked, so its unit confines it: Bluetooth and
 Unix sockets only, the capabilities for the adapter and no others, rfkill and
 the console as its only devices and no TPM, a read-only file system, and a
 system call filter (`systemd-analyze security` rates the unit 2.2, from 9.4

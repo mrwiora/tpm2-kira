@@ -121,15 +121,15 @@ not by calling each other ([PROJECT-STRUCTURE.md](PROJECT-STRUCTURE.md),
 ```mermaid
 flowchart LR
   subgraph INITRD["the boot image (Arch: systemd units; Debian: initramfs-tools scripts)"]
-    RUN["tpm2-kira-boot run (root)<br/>tpm2-kira.service / init-premount<br/>code screen, hold, board"]
+    RUN["tpm2-kira-boot run (root)<br/>tpm2-kira.service / init-premount<br/>code screen, hold, board;<br/>the gate's coordinator: the phone's TPM side"]
     CHILD["tpm2-kira-boot ssh-child<br/>nobody, namespaces, Landlock"]
-    GATE["tpm2-kira-boot gate --coordinator<br/>tpm2-kira-attest.service, confined, no TPM"]
+    GATE["tpm2-kira-boot gate --coordinator<br/>the radio worker, tpm2-kira-attest.service<br/>opens no TPM; confined by its unit (Arch only)"]
     CRYPT["systemd-cryptsetup<br/>(Debian: the keyscript, unlock-key)"]
     CAP["tpm2-kira-boot cap<br/>tpm2-kira-cap.service / init-bottom"]
   end
   TPM[("TPM")]
   RUN <-->|socket pair: signatures, sessions| CHILD
-  GATE <-->|/run/tpm2-kira/gate.sock| RUN
+  GATE <-->|gate.sock: quotes, boot key, receipt, phone salt| RUN
   CRYPT <-->|/run/tpm2-kira/unlock.sock| RUN
   RUN --- TPM
   CAP --- TPM
@@ -142,7 +142,7 @@ flowchart LR
 |---|---|---|
 | `unlock` | always | `run` answers the key socket (Arch) or the keyscript (Debian) |
 | `codes` | a slot is sealed | `run` shows the codes |
-| `phone` | a phone is enrolled and the adapter found | `run` coordinates, `gate` is the radio worker |
+| `phone` | a phone is enrolled and the adapter found | `gate` is the radio worker and opens no TPM; everything the phone check needs from the TPM - the record check, quotes, the boot key (certify, sign, its challenge), the EK, opening the phone salt - `run` does as the gate's coordinator, and it reads the receipt itself ([BOOT-INTEGRATION.md](BOOT-INTEGRATION.md), `internal/phonegate/gate_service.go`) |
 | `vault` | a slot is enrolled with a vault | `run` asks the vault while the screen holds |
 | `net`, `ssh` | set in `control` | the image's network; `run` starts the SSH server, `ssh-child` speaks SSH |
 
