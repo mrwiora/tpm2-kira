@@ -31,7 +31,14 @@ What it does, each step a check in the report:
      the SSH CA (StrictHostKeyChecking), the codes of both slots against the
      computed ones, Enter, the password and the salt typed in the session;
      after each boot: the cap ran, the key was answered, no tpm2-kira error
-  8. a slot's life: approve, add slot 2, delete it whole
+  8. remote attestation over TLS, the vault: tpm2-kira-vault runs here, in
+     a container with a software TPM of its own (tools/vmtest-vault/),
+     published on the [vault] port; luks enrol --mode tpm+vault with a
+     token it made; the image rebuilt with the vault; a boot that nobody
+     touches, unlocked by the vault's release to the TPM's quote; a boot
+     with the device revoked on the vault, where the password+salt keyslot
+     is the fallback, typed over SSH
+  9. a slot's life: approve, add slot 2, delete it whole
 
 Nothing but Python's standard library and ssh are needed here. Reports and
 every session's transcript land in the run's directory.
@@ -190,6 +197,58 @@ def menu_options(text):
             break
         opts.insert(0, (m.group(1), m.group(2)))
     return opts
+
+
+class Vault:
+    """tpm2-kira-vault for the run: built from the vault's source, in a
+    container with swtpm (tools/vmtest-vault), its port published on this
+    machine, created fresh for the run and removed after it."""
+
+    NAME = "tpm2-kira-vmtest-vault"
+
+    def __init__(self, src, url, port, run_dir):
+        self.src, self.url, self.port = src, url, port
+        self.dir = os.path.join(run_dir, "vault")
+        os.makedirs(self.dir, exist_ok=True)
+        self.lock = threading.Lock()
+
+    def _sh(self, args, check=True):
+        p = subprocess.run(args, capture_output=True, text=True)
+        if check and p.returncode != 0:
+            raise Fail(f"{' '.join(args[:3])}: {p.stderr.strip() or p.stdout.strip()}"[-800:])
+        return p.stdout + p.stderr
+
+    def start(self):
+        ctx = os.path.join(self.dir, "build")
+        os.makedirs(ctx, exist_ok=True)
+        for f in ("Dockerfile", "entrypoint.sh"):
+            subprocess.run(["cp", "-p", os.path.join(REPO, "tools", "vmtest-vault", f), ctx], check=True)
+        env = dict(os.environ, CGO_ENABLED="0")
+        p = subprocess.run(["go", "build", "-o", os.path.join(ctx, "tpm2-kira-vault"), "."], cwd=self.src, env=env, capture_output=True, text=True)
+        if p.returncode != 0:
+            raise Fail("building tpm2-kira-vault: " + p.stderr[-800:])
+        # Host networking for the build: name resolution inside a build
+        # container is the host's to get right, and is not always.
+        self._sh(["docker", "build", "--network", "host", "-q", "-t", self.NAME, ctx])
+        self._sh(["docker", "rm", "-f", self.NAME], check=False)
+        self._sh(["docker", "run", "-d", "--name", self.NAME, "-p", f"{self.port}:8443", "-e", f"VAULT_URL={self.url}", self.NAME])
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            if "serving " in self._sh(["docker", "logs", self.NAME], check=False):
+                break
+            time.sleep(1)
+        else:
+            raise Fail("the vault does not serve:\n" + self._sh(["docker", "logs", self.NAME], check=False)[-800:])
+
+    def admin(self, *args):
+        with self.lock:
+            return self._sh(["docker", "exec", self.NAME, "tpm2-kira-vault"] + list(args))
+
+    def stop(self):
+        with open(os.path.join(self.dir, "vault.log"), "w") as f:
+            f.write(self._sh(["docker", "logs", self.NAME], check=False))
+            f.write("\n--- audit\n" + self._sh(["docker", "exec", self.NAME, "tpm2-kira-vault", "audit"], check=False))
+        self._sh(["docker", "rm", "-f", self.NAME], check=False)
 
 
 class Machine:
@@ -481,6 +540,81 @@ class Machine:
         bad = [l for l in out.split("\n") if re.search(r"ERROR|FAILED|does not answer|cannot", l)]
         self.check(f"boot {n}: no tpm2-kira error in the boot's log", not bad, "\n".join(bad[:5]))
 
+    def rebuild(self):
+        cmd = "update-initramfs -u" if self.distro == "debian" else "mkinitcpio -P"
+        rc, out = self.run(cmd + " 2>&1", save="rebuild.log")
+        return out
+
+    def vault(self, vault):
+        self.log.head("remote attestation over TLS: the vault")
+        out = vault.admin("token", "create", "--name", self.name)
+        self.log.save("vault-token.log", out)
+        m = re.search(r"--url (\S+) --pin (\S+) --token (\S+)", out)
+        if not self.check("the vault makes an enrolment token", m is not None, out[-400:]):
+            raise Fail("no token")
+        url, pin, token = m.groups()
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --mode tpm+vault --url {url} --pin {pin} --token {token} --name {self.name}", "luks-enrol-vault")
+        try:
+            s.expect(r"to authorise: ?$", 300); s.send(self.luks_pass + "\n")
+            s.expect(r"keyslot (\d+) added: tpm2-kira, tpm\+vault", 300)
+            s.wait_end(120)
+            self.check("luks enrol --mode tpm+vault: the vault knows the device, a keyslot is added", True)
+        except Fail as e:
+            self.check("luks enrol --mode tpm+vault", False, str(e))
+            raise
+        finally:
+            s.close()
+        out = vault.admin("devices")
+        self.check("the vault lists the device", self.name in out, out[-400:])
+        out = self.rebuild()
+        self.check("the image is rebuilt with the vault in its plan", re.search(r"Vault:\s+in", out) is not None, out[-800:])
+
+        # A boot nobody touches: the vault releases its part to the TPM's
+        # quote of the approved boot state, the key ends the hold by itself.
+        self.log.head("a boot unlocked by the vault alone")
+        self.run("systemctl reboot")
+        self.wait_port(22, False, 120)
+        up = self.wait_port(22, True, 420)
+        if not self.check("the vault's boot: the system comes up with nobody at the console or in SSH", up):
+            raise Fail("the vault's boot did not come up")
+        time.sleep(5)
+        log = ("cat /run/initramfs/tpm2-kira.log" if self.distro == "debian" else
+               "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service")
+        rc, out = self.run(log + " 2>&1", save="boot-vault-tpm2-kira.log")
+        self.check("the vault released the remote part; the key was made", "released; the key is made" in out, out[-600:])
+        self.check("the key was answered", "unlock: answered for" in out, out[-600:])
+        out = vault.admin("devices")
+        self.log.save("vault-devices.log", out)
+
+        # Revoked: no release; the typed keyslot is the fallback, over SSH.
+        self.log.head("a boot with the device revoked on the vault")
+        vault.admin("device", "revoke", self.name)
+        self.run("systemctl reboot")
+        self.wait_port(22, False, 120)
+        if not self.check("revoked: the boot SSH server answers", self.wait_port(SSH_PORT, True, 300)):
+            raise Fail("no boot SSH server")
+        s = self.boot_session("revoked")
+        try:
+            text, _ = s.expect(r"Does the code match your authenticator\?.*$", 120)
+            self.check("revoked: the screen names the fallback", "the password and salt prompt if the vault gives no key" in text, text[-400:])
+            s.send("\r")
+            text, _ = s.expect(r"Password for disk \S+: ?$", 300)
+            self.check("revoked: tpm2-kira says the vault gave no key and asks the typed keyslot", "no key from the vault" in text and "revoked" in text, text[-500:])
+            s.send(TEST_PASSWORD + "\r")
+            s.expect(r"Salt for disk \S+: ?$", 60); s.send(TEST_SALT + "\r")
+            s.wait_end(600)
+        except Fail as e:
+            self.check("revoked: the fallback over SSH", False, str(e))
+            raise
+        finally:
+            s.close()
+        up = self.wait_port(22, True, 300)
+        self.check("revoked: the disk unlocks with the password and the salt", up)
+        time.sleep(5)
+        rc, out = self.run(log + " 2>&1", save="boot-revoked-tpm2-kira.log")
+        self.check("revoked: the vault refused, the key was answered from the typed keyslot", "the device is revoked" in out and "unlock: answered for" in out, out[-600:])
+        vault.admin("device", "unrevoke", self.name)
+
     def slot_life(self):
         self.log.head("a slot's life")
         rc, out = self.run("tpm2-kira slot approve --nvram 1 2>&1", save="slot-approve.log")
@@ -493,7 +627,7 @@ class Machine:
         rc, out = self.run("tpm2-kira slot list 2>&1", save="slot-list-after-delete.log")
         self.check("slot 2 is gone whole (its blob and its generation index)", "0x01803012" not in out and "0x01803812" not in out, out[-500:])
 
-    def all(self, package):
+    def all(self, package, vault=None):
         try:
             self.preflight()
             self.install(package)
@@ -504,6 +638,8 @@ class Machine:
             self.image()
             for n in range(1, self.cycles + 1):
                 self.cycle(n)
+            if vault:
+                self.vault(vault)
             self.slot_life()
         except Fail as e:
             self.rep.issues.append("stopped: " + str(e).split("\n")[0])
@@ -536,6 +672,7 @@ def main():
     p.add_argument("--password-file", help="the VMs' user password (default: the config's password_file, or $VMTEST_PASSWORD)")
     p.add_argument("--cycles", type=int, default=2, help="reboots, each unlocked over the boot SSH server (default 2)")
     p.add_argument("--run-dir", help="default: ./vmtest-<time>")
+    p.add_argument("--no-vault", action="store_true", help="leave out remote attestation over TLS (the vault)")
     args = p.parse_args()
 
     cfg = configparser.ConfigParser()
@@ -559,12 +696,24 @@ def main():
         sec = cfg[name]
         luks = sec.get("luks_passphrase") or os.environ.get("VMTEST_LUKS_PASSPHRASE") or password
         machines.append(Machine(name, name, sec["host"], sec.get("user", "pix"), password, luks, run_dir, args.cycles))
+    vault = None
+    if not args.no_vault:
+        vc = cfg["vault"] if cfg.has_section("vault") else {}
+        vault = Vault(os.path.abspath(os.path.join(REPO, vc.get("src", "../tpm2-kira-vault"))),
+                      vc.get("url", "https://172.17.2.174"), int(vc.get("port", "443")), run_dir)
+        try:
+            vault.start()
+        except Fail as e:
+            print("the vault does not start:", e, file=sys.stderr)
+            return 1
     results = {}
-    threads = [threading.Thread(target=lambda m=m: results.__setitem__(m.name, m.all(packages[m.name]))) for m in machines]
+    threads = [threading.Thread(target=lambda m=m: results.__setitem__(m.name, m.all(packages[m.name], vault))) for m in machines]
     for th in threads:
         th.start()
     for th in threads:
         th.join()
+    if vault:
+        vault.stop()
     ok = True
     for m in machines:
         passed, text = results[m.name]
