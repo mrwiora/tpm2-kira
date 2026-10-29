@@ -43,53 +43,59 @@ The code is one of four layers (below); more in [docs/CODE.md](docs/CODE.md). Fo
 
 ### What it does, and when
 
-On the installed system you set it up (`control` guides through all of it);
-the boot image carries only the parts something uses (`initramfs plan`);
-in the initrd they run, and `cap` ends them.
+On the installed system `tpm2-kira` sets it up (`control` guides through
+all of it); the boot image carries `tpm2-kira-boot` and only the parts
+something uses (`initramfs plan`); in the initrd they run, and `cap` ends
+them. The architecture behind it: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ```mermaid
 flowchart TB
-  subgraph SETUP["On the running system (root)"]
+  subgraph SETUP["On the installed system: tpm2-kira (root)"]
     CTRL["control<br/>guided: 1 boot chain, 2 what the machine combines<br/>writes control.conf + assh.conf, builds the image on leaving"]
     KEY["setup<br/>signing key: a file or a YubiKey"]
-    SEAL["slot add / slot approve<br/>a slot approved for PCR values<br/>slot 0 the evaluated selection, slot 1 the fallback<br/>an approval revokes the older approvals"]
+    SEAL["slot add / slot approve<br/>a boot state approved for PCR values<br/>slot 0 the evaluated selection, slot 1 the fallback"]
     PCR["PCR prediction<br/>event log (e), UKI PCR 11 (u), GRUB 8/9, register (r)"]
-    PHONE["phone enrol<br/>a phone (Marify) over Bluetooth LE"]
+    PHONE["phone enrol, phone salt enrol<br/>Marify at the machine, Bluetooth LE"]
     LUKS["luks enrol<br/>a keyslot and its token: how its key is made"]
-    SALT["phone salt enrol<br/>password + the phone's salt"]
-    VAULT["vault enrol<br/>this TPM + tpm2-kira-vault"]
-    INSPECT["status, info, nvram, reveal, pcrtips"]
+    VAULT["luks enrol --mode tpm+vault<br/>this TPM + tpm2-kira-vault, over TLS"]
+    INSPECT["status, slot info, slot list, reveal, pcrtips"]
   end
 
   subgraph BUILD["Image build (hooks)"]
     PLAN["initramfs plan<br/>parts: unlock, codes, phone, vault, net, ssh"]
-    HOOKS["mkinitcpio (systemd) / initramfs-tools (Debian)"]
+    HOOKS["mkinitcpio (systemd) / initramfs-tools (Debian)<br/>copy tpm2-kira-boot alone"]
     POST["post-update hooks: slot approve for the new image"]
   end
 
-  subgraph BOOT["In the initrd"]
-    RUN["run<br/>code screen: the TOTP code of every slot"]
-    ATT["phone gate<br/>the phone checks a TPM quote"]
-    SSH["SSH server<br/>the code screen over SSH (aSSH, ssh-child)"]
-    UNLOCK["unlock socket / Debian keyscript<br/>the disk's key, as its LUKS2 token says"]
+  subgraph BOOT["In the initrd: tpm2-kira-boot"]
+    RUN["run<br/>starts the planned parts; the code screen"]
+    ATT["gate<br/>the phone checks a TPM quote"]
+    SSH["SSH server (aSSH, ssh-child)<br/>the code screen over SSH"]
+    VREL["the vault<br/>releases its part to a TPM quote"]
+    UNLOCK["unlock socket / Debian keyscript<br/>the disk's key, as its LUKS2 tokens say"]
     CAP["cap<br/>when the initrd is left: no codes until reboot"]
   end
 
   KEY --> SEAL
   PCR --> SEAL
-  CTRL --> KEY & SEAL & PHONE & LUKS & SALT & VAULT
+  CTRL --> KEY & SEAL & PHONE & LUKS & VAULT
   CTRL --> PLAN --> HOOKS
   POST --> SEAL
   HOOKS --> RUN
-  RUN --> ATT
-  RUN --> SSH
-  RUN --> UNLOCK
+  RUN --> ATT & SSH & VREL & UNLOCK
   LUKS -. token .-> UNLOCK
-  SALT -. salt over Bluetooth .-> UNLOCK
-  VAULT -. the vault's part .-> UNLOCK
-  PHONE -. enrolment .-> ATT
+  PHONE -. enrolment, salt .-> ATT
+  VAULT -. enrolment .-> VREL
+  VREL -. the remote part .-> UNLOCK
   UNLOCK --> CAP
 ```
+
+## Architecture
+
+The projects tpm2-kira works with (aSSH, tpm2-kira-vault, Marify), the
+three ways a boot is checked, the two binaries `tpm2-kira` and
+`tpm2-kira-boot` with their packages, the processes at boot, and what is
+kept where, as diagrams: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## The layers
 
@@ -495,33 +501,40 @@ boot state, so the next boot matches.
 sequenceDiagram
   participant FW as Firmware / boot loader
   participant TPM
-  participant K as tpm2-kira (initrd)
+  participant K as tpm2-kira-boot run (initrd)
   participant P as Phone (Marify)
+  participant V as tpm2-kira-vault
   participant S as SSH client
   participant D as LUKS volume
   FW->>TPM: measure the boot chain into the PCRs
   alt a slot with a TOTP key
     K->>TPM: the code (approved PCR values, latest generation, not capped)
     TPM-->>K: 6 digits, only in the approved boot state
-    K->>K: show it: you compare it with your authenticator
+    K->>K: show it (console, or SSH): you compare it with your authenticator
   else a slot with a phone enrolled
-    K->>P: a TPM quote over Bluetooth LE
+    K->>P: a TPM quote over Bluetooth LE, at the machine
     P-->>K: the verdict (and the salt, for password+phonesalt)
+  end
+  opt a tpm+vault keyslot
+    K->>V: a TPM quote over TLS (pinned key)
+    V-->>K: the remote part, only for the approved boot state - the hold ends by itself
   end
   opt the SSH server in the image
     S->>K: connect: a host certificate from the CA in the TPM (aSSH)
-    K-->>S: the same code screen and the passphrase prompt
+    K-->>S: the same code screen and the password prompt
   end
-  K->>D: the key, as the keyslot's token says (password, salt, vault)
+  K->>D: the key, as the tokens say: the vault's, else password (+ phone salt or typed salt)
   K->>TPM: cap at switch-root: no more codes in this boot
 ```
 
-`tpm2-kira.service` starts before the disk unlock and runs `tpm2-kira
+`tpm2-kira.service` starts before the disk unlock and runs `tpm2-kira-boot
 run`: the code screen ([docs/CODE.md](docs/CODE.md)), the phone's gate
 when one is enrolled ([docs/PHONE.md](docs/PHONE.md)), the SSH server when
-it is set ([docs/SSH.md](docs/SSH.md)), and the key socket
+it is set ([docs/SSH.md](docs/SSH.md)), the vault's release when a slot is
+enrolled with one ([docs/VAULT.md](docs/VAULT.md)), and the key socket
 ([docs/DISK-KEY.md](docs/DISK-KEY.md)) - each only when the boot plan put
-it in the image. Enter at the code screen, or 90 seconds, ends the hold;
+it in the image. Enter at the code screen, the phone's verdict, the
+vault's key, or 90 seconds ends the hold;
 at switch-root `tpm2-kira-cap.service` caps the TPM, and no code can be
 computed until the next boot.
 
@@ -624,7 +637,7 @@ still be sealed in the TPM. Delete the slot first, then the directory.
 
 ## Troubleshooting, diagnosis, exit status
 
-The event-log calculator, what to do when a code stops matching, the common errors and the exit status table are in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md); how Bluetooth gets into the boot image and why a phone was not asked at boot in [docs/DEBUG-BLE.md](docs/DEBUG-BLE.md); the repository layout and how the tests are run in [docs/PROJECT-STRUCTURE.md](docs/PROJECT-STRUCTURE.md).
+The event-log calculator, what to do when a code stops matching, the common errors and the exit status table are in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md); how Bluetooth gets into the boot image and why a phone was not asked at boot in [docs/DEBUG-BLE.md](docs/DEBUG-BLE.md); the repository layout in [docs/PROJECT-STRUCTURE.md](docs/PROJECT-STRUCTURE.md); the tests - unit, integration, and the VM test on fresh encrypted machines with a vault - in [docs/TESTING.md](docs/TESTING.md).
 
 ## Security
 

@@ -46,11 +46,16 @@ Where things are in the repository, and how the tests are run.
 │                            #   plan and the image build ('initramfs plan')
 ├── tools/
 │   ├── acceptance.py         # The acceptance run on a machine: package, install, checks, reboot, report
+│   ├── vmtest.py             # The VM test: fresh encrypted VMs through install, control, reboots over SSH, the vault
+│   ├── vmtest.conf.example   # Its VMs and the vault (copy to vmtest.conf, not in git)
+│   ├── vmtest-vault/         # The vault of the VM test: tpm2-kira-vault with swtpm, in a container
 │   ├── pcrtool.py            # PCR replay and full-chain diagnosis
 │   ├── tpm2-pcr11predict     # Independent cross-check of the built-in PCR 11 computation
 │   ├── vulncheck.py          # govulncheck that fails on what the code calls into, minus vulncheck-ignore
 │   └── vulncheck-ignore      # Records the Go vulnerability database has wrong, with the proof
 ├── docs/
+│   ├── ARCHITECTURE.md           # The projects, the three checks, the binaries and packages, the boot, what is kept where
+│   ├── TESTING.md                # Unit, integration, the VM test and the acceptance run: what each needs, how to run it
 │   ├── SLOT.md                   # The slot: a boot state the signing key approved; choosing PCRs, approving, deleting
 │   ├── SEALING.md                # The details of sealing: the measure point, SHA-1, own keys, several slots
 │   ├── CODE.md                   # The TOTP code: when the TPM computes it, the code screen, the cap, the clock
@@ -89,30 +94,9 @@ Where things are in the repository, and how the tests are run.
 ## Testing
 
 ```bash
-# Unit tests (no TPM required)
-make test-unit
-
-# Integration tests (requires swtpm + socat)
-# Install: sudo apt install swtpm swtpm-tools socat
-#      or: sudo pacman -S swtpm socat
-make test-integration
-
-# Everything
-make test-all
-
-# The acceptance run on a machine of one distribution: builds the package
-# of the checked-out commit on the target, installs it, checks the
-# installed system and its initramfs, reboots when you say so, asks what
-# the console showed, checks the booted system and its journal, and
-# writes a report with every log into one directory.
-tools/acceptance.py --distro arch   --host 172.17.2.198 --user pix --ask-password
-tools/acceptance.py --distro debian --host 172.17.2.196 --user pix --password-file ~/.vm-pw --luks /dev/vda3
-
-# Known vulnerabilities the code calls into (what the Vulnerability Scan
-# workflow runs: the source on every push, the release binary daily)
-tools/vulncheck.py ./...
+make test-unit            # no TPM
+make test-integration     # swtpm and socat
+tools/vmtest.py --target both     # the whole life on fresh, encrypted test VMs, with a vault
 ```
 
-The machines this run should have - installed by a script, in a frozen
-state, with a serial console the harness reads and the phone in the
-Android emulator - are the plan in `docs/PLAN-BLE-TESTING.md`.
+The levels, what each needs and how to run them: [TESTING.md](TESTING.md).
