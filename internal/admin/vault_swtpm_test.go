@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/core/attest"
 	"github.com/mrwiora/tpm2-kira/core/vaultproto"
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
@@ -179,7 +181,7 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
-	if n != slot-nvslot.NVRAMSlotStart || len(key) != 64 {
+	if n != slot-nvslot.NVRAMSlotStart || len(key) != 87 || key[86] != '\n' {
 		t.Fatalf("slot %d, key %d bytes", n, len(key))
 	}
 	if _, _, err := vaultEnrolKey(opts); err == nil || !strings.Contains(err.Error(), "already") {
@@ -213,7 +215,7 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 
 	var said []string
 	say := func(s string) { said = append(said, s) }
-	got, err := vaultkey.OpenKey(context.Background(), tpmDev, vs, say)
+	got, _, err := vaultkey.Open(context.Background(), tpmDev, vs, say)
 	if err != nil {
 		t.Fatalf("the boot's key: %v (vault refused: %v)", err, tv.refused)
 	}
@@ -227,7 +229,7 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 	if err := extendPCR(tpmDev, 23, "a kernel nobody approved"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := vaultkey.OpenKey(context.Background(), tpmDev, vs, say); err == nil || !strings.Contains(err.Error(), "the local part") {
+	if _, _, err := vaultkey.Open(context.Background(), tpmDev, vs, say); err == nil || !strings.Contains(err.Error(), "the local part") {
 		t.Fatalf("after a PCR moved: %v", err)
 	}
 	if len(tv.nonces) != asked {
@@ -295,7 +297,7 @@ func TestVaultPepper(t *testing.T) {
 
 	tv.peppers = [][]byte{[]byte("s3cret pepprr"), []byte("s3cret pepper")}
 	var said []string
-	got, err := vaultkey.OpenKey(context.Background(), tpmDev, vs, func(s string) { said = append(said, s) })
+	got, _, err := vaultkey.Open(context.Background(), tpmDev, vs, func(s string) { said = append(said, s) })
 	if err != nil {
 		t.Fatalf("the boot's key: %v", err)
 	}
@@ -304,7 +306,58 @@ func TestVaultPepper(t *testing.T) {
 	}
 
 	tv.peppers, tv.gave = nil, 0
-	if _, err := vaultkey.OpenKey(context.Background(), tpmDev, vs, func(string) {}); err == nil || !strings.Contains(err.Error(), "without a pepper") {
+	if _, _, err := vaultkey.Open(context.Background(), tpmDev, vs, func(string) {}); err == nil || !strings.Contains(err.Error(), "without a pepper") {
 		t.Fatalf("a release without the pepper: %v", err)
+	}
+}
+
+// A typed password with the vault's salt and a pepper (0x1401): the vault
+// method keeps no TPM part and no pepper check; at boot the vault's
+// release is the salt - with the pepper in it - and the key is the
+// combiner's of the password typed later and that salt.
+func TestVaultTypedPassword(t *testing.T) {
+	sock := startSWTPM(t)
+	const slot = nvslot.NVRAMSlotStart + 4
+	privPath, pubPath := signingKeyFiles(t)
+	if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+		t.Fatal(err)
+	}
+	tv := &testVault{token: "tok-t", nonces: map[string][]byte{}}
+	srv := httptest.NewTLSServer(tv)
+	defer srv.Close()
+
+	old := terminalAsk
+	answers := map[string]string{"Pepper": "s3cret pepper", "The same pepper": "s3cret pepper", "Password": "hunter2", "The same password": "hunter2"}
+	terminalAsk = func(prompt string) ([]byte, error) {
+		for _, k := range []string{"The same pepper", "The same password", "Pepper", "Password"} {
+			if strings.HasPrefix(prompt, k) {
+				return []byte(answers[k]), nil
+			}
+		}
+		return nil, fmt.Errorf("unexpected prompt %q", prompt)
+	}
+	defer func() { terminalAsk = old }()
+	key, _, err := vaultEnrolKey(VaultEnrolOptions{TPMPath: sock, SealIndex: slot, URL: srv.URL, TypedPassword: true,
+		Pin: vaultproto.PinOf(srv.Certificate().RawSubjectPublicKeyInfo), Token: "tok-t", PrivKeyPath: privPath, Pepper: true})
+	if err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+	tpmDev, err := transport.OpenTPM(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tpmDev.Close()
+	vs := vaultkey.Slots(tpmDev, false)[0]
+	if v := vs.Att.Vault; v.Unattended() || !v.Pepper || len(v.PepperCheck) != 0 || vaultRecipeOf(&v) != diskkey.RecipeVaultSaltPepper {
+		t.Fatalf("the vault method %+v", v)
+	}
+
+	tv.peppers = [][]byte{[]byte("s3cret pepper")}
+	gotKey, salt, err := vaultkey.Open(context.Background(), tpmDev, vs, func(string) {})
+	if err != nil || gotKey != nil || salt == nil {
+		t.Fatalf("the boot's salt: %v (key %v)", err, gotKey != nil)
+	}
+	if want, _ := diskkey.Combine([]byte("hunter2"), salt); !bytes.Equal(want, key) {
+		t.Fatal("password and released salt do not make the enrolled key")
 	}
 }

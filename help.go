@@ -575,7 +575,7 @@ TPM, 3 the phone, 4 the vault), flag 0x01 the vault's pepper:
   0x2400  --password tpm --salt vault      unattended: this TPM and the vault
   0x2401  --password tpm --salt vault --pepper
 
-This build enrols 0x1100, 0x1300, 0x2400 and 0x2401. Every keyslot it adds
+Every keyslot tpm2-kira adds
 is marked with a LUKS2 token in the header (no secret), of type
 tpm2-kira-<number>, so a plain luksDump names the recipe too
 (docs/VAULT.md). status, removal and rotation know the keyslots by it,

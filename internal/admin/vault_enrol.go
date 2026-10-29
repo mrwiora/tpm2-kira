@@ -23,21 +23,25 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 )
 
-// VaultEnrolOptions is what 'vault enrol' and 'luks enrol --password tpm --salt vault'
+// VaultEnrolOptions is what 'vault enrol' and 'luks enrol --salt vault'
 // take.
 type VaultEnrolOptions struct {
-	TPMPath     string
-	SealIndex   uint32
-	URL         string
-	Pin         string
-	Token       string
-	Label       string
-	Name        string
-	PrivKeyPath string
-	Pepper      bool   // the key needs an operator's pepper too, asked here once
-	Out         string // 'vault enrol' only: where the key is written
-	Yes         bool   // the recovery passphrase is in place; do not ask
-	Debug       bool
+	// TypedPassword: the recipe's password is typed at the machine (0x1400,
+	// 0x1401); otherwise it is the TPM's part L, nothing typed (0x2400,
+	// 0x2401).
+	TypedPassword bool
+	TPMPath       string
+	SealIndex     uint32
+	URL           string
+	Pin           string
+	Token         string
+	Label         string
+	Name          string
+	PrivKeyPath   string
+	Pepper        bool   // the key needs an operator's pepper too, asked here once
+	Out           string // 'vault enrol' only: where the key is written
+	Yes           bool   // the recovery passphrase is in place; do not ask
+	Debug         bool
 }
 
 // VaultEnrol enrols the slot with the vault and writes the key to o.Out
@@ -65,8 +69,11 @@ func VaultEnrol(o VaultEnrolOptions) error {
 	fmt.Println("Next steps:")
 	fmt.Printf("    cryptsetup luksAddKey <device> %s\n", o.Out)
 	recipe := diskkey.RecipeUnattendedVault
+	if o.TypedPassword {
+		recipe = diskkey.RecipeVaultSalt
+	}
 	if o.Pepper {
-		recipe = diskkey.RecipeUnattendedVaultPepper
+		recipe |= diskkey.Recipe(diskkey.FlagPepper)
 	}
 	fmt.Printf("    tpm2-kira luks mark <device> --keyslot <the new keyslot> %s --nvram %d\n", recipe.Words(), slot)
 	fmt.Printf("    rm %s\n", o.Out)
@@ -184,22 +191,42 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		defer wipe.Bytes(pepper)
 	}
 
-	local, wLocal, err := phonegate.WrapFactor(tpmDev, att, nil)
-	if err != nil {
-		return nil, 0, err
+	var pw []byte
+	if o.TypedPassword {
+		if pw, err = askNewPassword(); err != nil {
+			return nil, 0, err
+		}
+		defer wipe.Bytes(pw)
 	}
-	defer wipe.Bytes(local)
 	remote, wRemote, err := phonegate.WrapFactor(tpmDev, att, nil)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer wipe.Bytes(remote)
-	// The blob must still fit its NV index with the vault method in it.
-	key := vaultkey.Key(local, remote, label, pepper)
-	att.Vault = nvslot.VaultAttestation{URL: strings.TrimSuffix(o.URL, "/"), Pin: strings.ToLower(o.Pin), Label: label, Local: *wLocal}
-	if pepper != nil {
-		att.Vault.PepperCheck = vaultkey.PepperCheck(key)
+	att.Vault = nvslot.VaultAttestation{URL: strings.TrimSuffix(o.URL, "/"), Pin: strings.ToLower(o.Pin), Label: label, Pepper: pepper != nil}
+	fmt.Fprintln(os.Stderr, "Deriving the key (Argon2id, 1 GiB, a few seconds) ...")
+	var key []byte
+	if o.TypedPassword {
+		salt := vaultkey.Salt(remote, label, pepper)
+		defer wipe.Bytes(salt)
+		if key, err = diskkey.Combine(pw, salt); err != nil {
+			return nil, 0, err
+		}
+	} else {
+		local, wLocal, err := phonegate.WrapFactor(tpmDev, att, nil)
+		if err != nil {
+			return nil, 0, err
+		}
+		defer wipe.Bytes(local)
+		att.Vault.Local = *wLocal
+		if key, err = vaultkey.Key(local, remote, label, pepper); err != nil {
+			return nil, 0, err
+		}
+		if pepper != nil {
+			att.Vault.PepperCheck = vaultkey.PepperCheck(key)
+		}
 	}
+	// The blob must still fit its NV index with the vault method in it.
 	if err := checkEnrolmentFits(tpmDev, sealed, att, slot); err != nil {
 		return nil, 0, err
 	}

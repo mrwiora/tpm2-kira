@@ -291,6 +291,9 @@ var ErrUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own p
 //	0x1300 salt from the phone a typed password and the salt the verifier released in this
 //	                          boot and the TPM opened (internal/phonegate/factor.go); without
 //	                          one, a typed salt - the recovery recipe
+//	0x1400, 0x1401 the vault  a typed password and the salt the vault released while the code
+//	                          screen held (internal/vaultkey/vault.go); without one, a typed
+//	                          salt - the recovery recipe
 //	0x1200 salt in this TPM   a typed password and the salt the TPM opened while the code
 //	                          screen held (internal/admin/tpmsalt_enrol.go); without one, a
 //	                          typed salt - the recovery recipe
@@ -346,8 +349,9 @@ func typedKey(volume string, r Recipe, vaultErr error, salt func(volume string, 
 	case RecipeRecovery:
 		note = "the key is derived from your password and your salt, both typed here (Argon2id, some seconds).\n" +
 			"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
-	case RecipePhoneSalt, RecipeTPMSalt:
-		from := map[Recipe]string{RecipePhoneSalt: "your phone returned", RecipeTPMSalt: "this TPM opened"}[r]
+	case RecipePhoneSalt, RecipeTPMSalt, RecipeVaultSalt, RecipeVaultSaltPepper:
+		from := map[Recipe]string{RecipePhoneSalt: "your phone returned", RecipeTPMSalt: "this TPM opened",
+			RecipeVaultSalt: "the vault released", RecipeVaultSaltPepper: "the vault released"}[r]
 		if s = salt(volume, r); s == nil {
 			// No salt from the device: the recovery recipe, which opens a
 			// keyslot enrolled that way; Ctrl-C, or a key that opens

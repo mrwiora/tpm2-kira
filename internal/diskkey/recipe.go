@@ -47,6 +47,9 @@ const (
 	RecipeUnattendedVaultPepper Recipe = 0x2401 // password in this TPM, salt from the vault with a pepper
 )
 
+// VaultRecipes are the recipes whose salt the vault releases.
+var VaultRecipes = []Recipe{RecipeUnattendedVault, RecipeUnattendedVaultPepper, RecipeVaultSalt, RecipeVaultSaltPepper}
+
 // Recipes are every recipe, in the order a volume's keyslots are tried at
 // boot: what needs nobody first, then a device-held salt with the typed
 // password, the recovery recipe last.
@@ -66,6 +69,9 @@ func (r Recipe) flags() uint8 { return uint8(r) }
 
 // Pepper says the vault releases the salt with an operator's pepper.
 func (r Recipe) Pepper() bool { return r.flags()&FlagPepper != 0 }
+
+// FromVault says the vault releases the salt.
+func (r Recipe) FromVault() bool { return r.Salt() == SaltVault }
 
 // Unattended says nothing is typed: the password is held by this TPM.
 func (r Recipe) Unattended() bool { return r.Password() == PasswordTPM }

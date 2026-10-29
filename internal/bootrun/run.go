@@ -726,7 +726,7 @@ func nextPrompt(recipes []diskkey.Recipe) string {
 	switch r := recipes[0]; {
 	case r == diskkey.RecipeRecovery:
 		return "the password and salt prompt"
-	case r == diskkey.RecipePhoneSalt:
+	case r == diskkey.RecipePhoneSalt, r == diskkey.RecipeTPMSalt, r.FromVault() && !r.Unattended():
 		return "the password prompt"
 	case r.Unattended():
 		if len(recipes) > 1 {

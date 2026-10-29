@@ -45,28 +45,48 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 )
 
-// vaultInfo is the derivation string of the key: part of the contract
-// between an enrolled keyslot and this code.
-const vaultInfo = "tpm2-kira/vault/v1"
+// The derivation strings of the vault's parts as the combiner's inputs:
+// part of the contract between an enrolled keyslot and this code.
+const (
+	vaultSaltInfo     = "tpm2-kira/vault/salt/v1"
+	vaultPasswordInfo = "tpm2-kira/vault/password/v1"
+)
 
-// VaultKey derives an unattended vault keyslot's key: 64 lowercase hexadecimal
-// characters, HKDF-SHA256(L ‖ R [‖ pepper], info = vaultInfo ‖ lp(label)
-// [‖ "pepper"]). The pepper is an operator's, for a keyslot enrolled with
-// one: the vault releases only with it (docs/VAULT.md §12); nil
-// without.
-func Key(local, remote []byte, label string, pepper []byte) []byte {
+// Salt makes the vault's part R the combiner's salt: 64 lowercase
+// hexadecimal characters, HKDF-SHA256(R, salt = pepper, info =
+// vaultSaltInfo ‖ lp(label)). With a pepper (an operator's, given at the
+// vault's approval, docs/VAULT.md §12) the salt is another, so every
+// guessed pepper costs a whole Argon2id of the combiner; nil without.
+func Salt(remote []byte, label string, pepper []byte) []byte {
+	return hkdfHex(remote, pepper, vaultSaltInfo, label)
+}
+
+// Password makes the TPM's part L the password of an unattended recipe
+// (0x2400, 0x2401): 64 lowercase hexadecimal characters, HKDF-SHA256(L,
+// info = vaultPasswordInfo ‖ lp(label)).
+func Password(local []byte, label string) []byte {
+	return hkdfHex(local, nil, vaultPasswordInfo, label)
+}
+
+// Key is an unattended recipe's key: the combiner's (Argon2id) of the
+// TPM's part as the password and the vault's as the salt. The caller
+// wipes it.
+func Key(local, remote []byte, label string, pepper []byte) ([]byte, error) {
+	pw := Password(local, label)
+	defer wipe.Bytes(pw)
+	salt := Salt(remote, label, pepper)
+	defer wipe.Bytes(salt)
+	return diskkey.Combine(pw, salt)
+}
+
+func hkdfHex(secret, salt []byte, what, label string) []byte {
 	if label == "" {
 		label = "luks"
 	}
-	ikm := append(append(append([]byte(nil), local...), remote...), pepper...)
-	defer wipe.Bytes(ikm)
-	info := append([]byte(vaultInfo), byte(len(label)>>8), byte(len(label)))
+	info := append([]byte(what), byte(len(label)>>8), byte(len(label)))
 	info = append(info, label...)
-	if pepper != nil {
-		info = append(info, "pepper"...)
-	}
 	out := make([]byte, 32)
-	if _, err := io.ReadFull(hkdf.New(sha256.New, ikm, nil, info), out); err != nil {
+	if _, err := io.ReadFull(hkdf.New(sha256.New, secret, salt, info), out); err != nil {
 		panic(err) // HKDF with a fixed length cannot fail
 	}
 	defer wipe.Bytes(out)
@@ -285,54 +305,67 @@ func FetchRemote(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, c *vau
 	}
 }
 
-// openVaultKey makes the slot's key in this boot: the local part first -
-// when the TPM does not open it, this boot state is not one the signing
-// key approved, and the vault is not asked - then the remote part from
-// the vault, opened under the same policy. For a keyslot enrolled with a
-// pepper, the vault's release carries the operator's pepper; one that
-// does not fit the slot's check (mistyped at the approval) is not handed
-// to cryptsetup: the vault is asked again, for a new approval. The
-// caller wipes the key.
-func OpenKey(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, say func(string)) ([]byte, error) {
+// Open makes what the slot's vault method gives in this boot. Unattended
+// (the TPM's part L in the slot: 0x2400, 0x2401), the key: L first - when
+// the TPM does not open it, this boot state is not one the signing key
+// approved, and the vault is not asked - then the vault's part, opened
+// under the same policy, and the combiner; for a keyslot enrolled with a
+// pepper, one that does not fit the slot's check (mistyped at the
+// approval) is not handed to cryptsetup: the vault is asked again, for a
+// new approval. With a typed password (0x1400, 0x1401), the salt, for the
+// key provider to combine with the password asked after the code screen.
+// The caller wipes what it gets.
+func Open(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, say func(string)) (key, salt []byte, err error) {
 	v := &vs.Att.Vault
-	local, err := phonegate.UnwrapFactor(tpmDev, vs.Sealed, vs.Idx, vs.Att, &v.Local)
-	if err != nil {
-		return nil, fmt.Errorf("the local part: %w", err)
+	var local []byte
+	if v.Unattended() {
+		if local, err = phonegate.UnwrapFactor(tpmDev, vs.Sealed, vs.Idx, vs.Att, &v.Local); err != nil {
+			return nil, nil, fmt.Errorf("the local part: %w", err)
+		}
+		defer wipe.Bytes(local)
 	}
-	defer wipe.Bytes(local)
 	c, err := NewClient(v.URL, v.Pin)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for {
 		rsp, err := fetchRemoteRetrying(ctx, tpmDev, vs, c, say)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		key, err := vaultKeyOf(tpmDev, vs, local, rsp)
-		if errors.Is(err, errPepperMismatch) {
+		salt, err := saltOf(tpmDev, vs, rsp)
+		if err != nil {
+			return nil, nil, err
+		}
+		if local == nil {
+			return nil, salt, nil
+		}
+		pw := Password(local, v.Label)
+		key, err := diskkey.Combine(pw, salt)
+		wipe.Bytes(pw)
+		wipe.Bytes(salt)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(v.PepperCheck) > 0 && !hmac.Equal(PepperCheck(key), v.PepperCheck) {
+			wipe.Bytes(key)
 			say("the pepper given with the approval does not fit this keyslot; asking the vault for a new approval")
 			continue
 		}
-		return key, err
+		return key, nil, nil
 	}
 }
 
-// errPepperMismatch: the operator's pepper does not make the key the
-// keyslot was enrolled with.
-var errPepperMismatch = errors.New("the pepper does not fit")
-
-// vaultKeyOf opens the released remote part and derives the key, with
-// the pepper the release carries when the keyslot was enrolled with one.
-// R and the pepper's key K open alike: ActivateCredential with the slot's
+// saltOf opens the released remote part and makes it the salt, with the
+// pepper the release carries when the keyslot was enrolled with one. R and
+// the pepper's key K open alike: ActivateCredential with the slot's
 // release key, through the slot's approval for this boot.
-func vaultKeyOf(tpmDev transport.TPM, vs vaultSlot, local []byte, rsp *vaultproto.ReleaseResponse) ([]byte, error) {
+func saltOf(tpmDev transport.TPM, vs vaultSlot, rsp *vaultproto.ReleaseResponse) ([]byte, error) {
 	v := &vs.Att.Vault
-	pepper := len(v.PepperCheck) > 0
 	switch {
-	case !pepper && rsp.Pepper != nil:
+	case !v.Pepper && rsp.Pepper != nil:
 		return nil, errors.New("the vault sent a pepper, and this keyslot was enrolled without one")
-	case pepper && rsp.Pepper == nil:
+	case v.Pepper && rsp.Pepper == nil:
 		return nil, errors.New("the vault released without a pepper, and this keyslot was enrolled with one")
 	}
 	remote, err := phonegate.UnwrapFactor(tpmDev, vs.Sealed, vs.Idx, vs.Att, &nvslot.WrappedFactor{Credential: rsp.Remote.Credential, EncryptedSecret: rsp.Remote.EncryptedSecret})
@@ -340,20 +373,15 @@ func vaultKeyOf(tpmDev transport.TPM, vs vaultSlot, local []byte, rsp *vaultprot
 		return nil, fmt.Errorf("the remote part: %w", err)
 	}
 	defer wipe.Bytes(remote)
-	if !pepper {
-		return Key(local, remote, v.Label, nil), nil
+	if !v.Pepper {
+		return Salt(remote, v.Label, nil), nil
 	}
 	p, err := openPepper(tpmDev, vs, rsp.Pepper)
 	if err != nil {
 		return nil, err
 	}
 	defer wipe.Bytes(p)
-	key := Key(local, remote, v.Label, p)
-	if !hmac.Equal(PepperCheck(key), v.PepperCheck) {
-		wipe.Bytes(key)
-		return nil, errPepperMismatch
-	}
-	return key, nil
+	return Salt(remote, v.Label, p), nil
 }
 
 // openPepper opens the pepper's key K in the TPM and the pepper with it.
@@ -417,13 +445,14 @@ func Retryable(err error) bool {
 
 // ── at boot ───────────────────────────────────────────────────────────────
 
-// vaultKeys are the keys run made in this boot, by slot number, for the
-// key provider to answer with; done is closed when every slot has been
-// tried.
+// Keys are what run made of the vault in this boot, by slot number, for
+// the key provider to answer with: an unattended recipe's key, a typed
+// recipe's salt; done is closed when every slot has been tried.
 type Keys struct {
-	keys map[int][]byte
-	errs map[int]error
-	done chan struct{}
+	keys  map[int][]byte
+	salts map[int][]byte
+	errs  map[int]error
+	done  chan struct{}
 }
 
 // startVaultKeys opens, in the background, the key of every slot with the
@@ -441,7 +470,7 @@ func Start(ctx context.Context, tpmPath string, out io.Writer, log func(string),
 		tpmDev.Close()
 		return nil
 	}
-	vk := &Keys{keys: map[int][]byte{}, errs: map[int]error{}, done: make(chan struct{})}
+	vk := &Keys{keys: map[int][]byte{}, salts: map[int][]byte{}, errs: map[int]error{}, done: make(chan struct{})}
 	go func() {
 		defer close(vk.done)
 		defer tpmDev.Close()
@@ -452,11 +481,17 @@ func Start(ctx context.Context, tpmPath string, out io.Writer, log func(string),
 				log(fmt.Sprintf("vault: slot %d: %s", n, s))
 			}
 			say(fmt.Sprintf("asking the vault at %s for the disk's remote part ...", vs.Att.Vault.URL))
-			key, err := OpenKey(ctx, tpmDev, vs, say)
+			key, salt, err := Open(ctx, tpmDev, vs, say)
 			if err != nil {
 				vk.errs[n] = err
-				fmt.Fprintf(out, "%s \033[0;31mSlot #%d: no key from the vault:\033[0m %v\n", screen.Tag(screen.TagYellow), n, err)
+				fmt.Fprintf(out, "%s \033[0;31mSlot #%d: nothing from the vault:\033[0m %v\n", screen.Tag(screen.TagYellow), n, err)
 				log(fmt.Sprintf("vault: slot %d: no key: %v", n, err))
+				continue
+			}
+			if salt != nil {
+				vk.salts[n] = salt
+				fmt.Fprintf(out, "%s \033[0;32mSlot #%d: the vault released the salt; the password is asked after the code screen.\033[0m\n", screen.Tag(screen.TagYellow), n)
+				log(fmt.Sprintf("vault: slot %d: released; the salt is opened", n))
 				continue
 			}
 			vk.keys[n] = key
@@ -516,6 +551,24 @@ func (vk *Keys) ForVolume(volume string) ([]byte, error) {
 		return nil, fmt.Errorf("slot %d has no vault", *t.Slot)
 	}
 	return nil, errors.New("no keyslot of the volume has an unattended vault recipe")
+}
+
+// SaltFor is the salt for a volume whose keyslot has a vault recipe with a
+// typed password (0x1400, 0x1401): the salt of the slot its token is bound
+// to, or nil. It waits for the attempt to end. The caller wipes it.
+func (vk *Keys) SaltFor(volume string, r diskkey.Recipe) []byte {
+	if vk == nil {
+		return nil
+	}
+	<-vk.done
+	tok, err := diskkey.TokenOf(volume, r)
+	if err != nil || tok.Slot == nil {
+		return nil
+	}
+	if salt, ok := vk.salts[*tok.Slot]; ok {
+		return append([]byte(nil), salt...)
+	}
+	return nil
 }
 
 // ── enrolment, status, removal ────────────────────────────────────────────

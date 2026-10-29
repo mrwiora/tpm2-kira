@@ -22,6 +22,7 @@ package vaultproto
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 )
 
 // The machine-facing paths. The vault serves them over HTTPS; the machine
@@ -116,18 +117,52 @@ type EnrolConfirm struct {
 // EnrolResult ends an enrolment. Mode is how the vault releases R for
 // this device: ModeAuto or ModeApprove.
 type EnrolResult struct {
-	DeviceID []byte `json:"device_id"`
-	Mode     string `json:"mode"`
+	DeviceID []byte      `json:"device_id"`
+	Mode     ReleaseMode `json:"mode"`
 }
 
 // MaxPepper bounds a pepper's length in bytes.
 const MaxPepper = 256
 
-// Release modes of a device.
+// ReleaseMode is how the vault releases a device's part, by number; the
+// words are for people (String, ParseReleaseMode).
+type ReleaseMode uint8
+
+// The release modes.
 const (
-	ModeAuto    = "auto"    // a release whose checks pass is released at once
-	ModeApprove = "approve" // it waits for an operator's approval
+	ModeAuto    ReleaseMode = 0x01 // a release whose checks pass is released at once
+	ModeApprove ReleaseMode = 0x02 // it waits for an operator's approval
 )
+
+// Check says why m is not a release mode, or nil.
+func (m ReleaseMode) Check() error {
+	if m != ModeAuto && m != ModeApprove {
+		return fmt.Errorf("release mode %#02x: 0x01 (auto) or 0x02 (approve)", uint8(m))
+	}
+	return nil
+}
+
+// String is the mode's word: auto, approve.
+func (m ReleaseMode) String() string {
+	switch m {
+	case ModeAuto:
+		return "auto"
+	case ModeApprove:
+		return "approve"
+	}
+	return fmt.Sprintf("%#02x", uint8(m))
+}
+
+// ParseReleaseMode reads the mode's word, as the command line takes it.
+func ParseReleaseMode(word string) (ReleaseMode, error) {
+	switch word {
+	case "auto":
+		return ModeAuto, nil
+	case "approve":
+		return ModeApprove, nil
+	}
+	return 0, fmt.Errorf("the release mode is auto or approve, not %q", word)
+}
 
 // ChallengeRequest starts a release.
 type ChallengeRequest struct {

@@ -268,6 +268,17 @@ socket, and the release key's policy is the slot's approval plus the
 command code, with no branch the phone can open: only a boot the
 machine's signing key approved at seal or reseal gets the factor.
 
+### The vault's key was an HKDF of both parts and the pepper
+
+Until 2026-10-29 a tpm+vault keyslot's key was HKDF-SHA256(L ‖ R ‖
+pepper): no Argon2id, and the slot's pepper check, an HMAC of that key,
+let whoever already had both parts guess a pepper at HMAC speed. Now every
+keyslot's key is the combiner's (Argon2id) of a password and a salt: the
+vault's part R is the salt, the pepper goes into it (HKDF with the pepper
+as its salt), and the TPM's part L is the password of the unattended
+recipes - a guessed pepper costs a whole Argon2id. The keyslots and the
+vault's devices are enrolled again.
+
 ### The vault's release carried the pepper in the clear
 
 Until 2026-10-29 `ReleaseResponse.Pepper` was the operator's pepper as

@@ -70,19 +70,11 @@ func tpmSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 		fmt.Printf("Slot %d holds a TPM salt already: it is replaced, and a keyslot enrolled with it opens no more.\n", slot)
 	}
 
-	pw, err := terminalAsk("Password (typed at the machine at every boot): ")
+	pw, err := askNewPassword()
 	if err != nil {
 		return nil, 0, err
 	}
 	defer wipe.Bytes(pw)
-	again, err := terminalAsk("The same password again: ")
-	if err != nil {
-		return nil, 0, err
-	}
-	defer wipe.Bytes(again)
-	if !bytes.Equal(pw, again) {
-		return nil, 0, errors.New("the passwords differ; nothing was written")
-	}
 
 	t, w, err := phonegate.WrapFactor(tpmDev, att, nil)
 	if err != nil {
@@ -103,4 +95,24 @@ func tpmSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 		return nil, 0, err
 	}
 	return key, slot, nil
+}
+
+// askNewPassword asks the password of a new keyslot twice, on the terminal:
+// the one typed at the machine at every boot.
+func askNewPassword() ([]byte, error) {
+	pw, err := terminalAsk("Password (typed at the machine at every boot): ")
+	if err != nil {
+		return nil, err
+	}
+	again, err := terminalAsk("The same password again: ")
+	if err != nil {
+		wipe.Bytes(pw)
+		return nil, err
+	}
+	defer wipe.Bytes(again)
+	if !bytes.Equal(pw, again) {
+		wipe.Bytes(pw)
+		return nil, errors.New("the passwords differ; nothing was written")
+	}
+	return pw, nil
 }

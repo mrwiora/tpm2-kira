@@ -112,3 +112,26 @@ func TestPepperOpensOnlyWithTheReleaseKey(t *testing.T) {
 		}
 	}
 }
+
+// The release modes are numbers; their words are for people.
+func TestReleaseModes(t *testing.T) {
+	for _, m := range []ReleaseMode{ModeAuto, ModeApprove} {
+		if err := m.Check(); err != nil {
+			t.Errorf("%s: %v", m, err)
+		}
+		if back, err := ParseReleaseMode(m.String()); err != nil || back != m {
+			t.Errorf("%s: %v %v", m, back, err)
+		}
+	}
+	if ModeAuto != 0x01 || ModeApprove != 0x02 {
+		t.Fatal("the release modes' numbers moved")
+	}
+	for _, m := range []ReleaseMode{0, 3, 0xff} {
+		if m.Check() == nil {
+			t.Errorf("%#02x is a release mode", uint8(m))
+		}
+	}
+	if _, err := ParseReleaseMode("sometimes"); err == nil {
+		t.Error("sometimes is a release mode")
+	}
+}

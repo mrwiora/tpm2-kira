@@ -97,12 +97,20 @@ type VaultAttestation struct {
 	URL   string // https://host:port of the vault
 	Pin   string // vaultproto.PinOf the vault's TLS key
 	Label string // the keyslot's label in the key's derivation
+	// Local is the TPM's part L, the password of an unattended recipe
+	// (0x2400, 0x2401); empty with a typed password (0x1400, 0x1401).
 	Local WrappedFactor
-	// PepperCheck is set when the key is derived with an operator's pepper
-	// too (vaultPepperCheck of the key): it tells a mistyped pepper from
+	// Pepper: the salt is made with an operator's pepper too.
+	Pepper bool
+	// PepperCheck is set for an unattended recipe with a pepper
+	// (vaultkey.PepperCheck of the key): it tells a mistyped pepper from
 	// the right one before cryptsetup sees the key. Empty without.
 	PepperCheck []byte
 }
+
+// Unattended says the slot's vault recipe needs nothing typed: the TPM's
+// part L is its password.
+func (v *VaultAttestation) Unattended() bool { return len(v.Local.Credential) != 0 }
 
 // Enabled reports whether the method is set up.
 func (v *VaultAttestation) Enabled() bool { return v.URL != "" }
@@ -272,6 +280,11 @@ func (v *VaultAttestation) marshal() []byte {
 	w.lp16([]byte(v.Label))
 	w.lp32(v.Local.Credential)
 	w.lp32(v.Local.EncryptedSecret)
+	if v.Pepper {
+		w.u8(1)
+	} else {
+		w.u8(0)
+	}
 	w.lp16(v.PepperCheck)
 	return w.b.Bytes()
 }
@@ -283,6 +296,7 @@ func (v *VaultAttestation) unmarshal(data []byte) error {
 	v.Label = string(r.lp16(64))
 	v.Local.Credential = r.lp32(1024)
 	v.Local.EncryptedSecret = r.lp32(1024)
+	v.Pepper = r.u8() == 1
 	v.PepperCheck = r.lp16(32)
 	if r.err != nil {
 		return r.err
@@ -290,11 +304,11 @@ func (v *VaultAttestation) unmarshal(data []byte) error {
 	if r.off != len(r.b) {
 		return fmt.Errorf("the vault method has %d trailing bytes", len(r.b)-r.off)
 	}
-	if v.URL == "" || v.Pin == "" || len(v.Local.Credential) == 0 || len(v.Local.EncryptedSecret) == 0 {
+	if v.URL == "" || v.Pin == "" || (len(v.Local.Credential) == 0) != (len(v.Local.EncryptedSecret) == 0) {
 		return fmt.Errorf("the vault method is incomplete")
 	}
-	if len(v.PepperCheck) != 0 && len(v.PepperCheck) != 32 {
-		return fmt.Errorf("the vault method's pepper check is %d bytes", len(v.PepperCheck))
+	if len(v.PepperCheck) != 0 && (len(v.PepperCheck) != 32 || !v.Pepper || !v.Unattended()) {
+		return fmt.Errorf("the vault method's pepper check is %d bytes, or not for an unattended recipe with a pepper", len(v.PepperCheck))
 	}
 	return nil
 }
@@ -431,10 +445,11 @@ type attestationMethods struct {
 }
 
 type vaultMethodJSON struct {
-	URL    string `json:"url"`
-	Pin    string `json:"pin"`
-	Label  string `json:"label"`
-	Pepper bool   `json:"pepper"`
+	URL        string `json:"url"`
+	Pin        string `json:"pin"`
+	Label      string `json:"label"`
+	Pepper     bool   `json:"pepper"`
+	Unattended bool   `json:"unattended"` // the TPM's part is the password: nothing typed
 }
 
 type phoneMethodJSON struct {
@@ -477,7 +492,7 @@ func (b *Attestation) Json() *attestationJSON {
 		out.Methods.Phone = m
 	}
 	if b.Vault.Enabled() {
-		out.Methods.Vault = &vaultMethodJSON{URL: b.Vault.URL, Pin: b.Vault.Pin, Label: b.Vault.Label, Pepper: len(b.Vault.PepperCheck) > 0}
+		out.Methods.Vault = &vaultMethodJSON{URL: b.Vault.URL, Pin: b.Vault.Pin, Label: b.Vault.Label, Pepper: b.Vault.Pepper, Unattended: b.Vault.Unattended()}
 	}
 	return out
 }

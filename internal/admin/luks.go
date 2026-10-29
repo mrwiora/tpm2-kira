@@ -241,18 +241,22 @@ func describeKeyslot(s KeyslotStatus) string {
 	return d + fmt.Sprintf(" (token %d, %s)", s.TokenID, t.Created)
 }
 
-// enrollable says whether this build enrols recipe r: the recovery
-// recipe, the TPM's salt, the phone's salt and the unattended vault
-// recipes.
+// enrollable says whether r is a recipe a keyslot can be enrolled with.
 func enrollable(r diskkey.Recipe) error {
-	if err := r.Check(); err != nil {
-		return err
+	return r.Check()
+}
+
+// vaultRecipeOf is the recipe a slot's vault method was enrolled for: the
+// TPM's part L as the password or a typed one, a pepper or none.
+func vaultRecipeOf(v *nvslot.VaultAttestation) diskkey.Recipe {
+	r := diskkey.RecipeVaultSalt
+	if v.Unattended() {
+		r = diskkey.RecipeUnattendedVault
 	}
-	switch r {
-	case diskkey.RecipeRecovery, diskkey.RecipeTPMSalt, diskkey.RecipePhoneSalt, diskkey.RecipeUnattendedVault, diskkey.RecipeUnattendedVaultPepper:
-		return nil
+	if v.Pepper {
+		r |= diskkey.Recipe(diskkey.FlagPepper)
 	}
-	return fmt.Errorf("recipe %s (%s) is not enrolled by this build yet", r, r.Words())
+	return r
 }
 
 // LuksMarkOptions is what luks mark takes.
@@ -300,9 +304,9 @@ func checkRemoteSaltReady(tpmPath string, sealIndex uint32) error {
 	return nil
 }
 
-// checkVaultReady says whether the slot is enrolled with a vault, and
-// returns the label its key is derived with.
-func checkVaultReady(tpmPath string, sealIndex uint32) (string, error) {
+// checkVaultReady says whether the slot is enrolled with a vault for
+// recipe, and returns the label its key is derived with.
+func checkVaultReady(tpmPath string, sealIndex uint32, recipe diskkey.Recipe) (string, error) {
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
@@ -310,9 +314,13 @@ func checkVaultReady(tpmPath string, sealIndex uint32) (string, error) {
 	defer tpmDev.Close()
 	_, sb, err := phonegate.ReadSlot(tpmDev, sealIndex)
 	if err != nil || sb.Payload.Attestation == nil || !sb.Payload.Attestation.Vault.Enabled() {
-		return "", fmt.Errorf("slot %d is not enrolled with a vault: tpm2-kira vault enrol first, or luks enrol %s", nvslot.AttestSlot(sealIndex), diskkey.RecipeUnattendedVault.Words())
+		return "", fmt.Errorf("slot %d is not enrolled with a vault: tpm2-kira vault enrol first, or luks enrol %s", nvslot.AttestSlot(sealIndex), recipe.Words())
 	}
-	return sb.Payload.Attestation.Vault.Label, nil
+	v := &sb.Payload.Attestation.Vault
+	if have := vaultRecipeOf(v); have != recipe {
+		return "", fmt.Errorf("slot %d is enrolled with the vault for recipe %s (%s), not %s", nvslot.AttestSlot(sealIndex), have, have.Words(), recipe)
+	}
+	return v.Label, nil
 }
 
 // LuksMark writes the token for an existing keyslot. A bound recipe's
@@ -334,9 +342,9 @@ func LuksMark(o LuksMarkOptions) error {
 			return err
 		}
 		slot = nvslot.SlotNumber(idx)
-		if recipe.Unattended() {
+		if recipe.FromVault() {
 			// The label is the vault method's: the key was derived with it.
-			if label, err = checkVaultReady(o.TPMPath, idx); err != nil {
+			if label, err = checkVaultReady(o.TPMPath, idx, recipe); err != nil {
 				return err
 			}
 		} else if err := checkRemoteSaltReady(o.TPMPath, idx); err != nil {
@@ -479,8 +487,9 @@ func LuksEnrol(o LuksEnrolOptions) error {
 		if label == "" {
 			label = "luks"
 		}
-	case diskkey.RecipeUnattendedVault, diskkey.RecipeUnattendedVaultPepper:
+	case diskkey.RecipeUnattendedVault, diskkey.RecipeUnattendedVaultPepper, diskkey.RecipeVaultSalt, diskkey.RecipeVaultSaltPepper:
 		o.Vault.Pepper = o.Recipe.Pepper()
+		o.Vault.TypedPassword = !o.Recipe.Unattended()
 		k, s, err := vaultEnrolKey(o.Vault)
 		if err != nil {
 			return err
@@ -532,9 +541,20 @@ func LuksEnrol(o LuksEnrolOptions) error {
 	if advice := RouteAdvice(o.Device); advice != "" {
 		fmt.Print(advice)
 	}
-	if o.Recipe == diskkey.RecipeUnattendedVaultPepper {
+	if o.Recipe.FromVault() && o.Recipe.Pepper() {
 		fmt.Println("Every boot waits until an operator approves it on the vault with the pepper;")
+		if !o.Recipe.Unattended() {
+			fmt.Println("the password is asked after the code screen. Without the vault, the recovery")
+			fmt.Println("recipe and the recovery passphrase stay the way in.")
+			return nil
+		}
 		fmt.Println("without that, the recovery passphrase stays the way in at cryptsetup's own prompt.")
+		return nil
+	}
+	if o.Recipe.FromVault() && !o.Recipe.Unattended() {
+		fmt.Println("Every boot the vault releases the salt while the code screen holds, and the")
+		fmt.Println("password is asked after it. Without the vault, the recovery recipe and the")
+		fmt.Println("recovery passphrase stay the way in.")
 		return nil
 	}
 	if o.Recipe.Unattended() {

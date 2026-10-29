@@ -202,7 +202,7 @@ func (c *controller) keysSteps() []controlStep {
 		if s.Vault != "" {
 			desc += ", the vault at " + s.Vault
 		}
-		for _, name := range c.boundKeyslots(s.Slot, diskkey.RecipePhoneSalt, diskkey.RecipeUnattendedVault, diskkey.RecipeUnattendedVaultPepper) {
+		for _, name := range c.boundKeyslots(s.Slot, append([]diskkey.Recipe{diskkey.RecipePhoneSalt, diskkey.RecipeTPMSalt}, diskkey.VaultRecipes...)...) {
 			desc += ", " + name
 		}
 		n := s.Slot

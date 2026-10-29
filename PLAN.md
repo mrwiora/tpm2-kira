@@ -122,9 +122,15 @@ flowchart LR
    enrolment. Tested: unit, swtpm (opens in the approved state, not after
    a PCR moved), the plan rule; vmtest in step 8. `control`'s choice for
    it: step 4.
-3. [ ] vaultkey: R as the salt, the pepper into it (HKDF), `Key` (HKDF over
-   L ‖ R) goes; the pepper check over the combined key; the vault's
-   release mode as an ID in `vaultproto`.
+3. [x] vaultkey: R as the salt (`vaultkey.Salt`, the pepper as HKDF's
+   salt), L as the unattended recipes' password (`vaultkey.Password`),
+   the key the combiner's; the pepper check (unattended with a pepper
+   only) over that key; 0x1400/0x1401 enrol with a typed password (no L
+   in the slot), the vault's release opens the salt during the hold and
+   the password is asked after it; the vault's release modes are
+   `vaultproto.ReleaseMode` (0x01 auto, 0x02 approve; the words on the
+   command line). Tested: unit, swtpm (0x2400, 0x2401, 0x1401), the
+   vault's tests.
 4. [ ] enrolment: `luks enrol --password … --salt … [--pepper]`, refused
    combinations named; `control`'s named choices; its red warning when
    every keyslot of a volume is tpm2-kira's.

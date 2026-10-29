@@ -64,6 +64,7 @@ func TestNextPromptNamesTheVaultsFallback(t *testing.T) {
 		{[]diskkey.Recipe{diskkey.RecipeUnattendedVault}, "cryptsetup's prompt without the vault"},
 		{[]diskkey.Recipe{diskkey.RecipeUnattendedVault, diskkey.RecipeRecovery}, "the password and salt prompt if the vault gives no key"},
 		{[]diskkey.Recipe{diskkey.RecipePhoneSalt}, "the password prompt"},
+		{[]diskkey.Recipe{diskkey.RecipeVaultSaltPepper, diskkey.RecipeRecovery}, "the password prompt"},
 	} {
 		if got := nextPrompt(c.recipes); got != c.want {
 			t.Errorf("%v: %q, want %q", c.recipes, got, c.want)

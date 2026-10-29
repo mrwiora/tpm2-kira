@@ -19,28 +19,41 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
 )
 
-// The key is fixed by its parts, its label and the pepper: the contract
-// with every enrolled keyslot.
+// The vault's parts as the combiner's inputs are fixed by the parts, the
+// label and the pepper: the contract with every enrolled keyslot. An
+// unattended recipe's key is the combiner's of the two.
 func TestVaultKey(t *testing.T) {
 	l, r := bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32)
-	k := vaultkey.Key(l, r, "luks", nil)
-	if len(k) != 64 || strings.Trim(string(k), "0123456789abcdef") != "" {
-		t.Fatalf("key %q", k)
+	salt, pw := vaultkey.Salt(r, "luks", nil), vaultkey.Password(l, "luks")
+	for _, v := range [][]byte{salt, pw} {
+		if len(v) != 64 || strings.Trim(string(v), "0123456789abcdef") != "" {
+			t.Fatalf("%q", v)
+		}
 	}
-	if !bytes.Equal(k, vaultkey.Key(l, r, "", nil)) {
+	if !bytes.Equal(salt, vaultkey.Salt(r, "", nil)) || !bytes.Equal(pw, vaultkey.Password(l, "")) {
 		t.Fatal("the default label is luks")
 	}
 	for name, other := range map[string][]byte{
-		"another label":    vaultkey.Key(l, r, "home", nil),
-		"parts swapped":    vaultkey.Key(r, l, "luks", nil),
-		"with a pepper":    vaultkey.Key(l, r, "luks", []byte("p")),
-		"an empty pepper":  vaultkey.Key(l, r, "luks", []byte{}),
-		"another remote":   vaultkey.Key(l, bytes.Repeat([]byte{3}, 32), "luks", nil),
-		"the phone salt's": phonegate.FactorSalt(append(append([]byte(nil), l...), r...), "luks"),
+		"another label":    vaultkey.Salt(r, "home", nil),
+		"with a pepper":    vaultkey.Salt(r, "luks", []byte("p")),
+		"another pepper":   vaultkey.Salt(r, "luks", []byte("q")),
+		"another remote":   vaultkey.Salt(bytes.Repeat([]byte{3}, 32), "luks", nil),
+		"the password's":   vaultkey.Salt(l, "luks", nil),
+		"the phone salt's": phonegate.FactorSalt(r, "luks"),
 	} {
-		if bytes.Equal(k, other) {
-			t.Errorf("%s gives the same key", name)
+		if bytes.Equal(salt, other) {
+			t.Errorf("%s gives the same salt", name)
 		}
+	}
+	if bytes.Equal(pw, vaultkey.Password(r, "luks")) || bytes.Equal(pw, salt) {
+		t.Error("the password is not the TPM part's alone")
+	}
+	key, err := vaultkey.Key(l, r, "luks", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want, _ := diskkey.Combine(pw, salt); !bytes.Equal(key, want) {
+		t.Fatal("the unattended key is not the combiner's of the TPM's part and the vault's")
 	}
 }
 
@@ -76,7 +89,7 @@ func TestVaultMethodInTheBlob(t *testing.T) {
 
 	// With a pepper the check comes along; a check of another size does
 	// not parse.
-	a.Vault.PepperCheck = vaultkey.PepperCheck([]byte("key"))
+	a.Vault.Pepper, a.Vault.PepperCheck = true, vaultkey.PepperCheck([]byte("key"))
 	raw, _ = a.Marshal()
 	if b, err = nvslot.UnmarshalAttestation(raw); err != nil || !bytes.Equal(b.Vault.PepperCheck, a.Vault.PepperCheck) {
 		t.Fatalf("pepper check: %v", err)

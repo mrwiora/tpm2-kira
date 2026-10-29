@@ -41,7 +41,7 @@ func (c *controller) vaultStep(gate string, strong *StatusSlot) controlStep {
 	}
 	switch {
 	case enrolled != nil:
-		keyslots := c.boundKeyslots(enrolled.Slot, diskkey.RecipeUnattendedVault, diskkey.RecipeUnattendedVaultPepper)
+		keyslots := c.boundKeyslots(enrolled.Slot, diskkey.VaultRecipes...)
 		v := f.Vaults[enrolled.Slot]
 		desc := fmt.Sprintf("slot %d with %s", enrolled.Slot, enrolled.Vault)
 		if len(keyslots) > 0 {
@@ -202,7 +202,7 @@ func (c *controller) vaultEnrolled(s StatusSlot) error {
 	}
 	for _, d := range c.facts.Status.Devices {
 		for _, ks := range d.Keyslots {
-			if ks.Token != nil && !ks.Token.Obsolete && ks.Token.Recipe.Unattended() && ks.Token.Slot != nil && *ks.Token.Slot == s.Slot {
+			if ks.Token != nil && !ks.Token.Obsolete && ks.Token.Recipe.FromVault() && ks.Token.Slot != nil && *ks.Token.Slot == s.Slot {
 				if err := LuksRemove(LuksRemoveOptions{Device: d.Device, Keyslot: ks.Keyslot}); err != nil {
 					return err
 				}

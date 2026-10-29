@@ -95,8 +95,11 @@ type board struct {
 	// expectRelease tells the gate that a salt is wanted after the receipt;
 	// nil without a phone.
 	expectRelease func(bool)
-	// vaultKey is a volume's key from the vault; nil without one.
-	vaultKey func(volume string) ([]byte, error)
+	// vaultKey is a volume's key from the vault (an unattended recipe), and
+	// vaultSalt the salt it released for a recipe with a typed password;
+	// nil without one.
+	vaultKey  func(volume string) ([]byte, error)
+	vaultSalt func(volume string, r diskkey.Recipe) []byte
 	// tpmSalt is the part T of a slot's TPM salt, opened while the code
 	// screen held; nil without one.
 	tpmSalt func(slot int) []byte
@@ -241,7 +244,7 @@ func (p *vaultPart) start(bd *board) {
 	if keys == nil {
 		return
 	}
-	bd.vaultKey = keys.ForVolume
+	bd.vaultKey, bd.vaultSalt = keys.ForVolume, keys.SaltFor
 	go func() {
 		select {
 		case <-keys.Ready():
@@ -341,6 +344,10 @@ func (p *unlockPart) start(bd *board) {
 		case diskkey.RecipePhoneSalt:
 			if bd.salt != nil {
 				return bd.salt()
+			}
+		case diskkey.RecipeVaultSalt, diskkey.RecipeVaultSaltPepper:
+			if bd.vaultSalt != nil {
+				return bd.vaultSalt(volume, r)
 			}
 		case diskkey.RecipeTPMSalt:
 			if bd.tpmSalt == nil {

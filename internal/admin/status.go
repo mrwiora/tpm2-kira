@@ -33,21 +33,22 @@ type StatusOptions struct {
 
 // StatusSlot is one slot of the report.
 type StatusSlot struct {
-	Slot        int    `json:"slot_number"`
-	NVRAMIndex  string `json:"nvram_index"`
-	PCRs        string `json:"pcrs"`
-	Fallback    bool   `json:"fallback"` // sealed to 0 and 7 alone
-	Generation  uint64 `json:"generation"`
-	GenState    string `json:"generation_state"`
-	Signed      bool   `json:"signed"` // by this machine's signing key
-	SignReason  string `json:"sign_reason,omitempty"`
-	Phones      int    `json:"phones"`                 // enrolled; the slot then has no TOTP code
-	PhoneSalt   bool   `json:"remote_salt"`            // the release key is in the blob
-	Vault       string `json:"vault,omitempty"`        // the vault's URL: the slot is enrolled with one
-	VaultPepper bool   `json:"vault_pepper,omitempty"` // its key needs an operator's pepper
-	VaultPin    string `json:"-"`                      // the vault's key pin, for control's check
-	VaultDevice []byte `json:"-"`                      // the device ID the vault knows this machine by
-	TPMSalt     bool   `json:"tpm_salt,omitempty"`     // the slot holds the salt of recipe 0x1200
+	Slot        int            `json:"slot_number"`
+	NVRAMIndex  string         `json:"nvram_index"`
+	PCRs        string         `json:"pcrs"`
+	Fallback    bool           `json:"fallback"` // sealed to 0 and 7 alone
+	Generation  uint64         `json:"generation"`
+	GenState    string         `json:"generation_state"`
+	Signed      bool           `json:"signed"` // by this machine's signing key
+	SignReason  string         `json:"sign_reason,omitempty"`
+	Phones      int            `json:"phones"`                 // enrolled; the slot then has no TOTP code
+	PhoneSalt   bool           `json:"remote_salt"`            // the release key is in the blob
+	Vault       string         `json:"vault,omitempty"`        // the vault's URL: the slot is enrolled with one
+	VaultPepper bool           `json:"vault_pepper,omitempty"` // its key needs an operator's pepper
+	VaultRecipe diskkey.Recipe `json:"vault_recipe,omitempty"` // the recipe the vault method was enrolled for
+	VaultPin    string         `json:"-"`                      // the vault's key pin, for control's check
+	VaultDevice []byte         `json:"-"`                      // the device ID the vault knows this machine by
+	TPMSalt     bool           `json:"tpm_salt,omitempty"`     // the slot holds the salt of recipe 0x1200
 }
 
 // StatusReport is the whole report.
@@ -109,7 +110,8 @@ func collectStatus(o StatusOptions) StatusReport {
 			}
 			if att := sb.Payload.Attestation; att != nil && att.Vault.Enabled() {
 				s.Vault = att.Vault.URL
-				s.VaultPepper = len(att.Vault.PepperCheck) > 0
+				s.VaultPepper = att.Vault.Pepper
+				s.VaultRecipe = vaultRecipeOf(&att.Vault)
 				s.VaultPin, s.VaultDevice = att.Vault.Pin, att.DeviceID
 			}
 			r.Slots = append(r.Slots, s)
@@ -214,7 +216,7 @@ func statusNotes(r StatusReport) []string {
 				notes = append(notes, fmt.Sprintf("%s keyslot %d is bound to slot %d, which is gone - the slot is dirty: 'tpm2-kira control' (the slot's line) deletes what is left, or tpm2-kira luks remove %s --keyslot %d by hand", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
 				continue
 			}
-			if ks.Token.Recipe.Unattended() {
+			if ks.Token.Recipe.FromVault() {
 				ok := false
 				for _, s := range r.Slots {
 					if s.Slot == *ks.Token.Slot && s.Vault != "" {
@@ -253,8 +255,12 @@ func statusNotes(r StatusReport) []string {
 	for _, s := range r.Slots {
 		vault = vault || s.Vault != ""
 	}
-	if vault && headersRead && marked[diskkey.RecipeUnattendedVault]+marked[diskkey.RecipeUnattendedVaultPepper] == 0 {
-		notes = append(notes, "a slot is enrolled with a vault, but no LUKS keyslot is marked with a vault recipe: its key opens nothing (tpm2-kira luks mark <device> --keyslot N "+diskkey.RecipeUnattendedVault.Words()+")")
+	vaultMarked := 0
+	for _, vr := range diskkey.VaultRecipes {
+		vaultMarked += marked[vr]
+	}
+	if vault && headersRead && vaultMarked == 0 {
+		notes = append(notes, "a slot is enrolled with a vault, but no LUKS keyslot is marked with a vault recipe: its key opens nothing (tpm2-kira luks mark <device> --keyslot N --salt vault ...)")
 	}
 	if remoteSalt && headersRead && marked[diskkey.RecipePhoneSalt] == 0 {
 		notes = append(notes, "a phone salt is enrolled, but no LUKS keyslot is marked with the phone's salt: the phone's salt opens nothing (tpm2-kira luks enrol <device> "+diskkey.RecipePhoneSalt.Words()+")")
@@ -287,11 +293,7 @@ func printStatus(r StatusReport) {
 			fmt.Printf("           %s, no TOTP code; no phone salt\n", phonesText(s.Phones))
 		}
 		if s.Vault != "" {
-			pepper := ""
-			if s.VaultPepper {
-				pepper = ", with an operator's pepper"
-			}
-			fmt.Printf("           enrolled with the vault at %s (%s%s)\n", s.Vault, diskkey.RecipeUnattendedVault, pepper)
+			fmt.Printf("           enrolled with the vault at %s (%s)\n", s.Vault, s.VaultRecipe.Describe())
 		}
 	}
 	fmt.Println()
