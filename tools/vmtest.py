@@ -41,7 +41,11 @@ What it does, each step a check in the report:
      the SSH CA (StrictHostKeyChecking), the codes of both slots against the
      computed ones, Enter, the password and the salt typed in the session;
      after each boot: the cap ran, the key was answered, no tpm2-kira error
-  8. remote attestation over TLS, the vault: tpm2-kira-vault runs here, in
+  7b. the salt in this TPM (0x1200): luks enrol --salt tpm, luks status and
+     luksDump name the recipe, the plan takes the part; a boot asks the
+     password alone over SSH (the TPM opened the salt during the hold);
+     luks remove takes the keyslot again
+ 8. remote attestation over TLS, the vault: tpm2-kira-vault runs here, in
      a container with a software TPM of its own (tools/vmtest-vault/),
      published on the [vault] port; luks enrol --password tpm --salt vault with a
      token it made; the image rebuilt with the vault; a boot that nobody
@@ -50,8 +54,12 @@ What it does, each step a check in the report:
      is the fallback, typed over SSH; the keyslot enrolled again with
      --pepper, and a boot that waits for an operator: approved first with a
      wrong pepper (refused by the machine's pepper check, a new approval
-     asked), then with the right one, over the operator interface (curl,
-     the vault's key pinned) - the pepper travels wrapped for the TPM
+     asked) - on the vault's CLI (request approve, the pepper on stdin) -,
+     then with the right one, over the operator interface (curl, the
+     vault's key pinned) - the pepper travels wrapped for the TPM; then
+     the vault's salt with a typed password and a pepper (0x1401): an
+     operator answers the queue on the vault's CLI (requests answer)
+     while the code screen holds, and the password alone is asked
   9. a slot's life: approve, add slot 2, delete it whole
  10. removal: control switches SSH off and asks before it removes the SSH
      CA (No keeps it); slot delete --yes takes everything of tpm2-kira -
@@ -93,6 +101,8 @@ ANSI = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x
 # recovery recipe's keyslot it enrols, and the boot SSH server's settings.
 TEST_PASSWORD = "kira-vmtest-pw"
 TEST_SALT = "kira-vmtest-salt"
+TPM_SALT_PASSWORD = "kira-vmtest-tpm-salt-pw"
+VAULT_PASSWORD = "kira-vmtest-vault-pw"
 SSH_PORT = 2222
 SSH_HOLD = 600
 
@@ -289,6 +299,14 @@ class Vault:
     def admin(self, *args):
         with self.lock:
             return self._sh(["docker", "exec", self.NAME, "tpm2-kira-vault"] + list(args))
+
+    def admin_input(self, text, *args):
+        """An admin command answered on its stdin, as an operator at the
+        vault's terminal answers it (a pipe: one line per answer)."""
+        with self.lock:
+            p = subprocess.run(["docker", "exec", "-i", self.NAME, "tpm2-kira-vault"] + list(args),
+                               input=text, capture_output=True, text=True)
+            return p.returncode, p.stdout + p.stderr
 
     def stop(self):
         with open(os.path.join(self.dir, "vault.log"), "w") as f:
@@ -690,7 +708,7 @@ class Machine:
         reaches the machine wrapped for its TPM, opened through the slot's
         approval like R."""
         self.log.head("the vault with an operator's pepper")
-        rc, out = self.run("tpm2-kira vault unenrol --nvram 1 2>&1", save="vault-unenrol.log")
+        rc, out = self.run("tpm2-kira vault unenrol --nvram 0 2>&1", save="vault-unenrol.log")
         m = re.search(r"tpm2-kira-vault device revoke ([0-9a-f]+)", out)
         if not self.check("vault unenrol: the slot's vault method is gone", m is not None, out[-400:]):
             raise Fail("vault unenrol")
@@ -731,8 +749,8 @@ class Machine:
         rid = vault.pending(self.name, 300)
         if not self.check("the boot asks the vault and waits for an operator", rid is not None):
             raise Fail("no pending request")
-        code, body = vault.approve(rid, "not the pepper")
-        self.check("an operator approves with a wrong pepper", code == "200", f"{code} {body[-300:]}")
+        rc, body = vault.admin_input("not the pepper\n", "request", "approve", rid)
+        self.check("an operator approves with a wrong pepper on the vault's CLI (request approve)", rc == 0 and "approved" in body, body[-300:])
         rid2 = None
         deadline = time.time() + 120
         while time.time() < deadline:
@@ -743,7 +761,7 @@ class Machine:
         if not self.check("the machine refuses the wrong pepper and asks for a new approval", rid2 is not None):
             raise Fail("no second request")
         code, body = vault.approve(rid2, self.PEPPER)
-        self.check("an operator approves with the pepper", code == "200", f"{code} {body[-300:]}")
+        self.check("an operator approves with the pepper over the operator interface", code == "200", f"{code} {body[-300:]}")
         up = self.wait_port(22, True, 420)
         if not self.check("the pepper's boot: the system comes up with nobody at the console", up):
             raise Fail("the pepper's boot did not come up")
@@ -757,6 +775,161 @@ class Machine:
         self.log.save("vault-audit-pepper.log", out)
         self.check("the vault's audit: released with a pepper, the pepper itself nowhere",
                    "with a pepper" in out and self.PEPPER not in out and "not the pepper" not in out, out[-600:])
+
+    def luks_remove(self, keyslot, name):
+        s = self.session(f"sudo tpm2-kira luks remove {self.luks_dev} --keyslot {keyslot}", name)
+        try:
+            s.expect(r"to authorise: ?$", 120); s.send(self.luks_pass + "\n")
+            text = s.wait_end(120)
+        finally:
+            s.close()
+        rc, out = self.run(f"tpm2-kira luks status {self.luks_dev} 2>&1")
+        return out
+
+    def typed_boot(self, name, from_words, before_enter=None):
+        """A boot whose recipe has a typed password and a device-held salt:
+        the code screen over SSH names the password prompt, the prompt says
+        where the salt came from and asks the password alone. before_enter
+        runs while the code screen holds (an operator's approval)."""
+        self.run("systemctl reboot")
+        self.wait_port(22, False, 120)
+        if not self.check(f"{name}: the boot SSH server answers", self.wait_port(SSH_PORT, True, 300)):
+            raise Fail("no boot SSH server")
+        s = self.boot_session(name.replace(" ", "-"))
+        try:
+            text, _ = s.expect(r"Does the code match your authenticator\?.*$", 120)
+            self.check(f"{name}: the screen names the password prompt", "continue to the password prompt" in text, text[-300:])
+            if before_enter:
+                before_enter()
+            s.send("\r")
+            text, _ = s.expect(r"(Password|Salt) for disk \S+: ?$", 300)
+            self.check(f"{name}: the password is asked with the salt {from_words}",
+                       "Password for disk" in text.split("\n")[-1] and f"the salt {from_words}" in text, text[-500:])
+            if "Salt for disk" in text.split("\n")[-1]:
+                raise Fail("asked for a typed salt: " + text[-300:])
+            return s, text
+        except Fail:
+            s.close()
+            raise
+
+    def boot_log(self, save):
+        log = ("cat /run/initramfs/tpm2-kira.log" if self.distro == "debian" else
+               "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service")
+        rc, out = self.run(log + " 2>&1", save=save)
+        return out
+
+    def tpm_salt(self):
+        """The salt in this TPM (0x1200): enrolled, named by luks status and
+        luksDump, the image's plan takes the part; a boot asks the password
+        alone - the TPM opened the salt while the code screen held; the
+        keyslot removed again."""
+        self.log.head("the salt in this TPM (0x1200)")
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt tpm", "luks-enrol-tpm-salt")
+        try:
+            s.expect(r"Password \(typed at the machine at every boot\): ?$", 300); s.send(TPM_SALT_PASSWORD + "\n")
+            s.expect(r"The same password again: ?$", 60); s.send(TPM_SALT_PASSWORD + "\n")
+            s.expect(r"to authorise: ?$", 600); s.send(self.luks_pass + "\n")
+            _, m = s.expect(r"keyslot (\d+) added: tpm2-kira, 0x1200 ", 300)
+            keyslot = m.group(1)
+            s.wait_end(120)
+            self.check("luks enrol --salt tpm: a keyslot of recipe 0x1200", True)
+        except Fail as e:
+            self.check("luks enrol --salt tpm", False, str(e))
+            raise
+        finally:
+            s.close()
+        rc, out = self.run(f"tpm2-kira luks status {self.luks_dev} 2>&1", save="luks-status-tpm-salt.log")
+        self.check("luks status names the recipe", "0x1200 password typed · salt in this TPM" in out, out[-500:])
+        rc, out = self.run(f"cryptsetup luksDump {self.luks_dev} 2>&1")
+        self.check("luksDump names it too (token type tpm2-kira-1200)", "tpm2-kira-1200" in out, out[-500:])
+        rc, out = self.run("tpm2-kira status --json 2>&1", save="status-tpm-salt.json")
+        self.check("status: slot 0 holds a TPM salt", '"tpm_salt": true' in out, out[-400:])
+        out = self.rebuild()
+        self.check("the image is rebuilt with the TPM salt in its plan", re.search(r"TPM salt:\s+in", out) is not None, out[-800:])
+
+        self.log.head("a boot with the salt in this TPM")
+        s, _ = self.typed_boot("TPM salt", "this TPM opened")
+        try:
+            s.send(TPM_SALT_PASSWORD + "\r")
+            s.wait_end(600)
+        finally:
+            s.close()
+        up = self.wait_port(22, True, 300)
+        if not self.check("TPM salt: the disk unlocks with the password alone", up):
+            raise Fail("the TPM salt's boot did not come up")
+        time.sleep(5)
+        out = self.boot_log("boot-tpm-salt-tpm2-kira.log")
+        self.check("TPM salt: opened while the code screen held, the key answered", "tpm salt: slot 0: opened" in out and "unlock: answered for" in out, out[-600:])
+        out = self.luks_remove(keyslot, "luks-remove-tpm-salt")
+        self.check("luks remove takes the TPM salt's keyslot", "0x1200" not in out, out[-400:])
+
+    def vault_typed(self, vault):
+        """The vault's salt with a typed password and a pepper (0x1401): the
+        unattended keyslot goes, the device enrolled again; at boot an
+        operator approves on the vault's CLI (requests answer, the pepper on
+        its stdin) while the code screen holds, the vault releases the salt,
+        and the password alone is asked after the code screen."""
+        self.log.head("the vault's salt with a typed password and a pepper (0x1401)")
+        rc, out = self.run("tpm2-kira vault unenrol --nvram 0 2>&1", save="vault-unenrol-typed.log")
+        m = re.search(r"tpm2-kira-vault device revoke ([0-9a-f]+)", out)
+        if not self.check("vault unenrol before the typed recipe", m is not None, out[-400:]):
+            raise Fail("vault unenrol")
+        device = m.group(1)
+        self.luks_remove(self.vault_keyslot, "luks-remove-vault-pepper")
+        out = vault.admin("token", "create", "--name", self.name, "--replace", device)
+        m = re.search(r"--url (\S+) --pin (\S+) --token (\S+)", out)
+        if not self.check("a token that replaces the device again", m is not None, out[-400:]):
+            raise Fail("no token")
+        url, pin, token = m.groups()
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt vault --pepper --url {url} --pin {pin} --token {token} --name {self.name}", "luks-enrol-vault-typed")
+        try:
+            s.expect(r"Pepper \(the operator gives it with every approval on the vault\): ?$", 300); s.send(self.PEPPER + "\n")
+            s.expect(r"The same pepper again: ?$", 60); s.send(self.PEPPER + "\n")
+            s.expect(r"Password \(typed at the machine at every boot\): ?$", 60); s.send(VAULT_PASSWORD + "\n")
+            s.expect(r"The same password again: ?$", 60); s.send(VAULT_PASSWORD + "\n")
+            s.expect(r"to authorise: ?$", 600); s.send(self.luks_pass + "\n")
+            _, m = s.expect(r"keyslot (\d+) added: tpm2-kira, 0x1401 ", 300)
+            self.vault_keyslot = m.group(1)
+            s.wait_end(120)
+            self.check("luks enrol --salt vault --pepper: a keyslot of recipe 0x1401", True)
+        except Fail as e:
+            self.check("luks enrol --salt vault --pepper", False, str(e))
+            raise
+        finally:
+            s.close()
+        rc, out = self.run("tpm2-kira status 2>&1", save="status-vault-typed.log")
+        self.check("status: the vault method is the typed recipe with a pepper", "0x1401 password typed · salt from the vault (pepper)" in out, out[-500:])
+
+        self.log.head("a boot: the operator approves on the vault's CLI, the password typed after")
+        releases = lambda: vault.admin("audit").count("TPM reset count")
+        released_before = releases()
+
+        def approve():
+            rid = vault.pending(self.name, 300)
+            if not self.check("typed vault: the boot waits for an operator", rid is not None):
+                raise Fail("no pending request")
+            rc, out = vault.admin_input("a\n" + self.PEPPER + "\n", "requests", "answer")
+            self.log.save("vault-requests-answer.log", out)
+            self.check("the vault's CLI answers the queue (requests answer, the pepper asked)", rc == 0 and self.name in out and "approved" in out, out[-400:])
+            deadline = time.time() + 120
+            while time.time() < deadline and releases() <= released_before:
+                time.sleep(2)
+            self.check("typed vault: the vault released the salt while the code screen held", releases() > released_before)
+
+        s, _ = self.typed_boot("typed vault", "the vault released", before_enter=approve)
+        try:
+            s.send(VAULT_PASSWORD + "\r")
+            s.wait_end(600)
+        finally:
+            s.close()
+        up = self.wait_port(22, True, 300)
+        if not self.check("typed vault: the disk unlocks with the password and the vault's salt", up):
+            raise Fail("the typed vault's boot did not come up")
+        time.sleep(5)
+        out = self.boot_log("boot-vault-typed-tpm2-kira.log")
+        self.check("typed vault: the salt opened during the hold, the key answered", "released; the salt is opened" in out and "unlock: answered for" in out, out[-600:])
+        out = vault.admin("audit")
+        self.check("the vault's audit holds no pepper", self.PEPPER not in out, out[-300:])
 
     def slot_life(self):
         self.log.head("a slot's life")
@@ -854,9 +1027,11 @@ class Machine:
             self.image()
             for n in range(1, self.cycles + 1):
                 self.cycle(n)
+            self.tpm_salt()
             if vault:
                 self.vault(vault)
                 self.vault_pepper(vault)
+                self.vault_typed(vault)
             self.slot_life()
             self.removal()
         except Fail as e:
