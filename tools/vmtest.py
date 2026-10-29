@@ -48,6 +48,10 @@ What it does, each step a check in the report:
      with the device revoked on the vault, where the password+salt keyslot
      is the fallback, typed over SSH
   9. a slot's life: approve, add slot 2, delete it whole
+ 10. removal: control switches SSH off and asks before it removes the SSH
+     CA (No keeps it); slot delete --yes takes everything of tpm2-kira -
+     no index of its range left in the TPM, no KIRAasshCA variable, no
+     ssh_ca.pub
 
 Nothing but Python's standard library and ssh are needed here. Reports and
 every session's transcript land in the run's directory.
@@ -651,6 +655,60 @@ class Machine:
         rc, out = self.run("tpm2-kira slot list 2>&1", save="slot-list-after-delete.log")
         self.check("slot 2 is gone whole (its blob and its generation index)", "0x01803012" not in out and "0x01803812" not in out, out[-500:])
 
+    def removal(self):
+        """What tpm2-kira keeps outside the disk goes when asked, and only
+        then: control asks before it removes the SSH CA when SSH is switched
+        off (No keeps it); slot delete without --nvram takes everything -
+        the slots, the boot settings, the SSH CA's EFI variable and its
+        public key."""
+        self.log.head("removing what tpm2-kira keeps in the TPM and the EFI variables")
+        ca_var = "/sys/firmware/efi/efivars/KIRAasshCA-24415b90-39be-45c0-a9a3-d547ebe28ea0"
+        there = lambda path: "yes" in self.run(f"test -e {path} && echo yes")[1]
+        s = self.session("sudo ACCESSIBLE=1 tpm2-kira control", "control-ssh-off")
+        menu = r"Enter a number between 1 and \d+: ?$"
+
+        def pick(rx, timeout=120):
+            for _ in range(4):
+                text, _ = s.expect(menu, timeout)
+                opts = menu_options(text)
+                o = next((o for o in opts if re.search(rx, o[1])), None)
+                if o:
+                    s.send(o[0] + "\n")
+                    return text
+                nxt = next((o for o in opts if "Continue to step 2" in o[1]), None)
+                if not nxt:
+                    raise Fail(f"no option /{rx}/ in:\n" + text[-1200:])
+                s.send(nxt[0] + "\n")
+            raise Fail(f"no option /{rx}/")
+
+        try:
+            pick(r"Network and SSH at boot")
+            pick(r"SSH server at boot")
+            s.expect(r"Start the SSH server with the code screen\? \[(y/N|Y/n)\] ?$"); s.send("n\n")
+            s.expect(r"Remove the SSH CA too\? \[y/N\] ?$", 60); s.send("n\n")
+            self.check("control asks before it removes the SSH CA when SSH is switched off", True)
+            pick(r"Back to step 2")
+            pick(r"^\s*Quit$")
+            s.expect(r"Run (mkinitcpio -P|update-initramfs -u) now\? \[Y/n\] ?$", 120); s.send("y\n")
+            self.log.save("control-ssh-off-rebuild.log", s.wait_end(900))
+        except Fail as e:
+            self.check("control: SSH off, the SSH CA kept on No", False, str(e))
+            raise
+        finally:
+            s.close()
+        self.check("No keeps the SSH CA: its EFI variable and ssh_ca.pub", there(ca_var) and there("/etc/tpm2-kira/ssh_ca.pub"))
+
+        rc, out = self.run("tpm2-kira slot delete --yes 2>&1", save="slot-delete-all.log")
+        self.check("slot delete without --nvram names the SSH CA and deletes everything",
+                   "Found the SSH CA efi:KIRAasshCA" in out and "item(s) deleted successfully" in out, out[-800:])
+        rc, out = self.run("tpm2-kira slot list 2>&1", save="slot-list-after-delete-all.log")
+        left = re.findall(r"0x01803[0-9A-Fa-f]{3}", out)
+        self.check("no index of tpm2-kira's is left in the TPM (slots, generations, counters, boot settings)", not left, ", ".join(sorted(set(left))))
+        self.check("the SSH CA's EFI variable is gone", not there(ca_var))
+        self.check("its public key /etc/tpm2-kira/ssh_ca.pub is gone", not there("/etc/tpm2-kira/ssh_ca.pub"))
+        rc, out = self.run("tpm2-kira slot delete --yes 2>&1")
+        self.check("slot delete again: nothing of tpm2-kira is found", "nothing of tpm2-kira found" in out, out[-300:])
+
     def all(self, package, vault=None, reset=None):
         try:
             if reset:
@@ -667,6 +725,7 @@ class Machine:
             if vault:
                 self.vault(vault)
             self.slot_life()
+            self.removal()
         except Fail as e:
             self.rep.issues.append("stopped: " + str(e).split("\n")[0])
         except Exception as e:  # a defect of the test, reported as such

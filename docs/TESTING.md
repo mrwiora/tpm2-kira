@@ -137,6 +137,11 @@ transcript, a log per command and session (`session-*-control.log`,
    is the fallback, typed over SSH; then unrevoked.
 10. **A slot's life:** `slot approve`, `slot add --nvram 2`, `slot delete`
     (blob and generation index gone).
+11. **Removal:** `control` switches the SSH server off and asks before it
+    removes the SSH CA - No keeps the EFI variable and `ssh_ca.pub`;
+    `slot delete --yes` then takes everything of tpm2-kira: no index of
+    its range is left in the TPM, the `KIRAasshCA` variable and
+    `ssh_ca.pub` are gone, and a second run finds nothing.
 
 ### The vault of the run
 
