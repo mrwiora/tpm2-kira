@@ -235,7 +235,13 @@ func (p *sshPart) end(*board) {}
 type vaultPart struct {
 	cancel context.CancelFunc
 	quit   chan struct{}
+	done   <-chan struct{} // closed once every slot has been tried
 }
+
+// vaultSettle bounds how long the end of the hold waits for an opening the
+// vault part has begun: what the vault released is opened in the TPM, and
+// the separator, which READY lets run, would end the slot's policy under it.
+var vaultSettle = 20 * time.Second
 
 func (p *vaultPart) start(bd *board) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -245,6 +251,7 @@ func (p *vaultPart) start(bd *board) {
 		return
 	}
 	bd.vaultKey, bd.vaultSalt = keys.ForVolume, keys.SaltFor
+	p.done = keys.Ready()
 	go func() {
 		select {
 		case <-keys.Ready():
@@ -257,10 +264,20 @@ func (p *vaultPart) start(bd *board) {
 	}()
 }
 
-// Past the hold the parts no longer open.
+// Past the hold the parts no longer open: the attempt is cancelled - a
+// request on the network at once - and an opening in the TPM already begun
+// is waited for, so that READY (and the separator after it) does not end
+// the slot's policy in the middle of it (TPM_RC_PCR_CHANGED).
 func (p *vaultPart) released(*board, string) {
 	p.cancel()
 	close(p.quit)
+	if p.done == nil {
+		return
+	}
+	select {
+	case <-p.done:
+	case <-time.After(vaultSettle):
+	}
 }
 
 func (p *vaultPart) end(*board) {}

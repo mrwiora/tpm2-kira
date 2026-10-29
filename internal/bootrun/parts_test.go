@@ -2,6 +2,7 @@ package bootrun
 
 import (
 	"testing"
+	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
@@ -69,5 +70,29 @@ func TestNextPromptNamesTheVaultsFallback(t *testing.T) {
 		if got := nextPrompt(c.recipes); got != c.want {
 			t.Errorf("%v: %q, want %q", c.recipes, got, c.want)
 		}
+	}
+}
+
+// The end of the hold waits for an opening the vault part has begun - READY
+// would let the separator end the slot's policy under it - and no longer
+// than vaultSettle.
+func TestVaultPartReleaseWaitsForTheOpening(t *testing.T) {
+	done := make(chan struct{})
+	p := &vaultPart{cancel: func() {}, quit: make(chan struct{}), done: done}
+	go func() { time.Sleep(200 * time.Millisecond); close(done) }()
+	start := time.Now()
+	p.released(nil, "")
+	if waited := time.Since(start); waited < 150*time.Millisecond {
+		t.Fatalf("released after %v, before the opening ended", waited)
+	}
+
+	old := vaultSettle
+	vaultSettle = 100 * time.Millisecond
+	defer func() { vaultSettle = old }()
+	p = &vaultPart{cancel: func() {}, quit: make(chan struct{}), done: make(chan struct{})}
+	start = time.Now()
+	p.released(nil, "")
+	if waited := time.Since(start); waited > time.Second {
+		t.Fatalf("an opening that does not end held the boot for %v", waited)
 	}
 }
