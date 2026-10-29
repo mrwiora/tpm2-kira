@@ -83,7 +83,7 @@ How the three High items fit together — none is sufficient alone:
 the Secure Boot policy. Outside a unified kernel image the initrd is never
 signature-checked, not even with Secure Boot on. An attacker with disk access
 replaces the initrd with one that logs the LUKS passphrase and still runs the
-genuine `tpm2-kira run`; every sealed PCR is unchanged, so a valid code is
+genuine `tpm2-kira-boot run`; every sealed PCR is unchanged, so a valid code is
 shown. The tool's central promise fails in its recommended configuration.
 
 The same gap lets an attacker take the secret itself, without the passphrase
@@ -139,7 +139,7 @@ saying what it leaves out.
 
 ## 2. The secret stays unsealable after boot (no PCR cap)
 
-- [x] done — owner first chose PCR 23, which turned out to be resettable from locality 0 (verified on swtpm), so the cap is an NV read-lock instead: `tpm2-kira cap` read-locks the item-14 generation indices (`READ_STCLEAR`). Wired into `tpm2-kira-cap.service` (stop action at `initrd-switch-root.target`, like systemd-pcrphase's leave-initrd) and the initramfs-tools init-bottom script. Integration test `TestCapLocksCodesUntilReboot`. Not yet verified in a real initrd boot.
+- [x] done — owner first chose PCR 23, which turned out to be resettable from locality 0 (verified on swtpm), so the cap is an NV read-lock instead: `tpm2-kira-boot cap` read-locks the item-14 generation indices (`READ_STCLEAR`). Wired into `tpm2-kira-cap.service` (stop action at `initrd-switch-root.target`, like systemd-pcrphase's leave-initrd) and the initramfs-tools init-bottom script. Integration test `TestCapLocksCodesUntilReboot`. Not yet verified in a real initrd boot.
 
 **Where**
 - `cmd/policy_or.go:580` — `UnsealWithPCRBranch`: policy is PolicyPCR only
@@ -163,7 +163,7 @@ steers users there. This item is for everything else (Debian/initramfs-tools,
 non-UKI Arch).
 
 **Resolution (recommended design).**
-1. New command `tpm2-kira cap`: extends a fixed digest
+1. New command `tpm2-kira-boot cap`: extends a fixed digest
    `H("tpm2-kira:leave-initrd")` into the cap PCR, in every active bank. No
    flags needed beyond `--tpm`.
 2. The cap PCR must be part of the sealed policy. **OWNER DECISION** between
@@ -212,7 +212,7 @@ non-UKI Arch).
      stops first; wire it in `initramfs/mkinitcpio/install/sd-tpm2-kira` the
      same way `tpm2-kira.service` is enabled. A separate unit is more reliable
      than `ExecStopPost=` if the display process is killed.
-   - initramfs-tools: call `tpm2-kira cap` in `scripts/init-bottom/tpm2-kira`
+   - initramfs-tools: call `tpm2-kira-boot cap` in `scripts/init-bottom/tpm2-kira`
      after the `kill`.
    - The cap must fail closed in the sense that a failed extend is printed
      loudly on the console; it must not block boot.
@@ -599,7 +599,7 @@ this is defence in depth only.
 startup rather than shipping a unit that fails):
 
 ```ini
-ExecStart=/usr/bin/tpm2-kira run
+ExecStart=/usr/bin/tpm2-kira-boot run
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 PrivateNetwork=yes

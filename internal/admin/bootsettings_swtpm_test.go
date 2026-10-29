@@ -52,7 +52,7 @@ func TestBootSettingsOnSWTPM(t *testing.T) {
 		t.Fatal("the boot settings changed")
 	}
 	if role := kiraIndexRole(nvslot.BootSettingsIndex); role == "" {
-		t.Fatal("nvram list does not know the index")
+		t.Fatal("slot list does not know the index")
 	}
 
 	// Off removes it.

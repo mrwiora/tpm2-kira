@@ -998,7 +998,7 @@ func testNVRAMDeleted(t *testing.T, tpmPath, nvramIndex string) {
 }
 
 // TestCompleteWorkflow is a comprehensive integration test that verifies the complete workflow
-// including seal, reveal, run, reseal, and nvram delete operations
+// including seal, reveal, run, reseal, and slot delete operations
 func TestCompleteWorkflow(t *testing.T) {
 	t.Log("=== PREPARATION ===")
 
@@ -1042,7 +1042,7 @@ func TestCompleteWorkflow(t *testing.T) {
 	testRun(t, tpmPath, nvramIndexBasic, 3*time.Second)
 
 	// NVRAM delete - must be successful
-	t.Log("Testing nvram delete...")
+	t.Log("Testing slot delete...")
 	testNVRAMDelete(t, tpmPath, nvramIndexBasic)
 
 	// ===================================================================
@@ -1067,7 +1067,7 @@ func TestCompleteWorkflow(t *testing.T) {
 	testReveal(t, tpmPath, nvramIndexReseal)
 
 	// NVRAM delete - must be successful
-	t.Log("Testing nvram delete...")
+	t.Log("Testing slot delete...")
 	testNVRAMDelete(t, tpmPath, nvramIndexReseal)
 
 	// Verify data is actually deleted
@@ -1170,7 +1170,7 @@ func TestCompleteWorkflow(t *testing.T) {
 	testReveal(t, tpmPath, nvramIndexPCR)
 
 	// Cleanup
-	t.Log("Testing nvram delete for PCR test...")
+	t.Log("Testing slot delete for PCR test...")
 	testNVRAMDelete(t, tpmPath, nvramIndexPCR)
 
 	t.Log("\n=== ALL TESTS PASSED ===")

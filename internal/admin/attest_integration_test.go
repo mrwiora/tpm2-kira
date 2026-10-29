@@ -616,7 +616,7 @@ func TestStaleSlotCanBeRemoved(t *testing.T) {
 
 	// Everything: the other slot, and the counter that belongs to no slot.
 	if err := NVRAMDeleteCommand(sock, 0, true, false); err != nil {
-		t.Fatalf("nvram delete: %v", err)
+		t.Fatalf("slot delete: %v", err)
 	}
 	for idx := uint32(nvslot.AppNVRAMStart); idx <= nvslot.AppNVRAMEnd; idx++ {
 		if role := kiraIndexRole(idx); role != "" && exists(idx) {
@@ -625,7 +625,7 @@ func TestStaleSlotCanBeRemoved(t *testing.T) {
 	}
 	// Nothing left: it says so instead of claiming success.
 	if err := NVRAMDeleteCommand(sock, 0, true, false); err == nil || !strings.Contains(err.Error(), "nothing of tpm2-kira") {
-		t.Fatalf("second nvram delete: %v", err)
+		t.Fatalf("second slot delete: %v", err)
 	}
 
 	// The new installation seals and enrols; the blob from before the

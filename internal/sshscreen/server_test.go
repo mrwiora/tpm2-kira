@@ -278,7 +278,7 @@ func TestRemoteConsoleReleaseStops(t *testing.T) {
 	select {
 	case <-srv.Child.Exited():
 	default:
-		t.Fatal("remote serve still runs")
+		t.Fatal("ssh-child still runs")
 	}
 	if c, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(srv.Opts.Port)); err == nil {
 		c.Close()
@@ -344,7 +344,7 @@ func TestConsoleHint(t *testing.T) {
 	}
 }
 
-// remote serve refuses to run as root, and without run's descriptors.
+// ssh-child refuses to run as root, and without run's descriptors.
 func TestRemoteServeAlone(t *testing.T) {
 	if os.Geteuid() == 0 {
 		if err := SSHChildCommand(); err == nil || !strings.Contains(err.Error(), "refuses to run as root") {

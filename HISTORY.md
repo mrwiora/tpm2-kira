@@ -33,7 +33,7 @@ systemd-tty-ask-password-agent for cryptsetup's own prompt. tinysshd and
 the session ran as root, so the separate process isolated nothing; the
 image needed tinysshd, a shell and the agent; the host key had to sit in
 a file for tinysshd; logins were ssh-ed25519 only. Replaced the same day
-by 'remote serve' (x/crypto/ssh, as nobody, in namespaces, under
+by 'ssh-child' (x/crypto/ssh, as nobody, in namespaces, under
 Landlock, signing delegated to run) and run as the session's password
 agent.
 
@@ -118,7 +118,7 @@ working across reboots.
 
 ### The SSH server was part of tpm2-kira
 
-Until 2026-10-23 'remote serve' and run's side of it (the sandbox, the
+Until 2026-10-23 'ssh-child' and run's side of it (the sandbox, the
 control socket, the signing) were tpm2-kira's own files
 (cmd/remote_serve.go, cmd/remote_privsep.go). They moved, with the TPM
 host keys, into aSSH (assh/, a git submodule; github.com/tpm2-trust/assh), a project of its
@@ -205,7 +205,7 @@ measures. Both old lines are errors that say where the value goes now.
 Until 2026-10-16 every image got the code screen, its wait for
 `/dev/tpmrm0` and `tpm2-kira-cap.service`, whether a slot was sealed or
 the machine had a TPM at all ("a later seal needs no rebuild"). The
-Bluetooth gate went in by a shell decision of each hook - `attest status
+Bluetooth gate went in by a shell decision of each hook - `phone status
 --json` for an enrolled phone, `attest signer`, `attest initramfs-deps`,
 `attest config-check` - and `TPM2_KIRA_ATTEST_BLUETOOTH=always` packed it
 with nothing but `seal.pub` checked, so a machine unlocking by password and
@@ -233,7 +233,7 @@ seal.key), and a failed NVRAM rewrite stashed the blob under
 `recovery/`), where systemd keeps its own key material
 (`/etc/systemd/tpm2-pcr-*`); nothing of tpm2-kira's is left under
 `/var/lib`. No migration: an installed system moves the keys directory by
-hand before the next `reseal`.
+hand before the next `slot approve`.
 
 ## Factor release
 
@@ -245,7 +245,7 @@ PLAN-FACTORRELEASE.md as drafted kept hashpwd2 a separate program: a
 fed it with the password into hashpwd2, and the key file went to
 `/run/cryptsetup-keys.d`. The release key had a `PolicyOR` with a
 `PolicySigned` branch the phone could open after a PCR change. Reviewed
-on 2026-10-07: the combiner is inside tpm2-kira (`cmd/combine.go`,
+on 2026-10-07: the combiner is inside tpm2-kira (`internal/diskkey/combine.go`,
 hashpwd2's bytes), the answer goes to systemd-cryptsetup over the key
 socket, and the release key's policy is the slot's approval plus the
 command code, with no branch the phone can open: only a boot the
@@ -257,7 +257,7 @@ machine's signing key approved at seal or reseal gets the factor.
 
 Until 2026-10-07 the phone was served at boot only with
 `TPM2_KIRA_ATTEST=lazy` in `/etc/tpm2-kira/attest.conf` (`off` by
-default), `attest gate` took `--mode lazy`, and `tpm2-kira run` decided
+default), `phone gate` took `--mode lazy`, and `tpm2-kira-boot run` decided
 whether to coordinate a gate by that line. Removed with the enforced mode
 below: there was nothing left to choose. A phone is served whenever one
 is enrolled and the hook found the adapter; `attest.conf` keeps the
@@ -291,13 +291,13 @@ wanted, is a missing factor (PLAN-FACTORRELEASE.md).
 ### TPM2_KIRA_UNLOCK in control.conf
 
 How the disk's key was made at boot was configured: TPM2_KIRA_UNLOCK in
-/etc/tpm2-kira/control.conf (skip, password+salt, password+remotesalt),
+/etc/tpm2-kira/control.conf (skip, password+salt, password+phonesalt),
 copied into the initramfs, so an enrolment needed the mode set and a
 rebuild, and a mode that did not fit the keyslots derived a key that
 opened nothing - status had three notes only for such mismatches. Now the
 keyslot's token in the volume's own LUKS2 header names the recipe, and the
 key provider reads the header the moment the volume asks
-(cmd/luks_header.go): nothing to configure, nothing to copy, nothing to
+(internal/diskkey/header.go): nothing to configure, nothing to copy, nothing to
 mismatch, and no rebuild after an enrolment. A leftover TPM2_KIRA_UNLOCK
 line is an error that says to remove it. The mode names live on as the
 token's mode values.
@@ -308,8 +308,8 @@ token's mode values.
 
 The token's type was "tpm2-kira" for both modes, the mode a JSON field: a
 plain 'cryptsetup luksDump', which shows only the types, could not tell a
-password+salt keyslot from a password+remotesalt one. Now the type
-carries the mode - tpm2-kira-salt and tpm2-kira-remotesalt ('+' is not
+password+salt keyslot from a password+phonesalt one. Now the type
+carries the mode - tpm2-kira-salt and tpm2-kira-phonesalt ('+' is not
 allowed in a token type) - and the mode field is gone. A token of the old
 type is recognised only to say what to do now: remove it (cryptsetup
 token remove --token-id N) and mark the keyslot anew.
@@ -320,14 +320,14 @@ For a short while every token carried `slot` (0 by default), whatever the
 mode, and deleting a slot took every keyslot bound to it - the typed-salt
 keyslot included, although no TPM is in its key. That made removing a
 slot overwrite protection that did not depend on it. Now only
-`password+remotesalt` binds (the slot whose enrolment releases its salt);
+`password+phonesalt` binds (the slot whose enrolment releases its salt);
 a `password+salt` token carries no `slot`, survives every slot, and
-coexists with the remote-salt keyslot as the typed fallback.
+coexists with the phone salt keyslot as the typed fallback.
 
-### `slot` only for the remote salt
+### `slot` only for the phone salt
 
 The LUKS2 token (`type: tpm2-kira`) first carried its `slot` field only in
-`password+remotesalt` mode, as "the slot whose remote salt it is"; a
+`password+phonesalt` mode, as "the slot whose phone salt it is"; a
 `password+salt` token named no slot. So nothing tied a typed-salt keyslot
 to the slot whose protections it rode on, deleting a slot could not take
 its keyslots with it, and a keyslot left behind was invisible as such. Now
@@ -367,12 +367,12 @@ attestation key's Name (computed from its public area). About 100 bytes for
 a slot of register PCRs, more with eventlog PCRs, all of it room for phones
 and, next, several kernel images per slot (docs/PLAN-SUPPORT-MULTIPLE-UKI.md).
 
-`attest enrol` refused a phone when the blob would not fit with another
+`phone enrol` refused a phone when the blob would not fit with another
 phone of the largest size the format allows, and assumed a 512-byte blob
 signature when it had none: a second phone was refused on a TPM with room
 for it. Now every write is compared with the TPM's `TPM2_PT_NV_INDEX_MAX`
-for the blob at hand, before the old index is touched, and `seal` and
-`reseal` check the same before raising the generation.
+for the blob at hand, before the old index is touched, and `slot add` and
+`slot approve` check the same before raising the generation.
 
 ### Version 11 — the boot key
 
@@ -396,8 +396,8 @@ Version 10 puts it into the slot's blob, under the blob's signature. The
 payload ends with an optional *attestation part* (identity, attestation key,
 quoted PCRs, revision count) that holds typed *methods*; the phones over
 Bluetooth LE are method 1, and another kind of verifier is another method.
-`attest enrol` therefore needs a sealed slot, `attest unenrol` rewrites the
-blob and needs the signing key, `reseal` and `seal` carry the part over, and
+`phone enrol` therefore needs a sealed slot, `phone unenrol` rewrites the
+blob and needs the signing key, `slot approve` and `slot add` carry the part over, and
 deleting a slot deletes everything. The record counter (`0x01803820` + slot)
 stays an NV index: "can only count up" is a property of an index's type.
 
@@ -412,18 +412,18 @@ branch for boot, and a PolicySigned branch for recovery. Every code meant a
 `TPM2_Unseal`, so the secret crossed the TPM bus every 30 seconds, and anyone
 who satisfied the PCR branch — root in the running system, or a shell in an
 initrd booted with the sealed PCRs intact — could copy it out and produce
-codes forever. `reseal` had to unseal it too, through the PolicySigned branch
+codes forever. `slot approve` had to unseal it too, through the PolicySigned branch
 when the PCRs had changed.
 
 Version 9 creates the key as an HMAC key object; the TPM computes each code
 with `TPM2_HMAC`, and the key is never returned. The object's policy is
-PolicyAuthorize by the signing key, so `reseal` approves new PCR values by
+PolicyAuthorize by the signing key, so `slot approve` approves new PCR values by
 signing instead of unsealing. Added with it:
 
 - a per-slot **generation index** (`GenerationIndex`): the approved policy
   includes PolicyNV on it, and each reseal raises it, revoking every older
   approval;
-- **`tpm2-kira cap`**, which read-locks the generation indices
+- **`tpm2-kira-boot cap`**, which read-locks the generation indices
   (`READ_STCLEAR`) when the initrd is left, so nothing can compute codes
   until the next reboot. A PCR cap was considered and rejected: PCR 23, the
   one free choice, can be reset from locality 0 by any process with TPM
@@ -456,9 +456,9 @@ string into a file-access vector.
 - Added the `u` PCR source (unified kernel image) and the `EventlogInfo` fields
   `measure_point_extends` / `measure_point_detection`.
 - **Removed the external predict source (`p:COMMAND`).** The blob used to store
-  a command string that `reseal` executed, so a planted blob meant arbitrary
+  a command string that `slot approve` executed, so a planted blob meant arbitrary
   code execution as root — `docs/pentest2/vulnerabilities/vuln-0001.md`.
-  PCR 11 is now computed in-process from the image (`cmd/ukipredict.go`).
+  PCR 11 is now computed in-process from the image (`internal/measure/ukipredict.go`).
 - Blob `PCRSource` byte **2** is retired and must not be reused; it identified
   the predict source. 0 = register, 1 = eventlog, 3 = uki.
 - `ParsePCRSpecs` carried an explicit rejection of the `p:` suffix with a
@@ -477,7 +477,7 @@ string into a file-access vector.
 - Replaced the `SigningKeyPEM` field from version 4 with the 32-byte
   `SignedBranchDigest`. The public key is no longer stored in the blob: it is
   loaded from the filesystem or derived from the private key when needed.
-- Consequences still visible in the code: `reseal` and the PolicySigned unseal
+- Consequences still visible in the code: `slot approve` and the PolicySigned unseal
   path require a key source on the filesystem, because the blob cannot supply
   one.
 
@@ -501,7 +501,7 @@ Current definition, and why each attribute is set that way:
 Read attributes are deliberately unchanged: reading the raw blob is harmless,
 since the TPM still protects the secret itself via the sealed object's policy.
 
-`reseal` verifies the blob signature **before** acting on any field. The
+`slot approve` verifies the blob signature **before** acting on any field. The
 original reason was to prevent execution of predict commands from a tampered
 blob; that specific risk is gone with the predict source, but the ordering
 requirement stands, because a tampered blob can still steer reseal through its
@@ -511,9 +511,9 @@ stored PCR specs and key paths.
 
 ## Signing key handling
 
-### `reseal` no longer finds its key through the blob
+### `slot approve` no longer finds its key through the blob
 
-`reseal` used to fall back to the `PrivateKeyPath` / `PublicKeyPath` stored in
+`slot approve` used to fall back to the `PrivateKeyPath` / `PublicKeyPath` stored in
 the blob when no `--privkey` / `--pubkey` was given, and then verified the
 blob's signature with the key it found there. Since anyone with TPM access can
 delete and redefine the NV index, a planted blob could name its author's key
@@ -571,7 +571,7 @@ firmware the image will get.
 
 ### `qrencode`
 
-`seal` rendered the enrolment QR code by running `qrencode` with the
+`slot add` rendered the enrolment QR code by running `qrencode` with the
 `otpauth://` URI, TOTP secret included, as a command-line argument — readable
 by every local user through `/proc/<pid>/cmdline`. The code is now rendered
 in-process with `rsc.io/qr`. tpm2-kira runs no external program any more.

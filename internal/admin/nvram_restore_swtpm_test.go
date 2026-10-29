@@ -16,7 +16,7 @@ import (
 )
 
 // A blob stashed when the rewrite of its slot failed goes back into the
-// slot with nvram restore: the TPM loads the same sealed object, so the
+// slot with slot restore: the TPM loads the same sealed object, so the
 // codes are the ones from before, and the approval is made afresh for the
 // PCRs the blob was sealed to. A slot that holds a blob is not restored
 // over.
