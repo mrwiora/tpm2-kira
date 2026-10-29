@@ -1,0 +1,16 @@
+# The test VMs of tools/vmtest.py. Copy to tools/vmtest.conf (not in git).
+# Each VM: fresh (go back to its snapshot before a run), its root on LUKS,
+# a TPM, sshd, and a user with sudo. The user's password comes from
+# password_file, --password-file or $VMTEST_PASSWORD; the LUKS passphrase
+# from luks_passphrase, $VMTEST_LUKS_PASSPHRASE, or else the same password.
+
+[defaults]
+# password_file = ~/.vm-pw
+
+[arch]
+host = 172.17.2.198
+user = pix
+
+[debian]
+host = 172.17.2.196
+user = pix
