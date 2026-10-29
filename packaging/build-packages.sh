@@ -108,15 +108,18 @@ if want deb; then
     step "Debian package"
     image="tpm2-kira-deb-build:$gover"
     if ! docker image inspect "$image" >/dev/null 2>&1; then
-        docker build -t "$image" --build-arg GOVER="$gover" packaging/deb
+        docker build --network host -t "$image" --build-arg GOVER="$gover" packaging/deb
     fi
     debver="$(packaging/deb-version.sh "$(git describe --tags HEAD)")"
     deb="$root/build/deb"
     mkdir -p "$deb"
     rm -f "$deb"/*.deb "$deb"/*.changes "$deb"/*.buildinfo "$deb"/tpm2-kira-*.tar.gz
     source_archive "$deb/tpm2-kira-$short.tar.gz"
-    # The Go build cache stays in build/deb/.gocache across runs.
-    docker run --rm -v "$deb:/out" -e SHORT="$short" -e DEBVER="$debver" -e OWNER="$(id -u):$(id -g)" \
+    # The Go build cache stays in build/deb/.gocache across runs. The host's
+    # network: the build fetches modules, and a container's own network
+    # depends on the host's firewall rules for docker, which another
+    # program reloading them (libvirt's, say) can take away.
+    docker run --rm --network host -v "$deb:/out" -e SHORT="$short" -e DEBVER="$debver" -e OWNER="$(id -u):$(id -g)" \
         "$image" bash -ec '
             mkdir -p /build && cd /build
             tar xzf "/out/tpm2-kira-$SHORT.tar.gz" && cd "tpm2-kira-$SHORT"
