@@ -107,8 +107,10 @@ Known residual risks:
   after which the passphrase alone no longer opens the disk.
 - **A machine compromised before enrolment.** Enrolment pins whatever TPM
   answers. `phone ekcert` and the phone show whether the TPM's endorsement
-  key is certified by its vendor (currently Intel PTT); "not verified" means
-  this protection is absent.
+  key is certified by its vendor, against tpm2-verifier's EK root store
+  (currently Intel); "vendor not known" means the store has no root of the
+  TPM's vendor yet - a risk, not a verdict - and "not verified" means this
+  protection is absent.
 - **The initrd must be covered by the quoted PCRs.** `phone enrol` warns
   when it is not; see docs/PHONE.md, "Choose PCRs that cover the initrd".
 

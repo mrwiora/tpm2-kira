@@ -75,7 +75,7 @@ func CheckOwnTPM(tpmDev transport.TPM, policy HWCheckPolicy, console *bufio.Read
 	if policy == CheckOff {
 		return true, nil
 	}
-	by, note, err := ownEKVerdict(tpmDev)
+	by, note, unknown, err := ownEKVerdict(tpmDev)
 	if err != nil {
 		return false, err
 	}
@@ -83,21 +83,26 @@ func CheckOwnTPM(tpmDev transport.TPM, policy HWCheckPolicy, console *bufio.Read
 		fmt.Fprintf(out, "TPM:           verified as genuine (%s)\n", by)
 		return true, nil
 	}
+	if unknown {
+		fmt.Fprintf(out, "TPM:           vendor not known yet: %s\n", note)
+		fmt.Fprintln(out, "               Not untrusted - not verified, a risk to weigh; the phone will show the same.")
+		return decide(policy, console, out)
+	}
 	fmt.Fprintf(out, "TPM:           NOT VERIFIED as genuine hardware: %s\n", note)
 	fmt.Fprintln(out, "               The phone will show the same. A machine that is already compromised")
 	fmt.Fprintln(out, "               could present a software TPM; enrol only if you trust its current state.")
 	return decide(policy, console, out)
 }
 
-func ownEKVerdict(tpmDev transport.TPM) (vendor, note string, err error) {
+func ownEKVerdict(tpmDev transport.TPM) (vendor, note string, unknown bool, err error) {
 	alg, ek, pub, err := PickCertifiedEK(tpmDev)
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 	tpmdev.FlushHandle(tpmDev, ek.Handle)
 	leaf := ReadEKCert(tpmDev, alg)
 	by, verr := attest.VerifyEKCertificate(pub, leaf, ReadEKCertChain(tpmDev, leaf), time.Now())
-	return by, attest.EKCertNote(verr), nil
+	return by, attest.EKCertNote(verr), attest.IsVendorUnknown(verr), nil
 }
 
 // AttestationStatusURL is Google's revocation list for attestation certificates.

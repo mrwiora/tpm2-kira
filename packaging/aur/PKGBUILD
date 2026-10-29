@@ -23,20 +23,29 @@ conflicts=('tpm2-kira-git')
 # The commit of the assh submodule at the tag (git rev-parse "$_tag:assh"):
 # GitHub's tag tarball leaves submodules out. Set with _tag.
 _assh=0ce851719c1aa432e84c125e2389438d55140243
+# The commit of the tpm2-verifier submodule (the core's EK root store), the
+# same way (git rev-parse "$_tag:tpm2-verifier").
+_verifier=804ab7ed7616c8984061febe01db999fdcb10d33
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
 source+=("assh-$_assh.tar.gz::https://github.com/tpm2-trust/assh/archive/$_assh.tar.gz")
-sha256sums=('SKIP' 'SKIP')
+source+=("tpm2-verifier-$_verifier.tar.gz::https://github.com/tpm2-trust/tpm2-verifier/archive/$_verifier.tar.gz")
+sha256sums=('SKIP' 'SKIP' 'SKIP')
 options=('!debug')
 
 # GitHub names the extracted directory after the tag, minus a leading 'v'.
 _srcdir="$pkgname-${_tag#v}"
 
 prepare() {
-    # aSSH's sources where the submodule goes (an archive of the
-    # repository's HEAD carries them already, and has no assh-* source).
+    # aSSH's and tpm2-verifier's sources where the submodules go (an
+    # archive of the repository's HEAD carries them already, and has no
+    # assh-* or tpm2-verifier-* source).
     if [[ -d assh-$_assh ]]; then
         rm -rf "$_srcdir/assh"
         mv "assh-$_assh" "$_srcdir/assh"
+    fi
+    if [[ -d tpm2-verifier-$_verifier ]]; then
+        rm -rf "$_srcdir/tpm2-verifier"
+        mv "tpm2-verifier-$_verifier" "$_srcdir/tpm2-verifier"
     fi
 
     cd "$_srcdir"

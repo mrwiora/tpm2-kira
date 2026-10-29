@@ -35,7 +35,9 @@ require (
 	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
+	github.com/tpm2-trust/tpm2-verifier v0.0.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
+	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 )
 
@@ -44,3 +46,7 @@ replace github.com/tpm2-trust/assh => ./assh
 // The shared core (attest, transport, vaultproto, mobile): a module of its
 // own, which the vault and Marify require alone; here its checkout.
 replace github.com/mrwiora/tpm2-kira/core => ./core
+
+// The core's EK root store, tpm2-verifier: its submodule (a replace of a
+// dependency does not reach its users).
+replace github.com/tpm2-trust/tpm2-verifier => ./tpm2-verifier

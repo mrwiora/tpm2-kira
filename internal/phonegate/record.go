@@ -187,6 +187,11 @@ func AttestEKCert(tpmPath string, debug bool) error {
 		fmt.Printf("Breaks off at:           %s (neither embedded nor fetched)\n", missing)
 	}
 	by, err := attest.VerifyEKCertificate(pub, cert, chain, time.Now())
+	if attest.IsVendorUnknown(err) {
+		fmt.Printf("Result:                  \033[0;33mVENDOR NOT KNOWN: %s\033[0m\n", attest.EKCertNote(err))
+		fmt.Println("The phone will show this TPM's vendor as not known yet: not untrusted, a risk to weigh.")
+		return nil
+	}
 	if err != nil {
 		fmt.Printf("Result:                  \033[0;31mNOT VERIFIED: %s\033[0m\n", attest.EKCertNote(err))
 		fmt.Println("The phone will show this TPM as \"not verified as genuine hardware\".")

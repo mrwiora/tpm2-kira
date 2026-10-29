@@ -216,7 +216,7 @@ func TestStepCarriesErrorRecordOnFailure(t *testing.T) {
 
 func TestEKVendorsListed(t *testing.T) {
 	var names []string
-	if err := json.Unmarshal([]byte(EKVendors()), &names); err != nil || len(names) == 0 || names[0] != "Intel PTT" {
+	if err := json.Unmarshal([]byte(EKVendors()), &names); err != nil || len(names) == 0 || names[0] != "Intel Corporation" {
 		t.Fatalf("EKVendors() = %s (%v)", EKVendors(), err)
 	}
 }

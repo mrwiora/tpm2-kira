@@ -74,6 +74,7 @@ type machineFacts struct {
 	PINLoose   bool   // the PIN file holds the PIN, but others can read it
 	EKBy       string // the vendor whose chain vouches for this TPM's EK; "" when none does
 	EKNote     string // why none does
+	EKUnknown  bool   // the EK root store has no root of the TPM's vendor yet: a risk, not untrusted
 	SecureBoot measure.SecureBootState
 	Initramfs  string // mkinitcpio, initramfs-tools, or ""
 	HookState  string // why the boot integration would not run; "" when wired
@@ -184,7 +185,7 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	}
 	f.SecureBoot = measure.ReadSecureBootState()
 	if f.TPMErr == "" {
-		f.EKBy, f.EKNote = ekVerdict(tpmPath, debug)
+		f.EKBy, f.EKNote, f.EKUnknown = ekVerdict(tpmPath, debug)
 	}
 	switch {
 	case fileExists(mkinitcpioConf):
@@ -343,24 +344,24 @@ func weakSlots(f *machineFacts) []int {
 
 // ekVerdict is what a phone concludes about this TPM's endorsement key:
 // the vendor whose certificate chain vouches for it, or why none does.
-func ekVerdict(tpmPath string, debug bool) (by, note string) {
+func ekVerdict(tpmPath string, debug bool) (by, note string, unknown bool) {
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
-		return "", err.Error()
+		return "", err.Error(), false
 	}
 	defer tpmDev.Close()
 	defer tpmdev.Cleanup(tpmDev, debug)
 	alg, ek, pub, err := phonegate.PickCertifiedEK(tpmDev)
 	if err != nil {
-		return "", err.Error()
+		return "", err.Error(), false
 	}
 	tpmdev.FlushHandle(tpmDev, ek.Handle)
 	leaf := phonegate.ReadEKCert(tpmDev, alg)
 	by, err = attest.VerifyEKCertificate(pub, leaf, phonegate.ReadEKCertChain(tpmDev, leaf), time.Now())
 	if err != nil {
-		return "", attest.EKCertNote(err)
+		return "", attest.EKCertNote(err), attest.IsVendorUnknown(err)
 	}
-	return by, ""
+	return by, "", false
 }
 
 func fileExists(p string) bool {
@@ -739,6 +740,8 @@ func (c *controller) factsText() string {
 		switch {
 		case f.EKBy != "":
 			fmt.Fprintf(&w, "  Vendor      %s\n", good(f.EKBy+" vouches for the endorsement key"))
+		case f.EKUnknown:
+			fmt.Fprintf(&w, "  Vendor      %s\n", warn("not known yet: "+f.EKNote))
 		default:
 			phone := "a phone trusts it on first use, as it would a software TPM"
 			if f.Phone {

@@ -97,7 +97,7 @@ func CheckAnchorAttestation(chainDER, spkiDER, challenge []byte) string {
 }
 
 // EKVendors returns, as a JSON array of names, the TPM vendors whose EK
-// certificates this core can verify (attest/ekroots/vendors.json).
+// certificates this core can verify (tpm2-verifier's EK root store).
 func EKVendors() string {
 	b, _ := json.Marshal(attest.EKVendorNames())
 	return string(b)

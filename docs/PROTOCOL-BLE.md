@@ -517,12 +517,16 @@ not listing exactly the PCRs of `pcr_selection` in order, aborts the
 enrolment. Without the field the phone pins `pcr_values` (`added_by` =
 `enrolment`), as before.
 
-The phone verifies `ek_cert` against vendor roots built into the core
-(`core/attest/ekroots/`, one directory per vendor listed with pinned SHA-256 values in `vendors.json`; currently Intel PTT — `core/attest/ekroots/README.md` says how to add a vendor) with `ek_cert_chain` as
-intermediates, and requires the certificate's key to be `ek_pub`. The result
-is shown to the user before binding ("TPM verified: Intel PTT" or "not
-verified as genuine hardware") and stored in the record; it never blocks
-enrolment. Revocation is not checked.
+The phone verifies `ek_cert` against the EK root store built into the core
+- tpm2-verifier's `ekroots` (`github.com/tpm2-trust/tpm2-verifier`, its
+`ekroots/vendors/`: per vendor its roots and the intermediates its TPMs do
+not carry, checked against a signed manifest; vendors are added there;
+currently Intel) - with `ek_cert_chain` as intermediates, and requires the
+certificate's key to be `ek_pub`. The result is shown to the user before
+binding - "TPM verified: Intel Corporation"; "vendor not known" when the
+store has no root of the TPM's vendor yet, which is not untrusted but a
+risk to weigh; or "not verified as genuine hardware" - and stored in the
+record; it never blocks enrolment. Revocation is not checked.
 
 #### 7.3.12 Challenge (0x25), ChallengeResponse (0x26)
 

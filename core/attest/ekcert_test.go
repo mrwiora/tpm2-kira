@@ -10,7 +10,8 @@ import (
 	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
-	"io/fs"
+	"errors"
+	"fmt"
 	"math/big"
 	"slices"
 	"strings"
@@ -19,103 +20,10 @@ import (
 	"time"
 
 	"github.com/google/go-tpm/tpm2"
+	"github.com/tpm2-trust/tpm2-verifier/ekroots"
+	"github.com/tpm2-trust/tpm2-verifier/store"
 )
 
-// The manifest loads completely: every vendor's files exist, match their
-// pinned SHA-256 and parse, and no certificate is embedded without a pin.
-func TestEKVendorManifest(t *testing.T) {
-	vendors := loadEKVendors()
-	if len(ekVendorErrs) > 0 {
-		t.Fatalf("vendor manifest: %v", ekVendorErrs)
-	}
-	if !slices.Contains(EKVendorNames(), "Intel PTT") {
-		t.Fatalf("vendors: %v", EKVendorNames())
-	}
-	pinned := map[string]bool{}
-	for _, v := range vendors {
-		for _, e := range append(append([]trustEntry(nil), v.Roots...), v.Intermediates...) {
-			if len(e.SHA256) != 64 {
-				t.Errorf("%s: pin is not a SHA-256", e.File)
-			}
-			pinned["ekroots/"+e.File] = true
-		}
-		for _, r := range v.roots {
-			c, _ := x509.ParseCertificate(r)
-			if !c.IsCA || c.CheckSignatureFrom(c) != nil {
-				t.Errorf("%s: root %q is not a self-signed CA", v.Name, c.Subject)
-			}
-		}
-	}
-	files, _ := fs.Glob(ekRootFS, "ekroots/*/*.der")
-	for _, f := range files {
-		if !pinned[f] {
-			t.Errorf("%s is embedded but not pinned in vendors.json", f)
-		}
-	}
-}
-
-// A file that no longer matches its pin is never used as an anchor, and a
-// second vendor is picked up from the manifest alone.
-func TestEKVendorManifestRules(t *testing.T) {
-	root, _ := ekRootFS.ReadFile("ekroots/intel-ptt/root.der")
-	other := newEKPKI(t, mustKey(t), nil)
-	pin := func(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
-	manifest := `{"vendors":[
-	  {"name":"Good","roots":[{"file":"good/root.der","sha256":"` + pin(other.rootDER) + `"}]},
-	  {"name":"Swapped","roots":[{"file":"swapped/root.der","sha256":"` + pin(root) + `"}]},
-	  {"name":"Missing","roots":[{"file":"missing/root.der","sha256":"` + pin(root) + `"}]}]}`
-	fsys := fstest.MapFS{
-		"vendors.json":     {Data: []byte(manifest)},
-		"good/root.der":    {Data: other.rootDER},
-		"swapped/root.der": {Data: other.rootDER}, // not the pinned bytes
-	}
-	vendors, errs := parseTrustStore(fsys)
-	if len(vendors) != 1 || vendors[0].Name != "Good" {
-		t.Fatalf("loaded %d vendors", len(vendors))
-	}
-	if len(errs) != 2 || !strings.Contains(errs[0].Error(), "does not match its pinned SHA-256") {
-		t.Fatalf("errors: %v", errs)
-	}
-	// The new vendor verifies its own EKs with nothing but the manifest entry.
-	if err := verifyEKCertificateWith(other.ekPub, other.leafDER, other.interDER, vendors[0].roots, vendors[0].inter, time.Now()); err != nil {
-		t.Fatalf("vendor from the manifest does not verify: %v", err)
-	}
-}
-
-func mustKey(t *testing.T) *ecdsa.PrivateKey {
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return k
-}
-
-func TestIntelChainLinks(t *testing.T) {
-	load := func(n string) *x509.Certificate {
-		b, _ := ekRootFS.ReadFile("ekroots/intel-ptt/" + n)
-		c, err := x509.ParseCertificate(b)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return c
-	}
-	root := load("root.der")
-	int1 := load("csme-intermediate.der")
-	int2 := load("mcc-00001881-issuing.der")
-	if err := root.CheckSignatureFrom(root); err != nil {
-		t.Errorf("root self-signature: %v", err)
-	}
-	if err := int1.CheckSignatureFrom(root); err != nil {
-		t.Errorf("CSME intermediate under root: %v", err)
-	}
-	if err := int2.CheckSignatureFrom(int1); err != nil {
-		t.Errorf("issuing CA under CSME intermediate: %v", err)
-	}
-}
-
-// A synthetic vendor hierarchy shaped like a TPM vendor's: root, an
-// intermediate the TPM carries, and an EK certificate with the critical
-// directoryName subjectAltName and the TCG EK extended key usage.
 type ekPKI struct {
 	rootDER, interDER, leafDER []byte
 	ekPub                      []byte
@@ -140,7 +48,14 @@ func newEKPKI(t *testing.T, ekKey *ecdsa.PrivateKey, mutate func(*x509.Certifica
 	interDER, _ := x509.CreateCertificate(rand.Reader, interT, root, &interKey.PublicKey, rootKey)
 	inter, _ := x509.ParseCertificate(interDER)
 
-	dirName, _ := asn1.Marshal(asn1.RawValue{Class: 2, Tag: 4, IsCompound: true, Bytes: mustMarshal(t, pkix.Name{CommonName: "TPM"}.ToRDNSequence())})
+	// A TPM's subject alternative name, as TCG's EK credential profile has
+	// it: manufacturer, model, version (the manufacturer "TEST").
+	tpmAttrs := pkix.RDNSequence{{
+		{Type: asn1.ObjectIdentifier{2, 23, 133, 2, 1}, Value: "id:54455354"},
+		{Type: asn1.ObjectIdentifier{2, 23, 133, 2, 2}, Value: "TEST-TPM"},
+		{Type: asn1.ObjectIdentifier{2, 23, 133, 2, 3}, Value: "id:00010000"},
+	}}
+	dirName, _ := asn1.Marshal(asn1.RawValue{Class: 2, Tag: 4, IsCompound: true, Bytes: mustMarshal(t, tpmAttrs)})
 	san, _ := asn1.Marshal(asn1.RawValue{Tag: 16, IsCompound: true, Bytes: dirName})
 	leafT := &x509.Certificate{
 		SerialNumber: big.NewInt(3),
@@ -177,6 +92,44 @@ func ekPublicArea(t *testing.T, pub *ecdsa.PublicKey) []byte {
 	return tpm2.Marshal(tmpl)
 }
 
+// verifyWith is VerifyEKCertificate against an EK root store of roots and
+// intermediates (a vendor of its own, as tpm2-verifier's store holds the
+// real ones).
+func verifyWith(t *testing.T, ekPub, leaf, chain []byte, roots, inter [][]byte, now time.Time) error {
+	t.Helper()
+	fsys := fstest.MapFS{}
+	var y strings.Builder
+	y.WriteString("id: test\nname: Test Vendor\nmanufacturer_ids: [TEST]\ncertificates:\n")
+	add := func(name string, der []byte, role string) {
+		sum := sha256.Sum256(der)
+		fsys["test/"+name] = &fstest.MapFile{Data: der}
+		fmt.Fprintf(&y, "  - file: %s\n    role: %s\n    source: test\n    sha256: %s\n", name, role, hex.EncodeToString(sum[:]))
+	}
+	for i, r := range roots {
+		add(fmt.Sprintf("root%d.der", i), r, "root")
+	}
+	for i, c := range inter {
+		add(fmt.Sprintf("int%d.der", i), c, "intermediate")
+	}
+	fsys["test/vendor.yaml"] = &fstest.MapFile{Data: []byte(y.String())}
+	st := store.New()
+	if err := st.AddFS(fsys, "test"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := verifyEK(ekPub, leaf, chain, now, func(l []byte, i [][]byte, n time.Time) ekroots.Result {
+		return ekroots.CheckWith(st, l, i, n)
+	})
+	return err
+}
+
+func mustKey(t *testing.T) *ecdsa.PrivateKey {
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
 func TestEKCertificateVerification(t *testing.T) {
 	ek, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	p := newEKPKI(t, ek, nil)
@@ -184,35 +137,35 @@ func TestEKCertificateVerification(t *testing.T) {
 	roots := [][]byte{p.rootDER}
 	padded := append(append([]byte(nil), p.interDER...), 0, 0, 0xFF, 0xFF)
 
-	if err := verifyEKCertificateWith(p.ekPub, p.leafDER, p.interDER, roots, nil, now); err != nil {
+	if err := verifyWith(t, p.ekPub, p.leafDER, p.interDER, roots, nil, now); err != nil {
 		t.Fatalf("genuine EK rejected: %v", err)
 	}
-	if err := verifyEKCertificateWith(p.ekPub, p.leafDER, padded, roots, nil, now); err != nil {
+	if err := verifyWith(t, p.ekPub, p.leafDER, padded, roots, nil, now); err != nil {
 		t.Fatalf("NV padding after the chain rejected: %v", err)
 	}
-	if err := verifyEKCertificateWith(p.ekPub, p.leafDER, nil, roots, [][]byte{p.interDER}, now); err != nil {
+	if err := verifyWith(t, p.ekPub, p.leafDER, nil, roots, [][]byte{p.interDER}, now); err != nil {
 		t.Fatalf("embedded intermediate not used: %v", err)
 	}
 
 	// The certificate must be for the offered EK.
 	other, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err := verifyEKCertificateWith(ekPublicArea(t, &other.PublicKey), p.leafDER, p.interDER, roots, nil, now); err == nil ||
+	if err := verifyWith(t, ekPublicArea(t, &other.PublicKey), p.leafDER, p.interDER, roots, nil, now); err == nil ||
 		!strings.Contains(err.Error(), "different key") {
 		t.Fatalf("certificate for another key accepted: %v", err)
 	}
 	// Missing intermediate, unknown root, tampering, expiry.
-	if verifyEKCertificateWith(p.ekPub, p.leafDER, nil, roots, nil, now) == nil {
+	if verifyWith(t, p.ekPub, p.leafDER, nil, roots, nil, now) == nil {
 		t.Fatal("verified without the intermediate")
 	}
-	if verifyEKCertificateWith(p.ekPub, p.leafDER, p.interDER, [][]byte{newEKPKI(t, ek, nil).rootDER}, nil, now) == nil {
+	if verifyWith(t, p.ekPub, p.leafDER, p.interDER, [][]byte{newEKPKI(t, ek, nil).rootDER}, nil, now) == nil {
 		t.Fatal("verified under a foreign root")
 	}
 	bad := append([]byte(nil), p.leafDER...)
 	bad[len(bad)-10] ^= 1
-	if verifyEKCertificateWith(p.ekPub, bad, p.interDER, roots, nil, now) == nil {
+	if verifyWith(t, p.ekPub, bad, p.interDER, roots, nil, now) == nil {
 		t.Fatal("tampered certificate verified")
 	}
-	if verifyEKCertificateWith(p.ekPub, p.leafDER, p.interDER, roots, nil, now.Add(2*time.Hour)) == nil {
+	if verifyWith(t, p.ekPub, p.leafDER, p.interDER, roots, nil, now.Add(2*time.Hour)) == nil {
 		t.Fatal("expired certificate verified")
 	}
 	// A certificate under the right root whose usage says it is not an EK.
@@ -220,15 +173,19 @@ func TestEKCertificateVerification(t *testing.T) {
 		c.UnknownExtKeyUsage = nil
 		c.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
 	})
-	if err := verifyEKCertificateWith(notEK.ekPub, notEK.leafDER, notEK.interDER, [][]byte{notEK.rootDER}, nil, now); err == nil {
+	if err := verifyWith(t, notEK.ekPub, notEK.leafDER, notEK.interDER, [][]byte{notEK.rootDER}, nil, now); err == nil {
 		t.Fatal("non-EK certificate verified")
 	}
 	// No certificate at all, and the public entry point with real roots.
 	if _, err := VerifyEKCertificate(p.ekPub, nil, nil, now); err == nil || EKCertNote(err) != "the TPM has no vendor certificate for its endorsement key" {
 		t.Fatalf("missing certificate: %v", err)
 	}
-	if v, err := VerifyEKCertificate(p.ekPub, p.leafDER, p.interDER, now); err == nil || v != "" {
-		t.Fatalf("test hierarchy verified as %q under the embedded roots", v)
+	// Under the real store the test hierarchy's vendor is not known: not
+	// verified, and said so as a risk, not as a failure.
+	v, err := VerifyEKCertificate(p.ekPub, p.leafDER, p.interDER, now)
+	var unknown *VendorUnknownError
+	if v != "" || !errors.As(err, &unknown) || !strings.Contains(EKCertNote(err), "not untrusted") {
+		t.Fatalf("the test hierarchy under the EK root store: %q %v", v, err)
 	}
 }
 
@@ -246,7 +203,7 @@ func TestTrimNVPaddingKeepsTrailingZeroBytes(t *testing.T) {
 		if got := trimNVPadding(padded); string(got) != string(p.interDER) {
 			t.Fatalf("certificate ending in %#x was cut or padding kept", last)
 		}
-		if err := verifyEKCertificateWith(p.ekPub, p.leafDER, padded, [][]byte{p.rootDER}, nil, time.Now()); err != nil {
+		if err := verifyWith(t, p.ekPub, p.leafDER, padded, [][]byte{p.rootDER}, nil, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 		return
@@ -285,7 +242,7 @@ func TestCompleteEKChainFromAIA(t *testing.T) {
 	if got := EKIssuerMissing(pki.leafDER, nil); got != "CN=Test TPM Intermediate" {
 		t.Fatalf("the missing issuer: %q", got)
 	}
-	if err := verifyEKCertificateWith(pki.ekPub, pki.leafDER, nil, [][]byte{pki.rootDER}, nil, time.Now()); err == nil {
+	if err := verifyWith(t, pki.ekPub, pki.leafDER, nil, [][]byte{pki.rootDER}, nil, time.Now()); err == nil {
 		t.Fatal("verified without the intermediate")
 	}
 
@@ -303,7 +260,7 @@ func TestCompleteEKChainFromAIA(t *testing.T) {
 	if asked != 1 || !slices.Equal(chain, pki.interDER) {
 		t.Fatalf("completed chain: %d fetches, %d bytes", asked, len(chain))
 	}
-	if err := verifyEKCertificateWith(pki.ekPub, pki.leafDER, chain, [][]byte{pki.rootDER}, nil, time.Now()); err != nil {
+	if err := verifyWith(t, pki.ekPub, pki.leafDER, chain, [][]byte{pki.rootDER}, nil, time.Now()); err != nil {
 		t.Fatalf("the completed chain does not verify: %v", err)
 	}
 	if got := EKIssuerMissing(pki.leafDER, chain); got != "CN=Test TPM Root" {

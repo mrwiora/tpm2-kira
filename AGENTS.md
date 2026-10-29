@@ -152,8 +152,9 @@ It may not carry what came before.
   (`github.com/mrwiora/tpm2-kira/core`: `attest/`, `transport/`,
   `vaultproto/`, `mobile/`). The phone (Marify, through gomobile) and the
   vault require it alone; tpm2-kira requires it through `replace ./core`.
-  It requires go-tpm and x/crypto and nothing of `internal/`, `cmd/` or
-  aSSH - the module boundary enforces that - and its tests run in `core/`
+  It requires go-tpm, x/crypto and tpm2-verifier (the EK root store, its
+  `ekroots`: the submodule `tpm2-verifier/`) and nothing of `internal/`,
+  `cmd/` or aSSH - the module boundary enforces that - and its tests run in `core/`
   (`make test-unit`). A change there is the phone's and the vault's too.
 - **One boot on every distribution.** Arch's unit and Debian's
   init-premount script start the same `run` - and the same two short

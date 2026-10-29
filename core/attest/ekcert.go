@@ -10,19 +10,22 @@ package attest
 //
 // The result is informational and never blocks enrolment: many firmware TPMs
 // ship without a usable certificate, and revocation is not checked (the app
-// has no network access). It is "verified by <vendor>" or "not verified".
+// has no network access). It is "verified by <vendor>", "vendor not known"
+// - the store has no root of the TPM's vendor yet: not untrusted, a risk to
+// weigh - or "not verified".
 //
-// Trust anchors are embedded in ekroots/, listed with pinned SHA-256 values in
-// ekroots/vendors.json; ekroots/README.md says how to add a vendor. Only roots
-// are anchors; embedded intermediates merely complete chains the TPM does not
-// carry in full.
+// The trust anchors are tpm2-verifier's EK root store, embedded
+// (github.com/tpm2-trust/tpm2-verifier/ekroots: the curated vendor data,
+// checked against its manifest and signature at load); vendors are added
+// there. This file adds what is the EK's: that the certificate is an EK
+// certificate, and for the EK the machine offered. Intel's chain, as an
+// example:
 //
-//	Intel PTT (on-die CSME), chain documented in
-//	https://github.com/mrwiora/intel-ek-dechainer and cross-checked against
+//	Intel PTT (on-die CSME), cross-checked against
 //	https://tsci.intel.com/content/OnDieCA/certs/:
-//	  OnDie CA Root Cert Signing                       ekroots/intel-ptt/root.der
-//	  └ OnDie CA CSME Intermediate CA                  ekroots/intel-ptt/csme-intermediate.der
-//	    └ On Die CSME P_MCC 00001881 Issuing CA        ekroots/intel-ptt/mcc-00001881-issuing.der
+//	  OnDie CA Root Cert Signing                       the store's root
+//	  └ OnDie CA CSME Intermediate CA                  the store's intermediate
+//	    └ On Die CSME P_MCC 00001881 Issuing CA        the store's intermediate
 //	      └ CSME MCC ROM CA ┐ per machine, concatenated DER
 //	        └ … Kernel CA   │ in NV index 0x01C00100
 //	          └ … PTT SVN   ┘ (EKCertChainNVIndex)
@@ -31,24 +34,21 @@ package attest
 // Other Intel product families use other P_MCC issuing CAs. The machine
 // completes the chain with the one its EK names (CompleteEKChain, from
 // the caIssuers URL at tsci.intel.com); trust still comes from the
-// embedded root alone.
+// store's root alone.
 
 import (
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/x509"
-	"embed"
 	"encoding/asn1"
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io/fs"
 	"slices"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/go-tpm/tpm2"
+	"github.com/tpm2-trust/tpm2-verifier/ekroots"
 )
 
 // EKCertChainNVIndex holds Intel PTT's per-machine intermediates.
@@ -57,35 +57,20 @@ const EKCertChainNVIndex = 0x01C00100
 // MaxEKCertChain bounds the concatenated intermediates the attester sends.
 const MaxEKCertChain = 16384
 
-//go:embed ekroots/vendors.json ekroots/*/*.der
-var ekRootFS embed.FS
-
-var (
-	ekVendorsOnce sync.Once
-	ekVendors     []*trustVendor
-	ekVendorErrs  []error // vendors left out because a file is missing or changed
-)
-
-// loadEKVendors reads the embedded manifest once.
-func loadEKVendors() []*trustVendor {
-	ekVendorsOnce.Do(func() {
-		sub, err := fs.Sub(ekRootFS, "ekroots")
-		if err != nil {
-			ekVendorErrs = []error{err}
-			return
-		}
-		ekVendors, ekVendorErrs = parseTrustStore(sub)
-	})
-	return ekVendors
-}
-
 // EKVendorNames lists the TPM vendors whose EK certificates the core can verify.
-func EKVendorNames() []string {
-	var out []string
-	for _, v := range loadEKVendors() {
-		out = append(out, v.Name)
-	}
-	return out
+func EKVendorNames() []string { return ekroots.Vendors() }
+
+// VendorUnknownError: the EK root store has no root of the TPM's vendor
+// yet. Not untrusted - not verified, a risk to weigh, until the vendor is
+// added to tpm2-verifier's store.
+type VendorUnknownError struct{ Detail string }
+
+func (e *VendorUnknownError) Error() string { return e.Detail }
+
+// IsVendorUnknown says whether err is a *VendorUnknownError.
+func IsVendorUnknown(err error) bool {
+	var u *VendorUnknownError
+	return errors.As(err, &u)
 }
 
 var (
@@ -226,79 +211,48 @@ func sameKey(cert *x509.Certificate, ekPub []byte) error {
 	return errors.New("the EK certificate is for a different key than the EK the machine offered")
 }
 
-// VerifyEKCertificate checks ekCert against the embedded vendor roots, with
-// chain (concatenated DER intermediates from the TPM) as extra
-// intermediates, and that the certificate is for ekPub. It returns the
-// vendor's name, or an error saying why the TPM is not verified.
+// VerifyEKCertificate checks ekCert against the EK root store, with chain
+// (concatenated DER intermediates from the TPM) as extra intermediates, and
+// that the certificate is an EK certificate for ekPub. It returns the
+// vendor's name; or a *VendorUnknownError when the store has no root of the
+// TPM's vendor; or an error saying why the TPM is not verified.
 func VerifyEKCertificate(ekPub, ekCert, chain []byte, now time.Time) (string, error) {
+	return verifyEK(ekPub, ekCert, chain, now, ekroots.Check)
+}
+
+// verifyEK is VerifyEKCertificate with the store's check: the tests'
+// store, or the embedded one.
+func verifyEK(ekPub, ekCert, chain []byte, now time.Time, check func(leaf []byte, intermediates [][]byte, now time.Time) ekroots.Result) (string, error) {
 	if len(ekCert) == 0 {
 		return "", errNoEKCertificate
 	}
-	var errs []error
-	for _, v := range loadEKVendors() {
-		if err := verifyEKCertificateWith(ekPub, ekCert, chain, v.roots, v.inter, now); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		return v.Name, nil
-	}
-	// Report the most specific reason: a key mismatch matters more than an
-	// unknown vendor.
-	for _, e := range errs {
-		if !errors.As(e, new(x509.UnknownAuthorityError)) {
-			return "", e
-		}
-	}
-	if missing := EKIssuerMissing(ekCert, chain); missing != "" {
-		return "", fmt.Errorf("the chain breaks off at %q: not embedded, and not sent by the machine (known: %s)", missing, strings.Join(EKVendorNames(), ", "))
-	}
-	return "", fmt.Errorf("the EK certificate is not issued by a vendor this app knows (%s)", strings.Join(EKVendorNames(), ", "))
-}
-
-func verifyEKCertificateWith(ekPub, ekCert, chain []byte, roots, inter [][]byte, now time.Time) error {
-	if len(ekCert) == 0 {
-		return errNoEKCertificate
-	}
 	leaf, err := parseEKCert(ekCert)
 	if err != nil {
-		return fmt.Errorf("the EK certificate does not parse: %w", err)
+		return "", fmt.Errorf("the EK certificate does not parse: %w", err)
 	}
 	if err := sameKey(leaf, ekPub); err != nil {
-		return err
+		return "", err
 	}
 	if len(leaf.ExtKeyUsage) > 0 || len(leaf.UnknownExtKeyUsage) > 0 {
 		if !slices.ContainsFunc(leaf.UnknownExtKeyUsage, oidTCGKPEKCert.Equal) {
-			return errors.New("the certificate is not an EK certificate (extended key usage)")
+			return "", errors.New("the certificate is not an EK certificate (extended key usage)")
 		}
-	}
-	opts := x509.VerifyOptions{
-		Roots:         x509.NewCertPool(),
-		Intermediates: x509.NewCertPool(),
-		CurrentTime:   now,
-		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-	}
-	for _, r := range roots {
-		c, err := x509.ParseCertificate(r)
-		if err != nil {
-			return err
-		}
-		opts.Roots.AddCert(c)
 	}
 	machine, err := SplitDERChain(trimNVPadding(chain))
 	if err != nil {
-		return err
+		return "", err
 	}
-	for _, b := range append(slices.Clone(inter), machine...) {
-		c, err := parseEKCert(b)
-		if err != nil {
-			return fmt.Errorf("an intermediate certificate does not parse: %w", err)
-		}
-		opts.Intermediates.AddCert(c)
+	r := check(ekCert, machine, now)
+	switch r.Status {
+	case ekroots.Verified:
+		return r.Vendor, nil
+	case ekroots.VendorUnknown:
+		return "", &VendorUnknownError{Detail: r.Detail}
 	}
-	if _, err := leaf.Verify(opts); err != nil {
-		return err
+	if missing := EKIssuerMissing(ekCert, chain); missing != "" {
+		return "", fmt.Errorf("the chain breaks off at %q: not in the EK root store, and not sent by the machine (%s)", missing, r.Detail)
 	}
-	return nil
+	return "", errors.New(r.Detail)
 }
 
 // EKCertNote is the short explanation the app shows for an unverified EK.
@@ -313,14 +267,12 @@ func EKCertNote(err error) string {
 	}
 }
 
-// knownEKCerts are the embedded roots and intermediates, parsed.
+// knownEKCerts are the EK root store's roots and intermediates, parsed.
 func knownEKCerts() []*x509.Certificate {
 	var out []*x509.Certificate
-	for _, v := range loadEKVendors() {
-		for _, b := range append(slices.Clone(v.roots), v.inter...) {
-			if c, err := x509.ParseCertificate(b); err == nil {
-				out = append(out, c)
-			}
+	for _, b := range ekroots.Certificates() {
+		if c, err := x509.ParseCertificate(b); err == nil {
+			out = append(out, c)
 		}
 	}
 	return out
