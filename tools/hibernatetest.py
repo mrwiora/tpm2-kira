@@ -195,6 +195,8 @@ class Hib:
 
     def hibernate(self, tag):
         """Hibernates the guest and waits for qemu to end (S4 powers off)."""
+        if self.distro == "arch":
+            self.run("swapon /swapfile 2>/dev/null; true")  # not in fstab: on again after a reboot
         before = self.state(f"{tag}-before")
         self.run("nohup sh -c 'sleep 2; systemctl hibernate' >/dev/null 2>&1 &")
         deadline = time.time() + 600
@@ -299,8 +301,8 @@ class Hib:
         else:
             rc, out = self.run("journalctl -b -o cat --no-pager -u systemd-hibernate-resume.service 2>&1", save="v4-resume-unit.log")
             self.check("V4: systemd-hibernate-resume failed at the close", "tpm2-kira-boot close" in out, out[-800:])
-        rc, out = self.run("journalctl -b -k -o cat --no-pager 2>&1 | grep -iE 'EXT4-fs (error|warning)|BTRFS (error|critical|warning)|I/O error|PM: (Image|hibernation: (resume|Failed))' ; "
-                           "journalctl -b -o cat --no-pager 2>&1 | grep -iE 'suspend data|swap signature' ; "
+        rc, out = self.run("journalctl -b -k -o cat --no-pager 2>&1 | grep -v COMMAND= | grep -iE 'EXT4-fs (error|warning)|BTRFS (error|critical|warning)|I/O error|PM: (Image|hibernation: (resume|Failed))' ; "
+                           "journalctl -b -o cat --no-pager 2>&1 | grep -v COMMAND= | grep -iE 'suspend data|swap signature' ; "
                            "swapon --show; true", save="v4-fs.log")
         self.check("V4: the file systems report no error after the fresh boot",
                    not re.search(r"EXT4-fs (error|warning)|BTRFS (error|critical|warning)|I/O error", out), out[-800:])
