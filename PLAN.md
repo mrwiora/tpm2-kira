@@ -352,8 +352,12 @@ flowchart LR
    hashes; its display name is "legacy SHA-1" (messages, status, the
    vault's selection); cmd_test says its SHA-1 is the test's subject.
    TOTP's HMAC-SHA1 stays.
-7. [ ] tests: `make test-all`, the vault's tests, `tools/vmtest.py` (its
-   vault steps place the root on the VMs).
+7. [x] tests: `make test-all`, the vault's tests, `tools/vmtest.py` (its
+   vault steps place the root on the VMs; an enrolment without a root is
+   refused; operators verify with --cacert): 128 checks on Arch and on
+   Debian, with aSSH 93d79df. The run found the hold ending under an
+   opening of a released salt (TPM_RC_PCR_CHANGED on Arch): the vault's
+   and the phone's parts now wait for it before READY.
 
 **Breaks:** existing vault enrolments refuse the vault until the root file
 is placed (and the vault's certificate reissued under its root). The old
