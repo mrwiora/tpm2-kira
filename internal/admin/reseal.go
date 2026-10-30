@@ -198,11 +198,12 @@ func (e *ResealSkippedError) Error() string {
 func (e *ResealSkippedError) Unwrap() []error { return []error{ErrResealSkipped, e.Cause} }
 
 // asResealSkipped turns an error into a skip when, and only when, the
-// signing key was unavailable and the NVRAM index was not touched. A failure
-// after the index was replaced is never a skip, whatever caused it.
+// signing key was unavailable and nothing of the slot was touched. A
+// failure after the generation was raised is never a skip, whatever caused
+// it.
 func asResealSkipped(err error, nvIndex uint32, keyFile string, blob *nvslot.SealedBlob) error {
 	var cause *signing.TokenUnavailableError
-	if err == nil || errors.Is(err, nvslot.ErrNVIndexReplaced) || errors.Is(err, ErrGenerationRaised) || !errors.As(err, &cause) {
+	if err == nil || errors.Is(err, ErrGenerationRaised) || !errors.As(err, &cause) {
 		return err
 	}
 	return &ResealSkippedError{NVIndex: nvIndex, KeyFile: keyFile, Cause: cause, SealedPCRs: blob.GetPCRSpecs()}
@@ -263,9 +264,9 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	defer tpmDev.Close()
 	tpmdev.Cleanup(tpmDev, debug)
 
-	sealedData, err := tpmdev.ReadFromNVRAM(tpmDev, nvramIndex)
+	sealedData, err := nvslot.ReadRecord(nvramIndex)
 	if err != nil {
-		return tpmdev.HandleNVRAMNotFoundError(err, debug)
+		return err
 	}
 	sealedBlob, err := nvslot.UnmarshalSealedBlob(sealedData)
 	if err != nil {

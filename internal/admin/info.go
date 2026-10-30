@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/core/attest"
@@ -50,7 +49,6 @@ func cont(last bool) string {
 type slotInfo struct {
 	Index      uint32
 	SlotNumber int
-	NVPublic   *tpm2.TPMSNVPublic
 	Blob       *nvslot.SealedBlob
 	Verify     blobVerification
 	raw        []byte
@@ -139,21 +137,9 @@ func InfoCommand(tpmPath string, nvramIndex uint32, privKeyPath string, debug bo
 // ── reading a single slot ───────────────────────────────────────────────
 
 func readSlotInfo(tpmDev transport.TPM, nvramIndex uint32) (*slotInfo, error) {
-	nvIndex := tpm2.TPMHandle(nvramIndex)
-	readPublic := tpm2.NVReadPublic{NVIndex: nvIndex}
-
-	readPublicResp, err := readPublic.Execute(tpmDev)
+	sealedData, err := nvslot.ReadRecord(nvramIndex)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read NVRAM index 0x%08X (may not exist): %w", nvramIndex, err)
-	}
-	nvPublic, err := readPublicResp.NVPublic.Contents()
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse NVRAM public area: %w", err)
-	}
-
-	sealedData, err := tpmdev.ReadFromNVRAM(tpmDev, nvramIndex)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read from NVRAM: %w", err)
+		return nil, err
 	}
 	sealedBlob, err := nvslot.UnmarshalSealedBlob(sealedData)
 	if err != nil {
@@ -163,7 +149,6 @@ func readSlotInfo(tpmDev transport.TPM, nvramIndex uint32) (*slotInfo, error) {
 	si := &slotInfo{
 		Index:      nvramIndex,
 		SlotNumber: nvslot.SlotNumber(nvramIndex),
-		NVPublic:   nvPublic,
 		Blob:       sealedBlob,
 		raw:        sealedData,
 		GenState:   generationState(tpmDev, nvramIndex, sealedBlob.Payload.Generation),
@@ -281,7 +266,6 @@ func printTree(slots []slotInfo) {
 
 func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 	blob := si.Blob
-	nvPub := si.NVPublic
 	hashAlgo := blob.GetHashAlgo()
 
 	// The slot body has 7 sections; the last one gets └──.
@@ -305,13 +289,12 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 	fmt.Printf("%s%sVersion: %d\n", sub, branch(false), blob.Version)
 	fmt.Printf("%s%sHash Algorithm: %s (%d-byte PCR digests)\n", sub, branch(true), hashAlgo.DisplayString(), hashAlgo.DigestSize())
 
-	// ── 2. NVRAM ────────────────────────────────────────────────────
-	fmt.Printf("%s%sNVRAM\n", prefix, branch(false))
+	// ── 2. Record ───────────────────────────────────────────────────
+	fmt.Printf("%s%sRecord\n", prefix, branch(false))
 	sub = prefix + cont(false)
-	fmt.Printf("%s%sIndex: 0x%08X\n", sub, branch(false), si.Index)
-	fmt.Printf("%s%sSize: %d bytes\n", sub, branch(false), nvPub.DataSize)
-	attrs := formatNVAttributes(nvPub)
-	fmt.Printf("%s%sAttributes: %s\n", sub, branch(true), attrs)
+	fmt.Printf("%s%sEFI variable: KIRAslot%d-%s\n", sub, branch(false), si.SlotNumber, nvslot.VarGUID)
+	fmt.Printf("%s%sSize: %d bytes (at most %d)\n", sub, branch(false), len(si.raw), nvslot.MaxRecordSize)
+	fmt.Printf("%s%sIn the TPM: generation index 0x%08X, record counter 0x%08X\n", sub, branch(true), nvslot.GenerationIndex(si.Index), nvslot.AttestCounterIndex(si.Index))
 
 	// ── 3. PCR Configuration ────────────────────────────────────────
 	fmt.Printf("%s%sPCR Configuration\n", prefix, branch(false))
@@ -451,33 +434,6 @@ func printPCRSources(sub string, blob *nvslot.SealedBlob) {
 		printed++
 		fmt.Printf("%s%sRegister PCRs: %v\n", sub, branch(printed == remaining), regPCRs)
 	}
-}
-
-func formatNVAttributes(nvPub *tpm2.TPMSNVPublic) string {
-	var attrs []string
-	if nvPub.Attributes.OwnerWrite {
-		attrs = append(attrs, "OwnerWrite")
-	}
-	if nvPub.Attributes.OwnerRead {
-		attrs = append(attrs, "OwnerRead")
-	}
-	if nvPub.Attributes.AuthWrite {
-		attrs = append(attrs, "AuthWrite")
-	}
-	if nvPub.Attributes.AuthRead {
-		attrs = append(attrs, "AuthRead")
-	}
-	if nvPub.Attributes.Written {
-		attrs = append(attrs, "Written")
-	}
-	if len(attrs) == 0 {
-		return "(none)"
-	}
-	result := attrs[0]
-	for _, a := range attrs[1:] {
-		result += ", " + a
-	}
-	return result
 }
 
 // printAttestationTree renders the blob's attestation part: who the

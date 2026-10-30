@@ -262,9 +262,9 @@ func Boot(tpmPath string) (released bool, err error) {
 		return false, err
 	}
 	defer t.Close()
-	data, err := tpmdev.ReadFromNVRAM(t, s.Slot)
+	data, err := nvslot.ReadRecord(s.Slot)
 	if err != nil {
-		return false, fmt.Errorf("slot 0 is not in the TPM: %w", err)
+		return false, fmt.Errorf("slot 0: %w", err)
 	}
 	sb, err := nvslot.UnmarshalSealedBlob(data)
 	if err != nil {

@@ -105,12 +105,15 @@ func signedAttestBlob(t *testing.T, key *ecdsa.PrivateKey, name string) []byte {
 	return signSlot(t, sb, key)
 }
 
-// writeTestSlot puts a slot's blob (TOTP key stand-in, no phones) into the
-// TPM at idx, the way 'slot add' leaves it.
+// writeTestSlot puts a slot's record (TOTP key stand-in, no phones) at
+// idx and defines its generation index, the way 'slot add' leaves it.
 func writeTestSlot(t *testing.T, tpmDev transport.TPM, idx uint32, key crypto.Signer) {
 	t.Helper()
-	if err := nvslot.WriteToNVRAM(tpmDev, idx, signSlot(t, testSlotBlob(), key), key.Public(), key); err != nil {
-		t.Fatalf("writing the slot's blob: %v", err)
+	if _, err := nvslot.WriteGeneration(tpmDev, nvslot.GenerationIndex(idx), 3, key.Public(), key); err != nil {
+		t.Fatalf("the slot's generation index: %v", err)
+	}
+	if err := nvslot.WriteRecord(idx, signSlot(t, testSlotBlob(), key)); err != nil {
+		t.Fatalf("writing the slot's record: %v", err)
 	}
 }
 

@@ -247,7 +247,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		}
 	}
 	// The blob must still fit its NV index with the vault method in it.
-	if err := checkEnrolmentFitsWithKey(tpmDev, sealed, att, slot); err != nil {
+	if err := checkEnrolmentFitsWithKey(sealed, att, slot); err != nil {
 		return nil, 0, err
 	}
 

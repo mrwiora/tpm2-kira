@@ -270,14 +270,10 @@ func showTOTPSecret(key []byte, alg tpm2.TPMAlgID, nvramIndex uint32, pcrs strin
 // completes. Such a failure is never reported as a harmless skip.
 var ErrGenerationRaised = errors.New("the slot's generation was raised")
 
-// checkBlobFits fails with a BlobTooLargeError when blob, with the given
+// checkBlobFits fails with a RecordTooLargeError when blob, with the given
 // PCR values and generation and signatures of the largest size pub makes,
-// would not fit this TPM's NV index.
-func checkBlobFits(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.SealedBlob, pcrDigests []nvslot.PCRDigestPair, measurePoint bool, gen uint64, pub crypto.PublicKey) error {
-	limit := nvslot.NvIndexLimit(tpmDev)
-	if limit == 0 {
-		return nil
-	}
+// would exceed a record's size - before the generation is raised.
+func checkBlobFits(nvramIndex uint32, blob *nvslot.SealedBlob, pcrDigests []nvslot.PCRDigestPair, measurePoint bool, gen uint64, pub crypto.PublicKey) error {
 	approvalMax, blobSigMax, err := signatureSizes(pub)
 	if err != nil {
 		return err
@@ -292,8 +288,8 @@ func checkBlobFits(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.SealedB
 	if err != nil {
 		return err
 	}
-	if size := len(unsigned) + 2 + blobSigMax; size > limit {
-		return &nvslot.BlobTooLargeError{Index: nvramIndex, Size: size, Limit: limit}
+	if size := len(unsigned) + 2 + blobSigMax; size > nvslot.MaxRecordSize {
+		return &nvslot.RecordTooLargeError{Slot: nvslot.SlotNumber(nvramIndex), Size: size}
 	}
 	return nil
 }
@@ -381,7 +377,7 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.Seale
 
 	// Raising the generation revokes the slot's approval, so a blob this
 	// TPM cannot store must be found before that, not by the write.
-	if err := checkBlobFits(tpmDev, nvramIndex, blob, pcrDigests, measurePoint, gen, signer.Public()); err != nil {
+	if err := checkBlobFits(nvramIndex, blob, pcrDigests, measurePoint, gen, signer.Public()); err != nil {
 		return err
 	}
 
@@ -428,8 +424,15 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.Seale
 	if err != nil {
 		return raised(fmt.Errorf("failed to sign sealed blob: %w", err))
 	}
-	if err := nvslot.WriteToNVRAM(tpmDev, nvramIndex, data, signer.Public(), signer); err != nil {
-		return raised(fmt.Errorf("failed to write to NVRAM: %w", err))
+	if err := nvslot.WriteRecord(nvramIndex, data); err != nil {
+		return raised(fmt.Errorf("failed to write the slot's record: %w", err))
+	}
+	// A blob an earlier version kept in NV at the slot's index is
+	// replaced by the record: it goes.
+	if ok, err := nvslot.RemoveIndex(tpmDev, nvramIndex); ok {
+		fmt.Printf("Removed slot %d's blob of an earlier version from NV (0x%08X): the record is its EFI variable now.\n", nvslot.SlotNumber(nvramIndex), nvramIndex)
+	} else if err != nil {
+		fmt.Printf("Note: slot %d's blob of an earlier version at 0x%08X is still in NV (%v); 'tpm2-kira slot delete' removes it.\n", nvslot.SlotNumber(nvramIndex), nvramIndex, err)
 	}
 	return nil
 }

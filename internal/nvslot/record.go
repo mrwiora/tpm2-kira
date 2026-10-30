@@ -34,7 +34,7 @@ const VarGUID = "67f474ef-94a1-4412-88df-d62349d430a9"
 const MaxRecordSize = 8 * 1024
 
 // ErrNoRecord: the slot has no record in its EFI variable.
-var ErrNoRecord = errors.New("no record")
+var ErrNoRecord = errors.New("no record (not set up: 'tpm2-kira slot add'; what is left of a slot: 'tpm2-kira control')")
 
 // RecordVar is the EFI variable of the slot at index: KIRAslotN.
 func RecordVar(index uint32) (string, error) {

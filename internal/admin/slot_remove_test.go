@@ -2,57 +2,70 @@ package admin
 
 import (
 	"bytes"
-	"os"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tpm2-trust/assh/persist"
 
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 )
 
-// What a slot is made of, and when it is dirty: parts without the blob.
+// useTestVars points the EFI variables at a directory of the test's own.
+func useTestVars(t *testing.T) {
+	t.Helper()
+	old := persist.VarDir
+	persist.VarDir = t.TempDir()
+	t.Cleanup(func() { persist.VarDir = old })
+}
+
+// What a slot is made of, and when it is dirty: not whole - its record and
+// its generation index - while anything of it is there.
 func TestSlotContentsDirtyAndRemains(t *testing.T) {
 	c := SlotContents{Slot: 2, Index: nvslot.NVRAMSlotStart + 2}
 	if c.Any() || c.Dirty() || c.Remains() != "nothing" {
 		t.Fatalf("an empty slot: %+v", c)
 	}
-	c.Blob, c.Generation, c.Counter = true, true, true
+	c.Record, c.Generation, c.Counter = true, true, true
 	c.Keyslots = []SlotKeyslot{{Device: "/dev/x", KeyslotStatus: KeyslotStatus{Keyslot: 1}}}
-	c.Recovery = []string{"a"}
 	if c.Dirty() {
 		t.Fatal("a whole slot is not dirty")
 	}
-	if r := c.Remains(); !strings.Contains(r, "the blob") || !strings.Contains(r, "generation index") ||
-		!strings.Contains(r, "record counter") || !strings.Contains(r, "keyslot 1 of /dev/x") || !strings.Contains(r, "a recovery blob") {
+	if r := c.Remains(); !strings.Contains(r, "the record (EFI variable KIRAslot2)") || !strings.Contains(r, "generation index") ||
+		!strings.Contains(r, "record counter") || !strings.Contains(r, "keyslot 1 of /dev/x") {
 		t.Fatalf("remains: %s", r)
 	}
-	c.Blob = false
-	if !c.Dirty() {
-		t.Fatal("parts without the blob are dirty")
+	for what, change := range map[string]func(c *SlotContents){
+		"without its record":           func(c *SlotContents) { c.Record = false },
+		"without its generation index": func(c *SlotContents) { c.Generation = false },
+		"with an earlier version's NV": func(c *SlotContents) { c.OldBlob = true },
+	} {
+		d := c
+		change(&d)
+		if !d.Dirty() {
+			t.Errorf("a slot %s is not dirty", what)
+		}
 	}
-	only := SlotContents{Slot: 2, Recovery: []string{"a", "b"}}
-	if !only.Dirty() || !only.Any() || only.Remains() != "2 recovery blobs" {
-		t.Fatalf("recovery blobs alone: %+v, %s", only, only.Remains())
+	old := SlotContents{Slot: 2, OldBlob: true}
+	if !old.Dirty() || old.Remains() != "a blob of an earlier version in NV" {
+		t.Fatalf("an earlier version's blob alone: %+v, %s", old, old.Remains())
 	}
+	c.Record = false
 	d := dirtText([]SlotContents{c, {Slot: 5, Counter: true}})
 	if !strings.Contains(d, "slot 2 is dirty:") || !strings.Contains(d, "; slot 5 is dirty: the record counter left") {
 		t.Fatalf("dirtText: %s", d)
 	}
-	// A recovery blob among the dirt: the other way out is named.
-	if !strings.Contains(d, "slot restore") || strings.Contains(strings.Split(d, ";")[1], "restore") {
-		t.Fatalf("the restore alternative: %s", d)
-	}
 }
 
 // collectSlotContents without a TPM still sees the keyslots and the
-// recovery blobs; the TPM parts stay absent for the caller to explain.
+// record; the TPM parts stay absent for the caller to explain.
 func TestCollectSlotContentsWithoutTPM(t *testing.T) {
-	oldDir := nvslot.NVRAMRecoveryDir
-	nvslot.NVRAMRecoveryDir = t.TempDir()
-	defer func() { nvslot.NVRAMRecoveryDir = oldDir }()
-	stash := filepath.Join(nvslot.NVRAMRecoveryDir, "slot-0x01803012-1759823456.blob")
-	os.WriteFile(stash, []byte("x"), 0o600)
+	useTestVars(t)
+	if err := nvslot.WriteRecord(nvslot.NVRAMSlotStart+2, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
 
 	zero, two := 0, 2
 	devices := []LuksDeviceStatus{{Device: "/dev/x", Keyslots: []KeyslotStatus{
@@ -62,22 +75,23 @@ func TestCollectSlotContentsWithoutTPM(t *testing.T) {
 		{Keyslot: 3, Token: &diskkey.LuksToken{Recipe: diskkey.RecipeRecovery}}, // bound to nothing: no slot takes it
 	}}}
 	c := collectSlotContents(nil, devices, 2)
-	if c.Blob || c.Generation || c.Counter || len(c.Keyslots) != 1 || c.Keyslots[0].Keyslot != 1 || len(c.Recovery) != 1 {
+	if !c.Record || c.Generation || c.Counter || c.OldBlob || len(c.Keyslots) != 1 || c.Keyslots[0].Keyslot != 1 {
 		t.Fatalf("%+v", c)
 	}
 }
 
 // DeleteSlot takes what it can and reports the rest: the keyslot, its
-// token and the recovery blob go although the TPM is not there, and the
-// error says the slot stays dirty.
+// token and the record go although the TPM is not there, and the error
+// says the slot stays dirty.
 func TestDeleteSlotTakesWhatItCan(t *testing.T) {
-	oldDir, oldList, oldCS, oldAuth, oldAsk := nvslot.NVRAMRecoveryDir, listLuksDevices, cryptsetup, cryptsetupAuth, terminalAskExisting
+	oldList, oldCS, oldAuth, oldAsk := listLuksDevices, cryptsetup, cryptsetupAuth, terminalAskExisting
 	defer func() {
-		nvslot.NVRAMRecoveryDir, listLuksDevices, cryptsetup, cryptsetupAuth, terminalAskExisting = oldDir, oldList, oldCS, oldAuth, oldAsk
+		listLuksDevices, cryptsetup, cryptsetupAuth, terminalAskExisting = oldList, oldCS, oldAuth, oldAsk
 	}()
-	nvslot.NVRAMRecoveryDir = t.TempDir()
-	stash := filepath.Join(nvslot.NVRAMRecoveryDir, "slot-0x01803010-1759823456.blob")
-	os.WriteFile(stash, []byte("x"), 0o600)
+	useTestVars(t)
+	if err := nvslot.WriteRecord(nvslot.NVRAMSlotStart, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
 
 	const meta = `{
 	  "keyslots": {"0": {"type": "luks2"}, "1": {"type": "luks2"}},
@@ -113,10 +127,10 @@ func TestDeleteSlotTakesWhatItCan(t *testing.T) {
 	if len(tokenRemoved) != 1 || !strings.Contains(tokenRemoved[0], "--token-id 0") {
 		t.Fatalf("token remove: %v", tokenRemoved)
 	}
-	if _, statErr := os.Stat(stash); !os.IsNotExist(statErr) {
-		t.Fatalf("the recovery blob was not removed: %v", statErr)
+	if _, err := nvslot.ReadRecord(nvslot.NVRAMSlotStart); !errors.Is(err, nvslot.ErrNoRecord) {
+		t.Fatalf("the record was not removed: %v", err)
 	}
-	if got := out.String(); !strings.Contains(got, "keyslot 1 removed") {
+	if got := out.String(); !strings.Contains(got, "keyslot 1 removed") || !strings.Contains(got, "KIRAslot0) removed") {
 		t.Fatalf("output: %s", got)
 	}
 

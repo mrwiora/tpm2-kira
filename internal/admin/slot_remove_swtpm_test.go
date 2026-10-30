@@ -4,9 +4,7 @@ package admin
 
 import (
 	"bytes"
-	"fmt"
-	"os"
-	"path/filepath"
+	"errors"
 	"strings"
 	"testing"
 
@@ -15,9 +13,9 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
-// DeleteSlot on a software TPM: the blob, its generation index and the
-// recovery blob go in one act; a slot whose blob alone was taken by hand
-// is dirty, and the deletion takes the rest.
+// DeleteSlot on a software TPM: the record and the generation index go in
+// one act; a slot whose record alone was taken by hand is dirty, and the
+// deletion takes the rest.
 //
 //	go test -tags integration -count=1 -run TestDeleteSlotOnSWTPM ./internal/admin/
 func TestDeleteSlotOnSWTPM(t *testing.T) {
@@ -31,29 +29,25 @@ func TestDeleteSlotOnSWTPM(t *testing.T) {
 	extendPCR(tpm, 7, "secure boot")
 	pubPath, privPath := writeTestKeyPair(t)
 
-	oldDir, oldList := nvslot.NVRAMRecoveryDir, listLuksDevices
-	defer func() { nvslot.NVRAMRecoveryDir, listLuksDevices = oldDir, oldList }()
-	nvslot.NVRAMRecoveryDir = t.TempDir()
+	oldList := listLuksDevices
+	defer func() { listLuksDevices = oldList }()
+	useTestVars(t)
 	listLuksDevices = func() ([]string, error) { return nil, nil }
 
 	const idx = nvslot.NVRAMSlotStart + 1
 	if err := Seal(sock, "0,7", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
-	stash := filepath.Join(nvslot.NVRAMRecoveryDir, fmt.Sprintf("slot-0x%08X-1759823456.blob", uint32(idx)))
-	os.WriteFile(stash, []byte("x"), 0o600)
 
 	var out bytes.Buffer
 	if err := DeleteSlot(DeleteSlotOptions{TPMPath: sock, Slot: 1, Out: &out}); err != nil {
 		t.Fatalf("delete: %v\n%s", err, out.String())
 	}
-	for _, i := range []uint32{idx, nvslot.GenerationIndex(idx)} {
-		if tpmdev.NVRAMIndexExists(tpm, i) {
-			t.Errorf("0x%08X is still there", i)
-		}
+	if tpmdev.NVRAMIndexExists(tpm, nvslot.GenerationIndex(idx)) {
+		t.Error("the generation index is still there")
 	}
-	if _, err := os.Stat(stash); !os.IsNotExist(err) {
-		t.Error("the recovery blob is still there")
+	if _, err := nvslot.ReadRecord(idx); !errors.Is(err, nvslot.ErrNoRecord) {
+		t.Errorf("the record is still there: %v", err)
 	}
 	if !strings.Contains(out.String(), "deleted whole") || !strings.Contains(out.String(), "authenticator") {
 		t.Errorf("output:\n%s", out.String())
@@ -62,16 +56,16 @@ func TestDeleteSlotOnSWTPM(t *testing.T) {
 		t.Fatalf("an empty slot: %v", err)
 	}
 
-	// The blob taken by hand leaves the generation index: the slot is
+	// The record taken by hand leaves the generation index: the slot is
 	// dirty, and the deletion takes the rest.
 	if err := Seal(sock, "0,7", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
 		t.Fatalf("seal again: %v", err)
 	}
-	if _, err := nvslot.RemoveIndex(tpm, idx); err != nil {
+	if _, err := nvslot.RemoveRecord(idx); err != nil {
 		t.Fatal(err)
 	}
 	dirt := collectDirt(sock, nil)
-	if len(dirt) != 1 || dirt[0].Slot != 1 || !dirt[0].Generation || dirt[0].Blob {
+	if len(dirt) != 1 || dirt[0].Slot != 1 || !dirt[0].Generation || dirt[0].Record {
 		t.Fatalf("dirt: %+v", dirt)
 	}
 	out.Reset()

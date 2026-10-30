@@ -1,10 +1,10 @@
 package admin
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
@@ -37,31 +37,34 @@ type SlotKeyslot struct {
 type SlotContents struct {
 	Slot       int
 	Index      uint32
-	Blob       bool // the slot's blob: TOTP key, phones, release key
+	Record     bool // the slot's record (KIRAslotN): TOTP key, phones, release key
 	Generation bool // its generation index
 	Counter    bool // its record counter
+	OldBlob    bool // a blob of an earlier version in NV at the slot's index
 	Keyslots   []SlotKeyslot
-	Recovery   []string // stashed blobs of this slot under NVRAMRecoveryDir
 }
 
 // Any says whether anything of the slot exists.
 func (c SlotContents) Any() bool {
-	return c.Blob || c.Generation || c.Counter || len(c.Keyslots) > 0 || len(c.Recovery) > 0
+	return c.Record || c.Generation || c.Counter || c.OldBlob || len(c.Keyslots) > 0
 }
 
-// Dirty says whether parts of the slot exist while its blob is gone: a
-// deletion stopped halfway, a rewrite failed, or one piece was taken by
-// hand. When a recovery blob is among the parts, 'slot restore' is the
-// other way out, and dirtText says so.
+// Dirty says whether parts of the slot exist while it is not whole - its
+// record and its generation index: a deletion stopped halfway, a record
+// removed or a firmware reset, a TPM cleared under its record, a blob of
+// an earlier version left in NV.
 func (c SlotContents) Dirty() bool {
-	return !c.Blob && c.Any()
+	return c.Any() && (!c.Record || !c.Generation || c.OldBlob)
 }
 
 // Remains names what exists, for a screen or an error.
 func (c SlotContents) Remains() string {
 	var parts []string
-	if c.Blob {
-		parts = append(parts, "the blob (TOTP key and phones)")
+	if c.Record {
+		parts = append(parts, fmt.Sprintf("the record (EFI variable KIRAslot%d)", c.Slot))
+	}
+	if c.OldBlob {
+		parts = append(parts, "a blob of an earlier version in NV")
 	}
 	if c.Generation {
 		parts = append(parts, "the generation index")
@@ -71,11 +74,6 @@ func (c SlotContents) Remains() string {
 	}
 	for _, ks := range c.Keyslots {
 		parts = append(parts, fmt.Sprintf("keyslot %d of %s", ks.Keyslot, ks.Device))
-	}
-	if n := len(c.Recovery); n == 1 {
-		parts = append(parts, "a recovery blob")
-	} else if n > 1 {
-		parts = append(parts, fmt.Sprintf("%d recovery blobs", n))
 	}
 	if len(parts) == 0 {
 		return "nothing"
@@ -87,8 +85,10 @@ func (c SlotContents) Remains() string {
 // are then reported as absent, and the caller says why the TPM is not there.
 func collectSlotContents(tpmDev transport.TPM, devices []LuksDeviceStatus, slot int) SlotContents {
 	c := SlotContents{Slot: slot, Index: nvslot.NVRAMSlotStart + uint32(slot)}
+	_, err := nvslot.ReadRecord(c.Index)
+	c.Record = err == nil || !errors.Is(err, nvslot.ErrNoRecord)
 	if tpmDev != nil {
-		c.Blob = tpmdev.NVRAMIndexExists(tpmDev, c.Index)
+		c.OldBlob = tpmdev.NVRAMIndexExists(tpmDev, c.Index)
 		c.Generation = tpmdev.NVRAMIndexExists(tpmDev, nvslot.GenerationIndex(c.Index))
 		c.Counter = tpmdev.NVRAMIndexExists(tpmDev, nvslot.AttestCounterIndex(c.Index))
 	}
@@ -99,7 +99,6 @@ func collectSlotContents(tpmDev transport.TPM, devices []LuksDeviceStatus, slot 
 			}
 		}
 	}
-	c.Recovery, _ = filepath.Glob(fmt.Sprintf("%s/slot-0x%08X-*.blob", nvslot.NVRAMRecoveryDir, c.Index))
 	return c
 }
 
@@ -124,11 +123,7 @@ func collectDirt(tpmPath string, devices []LuksDeviceStatus) []SlotContents {
 func dirtText(dirt []SlotContents) string {
 	var parts []string
 	for _, d := range dirt {
-		line := fmt.Sprintf("slot %d is dirty: %s left", d.Slot, d.Remains())
-		if len(d.Recovery) > 0 {
-			line += " ('tpm2-kira slot restore' puts a recovery blob back instead)"
-		}
-		parts = append(parts, line)
+		parts = append(parts, fmt.Sprintf("slot %d is dirty: %s left", d.Slot, d.Remains()))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -183,7 +178,7 @@ func DeleteSlot(o DeleteSlotOptions) error {
 		return fmt.Errorf("slot %d: nothing to delete", o.Slot)
 	}
 	phones := 0
-	if c.Blob {
+	if c.Record && tpmDev != nil {
 		if att, err := phonegate.LoadAttestBlob(tpmDev, c.Index); err == nil {
 			phones = len(att.Phone.Verifiers)
 		}
@@ -221,9 +216,15 @@ func DeleteSlot(o DeleteSlotOptions) error {
 		wipe.Bytes(existing)
 	}
 
-	// The slot in the TPM, as 'slot delete' takes it: the blob, then its
-	// companions.
-	if tpmDev != nil {
+	// The slot, as 'slot delete' takes it: its record, then what it keeps
+	// in the TPM. Without the TPM the record goes alone.
+	if tpmDev == nil {
+		if ok, err := nvslot.RemoveRecord(c.Index); err != nil {
+			fail("the record (KIRAslot%d): %v", o.Slot, err)
+		} else if ok {
+			fmt.Fprintf(out, "the record (EFI variable KIRAslot%d) removed\n", o.Slot)
+		}
+	} else {
 		removed, err := nvslot.RemoveSlot(tpmDev, c.Index)
 		for _, r := range removed {
 			fmt.Fprintf(out, "0x%08X removed: %s\n", r.Index, r.What)
@@ -237,21 +238,12 @@ func DeleteSlot(o DeleteSlotOptions) error {
 		}
 	}
 
-	// The recovery blobs: each holds the slot's sealed secret.
-	for _, f := range c.Recovery {
-		if err := os.Remove(f); err != nil {
-			fail("the recovery blob %s: %v", f, err)
-			continue
-		}
-		fmt.Fprintf(out, "%s removed\n", f)
-	}
-
 	if len(failures) > 0 {
 		return fmt.Errorf("slot %d is not gone whole:\n  %s\nThe slot is dirty until a deletion removes the rest: fix the cause and delete it again (tpm2-kira control)",
 			o.Slot, strings.Join(failures, "\n  "))
 	}
 	fmt.Fprintf(out, "Slot %d deleted whole.\n", o.Slot)
-	if c.Blob {
+	if c.Record {
 		fmt.Fprintln(out, "Its code in the authenticator matches nothing now; remove the entry there.")
 	}
 	if phones > 0 {

@@ -9,8 +9,8 @@ import (
 
 func TestKiraIndexRole(t *testing.T) {
 	for idx, want := range map[uint32]string{
-		nvslot.NVRAMSlotStart:                                "slot #0: its TOTP key",
-		nvslot.NVRAMSlotEnd:                                  "slot #15: its TOTP key",
+		nvslot.NVRAMSlotStart:                                "a blob of slot #0 of an earlier version",
+		nvslot.NVRAMSlotEnd:                                  "a blob of slot #15 of an earlier version",
 		nvslot.GenerationIndex(nvslot.NVRAMSlotStart + 2):    "generation index of slot #2",
 		nvslot.AttestCounterIndex(nvslot.NVRAMSlotStart + 3): "record counter of slot #3",
 		nvslot.BootSettingsIndex:                             "the boot settings",

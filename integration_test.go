@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"github.com/tpm2-trust/assh/persist"
 	"io"
 	"net"
 	"os"
@@ -27,8 +28,6 @@ import (
 
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/signing"
-	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 const (
@@ -92,6 +91,8 @@ func TestMain(m *testing.M) {
 	os.MkdirAll(testDir+"/efivars", 0o755)
 	os.WriteFile(testDir+"/machine-id", []byte("0123456789abcdef0123456789abcdef\n"), 0o444)
 	os.Setenv("TPM2_KIRA_TEST_DIR", testDir)
+	// ... and the suite's own reads and writes of the slots' records.
+	persist.VarDir = testDir + "/efivars"
 	fmt.Println("Building tpm2-kira and tpm2-kira-boot for testing...")
 	for _, b := range [][2]string{{"tpm2-kira", "."}, {"tpm2-kira-boot", "./cmd/tpm2-kira-boot"}} {
 		buildCmd := exec.Command("go", "build", "-o", b[0], b[1])
@@ -1556,8 +1557,8 @@ func TestResealRevokesOldBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldBlob, err := tpmdev.ReadFromNVRAM(tpm, index)
 	tpm.Close()
+	oldBlob, err := nvslot.ReadRecord(index)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1570,20 +1571,10 @@ func TestResealRevokesOldBlob(t *testing.T) {
 		t.Fatalf("no code after reseal:\n%s", out)
 	}
 
-	// Put the old blob back. An attacker can do this without the key by
-	// deleting and redefining the index; the test uses the key for brevity.
-	signer, err := signing.LoadSigningPrivateKey(testPrivKeyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tpm, err = transport.OpenTPM(tpmPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = nvslot.WriteToNVRAM(tpm, index, oldBlob, signer.Public(), signer)
-	tpm.Close()
-	if err != nil {
-		t.Fatalf("restoring the old blob: %v", err)
+	// Put the old record back, as anyone who can write the EFI variable
+	// can: the generation in the TPM revokes it.
+	if err := nvslot.WriteRecord(index, oldBlob); err != nil {
+		t.Fatalf("restoring the old record: %v", err)
 	}
 
 	code, out := revealPlainCode(t, tpmPath, nvramIndex)

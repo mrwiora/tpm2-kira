@@ -9,7 +9,6 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 
-	"github.com/google/go-tpm/tpm2"
 )
 
 // 'slot info' reads the blob's attestation part for a human: the machine as an
@@ -20,7 +19,7 @@ func TestInfoShowsTheAttestationPart(t *testing.T) {
 	withPhones(sb, testEnrolment("my laptop"))
 	sb.Payload.Attestation.Count = 4
 	si := &slotInfo{
-		Index: nvslot.NVRAMSlotStart, SlotNumber: 0, Blob: sb, NVPublic: &tpm2.TPMSNVPublic{},
+		Index: nvslot.NVRAMSlotStart, SlotNumber: 0, Blob: sb,
 		CounterState: "4 (matches: this is the current blob)",
 	}
 	out := captureStdout(t, func() { printAttestationTree("", si) })

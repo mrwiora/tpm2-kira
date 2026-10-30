@@ -47,9 +47,17 @@ func TestSlotStates(t *testing.T) {
 	if states[foreign].Orphaned() == "" {
 		t.Error("a record without its slot is not named")
 	}
-	// Until the seal writes the record (PLAN.md part C, step 3) the sealed
-	// slot has none in its variable: named as well.
-	if s := states[sealed]; s.Record || s.Orphaned() == "" {
+	// The sealed slot is whole: its record and its generation index.
+	if s := states[sealed]; !s.Record || s.Orphaned() != "" {
 		t.Errorf("the sealed slot: %+v %q", s, s.Orphaned())
+	}
+	// Its record removed (by hand, a firmware reset): named.
+	if _, err := nvslot.RemoveRecord(sealed); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range nvslot.SlotStates(tpmDev) {
+		if s.Index == sealed && (s.Record || s.Orphaned() == "") {
+			t.Errorf("the slot without its record: %+v %q", s, s.Orphaned())
+		}
 	}
 }

@@ -493,10 +493,19 @@ the boot is one the signing key approved - against a phished password.
    other indices were never used); the NV write keeps its own check for
    the boot settings. tpm2-kira's GUID is `nvslot.VarGUID`. Branch
    `feat/slot-record-efivar` (step 1 is on `feat/vault-root-ca`).
-3. [ ] The users of the blob: seal, reseal, approve, the phone and vault
+3. [x] The users of the blob: seal, reseal, approve, the phone and vault
    enrolments, the TPM salt, unenrol, slot delete (record and indices
    together), backup and restore (`nvram_restore`), info and status;
-   `blobFull` and the NV size checks go.
+   `blobFull` and the NV size checks go. Every read of a slot's blob is
+   `nvslot.ReadRecord`, every write `WriteRecord` (whole or not at all:
+   the stash of an unwritten blob and `slot restore` went with the NV
+   write's undefine); the size checks are against `MaxRecordSize`. A slot
+   is there by its generation index (`FindPopulatedSlots`); `slot delete`
+   takes the record, the indices and a blob of an earlier version left in
+   NV, which `slot add`/`approve` also remove; `slot list` shows the slots
+   and what is left of one, `slot status` and `slot info` the record.
+   `WriteToNVRAM` is the boot settings' alone. The tests: each swtpm gets
+   its own EFI variables.
 4. [ ] TOTP optional: `slot add --totp`, control, the code screen and
    `tpm2-kira-boot` only for slots with TOTP; the "TOTP or phones" rule
    goes; status and slot list name each slot's methods.

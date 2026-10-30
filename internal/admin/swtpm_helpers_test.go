@@ -94,6 +94,9 @@ func startSWTPM(t *testing.T) string {
 	if _, err := exec.LookPath("swtpm"); err != nil {
 		t.Skip("swtpm not installed")
 	}
+	// A fresh TPM gets fresh EFI variables: the slots' records are the
+	// TPM's companions.
+	useTestVars(t)
 	p, err := startSWTPMProc(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

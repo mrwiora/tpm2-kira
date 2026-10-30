@@ -84,7 +84,7 @@ func tpmSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	salt := phonegate.FactorSalt(t, label)
 	defer wipe.Bytes(salt)
 	att.TPMSalt = *w
-	if err := checkEnrolmentFitsWithKey(tpmDev, sealed, att, slot); err != nil {
+	if err := checkEnrolmentFitsWithKey(sealed, att, slot); err != nil {
 		return nil, 0, err
 	}
 	if err := writeAttestBlob(tpmDev, idx, att, priv); err != nil {

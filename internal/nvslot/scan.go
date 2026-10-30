@@ -3,8 +3,6 @@ package nvslot
 import (
 	"fmt"
 
-	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
-
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
@@ -14,13 +12,14 @@ const (
 	NVRAMSlotEnd   = 0x0180301F
 )
 
-// FindPopulatedSlotsInRange probes every index from startIndex to endIndex
-// (inclusive) and returns those that contain data.  The check is lightweight —
-// it only reads the NV public area (no unsealing).
+// FindPopulatedSlotsInRange returns the slots from startIndex to endIndex
+// (inclusive) that are set up: whose generation index is defined
+// (SlotExists). Their records may still be missing, which a reader finds
+// as ErrNoRecord. The check is lightweight: one NV public area each.
 func FindPopulatedSlotsInRange(tpmDev transport.TPM, startIndex, endIndex uint32, debug bool) []uint32 {
 	var populated []uint32
 	for idx := startIndex; idx <= endIndex; idx++ {
-		if !tpmdev.NVRAMIndexExists(tpmDev, idx) {
+		if !SlotExists(tpmDev, idx) {
 			continue
 		}
 		if debug {

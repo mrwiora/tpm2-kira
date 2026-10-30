@@ -4,10 +4,7 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/sha256"
-	"errors"
 	"fmt"
-	"os"
-	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
@@ -66,60 +63,29 @@ func ValidateBlobIndex(index uint32) error {
 	return nil
 }
 
-// MaxNVRAMBlobSize is the largest blob an NV index can hold: TPMS_NV_PUBLIC
-// stores the size as a uint16, so anything larger would be silently truncated
-// by the conversion rather than rejected.
-const MaxNVRAMBlobSize = 65535
-
-// BlobTooLargeError is a blob that this TPM cannot store in one NV index.
-// It is found before the index is touched: the slot stays as it was.
-type BlobTooLargeError struct {
-	Index uint32
-	Size  int // the blob, signed
-	Limit int // TPM2_PT_NV_INDEX_MAX of this TPM
-}
-
-func (e *BlobTooLargeError) Error() string {
-	return fmt.Sprintf("the blob for NV index 0x%08X would be %d bytes, %d more than this TPM stores in one NV index (%d); nothing was written",
-		e.Index, e.Size, e.Size-e.Limit, e.Limit)
-}
-
-// NVRAMRecoveryDir holds a blob that could not be written back after the index
-// had already been undefined.  See stashUnwrittenBlob. A variable so the
-// tests can point it elsewhere.
-var NVRAMRecoveryDir = "/etc/tpm2-kira/recovery"
-
-// WriteToNVRAM writes data to a TPM NVRAM index.
+// WriteToNVRAM writes data to one of tpm2-kira's NV indices below the
+// slots - the boot settings (bootsettings.go) - writable with the signing
+// key alone (PolicySigned). A slot's record is not in NV: record.go.
 //
 // Replacing an index means undefining it first, and there is no atomic
-// replace in TPM 2.0: between the undefine and the last chunk being written,
-// the slot holds no secret at all.  Everything that can fail without touching
-// the TPM state is therefore done *before* the undefine — the key is loaded,
-// the write policy is computed, and the signer is exercised on a dummy digest
-// — so that an unusable key, an absent hardware token or a refused PIN is
-// discovered while the old blob is still intact.
-//
-// If a step after the undefine fails anyway, the blob is written to
-// NVRAMRecoveryDir: it carries the sealed object's public and private areas,
-// which the TPM can still load, so the secret is not lost with the index.
+// replace in TPM 2.0. Everything that can fail without touching the TPM
+// state is therefore done before the undefine - the key is loaded, the
+// write policy is computed, and the signer is exercised on a dummy digest -
+// so that an unusable key, an absent hardware token or a refused PIN is
+// discovered while the old contents are still intact.
 func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto.PublicKey, privKey crypto.Signer) error {
 	if err := ValidateNVRAMIndex(index); err != nil {
 		return fmt.Errorf("invalid NVRAM index: %w", err)
 	}
-	if index >= GenerationIndex(AppNVRAMStart) {
-		return fmt.Errorf("invalid NVRAM index: 0x%08X is among the generation indices and record counters", index)
+	if index >= NVRAMSlotStart {
+		return fmt.Errorf("invalid NVRAM index: 0x%08X is a slot's or above (a slot's record is its EFI variable)", index)
 	}
 
 	if len(data) == 0 {
 		return fmt.Errorf("refusing to write an empty blob to NVRAM index 0x%08X", index)
 	}
-	if len(data) > MaxNVRAMBlobSize {
-		return fmt.Errorf("blob is %d bytes, which exceeds the %d-byte maximum for an NV index", len(data), MaxNVRAMBlobSize)
-	}
-	// The TPM's own limit decides, for the blob as it is: what fits
-	// depends on the signing key, the phones and the PCRs together.
-	if limit := NvIndexLimit(tpmDev); limit > 0 && len(data) > limit {
-		return &BlobTooLargeError{Index: index, Size: len(data), Limit: limit}
+	if limit := NvIndexLimit(tpmDev); len(data) > 0xFFFF || limit > 0 && len(data) > limit {
+		return fmt.Errorf("%d bytes are more than this TPM stores in one NV index", len(data))
 	}
 
 	if pubKey == nil {
@@ -186,7 +152,7 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 	}
 
 	if _, err = define.Execute(tpmDev); err != nil {
-		return stashUnwrittenBlob(index, data, fmt.Errorf("failed to define NVRAM space: %w", err))
+		return fmt.Errorf("failed to define NVRAM space: %w", err)
 	}
 
 	// Write data to NVRAM in chunks using PolicySigned sessions.
@@ -206,7 +172,7 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 		}
 
 		if err := policySignedNVWrite(tpmDev, nvIndex, uint16(offset), data[offset:offset+chunkSize], keyHandle, keyName, privKey); err != nil {
-			return stashUnwrittenBlob(index, data, fmt.Errorf("failed to write to NVRAM at offset %d: %w", offset, err))
+			return fmt.Errorf("failed to write to NVRAM at offset %d: %w", offset, err)
 		}
 
 		offset += chunkSize
@@ -218,10 +184,10 @@ func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto
 	// than here, where the bytes are still in hand.
 	written, err := tpmdev.ReadFromNVRAM(tpmDev, index)
 	if err != nil {
-		return stashUnwrittenBlob(index, data, fmt.Errorf("wrote the blob but could not read it back: %w", err))
+		return fmt.Errorf("wrote the blob but could not read it back: %w", err)
 	}
 	if !bytes.Equal(written, data) {
-		return stashUnwrittenBlob(index, data, fmt.Errorf("blob read back from NVRAM index 0x%08X differs from what was written (%d bytes written, %d read)", index, len(data), len(written)))
+		return fmt.Errorf("blob read back from NVRAM index 0x%08X differs from what was written (%d bytes written, %d read)", index, len(data), len(written))
 	}
 
 	return nil
@@ -270,45 +236,6 @@ func policySignedNVWrite(tpmDev transport.TPM, nvIndex tpm2.TPMHandle, offset ui
 		Offset:     offset,
 	}.Execute(tpmDev)
 	return err
-}
-
-// stashUnwrittenBlob saves a blob that could not be committed to NVRAM and
-// wraps err with where it went.
-//
-// It is only ever reached after the index has been undefined, so the slot is
-// empty at this point. The blob carries the sealed object's public and private
-// areas, and the private area is wrapped by this TPM's storage hierarchy, whose
-// primary key is re-derived deterministically — so the secret is recoverable
-// from this file even though the index is gone. Without it, the secret is lost
-// and the authenticator has to be re-enrolled.
-//
-// A failure to write the file is reported alongside the original error rather
-// than replacing it: the original is what the user has to act on.
-// ErrNVIndexReplaced marks an error that happened after an NVRAM index was
-// undefined for rewriting: the old blob is gone from the TPM. Callers must
-// never present such an error as harmless.
-var ErrNVIndexReplaced = errors.New("NVRAM index was replaced")
-
-type NvReplacedError struct{ Err error }
-
-func (e *NvReplacedError) Error() string   { return e.Err.Error() }
-func (e *NvReplacedError) Unwrap() []error { return []error{e.Err, ErrNVIndexReplaced} }
-
-func stashUnwrittenBlob(index uint32, data []byte, cause error) error {
-	return &NvReplacedError{Err: stashUnwrittenBlobFile(index, data, cause)}
-}
-
-func stashUnwrittenBlobFile(index uint32, data []byte, cause error) error {
-	if mkErr := os.MkdirAll(NVRAMRecoveryDir, 0700); mkErr != nil {
-		return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY and the blob could not be saved either (%v).\n  The sealed secret is lost; run 'tpm2-kira slot add' and re-enrol your authenticator", cause, index, mkErr)
-	}
-
-	path := fmt.Sprintf("%s/slot-0x%08X-%d.blob", NVRAMRecoveryDir, index, time.Now().Unix())
-	if wrErr := os.WriteFile(path, data, 0600); wrErr != nil {
-		return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY and the blob could not be saved either (%v).\n  The sealed secret is lost; run 'tpm2-kira slot add' and re-enrol your authenticator", cause, index, wrErr)
-	}
-
-	return fmt.Errorf("%w\n  NVRAM index 0x%08X is now EMPTY. The blob that was about to be written has been saved to:\n      %s\n  Keep this file: it holds the sealed object and is the only remaining copy of the secret.\n  Fix the cause above, then put it back:\n      tpm2-kira slot restore %s\n  If you discard it, the secret is gone and you must run 'tpm2-kira slot add' and re-enrol\n  your authenticator", cause, index, path, path)
 }
 
 // NvIndexLimit is the largest NV index this TPM stores, or 0 if it does

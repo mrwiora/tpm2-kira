@@ -460,8 +460,6 @@ func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
 	nvram := fs.Uint("nvram", nvramDefault(nvslot.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	yes := fs.Bool("yes", false, "delete: confirm deleting every slot (only needed without --nvram)")
-	pubKey := fs.String("pubkey", "", "restore: signing public key (default: derived from the private key)")
-	privKey := fs.String("privkey", "", "restore: signing private key (default: "+signing.DefaultPrivateKeyPath+")")
 
 	fs.Parse(args)
 
@@ -481,14 +479,6 @@ func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
 	case "delete":
 		deleteIndex := resolveOrScanAll(uint32(*nvram), provided)
 		if err := admin.NVRAMDeleteCommand(*tpm, deleteIndex, *yes, *debug); err != nil {
-			fail(err)
-		}
-	case "restore":
-		if fs.NArg() != 1 {
-			fail(fmt.Errorf("slot restore takes the stashed blob's file: tpm2-kira slot restore %s/slot-0x<index>-<time>.blob", nvslot.NVRAMRecoveryDir))
-		}
-		restoreIndex := resolveOrScanAll(uint32(*nvram), provided)
-		if err := admin.NVRAMRestore(*tpm, fs.Arg(0), restoreIndex, *pubKey, *privKey, *debug); err != nil {
 			fail(err)
 		}
 	default:

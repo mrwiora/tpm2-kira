@@ -17,7 +17,7 @@ import (
 // /etc/machine-id did. Without slot 0 nothing is sealed. A failure is said,
 // never fatal: the boot only goes without the machine-id.
 func keepMachineID(tpmDev transport.TPM, out io.Writer) {
-	data, err := tpmdev.ReadFromNVRAM(tpmDev, machineid.Slot)
+	data, err := nvslot.ReadRecord(machineid.Slot)
 	if err != nil {
 		return
 	}

@@ -126,7 +126,7 @@ func SignerForImage(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer, d
 	}
 	for _, idx := range found {
 		slot := nvslot.AttestSlot(idx)
-		raw, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
+		raw, err := nvslot.ReadRecord(idx)
 		if err != nil {
 			fmt.Fprintf(errOut, "tpm2-kira: slot %d: cannot read the attestation record: %v\n", slot, err)
 			return nil, ExitInternal
@@ -211,9 +211,9 @@ func presentBytes(b []byte) string {
 // ErrNotEnrolled: the slot's blob carries no phone enrolment.
 var ErrNotEnrolled = errors.New("no phone is enrolled for this slot")
 
-// ReadSlot returns a slot's blob as stored and parsed.
+// ReadSlot returns a slot's blob as stored (its record) and parsed.
 func ReadSlot(tpmDev transport.TPM, idx uint32) ([]byte, *nvslot.SealedBlob, error) {
-	raw, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
+	raw, err := nvslot.ReadRecord(idx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -248,7 +248,7 @@ func EnrolledSlots(tpmDev transport.TPM, debug bool) []uint32 {
 }
 
 func ReadSealedSlot(tpmDev transport.TPM, sealIndex uint32) *nvslot.SealedBlob {
-	data, err := tpmdev.ReadFromNVRAM(tpmDev, sealIndex)
+	data, err := nvslot.ReadRecord(sealIndex)
 	if err != nil {
 		return nil
 	}
@@ -278,9 +278,9 @@ func GateRecordCheck(tpmDev transport.TPM, idx uint32, signerPath string) (bool,
 			}
 		}
 	}
-	raw, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
+	raw, err := nvslot.ReadRecord(idx)
 	if err != nil {
-		GateFail("cannot read the attestation record at 0x%08X: %v", idx, err)
+		GateFail("cannot read the attestation record of slot %d: %v", nvslot.SlotNumber(idx), err)
 		return false, ExitInternal
 	}
 	if _, err := os.Stat(signerPath); os.IsNotExist(err) {

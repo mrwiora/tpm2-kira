@@ -154,7 +154,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	if _, _, err := totp.SlotCode(tpm, slot, at, false); err != nil {
 		t.Fatalf("code after seal: %v", err)
 	}
-	sealedSize := func() int { raw, _ := tpmdev.ReadFromNVRAM(tpm, slot); return len(raw) }
+	sealedSize := func() int { raw, _ := nvslot.ReadRecord(slot); return len(raw) }
 	plain := sealedSize()
 
 	// Enrol: the phone goes into the slot's blob.

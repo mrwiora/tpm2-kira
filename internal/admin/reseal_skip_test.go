@@ -32,10 +32,10 @@ func TestAsResealSkipped(t *testing.T) {
 		t.Fatalf("token error before the write: %v", err)
 	}
 
-	// The same cause after the index was replaced: never a skip.
-	replaced := stashUnwrittenBlobMarker(fmt.Errorf("failed to write: %w", cause))
-	if err := asResealSkipped(replaced, 0x01803010, "/k/seal.key", blob); errors.Is(err, ErrResealSkipped) {
-		t.Fatal("an error after the NV index was replaced was reported as a skip")
+	// The same cause after the generation was raised: never a skip.
+	raised := fmt.Errorf("%w: failed to write: %w", ErrGenerationRaised, cause)
+	if err := asResealSkipped(raised, 0x01803010, "/k/seal.key", blob); errors.Is(err, ErrResealSkipped) {
+		t.Fatal("an error after the generation was raised was reported as a skip")
 	}
 
 	// Anything that is not an unavailable token stays a failure.
@@ -47,9 +47,6 @@ func TestAsResealSkipped(t *testing.T) {
 		t.Fatal("nil error changed")
 	}
 }
-
-// stashUnwrittenBlobMarker wraps like stashUnwrittenBlob without writing.
-func stashUnwrittenBlobMarker(err error) error { return &nvslot.NvReplacedError{Err: err} }
 
 func TestPrintResealSkipped(t *testing.T) {
 	cause := &signing.TokenUnavailableError{Token: "YubiKey 12345678, slot 9a", Reason: "no YubiKey with serial 12345678 is present"}

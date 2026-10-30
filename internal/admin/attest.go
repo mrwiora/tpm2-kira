@@ -103,17 +103,14 @@ func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *nvslot.Attestation, pr
 	if err != nil {
 		return err
 	}
-	if err := nvslot.WriteToNVRAM(tpmDev, idx, signed, priv.Public(), priv); err != nil {
-		var tooLarge *nvslot.BlobTooLargeError
+	// The record is replaced whole or not at all: on a failure the slot
+	// is as it was.
+	if err := nvslot.WriteRecord(idx, signed); err != nil {
+		var tooLarge *nvslot.RecordTooLargeError
 		if errors.As(err, &tooLarge) {
-			return blobFull(slot, tooLarge.Size, tooLarge.Limit, b)
+			return blobFull(slot, tooLarge.Size, nvslot.MaxRecordSize, b)
 		}
-		// The index was replaced for the write; the TOTP key lives in it.
-		if rerr := nvslot.WriteToNVRAM(tpmDev, idx, raw, priv.Public(), priv); rerr != nil {
-			return fmt.Errorf("could not store the slot's blob (%w), and could not put the previous one back (%v); "+
-				"a copy is in %s", err, rerr, nvslot.NVRAMRecoveryDir)
-		}
-		return fmt.Errorf("could not store the slot's blob with the phone enrolment; the slot is as it was: %w", err)
+		return fmt.Errorf("could not store the slot's record with the enrolment; the slot is as it was: %w", err)
 	}
 	if got, err := nvslot.BumpAttestCounter(tpmDev, counterIdx); err != nil {
 		return fmt.Errorf("the enrolment is written, but the record counter could not be raised, so it is not accepted yet: %w", err)
@@ -131,12 +128,12 @@ func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *nvslot.Attestation, pr
 	return nil
 }
 
-// enrolmentSize is the size the slot's blob has at least after the
+// enrolmentSize is the size the slot's record has at least after the
 // enrolment. The phone is not known before it answers: it may be one of the
 // slot's phones enrolling again, which replaces its entry, and its strings
 // may be short. So a phone is added only to a slot without any, with empty
-// strings. The exact size is checked when the blob is written
-// (WriteToNVRAM).
+// strings. The exact size is checked when the record is written
+// (WriteRecord).
 func enrolmentSize(slotBlob *nvslot.SealedBlob, enrolment *nvslot.Attestation) (int, error) {
 	grown := *enrolment
 	if len(enrolment.Phone.Verifiers) == 0 {
@@ -158,30 +155,23 @@ func enrolmentSize(slotBlob *nvslot.SealedBlob, enrolment *nvslot.Attestation) (
 }
 
 // checkEnrolmentFits refuses, before a phone is involved, an enrolment
-// that cannot fit the slot's NV index whatever the phone: only then. What
-// the phone adds is checked against the TPM when the blob is written.
-func checkEnrolmentFits(tpmDev transport.TPM, slotBlob *nvslot.SealedBlob, enrolment *nvslot.Attestation, slot uint32) error {
+// that cannot fit the slot's record whatever the phone: only then. What
+// the phone adds is checked when the record is written.
+func checkEnrolmentFits(slotBlob *nvslot.SealedBlob, enrolment *nvslot.Attestation, slot uint32) error {
 	size, err := enrolmentSize(slotBlob, enrolment)
 	if err != nil {
 		return err
 	}
-	limit := nvslot.NvIndexLimit(tpmDev)
-	if limit > nvslot.MaxNVRAMBlobSize || limit == 0 {
-		limit = nvslot.MaxNVRAMBlobSize
-	}
-	if size > limit {
-		return fmt.Errorf("slot %d's blob would grow to at least %d bytes with another phone, and this TPM stores at most %d per NV index.\n"+
-			"Its phones share the blob with the TOTP key: remove one with 'tpm2-kira phone unenrol --nvram %d' "+
-			"(that removes all phones of the slot) and enrol the ones you need", slot, size, limit, slot)
+	if size > nvslot.MaxRecordSize {
+		return blobFull(slot, size, nvslot.MaxRecordSize, enrolment)
 	}
 	return nil
 }
 
 // checkEnrolmentFitsWithKey refuses, before anything is sent or made, an enrolment
-// without a phone (the vault, the TPM salt) whose blob would not fit the
-// slot's NV index: the blob as writeAttestBlob writes it, the TOTP key in
-// it as it is.
-func checkEnrolmentFitsWithKey(tpmDev transport.TPM, slotBlob *nvslot.SealedBlob, att *nvslot.Attestation, slot uint32) error {
+// without a phone (the vault, the TPM salt) whose record would not fit:
+// the record as writeAttestBlob writes it, the TOTP key in it as it is.
+func checkEnrolmentFitsWithKey(slotBlob *nvslot.SealedBlob, att *nvslot.Attestation, slot uint32) error {
 	copyBlob := *slotBlob
 	copyBlob.Payload.Attestation = att
 	unsigned, err := copyBlob.Marshal()
@@ -192,19 +182,14 @@ func checkEnrolmentFitsWithKey(tpmDev transport.TPM, slotBlob *nvslot.SealedBlob
 	if sig == 0 {
 		sig = 512
 	}
-	size := len(unsigned) + 2 + sig
-	limit := nvslot.NvIndexLimit(tpmDev)
-	if limit > nvslot.MaxNVRAMBlobSize || limit == 0 {
-		limit = nvslot.MaxNVRAMBlobSize
-	}
-	if size > limit {
-		return blobFull(slot, size, limit, att)
+	if size := len(unsigned) + 2 + sig; size > nvslot.MaxRecordSize {
+		return blobFull(slot, size, nvslot.MaxRecordSize, att)
 	}
 	return nil
 }
 
-// blobFull says that a slot's blob would not fit its NV index, and what
-// the slot holds that could make room.
+// blobFull says that a slot's record would exceed its size, and what the
+// slot holds that could make room.
 func blobFull(slot uint32, size, limit int, att *nvslot.Attestation) error {
 	var holds []string
 	advice := "use another slot (--nvram N)"
@@ -225,7 +210,7 @@ func blobFull(slot uint32, size, limit int, att *nvslot.Attestation) error {
 	if len(holds) > 0 {
 		what = " It holds " + strings.Join(holds, ", ") + " beside its key."
 	}
-	return fmt.Errorf("slot %d's blob would be %d bytes with this enrolment, and this TPM stores at most %d in one NV index; nothing was written.%s To make room: %s", slot, size, limit, what, advice)
+	return fmt.Errorf("slot %d's record would be %d bytes with this enrolment, and a record holds at most %d; nothing was written.%s To make room: %s", slot, size, limit, what, advice)
 }
 
 // imagePCRs names the PCRs of a selection that an initramfs rebuild moves:
@@ -439,7 +424,7 @@ func AttestEnrol(o EnrolOptions) error {
 	}
 	// And whether the slot's blob still fits its NV index with one more
 	// phone in it: the TOTP key shares that index.
-	if err := checkEnrolmentFits(tpmDev, slotBlob, blob, nvslot.AttestSlot(idx)); err != nil {
+	if err := checkEnrolmentFits(slotBlob, blob, nvslot.AttestSlot(idx)); err != nil {
 		return err
 	}
 	noise, err := attest.NoiseKeypairFromPrivate(blob.Phone.NoisePrivate)
@@ -854,7 +839,7 @@ func AttestStatus(tpmPath string, sealIndex uint32, jsonOut bool, debug bool) er
 			s.Current = "no"
 			invalid++
 		}
-		if raw, err := tpmdev.ReadFromNVRAM(tpmDev, idx); err == nil {
+		if raw, err := nvslot.ReadRecord(idx); err == nil {
 			if pub, path, err := phonegate.AttestPublicKey(""); err == nil {
 				s.SigningKey = path
 				if phonegate.VerifyAttestBlobSignature(raw, pub) == nil {

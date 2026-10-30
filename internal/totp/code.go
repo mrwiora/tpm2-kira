@@ -30,9 +30,9 @@ var ErrPhoneSlot = errors.New("the slot is attested by its phone and has no TOTP
 // when a later reseal revoked this blob's approval, ErrCodesLocked after
 // 'tpm2-kira-boot cap'. None of these checks is the gate; the TPM is.
 func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) (string, *nvslot.SealedBlob, error) {
-	sealedData, err := tpmdev.ReadFromNVRAM(tpmDev, nvramIndex)
+	sealedData, err := nvslot.ReadRecord(nvramIndex)
 	if err != nil {
-		return "", nil, tpmdev.HandleNVRAMNotFoundError(err, debug)
+		return "", nil, err
 	}
 	sealedBlob, err := nvslot.UnmarshalSealedBlob(sealedData)
 	if err != nil {
@@ -175,17 +175,15 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 		// Cleanup TPM state before each unseal attempt
 		tpmdev.Cleanup(tpmDev, debug)
 
-		// In debug mode, peek at the raw NVRAM data before attempting full unseal
+		// In debug mode, peek at the record before attempting full unseal
 		if debug {
-			rawData, peekErr := tpmdev.ReadFromNVRAM(tpmDev, i)
+			rawData, peekErr := nvslot.ReadRecord(i)
 			if peekErr == nil {
 				peek := nvslot.PeekBlobVersion(rawData)
-				fmt.Printf("  Slot %d: NVRAM data found (%d bytes), blob version: %d\n", slotNumber, peek.DataSize, peek.Version)
-			} else if debug {
-				fmt.Printf("  Slot %d: no NVRAM data (%v)\n", slotNumber, peekErr)
+				fmt.Printf("  Slot %d: record found (%d bytes), blob version: %d\n", slotNumber, peek.DataSize, peek.Version)
+			} else {
+				fmt.Printf("  Slot %d: %v\n", slotNumber, peekErr)
 			}
-			// Re-cleanup after the peek read
-			tpmdev.Cleanup(tpmDev, debug)
 		}
 
 		code, _, err := SlotCode(tpmDev, i, time.Now(), debug)
@@ -272,7 +270,7 @@ func FprintKIRASlots(w io.Writer, tpmDev transport.TPM, slots []NVRAMSlot, codes
 
 			// Try to read the sealed blob to get PCR details
 			// Read the sealed blob and current register values for comparison
-			sealedData, err := tpmdev.ReadFromNVRAM(tpmDev, slot.Index)
+			sealedData, err := nvslot.ReadRecord(slot.Index)
 			if err == nil {
 				sealedBlob, err := nvslot.UnmarshalSealedBlob(sealedData)
 				if err == nil {

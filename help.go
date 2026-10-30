@@ -9,7 +9,6 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/admin"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 )
@@ -44,7 +43,7 @@ GUIDED
 
 THE SLOT (a boot state your signing key approved; what control runs)
   setup        Create the signing key (local files, or the key in a YubiKey)
-  slot         add, approve, info, list, status, delete, restore: add seals a
+  slot         add, approve, info, list, status, delete: add seals a
                TOTP key to the boot state (PCRs); approve approves the boot
                state after a change (the initramfs hooks run it)
   status       The one page before a reboot: slots, phones, LUKS
@@ -92,7 +91,7 @@ BY HAND
 GLOBAL OPTIONS (before the command, or after it as the command's own)
   --tpm PATH      TPM device (default /dev/tpmrm0; /dev/tpm0 without a kernel
                   resource manager)
-  --nvram INDEX   A slot, 0-15, or a full NV index such as 0x01803010. Without
+  --nvram INDEX   A slot, 0-15, or its number as 0x01803010-0x0180301F. Without
                   it most commands take every populated slot
   --debug         Debug output
   An option after the command wins over the same one before it; a command
@@ -243,7 +242,7 @@ with the key that signs the boot components.
 tpm2-kira slot approve [--nvram N] [--pcrs LIST] [--measure-point M]
                        [--privkey PATH] [--pubkey PATH] [--require-key]
 tpm2-kira slot info    [--nvram N] [--json] [--privkey PATH]
-tpm2-kira slot list | status | delete [--yes] | restore FILE   [--nvram N]
+tpm2-kira slot list | status | delete [--yes]   [--nvram N]
 
 A slot is a boot state your signing key approved: PCR values and a
 generation, in one of the TPM's slots 0-15 (the NV indices
@@ -332,12 +331,16 @@ signed by this machine's key.
   tpm2-kira slot info
   tpm2-kira slot info --nvram 0x01803010 --json
 
-list, status, delete, restore
-The TPM's slots: 0-15 are the NV indices 0x01803010-0x0180301F.
+list, status, delete
+The slots 0-15: each a record in the EFI variable KIRAslotN (the TOTP key,
+the phones, the vault, the TPM salt, signed), and in the TPM its generation
+index and record counter (0x01803010-0x0180301F are the slots' numbers).
 
-  list             Every NV index the TPM holds
-  status           A slot's NV index: size, attributes, written
-  delete           Delete the slot's indices in the TPM: its blob, generation
+  list             The slots (records, and what is left of one), then every
+                   NV index the TPM holds
+  status           A slot: its record, its indices in the TPM, what the
+                   record holds; another NV index: size and attributes
+  delete           Delete the slot: its record (KIRAslotN), its generation
                    index and record counter. Without --nvram: everything of
                    tpm2-kira - every slot, the leftover indices, the boot
                    settings, the sealed machine-id (KIRAmachineID) and the
@@ -348,16 +351,9 @@ The TPM's slots: 0-15 are the NV indices 0x01803010-0x0180301F.
                    A LUKS keyslot bound to the slot stays and leaves the
                    slot dirty; 'tpm2-kira control' (the slot's line)
                    deletes a slot whole
-  restore FILE     Put back a blob that a failed write stashed in
-                   ` + nvslot.NVRAMRecoveryDir + `/ (slot-0x<index>-<time>.blob):
-                   the sealed TOTP key survives a lost index. It is approved
-                   and written as approve does it, with the signing key
-                   (--privkey PATH, --pubkey PATH; default: the key from
-                   setup), into an empty slot; the file is removed after
 
   tpm2-kira slot list
   tpm2-kira slot delete --nvram 0
-  tpm2-kira slot restore ` + nvslot.NVRAMRecoveryDir + `/slot-0x01803010-1759823456.blob
 `,
 
 	"status": `tpm2-kira status [--json] [--privkey PATH] [--conf PATH]
