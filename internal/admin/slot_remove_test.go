@@ -166,6 +166,7 @@ func TestSlotContentsCause(t *testing.T) {
 		{SlotContents{Slot: 3, Record: true}, "the TPM was cleared"},
 		{SlotContents{Slot: 3, Generation: true, Counter: true}, "KIRAslot3) is gone"},
 		{SlotContents{Slot: 3, Counter: true}, "stopped halfway"},
+		{SlotContents{Slot: 3, Keyslots: []SlotKeyslot{{Device: "/dev/x", KeyslotStatus: KeyslotStatus{Keyslot: 1}}}}, "keyslots outlived the slot"},
 	} {
 		if got := c.s.Cause(); (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
 			t.Errorf("%+v: %q, want %q", c.s, got, c.want)
@@ -174,5 +175,10 @@ func TestSlotContentsCause(t *testing.T) {
 	notes := strings.Join(statusNotes(StatusReport{Dirt: dirtyReport([]SlotContents{{Slot: 3, Generation: true}})}), "\n")
 	if !strings.Contains(notes, "slot 3 is incomplete") || !strings.Contains(notes, "is gone") || !strings.Contains(notes, "slot delete --nvram 3") {
 		t.Errorf("status notes: %s", notes)
+	}
+	// Only a keyslot left: luks remove takes it, slot delete would not.
+	keys := SlotContents{Slot: 3, Keyslots: []SlotKeyslot{{Device: "/dev/x", KeyslotStatus: KeyslotStatus{Keyslot: 1}}}}
+	if r := keys.Remedy(); !strings.Contains(r, "luks remove /dev/x --keyslot 1") || strings.Contains(r, "slot delete") {
+		t.Errorf("a keyslot's remedy: %s", r)
 	}
 }

@@ -387,7 +387,7 @@ func RevealCommand(tpmPath string, nvramIndex uint32, debug bool, plain bool) {
 		// Scan all slots in the default range when nvramIndex is 0
 		slots = ScanNVRAMSlots(tpmDev, debug)
 		if len(slots) == 0 {
-			PrintKIRAError(fmt.Errorf("no TOTP secrets found in NVRAM slots 0x%08X - 0x%08X", nvslot.NVRAMSlotStart, nvslot.NVRAMSlotEnd))
+			PrintKIRAError(fmt.Errorf("no slot has a TOTP code (tpm2-kira slot add --totp)"))
 			return
 		}
 	} else {

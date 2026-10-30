@@ -183,7 +183,7 @@ func statusNotes(r StatusReport) []string {
 		notes = append(notes, "no slot is sealed: tpm2-kira slot add")
 	}
 	for _, d := range r.Dirt {
-		notes = append(notes, fmt.Sprintf("slot %d is incomplete - %s left: %s. 'tpm2-kira control' (the slot's line) or 'tpm2-kira slot delete --nvram %d' removes what is left; then seal it again", d.Slot, d.Remains, d.Cause, d.Slot))
+		notes = append(notes, fmt.Sprintf("slot %d is incomplete - %s left: %s. %s; then seal it again", d.Slot, d.Remains, d.Cause, d.Remedy))
 	}
 	remoteSalt, fallback, codes := false, false, false
 	for _, s := range r.Slots {

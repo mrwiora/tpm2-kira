@@ -58,7 +58,7 @@ def load(name):
 
 vmtest = load("vmtest")
 localvm = load("localvm")
-Fail = vmtest.Fail
+Fail = (vmtest.Fail, localvm.Fail)
 CASES = ["totp", "hashpwd2", "tpmsalt", "lostrecord"]
 WRONG = "not-the-password"
 # The system's own prompt after tpm2-kira's key opened nothing: systemd's
@@ -99,9 +99,11 @@ class Case:
         return self.check(f"{what}: the system comes up (ssh)", self.m.wait_port(22, True, 420))
 
     def capped(self, what):
-        rc, out = self.m.run("tpm2-kira reveal 2>&1", save=f"reveal-{what}.log")
-        return self.check(f"{what}: cap locked the slots when the initrd was left (reveal refused)",
-                          "locked" in out and "until the next reboot" in out, out[-300:])
+        """cap read-locked slot 0's generation index when the initrd was
+        left: slot info says so, whatever the slot's methods."""
+        rc, out = self.m.run("tpm2-kira slot info --nvram 0 2>&1", save=f"slot-info-{what}.log")
+        return self.check(f"{what}: cap locked slot 0 when the initrd was left (its generation index read-locked)",
+                          "read-locked until reboot" in out, out[-400:])
 
     # ── the setup ────────────────────────────────────────────────────────
 
@@ -112,6 +114,12 @@ class Case:
         self.m.install(self.package)
 
     def rebuild(self, want):
+        if self.lv.name == "arch":
+            # What control's mkinitcpio step writes: sd-tpm2-kira into
+            # HOOKS, before sd-encrypt (AdoptHook).
+            rc, out = self.m.run("grep -q '^HOOKS=.*sd-tpm2-kira' /etc/mkinitcpio.conf || "
+                                 "sed -i '/^HOOKS=/s/sd-encrypt/sd-tpm2-kira sd-encrypt/' /etc/mkinitcpio.conf; grep ^HOOKS= /etc/mkinitcpio.conf")
+            self.check("HOOKS carry sd-tpm2-kira before sd-encrypt", "sd-tpm2-kira sd-encrypt" in out, out[-300:])
         out = self.m.rebuild()
         self.check("the image is rebuilt" + (f" ({want})" if want else ""), re.search(want, out) is not None if want else True, out[-800:])
 
@@ -240,12 +248,19 @@ class Case:
             return
         self.capped("tpmsalt")
 
-        # The fallback: a wrong password, then the system's own prompt.
+        # The fallback: a wrong password; tpm2-kira's prompt again (Debian's
+        # cryptsetup tries the keyscript again) or the system's own (Arch's
+        # systemd-cryptsetup); there Ctrl-C, then the system's prompt.
         mark = self.reboot()
         try:
             self.expect(r"Password for disk \S+: ?$", mark, 300)
+            mark2 = os.path.getsize(self.lv.path("serial.log"))
             self.lv.send(WRONG + "\r")
-            self.expect(SYSTEM_PROMPT, mark, 300)
+            m, _ = self.expect(r"(Password for disk \S+: ?$|" + SYSTEM_PROMPT + ")", mark2, 300)
+            if m.group(0).startswith("Password for disk"):
+                self.check("fallback: after a wrong password tpm2-kira asks again", True)
+                self.lv.send("\x03")
+            self.expect(SYSTEM_PROMPT, mark2, 300)
             self.lv.send(self.lv.passphrase + "\r")
             self.check("fallback: after a wrong password the system's prompt takes the LUKS passphrase", True)
         except Fail as e:
@@ -283,8 +298,14 @@ class Case:
         self.save_console(mark, "lostrecord")
         if not self.up("lostrecord"):
             return
-        rc, out = self.m.run("tpm2-kira slot delete --nvram 0 2>&1; tpm2-kira status 2>&1", save="slot-delete.log")
-        self.check("slot delete takes what is left; status names no incomplete slot", "incomplete" not in out.split("Successfully deleted")[-1], out[-800:])
+        rc, out = self.m.run("tpm2-kira slot delete --nvram 0 2>&1", save="slot-delete.log")
+        rc, out = self.m.run("tpm2-kira status 2>&1", save="status-after-delete.log")
+        # slot delete takes what is in the TPM; the LUKS keyslot bound to the
+        # slot stays (the header is control's and luks remove's), and is
+        # what is left of the slot now.
+        note = next((l for l in out.splitlines() if "slot 0 is incomplete" in l), "")
+        self.check("slot delete takes the slot's indices; the keyslot bound to it is what is left",
+                   re.search(r"slot 0 is incomplete - keyslot \d+ of \S+ left", note) is not None and "luks remove" in note and "generation" not in note and "slot delete" not in note, out[-800:])
 
     def run(self):
         try:

@@ -62,6 +62,8 @@ func (c SlotContents) Cause() string {
 		return ""
 	case c.Record && !c.Generation:
 		return "its record is left without its slot in the TPM: the TPM was cleared, or the slot removed without the record - the record's keys are the old TPM's and open nothing"
+	case !c.Record && !c.Generation && !c.Counter:
+		return "its LUKS keyslots outlived the slot: the slot was deleted without them (slot delete leaves the LUKS header alone)"
 	case c.Generation && !c.Record:
 		return fmt.Sprintf("its record (the EFI variable KIRAslot%d) is gone: removed, or the firmware's variables were reset - its methods fail at boot, the fallbacks unlock (the password and salt typed, the OS recovery passphrase)", c.Slot)
 	}
@@ -130,15 +132,30 @@ type DirtySlot struct {
 	Slot    int    `json:"slot_number"`
 	Remains string `json:"remains"`
 	Cause   string `json:"cause"`
+	Remedy  string `json:"remedy"`
 }
 
 // dirtyReport is the incomplete slots for the status report.
 func dirtyReport(dirt []SlotContents) []DirtySlot {
 	var out []DirtySlot
 	for _, d := range dirt {
-		out = append(out, DirtySlot{Slot: d.Slot, Remains: d.Remains(), Cause: d.Cause()})
+		out = append(out, DirtySlot{Slot: d.Slot, Remains: d.Remains(), Cause: d.Cause(), Remedy: d.Remedy()})
 	}
 	return out
+}
+
+// Remedy says what removes what is left of the slot: control's line takes
+// all of it; by hand, slot delete what is in the TPM and its record, luks
+// remove a keyslot.
+func (c SlotContents) Remedy() string {
+	var hand []string
+	if c.Record || c.Generation || c.Counter {
+		hand = append(hand, fmt.Sprintf("'tpm2-kira slot delete --nvram %d'", c.Slot))
+	}
+	for _, ks := range c.Keyslots {
+		hand = append(hand, fmt.Sprintf("'tpm2-kira luks remove %s --keyslot %d'", ks.Device, ks.Keyslot))
+	}
+	return "'tpm2-kira control' (the slot's line) removes what is left, or by hand " + strings.Join(hand, " and ")
 }
 
 // dirtText is the dirty slots in one line.
