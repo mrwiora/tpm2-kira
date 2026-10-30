@@ -1262,7 +1262,7 @@ func dirtyLine(d SlotContents) controlStep {
 	n := d.Slot
 	return controlStep{Key: fmt.Sprintf("slot:%d", n), Title: fmt.Sprintf("Slot %d", n),
 		Dirty: "dirty: " + d.Remains() + " left", SelfConfirm: true,
-		Explain: "A deletion stopped halfway, or a piece was taken by hand: picking the slot removes what is left of it.",
+		Explain: "Slot " + fmt.Sprint(n) + ": " + d.Cause() + ". Picking the slot removes what is left of it; then seal it again (slot add) and enrol its methods.",
 		Run:     func(c *controller) error { return c.runRemoveSlot(n) }}
 }
 

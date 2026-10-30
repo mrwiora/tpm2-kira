@@ -56,6 +56,22 @@ func (c SlotContents) Dirty() bool {
 	return c.Any() && (!c.Record || !c.Generation || c.OldBlob)
 }
 
+// Cause says how the slot came to be incomplete, and what that means;
+// "" for a whole slot.
+func (c SlotContents) Cause() string {
+	switch {
+	case !c.Dirty():
+		return ""
+	case c.Record && !c.Generation:
+		return "its record is left without its slot in the TPM: the TPM was cleared, or the slot removed without the record - the record's keys are the old TPM's and open nothing"
+	case c.Generation && !c.Record:
+		return fmt.Sprintf("its record (the EFI variable KIRAslot%d) is gone: removed, or the firmware's variables were reset - its methods fail at boot, the fallbacks unlock (the password and salt typed, the OS recovery passphrase)", c.Slot)
+	case c.OldBlob:
+		return "a blob of an earlier version of tpm2-kira is left in NV at its index"
+	}
+	return "a deletion stopped halfway, or a piece was taken by hand"
+}
+
 // Remains names what exists, for a screen or an error.
 func (c SlotContents) Remains() string {
 	var parts []string
@@ -113,6 +129,22 @@ func collectDirt(tpmPath string, devices []LuksDeviceStatus) []SlotContents {
 		if c := collectSlotContents(tpmDev, devices, slot); c.Dirty() {
 			out = append(out, c)
 		}
+	}
+	return out
+}
+
+// DirtySlot is an incomplete slot in the status report.
+type DirtySlot struct {
+	Slot    int    `json:"slot_number"`
+	Remains string `json:"remains"`
+	Cause   string `json:"cause"`
+}
+
+// dirtyReport is the incomplete slots for the status report.
+func dirtyReport(dirt []SlotContents) []DirtySlot {
+	var out []DirtySlot
+	for _, d := range dirt {
+		out = append(out, DirtySlot{Slot: d.Slot, Remains: d.Remains(), Cause: d.Cause()})
 	}
 	return out
 }

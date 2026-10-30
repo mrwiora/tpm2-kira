@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -62,6 +63,7 @@ type StatusReport struct {
 	ConfigError  string             `json:"config_error,omitempty"`
 	Devices      []LuksDeviceStatus `json:"devices"`
 	DevicesError string             `json:"devices_error,omitempty"`
+	Dirt         []DirtySlot        `json:"incomplete_slots,omitempty"`
 	Notes        []string           `json:"notes"`
 }
 
@@ -92,8 +94,11 @@ func collectStatus(o StatusOptions) StatusReport {
 		verifier := newBlobVerifier(o.PrivKeyPath)
 		for _, idx := range nvslot.FindPopulatedSlots(tpmDev, o.Debug) {
 			raw, sb, err := phonegate.ReadSlot(tpmDev, idx)
+			if errors.Is(err, nvslot.ErrNoRecord) {
+				continue // an incomplete slot: its note is the dirt's
+			}
 			if err != nil {
-				r.Notes = append(r.Notes, fmt.Sprintf("slot %d (0x%08X) does not read as a blob: %v", nvslot.SlotNumber(idx), idx, err))
+				r.Notes = append(r.Notes, fmt.Sprintf("slot %d's record does not read: %v", nvslot.SlotNumber(idx), err))
 				continue
 			}
 			s := StatusSlot{Slot: nvslot.SlotNumber(idx), NVRAMIndex: fmt.Sprintf("0x%08X", idx),
@@ -132,6 +137,9 @@ func collectStatus(o StatusOptions) StatusReport {
 	}
 	for _, d := range devices {
 		r.Devices = append(r.Devices, readLuksStatus(d))
+	}
+	if r.TPMError == "" {
+		r.Dirt = dirtyReport(collectDirt(o.TPMPath, r.Devices))
 	}
 
 	r.Notes = append(r.Notes, statusNotes(r)...)
@@ -173,6 +181,9 @@ func statusNotes(r StatusReport) []string {
 	var notes []string
 	if r.TPMError == "" && len(r.Slots) == 0 {
 		notes = append(notes, "no slot is sealed: tpm2-kira slot add")
+	}
+	for _, d := range r.Dirt {
+		notes = append(notes, fmt.Sprintf("slot %d is incomplete - %s left: %s. 'tpm2-kira control' (the slot's line) or 'tpm2-kira slot delete --nvram %d' removes what is left; then seal it again", d.Slot, d.Remains, d.Cause, d.Slot))
 	}
 	remoteSalt, fallback, codes := false, false, false
 	for _, s := range r.Slots {

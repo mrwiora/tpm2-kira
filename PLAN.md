@@ -528,8 +528,14 @@ the boot is one the signing key approved - against a phished password.
    with TOTP optional a slot without a code would not have been locked;
    the plan's TPM part now counts every sealed slot, and both hooks run
    cap with it.
-6. [ ] Status and control: a record left behind (TPM cleared, slot gone),
-   indices without a record; removal offered.
+6. [x] Status and control: a record left behind (TPM cleared, slot gone),
+   indices without a record; removal offered. control's slot lines (since
+   step 3 on records) name the cause (`SlotContents.Cause`): a record
+   without its slot (the TPM cleared), a record gone (removed, a firmware
+   reset: the fallbacks unlock), an earlier version's NV blob, a deletion
+   stopped; picking the line removes what is left. status reports them
+   (`incomplete_slots`, a note each with what removes it) instead of "does
+   not read as a blob".
 7. [ ] Docs: DISK-KEY.md, SECURITY-BACKGROUND.md (the record, where, the
    threats above), ARCHITECTURE.md, README, the help.
 8. [ ] Tests: unit and swtpm (`make test-all`), the vault's and Marify's

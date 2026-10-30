@@ -159,3 +159,26 @@ func TestDeleteSlotTakesWhatItCan(t *testing.T) {
 		t.Fatal("the last keyslot was killed")
 	}
 }
+
+// An incomplete slot says how it came to be: a record left by a cleared
+// TPM, a record gone, an earlier version's blob, a deletion stopped.
+func TestSlotContentsCause(t *testing.T) {
+	for _, c := range []struct {
+		s    SlotContents
+		want string
+	}{
+		{SlotContents{Slot: 3, Record: true, Generation: true}, ""},
+		{SlotContents{Slot: 3, Record: true}, "the TPM was cleared"},
+		{SlotContents{Slot: 3, Generation: true, Counter: true}, "KIRAslot3) is gone"},
+		{SlotContents{Slot: 3, Record: true, Generation: true, OldBlob: true}, "earlier version"},
+		{SlotContents{Slot: 3, Counter: true}, "stopped halfway"},
+	} {
+		if got := c.s.Cause(); (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
+			t.Errorf("%+v: %q, want %q", c.s, got, c.want)
+		}
+	}
+	notes := strings.Join(statusNotes(StatusReport{Dirt: dirtyReport([]SlotContents{{Slot: 3, Generation: true}})}), "\n")
+	if !strings.Contains(notes, "slot 3 is incomplete") || !strings.Contains(notes, "is gone") || !strings.Contains(notes, "slot delete --nvram 3") {
+		t.Errorf("status notes: %s", notes)
+	}
+}

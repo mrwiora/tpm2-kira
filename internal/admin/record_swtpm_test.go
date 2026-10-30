@@ -3,6 +3,8 @@
 package admin
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/go-tpm/tpm2/transport"
@@ -60,5 +62,32 @@ func TestSlotStates(t *testing.T) {
 		if s.Index == sealed && (s.Record || s.Orphaned() == "") {
 			t.Errorf("the slot without its record: %+v %q", s, s.Orphaned())
 		}
+	}
+}
+
+// status names what is left of a slot, and why: a record without its slot
+// (a TPM cleared), a slot without its record (the variable gone).
+func TestStatusNamesIncompleteSlots(t *testing.T) {
+	sock := startSWTPM(t)
+	const sealed, foreign = nvslot.NVRAMSlotStart, nvslot.NVRAMSlotStart + 5
+	privPath, pubPath := signingKeyFiles(t)
+	if err := Seal(sock, "23", sealed, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := nvslot.WriteRecord(foreign, []byte("a record of a TPM cleared since")); err != nil {
+		t.Fatal(err)
+	}
+	r := collectStatus(StatusOptions{TPMPath: sock, PrivKeyPath: privPath, ConfigPath: filepath.Join(t.TempDir(), "control.conf")})
+	if len(r.Dirt) != 1 || r.Dirt[0].Slot != 5 || !strings.Contains(r.Dirt[0].Cause, "TPM was cleared") || len(r.Slots) != 1 {
+		t.Fatalf("a record without its slot: slots %+v, dirt %+v", r.Slots, r.Dirt)
+	}
+	if _, err := nvslot.RemoveRecord(sealed); err != nil {
+		t.Fatal(err)
+	}
+	r = collectStatus(StatusOptions{TPMPath: sock, PrivKeyPath: privPath, ConfigPath: filepath.Join(t.TempDir(), "control.conf")})
+	notes := strings.Join(r.Notes, "\n")
+	if len(r.Dirt) != 2 || len(r.Slots) != 0 || !strings.Contains(notes, "slot 0 is incomplete") || !strings.Contains(notes, "KIRAslot0) is gone") ||
+		strings.Contains(notes, "does not read") {
+		t.Fatalf("a slot without its record: dirt %+v\n%s", r.Dirt, notes)
 	}
 }
