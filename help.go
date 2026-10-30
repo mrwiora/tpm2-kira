@@ -428,9 +428,10 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
                    ` + admin.DefaultSSHCA + `, an EFI variable). At the start,
                    before the OS separator, the TPM makes this boot's host
                    key and the CA certifies it through the first slot whose
-                   PCRs hold an approved state, then the window (PCR 15) is
-                   extended: the CA certifies nothing more until the next
-                   boot. When it does not certify, a temporary key is served
+                   PCRs hold an approved state, then the CA's window is
+                   closed - its window index locked, PCR 15 extended - also
+                   when anything failed: the CA certifies nothing more until
+                   the next boot. When it does not certify, a temporary key is served
                    - made in the TPM too, not certified - and the console
                    shows its fingerprint
 `,
@@ -469,10 +470,11 @@ image build puts them in ('tpm2-kira help initramfs').
 
 The SSH server is a library (github.com/tpm2-trust/assh/server) inside
 'run', split in two processes. 'run' opens the port and starts this
-binary again as 'ssh-child', the half that speaks SSH: as nobody, in
-namespaces of its own, confined on every thread (no new privileges, no
-executable memory, no file, none of the system calls that administer the
-machine; assh's sandbox). It holds no host key
+binary again as 'ssh-child', the half that speaks SSH: as a uid no one
+else has, in namespaces of its own, confined on every thread (no new
+privileges, not dumpable, no executable memory, no file, none of the
+system calls that administer the machine or make a namespace; assh's
+sandbox). It holds no host key
 ('run' has the TPM sign, over a socket pair between the two) and no
 password; a login becomes a session of the code screen in 'run'. Nobody
 runs 'ssh-child' by hand.
@@ -482,8 +484,9 @@ CA, which 'tpm2-kira control' creates in the TPM and keeps in the EFI
 variable ` + admin.DefaultSSHCA + `, and which signs only while the PCRs of one of its slots
 hold values the signing key approved. control writes two slots into
 assh.conf when it creates the CA: PCR 0, 2, 7 and the image's (11, or 8
-and 9 with GRUB), and PCR 7 alone - each with PCR 15, the window, which run
-extends. slot approve approves them after every image rebuild, and makes the
+and 9 with GRUB), and PCR 7 alone - each with PCR 15, which run extends
+when it closes the CA's window. A CA certifies from the boot after its
+creation. slot approve approves them after every image rebuild, and makes the
 CA's slots assh.conf's first (ASSH_CA_SLOT_<N>=PCRs). Clients trust the CA once, in known_hosts:
 
   @cert-authority <the machine's names> <the contents of ` + admin.DefaultSSHCAPub + `>

@@ -153,6 +153,7 @@ func Start(o Options, console io.Writer, log func(string)) (*Server, error) {
 	r := &Server{Opts: o, log: log, console: console, HostKey: hk,
 		Done: make(chan struct{}), Releases: make(chan struct{}, 1), Changed: make(chan struct{}, 1)}
 	child, err := server.Start(server.Options{
+		UIDs:           o.Assh.ChildUIDs,
 		Listener:       tcp.(*net.TCPListener),
 		HostKey:        hk.Signer,
 		AuthorizedKeys: authorized,

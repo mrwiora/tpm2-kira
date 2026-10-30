@@ -1,11 +1,13 @@
 package sshscreen
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/tpm2-trust/assh/server"
 
+	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/tpm2-trust/assh/config"
@@ -28,15 +30,22 @@ type hostKeyAtBoot struct {
 // with its key id and principals - and the CA conf names certify it. When it cannot (a firmware or Secure Boot update since
 // the build, another TPM, no CA), the key is temporary: made in the TPM
 // all the same, not certified, so the ssh client warns of an unknown host
-// key, and the console shows its fingerprint to compare. Either way the
-// CA's window is closed after. Without a TPM there is no key.
-func PrepareHostKey(tpmPath string, conf config.Config) (hostKeyAtBoot, error) {
+// key, and the console shows its fingerprint to compare. However it ends -
+// a key made, an error at any step - the CA's window is closed after, and
+// the PCR of ASSH_CLOSE_PCR extended. Without a TPM there is no key.
+func PrepareHostKey(tpmPath string, conf config.Config) (key hostKeyAtBoot, err error) {
 	caPath := conf.CA
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return hostKeyAtBoot{}, fmt.Errorf("no TPM: %w", err)
 	}
 	defer tpmDev.Close()
+	var ca *hostkey.CA
+	defer func() {
+		if cerr := closeWindow(tpmDev, ca, conf); cerr != nil {
+			key, err = hostKeyAtBoot{}, errors.Join(err, cerr)
+		}
+	}()
 	// The host key's authorization value stays in this process alone.
 	hostkey.NoDump()
 	o := hostkey.IssueOptions{
@@ -51,17 +60,15 @@ func PrepareHostKey(tpmPath string, conf config.Config) (hostKeyAtBoot, error) {
 			return hostKeyAtBoot{}, err
 		}
 	}
-	ca, err := hostkey.LoadCA(caPath)
+	loaded, err := hostkey.LoadCA(caPath)
 	switch {
 	case os.IsNotExist(err):
 		hk, err = hostkey.TemporaryKey(tpmDev, fmt.Errorf("no SSH CA at %s", caPath), o)
 	case err != nil:
 		hk, err = hostkey.TemporaryKey(tpmDev, err, o)
 	default:
+		ca = loaded
 		hk, err = hostkey.Issue(tpmDev, ca, o)
-		if err == nil && ca.Window != 0 {
-			err = hostkey.Close(tpmDev, ca.Window, sshCAWindowEvent)
-		}
 	}
 	if err != nil {
 		return hostKeyAtBoot{}, err
@@ -89,7 +96,22 @@ func mountEfivarfs() error {
 	return nil
 }
 
-// sshCAWindowEvent is what closes the window.
+// closeWindow closes the CA's window: its window index - assh.conf's when
+// the CA could not be read, if one is defined there - and the PCR of
+// ASSH_CLOSE_PCR.
+func closeWindow(tpmDev transport.TPM, ca *hostkey.CA, conf config.Config) error {
+	h := tpm2.TPMHandle(conf.WindowHdl)
+	if ca != nil && ca.WindowHandle() != 0 {
+		h = ca.WindowHandle()
+	}
+	_, err := hostkey.CloseWindow(tpmDev, h)
+	if conf.ClosePCR >= 0 {
+		err = errors.Join(err, hostkey.ExtendPCR(tpmDev, conf.ClosePCR, sshCAWindowEvent))
+	}
+	return err
+}
+
+// sshCAWindowEvent is what the PCR of ASSH_CLOSE_PCR is extended with.
 const sshCAWindowEvent = "tpm2-kira: ssh ca closed"
 
 // efivars is where efivarfs is mounted.

@@ -80,7 +80,7 @@ func TestSlotDeleteTakesTheSSHCA(t *testing.T) {
 	writeTestSlot(t, tpm, nvslot.NVRAMSlotStart, key)
 	dir := t.TempDir()
 	caPath := filepath.Join(dir, "ca")
-	ca, err := hostkey.CreateCA(tpm, key.Public(), hostkey.CAOptions{Type: hostkey.P256, Bank: hostkey.SHA256, PCRs: []int{7, 15}, Window: 15, PolicyRef: []byte(sshCARef)})
+	ca, err := hostkey.CreateCA(tpm, key.Public(), hostkey.CAOptions{Type: hostkey.P256, Bank: hostkey.SHA256, PCRs: []int{7, 15}, PolicyRef: []byte(sshCARef)})
 	if err != nil {
 		t.Fatal(err)
 	}

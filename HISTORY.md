@@ -75,6 +75,21 @@ another address than the machine's (found on a VM, 2026-10-26: .100 for
 (TPM2_KIRA_NET_DHCP_ID=auto), read at the build; Debian's image uses
 busybox' udhcpc for it.
 
+### The SSH CA's window was PCR 15 alone
+
+Until 2026-10-29 the SSH CA (aSSH's format 3) closed by PCR 15: every slot
+read it, and `run` extended it after the host key was certified. The
+window was only as good as each approval: a slot without PCR 15 - in an
+edited CA file, approved by a routine slot approve - signed after the
+close. And `run` extended it only after a successful Issue: with no CA,
+an unreadable one, or an error, the window stayed open for the rest of
+the boot. Since then the CA (aSSH's format 4) has a window index its own
+policy reads, which `run` locks on every way out; a CA is created with it
+locked, and certifies from the next boot on. PCR 15 is still extended
+beside it (ASSH_CLOSE_PCR), and still read by both slots. ASSH_CA_WINDOW
+is gone. A CA of format 3 is not read: control creates the CA again, and
+clients need its new `@cert-authority` line.
+
 ### The SSH CA was a file in /etc and in the image, bound to PCR 0 and 7
 
 The SSH CA was `/etc/tpm2-kira/ssh_ca.json` (aSSH's format 2), and the

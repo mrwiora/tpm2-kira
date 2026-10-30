@@ -43,7 +43,6 @@ var notTpm2Kiras = map[string]string{
 	"ASSH_AUTHORITY_TPM":  "the CA's authority is tpm2-kira's signing key",
 	"ASSH_PIN_HANDLE":     "the CA's authority is tpm2-kira's signing key",
 	"ASSH_COUNTER_HANDLE": "the CA's authority is tpm2-kira's signing key",
-	"ASSH_CLOSE_PCR":      "the CA's window, ASSH_CA_WINDOW, is what closes it",
 	"ASSH_STATE":          "slot approve approves the values the next boot will have, not a recorded state",
 	"ASSH_USER":           "a login is a session of the code screen",
 	"ASSH_SOCKET":         "a login is a session of the code screen",
@@ -67,8 +66,8 @@ func loadSSHConf(path, controlPath string) (config.Config, error) {
 }
 
 // sshConfDefaults gives what c leaves out tpm2-kira's defaults: the CA in
-// its EFI variable (DefaultSSHCA) with tpm2-kira's policy ref and the
-// window, PCR 15; the keys in tpm2-kira's own authorized_keys; the
+// its EFI variable (DefaultSSHCA) with tpm2-kira's policy ref and PCR 15
+// extended when the CA's window closes; the keys in tpm2-kira's own authorized_keys; the
 // certificate named "tpm2-kira boot". The slots have none: control writes
 // them when it creates the CA.
 func sshConfDefaults(c config.Config, controlPath string) config.Config {
@@ -79,8 +78,8 @@ func sshConfDefaults(c config.Config, controlPath string) config.Config {
 	if unset("ASSH_CA_REF") {
 		c.PolicyRef = sshCARef
 	}
-	if unset("ASSH_CA_WINDOW") {
-		c.Window = sshCAWindow
+	if unset("ASSH_CLOSE_PCR") {
+		c.ClosePCR = sshCAWindow
 	}
 	if unset("ASSH_KEY_ID") {
 		c.KeyID = "tpm2-kira boot"

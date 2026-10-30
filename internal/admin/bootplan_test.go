@@ -53,9 +53,9 @@ func testSSHCA(t *testing.T, approved bool) sshCAState {
 			Y: tpm2.TPM2BECCParameter{Buffer: k.Y.FillBytes(make([]byte, 32))},
 		}),
 	}
-	ca := &hostkey.CA{Version: 3, Type: hostkey.P256, Bank: hostkey.SHA256,
+	ca := &hostkey.CA{Version: 4, Type: hostkey.P256, Bank: hostkey.SHA256,
 		Slots:  []hostkey.Slot{{Number: 0, PCRs: []int{0, 2, 7, 11, sshCAWindow}}, {Number: 1, PCRs: []int{7, sshCAWindow}}},
-		Window: sshCAWindow, Public: tpm2.Marshal(pub), Authority: authDER, PolicyRef: []byte(sshCARef)}
+		Public: tpm2.Marshal(pub), Authority: authDER, PolicyRef: []byte(sshCARef)}
 	values := map[int][]byte{0: bytes.Repeat([]byte{0xA1}, 32), 2: bytes.Repeat([]byte{0xB2}, 32), 7: bytes.Repeat([]byte{0xC3}, 32), 11: bytes.Repeat([]byte{0xD4}, 32), sshCAWindow: make([]byte, 32)}
 	st := sshCAState{CA: ca, Values: values}
 	if approved {

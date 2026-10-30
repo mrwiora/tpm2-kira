@@ -161,9 +161,9 @@ It may not carry what came before.
   steps at fixed points, `machine-id` before the network and `cap` when
   the initrd is left - and `run` starts everything else of tpm2-kira's at
   boot itself: the parts of the plan, the TPM wait,
-  and the processes that parse outside input - `ssh-child` and the phone's
-  `gate-child` - as nobody, confined in code by assh's `sandbox` on every
-  thread. A unit or script of tpm2-kira's does only what the distribution
+  and the processes that parse outside input - `ssh-child` (as a uid no
+  one else has, assh's `sandbox.ClaimUID`) and the phone's `gate-child`
+  (as nobody) - confined in code by assh's `sandbox` on every thread. A unit or script of tpm2-kira's does only what the distribution
   needs around `run`: start and stop it, hand the disk's key to
   cryptsetup, bring up the image's network, keep the log
   (docs/BOOT-INTEGRATION.md, "Arch and Debian"). Do not add a second

@@ -65,20 +65,22 @@ format, `ASSH_*`, read with its `config` package).
 
 `assh.conf` (what control writes; aSSH's README lists every key, and
 tpm2-kira refuses those it has no use for - the authority is its signing
-key, the window closes the CA, a login is a session of the code screen):
+key, a login is a session of the code screen):
 
 | Key | Values |
 |---|---|
 | `ASSH_CA` | `efi:KIRAasshCA` (default): the SSH CA's EFI variable (its public key in `/etc/tpm2-kira/ssh_ca.pub`), created in the TPM by control (§4) |
 | `ASSH_CA_TYPE` | `p256` (default) or `rsa2048`: what control asked when it created the CA |
 | `ASSH_CA_SLOT_<N>` | a slot's PCRs, `0,2,7,11,15`; control writes two, worked out for this machine (§4). An edit takes effect at the next approval or control, which make the CA's slots these and approve them |
-| `ASSH_CA_WINDOW` | `15` (default): the PCR every slot reads and run extends |
+| `ASSH_CLOSE_PCR` | `15` (default): the PCR every slot reads and run extends when it closes the CA's window |
+| `ASSH_WINDOW_HANDLE` | `0x01802915` (default): the CA's window index, which run locks |
+| `ASSH_CHILD_UIDS` | `0x7FFE0000-0x7FFEFFFF` (default): where `ssh-child`'s uid is chosen from, one no one else has |
 | `ASSH_CA_REF` | `tpm2-kira ssh ca` (default): what the signing key's approvals are bound to |
 | `ASSH_LISTEN` | `:22` (default): the address the server listens on |
 | `ASSH_AUTHORIZED_KEYS` | `/etc/tpm2-kira/authorized_keys` (default), tpm2-kira's own file - control copies root's keys there when asked, edit it for others; any key type OpenSSH has. A line with options in front of the key (`from=`, `command=`) is left out: the options are not honoured. Their sum is part of the SSH part's digest in the boot plan, so control sees a difference without unpacking the image |
 | `ASSH_KEY_ID`, `ASSH_PRINCIPALS`, `ASSH_HOSTKEY_TYPE` | the host certificate's name (`tpm2-kira boot`), its principals (`*`), the host key's type (`p256`) |
 
-The window, the type, the bank and the ref are the CA's for good: a
+The window index, the type, the bank and the ref are the CA's for good: a
 different value in assh.conf is an error that says to create the CA again
 (control offers it). So is a CA made for another signing key - after
 `setup` made a new one: control offers to create the CA again, as slot approve
@@ -293,7 +295,7 @@ and no secret either: the keys are in the TPM.
 
   | Slot | PCRs | Confidence |
   |---|---|---|
-  | 0 | 0 (firmware), 2 (option ROMs), 7 (Secure Boot state and keys), the image - 11 with a unified kernel image, 8 and 9 with GRUB -, 15 (the window) | higher: what `slot add` binds its slot 0 to |
+  | 0 | 0 (firmware), 2 (option ROMs), 7 (Secure Boot state and keys), the image - 11 with a unified kernel image, 8 and 9 with GRUB -, 15 | higher: what `slot add` binds its slot 0 to |
   | 1 | 7, 15 | lower: an image not approved yet, a new option ROM or a firmware update still certify |
 
   Which of 11 or 8 and 9 is decided from the event log when control
@@ -311,18 +313,23 @@ and no secret either: the keys are in the TPM.
   only copy: firmware that wipes its variables loses the CA, as a TPM
   clear does - control then creates a new one, and the clients need its
   new line.
-- **The window is PCR 15.** Both slots read it, and nothing in the boot
-  image measures it before the code screen, so the next boot meets it
-  empty. `run` extends it (`tpm2-kira: ssh ca closed`) right after the
-  CA certified this boot's key - also when the key is temporary - so
-  the CA certifies nothing more until the next reboot: not in the running
-  system, on Arch or Debian, with or without `systemd-pcrosseparator`.
+- **The window is the CA's own.** The CA's policy reads its window index
+  (aSSH's README, "The window"): `run` locks it right after the CA
+  certified this boot's key - also when the key is temporary, and on every
+  other way out, a failure included - so the CA certifies nothing more
+  until the next reboot, whatever an approval says: not in the running
+  system, on Arch or Debian, with or without `systemd-pcrosseparator`. A
+  CA is created with its window locked: control's CA certifies from the
+  next boot on. Beside it `run` extends PCR 15 (`ASSH_CLOSE_PCR`,
+  `tpm2-kira: ssh ca closed`); both slots read PCR 15, and nothing in the
+  boot image measures it before the code screen, so the next boot meets it
+  empty.
 - **The approved values** are those of tpm2-kira's measure point: the code
   screen holds the boot ahead of `systemd-pcrosseparator`, which extends
   PCR 0-7 in the running system. They are replayed from the firmware
   event log (`measurepoint.go`), PCR 11 computed from the unified kernel
   image (`ukipredict.go`), PCR 8 and 9 predicted from grub.cfg and the
-  files GRUB loads (`grub_predict.go`) - as `slot add` does -; the window is
+  files GRUB loads (`grub_predict.go`) - as `slot add` does -; PCR 15
   empty. **`slot approve` approves them** in both slots, with the signing key,
   whenever a slot has no approval of the next boot: the initramfs hooks
   run it after every image rebuild, so a kernel update needs nothing by
@@ -371,7 +378,7 @@ up.
 ```
 tpm2-kira.service (holds READY)
   ├── the TPM makes this boot's host key, the SSH CA certifies it (slot 0 or 1),
-  │   PCR 15 is extended (the window closes), opens :PORT, starts 'ssh-child'
+  │   the window closes (its index locked, PCR 15 extended), opens :PORT, starts 'ssh-child'
   ├── console: "ssh root@<address>", the SSH CA's fingerprint, sessions connected,
   │            "Enter here: continue at this console"
   └── sessions: the code screen; Enter confirms, q leaves
@@ -482,7 +489,8 @@ tpm2-kira-boot run --ssh [--ssh-hold S] [--ssh-conf PATH]
 | `internal/admin/control_remote.go` | control's step |
 | `internal/admin/bootplan.go` | the boot plan: whether the network and the SSH server go in, and their files for both formats |
 | `internal/admin/remote_initramfs.go` | the files' contents: `remote.conf`, the drop-in, the image's assh.conf, the login keys, udhcpc's script |
-| `internal/admin/remote_hostkey.go` | the SSH CA in its EFI variable: its two slots and window, approved at the measure point; this boot's host key, certified or temporary; the window closed |
+| `internal/admin/remote_hostkey.go` | the SSH CA in its EFI variable: its two slots, approved at the measure point |
+| `internal/sshscreen/hostkey.go` | this boot's host key, certified or temporary; the window closed on every way out |
 | `internal/admin/reseal.go` | `slot approve` approves the SSH CA after the slots |
 | `internal/sshscreen/server.go` | the server in `run`: sessions, the code screen, prompts, the console hint, release and stop |
 | `assh/server` | `ssh-child`: the SSH protocol, the sandbox; `run`'s side of it: starting it without privileges, signing, taking sessions |
@@ -504,9 +512,10 @@ tpm2-kira-boot run --ssh [--ssh-hold S] [--ssh-conf PATH]
   alone (`internal/sshscreen/server_test.go`); cryptsetup's question through
   ask-password and through askpass' FIFO (`internal/sshscreen/agent_test.go`); the
   hooks add network and SSH on Arch and Debian (`hook_test.go`).
-- **swtpm** (`-tags integration`): the CA approved in both slots at the
-  code screen, certifying there through slot 0, nothing more once the
-  window closed, through slot 1 after a reboot with a firmware update and
+- **swtpm** (`-tags integration`): the CA approved in both slots,
+  certifying nothing in the boot of its creation, at the next boot's code
+  screen through slot 0, nothing more once the window closed, nothing
+  after a failure at the code screen (`TestHostKeyWindowClosedOnError`), through slot 1 after a reboot with a firmware update and
   a new option ROM, approved again by `slot approve` and refused with another
   key (`TestSSHCAApprovedForTheCodeScreen`; a file in place of the EFI
   variable, which aSSH tests); the whole

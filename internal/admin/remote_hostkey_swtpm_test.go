@@ -86,18 +86,32 @@ func TestSSHCAApprovedForTheCodeScreen(t *testing.T) {
 	if err := writeSSHConf(controlPath, conf); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(sshConfPath(controlPath)); !strings.Contains(string(b), "ASSH_CA_SLOT_0=0,2,7,15\nASSH_CA_SLOT_1=7,15\nASSH_CA_WINDOW=15\n") {
+	if b, _ := os.ReadFile(sshConfPath(controlPath)); !strings.Contains(string(b), "ASSH_CA_SLOT_0=0,2,7,15\nASSH_CA_SLOT_1=7,15\n") {
 		t.Fatalf("the slots in assh.conf:\n%s", b)
 	}
 	if pub, err := os.ReadFile(path + ".pub"); err != nil || !strings.HasPrefix(string(pub), "ecdsa-sha2-nistp256 ") {
 		t.Fatalf("the CA's public key: %q %v", pub, err)
 	}
-	if ca.Window != 15 || len(ca.Slots) != 2 || !slices.Equal(ca.Slots[0].PCRs, []int{0, 2, 7, 15}) || !slices.Equal(ca.Slots[1].PCRs, []int{7, 15}) {
+	if ca.WindowHandle() != hostkey.DefaultWindowHandle || len(ca.Slots) != 2 || !slices.Equal(ca.Slots[0].PCRs, []int{0, 2, 7, 15}) || !slices.Equal(ca.Slots[1].PCRs, []int{7, 15}) {
 		t.Fatalf("the CA: %s", ca.Describe())
 	}
 	if st := readSSHCA(conf, p.sock); len(st.Approvals) != 2 || st.Unapproved() != nil || st.CA.Fingerprint() != ca.Fingerprint() {
 		t.Fatalf("not approved for the next boot: %+v", st)
 	}
+	// Not in the boot that made it: a new CA's window is closed.
+	if hk, err := sshscreen.PrepareHostKey(p.sock, conf); err != nil || hk.CA != "" || !strings.Contains(hk.Temporary, "window is closed") {
+		t.Fatalf("in the boot of the creation: %+v %v", hk, err)
+	}
+
+	// The next boot, as the event log said.
+	p.stop(tpmDev)
+	if p, err = startSWTPMProc(p.dir); err != nil {
+		t.Fatal(err)
+	}
+	if tpmDev, err = transport.OpenTPM(p.sock); err != nil {
+		t.Fatal(err)
+	}
+	boot(0xA1, 0xB2)
 	hk, err := sshscreen.PrepareHostKey(p.sock, conf)
 	if err != nil || hk.CA != ca.Fingerprint() || hk.Slot != 0 || hk.Temporary != "" {
 		t.Fatalf("at the code screen: %+v %v", hk, err)
@@ -105,7 +119,7 @@ func TestSSHCAApprovedForTheCodeScreen(t *testing.T) {
 
 	// The window is closed: the CA certifies nothing more in this boot,
 	// and a temporary key is served, made in the TPM.
-	if hk, err := sshscreen.PrepareHostKey(p.sock, conf); err != nil || hk.CA != "" || !strings.Contains(hk.Temporary, "slot 0: PCR 15 not as approved; slot 1: PCR 15 not as approved") {
+	if hk, err := sshscreen.PrepareHostKey(p.sock, conf); err != nil || hk.CA != "" || !strings.Contains(hk.Temporary, "the CA's window is closed until the next boot") {
 		t.Fatalf("after the window closed: %+v %v", hk, err)
 	}
 	none := conf

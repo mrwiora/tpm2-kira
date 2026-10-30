@@ -37,6 +37,7 @@ import (
 	"crypto"
 	"errors"
 	"fmt"
+	"github.com/google/go-tpm/tpm2"
 	"os"
 	"slices"
 
@@ -62,19 +63,19 @@ const (
 // approved for its values.
 const sshCAUnapproved = "the SSH CA has no approval of the PCRs as the next boot meets them: approved when you quit control, and by slot approve after every image rebuild"
 
-// sshCAWindow is the CA's window by default (ASSH_CA_WINDOW): every slot
-// reads it, and run extends it once the host key is made. Nothing measures
-// it in the boot image before the code screen, so the next boot meets it
-// empty.
+// sshCAWindow is the PCR the code screen extends when it closes the CA's
+// window (ASSH_CLOSE_PCR), beside the CA's own window index: every slot
+// reads it. Nothing measures it in the boot image before the code screen,
+// so the next boot meets it empty.
 const sshCAWindow = 15
 
 // sshCASlots are the slots worked out for this machine, each with the
-// window when there is one. Slot 0, the higher confidence, is decided from
+// PCR extended at the close (closePCR, -1 none). Slot 0, the higher confidence, is decided from
 // this boot's event log as 'slot add' decides its slot 0: the firmware, the
 // option ROMs, the Secure Boot state, and the image's PCRs (11 with a
 // unified kernel image, 8 and 9 with GRUB). Slot 1, the lower, is the
 // Secure Boot state alone.
-func sshCASlots(algo measure.PCRHashAlgo, window int) (map[int][]int, error) {
+func sshCASlots(algo measure.PCRHashAlgo, closePCR int) (map[int][]int, error) {
 	sel, _ := DefaultPCRSelection("", algo)
 	specs, err := measure.ParsePCRSpecs(sel)
 	if err != nil {
@@ -85,8 +86,8 @@ func sshCASlots(algo measure.PCRHashAlgo, window int) (map[int][]int, error) {
 		slot0 = append(slot0, s.Index)
 	}
 	slot1 := []int{7}
-	if window != 0 {
-		slot0, slot1 = append(slot0, window), append(slot1, window)
+	if closePCR >= 0 {
+		slot0, slot1 = append(slot0, closePCR), append(slot1, closePCR)
 	}
 	return map[int][]int{0: slot0, 1: slot1}, nil
 }
@@ -102,12 +103,14 @@ func sshCABank(tpmDev transport.TPM) hostkey.Bank {
 
 // sshCAValues are the CA's PCRs as they will be at the next boot's code
 // screen: replayed from the event log (PCR 8 and 9 with GRUB's prediction),
-// PCR 11 computed from the unified kernel image, the window empty.
-func sshCAValues(tpmDev transport.TPM, ca *hostkey.CA) (map[int][]byte, error) {
+// PCR 11 computed from the unified kernel image, the PCR extended at the
+// close (closePCR) empty.
+func sshCAValues(tpmDev transport.TPM, ca *hostkey.CA, closePCR int) (map[int][]byte, error) {
 	var specs []measure.PCRSpec
+	reads := slices.Contains(ca.PCRs(), closePCR)
 	for _, idx := range ca.PCRs() {
 		switch idx {
-		case ca.Window:
+		case closePCR:
 		case measure.TPM2PCRKernelBoot:
 			uki := findUKI()
 			if uki == "" {
@@ -122,8 +125,8 @@ func sshCAValues(tpmDev transport.TPM, ca *hostkey.CA) (map[int][]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the values of %s at boot cannot be told: %w", hostkey.PCRList(ca.PCRs()), err)
 	}
-	if ca.Window != 0 {
-		r.Values[ca.Window] = make([]byte, measure.NewHashFor(measure.PCRHashAlgo(ca.Bank)).Size())
+	if reads {
+		r.Values[closePCR] = make([]byte, measure.NewHashFor(measure.PCRHashAlgo(ca.Bank)).Size())
 	}
 	return r.Values, nil
 }
@@ -140,8 +143,8 @@ func approveSSHCASlots(ca *hostkey.CA, signer crypto.Signer, values map[int][]by
 
 // createSSHCA makes the CA in the TPM as conf says - its key, the bank
 // (this TPM's SHA-256 unless conf sets one), the slots (worked out for this
-// machine unless conf has some; they go into conf), the window and the
-// policy ref - has signer approve the next boot's values, and writes it
+// machine unless conf has some; they go into conf), the window index and
+// the policy ref - has signer approve the next boot's values, and writes it
 // with its public key.
 func createSSHCA(conf *config.Config, tpmPath string, signer crypto.Signer) (*hostkey.CA, error) {
 	tpmDev, err := tpmdev.Open(tpmPath)
@@ -153,7 +156,7 @@ func createSSHCA(conf *config.Config, tpmPath string, signer crypto.Signer) (*ho
 		conf.Bank = sshCABank(tpmDev)
 	}
 	if len(conf.Slots) == 0 {
-		if conf.Slots, err = sshCASlots(measure.PCRHashAlgo(conf.Bank), conf.Window); err != nil {
+		if conf.Slots, err = sshCASlots(measure.PCRHashAlgo(conf.Bank), conf.ClosePCR); err != nil {
 			return nil, err
 		}
 	}
@@ -161,14 +164,14 @@ func createSSHCA(conf *config.Config, tpmPath string, signer crypto.Signer) (*ho
 	if !ok {
 		return nil, errors.New("assh.conf names no slot 0 (ASSH_CA_SLOT_0): the CA is created with it")
 	}
-	ca, err := hostkey.CreateCA(tpmDev, signer.Public(), hostkey.CAOptions{Type: conf.CAType, Bank: conf.Bank, PCRs: slot0, Window: conf.Window, PolicyRef: []byte(conf.PolicyRef)})
+	ca, err := hostkey.CreateCA(tpmDev, signer.Public(), hostkey.CAOptions{Type: conf.CAType, Bank: conf.Bank, PCRs: slot0, WindowHandle: tpm2.TPMHandle(conf.WindowHdl), PolicyRef: []byte(conf.PolicyRef)})
 	if err != nil {
 		return nil, err
 	}
 	if _, err := conf.Match(ca); err != nil {
 		return nil, err
 	}
-	values, err := sshCAValues(tpmDev, ca)
+	values, err := sshCAValues(tpmDev, ca, conf.ClosePCR)
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +245,7 @@ func removeSSHCA(tpmPath, path string) ([]string, error) {
 		return nil, err
 	}
 	defer tpmDev.Close()
-	removed, err := hostkey.RemoveCA(tpmDev, path, nil)
+	removed, err := hostkey.RemoveCA(tpmDev, path, hostkey.Handles{})
 	if err != nil {
 		return removed, err
 	}
@@ -319,7 +322,7 @@ func readSSHCA(conf config.Config, tpmPath string) sshCAState {
 		return sshCAState{CA: ca, Err: err.Error()}
 	}
 	defer tpmDev.Close()
-	values, err := sshCAValues(tpmDev, ca)
+	values, err := sshCAValues(tpmDev, ca, conf.ClosePCR)
 	if err != nil {
 		return sshCAState{CA: ca, Err: err.Error()}
 	}
