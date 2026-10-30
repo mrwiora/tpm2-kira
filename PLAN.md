@@ -547,13 +547,22 @@ the boot is one the signing key approved - against a phished password.
    CODE, PHONE, SEALING, VAULT, DISK-KEY (the hold without a code
    screen), ARCHITECTURE, README. The format test checks the record's
    variable, GUID and size limit.
-8. [ ] Tests: unit and swtpm (`make test-all`), the vault's and Marify's
+8. [x] Tests: unit and swtpm (`make test-all`), the vault's and Marify's
    (the core is not changed unless step 1 touches `vaultproto`'s pin),
    vmtest: a slot without TOTP, one with TOTP only, the vault with a pepper
    beside a TPM salt on the VMs' RSA EK (refused today), a record removed
    by hand (the fallback), a slot deleted (the variable gone).
 
-### Step 8b: a serial-console test, local (confirmed 2026-10-30: qemu directly, the OS's sshd for the setup, `.local/vms`; after step 7)
+### Step 8b: a serial-console test, local (done 2026-10-30)
+
+Result: `tools/vmtest.py` on both local machines (`tools/localvm.py`,
+`.local/vms/vmtest-local.conf`): 129 checks each, all passed, at
+04c30a8; `tools/serialtest.py`: totp, hashpwd2, tpmsalt (with the
+fallback), lostrecord - all passed on Arch and Debian. Found on the way:
+status's remedy for a slot of which only a keyslot is left (fixed),
+reveal's message (fixed); on Debian a code screen without the route
+shares the console with cryptsetup's prompt (control's route step is
+what a setup does; serialtest routes).
 
 The user exported the two test machines to `/home/pix/transfer-ai`
 (qcow2 and libvirt XML; no OVMF variables, no swtpm state) to test the
