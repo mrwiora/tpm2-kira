@@ -17,17 +17,24 @@ VERSION := $(shell dpkg-parsechangelog -SVersion)
 # calls sudo. Every dh_auto_* step is therefore stated explicitly.
 override_dh_auto_configure:
 
+# The package builds its own sources, aSSH as pinned: never a go.work around them.
+export GOWORK := off
+
 override_dh_auto_build:
 	go build -ldflags "-s -w -X main.Version=$(VERSION)" -o tpm2-kira .
-	go version -m tpm2-kira | grep -q 'CGO_ENABLED=0' || { echo "tpm2-kira was built with cgo" >&2; exit 1; }
+	go build -ldflags "-s -w -X main.Version=$(VERSION)" -o tpm2-kira-boot ./cmd/tpm2-kira-boot
+	for b in tpm2-kira tpm2-kira-boot; do \
+		go version -m $$b | grep -q 'CGO_ENABLED=0' || { echo "$$b was built with cgo" >&2; exit 1; }; \
+	done
 
 override_dh_auto_test:
-	go test -tags=unit ./cmd/...
+	go test -tags=unit ./internal/...
+	cd core && go test ./...
 
 override_dh_auto_install:
 
 override_dh_auto_clean:
-	rm -rf debian/.gocache tpm2-kira
+	rm -rf debian/.gocache tpm2-kira tpm2-kira-boot
 
 # Static Go binary, already stripped by -ldflags: dwz cannot process it and
 # there are no shared libraries to derive dependencies from.

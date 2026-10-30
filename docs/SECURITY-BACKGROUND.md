@@ -49,12 +49,12 @@ TPM after enrolment.
 ### 3.1 TPM NVRAM (the "blob")
 
 Each slot's NV index (default `0x01803010`; slot *n* is `0x01803010` + *n*)
-stores one serialised `SealedBlob` (format version 14, §10). It holds the
+stores one serialised `SealedBlob` (format version 15, §10). It holds the
 slot's TOTP key or its phones, never both (*TOTP key or phones*, below).
-Remote attestation is an optional part of the same blob,
+Phone attestation is an optional part of the same blob,
 and within that part the way a verifier reaches the machine is a typed
-*method*: today phones over Bluetooth LE; a verification server over the
-network would be another method next to it. The blob contains:
+*method*: phones over Bluetooth LE, and tpm2-kira-vault over HTTPS
+(VAULT.md). The blob contains:
 
 | Field               | Content                                                         | Sensitive? |
 |---------------------|-----------------------------------------------------------------|------------|
@@ -68,10 +68,10 @@ network would be another method next to it. The blob contains:
 | `SigningPublic`     | TPMT_PUBLIC of the signing key                                  | No²        |
 | `ApprovalSignature` | Signing key's signature over `H(approvedPolicy ‖ PolicyRef)`    | No         |
 | `MeasurePointApplied` | Whether the eventlog PCRs' values include the measure-point extends³ | No |
-| `Attestation`       | The optional remote-attestation part (fields below)             | Partly⁵    |
+| `Attestation`       | The optional phone-attestation part (fields below)             | Partly⁵    |
 | `BlobSignature`     | Signature over everything above                                 | No⁴        |
 
-The attestation part (`Attestation`), created by `attest enrol`. It describes
+The attestation part (`Attestation`), created by `phone enrol`. It describes
 the machine as an attester, whatever the method:
 
 | Field           | Content                                                              | Sensitive? |
@@ -85,6 +85,7 @@ the machine as an attester, whatever the method:
 | `BootKeyPrivate`| TPM2B_PRIVATE of the boot key (TPM-wrapped)                          | **Yes**¹   |
 | `ReleaseKeyPublic` | TPMT_PUBLIC of the release key (§3.7)                             | No         |
 | `ReleaseKeyPrivate`| TPM2B_PRIVATE of the release key (TPM-wrapped)                    | **Yes**¹   |
+| `TPMSalt`       | The salt part of recipe 0x1200, wrapped (TPM2_MakeCredential) for this TPM's EK and the release key: it opens only through the release key's policy; empty without | No⁶ |
 | `PCRAlg`, `PCRSelection` | The PCR bank and registers that are quoted                  | No         |
 | `Count`         | Value of the slot's record counter when the part last changed (§3.3) | No         |
 | methods         | Who may ask for a quote, and over what: typed blocks, below          | Partly⁵    |
@@ -97,6 +98,20 @@ Method 1, phones over Bluetooth LE (`Phone`):
 | `AdvKey`        | Key that lets an enrolled phone recognise the machine's advertising  | **Yes**⁵   |
 | `Verifiers`     | Up to 8 phones: id, anchor public key (signs the phone's verdicts), channel public key, policy id; no name | No |
 
+Method 2, tpm2-kira-vault (`Vault`, VAULT.md), created by `vault enrol`:
+
+| Field           | Content                                                              | Sensitive? |
+|-----------------|----------------------------------------------------------------------|------------|
+| `URL`           | The vault, `https://host:port`                                       | No         |
+| `Pin`           | SHA-256 of the vault's TLS root's key (SubjectPublicKeyInfo): a key of the vault's verified chain must be it - the chain itself is verified against `/etc/tpm2-kira/vault-ca.pem` | No |
+| `Label`         | The vault keyslot's label in the key's derivation                    | No         |
+| `Local`         | The local part L, the unattended recipes' password, wrapped (TPM2_MakeCredential) for this TPM's EK and the slot's release key: it opens only through the release key's policy; empty with a typed password | No⁶ |
+| `Pepper`        | The salt is made with an operator's pepper                            | No⁶ |
+| `PepperCheck`   | An unattended recipe with a pepper: an HMAC of the key (behind Argon2id), to tell a mistyped pepper from the right one at boot; empty otherwise | No⁶ |
+
+⁶ The wrapped part opens only on this TPM, in a boot state the signing key
+approved, before `cap`; and it is half of the key, the vault keeps the other.
+
 **TOTP key or phones.** A slot is checked one way at a time. Without a phone
 its TOTP key shows a code at boot, compared with the authenticator. The first
 phone enrolled for the slot retires the key: the phone's check (the quote,
@@ -106,7 +121,7 @@ would only be one more thing to keep, lose or leak. While a phone is enrolled
 the boot screen shows the slot as "mobile attestation locked - please
 connect" until the phone is in, then the phone's code, then the verdict.
 When the last phone leaves, the slot gets a new TOTP key at once, made under
-the slot's policy, so the approval in force covers it without a reseal; its
+the slot's policy, so the approval in force covers it without an approval; its
 QR code is shown then. The slot's policy (`SigningPublic` and `PolicyRef`)
 stays through all of it: the boot key and the release key are made under
 it, not under the TOTP key, and keep working. The fallback, slot 1, keeps
@@ -121,15 +136,15 @@ check itself says that this first state is clean; a boot chain that was
 tampered with before the enrolment would be pinned as good. Only a check
 made before the phone existed can say it, so the order is fixed:
 
-1. The slot is sealed with a TOTP key (`control`'s part 1, or `seal`).
+1. The slot is sealed with a TOTP key (`control`, "Signing key and TOTP codes", or `slot add`).
 2. The machine boots through tpm2-kira's code screen. The code exists only
    while the PCRs are the ones the signing key approved, and the person
    compares it with the authenticator: this boot is verified.
-3. In that boot the phone is enrolled (part 2, `attest enrol`), and with
+3. In that boot the phone is enrolled (`control`, "Attestation by phone", or `phone enrol`), and with
    that the slot's TOTP key is retired.
 
-`attest enrol` enforces what the machine can know of this (`requireVerifiedBoot`
-in `cmd/attest.go`): the boot passed the code screen (`cap` read-locked
+`phone enrol` enforces what the machine can know of this (`requireVerifiedBoot`
+in `internal/admin/attest.go`): the boot passed the code screen (`cap` read-locked
 the generation indices, which happens only there), and, for a slot with a
 TOTP key, the slot's PCRs at the code screen - recomputed from this boot's
 event log, before the OS separator, with `enter-initrd` on PCR 11 - are
@@ -139,7 +154,7 @@ screen. What the machine cannot know, that someone compared the code, it
 asks before the phone is involved. A further phone for a slot that
 already has phones needs a boot an enrolled phone attested ("mobile
 attestation passed"); the machine keeps no record of that verdict, so it
-asks. The rule holds for `control` and for `attest enrol` by hand alike.
+asks. The rule holds for `control` and for `phone enrol` by hand alike.
 
 **What the machine keeps of a phone, and why no more.** The blob is readable
 by anyone who can talk to the TPM (§9), so it holds only what the machine
@@ -148,8 +163,8 @@ needs to find and trust its phone:
 - the phone's channel key, by which the machine recognises it in the
   encrypted handshake, and the id it signs its receipts with;
 - the anchor key, which verifies the phone's verdicts;
-- nothing that names the phone. The phone sends no name (it used to send
-  its model), the machine numbers its phones ("phone 1", "phone 2") and
+- nothing that names the phone. The phone sends no name, not even its
+  model; the machine numbers its phones ("phone 1", "phone 2") and
   says at boot only that "your phone" attested. The machine finds the phone
   by itself, in the handshake, so nobody needs to be told which phone to
   pick up; the person knows their phone.
@@ -174,18 +189,18 @@ tpm2-kira: there is no `TPM2_Unseal`. The same holds for `AKPrivate` and
 files are not reachable in the initrd.
 
 ³ Which extends were applied follows from the eventlog PCRs: the seal folds
-the same words into each of them (§5.8), so the blob keeps one flag and `info`
+the same words into each of them (§5.8), so the blob keeps one flag and `slot info`
 spells the extends out from the selection. The blob holds nothing that only
 describes how it was made (the tool's version, the event log's path, the time
 of the calculation, the key files' paths): what is not needed to compute a
-code, to reseal or to attest is not stored, since every byte counts against
+code, to approve or to attest is not stored, since every byte counts against
 the TPM's per-index limit (§10, *Size*). The signing key's files are found at
 tpm2-kira's default paths or the ones given on the command line, never from
 the blob (§5.5).
 
 ⁴ The blob carries a detached signature over `[version ‖ payloadLen ‖ payload]`,
 made with the same signing key. Unsigned blobs are rejected outright. It
-protects the *metadata* (PCR selection and sources, UKI paths) that `reseal`
+protects the *metadata* (PCR selection and sources, UKI paths) that `slot approve`
 acts on; the TPM enforces the rest by itself. It also covers the attestation
 part: which verifiers are enrolled cannot be changed without the signing
 key, and the Bluetooth gate verifies the signature in the initrd with a copy
@@ -218,15 +233,15 @@ A slot with an attestation part has a third NV index, at `0x01803820` + *n*: an
 It is a revision number for the attestation part, kept by the TPM. It does
 **not** count attestations: nothing is written to the TPM's NV storage when
 the machine boots or is attested. It moves only when the verifiers of the
-slot change (`attest enrol`, `attest unenrol`), typically a handful of times
+slot change (`phone enrol`, `phone unenrol`), typically a handful of times
 in a machine's life.
 
 It answers a question a signature cannot: is this blob the *current* one? An
 older blob, still naming a phone that was removed since, verifies just as well.
 So the attestation part carries a `Count`, and the gate accepts the blob only
-while `Count` equals the counter. `attest enrol` and `attest unenrol` write the
-blob with the counter's next value and then increment the counter; `reseal`
-and `seal` carry the part over with its `Count` unchanged.
+while `Count` equals the counter. `phone enrol` and `phone unenrol` write the
+blob with the counter's next value and then increment the counter; `slot approve`
+and `slot add` carry the part over with its `Count` unchanged.
 
 A TPM counter can only be incremented. Deleting the index does not help
 either: the TPM starts a new counter above the highest value any counter in
@@ -258,8 +273,8 @@ for signing and key agreement, created inside the TPM (`sensitiveDataOrigin`,
 the slot's TOTP key**: PolicyAuthorize by the signing key with the slot's policy
 reference. So it is usable exactly when a TOTP code can be computed - in a
 boot state the signing key approved, at the slot's current generation, before
-`cap` - and one approval covers both keys; `reseal` needs to know nothing
-about it. `seal` on an existing slot keeps the slot's policy reference when it
+`cap` - and one approval covers both keys; `slot approve` needs to know nothing
+about it. `slot add` on an existing slot keeps the slot's policy reference when it
 carries the attestation part over, so that the boot key stays under the new
 TOTP key's approvals.
 
@@ -346,7 +361,7 @@ goes the same way:
 4. if the session's digest equals the key's policy digest, the TPM runs
    `TPM2_HMAC` (the code), or `TPM2_Sign` and `TPM2_ECDH_ZGen` (the boot key).
 
-The same session satisfies either key, which is why one reseal covers both,
+The same session satisfies either key, which is why one approve covers both,
 and why a key with a different policy is a different key with a different
 Name - the check the phone makes at enrolment (§3.4).
 
@@ -367,8 +382,8 @@ What the TPM itself keeps, and never gives out:
 PIV slot. Any RSA-2048 or ECC P-256/P-384 key works instead, including the
 sbctl Secure Boot DB key, via `--pubkey` / `--privkey`.
 
-`setup` writes both key files with mode `0400`. `seal` and `reseal` read a
-key file only through `ReadSigningKeyFile` (`cmd/keyfile.go`), which refuses:
+`setup` writes both key files with mode `0400`. `slot add` and `slot approve` read a
+key file only through `ReadSigningKeyFile` (`internal/signing/keyfile.go`), which refuses:
 
 - a symlink (the file is opened with `O_NOFOLLOW`),
 - anything but a regular file with exactly mode `0400`,
@@ -435,12 +450,12 @@ makes first (PCR values, generation) only produce readable errors.
   who satisfies the policy can make the TPM compute codes for chosen times,
   so a matching state still matters — but stolen access yields a list of
   codes for the times it was used, not the key forever.
-- **Reseal does not need the key.** New PCR values are approved by signing;
+- **Slot approve does not need the key.** New PCR values are approved by signing;
   the object is unchanged, so no re-enrolment.
-- **Revocation.** Each reseal raises `G`. Older approvals require an older `G`
+- **Revocation.** Each approve raises `G`. Older approvals require an older `G`
   and stop working, so an attacker who kept an old blob cannot roll the
   machine back to an old kernel or initrd.
-- **The cap.** `tpm2-kira cap`, run when the initrd is left, read-locks the
+- **The cap.** `tpm2-kira-boot cap`, run when the initrd is left, read-locks the
   generation index. `PolicyNV` fails until the next reboot, so nothing in the
   running OS can compute a code, root included. Deleting and recreating the
   index does not help: the policy binds the index's Name, and a recreated
@@ -507,7 +522,7 @@ passphrase and the phone's factor. The request waits for as long as
 tpm2-kira takes, which is what makes a hold real without a unit that
 refuses to start; and a wrong or missing answer sends systemd-cryptsetup
 to its own prompt for the remaining tries, so the passphrase can always
-be entered by hand - there is no enforced mode (UNLOCK-DISK.md §4). The
+be entered by hand - there is no enforced mode (DISK-KEY.md, "When the answer is wrong"). The
 provider trusts nothing about the requester beyond its uid and its peer
 name, and gives nothing to a request for a token's saved key: it holds no
 such keys.
@@ -550,7 +565,7 @@ What is systemd's, used as installed by sd-encrypt: `systemd-cryptsetup`,
 its generator, `cryptsetup.target` and `cryptsetup-pre.target`, the
 generated `systemd-cryptsetup@*.service` units, the dm-crypt modules and
 udev rules, the crypttab in the image. What is tpm2-kira's: the socket
-unit and the provider (`cmd/unlock.go`), whose key source is one function
+unit and the provider (`internal/diskkey/unlock.go`), whose key source is one function
 of the volume name - factor release replaces that function, not the
 transfer. The configuration is the administrator's
 `rd.luks.key=` on the kernel command line.
@@ -582,9 +597,9 @@ Backspace and on cancel, and the process is not dumpable
 neither side can do: the kernel's socket buffer holds the bytes between
 write and read (freed, not zeroed), and a hibernation image would hold
 all of RAM, locked or not - neither exists in the initrd, which has no
-swap. The whole of it, with what sd-encrypt is: `UNLOCK-DISK.md`.
+swap. The whole of it, with what sd-encrypt is: `DISK-KEY.md`.
 
-### 5.3 Approve and write (seal and reseal)
+### 5.3 Approve and write (slot add and slot approve)
 
 ```
 1.  Compute the PCR values for the next boot (§5.6–5.8)
@@ -595,10 +610,10 @@ swap. The whole of it, with what sd-encrypt is: `UNLOCK-DISK.md`.
 5.  Sign the approval; update the blob; sign the blob; write it (PolicySigned)
 ```
 
-If step 5 fails, the slot shows no code until a reseal succeeds; the blob is
+If step 5 fails, the slot shows no code until an approval succeeds; the blob is
 stashed as described in §9.
 
-### 5.4 Reseal
+### 5.4 Approve
 
 ```
 1.  Read the blob; load the signing key (--privkey or the default key, never
@@ -608,12 +623,12 @@ stashed as described in §9.
 4.  Approve and write (§5.3) with the preserved or given PCR selection
 ```
 
-Reseal never unseals, never uses the key object, and does not need the PCRs
+Approve never unseals, never uses the key object, and does not need the PCRs
 to match. It works in the running OS while the generation index is
 read-locked: the index's Name for `PolicyNV` is computed with the
 `READLOCKED` bit cleared, which is what it is in the initrd.
 
-### 5.5 Key resolution in reseal
+### 5.5 Key resolution in slot approve
 
 ```
 Private key = --privkey flag  →  /etc/tpm2-kira/keys/seal.key
@@ -623,17 +638,17 @@ Public key  = --pubkey flag (must match)  →  derived from the private key
 The blob names no key file. The blob is what the key is about to verify, and
 anyone with TPM access can replace it (§9): a planted blob signed by its
 author's key and naming that key would otherwise verify against itself, and
-reseal would report success instead of tampering. So the key comes from the
+approve would report success instead of tampering. So the key comes from the
 command line or tpm2-kira's default location, and a slot sealed with a
-non-default key always needs `--privkey` on reseal.
+non-default key always needs `--privkey` on approve.
 
-`resolveResealKeys` in `cmd/reseal.go` implements this.
+`resolveResealKeys` in `internal/admin/reseal.go` implements this.
 
 ### 5.6 The measure point
 
 A PCR policy is checked against **live registers at the instant a code is computed**.
 For tpm2-kira that instant is one specific point in the boot: the moment
-`tpm2-kira run` reads the TPM in the initrd, before the LUKS passphrase prompt.
+`tpm2-kira-boot run` reads the TPM in the initrd, before the LUKS passphrase prompt.
 Everything sealing does must answer one question:
 
 > What will PCR *i* be at the measure point of the *next* boot?
@@ -738,11 +753,11 @@ policy: `leave-initrd`, `sysinit`, `ready` (PCR 11), `machine-id:<id>` (PCR 15),
 > stub's digest conventions are known (a file event is the file's SHA-256, a
 > `grub_cmd` the command text's, the load options the UTF-16 of
 > `BOOT_IMAGE=` plus the command line), so the entries of what changed on disk
-> are replaced and the log replayed (`cmd/grub_predict.go`, with the
+> are replaced and the log replayed (`internal/measure/grub_predict.go`, with the
 > `menuentry`/`submenu` commands rebuilt from the new grub.cfg, since GRUB
 > measures them with their body). What it cannot foresee - a menu choice, an
 > edited command line, a grubenv the boot rewrites - leaves a boot without a
-> code and a reseal after it.
+> code and an approval after it.
 
 **UKI section measurement.** systemd-stub measures each present section twice,
 in its own fixed order (`.linux`, `.osrel`, `.cmdline`, `.initrd`, `.ucode`,
@@ -764,9 +779,9 @@ which is the event payload — but the measured digest is over the ASCII form.
 > `Section.VirtualSize`. Measuring the padded length yields a PCR 11 value the
 > machine will never present. See `docs/UKI-PCR11-PADDING.issue`.
 
-`tpm2-kira seal` guards this by recomputing PCR 11 from the image and comparing
+`tpm2-kira slot add` guards this by recomputing PCR 11 from the image and comparing
 it against the current boot's event log, refusing to seal on mismatch
-(`--verify-uki=false` overrides). `reseal` skips the check because it runs
+(`--verify-uki=false` overrides). `slot approve` skips the check because it runs
 when the image on disk is legitimately not the one that booted.
 
 **Useful constants for diagnosis.** PCRs 2, 3 and 6 normally contain only the
@@ -785,7 +800,7 @@ extends — it is never a changed measurement.
 
 ```mermaid
 flowchart TD
-    S["seal / reseal"] --> M{"--measure-point"}
+    S["seal / approve"] --> M{"--measure-point"}
     M -->|on| AP["apply extends"]
     M -->|off| SK["skip"]
     M -->|auto| P["probe stable PCRs:<br/>register == replay?<br/>register == replay + words?"]
@@ -810,7 +825,7 @@ Three properties make this safe:
   the case where these units first appear in the initramfs.
 - **The blob is self-describing.** What was applied is stored, so verification
   recomputes the sealed values rather than re-deriving them from a system that
-  may have changed. `tpm2-kira info` shows it.
+  may have changed. `tpm2-kira slot info` shows it.
 
 Ordering is enforced so the measure point is deterministic:
 `tpm2-kira.service` declares `After=systemd-pcrphase-initrd.service` and
@@ -819,7 +834,7 @@ edges the measure point could land on either side of the extends, which would
 make an identical machine pass or fail across identical boots.
 
 Running *before* the separator is what makes the codes boot-time codes.
-`tpm2-kira run` shows a fresh code every 30 seconds and asks whether it
+`tpm2-kira-boot run` shows a fresh code every 30 seconds and asks whether it
 matches the authenticator; Enter, or the end of the 90-second hold, sends
 `READY=1` and the display exits; the separator runs after READY and extends
 PCRs 0–7, 9, 12–14. Extends are one-way, so from then on no process in the
@@ -827,11 +842,11 @@ booted system can satisfy the key's policy: the key never left the TPM, the
 display only ever held the code it was showing, and a runtime compromise
 cannot turn into a forged code at the next boot. Holding the boot costs
 nothing in security: during the hold only the measured initramfs runs, and
-the codes on the screen are the design. `tpm2-kira cap` at
+the codes on the screen are the design. `tpm2-kira-boot cap` at
 `initrd-switch-root` read-locks the generation index on top of that, which
 also covers blobs whose policy holds after the separator.
 
-The attestation gate (`tpm2-kira-attest.service`) stays *after* the
+The attestation gate (`run`'s radio worker, `gate-child`) stays *after* the
 separator: a quote is not a secret, post-separator values are a fixed function
 of pre-separator ones, and the gate advertises for a while during which it
 could not hold the separator back. Its baseline is predicted for that point.
@@ -842,12 +857,29 @@ Keep it on a YubiKey (the intended setup), or at least off the machine; a key
 file in `/etc/tpm2-kira/keys` is the fallback, and with it a runtime root
 has that power.
 
+### 5.9 The combiner
+
+Every recipe's keyslot holds the key `Combine(password, salt)` (`internal/diskkey/combine.go`): Argon2id with 1 GiB of
+memory, 16 passes, 4 lanes and a 64-byte output, encoded as base64
+without padding and followed by a newline, which is part of the key. A
+device-held salt is not the device's part itself but an HKDF of it - the
+phone's factor and the TPM's part (`internal/phonegate/factor.go`), the
+vault's part with the pepper as HKDF's salt (`internal/vaultkey/vault.go`)
+- so the part never meets the password; the unattended recipes' password
+is an HKDF of the TPM's part L. The TPM does not check the typed
+password: after a stolen machine boots normally, it can be guessed
+offline at Argon2id's cost, and its strength is the limit. The
+parameters are a contract with every enrolled keyslot and do not change.
+The bytes are fixed by a known answer in a test (taken from the earlier
+separate combiner, hashpwd2): a keyslot enrolled with it opens with
+tpm2-kira's recovery recipe, and the other way round.
+
 ---
 
 ## 6. Policy Digests: Software vs TPM Computation
 
 The PolicyPCR digest is computed by the TPM in a trial session. The PolicyNV
-and PolicyAuthorize digests are computed in software (`cmd/totpkey.go`):
+and PolicyAuthorize digests are computed in software (`internal/nvslot/policy.go`):
 
 ```
 PolicyNV:        H(prev ‖ 0x00000149 ‖ H(operandB ‖ offset:2 ‖ operation:2) ‖ indexName)
@@ -856,13 +888,13 @@ PolicyAuthorize: H( H(prev ‖ 0x0000016A ‖ keySignName) ‖ policyRef )
 
 Software computation is required, not a convenience: after `cap`, the
 generation index is read-locked, and its current Name carries the
-`READLOCKED` bit. A reseal in the running OS must still produce the digest the
+`READLOCKED` bit. An approval in the running OS must still produce the digest the
 initrd will see, so it computes the Name from the index's public area with
 that bit cleared.
 
 A wrong digest cannot weaken anything — the TPM would simply refuse to
 compute codes — but it would lock the user out. The integration tests check
-every digest against real policy sessions on swtpm, including a reseal while
+every digest against real policy sessions on swtpm, including an approval while
 the index is read-locked followed by a reboot.
 
 The PolicySigned digest that guards NV writes is computed by the TPM in a
@@ -883,7 +915,7 @@ trial session, with the signing key loaded via `TPM2_LoadExternal`.
 
 The TPM must load the signing public key to verify approvals
 (`TPM2_VerifySignature`) and NV write authorisations (`TPM2_PolicySigned`).
-`seal` loads it before creating anything, so a key the TPM cannot load is
+`slot add` loads it before creating anything, so a key the TPM cannot load is
 refused up front.
 
 ### Key scheme
@@ -896,7 +928,7 @@ Keys are loaded into the TPM with an explicit signing scheme:
 The scheme is part of the `TPMT_PUBLIC` structure and therefore part of the
 key's **Name**. Changing the scheme changes the Name, which changes the key
 object's `authPolicy` and the NV write policy, so it must be the same at seal,
-reseal and boot.
+approve and boot.
 
 ---
 
@@ -909,18 +941,18 @@ reseal and boot.
 | Offline disk theft                          | The key object is TPM-wrapped; useless without the specific TPM chip |
 | Boot chain tampering (evil maid)            | PCR values change → PolicyPCR fails → no code → user detects compromise |
 | Copying the TOTP key                        | No unseal exists; the TPM computes codes and the key never leaves it after enrolment (§4.5) |
-| Using the TPM from the running OS (root, `tss`) | `tpm2-kira cap` read-locks the generation index when the initrd is left; PolicyNV fails until reboot (§4.5) |
-| Rollback to an older approved state         | Every reseal raises the generation; older approvals stop working |
+| Using the TPM from the running OS (root, `tss`) | `tpm2-kira-boot cap` read-locks the generation index when the initrd is left; PolicyNV fails until reboot (§4.5) |
+| Rollback to an older approved state         | Every approval raises the generation; older approvals stop working |
 | TPM bus sniffing at seal time               | The key goes into the TPM over a salted, parameter-encrypted session |
 | Blob tampering in NVRAM                     | `Private` area is integrity-protected by TPM; tampering causes `TPM2_Load` to fail; a substituted signing key fails PolicyAuthorize |
-| Planted blob steering `reseal`              | `reseal` verifies the blob with a key it takes from `--privkey` or the default location, never from the blob (§5.5) |
+| Planted blob steering `slot approve`              | `slot approve` verifies the blob with a key it takes from `--privkey` or the default location, never from the blob (§5.5) |
 | Approving a new state without the owner     | Requires the signing private key (or the YubiKey and its PIN) |
 
 ### What the TPM does NOT protect against
 
 | Threat                                       | Why                                        |
 |----------------------------------------------|--------------------------------------------|
-| A shell with the sealed PCRs intact, before the cap | Another OS, or a shell in the genuine initrd, while the PCRs still match: the TPM computes codes on request, including for future times. Choose PCRs that measure kernel, initrd and command line, and close the ways into a shell (README "Hardening the boot path") |
+| A shell with the sealed PCRs intact, before the cap | Another OS, or a shell in the genuine initrd, while the PCRs still match: the TPM computes codes on request, including for future times. Choose PCRs that measure kernel, initrd and command line, and close the ways into a shell (docs/SLOT.md, "Hardening the boot path") |
 | Physical TPM interposer (active)             | The salt key's public area is not authenticated, so an *active* interposer could substitute it at seal time. Passive sniffing sees only HMAC results |
 | Compromise of the signing private key         | Its holder can approve any state |
 | TPM reset attacks (if PCRs can be replayed)   | Platform-specific; DRTM/measured launch can mitigate |
@@ -930,7 +962,7 @@ reseal and boot.
 ### PCR selections that attest less than they appear to
 
 A policy is only as meaningful as the registers it binds. These selections look
-protective but are not, and `seal`/`reseal` warn about each:
+protective but are not, and `slot add`/`slot approve` warn about each:
 
 | Selection | Why it is weak |
 |-----------|----------------|
@@ -970,7 +1002,7 @@ be read at all, tpm2-kira says so rather than staying silent.
 
 ## 9. NVRAM Index Security
 
-`WriteToNVRAM` (`cmd/nvram.go`) defines the index as follows:
+`WriteToNVRAM` (`internal/nvslot/nvram.go`) defines the index as follows:
 
 | Attribute | Set | Effect |
 |---|---|---|
@@ -996,16 +1028,16 @@ What this means in practice:
 3. **Deleting the index does not need the signing key.** `TPM2_NV_UndefineSpace`
    is authorised by the owner hierarchy, not by the index's policy. tpm2-kira
    uses the owner hierarchy with an empty auth value throughout — for
-   `TPM2_CreatePrimary`, for defining the index and for `nvram delete` — so on
+   `TPM2_CreatePrimary`, for defining the index and for `slot delete` — so on
    a typical system any process with TPM access can delete a slot. That is a
    denial of service: the key object is gone, and the user must seal again
    and re-enrol the authenticator. Deleting the generation index is a denial
-   of service too, until the next reseal recreates it.
+   of service too, until the next approval recreates it.
 4. **Delete-and-redefine lets an attacker plant a blob of their own**, under a
    write policy of their choosing. The index definition therefore does not
    authenticate the blob's content; the blob signature does (§3.1, note ⁴).
-   `reseal` verifies it before acting on any field, with a key it does not take
-   from the blob (§5.5). `info` verifies it too, and shows an unverified blob
+   `slot approve` verifies it before acting on any field, with a key it does not take
+   from the blob (§5.5). `slot info` verifies it too, and shows an unverified blob
    as untrusted without opening the paths it names. `reveal` does not verify it,
    since the signing key is not available in the initrd. A planted blob can
    carry the user's key object only with an approval signed by the user's key
@@ -1015,7 +1047,7 @@ What this means in practice:
 5. **The real access control is on the key object**, not the NVRAM index.
    Its `authPolicy` (PolicyAuthorize) is what prevents unauthorised use.
 6. **tpm2-kira's own rewrites pass through the same gap.** There is no
-   atomic replace: `reseal`, `attest enrol` and `attest unenrol` undefine
+   atomic replace: `slot approve`, `phone enrol` and `phone unenrol` undefine
    the slot and define and write it again, and between the two the TPM
    holds no blob. Everything that can fail without touching the TPM -
    loading the signing key, a token's PIN, the signer itself on a dummy
@@ -1027,10 +1059,10 @@ What this means in practice:
    as the index was: it holds the key object's public and private areas,
    the private one wrapped under this TPM's storage primary, which is
    re-derived from the owner seed, so only this TPM can load it and only
-   under the object's policy. `nvram restore FILE` verifies the blob's
+   under the object's policy. `slot restore FILE` verifies the blob's
    signature with the signing key (never with a key the file names),
    requires the slot to be empty, approves the blob again for the PCRs it
-   was sealed to at a new generation, writes it as reseal does, and
+   was sealed to at a new generation, writes it as slot approve does, and
    removes the file. The codes are the ones from before.
 
 Setting an owner-hierarchy password would close the delete path, but tpm2-kira
@@ -1039,7 +1071,7 @@ on such a system. Supporting owner auth is outside the current design.
 
 ---
 
-## 10. Blob Format (Version 14)
+## 10. Blob Format (Version 15)
 
 The blob is a binary-serialised structure with explicit length prefixes and
 maximum size limits to prevent memory exhaustion during deserialisation.
@@ -1052,16 +1084,16 @@ blob
 └── attestation part           optional: the machine as an attester
     ├── identity, attestation key, quoted PCRs, count
     └── methods                typed blocks; who may ask for a quote, and how
-        └── 1  phones over Bluetooth LE
+        ├── 1  phones over Bluetooth LE
+        └── 2  tpm2-kira-vault over HTTPS
 ```
 
 The attestation part is the same for every method: one attestation key, one
 PCR selection and one count per slot. A method holds only what is particular
-to its verifiers and their transport. A new kind of verifier, such as a server
-reached over the network, is a new method type next to the phone; nothing
-else in the blob changes for it. A blob with a method type this build does
+to its verifiers and their transport; the vault is the second method type,
+next to the phone, and nothing else in the blob changed for it. A blob with a method type this build does
 not know is refused, since carrying it over would mean signing it again
-unseen on the next `reseal`.
+unseen on the next `slot approve`.
 
 **Only this version is read.** There is no migration and no compatibility
 with earlier formats: a blob of another version is an error that says to seal
@@ -1122,6 +1154,8 @@ Offset  Field                   Type        Notes
 ?         ReleaseKeyPublic      []byte      TPMT_PUBLIC of the release key (§3.7); empty until a factor is enrolled
 ?         ReleaseKeyPrivate length uint32   ≤ 4096
 ?         ReleaseKeyPrivate     []byte      TPM2B_PRIVATE (TPM-wrapped)
+?         TPMSalt credential    uint32 + []byte   ≤ 1024: TPM2B_ID_OBJECT, the salt part of recipe 0x1200; empty without
+?         TPMSalt secret        uint32 + []byte   ≤ 1024: TPM2B_ENCRYPTED_SECRET
 ?         PCRAlg                uint16      TPM_ALG_SHA256 or TPM_ALG_SHA1
 ?         PCRSelection length   uint16      ≤ 24
 ?         PCRSelection          []uint8     PCR indices that are quoted
@@ -1129,6 +1163,7 @@ Offset  Field                   Type        Notes
 ?         Method count          uint8       Each type at most once
           For each method:
             Method type         uint8       1 = phones over Bluetooth LE
+                                            2 = tpm2-kira-vault over HTTPS
             Method length       uint32
             Method data         []byte      By type, below; must fill the length
           Method type 1, phones over Bluetooth LE:
@@ -1143,6 +1178,19 @@ Offset  Field                   Type        Notes
               NoisePub          [32]byte    X25519 static key of the phone
               PolicyID length   uint16      ≤ 64
               PolicyID          string
+          Method type 2, tpm2-kira-vault over HTTPS:
+            URL length          uint16      ≤ 512
+            URL                 string      https://host:port
+            Pin length          uint16      ≤ 128
+            Pin                 string      sha256: and the hex of the vault's TLS root's SPKI digest
+            Label length        uint16      ≤ 64
+            Label               string      The key's label
+            Local credential    uint32 + []byte   ≤ 1024: TPM2B_ID_OBJECT, the local part L (the
+                                                  unattended recipes' password); empty with a typed password
+            Local secret        uint32 + []byte   ≤ 1024: TPM2B_ENCRYPTED_SECRET
+            Pepper              uint8       1: the salt is made with an operator's pepper
+            PepperCheck         uint16 + []byte   0 or 32: HMAC-SHA256(key, "tpm2-kira/vault/pepper-check/v1")
+                                            for an unattended recipe with a pepper
 ─────────────────────── end of signed region ───────────────────────
 ?       Signature length        uint16      ≤ 1024, must be non-zero
 ?       Signature               []byte      Over [version ‖ payloadLen ‖ payload]
@@ -1157,12 +1205,12 @@ the payload exactly, as each method's length must be filled exactly by its
 data: nothing can follow unsigned, and a truncated or padded part does not
 parse.
 
-**Who writes what.** `seal` creates the blob. `reseal` reads it, verifies it
+**Who writes what.** `slot add` creates the blob. `slot approve` reads it, verifies it
 with the signing key, changes the PCR digests, generation and approval, and
-writes it back, attestation part included and unchanged. `seal` on an existing
+writes it back, attestation part included and unchanged. `slot add` on an existing
 slot keeps the attestation part if the same signing key wrote the old blob,
 and drops it otherwise: it does not sign verifiers it cannot vouch for.
-`attest enrol` and `attest unenrol` read the blob, verify it, change the
+`phone enrol` and `phone unenrol` read the blob, verify it, change the
 attestation part and write it back, TOTP part unchanged; if that write fails, the previous blob is
 put back. Every write replaces the NV index (`TPM2_NV_UndefineSpace`, then
 define and PolicySigned writes, §9).
@@ -1188,9 +1236,9 @@ There is no fixed limit on phones beyond the format's eight: whether a blob
 fits is decided for the blob at hand, against the TPM it is written to.
 `WriteToNVRAM` compares the signed blob with `TPM2_PT_NV_INDEX_MAX` before the
 old index is touched, and refuses with the number of bytes missing; the slot
-keeps what it held. `seal` and `reseal` check the same before they raise the
+keeps what it held. `slot add` and `slot approve` check the same before they raise the
 generation, with the largest signatures the key can make, so a blob that
-would not fit never costs the slot its approval. `attest enrol` checks before
+would not fit never costs the slot its approval. `phone enrol` checks before
 the phone is involved only what is certain (a slot without phones gains at
 least one), and the write decides for the phone that actually enrolled.
 
@@ -1206,8 +1254,8 @@ terminators.
 
 ## 11. Why No Password Fallback
 
-Previous versions of tpm2-kira offered a password-based recovery mechanism.
-This was removed because:
+tpm2-kira has no password-based recovery for a slot; the signing key is the
+only way back in, because:
 
 1. **Passwords are weak.** A password stored alongside the blob (or memorised
    by the user) has far less entropy than an asymmetric key pair.
@@ -1226,7 +1274,7 @@ This was removed because:
 
 1. **Protect the signing private key.** It is the recovery master key. Store
    it with restrictive permissions (`chmod 400`, owned by root, in a directory
-   only root can write to; `seal` and `reseal` refuse anything else, §3.6).
+   only root can write to; `slot add` and `slot approve` refuse anything else, §3.6).
    Consider keeping a backup in a secure offline location.
 2. **Use RSA-2048 or ECC P-256.** These are universally supported by TPM 2.0
    hardware. RSA-4096 may not work on all TPMs.
@@ -1234,10 +1282,10 @@ This was removed because:
    boot chain may have been tampered with. Do not enter disk decryption
    passwords until the TOTP code is verified.
 4. **Re-seal after planned changes.** After firmware updates, bootloader
-   changes, or Secure Boot key rotations, run `tpm2-kira reseal` to approve
+   changes, or Secure Boot key rotations, run `tpm2-kira slot approve` to approve
    the new PCR values.
 5. **Keep the cap in the boot integration.** It is what keeps the running OS
-   from computing codes; check that `tpm2-kira info` reports the generation
+   from computing codes; check that `tpm2-kira slot info` reports the generation
    index as read-locked after boot.
 6. **NVRAM index range.** tpm2-kira uses blob indices `0x01803000–0x018037FF`
    and generation indices `0x01803800–0x01803FFF` (TPM2 owner-defined NV
@@ -1247,10 +1295,10 @@ This was removed because:
 
 ## 13. Trust between the phone and the machine: who signs what, and why the phone believes it
 
-Remote attestation rests on a handful of signatures and one key agreement.
+Phone attestation rests on a handful of signatures and one key agreement.
 This section lists them in the order they are given, what each one proves,
 and on what the phone's trust in it rests. The phone verifies everything
-itself, in the Go core it shares with the machine (`attest/`); the app only
+itself, in the Go core it shares with the machine (`core/attest/`); the app only
 moves bytes and shows results.
 
 ### 13.1 Roots
@@ -1266,7 +1314,7 @@ them.
 
 Everything the phone later trusts about a machine is *trust on first use*:
 whatever it pins at enrolment, it holds the machine to afterwards. So enrol
-only a machine whose current state you trust (`attest enrol` says so).
+only a machine whose current state you trust (`phone enrol` says so).
 
 ### 13.2 At enrolment
 
@@ -1311,13 +1359,13 @@ can make the phone call a changed boot "unchanged".
 The boot key proof (step 4) proves **that the machine's signing key approved
 this state**, and ties the session to the screen. It knows nothing about
 which registers moved. A machine that cannot produce it is not necessarily
-compromised: an update that was not resealed, or a check run after the code
+compromised: an update that was not approved, or a check run after the code
 screen, looks the same.
 
 So the phone shows both, and decides from both: green when the signature of
 the boot state is valid, red when it is not; match or changed from its own
 comparison. A changed boot with a valid boot-key proof is a state the
-machine's owner approved (a resealed update); a changed boot without one is
+machine's owner approved (an approved update); a changed boot without one is
 a state nobody approved yet; a matching boot without one means the machine
 could not vouch for itself this time.
 

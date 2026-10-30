@@ -14,7 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/admin"
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 )
 
 // The real systemd-cryptsetup unlocks a LUKS2 volume with the key it reads
@@ -48,7 +49,7 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	// A password+salt keyslot: the provider reads the recipe from the
+	// A recovery recipe (0x1100) keyslot: the provider reads the recipe from the
 	// volume's own header (the token luks mark writes below) and derives
 	// the key from what is typed at its prompts.
 	const password, salt = "correct horse", "battery staple"
@@ -56,7 +57,7 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	if err := os.WriteFile(conf, []byte("# nothing to configure\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	key, err := cmd.Combine([]byte(password), []byte(salt))
+	key, err := diskkey.Combine([]byte(password), []byte(salt))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,11 +73,11 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	}
 	loop := strings.TrimSpace(string(loopOut))
 	defer exec.Command("losetup", "-d", loop).Run()
-	if err := cmd.LuksMark(cmd.LuksMarkOptions{Device: loop, Keyslot: 0, Mode: "password+salt"}); err != nil {
+	if err := admin.LuksMark(admin.LuksMarkOptions{Device: loop, Keyslot: 0, Recipe: diskkey.RecipeRecovery}); err != nil {
 		t.Fatalf("luks mark: %v", err)
 	}
 
-	// tpm2-kira run without a TPM: nothing to show, the hold ends at once,
+	// tpm2-kira-boot run without a TPM: nothing to show, the hold ends at once,
 	// the key socket is served. The prompt goes to a socket the test answers.
 	sock := filepath.Join(dir, "unlock.sock")
 	console := filepath.Join(dir, "console.sock")
@@ -134,7 +135,11 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	if err := os.WriteFile(crypttab, []byte(volume+" "+loop+" none luks\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	run := exec.Command("./tpm2-kira", "run", "--tpm", filepath.Join(dir, "no-tpm"), "--hold", "0", "--unlock", sock)
+	// The image of a machine that unlocks by password and salt alone: its
+	// plan names the disk unlock and nothing else.
+	plan := filepath.Join(dir, "plan")
+	os.MkdirAll(filepath.Join(plan, "unlock"), 0o755)
+	run := exec.Command("./tpm2-kira-boot", "run", "--plan", plan, "--tpm", filepath.Join(dir, "no-tpm"), "--hold", "0", "--unlock", sock)
 	run.Env = append(os.Environ(), "TPM2_KIRA_CONSOLE="+console, "TPM2_KIRA_CONTROL_CONF="+conf, "TPM2_KIRA_CRYPTTAB="+crypttab)
 	var runOut bytes.Buffer
 	run.Stdout, run.Stderr = &runOut, &runOut
@@ -148,7 +153,7 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
-			t.Errorf("tpm2-kira run did not end on SIGINT within 5 s; killed. Its output:\n%s", runOut.String())
+			t.Errorf("tpm2-kira-boot run did not end on SIGINT within 5 s; killed. Its output:\n%s", runOut.String())
 			run.Process.Kill()
 			<-done
 		}
@@ -226,5 +231,27 @@ func TestSystemdCryptsetupUnlocksThroughTpm2Kira(t *testing.T) {
 	}
 	if !bytes.Contains(out, []byte("Password querying disabled via 'headless' option.")) {
 		t.Errorf("after no answer systemd-cryptsetup should fall back to its own prompt:\n%s", out)
+	}
+}
+
+// An image whose plan names the disk unlock alone - a machine without a
+// TPM, or nothing sealed - starts nothing else: 'run' asks no TPM for
+// codes, so there is no error about one, and releases the boot at once.
+// (Without a plan, by hand, it would wait for the TPM to come up.)
+func TestRunStartsWhatThePlanNames(t *testing.T) {
+	dir := t.TempDir()
+	plan := filepath.Join(dir, "plan")
+	os.MkdirAll(filepath.Join(plan, "unlock"), 0o755)
+	runIt := func(args ...string) string {
+		run := exec.Command("./tpm2-kira-boot", append([]string{"run", "--tpm", filepath.Join(dir, "no-tpm"), "--hold", "0"}, args...)...)
+		run.Env = append(os.Environ(), "TPM2_KIRA_UNPRIVILEGED=1")
+		out, err := run.CombinedOutput()
+		if err != nil {
+			t.Fatalf("run %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	if out := runIt("--plan", plan); strings.Contains(out, "TPM") || strings.Contains(out, "no-tpm") {
+		t.Errorf("the disk unlock alone asked the TPM:\n%s", out)
 	}
 }

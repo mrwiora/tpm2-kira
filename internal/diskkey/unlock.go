@@ -1,0 +1,536 @@
+// Package diskkey makes the disk's key at boot, as the keyslot's LUKS2 token
+// says: the token and its recipe, the combiner, the unlock socket for
+// systemd-cryptsetup, the passphrase prompt and Debian's keyscript.
+package diskkey
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/mrwiora/tpm2-kira/internal/journal"
+	"github.com/mrwiora/tpm2-kira/internal/screen"
+	"github.com/mrwiora/tpm2-kira/internal/unixsock"
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
+
+	"golang.org/x/sys/unix"
+)
+
+// The key provider for systemd-cryptsetup (crypttab(5), "AF_UNIX KEY
+// FILES"). When a volume's key field names a stream socket in the file
+// system, systemd-cryptsetup connects to it at the moment it activates the
+// volume and reads the key from the connection; the peer name of its
+// abstract socket says which volume (and whether it wants the key itself or
+// a saved token key). tpm2-kira listens there in the initrd, so the unlock
+// of the disk is a question to tpm2-kira and not a prompt of its own:
+// today it answers with what the person types at its own prompt, later
+// with a key derived from that and a factor the phone released
+// (PLAN-PHONESALT.md). systemd-cryptsetup waits for the answer for as
+// long as it takes, and a wrong or missing answer sends it to its own
+// prompt for the remaining tries (DISK-KEY.md, "When the answer is wrong"): the passphrase can
+// always be entered by hand, which is why there is no enforced mode.
+
+// DefaultUnlockSocket is where the initrd units put the key socket.
+const DefaultUnlockSocket = "/run/tpm2-kira/unlock.sock"
+
+// unlockRequest is one connection from systemd-cryptsetup.
+type unlockRequest struct {
+	Volume string
+	// Kind is "cryptsetup" when the key itself is wanted; for the token
+	// logics it is "cryptsetup-tpm2", "cryptsetup-fido2-salt" or
+	// "cryptsetup-pkcs11", which want a saved token key, not a passphrase.
+	Kind string
+}
+
+// Direct reports whether the request is for the volume's key (passphrase).
+func (r unlockRequest) Direct() bool { return r.Kind == "cryptsetup" }
+
+// parseUnlockPeer reads the volume out of systemd-cryptsetup's abstract
+// source socket name: NUL ‖ random ‖ "/cryptsetup/" ‖ volume (crypttab(5)).
+func parseUnlockPeer(name string) (unlockRequest, error) {
+	name = strings.TrimPrefix(name, "@")
+	name = strings.TrimPrefix(name, "\x00")
+	// Go renders abstract names with a leading '@'; a connection from a
+	// path-bound socket, which systemd never makes, has none of this.
+	i := strings.Index(name, "/cryptsetup")
+	if i < 0 {
+		return unlockRequest{}, fmt.Errorf("not a systemd-cryptsetup connection (peer %q)", name)
+	}
+	rest := name[i+1:] // "cryptsetup.../volume"
+	kind, volume, ok := strings.Cut(rest, "/")
+	if !ok || volume == "" || strings.Contains(volume, "/") {
+		return unlockRequest{}, fmt.Errorf("malformed systemd-cryptsetup peer %q", name)
+	}
+	switch kind {
+	case "cryptsetup", "cryptsetup-tpm2", "cryptsetup-fido2-salt", "cryptsetup-pkcs11":
+	default:
+		return unlockRequest{}, fmt.Errorf("unknown systemd-cryptsetup request %q", kind)
+	}
+	return unlockRequest{Volume: volume, Kind: kind}, nil
+}
+
+// UnlockServer answers systemd-cryptsetup's key requests on one socket.
+type UnlockServer struct {
+	l    net.Listener
+	key  func(volume string) ([]byte, error) // the key for a volume, or why not
+	log  func(string)
+	mu   sync.Mutex // one answer at a time: the prompt is one terminal
+	gate chan struct{}
+	done chan struct{}
+	// prompting is set while a key is being asked for: the display must
+	// not draw over the prompt (Prompting reports it).
+	prompting atomic.Bool
+}
+
+// Prompting reports whether a prompt is open on the console right now.
+func (s *UnlockServer) Prompting() bool { return s.prompting.Load() }
+
+// ServeUnlock answers on l. Requests wait until release is called (the
+// hold: the code screen is confirmed) and are then answered one after the
+// other with key.
+func ServeUnlock(l net.Listener, key func(volume string) ([]byte, error), log func(string)) *UnlockServer {
+	noCoreDump()
+	s := &UnlockServer{l: l, key: key, log: log, gate: make(chan struct{}), done: make(chan struct{})}
+	go s.run()
+	return s
+}
+
+// Release lets requests be answered from now on.
+func (s *UnlockServer) Release() {
+	select {
+	case <-s.gate:
+	default:
+		s.log("unlock: the hold has ended; key requests are answered from now on")
+		close(s.gate)
+	}
+}
+
+// Close stops answering; connections in progress are cut.
+func (s *UnlockServer) Close() {
+	s.l.Close()
+	<-s.done
+}
+
+func (s *UnlockServer) run() {
+	defer close(s.done)
+	var wg sync.WaitGroup
+	for {
+		c, err := s.l.Accept()
+		if err != nil {
+			break
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.answer(c)
+		}()
+	}
+	wg.Wait()
+}
+
+func (s *UnlockServer) answer(c net.Conn) {
+	defer c.Close()
+	if err := peerIsUs(c); err != nil {
+		s.log("unlock: refusing a connection: " + err.Error())
+		return
+	}
+	req, err := parseUnlockPeer(c.RemoteAddr().String())
+	if err != nil {
+		s.log("unlock: refusing a connection: " + err.Error())
+		return
+	}
+	if !req.Direct() {
+		// A token's saved key lives in the LUKS header or a file; this
+		// provider holds none. Closing without data lets systemd-cryptsetup
+		// go on without it.
+		s.log(fmt.Sprintf("unlock: %s asks for a %s key, which this provider does not hold", req.Volume, req.Kind))
+		return
+	}
+	s.log(fmt.Sprintf("unlock: %s asks for its key", req.Volume))
+	<-s.gate
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.log(fmt.Sprintf("unlock: making the key for %s, as its header says", req.Volume))
+	s.prompting.Store(true)
+	key, err := s.key(req.Volume)
+	s.prompting.Store(false)
+	if err != nil {
+		s.log(fmt.Sprintf("unlock: no key for %s: %v", req.Volume, err))
+		return
+	}
+	defer wipe.Bytes(key)
+	if _, err := c.Write(key); err != nil {
+		s.log(fmt.Sprintf("unlock: writing the key for %s failed: %v", req.Volume, err))
+		return
+	}
+	s.log(fmt.Sprintf("unlock: answered for %s (%d bytes)", req.Volume, len(key)))
+}
+
+// peerIsUs checks that the connection comes from a process of this user
+// (SO_PEERCRED): root in the initrd, which is what systemd's password agent
+// requires of a sender too. The socket's mode already says so; this does
+// not depend on it.
+func peerIsUs(c net.Conn) error {
+	uc, ok := c.(*net.UnixConn)
+	if !ok {
+		return errors.New("not a unix socket")
+	}
+	raw, err := uc.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var cred *unix.Ucred
+	var cerr error
+	if err := raw.Control(func(fd uintptr) {
+		cred, cerr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+	}); err != nil {
+		return err
+	}
+	if cerr != nil {
+		return cerr
+	}
+	if int(cred.Uid) != os.Getuid() {
+		return fmt.Errorf("peer is uid %d, not %d", cred.Uid, os.Getuid())
+	}
+	return nil
+}
+
+// noCoreDump keeps a crash of this process from writing its memory, with
+// a passphrase in it, to a file (PR_SET_DUMPABLE), as the cryptsetup
+// tools do while they hold key material.
+func noCoreDump() {
+	unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0)
+}
+
+// ListenUnlock is the key socket: the one systemd passed with the socket
+// unit (LISTEN_FDS, tpm2-kira-unlock.socket) when it did, else a new one at
+// path. Nil with no error when neither is wanted.
+func ListenUnlock(path string) (net.Listener, error) {
+	if l := listenFromSystemd(); l != nil {
+		return l, nil
+	}
+	if path == "" {
+		return nil, nil
+	}
+	return unixsock.Listen(path)
+}
+
+// listenFromSystemd returns the first socket systemd handed over, if this
+// process was started for a socket unit (sd_listen_fds(3)).
+func listenFromSystemd() net.Listener {
+	pid, err := strconv.Atoi(os.Getenv("LISTEN_PID"))
+	if err != nil || pid != os.Getpid() {
+		return nil
+	}
+	n, err := strconv.Atoi(os.Getenv("LISTEN_FDS"))
+	if err != nil || n < 1 {
+		return nil
+	}
+	os.Unsetenv("LISTEN_PID")
+	os.Unsetenv("LISTEN_FDS")
+	os.Unsetenv("LISTEN_FDNAMES")
+	return listenerFromFD(3) // SD_LISTEN_FDS_START
+}
+
+// listenerFromFD adopts a listening socket on fd.
+func listenerFromFD(fd int) net.Listener {
+	unix.CloseOnExec(fd)
+	f := os.NewFile(uintptr(fd), "unlock.sock")
+	l, err := net.FileListener(f)
+	f.Close()
+	if err != nil {
+		return nil
+	}
+	return l
+}
+
+// consolePath is where the passphrase is asked: the console, or for tests
+// the path in TPM2_KIRA_CONSOLE (a file, a pipe or a listening socket).
+func consolePath() string {
+	if p := os.Getenv("TPM2_KIRA_CONSOLE"); p != "" {
+		return p
+	}
+	return "/dev/console"
+}
+
+// openConsole opens the console for a prompt; a socket is connected to.
+func openConsole() (io.ReadWriteCloser, int, error) {
+	path := consolePath()
+	if st, err := os.Stat(path); err == nil && st.Mode()&os.ModeSocket != 0 {
+		c, err := net.Dial("unix", path)
+		return c, -1, err
+	}
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return nil, -1, err
+	}
+	return f, int(f.Fd()), nil
+}
+
+// ErrUnlockSkipped: no keyslot of tpm2-kira's on the volume, or its
+// header not readable: tpm2-kira gives no key, and cryptsetup's own
+// prompt follows.
+var ErrUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own prompt follows")
+
+// DiskKey is the key provider's answer, as the volume's own LUKS2 header
+// says (unlockRecipe reads its tpm2-kira tokens the moment it asks), its
+// recipes tried in their order (Recipes):
+//
+//	no token                  no answer: cryptsetup's own prompt, tpm2-kira untouched
+//	0x2400, 0x2401 unattended nothing typed: the key run made in this boot from the TPM's
+//	                          part and the vault's (internal/vaultkey/vault.go); without one,
+//	                          the volume's next recipe
+//	0x1300 salt from the phone a typed password and the salt the verifier released in this
+//	                          boot and the TPM opened (internal/phonegate/factor.go); without
+//	                          one, a typed salt - the recovery recipe
+//	0x1400, 0x1401 the vault  a typed password and the salt the vault released while the code
+//	                          screen held (internal/vaultkey/vault.go); without one, a typed
+//	                          salt - the recovery recipe
+//	0x1200 salt in this TPM   a typed password and the salt the TPM opened while the code
+//	                          screen held (internal/admin/tpmsalt_enrol.go); without one, a
+//	                          typed salt - the recovery recipe
+//	0x1100 recovery           a typed password and a typed salt, combined (Argon2id, combine.go)
+//
+// and after them, at Ctrl-C or with a key that opens nothing, cryptsetup's
+// own prompt, where a plain passphrase works.
+//
+// salt returns the device-held salt of a volume's recipe - the phone's,
+// the TPM's - or nil; vault the volume's unattended key or why there is
+// none. The key is for the caller to wipe.
+//
+// ask is where the person is asked: consoleAsk, or the SSH session that
+// confirmed the code screen (remoteServer.ask).
+func DiskKey(salt func(volume string, r Recipe) []byte, vault func(volume string) ([]byte, error), recipe func(volume string) (recipes []Recipe, why string), ask Prompter) func(volume string) ([]byte, error) {
+	return func(volume string) ([]byte, error) {
+		recipes, why := recipe(volume)
+		var vaultErr error
+		for _, r := range recipes {
+			if r.Unattended() {
+				if vault == nil {
+					vaultErr = errors.New("no vault in this boot")
+					continue
+				}
+				key, err := vault(volume)
+				if err != nil {
+					vaultErr = err
+					continue
+				}
+				return key, nil
+			}
+			// A typed recipe: the first the volume has, after a vault that
+			// gave no key.
+			return typedKey(volume, r, vaultErr, salt, ask)
+		}
+		if vaultErr != nil {
+			return nil, fmt.Errorf("%w (%v)", ErrUnlockSkipped, vaultErr)
+		}
+		if why != "" {
+			return nil, fmt.Errorf("%w (%s)", ErrUnlockSkipped, why)
+		}
+		return nil, ErrUnlockSkipped
+	}
+}
+
+// typedKey makes the key of a typed recipe: the password asked, and the
+// salt asked or the device's. A vault that gave no key before it is said
+// in the note.
+func typedKey(volume string, r Recipe, vaultErr error, salt func(volume string, r Recipe) []byte, ask Prompter) ([]byte, error) {
+	var s []byte
+	var note string
+	switch r {
+	case RecipeRecovery:
+		note = "the key is derived from your password and your salt, both typed here (Argon2id, some seconds).\n" +
+			"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
+	case RecipePhoneSalt, RecipeTPMSalt, RecipeVaultSalt, RecipeVaultSaltPepper:
+		from := map[Recipe]string{RecipePhoneSalt: "your phone returned", RecipeTPMSalt: "this TPM opened",
+			RecipeVaultSalt: "the vault released", RecipeVaultSaltPepper: "the vault released"}[r]
+		if s = salt(volume, r); s == nil {
+			// No salt from the device: the recovery recipe, which opens a
+			// keyslot enrolled that way; Ctrl-C, or a key that opens
+			// nothing, then leads to cryptsetup's own prompt and the
+			// recovery passphrase.
+			note = "no salt that " + from + ": the key is derived from your password and a salt you type,\n" +
+				"as for a keyslot of the recovery recipe (Argon2id, some seconds).\n" +
+				"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
+			break
+		}
+		note = "the key is derived from your password and the salt " + from + ".\n" +
+			"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
+	default:
+		return nil, ErrUnlockSkipped
+	}
+	if vaultErr != nil {
+		note = fmt.Sprintf("no key from the vault (%v):\n", vaultErr) + note
+	}
+	pw, err := ask(volume, "Password", note)
+	if err != nil {
+		return nil, err
+	}
+	defer wipe.Bytes(pw)
+	if s == nil {
+		if s, err = ask(volume, "Salt", ""); err != nil {
+			return nil, err
+		}
+	}
+	defer wipe.Bytes(s)
+	return Combine(pw, s)
+}
+
+// Prompter asks for a volume's password or salt, with a note above the
+// question when there is one.
+type Prompter func(volume, what, note string) ([]byte, error)
+
+// ConsoleAsk asks on the console for a volume's passphrase or password,
+// with a note above the prompt when there is one.
+// The prompt, as the person sees it: a note under the code screen's own
+// tag saying what the key is made of and where Ctrl-C leads, then the
+// question in bold, as systemd's own prompt is - "Password" is what the
+// person types, "Salt" the second part they type in the recovery recipe;
+// the phone's salt is never asked for.
+//
+//	[ KIRA ] Disk cryptroot: the key is derived from your password and the salt your phone returned.
+//	         Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works.
+//
+//	[ KIRA ] Password for disk cryptroot:          (the tag in blue, the question in bold)
+func ConsoleAsk(volume, what, note string) ([]byte, error) {
+	con, fd, err := openConsole()
+	if err != nil {
+		return nil, fmt.Errorf("cannot open the console: %w", err)
+	}
+	defer con.Close()
+	if note != "" {
+		lines := strings.Split(note, "\n")
+		fmt.Fprintf(con, "\n%s Disk %s: %s\n", screen.Tag(screen.TagYellow), volume, lines[0])
+		for _, l := range lines[1:] {
+			fmt.Fprintf(con, "         %s\n", l)
+		}
+	}
+	for {
+		fmt.Fprintf(con, "\n%s \033[1m%s for disk %s:\033[0m ", screen.Tag(screen.TagBlue), what, volume)
+		pw, err := ReadPassphrase(con, fd)
+		fmt.Fprintln(con)
+		if err != nil {
+			return nil, err
+		}
+		if len(pw) > 0 {
+			return pw, nil
+		}
+	}
+}
+
+var errPassphraseCancelled = errors.New("cancelled at the prompt")
+
+// ReadPassphrase reads one line with echo off from a terminal (fd), or a
+// plain line from anything else (tests, a pipe, a socket: fd < 0).
+func ReadPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
+	var old *unix.Termios
+	if fd >= 0 {
+		if t, err := unix.IoctlGetTermios(fd, unix.TCGETS); err == nil {
+			old = t
+		}
+	}
+	if old == nil {
+		// Not a terminal: one line, without its end, read a byte at a
+		// time so that nothing past the line is taken from the input -
+		// the next prompt reads the same pipe.
+		var line []byte
+		buf := make([]byte, 1)
+		for {
+			n, err := f.Read(buf)
+			if n == 1 {
+				if buf[0] == '\n' {
+					break
+				}
+				line = append(line, buf[0])
+				continue
+			}
+			if err != nil {
+				if errors.Is(err, io.EOF) && len(line) > 0 {
+					break
+				}
+				wipe.Bytes(line)
+				return nil, err
+			}
+		}
+		return bytes.TrimRight(line, "\r"), nil
+	}
+	raw := *old
+	// No echo, no line discipline, and no signals: Ctrl-C must arrive as
+	// a byte to cancel the prompt, because the display has given up its
+	// controlling terminal and a SIGINT from the tty would reach nobody.
+	raw.Lflag &^= unix.ECHO | unix.ICANON | unix.ISIG
+	raw.Cc[unix.VMIN], raw.Cc[unix.VTIME] = 1, 0
+	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &raw); err != nil {
+		return nil, err
+	}
+	defer unix.IoctlSetTermios(fd, unix.TCSETS, old)
+	one := make([]byte, 1)
+	return ReadRawPassphrase(func() (byte, error) {
+		n, err := f.Read(one)
+		if err == nil && n == 0 {
+			err = io.EOF
+		}
+		return one[0], err
+	}, f)
+}
+
+// ReadRawPassphrase reads a passphrase key by key from a terminal without
+// echo or line discipline - the console, or an SSH session (internal/sshscreen/server.go)
+// - and echoes a '*' per key to echo.
+func ReadRawPassphrase(next func() (byte, error), echo io.Writer) ([]byte, error) {
+	// One buffer of the final size, so the passphrase is in one place
+	// only: no growing slice leaves earlier copies behind for the garbage
+	// collector to find. Locked in memory, as libcryptsetup locks its key
+	// buffers; a page that the initrd could not swap out anyway.
+	pw := make([]byte, 0, MaxPassphrase)
+	unix.Mlock(pw[:MaxPassphrase])
+	for {
+		c, err := next()
+		if err != nil {
+			wipe.Bytes(pw)
+			if errors.Is(err, io.EOF) {
+				return nil, errPassphraseCancelled
+			}
+			return nil, err
+		}
+		switch c {
+		case '\n', '\r':
+			return pw, nil
+		case 3, 4: // Ctrl-C, Ctrl-D
+			wipe.Bytes(pw)
+			return nil, errPassphraseCancelled
+		case 127, 8: // Backspace
+			if len(pw) > 0 {
+				pw[len(pw)-1] = 0
+				pw = pw[:len(pw)-1]
+				fmt.Fprint(echo, "\b \b")
+			}
+		default:
+			if len(pw) == MaxPassphrase {
+				fmt.Fprint(echo, "\a")
+				continue
+			}
+			pw = append(pw, c)
+			fmt.Fprint(echo, "*")
+		}
+	}
+}
+
+// MaxPassphrase is cryptsetup's own limit for a typed passphrase.
+const MaxPassphrase = 512
+
+// UnlockLogger writes to stderr, with the time: the journal or the
+// initramfs log (Debian) is read after the boot.
+func UnlockLogger(debug bool) func(string) {
+	return func(msg string) {
+		journal.Narrate("tpm2-kira: %s %s", time.Now().UTC().Format("15:04:05.000"), msg)
+	}
+}

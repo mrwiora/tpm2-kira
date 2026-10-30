@@ -1,0 +1,369 @@
+package phonegate
+
+import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
+	"errors"
+	"net"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+)
+
+// A coordinator for one slot with one enrolled phone and no TPM behind it:
+// quotes are registered by hand, as Quote would after the TPM signed one.
+func testCoordinator(t *testing.T) (*GateService, *ecdsa.PrivateKey) {
+	t.Helper()
+	phone, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor, _ := x509.MarshalPKIXPublicKey(&phone.PublicKey)
+	s := &GateService{Ready: make(chan struct{}), Issued: map[string][]byte{}, Idx: nvslot.NVRAMSlotStart + 2}
+	s.Blob = &nvslot.Attestation{
+		DeviceID: []byte("0123456789abcdef"), AKName: []byte("ak-name"), FriendlyName: "box",
+		Phone: nvslot.PhoneAttestation{
+			NoisePrivate: make([]byte, 32), AdvKey: make([]byte, 32),
+			Verifiers: []attest.EnrolledVerifier{{ID: "phone-1", AnchorPub: anchor, NoisePub: make([]byte, 32)}},
+		},
+	}
+	s.Current.Slot = 2
+	close(s.Ready)
+	return s, phone
+}
+
+func (s *GateService) issue(quoted, qd []byte) []byte {
+	sum := sha256.Sum256(quoted)
+	s.Issued[hex.EncodeToString(sum[:])] = qd
+	return sum[:]
+}
+
+func signedReceipt(t *testing.T, s *GateService, key *ecdsa.PrivateKey, verdict attest.VerdictCode, digest, qd []byte) *attest.Receipt {
+	t.Helper()
+	r := &attest.Receipt{
+		Verdict: verdict, DeviceID: s.Blob.DeviceID, AKName: s.Blob.AKName,
+		QD: qd, QuoteDigest: digest, VerifierID: "phone-1",
+	}
+	if key != nil {
+		d := sha256.Sum256(attest.ReceiptTBS(r))
+		sig, err := ecdsa.SignASN1(rand.Reader, key, d[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Signature = sig
+	}
+	return r
+}
+
+// The verdict is the coordinator's reading of a receipt: signed by the
+// enrolled phone, over a quote the coordinator itself issued. Nothing the
+// radio worker says can stand in for that.
+func TestOnlyThePhonesReceiptGivesAVerdict(t *testing.T) {
+	s, phone := testCoordinator(t)
+	qd := []byte("qualifying-data-of-this-session!")
+	digest := s.issue([]byte("quote issued by this coordinator"), qd)
+
+	status := func() GateState { st, _ := s.Status(); return st.State }
+
+	// The worker reports progress; it cannot report a verdict.
+	s.Report(GateWaiting)
+	s.Report(GateAttested)
+	s.Report(GateRejected)
+	s.Report(GateState("anything"))
+	if status() != GateWaiting {
+		t.Fatalf("a report changed the state to %q", status())
+	}
+
+	other, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	notIssued := sha256.Sum256([]byte("a quote the worker made up"))
+	for name, r := range map[string]*attest.Receipt{
+		"unsigned":                   signedReceipt(t, s, nil, attest.VerdictOK, digest, qd),
+		"signed by another key":      signedReceipt(t, s, other, attest.VerdictOK, digest, qd),
+		"for a quote never issued":   signedReceipt(t, s, phone, attest.VerdictOK, notIssued[:], qd),
+		"with other qualifying data": signedReceipt(t, s, phone, attest.VerdictOK, digest, []byte("some other session's data.......")),
+		"for another machine": func() *attest.Receipt {
+			r := signedReceipt(t, s, phone, attest.VerdictOK, digest, qd)
+			r.DeviceID = []byte("another-machine!")
+			return r
+		}(),
+		"altered after it was signed": func() *attest.Receipt {
+			r := signedReceipt(t, s, phone, attest.VerdictReject, digest, qd)
+			r.Verdict = attest.VerdictOK
+			return r
+		}(),
+	} {
+		c := s.JudgeReceipt(r, "phone-1")
+		if c.Authentic || c.Ack == attest.AckAccepted || status() == GateAttested {
+			t.Fatalf("receipt %s was accepted: %+v, state %q", name, c, status())
+		}
+	}
+	if c := s.JudgeReceipt(signedReceipt(t, s, phone, attest.VerdictOK, digest, qd), "someone-else"); c.Authentic || status() == GateAttested {
+		t.Fatalf("receipt attributed to a phone that is not enrolled was accepted: %+v", c)
+	}
+
+	// The genuine receipt.
+	c := s.JudgeReceipt(signedReceipt(t, s, phone, attest.VerdictOK, digest, qd), "phone-1")
+	st, ok := s.Status()
+	if !c.Authentic || c.Ack != attest.AckAccepted || !ok || st.State != GateAttested || st.Slot != 2 {
+		t.Fatalf("genuine receipt: %+v, status %+v", c, st)
+	}
+	// Progress reports do not take a verdict back.
+	s.Report(GateWaiting)
+	if status() != GateAttested {
+		t.Fatal("a report replaced the verdict")
+	}
+}
+
+func TestRejectionsAreNoted(t *testing.T) {
+	s, phone := testCoordinator(t)
+	qd := []byte("qualifying-data-of-this-session!")
+	digest := s.issue([]byte("quote"), qd)
+	// A reject needs no signature: believing a false "no" costs a check.
+	if c := s.JudgeReceipt(signedReceipt(t, s, nil, attest.VerdictReject, digest, qd), "phone-1"); c.Ack != attest.AckRejectNoted {
+		t.Fatalf("%+v", c)
+	}
+	if st, _ := s.Status(); st.State != GateRejected {
+		t.Fatalf("state %q", st.State)
+	}
+	if c := s.JudgeReceipt(signedReceipt(t, s, phone, attest.VerdictReject, digest, qd), "phone-1"); !c.Authentic {
+		t.Fatalf("%+v", c)
+	}
+}
+
+// A coordinator that found the record replaced serves nothing, and says why.
+func TestRefusedCoordinatorServesNothing(t *testing.T) {
+	s := &GateService{Ready: make(chan struct{}), Issued: map[string][]byte{}, Code: ExitTampered, Reason: errors.New("not accepted")}
+	s.Current.State = GateRefused
+	close(s.Ready)
+	if _, code, err := s.Identity(); code != ExitTampered || err == nil {
+		t.Fatalf("identity: %d %v", code, err)
+	}
+	if _, err := s.Quote(make([]byte, 32), attest.PCRSelection{Alg: attest.AlgSHA256, Indices: []uint8{0}}); err == nil {
+		t.Fatal("a refused coordinator quoted")
+	}
+	if c := s.JudgeReceipt(&attest.Receipt{Verdict: attest.VerdictOK}, "x"); c.Authentic {
+		t.Fatal("a refused coordinator accepted a receipt")
+	}
+	s.Report(GateWaiting)
+	if st, _ := s.Status(); st.State != GateRefused {
+		t.Fatalf("state %q", st.State)
+	}
+}
+
+// fakeHost records what reaches the coordinator over the socket.
+type fakeHost struct {
+	identity *gateIdentity
+	code     int
+	quotes   int
+	reports  []GateState
+	receipt  *attest.Receipt
+	evlog    []byte
+	keep     *attest.FactorBlob
+	release  *attest.Release
+
+	challenge *attest.BootChallenge
+}
+
+func (f *fakeHost) Identity() (*gateIdentity, int, error) {
+	if f.identity == nil {
+		return nil, f.code, errors.New("refused")
+	}
+	return f.identity, 0, nil
+}
+func (f *fakeHost) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteResult, error) {
+	f.quotes++
+	if len(qd) != 32 {
+		return nil, errors.New("bad qualifying data")
+	}
+	return &attest.QuoteResult{Quoted: append([]byte("quoted:"), qd...), Signature: []byte("sig"),
+		Values: []attest.PCRValue{{Index: sel.Indices[0], Digest: make([]byte, 32)}}}, nil
+}
+func (f *fakeHost) BootContext() attest.BootContext {
+	return attest.BootContext{NVRAMIndex: 7, SealPCRSelection: []uint8{0, 7}, MeasurePoint: "on"}
+}
+func (f *fakeHost) Eventlog() ([]byte, error) { return f.evlog, nil }
+func (f *fakeHost) JudgeReceipt(r *attest.Receipt, id string) attest.ReceiptCheck {
+	f.receipt = r
+	return attest.ReceiptCheck{Verdict: r.Verdict, Authentic: true, Ack: attest.AckAccepted, Detail: id}
+}
+func (f *fakeHost) Report(s GateState)               { f.reports = append(f.reports, s) }
+func (f *fakeHost) FactorToKeep() *attest.FactorBlob { return f.keep }
+func (f *fakeHost) TakeRelease(r *attest.Release) (uint8, string) {
+	f.release = r
+	return attest.ReleaseOK, "opened"
+}
+func (f *fakeHost) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest []byte) (*attest.BootAnswer, uint8) {
+	f.challenge = ch
+	if len(ch.EphemeralPub) != 65 {
+		return nil, attest.BootKeyFailed
+	}
+	return &attest.BootAnswer{Proof: append([]byte("proof:"), context...), Signature: append([]byte("sig:"), quoteDigest...)}, attest.BootKeyProved
+}
+
+// startTestGate links a coordinator serving host to a worker's client.
+func startTestGate(t *testing.T, host GateHost) (*GateClient, *GateServer) {
+	t.Helper()
+	g, files, err := LinkGate(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(g.Close)
+	c, err := GateClientFromFiles(files[0], files[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	return c, g
+}
+
+// The coordinator's service ends with the code screen's hold, and the
+// worker learns of it at once, also while it is only waiting for a phone.
+func TestWorkerLearnsThatTheCoordinatorEnded(t *testing.T) {
+	c, server := startTestGate(t, &fakeHost{identity: &gateIdentity{FriendlyName: "box"}})
+	if _, _, err := c.Identity(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-c.Gone():
+		t.Fatal("reported gone while the coordinator serves")
+	case <-time.After(200 * time.Millisecond):
+	}
+	server.Close()
+	select {
+	case <-c.Gone():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the worker did not learn that the coordinator ended")
+	}
+	if _, _, err := c.Identity(); err == nil {
+		t.Fatal("a closed coordinator answered")
+	}
+	if _, err := c.Quote(make([]byte, 32), attest.PCRSelection{Alg: attest.AlgSHA256, Indices: []uint8{0}}); err == nil {
+		t.Fatal("a closed coordinator quoted")
+	}
+	server.Close() // twice is fine
+}
+
+func TestWorkerReachesTheCoordinator(t *testing.T) {
+	host := &fakeHost{
+		identity: &gateIdentity{Slot: 1, FriendlyName: "box", DeviceID: []byte("dev"), AKName: []byte("ak"),
+			NoisePrivate: make([]byte, 32), AdvKey: []byte("adv"), RecordVerified: true,
+			Verifiers: []gateVerifier{{ID: "p", NoisePub: []byte("np")}}},
+		evlog: make([]byte, 300_000),
+	}
+	c, _ := startTestGate(t, host)
+	id, code, err := c.Identity()
+	if err != nil || code != 0 || id.FriendlyName != "box" || !id.RecordVerified || len(id.Verifiers) != 1 || id.Verifiers[0].ID != "p" {
+		t.Fatalf("identity: %+v %d %v", id, code, err)
+	}
+	q, err := c.Quote(make([]byte, 32), attest.PCRSelection{Alg: attest.AlgSHA256, Indices: []uint8{7}})
+	if err != nil || !strings.HasPrefix(string(q.Quoted), "quoted:") || len(q.Values) != 1 || q.Values[0].Index != 7 {
+		t.Fatalf("quote: %+v %v", q, err)
+	}
+	if _, err := c.Quote([]byte("short"), attest.PCRSelection{Alg: attest.AlgSHA256, Indices: []uint8{7}}); err == nil {
+		t.Fatal("the coordinator's refusal did not reach the worker")
+	}
+	if bc := c.BootContext(); bc.NVRAMIndex != 7 || bc.MeasurePoint != "on" || len(bc.SealPCRSelection) != 2 {
+		t.Fatalf("boot context: %+v", bc)
+	}
+	if log, err := c.Eventlog(); err != nil || len(log) != 300_000 {
+		t.Fatalf("event log: %d %v", len(log), err)
+	}
+	check := c.JudgeReceipt(&attest.Receipt{Verdict: attest.VerdictOK, QD: []byte("qd"), Signature: []byte("s")}, "p")
+	if !check.Authentic || check.Detail != "p" || host.receipt == nil || string(host.receipt.QD) != "qd" {
+		t.Fatalf("receipt: %+v", check)
+	}
+	answer, state := c.ProveBootKey(&attest.BootChallenge{EphemeralPub: make([]byte, 65), Sealed: []byte("sealed")}, []byte("ctx"), []byte("qd"))
+	if state != attest.BootKeyProved || answer == nil || string(answer.Proof) != "proof:ctx" || string(answer.Signature) != "sig:qd" ||
+		host.challenge == nil || string(host.challenge.Sealed) != "sealed" {
+		t.Fatalf("boot key through the socket: %+v %d %+v", answer, state, host.challenge)
+	}
+	if _, state := c.ProveBootKey(&attest.BootChallenge{}, nil, nil); state != attest.BootKeyFailed {
+		t.Fatalf("a malformed challenge: state %d", state)
+	}
+	// The factor through the socket: nothing to keep, then something; the
+	// release reaches the coordinator and its status comes back.
+	if k := c.FactorToKeep(); k != nil {
+		t.Fatalf("a factor to keep from nowhere: %+v", k)
+	}
+	host.keep = &attest.FactorBlob{CredentialBlob: []byte("cred"), EncryptedSecret: []byte("sec"), Label: "luks"}
+	if k := c.FactorToKeep(); k == nil || string(k.CredentialBlob) != "cred" || k.Label != "luks" {
+		t.Fatalf("factor to keep: %+v", k)
+	}
+	status, msg := c.TakeRelease(&attest.Release{Kind: attest.ReleaseKindFactor, CredentialBlob: []byte("cred"), EncryptedSecret: []byte("sec")})
+	if status != attest.ReleaseOK || msg != "opened" || host.release == nil || string(host.release.CredentialBlob) != "cred" {
+		t.Fatalf("release through the socket: %d %q %+v", status, msg, host.release)
+	}
+	c.Report(GateSession)
+	if len(host.reports) != 1 || host.reports[0] != GateSession {
+		t.Fatalf("reports %v", host.reports)
+	}
+
+	// A refusal carries the coordinator's exit status to the worker's unit.
+	c2, _ := startTestGate(t, &fakeHost{code: ExitTampered})
+	if _, code, err := c2.Identity(); code != ExitTampered || err == nil {
+		t.Fatalf("refusal: %d %v", code, err)
+	}
+}
+
+// What arrives on the socket is input: unknown operations and oversized or
+// malformed messages get no service.
+func TestCoordinatorTreatsRequestsAsInput(t *testing.T) {
+	host := &fakeHost{identity: &gateIdentity{}}
+	dial := func() net.Conn {
+		g, files, err := LinkGate(host)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(g.Close)
+		files[1].Close()
+		conn, err := net.FileConn(files[0])
+		files[0].Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+		return conn
+	}
+	conn := dial()
+	if err := writeGateFrame(conn, &gateRequest{Op: "unseal"}, maxGateRequest); err != nil {
+		t.Fatal(err)
+	}
+	var resp gateResponse
+	if err := readGateFrame(conn, &resp, maxGateResponse); err != nil || resp.Err == "" {
+		t.Fatalf("unknown operation: %+v %v", resp, err)
+	}
+	if err := writeGateFrame(conn, &gateRequest{Op: gateOpReceipt}, maxGateRequest); err != nil {
+		t.Fatal(err)
+	}
+	if err := readGateFrame(conn, &resp, maxGateResponse); err != nil || resp.Err == "" || host.receipt != nil {
+		t.Fatalf("receipt operation without a receipt: %+v %v", resp, err)
+	}
+
+	// A length beyond the limit, and bytes that are not a request, end the
+	// connection without an answer.
+	for _, raw := range [][]byte{
+		{0x7f, 0xff, 0xff, 0xff},
+		append([]byte{0, 0, 0, 5}, []byte("hello")...),
+		{0, 0, 0, 0},
+	} {
+		conn := dial()
+		if _, err := conn.Write(raw); err != nil {
+			t.Fatal(err)
+		}
+		buf := make([]byte, 1)
+		if n, err := conn.Read(buf); n != 0 || err == nil {
+			t.Fatalf("%x: answered with %d bytes (%v)", raw[:4], n, err)
+		}
+	}
+	if host.quotes != 0 {
+		t.Fatal("a malformed request reached the TPM side")
+	}
+}

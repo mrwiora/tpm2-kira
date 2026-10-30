@@ -1,0 +1,305 @@
+package phonegate
+
+// Integrity of the attestation record (SECURITY.md, "Phone attestation: what it does not
+// protect against").
+//
+// The record's NV index refuses in-place writes without the signing key
+// (PolicySigned), but the owner hierarchy can undefine it and define a new
+// one with any content: root on this system, or any other OS booted on this
+// machine. That could name an attacker's phone, or put back an older record
+// that still names a phone you removed.
+//
+// The gate therefore checks the record before it advertises, in the initrd,
+// before any passphrase is typed and whether or not a phone is there:
+//
+//   - its signature must verify with this machine's signing public key, a
+//     copy of which the boot plan puts into the image (signerForImage). That
+//     catches a record written by anyone else;
+//   - its count must equal the slot's TPM counter (attest_counter.go), which
+//     catches an older, genuinely signed record put back.
+//
+// Enrolling or removing a phone writes a newly signed record with the next
+// count; the image does not change, so nothing has to be rebuilt.
+//
+// The public key in the image is not a secret, and it is as trustworthy as
+// the initramfs that carries it: a unified kernel image signed for Secure
+// Boot, or PCRs covering the initrd in what the TOTP seal or the phone
+// checks. Where neither holds, whoever can replace the record can replace
+// the image and the key in it too.
+
+import (
+	"crypto"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"time"
+
+	"github.com/google/go-tpm/tpm2/transport"
+
+	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+)
+
+// DefaultAttestSignerPath is the signing public key inside the initramfs.
+const DefaultAttestSignerPath = "/etc/tpm2-kira/attest-signer.pem"
+
+// VerifyAttestBlobSignature checks the signature of a slot's blob (the raw
+// NV contents), which covers the phone enrolment in it, against pubKey.
+// The key must come from the machine's own key files, never from the blob.
+func VerifyAttestBlobSignature(signed []byte, pubKey crypto.PublicKey) error {
+	sb, err := nvslot.UnmarshalSealedBlob(signed)
+	if err != nil {
+		return err
+	}
+	return nvslot.VerifyBlobSignature(signed, sb, pubKey)
+}
+
+// AttestPublicKey loads this machine's signing public key: an explicit
+// path, else the default; the blob names no key file.
+func AttestPublicKey(explicit string) (crypto.PublicKey, string, error) {
+	path := explicit
+	if path == "" {
+		path = signing.DefaultPublicKeyPath
+	}
+	pub, _, err := signing.LoadSigningPublicKeyFromPEM(path)
+	if err != nil {
+		return nil, path, err
+	}
+	return pub, path, nil
+}
+
+// checkAttestRecord applies both checks to the raw record of a slot.
+func checkAttestRecord(tpmDev transport.TPM, idx uint32, raw []byte, pubKey crypto.PublicKey) error {
+	if err := VerifyAttestBlobSignature(raw, pubKey); err != nil {
+		return &recordError{foreign: true, detail: err.Error()}
+	}
+	sb, err := nvslot.UnmarshalSealedBlob(raw)
+	if err != nil {
+		return &recordError{foreign: true, detail: err.Error()}
+	}
+	b := sb.Payload.Attestation
+	if b == nil || !b.Phone.Enabled() {
+		return &recordError{detail: "the slot's blob carries no phone enrolment"}
+	}
+	counter, err := nvslot.ReadAttestCounter(tpmDev, nvslot.AttestCounterIndex(idx))
+	if err != nil {
+		return &recordError{detail: err.Error()}
+	}
+	if b.Count != counter {
+		return &recordError{detail: fmt.Sprintf("the record has count %d, the TPM counter is at %d", b.Count, counter)}
+	}
+	return nil
+}
+
+// recordError says why a record is not served: written by someone else, or
+// not the current one.
+type recordError struct {
+	foreign bool
+	detail  string
+}
+
+func (e *recordError) Error() string {
+	if e.foreign {
+		return "it is not signed by this machine's signing key (" + e.detail + ")"
+	}
+	return "it is not the current record (" + e.detail + ")"
+}
+
+// SignerForImage checks every enrolled record against this machine's
+// signing public key and the record counters, and gives that key (PEM)
+// for the image: ExitTampered when a record does not pass, ExitUsage
+// when nothing is enrolled, with the reason on errOut.
+func SignerForImage(tpmDev transport.TPM, pubKeyPath string, errOut io.Writer, debug bool) ([]byte, int) {
+	found := EnrolledSlots(tpmDev, debug)
+	if len(found) == 0 {
+		fmt.Fprintln(errOut, "tpm2-kira: no phone is enrolled for attestation")
+		return nil, ExitUsage
+	}
+	pub, path, err := AttestPublicKey(pubKeyPath)
+	if err != nil {
+		fmt.Fprintf(errOut, "tpm2-kira: no signing public key at %s: %v\n", path, err)
+		return nil, ExitInternal
+	}
+	for _, idx := range found {
+		slot := nvslot.AttestSlot(idx)
+		raw, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
+		if err != nil {
+			fmt.Fprintf(errOut, "tpm2-kira: slot %d: cannot read the attestation record: %v\n", slot, err)
+			return nil, ExitInternal
+		}
+		if err := checkAttestRecord(tpmDev, idx, raw, pub); err != nil {
+			fmt.Fprintf(errOut, "tpm2-kira: slot %d: TAMPERED: the attestation record is not accepted:\n", slot)
+			fmt.Fprintf(errOut, "tpm2-kira:   %v.\n", err)
+			fmt.Fprintf(errOut, "tpm2-kira:   Signing key: %s. Inspect the record with 'tpm2-kira phone status';\n", path)
+			fmt.Fprintf(errOut, "tpm2-kira:   to start over: 'tpm2-kira phone unenrol --nvram %d', then enrol again.\n", slot)
+			return nil, ExitTampered
+		}
+	}
+	pemBytes, err := signing.PublicKeyToPEM(pub)
+	if err != nil {
+		fmt.Fprintf(errOut, "tpm2-kira: cannot encode the signing public key: %v\n", err)
+		return nil, ExitInternal
+	}
+	return pemBytes, 0
+}
+
+// AttestEKCert shows what the phone will conclude about this TPM at
+// enrolment: which EK is offered, whether it has a vendor certificate, and
+// whether that certificate verifies against the roots embedded in the core.
+func AttestEKCert(tpmPath string, debug bool) error {
+	tpmDev, err := tpmdev.Open(tpmPath)
+	if err != nil {
+		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+	}
+	defer tpmDev.Close()
+	defer tpmdev.Cleanup(tpmDev, debug)
+
+	alg, ek, pub, err := PickCertifiedEK(tpmDev)
+	if err != nil {
+		return err
+	}
+	tpmdev.FlushHandle(tpmDev, ek.Handle)
+	cert := ReadEKCert(tpmDev, alg)
+	chain := ReadEKCertChain(tpmDev, cert)
+	fmt.Printf("EK offered at enrolment: %s\n", nvslot.EKAlgName(alg))
+	fmt.Printf("EK certificate:          %s\n", presentBytes(cert))
+	// The chain as the phone receives it: the TPM's intermediates (NV
+	// 0x01C00100) and what was fetched from caIssuers URLs, each with
+	// its issuer, so a break shows where it is.
+	if c, err := x509.ParseCertificate(cert); err == nil {
+		fmt.Printf("  leaf  %s\n        issued by %s\n", c.Subject, c.Issuer)
+		for _, u := range c.IssuingCertificateURL {
+			fmt.Printf("        caIssuers %s\n", u)
+		}
+	}
+	certs, _ := attest.SplitDERChain(chain)
+	fmt.Printf("Certificate chain:       %d certificate(s) (NV 0x%08X, completed from caIssuers URLs)\n", len(certs), attest.EKCertChainNVIndex)
+	for i, b := range certs {
+		if c, err := x509.ParseCertificate(b); err == nil {
+			fmt.Printf("  %d     %s\n        issued by %s\n", i+1, c.Subject, c.Issuer)
+		}
+	}
+	if missing := attest.EKIssuerMissing(cert, chain); missing != "" {
+		fmt.Printf("Breaks off at:           %s (neither embedded nor fetched)\n", missing)
+	}
+	by, err := attest.VerifyEKCertificate(pub, cert, chain, time.Now())
+	if attest.IsVendorUnknown(err) {
+		fmt.Printf("Result:                  \033[0;33mVENDOR NOT KNOWN: %s\033[0m\n", attest.EKCertNote(err))
+		fmt.Println("The phone will show this TPM's vendor as not known yet: not untrusted, a risk to weigh.")
+		return nil
+	}
+	if err != nil {
+		fmt.Printf("Result:                  \033[0;31mNOT VERIFIED: %s\033[0m\n", attest.EKCertNote(err))
+		fmt.Println("The phone will show this TPM as \"not verified as genuine hardware\".")
+		return nil
+	}
+	fmt.Printf("Result:                  \033[0;32mverified: %s\033[0m\n", by)
+	return nil
+}
+
+func presentBytes(b []byte) string {
+	if len(b) == 0 {
+		return "absent"
+	}
+	return fmt.Sprintf("present (%d bytes)", len(b))
+}
+
+// ErrNotEnrolled: the slot's blob carries no phone enrolment.
+var ErrNotEnrolled = errors.New("no phone is enrolled for this slot")
+
+// ReadSlot returns a slot's blob as stored and parsed.
+func ReadSlot(tpmDev transport.TPM, idx uint32) ([]byte, *nvslot.SealedBlob, error) {
+	raw, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
+	if err != nil {
+		return nil, nil, err
+	}
+	sb, err := nvslot.UnmarshalSealedBlob(raw)
+	if err != nil {
+		return raw, nil, err
+	}
+	return raw, sb, nil
+}
+
+// LoadAttestBlob returns the phone enrolment a slot's blob carries.
+func LoadAttestBlob(tpmDev transport.TPM, idx uint32) (*nvslot.Attestation, error) {
+	_, sb, err := ReadSlot(tpmDev, idx)
+	if err != nil {
+		return nil, err
+	}
+	if sb.Payload.Attestation == nil || !sb.Payload.Attestation.Phone.Enabled() {
+		return nil, ErrNotEnrolled
+	}
+	return sb.Payload.Attestation, nil
+}
+
+// EnrolledSlots returns the slots whose blob carries a phone enrolment.
+func EnrolledSlots(tpmDev transport.TPM, debug bool) []uint32 {
+	var out []uint32
+	for _, idx := range nvslot.FindPopulatedSlots(tpmDev, debug) {
+		if _, err := LoadAttestBlob(tpmDev, idx); err == nil {
+			out = append(out, idx)
+		}
+	}
+	return out
+}
+
+func ReadSealedSlot(tpmDev transport.TPM, sealIndex uint32) *nvslot.SealedBlob {
+	data, err := tpmdev.ReadFromNVRAM(tpmDev, sealIndex)
+	if err != nil {
+		return nil
+	}
+	sb, err := nvslot.UnmarshalSealedBlob(data)
+	if err != nil {
+		return nil
+	}
+	return sb
+}
+
+func GateFail(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: "+format+"\n", args...)
+}
+
+// GateRecordCheck checks the record in the TPM before anything is
+// advertised: signed by the key this initramfs carries, and current by the
+// TPM's counter. It reports whether the record was verified, or the exit
+// status with which the gate gives up.
+func GateRecordCheck(tpmDev transport.TPM, idx uint32, signerPath string) (bool, int) {
+	if signerPath == "" {
+		signerPath = DefaultAttestSignerPath
+		// Run by hand on the unlocked system, there is no image around
+		// the gate, but the key the image would carry is right here.
+		if _, err := os.Stat(signerPath); os.IsNotExist(err) {
+			if _, err := os.Stat(signing.DefaultPublicKeyPath); err == nil {
+				signerPath = signing.DefaultPublicKeyPath
+			}
+		}
+	}
+	raw, err := tpmdev.ReadFromNVRAM(tpmDev, idx)
+	if err != nil {
+		GateFail("cannot read the attestation record at 0x%08X: %v", idx, err)
+		return false, ExitInternal
+	}
+	if _, err := os.Stat(signerPath); os.IsNotExist(err) {
+		fmt.Printf("tpm2-kira: no signing public key at %s to check the attestation record (in an initramfs: rebuild it)\n", signerPath)
+		return false, 0
+	}
+	pub, _, err := signing.LoadSigningPublicKeyFromPEM(signerPath)
+	if err != nil {
+		GateFail("cannot use the signing public key at %s: %v", signerPath, err)
+		return false, ExitInternal
+	}
+	if err := checkAttestRecord(tpmDev, idx, raw, pub); err != nil {
+		GateFail("the attestation record in the TPM (slot %d) is not accepted:\n"+
+			"tpm2-kira:   %v.\n"+
+			"tpm2-kira:   It was replaced, or an older one was put back: no phone is served, and a\n"+
+			"tpm2-kira:   verdict from any phone means nothing for this boot. To start over, run\n"+
+			"tpm2-kira:   'tpm2-kira phone unenrol' on the unlocked system and enrol again.",
+			nvslot.AttestSlot(idx), err)
+		return false, ExitTampered
+	}
+	return true, 0
+}

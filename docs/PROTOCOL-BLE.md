@@ -1,13 +1,13 @@
 # tpm2-kira BLE Attestation Protocol — Interface Definition
 
 > **Protocol version 1, schema 2.** Status: implemented on the machine side
-> (`attest/`, `transport/frame/`, `transport/ble/`) and in the phone core
-> (`mobile/kiracore/`). This document is the contract between a tpm2-kira
+> (`core/attest/`, `core/transport/frame/`, `core/transport/ble/`) and in the phone core
+> (`core/mobile/kiracore/`). This document is the contract between a tpm2-kira
 > machine and a phone app. The key words MUST, MUST NOT, SHOULD and MAY are
 > used as in RFC 2119.
 >
-> Background and rationale: [PLAN-REMOTEATTESTATION.md](PLAN-REMOTEATTESTATION.md),
-> [PLAN-BLE.md](PLAN-BLE.md), [PLAN-FACTORRELEASE.md](PLAN-FACTORRELEASE.md).
+> Background and rationale: [PLAN-PHONE.md](PLAN-PHONE.md),
+> [PLAN-BLE.md](PLAN-BLE.md), [PLAN-PHONESALT.md](PLAN-PHONESALT.md).
 > App build instructions: [mobile/AGENT-PROMPT-ANDROID.md](mobile/AGENT-PROMPT-ANDROID.md),
 > [mobile/AGENT-PROMPT-IOS.md](mobile/AGENT-PROMPT-IOS.md).
 
@@ -27,7 +27,7 @@ The protocol serves two purposes, both over the same session:
 | Purpose | When | Status |
 |---|---|---|
 | **Attestation** | Always. The phone shows *match* / *changed* / *failed*, the user decides on changes, the machine's console shows the signed verdict. | Implemented |
-| **Salt release** | Additionally, when the machine uses [hashpwd2](https://github.com/mrwiora/hashpwd2) to derive the LUKS key. After a trusted receipt, the phone sends a TPM-bound *factor*; the machine unwraps it and hands it to hashpwd2 as the salt (PLAN-FACTORRELEASE.md). | Message defined (§7.3.7); machine replies "unsupported" in this version |
+| **Salt release** | Additionally, when the LUKS key is derived from a password and the phone salt (`password+phonesalt`). After a trusted receipt, the phone sends a TPM-bound *factor*; the machine unwraps it and uses it as the salt of the derivation (PLAN-PHONESALT.md). | Message defined (§7.3.7); machine replies "unsupported" in this version |
 
 Attestation stands on its own. Salt release is an optional step on top of a
 trusted receipt and never replaces it.
@@ -40,7 +40,7 @@ trusted receipt and never replaces it.
 ├────────────────────────────────────────────────────────────┤  │ implemented ONCE,
 │ Records (§5) + Noise session (§6)  XX at enrolment, IK after│  │ in Go, shared by
 ├────────────────────────────────────────────────────────────┤  │ machine and phone
-│ Framing (§4)                       fragments ⇄ records      │  ┘ (mobile/kiracore)
+│ Framing (§4)                       fragments ⇄ records      │  ┘ (core/mobile/kiracore)
 ├────────────────────────────────────────────────────────────┤
 │ GATT (§3)                          RX write, TX notify      │  ┐ implemented by
 ├────────────────────────────────────────────────────────────┤  │ the app (native
@@ -49,7 +49,7 @@ trusted receipt and never replaces it.
 ```
 
 **The phone app MUST NOT re-implement the upper three layers.** It links the
-Go core (`mobile/kiracore`, built with `gomobile bind`) and only moves bytes
+Go core (`core/mobile/kiracore`, built with `gomobile bind`) and only moves bytes
 between the BLE stack and the core, and events between the core and the UI
 (§10). Every check that decides whether a boot is trustworthy runs in the
 core, byte for byte the code the machine's test suite runs. The wire format
@@ -90,8 +90,8 @@ tag         := HMAC-SHA256(adv_key, "tpm2-kira/adv/v1" ‖ prand)[0:8]
 
 | flags bit | Meaning |
 |---|---|
-| `0x01` ENROL | the machine runs `attest enrol` and waits for a new phone; `tag` is all zero |
-| `0x02` ATTEST | the machine serves attestation requests (`attest gate`) |
+| `0x01` ENROL | the machine runs `phone enrol` and waits for a new phone; `tag` is all zero |
+| `0x02` ATTEST | the machine serves attestation requests (`phone gate`) |
 
 `adv_key` (32 bytes) is sent to the phone at enrolment (EnrolOffer field 16)
 and stored in the machine record. `prand` is random per boot.
@@ -438,12 +438,12 @@ phone, decides whether a released factor opens.
 
 | Tag | Name | Type | | Notes |
 |---|---|---|---|---|
-| 1 | kind | u8 | R | 1 passphrase (remote unlocking), 2 factor (hashpwd2 salt) |
+| 1 | kind | u8 | R | 1 passphrase (the vault), 2 factor (the phone salt) |
 | 2 | slot | u8 | R | |
 | 3 | credential_blob | bytes ≤1024 | R | `TPM2_MakeCredential` credentialBlob, made at factor enrolment |
 | 4 | encrypted_secret | bytes ≤1024 | R | `TPM2_MakeCredential` secret |
 | 5 | ciphertext | bytes ≤4096 | O | kind 1 only |
-| 6 | approval | bytes ≤600 | O | unused: the release key has no branch the phone could open (PLAN-FACTORRELEASE.md §4.1) |
+| 6 | approval | bytes ≤600 | O | unused: the release key has no branch the phone could open (PLAN-PHONESALT.md §4.1) |
 | 7 | label | string ≤64 | O | factor label, default `luks` |
 
 The phone never holds the factor itself — only this blob, which only the
@@ -517,12 +517,16 @@ not listing exactly the PCRs of `pcr_selection` in order, aborts the
 enrolment. Without the field the phone pins `pcr_values` (`added_by` =
 `enrolment`), as before.
 
-The phone verifies `ek_cert` against vendor roots built into the core
-(`attest/ekroots/`, one directory per vendor listed with pinned SHA-256 values in `vendors.json`; currently Intel PTT — `attest/ekroots/README.md` says how to add a vendor) with `ek_cert_chain` as
-intermediates, and requires the certificate's key to be `ek_pub`. The result
-is shown to the user before binding ("TPM verified: Intel PTT" or "not
-verified as genuine hardware") and stored in the record; it never blocks
-enrolment. Revocation is not checked.
+The phone verifies `ek_cert` against the EK root store built into the core
+- tpm2-verifier's `ekroots` (`github.com/tpm2-trust/tpm2-verifier`, its
+`ekroots/vendors/`: per vendor its roots and the intermediates its TPMs do
+not carry, checked against a signed manifest; vendors are added there;
+currently Intel) - with `ek_cert_chain` as intermediates, and requires the
+certificate's key to be `ek_pub`. The result is shown to the user before
+binding - "TPM verified: Intel Corporation"; "vendor not known" when the
+store has no root of the TPM's vendor yet, which is not untrusted but a
+risk to weigh; or "not verified as genuine hardware" - and stored in the
+record; it never blocks enrolment. Revocation is not checked.
 
 #### 7.3.12 Challenge (0x25), ChallengeResponse (0x26)
 
@@ -544,10 +548,10 @@ chain (Android Key Attestation), concatenated DER, leaf first, made with the
 challenge `SHA-256("tpm2-kira/anchor-attest/v1" ‖ cb)`.
 
 The machine checks field 7 against pinned Google attestation roots
-(`attest/phoneroots/`): the leaf is for `anchor_pub`, the challenge is this
+(`core/attest/phoneroots/`): the leaf is for `anchor_pub`, the challenge is this
 session's, the key was generated in StrongBox or the TEE, needs an unlock for
 every use, and the phone booted locked and verified; on the booted machine it
-also consults Google's revocation list. `attest enrol --verify-phone
+also consults Google's revocation list. `phone enrol --verify-phone
 warn|require|off` (default `warn`: show and ask) decides what an unverified
 phone means; a refusal is sent as Error code 8 (policy) and nothing is
 stored. `--verify-tpm` does the same for the machine's own EK certificate
@@ -578,7 +582,7 @@ Bye has no fields. Error: 1 `code` u16 R · 2 `message` string ≤256 O.
 | Bit | Name |
 |---|---|
 | 0 | `CAP_EVENTLOG` — the event log can be requested |
-| 1 | `CAP_RELEASE_FACTOR` — Release kind 2 (hashpwd2 salt) is configured |
+| 1 | `CAP_RELEASE_FACTOR` — Release kind 2 (the phone salt) is configured |
 | 2 | `CAP_RELEASE_PASSPHRASE` — Release kind 1 is configured |
 
 ### 7.5 Verdict codes
@@ -636,8 +640,8 @@ the person at its console, signs `SHA-256("tpm2-kira/boot-signature/v1" ‖ qd
 same policy), and answers with `boot_key_state` 1, `boot_proof =
 HMAC-SHA256(k_mac, "tpm2-kira/boot-proof/v1" ‖ qd)` and `boot_signature`. If
 the TPM refuses, it answers with state 2 and neither. On the booted system,
-where `tpm2-kira cap` has locked the slot until the next boot (a check by
-hand, or a remote salt's enrolment, PLAN-FACTORRELEASE.md §6), it answers with state 4 and
+where `tpm2-kira-boot cap` has locked the slot until the next boot (a check by
+hand, or a phone salt's enrolment, PLAN-PHONESALT.md §6), it answers with state 4 and
 neither: not a refusal of the boot state, but the key's unavailability by
 design. The code is never sent back.
 
@@ -671,7 +675,7 @@ changed in a diff are those that do not match under these rules.
 
 ## 8. Exchanges
 
-### 8.1 Enrolment (machine runs `tpm2-kira attest enrol`, booted system)
+### 8.1 Enrolment (machine runs `tpm2-kira phone enrol`, booted system)
 
 ```mermaid
 sequenceDiagram
@@ -700,7 +704,7 @@ sequenceDiagram
     P->>M: Bye
 ```
 
-### 8.2 Attestation (machine runs `tpm2-kira attest gate`)
+### 8.2 Attestation (machine runs `tpm2-kira phone gate`)
 
 ```mermaid
 sequenceDiagram
@@ -723,7 +727,7 @@ sequenceDiagram
     P->>M: Receipt
     M->>M: check signature against pinned anchor and binding to this session
     M->>P: ReceiptAck
-    opt salt release (hashpwd2), trusted verdict, CAP_RELEASE_FACTOR
+    opt salt release (the phone salt), trusted verdict, CAP_RELEASE_FACTOR
         P->>M: Release (kind 2)
         M->>P: ReleaseAck
     end
@@ -784,14 +788,14 @@ enrol_accept_tbs := "tpm2-kira/enrol-accept/v1" ‖ lp(device_id) ‖ lp(cb) ‖
 
 ### 9.5 SAS — see §6.4.  9.6 Advertising tag — see §2.2.
 
-### 9.7 Factor (salt for hashpwd2)
+### 9.7 Factor (the phone salt)
 
 ```
 factor := hex( HKDF-SHA256(ikm = F, salt = "", info = "tpm2-kira/factor/v1" ‖ lp(label), L = 32) )
 ```
 
 `F` is the 32-byte secret recovered by `TPM2_ActivateCredential` from a
-Release. The 64 lowercase hex characters are the salt (PLAN-FACTORRELEASE.md §5.1).
+Release. The 64 lowercase hex characters are the salt (PLAN-PHONESALT.md §5.1).
 
 ### 9.8 Test vectors
 
@@ -824,11 +828,11 @@ selection SHA-256 {0, 2, 4, 7}, `device_id = a0 … af`,
 07000000 64656661756c74 803bb16a00000000 ac3cb16a00000000 07000000 706978656c2d31
 ```
 
-These values are asserted by `attest/vectors_test.go`.
+These values are asserted by `core/attest/vectors_test.go`.
 
 ---
 
-## 10. The phone core API (`mobile/kiracore`)
+## 10. The phone core API (`core/mobile/kiracore`)
 
 Built with `gomobile bind`. Java/Kotlin package `kiracore`, Swift prefix
 `Kiracore`. Only `String`, `[]byte`, `long`/`Int`, `Boolean` and opaque
@@ -887,7 +891,7 @@ Every event is a JSON object with `type`. `tbs` is base64 (prefer `PendingTBS()`
 | `type` | Fields | App action |
 |---|---|---|
 | `sas` | `sas` (6 digits) | show large; buttons *Matches* / *Does not match* → `ConfirmSAS` |
-| `need_anchor_key` | `device_id`, `friendly_name`, `ek_verified_by` (vendor, or absent), `ek_note` (why not verified), `initrd_coverage` (`covered` · `not_covered` · `no_initrd` · `unknown`), `initrd_pcrs`, `attestation_challenge` (hex) | show what is known about the machine and let the user decide to bind; then create the non-exportable P-256 key (§11.2) with `attestation_challenge` as its attestation challenge → `ProvideAnchorKeyAttested(spki, chain)` (or `ProvideAnchorKey` where the platform cannot attest) |
+| `need_anchor_key` | `device_id`, `friendly_name`, `ek_verified_by` (vendor, or absent), `ek_note` (why not verified), `ek_vendor_unknown` (true: the EK root store has no root of the TPM's vendor yet - not untrusted, a risk to weigh), `initrd_coverage` (`covered` · `not_covered` · `no_initrd` · `unknown`), `initrd_pcrs`, `attestation_challenge` (hex) | show what is known about the machine and let the user decide to bind; then create the non-exportable P-256 key (§11.2) with `attestation_challenge` as its attestation challenge → `ProvideAnchorKeyAttested(spki, chain)` (or `ProvideAnchorKey` where the platform cannot attest) |
 | `need_signature` | `purpose` (`enrol_accept`, `receipt`), `tbs`, `verdict_code` | unlock prompt (§11.2), sign `PendingTBS()` → `ProvideSignature` |
 | `enrolled` | `record` | persist the record (encrypted) |
 | `hello` | `device_id`, `friendly_name` | show "connected to …" |
@@ -938,7 +942,7 @@ counters, timestamps, `ek_verified_by`). The app stores it encrypted and hands i
 unchanged. It contains no private key, but `adv_key` and `machine_noise_pub`
 identify the machine, so treat it as private data.
 
-### 10.6 Demo machine for tests (`mobile/kiratest`)
+### 10.6 Demo machine for tests (`core/mobile/kiratest`)
 
 A second gomobile library, **for debug and test builds only**, runs the real
 machine-side protocol over a software TPM, with the BLE link replaced by
@@ -1016,8 +1020,8 @@ is created: on a phone without biometrics, enrolling a fingerprint later does
 not invalidate the key. Removing the screen lock invalidates it on both
 platforms.
 
-Losing the phone means re-enrolling the machine (`tpm2-kira attest enrol`
-again with the new phone; `attest unenrol` removes the old entry).
+Losing the phone means re-enrolling the machine (`tpm2-kira phone enrol`
+again with the new phone; `phone unenrol` removes the old entry).
 
 ---
 
@@ -1070,8 +1074,8 @@ wants to see why a boot changed.
 
 | Item | Where specified |
 |---|---|
-| Releasing the hashpwd2 salt (factor enrolment, Release handling) | PLAN-FACTORRELEASE.md |
-| No enforced mode: the passphrase can always be entered by hand; enforcement, where wanted, is a missing factor | UNLOCK-DISK.md §4, PLAN-BLE.md §7 |
+| Releasing the phone salt (factor enrolment, Release handling) | PLAN-PHONESALT.md |
+| No enforced mode: the passphrase can always be entered by hand; enforcement, where wanted, is a missing factor | DISK-KEY.md, "When the answer is wrong", PLAN-BLE.md §7 |
 | Bluetooth inside the initramfs: implemented (hooks, `control.conf` for the adapter), not yet tested on hardware | PLAN-BLE.md §3.1, phase 5 |
 | Break-glass bypass tokens | PLAN-BLE.md §7.6 |
 

@@ -1,0 +1,6 @@
+[submodule "assh"]
+	path = assh
+	url = https://github.com/tpm2-trust/assh.git
+[submodule "tpm2-verifier"]
+	path = tpm2-verifier
+	url = https://github.com/tpm2-trust/tpm2-verifier.git

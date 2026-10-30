@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          submodules: true
 
       - name: Set up Go
         uses: ./.github/actions/go-latest
@@ -33,10 +35,14 @@ jobs:
         run: go mod download
 
       - name: Run go vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          cd core && go vet ./...
 
       - name: Run unit tests
-        run: go test -v -tags=unit -coverprofile=coverage.out ./cmd/... ./attest/... ./transport/... ./mobile/...
+        run: |
+          go test -v -tags=unit -coverprofile=coverage.out ./internal/...
+          cd core && go test -v ./...
 
       - name: Fuzz the parsers of untrusted input
         run: make fuzz FUZZTIME=10s

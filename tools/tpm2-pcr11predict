@@ -6,7 +6,7 @@
 # is kept as an INDEPENDENT CROSS-CHECK of that built-in implementation:
 #
 #   tpm2-pcr11predict                 # via systemd-measure
-#   tpm2-kira seal --pcrs 11u --debug # via the built-in implementation
+#   tpm2-kira slot add --pcrs 11u --debug # via the built-in implementation
 #
 # The two must agree. Override the defaults via the environment:
 #   UKI=/boot/EFI/Linux/other.efi tpm2-pcr11predict

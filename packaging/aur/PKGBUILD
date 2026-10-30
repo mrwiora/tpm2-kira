@@ -20,14 +20,34 @@ optdepends=('mkinitcpio: for early boot integration'
             'tpm2-tools: for debugging and integration testing'
             'pcsclite: keeping the signing key on a YubiKey (setup --yubikey)')
 conflicts=('tpm2-kira-git')
+# The commit of the assh submodule at the tag (git rev-parse "$_tag:assh"):
+# GitHub's tag tarball leaves submodules out. Set with _tag.
+_assh=0ce851719c1aa432e84c125e2389438d55140243
+# The commit of the tpm2-verifier submodule (the core's EK root store), the
+# same way (git rev-parse "$_tag:tpm2-verifier").
+_verifier=804ab7ed7616c8984061febe01db999fdcb10d33
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
-sha256sums=('SKIP')
+source+=("assh-$_assh.tar.gz::https://github.com/tpm2-trust/assh/archive/$_assh.tar.gz")
+source+=("tpm2-verifier-$_verifier.tar.gz::https://github.com/tpm2-trust/tpm2-verifier/archive/$_verifier.tar.gz")
+sha256sums=('SKIP' 'SKIP' 'SKIP')
 options=('!debug')
 
 # GitHub names the extracted directory after the tag, minus a leading 'v'.
 _srcdir="$pkgname-${_tag#v}"
 
 prepare() {
+    # aSSH's and tpm2-verifier's sources where the submodules go (an
+    # archive of the repository's HEAD carries them already, and has no
+    # assh-* or tpm2-verifier-* source).
+    if [[ -d assh-$_assh ]]; then
+        rm -rf "$_srcdir/assh"
+        mv "assh-$_assh" "$_srcdir/assh"
+    fi
+    if [[ -d tpm2-verifier-$_verifier ]]; then
+        rm -rf "$_srcdir/tpm2-verifier"
+        mv "tpm2-verifier-$_verifier" "$_srcdir/tpm2-verifier"
+    fi
+
     cd "$_srcdir"
 
     export GOPROXY=direct
@@ -43,16 +63,28 @@ build() {
     # rules out -buildmode=pie: even without cgo a PIE binary still needs
     # glibc's program interpreter, /lib64/ld-linux-x86-64.so.2, to start.
     export CGO_ENABLED=0
-    export GOFLAGS="-trimpath -mod=readonly -modcacherw"
+    # The sources are a tarball; a git repository around the build
+    # directory (build/aur in a checkout) is not theirs, and Go would stamp
+    # its HEAD into the binary. The version is main.Version.
+    export GOFLAGS="-trimpath -mod=readonly -modcacherw -buildvcs=false"
+    # A go.work above build/aur (a development workspace) is not theirs
+    # either: the package builds the archive's sources, aSSH as pinned.
+    export GOWORK=off
 
+    # tpm2-kira on the installed system; tpm2-kira-boot, what the boot image
+    # carries, put in by the hook.
     go build -ldflags "-s -w -X main.Version=${pkgver}" -o "$pkgname" .
-    go version -m "$pkgname" | grep -q 'CGO_ENABLED=0' || { echo "$pkgname was built with cgo" >&2; return 1; }
+    go build -ldflags "-s -w -X main.Version=${pkgver}" -o "$pkgname-boot" ./cmd/tpm2-kira-boot
+    for b in "$pkgname" "$pkgname-boot"; do
+        go version -m "$b" | grep -q 'CGO_ENABLED=0' || { echo "$b was built with cgo" >&2; return 1; }
+    done
 }
 
 check() {
     cd "$_srcdir"
 
-    go test -tags=unit ./cmd/...
+    go test -tags=unit ./internal/...
+    (cd core && go test ./...)
 }
 
 backup=(etc/tpm2-kira/control.conf)
@@ -61,6 +93,7 @@ package() {
     cd "$_srcdir"
 
     install -Dm755 "$pkgname" "$pkgdir/usr/bin/$pkgname"
+    install -Dm755 "$pkgname-boot" "$pkgdir/usr/bin/$pkgname-boot"
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
@@ -70,14 +103,13 @@ package() {
         "$pkgdir/usr/lib/systemd/system/tpm2-kira.service"
     install -Dm644 initramfs/systemd/tpm2-kira-cap.service \
         "$pkgdir/usr/lib/systemd/system/tpm2-kira-cap.service"
+    install -Dm644 initramfs/systemd/tpm2-kira-machine-id.service \
+        "$pkgdir/usr/lib/systemd/system/tpm2-kira-machine-id.service"
     install -Dm644 initramfs/systemd/tpm2-kira-unlock.socket \
         "$pkgdir/usr/lib/systemd/system/tpm2-kira-unlock.socket"
 
-    # The attestation by phone; added to the image by the install hook
-    # when a phone is enrolled.
-    install -Dm644 initramfs/systemd/tpm2-kira-attest.service \
-        "$pkgdir/usr/lib/systemd/system/tpm2-kira-attest.service"
-    # The one configuration file: the unlock mode, the radio.
+    # tpm2-kira's configuration file: the radio, the image's network and
+    # SSH server (control writes it, and assh.conf beside it).
     install -Dm644 initramfs/common/control.conf \
         "$pkgdir/etc/tpm2-kira/control.conf"
 
