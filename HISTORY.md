@@ -576,6 +576,32 @@ string into a file-access vector.
 
 ---
 
+## The slot's record: from an NV index to an EFI variable (2026-10-30)
+
+Until blob format 15 a slot's blob was an NV index of its own, at
+`0x01803010` + *n*, defined `PolicyWrite` under the signing key's
+PolicySigned (§9 of SECURITY-BACKGROUND then): only that key could
+rewrite it, the owner hierarchy could delete it. Two limits made it go.
+**Room:** the TPM stores at most `TPM2_PT_NV_INDEX_MAX` in one index,
+2048 bytes on many; a TPM salt next to the vault with a pepper on an
+RSA-2048 EK (188 bytes more per factor wrapped for it) came to 2065 and
+was refused, and an RSA signing key with a phone did not fit either.
+**Atomicity:** a TPM cannot replace an index in place; every rewrite
+undefined it first, so a write that failed after the undefine left the
+slot empty, and the blob about to be written was saved to
+`/etc/tpm2-kira/recovery/slot-0x<index>-<time>.blob` for `slot restore
+FILE` to put back. Nothing in the blob needed the TPM to keep it - its
+integrity is the signature, its freshness the record counter, nothing in
+it is secret in clear - so it moved into the EFI variable `KIRAslotN`
+(at most 8 KiB, written whole or not at all), and the stash, `slot
+restore` and the NV size checks went with it. What root can do to a
+variable it could do to the index's owner authorisation (delete it); the
+one thing lost is that rewriting needed the signing key, which a
+replaced record's signature check covers. Format 16 also made the TOTP
+key optional (`slot add --totp`): the rule "a TOTP key or phones" was the
+history of the slot as a TOTP slot. A slot of format 15 is not read;
+`slot delete` and sealing again are the way.
+
 ## NVRAM index definition
 
 The NV index holding the blob was originally defined with `OwnerWrite: true`

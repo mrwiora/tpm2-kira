@@ -49,17 +49,12 @@ func TestSlotContentsDirtyAndRemains(t *testing.T) {
 	for what, change := range map[string]func(c *SlotContents){
 		"without its record":           func(c *SlotContents) { c.Record = false },
 		"without its generation index": func(c *SlotContents) { c.Generation = false },
-		"with an earlier version's NV": func(c *SlotContents) { c.OldBlob = true },
 	} {
 		d := c
 		change(&d)
 		if !d.Dirty() {
 			t.Errorf("a slot %s is not dirty", what)
 		}
-	}
-	old := SlotContents{Slot: 2, OldBlob: true}
-	if !old.Dirty() || old.Remains() != "a blob of an earlier version in NV" {
-		t.Fatalf("an earlier version's blob alone: %+v, %s", old, old.Remains())
 	}
 	c.Record = false
 	d := dirtText([]SlotContents{c, {Slot: 5, Counter: true}})
@@ -84,7 +79,7 @@ func TestCollectSlotContentsWithoutTPM(t *testing.T) {
 		{Keyslot: 3, Token: &diskkey.LuksToken{Recipe: diskkey.RecipeRecovery}}, // bound to nothing: no slot takes it
 	}}}
 	c := collectSlotContents(nil, devices, 2)
-	if !c.Record || c.Generation || c.Counter || c.OldBlob || len(c.Keyslots) != 1 || c.Keyslots[0].Keyslot != 1 {
+	if !c.Record || c.Generation || c.Counter || len(c.Keyslots) != 1 || c.Keyslots[0].Keyslot != 1 {
 		t.Fatalf("%+v", c)
 	}
 }
@@ -161,7 +156,7 @@ func TestDeleteSlotTakesWhatItCan(t *testing.T) {
 }
 
 // An incomplete slot says how it came to be: a record left by a cleared
-// TPM, a record gone, an earlier version's blob, a deletion stopped.
+// TPM, a record gone, a deletion stopped.
 func TestSlotContentsCause(t *testing.T) {
 	for _, c := range []struct {
 		s    SlotContents
@@ -170,7 +165,6 @@ func TestSlotContentsCause(t *testing.T) {
 		{SlotContents{Slot: 3, Record: true, Generation: true}, ""},
 		{SlotContents{Slot: 3, Record: true}, "the TPM was cleared"},
 		{SlotContents{Slot: 3, Generation: true, Counter: true}, "KIRAslot3) is gone"},
-		{SlotContents{Slot: 3, Record: true, Generation: true, OldBlob: true}, "earlier version"},
 		{SlotContents{Slot: 3, Counter: true}, "stopped halfway"},
 	} {
 		if got := c.s.Cause(); (c.want == "") != (got == "") || !strings.Contains(got, c.want) {

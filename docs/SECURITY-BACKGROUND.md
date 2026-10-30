@@ -179,11 +179,11 @@ signature, its freshness the record counter in the TPM (§3.3), and
 nothing in it is secret in clear: private parts are wrapped by this
 TPM's storage key, the TPM salt and the vault's part for its EK. So it
 needs no protection of the TPM's - only room, which an NV index (2048
-bytes on many TPMs, `TPM2_PT_NV_INDEX_MAX`) did not have for an RSA EK
-with two wrapped factors, an RSA signing key, or phones beside the
-rest. What the variable changes:
+bytes on many TPMs, `TPM2_PT_NV_INDEX_MAX`) has not for an RSA EK with
+two wrapped factors, an RSA signing key, or phones beside the rest. The
+variable against an NV index:
 
-| | NV index (until format 15) | EFI variable `KIRAslotN` |
+| | an NV index | EFI variable `KIRAslotN` |
 |---|---|---|
 | Size | `TPM2_PT_NV_INDEX_MAX`, often 2048 | 8 KiB (tpm2-kira's limit; firmware stores are small) |
 | Write | the signing key alone (PolicySigned) | root |
@@ -1104,9 +1104,7 @@ What this means in practice:
 5. **A record is replaced whole or not at all.** The firmware takes the
    whole variable or none of it and keeps the old one until the new one is
    there, so a failed `slot approve` or enrolment leaves the slot as it
-   was. (Rewriting an NV index meant undefining it first: a failed write
-   left the slot empty, and the blob was kept aside for `slot restore`.
-   Both went with the record's move to the variable.)
+   was.
 
 Setting an owner-hierarchy password would close the delete path for the
 indices, but tpm2-kira currently always presents an empty owner auth value,
@@ -1143,9 +1141,7 @@ unseen on the next `slot approve`.
 **Only this version is read.** There is no migration and no compatibility
 with earlier formats: a record of another version is an error that says to seal
 again, which means a new TOTP secret and enrolling the authenticator, the
-phones and the disk's keyslots again. A blob of version 15 or earlier is in
-NV at the slot's index, not in `KIRAslotN`: it is not read; `status` names
-it, and `slot add` or `slot delete` removes it.
+phones and the disk's keyslots again.
 
 The TOTP key is an HMAC key used inside the TPM, usable under a policy the
 signing key approves (PolicyAuthorize, §4). No command is ever executed from
@@ -1261,8 +1257,7 @@ signing key wrote the old record, and drops it otherwise: it does not sign
 verifiers it cannot vouch for. `phone enrol` and `phone unenrol`, the
 vault's and the TPM salt's enrolments read the record, verify it, change
 the attestation part and write it back, the slot part unchanged. Every
-write replaces the EFI variable whole (§9); `slot add` and `slot approve`
-also remove a blob an earlier version kept in NV at the slot's index.
+write replaces the EFI variable whole (§9).
 
 **Size.** A record is at most 8 KiB (`nvslot.MaxRecordSize`): firmware
 variable stores are small, and some fail when nearly full. What a record
@@ -1284,9 +1279,6 @@ so a record that would not fit never costs the slot its approval. An
 enrolment checks before anything is sent or made; `phone enrol` before the
 phone is involved only what is certain (a slot without phones gains at
 least one), and the write decides for the phone that actually enrolled.
-Until format 15 the blob had to fit one NV index (`TPM2_PT_NV_INDEX_MAX`,
-2048 bytes on many): an RSA EK with the TPM salt and the vault, or an RSA
-signing key with a phone, did not.
 
 The stored PCR digests are **measure-point values**, not end-of-firmware values
 and not the values a running system would report. `MeasurePointApplied` says

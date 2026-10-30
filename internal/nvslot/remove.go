@@ -22,9 +22,8 @@ import (
 )
 
 // Ours is what tpm2-kira defines at index, told by its place: the record
-// counters, the generation indices above them, and below those the blobs
-// (the boot settings', and a slot's blob of an earlier version). Outside
-// the range nothing is ours.
+// counters, the generation indices above them, and below those the boot
+// settings. Outside the range nothing is ours.
 func Ours(index uint32) persist.Owned {
 	switch {
 	case ValidateNVRAMIndex(index) != nil:
@@ -54,9 +53,8 @@ type Removed struct {
 }
 
 // RemoveSlot removes the slot at blobIndex whole: its record (the EFI
-// variable), then its generation index and record counter in the TPM -
-// and a blob an earlier version kept in NV at the slot's index, if one is
-// left. Every part is tried even when another fails; it gives what went,
+// variable), then its generation index and record counter in the TPM.
+// Every part is tried even when another fails; it gives what went,
 // and the failures together.
 func RemoveSlot(tpmDev transport.TPM, blobIndex uint32) ([]Removed, error) {
 	if err := ValidateBlobIndex(blobIndex); err != nil {
@@ -70,7 +68,6 @@ func RemoveSlot(tpmDev transport.TPM, blobIndex uint32) ([]Removed, error) {
 		removed = append(removed, Removed{blobIndex, fmt.Sprintf("the record (EFI variable KIRAslot%d)", SlotNumber(blobIndex))})
 	}
 	for _, part := range []Removed{
-		{blobIndex, "a blob of an earlier version in NV"},
 		{GenerationIndex(blobIndex), "the generation index"},
 		{AttestCounterIndex(blobIndex), "the record counter"},
 	} {

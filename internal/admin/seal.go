@@ -436,12 +436,5 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.Seale
 	if err := nvslot.WriteRecord(nvramIndex, data); err != nil {
 		return raised(fmt.Errorf("failed to write the slot's record: %w", err))
 	}
-	// A blob an earlier version kept in NV at the slot's index is
-	// replaced by the record: it goes.
-	if ok, err := nvslot.RemoveIndex(tpmDev, nvramIndex); ok {
-		fmt.Printf("Removed slot %d's blob of an earlier version from NV (0x%08X): the record is its EFI variable now.\n", nvslot.SlotNumber(nvramIndex), nvramIndex)
-	} else if err != nil {
-		fmt.Printf("Note: slot %d's blob of an earlier version at 0x%08X is still in NV (%v); 'tpm2-kira slot delete' removes it.\n", nvslot.SlotNumber(nvramIndex), nvramIndex, err)
-	}
 	return nil
 }

@@ -39,21 +39,19 @@ type SlotContents struct {
 	Record     bool // the slot's record (KIRAslotN): TOTP key, phones, release key
 	Generation bool // its generation index
 	Counter    bool // its record counter
-	OldBlob    bool // a blob of an earlier version in NV at the slot's index
 	Keyslots   []SlotKeyslot
 }
 
 // Any says whether anything of the slot exists.
 func (c SlotContents) Any() bool {
-	return c.Record || c.Generation || c.Counter || c.OldBlob || len(c.Keyslots) > 0
+	return c.Record || c.Generation || c.Counter || len(c.Keyslots) > 0
 }
 
 // Dirty says whether parts of the slot exist while it is not whole - its
 // record and its generation index: a deletion stopped halfway, a record
-// removed or a firmware reset, a TPM cleared under its record, a blob of
-// an earlier version left in NV.
+// removed or a firmware reset, a TPM cleared under its record.
 func (c SlotContents) Dirty() bool {
-	return c.Any() && (!c.Record || !c.Generation || c.OldBlob)
+	return c.Any() && (!c.Record || !c.Generation)
 }
 
 // Cause says how the slot came to be incomplete, and what that means;
@@ -66,8 +64,6 @@ func (c SlotContents) Cause() string {
 		return "its record is left without its slot in the TPM: the TPM was cleared, or the slot removed without the record - the record's keys are the old TPM's and open nothing"
 	case c.Generation && !c.Record:
 		return fmt.Sprintf("its record (the EFI variable KIRAslot%d) is gone: removed, or the firmware's variables were reset - its methods fail at boot, the fallbacks unlock (the password and salt typed, the OS recovery passphrase)", c.Slot)
-	case c.OldBlob:
-		return "a blob of an earlier version of tpm2-kira is left in NV at its index"
 	}
 	return "a deletion stopped halfway, or a piece was taken by hand"
 }
@@ -77,9 +73,6 @@ func (c SlotContents) Remains() string {
 	var parts []string
 	if c.Record {
 		parts = append(parts, fmt.Sprintf("the record (EFI variable KIRAslot%d)", c.Slot))
-	}
-	if c.OldBlob {
-		parts = append(parts, "a blob of an earlier version in NV")
 	}
 	if c.Generation {
 		parts = append(parts, "the generation index")
@@ -102,7 +95,6 @@ func collectSlotContents(tpmDev transport.TPM, devices []LuksDeviceStatus, slot 
 	c := SlotContents{Slot: slot, Index: nvslot.NVRAMSlotStart + uint32(slot)}
 	c.Record = nvslot.HasRecord(c.Index)
 	if tpmDev != nil {
-		c.OldBlob = tpmdev.NVRAMIndexExists(tpmDev, c.Index)
 		c.Generation = tpmdev.NVRAMIndexExists(tpmDev, nvslot.GenerationIndex(c.Index))
 		c.Counter = tpmdev.NVRAMIndexExists(tpmDev, nvslot.AttestCounterIndex(c.Index))
 	}

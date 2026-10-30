@@ -188,8 +188,6 @@ func kiraIndexRole(index uint32) string {
 	switch {
 	case index == nvslot.BootSettingsIndex:
 		return "the boot settings (debug at boot)"
-	case index >= nvslot.NVRAMSlotStart && index <= nvslot.NVRAMSlotEnd:
-		return fmt.Sprintf("a blob of slot #%d of an earlier version (the slot's record is its EFI variable now)", nvslot.SlotNumber(index))
 	case index >= nvslot.GenerationIndex(nvslot.NVRAMSlotStart) && index <= nvslot.GenerationIndex(nvslot.NVRAMSlotEnd):
 		return fmt.Sprintf("generation index of slot #%d", nvslot.SlotNumber(index-nvslot.GenerationIndexOffset))
 	case index >= nvslot.AttestCounterIndex(nvslot.NVRAMSlotStart) && index <= nvslot.AttestCounterIndex(nvslot.NVRAMSlotEnd):
@@ -199,9 +197,8 @@ func kiraIndexRole(index uint32) string {
 }
 
 // kiraLeftovers returns the indices that belong to no slot - a record
-// counter or a blob of an earlier version whose slot (generation index,
-// record) is gone, as an interrupted command leaves them - and the boot
-// settings.
+// counter whose slot (generation index, record) is gone, as an
+// interrupted command leaves it - and the boot settings.
 func kiraLeftovers(tpmDev transport.TPM, debug bool) []uint32 {
 	var out []uint32
 	if tpmdev.NVRAMIndexExists(tpmDev, nvslot.BootSettingsIndex) {
@@ -215,10 +212,8 @@ func kiraLeftovers(tpmDev transport.TPM, debug bool) []uint32 {
 		if slots[idx] {
 			continue
 		}
-		for _, part := range []uint32{idx, nvslot.AttestCounterIndex(idx)} {
-			if tpmdev.NVRAMIndexExists(tpmDev, part) {
-				out = append(out, part)
-			}
+		if c := nvslot.AttestCounterIndex(idx); tpmdev.NVRAMIndexExists(tpmDev, c) {
+			out = append(out, c)
 		}
 	}
 	return out
@@ -414,9 +409,6 @@ func slotStatus(tpmDev transport.TPM, idx uint32, debug bool) error {
 	}
 	fmt.Printf("  Generation index 0x%08X: %s\n", nvslot.GenerationIndex(idx), have(nvslot.GenerationIndex(idx)))
 	fmt.Printf("  Record counter 0x%08X: %s\n", nvslot.AttestCounterIndex(idx), have(nvslot.AttestCounterIndex(idx)))
-	if tpmdev.NVRAMIndexExists(tpmDev, idx) {
-		fmt.Printf("  NV index 0x%08X: a blob of an earlier version - 'tpm2-kira slot delete --nvram %d' removes it\n", idx, n)
-	}
 	if err != nil {
 		return nil
 	}

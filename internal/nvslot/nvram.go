@@ -22,7 +22,7 @@ const (
 	AppNVRAMEnd = 0x01803FFF
 )
 
-// blobPublic is a blob's index (a slot's, the boot settings'): written
+// blobPublic is the boot settings' index: written
 // only under the signing key's PolicySigned, no owner or unauthenticated
 // write path, so only a holder of that key can replace it. Reads stay open:
 // the secret is protected by the sealed object's own policy.

@@ -225,7 +225,6 @@ A slot is also left incomplete without anybody deleting it:
 |---|---|---|
 | the record, without the slot's indices | the TPM was cleared (or the slot removed without the record) | its keys are the old TPM's and open nothing |
 | the indices, without the record | the variable removed, or the firmware's variables reset | its methods fail at boot; the fallbacks unlock (password and salt typed, the OS recovery passphrase) |
-| a blob in NV at `0x01803010` + *n* | a slot sealed by tpm2-kira before the record moved to the EFI variable (format 15 and earlier) | not read; `slot add` or `slot delete` removes it |
 
 The pieces can still be taken by hand - these leave the slot dirty the
 same way where something of it remains:
@@ -276,8 +275,7 @@ Because the phones live in the slot's record,
 
 `slot delete` without `--nvram` removes everything of tpm2-kira's outside
 the disk: every slot, what belongs to no slot any more (a counter whose
-slot is gone, a record left by a cleared TPM, a blob of an earlier
-version), the boot settings, the sealed machine-id (`KIRAmachineID`,
+slot is gone, a record left by a cleared TPM), the boot settings, the sealed machine-id (`KIRAmachineID`,
 docs/SSH.md §2.1; it goes with slot 0 too), and the SSH CA - its EFI
 variable `KIRAasshCA` and `/etc/tpm2-kira/ssh_ca.pub` (docs/SSH.md §4).
 What it never touches is the LUKS header: a keyslot bound to a deleted
@@ -293,7 +291,5 @@ is no error.
 
 The firmware writes an EFI variable whole or not at all and keeps the
 old one until the new one is there: a `slot approve` or an enrolment that
-fails leaves the slot as it was. (While the slot was an NV index, a
-rewrite undefined it first, a failure left it empty, and the blob was
-kept aside for `slot restore`; both went with the move.)
+fails leaves the slot as it was.
 
