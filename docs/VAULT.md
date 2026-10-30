@@ -187,7 +187,7 @@ key (as slot approve):
    one) and the release key under the slot's policy. A slot already
    enrolled with a vault is refused.
 3. Draw L and R; wrap both for this TPM's EK and the release key's name.
-   Check the blob still fits its NV index with the vault method in it.
+   Check the slot's record still fits (8 KiB) with the vault method in it.
 4. `POST /v1/enrol` with the token, the device's public data (EK, EK
    certificate, AK), the slot's approval data (signing key, policyRef,
    the generation index's Name, the generation, the sealed PCR selection)

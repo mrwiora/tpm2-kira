@@ -2,18 +2,21 @@
 
 A slot is what everything else of tpm2-kira stands on: a policy of PCR
 values and a generation, approved by your signing key, in one of the
-TPM's slots 0-15 (NV indices `0x01803010`-`0x0180301F`). What is sealed
-to it works only in a boot whose PCRs match the approval:
+slots 0-15 - a record in the EFI variable `KIRAslotN`, with its
+generation index and record counter in the TPM (*Deleting a slot*,
+below). Its methods work only in a boot whose PCRs match the approval:
 
-- a TOTP key, the code on the screen ([CODE.md](CODE.md)) - or, once a
-  phone is enrolled, the phone's enrolment in its place ([PHONE.md](PHONE.md));
+- a TOTP key, when chosen (`slot add --totp`): the code on the screen
+  ([CODE.md](CODE.md)) - or, once a phone is enrolled, the phone's
+  enrolment in its place ([PHONE.md](PHONE.md));
+- the TPM salt ([DISK-KEY.md](DISK-KEY.md));
 - the phone salt's release key ([DISK-KEY.md](DISK-KEY.md#password-typed-salt-from-the-phone-0x1300));
 - the vault's local part ([VAULT.md](VAULT.md));
 - the SSH CA in the TPM approves its own slots the same way ([SSH.md](SSH.md)).
 
 `slot add` makes a slot, `slot approve` approves the boot state anew after
 an update (the hooks run it), `slot info` shows it, `slot list | status |
-delete | restore` handle its NV indices. The signing key comes from
+delete` show and remove it. The signing key comes from
 `tpm2-kira setup` (a file, or a YubiKey: [PLAN-YUBIKEY.md](PLAN-YUBIKEY.md));
 the details of sealing - the measure point, SHA-1, your own keys, several
 slots - are in [SEALING.md](SEALING.md).
@@ -21,8 +24,15 @@ slots - are in [SEALING.md](SEALING.md).
 ## Adding a slot: `slot add`
 
 ```bash
-tpm2-kira slot add
+tpm2-kira slot add            # the boot state alone: the methods are enrolled into it
+tpm2-kira slot add --totp     # and a TOTP code at boot, with slot 1 the fallback
 ```
+
+`--totp` seals a TOTP key too: a code at boot, compared with your
+authenticator before you type anything, which proves the boot is one your
+signing key approved. Without it nothing is shown at boot for the slot;
+its other methods - the vault, the TPM salt, a phone - check the boot.
+`tpm2-kira control` asks.
 
 Without `--pcrs`, the selection is what this boot measured, read from the
 event log:
@@ -34,8 +44,8 @@ event log:
 | neither | `0e,2e,7e` | firmware, option ROMs, Secure Boot state |
 | no event log to read (a software TPM, a run without root) | `0,2,7` | the same registers as they are now: nothing can be replayed |
 
-Without `--pcrs` and `--nvram`, a second slot is sealed as well: **slot 1,
-the fallback, to `0e,7e` alone** (`0,7` without an event log). When a kernel or boot loader change was
+Without `--pcrs` and `--nvram`, and with `--totp`, a second slot is sealed as
+well: **slot 1, the fallback, to `0e,7e` alone** (`0,7` without an event log). When a kernel or boot loader change was
 not predicted, slot 0 shows no code, but slot 1 still does as long as the
 firmware and the Secure Boot state are what they were: the machine is not
 simply lost, and the first slot is resealed once the boot is understood.
@@ -198,41 +208,55 @@ blob itself, so consumers never have to branch on the slot count.
 ## Deleting a slot
 
 **Deleting a slot is one act**: `tpm2-kira control`, the slot's own line. It
-deletes everything the slot is made of - the blob in the TPM (the TOTP
-key, the phones, the phone salt's release key), its two companion
-indices, the keyslots bound to the slot by their token (every recipe
-but the recovery recipe, which is bound to nothing and stays), the
-recovery blobs stashed for it. If any part fails to go (no remaining
-passphrase for `luksKillSlot`, a TPM that refuses), the rest is still
-removed, and the slot is **dirty**: parts of it exist while its blob is
-gone. `control` shows a dirty slot with `[!]` and recommends the removal
-first, `status` notes it, until a run removes what is left.
+deletes everything the slot is made of - its record (the EFI variable
+`KIRAslotN`: the TOTP key, the phones, the phone salt's release key, the
+vault's part, the TPM salt), its two companion indices in the TPM, the
+keyslots bound to the slot by their token (every recipe but the recovery
+recipe, which is bound to nothing and stays). If any part fails to go (no
+remaining passphrase for `luksKillSlot`, a TPM that refuses), the rest is
+still removed, and the slot is **dirty**: parts of it exist while it is
+not whole. `control` shows a dirty slot with `[!]` and the cause, and
+recommends the removal first; `status` notes it, until a run removes what
+is left.
+
+A slot is also left incomplete without anybody deleting it:
+
+| What is left | Cause | Means |
+|---|---|---|
+| the record, without the slot's indices | the TPM was cleared (or the slot removed without the record) | its keys are the old TPM's and open nothing |
+| the indices, without the record | the variable removed, or the firmware's variables reset | its methods fail at boot; the fallbacks unlock (password and salt typed, the OS recovery passphrase) |
+| a blob in NV at `0x01803010` + *n* | a slot sealed by tpm2-kira before the record moved to the EFI variable (format 15 and earlier) | not read; `slot add` or `slot delete` removes it |
 
 The pieces can still be taken by hand - these leave the slot dirty the
 same way where something of it remains:
 
 ```bash
-tpm2-kira slot delete              # everything tpm2-kira keeps in the TPM and the SSH CA: asks to type 'yes'
+tpm2-kira slot delete              # everything tpm2-kira keeps (slots, TPM indices, the SSH CA): asks to type 'yes'
 tpm2-kira slot delete --yes        # the same, without asking
-tpm2-kira slot delete --nvram 0    # one slot's indices in the TPM: TOTP key and phones
+tpm2-kira slot delete --nvram 0    # one slot: its record and its indices in the TPM
 tpm2-kira luks remove /dev/sda2 --keyslot 1   # one LUKS keyslot of tpm2-kira's, with its token
 tpm2-kira phone unenrol --nvram 0  # only the phones of one slot (needs the signing key)
 ```
 
-A slot is one blob in the TPM: it holds the slot's TOTP key or, once a phone
-is enrolled, the phones instead, under one signature. Two small companions belong
-to it, because they are mechanisms of the TPM and not data: an index the TPM
-can lock for the rest of the boot, and a counter the TPM only lets count up.
-`slot list` labels all three, and the machine's boot settings next to them:
+A slot is one record, under one signature: the EFI variable `KIRAslotN`,
+holding its sealed boot state and its methods - a TOTP key when chosen
+(`slot add --totp`), the phones, the vault, the TPM salt. Two small
+companions belong to it in the TPM, because they are mechanisms of the TPM
+and not data: an index the TPM can lock for the rest of the boot, and a
+counter the TPM only lets count up. Nothing else of it is in the TPM: the
+record needs no protection of the TPM's (its signature and the counter
+are its protection; nothing in it is secret in clear) and has room an NV
+index has not (SECURITY-BACKGROUND §3.1, *Why an EFI variable*). `slot
+list` shows the slots and their parts, and the machine's boot settings:
 
-| NV index (slot *n*) | What it holds | Written by |
+| Where (slot *n*) | What it holds | Written by |
 |---|---|---|
-| `0x01803010` + *n* | the slot's blob: TOTP key or phone enrolment | `slot add`, `slot approve`, `phone enrol`, `phone unenrol` |
-| `0x01803810` + *n* | the generation index of the TOTP key's policy | `slot add`, `slot approve` |
-| `0x01803820` + *n* | the record counter of the phone enrolment | `phone enrol`, `phone unenrol` |
-| `0x01803000` | the boot settings: "Debug at boot" (one per machine, only while it is on) | `control` |
+| EFI variable `KIRAslot`*n* | the slot's record: the boot state, its approval, its methods | `slot add`, `slot approve`, `phone enrol`/`unenrol`, `vault enrol`, `luks enrol` (TPM salt, vault) |
+| NV `0x01803810` + *n* | the generation index of the slot's policy (the slot exists while it does) | `slot add`, `slot approve` |
+| NV `0x01803820` + *n* | the record counter of the attestation part | the enrolments |
+| NV `0x01803000` | the boot settings: "Debug at boot" (one per machine, only while it is on) | `control` |
 
-Because the phones live in the slot's blob,
+Because the phones live in the slot's record,
 
 - `phone enrol` needs a sealed slot, and checks the PCRs that slot is sealed
   to unless `--pcrs` says otherwise;
@@ -243,47 +267,33 @@ Because the phones live in the slot's blob,
   "mobile attestation locked - please connect" for the slot until the phone
   is in. Remove the slot's entry from your authenticator; slot 1, the
   fallback, keeps its code for a boot without the phone;
-- `phone unenrol` rewrites the blob without the phones and gives the slot a
-  new TOTP key (its QR code is shown), and therefore needs the signing key;
-  `slot delete --nvram N` removes the slot whole and needs none;
-- every further phone makes the blob larger (about 170 bytes), and a TPM
-  limits the size of an NV index (2048 bytes on many). Whether a phone fits
-  is checked for the blob as it would be written.
+- `phone unenrol` rewrites the record without the phones, and therefore
+  needs the signing key; no TOTP key comes back by itself (`slot add
+  --totp` seals one). `slot delete --nvram N` removes the slot whole and
+  needs none;
+- every further phone makes the record larger (about 170 bytes); a record
+  holds at most 8 KiB, checked for the record as it would be written.
 
 `slot delete` without `--nvram` removes everything of tpm2-kira's outside
-the disk: every slot, what belongs to no slot any more (a companion index
-whose slot is gone), the boot settings, the sealed machine-id
-(`KIRAmachineID`, docs/SSH.md §2.1; it goes with slot 0 too), and the SSH CA - its EFI variable
-`KIRAasshCA` and `/etc/tpm2-kira/ssh_ca.pub` (docs/SSH.md §4). What it
-never touches is the LUKS header: a keyslot bound to a deleted slot is
-named as dirty, and `control` (or `luks remove`) takes it.
+the disk: every slot, what belongs to no slot any more (a counter whose
+slot is gone, a record left by a cleared TPM, a blob of an earlier
+version), the boot settings, the sealed machine-id (`KIRAmachineID`,
+docs/SSH.md §2.1; it goes with slot 0 too), and the SSH CA - its EFI
+variable `KIRAasshCA` and `/etc/tpm2-kira/ssh_ca.pub` (docs/SSH.md §4).
+What it never touches is the LUKS header: a keyslot bound to a deleted
+slot is named as dirty, and `control` (or `luks remove`) takes it.
 
 Every removal - `slot delete`, `control`'s, the SSH CA's - goes the one way
 aSSH removes what it keeps (its `persist` package): an NV index goes only
 when it has the public area tpm2-kira defines at that place, and anything
 else at a handle of tpm2-kira's range is left and named; what is not there
-is no error. Writing a slot is the other case: the handle is tpm2-kira's,
-and whatever is at it is replaced.
+is no error.
 
 ### If a rewrite of the slot fails
 
-A TPM cannot replace an NV index in place: `slot approve`, `phone enrol` and
-`phone unenrol` undefine the slot and write it again, and for a moment
-the TPM holds no blob. Everything that can fail without touching the TPM
-(loading the key, the token's PIN, the signer) is exercised before that
-moment. If a step after it fails anyway — the TPM refuses the define, a
-chunk does not write, the read-back differs — the blob that was about to
-be written is saved to `/etc/tpm2-kira/recovery/slot-0x<index>-<time>.blob`
-and the command says so. The file holds the sealed object as this TPM
-wrapped it, which only this TPM can load, so the secret is not lost with
-the index. Once the cause is fixed:
-
-```bash
-tpm2-kira slot restore /etc/tpm2-kira/recovery/slot-0x01803010-1759823456.blob
-```
-
-verifies the blob with the signing key, needs the slot to be empty (it
-is, after such a failure), approves the blob again for the PCRs it was
-sealed to, writes it, and removes the file. The codes are the ones from
-before; nothing has to be re-enrolled.
+The firmware writes an EFI variable whole or not at all and keeps the
+old one until the new one is there: a `slot approve` or an enrolment that
+fails leaves the slot as it was. (While the slot was an NV index, a
+rewrite undefined it first, a failure left it empty, and the blob was
+kept aside for `slot restore`; both went with the move.)
 

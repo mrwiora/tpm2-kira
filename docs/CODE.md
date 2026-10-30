@@ -1,7 +1,8 @@
 # The code: a TOTP code only the approved boot can show
 
-The first way to check the boot, and the one every machine starts with:
-`tpm2-kira slot add` creates a TOTP key **inside the TPM**, as an HMAC key
+A way to check the boot before you type anything, chosen when the slot is
+sealed: `tpm2-kira slot add --totp` (or `control`'s "A TOTP code at boot?")
+creates a TOTP key **inside the TPM**, as an HMAC key
 that never leaves it, sealed to the slot ([SLOT.md](SLOT.md)). The TPM
 computes every code; the key is shown exactly once, as the QR code you
 enrol in your authenticator app (Marify, or any TOTP app). Once a phone is

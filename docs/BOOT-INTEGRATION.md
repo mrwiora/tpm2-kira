@@ -23,10 +23,17 @@ Debian scripts start only those.
 
 | Unit | In the initramfs image | Does something when |
 |------|------------------------|---------------------|
-| `tpm2-kira.service` (`run`: the code at the prompt, the gate's coordinator, the SSH server, and the key provider for `systemd-cryptsetup`) | always, once `sd-tpm2-kira` is in `HOOKS`. `run` waits for the TPM's device (at most 5 s) only when a part of the plan needs it | a volume asks for its key; with the codes in the plan, a TOTP key is shown. Without them the TPM is not asked, and the boot is released at once. The first `slot add` makes the image out of date (`control` rebuilds it when left). The gate ends when the boot is released; the process stays to answer the volumes' key requests and ends at switch-root |
+| `tpm2-kira.service` (`run`: the code at the prompt, the gate's coordinator, the SSH server, and the key provider for `systemd-cryptsetup`) | always, once `sd-tpm2-kira` is in `HOOKS`. `run` waits for the TPM's device (at most 5 s) only when a part of the plan needs it | a volume asks for its key; with the codes in the plan (a slot with a TOTP key or phones), a code is shown. Without them nothing is shown: the hold lasts while the vault opens its part, else the boot is released at once. The first `slot add` makes the image out of date (`control` rebuilds it when left). The gate ends when the boot is released; the process stays to answer the volumes' key requests and ends at switch-root |
 | `tpm2-kira-unlock.socket` (the key socket) | always, with the display | `systemd-cryptsetup` activates a volume whose key file is the socket |
-| `tpm2-kira-cap.service` (locks codes when the initrd is left) | with the codes in the plan: a slot is sealed | the initrd is left |
+| `tpm2-kira-cap.service` (locks the slots' generation indices when the initrd is left: no code, no slot's part opens in the running system) | with the TPM in the plan: a slot is sealed, whatever its methods | the initrd is left |
 | `tpm2-kira-machine-id.service` (releases the sealed machine-id, `tpm2-kira-boot machine-id`) | with the image's network | before systemd-networkd starts: slot 0's policy holds, `KIRAmachineID` unseals ([SSH.md](SSH.md) §2.1) |
+
+The slots' records are EFI variables (`KIRAslotN`): the image reads them
+through efivarfs. systemd mounts it itself on Arch (the hook adds the
+module for a kernel that does not have it built in); on Debian the
+init-premount script mounts it before `run`, whenever the plan has the
+TPM. Without it no slot is read, and the boot goes on to the passphrase
+prompt ("efivarfs not mounted?" in the log).
 
 The phone's gate is no unit: with the phone in the plan, `run` starts its
 radio worker itself. The phone is in the plan with a TPM, a phone enrolled

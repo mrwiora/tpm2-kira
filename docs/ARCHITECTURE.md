@@ -88,7 +88,7 @@ flowchart BT
   DISKKEY["diskkey<br/>tokens, recipes, Argon2id,<br/>unlock socket, keyscript"]
   VAULTKEY["vaultkey<br/>the vault's release"]
   SSHSCREEN["sshscreen<br/>the code screen over SSH"]
-  NVSLOT["nvslot<br/>blob, NV layout, policy, cap"]
+  NVSLOT["nvslot<br/>record (EFI variable), NV indices, policy, cap"]
   MEASURE["measure<br/>PCRs, event log, predictions"]
   SIGNING["signing<br/>signing key, YubiKey, PIN"]
   TPMDEV["tpmdev<br/>the TPM device"]
@@ -156,8 +156,8 @@ flowchart LR
 
 | What | Where | Written by |
 |---|---|---|
-| a slot's blob (TOTP key, phones, the vault's part) | TPM NV `0x01803010` + n | `slot add`, `slot approve`, `phone enrol`, `vault enrol` |
-| a slot's generation | TPM NV `0x01803810` + n | `slot add`, `slot approve` |
+| a slot's record (its approval; TOTP key, phones, the vault's part, the TPM salt) | EFI variable `KIRAslot`n (tpm2-kira's GUID), at most 8 KiB | `slot add`, `slot approve`, `phone enrol`, `vault enrol`, `luks enrol` |
+| a slot's generation (the slot exists while it does) | TPM NV `0x01803810` + n | `slot add`, `slot approve` |
 | the phone record counter | TPM NV `0x01803820` + n | `phone enrol`, `phone unenrol` |
 | the boot settings ("Debug at boot") | TPM NV `0x01803000` | `control` |
 | the machine-id, sealed under slot 0's policy | EFI variable `KIRAmachineID` (tpm2-kira's GUID) | `slot add` (slot 0), `slot approve`; removed with slot 0 and by `slot delete` |

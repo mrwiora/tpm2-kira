@@ -48,6 +48,14 @@ fails, since the combiner's key ends in a newline that a passphrase
 prompt cannot take. Keep one in its own keyslot: `control` shows it red
 when every keyslot of a volume is tpm2-kira's.
 
+"While the code screen holds" is the hold before the boot goes on (the
+separator ends the slot's policy after it). A slot sealed without a TOTP
+code (`slot add` without `--totp`) and without phones shows no code
+screen: the TPM salt opens at once, the hold lasts only while the vault
+opens its part, and the password is asked then - with nothing on the
+screen that proves the boot to the person typing it (CODE.md). Which
+recipe needs a code is still open (PLAN.md, part C).
+
 The TPM does not check the typed password. A device-held salt opens in a
 boot the signing key approved, while the code screen holds; after a
 stolen machine boots normally, the password can be guessed offline at

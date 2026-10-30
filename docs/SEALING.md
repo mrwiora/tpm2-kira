@@ -103,13 +103,13 @@ Both key files must be mode `0400`, owned by root (or by the user running
 tpm2-kira), not symlinks, and in a directory nobody else can write to; `slot add`
 and `slot approve` refuse them otherwise.
 
-The blob names no key file: anyone with TPM access can replace the blob, and
-a planted one would name a key its author holds. `slot approve` uses `--privkey`, or
+The record names no key file: root can replace the record (the EFI
+variable `KIRAslotN`), and a planted one would name a key its author holds. `slot approve` uses `--privkey`, or
 the default key from `setup`. With a custom key, always pass `--privkey`.
 
 ECC P-256 is the default and the smallest: the key is stored in every slot
-and signs twice per slot, so an RSA key leaves less of the TPM's NV index
-(often 2048 bytes) for phones (SECURITY-BACKGROUND §10, *Size*).
+and signs twice per slot, so an RSA key makes every record larger (a
+record holds at most 8 KiB: SECURITY-BACKGROUND §10, *Size*).
 
 ## Multiple slots
 

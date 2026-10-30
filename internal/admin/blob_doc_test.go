@@ -30,6 +30,8 @@ func TestBlobFormatReferenceMatchesTheCode(t *testing.T) {
 		"the vault's pin":            "Pin                 [32]byte",
 		"the pepper check's size":    fmt.Sprintf("PepperCheck         uint16 + []byte   0 or %d", nvslot.PepperCheckSize),
 		"the slot's blob index":      fmt.Sprintf("`0x%08X`", nvslot.NVRAMSlotStart),
+		"the record's variable":      "the EFI variable `KIRAslotN` under tpm2-kira's vendor GUID\n(`" + nvslot.VarGUID + "`)",
+		"the record's size limit":    fmt.Sprintf("at most %d KiB", nvslot.MaxRecordSize/1024),
 		"the generation index":       fmt.Sprintf("`0x%08X` for slot", nvslot.GenerationIndex(nvslot.NVRAMSlotStart)),
 		"the record counter index":   fmt.Sprintf("`0x%08X` + *n*: an", nvslot.AttestCounterIndex(nvslot.NVRAMSlotStart)),
 	} {

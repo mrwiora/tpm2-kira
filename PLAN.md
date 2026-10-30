@@ -536,13 +536,64 @@ the boot is one the signing key approved - against a phished password.
    stopped; picking the line removes what is left. status reports them
    (`incomplete_slots`, a note each with what removes it) instead of "does
    not read as a blob".
-7. [ ] Docs: DISK-KEY.md, SECURITY-BACKGROUND.md (the record, where, the
-   threats above), ARCHITECTURE.md, README, the help.
+7. [x] Docs: DISK-KEY.md, SECURITY-BACKGROUND.md (the record, where, the
+   threats above), ARCHITECTURE.md, README, the help. SECURITY-BACKGROUND
+   §3.1 (the record, *Why an EFI variable* with the comparison table, TOTP
+   chosen, the open point: a phone enrolled into a slot without a code has
+   only `cap` as its evidence), §9 rewritten (who can change what: the
+   record, the indices), §10 (who writes, the size by combination); SLOT.md
+   (`--totp`, the record and its indices, an incomplete slot's causes,
+   the atomic write); BOOT-INTEGRATION (efivarfs, cap for every slot);
+   CODE, PHONE, SEALING, VAULT, DISK-KEY (the hold without a code
+   screen), ARCHITECTURE, README. The format test checks the record's
+   variable, GUID and size limit.
 8. [ ] Tests: unit and swtpm (`make test-all`), the vault's and Marify's
    (the core is not changed unless step 1 touches `vaultproto`'s pin),
    vmtest: a slot without TOTP, one with TOTP only, the vault with a pepper
    beside a TPM salt on the VMs' RSA EK (refused today), a record removed
    by hand (the fallback), a slot deleted (the variable gone).
+
+### Step 8b: a serial-console test, local (confirmed 2026-10-30: qemu directly, the OS's sshd for the setup, `.local/vms`; after step 7)
+
+The user exported the two test machines to `/home/pix/transfer-ai`
+(qcow2 and libvirt XML; no OVMF variables, no swtpm state) to test the
+recipes without the boot SSH server - the pure TOTP variant and the
+pure hashpwd2 variant - at the console, reachable over the serial port.
+Secure Boot is off on them. There is no libvirt on this host: qemu,
+swtpm, OVMF and KVM are.
+
+- `tools/serialtest.py` (stdlib only): starts a machine with qemu
+  directly - KVM, OVMF without Secure Boot (a copy of the VARS template
+  per machine), swtpm over a socket, the disk as a qcow2 overlay on the
+  export, the serial port on a unix socket, user-mode network with the
+  guest's ssh forwarded to a local port (installing the package, `slot
+  add`, `luks enrol`; tpm2-kira's boot SSH server stays off).
+- **The snapshot is the export:** the overlay, the VARS copy and the
+  swtpm state live in `.local/vms/<machine>/`; a revert deletes them (the
+  export is never written). Taken once after the console is set up
+  (below) as a second overlay level, so a run starts from there.
+- **The console:** at the first boot the boot loader's entry is edited
+  over the serial port (`console=ttyS0`: systemd-boot - Arch's UKI takes
+  the command line with Secure Boot off; GRUB - Debian), the LUKS
+  passphrase typed at the serial console; then made permanent inside
+  (`/etc/kernel/cmdline` and the UKI; `/etc/default/grub`).
+- **The runs**, each from the snapshot, each boot driven at the serial
+  console:
+  1. pure TOTP: `slot add --totp`, no keyslot of tpm2-kira's: the code at
+     the console equals the one computed from the secret; Enter; the OS's
+     own passphrase prompt opens the disk.
+  2. pure hashpwd2: `luks enrol --password typed --salt typed` (0x1100),
+     no slot: password and salt typed at the console open the disk.
+  3. TOTP optional: `slot add` without `--totp` and the TPM salt (0x1200):
+     no code screen, the TPM opens the salt, the password is typed at the
+     console.
+  4. the fallback order at the console: a wrong password, then the
+     recovery recipe, then the OS's passphrase.
+- Logs: the serial console's transcript per boot in `.local/runs/`.
+
+The user installed libvirt as well; qemu directly is kept: no root, no
+system-wide state, the run's files in one directory. The harness stops
+when less than 1 GB is free.
 
 ### What breaks
 

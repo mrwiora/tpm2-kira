@@ -46,14 +46,22 @@ TPM after enrolment.
 
 ## 3. What Is Stored Where
 
-### 3.1 TPM NVRAM (the "blob")
+### 3.1 The slot's record (the "blob"), in an EFI variable
 
-Each slot's NV index (default `0x01803010`; slot *n* is `0x01803010` + *n*)
-stores one serialised `SealedBlob` (format version 16, §10). Its TOTP key
-is optional: the format holds a slot with a TOTP key, with phones, with
-both or with no method at all (the boot state sealed, for the machine-id
-and the boot key); which recipe needs which method is not the format's to
-say. Today phones still retire the TOTP key (*TOTP key or phones*, below).
+Each slot (0-15; its number is also written as `0x01803010` + *n*) keeps
+one serialised `SealedBlob` (format version 16, §10), its **record**, in
+the EFI variable `KIRAslotN` under tpm2-kira's vendor GUID
+(`67f474ef-94a1-4412-88df-d62349d430a9`), at most 8 KiB. In the TPM a
+slot keeps only what a TPM policy reads or nobody may turn back: its
+generation index (§3.2), which also says that the slot exists, and its
+record counter (§3.3). Nothing in the record needs the TPM to keep it
+(*Why an EFI variable*, below).
+
+The record's TOTP key is optional: a slot holds a TOTP key when it is
+chosen (`slot add --totp`), phones, the vault, the TPM salt - or no
+method at all (the boot state sealed, for the machine-id and the boot
+key); which recipe needs which method is not the format's to say. Today
+phones still retire the TOTP key (*TOTP key or phones*, below).
 Phone attestation is an optional part of the same blob,
 and within that part the way a verifier reaches the machine is a typed
 *method*: phones over Bluetooth LE, and tpm2-kira-vault over HTTPS
@@ -61,11 +69,11 @@ and within that part the way a verifier reaches the machine is a typed
 
 | Field               | Content                                                         | Sensitive? |
 |---------------------|-----------------------------------------------------------------|------------|
-| `Version`           | Blob format version (14)                                        | No         |
+| `Version`           | Blob format version (16)                                        | No         |
 | `Public`            | TPMT_PUBLIC of the TOTP key object; empty without TOTP | No     |
 | `Private`           | TPM2B_PRIVATE of the TOTP key object (TPM-wrapped); empty without TOTP | **Yes**¹ |
 | `PCRDigests`        | Per-PCR index, source (register/eventlog/uki) and digest        | No         |
-| `TOTPAlgorithm`     | HMAC hash of the key: SHA-1, or SHA-256 on a TPM without SHA-1; 0 with phones | No |
+| `TOTPAlgorithm`     | HMAC hash of the key: SHA-1, or SHA-256 on a TPM without SHA-1; 0 without TOTP | No |
 | `Generation`        | The generation the approval requires                            | No         |
 | `PolicyRef`         | Random per slot; qualifies its approvals for all its keys       | No         |
 | `SigningPublic`     | TPMT_PUBLIC of the signing key                                  | No²        |
@@ -115,24 +123,25 @@ Method 2, tpm2-kira-vault (`Vault`, VAULT.md), created by `vault enrol`:
 ⁶ The wrapped part opens only on this TPM, in a boot state the signing key
 approved, before `cap`; and it is half of the key, the vault keeps the other.
 
-**TOTP key or phones.** A slot is checked one way at a time. Without a phone
-its TOTP key shows a code at boot, compared with the authenticator. The first
-phone enrolled for the slot retires the key: the phone's check (the quote,
+**TOTP key or phones.** TOTP is a method of its own: `slot add --totp`
+seals a TOTP key, `slot add` alone none; `control` asks. A slot with one
+shows a code at boot, compared with the authenticator; a slot with neither
+a code nor phones is not shown, and the hold lasts only while the vault
+opens its part. The first phone enrolled for the slot retires the key: the phone's check (the quote,
 the boot key's code, the person's confirmation on the phone, §13) covers what
 the code proves and more, and a second, weaker path to the same verdict
 would only be one more thing to keep, lose or leak. While a phone is enrolled
 the boot screen shows the slot as "mobile attestation locked - please
 connect" until the phone is in, then the phone's code, then the verdict.
-When the last phone leaves, the slot gets a new TOTP key at once, made under
-the slot's policy, so the approval in force covers it without an approval; its
-QR code is shown then. The slot's policy (`SigningPublic` and `PolicyRef`)
+When the last phone leaves, no TOTP key comes back by itself (nor with any
+other enrolment): `slot add --totp` seals one. The slot's policy (`SigningPublic` and `PolicyRef`)
 stays through all of it: the boot key and the release key are made under
 it, not under the TOTP key, and keep working. The fallback, slot 1, keeps
 its code: it is the check for a boot without the phone (a flat battery, a
 lost phone, no Bluetooth in the initrd).
 
-**Why a slot starts with a TOTP key: the phone is enrolled in a verified
-boot.** Enrolment is trust on first use for the phone: it pins the
+**Why a phone is enrolled after a TOTP code: the phone is enrolled in a
+verified boot.** Enrolment is trust on first use for the phone: it pins the
 machine's attestation key and takes the boot state of the enrolling boot
 as the baseline every later boot is compared with. Nothing the phone can
 check itself says that this first state is clean; a boot chain that was
@@ -148,7 +157,7 @@ made before the phone existed can say it, so the order is fixed:
 
 `phone enrol` enforces what the machine can know of this (`requireVerifiedBoot`
 in `internal/admin/attest.go`): the boot passed the code screen (`cap` read-locked
-the generation indices, which happens only there), and, for a slot with a
+the generation indices, which happens at every boot with a sealed slot), and, for a slot with a
 TOTP key, the slot's PCRs at the code screen - recomputed from this boot's
 event log, before the OS separator, with `enter-initrd` on PCR 11 - are
 the approved ones, so the screen did show the slot's code. A boot that
@@ -158,6 +167,39 @@ asks before the phone is involved. A further phone for a slot that
 already has phones needs a boot an enrolled phone attested ("mobile
 attestation passed"); the machine keeps no record of that verdict, so it
 asks. The rule holds for `control` and for `phone enrol` by hand alike.
+
+**Open, with TOTP optional:** a slot sealed without `--totp` has no code
+to verify the enrolling boot with; `phone enrol` then has only `cap` as its
+evidence, and the phone pins whatever state that boot had. Whether a phone
+(and a typed password) may be enrolled into a slot without a TOTP code is
+part of the decision which recipe needs which method (PLAN.md, part C).
+
+**Why an EFI variable.** A record's integrity is the signing key's
+signature, its freshness the record counter in the TPM (§3.3), and
+nothing in it is secret in clear: private parts are wrapped by this
+TPM's storage key, the TPM salt and the vault's part for its EK. So it
+needs no protection of the TPM's - only room, which an NV index (2048
+bytes on many TPMs, `TPM2_PT_NV_INDEX_MAX`) did not have for an RSA EK
+with two wrapped factors, an RSA signing key, or phones beside the
+rest. What the variable changes:
+
+| | NV index (until format 15) | EFI variable `KIRAslotN` |
+|---|---|---|
+| Size | `TPM2_PT_NV_INDEX_MAX`, often 2048 | 8 KiB (tpm2-kira's limit; firmware stores are small) |
+| Write | the signing key alone (PolicySigned) | root |
+| Replaced by an attacker | refused: signature, counter | refused: signature, counter |
+| Deleted | the owner's authorisation (empty on most machines) | root; also a firmware reset of its variables |
+| A TPM clear | gone with the keys it wraps | left behind, useless: `status` names it |
+| Read by | anyone with TPM access | root (efivarfs) |
+| Written | at every approval, enrolment | the same; no TPM NV write for it |
+
+A deleted or replaced record is a denial of service: the slot's methods
+fail at boot, and the fallbacks unlock (the password and salt typed, then
+the operating system's recovery passphrase). `status` and `control` name
+a record without its slot and a slot without its record, with the cause,
+and remove what is left. A record is written whole or not at all (the
+firmware keeps the old variable until the new one is there), so no
+"unwritten blob" is kept aside any more.
 
 **What the machine keeps of a phone, and why no more.** The blob is readable
 by anyone who can talk to the TPM (§9), so it holds only what the machine
@@ -218,12 +260,13 @@ attestation with a phone: what it does not protect against").
 
 ### 3.2 The generation index
 
-Each slot has a second NV index at blob index + `0x800` (`0x01803810` for slot
-0). It holds an 8-byte big-endian generation `G`. Attributes:
+Each slot has an NV index at its number's index + `0x800`
+(`0x01803810` for slot 0). It holds an 8-byte big-endian generation `G`; a slot exists
+while it is defined. Attributes:
 
 - `OwnerRead`, `AuthRead` (empty auth): anyone can read it, as `PolicyNV` must.
-- `PolicyWrite` with the same PolicySigned policy as the blob: only the
-  signing key can write it.
+- `PolicyWrite` with a PolicySigned policy: only the signing key can write
+  it.
 - `READ_STCLEAR`: `TPM2_NV_ReadLock` makes it unreadable until the next TPM
   reset, i.e. reboot. Nothing else can undo the lock.
 
@@ -260,8 +303,8 @@ the slots), holds the switches the boot reads: today one, debug, which makes
 the code screen and the phone check log every step and put the narrative on
 the console. Format: `[version:1 = 1][flags:1]`, bit 0 debug; another
 version or an unknown flag is refused. It exists only while a switch is on.
-`control` writes it with the signing key (PolicySigned, as the slots'
-blobs), so nobody else can turn on verbose output on the console; anyone
+`control` writes it with the signing key (PolicySigned, as the generation
+indices), so nobody else can turn on verbose output on the console; anyone
 with TPM access can read it, and it holds nothing secret. It is not
 measured and not signed beyond its write policy: it changes how much is
 logged, never what is trusted. Keeping it in the TPM rather than on the
@@ -329,13 +372,13 @@ and returns a temporary handle. The key is used (`TPM2_HMAC`, `TPM2_Sign`,
 during that use. tpm2-kira never sees a private key: it moves wrapped bytes
 and asks the TPM to use them.
 
-So the slot's blob holds three independent key objects as wrapped bytes, in
+So the slot's record holds independent key objects as wrapped bytes, in
 one place:
 
 ```
-NV index 0x01803010+n   (bytes, under one signature by the signing key)
-├── TOTP part
-│   ├── TOTP key          public area + wrapped private area   ← TPM key object
+EFI variable KIRAslotN   (bytes, under one signature by the signing key)
+├── slot part
+│   ├── TOTP key          public area + wrapped private area   ← TPM key object (with --totp)
 │   ├── approved PCR values, generation, policy reference
 │   └── signing public key, approval signature
 └── attestation part
@@ -344,10 +387,11 @@ NV index 0x01803010+n   (bytes, under one signature by the signing key)
     └── phones (anchor keys, channel keys), revision
 ```
 
-The TPM has no notion of "slot"; it is given one key at a time. The NV index
-is used, rather than a file, only because the keys are needed in the initrd
-before the disk is unlocked, and because its write policy (§9) and the
-companion indices (§3.2, §3.3) are TPM mechanisms.
+The TPM has no notion of "slot"; it is given one key at a time. The record is
+an EFI variable, rather than a file, because the keys are needed in the
+initrd before the disk is unlocked; what the TPM must hold of a slot - the
+generation the policy reads, the counter nobody can turn back - is in its
+indices (§3.2, §3.3).
 
 What ties the TOTP key and the boot key together is not where they are stored
 but their **policy**. Each key's public area carries a policy digest, fixed
@@ -355,7 +399,7 @@ at creation and part of the key's Name; both carry the same one, PolicyAuthorize
 by the signing key with this slot's policy reference (§4). Using either key
 goes the same way:
 
-1. read the blob from NV; re-create the storage primary (deterministic from
+1. read the record from its EFI variable; re-create the storage primary (deterministic from
    the seed, the same key every time);
 2. `TPM2_Load` the key wanted;
 3. open a policy session: `PolicyPCR` on the current registers, `PolicyNV`
@@ -704,7 +748,7 @@ flowchart LR
     D["unified kernel image<br/>.linux .osrel .cmdline ..."] -->|"section pairs + phases"| C
     E["live TPM register"] -->|"only if stable after<br/>the measure point"| C
     C --> F["PolicyPCR digest"]
-    F --> G["sealed blob in NVRAM"]
+    F --> G["sealed record, EFI variable KIRAslotN"]
 ```
 
 Per source:
@@ -1003,74 +1047,71 @@ be read at all, tpm2-kira says so rather than staying silent.
 
 ---
 
-## 9. NVRAM Index Security
+## 9. The Slot's Record and Indices: Who Can Change What
 
-`WriteToNVRAM` (`internal/nvslot/nvram.go`) defines the index as follows:
+A slot's record is the EFI variable `KIRAslotN` (§3.1): non-volatile, boot
+service and runtime access, no authenticated write - as aSSH's `persist`
+writes every variable. In the TPM a slot keeps its generation index (§3.2)
+and its record counter (§3.3); the boot settings (§3.3a) are the one other
+NV index. `WriteToNVRAM` (`internal/nvslot/nvram.go`) writes the boot
+settings, `WriteGeneration` the generation index, both defined as follows:
 
 | Attribute | Set | Effect |
 |---|---|---|
-| `OwnerRead`, `AuthRead` | yes | any process that can talk to the TPM can read the blob |
+| `OwnerRead`, `AuthRead` | yes | any process that can talk to the TPM can read it (`PolicyNV` must) |
 | `OwnerWrite` | no | the owner hierarchy cannot write, even with owner auth |
 | `AuthWrite` | no | the index's own (empty) auth value cannot write |
 | `PolicyWrite` | yes | a write needs a policy session that satisfies `AuthPolicy` |
-| `AuthPolicy` | PolicySigned digest of the signing key | only the signing key can authorise a write; the generation index uses the same policy (§3.2) |
+| `AuthPolicy` | PolicySigned digest of the signing key | only the signing key can authorise a write |
 
-Every write is therefore authorised by a signature from the signing private key,
-verified by the TPM. The blob is written in 1024-byte chunks, each under a fresh
-PolicySigned session: every session has a new `nonceTPM` to sign, and the index
-Name changes after the first write sets `TPMA_NV_WRITTEN`, so it is re-read
-before each chunk. HISTORY.md records the earlier, unauthenticated definition.
+Each write to them is authorised by a signature from the signing private
+key, verified by the TPM, in chunks of at most 1024 bytes, each under a
+fresh PolicySigned session. HISTORY.md records the earlier,
+unauthenticated definition.
 
 What this means in practice:
 
-1. **Reading the blob is harmless.** The `Private` field is TPM-encrypted and
-   reveals nothing without a valid policy session. The `Public` field, PCR
-   digests, and signing public key are not secret.
-2. **Overwriting the blob in place needs the signing private key.** Without it,
-   `TPM2_NV_Write` fails the policy check.
-3. **Deleting the index does not need the signing key.** `TPM2_NV_UndefineSpace`
-   is authorised by the owner hierarchy, not by the index's policy. tpm2-kira
-   uses the owner hierarchy with an empty auth value throughout — for
-   `TPM2_CreatePrimary`, for defining the index and for `slot delete` — so on
-   a typical system any process with TPM access can delete a slot. That is a
-   denial of service: the key object is gone, and the user must seal again
-   and re-enrol the authenticator. Deleting the generation index is a denial
-   of service too, until the next approval recreates it.
-4. **Delete-and-redefine lets an attacker plant a blob of their own**, under a
-   write policy of their choosing. The index definition therefore does not
-   authenticate the blob's content; the blob signature does (§3.1, note ⁴).
-   `slot approve` verifies it before acting on any field, with a key it does not take
-   from the blob (§5.5). `slot info` verifies it too, and shows an unverified blob
-   as untrusted without opening the paths it names. `reveal` does not verify it,
-   since the signing key is not available in the initrd. A planted blob can
-   carry the user's key object only with an approval signed by the user's key
-   for the current generation; otherwise it can only carry an object the
-   attacker created, whose codes do not match the user's authenticator, so
-   the substitution shows up as a failed comparison, not as a false pass.
-5. **The real access control is on the key object**, not the NVRAM index.
-   Its `authPolicy` (PolicyAuthorize) is what prevents unauthorised use.
-6. **tpm2-kira's own rewrites pass through the same gap.** There is no
-   atomic replace: `slot approve`, `phone enrol` and `phone unenrol` undefine
-   the slot and define and write it again, and between the two the TPM
-   holds no blob. Everything that can fail without touching the TPM -
-   loading the signing key, a token's PIN, the signer itself on a dummy
-   digest - is exercised before the undefine. If a step after it fails
-   (the define refused, a chunk not written, the read-back differing), the
-   blob that was about to be written is saved to
-   `/etc/tpm2-kira/recovery/slot-0x<index>-<time>.blob`, mode 0600, and the
-   error says so and cannot be mistaken for success. The file is as good
-   as the index was: it holds the key object's public and private areas,
-   the private one wrapped under this TPM's storage primary, which is
-   re-derived from the owner seed, so only this TPM can load it and only
-   under the object's policy. `slot restore FILE` verifies the blob's
-   signature with the signing key (never with a key the file names),
-   requires the slot to be empty, approves the blob again for the PCRs it
-   was sealed to at a new generation, writes it as slot approve does, and
-   removes the file. The codes are the ones from before.
+1. **Reading a record is harmless.** Its private parts are wrapped by this
+   TPM and reveal nothing without a valid policy session; the rest - PCR
+   digests, public keys, the vault's URL and pin, the phones' keys - is
+   not secret. efivarfs lets root read it.
+2. **Replacing a record needs no key, and gains nothing.** Root writes the
+   variable; the record's signature (§3.1, note ⁴) is what authenticates
+   its content, and the counter (§3.3) its freshness. `slot approve`
+   verifies the signature before acting on any field, with a key it does
+   not take from the record (§5.5); `slot info` verifies it too, and shows
+   an unverified record as untrusted without opening the paths it names;
+   the phone's gate verifies it with the key the image carries. `reveal`
+   does not verify it, since the signing key is not available in the
+   initrd. A planted record can carry the user's key objects only with an
+   approval signed by the user's key for the current generation; otherwise
+   it can only carry objects the attacker created, whose codes do not match
+   the user's authenticator: a failed comparison, not a false pass. An
+   older genuine record put back is refused by the generation (an approval
+   since) and by the counter (an enrolment since).
+3. **Deleting a record, or a slot's indices, is a denial of service.** Root
+   removes the variable; a firmware reset of its variables may too;
+   `TPM2_NV_UndefineSpace` takes an index with the owner hierarchy, whose
+   auth value tpm2-kira presents empty throughout (`TPM2_CreatePrimary`,
+   defining the indices, `slot delete`). The slot's methods then fail at
+   boot and the fallbacks unlock: the password and salt typed (recipe
+   0x1100), then the operating system's recovery passphrase. `status` and
+   `control` name what is left of the slot, and why, and remove it.
+4. **The real access control is on the key objects**, not on where the
+   record is stored: their `authPolicy` (PolicyAuthorize, §4) is what
+   prevents unauthorised use, and `cap` read-locks the generation indices
+   when the initrd is left, so the running system cannot satisfy it.
+5. **A record is replaced whole or not at all.** The firmware takes the
+   whole variable or none of it and keeps the old one until the new one is
+   there, so a failed `slot approve` or enrolment leaves the slot as it
+   was. (Rewriting an NV index meant undefining it first: a failed write
+   left the slot empty, and the blob was kept aside for `slot restore`.
+   Both went with the record's move to the variable.)
 
-Setting an owner-hierarchy password would close the delete path, but tpm2-kira
-currently always presents an empty owner auth value, so it would stop working
-on such a system. Supporting owner auth is outside the current design.
+Setting an owner-hierarchy password would close the delete path for the
+indices, but tpm2-kira currently always presents an empty owner auth value,
+so it would stop working on such a system. Supporting owner auth is outside
+the current design.
 
 ---
 
@@ -1100,9 +1141,11 @@ not know is refused, since carrying it over would mean signing it again
 unseen on the next `slot approve`.
 
 **Only this version is read.** There is no migration and no compatibility
-with earlier formats: a blob of another version is an error that says to seal
-again, which means a new TOTP secret and enrolling the authenticator and the
-phones again.
+with earlier formats: a record of another version is an error that says to seal
+again, which means a new TOTP secret and enrolling the authenticator, the
+phones and the disk's keyslots again. A blob of version 15 or earlier is in
+NV at the slot's index, not in `KIRAslotN`: it is not read; `status` names
+it, and `slot add` or `slot delete` removes it.
 
 The TOTP key is an HMAC key used inside the TPM, usable under a policy the
 signing key approves (PolicyAuthorize, §4). No command is ever executed from
@@ -1210,42 +1253,40 @@ the payload exactly, as each method's length must be filled exactly by its
 data: nothing can follow unsigned, and a truncated or padded part does not
 parse.
 
-**Who writes what.** `slot add` creates the blob. `slot approve` reads it, verifies it
-with the signing key, changes the PCR digests, generation and approval, and
-writes it back, attestation part included and unchanged. `slot add` on an existing
-slot keeps the attestation part if the same signing key wrote the old blob,
-and drops it otherwise: it does not sign verifiers it cannot vouch for.
-`phone enrol` and `phone unenrol` read the blob, verify it, change the
-attestation part and write it back, TOTP part unchanged; if that write fails, the previous blob is
-put back. Every write replaces the NV index (`TPM2_NV_UndefineSpace`, then
-define and PolicySigned writes, §9).
+**Who writes what.** `slot add` creates the record. `slot approve` reads it,
+verifies it with the signing key, changes the PCR digests, generation and
+approval, and writes it back, attestation part included and unchanged.
+`slot add` on an existing slot keeps the attestation part if the same
+signing key wrote the old record, and drops it otherwise: it does not sign
+verifiers it cannot vouch for. `phone enrol` and `phone unenrol`, the
+vault's and the TPM salt's enrolments read the record, verify it, change
+the attestation part and write it back, the slot part unchanged. Every
+write replaces the EFI variable whole (§9); `slot add` and `slot approve`
+also remove a blob an earlier version kept in NV at the slot's index.
 
-**Size.** The blob has to fit one NV index, whose maximum the TPM reports as
-`TPM2_PT_NV_INDEX_MAX` (2048 bytes on many, including Intel PTT). What fits
-depends on the combination, and the signing key matters most: it is in the
-blob once as `SigningPublic` and signs twice (the approval and the blob).
-Measured on swtpm with four sealed PCRs:
+**Size.** A record is at most 8 KiB (`nvslot.MaxRecordSize`): firmware
+variable stores are small, and some fail when nearly full. What a record
+holds depends on the combination; the signing key matters most: it is in
+the record once as `SigningPublic` and signs twice (the approval and the
+record). Measured on swtpm:
 
-| Signing key | TOTP part | Signing key + both signatures |
-|-------------|-----------|-------------------------------|
-| ECC P-256 (the default) | ~690 bytes | 88 + 72 + 72 |
-| RSA 2048    | ~1250 bytes | 280 + 262 + 262 |
-| RSA 4096    | ~2020 bytes (computed; swtpm cannot load the key) | 536 + 518 + 518 |
+| Record | Bytes |
+|---|---|
+| ECC P-256 signing key, four PCRs, a TOTP key | ~690 |
+| ... with an RSA-2048 or RSA-4096 signing key | ~1250 or ~2020 |
+| P-256, a TPM salt and the vault (unattended, a pepper), ECC EK | ~1660 |
+| ... with an RSA-2048 EK (188 bytes more per factor wrapped for it) | ~2040 |
+| one phone; each further phone | ~720; ~170 |
 
-The attestation part adds about 720 bytes with one phone and about 170 for
-each further phone, and the first phone retires the TOTP key, about 230
-bytes (*TOTP key or phones*, §3.1). With an RSA 4096 key a slot without
-phones still fits a 2048-byte TPM; with a phone it does not.
-
-There is no fixed limit on phones beyond the format's eight: whether a blob
-fits is decided for the blob at hand, against the TPM it is written to.
-`WriteToNVRAM` compares the signed blob with `TPM2_PT_NV_INDEX_MAX` before the
-old index is touched, and refuses with the number of bytes missing; the slot
-keeps what it held. `slot add` and `slot approve` check the same before they raise the
-generation, with the largest signatures the key can make, so a blob that
-would not fit never costs the slot its approval. `phone enrol` checks before
-the phone is involved only what is certain (a slot without phones gains at
+`slot add` and `slot approve` check the record against the limit before
+they raise the generation, with the largest signatures the key can make,
+so a record that would not fit never costs the slot its approval. An
+enrolment checks before anything is sent or made; `phone enrol` before the
+phone is involved only what is certain (a slot without phones gains at
 least one), and the write decides for the phone that actually enrolled.
+Until format 15 the blob had to fit one NV index (`TPM2_PT_NV_INDEX_MAX`,
+2048 bytes on many): an RSA EK with the TPM salt and the vault, or an RSA
+signing key with a phone, did not.
 
 The stored PCR digests are **measure-point values**, not end-of-firmware values
 and not the values a running system would report. `MeasurePointApplied` says
@@ -1292,9 +1333,11 @@ only way back in, because:
 5. **Keep the cap in the boot integration.** It is what keeps the running OS
    from computing codes; check that `tpm2-kira slot info` reports the generation
    index as read-locked after boot.
-6. **NVRAM index range.** tpm2-kira uses blob indices `0x01803000–0x018037FF`
-   and generation indices `0x01803800–0x01803FFF` (TPM2 owner-defined NV
-   range). Avoid conflicts with other applications using the same range.
+6. **NVRAM index range.** tpm2-kira uses `0x01803000` (the boot settings),
+   the generation indices `0x01803810–0x0180381F` and the record counters
+   `0x01803820–0x0180382F` (TPM2 owner-defined NV range); the slots' records
+   are EFI variables. Avoid conflicts with other applications using the
+   same range.
 
 ---
 

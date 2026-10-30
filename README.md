@@ -53,7 +53,7 @@ flowchart TB
   subgraph SETUP["On the installed system: tpm2-kira (root)"]
     CTRL["control<br/>guided: 1 boot chain, 2 what the machine combines<br/>writes control.conf + assh.conf, builds the image on leaving"]
     KEY["setup<br/>signing key: a file or a YubiKey"]
-    SEAL["slot add / slot approve<br/>a boot state approved for PCR values<br/>slot 0 the evaluated selection, slot 1 the fallback"]
+    SEAL["slot add / slot approve<br/>a boot state approved for PCR values<br/>slot 0 the evaluated selection; --totp: a code, slot 1 the fallback"]
     PCR["PCR prediction<br/>event log (e), UKI PCR 11 (u), GRUB 8/9, register (r)"]
     PHONE["phone enrol, phone salt enrol<br/>Marify at the machine, Bluetooth LE"]
     LUKS["luks enrol<br/>a keyslot and its token: how its key is made"]
@@ -105,7 +105,7 @@ from each only what it uses: the boot image carries only those parts
 
 | Layer | The choice | Commands | In detail |
 |---|---|---|---|
-| **The slot** | a boot state your signing key approved; what everything below that needs the TPM stands on | `setup`, `slot add\|approve\|info\|list\|status\|delete\|restore` | [docs/SLOT.md](docs/SLOT.md) |
+| **The slot** | a boot state your signing key approved; what everything below that needs the TPM stands on | `setup`, `slot add\|approve\|info\|list\|status\|delete` | [docs/SLOT.md](docs/SLOT.md) |
 | **Who checks the boot** | the code (TOTP), compared with your authenticator at the console or over SSH; a phone (Marify) at the machine, over Bluetooth LE, that verifies a TPM quote in the code's place; the vault, remote attestation over TLS, that verifies a TPM quote before it releases its part of the disk's key | `reveal`, `phone …`, `vault …` | [docs/CODE.md](docs/CODE.md), [docs/PHONE.md](docs/PHONE.md), [docs/VAULT.md](docs/VAULT.md) |
 | **Where the code screen is** | the console, always; SSH in the boot image, with the host key certified by an SSH CA in the TPM, when you turn it on - over SSH the code is what attests the boot | `control` (step 2) | [docs/SSH.md](docs/SSH.md) |
 | **The disk's key** | per LUKS keyslot, named by its token: cryptsetup's own passphrase (no token), or a recipe - always the combiner's (Argon2id) of a password, typed at the machine or held by this TPM (unattended), and a salt held by this TPM, the phone or the vault, or typed (the recovery recipe) | `luks …`, `phone salt …`, `vault …` | [docs/DISK-KEY.md](docs/DISK-KEY.md), [docs/VAULT.md](docs/VAULT.md) |
@@ -113,8 +113,10 @@ from each only what it uses: the boot image carries only those parts
 ### The slot
 
 `tpm2-kira slot add` approves what this boot measured - firmware, Secure
-Boot state, and the unified kernel image or GRUB's PCRs - in slot 0, and
-the firmware and Secure Boot state alone in slot 1, the fallback. After
+Boot state, and the unified kernel image or GRUB's PCRs - in slot 0; with
+`--totp` a TOTP code too, and the firmware and Secure Boot state alone in
+slot 1, the fallback. The slot's record is an EFI variable (`KIRAslotN`);
+the TPM keeps its generation and counter. After
 an update the hooks run `slot approve`: the TPM's key stays, so nothing is
 enrolled again. Which PCRs to choose and why, the boot path's hardening,
 inspecting and deleting a slot: [docs/SLOT.md](docs/SLOT.md).
@@ -184,10 +186,10 @@ sudo make install
 # First-time setup: generates the signing keys
 sudo tpm2-kira setup
 
-# Seal a TOTP key to what this boot measured: firmware and Secure Boot
-# state, plus the unified kernel image or GRUB's PCRs - and a fallback
+# Seal what this boot measured: firmware and Secure Boot state, plus the
+# unified kernel image or GRUB's PCRs - with a TOTP key, and a fallback
 # slot sealed to firmware and Secure Boot state alone
-sudo tpm2-kira slot add
+sudo tpm2-kira slot add --totp
 
 # Show the current TOTP code
 tpm2-kira reveal
@@ -235,7 +237,7 @@ After installing, run setup and slot add once, then rebuild the initramfs:
 
 ```bash
 sudo tpm2-kira setup
-sudo tpm2-kira slot add --pcrs 0,7,11u    # with a unified kernel image
+sudo tpm2-kira slot add --totp --pcrs 0,7,11u    # with a unified kernel image
 sudo mkinitcpio -P
 ```
 
@@ -432,7 +434,7 @@ tpm2-kira runs `reveal`.
 | | Commands |
 |---|---|
 | Guided | `control`: step 1 the boot chain, step 2 what the machine combines |
-| The slot | `setup` the signing key · `slot add` a slot and its TOTP key · `slot approve` the current boot state (the hooks run it) · `slot info` a slot's blob · `slot list\|status\|delete\|restore` · `status` the overview |
+| The slot | `setup` the signing key · `slot add` a slot (`--totp`: and its TOTP key) · `slot approve` the current boot state (the hooks run it) · `slot info` a slot's record · `slot list\|status\|delete` · `status` the overview |
 | Who checks the boot | `reveal` / `reveal-plain` the code · `phone enrol\|unenrol\|status\|gate\|ekcert\|quote\|verify` the phone (Marify, Bluetooth LE) |
 | The disk's key | `luks status\|enrol\|remove\|mark\|route\|derive` · `phone salt enrol\|rotate\|status\|unenrol` · `vault enrol\|status\|unenrol` |
 | At boot (the units and hooks) | `initramfs plan` what the image carries; in the image, `tpm2-kira-boot`: `run` · `cap` · `unlock-key` (Debian keyscript) · `gate` (the phone's radio worker) · `ssh-child` (the SSH server's unprivileged half, started by `run`) |

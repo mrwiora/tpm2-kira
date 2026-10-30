@@ -62,9 +62,9 @@ measured the initrd, and asks before enrolling a selection that misses them:
 PCR 9 also changes with every kernel or initrd update; the phone then shows
 *changed* with the diff, and you approve the new state once.
 
-The phone enrolment lives in the slot's blob in TPM NV storage, next to the
-TOTP key: readable and — through the owner hierarchy — replaceable by anyone
-who can talk to the TPM, including another OS booted on this machine. So the gate checks it before the passphrase prompt:
+The phone enrolment lives in the slot's record, the EFI variable
+`KIRAslotN`: readable and replaceable by root, including another OS
+booted on this machine. So the gate checks it before the passphrase prompt:
 the record must be signed by your signing key, whose public half the hook puts
 into the image, and its count must equal a counter the TPM keeps for the slot,
 which cannot be turned back. A foreign record fails the first check, an older
