@@ -21,6 +21,7 @@ func TestSealedMachineID(t *testing.T) {
 	sock := startSWTPM(t)
 	old := persist.VarDir
 	persist.VarDir = t.TempDir() // the suite's other tests seal slot 0 too
+	seedFirmwareVars(persist.VarDir)
 	t.Cleanup(func() { persist.VarDir = old })
 	if _, err := machineid.Load(); !os.IsNotExist(err) {
 		t.Fatalf("a variable before slot 0: %v", err)

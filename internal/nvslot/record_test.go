@@ -40,6 +40,12 @@ func TestRecordVar(t *testing.T) {
 func TestRecordStorage(t *testing.T) {
 	dir := useVarDir(t)
 	const slot = NVRAMSlotStart + 3
+	// No variable at all: efivarfs is not mounted, which is said.
+	if _, err := ReadRecord(slot); err == nil || errors.Is(err, ErrNoRecord) || !strings.Contains(err.Error(), "efivarfs not mounted") {
+		t.Fatalf("no EFI variables: %v", err)
+	}
+	// The firmware's own variables there: the slot has none.
+	os.WriteFile(filepath.Join(dir, "BootOrder-8be4df61-93ca-11d2-aa0d-00e098032b8c"), []byte{7, 0, 0, 0, 1, 0}, 0o644)
 	if _, err := ReadRecord(slot); !errors.Is(err, ErrNoRecord) {
 		t.Fatalf("no variable: %v", err)
 	}

@@ -30,6 +30,7 @@ func TestMain(m *testing.M) {
 	}
 	persist.VarDir = filepath.Join(dir, "efivars")
 	os.MkdirAll(persist.VarDir, 0o755)
+	seedFirmwareVars(persist.VarDir)
 	machineid.EtcPath = filepath.Join(dir, "machine-id")
 	machineid.RunPath = filepath.Join(dir, "run-machine-id")
 	os.WriteFile(machineid.EtcPath, []byte("0123456789abcdef0123456789abcdef\n"), 0o644)

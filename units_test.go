@@ -98,6 +98,14 @@ func TestTheBootIsRunOnBothDistributions(t *testing.T) {
 	if len(started) != 2 || !strings.Contains(started[0], machineID) || !strings.Contains(started[1], debian) {
 		t.Errorf("Debian starts %q, want the machine-id's release, then run as %q", started, debian)
 	}
+	// The slots' records are EFI variables: efivarfs is mounted before
+	// run, whenever the image needs the TPM - not only with a network.
+	mount := strings.Index(string(script), "mount -t efivarfs efivarfs /sys/firmware/efi/efivars")
+	netCase := strings.Index(string(script), `case "$TPM2_KIRA_NET" in`+"\ndhcp | static)\n    TPM2_KIRA_LOG")
+	run := strings.Index(string(script), debian)
+	if mount < 0 || run < 0 || mount > run || netCase >= 0 && mount > netCase || !strings.Contains(string(script), `if [ -d "$PLAN/tpm" ] && [ -d /sys/firmware/efi/efivars ]`) {
+		t.Error("Debian's script does not mount efivarfs before run, for every image with the TPM")
+	}
 	// Arch: the same release, before the network and the separators.
 	mid := directives(t, "initramfs/systemd/tpm2-kira-machine-id.service")
 	for _, want := range []string{"ExecStart=tpm2-kira-boot machine-id", "Type=oneshot", "Before=systemd-networkd.service",

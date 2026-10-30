@@ -517,9 +517,17 @@ the boot is one the signing key approved - against a phished password.
    for those. With nothing to show the hold lasts while the vault opens
    its part (`bootDisplay.Pending`), within the hold time. status: each
    slot's methods, the fallback note only with a code.
-5. [ ] The boot: efivarfs mounted before tpm2-kira-boot on Arch and Debian
+5. [x] The boot: efivarfs mounted before tpm2-kira-boot on Arch and Debian
    (Debian's init-premount does it for the machine-id: checked for the
-   order); the image plan needs no new part.
+   order); the image plan needs no new part. Debian mounted it only with
+   a network (for the machine-id): now before run whenever the image has
+   the TPM part (a units test holds the order). Arch: systemd mounts it as
+   an API file system; the hook adds the module for a kernel without it
+   built in. A read without EFI variables says "efivarfs not mounted?",
+   not "no record". Found on the way: cap ran with the code screen only -
+   with TOTP optional a slot without a code would not have been locked;
+   the plan's TPM part now counts every sealed slot, and both hooks run
+   cap with it.
 6. [ ] Status and control: a record left behind (TPM cleared, slot gone),
    indices without a record; removal offered.
 7. [ ] Docs: DISK-KEY.md, SECURITY-BACKGROUND.md (the record, where, the

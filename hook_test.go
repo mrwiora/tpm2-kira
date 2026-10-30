@@ -231,6 +231,12 @@ _add_plan
 	if got := run("unlock net", "net-modules-all\n", "0"); !strings.Contains(got, "ALLMODULES /drivers/net") || strings.Contains(got, "tpm2-kira-cap") {
 		t.Errorf("every network driver:\n%s", got)
 	}
+	// A sealed slot without codes (the vault, the TPM salt alone): its
+	// generation index is locked all the same, and its record is an EFI
+	// variable.
+	if got := run("unlock vault tpm", "", "0"); !strings.Contains(got, "UNIT tpm2-kira-cap.service") || !strings.Contains(got, "MODULE efivarfs") {
+		t.Errorf("a slot without codes:\n%s", got)
+	}
 	// The SSH server reads its CA from an EFI variable: efivarfs's module.
 	if got := run("unlock net ssh", "module efivarfs\n", "0"); !strings.Contains(got, "MODULE efivarfs") {
 		t.Errorf("efivarfs:\n%s", got)

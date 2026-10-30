@@ -89,6 +89,9 @@ func TestMain(m *testing.M) {
 		panic(dirErr)
 	}
 	os.MkdirAll(testDir+"/efivars", 0o755)
+	// A firmware's variable: an empty directory reads as an efivarfs that
+	// is not mounted.
+	os.WriteFile(testDir+"/efivars/BootOrder-8be4df61-93ca-11d2-aa0d-00e098032b8c", []byte{7, 0, 0, 0, 1, 0}, 0o644)
 	os.WriteFile(testDir+"/machine-id", []byte("0123456789abcdef0123456789abcdef\n"), 0o444)
 	os.Setenv("TPM2_KIRA_TEST_DIR", testDir)
 	// ... and the suite's own reads and writes of the slots' records.

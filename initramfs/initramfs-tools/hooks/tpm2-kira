@@ -98,9 +98,10 @@ $plan
 PLAN
 
 # The TPM's drivers: built in on most kernels, but modules on some machines.
-# efivarfs with them, loaded by the image's init: the sealed machine-id is an
-# EFI variable, and Debian's kernel has efivarfs as a module its initramfs
-# neither loads nor mounts (the premount script mounts it).
+# efivarfs with them, loaded by the image's init: the slots' records and the
+# sealed machine-id are EFI variables, and Debian's kernel has efivarfs as a
+# module its initramfs neither loads nor mounts (the premount script mounts
+# it).
 if [ -d "$DESTDIR/etc/tpm2-kira/plan/tpm" ]; then
     manual_add_modules tpm_tis
     manual_add_modules tpm_crb

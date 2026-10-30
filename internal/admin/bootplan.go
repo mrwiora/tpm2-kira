@@ -70,9 +70,17 @@ func (p PlanPart) Title() string { return partTitles[p.Name] }
 // BootPlan is the decided plan, with what its files are made of.
 type BootPlan struct {
 	Parts    []PlanPart
-	TPM      bool     // a part needs the TPM at boot
+	TPM      bool     // a part needs the TPM at boot, or a slot is sealed (cap)
 	Warnings []string // said at the build; not a reason for a part to be out
 	in       planInputs
+}
+
+// needsTPM: a part uses the TPM at boot, or a slot is sealed - whose
+// generation index 'cap' read-locks when the initrd is left, whatever the
+// slot's methods (the hooks run cap with the TPM part).
+func (p *BootPlan) needsTPM() bool {
+	return p.Has(imageplan.PartCodes) || p.Has(imageplan.PartPhone) || p.Has(imageplan.PartVault) || p.Has(imageplan.PartTPMSalt) ||
+		p.Has(imageplan.PartSSH) || p.in.TPMErr == "" && p.in.Slots > 0
 }
 
 // Part is the named part; a part that is not in the plan is out.
@@ -358,7 +366,7 @@ func decidePlan(in planInputs) *BootPlan {
 	}
 
 	sort.SliceStable(p.Parts, func(i, j int) bool { return planIndex(p.Parts[i].Name) < planIndex(p.Parts[j].Name) })
-	p.TPM = p.Has(imageplan.PartCodes) || p.Has(imageplan.PartPhone) || p.Has(imageplan.PartVault) || p.Has(imageplan.PartTPMSalt) || p.Has(imageplan.PartSSH)
+	p.TPM = p.needsTPM()
 	return p
 }
 
@@ -547,7 +555,7 @@ func (p *BootPlan) drop(name, why string) {
 			p.Parts[i] = PlanPart{Name: name, Why: why}
 		}
 	}
-	p.TPM = p.Has(imageplan.PartCodes) || p.Has(imageplan.PartPhone) || p.Has(imageplan.PartVault) || p.Has(imageplan.PartTPMSalt) || p.Has(imageplan.PartSSH)
+	p.TPM = p.needsTPM()
 }
 
 // InitramfsPlanCommand implements 'initramfs plan': with a build root the

@@ -98,9 +98,14 @@ _add_plan() {
         esac
     done <<< "$out"
 
-    # The codes: the lock of code computation when the initrd is left, so
-    # nothing in the running OS can compute codes until the next boot.
-    if _plan_has codes; then
+    # The lock of the slots when the initrd is left - their generation
+    # indices, which every slot's policy reads - so nothing in the running
+    # OS can compute a code or open a slot's part until the next boot:
+    # whenever a slot is sealed (the plan's TPM part), whatever its methods.
+    # efivarfs, where the slots' records are, is mounted by systemd itself;
+    # added for a kernel that has it as a module (built in, nothing to add).
+    if _plan_has tpm; then
+        add_module efivarfs
         _add_kira_unit tpm2-kira-cap.service
         add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-cap.service \
             /usr/lib/systemd/system/tpm2-kira-cap.service

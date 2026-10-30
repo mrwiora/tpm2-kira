@@ -54,6 +54,8 @@ func ReadRecord(index uint32) ([]byte, error) {
 	}
 	data, err := persist.ReadVar(v)
 	switch {
+	case errors.Is(err, os.ErrNotExist) && !varsReadable():
+		return nil, fmt.Errorf("slot %d's record cannot be read: no EFI variables at %s (efivarfs not mounted?)", SlotNumber(index), persist.VarDir)
 	case errors.Is(err, os.ErrNotExist):
 		return nil, fmt.Errorf("slot %d: %w", SlotNumber(index), ErrNoRecord)
 	case err != nil:
@@ -64,6 +66,14 @@ func ReadRecord(index uint32) ([]byte, error) {
 		return nil, fmt.Errorf("slot %d's record is %d bytes, more than the %d a record may have", SlotNumber(index), len(data), MaxRecordSize)
 	}
 	return data, nil
+}
+
+// varsReadable says whether the EFI variables are there to read: a
+// mounted efivarfs always holds the firmware's own, so an empty or missing
+// directory is one that is not mounted.
+func varsReadable() bool {
+	entries, err := os.ReadDir(persist.VarDir)
+	return err == nil && len(entries) > 0
 }
 
 // WriteRecord replaces the slot's record: the firmware takes the whole
@@ -88,6 +98,17 @@ func WriteRecord(index uint32, data []byte) error {
 		return fmt.Errorf("slot %d's record was written, but does not read back as written (%v)", SlotNumber(index), err)
 	}
 	return nil
+}
+
+// HasRecord reports whether the slot's variable is there, whatever it
+// holds (an oversized or foreign one is there too, for removal).
+func HasRecord(index uint32) bool {
+	v, err := RecordVar(index)
+	if err != nil {
+		return false
+	}
+	_, err = persist.ReadVar(v)
+	return err == nil
 }
 
 // RemoveRecord removes the slot's record and reports whether there was
@@ -142,11 +163,7 @@ func (s SlotState) Orphaned() string {
 func SlotStates(tpmDev transport.TPM) []SlotState {
 	var out []SlotState
 	for idx := uint32(NVRAMSlotStart); idx <= NVRAMSlotEnd; idx++ {
-		s := SlotState{Index: idx, Indices: SlotExists(tpmDev, idx)}
-		if v, err := RecordVar(idx); err == nil {
-			_, rerr := persist.ReadVar(v)
-			s.Record = rerr == nil
-		}
+		s := SlotState{Index: idx, Indices: SlotExists(tpmDev, idx), Record: HasRecord(idx)}
 		if s.Indices || s.Record {
 			out = append(out, s)
 		}

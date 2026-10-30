@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -85,8 +84,7 @@ func (c SlotContents) Remains() string {
 // are then reported as absent, and the caller says why the TPM is not there.
 func collectSlotContents(tpmDev transport.TPM, devices []LuksDeviceStatus, slot int) SlotContents {
 	c := SlotContents{Slot: slot, Index: nvslot.NVRAMSlotStart + uint32(slot)}
-	_, err := nvslot.ReadRecord(c.Index)
-	c.Record = err == nil || !errors.Is(err, nvslot.ErrNoRecord)
+	c.Record = nvslot.HasRecord(c.Index)
 	if tpmDev != nil {
 		c.OldBlob = tpmdev.NVRAMIndexExists(tpmDev, c.Index)
 		c.Generation = tpmdev.NVRAMIndexExists(tpmDev, nvslot.GenerationIndex(c.Index))

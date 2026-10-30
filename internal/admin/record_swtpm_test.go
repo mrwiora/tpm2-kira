@@ -18,6 +18,7 @@ func TestSlotStates(t *testing.T) {
 	old := persist.VarDir
 	persist.VarDir = t.TempDir()
 	t.Cleanup(func() { persist.VarDir = old })
+	seedFirmwareVars(persist.VarDir)
 
 	sock := startSWTPM(t)
 	const sealed, foreign = nvslot.NVRAMSlotStart, nvslot.NVRAMSlotStart + 5

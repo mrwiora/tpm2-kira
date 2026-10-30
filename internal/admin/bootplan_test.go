@@ -470,3 +470,18 @@ func TestVaultPartCarriesTheRoots(t *testing.T) {
 		t.Fatalf("the image's bundle: %q", got)
 	}
 }
+
+// A sealed slot needs the TPM at boot whatever its methods: 'cap' locks its
+// generation index when the initrd is left. Without a slot, and without a
+// TPM, it does not.
+func TestASealedSlotIsCapped(t *testing.T) {
+	if p := decidePlan(planInputs{Config: DefaultControlConfig(), Slots: 1}); !p.TPM || p.Has(imageplan.PartCodes) {
+		t.Fatalf("a slot without a method: TPM %v, codes %v", p.TPM, p.Has(imageplan.PartCodes))
+	}
+	if p := decidePlan(planInputs{Config: DefaultControlConfig()}); p.TPM {
+		t.Fatal("nothing sealed, yet the TPM is planned")
+	}
+	if p := decidePlan(planInputs{Config: DefaultControlConfig(), Slots: 1, TPMErr: "gone"}); p.TPM {
+		t.Fatal("no TPM, yet the TPM is planned")
+	}
+}

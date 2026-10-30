@@ -3,6 +3,7 @@ package admin
 import (
 	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,12 +14,20 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 )
 
-// useTestVars points the EFI variables at a directory of the test's own.
+// useTestVars points the EFI variables at a directory of the test's own,
+// with a variable of the firmware's in it, as a mounted efivarfs has.
 func useTestVars(t *testing.T) {
 	t.Helper()
 	old := persist.VarDir
 	persist.VarDir = t.TempDir()
 	t.Cleanup(func() { persist.VarDir = old })
+	seedFirmwareVars(persist.VarDir)
+}
+
+// seedFirmwareVars puts a firmware's variable into dir: an empty
+// directory reads as an efivarfs that is not mounted.
+func seedFirmwareVars(dir string) {
+	os.WriteFile(filepath.Join(dir, "BootOrder-8be4df61-93ca-11d2-aa0d-00e098032b8c"), []byte{7, 0, 0, 0, 1, 0}, 0o644)
 }
 
 // What a slot is made of, and when it is dirty: not whole - its record and
