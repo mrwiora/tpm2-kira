@@ -175,6 +175,11 @@ class Case:
         secrets = re.findall(r"^Secret: ([A-Z2-7]+)", out, re.M)
         if not self.check("slot add --totp seals slots 0 and 1, each with its secret", len(secrets) == 2, out[-600:]):
             return
+        # The volume routed through tpm2-kira, as control's step does: its
+        # prompt waits for the code screen. (Not routed, Debian's cryptsetup
+        # asks at the same time, and Enter goes to it.)
+        if not self.route():
+            return
         self.rebuild(r"TOTP codes:\s+in")
         mark = self.reboot()
         try:
@@ -305,7 +310,7 @@ class Case:
         # what is left of the slot now.
         note = next((l for l in out.splitlines() if "slot 0 is incomplete" in l), "")
         self.check("slot delete takes the slot's indices; the keyslot bound to it is what is left",
-                   re.search(r"slot 0 is incomplete - keyslot \d+ of \S+ left", note) is not None and "luks remove" in note and "generation" not in note and "slot delete" not in note, out[-800:])
+                   re.search(r"slot 0 is incomplete - keyslot \d+ of \S+ left", note) is not None and "luks remove" in note and "generation" not in note and "'tpm2-kira slot delete --nvram" not in note, out[-800:])
 
     def run(self):
         try:
