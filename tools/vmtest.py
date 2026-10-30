@@ -632,8 +632,12 @@ class Machine:
         self.check(f"boot {n}: the key was answered", re.search(r"unlock: answered for", out) is not None, out[-500:])
         self.check(f"boot {n}: the machine-id was released before the network (slot 0's policy held)",
                    "the machine-id is released" in out, out[-500:])
-        confined = re.search(r"ssh-child \(pid \d+\) runs with uid 65534, .*no new privileges, no executable memory, Landlock ABI \d+: no file access, \d+ system calls refused", out)
-        self.check(f"boot {n}: ssh-child ran confined (nobody, no new privileges, no executable memory, Landlock, seccomp)", confined is not None, out[-500:])
+        # aSSH gives the unprivileged half a uid of its own from its range
+        # (sandbox.DefaultUIDs, 0x7FFE0000-0x7FFEFFFF); nobody would mean
+        # none was free, which a boot with one ssh-child never is.
+        confined = re.search(r"ssh-child \(pid \d+\) runs with uid (\d+), namespaces of its own, no new privileges, not dumpable, no executable memory, Landlock ABI \d+: no file access, \d+ system calls refused", out)
+        own_uid = confined is not None and 0x7FFE0000 <= int(confined.group(1)) <= 0x7FFEFFFF
+        self.check(f"boot {n}: ssh-child ran confined (a uid of its own, namespaces, no new privileges, not dumpable, no executable memory, Landlock, seccomp)", own_uid, out[-500:])
         bad = [l for l in out.split("\n") if re.search(r"ERROR|FAILED|does not answer|cannot", l)]
         self.check(f"boot {n}: no tpm2-kira error in the boot's log", not bad, "\n".join(bad[:5]))
 
