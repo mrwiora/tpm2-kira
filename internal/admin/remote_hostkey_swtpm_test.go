@@ -86,13 +86,13 @@ func TestSSHCAApprovedForTheCodeScreen(t *testing.T) {
 	if err := writeSSHConf(controlPath, conf); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(sshConfPath(controlPath)); !strings.Contains(string(b), "ASSH_CA_SLOT_0=0,2,7,15\nASSH_CA_SLOT_1=7,15\n") {
+	if b, _ := os.ReadFile(sshConfPath(controlPath)); !strings.Contains(string(b), "ASSH_CA_SLOT_0=0,2,7\nASSH_CA_SLOT_1=7\n") {
 		t.Fatalf("the slots in assh.conf:\n%s", b)
 	}
 	if pub, err := os.ReadFile(path + ".pub"); err != nil || !strings.HasPrefix(string(pub), "ecdsa-sha2-nistp256 ") {
 		t.Fatalf("the CA's public key: %q %v", pub, err)
 	}
-	if ca.WindowHandle() != hostkey.DefaultWindowHandle || len(ca.Slots) != 2 || !slices.Equal(ca.Slots[0].PCRs, []int{0, 2, 7, 15}) || !slices.Equal(ca.Slots[1].PCRs, []int{7, 15}) {
+	if ca.WindowHandle() != hostkey.DefaultWindowHandle || len(ca.Slots) != 2 || !slices.Equal(ca.Slots[0].PCRs, []int{0, 2, 7}) || !slices.Equal(ca.Slots[1].PCRs, []int{7}) {
 		t.Fatalf("the CA: %s", ca.Describe())
 	}
 	if st := readSSHCA(conf, p.sock); len(st.Approvals) != 2 || st.Unapproved() != nil || st.CA.Fingerprint() != ca.Fingerprint() {
@@ -177,7 +177,7 @@ func TestSSHCAApprovedForTheCodeScreen(t *testing.T) {
 
 	// A slot added in assh.conf: reseal gives it to the CA and approves it.
 	f, _ := os.OpenFile(sshConfPath(controlPath), os.O_APPEND|os.O_WRONLY, 0)
-	f.WriteString("ASSH_CA_SLOT_2=0,7,15\n")
+	f.WriteString("ASSH_CA_SLOT_2=0,7\n")
 	f.Close()
 	if err := resealSSHCA(controlPath, p.sock, keyPath); err != nil {
 		t.Fatal(err)
@@ -188,7 +188,7 @@ func TestSSHCAApprovedForTheCodeScreen(t *testing.T) {
 	// Taken away again: reseal takes it from the CA with its approval,
 	// though every slot left is approved and nothing is signed.
 	b, _ := os.ReadFile(sshConfPath(controlPath))
-	os.WriteFile(sshConfPath(controlPath), bytes.ReplaceAll(b, []byte("ASSH_CA_SLOT_2=0,7,15\n"), nil), 0o644)
+	os.WriteFile(sshConfPath(controlPath), bytes.ReplaceAll(b, []byte("ASSH_CA_SLOT_2=0,7\n"), nil), 0o644)
 	if err := resealSSHCA(controlPath, p.sock, otherKey); err != nil {
 		t.Fatal(err)
 	}

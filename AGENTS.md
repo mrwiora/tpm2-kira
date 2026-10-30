@@ -157,9 +157,11 @@ It may not carry what came before.
   `cmd/` or aSSH - the module boundary enforces that - and its tests run in `core/`
   (`make test-unit`). A change there is the phone's and the vault's too.
 - **One boot on every distribution.** Arch's unit and Debian's
-  init-premount script start the same `run` - and the same two short
-  steps at fixed points, `machine-id` before the network and `cap` when
-  the initrd is left - and `run` starts everything else of tpm2-kira's at
+  init-premount script start the same `run` - and the same three short
+  steps at fixed points, `machine-id` before the network, `close` right
+  before a resume from hibernation (the SSH CA's window: a resume starts
+  the TPM afresh and runs no code screen; its failure stops the resume),
+  and `cap` when the initrd is left - and `run` starts everything else of tpm2-kira's at
   boot itself: the parts of the plan, the TPM wait,
   and the processes that parse outside input - `ssh-child` (as a uid no
   one else has, assh's `sandbox.ClaimUID`) and the phone's `gate-child`

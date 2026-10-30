@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/tpm2-trust/assh/server"
 
@@ -31,8 +32,8 @@ type hostKeyAtBoot struct {
 // the build, another TPM, no CA), the key is temporary: made in the TPM
 // all the same, not certified, so the ssh client warns of an unknown host
 // key, and the console shows its fingerprint to compare. However it ends -
-// a key made, an error at any step - the CA's window is closed after, and
-// the PCR of ASSH_CLOSE_PCR extended. Without a TPM there is no key.
+// a key made, an error at any step - the CA's window is closed after.
+// Without a TPM there is no key.
 func PrepareHostKey(tpmPath string, conf config.Config) (key hostKeyAtBoot, err error) {
 	caPath := conf.CA
 	tpmDev, err := tpmdev.Open(tpmPath)
@@ -97,22 +98,15 @@ func mountEfivarfs() error {
 }
 
 // closeWindow closes the CA's window: its window index - assh.conf's when
-// the CA could not be read, if one is defined there - and the PCR of
-// ASSH_CLOSE_PCR.
+// the CA could not be read, if one is defined there.
 func closeWindow(tpmDev transport.TPM, ca *hostkey.CA, conf config.Config) error {
 	h := tpm2.TPMHandle(conf.WindowHdl)
 	if ca != nil && ca.WindowHandle() != 0 {
 		h = ca.WindowHandle()
 	}
 	_, err := hostkey.CloseWindow(tpmDev, h)
-	if conf.ClosePCR >= 0 {
-		err = errors.Join(err, hostkey.ExtendPCR(tpmDev, conf.ClosePCR, sshCAWindowEvent))
-	}
 	return err
 }
-
-// sshCAWindowEvent is what the PCR of ASSH_CLOSE_PCR is extended with.
-const sshCAWindowEvent = "tpm2-kira: ssh ca closed"
 
 // efivars is where efivarfs is mounted.
 const efivars = "/sys/firmware/efi/efivars"
@@ -128,4 +122,43 @@ func AuthorizedKeys(path string) ([]string, int, error) {
 	}
 	keys, skipped := server.ParseAuthorizedKeys(data)
 	return keys, skipped, nil
+}
+
+// closeTPMWait is how long Close waits for the TPM's device: longer than
+// run's, since a TPM that does not come stops a resume from hibernation.
+var closeTPMWait = 30 * time.Second
+
+// Close closes the CA's window - the CA's window index, else assh.conf's -
+// and does nothing else: what the boot image runs right before a resume
+// from hibernation. A resume starts the TPM afresh, which opens the window
+// again, and the resumed system does not run the code screen. In a boot
+// where the code screen has closed it already, it does nothing. No CA and
+// no window index is no error; a TPM that does not come, or an index at the
+// handle that is not a window, is: the resume must not go on.
+func Close(tpmPath, confPath string) error {
+	conf, cerr := config.Load(confPath)
+	if cerr != nil {
+		conf = config.Default()
+	}
+	if !tpmdev.AwaitNode(tpmPath, closeTPMWait) {
+		return fmt.Errorf("%s did not appear within %s: the SSH CA's window is not closed", tpmPath, closeTPMWait)
+	}
+	tpmDev, err := tpmdev.Open(tpmPath)
+	if err != nil {
+		return fmt.Errorf("the SSH CA's window is not closed: %w", err)
+	}
+	defer tpmDev.Close()
+	var ca *hostkey.CA
+	if cerr == nil && conf.CA != "" {
+		if !persist.IsVar(conf.CA) || mountEfivarfs() == nil {
+			ca, _ = hostkey.LoadCA(conf.CA)
+		}
+	}
+	if err := closeWindow(tpmDev, ca, conf); err != nil {
+		return err
+	}
+	if cerr != nil && !os.IsNotExist(cerr) {
+		return fmt.Errorf("%s: %w (the default window index is closed)", confPath, cerr)
+	}
+	return nil
 }

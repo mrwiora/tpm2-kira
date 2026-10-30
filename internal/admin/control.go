@@ -121,6 +121,9 @@ type machineFacts struct {
 	EmptyPass    []string
 	EmptyPassErr string
 	Wired        int // wired network interfaces: the image's network needs one
+	// PlainSwap are the swaps a hibernation would write the memory to in
+	// the clear (swap.go); empty when the kernel offers no hibernation.
+	PlainSwap []string
 	// SSHKeys is how many keys may log in at boot (-1: the file cannot be
 	// read); SSHCA the SSH CA and its approval of the next boot. Both only
 	// with SSH on.
@@ -234,6 +237,7 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 		f.Dirt = collectDirt(tpmPath, f.Status.Devices)
 	}
 	f.NoRecovery, f.EmptyPass, f.EmptyPassErr = recoveryFacts(f.Status.Devices)
+	f.PlainSwap = plainSwaps()
 	for _, s := range f.Status.Slots {
 		if s.Vault != "" {
 			if f.Vaults == nil {
@@ -855,6 +859,9 @@ func (c *controller) factsText() string {
 		if len(f.EmptyPass) > 0 {
 			fmt.Fprintf(&w, "  Passphrase  %s\n", bad(strings.Join(f.EmptyPass, ", ")+" opens with an empty passphrase (risk: the disk is encrypted, yet anybody with it opens it - set a passphrase: cryptsetup luksChangeKey)"))
 		}
+	}
+	if len(f.PlainSwap) > 0 {
+		fmt.Fprintf(&w, "  Hibernation %s\n", bad("to unencrypted swap: "+strings.Join(f.PlainSwap, ", ")+" (risk: the memory - the disk's key included - lands on the disk in the clear, and a resume from it runs past the boot image, the SSH CA's window open - encrypt the swap or disable hibernation)"))
 	}
 	if f.Remote.Net.Mode != "off" {
 		fmt.Fprintf(&w, "  Boot network %s\n", strings.Join(RemoteStatusLines(f.Remote), "; "))

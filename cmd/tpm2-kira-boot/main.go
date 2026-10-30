@@ -32,6 +32,7 @@ scripts run it; on the installed system it is 'tpm2-kira')
                confirmed, and starts the parts the image's plan names - the
                phone's gate, the SSH server, the vault, the disk's key
   cap          Lock the codes until the next boot (when the initrd is left)
+  close        Close the SSH CA's window (before a resume from hibernation)
   unlock-key   Debian's keyscript: the disk's key from run's socket, else askpass
   machine-id   Release the sealed machine-id before the network (slot 0's policy)
   reveal       The current code (reveal-plain: without colour)
@@ -84,6 +85,17 @@ func main() {
 		fs.Parse(args)
 		if err := totp.CapCommand(*tpm); err != nil {
 			fail(err)
+		}
+	case "close":
+		fs := flag.NewFlagSet("close", flag.ExitOnError)
+		tpm := fs.String("tpm", tpmdev.DefaultPath, "Path to TPM device")
+		conf := fs.String("ssh-conf", sshscreen.DefaultConf, "aSSH's settings: the SSH CA and its window index")
+		fs.Parse(args)
+		// The one command whose failure is the boot's: the resume that
+		// follows it must not go on with the window open.
+		if err := sshscreen.Close(*tpm, *conf); err != nil {
+			fmt.Fprintf(os.Stderr, "tpm2-kira-boot close: %v\n", err)
+			os.Exit(1)
 		}
 	case "unlock-key":
 		fs := flag.NewFlagSet("unlock-key", flag.ExitOnError)

@@ -30,7 +30,7 @@ TPM2_KIRA_NET_DHCP_ID=mac
 		r.SSH.Assh.AuthorizedKeys != DefaultSSHAuthorizedKeys || r.SSH.Assh.CA != DefaultSSHCA || r.Net.DHCPID != "mac" || r.Problem() != "" {
 		t.Fatalf("%+v %q", r, r.Problem())
 	}
-	if d := DefaultControlConfig().Remote; d.Net.Mode != "off" || d.SSH.On || d.SSH.Port() != 22 || d.Net.DHCPID != "auto" || d.SSH.Assh.ClosePCR != 15 || d.SSH.Assh.KeyID != "tpm2-kira boot" {
+	if d := DefaultControlConfig().Remote; d.Net.Mode != "off" || d.SSH.On || d.SSH.Port() != 22 || d.Net.DHCPID != "auto" || d.SSH.Assh.KeyID != "tpm2-kira boot" {
 		t.Fatalf("defaults: %+v", d)
 	}
 	for _, bad := range []string{

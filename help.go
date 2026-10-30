@@ -434,7 +434,7 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
                    before the OS separator, the TPM makes this boot's host
                    key and the CA certifies it through the first slot whose
                    PCRs hold an approved state, then the CA's window is
-                   closed - its window index locked, PCR 15 extended - also
+                   closed - its window index locked - also
                    when anything failed: the CA certifies nothing more until
                    the next boot. When it does not certify, a temporary key is served
                    - made in the TPM too, not certified - and the console
@@ -489,9 +489,9 @@ CA, which 'tpm2-kira control' creates in the TPM and keeps in the EFI
 variable ` + admin.DefaultSSHCA + `, and which signs only while the PCRs of one of its slots
 hold values the signing key approved. control writes two slots into
 assh.conf when it creates the CA: PCR 0, 2, 7 and the image's (11, or 8
-and 9 with GRUB), and PCR 7 alone - each with PCR 15, which run extends
-when it closes the CA's window. A CA certifies from the boot after its
-creation. slot approve approves them after every image rebuild, and makes the
+and 9 with GRUB), and PCR 7 alone. A CA certifies from the boot after its
+creation; its window is closed by run, and by the image before a resume
+from hibernation (tpm2-kira-boot close). slot approve approves them after every image rebuild, and makes the
 CA's slots assh.conf's first (ASSH_CA_SLOT_<N>=PCRs). Clients trust the CA once, in known_hosts:
 
   @cert-authority <the machine's names> <the contents of ` + admin.DefaultSSHCAPub + `>

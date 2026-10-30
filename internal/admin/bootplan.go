@@ -542,6 +542,11 @@ func (p *BootPlan) WriteImage(buildroot, format string, out io.Writer) error {
 			if err := writeImageFile(buildroot, imageRunDropIn, []byte(runDropIn(in.Config.Remote.SSH)), 0o644); err != nil {
 				return err
 			}
+			if err := writeImageFile(buildroot, imageResumeDropIn, []byte(resumeDropIn), 0o644); err != nil {
+				return err
+			}
+		} else if err := writeImageFile(buildroot, imageResumeScript, []byte(resumeScript), 0o755); err != nil {
+			return err
 		}
 	}
 	return nil

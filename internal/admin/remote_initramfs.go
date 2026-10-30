@@ -26,6 +26,10 @@ const (
 	// by the init-premount script, which brings the network up and starts
 	// 'run' with TPM2_KIRA_REMOTE.
 	imageRemoteConf = "/etc/tpm2-kira/remote.conf"
+	// imageResumeDropIn and imageResumeScript close the SSH CA's window
+	// right before a resume from hibernation (resumeDropIn, resumeScript).
+	imageResumeDropIn = "/etc/systemd/system/systemd-hibernate-resume.service.d/tpm2-kira-close.conf"
+	imageResumeScript = "/scripts/local-top/tpm2-kira-close"
 	// imageUdhcpcScript is initramfs-tools' DHCP with a client identifier:
 	// busybox' udhcpc runs it at its events.
 	imageUdhcpcScript = "/etc/tpm2-kira/udhcpc.script"
@@ -140,3 +144,39 @@ func writeImageFile(buildroot, path string, data []byte, mode os.FileMode) error
 	}
 	return os.Chmod(dst, mode)
 }
+
+// A resume from hibernation starts the TPM afresh, which opens the SSH CA's
+// window again, and the resumed system runs no code screen: the image
+// closes it right before the resume, whatever run did. Where the code
+// screen closed it already, the close does nothing.
+
+// resumeDropIn is systemd's: the close before every resume attempt. Its
+// failure fails the resume service, and the machine does not resume.
+const resumeDropIn = `# Written by 'tpm2-kira initramfs plan': the SSH CA's window closed before
+# a resume from hibernation (the TPM starts afresh, the resumed system runs
+# no code screen). Its failure stops the resume.
+[Service]
+ExecStartPre=/usr/bin/tpm2-kira-boot close
+`
+
+// resumeScript is initramfs-tools': after every volume is unlocked
+// (cryptroot) and before local-premount, where the resume is. On failure it
+// sets noresume, which the resume script obeys.
+const resumeScript = `#!/bin/sh
+# Written by 'tpm2-kira initramfs plan': the SSH CA's window closed before
+# a resume from hibernation (the TPM starts afresh, the resumed system runs
+# no code screen). Its failure stops the resume.
+PREREQ="cryptroot"
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+prereqs)
+    prereqs
+    exit 0
+    ;;
+esac
+if ! /usr/bin/tpm2-kira-boot close; then
+    echo "tpm2-kira: the SSH CA's window is not closed: no resume from hibernation this boot" >/dev/console
+    echo "noresume=y" >>/conf/param.conf
+fi
+exit 0
+`

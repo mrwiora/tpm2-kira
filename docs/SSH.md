@@ -71,9 +71,8 @@ key, a login is a session of the code screen):
 |---|---|
 | `ASSH_CA` | `efi:KIRAasshCA` (default): the SSH CA's EFI variable (its public key in `/etc/tpm2-kira/ssh_ca.pub`), created in the TPM by control (§4) |
 | `ASSH_CA_TYPE` | `p256` (default) or `rsa2048`: what control asked when it created the CA |
-| `ASSH_CA_SLOT_<N>` | a slot's PCRs, `0,2,7,11,15`; control writes two, worked out for this machine (§4). An edit takes effect at the next approval or control, which make the CA's slots these and approve them |
-| `ASSH_CLOSE_PCR` | `15` (default): the PCR every slot reads and run extends when it closes the CA's window |
-| `ASSH_WINDOW_HANDLE` | `0x01802915` (default): the CA's window index, which run locks |
+| `ASSH_CA_SLOT_<N>` | a slot's PCRs, `0,2,7,11`; control writes two, worked out for this machine (§4). An edit takes effect at the next approval or control, which make the CA's slots these and approve them |
+| `ASSH_WINDOW_HANDLE` | `0x01802915` (default): the CA's window index, which run locks, and `tpm2-kira-boot close` before a resume |
 | `ASSH_CHILD_UIDS` | `0x7FFE0000-0x7FFEFFFF` (default): where `ssh-child`'s uid is chosen from, one no one else has |
 | `ASSH_CA_REF` | `tpm2-kira ssh ca` (default): what the signing key's approvals are bound to |
 | `ASSH_LISTEN` | `:22` (default): the address the server listens on |
@@ -320,17 +319,27 @@ and no secret either: the keys are in the TPM.
   until the next reboot, whatever an approval says: not in the running
   system, on Arch or Debian, with or without `systemd-pcrosseparator`. A
   CA is created with its window locked: control's CA certifies from the
-  next boot on. Beside it `run` extends PCR 15 (`ASSH_CLOSE_PCR`,
-  `tpm2-kira: ssh ca closed`); both slots read PCR 15, and nothing in the
-  boot image measures it before the code screen, so the next boot meets it
-  empty.
+  next boot on. Nothing but the window index closes the CA: no PCR is
+  extended.
+- **A resume from hibernation meets the window closed.** To the TPM a
+  resume is a new start, which opens the window again, and the resumed
+  system runs no code screen. So the image closes it right before every
+  resume, whatever `run` did: Arch, a drop-in on
+  `systemd-hibernate-resume.service` (`ExecStartPre=/usr/bin/tpm2-kira-boot
+  close`); Debian, the `local-top` script `tpm2-kira-close`, after
+  `cryptroot`, before `local-premount`'s resume. In a boot where `run`
+  closed it already, the close does nothing. When it fails (no TPM, an
+  index at the handle that is no window), the machine does not resume: the
+  hibernated session is lost, never the window. Hibernation to unencrypted
+  swap is not covered - the kernel may resume it before the image runs -
+  and control shows it red.
 - **The approved values** are those of tpm2-kira's measure point: the code
   screen holds the boot ahead of `systemd-pcrosseparator`, which extends
   PCR 0-7 in the running system. They are replayed from the firmware
   event log (`measurepoint.go`), PCR 11 computed from the unified kernel
   image (`ukipredict.go`), PCR 8 and 9 predicted from grub.cfg and the
-  files GRUB loads (`grub_predict.go`) - as `slot add` does -; PCR 15
-  empty. **`slot approve` approves them** in both slots, with the signing key,
+  files GRUB loads (`grub_predict.go`) - as `slot add` does.
+  **`slot approve` approves them** in both slots, with the signing key,
   whenever a slot has no approval of the next boot: the initramfs hooks
   run it after every image rebuild, so a kernel update needs nothing by
   hand. control approves them when it creates the CA and at quit; the CA
@@ -378,7 +387,7 @@ up.
 ```
 tpm2-kira.service (holds READY)
   ├── the TPM makes this boot's host key, the SSH CA certifies it (slot 0 or 1),
-  │   the window closes (its index locked, PCR 15 extended), opens :PORT, starts 'ssh-child'
+  │   the window closes (its index locked), opens :PORT, starts 'ssh-child'
   ├── console: "ssh root@<address>", the SSH CA's fingerprint, sessions connected,
   │            "Enter here: continue at this console"
   └── sessions: the code screen; Enter confirms, q leaves
@@ -548,13 +557,10 @@ aSSH's own tests log in with OpenSSH's client (10.6) through a
   little: any OS booted on the machine reaches the same values. The CA
   never leaves this TPM either way; a certificate made so is good for the
   machine's names until the clients drop the CA line.
-- **PCR 15 is extended in every boot with the SSH server**, before
-  cryptsetup. Whatever the running system binds to PCR 15 (systemd's
-  machine-id and file system measurements, a volume enrolled with
-  `systemd-cryptenroll --tpm2-pcrs=15`) sees that extension; turning the
-  SSH server on or off changes the value. Something that measured PCR 15
-  before the code screen (a volume unlocked earlier with
-  `tpm2-measure-pcr=`) meets no slot: the key is temporary.
+- **The window is closed by software.** `run` closes it at the code
+  screen, the image before a resume; a boot where neither runs (an image
+  without tpm2-kira's SSH server, booted under the same Secure Boot keys)
+  leaves it open for that boot - see the first limit.
 - **The approvals are the signing key's.** Whoever holds it can approve
   another state; keep it on the YubiKey.
 - **An approval is never revoked.** approve and control keep only the

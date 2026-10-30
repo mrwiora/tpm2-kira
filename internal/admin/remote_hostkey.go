@@ -9,9 +9,10 @@ package admin
 // exported - which signs only while the PCRs hold values the signing key
 // approved. At every boot 'run' has the TPM make a new host key under its
 // NULL hierarchy, gone at the next reboot, and the CA certify it, at the
-// start of the code screen, then closes the CA's window: PCR 15, which
-// every slot reads, is extended, so nothing later in this boot gets a
-// certificate. The clients trust the CA (a known_hosts line
+// start of the code screen, then closes the CA's window - its window index
+// W, read-locked until the next boot - so nothing later in this boot gets a
+// certificate. Before a resume from hibernation, which starts the TPM
+// afresh, the boot image closes it again (tpm2-kira-boot close). The clients trust the CA (a known_hosts line
 // '@cert-authority'), not a key, so a new key at every boot asks them
 // nothing.
 //
@@ -21,7 +22,7 @@ package admin
 // PCR 0 (firmware), 2 (option ROMs) and 7 (Secure Boot), and the image -
 // PCR 11 with a unified kernel image, PCR 8 and 9 with GRUB. Slot 1, the
 // lower, reads PCR 7 alone: a kernel update not approved yet, a new option
-// ROM or a firmware update leave it standing. Both read the window.
+// ROM or a firmware update leave it standing.
 //
 // The CA, its approvals with it, lives in the EFI variable KIRAasshCA, not
 // in the image: an approval of PCR 11 carried inside the image it measures
@@ -29,7 +30,7 @@ package admin
 // after every rebuild - and control approve the next boot's values in both
 // slots with the signing key: those of tpm2-kira's measure point, replayed
 // from the firmware event log and predicted from the image (measurepoint.go,
-// ukipredict.go, grub_predict.go), the window still empty. A boot whose
+// ukipredict.go, grub_predict.go). A boot whose
 // approvals no longer fit serves assh's temporary key, made in the TPM too
 // but not certified, which the console names.
 
@@ -63,19 +64,13 @@ const (
 // approved for its values.
 const sshCAUnapproved = "the SSH CA has no approval of the PCRs as the next boot meets them: approved when you quit control, and by slot approve after every image rebuild"
 
-// sshCAWindow is the PCR the code screen extends when it closes the CA's
-// window (ASSH_CLOSE_PCR), beside the CA's own window index: every slot
-// reads it. Nothing measures it in the boot image before the code screen,
-// so the next boot meets it empty.
-const sshCAWindow = 15
-
-// sshCASlots are the slots worked out for this machine, each with the
-// PCR extended at the close (closePCR, -1 none). Slot 0, the higher confidence, is decided from
+// sshCASlots are the slots worked out for this machine. Slot 0, the higher
+// confidence, is decided from
 // this boot's event log as 'slot add' decides its slot 0: the firmware, the
 // option ROMs, the Secure Boot state, and the image's PCRs (11 with a
 // unified kernel image, 8 and 9 with GRUB). Slot 1, the lower, is the
 // Secure Boot state alone.
-func sshCASlots(algo measure.PCRHashAlgo, closePCR int) (map[int][]int, error) {
+func sshCASlots(algo measure.PCRHashAlgo) (map[int][]int, error) {
 	sel, _ := DefaultPCRSelection("", algo)
 	specs, err := measure.ParsePCRSpecs(sel)
 	if err != nil {
@@ -85,11 +80,7 @@ func sshCASlots(algo measure.PCRHashAlgo, closePCR int) (map[int][]int, error) {
 	for _, s := range specs {
 		slot0 = append(slot0, s.Index)
 	}
-	slot1 := []int{7}
-	if closePCR >= 0 {
-		slot0, slot1 = append(slot0, closePCR), append(slot1, closePCR)
-	}
-	return map[int][]int{0: slot0, 1: slot1}, nil
+	return map[int][]int{0: slot0, 1: {7}}, nil
 }
 
 // sshCABank is the PCR bank the CA is bound to: SHA-256 where the TPM has
@@ -103,14 +94,11 @@ func sshCABank(tpmDev transport.TPM) hostkey.Bank {
 
 // sshCAValues are the CA's PCRs as they will be at the next boot's code
 // screen: replayed from the event log (PCR 8 and 9 with GRUB's prediction),
-// PCR 11 computed from the unified kernel image, the PCR extended at the
-// close (closePCR) empty.
-func sshCAValues(tpmDev transport.TPM, ca *hostkey.CA, closePCR int) (map[int][]byte, error) {
+// PCR 11 computed from the unified kernel image.
+func sshCAValues(tpmDev transport.TPM, ca *hostkey.CA) (map[int][]byte, error) {
 	var specs []measure.PCRSpec
-	reads := slices.Contains(ca.PCRs(), closePCR)
 	for _, idx := range ca.PCRs() {
 		switch idx {
-		case closePCR:
 		case measure.TPM2PCRKernelBoot:
 			uki := findUKI()
 			if uki == "" {
@@ -124,9 +112,6 @@ func sshCAValues(tpmDev transport.TPM, ca *hostkey.CA, closePCR int) (map[int][]
 	r, err := measure.ReadPCRValues(tpmDev, specs, measure.PCRHashAlgo(ca.Bank), measure.MeasurePointModeSetting, measure.MeasurePointBeforeSeparator, false)
 	if err != nil {
 		return nil, fmt.Errorf("the values of %s at boot cannot be told: %w", hostkey.PCRList(ca.PCRs()), err)
-	}
-	if reads {
-		r.Values[closePCR] = make([]byte, measure.NewHashFor(measure.PCRHashAlgo(ca.Bank)).Size())
 	}
 	return r.Values, nil
 }
@@ -156,7 +141,7 @@ func createSSHCA(conf *config.Config, tpmPath string, signer crypto.Signer) (*ho
 		conf.Bank = sshCABank(tpmDev)
 	}
 	if len(conf.Slots) == 0 {
-		if conf.Slots, err = sshCASlots(measure.PCRHashAlgo(conf.Bank), conf.ClosePCR); err != nil {
+		if conf.Slots, err = sshCASlots(measure.PCRHashAlgo(conf.Bank)); err != nil {
 			return nil, err
 		}
 	}
@@ -171,7 +156,7 @@ func createSSHCA(conf *config.Config, tpmPath string, signer crypto.Signer) (*ho
 	if _, err := conf.Match(ca); err != nil {
 		return nil, err
 	}
-	values, err := sshCAValues(tpmDev, ca, conf.ClosePCR)
+	values, err := sshCAValues(tpmDev, ca)
 	if err != nil {
 		return nil, err
 	}
@@ -322,7 +307,7 @@ func readSSHCA(conf config.Config, tpmPath string) sshCAState {
 		return sshCAState{CA: ca, Err: err.Error()}
 	}
 	defer tpmDev.Close()
-	values, err := sshCAValues(tpmDev, ca, conf.ClosePCR)
+	values, err := sshCAValues(tpmDev, ca)
 	if err != nil {
 		return sshCAState{CA: ca, Err: err.Error()}
 	}

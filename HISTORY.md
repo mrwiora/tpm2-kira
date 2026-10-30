@@ -85,10 +85,17 @@ close. And `run` extended it only after a successful Issue: with no CA,
 an unreadable one, or an error, the window stayed open for the rest of
 the boot. Since then the CA (aSSH's format 4) has a window index its own
 policy reads, which `run` locks on every way out; a CA is created with it
-locked, and certifies from the next boot on. PCR 15 is still extended
-beside it (ASSH_CLOSE_PCR), and still read by both slots. ASSH_CA_WINDOW
-is gone. A CA of format 3 is not read: control creates the CA again, and
-clients need its new `@cert-authority` line.
+locked, and certifies from the next boot on. ASSH_CA_WINDOW is gone. A CA
+of format 3 is not read: control creates the CA again, and clients need
+its new `@cert-authority` line.
+
+Until 2026-10-30 PCR 15 was still extended beside the window index
+(ASSH_CLOSE_PCR, "tpm2-kira: ssh ca closed") and read by both slots. It
+closed nothing the index did not, cost the running system PCR 15 (a known
+limit: anything bound to it saw the extension), and did not survive a
+resume from hibernation any better: the TPM resets every PCR there too. It
+went, with aSSH's `--close-pcr`; the slots read no PCR 15, and the image
+closes the window before a resume (`tpm2-kira-boot close`).
 
 ### The SSH CA was a file in /etc and in the image, bound to PCR 0 and 7
 

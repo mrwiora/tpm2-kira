@@ -54,9 +54,9 @@ func testSSHCA(t *testing.T, approved bool) sshCAState {
 		}),
 	}
 	ca := &hostkey.CA{Version: 4, Type: hostkey.P256, Bank: hostkey.SHA256,
-		Slots:  []hostkey.Slot{{Number: 0, PCRs: []int{0, 2, 7, 11, sshCAWindow}}, {Number: 1, PCRs: []int{7, sshCAWindow}}},
+		Slots:  []hostkey.Slot{{Number: 0, PCRs: []int{0, 2, 7, 11}}, {Number: 1, PCRs: []int{7}}},
 		Public: tpm2.Marshal(pub), Authority: authDER, PolicyRef: []byte(sshCARef)}
-	values := map[int][]byte{0: bytes.Repeat([]byte{0xA1}, 32), 2: bytes.Repeat([]byte{0xB2}, 32), 7: bytes.Repeat([]byte{0xC3}, 32), 11: bytes.Repeat([]byte{0xD4}, 32), sshCAWindow: make([]byte, 32)}
+	values := map[int][]byte{0: bytes.Repeat([]byte{0xA1}, 32), 2: bytes.Repeat([]byte{0xB2}, 32), 7: bytes.Repeat([]byte{0xC3}, 32), 11: bytes.Repeat([]byte{0xD4}, 32)}
 	st := sshCAState{CA: ca, Values: values}
 	if approved {
 		if err := approveSSHCASlots(ca, auth, values); err != nil {
@@ -244,7 +244,7 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 	if len(entries) != 1 || entries[0].Name() != imageplan.PartUnlock {
 		t.Fatalf("the plan names %v", entries)
 	}
-	for _, p := range []string{"/" + btModulesLoadConf, phonegate.DefaultAttestSignerPath, imageNetworkFile} {
+	for _, p := range []string{"/" + btModulesLoadConf, phonegate.DefaultAttestSignerPath, imageNetworkFile, imageResumeDropIn} {
 		if _, err := os.Stat(filepath.Join(root, p)); err == nil {
 			t.Errorf("%s in an image of the disk unlock alone", p)
 		}
@@ -294,6 +294,7 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 		"/etc/tpm2-kira/authorized_keys":  admin + "\n",
 		sshscreen.DefaultConf:             "ASSH_CA=efi:KIRAasshCA\n",
 		imageRunDropIn:                    `"TPM2_KIRA_REMOTE=--ssh --ssh-hold=0"`,
+		imageResumeDropIn:                 "\nExecStartPre=/usr/bin/tpm2-kira-boot close\n",
 	} {
 		if got := readImage(t, root, path); !strings.Contains(got, want) {
 			t.Errorf("%s: %q, want %q", path, got, want)
@@ -343,10 +344,16 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 			t.Errorf("remote.conf lacks %s:\n%s", want, conf)
 		}
 	}
-	for _, p := range []string{imageNetworkFile, imageRunDropIn, "/" + btModulesLoadConf} {
+	for _, p := range []string{imageNetworkFile, imageRunDropIn, imageResumeDropIn, "/" + btModulesLoadConf} {
 		if _, err := os.Stat(filepath.Join(root, p)); err == nil {
 			t.Errorf("%s in an initramfs-tools image", p)
 		}
+	}
+	// The close before a resume: after cryptroot, executable.
+	if st, err := os.Stat(filepath.Join(root, imageResumeScript)); err != nil || st.Mode().Perm() != 0o755 {
+		t.Errorf("the resume script: %v %v", st, err)
+	} else if got := readImage(t, root, imageResumeScript); !strings.Contains(got, `PREREQ="cryptroot"`) || !strings.Contains(got, "if ! /usr/bin/tpm2-kira-boot close; then") || !strings.Contains(got, "noresume=y") {
+		t.Errorf("the resume script:\n%s", got)
 	}
 	if got := readImage(t, root, sshscreen.DefaultConf); !strings.Contains(got, "ASSH_LISTEN=:2222\n") {
 		t.Errorf("the image's assh.conf:\n%s", got)
@@ -361,6 +368,9 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 	_, root = writePlan(t, decidePlan(in), FormatInitramfsTools)
 	if conf := readImage(t, root, imageRemoteConf); strings.Contains(conf, "TPM2_KIRA_REMOTE") || !strings.Contains(conf, `TPM2_KIRA_NET="dhcp"`) {
 		t.Errorf("network alone:\n%s", conf)
+	}
+	if _, err := os.Stat(filepath.Join(root, imageResumeScript)); err == nil {
+		t.Error("the resume script without the SSH server")
 	}
 }
 

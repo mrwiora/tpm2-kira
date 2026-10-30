@@ -1,3 +1,113 @@
+# PLAN: aSSH's window W alone, and closed before a resume from hibernation
+
+Branch `feat/assh-window-hibernate` (from `359c651`). Status: **confirmed** (2026-10-30: fail closed; V4 findings reported before any further step;
+swap set up in the guests). Steps 1-8 done, `make test-all` passes; VM tests running.
+
+## Goal
+
+1. Follow aSSH `0469090`. W alone closes the CA, so the code screen extends no PCR. PCR 15
+   goes from the SSH CA's default slots, and `ASSH_CLOSE_PCR` goes.
+2. A resume from hibernation never meets an open window. To the TPM a resume is a new
+   boot, which unlocks W, and the resumed system does not run the code screen again. So
+   the initrd closes W at one fixed point before the resume, whatever `run` did. If the
+   close fails, the machine does not resume (fail closed).
+3. Hibernation to unencrypted swap is not covered: `control` shows it red. The image
+   holds the running system's memory, and the kernel may resume it before the initrd.
+
+```mermaid
+flowchart LR
+  A[initrd starts] --> B[run: host key certified, W closed]
+  A --> C[swap unlocked]
+  B --> D
+  C --> D["fixed close: tpm2-kira-boot close<br/>(no-op when run closed already)"]
+  D -->|closed| E[resume, or normal boot]
+  D -->|failed| F[no resume]
+```
+
+## Steps
+
+- [x] 1. Pin aSSH `0469090` in this branch (tpm2-kira's submodule only, staged by hand;
+       `./pin assh` would also move safearch's).
+- [x] 2. The code screen's close: `CloseWindow` alone; remove `ExtendPCR`,
+       `sshCAWindowEvent`, `conf.ClosePCR`.
+- [x] 3. `remote_assh.go`: no `ASSH_CLOSE_PCR`. `remote_hostkey.go`: slot 0 = 0, 2, 7 and
+       the image's PCRs, slot 1 = 7; `sshCAValues` without the close PCR.
+- [x] 4. `tpm2-kira-boot close`: reads assh.conf (the CA's window handle) and closes W
+       with aSSH's `CloseWindow`. It waits for the TPM as `run` does (bounded). No CA or
+       no W: exit 0. A TPM that does not come, or an index that is not a window: exit 1.
+- [x] 5. The fixed close, in the image only while the boot plan has the SSH CA:
+       - Arch (systemd initrd): a drop-in for `systemd-hibernate-resume.service` with
+         `ExecStartPre=/usr/bin/tpm2-kira-boot close` (no `-`: a failure stops the
+         resume).
+       - Debian (initramfs-tools): a `local-top` script with `PREREQ=cryptroot`. It runs
+         after every unlock and before `local-premount/resume`. On failure it writes
+         `noresume=y` to `/conf/param.conf` (if Debian's resume script honours it; step
+         9 checks).
+- [x] 6. `control`, its status: a red line "hibernation to unencrypted swap (the memory
+       on the disk in the clear)". It appears when the kernel offers `disk` in
+       `/sys/power/state` and an active swap is neither dm-crypt nor zram nor a swap file
+       on an encrypted file system.
+- [x] 7. Docs: `docs/SSH.md` (the close, PCR 15, hibernation), `help.go`, HISTORY.md (PCR
+       15 at the code screen), AGENTS.md (the fixed close before a resume).
+- [x] 8. Unit and swtpm tests (below), `make test-all`.
+- [ ] 9. VM tests on the local machines (below), Arch and Debian.
+
+## What is tested
+
+### Unit and swtpm (`make test-all`)
+
+| # | Test | Expected |
+|---|---|---|
+| U1 | the code screen certifies, then a second `PrepareHostKey` in the same boot | the second gets a temporary key ("window is closed"); PCR 15 unchanged |
+| U2 | `tpm2-kira-boot close` with a CA whose W is open | W read-locked; a `PrepareHostKey` afterwards is temporary |
+| U3 | `close` without a CA, without W | exit 0, nothing touched |
+| U4 | `close` with a foreign NV index at W's handle | exit 1, the index left as it is |
+| U5 | `close` without a TPM | waits up to the bound, then exit 1 |
+| U6 | after `close`, a reboot (swtpm Startup CLEAR) | the CA certifies again |
+| U7 | the boot plan with and without the SSH server | drop-in / script in the image only with it; `boot_binary_test` still holds |
+| U8 | `sshCASlots` | slot 0 without 15, slot 1 = 7; assh.conf without `ASSH_CLOSE_PCR` |
+| U9 | the swap check (fake `/proc/swaps`, `/sys/power/state`, sysfs) | red: a partition, or a swap file on a plain file system, with `disk` offered; not red: dm-crypt, zram, a swap file on LUKS, no `disk` in the state (lockdown), no swap |
+
+### VM (local machines, Arch and Debian; `tools/vmtest.py` gets a hibernation step)
+
+Every case checks the result in the running system with `assh ca show` (from the pin):
+"window closed", and a signature attempt with the CA refused. It also checks that the
+resumed session is the old one (a marker process still running).
+
+| # | Case | Expected |
+|---|---|---|
+| V1 | normal boot, SSH code screen | certified; W closed after the boot; the fixed close ran and did nothing; no PCR 15 event from tpm2-kira |
+| V2 | hibernate to an encrypted swap file on the LUKS root (tpm2-kira's prompt unlocks), resume | resumed; W closed (by `run`, then the no-op close) |
+| V3 | as V2 with `run` kept from closing: Arch `rd.systemd.mask=tpm2-kira.service`, systemd's own prompt unlocks | resumed; W closed by the fixed close alone. **The case this plan adds** |
+| V4 | as V2 with the close failing (a foreign NV index put at W's handle before hibernating) | no resume; the boot continues fresh, the file systems are clean, and the stale image is not resumed later (checked on the next boot) |
+| V5 | suspend to RAM and back (if the VM supports S3) | W still closed (Startup STATE keeps the lock) |
+| V6 | plain swap partition with hibernation possible | `control` shows the red line; with LUKS swap it does not |
+| V7 | after V2-V4 a normal reboot | certified again: nothing of the close outlives the boot |
+
+Debian has no `rd.systemd.mask`. Its V3 is covered by the script's order (after
+`cryptroot`, before `local-premount`), checked in the image, and its V4 by the failure
+path.
+
+## What breaks
+
+- Every tpm2-kira SSH CA is made again (aSSH format 4; slots without PCR 15). The clients
+  keep their line only if the CA is unchanged, so they get the new `@cert-authority` line.
+- A resume from hibernation fails when the TPM is missing in the initrd (V4): the
+  hibernated session is lost, and the machine boots fresh.
+
+## Open questions
+
+1. Fail closed as above (no resume when the close fails): confirm, since it loses the
+   hibernated session.
+2. V4 depends on what systemd and initramfs-tools do with a resume that does not happen.
+   If either would resume the stale image later or mount over it, the failure path needs
+   a further step. I will report it before adding one.
+3. The VM tests need swap set up in the guests: a swap file on the LUKS root (V2-V4), a
+   plain partition on an extra disk (V6). That is setup by the test in the guest, not a
+   change to the machines' exports. Is that acceptable?
+
+---
+
 # PLAN
 
 - **A. One derivation for every keyslot:** the disk's key is always the
