@@ -24,8 +24,8 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
-	"github.com/tpm2-trust/assh/persist"
 
+	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
@@ -33,8 +33,9 @@ import (
 // GUID is the vendor GUID of tpm2-kira's own EFI variables.
 const GUID = nvslot.VarGUID
 
-// Var is the variable that keeps the sealed machine-id.
-const Var = persist.VarPrefix + "KIRAmachineID-" + GUID
+// Var is the variable that keeps the sealed machine-id, under tpm2-kira's
+// GUID.
+const Var = "KIRAmachineID"
 
 // Slot is the slot whose policy seals it: slot 0, the one bound to the
 // most (firmware, option ROMs, Secure Boot, the image).
@@ -58,7 +59,7 @@ func TestPaths() {
 	if dir == "" {
 		return
 	}
-	persist.VarDir = dir + "/efivars"
+	efivars.SetDir(dir + "/efivars")
 	EtcPath = dir + "/machine-id"
 	RunPath = dir + "/run-machine-id"
 }
@@ -184,13 +185,13 @@ func (s *Sealed) Unseal(t transport.TPM, sb *nvslot.SealedBlob) (string, error) 
 
 // Load reads the variable; an error os.IsNotExist knows when there is none.
 func Load() (*Sealed, error) {
-	b, err := persist.ReadVar(Var)
+	b, err := efivars.Read(Var)
 	if err != nil {
 		return nil, err
 	}
 	var s Sealed
 	if err := json.Unmarshal(b, &s); err != nil || s.Version != version {
-		return nil, fmt.Errorf("%s is not a sealed machine-id of this version: seal it again (tpm2-kira slot approve)", Var)
+		return nil, fmt.Errorf("%s is not a sealed machine-id of this version: seal it again (tpm2-kira slot approve)", efivars.Name(Var))
 	}
 	return &s, nil
 }
@@ -201,11 +202,11 @@ func (s *Sealed) Save() error {
 	if err != nil {
 		return err
 	}
-	return persist.WriteVar(Var, b)
+	return efivars.Write(Var, b)
 }
 
 // Remove removes the variable; it reports whether there was one.
-func Remove() (bool, error) { return persist.RemoveVar(Var) }
+func Remove() (bool, error) { return efivars.Remove(Var) }
 
 // Release hands id to PID 1 and the image's network: written in place into
 // RunPath, which PID 1 bind-mounts over EtcPath, and into EtcPath where it

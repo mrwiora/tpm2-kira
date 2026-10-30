@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"github.com/tpm2-trust/assh/persist"
 	"io"
 	"net"
 	"os"
@@ -27,6 +26,7 @@ import (
 	"time"
 
 	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 )
 
@@ -95,7 +95,7 @@ func TestMain(m *testing.M) {
 	os.WriteFile(testDir+"/machine-id", []byte("0123456789abcdef0123456789abcdef\n"), 0o444)
 	os.Setenv("TPM2_KIRA_TEST_DIR", testDir)
 	// ... and the suite's own reads and writes of the slots' records.
-	persist.VarDir = testDir + "/efivars"
+	efivars.SetDir(testDir + "/efivars")
 	fmt.Println("Building tpm2-kira and tpm2-kira-boot for testing...")
 	for _, b := range [][2]string{{"tpm2-kira", "."}, {"tpm2-kira-boot", "./cmd/tpm2-kira-boot"}} {
 		buildCmd := exec.Command("go", "build", "-o", b[0], b[1])

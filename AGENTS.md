@@ -170,8 +170,15 @@ It may not carry what came before.
   cryptsetup, bring up the image's network, keep the log
   (docs/BOOT-INTEGRATION.md, "Arch and Debian"). Do not add a second
   process, a confinement or a wait to one of them: add it to `run`.
-- **What is kept outside the disk is written and removed one way: aSSH's
-  `persist`.** No NVUndefineSpace and no efivarfs write of tpm2-kira's own:
+- **NV indices are written and removed one way: aSSH's `persist`.** EFI
+  variables are tpm2-kira's own:
+  - It has its own code for them (the machine-id, the slots' records, and
+    Secure Boot's PK, KEK, db and dbx), not aSSH's `persist`.
+  - aSSH's own variable (the SSH CA's file) is written by aSSH.
+  - If code shared with aSSH grows large, it becomes one package neither
+    owns (the workspace's AGENTS.md), never aSSH's.
+
+  For NV indices: no NVUndefineSpace of tpm2-kira's own.
   `nvslot.RemoveIndex` / `RemoveSlot` take an index only when it has the
   public area tpm2-kira defines at that place (anything else at a handle of
   its range is left and named), absent is no error, and a write at one of
@@ -180,6 +187,24 @@ It may not carry what came before.
   the leftovers, the boot settings, the sealed machine-id and the SSH CA
   (the machine-id goes with slot 0 too); `control` asks before it
   removes the SSH CA when SSH is switched off (No unless said).
+- **tpm2-kira manages Secure Boot itself, so that sbctl can take over at
+  any time.**
+  - It uses the workspace's `uefi` module (the submodule `uefi/`: signature
+    lists, signed updates, Authenticode, Microsoft's certificates), not the
+    sbctl command, which Debian does not package.
+  - Everything it creates is what sbctl would create, in the same place:
+    - the configuration `/etc/sbctl/sbctl.conf`;
+    - `/var/lib/sbctl/GUID`;
+    - `keys/{PK,KEK,db}/{PK,KEK,db}.{key,pem}`;
+    - a YubiKey key as sbctl's JSON reference to slot 9c;
+    - `files.json`.
+  - A machine sbctl set up is taken as it is.
+  - The image is signed with the db key, before `slot approve`.
+  - `control` asks before it creates or enrols keys. It names every certificate in
+    PK, KEK or db that is neither the owner's nor Microsoft's, and shim's MOKs.
+  - Debian keeps GRUB, the standard install: Secure Boot checks the kernel, not the
+    initrd, so the SSH CA there binds PCR 8 and 9 and trusts no PCR-7-only slot.
+  - aSSH only warns about Secure Boot.
 - **Root for everything but the help.** Every command refuses to run as a
   user (`main.go` `requireRoot`); `control` says so on its own screen. The
   test suite's exception is `TPM2_KIRA_UNPRIVILEGED=1` for the binary

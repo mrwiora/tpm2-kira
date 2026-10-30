@@ -48,6 +48,9 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_CONFIG = os.path.join(os.path.dirname(REPO), ".local", "vms", "localvm.conf")
 OVMF_CODE = "/usr/share/edk2/x64/OVMF_CODE.4m.fd"
+# The build with Secure Boot: it needs SMM, and the variables are the same
+# template's - without a PK, so a machine starts in Setup Mode.
+OVMF_CODE_SECBOOT = "/usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd"
 OVMF_VARS = "/usr/share/edk2/x64/OVMF_VARS.4m.fd"
 # What a fresh machine's initrd asks for its disk: systemd (Arch), cryptsetup's askpass (Debian).
 PASSPHRASE_PROMPT = re.compile(r"(Please enter passphrase for disk \S+|Please unlock disk \S+):[^\n]*$")
@@ -73,6 +76,7 @@ class Machine:
         self.boot_port = int(sec["boot_port"])
         self.mem = sec.get("memory", "4096")
         self.user = sec.get("user", "pix")
+        self.secure_boot = sec.get("secure_boot", "no").lower() in ("yes", "true", "1")
         self.dir = os.path.join(os.path.expanduser(defaults.get("dir")), name)
         pwfile = os.path.expanduser(defaults.get("password_file", ""))
         self.passphrase = sec.get("luks_passphrase") or (open(pwfile).read().strip() if pwfile and os.path.exists(pwfile) else "")
@@ -122,9 +126,13 @@ class Machine:
                  "--log", "file=" + self.path("tpm", "swtpm.log"), "--pid", "file=" + self.path("tpm", "swtpm.pid"),
                  "--terminate", "--daemon"])
             self.mark = os.path.getsize(self.path("serial.log")) if os.path.exists(self.path("serial.log")) else 0
-            run(["qemu-system-x86_64", "-name", self.name, "-machine", "q35,accel=kvm", "-cpu", "host", "-smp", "2", "-m", self.mem,
-                 "-rtc", "base=utc",
-                 "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_CODE}",
+            machine, code, secure = "q35,accel=kvm", OVMF_CODE, []
+            if self.secure_boot:
+                machine, code = "q35,accel=kvm,smm=on", OVMF_CODE_SECBOOT
+                secure = ["-global", "driver=cfi.pflash01,property=secure,value=on"]
+            run(["qemu-system-x86_64", "-name", self.name, "-machine", machine, "-cpu", "host", "-smp", "2", "-m", self.mem,
+                 "-rtc", "base=utc", *secure,
+                 "-drive", f"if=pflash,format=raw,readonly=on,file={code}",
                  "-drive", f"if=pflash,format=raw,file={self.path('vars.fd')}",
                  "-drive", f"file={self.path('disk.qcow2')},if=virtio,format=qcow2,discard=unmap",
                  "-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{self.ssh_port}-:22,hostfwd=tcp:127.0.0.1:{self.boot_port}-:2222",

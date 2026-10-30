@@ -21,13 +21,13 @@ import (
 	"os"
 
 	"github.com/google/go-tpm/tpm2/transport"
-	"github.com/tpm2-trust/assh/persist"
 
+	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
 // VarGUID is the vendor GUID of tpm2-kira's EFI variables.
-const VarGUID = "67f474ef-94a1-4412-88df-d62349d430a9"
+const VarGUID = efivars.GUIDText
 
 // MaxRecordSize bounds a slot's record: firmware variable stores are small
 // (some fail when nearly full), so a record stays a few KB.
@@ -36,12 +36,13 @@ const MaxRecordSize = 8 * 1024
 // ErrNoRecord: the slot has no record in its EFI variable.
 var ErrNoRecord = errors.New("no record (not set up: 'tpm2-kira slot add'; what is left of a slot: 'tpm2-kira control')")
 
-// RecordVar is the EFI variable of the slot at index: KIRAslotN.
+// RecordVar is the name of the EFI variable of the slot at index:
+// KIRAslotN, under tpm2-kira's GUID.
 func RecordVar(index uint32) (string, error) {
 	if err := ValidateBlobIndex(index); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%sKIRAslot%d-%s", persist.VarPrefix, SlotNumber(index), VarGUID), nil
+	return fmt.Sprintf("KIRAslot%d", SlotNumber(index)), nil
 }
 
 // ReadRecord is the slot's record as it is stored; ErrNoRecord when its
@@ -52,10 +53,10 @@ func ReadRecord(index uint32) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := persist.ReadVar(v)
+	data, err := efivars.Read(v)
 	switch {
-	case errors.Is(err, os.ErrNotExist) && !varsReadable():
-		return nil, fmt.Errorf("slot %d's record cannot be read: no EFI variables at %s (efivarfs not mounted?)", SlotNumber(index), persist.VarDir)
+	case errors.Is(err, os.ErrNotExist) && !efivars.Readable():
+		return nil, fmt.Errorf("slot %d's record cannot be read: no EFI variables at %s (efivarfs not mounted?)", SlotNumber(index), efivars.Dir)
 	case errors.Is(err, os.ErrNotExist):
 		return nil, fmt.Errorf("slot %d: %w", SlotNumber(index), ErrNoRecord)
 	case err != nil:
@@ -66,14 +67,6 @@ func ReadRecord(index uint32) ([]byte, error) {
 		return nil, fmt.Errorf("slot %d's record is %d bytes, more than the %d a record may have", SlotNumber(index), len(data), MaxRecordSize)
 	}
 	return data, nil
-}
-
-// varsReadable says whether the EFI variables are there to read: a
-// mounted efivarfs always holds the firmware's own, so an empty or missing
-// directory is one that is not mounted.
-func varsReadable() bool {
-	entries, err := os.ReadDir(persist.VarDir)
-	return err == nil && len(entries) > 0
 }
 
 // WriteRecord replaces the slot's record: the firmware takes the whole
@@ -90,10 +83,10 @@ func WriteRecord(index uint32, data []byte) error {
 	if len(data) > MaxRecordSize {
 		return &RecordTooLargeError{Slot: SlotNumber(index), Size: len(data)}
 	}
-	if err := persist.WriteVar(v, data); err != nil {
+	if err := efivars.Write(v, data); err != nil {
 		return fmt.Errorf("slot %d's record: %w", SlotNumber(index), err)
 	}
-	back, err := persist.ReadVar(v)
+	back, err := efivars.Read(v)
 	if err != nil || string(back) != string(data) {
 		return fmt.Errorf("slot %d's record was written, but does not read back as written (%v)", SlotNumber(index), err)
 	}
@@ -107,7 +100,7 @@ func HasRecord(index uint32) bool {
 	if err != nil {
 		return false
 	}
-	_, err = persist.ReadVar(v)
+	_, err = efivars.Read(v)
 	return err == nil
 }
 
@@ -118,7 +111,7 @@ func RemoveRecord(index uint32) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return persist.RemoveVar(v)
+	return efivars.Remove(v)
 }
 
 // RecordTooLargeError: a record over MaxRecordSize; nothing was written.

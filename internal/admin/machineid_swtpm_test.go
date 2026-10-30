@@ -7,8 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tpm2-trust/assh/persist"
-
+	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/mrwiora/tpm2-kira/internal/machineid"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
@@ -19,10 +18,10 @@ import (
 // and deleting slot 0 takes it.
 func TestSealedMachineID(t *testing.T) {
 	sock := startSWTPM(t)
-	old := persist.VarDir
-	persist.VarDir = t.TempDir() // the suite's other tests seal slot 0 too
-	seedFirmwareVars(persist.VarDir)
-	t.Cleanup(func() { persist.VarDir = old })
+	old := efivars.Dir
+	efivars.SetDir(t.TempDir()) // the suite's other tests seal slot 0 too
+	seedFirmwareVars(efivars.Dir)
+	t.Cleanup(func() { efivars.SetDir(old) })
 	if _, err := machineid.Load(); !os.IsNotExist(err) {
 		t.Fatalf("a variable before slot 0: %v", err)
 	}

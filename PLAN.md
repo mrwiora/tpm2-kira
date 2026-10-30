@@ -1,3 +1,170 @@
+# PLAN: Secure Boot managed by tpm2-kira; the SSH CA signs only an image Secure Boot checked
+
+Branch `feat/assh-window-hibernate` (on top of the hibernation work below). Status:
+**decisions taken (2026-10-30)**. Step 1 done; the Secure Boot primitives exist in the workspace's
+`uefi` module (tested on the VMs' firmware); steps 2-12 not started.
+
+## Goal
+
+The SSH CA's window W is open in the initrd until the code screen closes it. What may run
+there is decided by the slots' PCRs. Slot 1 = {7} trusts any image Secure Boot let start;
+slot 0 on a separate initrd (0, 2, 7) too. That holds only where Secure Boot checks the
+initrd and the command line:
+
+| Setup | Initrd and command line checked | Slot 1 = {7} |
+|---|---|---|
+| UKI, Secure Boot on (Arch) | yes, inside the signed UKI | sound, while the db key is not root's |
+| GRUB (Debian), Secure Boot on | no: GRUB checks the kernel only; grub.cfg unsigned | **signs for a changed initrd** |
+| separate initrd (systemd-boot type 1) | no | **slots 0 and 1 sign** |
+| Secure Boot off or in Setup Mode | nothing | **signs for anything** |
+
+1. **tpm2-kira manages Secure Boot itself**, with the workspace's `uefi` module (not sbctl's
+   library). The sbctl command is not used: Debian has no package. Covered:
+   - keys created and enrolled (with Microsoft's certificates);
+   - the boot loader and the UKI signed;
+   - `control` judges the state.
+2. **sbctl can take over at any time:**
+   - the same configuration (`/etc/sbctl/sbctl.conf`, read when present);
+   - the same files (`/var/lib/sbctl/GUID`, `keys/{PK,KEK,db}/*.{key,pem}`,
+     `files.json`);
+   - the same YubiKey reference (sbctl's JSON, slot 9c).
+
+   A machine sbctl set up is taken as it is.
+3. **Separate keys:** Secure Boot's (sbctl's layout, RSA-4096) and tpm2-kira's approval
+   key (the TPM's greatest RSA length), each a file or on the YubiKey. Old installations
+   are made again.
+4. **EFI variables are tpm2-kira's own**, not aSSH's `persist`: its own variables (the
+   machine-id, the slots' records), Secure Boot's, and the state it reads.
+5. **The SSH CA trusts PCR 7 alone only where Secure Boot covers the image** (a UKI).
+   Under GRUB (Debian, the standard install) slot 0 alone, with PCR 8 and 9, and the image
+   red as not checked.
+6. aSSH only warns. Both VMs run with Secure Boot on.
+
+```mermaid
+flowchart LR
+  subgraph keys [sbctl's layout: /var/lib/sbctl]
+    PK[PK] --> KEK[KEK] --> DB["db = tpm2-kira's signing key<br/>(file or YubiKey 9c)"]
+  end
+  DB -->|Authenticode| UKI[UKI, systemd-boot: Arch]
+  DB -->|PolicyAuthorize in the TPM| AP[slot approvals, SSH CA approvals]
+  MS[Microsoft certificates] --> SH[shim + GRUB + kernel: Debian]
+```
+
+## Steps
+
+- [x] 1. **`internal/efivars`**: tpm2-kira's EFI variables, on `uefi/efivar`:
+       - `machineid` and `nvslot`'s records moved from aSSH's `persist` to it;
+       - `measure`'s Secure Boot reads (`pcrwarn.go`) are `uefi/efivar`'s;
+       - the SSH CA's variable stays aSSH's (aSSH writes it; tpm2-kira only names it);
+       - `efivars.SetDir` points both at a test's directory.
+- [ ] 2. **`internal/secureboot`**:
+       - sbctl's configuration and layout, read and written: `/etc/sbctl/sbctl.conf`
+         (YAML, sbctl's keys); without it, sbctl's defaults under `/var/lib/sbctl`;
+       - keys:
+         - **file:** PKCS#8 "PRIVATE KEY", certificate PEM, as sbctl;
+         - **YubiKey:** sbctl's JSON (`algorithm`, `pinPolicy`, `touchPolicy`,
+           `slot`, `publicKey`), signed through tpm2-kira's own `internal/piv` (a
+           `crypto.Signer`);
+       - enrol: `WriteSignedUpdate` (db, then KEK, then PK, as sbctl), with Microsoft's
+         certificates;
+       - sign / verify a PE (`authenticode`); `files.json` as sbctl writes it;
+       - the state: enrolled certificates sorted into owner's / Microsoft's / others,
+         Setup Mode, Secure Boot, MOKs (`MokListRT`).
+- [ ] 3. **Keys, each as strong as its users allow:**
+       - Secure Boot: PK, KEK and db in sbctl's layout, RSA-4096;
+       - the approval key: tpm2-kira's own, at the TPM's greatest RSA length (the
+         tester), a file or the YubiKey's 9a; the slot choice and ECDSA defaults go;
+       - `setup` and `control` create both, or take sbctl's Secure Boot keys.
+- [ ] 4. **The PIN:**
+       - the YubiKey's PIN as today (`/etc/tpm2-kira/pin`, root's alone, or asked);
+       - for sbctl, `SBCTL_YUBIKEY_PIN` is sbctl's own matter;
+       - tpm2-kira never puts the PIN in an environment.
+- [ ] 5. **`control`, step 1 (boot chain), Secure Boot:**
+       - no keys: asks, creates them (file, or YubiKey);
+       - Setup Mode: asks, enrols;
+       - registers the UKI and systemd-boot;
+       - Secure Boot off with keys enrolled: "switch it on in the firmware";
+       - on Debian: no own keys needed (shim, Microsoft). Optional enrolment, with
+         Microsoft kept.
+- [ ] 6. **Signing at every image build** (Arch: mkinitcpio post hook; kernel
+       install): `tpm2-kira secureboot sign` signs what `files.json` names, then
+       `slot approve`. A failed signature stops the approval, and `control` says so.
+- [ ] 7. **`control` status, red lines** (the existing "Secure Boot disabled" and "Setup
+       Mode" stay):
+       - "Boot image: not checked by Secure Boot (risk: …)" for GRUB and separate
+         initrds;
+       - every certificate in PK/KEK/db neither the owner's nor Microsoft's, named;
+         shim's MOKs on Debian;
+       - files in `files.json` that no longer verify;
+       - the db key as a file root can read: info.
+- [ ] 8. **SSH CA slots:** slot 1 = {7} only with a UKI and Secure Boot enabled; GRUB:
+       slot 0 alone (0, 2, 7, 8, 9); a separate initrd under systemd-boot: slot 0 alone,
+       red.
+- [ ] 9. **aSSH warns** (read only): `ca create`, `agent`/`serve` log Secure Boot off or
+       in Setup Mode. An aSSH commit, `./pin assh`.
+- [ ] 10. **VMs with Secure Boot** (`tools/localvm.py` `secure_boot`: the secboot OVMF
+       code, `smm=on`):
+       - Arch: empty variables (Setup Mode), tpm2-kira enrols in the run;
+       - Debian: Microsoft's certificates in the variables (made once with
+         `virt-fw-vars`, `.local/venv`);
+       - `fresh` snapshots anew, the old kept as `fresh-nosb`.
+- [ ] 11. **Tests:**
+       - unit:
+         - sbctl's layout, written and read, against files sbctl wrote (recorded
+           fixtures);
+         - YubiKey JSON;
+         - Authenticode signature verified;
+         - the slot rule;
+         - control's lines;
+       - PIV emulator (`pivtest`): db signing;
+       - swtpm: approvals with an RSA key of the TPM's length;
+       - VM, Arch:
+         - enrol, Secure Boot on, CA certifies (slot 1 too);
+         - a changed unsigned UKI does not start;
+         - the command line edited at the boot menu is ignored;
+         - sbctl installed afterwards reads the state (`sbctl status`, `verify`);
+         - the hibernation test;
+       - VM, Debian:
+         - Secure Boot on via shim;
+         - a changed initrd boots, the CA does not certify;
+         - the red line;
+         - the hibernation test.
+- [ ] 12. **Docs:** SSH.md §11, SECURITY.md, new `docs/SECURE-BOOT.md`, help.go,
+       HISTORY.md (slot 1 = {7} everywhere; the separate signing key), `TODO-ASSH.md`.
+
+## Decisions (2026-10-30)
+
+- Secure Boot is the prerequisite of the SSH CA's PCR-7 slot; `control` shows red where
+  it is off, in Setup Mode, or does not cover the image.
+- tpm2-kira manages Secure Boot with the `uefi` module, in sbctl's layout, so that sbctl can
+  handle the machine at any time. aSSH only warns.
+- The Secure Boot db key is tpm2-kira's signing key (file or YubiKey).
+- Key algorithms (workspace AGENTS.md): Ed25519 where possible, else RSA at the greatest
+  length every user of the key accepts, ECDSA last.
+- EFI variables: tpm2-kira's own code; a shared package (not aSSH's) if it grows large.
+- Debian keeps GRUB (the standard install); a UKI on Debian is an option for later.
+- The close before a resume stays on both distributions, until Debian has a better
+  alternative (Arch's `systemd-pcrosseparator` already covers it there).
+
+## Keys (decided 2026-10-30)
+
+- **Separate keys:**
+  - Secure Boot's PK, KEK and db, in sbctl's layout;
+  - tpm2-kira's approval key, in tpm2-kira's place, with the same kind of storage
+    (a file, or the YubiKey in its own slot, 9a; sbctl's is 9c).
+
+  Each as strong as its users allow.
+- **Lengths:**
+  - Secure Boot keys: RSA-4096 by default (as sbctl).
+  - The approval key: the greatest RSA length the TPM takes.
+  - `control` has a tester: the TPM (`TPM2_TestParms` 4096, 3072, 2048) and a YubiKey
+    (firmware 5.7+ for 3072/4096). If one fails, its key falls back: 3072, then 2048.
+  - The firmware cannot be asked. The way back from a key it does not take is deleting
+    the keys in its setup.
+- **The workspace's own `uefi` module, not go-uefi** (2026-10-30): go-uefi's upstream
+  did not take the fork's changes, and it cost aSSH 422 KB and three modules. `uefi`
+  has the standard library and x/sys alone; aSSH and tpm2-kira pin it as a submodule.
+
 # PLAN: aSSH's window W alone, and closed before a resume from hibernation
 
 Branch `feat/assh-window-hibernate` (from `359c651`). Status: **confirmed** (2026-10-30: fail closed; V4 findings reported before any further step;

@@ -61,8 +61,11 @@ These are the points that matter, and why. The full command line is in
 
 - **q35, KVM, OVMF in pflash.** The code is read-only, and the variables
   are the machine's own copy of `OVMF_VARS.4m.fd`. The exports came with
-  Secure Boot off, so the build without Secure Boot fits. With a Secure
-  Boot variables template, a UKI that is not enrolled would not boot.
+  Secure Boot off. `secure_boot = yes` in a machine's section boots the
+  build with Secure Boot (`OVMF_CODE.secboot.4m.fd`, with SMM) on the same
+  variables: they hold no PK, so the machine starts in Setup Mode and boots
+  anything until keys are enrolled (`uefi/internal/vmcheck`); `reset`
+  brings it back to Setup Mode.
 - **TPM:** `tpm-crb` on swtpm through a unix socket. `swtpm_setup
   --create-ek-cert --create-platform-cert` provisions it the way libvirt
   does: the phone and vault steps of `vmtest.py` read the EK certificate.

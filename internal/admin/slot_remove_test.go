@@ -8,9 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tpm2-trust/assh/persist"
-
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 )
 
@@ -18,10 +17,10 @@ import (
 // with a variable of the firmware's in it, as a mounted efivarfs has.
 func useTestVars(t *testing.T) {
 	t.Helper()
-	old := persist.VarDir
-	persist.VarDir = t.TempDir()
-	t.Cleanup(func() { persist.VarDir = old })
-	seedFirmwareVars(persist.VarDir)
+	old := efivars.Dir
+	efivars.SetDir(t.TempDir())
+	t.Cleanup(func() { efivars.SetDir(old) })
+	seedFirmwareVars(efivars.Dir)
 }
 
 // seedFirmwareVars puts a firmware's variable into dir: an empty

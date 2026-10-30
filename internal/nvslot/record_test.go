@@ -8,22 +8,23 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tpm2-trust/assh/persist"
+	"github.com/mrwiora/tpm2-kira/internal/efivars"
 )
 
-// useVarDir points persist at a directory of the test's own.
+// useVarDir points the EFI variables at a directory of the test's own.
 func useVarDir(t *testing.T) string {
 	t.Helper()
-	old := persist.VarDir
-	persist.VarDir = t.TempDir()
-	t.Cleanup(func() { persist.VarDir = old })
-	return persist.VarDir
+	old := efivars.Dir
+	dir := t.TempDir()
+	efivars.SetDir(dir)
+	t.Cleanup(func() { efivars.SetDir(old) })
+	return dir
 }
 
 // A slot's record is KIRAslotN under tpm2-kira's GUID, for the 16 slots
 // and nothing else.
 func TestRecordVar(t *testing.T) {
-	for n, want := range map[uint32]string{0: "efi:KIRAslot0-" + VarGUID, 15: "efi:KIRAslot15-" + VarGUID} {
+	for n, want := range map[uint32]string{0: "KIRAslot0", 15: "KIRAslot15"} {
 		if got, err := RecordVar(NVRAMSlotStart + n); err != nil || got != want {
 			t.Errorf("slot %d: %q %v", n, got, err)
 		}

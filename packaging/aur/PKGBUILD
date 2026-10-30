@@ -26,19 +26,23 @@ _assh=0ce851719c1aa432e84c125e2389438d55140243
 # The commit of the tpm2-verifier submodule (the core's EK root store), the
 # same way (git rev-parse "$_tag:tpm2-verifier").
 _verifier=804ab7ed7616c8984061febe01db999fdcb10d33
+# The commit of the uefi submodule (EFI variables, Secure Boot), the same
+# way (git rev-parse "$_tag:uefi").
+_uefi=936fa50b5ded966ebe74fe55864d439ddaa9b9be
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
 source+=("assh-$_assh.tar.gz::https://github.com/tpm2-trust/assh/archive/$_assh.tar.gz")
 source+=("tpm2-verifier-$_verifier.tar.gz::https://github.com/tpm2-trust/tpm2-verifier/archive/$_verifier.tar.gz")
-sha256sums=('SKIP' 'SKIP' 'SKIP')
+source+=("uefi-$_uefi.tar.gz::https://github.com/tpm2-trust/uefi/archive/$_uefi.tar.gz")
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
 options=('!debug')
 
 # GitHub names the extracted directory after the tag, minus a leading 'v'.
 _srcdir="$pkgname-${_tag#v}"
 
 prepare() {
-    # aSSH's and tpm2-verifier's sources where the submodules go (an
-    # archive of the repository's HEAD carries them already, and has no
-    # assh-* or tpm2-verifier-* source).
+    # aSSH's, tpm2-verifier's and uefi's sources where the submodules go
+    # (an archive of the repository's HEAD carries them already, and has no
+    # assh-*, tpm2-verifier-* or uefi-* source).
     if [[ -d assh-$_assh ]]; then
         rm -rf "$_srcdir/assh"
         mv "assh-$_assh" "$_srcdir/assh"
@@ -46,6 +50,10 @@ prepare() {
     if [[ -d tpm2-verifier-$_verifier ]]; then
         rm -rf "$_srcdir/tpm2-verifier"
         mv "tpm2-verifier-$_verifier" "$_srcdir/tpm2-verifier"
+    fi
+    if [[ -d uefi-$_uefi ]]; then
+        rm -rf "$_srcdir/uefi"
+        mv "uefi-$_uefi" "$_srcdir/uefi"
     fi
 
     cd "$_srcdir"

@@ -10,6 +10,7 @@ require (
 	github.com/google/go-tpm v0.9.9-0.20261001171150-36f205946d7e
 	github.com/mrwiora/tpm2-kira/core v0.0.0
 	github.com/tpm2-trust/assh v0.0.0
+	github.com/tpm2-trust/uefi v0.0.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0
 	rsc.io/qr v0.2.0
@@ -50,3 +51,7 @@ replace github.com/mrwiora/tpm2-kira/core => ./core
 // The core's EK root store, tpm2-verifier: its submodule (a replace of a
 // dependency does not reach its users).
 replace github.com/tpm2-trust/tpm2-verifier => ./tpm2-verifier
+
+// EFI variables and Secure Boot: the workspace's uefi module, its
+// submodule (aSSH's replace of it does not reach here).
+replace github.com/tpm2-trust/uefi => ./uefi

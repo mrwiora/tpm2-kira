@@ -2,13 +2,10 @@ package measure
 
 import (
 	"fmt"
-	"os"
 	"slices"
-)
 
-// efiGlobalVariableGUID is the EFI_GLOBAL_VARIABLE namespace that holds
-// SecureBoot and SetupMode.
-const efiGlobalVariableGUID = "8be4df61-93ca-11d2-aa0d-00e098032b8c"
+	"github.com/tpm2-trust/uefi/efivar"
+)
 
 // SecureBootState is a best-effort reading of the firmware's Secure Boot
 // variables. Known is false when they cannot be read at all.
@@ -18,15 +15,14 @@ type SecureBootState struct {
 	Known     bool
 }
 
-// readEFIBoolVar reads a one-byte EFI variable. efivarfs prefixes every value
-// with a 4-byte attribute word.
+// readEFIBoolVar reads a one-byte variable of the UEFI specification's
+// namespace; ok is false when it cannot be read.
 func readEFIBoolVar(name string) (value bool, ok bool) {
-	path := fmt.Sprintf("/sys/firmware/efi/efivars/%s-%s", name, efiGlobalVariableGUID)
-	data, err := os.ReadFile(path)
-	if err != nil || len(data) < 5 {
+	_, data, err := efivar.Store{}.Read(name, efivar.GlobalVariable)
+	if err != nil || len(data) < 1 {
 		return false, false
 	}
-	return data[4] == 1, true
+	return data[0] == 1, true
 }
 
 // ReadSecureBootState probes the firmware state. It never fails, so it is safe
@@ -59,12 +55,12 @@ func WarnAboutHashAlgo(hashAlgo PCRHashAlgo) {
 
 // loaderInfoGUID is the vendor GUID of the variables systemd-boot and
 // systemd-stub set for the OS.
-const loaderInfoGUID = "4a67b082-0a4c-41cf-b6c7-440b29bb8c4f"
+var loaderInfoGUID = efivar.MustParseGUID("4a67b082-0a4c-41cf-b6c7-440b29bb8c4f")
 
 // BootedViaSystemdStub reports whether this boot went through systemd-stub,
 // i.e. a unified kernel image. systemd-stub sets StubInfo. Tests replace it.
 var BootedViaSystemdStub = func() bool {
-	_, err := os.Stat("/sys/firmware/efi/efivars/StubInfo-" + loaderInfoGUID)
+	_, _, err := efivar.Store{}.Read("StubInfo", loaderInfoGUID)
 	return err == nil
 }
 

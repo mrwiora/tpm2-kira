@@ -6,8 +6,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/tpm2-trust/assh/persist"
-
+	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/mrwiora/tpm2-kira/internal/machineid"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 )
@@ -28,9 +27,9 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	persist.VarDir = filepath.Join(dir, "efivars")
-	os.MkdirAll(persist.VarDir, 0o755)
-	seedFirmwareVars(persist.VarDir)
+	efivars.SetDir(filepath.Join(dir, "efivars"))
+	os.MkdirAll(efivars.Dir, 0o755)
+	seedFirmwareVars(efivars.Dir)
 	machineid.EtcPath = filepath.Join(dir, "machine-id")
 	machineid.RunPath = filepath.Join(dir, "run-machine-id")
 	os.WriteFile(machineid.EtcPath, []byte("0123456789abcdef0123456789abcdef\n"), 0o644)

@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/google/go-tpm/tpm2/transport"
-	"github.com/tpm2-trust/assh/persist"
 
+	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 )
@@ -17,10 +17,10 @@ import (
 // A slot is there when its generation index is; its record is its EFI
 // variable. What is left of one without the other is named.
 func TestSlotStates(t *testing.T) {
-	old := persist.VarDir
-	persist.VarDir = t.TempDir()
-	t.Cleanup(func() { persist.VarDir = old })
-	seedFirmwareVars(persist.VarDir)
+	old := efivars.Dir
+	efivars.SetDir(t.TempDir())
+	t.Cleanup(func() { efivars.SetDir(old) })
+	seedFirmwareVars(efivars.Dir)
 
 	sock := startSWTPM(t)
 	const sealed, foreign = nvslot.NVRAMSlotStart, nvslot.NVRAMSlotStart + 5
