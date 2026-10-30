@@ -330,14 +330,17 @@ class Vault:
 
 
 class Machine:
-    def __init__(self, name, distro, host, user, password, luks_pass, run_dir, cycles):
+    def __init__(self, name, distro, host, user, password, luks_pass, run_dir, cycles, ssh_port=22, boot_port=SSH_PORT):
         self.name, self.distro, self.host, self.user = name, distro, host, user
+        # The ports this side connects to: the machine's own 22 and SSH_PORT,
+        # or what a port forward makes of them (tools/localvm.py).
+        self.ssh_port, self.boot_port = ssh_port, boot_port
         self.password, self.luks_pass, self.cycles = password, luks_pass, cycles
         self.dir = os.path.join(run_dir, name)
         os.makedirs(self.dir, exist_ok=True)
         self.log = acceptance.Log(self.dir)
         self.rep = acceptance.Report()
-        self.t = acceptance.Target(host, user, 22, password, None, self.log)
+        self.t = acceptance.Target(host, user, ssh_port, password, None, self.log)
         self.secrets = []
         self.sessions = 0
 
@@ -354,22 +357,27 @@ class Machine:
 
     def session(self, remote_cmd, name):
         self.sessions += 1
-        argv = ["ssh", "-tt", "-o", "StrictHostKeyChecking=accept-new", "-o", "PubkeyAuthentication=no",
+        argv = ["ssh", "-tt", "-p", str(self.ssh_port), "-o", "StrictHostKeyChecking=accept-new", "-o", "PubkeyAuthentication=no",
                 "-o", "PreferredAuthentications=password,keyboard-interactive",
                 f"{self.user}@{self.host}", remote_cmd]
         return Session(argv, os.path.join(self.dir, f"session-{self.sessions:02d}-{name}.log"), self.password)
 
     def boot_session(self, n):
-        argv = ["ssh", "-tt", "-p", str(SSH_PORT), "-i", os.path.join(self.dir, "bootkey"),
+        argv = ["ssh", "-tt", "-p", str(self.boot_port), "-i", os.path.join(self.dir, "bootkey"),
                 "-o", "IdentitiesOnly=yes", "-o", "UserKnownHostsFile=" + os.path.join(self.dir, "known_hosts_boot"),
                 "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10", f"root@{self.host}"]
         return Session(argv, os.path.join(self.dir, f"boot-{n}.log"))
 
     def port_open(self, port):
+        """Whether an SSH server answers on the machine's port (22 or
+        SSH_PORT, as this side reaches it): its banner, not only a
+        connection - a port forward accepts one while the machine is down."""
         import socket
+        port = {22: self.ssh_port, SSH_PORT: self.boot_port}.get(port, port)
         try:
-            with socket.create_connection((self.host, port), timeout=2):
-                return True
+            with socket.create_connection((self.host, port), timeout=2) as c:
+                c.settimeout(5)
+                return c.recv(8).startswith(b"SSH-")
         except OSError:
             return False
 
@@ -545,7 +553,7 @@ class Machine:
             text, m = s.expect(r"@cert-authority \* (\S+ \S+)", 300)
             ca = m.group(1)
             with open(os.path.join(self.dir, "known_hosts_boot"), "w") as f:
-                f.write(f"@cert-authority {self.host} {ca}\n")
+                f.write(f"@cert-authority {self.host},[{self.host}]:{self.boot_port} {ca}\n")
             # What control asks the person to do: the key that may log in.
             key = os.path.join(self.dir, "bootkey")
             if not os.path.exists(key):
@@ -1142,7 +1150,8 @@ def main():
             return 2
         sec = cfg[name]
         luks = sec.get("luks_passphrase") or os.environ.get("VMTEST_LUKS_PASSPHRASE") or password
-        machines.append(Machine(name, name, sec["host"], sec.get("user", "pix"), password, luks, run_dir, args.cycles))
+        machines.append(Machine(name, name, sec["host"], sec.get("user", "pix"), password, luks, run_dir, args.cycles,
+                                int(sec.get("ssh_port", "22")), int(sec.get("boot_port", str(SSH_PORT)))))
         if not args.no_reset and sec.get("reset"):
             resets[name] = sec["reset"]
     vault = None

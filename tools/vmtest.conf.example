@@ -14,6 +14,14 @@
 # example:
 #   libvirt:  reset = virsh -c qemu+ssh://root@hv/system snapshot-revert vmtest-arch fresh --running
 #   Proxmox:  reset = ssh root@pve 'qm rollback 198 fresh && qm start 198'
+#   this host:  reset = tools/localvm.py reset arch   (qemu directly; see
+#               tools/localvm.py - the guests at 127.0.0.1, their ports
+#               forwarded: ssh_port, boot_port below; the vault's url is
+#               then https://10.0.2.2, the host as qemu's user network
+#               shows it to the guests)
+#
+# ssh_port and boot_port: where this side reaches the machine's ssh (22)
+# and tpm2-kira's boot SSH server (2222); the defaults are those.
 [arch]
 host = 172.17.2.198
 user = pix

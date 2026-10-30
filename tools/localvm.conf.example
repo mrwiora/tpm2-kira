@@ -1,0 +1,21 @@
+# The test machines of tools/localvm.py on this host. Copy to
+# ../.local/vms/localvm.conf (outside git): it names local paths.
+[defaults]
+# where each machine's files go: <dir>/<machine>/
+dir = ~/tpm2-trust/.local/vms
+# the disk's passphrase (and the user's password), one line
+password_file = ~/tpm2-trust/.local/vm-pw
+
+[arch]
+export = /path/to/archlinux.qcow2
+mac = 52:54:00:00:00:01
+ssh_port = 10022
+boot_port = 12222
+user = pix
+
+[debian]
+export = /path/to/debian.qcow2
+mac = 52:54:00:00:00:02
+ssh_port = 20022
+boot_port = 22222
+user = pix
