@@ -113,14 +113,19 @@ func findUKI() string {
 	return ""
 }
 
-// SealDefaults is 'slot add' without arguments: slot 0 to what this boot
-// measured, slot 1 to the fallback selection, both with the signing key
-// at the paths given ("" for the defaults).
-func SealDefaults(tpmPath, pubKeyPath, privKeyPath string, algo measure.PCRHashAlgo, debug bool) error {
+// SealDefaults is 'slot add' without --pcrs and --nvram: slot 0 to what
+// this boot measured and, with TOTP, slot 1 to the fallback selection -
+// a second code for a boot whose kernel changed unpredicted, which only a
+// code is for - with the signing key at the paths given ("" for the
+// defaults).
+func SealDefaults(tpmPath, pubKeyPath, privKeyPath string, algo measure.PCRHashAlgo, debug, withTOTP bool) error {
 	sel, why := DefaultPCRSelection("", algo)
 	fmt.Printf("PCRs: %s (%s)\n\n", sel, why)
-	if err := Seal(tpmPath, sel, nvslot.ResolveNVRAMIndex(0), pubKeyPath, privKeyPath, debug, algo, true); err != nil {
+	if err := Seal(tpmPath, sel, nvslot.ResolveNVRAMIndex(0), pubKeyPath, privKeyPath, debug, algo, true, withTOTP); err != nil {
 		return err
+	}
+	if !withTOTP {
+		return nil
 	}
 	return SealFallback(tpmPath, pubKeyPath, privKeyPath, algo, debug)
 }
@@ -133,5 +138,5 @@ func SealFallback(tpmPath, pubKeyPath, privKeyPath string, algo measure.PCRHashA
 	fmt.Println("as the firmware and the secure boot state are the same; it says the machine is")
 	fmt.Println("not simply lost. Pair this one with your authenticator too.")
 	fmt.Println()
-	return Seal(tpmPath, fallback, nvslot.ResolveNVRAMIndex(FallbackSlot), pubKeyPath, privKeyPath, debug, algo, true)
+	return Seal(tpmPath, fallback, nvslot.ResolveNVRAMIndex(FallbackSlot), pubKeyPath, privKeyPath, debug, algo, true, true)
 }

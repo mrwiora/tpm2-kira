@@ -506,9 +506,17 @@ the boot is one the signing key approved - against a phished password.
    and what is left of one, `slot status` and `slot info` the record.
    `WriteToNVRAM` is the boot settings' alone. The tests: each swtpm gets
    its own EFI variables.
-4. [ ] TOTP optional: `slot add --totp`, control, the code screen and
+4. [x] TOTP optional: `slot add --totp`, control, the code screen and
    `tpm2-kira-boot` only for slots with TOTP; the "TOTP or phones" rule
-   goes; status and slot list name each slot's methods.
+   goes; status and slot list name each slot's methods. `slot add`
+   seals a TOTP key only with `--totp`, and the fallback slot 1 only then
+   (it is a second code); control asks "A TOTP code at boot?". A phone
+   still retires the TOTP key; the last phone leaving brings none back
+   (nor does any other enrolment). The code screen leaves out slots
+   without a code or phones (`totp.ErrNoCode`); the image plans it only
+   for those. With nothing to show the hold lasts while the vault opens
+   its part (`bootDisplay.Pending`), within the hold time. status: each
+   slot's methods, the fallback note only with a code.
 5. [ ] The boot: efivarfs mounted before tpm2-kira-boot on Arch and Debian
    (Debian's init-premount does it for the machine-id: checked for the
    order); the image plan needs no new part.

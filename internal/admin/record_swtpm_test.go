@@ -22,7 +22,7 @@ func TestSlotStates(t *testing.T) {
 	sock := startSWTPM(t)
 	const sealed, foreign = nvslot.NVRAMSlotStart, nvslot.NVRAMSlotStart + 5
 	privPath, pubPath := signingKeyFiles(t)
-	if err := Seal(sock, "23", sealed, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "23", sealed, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := nvslot.WriteRecord(foreign, []byte("a record of a TPM cleared since")); err != nil {

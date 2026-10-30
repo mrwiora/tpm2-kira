@@ -138,7 +138,7 @@ func sealRealSlot(t *testing.T, sock string, idx uint32) (crypto.Signer, string)
 	if err := signing.WriteSigningKeyFile(pubPath, pubPEM); err != nil {
 		t.Fatal(err)
 	}
-	if err := Seal(sock, "23", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "23", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
 		t.Fatalf("sealing the test slot: %v", err)
 	}
 	signer, err := signing.LoadCheckedSigningPrivateKey(privPath)

@@ -26,7 +26,7 @@ import (
 
 // Seal creates a new TOTP key inside the TPM and approves the current PCR
 // values for it (see internal/nvslot/policy.go).
-func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath string, debug bool, hashAlgo measure.PCRHashAlgo, verifyUKI bool) error {
+func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath string, debug bool, hashAlgo measure.PCRHashAlgo, verifyUKI, withTOTP bool) error {
 	// Fall back to default key paths when not provided by the user
 	if pubKeyPath == "" {
 		pubKeyPath = signing.DefaultPublicKeyPath
@@ -121,8 +121,8 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	// enrolment lives in the same blob and is carried over - if this
 	// signing key wrote it. Somebody else's entries are not signed anew.
 	// The boot key in it is bound to the slot's policy by the policy
-	// reference, which is kept. A slot with phones gets no TOTP key: the
-	// phones check its boots (SealedBlobPayload).
+	// reference, which is kept. TOTP is a method of its own, selected
+	// (withTOTP); a slot with phones gets none: the phones check its boots.
 	var kept *nvslot.Attestation
 	var policyRef []byte
 	if oldRaw, old, err := phonegate.ReadSlot(tpmDev, nvramIndex); err == nil && old.Payload.Attestation != nil {
@@ -149,7 +149,11 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	blob.Payload.Attestation = kept
 	var key []byte
 	var alg tpm2.TPMAlgID
-	if !blob.PhoneAttested() {
+	if withTOTP && blob.PhoneAttested() {
+		fmt.Println("NOTE: this slot is attested by its phone(s); it gets no TOTP key while a phone is enrolled.")
+		fmt.Println()
+	}
+	if withTOTP && !blob.PhoneAttested() {
 		if key, alg, err = newTOTPSecret(tpmDev); err != nil {
 			return fmt.Errorf("cannot seal: %w", err)
 		}
@@ -174,8 +178,13 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	}
 	if key == nil {
 		fmt.Println()
-		fmt.Printf("Slot %d is attested by its phone(s): it has no TOTP code while a phone is enrolled.\n", nvslot.SlotNumber(nvramIndex))
-		fmt.Println("The new PCR values are approved for the phone's check at boot.")
+		if blob.PhoneAttested() {
+			fmt.Printf("Slot %d is attested by its phone(s): it has no TOTP code while a phone is enrolled.\n", nvslot.SlotNumber(nvramIndex))
+			fmt.Println("The new PCR values are approved for the phone's check at boot.")
+		} else {
+			fmt.Printf("Slot %d is sealed to the boot state, without a TOTP code (slot add --totp adds one).\n", nvslot.SlotNumber(nvramIndex))
+			fmt.Println("Its methods - the vault, the TPM salt, a phone - are enrolled into it.")
+		}
 		return nil
 	}
 	showTOTPSecret(key, alg, nvramIndex, measure.PCRSpecsToString(specs))

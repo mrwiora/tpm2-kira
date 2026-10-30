@@ -35,7 +35,7 @@ func TestDeleteSlotOnSWTPM(t *testing.T) {
 	listLuksDevices = func() ([]string, error) { return nil, nil }
 
 	const idx = nvslot.NVRAMSlotStart + 1
-	if err := Seal(sock, "0,7", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "0,7", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
 
@@ -58,7 +58,7 @@ func TestDeleteSlotOnSWTPM(t *testing.T) {
 
 	// The record taken by hand leaves the generation index: the slot is
 	// dirty, and the deletion takes the rest.
-	if err := Seal(sock, "0,7", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "0,7", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
 		t.Fatalf("seal again: %v", err)
 	}
 	if _, err := nvslot.RemoveRecord(idx); err != nil {

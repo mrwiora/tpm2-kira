@@ -47,7 +47,7 @@ func TestEnrolmentNeedsAVerifiedBoot(t *testing.T) {
 
 	const slot = nvslot.NVRAMSlotStart
 	pubPath, privPath := writeTestKeyPair(t)
-	if err := Seal(sock, "0e,2e,7e", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "0e,2e,7e", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
 	_, sealed, err := phonegate.ReadSlot(tpm, slot)

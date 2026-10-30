@@ -98,7 +98,8 @@ type planInputs struct {
 	ConfigErr string
 
 	TPMErr   string
-	Slots    int // populated slots: their codes are shown at boot
+	Slots    int // populated slots
+	Shown    int // slots the code screen shows: with a TOTP code or phones
 	Phones   int // phones enrolled, over all slots
 	Vaults   int // slots enrolled with a vault
 	TPMSalts int // slots holding a TPM salt (recipe 0x1200)
@@ -168,6 +169,9 @@ func readPlanInputs(o PlanOptions) planInputs {
 				continue
 			}
 			in.Slots++
+			if sb.HasTOTPKey() || sb.PhoneAttested() {
+				in.Shown++
+			}
 			if att := sb.Payload.Attestation; att != nil {
 				if att.Phone.Enabled() {
 					in.Phones += len(att.Phone.Verifiers)
@@ -255,8 +259,10 @@ func decidePlan(in planInputs) *BootPlan {
 		add(imageplan.PartCodes, false, noTPM)
 	case in.Slots == 0:
 		add(imageplan.PartCodes, false, "nothing is sealed (tpm2-kira slot add)")
+	case in.Shown == 0:
+		add(imageplan.PartCodes, false, "no slot has a TOTP code or a phone: nothing to confirm at boot (slot add --totp)")
 	default:
-		add(imageplan.PartCodes, true, plural(in.Slots, "slot")+" sealed")
+		add(imageplan.PartCodes, true, plural(in.Shown, "slot")+" with a TOTP code or phones")
 	}
 
 	always := cfg.Attest.Bluetooth == "always"

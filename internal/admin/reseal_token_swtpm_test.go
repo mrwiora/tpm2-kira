@@ -43,7 +43,7 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 		t.Fatal(err)
 	}
 	idx := nvslot.ResolveNVRAMIndex(0)
-	if err := Seal(sock, "23", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "23", idx, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
 		t.Fatalf("seal through the token: %v", err)
 	}
 	signing.CloseTokenSessions()

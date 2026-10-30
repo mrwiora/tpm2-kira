@@ -21,6 +21,10 @@ import (
 // ErrPhoneSlot: the slot is attested by its phones and has no TOTP code.
 var ErrPhoneSlot = errors.New("the slot is attested by its phone and has no TOTP code")
 
+// ErrNoCode: the slot has neither a TOTP code nor phones - nothing of it
+// is shown; its other methods (the vault, the TPM salt) work unseen.
+var ErrNoCode = errors.New("the slot has no TOTP code and no phone")
+
 // SlotCode reads the blob at nvramIndex and computes its current TOTP code.
 //
 // Before asking the TPM it compares the blob with the live state, purely to
@@ -38,8 +42,11 @@ func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) 
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to unmarshal sealed data: %w", err)
 	}
-	if !sealedBlob.HasTOTPKey() {
+	switch {
+	case !sealedBlob.HasTOTPKey() && sealedBlob.PhoneAttested():
 		return "", sealedBlob, ErrPhoneSlot
+	case !sealedBlob.HasTOTPKey():
+		return "", sealedBlob, ErrNoCode
 	}
 
 	gen, err := nvslot.ReadGeneration(tpmDev, nvslot.GenerationIndex(nvramIndex))
@@ -152,8 +159,9 @@ func ScanNVRAMSlot(tpmDev transport.TPM, nvramIndex uint32, debug bool) []NVRAMS
 	return ScanNVRAMSlotsRange(tpmDev, nvramIndex, nvramIndex, debug)
 }
 
-// ScanNVRAMSlotsRange scans NVRAM indices from startIndex to endIndex
-// and returns a list of slots containing valid TOTP secrets.
+// ScanNVRAMSlotsRange scans the slots from startIndex to endIndex and
+// returns those the code screen shows: with a TOTP code or phones. A slot
+// with neither is left out.
 // A lightweight existence check is performed first so that empty indices
 // are skipped without incurring the cost of a full unseal attempt.
 func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debug bool) []NVRAMSlot {
@@ -187,6 +195,12 @@ func ScanNVRAMSlotsRange(tpmDev transport.TPM, startIndex, endIndex uint32, debu
 		}
 
 		code, _, err := SlotCode(tpmDev, i, time.Now(), debug)
+		if errors.Is(err, ErrNoCode) {
+			if debug {
+				fmt.Printf("  Slot %d: no TOTP code, no phone: not shown\n", slotNumber)
+			}
+			continue
+		}
 		if errors.Is(err, ErrPhoneSlot) {
 			slots = append(slots, NVRAMSlot{SlotNumber: slotNumber, Index: i, Available: true, Phone: true})
 			continue

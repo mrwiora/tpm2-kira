@@ -99,7 +99,7 @@ GLOBAL OPTIONS (before the command, or after it as the command's own)
 
 FIRST STEPS
   tpm2-kira control                                  guided, in two steps; or:
-  tpm2-kira setup && tpm2-kira slot add             a code at every boot
+  tpm2-kira setup && tpm2-kira slot add --totp      a code at every boot
   tpm2-kira phone enrol                              the phone verifies the boot
   tpm2-kira luks enrol /dev/sda2 --salt phone
                                                      the disk's key from your
@@ -236,7 +236,7 @@ with the key that signs the boot components.
   tpm2-kira setup --yubikey=12345678 --slot 9c
 `,
 
-	"slot": `tpm2-kira slot add     [--nvram N] [--pcrs LIST] [--measure-point M]
+	"slot": `tpm2-kira slot add     [--totp] [--nvram N] [--pcrs LIST] [--measure-point M]
                        [--pubkey PATH] [--privkey PATH] [--sha1]
                        [--verify-uki=false]
 tpm2-kira slot approve [--nvram N] [--pcrs LIST] [--measure-point M]
@@ -245,28 +245,36 @@ tpm2-kira slot info    [--nvram N] [--json] [--privkey PATH]
 tpm2-kira slot list | status | delete [--yes]   [--nvram N]
 
 A slot is a boot state your signing key approved: PCR values and a
-generation, in one of the TPM's slots 0-15 (the NV indices
-0x01803010-0x0180301F). What is sealed to it - a TOTP key, or a phone's
-enrolment - and everything else that needs the approved boot state (the
-phone's salt, the vault's part, the SSH CA) works only in that state.
+generation, in one of the slots 0-15: a record in the EFI variable
+KIRAslotN, with its generation index and record counter in the TPM. Its
+methods - a TOTP code, phones, the vault, the TPM salt - and everything
+else that needs the approved boot state (the machine-id, the SSH CA) work
+only in that state.
 
 add
-Generates a TOTP key inside the TPM and seals it in a slot to the boot
-state. The key never leaves the TPM: the TPM computes every code, and only
-under a policy the signing key approved (PolicyAuthorize): the PCR values,
-and the slot's generation, which every approval raises to revoke the older
-approvals. Pair the code with the Marify app, or any TOTP app, from the QR
-code shown.
+Seals a slot to the boot state, under a policy the signing key approved
+(PolicyAuthorize): the PCR values, and the slot's generation, which every
+approval raises to revoke the older approvals. The methods are enrolled
+into it afterwards (luks enrol, vault enrol, phone enrol).
+
+  --totp             Generate a TOTP key inside the TPM too: a code at boot
+                     to compare with your authenticator before you type
+                     anything. The key never leaves the TPM: the TPM
+                     computes every code, only in the approved state. Pair
+                     it with the Marify app, or any TOTP app, from the QR
+                     code shown. A phone enrolled later retires it.
+
 
 Without --pcrs the selection is what this boot measured: the firmware and
 the secure boot state (0e,2e,7e), plus PCR 11 computed from the unified
 kernel image when one booted (11u), or GRUB's PCRs 8 and 9 predicted from
 grub.cfg when GRUB did (8e,9e); without an event log to read, the
-registers as they are (0,2,7). Without --pcrs and --nvram, two slots are
-sealed: slot 0 with that selection, and slot 1, the fallback, with 0e,7e
-alone (0,7 without a log) - a boot whose kernel changed unpredicted still shows slot 1's code,
-which says the machine is not simply lost. With --pcrs or --nvram, one
-slot: the one named (else 0), the PCRs named (else the selection).
+registers as they are (0,2,7). Without --pcrs and --nvram, slot 0 is
+sealed with that selection and, with --totp, slot 1, the fallback, with
+0e,7e alone (0,7 without a log) - a boot whose kernel changed unpredicted
+still shows slot 1's code, which says the machine is not simply lost. With
+--pcrs or --nvram, one slot: the one named (else 0), the PCRs named (else
+the selection).
 
   --pcrs LIST        PCRs with a source suffix each:
                        r  read from the TPM's registers (default)
@@ -288,7 +296,8 @@ slot: the one named (else 0), the PCRs named (else the selection).
   --verify-uki       Check the PCR 11 computation against this boot's event
                      log first (default true)
 
-  tpm2-kira slot add                        slot 0 as measured, 1 the fallback
+  tpm2-kira slot add                        slot 0 as measured
+  tpm2-kira slot add --totp                 slot 0 with a code, 1 the fallback
   tpm2-kira slot add --pcrs "0e,2e,7e,11u"  slot 0 with these
   tpm2-kira slot add --nvram 2 --pcrs "0e,7e"
   tpm2-kira slot add --sha1 --pcrs "0e,2e,7e"

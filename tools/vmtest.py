@@ -443,7 +443,7 @@ class Machine:
         self.log.head("setup and slot add")
         rc, out = self.run("tpm2-kira setup --local 2>&1", save="setup.log")
         self.check("setup --local makes the signing key", "Setup Complete" in out, out[-400:])
-        rc, out = self.run("tpm2-kira slot add 2>&1", save="slot-add.log")
+        rc, out = self.run("tpm2-kira slot add --totp 2>&1", save="slot-add.log")
         self.secrets = re.findall(r"^Secret: ([A-Z2-7]+)", out, re.M)
         if not self.check("slot add seals slots 0 and 1, each with its secret", len(self.secrets) == 2, out[-600:]):
             raise Fail("no slots")
@@ -974,7 +974,7 @@ class Machine:
         self.log.head("a slot's life")
         rc, out = self.run("tpm2-kira slot approve --nvram 1 2>&1", save="slot-approve.log")
         self.check("slot approve raises the generation", "Successfully approved the boot state" in out, out[-400:])
-        rc, out = self.run("tpm2-kira slot add --nvram 2 --pcrs 0,7 2>&1 | grep -v '^Secret'", save="slot-add-2.log")
+        rc, out = self.run("tpm2-kira slot add --totp --nvram 2 --pcrs 0,7 2>&1 | grep -v '^Secret'", save="slot-add-2.log")
         rc, info = self.run("tpm2-kira slot info --nvram 2 2>&1")
         self.check("slot add --nvram 2", "0x01803012" in info, info[-300:])
         rc, out = self.run("tpm2-kira slot delete --nvram 2 2>&1", save="slot-delete.log")

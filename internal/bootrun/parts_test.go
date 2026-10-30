@@ -7,6 +7,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
+	"github.com/mrwiora/tpm2-kira/internal/totp"
 )
 
 // Only what the plan names is started: an image without the phone, the
@@ -94,5 +95,37 @@ func TestVaultPartReleaseWaitsForTheOpening(t *testing.T) {
 	p.released(nil, "")
 	if waited := time.Since(start); waited > time.Second {
 		t.Fatalf("an opening that does not end held the boot for %v", waited)
+	}
+}
+
+// With nothing to show - no slot with a TOTP code or phones - the hold
+// lasts while the vault opens what it holds for this boot state, and ends
+// when it is done; at the latest when the hold does.
+func TestHoldWithoutCodesWaitsForTheVault(t *testing.T) {
+	run := func(pending <-chan struct{}, hold time.Duration) (time.Duration, bool) {
+		notified := false
+		b := &bootDisplay{
+			Scan:    func(time.Time) ([]totp.NVRAMSlot, error) { return nil, ErrNoSlots },
+			Notify:  func() { notified = true },
+			Wait:    func(d time.Duration) bool { time.Sleep(d); return false },
+			Now:     time.Now,
+			Hold:    hold,
+			Pending: func() <-chan struct{} { return pending },
+		}
+		start := time.Now()
+		b.Run()
+		return time.Since(start), notified
+	}
+
+	done := make(chan struct{})
+	go func() { time.Sleep(300 * time.Millisecond); close(done) }()
+	if took, notified := run(done, time.Minute); took < 250*time.Millisecond || took > 5*time.Second || !notified {
+		t.Fatalf("the vault working: released after %v (notified %v)", took, notified)
+	}
+	if took, notified := run(make(chan struct{}), 500*time.Millisecond); took < 400*time.Millisecond || took > 5*time.Second || !notified {
+		t.Fatalf("the vault never done: released after %v (notified %v)", took, notified)
+	}
+	if took, notified := run(nil, time.Minute); took > 100*time.Millisecond || !notified {
+		t.Fatalf("no vault: released after %v (notified %v)", took, notified)
 	}
 }

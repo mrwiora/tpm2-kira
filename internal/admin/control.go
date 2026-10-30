@@ -1097,8 +1097,9 @@ func (c *controller) storePIN() error {
 	return nil
 }
 
-// runSeal seals what the standard pair lacks: both slots when none is
-// there, else only the missing one, so the other's TOTP key (and so its
+// runSeal seals what lacks: slot 0 when it is not there - with a TOTP code
+// when the person chooses one, and then the fallback slot 1 - else only
+// the fallback of slot 0's code, so slot 0's TOTP key (and so its
 // authenticator entry) stays as it is. Slot 0's selection is the one the
 // analysis evaluated, put up as a recommendation: the person acknowledges
 // it, or gives custom PCRs instead (confirmPCRs).
@@ -1124,11 +1125,16 @@ func (c *controller) runSeal() error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprint(c.out, clearScreen)
-	if err := Seal(c.o.TPMPath, sel, nvslot.ResolveNVRAMIndex(0), "", "", c.o.Debug, algo, true); err != nil {
+	withTOTP, err := c.confirm("A TOTP code at boot?",
+		"The code screen shows a code to compare with your authenticator app before you type anything: it proves the boot is one your signing key approved. Without it the vault, the TPM salt or a phone check the boot, and nothing is shown.")
+	if err != nil {
 		return err
 	}
-	if fallback {
+	fmt.Fprint(c.out, clearScreen)
+	if err := Seal(c.o.TPMPath, sel, nvslot.ResolveNVRAMIndex(0), "", "", c.o.Debug, algo, true, withTOTP); err != nil {
+		return err
+	}
+	if fallback || !withTOTP {
 		return nil
 	}
 	if err := c.scanned("Slot 0"); err != nil {

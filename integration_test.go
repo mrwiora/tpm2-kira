@@ -289,7 +289,7 @@ func TestSealBasic(t *testing.T) {
 
 	// Test seal with signing key
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"slot", "add",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath,
@@ -322,7 +322,7 @@ func TestSealWithoutPrivKey(t *testing.T) {
 
 	// Test seal with both pubkey and privkey (privkey is required for NV write authorization)
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"slot", "add",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath,
@@ -346,7 +346,7 @@ func TestSealAndReveal(t *testing.T) {
 
 	// Seal with signing key
 	_, _, err := runTPMKira(t, tpmPath,
-		"slot", "add",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath,
@@ -390,7 +390,7 @@ func TestGlobalOptionsBeforeCommand(t *testing.T) {
 	defer cleanup()
 
 	// Slot 3: without --nvram, reveal-plain scans the slots and finds it.
-	if _, _, err := runTPMKira(t, tpmPath, "slot", "add", "--nvram", "3", "--pcrs", testPCRs,
+	if _, _, err := runTPMKira(t, tpmPath, "slot", "add", "--totp", "--nvram", "3", "--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
@@ -441,7 +441,7 @@ func TestSealWithCustomPCRs(t *testing.T) {
 			nvramIndex := fmt.Sprintf("0x%08X", 0x01803013+i)
 
 			stdout, stderr, err := runTPMKira(t, tpmPath,
-				"slot", "add",
+				"slot", "add", "--totp",
 				"--nvram", nvramIndex,
 				"--pcrs", tc.pcrs,
 				"--pubkey", testPubKeyPath,
@@ -471,7 +471,7 @@ func TestNVRAMDelete(t *testing.T) {
 
 	// First, seal some data
 	_, _, err := runTPMKira(t, tpmPath,
-		"slot", "add",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath,
@@ -586,7 +586,7 @@ func TestNVRAMList(t *testing.T) {
 
 	// Seal some data
 	_, _, err = runTPMKira(t, tpmPath,
-		"slot", "add",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pubkey", testPubKeyPath,
 		"--privkey", testPrivKeyPath,
@@ -621,7 +621,7 @@ func TestSealTwiceOverwrites(t *testing.T) {
 
 	// First seal
 	stdout1, _, err := runTPMKira(t, tpmPath,
-		"slot", "add",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pubkey", testPubKeyPath,
 		"--privkey", testPrivKeyPath,
@@ -646,7 +646,7 @@ func TestSealTwiceOverwrites(t *testing.T) {
 
 	// Second seal - should succeed and overwrite
 	stdout2, _, err := runTPMKira(t, tpmPath,
-		"slot", "add",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pubkey", testPubKeyPath,
 		"--privkey", testPrivKeyPath,
@@ -701,7 +701,7 @@ func TestInfo(t *testing.T) {
 
 	// Seal with signing key
 	_, _, err := runTPMKira(t, tpmPath,
-		"slot", "add",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath,
@@ -749,7 +749,7 @@ func TestInfoJSON(t *testing.T) {
 
 	// Seal with signing key
 	_, _, err := runTPMKira(t, tpmPath,
-		"slot", "add",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pubkey", testPubKeyPath,
 		"--privkey", testPrivKeyPath,
@@ -820,7 +820,7 @@ func TestDebugFlag(t *testing.T) {
 
 	// Seal with debug flag
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"slot", "add",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--debug",
 		"--pubkey", testPubKeyPath,
@@ -846,7 +846,7 @@ func TestDebugFlag(t *testing.T) {
 func testSeal(t *testing.T, tpmPath, nvramIndex string) {
 	t.Helper()
 	args := []string{
-		"slot", "add",
+		"slot", "add", "--totp",
 		"--nvram", nvramIndex,
 		"--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath,
@@ -1091,7 +1091,7 @@ func TestCompleteWorkflow(t *testing.T) {
 	// Seal with pubkey and privkey (privkey required for NV write authorization)
 	t.Log("Testing seal with signing key and PCR 0,23...")
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"slot", "add",
+		"slot", "add", "--totp",
 		"--nvram", nvramIndexPCR,
 		"--pcrs", customPCRs,
 		"--pubkey", testPubKeyPath,
@@ -1240,7 +1240,7 @@ func TestExitCodes(t *testing.T) {
 	// Test 2: Seal and then extend PCR to cause mismatch
 	t.Log("Test 2: Seal with PCR 0,23...")
 	_, _, err = runTPMKira(t, tpmPath,
-		"slot", "add",
+		"slot", "add", "--totp",
 		"--nvram", nvramIndex,
 		"--pcrs", "0,23",
 		"--pubkey", testPubKeyPath,
@@ -1371,7 +1371,7 @@ func TestResealNeedsItsKeyGiven(t *testing.T) {
 	nvramIndex := "0x01803014"
 
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"slot", "add",
+		"slot", "add", "--totp",
 		"--nvram", nvramIndex,
 		"--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath,
@@ -1449,7 +1449,7 @@ func TestCodeMatchesAuthenticator(t *testing.T) {
 	defer cleanup()
 	nvramIndex := "0x01803015"
 
-	stdout, stderr, err := runTPMKira(t, tpmPath, "slot", "add", "--nvram", nvramIndex, "--pcrs", "0,7",
+	stdout, stderr, err := runTPMKira(t, tpmPath, "slot", "add", "--totp", "--nvram", nvramIndex, "--pcrs", "0,7",
 		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath)
 	if err != nil || !strings.Contains(stdout, "Secret: ") {
 		t.Fatalf("seal failed: %v\n%s\n%s", err, stdout, stderr)
@@ -1498,7 +1498,7 @@ func TestCapLocksCodesUntilReboot(t *testing.T) {
 	defer cleanup()
 	nvramIndex := "0x01803016"
 
-	if stdout, stderr, err := runTPMKira(t, tpmPath, "slot", "add", "--nvram", nvramIndex, "--pcrs", "0,7",
+	if stdout, stderr, err := runTPMKira(t, tpmPath, "slot", "add", "--totp", "--nvram", nvramIndex, "--pcrs", "0,7",
 		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
 		t.Fatalf("seal failed: %v\n%s\n%s", err, stdout, stderr)
 	}
@@ -1548,7 +1548,7 @@ func TestResealRevokesOldBlob(t *testing.T) {
 	const index = 0x01803017
 	nvramIndex := fmt.Sprintf("0x%08X", index)
 
-	if stdout, stderr, err := runTPMKira(t, tpmPath, "slot", "add", "--nvram", nvramIndex, "--pcrs", "0,7",
+	if stdout, stderr, err := runTPMKira(t, tpmPath, "slot", "add", "--totp", "--nvram", nvramIndex, "--pcrs", "0,7",
 		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
 		t.Fatalf("seal failed: %v\n%s\n%s", err, stdout, stderr)
 	}

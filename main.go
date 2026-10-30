@@ -315,6 +315,7 @@ func runSlotAdd(args []string, tpmPath string, debugFlag bool) {
 	privKeyPath := fs.String("privkey", signing.DefaultPrivateKeyPath, "Path to signing private key: PEM, or the YubiKey key file from setup --yubikey")
 	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
 	verifyUKI := fs.Bool("verify-uki", true, "Check the built-in PCR 11 computation against this boot's event log before sealing")
+	withTOTP := fs.Bool("totp", false, "Seal a TOTP key too: a code at boot to compare with your authenticator app")
 
 	fs.Parse(args)
 
@@ -330,12 +331,13 @@ func runSlotAdd(args []string, tpmPath string, debugFlag bool) {
 	}
 
 	// Without --pcrs, the selection is what this boot measured. Without
-	// --pcrs and --nvram, slot 0 gets it and slot 1 the fallback (0 and 7
-	// alone), so a boot change that was not predicted still shows a code.
+	// --pcrs and --nvram, slot 0 gets it and, with --totp, slot 1 the
+	// fallback (0 and 7 alone), so a boot change that was not predicted
+	// still shows a code.
 	// With either, one slot: the one named (else 0), the PCRs named (else
 	// the selection).
 	if !nvramExplicit(args) && !pcrsGiven(args) {
-		if err := admin.SealDefaults(*tpm, *pubKeyPath, *privKeyPath, hashAlgo, *debug); err != nil {
+		if err := admin.SealDefaults(*tpm, *pubKeyPath, *privKeyPath, hashAlgo, *debug, *withTOTP); err != nil {
 			fail(err)
 		}
 		return
@@ -348,7 +350,7 @@ func runSlotAdd(args []string, tpmPath string, debugFlag bool) {
 	if _, err := measure.ParsePCRSpecs(*pcrs); err != nil {
 		fail(err)
 	}
-	if err := admin.Seal(*tpm, *pcrs, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI); err != nil {
+	if err := admin.Seal(*tpm, *pcrs, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *pubKeyPath, *privKeyPath, *debug, hashAlgo, *verifyUKI, *withTOTP); err != nil {
 		fail(err)
 	}
 }

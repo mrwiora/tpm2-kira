@@ -81,7 +81,7 @@ func TestCodeBeforeTheSeparatorThenLocked(t *testing.T) {
 	defer func() { measure.DefaultEventlogPath = old }()
 
 	pubPath, privPath := writeTestKeyPair(t)
-	if err := Seal(sock, "0,2,7", nvslot.NVRAMSlotStart, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "0,2,7", nvslot.NVRAMSlotStart, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
 
@@ -148,7 +148,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	const slot = nvslot.NVRAMSlotStart + 1
 	at := time.Date(2026, 10, 6, 1, 0, 0, 0, time.UTC)
 	pubPath, privPath := writeTestKeyPair(t)
-	if err := Seal(sock, "0,2,7", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "0,2,7", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
 	if _, _, err := totp.SlotCode(tpm, slot, at, false); err != nil {
@@ -253,7 +253,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	}
 
 	// Seal the slot again: the same phones, still no TOTP key.
-	if err := Seal(sock, "0,2,7", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "0,2,7", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
 		t.Fatalf("second seal: %v", err)
 	}
 	enrolled("after sealing again")
@@ -264,16 +264,16 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 		t.Fatalf("the boot key does not answer after the slot was sealed again: %v", err)
 	}
 
-	// The last phone leaves: the slot gets a TOTP key again, a new one,
-	// under the approval in force, so it computes at once, no reseal.
+	// The last phone leaves: TOTP is a method of its own, chosen; the slot
+	// gets none back by itself, and shows nothing.
 	if err := writeAttestBlob(tpm, slot, nil, priv); err != nil {
 		t.Fatalf("removing the phone: %v", err)
 	}
-	if _, sb, err := phonegate.ReadSlot(tpm, slot); err != nil || !sb.HasTOTPKey() || sb.Payload.Attestation != nil {
+	if _, sb, err := phonegate.ReadSlot(tpm, slot); err != nil || sb.HasTOTPKey() || sb.Payload.Attestation != nil {
 		t.Fatalf("after the last phone left: %+v %v", sb, err)
 	}
-	if code, _, err := totp.SlotCode(tpm, slot, at, false); err != nil || len(code) != 6 {
-		t.Fatalf("the new TOTP key gives no code under the approval in force: %q %v", code, err)
+	if _, _, err := totp.SlotCode(tpm, slot, at, false); !errors.Is(err, totp.ErrNoCode) {
+		t.Fatalf("a slot without TOTP and phones: %v", err)
 	}
 	// And a phone again: the boot key, made under the slot's policy, is
 	// still good for it.
@@ -295,7 +295,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	// Another signing key seals the slot: it does not adopt phones it
 	// cannot vouch for: the blob has no attestation part.
 	otherPub, otherPriv := writeTestKeyPair(t)
-	if err := Seal(sock, "0,2,7", slot, otherPub, otherPriv, false, measure.PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "0,2,7", slot, otherPub, otherPriv, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
 		t.Fatalf("seal with another key: %v", err)
 	}
 	if _, err := phonegate.LoadAttestBlob(tpm, slot); !errors.Is(err, phonegate.ErrNotEnrolled) {

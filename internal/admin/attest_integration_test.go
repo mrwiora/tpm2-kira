@@ -433,8 +433,8 @@ func TestReplacedRecordIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	unenrolled, _ := nvslot.ReadRecord(idx)
-	if a, err := nvslot.UnmarshalSealedBlob(unenrolled); err != nil || a.Payload.Attestation != nil || !a.HasTOTPKey() {
-		t.Fatalf("removing the phones did not give the slot a TOTP key back: %+v %v", a, err)
+	if a, err := nvslot.UnmarshalSealedBlob(unenrolled); err != nil || a.Payload.Attestation != nil || a.HasTOTPKey() {
+		t.Fatalf("removing the phones: %+v %v", a, err)
 	}
 	if verified, code := gate(); verified || code != phonegate.ExitTampered {
 		t.Fatalf("a slot without phones was served (verified=%v, exit %d)", verified, code)

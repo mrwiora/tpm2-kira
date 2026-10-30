@@ -37,11 +37,12 @@ type StatusSlot struct {
 	NVRAMIndex  string         `json:"nvram_index"`
 	PCRs        string         `json:"pcrs"`
 	Fallback    bool           `json:"fallback"` // sealed to 0 and 7 alone
+	TOTP        bool           `json:"totp"`     // the slot shows a TOTP code (a method of its own)
 	Generation  uint64         `json:"generation"`
 	GenState    string         `json:"generation_state"`
 	Signed      bool           `json:"signed"` // by this machine's signing key
 	SignReason  string         `json:"sign_reason,omitempty"`
-	Phones      int            `json:"phones"`                 // enrolled; the slot then has no TOTP code
+	Phones      int            `json:"phones"`                 // enrolled
 	PhoneSalt   bool           `json:"remote_salt"`            // the release key is in the blob
 	Vault       string         `json:"vault,omitempty"`        // the vault's URL: the slot is enrolled with one
 	VaultPepper bool           `json:"vault_pepper,omitempty"` // its key needs an operator's pepper
@@ -99,6 +100,7 @@ func collectStatus(o StatusOptions) StatusReport {
 				PCRs: measure.PCRSpecsToString(sb.GetPCRSpecs()), Generation: sb.Payload.Generation,
 				GenState: generationState(tpmDev, idx, sb.Payload.Generation)}
 			s.Fallback = isFallbackSelection(sb.GetPCRSpecs())
+			s.TOTP = sb.HasTOTPKey()
 			v := verifier.verify(raw, sb)
 			s.Signed, s.SignReason = v.Verified, v.Reason
 			if att := sb.Payload.Attestation; att != nil && att.Phone.Enabled() {
@@ -172,8 +174,9 @@ func statusNotes(r StatusReport) []string {
 	if r.TPMError == "" && len(r.Slots) == 0 {
 		notes = append(notes, "no slot is sealed: tpm2-kira slot add")
 	}
-	remoteSalt, fallback := false, false
+	remoteSalt, fallback, codes := false, false, false
 	for _, s := range r.Slots {
+		codes = codes || s.TOTP
 		if !s.Signed {
 			notes = append(notes, fmt.Sprintf("slot %d is not signed by this machine's key (%s): the hooks will not approve it and the gate serves no phone for it", s.Slot, s.SignReason))
 		}
@@ -183,7 +186,7 @@ func statusNotes(r StatusReport) []string {
 		remoteSalt = remoteSalt || s.PhoneSalt
 		fallback = fallback || s.Fallback
 	}
-	if r.TPMError == "" && len(r.Slots) > 0 && !fallback {
+	if r.TPMError == "" && codes && !fallback {
 		notes = append(notes, fmt.Sprintf("no fallback slot (PCRs %s alone) for a boot whose kernel changed unpredicted: tpm2-kira slot add --nvram %d --pcrs %s", FallbackPCRSelection, FallbackSlot, FallbackPCRSelection))
 	}
 
@@ -293,11 +296,12 @@ func printStatus(r StatusReport) {
 			signed = "NOT signed by this machine's key"
 		}
 		fmt.Printf("  slot %-2d  sealed to %s; generation %s; %s\n", s.Slot, pcrs, s.GenState, signed)
+		fmt.Printf("           methods: %s\n", slotMethods(s))
 		switch {
 		case s.Phones > 0 && s.PhoneSalt:
-			fmt.Printf("           %s, no TOTP code; phone salt enrolled\n", phonesText(s.Phones))
+			fmt.Printf("           %s; phone salt enrolled\n", phonesText(s.Phones))
 		case s.Phones > 0:
-			fmt.Printf("           %s, no TOTP code; no phone salt\n", phonesText(s.Phones))
+			fmt.Printf("           %s; no phone salt\n", phonesText(s.Phones))
 		}
 		if s.Vault != "" {
 			fmt.Printf("           enrolled with the vault at %s (%s)\n", s.Vault, s.VaultRecipe.Describe())
@@ -362,4 +366,27 @@ func phonesText(n int) string {
 		return "attested by 1 phone"
 	}
 	return fmt.Sprintf("attested by %d phones", n)
+}
+
+// slotMethods names a slot's methods: what it holds beside the sealed boot
+// state. A slot with none seals the boot state alone (the machine-id, the
+// boot key).
+func slotMethods(s StatusSlot) string {
+	var m []string
+	if s.TOTP {
+		m = append(m, "TOTP code")
+	}
+	if s.Phones > 0 {
+		m = append(m, phonesText(s.Phones))
+	}
+	if s.Vault != "" {
+		m = append(m, "vault")
+	}
+	if s.TPMSalt {
+		m = append(m, "TPM salt")
+	}
+	if len(m) == 0 {
+		return "none (the boot state alone)"
+	}
+	return strings.Join(m, ", ")
 }

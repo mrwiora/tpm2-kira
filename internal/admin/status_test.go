@@ -32,7 +32,7 @@ func TestStatusNotes(t *testing.T) {
 		want string
 	}{
 		{"nothing sealed", StatusReport{}, "no slot is sealed"},
-		{"no fallback", StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e", false)}}, "no fallback slot"},
+		{"no fallback", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e", TOTP: true, Signed: true, GenState: "3 (matches)"}}}, "no fallback slot"},
 		{"reseal due", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,7e", Fallback: true, GenState: "4 — does NOT match the blob", Signed: true}}}, "until it is approved"},
 		{"not signed", StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,7e", Fallback: true, GenState: "3 (matches)", SignReason: "no key"}}}, "not signed by this machine"},
 		{"salt without a keyslot", StatusReport{Slots: []StatusSlot{slot(0, "0e,2e,7e,11u", true), slot(1, "0e,7e", false)},
@@ -51,6 +51,11 @@ func TestStatusNotes(t *testing.T) {
 		if !strings.Contains(notes, c.want) {
 			t.Errorf("%s: want %q in:\n%s", c.name, c.want, notes)
 		}
+	}
+
+	// Without a TOTP code there is no fallback to have: no note.
+	if n := strings.Join(statusNotes(StatusReport{Slots: []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e", Signed: true, GenState: "3 (matches)"}}}), "\n"); strings.Contains(n, "fallback") {
+		t.Errorf("a fallback asked for a slot without a code: %s", n)
 	}
 
 	// A header that could not be read (no root): no guess about keyslots.

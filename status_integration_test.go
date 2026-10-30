@@ -98,8 +98,8 @@ func TestRootIsRequired(t *testing.T) {
 	}
 }
 
-// 'slot add' without --nvram and --pcrs seals slot 0 to what the machine can
-// vouch for and slot 1 to the fallback; without an event log (swtpm) both
+// 'slot add --totp' without --nvram and --pcrs seals slot 0 to what the
+// machine can vouch for and slot 1 to the fallback; without an event log (swtpm) both
 // are read from the registers, so the policy can be satisfied and the
 // codes show. 'status' then reports both slots signed, the fallback marked,
 // and nothing to do.
@@ -107,7 +107,7 @@ func TestSealDefaultsAndStatus(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
 
-	stdout, stderr, code := kira(t, nil, "slot", "add", "--tpm", tpmPath, "--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath)
+	stdout, stderr, code := kira(t, nil, "slot", "add", "--totp", "--tpm", tpmPath, "--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath)
 	if code != 0 {
 		t.Fatalf("seal: exit %d\n%s%s", code, stdout, stderr)
 	}
@@ -163,7 +163,7 @@ func TestStatusNotes(t *testing.T) {
 	}
 
 	// Slot 0 alone, to a selection that is not the fallback.
-	if _, stderr, code := kira(t, nil, "slot", "add", "--tpm", tpmPath, "--nvram", "0", "--pcrs", "0,23", "--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); code != 0 {
+	if _, stderr, code := kira(t, nil, "slot", "add", "--totp", "--tpm", tpmPath, "--nvram", "0", "--pcrs", "0,23", "--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); code != 0 {
 		t.Fatalf("seal: exit %d: %s", code, stderr)
 	}
 	r = statusJSON(t, tpmPath, testPrivKeyPath, empty)

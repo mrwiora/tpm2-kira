@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/core/attest"
@@ -75,25 +74,15 @@ func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *nvslot.Attestation, pr
 	if b != nil {
 		b.Count = current + 1
 	}
-	// A slot has a TOTP key or phones (SealedBlobPayload): the first phone
-	// retires the key, and the last one leaving brings a new one, under
-	// the slot's policy, so the approval in force covers it at once.
+	// TOTP is a method of its own, sealed when chosen (slot add --totp).
+	// The first phone retires it: the phone's check covers what the code
+	// proves. The last phone leaving brings none back by itself.
 	retired := false
-	var newKey []byte
-	var newAlg tpm2.TPMAlgID
+	hadPhones := sb.PhoneAttested()
 	sb.Payload.Attestation = b
-	switch {
-	case sb.PhoneAttested():
+	if sb.PhoneAttested() {
 		retired = sb.HasTOTPKey()
 		sb.Payload.Public, sb.Payload.Private, sb.Payload.TOTPAlgorithm = nil, nil, 0
-	case !sb.HasTOTPKey():
-		if newKey, newAlg, err = newTOTPSecret(tpmDev); err != nil {
-			return err
-		}
-		defer clear(newKey)
-		if err := addTOTPKey(tpmDev, sb, newKey, newAlg); err != nil {
-			return err
-		}
 	}
 	unsigned, err := sb.Marshal()
 	if err != nil {
@@ -121,9 +110,8 @@ func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *nvslot.Attestation, pr
 		fmt.Printf("Slot %d's TOTP code is retired: the phone checks its boots from now on. Remove its\n", slot)
 		fmt.Printf("entry from your authenticator app (\"TPM2-KIRA: ... (#%d)\"); it shows no valid code any more.\n", slot)
 	}
-	if newKey != nil {
-		fmt.Printf("Slot %d has no phone any more, so it has a TOTP code again (a new one):\n", slot)
-		showTOTPSecret(newKey, newAlg, idx, measure.PCRSpecsToString(sb.GetPCRSpecs()))
+	if hadPhones && !sb.PhoneAttested() {
+		fmt.Printf("Slot %d has no phone any more, and no TOTP code: 'tpm2-kira slot add --nvram %d --totp' seals one.\n", slot, slot)
 	}
 	return nil
 }

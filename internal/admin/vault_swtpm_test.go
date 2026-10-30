@@ -162,7 +162,7 @@ func TestVaultKeyRoundTrip(t *testing.T) {
 	sock := startSWTPM(t)
 	const slot = nvslot.NVRAMSlotStart + 2
 	privPath, pubPath := signingKeyFiles(t)
-	if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -264,7 +264,7 @@ func TestVaultPepper(t *testing.T) {
 	sock := startSWTPM(t)
 	const slot = nvslot.NVRAMSlotStart + 3
 	privPath, pubPath := signingKeyFiles(t)
-	if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
 		t.Fatal(err)
 	}
 	tv := &testVault{token: "tok-p", nonces: map[string][]byte{}}
@@ -321,7 +321,7 @@ func TestVaultTypedPassword(t *testing.T) {
 	sock := startSWTPM(t)
 	const slot = nvslot.NVRAMSlotStart + 4
 	privPath, pubPath := signingKeyFiles(t)
-	if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
 		t.Fatal(err)
 	}
 	tv := &testVault{token: "tok-t", nonces: map[string][]byte{}}
@@ -372,7 +372,7 @@ func TestVaultBesideATPMSalt(t *testing.T) {
 	sock := startSWTPM(t)
 	const slot = nvslot.NVRAMSlotStart
 	privPath, pubPath := signingKeyFiles(t)
-	if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false); err != nil {
+	if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
 		t.Fatal(err)
 	}
 	old := terminalAsk

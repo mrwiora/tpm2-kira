@@ -114,7 +114,7 @@ func TestDecidePlan(t *testing.T) {
 	}
 
 	// Slots and an enrolled phone: the codes and the gate, and the TPM.
-	in := planInputs{Config: DefaultControlConfig(), Slots: 2, Phones: 1, BT: bt, Signer: []byte("PEM")}
+	in := planInputs{Config: DefaultControlConfig(), Slots: 2, Shown: 2, Phones: 1, BT: bt, Signer: []byte("PEM")}
 	p = decidePlan(in)
 	if got := partsOn(p); got != "unlock codes phone" || !p.TPM {
 		t.Fatalf("a phone: %q", got)
@@ -135,11 +135,11 @@ func TestDecidePlan(t *testing.T) {
 	}
 
 	// A slot's TPM salt needs the TPM alone: no network, no phone.
-	in = planInputs{Config: DefaultControlConfig(), Slots: 1, TPMSalts: 1}
+	in = planInputs{Config: DefaultControlConfig(), Slots: 1, Shown: 1, TPMSalts: 1}
 	if p := decidePlan(in); !p.Has(imageplan.PartTPMSalt) || !p.TPM || !strings.Contains(p.Part(imageplan.PartTPMSalt).Why, "1 slot holding a TPM salt") {
 		t.Errorf("a TPM salt: %+v", p.Part(imageplan.PartTPMSalt))
 	}
-	if p := decidePlan(planInputs{Config: DefaultControlConfig(), Slots: 1}); p.Has(imageplan.PartTPMSalt) {
+	if p := decidePlan(planInputs{Config: DefaultControlConfig(), Slots: 1, Shown: 1}); p.Has(imageplan.PartTPMSalt) {
 		t.Errorf("no TPM salt, the part in: %+v", p.Part(imageplan.PartTPMSalt))
 	}
 	in.TPMErr = "no TPM"
@@ -148,7 +148,7 @@ func TestDecidePlan(t *testing.T) {
 	}
 
 	// The vault is asked over the network; SSH needs it too.
-	in = planInputs{Config: DefaultControlConfig(), Slots: 1, Vaults: 1}
+	in = planInputs{Config: DefaultControlConfig(), Slots: 1, Shown: 1, Vaults: 1}
 	if p := decidePlan(in); p.Has(imageplan.PartVault) || !strings.Contains(p.Part(imageplan.PartVault).Why, "network") {
 		t.Errorf("a vault without a network: %+v", p.Part(imageplan.PartVault))
 	}
@@ -172,7 +172,7 @@ func TestDecidePlan(t *testing.T) {
 	approved := in.SSHCA
 	approved.CA = approved.CA.Only(func(hostkey.Approval) bool { return true })
 	approved.CA.Approvals = append(approved.CA.Approvals, hostkey.Approval{Slot: 0, Signature: []byte("new")})
-	if other := decidePlan(planInputs{Config: in.Config, Slots: in.Slots, Vaults: in.Vaults, Keys: in.Keys, SSHCA: approved}); other.Part(imageplan.PartSSH).Digest != p.Part(imageplan.PartSSH).Digest {
+	if other := decidePlan(planInputs{Config: in.Config, Slots: in.Slots, Shown: in.Shown, Vaults: in.Vaults, Keys: in.Keys, SSHCA: approved}); other.Part(imageplan.PartSSH).Digest != p.Part(imageplan.PartSSH).Digest {
 		t.Error("an approval is another image")
 	}
 	// The digest names the settings: the same twice, another with another
@@ -257,13 +257,13 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 	ca := testSSHCA(t, true)
 	bt := &BTDeps{Adapter: "hci0", Modules: []string{"btusb", "btintel", "bluetooth"}, Firmware: []string{"intel/ibt-0180-0041.sfi"},
 		Authorize: &USBDevice{Port: "3-10", Vendor: "8087", Product: "0033"}}
-	in := planInputs{Config: planConfig(t, "TPM2_KIRA_NET=dhcp\nTPM2_KIRA_SSH=on\n"), Slots: 2, Phones: 1, BT: bt,
+	in := planInputs{Config: planConfig(t, "TPM2_KIRA_NET=dhcp\nTPM2_KIRA_SSH=on\n"), Slots: 2, Shown: 2, Phones: 1, BT: bt,
 		Signer: []byte("-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n"), Keys: []string{admin}, KeysSkipped: 2, SSHCA: ca}
 	in.Config.Remote.SSH.Assh.AuthorizedKeys = "/etc/tpm2-kira/authorized_keys"
 	p := decidePlan(in)
 	out, root = writePlan(t, p, FormatMkinitcpio)
 	for _, want := range []string{
-		"say TOTP codes:        in  - 2 slots sealed\n",
+		"say TOTP codes:        in  - 2 slots with a TOTP code or phones\n",
 		"say Phone (Bluetooth): in  - 1 phone enrolled, via hci0\n",
 		"bt-module btusb\nbt-module btintel\nbt-module bluetooth\nbt-firmware intel/ibt-0180-0041.sfi\n",
 		"net-module drv_enp1s0\n",
@@ -326,7 +326,7 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 func TestWriteImageInitramfsTools(t *testing.T) {
 	fakeNet(t, map[string]string{"enp1s0": "aa:bb:cc:dd:ee:01"})
 	in := planInputs{Config: planConfig(t, "TPM2_KIRA_NET=static\nTPM2_KIRA_NET_MATCH=aa:bb:cc:dd:ee:01\nTPM2_KIRA_NET_ADDRESS=\"192.0.2.10/24 2001:db8::10/64\"\nTPM2_KIRA_NET_GATEWAY=192.0.2.1\nTPM2_KIRA_SSH=on\n"),
-		Slots: 1, Phones: 1, BT: &BTDeps{Adapter: "hci0", Modules: []string{"btusb"}}, Signer: []byte("PEM"),
+		Slots: 1, Shown: 1, Phones: 1, BT: &BTDeps{Adapter: "hci0", Modules: []string{"btusb"}}, Signer: []byte("PEM"),
 		Keys: []string{loginKey(t, "admin")}, SSHCA: testSSHCA(t, true)}
 	in.Config.Remote.SSH.Assh.Listen = ":2222"
 	out, root := writePlan(t, decidePlan(in), FormatInitramfsTools)
@@ -369,7 +369,7 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 // rebuild; a part the image carries for nothing is not.
 func TestImagePlanPending(t *testing.T) {
 	fakeNet(t, map[string]string{"enp1s0": "aa:bb:cc:dd:ee:01"})
-	in := planInputs{Config: planConfig(t, "TPM2_KIRA_NET=dhcp\nTPM2_KIRA_SSH=on\n"), Slots: 1, Keys: []string{loginKey(t, "admin")}, SSHCA: testSSHCA(t, true)}
+	in := planInputs{Config: planConfig(t, "TPM2_KIRA_NET=dhcp\nTPM2_KIRA_SSH=on\n"), Slots: 1, Shown: 1, Keys: []string{loginKey(t, "admin")}, SSHCA: testSSHCA(t, true)}
 	_, root := writePlan(t, decidePlan(in), FormatMkinitcpio)
 
 	img := filepath.Join(t.TempDir(), "initramfs-linux.img")
@@ -407,7 +407,7 @@ func TestImagePlanPending(t *testing.T) {
 	}
 	// SSH switched off: a reason to rebuild at once - the image would
 	// start it at the next boot.
-	in = planInputs{Config: planConfig(t, "TPM2_KIRA_NET=dhcp\n"), Slots: 1}
+	in = planInputs{Config: planConfig(t, "TPM2_KIRA_NET=dhcp\n"), Slots: 1, Shown: 1}
 	if p := planPending(decidePlan(in), parts, img); len(p) != 1 || !strings.Contains(p[0], "SSH server: switched off, still in initramfs-linux.img") {
 		t.Errorf("SSH off: %q", p)
 	}
@@ -415,7 +415,7 @@ func TestImagePlanPending(t *testing.T) {
 		t.Errorf("unused: %q", u)
 	}
 	// The network off as well: both are named.
-	off := planInputs{Config: planConfig(t, ""), Slots: 1}
+	off := planInputs{Config: planConfig(t, ""), Slots: 1, Shown: 1}
 	if p := planPending(decidePlan(off), parts, img); len(p) != 2 {
 		t.Errorf("network and SSH off: %q", p)
 	}
@@ -451,7 +451,7 @@ func TestReadPlanned(t *testing.T) {
 // the image carries the bundle where the boot reads it.
 func TestVaultPartCarriesTheRoots(t *testing.T) {
 	cfg := planConfig(t, "TPM2_KIRA_NET=dhcp\n")
-	in := planInputs{Config: cfg, Slots: 1, Vaults: 1, VaultRootsErr: "no root of a vault in " + vaultkey.RootsPath}
+	in := planInputs{Config: cfg, Slots: 1, Shown: 1, Vaults: 1, VaultRootsErr: "no root of a vault in " + vaultkey.RootsPath}
 	if p := decidePlan(in); p.Has(imageplan.PartVault) || !strings.Contains(p.Part(imageplan.PartVault).Why, "no root of a vault") {
 		t.Fatalf("without roots: %+v", p.Part(imageplan.PartVault))
 	}

@@ -138,6 +138,11 @@ type bootDisplay struct {
 	PhonePoll  time.Duration                        // how often the state is looked at
 	PhoneGrace time.Duration                        // how far a session in progress may extend the hold
 
+	// Pending is closed once the parts that open during the hold (the
+	// vault) are done; nil without one. With nothing to show, the hold
+	// lasts as long as they work, within Hold.
+	Pending func() <-chan struct{}
+
 	Hold          time.Duration // how long to wait for Enter
 	ScanRetry     time.Duration // between attempts while nothing can be shown
 	QuickRetryFor time.Duration // after the release, failed slots are retried every retryEvery this long,
@@ -157,12 +162,35 @@ func (b *bootDisplay) Run() {
 	b.serveAfterRelease(slots)
 }
 
-// ErrNoSlots: no NVRAM slot holds a TOTP key.
-var ErrNoSlots = errors.New("no TOTP key is sealed")
+// ErrNoSlots: no slot shows anything - none with a TOTP code or phones.
+var ErrNoSlots = errors.New("no slot has a TOTP code or a phone")
 
 // errCodesOut: the boot image has no codes in its plan; the TPM is not
 // asked.
 var errCodesOut = errors.New("the boot image shows no codes")
+
+// holdForParts holds the boot without a screen until the parts that open
+// during the hold are done (pending closed), a part ends the hold itself
+// (Wait: the vault made the key), or the deadline passes.
+func (b *bootDisplay) holdForParts(pending <-chan struct{}, deadline time.Time) {
+	if pending == nil {
+		return
+	}
+	for {
+		select {
+		case <-pending:
+			return
+		default:
+		}
+		remaining := deadline.Sub(b.Now())
+		if remaining <= 0 {
+			return
+		}
+		if b.Wait(min(remaining, time.Second)) {
+			return
+		}
+	}
+}
 
 // holdForConfirmation shows a fresh code per window until the boot is
 // confirmed - Enter, or the enrolled phone accepting it - or the hold ends,
@@ -186,8 +214,13 @@ func (b *bootDisplay) holdForConfirmation() ([]totp.NVRAMSlot, bool, error) {
 		now := b.Now()
 		s, err := b.Scan(now)
 		if err != nil {
-			if !errors.Is(err, errCodesOut) {
+			if !errors.Is(err, errCodesOut) && !errors.Is(err, ErrNoSlots) {
 				totp.PrintKIRAError(err)
+			}
+			// Nothing to show: the hold lasts while a part still opens
+			// what it holds for this boot state.
+			if b.Pending != nil {
+				b.holdForParts(b.Pending(), deadline)
 			}
 			return slots, false, err
 		}
@@ -543,6 +576,12 @@ func Run(tpmPath string, nvramIndex uint32, hold time.Duration, unlockSocket str
 			case <-time.After(d):
 				return false
 			}
+		},
+		Pending: func() <-chan struct{} {
+			if v, ok := ps.vault.(*vaultPart); ok && v != nil {
+				return v.done
+			}
+			return nil
 		},
 		Sleep:         time.Sleep,
 		Now:           time.Now,

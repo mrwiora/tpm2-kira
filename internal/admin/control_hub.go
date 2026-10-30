@@ -166,22 +166,21 @@ func (c *controller) keysSteps() []controlStep {
 	}
 	steps := []controlStep{keys}
 
-	// The standard sealing, slots 0 and 1: the step guides to it while one
-	// of the two is missing and seals exactly what lacks; with both in
-	// place the slot lines show them and the step disappears ('tpm2-kira
-	// seal' stays for sealing anew by hand).
-	if slot0 == nil || !fallback {
-		seal := controlStep{Key: "seal", Title: "TOTP codes at boot (slot 0, and slot 1 the fallback)",
+	// The sealing: slot 0, the boot state the methods are enrolled into,
+	// with a TOTP code when chosen - and then slot 1, the fallback code for
+	// a boot whose kernel changed unpredicted. The step guides while slot 0
+	// is missing, or its code's fallback; then the slot lines show them and
+	// the step disappears ('tpm2-kira slot add' stays for sealing anew).
+	if slot0 == nil || slot0.TOTP && !fallback {
+		seal := controlStep{Key: "seal", Title: "The boot state (slot 0; a TOTP code if chosen)",
 			Run: (*controller).runSeal}
 		switch {
 		case f.TPMErr != "":
 			seal.Blocked = "no TPM: " + f.TPMErr
 		case f.Keys == "":
 			seal.Blocked = "needs the signing key"
-		case slot0 == nil && !fallback:
-			seal.Explain = "The standard pair: a TOTP key sealed into slot 0 - to " + f.PCRs + ", evaluated for this machine and put up as the recommendation to acknowledge, or custom PCRs instead - and one sealed to PCRs 0 and 7 alone into slot 1, the fallback for a boot whose kernel changed unpredicted. Pair both with your authenticator."
 		case slot0 == nil:
-			seal.Explain = "Slot 0 is missing: seals a TOTP key into it - to " + f.PCRs + ", evaluated for this machine and put up as the recommendation to acknowledge, or custom PCRs instead. Slot 1, the fallback, stays as it is."
+			seal.Explain = "Seals slot 0 to the boot state - to " + f.PCRs + ", evaluated for this machine and put up as the recommendation to acknowledge, or custom PCRs instead. The vault, the TPM salt and a phone are enrolled into it. Asked: a TOTP code at boot too, to compare with your authenticator before you type anything - then slot 1 gets one sealed to PCRs 0 and 7 alone, the fallback for a boot whose kernel changed unpredicted."
 		default:
 			seal.Explain = "Slot 1, the fallback, is missing: seals a TOTP key to PCRs 0 and 7 alone into it, the code for a boot whose kernel changed unpredicted. Slot 0 stays as it is."
 		}
@@ -195,6 +194,9 @@ func (c *controller) keysSteps() []controlStep {
 		desc := "sealed to " + s.PCRs
 		if s.Fallback {
 			desc = "the fallback, " + desc
+		}
+		if s.TOTP {
+			desc += ", a TOTP code"
 		}
 		if s.Phones > 0 {
 			desc += ", " + phonesText(s.Phones)
