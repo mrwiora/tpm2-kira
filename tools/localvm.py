@@ -27,6 +27,9 @@ its ssh (22) and tpm2-kira's boot SSH server (2222) are forwarded to on
 reset is what tools/vmtest.py's `reset` runs: the machine back to its
 snapshot and cold-booted, its disk unlocked at the serial console (the
 passphrase from the config's password file), ssh answering.
+
+tools/LOCALVM.md: what the host needs, how an export became a machine
+here (the serial console), and the pitfalls.
 """
 
 import argparse

@@ -44,6 +44,11 @@ writes a report per machine with every session's transcript.
 
 - **docker**, and the tpm2-kira-vault source beside this repository
   (`../tpm2-kira-vault`): the run starts the vault itself (below).
+- **The machines on this host instead:** `tools/localvm.py` runs both with
+  qemu, swtpm and OVMF, with no hypervisor and no root, and resets them to
+  their snapshot. See `tools/LOCALVM.md` for setting them up from an
+  export, the serial console, and the pitfalls. `tools/serialtest.py`
+  tests the recipes at their console.
 - **`tools/vmtest.conf`** - copy `tools/vmtest.conf.example` (it is not in
   git):
 
