@@ -22,6 +22,11 @@ machine would:
             the disk; cap locked the slot all the same. A second boot: a
             wrong password, then the system's own prompt and the LUKS
             passphrase (the fallback)
+  lostrecord  the TPM salt's slot, its record (the EFI variable KIRAslot0)
+            removed by hand: status names the slot incomplete and why; at
+            boot the TPM opens no salt, the prompt says so, Ctrl-C gives
+            the system's prompt and the LUKS passphrase opens the disk;
+            slot delete takes what is left
 
 The report and every serial transcript land in the run's directory
 (.local/runs/serialtest-<time>/<machine>/<case>/).
@@ -54,7 +59,7 @@ def load(name):
 vmtest = load("vmtest")
 localvm = load("localvm")
 Fail = vmtest.Fail
-CASES = ["totp", "hashpwd2", "tpmsalt"]
+CASES = ["totp", "hashpwd2", "tpmsalt", "lostrecord"]
 WRONG = "not-the-password"
 # The system's own prompt after tpm2-kira's key opened nothing: systemd's
 # agent (Arch) or cryptsetup's askpass (Debian).
@@ -247,6 +252,39 @@ class Case:
             self.check("fallback: after a wrong password the system's prompt takes the LUKS passphrase", False, str(e))
         self.save_console(mark, "fallback")
         self.up("fallback")
+
+    def lostrecord(self):
+        rc, out = self.m.run("tpm2-kira setup --local 2>&1", save="setup.log")
+        self.check("setup --local", "Setup Complete" in out, out[-400:])
+        rc, out = self.m.run("tpm2-kira slot add --nvram 0 2>&1", save="slot-add.log")
+        if not self.enrol("--salt tpm", "luks-enrol-tpm-salt",
+                          [(r"Password \(typed at the machine at every boot\): ?$", vmtest.TPM_SALT_PASSWORD),
+                           (r"The same password again: ?$", vmtest.TPM_SALT_PASSWORD), (r"to authorise: ?$", self.lv.passphrase)],
+                          r"keyslot (\d+) added: tpm2-kira, 0x1200 "):
+            return
+        if not self.route():
+            return
+        self.rebuild(r"TPM salt:\s+in")
+        var = "/sys/firmware/efi/efivars/KIRAslot0-67f474ef-94a1-4412-88df-d62349d430a9"
+        rc, out = self.m.run(f"chattr -i {var}; rm {var} && echo removed")
+        self.check("the record removed by hand (the EFI variable KIRAslot0)", "removed" in out, out[-300:])
+        rc, out = self.m.run("tpm2-kira status 2>&1", save="status-lost.log")
+        self.check("status: slot 0 is incomplete, its record gone", "slot 0 is incomplete" in out and "KIRAslot0) is gone" in out, out[-800:])
+        mark = self.reboot()
+        try:
+            _, text = self.expect(r"Password for disk \S+: ?$", mark, 300)
+            self.check("the TPM opened no salt, and the prompt says so", "no salt that this TPM opened" in text, text[-600:])
+            self.lv.send("\x03")
+            self.expect(SYSTEM_PROMPT, mark, 300)
+            self.lv.send(self.lv.passphrase + "\r")
+            self.check("Ctrl-C: the system's prompt takes the LUKS passphrase", True)
+        except Fail as e:
+            self.check("Ctrl-C: the system's prompt takes the LUKS passphrase", False, str(e))
+        self.save_console(mark, "lostrecord")
+        if not self.up("lostrecord"):
+            return
+        rc, out = self.m.run("tpm2-kira slot delete --nvram 0 2>&1; tpm2-kira status 2>&1", save="slot-delete.log")
+        self.check("slot delete takes what is left; status names no incomplete slot", "incomplete" not in out.split("Successfully deleted")[-1], out[-800:])
 
     def run(self):
         try:

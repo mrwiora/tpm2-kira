@@ -473,7 +473,7 @@ class Machine:
             "status": ("tpm2-kira status 2>&1", r"slot 0 .*signed by this machine's key"),
             "slot info": ("tpm2-kira slot info --nvram 1 2>&1", r"Signature: valid"),
             "slot list": ("tpm2-kira slot list 2>&1", r"slot #0"),
-            "slot status": ("tpm2-kira slot status --nvram 0 2>&1", r"Index: 0x01803010"),
+            "slot status": ("tpm2-kira slot status --nvram 0 2>&1", r"Slot 0 \(0x01803010\)\n  Record: EFI variable KIRAslot0-"),
             "phone ekcert": ("tpm2-kira phone ekcert 2>&1", r"EK certificate:"),
             "luks status": ("tpm2-kira luks status 2>&1", re.escape(self.luks_dev)),
             "initramfs plan": ("tpm2-kira initramfs plan 2>&1", r"in\s+TOTP codes"),
@@ -984,7 +984,7 @@ class Machine:
         self.check("slot approve raises the generation", "Successfully approved the boot state" in out, out[-400:])
         rc, out = self.run("tpm2-kira slot add --totp --nvram 2 --pcrs 0,7 2>&1 | grep -v '^Secret'", save="slot-add-2.log")
         rc, info = self.run("tpm2-kira slot info --nvram 2 2>&1")
-        self.check("slot add --nvram 2", "0x01803012" in info, info[-300:])
+        self.check("slot add --nvram 2: its record is KIRAslot2", "EFI variable: KIRAslot2-" in info, info[-300:])
         rc, out = self.run("tpm2-kira slot delete --nvram 2 2>&1", save="slot-delete.log")
         self.check("slot delete --nvram 2", "Successfully deleted" in out, out[-400:])
         rc, out = self.run("tpm2-kira slot list 2>&1", save="slot-list-after-delete.log")
