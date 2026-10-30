@@ -67,7 +67,7 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 var AppVersion = "unknown"
 
 // CurrentBlobVersion is the only supported blob format version.
-const CurrentBlobVersion = 15
+const CurrentBlobVersion = 16
 
 // MaxBlobSignatureLen is the maximum allowed signature size in bytes.
 // Generous: RSA-4096 PKCS#1 v1.5 = 512 bytes, ECDSA P-384 DER ≈ 104 bytes.
@@ -149,8 +149,8 @@ type SealedBlob struct {
 	BlobSignature []byte            `json:"blob_signature,omitempty"` // Signature over [version ‖ payloadLen ‖ payload bytes]
 }
 
-// HasTOTPKey reports whether the slot holds a TOTP key: it does exactly
-// when no phone is enrolled for it.
+// HasTOTPKey reports whether the slot holds a TOTP key: TOTP is a method
+// of its own, in a slot only when selected.
 func (sb *SealedBlob) HasTOTPKey() bool { return len(sb.Payload.Public) > 0 }
 
 // PhoneAttested reports whether phones are enrolled for the slot, which
@@ -161,14 +161,12 @@ func (p *SealedBlobPayload) phoneAttested() bool {
 	return p.Attestation != nil && len(p.Attestation.Phone.Verifiers) > 0
 }
 
-// checkTOTPOrPhones holds a payload to the rule: a TOTP key or phones.
-func (p *SealedBlobPayload) checkTOTPOrPhones() error {
+// checkTOTP holds a payload's TOTP key to being whole or absent. A slot
+// without one is valid: with its other methods, or with none - the boot
+// state sealed for the machine-id and the boot key alone.
+func (p *SealedBlobPayload) checkTOTP() error {
 	hasKey := len(p.Public) > 0 || len(p.Private) > 0
 	switch {
-	case hasKey && p.phoneAttested():
-		return fmt.Errorf("a slot with phones holds no TOTP key")
-	case !hasKey && !p.phoneAttested():
-		return fmt.Errorf("a slot without phones needs its TOTP key")
 	case hasKey && (len(p.Public) == 0 || len(p.Private) == 0 || p.TOTPAlgorithm == 0):
 		return fmt.Errorf("the TOTP key is incomplete")
 	case !hasKey && p.TOTPAlgorithm != 0:
@@ -341,7 +339,7 @@ func hasEventlogPCRsInPayload(p *SealedBlobPayload) bool {
 //	[measurePointApplied:1]
 //	[hasAttestation:1][attestationLen:4][attestation]
 func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
-	if err := p.checkTOTPOrPhones(); err != nil {
+	if err := p.checkTOTP(); err != nil {
 		return nil, err
 	}
 	size := 4 + len(p.Public) + // public blob
@@ -635,7 +633,7 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 		return nil, fmt.Errorf("invalid attestation flag %d", hasAttestation)
 	}
 
-	if err := p.checkTOTPOrPhones(); err != nil {
+	if err := p.checkTOTP(); err != nil {
 		return nil, err
 	}
 	return p, nil

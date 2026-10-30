@@ -293,7 +293,7 @@ func TestVaultPepper(t *testing.T) {
 	}
 	defer tpmDev.Close()
 	vs := vaultkey.Slots(tpmDev, false)[0]
-	if len(vs.Att.Vault.PepperCheck) != 32 {
+	if len(vs.Att.Vault.PepperCheck) != nvslot.PepperCheckSize {
 		t.Fatal("no pepper check in the blob")
 	}
 

@@ -13,7 +13,7 @@ import (
 // The format reference in docs/SECURITY-BACKGROUND.md §10 states numbers
 // that are constants here. A change to one without the other fails this.
 func TestBlobFormatReferenceMatchesTheCode(t *testing.T) {
-	data, err := os.ReadFile("../docs/SECURITY-BACKGROUND.md")
+	data, err := os.ReadFile("../../docs/SECURITY-BACKGROUND.md")
 	if err != nil {
 		t.Skipf("no documentation next to the sources: %v", err)
 	}
@@ -27,6 +27,8 @@ func TestBlobFormatReferenceMatchesTheCode(t *testing.T) {
 		"the number of phones":       fmt.Sprintf("Phone count         uint8       ≤ %d", nvslot.MaxVerifiers),
 		"the PCR selection limit":    fmt.Sprintf("PCRSelection length   uint16      ≤ %d", attest.MaxPCRIndex),
 		"the device id size":         fmt.Sprintf("DeviceID              [%d]byte", attest.DeviceIDSize),
+		"the vault's pin":            "Pin                 [32]byte",
+		"the pepper check's size":    fmt.Sprintf("PepperCheck         uint16 + []byte   0 or %d", nvslot.PepperCheckSize),
 		"the slot's blob index":      fmt.Sprintf("`0x%08X`", nvslot.NVRAMSlotStart),
 		"the generation index":       fmt.Sprintf("`0x%08X` for slot", nvslot.GenerationIndex(nvslot.NVRAMSlotStart)),
 		"the record counter index":   fmt.Sprintf("`0x%08X` + *n*: an", nvslot.AttestCounterIndex(nvslot.NVRAMSlotStart)),

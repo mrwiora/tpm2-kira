@@ -49,8 +49,11 @@ TPM after enrolment.
 ### 3.1 TPM NVRAM (the "blob")
 
 Each slot's NV index (default `0x01803010`; slot *n* is `0x01803010` + *n*)
-stores one serialised `SealedBlob` (format version 15, §10). It holds the
-slot's TOTP key or its phones, never both (*TOTP key or phones*, below).
+stores one serialised `SealedBlob` (format version 16, §10). Its TOTP key
+is optional: the format holds a slot with a TOTP key, with phones, with
+both or with no method at all (the boot state sealed, for the machine-id
+and the boot key); which recipe needs which method is not the format's to
+say. Today phones still retire the TOTP key (*TOTP key or phones*, below).
 Phone attestation is an optional part of the same blob,
 and within that part the way a verifier reaches the machine is a typed
 *method*: phones over Bluetooth LE, and tpm2-kira-vault over HTTPS
@@ -59,8 +62,8 @@ and within that part the way a verifier reaches the machine is a typed
 | Field               | Content                                                         | Sensitive? |
 |---------------------|-----------------------------------------------------------------|------------|
 | `Version`           | Blob format version (14)                                        | No         |
-| `Public`            | TPMT_PUBLIC of the TOTP key object; empty while phones are enrolled | No     |
-| `Private`           | TPM2B_PRIVATE of the TOTP key object (TPM-wrapped); empty with phones | **Yes**¹ |
+| `Public`            | TPMT_PUBLIC of the TOTP key object; empty without TOTP | No     |
+| `Private`           | TPM2B_PRIVATE of the TOTP key object (TPM-wrapped); empty without TOTP | **Yes**¹ |
 | `PCRDigests`        | Per-PCR index, source (register/eventlog/uki) and digest        | No         |
 | `TOTPAlgorithm`     | HMAC hash of the key: SHA-1, or SHA-256 on a TPM without SHA-1; 0 with phones | No |
 | `Generation`        | The generation the approval requires                            | No         |
@@ -107,7 +110,7 @@ Method 2, tpm2-kira-vault (`Vault`, VAULT.md), created by `vault enrol`:
 | `Label`         | The vault keyslot's label in the key's derivation                    | No         |
 | `Local`         | The local part L, the unattended recipes' password, wrapped (TPM2_MakeCredential) for this TPM's EK and the slot's release key: it opens only through the release key's policy; empty with a typed password | No⁶ |
 | `Pepper`        | The salt is made with an operator's pepper                            | No⁶ |
-| `PepperCheck`   | An unattended recipe with a pepper: an HMAC of the key (behind Argon2id), to tell a mistyped pepper from the right one at boot; empty otherwise | No⁶ |
+| `PepperCheck`   | An unattended recipe with a pepper: 16 bytes of an HMAC of the key (behind Argon2id), to tell a mistyped pepper from the right one at boot; empty otherwise | No⁶ |
 
 ⁶ The wrapped part opens only on this TPM, in a boot state the signing key
 approved, before `cap`; and it is half of the key, the vault keeps the other.
@@ -1071,7 +1074,7 @@ on such a system. Supporting owner auth is outside the current design.
 
 ---
 
-## 10. Blob Format (Version 15)
+## 10. Blob Format (Version 16)
 
 The blob is a binary-serialised structure with explicit length prefixes and
 maximum size limits to prevent memory exhaustion during deserialisation.
@@ -1080,7 +1083,8 @@ One blob per slot, in three levels:
 
 ```
 blob
-├── TOTP part                  always: the key object, its policy and metadata
+├── slot part                  always: the sealed boot state, its approval;
+│                              the TOTP key object when TOTP is selected
 └── attestation part           optional: the machine as an attester
     ├── identity, attestation key, quoted PCRs, count
     └── methods                typed blocks; who may ask for a quote, and how
@@ -1109,7 +1113,7 @@ every local user in `/proc/<pid>/cmdline`.
 ```
 Offset  Field                   Type        Notes
 ─────────────────────────────────────────────────────────────
-0       Version                 uint32      Must be 14
+0       Version                 uint32      Must be 16
 4       Payload length          uint32      Signed region length
 8       Public length           uint32      ≤ 2MB; 0 with phones (§3.1)
 ?       Public                  []byte      TPMT_PUBLIC of the TOTP key object
@@ -1181,15 +1185,16 @@ Offset  Field                   Type        Notes
           Method type 2, tpm2-kira-vault over HTTPS:
             URL length          uint16      ≤ 512
             URL                 string      https://host:port
-            Pin length          uint16      ≤ 128
-            Pin                 string      sha256: and the hex of the vault's TLS root's SPKI digest
+            Pin                 [32]byte    SHA-256 of the vault's TLS root's SPKI (tokens and the
+                                            command line write it as sha256: and its hex)
             Label length        uint16      ≤ 64
             Label               string      The key's label
             Local credential    uint32 + []byte   ≤ 1024: TPM2B_ID_OBJECT, the local part L (the
                                                   unattended recipes' password); empty with a typed password
             Local secret        uint32 + []byte   ≤ 1024: TPM2B_ENCRYPTED_SECRET
             Pepper              uint8       1: the salt is made with an operator's pepper
-            PepperCheck         uint16 + []byte   0 or 32: HMAC-SHA256(key, "tpm2-kira/vault/pepper-check/v1")
+            PepperCheck         uint16 + []byte   0 or 16: HMAC-SHA256(key, "tpm2-kira/vault/pepper-check/v1"),
+                                            its first 16 bytes
                                             for an unattended recipe with a pepper
 ─────────────────────── end of signed region ───────────────────────
 ?       Signature length        uint16      ≤ 1024, must be non-zero

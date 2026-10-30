@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -96,17 +97,59 @@ func TestVaultMethodInTheBlob(t *testing.T) {
 		t.Fatalf("json %s", js)
 	}
 
-	// With a pepper the check comes along; a check of another size does
-	// not parse.
+	// The pin is kept as its 32 bytes: the text's case does not matter,
+	// a pin that is not one is not written.
+	upper := *a
+	upper.Vault.Pin = "sha256:" + strings.Repeat("AB", 32)
+	if raw2, err := upper.Marshal(); err != nil || len(raw2) != len(raw) {
+		t.Fatalf("an upper-case pin: %d bytes, %v", len(raw2), err)
+	} else if b, err := nvslot.UnmarshalAttestation(raw2); err != nil || b.Vault.Pin != a.Vault.Pin {
+		t.Fatalf("an upper-case pin read back as %q, %v", b.Vault.Pin, err)
+	}
+	if bytes.Contains(raw, []byte("sha256:")) {
+		t.Fatal("the pin is kept as text")
+	}
+	for _, pin := range []string{"", "sha256:" + strings.Repeat("ab", 31), "sha256:" + strings.Repeat("zz", 32), "sha1:" + strings.Repeat("ab", 32), strings.Repeat("ab", 32)} {
+		bad := *a
+		bad.Vault.Pin = pin
+		if _, err := bad.Marshal(); err == nil {
+			t.Errorf("the pin %q was written", pin)
+		}
+	}
+
+	// With a pepper the check comes along, 16 bytes; a check of another
+	// size is neither written nor read.
 	a.Vault.Pepper, a.Vault.PepperCheck = true, vaultkey.PepperCheck([]byte("key"))
 	raw, _ = a.Marshal()
 	if b, err = nvslot.UnmarshalAttestation(raw); err != nil || !bytes.Equal(b.Vault.PepperCheck, a.Vault.PepperCheck) {
 		t.Fatalf("pepper check: %v", err)
 	}
+	if len(a.Vault.PepperCheck) != nvslot.PepperCheckSize {
+		t.Fatalf("the pepper check is %d bytes", len(a.Vault.PepperCheck))
+	}
+	good := len(raw)
 	a.Vault.PepperCheck = []byte{1, 2, 3}
-	raw, _ = a.Marshal()
-	if _, err := nvslot.UnmarshalAttestation(raw); err == nil {
-		t.Fatal("a 3-byte pepper check parsed")
+	if _, err := a.Marshal(); err == nil {
+		t.Fatal("a 3-byte pepper check was written")
+	}
+	// Read: the check cut to 3 bytes, its prefix and the vault method's
+	// length (the last method: [type 2][len:4], its data to the end) told
+	// so - the record is whole but for the check's size.
+	short := append([]byte(nil), raw[:good-nvslot.PepperCheckSize-2]...)
+	short = append(short, 3, 0, 1, 2, 3)
+	header := -1
+	for i := len(raw) - 5; i >= 0; i-- {
+		if raw[i] == nvslot.AttestMethodVault && int(binary.LittleEndian.Uint32(raw[i+1:])) == good-(i+5) {
+			header = i
+			break
+		}
+	}
+	if header < 0 {
+		t.Fatal("the vault method's header not found")
+	}
+	binary.LittleEndian.PutUint32(short[header+1:], uint32(len(short)-(header+5)))
+	if _, err := nvslot.UnmarshalAttestation(short); err == nil || !strings.Contains(err.Error(), "pepper check") {
+		t.Fatalf("a 3-byte pepper check: %v", err)
 	}
 }
 
@@ -355,5 +398,20 @@ func TestAddRoot(t *testing.T) {
 	}
 	if c, err := vaultkey.NewClient(srv.URL, pin); err != nil || c == nil {
 		t.Fatalf("a client with the added root: %v", err)
+	}
+}
+
+// A pin is sha256: and the 64 hexadecimal characters of a digest; what is
+// not is refused where it is given, before any record is written.
+func TestCheckPin(t *testing.T) {
+	for _, pin := range []string{"sha256:" + strings.Repeat("ab", 32), "sha256:" + strings.Repeat("AB", 32)} {
+		if err := vaultkey.CheckPin(pin); err != nil {
+			t.Errorf("%q: %v", pin, err)
+		}
+	}
+	for _, pin := range []string{"", "sha256:", "sha256:" + strings.Repeat("zz", 32), "sha256:" + strings.Repeat("ab", 33), "sha512:" + strings.Repeat("ab", 32)} {
+		if vaultkey.CheckPin(pin) == nil {
+			t.Errorf("%q taken", pin)
+		}
 	}
 }

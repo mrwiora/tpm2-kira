@@ -4,6 +4,9 @@
   combiner's (the hashpwd2-compatible `Combine(password, salt)`, Argon2id);
   a keyslot only says where its password and its salt come from.
 - **B. The vault's TLS certificate** verified against a root certificate.
+- **C. The slot's record in an EFI variable, TOTP a method of its own:**
+  the TPM keeps only what its policies read; everything else of a slot
+  goes into `KIRAslotN`.
 
 Done before this plan: the operator's pepper travels wrapped for the
 machine's TPM (tpm2-kira `10b9066`, the vault `00d0482`); vmtest's pepper
@@ -387,3 +390,136 @@ accepts a self-signed certificate that is itself in `RootCAs`.
   SHA-256 bank; enrolment and status name it "legacy SHA-1 bank".
 - `internal/admin/cmd_test.go`: a comment that the SHA-1 there is a test's.
 - TOTP's HMAC-SHA1 stays (RFC 6238's default, what authenticator apps use).
+
+---
+
+## C. The slot's record in an EFI variable, TOTP a method of its own
+
+Status: **confirmed** (2026-10-30).
+
+### Goal
+
+The protected machine keeps in TPM NV only what a TPM policy reads or
+what nobody may turn back; the slot's record - everything else, public
+or wrapped by this TPM - goes into an EFI variable of its own, without
+the 2048-byte limit of an NV index. The TOTP key becomes a method like
+the phones, the vault and the TPM salt: in a slot only when selected.
+
+### Assessment
+
+What a slot holds in the TPM today, and what it needs to:
+
+| NV index | Holds | Must stay in the TPM |
+|---|---|---|
+| the slot's blob (0x0180_0000 + N) | the record: TOTP key, PCR values, approval, AK, release key, TPM salt, vault, phones, signatures | **no** - integrity is the signing key's signature, freshness the counter, nothing in it is secret in clear (private parts wrapped by this TPM, factors for its EK) |
+| the generation index (+0x800) | G of `PolicyNV(generation == G)`, read-locked at the initrd's end | yes - in the slot's policy |
+| the record counter | `Count`, the revision of the attestation part | yes - nobody turns it back |
+| the boot settings (0x01803000) | debug | stays: 8 bytes, written with the signing key alone |
+
+Measured (swtpm, ECC EK, P-256 signing key): TPM salt + unattended vault
+with a pepper = 1659 of 2048 bytes. An RSA-2048 EK adds 188 per factor
+wrapped for it (the VMs: 2065, refused), an RSA signing key ~570, RSA-4096
+~1150, each phone its verifier.
+
+What the EFI variable changes:
+
+- **Gained:** room (a few KB per slot), every method beside the others
+  with RSA EKs and RSA signing keys; no TPM NV write per approval.
+- **Root can replace or delete the variable** - a replaced one fails the
+  signature or the counter; a deleted one is a denial of service, the
+  fallbacks unlock (manual password and salt, the OS recovery key). Today
+  the blob's index is written with the signing key alone (PolicySigned);
+  its deletion took the owner's authorisation, empty on most machines.
+- **A TPM clear leaves the variable behind** (useless: its keys are of the
+  old storage key and EK): status and control report it and remove it.
+- **A firmware reset can remove it:** as a deletion above.
+- **Firmware variable stores are small, some buggy:** records stay small
+  (a cap, see step 2), written only when the slot changes.
+- **Readable by root** (efivarfs; the mode is checked on both distros) -
+  the NV index is readable by anyone with TPM access today.
+
+The TOTP key: the slot's policy (`PolicyAuthorize(signing key, PolicyRef)`
+over `PolicyPCR` and `PolicyNV(generation)`) does not depend on it; the AK,
+the boot key and the release key are made under it without one. The rule
+"a TOTP key or phones" is the history of the slot as a TOTP slot. What the
+code proves: to the person in front of the machine, before typing, that
+the boot is one the signing key approved - against a phished password.
+
+### Design
+
+- **Name:** `efi:KIRAslotN-67f474ef-94a1-4412-88df-d62349d430a9`
+  (N = 0..15), tpm2-kira's GUID as `KIRAmachineID`'s; aSSH's `persist`
+  reads and writes it (`ReadVar`, `WriteVar`, `RemoveVar`) - it stays
+  generic, every application names its variables with its own prefix and
+  GUID.
+- **The record** (blob version 16): the slot's PCR selection and values,
+  generation, PolicyRef, signing key, approval, `Count`, and its methods
+  as optional sections - TOTP (key, algorithm), phones (channel keys,
+  verifiers), vault (URL, pin, label, its part, pepper), TPM salt - with
+  the attestation keys (AK, release key) when a method needs them. Signed
+  as today. A slot with no method is valid: it seals the boot state, for
+  the machine-id and the boot key.
+- **The pin as 32 bytes** in the record (`sha256:` and hex stays the
+  text of tokens and the CLI); **PepperCheck 16 bytes**.
+- **The slot exists** when its generation index is defined; its record is
+  the variable. Status names a record without indices (left behind by a
+  TPM clear or a deleted slot) and indices without a record.
+- **TOTP is selected:** `slot add --totp` (and a step in control); the
+  code screen shows codes of the slots with TOTP; phones as today.
+  **Which recipe needs which method** (e.g. a typed password only behind
+  TOTP or phones): a later decision - until then the combinations are not
+  restricted, and a boot with nothing to confirm has no code screen: the
+  hold ends with what the device-held salts gave.
+
+### Steps
+
+1. [x] nvslot: the record (version 16, sections, the pin raw, PepperCheck
+   16), Marshal/Unmarshal, the signature over it; tests. The format was
+   already in sections (the attestation part, its typed methods); version
+   16 drops the "TOTP key or phones" rule from it (a TOTP key is whole or
+   absent; no method, TOTP beside phones: valid data), keeps the vault's
+   pin as its 32 bytes (`sha256:` and hex stays the text outside;
+   `CheckPin` now refuses what is not hex) and the pepper check at 16
+   bytes. What seals and enrols is unchanged until step 4. The format
+   reference test read a path that does not exist and skipped: it runs
+   now, with the pin and the pepper check.
+2. [ ] nvslot: storage in `KIRAslotN` (persist), a cap of 8 KiB per
+   record; read, write, remove; the slot = its generation index; the
+   counter as today; tests with a test efivarfs directory
+   (`persist.VarDir`).
+3. [ ] The users of the blob: seal, reseal, approve, the phone and vault
+   enrolments, the TPM salt, unenrol, slot delete (record and indices
+   together), backup and restore (`nvram_restore`), info and status;
+   `blobFull` and the NV size checks go.
+4. [ ] TOTP optional: `slot add --totp`, control, the code screen and
+   `tpm2-kira-boot` only for slots with TOTP; the "TOTP or phones" rule
+   goes; status and slot list name each slot's methods.
+5. [ ] The boot: efivarfs mounted before tpm2-kira-boot on Arch and Debian
+   (Debian's init-premount does it for the machine-id: checked for the
+   order); the image plan needs no new part.
+6. [ ] Status and control: a record left behind (TPM cleared, slot gone),
+   indices without a record; removal offered.
+7. [ ] Docs: DISK-KEY.md, SECURITY-BACKGROUND.md (the record, where, the
+   threats above), ARCHITECTURE.md, README, the help.
+8. [ ] Tests: unit and swtpm (`make test-all`), the vault's and Marify's
+   (the core is not changed unless step 1 touches `vaultproto`'s pin),
+   vmtest: a slot without TOTP, one with TOTP only, the vault with a pepper
+   beside a TPM salt on the VMs' RSA EK (refused today), a record removed
+   by hand (the fallback), a slot deleted (the variable gone).
+
+### What breaks
+
+Every existing slot: its blob is in NV in format 15, not read any more -
+`slot delete` and `slot add` again (developer mode, no migration). The
+keyslots made with it (TPM salt, vault) are enrolled again; the recovery
+keyslot and the OS recovery passphrase are not touched.
+
+### Decided
+
+- An EFI variable, named `KIRA` + its use: `KIRAslotN`.
+- Which recipe needs which method: later.
+- `persist` stays generic; each application its prefix and GUID.
+
+- The boot settings (debug, 8 bytes) stay in NV, written with the
+  signing key alone.
+

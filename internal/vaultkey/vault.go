@@ -125,7 +125,7 @@ func CheckURL(rawURL string) (*url.URL, error) {
 
 // CheckPin says whether pin is a vault's pin.
 func CheckPin(pin string) error {
-	if !strings.HasPrefix(pin, "sha256:") || len(pin) != 7+64 {
+	if d, err := hex.DecodeString(strings.TrimPrefix(pin, "sha256:")); !strings.HasPrefix(pin, "sha256:") || err != nil || len(d) != sha256.Size {
 		return fmt.Errorf("the vault's pin must be sha256: and 64 hexadecimal characters, as 'tpm2-kira-vault token create' prints it")
 	}
 	return nil
@@ -520,14 +520,15 @@ func fetchRemoteRetrying(ctx context.Context, tpmDev transport.TPM, vs vaultSlot
 	}
 }
 
-// vaultPepperCheck is what the slot keeps to recognise the key made with
-// the right pepper: HMAC-SHA256(key, "tpm2-kira/vault/pepper-check/v1").
+// PepperCheck is what the slot keeps to recognise the key made with the
+// right pepper: HMAC-SHA256(key, "tpm2-kira/vault/pepper-check/v1"),
+// its first 16 bytes - enough to tell a mistyped pepper, and less to go on.
 // It is no help in guessing the pepper without L and R, which only the
 // TPM opens.
 func PepperCheck(key []byte) []byte {
 	m := hmac.New(sha256.New, key)
 	m.Write([]byte("tpm2-kira/vault/pepper-check/v1"))
-	return m.Sum(nil)
+	return m.Sum(nil)[:nvslot.PepperCheckSize]
 }
 
 // retryableVaultError: the vault was not reached (no route, no address

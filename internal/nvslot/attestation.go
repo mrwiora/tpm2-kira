@@ -2,9 +2,11 @@ package nvslot
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/mrwiora/tpm2-kira/core/attest"
@@ -240,7 +242,11 @@ func (b *Attestation) Marshal() ([]byte, error) {
 		methods = append(methods, [2][]byte{{AttestMethodPhone}, data})
 	}
 	if b.Vault.Enabled() {
-		methods = append(methods, [2][]byte{{AttestMethodVault}, b.Vault.marshal()})
+		data, err := b.Vault.marshal()
+		if err != nil {
+			return nil, err
+		}
+		methods = append(methods, [2][]byte{{AttestMethodVault}, data})
 	}
 	w.u8(uint8(len(methods)))
 	for _, m := range methods {
@@ -273,10 +279,17 @@ func (p *PhoneAttestation) Marshal() ([]byte, error) {
 	return w.b.Bytes(), nil
 }
 
-func (v *VaultAttestation) marshal() []byte {
+func (v *VaultAttestation) marshal() ([]byte, error) {
+	pin, err := pinDigest(v.Pin)
+	if err != nil {
+		return nil, err
+	}
+	if len(v.PepperCheck) != 0 && len(v.PepperCheck) != PepperCheckSize {
+		return nil, fmt.Errorf("the vault method's pepper check is %d bytes, not %d", len(v.PepperCheck), PepperCheckSize)
+	}
 	w := &blobWriter{}
 	w.lp16([]byte(v.URL))
-	w.lp16([]byte(v.Pin))
+	w.raw(pin)
 	w.lp16([]byte(v.Label))
 	w.lp32(v.Local.Credential)
 	w.lp32(v.Local.EncryptedSecret)
@@ -286,18 +299,38 @@ func (v *VaultAttestation) marshal() []byte {
 		w.u8(0)
 	}
 	w.lp16(v.PepperCheck)
-	return w.b.Bytes()
+	return w.b.Bytes(), nil
+}
+
+// PepperCheckSize is the size of a vault method's pepper check
+// (vaultkey.PepperCheck): it tells a mistyped pepper from the right one.
+const PepperCheckSize = 16
+
+// pinPrefix is the text of a vault's pin before its digest, as tokens and
+// the command line write it; the record keeps the 32 bytes alone.
+const pinPrefix = "sha256:"
+
+// pinDigest is the SHA-256 digest a pin names ("sha256:" and 64
+// hexadecimal characters, of either case).
+func pinDigest(pin string) ([]byte, error) {
+	d, err := hex.DecodeString(strings.TrimPrefix(pin, pinPrefix))
+	if !strings.HasPrefix(pin, pinPrefix) || err != nil || len(d) != sha256.Size {
+		return nil, fmt.Errorf("the vault's pin must be %s and 64 hexadecimal characters", pinPrefix)
+	}
+	return d, nil
 }
 
 func (v *VaultAttestation) unmarshal(data []byte) error {
 	r := &blobReader{b: data}
 	v.URL = string(r.lp16(512))
-	v.Pin = string(r.lp16(128))
+	if pin := r.take(sha256.Size); pin != nil {
+		v.Pin = pinPrefix + hex.EncodeToString(pin)
+	}
 	v.Label = string(r.lp16(64))
 	v.Local.Credential = r.lp32(1024)
 	v.Local.EncryptedSecret = r.lp32(1024)
 	v.Pepper = r.u8() == 1
-	v.PepperCheck = r.lp16(32)
+	v.PepperCheck = r.lp16(PepperCheckSize)
 	if r.err != nil {
 		return r.err
 	}
@@ -307,7 +340,7 @@ func (v *VaultAttestation) unmarshal(data []byte) error {
 	if v.URL == "" || v.Pin == "" || (len(v.Local.Credential) == 0) != (len(v.Local.EncryptedSecret) == 0) {
 		return fmt.Errorf("the vault method is incomplete")
 	}
-	if len(v.PepperCheck) != 0 && (len(v.PepperCheck) != 32 || !v.Pepper || !v.Unattended()) {
+	if len(v.PepperCheck) != 0 && (len(v.PepperCheck) != PepperCheckSize || !v.Pepper || !v.Unattended()) {
 		return fmt.Errorf("the vault method's pepper check is %d bytes, or not for an unattended recipe with a pepper", len(v.PepperCheck))
 	}
 	return nil

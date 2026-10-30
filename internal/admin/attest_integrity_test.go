@@ -122,7 +122,7 @@ func newKey(t *testing.T) *ecdsa.PrivateKey {
 	return k
 }
 
-// One blob per slot, one format: the TOTP key, then the optional
+// One blob per slot, one format: the optional TOTP key, then the optional
 // attestation part with its typed methods.
 func TestSlotBlobLayout(t *testing.T) {
 	key := newKey(t)
@@ -165,11 +165,34 @@ func TestSlotBlobLayout(t *testing.T) {
 		string(got.Payload.PolicyRef) != "policy-ref" {
 		t.Fatalf("TOTP part changed: %+v", got.Payload)
 	}
-	// Removing the phones without bringing a TOTP key back leaves a slot
-	// that checks nothing: it does not marshal.
+	// TOTP is a method of its own: a slot without it and without any
+	// other is valid - the boot state sealed, for the machine-id and the
+	// boot key alone.
 	got.Payload.Attestation = nil
-	if _, err := got.Marshal(); err == nil {
-		t.Fatal("a slot with neither a TOTP key nor phones was written")
+	bootOnly, err := nvslot.UnmarshalSealedBlob(signSlot(t, got, key))
+	if err != nil || bootOnly.HasTOTPKey() || bootOnly.Payload.Attestation != nil || bootOnly.Payload.TOTPAlgorithm != 0 {
+		t.Fatalf("a slot with no method: %+v %v", bootOnly, err)
+	}
+	// ... and phones beside a TOTP key as well: which recipe needs which
+	// method is not the format's to say.
+	both := testSlotBlob()
+	withPhones(both, testEnrolment("box"))
+	both.Payload.Public, both.Payload.Private, both.Payload.TOTPAlgorithm = []byte{1, 2, 3}, []byte{4, 5}, tpm2.TPMAlgSHA1
+	if got, err := nvslot.UnmarshalSealedBlob(signSlot(t, both, key)); err != nil || !got.HasTOTPKey() || !got.PhoneAttested() {
+		t.Fatalf("TOTP beside phones: %v", err)
+	}
+	// A TOTP key is whole or absent.
+	for what, change := range map[string]func(p *nvslot.SealedBlobPayload){
+		"no private part":   func(p *nvslot.SealedBlobPayload) { p.Private = nil },
+		"no public part":    func(p *nvslot.SealedBlobPayload) { p.Public = nil },
+		"no algorithm":      func(p *nvslot.SealedBlobPayload) { p.TOTPAlgorithm = 0 },
+		"an algorithm only": func(p *nvslot.SealedBlobPayload) { p.Public, p.Private = nil, nil },
+	} {
+		half := testSlotBlob()
+		change(&half.Payload)
+		if _, err := half.Marshal(); err == nil {
+			t.Errorf("%s: written", what)
+		}
 	}
 
 	// An attestation part without any method is valid data, and nobody is
