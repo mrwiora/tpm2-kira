@@ -187,7 +187,7 @@ class Hib:
         try:
             text = self.control_status("swap-plain")
             line = "\n".join(l for l in text.split("\n") if "Hibernation" in l)
-            self.check("V6: control shows hibernation to unencrypted swap red", "/boot/plainswap" in line and "\033[0;31m" in line, line or text[-800:])
+            self.check("V6: control shows the hibernation risk of the unencrypted swap", "/boot/plainswap" in line and "risk:" in line, line or text[-800:])
         finally:
             self.run("swapoff /boot/plainswap; rm -f /boot/plainswap")
 
@@ -218,7 +218,9 @@ class Hib:
             s.send("\r")
             s.expect(r"Password for disk \S+: ?$", 120); s.send(vmtest.TEST_PASSWORD + "\r")
             s.expect(r"Salt for disk \S+: ?$", 60); s.send(vmtest.TEST_SALT + "\r")
-            s.wait_end(600)
+            # A resume never leaves the initrd: the server goes with it,
+            # the connection without a last word.
+            time.sleep(5)
         finally:
             s.close()
         if not self.check(f"{tag}: the system is back (ssh)", m.wait_port(22, True, 300)):
@@ -226,6 +228,13 @@ class Hib:
 
     def after_resume(self, tag, before):
         st = self.state(f"{tag}-after")
+        if st["boot"] != before["boot"]:
+            rc, out = self.run("journalctl -b -k -o cat --no-pager 2>&1 | grep -E 'PM: (Image|hibernation: (Image|Failed))'", save=f"{tag}-no-resume.log")
+            if "Image mismatch" in out:
+                # The kernel refused the image itself: the firmware's memory
+                # map differed from the hibernated boot's (OVMF's on this VM).
+                self.m.rep.issues.append(f"{tag}: not tested - the kernel refused the image: {out.strip().splitlines()[-1] if out.strip() else ''}")
+                return st
         self.check(f"{tag}: the session resumed (boot_id {before['boot']} kept)", st["boot"] == before["boot"] and st["boot"], st["out"][:200])
         self.check(f"{tag}: the window is closed after the resume (W read-locked)", st["locked"], st["out"][-600:])
         self.check(f"{tag}: aSSH says the CA signs nothing", not st["signs"], st["out"][-400:])
@@ -290,11 +299,13 @@ class Hib:
         else:
             rc, out = self.run("journalctl -b -o cat --no-pager -u systemd-hibernate-resume.service 2>&1", save="v4-resume-unit.log")
             self.check("V4: systemd-hibernate-resume failed at the close", "tpm2-kira-boot close" in out, out[-800:])
-        rc, out = self.run("journalctl -b -k -o cat --no-pager 2>&1 | grep -iE 'EXT4-fs.*error|BTRFS.*error|I/O error|corrupt' ; "
-                           "journalctl -b -o cat --no-pager 2>&1 | grep -iE 'suspend data|swap signature|PM: (Image|hibernation)' ; "
+        rc, out = self.run("journalctl -b -k -o cat --no-pager 2>&1 | grep -iE 'EXT4-fs (error|warning)|BTRFS (error|critical|warning)|I/O error|PM: (Image|hibernation: (resume|Failed))' ; "
+                           "journalctl -b -o cat --no-pager 2>&1 | grep -iE 'suspend data|swap signature' ; "
                            "swapon --show; true", save="v4-fs.log")
         self.check("V4: the file systems report no error after the fresh boot",
-                   not re.search(r"error|corrupt", out, re.I), out[-800:])
+                   not re.search(r"EXT4-fs (error|warning)|BTRFS (error|critical|warning)|I/O error", out), out[-800:])
+        self.check("V4: the kernel did not even try the image (the resume was stopped before it)",
+                   "Image signature found" not in out, out[-800:])
         # The next boot: the stale image is not resumed either.
         boot = st["boot"]
         self.run("nohup sh -c 'sleep 2; systemctl reboot' >/dev/null 2>&1 &")

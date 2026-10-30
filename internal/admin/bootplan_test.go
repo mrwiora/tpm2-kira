@@ -355,7 +355,7 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 	if b, err := os.ReadFile("../../initramfs/initramfs-tools/scripts/local-top/tpm2-kira-close"); err != nil {
 		t.Error(err)
 	} else if got := string(b); !strings.Contains(got, `PREREQ="cryptroot"`) || !strings.Contains(got, "[ -d /etc/tpm2-kira/plan/ssh ] || exit 0") ||
-		!strings.Contains(got, "if ! /usr/bin/tpm2-kira-boot close") || !strings.Contains(got, "noresume=y") {
+		!strings.Contains(got, "if ! /usr/bin/tpm2-kira-boot close") || !strings.Contains(got, `echo "resume=" >>/conf/param.conf`) {
 		t.Errorf("the local-top script:\n%s", got)
 	}
 	if got := readImage(t, root, sshscreen.DefaultConf); !strings.Contains(got, "ASSH_LISTEN=:2222\n") {
