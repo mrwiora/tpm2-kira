@@ -91,7 +91,7 @@ class Hib:
         m.image()
         m.cycle(1)
         m.log.head("hibernation: tools and swap")
-        install = ("pacman -S --noconfirm --needed tpm2-tools" if self.distro == "arch" else
+        install = ("pacman -S --noconfirm --needed tpm2-tools btrfs-progs" if self.distro == "arch" else
                    "DEBIAN_FRONTEND=noninteractive apt-get install -y tpm2-tools")
         rc, out = self.run(install + " 2>&1", save="tpm2-tools.log")
         self.check("setup: tpm2-tools in the guest (the probe of W and the TPM's clock)", rc == 0, out[-300:])
