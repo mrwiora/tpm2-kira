@@ -1,7 +1,7 @@
 # PLAN: aSSH's window W alone, and closed before a resume from hibernation
 
 Branch `feat/assh-window-hibernate` (from `359c651`). Status: **confirmed** (2026-10-30: fail closed; V4 findings reported before any further step;
-swap set up in the guests). Steps 1-8 done, `make test-all` passes; VM tests running.
+swap set up in the guests). Steps 1-9 done: `make test-all`, the VM test and the hibernation test pass.
 
 ## Goal
 
@@ -50,7 +50,31 @@ flowchart LR
 - [x] 7. Docs: `docs/SSH.md` (the close, PCR 15, hibernation), `help.go`, HISTORY.md (PCR
        15 at the code screen), AGENTS.md (the fixed close before a resume).
 - [x] 8. Unit and swtpm tests (below), `make test-all`.
-- [ ] 9. VM tests on the local machines (below), Arch and Debian.
+- [x] 9. VM tests on the local machines (below), Arch and Debian: `tools/vmtest.py` ALL PASS
+       (Arch at c1c3506, Debian at 1e82272), `tools/hibernatetest.py` ALL PASS at 2ddbab0
+       (`.local/runs/hibernatetest-20261030-120610`).
+
+### Results (2026-10-30)
+
+| Case | Arch | Debian |
+|---|---|---|
+| V1 the close in the image, normal boot | pass | pass |
+| V2 resume through the code screen | pass | not tested: the kernel refused the image ("Image mismatch: architecture specific data"; OVMF's memory map moves between this VM's boots) |
+| V3 resume with run masked: the close alone | pass | - (no rd.systemd.mask) |
+| V4 the close fails: no resume, clean fresh boot, stale image never resumed | pass | pass (`swapon` rewrote the stale image's signature) |
+| V5 suspend to RAM | pass | pass |
+| V6 control's swap line | pass (encrypted: no line) | pass (a swap file on /boot: red) |
+| V7 a normal reboot afterwards | certified | certified |
+
+TPM: a resume from hibernation is a TPM Restart here (restartCount 0 -> 1, resetCount
+unchanged), as is suspend to RAM.
+
+Found and fixed on the way:
+- initramfs-tools orders a script by its installed file's PREREQ, not the image's copy:
+  the plan-written script ran before cryptroot and closed the window before the code
+  screen (the first Debian boot after the CA). Now a package file that reads the plan.
+- `noresume` in /conf/param.conf does not stop Debian's resume (init reads it once);
+  an empty `resume=` does. V4 now checks that the kernel does not even try the image.
 
 ## What is tested
 
