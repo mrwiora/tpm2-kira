@@ -53,19 +53,15 @@ func ValidateNVRAMIndex(index uint32) error {
 	return nil
 }
 
-// ValidateBlobIndex checks that a blob may be stored at index: inside the
-// application range, and below the generation indices (GenerationIndex).
+// ValidateBlobIndex checks that index names one of the 16 slots: the
+// slot's number is its record's (KIRAslotN), its index the base of its
+// generation index and record counter.
 func ValidateBlobIndex(index uint32) error {
 	if err := ValidateNVRAMIndex(index); err != nil {
 		return err
 	}
-	if g := GenerationIndex(index); g >= AttestCounterIndex(NVRAMSlotStart) && g <= AttestCounterIndex(NVRAMSlotEnd) {
-		return fmt.Errorf("NVRAM index 0x%08X cannot hold a blob: its generation index 0x%08X is the record counter of slot %d",
-			index, g, g-AttestCounterStart)
-	}
-	if index >= GenerationIndex(AppNVRAMStart) {
-		return fmt.Errorf("NVRAM index 0x%08X is reserved for generation indices; blobs go at 0x%08X-0x%08X",
-			index, AppNVRAMStart, GenerationIndex(AppNVRAMStart)-1)
+	if index < NVRAMSlotStart || index > NVRAMSlotEnd {
+		return fmt.Errorf("0x%08X is not a slot: slots are 0-%d (0x%08X-0x%08X)", index, MaxSlotNumber, NVRAMSlotStart, NVRAMSlotEnd)
 	}
 	return nil
 }
@@ -107,8 +103,11 @@ var NVRAMRecoveryDir = "/etc/tpm2-kira/recovery"
 // NVRAMRecoveryDir: it carries the sealed object's public and private areas,
 // which the TPM can still load, so the secret is not lost with the index.
 func WriteToNVRAM(tpmDev transport.TPM, index uint32, data []byte, pubKey crypto.PublicKey, privKey crypto.Signer) error {
-	if err := ValidateBlobIndex(index); err != nil {
+	if err := ValidateNVRAMIndex(index); err != nil {
 		return fmt.Errorf("invalid NVRAM index: %w", err)
+	}
+	if index >= GenerationIndex(AppNVRAMStart) {
+		return fmt.Errorf("invalid NVRAM index: 0x%08X is among the generation indices and record counters", index)
 	}
 
 	if len(data) == 0 {

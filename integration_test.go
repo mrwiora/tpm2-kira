@@ -34,7 +34,7 @@ import (
 const (
 	// Test configuration
 	testTPMPath    = "/tmp/tpm2-kira-test-tpm"
-	testNVRAMIndex = "0x01803099"
+	testNVRAMIndex = "0x0180301F"
 	testPCRs       = "0,2,4,7"
 )
 
@@ -436,10 +436,8 @@ func TestSealWithCustomPCRs(t *testing.T) {
 
 	for i, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// An index of its own per case, fixed: a blob index seal takes
-			// (cmd.ValidateBlobIndex refuses some below the generation
-			// indices, and a refusal exits 0).
-			nvramIndex := fmt.Sprintf("0x%08X", 0x01803100+i)
+			// A slot of its own per case (slots 3-6).
+			nvramIndex := fmt.Sprintf("0x%08X", 0x01803013+i)
 
 			stdout, stderr, err := runTPMKira(t, tpmPath,
 				"slot", "add",
@@ -552,7 +550,7 @@ func TestNVRAMDeleteNonExistent(t *testing.T) {
 	_, stderr, err := runTPMKira(t, tpmPath,
 		"slot",
 		"delete",
-		"--nvram", "0x01803999",
+		"--nvram", "0x0180301E",
 	)
 
 	// Check if command failed OR if error message indicates non-existent index
@@ -1030,8 +1028,8 @@ func TestCompleteWorkflow(t *testing.T) {
 	t.Log("✓ Startup TPM2 successful")
 
 	// Use unique NVRAM indices for each phase to avoid conflicts
-	nvramIndexBasic := "0x01803001"
-	nvramIndexReseal := "0x01803002"
+	nvramIndexBasic := "0x01803011"
+	nvramIndexReseal := "0x01803012"
 
 	// ===================================================================
 	t.Log("\n=== TEST BASIC SEAL/REVEAL ===")
@@ -1086,7 +1084,7 @@ func TestCompleteWorkflow(t *testing.T) {
 	t.Log("\n=== TEST WITH PCR EXTENSION ===")
 	// ===================================================================
 
-	nvramIndexPCR := "0x01803003"
+	nvramIndexPCR := "0x01803013"
 	customPCRs := "0,23"
 
 	// Seal with pubkey and privkey (privkey required for NV write authorization)
@@ -1192,7 +1190,7 @@ func TestQuickWorkflow(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
 
-	nvramIndex := "0x01803003"
+	nvramIndex := "0x01803013"
 
 	// Simple workflow: seal -> reveal -> reseal -> reveal -> delete
 	t.Log("Step 1: Seal with signing key")
@@ -1335,7 +1333,7 @@ func TestExitCodes(t *testing.T) {
 	t.Log("Test 9: NVRAM status on non-existent index...")
 	stdout.Reset()
 	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "slot", "status", "--tpm", tpmPath, "--nvram", "0x01803050")
+	cmd = exec.Command("./tpm2-kira", "slot", "status", "--tpm", tpmPath, "--nvram", "0x0180301D")
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
@@ -1349,7 +1347,7 @@ func TestExitCodes(t *testing.T) {
 	t.Log("Test 10: NVRAM delete on non-existent index...")
 	stdout.Reset()
 	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "slot", "delete", "--tpm", tpmPath, "--nvram", "0x01803051")
+	cmd = exec.Command("./tpm2-kira", "slot", "delete", "--tpm", tpmPath, "--nvram", "0x0180301E")
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
@@ -1369,7 +1367,7 @@ func TestResealNeedsItsKeyGiven(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
 
-	nvramIndex := "0x01803004"
+	nvramIndex := "0x01803014"
 
 	stdout, stderr, err := runTPMKira(t, tpmPath,
 		"slot", "add",
@@ -1448,7 +1446,7 @@ func revealPlainCode(t *testing.T, tpmPath, nvramIndex string) (string, string) 
 func TestCodeMatchesAuthenticator(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
-	nvramIndex := "0x01803040"
+	nvramIndex := "0x01803015"
 
 	stdout, stderr, err := runTPMKira(t, tpmPath, "slot", "add", "--nvram", nvramIndex, "--pcrs", "0,7",
 		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath)
@@ -1497,7 +1495,7 @@ func TestCapLocksCodesUntilReboot(t *testing.T) {
 	}
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
-	nvramIndex := "0x01803041"
+	nvramIndex := "0x01803016"
 
 	if stdout, stderr, err := runTPMKira(t, tpmPath, "slot", "add", "--nvram", nvramIndex, "--pcrs", "0,7",
 		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
@@ -1546,7 +1544,7 @@ func TestCapLocksCodesUntilReboot(t *testing.T) {
 func TestResealRevokesOldBlob(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
-	const index = 0x01803042
+	const index = 0x01803017
 	nvramIndex := fmt.Sprintf("0x%08X", index)
 
 	if stdout, stderr, err := runTPMKira(t, tpmPath, "slot", "add", "--nvram", nvramIndex, "--pcrs", "0,7",

@@ -483,10 +483,16 @@ the boot is one the signing key approved - against a phished password.
    bytes. What seals and enrols is unchanged until step 4. The format
    reference test read a path that does not exist and skipped: it runs
    now, with the pin and the pepper check.
-2. [ ] nvslot: storage in `KIRAslotN` (persist), a cap of 8 KiB per
+2. [x] nvslot: storage in `KIRAslotN` (persist), a cap of 8 KiB per
    record; read, write, remove; the slot = its generation index; the
    counter as today; tests with a test efivarfs directory
-   (`persist.VarDir`).
+   (`persist.VarDir`). `record.go`: `RecordVar`, `ReadRecord`
+   (`ErrNoRecord`), `WriteRecord` (read back), `RemoveRecord`,
+   `SlotExists`, `SlotStates` (what is left of a slot without the rest).
+   A slot is one of the 16 now (`--nvram` 0-15 or 0x01803010-0x0180301F;
+   other indices were never used); the NV write keeps its own check for
+   the boot settings. tpm2-kira's GUID is `nvslot.VarGUID`. Branch
+   `feat/slot-record-efivar` (step 1 is on `feat/vault-root-ca`).
 3. [ ] The users of the blob: seal, reseal, approve, the phone and vault
    enrolments, the TPM salt, unenrol, slot delete (record and indices
    together), backup and restore (`nvram_restore`), info and status;

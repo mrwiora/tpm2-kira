@@ -266,17 +266,20 @@ func TestSlotBlobRejectsMalformedAttestation(t *testing.T) {
 	}
 }
 
-// A blob elsewhere must not put its generation index on a slot's record
-// counter (both sit 0x800 above something).
-func TestBlobIndexCannotCollideWithACounter(t *testing.T) {
-	for _, idx := range []uint32{nvslot.NVRAMSlotStart, nvslot.NVRAMSlotEnd, 0x01803030, 0x01803100} {
+// A slot is one of the 16: its record is KIRAslotN, and its generation
+// index can never be a slot's record counter (both sit above a base).
+func TestBlobIndexIsASlot(t *testing.T) {
+	for idx := uint32(nvslot.NVRAMSlotStart); idx <= nvslot.NVRAMSlotEnd; idx++ {
 		if err := nvslot.ValidateBlobIndex(idx); err != nil {
 			t.Errorf("0x%08X refused: %v", idx, err)
 		}
+		if g := nvslot.GenerationIndex(idx); g >= nvslot.AttestCounterIndex(nvslot.NVRAMSlotStart) && g <= nvslot.AttestCounterIndex(nvslot.NVRAMSlotEnd) {
+			t.Errorf("slot 0x%08X's generation index 0x%08X is a record counter", idx, g)
+		}
 	}
-	for idx := nvslot.AttestCounterIndex(nvslot.NVRAMSlotStart) - nvslot.GenerationIndexOffset; idx <= nvslot.AttestCounterIndex(nvslot.NVRAMSlotEnd)-nvslot.GenerationIndexOffset; idx++ {
+	for _, idx := range []uint32{nvslot.NVRAMSlotStart - 1, nvslot.NVRAMSlotEnd + 1, 0x01803100, nvslot.GenerationIndex(nvslot.NVRAMSlotStart), nvslot.AttestCounterIndex(nvslot.NVRAMSlotStart) - nvslot.GenerationIndexOffset} {
 		if err := nvslot.ValidateBlobIndex(idx); err == nil {
-			t.Errorf("0x%08X accepted, though its generation index 0x%08X is a record counter", idx, nvslot.GenerationIndex(idx))
+			t.Errorf("0x%08X accepted as a slot", idx)
 		}
 	}
 }

@@ -31,7 +31,7 @@ import (
 )
 
 // GUID is the vendor GUID of tpm2-kira's own EFI variables.
-const GUID = "67f474ef-94a1-4412-88df-d62349d430a9"
+const GUID = nvslot.VarGUID
 
 // Var is the variable that keeps the sealed machine-id.
 const Var = persist.VarPrefix + "KIRAmachineID-" + GUID

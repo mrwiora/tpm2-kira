@@ -2359,7 +2359,7 @@ func TestApproveAndWriteValidation(t *testing.T) {
 	}{
 		{"no PCRs", nvslot.NVRAMSlotStart, nil, signer, "no PCRs specified"},
 		{"no signing key", nvslot.NVRAMSlotStart, specs, nil, "no signing private key provided"},
-		{"generation range", nvslot.GenerationIndex(nvslot.NVRAMSlotStart), specs, signer, "reserved for generation indices"},
+		{"a generation index", nvslot.GenerationIndex(nvslot.NVRAMSlotStart), specs, signer, "is not a slot"},
 		{"outside the application range", 0x01000000, specs, signer, "outside the safe application range"},
 	} {
 		err := approveAndWrite(nil, tc.index, blob, tc.specs, measure.PCRHashAlgoSHA256, false, tc.signer, false)
