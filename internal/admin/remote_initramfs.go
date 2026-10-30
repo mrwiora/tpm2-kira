@@ -26,10 +26,10 @@ const (
 	// by the init-premount script, which brings the network up and starts
 	// 'run' with TPM2_KIRA_REMOTE.
 	imageRemoteConf = "/etc/tpm2-kira/remote.conf"
-	// imageResumeDropIn and imageResumeScript close the SSH CA's window
-	// right before a resume from hibernation (resumeDropIn, resumeScript).
+	// imageResumeDropIn closes the SSH CA's window right before a resume
+	// from hibernation (resumeDropIn); initramfs-tools' is the package's
+	// local-top script tpm2-kira-close, which reads the plan.
 	imageResumeDropIn = "/etc/systemd/system/systemd-hibernate-resume.service.d/tpm2-kira-close.conf"
-	imageResumeScript = "/scripts/local-top/tpm2-kira-close"
 	// imageUdhcpcScript is initramfs-tools' DHCP with a client identifier:
 	// busybox' udhcpc runs it at its events.
 	imageUdhcpcScript = "/etc/tpm2-kira/udhcpc.script"
@@ -157,26 +157,4 @@ const resumeDropIn = `# Written by 'tpm2-kira initramfs plan': the SSH CA's wind
 # no code screen). Its failure stops the resume.
 [Service]
 ExecStartPre=/usr/bin/tpm2-kira-boot close
-`
-
-// resumeScript is initramfs-tools': after every volume is unlocked
-// (cryptroot) and before local-premount, where the resume is. On failure it
-// sets noresume, which the resume script obeys.
-const resumeScript = `#!/bin/sh
-# Written by 'tpm2-kira initramfs plan': the SSH CA's window closed before
-# a resume from hibernation (the TPM starts afresh, the resumed system runs
-# no code screen). Its failure stops the resume.
-PREREQ="cryptroot"
-prereqs() { echo "$PREREQ"; }
-case "$1" in
-prereqs)
-    prereqs
-    exit 0
-    ;;
-esac
-if ! /usr/bin/tpm2-kira-boot close; then
-    echo "tpm2-kira: the SSH CA's window is not closed: no resume from hibernation this boot" >/dev/console
-    echo "noresume=y" >>/conf/param.conf
-fi
-exit 0
 `

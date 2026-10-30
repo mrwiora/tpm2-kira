@@ -1,0 +1,30 @@
+#!/bin/sh
+# The SSH CA's window closed right before a resume from hibernation: a
+# resume starts the TPM afresh, which opens the window again, and the
+# resumed system runs no code screen. After every volume is unlocked
+# (cryptroot), before local-premount, where initramfs-tools resumes. In a
+# boot where run closed it already, the close does nothing. Its failure
+# stops the resume (noresume, which the resume script obeys).
+#
+# The package installs it into every image; it acts only while the image's
+# plan has the SSH server (the plan's part, as run reads it).
+
+PREREQ="cryptroot"
+
+prereqs() {
+    echo "$PREREQ"
+}
+
+case "$1" in
+prereqs)
+    prereqs
+    exit 0
+    ;;
+esac
+
+[ -d /etc/tpm2-kira/plan/ssh ] || exit 0
+if ! /usr/bin/tpm2-kira-boot close 2>>/run/initramfs/tpm2-kira.log; then
+    echo "tpm2-kira: the SSH CA's window is not closed: no resume from hibernation this boot" >/dev/console
+    echo "noresume=y" >>/conf/param.conf
+fi
+exit 0

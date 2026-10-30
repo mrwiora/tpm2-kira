@@ -349,11 +349,14 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 			t.Errorf("%s in an initramfs-tools image", p)
 		}
 	}
-	// The close before a resume: after cryptroot, executable.
-	if st, err := os.Stat(filepath.Join(root, imageResumeScript)); err != nil || st.Mode().Perm() != 0o755 {
-		t.Errorf("the resume script: %v %v", st, err)
-	} else if got := readImage(t, root, imageResumeScript); !strings.Contains(got, `PREREQ="cryptroot"`) || !strings.Contains(got, "if ! /usr/bin/tpm2-kira-boot close; then") || !strings.Contains(got, "noresume=y") {
-		t.Errorf("the resume script:\n%s", got)
+	// The close before a resume is the package's local-top script, read
+	// for its prerequisites where initramfs-tools reads them (the installed
+	// file, not the image): after cryptroot, only with the plan's SSH part.
+	if b, err := os.ReadFile("../../initramfs/initramfs-tools/scripts/local-top/tpm2-kira-close"); err != nil {
+		t.Error(err)
+	} else if got := string(b); !strings.Contains(got, `PREREQ="cryptroot"`) || !strings.Contains(got, "[ -d /etc/tpm2-kira/plan/ssh ] || exit 0") ||
+		!strings.Contains(got, "if ! /usr/bin/tpm2-kira-boot close") || !strings.Contains(got, "noresume=y") {
+		t.Errorf("the local-top script:\n%s", got)
 	}
 	if got := readImage(t, root, sshscreen.DefaultConf); !strings.Contains(got, "ASSH_LISTEN=:2222\n") {
 		t.Errorf("the image's assh.conf:\n%s", got)
@@ -368,9 +371,6 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 	_, root = writePlan(t, decidePlan(in), FormatInitramfsTools)
 	if conf := readImage(t, root, imageRemoteConf); strings.Contains(conf, "TPM2_KIRA_REMOTE") || !strings.Contains(conf, `TPM2_KIRA_NET="dhcp"`) {
 		t.Errorf("network alone:\n%s", conf)
-	}
-	if _, err := os.Stat(filepath.Join(root, imageResumeScript)); err == nil {
-		t.Error("the resume script without the SSH server")
 	}
 }
 
