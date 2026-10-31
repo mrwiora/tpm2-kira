@@ -26,13 +26,13 @@ _assh=0ce851719c1aa432e84c125e2389438d55140243
 # The commit of the tpm2-verifier submodule (the core's EK root store), the
 # same way (git rev-parse "$_tag:tpm2-verifier").
 _verifier=804ab7ed7616c8984061febe01db999fdcb10d33
-# The commit of the uefi submodule (EFI variables, Secure Boot), the same
-# way (git rev-parse "$_tag:uefi").
-_uefi=936fa50b5ded966ebe74fe55864d439ddaa9b9be
+# The commit of the go-uefi-slim submodule (EFI variables, Secure Boot), the
+# same way (git rev-parse "$_tag:go-uefi-slim").
+_uefislim=4e8c951178a9db47cf6f81dc3508f9a2d0513d45
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
 source+=("assh-$_assh.tar.gz::https://github.com/tpm2-trust/assh/archive/$_assh.tar.gz")
 source+=("tpm2-verifier-$_verifier.tar.gz::https://github.com/tpm2-trust/tpm2-verifier/archive/$_verifier.tar.gz")
-source+=("uefi-$_uefi.tar.gz::https://github.com/tpm2-trust/uefi/archive/$_uefi.tar.gz")
+source+=("go-uefi-slim-$_uefislim.tar.gz::https://github.com/tpm2-trust/go-uefi-slim/archive/$_uefislim.tar.gz")
 sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
 options=('!debug')
 
@@ -40,9 +40,9 @@ options=('!debug')
 _srcdir="$pkgname-${_tag#v}"
 
 prepare() {
-    # aSSH's, tpm2-verifier's and uefi's sources where the submodules go
-    # (an archive of the repository's HEAD carries them already, and has no
-    # assh-*, tpm2-verifier-* or uefi-* source).
+    # aSSH's, tpm2-verifier's and go-uefi-slim's sources where the
+    # submodules go (an archive of the repository's HEAD carries them
+    # already, and has no assh-*, tpm2-verifier-* or go-uefi-slim-* source).
     if [[ -d assh-$_assh ]]; then
         rm -rf "$_srcdir/assh"
         mv "assh-$_assh" "$_srcdir/assh"
@@ -51,9 +51,9 @@ prepare() {
         rm -rf "$_srcdir/tpm2-verifier"
         mv "tpm2-verifier-$_verifier" "$_srcdir/tpm2-verifier"
     fi
-    if [[ -d uefi-$_uefi ]]; then
-        rm -rf "$_srcdir/uefi"
-        mv "uefi-$_uefi" "$_srcdir/uefi"
+    if [[ -d go-uefi-slim-$_uefislim ]]; then
+        rm -rf "$_srcdir/go-uefi-slim"
+        mv "go-uefi-slim-$_uefislim" "$_srcdir/go-uefi-slim"
     fi
 
     cd "$_srcdir"

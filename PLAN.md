@@ -2,7 +2,7 @@
 
 Branch `feat/assh-window-hibernate` (on top of the hibernation work below). Status:
 **decisions taken (2026-10-30)**. Step 1 done; the Secure Boot primitives exist in the workspace's
-`uefi` module (tested on the VMs' firmware); steps 2-12 not started.
+`go-uefi-slim` module (tested on the VMs' firmware); steps 2-12 not started.
 
 ## Goal
 
@@ -18,7 +18,7 @@ initrd and the command line:
 | separate initrd (systemd-boot type 1) | no | **slots 0 and 1 sign** |
 | Secure Boot off or in Setup Mode | nothing | **signs for anything** |
 
-1. **tpm2-kira manages Secure Boot itself**, with the workspace's `uefi` module (not sbctl's
+1. **tpm2-kira manages Secure Boot itself**, with the workspace's `go-uefi-slim` module (not sbctl's
    library). The sbctl command is not used: Debian has no package. Covered:
    - keys created and enrolled (with Microsoft's certificates);
    - the boot loader and the UKI signed;
@@ -52,9 +52,9 @@ flowchart LR
 
 ## Steps
 
-- [x] 1. **`internal/efivars`**: tpm2-kira's EFI variables, on `uefi/efivar`:
+- [x] 1. **`internal/efivars`**: tpm2-kira's EFI variables, on `go-uefi-slim/efivar`:
        - `machineid` and `nvslot`'s records moved from aSSH's `persist` to it;
-       - `measure`'s Secure Boot reads (`pcrwarn.go`) are `uefi/efivar`'s;
+       - `measure`'s Secure Boot reads (`pcrwarn.go`) are `go-uefi-slim/efivar`'s;
        - the SSH CA's variable stays aSSH's (aSSH writes it; tpm2-kira only names it);
        - `efivars.SetDir` points both at a test's directory.
 - [ ] 2. **`internal/secureboot`**:
@@ -136,7 +136,7 @@ flowchart LR
 
 - Secure Boot is the prerequisite of the SSH CA's PCR-7 slot; `control` shows red where
   it is off, in Setup Mode, or does not cover the image.
-- tpm2-kira manages Secure Boot with the `uefi` module, in sbctl's layout, so that sbctl can
+- tpm2-kira manages Secure Boot with the `go-uefi-slim` module, in sbctl's layout, so that sbctl can
   handle the machine at any time. aSSH only warns.
 - The Secure Boot db key is tpm2-kira's signing key (file or YubiKey).
 - Key algorithms (workspace AGENTS.md): Ed25519 where possible, else RSA at the greatest
@@ -161,8 +161,8 @@ flowchart LR
     (firmware 5.7+ for 3072/4096). If one fails, its key falls back: 3072, then 2048.
   - The firmware cannot be asked. The way back from a key it does not take is deleting
     the keys in its setup.
-- **The workspace's own `uefi` module, not go-uefi** (2026-10-30): go-uefi's upstream
-  did not take the fork's changes, and it cost aSSH 422 KB and three modules. `uefi`
+- **The workspace's own `go-uefi-slim` module, not go-uefi** (2026-10-30): go-uefi's upstream
+  did not take the fork's changes, and it cost aSSH 422 KB and three modules. `go-uefi-slim`
   has the standard library and x/sys alone; aSSH and tpm2-kira pin it as a submodule.
 
 # PLAN: aSSH's window W alone, and closed before a resume from hibernation

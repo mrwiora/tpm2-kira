@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/tpm2-trust/uefi/efivar"
+	"github.com/tpm2-trust/go-uefi-slim/efivar"
 )
 
 // SecureBootState is a best-effort reading of the firmware's Secure Boot

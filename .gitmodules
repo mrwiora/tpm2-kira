@@ -4,6 +4,6 @@
 [submodule "tpm2-verifier"]
 	path = tpm2-verifier
 	url = https://github.com/tpm2-trust/tpm2-verifier.git
-[submodule "uefi"]
-	path = uefi
-	url = https://github.com/tpm2-trust/uefi.git
+[submodule "go-uefi-slim"]
+	path = go-uefi-slim
+	url = https://github.com/tpm2-trust/go-uefi-slim.git

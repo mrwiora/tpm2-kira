@@ -1,6 +1,6 @@
 // Package efivars is where tpm2-kira keeps its own EFI variables (the
 // slots' records, the sealed machine-id): under tpm2-kira's vendor GUID,
-// through the workspace's uefi module. aSSH's variable (the SSH CA's) is
+// through the workspace's go-uefi-slim module. aSSH's variable (the SSH CA's) is
 // aSSH's, through its persist; both live in the same efivarfs.
 package efivars
 
@@ -9,7 +9,7 @@ import (
 	"os"
 
 	"github.com/tpm2-trust/assh/persist"
-	"github.com/tpm2-trust/uefi/efivar"
+	"github.com/tpm2-trust/go-uefi-slim/efivar"
 )
 
 // GUIDText is the vendor GUID of tpm2-kira's EFI variables.

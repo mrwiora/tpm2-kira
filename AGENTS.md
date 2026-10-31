@@ -189,7 +189,7 @@ It may not carry what came before.
   removes the SSH CA when SSH is switched off (No unless said).
 - **tpm2-kira manages Secure Boot itself, so that sbctl can take over at
   any time.**
-  - It uses the workspace's `uefi` module (the submodule `uefi/`: signature
+  - It uses the workspace's `go-uefi-slim` module (the submodule `go-uefi-slim/`: signature
     lists, signed updates, Authenticode, Microsoft's certificates), not the
     sbctl command, which Debian does not package.
   - Everything it creates is what sbctl would create, in the same place:
