@@ -18,7 +18,7 @@ flowchart LR
   VAULT["tpm2-kira-vault<br/>the vault: remote attestation over TLS"]
   MARIFY["Marify (Android, iOS)<br/>the phone: attestation at the machine"]
   SAFEARCH["safearch<br/>a read-only Arch image"]
-  GOTPM["go-tpm<br/>pinned to 36f2059 (google/go-tpm#446)"]
+  GOTPM["go-tpm<br/>pinned to c395998 (google/go-tpm#446, #452)"]
   ADMIN & BOOT --> CORE
   ADMIN & BOOT -->|library| ASSH
   VAULT -->|vaultproto| CORE

@@ -7,7 +7,7 @@ require (
 	charm.land/huh/v2 v2.0.3
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/google/go-attestation v0.6.4
-	github.com/google/go-tpm v0.9.9-0.20261001171150-36f205946d7e
+	github.com/google/go-tpm v0.9.9-0.20261030171821-c395998989d7
 	github.com/mrwiora/tpm2-kira/core v0.0.0
 	github.com/tpm2-trust/assh v0.0.0
 	github.com/tpm2-trust/go-uefi-slim v0.0.0

@@ -724,7 +724,9 @@ v0.9.8 and not yet in a release. Since 2026-10-24 aSSH, tpm2-kira and
 tpm2-kira-vault require `v0.9.9-0.20261001171150-36f205946d7e`, and the
 workaround is gone: host keys use plain random values, and
 `TestHostKeysSign` checks values with zero bytes inside, first and at the
-end. Move to the first go-tpm release that contains #446.
+end. Since 2026-10-31 every module requires `c395998`, which adds
+TPM2_NV_ChangeAuth (google/go-tpm#452, for aSSH's `tpmadmin`, until then a
+fork). Move to the first go-tpm release that contains both.
 
 ## Removed functions
 
