@@ -44,8 +44,11 @@ What it does, each step a check in the report:
      closed (PCR 15 extended, run's close in the log, Arch's close unit
      ran), every slot closed and slot 0's TOTP key refusing; no cap unit;
      one PCR rule: the slots and the SSH CA's are PCR 7 and the image, slot 0
-     with 0, 2 and 4 (Debian's GRUB: a PCR 0,7 slot refused), and PCR 4 as
-     approved before this boot is PCR 4 as this boot measured it
+     with 0, 2 and 4 (Debian's GRUB: a PCR 0,7 slot refused; Arch: PCR 11
+     signed by the PCR key), and PCR 4 as approved before this boot is PCR 4
+     as this boot measured it
+  7a. Arch: an image the hook did not approve, signed by the PCR key: slot 1's
+     code and the SSH CA through slot 1, slot 0 out; slot approve brings it back
   7b. the salt in this TPM (0x1200): luks enrol --salt tpm, luks status and
      luksDump name the recipe, the plan takes the part; a boot asks the
      password alone over SSH (the TPM opened the salt during the hold);
@@ -688,18 +691,62 @@ class Machine:
         rc, out = self.run("ls /usr/lib/systemd/system/tpm2-kira-cap.service 2>&1; "
                            "grep -c 'tpm2-kira-boot cap' /usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira 2>&1; true")
         self.check(f"boot {n}: no cap unit or cap step", "No such file" in out.split("\n")[0] and not re.search(r"^[1-9]", out, re.M), out.strip())
-        # One rule: PCR 7 and the image; slot 0 with the platform.
-        slot0, slot1 = ("0,2,4,7,8,9", "7,8,9") if self.distro == "debian" else ("0,2,4,7,11", "7,11")
-        rc, out = self.run("grep '^ASSH_CA_SLOT_[0-9]=' /etc/tpm2-kira/assh.conf 2>&1", save=f"boot{n}-ca-slots.log")
-        self.check(f"boot {n}: the SSH CA's slots are {slot0} and {slot1}",
-                   re.search(rf"^ASSH_CA_SLOT_0={slot0}$", out, re.M) is not None and re.search(rf"^ASSH_CA_SLOT_1={slot1}$", out, re.M) is not None, out.strip())
+        # One rule: PCR 7 and the image; slot 0 with the platform. On a UKI
+        # the image is PCR 11, signed by the PCR key.
+        slot0, slot1 = ("0,2,4,7,8,9", "7,8,9") if self.distro == "debian" else ("0,2,4,7", "7")
+        rc, out = self.run("grep '^ASSH_CA_SLOT_[0-9]' /etc/tpm2-kira/assh.conf 2>&1", save=f"boot{n}-ca-slots.log")
+        ok = re.search(rf"^ASSH_CA_SLOT_0={slot0}$", out, re.M) is not None and re.search(rf"^ASSH_CA_SLOT_1={slot1}$", out, re.M) is not None
+        if self.distro != "debian":
+            ok = ok and "ASSH_CA_SLOT_0_SIGNED=11" in out and "ASSH_CA_SLOT_1_SIGNED=11" in out
+        self.check(f"boot {n}: the SSH CA's slots are {slot0} and {slot1}" + ("" if self.distro == "debian" else ", each with PCR 11 signed"), ok, out.strip())
+        if self.distro != "debian":
+            rc, out = self.run("tpm2-kira slot info --nvram 0 2>&1 | grep -E 'PCR 11 ' | head -2; stat -c '%a %U' /etc/tpm2-kira/pcr.key; grep -c '^Phases=enter-initrd$' /etc/kernel/uki.conf", save=f"boot{n}-pcr11.log")
+            self.check(f"boot {n}: slot 0's PCR 11 is signed, the PCR key root's alone, uki.conf signs enter-initrd", "(signed)" in out and "400 root" in out and re.search(r"^1$", out, re.M) is not None, out[-400:])
         # PCR 4 was predicted before this boot, for this boot: the approval
         # holds the prediction, the register what the firmware measured.
         rc, out = self.run("tpm2-kira slot info --nvram 0 2>&1; echo LIVE=$(cat /sys/class/tpm/tpm0/pcr-sha256/4)", save=f"boot{n}-pcr4.log")
         approved = re.search(r"PCR 4\s+\(uki\): ([0-9a-f]{64})", out)
         live = re.search(r"^LIVE=([0-9A-Fa-f]{64})$", out, re.M)
+        expected = None
+        if approved:
+            expected = approved.group(1)
+            if self.distro == "arch":
+                # systemd-pcrosseparator extended it after the code screen.
+                word = hashlib.sha256(b"os-separator").digest()
+                expected = hashlib.sha256(bytes.fromhex(expected) + word).hexdigest()
         self.check(f"boot {n}: PCR 4 as predicted before this boot is the register",
-                   approved is not None and live is not None and approved.group(1) == live.group(1).lower(), out[-500:])
+                   expected is not None and live is not None and expected == live.group(1).lower(), out[-500:])
+
+    def unapproved_kernel(self):
+        """Arch: an image the hooks did not approve, signed by the PCR key
+        all the same: PCR 11 needs no approval, so slot 1 shows its code and
+        the SSH CA certifies through its slot 1, with slot 0 (PCR 4 moved) out.
+        Then slot approve brings slot 0 back."""
+        self.log.head("an image not approved, signed by the PCR key")
+        rc, out = self.run("set -e; sed -i '$ s/$/ kiratest=1/' /etc/kernel/cmdline; mkinitcpio -P --nopost 2>&1 | tail -3", save="unapproved-rebuild.log")
+        self.check("unapproved: an image built without the hook's approval", rc == 0, out[-400:])
+        self.run("systemctl reboot")
+        self.wait_port(22, False, 120)
+        if not self.check("unapproved: the boot SSH server answers", self.wait_port(SSH_PORT, True, 300)):
+            raise Fail("no boot SSH server on the unapproved image")
+        s = self.boot_session("unapproved")
+        try:
+            text, _ = s.expect(r"Does the code match your authenticator\?.*$", 60)
+            at = time.time()
+            codes = dict(re.findall(r"^#(\d+): (\d{6})$", text, re.M))
+            self.check("unapproved: the host key is certified (slot 1, PCR 11 by its signature; strict known_hosts)", True)
+            self.check("unapproved: slot 0 shows no code (PCR 4 moved)", "0" not in codes, text[-500:])
+            self.check("unapproved: slot 1's code is the authenticator's", "1" in codes and code_matches(self.secrets[1], codes["1"], at), text[-500:])
+            s.send("\r")
+            s.expect(r"Password for disk \S+: ?$", 120); s.send(TEST_PASSWORD + "\r")
+            s.expect(r"Salt for disk \S+: ?$", 60); s.send(TEST_SALT + "\r")
+            s.wait_end(600)
+        finally:
+            s.close()
+        if not self.check("unapproved: the system comes up (ssh)", self.wait_port(22, True, 300)):
+            raise Fail("the system does not come up")
+        rc, out = self.run("tpm2-kira slot approve 2>&1 | tail -4", save="unapproved-approve.log")
+        self.check("unapproved: slot approve brings slot 0 back", "approved" in out, out[-400:])
 
     def rebuild(self):
         cmd = "update-initramfs -u" if self.distro == "debian" else "mkinitcpio -P"
@@ -1127,6 +1174,8 @@ class Machine:
             self.image()
             for n in range(1, self.cycles + 1):
                 self.cycle(n)
+            if self.distro == "arch":
+                self.unapproved_kernel()
             self.tpm_salt()
             if vault:
                 self.vault(vault)

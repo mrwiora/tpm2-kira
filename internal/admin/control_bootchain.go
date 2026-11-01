@@ -90,6 +90,14 @@ func (c *controller) prereqs() []prereq {
 			add(prereqMet, "Passphrase: no keyslot opens with an empty one")
 		}
 	}
+	// The image's signature of PCR 11, where the machine has ukify make one.
+	if f.UKISigns {
+		if f.UKISigErr != "" {
+			add(prereqNot, "PCR 11's signature: %s (risk: no slot and no CA slot that takes it signed is met at the next boot)", f.UKISigErr)
+		} else {
+			add(prereqMet, "PCR 11's signature: one for enter-initrd per bank, by the PCR key")
+		}
+	}
 	// GRUB: its entries edited at the console (break=, rdinit=) reach a
 	// shell before the close; PCRs 8 and 9 in every slot see the edit, a
 	// superuser password keeps it from being made. Advised, never written.
@@ -243,6 +251,7 @@ func routeResolved(f *machineFacts) bool {
 func (c *controller) chainSteps() []controlStep {
 	boot := c.bootStep()
 	route := c.routeStep()
+	pcr, hasPCR := c.pcrKeyStep()
 	next := controlStep{Key: "continue", Title: "Continue to step 2", Menu: "hub",
 		Explain: "The signing key and the TOTP codes, the phone, the ways the disk is unlocked, the network and SSH at boot - combined as this machine allows."}
 	var open []string
@@ -254,7 +263,46 @@ func (c *controller) chainSteps() []controlStep {
 	if len(open) > 0 {
 		next.Blocked = "first: " + strings.Join(open, ", ")
 	}
+	if hasPCR {
+		return []controlStep{boot, route, pcr, next}
+	}
 	return []controlStep{boot, route, next}
+}
+
+// pcrKeyStep is the PCR key's way into the images: uki.conf, asked every time.
+// On a boot with mkinitcpio whose PCR key exists; a No keeps 11 approved, so it
+// does not hold up the way on.
+func (c *controller) pcrKeyStep() (controlStep, bool) {
+	f := &c.facts
+	if f.Initramfs != "mkinitcpio" || !f.PCRKey {
+		return controlStep{}, false
+	}
+	s := controlStep{Key: "pcrkey", Title: "PCR key adoption", Check: true, Run: (*controller).runPCRKey,
+		Explain: "PCR 11 signed by tpm2-kira's PCR key: a kernel update needs no approval of 11, and slot 1 outlasts an image not approved. The step shows what goes into " + ukiConfPath + ", which ukify reads when mkinitcpio builds the image."}
+	if f.UKISigns {
+		s.Done = "ukify signs PCR 11 for enter-initrd with " + pcrKeyPath
+	}
+	return s, true
+}
+
+// runPCRKey writes the PCR key's lines into uki.conf when asked: an exception
+// like the HOOKS line, asked every time.
+func (c *controller) runPCRKey() error {
+	if ukiConfSigns() {
+		fmt.Fprintf(c.out, "%s has ukify sign PCR 11 for enter-initrd with %s already.\n", ukiConfPath, pcrKeyPath)
+		return nil
+	}
+	fmt.Fprintf(c.out, "ukify, when mkinitcpio builds the image, signs PCR 11 for enter-initrd alone with these lines in %s:\n\n%s\nPut them into the file yourself - or let this step append them, which changes nothing else of the file.\n\n", ukiConfPath, ukiConfBlock())
+	ok, err := c.confirm("Append the lines to "+ukiConfPath+"?", "Only these lines are added; 'No' leaves the editing to you, and PCR 11 approved after every image.")
+	if err != nil || !ok {
+		fmt.Fprintf(c.out, "Nothing was written. Without them PCR 11 stays approved by the hooks, and slot 1 fails at a kernel not approved.\n")
+		return nil
+	}
+	if err := adoptUKIConf(); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "%s now has them. The image is built when you quit control; slots already sealed take 11 signed at that approval, a CA made before keeps it approved until it is made again, and a vault enrolled before is enrolled again.\n", ukiConfPath)
+	return nil
 }
 
 // chainDone says whether step 1 is in place: the hook in the HOOKS the
@@ -262,7 +310,8 @@ func (c *controller) chainSteps() []controlStep {
 // route.
 func chainDone(f *machineFacts) bool {
 	c := &controller{facts: *f}
-	return c.chainSteps()[2].Blocked == ""
+	steps := c.chainSteps()
+	return steps[len(steps)-1].Blocked == ""
 }
 
 // runInitramfs wires the boot integration. On mkinitcpio it shows the

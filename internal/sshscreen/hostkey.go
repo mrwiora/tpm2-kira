@@ -8,6 +8,7 @@ import (
 	"github.com/tpm2-trust/assh/server"
 
 	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/tpm2-trust/assh/config"
 	"github.com/tpm2-trust/assh/hostkey"
@@ -49,6 +50,7 @@ func PrepareHostKey(tpmPath string, conf config.Config) (hostKeyAtBoot, error) {
 		Principals: conf.Principals,
 		Open:       func() (transport.TPMCloser, error) { return tpmdev.Open(tpmPath) },
 	}
+	o.PCRSignatures = bootPCRSignatures(conf.PCRSigs)
 	var hk *hostkey.HostKey
 	var ca *hostkey.CA
 	if persist.IsVar(caPath) {
@@ -73,6 +75,20 @@ func PrepareHostKey(tpmPath string, conf config.Config) (hostKeyAtBoot, error) {
 		return hostKeyAtBoot{Signer: hk.SSH(), Fingerprint: hk.Fingerprint(), Slot: -1, Temporary: "the SSH CA did not certify a key: " + hk.Temporary.Error()}, nil
 	}
 	return hostKeyAtBoot{Signer: hk.SSH(), Fingerprint: hk.Fingerprint(), CA: ca.Fingerprint(), Slot: hk.Slot}, nil
+}
+
+// bootPCRSignatures are the image's signatures of PCR 11, for a CA slot that
+// takes it signed: at path (ASSH_PCR_SIGNATURE) or where systemd-stub leaves
+// them. None: such a slot is not met.
+func bootPCRSignatures(path string) hostkey.PCRSignatures {
+	for _, p := range append([]string{path}, measure.BootPCRSignaturePaths...) {
+		if b, err := os.ReadFile(p); err == nil {
+			if sigs, err := hostkey.ParsePCRSignatures(b); err == nil {
+				return sigs
+			}
+		}
+	}
+	return nil
 }
 
 // mountEfivarfs mounts efivarfs where the boot image has not: systemd does

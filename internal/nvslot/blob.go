@@ -69,7 +69,7 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 var AppVersion = "unknown"
 
 // CurrentBlobVersion is the only supported blob format version.
-const CurrentBlobVersion = 17
+const CurrentBlobVersion = 18
 
 // MaxBlobSignatureLen is the maximum allowed signature size in bytes.
 // Generous: RSA-4096 PKCS#1 v1.5 = 512 bytes, ECDSA P-384 DER ≈ 104 bytes.
@@ -88,6 +88,7 @@ const (
 	MaxPolicyRef        = 64               // Maximum 64 bytes for the PolicyAuthorize policyRef
 	MaxSigningPublicLen = 2048             // Maximum 2KB for the signing key's TPMT_PUBLIC
 	MaxApprovalSigLen   = 1024             // Maximum 1KB for the approval TPMT_SIGNATURE
+	MaxPCRKeyLen        = 512              // An RSA-2048 key in PKIX DER is 294 bytes
 )
 
 // PCRDigestPair represents a PCR index paired with its digest value
@@ -128,6 +129,10 @@ type SealedBlobPayload struct {
 	// H(approvedPolicy ‖ PolicyRef), where approvedPolicy is PolicyPCR over
 	// PCRDigests followed by PolicyNV(generation index == Generation).
 	ApprovalSignature []byte `json:"approval_signature"`
+	// PCRKey is the key (PKIX DER, RSA-2048) that signs the PCRs of source
+	// signed (attest.PCRKeyPublic); empty without any: the approved policy
+	// holds its Name.
+	PCRKey []byte `json:"pcr_key,omitempty"`
 	// MeasurePointApplied says the eventlog PCRs' values include the
 	// measure-point extends (MeasurePointWordsAt, before the separator), so
 	// verification recomputes exactly what was sealed. Always false
@@ -297,7 +302,7 @@ func (sb *SealedBlob) GetRegisterPCRIndices() []int {
 // HasUKIPCRs returns true if any PCR in this blob is computed from a unified kernel image
 func (sb *SealedBlob) HasUKIPCRs() bool {
 	for _, pair := range sb.Payload.PCRDigests {
-		if pair.Source == measure.PCRSourceUKI {
+		if pair.Source.FromImage() {
 			return true
 		}
 	}
@@ -308,11 +313,34 @@ func (sb *SealedBlob) HasUKIPCRs() bool {
 func (sb *SealedBlob) GetUKIPCRIndices() []int {
 	var indices []int
 	for _, pair := range sb.Payload.PCRDigests {
-		if pair.Source == measure.PCRSourceUKI {
+		if pair.Source.FromImage() {
 			indices = append(indices, pair.Index)
 		}
 	}
 	return indices
+}
+
+// PlainPCRIndices are the PCRs the slot's approval holds; SignedPCRIndices the
+// ones the PCR key signs instead (attest.PCRKeyPublic).
+func (sb *SealedBlob) PlainPCRIndices() []int {
+	var out []int
+	for _, pair := range sb.Payload.PCRDigests {
+		if pair.Source != measure.PCRSourceSigned {
+			out = append(out, pair.Index)
+		}
+	}
+	return out
+}
+
+// SignedPCRIndices: see PlainPCRIndices.
+func (sb *SealedBlob) SignedPCRIndices() []int {
+	var out []int
+	for _, pair := range sb.Payload.PCRDigests {
+		if pair.Source == measure.PCRSourceSigned {
+			out = append(out, pair.Index)
+		}
+	}
+	return out
 }
 
 // GetPCRSpecs reconstructs PCRSpec slice from the sealed blob's PCR digests
@@ -355,7 +383,7 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		4 + len(p.Private) + // private blob
 		4 + // number of PCR digests
 		2 + 8 + // TOTP algorithm + generation
-		2 + len(p.PolicyRef) + 2 + len(p.SigningPublic) + 2 + len(p.ApprovalSignature) +
+		2 + len(p.PolicyRef) + 2 + len(p.SigningPublic) + 2 + len(p.ApprovalSignature) + 2 + len(p.PCRKey) +
 		1 // measure-point flag
 
 	// Guard against integer overflow and unreasonable allocations
@@ -368,7 +396,7 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		size += 4 + // PCR index
 			1 + // source byte
 			2 + len(pcrDigest.Digest.Buffer) // 2 bytes for length + digest data
-		if pcrDigest.Source == measure.PCRSourceUKI {
+		if pcrDigest.Source.FromImage() {
 			size += 2 + len(pcrDigest.Command) // 2 bytes for path length + path string
 		}
 		if size < 0 || size > MaxBlobSize {
@@ -409,7 +437,7 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 		offset++
 
 		// Command string (only for UKI source)
-		if pcrDigest.Source == measure.PCRSourceUKI {
+		if pcrDigest.Source.FromImage() {
 			binary.LittleEndian.PutUint16(buf[offset:], uint16(len(pcrDigest.Command)))
 			offset += 2
 			copy(buf[offset:], pcrDigest.Command)
@@ -428,7 +456,7 @@ func (p *SealedBlobPayload) MarshalPayload() ([]byte, error) {
 	offset += 2
 	binary.LittleEndian.PutUint64(buf[offset:], p.Generation)
 	offset += 8
-	for _, field := range [][]byte{p.PolicyRef, p.SigningPublic, p.ApprovalSignature} {
+	for _, field := range [][]byte{p.PolicyRef, p.SigningPublic, p.ApprovalSignature, p.PCRKey} {
 		binary.LittleEndian.PutUint16(buf[offset:], uint16(len(field)))
 		offset += 2
 		copy(buf[offset:], field)
@@ -528,7 +556,7 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 		offset++
 
 		// Command string (only for UKI source)
-		if p.PCRDigests[i].Source == measure.PCRSourceUKI {
+		if p.PCRDigests[i].Source.FromImage() {
 			if offset+2 > len(data) {
 				return nil, fmt.Errorf("data too short for UKI path length")
 			}
@@ -581,6 +609,7 @@ func UnmarshalPayload(data []byte) (*SealedBlobPayload, error) {
 		{"policy reference", MaxPolicyRef, &p.PolicyRef},
 		{"signing public key", MaxSigningPublicLen, &p.SigningPublic},
 		{"approval signature", MaxApprovalSigLen, &p.ApprovalSignature},
+		{"PCR key", MaxPCRKeyLen, &p.PCRKey},
 	} {
 		if offset+2 > len(data) {
 			return nil, fmt.Errorf("data too short for %s length", field.name)

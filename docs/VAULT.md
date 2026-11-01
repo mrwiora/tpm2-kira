@@ -89,7 +89,9 @@ Three layers, each depending on PCR state:
    generation. The vault rebuilds the approved policy from the quoted
    values and verifies the signature with the signing key it pinned at
    enrolment. So it releases R exactly for the boot states the machine's
-   own signing key approved - no list of PCR values on the vault, and a
+   own signing key approved - a slot's PCR 11 signed by the PCR key it
+   pinned at enrolment by that key's signature, which the machine sends too -
+   no list of PCR values on the vault, and a
    approve after a kernel update needs nothing there - and refuses a
    generation lower than the highest it has seen (an approval an approval
    revoked). It also refuses a revoked device, rate-limits, locks a device
@@ -448,7 +450,7 @@ JSON over HTTPS, `[]byte` as base64 (`core/vaultproto/proto.go`):
 | `POST /v1/enrol` | `EnrolRequest`: token, device ID, name, EK, EK certificate, AK, signing key, policyRef, generation index Name, generation, selection, wrapped R, label, whether the key needs a pepper (never the pepper), the slot's release key (TPMT_PUBLIC; the vault checks it is made under the slot's policy and fixedTPM, and keeps its Name) | `EnrolChallenge`: enrol ID, a credential for (EK, AK Name) |
 | `POST /v1/enrol/confirm` | `EnrolConfirm`: enrol ID, the opened secret | `EnrolResult`: device ID, mode |
 | `POST /v1/challenge` | `ChallengeRequest`: device ID | `ChallengeResponse`: request ID, 32-byte nonce, seconds valid |
-| `POST /v1/release` | `ReleaseRequest`: request ID, device ID, the quote (TPMS_ATTEST and its signature), the PCR values, generation, approval signature | `ReleaseResponse`: `released` with the wrapped R (and, for a pepper device, the operator's pepper wrapped for the TPM: K by MakeCredential for (EK, release key Name), the pepper under K), `pending` with `retry_after`, or `denied` with the reason |
+| `POST /v1/release` | `ReleaseRequest`: request ID, device ID, the quote (TPMS_ATTEST and its signature), the PCR values, generation, approval signature, the PCR key's signature for a slot with PCR 11 signed | `ReleaseResponse`: `released` with the wrapped R (and, for a pepper device, the operator's pepper wrapped for the TPM: K by MakeCredential for (EK, release key Name), the pepper under K), `pending` with `retry_after`, or `denied` with the reason |
 
 Errors are 4xx with `{"error": …}`. The quote's qualifying data is
 `SHA-256("tpm2-kira/vault/release/v1" ‖ lp(device ID) ‖ lp(request ID) ‖

@@ -386,7 +386,7 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.Seale
 		}
 	}
 
-	pcrPolicy, err := measure.ComputePolicyDigestFromPCRValues(tpmDev, measure.PCRSpecIndices(specs), readResult.Values, hashAlgo)
+	pcrPolicy, pcrKey, err := approvedPCRPolicy(tpmDev, specs, readResult.Values, hashAlgo)
 	if err != nil {
 		return fmt.Errorf("failed to compute the PCR policy: %w", err)
 	}
@@ -405,6 +405,7 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.Seale
 
 	// Raising the generation revokes the slot's approval, so a blob this
 	// TPM cannot store must be found before that, not by the write.
+	blob.Payload.PCRKey = pcrKey
 	if err := checkBlobFits(nvramIndex, blob, pcrDigests, measurePoint, gen, signer.Public()); err != nil {
 		return err
 	}
@@ -415,7 +416,7 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.Seale
 	}
 	raised := func(err error) error { return fmt.Errorf("%w (to generation %d): %w", ErrGenerationRaised, gen, err) }
 
-	approved := nvslot.ApprovedPolicy(pcrPolicy.Buffer, genName, gen)
+	approved := nvslot.ApprovedPolicy(pcrPolicy, genName, gen)
 	approval, err := nvslot.SignApproval(signer, approved, blob.Payload.PolicyRef)
 	if err != nil {
 		return raised(err)
@@ -429,7 +430,7 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.Seale
 
 	if debug {
 		fmt.Println("=== Policy Details ===")
-		fmt.Printf("PCR policy:       %x\n", pcrPolicy.Buffer)
+		fmt.Printf("PCR policy:       %x\n", pcrPolicy)
 		fmt.Printf("Generation:       %d (index 0x%08X)\n", gen, nvslot.GenerationIndex(nvramIndex))
 		fmt.Printf("Approved policy:  %x\n", approved)
 		fmt.Printf("Policy reference: %x\n", blob.Payload.PolicyRef)

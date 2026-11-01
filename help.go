@@ -276,7 +276,9 @@ registers as they are (0,2,7). Without --pcrs and --nvram, slot 0 is
 sealed with that selection and, with --totp, slot 1, the fallback, with PCR
 7 and the image alone (7e,11u or 7e,8e,9e; 0,7 without a log) - a boot whose
 firmware or option ROMs changed still shows slot 1's code, which says the
-machine is not simply lost; a kernel not approved shows no code. On a
+machine is not simply lost; a kernel not approved shows no code unless PCR
+11 is signed by the PCR key (11s: setup makes the key, control writes it into
+/etc/kernel/uki.conf, and a slot takes it at its next approval). On a
 GRUB boot Secure Boot does not check GRUB's command line and the initrd,
 so a selection without PCRs 8 and 9 is refused. With --pcrs or --nvram, one slot: the
 one named (else 0), the PCRs named (else the selection).

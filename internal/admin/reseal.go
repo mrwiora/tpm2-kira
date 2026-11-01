@@ -357,7 +357,8 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 		specsToUse = userProvidedSpecs
 		fmt.Printf("\nResealing with user-specified PCRs: %s\n", measure.PCRSpecsToString(specsToUse))
 	} else {
-		specsToUse = sealedBlob.GetPCRSpecs()
+		// A slot's PCR 11 goes signed once this machine's images are.
+		specsToUse = signedSelection(sealedBlob.GetPCRSpecs())
 		fmt.Printf("\nPreserving original PCR selection: %s\n", measure.PCRSpecsToString(specsToUse))
 	}
 
@@ -400,9 +401,11 @@ func printResealSources(specs []measure.PCRSpec) {
 	for _, spec := range specs {
 		fmt.Printf("  PCR%-2d (%s): %s\n", spec.Index, spec.Source.String(), measure.GetPCRDescription(spec.Index))
 		switch {
-		case spec.Source != measure.PCRSourceUKI:
+		case !spec.Source.FromImage():
 		case spec.Index == measure.TPM2PCRBootLoader:
 			fmt.Println("         predicted from this boot's log and the images on the EFI system partition")
+		case spec.Source == measure.PCRSourceSigned:
+			fmt.Printf("         signed by the PCR key; the unified kernel image %s\n", untrusted.Quote(spec.Command))
 		default:
 			fmt.Printf("         recomputed from the unified kernel image %s\n", untrusted.Quote(spec.Command))
 		}

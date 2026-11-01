@@ -2,9 +2,13 @@ package vaultproto
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -179,5 +183,91 @@ func TestReleaseResponseJSON(t *testing.T) {
 	}
 	if p := PinOf([]byte("x")); !strings.HasPrefix(p, "sha256:2d711642") || len(p) != 71 {
 		t.Fatalf("pin %s", p)
+	}
+}
+
+// A selection with PCR 11 signed by the PCR key: quoted, its value verified by
+// the signature, and the approval over the rest, with the key's Name in place
+// of it - a new image needs no approval, but only one the key signed.
+func TestVerifyReleaseSignedPCR(t *testing.T) {
+	m := newMachine(t)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.dev.Selection.Signed = []uint8{11}
+	m.dev.PCRKey = der
+	plain, signed := m.dev.Selection.split()
+	if len(plain.Indices) != 2 || len(signed.Indices) != 1 {
+		t.Fatalf("%v %v", plain, signed)
+	}
+	var vals []PCRValue
+	for _, i := range plain.Indices {
+		vals = append(vals, PCRValue{Index: i, Value: m.tpm.PCRs[i]})
+	}
+	pol, err := SignedPCRPolicy(der, plain, vals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := ApprovalDigest(ApprovedPolicy(pol, m.dev.GenerationIndexName, m.gen), m.dev.PolicyRef)
+	r, s, _ := ecdsa.Sign(rand.Reader, m.signer, d)
+	m.appr = tpm2.Marshal(tpm2.TPMTSignature{
+		SigAlg: tpm2.TPMAlgECDSA,
+		Signature: tpm2.NewTPMUSignature(tpm2.TPMAlgECDSA, &tpm2.TPMSSignatureECC{
+			Hash:       tpm2.TPMAlgSHA256,
+			SignatureR: tpm2.TPM2BECCParameter{Buffer: r.FillBytes(make([]byte, 32))},
+			SignatureS: tpm2.TPM2BECCParameter{Buffer: s.FillBytes(make([]byte, 32))},
+		}),
+	})
+	signFor := func(value []byte) []byte {
+		digest := sha256.Sum256(PolicyPCRDigest(signed, []PCRValue{{Index: 11, Value: value}}))
+		sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sig
+	}
+
+	req := m.request(t, "r1", nonce(1))
+	req.PCRSignature = signFor(m.tpm.PCRs[11])
+	if _, err := VerifyRelease(m.dev, nonce(1), req, 0); err != nil {
+		t.Fatalf("the signed image: %v", err)
+	}
+	// The next image: PCR 11 moved, the approval stands.
+	m.tpm.PCRs[11] = bytes.Repeat([]byte{0xAA}, 32)
+	req = m.request(t, "r2", nonce(2))
+	req.PCRSignature = signFor(m.tpm.PCRs[11])
+	if _, err := VerifyRelease(m.dev, nonce(2), req, 0); err != nil {
+		t.Fatalf("a new signed image: %v", err)
+	}
+	// An image the key did not sign, and no signature.
+	m.tpm.PCRs[11] = bytes.Repeat([]byte{0xBB}, 32)
+	req = m.request(t, "r3", nonce(3))
+	req.PCRSignature = signFor(bytes.Repeat([]byte{0xAA}, 32))
+	if _, err := VerifyRelease(m.dev, nonce(3), req, 0); err == nil {
+		t.Fatal("an unsigned image released")
+	}
+	req.PCRSignature = nil
+	if _, err := VerifyRelease(m.dev, nonce(3), req, 0); err == nil {
+		t.Fatal("no signature released")
+	}
+	// A PCR the approval holds moved: refused, whatever the PCR key signed.
+	m.tpm.PCRs[11] = bytes.Repeat([]byte{0xAA}, 32)
+	m.tpm.PCRs[7] = bytes.Repeat([]byte{0xCC}, 32)
+	req = m.request(t, "r4", nonce(4))
+	req.PCRSignature = signFor(m.tpm.PCRs[11])
+	if _, err := VerifyRelease(m.dev, nonce(4), req, 0); err == nil {
+		t.Fatal("another PCR 7 released")
+	}
+	// A selection of signed PCRs alone covers nothing of the approval.
+	if err := (Selection{Alg: uint16(tpm2.TPMAlgSHA256), Indices: []uint8{11}, Signed: []uint8{11}}).check(); err == nil {
+		t.Fatal("signed PCRs alone")
+	}
+	if err := (Selection{Alg: uint16(tpm2.TPMAlgSHA256), Indices: []uint8{7}, Signed: []uint8{11}}).check(); err == nil {
+		t.Fatal("a signed PCR outside the selection")
 	}
 }

@@ -62,7 +62,7 @@ func testSSHCA(t *testing.T, approved bool) sshCAState {
 		if err := approveSSHCASlots(ca, auth, values); err != nil {
 			t.Fatal(err)
 		}
-		st.Approvals = nextApprovals(ca, values)
+		st.Approvals = nextApprovals(ca, values, nil)
 	}
 	return st
 }

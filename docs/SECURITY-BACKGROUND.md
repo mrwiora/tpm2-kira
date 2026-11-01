@@ -1137,7 +1137,7 @@ the current design.
 
 ---
 
-## 10. Blob Format (Version 17)
+## 10. Blob Format (Version 18)
 
 The blob is a binary-serialised structure with explicit length prefixes and
 maximum size limits to prevent memory exhaustion during deserialisation.
@@ -1176,7 +1176,7 @@ every local user in `/proc/<pid>/cmdline`.
 ```
 Offset  Field                   Type        Notes
 ─────────────────────────────────────────────────────────────
-0       Version                 uint32      Must be 17
+0       Version                 uint32      Must be 18
 4       Payload length          uint32      Signed region length
 8       Public length           uint32      ≤ 2MB; 0 with phones (§3.1)
 ?       Public                  []byte      TPMT_PUBLIC of the TOTP key object
@@ -1199,6 +1199,8 @@ Offset  Field                   Type        Notes
 ?       SigningPublic           []byte      TPMT_PUBLIC of the signing key
 ?       ApprovalSignature len   uint16      ≤ 1024
 ?       ApprovalSignature       []byte      TPMT_SIGNATURE over H(approvedPolicy ‖ PolicyRef)
+?       PCRKey len              uint16      ≤ 512, 0 without a signed PCR
+?       PCRKey                  bytes       PKIX DER, RSA-2048: signs PCRs of source 4 (signed)
 ?       MeasurePointApplied     uint8       0 or 1: the measure-point extends are in
                                             the eventlog PCRs' values; 1 only
                                             with eventlog PCRs

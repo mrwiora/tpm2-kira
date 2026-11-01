@@ -1841,8 +1841,8 @@ func TestValidateNVRAMIndex(t *testing.T) {
 }
 
 func TestCurrentBlobVersion(t *testing.T) {
-	if nvslot.CurrentBlobVersion != 17 {
-		t.Errorf("CurrentBlobVersion should be 17, got %d", nvslot.CurrentBlobVersion)
+	if nvslot.CurrentBlobVersion != 18 {
+		t.Errorf("CurrentBlobVersion should be 18, got %d", nvslot.CurrentBlobVersion)
 	}
 }
 

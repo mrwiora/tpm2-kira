@@ -135,6 +135,14 @@ func Setup(opts SetupOptions) error {
 	}
 	fmt.Printf("  Public key written to:  %s\n", pubKeyPath)
 
+	// The PCR key: for a unified kernel image's PCR 11. GRUB signs nothing.
+	if !GRUBBoot("") {
+		if err := ensurePCRKey(); err != nil {
+			return fmt.Errorf("the PCR key: %w", err)
+		}
+		fmt.Printf("  PCR key written to:     %s (public part %s)\n", pcrKeyPath, pcrPubPath)
+	}
+
 	fmt.Println()
 	fmt.Println("=== Setup Complete ===")
 	fmt.Printf("  Keys directory: %s\n", signing.DefaultKeysDir)

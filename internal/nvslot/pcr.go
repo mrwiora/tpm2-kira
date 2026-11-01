@@ -15,6 +15,9 @@ func GetCurrentPCRValuesFromRegisters(tpmDev transport.TPM, sealedBlob *SealedBl
 	hashAlgo := sealedBlob.GetHashAlgo()
 	pcrIndices := sealedBlob.GetPCRIndices()
 
+	// A signed PCR is the PCR key's to judge (its signature, in the policy
+	// session): the blob's value is the image's at the approval, nothing to
+	// compare the register with.
 	regValues, err := measure.ReadPCRRegisters(tpmDev, pcrIndices, hashAlgo, debug)
 	if err != nil {
 		return nil, err
@@ -23,7 +26,9 @@ func GetCurrentPCRValuesFromRegisters(tpmDev transport.TPM, sealedBlob *SealedBl
 	// Map results back to blob PCR digest order
 	currentPCRValues := make([]tpm2.TPM2BDigest, len(sealedBlob.Payload.PCRDigests))
 	for i, pair := range sealedBlob.Payload.PCRDigests {
-		if val, ok := regValues[pair.Index]; ok {
+		if pair.Source == measure.PCRSourceSigned {
+			currentPCRValues[i] = pair.Digest
+		} else if val, ok := regValues[pair.Index]; ok {
 			currentPCRValues[i] = tpm2.TPM2BDigest{Buffer: val}
 		}
 	}

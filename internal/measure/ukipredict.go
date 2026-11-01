@@ -120,6 +120,23 @@ func PredictPCR11FromUKI(ukiPath string, phases []string, algo PCRHashAlgo, debu
 	return pcr, nil
 }
 
+// UKIMeasurementDigests are the digests systemd-stub and the phases extend into
+// PCR 11 for this image, in order.
+func UKIMeasurementDigests(ukiPath string, phases []string, algo PCRHashAlgo) ([][]byte, error) {
+	measurements, err := ukiSectionMeasurements(ukiPath, algo)
+	if err != nil {
+		return nil, err
+	}
+	var out [][]byte
+	for _, m := range measurements {
+		out = append(out, m.Digest)
+	}
+	for _, phase := range phases {
+		out = append(out, DigestOf(algo, []byte(phase)))
+	}
+	return out, nil
+}
+
 // VerifyUKIPredictionAgainstEventlog recomputes PCR 11 for a unified kernel
 // image and compares it with the firmware event log replay. It proves that the
 // section set, order and digest scheme used here match what the running
@@ -222,7 +239,7 @@ func VerifyUKIPredictionAgainstEventlog(ukiPath string, logDigests [][]byte, alg
 func VerifyUKISpecsAgainstEventlog(specs []PCRSpec, algo PCRHashAlgo, debug bool) error {
 	var ukiPaths []string
 	for _, spec := range specs {
-		if spec.Source == PCRSourceUKI && spec.Index == TPM2PCRKernelBoot {
+		if spec.Source.FromImage() && spec.Index == TPM2PCRKernelBoot {
 			ukiPaths = append(ukiPaths, spec.Command)
 		}
 	}

@@ -73,6 +73,8 @@ type PCRSpec struct {
 //	"11u:/path.efi"  - unified kernel image at an explicit path
 //	"4u", "4u:/path" - PCR 4 predicted for the next boot (pcr4predict.go), with
 //	                   that image for what the firmware loads from \EFI\Linux\
+//	"11s", "11s:/path" - PCR 11 signed by the PCR key, for the image at that
+//	                   path (the default): the slot's approval does not hold it
 func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 	parts := strings.Split(pcrsStr, ",")
 	specs := make([]PCRSpec, 0, len(parts))
@@ -91,6 +93,14 @@ func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 			source = PCRSourceUKI
 			command = part[uIdx+2:]
 			numStr = part[:uIdx]
+		} else if sIdx := strings.Index(part, "s:"); sIdx > 0 {
+			source = PCRSourceSigned
+			command = part[sIdx+2:]
+			numStr = part[:sIdx]
+		} else if strings.HasSuffix(part, "s") {
+			source = PCRSourceSigned
+			command = DefaultUKIPath
+			numStr = part[:len(part)-1]
 		} else if strings.HasSuffix(part, "e") {
 			source = PCRSourceEventlog
 			numStr = part[:len(part)-1]
@@ -119,7 +129,10 @@ func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 		if source == PCRSourceEventlog && pcr == TPM2PCRBootLoader {
 			return nil, fmt.Errorf("PCR 4 moves at every loader and kernel update, this boot's log (4e) would not hold at the next: use 4u, predicted for the next boot")
 		}
-		if source == PCRSourceUKI && command == "" {
+		if source == PCRSourceSigned && pcr != TPM2PCRKernelBoot {
+			return nil, fmt.Errorf("signed source (s suffix) is only valid for PCR 11, got PCR %d", pcr)
+		}
+		if source.FromImage() && command == "" {
 			return nil, fmt.Errorf("uki source for PCR %d requires a path (format: %du:/path/to/uki.efi)", pcr, pcr)
 		}
 		if seen[pcr] {
@@ -142,8 +155,8 @@ func PCRSpecsToString(specs []PCRSpec) string {
 	parts := make([]string, len(specs))
 	for i, spec := range specs {
 		switch spec.Source {
-		case PCRSourceUKI:
-			parts[i] = fmt.Sprintf("%du:%s", spec.Index, untrusted.Quote(spec.Command))
+		case PCRSourceUKI, PCRSourceSigned:
+			parts[i] = fmt.Sprintf("%d%s:%s", spec.Index, spec.Source.Suffix(), untrusted.Quote(spec.Command))
 		default:
 			parts[i] = fmt.Sprintf("%d%s", spec.Index, spec.Source.Suffix())
 		}
@@ -365,7 +378,7 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 		switch spec.Source {
 		case PCRSourceEventlog:
 			eventlogPCRIndices = append(eventlogPCRIndices, spec.Index)
-		case PCRSourceUKI:
+		case PCRSourceUKI, PCRSourceSigned:
 			ukiPCRIndices = append(ukiPCRIndices, spec.Index)
 		default:
 			if point == MeasurePointBeforeSeparator && mode != MeasurePointOff && slices.Contains(osSeparatorPCRs, spec.Index) {
@@ -427,7 +440,7 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 	// measured by the time tpm2-kira runs.
 	if len(ukiPCRIndices) > 0 {
 		for _, spec := range specs {
-			if spec.Source != PCRSourceUKI {
+			if !spec.Source.FromImage() {
 				continue
 			}
 			if spec.Index == TPM2PCRBootLoader {
@@ -544,7 +557,13 @@ const (
 	// Source byte 2 is retired and must not be reused; see HISTORY.md.
 	// PCRSourceUKI means the PCR value was computed from a unified kernel image ('u' suffix)
 	PCRSourceUKI PCRSource = 3
+	// PCRSourceSigned means the PCR is signed by the PCR key ('s' suffix): the
+	// value is computed from the image, for showing; the approval does not hold it
+	PCRSourceSigned PCRSource = 4
 )
+
+// FromImage says whether the source names an image, which a blob carries.
+func (s PCRSource) FromImage() bool { return s == PCRSourceUKI || s == PCRSourceSigned }
 
 // String returns a human-readable label for the PCR source
 func (s PCRSource) String() string {
@@ -555,6 +574,8 @@ func (s PCRSource) String() string {
 		return "register"
 	case PCRSourceUKI:
 		return "uki"
+	case PCRSourceSigned:
+		return "signed"
 	default:
 		return "unknown"
 	}
@@ -567,6 +588,8 @@ func (s PCRSource) Suffix() string {
 		return "e"
 	case PCRSourceUKI:
 		return "u"
+	case PCRSourceSigned:
+		return "s"
 	case PCRSourceRegister:
 		return ""
 	default:

@@ -186,7 +186,7 @@ func (c *controller) keysSteps() []controlStep {
 		case slot0 == nil:
 			seal.Explain = "Seals slot 0 to the boot state - to " + f.PCRs + ", evaluated for this machine and put up as the recommendation to acknowledge, or custom PCRs instead. The vault, the TPM salt and a phone are enrolled into it. Asked: a TOTP code at boot too, to compare with your authenticator before you type anything - then slot 1 gets one sealed to " + fallbackSel + ", the fallback for a boot whose kernel changed unpredicted."
 		default:
-			seal.Explain = "Slot 1, the fallback, is missing: seals a TOTP key to " + fallbackSel + " into it, the code for a boot whose firmware or option ROMs changed (a kernel not approved shows no code in it). Slot 0 stays as it is."
+			seal.Explain = "Slot 1, the fallback, is missing: seals a TOTP key to " + fallbackSel + " into it, the code for a boot whose firmware or option ROMs changed (a kernel not approved shows none in it until PCR 11 is signed). Slot 0 stays as it is."
 		}
 		steps = append(steps, seal)
 	}

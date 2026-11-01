@@ -55,6 +55,13 @@ shows no code, but slot 1 still does: the machine is not simply lost, and slot 0
 is approved again once the boot is understood. A kernel not approved shows no
 code in either. Pair both with your authenticator.
 
+On a UKI, once `control` has written the PCR key into `/etc/kernel/uki.conf` and
+the image carries its signature, PCR 11 goes `11s`: signed by
+`/etc/tpm2-kira/pcr.key` for `enter-initrd` alone, not approved. A kernel update
+then needs no approval of 11, and slot 1 outlasts a kernel not approved. Any image
+ever signed with it keeps 11 valid; revocation is a new PCR key and the slots
+approved again. Sealed slots take it at their next approval.
+
 PCR 4 is `4u`, predicted for the next boot: this boot's log with each image the
 firmware loaded hashed (Authenticode) as it is on the EFI system partition, the
 other events kept. `4e` is refused: PCR 4 moves at every loader and kernel

@@ -113,6 +113,11 @@ type machineFacts struct {
 	HookInstalled bool
 	// Hooks is mkinitcpio's HOOKS as it would build with them.
 	Hooks []string
+	// PCRKey: the PCR key exists; UKISigns: uki.conf has ukify sign with it;
+	// UKISigErr: why the image built does not carry what the slots need.
+	PCRKey    bool
+	UKISigns  bool
+	UKISigErr string
 	// NoRecovery are the LUKS devices without a keyslot that is not
 	// tpm2-kira's: nothing to authorise an enrolment, no way in by hand.
 	NoRecovery []string
@@ -202,6 +207,14 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	case "mkinitcpio":
 		f.HookInstalled = mkinitcpioHookInstalled()
 		f.Hooks = mkinitcpioHooks(mkinitcpioConf)
+		_, keyErr := os.Stat(pcrKeyPath)
+		f.PCRKey, f.UKISigns = keyErr == nil, ukiConfSigns()
+		if f.UKISigns {
+			f.UKISigErr = "no unified kernel image found"
+			if uki := findUKI(); uki != "" {
+				f.UKISigErr = ukiSignedReason(uki)
+			}
+		}
 		if f.HookState == "" {
 			f.Rebuild = rebuildPending(mkinitcpioConf)
 		}
@@ -271,6 +284,9 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 		f.Pending, f.Unused, f.ImageErr = imageState(f.Initramfs, f.Plan)
 		if f.Rebuild != "" {
 			f.Pending = append([]string{f.Rebuild}, f.Pending...)
+		}
+		if f.UKISigns && f.UKISigErr != "" {
+			f.Pending = append(f.Pending, "the image lacks the PCR key's signature of PCR 11")
 		}
 	}
 	var devices []string

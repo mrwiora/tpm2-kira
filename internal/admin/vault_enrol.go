@@ -265,7 +265,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		Token: o.Token, DeviceID: att.DeviceID, Name: vaultName(o.Name, att.FriendlyName),
 		EKPublic: ekPub, EKCert: phonegate.ReadEKCert(tpmDev, att.EKAlg), AKPublic: att.AKPublic,
 		SigningPublic: p.SigningPublic, PolicyRef: p.PolicyRef,
-		GenerationIndexName: genName, Generation: p.Generation, Selection: sel,
+		GenerationIndexName: genName, Generation: p.Generation, Selection: sel, PCRKey: p.PCRKey,
 		Remote:           vaultproto.Wrapped{Credential: wRemote.Credential, EncryptedSecret: wRemote.EncryptedSecret},
 		Label:            label,
 		Pepper:           pepper != nil,

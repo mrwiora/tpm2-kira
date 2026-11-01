@@ -34,6 +34,12 @@ import (
 //
 //	approvedPolicy = PolicyNV(PolicyPCR(selection, values), generation index == G)
 //
+// and where the slot has signed PCRs - PCR 11 of a unified kernel image, by the
+// PCR key - those first (attest.PCRKeyPublic), so that a new image needs no
+// approval for them:
+//
+//	PolicyPCR(11) ; PolicyAuthorize(PCR key) ; PolicyPCR(the others) ; PolicyNV(G)
+//
 // G lives in a per-slot NV index (GenerationIndex) that only the signing key
 // can write. reseal raises G, which revokes every earlier approval, and signs
 // a new approvedPolicy for the new PCR values; it never needs the key.
@@ -109,6 +115,61 @@ func Closed(tpmDev transport.TPM) bool {
 		err = CheckOpen(tpmDev, measure.PCRHashAlgoSHA1)
 	}
 	return errors.Is(err, ErrClosed)
+}
+
+// signedPCRs is what a policy session needs for a slot's signed PCRs: the PCR
+// key's Name, the policy of their values as they are now, and the TPM's ticket
+// for the signature. The key is gone again by then: a TPM holds few objects at
+// once (three transient ones), and the session's user loads two of its own.
+type signedPCRs struct {
+	name   tpm2.TPM2BName
+	policy []byte
+	ticket tpm2.TPMTTKVerified
+}
+
+// ErrNotSigned is a boot whose PCR 11 the PCR key has not signed: an image
+// without its signature, or none from the image at all.
+var ErrNotSigned = errors.New("no signature by the PCR key of this boot's PCR 11")
+
+// checkSignedPCRs finds the PCR key's signature of the signed PCRs' values.
+func checkSignedPCRs(tpmDev transport.TPM, blob *SealedBlob) (*signedPCRs, error) {
+	pcrs := blob.SignedPCRIndices()
+	if len(pcrs) != 1 {
+		return nil, fmt.Errorf("the slot signs PCRs %v: only one is supported", pcrs)
+	}
+	bank := blob.GetHashAlgo()
+	values, err := measure.ReadPCRRegisters(tpmDev, pcrs, bank, false)
+	if err != nil {
+		return nil, err
+	}
+	sigs, err := measure.ReadBootPCRSignatures()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrNotSigned, err)
+	}
+	pol := measure.SignedPolicy(pcrs[0], values[pcrs[0]], bank)
+	sig := sigs.Find(blob.Payload.PCRKey, bank, pcrs, pol)
+	if sig == nil {
+		return nil, ErrNotSigned
+	}
+	pub, err := attest.PCRKeyPublic(blob.Payload.PCRKey)
+	if err != nil {
+		return nil, err
+	}
+	key, err := tpm2.LoadExternal{InPublic: tpm2.New2B(pub), Hierarchy: tpm2.TPMRHOwner}.Execute(tpmDev)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load the PCR key: %w", err)
+	}
+	defer tpmdev.FlushHandle(tpmDev, key.ObjectHandle)
+	digest := sha256.Sum256(pol)
+	ticket, err := tpm2.VerifySignature{
+		KeyHandle: key.ObjectHandle,
+		Digest:    tpm2.TPM2BDigest{Buffer: digest[:]},
+		Signature: attest.PCRSignatureForTPM(sig),
+	}.Execute(tpmDev)
+	if err != nil {
+		return nil, fmt.Errorf("the PCR key's signature: %w", err)
+	}
+	return &signedPCRs{name: key.Name, policy: pol, ticket: ticket.Validation}, nil
 }
 
 // ── policy digests ──────────────────────────────────────────────────────────
@@ -295,12 +356,38 @@ func ApprovedSessionThen(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint3
 	}
 	done := func() { tpmdev.FlushHandle(tpmDev, signKey.ObjectHandle) }
 
+	var signed *signedPCRs
+	if len(blob.SignedPCRIndices()) > 0 {
+		if signed, err = checkSignedPCRs(tpmDev, blob); err != nil {
+			done()
+			return nil, nil, err
+		}
+	}
+
 	session := tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm transport.TPM, handle tpm2.TPMISHPolicy, _ tpm2.TPM2BNonce) error {
+		if signed != nil {
+			// The signed PCRs first: PolicyAuthorize by the PCR key resets
+			// the session's digest to its Name.
+			if _, err := (tpm2.PolicyPCR{
+				PolicySession: handle,
+				Pcrs:          measure.CreatePCRSelection(blob.SignedPCRIndices(), hashAlgo),
+			}).Execute(tpm); err != nil {
+				return fmt.Errorf("PolicyPCR(%v): %w", blob.SignedPCRIndices(), err)
+			}
+			if _, err := (tpm2.PolicyAuthorize{
+				PolicySession:  handle,
+				ApprovedPolicy: tpm2.TPM2BDigest{Buffer: signed.policy},
+				KeySign:        signed.name,
+				CheckTicket:    signed.ticket,
+			}).Execute(tpm); err != nil {
+				return fmt.Errorf("PolicyAuthorize(PCR key): %w", err)
+			}
+		}
 		if _, err := (tpm2.PolicyPCR{
 			PolicySession: handle,
 			Pcrs: tpm2.TPMLPCRSelection{PCRSelections: []tpm2.TPMSPCRSelection{{
 				Hash:      hashAlgo.TPMAlg(),
-				PCRSelect: measure.PcrsToBitmapBytes(blob.GetPCRIndices()),
+				PCRSelect: measure.PcrsToBitmapBytes(blob.PlainPCRIndices()),
 			}}},
 		}).Execute(tpm); err != nil {
 			return fmt.Errorf("PolicyPCR: %w", err)

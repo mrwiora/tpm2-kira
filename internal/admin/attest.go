@@ -705,7 +705,8 @@ func bootMatchesApproval(tpmDev transport.TPM, sealed *nvslot.SealedBlob) ([]int
 	}
 	var differ []int
 	for _, pd := range sealed.Payload.PCRDigests {
-		if !bytes.Equal(res.Values[pd.Index], pd.Digest.Buffer) {
+		// A signed PCR is the PCR key's, not the approval's.
+		if pd.Source != measure.PCRSourceSigned && !bytes.Equal(res.Values[pd.Index], pd.Digest.Buffer) {
 			differ = append(differ, pd.Index)
 		}
 	}

@@ -39,6 +39,9 @@ package admin
 
 import (
 	"crypto"
+	"crypto/x509"
+	"debug/pe"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -162,11 +165,15 @@ func createSSHCA(conf *config.Config, tpmPath string, signer crypto.Signer) (*ho
 			return nil, err
 		}
 	}
-	slot0, ok := conf.Slots[0]
-	if !ok {
+	if _, ok := conf.Slots[0]; !ok {
 		return nil, errors.New("assh.conf names no slot 0 (ASSH_CA_SLOT_0): the CA is created with it")
 	}
-	ca, err := hostkey.CreateCA(tpmDev, signer.Public(), hostkey.CAOptions{Type: conf.CAType, Bank: conf.Bank, PCRs: slot0, PolicyRef: []byte(conf.PolicyRef)})
+	signSlots(conf)
+	slots, err := sshCASlotSpecs(*conf)
+	if err != nil {
+		return nil, err
+	}
+	ca, err := hostkey.CreateCA(tpmDev, signer.Public(), hostkey.CAOptions{Type: conf.CAType, Bank: conf.Bank, Slots: slots, PolicyRef: []byte(conf.PolicyRef)})
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +188,56 @@ func createSSHCA(conf *config.Config, tpmPath string, signer crypto.Signer) (*ho
 		return nil, err
 	}
 	return ca, saveSSHCA(ca, conf.CA)
+}
+
+// signSlots makes PCR 11 of conf's slots the PCR key's, where the machine has
+// ukify sign with it (pcrkey.go): no approval of the CA for 11 at a kernel
+// update. The image the signatures come from is built when control is left.
+func signSlots(conf *config.Config) {
+	if !ukiConfSigns() || len(conf.Signed) > 0 {
+		return
+	}
+	for n, pcrs := range conf.Slots {
+		if !slices.Contains(pcrs, measure.TPM2PCRKernelBoot) {
+			continue
+		}
+		if conf.Signed == nil {
+			conf.Signed = map[int][]int{}
+		}
+		conf.Signed[n] = []int{measure.TPM2PCRKernelBoot}
+		conf.Slots[n] = slices.DeleteFunc(slices.Clone(pcrs), func(p int) bool { return p == measure.TPM2PCRKernelBoot })
+	}
+	if len(conf.Signed) > 0 {
+		conf.PCRKey = pcrPubPath
+		conf.PCRSigs = measure.BootPCRSignaturePaths[0]
+	}
+}
+
+// sshCASlotSpecs are conf's slots, with their signed PCRs and ASSH_PCR_KEY.
+func sshCASlotSpecs(conf config.Config) ([]hostkey.SlotSpec, error) {
+	var out []hostkey.SlotSpec
+	for _, n := range conf.SlotNumbers() {
+		s := hostkey.SlotSpec{Number: n, PCRs: conf.Slots[n]}
+		if pcrs, ok := conf.Signed[n]; ok {
+			b, err := os.ReadFile(conf.PCRKey)
+			if err != nil {
+				return nil, fmt.Errorf("ASSH_PCR_KEY: %w", err)
+			}
+			block, _ := pem.Decode(b)
+			if block == nil {
+				return nil, fmt.Errorf("ASSH_PCR_KEY: %s holds no public key", conf.PCRKey)
+			}
+			key, err := x509.ParsePKIXPublicKey(block.Bytes)
+			if err != nil {
+				return nil, fmt.Errorf("ASSH_PCR_KEY: %w", err)
+			}
+			if s.Signed, err = hostkey.NewSigned(pcrs, key); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, s)
+	}
+	return out, nil
 }
 
 // approveSSHCA has signer approve the next boot's values in every slot -
@@ -328,15 +385,42 @@ func readSSHCA(conf config.Config, tpmPath string) sshCAState {
 	if err != nil {
 		return sshCAState{CA: ca, Err: err.Error()}
 	}
-	return sshCAState{CA: ca, Values: values, Approvals: nextApprovals(ca, values)}
+	return sshCAState{CA: ca, Values: values, Approvals: nextApprovals(ca, values, nextPCRSignatures())}
+}
+
+// nextPCRSignatures are the signatures the next boot's image carries; none
+// when there is no such image, or it has none.
+func nextPCRSignatures() hostkey.PCRSignatures {
+	uki := findUKI()
+	if uki == "" {
+		return nil
+	}
+	f, err := pe.Open(uki)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	s := f.Section(".pcrsig")
+	if s == nil {
+		return nil
+	}
+	b, err := s.Data()
+	if err != nil {
+		return nil
+	}
+	sigs, err := hostkey.ParsePCRSignatures(b)
+	if err != nil {
+		return nil
+	}
+	return sigs
 }
 
 // nextApprovals are ca's approvals of values, one for each slot that has
 // one, in slot order.
-func nextApprovals(ca *hostkey.CA, values map[int][]byte) []hostkey.Approval {
+func nextApprovals(ca *hostkey.CA, values map[int][]byte, sigs hostkey.PCRSignatures) []hostkey.Approval {
 	var as []hostkey.Approval
 	for _, s := range ca.Slots {
-		if a := ca.Only(func(a hostkey.Approval) bool { return a.Slot == s.Number }).Approved(values, nil); a != nil {
+		if a := ca.Only(func(a hostkey.Approval) bool { return a.Slot == s.Number }).Approved(values, sigs); a != nil {
 			as = append(as, *a)
 		}
 	}

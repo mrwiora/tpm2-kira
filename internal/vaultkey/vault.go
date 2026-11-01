@@ -30,6 +30,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -40,6 +41,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/core/attest"
 	"github.com/mrwiora/tpm2-kira/core/vaultproto"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/screen"
@@ -339,7 +341,11 @@ func SealedSelection(sb *nvslot.SealedBlob) vaultproto.Selection {
 		idx = append(idx, uint8(i))
 	}
 	sort.Slice(idx, func(a, b int) bool { return idx[a] < idx[b] })
-	return vaultproto.Selection{Alg: uint16(sb.GetHashAlgo().TPMAlg()), Indices: idx}
+	var signed []uint8
+	for _, i := range sb.SignedPCRIndices() {
+		signed = append(signed, uint8(i))
+	}
+	return vaultproto.Selection{Alg: uint16(sb.GetHashAlgo().TPMAlg()), Indices: idx, Signed: signed}
 }
 
 // FetchRemote asks the vault for the slot's remote part: a challenge, a
@@ -371,6 +377,17 @@ func FetchRemote(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, c *vau
 	}
 	for _, v := range q.Values {
 		req.PCRValues = append(req.PCRValues, vaultproto.PCRValue{Index: v.Index, Value: v.Digest})
+		if slices.Contains(sel.Signed, v.Index) {
+			sigs, err := measure.ReadBootPCRSignatures()
+			if err != nil {
+				return nil, err
+			}
+			bank := vs.Sealed.GetHashAlgo()
+			pcrs := []int{int(v.Index)}
+			if req.PCRSignature = sigs.Find(p.PCRKey, bank, pcrs, measure.SignedPolicy(int(v.Index), v.Digest, bank)); req.PCRSignature == nil {
+				return nil, nvslot.ErrNotSigned
+			}
+		}
 	}
 	toldPending := false
 	for {

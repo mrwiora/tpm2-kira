@@ -113,6 +113,11 @@ class Hib:
                                "printf 'RESUME=UUID=%s\\n' \"$uuid\" > /etc/initramfs-tools/conf.d/resume; "
                                "update-initramfs -u 2>&1 | tail -3; cat /etc/initramfs-tools/conf.d/resume /proc/swaps", save="swap.log")
         self.check("setup: the resume device (an encrypted swap)", rc == 0, out[-400:])
+        # This test probes port 22 again and again across a resume, which keeps
+        # sshd's state: its penalties would close the connection for minutes.
+        rc, out = self.run("echo 'PerSourcePenalties no' > /etc/ssh/sshd_config.d/00-hibernatetest.conf; "
+                           "systemctl reload sshd 2>/dev/null || systemctl reload ssh; sshd -T 2>/dev/null | grep -i persourcepenalties", save="sshd-penalties.log")
+        self.check("setup: sshd without per-source penalties (this test's probes)", rc == 0, out[-300:])
 
     def state(self, tag):
         """boot_id, PCR 15, the TPM's clock counts, the CA as aSSH shows

@@ -73,7 +73,21 @@ func DefaultPCRSelection(eventlogPath string, algo measure.PCRHashAlgo) (string,
 	if err != nil {
 		return "0,2,7", "the event log does not parse: the firmware and the secure boot state, as the registers hold them"
 	}
-	return defaultPCRSelection(log.Events(measure.AttestHash(algo)), findUKI())
+	sel, why := defaultPCRSelection(log.Events(measure.AttestHash(algo)), findUKI())
+	return signedIfSigning(sel), why
+}
+
+// signedIfSigning is sel with PCR 11 signed by the PCR key where the machine
+// signs its images and this one is signed (pcrkey.go).
+func signedIfSigning(sel string) string {
+	if !strings.Contains(sel, "11u") || !ukiConfSigns() {
+		return sel
+	}
+	uki := findUKI()
+	if uki == "" || ukiSignedReason(uki) != "" {
+		return sel
+	}
+	return strings.Replace(sel, "11u", "11s", 1)
 }
 
 // grubBootWhy begins DefaultPCRSelection's reason on a GRUB boot.
@@ -171,7 +185,7 @@ func defaultFallbackSelection(eventlogPath string) string {
 	}
 	for _, algo := range []measure.PCRHashAlgo{measure.PCRHashAlgoSHA256, measure.PCRHashAlgoSHA1} {
 		if events := log.Events(measure.AttestHash(algo)); len(events) > 0 {
-			return fallbackSelectionFor(events, findUKI())
+			return signedIfSigning(fallbackSelectionFor(events, findUKI()))
 		}
 	}
 	return FallbackPCRSelection

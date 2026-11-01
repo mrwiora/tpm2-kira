@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 
@@ -289,6 +290,13 @@ func (c *controller) ensureSSHCA(conf *config.Config) error {
 				conf.Slots = map[int][]int{}
 				for _, sl := range st.CA.Slots {
 					conf.Slots[sl.Number] = sl.PCRs
+					if sl.Signed != nil {
+						if conf.Signed == nil {
+							conf.Signed = map[int][]int{}
+						}
+						conf.Signed[sl.Number] = sl.Signed.PCRs
+						conf.PCRKey, conf.PCRSigs = pcrPubPath, measure.BootPCRSignaturePaths[0]
+					}
 				}
 			}
 			fmt.Fprintf(c.out, "SSH CA %s: %s", path, st.CA.Describe())

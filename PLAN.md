@@ -1,3 +1,33 @@
+# PLAN: the hardening of the close, one PCR rule, signed PCR 11 (`feat/close-pcr15`)
+
+Status: **implemented** (2026-11-01). The workspace's PLAN.md holds the confirmed plan.
+
+## Goal
+
+A failed close needs a person, PCR 15 at zero is checked, every slot is PCR 7 and the image
+with slot 0 adding 0, 2 and 4, PCR 4 predicted for the next boot, and on a UKI PCR 11 is
+signed by tpm2-kira's own PCR key.
+
+## Steps
+
+- [x] E2. `close` tries once more; a failure powers off (Arch `FailureAction=poweroff-force`,
+      Debian `poweroff -f`); hibernatetest V4.
+- [x] E3. `slot add`, `slot approve`, the CA's approvals refuse an event in PCR 15 in the
+      firmware's log; status and control red (`closepcr.go`).
+- [x] E5. SSH.md's known limits; systemd-boot's editor under Secure Boot (systemd 262).
+- [x] F1. `4u` (`measure/pcr4predict.go`, go-uefi-slim's `HashWith`), `4e` refused; the
+      selections; `slot approve --if-moved`, the drop-in on `systemd-boot-update.service`; status.
+- [x] F2. The PCR key (`admin/pcrkey.go`), control's step for `uki.conf`, `11s` (blob 18,
+      `nvslot`'s nested PolicyAuthorize, `measure/pcrsig.go`), the CA's slots signed, core's
+      `vaultproto` (Selection.Signed, PCRKey, PCRSignature).
+
+## Open questions
+
+1. A shim or GRUB package on Debian moves PCR 4 with no hook: status says it is due; a
+   dpkg trigger would approve it.
+
+---
+
 # PLAN: PCR 15 closes every slot; GRUB binds PCRs 8 and 9 (`feat/close-pcr15`)
 
 Status: **implemented** (2026-11-01): unit and swtpm suites pass; the VM tests (`vmtest.py

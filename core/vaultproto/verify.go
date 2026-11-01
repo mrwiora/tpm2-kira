@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"math/big"
 
 	"github.com/google/go-tpm/tpm2"
@@ -26,6 +27,7 @@ type Device struct {
 	PolicyRef           []byte
 	GenerationIndexName []byte
 	Selection           Selection
+	PCRKey              []byte // PKIX DER of the key that signs Selection.Signed
 }
 
 // DeviceOf is the pinned part of an enrolment request.
@@ -37,6 +39,7 @@ func DeviceOf(r *EnrolRequest) *Device {
 		PolicyRef:           r.PolicyRef,
 		GenerationIndexName: r.GenerationIndexName,
 		Selection:           r.Selection,
+		PCRKey:              r.PCRKey,
 	}
 }
 
@@ -100,7 +103,9 @@ type Checked struct {
 //     approval a reseal revoked);
 //  4. the signing key's approval verifies over the policy those values
 //     and that generation make (docs/SECURITY-BACKGROUND.md §4.2): the
-//     quoted state is one the machine's own signing key approved.
+//     quoted state is one the machine's own signing key approved. Signed
+//     PCRs are the PCR key's: its signature verifies over their values, and
+//     the approved policy holds its Name in their place.
 //
 // The machine's TPM checks 3 and 4 again, against its own registers and
 // generation index, when it opens the remote part.
@@ -156,7 +161,11 @@ func VerifyRelease(dev *Device, nonce []byte, req *ReleaseRequest, minGeneration
 	if err != nil {
 		return nil, err
 	}
-	approved := ApprovedPolicy(PolicyPCRDigest(dev.Selection, req.PCRValues), dev.GenerationIndexName, req.Generation)
+	pcrPolicy, err := devicePCRPolicy(dev, req)
+	if err != nil {
+		return nil, err
+	}
+	approved := ApprovedPolicy(pcrPolicy, dev.GenerationIndexName, req.Generation)
 	if err := verifyDigestSignature(signer, ApprovalDigest(approved, dev.PolicyRef), req.ApprovalSignature); err != nil {
 		return nil, fmt.Errorf("the slot's approval does not cover this boot state: %w", err)
 	}
@@ -185,6 +194,43 @@ func cc(c tpm2.TPMCC) []byte { return binary.BigEndian.AppendUint32(nil, uint32(
 // these values: H(0…0 ‖ TPM_CC_PolicyPCR ‖ TPML_PCR_SELECTION ‖ H(values)).
 func PolicyPCRDigest(sel Selection, vals []PCRValue) []byte {
 	return policyHash(make([]byte, sha256.Size), cc(tpm2.TPMCCPolicyPCR), tpm2.Marshal(sel.tpm()), compositeDigest(vals))
+}
+
+// PolicyPCRDigestAfter is PolicyPCRDigest from the session's digest prior.
+func PolicyPCRDigestAfter(prior []byte, sel Selection, vals []PCRValue) []byte {
+	return policyHash(prior, cc(tpm2.TPMCCPolicyPCR), tpm2.Marshal(sel.tpm()), compositeDigest(vals))
+}
+
+// SignedPCRPolicy is the digest of the policy's first part with signed PCRs:
+// PolicyAuthorize by the PCR key (no reference) resets the session to its Name,
+// then PolicyPCR over the others - what ApprovedPolicy extends.
+func SignedPCRPolicy(pcrKey []byte, plain Selection, vals []PCRValue) ([]byte, error) {
+	name, err := attest.PCRKeyName(pcrKey)
+	if err != nil {
+		return nil, err
+	}
+	return PolicyPCRDigestAfter(attest.PolicyAuthorizeDigest(name, nil), plain, vals), nil
+}
+
+// devicePCRPolicy is the first part of the approved policy for a request's
+// values, the PCR key's signature checked where the selection has signed PCRs.
+func devicePCRPolicy(dev *Device, req *ReleaseRequest) ([]byte, error) {
+	if len(dev.Selection.Signed) == 0 {
+		return PolicyPCRDigest(dev.Selection, req.PCRValues), nil
+	}
+	plain, signed := dev.Selection.split()
+	var plainVals, signedVals []PCRValue
+	for _, v := range req.PCRValues {
+		if slices.Contains(dev.Selection.Signed, v.Index) {
+			signedVals = append(signedVals, v)
+		} else {
+			plainVals = append(plainVals, v)
+		}
+	}
+	if err := attest.VerifyPCRSignature(dev.PCRKey, PolicyPCRDigest(signed, signedVals), req.PCRSignature); err != nil {
+		return nil, fmt.Errorf("the PCR key's signature does not cover this boot's PCR %v: %w", dev.Selection.Signed, err)
+	}
+	return SignedPCRPolicy(dev.PCRKey, plain, plainVals)
 }
 
 // ApprovedPolicy extends a PolicyPCR digest by PolicyNV(generation index ==
@@ -237,7 +283,28 @@ func (s Selection) check() error {
 			return errors.New("PCR indices must be ascending and below 24")
 		}
 	}
+	for _, idx := range s.Signed {
+		if !slices.Contains(s.Indices, idx) {
+			return fmt.Errorf("signed PCR %d is not in the selection", idx)
+		}
+	}
+	if len(s.Signed) >= len(s.Indices) && len(s.Signed) > 0 {
+		return errors.New("a selection of signed PCRs alone: the slot's approval would cover none")
+	}
 	return nil
+}
+
+// split is the selection without its signed PCRs, and those alone.
+func (s Selection) split() (plain, signed Selection) {
+	plain, signed = Selection{Alg: s.Alg}, Selection{Alg: s.Alg}
+	for _, idx := range s.Indices {
+		if slices.Contains(s.Signed, idx) {
+			signed.Indices = append(signed.Indices, idx)
+		} else {
+			plain.Indices = append(plain.Indices, idx)
+		}
+	}
+	return plain, signed
 }
 
 func (s Selection) checkValues(vals []PCRValue) error {

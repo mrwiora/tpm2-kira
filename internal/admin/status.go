@@ -69,9 +69,9 @@ type StatusReport struct {
 	Dirt         []DirtySlot        `json:"incomplete_slots,omitempty"`
 	// GRUB: this boot was GRUB's; GRUBPassword: its entries need a
 	// superuser's password to be edited (GRUBPasswordErr: grub.cfg not read).
-	GRUB            bool     `json:"grub,omitempty"`
+	GRUB bool `json:"grub,omitempty"`
 	// ClosePCREvents: events in PCR 15 in this boot's firmware event log.
-	ClosePCREvents int `json:"close_pcr_events,omitempty"`
+	ClosePCREvents  int      `json:"close_pcr_events,omitempty"`
 	GRUBPassword    bool     `json:"grub_password,omitempty"`
 	GRUBPasswordErr string   `json:"grub_password_error,omitempty"`
 	Notes           []string `json:"notes"`

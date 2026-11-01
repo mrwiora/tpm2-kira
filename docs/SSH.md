@@ -71,7 +71,7 @@ key, a login is a session of the code screen):
 |---|---|
 | `ASSH_CA` | `efi:KIRAasshCA` (default): the SSH CA's EFI variable (its public key in `/etc/tpm2-kira/ssh_ca.pub`), created in the TPM by control (§4) |
 | `ASSH_CA_TYPE` | `p256` (default) or `rsa2048`: what control asked when it created the CA |
-| `ASSH_CA_SLOT_<N>` | a slot's PCRs, `0,2,4,7,11`; control writes two, worked out for this machine (§4). An edit takes effect at the next approval or control, which make the CA's slots these and approve them |
+| `ASSH_CA_SLOT_<N>` | a slot's PCRs, `0,2,4,7` with `ASSH_CA_SLOT_0_SIGNED=11` (and `ASSH_PCR_KEY`, `ASSH_PCR_SIGNATURE`, the PCR key's) on a UKI, `0,2,4,7,8,9` on GRUB; control writes two, worked out for this machine (§4). An edit takes effect at the next approval or control, which make the CA's slots these and approve them |
 | `ASSH_CHILD_UIDS` | `0x7FFE0000-0x7FFEFFFF` (default): where `ssh-child`'s uid is chosen from, one no one else has |
 | `ASSH_CA_REF` | `tpm2-kira ssh ca` (default): what the signing key's approvals are bound to |
 | `ASSH_LISTEN` | `:22` (default): the address the server listens on |
@@ -363,8 +363,10 @@ and no secret either: the keys are in the TPM.
   run it after every image rebuild, so a kernel update needs nothing by
   hand. control approves them when it creates the CA and at quit; the CA
   and the clients' trust in it stay the same. An approval that is skipped
-  (the YubiKey not plugged in) leaves no slot: both read the image, and such a
-  boot serves a temporary key. Slot 1 is for a firmware or option-ROM change.
+  (the YubiKey not plugged in) leaves slot 1 with PCR 11 signed (a UKI whose
+  `uki.conf` signs with the PCR key: a kernel update needs no approval of 11), and
+  no slot on GRUB, whose 8 and 9 are approved, or without the signature: such a
+  boot serves a temporary key.
 - **At every boot** `run` has the TPM make a new host key (the CA's type)
   under the TPM's **NULL hierarchy**, whose seed changes at every reboot,
   and the CA certify it (an OpenSSH host certificate) - when the SSH
@@ -572,9 +574,18 @@ aSSH's own tests log in with OpenSSH's client (10.6) through a
 
 ## 11. Known limits
 
-- **Every slot reads the image, so a boot of an image not approved opens
-  nothing.** One rule: PCR 7 and the image's PCRs, slot 0 with the platform (0,
-  2, 4). On a GRUB boot (Debian) those are PCRs 8 and 9: Secure Boot checks GRUB
+- **Every slot reads the image, so a boot of an image neither signed nor
+  approved opens nothing.** One rule: PCR 7 and the image's PCRs, slot 0 with
+  the platform (0, 2, 4). On a UKI boot (Arch) the image is PCR 11, signed by
+  tpm2-kira's PCR key for `enter-initrd` once `control` has written it into
+  `/etc/kernel/uki.conf`: a boot of an image merely signed by the db key, which
+  a boot with PCR 15 at zero and a shell before the close would need, meets no
+  slot unless the PCR key signed it too. **Any image ever signed with the PCR key
+  keeps PCR 11 valid**, like the db key: revocation is a new PCR key and the
+  slots approved again. Keep the key root's alone, and keep images with a shell
+  before the close unsigned. Without `uki.conf`'s lines PCR 11 is approved by the
+  hooks: slot 1 then survives a firmware change, not a kernel not approved. On a
+  GRUB boot (Debian) the image is PCRs 8 and 9: Secure Boot checks GRUB
   and the kernel, not GRUB's command line or the initrd, so an entry edited
   at the console (`break=`, `rdinit=/bin/sh`) would reach a shell before the
   close with PCR 7 as approved; PCRs 8 and 9 see the edit. `control` advises

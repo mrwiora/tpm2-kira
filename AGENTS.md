@@ -117,8 +117,9 @@ It may not carry what came before.
   no rebuild for one. `setup`, `slot add`, `luks enrol` and the rest do their
   one thing; `tpm2-kira control` checks the prerequisites of a working
   setup. Every other file on the system - the kernel command line,
-  crypttab - is advised by `control`, never edited, with two exceptions,
-  each asked for every time, both in control's step 1 (the boot chain):
+  crypttab - is advised by `control`, never edited, with three exceptions,
+  each asked for every time, all in control's step 1 (the boot chain):
+  `/etc/kernel/uki.conf` (the PCR key's lines, which ukify reads),
   the HOOKS of `/etc/mkinitcpio.conf` (its mkinitcpio step writes
   sd-tpm2-kira in when the person says so), and the key's route (the route step writes the shown line into
   the cmdline file, a boot entry's options or crypttab when the person
@@ -225,7 +226,10 @@ It may not carry what came before.
     default_pcrs.go) - and `slot add` refuses a selection without them. One
     rule for every slot: PCR 7 and the image's PCRs, slot 0 with the platform
     (0, 2, 4) added; PCR 4 is predicted for the next boot (`4u`), in by decision,
-    and goes again if it makes trouble in the real world. `control` advises a GRUB
+    and goes again if it makes trouble in the real world. On a UKI the image is
+    PCR 11 signed by tpm2-kira's PCR key for `enter-initrd` alone (`11s`,
+    `/etc/tpm2-kira/pcr.key`, written into `/etc/kernel/uki.conf` by `control`, a
+    third exception to its not editing, asked every time). `control` advises a GRUB
     superuser password (never writes grub.cfg) and judges its absence red.
   - aSSH only warns about Secure Boot.
 - **Root for everything but the help.** Every command refuses to run as a

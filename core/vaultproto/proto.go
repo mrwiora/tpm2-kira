@@ -56,6 +56,9 @@ type Wrapped struct {
 type Selection struct {
 	Alg     uint16  `json:"alg"` // TPM_ALG_SHA256 (0x000B) or TPM_ALG_SHA1 (0x0004)
 	Indices []uint8 `json:"indices"`
+	// Signed are those of Indices the PCR key signs instead of the slot's
+	// approval: quoted with the others, their value verified by its signature.
+	Signed []uint8 `json:"signed,omitempty"`
 }
 
 // PCRValue is one register's value in the selection's bank.
@@ -84,6 +87,7 @@ type EnrolRequest struct {
 	GenerationIndexName []byte    `json:"generation_index_name"` // Name of the generation index, written
 	Generation          uint64    `json:"generation"`            // the slot's generation now
 	Selection           Selection `json:"selection"`             // the slot's PCR selection
+	PCRKey              []byte    `json:"pcr_key,omitempty"`     // PKIX DER of the key that signs Selection.Signed
 
 	Remote Wrapped `json:"remote"` // R, wrapped for EK and the slot's release key
 	Label  string  `json:"label"`  // the keyslot's label, for the operator
@@ -190,6 +194,7 @@ type ReleaseRequest struct {
 	PCRValues         []PCRValue `json:"pcr_values"`
 	Generation        uint64     `json:"generation"`
 	ApprovalSignature []byte     `json:"approval_signature"` // TPMT_SIGNATURE by the signing key
+	PCRSignature      []byte     `json:"pcr_signature,omitempty"` // the PCR key's signature (RSASSA) of the signed PCRs' policy
 }
 
 // Release states.
