@@ -43,7 +43,12 @@ checks that on both distributions, from the machines' snapshot "fresh":
          Arch, the word tpm2-kira.noclose with Secure Boot off;
          Debian, GRUB's break=bottom and the plan's TPM part removed.
 
-V4, V9 and V8 run last. The report and every
+V4, V9 and V8 run last.
+
+Iterating on a step (a run from "fresh" is only for the proof): --save-setup keeps the
+state after the setup in a snapshot of its own ("hib-setup"); --only V4,V8 goes back
+to it and runs those steps alone, without building; --drop-setup removes it. A
+change to the product wants a new --save-setup. The report and every
 transcript land in the run's directory (.local/runs/hibernatetest-<time>/).
 """
 
@@ -51,6 +56,7 @@ import argparse
 import configparser
 import datetime
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -65,6 +71,9 @@ LOCAL = os.path.join(os.path.dirname(REPO), ".local")
 # A boot's first word on the serial console, the firmware's: the kernel's are
 # kept from it by the command line's quiet.
 RESTART = re.compile(r"BdsDxe: loading")
+# What rules a prompt on the console out, whatever the wait has left.
+RULED_OUT = re.compile(r"Freezing execution|Failed to isolate|emergency mode|Kernel panic|\(initramfs\) ?$|^\S+ login: ", re.M)
+SETUP_SNAPSHOT = "hib-setup"
 MEMMAP = "dmesg | sed -n 's/^\\[[^]]*\\] //; /BIOS-e820\\|reserve setup_data\\|Hibernate inconsistent/p'"
 
 
@@ -250,11 +259,9 @@ class Hib:
             raise vmtest.Fail("the system does not come back")
 
     def wait_login(self, tag):
-        """ssh itself works: a banner is not enough. The resumed sshd keeps
-        its penalties (PerSourcePenalties) for the probes of this boot and
-        earlier ones and closes the connection until they run out (600 s
-        at most); a login does not add to them."""
-        deadline = time.time() + 660
+        """ssh itself works: a banner is not enough (setup turned sshd's
+        per-source penalties off, which these probes would earn)."""
+        deadline = time.time() + 120
         while time.time() < deadline:
             rc, _ = self.run("true")
             if rc == 0:
@@ -335,6 +342,10 @@ class Hib:
                 again = RESTART.search(text, m.end())
                 if again:
                     return text[:again.start()], True
+            elif RULED_OUT.search(text):
+                return text, False
+            if not lv.pid():
+                return text, False
             time.sleep(0.5)
         return lv.serial_text(since), False
 
@@ -360,12 +371,32 @@ class Hib:
             lv.kill()
         raise vmtest.Fail("systemd-boot's menu did not show")
 
+    def console_expect(self, rx, timeout, since, ruled_out=RULED_OUT):
+        """Waits for rx on the console, and fails the moment the console rules it
+        out: a failure, a shell, a login, this boot's restart."""
+        lv, deadline = self.lv, time.time() + timeout
+        while time.time() < deadline:
+            text = lv.serial_text(since)
+            m = rx.search(text)
+            if m:
+                return m
+            bad = ruled_out.search(text) if ruled_out else None
+            if bad:
+                raise vmtest.Fail(f"waiting for /{rx.pattern}/, the console said {bad.group(0)!r}:\n" + text[-800:])
+            first = RESTART.search(text)
+            if first and RESTART.search(text, first.end()):
+                raise vmtest.Fail(f"waiting for /{rx.pattern}/, the machine restarted:\n" + text[-800:])
+            if not lv.pid():
+                raise vmtest.Fail(f"waiting for /{rx.pattern}/, the machine stopped:\n" + text[-800:])
+            time.sleep(0.5)
+        raise vmtest.Fail(f"waited {timeout} s for /{rx.pattern}/ at the console:\n" + lv.serial_text(since)[-800:])
+
     def console_prompts(self, since):
         """tpm2-kira's prompts at the console: the recovery recipe needs no TPM."""
         lv = self.lv
-        lv.expect(re.compile(r"Password for disk \S+: ?$", re.M), 600, since)
+        self.console_expect(re.compile(r"Password for disk \S+: ?$", re.M), 180, since)
         lv.send(vmtest.TEST_PASSWORD + "\r")
-        lv.expect(re.compile(r"Salt for disk \S+: ?$", re.M), 120, since)
+        self.console_expect(re.compile(r"Salt for disk \S+: ?$", re.M), 60, since)
         lv.send(vmtest.TEST_SALT + "\r")
 
     def console_mark(self):
@@ -379,7 +410,7 @@ class Hib:
         lv.start(unlock=False, tpm=False)
         since = lv.mark
         self.console_prompts(since)
-        lv.wait_ssh(600)
+        lv.wait_ssh(240)
         text = lv.serial_text(since)
         m.log.save("V4-no-tpm-console.log", text)
         self.check("V4 step 5: no TPM at all: no reboot, no failed close", not RESTART.search(text, text.find("Password for disk")) and "the boot is not closed" not in text, text[-800:])
@@ -433,7 +464,7 @@ class Hib:
         m, lv = self.m, self.lv
         words = "initcall_blacklist=crb_acpi_driver_init"
         since = self.menu_edit(words)
-        text, again = self.restarted(since, "rebooting once", 400)
+        text, again = self.restarted(since, "rebooting once", 150)
         m.log.save("V4-silent-first-console.log", text)
         self.check("V4 step 6: one hard reboot, for a TPM the firmware measured into", "rebooting once" in text and again, text[-800:])
         self.check("V4 step 6: no shell on the way", "maintenance" not in text and "emergency mode" not in text.lower(), text[-800:])
@@ -442,7 +473,7 @@ class Hib:
         lv.kill()
         since = self.menu_edit(words)
         self.console_prompts(since)
-        lv.wait_ssh(600)
+        lv.wait_ssh(240)
         self.wait_login("V4 step 6")
         text = lv.serial_text(since)
         m.log.save("V4-silent-second-console.log", text)
@@ -461,12 +492,12 @@ class Hib:
         lv.start(unlock=False)
         since = lv.mark
         self.console_prompts(since)
-        text, again = self.restarted(since, "rebooting once", 400)
+        text, again = self.restarted(since, "rebooting once", 150)
         m.log.save("V9-first-console.log", text)
         self.check("V9 step 6: one hard reboot, for a TPM the firmware measured into", again, text[-800:])
         self.check("V9 step 6: no shell on the way", "(initramfs)" not in text and "Rebooting automatically" not in text, text[-800:])
         self.console_prompts(self.console_mark())
-        lv.wait_ssh(600)
+        lv.wait_ssh(240)
         self.wait_login("V9")
         self.after_silent("V9 step 6", boot.strip())
         # Back to normal: the count goes with the first close that holds.
@@ -493,14 +524,14 @@ class Hib:
             lv.start(unlock=False, tpm=False)
             since = lv.mark
             self.console_prompts(since)
-            lv.expect(re.compile(r"\(initramfs\) ?$", re.M), 300, since)
+            self.console_expect(re.compile(r"\(initramfs\) ?$", re.M), 120, since, ruled_out=None)
             lv.send("rm -r /etc/tpm2-kira/plan/tpm\r")
             time.sleep(1)
             lv.send("exit\r")
         else:
             since = self.menu_edit("tpm2-kira.noclose", tpm=False)
             self.console_prompts(since)
-        lv.wait_ssh(600)
+        lv.wait_ssh(240)
         self.wait_login("V8")
         text = lv.serial_text(since)
         m.log.save("V8-console.log", text)
@@ -525,23 +556,76 @@ class Hib:
         self.check("V5: after suspend to RAM the CA is still closed", st["locked"] and st["boot"] == before["boot"], st["out"][-400:])
         self.m.rep.issues.append(f"V5: restartCount {before['restart']} -> {st['restart']}")
 
-    def all(self, package, reset):
+    def state_path(self):
+        return self.lv.path(SETUP_SNAPSHOT + ".json")
+
+    def save_setup(self):
+        """Keeps the state after the setup, for --only: the snapshot, and what the
+        test holds of it. The guest is started again through its code screen."""
+        m, lv = self.m, self.lv
+        self.run("nohup sh -c 'sleep 2; systemctl poweroff' >/dev/null 2>&1 &")
+        if not lv.wait_stopped(180):
+            raise vmtest.Fail("the guest did not power off for the setup's snapshot")
+        lv.snapshot(SETUP_SNAPSHOT)
+        files = {n: open(os.path.join(m.dir, n)).read() for n in ("bootkey", "bootkey.pub", "known_hosts_boot")}
+        fd = os.open(self.state_path(), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"secrets": m.secrets, "files": files}, f)
+        self.resume_over_ssh("after the snapshot")
+
+    def restore_setup(self):
+        m, lv = self.m, self.lv
+        lv.revert(SETUP_SNAPSHOT)
+        st = json.load(open(self.state_path()))
+        m.secrets = st["secrets"]
+        for n, body in st["files"].items():
+            path = os.path.join(m.dir, n)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(body)
+        self.resume_over_ssh("the snapshot")
+        self.wait_login("the snapshot")
+
+    def only(self, steps):
+        """The steps named, from the setup's snapshot."""
+        m = self.m
+        try:
+            self.restore_setup()
+            for step in steps:
+                {"V2": self.step_v2, "V3": self.step_v3, "V5": self.mem_sleep, "V4": self.failed_close, "V8": self.way_out}[step]()
+        except Fail as e:
+            m.rep.issues.append("stopped: " + str(e).split("\n")[0])
+        except Exception as e:
+            m.rep.issues.append(f"the test failed: {type(e).__name__}: {e}")
+        return m.report()
+
+    def step_v2(self):
+        self.m.log.head("V2: hibernate, resume over SSH")
+        before = self.hibernate("V2")
+        self.resume_over_ssh("V2")
+        self.after_resume("V2", before)
+
+    def step_v3(self):
+        if self.distro != "arch":
+            return
+        self.m.log.head("V3: resume with tpm2-kira masked: the close alone")
+        before = self.hibernate("V3")
+        self.resume_masked("V3")
+        self.after_resume("V3", before)
+
+    def all(self, package, reset, save=False):
         m = self.m
         try:
             self.setup(package, reset)
             self.image_has_close()
             self.swap_risk()
-            m.log.head("V2: hibernate, resume over SSH")
-            before = self.hibernate("V2")
-            self.resume_over_ssh("V2")
-            self.after_resume("V2", before)
+            if save:
+                self.save_setup()
+            self.step_v2()
             m.log.head("V7: a normal reboot after the resume")
             m.cycle(2)
             if self.distro == "arch":
-                m.log.head("V3: resume with tpm2-kira masked: the close alone")
-                before = self.hibernate("V3")
-                self.resume_masked("V3")
-                self.after_resume("V3", before)
+                self.step_v3()
                 m.cycle(3)
             self.mem_sleep()
             self.failed_close()
@@ -558,7 +642,11 @@ def main():
     p.add_argument("--target", choices=["arch", "debian", "both"], required=True)
     p.add_argument("--packages", default=os.path.join(REPO, "build", "packages"))
     p.add_argument("--no-build", action="store_true", help="take HEAD's packages already in --packages")
+    p.add_argument("--save-setup", action="store_true", help=f"keep the state after the setup in the snapshot {SETUP_SNAPSHOT}")
+    p.add_argument("--only", help=f"these steps alone (V2,V3,V4,V5,V8), from the snapshot {SETUP_SNAPSHOT}")
+    p.add_argument("--drop-setup", action="store_true", help=f"remove the snapshot {SETUP_SNAPSHOT} and end")
     args = p.parse_args()
+    args.no_build = args.no_build or bool(args.only)
     vcfg = configparser.ConfigParser()
     vcfg.read(os.path.join(LOCAL, "vms", "vmtest-local.conf"))
     lcfg = configparser.ConfigParser()
@@ -593,7 +681,19 @@ def main():
                            int(sec["ssh_port"]), int(sec["boot_port"]))
         hs.append((Hib(lv, m, probe), sec.get("reset")))
     print(f"tpm2-kira {short}: hibernation test on {', '.join(names)}, logs: {run_dir}", flush=True)
-    threads = [threading.Thread(target=lambda h=h, r=r: results.__setitem__(h.m.name, h.all(packages[h.m.name], r))) for h, r in hs]
+    if args.drop_setup:
+        for h, _ in hs:
+            h.lv.kill()
+            h.lv.drop_snapshot(SETUP_SNAPSHOT)
+            if os.path.exists(h.state_path()):
+                os.remove(h.state_path())
+        print(f"dropped {SETUP_SNAPSHOT}; start the machines from fresh")
+        return 0
+    if args.only:
+        steps = args.only.split(",")
+        threads = [threading.Thread(target=lambda h=h: results.__setitem__(h.m.name, h.only(steps))) for h, _ in hs]
+    else:
+        threads = [threading.Thread(target=lambda h=h, r=r: results.__setitem__(h.m.name, h.all(packages[h.m.name], r, args.save_setup))) for h, r in hs]
     for t in threads:
         t.start()
     for t in threads:
