@@ -103,7 +103,7 @@ func collectStatus(o StatusOptions) StatusReport {
 			}
 			s := StatusSlot{Slot: nvslot.SlotNumber(idx), NVRAMIndex: fmt.Sprintf("0x%08X", idx),
 				PCRs: measure.PCRSpecsToString(sb.GetPCRSpecs()), Generation: sb.Payload.Generation,
-				GenState: generationState(tpmDev, idx, sb.Payload.Generation)}
+				GenState: generationState(tpmDev, idx, sb)}
 			s.Fallback = isFallbackSelection(sb.GetPCRSpecs())
 			s.TOTP = sb.HasTOTPKey()
 			v := verifier.verify(raw, sb)

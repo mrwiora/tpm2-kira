@@ -1492,9 +1492,10 @@ func TestCodeMatchesAuthenticator(t *testing.T) {
 	t.Fatal("could not compare within one 30-second window")
 }
 
-// TestCapLocksCodesUntilReboot checks that 'cap' makes codes unavailable,
-// that reseal still works while locked, and that a reboot lifts the lock.
-func TestCapLocksCodesUntilReboot(t *testing.T) {
+// TestCloseEndsCodesUntilReboot checks that the close (PCR 15) makes codes
+// unavailable, that approving still works while closed, and that a reboot
+// opens the slot again.
+func TestCloseEndsCodesUntilReboot(t *testing.T) {
 	if _, err := exec.LookPath("swtpm_ioctl"); err != nil {
 		t.Skip("swtpm_ioctl not found")
 	}
@@ -1507,33 +1508,32 @@ func TestCapLocksCodesUntilReboot(t *testing.T) {
 		t.Fatalf("seal failed: %v\n%s\n%s", err, stdout, stderr)
 	}
 	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code == "" {
-		t.Fatalf("no code before cap:\n%s", out)
+		t.Fatalf("no code before the close:\n%s", out)
 	}
 
-	stdout, stderr, _ := runBoot(t, "cap", "--tpm", tpmPath)
-	if !strings.Contains(stdout, "locked 1 generation index") {
-		t.Fatalf("cap did not lock the generation index:\n%s\n%s", stdout, stderr)
+	if stdout, stderr, err := runBoot(t, "close", "--tpm", tpmPath); err != nil {
+		t.Fatalf("close failed: %v\n%s\n%s", err, stdout, stderr)
 	}
 	code, out := revealPlainCode(t, tpmPath, nvramIndex)
-	if code != "" || !strings.Contains(out, "Locked until reboot") {
-		t.Fatalf("expected no code after cap, got %q:\n%s", code, out)
+	if code != "" || !strings.Contains(out, "Closed until the next boot") {
+		t.Fatalf("expected no code after the close, got %q:\n%s", code, out)
 	}
-	t.Log("✓ No code after cap")
+	t.Log("✓ No code after the close")
 
-	// A second cap is harmless.
-	if stdout, _, _ := runBoot(t, "cap", "--tpm", tpmPath); !strings.Contains(stdout, "locked 1 generation index") {
-		t.Errorf("second cap: %s", stdout)
+	// A second close is harmless.
+	if stdout, stderr, err := runBoot(t, "close", "--tpm", tpmPath); err != nil {
+		t.Fatalf("second close: %v\n%s\n%s", err, stdout, stderr)
 	}
 
-	// reseal in the running OS works while the index is read-locked.
-	stdout, stderr, _ = runTPMKira(t, tpmPath, "slot", "approve", "--nvram", nvramIndex, "--privkey", testPrivKeyPath)
+	// Approving in the running OS works while closed, and opens nothing.
+	stdout, stderr, _ := runTPMKira(t, tpmPath, "slot", "approve", "--nvram", nvramIndex, "--privkey", testPrivKeyPath)
 	if !strings.Contains(stdout, "Successfully approved the boot state") {
-		t.Fatalf("reseal while capped failed:\n%s\n%s", stdout, stderr)
+		t.Fatalf("approve while closed failed:\n%s\n%s", stdout, stderr)
 	}
 	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code != "" {
-		t.Fatalf("reseal lifted the cap: got code %s\n%s", code, out)
+		t.Fatalf("an approval opened the closed slot: got code %s\n%s", code, out)
 	}
-	t.Log("✓ Reseal works while capped, and the cap holds")
+	t.Log("✓ Approving works while closed, and the close holds")
 
 	restartSoftwareTPM(t, tpmPath)
 	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code == "" {
@@ -1632,7 +1632,7 @@ func TestBootCloseExtendsPCR15(t *testing.T) {
 	}
 	notTPM := filepath.Join(t.TempDir(), "not-a-tpm")
 	os.WriteFile(notTPM, nil, 0o600)
-	if _, stderr, err := runBoot(t, "close", "--tpm", notTPM); err == nil || !strings.Contains(stderr, "the SSH CA is not closed") {
+	if _, stderr, err := runBoot(t, "close", "--tpm", notTPM); err == nil || !strings.Contains(stderr, "the boot is not closed") {
 		t.Fatalf("close without a TPM: %v\n%s", err, stderr)
 	}
 }

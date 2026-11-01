@@ -511,8 +511,8 @@ func (b *TPMBackend) ProveBootKey(ch *attest.BootChallenge, context, quoteDigest
 		sig, err = SignWithBootKey(b.TPM, b.Sealed, b.SealIndex, b.Blob, d[:])
 	}
 	switch {
-	case errors.Is(err, nvslot.ErrCodesLocked):
-		// The booted system: 'cap' locked the slot until the next boot.
+	case errors.Is(err, nvslot.ErrClosed):
+		// The booted system: the close (PCR 15) ended the slot until the next boot.
 		if b.Debug {
 			fmt.Printf("tpm2-kira: boot key: %v\n", err)
 		}

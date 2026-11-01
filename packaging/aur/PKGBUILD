@@ -109,8 +109,6 @@ package() {
     # image, which is the only place it is meant to run.
     install -Dm644 initramfs/systemd/tpm2-kira.service \
         "$pkgdir/usr/lib/systemd/system/tpm2-kira.service"
-    install -Dm644 initramfs/systemd/tpm2-kira-cap.service \
-        "$pkgdir/usr/lib/systemd/system/tpm2-kira-cap.service"
     install -Dm644 initramfs/systemd/tpm2-kira-close.service \
         "$pkgdir/usr/lib/systemd/system/tpm2-kira-close.service"
     install -Dm644 initramfs/systemd/tpm2-kira-machine-id.service \

@@ -26,9 +26,9 @@ const (
 	// by the init-premount script, which brings the network up and starts
 	// 'run' with TPM2_KIRA_REMOTE.
 	imageRemoteConf = "/etc/tpm2-kira/remote.conf"
-	// imageResumeDropIn closes the SSH CA (PCR 15) right before a resume
-	// from hibernation (resumeDropIn); initramfs-tools' is the package's
-	// local-top script tpm2-kira-close, which reads the plan.
+	// imageResumeDropIn closes the boot (PCR 15: the slots and the SSH CA)
+	// right before a resume from hibernation (resumeDropIn); initramfs-tools'
+	// is the package's local-top script tpm2-kira-close, which reads the plan.
 	imageResumeDropIn = "/etc/systemd/system/systemd-hibernate-resume.service.d/tpm2-kira-close.conf"
 	// imageUdhcpcScript is initramfs-tools' DHCP with a client identifier:
 	// busybox' udhcpc runs it at its events.
@@ -146,15 +146,22 @@ func writeImageFile(buildroot, path string, data []byte, mode os.FileMode) error
 }
 
 // A resume from hibernation starts the TPM afresh, which sets PCR 15 back
-// to zero and opens the SSH CA again, and the resumed system runs no code
-// screen: the image closes it right before the resume, whatever run did.
-// Where it is closed already, an extend more changes nothing.
+// to zero and opens the slots and the SSH CA again, and the resumed system
+// runs no code screen: the image closes the boot right before the resume,
+// whatever run did. Where it is closed already, an extend more changes
+// nothing.
 
 // resumeDropIn is systemd's: the close before every resume attempt. Its
-// failure fails the resume service, and the machine does not resume.
-const resumeDropIn = `# Written by 'tpm2-kira initramfs plan': the SSH CA closed (PCR 15) before
-# a resume from hibernation (the TPM starts afresh, the resumed system runs
-# no code screen). Its failure stops the resume.
+// failure fails the resume service, and the machine does not resume. The
+// resume service runs at every boot where a resume device is set: ordered
+// after the code screen, so that its close never comes before the codes,
+// the phone, the vault or the TPM salt have opened what they hold (a swap
+// on an encrypted volume comes after that anyway).
+const resumeDropIn = `# Written by 'tpm2-kira initramfs plan': the boot closed (PCR 15: the slots
+# and the SSH CA) before a resume from hibernation (the TPM starts afresh,
+# the resumed system runs no code screen). Its failure stops the resume.
+[Unit]
+After=tpm2-kira.service
 [Service]
 ExecStartPre=/usr/bin/tpm2-kira-boot close
 `

@@ -73,9 +73,10 @@ const (
 	BootKeyProved  uint8 = 1 // the TPM released the key; the proof is attached
 	BootKeyRefused uint8 = 2 // the TPM refused: this boot state is not an approved one
 	BootKeyFailed  uint8 = 3 // the machine could not try (TPM or data error)
-	// BootKeyLocked: the booted system. The key is locked until the next
-	// boot by design ('tpm2-kira-boot cap' when the initrd was left), so there is
-	// no code and no signature; the quote still says which boot this is.
+	// BootKeyLocked: the booted system. The key is closed until the next
+	// boot by design (PCR 15 extended when the code screen was over, the
+	// slot's policy: SlotPolicyDigest), so there is no code and no
+	// signature; the quote still says which boot this is.
 	BootKeyLocked uint8 = 4
 )
 
@@ -264,7 +265,7 @@ func FormatBootCode(code string) string {
 // PolicyAuthorizeDigest is the policy digest of a key that is usable
 // exactly when keyName has approved a policy for policyRef:
 // H(H(0 ‖ TPM_CC_PolicyAuthorize ‖ keyName) ‖ policyRef) (TPM 2.0 Part 3,
-// PolicyAuthorize). It is what the machine's TOTP key and boot key carry.
+// PolicyAuthorize). The slot's policy begins with it (SlotPolicyDigest).
 func PolicyAuthorizeDigest(keyName, policyRef []byte) []byte {
 	cc := []byte{0, 0, 0x01, 0x6a} // TPM_CC_PolicyAuthorize
 	inner := sha256.New()
@@ -290,7 +291,8 @@ type BootKeyOffer struct {
 // must be what a relying party needs it to be - made inside this TPM, not
 // exportable, for signing and key agreement, and only under a policy (never
 // by a password); that policy must be "whatever the machine's signing key
-// approves for this slot" (PolicyAuthorizeDigest); and the attestation key,
+// approves for this slot, until PCR 15 closes it" (SlotPolicyDigest, in
+// the SHA-256 or the SHA-1 bank); and the attestation key,
 // which the phone has already tied to the TPM's endorsement key, must
 // certify exactly that public area for this session. It returns the key's
 // public point and the signing key's Name for pinning.
@@ -344,8 +346,8 @@ func CheckBootKey(akPub crypto.PublicKey, o *BootKeyOffer, qd []byte) (point, si
 	if len(o.PolicyRef) == 0 || len(o.PolicyRef) > 64 {
 		return nil, nil, fmt.Errorf("the slot's policy reference has an invalid size")
 	}
-	if !bytes.Equal(pub.AuthPolicy.Buffer, PolicyAuthorizeDigest(signingName.Buffer, o.PolicyRef)) {
-		return nil, nil, fmt.Errorf("the boot key's policy is not \"approved by the machine's signing key for this slot\"")
+	if _, ok := IsSlotPolicy(pub.AuthPolicy.Buffer, signingName.Buffer, o.PolicyRef); !ok {
+		return nil, nil, fmt.Errorf("the boot key's policy is not \"approved by the machine's signing key for this slot, until the boot is closed\"")
 	}
 
 	if err := VerifyTPMSignature(akPub, certifyInfo, certifySig); err != nil {

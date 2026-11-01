@@ -83,10 +83,11 @@ func closeTestCA(t *testing.T, b *swtpmBoots, path string) *hostkey.CA {
 	return ca
 }
 
-// The code screen closes the SSH CA however it ends: after a host key it
-// could not make, and with a CA file it could not read, the CA certifies
-// nothing more in that boot; the next boot opens it again.
-func TestHostKeyClosedOnError(t *testing.T) {
+// Making the host key leaves the boot open, however it ends - a key made,
+// an error: the code screen still computes codes and opens the slots'
+// parts, which PCR 15 closes with the CA. The close at the end of the code
+// screen closes the CA; the next boot opens it again.
+func TestHostKeyLeavesTheBootOpen(t *testing.T) {
 	b := startBoots(t)
 	caPath := filepath.Join(t.TempDir(), "ca.json")
 	ca := closeTestCA(t, b, caPath)
@@ -104,7 +105,7 @@ func TestHostKeyClosedOnError(t *testing.T) {
 		t.Fatal("the CA is open in the boot of its creation")
 	}
 
-	// A host key type the TPM is not asked for: an error, the CA closed.
+	// A host key type the TPM is not asked for: an error, the boot open.
 	b.reboot()
 	if !open() {
 		t.Fatal("the CA is closed in the boot after the creation")
@@ -114,11 +115,11 @@ func TestHostKeyClosedOnError(t *testing.T) {
 	if _, err := sshscreen.PrepareHostKey(b.p.sock, bad); err == nil {
 		t.Fatal("a host key of an unknown type")
 	}
-	if open() {
-		t.Fatal("a failed code screen left the CA open")
+	if !open() {
+		t.Fatal("a failed host key closed the boot under the code screen")
 	}
 
-	// A CA file that does not parse: a temporary key, the CA closed.
+	// A CA file that does not parse: a temporary key, the boot open.
 	b.reboot()
 	good, _ := os.ReadFile(caPath)
 	if err := os.WriteFile(caPath, []byte("{not a CA"), 0o600); err != nil {
@@ -127,18 +128,25 @@ func TestHostKeyClosedOnError(t *testing.T) {
 	if hk, err := sshscreen.PrepareHostKey(b.p.sock, conf); err != nil || hk.Temporary == "" {
 		t.Fatalf("an unreadable CA file: %+v %v", hk, err)
 	}
-	if open() {
-		t.Fatal("an unreadable CA file left the CA open")
+	if !open() || !bytes.Equal(b.pcr15(), make([]byte, 32)) {
+		t.Fatal("an unreadable CA file closed the boot")
 	}
 
-	// The next boot certifies, and closes it after.
+	// The next boot certifies; the close at the end of the code screen
+	// closes the CA.
 	b.reboot()
 	os.WriteFile(caPath, good, 0o600)
 	if hk, err := sshscreen.PrepareHostKey(b.p.sock, conf); err != nil || hk.Slot != 0 {
 		t.Fatalf("the next boot: %+v %v", hk, err)
 	}
+	if !open() {
+		t.Fatal("the certificate closed the boot under the code screen")
+	}
+	if err := sshscreen.CloseNow(b.p.sock); err != nil {
+		t.Fatal(err)
+	}
 	if open() {
-		t.Fatal("the CA is open after the host key")
+		t.Fatal("the CA is open after the close")
 	}
 }
 
@@ -183,17 +191,23 @@ func TestHostKeyClose(t *testing.T) {
 		t.Fatalf("the code screen after the close: %+v %v", hk, err)
 	}
 
-	// A normal boot: the code screen certifies and closes (one event); the
-	// image's close after it extends once more; a second code screen gets a
-	// temporary key. Two boots alike end with PCR 15 alike.
+	// A normal boot: the code screen certifies, run closes at its end (one
+	// event); the image's close after it extends once more; a second code
+	// screen gets a temporary key. Two boots alike end with PCR 15 alike.
 	var ends [][]byte
 	for range 2 {
 		b.reboot()
 		if hk, err := sshscreen.PrepareHostKey(b.p.sock, conf); err != nil || hk.Slot != 0 {
 			t.Fatalf("the code screen: %+v %v", hk, err)
 		}
+		if !bytes.Equal(b.pcr15(), make([]byte, 32)) {
+			t.Fatalf("PCR 15 during the code screen: %x", b.pcr15())
+		}
+		if err := sshscreen.CloseNow(b.p.sock); err != nil {
+			t.Fatalf("run's close: %v", err)
+		}
 		if !bytes.Equal(b.pcr15(), once[:]) {
-			t.Fatalf("PCR 15 after the code screen: %x", b.pcr15())
+			t.Fatalf("PCR 15 after run's close: %x", b.pcr15())
 		}
 		if err := sshscreen.Close(b.p.sock); err != nil {
 			t.Fatalf("the close after the code screen: %v", err)

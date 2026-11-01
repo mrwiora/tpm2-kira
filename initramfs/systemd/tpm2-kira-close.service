@@ -1,16 +1,17 @@
 [Unit]
-Description=tpm2-kira: the SSH CA closed (PCR 15) when the code screen is over
+Description=tpm2-kira: the boot closed (PCR 15) when the code screen is over
 Documentation=file:///usr/share/doc/tpm2-kira/docs/SSH.md
 DefaultDependencies=no
 # An initrd unit. The package also puts this file on the host, where the
 # mkinitcpio hook picks it up from; enabled there by mistake it does nothing.
 ConditionPathExists=/etc/initrd-release
-# The SSH CA signs only while PCR 15 holds zero (aSSH: the CA's own
-# policy). run closes it right after the host key is certified; this unit
-# closes it whatever run did - no SSH server in the image, run failed or
-# timed out - once the code screen is over (tpm2-kira.service is ready or
-# gone), before any volume is opened and anything of the real root runs. An
-# extend more is harmless: PCR 15 never goes back. Ahead of every
+# Every slot object (the TOTP key, the sealed machine-id, the boot key,
+# the release key) and the SSH CA work only while PCR 15 holds zero (their
+# own policies). run closes the boot when the code screen is over; this
+# unit closes it whatever run did - run failed or timed out - once the code
+# screen is over (tpm2-kira.service is ready or gone), before any volume is
+# opened and anything of the real root runs. An extend more is harmless:
+# PCR 15 never goes back. Ahead of every
 # systemd-cryptsetup unit (their tpm2-measure-pcr= into PCR 15) and of
 # systemd-pcrmachine/pcrfs in the root, so PCR 15 is the same at every boot
 # of the same image. cryptsetup-pre.target is passive: pulled in here.
@@ -25,7 +26,8 @@ Type=oneshot
 RemainAfterExit=yes
 # Waits for the TPM itself (30 s at most). A failure is the boot's: the
 # image's initrd.target requires this unit, so the boot stops in the
-# emergency target rather than run the real root with the SSH CA open.
+# emergency target rather than run the real root with the slots and the
+# SSH CA open.
 ExecStart=tpm2-kira-boot close
 StandardOutput=journal+console
 StandardError=journal+console

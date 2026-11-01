@@ -75,7 +75,9 @@ THE BOOT IMAGE
   (its pages are here too: tpm2-kira help run):
     run          Show the code, hold for Enter, start the parts the image's
                  plan names: the phone's gate, SSH, the vault, the disk's key
-    cap          Lock the code until the next boot (when the initrd is left)
+    close        End the boot's slots and the SSH CA until the next boot:
+                 PCR 15 extended (the end of the code screen, before a
+                 resume from hibernation); a failure stops the boot
     machine-id   Release the installed system's machine-id, sealed under
                  slot 0's policy (KIRAmachineID), before the image's network
     unlock-key   Debian keyscript: the disk's key from 'run --unlock', else
@@ -385,7 +387,8 @@ slot, a slot that needs an approval. Root for the LUKS headers.
 
 The current code of a slot, in the coloured KIRA format or plain. The TPM
 computes it under the slot's policy: in a boot the signing key approved,
-before the OS separator (after 'cap' there is no code until the next boot).
+before the OS separator and before the boot image's close (PCR 15: after it
+there is no code until the next boot).
 `,
 
 	"run": `tpm2-kira-boot run [--plan DIR] [--hold S] [--unlock SOCKET] [--ssh [--ssh-conf PATH] ...]
@@ -535,11 +538,17 @@ reason to rebuild: the next build leaves it out.
                    journal is read in any case)
 `,
 
-	"cap": `tpm2-kira-boot cap
+	"close": `tpm2-kira-boot close [--tpm PATH]
 
-Read-locks every slot's generation until the next boot: no code can be
-computed in the running OS. The boot integration runs it when the initrd is
-left; by hand only for a test.
+Closes the boot: PCR 15 extended with aSSH's close event, in every bank.
+Every slot object (the TOTP key, the sealed machine-id, the boot key, the
+release key) and the SSH CA require PCR 15 at zero in their own policies,
+so from then on none can be used until the next boot - not by root, not
+by anything the signing key approves. run closes when the code screen is
+over; the image closes once more whatever run did (Arch:
+tpm2-kira-close.service, required by initrd.target; Debian: init-bottom),
+and right before a resume from hibernation. Waits for the TPM (30 s at
+most); a failure is the boot's: it stops (emergency target, panic).
 `,
 
 	"unlock-key": `tpm2-kira-boot unlock-key [--socket PATH] [--wait DUR] [VOLUME]

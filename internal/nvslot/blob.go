@@ -1,6 +1,7 @@
 // Package nvslot is the slot: the blob in its NV index and its attestation
 // part, the generation index and the approved policy (PolicyAuthorize over
-// the PCRs and the generation), the cap, signed NV writes, the recovery
+// the PCRs and the generation) under the slot's policy and its close
+// (PCR 15), signed NV writes, the recovery
 // stash and the boot settings.
 package nvslot
 
@@ -15,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/mrwiora/tpm2-kira/core/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 
 	"github.com/google/go-tpm/tpm2"
@@ -67,7 +69,7 @@ func PeekBlobVersion(data []byte) *BlobPeek {
 var AppVersion = "unknown"
 
 // CurrentBlobVersion is the only supported blob format version.
-const CurrentBlobVersion = 16
+const CurrentBlobVersion = 17
 
 // MaxBlobSignatureLen is the maximum allowed signature size in bytes.
 // Generous: RSA-4096 PKCS#1 v1.5 = 512 bytes, ECDSA P-384 DER ≈ 104 bytes.
@@ -175,11 +177,18 @@ func (p *SealedBlobPayload) checkTOTP() error {
 	return nil
 }
 
-// SlotPolicy is the policy every key of the slot is created under:
-// PolicyAuthorize by the signing key, qualified by the slot's PolicyRef.
-// The TOTP key, the boot key and the release key share it, so the boot and
-// release keys work whether or not the slot has a TOTP key.
+// SlotPolicy is the policy every key of the slot is created under
+// (attest.SlotPolicyDigest): PolicyAuthorize by the signing key, qualified
+// by the slot's PolicyRef, then PCR 15 zero in the slot's bank. The TOTP
+// key, the machine-id, the boot key and the release key share it, so the
+// boot and release keys work whether or not the slot has a TOTP key.
 func (sb *SealedBlob) SlotPolicy() ([]byte, error) {
+	return sb.SlotPolicyIn(sb.GetHashAlgo())
+}
+
+// SlotPolicyIn is SlotPolicy for the bank the slot is being sealed to,
+// before its PCR values are in the blob.
+func (sb *SealedBlob) SlotPolicyIn(bank measure.PCRHashAlgo) ([]byte, error) {
 	pub, err := tpm2.Unmarshal[tpm2.TPMTPublic](sb.Payload.SigningPublic)
 	if err != nil {
 		return nil, fmt.Errorf("the slot's signing key has no valid public area: %w", err)
@@ -191,7 +200,7 @@ func (sb *SealedBlob) SlotPolicy() ([]byte, error) {
 	if len(sb.Payload.PolicyRef) == 0 {
 		return nil, fmt.Errorf("the slot has no policy reference")
 	}
-	return policyAuthorizeDigest(name.Buffer, sb.Payload.PolicyRef), nil
+	return attest.SlotPolicyDigest(name.Buffer, sb.Payload.PolicyRef, bank.TPMAlg())
 }
 
 // GetHashAlgo infers the PCR hash algorithm from the stored digest sizes.

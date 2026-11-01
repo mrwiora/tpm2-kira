@@ -294,7 +294,7 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 		"/etc/tpm2-kira/authorized_keys":  admin + "\n",
 		sshscreen.DefaultConf:             "ASSH_CA=efi:KIRAasshCA\n",
 		imageRunDropIn:                    `"TPM2_KIRA_REMOTE=--ssh --ssh-hold=0"`,
-		imageResumeDropIn:                 "\nExecStartPre=/usr/bin/tpm2-kira-boot close\n",
+		imageResumeDropIn:                 "[Unit]\nAfter=tpm2-kira.service\n[Service]\nExecStartPre=/usr/bin/tpm2-kira-boot close\n",
 	} {
 		if got := readImage(t, root, path); !strings.Contains(got, want) {
 			t.Errorf("%s: %q, want %q", path, got, want)
@@ -358,12 +358,12 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 		!strings.Contains(got, "if ! /usr/bin/tpm2-kira-boot close") || !strings.Contains(got, `echo "resume=" >>/conf/param.conf`) {
 		t.Errorf("the local-top script:\n%s", got)
 	}
-	// The close when the initrd is left: with the plan's TPM part, before
-	// the cap, and its failure does not let the boot go on.
+	// The close when the initrd is left: with the plan's TPM part, and its
+	// failure does not let the boot go on; no cap.
 	if b, err := os.ReadFile("../../initramfs/initramfs-tools/scripts/init-bottom/tpm2-kira"); err != nil {
 		t.Error(err)
 	} else if got := string(b); !strings.Contains(got, "if [ -d /etc/tpm2-kira/plan/tpm ]; then\n    while ! /usr/bin/tpm2-kira-boot close") ||
-		!strings.Contains(got, "panic ") || strings.Index(got, "tpm2-kira-boot close") > strings.Index(got, "tpm2-kira-boot cap") {
+		!strings.Contains(got, "panic ") || strings.Contains(got, "tpm2-kira-boot cap") {
 		t.Errorf("the init-bottom script:\n%s", got)
 	}
 	if got := readImage(t, root, sshscreen.DefaultConf); !strings.Contains(got, "ASSH_LISTEN=:2222\n") {
@@ -489,12 +489,24 @@ func TestVaultPartCarriesTheRoots(t *testing.T) {
 	}
 }
 
-// A sealed slot needs the TPM at boot whatever its methods: 'cap' locks its
-// generation index when the initrd is left. Without a slot, and without a
-// TPM, it does not.
-func TestASealedSlotIsCapped(t *testing.T) {
+// A sealed slot needs the TPM at boot whatever its methods, and so does an
+// SSH CA kept while SSH is off: the image closes them (PCR 15) when the
+// code screen is over. Without a slot or a CA, and without a TPM, it does
+// not.
+func TestASealedSlotOrACAIsClosed(t *testing.T) {
 	if p := decidePlan(planInputs{Config: DefaultControlConfig(), Slots: 1}); !p.TPM || p.Has(imageplan.PartCodes) {
 		t.Fatalf("a slot without a method: TPM %v, codes %v", p.TPM, p.Has(imageplan.PartCodes))
+	}
+	if p := decidePlan(planInputs{Config: DefaultControlConfig(), CAExists: true}); !p.TPM || p.Has(imageplan.PartSSH) {
+		t.Fatalf("a CA kept with SSH off: TPM %v, SSH %v", p.TPM, p.Has(imageplan.PartSSH))
+	}
+	if p := decidePlan(planInputs{Config: DefaultControlConfig(), CAExists: true, TPMErr: "gone"}); p.TPM {
+		t.Fatal("a CA without a TPM, yet the TPM is planned")
+	}
+	// The close before a resume comes with the close, SSH or not.
+	_, root := writePlan(t, decidePlan(planInputs{Config: DefaultControlConfig(), Slots: 1}), FormatMkinitcpio)
+	if got := readImage(t, root, imageResumeDropIn); !strings.Contains(got, "ExecStartPre=/usr/bin/tpm2-kira-boot close") {
+		t.Fatalf("a sealed slot without SSH: the resume drop-in %q", got)
 	}
 	if p := decidePlan(planInputs{Config: DefaultControlConfig()}); p.TPM {
 		t.Fatal("nothing sealed, yet the TPM is planned")

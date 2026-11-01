@@ -1113,7 +1113,7 @@ the current design.
 
 ---
 
-## 10. Blob Format (Version 16)
+## 10. Blob Format (Version 17)
 
 The blob is a binary-serialised structure with explicit length prefixes and
 maximum size limits to prevent memory exhaustion during deserialisation.
@@ -1152,7 +1152,7 @@ every local user in `/proc/<pid>/cmdline`.
 ```
 Offset  Field                   Type        Notes
 ─────────────────────────────────────────────────────────────
-0       Version                 uint32      Must be 16
+0       Version                 uint32      Must be 17
 4       Payload length          uint32      Signed region length
 8       Public length           uint32      ≤ 2MB; 0 with phones (§3.1)
 ?       Public                  []byte      TPMT_PUBLIC of the TOTP key object

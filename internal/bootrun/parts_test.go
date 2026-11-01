@@ -1,6 +1,7 @@
 package bootrun
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -127,5 +128,41 @@ func TestHoldWithoutCodesWaitsForTheVault(t *testing.T) {
 	}
 	if took, notified := run(nil, time.Minute); took > 100*time.Millisecond || !notified {
 		t.Fatalf("no vault: released after %v (notified %v)", took, notified)
+	}
+}
+
+// recPart records what it is told.
+type recPart struct {
+	name string
+	log  *[]string
+}
+
+func (p recPart) start(*board)                {}
+func (p recPart) released(_ *board, _ string) { *p.log = append(*p.log, "released "+p.name) }
+func (p recPart) end(*board)                  {}
+
+// The end of the hold: every part that opens something in the TPM is told
+// first and finishes (the vault's opening, the phone's salt), then the
+// boot is closed (PCR 15), then READY, and only then does the key provider
+// answer - from what was opened before the close. Without a TPM in the
+// plan, nothing is closed.
+func TestReleaseClosesAfterThePartsAndBeforeReady(t *testing.T) {
+	var log []string
+	defer func(c func(string), n func()) { closeBoot, notifyReady = c, n }(closeBoot, notifyReady)
+	closeBoot = func(tpm string) { log = append(log, "close "+tpm) }
+	notifyReady = func() { log = append(log, "ready") }
+	ps := parts{}
+	for _, p := range []*part{&ps.phone, &ps.ssh, &ps.vault, &ps.tpmSalt, &ps.unlock, &ps.console} {
+		*p = recPart{name: map[*part]string{&ps.phone: "phone", &ps.ssh: "ssh", &ps.vault: "vault", &ps.tpmSalt: "tpmsalt", &ps.unlock: "unlock", &ps.console: "console"}[p], log: &log}
+	}
+	ps.release(&board{tpmPath: "/dev/tpmrm0"}, confirmedByConsole, true)
+	want := []string{"released vault", "released console", "released ssh", "released phone", "close /dev/tpmrm0", "ready", "released unlock"}
+	if strings.Join(log, "|") != strings.Join(want, "|") {
+		t.Fatalf("the order:\n%v\nwant\n%v", log, want)
+	}
+	log = nil
+	ps.release(&board{tpmPath: "/dev/tpmrm0"}, "", false)
+	if strings.Contains(strings.Join(log, "|"), "close") {
+		t.Fatalf("closed without a TPM in the plan: %v", log)
 	}
 }

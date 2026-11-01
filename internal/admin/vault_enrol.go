@@ -335,7 +335,7 @@ func askPepper() ([]byte, error) {
 
 // VaultStatus shows a slot's vault method and asks the vault for a
 // challenge: it answers one only for a device it knows. (A release is not
-// possible here: after 'cap' the parts do not open.)
+// possible here: after the boot's close (PCR 15) the parts do not open.)
 func VaultStatus(tpmPath string, sealIndex uint32, debug bool) error {
 	idx, err := nvslot.AttestIndexForSlot(sealIndex)
 	if err != nil {

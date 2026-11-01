@@ -1,7 +1,6 @@
 package sshscreen
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -30,22 +29,18 @@ type hostKeyAtBoot struct {
 // with its key id and principals - and the CA conf names certify it. When it cannot (a firmware or Secure Boot update since
 // the build, another TPM, no CA), the key is temporary: made in the TPM
 // all the same, not certified, so the ssh client warns of an unknown host
-// key, and the console shows its fingerprint to compare. However it ends -
-// a key made, an error at any step - the CA is closed after: PCR 15
-// extended (aSSH's hostkey.Close), which the CA's own policy reads. A close
-// that fails is an error. Without a TPM there is no key.
-func PrepareHostKey(tpmPath string, conf config.Config) (key hostKeyAtBoot, err error) {
+// key, and the console shows its fingerprint to compare. The CA stays open
+// for the code screen: PCR 15, which the CA's policy reads, closes it
+// together with every slot object (whose codes, boot key and release key
+// the code screen still uses) when the code screen is over - run's close,
+// and the image's after it (Close). Without a TPM there is no key.
+func PrepareHostKey(tpmPath string, conf config.Config) (hostKeyAtBoot, error) {
 	caPath := conf.CA
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return hostKeyAtBoot{}, fmt.Errorf("no TPM: %w", err)
 	}
 	defer tpmDev.Close()
-	defer func() {
-		if cerr := hostkey.Close(tpmDev); cerr != nil {
-			key, err = hostKeyAtBoot{}, errors.Join(err, cerr)
-		}
-	}()
 	// The host key's authorization value stays in this process alone.
 	hostkey.NoDump()
 	o := hostkey.IssueOptions{
@@ -117,26 +112,34 @@ func AuthorizedKeys(path string) ([]string, int, error) {
 // run's, since a TPM that does not come stops a resume from hibernation.
 var closeTPMWait = 30 * time.Second
 
-// Close closes the SSH CA - PCR 15 extended with aSSH's close event - and
-// does nothing else: what the boot image runs when the code screen is over
-// (systemd: tpm2-kira-close.service; initramfs-tools: init-bottom) and
-// right before a resume from hibernation. A resume starts the TPM afresh,
-// which sets PCR 15 back to zero, and the resumed system does not run the
-// code screen. It needs no CA file and no assh.conf: whatever CA there is
-// - its file read or not - signs nothing more until the next boot. A TPM
-// that does not come, or an extend the TPM refuses, is an error: the boot,
-// or the resume, must not go on.
+// Close closes the boot - PCR 15 extended with aSSH's close event - and
+// does nothing else: every slot object (the TOTP key, the sealed
+// machine-id, the boot key, the release key) and the SSH CA require PCR 15
+// at zero in their own policies, so none can be used until the next boot.
+// What the boot image runs when the code screen is over (run itself, then
+// systemd: tpm2-kira-close.service; initramfs-tools: init-bottom) and right
+// before a resume from hibernation. A resume starts the TPM afresh, which
+// sets PCR 15 back to zero, and the resumed system does not run the code
+// screen. It needs no CA file and no assh.conf. A TPM that does not come,
+// or an extend the TPM refuses, is an error: the boot, or the resume, must
+// not go on.
 func Close(tpmPath string) error {
 	if !tpmdev.AwaitNode(tpmPath, closeTPMWait) {
-		return fmt.Errorf("%s did not appear within %s: the SSH CA is not closed", tpmPath, closeTPMWait)
+		return fmt.Errorf("%s did not appear within %s: the boot is not closed (PCR 15)", tpmPath, closeTPMWait)
 	}
+	return CloseNow(tpmPath)
+}
+
+// CloseNow is Close without the wait for the TPM's device: run's close at
+// the end of the code screen, which has waited for it at its start.
+func CloseNow(tpmPath string) error {
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
-		return fmt.Errorf("the SSH CA is not closed: %w", err)
+		return fmt.Errorf("the boot is not closed (PCR 15): %w", err)
 	}
 	defer tpmDev.Close()
 	if err := hostkey.Close(tpmDev); err != nil {
-		return fmt.Errorf("the SSH CA is not closed: %w", err)
+		return fmt.Errorf("the boot is not closed: %w", err)
 	}
 	return nil
 }

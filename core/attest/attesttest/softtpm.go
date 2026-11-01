@@ -129,7 +129,11 @@ func NewSoftTPM() (*SoftTPM, error) {
 		return nil, err
 	}
 	s.PolicyRef = bytes.Repeat([]byte{0x9E}, 16)
-	bootT := attest.BootKeyTemplate(attest.PolicyAuthorizeDigest(signingName.Buffer, s.PolicyRef))
+	slotPolicy, err := attest.SlotPolicyDigest(signingName.Buffer, s.PolicyRef, tpm2.TPMAlgSHA256)
+	if err != nil {
+		return nil, err
+	}
+	bootT := attest.BootKeyTemplate(slotPolicy)
 	bootT.Unique = tpm2.NewTPMUPublicID(tpm2.TPMAlgECC, &tpm2.TPMSECCPoint{
 		X: tpm2.TPM2BECCParameter{Buffer: point[1:33]},
 		Y: tpm2.TPM2BECCParameter{Buffer: point[33:65]},
@@ -286,7 +290,11 @@ func (s *SoftTPM) ReleaseKey(signingPublic, policyRef []byte) (public, name []by
 		return nil, nil, err
 	}
 	pt := k.PublicKey().Bytes()
-	tmpl := attest.ReleaseKeyTemplate(attest.ReleaseKeyPolicy(attest.PolicyAuthorizeDigest(signingName.Buffer, policyRef)))
+	slotPolicy, err := attest.SlotPolicyDigest(signingName.Buffer, policyRef, tpm2.TPMAlgSHA256)
+	if err != nil {
+		return nil, nil, err
+	}
+	tmpl := attest.ReleaseKeyTemplate(attest.ReleaseKeyPolicy(slotPolicy))
 	tmpl.Unique = tpm2.NewTPMUPublicID(tpm2.TPMAlgECC, &tpm2.TPMSECCPoint{
 		X: tpm2.TPM2BECCParameter{Buffer: pt[1:33]},
 		Y: tpm2.TPM2BECCParameter{Buffer: pt[33:]},

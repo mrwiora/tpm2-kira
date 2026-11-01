@@ -627,15 +627,11 @@ func chooseAttestBank(sha1 bool, sealedAlg uint16, has func(measure.PCRHashAlgo)
 	return 0, fmt.Errorf("this TPM has no %s PCR bank to quote", hashAlgo.DisplayString())
 }
 
-// bootThroughKira says whether this boot passed the code screen:
-// 'tpm2-kira-boot cap' read-locked a generation index when the initrd was left.
+// bootThroughKira says whether this boot passed the code screen: the boot
+// image closed it (PCR 15 is not zero), so the slots' objects answer
+// "closed until the next boot".
 func bootThroughKira(tpmDev transport.TPM) bool {
-	for _, idx := range nvslot.FindPopulatedSlots(tpmDev, false) {
-		if _, err := nvslot.ReadGeneration(tpmDev, nvslot.GenerationIndex(idx)); errors.Is(err, nvslot.ErrCodesLocked) {
-			return true
-		}
-	}
-	return false
+	return nvslot.Closed(tpmDev)
 }
 
 // verifiedBootRequired: a phone is enrolled only in a boot that was
@@ -652,8 +648,7 @@ func bootThroughKira(tpmDev transport.TPM) bool {
 // never before (docs/SECURITY-BACKGROUND.md §3.1).
 //
 // requireVerifiedBoot refuses a boot that cannot have been verified: one
-// that never passed tpm2-kira's code screen (the generation indices are
-// not read-locked), and, for a slot with a TOTP key, one whose PCR values
+// that never passed tpm2-kira's code screen (PCR 15 not closed), and, for a slot with a TOTP key, one whose PCR values
 // at the code screen were not the approved ones, so no code was shown for
 // the slot. It reports whether that match was established; when the event
 // log cannot tell, the person's answer is what is left.
@@ -717,11 +712,11 @@ func bootMatchesApproval(tpmDev transport.TPM, sealed *nvslot.SealedBlob) ([]int
 	return differ, nil
 }
 
-// warnUncappedBoot says, before a session with the phone, what its boot
+// warnUnclosedBoot says, before a session with the phone, what its boot
 // key verdict will read in a boot that never passed the code screen:
 // refused, not the designed "locked until the next boot". control blocks
 // its steps on this; by hand the note is the warning.
-func warnUncappedBoot(tpmDev transport.TPM) {
+func warnUnclosedBoot(tpmDev transport.TPM) {
 	if bootThroughKira(tpmDev) {
 		return
 	}

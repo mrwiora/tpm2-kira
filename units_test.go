@@ -35,7 +35,7 @@ func has(lines []string, want string) bool {
 // The initrd units are installed on the host too (the mkinitcpio hook takes
 // them from there). Enabled on the host by mistake they must do nothing.
 func TestInitrdUnitsOnlyRunInTheInitrd(t *testing.T) {
-	for _, unit := range []string{"tpm2-kira.service", "tpm2-kira-cap.service", "tpm2-kira-close.service", "tpm2-kira-machine-id.service", "tpm2-kira-unlock.socket"} {
+	for _, unit := range []string{"tpm2-kira.service", "tpm2-kira-close.service", "tpm2-kira-machine-id.service", "tpm2-kira-unlock.socket"} {
 		if !has(directives(t, "initramfs/systemd/"+unit), "ConditionPathExists=/etc/initrd-release") {
 			t.Errorf("%s lacks ConditionPathExists=/etc/initrd-release", unit)
 		}
@@ -109,7 +109,9 @@ func TestTheBootIsRunOnBothDistributions(t *testing.T) {
 	// Arch: the same release, before the network and the separators.
 	mid := directives(t, "initramfs/systemd/tpm2-kira-machine-id.service")
 	for _, want := range []string{"ExecStart=tpm2-kira-boot machine-id", "Type=oneshot", "Before=systemd-networkd.service",
-		"Before=systemd-pcrosseparator.service", "After=systemd-pcrphase-initrd.service"} {
+		"Before=systemd-pcrosseparator.service", "After=systemd-pcrphase-initrd.service",
+		// Unsealed under slot 0's policy: before the close (PCR 15) ends it.
+		"Before=tpm2-kira-close.service"} {
 		if !has(mid, want) {
 			t.Errorf("tpm2-kira-machine-id.service lacks %q", want)
 		}
@@ -155,10 +157,14 @@ func TestUnlockSocketIsWiredToTheDisplay(t *testing.T) {
 	}
 }
 
-// The SSH CA's close when the code screen is over: after run, before any
-// volume is opened, its failure the boot's (no "-" before the command; the
-// hook makes initrd.target require it).
+// The close (PCR 15: every slot and the SSH CA) when the code screen is
+// over: after run, before any volume is opened, its failure the boot's (no
+// "-" before the command; the hook makes initrd.target require it). There
+// is no other lock: no cap unit.
 func TestCloseUnitFailsTheBoot(t *testing.T) {
+	if _, err := os.Stat("initramfs/systemd/tpm2-kira-cap.service"); err == nil {
+		t.Error("a cap unit: PCR 15 closes the slots")
+	}
 	d := directives(t, "initramfs/systemd/tpm2-kira-close.service")
 	for _, want := range []string{"After=tpm2-kira.service", "Wants=cryptsetup-pre.target",
 		"Before=cryptsetup-pre.target initrd.target initrd-switch-root.target", "Type=oneshot", "ExecStart=tpm2-kira-boot close"} {

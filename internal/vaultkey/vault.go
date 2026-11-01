@@ -8,7 +8,7 @@ package vaultkey
 // Both parts are 32 random bytes, wrapped (TPM2_MakeCredential) for this
 // TPM's EK and the slot's release key: they open only through the release
 // key's policy, the slot's approval for this boot state, and only before
-// 'cap'. The local part is kept in the slot's blob (the vault method); the
+// the boot's close (PCR 15). The local part is kept in the slot's blob (the vault method); the
 // remote part only by the vault, which releases it to a fresh quote of a
 // boot state the slot's signing key approved. Neither is ever stored in
 // the clear, and the key is derived from both in the moment.

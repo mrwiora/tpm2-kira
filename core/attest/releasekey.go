@@ -16,12 +16,13 @@ import (
 // on the TPM holding that EK, and only with the RK loaded and its ADMIN
 // role authorised - which, with adminWithPolicy set, means a policy session
 // that ends in PolicyCommandCode(ActivateCredential). The policy before
-// that is the slot's own: PolicyAuthorize(signing key, policyRef), the
-// approval the signing key gives at seal and reseal for the PCR values of
-// the image it approved. So the factor unwraps exactly where the slot's
-// TOTP key computes: in the boot the signing key approved, with the
-// tpm2-kira that image carries, and nowhere else. The key never signs or
-// decrypts anything; it exists for its name.
+// that is the slot's own (SlotPolicyDigest): PolicyAuthorize(signing key,
+// policyRef), the approval the signing key gives at seal and reseal for
+// the PCR values of the image it approved, and PolicyPCR(15 == zero), which
+// the boot image's close ends. So the factor unwraps exactly where the
+// slot's TOTP key computes: in the boot the signing key approved, with the
+// tpm2-kira that image carries, before the close, and nowhere else. The
+// key never signs or decrypts anything; it exists for its name.
 
 const (
 	ccPolicyCommandCode  = 0x0000016c // TPM_CC_PolicyCommandCode
@@ -29,7 +30,7 @@ const (
 )
 
 // ReleaseKeyPolicy extends the slot's policy (the TOTP key's authPolicy,
-// PolicyAuthorizeDigest(signing key name, policyRef)) by
+// SlotPolicyDigest) by
 // PolicyCommandCode(TPM_CC_ActivateCredential), as the TPM computes it:
 // H(policy ‖ TPM_CC_PolicyCommandCode ‖ TPM_CC_ActivateCredential).
 func ReleaseKeyPolicy(slotPolicy []byte) []byte {
@@ -80,11 +81,12 @@ func ReleaseKeyTemplate(authPolicy []byte) tpm2.TPMTPublic {
 // ReleaseKeyName checks a release key's public area against the slot it
 // was made for - signingPublic (TPMT_PUBLIC of the slot's signing key) and
 // policyRef - and returns its Name. The area must be ReleaseKeyTemplate
-// under ReleaseKeyPolicy of the slot's policy, byte for byte but for its
-// public point: so the key is usable only through the slot's approval, and
-// is fixedTPM, which no key loaded or imported from outside a TPM can be.
-// A credential made for this Name then opens only in the machine's TPM, in
-// a boot the slot's signing key approved.
+// under ReleaseKeyPolicy of the slot's policy (in the SHA-256 or the SHA-1
+// bank), byte for byte but for its public point: so the key is usable only
+// through the slot's approval, before the boot's close, and is fixedTPM,
+// which no key loaded or imported from outside a TPM can be. A credential
+// made for this Name then opens only in the machine's TPM, in a boot the
+// slot's signing key approved.
 func ReleaseKeyName(public, signingPublic, policyRef []byte) ([]byte, error) {
 	pub, err := tpm2.Unmarshal[tpm2.TPMTPublic](public)
 	if err != nil {
@@ -108,9 +110,7 @@ func ReleaseKeyName(public, signingPublic, policyRef []byte) ([]byte, error) {
 	if _, err := ecdh.P256().NewPublicKey(append(append([]byte{0x04}, point.X.Buffer...), point.Y.Buffer...)); err != nil {
 		return nil, fmt.Errorf("the release key's point: %w", err)
 	}
-	want := ReleaseKeyTemplate(ReleaseKeyPolicy(PolicyAuthorizeDigest(signingName.Buffer, policyRef)))
-	want.Unique = pub.Unique
-	if !bytes.Equal(tpm2.Marshal(want), public) {
+	if !isReleaseKey(pub, public, signingName.Buffer, policyRef) {
 		return nil, errors.New("the release key is not the slot's: its attributes or its policy differ")
 	}
 	name, err := tpm2.ObjectName(pub)
@@ -118,4 +118,21 @@ func ReleaseKeyName(public, signingPublic, policyRef []byte) ([]byte, error) {
 		return nil, err
 	}
 	return name.Buffer, nil
+}
+
+// isReleaseKey reports whether public (pub, parsed) is ReleaseKeyTemplate
+// under the slot's ReleaseKeyPolicy in one of the slot's banks.
+func isReleaseKey(pub *tpm2.TPMTPublic, public, signingName, policyRef []byte) bool {
+	for _, bank := range slotBanks {
+		slot, err := SlotPolicyDigest(signingName, policyRef, bank)
+		if err != nil {
+			continue
+		}
+		want := ReleaseKeyTemplate(ReleaseKeyPolicy(slot))
+		want.Unique = pub.Unique
+		if bytes.Equal(tpm2.Marshal(want), public) {
+			return true
+		}
+	}
+	return false
 }

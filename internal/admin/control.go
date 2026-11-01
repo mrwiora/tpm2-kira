@@ -134,7 +134,7 @@ type machineFacts struct {
 	SSHCAOtherKey bool
 	// Vaults is each vault-enrolled slot's vault, asked now.
 	Vaults   map[int]vaultkey.CheckResult
-	Capped   bool   // 'tpm2-kira-boot cap' ran: this boot went through the code screen
+	Closed   bool   // PCR 15 is extended: this boot went through the code screen's close
 	NewImage string // an image was rebuilt after this boot started; "" when not
 	Routed   map[string]bool
 	Route    []RouteFinding // the route's findings, for the step that writes the fixes
@@ -232,6 +232,10 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	f.Status = collectStatus(StatusOptions{TPMPath: tpmPath, ConfigPath: controlConfigPath(), Debug: debug})
 	if f.TPMErr == "" {
 		f.BootDebug = nvslot.BootDebug(tpmPath)
+		if tpmDev, err := tpmdev.Open(tpmPath); err == nil {
+			f.Closed = nvslot.Closed(tpmDev)
+			tpmDev.Close()
+		}
 	}
 	if f.TPMErr == "" {
 		f.Dirt = collectDirt(tpmPath, f.Status.Devices)
@@ -247,7 +251,6 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 		}
 		f.Phone = f.Phone || s.Phones > 0
 		f.Salt = f.Salt || s.PhoneSalt
-		f.Capped = f.Capped || strings.Contains(s.GenState, "read-locked until reboot")
 	}
 	if f.Initramfs == "mkinitcpio" {
 		f.NewImage = imageNewerThanBoot()
@@ -1445,7 +1448,7 @@ func (c *controller) imageHints() []controlStep {
 	if f.Initramfs == "" || !chainDone(f) || len(f.Pending) > 0 {
 		return nil
 	}
-	if len(f.Status.Slots) == 0 || (f.Capped && f.NewImage == "") {
+	if len(f.Status.Slots) == 0 || (f.Closed && f.NewImage == "") {
 		return nil
 	}
 	why := "the boot image is ready, and this boot did not go through it"

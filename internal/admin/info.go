@@ -3,7 +3,6 @@ package admin
 import (
 	"crypto"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -151,7 +150,7 @@ func readSlotInfo(tpmDev transport.TPM, nvramIndex uint32) (*slotInfo, error) {
 		SlotNumber: nvslot.SlotNumber(nvramIndex),
 		Blob:       sealedBlob,
 		raw:        sealedData,
-		GenState:   generationState(tpmDev, nvramIndex, sealedBlob.Payload.Generation),
+		GenState:   generationState(tpmDev, nvramIndex, sealedBlob),
 	}
 	if att := sealedBlob.Payload.Attestation; att != nil && nvramIndex >= nvslot.NVRAMSlotStart && nvramIndex <= nvslot.NVRAMSlotEnd {
 		si.CounterState = counterState(tpmDev, nvramIndex, att.Count)
@@ -173,16 +172,18 @@ func counterState(tpmDev transport.TPM, nvramIndex uint32, count uint64) string 
 }
 
 // generationState compares the slot's generation index with the generation
-// the blob's approval requires.
-func generationState(tpmDev transport.TPM, nvramIndex uint32, blobGen uint64) string {
+// the blob's approval requires, and says when the boot is closed.
+func generationState(tpmDev transport.TPM, nvramIndex uint32, sb *nvslot.SealedBlob) string {
+	blobGen := sb.Payload.Generation
 	gen, err := nvslot.ReadGeneration(tpmDev, nvslot.GenerationIndex(nvramIndex))
 	switch {
-	case errors.Is(err, nvslot.ErrCodesLocked):
-		return "read-locked until reboot ('tpm2-kira-boot cap' ran): no codes in this boot"
 	case err != nil:
 		return fmt.Sprintf("unavailable (%v): no codes until slot approve", err)
 	case gen != blobGen:
 		return fmt.Sprintf("%d — does NOT match the blob: this approval is revoked; slot approve", gen)
+	}
+	if nvslot.CheckOpen(tpmDev, sb.GetHashAlgo()) == nvslot.ErrClosed {
+		return fmt.Sprintf("%d (matches); the slot is closed until the next boot (PCR 15)", gen)
 	}
 	return fmt.Sprintf("%d (matches)", gen)
 }

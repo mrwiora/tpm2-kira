@@ -3,8 +3,8 @@ package phonegate
 // The boot key (attest/bootkey.go) in this machine's TPM: an ECC key for key
 // agreement under the same policy as the slot's TOTP key. Whatever the
 // signing key has approved for the slot - PCR values and generation - lets
-// the TPM use it, nothing else does; 'cap' locks it with the TOTP key when
-// the initrd is left. So "the boot key answered" means exactly what "the
+// the TPM use it, nothing else does; the close (PCR 15) ends it with the
+// TOTP key when the code screen is over. So "the boot key answered" means exactly what "the
 // code is shown" means, without a person comparing six digits against a
 // clock.
 

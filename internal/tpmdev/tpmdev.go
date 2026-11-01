@@ -204,6 +204,9 @@ type PrimaryKeyResponse struct {
 
 // StoragePrimaryTemplate is the deterministic ECC P-256 storage key that
 // parents tpm2-kira's objects. Re-created on every use, never persisted.
+// noDA: it is used with an empty password, and a dictionary attack lockout
+// (wrong PINs elsewhere) must not stop the slots' objects from loading at
+// boot. Only a PIN is counted (aSSH's rule).
 func StoragePrimaryTemplate() tpm2.TPMTPublic {
 	return tpm2.TPMTPublic{
 		Type:    tpm2.TPMAlgECC,
@@ -215,6 +218,7 @@ func StoragePrimaryTemplate() tpm2.TPMTPublic {
 			UserWithAuth:        true,
 			Restricted:          true,
 			Decrypt:             true,
+			NoDA:                true,
 		},
 		Parameters: tpm2.NewTPMUPublicParms(
 			tpm2.TPMAlgECC,

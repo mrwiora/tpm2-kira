@@ -1,7 +1,7 @@
 #!/bin/sh
-# The SSH CA closed (PCR 15 extended) right before a resume from
-# hibernation: a resume starts the TPM afresh, which sets PCR 15 back to
-# zero, and the resumed system runs no code screen. After every volume is
+# The boot closed (PCR 15 extended: every slot and the SSH CA) right before
+# a resume from hibernation: a resume starts the TPM afresh, which sets
+# PCR 15 back to zero, and the resumed system runs no code screen. After every volume is
 # unlocked (cryptroot), before local-premount, where initramfs-tools
 # resumes. In a boot where run closed it already, an extend more changes
 # nothing. Its failure
@@ -11,7 +11,7 @@
 # reaches it.
 #
 # The package installs it into every image; it acts only while the image's
-# plan has the TPM (a sealed slot, the SSH server), as init-bottom's close.
+# plan has the TPM (a sealed slot, an SSH CA), as init-bottom's close.
 
 PREREQ="cryptroot"
 
@@ -28,7 +28,7 @@ esac
 
 [ -d /etc/tpm2-kira/plan/tpm ] || exit 0
 if ! /usr/bin/tpm2-kira-boot close 2>>/run/initramfs/tpm2-kira.log; then
-    echo "tpm2-kira: the SSH CA is not closed: no resume from hibernation this boot" >/dev/console
+    echo "tpm2-kira: the boot is not closed (PCR 15): no resume from hibernation this boot" >/dev/console
     echo "resume=" >>/conf/param.conf
 fi
 exit 0

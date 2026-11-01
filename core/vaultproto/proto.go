@@ -7,7 +7,7 @@
 // the TPM's endorsement key and the slot's release key). The remote part R
 // is kept by the vault, wrapped the same way: a credential only this
 // machine's TPM opens, and only in a boot state the slot's signing key
-// approved, before the boot is capped. The vault never sees R in the clear.
+// approved, before the boot is closed (PCR 15). The vault never sees R in the clear.
 //
 // The vault releases R only to a quote from the machine's attestation key
 // over a fresh challenge, whose PCR values are a state the machine's
@@ -81,7 +81,7 @@ type EnrolRequest struct {
 	// against (docs/SECURITY-BACKGROUND.md §4).
 	SigningPublic       []byte    `json:"signing_public"`        // TPMT_PUBLIC of the slot's signing key
 	PolicyRef           []byte    `json:"policy_ref"`            // the slot's policyRef
-	GenerationIndexName []byte    `json:"generation_index_name"` // Name of the generation index, written and not read-locked
+	GenerationIndexName []byte    `json:"generation_index_name"` // Name of the generation index, written
 	Generation          uint64    `json:"generation"`            // the slot's generation now
 	Selection           Selection `json:"selection"`             // the slot's PCR selection
 

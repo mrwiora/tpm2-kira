@@ -22,6 +22,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
 
 	"github.com/tpm2-trust/assh/config"
+	"github.com/tpm2-trust/assh/hostkey"
 )
 
 // The boot plan: what the boot image carries and starts, decided once, when
@@ -70,17 +71,19 @@ func (p PlanPart) Title() string { return partTitles[p.Name] }
 // BootPlan is the decided plan, with what its files are made of.
 type BootPlan struct {
 	Parts    []PlanPart
-	TPM      bool     // a part needs the TPM at boot, or a slot is sealed (cap)
+	TPM      bool     // a part needs the TPM at boot, a slot is sealed or an SSH CA exists: the image closes the boot
 	Warnings []string // said at the build; not a reason for a part to be out
 	in       planInputs
 }
 
-// needsTPM: a part uses the TPM at boot, or a slot is sealed - whose
-// generation index 'cap' read-locks when the initrd is left, whatever the
-// slot's methods (the hooks run cap with the TPM part).
+// needsTPM: a part uses the TPM at boot, a slot is sealed, or an SSH CA
+// exists (kept while SSH is off) - whose objects PCR 15 must close when
+// the code screen is over, whatever the slot's methods: the hooks add the
+// close (tpm2-kira-close.service, Debian's init-bottom and local-top) with
+// the TPM part.
 func (p *BootPlan) needsTPM() bool {
 	return p.Has(imageplan.PartCodes) || p.Has(imageplan.PartPhone) || p.Has(imageplan.PartVault) || p.Has(imageplan.PartTPMSalt) ||
-		p.Has(imageplan.PartSSH) || p.in.TPMErr == "" && p.in.Slots > 0
+		p.Has(imageplan.PartSSH) || p.in.TPMErr == "" && (p.in.Slots > 0 || p.in.CAExists)
 }
 
 // Part is the named part; a part that is not in the plan is out.
@@ -124,6 +127,9 @@ type planInputs struct {
 	KeysSkipped int      // lines of the file that let nobody in
 	KeysErr     string
 	SSHCA       sshCAState // the CA, whether it loads
+	// CAExists: assh.conf's CA file is there, whether SSH is on or not:
+	// the image closes it like the slots.
+	CAExists bool
 
 	NoBusybox bool // initramfs-tools: no busybox in the image, so no ip
 
@@ -228,6 +234,7 @@ func readPlanInputs(o PlanOptions) planInputs {
 		}
 	}
 
+	in.CAExists = caFileExists(cfg.Remote.SSH.Assh.CA)
 	if cfg.Remote.SSH.On {
 		keys, skipped, err := sshscreen.AuthorizedKeys(cfg.Remote.SSH.Assh.AuthorizedKeys)
 		switch {
@@ -242,6 +249,17 @@ func readPlanInputs(o PlanOptions) planInputs {
 		in.SSHCA = loadSSHCA(cfg.Remote.SSH.Assh)
 	}
 	return in
+}
+
+// caFileExists says whether there is an SSH CA at path (a file, or an EFI
+// variable efi:NAME): one that does not load counts, a CA kept with SSH off
+// counts.
+func caFileExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	_, err := hostkey.LoadCA(path)
+	return !os.IsNotExist(err)
 }
 
 // decidePlan is the rules: each part in or out, and why.
@@ -542,9 +560,14 @@ func (p *BootPlan) WriteImage(buildroot, format string, out io.Writer) error {
 			if err := writeImageFile(buildroot, imageRunDropIn, []byte(runDropIn(in.Config.Remote.SSH)), 0o644); err != nil {
 				return err
 			}
-			if err := writeImageFile(buildroot, imageResumeDropIn, []byte(resumeDropIn), 0o644); err != nil {
-				return err
-			}
+		}
+	}
+	// The close before a resume from hibernation, with the close itself:
+	// whenever the image closes the boot (initramfs-tools: the package's
+	// local-top script, which reads the plan).
+	if p.TPM && format == FormatMkinitcpio {
+		if err := writeImageFile(buildroot, imageResumeDropIn, []byte(resumeDropIn), 0o644); err != nil {
+			return err
 		}
 	}
 	return nil

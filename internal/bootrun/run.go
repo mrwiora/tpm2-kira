@@ -13,8 +13,9 @@ package bootrun
 // watches continues on its own. The separator then extends os-separator into
 // PCRs 0-7, 9, 12-14, after which the key's policy cannot be satisfied again
 // until the next boot; the key never left the TPM, and the display has
-// nothing left to show, so it exits. 'tpm2-kira-boot cap' at initrd-switch-root
-// read-locks the generation index on top of that.
+// nothing left to show, so it exits. Right before READY, run closes the
+// boot (PCR 15, which every slot object's own policy reads), and the image
+// closes it again after (tpm2-kira-close.service, Debian's init-bottom).
 //
 // A slot that is enrolled with a phone is verified by that phone instead: a
 // verdict from the phone releases the boot the way Enter does. The code
@@ -28,10 +29,10 @@ package bootrun
 // hold on the console in any case: it owns the terminal, and systemd's
 // passphrase prompt waits for the terminal to be free.
 //
-// A slot that yields no code during the hold is served after the boot is
-// released: a blob whose policy holds only after the separator (sealed from
-// registers because the event log cannot be replayed) then gets its codes
-// live, window by window, and the display says so.
+// A slot that yields no code during the hold gets none after it: the boot
+// is closed when the hold ends. (Without a close - run by hand, without a
+// TPM in the plan - such a slot is served after the release: a blob whose
+// policy holds only after the separator then gets its codes live.)
 
 import (
 	"bytes"
@@ -143,6 +144,10 @@ type bootDisplay struct {
 	// lasts as long as they work, within Hold.
 	Pending func() <-chan struct{}
 
+	// Closes: Notify closes the boot (PCR 15), so no slot computes after
+	// the release and nothing is served then.
+	Closes bool
+
 	Hold          time.Duration // how long to wait for Enter
 	ScanRetry     time.Duration // between attempts while nothing can be shown
 	QuickRetryFor time.Duration // after the release, failed slots are retried every retryEvery this long,
@@ -152,7 +157,7 @@ type bootDisplay struct {
 func (b *bootDisplay) Run() {
 	slots, allUp, err := b.holdForConfirmation()
 	b.Notify()
-	if allUp {
+	if allUp || b.Closes {
 		return // every slot was confirmed or at least shown; nothing more can be computed
 	}
 	if errors.Is(err, ErrNoSlots) || errors.Is(err, errCodesOut) {
@@ -550,18 +555,7 @@ func Run(tpmPath string, nvramIndex uint32, hold time.Duration, unlockSocket str
 			s.Code, _, s.Error = totp.SlotCode(tpmDev, s.Index, now, debug)
 			return s
 		},
-		Notify: func() {
-			for _, p := range []part{ps.vault, ps.console, ps.ssh, ps.phone} {
-				if p != nil {
-					p.released(bd, confirmedBy)
-				}
-			}
-			// A display that goes on (codes that only compute after the
-			// separator) writes to the terminal but must not own it.
-			releaseTerminal(0)
-			sdNotifyReady()
-			ps.unlock.released(bd, confirmedBy)
-		},
+		Notify: func() { ps.release(bd, confirmedBy, planned.TPM) },
 		Show: func(slots []totp.NVRAMSlot, codes map[int]string, remaining time.Duration) {
 			if bd.prompting() {
 				return // the prompt owns the console; nothing is drawn over it
@@ -585,6 +579,7 @@ func Run(tpmPath string, nvramIndex uint32, hold time.Duration, unlockSocket str
 		},
 		Sleep:         time.Sleep,
 		Now:           time.Now,
+		Closes:        planned.TPM,
 		Hold:          bd.hold,
 		ScanRetry:     30 * time.Second,
 		QuickRetryFor: time.Minute,
@@ -594,6 +589,41 @@ func Run(tpmPath string, nvramIndex uint32, hold time.Duration, unlockSocket str
 	for i := len(started) - 1; i >= 0; i-- {
 		started[i].end(bd)
 	}
+}
+
+// release ends the hold: the parts are told, in the order that lets every
+// one finish what it opens in the TPM (the vault's opening, the phone's
+// salt); then the boot is closed (PCR 15) when closes - every slot and the
+// SSH CA with it, so nothing opens after this point; then READY, and the
+// key provider answers from what the parts opened before. The image closes
+// once more after this (fail-stop); here a failure is said.
+func (ps parts) release(bd *board, by string, closes bool) {
+	for _, p := range []part{ps.vault, ps.console, ps.ssh, ps.phone} {
+		if p != nil {
+			p.released(bd, by)
+		}
+	}
+	if closes {
+		closeBoot(bd.tpmPath)
+	}
+	// A display that goes on (run by hand, without a close) writes to the
+	// terminal but must not own it.
+	releaseTerminal(0)
+	notifyReady()
+	ps.unlock.released(bd, by)
+}
+
+// notifyReady is sdNotifyReady; a var: the tests see the order.
+var notifyReady = sdNotifyReady
+
+// closeBoot is run's close at the end of the code screen. A var: the tests
+// count it.
+var closeBoot = func(tpmPath string) {
+	if err := sshscreen.CloseNow(tpmPath); err != nil {
+		fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
+		return
+	}
+	journal.Narrate("tpm2-kira: the boot is closed (PCR 15): no slot and no SSH CA until the next boot")
 }
 
 // showScreen is the code screen: in the SSH sessions while the hold lasts

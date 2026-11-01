@@ -176,7 +176,7 @@ func TestControlHub(t *testing.T) {
 	}
 
 	// The phone: an adapter, the boot capped; the phone salt waits for it.
-	c.facts.Adapter, c.facts.Capped = "hci0", true
+	c.facts.Adapter, c.facts.Closed = "hci0", true
 	phone := c.menuSteps("phone")
 	if phone[0].Blocked != "" || phone[0].Done != "" || phone[1].Blocked != "" {
 		t.Fatalf("phone possible: %+v", phone)

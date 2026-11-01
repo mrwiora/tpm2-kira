@@ -159,7 +159,7 @@ func UnwrapFactor(tpmDev transport.TPM, sealed *nvslot.SealedBlob, blobIndex uin
 		Secret:         tpm2.TPM2BEncryptedSecret{Buffer: w.EncryptedSecret},
 	}.Execute(tpmDev)
 	if err != nil {
-		if errors.Is(err, nvslot.ErrCodesLocked) {
+		if errors.Is(err, nvslot.ErrClosed) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: %v", ErrFactorRefused, err)

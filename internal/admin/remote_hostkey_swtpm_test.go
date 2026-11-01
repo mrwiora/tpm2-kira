@@ -117,8 +117,11 @@ func TestSSHCAApprovedForTheCodeScreen(t *testing.T) {
 		t.Fatalf("at the code screen: %+v %v", hk, err)
 	}
 
-	// The CA is closed: it certifies nothing more in this boot, and a
-	// temporary key is served, made in the TPM.
+	// The code screen is over, the boot closed: the CA certifies nothing
+	// more in this boot, and a temporary key is served, made in the TPM.
+	if err := sshscreen.CloseNow(p.sock); err != nil {
+		t.Fatal(err)
+	}
 	if hk, err := sshscreen.PrepareHostKey(p.sock, conf); err != nil || hk.CA != "" || !strings.Contains(hk.Temporary, "the CA is closed until the next boot") {
 		t.Fatalf("after the close: %+v %v", hk, err)
 	}

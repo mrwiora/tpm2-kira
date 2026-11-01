@@ -5,6 +5,7 @@ package admin
 import (
 	"bufio"
 	"bytes"
+	"github.com/tpm2-trust/assh/hostkey"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,11 +58,11 @@ func TestEnrolmentNeedsAVerifiedBoot(t *testing.T) {
 
 	// Before the code screen ran: nothing verified this boot.
 	if _, err := requireVerifiedBoot(tpm, sealed, 0); err == nil || !strings.Contains(err.Error(), "did not pass tpm2-kira's code screen") {
-		t.Fatalf("an uncapped boot was taken: %v", err)
+		t.Fatalf("a boot that was not closed was taken: %v", err)
 	}
 
 	// Through the code screen, in the approved state: the code was shown.
-	if _, err := nvslot.CapCodes(tpm); err != nil {
+	if err := hostkey.Close(tpm); err != nil {
 		t.Fatal(err)
 	}
 	matched, err := requireVerifiedBoot(tpm, sealed, 0)

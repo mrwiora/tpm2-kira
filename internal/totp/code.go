@@ -31,8 +31,9 @@ var ErrNoCode = errors.New("the slot has no TOTP code and no phone")
 // explain a failure: a PCRMismatchError when the registers differ from the
 // sealed values, ErrSeparatorLocked when they differ only by the OS
 // separator that ran after the measure point, a GenerationMismatchError
-// when a later reseal revoked this blob's approval, ErrCodesLocked after
-// 'tpm2-kira-boot cap'. None of these checks is the gate; the TPM is.
+// when a later reseal revoked this blob's approval, nvslot.ErrClosed after
+// the boot image's close (PCR 15). None of these checks is the gate; the
+// TPM is.
 func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) (string, *nvslot.SealedBlob, error) {
 	sealedData, err := nvslot.ReadRecord(nvramIndex)
 	if err != nil {
@@ -49,10 +50,11 @@ func SlotCode(tpmDev transport.TPM, nvramIndex uint32, t time.Time, debug bool) 
 		return "", sealedBlob, ErrNoCode
 	}
 
+	if err := nvslot.CheckOpen(tpmDev, sealedBlob.GetHashAlgo()); err != nil {
+		return "", sealedBlob, err
+	}
 	gen, err := nvslot.ReadGeneration(tpmDev, nvslot.GenerationIndex(nvramIndex))
 	switch {
-	case errors.Is(err, nvslot.ErrCodesLocked):
-		return "", sealedBlob, nvslot.ErrCodesLocked
 	case err != nil:
 		return "", sealedBlob, &nvslot.GenerationMismatchError{BlobGeneration: sealedBlob.Payload.Generation, IndexMissing: true}
 	case gen != sealedBlob.Payload.Generation:
@@ -240,8 +242,8 @@ func CodesForSlots(slots []NVRAMSlot) (map[int]string, error) {
 func SlotErrorLine(err error) string {
 	var genErr *nvslot.GenerationMismatchError
 	switch {
-	case errors.Is(err, nvslot.ErrCodesLocked):
-		return "Locked until reboot (codes are only shown before the disk is unlocked)"
+	case errors.Is(err, nvslot.ErrClosed):
+		return "Closed until the next boot (PCR 15: codes are only shown while the code screen holds)"
 	case errors.Is(err, measure.ErrSeparatorLocked):
 		return "Locked until the next boot (the OS separator ran after the measure point)"
 	case errors.As(err, &genErr):
@@ -480,6 +482,7 @@ func totpKeyTemplate(alg tpm2.TPMAlgID, authPolicy []byte) tpm2.TPMTPublic {
 			FixedTPM:    true,
 			FixedParent: true,
 			SignEncrypt: true,
+			NoDA:        true,
 			// UserWithAuth deliberately NOT set: policy only.
 			// SensitiveDataOrigin is clear because tpm2-kira supplies the
 			// key, which it must show once for enrolment.
@@ -499,7 +502,8 @@ func totpKeyTemplate(alg tpm2.TPMAlgID, authPolicy []byte) tpm2.TPMTPublic {
 //
 // The policy session satisfies the approved policy (PolicyPCR against the
 // live registers, PolicyNV against the generation index), then PolicyAuthorize
-// with a ticket for the approval signature in the blob. The TPM decides; the
+// with a ticket for the approval signature in the blob, then PCR 15 zero
+// (the boot not closed). The TPM decides; the
 // blob is not trusted for anything it could not also have done itself:
 // PolicyAuthorize only accepts the signing key whose Name the key object's
 // policy binds.
@@ -531,27 +535,10 @@ func Code(tpmDev transport.TPM, blob *nvslot.SealedBlob, blobIndex uint32, t tim
 		HashAlg: p.TOTPAlgorithm,
 	}.Execute(tpmDev)
 	if err != nil {
-		if errors.Is(err, nvslot.ErrCodesLocked) {
-			return "", nvslot.ErrCodesLocked
+		if errors.Is(err, nvslot.ErrClosed) {
+			return "", nvslot.ErrClosed
 		}
 		return "", fmt.Errorf("failed to compute the code in the TPM: %w", err)
 	}
 	return HOTPTruncate(rsp.OutHMAC.Buffer), nil
-}
-
-// CapCommand implements 'tpm2-kira-boot cap': it read-locks every generation
-// index, so that no TOTP code can be computed until the next reboot. Run it
-// when leaving the initrd; the systemd unit and the initramfs-tools script do.
-func CapCommand(tpmPath string) error {
-	tpmDev, err := tpmdev.Open(tpmPath)
-	if err != nil {
-		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
-	}
-	defer tpmDev.Close()
-	n, err := nvslot.CapCodes(tpmDev)
-	if err != nil {
-		return fmt.Errorf("locked %d generation index(es), but not all: %w", n, err)
-	}
-	fmt.Printf("tpm2-kira: locked %d generation index(es); no codes until the next reboot\n", n)
-	return nil
 }

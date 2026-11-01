@@ -98,22 +98,17 @@ _add_plan() {
         esac
     done <<< "$out"
 
-    # The lock of the slots when the initrd is left - their generation
-    # indices, which every slot's policy reads - so nothing in the running
-    # OS can compute a code or open a slot's part until the next boot:
-    # whenever a slot is sealed (the plan's TPM part), whatever its methods.
-    # efivarfs, where the slots' records are, is mounted by systemd itself;
-    # added for a kernel that has it as a module (built in, nothing to add).
-    #
-    # The SSH CA's close (PCR 15) when the code screen is over, whether the
-    # image serves SSH or not: a CA in this TPM signs nothing in the
-    # running system. Required by initrd.target: a close that fails stops
-    # the boot (emergency target).
+    # The close (PCR 15) when the code screen is over, whether the image
+    # serves SSH or not: every slot object's policy and the SSH CA's read
+    # PCR 15, so nothing in the running system can compute a code, open a
+    # slot's part or have a key certified until the next boot - whenever a
+    # slot is sealed or an SSH CA exists (the plan's TPM part), whatever
+    # their methods. Required by initrd.target: a close that fails stops
+    # the boot (emergency target). efivarfs, where the slots' records are,
+    # is mounted by systemd itself; added for a kernel that has it as a
+    # module (built in, nothing to add).
     if _plan_has tpm; then
         add_module efivarfs
-        _add_kira_unit tpm2-kira-cap.service
-        add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-cap.service \
-            /usr/lib/systemd/system/tpm2-kira-cap.service
         _add_kira_unit tpm2-kira-close.service
         add_symlink /usr/lib/systemd/system/initrd.target.requires/tpm2-kira-close.service \
             /usr/lib/systemd/system/tpm2-kira-close.service
@@ -265,10 +260,10 @@ The hook will:
   volume's LUKS2 header says. Nothing is written.
 - Add each part of the boot plan that something uses, and say why the
   others are out:
-    TOTP codes   a slot is sealed: run waits for the TPM (5 s), and
-                 tpm2-kira-cap.service locks the codes when the initrd is left;
-                 with the TPM in the plan, tpm2-kira-close.service closes the
-                 SSH CA (PCR 15) when the code screen is over
+    TOTP codes   a slot is sealed: run waits for the TPM (5 s); with the TPM
+                 in the plan (a sealed slot, an SSH CA), run and then
+                 tpm2-kira-close.service close the boot (PCR 15: every slot
+                 and the SSH CA) when the code screen is over
     Phone        a phone is enrolled (or TPM2_KIRA_ATTEST_BLUETOOTH=always):
                  the adapter's driver and firmware, the signing public key;
                  run starts the radio worker (gate-child) itself

@@ -65,7 +65,7 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	// not, so the seal step offers exactly that; the phone can be enrolled.
 	f.Keys, f.Adapter = "local key files", "hci0"
 	f.Initramfs, f.HookState, f.Rebuild, f.NewImage = "mkinitcpio", "", "", ""
-	f.Capped = true
+	f.Closed = true
 	var out strings.Builder
 	c := &controller{facts: f, out: &out}
 	if route := c.routeStep(); !strings.Contains(route.Blocked, "no LUKS device") {
@@ -141,7 +141,7 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	}
 	f.Keys, f.Adapter = "local key files", "hci0"
 	f.Initramfs, f.HookState, f.Rebuild, f.NewImage = "mkinitcpio", "", "", ""
-	f.Capped = true
+	f.Closed = true
 	c = &controller{facts: f, out: &out}
 	if s := c.menuSteps("phone")[0]; s.Key != "attest" || !strings.HasPrefix(s.Blocked, conf+": ") {
 		t.Errorf("the attest step with a broken file: %+v", s)

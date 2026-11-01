@@ -126,7 +126,14 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	var kept *nvslot.Attestation
 	var policyRef []byte
 	if oldRaw, old, err := phonegate.ReadSlot(tpmDev, nvramIndex); err == nil && old.Payload.Attestation != nil {
-		if nvslot.VerifyBlobSignature(oldRaw, old, signer.Public()) == nil {
+		switch {
+		case old.GetHashAlgo() != hashAlgo:
+			// The boot key and the release key read PCR 15 in the slot's
+			// bank (its policy); in another bank they would never open.
+			fmt.Printf("WARNING: this slot's phone or vault enrolment is for the %s bank, not %s.\n", old.GetHashAlgo().DisplayString(), hashAlgo.DisplayString())
+			fmt.Println("  It is not carried over. Enrol again: tpm2-kira phone enrol, luks enrol")
+			fmt.Println()
+		case nvslot.VerifyBlobSignature(oldRaw, old, signer.Public()) == nil:
 			kept, policyRef = old.Payload.Attestation, old.Payload.PolicyRef
 			if kept.Phone.Enabled() {
 				fmt.Printf("Phone enrolment: kept (%d phone(s) enrolled for this slot)\n", len(kept.Phone.Verifiers))
@@ -135,7 +142,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 				fmt.Printf("Vault enrolment: kept (%s)\n", kept.Vault.URL)
 			}
 			fmt.Println()
-		} else {
+		default:
 			fmt.Println("WARNING: this slot carries a phone enrolment that another signing key wrote.")
 			fmt.Println("  It is not carried over. Enrol the phone again: tpm2-kira phone enrol")
 			fmt.Println()
@@ -165,7 +172,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 			fmt.Println("  Check that your app's first code matches 'tpm2-kira reveal' before you rely on it.")
 			fmt.Println()
 		}
-		if err := addTOTPKey(tpmDev, blob, key, alg); err != nil {
+		if err := addTOTPKey(tpmDev, blob, key, alg, hashAlgo); err != nil {
 			return err
 		}
 	}
@@ -223,9 +230,9 @@ func newSlot(tpmDev transport.TPM, pubKey crypto.PublicKey, policyRef []byte) (*
 }
 
 // addTOTPKey creates the TOTP key object for key under the slot's policy
-// and puts it into blob.
-func addTOTPKey(tpmDev transport.TPM, blob *nvslot.SealedBlob, key []byte, alg tpm2.TPMAlgID) error {
-	policy, err := blob.SlotPolicy()
+// in bank, the bank the slot is being sealed to, and puts it into blob.
+func addTOTPKey(tpmDev transport.TPM, blob *nvslot.SealedBlob, key []byte, alg tpm2.TPMAlgID, bank measure.PCRHashAlgo) error {
+	policy, err := blob.SlotPolicyIn(bank)
 	if err != nil {
 		return err
 	}
@@ -354,8 +361,9 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.Seale
 		fmt.Println()
 		fmt.Println("WARNING: the event log cannot be used for this TPM, so PCRs 0-7, 9, 12-14 are sealed to")
 		fmt.Println("         their register values, which already carry systemd's os-separator. The key's policy")
-		fmt.Println("         then holds only after the separator: codes are computed live while the initrd")
-		fmt.Println("         runs instead of before the separator, and the display says so. Reason:")
+		fmt.Println("         then holds only after the separator - and the boot image closes the boot (PCR 15)")
+		fmt.Println("         when the code screen is over, before the separator: this slot shows no code at")
+		fmt.Println("         boot. Only 'tpm2-kira-boot run' by hand in an image without the close shows it. Reason:")
 		fmt.Printf("         %s\n", readResult.AfterSeparator)
 		fmt.Println()
 	}

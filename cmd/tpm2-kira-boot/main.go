@@ -1,5 +1,5 @@
 // tpm2-kira-boot is what the boot image carries of tpm2-kira: the code
-// screen and the parts the image's plan names, the cap, the Debian
+// screen and the parts the image's plan names, the close, the Debian
 // keyscript, the SSH server's unprivileged half and the phone's radio
 // worker. Nothing of the administration (tpm2-kira) is in it.
 package main
@@ -31,9 +31,9 @@ scripts run it; on the installed system it is 'tpm2-kira')
   run          The code screen: shows the codes, holds the boot until it is
                confirmed, and starts the parts the image's plan names - the
                phone's gate, the SSH server, the vault, the disk's key
-  cap          Lock the codes until the next boot (when the initrd is left)
-  close        Close the SSH CA, PCR 15 extended (the end of the code screen,
-               before a resume from hibernation)
+  close        Close the boot - every slot and the SSH CA - until the next
+               boot: PCR 15 extended (the end of the code screen, before a
+               resume from hibernation)
   unlock-key   Debian's keyscript: the disk's key from run's socket, else askpass
   machine-id   Release the sealed machine-id before the network (slot 0's policy)
   reveal       The current code (reveal-plain: without colour)
@@ -80,19 +80,13 @@ func main() {
 	switch command {
 	case "run":
 		runRun(args)
-	case "cap":
-		fs := flag.NewFlagSet("cap", flag.ExitOnError)
-		tpm := fs.String("tpm", tpmdev.DefaultPath, "Path to TPM device")
-		fs.Parse(args)
-		if err := totp.CapCommand(*tpm); err != nil {
-			fail(err)
-		}
 	case "close":
 		fs := flag.NewFlagSet("close", flag.ExitOnError)
 		tpm := fs.String("tpm", tpmdev.DefaultPath, "Path to TPM device")
 		fs.Parse(args)
 		// The one command whose failure is the boot's: the boot or the
-		// resume that follows it must not go on with the SSH CA open.
+		// resume that follows it must not go on with the slots and the SSH
+		// CA open.
 		if err := sshscreen.Close(*tpm); err != nil {
 			fmt.Fprintf(os.Stderr, "tpm2-kira-boot close: %v\n", err)
 			os.Exit(1)

@@ -257,7 +257,7 @@ func (c *controller) phoneSteps() []controlStep {
 		// the next boot differ, and a reboot cures both this and the boot
 		// key's verdict below.
 		attest.Blocked = f.NewImage
-	case !f.Capped:
+	case !f.Closed:
 		attest.Blocked = "this boot did not pass tpm2-kira's code screen: reboot, then enrol - the phone would otherwise call the boot key refused instead of locked"
 	}
 	bt := controlStep{Key: "bt-always", Title: "Bluetooth in every boot image", Optional: true, SelfConfirm: true,
@@ -369,7 +369,7 @@ func (c *controller) diskSteps() []controlStep {
 		remote.Blocked = "needs an enrolled phone (Attestation by phone)"
 	case f.NewImage != "":
 		remote.Blocked = f.NewImage
-	case !f.Capped:
+	case !f.Closed:
 		remote.Blocked = "this boot did not pass tpm2-kira's code screen: reboot, then enrol the salt - the phone would otherwise call the boot key refused instead of locked"
 	}
 	return []controlStep{salt, remote, c.vaultStep(gate, strong), tpmSalt}
