@@ -111,7 +111,9 @@ class Machine:
         except (OSError, ValueError):
             return None
 
-    def start(self, unlock=True, timeout=600):
+    def start(self, unlock=True, timeout=600, tpm=True):
+        """Starts the machine; tpm=False without its TPM (a boot whose
+        close must fail: hibernatetest's V4)."""
         if self.pid():
             print(f"{self.name}: running")
         else:
@@ -121,10 +123,14 @@ class Machine:
             for f in ("serial.sock", "qmp.sock", os.path.join("tpm", "swtpm-sock")):
                 if os.path.exists(self.path(f)):
                     os.remove(self.path(f))
-            run(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=" + self.path("tpm"),
-                 "--ctrl", "type=unixio,path=" + self.path("tpm", "swtpm-sock"),
-                 "--log", "file=" + self.path("tpm", "swtpm.log"), "--pid", "file=" + self.path("tpm", "swtpm.pid"),
-                 "--terminate", "--daemon"])
+            tpmdev = []
+            if tpm:
+                run(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=" + self.path("tpm"),
+                     "--ctrl", "type=unixio,path=" + self.path("tpm", "swtpm-sock"),
+                     "--log", "file=" + self.path("tpm", "swtpm.log"), "--pid", "file=" + self.path("tpm", "swtpm.pid"),
+                     "--terminate", "--daemon"])
+                tpmdev = ["-chardev", f"socket,id=chrtpm,path={self.path('tpm', 'swtpm-sock')}",
+                          "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", "tpm-crb,tpmdev=tpm0"]
             self.mark = os.path.getsize(self.path("serial.log")) if os.path.exists(self.path("serial.log")) else 0
             machine, code, secure = "q35,accel=kvm", OVMF_CODE, []
             if self.secure_boot:
@@ -140,8 +146,7 @@ class Machine:
                  # guest names it enp1s0, as its network configuration says.
                  "-device", "pcie-root-port,id=rp1,chassis=1,slot=1",
                  "-device", f"virtio-net-pci,bus=rp1,netdev=n0,mac={self.mac}",
-                 "-chardev", f"socket,id=chrtpm,path={self.path('tpm', 'swtpm-sock')}",
-                 "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", "tpm-crb,tpmdev=tpm0",
+                 *tpmdev,
                  "-chardev", f"socket,id=ser0,path={self.path('serial.sock')},server=on,wait=off,logfile={self.path('serial.log')},logappend=on",
                  "-serial", "chardev:ser0",
                  "-qmp", f"unix:{self.path('qmp.sock')},server=on,wait=off",

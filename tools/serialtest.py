@@ -13,13 +13,14 @@ the boot is then answered at the serial console alone, as a person at the
 machine would:
 
   totp      slot add --totp, no keyslot of tpm2-kira's: the codes of slots
-            0 and 1 at the console are the ones computed from the secrets;
-            Enter; the passphrase opens the disk; cap locked the codes
+            0 and 1 (Debian's GRUB: slot 0 alone) at the console are the
+            ones computed from the secrets; Enter; the passphrase opens the
+            disk; the close (PCR 15) ended the slots
   hashpwd2  luks enrol --password typed --salt typed (0x1100), no slot:
             no code screen; the password and the salt typed open the disk
   tpmsalt   slot add without --totp, luks enrol --salt tpm (0x1200): no
             code screen, the TPM opens the salt, the password alone opens
-            the disk; cap locked the slot all the same. A second boot: a
+            the disk; the close ended the slot all the same. A second boot: a
             wrong password, then the system's own prompt and the LUKS
             passphrase (the fallback)
   lostrecord  the TPM salt's slot, its record (the EFI variable KIRAslot0)
@@ -98,12 +99,12 @@ class Case:
     def up(self, what):
         return self.check(f"{what}: the system comes up (ssh)", self.m.wait_port(22, True, 420))
 
-    def capped(self, what):
-        """cap read-locked slot 0's generation index when the initrd was
-        left: slot info says so, whatever the slot's methods."""
+    def closed(self, what):
+        """The boot image closed the boot (PCR 15) when the code screen was
+        over: slot info says slot 0 is closed, whatever its methods."""
         rc, out = self.m.run("tpm2-kira slot info --nvram 0 2>&1", save=f"slot-info-{what}.log")
-        return self.check(f"{what}: cap locked slot 0 when the initrd was left (its generation index read-locked)",
-                          "read-locked until reboot" in out, out[-400:])
+        return self.check(f"{what}: the close ended slot 0 until the next boot (PCR 15)",
+                          "closed until the next boot (PCR 15)" in out, out[-400:])
 
     # ── the setup ────────────────────────────────────────────────────────
 
@@ -173,7 +174,9 @@ class Case:
         self.check("setup --local", "Setup Complete" in out, out[-400:])
         rc, out = self.m.run("tpm2-kira slot add --totp 2>&1", save="slot-add.log")
         secrets = re.findall(r"^Secret: ([A-Z2-7]+)", out, re.M)
-        if not self.check("slot add --totp seals slots 0 and 1, each with its secret", len(secrets) == 2, out[-600:]):
+        # Debian boots GRUB: no fallback slot (no slot without PCRs 8 and 9).
+        slots = 1 if self.m.distro == "debian" else 2
+        if not self.check(f"slot add --totp seals {slots} slot(s), each with its secret", len(secrets) == slots, out[-600:]):
             return
         # The volume routed through tpm2-kira, as control's step does: its
         # prompt waits for the code screen. (Not routed, Debian's cryptsetup
@@ -183,13 +186,14 @@ class Case:
         self.rebuild(r"TOTP codes:\s+in")
         mark = self.reboot()
         try:
-            m, text = self.expect(r"#0: (\d{6})[\s\S]*#1: (\d{6})", mark, 300)
+            m, text = self.expect(r"#0: (\d{6})[\s\S]*#1: (\d{6})" if slots == 2 else r"#0: (\d{6})", mark, 300)
         except Fail as e:
             self.check("the code screen at the serial console", False, str(e))
             return
         at = time.time()
         self.check("slot 0's code at the console is the authenticator's", vmtest.code_matches(secrets[0], m.group(1), at), m.group(0)[-200:])
-        self.check("slot 1's code at the console is the authenticator's", vmtest.code_matches(secrets[1], m.group(2), at), m.group(0)[-200:])
+        if slots == 2:
+            self.check("slot 1's code at the console is the authenticator's", vmtest.code_matches(secrets[1], m.group(2), at), m.group(0)[-200:])
         self.lv.send("\r")
         try:
             self.expect(r"(Passphrase for disk \S+|" + SYSTEM_PROMPT + r")", mark, 300)
@@ -199,7 +203,7 @@ class Case:
             self.check("after Enter, the passphrase is asked at the console", False, str(e))
         self.save_console(mark, "totp")
         if self.up("totp"):
-            self.capped("totp")
+            self.closed("totp")
 
     def hashpwd2(self):
         if not self.enrol("--password typed --salt typed", "luks-enrol-recovery",
@@ -251,7 +255,7 @@ class Case:
         self.save_console(mark, "tpmsalt")
         if not self.up("tpmsalt"):
             return
-        self.capped("tpmsalt")
+        self.closed("tpmsalt")
 
         # The fallback: a wrong password; tpm2-kira's prompt again (Debian's
         # cryptsetup tries the keyscript again) or the system's own (Arch's

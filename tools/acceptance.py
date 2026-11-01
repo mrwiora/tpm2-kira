@@ -438,9 +438,9 @@ def check_installed(t, distro, expected, mode_wanted, luks_device, log, rep):
         rep.check("status: a slot is sealed", len(slots) > 0)
         rep.check("status: every slot signed by this machine's key", all(s["signed"] for s in slots),
                   "; ".join(f"slot {s['slot_number']}: {s.get('sign_reason', '')}" for s in slots if not s["signed"]))
-        rep.check("status: a fallback slot (PCRs 0 and 7)", any(s["fallback"] for s in slots))
+        rep.check("status: a fallback slot (PCRs 0 and 7), none on GRUB", status.get("grub") or any(s["fallback"] for s in slots))
         rep.check("status: every slot's generation matches (no approval due)",
-                  all("matches" in s["generation_state"] or "read-locked" in s["generation_state"] for s in slots),
+                  all("matches" in s["generation_state"] for s in slots),
                   "; ".join(f"slot {s['slot_number']}: {s['generation_state']}" for s in slots))
         rep.check("status: no notes", not status.get("notes"), "\n".join(status.get("notes", [])))
         if mode_wanted != "skip":
@@ -505,7 +505,7 @@ cd /; rm -rf "$d"
     # The codes this boot shows, for the comparison after the reboot.
     rc, out = t.run("for s in 0 1; do echo \"slot $s: $(tpm2-kira reveal-plain --nvram $s 2>&1 | tail -1)\"; done", root=True)
     log.save("codes-before-reboot.txt", out)
-    log.say("codes now (read-locked after boot is expected: 'cap' ran):")
+    log.say("codes now (closed after boot is expected: the close, PCR 15, ran):")
     log.say(out.rstrip())
 
 
@@ -569,8 +569,8 @@ def check_booted(t, distro, expected, mode_wanted, log, rep):
         status = {}
     if status:
         slots = status.get("slots", [])
-        rep.check("after boot: slot 0 is read-locked (cap ran at the code screen)",
-                  any(s["slot_number"] == 0 and "read-locked" in s["generation_state"] for s in slots),
+        rep.check("after boot: slot 0 is closed (PCR 15, the close at the code screen's end)",
+                  any(s["slot_number"] == 0 and "closed until the next boot" in s["generation_state"] for s in slots),
                   "; ".join(f"slot {s['slot_number']}: {s['generation_state']}" for s in slots))
         rep.check("after boot: no slot needs an approval", not any("NOT" in s["generation_state"] or "unavailable" in s["generation_state"] for s in slots))
         rep.check("after boot: no notes", not status.get("notes"), "\n".join(status.get("notes", [])))
@@ -578,7 +578,7 @@ def check_booted(t, distro, expected, mode_wanted, log, rep):
     log.save("status-booted.txt", out)
     log.say(out.rstrip())
 
-    units = "tpm2-kira.service tpm2-kira-cap.service tpm2-kira-unlock.socket tpm2-kira-unlock.service"
+    units = "tpm2-kira.service tpm2-kira-close.service tpm2-kira-unlock.socket tpm2-kira-unlock.service"
     rc, out = t.run(f"journalctl -b -o short-iso --no-pager -t tpm2-kira $(for u in {units}; do echo -u $u; done) 2>&1", root=True)
     log.save("journal-tpm2-kira.log", out)
     rc, errs = t.run("journalctl -b -o short-iso --no-pager -p err 2>&1", root=True)

@@ -40,7 +40,11 @@ What it does, each step a check in the report:
   7. --cycles reboots: the boot SSH server, its host key checked against
      the SSH CA (StrictHostKeyChecking), the codes of both slots against the
      computed ones, Enter, the password and the salt typed in the session;
-     after each boot: the cap ran, the key was answered, no tpm2-kira error
+     after each boot: the key was answered, no tpm2-kira error; the boot is
+     closed (PCR 15 extended, run's close in the log, Arch's close unit
+     ran), every slot closed and slot 0's TOTP key refusing; no cap unit;
+     Debian (GRUB): one TOTP slot (no fallback, a PCR 0,7 slot refused),
+     the SSH CA with slot 0 alone
   7b. the salt in this TPM (0x1200): luks enrol --salt tpm, luks status and
      luksDump name the recipe, the plan takes the part; a boot asks the
      password alone over SSH (the TPM opened the salt during the hold);
@@ -343,6 +347,9 @@ class Machine:
         self.t = acceptance.Target(host, user, ssh_port, password, None, self.log)
         self.secrets = []
         self.sessions = 0
+        # The TOTP slots slot add makes: 0 and the fallback 1 - not on
+        # Debian's GRUB, where no slot may lack PCRs 8 and 9.
+        self.slots = [0] if distro == "debian" else [0, 1]
 
     # -- helpers ------------------------------------------------------------
 
@@ -453,25 +460,31 @@ class Machine:
         self.check("setup --local makes the signing key", "Setup Complete" in out, out[-400:])
         rc, out = self.run("tpm2-kira slot add --totp 2>&1", save="slot-add.log")
         self.secrets = re.findall(r"^Secret: ([A-Z2-7]+)", out, re.M)
-        if not self.check("slot add seals slots 0 and 1, each with its secret", len(self.secrets) == 2, out[-600:]):
+        if not self.check("slot add seals slots %s, each with its secret" % " and ".join(map(str, self.slots)), len(self.secrets) == len(self.slots), out[-600:]):
             raise Fail("no slots")
+        if self.distro == "debian":
+            self.check("GRUB: slot add makes no fallback slot, and says why", "No fallback slot: on a GRUB boot every slot includes PCRs 8 and 9" in out, out[-600:])
+            rc, out = self.run("tpm2-kira slot add --totp --nvram 1 --pcrs 0,7 2>&1", save="slot-add-grub-07.log")
+            self.check("GRUB: slot add refuses a slot without PCRs 8 and 9", "PCR 8 is not selected: on a GRUB boot" in out, out[-400:])
         rc, mid = self.run(f"test -e {self.MID_VAR} && echo sealed")
         self.check("slot 0 seals the machine-id in the EFI variable KIRAmachineID", "sealed" in mid and "Sealed the machine-id" in out, out[-400:])
-        rc, out = self.run("tpm2-kira reveal-plain --nvram 1 2>&1 | tail -1", save="reveal.log")
+        last = self.slots[-1]
+        rc, out = self.run(f"tpm2-kira reveal-plain --nvram {last} 2>&1 | tail -1", save="reveal.log")
         at = time.time()
         m = re.search(r"\b(\d{6})\b", out)
         if m:
-            self.check("slot 1's code is the authenticator's (computed from its secret)", code_matches(self.secrets[1], m.group(1), at), out.strip())
+            self.check(f"slot {last}'s code is the authenticator's (computed from its secret)", code_matches(self.secrets[last], m.group(1), at), out.strip())
         else:
-            # With systemd's measure point the running system is past the
-            # OS separator: no code until the next boot, by design.
-            self.check("slot 1: a code, or locked until the next boot (past the OS separator)", "Locked until the next boot" in out, out.strip())
+            # The running system is closed (PCR 15), or past the OS
+            # separator: no code until the next boot, by design.
+            self.check(f"slot {last}: a code, or none until the next boot (closed, or past the OS separator)",
+                       "Closed until the next boot" in out or "Locked until the next boot" in out, out.strip())
 
     def inspect(self):
         self.log.head("the commands that read")
         cmds = {
             "status": ("tpm2-kira status 2>&1", r"slot 0 .*signed by this machine's key"),
-            "slot info": ("tpm2-kira slot info --nvram 1 2>&1", r"Signature: valid"),
+            "slot info": (f"tpm2-kira slot info --nvram {self.slots[-1]} 2>&1", r"Signature: valid"),
             "slot list": ("tpm2-kira slot list 2>&1", r"slot #0"),
             "slot status": ("tpm2-kira slot status --nvram 0 2>&1", r"Slot 0 \(0x01803010\)\n  Record: EFI variable KIRAslot0-"),
             "phone ekcert": ("tpm2-kira phone ekcert 2>&1", r"EK certificate:"),
@@ -608,7 +621,7 @@ class Machine:
             at = time.time()
             codes = dict(re.findall(r"^#(\d+): (\d{6})$", text, re.M))
             self.check(f"boot {n}: the host key is certified by the SSH CA (strict known_hosts)", True)
-            for slot in (0, 1):
+            for slot in self.slots:
                 self.check(f"boot {n}: slot {slot}'s code is the authenticator's", str(slot) in codes and code_matches(self.secrets[slot], codes[str(slot)], at), text[-500:])
             self.check(f"boot {n}: the screen names tpm2-kira's password and salt prompt", "continue to the password and salt prompt" in text, text[-300:])
             s.send("\r")
@@ -633,10 +646,17 @@ class Machine:
             slots = json.loads(out).get("slots", [])
         except ValueError:
             slots = []
-        self.check(f"boot {n}: the cap ran (every slot read-locked)", slots and all("read-locked" in s["generation_state"] for s in slots), out[-300:])
+        self.check(f"boot {n}: every slot is closed until the next boot (PCR 15)", slots and all("closed until the next boot" in s["generation_state"] for s in slots), out[-300:])
+        if self.distro == "debian":
+            self.check(f"boot {n}: GRUB - every slot includes PCRs 8 and 9", slots and not any(s.get("no_grub_pcrs") for s in slots), out[-300:])
+        # A slot object refuses in the running system: the TPM computes no
+        # code, by the slot's own policy (PCR 15).
+        rc, out = self.run("tpm2-kira reveal-plain --nvram 0 2>&1 | tail -2", save=f"boot{n}-reveal.log")
+        self.check(f"boot {n}: slot 0's TOTP key refuses after the boot (closed)", "Closed until the next boot" in out and not re.search(r"^\d{6}$", out, re.M), out.strip())
         log = ("cat /run/initramfs/tpm2-kira.log" if self.distro == "debian" else
-               "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service -u tpm2-kira-cap.service -u tpm2-kira-machine-id.service")
+               "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service -u tpm2-kira-machine-id.service")
         rc, out = self.run(log + " 2>&1", save=f"boot{n}-tpm2-kira.log")
+        self.check(f"boot {n}: run closed the boot when the code screen was over", "the boot is closed (PCR 15)" in out, out[-500:])
         self.check(f"boot {n}: the key was answered", re.search(r"unlock: answered for", out) is not None, out[-500:])
         self.check(f"boot {n}: the machine-id was released before the network (slot 0's policy held)",
                    "the machine-id is released" in out, out[-500:])
@@ -648,18 +668,27 @@ class Machine:
         self.check(f"boot {n}: ssh-child ran confined (a uid of its own, namespaces, no new privileges, not dumpable, no executable memory, Landlock, seccomp)", own_uid, out[-500:])
         bad = [l for l in out.split("\n") if re.search(r"ERROR|FAILED|does not answer|cannot", l)]
         self.check(f"boot {n}: no tpm2-kira error in the boot's log", not bad, "\n".join(bad[:5]))
-        # The SSH CA is closed in the running system: PCR 15 extended (the
-        # kernel's sysfs view of the TPM's PCRs), by the image's close when
-        # the code screen was over (Arch: tpm2-kira-close.service).
+        # The boot is closed in the running system: PCR 15 extended (the
+        # kernel's sysfs view of the TPM's PCRs), by run and the image's
+        # close when the code screen was over (Arch: tpm2-kira-close.service).
         rc, out = self.run("cat /sys/class/tpm/tpm0/pcr-sha256/15 2>&1; "
                            + ("true" if self.distro == "debian" else
                               "journalctl -b -o cat --no-pager -u tpm2-kira-close.service 2>&1 | tail -5"),
                            save=f"boot{n}-close.log")
         pcr15 = out.split("\n")[0].strip()
-        self.check(f"boot {n}: the SSH CA is closed in the running system (PCR 15 extended)",
+        self.check(f"boot {n}: the boot is closed in the running system (PCR 15 extended)",
                    re.fullmatch(r"[0-9A-Fa-f]{64}", pcr15) is not None and set(pcr15) != {"0"}, out[-300:])
         if self.distro != "debian":
             self.check(f"boot {n}: tpm2-kira-close.service ran in the initrd", "Finished" in out and "Failed" not in out, out[-300:])
+        # No cap: PCR 15 closes the slots.
+        rc, out = self.run("ls /usr/lib/systemd/system/tpm2-kira-cap.service 2>&1; "
+                           "grep -c 'tpm2-kira-boot cap' /usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira 2>&1; true")
+        self.check(f"boot {n}: no cap unit or cap step", "No such file" in out.split("\n")[0] and not re.search(r"^[1-9]", out, re.M), out.strip())
+        if self.distro == "debian":
+            # GRUB: the SSH CA has slot 0 alone (PCRs 8 and 9 in it).
+            rc, out = self.run("grep '^ASSH_CA_SLOT_' /etc/tpm2-kira/assh.conf 2>&1", save=f"boot{n}-ca-slots.log")
+            self.check(f"boot {n}: GRUB - the SSH CA has slot 0 alone, with PCRs 8 and 9",
+                       re.search(r"^ASSH_CA_SLOT_0=0,2,7,8,9$", out, re.M) is not None and "ASSH_CA_SLOT_1" not in out, out.strip())
 
     def rebuild(self):
         cmd = "update-initramfs -u" if self.distro == "debian" else "mkinitcpio -P"
@@ -992,9 +1021,10 @@ class Machine:
 
     def slot_life(self):
         self.log.head("a slot's life")
-        rc, out = self.run("tpm2-kira slot approve --nvram 1 2>&1", save="slot-approve.log")
+        rc, out = self.run(f"tpm2-kira slot approve --nvram {self.slots[-1]} 2>&1", save="slot-approve.log")
         self.check("slot approve raises the generation", "Successfully approved the boot state" in out, out[-400:])
-        rc, out = self.run("tpm2-kira slot add --totp --nvram 2 --pcrs 0,7 2>&1 | grep -v '^Secret'", save="slot-add-2.log")
+        pcrs = "0,7,8,9" if self.distro == "debian" else "0,7"
+        rc, out = self.run(f"tpm2-kira slot add --totp --nvram 2 --pcrs {pcrs} 2>&1 | grep -v '^Secret'", save="slot-add-2.log")
         rc, info = self.run("tpm2-kira slot info --nvram 2 2>&1")
         self.check("slot add --nvram 2: its record is KIRAslot2", "EFI variable: KIRAslot2-" in info, info[-300:])
         rc, out = self.run("tpm2-kira slot delete --nvram 2 2>&1", save="slot-delete.log")
