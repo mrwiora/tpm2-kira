@@ -1715,7 +1715,7 @@ Logs: `.local/runs/` of the workspace.
 | tpm2-kira-vault's tests | at the pin | its suite | 26 passed, 0 failed (`vault-final.log`) |
 | safearch `tests/run.sh` | eea5e9a | stubs | 335 passed, 0 failed, 1 skipped (`safearch-run-final.log`) |
 | Marify `android/scripts/test-emulator.sh` | 7091a71 (core unchanged since) | JVM, emulator, swtpm | ALL PASS (`marify-emulator-7091a71.out`) |
-| safearch `tests/vm.sh` | eea5e9a | VM | **not yet finished** when this was written (`safearch-vm-eea5e9a.log`) |
+| safearch `tests/vm.sh` | eea5e9a | VM (a fresh build, swtpm) | 96 passed, 0 failed (`safearch-vm-eea5e9a.log`, `mkosi.test/vm/run-20261101-223352`) |
 
 ### 17.2 On the VMs
 
@@ -1793,7 +1793,7 @@ produce a quote. No test covers this. Not an accepted risk yet: decide, or set t
 
 | Not proven | What exists instead |
 |---|---|
-| safearch's `tests/vm.sh` | not finished when this was written; it forces no failed `sealed` extend either, so safearch's ladder and reboot are `tests/run.sh` stubs only |
+| safearch's failed `sealed` extend | `tests/vm.sh` passes but forces no failed extend, so safearch's ladder and reboot are `tests/run.sh` stubs only |
 | Debian's resume itself | "Hibernate inconsistent memory map detected": the firmware's e820 differs between boots (OVMF, an ACPI data region moving; `*-memmap.diff`), so the kernel refuses the image. Reported as the test machine's defect. The close before it ran (§17.2); a resume after it has not been seen |
 | Arch V3, a resume with tpm2-kira masked, the close alone | the same refusal, in the five Arch runs of 2026-11-01 that got that far. V2 and V4-reverted resumed |
 | The firmware refusing a changed or unsigned UKI on Arch | not tested on this branch, the machines being in Setup Mode. Shown only on `exp/debian-uki` ("Access denied" for a UKI changed by one byte) |
