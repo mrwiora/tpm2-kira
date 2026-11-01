@@ -3,7 +3,6 @@ package sshscreen
 import (
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/tpm2-trust/assh/server"
 
@@ -122,54 +121,4 @@ func AuthorizedKeys(path string) ([]string, int, error) {
 	}
 	keys, skipped := server.ParseAuthorizedKeys(data)
 	return keys, skipped, nil
-}
-
-// closeTPMWait is how long Close waits for the TPM's device: longer than
-// run's, since a TPM that does not come stops a resume from hibernation.
-var closeTPMWait = 30 * time.Second
-
-// Close closes the boot - PCR 15 extended with aSSH's close event - and
-// does nothing else: every slot object (the TOTP key, the sealed
-// machine-id, the boot key, the release key) and the SSH CA require PCR 15
-// at zero in their own policies, so none can be used until the next boot.
-// What the boot image runs when the code screen is over (run itself, then
-// systemd: tpm2-kira-close.service; initramfs-tools: init-bottom) and right
-// before a resume from hibernation. A resume starts the TPM afresh, which
-// sets PCR 15 back to zero, and the resumed system does not run the code
-// screen. It needs no CA file and no assh.conf. A TPM that does not come,
-// or an extend the TPM refuses twice, is an error: the boot, or the resume,
-// must not go on.
-func Close(tpmPath string) error {
-	if !tpmdev.AwaitNode(tpmPath, closeTPMWait) {
-		return fmt.Errorf("%s did not appear within %s: the boot is not closed (PCR 15)", tpmPath, closeTPMWait)
-	}
-	return CloseNow(tpmPath)
-}
-
-// CloseNow is Close without the wait for the TPM's device: run's close at
-// the end of the code screen, which has waited for it at its start.
-func CloseNow(tpmPath string) error {
-	return closeRetried(func() error { return closeOnce(tpmPath) })
-}
-
-// closeRetried tries once more what failed: a close that fails ends in a
-// hard reboot, so a passing fault in the TPM does not get that far.
-func closeRetried(close func() error) error {
-	if err := close(); err != nil {
-		fmt.Fprintf(os.Stderr, "%v: once more\n", err)
-		return close()
-	}
-	return nil
-}
-
-func closeOnce(tpmPath string) error {
-	tpmDev, err := tpmdev.Open(tpmPath)
-	if err != nil {
-		return fmt.Errorf("the boot is not closed (PCR 15): %w", err)
-	}
-	defer tpmDev.Close()
-	if err := hostkey.Close(tpmDev); err != nil {
-		return fmt.Errorf("the boot is not closed: %w", err)
-	}
-	return nil
 }

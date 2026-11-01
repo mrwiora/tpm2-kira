@@ -294,7 +294,7 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 		"/etc/tpm2-kira/authorized_keys":  admin + "\n",
 		sshscreen.DefaultConf:             "ASSH_CA=efi:KIRAasshCA\n",
 		imageRunDropIn:                    `"TPM2_KIRA_REMOTE=--ssh --ssh-hold=0"`,
-		imageResumeDropIn:                 "[Unit]\nAfter=tpm2-kira.service\n[Service]\nExecStartPre=/usr/bin/tpm2-kira-boot close\n",
+		imageResumeDropIn:                 "[Unit]\nAfter=tpm2-kira.service\n[Service]\nExecStartPre=/usr/bin/tpm2-kira-boot close --resume\n",
 	} {
 		if got := readImage(t, root, path); !strings.Contains(got, want) {
 			t.Errorf("%s: %q, want %q", path, got, want)
@@ -355,7 +355,7 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 	if b, err := os.ReadFile("../../initramfs/initramfs-tools/scripts/local-top/tpm2-kira-close"); err != nil {
 		t.Error(err)
 	} else if got := string(b); !strings.Contains(got, `PREREQ="cryptroot"`) || !strings.Contains(got, "[ -d /etc/tpm2-kira/plan/tpm ] || exit 0") ||
-		!strings.Contains(got, "if ! /usr/bin/tpm2-kira-boot close") || !strings.Contains(got, `echo "resume=" >>/conf/param.conf`) {
+		!strings.Contains(got, "if ! /usr/bin/tpm2-kira-boot close --resume") || !strings.Contains(got, `echo "resume=" >>/conf/param.conf`) {
 		t.Errorf("the local-top script:\n%s", got)
 	}
 	// The close when the initrd is left: with the plan's TPM part, and its
@@ -506,7 +506,7 @@ func TestASealedSlotOrACAIsClosed(t *testing.T) {
 	}
 	// The close before a resume comes with the close, SSH or not.
 	_, root := writePlan(t, decidePlan(planInputs{Config: DefaultControlConfig(), Slots: 1}), FormatMkinitcpio)
-	if got := readImage(t, root, imageResumeDropIn); !strings.Contains(got, "ExecStartPre=/usr/bin/tpm2-kira-boot close") {
+	if got := readImage(t, root, imageResumeDropIn); !strings.Contains(got, "ExecStartPre=/usr/bin/tpm2-kira-boot close --resume") {
 		t.Fatalf("a sealed slot without SSH: the resume drop-in %q", got)
 	}
 	if p := decidePlan(planInputs{Config: DefaultControlConfig()}); p.TPM {

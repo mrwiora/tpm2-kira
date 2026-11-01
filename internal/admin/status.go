@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mrwiora/tpm2-kira/internal/bootclose"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
@@ -71,7 +72,9 @@ type StatusReport struct {
 	// superuser's password to be edited (GRUBPasswordErr: grub.cfg not read).
 	GRUB bool `json:"grub,omitempty"`
 	// ClosePCREvents: events in PCR 15 in this boot's firmware event log.
-	ClosePCREvents  int      `json:"close_pcr_events,omitempty"`
+	ClosePCREvents int `json:"close_pcr_events,omitempty"`
+	// CloseFinding: this boot's close went another way than PCR 15, or not yet.
+	CloseFinding    string   `json:"close_finding,omitempty"`
 	GRUBPassword    bool     `json:"grub_password,omitempty"`
 	GRUBPasswordErr string   `json:"grub_password_error,omitempty"`
 	Notes           []string `json:"notes"`
@@ -98,6 +101,7 @@ func collectStatus(o StatusOptions) StatusReport {
 	}
 
 	r.ClosePCREvents, _ = firmwareClosePCREvents(closeEventlogPath)
+	r.CloseFinding = bootclose.Finding(nil)
 	if r.GRUB = GRUBBoot(""); r.GRUB {
 		var err error
 		if r.GRUBPassword, err = GRUBPassword(grubCfgPath); err != nil {
@@ -142,6 +146,7 @@ func collectStatus(o StatusOptions) StatusReport {
 			}
 			r.Slots = append(r.Slots, s)
 		}
+		r.CloseFinding = bootclose.Finding(tpmDev)
 		tpmDev.Close()
 	}
 
@@ -193,6 +198,9 @@ func statusNotes(r StatusReport) []string {
 	}
 	if r.ClosePCREvents > 0 {
 		notes = append(notes, closePCRWhy)
+	}
+	if r.CloseFinding != "" {
+		notes = append(notes, r.CloseFinding)
 	}
 	for _, d := range r.Dirt {
 		notes = append(notes, fmt.Sprintf("slot %d is incomplete - %s left: %s. %s; then seal it again", d.Slot, d.Remains, d.Cause, d.Remedy))

@@ -1,0 +1,20 @@
+[Unit]
+Description=tpm2-kira: the close, the moment a TPM that did not answer at boot does
+Documentation=file:///usr/share/doc/tpm2-kira/docs/SSH.md
+DefaultDependencies=no
+# In the image and in the running system, one after the other: the close left
+# this file when it went on without the TPM (/run survives the change of root).
+# Best effort: root can stop it. docs/SSH.md, "The close".
+ConditionPathExists=/run/tpm2-kira/close-pending
+After=tpm2-kira-close.service
+Conflicts=shutdown.target initrd-switch-root.target
+Before=shutdown.target initrd-switch-root.target
+
+[Service]
+Type=simple
+ExecStart=tpm2-kira-boot close --late
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=sysinit.target

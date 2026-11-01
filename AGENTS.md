@@ -86,6 +86,10 @@ It may not carry what came before.
   tpm2-kira adds ways to unlock (its prompt, later a phone-released
   factor) and informs; it never withholds systemd's own prompt, which is
   the fallback after a wrong or missing answer (docs/DISK-KEY.md, "When the answer is wrong").
+  The single exception: the close, when a TPM answers and refuses every way of it
+  (PCR 15, the kill switch, PCR 7) reboots the machine, and goes on doing so; the way
+  out is in docs/SSH.md, "The close: what it can come to". Every other outcome of the
+  close goes on to the passphrase.
   Do not build a mode that holds the boot on the phone's verdict.
 - **Two configuration files, tpm2-kira's and aSSH's, and only `control`
   writes them.** `/etc/tpm2-kira/control.conf` is tpm2-kira's; beside it
@@ -166,7 +170,9 @@ It may not carry what came before.
   `tpm2-kira-close.service`, required by `initrd.target`, Debian's
   init-bottom - and right before a resume from hibernation (a resume
   starts the TPM afresh and runs no code screen); a failed close stops
-  the boot or the resume. Whatever opens a slot object at boot (the
+  the boot only when the TPM answers and refuses every way of it, or does not answer
+  for the first time (`internal/bootclose`; docs/SSH.md, "The close: what it can come
+  to"), and the resume on anything but PCR 15 itself. Whatever opens a slot object at boot (the
   codes, the machine-id, the phone, the vault, the TPM salt) does so
   before the close - and `run` starts everything else of tpm2-kira's at
   boot itself: the parts of the plan, the TPM wait,

@@ -142,7 +142,7 @@ func TestTheCloseEndsEverySlotObject(t *testing.T) {
 				t.Fatal("closed before the close")
 			}
 
-			if err := hostkey.Close(b.dev); err != nil {
+			if _, err := hostkey.Close(b.dev); err != nil {
 				t.Fatal(err)
 			}
 			if !nvslot.Closed(b.dev) {
@@ -248,7 +248,7 @@ func TestSlotsWorkInLockout(t *testing.T) {
 		t.Fatalf("the generation index: %+v", pub.Attributes)
 	}
 	o.allWork("in lockout")
-	if err := hostkey.Close(b.dev); err != nil {
+	if _, err := hostkey.Close(b.dev); err != nil {
 		t.Fatalf("the close in lockout: %v", err)
 	}
 	o.allClosed("in lockout, after the close")

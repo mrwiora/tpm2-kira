@@ -113,6 +113,12 @@ package() {
         "$pkgdir/usr/lib/systemd/system/tpm2-kira-close.service"
     install -Dm644 initramfs/systemd/tpm2-kira-machine-id.service \
         "$pkgdir/usr/lib/systemd/system/tpm2-kira-machine-id.service"
+    # The one unit that runs on the host too; it starts only after a close that
+    # went on without an answer from the TPM.
+    install -Dm644 initramfs/systemd/tpm2-kira-late-close.service \
+        "$pkgdir/usr/lib/systemd/system/tpm2-kira-late-close.service"
+    install -d "$pkgdir/usr/lib/systemd/system/sysinit.target.wants"
+    ln -s ../tpm2-kira-late-close.service "$pkgdir/usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-late-close.service"
     install -Dm644 initramfs/systemd/tpm2-kira-unlock.socket \
         "$pkgdir/usr/lib/systemd/system/tpm2-kira-unlock.socket"
     install -Dm644 initramfs/systemd/systemd-boot-update-tpm2-kira.conf \

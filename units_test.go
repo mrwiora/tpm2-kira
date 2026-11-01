@@ -192,6 +192,15 @@ func TestCloseUnitFailsTheBoot(t *testing.T) {
 			t.Errorf("tpm2-kira-close.service lacks %s", want)
 		}
 	}
+	// The late closer: after the close, in the image and in the root, only when
+	// the close left its file.
+	d = directives(t, "initramfs/systemd/tpm2-kira-late-close.service")
+	for _, want := range []string{"ConditionPathExists=/run/tpm2-kira/close-pending", "After=tpm2-kira-close.service",
+		"ExecStart=tpm2-kira-boot close --late", "Conflicts=shutdown.target initrd-switch-root.target"} {
+		if !has(d, want) {
+			t.Errorf("tpm2-kira-late-close.service lacks %s", want)
+		}
+	}
 	hook, err := os.ReadFile("initramfs/mkinitcpio/install/sd-tpm2-kira")
 	if err != nil {
 		t.Fatal(err)

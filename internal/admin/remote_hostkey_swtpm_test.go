@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/bootclose"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
@@ -119,7 +120,7 @@ func TestSSHCAApprovedForTheCodeScreen(t *testing.T) {
 
 	// The code screen is over, the boot closed: the CA certifies nothing
 	// more in this boot, and a temporary key is served, made in the TPM.
-	if err := sshscreen.CloseNow(p.sock); err != nil {
+	if err := bootclose.Now(p.sock); err != nil {
 		t.Fatal(err)
 	}
 	if hk, err := sshscreen.PrepareHostKey(p.sock, conf); err != nil || hk.CA != "" || !strings.Contains(hk.Temporary, "the CA is closed until the next boot") {

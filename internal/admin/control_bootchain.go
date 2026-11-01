@@ -90,6 +90,9 @@ func (c *controller) prereqs() []prereq {
 			add(prereqMet, "Passphrase: no keyslot opens with an empty one")
 		}
 	}
+	if f.Status.CloseFinding != "" {
+		add(prereqNot, "The close: %s", f.Status.CloseFinding)
+	}
 	// The image's signature of PCR 11, where the machine has ukify make one.
 	if f.UKISigns {
 		if f.UKISigErr != "" {

@@ -14,6 +14,7 @@ import (
 	"github.com/tpm2-trust/assh/config"
 	"github.com/tpm2-trust/assh/hostkey"
 
+	"github.com/mrwiora/tpm2-kira/internal/bootclose"
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 )
 
@@ -142,7 +143,7 @@ func TestHostKeyLeavesTheBootOpen(t *testing.T) {
 	if !open() {
 		t.Fatal("the certificate closed the boot under the code screen")
 	}
-	if err := sshscreen.CloseNow(b.p.sock); err != nil {
+	if err := bootclose.Now(b.p.sock); err != nil {
 		t.Fatal(err)
 	}
 	if open() {
@@ -161,7 +162,7 @@ func TestHostKeyClose(t *testing.T) {
 	dir := t.TempDir()
 
 	// No CA at all: the close extends PCR 15 all the same, no error.
-	if err := sshscreen.Close(b.p.sock); err != nil {
+	if err := bootclose.Boot(b.p.sock); err != nil {
 		t.Fatalf("without a CA: %v", err)
 	}
 	ev := sha256.Sum256([]byte(hostkey.CloseEvent))
@@ -181,7 +182,7 @@ func TestHostKeyClose(t *testing.T) {
 	if o, _ := ca.IsOpen(b.dev); !o {
 		t.Fatal("the CA is closed in the boot after the creation")
 	}
-	if err := sshscreen.Close(b.p.sock); err != nil {
+	if err := bootclose.Boot(b.p.sock); err != nil {
 		t.Fatal(err)
 	}
 	if o, _ := ca.IsOpen(b.dev); o {
@@ -203,13 +204,13 @@ func TestHostKeyClose(t *testing.T) {
 		if !bytes.Equal(b.pcr15(), make([]byte, 32)) {
 			t.Fatalf("PCR 15 during the code screen: %x", b.pcr15())
 		}
-		if err := sshscreen.CloseNow(b.p.sock); err != nil {
+		if err := bootclose.Now(b.p.sock); err != nil {
 			t.Fatalf("run's close: %v", err)
 		}
 		if !bytes.Equal(b.pcr15(), once[:]) {
 			t.Fatalf("PCR 15 after run's close: %x", b.pcr15())
 		}
-		if err := sshscreen.Close(b.p.sock); err != nil {
+		if err := bootclose.Boot(b.p.sock); err != nil {
 			t.Fatalf("the close after the code screen: %v", err)
 		}
 		if hk, err := sshscreen.PrepareHostKey(b.p.sock, conf); err != nil || hk.Temporary == "" {

@@ -826,6 +826,9 @@ func (c *controller) factsText() string {
 	default:
 		fmt.Fprintf(&w, "  Initramfs   %s\n", good(f.Initramfs))
 	}
+	if f.Status.CloseFinding != "" {
+		fmt.Fprintf(&w, "  Close       %s\n", bad(f.Status.CloseFinding))
+	}
 	phone := f.planHas(imageplan.PartPhone)
 	switch {
 	case f.Adapter != "" && len(f.BTFirmware) == 0 && phone:

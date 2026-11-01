@@ -7,6 +7,8 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/mrwiora/tpm2-kira/internal/bootclose"
+	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/mrwiora/tpm2-kira/internal/machineid"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
@@ -332,6 +334,10 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 			fmt.Printf("Deleting the sealed machine-id FAILED: %v\n", err)
 			failed++
 		}
+	}
+	if _, err := efivars.Remove(bootclose.CounterVar); err != nil {
+		fmt.Printf("Deleting the close's reboot count FAILED: %v\n", err)
+		failed++
 	}
 	if caPath != "" {
 		fmt.Printf("Deleting the SSH CA %s... ", caPath)

@@ -159,9 +159,10 @@ func writeImageFile(buildroot, path string, data []byte, mode os.FileMode) error
 // on an encrypted volume comes after that anyway).
 const resumeDropIn = `# Written by 'tpm2-kira initramfs plan': the boot closed (PCR 15: the slots
 # and the SSH CA) before a resume from hibernation (the TPM starts afresh,
-# the resumed system runs no code screen). Its failure stops the resume.
+# the resumed system runs no code screen). Anything but PCR 15 itself stops the
+# resume.
 [Unit]
 After=tpm2-kira.service
 [Service]
-ExecStartPre=/usr/bin/tpm2-kira-boot close
+ExecStartPre=/usr/bin/tpm2-kira-boot close --resume
 `

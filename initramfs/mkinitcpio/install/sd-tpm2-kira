@@ -103,8 +103,9 @@ _add_plan() {
     # PCR 15, so nothing in the running system can compute a code, open a
     # slot's part or have a key certified until the next boot - whenever a
     # slot is sealed or an SSH CA exists (the plan's TPM part), whatever
-    # their methods. Required by initrd.target: a close that fails stops
-    # the boot (emergency target). efivarfs, where the slots' records are,
+    # their methods. Required by initrd.target: a close that fails reboots.
+    # The late closer goes with it: it starts when the close went on without
+    # an answer from the TPM. efivarfs, where the slots' records are,
     # is mounted by systemd itself; added for a kernel that has it as a
     # module (built in, nothing to add).
     if _plan_has tpm; then
@@ -112,6 +113,9 @@ _add_plan() {
         _add_kira_unit tpm2-kira-close.service
         add_symlink /usr/lib/systemd/system/initrd.target.requires/tpm2-kira-close.service \
             /usr/lib/systemd/system/tpm2-kira-close.service
+        _add_kira_unit tpm2-kira-late-close.service
+        add_symlink /usr/lib/systemd/system/initrd.target.wants/tpm2-kira-late-close.service \
+            /usr/lib/systemd/system/tpm2-kira-late-close.service
     fi
 
     # The phone's gate (PLAN-BLE.md §3.1): the adapter's driver modules and

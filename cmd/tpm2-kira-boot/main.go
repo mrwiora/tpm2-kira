@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/bootclose"
 	"github.com/mrwiora/tpm2-kira/internal/bootrun"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
@@ -73,6 +74,7 @@ func main() {
 		os.Exit(phonegate.RadioWorkerMain(*debug))
 	}
 	machineid.TestPaths()
+	bootclose.TestPaths()
 	if os.Geteuid() != 0 && os.Getenv("TPM2_KIRA_UNPRIVILEGED") == "" {
 		fmt.Fprintf(os.Stderr, "tpm2-kira-boot %s: root is needed\n", command)
 		os.Exit(1)
@@ -83,11 +85,19 @@ func main() {
 	case "close":
 		fs := flag.NewFlagSet("close", flag.ExitOnError)
 		tpm := fs.String("tpm", tpmdev.DefaultPath, "Path to TPM device")
+		resume := fs.Bool("resume", false, "The close right before a resume from hibernation: anything but PCR 15 itself is a failure")
+		late := fs.Bool("late", false, "Wait for a TPM that did not answer at boot, and close the moment it does")
 		fs.Parse(args)
-		// The one command whose failure is the boot's: the boot or the
-		// resume that follows it must not go on with the slots and the SSH
-		// CA open.
-		if err := sshscreen.Close(*tpm); err != nil {
+		// The one command whose failure is the boot's: the boot reboots, the
+		// resume does not happen.
+		close := bootclose.Boot
+		if *resume {
+			close = bootclose.Resume
+		}
+		if *late {
+			close = func(p string) error { return bootclose.Late(p, nil) }
+		}
+		if err := close(*tpm); err != nil {
 			fmt.Fprintf(os.Stderr, "tpm2-kira-boot close: %v\n", err)
 			os.Exit(1)
 		}

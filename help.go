@@ -556,9 +556,12 @@ by anything the signing key approves. run closes when the code screen is
 over; the image closes once more whatever run did (Arch:
 tpm2-kira-close.service, required by initrd.target; Debian: init-bottom),
 and right before a resume from hibernation. Waits for the TPM (30 s at
-most) and tries a refused extend once more; a failure is the boot's: the
-machine reboots, and a TPM that stays broken keeps it rebooting (docs/SSH.md,
-"A failed close: the way out").
+most) and goes down aSSH's ladder: PCR 15, the kill switch, PCR 7. A degraded
+close, or no TPM at all, goes on. A TPM the firmware has and that does not answer
+reboots once (counted in an EFI variable), then goes on with the passphrase and a
+late closer. One that answers and refuses everything reboots (docs/SSH.md, "The
+close: what it can come to"). --resume: the close before a resume, which only PCR
+15 itself lets go on. --late: the waiting closer.
 `,
 
 	"unlock-key": `tpm2-kira-boot unlock-key [--socket PATH] [--wait DUR] [VOLUME]

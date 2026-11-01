@@ -29,18 +29,21 @@ checks that on both distributions, from the machines' snapshot "fresh":
          (rd.systemd.mask, the passphrase at systemd's own prompt): the
          close alone closes the CA
   V5     suspend to RAM: tested where the guest offers S3 ("deep")
-  V4     the close fails (the resume's boot without its TPM): no resume,
-         and the machine restarts - Arch: tpm2-kira-close.service's
-         FailureAction, no emergency target; Debian: local-top clears the
-         resume, init-bottom's reboot -f, no panic. Without the TPM it would
-         restart for ever: the test stops it at the second boot, reverts to
-         the hibernated state and resumes with the TPM.
-  V8     the way out of a TPM that stays broken (docs/SSH.md): Arch,
-         rd.systemd.mask=tpm2-kira-close.service with Secure Boot off;
-         Debian, GRUB's break=bottom and the plan's TPM part removed. The
-         machine comes up without its TPM.
+  V4     a boot without the TPM's answer, from one hibernated state (the steps
+         of docs/SSH.md, "The close"): step 5, no TPM at all (localvm's
+         tpm=False: no device, no TPM2 table, nothing measured): no reboot, the
+         passphrase's recipe, the resume may go on. On Arch step 6, the TPM2
+         table there and the kernel's driver kept from starting: one hard reboot,
+         then the recipe and the late closer, no resume. Then the resume with
+         the TPM back.
+  V9     Debian's step 6, in a boot of its own: GRUB's command line is part of
+         what is hibernated. Then a close that holds clears the count.
+  V8     the way out of a close that keeps rebooting (step 7, which no VM can
+         make: a TPM that answers and refuses): its mechanics, without a TPM:
+         Arch, rd.systemd.mask=tpm2-kira-close.service with Secure Boot off;
+         Debian, GRUB's break=bottom and the plan's TPM part removed.
 
-V4 and V8 run last. The report and every
+V4, V9 and V8 run last. The report and every
 transcript land in the run's directory (.local/runs/hibernatetest-<time>/).
 """
 
@@ -334,46 +337,139 @@ class Hib:
             time.sleep(0.5)
         return lv.serial_text(since), False
 
-    def failed_close(self):
-        """The close fails - the resume's boot without the TPM, whose
-        device never comes: no resume, and the machine restarts, with no
-        shell on the way (Arch: tpm2-kira-close.service's FailureAction;
-        Debian: local-top's close fails and clears the resume, init-bottom
-        reboots). Without the TPM it restarts again and again: the test stops
-        it at the second boot, reverts to the hibernated state and resumes
-        with the TPM back."""
+    def menu_edit(self, since, words):
+        """Arch: at systemd-boot's menu (the console's text from since), the
+        command line edited: this machine has Secure Boot off."""
+        lv = self.lv
+        deadline = time.time() + 180
+        while time.time() < deadline and "Reboot Into Firmware" not in lv.serial_text(since):
+            lv.send(" ")
+            time.sleep(0.5)
+        if "Reboot Into Firmware" not in lv.serial_text(since):
+            raise vmtest.Fail("systemd-boot's menu did not show")
+        lv.send("e")
+        time.sleep(1)
+        lv.send(words + " ")
+        lv.send("\r")
+
+    def console_prompts(self, since):
+        """tpm2-kira's prompts at the console: the recovery recipe needs no TPM."""
+        lv = self.lv
+        lv.expect(re.compile(r"Password for disk \S+: ?$", re.M), 600, since)
+        lv.send(vmtest.TEST_PASSWORD + "\r")
+        lv.expect(re.compile(r"Salt for disk \S+: ?$", re.M), 120, since)
+        lv.send(vmtest.TEST_SALT + "\r")
+
+    def console_mark(self):
+        return os.path.getsize(self.lv.path("serial.log"))
+
+    def no_tpm_at_all(self, before):
+        """Step 5: no TPM device and no sign of one (localvm's tpm=False: QEMU
+        gives no TPM2 table without the device, and the stub measures nothing):
+        nothing to close, no reboot, and the resume goes on."""
         m, lv = self.m, self.lv
-        m.log.head("V4: the close fails - no resume, the machine restarts")
-        before = self.hibernate("V4")
-        lv.snapshot("hibernated-v4")
         lv.start(unlock=False, tpm=False)
         since = lv.mark
+        self.console_prompts(since)
+        lv.wait_ssh(600)
+        text = lv.serial_text(since)
+        m.log.save("V4-no-tpm-console.log", text)
+        self.check("V4 step 5: no TPM at all: no reboot, no failed close", not RESTART.search(text, text.find("Password for disk")) and "the boot is not closed" not in text, text[-800:])
+        rc, out = self.run("cat /proc/sys/kernel/random/boot_id", save="V4-no-tpm-boot.log")
+        resumed = out.strip() == before["boot"]
+        if not resumed:
+            m.rep.issues.append("V4 step 5: the kernel did not resume (a boot of its own): the resume itself is not shown here")
+        self.check("V4 step 5: the machine is up", rc == 0, out)
+
+    def failed_close(self):
+        """What a boot does for a TPM it does not get. The resume's boot, from
+        one hibernated state: step 5 (no TPM at all); on Arch step 6 (a TPM the
+        firmware has, silent); then the resume with the TPM back. Debian's step
+        6 comes after it, in a boot of its own: its command line is grub.cfg's,
+        part of what is hibernated."""
+        m, lv = self.m, self.lv
+        m.log.head("V4: a boot without the TPM's answer")
+        before = self.hibernate("V4")
+        lv.snapshot("hibernated-v4")
         try:
-            if self.distro == "debian":
-                # No TPM: no code; tpm2-kira's prompts at the console (the
-                # recovery recipe needs none), then the closes fail.
-                lv.expect(re.compile(r"Password for disk \S+: ?$", re.M), 600, since)
-                lv.send(vmtest.TEST_PASSWORD + "\r")
-                lv.expect(re.compile(r"Salt for disk \S+: ?$", re.M), 120, since)
-                lv.send(vmtest.TEST_SALT + "\r")
-                text, again = self.restarted(since, "the boot is not closed (PCR 15): rebooting", 300)
-                self.check("V4: Debian - no resume (local-top's close failed)", "no resume from hibernation this boot" in text, text[-800:])
-                self.check("V4: Debian - init-bottom's close restarts the machine", again, text[-800:])
-                self.check("V4: Debian - no shell on the way", "(initramfs)" not in text and "Rebooting automatically" not in text, text[-800:])
-            else:
-                text, again = self.restarted(since, "the boot is not closed (PCR 15)", 400)
-                self.check("V4: Arch - tpm2-kira-boot close failed (no TPM)", "the boot is not closed (PCR 15)" in text, text[-800:])
-                self.check("V4: Arch - the machine restarts", again, text[-800:])
-                self.check("V4: Arch - no shell on the way", "maintenance" not in text and "emergency mode" not in text.lower(), text[-800:])
-            self.check("V4: the system did not come up (no resume, no boot)", "login:" not in text, text[-400:])
-            m.log.save("V4-console.log", text)
+            self.no_tpm_at_all(before)
         except Fail as e:
-            self.check("V4: the boot stops at the failed close", False, str(e).split("\n")[0] + "\n" + lv.serial_text(since)[-800:])
-        # Back to the hibernated state, the TPM with it: the resume goes on.
+            self.check("V4 step 5: the machine comes up without a TPM", False, str(e).split("\n")[0] + "\n" + lv.serial_text(lv.mark)[-800:])
         lv.revert("hibernated-v4")
+        if self.distro == "arch":
+            try:
+                self.silent_tpm_arch(before)
+            except Fail as e:
+                self.check("V4 step 6: one reboot, then the passphrase", False, str(e).split("\n")[0] + "\n" + lv.serial_text(lv.mark)[-800:])
+            lv.revert("hibernated-v4")
         lv.drop_snapshot("hibernated-v4")
         self.resume_over_ssh("V4-reverted")
         self.after_resume("V4-reverted", before)
+        if self.distro == "debian":
+            m.log.head("V9: a TPM the firmware has does not answer")
+            self.silent_tpm_debian()
+
+    def after_silent(self, tag, before_boot):
+        """The running system of a boot that went on without the TPM's answer."""
+        rc, out = self.run("cat /proc/sys/kernel/random/boot_id; ls /dev/tpm* 2>&1; cat /run/tpm2-kira/close-state; ls /run/tpm2-kira/close-pending; "
+                           "systemctl is-active tpm2-kira-late-close.service; ls /sys/firmware/efi/efivars | grep KIRAcloseReboot; "
+                           "tpm2-kira status 2>&1 | grep -i 'did not answer'", save=f"{tag.replace(' ', '-')}-state.log")
+        self.check(f"{tag}: a fresh boot, no resume", before_boot not in out, out[:200])
+        self.check(f"{tag}: no device for the TPM", "/dev/tpm0" not in out, out)
+        self.check(f"{tag}: the close left its state: pending", "pending" in out and "close-pending" in out, out)
+        self.check(f"{tag}: the late closer runs", re.search(r"^active$", out, re.M) is not None, out)
+        self.check(f"{tag}: the reboot is counted", "KIRAcloseReboot" in out, out)
+        self.check(f"{tag}: status says it in red", "did not answer" in out, out)
+
+    def silent_tpm_arch(self, before):
+        m, lv = self.m, self.lv
+        words = "initcall_blacklist=crb_acpi_driver_init"
+        lv.start(unlock=False)
+        since = lv.mark
+        self.menu_edit(since, words)
+        text, again = self.restarted(since, "rebooting once", 400)
+        m.log.save("V4-silent-first-console.log", text)
+        self.check("V4 step 6: one hard reboot, for a TPM the firmware measured into", "rebooting once" in text and again, text[-800:])
+        self.check("V4 step 6: no shell on the way", "maintenance" not in text and "emergency mode" not in text.lower(), text[-800:])
+        # restarted() saw the kernel of the second boot, which was not edited:
+        # it has its driver, and closes. The reboot goes on to a boot edited.
+        lv.kill()
+        lv.start(unlock=False)
+        since = lv.mark
+        self.menu_edit(since, words)
+        self.console_prompts(since)
+        lv.wait_ssh(600)
+        self.wait_login("V4 step 6")
+        text = lv.serial_text(since)
+        m.log.save("V4-silent-second-console.log", text)
+        self.check("V4 step 6: the second time: no reboot, the passphrase", "the TPM does not answer" in text and not RESTART.search(text, text.find("Password for disk")), text[-800:])
+        self.after_silent("V4 step 6", before["boot"])
+
+    def silent_tpm_debian(self):
+        m, lv = self.m, self.lv
+        words = "initcall_blacklist=crb_acpi_driver_init"
+        rc, out = self.run("cp /boot/grub/grub.cfg /boot/grub/grub.cfg.kira; sed -i 's#^\\(\\s*linux\\s.*\\)$#\\1 " + words + "#' /boot/grub/grub.cfg; grep -c " + words + " /boot/grub/grub.cfg", save="silent-grub.log")
+        self.check("V9 step 6: the driver kept from starting on GRUB's command line", rc == 0 and out.strip() != "0", out)
+        rc, boot = self.run("cat /proc/sys/kernel/random/boot_id")
+        self.run("nohup sh -c 'sleep 2; systemctl poweroff' >/dev/null 2>&1 &")
+        if not lv.wait_stopped(300):
+            raise vmtest.Fail("V9: the guest did not power off")
+        lv.start(unlock=False)
+        since = lv.mark
+        self.console_prompts(since)
+        text, again = self.restarted(since, "rebooting once", 400)
+        m.log.save("V9-first-console.log", text)
+        self.check("V9 step 6: one hard reboot, for a TPM the firmware measured into", again, text[-800:])
+        self.check("V9 step 6: no shell on the way", "(initramfs)" not in text and "Rebooting automatically" not in text, text[-800:])
+        self.console_prompts(self.console_mark())
+        lv.wait_ssh(600)
+        self.wait_login("V9")
+        self.after_silent("V9 step 6", boot.strip())
+        # Back to normal: the count goes with the first close that holds.
+        self.run("mv /boot/grub/grub.cfg.kira /boot/grub/grub.cfg")
+        m.cycle(9)
+        rc, out = self.run("ls /sys/firmware/efi/efivars | grep -c KIRAcloseReboot; cat /run/tpm2-kira/close-state; ls /run/tpm2-kira/close-pending 2>&1", save="V9-after.log")
+        self.check("V9: a close that holds clears the count and the state", re.search(r"^0$", out, re.M) is not None and "closed" in out and "No such file" in out, out)
 
     def way_out(self):
         """A TPM that stays broken: docs/SSH.md's way out, taken as it says.

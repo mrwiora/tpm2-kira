@@ -9,3 +9,4 @@ initramfs/initramfs-tools/kernel/zzz-tpm2-kira             etc/kernel/postinst.d
 initramfs/initramfs-tools/kernel/zzz-tpm2-kira             etc/kernel/postrm.d
 initramfs/initramfs-tools/keyscript/tpm2-kira              lib/cryptsetup/scripts
 initramfs/common/control.conf                              etc/tpm2-kira
+initramfs/systemd/tpm2-kira-late-close.service             usr/lib/systemd/system

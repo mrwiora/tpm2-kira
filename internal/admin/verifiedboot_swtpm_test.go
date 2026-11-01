@@ -62,7 +62,7 @@ func TestEnrolmentNeedsAVerifiedBoot(t *testing.T) {
 	}
 
 	// Through the code screen, in the approved state: the code was shown.
-	if err := hostkey.Close(tpm); err != nil {
+	if _, err := hostkey.Close(tpm); err != nil {
 		t.Fatal(err)
 	}
 	matched, err := requireVerifiedBoot(tpm, sealed, 0)

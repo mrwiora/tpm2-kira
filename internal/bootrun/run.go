@@ -48,6 +48,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/bootclose"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/journal"
@@ -619,7 +620,7 @@ var notifyReady = sdNotifyReady
 // closeBoot is run's close at the end of the code screen. A var: the tests
 // count it.
 var closeBoot = func(tpmPath string) {
-	if err := sshscreen.CloseNow(tpmPath); err != nil {
+	if err := bootclose.Now(tpmPath); err != nil {
 		fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
 		return
 	}

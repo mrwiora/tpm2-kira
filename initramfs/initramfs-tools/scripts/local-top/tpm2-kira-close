@@ -4,8 +4,8 @@
 # PCR 15 back to zero, and the resumed system runs no code screen. After every volume is
 # unlocked (cryptroot), before local-premount, where initramfs-tools
 # resumes. In a boot where run closed it already, an extend more changes
-# nothing. Its failure
-# stops the resume: local-premount/resume reads $resume alone (init made it
+# nothing. Anything but PCR 15 itself (no TPM aside) stops the resume; the boot's
+# own close, in init-bottom, decides what follows: local-premount/resume reads $resume alone (init made it
 # from resume= and noresume once, before any script), and the ORDER file
 # sources /conf/param.conf after every script, so an empty resume= there
 # reaches it.
@@ -27,7 +27,7 @@ prereqs)
 esac
 
 [ -d /etc/tpm2-kira/plan/tpm ] || exit 0
-if ! /usr/bin/tpm2-kira-boot close 2>>/run/initramfs/tpm2-kira.log; then
+if ! /usr/bin/tpm2-kira-boot close --resume 2>>/run/initramfs/tpm2-kira.log; then
     echo "tpm2-kira: the boot is not closed (PCR 15): no resume from hibernation this boot" >/dev/console
     echo "resume=" >>/conf/param.conf
 fi
