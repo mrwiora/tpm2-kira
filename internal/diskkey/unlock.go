@@ -113,27 +113,25 @@ func (s *UnlockServer) Release() {
 	}
 }
 
-// Close stops answering; connections in progress are cut.
+// Close stops answering: the socket goes, and a terminal in raw mode for a
+// prompt is given back. An answer in progress is not waited for - a prompt
+// waits for a person who may never type - and it goes, with its connection
+// and what it holds, with the process.
 func (s *UnlockServer) Close() {
 	s.l.Close()
 	<-s.done
+	restoreTerminal()
 }
 
 func (s *UnlockServer) run() {
 	defer close(s.done)
-	var wg sync.WaitGroup
 	for {
 		c, err := s.l.Accept()
 		if err != nil {
-			break
+			return
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			s.answer(c)
-		}()
+		go s.answer(c)
 	}
-	wg.Wait()
 }
 
 func (s *UnlockServer) answer(c net.Conn) {
@@ -428,6 +426,24 @@ func ConsoleAsk(volume, what, note string) ([]byte, error) {
 
 var errPassphraseCancelled = errors.New("cancelled at the prompt")
 
+// rawTerminal is the terminal a prompt has in raw mode, and how it was:
+// there is one console, and an open prompt may end with the process.
+var rawTerminal struct {
+	sync.Mutex
+	fd  int
+	old *unix.Termios
+}
+
+// restoreTerminal gives the terminal of an open prompt back.
+func restoreTerminal() {
+	rawTerminal.Lock()
+	defer rawTerminal.Unlock()
+	if rawTerminal.old != nil {
+		unix.IoctlSetTermios(rawTerminal.fd, unix.TCSETS, rawTerminal.old)
+		rawTerminal.old = nil
+	}
+}
+
 // ReadPassphrase reads one line with echo off from a terminal (fd), or a
 // plain line from anything else (tests, a pipe, a socket: fd < 0).
 func ReadPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
@@ -471,7 +487,10 @@ func ReadPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &raw); err != nil {
 		return nil, err
 	}
-	defer unix.IoctlSetTermios(fd, unix.TCSETS, old)
+	rawTerminal.Lock()
+	rawTerminal.fd, rawTerminal.old = fd, old
+	rawTerminal.Unlock()
+	defer restoreTerminal()
 	one := make([]byte, 1)
 	return ReadRawPassphrase(func() (byte, error) {
 		n, err := f.Read(one)

@@ -678,3 +678,60 @@ func TestReadPassphraseTakesOneLineOfAPipe(t *testing.T) {
 func recipeOf(recipes ...Recipe) func(string) ([]Recipe, string) {
 	return func(string) ([]Recipe, string) { return recipes, "" }
 }
+
+// A prompt nobody answers does not hold Close up: the socket goes, the
+// terminal in raw mode is given back, and the answer goes with the process.
+func TestUnlockServerCloseLeavesAnOpenPrompt(t *testing.T) {
+	ptm, pts, err := openPty()
+	if err != nil {
+		t.Skipf("no pty: %v", err)
+	}
+	defer ptm.Close()
+	defer pts.Close()
+	before, err := unix.IoctlGetTermios(int(pts.Fd()), unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked := make(chan struct{})
+	path := filepath.Join(t.TempDir(), "unlock.sock")
+	l, err := ListenUnlock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := ServeUnlock(l, func(string) ([]byte, error) {
+		close(asked)
+		return ReadPassphrase(pts, int(pts.Fd()))
+	}, func(string) {})
+	s.Release()
+	c := askLike(t, path, "cryptsetup", "cryptroot")
+	defer c.Close()
+	<-asked
+	for {
+		tio, err := unix.IoctlGetTermios(int(pts.Fd()), unix.TCGETS)
+		if err == nil && tio.Lflag&unix.ICANON == 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	closed := make(chan struct{})
+	go func() {
+		s.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close waits for the prompt")
+	}
+	after, err := unix.IoctlGetTermios(int(pts.Fd()), unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Lflag != before.Lflag {
+		t.Errorf("the terminal is left with lflag %#x, it had %#x", after.Lflag, before.Lflag)
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Error("the socket stayed")
+	}
+	ptm.Write([]byte("\n")) // the prompt's goroutine ends with the test
+}

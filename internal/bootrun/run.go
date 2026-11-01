@@ -497,18 +497,44 @@ func StartCoordinator(tpmPath, signerPath string, debug bool) (*phonegate.GateSe
 // started, and the TPM is not touched for it. Then it shows the codes and
 // holds the boot until it is confirmed or the hold ends, tells the parts,
 // and with the disk's key provider stays until it is stopped.
+//
+// SIGTERM and SIGINT end it whatever it is doing - at a TPM that hangs, in
+// the hold, with a prompt open nobody may answer: systemd-shutdown waits for
+// this process before a hard reboot, and systemd stops the service at
+// switch-root. The work runs beside the wait for the signal; the parts get
+// endWait to say goodbye, and what is left goes with the process.
 func Run(tpmPath string, nvramIndex uint32, hold time.Duration, unlockSocket string, remote sshscreen.Options, planned imageplan.Planned, debug bool) {
+	asked := make(chan os.Signal, 1)
+	signal.Notify(asked, syscall.SIGTERM, syscall.SIGINT)
 	bd := &board{tpmPath: tpmPath, debug: debug, hold: hold, confirm: make(chan string), ask: diskkey.Prompter(diskkey.ConsoleAsk),
 		prompting: func() bool { return false }, promptMode: func() []diskkey.Recipe { return nil }}
-	if planned.TPM && !tpmdev.AwaitNode(tpmPath, imageplan.TPMWait) {
-		fmt.Fprintf(os.Stderr, "tpm2-kira: %s did not appear within %s; no code this boot\n", tpmPath, imageplan.TPMWait)
-	}
 	ps := plannedParts(planned, remote, unlockSocket)
-	started := ps.inOrder()
-	for _, p := range started {
-		p.start(bd)
+	started := &startedParts{}
+	over := make(chan struct{})
+	go func() {
+		defer close(over)
+		if planned.TPM && !tpmdev.AwaitNode(tpmPath, imageplan.TPMWait) {
+			fmt.Fprintf(os.Stderr, "tpm2-kira: %s did not appear within %s; no code this boot\n", tpmPath, imageplan.TPMWait)
+		}
+		for _, p := range ps.inOrder() {
+			p.start(bd)
+			started.add(p)
+		}
+		showCodes(bd, ps, tpmPath, nvramIndex, planned, debug)
+	}()
+	select {
+	case <-asked:
+	case <-over:
+		if bd.serving {
+			<-asked
+		}
 	}
+	started.end(bd)
+}
 
+// showCodes is the code screen: until the boot is confirmed or the hold ends, and
+// after it what the slots still show.
+func showCodes(bd *board, ps parts, tpmPath string, nvramIndex uint32, planned imageplan.Planned, debug bool) {
 	open := func() (transport.TPMCloser, error) {
 		tpmDev, err := tpmdev.Open(tpmPath)
 		if err != nil {
@@ -587,9 +613,6 @@ func Run(tpmPath string, nvramIndex uint32, hold time.Duration, unlockSocket str
 		RetryEvery:    2 * time.Second,
 	}
 	b.Run()
-	for i := len(started) - 1; i >= 0; i-- {
-		started[i].end(bd)
-	}
 }
 
 // release ends the hold: the parts are told, in the order that lets every
@@ -660,28 +683,6 @@ func showScreen(bd *board, open func() (transport.TPMCloser, error), slots []tot
 		}
 	}
 	fmt.Println()
-}
-
-// stopRemoteOnSignal stops the SSH server when systemd stops the service
-// at switch-root - whatever run is doing then - so that its socket does
-// not stay in /run, which is carried over into the booted system, then
-// ends the process by the signal as it would have ended without this.
-func stopRemoteOnSignal(srv *sshscreen.Server) {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		sig := <-ch
-		srv.Stop("The machine boots; the SSH server stops.")
-		signal.Reset(syscall.SIGTERM, syscall.SIGINT)
-		syscall.Kill(os.Getpid(), sig.(syscall.Signal))
-	}()
-}
-
-// waitForStop returns when systemd (or anyone) asks this process to end.
-func waitForStop() {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
-	<-ch
 }
 
 // phoneCodes puts each phone slot's line into codes: a slot with phones

@@ -6,6 +6,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -30,8 +31,51 @@ type part interface {
 	// released is told that the hold has ended, and who confirmed the boot
 	// (one of the confirmedBy values, or "" when the hold ran out).
 	released(bd *board, by string)
-	// end is told that run ends.
+	// end is told that run ends; a hold or a prompt may still be going on
+	// beside it. run waits for it only so long (endWait).
 	end(bd *board)
+}
+
+// endWait bounds a stop of run: the parts' goodbye, which is what the SSH
+// sessions' last line needs, longer than ssh-child gets to end before it is
+// killed (assh's Server.Stop) and the radio worker (workerStopWait).
+var endWait = 5 * time.Second
+
+// startedParts are the parts whose start has returned: a part in the middle
+// of its start has nothing to end, and goes with the process.
+type startedParts struct {
+	mu   sync.Mutex
+	list []part
+}
+
+func (s *startedParts) add(p part) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.list = append(s.list, p)
+}
+
+// end ends them, side by side, and returns within endWait.
+func (s *startedParts) end(bd *board) {
+	s.mu.Lock()
+	list := slices.Clone(s.list)
+	s.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, p := range list {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.end(bd)
+		}()
+	}
+	all := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(all)
+	}()
+	select {
+	case <-all:
+	case <-time.After(endWait):
+	}
 }
 
 // parts are the parts of one boot; nil is a part the plan does not name.
@@ -107,8 +151,9 @@ type board struct {
 	// console where they are; nil: the code screen is the console's.
 	remote func(screen []byte)
 	hint   func(remaining time.Duration)
-	// remoteDone is closed once the SSH server has ended; nil without one.
-	remoteDone <-chan struct{}
+	// serving: the disk's key provider answers, so run stays when the hold
+	// is over, until it is stopped.
+	serving bool
 	// prompting says the passphrase prompt owns the console; promptMode is
 	// the recipe of the volume asked next, for the screen's words.
 	prompting  func() bool
@@ -169,6 +214,9 @@ func (p *phonePart) released(*board, string) {
 }
 
 func (p *phonePart) end(*board) {
+	if p.stop != nil {
+		p.stop()
+	}
 	if p.svc != nil {
 		p.svc.Forget()
 	}
@@ -194,7 +242,6 @@ func (p *sshPart) start(bd *board) {
 		return
 	}
 	p.srv = srv
-	stopRemoteOnSignal(srv)
 	bd.ask = srv.Ask
 	bd.hold = p.opts.Hold
 	if bd.hold == 0 {
@@ -203,7 +250,6 @@ func (p *sshPart) start(bd *board) {
 	p.hint = startHintPrinter(srv)
 	bd.remote = srv.Show
 	bd.hint = p.hint.print
-	bd.remoteDone = srv.Done
 	p.quit = make(chan struct{})
 	go func() {
 		for {
@@ -232,7 +278,16 @@ func (p *sshPart) released(_ *board, by string) {
 	}
 }
 
-func (p *sshPart) end(*board) {}
+// The server stops with run, so that its sessions hear it and its socket
+// does not stay in /run, which is carried over into the booted system.
+func (p *sshPart) end(*board) {
+	if p.srv == nil {
+		return
+	}
+	p.hint.stop()
+	p.srv.Stop("The machine boots; the SSH server stops.")
+	<-p.srv.Done
+}
 
 // vaultPart makes the key of a slot enrolled with a vault while the code
 // screen holds (the parts open only in the approved boot state, before the
@@ -391,6 +446,7 @@ func (p *unlockPart) start(bd *board) {
 	}
 	recipes := &diskkey.UnlockRecipe{}
 	p.unlock = diskkey.ServeUnlock(l, diskkey.DiskKey(salt, bd.vaultKey, recipes.ForVolume, bd.ask), diskkey.UnlockLogger(bd.debug))
+	bd.serving = true
 	bd.prompting = p.unlock.Prompting
 }
 
@@ -407,17 +463,11 @@ func (p *unlockPart) released(*board, string) {
 	}()
 }
 
-// The display is done; the key provider stays until systemd stops the
-// service at switch-root.
-func (p *unlockPart) end(bd *board) {
-	if p.unlock == nil {
-		return
+// The key provider stays until run is stopped (Run), at switch-root.
+func (p *unlockPart) end(*board) {
+	if p.unlock != nil {
+		p.unlock.Close()
 	}
-	waitForStop()
-	if bd.remoteDone != nil {
-		<-bd.remoteDone // its socket removed before the process ends
-	}
-	p.unlock.Close()
 }
 
 // consolePart is Enter at the console: it confirms the boot until the hold

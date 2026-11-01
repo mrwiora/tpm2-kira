@@ -45,10 +45,10 @@ checks that on both distributions, from the machines' snapshot "fresh":
 
 V4, V9 and V8 run last.
 
-Iterating on a step (a run from "fresh" is only for the proof): --save-setup keeps the
-state after the setup in a snapshot of its own ("hib-setup"); --only V4,V8 goes back
-to it and runs those steps alone, without building; --drop-setup removes it. A
-change to the product wants a new --save-setup. The report and every
+Iterating on a step (a run from "fresh" is only for the proof): --save-setup makes the
+setup, keeps the state after it in a snapshot of its own ("hib-setup") and ends; --only
+V4,V8 goes back to it and runs those steps alone, without building; --drop-setup removes
+it. A change to the product wants a new --save-setup. The report and every
 transcript land in the run's directory (.local/runs/hibernatetest-<time>/).
 """
 
@@ -621,6 +621,7 @@ class Hib:
             self.swap_risk()
             if save:
                 self.save_setup()
+                return m.report()
             self.step_v2()
             m.log.head("V7: a normal reboot after the resume")
             m.cycle(2)
