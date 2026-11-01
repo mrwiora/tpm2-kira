@@ -2,7 +2,6 @@ package measure
 
 import (
 	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -44,12 +43,10 @@ func FindPCRSignature(p uki.PCRSignatures, key []byte, bank PCRHashAlgo, pcrs []
 // digest of a fresh SHA-256 session.
 func SignedPolicy(pcr int, value []byte, bank PCRHashAlgo) []byte {
 	composite := sha256.Sum256(value)
-	h := sha256.New()
-	h.Write(make([]byte, sha256.Size))
-	h.Write(binary.BigEndian.AppendUint32(nil, uint32(tpm2.TPMCCPolicyPCR)))
-	h.Write(tpm2.Marshal(CreatePCRSelection([]int{pcr}, bank)))
-	h.Write(composite[:])
-	return h.Sum(nil)
+	return attest.PolicyDigest(tpm2.PolicyPCR{
+		PcrDigest: tpm2.TPM2BDigest{Buffer: composite[:]},
+		Pcrs:      CreatePCRSelection([]int{pcr}, bank),
+	}.Update)
 }
 
 // UKIPCRSignatures reads the .pcrsig section of the image at path.

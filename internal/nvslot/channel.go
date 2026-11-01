@@ -54,35 +54,13 @@ func channelPolicy(signingName tpm2.TPM2BName, policyRef []byte, bank tpm2.TPMIA
 		return nil, branches, err
 	}
 	unseal := tpm2.PolicyCommandCode{Code: tpm2.TPMCCUnseal}
-	digest := func(update ...func(*tpm2.PolicyCalculator) error) (tpm2.TPM2BDigest, error) {
-		calc, err := tpm2.NewPolicyCalculator(tpm2.TPMAlgSHA256)
-		if err != nil {
-			return tpm2.TPM2BDigest{}, err
-		}
-		for _, u := range update {
-			if err := u(calc); err != nil {
-				return tpm2.TPM2BDigest{}, err
-			}
-		}
-		return tpm2.TPM2BDigest{Buffer: calc.Hash().Digest}, nil
-	}
-	gate, err := digest(tpm2.PolicyPCR{PcrDigest: tpm2.TPM2BDigest{Buffer: open}, Pcrs: attest.ClosePCRSelection(bank)}.Update, unseal.Update)
-	if err != nil {
-		return nil, branches, err
-	}
-	signed, err := digest(tpm2.PolicySigned{
+	gate := attest.PolicyDigest(tpm2.PolicyPCR{PcrDigest: tpm2.TPM2BDigest{Buffer: open}, Pcrs: attest.ClosePCRSelection(bank)}.Update, unseal.Update)
+	signed := attest.PolicyDigest(tpm2.PolicySigned{
 		AuthObject: tpm2.NamedHandle{Name: signingName},
 		PolicyRef:  tpm2.TPM2BNonce{Buffer: policyRef},
 	}.Update, unseal.Update)
-	if err != nil {
-		return nil, branches, err
-	}
-	branches = tpm2.TPMLDigest{Digests: []tpm2.TPM2BDigest{gate, signed}}
-	all, err := digest(tpm2.PolicyOr{PHashList: branches}.Update)
-	if err != nil {
-		return nil, branches, err
-	}
-	return all.Buffer, branches, nil
+	branches = tpm2.TPMLDigest{Digests: []tpm2.TPM2BDigest{{Buffer: gate}, {Buffer: signed}}}
+	return attest.PolicyDigest(tpm2.PolicyOr{PHashList: branches}.Update), branches, nil
 }
 
 // channelTemplate is a sealed data object only its policy opens.

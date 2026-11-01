@@ -263,19 +263,17 @@ func FormatBootCode(code string) string {
 }
 
 // PolicyAuthorizeDigest is the policy digest of a key that is usable
-// exactly when keyName has approved a policy for policyRef:
-// H(H(0 ‖ TPM_CC_PolicyAuthorize ‖ keyName) ‖ policyRef) (TPM 2.0 Part 3,
-// PolicyAuthorize). The slot's policy begins with it (SlotPolicyDigest).
+// exactly when keyName has approved a policy for policyRef. The slot's
+// policy begins with it (SlotPolicyDigest).
 func PolicyAuthorizeDigest(keyName, policyRef []byte) []byte {
-	cc := []byte{0, 0, 0x01, 0x6a} // TPM_CC_PolicyAuthorize
-	inner := sha256.New()
-	inner.Write(make([]byte, sha256.Size))
-	inner.Write(cc)
-	inner.Write(keyName)
-	outer := sha256.New()
-	outer.Write(inner.Sum(nil))
-	outer.Write(policyRef)
-	return outer.Sum(nil)
+	return PolicyDigest(policyAuthorize(keyName, policyRef))
+}
+
+func policyAuthorize(keyName, policyRef []byte) PolicyStep {
+	return tpm2.PolicyAuthorize{
+		KeySign:   tpm2.TPM2BName{Buffer: keyName},
+		PolicyRef: tpm2.TPM2BDigest{Buffer: policyRef},
+	}.Update
 }
 
 // BootKeyOffer is what the machine presents for its boot key at enrolment.

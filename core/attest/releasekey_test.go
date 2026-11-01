@@ -4,20 +4,28 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"testing"
+
+	"github.com/google/go-tpm/tpm2"
 )
 
 func TestReleaseKeyPolicyExtendsTheSlotPolicy(t *testing.T) {
-	slot := bytes.Repeat([]byte{7}, 32)
+	name := append([]byte{0, 0x0b}, bytes.Repeat([]byte{7}, 32)...)
+	ref := bytes.Repeat([]byte{9}, 16)
+	slot, err := SlotPolicyDigest(name, ref, tpm2.TPMAlgSHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
 	h := sha256.New()
 	h.Write(slot)
 	h.Write([]byte{0, 0, 0x01, 0x6c, 0, 0, 0x01, 0x47})
-	if got := ReleaseKeyPolicy(slot); !bytes.Equal(got, h.Sum(nil)) {
-		t.Fatalf("%x", got)
+	got, err := ReleaseKeyPolicy(name, ref, tpm2.TPMAlgSHA256)
+	if err != nil || !bytes.Equal(got, h.Sum(nil)) {
+		t.Fatalf("%x %v", got, err)
 	}
-	if bytes.Equal(ReleaseKeyPolicy(slot), ReleaseKeyPolicy(bytes.Repeat([]byte{8}, 32))) {
+	if other, _ := ReleaseKeyPolicy(name, bytes.Repeat([]byte{8}, 16), tpm2.TPMAlgSHA256); bytes.Equal(got, other) {
 		t.Fatal("different slot policies give the same release policy")
 	}
-	tmpl := ReleaseKeyTemplate(ReleaseKeyPolicy(slot))
+	tmpl := ReleaseKeyTemplate(got)
 	a := tmpl.ObjectAttributes
 	if !a.AdminWithPolicy || a.UserWithAuth || a.Decrypt || a.Restricted || !a.FixedTPM || !a.FixedParent {
 		t.Fatalf("attributes %+v", a)

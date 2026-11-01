@@ -3,7 +3,6 @@ package attest
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
 
 	"github.com/google/go-tpm/tpm2"
@@ -61,21 +60,45 @@ func OpenPCRDigest(bank tpm2.TPMIAlgHash) ([]byte, error) {
 	return d[:], nil
 }
 
-// SlotPolicyDigest is the slot's policy as the TPM computes it, for the
-// signing key named keyName, policyRef and the bank ClosePCR is read in:
-// PolicyAuthorizeDigest, then H(that ‖ TPM_CC_PolicyPCR ‖
-// TPML_PCR_SELECTION ‖ OpenPCRDigest(bank)).
-func SlotPolicyDigest(keyName, policyRef []byte, bank tpm2.TPMIAlgHash) ([]byte, error) {
+// PolicyStep is one policy command as the digest it adds to a session.
+type PolicyStep = func(*tpm2.PolicyCalculator) error
+
+// PolicyDigest is a fresh SHA-256 session's digest after steps, as the TPM
+// computes it. The steps only marshal byte strings and a selection, which does
+// not fail: an error is a bug here, not bad input.
+func PolicyDigest(steps ...PolicyStep) []byte {
+	calc, err := tpm2.NewPolicyCalculator(tpm2.TPMAlgSHA256)
+	if err != nil {
+		panic(err)
+	}
+	for _, step := range steps {
+		if err := step(calc); err != nil {
+			panic(err)
+		}
+	}
+	return calc.Hash().Digest
+}
+
+// slotPolicySteps is the slot's policy for the signing key named keyName,
+// policyRef and the bank ClosePCR is read in.
+func slotPolicySteps(keyName, policyRef []byte, bank tpm2.TPMIAlgHash) ([]PolicyStep, error) {
 	open, err := OpenPCRDigest(bank)
 	if err != nil {
 		return nil, err
 	}
-	h := sha256.New()
-	h.Write(PolicyAuthorizeDigest(keyName, policyRef))
-	h.Write(binary.BigEndian.AppendUint32(nil, uint32(tpm2.TPMCCPolicyPCR)))
-	h.Write(tpm2.Marshal(ClosePCRSelection(bank)))
-	h.Write(open)
-	return h.Sum(nil), nil
+	return []PolicyStep{
+		policyAuthorize(keyName, policyRef),
+		tpm2.PolicyPCR{PcrDigest: tpm2.TPM2BDigest{Buffer: open}, Pcrs: ClosePCRSelection(bank)}.Update,
+	}, nil
+}
+
+// SlotPolicyDigest is the slot's policy as the TPM computes it.
+func SlotPolicyDigest(keyName, policyRef []byte, bank tpm2.TPMIAlgHash) ([]byte, error) {
+	steps, err := slotPolicySteps(keyName, policyRef, bank)
+	if err != nil {
+		return nil, err
+	}
+	return PolicyDigest(steps...), nil
 }
 
 // slotBanks are the banks a slot's ClosePCR may be read in. A verifier

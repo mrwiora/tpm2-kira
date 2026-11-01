@@ -3,8 +3,6 @@ package attest
 import (
 	"bytes"
 	"crypto/ecdh"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -24,23 +22,14 @@ import (
 // tpm2-kira that image carries, before the close, and nowhere else. The
 // key never signs or decrypts anything; it exists for its name.
 
-const (
-	ccPolicyCommandCode  = 0x0000016c // TPM_CC_PolicyCommandCode
-	ccActivateCredential = 0x00000147 // TPM_CC_ActivateCredential
-)
-
-// ReleaseKeyPolicy extends the slot's policy (the TOTP key's authPolicy,
-// SlotPolicyDigest) by
-// PolicyCommandCode(TPM_CC_ActivateCredential), as the TPM computes it:
-// H(policy ‖ TPM_CC_PolicyCommandCode ‖ TPM_CC_ActivateCredential).
-func ReleaseKeyPolicy(slotPolicy []byte) []byte {
-	h := sha256.New()
-	h.Write(slotPolicy)
-	var cc [8]byte
-	binary.BigEndian.PutUint32(cc[:4], ccPolicyCommandCode)
-	binary.BigEndian.PutUint32(cc[4:], ccActivateCredential)
-	h.Write(cc[:])
-	return h.Sum(nil)
+// ReleaseKeyPolicy is the slot's policy (SlotPolicyDigest) extended by
+// PolicyCommandCode(TPM_CC_ActivateCredential), as the TPM computes it.
+func ReleaseKeyPolicy(keyName, policyRef []byte, bank tpm2.TPMIAlgHash) ([]byte, error) {
+	steps, err := slotPolicySteps(keyName, policyRef, bank)
+	if err != nil {
+		return nil, err
+	}
+	return PolicyDigest(append(steps, tpm2.PolicyCommandCode{Code: tpm2.TPMCCActivateCredential}.Update)...), nil
 }
 
 // ReleaseKeyTemplate is the RK's public area under authPolicy: an ECC P-256
@@ -124,11 +113,11 @@ func ReleaseKeyName(public, signingPublic, policyRef []byte) ([]byte, error) {
 // under the slot's ReleaseKeyPolicy in one of the slot's banks.
 func isReleaseKey(pub *tpm2.TPMTPublic, public, signingName, policyRef []byte) bool {
 	for _, bank := range slotBanks {
-		slot, err := SlotPolicyDigest(signingName, policyRef, bank)
+		policy, err := ReleaseKeyPolicy(signingName, policyRef, bank)
 		if err != nil {
 			continue
 		}
-		want := ReleaseKeyTemplate(ReleaseKeyPolicy(slot))
+		want := ReleaseKeyTemplate(policy)
 		want.Unique = pub.Unique
 		if bytes.Equal(tpm2.Marshal(want), public) {
 			return true

@@ -188,17 +188,15 @@ func policyHash(parts ...[]byte) []byte {
 	return h.Sum(nil)
 }
 
-func cc(c tpm2.TPMCC) []byte { return binary.BigEndian.AppendUint32(nil, uint32(c)) }
-
-// PolicyPCRDigest is a fresh session's digest after PolicyPCR over sel with
-// these values: H(0…0 ‖ TPM_CC_PolicyPCR ‖ TPML_PCR_SELECTION ‖ H(values)).
-func PolicyPCRDigest(sel Selection, vals []PCRValue) []byte {
-	return policyHash(make([]byte, sha256.Size), cc(tpm2.TPMCCPolicyPCR), tpm2.Marshal(sel.tpm()), compositeDigest(vals))
+// policyPCR is PolicyPCR over sel with these values.
+func policyPCR(sel Selection, vals []PCRValue) attest.PolicyStep {
+	return tpm2.PolicyPCR{PcrDigest: tpm2.TPM2BDigest{Buffer: compositeDigest(vals)}, Pcrs: sel.tpm()}.Update
 }
 
-// PolicyPCRDigestAfter is PolicyPCRDigest from the session's digest prior.
-func PolicyPCRDigestAfter(prior []byte, sel Selection, vals []PCRValue) []byte {
-	return policyHash(prior, cc(tpm2.TPMCCPolicyPCR), tpm2.Marshal(sel.tpm()), compositeDigest(vals))
+// PolicyPCRDigest is a fresh session's digest after PolicyPCR over sel with
+// these values.
+func PolicyPCRDigest(sel Selection, vals []PCRValue) []byte {
+	return attest.PolicyDigest(policyPCR(sel, vals))
 }
 
 // SignedPCRPolicy is the digest of the policy's first part with signed PCRs:
@@ -209,7 +207,7 @@ func SignedPCRPolicy(pcrKey []byte, plain Selection, vals []PCRValue) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	return PolicyPCRDigestAfter(attest.PolicyAuthorizeDigest(name, nil), plain, vals), nil
+	return attest.PolicyDigest(tpm2.PolicyAuthorize{KeySign: tpm2.TPM2BName{Buffer: name}}.Update, policyPCR(plain, vals)), nil
 }
 
 // devicePCRPolicy is the first part of the approved policy for a request's
@@ -234,15 +232,17 @@ func devicePCRPolicy(dev *Device, req *ReleaseRequest) ([]byte, error) {
 }
 
 // ApprovedPolicy extends a PolicyPCR digest by PolicyNV(generation index ==
-// gen at offset 0): the policy the slot's signing key approves.
+// gen at offset 0): the policy the slot's signing key approves. By hand: it goes
+// on from a digest, the TPM's trial session's at a seal, and go-tpm's
+// PolicyCalculator starts at zero only.
 func ApprovedPolicy(pcrPolicy, genIndexName []byte, gen uint64) []byte {
 	operand := binary.BigEndian.AppendUint64(nil, gen)
 	args := policyHash(operand, []byte{0, 0}, binary.BigEndian.AppendUint16(nil, uint16(tpm2.TPMEOEq)))
-	return policyHash(pcrPolicy, cc(tpm2.TPMCCPolicyNV), args, genIndexName)
+	return policyHash(pcrPolicy, binary.BigEndian.AppendUint32(nil, uint32(tpm2.TPMCCPolicyNV)), args, genIndexName)
 }
 
 // ApprovalDigest is what the signing key signs to approve a policy for
-// policyRef.
+// policyRef; a digest TPM2_VerifySignature checks, no session's.
 func ApprovalDigest(approvedPolicy, policyRef []byte) []byte {
 	return policyHash(approvedPolicy, policyRef)
 }

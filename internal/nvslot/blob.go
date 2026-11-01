@@ -194,18 +194,20 @@ func (sb *SealedBlob) SlotPolicy() ([]byte, error) {
 // SlotPolicyIn is SlotPolicy for the bank the slot is being sealed to,
 // before its PCR values are in the blob.
 func (sb *SealedBlob) SlotPolicyIn(bank measure.PCRHashAlgo) ([]byte, error) {
-	pub, err := tpm2.Unmarshal[tpm2.TPMTPublic](sb.Payload.SigningPublic)
-	if err != nil {
-		return nil, fmt.Errorf("the slot's signing key has no valid public area: %w", err)
-	}
-	name, err := tpm2.ObjectName(pub)
+	name, err := slotSigningName(sb)
 	if err != nil {
 		return nil, err
 	}
-	if len(sb.Payload.PolicyRef) == 0 {
-		return nil, fmt.Errorf("the slot has no policy reference")
-	}
 	return attest.SlotPolicyDigest(name.Buffer, sb.Payload.PolicyRef, bank.TPMAlg())
+}
+
+// ReleaseKeyPolicy is the policy of the slot's release key.
+func (sb *SealedBlob) ReleaseKeyPolicy() ([]byte, error) {
+	name, err := slotSigningName(sb)
+	if err != nil {
+		return nil, err
+	}
+	return attest.ReleaseKeyPolicy(name.Buffer, sb.Payload.PolicyRef, sb.GetHashAlgo().TPMAlg())
 }
 
 // GetHashAlgo infers the PCR hash algorithm from the stored digest sizes.

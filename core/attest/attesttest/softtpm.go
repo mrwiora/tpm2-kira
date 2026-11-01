@@ -290,11 +290,11 @@ func (s *SoftTPM) ReleaseKey(signingPublic, policyRef []byte) (public, name []by
 		return nil, nil, err
 	}
 	pt := k.PublicKey().Bytes()
-	slotPolicy, err := attest.SlotPolicyDigest(signingName.Buffer, policyRef, tpm2.TPMAlgSHA256)
+	policy, err := attest.ReleaseKeyPolicy(signingName.Buffer, policyRef, tpm2.TPMAlgSHA256)
 	if err != nil {
 		return nil, nil, err
 	}
-	tmpl := attest.ReleaseKeyTemplate(attest.ReleaseKeyPolicy(slotPolicy))
+	tmpl := attest.ReleaseKeyTemplate(policy)
 	tmpl.Unique = tpm2.NewTPMUPublicID(tpm2.TPMAlgECC, &tpm2.TPMSECCPoint{
 		X: tpm2.TPM2BECCParameter{Buffer: pt[1:33]},
 		Y: tpm2.TPM2BECCParameter{Buffer: pt[33:]},

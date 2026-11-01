@@ -50,7 +50,7 @@ var ErrFactorRefused = errors.New("the TPM refused to open the factor: this boot
 // CreateReleaseKey makes the slot's release key under the slot's policy
 // extended by PolicyCommandCode(ActivateCredential).
 func CreateReleaseKey(tpmDev transport.TPM, sealed *nvslot.SealedBlob) (public, private []byte, err error) {
-	policy, err := sealed.SlotPolicy()
+	policy, err := sealed.ReleaseKeyPolicy()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -61,7 +61,7 @@ func CreateReleaseKey(tpmDev transport.TPM, sealed *nvslot.SealedBlob) (public, 
 	defer tpmdev.FlushHandle(tpmDev, primary.ObjectHandle)
 	rsp, err := tpm2.Create{
 		ParentHandle: tpm2.AuthHandle{Handle: primary.ObjectHandle, Name: primary.Name, Auth: tpm2.PasswordAuth(nil)},
-		InPublic:     tpm2.New2B(attest.ReleaseKeyTemplate(attest.ReleaseKeyPolicy(policy))),
+		InPublic:     tpm2.New2B(attest.ReleaseKeyTemplate(policy)),
 	}.Execute(tpmDev)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create the release key in the TPM: %w", err)
