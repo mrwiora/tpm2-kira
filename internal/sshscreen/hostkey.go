@@ -153,7 +153,7 @@ func CloseNow(tpmPath string) error {
 }
 
 // closeRetried tries once more what failed: a close that fails ends in a
-// power-off, so a passing fault in the TPM does not get that far.
+// hard reboot, so a passing fault in the TPM does not get that far.
 func closeRetried(close func() error) error {
 	if err := close(); err != nil {
 		fmt.Fprintf(os.Stderr, "%v: once more\n", err)

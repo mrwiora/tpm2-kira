@@ -30,12 +30,17 @@ checks that on both distributions, from the machines' snapshot "fresh":
          close alone closes the CA
   V5     suspend to RAM: tested where the guest offers S3 ("deep")
   V4     the close fails (the resume's boot without its TPM): no resume,
-         and the machine powers off - Arch: tpm2-kira-close.service's
+         and the machine restarts - Arch: tpm2-kira-close.service's
          FailureAction, no emergency target; Debian: local-top clears the
-         resume, init-bottom's poweroff -f, no panic. Then the test
-         reverts to the hibernated state and resumes with the TPM.
+         resume, init-bottom's reboot -f, no panic. Without the TPM it would
+         restart for ever: the test stops it at the second boot, reverts to
+         the hibernated state and resumes with the TPM.
+  V8     the way out of a TPM that stays broken (docs/SSH.md): Arch,
+         rd.systemd.mask=tpm2-kira-close.service with Secure Boot off;
+         Debian, GRUB's break=bottom and the plan's TPM part removed. The
+         machine comes up without its TPM.
 
-V4 runs last. The report and every
+V4 and V8 run last. The report and every
 transcript land in the run's directory (.local/runs/hibernatetest-<time>/).
 """
 
@@ -52,6 +57,11 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCAL = os.path.join(os.path.dirname(REPO), ".local")
+
+
+# A boot's first word on the serial console: the kernel's.
+MEMMAP = "dmesg | sed -n 's/^\\[[^]]*\\] //; /BIOS-e820\\|reserve setup_data\\|Hibernate inconsistent/p'"
+RESTART = re.compile(r"Linux version \d")
 
 
 def load(name):
@@ -204,6 +214,7 @@ class Hib:
         if self.distro == "arch":
             self.run("swapon /swapfile 2>/dev/null; true")  # not in fstab: on again after a reboot
         before = self.state(f"{tag}-before")
+        _, self.memmap = self.run(MEMMAP, save=f"{tag}-memmap-before.log")
         self.run("nohup sh -c 'sleep 2; systemctl hibernate' >/dev/null 2>&1 &")
         deadline = time.time() + 600
         while self.lv.pid() and time.time() < deadline:
@@ -253,9 +264,13 @@ class Hib:
         if st["boot"] != before["boot"]:
             rc, out = self.run("journalctl -b -k -o cat --no-pager 2>&1 | grep -E 'PM: (Image|hibernation: (Image|Failed))'", save=f"{tag}-no-resume.log")
             if "Image mismatch" in out:
-                # The kernel refused the image itself: the firmware's memory
-                # map differed from the hibernated boot's (OVMF's on this VM).
-                self.m.rep.issues.append(f"{tag}: not tested - the kernel refused the image: {out.strip().splitlines()[-1] if out.strip() else ''}")
+                # The kernel refused the image itself: the memory map it got
+                # from the firmware differs from the hibernated boot's.
+                _, now = self.run(MEMMAP, save=f"{tag}-memmap-after.log")
+                was, is_ = set(self.memmap.splitlines()), set(now.splitlines())
+                diff = sorted("- " + l for l in was - is_) + sorted("+ " + l for l in is_ - was)
+                self.m.log.save(f"{tag}-memmap.diff", "\n".join(diff) + "\n")
+                self.m.rep.issues.append(f"{tag}: not tested - the kernel refused the image: {out.strip().splitlines()[-1] if out.strip() else ''}; the memory map differs in {len(diff)} line(s) ({tag}-memmap.diff)")
                 return st
         self.check(f"{tag}: the session resumed (boot_id {before['boot']} kept)", st["boot"] == before["boot"] and st["boot"], st["out"][:200])
         self.check(f"{tag}: the CA is closed after the resume (PCR 15 extended)", st["locked"], st["out"][-600:])
@@ -303,15 +318,32 @@ class Hib:
         lv.send(vmtest.TEST_SALT + "\r")
         lv.wait_ssh(600)
 
+    def restarted(self, since, after, timeout):
+        """Waits for the second boot on the console after the text after:
+        the machine restarted by itself. The console's text up to it, and
+        whether it came."""
+        lv, deadline = self.lv, time.time() + timeout
+        first = re.compile(re.escape(after))
+        while time.time() < deadline:
+            text = lv.serial_text(since)
+            m = first.search(text)
+            if m:
+                again = RESTART.search(text, m.end())
+                if again:
+                    return text[:again.start()], True
+            time.sleep(0.5)
+        return lv.serial_text(since), False
+
     def failed_close(self):
         """The close fails - the resume's boot without the TPM, whose
-        device never comes: no resume, and the machine powers off, with no
+        device never comes: no resume, and the machine restarts, with no
         shell on the way (Arch: tpm2-kira-close.service's FailureAction;
         Debian: local-top's close fails and clears the resume, init-bottom
-        powers off). Then the test reverts to the hibernated state and
-        resumes with the TPM back."""
+        reboots). Without the TPM it restarts again and again: the test stops
+        it at the second boot, reverts to the hibernated state and resumes
+        with the TPM back."""
         m, lv = self.m, self.lv
-        m.log.head("V4: the close fails - no resume, the machine powers off")
+        m.log.head("V4: the close fails - no resume, the machine restarts")
         before = self.hibernate("V4")
         lv.snapshot("hibernated-v4")
         lv.start(unlock=False, tpm=False)
@@ -324,26 +356,73 @@ class Hib:
                 lv.send(vmtest.TEST_PASSWORD + "\r")
                 lv.expect(re.compile(r"Salt for disk \S+: ?$", re.M), 120, since)
                 lv.send(vmtest.TEST_SALT + "\r")
-                lv.expect(re.compile(r"the boot is not closed \(PCR 15\): powering off"), 300, since)
-                off = lv.wait_stopped(120)
-                text = lv.serial_text(since)
+                text, again = self.restarted(since, "the boot is not closed (PCR 15): rebooting", 300)
                 self.check("V4: Debian - no resume (local-top's close failed)", "no resume from hibernation this boot" in text, text[-800:])
-                self.check("V4: Debian - init-bottom's close powers off", off, text[-800:])
+                self.check("V4: Debian - init-bottom's close restarts the machine", again, text[-800:])
                 self.check("V4: Debian - no shell on the way", "(initramfs)" not in text and "Rebooting automatically" not in text, text[-800:])
             else:
-                off = lv.wait_stopped(400)
-                text = lv.serial_text(since)
+                text, again = self.restarted(since, "the boot is not closed (PCR 15)", 400)
                 self.check("V4: Arch - tpm2-kira-boot close failed (no TPM)", "the boot is not closed (PCR 15)" in text, text[-800:])
-                self.check("V4: Arch - the machine powers off", off, text[-800:])
+                self.check("V4: Arch - the machine restarts", again, text[-800:])
                 self.check("V4: Arch - no shell on the way", "maintenance" not in text and "emergency mode" not in text.lower(), text[-800:])
+            self.check("V4: the system did not come up (no resume, no boot)", "login:" not in text, text[-400:])
+            m.log.save("V4-console.log", text)
         except Fail as e:
             self.check("V4: the boot stops at the failed close", False, str(e).split("\n")[0] + "\n" + lv.serial_text(since)[-800:])
-        self.check("V4: the system did not come up (no resume, no boot)", not m.wait_port(22, True, 5))
         # Back to the hibernated state, the TPM with it: the resume goes on.
         lv.revert("hibernated-v4")
         lv.drop_snapshot("hibernated-v4")
         self.resume_over_ssh("V4-reverted")
         self.after_resume("V4-reverted", before)
+
+    def way_out(self):
+        """A TPM that stays broken: docs/SSH.md's way out, taken as it says.
+        The boot without the close comes up with the passphrase's recipe.
+        Arch: the stub takes a passed command line (this machine has Secure
+        Boot off); Debian: GRUB's break=bottom - written into grub.cfg, as
+        the menu's editor is on the graphical console here - and the plan's
+        TPM part removed in the shell it gives."""
+        m, lv = self.m, self.lv
+        m.log.head("V8: the way out of a TPM that stays broken")
+        if self.distro == "debian":
+            rc, out = self.run("sed -i 's#^\\(\\s*linux\\s.*\\)$#\\1 break=bottom#' /boot/grub/grub.cfg; grep -c 'break=bottom' /boot/grub/grub.cfg", save="wayout-grub.log")
+            self.check("V8: Debian - break=bottom on GRUB's command line", rc == 0 and out.strip() != "0", out)
+        self.run("nohup sh -c 'sleep 2; systemctl poweroff' >/dev/null 2>&1 &")
+        if not lv.wait_stopped(300):
+            raise vmtest.Fail("V8: the guest did not power off")
+        lv.start(unlock=False, tpm=False)
+        since = lv.mark
+        if self.distro == "debian":
+            lv.expect(re.compile(r"Password for disk \S+: ?$", re.M), 600, since)
+            lv.send(vmtest.TEST_PASSWORD + "\r")
+            lv.expect(re.compile(r"Salt for disk \S+: ?$", re.M), 120, since)
+            lv.send(vmtest.TEST_SALT + "\r")
+            lv.expect(re.compile(r"\(initramfs\) ?$", re.M), 300, since)
+            lv.send("rm -r /etc/tpm2-kira/plan/tpm\r")
+            time.sleep(1)
+            lv.send("exit\r")
+        else:
+            deadline = time.time() + 120
+            while time.time() < deadline and "Reboot Into Firmware" not in lv.serial_text(since):
+                lv.send(" ")
+                time.sleep(0.5)
+            if "Reboot Into Firmware" not in lv.serial_text(since):
+                raise vmtest.Fail("V8: systemd-boot's menu did not show")
+            lv.send("e")
+            time.sleep(1)
+            lv.send("rd.systemd.mask=tpm2-kira-close.service ")
+            lv.send("\r")
+            lv.expect(re.compile(r"Password for disk \S+: ?$", re.M), 600, since)
+            lv.send(vmtest.TEST_PASSWORD + "\r")
+            lv.expect(re.compile(r"Salt for disk \S+: ?$", re.M), 120, since)
+            lv.send(vmtest.TEST_SALT + "\r")
+        lv.wait_ssh(600)
+        self.wait_login("V8")
+        text = lv.serial_text(since)
+        m.log.save("V8-console.log", text)
+        self.check("V8: the machine is up with its passphrase's recipe, without the TPM", not RESTART.search(text, text.find("Password for disk")), text[-800:])
+        rc, out = self.run("ls /dev/tpm* 2>&1; true", save="wayout-tpm.log")
+        self.check("V8: no TPM in this boot", "/dev/tpm0" not in out, out)
 
     def mem_sleep(self):
         rc, out = self.run("cat /sys/power/mem_sleep")
@@ -379,6 +458,7 @@ class Hib:
                 m.cycle(3)
             self.mem_sleep()
             self.failed_close()
+            self.way_out()
         except Fail as e:
             m.rep.issues.append("stopped: " + str(e).split("\n")[0])
         except Exception as e:

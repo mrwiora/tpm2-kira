@@ -325,9 +325,11 @@ and no secret either: the keys are in the TPM.
      `tpm2-kira-close.service` (after `tpm2-kira.service`, before
      `cryptsetup-pre.target`, required by `initrd.target`); Debian,
      `scripts/init-bottom/tpm2-kira`. Both with the TPM in the plan. A
-     close tries a refused extend once more; its failure powers the machine
-     off (Arch `FailureAction=poweroff-force`, Debian `poweroff -f`), which
-     needs a person: no shell with PCR 15 at zero, no reboot loop;
+     close tries a refused extend once more; its failure is a hard
+     reboot (Arch `FailureAction=reboot-force`, Debian `reboot -f`, then
+     SysRq `b`): no shell with PCR 15 at zero, and the reboot starts the PCRs
+     afresh. A TPM that stays broken keeps it rebooting (below, "A failed
+     close: the way out");
   3. right before a resume from hibernation (below).
   So the CA certifies nothing more until the next reboot, whatever an
   approval says: not in the running system, on Arch or Debian, with or
@@ -598,6 +600,27 @@ aSSH's own tests log in with OpenSSH's client (10.6) through a
   little: any OS booted on the machine reaches the same values. The CA
   never leaves this TPM either way; a certificate made so is good for the
   machine's names until the clients drop the CA line.
+- **A failed close: the way out.** A close that fails reboots the machine, so
+  a TPM that stays broken (no device within the wait, an extend refused) keeps
+  it rebooting; on Arch before any passphrase is asked (the close comes before
+  `cryptsetup-pre.target`), on Debian after the disk's prompts (init-bottom).
+  The way out is a boot that is told at the console not to close, on a command
+  line no slot accepts, so nothing is open in it:
+  - **Arch (UKI):** Secure Boot off in the firmware, which moves PCR 7, then at
+    systemd-boot's menu `e` and `rd.systemd.mask=tpm2-kira-close.service` (the
+    stub ignores a passed command line while Secure Boot is on, systemd-stub(7)).
+    The passphrase's recipe, or systemd's own prompt, opens the disk. Secure Boot
+    on again afterwards.
+  - **Debian (GRUB):** at GRUB's menu `e` (the superuser password `control`
+    advises), `break=bottom` on the `linux` line, which moves PCR 8. The disk's
+    prompts come, then a shell before init-bottom; there
+    `rm -r /etc/tpm2-kira/plan/tpm` and `exit`.
+  - **Either:** rescue media with the LUKS passphrase; nothing of tpm2-kira's is
+    needed to open a keyslot that is not its own.
+
+  In such a boot nothing closes PCR 15: should the TPM come back in it, close by
+  hand (`tpm2-kira-boot close`) and reboot. `hibernatetest.py` V8 walks both on
+  VMs without a TPM, Secure Boot off.
 - **An edited command line is no such shell on a UKI boot with Secure Boot
   on.** `loader.conf`'s `editor` defaults to on, and its man page (systemd
   262) says nothing of Secure Boot, but systemd-boot 262 refuses it there (the

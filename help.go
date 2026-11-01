@@ -557,7 +557,8 @@ over; the image closes once more whatever run did (Arch:
 tpm2-kira-close.service, required by initrd.target; Debian: init-bottom),
 and right before a resume from hibernation. Waits for the TPM (30 s at
 most) and tries a refused extend once more; a failure is the boot's: the
-machine powers off.
+machine reboots, and a TPM that stays broken keeps it rebooting (docs/SSH.md,
+"A failed close: the way out").
 `,
 
 	"unlock-key": `tpm2-kira-boot unlock-key [--socket PATH] [--wait DUR] [VOLUME]
