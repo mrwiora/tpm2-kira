@@ -1,8 +1,7 @@
-// Package nvslot is the slot: the blob in its NV index and its attestation
-// part, the generation index and the approved policy (PolicyAuthorize over
-// the PCRs and the generation) under the slot's policy and its close
-// (PCR 15), signed NV writes, the recovery
-// stash and the boot settings.
+// Package nvslot is the slot: its record in an EFI variable with its attestation
+// part and the phone channel's sealed secrets, the generation index and the
+// approved policy (PolicyAuthorize over the PCRs and the generation) under the
+// slot's policy and its close (PCR 15), signed NV writes and the boot settings.
 package nvslot
 
 import (

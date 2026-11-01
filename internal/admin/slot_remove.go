@@ -16,9 +16,9 @@ import (
 )
 
 // Deleting a slot is one act that removes everything the slot is made of:
-// the blob in the TPM (the TOTP key, the phones, the phone salt's release
-// key) with its generation index and record counter, the LUKS keyslots
-// bound to the slot by their token, and the recovery blobs stashed for it.
+// the record in its EFI variable (the TOTP key, the phones, the phone salt's
+// release key), the generation index and record counter in the TPM, and the LUKS
+// keyslots bound to the slot by their token.
 // 'control' offers exactly this one way to delete a slot; the expert
 // commands (slot delete, luks remove, phone unenrol, phone salt unenrol)
 // stay for taking one piece by hand. A deletion that fails halfway, or a
