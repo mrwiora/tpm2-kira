@@ -66,6 +66,11 @@ These are the points that matter, and why. The full command line is in
   variables: they hold no PK, so the machine starts in Setup Mode and boots
   anything until keys are enrolled (`go-uefi-slim/internal/vmcheck`); `reset`
   brings it back to Setup Mode.
+- **No reset by the watchdog** (`-global ICH9-LPC.noreboot=true`). q35's iTCO
+  watchdog resets a guest resumed from hibernation about 30 s after its first
+  login: nothing in the resumed system keeps the armed watchdog alive. A test
+  machine with that reset is no test of a resume; what a real machine does is
+  not shown by it (SECURITY-BACKGROUND.md §18).
 - **TPM:** `tpm-crb` on swtpm through a unix socket. `swtpm_setup
   --create-ek-cert --create-platform-cert` provisions it the way libvirt
   does: the phone and vault steps of `vmtest.py` read the EK certificate.

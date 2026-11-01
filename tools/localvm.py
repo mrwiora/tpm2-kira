@@ -138,6 +138,8 @@ class Machine:
                 secure = ["-global", "driver=cfi.pflash01,property=secure,value=on"]
             run(["qemu-system-x86_64", "-name", self.name, "-machine", machine, "-cpu", "host", "-smp", "2", "-m", self.mem,
                  "-rtc", "base=utc", *secure,
+                 # q35's iTCO watchdog would reset a resumed guest (LOCALVM.md).
+                 "-global", "ICH9-LPC.noreboot=true",
                  "-drive", f"if=pflash,format=raw,readonly=on,file={code}",
                  "-drive", f"if=pflash,format=raw,file={self.path('vars.fd')}",
                  "-drive", f"file={self.path('disk.qcow2')},if=virtio,format=qcow2,discard=unmap",
