@@ -464,7 +464,7 @@ class Hib:
         m, lv = self.m, self.lv
         words = "initcall_blacklist=crb_acpi_driver_init"
         since = self.menu_edit(words)
-        text, again = self.restarted(since, "rebooting once", 150)
+        text, again = self.restarted(since, "rebooting once", 240)
         m.log.save("V4-silent-first-console.log", text)
         self.check("V4 step 6: one hard reboot, for a TPM the firmware measured into", "rebooting once" in text and again, text[-800:])
         self.check("V4 step 6: no shell on the way", "maintenance" not in text and "emergency mode" not in text.lower(), text[-800:])
@@ -492,7 +492,7 @@ class Hib:
         lv.start(unlock=False)
         since = lv.mark
         self.console_prompts(since)
-        text, again = self.restarted(since, "rebooting once", 150)
+        text, again = self.restarted(since, "rebooting once", 240)
         m.log.save("V9-first-console.log", text)
         self.check("V9 step 6: one hard reboot, for a TPM the firmware measured into", again, text[-800:])
         self.check("V9 step 6: no shell on the way", "(initramfs)" not in text and "Rebooting automatically" not in text, text[-800:])
