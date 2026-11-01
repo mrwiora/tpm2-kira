@@ -1127,8 +1127,7 @@ func (c *controller) runSeal() error {
 	// slot's output would otherwise scroll the first one's code away, and
 	// it is shown this once. Between the two the person confirms the scan;
 	// the last screen stays until "Back to the overview?" is answered.
-	grub := c.facts.Status.GRUB // no fallback on GRUB (GRUBPCRs)
-	if slot0 && !fallback && !grub {
+	if slot0 && !fallback {
 		fmt.Fprint(c.out, clearScreen)
 		return SealFallback(c.o.TPMPath, "", "", algo, c.o.Debug)
 	}
@@ -1146,10 +1145,6 @@ func (c *controller) runSeal() error {
 		return err
 	}
 	if fallback || !withTOTP {
-		return nil
-	}
-	if grub {
-		fmt.Fprintf(c.out, "\nNo fallback slot: %s.\n", grubSelectionWhy)
 		return nil
 	}
 	if err := c.scanned("Slot 0"); err != nil {

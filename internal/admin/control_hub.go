@@ -25,7 +25,7 @@ type controlMenu struct {
 
 var controlMenus = []controlMenu{
 	{key: "keys", title: "Signing key and TOTP codes", required: true,
-		intro: "The signing key approves boot states and authorises every write to the TPM; with it the TOTP codes at boot are sealed into slot 0 (the boot as it is) and slot 1 (the fallback for a boot whose kernel changed unpredicted; none on GRUB). Everything else of step 2 builds on them."},
+		intro: "The signing key approves boot states and authorises every write to the TPM; with it the TOTP codes at boot are sealed into slot 0 (the boot as it is) and slot 1 (the fallback for a boot whose kernel changed unpredicted). Everything else of step 2 builds on them."},
 	{key: "phone", title: "Attestation by phone",
 		intro: "A phone (Marify, Bluetooth LE) checks the boot state against what it pinned and shows a code the machine shows too; it replaces Enter at the code screen, and it can hand back the salt of a disk key."},
 	{key: "disk", title: "Disk unlock",
@@ -171,8 +171,11 @@ func (c *controller) keysSteps() []controlStep {
 	// a boot whose kernel changed unpredicted. The step guides while slot 0
 	// is missing, or its code's fallback; then the slot lines show them and
 	// the step disappears ('tpm2-kira slot add' stays for sealing anew).
-	// On GRUB there is no fallback (GRUBPCRs): slot 0 is the one slot.
-	if slot0 == nil || slot0.TOTP && !fallback && !f.Status.GRUB {
+	fallbackSel := "PCRs 0 and 7 alone"
+	if f.Status.GRUB {
+		fallbackSel = "PCRs 7, 8 and 9 alone (on GRUB every slot includes 8 and 9)"
+	}
+	if slot0 == nil || slot0.TOTP && !fallback {
 		seal := controlStep{Key: "seal", Title: "The boot state (slot 0; a TOTP code if chosen)",
 			Run: (*controller).runSeal}
 		switch {
@@ -180,12 +183,10 @@ func (c *controller) keysSteps() []controlStep {
 			seal.Blocked = "no TPM: " + f.TPMErr
 		case f.Keys == "":
 			seal.Blocked = "needs the signing key"
-		case slot0 == nil && f.Status.GRUB:
-			seal.Explain = "Seals slot 0 to the boot state - to " + f.PCRs + ", evaluated for this machine and put up as the recommendation to acknowledge, or custom PCRs that include 8 and 9 instead. The vault, the TPM salt and a phone are enrolled into it. Asked: a TOTP code at boot too, to compare with your authenticator before you type anything. No fallback slot: " + grubSelectionWhy + "."
 		case slot0 == nil:
-			seal.Explain = "Seals slot 0 to the boot state - to " + f.PCRs + ", evaluated for this machine and put up as the recommendation to acknowledge, or custom PCRs instead. The vault, the TPM salt and a phone are enrolled into it. Asked: a TOTP code at boot too, to compare with your authenticator before you type anything - then slot 1 gets one sealed to PCRs 0 and 7 alone, the fallback for a boot whose kernel changed unpredicted."
+			seal.Explain = "Seals slot 0 to the boot state - to " + f.PCRs + ", evaluated for this machine and put up as the recommendation to acknowledge, or custom PCRs instead. The vault, the TPM salt and a phone are enrolled into it. Asked: a TOTP code at boot too, to compare with your authenticator before you type anything - then slot 1 gets one sealed to " + fallbackSel + ", the fallback for a boot whose kernel changed unpredicted."
 		default:
-			seal.Explain = "Slot 1, the fallback, is missing: seals a TOTP key to PCRs 0 and 7 alone into it, the code for a boot whose kernel changed unpredicted. Slot 0 stays as it is."
+			seal.Explain = "Slot 1, the fallback, is missing: seals a TOTP key to " + fallbackSel + " into it, the code for a boot whose kernel changed unpredicted. Slot 0 stays as it is."
 		}
 		steps = append(steps, seal)
 	}

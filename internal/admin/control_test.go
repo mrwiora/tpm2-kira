@@ -554,8 +554,8 @@ func TestImageNewerThanBoot(t *testing.T) {
 }
 
 // GRUB: without a superuser password its entry can be edited at the
-// console - red, with the advice; with one, met. No fallback slot is asked
-// for there, and the status notes no slot without PCRs 8 and 9.
+// console - red, with the advice; with one, met. The fallback asked for
+// there is 7, 8 and 9, and the status notes a slot without PCRs 8 and 9.
 func TestControlGRUB(t *testing.T) {
 	c := wired()
 	c.facts.PCRs = "0e,2e,7e,8e,9e"
@@ -571,19 +571,21 @@ func TestControlGRUB(t *testing.T) {
 
 	c.facts.Keys = "local key files"
 	c.facts.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,8e,9e", TOTP: true, Signed: true}}
-	for _, st := range c.menuSteps("keys") {
-		if st.Key == "seal" {
-			t.Fatalf("a fallback asked for on GRUB: %+v", st)
-		}
+	if keys := c.menuSteps("keys"); keys[1].Key != "seal" || !strings.Contains(keys[1].Explain, "Slot 1, the fallback, is missing: seals a TOTP key to PCRs 7, 8 and 9 alone") {
+		t.Fatalf("the fallback on GRUB: %+v", keys[1])
 	}
 	c.facts.Status.GRUB = false
-	if keys := c.menuSteps("keys"); keys[1].Key != "seal" || !strings.Contains(keys[1].Explain, "Slot 1, the fallback, is missing") {
+	if keys := c.menuSteps("keys"); keys[1].Key != "seal" || !strings.Contains(keys[1].Explain, "seals a TOTP key to PCRs 0 and 7 alone") {
 		t.Fatalf("the fallback elsewhere: %+v", keys[1])
 	}
 
-	r := StatusReport{GRUB: true, Slots: []StatusSlot{{Slot: 0, TOTP: true, Signed: true}, {Slot: 1, TOTP: true, Signed: true, Fallback: true, NoGRUBPCRs: true}}}
+	r := StatusReport{GRUB: true, Slots: []StatusSlot{{Slot: 0, TOTP: true, Signed: true}, {Slot: 1, TOTP: true, Signed: true, NoGRUBPCRs: true}}}
 	notes := strings.Join(statusNotes(r), "\n")
-	if !strings.Contains(notes, "slot 1 lacks PCR 8 or 9") || !strings.Contains(notes, "GRUB has no password") || strings.Contains(notes, "no fallback slot") {
+	if !strings.Contains(notes, "slot 1 lacks PCR 8 or 9") || !strings.Contains(notes, "GRUB has no password") || !strings.Contains(notes, "no fallback slot (PCRs 7e,8e,9e alone)") {
 		t.Fatalf("the notes on GRUB:\n%s", notes)
+	}
+	r.Slots[1] = StatusSlot{Slot: 1, PCRs: "7e,8e,9e", TOTP: true, Signed: true, Fallback: true}
+	if notes := strings.Join(statusNotes(r), "\n"); strings.Contains(notes, "no fallback slot") {
+		t.Fatalf("the GRUB fallback not seen:\n%s", notes)
 	}
 }

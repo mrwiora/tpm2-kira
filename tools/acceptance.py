@@ -438,7 +438,7 @@ def check_installed(t, distro, expected, mode_wanted, luks_device, log, rep):
         rep.check("status: a slot is sealed", len(slots) > 0)
         rep.check("status: every slot signed by this machine's key", all(s["signed"] for s in slots),
                   "; ".join(f"slot {s['slot_number']}: {s.get('sign_reason', '')}" for s in slots if not s["signed"]))
-        rep.check("status: a fallback slot (PCRs 0 and 7), none on GRUB", status.get("grub") or any(s["fallback"] for s in slots))
+        rep.check("status: a fallback slot (PCRs 0 and 7; 7, 8 and 9 on GRUB)", any(s["fallback"] for s in slots))
         rep.check("status: every slot's generation matches (no approval due)",
                   all("matches" in s["generation_state"] for s in slots),
                   "; ".join(f"slot {s['slot_number']}: {s['generation_state']}" for s in slots))

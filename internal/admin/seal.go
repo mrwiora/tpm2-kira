@@ -99,8 +99,8 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	if err := checkGRUBSelection(specs, GRUBBoot("")); err != nil {
 		return fmt.Errorf("cannot seal: %w", err)
 	}
-	// The fallback slot is sealed to 0 and 7 alone by design (default_pcrs.go).
-	if !(pcrsStr == FallbackPCRSelection && nvramIndex == nvslot.ResolveNVRAMIndex(FallbackSlot)) {
+	// The fallback slot is sealed to 0 and 7 alone (7, 8, 9 on GRUB) by design (default_pcrs.go).
+	if !((pcrsStr == FallbackPCRSelection || pcrsStr == GRUBFallbackPCRSelection) && nvramIndex == nvslot.ResolveNVRAMIndex(FallbackSlot)) {
 		measure.WarnAboutPCRSelection(specs)
 	}
 	measure.WarnAboutHashAlgo(hashAlgo)

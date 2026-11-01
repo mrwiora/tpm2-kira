@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -37,7 +36,7 @@ type StatusSlot struct {
 	Slot        int            `json:"slot_number"`
 	NVRAMIndex  string         `json:"nvram_index"`
 	PCRs        string         `json:"pcrs"`
-	Fallback    bool           `json:"fallback"` // sealed to 0 and 7 alone
+	Fallback    bool           `json:"fallback"` // sealed to 0 and 7 alone (7, 8 and 9 on GRUB)
 	TOTP        bool           `json:"totp"`     // the slot shows a TOTP code (a method of its own)
 	Generation  uint64         `json:"generation"`
 	GenState    string         `json:"generation_state"`
@@ -179,16 +178,6 @@ func collectStatus(o StatusOptions) StatusReport {
 	return r
 }
 
-// isFallbackSelection says whether specs are PCRs 0 and 7 alone.
-func isFallbackSelection(specs []measure.PCRSpec) bool {
-	if len(specs) != 2 {
-		return false
-	}
-	idx := []int{specs[0].Index, specs[1].Index}
-	sort.Ints(idx)
-	return idx[0] == 0 && idx[1] == 7
-}
-
 // statusNotes are the checks across the parts: what does not fit, and
 // what to do about it.
 func statusNotes(r StatusReport) []string {
@@ -221,8 +210,12 @@ func statusNotes(r StatusReport) []string {
 	case !r.GRUBPassword:
 		notes = append(notes, "GRUB has no password (risk: the GRUB entry can be edited at the console): "+GRUBAdvice)
 	}
-	if r.TPMError == "" && codes && !fallback && !r.GRUB {
-		notes = append(notes, fmt.Sprintf("no fallback slot (PCRs %s alone) for a boot whose kernel changed unpredicted: tpm2-kira slot add --nvram %d --pcrs %s", FallbackPCRSelection, FallbackSlot, FallbackPCRSelection))
+	if r.TPMError == "" && codes && !fallback {
+		sel := FallbackPCRSelection
+		if r.GRUB {
+			sel = GRUBFallbackPCRSelection
+		}
+		notes = append(notes, fmt.Sprintf("no fallback slot (PCRs %s alone) for a boot whose kernel changed unpredicted: tpm2-kira slot add --nvram %d --pcrs %s", sel, FallbackSlot, sel))
 	}
 
 	slotThere := map[int]bool{}

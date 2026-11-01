@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
@@ -19,16 +21,23 @@ import (
 // 9, predicted from grub.cfg and the files it loads. And a second slot
 // sealed to 0 and 7 alone - the fallback: when a kernel or boot loader
 // change was not predicted, the firmware and the secure boot state still
-// vouch for the machine, and that slot's code still shows. Not on GRUB:
-// Secure Boot checks GRUB and the kernel there, not GRUB's command line or
-// the initrd, so someone at the console edits the entry (break=,
+// vouch for the machine, and that slot's code still shows. One rule for
+// every slot: PCR 7 and the image's PCRs; slot 0 adds the platform (0, 2).
+// On GRUB, Secure Boot checks GRUB and the kernel, not GRUB's command line
+// or the initrd, so someone at the console edits the entry (break=,
 // rdinit=/bin/sh) and has a shell before the close, with PCRs 0 and 7 as
-// approved. On a GRUB boot every slot includes PCRs 8 and 9, which see
-// that edit (GRUBPCRs).
+// approved: there the image's PCRs are 8 and 9 (GRUBPCRs), which see that
+// edit, and the fallback is 7, 8 and 9 - a slot without 8 and 9 is
+// refused.
 
 // FallbackPCRSelection is what the fallback slot is sealed to; without an
-// event log the registers as they are (FallbackRegisterSelection).
+// event log the registers as they are (FallbackRegisterSelection); on a
+// GRUB boot GRUBFallbackPCRSelection.
 const FallbackPCRSelection = "0e,7e"
+
+// GRUBFallbackPCRSelection is the fallback slot's selection on a GRUB
+// boot: the secure boot state and GRUB's PCRs 8 and 9.
+const GRUBFallbackPCRSelection = "7e,8e,9e"
 
 // FallbackRegisterSelection is the fallback selection read from the
 // registers, for a machine whose event log cannot be read.
@@ -141,7 +150,8 @@ func GRUBPassword(path string) (bool, error) {
 }
 
 // defaultFallbackSelection is the fallback slot's selection, from the
-// event log when there is one to read.
+// event log when there is one to read: GRUBFallbackPCRSelection on a GRUB
+// boot.
 func defaultFallbackSelection(eventlogPath string) string {
 	if eventlogPath == "" {
 		eventlogPath = measure.DefaultEventlogPath
@@ -149,7 +159,21 @@ func defaultFallbackSelection(eventlogPath string) string {
 	if _, err := measure.ReadRawEventLogFromPath(eventlogPath); err != nil {
 		return FallbackRegisterSelection
 	}
+	if GRUBBoot(eventlogPath) {
+		return GRUBFallbackPCRSelection
+	}
 	return FallbackPCRSelection
+}
+
+// isFallbackSelection says whether specs are a fallback slot's: PCRs 0
+// and 7 alone, or 7, 8 and 9 alone (GRUB).
+func isFallbackSelection(specs []measure.PCRSpec) bool {
+	var idx []int
+	for _, s := range specs {
+		idx = append(idx, s.Index)
+	}
+	sort.Ints(idx)
+	return slices.Equal(idx, []int{0, 7}) || slices.Equal(idx, []int{7, 8, 9})
 }
 
 // defaultPCRSelection decides from the events: systemd-stub's section
@@ -207,7 +231,7 @@ func findUKI() string {
 // this boot measured and, with TOTP, slot 1 to the fallback selection -
 // a second code for a boot whose kernel changed unpredicted, which only a
 // code is for - with the signing key at the paths given ("" for the
-// defaults). On a GRUB boot there is no fallback (GRUBPCRs).
+// defaults). On a GRUB boot the fallback is 7, 8 and 9 (GRUBPCRs).
 func SealDefaults(tpmPath, pubKeyPath, privKeyPath string, algo measure.PCRHashAlgo, debug, withTOTP bool) error {
 	sel, why := DefaultPCRSelection("", algo)
 	fmt.Printf("PCRs: %s (%s)\n\n", sel, why)
@@ -217,24 +241,23 @@ func SealDefaults(tpmPath, pubKeyPath, privKeyPath string, algo measure.PCRHashA
 	if !withTOTP {
 		return nil
 	}
-	if GRUBBoot("") {
-		fmt.Printf("\nNo fallback slot: %s. A fallback with PCRs 8 and 9 would add nothing to slot 0.\n", grubSelectionWhy)
-		return nil
-	}
 	return SealFallback(tpmPath, pubKeyPath, privKeyPath, algo, debug)
 }
 
-// SealFallback seals slot 1, the fallback, and says what it is for. Not
-// on a GRUB boot.
+// SealFallback seals slot 1, the fallback, and says what it is for.
 func SealFallback(tpmPath, pubKeyPath, privKeyPath string, algo measure.PCRHashAlgo, debug bool) error {
-	if GRUBBoot("") {
-		return fmt.Errorf("no fallback slot: %s", grubSelectionWhy)
-	}
 	fallback := defaultFallbackSelection("")
 	fmt.Printf("\n=== Slot %d: the fallback, sealed to PCRs %s alone ===\n", FallbackSlot, fallback)
-	fmt.Println("Its code shows in a boot whose kernel or boot loader changed unpredicted, as long")
-	fmt.Println("as the firmware and the secure boot state are the same; it says the machine is")
-	fmt.Println("not simply lost. Pair this one with your authenticator too.")
+	if fallback == GRUBFallbackPCRSelection {
+		fmt.Println("Its code shows in a boot whose firmware or option ROMs changed unpredicted, as long")
+		fmt.Println("as the secure boot state and GRUB's measurements are the same (on GRUB no slot")
+		fmt.Println("may lack PCRs 8 and 9); it says the machine is not simply lost.")
+	} else {
+		fmt.Println("Its code shows in a boot whose kernel or boot loader changed unpredicted, as long")
+		fmt.Println("as the firmware and the secure boot state are the same; it says the machine is")
+		fmt.Println("not simply lost.")
+	}
+	fmt.Println("Pair this one with your authenticator too.")
 	fmt.Println()
 	return Seal(tpmPath, fallback, nvslot.ResolveNVRAMIndex(FallbackSlot), pubKeyPath, privKeyPath, debug, algo, true, true)
 }

@@ -25,8 +25,8 @@ package admin
 // PCR 0 (firmware), 2 (option ROMs) and 7 (Secure Boot), and the image -
 // PCR 11 with a unified kernel image, PCR 8 and 9 with GRUB. Slot 1, the
 // lower, reads PCR 7 alone: a kernel update not approved yet, a new option
-// ROM or a firmware update leave it standing. Not on GRUB, where Secure
-// Boot does not cover the command line and the initrd: slot 0 alone.
+// ROM or a firmware update leave it standing; on GRUB, where Secure Boot
+// does not cover the command line and the initrd, with PCRs 8 and 9.
 //
 // The CA, its approvals with it, lives in the EFI variable KIRAasshCA, not
 // in the image: an approval of PCR 11 carried inside the image it measures
@@ -73,8 +73,8 @@ const sshCAUnapproved = "the SSH CA has no approval of the PCRs as the next boot
 // this boot's event log as 'slot add' decides its slot 0: the firmware, the
 // option ROMs, the Secure Boot state, and the image's PCRs (11 with a
 // unified kernel image, 8 and 9 with GRUB). Slot 1, the lower, is the
-// Secure Boot state alone - not on a GRUB boot, where Secure Boot does not
-// cover GRUB's command line and the initrd (GRUBPCRs): there slot 0 alone.
+// Secure Boot state alone - with GRUB's PCRs 8 and 9 on a GRUB boot, where
+// Secure Boot does not cover GRUB's command line and the initrd (GRUBPCRs).
 func sshCASlots(algo measure.PCRHashAlgo) (map[int][]int, error) {
 	return sshCASlotsFor(DefaultPCRSelection("", algo))
 }
@@ -91,7 +91,7 @@ func sshCASlotsFor(sel, why string) (map[int][]int, error) {
 		slot0 = append(slot0, s.Index)
 	}
 	if strings.HasPrefix(why, grubBootWhy) {
-		return map[int][]int{0: slot0}, nil
+		return map[int][]int{0: slot0, 1: append([]int{7}, GRUBPCRs...)}, nil
 	}
 	return map[int][]int{0: slot0, 1: {7}}, nil
 }

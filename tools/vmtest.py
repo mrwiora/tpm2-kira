@@ -43,8 +43,8 @@ What it does, each step a check in the report:
      after each boot: the key was answered, no tpm2-kira error; the boot is
      closed (PCR 15 extended, run's close in the log, Arch's close unit
      ran), every slot closed and slot 0's TOTP key refusing; no cap unit;
-     Debian (GRUB): one TOTP slot (no fallback, a PCR 0,7 slot refused),
-     the SSH CA with slot 0 alone
+     Debian (GRUB): every slot with PCRs 8 and 9 - the fallback 7,8,9, a
+     PCR 0,7 slot refused, the SSH CA's slot 1 = 7,8,9
   7b. the salt in this TPM (0x1200): luks enrol --salt tpm, luks status and
      luksDump name the recipe, the plan takes the part; a boot asks the
      password alone over SSH (the TPM opened the salt during the hold);
@@ -347,9 +347,7 @@ class Machine:
         self.t = acceptance.Target(host, user, ssh_port, password, None, self.log)
         self.secrets = []
         self.sessions = 0
-        # The TOTP slots slot add makes: 0 and the fallback 1 - not on
-        # Debian's GRUB, where no slot may lack PCRs 8 and 9.
-        self.slots = [0] if distro == "debian" else [0, 1]
+        self.slots = [0, 1]  # the TOTP slots slot add makes: 0 and the fallback 1
 
     # -- helpers ------------------------------------------------------------
 
@@ -463,8 +461,8 @@ class Machine:
         if not self.check("slot add seals slots %s, each with its secret" % " and ".join(map(str, self.slots)), len(self.secrets) == len(self.slots), out[-600:]):
             raise Fail("no slots")
         if self.distro == "debian":
-            self.check("GRUB: slot add makes no fallback slot, and says why", "No fallback slot: on a GRUB boot every slot includes PCRs 8 and 9" in out, out[-600:])
-            rc, out = self.run("tpm2-kira slot add --totp --nvram 1 --pcrs 0,7 2>&1", save="slot-add-grub-07.log")
+            self.check("GRUB: the fallback slot 1 is sealed to 7e,8e,9e", "the fallback, sealed to PCRs 7e,8e,9e alone" in out, out[-600:])
+            rc, out = self.run("tpm2-kira slot add --totp --nvram 2 --pcrs 0,7 2>&1", save="slot-add-grub-07.log")
             self.check("GRUB: slot add refuses a slot without PCRs 8 and 9", "PCR 8 is not selected: on a GRUB boot" in out, out[-400:])
         rc, mid = self.run(f"test -e {self.MID_VAR} && echo sealed")
         self.check("slot 0 seals the machine-id in the EFI variable KIRAmachineID", "sealed" in mid and "Sealed the machine-id" in out, out[-400:])
@@ -685,10 +683,10 @@ class Machine:
                            "grep -c 'tpm2-kira-boot cap' /usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira 2>&1; true")
         self.check(f"boot {n}: no cap unit or cap step", "No such file" in out.split("\n")[0] and not re.search(r"^[1-9]", out, re.M), out.strip())
         if self.distro == "debian":
-            # GRUB: the SSH CA has slot 0 alone (PCRs 8 and 9 in it).
+            # GRUB: every slot of the SSH CA has PCRs 8 and 9.
             rc, out = self.run("grep '^ASSH_CA_SLOT_' /etc/tpm2-kira/assh.conf 2>&1", save=f"boot{n}-ca-slots.log")
-            self.check(f"boot {n}: GRUB - the SSH CA has slot 0 alone, with PCRs 8 and 9",
-                       re.search(r"^ASSH_CA_SLOT_0=0,2,7,8,9$", out, re.M) is not None and "ASSH_CA_SLOT_1" not in out, out.strip())
+            self.check(f"boot {n}: GRUB - every slot of the SSH CA has PCRs 8 and 9",
+                       re.search(r"^ASSH_CA_SLOT_0=0,2,7,8,9$", out, re.M) is not None and re.search(r"^ASSH_CA_SLOT_1=7,8,9$", out, re.M) is not None, out.strip())
 
     def rebuild(self):
         cmd = "update-initramfs -u" if self.distro == "debian" else "mkinitcpio -P"

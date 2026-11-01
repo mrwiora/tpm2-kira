@@ -13,8 +13,8 @@ the boot is then answered at the serial console alone, as a person at the
 machine would:
 
   totp      slot add --totp, no keyslot of tpm2-kira's: the codes of slots
-            0 and 1 (Debian's GRUB: slot 0 alone) at the console are the
-            ones computed from the secrets; Enter; the passphrase opens the
+            0 and 1 at the console are the ones computed from the secrets
+            (on Debian's GRUB slot 1 reads 7, 8 and 9); Enter; the passphrase opens the
             disk; the close (PCR 15) ended the slots
   hashpwd2  luks enrol --password typed --salt typed (0x1100), no slot:
             no code screen; the password and the salt typed open the disk
@@ -174,8 +174,7 @@ class Case:
         self.check("setup --local", "Setup Complete" in out, out[-400:])
         rc, out = self.m.run("tpm2-kira slot add --totp 2>&1", save="slot-add.log")
         secrets = re.findall(r"^Secret: ([A-Z2-7]+)", out, re.M)
-        # Debian boots GRUB: no fallback slot (no slot without PCRs 8 and 9).
-        slots = 1 if self.m.distro == "debian" else 2
+        slots = 2
         if not self.check(f"slot add --totp seals {slots} slot(s), each with its secret", len(secrets) == slots, out[-600:]):
             return
         # The volume routed through tpm2-kira, as control's step does: its
