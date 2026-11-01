@@ -1813,7 +1813,7 @@ channel: that is swtpm and Marify's emulator test.
 | Step 7's way out as a rescue | only the mechanics (V8), with no TPM and no broken TPM before it |
 | `gate-child`, the radio | no phone or Bluetooth in the VM runs; the protocol is Marify's emulator and swtpm tests |
 | sshd's `PerSourcePenalties` as the cause of earlier Arch hibernate stops | switched off in the test, never measured |
-| A hard reboot with tpm2-kira's prompt open took 95 s | `systemd-shutdown` waits for `run`. Not fixed; it only delays the failure path |
+| The watchdog after a resume, on real hardware | On the VM a resumed system did not keep an armed watchdog alive: q35's iTCO reset it about 30 s after its first login. The test machine now switches that reset off (`ICH9-LPC.noreboot`, tools/LOCALVM.md; `fresh`'s PCRs 0-9, 11, 14, 15 unchanged), so a real machine's behaviour here is not shown |
 
 ---
 
