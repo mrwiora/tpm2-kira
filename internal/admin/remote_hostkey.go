@@ -40,7 +40,6 @@ package admin
 import (
 	"crypto"
 	"crypto/x509"
-	"debug/pe"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -55,6 +54,7 @@ import (
 	"github.com/tpm2-trust/assh/config"
 	"github.com/tpm2-trust/assh/hostkey"
 	"github.com/tpm2-trust/assh/persist"
+	"github.com/tpm2-trust/go-uefi-slim/uki"
 )
 
 const (
@@ -402,25 +402,12 @@ func readSSHCA(conf config.Config, tpmPath string) sshCAState {
 
 // nextPCRSignatures are the signatures the next boot's image carries; none
 // when there is no such image, or it has none.
-func nextPCRSignatures() hostkey.PCRSignatures {
-	uki := findUKI()
-	if uki == "" {
+func nextPCRSignatures() uki.PCRSignatures {
+	path := findUKI()
+	if path == "" {
 		return nil
 	}
-	f, err := pe.Open(uki)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	s := f.Section(".pcrsig")
-	if s == nil {
-		return nil
-	}
-	b, err := s.Data()
-	if err != nil {
-		return nil
-	}
-	sigs, err := hostkey.ParsePCRSignatures(b)
+	sigs, err := measure.UKIPCRSignatures(path)
 	if err != nil {
 		return nil
 	}
@@ -429,7 +416,7 @@ func nextPCRSignatures() hostkey.PCRSignatures {
 
 // nextApprovals are ca's approvals of values, one for each slot that has
 // one, in slot order.
-func nextApprovals(ca *hostkey.CA, values map[int][]byte, sigs hostkey.PCRSignatures) []hostkey.Approval {
+func nextApprovals(ca *hostkey.CA, values map[int][]byte, sigs uki.PCRSignatures) []hostkey.Approval {
 	var as []hostkey.Approval
 	for _, s := range ca.Slots {
 		if a := ca.Only(func(a hostkey.Approval) bool { return a.Slot == s.Number }).Approved(values, sigs); a != nil {

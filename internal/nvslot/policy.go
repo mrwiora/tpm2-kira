@@ -147,7 +147,7 @@ func checkSignedPCRs(tpmDev transport.TPM, blob *SealedBlob) (*signedPCRs, error
 		return nil, fmt.Errorf("%w: %w", ErrNotSigned, err)
 	}
 	pol := measure.SignedPolicy(pcrs[0], values[pcrs[0]], bank)
-	sig := sigs.Find(blob.Payload.PCRKey, bank, pcrs, pol)
+	sig := measure.FindPCRSignature(sigs, blob.Payload.PCRKey, bank, pcrs, pol)
 	if sig == nil {
 		return nil, ErrNotSigned
 	}

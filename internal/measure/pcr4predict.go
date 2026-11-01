@@ -5,15 +5,14 @@ import (
 	"crypto"
 	_ "crypto/sha1"   // the SHA-1 bank's Authenticode hash
 	_ "crypto/sha256" // the SHA-256 bank's
-	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode/utf16"
 
 	"github.com/google/go-attestation/attest"
 	"github.com/tpm2-trust/go-uefi-slim/authenticode"
+	"github.com/tpm2-trust/go-uefi-slim/uki"
 )
 
 // PCR 4 holds what the firmware loaded: EV_EFI_BOOT_SERVICES_APPLICATION, the
@@ -75,7 +74,7 @@ func predictPCR4(events []attest.Event, ukiPath string, algo PCRHashAlgo) (*PCR4
 		digest := e.Digest
 		if uint32(e.Type) == evBootServicesApplication {
 			seen++
-			path := imageLoadPath(e.Data)
+			path := uki.ImageLoadPath(e.Data)
 			file := espFile(path, ukiPath)
 			next, err := fileAuthenticode(file, algo)
 			switch {
@@ -113,6 +112,14 @@ func espFile(path, ukiPath string) string {
 	return ""
 }
 
+// cryptoHash is the bank's hash function.
+func (h PCRHashAlgo) cryptoHash() crypto.Hash {
+	if h == PCRHashAlgoSHA1 {
+		return crypto.SHA1
+	}
+	return crypto.SHA256
+}
+
 // fileAuthenticode is the file's Authenticode hash in the bank's hash.
 func fileAuthenticode(path string, algo PCRHashAlgo) ([]byte, error) {
 	if path == "" {
@@ -122,41 +129,5 @@ func fileAuthenticode(path string, algo PCRHashAlgo) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := crypto.SHA256
-	if algo == PCRHashAlgoSHA1 {
-		h = crypto.SHA1
-	}
-	return authenticode.HashWith(img, h)
-}
-
-// imageLoadPath is the file path in a UEFI_IMAGE_LOAD_EVENT's device path
-// (TCG PC Client Platform Firmware Profile): location, length and link address
-// of the image, the device path's length and the path, whose media file path
-// nodes (type 4, subtype 4) hold the file, in UTF-16. "" when it names none.
-func imageLoadPath(data []byte) string {
-	const header = 32
-	if len(data) < header {
-		return ""
-	}
-	length := binary.LittleEndian.Uint64(data[24:])
-	if length > uint64(len(data)-header) {
-		return ""
-	}
-	dp := data[header : header+int(length)]
-	var path strings.Builder
-	for len(dp) >= 4 {
-		nodeLen := int(binary.LittleEndian.Uint16(dp[2:]))
-		if nodeLen < 4 || nodeLen > len(dp) {
-			return ""
-		}
-		if dp[0] == 4 && dp[1] == 4 {
-			units := make([]uint16, 0, (nodeLen-4)/2)
-			for b := dp[4:nodeLen]; len(b) >= 2 && (b[0] != 0 || b[1] != 0); b = b[2:] {
-				units = append(units, binary.LittleEndian.Uint16(b))
-			}
-			path.WriteString(string(utf16.Decode(units)))
-		}
-		dp = dp[nodeLen:]
-	}
-	return path.String()
+	return authenticode.HashWith(img, algo.cryptoHash())
 }

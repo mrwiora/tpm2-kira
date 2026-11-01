@@ -12,6 +12,7 @@ import (
 	"github.com/tpm2-trust/assh/config"
 	"github.com/tpm2-trust/assh/hostkey"
 	"github.com/tpm2-trust/assh/persist"
+	"github.com/tpm2-trust/go-uefi-slim/uki"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/sys/unix"
 )
@@ -79,10 +80,10 @@ func PrepareHostKey(tpmPath string, conf config.Config) (hostKeyAtBoot, error) {
 // bootPCRSignatures are the image's signatures of PCR 11, for a CA slot that
 // takes it signed: at path (ASSH_PCR_SIGNATURE) or where systemd-stub leaves
 // them. None: such a slot is not met.
-func bootPCRSignatures(path string) hostkey.PCRSignatures {
+func bootPCRSignatures(path string) uki.PCRSignatures {
 	for _, p := range append([]string{path}, measure.BootPCRSignaturePaths...) {
 		if b, err := os.ReadFile(p); err == nil {
-			if sigs, err := hostkey.ParsePCRSignatures(b); err == nil {
+			if sigs, err := uki.ParsePCRSignatures(b); err == nil {
 				return sigs
 			}
 		}

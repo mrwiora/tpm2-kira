@@ -1,52 +1,25 @@
 package measure
 
 import (
-	"bytes"
 	"crypto/sha256"
-	"debug/pe"
-	"encoding/base64"
 	"encoding/binary"
-	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
-	"slices"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/go-uefi-slim/uki"
 )
-
-// The PCR key's signatures as systemd writes them (systemd-measure sign --json,
-// a UKI's .pcrsig; systemd-stub hands them over to the initrd):
-//
-//	{"sha256": [{"pcrs": [11], "pkfp": "...", "pol": "<hex>", "sig": "<base64>"}], ...}
-
-// PCRSignatures are those signatures, by the bank's name.
-type PCRSignatures map[string][]struct {
-	PCRs []int  `json:"pcrs"`
-	Pkfp string `json:"pkfp"`
-	Pol  string `json:"pol"`
-	Sig  string `json:"sig"`
-}
 
 // BootPCRSignaturePaths are where the initrd finds the booted image's
 // signatures: systemd-stub's file, and systemd's copy of it. A var: the tests
 // point it elsewhere.
 var BootPCRSignaturePaths = []string{"/run/systemd/tpm2-pcr-signature.json", "/.extra/tpm2-pcr-signature.json"}
 
-// ParsePCRSignatures reads systemd's JSON (trailing NULs allowed, as a section
-// has them).
-func ParsePCRSignatures(b []byte) (PCRSignatures, error) {
-	var p PCRSignatures
-	if err := json.Unmarshal(bytes.TrimRight(b, "\x00"), &p); err != nil {
-		return nil, fmt.Errorf("not systemd's PCR signatures: %w", err)
-	}
-	return p, nil
-}
-
 // ReadBootPCRSignatures reads the booted image's signatures from the first of
 // BootPCRSignaturePaths that is there.
-func ReadBootPCRSignatures() (PCRSignatures, error) {
+func ReadBootPCRSignatures() (uki.PCRSignatures, error) {
 	var last error
 	for _, path := range BootPCRSignaturePaths {
 		b, err := os.ReadFile(path)
@@ -54,30 +27,17 @@ func ReadBootPCRSignatures() (PCRSignatures, error) {
 			last = err
 			continue
 		}
-		return ParsePCRSignatures(b)
+		return uki.ParsePCRSignatures(b)
 	}
 	return nil, fmt.Errorf("no signatures of PCR 11 from the image: %w", last)
 }
 
-// Find is the signature by the key in PKIX DER, for pcrs in bank, over pol;
-// nil when there is none. It is checked here.
-func (p PCRSignatures) Find(key []byte, bank PCRHashAlgo, pcrs []int, pol []byte) []byte {
-	for _, e := range p[string(bank)] {
-		if !slices.Equal(e.PCRs, pcrs) {
-			continue
-		}
-		if got, err := hex.DecodeString(e.Pol); err != nil || !bytes.Equal(got, pol) {
-			continue
-		}
-		sig, err := base64.StdEncoding.DecodeString(e.Sig)
-		if err != nil {
-			continue
-		}
-		if attest.VerifyPCRSignature(key, pol, sig) == nil {
-			return sig
-		}
-	}
-	return nil
+// FindPCRSignature is the signature in p by the PCR key in PKIX DER, for pcrs in
+// bank, over pol; nil when there is none. It is checked here.
+func FindPCRSignature(p uki.PCRSignatures, key []byte, bank PCRHashAlgo, pcrs []int, pol []byte) []byte {
+	return p.Find(string(bank), pcrs, pol, func(sig []byte) error {
+		return attest.VerifyPCRSignature(key, pol, sig)
+	})
 }
 
 // SignedPolicy is what the PCR key signs for one PCR's value: the PolicyPCR
@@ -93,21 +53,20 @@ func SignedPolicy(pcr int, value []byte, bank PCRHashAlgo) []byte {
 }
 
 // UKIPCRSignatures reads the .pcrsig section of the image at path.
-func UKIPCRSignatures(path string) (PCRSignatures, error) {
-	f, err := pe.Open(path)
+func UKIPCRSignatures(path string) (uki.PCRSignatures, error) {
+	i, err := uki.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	defer f.Close()
-	s := f.Section(".pcrsig")
-	if s == nil {
+	defer i.Close()
+	p, err := i.PCRSignatures()
+	if errors.Is(err, uki.ErrNoSection) {
 		return nil, fmt.Errorf("%s has no .pcrsig section", path)
 	}
-	b, err := s.Data()
 	if err != nil {
 		return nil, fmt.Errorf("%s: .pcrsig: %w", path, err)
 	}
-	return ParsePCRSignatures(b)
+	return p, nil
 }
 
 // CheckUKIPCRSig checks that the image's .pcrsig holds what the slots need and
@@ -138,7 +97,7 @@ func CheckUKIPCRSig(path string, key []byte) error {
 		if err != nil {
 			return err
 		}
-		if sigs.Find(key, algo, []int{TPM2PCRKernelBoot}, SignedPolicy(TPM2PCRKernelBoot, value, algo)) == nil {
+		if FindPCRSignature(sigs, key, algo, []int{TPM2PCRKernelBoot}, SignedPolicy(TPM2PCRKernelBoot, value, algo)) == nil {
 			return fmt.Errorf("%s: .pcrsig holds no signature by the PCR key of PCR 11 at enter-initrd (%s)", path, algo)
 		}
 	}

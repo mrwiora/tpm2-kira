@@ -2,13 +2,14 @@ package measure
 
 import (
 	"bytes"
-	"debug/pe"
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tpm2-trust/go-uefi-slim/uki"
 )
 
 // DefaultUKIPath is the conventional unified kernel image location.
@@ -17,79 +18,28 @@ const DefaultUKIPath = "/boot/EFI/Linux/arch-linux.efi"
 // TPM2PCRKernelBoot is the PCR systemd-stub measures the unified kernel image into.
 const TPM2PCRKernelBoot = 11
 
-// Order in which systemd-stub measures unified kernel image sections into
-// PCR 11. ".pcrsig" is deliberately absent: it carries the signature over
-// these very measurements and is therefore never itself measured.
-var UKIMeasuredSections = []string{
-	".linux",
-	".osrel",
-	".cmdline",
-	".initrd",
-	".ucode",
-	".splash",
-	".dtb",
-	".uname",
-	".sbat",
-	".pcrpkey",
-}
-
 // MeasurePointPhases are the boot phases systemd has already measured into
 // PCR 11 by the time tpm2-kira runs. systemd-pcrphase-initrd is ordered before
 // cryptsetup-pre.target, and tpm2-kira orders itself after it.
 var MeasurePointPhases = []string{EnterInitrdWord}
 
-// ukiMeasurement is one digest systemd-stub extends into PCR 11, labelled by
-// what produced it so a mismatch can be attributed to a specific section.
-type ukiMeasurement struct {
-	Section string
-	Kind    string // "name" or "content"
-	Digest  []byte
-}
-
 // ukiSectionMeasurements returns, in order, the digests systemd-stub extends
-// for the given image: per present section the NUL-terminated ASCII name, then
-// the section content. The firmware event log renders the name as UTF-16, but
-// the digest is over the ASCII form.
-func ukiSectionMeasurements(ukiPath string, algo PCRHashAlgo) ([]ukiMeasurement, error) {
+// for the given image (uki.Measurements).
+func ukiSectionMeasurements(ukiPath string, algo PCRHashAlgo) ([]uki.Measurement, error) {
 	if _, err := os.Stat(ukiPath); err != nil {
 		return nil, fmt.Errorf("unified kernel image %s: %w", ukiPath, err)
 	}
-
-	file, err := pe.Open(ukiPath)
+	image, err := uki.Open(ukiPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse %s as a PE image: %w", ukiPath, err)
 	}
-	defer file.Close()
-
-	var measurements []ukiMeasurement
-	for _, name := range UKIMeasuredSections {
-		section := file.Section(name)
-		if section == nil {
-			continue
-		}
-		// debug/pe's Section.Size is SizeOfRawData, which is padded up to the
-		// file alignment; systemd-stub measures the unpadded contents.
-		size := int64(section.VirtualSize)
-		if size == 0 || size > int64(section.Size) {
-			size = int64(section.Size)
-		}
-		if size == 0 {
-			continue
-		}
-
-		hasher := NewHashFor(algo)
-		if _, err := io.CopyN(hasher, section.Open(), size); err != nil {
-			return nil, fmt.Errorf("failed to read section %s of %s: %w", name, ukiPath, err)
-		}
-
-		measurements = append(measurements,
-			ukiMeasurement{Section: name, Kind: "name", Digest: DigestOf(algo, append([]byte(name), 0))},
-			ukiMeasurement{Section: name, Kind: "content", Digest: hasher.Sum(nil)},
-		)
-	}
-
-	if len(measurements) == 0 {
+	defer image.Close()
+	measurements, err := image.Measurements(algo.cryptoHash())
+	if errors.Is(err, uki.ErrNotUKI) {
 		return nil, fmt.Errorf("%s contains none of the sections systemd-stub measures; is it a unified kernel image?", ukiPath)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read a section of %s: %w", ukiPath, err)
 	}
 	return measurements, nil
 }
@@ -105,7 +55,7 @@ func PredictPCR11FromUKI(ukiPath string, phases []string, algo PCRHashAlgo, debu
 	pcr := make([]byte, algo.DigestSize())
 	for _, m := range measurements {
 		pcr = ExtendDigest(algo, pcr, m.Digest)
-		if debug && m.Kind == "content" {
+		if debug && m.Kind == uki.MeasuredContent {
 			fmt.Printf("  measured %-9s -> %x\n", m.Section, pcr)
 		}
 	}
@@ -210,7 +160,7 @@ func VerifyUKIPredictionAgainstEventlog(ukiPath string, logDigests [][]byte, alg
 		if bytes.Equal(m.Digest, logDigests[i]) {
 			continue
 		}
-		if m.Kind == "name" {
+		if m.Kind == uki.MeasuredName {
 			return fmt.Errorf(
 				"PCR 11 measurement %d should be the name of section %s but the event log records\n"+
 					"a different digest. systemd-stub's section set or order differs from what\n"+

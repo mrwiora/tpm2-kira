@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/go-attestation/attest"
 	"github.com/tpm2-trust/go-uefi-slim/authenticode"
+	"github.com/tpm2-trust/go-uefi-slim/uki"
 )
 
 // minimalEFI is a PE32+ of one section holding data.
@@ -162,7 +163,7 @@ func TestImageLoadPathOfRealLogs(t *testing.T) {
 		var got []string
 		for _, e := range log.Events(attest.HashSHA256) {
 			if e.Index == TPM2PCRBootLoader && uint32(e.Type) == evBootServicesApplication {
-				got = append(got, imageLoadPath(e.Data))
+				got = append(got, uki.ImageLoadPath(e.Data))
 			}
 		}
 		if strings.Join(got, " ") != strings.Join(want, " ") {
@@ -170,7 +171,7 @@ func TestImageLoadPathOfRealLogs(t *testing.T) {
 		}
 	}
 	for _, bad := range [][]byte{nil, make([]byte, 31), append(append(make([]byte, 24), 0xff, 0xff, 0, 0, 0, 0, 0, 0), 1, 2)} {
-		if p := imageLoadPath(bad); p != "" {
+		if p := uki.ImageLoadPath(bad); p != "" {
 			t.Errorf("%x: %q", bad, p)
 		}
 	}

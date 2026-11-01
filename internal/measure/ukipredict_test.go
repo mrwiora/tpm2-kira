@@ -5,6 +5,8 @@ import (
 	"debug/pe"
 	"io"
 	"testing"
+
+	"github.com/tpm2-trust/go-uefi-slim/uki"
 )
 
 // systemd-stub measures the unpadded section contents. debug/pe's Section.Size
@@ -19,7 +21,7 @@ func TestPredictPCR11UsesUnpaddedSections(t *testing.T) {
 
 	pcr11Of := func(padded bool) []byte {
 		pcr := make([]byte, 32)
-		for _, name := range UKIMeasuredSections {
+		for _, name := range uki.MeasuredSections() {
 			section := file.Section(name)
 			if section == nil {
 				continue

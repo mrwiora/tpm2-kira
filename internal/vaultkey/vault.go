@@ -384,7 +384,7 @@ func FetchRemote(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, c *vau
 			}
 			bank := vs.Sealed.GetHashAlgo()
 			pcrs := []int{int(v.Index)}
-			if req.PCRSignature = sigs.Find(p.PCRKey, bank, pcrs, measure.SignedPolicy(int(v.Index), v.Digest, bank)); req.PCRSignature == nil {
+			if req.PCRSignature = measure.FindPCRSignature(sigs, p.PCRKey, bank, pcrs, measure.SignedPolicy(int(v.Index), v.Digest, bank)); req.PCRSignature == nil {
 				return nil, nvslot.ErrNotSigned
 			}
 		}
