@@ -1602,8 +1602,7 @@ func runBoot(t *testing.T, args ...string) (stdout, stderr string, err error) {
 // TestBootCloseExtendsPCR15 checks 'tpm2-kira-boot close', what the image
 // runs when the code screen is over and before a resume: it extends PCR 15
 // with aSSH's close event and exits 0; without a TPM it exits non-zero, so
-// that the unit fails (initrd.target, emergency) and the Debian script
-// does not go on.
+// that the unit fails (a power-off) and the Debian script powers off.
 func TestBootCloseExtendsPCR15(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()

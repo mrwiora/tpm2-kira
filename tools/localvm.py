@@ -218,6 +218,16 @@ class Machine:
                     if "event" not in reply:
                         break
 
+    def wait_stopped(self, timeout):
+        """Whether the machine's qemu ended by itself (a power-off) within
+        timeout, the moment it does."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not self.pid():
+                return True
+            time.sleep(0.5)
+        return False
+
     def stop(self, timeout=90):
         if not self.pid():
             print(f"{self.name}: not running")

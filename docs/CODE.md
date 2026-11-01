@@ -52,8 +52,9 @@ whatever the signing key approves.
 - `run` closes at the end of the code screen, after the parts have opened
   what they hold (the vault's part, the phone's salt, the TPM salt).
 - The image closes again, whatever `run` did, before any volume is opened:
-  on Arch `tpm2-kira-close.service` (a failure is the emergency target), on
-  Debian the init-bottom script (a failure is initramfs-tools' panic).
+  on Arch `tpm2-kira-close.service`, on Debian the init-bottom script. A close
+  tries a refused extend once more; a failure powers the machine off: no
+  shell with PCR 15 at zero, no reboot loop.
 - Right before a resume from hibernation, which starts the TPM afresh and
   runs no code screen: on Arch a drop-in on
   `systemd-hibernate-resume.service`, on Debian

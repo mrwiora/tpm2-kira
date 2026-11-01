@@ -359,11 +359,12 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 		t.Errorf("the local-top script:\n%s", got)
 	}
 	// The close when the initrd is left: with the plan's TPM part, and its
-	// failure does not let the boot go on; no cap.
+	// failure powers off, with no shell and no way on; no cap.
 	if b, err := os.ReadFile("../../initramfs/initramfs-tools/scripts/init-bottom/tpm2-kira"); err != nil {
 		t.Error(err)
-	} else if got := string(b); !strings.Contains(got, "if [ -d /etc/tpm2-kira/plan/tpm ]; then\n    while ! /usr/bin/tpm2-kira-boot close") ||
-		!strings.Contains(got, "panic ") || strings.Contains(got, "tpm2-kira-boot cap") {
+	} else if got := string(b); !strings.Contains(got, "if [ -d /etc/tpm2-kira/plan/tpm ] && ! /usr/bin/tpm2-kira-boot close") ||
+		!strings.Contains(got, "poweroff -f") || !strings.Contains(got, "while :; do sleep 60; done") ||
+		strings.Contains(got, "panic") || strings.Contains(got, "tpm2-kira-boot cap") {
 		t.Errorf("the init-bottom script:\n%s", got)
 	}
 	if got := readImage(t, root, sshscreen.DefaultConf); !strings.Contains(got, "ASSH_LISTEN=:2222\n") {

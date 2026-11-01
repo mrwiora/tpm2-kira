@@ -121,8 +121,8 @@ var closeTPMWait = 30 * time.Second
 // before a resume from hibernation. A resume starts the TPM afresh, which
 // sets PCR 15 back to zero, and the resumed system does not run the code
 // screen. It needs no CA file and no assh.conf. A TPM that does not come,
-// or an extend the TPM refuses, is an error: the boot, or the resume, must
-// not go on.
+// or an extend the TPM refuses twice, is an error: the boot, or the resume,
+// must not go on.
 func Close(tpmPath string) error {
 	if !tpmdev.AwaitNode(tpmPath, closeTPMWait) {
 		return fmt.Errorf("%s did not appear within %s: the boot is not closed (PCR 15)", tpmPath, closeTPMWait)
@@ -133,6 +133,20 @@ func Close(tpmPath string) error {
 // CloseNow is Close without the wait for the TPM's device: run's close at
 // the end of the code screen, which has waited for it at its start.
 func CloseNow(tpmPath string) error {
+	return closeRetried(func() error { return closeOnce(tpmPath) })
+}
+
+// closeRetried tries once more what failed: a close that fails ends in a
+// power-off, so a passing fault in the TPM does not get that far.
+func closeRetried(close func() error) error {
+	if err := close(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v: once more\n", err)
+		return close()
+	}
+	return nil
+}
+
+func closeOnce(tpmPath string) error {
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("the boot is not closed (PCR 15): %w", err)

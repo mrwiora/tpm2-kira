@@ -64,15 +64,16 @@ fi
 # the code screen was over, unless it failed: every slot object's policy
 # and the SSH CA's read PCR 15, so nothing in the running system can
 # compute a code, open a slot's part or have a key certified. With the TPM
-# in the plan (a sealed slot, an SSH CA). Its failure stops the boot: the
-# real root must not run with them open. initramfs-tools' panic (a shell on
-# the console, or a reboot with panic=); leaving the shell tries the close
-# again, never the boot without it.
-if [ -d /etc/tpm2-kira/plan/tpm ]; then
-    while ! /usr/bin/tpm2-kira-boot close >/dev/console 2>&1; do
-        . /scripts/functions
-        panic "tpm2-kira: the boot is not closed (PCR 15): the boot does not go on until it is"
-    done
+# in the plan (a sealed slot, an SSH CA). The close tries a refused extend
+# once more; its failure powers the machine off, which needs a person: no
+# shell with PCR 15 at zero (initramfs-tools' rescue shell) and no reboot
+# loop. The real root never runs with them open: should the power-off
+# itself fail, this script does not end.
+if [ -d /etc/tpm2-kira/plan/tpm ] && ! /usr/bin/tpm2-kira-boot close >/dev/console 2>&1; then
+    echo "tpm2-kira: the boot is not closed (PCR 15): powering off" >/dev/console
+    poweroff -f || true
+    echo o >/proc/sysrq-trigger || true
+    while :; do sleep 60; done
 fi
 
 exit 0

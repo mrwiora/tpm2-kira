@@ -323,10 +323,11 @@ and no secret either: the keys are in the TPM.
   2. when the code screen is over, whatever `run` did (no SSH server in
      the image, `run` failed or timed out): Arch,
      `tpm2-kira-close.service` (after `tpm2-kira.service`, before
-     `cryptsetup-pre.target`, required by `initrd.target`: a failure is
-     the emergency target); Debian, `scripts/init-bottom/tpm2-kira`
-     (a failure is initramfs-tools' panic, and leaving its
-     shell tries the close again). Both with the TPM in the plan;
+     `cryptsetup-pre.target`, required by `initrd.target`); Debian,
+     `scripts/init-bottom/tpm2-kira`. Both with the TPM in the plan. A
+     close tries a refused extend once more; its failure powers the machine
+     off (Arch `FailureAction=poweroff-force`, Debian `poweroff -f`), which
+     needs a person: no shell with PCR 15 at zero, no reboot loop;
   3. right before a resume from hibernation (below).
   So the CA certifies nothing more until the next reboot, whatever an
   approval says: not in the running system, on Arch or Debian, with or
@@ -585,10 +586,20 @@ aSSH's own tests log in with OpenSSH's client (10.6) through a
   image signed with the same key that gives a root
   shell before PCR 15 is extended (an initramfs with an emergency shell,
   an older UKI or one without tpm2-kira, which never closes it) can have the CA certify a key of its own for that boot - not take
-  the CA away. Keep such images unsigned. Without Secure Boot, PCR 7 says
+  the CA away, and the TOTP fallback slot computes a code there too: such a
+  boot holds PCR 7 as approved and PCR 15 at zero. Keep such images unsigned.
+  Without Secure Boot, PCR 7 says
   little: any OS booted on the machine reaches the same values. The CA
   never leaves this TPM either way; a certificate made so is good for the
   machine's names until the clients drop the CA line.
+- **An edited command line is no such shell on a UKI boot with Secure Boot
+  on.** `loader.conf`'s `editor` defaults to on, and its man page (systemd
+  262) says nothing of Secure Boot, but systemd-boot 262 refuses it there (the
+  binary's "Entry not editable in SecureBoot mode."), and systemd-stub ignores a
+  command line passed to an image with a `.cmdline` section while Secure Boot
+  is on (systemd-stub(7)). A signed addon (`*.addon.efi`) still adds to the
+  command line: keep such addons unsigned, too. Without Secure Boot both go,
+  which PCR 7 says.
 - **The close is done by software.** `run` and the image extend PCR 15;
   a boot where neither runs (an image without tpm2-kira, booted under the
   same Secure Boot keys) leaves the CA - and the slots, whose objects read

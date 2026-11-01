@@ -30,9 +30,9 @@ checks that on both distributions, from the machines' snapshot "fresh":
          close alone closes the CA
   V5     suspend to RAM: tested where the guest offers S3 ("deep")
   V4     the close fails (the resume's boot without its TPM): no resume,
-         and the boot stops - Arch: the emergency target
-         (tpm2-kira-close.service, required by initrd.target); Debian:
-         local-top clears the resume, init-bottom panics. Then the test
+         and the machine powers off - Arch: tpm2-kira-close.service's
+         FailureAction, no emergency target; Debian: local-top clears the
+         resume, init-bottom's poweroff -f, no panic. Then the test
          reverts to the hibernated state and resumes with the TPM.
 
 V4 runs last. The report and every
@@ -286,13 +286,13 @@ class Hib:
 
     def failed_close(self):
         """The close fails - the resume's boot without the TPM, whose
-        device never comes: no resume, and the boot stops (Arch:
-        tpm2-kira-close.service fails, initrd.target requires it, the
-        emergency target; Debian: local-top's close fails and clears the
-        resume, init-bottom's close panics). Then the test reverts to the
-        hibernated state and resumes with the TPM back."""
+        device never comes: no resume, and the machine powers off, with no
+        shell on the way (Arch: tpm2-kira-close.service's FailureAction;
+        Debian: local-top's close fails and clears the resume, init-bottom
+        powers off). Then the test reverts to the hibernated state and
+        resumes with the TPM back."""
         m, lv = self.m, self.lv
-        m.log.head("V4: the close fails - no resume, the boot stops")
+        m.log.head("V4: the close fails - no resume, the machine powers off")
         before = self.hibernate("V4")
         lv.snapshot("hibernated-v4")
         lv.start(unlock=False, tpm=False)
@@ -305,19 +305,21 @@ class Hib:
                 lv.send(vmtest.TEST_PASSWORD + "\r")
                 lv.expect(re.compile(r"Salt for disk \S+: ?$", re.M), 120, since)
                 lv.send(vmtest.TEST_SALT + "\r")
-                text = lv.expect(re.compile(r"the boot is not closed \(PCR 15\): the boot does not go on until it is"), 300, since)
+                lv.expect(re.compile(r"the boot is not closed \(PCR 15\): powering off"), 300, since)
+                off = lv.wait_stopped(120)
                 text = lv.serial_text(since)
                 self.check("V4: Debian - no resume (local-top's close failed)", "no resume from hibernation this boot" in text, text[-800:])
-                self.check("V4: Debian - init-bottom's close panics: the boot stops", "the boot is not closed (PCR 15): the boot does not go on until it is" in text, text[-800:])
+                self.check("V4: Debian - init-bottom's close powers off", off, text[-800:])
+                self.check("V4: Debian - no shell on the way", "(initramfs)" not in text and "Rebooting automatically" not in text, text[-800:])
             else:
-                text = lv.expect(re.compile(r"[Ee]mergency"), 300, since)
+                off = lv.wait_stopped(400)
                 text = lv.serial_text(since)
                 self.check("V4: Arch - tpm2-kira-boot close failed (no TPM)", "the boot is not closed (PCR 15)" in text, text[-800:])
-                self.check("V4: Arch - the boot stops in the emergency target", re.search(r"[Ee]mergency", text) is not None, text[-800:])
+                self.check("V4: Arch - the machine powers off", off, text[-800:])
+                self.check("V4: Arch - no shell on the way", "maintenance" not in text and "emergency mode" not in text.lower(), text[-800:])
         except Fail as e:
             self.check("V4: the boot stops at the failed close", False, str(e).split("\n")[0] + "\n" + lv.serial_text(since)[-800:])
-        up = m.wait_port(22, True, 30)
-        self.check("V4: the system did not come up (no resume, no boot)", not up)
+        self.check("V4: the system did not come up (no resume, no boot)", not m.wait_port(22, True, 5))
         # Back to the hibernated state, the TPM with it: the resume goes on.
         lv.revert("hibernated-v4")
         self.resume_over_ssh("V4-reverted")

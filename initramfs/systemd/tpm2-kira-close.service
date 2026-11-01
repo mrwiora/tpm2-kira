@@ -20,14 +20,18 @@ Wants=cryptsetup-pre.target
 Before=cryptsetup-pre.target initrd.target initrd-switch-root.target
 Conflicts=shutdown.target
 Before=shutdown.target
+# A failure is a power-off, which needs a person: no shell with PCR 15 at
+# zero (the emergency target's) and no reboot loop. The failure of a unit that
+# initrd.target requires would start the emergency target; this comes first.
+FailureAction=poweroff-force
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Waits for the TPM itself (30 s at most). A failure is the boot's: the
-# image's initrd.target requires this unit, so the boot stops in the
-# emergency target rather than run the real root with the slots and the
-# SSH CA open.
+# Waits for the TPM itself (30 s at most) and tries a refused extend once
+# more. A failure is the boot's: the machine powers off rather than run the
+# real root with the slots and the SSH CA open; the image's initrd.target
+# requires this unit as well, so nothing goes on while that happens.
 ExecStart=tpm2-kira-boot close
 StandardOutput=journal+console
 StandardError=journal+console
