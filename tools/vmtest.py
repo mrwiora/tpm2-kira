@@ -648,6 +648,18 @@ class Machine:
         self.check(f"boot {n}: ssh-child ran confined (a uid of its own, namespaces, no new privileges, not dumpable, no executable memory, Landlock, seccomp)", own_uid, out[-500:])
         bad = [l for l in out.split("\n") if re.search(r"ERROR|FAILED|does not answer|cannot", l)]
         self.check(f"boot {n}: no tpm2-kira error in the boot's log", not bad, "\n".join(bad[:5]))
+        # The SSH CA is closed in the running system: PCR 15 extended (the
+        # kernel's sysfs view of the TPM's PCRs), by the image's close when
+        # the code screen was over (Arch: tpm2-kira-close.service).
+        rc, out = self.run("cat /sys/class/tpm/tpm0/pcr-sha256/15 2>&1; "
+                           + ("true" if self.distro == "debian" else
+                              "journalctl -b -o cat --no-pager -u tpm2-kira-close.service 2>&1 | tail -5"),
+                           save=f"boot{n}-close.log")
+        pcr15 = out.split("\n")[0].strip()
+        self.check(f"boot {n}: the SSH CA is closed in the running system (PCR 15 extended)",
+                   re.fullmatch(r"[0-9A-Fa-f]{64}", pcr15) is not None and set(pcr15) != {"0"}, out[-300:])
+        if self.distro != "debian":
+            self.check(f"boot {n}: tpm2-kira-close.service ran in the initrd", "Finished" in out and "Failed" not in out, out[-300:])
 
     def rebuild(self):
         cmd = "update-initramfs -u" if self.distro == "debian" else "mkinitcpio -P"

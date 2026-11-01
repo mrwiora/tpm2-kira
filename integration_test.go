@@ -28,6 +28,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/assh/hostkey"
 )
 
 const (
@@ -1596,4 +1597,42 @@ func runBoot(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	c.Stdout, c.Stderr = &out, &errb
 	err = c.Run()
 	return out.String(), errb.String(), err
+}
+
+// TestBootCloseExtendsPCR15 checks 'tpm2-kira-boot close', what the image
+// runs when the code screen is over and before a resume: it extends PCR 15
+// with aSSH's close event and exits 0; without a TPM it exits non-zero, so
+// that the unit fails (initrd.target, emergency) and the Debian script
+// does not go on.
+func TestBootCloseExtendsPCR15(t *testing.T) {
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+	read := func() []byte {
+		t.Helper()
+		c, err := transport.OpenTPM(tpmPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		v, err := hostkey.ReadPCRs(c, hostkey.SHA256, []int{hostkey.ClosePCR})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v[hostkey.ClosePCR]
+	}
+	if !bytes.Equal(read(), make([]byte, 32)) {
+		t.Fatal("PCR 15 is not zero at the start")
+	}
+	if stdout, stderr, err := runBoot(t, "close", "--tpm", tpmPath); err != nil {
+		t.Fatalf("close: %v\n%s\n%s", err, stdout, stderr)
+	}
+	want, _ := hostkey.EventChain(hostkey.SHA256, []string{hostkey.CloseEvent})
+	if !bytes.Equal(read(), want) {
+		t.Fatalf("PCR 15 after close: %x, want %x", read(), want)
+	}
+	notTPM := filepath.Join(t.TempDir(), "not-a-tpm")
+	os.WriteFile(notTPM, nil, 0o600)
+	if _, stderr, err := runBoot(t, "close", "--tpm", notTPM); err == nil || !strings.Contains(stderr, "the SSH CA is not closed") {
+		t.Fatalf("close without a TPM: %v\n%s", err, stderr)
+	}
 }

@@ -26,7 +26,7 @@ const (
 	// by the init-premount script, which brings the network up and starts
 	// 'run' with TPM2_KIRA_REMOTE.
 	imageRemoteConf = "/etc/tpm2-kira/remote.conf"
-	// imageResumeDropIn closes the SSH CA's window right before a resume
+	// imageResumeDropIn closes the SSH CA (PCR 15) right before a resume
 	// from hibernation (resumeDropIn); initramfs-tools' is the package's
 	// local-top script tpm2-kira-close, which reads the plan.
 	imageResumeDropIn = "/etc/systemd/system/systemd-hibernate-resume.service.d/tpm2-kira-close.conf"
@@ -145,14 +145,14 @@ func writeImageFile(buildroot, path string, data []byte, mode os.FileMode) error
 	return os.Chmod(dst, mode)
 }
 
-// A resume from hibernation starts the TPM afresh, which opens the SSH CA's
-// window again, and the resumed system runs no code screen: the image
-// closes it right before the resume, whatever run did. Where the code
-// screen closed it already, the close does nothing.
+// A resume from hibernation starts the TPM afresh, which sets PCR 15 back
+// to zero and opens the SSH CA again, and the resumed system runs no code
+// screen: the image closes it right before the resume, whatever run did.
+// Where it is closed already, an extend more changes nothing.
 
 // resumeDropIn is systemd's: the close before every resume attempt. Its
 // failure fails the resume service, and the machine does not resume.
-const resumeDropIn = `# Written by 'tpm2-kira initramfs plan': the SSH CA's window closed before
+const resumeDropIn = `# Written by 'tpm2-kira initramfs plan': the SSH CA closed (PCR 15) before
 # a resume from hibernation (the TPM starts afresh, the resumed system runs
 # no code screen). Its failure stops the resume.
 [Service]

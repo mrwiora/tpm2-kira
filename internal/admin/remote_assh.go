@@ -5,7 +5,7 @@ package admin
 // control.conf. control.conf holds what is tpm2-kira's - whether the
 // server runs, how long the boot waits, the image's network; assh.conf
 // what is aSSH's - the SSH CA (where it is kept, its key, its slots and
-// their PCRs, the window), the port, the keys that may log in, the host
+// their PCRs), the port, the keys that may log in, the host
 // certificate's name. control writes both: the CA's slots when it creates
 // the CA, worked out from this machine (remote_hostkey.go), and the port.
 // An edit of the slots is followed by the next reseal or control, which

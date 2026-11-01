@@ -351,12 +351,20 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 	}
 	// The close before a resume is the package's local-top script, read
 	// for its prerequisites where initramfs-tools reads them (the installed
-	// file, not the image): after cryptroot, only with the plan's SSH part.
+	// file, not the image): after cryptroot, only with the plan's TPM part.
 	if b, err := os.ReadFile("../../initramfs/initramfs-tools/scripts/local-top/tpm2-kira-close"); err != nil {
 		t.Error(err)
-	} else if got := string(b); !strings.Contains(got, `PREREQ="cryptroot"`) || !strings.Contains(got, "[ -d /etc/tpm2-kira/plan/ssh ] || exit 0") ||
+	} else if got := string(b); !strings.Contains(got, `PREREQ="cryptroot"`) || !strings.Contains(got, "[ -d /etc/tpm2-kira/plan/tpm ] || exit 0") ||
 		!strings.Contains(got, "if ! /usr/bin/tpm2-kira-boot close") || !strings.Contains(got, `echo "resume=" >>/conf/param.conf`) {
 		t.Errorf("the local-top script:\n%s", got)
+	}
+	// The close when the initrd is left: with the plan's TPM part, before
+	// the cap, and its failure does not let the boot go on.
+	if b, err := os.ReadFile("../../initramfs/initramfs-tools/scripts/init-bottom/tpm2-kira"); err != nil {
+		t.Error(err)
+	} else if got := string(b); !strings.Contains(got, "if [ -d /etc/tpm2-kira/plan/tpm ]; then\n    while ! /usr/bin/tpm2-kira-boot close") ||
+		!strings.Contains(got, "panic ") || strings.Index(got, "tpm2-kira-boot close") > strings.Index(got, "tpm2-kira-boot cap") {
+		t.Errorf("the init-bottom script:\n%s", got)
 	}
 	if got := readImage(t, root, sshscreen.DefaultConf); !strings.Contains(got, "ASSH_LISTEN=:2222\n") {
 		t.Errorf("the image's assh.conf:\n%s", got)

@@ -8,7 +8,6 @@ import (
 
 	"github.com/tpm2-trust/assh/server"
 
-	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/tpm2-trust/assh/config"
@@ -32,8 +31,9 @@ type hostKeyAtBoot struct {
 // the build, another TPM, no CA), the key is temporary: made in the TPM
 // all the same, not certified, so the ssh client warns of an unknown host
 // key, and the console shows its fingerprint to compare. However it ends -
-// a key made, an error at any step - the CA's window is closed after.
-// Without a TPM there is no key.
+// a key made, an error at any step - the CA is closed after: PCR 15
+// extended (aSSH's hostkey.Close), which the CA's own policy reads. A close
+// that fails is an error. Without a TPM there is no key.
 func PrepareHostKey(tpmPath string, conf config.Config) (key hostKeyAtBoot, err error) {
 	caPath := conf.CA
 	tpmDev, err := tpmdev.Open(tpmPath)
@@ -41,9 +41,8 @@ func PrepareHostKey(tpmPath string, conf config.Config) (key hostKeyAtBoot, err 
 		return hostKeyAtBoot{}, fmt.Errorf("no TPM: %w", err)
 	}
 	defer tpmDev.Close()
-	var ca *hostkey.CA
 	defer func() {
-		if cerr := closeWindow(tpmDev, ca, conf); cerr != nil {
+		if cerr := hostkey.Close(tpmDev); cerr != nil {
 			key, err = hostKeyAtBoot{}, errors.Join(err, cerr)
 		}
 	}()
@@ -56,6 +55,7 @@ func PrepareHostKey(tpmPath string, conf config.Config) (key hostKeyAtBoot, err 
 		Open:       func() (transport.TPMCloser, error) { return tpmdev.Open(tpmPath) },
 	}
 	var hk *hostkey.HostKey
+	var ca *hostkey.CA
 	if persist.IsVar(caPath) {
 		if err := mountEfivarfs(); err != nil {
 			return hostKeyAtBoot{}, err
@@ -97,17 +97,6 @@ func mountEfivarfs() error {
 	return nil
 }
 
-// closeWindow closes the CA's window: its window index - assh.conf's when
-// the CA could not be read, if one is defined there.
-func closeWindow(tpmDev transport.TPM, ca *hostkey.CA, conf config.Config) error {
-	h := tpm2.TPMHandle(conf.WindowHdl)
-	if ca != nil && ca.WindowHandle() != 0 {
-		h = ca.WindowHandle()
-	}
-	_, err := hostkey.CloseWindow(tpmDev, h)
-	return err
-}
-
 // efivars is where efivarfs is mounted.
 const efivars = "/sys/firmware/efi/efivars"
 
@@ -128,37 +117,26 @@ func AuthorizedKeys(path string) ([]string, int, error) {
 // run's, since a TPM that does not come stops a resume from hibernation.
 var closeTPMWait = 30 * time.Second
 
-// Close closes the CA's window - the CA's window index, else assh.conf's -
-// and does nothing else: what the boot image runs right before a resume
-// from hibernation. A resume starts the TPM afresh, which opens the window
-// again, and the resumed system does not run the code screen. In a boot
-// where the code screen has closed it already, it does nothing. No CA and
-// no window index is no error; a TPM that does not come, or an index at the
-// handle that is not a window, is: the resume must not go on.
-func Close(tpmPath, confPath string) error {
-	conf, cerr := config.Load(confPath)
-	if cerr != nil {
-		conf = config.Default()
-	}
+// Close closes the SSH CA - PCR 15 extended with aSSH's close event - and
+// does nothing else: what the boot image runs when the code screen is over
+// (systemd: tpm2-kira-close.service; initramfs-tools: init-bottom) and
+// right before a resume from hibernation. A resume starts the TPM afresh,
+// which sets PCR 15 back to zero, and the resumed system does not run the
+// code screen. It needs no CA file and no assh.conf: whatever CA there is
+// - its file read or not - signs nothing more until the next boot. A TPM
+// that does not come, or an extend the TPM refuses, is an error: the boot,
+// or the resume, must not go on.
+func Close(tpmPath string) error {
 	if !tpmdev.AwaitNode(tpmPath, closeTPMWait) {
-		return fmt.Errorf("%s did not appear within %s: the SSH CA's window is not closed", tpmPath, closeTPMWait)
+		return fmt.Errorf("%s did not appear within %s: the SSH CA is not closed", tpmPath, closeTPMWait)
 	}
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
-		return fmt.Errorf("the SSH CA's window is not closed: %w", err)
+		return fmt.Errorf("the SSH CA is not closed: %w", err)
 	}
 	defer tpmDev.Close()
-	var ca *hostkey.CA
-	if cerr == nil && conf.CA != "" {
-		if !persist.IsVar(conf.CA) || mountEfivarfs() == nil {
-			ca, _ = hostkey.LoadCA(conf.CA)
-		}
-	}
-	if err := closeWindow(tpmDev, ca, conf); err != nil {
-		return err
-	}
-	if cerr != nil && !os.IsNotExist(cerr) {
-		return fmt.Errorf("%s: %w (the default window index is closed)", confPath, cerr)
+	if err := hostkey.Close(tpmDev); err != nil {
+		return fmt.Errorf("the SSH CA is not closed: %w", err)
 	}
 	return nil
 }

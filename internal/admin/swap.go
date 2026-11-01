@@ -11,7 +11,7 @@ import (
 // passphrase's traces, everything - into a swap device. Onto an encrypted
 // one it is as safe as the disk; onto a plain one it lies on the disk in
 // the clear, and the kernel may resume it before the boot image runs at
-// all, so nothing of tpm2-kira's (the SSH CA's window closed before a
+// all, so nothing of tpm2-kira's (the SSH CA closed before a
 // resume) comes in between. control shows it as a risk; tpm2-kira does not
 // cover it.
 

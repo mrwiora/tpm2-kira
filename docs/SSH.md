@@ -72,14 +72,13 @@ key, a login is a session of the code screen):
 | `ASSH_CA` | `efi:KIRAasshCA` (default): the SSH CA's EFI variable (its public key in `/etc/tpm2-kira/ssh_ca.pub`), created in the TPM by control (§4) |
 | `ASSH_CA_TYPE` | `p256` (default) or `rsa2048`: what control asked when it created the CA |
 | `ASSH_CA_SLOT_<N>` | a slot's PCRs, `0,2,7,11`; control writes two, worked out for this machine (§4). An edit takes effect at the next approval or control, which make the CA's slots these and approve them |
-| `ASSH_WINDOW_HANDLE` | `0x01802915` (default): the CA's window index, which run locks, and `tpm2-kira-boot close` before a resume |
 | `ASSH_CHILD_UIDS` | `0x7FFE0000-0x7FFEFFFF` (default): where `ssh-child`'s uid is chosen from, one no one else has |
 | `ASSH_CA_REF` | `tpm2-kira ssh ca` (default): what the signing key's approvals are bound to |
 | `ASSH_LISTEN` | `:22` (default): the address the server listens on |
 | `ASSH_AUTHORIZED_KEYS` | `/etc/tpm2-kira/authorized_keys` (default), tpm2-kira's own file - control copies root's keys there when asked, edit it for others; any key type OpenSSH has. A line with options in front of the key (`from=`, `command=`) is left out: the options are not honoured. Their sum is part of the SSH part's digest in the boot plan, so control sees a difference without unpacking the image |
 | `ASSH_KEY_ID`, `ASSH_PRINCIPALS`, `ASSH_HOSTKEY_TYPE` | the host certificate's name (`tpm2-kira boot`), its principals (`*`), the host key's type (`p256`) |
 
-The window index, the type, the bank and the ref are the CA's for good: a
+The type, the bank and the ref are the CA's for good: a
 different value in assh.conf is an error that says to create the CA again
 (control offers it). So is a CA made for another signing key - after
 `setup` made a new one: control offers to create the CA again, as slot approve
@@ -312,25 +311,41 @@ and no secret either: the keys are in the TPM.
   only copy: firmware that wipes its variables loses the CA, as a TPM
   clear does - control then creates a new one, and the clients need its
   new line.
-- **The window is the CA's own.** The CA's policy reads its window index
-  (aSSH's README, "The window"): `run` locks it right after the CA
-  certified this boot's key - also when the key is temporary, and on every
-  other way out, a failure included - so the CA certifies nothing more
-  until the next reboot, whatever an approval says: not in the running
-  system, on Arch or Debian, with or without `systemd-pcrosseparator`. A
-  CA is created with its window locked: control's CA certifies from the
-  next boot on. Nothing but the window index closes the CA: no PCR is
-  extended.
-- **A resume from hibernation meets the window closed.** To the TPM a
-  resume is a new start, which opens the window again, and the resumed
-  system runs no code screen. So the image closes it right before every
-  resume, whatever `run` did: Arch, a drop-in on
+- **The close is PCR 15, in the CA's own policy.** The CA signs only while
+  PCR 15 holds zero (aSSH's README, "The close: PCR 15"); the close is an
+  extend of PCR 15 with `assh-close`. It happens at fixed points, each
+  with no CA file needed, and a close that fails is the boot's failure:
+  1. `run`, right after the CA certified this boot's key - also when the
+     key is temporary, and on every other way out, a failure included;
+  2. when the code screen is over, whatever `run` did (no SSH server in
+     the image, `run` failed or timed out): Arch,
+     `tpm2-kira-close.service` (after `tpm2-kira.service`, before
+     `cryptsetup-pre.target`, required by `initrd.target`: a failure is
+     the emergency target); Debian, `scripts/init-bottom/tpm2-kira`
+     before the cap (a failure is initramfs-tools' panic, and leaving its
+     shell tries the close again). Both with the TPM in the plan;
+  3. right before a resume from hibernation (below).
+  So the CA certifies nothing more until the next reboot, whatever an
+  approval says: not in the running system, on Arch or Debian, with or
+  without `systemd-pcrosseparator`. A CA is created closed (PCR 15
+  extended): control's CA certifies from the next boot on. PCR 15 holds
+  zero at the code screen on both: on Arch nothing in the initrd measures
+  into it before (systemd-pcrmachine and -pcrfs run in the root alone,
+  `ConditionPathExists=!/etc/initrd-release`; systemd-cryptsetup's
+  `tpm2-measure-pcr=` is off unless crypttab says so, and runs after the
+  close); on Debian nothing measures into it at all. A volume bound to
+  PCR 15 with systemd-cryptenroll sees the close's event first, at every
+  boot alike.
+- **A resume from hibernation meets the CA closed.** To the TPM a resume
+  is a new start, which sets PCR 15 back to zero, and the resumed system
+  runs no code screen. So the image closes it right before every resume,
+  whatever `run` did: Arch, a drop-in on
   `systemd-hibernate-resume.service` (`ExecStartPre=/usr/bin/tpm2-kira-boot
-  close`); Debian, the `local-top` script `tpm2-kira-close`, after
-  `cryptroot`, before `local-premount`'s resume. In a boot where `run`
-  closed it already, the close does nothing. When it fails (no TPM, an
-  index at the handle that is no window), the machine does not resume: the
-  hibernated session is lost, never the window. Hibernation to unencrypted
+  close`; `tpm2-kira-close.service` has run before already); Debian, the
+  `local-top` script `tpm2-kira-close`, after `cryptroot`, before
+  `local-premount`'s resume. Where it is closed already, an extend more
+  changes nothing. When it fails (no TPM, an extend refused), the machine
+  does not resume: the hibernated session is lost, never the close. Hibernation to unencrypted
   swap is not covered - the kernel may resume it before the image runs -
   and control shows it red.
 - **The approved values** are those of tpm2-kira's measure point: the code
@@ -348,7 +363,7 @@ and no secret either: the keys are in the TPM.
 - **At every boot** `run` has the TPM make a new host key (the CA's type)
   under the TPM's **NULL hierarchy**, whose seed changes at every reboot,
   and the CA certify it (an OpenSSH host certificate) - when the SSH
-  server starts, before the separator; then the window closes. The host key's authorization value
+  server starts, before the separator; then the CA is closed (PCR 15). The host key's authorization value
   is in `run`'s memory alone (the process is not dumpable); the key signs
   every key exchange of this boot, after the separator too, so a dropped
   session can come back; at the next reboot it loads nowhere.
@@ -387,7 +402,7 @@ up.
 ```
 tpm2-kira.service (holds READY)
   ├── the TPM makes this boot's host key, the SSH CA certifies it (slot 0 or 1),
-  │   the window closes (its index locked), opens :PORT, starts 'ssh-child'
+  │   the CA closes (PCR 15 extended), opens :PORT, starts 'ssh-child'
   ├── console: "ssh root@<address>", the SSH CA's fingerprint, sessions connected,
   │            "Enter here: continue at this console"
   └── sessions: the code screen; Enter confirms, q leaves
@@ -523,8 +538,11 @@ tpm2-kira-boot run --ssh [--ssh-hold S] [--ssh-conf PATH]
   hooks add network and SSH on Arch and Debian (`hook_test.go`).
 - **swtpm** (`-tags integration`): the CA approved in both slots,
   certifying nothing in the boot of its creation, at the next boot's code
-  screen through slot 0, nothing more once the window closed, nothing
-  after a failure at the code screen (`TestHostKeyWindowClosedOnError`), through slot 1 after a reboot with a firmware update and
+  screen through slot 0, nothing more once PCR 15 is extended, nothing
+  after a failure at the code screen (`TestHostKeyClosedOnError`), the
+  close with no CA, the same PCR 15 at every boot alike
+  (`TestHostKeyClose`), the boot binary's close failing without a TPM
+  (`TestBootCloseExtendsPCR15`), through slot 1 after a reboot with a firmware update and
   a new option ROM, approved again by `slot approve` and refused with another
   key (`TestSSHCAApprovedForTheCodeScreen`; a file in place of the EFI
   variable, which aSSH tests); the whole
@@ -550,17 +568,18 @@ aSSH's own tests log in with OpenSSH's client (10.6) through a
 
 - **Slot 1 binds the CA to the Secure Boot keys, not to the image.** Any
   image signed with the same key that gives a root
-  shell before the window closes (an initramfs with an emergency shell, an
-  older UKI, an image without tpm2-kira's SSH server, which never closes
-  it) can have the CA certify a key of its own for that boot - not take
+  shell before PCR 15 is extended (an initramfs with an emergency shell,
+  an older UKI or one without tpm2-kira, which never closes it) can have the CA certify a key of its own for that boot - not take
   the CA away. Keep such images unsigned. Without Secure Boot, PCR 7 says
   little: any OS booted on the machine reaches the same values. The CA
   never leaves this TPM either way; a certificate made so is good for the
   machine's names until the clients drop the CA line.
-- **The window is closed by software.** `run` closes it at the code
-  screen, the image before a resume; a boot where neither runs (an image
-  without tpm2-kira's SSH server, booted under the same Secure Boot keys)
-  leaves it open for that boot - see the first limit.
+- **The close is done by software.** `run` and the image extend PCR 15;
+  a boot where neither runs (an image without tpm2-kira, booted under the
+  same Secure Boot keys) leaves the CA open for that boot - see the first
+  limit. Anything that extends PCR 15 earlier (a crypttab volume with
+  `tpm2-measure-pcr=` opened before the code screen) closes it early: a
+  temporary key, never an open CA.
 - **The approvals are the signing key's.** Whoever holds it can approve
   another state; keep it on the YubiKey.
 - **An approval is never revoked.** approve and control keep only the

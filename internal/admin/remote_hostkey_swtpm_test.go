@@ -92,14 +92,14 @@ func TestSSHCAApprovedForTheCodeScreen(t *testing.T) {
 	if pub, err := os.ReadFile(path + ".pub"); err != nil || !strings.HasPrefix(string(pub), "ecdsa-sha2-nistp256 ") {
 		t.Fatalf("the CA's public key: %q %v", pub, err)
 	}
-	if ca.WindowHandle() != hostkey.DefaultWindowHandle || len(ca.Slots) != 2 || !slices.Equal(ca.Slots[0].PCRs, []int{0, 2, 7}) || !slices.Equal(ca.Slots[1].PCRs, []int{7}) {
+	if len(ca.Slots) != 2 || !slices.Equal(ca.Slots[0].PCRs, []int{0, 2, 7}) || !slices.Equal(ca.Slots[1].PCRs, []int{7}) {
 		t.Fatalf("the CA: %s", ca.Describe())
 	}
 	if st := readSSHCA(conf, p.sock); len(st.Approvals) != 2 || st.Unapproved() != nil || st.CA.Fingerprint() != ca.Fingerprint() {
 		t.Fatalf("not approved for the next boot: %+v", st)
 	}
-	// Not in the boot that made it: a new CA's window is closed.
-	if hk, err := sshscreen.PrepareHostKey(p.sock, conf); err != nil || hk.CA != "" || !strings.Contains(hk.Temporary, "window is closed") {
+	// Not in the boot that made it: a new CA is closed (PCR 15 extended).
+	if hk, err := sshscreen.PrepareHostKey(p.sock, conf); err != nil || hk.CA != "" || !strings.Contains(hk.Temporary, "the CA is closed") {
 		t.Fatalf("in the boot of the creation: %+v %v", hk, err)
 	}
 
@@ -117,10 +117,10 @@ func TestSSHCAApprovedForTheCodeScreen(t *testing.T) {
 		t.Fatalf("at the code screen: %+v %v", hk, err)
 	}
 
-	// The window is closed: the CA certifies nothing more in this boot,
-	// and a temporary key is served, made in the TPM.
-	if hk, err := sshscreen.PrepareHostKey(p.sock, conf); err != nil || hk.CA != "" || !strings.Contains(hk.Temporary, "the CA's window is closed until the next boot") {
-		t.Fatalf("after the window closed: %+v %v", hk, err)
+	// The CA is closed: it certifies nothing more in this boot, and a
+	// temporary key is served, made in the TPM.
+	if hk, err := sshscreen.PrepareHostKey(p.sock, conf); err != nil || hk.CA != "" || !strings.Contains(hk.Temporary, "the CA is closed until the next boot") {
+		t.Fatalf("after the close: %+v %v", hk, err)
 	}
 	none := conf
 	none.CA = filepath.Join(t.TempDir(), "none.json")
@@ -128,9 +128,9 @@ func TestSSHCAApprovedForTheCodeScreen(t *testing.T) {
 		t.Fatalf("without a CA: %+v %v", hk, err)
 	}
 	// The approvals are still the next boot's: made from the event log,
-	// the window empty.
+	// PCR 15 not among them.
 	if st := readSSHCA(conf, p.sock); len(st.Approvals) != 2 {
-		t.Fatalf("the closed window took approvals away: %+v", st)
+		t.Fatalf("the close took approvals away: %+v", st)
 	}
 
 	// A reboot after a firmware update and with a new option ROM: slot 0

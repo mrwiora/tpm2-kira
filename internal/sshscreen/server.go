@@ -135,7 +135,7 @@ func Start(o Options, console io.Writer, log func(string)) (*Server, error) {
 		return nil, fmt.Errorf("%s holds no key: nobody could log in", o.Assh.AuthorizedKeys)
 	}
 	// Certified now, while the code screen holds the boot ahead of the OS
-	// separator; the CA's window closes right after. The key stays in the
+	// separator; the CA is closed right after (PCR 15). The key stays in the
 	// TPM, signing for this process; 'ssh-child' asks it for
 	// signatures.
 	hk, err := makeHostKey(o.TPM, o.Assh)

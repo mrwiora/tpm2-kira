@@ -861,7 +861,7 @@ func (c *controller) factsText() string {
 		}
 	}
 	if len(f.PlainSwap) > 0 {
-		fmt.Fprintf(&w, "  Hibernation %s\n", bad("to unencrypted swap: "+strings.Join(f.PlainSwap, ", ")+" (risk: the memory - the disk's key included - lands on the disk in the clear, and a resume from it runs past the boot image, the SSH CA's window open - encrypt the swap or disable hibernation)"))
+		fmt.Fprintf(&w, "  Hibernation %s\n", bad("to unencrypted swap: "+strings.Join(f.PlainSwap, ", ")+" (risk: the memory - the disk's key included - lands on the disk in the clear, and a resume from it runs past the boot image, the SSH CA open - encrypt the swap or disable hibernation)"))
 	}
 	if f.Remote.Net.Mode != "off" {
 		fmt.Fprintf(&w, "  Boot network %s\n", strings.Join(RemoteStatusLines(f.Remote), "; "))

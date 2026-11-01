@@ -1,3 +1,41 @@
+# PLAN: the SSH CA closes by PCR 15 (experiment v2, `exp/close-pcr15`)
+
+Status: **implemented** (2026-11-01); unit and swtpm suites pass; the VM test is the
+coordinator's (recipe in the experiment's report). aSSH's side: its PLAN.md.
+
+## Goal
+
+The SSH CA's own policy reads PCR 15 (aSSH: `PolicyAuthorize ; PolicyCommandCode(Sign) ;
+PolicyPCR(15 == 0)`); the close is an extend of PCR 15 (`assh-close`), made by tpm2-kira at
+fixed points of every boot, each a failure of the boot when it fails. The window index W and
+its settings go.
+
+## Steps
+
+- [x] 1. aSSH moved (submodule `assh/` at its `exp/close-pcr15`): `hostkey.Close`, W gone.
+- [x] 2. `sshscreen.PrepareHostKey` closes with `hostkey.Close` on every way out;
+       `sshscreen.Close(tpm)` and `tpm2-kira-boot close` need no assh.conf or CA file.
+- [x] 3. Arch: `tpm2-kira-close.service` (after `tpm2-kira.service`, before
+       `cryptsetup-pre.target`, required by `initrd.target`: a failure is the emergency
+       target), added by the hook with the plan's TPM part; Makefile, PKGBUILD.
+- [x] 4. Debian: `init-bottom` closes before the cap, `panic` on a failure (leaving the
+       shell tries again); `local-top/tpm2-kira-close` (before a resume) with the plan's TPM
+       part.
+- [x] 5. The resume drop-in (Arch) unchanged: the close before a resume.
+- [x] 6. Tests: the code screen closes on every error path; the close with no CA; PCR 15
+       alike at every boot of the same image; the boot binary's close extends PCR 15 and
+       fails without a TPM; the unit's ordering and the hook's `initrd.target.requires`;
+       the Debian scripts.
+- [x] 7. docs/SSH.md, docs/BOOT-INTEGRATION.md, help, AGENTS.md; vmtest.py checks PCR 15
+       and the unit after each boot; hibernatetest.py reads PCR 15 (its V4 skipped).
+
+## Open questions
+
+1. A machine with a CA kept while SSH is off and no slot sealed has no TPM part in the plan:
+   no close in its image (as before with W). Add "a CA exists" to the plan's TPM rule?
+2. systemd-pcrlock does not know `assh-close` in PCR 15: a `.pcrlock` file for it, and an
+   entry in `/run/log/systemd/tpm2-measure.log`, if pcrlock policies are to cover PCR 15.
+
 # PLAN: Secure Boot managed by tpm2-kira; the SSH CA signs only an image Secure Boot checked
 
 Branch `feat/assh-window-hibernate` (on top of the hibernation work below). Status:

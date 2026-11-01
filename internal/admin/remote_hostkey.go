@@ -9,10 +9,12 @@ package admin
 // exported - which signs only while the PCRs hold values the signing key
 // approved. At every boot 'run' has the TPM make a new host key under its
 // NULL hierarchy, gone at the next reboot, and the CA certify it, at the
-// start of the code screen, then closes the CA's window - its window index
-// W, read-locked until the next boot - so nothing later in this boot gets a
-// certificate. Before a resume from hibernation, which starts the TPM
-// afresh, the boot image closes it again (tpm2-kira-boot close). The clients trust the CA (a known_hosts line
+// start of the code screen, then closes the CA - PCR 15 extended, which the
+// CA's own policy reads, until the next boot - so nothing later in this boot
+// gets a certificate. The image closes it again when the code screen is
+// over (tpm2-kira-close.service, initramfs-tools' init-bottom), and before a
+// resume from hibernation, which starts the TPM afresh (tpm2-kira-boot
+// close); a close that fails stops the boot or the resume. The clients trust the CA (a known_hosts line
 // '@cert-authority'), not a key, so a new key at every boot asks them
 // nothing.
 //
@@ -38,7 +40,6 @@ import (
 	"crypto"
 	"errors"
 	"fmt"
-	"github.com/google/go-tpm/tpm2"
 	"os"
 	"slices"
 
@@ -128,8 +129,7 @@ func approveSSHCASlots(ca *hostkey.CA, signer crypto.Signer, values map[int][]by
 
 // createSSHCA makes the CA in the TPM as conf says - its key, the bank
 // (this TPM's SHA-256 unless conf sets one), the slots (worked out for this
-// machine unless conf has some; they go into conf), the window index and
-// the policy ref - has signer approve the next boot's values, and writes it
+// machine unless conf has some; they go into conf) and the policy ref - has signer approve the next boot's values, and writes it
 // with its public key.
 func createSSHCA(conf *config.Config, tpmPath string, signer crypto.Signer) (*hostkey.CA, error) {
 	tpmDev, err := tpmdev.Open(tpmPath)
@@ -149,7 +149,7 @@ func createSSHCA(conf *config.Config, tpmPath string, signer crypto.Signer) (*ho
 	if !ok {
 		return nil, errors.New("assh.conf names no slot 0 (ASSH_CA_SLOT_0): the CA is created with it")
 	}
-	ca, err := hostkey.CreateCA(tpmDev, signer.Public(), hostkey.CAOptions{Type: conf.CAType, Bank: conf.Bank, PCRs: slot0, WindowHandle: tpm2.TPMHandle(conf.WindowHdl), PolicyRef: []byte(conf.PolicyRef)})
+	ca, err := hostkey.CreateCA(tpmDev, signer.Public(), hostkey.CAOptions{Type: conf.CAType, Bank: conf.Bank, PCRs: slot0, PolicyRef: []byte(conf.PolicyRef)})
 	if err != nil {
 		return nil, err
 	}

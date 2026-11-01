@@ -1,7 +1,7 @@
 #!/bin/sh
-# Stop run and lock code computation before the real root takes over:
-# what systemd's stop of tpm2-kira.service and tpm2-kira-cap.service does
-# at initrd-switch-root.
+# Stop run, close the SSH CA and lock code computation before the real root
+# takes over: what systemd's stop of tpm2-kira.service, tpm2-kira-close.service
+# and tpm2-kira-cap.service do in the initrd.
 #
 # run-init wipes the initramfs, so a process still running from it has to go.
 
@@ -58,6 +58,19 @@ if [ -r /run/tpm2-kira/net-device ]; then
         ip link set dev "$dev" down 2>/dev/null || true
     fi
     rm -f "/run/net-$dev.conf"
+fi
+
+# Close the SSH CA (PCR 15 extended) whatever run did - no SSH server in
+# the image, run failed: a CA in this TPM signs nothing in the running
+# system. With the TPM in the plan (a sealed slot, the SSH server). Its
+# failure stops the boot: the real root must not run with the CA open.
+# initramfs-tools' panic (a shell on the console, or a reboot with panic=);
+# leaving the shell tries the close again, never the boot without it.
+if [ -d /etc/tpm2-kira/plan/tpm ]; then
+    while ! /usr/bin/tpm2-kira-boot close >/dev/console 2>&1; do
+        . /scripts/functions
+        panic "tpm2-kira: the SSH CA is not closed (PCR 15): the boot does not go on until it is"
+    done
 fi
 
 # Lock the slots until the next boot - their generation indices, which

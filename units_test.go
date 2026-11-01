@@ -35,7 +35,7 @@ func has(lines []string, want string) bool {
 // The initrd units are installed on the host too (the mkinitcpio hook takes
 // them from there). Enabled on the host by mistake they must do nothing.
 func TestInitrdUnitsOnlyRunInTheInitrd(t *testing.T) {
-	for _, unit := range []string{"tpm2-kira.service", "tpm2-kira-cap.service", "tpm2-kira-machine-id.service", "tpm2-kira-unlock.socket"} {
+	for _, unit := range []string{"tpm2-kira.service", "tpm2-kira-cap.service", "tpm2-kira-close.service", "tpm2-kira-machine-id.service", "tpm2-kira-unlock.socket"} {
 		if !has(directives(t, "initramfs/systemd/"+unit), "ConditionPathExists=/etc/initrd-release") {
 			t.Errorf("%s lacks ConditionPathExists=/etc/initrd-release", unit)
 		}
@@ -152,5 +152,25 @@ func TestUnlockSocketIsWiredToTheDisplay(t *testing.T) {
 	// precedes; the service must not end with the hold any more.
 	if !has(svc, "Conflicts=initrd-switch-root.target") {
 		t.Error("the service is not ended at switch-root")
+	}
+}
+
+// The SSH CA's close when the code screen is over: after run, before any
+// volume is opened, its failure the boot's (no "-" before the command; the
+// hook makes initrd.target require it).
+func TestCloseUnitFailsTheBoot(t *testing.T) {
+	d := directives(t, "initramfs/systemd/tpm2-kira-close.service")
+	for _, want := range []string{"After=tpm2-kira.service", "Wants=cryptsetup-pre.target",
+		"Before=cryptsetup-pre.target initrd.target initrd-switch-root.target", "Type=oneshot", "ExecStart=tpm2-kira-boot close"} {
+		if !has(d, want) {
+			t.Errorf("tpm2-kira-close.service lacks %s", want)
+		}
+	}
+	hook, err := os.ReadFile("initramfs/mkinitcpio/install/sd-tpm2-kira")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(hook), "initrd.target.requires/tpm2-kira-close.service") {
+		t.Error("the hook does not make initrd.target require the close")
 	}
 }

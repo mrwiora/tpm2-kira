@@ -1,16 +1,17 @@
 #!/bin/sh
-# The SSH CA's window closed right before a resume from hibernation: a
-# resume starts the TPM afresh, which opens the window again, and the
-# resumed system runs no code screen. After every volume is unlocked
-# (cryptroot), before local-premount, where initramfs-tools resumes. In a
-# boot where run closed it already, the close does nothing. Its failure
+# The SSH CA closed (PCR 15 extended) right before a resume from
+# hibernation: a resume starts the TPM afresh, which sets PCR 15 back to
+# zero, and the resumed system runs no code screen. After every volume is
+# unlocked (cryptroot), before local-premount, where initramfs-tools
+# resumes. In a boot where run closed it already, an extend more changes
+# nothing. Its failure
 # stops the resume: local-premount/resume reads $resume alone (init made it
 # from resume= and noresume once, before any script), and the ORDER file
 # sources /conf/param.conf after every script, so an empty resume= there
 # reaches it.
 #
 # The package installs it into every image; it acts only while the image's
-# plan has the SSH server (the plan's part, as run reads it).
+# plan has the TPM (a sealed slot, the SSH server), as init-bottom's close.
 
 PREREQ="cryptroot"
 
@@ -25,9 +26,9 @@ prereqs)
     ;;
 esac
 
-[ -d /etc/tpm2-kira/plan/ssh ] || exit 0
+[ -d /etc/tpm2-kira/plan/tpm ] || exit 0
 if ! /usr/bin/tpm2-kira-boot close 2>>/run/initramfs/tpm2-kira.log; then
-    echo "tpm2-kira: the SSH CA's window is not closed: no resume from hibernation this boot" >/dev/console
+    echo "tpm2-kira: the SSH CA is not closed: no resume from hibernation this boot" >/dev/console
     echo "resume=" >>/conf/param.conf
 fi
 exit 0

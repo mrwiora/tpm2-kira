@@ -104,11 +104,19 @@ _add_plan() {
     # whenever a slot is sealed (the plan's TPM part), whatever its methods.
     # efivarfs, where the slots' records are, is mounted by systemd itself;
     # added for a kernel that has it as a module (built in, nothing to add).
+    #
+    # The SSH CA's close (PCR 15) when the code screen is over, whether the
+    # image serves SSH or not: a CA in this TPM signs nothing in the
+    # running system. Required by initrd.target: a close that fails stops
+    # the boot (emergency target).
     if _plan_has tpm; then
         add_module efivarfs
         _add_kira_unit tpm2-kira-cap.service
         add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-cap.service \
             /usr/lib/systemd/system/tpm2-kira-cap.service
+        _add_kira_unit tpm2-kira-close.service
+        add_symlink /usr/lib/systemd/system/initrd.target.requires/tpm2-kira-close.service \
+            /usr/lib/systemd/system/tpm2-kira-close.service
     fi
 
     # The phone's gate (PLAN-BLE.md §3.1): the adapter's driver modules and
@@ -258,7 +266,9 @@ The hook will:
 - Add each part of the boot plan that something uses, and say why the
   others are out:
     TOTP codes   a slot is sealed: run waits for the TPM (5 s), and
-                 tpm2-kira-cap.service locks the codes when the initrd is left
+                 tpm2-kira-cap.service locks the codes when the initrd is left;
+                 with the TPM in the plan, tpm2-kira-close.service closes the
+                 SSH CA (PCR 15) when the code screen is over
     Phone        a phone is enrolled (or TPM2_KIRA_ATTEST_BLUETOOTH=always):
                  the adapter's driver and firmware, the signing public key;
                  run starts the radio worker (gate-child) itself

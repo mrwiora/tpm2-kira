@@ -8,6 +8,21 @@ formats and CLI flags may change without migration paths.
 
 ---
 
+
+## The SSH CA closes by PCR 15, not by a window index (2026-11-01, experiment)
+
+The CA's window index W (aSSH, read-locked by `run` and before a resume) was replaced by
+PCR 15 in the CA's own policy, closed by an extend. Why, and what it changed here:
+
+- W had to be found to be closed (the CA file, else assh.conf's handle), so the close read
+  efivarfs and assh.conf; the extend needs neither, so it runs wherever the TPM is, also in
+  an image without the SSH server: `tpm2-kira-close.service` / init-bottom close every
+  boot whose plan has the TPM - which W never did (a CA kept with SSH off was never closed,
+  and on Debian the running system's PCRs are the code screen's).
+- A close that fails now stops the boot, not only the resume.
+- PCR 15 is shared with systemd (machine-id, file systems, volume keys): the close runs
+  before every cryptsetup unit, so its event is first and the same at every boot.
+
 ## Boot integration
 
 ### The phone's radio worker had a unit of its own
