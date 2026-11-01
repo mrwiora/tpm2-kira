@@ -30,7 +30,10 @@ signed by tpm2-kira's own PCR key.
 2. Not shown on a VM: the ladder's steps 2, 3 and 7 and the late closer's close (swtpm only;
    a VM's TPM does not refuse), Debian's resume itself (the kernel refuses the image: OVMF's
    memory map differs), V3's resume on Arch (the same refusal).
-3. A hard reboot with tpm2-kira's prompt open takes 95 s: `systemd-shutdown` waits for `run`.
+3. A resumed Arch VM resets itself about 30 s after its first login: QEMU's q35 TCO watchdog
+   runs from the firmware on, and a resumed kernel does not stop it (a magic close of
+   /dev/watchdog keeps the guest up). The machine's, not tpm2-kira's; V2's and V4's last check
+   (`reveal-plain`) passes or fails by whether it comes first.
 
 ---
 

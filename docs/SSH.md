@@ -448,7 +448,7 @@ local-top/cryptroot
   └── keyscript=/lib/cryptsetup/scripts/tpm2-kira: 'tpm2-kira-boot unlock-key' waits on
       run's socket - the hold is there, until the code is confirmed
 init-bottom/tpm2-kira
-  └── SIGTERM to run (sessions told, 'ssh-child' ends; KILL after a second),
+  └── SIGTERM to run (sessions told, 'ssh-child' ends; KILL after 5 s),
       'killall ipconfig', the interface's addresses and routes flushed, the link
       set down, /run/net-<dev>.conf removed
 ```

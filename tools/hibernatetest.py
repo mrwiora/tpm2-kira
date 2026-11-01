@@ -464,7 +464,7 @@ class Hib:
         m, lv = self.m, self.lv
         words = "initcall_blacklist=crb_acpi_driver_init"
         since = self.menu_edit(words)
-        text, again = self.restarted(since, "rebooting once", 240)
+        text, again = self.restarted(since, "rebooting once", 90)
         m.log.save("V4-silent-first-console.log", text)
         self.check("V4 step 6: one hard reboot, for a TPM the firmware measured into", "rebooting once" in text and again, text[-800:])
         self.check("V4 step 6: no shell on the way", "maintenance" not in text and "emergency mode" not in text.lower(), text[-800:])
@@ -492,7 +492,7 @@ class Hib:
         lv.start(unlock=False)
         since = lv.mark
         self.console_prompts(since)
-        text, again = self.restarted(since, "rebooting once", 240)
+        text, again = self.restarted(since, "rebooting once", 150)
         m.log.save("V9-first-console.log", text)
         self.check("V9 step 6: one hard reboot, for a TPM the firmware measured into", again, text[-800:])
         self.check("V9 step 6: no shell on the way", "(initramfs)" not in text and "Rebooting automatically" not in text, text[-800:])
@@ -673,7 +673,7 @@ def main():
     defaults.setdefault("password_file", os.path.join(LOCAL, "vm-pw"))
     hs, results = [], {}
     for name in names:
-        if not packages[name]:
+        if not packages[name] and not args.only and not args.drop_setup:
             print(f"no {name} package of HEAD ({short})", file=sys.stderr)
             return 2
         lv = localvm.Machine(name, lcfg[name], defaults)
