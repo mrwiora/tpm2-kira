@@ -16,6 +16,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/tpm2-trust/assh/hostkey"
 )
 
@@ -103,6 +104,19 @@ func TestSlotWithSignedPCR11(t *testing.T) {
 	if err := code(); err != nil {
 		t.Fatalf("the image approved with: %v", err)
 	}
+	// Beside what a caller holds, a primary and its object (the machine-id, the
+	// TPM salt): a TPM holds three objects, the PCR key goes before the signing key.
+	for i := 0; i < 2; i++ {
+		if _, err := tpmdev.CreatePrimaryKey(b.dev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, done, err := nvslot.ApprovedSession(b.dev, sb, idx); err != nil {
+		t.Fatalf("with two objects held: %v", err)
+	} else {
+		done()
+	}
+	tpmdev.Cleanup(b.dev, false)
 	// PCR 11 past enter-initrd (leave-initrd measured): no signature for it.
 	if err := extendPCR(b.dev, 11, "leave-initrd"); err != nil {
 		t.Fatal(err)
@@ -140,7 +154,7 @@ func TestSlotWithSignedPCR11(t *testing.T) {
 		t.Fatalf("after the reboot: %v", err)
 	}
 	// The close ends it, as every slot's.
-	if err := hostkey.Close(b.dev); err != nil {
+	if _, err := hostkey.Close(b.dev); err != nil {
 		t.Fatal(err)
 	}
 	if err := code(); err == nil {

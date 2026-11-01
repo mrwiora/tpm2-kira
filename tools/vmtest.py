@@ -690,6 +690,8 @@ class Machine:
         # No cap: PCR 15 closes the slots.
         rc, out = self.run("ls /usr/lib/systemd/system/tpm2-kira-cap.service 2>&1; "
                            "grep -c 'tpm2-kira-boot cap' /usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira 2>&1; true")
+        rc2, state = self.run("cat /run/tpm2-kira/close-state; ls /run/tpm2-kira/close-pending 2>&1; systemctl is-active tpm2-kira-late-close.service; ls /sys/firmware/efi/efivars | grep -c KIRAcloseReboot; true", save=f"boot{n}-close-state.log")
+        self.check(f"boot {n}: the close is PCR 15's, no late closer, no reboot counted", state.startswith("closed") and "No such file" in state and "inactive" in state and re.search(r"^0$", state, re.M) is not None, state)
         self.check(f"boot {n}: no cap unit or cap step", "No such file" in out.split("\n")[0] and not re.search(r"^[1-9]", out, re.M), out.strip())
         # One rule: PCR 7 and the image; slot 0 with the platform. On a UKI
         # the image is PCR 11, signed by the PCR key.
@@ -723,7 +725,10 @@ class Machine:
         the SSH CA certifies through its slot 1, with slot 0 (PCR 4 moved) out.
         Then slot approve brings slot 0 back."""
         self.log.head("an image not approved, signed by the PCR key")
-        rc, out = self.run("set -e; sed -i '$ s/$/ kiratest=1/' /etc/kernel/cmdline; mkinitcpio -P --nopost 2>&1 | tail -3", save="unapproved-rebuild.log")
+        # mkinitcpio -P does not hand --nopost to its presets: the hook goes aside.
+        hook = "/usr/lib/initcpio/post/sd-tpm2-kira"
+        rc, out = self.run(f"set -e; sed -i '$ s/$/ kiratest=1/' /etc/kernel/cmdline; mv {hook} {hook}.off; "
+                           f"mkinitcpio -P 2>&1 | tail -3; mv {hook}.off {hook}", save="unapproved-rebuild.log")
         self.check("unapproved: an image built without the hook's approval", rc == 0, out[-400:])
         self.run("systemctl reboot")
         self.wait_port(22, False, 120)

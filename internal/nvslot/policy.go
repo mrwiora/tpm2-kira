@@ -348,6 +348,15 @@ func ApprovedSessionThen(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint3
 		return nil, nil, &GenerationMismatchError{BlobGeneration: p.Generation, IndexMissing: true}
 	}
 
+	// The PCR key is loaded and flushed before the signing key: a TPM holds
+	// three objects, and a caller may hold two (a primary and its object).
+	var signed *signedPCRs
+	if len(blob.SignedPCRIndices()) > 0 {
+		if signed, err = checkSignedPCRs(tpmDev, blob); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	// The ticket must come from a key in a real hierarchy: PolicyAuthorize
 	// refuses the NULL ticket a NULL-hierarchy key produces.
 	signKey, err := tpm2.LoadExternal{InPublic: tpm2.New2B(*signingPublic), Hierarchy: tpm2.TPMRHOwner}.Execute(tpmDev)
@@ -355,14 +364,6 @@ func ApprovedSessionThen(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint3
 		return nil, nil, fmt.Errorf("failed to load the signing public key: %w", err)
 	}
 	done := func() { tpmdev.FlushHandle(tpmDev, signKey.ObjectHandle) }
-
-	var signed *signedPCRs
-	if len(blob.SignedPCRIndices()) > 0 {
-		if signed, err = checkSignedPCRs(tpmDev, blob); err != nil {
-			done()
-			return nil, nil, err
-		}
-	}
 
 	session := tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm transport.TPM, handle tpm2.TPMISHPolicy, _ tpm2.TPM2BNonce) error {
 		if signed != nil {
