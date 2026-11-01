@@ -77,6 +77,7 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 	// The coordinator does the same at boot, from a Release, and keeps
 	// only the salt.
 	s.blob.Phone.Verifiers = []attest.EnrolledVerifier{{ID: "my-phone", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
+	s.sealChannel(t, tpm, slot)
 	if err := writeAttestBlob(tpm, slot, s.blob, signer); err != nil {
 		t.Fatal(err)
 	}

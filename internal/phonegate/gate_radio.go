@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"github.com/google/go-tpm/tpm2/transport"
 	"io"
 	"os"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/core/transport/frame"
 	"github.com/mrwiora/tpm2-kira/internal/journal"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -22,6 +24,7 @@ type GateOptions struct {
 	TPMPath     string
 	SignerPath  string        // the signing public key in the initramfs; "" = DefaultAttestSignerPath
 	SealIndex   uint32        // 0 = first enrolled slot
+	PrivKeyPath string        // 'phone gate' after the close: the signing key that opens the channel; "" = the default
 	Adapter     int           // hciN, or ble.AnyAdapter: the first that comes up
 	Timeout     time.Duration // 0 = wait forever
 	AdapterWait time.Duration // how long to wait for the adapter to appear; the code screen's end stops it earlier
@@ -32,6 +35,28 @@ type GateOptions struct {
 	// RFKill is /dev/rfkill, opened by whoever may: the worker cannot open
 	// it. Nil: opened when a soft block is to be cleared.
 	RFKill *os.File
+}
+
+// openChannelByHand is 'phone gate”s way to the channel's secrets: the boot's
+// before the close, the signing key's after it.
+func openChannelByHand(privPath string) ChannelOpener {
+	return func(t transport.TPM, sb *nvslot.SealedBlob) (*nvslot.ChannelSecrets, error) {
+		c, err := nvslot.UnsealChannel(t, sb)
+		if !errors.Is(err, nvslot.ErrClosed) {
+			return c, err
+		}
+		if privPath == "" {
+			privPath = signing.DefaultPrivateKeyPath
+		}
+		priv, err := signing.LoadCheckedSigningPrivateKey(privPath)
+		if err != nil {
+			return nil, fmt.Errorf("the boot is closed, and only the signing key opens them now: %w", err)
+		}
+		if err := signing.PrepareSigningKey(priv); err != nil {
+			return nil, fmt.Errorf("the signing key is not usable: %w", err)
+		}
+		return nvslot.UnsealChannelSigned(t, sb, priv)
+	}
 }
 
 // AttestGate is 'tpm2-kira phone gate': one process that holds the TPM
@@ -55,7 +80,7 @@ func AttestGate(o GateOptions) int {
 	}
 	defer tpmDev.Close()
 	defer tpmdev.Cleanup(tpmDev, o.Debug)
-	return RunGateRadio(NewGateService(tpmDev, o.SealIndex, o.SignerPath, o.Debug), o, step, nil)
+	return RunGateRadio(NewGateServiceOpening(openChannelByHand(o.PrivKeyPath), tpmDev, o.SealIndex, o.SignerPath, o.Debug), o, step, nil)
 }
 
 // runGateRadio is the radio half of the gate: advertise, serve the phone,

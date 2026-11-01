@@ -29,7 +29,8 @@ sudo tpm2-kira phone enrol --name "Thinkpad-X1"
 #   A TPM without a SHA-256 PCR bank, or a slot sealed with --sha1, needs
 #   --sha1 here as well: SHA-1 is never chosen without being asked for.
 
-# Serve an attestation by hand (shows the verdict, never blocks):
+# Serve an attestation by hand (shows the verdict, never blocks; on the booted
+# system it needs the signing key, which opens the channel's secrets):
 sudo tpm2-kira phone gate
 sudo tpm2-kira phone status
 

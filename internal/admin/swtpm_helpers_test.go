@@ -106,10 +106,11 @@ func startSWTPM(t *testing.T) string {
 }
 
 type swtpmSetup struct {
-	sock string
-	tpm  transport.TPMCloser
-	blob *nvslot.Attestation
-	be   *phonegate.TPMBackend
+	channel *nvslot.ChannelSecrets // what blob.Phone seals (sealChannel)
+	sock    string
+	tpm     transport.TPMCloser
+	blob    *nvslot.Attestation
+	be      *phonegate.TPMBackend
 }
 
 // sealRealSlot seals a real TOTP key into the slot at idx, the way 'slot add'
@@ -170,6 +171,7 @@ func newSWTPMSetupAt(t *testing.T, sock, name string) *swtpmSetup {
 		t.Fatalf("TPM-created AK fails the verifier's own checks: %v", err)
 	}
 	noise, _ := attest.GenerateNoiseKeypair(nil)
+	s.channel = &nvslot.ChannelSecrets{NoisePrivate: noise.Private, AdvKey: phonegate.RandBytes(32)}
 	sel, _ := attest.NewPCRSelection(attest.AlgSHA256, []int{0, 2, 4, 7, 8, 9, 10, 11, 14})
 	s.blob = &nvslot.Attestation{
 		DeviceID:     phonegate.RandBytes(16),
@@ -179,10 +181,26 @@ func newSWTPMSetupAt(t *testing.T, sock, name string) *swtpmSetup {
 		AKName:       akName,
 		PCRAlg:       sel.Alg,
 		PCRSelection: sel.Indices,
-		Phone:        nvslot.PhoneAttestation{NoisePrivate: noise.Private, AdvKey: phonegate.RandBytes(32)},
+		// Not yet sealed: a slot to seal under comes later (sealChannel).
+		Phone: nvslot.PhoneAttestation{ChannelPublic: []byte{1}, ChannelPrivate: []byte{2}},
 	}
 	s.be = &phonegate.TPMBackend{TPM: tpmDev, Blob: s.blob, SealIndex: nvslot.NVRAMSlotStart}
 	return s
+}
+
+// sealChannel seals the setup's channel secrets for the slot at idx, as an
+// enrolment does; a test that opens them needs it.
+func (s *swtpmSetup) sealChannel(t *testing.T, tpm transport.TPM, idx uint32) {
+	t.Helper()
+	sb := phonegate.ReadSealedSlot(tpm, idx)
+	if sb == nil {
+		t.Fatalf("no slot at 0x%08X", idx)
+	}
+	pub, priv, err := nvslot.SealChannel(tpm, sb, s.channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.blob.Phone.ChannelPublic, s.blob.Phone.ChannelPrivate = pub, priv
 }
 
 func (s *swtpmSetup) extend(t *testing.T, pcr int, data string) {

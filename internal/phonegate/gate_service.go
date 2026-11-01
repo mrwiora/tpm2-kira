@@ -28,6 +28,7 @@ package phonegate
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -43,9 +44,9 @@ import (
 )
 
 // gateIdentity is what the radio worker needs to advertise and to run the
-// session: the slot's identifiers and keys for the channel. None of it is
-// protected by the TPM (the record is readable by anyone who can talk to
-// it); the phones' anchors, which decide a verdict, stay with the coordinator.
+// session: the slot's identifiers and the channel's secrets, which the
+// coordinator has opened from their sealed object; the phones' anchors, which
+// decide a verdict, stay with the coordinator.
 type gateIdentity struct {
 	Slot           int            `json:"slot"`
 	FriendlyName   string         `json:"friendly_name"`
@@ -92,6 +93,7 @@ type GateService struct {
 	TPM            transport.TPM
 	Idx            uint32
 	Blob           *nvslot.Attestation
+	Channel        *nvslot.ChannelSecrets
 	be             *TPMBackend
 	recordVerified bool
 
@@ -120,15 +122,32 @@ type GateService struct {
 // wait at once. The bound is for a session that dies in between.
 const releaseWait = 15 * time.Second
 
+// ChannelOpener opens the slot's channel secrets: nvslot.UnsealChannel at boot,
+// before the close; on the running system, the signing key's way
+// (OpenChannelSigned).
+type ChannelOpener func(transport.TPM, *nvslot.SealedBlob) (*nvslot.ChannelSecrets, error)
+
+// OpenChannelSigned opens the channel's secrets with the signing key.
+func OpenChannelSigned(signer crypto.Signer) ChannelOpener {
+	return func(t transport.TPM, sb *nvslot.SealedBlob) (*nvslot.ChannelSecrets, error) {
+		return nvslot.UnsealChannelSigned(t, sb, signer)
+	}
+}
+
 // NewGateService sets the coordinator up in the background (the TPM can be
 // slow, and the code screen must not wait for it): finds the enrolled slot,
-// checks its record and loads it. tpmDev is used from then on and never
-// closed here.
+// checks its record, loads it and opens its channel's secrets, the boot's way.
+// tpmDev is used from then on and never closed here.
 func NewGateService(tpmDev transport.TPM, sealIndex uint32, signerPath string, debug bool) *GateService {
+	return NewGateServiceOpening(nvslot.UnsealChannel, tpmDev, sealIndex, signerPath, debug)
+}
+
+// NewGateServiceOpening is NewGateService with the channel's secrets opened by open.
+func NewGateServiceOpening(open ChannelOpener, tpmDev transport.TPM, sealIndex uint32, signerPath string, debug bool) *GateService {
 	s := &GateService{Ready: make(chan struct{}), TPM: tpmDev, Issued: map[string][]byte{}}
 	go func() {
 		defer close(s.Ready)
-		s.Code, s.Reason = s.setup(sealIndex, signerPath, debug)
+		s.Code, s.Reason = s.setup(open, sealIndex, signerPath, debug)
 		if s.Code != 0 {
 			s.mu.Lock()
 			if s.Code == ExitTampered {
@@ -142,7 +161,7 @@ func NewGateService(tpmDev transport.TPM, sealIndex uint32, signerPath string, d
 	return s
 }
 
-func (s *GateService) setup(sealIndex uint32, signerPath string, debug bool) (int, error) {
+func (s *GateService) setup(open ChannelOpener, sealIndex uint32, signerPath string, debug bool) (int, error) {
 	var idx uint32
 	var err error
 	if sealIndex != 0 {
@@ -172,14 +191,26 @@ func (s *GateService) setup(sealIndex uint32, signerPath string, debug bool) (in
 	if len(blob.Phone.Verifiers) == 0 {
 		return ExitUsage, fmt.Errorf("no phone is enrolled for slot %d", nvslot.AttestSlot(idx))
 	}
-	if _, err := attest.NoiseKeypairFromPrivate(blob.Phone.NoisePrivate); err != nil {
+	sealIdx := idx // the enrolment lives in the slot's own blob
+	sealed := ReadSealedSlot(s.TPM, sealIdx)
+	if sealed == nil {
+		return ExitInternal, fmt.Errorf("cannot read slot %d's record", nvslot.AttestSlot(idx))
+	}
+	s.TPMMu.Lock()
+	channel, err := open(s.TPM, sealed)
+	s.TPMMu.Unlock()
+	if err != nil {
+		return ExitInternal, fmt.Errorf("the channel's secrets: %w", err)
+	}
+	if _, err := attest.NoiseKeypairFromPrivate(channel.NoisePrivate); err != nil {
+		channel.Wipe()
 		return ExitInternal, err
 	}
-	sealIdx := idx // the enrolment lives in the slot's own blob
 	s.mu.Lock()
 	s.Blob = blob
+	s.Channel = channel
 	s.recordVerified = verified
-	s.be = &TPMBackend{TPM: s.TPM, Blob: blob, SealIndex: sealIdx, Sealed: ReadSealedSlot(s.TPM, sealIdx), Debug: debug}
+	s.be = &TPMBackend{TPM: s.TPM, Blob: blob, SealIndex: sealIdx, Sealed: sealed, Debug: debug}
 	s.mu.Unlock()
 	return 0, nil
 }
@@ -195,8 +226,8 @@ func (s *GateService) Identity() (*gateIdentity, int, error) {
 		FriendlyName:   s.Blob.FriendlyName,
 		DeviceID:       s.Blob.DeviceID,
 		AKName:         s.Blob.AKName,
-		NoisePrivate:   s.Blob.Phone.NoisePrivate,
-		AdvKey:         s.Blob.Phone.AdvKey,
+		NoisePrivate:   s.Channel.NoisePrivate,
+		AdvKey:         s.Channel.AdvKey,
 		RecordVerified: s.recordVerified,
 	}
 	for _, v := range s.Blob.Phone.Verifiers {
@@ -382,6 +413,7 @@ func (s *GateService) Forget() {
 	defer s.mu.Unlock()
 	wipe.Bytes(s.salt)
 	s.salt = nil
+	s.Channel.Wipe()
 }
 
 func (s *GateService) JudgeReceipt(r *attest.Receipt, verifierID string) attest.ReceiptCheck {

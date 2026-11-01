@@ -101,8 +101,9 @@ label a scan result with the machine's name before connecting. Without
 `adv_key` the bytes are indistinguishable from random: an observer learns that
 *a* tpm2-kira machine is booting nearby, not *which*.
 
-`adv_key` and the machine's Noise private key are stored in the attestation
-blob, which anyone who can talk to the TPM can read. Such a reader can
+`adv_key` and the machine's Noise private key are sealed in the TPM: they open
+before the close in any boot, after it only with the signing key
+(SECURITY-BACKGROUND.md §3.1, note 5). Whoever opens them can
 recognise the machine and imitate its Bluetooth endpoint, but cannot produce
 a quote; this is accepted (SECURITY.md, "what it does not protect against").
 

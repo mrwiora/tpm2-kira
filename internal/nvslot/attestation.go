@@ -40,6 +40,9 @@ const (
 	// MaxVerifiers bounds the phones of one slot.
 	MaxVerifiers = 8
 
+	// maxChannelArea bounds each area of the channel's sealed object.
+	maxChannelArea = 1024
+
 	// MaxAttestationLen bounds the attestation part of a slot's blob.
 	MaxAttestationLen = 16 * 1024
 
@@ -80,16 +83,17 @@ type Attestation struct {
 	Vault VaultAttestation
 }
 
-// PhoneAttestation is the method "phones over Bluetooth LE": the keys of
-// the channel and the phones that may use it. The zero value is "not set up".
+// PhoneAttestation is the method "phones over Bluetooth LE": the channel's
+// secrets, sealed (channel.go), and the phones that may use it. The zero value
+// is "not set up".
 type PhoneAttestation struct {
-	NoisePrivate []byte // 32 bytes: the machine's static key of the encrypted channel
-	AdvKey       []byte // 32 bytes: lets an enrolled phone recognise the advertising
-	Verifiers    []attest.EnrolledVerifier
+	ChannelPublic  []byte // marshalled TPMT_PUBLIC of the sealed object
+	ChannelPrivate []byte // TPM2B_PRIVATE contents, wrapped by the storage primary
+	Verifiers      []attest.EnrolledVerifier
 }
 
 // Enabled reports whether the method is set up.
-func (p *PhoneAttestation) Enabled() bool { return len(p.NoisePrivate) != 0 }
+func (p *PhoneAttestation) Enabled() bool { return len(p.ChannelPublic) != 0 }
 
 // VaultAttestation is the method "tpm2-kira-vault": where the vault is,
 // the pin of its key, and the local part L of a vault keyslot's key,
@@ -257,15 +261,15 @@ func (b *Attestation) Marshal() ([]byte, error) {
 }
 
 func (p *PhoneAttestation) Marshal() ([]byte, error) {
-	if len(p.NoisePrivate) != 32 || len(p.AdvKey) != 32 {
-		return nil, fmt.Errorf("the phone method's keys are incomplete")
+	if len(p.ChannelPublic) == 0 || len(p.ChannelPrivate) == 0 {
+		return nil, fmt.Errorf("the phone method's sealed channel is incomplete")
 	}
 	if len(p.Verifiers) > MaxVerifiers {
 		return nil, fmt.Errorf("at most %d phones can be enrolled per slot", MaxVerifiers)
 	}
 	w := &blobWriter{}
-	w.raw(p.NoisePrivate)
-	w.raw(p.AdvKey)
+	w.lp16(p.ChannelPublic)
+	w.lp16(p.ChannelPrivate)
 	w.u8(uint8(len(p.Verifiers)))
 	for _, v := range p.Verifiers {
 		if len(v.NoisePub) != 32 {
@@ -412,8 +416,11 @@ func UnmarshalAttestation(data []byte) (*Attestation, error) {
 
 func (p *PhoneAttestation) unmarshal(data []byte) error {
 	r := &blobReader{b: data}
-	p.NoisePrivate = r.take(32)
-	p.AdvKey = r.take(32)
+	p.ChannelPublic = r.lp16(maxChannelArea)
+	p.ChannelPrivate = r.lp16(maxChannelArea)
+	if r.err == nil && (len(p.ChannelPublic) == 0 || len(p.ChannelPrivate) == 0) {
+		return fmt.Errorf("the phone method has no sealed channel")
+	}
 	n := int(r.u8())
 	if r.err == nil && n > MaxVerifiers {
 		return fmt.Errorf("the blob lists %d phones, maximum %d", n, MaxVerifiers)

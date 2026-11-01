@@ -358,7 +358,7 @@ func (m *appMachine) serve(c net.Conn, mode string, mtu int) {
 	m.mu.Unlock()
 
 	outcome := func() string {
-		noise, err := attest.NoiseKeypairFromPrivate(blob.Phone.NoisePrivate)
+		noise, err := attest.NoiseKeypairFromPrivate(m.s.channel.NoisePrivate)
 		if err != nil {
 			return "error: " + err.Error()
 		}
@@ -385,7 +385,7 @@ func (m *appMachine) serve(c net.Conn, mode string, mtu int) {
 			_, err := attest.ServeEnrolment(fc, &attest.EnrolIdentity{
 				DeviceID: blob.DeviceID, FriendlyName: blob.FriendlyName,
 				AKPub: blob.AKPublic, AKName: blob.AKName, NoiseStatic: noise,
-				AdvKey: blob.Phone.AdvKey, Selection: sel, AppVersion: "apptest",
+				AdvKey: m.s.channel.AdvKey, Selection: sel, AppVersion: "apptest",
 				Slot: uint8(nvslot.SlotNumber(nvslot.NVRAMSlotStart)),
 			}, be, nil)
 			if err != nil {

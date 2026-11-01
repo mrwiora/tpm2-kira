@@ -9,6 +9,17 @@ formats and CLI flags may change without migration paths.
 ---
 
 
+## The phone channel's secrets sealed (2026-11-01, security)
+
+Until blob 18 a record held `NoisePrivate` and `AdvKey` in clear, in an EFI variable
+any local user can read: imitating the machine's Bluetooth endpoint needed no root.
+Sealing under the slot's policy did not fit: the gate could then not start in a boot
+nobody approved (no "changed" diff, the reason SECURITY.md had rejected sealing to the
+PCRs), and a further phone, `phone salt enrol` and `phone gate` read the secrets on the
+running system. A TPM key doing the agreement would change the phone's protocol (the
+TPM has no X25519) and needs the same branch for those. Hence one object with its
+own policy, PCR 15 alone or the signing key.
+
 ## PCR 15 closes every slot, not `cap` (2026-11-01)
 
 Until 2026-11-01 the slots were closed by `tpm2-kira-boot cap`: `tpm2-kira-cap.service`

@@ -73,7 +73,7 @@ flowchart TB
 ### 3.1 The slot's record (the "blob"), in an EFI variable
 
 Each slot (0-15; its number is also written as `0x01803010` + *n*) keeps
-one serialised `SealedBlob` (format version 18, §10), its **record**, in
+one serialised `SealedBlob` (format version 19, §10), its **record**, in
 the EFI variable `KIRAslotN` under tpm2-kira's vendor GUID
 (`67f474ef-94a1-4412-88df-d62349d430a9`), at most 8 KiB. In the TPM a
 slot keeps only what a TPM policy reads or nobody may turn back: its
@@ -93,7 +93,7 @@ and within that part the way a verifier reaches the machine is a typed
 
 | Field               | Content                                                         | Sensitive? |
 |---------------------|-----------------------------------------------------------------|------------|
-| `Version`           | Blob format version (18)                                        | No         |
+| `Version`           | Blob format version (19)                                        | No         |
 | `Public`            | TPMT_PUBLIC of the TOTP key object; empty without TOTP | No     |
 | `Private`           | TPM2B_PRIVATE of the TOTP key object (TPM-wrapped); empty without TOTP | **Yes**¹ |
 | `PCRDigests`        | Per-PCR index, source (register/eventlog/uki/signed) and digest | No         |
@@ -104,7 +104,7 @@ and within that part the way a verifier reaches the machine is a typed
 | `ApprovalSignature` | Signing key's signature over `H(approvedPolicy ‖ PolicyRef)`    | No         |
 | `PCRKey`            | Public PCR key (§15) when the slot takes PCR 11 signed; else empty | No      |
 | `MeasurePointApplied` | Whether the eventlog PCRs' values include the measure-point extends³ | No |
-| `Attestation`       | The optional phone-attestation part (fields below)             | Partly⁵    |
+| `Attestation`       | The optional phone-attestation part (fields below)             | Partly¹    |
 | `BlobSignature`     | Signature over everything above                                 | No⁴        |
 
 The attestation part (`Attestation`), created by `phone enrol`. It describes
@@ -124,14 +124,14 @@ the machine as an attester, whatever the method:
 | `TPMSalt`       | The salt part of recipe 0x1200, wrapped (TPM2_MakeCredential) for this TPM's EK and the release key: it opens only through the release key's policy; empty without | No⁶ |
 | `PCRAlg`, `PCRSelection` | The PCR bank and registers that are quoted                  | No         |
 | `Count`         | Value of the slot's record counter when the part last changed (§3.3) | No         |
-| methods         | Who may ask for a quote, and over what: typed blocks, below          | Partly⁵    |
+| methods         | Who may ask for a quote, and over what: typed blocks, below          | Partly¹    |
 
 Method 1, phones over Bluetooth LE (`Phone`):
 
 | Field           | Content                                                              | Sensitive? |
 |-----------------|----------------------------------------------------------------------|------------|
-| `NoisePrivate`  | The machine's static key for the encrypted channel to the phones     | **Yes**⁵   |
-| `AdvKey`        | Key that lets an enrolled phone recognise the machine's advertising  | **Yes**⁵   |
+| `ChannelPublic` | TPMT_PUBLIC of the sealed object holding the channel's secrets⁵      | No         |
+| `ChannelPrivate`| TPM2B_PRIVATE of that object (TPM-wrapped)                           | **Yes**¹   |
 | `Verifiers`     | Up to 8 phones: id, anchor public key (signs the phone's verdicts), channel public key, policy id; no name | No |
 
 Method 2, tpm2-kira-vault (`Vault`, VAULT.md), created by `vault enrol`:
@@ -202,7 +202,7 @@ part of the decision which recipe needs which method (PLAN.md, part C).
 **Why an EFI variable.** A record's integrity is the signing key's
 signature, its freshness the record counter in the TPM (§3.3), and
 its private parts are wrapped: by this TPM's storage key, the TPM salt and the
-vault's part for its EK; what stays in clear is note ⁵'s. So it needs no
+vault's part for its EK. So it needs no
 protection of the TPM's - only room, which an NV index (2048 bytes on many TPMs,
 `TPM2_PT_NV_INDEX_MAX`) has not for an RSA EK with two wrapped factors, an RSA
 signing key, or phones beside the rest. The variable against an NV index:
@@ -214,7 +214,7 @@ signing key, or phones beside the rest. The variable against an NV index:
 | Replaced by an attacker | refused: signature, counter | refused: signature, counter |
 | Deleted | the owner's authorisation (empty on most machines) | root; also a firmware reset of its variables |
 | A TPM clear | gone with the keys it wraps | left behind, useless: `status` names it |
-| Read by | anyone with TPM access | any local user: efivarfs shows variables mode 0644, and nothing sets it tighter (§18) |
+| Read by | anyone with TPM access | any local user: efivarfs shows variables mode 0644, and nothing sets it tighter; it holds nothing secret in clear |
 | Written | at every approval, enrolment | the same; no TPM NV write for it |
 
 A deleted or replaced record is a denial of service: the slot's methods
@@ -274,12 +274,20 @@ part: which verifiers are enrolled cannot be changed without the signing
 key, and the Bluetooth gate verifies the signature in the initrd with a copy
 of the signing *public* key that the initramfs hooks put into the image.
 
-⁵ `NoisePrivate` and `AdvKey` are stored in the clear and, unlike the
-`Private` fields, are **not** protected by the TPM. Whoever can read the
-variable (§9) can recognise the machine's advertisements and imitate its
-Bluetooth endpoint, but cannot produce a quote, which only the TPM's attestation
-key can sign (SECURITY.md, "Remote attestation with a phone: what it does not
-protect against").
+⁵ The channel's secrets are the machine's static Noise key and the advertising
+key, 64 bytes sealed in one object (`internal/nvslot/channel.go`). Its policy is
+not the slot's, and is fixed when it is made:
+
+    PolicyOR( PolicyPCR(15 == zero) ; PolicyCommandCode(Unseal),
+              PolicySigned(signing key, policyRef) ; PolicyCommandCode(Unseal) )
+
+The first branch is the gate's: before the close, in any boot, approved or not, so
+that the phone can show a boot nobody approved as changed. The second is the
+running system's, with a signature over the TPM's nonce of that session: `phone enrol`
+for a further phone (the phones have pinned these keys), `phone salt enrol` and
+`phone gate` after the close. Whoever opens them can recognise the machine's
+advertisements and imitate its Bluetooth endpoint, but cannot produce a quote, which
+only the TPM's attestation key can sign. Who still can: §19.
 
 ### 3.2 The generation index
 
@@ -409,14 +417,15 @@ EFI variable KIRAslotN   (bytes, under one signature by the signing key)
     ├── boot key          public area + wrapped private area
     ├── release key       public area + wrapped private area
     ├── wrapped factors (TPM salt, the vault's local part)
+    ├── the channel's secrets, sealed: public area + wrapped private area
     └── phones, the vault, revision
 ```
 
 The TPM has no notion of "slot"; it is given one key at a time. What ties the
 keys together is their **policy**: each public area carries a policy digest,
 fixed at creation and part of the key's Name, and all carry the same slot policy
-(§4; the release key adds a command code to it, §3.7). Using one goes the same
-way:
+(§4; the release key adds a command code to it, §3.7; the channel's object alone has
+another, §3.1 note ⁵). Using one goes the same way:
 
 1. read the record from its EFI variable; re-create the storage primary
    (deterministic from the seed);
@@ -1046,6 +1055,7 @@ approve and boot.
 | Offline disk theft                          | The key objects are TPM-wrapped; useless without the specific TPM chip |
 | Boot chain tampering (evil maid)            | PCR values change → PolicyPCR fails → no code → user detects compromise |
 | Copying the TOTP key                        | No unseal exists; the TPM computes codes and the key never leaves it after enrolment (§4.5) |
+| Reading the phone channel's secrets on the running OS | Sealed; after the close only the signing key opens them (§3.1, note ⁵) |
 | Using the TPM from the running OS (root, `tss`) | The close extends PCR 15 at the end of the code screen; every slot object's own PolicyPCR(15 == zero) fails until reboot, whatever the signing key approves (§4.5, §14) |
 | Rollback to an older approved state         | Every approval raises the generation; older approvals of a slot stop working. Limit: signed PCR 11 and the CA's approvals (§19) |
 | A dictionary-attack lockout stopping the boot | The generation index, the storage primary and every slot object are noDA (§4.5) |
@@ -1089,7 +1099,7 @@ flowchart TB
   T["TRUSTED: TPM 2.0 chip<br/>keys never leave; PCR integrity;<br/>PolicyAuthorize, PolicyNV, PolicyPCR; signature checks"]
   I["TRUSTED UNTIL THE CLOSE: the approved boot image<br/>run, the code screen, the close"]
   R["PRIVILEGED: root on the running system<br/>the signing key (file) and the PCR key; replaces records;<br/>no slot object and no CA after the close"]
-  U["UNTRUSTED: non-root userspace<br/>no /dev/tpmrm0, no key file; can read EFI variables (§18)"]
+  U["UNTRUSTED: non-root userspace<br/>no /dev/tpmrm0, no key file; can read EFI variables, nothing secret in them"]
   C["CONFINED: ssh-child, gate-child<br/>parse outside input; no TPM; run signs for them"]
   T ---|"/dev/tpmrm0"| I
   T ---|"/dev/tpmrm0, kernel mediated"| R
@@ -1124,9 +1134,8 @@ What this means in practice:
 
 1. **Reading a record yields no key of the TPM.** Its private parts are wrapped by
    this TPM and reveal nothing without a valid policy session; PCR digests, public
-   keys, the vault's URL and pin, the phones' keys are not secret. What is secret
-   and in clear is note ⁵'s (§3.1); efivarfs shows the variable to any local user
-   unless its mode is changed (§18).
+   keys, the vault's URL and pin, the phones' keys are not secret. efivarfs shows
+   the variable to any local user.
 2. **Replacing a record needs no key, and gains nothing.** Root writes the
    variable; the record's signature (§3.1, note ⁴) is what authenticates
    its content, and the counter (§3.3) its freshness. `slot approve`
@@ -1167,7 +1176,7 @@ outside the current design.
 
 ---
 
-## 10. Blob Format (Version 18)
+## 10. Blob Format (Version 19)
 
 The blob is a binary-serialised structure with explicit length prefixes and
 maximum size limits to prevent memory exhaustion during deserialisation.
@@ -1206,7 +1215,7 @@ every local user in `/proc/<pid>/cmdline`.
 ```
 Offset  Field                   Type        Notes
 ─────────────────────────────────────────────────────────────
-0       Version                 uint32      Must be 18
+0       Version                 uint32      Must be 19
 4       Payload length          uint32      Signed region length
 8       Public length           uint32      ≤ 2MB; 0 with phones (§3.1)
 ?       Public                  []byte      TPMT_PUBLIC of the TOTP key object
@@ -1265,8 +1274,8 @@ Offset  Field                   Type        Notes
             Method length       uint32
             Method data         []byte      By type, below; must fill the length
           Method type 1, phones over Bluetooth LE:
-            NoisePrivate        [32]byte    X25519 static key of the channel
-            AdvKey              [32]byte    Advertising key
+            ChannelPublic       uint16 + []byte   ≤ 1024: TPMT_PUBLIC of the sealed channel secrets
+            ChannelPrivate      uint16 + []byte   ≤ 1024: TPM2B_PRIVATE of it, wrapped (§3.1, note ⁵)
             Phone count         uint8       ≤ 8
             For each phone:
               ID length         uint16      ≤ 64
@@ -1327,7 +1336,7 @@ record). Measured on swtpm, unless it says otherwise:
 | ... with an RSA-2048 or RSA-4096 signing key | ~1250 or ~2020 |
 | P-256, a TPM salt and the vault (unattended, a pepper), ECC EK | ~1660 |
 | ... with an RSA-2048 EK (188 bytes more per factor wrapped for it) | ~2040 |
-| one phone; each further phone | ~720; ~170 |
+| one phone; each further phone | ~930; ~170 |
 
 `slot add` and `slot approve` check the record against the limit before
 they raise the generation, with the largest signatures the key can make,
@@ -1784,12 +1793,12 @@ and uses go-uefi-slim for EFI variables and PCR 4's Authenticode hashes. On Arch
 db signature comes from outside, from sbctl or whatever the owner runs; tpm2-kira neither
 makes nor checks it.
 
-**WARNING, the records are readable without root.** `go-uefi-slim/efivar` creates
-variables mode 0644 and efivarfs shows them so (seen on the development host's efivarfs;
-not looked at on the VMs), and nothing in tpm2-kira changes it. A record holds a
-phone-enrolled slot's `NoisePrivate` and `AdvKey` in clear (§3.1, note ⁵), so any local
-user can recognise the machine's advertisements and imitate its Bluetooth endpoint, not
-produce a quote. No test covers this. Not an accepted risk yet: decide, or set the mode.
+**What stays of the channel's secrets.** A record stays readable without root
+(`go-uefi-slim/efivar` creates variables mode 0644, seen on the development host's
+efivarfs), and holds nothing secret in clear since blob 19: `TestChannelSecretsSealed`
+looks for them in the bytes. Before the close they still open by design, for anything
+booted on the machine (§19). No phone or radio on a VM has exercised the sealed
+channel: that is swtpm and Marify's emulator test.
 
 | Not proven | What exists instead |
 |---|---|
@@ -1822,6 +1831,8 @@ Each is taken knowingly: why the design still works, and how far.
 | An image without tpm2-kira under the same keys | The close is software in the approved image; the TPM cannot tell. It needs the PCR key's signature (or an approval) too | That one boot, with PCR 15 at zero |
 | An early extend of PCR 15 (`tpm2-measure-pcr=` before the code screen) | It closes early | A denial of service only: a temporary key and no codes, never an open CA |
 | A TPM silent in the initrd, answering later in the same boot (step 6) | The late closer closes the moment it answers; `control` is red meanwhile | Root can kill the closer. Whoever can silence the TPM for the initrd alone and has root afterwards gets that one boot, if the PCRs hold an approved state. `KIRAcloseReboot` is plain: writing it spares a boot the reboot, not a close |
+| Anything booted on the machine reads the channel's secrets before the close | The gate must start in a boot nobody approved, or the phone could not show it as changed. A live USB, another signed OS, a `break=` shell: PCR 15 is zero there. So the object's first branch reads PCR 15 alone, no approval | That machine can recognise the advertisements and imitate the Bluetooth endpoint, and keeps that ability once it has read them: an enrolment again makes new ones. It cannot produce a quote of a good state: quotes come from the TPM's registers as they are, the phone says changed |
+| Root with the signing key opens the channel's secrets on the running system | Enrolling a further phone and the phone salt's hand-over need them; each opening signs the TPM's nonce, so a YubiKey asks each time | As the row above; with a key file root can do it unseen (the first row: such root approves anything) |
 | A physical attacker on the TPM bus | Out of this design's scope; a firmware TPM has no such bus | Can fake replies, the close's read-back included |
 | A temporary host key cannot be checked from afar | Its fingerprint is on the console; it lets the server run when no slot certifies | Whoever logs in remotely after a firmware update accepts an unknown key for that boot; never with `StrictHostKeyChecking=accept-new` |
 | A reboot loop with a broken TPM (step 7) | Booting on with an open CA is worse, and the way out exists (§14.3) | The one exception to the passphrase by hand; a person at the console needed |

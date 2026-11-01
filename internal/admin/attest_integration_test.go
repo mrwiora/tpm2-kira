@@ -59,7 +59,8 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 		}
 		return writeAttestBlob(s.tpm, idx, s.blob, signer)
 	}
-	noise, _ := attest.NoiseKeypairFromPrivate(s.blob.Phone.NoisePrivate)
+	s.sealChannel(t, s.tpm, idx)
+	noise, _ := attest.NoiseKeypairFromPrivate(s.channel.NoisePrivate)
 
 	a, b := attesttest.NewPipe()
 	done := make(chan error, 1)
@@ -67,7 +68,7 @@ func runAttestationOnSWTPM(t *testing.T, s *swtpmSetup) {
 		_, err := attest.ServeEnrolment(a, &attest.EnrolIdentity{
 			DeviceID: s.blob.DeviceID, FriendlyName: s.blob.FriendlyName,
 			AKPub: s.blob.AKPublic, AKName: s.blob.AKName, NoiseStatic: noise,
-			AdvKey: s.blob.Phone.AdvKey, Selection: sel, AppVersion: "test",
+			AdvKey: s.channel.AdvKey, Selection: sel, AppVersion: "test",
 		}, s.be, nil)
 		a.Close()
 		done <- err
@@ -454,6 +455,7 @@ func TestCoordinatorAndWorker(t *testing.T) {
 	idx := uint32(nvslot.NVRAMSlotStart + 3)
 	writeTestSlot(t, s.tpm, idx, mine)
 	s.blob.Phone.Verifiers = []attest.EnrolledVerifier{{ID: "my-phone", AnchorPub: []byte{1}, NoisePub: make([]byte, 32)}}
+	s.sealChannel(t, s.tpm, idx)
 	if err := writeAttestBlob(s.tpm, idx, s.blob, mine); err != nil {
 		t.Fatal(err)
 	}

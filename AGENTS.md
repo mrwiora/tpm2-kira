@@ -192,6 +192,13 @@ It may not carry what came before.
   `SlotPolicy`, `ApprovedSessionThen`); nothing read-locks or caps. The
   generation index only revokes approvals; it, the storage primary and
   the slot objects are noDA, so a lockout never stops the slots at boot.
+- **The phone channel's secrets are the one sealed object with another
+  policy** (`internal/nvslot/channel.go`, decided 2026-11-01): `PolicyOR(
+  PolicyPCR(15 == zero), PolicySigned(signing key, policyRef))`, each branch
+  with `PolicyCommandCode(Unseal)`. Not the slot's policy: the gate must start in
+  a boot nobody approved, so that the phone shows it as changed; a further phone
+  and the phone salt's hand-over open them after the close with the signing key.
+  The wire does not change. The record never holds them in clear.
 - **NV indices are written and removed one way: aSSH's `persist`.** EFI
   variables are tpm2-kira's own:
   - It has its own code for them (the machine-id, the slots' records, and

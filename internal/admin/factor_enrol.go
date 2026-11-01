@@ -168,7 +168,8 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	if pubKeyPath == "" {
 		pubKeyPath = signing.DefaultPublicKeyPath
 	}
-	svc := phonegate.NewGateService(tpmDev, idx, pubKeyPath, o.Debug)
+	// The boot is closed here: the channel's secrets open with the signing key.
+	svc := phonegate.NewGateServiceOpening(phonegate.OpenChannelSigned(priv), tpmDev, idx, pubKeyPath, o.Debug)
 	svc.Keep(&attest.FactorBlob{CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret, Label: label})
 	fmt.Println("Open Marify on the phone and verify this machine: the verdict screen asks")
 	fmt.Println("to keep the phone salt (no code: after boot the boot key is locked). Continue")

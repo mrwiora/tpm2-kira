@@ -87,17 +87,18 @@ Known residual risks:
   can raise it, which makes the genuine record stale: the gate then refuses
   it and no phone is served until you enrol again. That denies the phone
   check; it never produces an accepted record.
-- **A slot's record is readable by any local user.** It is the EFI variable
-  `KIRAslotN`, and efivarfs shows variables mode 0644.
-  With a phone enrolled it holds the machine's Noise private key and its
-  advertising key (docs/SECURITY-BACKGROUND.md §3.1). Someone
-  who reads it once — any local user, or a live USB on this machine — can recognise the
+- **The channel's secrets open for anything booted on this machine, before the
+  close.** The machine's Noise private key and its advertising key are sealed in
+  the TPM (docs/SECURITY-BACKGROUND.md §3.1, note 5): a record, the EFI variable
+  `KIRAslotN` that any local user can read, holds neither in clear, and after the
+  close only the signing key opens them. Before the close PCR 15 alone guards them,
+  so someone who boots this machine once — a live USB, a `break=` shell — can recognise the
   machine's advertisements and imitate its Bluetooth endpoint. They cannot
   produce a quote: quotes come from the TPM, are bound to the session, and a
   tampered boot reports tampered PCRs. The phone then shows a failed or
   changed verdict, or "did not accept this phone", never a green one.
-  Sealing these keys to the PCRs was rejected: a legitimate update could then
-  not show its "changed" diff, which is the point of the phone.
+  Sealing these keys to the approved PCRs was rejected: a legitimate update could
+  then not show its "changed" diff, which is the point of the phone.
 - **Relay to a look-alike machine.** Attestation proves that *your enrolled
   TPM* booted a known state, not that the laptop in front of you is that
   machine. An attacker who swaps the laptop for a look-alike and relays
@@ -140,9 +141,8 @@ display's process, the *coordinator*, which the worker reaches over the
 socket pairs it was started with; nothing is in the file system for another
 process to connect to. Over them the worker can
 
-- obtain what it needs for the radio session (identifiers, the channel key,
-  the phones' channel keys; all readable from the slot's record, an EFI
-  variable, by any local user, and none of it TPM-protected),
+- obtain what it needs for the radio session (identifiers, the channel's
+  secrets, which the coordinator opened from the TPM, the phones' channel keys),
 - have a quote signed by the attestation key, which states what the PCRs
   are and gives nothing away,
 - hand in the phone's receipt, and report its own progress.

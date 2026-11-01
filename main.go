@@ -865,13 +865,14 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		adapter := fs.Int("adapter", -1, "Bluetooth adapter index (hciN); default: the first that comes up")
 		timeout := fs.Duration("timeout", 0, "Give up after this long (0 = as long as the code screen holds, or forever without one)")
 		adapterWait := fs.Duration("adapter-wait", phonegate.GateAdapterWait, "Wait this long for the adapter to appear")
+		gatePrivKey := fs.String("privkey", "", "After the close: the signing key that opens the channel's secrets (default: the installed one)")
 		fs.Parse(args)
 		var slot uint32
 		if nvramExplicit(args) {
 			slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
 		}
 		os.Exit(phonegate.AttestGate(phonegate.GateOptions{
-			TPMPath: *tpm, SealIndex: slot, Adapter: *adapter, Timeout: *timeout,
+			TPMPath: *tpm, SealIndex: slot, PrivKeyPath: *gatePrivKey, Adapter: *adapter, Timeout: *timeout,
 			AdapterWait: *adapterWait, Debug: *debug || nvslot.BootDebug(*tpm),
 		}))
 	case "status":

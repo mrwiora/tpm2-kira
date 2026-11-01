@@ -30,10 +30,11 @@ func testCoordinator(t *testing.T) (*GateService, *ecdsa.PrivateKey) {
 	s.Blob = &nvslot.Attestation{
 		DeviceID: []byte("0123456789abcdef"), AKName: []byte("ak-name"), FriendlyName: "box",
 		Phone: nvslot.PhoneAttestation{
-			NoisePrivate: make([]byte, 32), AdvKey: make([]byte, 32),
+			ChannelPublic: []byte{1}, ChannelPrivate: []byte{2},
 			Verifiers: []attest.EnrolledVerifier{{ID: "phone-1", AnchorPub: anchor, NoisePub: make([]byte, 32)}},
 		},
 	}
+	s.Channel = &nvslot.ChannelSecrets{NoisePrivate: make([]byte, 32), AdvKey: make([]byte, 32)}
 	s.Current.Slot = 2
 	close(s.Ready)
 	return s, phone

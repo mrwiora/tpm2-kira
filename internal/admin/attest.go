@@ -116,6 +116,33 @@ func writeAttestBlob(tpmDev transport.TPM, idx uint32, b *nvslot.Attestation, pr
 	return nil
 }
 
+// enrolmentChannel is the channel's secrets for an enrolment. A slot's first
+// phone makes them and seals them into enrolment; a further phone gets the ones
+// the slot's phones have pinned, which the signing key opens: the boot is closed
+// by now.
+func enrolmentChannel(t transport.TPM, sealed *nvslot.SealedBlob, enrolment *nvslot.Attestation, signer crypto.Signer) (*nvslot.ChannelSecrets, error) {
+	if enrolment.Phone.Enabled() {
+		if err := signing.PrepareSigningKey(signer); err != nil {
+			return nil, fmt.Errorf("the signing key is not usable: %w", err)
+		}
+		probe := *sealed
+		probe.Payload.Attestation = enrolment
+		return nvslot.UnsealChannelSigned(t, &probe, signer)
+	}
+	noise, err := attest.GenerateNoiseKeypair(nil)
+	if err != nil {
+		return nil, err
+	}
+	channel := &nvslot.ChannelSecrets{NoisePrivate: noise.Private, AdvKey: phonegate.RandBytes(32)}
+	public, private, err := nvslot.SealChannel(t, sealed, channel)
+	if err != nil {
+		channel.Wipe()
+		return nil, err
+	}
+	enrolment.Phone = nvslot.PhoneAttestation{ChannelPublic: public, ChannelPrivate: private}
+	return channel, nil
+}
+
 // enrolmentSize is the size the slot's record has at least after the
 // enrolment. The phone is not known before it answers: it may be one of the
 // slot's phones enrolling again, which replaces its entry, and its strings
@@ -325,15 +352,6 @@ func AttestEnrol(o EnrolOptions) error {
 	}
 	blob := slotBlob.Payload.Attestation
 	sealed := slotBlob
-	if blob != nil && !blob.Phone.Enabled() {
-		// The part is there for the vault: the phones join it, with the
-		// attestation key, selection and release key it has.
-		noise, err := attest.GenerateNoiseKeypair(nil)
-		if err != nil {
-			return err
-		}
-		blob.Phone = nvslot.PhoneAttestation{NoisePrivate: noise.Private, AdvKey: phonegate.RandBytes(32)}
-	}
 	if blob != nil && o.PCRs != "" {
 		if err := checkSamePCRs(blob, o.PCRs, nvslot.AttestSlot(idx)); err != nil {
 			return err
@@ -377,10 +395,6 @@ func AttestEnrol(o EnrolOptions) error {
 		if err != nil {
 			return err
 		}
-		noise, err := attest.GenerateNoiseKeypair(nil)
-		if err != nil {
-			return err
-		}
 		name := o.Name
 		if name == "" {
 			name, _ = os.Hostname()
@@ -396,11 +410,17 @@ func AttestEnrol(o EnrolOptions) error {
 			AKName:       akName,
 			PCRAlg:       sel.Alg,
 			PCRSelection: sel.Indices,
-			Phone:        nvslot.PhoneAttestation{NoisePrivate: noise.Private, AdvKey: phonegate.RandBytes(32)},
 		}
 	} else if o.Name != "" {
 		blob.FriendlyName = o.Name
 	}
+	// The part may be there for the vault alone: the phones join it, with the
+	// attestation key, selection and release key it has.
+	channel, err := enrolmentChannel(tpmDev, sealed, blob, priv)
+	if err != nil {
+		return err
+	}
+	defer channel.Wipe()
 	sel, err := blob.Selection()
 	if err != nil {
 		return err
@@ -415,7 +435,7 @@ func AttestEnrol(o EnrolOptions) error {
 	if err := checkEnrolmentFits(slotBlob, blob, nvslot.AttestSlot(idx)); err != nil {
 		return err
 	}
-	noise, err := attest.NoiseKeypairFromPrivate(blob.Phone.NoisePrivate)
+	noise, err := attest.NoiseKeypairFromPrivate(channel.NoisePrivate)
 	if err != nil {
 		return err
 	}
@@ -504,7 +524,7 @@ func AttestEnrol(o EnrolOptions) error {
 		AKPub:        blob.AKPublic,
 		AKName:       blob.AKName,
 		NoiseStatic:  noise,
-		AdvKey:       blob.Phone.AdvKey,
+		AdvKey:       channel.AdvKey,
 		Selection:    sel,
 		AppVersion:   nvslot.AppVersion,
 		Slot:         uint8(nvslot.SlotNumber(sealIndex)),
