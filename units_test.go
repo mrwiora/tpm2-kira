@@ -187,7 +187,7 @@ func TestCloseUnitFailsTheBoot(t *testing.T) {
 	d := directives(t, "initramfs/systemd/tpm2-kira-close.service")
 	for _, want := range []string{"After=tpm2-kira.service", "Wants=cryptsetup-pre.target",
 		"Before=cryptsetup-pre.target initrd.target initrd-switch-root.target", "Type=oneshot", "ExecStart=tpm2-kira-boot close",
-		"FailureAction=reboot-force"} {
+		"FailureAction=reboot-force", "ConditionKernelCommandLine=!tpm2-kira.noclose"} {
 		if !has(d, want) {
 			t.Errorf("tpm2-kira-close.service lacks %s", want)
 		}

@@ -40,7 +40,7 @@ checks that on both distributions, from the machines' snapshot "fresh":
          what is hibernated. Then a close that holds clears the count.
   V8     the way out of a close that keeps rebooting (step 7, which no VM can
          make: a TPM that answers and refuses): its mechanics, without a TPM:
-         Arch, rd.systemd.mask=tpm2-kira-close.service with Secure Boot off;
+         Arch, the word tpm2-kira.noclose with Secure Boot off;
          Debian, GRUB's break=bottom and the plan's TPM part removed.
 
 V4, V9 and V8 run last. The report and every
@@ -476,12 +476,11 @@ class Hib:
         self.check("V9: a close that holds clears the count and the state", re.search(r"^0$", out, re.M) is not None and "closed" in out and "No such file" in out, out)
 
     def way_out(self):
-        """A TPM that stays broken: docs/SSH.md's way out, taken as it says.
-        The boot without the close comes up with the passphrase's recipe.
-        Arch: the stub takes a passed command line (this machine has Secure
-        Boot off); Debian: GRUB's break=bottom - written into grub.cfg, as
-        the menu's editor is on the graphical console here - and the plan's
-        TPM part removed in the shell it gives."""
+        """A TPM that answers and refuses everything: docs/SSH.md's way out, taken
+        as it says, here without a TPM. Arch: the word tpm2-kira.noclose, which the
+        stub takes with Secure Boot off; Debian: GRUB's break=bottom - written into
+        grub.cfg, as the menu's editor is on the graphical console here - and the
+        plan's TPM part removed in the shell it gives."""
         m, lv = self.m, self.lv
         m.log.head("V8: the way out of a TPM that stays broken")
         if self.distro == "debian":
@@ -499,13 +498,16 @@ class Hib:
             time.sleep(1)
             lv.send("exit\r")
         else:
-            since = self.menu_edit("rd.systemd.mask=tpm2-kira-close.service", tpm=False)
+            since = self.menu_edit("tpm2-kira.noclose", tpm=False)
             self.console_prompts(since)
         lv.wait_ssh(600)
         self.wait_login("V8")
         text = lv.serial_text(since)
         m.log.save("V8-console.log", text)
         self.check("V8: the machine is up with its passphrase's recipe, without the TPM", not RESTART.search(text, text.find("Password for disk")), text[-800:])
+        if self.distro == "arch":
+            rc, out = self.run("journalctl -b --no-pager -o cat | grep 'tpm2-kira.noclose'", save="wayout-skipped.log")
+            self.check("V8: Arch - the close's unit was left out by the word", "ConditionKernelCommandLine" in out or "unmet condition" in out, out[-400:])
         rc, out = self.run("ls /dev/tpm* 2>&1; true", save="wayout-tpm.log")
         self.check("V8: no TPM in this boot", "/dev/tpm0" not in out, out)
 

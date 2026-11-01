@@ -599,9 +599,10 @@ the resume's close leaves it alone.
   hand". A TPM in that state keeps the machine rebooting until the person takes the
   way out:
   - **Arch (UKI):** Secure Boot off in the firmware, which moves PCR 7, then at
-    systemd-boot's menu `e` and `rd.systemd.mask=tpm2-kira-close.service` (the
-    stub ignores a passed command line while Secure Boot is on, systemd-stub(7)).
-    Secure Boot on again afterwards.
+    systemd-boot's menu `e` and the word `tpm2-kira.noclose` (the stub ignores a
+    passed command line while Secure Boot is on, systemd-stub(7)). Masking the unit
+    does not do: `initrd.target` requires it, and systemd freezes. Secure Boot on
+    again afterwards.
   - **Debian (GRUB):** at GRUB's menu `e` (the superuser password `control`
     advises), `break=bottom` on the `linux` line, which moves PCR 8. The disk's
     prompts come, then a shell before init-bottom; there

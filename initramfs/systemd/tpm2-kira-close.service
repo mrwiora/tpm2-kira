@@ -26,6 +26,11 @@ Before=shutdown.target
 # docs/SSH.md, "The close". The failure of a unit that initrd.target requires would start the emergency target;
 # this comes first.
 FailureAction=reboot-force
+# The way out of a TPM that refuses everything: a command line with this word,
+# which a Secure Boot boot does not take from anyone (systemd-stub(7)) and which
+# moves PCR 7 where it can be given. Masking the unit does not do: initrd.target
+# requires it, and systemd then freezes at "Failed to isolate default target".
+ConditionKernelCommandLine=!tpm2-kira.noclose
 
 [Service]
 Type=oneshot
