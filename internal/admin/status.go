@@ -68,6 +68,8 @@ type StatusReport struct {
 	// GRUB: this boot was GRUB's; GRUBPassword: its entries need a
 	// superuser's password to be edited (GRUBPasswordErr: grub.cfg not read).
 	GRUB            bool     `json:"grub,omitempty"`
+	// ClosePCREvents: events in PCR 15 in this boot's firmware event log.
+	ClosePCREvents int `json:"close_pcr_events,omitempty"`
 	GRUBPassword    bool     `json:"grub_password,omitempty"`
 	GRUBPasswordErr string   `json:"grub_password_error,omitempty"`
 	Notes           []string `json:"notes"`
@@ -93,6 +95,7 @@ func collectStatus(o StatusOptions) StatusReport {
 		r.Version = "unknown"
 	}
 
+	r.ClosePCREvents, _ = firmwareClosePCREvents(closeEventlogPath)
 	if r.GRUB = GRUBBoot(""); r.GRUB {
 		var err error
 		if r.GRUBPassword, err = GRUBPassword(grubCfgPath); err != nil {
@@ -184,6 +187,9 @@ func statusNotes(r StatusReport) []string {
 	var notes []string
 	if r.TPMError == "" && len(r.Slots) == 0 {
 		notes = append(notes, "no slot is sealed: tpm2-kira slot add")
+	}
+	if r.ClosePCREvents > 0 {
+		notes = append(notes, closePCRWhy)
 	}
 	for _, d := range r.Dirt {
 		notes = append(notes, fmt.Sprintf("slot %d is incomplete - %s left: %s. %s; then seal it again", d.Slot, d.Remains, d.Cause, d.Remedy))

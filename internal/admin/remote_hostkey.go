@@ -131,6 +131,9 @@ func sshCAValues(tpmDev transport.TPM, ca *hostkey.CA) (map[int][]byte, error) {
 
 // approveSSHCASlots has signer approve values in every slot of ca.
 func approveSSHCASlots(ca *hostkey.CA, signer crypto.Signer, values map[int][]byte) error {
+	if err := checkClosePCRZero(); err != nil {
+		return fmt.Errorf("cannot approve: %w", err)
+	}
 	for _, s := range ca.Slots {
 		if err := ca.Approve(signer, s.Number, values); err != nil {
 			return err

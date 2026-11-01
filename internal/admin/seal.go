@@ -95,6 +95,10 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	}
 	fmt.Println()
 
+	// PCR 15 has to be zero at the code screen, or nothing sealed opens.
+	if err := checkClosePCRZero(); err != nil {
+		return fmt.Errorf("cannot seal: %w", err)
+	}
 	// On a GRUB boot no slot may lack PCRs 8 and 9 (default_pcrs.go).
 	if err := checkGRUBSelection(specs, GRUBBoot("")); err != nil {
 		return fmt.Errorf("cannot seal: %w", err)
@@ -342,6 +346,9 @@ func signatureSizes(pub crypto.PublicKey) (approval, blob int, err error) {
 // writes the signed blob. The key object in blob is not touched: only its
 // approval changes, so the TOTP key never has to leave the TPM.
 func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.SealedBlob, specs []measure.PCRSpec, hashAlgo measure.PCRHashAlgo, verifyUKI bool, signer crypto.Signer, debug bool) error {
+	if err := checkClosePCRZero(); err != nil {
+		return fmt.Errorf("cannot approve: %w", err)
+	}
 	if len(specs) == 0 {
 		return fmt.Errorf("no PCRs specified")
 	}
