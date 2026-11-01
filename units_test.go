@@ -23,6 +23,20 @@ func directives(t *testing.T, path string) []string {
 	return out
 }
 
+// section is the section a directive is in, "" when it is not there.
+func section(lines []string, want string) string {
+	cur := ""
+	for _, l := range lines {
+		if strings.HasPrefix(l, "[") {
+			cur = l
+		}
+		if l == want {
+			return cur
+		}
+	}
+	return ""
+}
+
 func has(lines []string, want string) bool {
 	for _, l := range lines {
 		if l == want {
@@ -147,8 +161,9 @@ func TestUnlockSocketIsWiredToTheDisplay(t *testing.T) {
 		}
 	}
 	svc := directives(t, "initramfs/systemd/tpm2-kira.service")
-	if !has(svc, "Sockets=tpm2-kira-unlock.socket") {
-		t.Error("the display's service does not take the key socket")
+	// Sockets= is a [Service] setting: systemd ignores it in [Unit].
+	if section(svc, "Sockets=tpm2-kira-unlock.socket") != "[Service]" {
+		t.Error("the display's service does not take the key socket in [Service]")
 	}
 	// The key is asked for after the separator, which the display's READY
 	// precedes; the service must not end with the hold any more.
