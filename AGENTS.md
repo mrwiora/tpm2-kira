@@ -209,21 +209,17 @@ It may not carry what came before.
   the leftovers, the boot settings, the sealed machine-id and the SSH CA
   (the machine-id goes with slot 0 too); `control` asks before it
   removes the SSH CA when SSH is switched off (No unless said).
-- **tpm2-kira manages Secure Boot itself, so that sbctl can take over at
-  any time.**
-  - It uses the workspace's `go-uefi-slim` module (the submodule `go-uefi-slim/`: signature
-    lists, signed updates, Authenticode, Microsoft's certificates), not the
-    sbctl command, which Debian does not package.
-  - Everything it creates is what sbctl would create, in the same place:
-    - the configuration `/etc/sbctl/sbctl.conf`;
-    - `/var/lib/sbctl/GUID`;
-    - `keys/{PK,KEK,db}/{PK,KEK,db}.{key,pem}`;
-    - a YubiKey key as sbctl's JSON reference to slot 9c;
-    - `files.json`.
-  - A machine sbctl set up is taken as it is.
-  - The image is signed with the db key, before `slot approve`.
-  - `control` asks before it creates or enrols keys. It names every certificate in
-    PK, KEK or db that is neither the owner's nor Microsoft's, and shim's MOKs.
+- **tpm2-kira reads and judges Secure Boot; it does not manage it on this
+  branch.**
+  - The state is read (`measure.ReadSecureBootState`) and judged in `control`
+    and `status`. A UKI's db signature comes from outside: from sbctl, or
+    whatever the owner runs. tpm2-kira neither makes nor checks it.
+  - The workspace's `go-uefi-slim` module (the submodule `go-uefi-slim/`) serves
+    its EFI variables and PCR 4's Authenticode hashes.
+  - Key creation, enrolment, db signing and `control` naming foreign certificates
+    are on `exp/debian-uki` alone (`internal/secureboot`). The rule there, and
+    for whatever comes here from it: what it creates is what sbctl would create,
+    in the same place, and a machine sbctl set up is taken as it is.
   - Debian keeps GRUB, the standard install: Secure Boot checks GRUB and the
     kernel, not GRUB's command line or the initrd (an entry edited at the
     console - `break=`, `rdinit=` - is a shell before the close), so on a GRUB

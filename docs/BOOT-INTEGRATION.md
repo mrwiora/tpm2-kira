@@ -53,7 +53,7 @@ Debian, with nothing of it in a unit or a script:
 
 | | `ssh-child` (the SSH server) | `gate-child` (the phone's radio worker) |
 |---|---|---|
-| user | nobody | nobody, with `CAP_NET_ADMIN` and `CAP_NET_RAW` alone (the HCI user channel) |
+| user | a uid no one else has (aSSH's `sandbox.ClaimUID`, `ASSH_CHILD_UIDS`; nobody only when none is free) | nobody, with `CAP_NET_ADMIN` and `CAP_NET_RAW` alone (the HCI user channel) |
 | namespaces of its own | network, IPC, PID, mount, UTS | IPC, PID, mount, UTS (Bluetooth sockets exist only in the first network namespace) |
 | open files | the listening socket, a socket pair to `run` | two socket pairs to `run`, `/dev/rfkill` |
 | files it can reach (Landlock) | none | reads beneath `/sys` (the adapter's and rfkill's state) |
@@ -82,7 +82,7 @@ does around it:
 | the image's network | `systemd-networkd`, the plan's `.network` file; the sealed machine-id released before it (`tpm2-kira-machine-id.service`), from which networkd derives its default DUID (a copied identity wins) | the script: initramfs-tools' `configure_networking`, or busybox' `udhcpc` / `ip` (`remote.conf`) with the copied identity; the machine-id is released all the same, before it |
 | the narrative | the journal: `journalctl -b -u tpm2-kira.service` | `/run/initramfs/tpm2-kira.log` |
 | the boot closed (PCR 15: every slot and the SSH CA) | `run` when the code screen is over, before READY; then `tpm2-kira-close.service`; down aSSH's ladder (SSH.md), a failure: `FailureAction=reboot-force` | `run` when the code screen is over; then `scripts/init-bottom/tpm2-kira`; down aSSH's ladder (SSH.md), a failure: `reboot -f`, then SysRq `b` |
-| the close before a resume from hibernation | a drop-in on `systemd-hibernate-resume.service` (`ExecStartPre=tpm2-kira-boot close`, after `tpm2-kira.service`); a failure: no resume | `scripts/local-top/tpm2-kira-close`, after cryptroot; a failure clears `resume=` |
+| the close before a resume from hibernation | a drop-in on `systemd-hibernate-resume.service` (`ExecStartPre=tpm2-kira-boot close --resume`, after `tpm2-kira.service`); a failure: no resume | `scripts/local-top/tpm2-kira-close` (`tpm2-kira-boot close --resume`), after cryptroot; a failure clears `resume=` |
 | stopped | at `initrd-switch-root`: the units' stop | `scripts/init-bottom/tpm2-kira`: TERM to `run` (5 s) |
 | the measure point | ordered before systemd's PCR separators | before cryptroot (no separator) |
 

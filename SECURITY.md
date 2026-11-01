@@ -87,10 +87,11 @@ Known residual risks:
   can raise it, which makes the genuine record stale: the gate then refuses
   it and no phone is served until you enrol again. That denies the phone
   check; it never produces an accepted record.
-- **The slot's blob is readable by anyone who can talk to the TPM.**
+- **A slot's record is readable by any local user.** It is the EFI variable
+  `KIRAslotN`, and efivarfs shows variables mode 0644.
   With a phone enrolled it holds the machine's Noise private key and its
   advertising key (docs/SECURITY-BACKGROUND.md §3.1). Someone
-  who reads it once — root, or a live USB on this machine — can recognise the
+  who reads it once — any local user, or a live USB on this machine — can recognise the
   machine's advertisements and imitate its Bluetooth endpoint. They cannot
   produce a quote: quotes come from the TPM, are bound to the session, and a
   tampered boot reports tampered PCRs. The phone then shows a failed or
@@ -140,8 +141,8 @@ socket pairs it was started with; nothing is in the file system for another
 process to connect to. Over them the worker can
 
 - obtain what it needs for the radio session (identifiers, the channel key,
-  the phones' channel keys; all readable from the TPM's NV storage by anyone
-  who can talk to it, and none of it TPM-protected),
+  the phones' channel keys; all readable from the slot's record, an EFI
+  variable, by any local user, and none of it TPM-protected),
 - have a quote signed by the attestation key, which states what the PCRs
   are and gives nothing away,
 - hand in the phone's receipt, and report its own progress.

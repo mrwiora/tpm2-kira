@@ -216,7 +216,7 @@ tpm2-kira-boot run                              (root: TPM, disk key, code scree
   │  has the TPM make this boot's host key, the SSH CA certify it; opens :PORT
   │  starts, handing over the listening socket and a control socket:
   ▼
-tpm2-kira-boot ssh-child                     (uid 65534; own net/IPC/PID/mount/UTS namespaces;
+tpm2-kira-boot ssh-child                     (a uid of its own; own net/IPC/PID/mount/UTS namespaces;
   │                                         sandbox on every thread: no new privileges,
   │                                         no executable memory, no file, seccomp)
   │  speaks SSH (golang.org/x/crypto/ssh), checks the login keys
@@ -233,7 +233,8 @@ as the phone's radio worker is (`gate-child`, docs/BOOT-INTEGRATION.md) -
 which gives up everything it does not need
 before it reads a byte:
 
-- **nobody** (uid/gid 65534, no supplementary groups, so no capabilities):
+- **A uid no one else has** (aSSH's `sandbox.ClaimUID`, from `ASSH_CHILD_UIDS`;
+  nobody only when none is free), no supplementary groups, so no capabilities:
   the TPM device and everything in `/etc/tpm2-kira` and `/run/tpm2-kira`
   are out of reach.
 - **Namespaces of its own** for network, IPC, PID, mount and UTS. It has
@@ -268,7 +269,7 @@ monitor; it cannot read the key - which is in the TPM - the TPM or the
 disk key.
 
 The log shows what it runs with, for example `ssh: ssh-child (pid 412)
-runs with uid 65534, namespaces of its own, no new privileges, no
+runs with uid 2147352576, namespaces of its own, no new privileges, no
 executable memory, Landlock ABI 6: no file access, 68 system calls
 refused`.
 
@@ -344,8 +345,8 @@ and no secret either: the keys are in the TPM.
   runs no code screen. So the image closes it right before every resume,
   whatever `run` did: Arch, a drop-in on
   `systemd-hibernate-resume.service` (`ExecStartPre=/usr/bin/tpm2-kira-boot
-  close`; `tpm2-kira-close.service` has run before already); Debian, the
-  `local-top` script `tpm2-kira-close`, after `cryptroot`, before
+  close --resume`; `tpm2-kira-close.service` has run before already); Debian, the
+  `local-top` script `tpm2-kira-close` (`close --resume` too), after `cryptroot`, before
   `local-premount`'s resume. Where it is closed already, an extend more
   changes nothing. Anything but PCR 15 itself (no TPM at all aside) and the machine
   does not resume: the hibernated session is lost, never the close. Hibernation to unencrypted
@@ -564,10 +565,10 @@ tpm2-kira-boot run --ssh [--ssh-hold S] [--ssh-conf PATH]
   again in a second session after the first left); after the boot no
   address of the image and no process left.
 
-Not run on a VM yet: a static address on Debian, the temporary key made
-in the TPM, and the SSH CA at all (the VM runs above had none):
-its EFI variable written by slot approve and read at the code screen, PCR 11
-and PCR 8/9 approved from the prediction.
+Not run on a VM yet: a static address on Debian. The SSH CA runs on both
+VMs: its EFI variable written by slot approve and read at the code screen,
+the host key certified (strict `known_hosts`), a temporary key where a closed CA
+refuses (SECURITY-BACKGROUND.md §17.2).
 aSSH's own tests log in with OpenSSH's client (10.6) through a
 `@cert-authority` line against a software TPM.
 
