@@ -57,3 +57,56 @@ func TestDefaultPCRSelection(t *testing.T) {
 		t.Errorf("the fallback with a log: %s", sel)
 	}
 }
+
+// On GRUB no slot lacks PCRs 8 and 9: Secure Boot does not cover GRUB's
+// command line and the initrd. The SSH CA gets slot 0 alone, slot add no
+// fallback, and a selection without 8 or 9 is refused; elsewhere slot 1
+// (PCR 7) stays.
+func TestGRUBHasNoSlotWithoutPCR8And9(t *testing.T) {
+	if !GRUBBoot("testdata/debian13-grub-eventlog.bin") || GRUBBoot("testdata/arch-uki-eventlog.bin") || GRUBBoot("/nonexistent") {
+		t.Fatal("GRUB's boot not told apart")
+	}
+	grub, err := sshCASlotsFor(DefaultPCRSelection("testdata/debian13-grub-eventlog.bin", measure.PCRHashAlgoSHA256))
+	if err != nil || len(grub) != 1 || len(grub[0]) != 5 || grub[0][3] != 8 || grub[0][4] != 9 {
+		t.Fatalf("the SSH CA's slots on GRUB: %v %v", grub, err)
+	}
+	uki, err := sshCASlotsFor(DefaultPCRSelection("testdata/arch-uki-eventlog.bin", measure.PCRHashAlgoSHA256))
+	if err != nil || len(uki) != 2 || len(uki[1]) != 1 || uki[1][0] != 7 {
+		t.Fatalf("the SSH CA's slots with a UKI: %v %v", uki, err)
+	}
+	for sel, ok := range map[string]bool{"0e,2e,7e,8e,9e": true, "0e,7e": false, "7": false, "0,2,7,8": false, "8,9": true} {
+		specs, err := measure.ParsePCRSpecs(sel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := checkGRUBSelection(specs, true); (err == nil) != ok {
+			t.Errorf("%s on GRUB: %v", sel, err)
+		}
+		if err := checkGRUBSelection(specs, false); err != nil {
+			t.Errorf("%s elsewhere: %v", sel, err)
+		}
+	}
+}
+
+// GRUB's password is judged from grub.cfg: a superuser and a PBKDF2
+// password, both.
+func TestGRUBPassword(t *testing.T) {
+	dir := t.TempDir()
+	for cfg, want := range map[string]bool{
+		"menuentry 'Debian' {\n}\n": false,
+		"set superusers=\"root\"\npassword_pbkdf2 root grub.pbkdf2.sha512.10000.AB.CD\nmenuentry 'Debian' --unrestricted {\n}\n": true,
+		"set superusers=\"root\"\n":                         false,
+		"  password_pbkdf2 root grub.pbkdf2.sha512.1.A.B\n": false,
+	} {
+		path := dir + "/grub.cfg"
+		if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := GRUBPassword(path); err != nil || got != want {
+			t.Errorf("%q: %v %v, want %v", cfg, got, err, want)
+		}
+	}
+	if _, err := GRUBPassword(dir + "/none"); err == nil {
+		t.Error("a grub.cfg that is not there")
+	}
+}

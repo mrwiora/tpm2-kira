@@ -90,6 +90,18 @@ func (c *controller) prereqs() []prereq {
 			add(prereqMet, "Passphrase: no keyslot opens with an empty one")
 		}
 	}
+	// GRUB: its entries edited at the console (break=, rdinit=) reach a
+	// shell before the close; PCRs 8 and 9 in every slot see the edit, a
+	// superuser password keeps it from being made. Advised, never written.
+	switch st := f.Status; {
+	case !st.GRUB:
+	case st.GRUBPasswordErr != "":
+		add(prereqNot, "GRUB: its password is not known (%s) - (risk: the GRUB entry can be edited at the console) %s", st.GRUBPasswordErr, GRUBAdvice)
+	case !st.GRUBPassword:
+		add(prereqNot, "GRUB: no password (risk: the GRUB entry can be edited at the console) - %s; every slot includes PCRs 8 and 9 all the same", GRUBAdvice)
+	default:
+		add(prereqMet, "GRUB: a superuser password guards the entries; every slot includes PCRs 8 and 9")
+	}
 	switch {
 	case !f.SecureBoot.Known:
 		add(prereqInfo, "Secure Boot: state unknown, no efivars")

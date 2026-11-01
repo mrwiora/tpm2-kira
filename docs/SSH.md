@@ -566,7 +566,16 @@ aSSH's own tests log in with OpenSSH's client (10.6) through a
 
 ## 11. Known limits
 
-- **Slot 1 binds the CA to the Secure Boot keys, not to the image.** Any
+- **Slot 1 binds the CA to the Secure Boot keys, not to the image** - on
+  a UKI boot (Arch), where the command line and the initrd are in the
+  signed image. On a GRUB boot (Debian) there is no slot 1: Secure Boot
+  checks GRUB and the kernel, not GRUB's command line or the initrd, so an
+  entry edited at the console (`break=`, `rdinit=/bin/sh`) would reach a
+  shell before the close with PCR 7 as approved; the CA has slot 0 alone,
+  whose PCRs 8 and 9 see the edit, and no TOTP slot lacks them either.
+  `control` advises a GRUB superuser password with the entries
+  `--unrestricted`, which keeps the edit from being made at all. On a UKI
+  boot any
   image signed with the same key that gives a root
   shell before PCR 15 is extended (an initramfs with an emergency shell,
   an older UKI or one without tpm2-kira, which never closes it) can have the CA certify a key of its own for that boot - not take
@@ -576,10 +585,11 @@ aSSH's own tests log in with OpenSSH's client (10.6) through a
   machine's names until the clients drop the CA line.
 - **The close is done by software.** `run` and the image extend PCR 15;
   a boot where neither runs (an image without tpm2-kira, booted under the
-  same Secure Boot keys) leaves the CA open for that boot - see the first
-  limit. Anything that extends PCR 15 earlier (a crypttab volume with
-  `tpm2-measure-pcr=` opened before the code screen) closes it early: a
-  temporary key, never an open CA.
+  same Secure Boot keys) leaves the CA - and the slots, whose objects read
+  PCR 15 too - open for that boot - see the first limit. Anything that
+  extends PCR 15 earlier (a crypttab volume with `tpm2-measure-pcr=`
+  opened before the code screen) closes it early: a temporary key and no
+  codes, never an open CA.
 - **The approvals are the signing key's.** Whoever holds it can approve
   another state; keep it on the YubiKey.
 - **An approval is never revoked.** approve and control keep only the

@@ -51,6 +51,8 @@ type StatusSlot struct {
 	VaultPin    string         `json:"-"`                      // the vault's key pin, for control's check
 	VaultDevice []byte         `json:"-"`                      // the device ID the vault knows this machine by
 	TPMSalt     bool           `json:"tpm_salt,omitempty"`     // the slot holds the salt of recipe 0x1200
+	// NoGRUBPCRs: on a GRUB boot, the slot lacks PCR 8 or 9 (GRUBPCRs).
+	NoGRUBPCRs bool `json:"no_grub_pcrs,omitempty"`
 }
 
 // StatusReport is the whole report.
@@ -64,7 +66,12 @@ type StatusReport struct {
 	Devices      []LuksDeviceStatus `json:"devices"`
 	DevicesError string             `json:"devices_error,omitempty"`
 	Dirt         []DirtySlot        `json:"incomplete_slots,omitempty"`
-	Notes        []string           `json:"notes"`
+	// GRUB: this boot was GRUB's; GRUBPassword: its entries need a
+	// superuser's password to be edited (GRUBPasswordErr: grub.cfg not read).
+	GRUB            bool     `json:"grub,omitempty"`
+	GRUBPassword    bool     `json:"grub_password,omitempty"`
+	GRUBPasswordErr string   `json:"grub_password_error,omitempty"`
+	Notes           []string `json:"notes"`
 }
 
 // Status prints the report.
@@ -87,6 +94,12 @@ func collectStatus(o StatusOptions) StatusReport {
 		r.Version = "unknown"
 	}
 
+	if r.GRUB = GRUBBoot(""); r.GRUB {
+		var err error
+		if r.GRUBPassword, err = GRUBPassword(grubCfgPath); err != nil {
+			r.GRUBPasswordErr = err.Error()
+		}
+	}
 	tpmDev, err := tpmdev.Open(o.TPMPath)
 	if err != nil {
 		r.TPMError = fmt.Sprintf("the TPM at %s cannot be opened: %v", o.TPMPath, err)
@@ -105,6 +118,7 @@ func collectStatus(o StatusOptions) StatusReport {
 				PCRs: measure.PCRSpecsToString(sb.GetPCRSpecs()), Generation: sb.Payload.Generation,
 				GenState: generationState(tpmDev, idx, sb)}
 			s.Fallback = isFallbackSelection(sb.GetPCRSpecs())
+			s.NoGRUBPCRs = checkGRUBSelection(sb.GetPCRSpecs(), r.GRUB) != nil
 			s.TOTP = sb.HasTOTPKey()
 			v := verifier.verify(raw, sb)
 			s.Signed, s.SignReason = v.Verified, v.Reason
@@ -194,10 +208,20 @@ func statusNotes(r StatusReport) []string {
 		if strings.Contains(s.GenState, "NOT") || strings.Contains(s.GenState, "unavailable") {
 			notes = append(notes, fmt.Sprintf("slot %d shows no code until it is approved: tpm2-kira slot approve --nvram %d", s.Slot, s.Slot))
 		}
+		if s.NoGRUBPCRs {
+			notes = append(notes, fmt.Sprintf("slot %d lacks PCR 8 or 9 (risk: %s): tpm2-kira slot delete --nvram %d", s.Slot, grubSelectionWhy, s.Slot))
+		}
 		remoteSalt = remoteSalt || s.PhoneSalt
 		fallback = fallback || s.Fallback
 	}
-	if r.TPMError == "" && codes && !fallback {
+	switch {
+	case !r.GRUB:
+	case r.GRUBPasswordErr != "":
+		notes = append(notes, fmt.Sprintf("GRUB's password is not known (%s): without one the GRUB entry can be edited at the console - %s", r.GRUBPasswordErr, GRUBAdvice))
+	case !r.GRUBPassword:
+		notes = append(notes, "GRUB has no password (risk: the GRUB entry can be edited at the console): "+GRUBAdvice)
+	}
+	if r.TPMError == "" && codes && !fallback && !r.GRUB {
 		notes = append(notes, fmt.Sprintf("no fallback slot (PCRs %s alone) for a boot whose kernel changed unpredicted: tpm2-kira slot add --nvram %d --pcrs %s", FallbackPCRSelection, FallbackSlot, FallbackPCRSelection))
 	}
 

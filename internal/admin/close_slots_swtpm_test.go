@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -323,4 +324,20 @@ func hmacWithCloseAsIs(tpm transport.TPM, o *slotObjects) error {
 		HashAlg: p.TOTPAlgorithm,
 	}.Execute(tpm)
 	return err
+}
+
+// On a GRUB boot slot add refuses a selection without PCRs 8 and 9, and
+// makes no fallback - before anything is written to the TPM.
+func TestSealRefusesASlotWithout8And9OnGRUB(t *testing.T) {
+	old := measure.DefaultEventlogPath
+	measure.DefaultEventlogPath = "testdata/debian13-grub-eventlog.bin"
+	defer func() { measure.DefaultEventlogPath = old }()
+	pub, priv := writeTestKeyPair(t)
+	if err := Seal("/nonexistent", "0,7", nvslot.NVRAMSlotStart+1, pub, priv, false, measure.PCRHashAlgoSHA256, false, true); err == nil ||
+		!strings.Contains(err.Error(), "PCR 8 is not selected: on a GRUB boot every slot includes PCRs 8 and 9") {
+		t.Fatalf("a PCR-7 slot on GRUB: %v", err)
+	}
+	if err := SealFallback("/nonexistent", pub, priv, measure.PCRHashAlgoSHA256, false); err == nil || !strings.Contains(err.Error(), "no fallback slot") {
+		t.Fatalf("the fallback on GRUB: %v", err)
+	}
 }

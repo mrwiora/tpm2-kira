@@ -205,8 +205,13 @@ It may not carry what came before.
   - The image is signed with the db key, before `slot approve`.
   - `control` asks before it creates or enrols keys. It names every certificate in
     PK, KEK or db that is neither the owner's nor Microsoft's, and shim's MOKs.
-  - Debian keeps GRUB, the standard install: Secure Boot checks the kernel, not the
-    initrd, so the SSH CA there binds PCR 8 and 9 and trusts no PCR-7-only slot.
+  - Debian keeps GRUB, the standard install: Secure Boot checks GRUB and the
+    kernel, not GRUB's command line or the initrd (an entry edited at the
+    console - `break=`, `rdinit=` - is a shell before the close), so on a GRUB
+    boot every slot and the SSH CA bind PCR 8 and 9: no PCR-7-only slot, no
+    fallback slot, the CA has slot 0 alone (`GRUBPCRs`, default_pcrs.go), and
+    `slot add` refuses a selection without them. `control` advises a GRUB
+    superuser password (never writes grub.cfg) and judges its absence red.
   - aSSH only warns about Secure Boot.
 - **Root for everything but the help.** Every command refuses to run as a
   user (`main.go` `requireRoot`); `control` says so on its own screen. The

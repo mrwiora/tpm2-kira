@@ -9,12 +9,13 @@ package admin
 // exported - which signs only while the PCRs hold values the signing key
 // approved. At every boot 'run' has the TPM make a new host key under its
 // NULL hierarchy, gone at the next reboot, and the CA certify it, at the
-// start of the code screen, then closes the CA - PCR 15 extended, which the
-// CA's own policy reads, until the next boot - so nothing later in this boot
-// gets a certificate. The image closes it again when the code screen is
-// over (tpm2-kira-close.service, initramfs-tools' init-bottom), and before a
-// resume from hibernation, which starts the TPM afresh (tpm2-kira-boot
-// close); a close that fails stops the boot or the resume. The clients trust the CA (a known_hosts line
+// start of the code screen. When the code screen is over run closes the
+// boot - PCR 15 extended, which the CA's own policy reads, and every slot
+// object's, until the next boot - so nothing later in this boot gets a
+// certificate. The image closes it again (tpm2-kira-close.service,
+// initramfs-tools' init-bottom), and before a resume from hibernation,
+// which starts the TPM afresh (tpm2-kira-boot close); a close that fails
+// stops the boot or the resume. The clients trust the CA (a known_hosts line
 // '@cert-authority'), not a key, so a new key at every boot asks them
 // nothing.
 //
@@ -24,7 +25,8 @@ package admin
 // PCR 0 (firmware), 2 (option ROMs) and 7 (Secure Boot), and the image -
 // PCR 11 with a unified kernel image, PCR 8 and 9 with GRUB. Slot 1, the
 // lower, reads PCR 7 alone: a kernel update not approved yet, a new option
-// ROM or a firmware update leave it standing.
+// ROM or a firmware update leave it standing. Not on GRUB, where Secure
+// Boot does not cover the command line and the initrd: slot 0 alone.
 //
 // The CA, its approvals with it, lives in the EFI variable KIRAasshCA, not
 // in the image: an approval of PCR 11 carried inside the image it measures
@@ -42,6 +44,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
@@ -70,9 +73,15 @@ const sshCAUnapproved = "the SSH CA has no approval of the PCRs as the next boot
 // this boot's event log as 'slot add' decides its slot 0: the firmware, the
 // option ROMs, the Secure Boot state, and the image's PCRs (11 with a
 // unified kernel image, 8 and 9 with GRUB). Slot 1, the lower, is the
-// Secure Boot state alone.
+// Secure Boot state alone - not on a GRUB boot, where Secure Boot does not
+// cover GRUB's command line and the initrd (GRUBPCRs): there slot 0 alone.
 func sshCASlots(algo measure.PCRHashAlgo) (map[int][]int, error) {
-	sel, _ := DefaultPCRSelection("", algo)
+	return sshCASlotsFor(DefaultPCRSelection("", algo))
+}
+
+// sshCASlotsFor is sshCASlots for slot 0's selection sel; GRUB's boot
+// says so in why (DefaultPCRSelection).
+func sshCASlotsFor(sel, why string) (map[int][]int, error) {
 	specs, err := measure.ParsePCRSpecs(sel)
 	if err != nil {
 		return nil, err
@@ -80,6 +89,9 @@ func sshCASlots(algo measure.PCRHashAlgo) (map[int][]int, error) {
 	var slot0 []int
 	for _, s := range specs {
 		slot0 = append(slot0, s.Index)
+	}
+	if strings.HasPrefix(why, grubBootWhy) {
+		return map[int][]int{0: slot0}, nil
 	}
 	return map[int][]int{0: slot0, 1: {7}}, nil
 }

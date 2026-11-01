@@ -313,7 +313,7 @@ func (c *controller) ensureSSHCA(conf *config.Config) error {
 	}
 	typ := conf.CAType
 	if err := c.form(huh.NewSelect[hostkey.Type]().Title("Create the SSH CA in the TPM").
-		Description("The boot image's host key is made in the TPM at every boot and certified by this CA, which never leaves the TPM and signs only while the PCRs hold values the signing key approved: PCR 0 (firmware), 2 (option ROMs), 7 (Secure Boot) and the image's, or PCR 7 alone. It is kept in the EFI variable KIRAasshCA; slot approve approves each rebuilt image. Clients trust the CA, once.").
+		Description("The boot image's host key is made in the TPM at every boot and certified by this CA, which never leaves the TPM and signs only while the PCRs hold values the signing key approved: PCR 0 (firmware), 2 (option ROMs), 7 (Secure Boot) and the image's, or PCR 7 alone (not on GRUB, where Secure Boot does not cover the command line and the initrd). It is kept in the EFI variable KIRAasshCA; slot approve approves each rebuilt image. Clients trust the CA, once.").
 		Options(huh.NewOption("ECDSA P-256 (recommended)", hostkey.P256), huh.NewOption("RSA-2048", hostkey.RSA2048)).
 		Value(&typ)).Run(); err != nil {
 		return err

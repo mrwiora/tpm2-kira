@@ -172,10 +172,10 @@ func TestControlHub(t *testing.T) {
 	c.facts.Status.Slots[0].Signed = true
 	// A slot sealed, this boot not through the image: reboot leads.
 	if steps := c.hubSteps(); steps[0].Key != "reboot" {
-		t.Fatalf("uncapped: %+v", steps[0])
+		t.Fatalf("not closed: %+v", steps[0])
 	}
 
-	// The phone: an adapter, the boot capped; the phone salt waits for it.
+	// The phone: an adapter, the boot closed; the phone salt waits for it.
 	c.facts.Adapter, c.facts.Closed = "hci0", true
 	phone := c.menuSteps("phone")
 	if phone[0].Blocked != "" || phone[0].Done != "" || phone[1].Blocked != "" {
@@ -550,5 +550,40 @@ func TestImageNewerThanBoot(t *testing.T) {
 	os.Chtimes(img, old, old)
 	if got := imageNewerThanBoot(); got != "" {
 		t.Fatalf("an image older than the boot: %q", got)
+	}
+}
+
+// GRUB: without a superuser password its entry can be edited at the
+// console - red, with the advice; with one, met. No fallback slot is asked
+// for there, and the status notes no slot without PCRs 8 and 9.
+func TestControlGRUB(t *testing.T) {
+	c := wired()
+	c.facts.PCRs = "0e,2e,7e,8e,9e"
+	c.facts.Status.GRUB = true
+	got := c.prereqText()
+	if !strings.Contains(got, "GRUB: no password (risk: the GRUB entry can be edited at the console)") || !strings.Contains(got, "--unrestricted") {
+		t.Fatalf("GRUB without a password:\n%s", got)
+	}
+	c.facts.Status.GRUBPassword = true
+	if got := c.prereqText(); !strings.Contains(got, "GRUB: a superuser password guards the entries") {
+		t.Fatalf("GRUB with a password:\n%s", got)
+	}
+
+	c.facts.Keys = "local key files"
+	c.facts.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,8e,9e", TOTP: true, Signed: true}}
+	for _, st := range c.menuSteps("keys") {
+		if st.Key == "seal" {
+			t.Fatalf("a fallback asked for on GRUB: %+v", st)
+		}
+	}
+	c.facts.Status.GRUB = false
+	if keys := c.menuSteps("keys"); keys[1].Key != "seal" || !strings.Contains(keys[1].Explain, "Slot 1, the fallback, is missing") {
+		t.Fatalf("the fallback elsewhere: %+v", keys[1])
+	}
+
+	r := StatusReport{GRUB: true, Slots: []StatusSlot{{Slot: 0, TOTP: true, Signed: true}, {Slot: 1, TOTP: true, Signed: true, Fallback: true, NoGRUBPCRs: true}}}
+	notes := strings.Join(statusNotes(r), "\n")
+	if !strings.Contains(notes, "slot 1 lacks PCR 8 or 9") || !strings.Contains(notes, "GRUB has no password") || strings.Contains(notes, "no fallback slot") {
+		t.Fatalf("the notes on GRUB:\n%s", notes)
 	}
 }
