@@ -725,10 +725,12 @@ class Machine:
         the SSH CA certifies through its slot 1, with slot 0 (PCR 4 moved) out.
         Then slot approve brings slot 0 back."""
         self.log.head("an image not approved, signed by the PCR key")
-        # mkinitcpio -P does not hand --nopost to its presets: the hook goes aside.
+        # mkinitcpio -P does not hand --nopost to its presets, and runs every file
+        # of the hooks' directory: the hook goes out of it.
         hook = "/usr/lib/initcpio/post/sd-tpm2-kira"
-        rc, out = self.run(f"set -e; sed -i '$ s/$/ kiratest=1/' /etc/kernel/cmdline; mv {hook} {hook}.off; "
-                           f"mkinitcpio -P 2>&1 | tail -3; mv {hook}.off {hook}", save="unapproved-rebuild.log")
+        rc, out = self.run(f"set -e; sed -i '$ s/$/ kiratest=1/' /etc/kernel/cmdline; mv {hook} /root/sd-tpm2-kira.off; "
+                           f"mkinitcpio -P 2>&1 | tail -3; mv /root/sd-tpm2-kira.off {hook}", save="unapproved-rebuild.log")
+        self.check("unapproved: the hook did not approve it", "approv" not in out, out[-400:])
         self.check("unapproved: an image built without the hook's approval", rc == 0, out[-400:])
         self.run("systemctl reboot")
         self.wait_port(22, False, 120)
@@ -1052,7 +1054,8 @@ class Machine:
         self.check("status: the vault method is the typed recipe with a pepper", "0x1401 password typed · salt from the vault (pepper)" in out, out[-500:])
 
         self.log.head("a boot: the operator approves on the vault's CLI, the password typed after")
-        releases = lambda: vault.admin("audit").count("TPM reset count")
+        # This device's: the other machine's run shares the vault.
+        releases = lambda: sum(1 for l in vault.admin("audit").splitlines() if f"({name})" in l and "TPM reset count" in l)
         released_before = releases()
 
         def approve():
