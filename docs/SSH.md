@@ -71,7 +71,7 @@ key, a login is a session of the code screen):
 |---|---|
 | `ASSH_CA` | `efi:KIRAasshCA` (default): the SSH CA's EFI variable (its public key in `/etc/tpm2-kira/ssh_ca.pub`), created in the TPM by control (§4) |
 | `ASSH_CA_TYPE` | `p256` (default) or `rsa2048`: what control asked when it created the CA |
-| `ASSH_CA_SLOT_<N>` | a slot's PCRs, `0,2,7,11`; control writes two, worked out for this machine (§4). An edit takes effect at the next approval or control, which make the CA's slots these and approve them |
+| `ASSH_CA_SLOT_<N>` | a slot's PCRs, `0,2,4,7,11`; control writes two, worked out for this machine (§4). An edit takes effect at the next approval or control, which make the CA's slots these and approve them |
 | `ASSH_CHILD_UIDS` | `0x7FFE0000-0x7FFEFFFF` (default): where `ssh-child`'s uid is chosen from, one no one else has |
 | `ASSH_CA_REF` | `tpm2-kira ssh ca` (default): what the signing key's approvals are bound to |
 | `ASSH_LISTEN` | `:22` (default): the address the server listens on |
@@ -363,9 +363,8 @@ and no secret either: the keys are in the TPM.
   run it after every image rebuild, so a kernel update needs nothing by
   hand. control approves them when it creates the CA and at quit; the CA
   and the clients' trust in it stay the same. An approval that is skipped
-  (the YubiKey not plugged in) leaves slot 1, which reads no image on a
-  UKI boot; on GRUB slot 1 reads PCRs 8 and 9 too, and such a boot serves
-  a temporary key.
+  (the YubiKey not plugged in) leaves no slot: both read the image, and such a
+  boot serves a temporary key. Slot 1 is for a firmware or option-ROM change.
 - **At every boot** `run` has the TPM make a new host key (the CA's type)
   under the TPM's **NULL hierarchy**, whose seed changes at every reboot,
   and the CA certify it (an OpenSSH host certificate) - when the SSH
@@ -573,21 +572,17 @@ aSSH's own tests log in with OpenSSH's client (10.6) through a
 
 ## 11. Known limits
 
-- **Slot 1 binds the CA to the Secure Boot keys, not to the image** - on
-  a UKI boot (Arch), where the command line and the initrd are in the
-  signed image. On a GRUB boot (Debian) slot 1 is PCRs 7, 8 and 9: Secure
-  Boot checks GRUB and the kernel, not GRUB's command line or the initrd,
-  so an entry edited at the console (`break=`, `rdinit=/bin/sh`) would
-  reach a shell before the close with PCR 7 as approved; PCRs 8 and 9 see
-  the edit, and no TOTP slot lacks them either.
-  `control` advises a GRUB superuser password with the entries
-  `--unrestricted`, which keeps the edit from being made at all. On a UKI
-  boot any
-  image signed with the same key that gives a root
-  shell before PCR 15 is extended (an initramfs with an emergency shell,
-  an older UKI or one without tpm2-kira, which never closes it) can have the CA certify a key of its own for that boot - not take
-  the CA away, and the TOTP fallback slot computes a code there too: such a
-  boot holds PCR 7 as approved and PCR 15 at zero. Keep such images unsigned.
+- **Every slot reads the image, so a boot of an image not approved opens
+  nothing.** One rule: PCR 7 and the image's PCRs, slot 0 with the platform (0,
+  2, 4). On a GRUB boot (Debian) those are PCRs 8 and 9: Secure Boot checks GRUB
+  and the kernel, not GRUB's command line or the initrd, so an entry edited
+  at the console (`break=`, `rdinit=/bin/sh`) would reach a shell before the
+  close with PCR 7 as approved; PCRs 8 and 9 see the edit. `control` advises
+  a GRUB superuser password with the entries `--unrestricted`, which keeps
+  the edit from being made at all. An image that **is** approved and gives a
+  root shell before PCR 15 is extended (an initramfs with an emergency shell)
+  can have the CA certify a key of its own for that boot - not take the CA
+  away - and the slots compute codes there too: PCR 15 is at zero.
   Without Secure Boot, PCR 7 says
   little: any OS booted on the machine reaches the same values. The CA
   never leaves this TPM either way; a certificate made so is good for the

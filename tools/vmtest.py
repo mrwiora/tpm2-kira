@@ -43,8 +43,9 @@ What it does, each step a check in the report:
      after each boot: the key was answered, no tpm2-kira error; the boot is
      closed (PCR 15 extended, run's close in the log, Arch's close unit
      ran), every slot closed and slot 0's TOTP key refusing; no cap unit;
-     Debian (GRUB): every slot with PCRs 8 and 9 - the fallback 7,8,9, a
-     PCR 0,7 slot refused, the SSH CA's slot 1 = 7,8,9
+     one PCR rule: the slots and the SSH CA's are PCR 7 and the image, slot 0
+     with 0, 2 and 4 (Debian's GRUB: a PCR 0,7 slot refused), and PCR 4 as
+     approved before this boot is PCR 4 as this boot measured it
   7b. the salt in this TPM (0x1200): luks enrol --salt tpm, luks status and
      luksDump name the recipe, the plan takes the part; a boot asks the
      password alone over SSH (the TPM opened the salt during the hold);
@@ -460,10 +461,14 @@ class Machine:
         self.secrets = re.findall(r"^Secret: ([A-Z2-7]+)", out, re.M)
         if not self.check("slot add seals slots %s, each with its secret" % " and ".join(map(str, self.slots)), len(self.secrets) == len(self.slots), out[-600:]):
             raise Fail("no slots")
+        if self.distro == "arch":
+            self.check("UKI: the fallback slot 1 is sealed to 7e,11u", "the fallback, sealed to PCRs 7e,11u alone" in out, out[-600:])
+            self.check("UKI: slot 0 is sealed to 0e,2e,4u,7e,11u", "PCRs: 0e,2e,4u,7e,11u" in out, out[-600:])
         if self.distro == "debian":
             self.check("GRUB: the fallback slot 1 is sealed to 7e,8e,9e", "the fallback, sealed to PCRs 7e,8e,9e alone" in out, out[-600:])
-            rc, out = self.run("tpm2-kira slot add --totp --nvram 2 --pcrs 0,7 2>&1", save="slot-add-grub-07.log")
-            self.check("GRUB: slot add refuses a slot without PCRs 8 and 9", "PCR 8 is not selected: on a GRUB boot" in out, out[-400:])
+            self.check("GRUB: slot 0 is sealed to 0e,2e,4u,7e,8e,9e", "PCRs: 0e,2e,4u,7e,8e,9e" in out, out[-600:])
+            rc, refused = self.run("tpm2-kira slot add --totp --nvram 2 --pcrs 0,7 2>&1", save="slot-add-grub-07.log")
+            self.check("GRUB: slot add refuses a slot without PCRs 8 and 9", "PCR 8 is not selected: on a GRUB boot" in refused, refused[-400:])
         rc, mid = self.run(f"test -e {self.MID_VAR} && echo sealed")
         self.check("slot 0 seals the machine-id in the EFI variable KIRAmachineID", "sealed" in mid and "Sealed the machine-id" in out, out[-400:])
         last = self.slots[-1]
@@ -474,9 +479,10 @@ class Machine:
             self.check(f"slot {last}'s code is the authenticator's (computed from its secret)", code_matches(self.secrets[last], m.group(1), at), out.strip())
         else:
             # The running system is closed (PCR 15), or past the OS
-            # separator: no code until the next boot, by design.
-            self.check(f"slot {last}: a code, or none until the next boot (closed, or past the OS separator)",
-                       "Closed until the next boot" in out or "Locked until the next boot" in out, out.strip())
+            # separator, or the slot's image is predicted for the next boot
+            # (an image rebuilt since this one): no code until then, by design.
+            self.check(f"slot {last}: a code, or none until the next boot (closed, past the OS separator, or predicted)",
+                       "Closed until the next boot" in out or "Locked until the next boot" in out or "PCR Mismatch" in out, out.strip())
 
     def inspect(self):
         self.log.head("the commands that read")
@@ -682,11 +688,18 @@ class Machine:
         rc, out = self.run("ls /usr/lib/systemd/system/tpm2-kira-cap.service 2>&1; "
                            "grep -c 'tpm2-kira-boot cap' /usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira 2>&1; true")
         self.check(f"boot {n}: no cap unit or cap step", "No such file" in out.split("\n")[0] and not re.search(r"^[1-9]", out, re.M), out.strip())
-        if self.distro == "debian":
-            # GRUB: every slot of the SSH CA has PCRs 8 and 9.
-            rc, out = self.run("grep '^ASSH_CA_SLOT_' /etc/tpm2-kira/assh.conf 2>&1", save=f"boot{n}-ca-slots.log")
-            self.check(f"boot {n}: GRUB - every slot of the SSH CA has PCRs 8 and 9",
-                       re.search(r"^ASSH_CA_SLOT_0=0,2,7,8,9$", out, re.M) is not None and re.search(r"^ASSH_CA_SLOT_1=7,8,9$", out, re.M) is not None, out.strip())
+        # One rule: PCR 7 and the image; slot 0 with the platform.
+        slot0, slot1 = ("0,2,4,7,8,9", "7,8,9") if self.distro == "debian" else ("0,2,4,7,11", "7,11")
+        rc, out = self.run("grep '^ASSH_CA_SLOT_[0-9]=' /etc/tpm2-kira/assh.conf 2>&1", save=f"boot{n}-ca-slots.log")
+        self.check(f"boot {n}: the SSH CA's slots are {slot0} and {slot1}",
+                   re.search(rf"^ASSH_CA_SLOT_0={slot0}$", out, re.M) is not None and re.search(rf"^ASSH_CA_SLOT_1={slot1}$", out, re.M) is not None, out.strip())
+        # PCR 4 was predicted before this boot, for this boot: the approval
+        # holds the prediction, the register what the firmware measured.
+        rc, out = self.run("tpm2-kira slot info --nvram 0 2>&1; echo LIVE=$(cat /sys/class/tpm/tpm0/pcr-sha256/4)", save=f"boot{n}-pcr4.log")
+        approved = re.search(r"PCR 4\s+\(uki\): ([0-9a-f]{64})", out)
+        live = re.search(r"^LIVE=([0-9A-Fa-f]{64})$", out, re.M)
+        self.check(f"boot {n}: PCR 4 as predicted before this boot is the register",
+                   approved is not None and live is not None and approved.group(1) == live.group(1).lower(), out[-500:])
 
     def rebuild(self):
         cmd = "update-initramfs -u" if self.distro == "debian" else "mkinitcpio -P"

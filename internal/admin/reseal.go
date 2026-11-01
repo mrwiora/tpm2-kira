@@ -58,6 +58,52 @@ func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privK
 	return joinReseal(slotsErr, resealSSHCA(controlPath, tpmPath, privKeyPath))
 }
 
+// ResealIfMoved approves only what an update of the images on the EFI system
+// partition (a boot loader by bootctl, shim or GRUB by a package) moved: every
+// slot when PCR 4 of one has moved, the SSH CA when it has no approval of the
+// next boot. Nothing moved: nothing is written and no generation raised.
+func ResealIfMoved(tpmPath, pubKeyPath, privKeyPath string, debug bool) error {
+	tpmDev, err := tpmdev.Open(tpmPath)
+	if err != nil {
+		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
+	}
+	moved := false
+	slots := nvslot.FindPopulatedSlots(tpmDev, debug)
+	tpmDev.Close()
+	for _, idx := range slots {
+		raw, err := nvslot.ReadRecord(idx)
+		if err != nil {
+			continue
+		}
+		if sb, err := nvslot.UnmarshalSealedBlob(raw); err == nil {
+			moved = moved || loaderMoved(sb)
+		}
+	}
+	if moved {
+		return ResealCommand(tpmPath, 0, "", pubKeyPath, privKeyPath, debug)
+	}
+	fmt.Println("No slot's PCR 4 has moved")
+	return resealSSHCA(controlConfigPath(), tpmPath, privKeyPath)
+}
+
+// loaderMoved says whether the slot's approved PCR 4 is no longer what the next
+// boot will measure. A slot without 4u, or no event log to predict from, has
+// not moved.
+func loaderMoved(sb *nvslot.SealedBlob) bool {
+	return loaderMovedAt(measure.DefaultEventlogPath, sb)
+}
+
+func loaderMovedAt(eventlogPath string, sb *nvslot.SealedBlob) bool {
+	for _, d := range sb.Payload.PCRDigests {
+		if d.Source != measure.PCRSourceUKI || d.Index != measure.TPM2PCRBootLoader {
+			continue
+		}
+		p, err := measure.PredictPCR4(eventlogPath, d.Command, sb.GetHashAlgo())
+		return err == nil && !bytes.Equal(p.Value, d.Digest.Buffer)
+	}
+	return false
+}
+
 // joinReseal is the slots' and the SSH CA's outcome: a failure of either
 // wins over a skip of the other, which was reported already.
 func joinReseal(slots, sshCA error) error {
@@ -353,7 +399,11 @@ func checkObjectSigningKey(blob *nvslot.SealedBlob, pub crypto.PublicKey) error 
 func printResealSources(specs []measure.PCRSpec) {
 	for _, spec := range specs {
 		fmt.Printf("  PCR%-2d (%s): %s\n", spec.Index, spec.Source.String(), measure.GetPCRDescription(spec.Index))
-		if spec.Source == measure.PCRSourceUKI {
+		switch {
+		case spec.Source != measure.PCRSourceUKI:
+		case spec.Index == measure.TPM2PCRBootLoader:
+			fmt.Println("         predicted from this boot's log and the images on the EFI system partition")
+		default:
 			fmt.Printf("         recomputed from the unified kernel image %s\n", untrusted.Quote(spec.Command))
 		}
 	}

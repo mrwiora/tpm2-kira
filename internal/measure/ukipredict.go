@@ -222,7 +222,7 @@ func VerifyUKIPredictionAgainstEventlog(ukiPath string, logDigests [][]byte, alg
 func VerifyUKISpecsAgainstEventlog(specs []PCRSpec, algo PCRHashAlgo, debug bool) error {
 	var ukiPaths []string
 	for _, spec := range specs {
-		if spec.Source == PCRSourceUKI {
+		if spec.Source == PCRSourceUKI && spec.Index == TPM2PCRKernelBoot {
 			ukiPaths = append(ukiPaths, spec.Command)
 		}
 	}

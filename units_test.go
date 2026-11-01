@@ -200,3 +200,19 @@ func TestCloseUnitFailsTheBoot(t *testing.T) {
 		t.Error("the hook does not make initrd.target require the close")
 	}
 }
+
+// bootctl update through systemd-boot-update.service moves PCR 4: its drop-in
+// approves, only what moved, and its failure is never the update's.
+func TestBootUpdateApprovesPCR4(t *testing.T) {
+	d := directives(t, "initramfs/systemd/systemd-boot-update-tpm2-kira.conf")
+	if !has(d, "ExecStartPost=-/usr/bin/tpm2-kira slot approve --if-moved") {
+		t.Errorf("the drop-in: %v", d)
+	}
+	pkg, err := os.ReadFile("packaging/aur/PKGBUILD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(pkg), "systemd-boot-update.service.d/tpm2-kira.conf") {
+		t.Error("the package does not install the drop-in")
+	}
+}

@@ -170,7 +170,7 @@ func TestStatusNotes(t *testing.T) {
 	if len(r.Slots) != 1 || !r.Slots[0].Signed || r.Slots[0].Fallback {
 		t.Fatalf("slots: %+v", r.Slots)
 	}
-	if !hasNote(r.Notes, "no fallback slot (PCRs 0e,7e alone)") || !hasNote(r.Notes, "tpm2-kira slot add --nvram 1 --pcrs 0e,7e") {
+	if !hasNote(r.Notes, "no fallback slot (PCRs 0,7 alone)") || !hasNote(r.Notes, "tpm2-kira slot add --nvram 1 --pcrs 0,7") {
 		t.Errorf("no fallback: notes %q", r.Notes)
 	}
 

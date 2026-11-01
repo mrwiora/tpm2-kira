@@ -50,6 +50,8 @@ type StatusSlot struct {
 	VaultPin    string         `json:"-"`                      // the vault's key pin, for control's check
 	VaultDevice []byte         `json:"-"`                      // the device ID the vault knows this machine by
 	TPMSalt     bool           `json:"tpm_salt,omitempty"`     // the slot holds the salt of recipe 0x1200
+	// LoaderMoved: the approved PCR 4 is not what the next boot will measure.
+	LoaderMoved bool `json:"loader_moved,omitempty"`
 	// NoGRUBPCRs: on a GRUB boot, the slot lacks PCR 8 or 9 (GRUBPCRs).
 	NoGRUBPCRs bool `json:"no_grub_pcrs,omitempty"`
 }
@@ -121,6 +123,7 @@ func collectStatus(o StatusOptions) StatusReport {
 				GenState: generationState(tpmDev, idx, sb)}
 			s.Fallback = isFallbackSelection(sb.GetPCRSpecs())
 			s.NoGRUBPCRs = checkGRUBSelection(sb.GetPCRSpecs(), r.GRUB) != nil
+			s.LoaderMoved = loaderMoved(sb)
 			s.TOTP = sb.HasTOTPKey()
 			v := verifier.verify(raw, sb)
 			s.Signed, s.SignReason = v.Verified, v.Reason
@@ -203,6 +206,9 @@ func statusNotes(r StatusReport) []string {
 		if strings.Contains(s.GenState, "NOT") || strings.Contains(s.GenState, "unavailable") {
 			notes = append(notes, fmt.Sprintf("slot %d shows no code until it is approved: tpm2-kira slot approve --nvram %d", s.Slot, s.Slot))
 		}
+		if s.LoaderMoved {
+			notes = append(notes, fmt.Sprintf("slot %d's PCR 4 is not what the next boot will measure (an updated boot loader or image; risk: no slot 0 at the next boot, the fallback's purple): tpm2-kira slot approve", s.Slot))
+		}
 		if s.NoGRUBPCRs {
 			notes = append(notes, fmt.Sprintf("slot %d lacks PCR 8 or 9 (risk: %s): tpm2-kira slot delete --nvram %d", s.Slot, grubSelectionWhy, s.Slot))
 		}
@@ -217,11 +223,11 @@ func statusNotes(r StatusReport) []string {
 		notes = append(notes, "GRUB has no password (risk: the GRUB entry can be edited at the console): "+GRUBAdvice)
 	}
 	if r.TPMError == "" && codes && !fallback {
-		sel := FallbackPCRSelection
+		sel := defaultFallbackSelection("")
 		if r.GRUB {
 			sel = GRUBFallbackPCRSelection
 		}
-		notes = append(notes, fmt.Sprintf("no fallback slot (PCRs %s alone) for a boot whose kernel changed unpredicted: tpm2-kira slot add --nvram %d --pcrs %s", sel, FallbackSlot, sel))
+		notes = append(notes, fmt.Sprintf("no fallback slot (PCRs %s alone) for a boot whose firmware or option ROMs changed: tpm2-kira slot add --nvram %d --pcrs %s", sel, FallbackSlot, sel))
 	}
 
 	slotThere := map[int]bool{}

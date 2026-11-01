@@ -112,11 +112,10 @@ from each only what it uses: the boot image carries only those parts
 
 ### The slot
 
-`tpm2-kira slot add` approves what this boot measured - firmware, Secure
-Boot state, and the unified kernel image or GRUB's PCRs - in slot 0; with
-`--totp` a TOTP code too, and the firmware and Secure Boot state alone in
-slot 1, the fallback (not on a GRUB boot, where every slot includes PCRs 8
-and 9). The slot's record is an EFI variable (`KIRAslotN`);
+`tpm2-kira slot add` approves what this boot measured - firmware, what it
+loaded, Secure Boot state, and the unified kernel image or GRUB's PCRs - in
+slot 0; with `--totp` a TOTP code too, and the Secure Boot state and the image
+alone in slot 1, the fallback for a firmware or option-ROM change. The slot's record is an EFI variable (`KIRAslotN`);
 the TPM keeps its generation and counter. After
 an update the hooks run `slot approve`: the TPM's key stays, so nothing is
 enrolled again. Which PCRs to choose and why, the boot path's hardening,
@@ -238,7 +237,7 @@ After installing, run setup and slot add once, then rebuild the initramfs:
 
 ```bash
 sudo tpm2-kira setup
-sudo tpm2-kira slot add --totp --pcrs 0,7,11u    # with a unified kernel image
+sudo tpm2-kira slot add --totp --pcrs 0e,2e,4u,7e,11u    # with a unified kernel image
 sudo mkinitcpio -P
 ```
 
@@ -259,7 +258,7 @@ generates a new TOTP secret and prints a QR code you need to scan:
 
 ```bash
 sudo tpm2-kira setup
-sudo tpm2-kira slot add --pcrs "0e,2e,4e,7e,8e,9e"
+sudo tpm2-kira slot add --pcrs "0e,2e,4u,7e,8e,9e"
 sudo update-initramfs -u
 ```
 
@@ -596,7 +595,7 @@ apply. GRUB carries the equivalent measurements instead:
 
 ```bash
 # Measures kernel, initrd and command line; predicted across updates (below)
-tpm2-kira slot add --pcrs "0e,2e,4e,7e,8e,9e"
+tpm2-kira slot add --pcrs "0e,2e,4u,7e,8e,9e"
 ```
 
 Secure Boot checks GRUB and the kernel, not GRUB's command line or the

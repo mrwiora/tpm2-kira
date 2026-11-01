@@ -14,15 +14,16 @@ import (
 	"github.com/google/go-attestation/attest"
 )
 
-// What 'slot add' seals to when nobody says. The boot's own event log decides:
-// the firmware, its configuration and the secure boot state always (0, 2,
-// 7); with a unified kernel image, PCR 11 computed from the image, so the
-// code survives a kernel update by prediction; with GRUB, its PCRs 8 and
-// 9, predicted from grub.cfg and the files it loads. And a second slot
-// sealed to 0 and 7 alone - the fallback: when a kernel or boot loader
-// change was not predicted, the firmware and the secure boot state still
-// vouch for the machine, and that slot's code still shows. One rule for
-// every slot: PCR 7 and the image's PCRs; slot 0 adds the platform (0, 2).
+// What 'slot add' seals to when nobody says. One rule for every slot: PCR 7
+// and the image's PCRs; slot 0 adds the platform (0, 2 and 4). The boot's own
+// event log decides the image's: with a unified kernel image PCR 11 computed
+// from the image, with GRUB its PCRs 8 and 9, predicted from grub.cfg and the
+// files it loads. PCR 4 - what the firmware loaded - moves at every loader and
+// kernel update: predicted for the next boot too (4u), so the code survives
+// them; in by decision, and it goes again if it makes trouble in the real
+// world (a firmware that measures more into it, an unpredictable value). The
+// second slot, the fallback, is PCR 7 and the image alone: after a firmware or
+// option-ROM change it still vouches for the machine, and its code still shows.
 // On GRUB, Secure Boot checks GRUB and the kernel, not GRUB's command line
 // or the initrd, so someone at the console edits the entry (break=,
 // rdinit=/bin/sh) and has a shell before the close, with PCRs 0 and 7 as
@@ -30,10 +31,15 @@ import (
 // edit, and the fallback is 7, 8 and 9 - a slot without 8 and 9 is
 // refused.
 
-// FallbackPCRSelection is what the fallback slot is sealed to; without an
-// event log the registers as they are (FallbackRegisterSelection); on a
-// GRUB boot GRUBFallbackPCRSelection.
+// FallbackPCRSelection is the fallback slot's selection on a boot that is
+// neither a unified kernel image's nor GRUB's, whose image no PCR tells; on
+// those UKIFallbackPCRSelection and GRUBFallbackPCRSelection, without an event
+// log the registers as they are (FallbackRegisterSelection).
 const FallbackPCRSelection = "0e,7e"
+
+// UKIFallbackPCRSelection is the fallback slot's selection on a boot of a
+// unified kernel image: the secure boot state and the image.
+const UKIFallbackPCRSelection = "7e,11u"
 
 // GRUBFallbackPCRSelection is the fallback slot's selection on a GRUB
 // boot: the secure boot state and GRUB's PCRs 8 and 9.
@@ -150,30 +156,52 @@ func GRUBPassword(path string) (bool, error) {
 }
 
 // defaultFallbackSelection is the fallback slot's selection, from the
-// event log when there is one to read: GRUBFallbackPCRSelection on a GRUB
-// boot.
+// event log when there is one to read.
 func defaultFallbackSelection(eventlogPath string) string {
 	if eventlogPath == "" {
 		eventlogPath = measure.DefaultEventlogPath
 	}
-	if _, err := measure.ReadRawEventLogFromPath(eventlogPath); err != nil {
+	raw, err := measure.ReadRawEventLogFromPath(eventlogPath)
+	if err != nil {
 		return FallbackRegisterSelection
 	}
-	if GRUBBoot(eventlogPath) {
+	log, err := attest.ParseEventLog(raw)
+	if err != nil {
+		return FallbackRegisterSelection
+	}
+	for _, algo := range []measure.PCRHashAlgo{measure.PCRHashAlgoSHA256, measure.PCRHashAlgoSHA1} {
+		if events := log.Events(measure.AttestHash(algo)); len(events) > 0 {
+			return fallbackSelectionFor(events, findUKI())
+		}
+	}
+	return FallbackPCRSelection
+}
+
+// fallbackSelectionFor is the fallback slot's selection for this boot's
+// events, uki the image's path when it is not the default one.
+func fallbackSelectionFor(events []attest.Event, uki string) string {
+	stub, grub := bootKind(events)
+	switch {
+	case stub:
+		if uki != "" && uki != measure.DefaultUKIPath {
+			return "7e,11u:" + uki
+		}
+		return UKIFallbackPCRSelection
+	case grub:
 		return GRUBFallbackPCRSelection
 	}
 	return FallbackPCRSelection
 }
 
-// isFallbackSelection says whether specs are a fallback slot's: PCRs 0
-// and 7 alone, or 7, 8 and 9 alone (GRUB).
+// isFallbackSelection says whether specs are a fallback slot's: PCR 7 and the
+// image (11, or 8 and 9), or PCRs 0 and 7 where no PCR tells the image.
 func isFallbackSelection(specs []measure.PCRSpec) bool {
 	var idx []int
 	for _, s := range specs {
 		idx = append(idx, s.Index)
 	}
 	sort.Ints(idx)
-	return slices.Equal(idx, []int{0, 7}) || slices.Equal(idx, []int{7, 8, 9})
+	return slices.Equal(idx, []int{7, 11}) || slices.Equal(idx, []int{7, 8, 9}) || slices.Equal(idx, []int{0, 7})
 }
 
 // defaultPCRSelection decides from the events: systemd-stub's section
@@ -183,13 +211,13 @@ func defaultPCRSelection(events []attest.Event, uki string) (string, string) {
 	stub, grub := bootKind(events)
 	switch {
 	case stub:
-		spec := "11u"
+		loader, image := "4u", "11u"
 		if uki != "" && uki != measure.DefaultUKIPath {
-			spec += ":" + uki
+			loader, image = loader+":"+uki, image+":"+uki
 		}
-		return "0e,2e,7e," + spec, "a unified kernel image booted: the firmware, the secure boot state, and PCR 11 computed from the image"
+		return "0e,2e," + loader + ",7e," + image, "a unified kernel image booted: the firmware, what it loaded (predicted), the secure boot state, and PCR 11 computed from the image"
 	case grub:
-		return "0e,2e,7e,8e,9e", grubBootWhy + ": the firmware, the secure boot state, and GRUB's PCRs 8 and 9, predicted from grub.cfg"
+		return "0e,2e,4u,7e,8e,9e", grubBootWhy + ": the firmware, what it loaded (predicted), the secure boot state, and GRUB's PCRs 8 and 9, predicted from grub.cfg"
 	}
 	return "0e,2e,7e", "the firmware and the secure boot state"
 }
@@ -231,7 +259,7 @@ func findUKI() string {
 // this boot measured and, with TOTP, slot 1 to the fallback selection -
 // a second code for a boot whose kernel changed unpredicted, which only a
 // code is for - with the signing key at the paths given ("" for the
-// defaults). On a GRUB boot the fallback is 7, 8 and 9 (GRUBPCRs).
+// defaults). The fallback is PCR 7 and the image: 11, or 8 and 9 on GRUB.
 func SealDefaults(tpmPath, pubKeyPath, privKeyPath string, algo measure.PCRHashAlgo, debug, withTOTP bool) error {
 	sel, why := DefaultPCRSelection("", algo)
 	fmt.Printf("PCRs: %s (%s)\n\n", sel, why)
@@ -248,14 +276,14 @@ func SealDefaults(tpmPath, pubKeyPath, privKeyPath string, algo measure.PCRHashA
 func SealFallback(tpmPath, pubKeyPath, privKeyPath string, algo measure.PCRHashAlgo, debug bool) error {
 	fallback := defaultFallbackSelection("")
 	fmt.Printf("\n=== Slot %d: the fallback, sealed to PCRs %s alone ===\n", FallbackSlot, fallback)
-	if fallback == GRUBFallbackPCRSelection {
-		fmt.Println("Its code shows in a boot whose firmware or option ROMs changed unpredicted, as long")
-		fmt.Println("as the secure boot state and GRUB's measurements are the same (on GRUB no slot")
-		fmt.Println("may lack PCRs 8 and 9); it says the machine is not simply lost.")
-	} else {
+	if fallback == FallbackPCRSelection || fallback == FallbackRegisterSelection {
 		fmt.Println("Its code shows in a boot whose kernel or boot loader changed unpredicted, as long")
 		fmt.Println("as the firmware and the secure boot state are the same; it says the machine is")
 		fmt.Println("not simply lost.")
+	} else {
+		fmt.Println("Its code shows in a boot whose firmware or option ROMs changed, as long as the")
+		fmt.Println("secure boot state and the image are the same as approved (an image not approved")
+		fmt.Println("yet shows no code in either slot); it says the machine is not simply lost.")
 	}
 	fmt.Println("Pair this one with your authenticator too.")
 	fmt.Println()

@@ -39,21 +39,30 @@ event log:
 
 | This boot | Slot 0 is sealed to | Why |
 |---|---|---|
-| a unified kernel image (systemd-stub) | `0e,2e,7e,11u` | firmware, option ROMs, Secure Boot state, and PCR 11 computed from the image - a kernel update is predicted from the new image |
-| GRUB | `0e,2e,7e,8e,9e` | the same, and GRUB's commands and the files it read, predicted from `grub.cfg` for the next boot |
+| a unified kernel image (systemd-stub) | `0e,2e,4u,7e,11u` | firmware, option ROMs, what the firmware loaded, Secure Boot state, and PCR 11 computed from the image - a kernel update is predicted from the new image |
+| GRUB | `0e,2e,4u,7e,8e,9e` | the same, and GRUB's commands and the files it read, predicted from `grub.cfg` for the next boot |
 | neither | `0e,2e,7e` | firmware, option ROMs, Secure Boot state |
 | no event log to read (a software TPM, a run without root) | `0,2,7` | the same registers as they are now: nothing can be replayed |
 
 Without `--pcrs` and `--nvram`, and with `--totp`, a second slot is sealed as
-well: **slot 1, the fallback, to `0e,7e` alone** (`0,7` without an event log).
-One rule for every slot: PCR 7 and the image's PCRs, slot 0 with the platform
-(0, 2) added. On a GRUB boot Secure Boot checks GRUB and the kernel, not
-GRUB's command line or the initrd, so there every slot includes PCRs 8 and 9:
-the fallback is `7e,8e,9e`, and `slot add` refuses a selection without them.
-When a kernel or boot loader change was not predicted, slot 0 shows no code,
-but slot 1 still does as long as the firmware and the Secure Boot state are
-what they were: the machine is not simply lost, and the first slot is resealed
-once the boot is understood. Pair both with your authenticator.
+well: **slot 1, the fallback, to `7e,11u` alone** (`7e,8e,9e` on GRUB; `0e,7e`
+on a boot of neither, `0,7` without an event log). One rule for every slot:
+PCR 7 and the image's PCRs, slot 0 with the platform (0, 2, 4) added. On a GRUB
+boot Secure Boot checks GRUB and the kernel, not GRUB's command line or the
+initrd, so there every slot includes PCRs 8 and 9, and `slot add` refuses a
+selection without them. When the firmware or an option ROM changes, slot 0
+shows no code, but slot 1 still does: the machine is not simply lost, and slot 0
+is approved again once the boot is understood. A kernel not approved shows no
+code in either. Pair both with your authenticator.
+
+PCR 4 is `4u`, predicted for the next boot: this boot's log with each image the
+firmware loaded hashed (Authenticode) as it is on the EFI system partition, the
+other events kept. `4e` is refused: PCR 4 moves at every loader and kernel
+update. The image hooks approve it with the rest; `bootctl update` through
+`systemd-boot-update.service` too (`slot approve --if-moved`). After `bootctl
+update` by hand or a shim or GRUB package on Debian, `status` and `control` say
+it is due. It is in by decision, and goes again if it makes trouble in the real
+world (a firmware that measures more into it, an unpredictable value).
 
 With `--pcrs`, or `--nvram`, one slot is sealed: the one named (else 0),
 to the PCRs named (else the selection above).
@@ -107,11 +116,11 @@ and the kernel command line.
 
 | Boot setup | Selection | Measures kernel, initrd and command line through |
 |---|---|---|
-| Unified kernel image (systemd-stub) | `0,7,11u` | PCR 11, computed from the image on disk |
-| GRUB | `0e,2e,4e,7e,8e,9e` | PCR 8 (GRUB commands, incl. the command line) and PCR 9 (files GRUB reads) |
+| Unified kernel image (systemd-stub) | `0e,2e,4u,7e,11u` | PCR 11, computed from the image on disk |
+| GRUB | `0e,2e,4u,7e,8e,9e` | PCR 8 (GRUB commands, incl. the command line) and PCR 9 (files GRUB reads) |
 | systemd-boot, separate kernel and initrd | add `9`, `12` | PCR 9 (initrd loaded by the EFI stub) and PCR 12 (command line) |
 
-Firmware-only selections such as `0,7` or `0e,2e,4e,7e` survive kernel updates
+Firmware-only selections such as `0,7` or `0e,2e,7e` survive kernel updates
 untouched, but a replaced initrd, or a shell from an edited command line, then
 still gets a valid code — and from such a shell the TPM can be made to compute
 codes for any future time. PCRs 8 and 9 change on every kernel or initramfs

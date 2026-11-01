@@ -119,7 +119,7 @@ class Hib:
         it."""
         rc, out = self.run(
             "echo BOOT=$(cat /proc/sys/kernel/random/boot_id); "
-            "echo PCR15=$(tpm2_pcrread sha256:15 2>&1 | awk '/15 *:/{print $3}'); "
+            "echo PCR15=$(tpm2_pcrread sha256:15 2>&1 | awk '/15 *:/{print $2}'); "
             "tpm2_readclock 2>&1; "
             f"{PROBE} ca show --config {CONF} 2>&1 | tail -4", save=f"state-{tag}.log")
         boot = re.search(r"BOOT=(\S+)", out)
@@ -229,7 +229,21 @@ class Hib:
         if not self.check(f"{tag}: the system is back (ssh)", m.wait_port(22, True, 300)):
             raise vmtest.Fail("the system does not come back")
 
+    def wait_login(self, tag):
+        """ssh itself works: a banner is not enough. The resumed sshd keeps
+        its penalties (PerSourcePenalties) for the probes of this boot and
+        earlier ones and closes the connection until they run out (600 s
+        at most); a login does not add to them."""
+        deadline = time.time() + 660
+        while time.time() < deadline:
+            rc, _ = self.run("true")
+            if rc == 0:
+                return
+            time.sleep(5)
+        raise vmtest.Fail(f"{tag}: ssh does not let in")
+
     def after_resume(self, tag, before):
+        self.wait_login(tag)
         st = self.state(f"{tag}-after")
         if st["boot"] != before["boot"]:
             rc, out = self.run("journalctl -b -k -o cat --no-pager 2>&1 | grep -E 'PM: (Image|hibernation: (Image|Failed))'", save=f"{tag}-no-resume.log")
@@ -322,6 +336,7 @@ class Hib:
         self.check("V4: the system did not come up (no resume, no boot)", not m.wait_port(22, True, 5))
         # Back to the hibernated state, the TPM with it: the resume goes on.
         lv.revert("hibernated-v4")
+        lv.drop_snapshot("hibernated-v4")
         self.resume_over_ssh("V4-reverted")
         self.after_resume("V4-reverted", before)
 

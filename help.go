@@ -242,7 +242,7 @@ with the key that signs the boot components.
                        [--pubkey PATH] [--privkey PATH] [--sha1]
                        [--verify-uki=false]
 tpm2-kira slot approve [--nvram N] [--pcrs LIST] [--measure-point M]
-                       [--privkey PATH] [--pubkey PATH] [--require-key]
+                       [--privkey PATH] [--pubkey PATH] [--require-key] [--if-moved]
 tpm2-kira slot info    [--nvram N] [--json] [--privkey PATH]
 tpm2-kira slot list | status | delete [--yes]   [--nvram N]
 
@@ -268,23 +268,24 @@ into it afterwards (luks enrol, vault enrol, phone enrol).
 
 
 Without --pcrs the selection is what this boot measured: the firmware and
-the secure boot state (0e,2e,7e), plus PCR 11 computed from the unified
-kernel image when one booted (11u), or GRUB's PCRs 8 and 9 predicted from
-grub.cfg when GRUB did (8e,9e); without an event log to read, the
+the secure boot state (0e,2e,7e), plus, when a unified kernel image booted,
+PCR 4 predicted for the next boot and PCR 11 computed from the image
+(4u,11u), or when GRUB did, PCR 4 predicted and GRUB's PCRs 8 and 9
+predicted from grub.cfg (4u,8e,9e); without an event log to read, the
 registers as they are (0,2,7). Without --pcrs and --nvram, slot 0 is
-sealed with that selection and, with --totp, slot 1, the fallback, with
-0e,7e alone (0,7 without a log) - a boot whose kernel changed unpredicted
-still shows slot 1's code, which says the machine is not simply lost. On a
+sealed with that selection and, with --totp, slot 1, the fallback, with PCR
+7 and the image alone (7e,11u or 7e,8e,9e; 0,7 without a log) - a boot whose
+firmware or option ROMs changed still shows slot 1's code, which says the
+machine is not simply lost; a kernel not approved shows no code. On a
 GRUB boot Secure Boot does not check GRUB's command line and the initrd,
-so every slot includes PCRs 8 and 9: the fallback is 7e,8e,9e, and a
-selection without them is refused. With --pcrs or --nvram, one slot: the
+so a selection without PCRs 8 and 9 is refused. With --pcrs or --nvram, one slot: the
 one named (else 0), the PCRs named (else the selection).
 
   --pcrs LIST        PCRs with a source suffix each:
                        r  read from the TPM's registers (default)
                        e  replayed from the event log (PCRs 0-12)
                        u[:PATH]  computed from the unified kernel image (PCR 11)
-                     "0e,2e,7e"  "0e,2e,7e,11u"  "0e,2,4,7e"
+                     "0e,2e,7e"  "0e,2e,4u,7e,11u"  "0e,2,7e"
                      PCRs 0-7, 9 and 12-14 are sealed to their values before
                      systemd-pcrosseparator.service: the code shows before
                      it, and the separator then locks the key until the next
@@ -302,8 +303,8 @@ one named (else 0), the PCRs named (else the selection).
 
   tpm2-kira slot add                        slot 0 as measured
   tpm2-kira slot add --totp                 slot 0 with a code, 1 the fallback
-  tpm2-kira slot add --pcrs "0e,2e,7e,11u"  slot 0 with these
-  tpm2-kira slot add --nvram 2 --pcrs "0e,7e"
+  tpm2-kira slot add --pcrs "0e,2e,4u,7e,11u"  slot 0 with these
+  tpm2-kira slot add --nvram 2 --pcrs "7e,11u"
   tpm2-kira slot add --sha1 --pcrs "0e,2e,7e"
 
 approve
@@ -327,7 +328,7 @@ control stores, root-only; else asked).
                      every slot as it is, and exits 0
 
   tpm2-kira slot approve
-  tpm2-kira slot approve --nvram 0 --pcrs "0e,2,4,7e"
+  tpm2-kira slot approve --nvram 0 --pcrs "0e,2,4u,7e"
   tpm2-kira slot approve --privkey /path/to/my-key.key
 
 info
@@ -494,9 +495,9 @@ The host key is made in the TPM at every boot and certified by the SSH
 CA, which 'tpm2-kira control' creates in the TPM and keeps in the EFI
 variable ` + admin.DefaultSSHCA + `, and which signs only while the PCRs of one of its slots
 hold values the signing key approved. control writes two slots into
-assh.conf when it creates the CA: PCR 0, 2, 7 and the image's (11, or 8
-and 9 with GRUB), and PCR 7 alone (with 8 and 9 on GRUB, where Secure
-Boot does not check the command line and the initrd). A CA certifies
+assh.conf when it creates the CA: PCR 0, 2, 4, 7 and the image's (11, or 8
+and 9 with GRUB), and PCR 7 and the image alone, which outlasts a firmware
+or option-ROM change. A CA certifies
 from the boot after its creation; it is closed (PCR 15 extended) with
 every slot by run and by the image when the code screen is over, and
 before a resume from hibernation (tpm2-kira-boot close; a close that
@@ -674,7 +675,7 @@ key on a YubiKey, slot add and slot approve need the token and its PIN (see
 
 	"pcrtips": `tpm2-kira pcrtips
 
-What each PCR measures and which to seal to: 0,2,7 by default; 8 and 9 on
+What each PCR measures and which to seal to: 0,2,4,7 and the image by default; 8 and 9 on
 Debian with GRUB; 11 with a unified kernel image (docs/SEALING.md).
 `,
 }

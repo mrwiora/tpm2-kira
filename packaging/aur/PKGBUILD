@@ -115,6 +115,8 @@ package() {
         "$pkgdir/usr/lib/systemd/system/tpm2-kira-machine-id.service"
     install -Dm644 initramfs/systemd/tpm2-kira-unlock.socket \
         "$pkgdir/usr/lib/systemd/system/tpm2-kira-unlock.socket"
+    install -Dm644 initramfs/systemd/systemd-boot-update-tpm2-kira.conf \
+        "$pkgdir/usr/lib/systemd/system/systemd-boot-update.service.d/tpm2-kira.conf"
 
     # tpm2-kira's configuration file: the radio, the image's network and
     # SSH server (control writes it, and assh.conf beside it).

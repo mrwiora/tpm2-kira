@@ -376,6 +376,7 @@ func runSlotApprove(args []string, tpmPath string, debugFlag bool) {
 	privKeyPath := fs.String("privkey", "", "Path to signing private key: PEM, or the YubiKey key file from setup --yubikey")
 	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
 	requireKey := fs.Bool("require-key", false, "Fail instead of reporting SKIPPED when the signing key (YubiKey) is unavailable")
+	ifMoved := fs.Bool("if-moved", false, "Approve only what the images on the EFI system partition moved (PCR 4)")
 
 	fs.Parse(args)
 
@@ -384,6 +385,13 @@ func runSlotApprove(args []string, tpmPath string, debugFlag bool) {
 		fail(err)
 	}
 	measure.MeasurePointModeSetting = mode
+
+	if *ifMoved {
+		if err := admin.ResealIfMoved(*tpm, *pubKeyPath, *privKeyPath, *debug); err != nil && !errors.Is(err, admin.ErrResealSkipped) {
+			fail(err)
+		}
+		return
+	}
 
 	// Validate PCR specs before proceeding (only if explicitly provided)
 	if *pcrs != "" {

@@ -168,10 +168,10 @@ func (c *controller) keysSteps() []controlStep {
 
 	// The sealing: slot 0, the boot state the methods are enrolled into,
 	// with a TOTP code when chosen - and then slot 1, the fallback code for
-	// a boot whose kernel changed unpredicted. The step guides while slot 0
+	// a boot whose firmware or option ROMs changed. The step guides while slot 0
 	// is missing, or its code's fallback; then the slot lines show them and
 	// the step disappears ('tpm2-kira slot add' stays for sealing anew).
-	fallbackSel := "PCRs 0 and 7 alone"
+	fallbackSel := "PCR 7 and the image (PCR 11) alone"
 	if f.Status.GRUB {
 		fallbackSel = "PCRs 7, 8 and 9 alone (on GRUB every slot includes 8 and 9)"
 	}
@@ -186,7 +186,7 @@ func (c *controller) keysSteps() []controlStep {
 		case slot0 == nil:
 			seal.Explain = "Seals slot 0 to the boot state - to " + f.PCRs + ", evaluated for this machine and put up as the recommendation to acknowledge, or custom PCRs instead. The vault, the TPM salt and a phone are enrolled into it. Asked: a TOTP code at boot too, to compare with your authenticator before you type anything - then slot 1 gets one sealed to " + fallbackSel + ", the fallback for a boot whose kernel changed unpredicted."
 		default:
-			seal.Explain = "Slot 1, the fallback, is missing: seals a TOTP key to " + fallbackSel + " into it, the code for a boot whose kernel changed unpredicted. Slot 0 stays as it is."
+			seal.Explain = "Slot 1, the fallback, is missing: seals a TOTP key to " + fallbackSel + " into it, the code for a boot whose firmware or option ROMs changed (a kernel not approved shows no code in it). Slot 0 stays as it is."
 		}
 		steps = append(steps, seal)
 	}

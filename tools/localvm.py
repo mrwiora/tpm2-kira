@@ -300,6 +300,13 @@ class Machine:
         shutil.copytree(self.path("tpm"), os.path.join(snap, "tpm"), ignore=shutil.ignore_patterns("swtpm-sock", "swtpm.pid", "swtpm.log"))
         print(f"{self.name}: snapshot {tag}")
 
+    def drop_snapshot(self, tag):
+        """Removes a snapshot a test made for itself."""
+        snap = self.path("snap-" + tag)
+        if os.path.exists(snap):
+            shutil.rmtree(snap)
+            run(["qemu-img", "snapshot", "-d", tag, self.path("disk.qcow2")], check=False)
+
     def revert(self, tag):
         snap = self.path("snap-" + tag)
         if not os.path.isdir(snap):

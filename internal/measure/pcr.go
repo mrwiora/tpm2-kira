@@ -68,9 +68,11 @@ type PCRSpec struct {
 //
 //	"0"              - register (default)
 //	"0r"             - register (explicit)
-//	"0e"             - eventlog (PCRs 0-12 only)
-//	"11u"            - unified kernel image at the default path (PCR 11 only)
+//	"0e"             - eventlog (PCRs 0-12, not 4)
+//	"11u"            - unified kernel image at the default path
 //	"11u:/path.efi"  - unified kernel image at an explicit path
+//	"4u", "4u:/path" - PCR 4 predicted for the next boot (pcr4predict.go), with
+//	                   that image for what the firmware loads from \EFI\Linux\
 func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 	parts := strings.Split(pcrsStr, ",")
 	specs := make([]PCRSpec, 0, len(parts))
@@ -111,8 +113,11 @@ func ParsePCRSpecs(pcrsStr string) ([]PCRSpec, error) {
 		if source == PCRSourceEventlog && pcr > 12 {
 			return nil, fmt.Errorf("eventlog source (e suffix) is only valid for PCRs 0-12, got PCR %d", pcr)
 		}
-		if source == PCRSourceUKI && pcr != 11 {
-			return nil, fmt.Errorf("uki source (u suffix) is only valid for PCR 11, got PCR %d", pcr)
+		if source == PCRSourceUKI && pcr != TPM2PCRKernelBoot && pcr != TPM2PCRBootLoader {
+			return nil, fmt.Errorf("uki source (u suffix) is only valid for PCRs 4 and 11, got PCR %d", pcr)
+		}
+		if source == PCRSourceEventlog && pcr == TPM2PCRBootLoader {
+			return nil, fmt.Errorf("PCR 4 moves at every loader and kernel update, this boot's log (4e) would not hold at the next: use 4u, predicted for the next boot")
 		}
 		if source == PCRSourceUKI && command == "" {
 			return nil, fmt.Errorf("uki source for PCR %d requires a path (format: %du:/path/to/uki.efi)", pcr, pcr)
@@ -423,6 +428,20 @@ func ReadPCRValues(tpmDev transport.TPM, specs []PCRSpec, hashAlgo PCRHashAlgo, 
 	if len(ukiPCRIndices) > 0 {
 		for _, spec := range specs {
 			if spec.Source != PCRSourceUKI {
+				continue
+			}
+			if spec.Index == TPM2PCRBootLoader {
+				p, err := PredictPCR4(DefaultEventlogPath, spec.Command, hashAlgo)
+				if err != nil {
+					return nil, err
+				}
+				result.Values[spec.Index] = p.Value
+				for _, f := range p.Replaced {
+					fmt.Printf("PCR 4 predicted for the next boot: %s changed\n", f)
+				}
+				for _, k := range p.Kept {
+					fmt.Printf("PCR 4 predicted for the next boot: this boot's digest stays for %s\n", k)
+				}
 				continue
 			}
 			value, err := PredictPCR11FromUKI(spec.Command, MeasurePointPhases, hashAlgo, debug)

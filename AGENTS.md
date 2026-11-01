@@ -224,7 +224,8 @@ It may not carry what came before.
     fallback slot and the CA's slot 1 are 7, 8 and 9 (`GRUBPCRs`,
     default_pcrs.go) - and `slot add` refuses a selection without them. One
     rule for every slot: PCR 7 and the image's PCRs, slot 0 with the platform
-    (0, 2) added. `control` advises a GRUB
+    (0, 2, 4) added; PCR 4 is predicted for the next boot (`4u`), in by decision,
+    and goes again if it makes trouble in the real world. `control` advises a GRUB
     superuser password (never writes grub.cfg) and judges its absence red.
   - aSSH only warns about Secure Boot.
 - **Root for everything but the help.** Every command refuses to run as a

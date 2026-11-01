@@ -1183,7 +1183,7 @@ func (c *controller) confirmPCRs() (string, error) {
 	}
 	pcrs := f.PCRs
 	if err := c.form(huh.NewInput().Title("PCRs for slot 0").
-		Description("Indices with a source each: none or r the register, e the event log, u the unified kernel image - such as 0e,2e,7e,11u (tpm2-kira help slot).").
+		Description("Indices with a source each: none or r the register, e the event log, u the unified kernel image - such as 0e,2e,4u,7e,11u (tpm2-kira help slot).").
 		Value(&pcrs).
 		Validate(func(s string) error {
 			_, err := measure.ParsePCRSpecs(s)

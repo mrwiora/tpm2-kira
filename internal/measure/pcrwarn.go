@@ -161,7 +161,7 @@ func suggestWith(specs []PCRSpec, extra string) string {
 // a reseal after the reboot that follows each kernel or initrd update.
 func RecommendedPCRs() string {
 	if BootedViaSystemdStub() {
-		return "0,7,11u"
+		return "0e,2e,4u,7e,11u"
 	}
-	return "0e,2e,4e,7e,8e,9e"
+	return "0e,2e,4u,7e,8e,9e"
 }

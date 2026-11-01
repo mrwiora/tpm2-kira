@@ -575,7 +575,7 @@ func TestControlGRUB(t *testing.T) {
 		t.Fatalf("the fallback on GRUB: %+v", keys[1])
 	}
 	c.facts.Status.GRUB = false
-	if keys := c.menuSteps("keys"); keys[1].Key != "seal" || !strings.Contains(keys[1].Explain, "seals a TOTP key to PCRs 0 and 7 alone") {
+	if keys := c.menuSteps("keys"); keys[1].Key != "seal" || !strings.Contains(keys[1].Explain, "seals a TOTP key to PCR 7 and the image (PCR 11) alone") {
 		t.Fatalf("the fallback elsewhere: %+v", keys[1])
 	}
 
