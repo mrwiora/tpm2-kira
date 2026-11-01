@@ -274,9 +274,11 @@ grub.cfg when GRUB did (8e,9e); without an event log to read, the
 registers as they are (0,2,7). Without --pcrs and --nvram, slot 0 is
 sealed with that selection and, with --totp, slot 1, the fallback, with
 0e,7e alone (0,7 without a log) - a boot whose kernel changed unpredicted
-still shows slot 1's code, which says the machine is not simply lost. With
---pcrs or --nvram, one slot: the one named (else 0), the PCRs named (else
-the selection).
+still shows slot 1's code, which says the machine is not simply lost. On a
+GRUB boot Secure Boot does not check GRUB's command line and the initrd,
+so every slot includes PCRs 8 and 9: the fallback is 7e,8e,9e, and a
+selection without them is refused. With --pcrs or --nvram, one slot: the
+one named (else 0), the PCRs named (else the selection).
 
   --pcrs LIST        PCRs with a source suffix each:
                        r  read from the TPM's registers (default)
@@ -436,10 +438,11 @@ passphrase works. The log of the boot: journalctl -b -u tpm2-kira.service
                    ` + admin.DefaultSSHCA + `, an EFI variable). At the start,
                    before the OS separator, the TPM makes this boot's host
                    key and the CA certifies it through the first slot whose
-                   PCRs hold an approved state, then the CA is
-                   closed - PCR 15 extended, which its policy reads - also
-                   when anything failed: the CA certifies nothing more until
-                   the next boot. When it does not certify, a temporary key is served
+                   PCRs hold an approved state. When the code screen is
+                   over run closes the boot - PCR 15 extended, which the
+                   CA's policy and every slot's read - also when anything
+                   failed: the CA certifies nothing more until the next
+                   boot. When it does not certify, a temporary key is served
                    - made in the TPM too, not certified - and the console
                    shows its fingerprint
 `,
@@ -492,10 +495,12 @@ CA, which 'tpm2-kira control' creates in the TPM and keeps in the EFI
 variable ` + admin.DefaultSSHCA + `, and which signs only while the PCRs of one of its slots
 hold values the signing key approved. control writes two slots into
 assh.conf when it creates the CA: PCR 0, 2, 7 and the image's (11, or 8
-and 9 with GRUB), and PCR 7 alone. A CA certifies from the boot after its
-creation; it is closed (PCR 15 extended) by run, by the image when the code
-screen is over and before a resume from hibernation (tpm2-kira-boot close;
-a close that fails stops the boot or the resume). slot approve approves them after every image rebuild, and makes the
+and 9 with GRUB), and PCR 7 alone (with 8 and 9 on GRUB, where Secure
+Boot does not check the command line and the initrd). A CA certifies
+from the boot after its creation; it is closed (PCR 15 extended) with
+every slot by run and by the image when the code screen is over, and
+before a resume from hibernation (tpm2-kira-boot close; a close that
+fails stops the boot or the resume). slot approve approves them after every image rebuild, and makes the
 CA's slots assh.conf's first (ASSH_CA_SLOT_<N>=PCRs). Clients trust the CA once, in known_hosts:
 
   @cert-authority <the machine's names> <the contents of ` + admin.DefaultSSHCAPub + `>

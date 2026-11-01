@@ -42,17 +42,18 @@ one-way, so once the separator has run, nothing in the booted system can
 satisfy the key's policy again — not root, not malware — until the next boot.
 The key never leaves the TPM; the display holds nothing but the code it is
 showing, good for 30 seconds. `tpm2-kira reveal` on a running system reports the
-slot as *locked until the next boot*, which is the intended state, and
-`tpm2-kira-boot cap` read-locks the generation index at `initrd-switch-root` on
-top of that. (The signing key is outside the lock: whoever can use it can
-approve a new policy — keep it on a YubiKey, or at least off the machine.)
+slot as *closed until the next boot*, which is the intended state: on top of
+the separator, `run` closes the boot at the end of the code screen (PCR 15
+extended), and every slot object's own policy requires PCR 15 to be zero,
+beyond any approval ([CODE.md](CODE.md#the-close)). (The signing key is
+outside the lock: whoever can use it can approve a new policy for the next
+boot — keep it on a YubiKey, or at least off the machine.)
 
 Because the live registers at seal time already carry the separator, PCRs
 0–7, 9, 12–14 are sealed to values replayed from the firmware event log even
 when given as register source. Where the log cannot be replayed, `slot add` warns
 and falls back to the registers: the key's policy then holds only after the
-separator, the display computes codes live after the boot has been released
-(until `cap`), and marks them accordingly.
+separator, which comes after the close, so such a slot shows no code at boot.
 
 Eventlog-derived values describe the *end of firmware*, so tpm2-kira adds
 `enter-initrd` on PCR 11 to reach the measure point. `--measure-point`
@@ -114,7 +115,8 @@ record holds at most 8 KiB: SECURITY-BACKGROUND §10, *Size*).
 ## Multiple slots
 
 tpm2-kira supports up to 16 NVRAM slots (0–15). A plain `slot add` takes two: slot
-0 for what this boot measured and slot 1 for the fallback (`0e,7e`). More, for
+0 for what this boot measured and slot 1 for the fallback (`0e,7e`; on a
+GRUB boot `7e,8e,9e`: every slot there includes PCRs 8 and 9). More, for
 separate secrets or selections:
 
 ```bash

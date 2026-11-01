@@ -4,14 +4,14 @@ What the hooks put into the initramfs on Arch and Debian, the units and their co
 
 ## What is installed where
 
-The package puts four unit files into `/usr/lib/systemd/system` on the
+The package puts five unit files into `/usr/lib/systemd/system` on the
 host, because the mkinitcpio hook takes them from there. None of them is
 enabled on the host, and each carries
 `ConditionPathExists=/etc/initrd-release`, so enabling one there by mistake
 does nothing.
 
 The image carries one binary, `/usr/bin/tpm2-kira-boot`: the code screen
-and the parts of the plan, the cap, the keyscript, the phone's radio worker
+and the parts of the plan, the close, the keyscript, the phone's radio worker
 and the SSH server's unprivileged half. `tpm2-kira`, the administration,
 stays on the installed system; the hooks run it to decide the plan.
 
@@ -25,9 +25,8 @@ Debian scripts start only those.
 |------|------------------------|---------------------|
 | `tpm2-kira.service` (`run`: the code at the prompt, the gate's coordinator, the SSH server, and the key provider for `systemd-cryptsetup`) | always, once `sd-tpm2-kira` is in `HOOKS`. `run` waits for the TPM's device (at most 5 s) only when a part of the plan needs it | a volume asks for its key; with the codes in the plan (a slot with a TOTP key or phones), a code is shown. Without them nothing is shown: the hold lasts while the vault opens its part, else the boot is released at once. The first `slot add` makes the image out of date (`control` rebuilds it when left). The gate ends when the boot is released; the process stays to answer the volumes' key requests and ends at switch-root |
 | `tpm2-kira-unlock.socket` (the key socket) | always, with the display | `systemd-cryptsetup` activates a volume whose key file is the socket |
-| `tpm2-kira-cap.service` (locks the slots' generation indices when the initrd is left: no code, no slot's part opens in the running system) | with the TPM in the plan: a slot is sealed, whatever its methods | the initrd is left |
-| `tpm2-kira-close.service` (closes the SSH CA: PCR 15 extended, `tpm2-kira-boot close`; required by `initrd.target`, so a failure stops the boot in the emergency target) | with the TPM in the plan | the code screen is over (after `tpm2-kira.service`), before `cryptsetup-pre.target` |
-| `tpm2-kira-machine-id.service` (releases the sealed machine-id, `tpm2-kira-boot machine-id`) | with the image's network | before systemd-networkd starts: slot 0's policy holds, `KIRAmachineID` unseals ([SSH.md](SSH.md) §2.1) |
+| `tpm2-kira-close.service` (closes the boot: PCR 15 extended, `tpm2-kira-boot close`, which every slot object's policy and the SSH CA's read - no code, no slot's part opens, no key is certified until the next boot; `run` closed it already when the code screen was over, this closes it whatever `run` did; required by `initrd.target`, so a failure stops the boot in the emergency target) | with the TPM in the plan: a slot is sealed, whatever its methods, or an SSH CA exists (also one kept while SSH is off) | the code screen is over (after `tpm2-kira.service`), before `cryptsetup-pre.target` |
+| `tpm2-kira-machine-id.service` (releases the sealed machine-id, `tpm2-kira-boot machine-id`) | with the image's network | before systemd-networkd starts and before the close: slot 0's policy holds, `KIRAmachineID` unseals ([SSH.md](SSH.md) §2.1) |
 
 The slots' records are EFI variables (`KIRAslotN`): the image reads them
 through efivarfs. systemd mounts it itself on Arch (the hook adds the
@@ -82,13 +81,26 @@ does around it:
 | the adapter's modules | loaded by `systemd-modules-load` (`modules-load.d`) | loaded by the image's init (`conf/modules`, the hook's `force_load`) |
 | the image's network | `systemd-networkd`, the plan's `.network` file; the sealed machine-id released before it (`tpm2-kira-machine-id.service`), from which networkd derives its default DUID (a copied identity wins) | the script: initramfs-tools' `configure_networking`, or busybox' `udhcpc` / `ip` (`remote.conf`) with the copied identity; the machine-id is released all the same, before it |
 | the narrative | the journal: `journalctl -b -u tpm2-kira.service` | `/run/initramfs/tpm2-kira.log` |
-| the SSH CA closed (PCR 15) | `tpm2-kira-close.service` when the code screen is over; a failure: emergency target | `scripts/init-bottom/tpm2-kira`, before `cap`; a failure: initramfs-tools' panic, the close tried again |
-| stopped, and the codes locked | at `initrd-switch-root`: the units' stop, `cap` in `tpm2-kira-cap.service` | `scripts/init-bottom/tpm2-kira`: TERM to `run` (5 s), then `cap` |
+| the boot closed (PCR 15: every slot and the SSH CA) | `run` when the code screen is over, before READY; then `tpm2-kira-close.service`; a failure: emergency target | `run` when the code screen is over; then `scripts/init-bottom/tpm2-kira`; a failure: initramfs-tools' panic, the close tried again |
+| the close before a resume from hibernation | a drop-in on `systemd-hibernate-resume.service` (`ExecStartPre=tpm2-kira-boot close`, after `tpm2-kira.service`); a failure: no resume | `scripts/local-top/tpm2-kira-close`, after cryptroot; a failure clears `resume=` |
+| stopped | at `initrd-switch-root`: the units' stop | `scripts/init-bottom/tpm2-kira`: TERM to `run` (5 s) |
 | the measure point | ordered before systemd's PCR separators | before cryptroot (no separator) |
 
 The display refreshes once per 30-second TOTP window, writing to the same
 console as the passphrase prompt. The prompt scrolls up as codes arrive;
 typing is unaffected, since the passphrase is not echoed anyway.
+
+### Debian with systemd-boot and a UKI: not yet
+
+On Debian the boot is GRUB's, whose command line and initrd Secure Boot
+does not check; so every slot there includes PCRs 8 and 9, the fallback
+and the SSH CA's slot 1 with them ([SSH.md](SSH.md) §11). A unified kernel image would put
+both into the signed image, as on Arch. Debian 13 cannot measure such a
+boot yet: its systemd 257 has no `systemd-pcrosseparator`, and its dracut
+systemd initrd measures no `enter-initrd` into PCR 11, so slot 0's
+prediction of PCR 11 fails. The tried conversion, and what else it met, is
+in [HISTORY.md](../HISTORY.md) ("Debian on systemd-boot and a UKI: not
+yet"); it is worth doing once Debian ships systemd 258 or later.
 
 ## PCR 8 and 9 are predicted for the next boot
 

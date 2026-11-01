@@ -49,7 +49,7 @@ prompt cannot take. Keep one in its own keyslot: `control` shows it red
 when every keyslot of a volume is tpm2-kira's.
 
 "While the code screen holds" is the hold before the boot goes on (the
-separator ends the slot's policy after it). A slot sealed without a TOTP
+close, PCR 15, ends the slot's policy after it). A slot sealed without a TOTP
 code (`slot add` without `--totp`) and without phones shows no code
 screen: the TPM salt opens at once, the hold lasts only while the vault
 opens its part, and the password is asked then - with nothing on the

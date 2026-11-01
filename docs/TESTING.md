@@ -131,7 +131,8 @@ transcript, a log per command and session (`session-*-control.log`,
    checked against the CA (`StrictHostKeyChecking=yes`); both slots'
    codes against the computed ones; Enter, the password and the salt in
    the session; the session ends with the server's last line; after the
-   boot the cap ran, the key was answered, `ssh-child` ran confined
+   boot the close ran (every slot closed: PCR 15 extended, slot 0's TOTP
+   key refuses), the key was answered, `ssh-child` ran confined
    (nobody, no new privileges, no executable memory, Landlock, seccomp), and
    the boot's log has no error.
 9. **Remote attestation over TLS, the vault:** a token from the vault,

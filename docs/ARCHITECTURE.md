@@ -88,7 +88,7 @@ flowchart BT
   DISKKEY["diskkey<br/>tokens, recipes, Argon2id,<br/>unlock socket, keyscript"]
   VAULTKEY["vaultkey<br/>the vault's release"]
   SSHSCREEN["sshscreen<br/>the code screen over SSH"]
-  NVSLOT["nvslot<br/>record (EFI variable), NV indices, policy, cap"]
+  NVSLOT["nvslot<br/>record (EFI variable), NV indices, policy, the close"]
   MEASURE["measure<br/>PCRs, event log, predictions"]
   SIGNING["signing<br/>signing key, YubiKey, PIN"]
   TPMDEV["tpmdev<br/>the TPM device"]
@@ -108,7 +108,7 @@ flowchart BT
 | Binary | Commands | Pages |
 |---|---|---|
 | `tpm2-kira` | `control`, `setup`, `slot …`, `status`, `phone …`, `luks …`, `vault …`, `initramfs plan`, `reveal`, `yubikey`, `pcrtips` | [README.md](../README.md) "Commands", `tpm2-kira help <command>` |
-| `tpm2-kira-boot` | `run`, `cap`, `machine-id`, `unlock-key`, `ssh-child`, `gate-child`, `reveal` | `tpm2-kira-boot help`; the pages: `tpm2-kira help run`, `cap`, `unlock-key`, `ssh-child`, `gate-child`; [BOOT-INTEGRATION.md](BOOT-INTEGRATION.md) |
+| `tpm2-kira-boot` | `run`, `close`, `machine-id`, `unlock-key`, `ssh-child`, `gate-child`, `reveal` | `tpm2-kira-boot help`; the pages: `tpm2-kira help run`, `close`, `unlock-key`, `ssh-child`, `gate-child`; [BOOT-INTEGRATION.md](BOOT-INTEGRATION.md) |
 
 ## At boot
 
@@ -130,7 +130,7 @@ flowchart LR
     CHILD["tpm2-kira-boot ssh-child<br/>nobody; net, IPC, PID, mount, UTS ns;<br/>sandbox: no file, seccomp"]
     GATE["tpm2-kira-boot gate-child<br/>the radio worker: nobody + NET_ADMIN, NET_RAW;<br/>IPC, PID, mount, UTS ns;<br/>sandbox: reads /sys, seccomp; no TPM"]
     CRYPT["systemd-cryptsetup<br/>(Debian: the keyscript, unlock-key)"]
-    CAP["tpm2-kira-boot cap<br/>tpm2-kira-cap.service / init-bottom"]
+    CLOSE["tpm2-kira-boot close (PCR 15)<br/>run at the code screen's end; again:<br/>tpm2-kira-close.service / init-bottom;<br/>before a resume from hibernation"]
   end
   TPM[("TPM")]
   RUN <-->|socket pair: signatures, sessions| CHILD
@@ -138,7 +138,7 @@ flowchart LR
   GATE <-->|socket pairs: quotes, boot key, receipt, phone salt| RUN
   CRYPT <-->|/run/tpm2-kira/unlock.sock| RUN
   RUN --- TPM
-  CAP --- TPM
+  CLOSE --- TPM
   SSHC["SSH client"] <-->|SSH, host cert by the CA| CHILD
   PHONEB["phone"] <-->|Bluetooth LE| GATE
   VAULTS["tpm2-kira-vault"] <-->|HTTPS, its root, pinned key| RUN

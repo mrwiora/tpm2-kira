@@ -19,7 +19,7 @@ phone (at the machine) are the other two ways the boot is checked.
 
 The vault keeps a keyslot's **salt**: a part only this machine's TPM opens,
 and only in a boot state the slot's signing key approved, before the boot
-is capped. The vault releases it only to a fresh TPM quote of such a
+is closed (PCR 15). The vault releases it only to a fresh TPM quote of such a
 state, and stops releasing it for a machine an operator revokes. The
 keyslot's **password** is the TPM's own part - nothing is typed, the
 machine unlocks unattended (`0x2400`, with a pepper `0x2401`) - or typed by
@@ -60,7 +60,7 @@ keyslot.
 
 | Part | Where it is kept | Who can open it |
 |---|---|---|
-| **L**, local, 32 bytes (unattended recipes only) | in the slot's blob in the machine's TPM NV (attestation method 2), wrapped with `TPM2_MakeCredential` for the TPM's EK and the slot's release key | this TPM, in a boot state the slot's signing key approved, before `cap` |
+| **L**, local, 32 bytes (unattended recipes only) | in the slot's blob in the machine's TPM NV (attestation method 2), wrapped with `TPM2_MakeCredential` for the TPM's EK and the slot's release key | this TPM, in a boot state the slot's signing key approved, before the close (PCR 15) |
 | **R**, remote, 32 bytes | only in the vault, wrapped the same way, encrypted there under a key sealed in the **vault's** TPM | the vault releases it (§5); then only this machine's TPM opens it, under the same policy as L |
 | **P**, pepper (optional, per keyslot) | with an operator; typed once on the machine at enrolment, never sent then, never stored by the vault | given with each approval (the vault's CLI or its operator interface); the vault passes it on once, wrapped for the machine's TPM like R (§12) |
 
@@ -77,10 +77,11 @@ Three layers, each depending on PCR state:
 1. **The machine's TPM.** L and R open only through the release key's
    policy (`core/attest/releasekey.go`): the slot's approval - PolicyPCR over
    the sealed selection, PolicyNV over the generation, the signing key's
-   signature, PolicyAuthorize (SECURITY-BACKGROUND.md §4) - then
-   PolicyCommandCode(ActivateCredential). After `cap` the generation index
-   is read-locked, so in the running system, root included, neither part
-   opens. A copied or relayed answer of the vault is useless on any other
+   signature, PolicyAuthorize, PolicyPCR(15 == zero) (SECURITY-BACKGROUND.md §4) - then
+   PolicyCommandCode(ActivateCredential). After the close (PCR 15
+   extended at the end of the code screen) the release key's own policy
+   fails, so in the running system, root included, neither part opens,
+   whatever the signing key approves. A copied or relayed answer of the vault is useless on any other
    TPM.
 2. **The vault's check** (`vaultproto.VerifyRelease`). The machine quotes
    the slot's sealed selection with its attestation key over a fresh
@@ -475,7 +476,7 @@ functions tpm2-kira seals with (`internal/nvslot/policy.go` calls them).
 | the machine's clock set back or ahead | a certificate outside its dates refuses the vault; the fallbacks stay |
 | the machine and root on the vault, a keyslot with a pepper | still no key: the pepper is with the operators, the vault never keeps it (a pepper given to a compromised running vault is seen, though) |
 | an operator's token | can approve releases and read requests and devices, nothing else; cannot revoke, enrol or read the audit |
-| root on the running machine | the disk is open already; after `cap` no part opens again |
+| root on the running machine | the disk is open already; after the close no part opens again |
 
 Availability is the dominant risk: no vault, no unattended boot. The
 recovery keyslot is mandatory, and the console prompt is always there.

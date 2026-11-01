@@ -191,24 +191,27 @@ fresh code every 30 seconds until Enter or 90 seconds), the policy is still
 satisfiable, and the moment it releases the boot it exits. PCR extends are
 one-way: once the
 separator has run, no process in the booted system — root included — can
-satisfy the key's policy again until the next boot; `tpm2-kira-boot cap` read-locks
-the generation index at `initrd-switch-root` on top of that. `tpm2-kira
-reveal` on the running system reports the slot as *locked until the next
-boot*. A runtime compromise can therefore neither read the key nor compute a
+satisfy the key's policy again until the next boot. On top of that, `run`
+closes the boot at the end of the code screen, and the image closes it again
+before any volume is opened: `tpm2-kira-boot close` extends PCR 15, which
+every slot object's own policy requires to be zero
+(`PolicyAuthorize ; PolicyPCR(15 == 0)`, fixed at creation, beyond any
+approval). `tpm2-kira reveal` on the running system reports the slot as
+*closed until the next boot*. A runtime compromise can therefore neither read the key nor compute a
 code to replay at a later, tampered boot.
 
 Two things fall outside that lock:
 
-- **The signing key.** Whoever can use it can approve a new policy for the
-  current state and compute codes at any time. Keep it on a YubiKey (the
+- **The signing key.** Whoever can use it can approve any boot state; after
+  the close that opens nothing in this boot, but the next boot of that state
+  shows codes. Keep it on a YubiKey (the
   intended setup); a key file under `/etc/tpm2-kira/keys` is the fallback,
   better than no recovery path, but with it a runtime root has that power.
-- **Blobs whose policy holds after the separator.** Blobs from versions that
-  ran after the separator, and blobs sealed from registers because the event
-  log could not be replayed, get their codes live after the boot has been
-  released, until `cap`. They work, the display marks their code, and an approval
-  moves them before the separator where the log allows it.
+- **Blobs sealed from registers.** A slot sealed from the registers because
+  the event log could not be replayed holds post-separator values; the close
+  comes before the separator, so it shows no code at boot. An approval moves
+  it before the separator where the log allows it.
 
 ## Security Design
 
-For an in-depth description of the cryptographic architecture, threat model, authentication model (an HMAC key inside the TPM under PolicyAuthorize, with a revocable generation and a boot-time cap), blob format, and trust boundaries, see [SECURITY-BACKGROUND.md](docs/SECURITY-BACKGROUND.md).
+For an in-depth description of the cryptographic architecture, threat model, authentication model (an HMAC key inside the TPM under PolicyAuthorize, with a revocable generation and the close, PCR 15, at the end of the code screen), blob format, and trust boundaries, see [SECURITY-BACKGROUND.md](docs/SECURITY-BACKGROUND.md).

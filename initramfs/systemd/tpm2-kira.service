@@ -14,6 +14,10 @@ ConditionPathExists=/etc/initrd-release
 # unsatisfiable until the next boot (SECURITY-BACKGROUND.md §5.8).
 After=systemd-pcrphase-initrd.service
 Before=systemd-pcrosseparator.service
+# The machine-id is unsealed under slot 0's policy, which run's close at
+# the end of the code screen ends: it is released first (with the image's
+# network; Debian's script runs it before run as well).
+After=tpm2-kira-machine-id.service
 # systemd 258's NvPCR initialisation separator extends PCR 11 in the
 # initrd; unordered it could land while the code is shown and break the
 # policy mid-screen. Held back like the OS separator, it is also what the

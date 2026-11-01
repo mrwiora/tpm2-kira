@@ -158,13 +158,16 @@ It may not carry what came before.
   (`make test-unit`). A change there is the phone's and the vault's too.
 - **One boot on every distribution.** Arch's unit and Debian's
   init-premount script start the same `run` - and the same short steps at
-  fixed points, `machine-id` before the network, `close` (the SSH CA's
-  close: PCR 15 extended, which the CA's own policy reads) when the code
-  screen is over - Arch's `tpm2-kira-close.service`, required by
-  `initrd.target`, Debian's init-bottom - and right before a resume from
-  hibernation (a resume starts the TPM afresh and runs no code screen);
-  a failed close stops the boot or the resume - and `cap` when the initrd
-  is left - and `run` starts everything else of tpm2-kira's at
+  fixed points, `machine-id` before the network, `close` (PCR 15
+  extended, which every slot object's policy and the SSH CA's read: no
+  code, no slot's part, no certificate until the next boot) when the
+  code screen is over - `run` itself before READY, then Arch's
+  `tpm2-kira-close.service`, required by `initrd.target`, Debian's
+  init-bottom - and right before a resume from hibernation (a resume
+  starts the TPM afresh and runs no code screen); a failed close stops
+  the boot or the resume. Whatever opens a slot object at boot (the
+  codes, the machine-id, the phone, the vault, the TPM salt) does so
+  before the close - and `run` starts everything else of tpm2-kira's at
   boot itself: the parts of the plan, the TPM wait,
   and the processes that parse outside input - `ssh-child` (as a uid no
   one else has, assh's `sandbox.ClaimUID`) and the phone's `gate-child`
@@ -173,6 +176,15 @@ It may not carry what came before.
   cryptsetup, bring up the image's network, keep the log
   (docs/BOOT-INTEGRATION.md, "Arch and Debian"). Do not add a second
   process, a confinement or a wait to one of them: add it to `run`.
+- **PCR 15 closes every slot object, in its own policy.** Every object
+  bound to a slot (the TOTP key, the sealed machine-id, the boot key, the
+  release key) is created under `attest.SlotPolicyDigest`:
+  PolicyAuthorize(signing key, policyRef) ; PolicyPCR(15 == zero) in the
+  slot's bank - the PCR 15 assertion after PolicyAuthorize, beyond any
+  approval. A new slot object takes the same policy (nvslot's
+  `SlotPolicy`, `ApprovedSessionThen`); nothing read-locks or caps. The
+  generation index only revokes approvals; it, the storage primary and
+  the slot objects are noDA, so a lockout never stops the slots at boot.
 - **NV indices are written and removed one way: aSSH's `persist`.** EFI
   variables are tpm2-kira's own:
   - It has its own code for them (the machine-id, the slots' records, and
@@ -208,9 +220,11 @@ It may not carry what came before.
   - Debian keeps GRUB, the standard install: Secure Boot checks GRUB and the
     kernel, not GRUB's command line or the initrd (an entry edited at the
     console - `break=`, `rdinit=` - is a shell before the close), so on a GRUB
-    boot every slot and the SSH CA bind PCR 8 and 9: no PCR-7-only slot, no
-    fallback slot, the CA has slot 0 alone (`GRUBPCRs`, default_pcrs.go), and
-    `slot add` refuses a selection without them. `control` advises a GRUB
+    boot every slot and the SSH CA bind PCR 8 and 9: no PCR-7-only slot - the
+    fallback slot and the CA's slot 1 are 7, 8 and 9 (`GRUBPCRs`,
+    default_pcrs.go) - and `slot add` refuses a selection without them. One
+    rule for every slot: PCR 7 and the image's PCRs, slot 0 with the platform
+    (0, 2) added. `control` advises a GRUB
     superuser password (never writes grub.cfg) and judges its absence red.
   - aSSH only warns about Secure Boot.
 - **Root for everything but the help.** Every command refuses to run as a

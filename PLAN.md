@@ -1,3 +1,58 @@
+# PLAN: PCR 15 closes every slot; GRUB binds PCRs 8 and 9 (`feat/close-pcr15`)
+
+Status: **implemented** (2026-11-01): unit and swtpm suites pass; the VM tests (`vmtest.py
+--target both` from `fresh`, then `hibernatetest.py`) are the coordinator's. The workspace's
+PLAN.md holds the confirmed plan (steps B2-B7) and its evaluation.
+
+## Goal
+
+One close for everything a boot opens: every slot object's own policy reads PCR 15 after
+PolicyAuthorize, exactly as the SSH CA's, so the close (`tpm2-kira-boot close`, PCR 15
+extended) ends the codes, the machine-id, the phone's boot key and the release key (TPM
+salt, vault) with the CA; `cap` goes. On GRUB, where Secure Boot does not cover the command
+line and the initrd, no slot lacks PCRs 8 and 9. The learnings of the experiments are kept.
+
+## Steps
+
+- [x] B2. The slot's policy `PolicyAuthorize ; PolicyPCR(15 == 0)` in the slot's bank
+      (core: `attest.SlotPolicyDigest`, `IsSlotPolicy`; CheckBootKey and ReleaseKeyName accept
+      either bank), `nvslot.ApprovedSessionThen` asserts it, `ErrClosed`; generation indices
+      noDA without READ_STCLEAR, storage primary and TOTP key noDA; `cap`, `CapCodes`,
+      `tpm2-kira-cap.service` and Debian's cap gone; blob version 17. `run` closes at the end
+      of the code screen (after the parts, before READY), not after the certificate. The plan's
+      TPM part also with an SSH CA kept while SSH is off; the resume drop-in with the TPM part,
+      after `tpm2-kira.service`; the machine-id unit before the close. swtpm tests: every
+      object before/after the close in both banks, the TPM's own refusal, core's digest equals
+      a trial session's, a DA lockout stops nothing, run's release order.
+- [x] B3. GRUB: no slot without PCRs 8 and 9 (`slot add` refuses; the fallback slot and the
+      SSH CA's slot 1 are 7, 8 and 9 - one rule: PCR 7 and the image's PCRs, slot 0 with the
+      platform); status and control's step 1 judge GRUB without a superuser password
+      red and advise one (`--unrestricted` entries); AGENTS.md, SSH.md's known limits.
+- [x] B4. HISTORY.md (why PCR 15 instead of `cap`; why no counter window - experiment 1;
+      Debian on systemd-boot + UKI - experiment 3); BOOT-INTEGRATION.md ("not yet"); the docs
+      describe the close.
+- [x] B5. `Sockets=` in `[Service]` of `tpm2-kira.service`.
+- [x] B6. vmtest (closed slots, a refusing TOTP key, run's close, no cap, GRUB's one slot and
+      the CA's slot 0), hibernatetest V4 (the resume's boot without a TPM: no resume, the boot
+      stops; reverted and resumed), serialtest, acceptance.
+- [ ] B7. The VM tests (coordinator).
+
+## What breaks (said before the change)
+
+- Every slot sealed again (`slot add`), every phone, vault and TPM salt enrolled again, the
+  machine-id sealed again: the objects' policy, the noDA storage primary and the blob
+  version 17 change.
+- Debian/GRUB: the fallback code and the fallback CA slot read PCRs 8 and 9 too; a slot
+  sealed without them is refused.
+- A slot sealed to post-separator registers (no usable event log) shows no code at boot.
+- A failed close stops the boot on every machine with a sealed slot or an SSH CA.
+
+## Open questions
+
+1. A DA lockout still stops the phone's quote: the attestation key (core's AK template) is
+   DA-protected. noDA there changes core's AK template - a phone protocol question.
+2. systemd-pcrlock does not know `assh-close` in PCR 15 (unchanged).
+
 # PLAN: the SSH CA closes by PCR 15 (experiment v2, `exp/close-pcr15`)
 
 Status: **implemented** (2026-11-01); unit and swtpm suites pass; the VM test is the
@@ -32,7 +87,8 @@ its settings go.
 ## Open questions
 
 1. A machine with a CA kept while SSH is off and no slot sealed has no TPM part in the plan:
-   no close in its image (as before with W). Add "a CA exists" to the plan's TPM rule?
+   no close in its image (as before with W). Add "a CA exists" to the plan's TPM rule? Done
+   (`feat/close-pcr15`, B2).
 2. systemd-pcrlock does not know `assh-close` in PCR 15: a `.pcrlock` file for it, and an
    entry in `/run/log/systemd/tpm2-measure.log`, if pcrlock policies are to cover PCR 15.
 

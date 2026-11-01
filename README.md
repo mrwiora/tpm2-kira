@@ -28,7 +28,7 @@ The TPM computes a code only under a policy your signing key has approved:
 |-----------|----------------|
 | **PCR values** | Boot measurements match the values approved at slot add or slot approve time |
 | **Generation** | The approval is the latest one: every approval revokes the older ones |
-| **Not capped** | `tpm2-kira-boot cap` has not run in this boot — it runs when the initrd is left, so the running system cannot compute codes |
+| **Not closed** | The close (PCR 15) has not run in this boot — it runs at the end of the code screen, so the running system cannot compute codes |
 
 On every boot, tpm2-kira asks the TPM for the current code before the
 passphrase prompt. Compare it with the code in your authenticator app — if
@@ -45,8 +45,8 @@ The code is one of four layers (below); more in [docs/CODE.md](docs/CODE.md). Fo
 
 On the installed system `tpm2-kira` sets it up (`control` guides through
 all of it); the boot image carries `tpm2-kira-boot` and only the parts
-something uses (`initramfs plan`); in the initrd they run, and `cap` ends
-them. The architecture behind it: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+something uses (`initramfs plan`); in the initrd they run, and the close
+(PCR 15) ends them. The architecture behind it: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ```mermaid
 flowchart TB
@@ -73,7 +73,7 @@ flowchart TB
     SSH["SSH server (aSSH, ssh-child)<br/>the code screen over SSH"]
     VREL["the vault<br/>releases its part to a TPM quote"]
     UNLOCK["unlock socket / Debian keyscript<br/>the disk's key, as its LUKS2 tokens say"]
-    CAP["cap<br/>when the initrd is left: no codes until reboot"]
+    CLOSE["close (PCR 15)<br/>when the code screen is over: no codes until reboot"]
   end
 
   KEY --> SEAL
@@ -87,7 +87,7 @@ flowchart TB
   PHONE -. enrolment, salt .-> ATT
   VAULT -. enrolment .-> VREL
   VREL -. the remote part .-> UNLOCK
-  UNLOCK --> CAP
+  UNLOCK --> CLOSE
 ```
 
 ## Architecture
@@ -115,7 +115,8 @@ from each only what it uses: the boot image carries only those parts
 `tpm2-kira slot add` approves what this boot measured - firmware, Secure
 Boot state, and the unified kernel image or GRUB's PCRs - in slot 0; with
 `--totp` a TOTP code too, and the firmware and Secure Boot state alone in
-slot 1, the fallback. The slot's record is an EFI variable (`KIRAslotN`);
+slot 1, the fallback (not on a GRUB boot, where every slot includes PCRs 8
+and 9). The slot's record is an EFI variable (`KIRAslotN`);
 the TPM keeps its generation and counter. After
 an update the hooks run `slot approve`: the TPM's key stays, so nothing is
 enrolled again. Which PCRs to choose and why, the boot path's hardening,
@@ -124,7 +125,7 @@ inspecting and deleting a slot: [docs/SLOT.md](docs/SLOT.md).
 ### Who checks the boot: the code, the phone, the vault
 
 - **The code** is a TOTP code the TPM computes only in the approved boot
-  state, before the cap at switch-root; you compare it with your
+  state, before the close (PCR 15) at the end of the code screen; you compare it with your
   authenticator, at the console or over SSH: [docs/CODE.md](docs/CODE.md).
 - **The phone** (experimental) attests at the machine: it verifies a TPM
   quote over Bluetooth LE and shows its verdict; the slot it attests shows
@@ -188,7 +189,7 @@ sudo tpm2-kira setup
 
 # Seal what this boot measured: firmware and Secure Boot state, plus the
 # unified kernel image or GRUB's PCRs - with a TOTP key, and a fallback
-# slot sealed to firmware and Secure Boot state alone
+# slot sealed to firmware and Secure Boot state alone (not on a GRUB boot)
 sudo tpm2-kira slot add --totp
 
 # Show the current TOTP code
@@ -216,7 +217,7 @@ sudo make install-initramfs-tools   # Debian/Ubuntu: the hook and boot scripts, 
 
 There are two binaries: `tpm2-kira`, everything on the installed system,
 and `tpm2-kira-boot`, what the boot image carries (the code screen and the
-parts the image's plan names, the cap, the keyscript) and nothing of the
+parts the image's plan names, the close, the keyscript) and nothing of the
 administration. Built from source or from a package, both systems get the
 same: the hooks find the binaries in `/usr/bin` or `/usr/local/bin`, the
 image has `/usr/bin/tpm2-kira-boot` alone, and `tpm2-kira control` does the
@@ -437,7 +438,7 @@ tpm2-kira runs `reveal`.
 | The slot | `setup` the signing key · `slot add` a slot (`--totp`: and its TOTP key) · `slot approve` the current boot state (the hooks run it) · `slot info` a slot's record · `slot list\|status\|delete` · `status` the overview |
 | Who checks the boot | `reveal` / `reveal-plain` the code · `phone enrol\|unenrol\|status\|gate\|ekcert\|quote\|verify` the phone (Marify, Bluetooth LE) |
 | The disk's key | `luks status\|enrol\|remove\|mark\|route\|derive` · `phone salt enrol\|rotate\|status\|unenrol` · `vault enrol\|status\|unenrol` |
-| At boot (the units and hooks) | `initramfs plan` what the image carries; in the image, `tpm2-kira-boot`: `run` · `cap` · `unlock-key` (Debian keyscript) · `gate` (the phone's radio worker) · `ssh-child` (the SSH server's unprivileged half, started by `run`) |
+| At boot (the units and hooks) | `initramfs plan` what the image carries; in the image, `tpm2-kira-boot`: `run` · `close` · `unlock-key` (Debian keyscript) · `gate` (the phone's radio worker) · `ssh-child` (the SSH server's unprivileged half, started by `run`) |
 | By hand | `yubikey list` · `pcrtips` · `version` |
 
 Global options come before the command, or after it as the command's own
@@ -513,7 +514,7 @@ sequenceDiagram
   participant D as LUKS volume
   FW->>TPM: measure the boot chain into the PCRs
   alt a slot with a TOTP key
-    K->>TPM: the code (approved PCR values, latest generation, not capped)
+    K->>TPM: the code (approved PCR values, latest generation, not closed)
     TPM-->>K: 6 digits, only in the approved boot state
     K->>K: show it (console, or SSH): you compare it with your authenticator
   else a slot with a phone enrolled
@@ -529,7 +530,7 @@ sequenceDiagram
     K-->>S: the same code screen and the password prompt
   end
   K->>D: the key, as the tokens say: the vault's, else password (+ phone salt or typed salt)
-  K->>TPM: cap at switch-root: no more codes in this boot
+  K->>TPM: close (PCR 15) when the code screen is over: no more codes in this boot
 ```
 
 `tpm2-kira.service` starts before the disk unlock and runs `tpm2-kira-boot
@@ -540,7 +541,8 @@ enrolled with one ([docs/VAULT.md](docs/VAULT.md)), and the key socket
 ([docs/DISK-KEY.md](docs/DISK-KEY.md)) - each only when the boot plan put
 it in the image. Enter at the code screen, the phone's verdict, the
 vault's key, or 90 seconds ends the hold;
-at switch-root `tpm2-kira-cap.service` caps the TPM, and no code can be
+`run` then closes the boot (PCR 15), `tpm2-kira-close.service` closes it
+again before any volume is opened, whatever `run` did, and no code can be
 computed until the next boot.
 
 See [initramfs/mkinitcpio/mkinitcpio.conf.example](initramfs/mkinitcpio/mkinitcpio.conf.example) for more HOOKS configurations (LVM, multiple encrypted devices, etc.).
@@ -558,7 +560,7 @@ does not apply. The `.deb` installs two scripts instead:
 |---|---|
 | `/usr/share/initramfs-tools/hooks/tpm2-kira` | copies the binary into the image |
 | `/usr/share/initramfs-tools/scripts/init-premount/tpm2-kira` | starts the display at boot |
-| `/usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira` | stops it and runs `tpm2-kira-boot cap` before the real root takes over |
+| `/usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira` | stops it and runs `tpm2-kira-boot close` before the real root takes over (a failure is initramfs-tools' panic) |
 | `/lib/cryptsetup/scripts/tpm2-kira` | cryptsetup keyscript: the volume's key from tpm2-kira's prompt |
 
 `/init` runs `init-premount` before `local-top/cryptroot` asks for the
@@ -595,11 +597,16 @@ apply. GRUB carries the equivalent measurements instead:
 ```bash
 # Measures kernel, initrd and command line; predicted across updates (below)
 tpm2-kira slot add --pcrs "0e,2e,4e,7e,8e,9e"
-
-# Stable across kernel updates, but a modified initrd or command line
-# still shows a valid code (slot add prints a warning)
-tpm2-kira slot add --pcrs "0e,2e,4e,7e"
 ```
+
+Secure Boot checks GRUB and the kernel, not GRUB's command line or the
+initrd, so on a GRUB boot every slot includes PCRs 8 and 9: `slot add`
+refuses a selection without them; the fallback slot 1 and the SSH CA's
+slot 1 are PCRs 7, 8 and 9. An entry edited at the GRUB console
+(`break=`, `rdinit=`) is a shell before the close; `control` advises a
+GRUB superuser password (`set superusers=` and `password_pbkdf2` in
+`/etc/grub.d/40_custom`, the menu entries `--unrestricted`, then
+`update-grub`) and judges its absence red.
 
 ### PCR 8 and 9 are predicted for the next boot
 

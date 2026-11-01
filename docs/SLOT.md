@@ -45,11 +45,15 @@ event log:
 | no event log to read (a software TPM, a run without root) | `0,2,7` | the same registers as they are now: nothing can be replayed |
 
 Without `--pcrs` and `--nvram`, and with `--totp`, a second slot is sealed as
-well: **slot 1, the fallback, to `0e,7e` alone** (`0,7` without an event log). When a kernel or boot loader change was
-not predicted, slot 0 shows no code, but slot 1 still does as long as the
-firmware and the Secure Boot state are what they were: the machine is not
-simply lost, and the first slot is resealed once the boot is understood.
-Pair both with your authenticator.
+well: **slot 1, the fallback, to `0e,7e` alone** (`0,7` without an event log).
+One rule for every slot: PCR 7 and the image's PCRs, slot 0 with the platform
+(0, 2) added. On a GRUB boot Secure Boot checks GRUB and the kernel, not
+GRUB's command line or the initrd, so there every slot includes PCRs 8 and 9:
+the fallback is `7e,8e,9e`, and `slot add` refuses a selection without them.
+When a kernel or boot loader change was not predicted, slot 0 shows no code,
+but slot 1 still does as long as the firmware and the Secure Boot state are
+what they were: the machine is not simply lost, and the first slot is resealed
+once the boot is understood. Pair both with your authenticator.
 
 With `--pcrs`, or `--nvram`, one slot is sealed: the one named (else 0),
 to the PCRs named (else the selection above).
@@ -119,7 +123,10 @@ update; `slot approve` predicts them from the files on disk, see
 A selection is only as good as the ways into a shell that it measures. Also:
 
 - **Disable the boot-menu editor.** systemd-boot: `editor no` in
-  `loader.conf`. GRUB: set a superuser password. Otherwise `rd.break` or
+  `loader.conf`. GRUB: set a superuser password (`set superusers=` and
+  `password_pbkdf2` in `/etc/grub.d/40_custom`, the menu entries
+  `--unrestricted`, then `update-grub`; `control` advises it and judges its
+  absence red). Otherwise `rd.break` or
   `break=` on the command line drops to a root shell in the genuine initrd
   (and if the command line is not measured, the code still matches).
 - **No shell after a failed unlock.** On Debian, add `panic=0` (reboot) so

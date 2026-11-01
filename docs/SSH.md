@@ -315,14 +315,17 @@ and no secret either: the keys are in the TPM.
   PCR 15 holds zero (aSSH's README, "The close: PCR 15"); the close is an
   extend of PCR 15 with `assh-close`. It happens at fixed points, each
   with no CA file needed, and a close that fails is the boot's failure:
-  1. `run`, right after the CA certified this boot's key - also when the
-     key is temporary, and on every other way out, a failure included;
+  1. `run`, when the code screen is over: after the parts have opened
+     what they hold (the vault's part, the phone's salt, the TPM salt),
+     before READY (a failure there is said; the image's close below
+     stops the boot). The host key the CA certified at the server's start
+     serves the sessions after the close too;
   2. when the code screen is over, whatever `run` did (no SSH server in
      the image, `run` failed or timed out): Arch,
      `tpm2-kira-close.service` (after `tpm2-kira.service`, before
      `cryptsetup-pre.target`, required by `initrd.target`: a failure is
      the emergency target); Debian, `scripts/init-bottom/tpm2-kira`
-     before the cap (a failure is initramfs-tools' panic, and leaving its
+     (a failure is initramfs-tools' panic, and leaving its
      shell tries the close again). Both with the TPM in the plan;
   3. right before a resume from hibernation (below).
   So the CA certifies nothing more until the next reboot, whatever an
@@ -354,16 +357,18 @@ and no secret either: the keys are in the TPM.
   event log (`measurepoint.go`), PCR 11 computed from the unified kernel
   image (`ukipredict.go`), PCR 8 and 9 predicted from grub.cfg and the
   files GRUB loads (`grub_predict.go`) - as `slot add` does.
-  **`slot approve` approves them** in both slots, with the signing key,
+  **`slot approve` approves them** in every slot, with the signing key,
   whenever a slot has no approval of the next boot: the initramfs hooks
   run it after every image rebuild, so a kernel update needs nothing by
   hand. control approves them when it creates the CA and at quit; the CA
   and the clients' trust in it stay the same. An approval that is skipped
-  (the YubiKey not plugged in) leaves slot 1, which reads no image.
+  (the YubiKey not plugged in) leaves slot 1, which reads no image on a
+  UKI boot; on GRUB slot 1 reads PCRs 8 and 9 too, and such a boot serves
+  a temporary key.
 - **At every boot** `run` has the TPM make a new host key (the CA's type)
   under the TPM's **NULL hierarchy**, whose seed changes at every reboot,
   and the CA certify it (an OpenSSH host certificate) - when the SSH
-  server starts, before the separator; then the CA is closed (PCR 15). The host key's authorization value
+  server starts, before the separator; the CA is closed (PCR 15) when the code screen is over. The host key's authorization value
   is in `run`'s memory alone (the process is not dumpable); the key signs
   every key exchange of this boot, after the separator too, so a dropped
   session can come back; at the next reboot it loads nowhere.
@@ -402,7 +407,8 @@ up.
 ```
 tpm2-kira.service (holds READY)
   ├── the TPM makes this boot's host key, the SSH CA certifies it (slot 0 or 1),
-  │   the CA closes (PCR 15 extended), opens :PORT, starts 'ssh-child'
+  │   opens :PORT, starts 'ssh-child'; the CA closes (PCR 15 extended)
+  │   with every slot when the code screen is over
   ├── console: "ssh root@<address>", the SSH CA's fingerprint, sessions connected,
   │            "Enter here: continue at this console"
   └── sessions: the code screen; Enter confirms, q leaves
@@ -568,11 +574,11 @@ aSSH's own tests log in with OpenSSH's client (10.6) through a
 
 - **Slot 1 binds the CA to the Secure Boot keys, not to the image** - on
   a UKI boot (Arch), where the command line and the initrd are in the
-  signed image. On a GRUB boot (Debian) there is no slot 1: Secure Boot
-  checks GRUB and the kernel, not GRUB's command line or the initrd, so an
-  entry edited at the console (`break=`, `rdinit=/bin/sh`) would reach a
-  shell before the close with PCR 7 as approved; the CA has slot 0 alone,
-  whose PCRs 8 and 9 see the edit, and no TOTP slot lacks them either.
+  signed image. On a GRUB boot (Debian) slot 1 is PCRs 7, 8 and 9: Secure
+  Boot checks GRUB and the kernel, not GRUB's command line or the initrd,
+  so an entry edited at the console (`break=`, `rdinit=/bin/sh`) would
+  reach a shell before the close with PCR 7 as approved; PCRs 8 and 9 see
+  the edit, and no TOTP slot lacks them either.
   `control` advises a GRUB superuser password with the entries
   `--unrestricted`, which keeps the edit from being made at all. On a UKI
   boot any

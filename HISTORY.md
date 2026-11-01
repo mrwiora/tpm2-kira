@@ -9,6 +9,86 @@ formats and CLI flags may change without migration paths.
 ---
 
 
+## PCR 15 closes every slot, not `cap` (2026-11-01)
+
+Until 2026-11-01 the slots were closed by `tpm2-kira-boot cap`: `tpm2-kira-cap.service`
+(its stop at `initrd-switch-root`) and Debian's init-bottom read-locked every
+generation index (`READ_STCLEAR`), which every slot's approved policy reads with
+PolicyNV, so nothing in the running system could compute a code or open a slot's
+part. Now every slot object - the TOTP key, the sealed machine-id, the boot key,
+the release key - carries `PolicyPCR(15 == zero)` after PolicyAuthorize in its own
+policy, and the close that ends the SSH CA (PCR 15 extended) ends them too. Why:
+
+- **One close, enforced by the object.** The read-lock was a second mechanism
+  beside the CA's PCR 15, and only a convention of the approved policy; the
+  PolicyPCR after PolicyAuthorize is fixed at the object's creation, beyond any
+  approval.
+- **The read-lock failed open, and silently.** In a dictionary attack lockout
+  `TPM2_NV_ReadLock` with the (DA-protected) generation index's empty password
+  failed, and `cap` exited 0: the codes stayed computable in the running system.
+  PolicyPCR knows no lockout. The generation index (revocation alone now), the
+  storage primary and the TOTP key are noDA, so a lockout no longer stops the
+  slots at boot either.
+- **The close before a resume did not lock the codes**: it extended PCR 15 for
+  the CA, and `cap` ran only when the initrd was left, which a resume never does.
+- **A CA kept with SSH off was never closed on Debian**, whose image ran the
+  CA's close only with the SSH part; the plan's TPM part now comes with a CA too.
+- A failed `cap` let the boot go on; the close is fail-stop.
+
+What it costs: every unseal at boot must come before the close. `run` used to close
+the CA right after the host key's certificate, at the start of the code screen;
+that would end the codes, the phone, the vault and the TPM salt under it, so `run`
+closes when the code screen is over, after the parts have opened what they hold.
+A slot sealed to post-separator registers (no usable event log) shows no code at
+boot any more. Every slot is sealed again (blob version 17), every phone, vault
+and TPM salt enrolled again.
+
+## Not a counter window (experiment 1)
+
+The SSH CA's window as slot 0's generation index (branch `exp/close-counter`):
+the CA's policy would read the index that `cap` read-locks, one lock for the
+codes and the CA. Taken neither for the CA nor for the slots, because:
+
+- one index for two purposes ties the CA to TOTP slot 0: without slot 0 there is
+  no CA, and deleting slot 0 stops it;
+- the window stays open for the whole code screen, because slot 0's codes read
+  the same index - it cannot close when the host key is certified;
+- root with the signing key could reopen the CA in the same boot: with an empty
+  owner password, delete the read-locked index, define it again alike (the same
+  Name) and write it with the signing key. PCR 15 never goes back;
+- a fail-stop `cap` turns a persistent TPM fault into a reboot loop, and Debian
+  has no way out short of rescue media.
+
+It found three gaps of the design then, all closed by PCR 15 in every slot's
+policy (above): a DA lockout made `cap`'s read-lock fail silently; a CA kept with
+SSH off was never closed on Debian; the close before a resume did not lock the
+codes.
+
+## Debian on systemd-boot and a UKI: not yet (experiment 3)
+
+GRUB's command line and the initrd are outside Secure Boot (`break=`, `rdinit=`
+at the console: a shell before the close). A UKI would put them into the signed
+image. Tried on Debian 13 (branch `exp/debian-uki`, kept as the reference: the
+conversion script and a `secureboot` command); Arch passed the VM test, Debian
+failed slot 0's PCR 11 prediction:
+
+- Debian 13's systemd 257 has no `systemd-pcrosseparator`;
+- its dracut systemd initrd reports "No complete TPM2 support detected" and
+  measures no `enter-initrd` into PCR 11, even with libtss2 in the image, so slot
+  0's PCR 11 prediction failed on the VM;
+- `grub-efi-amd64-signed` is `Protected: yes`;
+- `kernel-install add-all` does not find Debian's kernels in `/boot`;
+- Debian's `55-initrd.install` adds `/boot/initrd.img-*` as a second initrd;
+- removing `/etc/kernel/postinst.d/dracut` breaks dpkg;
+- the package needs the libtss2 libraries.
+
+Worth doing once Debian ships a systemd (>= 258) whose initrd measures. Until
+then GRUB's boot binds PCRs 8 and 9 in every slot (the fallback and the SSH CA's
+slot 1 are 7, 8 and 9), and control advises a GRUB superuser password. One finding
+held on Arch too: `tpm2-kira.service` had `Sockets=` in `[Unit]`, where systemd
+ignores it; it is in `[Service]` now (the descriptor reached `run` all the same,
+through the socket's `Service=`).
+
 ## The SSH CA closes by PCR 15, not by a window index (2026-11-01, experiment)
 
 The CA's window index W (aSSH, read-locked by `run` and before a resume) was replaced by

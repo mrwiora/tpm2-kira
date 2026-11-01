@@ -130,6 +130,10 @@ func TestTheBootIsRunOnBothDistributions(t *testing.T) {
 			t.Errorf("tpm2-kira-machine-id.service lacks %q", want)
 		}
 	}
+	// ... and before run, which closes when its code screen is over.
+	if !has(directives(t, "initramfs/systemd/tpm2-kira.service"), "After=tpm2-kira-machine-id.service") {
+		t.Error("run may close the boot before the machine-id is released")
+	}
 	for _, bad := range []string{"modprobe", "/dev/tpmrm0", "gate-child", "--gate", "INITRAMFS_MODE"} {
 		if strings.Contains(string(script), bad) {
 			t.Errorf("Debian's script has %q: run, or the image's init, does that on both", bad)

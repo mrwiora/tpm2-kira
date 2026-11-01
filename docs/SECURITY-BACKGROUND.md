@@ -26,12 +26,12 @@ TPM after enrolment.
 │                                                              │
 │  PCR registers            TOTP key object (HMAC, in blob)    │
 │  PCR0, PCR7, PCR11 ...    authPolicy = PolicyAuthorize(      │
-│                               signing key, policyRef)        │
+│  PCR15: zero until the        signing key, policyRef)        │
+│    close                    ; PolicyPCR(15 == zero)          │
 │                                                              │
 │  NV 0x01803010 + n   blob: key object, PCR values,           │
 │                      generation G, approval signature        │
-│  NV 0x01803810 + n   generation index: holds G               │
-│                      (READ_STCLEAR: read-locked by `cap`)    │
+│  NV 0x01803810 + n   generation index: holds G (noDA)        │
 └──────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────┐
@@ -121,7 +121,7 @@ Method 2, tpm2-kira-vault (`Vault`, VAULT.md), created by `vault enrol`:
 | `PepperCheck`   | An unattended recipe with a pepper: 16 bytes of an HMAC of the key (behind Argon2id), to tell a mistyped pepper from the right one at boot; empty otherwise | No⁶ |
 
 ⁶ The wrapped part opens only on this TPM, in a boot state the signing key
-approved, before `cap`; and it is half of the key, the vault keeps the other.
+approved, before the close (PCR 15); and it is half of the key, the vault keeps the other.
 
 **TOTP key or phones.** TOTP is a method of its own: `slot add --totp`
 seals a TOTP key, `slot add` alone none; `control` asks. A slot with one
@@ -156,8 +156,8 @@ made before the phone existed can say it, so the order is fixed:
    that the slot's TOTP key is retired.
 
 `phone enrol` enforces what the machine can know of this (`requireVerifiedBoot`
-in `internal/admin/attest.go`): the boot passed the code screen (`cap` read-locked
-the generation indices, which happens at every boot with a sealed slot), and, for a slot with a
+in `internal/admin/attest.go`): the boot passed the code screen (the close extended
+PCR 15, which happens at every boot with a sealed slot), and, for a slot with a
 TOTP key, the slot's PCRs at the code screen - recomputed from this boot's
 event log, before the OS separator, with `enter-initrd` on PCR 11 - are
 the approved ones, so the screen did show the slot's code. A boot that
@@ -169,7 +169,7 @@ attestation passed"); the machine keeps no record of that verdict, so it
 asks. The rule holds for `control` and for `phone enrol` by hand alike.
 
 **Open, with TOTP optional:** a slot sealed without `--totp` has no code
-to verify the enrolling boot with; `phone enrol` then has only `cap` as its
+to verify the enrolling boot with; `phone enrol` then has only the close as its
 evidence, and the phone pins whatever state that boot had. Whether a phone
 (and a typed password) may be enrolled into a slot without a TOTP code is
 part of the decision which recipe needs which method (PLAN.md, part C).
@@ -267,8 +267,12 @@ while it is defined. Attributes:
 - `OwnerRead`, `AuthRead` (empty auth): anyone can read it, as `PolicyNV` must.
 - `PolicyWrite` with a PolicySigned policy: only the signing key can write
   it.
-- `READ_STCLEAR`: `TPM2_NV_ReadLock` makes it unreadable until the next TPM
-  reset, i.e. reboot. Nothing else can undo the lock.
+- `NoDA`: `PolicyNV` reads it with an empty password, and a dictionary-attack
+  lockout must not stop the slots at boot (the storage primary and the TOTP
+  key are noDA too).
+
+It serves revocation alone (`PolicyNV(G == n)`, raised by `slot approve`);
+closing the slots for the rest of the boot is PCR 15's (§4.5).
 
 ### 3.3 The record counter
 
@@ -317,9 +321,9 @@ The attestation part holds a second TPM key, the *boot key*: an ECC P-256 key
 for signing and key agreement, created inside the TPM (`sensitiveDataOrigin`,
 `fixedTPM`, `fixedParent`), with `userWithAuth` clear and the **same policy as
 the slot's TOTP key**: PolicyAuthorize by the signing key with the slot's policy
-reference. So it is usable exactly when a TOTP code can be computed - in a
+reference, then PolicyPCR(15 == zero) (§4.1). So it is usable exactly when a TOTP code can be computed - in a
 boot state the signing key approved, at the slot's current generation, before
-`cap` - and one approval covers both keys; `slot approve` needs to know nothing
+the close - and one approval covers both keys; `slot approve` needs to know nothing
 about it. `slot add` on an existing slot keeps the slot's policy reference when it
 carries the attestation part over, so that the boot key stays under the new
 TOTP key's approvals.
@@ -327,8 +331,9 @@ TOTP key's approvals.
 At enrolment the attestation key certifies it (`TPM2_Certify`, bound to the
 session), and the phone pins its public point after checking the attributes
 above and its policy: the machine sends the signing key's public area and the
-slot's policy reference, the phone recomputes the PolicyAuthorize digest and
-compares it with the certified key. So the phone knows, not merely assumes,
+slot's policy reference, the phone recomputes the slot's policy digest
+(`attest.SlotPolicyDigest`: PolicyAuthorize, then PolicyPCR(15 == zero))
+and compares it with the certified key. So the phone knows, not merely assumes,
 that the key lives in the TPM it has verified, cannot be used with a
 password, and unlocks on nothing but that signing key's approvals. It pins
 the signing key's Name with the point.
@@ -449,12 +454,19 @@ check and use.
 ### 4.1 The key object's policy
 
 ```
-authPolicy = H( H(0…0 ‖ TPM_CC_PolicyAuthorize ‖ signingKeyName) ‖ policyRef )
+authorized = H( H(0…0 ‖ TPM_CC_PolicyAuthorize ‖ signingKeyName) ‖ policyRef )
+authPolicy = H( authorized ‖ TPM_CC_PolicyPCR ‖ selection(PCR 15) ‖ H(PCR 15 = 0…0) )
 ```
 
 It is fixed when the object is created and never changes. It says: *use this
-key under whatever policy the signing key has approved for `policyRef`*.
-`UserWithAuth` is clear, so there is no password path.
+key under whatever policy the signing key has approved for `policyRef`, and
+only while PCR 15 is zero* (`attest.SlotPolicyDigest`, `attest.ClosePCR`).
+PCR 15 is read in the slot's bank (SHA-256, or SHA-1 for a `--sha1` slot).
+The PolicyPCR after PolicyAuthorize is the object's own: no approval can
+leave it out. Every slot object is created under it: the TOTP key, the
+sealed machine-id, the boot key and the release key (whose policy adds
+PolicyCommandCode(ActivateCredential)). `UserWithAuth` is clear, so there
+is no password path.
 
 ### 4.2 The approved policy
 
@@ -465,20 +477,22 @@ approval       = Sign_signingKey( H(approvedPolicy ‖ policyRef) )
 ```
 
 The approval is stored in the blob. It is only valid while the PCRs hold the
-sealed values **and** the generation index holds `G` and is readable.
+sealed values **and** the generation index holds `G`; the object's own
+policy adds that PCR 15 is zero.
 
 ### 4.3 Computing a code
 
 ```
 1. PolicyPCR          TPM reads the live registers
 2. PolicyNV           TPM reads the generation index, compares with G
-                      (fails if the index is read-locked)
 3. VerifySignature    TPM checks the approval against the session digest
                       → ticket (signing key loaded in the owner hierarchy:
                         PolicyAuthorize refuses the NULL ticket a
                         NULL-hierarchy key produces)
-4. PolicyAuthorize    session digest := the key object's authPolicy
-5. HMAC(counter)      TPM computes the code's HMAC
+4. PolicyAuthorize    session digest := the authorized digest (§4.1)
+5. PolicyPCR(15)      TPM reads PCR 15: zero until the close
+                      → session digest = the key object's authPolicy
+6. HMAC(counter)      TPM computes the code's HMAC
 ```
 
 ### 4.4 Where the guarantee is enforced
@@ -502,11 +516,16 @@ makes first (PCR values, generation) only produce readable errors.
 - **Revocation.** Each approve raises `G`. Older approvals require an older `G`
   and stop working, so an attacker who kept an old blob cannot roll the
   machine back to an old kernel or initrd.
-- **The cap.** `tpm2-kira-boot cap`, run when the initrd is left, read-locks the
-  generation index. `PolicyNV` fails until the next reboot, so nothing in the
-  running OS can compute a code, root included. Deleting and recreating the
-  index does not help: the policy binds the index's Name, and a recreated
-  index has a different Name until it is written, which needs the signing key.
+- **The close.** `tpm2-kira-boot close` extends PCR 15 (PCR_Event
+  "assh-close" in every bank, aSSH's `hostkey.Close`): `run` at the end of
+  the code screen, the image again before any volume is opened, and right
+  before a resume from hibernation. Every slot object's own PolicyPCR(15)
+  fails until the next reboot, so nothing in the running OS can compute a
+  code or open a slot's part, root included, whatever the signing key
+  approves. PCR 15 cannot be reset; the SSH CA's policy reads it too.
+- **The generation index's Name.** Deleting and recreating the index does
+  not help: the policy binds the index's Name, and a recreated index has a
+  different Name until it is written, which needs the signing key.
 - **`policyRef` per object.** Approvals are bound to one key object. Without
   it, every approval ever made with the signing key — for any slot, or for an
   earlier seal — would fit every object.
@@ -514,8 +533,8 @@ makes first (PCR values, generation) only produce readable errors.
 ### 4.6 What this does *not* guarantee
 
 > The TPM computes codes when the PCRs match the approved values, the
-> generation matches, and the index is not locked — or under any other state
-> the signing key approves.
+> generation matches, and PCR 15 is zero (the close has not run) — or under
+> any other state the signing key approves, before the close.
 
 Anyone holding the signing private key can approve any state. The key is as
 security-critical as the TPM policy. `/etc/tpm2-kira/keys/seal.key` sits on
@@ -671,9 +690,9 @@ stashed as described in §9.
 ```
 
 Approve never unseals, never uses the key object, and does not need the PCRs
-to match. It works in the running OS while the generation index is
-read-locked: the index's Name for `PolicyNV` is computed with the
-`READLOCKED` bit cleared, which is what it is in the initrd.
+to match. It works in the running OS after the close: the approval is a
+signature over a digest computed in software, with the generation index's
+Name as it is.
 
 ### 5.5 Key resolution in slot approve
 
@@ -889,9 +908,11 @@ booted system can satisfy the key's policy: the key never left the TPM, the
 display only ever held the code it was showing, and a runtime compromise
 cannot turn into a forged code at the next boot. Holding the boot costs
 nothing in security: during the hold only the measured initramfs runs, and
-the codes on the screen are the design. `tpm2-kira-boot cap` at
-`initrd-switch-root` read-locks the generation index on top of that, which
-also covers blobs whose policy holds after the separator.
+the codes on the screen are the design. On top of that, `run` closes the
+boot at the end of the code screen, before READY (PCR 15 extended, §4.5),
+and the image closes it again before any volume is opened. The close comes
+before the separator, so a blob sealed from the registers (post-separator
+values, the event log not usable) shows no code at boot.
 
 The attestation gate (`run`'s radio worker, `gate-child`) stays *after* the
 separator: a quote is not a secret, post-separator values are a fixed function
@@ -899,7 +920,8 @@ of pre-separator ones, and the gate advertises for a while during which it
 could not hold the separator back. Its baseline is predicted for that point.
 
 What the separator does not cover is the signing key: whoever can use it can
-approve a new policy for the current state and compute codes at any time.
+approve any state; after the close that opens nothing in this boot, but
+the next boot of that state shows codes.
 Keep it on a YubiKey (the intended setup), or at least off the machine; a key
 file in `/etc/tpm2-kira/keys` is the fallback, and with it a runtime root
 has that power.
@@ -933,16 +955,17 @@ PolicyNV:        H(prev ‖ 0x00000149 ‖ H(operandB ‖ offset:2 ‖ operation
 PolicyAuthorize: H( H(prev ‖ 0x0000016A ‖ keySignName) ‖ policyRef )
 ```
 
-Software computation is required, not a convenience: after `cap`, the
-generation index is read-locked, and its current Name carries the
-`READLOCKED` bit. An approval in the running OS must still produce the digest the
-initrd will see, so it computes the Name from the index's public area with
-that bit cleared.
+Software computation lets an approval be made in the running OS after the
+close, where no policy session of the slot succeeds: it binds the
+generation index's Name as `TPM2_NV_ReadPublic` returns it, and the vault
+recomputes the same digest (`vaultproto.ApprovedPolicy`). The object's own
+part, PolicyAuthorize then PolicyPCR(15 == zero), is computed in software
+too (`attest.SlotPolicyDigest`, §4.1).
 
 A wrong digest cannot weaken anything — the TPM would simply refuse to
 compute codes — but it would lock the user out. The integration tests check
-every digest against real policy sessions on swtpm, including an approval while
-the index is read-locked followed by a reboot.
+every digest against real policy sessions on swtpm, the slot's policy
+against a trial session in either bank.
 
 The PolicySigned digest that guards NV writes is computed by the TPM in a
 trial session, with the signing key loaded via `TPM2_LoadExternal`.
@@ -988,7 +1011,7 @@ approve and boot.
 | Offline disk theft                          | The key object is TPM-wrapped; useless without the specific TPM chip |
 | Boot chain tampering (evil maid)            | PCR values change → PolicyPCR fails → no code → user detects compromise |
 | Copying the TOTP key                        | No unseal exists; the TPM computes codes and the key never leaves it after enrolment (§4.5) |
-| Using the TPM from the running OS (root, `tss`) | `tpm2-kira-boot cap` read-locks the generation index when the initrd is left; PolicyNV fails until reboot (§4.5) |
+| Using the TPM from the running OS (root, `tss`) | The close extends PCR 15 at the end of the code screen; every slot object's own PolicyPCR(15 == zero) fails until reboot, whatever the signing key approves (§4.5) |
 | Rollback to an older approved state         | Every approval raises the generation; older approvals stop working |
 | TPM bus sniffing at seal time               | The key goes into the TPM over a salted, parameter-encrypted session |
 | Blob tampering in NVRAM                     | `Private` area is integrity-protected by TPM; tampering causes `TPM2_Load` to fail; a substituted signing key fails PolicyAuthorize |
@@ -999,7 +1022,7 @@ approve and boot.
 
 | Threat                                       | Why                                        |
 |----------------------------------------------|--------------------------------------------|
-| A shell with the sealed PCRs intact, before the cap | Another OS, or a shell in the genuine initrd, while the PCRs still match: the TPM computes codes on request, including for future times. Choose PCRs that measure kernel, initrd and command line, and close the ways into a shell (docs/SLOT.md, "Hardening the boot path") |
+| A shell with the sealed PCRs intact, before the close | Another OS, or a shell in the genuine initrd, while the PCRs still match: the TPM computes codes on request, including for future times. Choose PCRs that measure kernel, initrd and command line, and close the ways into a shell (docs/SLOT.md, "Hardening the boot path") |
 | Physical TPM interposer (active)             | The salt key's public area is not authenticated, so an *active* interposer could substitute it at seal time. Passive sniffing sees only HMAC results |
 | Compromise of the signing private key         | Its holder can approve any state |
 | TPM reset attacks (if PCRs can be replayed)   | Platform-specific; DRTM/measured launch can mitigate |
@@ -1014,7 +1037,7 @@ protective but are not, and `slot add`/`slot approve` warn about each:
 | Selection | Why it is weak |
 |-----------|----------------|
 | PCR 0 alone | PCR 0 measures firmware **code**, not this machine. Every device running the same firmware build holds the same value, so an attacker can reproduce it on their own hardware. Firmware *configuration* lives in PCR 1, which is not covered. |
-| No PCR for kernel, initrd or command line (e.g. `0,7`, `0e,2e,4e,7e`) | Nothing before the passphrase prompt is attested after the bootloader. A replaced initrd, or a shell from an edited command line (`rd.break`, `break=`), runs with these PCRs intact: it can log the passphrase while the genuine code is shown, or have the TPM compute codes for future times. PCR 11 (UKI), PCRs 8+9 (GRUB) or 9+12 (systemd-boot) close this. |
+| No PCR for kernel, initrd or command line (e.g. `0,7`, `0e,2e,4e,7e`) | Nothing before the passphrase prompt is attested after the bootloader. A replaced initrd, or a shell from an edited command line (`rd.break`, `break=`), runs with these PCRs intact: it can log the passphrase while the genuine code is shown, or have the TPM compute codes for future times. PCR 11 (UKI), PCRs 8+9 (GRUB) or 9+12 (systemd-boot) close this. Secure Boot checks GRUB and the kernel, not GRUB's command line or the initrd: on a GRUB boot `slot add` refuses a selection without 8 and 9 (the fallback slot is 7, 8 and 9), and `control` advises a GRUB superuser password, red while there is none (an entry edited at the console is a shell before the close). |
 | PCR 7 with Secure Boot disabled, or the platform in Setup Mode | PCR 7 records the Secure Boot state and policy. With Secure Boot off it faithfully records "disabled", and nothing verifies which bootloader or kernel runs — a matching PCR 7 does not mean the boot chain was checked. In Setup Mode the keys can be replaced without physical presence, so the attested policy is one any root user can rewrite. |
 
 The Secure Boot state is read from `/sys/firmware/efi/efivars`. When it cannot
@@ -1035,7 +1058,7 @@ be read at all, tpm2-kira says so rather than staying silent.
 │  PRIVILEGED: root userspace      │
 │  - tpm2-kira binary              │
 │  - Signing private key (fs)      │
-│  - Codes only before `cap`       │
+│  - Codes only before the close   │
 └─────────────┬────────────────────┘
               │
 ┌─────────────┴───────────────────┐
@@ -1099,8 +1122,9 @@ What this means in practice:
    `control` name what is left of the slot, and why, and remove it.
 4. **The real access control is on the key objects**, not on where the
    record is stored: their `authPolicy` (PolicyAuthorize, §4) is what
-   prevents unauthorised use, and `cap` read-locks the generation indices
-   when the initrd is left, so the running system cannot satisfy it.
+   prevents unauthorised use, and its PolicyPCR(15 == zero) fails after the
+   close at the end of the code screen, so the running system cannot
+   satisfy it.
 5. **A record is replaced whole or not at all.** The firmware takes the
    whole variable or none of it and keeps the old one until the new one is
    there, so a failed `slot approve` or enrolment leaves the slot as it
@@ -1322,9 +1346,9 @@ only way back in, because:
 4. **Re-seal after planned changes.** After firmware updates, bootloader
    changes, or Secure Boot key rotations, run `tpm2-kira slot approve` to approve
    the new PCR values.
-5. **Keep the cap in the boot integration.** It is what keeps the running OS
-   from computing codes; check that `tpm2-kira slot info` reports the generation
-   index as read-locked after boot.
+5. **Keep the close in the boot integration.** It is what keeps the running OS
+   from computing codes; check that `tpm2-kira slot info` reports the slot as
+   closed until the next boot (PCR 15) after boot.
 6. **NVRAM index range.** tpm2-kira uses `0x01803000` (the boot settings),
    the generation indices `0x01803810–0x0180381F` and the record counters
    `0x01803820–0x0180382F` (TPM2 owner-defined NV range); the slots' records
@@ -1385,7 +1409,7 @@ phone's anchor public key and channel key.
 | 1 | both | Encrypted channel (Noise IK) with the *pinned* static keys | the keys of 13.2 step 1 | the peer is the enrolled machine / the enrolled phone, and nobody is in between | both sides refuse any other static key; nothing to compare any more |
 | 2 | machine | **Hello** with a fresh nonce; phone answers a **Request** with its own nonce, the PCR selection, and the **boot challenge** (§3.4): a one-time key and the code sealed to the boot key | — | freshness and binding: `qd = H(label ‖ nonce_a ‖ nonce_v ‖ cb ‖ selection)` is new for every session and known only to its two ends | its own nonce is in it |
 | 3 | machine | **Quote** over the selected PCRs with qualifying data `qd` | the AK | these are the registers *now*, in this session, as signed by the TPM pinned at enrolment; the quote also carries the TPM's reset counter and firmware version | the AK is pinned (13.2 step 4); `qd` makes a replay impossible; a reset counter that went backwards is a hard failure |
-| 4 | machine | **Boot key proof**: the TPM recovers the code with `TPM2_ECDH_ZGen` under the slot's policy; the machine shows the code, returns `HMAC(k_mac, label ‖ qd)`, and **signs** `label ‖ qd ‖ SHA-256(quote)` with the same key (`TPM2_Sign`) | the boot key, usable only if the slot's policy holds: PCRs as approved by the signing key, current generation, before `cap` | *the machine's signing key has approved this boot state - the one in the quote of step 3*, and the screen in front of the person belongs to the machine whose TPM answered | the boot key was certified at enrolment (13.2 step 7), and its policy was checked to be that signing key's approvals; the signature verifies with the pinned point; the code and the MAC key derive from a shared secret only that key can compute; the code is compared by the person with the machine's screen. A proof or signature that does not verify is a hard failure; a refusal is reported as such and is not, by itself, a failure |
+| 4 | machine | **Boot key proof**: the TPM recovers the code with `TPM2_ECDH_ZGen` under the slot's policy; the machine shows the code, returns `HMAC(k_mac, label ‖ qd)`, and **signs** `label ‖ qd ‖ SHA-256(quote)` with the same key (`TPM2_Sign`) | the boot key, usable only if the slot's policy holds: PCRs as approved by the signing key, current generation, before the close (PCR 15) | *the machine's signing key has approved this boot state - the one in the quote of step 3*, and the screen in front of the person belongs to the machine whose TPM answered | the boot key was certified at enrolment (13.2 step 7), and its policy was checked to be that signing key's approvals; the signature verifies with the pinned point; the code and the MAC key derive from a shared secret only that key can compute; the code is compared by the person with the machine's screen. A proof or signature that does not verify is a hard failure; a refusal is reported as such and is not, by itself, a failure |
 | 5 | phone | Comparison of the quoted values with its **profiles** (the baseline and whatever the person approved and remembered later) | — | match, or which registers changed and what that means | its own stored values; this is the one judgement no key on the machine can make for it |
 | 6 | person | The decision: continue (match), approve once, approve and remember, or reject | — | a human looked at the result and the code | — |
 | 7 | phone | **Receipt** over (verdict, device id, AK Name, `qd`, SHA-256 of the quote, policy id, issue and expiry time, verifier id) | the anchor key, unlocked by the phone's PIN or biometrics | *this phone* gave *this verdict* about *this quote* in *this session* | *for the machine*: the coordinator (§3.4, the process that holds the TPM) checks the signature against the pinned anchor and the binding against the quote it issued itself. A reject needs no signature: believing a false "no" costs a check, never trust |

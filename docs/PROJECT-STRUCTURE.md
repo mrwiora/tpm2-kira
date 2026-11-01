@@ -6,7 +6,7 @@ Where things are in the repository, and how the tests are run.
 
 ```
 ├── main.go, help.go         # tpm2-kira, the installed system's command line: routing and the help pages
-├── cmd/tpm2-kira-boot/      # tpm2-kira-boot, what the boot image carries: run, cap, machine-id, unlock-key, ssh-child, gate-child
+├── cmd/tpm2-kira-boot/      # tpm2-kira-boot, what the boot image carries: run, close, machine-id, unlock-key, ssh-child, gate-child
 ├── core/                    # The shared core: a Go module of its own (github.com/mrwiora/tpm2-kira/core),
 │   │                        #   what the phone (Marify) and the vault require alone: go-tpm, x/crypto, tpm2-verifier,
 │   │                        #   nothing of internal/ or aSSH (the module boundary keeps it so)
@@ -27,7 +27,7 @@ Where things are in the repository, and how the tests are run.
 │   │                        #   the UKI and GRUB predictions, PCR descriptions and warnings
 │   ├── signing/             # The signing key: files, YubiKey, the PIN file
 │   ├── nvslot/              # The slot: blob format, NV layout, generation, approved policy,
-│   │                        #   cap, signed NV writes, the boot settings
+│   │                        #   the close (PCR 15), signed NV writes, the boot settings
 │   ├── totp/                # Who checks the boot by its code: the TOTP key, the code screen's lines
 │   ├── phonegate/           # The phone at boot: the coordinator, quotes, boot key, EK,
 │   │                        #   the record check, the factor of the phone salt
@@ -62,7 +62,7 @@ Where things are in the repository, and how the tests are run.
 │   ├── TESTING.md                # Unit, integration, the VM test and the acceptance run: what each needs, how to run it
 │   ├── SLOT.md                   # The slot: a boot state the signing key approved; choosing PCRs, approving, deleting
 │   ├── SEALING.md                # The details of sealing: the measure point, SHA-1, own keys, several slots
-│   ├── CODE.md                   # The TOTP code: when the TPM computes it, the code screen, the cap, the clock
+│   ├── CODE.md                   # The TOTP code: when the TPM computes it, the code screen, the close, the clock
 │   ├── PHONE.md                  # The phone (Marify) verifies the boot over Bluetooth LE
 │   ├── SSH.md                    # SSH in the boot image: the code screen over the network
 │   ├── DISK-KEY.md               # The disk's key: the recipes, the token, the route, how systemd takes the key
@@ -76,7 +76,7 @@ Where things are in the repository, and how the tests are run.
 ├── initramfs/               # Everything that goes into, or builds, an initramfs
 │   ├── common/control.conf          # tpm2-kira's configuration: what the image is built with (radio, network, SSH); aSSH's is assh.conf beside it
 │   ├── systemd/tpm2-kira.service   # Shows the code in systemd-based images
-│   ├── systemd/tpm2-kira-cap.service  # Runs 'cap' when leaving the initrd
+│   ├── systemd/tpm2-kira-close.service  # Runs 'close' (PCR 15) whatever run did, before any volume is opened
 │   ├── mkinitcpio/                 # Arch
 │   │   ├── install/sd-tpm2-kira    # Build hook: puts the binary in the image
 │   │   ├── post/sd-tpm2-kira       # Approve after the image is written
@@ -84,7 +84,8 @@ Where things are in the repository, and how the tests are run.
 │   └── initramfs-tools/            # Debian
 │       ├── hooks/tpm2-kira         # Build hook: copies the static binary
 │       ├── scripts/init-premount/tpm2-kira  # Shows the code before unlock
-│       ├── scripts/init-bottom/tpm2-kira    # Stops it and caps before switching root
+│       ├── scripts/local-top/tpm2-kira-close  # Closes the boot (PCR 15) before a resume from hibernation
+│       ├── scripts/init-bottom/tpm2-kira    # Stops it and closes the boot before switching root
 │       └── post-update.d/tpm2-kira          # slot approve for the new image
 ├── debian/                  # Debian package definition (must sit at the root)
 ├── packaging/

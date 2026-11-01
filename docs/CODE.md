@@ -17,7 +17,7 @@ Only under a policy your signing key approved:
 |-----------|----------------|
 | **PCR values** | Boot measurements match the values approved by `slot add` or `slot approve` |
 | **Generation** | The approval is the latest one: every approval revokes the older ones |
-| **Not capped** | `tpm2-kira-boot cap` has not run in this boot - it runs when the initrd is left, so the running system cannot compute codes |
+| **Not closed** | The close (PCR 15) has not run in this boot - it runs at the end of the code screen, so the running system cannot compute codes |
 
 When an update changes the PCR values, the TPM refuses until `slot
 approve` approves the new boot state with your signing key (the hooks run
@@ -35,16 +35,34 @@ continues by itself after 90 seconds. The same screen can be had over SSH
 ([SSH.md](SSH.md)).
 
 On the running system, `tpm2-kira reveal` (`reveal-plain` without colour)
-shows a slot's code - only before the cap, so in practice only in the
+shows a slot's code - only before the close, so in practice only in the
 initrd.
 
-## The cap
+## The close
 
-When the initrd hands over to the real root, `tpm2-kira-cap.service`
-(Debian: the init-bottom script) runs `tpm2-kira-boot cap`. From then until the
-next reboot the TPM computes no codes, for anyone, root included -
-`tpm2-kira reveal` in the running system reports "Locked until reboot".
-`slot approve` still works.
+`tpm2-kira-boot close` extends PCR 15 (an event, "assh-close", in every
+bank). Every slot object - the TOTP key, the sealed machine-id, the phone's
+boot key, the release key - is created under the slot's policy
+`PolicyAuthorize(signing key) ; PolicyPCR(15 == 0)`: the PCR 15 check is
+the object's own, fixed at creation, beyond any approval. The SSH CA's
+policy reads PCR 15 too. Once it is extended, until the next reboot the TPM
+computes no codes and opens no slot's part, for anyone, root included,
+whatever the signing key approves.
+
+- `run` closes at the end of the code screen, after the parts have opened
+  what they hold (the vault's part, the phone's salt, the TPM salt).
+- The image closes again, whatever `run` did, before any volume is opened:
+  on Arch `tpm2-kira-close.service` (a failure is the emergency target), on
+  Debian the init-bottom script (a failure is initramfs-tools' panic).
+- Right before a resume from hibernation, which starts the TPM afresh and
+  runs no code screen: on Arch a drop-in on
+  `systemd-hibernate-resume.service`, on Debian
+  `scripts/local-top/tpm2-kira-close` (a failure there clears `resume=`).
+
+`tpm2-kira reveal` in the running system reports "Closed until the next
+boot". `slot approve` still works; the next boot opens the slots again.
+A slot sealed from the registers (post-separator values, the event log not
+usable) shows no code at boot: the close comes before the separator.
 
 ## The clock
 
