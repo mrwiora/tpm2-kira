@@ -352,6 +352,18 @@ func (s sshCAState) Unapproved() []int {
 	return n
 }
 
+// caWaitsForImage says whether a slot of the CA without an approval takes
+// PCR 11 signed while the image lacks the signature: no approval helps it, an
+// image with the signature does.
+func (f *machineFacts) caWaitsForImage() bool {
+	if !f.UKISigns || f.UKISigErr == "" || f.SSHCA.CA == nil {
+		return false
+	}
+	return slices.ContainsFunc(f.SSHCA.CA.Slots, func(s hostkey.Slot) bool {
+		return s.Signed != nil && slices.Contains(f.SSHCA.Unapproved(), s.Number)
+	})
+}
+
 // loadSSHCA reads the CA conf names, with conf's slots: what the image
 // build needs to know.
 func loadSSHCA(conf config.Config) sshCAState {

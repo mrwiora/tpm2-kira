@@ -11,6 +11,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
+	"github.com/tpm2-trust/assh/hostkey"
 )
 
 // Step 1, the boot chain: the hook, the route, and the way on to step 2,
@@ -587,5 +588,44 @@ func TestControlGRUB(t *testing.T) {
 	r.Slots[1] = StatusSlot{Slot: 1, PCRs: "7e,8e,9e", TOTP: true, Signed: true, Fallback: true}
 	if notes := strings.Join(statusNotes(r), "\n"); strings.Contains(notes, "no fallback slot") {
 		t.Fatalf("the GRUB fallback not seen:\n%s", notes)
+	}
+}
+
+// Leaving control: the image first, the SSH CA's approval after it - its hook
+// approves what it built, and no approval helps a slot that takes PCR 11 signed
+// while the image lacks the signature.
+func TestControlLeaveBuildsBeforeItApproves(t *testing.T) {
+	ca := &hostkey.CA{Slots: []hostkey.Slot{{Number: 0, PCRs: []int{0, 7}, Signed: &hostkey.Signed{PCRs: []int{11}}}}}
+	st := sshCAState{CA: ca, Values: map[int][]byte{0: {1}}}
+	f := machineFacts{Initramfs: "mkinitcpio", Pending: []string{"the image lacks the PCR key's signature of PCR 11"},
+		UKISigns: true, UKISigErr: "no .pcrsig section", SSHCA: st}
+	if !f.caWaitsForImage() {
+		t.Fatal("a signed slot without an approval and an image without the signature waits for the image")
+	}
+	var out bytes.Buffer
+	c := &controller{out: &out}
+	c.leaveWith(func() machineFacts { return f })
+	got := out.String()
+	build, wait := strings.Index(got, "Rebuild the initramfs"), strings.Index(got, "build it (mkinitcpio -P), whose hook approves it")
+	if build < 0 || wait < build || strings.Contains(got, "needs the signing key's approval") {
+		t.Fatalf("leaving:\n%s", got)
+	}
+
+	// The image carries the signature, the approval is what lacks: asked for.
+	f.UKISigErr, f.Pending = "", nil
+	if f.caWaitsForImage() {
+		t.Fatal("an image with the signature waits for nothing")
+	}
+	out.Reset()
+	c.leaveWith(func() machineFacts { return f })
+	if got := out.String(); !strings.Contains(got, "needs the signing key's approval") || strings.Contains(got, "Rebuild the initramfs") {
+		t.Fatalf("leaving, the image as it is:\n%s", got)
+	}
+
+	// A slot that takes nothing signed never waits for the signature.
+	ca.Slots[0].Signed = nil
+	f.UKISigErr = "no .pcrsig section"
+	if f.caWaitsForImage() {
+		t.Fatal("a slot without signed PCRs waits for no signature")
 	}
 }

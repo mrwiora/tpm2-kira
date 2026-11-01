@@ -999,10 +999,18 @@ func (c *controller) show() {
 // when it is out of date - after everything is set up, as a build takes
 // its time - then what is left to do by hand is said: the route.
 func (c *controller) leave() {
+	c.leaveWith(func() machineFacts { return collectFacts(c.o.TPMPath, c.o.Debug) })
+}
+
+// leaveWith is leave with look, the fresh look at the machine. The image comes
+// before the SSH CA's approval: PCR 4 and PCR 11 are the image's, its hook
+// approves what it built, and a slot that takes PCR 11 signed cannot be
+// approved for an image that does not carry the signature.
+func (c *controller) leaveWith(look func() machineFacts) {
 	fmt.Fprintln(c.out)
 	// What changed since the image was built is looked at, not which
 	// steps ran: a fresh look, as the last step may have changed it.
-	f := collectFacts(c.o.TPMPath, c.o.Debug)
+	f := look()
 	// The CA's slots are assh.conf's from here on: one taken away there
 	// goes now, one added is approved below.
 	if f.SSHCA.CA != nil && f.Remote.SSH.On {
@@ -1012,32 +1020,36 @@ func (c *controller) leave() {
 			fmt.Fprintf(c.out, "The SSH CA's slots are %s's now.\n", sshConfPath(controlConfigPath()))
 		}
 	}
-	if f.SSHCA.CA != nil && f.SSHCA.Values != nil && len(f.SSHCA.Unapproved()) > 0 {
-		// Approved for the image as it is; a rebuild that follows has its
-		// reseal hook approve the new image's values.
-		if !c.tty {
-			fmt.Fprintln(c.out, "The SSH CA needs the signing key's approval of the PCRs at the next boot: run tpm2-kira control at a terminal.")
-		} else if err := c.approveSSHCA(); err != nil {
-			fmt.Fprintf(c.out, "\033[0;31mNot approved:\033[0m %v - the image is built without SSH\n", err)
-		} else {
-			f = collectFacts(c.o.TPMPath, c.o.Debug)
-		}
-	}
+	c.facts = f
 	if len(f.Pending) > 0 {
-		c.facts = f
 		if c.tty {
 			if err := c.offerRebuild(); err != nil {
 				// A build hook of the machine's own (fsck without its
 				// helper, say) fails the command after the image is
 				// written: what counts is whether the image is new.
-				if g := collectFacts(c.o.TPMPath, c.o.Debug); len(g.Pending) == 0 {
+				if g := look(); len(g.Pending) == 0 {
 					fmt.Fprintf(c.out, "\033[0;33mThe image is built\033[0m, and carries what control set up; %v - an error of the build's own, above.\n", err)
 				} else {
 					fmt.Fprintf(c.out, "\033[0;31mNot rebuilt:\033[0m %v\n", err)
 				}
 			}
+			f = look()
+			c.facts = f
 		} else {
 			fmt.Fprintf(c.out, "Rebuild the initramfs for the next boot (%s): %s\n", rebuildCommand(f.Initramfs), strings.Join(f.Pending, "; "))
+		}
+	}
+	// What the image's hook did not approve: the image stayed as it is.
+	if f.SSHCA.CA != nil && f.SSHCA.Values != nil && len(f.SSHCA.Unapproved()) > 0 {
+		switch {
+		case f.caWaitsForImage():
+			fmt.Fprintf(c.out, "The SSH CA's slots take PCR 11 signed and the image carries no such signature: build it (%s), whose hook approves it; until then the next boot serves a temporary host key.\n", rebuildCommand(f.Initramfs))
+		case !c.tty:
+			fmt.Fprintln(c.out, "The SSH CA needs the signing key's approval of the PCRs at the next boot: run tpm2-kira control at a terminal.")
+		default:
+			if err := c.approveSSHCA(); err != nil {
+				fmt.Fprintf(c.out, "\033[0;31mNot approved:\033[0m %v - the next boot serves a temporary host key\n", err)
+			}
 		}
 	}
 	for _, d := range c.facts.Status.Devices {
