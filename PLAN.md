@@ -10,14 +10,16 @@ signed by tpm2-kira's own PCR key.
 
 ## Steps
 
-- [x] E2. `close` tries once more; a failure powers off (Arch `FailureAction=poweroff-force`,
-      Debian `poweroff -f`); hibernatetest V4.
+- [x] E2. The failure ladder's outcomes: `internal/bootclose`, `close --resume|--late`, the EFI
+      count, `tpm2-kira-late-close.service`, status and control red, AGENTS.md's exception,
+      SSH.md "The close: what it can come to", the word `tpm2-kira.noclose`; hibernatetest V4
+      (steps 5, 6), V9, V8.
 - [x] E3. `slot add`, `slot approve`, the CA's approvals refuse an event in PCR 15 in the
       firmware's log; status and control red (`closepcr.go`).
 - [x] E5. SSH.md's known limits; systemd-boot's editor under Secure Boot (systemd 262).
 - [x] F1. `4u` (`measure/pcr4predict.go`, go-uefi-slim's `HashWith`), `4e` refused; the
       selections; `slot approve --if-moved`, the drop-in on `systemd-boot-update.service`; status.
-- [x] F2. The PCR key (`admin/pcrkey.go`), control's step for `uki.conf`, `11s` (blob 18,
+- [x] F2. VM test and hibernatetest PASS at a101fbf (`.local/runs/vmtest-final-a101fbf`: Arch 157, Debian 148; `hibernatetest-20261101-220503`: Arch 137, Debian 126). The PCR key (`admin/pcrkey.go`), control's step for `uki.conf`, `11s` (blob 18,
       `nvslot`'s nested PolicyAuthorize, `measure/pcrsig.go`), the CA's slots signed, core's
       `vaultproto` (Selection.Signed, PCRKey, PCRSignature).
 
@@ -25,6 +27,10 @@ signed by tpm2-kira's own PCR key.
 
 1. A shim or GRUB package on Debian moves PCR 4 with no hook: status says it is due; a
    dpkg trigger would approve it.
+2. Not shown on a VM: the ladder's steps 2, 3 and 7 and the late closer's close (swtpm only;
+   a VM's TPM does not refuse), Debian's resume itself (the kernel refuses the image: OVMF's
+   memory map differs), V3's resume on Arch (the same refusal).
+3. A hard reboot with tpm2-kira's prompt open takes 95 s: `systemd-shutdown` waits for `run`.
 
 ---
 
