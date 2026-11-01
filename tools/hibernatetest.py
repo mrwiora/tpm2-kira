@@ -62,9 +62,10 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCAL = os.path.join(os.path.dirname(REPO), ".local")
 
 
-# A boot's first word on the serial console: the kernel's.
+# A boot's first word on the serial console, the firmware's: the kernel's are
+# kept from it by the command line's quiet.
+RESTART = re.compile(r"BdsDxe: loading")
 MEMMAP = "dmesg | sed -n 's/^\\[[^]]*\\] //; /BIOS-e820\\|reserve setup_data\\|Hibernate inconsistent/p'"
-RESTART = re.compile(r"Linux version \d")
 
 
 def load(name):
@@ -297,7 +298,7 @@ class Hib:
         deadline = time.time() + 120
         while time.time() < deadline and "Reboot Into Firmware" not in lv.serial_text(since):
             lv.send(" ")
-            time.sleep(0.5)
+            time.sleep(0.1)
         if "Reboot Into Firmware" not in lv.serial_text(since):
             raise vmtest.Fail(f"{tag}: systemd-boot's menu did not show")
         lv.send("e")
@@ -337,20 +338,27 @@ class Hib:
             time.sleep(0.5)
         return lv.serial_text(since), False
 
-    def menu_edit(self, since, words):
-        """Arch: at systemd-boot's menu (the console's text from since), the
-        command line edited: this machine has Secure Boot off."""
+    def menu_edit(self, words, tpm=True):
+        """Arch: a start, and at systemd-boot's menu the command line edited: this
+        machine has Secure Boot off. The menu comes for a key that is there the
+        moment the loader looks: a boot that goes past it is started again. Gives
+        where the console's text of that boot starts."""
         lv = self.lv
-        deadline = time.time() + 180
-        while time.time() < deadline and "Reboot Into Firmware" not in lv.serial_text(since):
-            lv.send(" ")
-            time.sleep(0.5)
-        if "Reboot Into Firmware" not in lv.serial_text(since):
-            raise vmtest.Fail("systemd-boot's menu did not show")
-        lv.send("e")
-        time.sleep(1)
-        lv.send(words + " ")
-        lv.send("\r")
+        for _ in range(4):
+            lv.start(unlock=False, tpm=tpm)
+            since = lv.mark
+            deadline = time.time() + 40
+            while time.time() < deadline and "Reboot Into Firmware" not in lv.serial_text(since):
+                lv.send(" ")
+                time.sleep(0.1)
+            if "Reboot Into Firmware" in lv.serial_text(since):
+                lv.send("e")
+                time.sleep(1)
+                lv.send(words + " ")
+                lv.send("\r")
+                return since
+            lv.kill()
+        raise vmtest.Fail("systemd-boot's menu did not show")
 
     def console_prompts(self, since):
         """tpm2-kira's prompts at the console: the recovery recipe needs no TPM."""
@@ -424,19 +432,15 @@ class Hib:
     def silent_tpm_arch(self, before):
         m, lv = self.m, self.lv
         words = "initcall_blacklist=crb_acpi_driver_init"
-        lv.start(unlock=False)
-        since = lv.mark
-        self.menu_edit(since, words)
+        since = self.menu_edit(words)
         text, again = self.restarted(since, "rebooting once", 400)
         m.log.save("V4-silent-first-console.log", text)
         self.check("V4 step 6: one hard reboot, for a TPM the firmware measured into", "rebooting once" in text and again, text[-800:])
         self.check("V4 step 6: no shell on the way", "maintenance" not in text and "emergency mode" not in text.lower(), text[-800:])
-        # restarted() saw the kernel of the second boot, which was not edited:
-        # it has its driver, and closes. The reboot goes on to a boot edited.
+        # The firmware of the second boot: it would not be edited, and have its
+        # driver. The second boot is one edited.
         lv.kill()
-        lv.start(unlock=False)
-        since = lv.mark
-        self.menu_edit(since, words)
+        since = self.menu_edit(words)
         self.console_prompts(since)
         lv.wait_ssh(600)
         self.wait_login("V4 step 6")
@@ -486,32 +490,17 @@ class Hib:
         self.run("nohup sh -c 'sleep 2; systemctl poweroff' >/dev/null 2>&1 &")
         if not lv.wait_stopped(300):
             raise vmtest.Fail("V8: the guest did not power off")
-        lv.start(unlock=False, tpm=False)
-        since = lv.mark
         if self.distro == "debian":
-            lv.expect(re.compile(r"Password for disk \S+: ?$", re.M), 600, since)
-            lv.send(vmtest.TEST_PASSWORD + "\r")
-            lv.expect(re.compile(r"Salt for disk \S+: ?$", re.M), 120, since)
-            lv.send(vmtest.TEST_SALT + "\r")
+            lv.start(unlock=False, tpm=False)
+            since = lv.mark
+            self.console_prompts(since)
             lv.expect(re.compile(r"\(initramfs\) ?$", re.M), 300, since)
             lv.send("rm -r /etc/tpm2-kira/plan/tpm\r")
             time.sleep(1)
             lv.send("exit\r")
         else:
-            deadline = time.time() + 120
-            while time.time() < deadline and "Reboot Into Firmware" not in lv.serial_text(since):
-                lv.send(" ")
-                time.sleep(0.5)
-            if "Reboot Into Firmware" not in lv.serial_text(since):
-                raise vmtest.Fail("V8: systemd-boot's menu did not show")
-            lv.send("e")
-            time.sleep(1)
-            lv.send("rd.systemd.mask=tpm2-kira-close.service ")
-            lv.send("\r")
-            lv.expect(re.compile(r"Password for disk \S+: ?$", re.M), 600, since)
-            lv.send(vmtest.TEST_PASSWORD + "\r")
-            lv.expect(re.compile(r"Salt for disk \S+: ?$", re.M), 120, since)
-            lv.send(vmtest.TEST_SALT + "\r")
+            since = self.menu_edit("rd.systemd.mask=tpm2-kira-close.service", tpm=False)
+            self.console_prompts(since)
         lv.wait_ssh(600)
         self.wait_login("V8")
         text = lv.serial_text(since)
