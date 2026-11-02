@@ -14,6 +14,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/machineid"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/memlock"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
@@ -60,6 +61,35 @@ func requireRoot(command string, args []string) {
 	os.Exit(1)
 }
 
+// holdsSecrets says whether a command handles a passphrase, a salt or a derived key
+// (secrets_test.go lists them, and what in internal/admin reaches one): it locks its
+// memory first, and stops if it cannot.
+func holdsSecrets(command string, args []string) bool {
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	switch command {
+	case "control":
+		return true
+	case "luks":
+		switch sub {
+		case "derive", "enrol", "enroll", "remove":
+			return true
+		}
+	case "vault":
+		return sub == "enrol" || sub == "enroll"
+	case "phone":
+		if sub == "salt" && len(args) > 1 {
+			switch args[1] {
+			case "enrol", "enroll", "rotate":
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func main() {
 	// Set application version in cmd package
 	nvslot.AppVersion = Version
@@ -94,6 +124,11 @@ func main() {
 	}
 
 	requireRoot(command, commandArgs)
+	if holdsSecrets(command, commandArgs) {
+		if err := memlock.Command(); err != nil {
+			fail(err)
+		}
+	}
 
 	switch command {
 	case "setup":
