@@ -54,6 +54,7 @@ It may not carry what came before.
   instead, so its steps say nothing twice); nothing falls back to it on
   its own. Workarounds for old
   TPMs must not change the SHA-256 path.
+- **What to run, at which depth, and what no depth covers:** `docs/TESTING.md`, "Test depths".
 - **Tests must run against the current code.** Use `-count=1` for the
   integration suite; a result marked `(cached)` has tested nothing.
 - **Tests and test runs are fast, and they wait for a state, never for a

@@ -1,5 +1,49 @@
 # Testing
 
+## Test depths
+
+Four depths. Each says what it can show; only the third and the fourth end a batch.
+
+| Depth | Command | What runs | Takes (measured) | Is it a proof? |
+|---|---|---|---|---|
+| **Fast** | `make test-all`, a project's `go test ./...` | unit and integration tests against swtpm, no VM | `make test-all` 190 s, beside the VMs | no |
+| **A single scenario** | `tools/vmtest.py --only SCENARIO`, from the snapshot `setup` | that scenario and what it needs, on real VMs | 1-5 min: the table below, plus the typed boot it starts from | never; its report says so |
+| **The proof** | `tools/proof.py` | from `fresh`, both machines in parallel: `setup`, `typed-boot`, `hibernate`, `unapproved` (Arch), `tpm-salt`, `vault-pepper`, `revoked`, `silent-tpm`; beside them `make test-all`, aSSH's tests, the vault's, safearch's `tests/run.sh` | limit 15 min; see below | yes, once per batch |
+| **`--all`** | `tools/proof.py --all`, before a release, the owner's call | the proof's scenarios and `second-typed-boot`, `V6`, `V3`, `vault-alone`, `typed-vault`, `slot-life`, `removal`, `no-tpm`, `V4-reverted`, `V9-long`, `V8`; safearch's `tests/vm.sh`, Marify's emulator test, go-uefi-slim's and tpm2-verifier's tests | about 26 min for the machines, summed from single runs: never run as one | yes, and more |
+
+Measured seconds, each scenario in the one full run so far and alone from a saved setup
+(`.local/runs/p/`), Arch / Debian:
+
+| Scenario | In the full run | Alone | Budget |
+|---|---|---|---|
+| `setup` | 194 / 206 | 167 / 188 | 170 / 190 |
+| `typed-boot` | 45 / 56 | 46 / 52 | 48 / 58 |
+| `hibernate` | 62 / 62 | 63 / 61 | 65 / 62 |
+| `unapproved` | 71 / - | 70 / - | 70 / - |
+| `tpm-salt` | 105 / 126 | 106 / 124 | 107 / 124 |
+| `vault-pepper` | 144 / 153 | 132 / 161 | 135 / 162 |
+| `revoked` | 51 / 60 | 52 / 59 | 52 / 59 |
+| `silent-tpm` | 168 / stopped at 234 | 173 / 245 | 175 / 245 |
+
+**Debian does not yet fit the limit.** The one full run stopped at 903 s of 900 in Debian's
+`silent-tpm`: with the 245 s it takes alone, Debian comes to about 909 s; Arch finished in about 840 s.
+
+After which change: `tools/test-affected.py` prints it, from the table in the workspace's AGENTS.md,
+"What to test after a change". In short: installed-system code, the fast depth; the boot, the close or
+the unlock, the fast depth and the affected scenarios; a batch ends with the proof; a release with `--all`.
+
+**What no depth covers:**
+
+- A real TPM, real firmware, a real phone or a real radio: the machines are qemu, OVMF and swtpm; the
+  phone is the emulator's, under `--all`.
+- A real update of `db` or `dbx`.
+- Debian's normal resume and Arch's V3, as things to rely on: the kernel refuses the hibernated image
+  for its memory map, and that is "not tested", no failure. Debian's `hibernate` refused it in every
+  run here, its `V4-reverted` took it once; Arch's `V3` refused it each time, its `hibernate` took it.
+- Secure Boot really on: the machines are in Setup Mode, until M2's snapshot.
+
+## What the tools are
+
 Four levels, from seconds to a whole boot:
 
 | Level | What it needs | What it shows |
