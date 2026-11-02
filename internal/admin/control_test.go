@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -342,7 +343,7 @@ func TestNoteTextEscapesMarkupAndDropsIndent(t *testing.T) {
 // not with the risk in brackets; there is no separate risks list.
 func TestControlStatusJudgement(t *testing.T) {
 	f := machineFacts{TPM: "/dev/tpmrm0", LogSHA256: true, Keys: "local key files",
-		SecureBoot: sbstate.State{Known: true, Enabled: true}, EKBy: "Infineon", Initramfs: "mkinitcpio"}
+		SecureBoot: sbstate.State{Known: true, Enabled: true}, MemoryMiB: 8192, EKBy: "Infineon", Initramfs: "mkinitcpio"}
 	f.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u"}, {Slot: 1, PCRs: "0e,7e", Fallback: true}}
 	c := &controller{facts: f}
 	got := c.factsText()
@@ -386,6 +387,15 @@ func TestControlStatusJudgement(t *testing.T) {
 		t.Errorf("the unwired hook is not marked:\n%s", got)
 	}
 	c.facts.Initramfs, c.facts.HookState = "", ""
+	c.facts.MemoryMiB = diskkey.MinMemoryMiB - 1
+	if got := c.factsText(); !strings.Contains(got, "\033[0;31m") || !strings.Contains(got, fmt.Sprintf("%d MiB (risk: the disk's key takes at least %d MiB", diskkey.MinMemoryMiB-1, diskkey.MinMemoryMiB)) {
+		t.Errorf("too little memory is not red:\n%s", got)
+	}
+	c.facts.MemoryMiB = 0
+	if got := c.factsText(); !strings.Contains(got, "Memory") || !strings.Contains(got, "not known (risk:") {
+		t.Errorf("memory not read is not red:\n%s", got)
+	}
+	c.facts.MemoryMiB = diskkey.MinMemoryMiB
 	c.facts.SecureBoot = sbstate.State{Known: true}
 	if got := c.factsText(); !strings.Contains(got, "disabled (risk: the boot loader and the kernel run unsigned") {
 		t.Errorf("disabled: %s", got)

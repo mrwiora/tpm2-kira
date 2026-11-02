@@ -583,6 +583,15 @@ class Machine:
                                  None if secure == "01" and setup == "00" else "WARNING: Secure Boot's state could not be read")
         return self._secure_boot
 
+    def check_memory(self, where, out):
+        """The process keeps nothing of Argon2id once a key is answered: the keyslot's
+        own comes next, in an initrd without swap. What it says is the log of the floor
+        (tools/LOCALVM.md, "Memory")."""
+        said = re.findall(r"answered for \S+ \(\d+ bytes\); memory: heap (\d+) MiB, resident (\d+) MiB, peak (\d+) MiB", out)
+        self.log.say(f"{where}: {said}")
+        self.check(f"{where}: the key answered, Argon2id's memory given back (heap and resident below 256 MiB, the peak one derivation's)",
+                   bool(said) and all(int(h) < 256 and int(r) < 256 and int(p) < 1536 for h, r, p in said), f"{said}: " + out[-300:])
+
     def check_secure_boot(self, where, out, least=1, most=1):
         """where says the state, plainly, between least and most times."""
         want = self.secure_boot_warning()
@@ -974,6 +983,7 @@ class Machine:
         self.check(f"boot {n}: run closed the boot when the code screen was over", "the boot is closed (PCR 15)" in out, out[-500:])
         self.check_secure_boot(f"boot {n}: the boot's log", out)
         self.check(f"boot {n}: the key was answered", re.search(r"unlock: answered for", out) is not None, out[-500:])
+        self.check_memory(f"boot {n}", out)
         self.check(f"boot {n}: the machine-id was released before the network (slot 0's policy held)",
                    "the machine-id is released" in out, out[-500:])
         # aSSH gives the unprivileged half a uid of its own from its range
@@ -1230,6 +1240,7 @@ class Machine:
         rc, out = self.run(log + " 2>&1", save="boot-vault-pepper-tpm2-kira.log")
         self.check("the wrong pepper did not fit the slot's pepper check", "does not fit this keyslot" in out, out[-600:])
         self.check("with the right pepper the key was made and answered", "released; the key is made" in out and "unlock: answered for" in out, out[-600:])
+        self.check_memory("the pepper's boot, two derivations", out)
         out = vault.admin("audit")
         self.log.save("vault-audit-pepper.log", out)
         self.check("the vault's audit: released with a pepper, the pepper itself nowhere",
@@ -1493,6 +1504,7 @@ class Machine:
         try:
             text = pick(r"Signing key and TOTP codes")
             self.check("control: step 2 shows the moved channel", "phone channel" in text, text[-1200:])
+            self.check("control: step 2 judges the machine's memory", re.search(r"Memory\s+\d+ MiB", re.sub(r"\x1b\[[0-9;]*m", "", text)) is not None, text[-1200:])
             self.check_control_secure_boot("control step 2", text, {"Setup Mode": "Setup Mode (risk: any root user", "off": "disabled (risk: the boot loader", "could": "state unknown,"}, s)
             text = pick(r"Slot \d+'s phone channel")
             text, _ = s.expect(r"Seal slot \d+'s phone channel to the next boot's PCR 7\?.*\[y/N\] ?$", 60)

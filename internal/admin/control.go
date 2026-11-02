@@ -78,6 +78,9 @@ type machineFacts struct {
 	EKNote     string // why none does
 	EKUnknown  bool   // the EK root store has no root of the TPM's vendor yet: a risk, not untrusted
 	SecureBoot sbstate.State
+	// MemoryMiB is the machine's RAM as its kernel counts it, 0 when it could
+	// not be read; below diskkey.MinMemoryMiB the boot's derivation may not fit.
+	MemoryMiB  uint64
 	Initramfs  string // mkinitcpio, initramfs-tools, or ""
 	HookState  string // why the boot integration would not run; "" when wired
 	Rebuild    string // mkinitcpio: why the image still lacks the hook; "" when it carries it
@@ -194,6 +197,7 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 		f.PINStored, f.PINLoose = !loose, loose
 	}
 	f.SecureBoot = sbstate.Read()
+	f.MemoryMiB = diskkey.MemTotalMiB()
 	if f.TPMErr == "" {
 		f.EKBy, f.EKNote, f.EKUnknown = ekVerdict(tpmPath, debug)
 	}
@@ -748,6 +752,9 @@ func amber(s string) string { return "\033[0;33m" + s + "\033[0m" }
 // factsText is "What this machine has", one line per fact, each marked
 // green when it is as it should be and red with the risk in brackets
 // when it is not.
+// memoryNeed is the floor, as the memory lines say it.
+func memoryNeed() string { return fmt.Sprintf("at least %d MiB", diskkey.MinMemoryMiB) }
+
 func (c *controller) factsText() string {
 	f := &c.facts
 	var w strings.Builder
@@ -784,6 +791,14 @@ func (c *controller) factsText() string {
 		fmt.Fprintf(&w, "  Secure Boot %s\n", good("enabled"))
 	default:
 		fmt.Fprintf(&w, "  Secure Boot %s\n", bad("disabled (risk: the boot loader and the kernel run unsigned, and PCR 7 records only that)"))
+	}
+	switch {
+	case f.MemoryMiB == 0:
+		fmt.Fprintf(&w, "  Memory      %s\n", bad(fmt.Sprintf("not known (risk: the disk's key takes %s at boot, in an initrd without swap)", memoryNeed())))
+	case f.MemoryMiB < diskkey.MinMemoryMiB:
+		fmt.Fprintf(&w, "  Memory      %s\n", bad(fmt.Sprintf("%d MiB (risk: the disk's key takes %s at boot, in an initrd without swap: the kernel kills what does not fit, and only the passphrase by hand may still work)", f.MemoryMiB, memoryNeed())))
+	default:
+		fmt.Fprintf(&w, "  Memory      %s\n", good(fmt.Sprintf("%d MiB, the boot's Argon2id needs %d", f.MemoryMiB, diskkey.MinMemoryMiB)))
 	}
 	fmt.Fprintf(&w, "  Boot        %s: PCRs %s\n", f.PCRsWhy, f.PCRs)
 	if f.TPMErr == "" {

@@ -3,6 +3,8 @@ package diskkey
 import (
 	"encoding/base64"
 	"errors"
+	"runtime/debug"
+	"sync"
 
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 
@@ -31,15 +33,31 @@ const combineKeyLength = 64
 
 var errCombineEmpty = errors.New("the password and the salt must both be non-empty")
 
+// idKey is Argon2id; TestCombinesDoNotOverlap counts its callers.
+var idKey = argon2.IDKey
+
+// combining holds a derivation: two of them at once would need twice the memory
+// (a typed key beside the vault's), and the machine's floor (MinMemoryMiB) counts one.
+var combining sync.Mutex
+
 // Combine derives the LUKS key: the Argon2id output, base64 without
 // padding, followed by one newline - the newline is part of the key. Empty input is refused, not hashed.
 // The caller wipes the result.
+//
+// Argon2id's memory goes back to the kernel before Combine returns: the Go runtime
+// would keep it, the keyslot's own Argon2id comes on top, and an initrd has no swap
+// (docs/DISK-KEY.md, "Memory"). x/crypto does not wipe that memory and gives no way
+// to; whether it is the runtime's or the kernel's free page changes nothing for
+// whoever reads the machine's RAM, and the kernel hands it out zeroed.
 func Combine(password, salt []byte) ([]byte, error) {
 	if len(password) == 0 || len(salt) == 0 {
 		return nil, errCombineEmpty
 	}
-	hash := argon2.IDKey(password, salt, combineIterations, combineMemoryKiB, combineParallelism, combineKeyLength)
+	combining.Lock()
+	defer combining.Unlock()
+	hash := idKey(password, salt, combineIterations, combineMemoryKiB, combineParallelism, combineKeyLength)
 	defer wipe.Bytes(hash)
+	debug.FreeOSMemory()
 	out := make([]byte, base64.RawStdEncoding.EncodedLen(len(hash))+1)
 	base64.RawStdEncoding.Encode(out, hash)
 	out[len(out)-1] = '\n'
