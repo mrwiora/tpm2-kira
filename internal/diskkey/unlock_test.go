@@ -863,3 +863,28 @@ func TestPassphraseBufferUnlockedGoesOn(t *testing.T) {
 		t.Errorf("said %d times: %q", n, said.String())
 	}
 }
+
+// A vault that gives no key: the typed recipe after it, and the note says why. The
+// VM shows the salt in this TPM after a revoked vault; here the recovery recipe.
+func TestDiskKeyAfterARefusingVault(t *testing.T) {
+	cheapCombine(t)
+	refused := errors.New("the device is revoked")
+	var notes []string
+	ask := func(_, what, note string) ([]byte, error) {
+		notes = append(notes, what+": "+note)
+		return []byte("typed " + what), nil
+	}
+	key, err := DiskKey(func(string, Recipe) []byte { return nil },
+		func(string) ([]byte, error) { return nil, refused },
+		recipeOf(RecipeUnattendedVaultPepper, RecipeRecovery), ask)("cryptroot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := derive([]byte("typed Password"), []byte("typed Salt"))
+	if !bytes.Equal(key, want) {
+		t.Fatal("not the recovery recipe's key")
+	}
+	if len(notes) != 2 || !strings.Contains(notes[0], "no key from the vault") || !strings.Contains(notes[0], "revoked") {
+		t.Fatalf("what was asked: %q", notes)
+	}
+}

@@ -111,8 +111,9 @@ class Hib:
         """What this test adds to the setup: before control, whose image is resumed."""
         m = self.m
         m.head("hibernation: tools and swap")
-        install = ("pacman -S --noconfirm --needed tpm2-tools btrfs-progs" if self.distro == "arch" else
-                   "DEBIAN_FRONTEND=noninteractive apt-get install -y tpm2-tools")
+        # Nothing that wakes a hook: btrfs-progs alone would build the image, which control does.
+        install = ("pacman -S --noconfirm --needed tpm2-tools" if self.distro == "arch" else
+                   "rm -f /var/lib/man-db/auto-update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tpm2-tools")
         rc, out = self.run(install + " 2>&1", save="tpm2-tools.log")
         self.check("setup: tpm2-tools in the guest (the probe of PCR 15 and the TPM's clock)", rc == 0, out[-300:])
         m.t.copy_to(self.probe, "/tmp/assh")
@@ -121,9 +122,9 @@ class Hib:
         if self.distro == "arch":
             # A swap file on the encrypted root; systemd records it in
             # HibernateLocation, which its initrd resumes from.
-            rc, out = self.run("set -e; fs=$(findmnt -no FSTYPE /); "
-                               "if [ \"$fs\" = btrfs ]; then btrfs filesystem mkswapfile --size 6g /swapfile; "
-                               "else fallocate -l 6G /swapfile; chmod 600 /swapfile; mkswap /swapfile; fi; "
+            rc, out = self.run("set -e; touch /swapfile; chmod 600 /swapfile; "
+                               "if [ \"$(findmnt -no FSTYPE /)\" = btrfs ]; then chattr +C /swapfile; fi; "
+                               "fallocate -l 6G /swapfile; mkswap /swapfile; "
                                "swapon /swapfile; cat /proc/swaps", save="swap.log")
         else:
             # The encrypted swap volume, as the resume device of the image.
@@ -486,6 +487,14 @@ class Hib:
         self.check(f"{tag}: the reboot is counted", "KIRAcloseReboot" in out, out)
         self.check(f"{tag}: status says it in red", "did not answer" in out, out)
 
+    def one_wait(self, text, what, first, then, most):
+        """The kernel's stamps on what the boot's steps said at the console: then came at most
+        most seconds after first, so it did not wait again."""
+        stamp = lambda word: next((float(x) for x in re.findall(r"\[\s*([\d.]+)\][^\n]*?" + word, text)), None)
+        a, b = stamp(first), stamp(then)
+        self.m.log.say(f"{what}: {first} at {a} s, {then} at {b} s")
+        self.check(what, a is not None and b is not None and b - a <= most, f"{a}, {b}: " + text[-800:])
+
     def silent_tpm_arch(self, before):
         m, lv = self.m, self.lv
         words = SILENT_WORDS
@@ -494,6 +503,8 @@ class Hib:
         m.log.save("V4-silent-first-console.log", text)
         self.check("V4 step 6: one hard reboot, for a TPM the firmware measured into", "rebooting once" in text and again, text[-800:])
         self.check("V4 step 6: no shell on the way", "maintenance" not in text and "emergency mode" not in text.lower(), text[-800:])
+        self.one_wait(text, "V4 step 6: one wait: run does not wait after machine-id", "the machine-id is not released", "did not appear; no code", 2)
+        self.one_wait(text, "V4 step 6: one wait: the close ends the boot's 30 s, from machine-id's first wait", "the machine-id is not released", "rebooting once", 27)
         # The firmware of the second boot: it would not be edited, and have its
         # driver. The second boot is one edited.
         lv.kill()
@@ -504,6 +515,7 @@ class Hib:
         text = lv.serial_text(since)
         m.log.save("V4-silent-second-console.log", text)
         self.check("V4 step 6: the second time: no reboot, the passphrase", "the TPM does not answer" in text and not RESTART.search(text, text.find("Password for disk")), text[-800:])
+        self.one_wait(text, "V4 step 6: the second time the close does not wait", "did not appear; no code", "the TPM does not answer", 3)
         self.after_silent("V4 step 6", before["boot"])
 
     def silent_tpm_debian(self):

@@ -111,10 +111,10 @@ SCENARIOS = (
     Scenario("debian-resume", distro="debian", hib=True),
     Scenario("V3", distro="arch", hib=True),
     Scenario("unapproved", budget(71, None), distro="arch"),
-    Scenario("tpm-salt", budget(107, 126)),
     Scenario("second-typed-boot"),
+    Scenario("tpm-salt", budget(30, 35)),
     Scenario("vault-pepper", budget(144, 162), vault=True),
-    Scenario("revoked", budget(52, 60), needs=("vault-pepper",), vault=True),
+    Scenario("revoked", budget(55, 65), needs=("tpm-salt", "vault-pepper"), vault=True),
     Scenario("vault-alone", needs=("vault-pepper",), vault=True),
     Scenario("typed-vault", needs=("vault-pepper",), vault=True),
     Scenario("slot-life"),
@@ -137,11 +137,12 @@ def scenarios_of(only=None, everything=False):
     from the typed boot), --all, or the proof's."""
     if only is None:
         return [s.name for s in SCENARIOS if everything or s.budget]
-    wanted = set(only)
-    for name in only:
-        if name != SETUP:
-            wanted.add(ALWAYS)
-        wanted.update(scenario(name).needs)
+    wanted, todo = set(), list(only)
+    while todo:
+        name = todo.pop()
+        if name not in wanted:
+            wanted.add(name)
+            todo += list(scenario(name).needs) + ([ALWAYS] if name != SETUP else [])
     return [s.name for s in SCENARIOS if s.name in wanted]
 
 
@@ -566,9 +567,10 @@ class Machine:
         self.timing = Timing(name, self.log.say)
         self.notes = []  # the report's first lines: what kind of run this was
         self.fast_kdf = False
-        self.hib = None  # the hibernation steps (tools/hibernatetest.py), on tools/localvm.py's machines
+        self.hib = None  # the hibernation steps (tools/hibernatetest.py), on tools/localvm.py's machines; set when a run has one
         self.resumed = False  # V2's resume ran, and no boot since
         self.done = []  # a scenario's name, budget, seconds and result: scenarios.json
+        self.tpm_salt_keyslot = None  # the salt in this TPM's keyslot, while enrolled
         self.vault_keyslot = None  # the vault's keyslot now
         self.vault_device = None  # the name the vault knows this machine's device by now
 
@@ -1224,6 +1226,7 @@ class Machine:
                            f"mkinitcpio -P 2>&1 | tail -3; mv /root/sd-tpm2-kira.off {hook}", save="unapproved-rebuild.log")
         self.check("unapproved: the hook did not approve it", "approv" not in out, out[-400:])
         self.check("unapproved: an image built without the hook's approval", rc == 0, out[-400:])
+        self.lap("the image built (mkinitcpio -P, without the hook)")
         self.warm_reboot()
         if not self.check("unapproved: the boot SSH server answers", self.wait_port(SSH_PORT, True, 300)):
             raise Fail("no boot SSH server on the unapproved image")
@@ -1318,11 +1321,12 @@ class Machine:
         self.check("the key was answered", "unlock: answered for" in out, out[-600:])
 
     def revoked(self):
-        """Revoked: no release; the typed keyslot is the fallback, over SSH. The boot after the
-        pepper's with no image built and nothing approved in between: the second real boot of one
-        approval, so boot 2's checks run on it."""
+        """The boot after the pepper's, with no image built and nothing approved in between: the
+        second real boot of one approval, so boot 2's checks run on it. Its device revoked: no
+        release, and what follows the vault in the recipes' order takes over, over SSH: the salt in
+        this TPM, opened while the code screen holds, the password alone typed. That keyslot goes after."""
         vault = self.vault_of_run
-        self.head("a boot with the device revoked on the vault (boot 2)")
+        self.head("a boot with the device revoked on the vault and the salt in this TPM (boot 2)")
         vault.admin("device", "revoke", self.vault_device)
         console_from = self.console_mark()
         self.warm_reboot()
@@ -1332,15 +1336,18 @@ class Machine:
         s = self.boot_session("revoked")
         try:
             text = self.code_screen(2, s, console_from, 120)
-            self.check("revoked: the screen names the fallback", "the password and salt prompt if the vault gives no key" in text, text[-400:])
+            self.check("revoked: the screen names the fallback", "the password prompt if the vault gives no key" in text, text[-400:])
+            self.check("TPM salt: the screen names the password prompt", "continue to the password prompt" in text, text[-300:])
             s.send("\r")
-            text, _ = s.expect(r"Password for disk \S+: ?$", 300)
-            self.check("revoked: tpm2-kira says the vault gave no key and asks the typed keyslot", "no key from the vault" in text and "revoked" in text, text[-500:])
-            s.send(TEST_PASSWORD + "\r")
-            s.expect(r"Salt for disk \S+: ?$", 60); s.send(TEST_SALT + "\r")
-            self.lap("the prompts")
+            text, _ = s.expect(r"(Password|Salt) for disk \S+: ?$", 300)
+            self.check("revoked: tpm2-kira says the vault gave no key and asks the keyslot after it", "no key from the vault" in text and "revoked" in text, text[-500:])
+            self.check("TPM salt: the password is asked with the salt this TPM opened", "Password for disk" in text.split("\n")[-1] and "the salt this TPM opened" in text, text[-500:])
+            if "Salt for disk" in text.split("\n")[-1]:
+                raise Fail("asked for a typed salt: " + text[-300:])
+            s.send(TPM_SALT_PASSWORD + "\r")
+            self.lap("the prompt")
             rest = s.wait_end(600)
-            self.lap("salt typed to the initrd's end (Argon2id, the keyslot)")
+            self.lap("password typed to the initrd's end (Argon2id, the keyslot)")
             self.check("boot 2: the session ends with the server's last line ('The machine boots; ...')",
                        "The machine boots; the SSH server stops." in rest, rest[-300:])
         except Fail as e:
@@ -1349,13 +1356,17 @@ class Machine:
         finally:
             s.close()
         up = self.wait_port(22, True, 300)
-        self.check("revoked: the disk unlocks with the password and the salt", up)
+        self.check("TPM salt: the disk unlocks with the password alone", up)
         self.check("boot 2: the system comes up (ssh)", up)
+        if not up:
+            raise Fail("the revoked boot did not come up")
         self.lap("the initrd's end to ssh")
         got = self.after_boot(2)
         out = got["log"]
-        self.check("revoked: the vault refused, the key was answered from the typed keyslot", "the device is revoked" in out and "unlock: answered for" in out, out[-600:])
+        self.check("revoked: the vault refused, the key was answered from the keyslot after it", "the device is revoked" in out and "unlock: answered for" in out, out[-600:])
+        self.check("TPM salt: opened while the code screen held, the key answered", "tpm salt: slot 0: opened" in out and "unlock: answered for" in out, out[-600:])
         vault.admin("device", "unrevoke", self.vault_device)
+        self.tpm_salt_removed()
 
     PEPPER = "vmtest pepper 7f3a"
 
@@ -1391,6 +1402,8 @@ class Machine:
         self.check("the vault's device needs a pepper and waits for approvals", "pepper:          yes" in out and "approve" in out, out[-400:])
         out = self.rebuild()
         self.check("the image is rebuilt with the vault in its plan", re.search(r"Vault:\s+in", out) is not None, out[-800:])
+        if self.tpm_salt_keyslot:
+            self.tpm_salt_in_image(out)
 
         self.head("a boot approved with a wrong pepper, then the right one")
         self.run("systemctl reboot")
@@ -1469,10 +1482,8 @@ class Machine:
         return out
 
     def tpm_salt(self):
-        """The salt in this TPM (0x1200): enrolled, named by luks status and
-        luksDump, the image's plan takes the part; a boot asks the password
-        alone - the TPM opened the salt while the code screen held; the
-        keyslot removed again."""
+        """The salt in this TPM (0x1200): enrolled, named by luks status and luksDump. The image
+        that takes it is vault-pepper's, its boot the revoked one, where it goes again."""
         self.head("the salt in this TPM (0x1200)")
         swap = self.swap_counts()
         s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt tpm", "luks-enrol-tpm-salt")
@@ -1481,7 +1492,7 @@ class Machine:
             s.expect(r"The same password again: ?$", 60); s.send(TPM_SALT_PASSWORD + "\n")
             s.expect(r"to authorise: ?$", 600); s.send(self.luks_pass + "\n")
             _, m = s.expect(r"keyslot (\d+) added: tpm2-kira, 0x1200 ", 300)
-            keyslot = m.group(1)
+            self.tpm_salt_keyslot = m.group(1)
             s.wait_end(120)
             self.check("luks enrol --salt tpm: a keyslot of recipe 0x1200", True)
             self.check_no_swap(swap, "the TPM salt enrolment's Argon2id")
@@ -1496,30 +1507,21 @@ class Machine:
         self.check("luksDump names it too (token type tpm2-kira-1200)", "tpm2-kira-1200" in out, out[-500:])
         rc, out = self.run("tpm2-kira status --json 2>&1", save="status-tpm-salt.json")
         self.check("status: slot 0 holds a TPM salt", '"tpm_salt": true' in out, out[-400:])
-        out = self.rebuild()
+
+    def tpm_salt_in_image(self, out):
+        """What a rebuild with the salt in this TPM enrolled says."""
         self.check("the image is rebuilt with the TPM salt in its plan", re.search(r"TPM salt:\s+in", out) is not None, out[-800:])
         # The image's hook says it, once per image built; its approval does not again.
         images = out.count("Starting build:") if self.distro == "arch" else 1
         n = len(re.findall(r"Secure Boot (is|'s state)", out))
         self.check(f"the image's hook says Secure Boot's state once per image built ({images})", n == images if self.secure_boot_warning() else n == 0, out[-800:])
 
-        self.head("a boot with the salt in this TPM")
-        s, _ = self.typed_boot("TPM salt", "this TPM opened")
-        try:
-            s.send(TPM_SALT_PASSWORD + "\r")
-            s.wait_end(600)
-        finally:
-            s.close()
-        up = self.wait_port(22, True, 300)
-        if not self.check("TPM salt: the disk unlocks with the password alone", up):
-            raise Fail("the TPM salt's boot did not come up")
-        self.booted("TPM salt")
-        out = self.boot_log("boot-tpm-salt-tpm2-kira.log")
-        self.check("TPM salt: opened while the code screen held, the key answered", "tpm salt: slot 0: opened" in out and "unlock: answered for" in out, out[-600:])
-        out = self.luks_remove(keyslot, "luks-remove-tpm-salt")
+    def tpm_salt_removed(self):
+        out = self.luks_remove(self.tpm_salt_keyslot, "luks-remove-tpm-salt")
         self.check("luks remove takes the TPM salt's keyslot", "0x1200" not in out, out[-400:])
         rc, out = self.run("tpm2-kira status --json 2>&1")
         self.check("the TPM salt went with its last keyslot", '"tpm_salt": true' not in out, out[-400:])
+        self.tpm_salt_keyslot = None
 
     def vault_typed(self):
         """The vault's salt with a typed password and a pepper (0x1401): the keyslot the vault has
@@ -2127,7 +2129,7 @@ def main():
             fixture = build_channel_fixture(run_dir)
             for m in machines:
                 m.channel_fixture = fixture
-        if local:
+        if local and (args.save_setup or args.keep_setup or any(scenario(n).hib for n in names)):
             # The steps of hibernatetest.py, in this machine and this process.
             timing.step("aSSH's command, the hibernate steps' probe")
             sys.modules.setdefault("vmtest", sys.modules[__name__])

@@ -58,10 +58,28 @@ class Limit(unittest.TestCase):
             write_scenarios(run_dir, "debian", [{"name": "revoked", "budget": 59, "seconds": 61.0, "result": "ok"}])
             parts = [sleeper("short", 0)]
             proof.run_parts(parts, run_dir, 2, time.monotonic(), limit=60)
-            text, ok = proof.report(parts, 1, [], run_dir, limit=900, proof_wall=800)
+            text, ok = proof.report(parts, 1, [], run_dir, limit=960, proof_wall=800, target=900)
             self.assertTrue(ok, text)
-            self.assertIn("over budget, within the limit: debian revoked 61 s of 59", text)
+            self.assertIn("over budget, within the target: debian revoked 61 s of 59", text)
             self.assertIn("61 / 59 OVER", text)
+
+    def test_over_the_target_within_the_limit_passes_and_names_what_went_over(self):
+        with tempfile.TemporaryDirectory() as run_dir:
+            write_scenarios(run_dir, "debian", [{"name": "revoked", "budget": 59, "seconds": 61.0, "result": "ok"}])
+            parts = [sleeper("short", 0)]
+            proof.run_parts(parts, run_dir, 2, time.monotonic(), limit=60)
+            text, ok = proof.report(parts, 1, [], run_dir, limit=960, proof_wall=930, target=900)
+            self.assertTrue(ok, text)
+            self.assertIn("OVER THE TARGET, within the limit: 930 s of 900", text)
+            self.assertIn("debian revoked 61 s of 59", text)
+
+    def test_past_the_limit_it_fails(self):
+        with tempfile.TemporaryDirectory() as run_dir:
+            parts = [sleeper("short", 0)]
+            proof.run_parts(parts, run_dir, 2, time.monotonic(), limit=60)
+            text, ok = proof.report(parts, 1, [], run_dir, limit=960, proof_wall=961, target=900)
+            self.assertFalse(ok, text)
+            self.assertIn("OVER THE LIMIT", text)
 
     def test_a_part_that_fails_fails_the_run(self):
         with tempfile.TemporaryDirectory() as run_dir:
@@ -69,6 +87,37 @@ class Limit(unittest.TestCase):
             proof.run_parts(parts, run_dir, 2, time.monotonic())
             _, ok = proof.report(parts, 1, [], run_dir)
             self.assertFalse(ok)
+
+
+class AfterTheSetups(unittest.TestCase):
+    def machines_and_tests(self):
+        machines = proof.Part("machines", ["sleep", "60"], "/", machines=True, memory=1)
+        tests = sleeper("tests", 0)
+        tests.after_setup = True
+        return machines, tests
+
+    def test_a_part_waits_for_the_setups_of_both_machines(self):
+        with tempfile.TemporaryDirectory() as run_dir:
+            machines, tests = self.machines_and_tests()
+            self.assertTrue(proof.held(tests, [machines, tests], run_dir))
+            write_scenarios(run_dir, "arch", [{"name": "setup", "budget": 1, "seconds": 1.0, "result": "ok"}])
+            write_scenarios(run_dir, "debian", [{"name": "setup", "budget": 1, "seconds": None, "result": "running"}])
+            self.assertTrue(proof.held(tests, [machines, tests], run_dir))
+            os.remove(os.path.join(run_dir, "machines", "debian", "scenarios.json"))
+            with open(os.path.join(run_dir, "machines", "debian", "scenarios.json"), "w") as f:
+                json.dump([{"name": "setup", "budget": 1, "seconds": 1.0, "result": "FAILED"}], f)
+            self.assertFalse(proof.held(tests, [machines, tests], run_dir))
+
+    def test_machines_that_end_without_a_setup_hold_nothing(self):
+        with tempfile.TemporaryDirectory() as run_dir:
+            machines, tests = self.machines_and_tests()
+            machines.ok = False
+            self.assertFalse(proof.held(tests, [machines, tests], run_dir))
+
+    def test_without_machines_nothing_is_held(self):
+        with tempfile.TemporaryDirectory() as run_dir:
+            _, tests = self.machines_and_tests()
+            self.assertFalse(proof.held(tests, [tests], run_dir))
 
 
 class Scenarios(unittest.TestCase):
@@ -81,13 +130,13 @@ class Scenarios(unittest.TestCase):
         self.assertNotIn("V3", proof_names)
 
     def test_only_takes_what_a_scenario_needs(self):
-        self.assertEqual(vmtest.scenarios_of(["revoked"]), ["typed-boot", "vault-pepper", "revoked"])
+        self.assertEqual(vmtest.scenarios_of(["revoked"]), ["typed-boot", "tpm-salt", "vault-pepper", "revoked"])
         self.assertEqual(vmtest.scenarios_of(["setup"]), ["setup"])
 
     def test_the_budgets_fit_the_limit(self):
         for distro in ("arch", "debian"):
             total = sum((s.budget or {}).get(distro) or 0 for s in vmtest.SCENARIOS if s.distro in (None, distro))
-            self.assertLessEqual(total, proof.LIMIT, distro)
+            self.assertLessEqual(total, proof.TARGET, distro)
 
     def test_a_scenario_on_one_distribution_has_a_budget_for_it_alone(self):
         for s in vmtest.SCENARIOS:

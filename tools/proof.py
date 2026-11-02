@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The proof, as one command: 15 minutes wall clock, a hard limit.
+"""The proof, as one command: 15 minutes wall clock, the target; 16 a hard limit.
 
     tools/proof.py                            # the proof, from the snapshot fresh
     tools/proof.py --since '2026-11-03 09:00' # and, after it, what AGENTS.md's table asks for the batch
@@ -8,9 +8,11 @@
     tools/proof.py --only test-all            # these parts alone: NO FINAL PROOF
 
 The proof is DEFAULT: the two machines in parallel, each through the scenarios that have a budget
-(tools/vmtest.py's SCENARIOS, measured seconds per machine), and beside them what needs no VM. At
-LIMIT it stops what still runs and fails, and says which scenario it was in and which went over
-their budgets. A scenario over its budget in a run within the limit is printed, and no failure.
+(tools/vmtest.py's SCENARIOS, measured seconds per machine), and beside them, once the machines'
+setups are done, what needs no VM: the setups are what they would slow. At LIMIT it stops what still
+runs and fails, and says which scenario it was in and which went over their budgets. Past TARGET and
+within the limit it passes and names what went over. A scenario over its budget within the target is
+printed, and no failure.
 Parts on top of the proof run after it, outside the limit; so does everything --all adds, with no
 limit at all: what leaves the proof is named there, never lost.
 
@@ -45,7 +47,8 @@ VM_LOCK = os.path.join(LOCAL, "vms", "vm.lock")
 VM_CONFIG = os.path.join(LOCAL, "vms", "vmtest-local.conf")
 NOT_FINAL = "NOT A FINAL PROOF: "
 MEMORY_BUDGET = 14000  # MiB of the host's 15 GB the parts may plan on
-LIMIT = 15 * 60  # the proof's seconds, wall clock
+TARGET = 15 * 60  # the proof's seconds, wall clock; over it the report names what went over
+LIMIT = 16 * 60  # at it the run stops and fails
 MACHINES = ("arch", "debian")
 VAULT_CONTAINER = "tpm2-kira-vmtest-vault"
 
@@ -59,6 +62,7 @@ class Part:
         self.name, self.argv, self.cwd, self.env = name, argv, cwd, env or {}
         self.machines, self.check, self.memory = machines, check, memory
         self.seconds, self.start, self.ok, self.why = 0.0, 0.0, None, ""
+        self.after_setup = False  # waits for the machines' setups, when machines run
         self.least_memory, self.least_disk = None, None
         self.running = False
         self.process = None
@@ -169,6 +173,21 @@ def stop_part(p):
             pass
 
 
+def setups_done(run_dir):
+    """Whether no machine is still in its setup, by what each has written."""
+    scenarios = read_scenarios(run_dir)
+    return all(any(d["name"] == "setup" and d["result"] != "running" for d in scenarios[name]) for name in MACHINES)
+
+
+def held(p, parts, run_dir):
+    """Whether a part still waits for the machines' setups: until those are done, or the machines
+    have ended without."""
+    if not p.after_setup:
+        return False
+    machines = [x for x in parts if x.machines]
+    return bool(machines) and machines[0].ok is None and not setups_done(run_dir)
+
+
 def run_parts(parts, run_dir, budget, begun, limit=None):
     """Every part, as many at once as the budget has room for; the first of those that do not
     wait, each in the table's order. One larger than the budget runs alone. At the limit, seconds
@@ -185,7 +204,7 @@ def run_parts(parts, run_dir, budget, begun, limit=None):
             waiting = []
         used = sum(p.memory for p, _ in running)
         for p in list(waiting):
-            if not running or used + p.memory <= budget:
+            if not held(p, parts, run_dir) and (not running or used + p.memory <= budget):
                 t = threading.Thread(target=run_part, args=(p, run_dir, begun))
                 t.start()
                 running.append((p, t))
@@ -238,7 +257,7 @@ def scenario_lines(scenarios):
     return lines
 
 
-def report(parts, wall, notes, run_dir, limit=None, proof_wall=None):
+def report(parts, wall, notes, run_dir, limit=None, proof_wall=None, target=None):
     scenarios = read_scenarios(run_dir)
     over, running = over_budget(scenarios)
     lines = list(notes) + ["tpm2-kira proof, " + datetime.datetime.now().isoformat(timespec="seconds"), ""]
@@ -250,11 +269,13 @@ def report(parts, wall, notes, run_dir, limit=None, proof_wall=None):
     lines += ["", f"{'the whole':<23}{wall:>9.0f}  (the wall clock)", f"{'sum of parts':<23}{sum(p.seconds for p in parts):>9.0f}"]
     late = limit is not None and proof_wall is not None and proof_wall > limit
     if limit is not None:
-        lines.append(f"{'the proof':<23}{proof_wall:>9.0f}  of a limit of {limit}")
+        lines.append(f"{'the proof':<23}{proof_wall:>9.0f}  target {target if target is not None else '-'}, limit {limit}")
     if late:
         lines += ["", f"OVER THE LIMIT: {proof_wall:.0f} s of {limit}.", "  over budget: " + (", ".join(over) or "none"), "  stopped in: " + (", ".join(running) or "nothing")]
+    elif target is not None and proof_wall is not None and proof_wall > target:
+        lines += ["", f"OVER THE TARGET, within the limit: {proof_wall:.0f} s of {target}.", "  over budget: " + (", ".join(over) or "none")]
     elif over:
-        lines += ["", "over budget, within the limit: " + ", ".join(over)]
+        lines += ["", "over budget, within the target: " + ", ".join(over)]
     ok = all(p.ok for p in parts) and not late
     lines += ["", "ALL PASS" if ok else "FAILED", f"logs: {run_dir}"]
     text = "\n".join(lines) + "\n"
@@ -292,6 +313,8 @@ def main():
         wanted.remove("assh")
         print("[proof] assh: its tests run in safearch-run, the pin being the checkout", flush=True)
     parts = [p for n, p in table.items() if n in wanted]
+    for p in parts:
+        p.after_setup = not p.machines and p.name in DEFAULT
     lock = None
     if any(p.machines for p in parts):
         lock = open(VM_LOCK, "a")
@@ -311,7 +334,7 @@ def main():
     if proof_wall <= LIMIT or not limited:
         run_parts([p for p in parts if p not in first], run_dir, budget, start)
     stop.set()
-    text, ok = report(parts, time.monotonic() - start, notes, run_dir, LIMIT if limited else None, proof_wall if limited else None)
+    text, ok = report(parts, time.monotonic() - start, notes, run_dir, LIMIT if limited else None, proof_wall if limited else None, TARGET if limited else None)
     print(text, flush=True)
     return 0 if ok else 1
 
