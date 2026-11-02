@@ -90,7 +90,7 @@ test machines with every step passing and no swap touched. Below it boots still 
 at 1368 MiB of MemTotal, an enrolment beginning to swap; at 1131 MiB neither holds. Each
 further volume's keyslot can run beside a derivation: the floor counts one disk. It holds
 with the lock below on: the whole VM test at that guest, the real cost, both machines, the
-boot's lock on at every answer (resident 14-20 MiB, peak 1042-1047 MiB), and a command's
+boot's lock on at every answer (resident 14-20 MiB, peak 1042-1048 MiB), and a command's
 Argon2id under a memory hog on Debian (nothing of it in swap, 126555 other pages).
 
 ### Out of swap and core files
@@ -130,7 +130,7 @@ taken stays there until touched, which is why the lock comes first.
 `VmLck` is address space, not memory: the real `luks derive` shows 1242 MiB at the start
 and 2269 MiB during Argon2id, of which 1041 MiB are resident (container, the host's
 kernel; the VM test's: the same); most of the rest is the runtime's untouched
-reservations. A boot's: 2264-2329 MiB, resident 1042-1047 at the peak. Debian's VM, 1 GiB of swap, a
+reservations. A boot's: 2264-2329 MiB, resident 1042-1048 at the peak. Debian's VM, 1 GiB of swap, a
 process filling what is free but 512 MiB, Argon2id at its real cost: without the lock
 (a probe of the same calls) 35712 kB of the process went to swap, with it 0, while
 swap took about 260000 other pages each time. The VM test checks the real command for this at every run.

@@ -3,7 +3,7 @@
 How tpm2-kira protects its secrets, where data is stored, how authentication
 works and where the trust boundaries are; then what has been tested on what,
 what is not proven, and which risks are accepted and why. It describes the code
-of branch `feat/close-pcr15` (tpm2-kira `dcc9ede`).
+of branch `feat/close-pcr15` (tpm2-kira `f0965aa`).
 
 | For | Read |
 |---|---|
@@ -1788,7 +1788,7 @@ Which key does what:
 
 ## 17. What Has Been Tested
 
-**The code:** tpm2-kira `dcc9ede` (blob 20, schema 3), vault `dcf9bda`, Marify `f8d4e61`, aSSH `78b1fac`, go-uefi-slim `8f7d9c7`. Rows at another commit say so: aSSH did not change after them.
+**The code:** tpm2-kira `f0965aa` (blob 20, schema 3; what came after it: test tools and documentation), vault `dcf9bda`, Marify `f8d4e61`, aSSH `8c18175`, safearch `f9c8745`, go-uefi-slim `8f7d9c7`. Rows at another commit say so: aSSH did not change after them.
 **Date:** 2026-11-02.
 
 **The machines:** the VMs are QEMU with OVMF and swtpm as their TPM, in Secure Boot
@@ -1801,20 +1801,22 @@ Logs: `.local/runs/` of the workspace.
 
 | Run | Code | On | Result |
 |---|---|---|---|
-| `tools/vmtest.py --target both`, from `fresh`, the machines in parallel, no `--fast-kdf` | dcc9ede | VM | Arch 202, Debian 196, 0 failed (`k/final/vmtest`) |
-| The same at a guest of 1792 MiB, the memory floor (MemTotal 1620-1635 MiB) | dcc9ede | VM | Arch 202, Debian 196, 0 failed (`k/mem/vm-1792`). Other sizes: tools/LOCALVM.md |
-| The memory lock (`sandbox.LockMemory`), a probe of the same system calls: Argon2id at the real cost, freed; against a memory hog | - | Arch VM, Debian VM | resident after freeing 8 MiB; the process's swap 35712 kB without the lock, 0 with it (`l/probe`). **The lock's own VM test and the floor with the lock on have not run: below** |
-| `sandbox.TestLockMemoryCovers` as root; the real `luks derive` at the real cost; a refused lock, `luks derive` and `run` | 082f908, aSSH 8c18175 | a container on the host's kernel | pass; `VmLck` 1242, then 2269 MiB, resident 1041 MiB, swap 0; refused: stops before it asks, `run` goes on (`l/docker`) |
-| `tools/hibernatetest.py --target both --no-build`, in parallel | dcc9ede | VM | Arch 160, Debian 149, 0 failed, with the "not tested" items in §18 (`k/final/hib`) |
+| `tools/vmtest.py --target both`, from `fresh`, the machines in parallel, no `--fast-kdf` | f0965aa | VM | Arch 211, Debian 206, 0 failed (`l/final/vmtest`) |
+| The same at a guest of 1792 MiB, the memory floor (MemTotal 1620-1635 MiB), the memory lock on | ad20b07, the same code | VM | Arch 211, Debian 206, 0 failed (`l/mem/vm-1792`). Other sizes, before the lock: tools/LOCALVM.md |
+| The memory lock under a memory hog, the real `luks derive` at the real cost, at the floor | ad20b07 | Debian VM, 1 GiB of swap | `VmLck` 1242 at the prompt, 2267 MiB during Argon2id, resident 1038 MiB; `VmSwap` 0 at every sample, 126555 other pages to swap (`l/mem/vm-1792.out`). The same calls without the lock, a probe at 4096 MiB: 35712 kB of the process in swap (`l/probe/debian-pressure.log`) |
+| The boot's lock | f0965aa | VM | every boot of the VM test: "memory locked, not dumpable", resident 14-20 MiB after a derivation, peak 1042-1048 MiB, locked 2264-2329 MiB |
+| `sandbox`'s lock tests as root | aSSH 8c18175 | Arch VM (kernel 7.2.9), Debian VM (6.12) | pass, the refusal and the whole process, also under a low limit with the capability; a user's `go test` skips the second (`l/final/sandbox-root-*.log`) |
+| A refused lock: `luks derive`, `run` | 082f908 | a VM (`luks derive` as root without `CAP_IPC_LOCK`: each VM test); a container (both) | `luks derive` stops before it asks; `run` goes on, one line (`l/docker/nocap.log`) |
+| `tools/hibernatetest.py --target both --no-build`, in parallel | f0965aa | VM | Arch 163, Debian 152, 0 failed, with the "not tested" items in §18 (`l/final/hib`) |
 | A resumed guest, `--only V2` with a wait added | 75121e2 | VM | Arch: slot 0's TOTP key refuses after the resume, same boot_id 75 s after the first login, with `ICH9-LPC.noreboot` (`g5/resume-uptime.out`) |
-| `make test-all` | dcc9ede | unit, swtpm | 1054 passed, 8 skipped, 0 failed, no `(cached)` (`k/final/test-all.log`) |
+| `make test-all` | f0965aa | unit, swtpm | 1061 passed, 8 skipped, 0 failed, no `(cached)` (`l/final/test-all.log`) |
 | A failing `tpm2.Policy` callback at go-tpm `c395998`, repeated on one open file (the probe `h2/leakprobe`) | - | Arch VM, kernel 7.2.9, swtpm behind it | `/dev/tpmrm0` and `/dev/tpm0`: the 4th is `TPM_RC_SESSION_MEMORY`. Closing the file clears `tpmrm0`; on `tpm0` the three sessions stay (`h2/probe.log`). tpm2-kira's sessions are explicit now (`TestFailuresLeaveNoSession`) |
-| aSSH `go test ./...` | 78b1fac | unit, swtpm | 81 passed, 0 failed (`g5/assh.log`) |
+| aSSH `go test ./...` | 8c18175 | unit, swtpm | 89 passed, 1 skipped (the lock as root: on the VMs, above), 0 failed (`l/final/assh.log`) |
 | go-uefi-slim `go test ./...` | 8f7d9c7 | unit | 46 passed, 1 skipped, 0 failed (`g5/go-uefi-slim.log`); `uki`'s three fuzz targets 40 s each (`g3/fuzz.log`) |
 | tpm2-kira-vault's tests | dcf9bda, at the pin c81ea61 | its suite, with and without go.work | all pass |
-| safearch `tests/run.sh` | 8aac900 | stubs | 335 passed, 0 failed, 1 skipped (`g5/safearch-run.log`) |
+| safearch `tests/run.sh` | f9c8745 | stubs | 335 passed, 0 failed, 1 skipped (`l/final/safearch-run.log`) |
 | Marify `android/scripts/test-emulator.sh` | f8d4e61, core c81ea61 | JVM, emulator, swtpm | 59, 46, 8 passed, 0 failed, ALL PASS (`k/marify-emulator.out`; an 8 GiB data partition, `/` had 11 GB free) |
-| safearch `tests/vm.sh` | eea5e9a (aSSH's behaviour has not changed since: PCR signatures moved to go-uefi-slim's `uki`) | VM (a fresh build, swtpm) | 96 passed, 0 failed (`safearch-vm-eea5e9a.log`, `mkosi.test/vm/run-20261101-223352`). Not run again |
+| safearch `tests/vm.sh` | f9c8745, aSSH 8c18175 | VM (a fresh build, swtpm) | ? passed, 0 failed (`l/final/safearch-vm.log`, `mkosi.test/vm/run-20261102-171448`) |
 
 ### 17.2 On the VMs
 
@@ -1891,6 +1893,22 @@ Secure Boot state (`sbstate.Read`), judges it in `control` and `status`, says it
 and uses go-uefi-slim for EFI variables and PCR 4's Authenticode hashes. On Arch the UKI's
 db signature comes from outside, from sbctl or whatever the owner runs; tpm2-kira neither
 makes nor checks it.
+
+**WARNING, what still can reach swap.** `sandbox.LockMemory` covers what holds a
+passphrase, a salt or a derived key (DISK-KEY.md, "Memory"), and aSSH's PIN and lockout
+authorization. Not covered, open for the owner: `assh agent` and `serve` hold host keys'
+authorization values, not dumpable but not locked, on an installed system with swap, against
+"no secret of a host key is stored"; `slot add`, `slot approve` and `setup` handle a TOTP
+key, a signing key file or a YubiKey's PIN unlocked.
+
+**What the memory lock does not show.** A boot with its lock refused: only `run` in a
+container, not a real boot. `MCL_ONFAULT` is what lets Go give locked memory back, through a
+fallback of the runtime's (mapping over what `MADV_DONTNEED` refuses), which a Go release
+could change: `sandbox`'s test as root and the VM test's resident check would show it, a
+user's `go test` does not. A hibernation image holds locked memory too. `ssh-child` has a
+prompt's answer in its buffers in passing, unlocked; it runs only in an initrd, without swap.
+A machine too small for the 1 GiB has the derivation killed, after the password was typed:
+the floor is measured, no early check says so. A 1 GiB keyslot at the floor stays unmeasured (K1).
 
 **What stays of the channel's secrets.** A record stays readable without root
 (`go-uefi-slim/efivar` creates variables mode 0644, seen on the development host's

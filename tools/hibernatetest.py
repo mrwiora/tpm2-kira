@@ -715,7 +715,8 @@ def main():
     vcfg.read(os.path.join(LOCAL, "vms", "vmtest-local.conf"))
     lcfg = configparser.ConfigParser()
     lcfg.read(args.localvm_config)
-    run_dir = args.run_dir or os.path.join(LOCAL, "runs", "hibernatetest-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    # Absolute: the probe is built from another directory, and copied from this one.
+    run_dir = os.path.abspath(args.run_dir or os.path.join(LOCAL, "runs", "hibernatetest-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")))
     os.makedirs(run_dir, exist_ok=True)
     names = ["arch", "debian"] if args.target == "both" else [args.target]
     if not args.no_build:
@@ -767,13 +768,20 @@ def main():
             print("\n".join(problems), file=sys.stderr)
             return 2
         print(vmtest.FROM_SETUP_NOTE, flush=True)
+    def machine(h, run):
+        """A machine's thread: what ends it (acceptance's SystemExit, which a thread drops
+        without a word) is its result."""
+        try:
+            results[h.m.name] = run()
+        except SystemExit as e:
+            results[h.m.name] = (False, f"{h.m.name}: {e}")
     if args.only:
         steps = args.only.split(",")
-        threads = [threading.Thread(target=lambda h=h: results.__setitem__(h.m.name, h.only(steps))) for h, _ in hs]
+        threads = [threading.Thread(target=machine, args=(h, lambda h=h: h.only(steps))) for h, _ in hs]
     elif args.from_setup:
-        threads = [threading.Thread(target=lambda h=h: results.__setitem__(h.m.name, h.from_setup())) for h, _ in hs]
+        threads = [threading.Thread(target=machine, args=(h, h.from_setup)) for h, _ in hs]
     else:
-        threads = [threading.Thread(target=lambda h=h, r=r: results.__setitem__(h.m.name, h.all(packages[h.m.name], r, args.save_setup))) for h, r in hs]
+        threads = [threading.Thread(target=machine, args=(h, lambda h=h, r=r: h.all(packages[h.m.name], r, args.save_setup))) for h, r in hs]
     for t in threads:
         t.start()
     for t in threads:

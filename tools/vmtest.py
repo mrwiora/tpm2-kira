@@ -32,6 +32,9 @@ What it does, each step a check in the report:
      luks status, initramfs plan, help
   4. luks enrol --salt typed, the recovery recipe 0x1100 (a password, a
      salt, the passphrase)
+     the memory of a command that holds a passphrase: a refused lock stops it
+     before it asks; VmLck at the prompt; VmSwap during Argon2id, with swap and
+     at the real cost under a memory hog
   5. control, as a person would answer it (ACCESSIBLE=1, line by line):
      the boot chain's adoptions, the boot image's network (DHCP), the SSH
      server at boot with its SSH CA, debug at boot, the image rebuilt; the
