@@ -229,7 +229,18 @@ What is left is mostly the machines and the product:
    enrolled again with a pepper, a boot approved over the operator
    interface first with a wrong pepper, then with the right one.
 10. **A slot's life:** `slot approve`, `slot add --nvram 2`, `slot delete`
-    (blob and generation index gone).
+    (blob and generation index gone). Between them slot 2 gets a phone channel
+    sealed to a PCR 7 of another day (`channel-fixture`: `go test -c -tags
+    kira_vm_fixture ./internal/admin`, on the machine for the run, never in a package;
+    no VM has a phone, and a register extended by hand moves nothing here, since the next
+    boot's value comes from the event log). The real hook scripts, `--if-moved` and a run with
+    no terminal leave it and say so with old, new and the event log's names; no at a
+    terminal leaves it; yes and `control`'s line seal it. A gate refusing it is
+    `TestChannelFollowsPCR7`'s, with PCR 7 extended by hand on swtpm.
+    Throughout, Secure Boot's warning, from the machine's own variables (the
+    fresh VMs are in Setup Mode): once in `slot add`, `slot approve` and `status`,
+    per image in the hook's output, red in `control`'s two steps, and at each boot on
+    the console (the serial log), in the SSH session and in the boot's log.
 11. **Removal:** `control` switches the SSH server off and asks before it
     removes the SSH CA - No keeps the EFI variable and `ssh_ca.pub`;
     `slot delete --yes` then takes everything of tpm2-kira: no index of
