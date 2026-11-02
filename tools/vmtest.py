@@ -613,10 +613,12 @@ class Machine:
         """The process keeps nothing of Argon2id once a key is answered: the keyslot's
         own comes next, in an initrd without swap. What it says is the log of the floor
         (tools/LOCALVM.md, "Memory")."""
-        said = re.findall(r"answered for \S+ \(\d+ bytes\); memory: heap (\d+) MiB, resident (\d+) MiB, peak (\d+) MiB", out)
+        said = re.findall(r"answered for \S+ \(\d+ bytes\); memory: heap (\d+) MiB, resident (\d+) MiB, peak (\d+) MiB, locked (\d+) MiB", out)
         self.log.say(f"{where}: {said}")
+        self.check(f"{where}: run locked its memory and said so, once; the lock is on when the key is answered",
+                   out.count("memory locked, not dumpable") == 1 and bool(said) and all(int(l) > 0 for _, _, _, l in said), f"{said}: " + out[-300:])
         self.check(f"{where}: the key answered, Argon2id's memory given back (heap and resident below 256 MiB, the peak one derivation's)",
-                   bool(said) and all(int(h) < 256 and int(r) < 256 and int(p) < 1536 for h, r, p in said), f"{said}: " + out[-300:])
+                   bool(said) and all(int(h) < 256 and int(r) < 256 and int(p) < 1536 for h, r, p, _ in said), f"{said}: " + out[-300:])
 
     def check_secure_boot(self, where, out, least=1, most=1):
         """where says the state, plainly, between least and most times."""
@@ -702,6 +704,78 @@ class Machine:
         after = self.swap_counts()
         self.log.say(f"swap around {what}: {before} -> {after}")
         self.check(f"{what} touched no swap (/proc/vmstat)", before.get("pswpout") == after.get("pswpout") and before.get("pswpin") == after.get("pswpin"), f"{before} -> {after}")
+
+    def command_status(self):
+        """/proc/PID/status of the running tpm2-kira command, in KiB; empty when it is gone."""
+        rc, out = self.run("cat /proc/$(pgrep -xn tpm2-kira)/status 2>/dev/null")
+        return {k: int(v) for k, v in re.findall(r"^(Vm\w+):\s+(\d+) kB", out, re.M)}
+
+    def check_memory_lock(self):
+        """A command that holds a passphrase: what a refused lock does, what is locked,
+        and on a machine with swap, at Argon2id's real cost and under memory pressure,
+        that nothing of it goes there while other processes' pages do."""
+        self.head("the memory of a command that holds a passphrase")
+        key = "/run/tpm2-kira-lock-test.key"
+        rc, out = self.run(f"prlimit --memlock=65536:65536 setpriv --bounding-set=-ipc_lock --inh-caps=-ipc_lock tpm2-kira luks derive --out {key} </dev/null 2>&1", save="lock-refused.log")
+        self.check("a limit on locked memory without CAP_IPC_LOCK stops the command before it asks",
+                   "FAILED: nothing was asked" in out and "RLIMIT_MEMLOCK" in out and "Password" not in out, out[-400:])
+        swap = self.swap_counts()
+        pressure = int(swap.get("SwapTotal:", "0")) > 0 and not self.fast_kdf
+        hog = None
+        s = self.session(f"sudo tpm2-kira luks derive --out {key}", "luks-derive")
+        try:
+            s.expect(r"^Password: ?$", 60)
+            st = self.command_status()
+            self.log.say(f"at the prompt: {st}")
+            self.check("at the prompt the whole process is locked (VmLck, VmSize), nothing of it resident beyond what it touched",
+                       st.get("VmLck", 0) * 10 >= st.get("VmSize", 1) * 9 and st.get("VmRSS", 1 << 30) < 128 << 10, str(st))
+            if pressure:
+                # All that is free but 512 MiB: Argon2id's 1 GiB then pushes out what can go.
+                avail = int(self.run("awk '/^MemAvailable/{print int($2/1024)}' /proc/meminfo", root=False)[1].strip())
+                n = avail - 512
+                rc, out = self.run(f"""nohup perl -e '$x = "x"; $x x= {n} * 1048576; sleep 900' >/dev/null 2>&1 & echo $!""", root=False)
+                hog = int(out.strip().splitlines()[-1])
+                deadline = time.time() + 120
+                while int(self.run(f"awk '/^VmRSS/{{print $2}}' /proc/{hog}/status 2>/dev/null || echo 0", root=False)[1].strip() or 0) < (n - 16) << 10:
+                    if time.time() > deadline:
+                        raise Fail(f"the memory hog of {n} MiB did not fill")
+                    time.sleep(0.5)
+            s.send(TEST_PASSWORD + "\n")
+            s.expect(r"The same password again: ?$"); s.send(TEST_PASSWORD + "\n")
+            s.expect(r"Salt \(asked for at boot the same way\): ?$"); s.send(TEST_SALT + "\n")
+            samples, deadline = [], time.time() + 900
+            while True:
+                try:
+                    s.expect(r"Key written to", 1)
+                    break
+                except Fail:
+                    if s.closed or time.time() > deadline:
+                        raise
+                st = self.command_status()
+                if st:
+                    samples.append(st)
+            peak = max((x.get("VmRSS", 0) for x in samples), default=0)
+            locked = max((x.get("VmLck", 0) for x in samples), default=0)
+            swapped = max((x.get("VmSwap", 0) for x in samples), default=-1)
+            self.log.say(f"during Argon2id: {len(samples)} samples, resident {peak >> 10} MiB, locked {locked >> 10} MiB, in swap {swapped} kB")
+            self.check("during Argon2id nothing of the process is in swap (VmSwap, every sample)", bool(samples) and swapped == 0, str(samples[-3:]))
+            self.check("during Argon2id the whole process stays locked", locked * 10 >= samples[-1].get("VmSize", 1) * 9, str(samples[-3:]))
+            if not self.fast_kdf:
+                self.check("during Argon2id its 1 GiB is resident", peak >= 1000 << 10, f"{peak} kB")
+            if pressure:
+                after = self.swap_counts()
+                self.log.say(f"swap under pressure: {swap} -> {after}")
+                self.check("the pressure was real: other pages went to swap meanwhile", int(after["pswpout"]) > int(swap["pswpout"]), f"{swap} -> {after}")
+            s.wait_end(120)
+        except Fail as e:
+            self.check("the locked command's checks ran", False, str(e))
+        finally:
+            s.close()
+            if hog:
+                self.run(f"kill {hog}", root=False)
+            self.run(f"rm -f {key}")
+        rc, out = self.run("dmesg | grep -E 'Out of memory|oom-kill' | head -3")
+        self.check("nothing was killed for memory by the pressure", "Out of memory" not in out and "oom-kill" not in out, out[-400:])
 
     def when_returned(self, command):
         """Runs a root command that takes the machine away, once this ssh command
@@ -1629,6 +1703,7 @@ class Machine:
         self.seal()
         self.inspect()
         self.enrol()
+        self.check_memory_lock()
         self.control()
         self.image()
 
