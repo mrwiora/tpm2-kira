@@ -8,7 +8,8 @@ import (
 	"time"
 )
 
-// TPMWait is how long run waits for the TPM's device to appear.
+// TPMWait is how long after the boot's first wait for the TPM's device (bootwait)
+// run still waits for it.
 const TPMWait = 5 * time.Second
 
 // ImagePlanDir is where the image names its parts.

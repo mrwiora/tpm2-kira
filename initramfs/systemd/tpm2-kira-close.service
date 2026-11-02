@@ -35,7 +35,8 @@ ConditionKernelCommandLine=!tpm2-kira.noclose
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Waits for the TPM itself (30 s at most) and goes down the ladder of the close.
+# Waits for the TPM itself (up to 30 s after the boot's first wait for it, none in
+# the boot after the one reboot) and goes down the ladder of the close.
 # Exit status 0 goes on, also degraded or without a TPM; a failure is the
 # boot's: the machine reboots rather than run the real root with the slots and the SSH CA open; the image's initrd.target
 # requires this unit as well, so nothing goes on while that happens.

@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/bootclose"
+	"github.com/mrwiora/tpm2-kira/internal/bootwait"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/journal"
@@ -515,8 +516,8 @@ func Run(tpmPath string, nvramIndex uint32, hold time.Duration, unlockSocket str
 	over := make(chan struct{})
 	go func() {
 		defer close(over)
-		if planned.TPM && !tpmdev.AwaitNode(tpmPath, imageplan.TPMWait) {
-			fmt.Fprintf(os.Stderr, "tpm2-kira: %s did not appear within %s; no code this boot\n", tpmPath, imageplan.TPMWait)
+		if planned.TPM && !bootwait.Await(tpmPath, imageplan.TPMWait) {
+			fmt.Fprintf(os.Stderr, "tpm2-kira: %s did not appear; no code this boot\n", tpmPath)
 		}
 		for _, p := range ps.inOrder() {
 			p.start(bd)

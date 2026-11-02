@@ -582,9 +582,17 @@ in the TPM's own state; `internal/bootclose` is what a boot does with the outcom
 | 1 | PCR 15 moved (tried twice) | closed | goes on |
 | 2 | it did not move, the TPM answers: `shEnable` cleared with the owner's empty authorization, then `ehEnable` and `phEnable` with the platform's (its authorization random first: a resume from S3 sets `phEnable` again) | closed, degraded: under the owner nothing answers, however the PCRs stand: no slot object, no SSH CA, no owner NV index. Keys under the NULL hierarchy and extends still work. `TPM2_Startup(CLEAR)` restores all at the next boot; a resume from S3 keeps it. A firmware that locked the platform refuses `ehEnable` and `phEnable`, which is said and is no failure | goes on: the passphrase and a temporary host key work, the console and `control` say it in red |
 | 3 | an owner password refused that: PCR 7 extended | closed, degraded: every slot reads PCR 7, so every approval is out | as 2 |
-| 5 | no device after the wait, and no firmware sign of a TPM (no TPM2 or TCPA ACPI table, no event log, nothing the stub measured) | nothing to close | goes on, no error |
-| 6 | the firmware has a TPM and it does not answer | one hard reboot, counted in the EFI variable `KIRAcloseReboot`. The next time in a row: no reboot; a closer keeps asking (`tpm2-kira-late-close.service`, in the image and in the root) and closes the moment the TPM answers. A close that holds removes the count | goes on: the passphrase alone, `control` red |
+| 5 | no device after the wait (30 s from the boot's first wait for it, below), and no firmware sign of a TPM (no TPM2 or TCPA ACPI table, no event log, nothing the stub measured) | nothing to close | goes on, no error |
+| 6 | the firmware has a TPM and it does not answer | one hard reboot, counted in the EFI variable `KIRAcloseReboot`. The next time in a row: no reboot and no wait for the device; a closer keeps asking (`tpm2-kira-late-close.service`, in the image and in the root) and closes the moment the TPM answers. A close that holds removes the count | goes on: the passphrase alone, `control` red |
 | 7 | the TPM answers and refuses all of 1-3 | hard reboot, not counted (Arch `FailureAction=reboot-force`, Debian `reboot -f`, then SysRq `b`, then an endless loop) | stops, as long as that lasts |
+
+**One wait per boot.** `machine-id`, `run` and the close ask for the TPM's device in that order
+(`internal/bootwait`). The first that does not find it notes when, in
+`/run/tpm2-kira/tpm-wait-since`, and each waits only until its own time after that: 5 s for the first
+two, 30 s for the close. A device that comes within the 30 s closes the boot as usual; it misses the
+codes of this boot if it comes after the 5 s. The note only shortens a wait: the device is looked for
+all the same, and what follows from its absence reads nothing there. It lies in the initrd's own
+tmpfs, where only what is confined and cannot write there runs beside the boot's steps.
 
 Before a resume from hibernation only 1, or 5, lets the resume go on: a resumed
 system expects its own state, also after a degraded close. The count is the boot's,
@@ -595,7 +603,9 @@ the resume's close leaves it alone.
   PCR 15 at zero: the slots and the CA are open, should the other PCRs hold what an
   approval holds. The closer is best effort: root can kill it. Who can silence the
   TPM for the initrd alone and has root afterwards gets that one boot. The EFI
-  variable is plain: writing it spares a boot the one reboot, not a close.
+  variable is plain: writing it spares a boot the one reboot and the wait for a device
+  that comes late (where the firmware shows a TPM; the late closer then takes it), not
+  a close.
 - Step 7 is the single exception to "the passphrase can always be entered by
   hand". A TPM in that state keeps the machine rebooting until the person takes the
   way out:

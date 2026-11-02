@@ -25,6 +25,7 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
+	"github.com/mrwiora/tpm2-kira/internal/bootwait"
 	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
@@ -255,7 +256,7 @@ func Boot(tpmPath string) (released bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	if !tpmdev.AwaitNode(tpmPath, tpmWait) {
+	if !bootwait.Await(tpmPath, tpmWait) {
 		return false, fmt.Errorf("%s did not appear", tpmPath)
 	}
 	t, err := tpmdev.Open(tpmdev.PreferResourceManager(tpmPath))
@@ -278,5 +279,6 @@ func Boot(tpmPath string) (released bool, err error) {
 	return true, Release(id)
 }
 
-// tpmWait is how long Boot waits for the TPM's device, as run does.
+// tpmWait is how long after the boot's first wait for the TPM's device Boot still
+// waits, as run does.
 const tpmWait = 5 * time.Second

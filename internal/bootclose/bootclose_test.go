@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +16,9 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/tpm2-trust/assh/hostkey"
+	"golang.org/x/sys/unix"
 
+	"github.com/mrwiora/tpm2-kira/internal/bootwait"
 	"github.com/mrwiora/tpm2-kira/internal/efivars"
 )
 
@@ -23,14 +26,16 @@ import (
 func setup(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	was := []string{RunDir, ACPITables, EventLog, efivars.Dir}
+	was := []string{RunDir, ACPITables, EventLog, efivars.Dir, bootwait.Dir}
 	w, o, every, open := Wait, out, LateEvery, openTPM
 	t.Cleanup(func() {
 		RunDir, ACPITables, EventLog = was[0], was[1], was[2]
 		efivars.SetDir(was[3])
+		bootwait.Dir = was[4]
 		Wait, out, LateEvery, openTPM = w, o, every, open
 	})
 	RunDir, ACPITables, EventLog = dir+"/run", dir+"/acpi", dir+"/log"
+	bootwait.Dir = RunDir
 	efivars.SetDir(dir + "/efivars")
 	for _, d := range []string{ACPITables, dir + "/efivars"} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -310,6 +315,7 @@ func TestLate(t *testing.T) {
 	path := setup(t)
 	firmwareHasTPM(t)
 	efivars.Write(CounterVar, []byte{1})
+	Wait = time.Hour // a counted boot does not wait: the closer takes a device that comes
 	if err := Boot(path); err != nil {
 		t.Fatal(err)
 	}
@@ -343,5 +349,135 @@ func TestLate(t *testing.T) {
 	}
 	if s, _ := ReadState(); s != StateClosed || pending() || counted(t) != 0 {
 		t.Fatalf("state %q pending %v counted %d", s, pending(), counted(t))
+	}
+}
+
+// bootBy runs Boot and fails when it takes longer than a boot that does not wait would.
+func bootBy(t *testing.T, path string) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- Boot(path) }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("the close waited")
+		return nil
+	}
+}
+
+// The first wait of a boot counts for the close: machine-id's and run's are spent.
+func TestCloseWaitsOnlyWhatIsLeft(t *testing.T) {
+	path := setup(t)
+	firmwareHasTPM(t)
+	Wait = time.Hour
+	waitBegan(t, time.Hour)
+	if err := bootBy(t, path); !errors.Is(err, ErrReboot) {
+		t.Fatalf("no wait left, the first time: the one reboot, got %v", err)
+	}
+	if counted(t) != 1 {
+		t.Fatalf("counted %d", counted(t))
+	}
+}
+
+// The first boot gives a late device all of its wait.
+func TestFirstBootWaits(t *testing.T) {
+	path := setup(t)
+	firmwareHasTPM(t)
+	Wait = 50 * time.Millisecond
+	start := time.Now()
+	if err := Boot(path); !errors.Is(err, ErrReboot) {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d < Wait {
+		t.Fatalf("waited %s of %s", d, Wait)
+	}
+}
+
+// The boot after the one reboot: no wait, the passphrase, the late closer.
+func TestCountedBootDoesNotWait(t *testing.T) {
+	path := setup(t)
+	firmwareHasTPM(t)
+	efivars.Write(CounterVar, []byte{1})
+	Wait = time.Hour
+	if err := bootBy(t, path); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := ReadState(); s != StatePending || !pending() {
+		t.Fatalf("state %q pending %v: no late closer", s, pending())
+	}
+}
+
+// The count is plain: without a sign of the firmware's, where no late closer would
+// follow, it spares no wait.
+func TestCountWithoutFirmwareSignWaits(t *testing.T) {
+	path := setup(t)
+	efivars.Write(CounterVar, []byte{1})
+	Wait = 50 * time.Millisecond
+	start := time.Now()
+	if err := Boot(path); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d < Wait {
+		t.Fatalf("waited %s of %s", d, Wait)
+	}
+	if s, _ := ReadState(); s != StateNoTPM {
+		t.Fatalf("state %q", s)
+	}
+}
+
+// What /run/tpm2-kira and the count say never skips a close: a TPM that is there is
+// closed, whatever they say.
+func TestNothingWrittenSkipsTheClose(t *testing.T) {
+	setup(t)
+	firmwareHasTPM(t)
+	efivars.Write(CounterVar, []byte{1})
+	waitBegan(t, time.Hour)
+	if err := touchPending(); err != nil {
+		t.Fatal(err)
+	}
+	sock := swtpm(t)
+	if err := bootBy(t, sock); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(pcr15(t, sock), make([]byte, 32)) {
+		t.Fatal("PCR 15 did not move")
+	}
+	if s, _ := ReadState(); s != StateClosed || pending() || counted(t) != 0 {
+		t.Fatalf("state %q pending %v counted %d", s, pending(), counted(t))
+	}
+}
+
+// A silent TPM with nothing left of the wait, in a resume: no resume, at once.
+func TestResumeOfACountedBootDoesNotWait(t *testing.T) {
+	path := setup(t)
+	firmwareHasTPM(t)
+	efivars.Write(CounterVar, []byte{1})
+	Wait = time.Hour
+	done := make(chan error, 1)
+	go func() { done <- Resume(path) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrNoResume) {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the resume's close waited")
+	}
+}
+
+// waitBegan is a step of this boot that began to wait ago.
+func waitBegan(t *testing.T, ago time.Duration) {
+	t.Helper()
+	var ts unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_BOOTTIME, &ts); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(bootwait.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	began := strconv.FormatInt(ts.Nano()-int64(ago), 10)
+	if err := os.WriteFile(filepath.Join(bootwait.Dir, bootwait.SinceFile), []byte(began), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

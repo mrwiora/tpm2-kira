@@ -6,7 +6,7 @@
 //	no device and no sign of a TPM         nothing to close: go on
 //	a TPM the firmware measured into       one hard reboot, counted in an EFI
 //	does not answer                        variable; then go on, passphrase only,
-//	                                       with the late closer
+//	                                       with the late closer, and no wait
 //	the TPM answers, all ways refused      hard reboot, not counted
 //
 // A resume from hibernation goes on only through PCR 15 itself, or without a TPM.
@@ -24,6 +24,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/tpm2-trust/assh/hostkey"
 
+	"github.com/mrwiora/tpm2-kira/internal/bootwait"
 	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
@@ -51,7 +52,8 @@ const (
 
 // Paths and times; vars for the tests.
 var (
-	// Wait is how long a close waits for the TPM's device.
+	// Wait is how long after a boot's first wait for the TPM's device (bootwait) a
+	// close still waits.
 	Wait = 30 * time.Second
 	// LateEvery is how often the late closer asks.
 	LateEvery = 2 * time.Second
@@ -76,6 +78,7 @@ func TestPaths() {
 		return
 	}
 	RunDir = dir + "/run"
+	bootwait.Dir = RunDir
 	ACPITables = dir + "/acpi"
 	EventLog = dir + "/binary_bios_measurements"
 }
@@ -97,11 +100,11 @@ const (
 	refused
 )
 
-// attempt waits for the device up to wait and runs the ladder.
+// attempt waits for the device what is left of wait (bootwait) and runs the ladder.
 func attempt(tpmPath string, wait time.Duration) (outcome, hostkey.CloseResult, error) {
-	if !tpmdev.AwaitNode(tpmPath, wait) {
+	if !bootwait.Await(tpmPath, wait) {
 		if sign := FirmwareSign(); sign != "" {
-			return silent, hostkey.CloseResult{}, fmt.Errorf("%s did not appear within %s, and %s", tpmPath, wait, sign)
+			return silent, hostkey.CloseResult{}, fmt.Errorf("%s did not appear, and %s", tpmPath, sign)
 		}
 		return noTPM, hostkey.CloseResult{}, nil
 	}
@@ -148,7 +151,7 @@ func FirmwareSign() string {
 // Boot is the close of a boot on its way to the real root: nil goes on, ErrReboot
 // (wrapped) is the hard reboot.
 func Boot(tpmPath string) error {
-	how, res, err := attempt(tpmPath, Wait)
+	how, res, err := attempt(tpmPath, closeWait())
 	switch how {
 	case closed:
 		succeeded(res)
@@ -179,11 +182,7 @@ func Boot(tpmPath string) error {
 // closes as far as it can, leaves the counter to the boot's own close, and only
 // PCR 15 itself lets a resume go on: a resumed system expects its own state.
 func Resume(tpmPath string) error {
-	wait := Wait
-	if pending() {
-		wait = 0 // the boot's close has waited
-	}
-	how, res, err := attempt(tpmPath, wait)
+	how, res, err := attempt(tpmPath, closeWait())
 	switch how {
 	case noTPM:
 		return nil
@@ -195,6 +194,18 @@ func Resume(tpmPath string) error {
 		return ErrNoResume
 	}
 	return fmt.Errorf("%w: %w", ErrNoResume, err)
+}
+
+// closeWait is what a close waits for the device. None when this boot's close has
+// waited, or when it follows the one reboot for a TPM the firmware has and that did
+// not answer: straight to the passphrase, the late closer takes a device that comes.
+// The count is plain, so it decides nothing without the firmware's sign, where no
+// late closer would follow: writing it costs a boot the wait, never a close.
+func closeWait() time.Duration {
+	if pending() || (rebootsCounted() > 0 && FirmwareSign() != "") {
+		return 0
+	}
+	return Wait
 }
 
 // Now is run's close at the end of the code screen, which has waited for the

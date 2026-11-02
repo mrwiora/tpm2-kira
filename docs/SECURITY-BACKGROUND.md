@@ -1626,13 +1626,13 @@ Numbered as in docs/SSH.md, which has the operator's view.
 | 1 | PCR 15 moved in every bank, read back (tried twice) | closed | goes on |
 | 2 | it did not move, the TPM answers: the kill switch. `TPM2_HierarchyControl` clears `shEnable` with the owner's empty authorization (the platform's where that is refused), then `ehEnable` and `phEnable` with the platform's; the platform's authorization goes random before `phEnable` | closed, degraded: nothing under the owner answers, however the PCRs stand: no slot object, no SSH CA, no owner NV index. NULL-hierarchy keys and extends work. A firmware that locked the platform refuses `ehEnable` and `phEnable`: said, no failure | goes on: the passphrase and a temporary host key; console, `status`, `control` red |
 | 3 | `shEnable` stayed set (an owner password, the platform locked or set): PCR 7 extended, read back | closed, degraded: every slot of the rule (§15) reads PCR 7, so every approval is out. A slot chosen by hand without 7, and an aSSH CA without it, stay open | as 2 |
-| 5 | no device after the wait (30 s), and no firmware sign of a TPM: no TPM2 or TCPA ACPI table, no event log, nothing the stub measured | nothing to close | goes on, no error |
-| 6 | a firmware sign and no answer | one hard reboot, counted in the EFI variable `KIRAcloseReboot`. The next time in a row, or where the count cannot be written: no reboot, `/run/tpm2-kira/close-pending`, and `tpm2-kira-late-close.service` asks every 2 s and closes the moment the TPM answers. A close that holds, some way, removes the count | goes on: the passphrase alone; console, `status`, `control` red |
+| 5 | no device after the wait (30 s from the boot's first wait for it, `internal/bootwait`), and no firmware sign of a TPM: no TPM2 or TCPA ACPI table, no event log, nothing the stub measured | nothing to close | goes on, no error |
+| 6 | a firmware sign and no answer | one hard reboot, counted in the EFI variable `KIRAcloseReboot`. The next time in a row, or where the count cannot be written: no reboot, the next time in a row with no wait for the device either, `/run/tpm2-kira/close-pending`, and `tpm2-kira-late-close.service` asks every 2 s and closes the moment the TPM answers. A close that holds, some way, removes the count | goes on: the passphrase alone; console, `status`, `control` red |
 | 7 | the TPM answers and refuses all of 1-3 | hard reboot, not counted: Arch `FailureAction=reboot-force`; Debian `reboot -f`, then SysRq `b`, then an endless loop | stops as long as that lasts: the one exception to "the passphrase can always be entered by hand" |
 
 ```mermaid
 flowchart TD
-  A["tpm2-kira-boot close"] --> D{"device within 30 s?"}
+  A["tpm2-kira-boot close"] --> D{"device within what is left of the boot's 30 s? none after the counted reboot"}
   D -->|no| F{"firmware sign of a TPM?"}
   F -->|no| S5["5: nothing to close, go on"]
   F -->|yes| C{"reboot counted?"}
