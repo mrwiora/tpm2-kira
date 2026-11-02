@@ -134,6 +134,13 @@ if [ -d /sys/firmware/efi/efivars ] && ! grep -qs ' /sys/firmware/efi/efivars ef
     mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>>/run/initramfs/tpm2-kira.log ||
         echo "tpm2-kira: efivarfs is not mounted: neither Secure Boot's state nor a slot's record can be read" >>/run/initramfs/tpm2-kira.log
 fi
+# The firmware's event log: what a phone and the vault replay against the quoted PCR 7
+# to establish Secure Boot's state, and what says where the initrd was measured. It is
+# in securityfs, which initramfs-tools does not mount either; init moves it with /sys.
+if [ -d /sys/kernel/security ] && ! grep -qs ' /sys/kernel/security securityfs ' /proc/mounts; then
+    mount -t securityfs securityfs /sys/kernel/security 2>>/run/initramfs/tpm2-kira.log ||
+        echo "tpm2-kira: securityfs is not mounted: no event log, so a phone and the vault cannot establish Secure Boot's state" >>/run/initramfs/tpm2-kira.log
+fi
 
 # The installed system's machine-id, sealed under slot 0's policy, released
 # before the network as under systemd (tpm2-kira-machine-id.service): written

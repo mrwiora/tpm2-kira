@@ -7,10 +7,10 @@ import (
 	"runtime"
 )
 
-// MinMemoryMiB is the least RAM, as the kernel counts it (MemTotal), a boot was
-// measured to open a disk with: Argon2id's 1 GiB, then the keyslot's own Argon2id,
-// beside the initrd itself and without swap (docs/DISK-KEY.md, "Memory").
-const MinMemoryMiB uint64 = 2048
+// MinMemoryMiB is the least RAM, as the kernel counts it (MemTotal), on which
+// every step was measured to hold on both test machines with no swap touched:
+// Argon2id's 1 GiB, then the keyslot's own, beside the initrd (docs/DISK-KEY.md, "Memory").
+const MinMemoryMiB uint64 = 1620
 
 // MemTotalMiB is the machine's RAM as the kernel counts it; 0 when it cannot be read.
 func MemTotalMiB() uint64 {

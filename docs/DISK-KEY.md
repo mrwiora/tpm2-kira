@@ -65,6 +65,31 @@ initramfs and takes some seconds; the keyboard layout in the initramfs
 must be the one the password was typed with (`sd-vconsole` on Arch, the
 `keymap` hook on Debian).
 
+## Memory
+
+Argon2id's 1 GiB is the process's only while a derivation runs: `Combine` hands it back
+to the kernel before it returns, and runs one derivation at a time. So a boot after a
+wrong pepper holds what one derivation does, and the keyslot's own Argon2id, which comes
+next in `systemd-cryptsetup`, does not add to it. Measured on real boots (the boot's log
+says it at each answer, `unlock: answered for ...; memory: ...`):
+
+| | heap after the key | resident | peak |
+|---|---:|---:|---:|
+| before, one derivation | 1030 MiB | 1046 MiB | 1046 MiB |
+| before, a wrong pepper and the right one | 2052 MiB | 2071 MiB | 2071 MiB |
+| now, either | 2-4 MiB | 13-22 MiB | 1042-1049 MiB |
+
+x/crypto does not wipe Argon2id's memory and gives no way to. Freeing changes who holds
+those pages, not whether they were wiped: the runtime held them until the process ended,
+now the kernel does, and it zeroes them before anyone else gets them. The key itself and
+its hash are wiped as before.
+
+**The floor: 1620 MiB of MemTotal** (`diskkey.MinMemoryMiB`, red in `control` below it; a
+guest of 1792 MiB, tools/LOCALVM.md, "Memory"). It is what was measured to hold on both
+test machines with every step passing and no swap touched. Below it boots still opened
+at 1368 MiB of MemTotal, an enrolment beginning to swap; at 1131 MiB neither holds. Each
+further volume's keyslot can run beside a derivation: the floor counts one disk.
+
 ## The token
 
 `luks enrol` adds the keyslot and marks it, `luks mark` marks one made by

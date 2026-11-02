@@ -104,17 +104,23 @@ These are the points that matter, and why. The full command line is in
 
 A guest has 4096 MiB (`DEFAULT_MEMORY` in `tools/localvm.py`; `memory = <MiB>` in a
 machine's section of `localvm.conf`, or `--localvm-config` for one run). Measured
-(2026-11-02), both machines, and below it the machines fail:
+(2026-11-02), both machines, the whole VM test from `fresh` at that size, the machine
+sealed at it (below 2816 MiB its PCRs move: a machine's snapshot does not carry over):
 
-| MiB | PCRs of `fresh` against 4096 | What happens |
-|---|---|---|
-| 4096 | - | every step holds, nothing killed, no swap touched |
-| 3072 | unchanged (down to 2816) | the boot after a wrong pepper fails: `tpm2-kira-boot` holds 2.1 GiB of two Argon2ids, the keyslot's Argon2id comes on top, the kernel kills one of them (Arch's disk never opens) |
-| 2688 and below | PCR 0 and 1 differ (PCR 10 on Debian) | - |
-| 2048 | PCR 0 and 10 differ | Arch: a plain typed boot fails, `systemd-cryptsetup` killed beside the 1 GiB of `tpm2-kira-boot` |
-| 1536 | PCR 0, 1 and 10 differ | `tpm2-kira-boot` is killed in the initrd |
+| MiB | MemTotal | PCRs of `fresh` against 4096 | What happens |
+|---|---:|---|---|
+| 4096 | | - | every step holds, nothing killed, no swap touched |
+| 3072 | | unchanged (down to 2816) | every step holds; the boot after a wrong pepper too |
+| 2048 | 1872 | PCR 0 and 10 differ | every step holds |
+| 1792 | 1620-1635 | they differ | every step holds, no swap touched: **the floor** (`diskkey.MinMemoryMiB`, red in `control` below) |
+| 1536 | 1368-1383 | PCR 0, 1 and 10 differ | every boot opens, nothing killed; Debian's enrolment swaps 3 pages, which an Argon2id must not |
+| 1280 | 1131 | they differ | Arch's enrolment does not end within 900 s; Debian's swaps 1.6 million pages and its boot does not come up |
 
-Lowering it gains nothing worth a smaller margin: the same runs at 3072 and 4096
+Each run: `.local/runs/k/mem/`. A keyslot is enrolled at the size the machine has, and
+`cryptsetup` scales its own Argon2id to that (340-500 MiB of memory here): a disk with a
+1 GiB keyslot moved to a machine at the floor is not measured.
+
+Lowering a test machine gains nothing worth a smaller margin: the same runs at 3072 and 4096
 took the same time within a run's spread (hibernate test 754 and 868 s against
 752 and 902 s): the guest's memory is mostly free, so a hibernate image is no
 smaller. The initrd has no swap: too little memory is a failed allocation or a
