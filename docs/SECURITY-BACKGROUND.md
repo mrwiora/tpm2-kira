@@ -3,7 +3,7 @@
 How tpm2-kira protects its secrets, where data is stored, how authentication
 works and where the trust boundaries are; then what has been tested on what,
 what is not proven, and which risks are accepted and why. It describes the code
-of branch `feat/close-pcr15` (tpm2-kira `fe80b16`).
+of branch `feat/close-pcr15` (tpm2-kira `dcc9ede`).
 
 | For | Read |
 |---|---|
@@ -1788,7 +1788,7 @@ Which key does what:
 
 ## 17. What Has Been Tested
 
-**The code:** tpm2-kira `d62a72d` (blob 20), aSSH `78b1fac`, go-uefi-slim `8f7d9c7`. Rows at another commit say so: `core` and aSSH did not change after them.
+**The code:** tpm2-kira `dcc9ede` (blob 20, schema 3), vault `dcf9bda`, Marify `f8d4e61`, aSSH `78b1fac`, go-uefi-slim `8f7d9c7`. Rows at another commit say so: aSSH did not change after them.
 **Date:** 2026-11-02.
 
 **The machines:** the VMs are QEMU with OVMF and swtpm as their TPM, in Secure Boot
@@ -1801,16 +1801,17 @@ Logs: `.local/runs/` of the workspace.
 
 | Run | Code | On | Result |
 |---|---|---|---|
-| `tools/vmtest.py --target both`, from `fresh`, the machines in parallel | d62a72d | VM | Arch 157, Debian 148, 0 failed (`h3/vmtest`) |
-| `tools/hibernatetest.py --target both --no-build`, in parallel | d62a72d | VM | Arch 137, Debian 126, 0 failed, with the "not tested" items in §18 (`hibernatetest-20261102-015120`) |
+| `tools/vmtest.py --target both`, from `fresh`, the machines in parallel, no `--fast-kdf` | dcc9ede | VM | Arch 202, Debian 196, 0 failed (`k/final/vmtest`) |
+| The same at a guest of 1792 MiB, the memory floor (MemTotal 1620-1635 MiB) | dcc9ede | VM | Arch 202, Debian 196, 0 failed (`k/mem/vm-1792`). Other sizes: tools/LOCALVM.md |
+| `tools/hibernatetest.py --target both --no-build`, in parallel | dcc9ede | VM | Arch 160, Debian 149, 0 failed, with the "not tested" items in §18 (`k/final/hib`) |
 | A resumed guest, `--only V2` with a wait added | 75121e2 | VM | Arch: slot 0's TOTP key refuses after the resume, same boot_id 75 s after the first login, with `ICH9-LPC.noreboot` (`g5/resume-uptime.out`) |
-| `make test-all` | d62a72d | unit, swtpm | 944 passed, 8 skipped, 0 failed (`h3/test-all.log`) |
+| `make test-all` | dcc9ede | unit, swtpm | 1054 passed, 8 skipped, 0 failed, no `(cached)` (`k/final/test-all.log`) |
 | A failing `tpm2.Policy` callback at go-tpm `c395998`, repeated on one open file (the probe `h2/leakprobe`) | - | Arch VM, kernel 7.2.9, swtpm behind it | `/dev/tpmrm0` and `/dev/tpm0`: the 4th is `TPM_RC_SESSION_MEMORY`. Closing the file clears `tpmrm0`; on `tpm0` the three sessions stay (`h2/probe.log`). tpm2-kira's sessions are explicit now (`TestFailuresLeaveNoSession`) |
 | aSSH `go test ./...` | 78b1fac | unit, swtpm | 81 passed, 0 failed (`g5/assh.log`) |
 | go-uefi-slim `go test ./...` | 8f7d9c7 | unit | 46 passed, 1 skipped, 0 failed (`g5/go-uefi-slim.log`); `uki`'s three fuzz targets 40 s each (`g3/fuzz.log`) |
-| tpm2-kira-vault's tests | at the pin 73d53dc | its suite | 26 passed, 0 failed (`g5/vault.log`) |
+| tpm2-kira-vault's tests | dcf9bda, at the pin c81ea61 | its suite, with and without go.work | all pass |
 | safearch `tests/run.sh` | 8aac900 | stubs | 335 passed, 0 failed, 1 skipped (`g5/safearch-run.log`) |
-| Marify `android/scripts/test-emulator.sh` | core 73d53dc | JVM, emulator, swtpm | 57, 41, 7 passed, 0 failed, ALL PASS (`g5/marify-emulator.out`) |
+| Marify `android/scripts/test-emulator.sh` | f8d4e61, core c81ea61 | JVM, emulator, swtpm | 59, 46, 8 passed, 0 failed, ALL PASS (`k/marify-emulator.out`; an 8 GiB data partition, `/` had 11 GB free) |
 | safearch `tests/vm.sh` | eea5e9a (aSSH's behaviour has not changed since: PCR signatures moved to go-uefi-slim's `uki`) | VM (a fresh build, swtpm) | 96 passed, 0 failed (`safearch-vm-eea5e9a.log`, `mkosi.test/vm/run-20261101-223352`). Not run again |
 
 ### 17.2 On the VMs
@@ -1833,6 +1834,8 @@ Both machines unless it says otherwise; step names (V2, V4, ...) are hibernatete
 | Vault, pepper | a wrong pepper refused by the pepper check, a new approval asked; the right one over the operator interface makes the key; the audit log holds no pepper | Arch, Debian |
 | Vault, typed recipe with pepper | recipe 0x1401, salt released during the hold, the password asked with it | Arch, Debian |
 | Removal | `slot delete` names the CA and takes every index, the CA's variable, the machine-id's, `ssh_ca.pub`. `control` asks before removing the CA with SSH off; No keeps it | Arch, Debian |
+| Argon2id's memory | each boot's log at the key's answer: heap at most 2 MiB, resident at most 22 MiB, peak at most 1047 MiB; after a wrong pepper and the right one too (before: 2052, 2071, 2071 MiB, `k/k1-before`) | Arch, Debian |
+| Secure Boot at the vault | the machine's real PCR 7 quoted, the real event log's digests: `SETUP MODE` in the devices table, the device's view and the audit, as the machine's variables say; established in Debian's initrd once it mounts securityfs | Arch, Debian |
 | Hibernation risk (V6) | no risk with encrypted swap; red with a swap file on Debian's unencrypted /boot | both; the swap file Debian |
 | Suspend (V5) | after S3 the CA is still closed (restartCount 0 → 1) | Arch, Debian |
 | The close before a resume | in the image (`image-close.log`). After the boot PCR 15 holds exactly three `assh-close` extends (`312573a5…`, by hash chain): `run`, the unit, the drop-in on Arch's resume; `run`, local-top, init-bottom on Debian's boot | Arch, Debian |
@@ -1867,7 +1870,9 @@ transport that refuses named commands.
 | Secure Boot off, in Setup Mode or unreadable is said: `status`, `control` (red, on both steps), `slot add`, `slot approve` (once, whatever the selection, however many slots), the image's hooks, the code screen and every SSH session at boot, the boot's log; no TPM needed, nothing stops | `TestStates`, `TestWarnSecureBootOnce`, `TestSecureBootWarningPlaces`, `TestStatusSaysSecureBoot`, `TestPrereqsShowSecureBootRed`, `TestSayFirmwareState`, `TestSessionGetsTheNoticeFirst`, `TestRemoteSSHConfirmsAndUnlocks`, `TestHookAddsThePlan`; VM test (the VMs are in Setup Mode) |
 | Sessions: eight failures of each kind on one connection (a policy refused, a signer that fails, an EK policy refused) leave no session and no object | `TestFailuresLeaveNoSession` |
 
-Unit, with no TPM: `TestSealRefusesASlotWithout8And9OnGRUB`, `TestClosePCRChecked` (a log
+Secure Boot's state on a real TPM's quote, swtpm's PCR 7 extended as firmware does: on, off, Setup Mode, no log, another boot's events; at enrolment and the next boot, the real core on an emulated phone: Marify `secureBootStatesFromTheQuote`.
+
+Unit, with no TPM: `TestEstablishSecureBootStates`, `TestEstablishSecureBootTakesNoClaim`, `TestEstablishSecureBootNotEstablished`, `FuzzEstablishSecureBoot`, `TestVerdictEstablishesSecureBoot`, the vault's `TestSecureBootStates`, `TestChangedPCR7IsRefusedAndShown`, `TestRequestShowsSecureBoot`, `TestPCR7ChainOfRealLogs` (two real OVMF logs: on, Setup Mode), `TestCombineGivesItsMemoryBack`, `TestSealRefusesASlotWithout8And9OnGRUB`, `TestClosePCRChecked` (a log
 with an event in PCR 15), `TestNoTPMAtAll` and `TestSilentTPM` (steps 5 and 6's decisions),
 `grub_predict_test.go` (against a Debian 13 log), `pcr4predict_test.go`,
 `TestVerifyReleaseSignedPCR` (the vault's computation).
@@ -1910,6 +1915,10 @@ VM's initrd.
 | A db or dbx update changing PCR 7 on real firmware, and `slot approve` afterwards | the mechanics on swtpm (`TestChannelFollowsPCR7`, PCR 7 extended by hand). The VMs' firmware has not been updated in a run |
 | Debian's init-bottom ending `run` at SIGTERM with a prompt open | not forced. What was measured is the restart with the prompt open: Arch's V4 step 6 at 50.7 s of the kernel's clock (140.9 s before `03510b3`), no "Waiting for process"; Debian's V9 at 97.2 s, its own path with no systemd-shutdown in it, as before |
 | sshd's `PerSourcePenalties` as the cause of earlier Arch hibernate stops | switched off in the test, never measured |
+| Secure Boot's state on real firmware | OVMF's logs alone: on from a stored log, Setup Mode live; off only by the test's digests. A firmware that hashes the variables otherwise than TCG's profile is not established, red: which real ones do has not been looked at |
+| The phone's red card on a real phone, and on iOS | Android's on an emulator; iOS is written, and neither compiled nor run: no Mac on this host |
+| The memory floor on other machines, or with a 1 GiB keyslot | two VMs at 2 vCPUs; `cryptsetup` scaled the keyslots to 340-585 MiB. Two volumes at once: not measured |
+| A resume on real hardware, in time | On these VMs a resume's wait is the guest's `kvm-clock` (tools/LOCALVM.md), which real hardware does not have |
 | The watchdog after a resume, on real hardware | On the VM a resumed system did not keep an armed watchdog alive: q35's iTCO reset it about 30 s after its first login. The test machine now switches that reset off (`ICH9-LPC.noreboot`, tools/LOCALVM.md; `fresh`'s PCRs 0-9, 11, 14, 15 unchanged), so a real machine's behaviour here is not shown |
 
 ---
