@@ -1704,8 +1704,8 @@ Which key does what:
 
 ## 17. What Has Been Tested
 
-**The code:** tpm2-kira `a101fbf`. `fe80b16` differs only in PLAN.md and the aSSH
-pointer, whose commit changes only aSSH's PLAN.md. **Date:** 2026-11-01.
+**The code:** tpm2-kira `75121e2` (blob 19), aSSH `78b1fac`, go-uefi-slim `8f7d9c7`.
+**Date:** 2026-11-02.
 
 **The machines:** the VMs are QEMU with OVMF and swtpm as their TPM, in Secure Boot
 **Setup Mode** (`control` says so in red there). So no check below ran on a real TPM or
@@ -1717,14 +1717,16 @@ Logs: `.local/runs/` of the workspace.
 
 | Run | Code | On | Result |
 |---|---|---|---|
-| `tools/vmtest.py --target both`, from `fresh` | a101fbf | VM | Arch 157, Debian 148, 0 failed (`vmtest-final-a101fbf`) |
-| `tools/hibernatetest.py` | a101fbf | VM | Arch 137, Debian 126, 0 failed, with the "not tested" items in §18 (`hibernatetest-20261101-220503`) |
-| `make test-all` | 97ee314 (a101fbf differs only in a test tool) | unit, swtpm | 925 passed, 8 skipped, 0 failed (`test-all-final.log`) |
-| aSSH `go test ./...` | aSSH at the pin | unit, swtpm | 81 passed, 0 failed (`assh-final.log`) |
-| tpm2-kira-vault's tests | at the pin | its suite | 26 passed, 0 failed (`vault-final.log`) |
-| safearch `tests/run.sh` | eea5e9a | stubs | 335 passed, 0 failed, 1 skipped (`safearch-run-final.log`) |
-| Marify `android/scripts/test-emulator.sh` | 7091a71 (core unchanged since) | JVM, emulator, swtpm | ALL PASS (`marify-emulator-7091a71.out`) |
-| safearch `tests/vm.sh` | eea5e9a | VM (a fresh build, swtpm) | 96 passed, 0 failed (`safearch-vm-eea5e9a.log`, `mkosi.test/vm/run-20261101-223352`) |
+| `tools/vmtest.py --target both`, from `fresh`, the machines in parallel | 75121e2 | VM | Arch 157, Debian 148, 0 failed (`g5/vmtest-75121e2`) |
+| `tools/hibernatetest.py --target both --no-build`, in parallel | 75121e2 | VM | Arch 137, Debian 126, 0 failed, with the "not tested" items in §18 (`hibernatetest-20261102-002331`) |
+| A resumed guest, `--only V2` with a wait added | 75121e2 | VM | Arch: slot 0's TOTP key refuses after the resume, same boot_id 75 s after the first login, with `ICH9-LPC.noreboot` (`g5/resume-uptime.out`) |
+| `make test-all` | 73d53dc (75121e2 differs only in docs) | unit, swtpm | 937 passed, 8 skipped, 0 failed (`g5/test-all.log`) |
+| aSSH `go test ./...` | 78b1fac | unit, swtpm | 81 passed, 0 failed (`g5/assh.log`) |
+| go-uefi-slim `go test ./...` | 8f7d9c7 | unit | 46 passed, 1 skipped, 0 failed (`g5/go-uefi-slim.log`); `uki`'s three fuzz targets 40 s each (`g3/fuzz.log`) |
+| tpm2-kira-vault's tests | at the pin 73d53dc | its suite | 26 passed, 0 failed (`g5/vault.log`) |
+| safearch `tests/run.sh` | 8aac900 | stubs | 335 passed, 0 failed, 1 skipped (`g5/safearch-run.log`) |
+| Marify `android/scripts/test-emulator.sh` | core 73d53dc | JVM, emulator, swtpm | 57, 41, 7 passed, 0 failed, ALL PASS (`g5/marify-emulator.out`) |
+| safearch `tests/vm.sh` | eea5e9a (aSSH's behaviour has not changed since: PCR signatures moved to go-uefi-slim's `uki`) | VM (a fresh build, swtpm) | 96 passed, 0 failed (`safearch-vm-eea5e9a.log`, `mkosi.test/vm/run-20261101-223352`). Not run again |
 
 ### 17.2 On the VMs
 
@@ -1773,7 +1775,8 @@ transport that refuses named commands.
 | A lockout does not stop the slots | `TestSlotsWorkInLockout` |
 | The SSH CA after the close: past the software's check, the TPM refuses | aSSH `TestClose`; `TestHostKeyClose` |
 | Signed PCR 11: the image approved with works, another signed image needs no approval, past `enter-initrd` and an unsigned image are refused, the close ends it | `TestSlotWithSignedPCR11` |
-| The slot's policy digest equals the TPM's trial session in either bank | `TestSlotPolicyDigestIsTheTPMs` |
+| The slot's policy digest equals the TPM's trial session in either bank; every hand-written digest's value from before `PolicyCalculator` still holds | `TestSlotPolicyDigestIsTheTPMs`; `TestPolicyDigestsFixed`, `TestSignedPolicyFixed` (unit) |
+| The channel's secrets: not in the record's bytes; open before the close, in a boot not approved too; after it refused (`ErrClosed`), by another key too; the signing key opens them, for a further phone and a whole gate | `TestChannelSecretsSealed` |
 
 Unit, with no TPM: `TestSealRefusesASlotWithout8And9OnGRUB`, `TestClosePCRChecked` (a log
 with an event in PCR 15), `TestNoTPMAtAll` and `TestSilentTPM` (steps 5 and 6's decisions),
@@ -1811,7 +1814,8 @@ channel: that is swtpm and Marify's emulator test.
 | Real firmware (platform authorization locked or empty) | none; `TestCloseKillSwitchPlatformLocked` is what stands in |
 | A real TPM | none, in any of these runs. Banks, `TPM2_TestParms`, timings, PCR 4's contents: swtpm and OVMF's |
 | Step 7's way out as a rescue | only the mechanics (V8), with no TPM and no broken TPM before it |
-| `gate-child`, the radio | no phone or Bluetooth in the VM runs; the protocol is Marify's emulator and swtpm tests |
+| `gate-child`, the radio; the sealed channel on a machine | no phone or Bluetooth in the VM runs; the protocol is Marify's emulator and swtpm tests (the wire did not change), the sealed channel `TestChannelSecretsSealed` on swtpm. A boot that unseals it with a real gate has not run on a VM |
+| Debian's init-bottom ending `run` at SIGTERM with a prompt open | not forced. What was measured is the restart with the prompt open: Arch's V4 step 6 at 50.7 s of the kernel's clock (140.9 s before `03510b3`), no "Waiting for process"; Debian's V9 at 97.2 s, its own path with no systemd-shutdown in it, as before |
 | sshd's `PerSourcePenalties` as the cause of earlier Arch hibernate stops | switched off in the test, never measured |
 | The watchdog after a resume, on real hardware | On the VM a resumed system did not keep an armed watchdog alive: q35's iTCO reset it about 30 s after its first login. The test machine now switches that reset off (`ICH9-LPC.noreboot`, tools/LOCALVM.md; `fresh`'s PCRs 0-9, 11, 14, 15 unchanged), so a real machine's behaviour here is not shown |
 
