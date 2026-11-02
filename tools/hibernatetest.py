@@ -87,8 +87,9 @@ HIBERNATED = "hibernated"
 STEPS = ("V1", "V6", "V3", "V2", "V5", "V4", "V9", "V8")
 FAILURE_PATHS = ("V4", "V9", "V8")
 V2_TRIES = 3
-# The kernel's TPM driver kept from starting.
-SILENT_WORDS = "initcall_blacklist=crb_acpi_driver_init"
+# The kernel's TPM driver kept from starting. The second word is the test's and not what it tests:
+# without a TPM device the running system's units wait 90 s for /dev/tpm0, systemd's own bound.
+SILENT_WORDS = "initcall_blacklist=crb_acpi_driver_init systemd.default_device_timeout_sec=15"
 MEMMAP = "dmesg | sed -n 's/^\\[[^]]*\\] //; /BIOS-e820\\|reserve setup_data\\|Hibernate inconsistent/p'"
 
 
