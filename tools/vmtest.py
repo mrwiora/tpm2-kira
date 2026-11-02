@@ -136,6 +136,8 @@ SSH_HOLD = 600
 # The state after the steps up to the first reboot: the same in this test and
 # the hibernate test, which keeps its own after that (hib-setup).
 SETUP_SNAPSHOT = "setup"
+# A boot's commands read at once: where one's output starts (Machine.batch).
+BATCH_MARK = "@@tpm2-kira-vmtest@@"
 FROM_SETUP_NOTE = "NOT A FINAL PROOF: started from a saved setup, not from the snapshot fresh."
 FAST_KDF_NOTE = "NOT A FINAL PROOF: a --fast-kdf TEST build, Argon2id at a test's cost, not the production's."
 
@@ -1023,34 +1025,48 @@ class Machine:
         for part in ("unlock", "codes", "net", "ssh", "tpm"):
             self.check(f"the image's plan names '{part}'", f"etc/tpm2-kira/plan/{part}" in out, out[-500:])
 
+    def code_screen(self, n, s, console_from, timeout=60):
+        """The code screen of a boot's SSH session: certified, each slot's code the
+        authenticator's, Secure Boot said once in the session and at the console. Its text."""
+        text, _ = s.expect(r"Does the code match your authenticator\?.*$", timeout)
+        at = time.time()
+        self.lap("the code screen over SSH")
+        codes = dict(re.findall(r"^#(\d+): (\d{6})$", text, re.M))
+        self.check(f"boot {n}: the host key is certified by the SSH CA (strict known_hosts)", True)
+        for slot in self.slots:
+            self.check(f"boot {n}: slot {slot}'s code is the authenticator's", str(slot) in codes and code_matches(self.secrets[slot], codes[str(slot)], at), text[-500:])
+        self.check_secure_boot(f"boot {n}: the SSH session, at its start", text)
+        lv = getattr(self, "lv", None)
+        if lv:
+            self.check_secure_boot(f"boot {n}: the console", lv.serial_text(console_from))
+        return text
+
+    def console_mark(self):
+        """Where this boot's text will start on the console."""
+        lv = getattr(self, "lv", None)
+        return os.path.getsize(lv.path("serial.log")) if lv else 0
+
+    def warm_reboot(self):
+        self.run("systemctl reboot")
+        self.wait_port(22, False, 120)
+        self.lap("the system going down")
+
     def cycle(self, n, started=False):
         """A boot unlocked over SSH, with its checks; started: the machine was
-        started from a saved setup, nothing to reboot."""
+        started by the caller, nothing to reboot."""
         self.head(f"reboot {n}: the code screen over SSH, unlocked there")
         lv = getattr(self, "lv", None)
         console_from = getattr(lv, "mark", 0)
         if not started:
-            if lv:
-                console_from = os.path.getsize(lv.path("serial.log"))
-            self.run("systemctl reboot")
-            self.wait_port(22, False, 120)
-            self.lap("the system going down")
+            console_from = self.console_mark()
+            self.warm_reboot()
         if not self.check(f"boot {n}: the boot SSH server answers (port {SSH_PORT})", self.wait_port(SSH_PORT, True, 300)):
             raise Fail("no boot SSH server: the console shows why")
         self.lap("firmware to the boot SSH server")
         s = self.boot_session(n)
         try:
-            text, _ = s.expect(r"Does the code match your authenticator\?.*$", 60)
-            at = time.time()
-            self.lap("the code screen over SSH")
-            codes = dict(re.findall(r"^#(\d+): (\d{6})$", text, re.M))
-            self.check(f"boot {n}: the host key is certified by the SSH CA (strict known_hosts)", True)
-            for slot in self.slots:
-                self.check(f"boot {n}: slot {slot}'s code is the authenticator's", str(slot) in codes and code_matches(self.secrets[slot], codes[str(slot)], at), text[-500:])
+            text = self.code_screen(n, s, console_from)
             self.check(f"boot {n}: the screen names tpm2-kira's password and salt prompt", "continue to the password and salt prompt" in text, text[-300:])
-            self.check_secure_boot(f"boot {n}: the SSH session, at its start", text)
-            if lv:
-                self.check_secure_boot(f"boot {n}: the console", lv.serial_text(console_from))
             s.send("\r")
             s.expect(r"Password for disk \S+: ?$", 120); s.send(TEST_PASSWORD + "\r")
             s.expect(r"Salt for disk \S+: ?$", 60); s.send(TEST_SALT + "\r")
@@ -1070,8 +1086,56 @@ class Machine:
         if not self.check(f"boot {n}: the system comes up (ssh)", self.wait_port(22, True, 300)):
             raise Fail("the system does not come up")
         self.lap("the initrd's end to ssh")
-        self.booted(f"boot {n}")
-        rc, out = self.run("tpm2-kira status --json", save=f"status-boot{n}.json")
+        self.after_boot(n)
+
+    def boot_log_command(self):
+        return ("cat /run/initramfs/tpm2-kira.log" if self.distro == "debian" else
+                "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service -u tpm2-kira-machine-id.service")
+
+    def batch(self, commands):
+        """Every command of a dict, in one ssh command as root, each one's output and
+        error apart: what a boot reads costs one connection. save: the file for a name."""
+        script = "; ".join(f"echo {BATCH_MARK}{name}; {{ {cmd.rstrip('; ')}; }} 2>&1" for name, (cmd, _) in commands.items())
+        rc, out = self.run(script)
+        parts = re.split(rf"^{BATCH_MARK}(\S+)\n", out, flags=re.M)
+        got = dict(zip(parts[1::2], parts[2::2]))
+        missing = [name for name in commands if name not in got]
+        if missing:
+            raise Fail(f"the commands of a boot did not run ({', '.join(missing)}):\n" + out[-500:])
+        for name, (_, save) in commands.items():
+            if save:
+                self.log.save(save, got[name])
+        return got
+
+    def after_boot(self, n):
+        """Everything a boot's running system is checked for, read at once."""
+        self.wait_login(f"boot {n}")
+        slot0, slot1 = ("0,2,4,7,8,9", "7,8,9") if self.distro == "debian" else ("0,2,4,7", "7")
+        commands = {
+            "oom": ("dmesg | grep -E 'Out of memory|oom-kill' | head -3", f"oom-boot-{n}.log"),
+            "status": ("tpm2-kira status --json", f"status-boot{n}.json"),
+            # A slot object refuses in the running system: the TPM computes no
+            # code, by the slot's own policy (PCR 15).
+            "reveal": ("tpm2-kira reveal-plain --nvram 0 2>&1 | tail -2", f"boot{n}-reveal.log"),
+            "log": (self.boot_log_command(), f"boot{n}-tpm2-kira.log"),
+            # The boot is closed in the running system: PCR 15 extended (the kernel's sysfs
+            # view of the TPM's PCRs), by run and the image's close when the code screen was
+            # over (Arch: tpm2-kira-close.service).
+            "close": ("cat /sys/class/tpm/tpm0/pcr-sha256/15 2>&1; " + ("true" if self.distro == "debian" else
+                      "journalctl -b -o cat --no-pager -u tpm2-kira-close.service 2>&1 | tail -5"), f"boot{n}-close.log"),
+            "cap": ("ls /usr/lib/systemd/system/tpm2-kira-cap.service 2>&1; grep -c 'tpm2-kira-boot cap' /usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira 2>&1; true", None),
+            "state": ("cat /run/tpm2-kira/close-state; ls /run/tpm2-kira/close-pending 2>&1; systemctl is-active tpm2-kira-late-close.service; ls /sys/firmware/efi/efivars | grep -c KIRAcloseReboot; true", f"boot{n}-close-state.log"),
+            "ca": ("grep '^ASSH_CA_SLOT_[0-9]' /etc/tpm2-kira/assh.conf 2>&1", f"boot{n}-ca-slots.log"),
+            # PCR 4 was predicted before this boot, for this boot: the approval
+            # holds the prediction, the register what the firmware measured.
+            "pcr4": ("tpm2-kira slot info --nvram 0 2>&1; echo LIVE=$(cat /sys/class/tpm/tpm0/pcr-sha256/4)", f"boot{n}-pcr4.log"),
+        }
+        if self.distro != "debian":
+            commands["pcr11"] = ("tpm2-kira slot info --nvram 0 2>&1 | grep -E 'PCR 11 ' | head -2; stat -c '%a %U' /etc/tpm2-kira/pcr.key; grep -c '^Phases=enter-initrd$' /etc/kernel/uki.conf", f"boot{n}-pcr11.log")
+        got = self.batch(commands)
+        self.lap("what the boot's system is checked for, read")
+        self.check(f"boot {n}: nothing was killed for memory", "Out of memory" not in got["oom"] and "oom-kill" not in got["oom"], got["oom"][-400:])
+        out = got["status"]
         try:
             slots = json.loads(out).get("slots", [])
         except ValueError:
@@ -1079,13 +1143,9 @@ class Machine:
         self.check(f"boot {n}: every slot is closed until the next boot (PCR 15)", slots and all("closed until the next boot" in s["generation_state"] for s in slots), out[-300:])
         if self.distro == "debian":
             self.check(f"boot {n}: GRUB - every slot includes PCRs 8 and 9", slots and not any(s.get("no_grub_pcrs") for s in slots), out[-300:])
-        # A slot object refuses in the running system: the TPM computes no
-        # code, by the slot's own policy (PCR 15).
-        rc, out = self.run("tpm2-kira reveal-plain --nvram 0 2>&1 | tail -2", save=f"boot{n}-reveal.log")
+        out = got["reveal"]
         self.check(f"boot {n}: slot 0's TOTP key refuses after the boot (closed)", "Closed until the next boot" in out and not re.search(r"^\d{6}$", out, re.M), out.strip())
-        log = ("cat /run/initramfs/tpm2-kira.log" if self.distro == "debian" else
-               "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service -u tpm2-kira-machine-id.service")
-        rc, out = self.run(log + " 2>&1", save=f"boot{n}-tpm2-kira.log")
+        out = got["log"]
         self.check(f"boot {n}: run closed the boot when the code screen was over", "the boot is closed (PCR 15)" in out, out[-500:])
         self.check_secure_boot(f"boot {n}: the boot's log", out)
         self.check(f"boot {n}: the key was answered", re.search(r"unlock: answered for", out) is not None, out[-500:])
@@ -1100,38 +1160,27 @@ class Machine:
         self.check(f"boot {n}: ssh-child ran confined (a uid of its own, namespaces, no new privileges, not dumpable, no executable memory, Landlock, seccomp)", own_uid, out[-500:])
         bad = [l for l in out.split("\n") if re.search(r"ERROR|FAILED|does not answer|cannot", l)]
         self.check(f"boot {n}: no tpm2-kira error in the boot's log", not bad, "\n".join(bad[:5]))
-        # The boot is closed in the running system: PCR 15 extended (the
-        # kernel's sysfs view of the TPM's PCRs), by run and the image's
-        # close when the code screen was over (Arch: tpm2-kira-close.service).
-        rc, out = self.run("cat /sys/class/tpm/tpm0/pcr-sha256/15 2>&1; "
-                           + ("true" if self.distro == "debian" else
-                              "journalctl -b -o cat --no-pager -u tpm2-kira-close.service 2>&1 | tail -5"),
-                           save=f"boot{n}-close.log")
+        out = got["close"]
         pcr15 = out.split("\n")[0].strip()
         self.check(f"boot {n}: the boot is closed in the running system (PCR 15 extended)",
                    re.fullmatch(r"[0-9A-Fa-f]{64}", pcr15) is not None and set(pcr15) != {"0"}, out[-300:])
         if self.distro != "debian":
             self.check(f"boot {n}: tpm2-kira-close.service ran in the initrd", "Finished" in out and "Failed" not in out, out[-300:])
         # No cap: PCR 15 closes the slots.
-        rc, out = self.run("ls /usr/lib/systemd/system/tpm2-kira-cap.service 2>&1; "
-                           "grep -c 'tpm2-kira-boot cap' /usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira 2>&1; true")
-        rc2, state = self.run("cat /run/tpm2-kira/close-state; ls /run/tpm2-kira/close-pending 2>&1; systemctl is-active tpm2-kira-late-close.service; ls /sys/firmware/efi/efivars | grep -c KIRAcloseReboot; true", save=f"boot{n}-close-state.log")
+        state, out = got["state"], got["cap"]
         self.check(f"boot {n}: the close is PCR 15's, no late closer, no reboot counted", state.startswith("closed") and "No such file" in state and "inactive" in state and re.search(r"^0$", state, re.M) is not None, state)
         self.check(f"boot {n}: no cap unit or cap step", "No such file" in out.split("\n")[0] and not re.search(r"^[1-9]", out, re.M), out.strip())
         # One rule: PCR 7 and the image; slot 0 with the platform. On a UKI
         # the image is PCR 11, signed by the PCR key.
-        slot0, slot1 = ("0,2,4,7,8,9", "7,8,9") if self.distro == "debian" else ("0,2,4,7", "7")
-        rc, out = self.run("grep '^ASSH_CA_SLOT_[0-9]' /etc/tpm2-kira/assh.conf 2>&1", save=f"boot{n}-ca-slots.log")
+        out = got["ca"]
         ok = re.search(rf"^ASSH_CA_SLOT_0={slot0}$", out, re.M) is not None and re.search(rf"^ASSH_CA_SLOT_1={slot1}$", out, re.M) is not None
         if self.distro != "debian":
             ok = ok and "ASSH_CA_SLOT_0_SIGNED=11" in out and "ASSH_CA_SLOT_1_SIGNED=11" in out
         self.check(f"boot {n}: the SSH CA's slots are {slot0} and {slot1}" + ("" if self.distro == "debian" else ", each with PCR 11 signed"), ok, out.strip())
         if self.distro != "debian":
-            rc, out = self.run("tpm2-kira slot info --nvram 0 2>&1 | grep -E 'PCR 11 ' | head -2; stat -c '%a %U' /etc/tpm2-kira/pcr.key; grep -c '^Phases=enter-initrd$' /etc/kernel/uki.conf", save=f"boot{n}-pcr11.log")
+            out = got["pcr11"]
             self.check(f"boot {n}: slot 0's PCR 11 is signed, the PCR key root's alone, uki.conf signs enter-initrd", "(signed)" in out and "400 root" in out and re.search(r"^1$", out, re.M) is not None, out[-400:])
-        # PCR 4 was predicted before this boot, for this boot: the approval
-        # holds the prediction, the register what the firmware measured.
-        rc, out = self.run("tpm2-kira slot info --nvram 0 2>&1; echo LIVE=$(cat /sys/class/tpm/tpm0/pcr-sha256/4)", save=f"boot{n}-pcr4.log")
+        out = got["pcr4"]
         approved = re.search(r"PCR 4\s+\(uki\): ([0-9a-f]{64})", out)
         live = re.search(r"^LIVE=([0-9A-Fa-f]{64})$", out, re.M)
         expected = None
@@ -1143,6 +1192,7 @@ class Machine:
                 expected = hashlib.sha256(bytes.fromhex(expected) + word).hexdigest()
         self.check(f"boot {n}: PCR 4 as predicted before this boot is the register",
                    expected is not None and live is not None and expected == live.group(1).lower(), out[-500:])
+        return got
 
     def unapproved_kernel(self):
         """Arch: an image the hooks did not approve, signed by the PCR key
