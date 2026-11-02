@@ -54,6 +54,9 @@ OVMF_CODE_SECBOOT = "/usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd"
 OVMF_VARS = "/usr/share/edk2/x64/OVMF_VARS.4m.fd"
 # What a fresh machine's initrd asks for its disk: systemd (Arch), cryptsetup's askpass (Debian).
 PASSPHRASE_PROMPT = re.compile(r"(Please enter passphrase for disk \S+|Please unlock disk \S+):[^\n]*$")
+# What every run goes back to and what the machine came from: made once, by
+# hand; no test overwrites or removes them.
+PROTECTED_SNAPSHOTS = ("export", "fresh")
 
 
 class Fail(Exception):
@@ -289,10 +292,12 @@ class Machine:
 
     # ── snapshots ────────────────────────────────────────────────────────
 
-    def snapshot(self, tag):
+    def snapshot(self, tag, overwrite=False):
         if self.pid():
             raise Fail(f"{self.name} runs: stop it first")
         snap = self.path("snap-" + tag)
+        if os.path.exists(snap) and tag in PROTECTED_SNAPSHOTS and not overwrite:
+            raise Fail(f"{self.name}: the snapshot {tag} exists and every run starts from it: --overwrite, by hand, if that is meant")
         if os.path.exists(snap):
             shutil.rmtree(snap)
             run(["qemu-img", "snapshot", "-d", tag, self.path("disk.qcow2")], check=False)
@@ -304,6 +309,8 @@ class Machine:
 
     def drop_snapshot(self, tag):
         """Removes a snapshot a test made for itself."""
+        if tag in PROTECTED_SNAPSHOTS:
+            raise Fail(f"{self.name}: the snapshot {tag} is not a test's to remove")
         snap = self.path("snap-" + tag)
         if os.path.exists(snap):
             shutil.rmtree(snap)
@@ -339,6 +346,7 @@ def main():
     p.add_argument("machine", nargs="?")
     p.add_argument("arg", nargs="?")
     p.add_argument("--no-unlock", action="store_true")
+    p.add_argument("--overwrite", action="store_true", help="snapshot: replace fresh or export, which every run depends on")
     p.add_argument("--timeout", type=int, default=600)
     a = p.parse_args()
     cfg = configparser.ConfigParser()
@@ -373,7 +381,7 @@ def main():
         elif a.command == "log":
             print("\n".join(m.serial_text().splitlines()[-int(a.arg or 40):]))
         elif a.command == "snapshot":
-            m.snapshot(a.arg or "fresh")
+            m.snapshot(a.arg or "fresh", overwrite=a.overwrite)
         elif a.command == "revert":
             m.revert(a.arg or "fresh")
         elif a.command == "reset":

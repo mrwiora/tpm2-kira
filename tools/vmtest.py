@@ -77,6 +77,13 @@ What it does, each step a check in the report:
      no index of its range left in the TPM, no KIRAasshCA variable, no
      ssh_ca.pub
 
+Iterating (a run from the reset is what a final proof is): on the machines of
+tools/localvm.py, --save-setup makes steps 1-6 once, keeps the state after them
+in the snapshot "setup" and ends; --from-setup starts from it, at the first
+reboot, and its report says it is no final proof. hibernatetest.py's setup
+takes the same snapshot. A change to the product wants a new --save-setup;
+--drop-setup removes it. "fresh" and "export" are never written.
+
 Nothing but Python's standard library and ssh are needed here. Reports and
 every session's transcript land in the run's directory.
 """
@@ -117,6 +124,10 @@ TPM_SALT_PASSWORD = "kira-vmtest-tpm-salt-pw"
 VAULT_PASSWORD = "kira-vmtest-vault-pw"
 SSH_PORT = 2222
 SSH_HOLD = 600
+# The state after the steps up to the first reboot: the same in this test and
+# the hibernate test, which keeps its own after that (hib-setup).
+SETUP_SNAPSHOT = "setup"
+FROM_SETUP_NOTE = "NOT A FINAL PROOF: started from a saved setup, not from the snapshot fresh."
 
 
 def clean(data):
@@ -202,6 +213,84 @@ def print_slowest(timings, n=10):
         print(f"  {secs:7.1f}  [{label}] {name}")
     for t in timings:
         print(f"  {t.total():7.1f}  [{t.label}] in all")
+
+
+def load_localvm():
+    spec = importlib.util.spec_from_file_location("localvm", os.path.join(REPO, "tools", "localvm.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def local_machines(config, names):
+    """The machines of tools/localvm.py: what snapshots need. The module and a
+    machine per name."""
+    localvm = load_localvm()
+    cfg = configparser.ConfigParser()
+    if not cfg.read(config):
+        raise Fail(f"no {config}: a saved setup needs the machines of tools/localvm.py")
+    defaults = dict(cfg["defaults"]) if cfg.has_section("defaults") else {}
+    return localvm, {n: localvm.Machine(n, cfg[n], defaults) for n in names}
+
+
+class SavedSetup:
+    """A state of a machine kept to start from: the snapshot of the tag (disk,
+    EFI variables, TPM) and what the test holds of it, in the machine's directory
+    beside the snapshot, root's secrets of a test machine's test slots alone. It
+    is good for the commit that made it and those that differ only in tools and
+    documentation. A product built with another key derivation cost does not open
+    its keyslots."""
+
+    FILES = ("bootkey", "bootkey.pub", "known_hosts_boot")
+
+    def __init__(self, lv, m, tag, fast_kdf=False):
+        self.lv, self.m, self.tag, self.fast_kdf = lv, m, tag, fast_kdf
+
+    def path(self):
+        return self.lv.path(self.tag + ".json")
+
+    def save(self):
+        """Powers the guest off and keeps it; it stays off."""
+        self.m.power_off()
+        self.lv.snapshot(self.tag)
+        commit = subprocess.run(["git", "-C", REPO, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+        fd = os.open(self.path(), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"commit": commit, "fast_kdf": self.fast_kdf, "secrets": self.m.secrets, "luks_dev": getattr(self.m, "luks_dev", None),
+                       "version": getattr(self.m, "version", None),
+                       "files": {n: open(os.path.join(self.m.dir, n)).read() for n in self.FILES}}, f)
+
+    def problem(self):
+        """Why this setup cannot be started from; None if it can."""
+        if not os.path.exists(self.path()) or not os.path.isdir(self.lv.path("snap-" + self.tag)):
+            return f"{self.lv.name}: no snapshot {self.tag}: --save-setup"
+        st = json.load(open(self.path()))
+        if st.get("fast_kdf") != self.fast_kdf:
+            return f"{self.lv.name}: the snapshot {self.tag} was made with fast_kdf={st.get('fast_kdf')}: its keyslots open with no other build"
+        diff = subprocess.run(["git", "-C", REPO, "diff", "--name-only", st["commit"], "HEAD", "--", ".", ":!tools", ":!docs", ":!*.md"],
+                              capture_output=True, text=True)
+        if diff.returncode != 0 or diff.stdout.strip():
+            return f"{self.lv.name}: the snapshot {self.tag} is of {st['commit'][:7]}, and the product changed since: --save-setup again"
+        return None
+
+    def restore(self):
+        """Back to the snapshot, the machine stopped, what the test holds back."""
+        why = self.problem()
+        if why:
+            raise Fail(why)
+        self.lv.revert(self.tag)
+        st = json.load(open(self.path()))
+        self.m.secrets, self.m.luks_dev, self.m.version = st["secrets"], st["luks_dev"], st["version"]
+        for n, body in st["files"].items():
+            fd = os.open(os.path.join(self.m.dir, n), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(body)
+
+    def drop(self):
+        self.lv.kill()
+        self.lv.drop_snapshot(self.tag)
+        if os.path.exists(self.path()):
+            os.remove(self.path())
 
 
 class Session:
@@ -417,6 +506,7 @@ class Machine:
         self.sessions = 0
         self.slots = [0, 1]  # the TOTP slots slot add makes: 0 and the fallback 1
         self.timing = Timing(name, self.log.say)
+        self.notes = []  # the report's first lines: what kind of run this was
 
     # -- helpers ------------------------------------------------------------
 
@@ -427,6 +517,13 @@ class Machine:
 
     def lap(self, name):
         self.timing.lap(name)
+
+    def power_off(self):
+        """The guest powered off, the moment the command has returned; a
+        machine of tools/localvm.py, whose qemu ends with it."""
+        self.run("nohup sh -c 'sleep 2; systemctl poweroff' >/dev/null 2>&1 &")
+        if not self.lv.wait_stopped(180):
+            raise Fail("the guest did not power off")
 
     def run(self, cmd, root=True, save=None):
         rc, out = self.t.run(cmd, root=root)
@@ -690,11 +787,14 @@ class Machine:
         for part in ("unlock", "codes", "net", "ssh", "tpm"):
             self.check(f"the image's plan names '{part}'", f"etc/tpm2-kira/plan/{part}" in out, out[-500:])
 
-    def cycle(self, n):
+    def cycle(self, n, started=False):
+        """A boot unlocked over SSH, with its checks; started: the machine was
+        started from a saved setup, nothing to reboot."""
         self.head(f"reboot {n}: the code screen over SSH, unlocked there")
-        self.run("systemctl reboot")
-        self.wait_port(22, False, 120)
-        self.lap("the system going down")
+        if not started:
+            self.run("systemctl reboot")
+            self.wait_port(22, False, 120)
+            self.lap("the system going down")
         if not self.check(f"boot {n}: the boot SSH server answers (port {SSH_PORT})", self.wait_port(SSH_PORT, True, 300)):
             raise Fail("no boot SSH server: the console shows why")
         self.lap("firmware to the boot SSH server")
@@ -1251,19 +1351,41 @@ class Machine:
         rc, out = self.run("tpm2-kira slot delete --yes 2>&1")
         self.check("slot delete again: nothing of tpm2-kira is found", "nothing of tpm2-kira found" in out, out[-300:])
 
-    def all(self, package, vault=None, reset=None):
+    def make_setup(self, package, reset=None):
+        """The steps up to the first reboot."""
+        if reset:
+            self.reset(reset)
+        self.preflight()
+        self.install(package)
+        self.seal()
+        self.inspect()
+        self.enrol()
+        self.control()
+        self.image()
+
+    def save_setup(self, package, setup, reset=None):
+        """--save-setup: the steps up to the first reboot, kept; the run ends."""
         try:
-            if reset:
-                self.reset(reset)
-            self.preflight()
-            self.install(package)
-            self.seal()
-            self.inspect()
-            self.enrol()
-            self.control()
-            self.image()
+            self.make_setup(package, reset)
+            self.head(f"keeping the setup: the snapshot {setup.tag}")
+            setup.save()
+        except Fail as e:
+            self.rep.issues.append("stopped: " + str(e).split("\n")[0])
+        except Exception as e:
+            self.rep.issues.append(f"the test failed: {type(e).__name__}: {e}")
+        return self.report()
+
+    def all(self, package, vault=None, reset=None, from_setup=None):
+        try:
+            if from_setup:
+                self.notes.append(FROM_SETUP_NOTE)
+                self.head(f"back to the setup: the snapshot {from_setup.tag}")
+                from_setup.restore()
+                self.lv.start(unlock=False)
+            else:
+                self.make_setup(package, reset)
             for n in range(1, self.cycles + 1):
-                self.cycle(n)
+                self.cycle(n, started=bool(from_setup) and n == 1)
             if self.distro == "arch":
                 self.unapproved_kernel()
             self.tpm_salt()
@@ -1282,7 +1404,7 @@ class Machine:
     def report(self):
         self.timing.finish()
         self.log.save("times.json", self.timing.as_json())
-        lines = [f"tpm2-kira vmtest: {self.name} ({self.distro}) on {self.host}", datetime.datetime.now().isoformat(timespec="seconds"), ""]
+        lines = list(self.notes) + [f"tpm2-kira vmtest: {self.name} ({self.distro}) on {self.host}", datetime.datetime.now().isoformat(timespec="seconds"), ""]
         for name, status, detail in self.rep.checks:
             lines.append(f"[{status}] {name}" + (f" - {detail}" if detail else ""))
         lines += ["", "Issues:" if self.rep.issues else "No issues."] + ["  - " + i for i in self.rep.issues]
@@ -1314,7 +1436,14 @@ def main():
     p.add_argument("--no-vault", action="store_true", help="leave out remote attestation over TLS (the vault)")
     p.add_argument("--no-build", action="store_true", help="take HEAD's packages already in --packages instead of building them")
     p.add_argument("--no-reset", action="store_true", help="do not run the machines' reset commands: they must be fresh already")
+    p.add_argument("--localvm-config", help="the machines' config for the saved setup (default: tools/localvm.py's)")
+    p.add_argument("--save-setup", action="store_true", help=f"the steps up to the first reboot, kept in the snapshot {SETUP_SNAPSHOT}; the run ends")
+    p.add_argument("--from-setup", action="store_true", help=f"start from the snapshot {SETUP_SNAPSHOT}, without building: no final proof")
+    p.add_argument("--drop-setup", action="store_true", help=f"remove the snapshot {SETUP_SNAPSHOT} and end")
     args = p.parse_args()
+    if sum((args.save_setup, args.from_setup, args.drop_setup)) > 1:
+        p.error("--save-setup, --from-setup and --drop-setup exclude each other")
+    args.no_build = args.no_build or args.from_setup or args.drop_setup
 
     cfg = configparser.ConfigParser()
     if not cfg.read(args.config):
@@ -1329,6 +1458,14 @@ def main():
     names = ["arch", "debian"] if args.target == "both" else [args.target]
     if subprocess.run(["git", "-C", REPO, "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True).stdout.strip():
         print("note: uncommitted changes are not tested: the packages are HEAD's", file=sys.stderr)
+    local = {}
+    if args.save_setup or args.from_setup or args.drop_setup:
+        localvm, local = local_machines(args.localvm_config or load_localvm().DEFAULT_CONFIG, names)
+    if args.drop_setup:
+        for lv in local.values():
+            SavedSetup(lv, None, SETUP_SNAPSHOT).drop()
+        print(f"dropped {SETUP_SNAPSHOT}")
+        return 0
     timing = Timing("the run", print)
     os.makedirs(run_dir, exist_ok=True)
     if not args.no_build:
@@ -1342,7 +1479,7 @@ def main():
     short, packages = head_packages(args.packages)
     machines, resets = [], {}
     for name in names:
-        if not packages[name]:
+        if not packages[name] and not args.from_setup:
             print(f"no {name} package of HEAD ({short}) in {args.packages} (leave out --no-build)", file=sys.stderr)
             return 2
         sec = cfg[name]
@@ -1351,8 +1488,17 @@ def main():
                                 int(sec.get("ssh_port", "22")), int(sec.get("boot_port", str(SSH_PORT)))))
         if not args.no_reset and sec.get("reset"):
             resets[name] = sec["reset"]
+        if name in local:
+            machines[-1].lv = local[name]
+    setups = {m.name: SavedSetup(local[m.name], m, SETUP_SNAPSHOT) for m in machines if m.name in local}
+    if args.from_setup:
+        problems = [why for why in (s.problem() for s in setups.values()) if why]
+        if problems:
+            print("\n".join(problems), file=sys.stderr)
+            return 2
+        print(FROM_SETUP_NOTE, flush=True)
     vault = None
-    if not args.no_vault:
+    if not args.no_vault and not args.save_setup:
         vc = cfg["vault"] if cfg.has_section("vault") else {}
         vault = Vault(os.path.abspath(os.path.join(REPO, vc.get("src", "../tpm2-kira-vault"))),
                       vc.get("url", "https://172.17.2.174"), int(vc.get("port", "443")), int(vc.get("operator_port", "8444")), run_dir)
@@ -1364,8 +1510,12 @@ def main():
             return 1
     timing.finish()
     results = {}
-    print(f"tpm2-kira {short}: " + ", ".join(f"{m.name} {os.path.basename(packages[m.name])}" + (" (reset)" if m.name in resets else "") for m in machines), flush=True)
-    threads = [threading.Thread(target=lambda m=m: results.__setitem__(m.name, m.all(packages[m.name], vault, resets.get(m.name)))) for m in machines]
+    print(f"tpm2-kira {short}: " + ", ".join(f"{m.name} {os.path.basename(packages[m.name] or 'the saved setup')}" + (" (reset)" if m.name in resets else "") for m in machines), flush=True)
+    if args.save_setup:
+        work = lambda m: m.save_setup(packages[m.name], setups[m.name], resets.get(m.name))
+    else:
+        work = lambda m: m.all(packages[m.name], vault, resets.get(m.name), setups.get(m.name) if args.from_setup else None)
+    threads = [threading.Thread(target=lambda m=m: results.__setitem__(m.name, work(m))) for m in machines]
     for th in threads:
         th.start()
     for th in threads:
@@ -1378,6 +1528,8 @@ def main():
         print(text)
         ok = ok and passed
     print_slowest([timing] + [m.timing for m in machines])
+    if args.from_setup:
+        print(FROM_SETUP_NOTE)
     with open(os.path.join(run_dir, "times.json"), "w") as f:
         f.write(timing.as_json())
     print("ALL PASS" if ok else "FAILED", "- logs:", run_dir)

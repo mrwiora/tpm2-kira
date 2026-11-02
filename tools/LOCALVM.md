@@ -53,6 +53,11 @@ Snapshots in use:
 |---|---|
 | `export` | the disk as exported, fresh OVMF variables, a fresh TPM; nothing changed in the guest |
 | `fresh` | the serial console enabled (below), no tpm2-kira installed: what every test starts from |
+| `setup` | yours, while iterating: the steps of `vmtest.py` up to the first reboot (`--save-setup`, docs/TESTING.md) |
+| `hib-setup` | yours, while iterating: `hibernatetest.py`'s setup (`--save-setup`) |
+
+`export` and `fresh` are not replaced without `snapshot --overwrite`, and no
+test removes them.
 
 ## The machine as qemu sees it
 

@@ -110,6 +110,26 @@ the laps inside the boots and the slowest steps in each `report.txt`, the
 same as `times.json`, and the slowest steps over both machines before the
 result. `tools/hibernatetest.py` does the same.
 
+### Iterating from a saved setup
+
+A final proof starts from the snapshot `fresh`. To work on a step, on the
+machines of `tools/localvm.py`, the setup can be kept:
+
+```bash
+tools/vmtest.py --config ../.local/vms/vmtest-local.conf --target both --save-setup   # up to the first reboot: the snapshot "setup"; ends
+tools/vmtest.py --config ../.local/vms/vmtest-local.conf --target both --from-setup   # the rest, from it, without building
+tools/hibernatetest.py --target both --save-setup      # "setup" when it fits (else made on the way), then its own: "hib-setup"; ends
+tools/hibernatetest.py --target both --from-setup      # every V step, from it, without building
+tools/hibernatetest.py --target both --only V4,V8      # those steps alone
+tools/hibernatetest.py --target both --drop-setup      # removes both snapshots (the VM test's flag removes "setup")
+```
+
+A run from a saved setup says on its report's first line that it is no final
+proof. A snapshot holds the commit that made it and is refused once anything
+but `tools/` and documentation has changed since. `fresh` and `export` are
+never written: `tools/localvm.py` refuses to replace or remove them without
+`--overwrite`, by hand.
+
 ### What it checks
 
 1. **Preflight:** the machine answers, runs the distribution, is fresh,

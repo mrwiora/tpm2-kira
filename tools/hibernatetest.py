@@ -45,11 +45,18 @@ checks that on both distributions, from the machines' snapshot "fresh":
 
 V4, V9 and V8 run last.
 
-Iterating on a step (a run from "fresh" is only for the proof): --save-setup makes the
-setup, keeps the state after it in a snapshot of its own ("hib-setup") and ends; --only
-V4,V8 goes back to it and runs those steps alone, without building; --drop-setup removes
-it. A change to the product wants a new --save-setup. The report and every
-transcript land in the run's directory (.local/runs/hibernatetest-<time>/).
+A run without the flags below starts from the snapshot "fresh": that is what a final
+proof is.
+
+Iterating: --save-setup makes the setup, keeps the state after it in a snapshot of its own
+("hib-setup") and ends. Its first half, up to the first reboot, is the VM test's: taken
+from the snapshot "setup" when that is there and of this product (vmtest.py --save-setup,
+or kept on the way), which spares the install, the slots, the enrolment and control.
+--from-setup runs every step from "hib-setup", without building, and its report says it is
+no final proof; --only V4,V8 runs those steps alone from there; --drop-setup removes both
+snapshots. A change to the product wants a new --save-setup. "fresh" and "export" are never
+written. The report and every transcript land in the run's directory (--run-dir, or
+.local/runs/hibernatetest-<time>/).
 """
 
 import argparse
@@ -104,16 +111,32 @@ class Hib:
 
     # ── the guest ────────────────────────────────────────────────────────
 
-    def setup(self, package, reset):
-        m = self.m
-        m.reset(reset)
-        m.preflight()
-        m.install(package)
-        m.seal()
-        m.enrol()
-        m.control()
-        m.image()
-        m.cycle(1)
+    def setup(self, package, reset, save=False):
+        """The VM test's steps up to its first reboot and its first boot, then what
+        this test adds. With save the first half is the snapshot both tests share,
+        taken when it fits this product, kept when it does not."""
+        m, lv = self.m, self.lv
+        shared = vmtest.SavedSetup(lv, m, vmtest.SETUP_SNAPSHOT) if save else None
+        if shared and not shared.problem():
+            m.head(f"back to the setup: the snapshot {shared.tag}")
+            shared.restore()
+            lv.start(unlock=False)
+            m.cycle(1, started=True)
+        else:
+            m.reset(reset)
+            m.preflight()
+            m.install(package)
+            m.seal()
+            m.enrol()
+            m.control()
+            m.image()
+            if shared:
+                m.head(f"keeping the setup: the snapshot {shared.tag}")
+                shared.save()
+                lv.start(unlock=False)
+                m.cycle(1, started=True)
+            else:
+                m.cycle(1)
         m.head("hibernation: tools and swap")
         install = ("pacman -S --noconfirm --needed tpm2-tools btrfs-progs" if self.distro == "arch" else
                    "DEBIAN_FRONTEND=noninteractive apt-get install -y tpm2-tools")
@@ -562,39 +585,25 @@ class Hib:
         self.check("V5: after suspend to RAM the CA is still closed", st["locked"] and st["boot"] == before["boot"], st["out"][-400:])
         self.m.rep.issues.append(f"V5: restartCount {before['restart']} -> {st['restart']}")
 
-    def state_path(self):
-        return self.lv.path(SETUP_SNAPSHOT + ".json")
+    def saved(self):
+        return vmtest.SavedSetup(self.lv, self.m, SETUP_SNAPSHOT)
 
     def save_setup(self):
-        """Keeps the state after the setup, for --only: the snapshot, and what the
-        test holds of it. The guest is started again through its code screen."""
-        m, lv = self.m, self.lv
-        self.run("nohup sh -c 'sleep 2; systemctl poweroff' >/dev/null 2>&1 &")
-        if not lv.wait_stopped(180):
-            raise vmtest.Fail("the guest did not power off for the setup's snapshot")
-        lv.snapshot(SETUP_SNAPSHOT)
-        files = {n: open(os.path.join(m.dir, n)).read() for n in ("bootkey", "bootkey.pub", "known_hosts_boot")}
-        fd = os.open(self.state_path(), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            json.dump({"secrets": m.secrets, "files": files}, f)
-        self.resume_over_ssh("after the snapshot")
+        """Keeps the state after the setup, for --from-setup and --only: the
+        snapshot, and what the test holds of it. The guest stays off."""
+        self.m.head(f"keeping the setup: the snapshot {SETUP_SNAPSHOT}")
+        self.saved().save()
 
     def restore_setup(self):
-        m, lv = self.m, self.lv
-        lv.revert(SETUP_SNAPSHOT)
-        st = json.load(open(self.state_path()))
-        m.secrets = st["secrets"]
-        for n, body in st["files"].items():
-            path = os.path.join(m.dir, n)
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as f:
-                f.write(body)
+        self.m.head(f"back to the setup: the snapshot {SETUP_SNAPSHOT}")
+        self.saved().restore()
         self.resume_over_ssh("the snapshot")
         self.wait_login("the snapshot")
 
     def only(self, steps):
         """The steps named, from the setup's snapshot."""
         m = self.m
+        m.notes.append(vmtest.FROM_SETUP_NOTE)
         try:
             self.restore_setup()
             for step in steps:
@@ -619,24 +628,42 @@ class Hib:
         self.resume_masked("V3")
         self.after_resume("V3", before)
 
+    def steps(self):
+        """Every step after the setup."""
+        m = self.m
+        self.step_v2()
+        m.head("V7: a normal reboot after the resume")
+        m.cycle(2)
+        if self.distro == "arch":
+            self.step_v3()
+            m.cycle(3)
+        self.mem_sleep()
+        self.failed_close()
+        self.way_out()
+
+    def from_setup(self):
+        """Every step, from the setup's snapshot."""
+        m = self.m
+        m.notes.append(vmtest.FROM_SETUP_NOTE)
+        try:
+            self.restore_setup()
+            self.steps()
+        except Fail as e:
+            m.rep.issues.append("stopped: " + str(e).split("\n")[0])
+        except Exception as e:
+            m.rep.issues.append(f"the test failed: {type(e).__name__}: {e}")
+        return m.report()
+
     def all(self, package, reset, save=False):
         m = self.m
         try:
-            self.setup(package, reset)
+            self.setup(package, reset, save)
             self.image_has_close()
             self.swap_risk()
             if save:
                 self.save_setup()
                 return m.report()
-            self.step_v2()
-            m.head("V7: a normal reboot after the resume")
-            m.cycle(2)
-            if self.distro == "arch":
-                self.step_v3()
-                m.cycle(3)
-            self.mem_sleep()
-            self.failed_close()
-            self.way_out()
+            self.steps()
         except Fail as e:
             m.rep.issues.append("stopped: " + str(e).split("\n")[0])
         except Exception as e:
@@ -651,10 +678,12 @@ def main():
     p.add_argument("--no-build", action="store_true", help="take HEAD's packages already in --packages")
     p.add_argument("--run-dir", help="where the report and the transcripts land (default .local/runs/hibernatetest-<time>)")
     p.add_argument("--save-setup", action="store_true", help=f"keep the state after the setup in the snapshot {SETUP_SNAPSHOT}")
+    p.add_argument("--from-setup", action="store_true", help=f"every step from the snapshot {SETUP_SNAPSHOT}, without building: no final proof")
     p.add_argument("--only", help=f"these steps alone (V2,V3,V4,V5,V8), from the snapshot {SETUP_SNAPSHOT}")
-    p.add_argument("--drop-setup", action="store_true", help=f"remove the snapshot {SETUP_SNAPSHOT} and end")
+    p.add_argument("--drop-setup", action="store_true", help=f"remove the snapshots {SETUP_SNAPSHOT} and {vmtest.SETUP_SNAPSHOT} and end")
     args = p.parse_args()
-    args.no_build = args.no_build or bool(args.only)
+    args.from_setup = args.from_setup or bool(args.only)
+    args.no_build = args.no_build or args.from_setup or args.drop_setup
     vcfg = configparser.ConfigParser()
     vcfg.read(os.path.join(LOCAL, "vms", "vmtest-local.conf"))
     lcfg = configparser.ConfigParser()
@@ -680,26 +709,33 @@ def main():
     defaults.setdefault("password_file", os.path.join(LOCAL, "vm-pw"))
     hs, results = [], {}
     for name in names:
-        if not packages[name] and not args.only and not args.drop_setup:
+        if not packages[name] and not args.from_setup and not args.drop_setup:
             print(f"no {name} package of HEAD ({short})", file=sys.stderr)
             return 2
         lv = localvm.Machine(name, lcfg[name], defaults)
         sec = vcfg[name]
         m = vmtest.Machine(name, name, sec["host"], sec.get("user", "pix"), password, lv.passphrase, run_dir, 0,
                            int(sec["ssh_port"]), int(sec["boot_port"]))
+        m.lv = lv
         hs.append((Hib(lv, m, probe), sec.get("reset")))
     print(f"tpm2-kira {short}: hibernation test on {', '.join(names)}, logs: {run_dir}", flush=True)
     if args.drop_setup:
         for h, _ in hs:
-            h.lv.kill()
-            h.lv.drop_snapshot(SETUP_SNAPSHOT)
-            if os.path.exists(h.state_path()):
-                os.remove(h.state_path())
-        print(f"dropped {SETUP_SNAPSHOT}; start the machines from fresh")
+            for tag in (SETUP_SNAPSHOT, vmtest.SETUP_SNAPSHOT):
+                vmtest.SavedSetup(h.lv, h.m, tag).drop()
+        print(f"dropped {SETUP_SNAPSHOT} and {vmtest.SETUP_SNAPSHOT}; start the machines from fresh")
         return 0
+    if args.from_setup:
+        problems = [why for why in (h.saved().problem() for h, _ in hs) if why]
+        if problems:
+            print("\n".join(problems), file=sys.stderr)
+            return 2
+        print(vmtest.FROM_SETUP_NOTE, flush=True)
     if args.only:
         steps = args.only.split(",")
         threads = [threading.Thread(target=lambda h=h: results.__setitem__(h.m.name, h.only(steps))) for h, _ in hs]
+    elif args.from_setup:
+        threads = [threading.Thread(target=lambda h=h: results.__setitem__(h.m.name, h.from_setup())) for h, _ in hs]
     else:
         threads = [threading.Thread(target=lambda h=h, r=r: results.__setitem__(h.m.name, h.all(packages[h.m.name], r, args.save_setup))) for h, r in hs]
     for t in threads:
@@ -712,6 +748,8 @@ def main():
         print(text)
         ok = ok and passed
     vmtest.print_slowest([h.m.timing for h, _ in hs])
+    if args.from_setup:
+        print(vmtest.FROM_SETUP_NOTE)
     print("ALL PASS" if ok else "FAILED", "- logs:", run_dir)
     return 0 if ok else 1
 
