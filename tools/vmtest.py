@@ -411,7 +411,9 @@ class Session:
                 text = clean(raw[:cut])
                 self.mark += cut
                 return text, m
-            if self.closed or time.time() > deadline:
+            if self.closed:
+                raise Fail(f"the session ended before /{pattern}/; it showed:\n" + clean(raw)[-1500:])
+            if time.time() > deadline:
                 raise Fail(f"waited {timeout} s for /{pattern}/; the session showed:\n" + clean(raw)[-1500:])
             self._pump(min(1.0, max(0.0, deadline - time.time())))
 
