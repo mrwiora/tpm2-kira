@@ -6,7 +6,7 @@ Four levels, from seconds to a whole boot:
 |---|---|---|
 | unit | Go | the logic: blobs, policies, recipes, the board, the parsers |
 | integration | Go, swtpm, socat | the binaries against a software TPM: sealing, codes, run, the unlock socket, SSH |
-| the VM test (`tools/vmtest.py`) | fresh, encrypted VMs; docker; the built packages | tpm2-kira's whole life on a real machine: install, `control`, reboots unlocked over SSH, the vault |
+| the VM test (`tools/vmtest.py`) | fresh, encrypted VMs; docker; the built packages | tpm2-kira's whole life on a real machine: install, `control`, reboots unlocked over SSH, the vault, hibernation |
 | the acceptance run (`tools/acceptance.py`) | a machine you watch | the same install checks, with you at the console for the reboot |
 
 ## Unit and integration tests
@@ -23,6 +23,58 @@ Tests run with `-count=1` and wait for a state, never for a time
 (AGENTS.md). The integration suite builds both binaries, `tpm2-kira` and
 `tpm2-kira-boot`, as they ship (static, no cgo) and runs them as a user
 against swtpm (`TPM2_KIRA_UNPRIVILEGED=1`).
+
+## The proof: 15 minutes
+
+```bash
+tools/proof.py                                      # the proof: from fresh, two machines, 15 minutes
+tools/proof.py --since '2026-11-03 09:00'           # and, after it, what the batch touched
+tools/proof.py --all                                # before a release, the owner's call: everything
+tools/test-affected.py --since '2026-11-03 09:00'   # what AGENTS.md's table asks for: prints, starts nothing
+```
+
+`tools/proof.py` runs both machines in parallel through the scenarios below and, beside them, what
+needs no VM: `make test-all`, aSSH's tests, the vault's, safearch's `tests/run.sh`. **15 minutes wall
+clock is a hard limit:** at 900 s it stops what still runs and fails, naming the scenario it was in
+and those over their budgets. A scenario over its budget within the limit is printed, and no failure.
+It reports in `report.txt` and `report.json` of its run's directory (`.local/runs/proof-<time>/`, or
+`--run-dir`), every scenario against its budget, and leaves the machines at `fresh`, stopped. A part
+that fails does not stop the others. `--only` is no final proof, and its report says so. A final proof
+is this, from `fresh`, without `--fast-kdf`: there is no flag for that.
+
+| Scenario (`vmtest.py --only NAME`) | What it shows | Budget Arch / Debian, s |
+|---|---|---|
+| `setup` | install, setup, enrolment, `control`, the memory lock of a command | 170 / 190 |
+| `typed-boot` | the typed boot over SSH, every running-system check in one go: certified key, TOTP, PCR 15 closed, slots refuse, PCR 4, Secure Boot's warning, memory locked, signed slots on Arch, 8 and 9 on Debian | 48 / 58 |
+| `hibernate` | hibernate and resume, suspend; a kernel that refuses the image is "not tested", at once | 65 / 62 |
+| `unapproved` | an image not approved, signed by the PCR key (Arch) | 70 / - |
+| `tpm-salt` | the salt in this TPM: enrolment, its boot, removal | 107 / 124 |
+| `vault-pepper` | the vault: a wrong, then the right pepper | 135 / 162 |
+| `revoked` | a device revoked on the vault, falling back to typed: boot 2's checks | 52 / 59 |
+| `silent-tpm` | the failure path: a silent TPM, one hard reboot, then the passphrase | 175 / 245 |
+
+**Before a release, `--all`:** the proof's scenarios and the rest, named, with no limit, which also
+runs when named in `--only`:
+
+| Scenario | What it shows |
+|---|---|
+| `second-typed-boot` | a second typed boot of one image |
+| `vault-alone` | the unattended recipe: a boot nobody touches, the vault alone |
+| `typed-vault` | the operator-approved typed vault (0x1401) |
+| `V3` | Arch: the resume with tpm2-kira masked, the close alone |
+| `V6` | `control` on unencrypted swap |
+| `no-tpm` | V4 step 5: a boot with no TPM at all |
+| `V4-reverted` | Debian: the resume with the TPM back |
+| `V9-long` | Debian: the close that holds clears the count |
+| `V8` | the way out of a close that keeps rebooting |
+| `slot-life` | a slot's life, a moved PCR 7 |
+| `removal` | what `slot delete` takes; `control` asks before the SSH CA |
+
+`tests/vm.sh` (safearch) and Marify's emulator test run under `--all`, and when AGENTS.md's table
+asks (`--with`, `--since`): after the proof, outside its limit.
+
+**The rule:** no full run while a scenario fails; each is proven alone from a saved setup first,
+then one full proof. A run expected over 10 minutes is announced first.
 
 ## The VM test
 
@@ -79,14 +131,13 @@ writes a report per machine with every session's transcript.
 ### Running it
 
 ```bash
-tools/vmtest.py --target both               # or arch, or debian (in parallel)
-tools/vmtest.py --target both --cycles 3    # reboots unlocked over SSH (default 2)
-tools/vmtest.py --target arch --no-vault    # without the vault
+tools/vmtest.py --target both               # the proof's scenarios; or arch, or debian
+tools/vmtest.py --target both --all         # every scenario
 ```
 
 A run needs nobody at the keyboard, and starts from a defined state:
 
-1. **The packages of HEAD**: it builds them (`packaging/build-packages.sh`:
+1. **The packages of HEAD**: beside the reset, it builds them (`packaging/build-packages.sh`:
    the committed state, aSSH as pinned) and installs exactly those - by
    the commit in their names, never a package of another commit.
    Uncommitted changes are not tested; it says so. `--no-build` takes
@@ -96,8 +147,7 @@ A run needs nobody at the keyboard, and starts from a defined state:
    then its ssh is waited for. Without one (or with `--no-reset`) the
    machine must be fresh already; one that is not is refused before
    anything is changed.
-3. The steps below, both machines at once, and the vault in its
-   container.
+3. The scenarios, both machines at once, and the vault in its container.
 
 It ends with `ALL PASS` (exit 0) or `FAILED` and the run's directory
 (`./vmtest-<time>`, or `--run-dir`): per machine `report.txt`, the
@@ -108,21 +158,26 @@ transcript, a log per command and session (`session-*-control.log`,
 Every step is timed: its seconds in the output as it ends, a table with
 the laps inside the boots and the slowest steps in each `report.txt`, the
 same as `times.json`, and the slowest steps over both machines before the
-result. `tools/hibernatetest.py` does the same.
+result.
+
+A scenario that fails does not end the others: the machine goes back to the setup, booted, and the
+next goes on from there; one that needs it is not run. Only a machine that does not come back ends
+the run.
 
 ### Iterating from a saved setup
 
-A final proof starts from the snapshot `fresh`. To work on a step, on the
-machines of `tools/localvm.py`, the setup can be kept:
+A final proof starts from the snapshot `fresh`. To work on a scenario, on the machines of
+`tools/localvm.py`, the setup can be kept.
 
 ```bash
-tools/vmtest.py --config ../.local/vms/vmtest-local.conf --target both --save-setup   # up to the first reboot: the snapshot "setup"; ends
-tools/vmtest.py --config ../.local/vms/vmtest-local.conf --target both --from-setup   # the rest, from it, without building
-tools/hibernatetest.py --target both --save-setup      # "setup" when it fits (else made on the way), then its own: "hib-setup"; ends
-tools/hibernatetest.py --target both --from-setup      # every V step, from it, without building
-tools/hibernatetest.py --target both --only V4,V8      # those steps alone
-tools/hibernatetest.py --target both --drop-setup      # removes both snapshots (the VM test's flag removes "setup")
+tools/vmtest.py --config ../.local/vms/vmtest-local.conf --target both --save-setup   # the snapshot "setup"; ends
+tools/vmtest.py --config ../.local/vms/vmtest-local.conf --target both --from-setup   # the proof's scenarios, from it, without building
+tools/vmtest.py --config ../.local/vms/vmtest-local.conf --target debian --only revoked   # a scenario and what it needs
+tools/vmtest.py --config ../.local/vms/vmtest-local.conf --target both --drop-setup   # removes the snapshot
 ```
+
+Each scenario starts with the typed boot, from the setup. `--only setup` runs the setup from `fresh`.
+None of these is a final proof, and their reports' first lines say so.
 
 A run from a saved setup says on its report's first line that it is no final
 proof. A snapshot holds the commit that made it and is refused once anything
@@ -158,46 +213,9 @@ test build says what it is in `version` and in `tpm2-kira status`. The vault, th
 phone, aSSH and safearch derive nothing with this cost: they hand over salts,
 parts and peppers; only `diskkey.Combine` runs it, in the two binaries of one package.
 
-### What a run costs
-
-Seconds, measured from `fresh` (2026-11-02, both machines in parallel, one process;
-`times.json` of each run). Before is the code before the timing work; after has the
-state waits; `--fast-kdf` is the test build's cost on top of that.
-
-| | Arch before | after | `--fast-kdf` | Debian before | after | `--fast-kdf` |
-|---|---:|---:|---:|---:|---:|---:|
-| VM test, all | 957 | 833 | 686 | 1048 | 922 | 696 |
-| a typed boot (reboot 1) | 68 | 48 | 38 | 81 | 59 | 49 |
-| a boot, wrong pepper then right | 96 | 82 | 60 | 127 | 110 | 66 |
-| hibernate test, all | 1240 | 1064 | 1002 | 1171 | 1074 | 919 |
-| V2 (Arch: the guest's clock, below) | 272 | 231 | 212 | 76 | 68 | 52 |
-| V4 | 502 | 421 | 388 | 199 | 191 | 158 |
-| V5 | 23 | 3.5 | 3.6 | 23 | 3.9 | 3.9 |
-| V8 | 55 | 52 | 82 | 101 | 94 | 81 |
-
-The VM test's whole run, with the build and the vault's container: 1117 s before,
-967 after, 739 with `--fast-kdf`. A hibernate test from `hib-setup` skips a further
-4-5 minutes of setup; it is no final proof. The guest's memory stays 4096 MiB: lower
-gained nothing and fails (`tools/LOCALVM.md`, "Memory").
-
-What is left is mostly the machines and the product:
-- the V4 and V9 boots without a TPM's answer (Arch's silent TPM alone 240 s) wait for
-  the close's own timeouts;
-- Arch's V2 spends about 182 s of a run from `fresh`, about 10 s from `hib-setup`, with the
-  resumed kernel idle: its clock stands still. A guest's `kvm-clock` counts from qemu's
-  start, guest reboots included; a resume is under a new qemu, whose clock is behind what
-  the kernel last read, and the kernel holds to its last value until the new one passes
-  it. So the wait is qemu's time before the hibernation less its time at the resume: 223
-  less 40 s from `fresh`, none from a snapshot started just before. Holding a guest up
-  300 s longer from `hib-setup` makes the 10 s more than the test's 300 s
-  (`.local/runs/k/k2`). It is the test machine's, not tpm2-kira's, and left as it is; a
-  run that spends longer before V2 than that margin fails V2 with "the system does not
-  come back";
-- firmware to the boot SSH server is 18-20 s on Arch and 28 s on Debian (GRUB's timeout
-  is `fresh`'s), the initrd's end to ssh 6 and 10-16 s;
-- Argon2id itself is 11-17 s per derivation on the 2 vCPUs.
-
 ### What it checks
+
+The setup:
 
 1. **Preflight:** the machine answers, runs the distribution, is fresh,
    has a TPM and a LUKS device that the passphrase opens.
@@ -207,9 +225,12 @@ What is left is mostly the machines and the product:
    computed from the secret `slot add` shows - what your authenticator
    does (on a systemd initrd the running system is past the separator:
    locked until the next boot, by design).
-4. The commands that read: `status`, `slot info|list|status`, `phone
-   ekcert`, `luks status`, `initramfs plan`, help pages.
-5. **`luks enrol --salt typed`** (the recovery recipe) with a test password and salt.
+4. The commands that read what only a machine has: `status`'s Secure Boot, `slot status`, `phone
+   ekcert`, `luks status`. The rest is the integration suite's: `TestRootIsRequired` (the root
+   gate, help pages), `TestSealDefaultsAndStatus`, `TestInfo`, `TestNVRAMList`, `TestDecidePlan`.
+5. **`luks enrol --salt typed`** (the recovery recipe) with a test password and salt, and the memory
+   of a command that holds it: a refused lock stops it before it asks, `VmLck`, `VmSwap` under
+   a hog.
 6. **`control`, answered line by line** (`ACCESSIBLE=1`): step 1's
    adoptions (the mkinitcpio hook, the key's route), the image's network
    (DHCP, as proposed), the SSH server at boot (port 2222, a 600 s hold)
@@ -219,40 +240,42 @@ What is left is mostly the machines and the product:
 7. **The image:** `tpm2-kira-boot` and no `tpm2-kira`, no control.conf,
    the plan's parts, no unit or script that starts a gate (`run` starts
    its children itself).
-8. **Reboots** (`--cycles`): the boot SSH server answers; its host key is
-   checked against the CA (`StrictHostKeyChecking=yes`); both slots'
-   codes against the computed ones; Enter, the password and the salt in
-   the session; the session ends with the server's last line; after the
-   boot the close ran (every slot closed: PCR 15 extended, slot 0's TOTP
-   key refuses), the key was answered, `ssh-child` ran confined
-   (nobody, no new privileges, no executable memory, Landlock, seccomp), and
-   the boot's log has no error.
-9. **Remote attestation over TLS, the vault:** a token from the vault,
-   `luks enrol --password tpm --salt vault`, the image rebuilt with the vault; a boot
-   that nobody touches, unlocked by the vault's release to the TPM's
-   quote; a boot with the device revoked on the vault, where the screen
-   and the prompt say the vault gave no key and the recovery recipe's
-   keyslot is the fallback, typed over SSH; then unrevoked; the keyslot
-   enrolled again with a pepper, a boot approved over the operator
-   interface first with a wrong pepper, then with the right one.
-10. **A slot's life:** `slot approve`, `slot add --nvram 2`, `slot delete`
-    (blob and generation index gone). Between them slot 2 gets a phone channel
-    sealed to a PCR 7 of another day (`channel-fixture`: `go test -c -tags
-    kira_vm_fixture ./internal/admin`, on the machine for the run, never in a package;
-    no VM has a phone, and a register extended by hand moves nothing here, since the next
-    boot's value comes from the event log). The real hook scripts, `--if-moved` and a run with
-    no terminal leave it and say so with old, new and the event log's names; no at a
-    terminal leaves it; yes and `control`'s line seal it. A gate refusing it is
-    `TestChannelFollowsPCR7`'s, with PCR 7 extended by hand on swtpm.
-    Throughout, Secure Boot's warning, from the machine's own variables (the
-    fresh VMs are in Setup Mode): once in `slot add`, `slot approve` and `status`,
-    per image in the hook's output, red in `control`'s two steps, and at each boot on
-    the console (the serial log), in the SSH session and in the boot's log.
-11. **Removal:** `control` switches the SSH server off and asks before it
-    removes the SSH CA - No keeps the EFI variable and `ssh_ca.pub`;
-    `slot delete --yes` then takes everything of tpm2-kira: no index of
-    its range is left in the TPM, the `KIRAasshCA` variable and
-    `ssh_ca.pub` are gone, and a second run finds nothing.
+
+The boots. **A typed boot** (`typed-boot`, and boot 2, the revoked device's): the boot SSH server
+answers; its host key is checked against the CA (`StrictHostKeyChecking=yes`); both slots' codes
+against the computed ones; Enter, the password and the salt in the session; the session ends with
+the server's last line; after the boot the close ran (every slot closed: PCR 15 extended, slot 0's
+TOTP key refuses), the key was answered, memory locked and given back, `ssh-child` ran confined
+(nobody, no new privileges, no executable memory, Landlock, seccomp), PCR 4 as predicted, the SSH
+CA's slots (signed on Arch, 8 and 9 on Debian), and the boot's log has no error.
+
+**Remote attestation over TLS, the vault:** `vault-pepper` refuses an enrolment without a root, makes
+a token, enrols with a pepper, rebuilds the image; a boot nobody touches waits for an operator, is
+approved first with a wrong pepper, then with the right one; what the vault shows of Secure Boot, from
+the quote. `revoked`: the screen and the prompt say the vault gave no key and the recovery recipe's
+keyslot is the fallback, typed over SSH; then unrevoked. Under `--all`, `vault-alone` and `typed-vault`.
+
+**Hibernation** (`tools/hibernatetest.py`'s docstring has the steps): one hibernation of the typed boot,
+kept as a snapshot; the resume over SSH; suspend to RAM; the failure path from it.
+
+**Under `--all`, a slot's life:** `slot approve`, `slot add --nvram 2`, `slot delete` (blob and
+generation index gone). Between them slot 2 gets a phone channel sealed to a PCR 7 of another day
+(`channel-fixture`: `go test -c -tags kira_vm_fixture ./internal/admin`, on the machine for the run,
+never in a package; no VM has a phone, and a register extended by hand moves nothing here, since the
+next boot's value comes from the event log). The real hook scripts, `--if-moved` and a run with no
+terminal leave it and say so with old, new and the event log's names; no at a terminal leaves it;
+`control`'s line seals it, a person's yes is `TestApprovalLeavesAMovedChannel`'s. A gate refusing it
+is `TestChannelFollowsPCR7`'s, with PCR 7 extended by hand on swtpm.
+
+Throughout, Secure Boot's warning, from the machine's own variables (the fresh VMs are in Setup Mode):
+once in `slot add`, `status`, per image in the hook's output, red in `control`'s step, and at each
+boot on the console (the serial log), in the SSH session and in the boot's log; `slot approve` and
+`control`'s step 2 under `--all`.
+
+**Under `--all`, removal:** `control` switches the SSH server off and asks before it removes the SSH
+CA - No keeps the EFI variable and `ssh_ca.pub`; `slot delete --yes` then takes everything of tpm2-kira:
+no index of its range is left in the TPM, the `KIRAasshCA` variable and `ssh_ca.pub` are gone, and a
+second run finds nothing.
 
 ### The vault of the run
 

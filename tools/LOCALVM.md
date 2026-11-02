@@ -149,7 +149,7 @@ Lowering a test machine gains nothing worth a smaller margin: the same runs at 3
 took the same time within a run's spread (hibernate test 754 and 868 s against
 752 and 902 s): the guest's memory is mostly free, so a hibernate image is no
 smaller. The initrd has no swap: too little memory is a failed allocation or a
-killed process, and `vmtest.py` and `hibernatetest.py` check for that at every
+killed process, and `vmtest.py` checks for that at every
 boot, and for `/proc/vmstat`'s swap counters around an enrolment's Argon2id.
 
 ## From a libvirt export to the snapshot `fresh`
