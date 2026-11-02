@@ -403,6 +403,17 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.Seale
 	measurePoint := readResult.EventlogInfo != nil && readResult.EventlogInfo.MeasurePointExtends != ""
 	gen := blob.Payload.Generation + 1
 
+	// A moved channel PCR (a db or dbx update): the phone channel follows the approval.
+	// Before the generation is raised: a failure leaves the slot as it is.
+	resealed, afterSeparator, err := nvslot.ResealChannelIfMoved(tpmDev, blob, signer)
+	if err != nil {
+		return fmt.Errorf("cannot seal the phone channel again (remove the slot's phones if it stays so): %w", err)
+	}
+	if resealed {
+		fmt.Printf("The phone channel is sealed again, to PCR %s as the next boot will have it; the phones keep what they pinned.\n", nvslot.ChannelPCRList())
+		warnChannelAfterSeparator(afterSeparator)
+	}
+
 	// Raising the generation revokes the slot's approval, so a blob this
 	// TPM cannot store must be found before that, not by the write.
 	blob.Payload.PCRKey = pcrKey

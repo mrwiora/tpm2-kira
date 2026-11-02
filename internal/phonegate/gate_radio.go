@@ -38,11 +38,11 @@ type GateOptions struct {
 }
 
 // openChannelByHand is 'phone gate”s way to the channel's secrets: the boot's
-// before the close, the signing key's after it.
+// before the close, the signing key's after it or with PCR 7 moved.
 func openChannelByHand(privPath string) ChannelOpener {
 	return func(t transport.TPM, sb *nvslot.SealedBlob) (*nvslot.ChannelSecrets, error) {
 		c, err := nvslot.UnsealChannel(t, sb)
-		if !errors.Is(err, nvslot.ErrClosed) {
+		if !errors.Is(err, nvslot.ErrClosed) && !errors.Is(err, nvslot.ErrChannelMoved) {
 			return c, err
 		}
 		if privPath == "" {
@@ -50,7 +50,7 @@ func openChannelByHand(privPath string) ChannelOpener {
 		}
 		priv, err := signing.LoadCheckedSigningPrivateKey(privPath)
 		if err != nil {
-			return nil, fmt.Errorf("the boot is closed, and only the signing key opens them now: %w", err)
+			return nil, fmt.Errorf("only the signing key opens them in this boot: %w", err)
 		}
 		if err := signing.PrepareSigningKey(priv); err != nil {
 			return nil, fmt.Errorf("the signing key is not usable: %w", err)

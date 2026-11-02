@@ -79,7 +79,8 @@ func testEnrolment(name string) *nvslot.Attestation {
 		PCRAlg: attest.AlgSHA256, PCRSelection: []uint8{0, 7},
 		Phone: nvslot.PhoneAttestation{
 			ChannelPublic: bytes.Repeat([]byte{0x11}, 80), ChannelPrivate: bytes.Repeat([]byte{0x22}, 160),
-			Verifiers: []attest.EnrolledVerifier{{ID: "phone", AnchorPub: []byte{4}, NoisePub: make([]byte, 32), PolicyID: "p"}},
+			ChannelPCRs: []nvslot.ChannelPCR{{Index: 7, Digest: bytes.Repeat([]byte{0x33}, 32)}},
+			Verifiers:   []attest.EnrolledVerifier{{ID: "phone", AnchorPub: []byte{4}, NoisePub: make([]byte, 32), PolicyID: "p"}},
 		},
 	}
 }
@@ -160,7 +161,8 @@ func TestSlotBlobLayout(t *testing.T) {
 		t.Fatalf("attestation part did not survive: %+v", a)
 	}
 	if !a.Phone.Enabled() || len(a.Phone.Verifiers) != 1 || a.Phone.Verifiers[0].ID != "phone" || a.Phone.Verifiers[0].PolicyID != "p" ||
-		!bytes.Equal(a.Phone.ChannelPublic, want.Phone.ChannelPublic) || !bytes.Equal(a.Phone.ChannelPrivate, want.Phone.ChannelPrivate) {
+		!bytes.Equal(a.Phone.ChannelPublic, want.Phone.ChannelPublic) || !bytes.Equal(a.Phone.ChannelPrivate, want.Phone.ChannelPrivate) ||
+		len(a.Phone.ChannelPCRs) != 1 || a.Phone.ChannelPCRs[0].Index != 7 || !bytes.Equal(a.Phone.ChannelPCRs[0].Digest, want.Phone.ChannelPCRs[0].Digest) {
 		t.Fatalf("phone method did not survive: %+v", a.Phone)
 	}
 	// The rest of the slot is untouched by it; its TOTP key is retired.

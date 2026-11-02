@@ -171,6 +171,9 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	if enrolment.BootKeyPublic, enrolment.BootKeyPrivate, err = phonegate.CreateBootKey(tpm, sealedBlob); err != nil {
 		t.Fatalf("boot key: %v", err)
 	}
+	if _, err := nvslot.SealChannel(tpm, sealedBlob, &enrolment.Phone, &nvslot.ChannelSecrets{NoisePrivate: make([]byte, 32), AdvKey: make([]byte, 32)}); err != nil {
+		t.Fatalf("the channel: %v", err)
+	}
 	if err := writeAttestBlob(tpm, slot, enrolment, priv); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}

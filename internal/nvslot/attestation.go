@@ -43,6 +43,11 @@ const (
 	// maxChannelArea bounds each area of the channel's sealed object.
 	maxChannelArea = 1024
 
+	// maxChannelPCRs bounds the registers the object's policy reads; a PCR's
+	// digest is a bank's, at most SHA-256's.
+	maxChannelPCRs      = 24
+	maxChannelPCRDigest = 32
+
 	// MaxAttestationLen bounds the attestation part of a slot's blob.
 	MaxAttestationLen = 16 * 1024
 
@@ -87,8 +92,9 @@ type Attestation struct {
 // secrets, sealed (channel.go), and the phones that may use it. The zero value
 // is "not set up".
 type PhoneAttestation struct {
-	ChannelPublic  []byte // marshalled TPMT_PUBLIC of the sealed object
-	ChannelPrivate []byte // TPM2B_PRIVATE contents, wrapped by the storage primary
+	ChannelPublic  []byte       // marshalled TPMT_PUBLIC of the sealed object
+	ChannelPrivate []byte       // TPM2B_PRIVATE contents, wrapped by the storage primary
+	ChannelPCRs    []ChannelPCR // what the object's first branch reads besides PCR 15
 	Verifiers      []attest.EnrolledVerifier
 }
 
@@ -261,8 +267,11 @@ func (b *Attestation) Marshal() ([]byte, error) {
 }
 
 func (p *PhoneAttestation) Marshal() ([]byte, error) {
-	if len(p.ChannelPublic) == 0 || len(p.ChannelPrivate) == 0 {
+	if len(p.ChannelPublic) == 0 || len(p.ChannelPrivate) == 0 || len(p.ChannelPCRs) == 0 {
 		return nil, fmt.Errorf("the phone method's sealed channel is incomplete")
+	}
+	if len(p.ChannelPCRs) > maxChannelPCRs {
+		return nil, fmt.Errorf("the phone method's sealed channel reads %d PCRs, maximum %d", len(p.ChannelPCRs), maxChannelPCRs)
 	}
 	if len(p.Verifiers) > MaxVerifiers {
 		return nil, fmt.Errorf("at most %d phones can be enrolled per slot", MaxVerifiers)
@@ -270,6 +279,11 @@ func (p *PhoneAttestation) Marshal() ([]byte, error) {
 	w := &blobWriter{}
 	w.lp16(p.ChannelPublic)
 	w.lp16(p.ChannelPrivate)
+	w.u8(uint8(len(p.ChannelPCRs)))
+	for _, pcr := range p.ChannelPCRs {
+		w.u8(uint8(pcr.Index))
+		w.lp16(pcr.Digest)
+	}
 	w.u8(uint8(len(p.Verifiers)))
 	for _, v := range p.Verifiers {
 		if len(v.NoisePub) != 32 {
@@ -420,6 +434,17 @@ func (p *PhoneAttestation) unmarshal(data []byte) error {
 	p.ChannelPrivate = r.lp16(maxChannelArea)
 	if r.err == nil && (len(p.ChannelPublic) == 0 || len(p.ChannelPrivate) == 0) {
 		return fmt.Errorf("the phone method has no sealed channel")
+	}
+	pcrs := int(r.u8())
+	if r.err == nil && (pcrs == 0 || pcrs > maxChannelPCRs) {
+		return fmt.Errorf("the blob's sealed channel reads %d PCRs, between 1 and %d allowed", pcrs, maxChannelPCRs)
+	}
+	for i := 0; i < pcrs && r.err == nil; i++ {
+		pcr := ChannelPCR{Index: int(r.u8()), Digest: r.lp16(maxChannelPCRDigest)}
+		if pcr.Index >= maxChannelPCRs {
+			return fmt.Errorf("the blob's sealed channel reads PCR %d", pcr.Index)
+		}
+		p.ChannelPCRs = append(p.ChannelPCRs, pcr)
 	}
 	n := int(r.u8())
 	if r.err == nil && n > MaxVerifiers {

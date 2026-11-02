@@ -73,7 +73,7 @@ flowchart TB
 ### 3.1 The slot's record (the "blob"), in an EFI variable
 
 Each slot (0-15; its number is also written as `0x01803010` + *n*) keeps
-one serialised `SealedBlob` (format version 19, §10), its **record**, in
+one serialised `SealedBlob` (format version 20, §10), its **record**, in
 the EFI variable `KIRAslotN` under tpm2-kira's vendor GUID
 (`67f474ef-94a1-4412-88df-d62349d430a9`), at most 8 KiB. In the TPM a
 slot keeps only what a TPM policy reads or nobody may turn back: its
@@ -93,7 +93,7 @@ and within that part the way a verifier reaches the machine is a typed
 
 | Field               | Content                                                         | Sensitive? |
 |---------------------|-----------------------------------------------------------------|------------|
-| `Version`           | Blob format version (19)                                        | No         |
+| `Version`           | Blob format version (20)                                        | No         |
 | `Public`            | TPMT_PUBLIC of the TOTP key object; empty without TOTP | No     |
 | `Private`           | TPM2B_PRIVATE of the TOTP key object (TPM-wrapped); empty without TOTP | **Yes**¹ |
 | `PCRDigests`        | Per-PCR index, source (register/eventlog/uki/signed) and digest | No         |
@@ -132,6 +132,7 @@ Method 1, phones over Bluetooth LE (`Phone`):
 |-----------------|----------------------------------------------------------------------|------------|
 | `ChannelPublic` | TPMT_PUBLIC of the sealed object holding the channel's secrets⁵      | No         |
 | `ChannelPrivate`| TPM2B_PRIVATE of that object (TPM-wrapped)                           | **Yes**¹   |
+| `ChannelPCRs`   | The registers its first branch reads besides PCR 15 (today PCR 7) and their values⁵ | No |
 | `Verifiers`     | Up to 8 phones: id, anchor public key (signs the phone's verdicts), channel public key, policy id; no name | No |
 
 Method 2, tpm2-kira-vault (`Vault`, VAULT.md), created by `vault enrol`:
@@ -278,16 +279,36 @@ of the signing *public* key that the initramfs hooks put into the image.
 key, 64 bytes sealed in one object (`internal/nvslot/channel.go`). Its policy is
 not the slot's, and is fixed when it is made:
 
-    PolicyOR( PolicyPCR(15 == zero) ; PolicyCommandCode(Unseal),
+    PolicyOR( PolicyPCR(7 as sealed, 15 == zero) ; PolicyCommandCode(Unseal),
               PolicySigned(signing key, policyRef) ; PolicyCommandCode(Unseal) )
 
-The first branch is the gate's: before the close, in any boot, approved or not, so
-that the phone can show a boot nobody approved as changed. The second is the
-running system's, with a signature over the TPM's nonce of that session: `phone enrol`
-for a further phone (the phones have pinned these keys), `phone salt enrol` and
-`phone gate` after the close. Whoever opens them can recognise the machine's
-advertisements and imitate its Bluetooth endpoint, but cannot produce a quote, which
-only the TPM's attestation key can sign. Who still can: §19.
+The first branch is the gate's: before the close, with this machine's Secure Boot
+state in PCR 7, whatever image it boots, approved or not, so that the phone can
+show a boot nobody approved as changed. The list of registers is one constant
+(`channelPCRs`). A Microsoft-signed live USB, Secure Boot switched off, a db or dbx
+update: PCR 7 differs, nothing opens them, there is no gate, and the phone finds no
+machine (§13.4).
+
+PCR 7's value is the one the gate will see at the next boot: replayed from the event
+log, like a slot's (§5.8), because on the running system of an Arch machine
+`systemd-pcrosseparator` has moved the register. The record carries it
+(`ChannelPCRs`) for PolicyOR's branch digest; a record with another value does not
+fit the object's policy. Without a usable log the registers are taken, and enrolment
+warns.
+
+The second branch is the running system's, with a signature over the TPM's nonce of
+that session: `phone enrol` for a further phone (the phones have pinned these keys),
+`phone salt enrol`, `phone gate` after the close or with PCR 7 moved, and `slot
+approve`. A moved PCR 7 means sealing them again: `status` and `control` say so (the
+next boot's PCR 7, from the log, is not the sealed one), and `slot approve` opens them
+with the signing key and seals the same secrets to the new value, before it raises the
+generation. A db or dbx update takes effect at the next boot, so the log shows it only
+then: that one boot has no gate, as it has no slot that reads PCR 7. The phones keep
+what they pinned.
+
+Whoever opens them can recognise the machine's advertisements and imitate its Bluetooth
+endpoint, but cannot produce a quote, which only the TPM's attestation key can sign. Who
+still can: §19.
 
 ### 3.2 The generation index
 
@@ -1055,7 +1076,7 @@ approve and boot.
 | Offline disk theft                          | The key objects are TPM-wrapped; useless without the specific TPM chip |
 | Boot chain tampering (evil maid)            | PCR values change → PolicyPCR fails → no code → user detects compromise |
 | Copying the TOTP key                        | No unseal exists; the TPM computes codes and the key never leaves it after enrolment (§4.5) |
-| Reading the phone channel's secrets on the running OS | Sealed; after the close only the signing key opens them (§3.1, note ⁵) |
+| Reading the phone channel's secrets on the running OS, or from another boot chain | Sealed to PCR 7 and PCR 15; after the close, or under another Secure Boot state, only the signing key opens them (§3.1, note ⁵) |
 | Using the TPM from the running OS (root, `tss`) | The close extends PCR 15 at the end of the code screen; every slot object's own PolicyPCR(15 == zero) fails until reboot, whatever the signing key approves (§4.5, §14) |
 | Rollback to an older approved state         | Every approval raises the generation; older approvals of a slot stop working. Limit: signed PCR 11 and the CA's approvals (§19) |
 | A dictionary-attack lockout stopping the boot | The generation index, the storage primary and every slot object are noDA (§4.5) |
@@ -1176,7 +1197,7 @@ outside the current design.
 
 ---
 
-## 10. Blob Format (Version 19)
+## 10. Blob Format (Version 20)
 
 The blob is a binary-serialised structure with explicit length prefixes and
 maximum size limits to prevent memory exhaustion during deserialisation.
@@ -1215,7 +1236,7 @@ every local user in `/proc/<pid>/cmdline`.
 ```
 Offset  Field                   Type        Notes
 ─────────────────────────────────────────────────────────────
-0       Version                 uint32      Must be 19
+0       Version                 uint32      Must be 20
 4       Payload length          uint32      Signed region length
 8       Public length           uint32      ≤ 2MB; 0 with phones (§3.1)
 ?       Public                  []byte      TPMT_PUBLIC of the TOTP key object
@@ -1276,6 +1297,10 @@ Offset  Field                   Type        Notes
           Method type 1, phones over Bluetooth LE:
             ChannelPublic       uint16 + []byte   ≤ 1024: TPMT_PUBLIC of the sealed channel secrets
             ChannelPrivate      uint16 + []byte   ≤ 1024: TPM2B_PRIVATE of it, wrapped (§3.1, note ⁵)
+            ChannelPCR count    uint8       1 to 24
+            For each register:
+              Index             uint8       < 24
+              Digest            uint16 + []byte   ≤ 32: its value in the slot's bank
             Phone count         uint8       ≤ 8
             For each phone:
               ID length         uint16      ≤ 64
@@ -1479,6 +1504,13 @@ comparison. A changed boot with a valid boot-key proof is a state the
 machine's owner approved (an approved update); a changed boot without one is
 a state nobody approved yet; a matching boot without one means the machine
 could not vouch for itself this time.
+
+All of this needs a gate, and a gate needs the channel's secrets, which open
+only with PCR 7 as sealed (§3.1, note ⁵). So "changed" covers what moved under
+the same Secure Boot state: the image, PCR 11, the loader. A changed PCR 7 - a db
+or dbx update, Secure Boot off, a system signed by another key - shows no
+"changed": there is no gate, and the phone finds no machine. The passphrase by
+hand stays, and after such an update `slot approve` brings the gate back.
 
 ### 13.5 What is *not* trusted
 
@@ -1776,7 +1808,9 @@ transport that refuses named commands.
 | The SSH CA after the close: past the software's check, the TPM refuses | aSSH `TestClose`; `TestHostKeyClose` |
 | Signed PCR 11: the image approved with works, another signed image needs no approval, past `enter-initrd` and an unsigned image are refused, the close ends it | `TestSlotWithSignedPCR11` |
 | The slot's policy digest equals the TPM's trial session in either bank; every hand-written digest's value from before `PolicyCalculator` still holds | `TestSlotPolicyDigestIsTheTPMs`; `TestPolicyDigestsFixed`, `TestSignedPolicyFixed` (unit) |
-| The channel's secrets: not in the record's bytes; open before the close, in a boot not approved too; after it refused (`ErrClosed`), by another key too; the signing key opens them, for a further phone and a whole gate | `TestChannelSecretsSealed` |
+| The channel's secrets: not in the record's bytes; open before the close with PCR 7 as sealed, in a boot not approved too; after it refused (`ErrClosed`), by another key too; the signing key opens them, for a further phone and a whole gate | `TestChannelSecretsSealed` |
+| PCR 7 in the channel's policy: PCR 7 moved refuses (`ErrChannelMoved`), the gate does not start, the signing key still opens, the status note, `slot approve` seals the same secrets again and only when moved, the close refuses with 7 as sealed and moved; sealed from the log on a system past the separator, open at the next boot | `TestChannelFollowsPCR7`, `TestChannelSealedForTheNextBoot` |
+| Sessions: eight failures of each kind on one connection (a policy refused, a signer that fails, an EK policy refused) leave no session and no object | `TestFailuresLeaveNoSession` |
 
 Unit, with no TPM: `TestSealRefusesASlotWithout8And9OnGRUB`, `TestClosePCRChecked` (a log
 with an event in PCR 15), `TestNoTPMAtAll` and `TestSilentTPM` (steps 5 and 6's decisions),
@@ -1798,10 +1832,13 @@ makes nor checks it.
 
 **What stays of the channel's secrets.** A record stays readable without root
 (`go-uefi-slim/efivar` creates variables mode 0644, seen on the development host's
-efivarfs), and holds nothing secret in clear since blob 19: `TestChannelSecretsSealed`
-looks for them in the bytes. Before the close they still open by design, for anything
-booted on the machine (§19). No phone or radio on a VM has exercised the sealed
-channel: that is swtpm and Marify's emulator test.
+efivarfs), and holds nothing secret in clear: `TestChannelSecretsSealed` looks for them
+in the bytes. Before the close they still open by design, for anything booted on the
+machine under the same PCR 7 (§19). No phone or radio on a VM has exercised the sealed
+channel: that is swtpm and Marify's emulator test. That the event log's PCR 7 is the one
+in the initrd is shown on swtpm with a log (`TestChannelSealedForTheNextBoot`), and on
+the VMs by the slots, which read PCR 7 the same way; no gate has opened the object in a
+VM's initrd.
 
 | Not proven | What exists instead |
 |---|---|
@@ -1814,7 +1851,8 @@ channel: that is swtpm and Marify's emulator test.
 | Real firmware (platform authorization locked or empty) | none; `TestCloseKillSwitchPlatformLocked` is what stands in |
 | A real TPM | none, in any of these runs. Banks, `TPM2_TestParms`, timings, PCR 4's contents: swtpm and OVMF's |
 | Step 7's way out as a rescue | only the mechanics (V8), with no TPM and no broken TPM before it |
-| `gate-child`, the radio; the sealed channel on a machine | no phone or Bluetooth in the VM runs; the protocol is Marify's emulator and swtpm tests (the wire did not change), the sealed channel `TestChannelSecretsSealed` on swtpm. A boot that unseals it with a real gate has not run on a VM |
+| `gate-child`, the radio; the sealed channel on a machine | no phone or Bluetooth in the VM runs; the protocol is Marify's emulator and swtpm tests (the wire did not change), the sealed channel `TestChannelSecretsSealed`, `TestChannelFollowsPCR7` and `TestChannelSealedForTheNextBoot` on swtpm. A boot that unseals it with a real gate has not run on a VM |
+| A db or dbx update changing PCR 7 on real firmware, and `slot approve` afterwards | the mechanics on swtpm (`TestChannelFollowsPCR7`, PCR 7 extended by hand). The VMs' firmware has not been updated in a run |
 | Debian's init-bottom ending `run` at SIGTERM with a prompt open | not forced. What was measured is the restart with the prompt open: Arch's V4 step 6 at 50.7 s of the kernel's clock (140.9 s before `03510b3`), no "Waiting for process"; Debian's V9 at 97.2 s, its own path with no systemd-shutdown in it, as before |
 | sshd's `PerSourcePenalties` as the cause of earlier Arch hibernate stops | switched off in the test, never measured |
 | The watchdog after a resume, on real hardware | On the VM a resumed system did not keep an armed watchdog alive: q35's iTCO reset it about 30 s after its first login. The test machine now switches that reset off (`ICH9-LPC.noreboot`, tools/LOCALVM.md; `fresh`'s PCRs 0-9, 11, 14, 15 unchanged), so a real machine's behaviour here is not shown |
@@ -1835,8 +1873,9 @@ Each is taken knowingly: why the design still works, and how far.
 | An image without tpm2-kira under the same keys | The close is software in the approved image; the TPM cannot tell. It needs the PCR key's signature (or an approval) too | That one boot, with PCR 15 at zero |
 | An early extend of PCR 15 (`tpm2-measure-pcr=` before the code screen) | It closes early | A denial of service only: a temporary key and no codes, never an open CA |
 | A TPM silent in the initrd, answering later in the same boot (step 6) | The late closer closes the moment it answers; `control` is red meanwhile | Root can kill the closer. Whoever can silence the TPM for the initrd alone and has root afterwards gets that one boot, if the PCRs hold an approved state. `KIRAcloseReboot` is plain: writing it spares a boot the reboot, not a close |
-| Anything booted on the machine reads the channel's secrets before the close | The gate must start in a boot nobody approved, or the phone could not show it as changed. A live USB, another signed OS, a `break=` shell: PCR 15 is zero there. So the object's first branch reads PCR 15 alone, no approval | That machine can recognise the advertisements and imitate the Bluetooth endpoint, and keeps that ability once it has read them: an enrolment again makes new ones. It cannot produce a quote of a good state: quotes come from the TPM's registers as they are, the phone says changed |
-| Root with the signing key opens the channel's secrets on the running system | Enrolling a further phone and the phone salt's hand-over need them; each opening signs the TPM's nonce, so a YubiKey asks each time | As the row above; with a key file root can do it unseen (the first row: such root approves anything) |
+| What boots under the same Secure Boot state reads the channel's secrets before the close | The gate must start in a boot nobody approved, or the phone could not show it as changed. So the object's first branch reads PCR 7 and PCR 15, no approval. A Microsoft-signed live USB and Secure Boot off are out (PCR 7). What stays: an image signed by the owner's db key, and on Debian an edited GRUB entry (`break=`, `rdinit=`): GRUB's command line is PCR 8, PCR 7 does not move | That machine can recognise the advertisements and imitate the Bluetooth endpoint, and keeps that ability once it has read them: an enrolment again makes new ones. It cannot produce a quote of a good state: quotes come from the TPM's registers as they are, the phone says changed. On Debian a GRUB superuser password closes the edited entry (`control` judges its absence red) |
+| A moved PCR 7 is no gate | A db or dbx update, or switching Secure Boot, moves it. The phone finds no machine for that boot rather than showing "changed" | The passphrase by hand stays; `status` and `control` say it, and `slot approve` seals the same secrets again with the signing key. A phone that is told "no machine" learns less than one told "changed" |
+| Root with the signing key opens the channel's secrets on the running system | Enrolling a further phone, the phone salt's hand-over and sealing them again at `slot approve` need them; each opening signs the TPM's nonce, so a YubiKey asks each time | As the row above; with a key file root can do it unseen (the first row: such root approves anything) |
 | A physical attacker on the TPM bus | Out of this design's scope; a firmware TPM has no such bus | Can fake replies, the close's read-back included |
 | A temporary host key cannot be checked from afar | Its fingerprint is on the console; it lets the server run when no slot certifies | Whoever logs in remotely after a firmware update accepts an unknown key for that boot; never with `StrictHostKeyChecking=accept-new` |
 | A reboot loop with a broken TPM (step 7) | Booting on with an open CA is worse, and the way out exists (§14.3) | The one exception to the passphrase by hand; a person at the console needed |

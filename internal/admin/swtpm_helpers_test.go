@@ -182,7 +182,7 @@ func newSWTPMSetupAt(t *testing.T, sock, name string) *swtpmSetup {
 		PCRAlg:       sel.Alg,
 		PCRSelection: sel.Indices,
 		// Not yet sealed: a slot to seal under comes later (sealChannel).
-		Phone: nvslot.PhoneAttestation{ChannelPublic: []byte{1}, ChannelPrivate: []byte{2}},
+		Phone: nvslot.PhoneAttestation{ChannelPublic: []byte{1}, ChannelPrivate: []byte{2}, ChannelPCRs: []nvslot.ChannelPCR{{Index: 7, Digest: make([]byte, 32)}}},
 	}
 	s.be = &phonegate.TPMBackend{TPM: tpmDev, Blob: s.blob, SealIndex: nvslot.NVRAMSlotStart}
 	return s
@@ -196,11 +196,9 @@ func (s *swtpmSetup) sealChannel(t *testing.T, tpm transport.TPM, idx uint32) {
 	if sb == nil {
 		t.Fatalf("no slot at 0x%08X", idx)
 	}
-	pub, priv, err := nvslot.SealChannel(tpm, sb, s.channel)
-	if err != nil {
+	if _, err := nvslot.SealChannel(tpm, sb, &s.blob.Phone, s.channel); err != nil {
 		t.Fatal(err)
 	}
-	s.blob.Phone.ChannelPublic, s.blob.Phone.ChannelPrivate = pub, priv
 }
 
 func (s *swtpmSetup) extend(t *testing.T, pcr int, data string) {

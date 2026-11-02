@@ -17,9 +17,9 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 )
 
-// The channel's secrets: never in the record; open before the close in any boot,
-// approved or not; after the close only with the slot's signing key; a further
-// phone gets the same ones.
+// The channel's secrets: never in the record; open before the close in a boot of
+// the PCR 7 they are sealed to, approved or not; after the close only with the
+// slot's signing key; a further phone gets the same ones.
 func TestChannelSecretsSealed(t *testing.T) {
 	s := newSWTPMSetup(t)
 	idx := uint32(nvslot.NVRAMSlotStart + 4)
@@ -61,9 +61,9 @@ func TestChannelSecretsSealed(t *testing.T) {
 		t.Fatal("the record lost the channel")
 	}
 
-	// Before the close, whether or not the boot is approved: PCR 23, what the
-	// slot was approved for, moved, and the gate still has its channel, so the
-	// phone can show the boot as changed.
+	// Before the close, with PCR 7 as sealed, whether or not the boot is approved:
+	// PCR 23, what the slot was approved for, moved, and the gate still has its
+	// channel, so the phone can show the boot as changed.
 	if c, err := nvslot.UnsealChannel(s.tpm, sb); err != nil || !same(c) {
 		t.Fatalf("before the close: %v", err)
 	}

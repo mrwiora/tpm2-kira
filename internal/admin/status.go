@@ -53,6 +53,8 @@ type StatusSlot struct {
 	TPMSalt     bool           `json:"tpm_salt,omitempty"`     // the slot holds the salt of recipe 0x1200
 	// LoaderMoved: the approved PCR 4 is not what the next boot will measure.
 	LoaderMoved bool `json:"loader_moved,omitempty"`
+	// ChannelMoved: the phone channel is sealed to other values than the next boot's.
+	ChannelMoved bool `json:"channel_moved,omitempty"`
 	// NoGRUBPCRs: on a GRUB boot, the slot lacks PCR 8 or 9 (GRUBPCRs).
 	NoGRUBPCRs bool `json:"no_grub_pcrs,omitempty"`
 }
@@ -134,6 +136,8 @@ func collectStatus(o StatusOptions) StatusReport {
 			if att := sb.Payload.Attestation; att != nil && att.Phone.Enabled() {
 				s.Phones = len(att.Phone.Verifiers)
 				s.PhoneSalt = len(att.ReleaseKeyPublic) > 0
+				// An error says the object is unusable; the gate names that.
+				s.ChannelMoved, _ = nvslot.ChannelMoved(tpmDev, sb)
 			}
 			if att := sb.Payload.Attestation; att != nil {
 				s.TPMSalt = len(att.TPMSalt.Credential) > 0
@@ -216,6 +220,9 @@ func statusNotes(r StatusReport) []string {
 		}
 		if s.LoaderMoved {
 			notes = append(notes, fmt.Sprintf("slot %d's PCR 4 is not what the next boot will measure (an updated boot loader or image; risk: no slot 0 at the next boot, the fallback's purple): tpm2-kira slot approve", s.Slot))
+		}
+		if s.ChannelMoved {
+			notes = append(notes, fmt.Sprintf("slot %d's phone channel is sealed to another PCR %s than the next boot's (a db or dbx update, Secure Boot switched; risk: no gate, the phones find no machine at the next boot): tpm2-kira slot approve --nvram %d", s.Slot, nvslot.ChannelPCRList(), s.Slot))
 		}
 		if s.NoGRUBPCRs {
 			notes = append(notes, fmt.Sprintf("slot %d lacks PCR 8 or 9 (risk: %s): tpm2-kira slot delete --nvram %d", s.Slot, grubSelectionWhy, s.Slot))

@@ -134,13 +134,27 @@ func enrolmentChannel(t transport.TPM, sealed *nvslot.SealedBlob, enrolment *nvs
 		return nil, err
 	}
 	channel := &nvslot.ChannelSecrets{NoisePrivate: noise.Private, AdvKey: phonegate.RandBytes(32)}
-	public, private, err := nvslot.SealChannel(t, sealed, channel)
+	afterSeparator, err := nvslot.SealChannel(t, sealed, &enrolment.Phone, channel)
 	if err != nil {
 		channel.Wipe()
 		return nil, err
 	}
-	enrolment.Phone = nvslot.PhoneAttestation{ChannelPublic: public, ChannelPrivate: private}
+	warnChannelAfterSeparator(afterSeparator)
 	return channel, nil
+}
+
+// warnChannelAfterSeparator says when the channel's secrets are sealed to registers
+// that may already carry the separator: the gate may not open them at the next boot.
+func warnChannelAfterSeparator(reason string) {
+	if reason == "" {
+		return
+	}
+	fmt.Println()
+	fmt.Println("WARNING: the event log cannot be used for this TPM, so the phone channel is sealed to the")
+	fmt.Println("         registers as they are. Where systemd's os-separator has moved them, the gate does")
+	fmt.Println("         not open it at boot, and the phone finds no machine. Reason:")
+	fmt.Printf("         %s\n", reason)
+	fmt.Println()
 }
 
 // enrolmentSize is the size the slot's record has at least after the

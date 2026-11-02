@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
@@ -20,13 +22,29 @@ import (
 // advertising key, sealed in one TPM object that the slot's record carries.
 // Its policy is not the slot's:
 //
-//	PolicyOR( PolicyPCR(15 == zero) ; PolicyCommandCode(Unseal),
+//	PolicyOR( PolicyPCR(channelPCRs as sealed, 15 == zero) ; PolicyCommandCode(Unseal),
 //	          PolicySigned(signing key, policyRef) ; PolicyCommandCode(Unseal) )
 //
-// The first branch is the gate's: before the close, in any boot, approved or
-// not, so that the phone can show a boot nobody approved as changed. The second
-// is the running system's: another phone, the phone salt's hand-over, each with
-// a signature over the TPM's fresh nonce. After the close nothing else opens it.
+// The first branch is the gate's: before the close, in a boot of this machine's
+// Secure Boot state (PCR 7), whatever image it runs, approved or not, so that the
+// phone can show a boot nobody approved as changed. Another Secure Boot state - a
+// live USB signed by another key, Secure Boot off, a db or dbx update - does not
+// open them: no gate, and the phone finds no machine. The second branch is the
+// running system's: another phone, the phone salt's hand-over, sealing them again
+// at slot approve, each with a signature over the TPM's fresh nonce. After the
+// close nothing else opens it.
+
+// channelPCRs are the registers the first branch reads besides PCR 15: this list
+// alone says which. Their values are the ones the gate will see, before the
+// separator (ReadChannelPCRs), and the record carries them.
+var channelPCRs = []int{7}
+
+// ErrChannelMoved marks a boot before the close whose channel PCRs are not those
+// the channel's secrets are sealed to.
+var ErrChannelMoved = fmt.Errorf("PCR %s moved since the phone channel was sealed (a db or dbx update, Secure Boot switched, another signed system): only the signing key opens it, 'tpm2-kira slot approve' seals it again", ChannelPCRList())
+
+// ChannelPCRList names channelPCRs for a message.
+func ChannelPCRList() string { return measure.FormatPCRList(channelPCRs) }
 
 // channelSecretSize is what the object holds: the Noise key, then the
 // advertising key.
@@ -46,21 +64,63 @@ func (c *ChannelSecrets) Wipe() {
 	}
 }
 
-// channelPolicy is the object's policy for signingName and policyRef, with PCR
-// 15 read in bank, and the two branches PolicyOR takes.
-func channelPolicy(signingName tpm2.TPM2BName, policyRef []byte, bank tpm2.TPMIAlgHash) (policy []byte, branches tpm2.TPMLDigest, err error) {
-	open, err := attest.OpenPCRDigest(bank)
+// ChannelPCR is one register's value in the first branch of the object's policy.
+type ChannelPCR struct {
+	Index  int
+	Digest []byte
+}
+
+// ReadChannelPCRs returns channelPCRs' values as the gate will see them at the
+// next boot: replayed from the event log, because on the running system the
+// separator has moved the registers. Without a usable log it returns the registers,
+// and why in afterSeparator: the gate's boot sees those only where no separator ran.
+func ReadChannelPCRs(t transport.TPM, bank measure.PCRHashAlgo) (pcrs []ChannelPCR, afterSeparator string, err error) {
+	specs := make([]measure.PCRSpec, len(channelPCRs))
+	for i, index := range channelPCRs {
+		specs[i] = measure.PCRSpec{Index: index, Source: measure.PCRSourceRegister}
+	}
+	res, err := measure.ReadPCRValues(t, specs, bank, measure.MeasurePointModeSetting, measure.MeasurePointBeforeSeparator, false)
+	if err != nil {
+		return nil, "", fmt.Errorf("the channel's PCRs: %w", err)
+	}
+	for _, index := range channelPCRs {
+		pcrs = append(pcrs, ChannelPCR{Index: index, Digest: res.Values[index]})
+	}
+	return pcrs, res.AfterSeparator, nil
+}
+
+// channelPolicy is the object's policy for signingName and policyRef, with pcrs
+// and PCR 15 read in bank, and the two branches PolicyOR takes.
+func channelPolicy(signingName tpm2.TPM2BName, policyRef []byte, bank measure.PCRHashAlgo, pcrs []ChannelPCR) (policy []byte, branches tpm2.TPMLDigest, err error) {
+	selection, digest, err := channelSelection(bank, pcrs)
 	if err != nil {
 		return nil, branches, err
 	}
 	unseal := tpm2.PolicyCommandCode{Code: tpm2.TPMCCUnseal}
-	gate := attest.PolicyDigest(tpm2.PolicyPCR{PcrDigest: tpm2.TPM2BDigest{Buffer: open}, Pcrs: attest.ClosePCRSelection(bank)}.Update, unseal.Update)
+	gate := attest.PolicyDigest(tpm2.PolicyPCR{PcrDigest: digest, Pcrs: selection}.Update, unseal.Update)
 	signed := attest.PolicyDigest(tpm2.PolicySigned{
 		AuthObject: tpm2.NamedHandle{Name: signingName},
 		PolicyRef:  tpm2.TPM2BNonce{Buffer: policyRef},
 	}.Update, unseal.Update)
 	branches = tpm2.TPMLDigest{Digests: []tpm2.TPM2BDigest{{Buffer: gate}, {Buffer: signed}}}
 	return attest.PolicyDigest(tpm2.PolicyOr{PHashList: branches}.Update), branches, nil
+}
+
+// channelSelection is the first branch's PolicyPCR: the registers in ascending
+// order, PCR 15 at zero among them, and the digest of their values.
+func channelSelection(bank measure.PCRHashAlgo, pcrs []ChannelPCR) (tpm2.TPMLPCRSelection, tpm2.TPM2BDigest, error) {
+	values := map[int][]byte{attest.ClosePCR: make([]byte, bank.DigestSize())}
+	indices := []int{attest.ClosePCR}
+	for _, p := range pcrs {
+		values[p.Index] = p.Digest
+		indices = append(indices, p.Index)
+	}
+	slices.Sort(indices)
+	digest, err := measure.BuildPCRDigest(indices, values, bank)
+	if err != nil {
+		return tpm2.TPMLPCRSelection{}, tpm2.TPM2BDigest{}, err
+	}
+	return measure.CreatePCRSelection(indices, bank), digest, nil
 }
 
 // channelTemplate is a sealed data object only its policy opens.
@@ -80,21 +140,37 @@ func channelTemplate(policy []byte) tpm2.TPMTPublic {
 	}
 }
 
-// SealChannel seals c in this TPM for the slot sb is, and returns the object's
-// public and private areas, what the record's phone method holds. The secrets go
-// to the TPM in a salted, parameter-encrypted session.
-func SealChannel(t transport.TPM, sb *SealedBlob, c *ChannelSecrets) (public, private []byte, err error) {
+// SealChannel seals c in this TPM for the slot sb is, to the channel PCRs'
+// values at the next boot, and sets the object and those values in phone. The
+// secrets go to the TPM in a salted, parameter-encrypted session. afterSeparator
+// is ReadChannelPCRs'.
+func SealChannel(t transport.TPM, sb *SealedBlob, phone *PhoneAttestation, c *ChannelSecrets) (afterSeparator string, err error) {
 	if len(c.NoisePrivate)+len(c.AdvKey) != channelSecretSize || len(c.NoisePrivate) != 32 {
-		return nil, nil, errors.New("the channel's secrets are incomplete")
+		return "", errors.New("the channel's secrets are incomplete")
 	}
 	name, err := slotSigningName(sb)
 	if err != nil {
-		return nil, nil, err
+		return "", err
 	}
-	policy, _, err := channelPolicy(name, sb.Payload.PolicyRef, sb.GetHashAlgo().TPMAlg())
+	bank := sb.GetHashAlgo()
+	pcrs, afterSeparator, err := ReadChannelPCRs(t, bank)
 	if err != nil {
-		return nil, nil, err
+		return "", err
 	}
+	policy, _, err := channelPolicy(name, sb.Payload.PolicyRef, bank, pcrs)
+	if err != nil {
+		return "", err
+	}
+	public, private, err := sealChannelObject(t, policy, c)
+	if err != nil {
+		return "", err
+	}
+	phone.ChannelPublic, phone.ChannelPrivate, phone.ChannelPCRs = public, private, pcrs
+	return afterSeparator, nil
+}
+
+// sealChannelObject makes the object under policy.
+func sealChannelObject(t transport.TPM, policy []byte, c *ChannelSecrets) (public, private []byte, err error) {
 	primary, err := tpmdev.CreatePrimaryKey(t)
 	if err != nil {
 		return nil, nil, err
@@ -132,30 +208,69 @@ func slotSigningName(sb *SealedBlob) (tpm2.TPM2BName, error) {
 	return *name, nil
 }
 
-// channelObject is what unsealing needs: the bank the object reads PCR 15 in, the
+// channelObject is what unsealing needs: the bank the object reads its PCRs in, the
 // slot's bank when it was sealed, which the object's own policy tells.
-func channelObject(sb *SealedBlob) (name tpm2.TPM2BName, bank tpm2.TPMIAlgHash, branches tpm2.TPMLDigest, err error) {
+func channelObject(sb *SealedBlob) (name tpm2.TPM2BName, bank measure.PCRHashAlgo, branches tpm2.TPMLDigest, err error) {
 	att := sb.Payload.Attestation
 	if att == nil || !att.Phone.Enabled() {
-		return name, 0, branches, errors.New("the slot has no phone channel")
+		return name, "", branches, errors.New("the slot has no phone channel")
 	}
 	pub, err := tpm2.Unmarshal[tpm2.TPMTPublic](att.Phone.ChannelPublic)
 	if err != nil {
-		return name, 0, branches, fmt.Errorf("the channel's sealed object does not parse: %w", err)
+		return name, "", branches, fmt.Errorf("the channel's sealed object does not parse: %w", err)
 	}
 	if name, err = slotSigningName(sb); err != nil {
-		return name, 0, branches, err
+		return name, "", branches, err
 	}
-	for _, bank := range []tpm2.TPMIAlgHash{tpm2.TPMAlgSHA256, tpm2.TPMAlgSHA1} {
-		policy, branches, err := channelPolicy(name, sb.Payload.PolicyRef, bank)
-		if err != nil {
-			return name, 0, branches, err
-		}
-		if bytes.Equal(policy, pub.AuthPolicy.Buffer) {
+	for _, bank := range []measure.PCRHashAlgo{measure.PCRHashAlgoSHA256, measure.PCRHashAlgoSHA1} {
+		policy, branches, err := channelPolicy(name, sb.Payload.PolicyRef, bank, att.Phone.ChannelPCRs)
+		if err == nil && bytes.Equal(policy, pub.AuthPolicy.Buffer) {
 			return name, bank, branches, nil
 		}
 	}
-	return name, 0, branches, errors.New("the channel's sealed object is not this slot's: its policy differs; enrol the phones again")
+	return name, "", branches, errors.New("the channel's sealed object is not this slot's: its policy differs; enrol the phones again")
+}
+
+// ChannelMoved says whether the channel PCRs at the next boot are not those the
+// channel's secrets are sealed to: slot approve seals them again. A slot without a
+// phone channel has not moved.
+func ChannelMoved(t transport.TPM, sb *SealedBlob) (bool, error) {
+	att := sb.Payload.Attestation
+	if att == nil || !att.Phone.Enabled() {
+		return false, nil
+	}
+	_, bank, _, err := channelObject(sb)
+	if err != nil {
+		return false, err
+	}
+	pcrs, _, err := ReadChannelPCRs(t, bank)
+	if err != nil {
+		return false, err
+	}
+	return !slices.EqualFunc(pcrs, att.Phone.ChannelPCRs, func(a, b ChannelPCR) bool {
+		return a.Index == b.Index && bytes.Equal(a.Digest, b.Digest)
+	}), nil
+}
+
+// ResealChannelIfMoved seals the channel's secrets again, in sb's own record part,
+// when ChannelMoved says so: opened with the signing key, the same secrets, so the
+// phones keep what they pinned. It reports whether it did. afterSeparator is
+// ReadChannelPCRs'.
+func ResealChannelIfMoved(t transport.TPM, sb *SealedBlob, signer crypto.Signer) (resealed bool, afterSeparator string, err error) {
+	moved, err := ChannelMoved(t, sb)
+	if err != nil || !moved {
+		return false, "", err
+	}
+	c, err := UnsealChannelSigned(t, sb, signer)
+	if err != nil {
+		return false, "", err
+	}
+	defer c.Wipe()
+	afterSeparator, err = SealChannel(t, sb, &sb.Payload.Attestation.Phone, c)
+	if err != nil {
+		return false, "", err
+	}
+	return true, afterSeparator, nil
 }
 
 // unsealChannel loads the object and opens it with what assert puts into the
@@ -177,8 +292,7 @@ func unsealChannel(t transport.TPM, sb *SealedBlob, branches tpm2.TPMLDigest, as
 		return nil, fmt.Errorf("loading the channel's sealed object (was the TPM cleared?): %w", err)
 	}
 	defer tpmdev.FlushHandle(t, obj.ObjectHandle)
-	// A session of its own, flushed on every way out: a callback session that
-	// fails its policy would stay in the TPM.
+	// A session of its own, flushed on every way out.
 	session, flush, err := tpm2.PolicySession(t, tpm2.TPMAlgSHA256, 16, tpm2.Salted(primary.ObjectHandle, primary.Public), tpm2.AESEncryption(128, tpm2.EncryptOut))
 	if err != nil {
 		return nil, fmt.Errorf("a policy session for the channel's secrets: %w", err)
@@ -204,26 +318,31 @@ func unsealChannel(t transport.TPM, sb *SealedBlob, branches tpm2.TPMLDigest, as
 }
 
 // UnsealChannel opens the channel's secrets the gate's way: before the close, in
-// any boot. ErrClosed after it.
+// a boot whose channel PCRs are as sealed. ErrClosed after the close, ErrChannelMoved
+// when those moved.
 func UnsealChannel(t transport.TPM, sb *SealedBlob) (*ChannelSecrets, error) {
 	_, bank, branches, err := channelObject(sb)
 	if err != nil {
 		return nil, err
 	}
-	open, err := attest.OpenPCRDigest(bank)
+	selection, digest, err := channelSelection(bank, sb.Payload.Attestation.Phone.ChannelPCRs)
 	if err != nil {
 		return nil, err
 	}
 	return unsealChannel(t, sb, branches, func(tpm transport.TPM, handle tpm2.TPMHandle, _ tpm2.TPM2BNonce) error {
+		// With the digest given, the TPM compares at once.
 		if _, err := (tpm2.PolicyPCR{
 			PolicySession: handle,
-			PcrDigest:     tpm2.TPM2BDigest{Buffer: open},
-			Pcrs:          attest.ClosePCRSelection(bank),
+			PcrDigest:     digest,
+			Pcrs:          selection,
 		}).Execute(tpm); err != nil {
 			if errors.Is(err, tpm2.TPMRCValue) {
-				return ErrClosed
+				if err := CheckOpen(tpm, bank); err != nil {
+					return err
+				}
+				return ErrChannelMoved
 			}
-			return fmt.Errorf("PolicyPCR(%d): %w", attest.ClosePCR, err)
+			return fmt.Errorf("PolicyPCR: %w", err)
 		}
 		return nil
 	})
@@ -231,7 +350,7 @@ func UnsealChannel(t transport.TPM, sb *SealedBlob) (*ChannelSecrets, error) {
 
 // UnsealChannelSigned opens the channel's secrets with the slot's signing key,
 // which signs the TPM's nonce for this one session: on the running system, for
-// another phone or the phone salt's hand-over.
+// another phone, the phone salt's hand-over or sealing them again.
 func UnsealChannelSigned(t transport.TPM, sb *SealedBlob, signer crypto.Signer) (*ChannelSecrets, error) {
 	name, _, branches, err := channelObject(sb)
 	if err != nil {

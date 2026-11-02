@@ -87,18 +87,22 @@ Known residual risks:
   can raise it, which makes the genuine record stale: the gate then refuses
   it and no phone is served until you enrol again. That denies the phone
   check; it never produces an accepted record.
-- **The channel's secrets open for anything booted on this machine, before the
-  close.** The machine's Noise private key and its advertising key are sealed in
-  the TPM (docs/SECURITY-BACKGROUND.md §3.1, note 5): a record, the EFI variable
-  `KIRAslotN` that any local user can read, holds neither in clear, and after the
-  close only the signing key opens them. Before the close PCR 15 alone guards them,
-  so someone who boots this machine once — a live USB, a `break=` shell — can recognise the
-  machine's advertisements and imitate its Bluetooth endpoint. They cannot
-  produce a quote: quotes come from the TPM, are bound to the session, and a
-  tampered boot reports tampered PCRs. The phone then shows a failed or
-  changed verdict, or "did not accept this phone", never a green one.
-  Sealing these keys to the approved PCRs was rejected: a legitimate update could
-  then not show its "changed" diff, which is the point of the phone.
+- **The channel's secrets open for what boots under this machine's Secure Boot
+  state, before the close.** The machine's Noise private key and its advertising key
+  are sealed in the TPM (docs/SECURITY-BACKGROUND.md §3.1, note 5): a record, the EFI
+  variable `KIRAslotN` that any local user can read, holds neither in clear, and after
+  the close only the signing key opens them. Before the close PCR 7 and PCR 15 guard
+  them: a Microsoft-signed live USB and Secure Boot off do not open them, and a db or
+  dbx update means sealing them again (`slot approve`; `status` and `control` say so),
+  with no gate until then: the phone finds no machine. Someone who boots an image the
+  owner's db key signed, or on Debian edits a GRUB entry (`break=`; PCR 7 does not move,
+  a GRUB superuser password closes it), can recognise the machine's advertisements and
+  imitate its Bluetooth endpoint. They cannot produce a quote: quotes come from the TPM,
+  are bound to the session, and a tampered boot reports tampered PCRs. The phone then
+  shows a failed or changed verdict, or "did not accept this phone", never a green one.
+  Sealing these keys to the approved PCRs was rejected: a legitimate update could then
+  not show its "changed" diff, which is the point of the phone. A change of PCR 7 itself
+  shows none.
 - **Relay to a look-alike machine.** Attestation proves that *your enrolled
   TPM* booted a known state, not that the laptop in front of you is that
   machine. An attacker who swaps the laptop for a look-alike and relays
