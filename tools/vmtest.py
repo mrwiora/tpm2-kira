@@ -581,6 +581,25 @@ class Machine:
             time.sleep(1)
         raise Fail(f"{what}: ssh does not let in")
 
+    def booted(self, what):
+        """The system is up: logged into, and nothing of this boot, the initrd's
+        Argon2id above all, was killed for memory."""
+        self.wait_login(what)
+        rc, out = self.run("dmesg | grep -E 'Out of memory|oom-kill' | head -3", save=f"oom-{what.replace(' ', '-')}.log")
+        self.check(f"{what}: nothing was killed for memory", "Out of memory" not in out and "oom-kill" not in out, out[-400:])
+
+    def swap_counts(self):
+        """Pages this boot swapped in and out so far, and the swap there is."""
+        rc, out = self.run("awk '/^pswp(in|out) /{print $1, $2}' /proc/vmstat; awk '/^SwapTotal/{print $1, $2}' /proc/meminfo", root=False)
+        return dict(l.split(None, 1) for l in out.strip().splitlines() if l.strip())
+
+    def check_no_swap(self, before, what):
+        """Argon2id's 1 GiB must not reach swap: guest memory is sized so
+        (tools/LOCALVM.md)."""
+        after = self.swap_counts()
+        self.log.say(f"swap around {what}: {before} -> {after}")
+        self.check(f"{what} touched no swap (/proc/vmstat)", before.get("pswpout") == after.get("pswpout") and before.get("pswpin") == after.get("pswpin"), f"{before} -> {after}")
+
     def when_returned(self, command):
         """Runs a root command that takes the machine away, once this ssh command
         has returned: its shell gone, the background job goes on."""
@@ -694,6 +713,7 @@ class Machine:
 
     def enrol(self):
         self.head(f"luks enrol {self.luks_dev} --salt typed")
+        swap = self.swap_counts()
         s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt typed", "luks-enrol")
         try:
             s.expect(r"^Password: ?$", 60); s.send(TEST_PASSWORD + "\n")
@@ -706,6 +726,7 @@ class Machine:
             text, _ = s.expect(r"keyslot (\d+) added: tpm2-kira, 0x1100 ", 300)
             out = s.wait_end(120)
             self.check("luks enrol adds a keyslot of the recovery recipe (0x1100)", True)
+            self.check_no_swap(swap, "the enrolment's Argon2id")
         except Fail as e:
             self.check("luks enrol adds a keyslot of the recovery recipe (0x1100)", False, str(e))
             raise
@@ -845,7 +866,7 @@ class Machine:
         if not self.check(f"boot {n}: the system comes up (ssh)", self.wait_port(22, True, 300)):
             raise Fail("the system does not come up")
         self.lap("the initrd's end to ssh")
-        self.wait_login(f"boot {n}")
+        self.booted(f"boot {n}")
         rc, out = self.run("tpm2-kira status --json", save=f"status-boot{n}.json")
         try:
             slots = json.loads(out).get("slots", [])
@@ -1003,7 +1024,7 @@ class Machine:
         self.lap("nobody at the machine, to ssh")
         if not self.check("the vault's boot: the system comes up with nobody at the console or in SSH", up):
             raise Fail("the vault's boot did not come up")
-        self.wait_login("the vault's boot")
+        self.booted("the vault's boot")
         log = ("cat /run/initramfs/tpm2-kira.log" if self.distro == "debian" else
                "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service")
         rc, out = self.run(log + " 2>&1", save="boot-vault-tpm2-kira.log")
@@ -1036,7 +1057,7 @@ class Machine:
             s.close()
         up = self.wait_port(22, True, 300)
         self.check("revoked: the disk unlocks with the password and the salt", up)
-        self.wait_login("revoked")
+        self.booted("revoked")
         rc, out = self.run(log + " 2>&1", save="boot-revoked-tpm2-kira.log")
         self.check("revoked: the vault refused, the key was answered from the typed keyslot", "the device is revoked" in out and "unlock: answered for" in out, out[-600:])
         vault.admin("device", "unrevoke", self.name)
@@ -1113,7 +1134,7 @@ class Machine:
         up = self.wait_port(22, True, 420)
         if not self.check("the pepper's boot: the system comes up with nobody at the console", up):
             raise Fail("the pepper's boot did not come up")
-        self.wait_login("the pepper's boot")
+        self.booted("the pepper's boot")
         log = ("cat /run/initramfs/tpm2-kira.log" if self.distro == "debian" else
                "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service")
         rc, out = self.run(log + " 2>&1", save="boot-vault-pepper-tpm2-kira.log")
@@ -1172,6 +1193,7 @@ class Machine:
         alone - the TPM opened the salt while the code screen held; the
         keyslot removed again."""
         self.head("the salt in this TPM (0x1200)")
+        swap = self.swap_counts()
         s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt tpm", "luks-enrol-tpm-salt")
         try:
             s.expect(r"Password \(typed at the machine at every boot\): ?$", 300); s.send(TPM_SALT_PASSWORD + "\n")
@@ -1181,6 +1203,7 @@ class Machine:
             keyslot = m.group(1)
             s.wait_end(120)
             self.check("luks enrol --salt tpm: a keyslot of recipe 0x1200", True)
+            self.check_no_swap(swap, "the TPM salt enrolment's Argon2id")
         except Fail as e:
             self.check("luks enrol --salt tpm", False, str(e))
             raise
@@ -1205,7 +1228,7 @@ class Machine:
         up = self.wait_port(22, True, 300)
         if not self.check("TPM salt: the disk unlocks with the password alone", up):
             raise Fail("the TPM salt's boot did not come up")
-        self.wait_login("TPM salt")
+        self.booted("TPM salt")
         out = self.boot_log("boot-tpm-salt-tpm2-kira.log")
         self.check("TPM salt: opened while the code screen held, the key answered", "tpm salt: slot 0: opened" in out and "unlock: answered for" in out, out[-600:])
         out = self.luks_remove(keyslot, "luks-remove-tpm-salt")
@@ -1279,7 +1302,7 @@ class Machine:
         up = self.wait_port(22, True, 300)
         if not self.check("typed vault: the disk unlocks with the password and the vault's salt", up):
             raise Fail("the typed vault's boot did not come up")
-        self.wait_login("typed vault")
+        self.booted("typed vault")
         out = self.boot_log("boot-vault-typed-tpm2-kira.log")
         self.check("typed vault: the salt opened during the hold, the key answered", "released; the salt is opened" in out and "unlock: answered for" in out, out[-600:])
         out = vault.admin("audit")

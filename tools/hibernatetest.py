@@ -285,6 +285,9 @@ class Hib:
             back = m.wait_port(22, True, 300)
         finally:
             s.close()
+        console = self.lv.serial_text(self.lv.mark)
+        killed = [l for l in console.split("\n") if "Out of memory" in l]
+        self.check(f"{tag}: nothing was killed for memory on the resume's boot (the console)", not killed, "\n".join(killed)[-400:])
         if not self.check(f"{tag}: the system is back (ssh)", back):
             raise vmtest.Fail("the system does not come back")
         m.lap(f"{tag}: the prompts to ssh (Argon2id, the keyslot, the resume)")
@@ -687,6 +690,7 @@ def main():
     p.add_argument("--target", choices=["arch", "debian", "both"], required=True)
     p.add_argument("--packages", default=os.path.join(REPO, "build", "packages"))
     p.add_argument("--no-build", action="store_true", help="take HEAD's packages already in --packages")
+    p.add_argument("--localvm-config", default=os.path.join(LOCAL, "vms", "localvm.conf"), help="the machines' config (their memory, say)")
     p.add_argument("--run-dir", help="where the report and the transcripts land (default .local/runs/hibernatetest-<time>)")
     p.add_argument("--save-setup", action="store_true", help=f"keep the state after the setup in the snapshot {SETUP_SNAPSHOT}")
     p.add_argument("--from-setup", action="store_true", help=f"every step from the snapshot {SETUP_SNAPSHOT}, without building: no final proof")
@@ -698,7 +702,7 @@ def main():
     vcfg = configparser.ConfigParser()
     vcfg.read(os.path.join(LOCAL, "vms", "vmtest-local.conf"))
     lcfg = configparser.ConfigParser()
-    lcfg.read(os.path.join(LOCAL, "vms", "localvm.conf"))
+    lcfg.read(args.localvm_config)
     run_dir = args.run_dir or os.path.join(LOCAL, "runs", "hibernatetest-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     os.makedirs(run_dir, exist_ok=True)
     names = ["arch", "debian"] if args.target == "both" else [args.target]

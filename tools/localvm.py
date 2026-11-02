@@ -57,6 +57,8 @@ PASSPHRASE_PROMPT = re.compile(r"(Please enter passphrase for disk \S+|Please un
 # What every run goes back to and what the machine came from: made once, by
 # hand; no test overwrites or removes them.
 PROTECTED_SNAPSHOTS = ("export", "fresh")
+# A guest's memory, MiB: no less without measuring again (LOCALVM.md, "Memory").
+DEFAULT_MEMORY = "4096"
 
 
 class Fail(Exception):
@@ -77,7 +79,7 @@ class Machine:
         self.mac = sec["mac"]
         self.ssh_port = int(sec["ssh_port"])
         self.boot_port = int(sec["boot_port"])
-        self.mem = sec.get("memory", "4096")
+        self.mem = sec.get("memory", DEFAULT_MEMORY)
         self.user = sec.get("user", "pix")
         self.secure_boot = sec.get("secure_boot", "no").lower() in ("yes", "true", "1")
         self.dir = os.path.join(os.path.expanduser(defaults.get("dir")), name)

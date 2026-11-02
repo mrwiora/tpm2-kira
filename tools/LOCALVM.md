@@ -100,6 +100,27 @@ These are the points that matter, and why. The full command line is in
   stopped.
 - **QMP** for `system_powerdown` (stop) and `quit` (kill).
 
+## Memory
+
+A guest has 4096 MiB (`DEFAULT_MEMORY` in `tools/localvm.py`; `memory = <MiB>` in a
+machine's section of `localvm.conf`, or `--localvm-config` for one run). Measured
+(2026-11-02), both machines, and below it the machines fail:
+
+| MiB | PCRs of `fresh` against 4096 | What happens |
+|---|---|---|
+| 4096 | - | every step holds, nothing killed, no swap touched |
+| 3072 | unchanged (down to 2816) | the boot after a wrong pepper fails: `tpm2-kira-boot` holds 2.1 GiB of two Argon2ids, the keyslot's Argon2id comes on top, the kernel kills one of them (Arch's disk never opens) |
+| 2688 and below | PCR 0 and 1 differ (PCR 10 on Debian) | - |
+| 2048 | PCR 0 and 10 differ | Arch: a plain typed boot fails, `systemd-cryptsetup` killed beside the 1 GiB of `tpm2-kira-boot` |
+| 1536 | PCR 0, 1 and 10 differ | `tpm2-kira-boot` is killed in the initrd |
+
+Lowering it gains nothing worth a smaller margin: the same runs at 3072 and 4096
+took the same time within a run's spread (hibernate test 754 and 868 s against
+752 and 902 s): the guest's memory is mostly free, so a hibernate image is no
+smaller. The initrd has no swap: too little memory is a failed allocation or a
+killed process, and `vmtest.py` and `hibernatetest.py` check for that at every
+boot, and for `/proc/vmstat`'s swap counters around an enrolment's Argon2id.
+
 ## From a libvirt export to the snapshot `fresh`
 
 The export was a qcow2 and a libvirt XML per machine (no OVMF variables,
