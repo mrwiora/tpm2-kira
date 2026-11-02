@@ -90,10 +90,13 @@ func TestRootIsRequired(t *testing.T) {
 	if code != 1 || !strings.Contains(stderr, "tpm2-kira control: root is needed - sudo tpm2-kira control") {
 		t.Errorf("control as a user: exit %d, stderr %q", code, stderr)
 	}
-	for _, args := range [][]string{{"help"}, {"help", "slot"}, {"version"}, {"pcrtips"}} {
-		stdout, stderr, code := kira(t, []string{unprivileged}, args...)
-		if code != 0 || stdout == "" || strings.Contains(stderr, "root is needed") {
-			t.Errorf("%v as a user: exit %d, stdout %d bytes, stderr %q; want an answer", args, code, len(stdout), stderr)
+	for _, c := range []struct {
+		args []string
+		want string
+	}{{[]string{"help"}, ""}, {[]string{"help", "slot"}, "tpm2-kira slot add"}, {[]string{"help", "run"}, "tpm2-kira-boot run"}, {[]string{"version"}, ""}, {[]string{"pcrtips"}, ""}} {
+		stdout, stderr, code := kira(t, []string{unprivileged}, c.args...)
+		if code != 0 || stdout == "" || strings.Contains(stderr, "root is needed") || !strings.Contains(stdout, c.want) {
+			t.Errorf("%v as a user: exit %d, stdout %d bytes, stderr %q; want an answer with %q", c.args, code, len(stdout), stderr, c.want)
 		}
 	}
 }

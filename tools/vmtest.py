@@ -1,13 +1,3 @@
-            "initramfs plan": ("tpm2-kira initramfs plan 2>&1", r"in\s+TOTP codes"),
-            "help slot": ("tpm2-kira help slot 2>&1", r"tpm2-kira slot add"),
-            "help run (the boot binary's page)": ("tpm2-kira help run 2>&1", r"tpm2-kira-boot run"),
-            "status": ("tpm2-kira status 2>&1", r"slot 0 .*signed by this machine's key"),
-            "slot info": (f"tpm2-kira slot info --nvram {self.slots[-1]} 2>&1", r"Signature: valid"),
-            "slot list": ("tpm2-kira slot list 2>&1", r"slot #0"),
-        rc, out = self.run("tpm2-kira status 2>&1; echo rc=$?", root=False)
-        self.check("root gate: 'status' as a user refuses", "root is needed" in out and "rc=1" in out, out.strip())
-        rc, out = self.run("tpm2-kira help >/dev/null 2>&1; echo rc=$?", root=False)
-        self.check("'help' answers as a user", "rc=0" in out)
 #!/usr/bin/env python3
 """The VM test: tpm2-kira's whole life on a fresh, encrypted test VM.
 
@@ -1663,20 +1653,18 @@ class Machine:
         rc, out = self.run(f"tpm2-kira slot approve --nvram {slot} </dev/null 2>&1", save="channel-no-terminal.log")
         self.check("no terminal, no flag: the slot approved, the channel left, and said", moved() and left in out and "Successfully approved the boot state" in out, out[-800:])
 
-        answers = {"n": True, "y": False}
-        for answer, stays in answers.items():
-            s = self.session(f"sudo tpm2-kira slot approve --nvram {slot}", f"channel-person-{answer}")
-            try:
-                text, _ = s.expect(r"Seal slot \d+'s phone channel to the next boot's PCR 7\? \[y/N\] ?$", 120)
-                self.check(f"at a terminal: old, new and what moved it, before the question ({answer})",
-                           re.search(r"PCR 7 sealed: +[0-9a-f]{64}", text) is not None and re.search(r"PCR 7 next boot: +[0-9a-f]{64}", text) is not None and re.search(r"SecureBoot: (on|off)", text) is not None, text[-800:])
-                s.send(answer + "\n")
-                out = s.wait_end(120)
-            finally:
-                s.close()
-            self.check(f"at a terminal, {answer}: " + ("left, and said" if stays else "sealed"), moved() == stays and ((left in out) if stays else ("is sealed again" in out)), out[-500:])
+        # A person's yes is TestApprovalLeavesAMovedChannel's; control's line seals it here.
+        s = self.session(f"sudo tpm2-kira slot approve --nvram {slot}", "channel-person-n")
+        try:
+            text, _ = s.expect(r"Seal slot \d+'s phone channel to the next boot's PCR 7\? \[y/N\] ?$", 120)
+            self.check("at a terminal: old, new and what moved it, before the question (n)",
+                       re.search(r"PCR 7 sealed: +[0-9a-f]{64}", text) is not None and re.search(r"PCR 7 next boot: +[0-9a-f]{64}", text) is not None and re.search(r"SecureBoot: (on|off)", text) is not None, text[-800:])
+            s.send("n\n")
+            out = s.wait_end(120)
+        finally:
+            s.close()
+        self.check("at a terminal, n: left, and said", moved() and left in out, out[-500:])
 
-        fixture()
         s = self.session("sudo ACCESSIBLE=1 tpm2-kira control", "control-channel")
         menu = r"Enter a number between 1 and \d+: ?$"
 
@@ -1754,11 +1742,10 @@ class Machine:
             text, m = s.expect(r"(Run (mkinitcpio -P|update-initramfs -u) now\? \[Y/n\] ?$|Connection to \S+ closed)", 120)
             self.check("SSH switched off: control offers the rebuild (the next boot without the server)",
                        m.group(1).startswith("Run") and "SSH server: switched off" in text, text[-800:])
+            # What a rebuild then leaves out is TestDecidePlan's; control's own rebuild ran in the setup.
             if m.group(1).startswith("Run"):
-                s.send("y\n")
-                text = s.wait_end(900)
-                self.check("the rebuilt image leaves the SSH server out", re.search(r"SSH server:\s+out", text) is not None, text[-800:])
-            self.log.save("control-ssh-off-rebuild.log", text)
+                s.send("n\n")
+                s.wait_end(120)
         except Fail as e:
             self.check("control: SSH off, the SSH CA kept on No", False, str(e))
             raise
