@@ -715,7 +715,8 @@ class Machine:
         and on a machine with swap, at Argon2id's real cost and under memory pressure,
         that nothing of it goes there while other processes' pages do."""
         self.head("the memory of a command that holds a passphrase")
-        key = "/run/tpm2-kira-lock-test.key"
+        key = "/run/tpm2-kira-lock-test/key"
+        self.run("mkdir -m 700 /run/tpm2-kira-lock-test")
         rc, out = self.run(f"prlimit --memlock=65536:65536 setpriv --bounding-set=-ipc_lock --inh-caps=-ipc_lock tpm2-kira luks derive --out {key} </dev/null 2>&1", save="lock-refused.log")
         self.check("a limit on locked memory without CAP_IPC_LOCK stops the command before it asks",
                    "FAILED: nothing was asked" in out and "RLIMIT_MEMLOCK" in out and "Password" not in out, out[-400:])
@@ -773,7 +774,7 @@ class Machine:
             s.close()
             if hog:
                 self.run(f"kill {hog}", root=False)
-            self.run(f"rm -f {key}")
+            self.run("rm -rf /run/tpm2-kira-lock-test")
         rc, out = self.run("dmesg | grep -E 'Out of memory|oom-kill' | head -3")
         self.check("nothing was killed for memory by the pressure", "Out of memory" not in out and "oom-kill" not in out, out[-400:])
 
