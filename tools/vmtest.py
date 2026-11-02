@@ -84,6 +84,11 @@ reboot, and its report says it is no final proof. hibernatetest.py's setup
 takes the same snapshot. A change to the product wants a new --save-setup;
 --drop-setup removes it. "fresh" and "export" are never written.
 
+--fast-kdf runs on a TEST package: Argon2id at a test's cost, by a Go build tag
+(packaging/build-packages.sh --fast-kdf, build/packages-fastkdf). The whole
+typed-recipe path runs, the real cost does not: such a run is NO FINAL PROOF, and
+its report's first line says so. A final proof runs without it.
+
 Nothing but Python's standard library and ssh are needed here. Reports and
 every session's transcript land in the run's directory.
 """
@@ -106,6 +111,7 @@ import shlex
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -128,6 +134,7 @@ SSH_HOLD = 600
 # the hibernate test, which keeps its own after that (hib-setup).
 SETUP_SNAPSHOT = "setup"
 FROM_SETUP_NOTE = "NOT A FINAL PROOF: started from a saved setup, not from the snapshot fresh."
+FAST_KDF_NOTE = "NOT A FINAL PROOF: a --fast-kdf TEST build, Argon2id at a test's cost, not the production's."
 
 
 def clean(data):
@@ -231,6 +238,36 @@ def local_machines(config, names):
         raise Fail(f"no {config}: a saved setup needs the machines of tools/localvm.py")
     defaults = dict(cfg["defaults"]) if cfg.has_section("defaults") else {}
     return localvm, {n: localvm.Machine(n, cfg[n], defaults) for n in names}
+
+
+def package_binaries(package, directory):
+    """Takes the two binaries out of a package; their paths."""
+    if package.endswith(".deb"):
+        member = next(m for m in subprocess.run(["ar", "t", package], capture_output=True, text=True, check=True).stdout.split() if m.startswith("data.tar"))
+        subprocess.run(["ar", "x", os.path.abspath(package), member], cwd=directory, check=True)
+        archive = os.path.join(directory, member)
+    else:
+        archive = package
+    subprocess.run(["tar", "-xf", archive, "-C", directory, "--wildcards", "*usr/bin/tpm2-kira", "*usr/bin/tpm2-kira-boot"], check=True)
+    return [os.path.join(directory, "usr", "bin", b) for b in ("tpm2-kira", "tpm2-kira-boot")]
+
+
+def package_is(package, fast_kdf):
+    """Whether a package's binaries are what the run asks for: a release's
+    (packaging/release-binary-check.sh: no build tag, no trace of the test
+    build), or the test build's (the tag, in what Go recorded of the build).
+    Why not, or None."""
+    with tempfile.TemporaryDirectory() as d:
+        for binary in package_binaries(package, d):
+            if fast_kdf:
+                info = subprocess.run(["go", "version", "-m", binary], capture_output=True, text=True).stdout
+                if "-tags=kira_test_fast_kdf" not in info:
+                    return f"{os.path.basename(binary)} is not a test build:\n{info[-400:]}"
+            else:
+                p = subprocess.run(["sh", os.path.join(REPO, "packaging", "release-binary-check.sh"), binary], capture_output=True, text=True)
+                if p.returncode != 0:
+                    return p.stderr.strip()
+    return None
 
 
 class SavedSetup:
@@ -507,6 +544,7 @@ class Machine:
         self.slots = [0, 1]  # the TOTP slots slot add makes: 0 and the fallback 1
         self.timing = Timing(name, self.log.say)
         self.notes = []  # the report's first lines: what kind of run this was
+        self.fast_kdf = False
 
     # -- helpers ------------------------------------------------------------
 
@@ -658,6 +696,11 @@ class Machine:
         rc, out = self.run("tpm2-kira version; tpm2-kira-boot version", root=False)
         vers = re.findall(r"^tpm2-kira(?:-boot)? version (\S+)$", out, re.M)
         self.check("tpm2-kira and tpm2-kira-boot, of one version", len(vers) == 2 and vers[0] == vers[1], out.strip())
+        says = out.count("TEST BUILD")
+        if self.fast_kdf:
+            self.check("both binaries say they are a test build, as --fast-kdf asks", says == 2 and ".fastkdf" in self.version, out.strip())
+        else:
+            self.check("neither binary is a test build: the production cost", says == 0 and "fastkdf" not in self.version, out.strip())
         rc, out = self.run("tpm2-kira status 2>&1; echo rc=$?", root=False)
         self.check("root gate: 'status' as a user refuses", "root is needed" in out and "rc=1" in out, out.strip())
         rc, out = self.run("tpm2-kira help >/dev/null 2>&1; echo rc=$?", root=False)
@@ -1457,20 +1500,23 @@ class Machine:
         return not failed, text
 
 
-def head_packages(directory):
+def head_packages(directory, fast_kdf=False):
     """The packages of HEAD in directory: the Arch package names the commit
-    as .g<short>-, the Debian one as +<n>.g<short>_."""
+    as .g<short>-, the Debian one as +<n>.g<short>_; a test build's has
+    .fastkdf behind it, so that neither is ever taken for the other."""
+    mark = ".fastkdf" if fast_kdf else ""
     short = subprocess.run(["git", "-C", REPO, "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     pick = lambda pattern: (sorted(glob.glob(os.path.join(directory, pattern)), key=os.path.getmtime) or [None])[-1]
-    return short, {"debian": pick(f"tpm2-kira_*.g{short}_amd64.deb"),
-                   "arch": pick(f"tpm2-kira-*.g{short}-*-x86_64.pkg.tar.zst")}
+    return short, {"debian": pick(f"tpm2-kira_*.g{short}{mark}_amd64.deb"),
+                   "arch": pick(f"tpm2-kira-*.g{short}{mark}-*-x86_64.pkg.tar.zst")}
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--target", choices=["arch", "debian", "both"], required=True)
     p.add_argument("--config", default=os.path.join(REPO, "tools", "vmtest.conf"))
-    p.add_argument("--packages", default=os.path.join(REPO, "build", "packages"), help="where the built .deb and .pkg.tar.zst are")
+    p.add_argument("--packages", help="where the built .deb and .pkg.tar.zst are (default build/packages, with --fast-kdf build/packages-fastkdf)")
+    p.add_argument("--fast-kdf", action="store_true", help="WARNING: NO FINAL PROOF. A test package, built here with Argon2id at a test's cost (a Go build tag), never a release; the whole typed-recipe path runs, the real cost does not. Disks enrolled with one cost do not open with the other")
     p.add_argument("--password-file", help="the VMs' user password (default: the config's password_file, or $VMTEST_PASSWORD)")
     p.add_argument("--cycles", type=int, default=2, help="reboots, each unlocked over the boot SSH server (default 2)")
     p.add_argument("--run-dir", help="default: ./vmtest-<time>")
@@ -1485,6 +1531,9 @@ def main():
     if sum((args.save_setup, args.from_setup, args.drop_setup)) > 1:
         p.error("--save-setup, --from-setup and --drop-setup exclude each other")
     args.no_build = args.no_build or args.from_setup or args.drop_setup
+    args.packages = args.packages or os.path.join(REPO, "build", "packages-fastkdf" if args.fast_kdf else "packages")
+    if args.fast_kdf:
+        print(FAST_KDF_NOTE, flush=True)
 
     cfg = configparser.ConfigParser()
     if not cfg.read(args.config):
@@ -1514,10 +1563,10 @@ def main():
         targets = ["arch" if n == "arch" else "deb" for n in names]
         print(f"building the packages of HEAD ({' '.join(targets)}), log: {run_dir}/build-packages.log", flush=True)
         with open(os.path.join(run_dir, "build-packages.log"), "w") as log:
-            if subprocess.run([os.path.join(REPO, "packaging", "build-packages.sh")] + targets, cwd=REPO, stdout=log, stderr=subprocess.STDOUT).returncode != 0:
+            if subprocess.run([os.path.join(REPO, "packaging", "build-packages.sh")] + (["--fast-kdf"] if args.fast_kdf else []) + targets, cwd=REPO, stdout=log, stderr=subprocess.STDOUT).returncode != 0:
                 print(f"the packages do not build: {run_dir}/build-packages.log", file=sys.stderr)
                 return 1
-    short, packages = head_packages(args.packages)
+    short, packages = head_packages(args.packages, args.fast_kdf)
     machines, resets = [], {}
     for name in names:
         if not packages[name] and not args.from_setup:
@@ -1531,7 +1580,16 @@ def main():
             resets[name] = sec["reset"]
         if name in local:
             machines[-1].lv = local[name]
-    setups = {m.name: SavedSetup(local[m.name], m, SETUP_SNAPSHOT) for m in machines if m.name in local}
+        machines[-1].fast_kdf = args.fast_kdf
+        if args.fast_kdf:
+            machines[-1].notes.append(FAST_KDF_NOTE)
+        if packages[name]:
+            why = package_is(packages[name], args.fast_kdf)
+            machines[-1].check(f"the package is {'a test build, as --fast-kdf asks' if args.fast_kdf else 'a release build: no Go build tag, no trace of a test build'}", why is None, why or "")
+            if why:
+                print(f"{os.path.basename(packages[name])}: {why}", file=sys.stderr)
+                return 1
+    setups = {m.name: SavedSetup(local[m.name], m, SETUP_SNAPSHOT, args.fast_kdf) for m in machines if m.name in local}
     if args.from_setup:
         problems = [why for why in (s.problem() for s in setups.values()) if why]
         if problems:
@@ -1571,6 +1629,8 @@ def main():
     print_slowest([timing] + [m.timing for m in machines])
     if args.from_setup:
         print(FROM_SETUP_NOTE)
+    if args.fast_kdf:
+        print(FAST_KDF_NOTE)
     with open(os.path.join(run_dir, "times.json"), "w") as f:
         f.write(timing.as_json())
     print("ALL PASS" if ok else "FAILED", "- logs:", run_dir)

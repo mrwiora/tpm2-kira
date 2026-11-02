@@ -55,7 +55,8 @@ or kept on the way), which spares the install, the slots, the enrolment and cont
 --from-setup runs every step from "hib-setup", without building, and its report says it is
 no final proof; --only V4,V8 runs those steps alone from there; --drop-setup removes both
 snapshots. A change to the product wants a new --save-setup. "fresh" and "export" are never
-written. The report and every transcript land in the run's directory (--run-dir, or
+written. --fast-kdf runs on the test package (vmtest.py's flag: NO FINAL PROOF, the report's
+first line says so). The report and every transcript land in the run's directory (--run-dir, or
 .local/runs/hibernatetest-<time>/).
 """
 
@@ -116,7 +117,7 @@ class Hib:
         this test adds. With save the first half is the snapshot both tests share,
         taken when it fits this product, kept when it does not."""
         m, lv = self.m, self.lv
-        shared = vmtest.SavedSetup(lv, m, vmtest.SETUP_SNAPSHOT) if save else None
+        shared = vmtest.SavedSetup(lv, m, vmtest.SETUP_SNAPSHOT, m.fast_kdf) if save else None
         if shared and not shared.problem():
             m.head(f"back to the setup: the snapshot {shared.tag}")
             shared.restore()
@@ -600,7 +601,7 @@ class Hib:
         self.m.rep.issues.append(f"V5: restartCount {before['restart']} -> {st['restart']}")
 
     def saved(self):
-        return vmtest.SavedSetup(self.lv, self.m, SETUP_SNAPSHOT)
+        return vmtest.SavedSetup(self.lv, self.m, SETUP_SNAPSHOT, self.m.fast_kdf)
 
     def save_setup(self):
         """Keeps the state after the setup, for --from-setup and --only: the
@@ -688,7 +689,8 @@ class Hib:
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--target", choices=["arch", "debian", "both"], required=True)
-    p.add_argument("--packages", default=os.path.join(REPO, "build", "packages"))
+    p.add_argument("--packages", help="default build/packages, with --fast-kdf build/packages-fastkdf")
+    p.add_argument("--fast-kdf", action="store_true", help="WARNING: NO FINAL PROOF. The test package, Argon2id at a test's cost (vmtest.py's flag)")
     p.add_argument("--no-build", action="store_true", help="take HEAD's packages already in --packages")
     p.add_argument("--localvm-config", default=os.path.join(LOCAL, "vms", "localvm.conf"), help="the machines' config (their memory, say)")
     p.add_argument("--run-dir", help="where the report and the transcripts land (default .local/runs/hibernatetest-<time>)")
@@ -699,6 +701,9 @@ def main():
     args = p.parse_args()
     args.from_setup = args.from_setup or bool(args.only)
     args.no_build = args.no_build or args.from_setup or args.drop_setup
+    args.packages = args.packages or os.path.join(REPO, "build", "packages-fastkdf" if args.fast_kdf else "packages")
+    if args.fast_kdf:
+        print(vmtest.FAST_KDF_NOTE, flush=True)
     vcfg = configparser.ConfigParser()
     vcfg.read(os.path.join(LOCAL, "vms", "vmtest-local.conf"))
     lcfg = configparser.ConfigParser()
@@ -709,10 +714,10 @@ def main():
     if not args.no_build:
         targets = ["arch" if n == "arch" else "deb" for n in names]
         with open(os.path.join(run_dir, "build-packages.log"), "w") as log:
-            if subprocess.run([os.path.join(REPO, "packaging", "build-packages.sh")] + targets, cwd=REPO, stdout=log, stderr=subprocess.STDOUT).returncode != 0:
+            if subprocess.run([os.path.join(REPO, "packaging", "build-packages.sh")] + (["--fast-kdf"] if args.fast_kdf else []) + targets, cwd=REPO, stdout=log, stderr=subprocess.STDOUT).returncode != 0:
                 print(f"the packages do not build: {run_dir}/build-packages.log", file=sys.stderr)
                 return 1
-    short, packages = vmtest.head_packages(args.packages)
+    short, packages = vmtest.head_packages(args.packages, args.fast_kdf)
     # The probe: aSSH's command of the pin, as releases build it.
     probe = os.path.join(run_dir, "assh")
     if subprocess.run(["go", "build", "-o", probe, "./cmd/assh"], cwd=os.path.join(REPO, "assh"),
@@ -732,6 +737,15 @@ def main():
         m = vmtest.Machine(name, name, sec["host"], sec.get("user", "pix"), password, lv.passphrase, run_dir, 0,
                            int(sec["ssh_port"]), int(sec["boot_port"]))
         m.lv = lv
+        m.fast_kdf = args.fast_kdf
+        if args.fast_kdf:
+            m.notes.append(vmtest.FAST_KDF_NOTE)
+        if packages[name]:
+            why = vmtest.package_is(packages[name], args.fast_kdf)
+            m.check(f"the package is {'a test build, as --fast-kdf asks' if args.fast_kdf else 'a release build: no Go build tag, no trace of a test build'}", why is None, why or "")
+            if why:
+                print(f"{os.path.basename(packages[name])}: {why}", file=sys.stderr)
+                return 1
         hs.append((Hib(lv, m, probe), sec.get("reset")))
     print(f"tpm2-kira {short}: hibernation test on {', '.join(names)}, logs: {run_dir}", flush=True)
     if args.drop_setup:
@@ -765,6 +779,8 @@ def main():
     vmtest.print_slowest([h.m.timing for h, _ in hs])
     if args.from_setup:
         print(vmtest.FROM_SETUP_NOTE)
+    if args.fast_kdf:
+        print(vmtest.FAST_KDF_NOTE)
     print("ALL PASS" if ok else "FAILED", "- logs:", run_dir)
     return 0 if ok else 1
 

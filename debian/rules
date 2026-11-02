@@ -26,6 +26,7 @@ override_dh_auto_build:
 	for b in tpm2-kira tpm2-kira-boot; do \
 		go version -m $$b | grep -q 'CGO_ENABLED=0' || { echo "$$b was built with cgo" >&2; exit 1; }; \
 	done
+	sh packaging/release-binary-check.sh tpm2-kira tpm2-kira-boot
 
 override_dh_auto_test:
 	go test -tags=unit ./internal/...

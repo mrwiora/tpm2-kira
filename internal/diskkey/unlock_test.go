@@ -477,7 +477,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := Combine([]byte("hunter2"), salt)
+	want, _ := derive([]byte("hunter2"), salt)
 	if !bytes.Equal(key, want) {
 		t.Fatal("the key is not the combination of password and salt")
 	}
@@ -509,7 +509,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("without a salt from the phone: %v", err)
 	}
-	if want, _ := Combine([]byte("hunter2"), []byte("typed-salt")); !bytes.Equal(key, want) {
+	if want, _ := derive([]byte("hunter2"), []byte("typed-salt")); !bytes.Equal(key, want) {
 		t.Fatal("without a salt from the phone the key is not password + typed salt")
 	}
 	seen = ""
@@ -537,7 +537,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 	if err != nil || asked != RecipeTPMSalt {
 		t.Fatalf("the TPM's salt: %v (asked for %v)", err, asked)
 	}
-	if want, _ := Combine([]byte("hunter2"), salt); !bytes.Equal(key, want) {
+	if want, _ := derive([]byte("hunter2"), salt); !bytes.Equal(key, want) {
 		t.Fatal("the TPM salt's key is not the combination of password and salt")
 	}
 	seen = ""
@@ -636,7 +636,7 @@ func TestDiskKeyPasswordSaltMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := Combine([]byte("hunter2"), []byte("my-salt"))
+	want, _ := derive([]byte("hunter2"), []byte("my-salt"))
 	if !bytes.Equal(key, want) {
 		t.Fatal("the key is not the derivation of password and salt")
 	}

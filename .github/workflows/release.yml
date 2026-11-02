@@ -95,6 +95,7 @@ jobs:
           for b in dist/tpm2-kira-linux-amd64 dist/tpm2-kira-boot-linux-amd64; do
             go version -m "$b" | grep -q 'CGO_ENABLED=0' || { echo "$b built with cgo" >&2; exit 1; }
           done
+          sh packaging/release-binary-check.sh dist/tpm2-kira-linux-amd64 dist/tpm2-kira-boot-linux-amd64
 
       - name: Create checksums
         run: |

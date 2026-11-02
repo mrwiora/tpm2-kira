@@ -16,14 +16,15 @@ import (
 // released (internal/phonegate/factor.go); the password is typed at tpm2-kira's prompt; the
 // result is the key file systemd-cryptsetup reads from the unlock socket.
 
-// Argon2id: 1 GiB, 16 passes, 4 lanes, 64 bytes. The
-// cost is a variable for the tests of the flows around the derivation
-// (cheapCombine in combine_test.go); the derivation itself is tested with
-// these numbers.
-var (
-	combineMemoryKiB   uint32 = 1 << 20
-	combineIterations  uint32 = 16
-	combineParallelism uint8  = 4
+// Argon2id's production cost: 1 GiB, 16 passes, 4 lanes. Constants, and nothing
+// at run time reaches them: not a flag, an environment variable, a config or a
+// LUKS token. What Combine uses is combineMemoryKiB and the rest (combine_cost.go,
+// these numbers); only a test build, by a Go build tag, has others
+// (combine_cost_fast.go, docs/TESTING.md).
+const (
+	productionMemoryKiB   uint32 = 1 << 20
+	productionIterations  uint32 = 16
+	productionParallelism uint8  = 4
 )
 
 const combineKeyLength = 64

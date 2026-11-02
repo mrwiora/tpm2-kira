@@ -197,6 +197,9 @@ func collectStatus(o StatusOptions) StatusReport {
 // what to do about it.
 func statusNotes(r StatusReport) []string {
 	var notes []string
+	if diskkey.TestBuildNote != "" {
+		notes = append(notes, diskkey.TestBuildNote)
+	}
 	if r.TPMError == "" && len(r.Slots) == 0 {
 		notes = append(notes, "no slot is sealed: tpm2-kira slot add")
 	}

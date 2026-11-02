@@ -248,6 +248,14 @@ It may not carry what came before.
     third exception to its not editing, asked every time). `control` advises a GRUB
     superuser password (never writes grub.cfg) and judges its absence red.
   - aSSH only warns about Secure Boot.
+- **Argon2id's cost is a constant; only a Go build tag gives a test another.**
+  `internal/diskkey/combine.go` holds the production cost; the tag
+  `kira_test_fast_kdf` alone selects a test's (`combine_cost_fast.go`), for
+  `tools/vmtest.py --fast-kdf`. Never anything at run time: a flag, an environment
+  variable, a config or a LUKS token would be a downgrade an attacker could reach.
+  Release recipes never name the tag and refuse a binary built with one
+  (`packaging/release-binary-check.sh`, `internal/diskkey/release_test.go`). A
+  `--fast-kdf` run is no final proof.
 - **Root for everything but the help.** Every command refuses to run as a
   user (`main.go` `requireRoot`); `control` says so on its own screen. The
   test suite's exception is `TPM2_KIRA_UNPRIVILEGED=1` for the binary

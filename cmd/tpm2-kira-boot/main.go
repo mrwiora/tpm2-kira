@@ -55,6 +55,9 @@ func main() {
 	switch command {
 	case "version", "-v", "--version":
 		fmt.Printf("tpm2-kira-boot version %s\n", Version)
+		if diskkey.TestBuildNote != "" {
+			fmt.Println(diskkey.TestBuildNote)
+		}
 		return
 	case "help", "-h", "--help":
 		fmt.Print(usage)

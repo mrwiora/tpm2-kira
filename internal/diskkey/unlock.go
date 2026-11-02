@@ -379,8 +379,12 @@ func typedKey(volume string, r Recipe, vaultErr error, salt func(volume string, 
 		}
 	}
 	defer wipe.Bytes(s)
-	return Combine(pw, s)
+	return derive(pw, s)
 }
+
+// derive is Combine; the tests of what happens around the derivation put a
+// cheap one here (cheapCombine in combine_test.go).
+var derive = Combine
 
 // Prompter asks for a volume's password or salt, with a note above the
 // question when there is one.

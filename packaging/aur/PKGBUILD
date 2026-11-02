@@ -86,6 +86,7 @@ build() {
     for b in "$pkgname" "$pkgname-boot"; do
         go version -m "$b" | grep -q 'CGO_ENABLED=0' || { echo "$b was built with cgo" >&2; return 1; }
     done
+    sh packaging/release-binary-check.sh "$pkgname" "$pkgname-boot"
 }
 
 check() {

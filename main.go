@@ -139,6 +139,9 @@ func main() {
 		}
 	case "version", "-v", "--version":
 		fmt.Printf("tpm2-kira version %s\n", Version)
+		if diskkey.TestBuildNote != "" {
+			fmt.Println(diskkey.TestBuildNote)
+		}
 	case "help", "-h", "--help":
 		if len(commandArgs) > 0 {
 			printHelp(commandArgs[0])

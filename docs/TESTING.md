@@ -130,6 +130,34 @@ but `tools/` and documentation has changed since. `fresh` and `export` are
 never written: `tools/localvm.py` refuses to replace or remove them without
 `--overwrite`, by hand.
 
+### A test build: `--fast-kdf`
+
+```bash
+tools/vmtest.py --config ../.local/vms/vmtest-local.conf --target both --fast-kdf
+```
+
+**Such a run is no final proof.** It says so in the output and on the first line
+of every report. Argon2id's production cost (1 GiB, 16 passes, 4 lanes) is a
+constant in `internal/diskkey/combine.go`; a Go build tag alone,
+`kira_test_fast_kdf`, selects a test's (`combine_cost_fast.go`: 16 MiB, 1 pass) -
+not a flag, an environment variable, a config or a LUKS token: anything at run time
+would be a downgrade an attacker could reach. `packaging/build-packages.sh
+--fast-kdf` edits its copies of the recipes to pass the tag, marks the version
+`.fastkdf` and writes to `build/packages-fastkdf/`. Every step, the typed recipes'
+prompts, keyslots and boots included, runs as always; what is not shown is the
+real cost, its memory and its time. Keyslots enrolled with one cost do not open with
+the other, and a saved setup is refused by a run of the other kind.
+
+What keeps the tag out of a release: `packaging/aur/PKGBUILD`, `debian/rules` and
+`release.yml` never name it and run `packaging/release-binary-check.sh` on what they
+built, which refuses a binary Go recorded a build tag for or that holds the test
+build's mark; `internal/diskkey/release_test.go` holds the recipes to that, and shows
+it on real builds of both kinds; every VM test checks its package the same way before
+it touches a machine, and that `tpm2-kira version` says nothing of a test build. A
+test build says what it is in `version` and in `tpm2-kira status`. The vault, the
+phone, aSSH and safearch derive nothing with this cost: they hand over salts,
+parts and peppers; only `diskkey.Combine` runs it, in the two binaries of one package.
+
 ### What it checks
 
 1. **Preflight:** the machine answers, runs the distribution, is fresh,
