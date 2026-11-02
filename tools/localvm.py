@@ -43,6 +43,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -59,6 +60,13 @@ PASSPHRASE_PROMPT = re.compile(r"(Please enter passphrase for disk \S+|Please un
 PROTECTED_SNAPSHOTS = ("export", "fresh")
 # A guest's memory, MiB: no less without measuring again (LOCALVM.md, "Memory").
 DEFAULT_MEMORY = "4096"
+# GRUB's menu waits for a key or its timeout (fresh's GRUB_TIMEOUT), graphically: nothing of it shows
+# on the serial console, whose keys it reads all the same. An Enter takes the default entry, as the
+# timeout would. The keys stop long before the kernel opens the console, whose prompts they would
+# answer. systemd-boot has no timeout here.
+GRUB_STARTS = re.compile(rb'BdsDxe: starting Boot\w+ "[^"]*" from .*(?:shim|grub)', re.I)
+GRUB_KEYS = 8
+GRUB_KEY_INTERVAL = 0.25
 
 
 class Fail(Exception):
@@ -158,10 +166,34 @@ class Machine:
                  "-serial", "chardev:ser0",
                  "-qmp", f"unix:{self.path('qmp.sock')},server=on,wait=off",
                  "-display", "none", "-daemonize", "-pidfile", self.path("qemu.pid")])
+            threading.Thread(target=self.pass_grub_menu, args=(self.mark,), daemon=True).start()
             print(f"{self.name}: started (ssh 127.0.0.1:{self.ssh_port}, boot ssh 127.0.0.1:{self.boot_port}, serial {self.path('serial.log')})")
         if unlock:
             self.unlock(timeout)
             self.wait_ssh(timeout)
+
+    def pass_grub_menu(self, since):
+        """As long as this qemu runs: at each boot GRUB's menu is passed with an Enter."""
+        seen = since
+        path = self.path("serial.log")
+        qemu = self.pid()
+        while qemu and self.pid() == qemu:
+            with open(path, "rb") as f:
+                f.seek(seen)
+                data = f.read()
+            m = GRUB_STARTS.search(data)
+            if m:
+                seen += m.end()
+                for _ in range(GRUB_KEYS):
+                    try:
+                        self.send("\r")
+                    except OSError:
+                        return
+                    time.sleep(GRUB_KEY_INTERVAL)
+            else:
+                # A line cut in two stays to be read again.
+                seen += max(0, data.rfind(b"\n") + 1)
+                time.sleep(0.1)
 
     def serial_text(self, since=0):
         try:

@@ -53,8 +53,8 @@ Snapshots in use:
 |---|---|
 | `export` | the disk as exported, fresh OVMF variables, a fresh TPM; nothing changed in the guest |
 | `fresh` | the serial console enabled (below), no tpm2-kira installed: what every test starts from |
-| `setup` | yours, while iterating: the steps of `vmtest.py` up to the first reboot (`--save-setup`, docs/TESTING.md) |
-| `hib-setup` | yours, while iterating: `hibernatetest.py`'s setup (`--save-setup`) |
+| `setup` | a run's own, and yours while iterating: the steps up to the first reboot (`--save-setup`, docs/TESTING.md) |
+| `hibernated` | a run's own: boot 1 hibernated, what V2 and V4 resume from; gone at the run's end |
 
 `export` and `fresh` are not replaced without `snapshot --overwrite`, and no
 test removes them.
@@ -71,6 +71,12 @@ These are the points that matter, and why. The full command line is in
   variables: they hold no PK, so the machine starts in Setup Mode and boots
   anything until keys are enrolled (`go-uefi-slim/internal/vmcheck`); `reset`
   brings it back to Setup Mode.
+- **GRUB's 5 s menu passed from the console.** `localvm.py` sends an Enter when the firmware starts
+  a shim or GRUB, for as long as qemu runs; the `grub.cfg` and `fresh` stay as they are, PCRs 0-15
+  of `fresh` are unchanged. systemd-boot has no timeout here. Measured against what was left out
+  (2026-11-02, `.local/runs/n/n5/`): `-smp 4` moves PCR 0 and 1 (Debian's 10 too) and gains 3-7 s of
+  Argon2id per derivation, loses as much in install and `control`; `cache=unsafe` leaves PCRs alone
+  and gains nothing measurable, while the qcow2 that holds `fresh` is the one it writes.
 - **No reset by the watchdog** (`-global ICH9-LPC.noreboot=true`). q35's iTCO
   watchdog resets a guest resumed from hibernation about 30 s after its first
   login: nothing in the resumed system keeps the armed watchdog alive. A test
@@ -79,9 +85,20 @@ These are the points that matter, and why. The full command line is in
 - **`kvm-clock` counts from qemu's start, and a resume is under a new qemu.** The
   resumed kernel keeps its clock at the last value it read until the new one passes it:
   the guest sits idle, nothing fires, for as long as qemu had been up before the
-  hibernation, less its time at the resume. About 182 s on Arch's V2 from `fresh`, about 10
-  s from a snapshot (docs/TESTING.md). A machine without `kvm-clock` has no such wait: what
-  real hardware does at a resume is not shown here.
+  hibernation, less its time at the resume: why boot 1 comes under a new qemu and the
+  hibernation right after it. The measured wait was about 182 s on Arch's V2 hibernated after a
+  whole setup under one qemu. A machine without `kvm-clock` has no such wait: what real
+  hardware does at a resume is not shown here.
+- **The firmware's memory map differs from boot to boot, and the kernel refuses an image of
+  another map** ("Hibernate inconsistent memory map"). A 3-page ACPI-data allocation sits
+  elsewhere: from the same snapshot of the same disk 0x79a87000, 0x79a78000 or 0x79a66000 on Debian,
+  and an edit at systemd-boot's menu brings it in on Arch, where without one the map holds.
+  Measured over cold boots and resumes (2026-11-02, `.local/runs/n/exp/`): Debian's resume is taken about
+  every second try, Arch's with the menu edited one try in four, with or without
+  `HibernateLocation` in the variables beforehand; a CPU without `rdrand` and `rdseed` moves PCR 1,
+  so that was not tried further. So V2 hibernates again, up to three times, and says how many it
+  took; V3 and V4's resume are "not tested" when refused. What a real machine's firmware does is not
+  shown here.
 - **TPM:** `tpm-crb` on swtpm through a unix socket. `swtpm_setup
   --create-ek-cert --create-platform-cert` provisions it the way libvirt
   does: the phone and vault steps of `vmtest.py` read the EK certificate.
