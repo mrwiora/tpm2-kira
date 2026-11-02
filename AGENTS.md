@@ -193,12 +193,19 @@ It may not carry what came before.
   generation index only revokes approvals; it, the storage primary and
   the slot objects are noDA, so a lockout never stops the slots at boot.
 - **The phone channel's secrets are the one sealed object with another
-  policy** (`internal/nvslot/channel.go`, decided 2026-11-01): `PolicyOR(
-  PolicyPCR(15 == zero), PolicySigned(signing key, policyRef))`, each branch
-  with `PolicyCommandCode(Unseal)`. Not the slot's policy: the gate must start in
-  a boot nobody approved, so that the phone shows it as changed; a further phone
-  and the phone salt's hand-over open them after the close with the signing key.
-  The wire does not change. The record never holds them in clear.
+  policy** (`internal/nvslot/channel.go`): `PolicyOR(PolicyPCR(7 as sealed, 15 ==
+  zero), PolicySigned(signing key, policyRef))`, each branch with
+  `PolicyCommandCode(Unseal)`. The PCRs besides 15 are one list, `channelPCRs`, and
+  their values the next boot's, from the event log (the record carries them). Not the
+  slot's policy: the gate must start in a boot nobody approved, so that the phone shows
+  it as changed; a moved PCR 7 is no gate, and the phone finds no machine. A further
+  phone, the phone salt's hand-over and `slot approve`, which seals them again when PCR
+  7 moved, open them with the signing key. The wire does not change. The record never
+  holds them in clear.
+- **A policy session is explicit and flushed on every way out**, never a
+  `tpm2.Policy` callback, which stays in the TPM when it fails (a fix is offered to
+  go-tpm, branch `fix/policy-init-leak`, not used here). The policy runs right before
+  the one command that uses the session.
 - **NV indices are written and removed one way: aSSH's `persist`.** EFI
   variables are tpm2-kira's own:
   - It has its own code for them (the machine-id, the slots' records, and

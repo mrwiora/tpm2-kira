@@ -9,6 +9,19 @@ formats and CLI flags may change without migration paths.
 ---
 
 
+## PCR 7 in the channel's first branch; explicit sessions (2026-11-02, security)
+
+Until blob 19 the channel's first branch read PCR 15 alone, so anything booted on the
+machine, a Microsoft-signed live USB or Secure Boot off included, opened the secrets
+before the close. It reads PCR 7 too now. The price: a changed PCR 7 shows no "changed"
+on the phone, there is no gate; a db or dbx update needs `slot approve`.
+
+`nvslot.ApprovedSession`, the NV write and the EK's policy were `tpm2.Policy` callbacks:
+go-tpm's `execute()` returned on a failed callback without flushing, and the fourth
+failure on one open file was `TPM_RC_SESSION_MEMORY`; on the raw `/dev/tpm0` the
+sessions outlived the process. A refused policy is an ordinary outcome of a boot nobody
+approved.
+
 ## The phone channel's secrets sealed (2026-11-01, security)
 
 Until blob 18 a record held `NoisePrivate` and `AdvKey` in clear, in an EFI variable

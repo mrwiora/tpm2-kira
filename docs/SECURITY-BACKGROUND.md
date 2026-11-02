@@ -1736,7 +1736,7 @@ Which key does what:
 
 ## 17. What Has Been Tested
 
-**The code:** tpm2-kira `75121e2` (blob 19), aSSH `78b1fac`, go-uefi-slim `8f7d9c7`.
+**The code:** tpm2-kira `d62a72d` (blob 20), aSSH `78b1fac`, go-uefi-slim `8f7d9c7`. Rows at another commit say so: `core` and aSSH did not change after them.
 **Date:** 2026-11-02.
 
 **The machines:** the VMs are QEMU with OVMF and swtpm as their TPM, in Secure Boot
@@ -1749,10 +1749,11 @@ Logs: `.local/runs/` of the workspace.
 
 | Run | Code | On | Result |
 |---|---|---|---|
-| `tools/vmtest.py --target both`, from `fresh`, the machines in parallel | 75121e2 | VM | Arch 157, Debian 148, 0 failed (`g5/vmtest-75121e2`) |
-| `tools/hibernatetest.py --target both --no-build`, in parallel | 75121e2 | VM | Arch 137, Debian 126, 0 failed, with the "not tested" items in §18 (`hibernatetest-20261102-002331`) |
+| `tools/vmtest.py --target both`, from `fresh`, the machines in parallel | d62a72d | VM | Arch 157, Debian 148, 0 failed (`h3/vmtest`) |
+| `tools/hibernatetest.py --target both --no-build`, in parallel | d62a72d | VM | Arch 137, Debian 126, 0 failed, with the "not tested" items in §18 (`hibernatetest-20261102-015120`) |
 | A resumed guest, `--only V2` with a wait added | 75121e2 | VM | Arch: slot 0's TOTP key refuses after the resume, same boot_id 75 s after the first login, with `ICH9-LPC.noreboot` (`g5/resume-uptime.out`) |
-| `make test-all` | 73d53dc (75121e2 differs only in docs) | unit, swtpm | 937 passed, 8 skipped, 0 failed (`g5/test-all.log`) |
+| `make test-all` | d62a72d | unit, swtpm | 944 passed, 8 skipped, 0 failed (`h3/test-all.log`) |
+| A failing `tpm2.Policy` callback at go-tpm `c395998`, repeated on one open file (the probe `h2/leakprobe`) | - | Arch VM, kernel 7.2.9, swtpm behind it | `/dev/tpmrm0` and `/dev/tpm0`: the 4th is `TPM_RC_SESSION_MEMORY`. Closing the file clears `tpmrm0`; on `tpm0` the three sessions stay (`h2/probe.log`). tpm2-kira's sessions are explicit now (`TestFailuresLeaveNoSession`) |
 | aSSH `go test ./...` | 78b1fac | unit, swtpm | 81 passed, 0 failed (`g5/assh.log`) |
 | go-uefi-slim `go test ./...` | 8f7d9c7 | unit | 46 passed, 1 skipped, 0 failed (`g5/go-uefi-slim.log`); `uki`'s three fuzz targets 40 s each (`g3/fuzz.log`) |
 | tpm2-kira-vault's tests | at the pin 73d53dc | its suite | 26 passed, 0 failed (`g5/vault.log`) |
