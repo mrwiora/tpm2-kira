@@ -104,16 +104,17 @@ SETUP = "setup"
 # A run's order, which spares waits: the hibernation right after a short boot; each state a
 # scenario needs from the one before; what breaks the machine last.
 SCENARIOS = (
-    Scenario(SETUP, budget(170, 190)),
+    Scenario(SETUP, budget(194, 206)),
     Scenario("typed-boot", budget(48, 58)),
     Scenario("V6", hib=True),
-    Scenario("hibernate", budget(65, 62), hib=True),
+    Scenario("hibernate", budget(65, 10), hib=True),
+    Scenario("debian-resume", distro="debian", hib=True),
     Scenario("V3", distro="arch", hib=True),
-    Scenario("unapproved", budget(70, None), distro="arch"),
-    Scenario("tpm-salt", budget(107, 124)),
+    Scenario("unapproved", budget(71, None), distro="arch"),
+    Scenario("tpm-salt", budget(107, 126)),
     Scenario("second-typed-boot"),
-    Scenario("vault-pepper", budget(135, 162), vault=True),
-    Scenario("revoked", budget(52, 59), needs=("vault-pepper",), vault=True),
+    Scenario("vault-pepper", budget(144, 162), vault=True),
+    Scenario("revoked", budget(52, 60), needs=("vault-pepper",), vault=True),
     Scenario("vault-alone", needs=("vault-pepper",), vault=True),
     Scenario("typed-vault", needs=("vault-pepper",), vault=True),
     Scenario("slot-life"),
@@ -1802,7 +1803,7 @@ class Machine:
                "vault-pepper": self.vault_pepper, "revoked": self.revoked, "vault-alone": self.vault_alone, "typed-vault": self.vault_typed,
                "slot-life": self.slot_life, "removal": self.removal}
         if hib:
-            out.update({"V6": hib.swap_risk, "hibernate": hib.scenario_hibernate, "V3": hib.step_v3, "no-tpm": hib.step_no_tpm, "V4-reverted": hib.step_v4_reverted,
+            out.update({"V6": hib.swap_risk, "hibernate": hib.scenario_hibernate, "debian-resume": hib.scenario_resume, "V3": hib.step_v3, "no-tpm": hib.step_no_tpm, "V4-reverted": hib.step_v4_reverted,
                         "silent-tpm": hib.silent_tpm, "V9-long": hib.silent_tpm_long, "V8": hib.way_out})
         return out
 

@@ -12,15 +12,16 @@ distributions:
              root (Arch) or the encrypted swap volume (Debian) as the resume device: in the setup,
              before control, so that control's image is the one resumed
   hibernate  the proof's: V1 the image carries the close before the resume; a normal boot certifies
-             and leaves the CA closed (PCR 15 not zero). One hibernation, of the typed boot, kept
+             and leaves the CA closed (PCR 15 not zero). V5 suspend to RAM: tested where the guest
+             offers S3 ("deep"). On Arch, between them, the resume: one hibernation, of the typed boot, kept
              as a snapshot: every resume starts from it. The guest under a new qemu since that
              boot, so no clock to catch up (tools/LOCALVM.md), and a cold start's memory map at the
              resume as at the boot. V2 the resume through the code screen over SSH: the session is
              the old one (boot_id), the CA closed, the CA certifies nothing (aSSH's agent as the
              probe); the TPM's restartCount is reported. A kernel that refuses the image for its
              memory map (tools/LOCALVM.md) makes it "not tested", at once. V7 the next boot,
-             whatever it is for: certified again. V5 suspend to RAM: tested where the guest offers
-             S3 ("deep")
+             whatever it is for: certified again
+  debian-resume  --all, Debian: that hibernation and resume; its kernel refuses the image in most runs
   silent-tpm the proof's: a TPM the firmware has, silent (the steps of docs/SSH.md, "The close",
              step 6): the kernel's driver kept from starting: one hard reboot, then the passphrase
              and the late closer. Arch at the resume's boot, from the hibernated state, the words
@@ -611,11 +612,16 @@ class Hib:
         return self.before
 
     def scenario_hibernate(self):
-        """V1, the hibernation, the resume (V2), suspend to RAM (V5), in the order that spares waits."""
+        """V1, on Arch the hibernation and the resume (V2), suspend to RAM (V5), in the order that
+        spares waits. Debian's kernel refuses the image in most runs: its resume is under --all."""
         self.image_has_close()
+        if self.distro == "arch":
+            self.scenario_resume()
+        self.mem_sleep()
+
+    def scenario_resume(self):
         self.hibernate_once()
         self.step_v2()
-        self.mem_sleep()
 
     def step_v2(self):
         """The resume. A kernel that refuses the image makes it "not tested", at once."""
