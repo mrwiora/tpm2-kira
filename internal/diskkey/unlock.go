@@ -169,7 +169,7 @@ func (s *UnlockServer) answer(c net.Conn) {
 		s.log(fmt.Sprintf("unlock: writing the key for %s failed: %v", req.Volume, err))
 		return
 	}
-	s.log(fmt.Sprintf("unlock: answered for %s (%d bytes)", req.Volume, len(key)))
+	s.log(fmt.Sprintf("unlock: answered for %s (%d bytes); %s", req.Volume, len(key), MemoryNote()))
 }
 
 // peerIsUs checks that the connection comes from a process of this user
