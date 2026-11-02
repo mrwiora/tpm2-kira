@@ -158,6 +158,38 @@ test build says what it is in `version` and in `tpm2-kira status`. The vault, th
 phone, aSSH and safearch derive nothing with this cost: they hand over salts,
 parts and peppers; only `diskkey.Combine` runs it, in the two binaries of one package.
 
+### What a run costs
+
+Seconds, measured from `fresh` (2026-11-02, both machines in parallel, one process;
+`times.json` of each run). Before is the code before the timing work; after has the
+state waits; `--fast-kdf` is the test build's cost on top of that.
+
+| | Arch before | after | `--fast-kdf` | Debian before | after | `--fast-kdf` |
+|---|---:|---:|---:|---:|---:|---:|
+| VM test, all | 957 | 833 | 686 | 1048 | 922 | 696 |
+| a typed boot (reboot 1) | 68 | 48 | 38 | 81 | 59 | 49 |
+| a boot, wrong pepper then right | 96 | 82 | 60 | 127 | 110 | 66 |
+| hibernate test, all | 1240 | 1064 | 1002 | 1171 | 1074 | 919 |
+| V2 | 272 | 231 | 212 | 76 | 68 | 52 |
+| V4 | 502 | 421 | 388 | 199 | 191 | 158 |
+| V5 | 23 | 3.5 | 3.6 | 23 | 3.9 | 3.9 |
+| V8 | 55 | 52 | 82 | 101 | 94 | 81 |
+
+The VM test's whole run, with the build and the vault's container: 1117 s before,
+967 after, 739 with `--fast-kdf`. A hibernate test from `hib-setup` skips a further
+4-5 minutes of setup; it is no final proof. The guest's memory stays 4096 MiB: lower
+gained nothing and fails (`tools/LOCALVM.md`, "Memory").
+
+What is left is mostly the machines and the product:
+- the V4 and V9 boots without a TPM's answer (Arch's silent TPM alone 240 s) wait for
+  the close's own timeouts;
+- Arch's V2 spends about 205 s between the prompts and ssh, on the first resume after
+  the setup, about 30 s from `hib-setup`: not explained, and not Argon2id (212 s with
+  `--fast-kdf`);
+- firmware to the boot SSH server is 18-20 s on Arch and 28 s on Debian (GRUB's timeout
+  is `fresh`'s), the initrd's end to ssh 6 and 10-16 s;
+- Argon2id itself is 11-17 s per derivation on the 2 vCPUs.
+
 ### What it checks
 
 1. **Preflight:** the machine answers, runs the distribution, is fresh,
