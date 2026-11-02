@@ -57,7 +57,7 @@ func TestSourcesAreInputs(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			if name := d.Name(); path != "." && (strings.HasPrefix(name, ".") || name == "testdata") {
+			if name := d.Name(); path != "." && (strings.HasPrefix(name, ".") || name == "testdata" || name == "build") {
 				return filepath.SkipDir
 			}
 			return nil
