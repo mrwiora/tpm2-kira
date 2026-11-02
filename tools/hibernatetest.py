@@ -650,6 +650,8 @@ class Hib:
             if st["boot"] == before["boot"]:
                 self.m.rep.issues.append(f"V2: the kernel took the image on try {attempt}")
                 break
+            if attempt == V2_TRIES:
+                break
             # A boot of its own, with another map's image refused: hibernated again, the
             # snapshot follows: what V3 and V4 resume from is the last one that was tried.
             before = self.hibernate("V2")

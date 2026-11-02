@@ -65,14 +65,14 @@ def parts_table(run_dir):
     project = lambda name: os.path.join(WORKSPACE, name)
     table = [
         Part("test-all", ["make", "test-all"], REPO, {"GOFLAGS": "-count=1"}, check=no_cached, memory=3000),
-        Part("machines", [tool("vmtest.py"), "--config", VM_CONFIG, "--target", "both", "--run-dir", os.path.join(run_dir, "machines")], REPO, machines=True, memory=9000),
-        Part("assh", go_test, project("assh"), check=no_cached, memory=1500),
-        Part("vault", go_test, project("tpm2-kira-vault"), check=no_cached, memory=1500),
+        Part("machines", [tool("vmtest.py"), "--config", VM_CONFIG, "--target", "both", "--run-dir", os.path.join(run_dir, "machines")], REPO, machines=True, memory=8500),
+        Part("assh", go_test, project("assh"), check=no_cached, memory=1000),
+        Part("vault", go_test, project("tpm2-kira-vault"), check=no_cached, memory=500),
         Part("go-uefi-slim", go_test, project("go-uefi-slim"), check=no_cached, memory=1000),
         Part("tpm2-verifier", go_test, project("tpm2-verifier"), check=no_cached, memory=1000),
-        Part("safearch-run", ["tests/run.sh"], project("safearch"), memory=1000),
-        Part("safearch-vm", ["tests/vm.sh"], project("safearch"), memory=4000),
-        Part("marify", ["android/scripts/test-emulator.sh"], project("marify"), memory=5000),
+        Part("safearch-run", ["tests/run.sh"], project("safearch"), memory=500),
+        Part("safearch-vm", ["tests/vm.sh"], project("safearch"), memory=3500),
+        Part("marify", ["android/scripts/test-emulator.sh"], project("marify"), memory=6600),
     ]
     return {p.name: p for p in table}
 

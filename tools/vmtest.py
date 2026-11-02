@@ -326,7 +326,7 @@ class SavedSetup:
         st = json.load(open(self.path()))
         if st.get("fast_kdf") != self.fast_kdf:
             return f"{self.lv.name}: the snapshot {self.tag} was made with fast_kdf={st.get('fast_kdf')}: its keyslots open with no other build"
-        diff = subprocess.run(["git", "-C", REPO, "diff", "--name-only", st["commit"], "HEAD", "--", ".", ":!tools", ":!docs", ":!*.md"],
+        diff = subprocess.run(["git", "-C", REPO, "diff", "--name-only", st["commit"], "HEAD", "--", ".", ":!tools", ":!docs", ":!*.md", ":!*_test.go"],
                               capture_output=True, text=True)
         if diff.returncode != 0 or diff.stdout.strip():
             return f"{self.lv.name}: the snapshot {self.tag} is of {st['commit'][:7]}, and the product changed since: --save-setup again"
