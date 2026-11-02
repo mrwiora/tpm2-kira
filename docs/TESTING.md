@@ -25,7 +25,7 @@ a saved setup (`.local/runs/q/`), Arch / Debian:
 | `vault-pepper` | 136 / 167 | 136 / 149 | 140 / 168 |
 | `revoked` | 60 / 69 | 59 / 61 | 62 / 70 |
 | `silent-tpm` | 122 / 116 | 126 / 116 | 130 / 120 |
-| the machine | 699 / 644 | | 704 / 668 |
+| the machine | 699 / 644 | | 724 / 668 |
 
 After which change: `tools/test-affected.py` prints it, from the table in the workspace's AGENTS.md,
 "What to test after a change". In short: installed-system code, the fast depth; the boot, the close or
