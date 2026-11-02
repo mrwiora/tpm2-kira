@@ -583,6 +583,32 @@ class Machine:
                                  None if secure == "01" and setup == "00" else "WARNING: Secure Boot's state could not be read")
         return self._secure_boot
 
+    def check_vault_secure_boot(self, vault):
+        """What the vault shows of this machine's Secure Boot, from the quote of its real
+        PCR 7 and the real event log's digests: the state its variables say, read there
+        with no word of the machine's. The tables and the audit, red in words where there
+        is no colour (the fresh VMs are in Setup Mode)."""
+        want = self.secure_boot_warning()
+        if want is None:
+            word, line = " on\n", "secure boot:     Secure Boot on"
+        elif "Setup Mode" in want:
+            word, line = "SETUP-MODE", "secure boot:     WARNING: Secure Boot in SETUP MODE"
+        elif "off" in want:
+            word, line = "OFF", "secure boot:     WARNING: Secure Boot OFF"
+        else:
+            word, line = "NOT-ESTABLISHED", "secure boot:     WARNING: Secure Boot NOT ESTABLISHED"
+        out = vault.admin("devices")
+        self.log.save("vault-devices.log", out)
+        row = next((l for l in out.splitlines() if re.search(r"\s" + re.escape(self.name) + r"\s", l)), "")
+        self.check(f"the vault's devices: Secure Boot established from the quote and the event log: {word.strip()}", word.strip() in row, out[-400:])
+        out = vault.admin("device", "show", self.name)
+        self.log.save("vault-device.log", out)
+        self.check(f"the vault's device view: {line.split('     ')[1]}", line in out, out[-400:])
+        out = vault.admin("audit")
+        self.log.save("vault-audit-secure-boot.log", out)
+        rel = [l for l in out.splitlines() if "release" in l and "released" in l and self.name in l]
+        self.check("the vault's audit: the release carries the state", bool(rel) and word.strip().replace("-", " ") in rel[-1].upper(), (rel or [out])[-1][-400:])
+
     def check_memory(self, where, out):
         """The process keeps nothing of Argon2id once a key is answered: the keyslot's
         own comes next, in an initrd without swap. What it says is the log of the floor
@@ -814,6 +840,8 @@ class Machine:
             out = s.wait_end(120)
             self.check("luks enrol adds a keyslot of the recovery recipe (0x1100)", True)
             self.check_no_swap(swap, "the enrolment's Argon2id")
+            # What the keyslot's own Argon2id takes at boot, after Combine's: for the floor.
+            self.run(f"cryptsetup luksDump {self.luks_dev} | grep -E '^  [0-9]+: luks2|Memory:|Time cost|Threads'", save="luks-keyslots.log")
         except Fail as e:
             self.check("luks enrol adds a keyslot of the recovery recipe (0x1100)", False, str(e))
             raise
@@ -1130,8 +1158,7 @@ class Machine:
         rc, out = self.run(log + " 2>&1", save="boot-vault-tpm2-kira.log")
         self.check("the vault released the remote part; the key was made", "released; the key is made" in out, out[-600:])
         self.check("the key was answered", "unlock: answered for" in out, out[-600:])
-        out = vault.admin("devices")
-        self.log.save("vault-devices.log", out)
+        self.check_vault_secure_boot(vault)
 
         # Revoked: no release; the typed keyslot is the fallback, over SSH.
         self.head("a boot with the device revoked on the vault")

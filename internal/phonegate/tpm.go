@@ -21,7 +21,6 @@ import (
 	"github.com/mrwiora/tpm2-kira/core/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/sbstate"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -316,7 +315,10 @@ type TPMBackend struct {
 	EKAlgorithm  uint16
 	EventlogData []byte
 	EventlogRead bool
-	initrd       *initrdCoverage // read once from the event log
+	// PCR7ChainData is the digests of PCR 7's events (PCR7Chain), once PCR7ChainRead.
+	PCR7ChainData []byte
+	PCR7ChainRead bool
+	initrd        *initrdCoverage // read once from the event log
 }
 
 // Quote implements attest.AttesterBackend.
@@ -390,17 +392,15 @@ func (b *TPMBackend) BootContext() attest.BootContext {
 			bc.InitrdPCRs = append(bc.InitrdPCRs, uint8(p))
 		}
 	}
-	sb := sbstate.Read()
-	switch {
-	case !sb.Known:
-		bc.SecureBootState = attest.SecureBootUnknown
-	case sb.SetupMode:
-		bc.SecureBootState = attest.SecureBootSetupMode
-	case sb.Enabled:
-		bc.SecureBootState = attest.SecureBootEnabled
-	default:
-		bc.SecureBootState = attest.SecureBootDisabled
+	if !b.PCR7ChainRead {
+		b.PCR7ChainRead = true
+		alg := attest.AlgSHA256
+		if b.Sealed != nil && b.Sealed.GetHashAlgo().TPMAlg() == tpm2.TPMAlgSHA1 {
+			alg = attest.AlgSHA1
+		}
+		b.PCR7ChainData = PCR7Chain(measure.DefaultEventlogPath, alg)
 	}
+	bc.PCR7Chain = b.PCR7ChainData
 	return bc
 }
 

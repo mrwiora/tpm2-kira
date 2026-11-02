@@ -374,6 +374,7 @@ func FetchRemote(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, c *vau
 		QuoteSignature:    q.Signature,
 		Generation:        p.Generation,
 		ApprovalSignature: p.ApprovalSignature,
+		PCR7Chain:         phonegate.PCR7Chain(measure.DefaultEventlogPath, sel.Alg),
 	}
 	for _, v := range q.Values {
 		req.PCRValues = append(req.PCRValues, vaultproto.PCRValue{Index: v.Index, Value: v.Digest})

@@ -26,7 +26,7 @@ import (
 // "PCR 4 differs" and "four PCRs and the firmware changed" call for different
 // human decisions.
 func Verify(ev *Evidence, pol *Policy, pin *PinnedIdentity, expectedQD []byte, now time.Time) *Verdict {
-	v := &Verdict{}
+	v := &Verdict{SecureBoot: notEstablished("the quote did not verify")}
 	if ev == nil || pol == nil || pin == nil {
 		v.hard(ReasonMalformed, "missing evidence, policy or pinned identity")
 		return v.finish()
@@ -127,13 +127,9 @@ func Verify(ev *Evidence, pol *Policy, pin *PinnedIdentity, expectedQD []byte, n
 	}
 	v.Values = values
 
-	if pol.RequireSecureBoot && ev.BootContext.SecureBootState != SecureBootEnabled {
-		// Informational context, not TPM-signed: it can only make a
-		// verdict stricter, never more lenient.
-		v.hard(ReasonSecureBootOff, "Secure Boot is not reported as enabled")
-	} else if ev.BootContext.SecureBootState == SecureBootDisabled || ev.BootContext.SecureBootState == SecureBootSetupMode {
-		v.warn(WarnSecureBootOff, "Secure Boot is off or in Setup Mode; PCR 7 then attests little")
-	}
+	// From the verified quote's PCR 7, never from what the machine says: a state
+	// not established, the default above, is red like off.
+	v.SecureBoot = EstablishSecureBoot(sel.Alg, values[7], ev.BootContext.PCR7Chain)
 
 	if pr, err := pol.MatchProfile(values, now); err == nil {
 		v.Profile = pr.Name
@@ -175,7 +171,6 @@ const (
 	ReasonSelectionMismatch   = "selection_mismatch"
 	ReasonPCRValuesInvalid    = "pcr_values_invalid"
 	ReasonPCRDigestMismatch   = "pcr_digest_mismatch"
-	ReasonSecureBootOff       = "secureboot_off"
 	// ReasonNoProfileMatch is the only soft reason: the evidence is
 	// authentic, the state is merely unknown, and a human may approve it.
 	ReasonNoProfileMatch = "no_profile_match"
@@ -183,7 +178,6 @@ const (
 	WarnResetCountJump  = "reset_count_jump"
 	WarnClockUnsafe     = "clock_unsafe"
 	WarnFirmwareChanged = "firmware_changed"
-	WarnSecureBootOff   = "secureboot_off"
 )
 
 // Reason is one failed check.
@@ -220,6 +214,9 @@ type Verdict struct {
 	DiffAgainst string           `json:"diff_against,omitempty"`
 	Explanation string           `json:"explanation,omitempty"`
 	Values      map[uint8][]byte `json:"-"`
+	// SecureBoot is what the quote and the event log establish (secureboot.go);
+	// anything but on is shown red, whatever State is. It decides nothing.
+	SecureBoot SecureBootFinding `json:"secure_boot"`
 
 	ResetCount      uint32 `json:"reset_count"`
 	RestartCount    uint32 `json:"restart_count"`

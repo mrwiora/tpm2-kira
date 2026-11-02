@@ -205,6 +205,24 @@ func (d *DemoMachine) ChangePCR(index int) {
 	}
 }
 
+// SetSecureBoot boots the demo machine's firmware in a state: "on", "off" or
+// "setup_mode" (attest.SecureBootOn and the others); "no_log" keeps PCR 7 and takes the
+// events away, and "lying" keeps PCR 7 of its state and shows the events of "on"
+// beside a value they do not replay to: neither is established.
+func (d *DemoMachine) SetSecureBoot(state string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	switch state {
+	case "no_log":
+		d.m.TPM.PCR7Chain = nil
+	case "lying":
+		d.m.TPM.SetSecureBoot(attest.SecureBootOff)
+		d.m.TPM.PCR7Chain = attesttest.SecureBootChain(attest.AlgSHA256, attest.SecureBootOn)
+	default:
+		d.m.TPM.SetSecureBoot(state)
+	}
+}
+
 // NextBoot simulates a reboot (the TPM reset counter advances).
 func (d *DemoMachine) NextBoot() { d.m.TPM.ResetCount++ }
 

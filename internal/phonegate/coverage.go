@@ -103,6 +103,34 @@ func readInitrdCoverage(path string) (initrdCoverage, error) {
 	return initrdCoverageFromEvents(events), nil
 }
 
+// PCR7Chain is the digests of PCR 7's events in the firmware's log, in a bank:
+// what a verifier replays against the quoted PCR 7 (attest.EstablishSecureBoot), the
+// state of Secure Boot established with no word of this machine's. Nil without a log.
+func PCR7Chain(path string, alg uint16) []byte {
+	raw, err := measure.ReadRawEventLogFromPath(path)
+	if err != nil {
+		return nil
+	}
+	log, err := evlog.ParseEventLog(raw)
+	if err != nil {
+		return nil
+	}
+	hash := evlog.HashSHA256
+	if alg == attest.AlgSHA1 {
+		hash = evlog.HashSHA1
+	}
+	var chain []byte
+	for _, e := range log.Events(hash) {
+		if e.Index == 7 {
+			chain = append(chain, e.Digest...)
+		}
+	}
+	if len(chain) > attest.MaxPCR7Chain {
+		return nil
+	}
+	return chain
+}
+
 // coveredBy reports whether one of the PCRs that measured the initrd is in sel.
 func (c initrdCoverage) coveredBy(sel []uint8) bool {
 	for _, p := range c.PCRs {

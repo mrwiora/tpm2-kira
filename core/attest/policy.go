@@ -14,7 +14,6 @@ type Policy struct {
 	Selection               []uint8   `json:"pcr_selection"`
 	PCRAlg                  uint16    `json:"pcr_alg"`
 	Profiles                []Profile `json:"profiles"`
-	RequireSecureBoot       bool      `json:"require_secureboot"`
 	RequireEKCert           bool      `json:"require_ek_cert"`
 	AllowResetCountIncrease bool      `json:"allow_reset_count_increase"`
 	RequireClockSafe        bool      `json:"require_clock_safe"`

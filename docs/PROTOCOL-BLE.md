@@ -399,11 +399,18 @@ Signatures never cover this encoding; they cover the canonical strings of §9.
 | 17 | factor_label | string ≤64 | O | with 15: the factor's label, default `luks` |
 
 BootContext (nested): 1 `blob_version` u32 · 2 `nvram_index` u32 ·
-3 `measure_point` string ≤512 · 4 `secureboot_state` u8 (0 unknown, 1 enabled,
-2 disabled, 3 setup mode) · 5 `seal_pcr_selection` bytes ≤24 · 6 `uptime_ms` u64 ·
+3 `measure_point` string ≤512 · 4 `pcr7_chain` bytes ≤16384 O ·
+5 `seal_pcr_selection` bytes ≤24 · 6 `uptime_ms` u64 ·
 7 `initrd_state` u8 (absent/0 unknown, 1 measured, 2 no initrd) · 8 `initrd_pcrs`
 bytes ≤24 — the PCRs this boot's event log shows measuring the initrd. Like the
 rest of BootContext it is not TPM-signed and can only add a warning.
+
+`pcr7_chain` is the digests of PCR 7's events in the machine's event log, in the
+quote's bank, concatenated in the log's order. The phone believes them only as far as
+they replay to the quoted PCR 7, and reads Secure Boot's state from them with its own
+hashes of `UEFI_VARIABLE_DATA` (`attest.EstablishSecureBoot`,
+docs/SECURITY-BACKGROUND.md §13.5); anything else the machine could say of the state is
+not on the wire. The same field is in the EnrolOffer's `boot_context`.
 
 #### 7.3.4 EventlogRequest (0x04)
 
@@ -918,9 +925,16 @@ Every event is a JSON object with `type`. `tbs` is base64 (prefer `PendingTBS()`
   "diff_against": "enrolment baseline",
   "explanation": "PCR 4 changed. The bootloader changed, which a shim, GRUB or systemd-boot update causes; the Secure Boot policy is unchanged.",
   "reset_count": 12, "restart_count": 0, "clock_safe": true, "firmware_version": 1234,
-  "boot_key": "proved", "code": "K7QM-2XHD"
+  "boot_key": "proved", "code": "K7QM-2XHD",
+  "secure_boot": {"state": "setup_mode", "detail": ""}
 }
 ```
+
+`secure_boot` is what the quote and `pcr7_chain` establish: `on`, `off`, `setup_mode`
+or `not_established` (with `detail`: why). **Every state but `on` is shown red, in every
+`state`**, also at `match`, and one the app does not know or does not get. It decides
+nothing: the decisions below stay as they are. `need_anchor_key` carries the same object
+for the baseline quote.
 
 | `state` | Display (PLAN-BLE.md §6.3) | Allowed decisions |
 |---|---|---|
@@ -932,8 +946,8 @@ Reason codes (hard unless noted): `malformed`, `policy_invalid`,
 `device_mismatch`, `ak_mismatch`, `bad_signature`, `bad_magic`, `bad_type`,
 `qd_mismatch`, `reset_count_decreased`, `clock_unsafe`, `firmware_changed`,
 `selection_mismatch`, `pcr_values_invalid`, `pcr_digest_mismatch`,
-`secureboot_off`, `no_profile_match` (soft). Warning codes: `reset_count_jump`,
-`clock_unsafe`, `firmware_changed`, `secureboot_off`.
+`no_profile_match` (soft). Warning codes: `reset_count_jump`,
+`clock_unsafe`, `firmware_changed`.
 
 The app SHOULD NOT show PCR hex by default; offer it behind "Details".
 

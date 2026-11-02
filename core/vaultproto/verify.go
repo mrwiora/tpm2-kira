@@ -10,8 +10,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"slices"
 	"math/big"
+	"slices"
 
 	"github.com/google/go-tpm/tpm2"
 
@@ -88,6 +88,20 @@ type Checked struct {
 	ResetCount   uint32 // TPM resets (boots) since the TPM was cleared
 	RestartCount uint32
 	Firmware     uint64
+	// SecureBoot is what the quoted PCR 7 and the event log establish. It decides
+	// nothing: what releases is the rest of the check.
+	SecureBoot attest.SecureBootFinding
+}
+
+// establishSecureBoot reads Secure Boot's state from the verified values.
+func establishSecureBoot(sel Selection, vals []PCRValue, chain []byte) attest.SecureBootFinding {
+	var pcr7 []byte
+	for _, v := range vals {
+		if v.Index == 7 {
+			pcr7 = v.Value
+		}
+	}
+	return attest.EstablishSecureBoot(sel.Alg, pcr7, chain)
 }
 
 // VerifyRelease is the vault's check of one release request, against the
@@ -109,6 +123,9 @@ type Checked struct {
 //
 // The machine's TPM checks 3 and 4 again, against its own registers and
 // generation index, when it opens the remote part.
+//
+// A request refused at 3 or 4 has a verified quote: Checked comes with the error, for
+// what it says of the boot. A nil Checked is a quote that says nothing.
 func VerifyRelease(dev *Device, nonce []byte, req *ReleaseRequest, minGeneration uint64) (*Checked, error) {
 	if dev == nil || req == nil {
 		return nil, errors.New("nothing to verify")
@@ -154,28 +171,32 @@ func VerifyRelease(dev *Device, nonce []byte, req *ReleaseRequest, minGeneration
 		return nil, errors.New("the PCR values do not reproduce the quoted digest")
 	}
 
-	if req.Generation < minGeneration {
-		return nil, fmt.Errorf("generation %d is older than %d: an approval a later one revoked", req.Generation, minGeneration)
-	}
-	signer, err := signingKey(dev.SigningPublic)
-	if err != nil {
-		return nil, err
-	}
-	pcrPolicy, err := devicePCRPolicy(dev, req)
-	if err != nil {
-		return nil, err
-	}
-	approved := ApprovedPolicy(pcrPolicy, dev.GenerationIndexName, req.Generation)
-	if err := verifyDigestSignature(signer, ApprovalDigest(approved, dev.PolicyRef), req.ApprovalSignature); err != nil {
-		return nil, fmt.Errorf("the slot's approval does not cover this boot state: %w", err)
-	}
-	return &Checked{
+	// The quote is verified from here on: what it says of Secure Boot holds for a
+	// release refused below too, and the vault shows it (a refused boot may be why).
+	checked := &Checked{
 		Generation:   req.Generation,
 		PCRValues:    req.PCRValues,
 		ResetCount:   att.ClockInfo.ResetCount,
 		RestartCount: att.ClockInfo.RestartCount,
 		Firmware:     att.FirmwareVersion,
-	}, nil
+		SecureBoot:   establishSecureBoot(dev.Selection, req.PCRValues, req.PCR7Chain),
+	}
+	if req.Generation < minGeneration {
+		return checked, fmt.Errorf("generation %d is older than %d: an approval a later one revoked", req.Generation, minGeneration)
+	}
+	signer, err := signingKey(dev.SigningPublic)
+	if err != nil {
+		return checked, err
+	}
+	pcrPolicy, err := devicePCRPolicy(dev, req)
+	if err != nil {
+		return checked, err
+	}
+	approved := ApprovedPolicy(pcrPolicy, dev.GenerationIndexName, req.Generation)
+	if err := verifyDigestSignature(signer, ApprovalDigest(approved, dev.PolicyRef), req.ApprovalSignature); err != nil {
+		return checked, fmt.Errorf("the slot's approval does not cover this boot state: %w", err)
+	}
+	return checked, nil
 }
 
 // ── policy digests, as the TPM computes them (SHA-256 sessions) ───────────

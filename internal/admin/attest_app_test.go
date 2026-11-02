@@ -14,7 +14,7 @@ package admin
 //	                             big-endian u16 length
 //
 // Commands: enrol <mtu> | attest <mtu> (serve the next data connection) |
-// reset (no phone enrolled: each test starts from it) | reboot | extend <pcr> |
+// reset (no phone enrolled: each test starts from it) | reboot | secureboot <state> | extend <pcr> |
 // snapshot | rollback | sas | phone | outcome <ms> | quit.
 // Replies: "ok", a value, or "error: …".
 //
@@ -26,6 +26,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -39,9 +40,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/mrwiora/tpm2-kira/core/attest/attesttest"
 	"github.com/mrwiora/tpm2-kira/core/transport/frame"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
@@ -102,11 +105,15 @@ type appMachine struct {
 	idx    uint32
 	snap   string
 	evlog  []byte
-	mode   string // session to serve on the next data connection
-	mtu    int
-	sas    string
-	phone  *attest.PhoneAttestation // what the machine concluded about the phone's key
-	result chan string
+	// pcr7Chain and pcr7State: the firmware's state this machine boots in (secureboot);
+	// nil: no event log.
+	pcr7Chain []byte
+	pcr7State string
+	mode      string // session to serve on the next data connection
+	mtu       int
+	sas       string
+	phone     *attest.PhoneAttestation // what the machine concluded about the phone's key
+	result    chan string
 }
 
 func newAppMachine(t *testing.T) *appMachine {
@@ -142,6 +149,9 @@ func (m *appMachine) newBackend() {
 		Sealed:       phonegate.ReadSealedSlot(m.s.tpm, m.idx),
 		EventlogRead: true,
 		EventlogData: m.evlog,
+
+		PCR7ChainRead: true,
+		PCR7ChainData: m.pcr7Chain,
 	}
 	// The console's "y": the machine user always confirms; the app test
 	// compares the code it showed with this one.
@@ -198,7 +208,40 @@ func (m *appMachine) powerCycle(save, restore string) error {
 		return err
 	}
 	m.s.tpm = tpm
+	if err := m.firmwareMeasures(); err != nil {
+		return err
+	}
 	m.newBackend()
+	return nil
+}
+
+// firmwareMeasures extends PCR 7 as firmware in the machine's state does, the real
+// TPM's register, and keeps the events its log would hold. "lying" boots with
+// Secure Boot off and shows the events of a boot with it on.
+func (m *appMachine) firmwareMeasures() error {
+	m.pcr7Chain = nil
+	state := m.pcr7State
+	if state == "" || state == "no_log" {
+		return nil
+	}
+	real := state
+	if state == "lying" {
+		real = attest.SecureBootOff
+	}
+	chain := attesttest.SecureBootChain(attest.AlgSHA256, real)
+	for off := 0; off < len(chain); off += sha256.Size {
+		_, err := tpm2.PCRExtend{
+			PCRHandle: tpm2.AuthHandle{Handle: tpm2.TPMHandle(7), Auth: tpm2.PasswordAuth(nil)},
+			Digests:   tpm2.TPMLDigestValues{Digests: []tpm2.TPMTHA{{HashAlg: tpm2.TPMAlgSHA256, Digest: chain[off : off+sha256.Size]}}},
+		}.Execute(m.s.tpm)
+		if err != nil {
+			return err
+		}
+	}
+	if state == "lying" {
+		chain = attesttest.SecureBootChain(attest.AlgSHA256, attest.SecureBootOn)
+	}
+	m.pcr7Chain = chain
 	return nil
 }
 
@@ -272,6 +315,7 @@ func (m *appMachine) command(f []string) (reply string, quit bool) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		m.s.blob.Phone.Verifiers = nil
+		m.pcr7State, m.pcr7Chain = "", nil
 		if err := writeAttestBlob(m.s.tpm, m.idx, m.s.blob, m.signer); err != nil {
 			return fail(err)
 		}
@@ -291,6 +335,17 @@ func (m *appMachine) command(f []string) (reply string, quit bool) {
 			err = m.powerCycle("", m.snap)
 		}
 		if err != nil {
+			return fail(err)
+		}
+		return "ok", false
+	case "secureboot": // secureboot on|off|setup_mode|no_log|lying: a reboot into that firmware
+		if len(f) != 2 {
+			return fail(fmt.Errorf("secureboot needs a state"))
+		}
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.pcr7State = f[1]
+		if err := m.powerCycle("", ""); err != nil {
 			return fail(err)
 		}
 		return "ok", false

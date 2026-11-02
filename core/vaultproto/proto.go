@@ -193,8 +193,11 @@ type ReleaseRequest struct {
 	QuoteSignature    []byte     `json:"quote_signature"` // TPMT_SIGNATURE by the AK
 	PCRValues         []PCRValue `json:"pcr_values"`
 	Generation        uint64     `json:"generation"`
-	ApprovalSignature []byte     `json:"approval_signature"` // TPMT_SIGNATURE by the signing key
+	ApprovalSignature []byte     `json:"approval_signature"`      // TPMT_SIGNATURE by the signing key
 	PCRSignature      []byte     `json:"pcr_signature,omitempty"` // the PCR key's signature (RSASSA) of the signed PCRs' policy
+	// PCR7Chain is the digests of PCR 7's events in the machine's event log,
+	// concatenated: believed only as far as they replay to the quoted PCR 7.
+	PCR7Chain []byte `json:"pcr7_chain,omitempty"`
 }
 
 // Release states.

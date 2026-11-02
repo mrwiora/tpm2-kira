@@ -95,7 +95,15 @@ Three layers, each depending on PCR state:
    approve after a kernel update needs nothing there - and refuses a
    generation lower than the highest it has seen (an approval an approval
    revoked). It also refuses a revoked device, rate-limits, locks a device
-   after repeated failures, and logs every request.
+   after repeated failures, and logs every request. And it establishes Secure
+   Boot's state from the quoted PCR 7 and PCR 7's events from the event log,
+   replayed against it (`attest.EstablishSecureBoot`): `on`, `off`, `setup_mode` or
+   `not_established`, never what the machine says. Every state but `on` is red in the
+   device's view, on the request an operator approves and in the audit, for a request
+   refused too. **It decides nothing:** what releases is the check above. That check
+   refuses a PCR 7 no approval covers, for a slot whose selection has PCR 7; a state
+   the signing key did approve releases, Secure Boot off or not (docs/SECURITY-BACKGROUND.md
+   §13.5).
 3. **The vault's TPM.** Each device record is encrypted with a key sealed
    in the vault's TPM to the vault's own PCRs (default PCR 7). A copy of
    the vault's disk or a backup opens nothing; a vault booted in another
@@ -320,7 +328,7 @@ enrolment).
 | generation | the highest verified generation is kept; a lower one is refused |
 | revoked | denied, "the device is revoked" |
 | the vault's own boot state changed | denied, "the vault's own boot state changed: run reseal"; not counted against the device |
-| audit | every enrolment, challenge, verification, release, denial and admin action, append-only, synced after each line |
+| audit | every enrolment, challenge, verification, release, denial and admin action, append-only, synced after each line; a request with a verified quote names Secure Boot's state (`secure_boot`, `secure_boot_red`) |
 
 Pending requests live in memory only: after a restart, the machine starts
 with a new challenge. Request bodies are limited to 1 MiB.
@@ -450,7 +458,7 @@ JSON over HTTPS, `[]byte` as base64 (`core/vaultproto/proto.go`):
 | `POST /v1/enrol` | `EnrolRequest`: token, device ID, name, EK, EK certificate, AK, signing key, policyRef, generation index Name, generation, selection, wrapped R, label, whether the key needs a pepper (never the pepper), the slot's release key (TPMT_PUBLIC; the vault checks it is made under the slot's policy and fixedTPM, and keeps its Name) | `EnrolChallenge`: enrol ID, a credential for (EK, AK Name) |
 | `POST /v1/enrol/confirm` | `EnrolConfirm`: enrol ID, the opened secret | `EnrolResult`: device ID, mode |
 | `POST /v1/challenge` | `ChallengeRequest`: device ID | `ChallengeResponse`: request ID, 32-byte nonce, seconds valid |
-| `POST /v1/release` | `ReleaseRequest`: request ID, device ID, the quote (TPMS_ATTEST and its signature), the PCR values, generation, approval signature, the PCR key's signature for a slot with PCR 11 signed | `ReleaseResponse`: `released` with the wrapped R (and, for a pepper device, the operator's pepper wrapped for the TPM: K by MakeCredential for (EK, release key Name), the pepper under K), `pending` with `retry_after`, or `denied` with the reason |
+| `POST /v1/release` | `ReleaseRequest`: request ID, device ID, the quote (TPMS_ATTEST and its signature), the PCR values, generation, approval signature, the PCR key's signature for a slot with PCR 11 signed, the digests of PCR 7's events in the event log | `ReleaseResponse`: `released` with the wrapped R (and, for a pepper device, the operator's pepper wrapped for the TPM: K by MakeCredential for (EK, release key Name), the pepper under K), `pending` with `retry_after`, or `denied` with the reason |
 
 Errors are 4xx with `{"error": …}`. The quote's qualifying data is
 `SHA-256("tpm2-kira/vault/release/v1" ‖ lp(device ID) ‖ lp(request ID) ‖
@@ -505,7 +513,8 @@ recovery keyslot is mandatory, and the console prompt is always there.
   are not the quoted ones, a rolled-back generation, a generation the
   approval is not for, another selection, a quote by another key,
   something that is not a quote; an approval of the slot is accepted without a change on
-  the vault; the JSON field names.
+  the vault; the JSON field names. The vault's `TestSecureBootStates`,
+  `TestChangedPCR7IsRefusedAndShown`, `TestRequestShowsSecureBoot`.
 - **tpm2-kira, unit** (`internal/admin/vault_test.go`): the key's derivation
   (labels, order, pepper), the vault method in the blob, the pinned client
   (the right key, another key, a vault not reached, its error words
@@ -588,10 +597,10 @@ prints).
 
 | Endpoint | |
 |---|---|
-| `GET /v1/requests` | the pending and approved requests: device, pepper yes/no, generation, the quoted PCR values, where from, until when |
+| `GET /v1/requests` | the pending and approved requests: device, pepper yes/no, generation, the quoted PCR values, where from, until when, what the quote establishes of Secure Boot (`secure_boot`, `secure_boot_red`) |
 | `POST /v1/requests/{id}/approve` | `{}` to release, `{"pepper":"…"}` for a device enrolled with one |
 | `POST /v1/requests/{id}/deny` | deny |
-| `GET /v1/devices`, `GET /v1/devices/{id}` | the devices (by ID or unique name) |
+| `GET /v1/devices`, `GET /v1/devices/{id}` | the devices (by ID or unique name), with what the last verified quote established of Secure Boot (`secure_boot`, `secure_boot_red`, `secure_boot_at`); not established before the first |
 
 Nothing else is served there (404). Authentication is a bearer token per
 operator (`Authorization: Bearer …`), 32 random bytes from `operator add

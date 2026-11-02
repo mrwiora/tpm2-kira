@@ -147,6 +147,8 @@ type Event struct {
 	EKVendorUnknown bool   `json:"ek_vendor_unknown,omitempty"`
 	InitrdCoverage  string `json:"initrd_coverage,omitempty"` // covered | not_covered | no_initrd | unknown
 	InitrdPCRs      []int  `json:"initrd_pcrs,omitempty"`
+	// SecureBoot is what the baseline quote and the event log establish.
+	SecureBoot *SecureBootFinding `json:"secure_boot,omitempty"`
 }
 
 // InitrdCoverage values in need_anchor_key events.
@@ -553,6 +555,7 @@ func (v *Verifier) handleEnrol(out *Output, d *Decoder) (*Output, error) {
 		out.Events = append(out.Events, Event{
 			Type: EvNeedAnchorKey, DeviceID: v.offer.DeviceID, FriendlyName: v.offer.FriendlyName,
 			EKVerifiedBy: v.ekBy, EKNote: v.ekNote, EKVendorUnknown: v.ekVendorUnknown, InitrdCoverage: cov, InitrdPCRs: pcrs,
+			SecureBoot:           &v.baseVer.SecureBoot,
 			AttestationChallenge: AnchorAttestationChallenge(v.sess.ChannelBinding()),
 		})
 		return out, nil
@@ -656,6 +659,8 @@ func (v *Verifier) checkOffer(o *EnrolOffer) error {
 		Signature: o.Signature,
 		PCRAlg:    o.Selection.Alg,
 		PCRValues: o.PCRValues,
+
+		BootContext: o.BootContext,
 	}
 	verdict := Verify(ev, pol, pin, EnrolQualifyingData(v.sess.ChannelBinding()), v.cfg.now())
 	if verdict.State != StateMatch {

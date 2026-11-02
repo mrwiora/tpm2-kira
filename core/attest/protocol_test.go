@@ -604,3 +604,50 @@ func TestOnePhoneTwoMachinesUnlinked(t *testing.T) {
 		t.Fatal("a machine accepted the phone's identity for another machine")
 	}
 }
+
+// What the phone is told of Secure Boot, at enrolment and at every boot, is established
+// from the quote and the machine's events: every state, on the wire, a lie too.
+func TestVerdictEstablishesSecureBoot(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		boot       func(s *attesttest.SoftTPM)
+	}{
+		{"on", SecureBootOn, func(s *attesttest.SoftTPM) { s.SetSecureBoot(SecureBootOn) }},
+		{"off", SecureBootOff, func(s *attesttest.SoftTPM) { s.SetSecureBoot(SecureBootOff) }},
+		{"Setup Mode", SecureBootSetupMode, func(s *attesttest.SoftTPM) { s.SetSecureBoot(SecureBootSetupMode) }},
+		{"no event log", SecureBootNotEstablished, func(s *attesttest.SoftTPM) { s.PCR7Chain = nil }},
+		{"off, the events of on", SecureBootNotEstablished, func(s *attesttest.SoftTPM) {
+			s.SetSecureBoot(SecureBootOff)
+			s.PCR7Chain = attesttest.SecureBootChain(AlgSHA256, SecureBootOn)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, p := newMachine(t), newPhone(t)
+			tc.boot(m.TPM)
+			rec := enrol(t, m, p)
+			if ev := p.Last(EvNeedAnchorKey); ev == nil || ev.SecureBoot == nil || ev.SecureBoot.State != tc.want {
+				t.Fatalf("at enrolment: %+v", ev)
+			}
+			m.TPM.ResetCount++
+			if _, merr, perr := attestOnce(t, m, p, rec); merr != nil || perr != nil {
+				t.Fatalf("machine %v phone %v", merr, perr)
+			}
+			ev := p.Last(EvVerdict)
+			if ev == nil || ev.Verdict.SecureBoot.State != tc.want || ev.Verdict.SecureBoot.Red() != (tc.want != SecureBootOn) {
+				t.Fatalf("the verdict: %+v", ev)
+			}
+			// It decides nothing: the same boot still matches.
+			if ev.Verdict.State != StateMatch {
+				t.Fatalf("the state is %s", ev.Verdict.State)
+			}
+		})
+	}
+}
+
+// A quote that does not verify establishes nothing.
+func TestFailedVerdictEstablishesNothing(t *testing.T) {
+	v := Verify(nil, nil, nil, nil, time.Time{})
+	if v.SecureBoot.State != SecureBootNotEstablished {
+		t.Fatalf("%+v", v.SecureBoot)
+	}
+}

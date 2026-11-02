@@ -8,7 +8,7 @@ import (
 // (docs/PROTOCOL-BLE.md) and must never be renumbered.
 
 // SchemaVersion is the protocol schema carried in Hello, Evidence and EnrolOffer.
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // Size limits for variable-length fields.
 const (
@@ -49,14 +49,6 @@ const (
 	ErrCodeTimeout          uint16 = 9
 	ErrCodeUserAborted      uint16 = 10
 	ErrCodeUnsupported      uint16 = 11
-)
-
-// SecureBootState values in BootContext.
-const (
-	SecureBootUnknown   uint8 = 0
-	SecureBootEnabled   uint8 = 1
-	SecureBootDisabled  uint8 = 2
-	SecureBootSetupMode uint8 = 3
 )
 
 func checkNonce(name string, b []byte) error {
@@ -101,14 +93,17 @@ func decodePCRValues(v []byte) ([]PCRValue, error) {
 	return out, nil
 }
 
-// BootContext describes how the attester is configured. It is informational:
-// nothing in it is covered by the TPM's signature, and the verifier never
-// trusts it over the quote.
+// BootContext describes how the attester is configured. Nothing in it is
+// covered by the TPM's signature. Apart from PCR7Chain, which the verifier
+// believes only as far as it replays to the quoted PCR 7 (EstablishSecureBoot),
+// it is informational.
 type BootContext struct {
-	BlobVersion      uint32
-	NVRAMIndex       uint32
-	MeasurePoint     string
-	SecureBootState  uint8
+	BlobVersion  uint32
+	NVRAMIndex   uint32
+	MeasurePoint string
+	// PCR7Chain is the digests of PCR 7's events in the event log, concatenated,
+	// in the quote's bank; empty without a log.
+	PCR7Chain        []byte
 	SealPCRSelection []uint8
 	UptimeMS         uint64
 	// Where this boot measured the initrd, read from the attester's event
@@ -117,6 +112,9 @@ type BootContext struct {
 	InitrdState uint8
 	InitrdPCRs  []uint8
 }
+
+// maxBootContext bounds a BootContext on the wire.
+const maxBootContext = 2048 + MaxPCR7Chain
 
 // InitrdState values in BootContext.
 const (
@@ -130,7 +128,7 @@ func (b *BootContext) encode() *Encoder {
 	e.U32(1, b.BlobVersion)
 	e.U32(2, b.NVRAMIndex)
 	e.String(3, b.MeasurePoint)
-	e.U8(4, b.SecureBootState)
+	e.OptBytes(4, b.PCR7Chain)
 	e.Bytes(5, b.SealPCRSelection)
 	e.U64(6, b.UptimeMS)
 	if b.InitrdState != InitrdUnknown {
@@ -148,7 +146,7 @@ func decodeBootContext(d *Decoder) BootContext {
 		BlobVersion:      d.U32(1, false),
 		NVRAMIndex:       d.U32(2, false),
 		MeasurePoint:     d.String(3, 512, false),
-		SecureBootState:  d.U8(4, false),
+		PCR7Chain:        d.Bytes(4, MaxPCR7Chain, false),
 		SealPCRSelection: d.Bytes(5, MaxPCRIndex, false),
 		UptimeMS:         d.U64(6, false),
 		InitrdState:      d.U8(7, false),
@@ -312,7 +310,7 @@ func DecodeEvidence(d *Decoder) (*Evidence, error) {
 		Signature:      d.Bytes(5, maxTPMSig, true),
 		PCRAlg:         d.U16(6, true),
 		EventlogSHA256: d.Fixed(8, 32, false),
-		BootContext:    decodeBootContext(d.Sub(9, 2048, false)),
+		BootContext:    decodeBootContext(d.Sub(9, maxBootContext, false)),
 		AppVersion:     d.String(10, maxShortString, false),
 		EventlogSize:   d.U32(11, false),
 		BootKeyState:   d.U8(12, false),
@@ -701,7 +699,7 @@ func DecodeEnrolOffer(d *Decoder) (*EnrolOffer, error) {
 		Quoted:         d.Bytes(11, maxQuoted, true),
 		Signature:      d.Bytes(12, maxTPMSig, true),
 		EventlogSHA256: d.Fixed(13, 32, false),
-		BootContext:    decodeBootContext(d.Sub(14, 2048, false)),
+		BootContext:    decodeBootContext(d.Sub(14, maxBootContext, false)),
 		AppVersion:     d.String(15, maxShortString, false),
 		AdvKey:         d.Fixed(16, 32, true),
 		EKCertChain:    d.Bytes(17, MaxEKCertChain, false),

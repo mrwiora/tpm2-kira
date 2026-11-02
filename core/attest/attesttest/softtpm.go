@@ -10,6 +10,7 @@ import (
 	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -36,6 +37,8 @@ type SoftTPM struct {
 	Firmware   uint64
 	Safe       bool
 	Evlog      []byte
+	// PCR7Chain is what the machine says of PCR 7's events (SetSecureBoot).
+	PCR7Chain []byte
 
 	// TamperQuote, if set, edits each quote before it is signed.
 	TamperQuote func(att *tpm2.TPMSAttest)
@@ -105,6 +108,7 @@ func NewSoftTPM() (*SoftTPM, error) {
 	for i := uint8(0); i < attest.MaxPCRIndex; i++ {
 		s.PCRs[i] = bytes.Repeat([]byte{i}, 32)
 	}
+	s.SetSecureBoot(attest.SecureBootOn)
 	if s.BootSign, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader); err != nil {
 		return nil, err
 	}
@@ -259,7 +263,52 @@ func (s *SoftTPM) signWith(key *ecdsa.PrivateKey, msg []byte) ([]byte, error) {
 
 // BootContext implements attest.AttesterBackend.
 func (s *SoftTPM) BootContext() attest.BootContext {
-	return attest.BootContext{BlobVersion: 8, NVRAMIndex: 0x01803010, SecureBootState: attest.SecureBootEnabled, SealPCRSelection: []uint8{0, 7}, UptimeMS: 4200}
+	return attest.BootContext{BlobVersion: 8, NVRAMIndex: 0x01803010, PCR7Chain: s.PCR7Chain, SealPCRSelection: []uint8{0, 7}, UptimeMS: 4200}
+}
+
+// SetSecureBoot boots the firmware in a state: PCR 7 and its events as that firmware
+// measures them.
+func (s *SoftTPM) SetSecureBoot(state string) {
+	s.PCR7Chain = SecureBootChain(attest.AlgSHA256, state)
+	s.PCRs[7] = ReplayChain(attest.AlgSHA256, s.PCR7Chain)
+}
+
+// SecureBootChain is the chain of a firmware in a state: attest.SecureBootOn, Off or
+// SetupMode. The digests of KEK, db and dbx are stand-ins: no verifier reads them.
+func SecureBootChain(alg uint16, state string) []byte {
+	sum := chainHash(alg)
+	sb, pk := []byte{0}, []byte("a platform key")
+	switch state {
+	case attest.SecureBootOn:
+		sb = []byte{1}
+	case attest.SecureBootSetupMode:
+		pk = nil
+	}
+	var chain []byte
+	chain = append(chain, sum(attest.UEFIVariableData("SecureBoot", sb))...)
+	chain = append(chain, sum(attest.UEFIVariableData("PK", pk))...)
+	chain = append(chain, sum(attest.UEFIVariableData("KEK", []byte("keys")))...)
+	chain = append(chain, sum(attest.UEFIVariableData("db", []byte("signatures")))...)
+	chain = append(chain, sum(attest.UEFIVariableData("dbx", []byte("revoked")))...)
+	chain = append(chain, sum([]byte{0, 0, 0, 0})...)
+	return chain
+}
+
+// ReplayChain is the register a chain replays to.
+func ReplayChain(alg uint16, chain []byte) []byte {
+	sum := chainHash(alg)
+	cur := make([]byte, len(sum(nil)))
+	for off := 0; off+len(cur) <= len(chain); off += len(cur) {
+		cur = sum(append(append([]byte(nil), cur...), chain[off:off+len(cur)]...))
+	}
+	return cur
+}
+
+func chainHash(alg uint16) func([]byte) []byte {
+	if alg == attest.AlgSHA1 {
+		return func(b []byte) []byte { d := sha1.Sum(b); return d[:] }
+	}
+	return func(b []byte) []byte { d := sha256.Sum256(b); return d[:] }
 }
 
 // Eventlog implements attest.AttesterBackend.

@@ -16,6 +16,9 @@ import (
 
 // drive plays the app against the demo machine using only the two gomobile
 // APIs, exactly as a Kotlin or Swift test would.
+// lastSecureBoot is what the last verdict drive saw said of Secure Boot.
+var lastSecureBoot string
+
 func drive(t *testing.T, d *DemoMachine, s *kiracore.Session, key **ecdsa.PrivateKey, decision int) (record string, state string) {
 	s.SetMaxFragment(182)
 	queue := []*kiracore.Step{s.Start()}
@@ -53,6 +56,9 @@ func drive(t *testing.T, d *DemoMachine, s *kiracore.Session, key **ecdsa.Privat
 				case "verdict":
 					vd := e["verdict"].(map[string]any)
 					state = vd["state"].(string)
+					if sb, ok := vd["secure_boot"].(map[string]any); ok {
+						lastSecureBoot, _ = sb["state"].(string)
+					}
 					// Nothing is signed before the person answered, and the
 					// phone shows the code the machine's screen shows.
 					if e["needs_decision"] != true {
@@ -130,5 +136,38 @@ func TestDemoMachineAllStates(t *testing.T) {
 		if r := d.Outcome(5000); !strings.Contains(r, c.result) {
 			t.Fatalf("machine result %q, want %q", r, c.result)
 		}
+	}
+}
+
+// The demo machine shows the phone every state of Secure Boot.
+func TestDemoMachineSecureBootStates(t *testing.T) {
+	for state, want := range map[string]string{
+		"on": "on", "off": "off", "setup_mode": "setup_mode", "no_log": "not_established", "lying": "not_established",
+	} {
+		d, err := NewDemoMachine()
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.SetSecureBoot(state)
+		var key *ecdsa.PrivateKey
+		d.StartEnrolment(185)
+		s, _ := kiracore.NewEnrolSession(`{}`)
+		record, _ := drive(t, d, s, &key, 0)
+		if r := d.Outcome(5000); r != "enrolled" {
+			t.Fatalf("%s: enrolment: %s", state, r)
+		}
+		d.NextBoot()
+		d.StartAttestation(185)
+		if s, err = kiracore.NewAttestSession(`{}`, record); err != nil {
+			t.Fatal(err)
+		}
+		lastSecureBoot = ""
+		if _, st := drive(t, d, s, &key, 0); st != "match" {
+			t.Fatalf("%s: state %q", state, st)
+		}
+		if lastSecureBoot != want {
+			t.Fatalf("%s: secure_boot %q, want %q", state, lastSecureBoot, want)
+		}
+		d.Outcome(5000)
 	}
 }

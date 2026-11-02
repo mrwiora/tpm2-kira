@@ -1519,7 +1519,51 @@ or dbx update, Secure Boot off, a system signed by another key - shows no
 "changed": there is no gate, and the phone finds no machine. The passphrase by
 hand stays, and after such an update `slot approve` brings the gate back.
 
-### 13.5 What is *not* trusted
+### 13.5 Secure Boot's state
+
+**Established from what the TPM vouches for, never from what the machine says.** At
+enrolment and at every boot, on the phone (`Verify`) and at the vault
+(`VerifyRelease`), `attest.EstablishSecureBoot` takes the PCR 7 of a verified quote and
+the digests of PCR 7's events the machine sends (the event log's, `pcr7_chain`), and:
+
+1. replays the digests: they must make the quoted PCR 7, or it is not established;
+2. makes `UEFI_VARIABLE_DATA` itself for `SecureBoot` = 1, `SecureBoot` = 0 or absent,
+   and an empty `PK` (the firmware's measurement of these, the hash of that structure),
+   and looks for their hashes among the digests before PCR 7's separator;
+3. says: an empty PK is `setup_mode` (the `SetupMode` variable is not measured; an empty
+   PK is what that state is); `SecureBoot` = 1 is `on`; 0 or absent is `off`.
+   Anything else - no log, PCR 7 not in the selection, a chain that does not replay, no
+   separator, no such event or two, firmware that hashes the variable otherwise - is
+   `not_established`.
+
+Event types are in no signature and are not read. Whatever the machine does after the
+firmware's separator it cannot place an event before it. A machine that shows another
+boot's events does not replay; one that shows no events is not established. **What
+this rests on is the firmware that measured it**: firmware that lies measures what it
+likes, and shows in PCR 0, not here. Real logs behind the digests: `TestPCR7ChainOfRealLogs`
+(on, Setup Mode), the VM test (Setup Mode).
+
+**On the phone:** a red card in every state but `on`, at a match too, at the bind screen
+too; it decides nothing, and a match can be continued. **At the vault:** red in the
+device's view, on the request, in the audit and in the CLI, with the word WARNING where
+there is no colour, for a request refused too; before a device's first quote not
+established. It releases as before.
+
+**Where the phone sees it, and where it finds no machine.** The channel's secrets open
+only with PCR 7 as sealed (§13.4, §3.1 note ⁵). So a machine that goes from on to off
+has no gate: the phone says not reachable, it never gets a quote to read. The red card
+is for a boot under the state the channel was sealed under: a machine enrolled off or in
+Setup Mode, or one a person sealed the channel for afterwards.
+
+**What the vault's approvals do of a changed PCR 7.** A release needs the signing key's
+signature over a policy of the quoted values, so a PCR 7 no approval covers is refused,
+and the machine's TPM refuses too (`TestChangedPCR7IsRefusedAndShown`, for the vault's
+side; `TestSlotWithSignedPCR11` and the slot policy for the TPM's). Two limits, neither
+changed here (the owner's decision): this is "as approved", not "on": a state the signing
+key approved with Secure Boot off releases, red; and a slot chosen by hand without PCR 7
+is not held to it at all, and is shown not established.
+
+### 13.6 What is *not* trusted
 
 - **The machine's console.** Everything it prints, including "ATTESTED", is
   advisory. The verdict is on the phone's screen.
