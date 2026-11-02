@@ -586,6 +586,10 @@ in the TPM's own state; `internal/bootclose` is what a boot does with the outcom
 | 6 | the firmware has a TPM and it does not answer | one hard reboot, counted in the EFI variable `KIRAcloseReboot`. The next time in a row: no reboot and no wait for the device; a closer keeps asking (`tpm2-kira-late-close.service`, in the image and in the root) and closes the moment the TPM answers. A close that holds removes the count | goes on: the passphrase alone, `control` red |
 | 7 | the TPM answers and refuses all of 1-3 | hard reboot, not counted (Arch `FailureAction=reboot-force`, Debian `reboot -f`, then SysRq `b`, then an endless loop) | stops, as long as that lasts |
 
+`FailureAction=reboot-force` says "proceeding in 5s" and sleeps them in PID 1 (`emergency-action.c`);
+`reboot-immediate` does the same (measured, systemd 262: 11.3-11.9 s to the firmware for both, 6.3-7.7 s
+for `systemctl reboot -ff`), so it stays.
+
 **One wait per boot.** `machine-id`, `run` and the close ask for the TPM's device in that order
 (`internal/bootwait`). The first that does not find it notes when, in
 `/run/tpm2-kira/tpm-wait-since`, and each waits only until its own time after that: 5 s for the first

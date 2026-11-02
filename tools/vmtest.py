@@ -104,7 +104,7 @@ SETUP = "setup"
 # A run's order, which spares waits: the hibernation right after a short boot; each state a
 # scenario needs from the one before; what breaks the machine last.
 SCENARIOS = (
-    Scenario(SETUP, budget(194, 206)),
+    Scenario(SETUP, budget(165, 195)),
     Scenario("typed-boot", budget(48, 58)),
     Scenario("V6", hib=True),
     Scenario("hibernate", budget(65, 10), hib=True),
@@ -113,15 +113,15 @@ SCENARIOS = (
     Scenario("unapproved", budget(71, None), distro="arch"),
     Scenario("second-typed-boot"),
     Scenario("tpm-salt", budget(30, 35)),
-    Scenario("vault-pepper", budget(144, 162), vault=True),
-    Scenario("revoked", budget(55, 65), needs=("tpm-salt", "vault-pepper"), vault=True),
+    Scenario("vault-pepper", budget(140, 155), vault=True),
+    Scenario("revoked", budget(62, 65), needs=("tpm-salt", "vault-pepper"), vault=True),
     Scenario("vault-alone", needs=("vault-pepper",), vault=True),
     Scenario("typed-vault", needs=("vault-pepper",), vault=True),
     Scenario("slot-life"),
     Scenario("removal"),
     Scenario("no-tpm", hib=True),
     Scenario("V4-reverted", distro="debian", needs=("no-tpm",), hib=True),
-    Scenario("silent-tpm", budget(175, 245), hib=True),
+    Scenario("silent-tpm", budget(130, 120), hib=True),
     Scenario("V9-long", distro="debian", needs=("silent-tpm",), hib=True),
     Scenario("V8", hib=True),
 )
