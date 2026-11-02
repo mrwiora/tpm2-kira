@@ -280,6 +280,11 @@ class Hib:
             s.send("\r")
             s.expect(r"Password for disk \S+: ?$", 120); s.send(vmtest.TEST_PASSWORD + "\r")
             s.expect(r"Salt for disk \S+: ?$", 60); s.send(vmtest.TEST_SALT + "\r")
+            m.lap(f"{tag}: the prompts")
+            # The kernel takes the image once the keyslot is open, and the initrd's
+            # SSH server goes with it: where the time between goes is told by this.
+            m.wait_port(vmtest.SSH_PORT, False, 300)
+            m.lap(f"{tag}: salt typed to the image taken (Argon2id, the keyslot)")
             # A resume never leaves the initrd: the server goes with it, the
             # connection without a last word. The session is held until the
             # system is back, so that what was typed arrives whatever the boot does.
@@ -291,7 +296,7 @@ class Hib:
         self.check(f"{tag}: nothing was killed for memory on the resume's boot (the console)", not killed, "\n".join(killed)[-400:])
         if not self.check(f"{tag}: the system is back (ssh)", back):
             raise vmtest.Fail("the system does not come back")
-        m.lap(f"{tag}: the prompts to ssh (Argon2id, the keyslot, the resume)")
+        m.lap(f"{tag}: the image taken to ssh (the resume)")
 
     def wait_login(self, tag):
         """ssh itself works: a banner is not enough (setup turned sshd's
@@ -300,6 +305,8 @@ class Hib:
 
     def after_resume(self, tag, before):
         self.wait_login(tag)
+        # What the resumed system did, by its own clock: the kernel's, the journal's.
+        self.run("dmesg -T | tail -80; journalctl --no-pager -o short-precise -n 200; systemctl list-jobs --no-pager", save=f"{tag}-resumed-system.log")
         st = self.state(f"{tag}-after")
         if st["boot"] != before["boot"]:
             rc, out = self.run("journalctl -b -k -o cat --no-pager 2>&1 | grep -E 'PM: (Image|hibernation: (Image|Failed))'", save=f"{tag}-no-resume.log")
