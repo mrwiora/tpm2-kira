@@ -105,6 +105,11 @@ transcript, a log per command and session (`session-*-control.log`,
 `boot-1.log`, ...), and the boot logs; the vault's log and audit in
 `vault/`.
 
+Every step is timed: its seconds in the output as it ends, a table with
+the laps inside the boots and the slowest steps in each `report.txt`, the
+same as `times.json`, and the slowest steps over both machines before the
+result. `tools/hibernatetest.py` does the same.
+
 ### What it checks
 
 1. **Preflight:** the machine answers, runs the distribution, is fresh,

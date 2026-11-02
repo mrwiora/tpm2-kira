@@ -140,6 +140,70 @@ class Fail(Exception):
     pass
 
 
+class Timing:
+    """The seconds of every step of a run, and of the laps inside one: what a
+    run spends its time on, in its output and its report."""
+
+    def __init__(self, label, say):
+        self.label, self.say = label, say
+        self.steps = []  # [name, seconds, [(lap, seconds)]]
+        self.start = None
+        self.first = time.monotonic()
+
+    def _close(self, now):
+        if self.start is None:
+            return
+        self.steps[-1][1] = now - self.start
+        self.say(f"[{self.label}] {self.steps[-1][1]:.1f} s: {self.steps[-1][0]}")
+        self.start = None
+
+    def step(self, name):
+        now = time.monotonic()
+        self._close(now)
+        self.steps.append([name, 0.0, []])
+        self.start = self.last = now
+
+    def lap(self, name):
+        """The time since the step's start or its last lap, under name."""
+        if self.start is None:
+            return
+        now = time.monotonic()
+        self.steps[-1][2].append((name, now - self.last))
+        self.last = now
+
+    def finish(self):
+        self._close(time.monotonic())
+
+    def total(self):
+        return sum(s[1] for s in self.steps)
+
+    def slowest(self, n):
+        return sorted(((s[1], s[0]) for s in self.steps), reverse=True)[:n]
+
+    def lines(self, slowest=8):
+        out = ["Times (seconds):"]
+        for name, secs, laps in self.steps:
+            out.append(f"  {secs:7.1f}  {name}")
+            out += [f"  {l:7.1f}      - {lap}" for lap, l in laps]
+        out.append(f"  {self.total():7.1f}  in all")
+        out += ["", f"The slowest {slowest}:"] + [f"  {secs:7.1f}  {name}" for secs, name in self.slowest(slowest)]
+        return out
+
+    def as_json(self):
+        return json.dumps({"total": self.total(), "steps": [{"name": n, "seconds": round(s, 1), "laps": [[l, round(t, 1)] for l, t in laps]}
+                                                             for n, s, laps in self.steps]}, indent=1)
+
+
+def print_slowest(timings, n=10):
+    """The slowest steps of a whole run, over its machines, at its end."""
+    rows = sorted(((secs, t.label, name) for t in timings for secs, name in t.slowest(n)), reverse=True)[:n]
+    print(f"The slowest {len(rows)} steps of the run (seconds):")
+    for secs, label, name in rows:
+        print(f"  {secs:7.1f}  [{label}] {name}")
+    for t in timings:
+        print(f"  {t.total():7.1f}  [{t.label}] in all")
+
+
 class Session:
     """An interactive ssh session in a pty: expect text, send keys. The
     password prompts of ssh and sudo are answered by themselves; every
@@ -352,8 +416,17 @@ class Machine:
         self.secrets = []
         self.sessions = 0
         self.slots = [0, 1]  # the TOTP slots slot add makes: 0 and the fallback 1
+        self.timing = Timing(name, self.log.say)
 
     # -- helpers ------------------------------------------------------------
+
+    def head(self, text):
+        """A step of the run begins: its heading, and its time from here."""
+        self.timing.step(text)
+        self.log.head(text)
+
+    def lap(self, name):
+        self.timing.lap(name)
 
     def run(self, cmd, root=True, save=None):
         rc, out = self.t.run(cmd, root=root)
@@ -404,7 +477,7 @@ class Machine:
         """Puts the machine back into its defined state: the configured
         command (VMTEST_NAME and VMTEST_HOST in its environment), then the
         machine must go away and come back on ssh."""
-        self.log.head("reset: " + command)
+        self.head("reset: " + command)
         env = dict(os.environ, VMTEST_NAME=self.name, VMTEST_HOST=self.host)
         r = subprocess.run(command, shell=True, env=env, capture_output=True, text=True, timeout=900)
         self.log.save("reset.log", r.stdout + r.stderr)
@@ -412,7 +485,7 @@ class Machine:
             raise Fail("reset failed")
 
     def preflight(self):
-        self.log.head("preflight")
+        self.head("preflight")
         # A machine just reset may still be starting.
         if not self.check("the machine answers on ssh", self.wait_port(22, True, 300), f"{self.host}:22 does not answer within 300 s"):
             raise Fail("unreachable")
@@ -434,7 +507,7 @@ class Machine:
             raise Fail("the configured LUKS passphrase does not open the device")
 
     def install(self, package):
-        self.log.head("install " + os.path.basename(package))
+        self.head("install " + os.path.basename(package))
         remote = "/tmp/" + os.path.basename(package)
         self.t.copy_to(package, remote)
         if self.distro == "debian":
@@ -457,7 +530,7 @@ class Machine:
         self.check("'help' answers as a user", "rc=0" in out)
 
     def seal(self):
-        self.log.head("setup and slot add")
+        self.head("setup and slot add")
         rc, out = self.run("tpm2-kira setup --local 2>&1", save="setup.log")
         self.check("setup --local makes the signing key", "Setup Complete" in out, out[-400:])
         rc, out = self.run("tpm2-kira slot add --totp 2>&1", save="slot-add.log")
@@ -488,7 +561,7 @@ class Machine:
                        "Closed until the next boot" in out or "Locked until the next boot" in out or "PCR Mismatch" in out, out.strip())
 
     def inspect(self):
-        self.log.head("the commands that read")
+        self.head("the commands that read")
         cmds = {
             "status": ("tpm2-kira status 2>&1", r"slot 0 .*signed by this machine's key"),
             "slot info": (f"tpm2-kira slot info --nvram {self.slots[-1]} 2>&1", r"Signature: valid"),
@@ -505,7 +578,7 @@ class Machine:
             self.check(f"'{name}' answers", re.search(want, out) is not None, out[-400:])
 
     def enrol(self):
-        self.log.head(f"luks enrol {self.luks_dev} --salt typed")
+        self.head(f"luks enrol {self.luks_dev} --salt typed")
         s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt typed", "luks-enrol")
         try:
             s.expect(r"^Password: ?$", 60); s.send(TEST_PASSWORD + "\n")
@@ -514,6 +587,7 @@ class Machine:
             t0 = time.time()
             s.expect(r"to authorise: ?$", 900); s.send(self.luks_pass + "\n")
             self.log.say(f"Argon2id took {time.time() - t0:.0f} s here")
+            self.lap("the prompts and Argon2id")
             text, _ = s.expect(r"keyslot (\d+) added: tpm2-kira, 0x1100 ", 300)
             out = s.wait_end(120)
             self.check("luks enrol adds a keyslot of the recovery recipe (0x1100)", True)
@@ -524,7 +598,7 @@ class Machine:
             s.close()
 
     def control(self):
-        self.log.head("control, answered line by line")
+        self.head("control, answered line by line")
         s = self.session("sudo ACCESSIBLE=1 tpm2-kira control", "control")
         menu = r"Enter a number between 1 and \d+: ?$"
         try:
@@ -598,7 +672,7 @@ class Machine:
             s.close()
 
     def image(self):
-        self.log.head("the boot image")
+        self.head("the boot image")
         if self.distro == "debian":
             listing = "unmkinitramfs /boot/initrd.img-$(uname -r) x >/dev/null && cd x && { [ -d main ] && cd main; true; }"
         else:
@@ -617,15 +691,18 @@ class Machine:
             self.check(f"the image's plan names '{part}'", f"etc/tpm2-kira/plan/{part}" in out, out[-500:])
 
     def cycle(self, n):
-        self.log.head(f"reboot {n}: the code screen over SSH, unlocked there")
+        self.head(f"reboot {n}: the code screen over SSH, unlocked there")
         self.run("systemctl reboot")
         self.wait_port(22, False, 120)
+        self.lap("the system going down")
         if not self.check(f"boot {n}: the boot SSH server answers (port {SSH_PORT})", self.wait_port(SSH_PORT, True, 300)):
             raise Fail("no boot SSH server: the console shows why")
+        self.lap("firmware to the boot SSH server")
         s = self.boot_session(n)
         try:
             text, _ = s.expect(r"Does the code match your authenticator\?.*$", 60)
             at = time.time()
+            self.lap("the code screen over SSH")
             codes = dict(re.findall(r"^#(\d+): (\d{6})$", text, re.M))
             self.check(f"boot {n}: the host key is certified by the SSH CA (strict known_hosts)", True)
             for slot in self.slots:
@@ -634,10 +711,12 @@ class Machine:
             s.send("\r")
             s.expect(r"Password for disk \S+: ?$", 120); s.send(TEST_PASSWORD + "\r")
             s.expect(r"Salt for disk \S+: ?$", 60); s.send(TEST_SALT + "\r")
+            self.lap("the prompts")
             # The session ends when the system leaves the initrd, after the
             # server's last line (the checks after the boot say whether the
             # key was answered).
             rest = s.wait_end(600)
+            self.lap("salt typed to the initrd's end (Argon2id, the keyslot)")
             self.check(f"boot {n}: the session ends with the server's last line ('The machine boots; ...')",
                        "The machine boots; the SSH server stops." in rest, rest[-300:])
         except Fail as e:
@@ -647,6 +726,7 @@ class Machine:
             s.close()
         if not self.check(f"boot {n}: the system comes up (ssh)", self.wait_port(22, True, 300)):
             raise Fail("the system does not come up")
+        self.lap("the initrd's end to ssh")
         time.sleep(5)
         rc, out = self.run("tpm2-kira status --json", save=f"status-boot{n}.json")
         try:
@@ -724,7 +804,7 @@ class Machine:
         all the same: PCR 11 needs no approval, so slot 1 shows its code and
         the SSH CA certifies through its slot 1, with slot 0 (PCR 4 moved) out.
         Then slot approve brings slot 0 back."""
-        self.log.head("an image not approved, signed by the PCR key")
+        self.head("an image not approved, signed by the PCR key")
         # mkinitcpio -P does not hand --nopost to its presets, and runs every file
         # of the hooks' directory: the hook goes out of it.
         hook = "/usr/lib/initcpio/post/sd-tpm2-kira"
@@ -763,7 +843,7 @@ class Machine:
     CA_FILE = "/root/vault-ca.pem"
 
     def vault(self, vault):
-        self.log.head("remote attestation over TLS: the vault")
+        self.head("remote attestation over TLS: the vault")
         # Without a root of the vault the enrolment is refused before the
         # vault is asked; the root comes over as an operator brings it.
         rc, out = self.run("tpm2-kira luks enrol " + self.luks_dev + " --password tpm --salt vault --url " + vault.url +
@@ -797,10 +877,12 @@ class Machine:
 
         # A boot nobody touches: the vault releases its part to the TPM's
         # quote of the approved boot state, the key ends the hold by itself.
-        self.log.head("a boot unlocked by the vault alone")
+        self.head("a boot unlocked by the vault alone")
         self.run("systemctl reboot")
         self.wait_port(22, False, 120)
+        self.lap("the system going down")
         up = self.wait_port(22, True, 420)
+        self.lap("nobody at the machine, to ssh")
         if not self.check("the vault's boot: the system comes up with nobody at the console or in SSH", up):
             raise Fail("the vault's boot did not come up")
         time.sleep(5)
@@ -813,7 +895,7 @@ class Machine:
         self.log.save("vault-devices.log", out)
 
         # Revoked: no release; the typed keyslot is the fallback, over SSH.
-        self.log.head("a boot with the device revoked on the vault")
+        self.head("a boot with the device revoked on the vault")
         vault.admin("device", "revoke", self.name)
         self.run("systemctl reboot")
         self.wait_port(22, False, 120)
@@ -849,7 +931,7 @@ class Machine:
         check and a new approval asked; the right one unlocks. The pepper
         reaches the machine wrapped for its TPM, opened through the slot's
         approval like R."""
-        self.log.head("the vault with an operator's pepper")
+        self.head("the vault with an operator's pepper")
         rc, out = self.run("tpm2-kira vault unenrol --nvram 0 2>&1", save="vault-unenrol.log")
         m = re.search(r"tpm2-kira-vault device revoke ([0-9a-f]+)", out)
         if not self.check("vault unenrol: the slot's vault method is gone", m is not None, out[-400:]):
@@ -891,7 +973,7 @@ class Machine:
         self.check("the vault's device needs a pepper and waits for approvals", "pepper:          yes" in out and "approve" in out, out[-400:])
         self.rebuild()
 
-        self.log.head("a boot approved with a wrong pepper, then the right one")
+        self.head("a boot approved with a wrong pepper, then the right one")
         self.run("systemctl reboot")
         self.wait_port(22, False, 120)
         rid = vault.pending(name, 300)
@@ -971,7 +1053,7 @@ class Machine:
         luksDump, the image's plan takes the part; a boot asks the password
         alone - the TPM opened the salt while the code screen held; the
         keyslot removed again."""
-        self.log.head("the salt in this TPM (0x1200)")
+        self.head("the salt in this TPM (0x1200)")
         s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt tpm", "luks-enrol-tpm-salt")
         try:
             s.expect(r"Password \(typed at the machine at every boot\): ?$", 300); s.send(TPM_SALT_PASSWORD + "\n")
@@ -995,7 +1077,7 @@ class Machine:
         out = self.rebuild()
         self.check("the image is rebuilt with the TPM salt in its plan", re.search(r"TPM salt:\s+in", out) is not None, out[-800:])
 
-        self.log.head("a boot with the salt in this TPM")
+        self.head("a boot with the salt in this TPM")
         s, _ = self.typed_boot("TPM salt", "this TPM opened")
         try:
             s.send(TPM_SALT_PASSWORD + "\r")
@@ -1019,7 +1101,7 @@ class Machine:
         operator approves on the vault's CLI (requests answer, the pepper on
         its stdin) while the code screen holds, the vault releases the salt,
         and the password alone is asked after the code screen."""
-        self.log.head("the vault's salt with a typed password and a pepper (0x1401)")
+        self.head("the vault's salt with a typed password and a pepper (0x1401)")
         rc, out = self.run("tpm2-kira vault unenrol --nvram 0 2>&1", save="vault-unenrol-typed.log")
         m = re.search(r"tpm2-kira-vault device revoke ([0-9a-f]+)", out)
         if not self.check("vault unenrol before the typed recipe", m is not None, out[-400:]):
@@ -1053,7 +1135,7 @@ class Machine:
         rc, out = self.run("tpm2-kira status 2>&1", save="status-vault-typed.log")
         self.check("status: the vault method is the typed recipe with a pepper", "0x1401 password typed · salt from the vault (pepper)" in out, out[-500:])
 
-        self.log.head("a boot: the operator approves on the vault's CLI, the password typed after")
+        self.head("a boot: the operator approves on the vault's CLI, the password typed after")
         # This device's: the other machine's run shares the vault.
         releases = lambda: sum(1 for l in vault.admin("audit").splitlines() if f"({name})" in l and "TPM reset count" in l)
         released_before = releases()
@@ -1086,7 +1168,7 @@ class Machine:
         self.check("the vault's audit holds no pepper", self.PEPPER not in out, out[-300:])
 
     def slot_life(self):
-        self.log.head("a slot's life")
+        self.head("a slot's life")
         rc, out = self.run(f"tpm2-kira slot approve --nvram {self.slots[-1]} 2>&1", save="slot-approve.log")
         self.check("slot approve raises the generation", "Successfully approved the boot state" in out, out[-400:])
         pcrs = "0,7,8,9" if self.distro == "debian" else "0,7"
@@ -1104,7 +1186,7 @@ class Machine:
         off (No keeps it); slot delete without --nvram takes everything -
         the slots, the boot settings, the SSH CA's EFI variable and its
         public key."""
-        self.log.head("removing what tpm2-kira keeps in the TPM and the EFI variables")
+        self.head("removing what tpm2-kira keeps in the TPM and the EFI variables")
         ca_var = "/sys/firmware/efi/efivars/KIRAasshCA-24415b90-39be-45c0-a9a3-d547ebe28ea0"
         there = lambda path: "yes" in self.run(f"test -e {path} && echo yes")[1]
         s = self.session("sudo ACCESSIBLE=1 tpm2-kira control", "control-ssh-off")
@@ -1198,10 +1280,13 @@ class Machine:
         return self.report()
 
     def report(self):
+        self.timing.finish()
+        self.log.save("times.json", self.timing.as_json())
         lines = [f"tpm2-kira vmtest: {self.name} ({self.distro}) on {self.host}", datetime.datetime.now().isoformat(timespec="seconds"), ""]
         for name, status, detail in self.rep.checks:
             lines.append(f"[{status}] {name}" + (f" - {detail}" if detail else ""))
         lines += ["", "Issues:" if self.rep.issues else "No issues."] + ["  - " + i for i in self.rep.issues]
+        lines += [""] + self.timing.lines()
         failed = self.rep.failed() or any(i.startswith(("stopped", "the test failed")) for i in self.rep.issues)
         lines += ["", "RESULT: FAIL" if failed else "RESULT: PASS", f"logs: {self.dir}"]
         text = "\n".join(lines) + "\n"
@@ -1244,8 +1329,10 @@ def main():
     names = ["arch", "debian"] if args.target == "both" else [args.target]
     if subprocess.run(["git", "-C", REPO, "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True).stdout.strip():
         print("note: uncommitted changes are not tested: the packages are HEAD's", file=sys.stderr)
+    timing = Timing("the run", print)
+    os.makedirs(run_dir, exist_ok=True)
     if not args.no_build:
-        os.makedirs(run_dir, exist_ok=True)
+        timing.step("building the packages")
         targets = ["arch" if n == "arch" else "deb" for n in names]
         print(f"building the packages of HEAD ({' '.join(targets)}), log: {run_dir}/build-packages.log", flush=True)
         with open(os.path.join(run_dir, "build-packages.log"), "w") as log:
@@ -1269,11 +1356,13 @@ def main():
         vc = cfg["vault"] if cfg.has_section("vault") else {}
         vault = Vault(os.path.abspath(os.path.join(REPO, vc.get("src", "../tpm2-kira-vault"))),
                       vc.get("url", "https://172.17.2.174"), int(vc.get("port", "443")), int(vc.get("operator_port", "8444")), run_dir)
+        timing.step("the vault's container")
         try:
             vault.start()
         except Fail as e:
             print("the vault does not start:", e, file=sys.stderr)
             return 1
+    timing.finish()
     results = {}
     print(f"tpm2-kira {short}: " + ", ".join(f"{m.name} {os.path.basename(packages[m.name])}" + (" (reset)" if m.name in resets else "") for m in machines), flush=True)
     threads = [threading.Thread(target=lambda m=m: results.__setitem__(m.name, m.all(packages[m.name], vault, resets.get(m.name)))) for m in machines]
@@ -1288,6 +1377,9 @@ def main():
         passed, text = results[m.name]
         print(text)
         ok = ok and passed
+    print_slowest([timing] + [m.timing for m in machines])
+    with open(os.path.join(run_dir, "times.json"), "w") as f:
+        f.write(timing.as_json())
     print("ALL PASS" if ok else "FAILED", "- logs:", run_dir)
     return 0 if ok else 1
 

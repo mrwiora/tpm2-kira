@@ -114,7 +114,7 @@ class Hib:
         m.control()
         m.image()
         m.cycle(1)
-        m.log.head("hibernation: tools and swap")
+        m.head("hibernation: tools and swap")
         install = ("pacman -S --noconfirm --needed tpm2-tools btrfs-progs" if self.distro == "arch" else
                    "DEBIAN_FRONTEND=noninteractive apt-get install -y tpm2-tools")
         rc, out = self.run(install + " 2>&1", save="tpm2-tools.log")
@@ -169,7 +169,7 @@ class Hib:
 
     def image_has_close(self):
         m = self.m
-        m.log.head("V1: the close before the resume, in the image")
+        m.head("V1: the close before the resume, in the image")
         if self.distro == "debian":
             listing = "unmkinitramfs /boot/initrd.img-$(uname -r) x >/dev/null && cd x && { [ -d main ] && cd main; true; }"
             show = ("cat scripts/local-top/tpm2-kira-close; echo ORDER:; cat scripts/local-top/ORDER; "
@@ -203,7 +203,7 @@ class Hib:
 
     def swap_risk(self):
         m = self.m
-        m.log.head("V6: hibernation to unencrypted swap in control")
+        m.head("V6: hibernation to unencrypted swap in control")
         text = self.control_status("swap-encrypted")
         self.check("V6: control shows no hibernation risk with the swap encrypted", "Hibernation" not in text,
                    "\n".join(l for l in text.split("\n") if "Hibernation" in l))
@@ -234,6 +234,7 @@ class Hib:
             time.sleep(2)
         if self.lv.pid():
             raise vmtest.Fail(f"{tag}: the guest did not hibernate (qemu still runs)")
+        self.m.lap(f"{tag}: writing the image, the power-off")
         self.check(f"{tag}: the guest hibernated (powered off)", True)
         return before
 
@@ -243,6 +244,7 @@ class Hib:
         self.lv.start(unlock=False)
         if not self.check(f"{tag}: the boot SSH server answers", m.wait_port(vmtest.SSH_PORT, True, 300)):
             raise vmtest.Fail("no boot SSH server on the resume's boot")
+        m.lap(f"{tag}: firmware to the boot SSH server")
         s = m.boot_session(tag)
         try:
             s.expect(r"Does the code match your authenticator\?.*$", 60)
@@ -257,6 +259,7 @@ class Hib:
             s.close()
         if not self.check(f"{tag}: the system is back (ssh)", m.wait_port(22, True, 300)):
             raise vmtest.Fail("the system does not come back")
+        m.lap(f"{tag}: the prompts to ssh (Argon2id, the keyslot, the resume)")
 
     def wait_login(self, tag):
         """ssh itself works: a banner is not enough (setup turned sshd's
@@ -427,17 +430,19 @@ class Hib:
         6 comes after it, in a boot of its own: its command line is grub.cfg's,
         part of what is hibernated."""
         m, lv = self.m, self.lv
-        m.log.head("V4: a boot without the TPM's answer")
+        m.head("V4: a boot without the TPM's answer")
         before = self.hibernate("V4")
         lv.snapshot("hibernated-v4")
         try:
             self.no_tpm_at_all(before)
+            m.lap("V4 step 5: no TPM at all")
         except Fail as e:
             self.check("V4 step 5: the machine comes up without a TPM", False, str(e).split("\n")[0] + "\n" + lv.serial_text(lv.mark)[-800:])
         lv.revert("hibernated-v4")
         if self.distro == "arch":
             try:
                 self.silent_tpm_arch(before)
+                m.lap("V4 step 6: a silent TPM")
             except Fail as e:
                 self.check("V4 step 6: one reboot, then the passphrase", False, str(e).split("\n")[0] + "\n" + lv.serial_text(lv.mark)[-800:])
             lv.revert("hibernated-v4")
@@ -445,7 +450,7 @@ class Hib:
         self.resume_over_ssh("V4-reverted")
         self.after_resume("V4-reverted", before)
         if self.distro == "debian":
-            m.log.head("V9: a TPM the firmware has does not answer")
+            m.head("V9: a TPM the firmware has does not answer")
             self.silent_tpm_debian()
 
     def after_silent(self, tag, before_boot):
@@ -513,7 +518,7 @@ class Hib:
         grub.cfg, as the menu's editor is on the graphical console here - and the
         plan's TPM part removed in the shell it gives."""
         m, lv = self.m, self.lv
-        m.log.head("V8: the way out of a TPM that stays broken")
+        m.head("V8: the way out of a TPM that stays broken")
         if self.distro == "debian":
             rc, out = self.run("sed -i 's#^\\(\\s*linux\\s.*\\)$#\\1 break=bottom#' /boot/grub/grub.cfg; grep -c 'break=bottom' /boot/grub/grub.cfg", save="wayout-grub.log")
             self.check("V8: Debian - break=bottom on GRUB's command line", rc == 0 and out.strip() != "0", out)
@@ -543,6 +548,7 @@ class Hib:
         self.check("V8: no TPM in this boot", "/dev/tpm0" not in out, out)
 
     def mem_sleep(self):
+        self.m.head("V5: suspend to RAM")
         rc, out = self.run("cat /sys/power/mem_sleep")
         if "deep" not in out:
             self.m.rep.issues.append(f"V5: not tested - the guest offers no suspend to RAM (S3): mem_sleep is '{out.strip()}'")
@@ -600,7 +606,7 @@ class Hib:
         return m.report()
 
     def step_v2(self):
-        self.m.log.head("V2: hibernate, resume over SSH")
+        self.m.head("V2: hibernate, resume over SSH")
         before = self.hibernate("V2")
         self.resume_over_ssh("V2")
         self.after_resume("V2", before)
@@ -608,7 +614,7 @@ class Hib:
     def step_v3(self):
         if self.distro != "arch":
             return
-        self.m.log.head("V3: resume with tpm2-kira masked: the close alone")
+        self.m.head("V3: resume with tpm2-kira masked: the close alone")
         before = self.hibernate("V3")
         self.resume_masked("V3")
         self.after_resume("V3", before)
@@ -623,7 +629,7 @@ class Hib:
                 self.save_setup()
                 return m.report()
             self.step_v2()
-            m.log.head("V7: a normal reboot after the resume")
+            m.head("V7: a normal reboot after the resume")
             m.cycle(2)
             if self.distro == "arch":
                 self.step_v3()
@@ -643,6 +649,7 @@ def main():
     p.add_argument("--target", choices=["arch", "debian", "both"], required=True)
     p.add_argument("--packages", default=os.path.join(REPO, "build", "packages"))
     p.add_argument("--no-build", action="store_true", help="take HEAD's packages already in --packages")
+    p.add_argument("--run-dir", help="where the report and the transcripts land (default .local/runs/hibernatetest-<time>)")
     p.add_argument("--save-setup", action="store_true", help=f"keep the state after the setup in the snapshot {SETUP_SNAPSHOT}")
     p.add_argument("--only", help=f"these steps alone (V2,V3,V4,V5,V8), from the snapshot {SETUP_SNAPSHOT}")
     p.add_argument("--drop-setup", action="store_true", help=f"remove the snapshot {SETUP_SNAPSHOT} and end")
@@ -652,7 +659,7 @@ def main():
     vcfg.read(os.path.join(LOCAL, "vms", "vmtest-local.conf"))
     lcfg = configparser.ConfigParser()
     lcfg.read(os.path.join(LOCAL, "vms", "localvm.conf"))
-    run_dir = os.path.join(LOCAL, "runs", "hibernatetest-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    run_dir = args.run_dir or os.path.join(LOCAL, "runs", "hibernatetest-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     os.makedirs(run_dir, exist_ok=True)
     names = ["arch", "debian"] if args.target == "both" else [args.target]
     if not args.no_build:
@@ -704,6 +711,7 @@ def main():
         passed, text = results[h.m.name]
         print(text)
         ok = ok and passed
+    vmtest.print_slowest([h.m.timing for h, _ in hs])
     print("ALL PASS" if ok else "FAILED", "- logs:", run_dir)
     return 0 if ok else 1
 
