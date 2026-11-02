@@ -1,79 +1,56 @@
 #!/usr/bin/env python3
-"""The hibernate steps of a run: the SSH CA's close (PCR 15) across a resume from hibernation,
-on the machines of tools/localvm.py. tools/vmtest.py and tools/proof.py run them in the VM test's
-machine, after its boots; this command runs them alone, to work on them.
+"""The hibernate steps of tools/vmtest.py's scenarios: the SSH CA's close (PCR 15) across a resume
+from hibernation, on the machines of tools/localvm.py. vmtest.py --only NAME runs them alone.
 
-    tools/hibernatetest.py --target both --save-setup       # the setup, kept as a snapshot
-    tools/hibernatetest.py --target both --only V4,V8       # those steps, from it
-    tools/hibernatetest.py --target both --from-setup       # every step, from it
-    tools/hibernatetest.py --target both --no-failure-paths # without V4, V8, V9
-    tools/hibernatetest.py --target arch --drop-setup
+A resume from hibernation starts the TPM afresh, which sets PCR 15 back to zero and so opens the
+SSH CA and every slot (their policies read PCR 15), and the resumed system runs no code screen. The
+boot image closes it right before the resume (tpm2-kira-boot close: Arch's drop-in on
+systemd-hibernate-resume.service, Debian's local-top script). This checks that on both
+distributions:
 
-A resume from hibernation starts the TPM afresh, which sets PCR 15 back to
-zero and so opens the SSH CA and every slot (their policies read PCR 15),
-and the resumed system runs no code screen. The boot image closes it right before
-the resume (tpm2-kira-boot close: Arch's drop-in on
-systemd-hibernate-resume.service, Debian's local-top script). This checks that on
-both distributions:
+  prepare    tpm2-tools and aSSH's command (the probe) in the guest, a swap file on the encrypted
+             root (Arch) or the encrypted swap volume (Debian) as the resume device: in the setup,
+             before control, so that control's image is the one resumed
+  hibernate  the proof's: V1 the image carries the close before the resume; a normal boot certifies
+             and leaves the CA closed (PCR 15 not zero). One hibernation, of the typed boot, kept
+             as a snapshot: every resume starts from it. The guest under a new qemu since that
+             boot, so no clock to catch up (tools/LOCALVM.md), and a cold start's memory map at the
+             resume as at the boot. V2 the resume through the code screen over SSH: the session is
+             the old one (boot_id), the CA closed, the CA certifies nothing (aSSH's agent as the
+             probe); the TPM's restartCount is reported. A kernel that refuses the image for its
+             memory map (tools/LOCALVM.md) makes it "not tested", at once. V7 the next boot,
+             whatever it is for: certified again. V5 suspend to RAM: tested where the guest offers
+             S3 ("deep")
+  silent-tpm the proof's: a TPM the firmware has, silent (the steps of docs/SSH.md, "The close",
+             step 6): the kernel's driver kept from starting: one hard reboot, then the passphrase
+             and the late closer. Arch at the resume's boot, from the hibernated state, the words
+             at systemd-boot's menu; Debian in a boot of its own: GRUB's command line is part of
+             what is hibernated
+  V6         --all: control: no hibernation risk with encrypted swap; red with a swap file on an
+             unencrypted file system (Debian's /boot)
+  V3         --all, Arch: the resume with tpm2-kira's unit masked (rd.systemd.mask, the passphrase
+             at systemd's own prompt): the close alone closes the CA
+  no-tpm     --all: V4 step 5, a boot without a TPM from the hibernated state (localvm's tpm=False:
+             no device, no TPM2 table, nothing measured): no reboot, the passphrase's recipe, the
+             resume may go on
+  V4-reverted  --all, Debian: the resume with the TPM back
+  V9-long    --all, Debian: after silent-tpm, a close that holds clears the count
+  V8         --all: the way out of a close that keeps rebooting (step 7, which no VM can make: a
+             TPM that answers and refuses): its mechanics, without a TPM: Arch, the word
+             tpm2-kira.noclose with Secure Boot off, from the setup; Debian, GRUB's break=bottom
+             and the plan's TPM part removed
 
-  prepare tpm2-tools and aSSH's command (the probe) in the guest, a swap file on the
-         encrypted root (Arch) or the encrypted swap volume (Debian) as the resume
-         device: the end of the setup, so that the image of boot 1 is the one resumed
-  V1     the image carries the close before the resume; a normal boot
-         certifies and leaves the CA closed (PCR 15 not zero)
-  V6     control: no hibernation risk with encrypted swap; red with a swap
-         file on an unencrypted file system (Debian's /boot)
-  hibernate   one hibernation, of boot 1, kept as a snapshot: every resume below is of it.
-         The guest under a new qemu since boot 1, so no clock to catch up (tools/LOCALVM.md),
-         and a cold start's memory map at the resume as at the boot.
-  V3     Arch: the resume with tpm2-kira's unit masked (rd.systemd.mask, the passphrase at
-         systemd's own prompt): the close alone closes the CA
-  V2     the resume through the code screen over SSH: the session is
-         the old one (boot_id), the CA closed, the CA certifies nothing
-         (aSSH's agent as the probe); the TPM's restartCount is reported. The kernel
-         may refuse the image for its memory map (tools/LOCALVM.md): hibernated again, up to
-         V2_TRIES, and the report says how many it took
-  V7     the next boot, whatever it is for: certified again
-  V5     suspend to RAM: tested where the guest offers S3 ("deep")
-  V4     a boot without the TPM's answer, from the hibernated state (the steps
-         of docs/SSH.md, "The close"): step 5, no TPM at all (localvm's
-         tpm=False: no device, no TPM2 table, nothing measured): no reboot, the
-         passphrase's recipe, the resume may go on. On Arch step 6, the TPM2
-         table there and the kernel's driver kept from starting: one hard reboot,
-         then the recipe and the late closer, no resume. Debian: the resume with the TPM
-         back, the running system V9 goes on from.
-  V9     Debian's step 6, in a boot of its own: GRUB's command line is part of
-         what is hibernated. Then a close that holds clears the count.
-  V8     the way out of a close that keeps rebooting (step 7, which no VM can
-         make: a TPM that answers and refuses): its mechanics, without a TPM:
-         Arch, the word tpm2-kira.noclose with Secure Boot off, from the setup;
-         Debian, GRUB's break=bottom and the plan's TPM part removed.
-
-V4, V9 and V8 are the failure paths: they run last and only when asked (AGENTS.md), always in a
-proof. Each step that wants a running system gets one when the step before it left none.
-
---save-setup makes the steps up to the first reboot and ends: the snapshot "setup", which
-tools/vmtest.py --save-setup makes too. --from-setup and --only start there, without building,
-and their reports say they are no final proof; --drop-setup removes it. A change to the product
-wants a new --save-setup. "fresh" and "export" are never written. --fast-kdf runs on the test
-package (vmtest.py's flag: NO FINAL PROOF, the report's first line says so). The report and every
-transcript land in the run's directory (--run-dir, or .local/runs/hibernatetest-<time>/).
+Each step that wants a running system gets one when the step before it left none.
 """
 
-import argparse
-import configparser
-import datetime
 import importlib.util
-import json
 import os
 import re
 import subprocess
 import sys
-import threading
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LOCAL = os.path.join(os.path.dirname(REPO), ".local")
 
 
 # A boot's first word on the serial console, the firmware's: the kernel's are
@@ -81,12 +58,6 @@ LOCAL = os.path.join(os.path.dirname(REPO), ".local")
 RESTART = re.compile(r"BdsDxe: loading")
 # What rules a prompt on the console out, whatever the wait has left.
 RULED_OUT = re.compile(r"Freezing execution|Failed to isolate|emergency mode|Kernel panic|\(initramfs\) ?$|^\S+ login: ", re.M)
-# What V3, V2 and V4 resume from, while a run lasts.
-HIBERNATED = "hibernated"
-# What --only takes, the order is the run's.
-STEPS = ("V1", "V6", "V3", "V2", "V5", "V4", "V9", "V8")
-FAILURE_PATHS = ("V4", "V9", "V8")
-V2_TRIES = 3
 # The kernel's TPM driver kept from starting. The second word is the test's and not what it tests:
 # without a TPM device the running system's units wait 90 s for /dev/tpm0, systemd's own bound.
 SILENT_WORDS = "initcall_blacklist=crb_acpi_driver_init systemd.default_device_timeout_sec=15"
@@ -105,6 +76,7 @@ def load(name):
 
 vmtest = load("vmtest")
 localvm = load("localvm")
+HIBERNATED = vmtest.HIBERNATED
 Fail = (vmtest.Fail, localvm.Fail)
 CONF = "/etc/tpm2-kira/assh.conf"
 PROBE = "/root/assh"
@@ -121,8 +93,6 @@ def build_probe(run_dir):
 
 
 class Hib:
-    HIBERNATED = HIBERNATED
-
     def __init__(self, lv, m, probe):
         self.lv, self.m, self.probe = lv, m, probe
         self.distro = m.distro
@@ -137,7 +107,7 @@ class Hib:
     # ── the guest ────────────────────────────────────────────────────────
 
     def prepare(self):
-        """What this test adds to the setup: before the first boot, whose image is resumed."""
+        """What this test adds to the setup: before control, whose image is resumed."""
         m = self.m
         m.head("hibernation: tools and swap")
         install = ("pacman -S --noconfirm --needed tpm2-tools btrfs-progs" if self.distro == "arch" else
@@ -159,7 +129,7 @@ class Hib:
             rc, out = self.run("set -e; dev=$(awk 'NR==2{print $1}' /proc/swaps); "
                                "uuid=$(blkid -s UUID -o value \"$dev\"); "
                                "printf 'RESUME=UUID=%s\\n' \"$uuid\" > /etc/initramfs-tools/conf.d/resume; "
-                               "update-initramfs -u 2>&1 | tail -3; cat /etc/initramfs-tools/conf.d/resume /proc/swaps", save="swap.log")
+                               "cat /etc/initramfs-tools/conf.d/resume /proc/swaps", save="swap.log")
         self.check("setup: the resume device (an encrypted swap)", rc == 0, out[-400:])
         # This test probes port 22 again and again across a resume, which keeps
         # sshd's state: its penalties would close the connection for minutes.
@@ -315,7 +285,7 @@ class Hib:
         per-source penalties off, which these probes would earn)."""
         self.m.wait_login(tag)
 
-    def after_resume(self, tag, before, last=True):
+    def after_resume(self, tag, before):
         self.wait_login(tag)
         # What the resumed system did, by its own clock: the kernel's, the journal's.
         self.run("dmesg -T | tail -80; journalctl --no-pager -o short-precise -n 200; systemctl list-jobs --no-pager", save=f"{tag}-resumed-system.log")
@@ -329,8 +299,6 @@ class Hib:
                 was, is_ = set(self.memmap.splitlines()), set(now.splitlines())
                 diff = sorted("- " + l for l in was - is_) + sorted("+ " + l for l in is_ - was)
                 self.m.log.save(f"{tag}-memmap.diff", "\n".join(diff) + "\n")
-                if not last:
-                    return st
                 self.m.rep.issues.append(f"{tag}: not tested - the kernel refused the image: {out.strip().splitlines()[-1] if out.strip() else ''}; the memory map differs in {len(diff)} line(s) ({tag}-memmap.diff)")
                 return st
         self.check(f"{tag}: the session resumed (boot_id {before['boot']} kept)", st["boot"] == before["boot"] and st["boot"], st["out"][:200])
@@ -476,37 +444,34 @@ class Hib:
             m.rep.issues.append("V4 step 5: the kernel did not resume (a boot of its own): the resume itself is not shown here")
         self.check("V4 step 5: the machine is up", rc == 0, out)
 
-    def failed_close(self):
-        """What a boot does for a TPM it does not get. The resume's boot, from the one
-        hibernated state: step 5 (no TPM at all); on Arch step 6 (a TPM the firmware has,
-        silent). On Debian then the resume with the TPM back, for the running system V9 goes
-        on from: its step 6 is a boot of its own, its command line is grub.cfg's, part of what
-        is hibernated."""
+    def step_no_tpm(self):
+        """Step 5: the resume's boot, from the one hibernated state, without a TPM."""
         m, lv = self.m, self.lv
         before = self.hibernated()
-        m.head("V4: a boot without the TPM's answer")
+        m.head("V4: a boot without a TPM at all")
         try:
             self.no_tpm_at_all(before)
-            m.lap("V4 step 5: no TPM at all")
         except Fail as e:
             self.check("V4 step 5: the machine comes up without a TPM", False, str(e).split("\n")[0] + "\n" + lv.serial_text(lv.mark)[-800:])
-        lv.revert(HIBERNATED)
-        if self.distro == "arch":
-            try:
-                self.silent_tpm_arch(before)
-                m.lap("V4 step 6: a silent TPM")
-            except Fail as e:
-                self.check("V4 step 6: one reboot, then the passphrase", False, str(e).split("\n")[0] + "\n" + lv.serial_text(lv.mark)[-800:])
-        else:
-            self.resume_over_ssh("V4-reverted")
-            self.after_resume("V4-reverted", before)
 
-    def step_v9(self):
-        if self.distro != "debian":
-            return
-        self.running()
-        self.m.head("V9: a TPM the firmware has does not answer")
-        self.silent_tpm_debian()
+    def step_v4_reverted(self):
+        """Debian: the resume with the TPM back, the running system what comes after goes on from."""
+        before = self.hibernated()
+        self.m.head("V4: the resume with the TPM back")
+        self.resume_over_ssh("V4-reverted")
+        self.after_resume("V4-reverted", before)
+
+    def silent_tpm(self):
+        """Step 6: a TPM the firmware has does not answer. On Arch the resume's boot; on Debian a
+        boot of its own, its command line is grub.cfg's, part of what is hibernated."""
+        if self.distro == "arch":
+            before = self.hibernated()
+            self.m.head("V4: a silent TPM")
+            self.silent_tpm_arch(before)
+        else:
+            self.running()
+            self.m.head("V9: a TPM the firmware has does not answer")
+            self.silent_tpm_debian()
 
     def after_silent(self, tag, before_boot):
         """The running system of a boot that went on without the TPM's answer."""
@@ -560,7 +525,11 @@ class Hib:
         lv.wait_ssh(240)
         self.wait_login("V9")
         self.after_silent("V9 step 6", boot.strip())
-        # Back to normal: the count goes with the first close that holds.
+
+    def silent_tpm_long(self):
+        """Back to normal: the count goes with the first close that holds."""
+        m = self.m
+        m.head("V9: a close that holds clears the count")
         self.run("mv /boot/grub/grub.cfg.kira /boot/grub/grub.cfg")
         m.cycle(9)
         rc, out = self.run("ls /sys/firmware/efi/efivars | grep -c KIRAcloseReboot; cat /run/tpm2-kira/close-state; ls /run/tpm2-kira/close-pending 2>&1", save="V9-after.log")
@@ -641,147 +610,23 @@ class Hib:
         self.lv.revert(HIBERNATED)
         return self.before
 
+    def scenario_hibernate(self):
+        """V1, the hibernation, the resume (V2), suspend to RAM (V5), in the order that spares waits."""
+        self.image_has_close()
+        self.hibernate_once()
+        self.step_v2()
+        self.mem_sleep()
+
     def step_v2(self):
+        """The resume. A kernel that refuses the image makes it "not tested", at once."""
         before = self.hibernated()
-        for attempt in range(1, V2_TRIES + 1):
-            self.m.head("V2: resume over SSH" + (f", try {attempt}" if attempt > 1 else ""))
-            self.resume_over_ssh("V2")
-            st = self.after_resume("V2", before, last=attempt == V2_TRIES)
-            if st["boot"] == before["boot"]:
-                self.m.rep.issues.append(f"V2: the kernel took the image on try {attempt}")
-                break
-            if attempt == V2_TRIES:
-                break
-            # A boot of its own, with another map's image refused: hibernated again, the
-            # snapshot follows: what V3 and V4 resume from is the last one that was tried.
-            before = self.hibernate("V2")
-            self.before = before
-            self.lv.snapshot(HIBERNATED)
+        self.m.head("V2: resume over SSH")
+        self.resume_over_ssh("V2")
+        self.after_resume("V2", before)
         self.m.resumed = True
 
     def step_v3(self):
-        if self.distro != "arch":
-            return
         before = self.hibernated()
         self.m.head("V3: resume with tpm2-kira masked: the close alone")
         self.resume_masked("V3")
         self.after_resume("V3", before)
-
-
-def main():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--target", choices=["arch", "debian", "both"], required=True)
-    p.add_argument("--packages", help="default build/packages, with --fast-kdf build/packages-fastkdf")
-    p.add_argument("--fast-kdf", action="store_true", help="WARNING: NO FINAL PROOF. The test package, Argon2id at a test's cost (vmtest.py's flag)")
-    p.add_argument("--no-build", action="store_true", help="take HEAD's packages already in --packages")
-    p.add_argument("--localvm-config", default=os.path.join(LOCAL, "vms", "localvm.conf"), help="the machines' config (their memory, say)")
-    p.add_argument("--run-dir", help="where the report and the transcripts land (default .local/runs/hibernatetest-<time>)")
-    p.add_argument("--save-setup", action="store_true", help=f"keep the state after the setup in the snapshot {vmtest.SETUP_SNAPSHOT}")
-    p.add_argument("--from-setup", action="store_true", help=f"every step from the snapshot {vmtest.SETUP_SNAPSHOT}, without building: no final proof")
-    p.add_argument("--only", help=f"these steps alone ({','.join(STEPS)}), from the snapshot {vmtest.SETUP_SNAPSHOT}: no final proof")
-    p.add_argument("--no-failure-paths", action="store_true", help=f"without {', '.join(FAILURE_PATHS)}: no final proof")
-    p.add_argument("--drop-setup", action="store_true", help=f"remove the snapshot {vmtest.SETUP_SNAPSHOT} and end")
-    args = p.parse_args()
-    wanted = None
-    if args.only:
-        unknown = set(args.only.split(",")) - set(STEPS)
-        if unknown:
-            p.error("no such step: " + ", ".join(sorted(unknown)) + "; there are " + ", ".join(STEPS))
-        wanted = {"boot 1"} | set(args.only.split(","))
-    args.from_setup = args.from_setup or bool(args.only)
-    args.no_build = args.no_build or args.from_setup or args.drop_setup
-    args.packages = args.packages or os.path.join(REPO, "build", "packages-fastkdf" if args.fast_kdf else "packages")
-    if args.fast_kdf:
-        print(vmtest.FAST_KDF_NOTE, flush=True)
-    vcfg = configparser.ConfigParser()
-    vcfg.read(os.path.join(LOCAL, "vms", "vmtest-local.conf"))
-    lcfg = configparser.ConfigParser()
-    lcfg.read(args.localvm_config)
-    # Absolute: the probe is built from another directory, and copied from this one.
-    run_dir = os.path.abspath(args.run_dir or os.path.join(LOCAL, "runs", "hibernatetest-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")))
-    os.makedirs(run_dir, exist_ok=True)
-    names = ["arch", "debian"] if args.target == "both" else [args.target]
-    if not args.no_build:
-        targets = ["arch" if n == "arch" else "deb" for n in names]
-        with open(os.path.join(run_dir, "build-packages.log"), "w") as log:
-            if subprocess.run([os.path.join(REPO, "packaging", "build-packages.sh")] + (["--fast-kdf"] if args.fast_kdf else []) + targets, cwd=REPO, stdout=log, stderr=subprocess.STDOUT).returncode != 0:
-                print(f"the packages do not build: {run_dir}/build-packages.log", file=sys.stderr)
-                return 1
-    short, packages = vmtest.head_packages(args.packages, args.fast_kdf)
-    probe = build_probe(run_dir)
-    defaults = dict(lcfg["defaults"]) if lcfg.has_section("defaults") else {}
-    password = open(os.path.expanduser(defaults.get("password_file", os.path.join(LOCAL, "vm-pw")))).read().strip()
-    defaults.setdefault("password_file", os.path.join(LOCAL, "vm-pw"))
-    hs, results, setups = [], {}, {}
-    sections = ("hibernate",) if args.no_failure_paths else ("hibernate", "failure-paths")
-    if not args.from_setup:
-        sections = ("setup",) + sections
-    for name in names:
-        if not packages[name] and not args.from_setup and not args.drop_setup:
-            print(f"no {name} package of HEAD ({short})", file=sys.stderr)
-            return 2
-        lv = localvm.Machine(name, lcfg[name], defaults)
-        sec = vcfg[name]
-        m = vmtest.Machine(name, name, sec["host"], sec.get("user", "pix"), password, lv.passphrase, run_dir,
-                           int(sec["ssh_port"]), int(sec["boot_port"]))
-        m.lv = lv
-        m.fast_kdf = args.fast_kdf
-        if args.fast_kdf:
-            m.notes.append(vmtest.FAST_KDF_NOTE)
-        if args.no_failure_paths:
-            m.notes.append(vmtest.PARTIAL_NOTE + "without " + ", ".join(FAILURE_PATHS))
-        if args.only:
-            m.notes.append(vmtest.PARTIAL_NOTE + args.only)
-        if packages[name]:
-            why = vmtest.package_is(packages[name], args.fast_kdf)
-            m.check(f"the package is {'a test build, as --fast-kdf asks' if args.fast_kdf else 'a release build: no Go build tag, no trace of a test build'}", why is None, why or "")
-            if why:
-                print(f"{os.path.basename(packages[name])}: {why}", file=sys.stderr)
-                return 1
-        m.hib = Hib(lv, m, probe)
-        setups[name] = vmtest.SavedSetup(lv, m, vmtest.SETUP_SNAPSHOT, m.fast_kdf)
-        hs.append((m.hib, sec.get("reset")))
-    print(f"tpm2-kira {short}: the hibernate steps on {', '.join(names)}, logs: {run_dir}", flush=True)
-    if args.drop_setup:
-        for name in names:
-            setups[name].drop()
-        print(f"dropped {vmtest.SETUP_SNAPSHOT}; start the machines from fresh")
-        return 0
-    if args.from_setup:
-        problems = [why for why in (s.problem() for s in setups.values()) if why]
-        if problems:
-            print("\n".join(problems), file=sys.stderr)
-            return 2
-        print(vmtest.FROM_SETUP_NOTE, flush=True)
-
-    def machine(h, reset):
-        m, setup = h.m, setups[h.m.name]
-        package = packages[m.name]
-        if args.save_setup:
-            results[m.name] = m.save_setup(package, setup, reset)
-        else:
-            results[m.name] = m.all(package, None, reset, setup if args.from_setup else None, setup, sections, wanted)
-    threads = [threading.Thread(target=machine, args=(h, r)) for h, r in hs]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    ok = True
-    for h, _ in hs:
-        passed, text = results[h.m.name]
-        print(text)
-        ok = ok and passed
-    vmtest.print_slowest([h.m.timing for h, _ in hs])
-    if args.from_setup:
-        print(vmtest.FROM_SETUP_NOTE)
-    if args.fast_kdf:
-        print(vmtest.FAST_KDF_NOTE)
-    print("ALL PASS" if ok else "FAILED", "- logs:", run_dir)
-    return 0 if ok else 1
-
-
-if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except KeyboardInterrupt:
-        sys.exit(130)

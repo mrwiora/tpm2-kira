@@ -61,11 +61,11 @@ def project_is(name):
 
 ROWS = (
     Row("Docs only", "nothing", lambda project, path: is_docs(path)),
-    Row("Test tools", "the affected step alone (`hibernatetest.py --only STEP`, `vmtest.py --only SECTION`)",
+    Row("Test tools", "the affected scenario alone (`vmtest.py --only SCENARIO`)",
         kira(under("tools/*", "packaging/*", ".github/*", "Makefile"))),
     Row("Installed-system code of tpm2-kira (`control`, `status`, the admin commands)", "`make test-all`",
         kira(lambda path: not under("tools/*", "packaging/*", ".github/*", "Makefile", "core/*")(path) and not is_boot(path)), ("test-all",)),
-    Row("tpm2-kira's boot, close or unlock", "`make test-all`; `tools/vmtest.py --fast-kdf`; the affected hibernate steps, from a saved setup",
+    Row("tpm2-kira's boot, close or unlock", "`make test-all`; `tools/vmtest.py --fast-kdf`; the affected scenarios, from a saved setup",
         kira(is_boot), ("test-all", "machines")),
     Row("Argon2id, or what memory the boot takes", "as above, at the real cost (without `--fast-kdf`), on the affected boots",
         kira(is_argon2), ("test-all", "machines")),

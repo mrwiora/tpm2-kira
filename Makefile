@@ -220,6 +220,7 @@ test-all:
 	$(GOTEST) -v -tags="unit integration" -timeout 10m ./...
 	cd core && $(GOTEST) -v ./...
 	python3 tools/test_affected_test.py
+	python3 tools/proof_test.py
 
 ## fmt: Format code
 fmt:
