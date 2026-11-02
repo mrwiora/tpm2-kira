@@ -24,5 +24,6 @@ tpm2-kira slot info --json 2>/dev/null | grep -q '"index"' || [ -e /sys/firmware
 echo "tpm2-kira: initramfs rebuilt ($1); approving for the next boot" >&2
 # No terminal (setsid): a PIN it cannot read from /etc/tpm2-kira/pin ends the
 # approve with the reason instead of a prompt that would hold the update.
-setsid -w tpm2-kira slot approve </dev/null || echo "tpm2-kira: the approval did not succeed; the next boot shows no code until 'tpm2-kira slot approve' does" >&2
+# --unattended: a moved phone channel stays as it is, and it says so.
+setsid -w tpm2-kira slot approve --unattended </dev/null || echo "tpm2-kira: the approval did not succeed; the next boot shows no code until 'tpm2-kira slot approve' does" >&2
 exit 0

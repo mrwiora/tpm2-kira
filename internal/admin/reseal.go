@@ -23,10 +23,10 @@ import (
 // ResealCommand is the top-level entry point for the reseal CLI command.
 // When nvramIndex is 0 it scans every default slot and reseals each one;
 // otherwise it reseals only the requested index.
-func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privKeyPath string, debug bool) error {
+func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privKeyPath string, channel ChannelApproval, debug bool) error {
 	if nvramIndex != 0 {
 		// Single-slot mode – same behaviour as before
-		err := Reseal(tpmPath, pcrsStr, nvramIndex, pubKeyPath, privKeyPath, debug)
+		err := Reseal(tpmPath, pcrsStr, nvramIndex, pubKeyPath, privKeyPath, channel, debug)
 		if nvramIndex == machineid.Slot {
 			keepMachineIDAt(tpmPath)
 		}
@@ -53,7 +53,7 @@ func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privK
 		}
 		return fmt.Errorf("no sealed secrets found in NVRAM slots 0x%08X - 0x%08X", nvslot.NVRAMSlotStart, nvslot.NVRAMSlotEnd)
 	}
-	slotsErr := resealSlots(tpmPath, slots, pcrsStr, pubKeyPath, privKeyPath, debug)
+	slotsErr := resealSlots(tpmPath, slots, pcrsStr, pubKeyPath, privKeyPath, channel, debug)
 	keepMachineIDAt(tpmPath)
 	return joinReseal(slotsErr, resealSSHCA(controlPath, tpmPath, privKeyPath))
 }
@@ -61,7 +61,8 @@ func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privK
 // ResealIfMoved approves only what an update of the images on the EFI system
 // partition (a boot loader by bootctl, shim or GRUB by a package) moved: every
 // slot when PCR 4 of one has moved, the SSH CA when it has no approval of the
-// next boot. Nothing moved: nothing is written and no generation raised.
+// next boot. Nothing moved: nothing is written and no generation raised. It runs
+// unattended, so a moved phone channel is left (ChannelLeave).
 func ResealIfMoved(tpmPath, pubKeyPath, privKeyPath string, debug bool) error {
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
@@ -80,7 +81,7 @@ func ResealIfMoved(tpmPath, pubKeyPath, privKeyPath string, debug bool) error {
 		}
 	}
 	if moved {
-		return ResealCommand(tpmPath, 0, "", pubKeyPath, privKeyPath, debug)
+		return ResealCommand(tpmPath, 0, "", pubKeyPath, privKeyPath, ChannelLeave, debug)
 	}
 	fmt.Println("No slot's PCR 4 has moved")
 	return resealSSHCA(controlConfigPath(), tpmPath, privKeyPath)
@@ -118,7 +119,7 @@ func joinReseal(slots, sshCA error) error {
 }
 
 // resealSlots reseals each of slots.
-func resealSlots(tpmPath string, slots []uint32, pcrsStr, pubKeyPath, privKeyPath string, debug bool) error {
+func resealSlots(tpmPath string, slots []uint32, pcrsStr, pubKeyPath, privKeyPath string, channel ChannelApproval, debug bool) error {
 	fmt.Printf("Found %d sealed slot(s) to approve\n\n", len(slots))
 
 	var failed []uint32
@@ -127,7 +128,7 @@ func resealSlots(tpmPath string, slots []uint32, pcrsStr, pubKeyPath, privKeyPat
 		slotNum := nvslot.SlotNumber(slotIdx)
 		fmt.Printf("── Slot #%d (0x%08X) ─────────────────────────\n", slotNum, slotIdx)
 
-		err := Reseal(tpmPath, pcrsStr, slotIdx, pubKeyPath, privKeyPath, debug)
+		err := Reseal(tpmPath, pcrsStr, slotIdx, pubKeyPath, privKeyPath, channel, debug)
 		var skip *ResealSkippedError
 		switch {
 		case errors.As(err, &skip):
@@ -290,7 +291,7 @@ func indentContinuation(s, indent string) string {
 // The signing key is --privkey, or the default key from setup (see
 // resolveResealKeys); the blob names no key file. The public key for the NEW sealed blob is --pubkey, which must belong to that
 // private key, or else derived from it.
-func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath string, debug bool) error {
+func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath string, channel ChannelApproval, debug bool) error {
 	// Parse PCRs if provided (we'll use original PCRs if not explicitly overridden)
 	var userProvidedSpecs []measure.PCRSpec
 	var userSpecifiedPCRs bool
@@ -372,7 +373,7 @@ func Reseal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath 
 	pub := signer.Public()
 	fmt.Printf("Signing key: %s (%s, fingerprint: %s)\n", keys.privKeyPath, signing.PublicKeyDescription(pub), signing.PublicKeyFingerprint(pub))
 
-	if err := approveAndWrite(tpmDev, nvramIndex, sealedBlob, specsToUse, hashAlgo, false, signer, debug); err != nil {
+	if err := approveAndWrite(tpmDev, nvramIndex, sealedBlob, specsToUse, hashAlgo, false, signer, channel, debug); err != nil {
 		return asResealSkipped(fmt.Errorf("failed to approve: %w", err), nvramIndex, keys.privKeyPath, sealedBlob)
 	}
 

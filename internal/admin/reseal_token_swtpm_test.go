@@ -49,7 +49,7 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 	signing.CloseTokenSessions()
 
 	// With the PIN stored: the reseal signs, nobody is asked.
-	if err := Reseal(sock, "", idx, pubPath, privPath, false); err != nil {
+	if err := Reseal(sock, "", idx, pubPath, privPath, ChannelLeave, false); err != nil {
 		t.Fatalf("reseal with the PIN in control.conf: %v", err)
 	}
 	if fake.prompts != 0 || card.Retries != 3 {
@@ -63,7 +63,7 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 
 	// Without it, and without a terminal: skipped, and the slot as it was.
 	os.Remove(pinFile)
-	err = Reseal(sock, "", idx, pubPath, privPath, false)
+	err = Reseal(sock, "", idx, pubPath, privPath, ChannelLeave, false)
 	var skipped *ResealSkippedError
 	if !errors.Is(err, ErrResealSkipped) || !errors.As(err, &skipped) || skipped.NVIndex != idx {
 		t.Fatalf("reseal without a PIN: %v", err)
@@ -79,7 +79,7 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 	// from, and no second attempt is spent on it.
 	os.WriteFile(pinFile, []byte("000000\n"), 0o600)
 	signing.CloseTokenSessions()
-	err = Reseal(sock, "", idx, pubPath, privPath, false)
+	err = Reseal(sock, "", idx, pubPath, privPath, ChannelLeave, false)
 	if !errors.Is(err, ErrResealSkipped) || !strings.Contains(err.Error(), "wrong PIN (2 attempt(s) remaining) (PIN from "+pinFile+")") {
 		t.Fatalf("reseal with a wrong PIN: %v", err)
 	}

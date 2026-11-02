@@ -71,6 +71,13 @@ update` by hand or a shim or GRUB package on Debian, `status` and `control` say
 it is due. It is in by decision, and goes again if it makes trouble in the real
 world (a firmware that measures more into it, an unpredictable value).
 
+A phone channel follows a moved PCR 7 only when a person says so: `slot approve` at a
+terminal shows the old and new value and what the event log says PCR 7 is made of, and
+asks; `--seal-channel` is the same without a terminal, and `control` has a line for it.
+The hooks (`--unattended`), `--if-moved` and a run with no terminal approve the slot,
+leave the channel and say so; until it is sealed the phones find no machine, and `status`
+and `control` are red (`tpm2-kira help slot`).
+
 With `--pcrs`, or `--nvram`, one slot is sealed: the one named (else 0),
 to the PCRs named (else the selection above).
 

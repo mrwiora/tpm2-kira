@@ -41,8 +41,8 @@ func sealTestChannel(t *testing.T, s *swtpmSetup, idx uint32, signer crypto.Sign
 
 // A moved PCR 7 - a db or dbx update, another signed system, Secure Boot off - is
 // no gate: the first branch refuses, not as closed, and the signed branch still
-// opens. Status says so, and slot approve seals the same secrets to the new value,
-// so that the phones keep what they pinned. The close then still closes.
+// opens. Status says so, and a person's slot approve seals the same secrets to the
+// new value, so that the phones keep what they pinned. The close then still closes.
 func TestChannelFollowsPCR7(t *testing.T) {
 	s := newSWTPMSetup(t)
 	idx := uint32(nvslot.NVRAMSlotStart + 4)
@@ -89,13 +89,13 @@ func TestChannelFollowsPCR7(t *testing.T) {
 		t.Fatalf("no advice in %v", notes)
 	}
 
-	// Slot approve, by the way a person runs it: what it writes opens again.
+	// Slot approve, by the way a person says yes: what it writes opens again.
 	public := bytes.Clone(sb.Payload.Attestation.Phone.ChannelPublic)
 	specs, err := measure.ParsePCRSpecs("23")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := approveAndWrite(s.tpm, idx, sb, specs, measure.PCRHashAlgoSHA256, false, signer, false); err != nil {
+	if err := approveAndWrite(s.tpm, idx, sb, specs, measure.PCRHashAlgoSHA256, false, signer, ChannelSeal, false); err != nil {
 		t.Fatal(err)
 	}
 	sb = phonegate.ReadSealedSlot(s.tpm, idx)
@@ -114,7 +114,7 @@ func TestChannelFollowsPCR7(t *testing.T) {
 
 	// Approving again with nothing moved keeps the object.
 	public = bytes.Clone(sb.Payload.Attestation.Phone.ChannelPublic)
-	if err := approveAndWrite(s.tpm, idx, sb, specs, measure.PCRHashAlgoSHA256, false, signer, false); err != nil {
+	if err := approveAndWrite(s.tpm, idx, sb, specs, measure.PCRHashAlgoSHA256, false, signer, ChannelSeal, false); err != nil {
 		t.Fatal(err)
 	}
 	if sb = phonegate.ReadSealedSlot(s.tpm, idx); !bytes.Equal(sb.Payload.Attestation.Phone.ChannelPublic, public) {

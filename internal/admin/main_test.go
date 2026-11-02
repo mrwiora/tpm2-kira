@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -36,4 +37,24 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// captureStdout runs fn and returns what it printed to os.Stdout.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	done := make(chan []byte)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- b
+	}()
+	defer func() { os.Stdout = old }()
+	fn()
+	w.Close()
+	return string(<-done)
 }

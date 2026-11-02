@@ -243,6 +243,7 @@ with the key that signs the boot components.
                        [--verify-uki=false]
 tpm2-kira slot approve [--nvram N] [--pcrs LIST] [--measure-point M]
                        [--privkey PATH] [--pubkey PATH] [--require-key] [--if-moved]
+                       [--unattended] [--seal-channel]
 tpm2-kira slot info    [--nvram N] [--json] [--privkey PATH]
 tpm2-kira slot list | status | delete [--yes]   [--nvram N]
 
@@ -328,6 +329,21 @@ control stores, root-only; else asked).
   --require-key      With a YubiKey: fail when the token or its PIN is not
                      at hand. By default approve then prints SKIPPED, leaves
                      every slot as it is, and exits 0
+  --if-moved         Approve only what the images on the EFI system partition
+                     moved (PCR 4); as --unattended about the phone channel
+  --unattended       No person is here (the hooks): never asks, and a phone
+                     channel whose PCR 7 moved stays as it is, and it says so
+  --seal-channel     A person's decision without a terminal: seal a moved
+                     phone channel to the next boot's PCR 7 without asking
+
+A slot's phone channel is sealed to PCR 7. When the next boot's PCR 7 is another
+(a db or dbx update, Secure Boot switched, another signed system) approve shows
+the old and new value and what the event log says PCR 7 is made of, and asks: at
+a terminal alone, without --unattended and --if-moved. Yes seals the same secrets
+again, the phones keep what they pinned. Anything else approves the slot and
+leaves the channel: the phones find no machine, status and control are red with
+the command to run. It never follows PCR 7 without a person: the signing key
+of a hook would hand the secrets to whatever moved it.
 
   tpm2-kira slot approve
   tpm2-kira slot approve --nvram 0 --pcrs "0e,2,4u,7e"

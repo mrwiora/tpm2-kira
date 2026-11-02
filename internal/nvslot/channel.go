@@ -33,6 +33,10 @@ import (
 // running system's: another phone, the phone salt's hand-over, sealing them again
 // at slot approve, each with a signature over the TPM's fresh nonce. After the
 // close nothing else opens it.
+//
+// The channel follows a moved PCR 7 only when a person says so: an approval of a
+// hook leaves it (internal/admin's ChannelApproval). Following it unattended would
+// hand the secrets to whatever moved it.
 
 // channelPCRs are the registers the first branch reads besides PCR 15: this list
 // alone says which. Their values are the ones the gate will see, before the
@@ -41,7 +45,7 @@ var channelPCRs = []int{7}
 
 // ErrChannelMoved marks a boot before the close whose channel PCRs are not those
 // the channel's secrets are sealed to.
-var ErrChannelMoved = fmt.Errorf("PCR %s moved since the phone channel was sealed (a db or dbx update, Secure Boot switched, another signed system): only the signing key opens it, 'tpm2-kira slot approve' seals it again", ChannelPCRList())
+var ErrChannelMoved = fmt.Errorf("PCR %s moved since the phone channel was sealed (a db or dbx update, Secure Boot switched, another signed system): only the signing key opens it, 'tpm2-kira slot approve' at a terminal seals it again", ChannelPCRList())
 
 // ChannelPCRList names channelPCRs for a message.
 func ChannelPCRList() string { return measure.FormatPCRList(channelPCRs) }
@@ -145,28 +149,35 @@ func channelTemplate(policy []byte) tpm2.TPMTPublic {
 // secrets go to the TPM in a salted, parameter-encrypted session. afterSeparator
 // is ReadChannelPCRs'.
 func SealChannel(t transport.TPM, sb *SealedBlob, phone *PhoneAttestation, c *ChannelSecrets) (afterSeparator string, err error) {
+	pcrs, afterSeparator, err := ReadChannelPCRs(t, sb.GetHashAlgo())
+	if err != nil {
+		return "", err
+	}
+	if err := SealChannelTo(t, sb, phone, c, pcrs); err != nil {
+		return "", err
+	}
+	return afterSeparator, nil
+}
+
+// SealChannelTo is SealChannel to the values pcrs.
+func SealChannelTo(t transport.TPM, sb *SealedBlob, phone *PhoneAttestation, c *ChannelSecrets, pcrs []ChannelPCR) error {
 	if len(c.NoisePrivate)+len(c.AdvKey) != channelSecretSize || len(c.NoisePrivate) != 32 {
-		return "", errors.New("the channel's secrets are incomplete")
+		return errors.New("the channel's secrets are incomplete")
 	}
 	name, err := slotSigningName(sb)
 	if err != nil {
-		return "", err
+		return err
 	}
-	bank := sb.GetHashAlgo()
-	pcrs, afterSeparator, err := ReadChannelPCRs(t, bank)
+	policy, _, err := channelPolicy(name, sb.Payload.PolicyRef, sb.GetHashAlgo(), pcrs)
 	if err != nil {
-		return "", err
-	}
-	policy, _, err := channelPolicy(name, sb.Payload.PolicyRef, bank, pcrs)
-	if err != nil {
-		return "", err
+		return err
 	}
 	public, private, err := sealChannelObject(t, policy, c)
 	if err != nil {
-		return "", err
+		return err
 	}
 	phone.ChannelPublic, phone.ChannelPrivate, phone.ChannelPCRs = public, private, pcrs
-	return afterSeparator, nil
+	return nil
 }
 
 // sealChannelObject makes the object under policy.
@@ -231,25 +242,44 @@ func channelObject(sb *SealedBlob) (name tpm2.TPM2BName, bank measure.PCRHashAlg
 	return name, "", branches, errors.New("the channel's sealed object is not this slot's: its policy differs; enrol the phones again")
 }
 
-// ChannelMoved says whether the channel PCRs at the next boot are not those the
-// channel's secrets are sealed to: slot approve seals them again. A slot without a
-// phone channel has not moved.
-func ChannelMoved(t transport.TPM, sb *SealedBlob) (bool, error) {
+// ChannelMove is a phone channel whose PCRs at the next boot are not those its
+// secrets are sealed to.
+type ChannelMove struct {
+	Bank     measure.PCRHashAlgo
+	Sealed   []ChannelPCR // what the object's policy reads
+	NextBoot []ChannelPCR // what the next boot will have
+	// AfterSeparator is ReadChannelPCRs': NextBoot are registers, and why.
+	AfterSeparator string
+}
+
+// ChannelMoves is the slot's move; nil when the channel has not moved, or the slot
+// has none.
+func ChannelMoves(t transport.TPM, sb *SealedBlob) (*ChannelMove, error) {
 	att := sb.Payload.Attestation
 	if att == nil || !att.Phone.Enabled() {
-		return false, nil
+		return nil, nil
 	}
 	_, bank, _, err := channelObject(sb)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	pcrs, _, err := ReadChannelPCRs(t, bank)
+	pcrs, afterSeparator, err := ReadChannelPCRs(t, bank)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	return !slices.EqualFunc(pcrs, att.Phone.ChannelPCRs, func(a, b ChannelPCR) bool {
+	if slices.EqualFunc(pcrs, att.Phone.ChannelPCRs, func(a, b ChannelPCR) bool {
 		return a.Index == b.Index && bytes.Equal(a.Digest, b.Digest)
-	}), nil
+	}) {
+		return nil, nil
+	}
+	return &ChannelMove{Bank: bank, Sealed: att.Phone.ChannelPCRs, NextBoot: pcrs, AfterSeparator: afterSeparator}, nil
+}
+
+// ChannelMoved says whether the channel PCRs at the next boot are not those the
+// channel's secrets are sealed to.
+func ChannelMoved(t transport.TPM, sb *SealedBlob) (bool, error) {
+	move, err := ChannelMoves(t, sb)
+	return move != nil, err
 }
 
 // ResealChannelIfMoved seals the channel's secrets again, in sb's own record part,

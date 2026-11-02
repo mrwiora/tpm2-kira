@@ -91,6 +91,12 @@ It may not carry what came before.
   out is in docs/SSH.md, "The close: what it can come to". Every other outcome of the
   close goes on to the passphrase.
   Do not build a mode that holds the boot on the phone's verdict.
+- **The phone channel follows a moved PCR 7 on a person's word alone.**
+  Its secrets open with the signing key, which a hook holds too, so a hook's
+  approval (`--unattended`, `--if-moved`), or one with no terminal and no flag,
+  approves the slot, leaves the channel and says so; `slot approve` at a terminal
+  asks after showing old, new and what moved it, `--seal-channel` and `control`
+  are the person's word too (`ChannelApproval`).
 - **Two configuration files, tpm2-kira's and aSSH's, and only `control`
   writes them.** `/etc/tpm2-kira/control.conf` is tpm2-kira's; beside it
   `/etc/tpm2-kira/assh.conf` is aSSH's own format (`ASSH_*`, parsed by

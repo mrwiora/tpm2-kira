@@ -199,6 +199,8 @@ fuzz:
 		echo "Fuzzing $$t for $(FUZZTIME)..."; \
 		$(GOTEST) -tags=unit ./internal/admin -run '^$$' -fuzz "^$$t\$$" -fuzztime $(FUZZTIME) || exit 1; \
 	done
+	@echo "Fuzzing FuzzDescribeEvent for $(FUZZTIME)..."
+	$(GOTEST) ./internal/measure -run '^$$' -fuzz '^FuzzDescribeEvent$$' -fuzztime $(FUZZTIME)
 	@echo "Fuzzing FuzzDecode for $(FUZZTIME)..."
 	$(GOTEST) ./internal/pcsc -run '^$$' -fuzz '^FuzzDecode$$' -fuzztime $(FUZZTIME)
 

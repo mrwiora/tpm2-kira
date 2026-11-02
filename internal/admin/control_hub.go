@@ -226,11 +226,18 @@ func (c *controller) keysSteps() []controlStep {
 		lines[n] = line
 		order = append(order, n)
 	}
+	var channels []controlStep
+	for _, s := range f.Status.Slots {
+		if s.ChannelMoved {
+			channels = append(channels, channelStep(s.Slot))
+		}
+	}
 	for _, d := range f.Dirt {
 		lines[d.Slot] = dirtyLine(d)
 		order = append(order, d.Slot)
 	}
 	sort.Ints(order)
+	steps = append(steps, channels...)
 	for _, n := range order {
 		steps = append(steps, lines[n])
 	}

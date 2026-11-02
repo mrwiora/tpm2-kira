@@ -950,6 +950,16 @@ each other.
 
 ---
 
+## The phone channel stopped following PCR 7 by itself (2026-11-02)
+
+Until then every `slot approve`, a hook's too, sealed the channel's secrets to a moved
+PCR 7 before it raised the generation. Whatever had moved it - a db update, or someone's
+own key enrolled - got the channel with the next kernel update, and no person saw it: a
+hook holds the signing key. An approval now leaves it unless a person says so
+(`ChannelApproval`), and says it did.
+
+---
+
 ## Related records
 
 - `docs/SYSTEMD-PCROSSEPARATOR.issue` — systemd's userspace measure-point

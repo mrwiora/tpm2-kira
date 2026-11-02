@@ -243,7 +243,7 @@ func TestPhonesLiveInTheSlotsBlob(t *testing.T) {
 	t.Logf("slot blob: %d bytes sealed, %d bytes with one phone", plain, sealedSize())
 
 	// Reseal, as the hook does after every kernel update.
-	if err := Reseal(sock, "", slot, pubPath, privPath, false); err != nil {
+	if err := Reseal(sock, "", slot, pubPath, privPath, ChannelLeave, false); err != nil {
 		t.Fatalf("reseal: %v", err)
 	}
 	if got := enrolled("after reseal").Count; got != count {

@@ -93,8 +93,9 @@ Known residual risks:
   variable `KIRAslotN` that any local user can read, holds neither in clear, and after
   the close only the signing key opens them. Before the close PCR 7 and PCR 15 guard
   them: a Microsoft-signed live USB and Secure Boot off do not open them, and a db or
-  dbx update means sealing them again (`slot approve`; `status` and `control` say so),
-  with no gate until then: the phone finds no machine. Someone who boots an image the
+  dbx update means sealing them again, which a person does (`slot approve` at a terminal,
+  or `control`; no hook follows PCR 7; `status` and `control` are red), with no gate until
+  then: the phone finds no machine. Someone who boots an image the
   owner's db key signed, or on Debian edits a GRUB entry (`break=`; PCR 7 does not move,
   a GRUB superuser password closes it), can recognise the machine's advertisements and
   imitate its Bluetooth endpoint. They cannot produce a quote: quotes come from the TPM,

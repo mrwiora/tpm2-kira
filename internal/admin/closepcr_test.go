@@ -69,7 +69,7 @@ func TestClosePCRChecked(t *testing.T) {
 	if err := approveSSHCASlots(nil, nil, nil); err == nil || !strings.Contains(err.Error(), "cannot approve") {
 		t.Fatalf("the CA's approval: %v", err)
 	}
-	if err := approveAndWrite(nil, nvslot.ResolveNVRAMIndex(0), nil, nil, "", false, nil, false); err == nil || !strings.Contains(err.Error(), "cannot approve") {
+	if err := approveAndWrite(nil, nvslot.ResolveNVRAMIndex(0), nil, nil, "", false, nil, ChannelLeave, false); err == nil || !strings.Contains(err.Error(), "cannot approve") {
 		t.Fatalf("the slot's approval: %v", err)
 	}
 	found := false

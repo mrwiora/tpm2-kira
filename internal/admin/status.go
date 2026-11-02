@@ -225,7 +225,7 @@ func statusNotes(r StatusReport) []string {
 			notes = append(notes, fmt.Sprintf("slot %d's PCR 4 is not what the next boot will measure (an updated boot loader or image; risk: no slot 0 at the next boot, the fallback's purple): tpm2-kira slot approve", s.Slot))
 		}
 		if s.ChannelMoved {
-			notes = append(notes, fmt.Sprintf("slot %d's phone channel is sealed to another PCR %s than the next boot's (a db or dbx update, Secure Boot switched; risk: no gate, the phones find no machine at the next boot): tpm2-kira slot approve --nvram %d", s.Slot, nvslot.ChannelPCRList(), s.Slot))
+			notes = append(notes, fmt.Sprintf("WARNING: slot %d's phone channel is sealed to another PCR %s than the next boot's (a db or dbx update, Secure Boot switched; risk: no gate, the phones find no machine at the next boot; no hook follows it): at a terminal, after looking at what moved it: sudo tpm2-kira slot approve --nvram %d", s.Slot, nvslot.ChannelPCRList(), s.Slot))
 		}
 		if s.NoGRUBPCRs {
 			notes = append(notes, fmt.Sprintf("slot %d lacks PCR 8 or 9 (risk: %s): tpm2-kira slot delete --nvram %d", s.Slot, grubSelectionWhy, s.Slot))
@@ -391,9 +391,20 @@ func printStatus(r StatusReport) {
 		fmt.Println()
 		fmt.Println("Notes")
 		for _, n := range r.Notes {
+			if strings.HasPrefix(n, "WARNING: ") {
+				n = statusRed(n)
+			}
 			fmt.Printf("  - %s\n", n)
 		}
 	}
+}
+
+// statusRed is s in red on a terminal; a pipe gets the words.
+func statusRed(s string) string {
+	if isTerminal(os.Stdout) {
+		return bad(s)
+	}
+	return s
 }
 
 // shortKeyslot is describeKeyslot in a few words.

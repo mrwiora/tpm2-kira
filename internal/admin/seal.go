@@ -185,7 +185,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 		}
 	}
 
-	if err := approveAndWrite(tpmDev, nvramIndex, blob, specs, hashAlgo, verifyUKI, signer, debug); err != nil {
+	if err := approveAndWrite(tpmDev, nvramIndex, blob, specs, hashAlgo, verifyUKI, signer, ChannelLeave, debug); err != nil {
 		return err
 	}
 	if nvramIndex == machineid.Slot {
@@ -345,7 +345,7 @@ func signatureSizes(pub crypto.PublicKey) (approval, blob int, err error) {
 // the slot, signs PolicyPCR(values) + PolicyNV(generation) with signer, and
 // writes the signed blob. The key object in blob is not touched: only its
 // approval changes, so the TOTP key never has to leave the TPM.
-func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.SealedBlob, specs []measure.PCRSpec, hashAlgo measure.PCRHashAlgo, verifyUKI bool, signer crypto.Signer, debug bool) error {
+func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.SealedBlob, specs []measure.PCRSpec, hashAlgo measure.PCRHashAlgo, verifyUKI bool, signer crypto.Signer, channel ChannelApproval, debug bool) error {
 	if err := checkClosePCRZero(); err != nil {
 		return fmt.Errorf("cannot approve: %w", err)
 	}
@@ -403,15 +403,10 @@ func approveAndWrite(tpmDev transport.TPM, nvramIndex uint32, blob *nvslot.Seale
 	measurePoint := readResult.EventlogInfo != nil && readResult.EventlogInfo.MeasurePointExtends != ""
 	gen := blob.Payload.Generation + 1
 
-	// A moved channel PCR (a db or dbx update): the phone channel follows the approval.
-	// Before the generation is raised: a failure leaves the slot as it is.
-	resealed, afterSeparator, err := nvslot.ResealChannelIfMoved(tpmDev, blob, signer)
-	if err != nil {
-		return fmt.Errorf("cannot seal the phone channel again (remove the slot's phones if it stays so): %w", err)
-	}
-	if resealed {
-		fmt.Printf("The phone channel is sealed again, to PCR %s as the next boot will have it; the phones keep what they pinned.\n", nvslot.ChannelPCRList())
-		warnChannelAfterSeparator(afterSeparator)
+	// A moved channel PCR (a db or dbx update): the phone channel follows a person's
+	// approval alone. Before the generation is raised: a failure leaves the slot as it is.
+	if err := followChannel(tpmDev, nvramIndex, blob, signer, channel); err != nil {
+		return err
 	}
 
 	// Raising the generation revokes the slot's approval, so a blob this

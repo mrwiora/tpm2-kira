@@ -1435,6 +1435,50 @@ func (c *controller) runRemoveSlot(slot int) error {
 	return err
 }
 
+// channelStep is the red line of a slot whose phone channel is sealed to another
+// PCR 7 than the next boot's: picking it shows old, new and what moved it, and asks.
+func channelStep(slot int) controlStep {
+	return controlStep{Key: fmt.Sprintf("channel:%d", slot), Title: fmt.Sprintf("Slot %d's phone channel", slot), SelfConfirm: true,
+		Dirty:   fmt.Sprintf("sealed to another PCR %s than the next boot's (risk: no gate, the phones find no machine at the next boot; no hook follows it): pick it to look at what moved it and seal it again", nvslot.ChannelPCRList()),
+		Explain: "The phones find no machine until the channel is sealed to the next boot's PCR " + nvslot.ChannelPCRList() + ". Look at what moved it first: a db or dbx update is yours; anything you did not do means this boot is not yours, and sealing hands the channel over to it.",
+		Run:     func(c *controller) error { return c.runSealChannel(slot) }}
+}
+
+// runSealChannel shows the move, asks, and approves the slot with its channel.
+func (c *controller) runSealChannel(slot int) error {
+	idx := nvslot.ResolveNVRAMIndex(uint32(slot))
+	ok, err := c.confirm(fmt.Sprintf("Seal slot %d's phone channel to the next boot's PCR %s?", slot, nvslot.ChannelPCRList()),
+		c.channelMoveText(idx))
+	if err != nil || !ok {
+		return errors.New("not sealed: the phones find no machine at the next boot")
+	}
+	return Reseal(c.o.TPMPath, "", idx, "", "", ChannelSeal, c.o.Debug)
+}
+
+// channelMoveText is what the question shows: old, new and what moved it.
+func (c *controller) channelMoveText(idx uint32) string {
+	tpmDev, err := tpmdev.Open(c.o.TPMPath)
+	if err != nil {
+		return err.Error()
+	}
+	defer tpmDev.Close()
+	raw, err := nvslot.ReadRecord(idx)
+	if err != nil {
+		return err.Error()
+	}
+	sb, err := nvslot.UnmarshalSealedBlob(raw)
+	if err != nil {
+		return err.Error()
+	}
+	move, err := nvslot.ChannelMoves(tpmDev, sb)
+	if err != nil || move == nil {
+		return fmt.Sprintf("Not moved any more, or not readable: %v", err)
+	}
+	var b strings.Builder
+	printChannelMoveTo(&b, move)
+	return b.String()
+}
+
 func isTerminal(f *os.File) bool {
 	_, err := unix.IoctlGetTermios(int(f.Fd()), unix.TCGETS)
 	return err == nil

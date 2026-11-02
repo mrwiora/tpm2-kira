@@ -381,9 +381,16 @@ func runSlotApprove(args []string, tpmPath string, debugFlag bool) {
 	privKeyPath := fs.String("privkey", "", "Path to signing private key: PEM, or the YubiKey key file from setup --yubikey")
 	measurePoint := fs.String("measure-point", "auto", "Account for systemd's userspace PCR extends before tpm2-kira runs (auto, on, off)")
 	requireKey := fs.Bool("require-key", false, "Fail instead of reporting SKIPPED when the signing key (YubiKey) is unavailable")
-	ifMoved := fs.Bool("if-moved", false, "Approve only what the images on the EFI system partition moved (PCR 4)")
+	ifMoved := fs.Bool("if-moved", false, "Approve only what the images on the EFI system partition moved (PCR 4); never seals a moved phone channel")
+	unattended := fs.Bool("unattended", false, "No person is here (the hooks): never asks, and a moved phone channel stays as it is")
+	sealChannel := fs.Bool("seal-channel", false, "Seal a moved phone channel to the next boot's PCR 7 without asking, after showing what moved it")
 
 	fs.Parse(args)
+
+	channel, err := admin.ChannelApprovalFor(*unattended || *ifMoved, *sealChannel, admin.StdinIsTerminal())
+	if err != nil {
+		fail(err)
+	}
 
 	mode, err := measure.ParseMeasurePointMode(*measurePoint)
 	if err != nil {
@@ -407,7 +414,7 @@ func runSlotApprove(args []string, tpmPath string, debugFlag bool) {
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	if err := admin.ResealCommand(*tpm, scanIndex, *pcrs, *pubKeyPath, *privKeyPath, *debug); err != nil {
+	if err := admin.ResealCommand(*tpm, scanIndex, *pcrs, *pubKeyPath, *privKeyPath, channel, *debug); err != nil {
 		// A skip has already been reported with its SKIPPED block; it is
 		// the expected outcome with the token unplugged, not a failure,
 		// unless the caller asked for the key to be required.
