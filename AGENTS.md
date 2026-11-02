@@ -267,6 +267,13 @@ It may not carry what came before.
   Release recipes never name the tag and refuse a binary built with one
   (`packaging/release-binary-check.sh`, `internal/diskkey/release_test.go`). A
   `--fast-kdf` run is no final proof.
+- **What holds a passphrase, a salt or a derived key is locked and not dumpable.**
+  aSSH's `sandbox.LockMemory`, first thing: a command on the installed system stops
+  if it cannot, before it asks (`holdsSecrets` in main.go; `secrets_test.go` finds
+  what in `internal/admin` comes to one, and a new one fails there); at boot `run` and
+  `unlock-key` go on and say so (no enforced mode). It locks on fault, or
+  `Combine` could give nothing back. Locks do not cross an exec: `ssh-child` and
+  `gate-child` have none (docs/DISK-KEY.md, "Memory").
 - **Root for everything but the help.** Every command refuses to run as a
   user (`main.go` `requireRoot`); `control` says so on its own screen. The
   test suite's exception is `TPM2_KIRA_UNPRIVILEGED=1` for the binary

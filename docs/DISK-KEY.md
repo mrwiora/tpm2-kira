@@ -88,7 +88,53 @@ its hash are wiped as before.
 guest of 1792 MiB, tools/LOCALVM.md, "Memory"). It is what was measured to hold on both
 test machines with every step passing and no swap touched. Below it boots still opened
 at 1368 MiB of MemTotal, an enrolment beginning to swap; at 1131 MiB neither holds. Each
-further volume's keyslot can run beside a derivation: the floor counts one disk.
+further volume's keyslot can run beside a derivation: the floor counts one disk. The
+floor was measured before the lock below; at the floor with the lock on it is not yet
+measured (the machines' disks are gone, PLAN.md).
+
+### Out of swap and core files
+
+Whatever holds a passphrase, a salt or a derived key takes `sandbox.LockMemory` (aSSH)
+first: `mlockall(MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT)` and `PR_SET_DUMPABLE=0`, both
+the whole address space's, every thread in one call.
+
+- **On the installed system** a refused lock stops the command before it asks:
+  `control`, `luks derive`, `enrol`, `remove`, `vault enrol`, `phone salt enrol` and
+  `rotate` (`holdsSecrets`; `secrets_test.go` lists them, and fails on a new function
+  in `internal/admin` that comes to something secret). A refused lock is any limit on locked memory
+  without `CAP_IPC_LOCK`, however large: a mapping past the limit is fatal for the Go
+  runtime, at no place the program could answer. Root has the capability; a
+  container's root, or a unit that drops it, does not. `LimitMEMLOCK=` alone does not stop root.
+- **At boot** it is best effort, one line in the log, and never withholds a prompt.
+  The initrd has no swap, so the lock there guards against one being set up.
+- **Locks do not cross an exec**, and each process needs what it holds:
+
+| Process | Holds | Locked | Not dumpable |
+|---|---|---|---|
+| `run` | what is typed, salts, the pepper, the derived key, the host key's authorization | best effort | yes, first thing |
+| `unlock-key` (Debian) | the derived key, on its way to cryptsetup | best effort | yes |
+| `ssh-child` | a prompt's answer in passing, decrypted, in its SSH and relay buffers | no: a uid of its own, no capability; no swap in an initrd | yes (`sandbox.Apply`) |
+| `gate-child` | what the phone sends, sealed; never the code or the opened salt (`run` opens them) | no: nothing to lock | yes (`sandbox.Apply`) |
+| `cryptsetup`, `systemd-cryptsetup` | the key, the passphrase | their own (`mlockall`) | theirs |
+
+**Why `MCL_ONFAULT`.** The kernel refuses `MADV_DONTNEED` on locked memory, and the Go
+runtime then gives memory back by mapping over it. Under `MCL_FUTURE` alone that new
+mapping is made resident at once, so `debug.FreeOSMemory` frees nothing while the
+runtime's numbers say it did. Measured on the Arch VM, Argon2id at its real cost, after
+freeing: resident 1097 MiB under `MCL_CURRENT | MCL_FUTURE`, 8 MiB with `MCL_ONFAULT`, 8 MiB
+without any lock; the start of a process: 47 MiB against 4.5 MiB. What is locked is the same: a page
+cannot be evicted from its first touch. Only a page already in swap when the lock is
+taken stays there until touched, which is why the lock comes first.
+
+`VmLck` is address space, not memory: the real `luks derive` shows 1242 MiB at the start
+and 2269 MiB during Argon2id, of which 1041 MiB are resident (container, the host's
+kernel); most of the rest is the runtime's untouched reservations. Debian's VM, 1 GiB of swap, a
+process filling what is free but 512 MiB, Argon2id at its real cost: without the lock
+35712 kB of the process went to swap, with it 0, while swap took 270000 other pages
+each time.
+
+What the lock does not do: a hibernation image holds locked memory too. And a machine with too
+little RAM for the 1 GiB now has its derivation killed for memory instead of swapping.
 
 ## The token
 
@@ -430,9 +476,10 @@ goes the same way: the transfer never changes.
 **Treat the bytes like libcryptsetup does.** `systemd-cryptsetup` locks
 its memory (`mlockall`), keeps the key in guarded buffers and erases them
 (`explicit_bzero`). tpm2-kira reads the passphrase into one fixed buffer
-of cryptsetup's limit (512 bytes, no growing copy), `mlock`s it, wipes it
-to its full capacity after the answer, on Backspace and on cancel, and is
-not dumpable while it serves keys. Neither side can zero the kernel's
+of cryptsetup's limit (512 bytes, no growing copy; from a pipe too, and more than
+that is an error), `mlock`s it, wipes it to its full capacity after the answer, on
+Backspace, on cancel and on a failed read, and locks the whole process and is not
+dumpable from its start ("Memory", above). Neither side can zero the kernel's
 socket buffer between write and read, and neither can protect against a
 hibernation image; the initrd has no swap and no hibernation.
 

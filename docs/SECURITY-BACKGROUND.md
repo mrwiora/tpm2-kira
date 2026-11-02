@@ -726,9 +726,9 @@ on the kernel command line. Both channels - the password agent's on
 touch a file or the kernel keyring.
 
 Memory. Both sides lock what holds the key and erase it: `systemd-cryptsetup` by
-`mlockall` and guarded buffers, tpm2-kira by one fixed `mlock`ed buffer of cryptsetup's
-limit, overwritten after the answer, in a process that is not dumpable. What neither can
-do: the kernel's socket buffer holds the bytes between write and read, and a hibernation
+`mlockall` and guarded buffers, tpm2-kira by `mlockall` too (at boot best effort, on the
+installed system a stop if it is refused) and one fixed buffer of cryptsetup's limit,
+overwritten after the answer, in a process that is not dumpable. What neither can do: the kernel's socket buffer holds the bytes between write and read, and a hibernation
 image would hold all of RAM; neither exists in the initrd, which has no swap. The whole of
 it: DISK-KEY.md, "The secure way to plug in".
 
@@ -1803,6 +1803,8 @@ Logs: `.local/runs/` of the workspace.
 |---|---|---|---|
 | `tools/vmtest.py --target both`, from `fresh`, the machines in parallel, no `--fast-kdf` | dcc9ede | VM | Arch 202, Debian 196, 0 failed (`k/final/vmtest`) |
 | The same at a guest of 1792 MiB, the memory floor (MemTotal 1620-1635 MiB) | dcc9ede | VM | Arch 202, Debian 196, 0 failed (`k/mem/vm-1792`). Other sizes: tools/LOCALVM.md |
+| The memory lock (`sandbox.LockMemory`), a probe of the same system calls: Argon2id at the real cost, freed; against a memory hog | - | Arch VM, Debian VM | resident after freeing 8 MiB; the process's swap 35712 kB without the lock, 0 with it (`l/probe`). **The lock's own VM test and the floor with the lock on have not run: below** |
+| `sandbox.TestLockMemoryCovers` as root; the real `luks derive` at the real cost; a refused lock, `luks derive` and `run` | 082f908, aSSH 8c18175 | a container on the host's kernel | pass; `VmLck` 1242, then 2269 MiB, resident 1041 MiB, swap 0; refused: stops before it asks, `run` goes on (`l/docker`) |
 | `tools/hibernatetest.py --target both --no-build`, in parallel | dcc9ede | VM | Arch 160, Debian 149, 0 failed, with the "not tested" items in §18 (`k/final/hib`) |
 | A resumed guest, `--only V2` with a wait added | 75121e2 | VM | Arch: slot 0's TOTP key refuses after the resume, same boot_id 75 s after the first login, with `ICH9-LPC.noreboot` (`g5/resume-uptime.out`) |
 | `make test-all` | dcc9ede | unit, swtpm | 1054 passed, 8 skipped, 0 failed, no `(cached)` (`k/final/test-all.log`) |

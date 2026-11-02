@@ -122,7 +122,7 @@ sealed at it (below 2816 MiB its PCRs move: a machine's snapshot does not carry 
 | 1536 | 1368-1383 | PCR 0, 1 and 10 differ | every boot opens, nothing killed; Debian's enrolment swaps 3 pages, which an Argon2id must not |
 | 1280 | 1131 | not compared | Arch's enrolment does not end within 900 s; Debian's swaps 1.6 million pages and its boot does not come up |
 
-Each run: `.local/runs/k/mem/`. A keyslot is enrolled at the size the machine has, and
+Each run: `.local/runs/k/mem/`, all before the memory lock (docs/DISK-KEY.md, "Memory"). A keyslot is enrolled at the size the machine has, and
 `cryptsetup` scales its own Argon2id to that (340-585 MiB of memory here): a disk with a
 1 GiB keyslot moved to a machine at the floor is not measured.
 
