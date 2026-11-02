@@ -36,11 +36,11 @@ func TestQuoteUntrusted(t *testing.T) {
 }
 
 func TestInfoDoesNotTrustPlantedBlob(t *testing.T) {
-	_, ownPriv, _ := writeTestKeyPair(t, newTestKeyDir(t, "owner"))
+	_, ownPriv, _ := writeTestKeyPairIn(t, newTestKeyDir(t, "owner"))
 
 	// A planted blob, signed by its author, with escape sequences in its
 	// one string, the image path.
-	attackerKey, _, _ := writeTestKeyPair(t, newTestKeyDir(t, "attacker"))
+	attackerKey, _, _ := writeTestKeyPairIn(t, newTestKeyDir(t, "attacker"))
 	esc := "\x1b[2J"
 	sb := &nvslot.SealedBlob{Version: nvslot.CurrentBlobVersion, Payload: nvslot.SealedBlobPayload{
 		Public: []byte{1}, Private: []byte{2},
@@ -97,7 +97,7 @@ func TestInfoDoesNotTrustPlantedBlob(t *testing.T) {
 }
 
 func TestInfoVerifiedBlob(t *testing.T) {
-	key, priv, _ := writeTestKeyPair(t, newTestKeyDir(t, "owner"))
+	key, priv, _ := writeTestKeyPairIn(t, newTestKeyDir(t, "owner"))
 	data, blob := signedTestBlob(t, key)
 	si := slotInfo{Index: nvslot.NVRAMSlotStart, Blob: blob, raw: data}
 	si.Verify = newBlobVerifier(priv).verify(si.raw, si.Blob)

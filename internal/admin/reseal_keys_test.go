@@ -19,8 +19,8 @@ import (
 	"github.com/google/go-tpm/tpm2"
 )
 
-// writeTestKeyPair writes an ECDSA P-256 pair into dir the way setup does.
-func writeTestKeyPair(t *testing.T, dir string) (*ecdsa.PrivateKey, string, string) {
+// writeTestKeyPairIn writes an ECDSA P-256 pair into dir the way setup does.
+func writeTestKeyPairIn(t *testing.T, dir string) (*ecdsa.PrivateKey, string, string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -79,8 +79,8 @@ func signedTestBlob(t *testing.T, key *ecdsa.PrivateKey) ([]byte, *nvslot.Sealed
 }
 
 func TestResolveResealKeysRefusesForeignBlob(t *testing.T) {
-	_, ownPriv, _ := writeTestKeyPair(t, newTestKeyDir(t, "owner"))
-	attackerKey, _, _ := writeTestKeyPair(t, newTestKeyDir(t, "attacker"))
+	_, ownPriv, _ := writeTestKeyPairIn(t, newTestKeyDir(t, "owner"))
+	attackerKey, _, _ := writeTestKeyPairIn(t, newTestKeyDir(t, "attacker"))
 	data, blob := signedTestBlob(t, attackerKey)
 
 	_, err := resolveResealKeys(data, blob, ownPriv, "", false)
@@ -94,7 +94,7 @@ func TestResolveResealKeysRefusesForeignBlob(t *testing.T) {
 }
 
 func TestResolveResealKeysAcceptsOwnBlob(t *testing.T) {
-	key, priv, pub := writeTestKeyPair(t, newTestKeyDir(t, "owner"))
+	key, priv, pub := writeTestKeyPairIn(t, newTestKeyDir(t, "owner"))
 	data, blob := signedTestBlob(t, key)
 
 	keys, err := resolveResealKeys(data, blob, priv, pub, false)
@@ -107,8 +107,8 @@ func TestResolveResealKeysAcceptsOwnBlob(t *testing.T) {
 }
 
 func TestResolveResealKeysRejectsMismatchedPubkey(t *testing.T) {
-	key, priv, _ := writeTestKeyPair(t, newTestKeyDir(t, "owner"))
-	_, _, otherPub := writeTestKeyPair(t, newTestKeyDir(t, "other"))
+	key, priv, _ := writeTestKeyPairIn(t, newTestKeyDir(t, "owner"))
+	_, _, otherPub := writeTestKeyPairIn(t, newTestKeyDir(t, "other"))
 	data, blob := signedTestBlob(t, key)
 
 	_, err := resolveResealKeys(data, blob, priv, otherPub, false)
@@ -118,7 +118,7 @@ func TestResolveResealKeysRejectsMismatchedPubkey(t *testing.T) {
 }
 
 func TestResolveResealKeysMissingKey(t *testing.T) {
-	key, _, _ := writeTestKeyPair(t, newTestKeyDir(t, "owner"))
+	key, _, _ := writeTestKeyPairIn(t, newTestKeyDir(t, "owner"))
 	data, blob := signedTestBlob(t, key)
 
 	missing := filepath.Join(t.TempDir(), "absent.key")

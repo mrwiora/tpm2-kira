@@ -215,13 +215,11 @@ test-integration:
 ## test-all: Run all tests (unit + integration)
 test-all:
 	@echo "Running all tests..."
-	@echo "Unit tests:"
-	$(GOTEST) -v -tags=unit ./internal/...
-	cd core && $(GOTEST) -v ./...
-	@echo ""
-	@echo "Integration tests:"
 	@echo "Note: Requires swtpm (software TPM) to be installed"
-	$(GOTEST) -v -tags=integration -timeout 10m ./...
+	@# One run of both tags: the unit tags' files are built with them, nothing runs twice.
+	$(GOTEST) -v -tags="unit integration" -timeout 10m ./...
+	cd core && $(GOTEST) -v ./...
+	python3 tools/test_affected_test.py
 
 ## fmt: Format code
 fmt:
