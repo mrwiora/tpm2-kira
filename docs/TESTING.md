@@ -11,9 +11,21 @@ Four depths. Each says what it can show; only the third and the fourth end a bat
 | **The proof** | `tools/proof.py` | from `fresh`, both machines in parallel: `setup`, `typed-boot`, `hibernate`, `unapproved` (Arch), `tpm-salt`, `vault-pepper`, `revoked`, `silent-tpm`; beside them `make test-all`, aSSH's tests, the vault's, safearch's `tests/run.sh` | target 15 min, limit 16; see below | yes, once per batch |
 | **`--all`** | `tools/proof.py --all`, before a release, the owner's call | the proof's scenarios and `second-typed-boot`, `debian-resume`, `V6`, `V3`, `vault-alone`, `typed-vault`, `slot-life`, `removal`, `no-tpm`, `V4-reverted`, `V9-long`, `V8`; safearch's `tests/vm.sh`, Marify's emulator test, go-uefi-slim's and tpm2-verifier's tests | about 26 min for the machines, summed from single runs: never run as one | yes, and more |
 
-Measured seconds, each scenario alone from a saved setup (`.local/runs/q/`), Arch / Debian: `setup` 158 /
-187, `typed-boot` 46 / 54-58, `hibernate` 63 / 6, `unapproved` 71 / -, `tpm-salt` 26 / 33, `vault-pepper` 136
-/ 149, `revoked` 59 / 61, `silent-tpm` 126 / 116.
+Measured seconds, in the full run (`.local/runs/q/proof`, 702 s of the target of 900; `make test-all` 187 s
+and safearch's `tests/run.sh` 153 s started at 186 s, when the setups were done) and each scenario alone from
+a saved setup (`.local/runs/q/`), Arch / Debian:
+
+| Scenario | In the full run | Alone | Budget |
+|---|---|---|---|
+| `setup` | 162 / 186 | 158 / 187 | 165 / 195 |
+| `typed-boot` | 50 / 69 | 46 / 54-58 | 52 / 70 |
+| `hibernate` | 67 / 7 | 63 / 6 | 68 / 10 |
+| `unapproved` | 76 / - | 71 / - | 77 / - |
+| `tpm-salt` | 26 / 30 | 26 / 33 | 30 / 35 |
+| `vault-pepper` | 136 / 167 | 136 / 149 | 140 / 168 |
+| `revoked` | 60 / 69 | 59 / 61 | 62 / 70 |
+| `silent-tpm` | 122 / 116 | 126 / 116 | 130 / 120 |
+| the machine | 699 / 644 | | 704 / 668 |
 
 After which change: `tools/test-affected.py` prints it, from the table in the workspace's AGENTS.md,
 "What to test after a change". In short: installed-system code, the fast depth; the boot, the close or
@@ -24,9 +36,12 @@ the unlock, the fast depth and the affected scenarios; a batch ends with the pro
 - A real TPM, real firmware, a real phone or a real radio: the machines are qemu, OVMF and swtpm; the
   phone is the emulator's, under `--all`.
 - A real update of `db` or `dbx`.
-- Debian's normal resume and Arch's V3, as things to rely on: the kernel refuses the hibernated image
-  for its memory map, and that is "not tested", no failure. Debian's `hibernate` refused it in every
-  run here, its `V4-reverted` took it once; Arch's `V3` refused it each time, its `hibernate` took it.
+- Debian's normal resume (`debian-resume`, under `--all`) and Arch's V3, as things to rely on: the kernel
+  refuses the hibernated image for its memory map, and that is "not tested", no failure. Debian's resume
+  was refused in every run here, its `V4-reverted` took it once; Arch's `V3` refused it each time, its
+  `hibernate` took it.
+- A late TPM's device that comes after the counted boot's close: `TestLate` (swtpm); no VM brings the device
+  back within a boot.
 - Secure Boot really on: the machines are in Setup Mode, until M2's snapshot.
 
 ## What the tools are
@@ -84,7 +99,7 @@ is this, from `fresh`, without `--fast-kdf`: there is no flag for that.
 | `tpm-salt` | the salt in this TPM: its enrolment; its image is `vault-pepper`'s, its boot `revoked`'s | 30 / 35 |
 | `vault-pepper` | the vault: a wrong, then the right pepper; one image with the salt in this TPM | 140 / 155 |
 | `revoked` | one boot, boot 2's checks: a device revoked on the vault, falling back to the password with the salt this TPM opened; the salt's keyslot removed | 62 / 65 |
-| `silent-tpm` | the failure path: a silent TPM, one hard reboot, then the passphrase; one wait per boot | 130 / 120 |
+| `silent-tpm` | the failure path: a silent TPM, one hard reboot, then the passphrase; one wait per boot (Arch reads the console's stamps) | 130 / 120 |
 
 **Before a release, `--all`:** the proof's scenarios and the rest, named, with no limit, which also
 runs when named in `--only`:
