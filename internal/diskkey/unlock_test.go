@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/journal"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 
 	"golang.org/x/sys/unix"
@@ -734,4 +735,131 @@ func TestUnlockServerCloseLeavesAnOpenPrompt(t *testing.T) {
 		t.Error("the socket stayed")
 	}
 	ptm.Write([]byte("\n")) // the prompt's goroutine ends with the test
+}
+
+// TestReadPassphraseWipesOnEveryWayOut: one buffer, and nothing left in it unless it
+// is the answer, whichever way the read ends.
+func TestReadPassphraseWipesOnEveryWayOut(t *testing.T) {
+	var got []byte
+	real := passphraseBuffer
+	passphraseBuffer = func() []byte {
+		got = real()
+		return got
+	}
+	defer func() { passphraseBuffer = real }()
+	clean := func(name string) {
+		t.Helper()
+		for i, c := range got[:cap(got)] {
+			if c != 0 {
+				t.Errorf("%s: byte %d of the buffer is left", name, i)
+				return
+			}
+		}
+	}
+	feed := func(s string, end bool) *os.File {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { r.Close(); w.Close() })
+		w.WriteString(s)
+		if end {
+			w.Close()
+		}
+		return r
+	}
+
+	// Too long for the buffer: an error, not a shorter passphrase.
+	r := feed(strings.Repeat("x", MaxPassphrase+1)+"\n", true)
+	if _, err := ReadPassphrase(r, -1); !errors.Is(err, errPassphraseTooLong) {
+		t.Errorf("past the limit: %v", err)
+	}
+	clean("past the limit")
+
+	// The limit itself is a passphrase, in the one buffer.
+	r = feed(strings.Repeat("x", MaxPassphrase)+"\r\n", true)
+	if _, err := ReadPassphrase(r, -1); !errors.Is(err, errPassphraseTooLong) {
+		t.Errorf("the limit and a carriage return: %v", err)
+	}
+	clean("the limit and a carriage return")
+	r = feed(strings.Repeat("x", MaxPassphrase)+"\n", true)
+	pw, err := ReadPassphrase(r, -1)
+	if err != nil || len(pw) != MaxPassphrase || &pw[0] != &got[:1][0] {
+		t.Errorf("the limit: %d bytes, %v", len(pw), err)
+	}
+
+	// A read that fails half way.
+	if _, err := ReadPassphrase(&failingReader{"half"}, -1); !errors.Is(err, errFailingReader) {
+		t.Errorf("a failed read: %v", err)
+	}
+	clean("a failed read")
+
+	// The answer, wiped to its capacity by the caller, a carriage return with it.
+	r = feed("short\r\n", true)
+	pw, err = ReadPassphrase(r, -1)
+	if err != nil || string(pw) != "short" {
+		t.Errorf("the answer: %q %v", pw, err)
+	}
+	wipe.Bytes(pw)
+	clean("the answer")
+
+	// At a key-by-key prompt: Ctrl-C, Ctrl-D, the session gone.
+	for _, keys := range []string{"secret\x03", "secret\x04", "secret"} {
+		rest := keys
+		_, err := ReadRawPassphrase(func() (byte, error) {
+			if rest == "" {
+				return 0, io.EOF
+			}
+			c := rest[0]
+			rest = rest[1:]
+			return c, nil
+		}, io.Discard)
+		if !errors.Is(err, errPassphraseCancelled) {
+			t.Errorf("%q: %v", keys, err)
+		}
+		clean(fmt.Sprintf("%q", keys))
+	}
+}
+
+var errFailingReader = errors.New("the reader fails")
+
+// failingReader gives its bytes one at a time, then fails.
+type failingReader struct{ s string }
+
+func (f *failingReader) Write(b []byte) (int, error) { return len(b), nil }
+
+func (f *failingReader) Read(b []byte) (int, error) {
+	if f.s == "" {
+		return 0, errFailingReader
+	}
+	b[0], f.s = f.s[0], f.s[1:]
+	return 1, nil
+}
+
+// A buffer that cannot be locked is said once, and the prompt stays (no enforced mode).
+func TestPassphraseBufferUnlockedGoesOn(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root locks past any limit")
+	}
+	var limit unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_MEMLOCK, &limit); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &unix.Rlimit{Cur: 0, Max: limit.Max}); err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Setrlimit(unix.RLIMIT_MEMLOCK, &limit)
+	var said bytes.Buffer
+	out := journal.NarrateOut
+	journal.NarrateOut = &said
+	defer func() { journal.NarrateOut = out }()
+	bufferLockSaid.Store(false)
+	for range 2 {
+		if pw := passphraseBuffer(); cap(pw) != MaxPassphrase || len(pw) != 0 {
+			t.Errorf("len %d cap %d", len(pw), cap(pw))
+		}
+	}
+	if n := strings.Count(said.String(), "is not locked in memory"); n != 1 {
+		t.Errorf("said %d times: %q", n, said.String())
+	}
 }

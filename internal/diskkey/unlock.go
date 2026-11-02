@@ -449,7 +449,9 @@ func restoreTerminal() {
 }
 
 // ReadPassphrase reads one line with echo off from a terminal (fd), or a
-// plain line from anything else (tests, a pipe, a socket: fd < 0).
+// plain line from anything else (tests, a pipe, a socket: fd < 0). Both in one
+// buffer, and what was read is wiped on every way out but the answer, which the
+// caller wipes.
 func ReadPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 	var old *unix.Termios
 	if fd >= 0 {
@@ -457,19 +459,24 @@ func ReadPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 			old = t
 		}
 	}
+	one := make([]byte, 1)
+	defer wipe.Bytes(one)
 	if old == nil {
 		// Not a terminal: one line, without its end, read a byte at a
 		// time so that nothing past the line is taken from the input -
 		// the next prompt reads the same pipe.
-		var line []byte
-		buf := make([]byte, 1)
+		line := passphraseBuffer()
 		for {
-			n, err := f.Read(buf)
+			n, err := f.Read(one)
 			if n == 1 {
-				if buf[0] == '\n' {
+				if one[0] == '\n' {
 					break
 				}
-				line = append(line, buf[0])
+				if len(line) == MaxPassphrase {
+					wipe.Bytes(line)
+					return nil, errPassphraseTooLong
+				}
+				line = append(line, one[0])
 				continue
 			}
 			if err != nil {
@@ -495,7 +502,6 @@ func ReadPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 	rawTerminal.fd, rawTerminal.old = fd, old
 	rawTerminal.Unlock()
 	defer restoreTerminal()
-	one := make([]byte, 1)
 	return ReadRawPassphrase(func() (byte, error) {
 		n, err := f.Read(one)
 		if err == nil && n == 0 {
@@ -509,12 +515,7 @@ func ReadPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 // echo or line discipline - the console, or an SSH session (internal/sshscreen/server.go)
 // - and echoes a '*' per key to echo.
 func ReadRawPassphrase(next func() (byte, error), echo io.Writer) ([]byte, error) {
-	// One buffer of the final size, so the passphrase is in one place
-	// only: no growing slice leaves earlier copies behind for the garbage
-	// collector to find. Locked in memory, as libcryptsetup locks its key
-	// buffers; a page that the initrd could not swap out anyway.
-	pw := make([]byte, 0, MaxPassphrase)
-	unix.Mlock(pw[:MaxPassphrase])
+	pw := passphraseBuffer()
 	for {
 		c, err := next()
 		if err != nil {
@@ -549,6 +550,25 @@ func ReadRawPassphrase(next func() (byte, error), echo io.Writer) ([]byte, error
 
 // MaxPassphrase is cryptsetup's own limit for a typed passphrase.
 const MaxPassphrase = 512
+
+var errPassphraseTooLong = fmt.Errorf("a passphrase of more than %d bytes", MaxPassphrase)
+
+// passphraseBuffer is what a passphrase is read into: one buffer of the final
+// size, so that it is in one place only and no growing slice leaves earlier copies
+// behind for the garbage collector to find. Locked in memory, as libcryptsetup
+// locks its key buffers. A var for the tests.
+//
+// A lock that fails is said, once, and the prompt stays: at boot nothing withholds
+// a prompt, and a command on the installed system has locked its whole memory first.
+var passphraseBuffer = func() []byte {
+	pw := make([]byte, 0, MaxPassphrase)
+	if err := unix.Mlock(pw[:MaxPassphrase]); err != nil && !bufferLockSaid.Swap(true) {
+		journal.NarrateAt(journal.PrioWarning, "tpm2-kira: the passphrase's buffer is not locked in memory: %v", err)
+	}
+	return pw
+}
+
+var bufferLockSaid atomic.Bool
 
 // UnlockLogger writes to stderr, with the time: the journal or the
 // initramfs log (Debian) is read after the boot.
