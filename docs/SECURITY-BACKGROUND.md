@@ -1816,7 +1816,7 @@ Logs: `.local/runs/` of the workspace.
 | tpm2-kira-vault's tests | dcf9bda, at the pin c81ea61 | its suite, with and without go.work | all pass |
 | safearch `tests/run.sh` | f9c8745 | stubs | 335 passed, 0 failed, 1 skipped (`l/final/safearch-run.log`) |
 | Marify `android/scripts/test-emulator.sh` | f8d4e61, core c81ea61 | JVM, emulator, swtpm | 59, 46, 8 passed, 0 failed, ALL PASS (`k/marify-emulator.out`; an 8 GiB data partition, `/` had 11 GB free) |
-| safearch `tests/vm.sh` | f9c8745, aSSH 8c18175 | VM (a fresh build, swtpm) | ? passed, 0 failed (`l/final/safearch-vm.log`, `mkosi.test/vm/run-20261102-171448`) |
+| safearch `tests/vm.sh` | f9c8745, aSSH 8c18175 | VM (a fresh build, swtpm) | 48 checks passed, 0 failed (96 PASS lines in the log, each written twice; `l/final/safearch-vm.log`, `mkosi.test/vm/run-20261102-171448`) |
 
 ### 17.2 On the VMs
 
