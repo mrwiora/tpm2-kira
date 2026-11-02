@@ -572,6 +572,34 @@ class Machine:
     def check(self, name, ok, detail=""):
         return self.rep.check(name, ok, detail if not ok else "")
 
+    def secure_boot_warning(self):
+        """What a command must say of this machine's Secure Boot state, from its
+        variables; None when it must say nothing (the fresh VMs are in Setup Mode)."""
+        if not hasattr(self, "_secure_boot"):
+            read = lambda name: self.run(f"od -An -tx1 /sys/firmware/efi/efivars/{name}-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>&1 | awk '{{print $NF}}'")[1].strip()
+            secure, setup = read("SecureBoot"), read("SetupMode")
+            self._secure_boot = ("WARNING: Secure Boot is in Setup Mode" if setup == "01" else
+                                 "WARNING: Secure Boot is off" if secure == "00" else
+                                 None if secure == "01" and setup == "00" else "WARNING: Secure Boot's state could not be read")
+        return self._secure_boot
+
+    def check_secure_boot(self, where, out, least=1, most=1):
+        """where says the state, plainly, between least and most times."""
+        want = self.secure_boot_warning()
+        n = out.count("WARNING: Secure Boot")
+        if want is None:
+            return self.check(f"{where}: says nothing of Secure Boot, which is on", n == 0, out[-400:])
+        return self.check(f"{where}: says {want!r}, {least} time(s)" + ("" if most == least else f" to {most}"), least <= n <= most and (least == 0 or want in out), f"{n} time(s): " + out[-400:])
+
+    def check_control_secure_boot(self, where, text, wants):
+        """control judges Secure Boot's state on its own line, in red."""
+        state = self.secure_boot_warning()
+        if state is None:
+            return
+        flat = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;]*m", "", text))
+        want = next(v for k, v in wants.items() if k in state)
+        self.check(f"{where} judges Secure Boot's state: {want!r}", want in flat and "\x1b[0;31m" in text, flat[-800:])
+
     def session(self, remote_cmd, name):
         self.sessions += 1
         argv = ["ssh", "-tt", "-p", str(self.ssh_port), "-o", "StrictHostKeyChecking=accept-new", "-o", "PubkeyAuthentication=no",
@@ -711,6 +739,7 @@ class Machine:
         rc, out = self.run("tpm2-kira setup --local 2>&1", save="setup.log")
         self.check("setup --local makes the signing key", "Setup Complete" in out, out[-400:])
         rc, out = self.run("tpm2-kira slot add --totp 2>&1", save="slot-add.log")
+        self.check_secure_boot("slot add, two slots", out)
         self.secrets = re.findall(r"^Secret: ([A-Z2-7]+)", out, re.M)
         if not self.check("slot add seals slots %s, each with its secret" % " and ".join(map(str, self.slots)), len(self.secrets) == len(self.slots), out[-600:]):
             raise Fail("no slots")
@@ -753,6 +782,10 @@ class Machine:
         for name, (cmd, want) in cmds.items():
             rc, out = self.run(cmd, save="cmd-" + name.split(" (")[0].replace(" ", "-") + ".log")
             self.check(f"'{name}' answers", re.search(want, out) is not None, out[-400:])
+        rc, out = self.run("tpm2-kira status 2>&1")
+        self.check_secure_boot("status", out)
+        rc, out = self.run("tpm2-kira status --json 2>&1")
+        self.check("status --json carries Secure Boot's warning", (self.secure_boot_warning() or "secure_boot_warning") in out if self.secure_boot_warning() else "secure_boot_warning" not in out, out[-300:])
 
     def enrol(self):
         self.head(f"luks enrol {self.luks_dev} --salt typed")
@@ -782,8 +815,12 @@ class Machine:
         menu = r"Enter a number between 1 and \d+: ?$"
         try:
             # Step 1: every open adoption, written when asked; then on.
+            first = True
             for _ in range(10):
                 text, _ = s.expect(menu, 120)
+                if first:
+                    first = False
+                    self.check_control_secure_boot("control step 1", text, {"Setup Mode": "Setup Mode (risk: nothing checks the boot chain", "off": "disabled (risk: nothing checks", "could": "state unknown,"})
                 opts = menu_options(text)
                 pick = next((o for o in opts if o[1].startswith("•") and "adoption" in o[1]), None)
                 if pick:
@@ -873,7 +910,11 @@ class Machine:
         """A boot unlocked over SSH, with its checks; started: the machine was
         started from a saved setup, nothing to reboot."""
         self.head(f"reboot {n}: the code screen over SSH, unlocked there")
+        lv = getattr(self, "lv", None)
+        console_from = lv.mark if lv else None
         if not started:
+            if lv:
+                console_from = os.path.getsize(lv.path("serial.log"))
             self.run("systemctl reboot")
             self.wait_port(22, False, 120)
             self.lap("the system going down")
@@ -890,6 +931,9 @@ class Machine:
             for slot in self.slots:
                 self.check(f"boot {n}: slot {slot}'s code is the authenticator's", str(slot) in codes and code_matches(self.secrets[slot], codes[str(slot)], at), text[-500:])
             self.check(f"boot {n}: the screen names tpm2-kira's password and salt prompt", "continue to the password and salt prompt" in text, text[-300:])
+            self.check_secure_boot(f"boot {n}: the SSH session, at its start", text)
+            if lv:
+                self.check_secure_boot(f"boot {n}: the console", lv.serial_text(console_from))
             s.send("\r")
             s.expect(r"Password for disk \S+: ?$", 120); s.send(TEST_PASSWORD + "\r")
             s.expect(r"Salt for disk \S+: ?$", 60); s.send(TEST_SALT + "\r")
@@ -926,6 +970,7 @@ class Machine:
                "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service -u tpm2-kira-machine-id.service")
         rc, out = self.run(log + " 2>&1", save=f"boot{n}-tpm2-kira.log")
         self.check(f"boot {n}: run closed the boot when the code screen was over", "the boot is closed (PCR 15)" in out, out[-500:])
+        self.check_secure_boot(f"boot {n}: the boot's log", out)
         self.check(f"boot {n}: the key was answered", re.search(r"unlock: answered for", out) is not None, out[-500:])
         self.check(f"boot {n}: the machine-id was released before the network (slot 0's policy held)",
                    "the machine-id is released" in out, out[-500:])
@@ -1260,6 +1305,10 @@ class Machine:
         self.check("status: slot 0 holds a TPM salt", '"tpm_salt": true' in out, out[-400:])
         out = self.rebuild()
         self.check("the image is rebuilt with the TPM salt in its plan", re.search(r"TPM salt:\s+in", out) is not None, out[-800:])
+        # The image's hook says it, once per image built; its approval does not again.
+        images = out.count("Starting build:") if self.distro == "arch" else 1
+        n = len(re.findall(r"Secure Boot (is|'s state)", out))
+        self.check(f"the image's hook says Secure Boot's state once per image built ({images})", n == images if self.secure_boot_warning() else n == 0, out[-800:])
 
         self.head("a boot with the salt in this TPM")
         s, _ = self.typed_boot("TPM salt", "this TPM opened")
@@ -1355,14 +1404,109 @@ class Machine:
         self.head("a slot's life")
         rc, out = self.run(f"tpm2-kira slot approve --nvram {self.slots[-1]} 2>&1", save="slot-approve.log")
         self.check("slot approve raises the generation", "Successfully approved the boot state" in out, out[-400:])
+        self.check_secure_boot("slot approve", out)
+        rc, out = self.run("tpm2-kira slot approve 2>&1", save="slot-approve-all.log")
+        self.check_secure_boot("slot approve of every slot", out)
         pcrs = "0,7,8,9" if self.distro == "debian" else "0,7"
         rc, out = self.run(f"tpm2-kira slot add --totp --nvram 2 --pcrs {pcrs} 2>&1 | grep -v '^Secret'", save="slot-add-2.log")
         rc, info = self.run("tpm2-kira slot info --nvram 2 2>&1")
         self.check("slot add --nvram 2: its record is KIRAslot2", "EFI variable: KIRAslot2-" in info, info[-300:])
+        self.moved_channel(2)
         rc, out = self.run("tpm2-kira slot delete --nvram 2 2>&1", save="slot-delete.log")
         self.check("slot delete --nvram 2", "Successfully deleted" in out, out[-400:])
         rc, out = self.run("tpm2-kira slot list 2>&1", save="slot-list-after-delete.log")
         self.check("slot 2 is gone whole (its blob and its generation index)", "0x01803012" not in out and "0x01803812" not in out, out[-500:])
+
+    def moved_channel(self, slot):
+        """A slot whose phone channel is sealed to another PCR 7 than the next boot's
+        (the fixture: no VM has a phone): the real hook scripts and a run with no
+        terminal approve the slot and leave the channel, and say so with old, new and
+        the real event log's events; no at a terminal leaves it; yes and control seal
+        it. A gate is not started here: no radio; that it refuses is swtpm's test."""
+        self.head("a moved PCR 7: the phone channel follows a person alone")
+        remote = "/tmp/channel-fixture"
+        self.t.copy_to(self.channel_fixture, remote)
+        self.run(f"chmod 755 {remote}")
+
+        def moved():
+            rc, out = self.run("tpm2-kira status --json 2>&1", save=f"status-channel-{self.sessions}.json")
+            try:
+                s = next(x for x in json.loads(out)["slots"] if x["slot_number"] == slot)
+            except (ValueError, StopIteration, KeyError):
+                raise Fail("status does not read:\n" + out[-500:])
+            return bool(s.get("channel_moved"))
+
+        def fixture():
+            rc, out = self.run(f"FIXTURE_SLOT={slot} {remote} -test.run '^TestVMChannelFixture$' 2>&1", save="channel-fixture.log")
+            if rc != 0 or not moved():
+                raise Fail("the fixture makes no moved channel:\n" + out[-800:])
+
+        left = f"WARNING: slot {slot}'s phone channel was left sealed to the old PCR 7"
+        hooks = ["/usr/lib/initcpio/post/sd-tpm2-kira"] if self.distro == "arch" else ["/etc/initramfs/post-update.d/tpm2-kira", "/etc/kernel/postinst.d/zzz-tpm2-kira"]
+        fixture()
+        for hook in hooks:
+            name = os.path.basename(hook)
+            rc, out = self.run(f"{hook} 0.0 /boot/nothing 2>&1", save=f"channel-hook-{name}.log")
+            self.check(f"{name}: the hook's approval says it left the channel, with the command", left in out and f"sudo tpm2-kira slot approve --nvram {slot}" in out, out[-800:])
+            self.check(f"{name}: old and new PCR 7, and what the event log names", re.search(r"PCR 7 sealed: +[0-9a-f]{64}", out) is not None and re.search(r"PCR 7 next boot: +[0-9a-f]{64}", out) is not None and re.search(r"SecureBoot: (on|off)", out) is not None, out[-800:])
+            self.check(f"{name}: the channel stays moved", moved())
+        rc, out = self.run("tpm2-kira status 2>&1", save="status-channel.log")
+        self.check("status: the moved channel is a warning, with the command", f"WARNING: slot {slot}'s phone channel is sealed to another PCR 7" in out and f"slot approve --nvram {slot}" in out, out[-800:])
+        rc, out = self.run("tpm2-kira slot approve --if-moved 2>&1", save="channel-if-moved.log")
+        self.check("--if-moved never seals it", moved() and "is sealed again" not in out, out[-500:])
+        rc, out = self.run(f"tpm2-kira slot approve --nvram {slot} </dev/null 2>&1", save="channel-no-terminal.log")
+        self.check("no terminal, no flag: the slot approved, the channel left, and said", moved() and left in out and "Successfully approved the boot state" in out, out[-800:])
+
+        answers = {"n": True, "y": False}
+        for answer, stays in answers.items():
+            s = self.session(f"sudo tpm2-kira slot approve --nvram {slot}", f"channel-person-{answer}")
+            try:
+                text, _ = s.expect(r"Seal slot \d+'s phone channel to the next boot's PCR 7\? \[y/N\] ?$", 120)
+                self.check(f"at a terminal: old, new and what moved it, before the question ({answer})",
+                           re.search(r"PCR 7 sealed: +[0-9a-f]{64}", text) is not None and re.search(r"PCR 7 next boot: +[0-9a-f]{64}", text) is not None and re.search(r"SecureBoot: (on|off)", text) is not None, text[-800:])
+                s.send(answer + "\n")
+                out = s.wait_end(120)
+            finally:
+                s.close()
+            self.check(f"at a terminal, {answer}: " + ("left, and said" if stays else "sealed"), moved() == stays and ((left in out) if stays else ("is sealed again" in out)), out[-500:])
+
+        fixture()
+        s = self.session("sudo ACCESSIBLE=1 tpm2-kira control", "control-channel")
+        menu = r"Enter a number between 1 and \d+: ?$"
+
+        def pick(rx, timeout=120):
+            for _ in range(4):
+                text, _ = s.expect(menu, timeout)
+                opts = menu_options(text)
+                o = next((o for o in opts if re.search(rx, o[1])), None)
+                if o:
+                    s.send(o[0] + "\n")
+                    return text
+                nxt = next((o for o in opts if "Continue to step 2" in o[1]), None)
+                if not nxt:
+                    raise Fail(f"no option /{rx}/ in:\n" + text[-1200:])
+                s.send(nxt[0] + "\n")
+            raise Fail(f"no option /{rx}/")
+
+        try:
+            text = pick(r"Signing key and TOTP codes")
+            self.check("control: step 2 shows the moved channel", "phone channel" in text, text[-1200:])
+            self.check_control_secure_boot("control step 2", text, {"Setup Mode": "Setup Mode (risk: any root user", "off": "disabled (risk: the boot loader", "could": "state unknown,"})
+            text = pick(r"Slot \d+'s phone channel")
+            text, _ = s.expect(r"Seal slot \d+'s phone channel to the next boot's PCR 7\?.*\[y/N\] ?$", 60)
+            self.check("control: old, new and what moved it, before the question", re.search(r"PCR 7 sealed: +[0-9a-f]{64}", text) is not None and re.search(r"SecureBoot: (on|off)", text) is not None, text[-1200:])
+            s.send("y\n")
+            pick(r"Back to step 2")
+            pick(r"^\s*Quit$")
+            for _ in range(4):
+                text, m = s.expect(r"(\[(y/N|Y/n)\] ?$|Connection to \S+ closed)", 120)
+                if m.group(1).startswith("Connection"):
+                    break
+                s.send("n\n")
+        finally:
+            s.close()
+        self.check("control: picking the line seals it", not moved())
+        self.run(f"rm -f {remote}")
 
     def removal(self):
         """What tpm2-kira keeps outside the disk goes when asked, and only
@@ -1500,6 +1644,17 @@ class Machine:
         return not failed, text
 
 
+def build_channel_fixture(run_dir):
+    """A test binary the machines run: internal/admin's TestVMChannelFixture, which
+    gives a slot a phone channel sealed to another PCR 7 (no VM has a phone)."""
+    path = os.path.join(run_dir, "channel-fixture")
+    env = dict(os.environ, CGO_ENABLED="0", GOWORK="off")
+    p = subprocess.run(["go", "test", "-c", "-tags", "kira_vm_fixture", "-o", path, "./internal/admin"], cwd=REPO, env=env, capture_output=True, text=True)
+    if p.returncode != 0:
+        raise Fail("the channel fixture does not build:\n" + p.stdout + p.stderr)
+    return path
+
+
 def head_packages(directory, fast_kdf=False):
     """The packages of HEAD in directory: the Arch package names the commit
     as .g<short>-, the Debian one as +<n>.g<short>_; a test build's has
@@ -1607,6 +1762,11 @@ def main():
         except Fail as e:
             print("the vault does not start:", e, file=sys.stderr)
             return 1
+    if not args.save_setup:
+        timing.step("the channel fixture")
+        fixture = build_channel_fixture(run_dir)
+        for m in machines:
+            m.channel_fixture = fixture
     timing.finish()
     results = {}
     print(f"tpm2-kira {short}: " + ", ".join(f"{m.name} {os.path.basename(packages[m.name] or 'the saved setup')}" + (" (reset)" if m.name in resets else "") for m in machines), flush=True)
