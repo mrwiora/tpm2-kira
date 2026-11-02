@@ -147,21 +147,26 @@ func UnwrapFactor(tpmDev transport.TPM, sealed *nvslot.SealedBlob, blobIndex uin
 		_, err := tpm2.PolicyCommandCode{PolicySession: handle, Code: tpm2.TPMCCActivateCredential}.Execute(tpm)
 		return err
 	})
+	if errors.Is(err, nvslot.ErrPolicyRefused) {
+		return nil, fmt.Errorf("%w: %v", ErrFactorRefused, err)
+	}
 	if err != nil {
 		return nil, err
 	}
 	defer done()
+	ekSession, ekDone, err := EndorsementSession(tpmDev)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrFactorRefused, err)
+	}
+	defer ekDone()
 
 	rsp, err := tpm2.ActivateCredential{
 		ActivateHandle: tpm2.AuthHandle{Handle: rk.Handle, Name: rk.Name, Auth: session},
-		KeyHandle:      tpm2.AuthHandle{Handle: ek.Handle, Name: ek.Name, Auth: EndorsementPolicy()},
+		KeyHandle:      tpm2.AuthHandle{Handle: ek.Handle, Name: ek.Name, Auth: ekSession},
 		CredentialBlob: tpm2.TPM2BIDObject{Buffer: w.Credential},
 		Secret:         tpm2.TPM2BEncryptedSecret{Buffer: w.EncryptedSecret},
 	}.Execute(tpmDev)
 	if err != nil {
-		if errors.Is(err, nvslot.ErrClosed) {
-			return nil, err
-		}
 		return nil, fmt.Errorf("%w: %v", ErrFactorRefused, err)
 	}
 	if len(rsp.CertInfo.Buffer) != FactorSize {

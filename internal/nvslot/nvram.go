@@ -206,31 +206,32 @@ func policySignedNVWrite(tpmDev transport.TPM, nvIndex tpm2.TPMHandle, offset ui
 		return fmt.Errorf("failed to read NV public: %w", err)
 	}
 
-	// The callback runs when the session is first used: it signs the
-	// TPM-provided nonce to prove possession of the private key.
-	policySession := tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm transport.TPM, handle tpm2.TPMISHPolicy, nonceTPM tpm2.TPM2BNonce) error {
-		// aHash = SHA-256(nonceTPM || expiration(0)); cpHashA and
-		// policyRef are empty.
-		aHash := sha256.Sum256(append(append([]byte(nil), nonceTPM.Buffer...), 0, 0, 0, 0))
-		tpmSig, signErr := signing.SignForTPM(privKey, aHash[:])
-		if signErr != nil {
-			return fmt.Errorf("failed to sign NV write policy nonce: %w", signErr)
-		}
-		// The TPM verifies the signature against the loaded public key.
-		if _, err := (tpm2.PolicySigned{
-			AuthObject:    tpm2.NamedHandle{Handle: keyHandle, Name: keyName},
-			PolicySession: handle,
-			NonceTPM:      nonceTPM,
-			Expiration:    0,
-			Auth:          tpmSig,
-		}).Execute(tpm); err != nil {
-			return fmt.Errorf("failed to execute PolicySigned for NV write: %w", err)
-		}
-		return nil
-	})
+	session, flush, err := tpm2.PolicySession(tpmDev, tpm2.TPMAlgSHA256, 16)
+	if err != nil {
+		return fmt.Errorf("a policy session for the NV write: %w", err)
+	}
+	defer flush()
+	// aHash = SHA-256(nonceTPM || expiration(0)); cpHashA and policyRef are
+	// empty. Signing the TPM's nonce proves possession of the private key; the
+	// TPM verifies the signature against the loaded public key.
+	nonceTPM := session.NonceTPM()
+	aHash := sha256.Sum256(append(append([]byte(nil), nonceTPM.Buffer...), 0, 0, 0, 0))
+	tpmSig, err := signing.SignForTPM(privKey, aHash[:])
+	if err != nil {
+		return fmt.Errorf("failed to sign NV write policy nonce: %w", err)
+	}
+	if _, err := (tpm2.PolicySigned{
+		AuthObject:    tpm2.NamedHandle{Handle: keyHandle, Name: keyName},
+		PolicySession: session.Handle(),
+		NonceTPM:      nonceTPM,
+		Expiration:    0,
+		Auth:          tpmSig,
+	}).Execute(tpmDev); err != nil {
+		return fmt.Errorf("failed to execute PolicySigned for NV write: %w", err)
+	}
 
 	_, err = tpm2.NVWrite{
-		AuthHandle: tpm2.AuthHandle{Handle: nvIndex, Name: nvReadPubRsp.NVName, Auth: policySession},
+		AuthHandle: tpm2.AuthHandle{Handle: nvIndex, Name: nvReadPubRsp.NVName, Auth: session},
 		NVIndex:    tpm2.NamedHandle{Handle: nvIndex, Name: nvReadPubRsp.NVName},
 		Data:       tpm2.TPM2BMaxNVBuffer{Buffer: chunk},
 		Offset:     offset,

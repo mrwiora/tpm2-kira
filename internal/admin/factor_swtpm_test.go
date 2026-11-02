@@ -135,12 +135,17 @@ func TestFactorOpensOnlyInTheApprovedBootState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ekSession, ekDone, err := phonegate.EndorsementSession(tpm)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = tpm2.ActivateCredential{
 		ActivateHandle: tpm2.AuthHandle{Handle: rk.Handle, Name: rk.Name, Auth: session},
-		KeyHandle:      tpm2.AuthHandle{Handle: ek.Handle, Name: ek.Name, Auth: phonegate.EndorsementPolicy()},
+		KeyHandle:      tpm2.AuthHandle{Handle: ek.Handle, Name: ek.Name, Auth: ekSession},
 		CredentialBlob: tpm2.TPM2BIDObject{Buffer: w.Credential},
 		Secret:         tpm2.TPM2BEncryptedSecret{Buffer: w.EncryptedSecret},
 	}.Execute(tpm)
+	ekDone()
 	done()
 	tpmdev.FlushHandle(tpm, rk.Handle)
 	tpmdev.FlushHandle(tpm, ek.Handle)

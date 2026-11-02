@@ -252,18 +252,26 @@ func ReadEKCert(tpmDev transport.TPM, alg uint16) []byte {
 	return data
 }
 
-// EndorsementPolicy satisfies the TCG EK's authPolicy:
+// EndorsementSession returns a session that satisfies the TCG EK's authPolicy:
 // TPM2_PolicySecret(TPM_RH_ENDORSEMENT) with an empty endorsement auth.
 // Using the EK with a plain password session fails with TPM_RC_AUTH_UNAVAILABLE.
-func EndorsementPolicy() tpm2.Session {
-	return tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm transport.TPM, handle tpm2.TPMISHPolicy, nonce tpm2.TPM2BNonce) error {
-		_, err := tpm2.PolicySecret{
-			AuthHandle:    tpm2.AuthHandle{Handle: tpm2.TPMRHEndorsement, Auth: tpm2.PasswordAuth(nil)},
-			PolicySession: handle,
-			NonceTPM:      nonce,
-		}.Execute(tpm)
-		return err
-	})
+// It serves one command; the caller calls done after it. On an error no session
+// is left in the TPM.
+func EndorsementSession(tpmDev transport.TPM) (tpm2.Session, func(), error) {
+	session, flush, err := tpm2.PolicySession(tpmDev, tpm2.TPMAlgSHA256, 16)
+	if err != nil {
+		return nil, nil, fmt.Errorf("a policy session for the EK: %w", err)
+	}
+	done := func() { _ = flush() }
+	if _, err := (tpm2.PolicySecret{
+		AuthHandle:    tpm2.AuthHandle{Handle: tpm2.TPMRHEndorsement, Auth: tpm2.PasswordAuth(nil)},
+		PolicySession: session.Handle(),
+		NonceTPM:      session.NonceTPM(),
+	}).Execute(tpmDev); err != nil {
+		done()
+		return nil, nil, fmt.Errorf("the endorsement hierarchy's policy: %w", err)
+	}
+	return session, done, nil
 }
 
 // ReadPCRBank reads PCRs in chunks of at most 8 (the most a TPM returns per
@@ -453,9 +461,14 @@ func (b *TPMBackend) ActivateCredential(blob, encSecret []byte) ([]byte, error) 
 		return nil, err
 	}
 	defer tpmdev.FlushHandle(b.TPM, ek.Handle)
+	session, done, err := EndorsementSession(b.TPM)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
 	rsp, err := tpm2.ActivateCredential{
 		ActivateHandle: tpm2.AuthHandle{Handle: ak.Handle, Name: ak.Name, Auth: tpm2.PasswordAuth(nil)},
-		KeyHandle:      tpm2.AuthHandle{Handle: ek.Handle, Name: ek.Name, Auth: EndorsementPolicy()},
+		KeyHandle:      tpm2.AuthHandle{Handle: ek.Handle, Name: ek.Name, Auth: session},
 		CredentialBlob: tpm2.TPM2BIDObject{Buffer: blob},
 		Secret:         tpm2.TPM2BEncryptedSecret{Buffer: encSecret},
 	}.Execute(b.TPM)

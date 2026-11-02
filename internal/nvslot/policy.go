@@ -309,12 +309,20 @@ func SignApproval(signer crypto.Signer, approvedPolicy, policyRef []byte) ([]byt
 
 // ── computing a code ────────────────────────────────────────────────────────
 
+// ErrPolicyRefused marks a slot's policy the TPM did not take in this boot: the
+// PCRs or the generation are not what the signing key approved.
+var ErrPolicyRefused = errors.New("the TPM did not take the slot's policy")
+
 // ApprovedSession returns a policy session that satisfies the slot's policy
 // if the PCRs and the generation are what the signing key approved and the
 // boot is not closed (PCR 15 zero): the one authorization for everything
-// bound to the slot (the TOTP key, the machine-id, the boot key). The
-// session runs its policy when a command uses it. The caller calls done
-// once that command has been executed. ErrClosed after the close.
+// bound to the slot (the TOTP key, the machine-id, the boot key). The policy
+// has run when it returns, and nothing of it stays loaded but the session: the
+// caller makes it its last step before the command (a PCR extended in between
+// ends the session's use), uses it for that one command (the TPM resets a used
+// policy session) and calls done after it. ErrClosed after the close,
+// ErrPolicyRefused when the TPM does not take the policy; on any error no
+// session is left in the TPM.
 func ApprovedSession(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint32) (tpm2.Session, func(), error) {
 	return ApprovedSessionThen(tpmDev, blob, blobIndex, nil)
 }
@@ -358,91 +366,103 @@ func ApprovedSessionThen(tpmDev transport.TPM, blob *SealedBlob, blobIndex uint3
 	}
 
 	// The ticket must come from a key in a real hierarchy: PolicyAuthorize
-	// refuses the NULL ticket a NULL-hierarchy key produces.
+	// refuses the NULL ticket a NULL-hierarchy key produces. The key is needed
+	// for the policy alone, and goes with it.
 	signKey, err := tpm2.LoadExternal{InPublic: tpm2.New2B(*signingPublic), Hierarchy: tpm2.TPMRHOwner}.Execute(tpmDev)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load the signing public key: %w", err)
 	}
-	done := func() { tpmdev.FlushHandle(tpmDev, signKey.ObjectHandle) }
+	defer tpmdev.FlushHandle(tpmDev, signKey.ObjectHandle)
 
-	session := tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm transport.TPM, handle tpm2.TPMISHPolicy, _ tpm2.TPM2BNonce) error {
-		if signed != nil {
-			// The signed PCRs first: PolicyAuthorize by the PCR key resets
-			// the session's digest to its Name.
-			if _, err := (tpm2.PolicyPCR{
-				PolicySession: handle,
-				Pcrs:          measure.CreatePCRSelection(blob.SignedPCRIndices(), hashAlgo),
-			}).Execute(tpm); err != nil {
-				return fmt.Errorf("PolicyPCR(%v): %w", blob.SignedPCRIndices(), err)
-			}
-			if _, err := (tpm2.PolicyAuthorize{
-				PolicySession:  handle,
-				ApprovedPolicy: tpm2.TPM2BDigest{Buffer: signed.policy},
-				KeySign:        signed.name,
-				CheckTicket:    signed.ticket,
-			}).Execute(tpm); err != nil {
-				return fmt.Errorf("PolicyAuthorize(PCR key): %w", err)
-			}
-		}
+	session, flush, err := tpm2.PolicySession(tpmDev, tpm2.TPMAlgSHA256, 16)
+	if err != nil {
+		return nil, nil, fmt.Errorf("a policy session for the slot: %w", err)
+	}
+	done := func() { _ = flush() }
+	handle := session.Handle()
+
+	refuse := func(err error) (tpm2.Session, func(), error) {
+		done()
+		return nil, nil, fmt.Errorf("%w: %w", ErrPolicyRefused, err)
+	}
+	if signed != nil {
+		// The signed PCRs first: PolicyAuthorize by the PCR key resets
+		// the session's digest to its Name.
 		if _, err := (tpm2.PolicyPCR{
 			PolicySession: handle,
-			Pcrs: tpm2.TPMLPCRSelection{PCRSelections: []tpm2.TPMSPCRSelection{{
-				Hash:      hashAlgo.TPMAlg(),
-				PCRSelect: measure.PcrsToBitmapBytes(blob.PlainPCRIndices()),
-			}}},
-		}).Execute(tpm); err != nil {
-			return fmt.Errorf("PolicyPCR: %w", err)
-		}
-		if _, err := (tpm2.PolicyNV{
-			AuthHandle:    tpm2.AuthHandle{Handle: tpm2.TPMHandle(genIndex), Name: genPub.NVName, Auth: tpm2.PasswordAuth(nil)},
-			NVIndex:       tpm2.NamedHandle{Handle: tpm2.TPMHandle(genIndex), Name: genPub.NVName},
-			PolicySession: handle,
-			OperandB:      tpm2.TPM2BOperand{Buffer: generationOperand(p.Generation)},
-			Offset:        0,
-			Operation:     tpm2.TPMEOEq,
-		}).Execute(tpm); err != nil {
-			return fmt.Errorf("PolicyNV: %w", err)
-		}
-		// The session digest is now the approved policy, if the PCRs and
-		// the generation match; the signature is checked against it.
-		pgd, err := tpm2.PolicyGetDigest{PolicySession: handle}.Execute(tpm)
-		if err != nil {
-			return fmt.Errorf("PolicyGetDigest: %w", err)
-		}
-		ticket, err := tpm2.VerifySignature{
-			KeyHandle: signKey.ObjectHandle,
-			Digest:    tpm2.TPM2BDigest{Buffer: approvalDigest(pgd.PolicyDigest.Buffer, p.PolicyRef)},
-			Signature: *approval,
-		}.Execute(tpm)
-		if err != nil {
-			return fmt.Errorf("the approval signature does not verify for the current PCR values and generation: %w", err)
+			Pcrs:          measure.CreatePCRSelection(blob.SignedPCRIndices(), hashAlgo),
+		}).Execute(tpmDev); err != nil {
+			return refuse(fmt.Errorf("PolicyPCR(%v): %w", blob.SignedPCRIndices(), err))
 		}
 		if _, err := (tpm2.PolicyAuthorize{
 			PolicySession:  handle,
-			ApprovedPolicy: pgd.PolicyDigest,
-			PolicyRef:      tpm2.TPM2BDigest{Buffer: p.PolicyRef},
-			KeySign:        signKey.Name,
-			CheckTicket:    ticket.Validation,
-		}).Execute(tpm); err != nil {
-			return fmt.Errorf("PolicyAuthorize: %w", err)
+			ApprovedPolicy: tpm2.TPM2BDigest{Buffer: signed.policy},
+			KeySign:        signed.name,
+			CheckTicket:    signed.ticket,
+		}).Execute(tpmDev); err != nil {
+			return refuse(fmt.Errorf("PolicyAuthorize(PCR key): %w", err))
 		}
-		// The object's own part of the slot's policy: PCR 15 still zero.
-		// With the digest given, the TPM compares at once: TPM_RC_VALUE
-		// once the boot is closed.
-		if _, err := (tpm2.PolicyPCR{
-			PolicySession: handle,
-			PcrDigest:     tpm2.TPM2BDigest{Buffer: openDigest},
-			Pcrs:          attest.ClosePCRSelection(hashAlgo.TPMAlg()),
-		}).Execute(tpm); err != nil {
-			if errors.Is(err, tpm2.TPMRCValue) {
-				return ErrClosed
-			}
-			return fmt.Errorf("PolicyPCR(%d): %w", attest.ClosePCR, err)
+	}
+	if _, err := (tpm2.PolicyPCR{
+		PolicySession: handle,
+		Pcrs: tpm2.TPMLPCRSelection{PCRSelections: []tpm2.TPMSPCRSelection{{
+			Hash:      hashAlgo.TPMAlg(),
+			PCRSelect: measure.PcrsToBitmapBytes(blob.PlainPCRIndices()),
+		}}},
+	}).Execute(tpmDev); err != nil {
+		return refuse(fmt.Errorf("PolicyPCR: %w", err))
+	}
+	if _, err := (tpm2.PolicyNV{
+		AuthHandle:    tpm2.AuthHandle{Handle: tpm2.TPMHandle(genIndex), Name: genPub.NVName, Auth: tpm2.PasswordAuth(nil)},
+		NVIndex:       tpm2.NamedHandle{Handle: tpm2.TPMHandle(genIndex), Name: genPub.NVName},
+		PolicySession: handle,
+		OperandB:      tpm2.TPM2BOperand{Buffer: generationOperand(p.Generation)},
+		Offset:        0,
+		Operation:     tpm2.TPMEOEq,
+	}).Execute(tpmDev); err != nil {
+		return refuse(fmt.Errorf("PolicyNV: %w", err))
+	}
+	// The session digest is now the approved policy, if the PCRs and
+	// the generation match; the signature is checked against it.
+	pgd, err := tpm2.PolicyGetDigest{PolicySession: handle}.Execute(tpmDev)
+	if err != nil {
+		return refuse(fmt.Errorf("PolicyGetDigest: %w", err))
+	}
+	ticket, err := tpm2.VerifySignature{
+		KeyHandle: signKey.ObjectHandle,
+		Digest:    tpm2.TPM2BDigest{Buffer: approvalDigest(pgd.PolicyDigest.Buffer, p.PolicyRef)},
+		Signature: *approval,
+	}.Execute(tpmDev)
+	if err != nil {
+		return refuse(fmt.Errorf("the approval signature does not verify for the current PCR values and generation: %w", err))
+	}
+	if _, err := (tpm2.PolicyAuthorize{
+		PolicySession:  handle,
+		ApprovedPolicy: pgd.PolicyDigest,
+		PolicyRef:      tpm2.TPM2BDigest{Buffer: p.PolicyRef},
+		KeySign:        signKey.Name,
+		CheckTicket:    ticket.Validation,
+	}).Execute(tpmDev); err != nil {
+		return refuse(fmt.Errorf("PolicyAuthorize: %w", err))
+	}
+	// The object's own part of the slot's policy: PCR 15 still zero.
+	// With the digest given, the TPM compares at once: TPM_RC_VALUE
+	// once the boot is closed.
+	if _, err := (tpm2.PolicyPCR{
+		PolicySession: handle,
+		PcrDigest:     tpm2.TPM2BDigest{Buffer: openDigest},
+		Pcrs:          attest.ClosePCRSelection(hashAlgo.TPMAlg()),
+	}).Execute(tpmDev); err != nil {
+		if errors.Is(err, tpm2.TPMRCValue) {
+			done()
+			return nil, nil, ErrClosed
 		}
-		if then != nil {
-			return then(tpm, handle)
+		return refuse(fmt.Errorf("PolicyPCR(%d): %w", attest.ClosePCR, err))
+	}
+	if then != nil {
+		if err := then(tpmDev, handle); err != nil {
+			return refuse(err)
 		}
-		return nil
-	})
+	}
 	return session, done, nil
 }

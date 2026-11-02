@@ -512,11 +512,6 @@ func Code(tpmDev transport.TPM, blob *nvslot.SealedBlob, blobIndex uint32, t tim
 	if p.TOTPAlgorithm != tpm2.TPMAlgSHA1 && p.TOTPAlgorithm != tpm2.TPMAlgSHA256 {
 		return "", fmt.Errorf("blob has unknown TOTP algorithm 0x%04x", uint16(p.TOTPAlgorithm))
 	}
-	session, done, err := nvslot.ApprovedSession(tpmDev, blob, blobIndex)
-	if err != nil {
-		return "", err
-	}
-	defer done()
 	primary, err := tpmdev.CreatePrimaryKey(tpmDev)
 	if err != nil {
 		return "", err
@@ -527,6 +522,11 @@ func Code(tpmDev transport.TPM, blob *nvslot.SealedBlob, blobIndex uint32, t tim
 		return "", err
 	}
 	defer tpmdev.FlushHandle(tpmDev, key.ObjectHandle)
+	session, done, err := nvslot.ApprovedSession(tpmDev, blob, blobIndex)
+	if err != nil {
+		return "", err
+	}
+	defer done()
 
 	counter := binary.BigEndian.AppendUint64(nil, uint64(t.Unix()/30))
 	rsp, err := tpm2.Hmac{
@@ -535,9 +535,6 @@ func Code(tpmDev transport.TPM, blob *nvslot.SealedBlob, blobIndex uint32, t tim
 		HashAlg: p.TOTPAlgorithm,
 	}.Execute(tpmDev)
 	if err != nil {
-		if errors.Is(err, nvslot.ErrClosed) {
-			return "", nvslot.ErrClosed
-		}
 		return "", fmt.Errorf("failed to compute the code in the TPM: %w", err)
 	}
 	return HOTPTruncate(rsp.OutHMAC.Buffer), nil
