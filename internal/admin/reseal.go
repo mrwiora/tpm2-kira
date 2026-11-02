@@ -24,6 +24,7 @@ import (
 // When nvramIndex is 0 it scans every default slot and reseals each one;
 // otherwise it reseals only the requested index.
 func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privKeyPath string, channel ChannelApproval, debug bool) error {
+	measure.WarnSecureBoot()
 	if nvramIndex != 0 {
 		// Single-slot mode – same behaviour as before
 		err := Reseal(tpmPath, pcrsStr, nvramIndex, pubKeyPath, privKeyPath, channel, debug)
@@ -64,6 +65,7 @@ func ResealCommand(tpmPath string, nvramIndex uint32, pcrsStr, pubKeyPath, privK
 // next boot. Nothing moved: nothing is written and no generation raised. It runs
 // unattended, so a moved phone channel is left (ChannelLeave).
 func ResealIfMoved(tpmPath, pubKeyPath, privKeyPath string, debug bool) error {
+	measure.WarnSecureBoot()
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)

@@ -199,6 +199,14 @@ func TestRemoteSSHConfirmsAndUnlocks(t *testing.T) {
 	if !strings.Contains(screen, "#0") || !strings.Contains(screen, "Does the code match your authenticator?") {
 		t.Fatalf("the session's screen:\n%s", screen)
 	}
+	// This test's EFI variables hold no Secure Boot state: said at the console and in
+	// the session, once each, and the boot goes on.
+	if strings.Count(screen, "WARNING: Secure Boot") != 1 {
+		t.Fatalf("the session's screen, Secure Boot:\n%s", screen)
+	}
+	if n := strings.Count(b.out.String(), "WARNING: Secure Boot"); n != 1 {
+		t.Fatalf("the console says Secure Boot %d times:\n%s", n, b.out.String())
+	}
 	if strings.Contains(b.out.String(), "Does the code match") {
 		t.Fatalf("the console shows the codes:\n%s", b.out.String())
 	}

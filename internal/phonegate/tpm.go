@@ -21,6 +21,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/core/attest"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/sbstate"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -389,7 +390,7 @@ func (b *TPMBackend) BootContext() attest.BootContext {
 			bc.InitrdPCRs = append(bc.InitrdPCRs, uint8(p))
 		}
 	}
-	sb := measure.ReadSecureBootState()
+	sb := sbstate.Read()
 	switch {
 	case !sb.Known:
 		bc.SecureBootState = attest.SecureBootUnknown

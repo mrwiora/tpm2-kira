@@ -336,7 +336,9 @@ SHA-1 bank in use, Secure Boot disabled or in Setup Mode, a slot sealed
 without the kernel measured, a TPM whose endorsement key no known vendor
 vouches for (a phone then trusts it on first use, as it would a software
 TPM), a loose file holding the PIN, an empty passphrase, a vault that
-does not answer. The header carries the version. Because the status
+does not answer. `tpm2-kira status`, `slot add`, `slot approve`, the image's hooks and,
+at boot, the code screen, every SSH session and the boot's log say the same of Secure
+Boot on their own (a `WARNING:` line, never a stop). The header carries the version. Because the status
 already says what is not good, the steps repeat none of the commands'
 advisory warnings. A slot whose deletion stopped halfway shows as dirty,
 marked `[!]` and recommended first, until a run removes the rest (see

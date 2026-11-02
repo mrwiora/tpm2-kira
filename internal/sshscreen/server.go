@@ -51,6 +51,8 @@ type Options struct {
 	// in, the host certificate's name.
 	Assh config.Config
 	Port int // the port it listens on, once started
+	// Notice is written to a session first, when it comes in (CRLF line ends).
+	Notice string
 }
 
 // RemoteOptionsFrom are run's SSH settings from the assh.conf at path.
@@ -192,6 +194,9 @@ func (r *Server) addSession(c net.Conn, who string) {
 	r.mu.Unlock()
 	r.log("ssh: a session is in: " + who)
 	r.signal(r.Changed)
+	if r.Opts.Notice != "" {
+		s.write([]byte(r.Opts.Notice))
+	}
 	if released {
 		s.write([]byte(fmt.Sprintf("%s The boot is released; the password is asked here when a disk asks for its key.\r\n", screen.Tag(screen.TagYellow))))
 	} else if len(last) > 0 {

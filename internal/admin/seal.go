@@ -103,6 +103,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 	if err := checkGRUBSelection(specs, GRUBBoot("")); err != nil {
 		return fmt.Errorf("cannot seal: %w", err)
 	}
+	measure.WarnSecureBoot()
 	// The fallback slot has no platform PCRs by design (default_pcrs.go).
 	if !(isFallbackSelection(specs) && nvramIndex == nvslot.ResolveNVRAMIndex(FallbackSlot)) {
 		measure.WarnAboutPCRSelection(specs)

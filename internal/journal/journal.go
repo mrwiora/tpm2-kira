@@ -28,8 +28,9 @@ var JournalSocket = "/run/systemd/journal/socket" // a var: tests point it elsew
 
 // Priorities, as syslog(3) and journald have them.
 const (
-	PrioInfo  = 6
-	PrioDebug = 7
+	PrioWarning = 4
+	PrioInfo    = 6
+	PrioDebug   = 7
 )
 
 var (
@@ -62,6 +63,10 @@ func journal() *net.UnixConn {
 	})
 	return JournalConn
 }
+
+// Separate says whether the narrative goes somewhere other than the console: the
+// journal or the log file.
+func Separate() bool { return journal() != nil || LogFile != nil }
 
 // Narrate writes one line of the narrative (priority info).
 func Narrate(format string, args ...any) {

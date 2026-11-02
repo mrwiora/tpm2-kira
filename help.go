@@ -345,6 +345,9 @@ leaves the channel: the phones find no machine, status and control are red with
 the command to run. It never follows PCR 7 without a person: the signing key
 of a hook would hand the secrets to whatever moved it.
 
+Any command here says when Secure Boot is off, in Setup Mode or not readable,
+once; it never stops for it.
+
   tpm2-kira slot approve
   tpm2-kira slot approve --nvram 0 --pcrs "0e,2,4u,7e"
   tpm2-kira slot approve --privkey /path/to/my-key.key

@@ -97,6 +97,11 @@ It may not carry what came before.
   approves the slot, leaves the channel and says so; `slot approve` at a terminal
   asks after showing old, new and what moved it, `--seal-channel` and `control`
   are the person's word too (`ChannelApproval`).
+- **Secure Boot off, in Setup Mode or unreadable is said, never a stop**, once in a
+  command (`internal/sbstate`, `measure.WarnSecureBoot`): `status`, `control`,
+  `slot add`, `slot approve`, the image's hooks, and at boot the console, every SSH
+  session and the log, from the firmware's variables, with no TPM. efivarfs is in
+  every image for it.
 - **Two configuration files, tpm2-kira's and aSSH's, and only `control`
   writes them.** `/etc/tpm2-kira/control.conf` is tpm2-kira's; beside it
   `/etc/tpm2-kira/assh.conf` is aSSH's own format (`ASSH_*`, parsed by

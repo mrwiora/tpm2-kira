@@ -1819,6 +1819,7 @@ transport that refuses named commands.
 | The channel's secrets: not in the record's bytes; open before the close with PCR 7 as sealed, in a boot not approved too; after it refused (`ErrClosed`), by another key too; the signing key opens them, for a further phone and a whole gate | `TestChannelSecretsSealed` |
 | PCR 7 in the channel's policy: PCR 7 moved refuses (`ErrChannelMoved`), the gate does not start, the signing key still opens, the status note, a person's `slot approve` seals the same secrets again and only when moved, the close refuses with 7 as sealed and moved; sealed from the log on a system past the separator, open at the next boot | `TestChannelFollowsPCR7`, `TestChannelSealedForTheNextBoot` |
 | The channel follows a moved PCR 7 on a person's word alone: the real hooks (mkinitcpio's, initramfs-tools') and no terminal leave it, approve the slot, pass the warning on, with old, new and what moved it; no at the terminal leaves it; yes and `--seal-channel` seal it; `--unattended --seal-channel` refused; PCR 7 extended by hand on swtpm; on the VMs a channel sealed to another value, the real hook scripts and the real event log | `TestApprovalLeavesAMovedChannel`, `TestHooksLeaveAMovedChannel`, `TestChannelApprovalFor`, `TestStatusSaysTheChannel`, `TestControlShowsTheMovedChannel`, `FuzzDescribeEvent`; VM test, "a slot's life" |
+| Secure Boot off, in Setup Mode or unreadable is said: `status`, `control` (red, on both steps), `slot add`, `slot approve` (once, whatever the selection, however many slots), the image's hooks, the code screen and every SSH session at boot, the boot's log; no TPM needed, nothing stops | `TestStates`, `TestWarnSecureBootOnce`, `TestSecureBootWarningPlaces`, `TestStatusSaysSecureBoot`, `TestPrereqsShowSecureBootRed`, `TestSayFirmwareState`, `TestSessionGetsTheNoticeFirst`, `TestRemoteSSHConfirmsAndUnlocks`, `TestHookAddsThePlan`; VM test (the VMs are in Setup Mode) |
 | Sessions: eight failures of each kind on one connection (a policy refused, a signer that fails, an EK policy refused) leave no session and no object | `TestFailuresLeaveNoSession` |
 
 Unit, with no TPM: `TestSealRefusesASlotWithout8And9OnGRUB`, `TestClosePCRChecked` (a log
@@ -1834,7 +1835,7 @@ with an event in PCR 15), `TestNoTPMAtAll` and `TestSilentTPM` (steps 5 and 6's 
 manages Secure Boot itself: its keys, the enrolment, the image signed with the db key
 before `slot approve`, `control` naming foreign certificates. On this branch none of that
 exists: `internal/secureboot` is on `exp/debian-uki` alone. The code here only reads the
-Secure Boot state (`measure.ReadSecureBootState`), judges it in `control` and `status`,
+Secure Boot state (`sbstate.Read`), judges it in `control` and `status`, says it at boot,
 and uses go-uefi-slim for EFI variables and PCR 4's Authenticode hashes. On Arch the UKI's
 db signature comes from outside, from sbctl or whatever the owner runs; tpm2-kira neither
 makes nor checks it.

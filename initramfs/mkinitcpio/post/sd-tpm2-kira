@@ -55,7 +55,8 @@ fi
 # it cannot read from /etc/tpm2-kira/pin ends it with the reason (SKIPPED)
 # instead of a prompt that would hold mkinitcpio -P. --unattended: a moved
 # phone channel stays as it is, a person decides that, and what it says about
-# it is passed on below.
+# it is passed on below. (The install hook has said what is wrong with Secure
+# Boot in this same build.)
 output=$(setsid -w tpm2-kira slot approve --unattended --measure-point="$measure_point" 2>&1 < /dev/null)
 sed -n "/^WARNING: slot .* phone channel/,/^\$/p" <<< "$output" >&2
 #

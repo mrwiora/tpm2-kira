@@ -128,10 +128,13 @@ func TestHookPutsNoConfigIntoTheImage(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
+	// Secure Boot on: nothing to warn of here (that is TestHookAddsThePlan's).
+	testDir := filepath.Join(dir, "testdir")
+	writeSecureBootVars(t, testDir, 1, 0)
 	plan := func(conf string) (string, string) {
 		root := t.TempDir()
 		cmd := exec.Command(bin, "initramfs", "plan", "--conf", conf, "--tpm", filepath.Join(dir, "no-tpm"), "--buildroot", root)
-		cmd.Env = append(os.Environ(), "TPM2_KIRA_UNPRIVILEGED=1")
+		cmd.Env = append(os.Environ(), "TPM2_KIRA_UNPRIVILEGED=1", "TPM2_KIRA_TEST_DIR="+testDir)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("%v: %s", err, out)
@@ -208,9 +211,12 @@ _add_plan
 		return string(b)
 	}
 
-	got := run("unlock", "say Disk unlock:       in  - the key of every volume\nsay Phone (Bluetooth): out - no TPM (none): a phone cannot attest this machine\n", "0")
-	if strings.Contains(got, "UNIT") || strings.Contains(got, "MODULE") || !strings.Contains(got, "PLAIN tpm2-kira: Phone (Bluetooth): out - no TPM") {
-		t.Fatalf("the disk unlock alone:\n%s", got)
+	got := run("unlock", "say Disk unlock:       in  - the key of every volume\nsay Phone (Bluetooth): out - no TPM (none): a phone cannot attest this machine\nwarning Secure Boot is off\n", "0")
+	if strings.Contains(got, "UNIT") || strings.Replace(got, "MODULE efivarfs", "", 1) != strings.ReplaceAll(got, "MODULE efivarfs", "") || !strings.Contains(got, "MODULE efivarfs") || strings.Contains(strings.ReplaceAll(got, "MODULE efivarfs", ""), "MODULE") || !strings.Contains(got, "PLAIN tpm2-kira: Phone (Bluetooth): out - no TPM") {
+		t.Fatalf("the disk unlock alone: efivarfs and nothing else, for Secure Boot's state:\n%s", got)
+	}
+	if !strings.Contains(got, "WARNING tpm2-kira: Secure Boot is off") {
+		t.Fatalf("the plan's warning is not said:\n%s", got)
 	}
 
 	got = run("unlock codes phone net ssh tpm",
@@ -276,8 +282,8 @@ busybox() { :; }
 		b, _ := cmd.CombinedOutput()
 		return string(b)
 	}
-	if got := run("unlock", "say Disk unlock: in\n", "auto"); strings.Contains(got, "MODULE") || !strings.Contains(got, "tpm2-kira: Disk unlock: in") || strings.Contains(got, "NOBUSYBOX") {
-		t.Fatalf("the disk unlock alone:\n%s", got)
+	if got := run("unlock", "say Disk unlock: in\nwarning Secure Boot is off\n", "auto"); strings.Contains(got, "MODULE") || !strings.Contains(got, "FORCELOAD efivarfs") || !strings.Contains(got, "tpm2-kira: Disk unlock: in") || strings.Contains(got, "NOBUSYBOX") || !strings.Contains(got, "tpm2-kira: WARNING: Secure Boot is off") {
+		t.Fatalf("the disk unlock alone: efivarfs for Secure Boot's state, and the plan's warning:\n%s", got)
 	}
 	got := run("unlock codes phone net tpm", "bt-module btusb\nbt-firmware intel/ibt.sfi\nnet-module e1000e\n", "auto")
 	for _, want := range []string{"MODULE tpm_tis", "MODULE tpm_crb", "FORCELOAD btusb", "FIRMWARE intel/ibt.sfi", "MODULE e1000e",
@@ -322,5 +328,21 @@ add_binary after
 	want := "BIN /usr/local/bin/tpm2-kira-boot /usr/bin/tpm2-kira-boot\nUNIT tpm2-kira.service\nBIN sh\nBIN after\n"
 	if string(out) != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+// writeSecureBootVars puts SecureBoot and SetupMode where TPM2_KIRA_TEST_DIR=testDir
+// makes the binaries read them.
+func writeSecureBootVars(t *testing.T, testDir string, secureBoot, setupMode byte) {
+	t.Helper()
+	dir := filepath.Join(testDir, "efivars")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, v := range map[string]byte{"SecureBoot": secureBoot, "SetupMode": setupMode} {
+		path := filepath.Join(dir, name+"-8be4df61-93ca-11d2-aa0d-00e098032b8c")
+		if err := os.WriteFile(path, []byte{6, 0, 0, 0, v}, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

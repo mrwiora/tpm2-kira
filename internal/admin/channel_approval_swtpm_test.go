@@ -206,6 +206,10 @@ exec %q "$@"
 			if g := phonegate.ReadSealedSlot(s.tpm, idx).Payload.Generation; g <= generation {
 				t.Errorf("the slot was not approved: generation %d, was %d\n%s", g, generation, got)
 			}
+			// What the image's hook said in this same build is not said again.
+			if n := strings.Count(got, "WARNING: Secure Boot"); (filepath.Base(hook) == "zzz-tpm2-kira" && n != 1) || (filepath.Base(hook) != "zzz-tpm2-kira" && n != 0) {
+				t.Errorf("Secure Boot said %d times:\n%s", n, got)
+			}
 		})
 	}
 	// Not a hook, no terminal, no flag: the same. --if-moved with nothing of PCR 4
@@ -233,7 +237,7 @@ exec %q "$@"
 	cmd := exec.Command(bin, "status", "--tpm", s.sock, "--privkey", privPath)
 	cmd.Env = append(os.Environ(), "TPM2_KIRA_UNPRIVILEGED=1", "TPM2_KIRA_TEST_DIR="+testDir)
 	out, _ := cmd.CombinedOutput()
-	if !strings.Contains(string(out), "WARNING: slot 4's phone channel is sealed to another PCR 7") {
+	if !strings.Contains(string(out), "WARNING: slot 4's phone channel is sealed to another PCR 7") || !strings.Contains(string(out), "WARNING: Secure Boot") {
 		t.Errorf("status:\n%s", out)
 	}
 	// And the explicit flag seals it.

@@ -3,15 +3,20 @@ package bootrun
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/mrwiora/tpm2-kira/internal/journal"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/mrwiora/tpm2-kira/internal/sbstate"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
 
 	"golang.org/x/sys/unix"
@@ -568,5 +573,60 @@ func TestWaitPromptTurn(t *testing.T) {
 	waitPromptTurn()
 	if waited := time.Since(start); waited < promptDelay || waited > 10*promptDelay {
 		t.Fatalf("the cap did not bound the wait: %v", waited)
+	}
+}
+
+// The boot's word on Secure Boot needs nothing but the variables: a bad state goes
+// to the console, once, and the line for the SSH sessions comes back; a good one is
+// silent.
+func TestSayFirmwareState(t *testing.T) {
+	capture := func(f func()) string {
+		t.Helper()
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		old := os.Stdout
+		os.Stdout = w
+		defer func() { os.Stdout = old }()
+		f()
+		w.Close()
+		b, _ := io.ReadAll(r)
+		return string(b)
+	}
+	for _, tc := range []struct {
+		state sbstate.State
+		want  string
+	}{
+		{sbstate.State{Known: true}, "WARNING: Secure Boot is off"},
+		{sbstate.State{Known: true, SetupMode: true}, "WARNING: Secure Boot is in Setup Mode"},
+		{sbstate.State{Why: "no SecureBoot variable"}, "WARNING: Secure Boot's state could not be read (no SecureBoot variable)"},
+	} {
+		var session string
+		out := capture(func() { session = sayFirmwareState(tc.state) })
+		if strings.Count(out, tc.want) != 1 || !strings.Contains(session, tc.want) || !strings.HasSuffix(session, "\r\n") {
+			t.Errorf("%+v: console %q, session %q", tc.state, out, session)
+		}
+	}
+	var session string
+	if out := capture(func() { session = sayFirmwareState(sbstate.State{Known: true, Enabled: true}) }); out != "" || session != "" {
+		t.Errorf("Secure Boot on: console %q, session %q", out, session)
+	}
+
+	// Debian's image has no journal: the log file holds it too, and only with a
+	// separate log is it written twice.
+	journal.JournalOnce.Do(func() {})
+	logPath := filepath.Join(t.TempDir(), "tpm2-kira.log")
+	f, err := os.Create(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	defer func(old *os.File) { journal.LogFile = old }(journal.LogFile)
+	journal.LogFile = f
+	capture(func() { sayFirmwareState(sbstate.State{Known: true}) })
+	b, err := os.ReadFile(logPath)
+	if err != nil || string(b) != "WARNING: Secure Boot is off: nothing checks the boot loader and the kernel, and PCR 7 records only that\n" {
+		t.Errorf("the log: %q, %v", b, err)
 	}
 }

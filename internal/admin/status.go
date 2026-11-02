@@ -13,6 +13,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/mrwiora/tpm2-kira/internal/sbstate"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 )
 
@@ -76,10 +77,13 @@ type StatusReport struct {
 	// ClosePCREvents: events in PCR 15 in this boot's firmware event log.
 	ClosePCREvents int `json:"close_pcr_events,omitempty"`
 	// CloseFinding: this boot's close went another way than PCR 15, or not yet.
-	CloseFinding    string   `json:"close_finding,omitempty"`
-	GRUBPassword    bool     `json:"grub_password,omitempty"`
-	GRUBPasswordErr string   `json:"grub_password_error,omitempty"`
-	Notes           []string `json:"notes"`
+	CloseFinding    string `json:"close_finding,omitempty"`
+	GRUBPassword    bool   `json:"grub_password,omitempty"`
+	GRUBPasswordErr string `json:"grub_password_error,omitempty"`
+	// SecureBootWarning: what is wrong with Secure Boot, in one line; control judges
+	// the same state on its own line.
+	SecureBootWarning string   `json:"secure_boot_warning,omitempty"`
+	Notes             []string `json:"notes"`
 }
 
 // Status prints the report.
@@ -102,6 +106,7 @@ func collectStatus(o StatusOptions) StatusReport {
 		r.Version = "unknown"
 	}
 
+	r.SecureBootWarning = sbstate.Read().Warning()
 	r.ClosePCREvents, _ = firmwareClosePCREvents(closeEventlogPath)
 	r.CloseFinding = bootclose.Finding(nil)
 	if r.GRUB = GRUBBoot(""); r.GRUB {
@@ -338,6 +343,10 @@ func statusNotes(r StatusReport) []string {
 
 func printStatus(r StatusReport) {
 	fmt.Printf("tpm2-kira %s\n\n", r.Version)
+	if r.SecureBootWarning != "" {
+		fmt.Println(statusRed(r.SecureBootWarning))
+		fmt.Println()
+	}
 	fmt.Printf("Slots (%s)\n", r.TPM)
 	if r.TPMError != "" {
 		fmt.Printf("  %s\n", r.TPMError)

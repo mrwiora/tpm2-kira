@@ -4,43 +4,32 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/mrwiora/tpm2-kira/internal/sbstate"
 	"github.com/tpm2-trust/go-uefi-slim/efivar"
 )
-
-// SecureBootState is a best-effort reading of the firmware's Secure Boot
-// variables. Known is false when they cannot be read at all.
-type SecureBootState struct {
-	Enabled   bool
-	SetupMode bool
-	Known     bool
-}
-
-// readEFIBoolVar reads a one-byte variable of the UEFI specification's
-// namespace; ok is false when it cannot be read.
-func readEFIBoolVar(name string) (value bool, ok bool) {
-	_, data, err := efivar.Store{}.Read(name, efivar.GlobalVariable)
-	if err != nil || len(data) < 1 {
-		return false, false
-	}
-	return data[0] == 1, true
-}
-
-// ReadSecureBootState probes the firmware state. It never fails, so it is safe
-// to use as an advisory input rather than a gate.
-func ReadSecureBootState() SecureBootState {
-	enabled, ok := readEFIBoolVar("SecureBoot")
-	if !ok {
-		return SecureBootState{}
-	}
-	setupMode, _ := readEFIBoolVar("SetupMode")
-	return SecureBootState{Enabled: enabled, SetupMode: setupMode, Known: true}
-}
 
 // AdvisoryWarnings switches the advisory warnings of seal and reseal (a
 // weak selection, SHA-1, Secure Boot off). 'control' turns them off for
 // the steps it runs: its overview says the same, judged line by line in
 // red, and need not say it twice. The commands run by hand keep them.
 var AdvisoryWarnings = true
+
+// secureBootWarned: this command has said it.
+var secureBootWarned bool
+
+// WarnSecureBoot says what is wrong with Secure Boot, whatever the selection, once
+// in a command however many slots it goes through. Never a stop: tpm2-kira has no
+// enforced mode.
+func WarnSecureBoot() {
+	if !AdvisoryWarnings || secureBootWarned {
+		return
+	}
+	secureBootWarned = true
+	if w := sbstate.Read().Warning(); w != "" {
+		fmt.Println(w)
+		fmt.Println()
+	}
+}
 
 // WarnAboutHashAlgo reports a PCR bank that should not be used for new policies.
 func WarnAboutHashAlgo(hashAlgo PCRHashAlgo) {
@@ -121,31 +110,6 @@ func WarnAboutPCRSelection(specs []PCRSpec) {
 		fmt.Println("  version holds the same value, and an attacker can reproduce it on their own")
 		fmt.Println("  hardware. It covers neither the bootloader, the kernel, nor the Secure Boot")
 		fmt.Println("  policy. Add PCR 7, and 2/4 for the boot chain, to make the policy meaningful.")
-		fmt.Println()
-	}
-
-	if !slices.Contains(indices, 7) {
-		return
-	}
-
-	state := ReadSecureBootState()
-	switch {
-	case !state.Known:
-		fmt.Println("WARNING: sealing against PCR 7, but the Secure Boot state could not be read.")
-		fmt.Println("  /sys/firmware/efi/efivars is unavailable (non-EFI boot, or efivarfs not")
-		fmt.Println("  mounted), so whether PCR 7 attests an enforced policy is unknown here.")
-		fmt.Println()
-	case state.SetupMode:
-		fmt.Println("WARNING: sealing against PCR 7 while the platform is in Setup Mode.")
-		fmt.Println("  In Setup Mode the Secure Boot keys can be replaced without physical presence,")
-		fmt.Println("  so PCR 7 records a policy that any root user can rewrite. Enrol keys and")
-		fmt.Println("  leave Setup Mode before treating this value as evidence.")
-		fmt.Println()
-	case !state.Enabled:
-		fmt.Println("WARNING: sealing against PCR 7 while Secure Boot is disabled.")
-		fmt.Println("  PCR 7 measures the Secure Boot state and policy. With Secure Boot off it")
-		fmt.Println("  records \"disabled\" and nothing verifies which bootloader or kernel runs, so")
-		fmt.Println("  a matching PCR 7 does not mean the boot chain was checked.")
 		fmt.Println()
 	}
 }

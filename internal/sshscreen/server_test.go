@@ -193,6 +193,21 @@ func TestRemoteSessionConfirmsAndAnswers(t *testing.T) {
 	}
 }
 
+// The notice comes first in every session, before the screen drawn before it came.
+func TestSessionGetsTheNoticeFirst(t *testing.T) {
+	srv, key, log := testRemote(t)
+	log.wait(t, "no new privileges")
+	srv.Opts.Notice = "WARNING: Secure Boot is off\r\n"
+	srv.Show([]byte("#0: 123456\n"))
+	for range 2 {
+		_, r, _ := login(t, srv, key)
+		got := until(t, r, "#0: 123456\r\n")
+		if !strings.HasPrefix(got, srv.Opts.Notice) || strings.Count(got, "Secure Boot") != 1 {
+			t.Fatalf("the session begins %q", got)
+		}
+	}
+}
+
 // The session leaves in the middle of a prompt: cancelled, so that
 // cryptsetup's own prompt follows at the console.
 func TestRemoteSessionLeavesPrompt(t *testing.T) {

@@ -80,6 +80,10 @@ _plan_has() {
 }
 
 _add_plan() {
+    # efivarfs, whatever the plan: run reads Secure Boot's state at every boot, and
+    # the slots' records are there. Mounted by systemd itself; added for a kernel that
+    # has it as a module (built in, nothing to add).
+    add_module efivarfs
     local out kind value nfw=0 adapter
     local -a btmods=() btfw=() netmods=()
     if ! out=$("$KIRA" initramfs plan --format mkinitcpio --conf "$CONF" --buildroot "$BUILDROOT"); then
@@ -105,11 +109,8 @@ _add_plan() {
     # slot is sealed or an SSH CA exists (the plan's TPM part), whatever
     # their methods. Required by initrd.target: a close that fails reboots.
     # The late closer goes with it: it starts when the close went on without
-    # an answer from the TPM. efivarfs, where the slots' records are,
-    # is mounted by systemd itself; added for a kernel that has it as a
-    # module (built in, nothing to add).
+    # an answer from the TPM.
     if _plan_has tpm; then
-        add_module efivarfs
         _add_kira_unit tpm2-kira-close.service
         add_symlink /usr/lib/systemd/system/initrd.target.requires/tpm2-kira-close.service \
             /usr/lib/systemd/system/tpm2-kira-close.service

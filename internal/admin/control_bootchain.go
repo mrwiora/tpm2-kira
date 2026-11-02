@@ -17,7 +17,7 @@ import (
 // prereq is one line of the prerequisites: met, not met (red, with what
 // to do or the risk), or plain information.
 type prereq struct {
-	state int // prereqMet, prereqNot, prereqInfo
+	state int // prereqMet, prereqNot, prereqInfo, prereqRisk
 	text  string
 }
 
@@ -25,6 +25,7 @@ const (
 	prereqMet = iota
 	prereqNot
 	prereqInfo
+	prereqRisk // red, and no prerequisite: tpm2-kira has no enforced mode
 )
 
 // prereqs are the boot chain's prerequisites as this machine meets them.
@@ -115,13 +116,13 @@ func (c *controller) prereqs() []prereq {
 	}
 	switch {
 	case !f.SecureBoot.Known:
-		add(prereqInfo, "Secure Boot: state unknown, no efivars")
+		add(prereqRisk, "Secure Boot: state unknown, %s (risk: whether anything checks the boot chain is unknown)", f.SecureBoot.Why)
 	case f.SecureBoot.SetupMode:
-		add(prereqInfo, "Secure Boot: Setup Mode (risk on step 2's status)")
+		add(prereqRisk, "Secure Boot: Setup Mode (risk: nothing checks the boot chain, any root user can replace the keys)")
 	case f.SecureBoot.Enabled:
 		add(prereqMet, "Secure Boot: enabled")
 	default:
-		add(prereqInfo, "Secure Boot: disabled (risk on step 2's status)")
+		add(prereqRisk, "Secure Boot: disabled (risk: nothing checks the boot loader and the kernel)")
 	}
 	return out
 }
@@ -137,6 +138,8 @@ func (c *controller) prereqText() string {
 		case prereqNot:
 			open++
 			fmt.Fprintf(&b, "  %s %s\n", bad("✗"), bad(p.text))
+		case prereqRisk:
+			fmt.Fprintf(&b, "  %s %s\n", bad("!"), bad(p.text))
 		default:
 			fmt.Fprintf(&b, "  %s %s\n", amber("•"), p.text)
 		}

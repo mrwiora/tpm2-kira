@@ -24,6 +24,10 @@ tpm2-kira slot info --json 2>/dev/null | grep -q '"index"' || [ -e /sys/firmware
 echo "tpm2-kira: initramfs rebuilt ($1); approving for the next boot" >&2
 # No terminal (setsid): a PIN it cannot read from /etc/tpm2-kira/pin ends the
 # approve with the reason instead of a prompt that would hold the update.
-# --unattended: a moved phone channel stays as it is, and it says so.
-setsid -w tpm2-kira slot approve --unattended </dev/null || echo "tpm2-kira: the approval did not succeed; the next boot shows no code until 'tpm2-kira slot approve' does" >&2
+# --unattended: a moved phone channel stays as it is, and it says so. The image's
+# hook has said what is wrong with Secure Boot in this same build.
+rc=0
+output=$(setsid -w tpm2-kira slot approve --unattended </dev/null 2>&1) || rc=$?
+printf '%s\n' "$output" | grep -v '^WARNING: Secure Boot' || true
+[ "$rc" -eq 0 ] || echo "tpm2-kira: the approval did not succeed; the next boot shows no code until 'tpm2-kira slot approve' does" >&2
 exit 0

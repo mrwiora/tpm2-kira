@@ -97,15 +97,15 @@ done <<PLAN
 $plan
 PLAN
 
+# efivarfs, whatever the plan, loaded by the image's init: run reads Secure Boot's
+# state at every boot, and the slots' records and the sealed machine-id are EFI
+# variables. Debian's kernel has it as a module its initramfs neither loads nor
+# mounts (the premount script mounts it).
+force_load efivarfs
 # The TPM's drivers: built in on most kernels, but modules on some machines.
-# efivarfs with them, loaded by the image's init: the slots' records and the
-# sealed machine-id are EFI variables, and Debian's kernel has efivarfs as a
-# module its initramfs neither loads nor mounts (the premount script mounts
-# it).
 if [ -d "$DESTDIR/etc/tpm2-kira/plan/tpm" ]; then
     manual_add_modules tpm_tis
     manual_add_modules tpm_crb
-    force_load efivarfs
 fi
 [ -d "$DESTDIR/etc/tpm2-kira/plan/phone" ] && echo "tpm2-kira: Bluetooth: $nbt modules, $nfw firmware files"
 [ -n "$nnet" ] && echo "tpm2-kira: network drivers:$nnet"

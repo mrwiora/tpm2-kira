@@ -54,6 +54,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/journal"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/mrwiora/tpm2-kira/internal/sbstate"
 	"github.com/mrwiora/tpm2-kira/internal/screen"
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
@@ -506,6 +507,7 @@ func StartCoordinator(tpmPath, signerPath string, debug bool) (*phonegate.GateSe
 func Run(tpmPath string, nvramIndex uint32, hold time.Duration, unlockSocket string, remote sshscreen.Options, planned imageplan.Planned, debug bool) {
 	asked := make(chan os.Signal, 1)
 	signal.Notify(asked, syscall.SIGTERM, syscall.SIGINT)
+	remote.Notice = sayFirmwareState(sbstate.Read())
 	bd := &board{tpmPath: tpmPath, debug: debug, hold: hold, confirm: make(chan string), ask: diskkey.Prompter(diskkey.ConsoleAsk),
 		prompting: func() bool { return false }, promptMode: func() []diskkey.Recipe { return nil }}
 	ps := plannedParts(planned, remote, unlockSocket)
@@ -530,6 +532,21 @@ func Run(tpmPath string, nvramIndex uint32, hold time.Duration, unlockSocket str
 		}
 	}
 	started.end(bd)
+}
+
+// sayFirmwareState is the boot's word on Secure Boot, before anything else and
+// without the TPM: once on the console and in the boot's log; each SSH session gets
+// the line it returns when it comes in. Never a stop: no enforced mode.
+func sayFirmwareState(s sbstate.State) string {
+	w := s.Warning()
+	if w == "" {
+		return ""
+	}
+	fmt.Printf("%s \033[1;31m%s\033[0m\n", screen.Tag(screen.TagYellow), w)
+	if journal.Separate() {
+		journal.NarrateAt(journal.PrioWarning, "%s", w)
+	}
+	return fmt.Sprintf("%s \033[1;31m%s\033[0m\r\n", screen.Tag(screen.TagYellow), w)
 }
 
 // showCodes is the code screen: until the boot is confirmed or the hold ends, and

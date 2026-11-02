@@ -16,6 +16,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/mrwiora/tpm2-kira/internal/sbstate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
@@ -589,6 +590,10 @@ func (p *BootPlan) drop(name, why string) {
 func InitramfsPlanCommand(o PlanOptions, buildroot, format string, out io.Writer) error {
 	p := ReadBootPlan(o)
 	if buildroot != "" {
+		// A boot image is built on a machine with this state: the hook says it.
+		if risk := sbstate.Read().Risk(); risk != "" {
+			fmt.Fprintf(out, "warning %s\n", risk)
+		}
 		return p.WriteImage(buildroot, format, out)
 	}
 	for _, pt := range p.Parts {

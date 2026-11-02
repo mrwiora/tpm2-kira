@@ -24,6 +24,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/mrwiora/tpm2-kira/internal/sbstate"
 	"github.com/mrwiora/tpm2-kira/internal/screen"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
@@ -76,7 +77,7 @@ type machineFacts struct {
 	EKBy       string // the vendor whose chain vouches for this TPM's EK; "" when none does
 	EKNote     string // why none does
 	EKUnknown  bool   // the EK root store has no root of the TPM's vendor yet: a risk, not untrusted
-	SecureBoot measure.SecureBootState
+	SecureBoot sbstate.State
 	Initramfs  string // mkinitcpio, initramfs-tools, or ""
 	HookState  string // why the boot integration would not run; "" when wired
 	Rebuild    string // mkinitcpio: why the image still lacks the hook; "" when it carries it
@@ -192,7 +193,7 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	if stored, loose := signing.PINStored(signing.PINPath()); stored {
 		f.PINStored, f.PINLoose = !loose, loose
 	}
-	f.SecureBoot = measure.ReadSecureBootState()
+	f.SecureBoot = sbstate.Read()
 	if f.TPMErr == "" {
 		f.EKBy, f.EKNote, f.EKUnknown = ekVerdict(tpmPath, debug)
 	}
@@ -776,7 +777,7 @@ func (c *controller) factsText() string {
 	}
 	switch {
 	case !f.SecureBoot.Known:
-		fmt.Fprintf(&w, "  Secure Boot %s\n", bad("state unknown, no efivars (risk: whether PCR 7 attests an enforced policy is unknown)"))
+		fmt.Fprintf(&w, "  Secure Boot %s\n", bad("state unknown, "+f.SecureBoot.Why+" (risk: whether PCR 7 attests an enforced policy is unknown)"))
 	case f.SecureBoot.SetupMode:
 		fmt.Fprintf(&w, "  Secure Boot %s\n", bad("Setup Mode (risk: any root user can replace the keys, PCR 7 attests a policy that can be rewritten)"))
 	case f.SecureBoot.Enabled:

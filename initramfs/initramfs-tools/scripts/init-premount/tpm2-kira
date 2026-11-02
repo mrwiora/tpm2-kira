@@ -126,13 +126,13 @@ tpm2_kira_net() {
 
 mkdir -p /run/initramfs
 
-# The slots' records (KIRAslotN) and the sealed machine-id are EFI
-# variables, read through efivarfs, which initramfs-tools does not mount
-# (systemd does, as an API file system, on Arch). Without it no slot is
-# read: the boot goes on to the passphrase prompt.
-if [ -d "$PLAN/tpm" ] && [ -d /sys/firmware/efi/efivars ] && ! grep -qs ' /sys/firmware/efi/efivars efivarfs ' /proc/mounts; then
+# Secure Boot's state, the slots' records (KIRAslotN) and the sealed machine-id
+# are EFI variables, read through efivarfs, which initramfs-tools does not mount
+# (systemd does, as an API file system, on Arch). Without it run says the state
+# cannot be read, and no slot is read: the boot goes on to the passphrase prompt.
+if [ -d /sys/firmware/efi/efivars ] && ! grep -qs ' /sys/firmware/efi/efivars efivarfs ' /proc/mounts; then
     mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>>/run/initramfs/tpm2-kira.log ||
-        echo "tpm2-kira: efivarfs is not mounted: no slot's record can be read" >>/run/initramfs/tpm2-kira.log
+        echo "tpm2-kira: efivarfs is not mounted: neither Secure Boot's state nor a slot's record can be read" >>/run/initramfs/tpm2-kira.log
 fi
 
 # The installed system's machine-id, sealed under slot 0's policy, released
