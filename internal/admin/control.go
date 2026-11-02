@@ -1445,39 +1445,45 @@ func channelStep(slot int) controlStep {
 		Run:     func(c *controller) error { return c.runSealChannel(slot) }}
 }
 
-// runSealChannel shows the move, asks, and approves the slot with its channel.
+// runSealChannel shows the move, asks, and approves the slot with its channel. The
+// move is printed, not the question's description: every form of the question shows it.
 func (c *controller) runSealChannel(slot int) error {
 	idx := nvslot.ResolveNVRAMIndex(uint32(slot))
+	if err := c.showChannelMove(idx); err != nil {
+		return err
+	}
 	ok, err := c.confirm(fmt.Sprintf("Seal slot %d's phone channel to the next boot's PCR %s?", slot, nvslot.ChannelPCRList()),
-		c.channelMoveText(idx))
+		"The values above are the ones it follows. No leaves it: the phones find no machine.")
 	if err != nil || !ok {
 		return errors.New("not sealed: the phones find no machine at the next boot")
 	}
 	return Reseal(c.o.TPMPath, "", idx, "", "", ChannelSeal, c.o.Debug)
 }
 
-// channelMoveText is what the question shows: old, new and what moved it.
-func (c *controller) channelMoveText(idx uint32) string {
+// showChannelMove prints old, new and what moved it.
+func (c *controller) showChannelMove(idx uint32) error {
 	tpmDev, err := tpmdev.Open(c.o.TPMPath)
 	if err != nil {
-		return err.Error()
+		return err
 	}
 	defer tpmDev.Close()
 	raw, err := nvslot.ReadRecord(idx)
 	if err != nil {
-		return err.Error()
+		return err
 	}
 	sb, err := nvslot.UnmarshalSealedBlob(raw)
 	if err != nil {
-		return err.Error()
+		return err
 	}
 	move, err := nvslot.ChannelMoves(tpmDev, sb)
-	if err != nil || move == nil {
-		return fmt.Sprintf("Not moved any more, or not readable: %v", err)
+	if err != nil {
+		return err
 	}
-	var b strings.Builder
-	printChannelMoveTo(&b, move)
-	return b.String()
+	if move == nil {
+		return errors.New("the channel has not moved any more")
+	}
+	printChannelMoveTo(c.out, move)
+	return nil
 }
 
 func isTerminal(f *os.File) bool {

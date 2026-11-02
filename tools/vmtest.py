@@ -591,14 +591,16 @@ class Machine:
             return self.check(f"{where}: says nothing of Secure Boot, which is on", n == 0, out[-400:])
         return self.check(f"{where}: says {want!r}, {least} time(s)" + ("" if most == least else f" to {most}"), least <= n <= most and (least == 0 or want in out), f"{n} time(s): " + out[-400:])
 
-    def check_control_secure_boot(self, where, text, wants):
-        """control judges Secure Boot's state on its own line, in red."""
+    def check_control_secure_boot(self, where, text, wants, session):
+        """control judges Secure Boot's state on its own line, in red (the text is
+        cleaned; the session's raw bytes keep the colour)."""
         state = self.secure_boot_warning()
         if state is None:
             return
         flat = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;]*m", "", text))
         want = next(v for k, v in wants.items() if k in state)
-        self.check(f"{where} judges Secure Boot's state: {want!r}", want in flat and "\x1b[0;31m" in text, flat[-800:])
+        red = re.search(rb"\x1b\[0;31m[^\n]*" + re.escape(want.split(" (risk")[0].encode()), session.buf) is not None
+        self.check(f"{where} judges Secure Boot's state, in red: {want!r}", want in flat and red, flat[-800:])
 
     def session(self, remote_cmd, name):
         self.sessions += 1
@@ -820,7 +822,7 @@ class Machine:
                 text, _ = s.expect(menu, 120)
                 if first:
                     first = False
-                    self.check_control_secure_boot("control step 1", text, {"Setup Mode": "Setup Mode (risk: nothing checks the boot chain", "off": "disabled (risk: nothing checks", "could": "state unknown,"})
+                    self.check_control_secure_boot("control step 1", text, {"Setup Mode": "Setup Mode (risk: nothing checks the boot chain", "off": "disabled (risk: nothing checks", "could": "state unknown,"}, s)
                 opts = menu_options(text)
                 pick = next((o for o in opts if o[1].startswith("•") and "adoption" in o[1]), None)
                 if pick:
@@ -911,7 +913,7 @@ class Machine:
         started from a saved setup, nothing to reboot."""
         self.head(f"reboot {n}: the code screen over SSH, unlocked there")
         lv = getattr(self, "lv", None)
-        console_from = lv.mark if lv else None
+        console_from = getattr(lv, "mark", 0)
         if not started:
             if lv:
                 console_from = os.path.getsize(lv.path("serial.log"))
@@ -1491,7 +1493,7 @@ class Machine:
         try:
             text = pick(r"Signing key and TOTP codes")
             self.check("control: step 2 shows the moved channel", "phone channel" in text, text[-1200:])
-            self.check_control_secure_boot("control step 2", text, {"Setup Mode": "Setup Mode (risk: any root user", "off": "disabled (risk: the boot loader", "could": "state unknown,"})
+            self.check_control_secure_boot("control step 2", text, {"Setup Mode": "Setup Mode (risk: any root user", "off": "disabled (risk: the boot loader", "could": "state unknown,"}, s)
             text = pick(r"Slot \d+'s phone channel")
             text, _ = s.expect(r"Seal slot \d+'s phone channel to the next boot's PCR 7\?.*\[y/N\] ?$", 60)
             self.check("control: old, new and what moved it, before the question", re.search(r"PCR 7 sealed: +[0-9a-f]{64}", text) is not None and re.search(r"SecureBoot: (on|off)", text) is not None, text[-1200:])
@@ -1735,6 +1737,9 @@ def main():
             resets[name] = sec["reset"]
         if name in local:
             machines[-1].lv = local[name]
+        elif "localvm.py" in resets.get(name, ""):
+            # The serial console's log: what the boot shows at the console.
+            machines[-1].lv = local_machines(args.localvm_config or load_localvm().DEFAULT_CONFIG, [name])[1][name]
         machines[-1].fast_kdf = args.fast_kdf
         if args.fast_kdf:
             machines[-1].notes.append(FAST_KDF_NOTE)
