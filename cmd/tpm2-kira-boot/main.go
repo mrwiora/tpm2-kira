@@ -16,11 +16,14 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/journal"
 	"github.com/mrwiora/tpm2-kira/internal/machineid"
+	"github.com/mrwiora/tpm2-kira/internal/memlock"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 	"github.com/mrwiora/tpm2-kira/internal/totp"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+
+	"github.com/tpm2-trust/assh/sandbox"
 )
 
 // Version is set at build time (-X main.Version=...).
@@ -105,6 +108,11 @@ func main() {
 			os.Exit(1)
 		}
 	case "unlock-key":
+		// It holds the disk's key on its way to cryptsetup. Its stdout is that key: the
+		// word on a lock it could not take goes to stderr, and no further.
+		if err := sandbox.LockMemory(); err != nil {
+			fmt.Fprintf(os.Stderr, "tpm2-kira: %v\n", err)
+		}
 		fs := flag.NewFlagSet("unlock-key", flag.ExitOnError)
 		socket := fs.String("socket", diskkey.DefaultUnlockSocket, "The key socket of 'tpm2-kira-boot run --unlock'")
 		wait := fs.Duration("wait", 5*time.Second, "How long to wait for the socket to appear")
@@ -145,6 +153,7 @@ func main() {
 }
 
 func runRun(args []string) {
+	journal.Narrate("%s", memlock.Boot())
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	tpm := fs.String("tpm", tpmdev.DefaultPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", 0, "A slot, 0-15, or a full NV index (default: every populated slot)")

@@ -46,7 +46,8 @@ var combining sync.Mutex
 //
 // Argon2id's memory goes back to the kernel before Combine returns: the Go runtime
 // would keep it, the keyslot's own Argon2id comes on top, and an initrd has no swap
-// (docs/DISK-KEY.md, "Memory"). x/crypto does not wipe that memory and gives no way
+// (docs/DISK-KEY.md, "Memory"). In a locked process too: sandbox.LockMemory locks on
+// fault, which is what lets the runtime give locked memory back. x/crypto does not wipe that memory and gives no way
 // to; whether it is the runtime's or the kernel's free page changes nothing for
 // whoever reads the machine's RAM, and the kernel hands it out zeroed.
 func Combine(password, salt []byte) ([]byte, error) {

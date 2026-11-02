@@ -37,7 +37,8 @@ func memTotalMiB(meminfo []byte) uint64 {
 }
 
 // MemoryNote says what this process holds now, for the boot's log: the Go heap
-// not given back to the kernel, what is resident, and the most that was
+// not given back to the kernel, what is resident, the most that was, and the
+// locked address space, most of it the runtime's reservations and untouched
 // (docs/DISK-KEY.md, "Memory"). Numbers alone; nothing of what they hold.
 func MemoryNote() string {
 	var m runtime.MemStats
@@ -46,7 +47,7 @@ func MemoryNote() string {
 	if err != nil {
 		return fmt.Sprintf("memory: heap %d MiB", (m.HeapSys-m.HeapReleased)>>20)
 	}
-	return fmt.Sprintf("memory: heap %d MiB, resident %d MiB, peak %d MiB", (m.HeapSys-m.HeapReleased)>>20, statusMiB(status, "VmRSS"), statusMiB(status, "VmHWM"))
+	return fmt.Sprintf("memory: heap %d MiB, resident %d MiB, peak %d MiB, locked %d MiB", (m.HeapSys-m.HeapReleased)>>20, statusMiB(status, "VmRSS"), statusMiB(status, "VmHWM"), statusMiB(status, "VmLck"))
 }
 
 var statusLine = regexp.MustCompile(`(?m)^(Vm[A-Za-z]+):\s+(\d+) kB$`)
