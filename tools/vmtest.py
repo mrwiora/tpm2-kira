@@ -431,7 +431,7 @@ class Vault:
         while time.time() < deadline:
             if "serving " in self._sh(["docker", "logs", self.NAME], check=False):
                 break
-            time.sleep(1)
+            time.sleep(0.5)
         else:
             raise Fail("the vault does not serve:\n" + self._sh(["docker", "logs", self.NAME], check=False)[-800:])
         out = self.admin("operator", "add", "vmtest")
@@ -468,7 +468,7 @@ class Vault:
             m = re.search(r"^(\S+)\s+\S+\s+" + re.escape(name) + r"\s+pending\s", self.admin("requests"), re.M)
             if m:
                 return m.group(1)
-            time.sleep(2)
+            time.sleep(1)
         return None
 
     def admin(self, *args):
@@ -521,7 +521,7 @@ class Machine:
     def power_off(self):
         """The guest powered off, the moment the command has returned; a
         machine of tools/localvm.py, whose qemu ends with it."""
-        self.run("nohup sh -c 'sleep 2; systemctl poweroff' >/dev/null 2>&1 &")
+        self.when_returned("systemctl poweroff")
         if not self.lv.wait_stopped(180):
             raise Fail("the guest did not power off")
 
@@ -555,7 +555,9 @@ class Machine:
         port = {22: self.ssh_port, SSH_PORT: self.boot_port}.get(port, port)
         try:
             with socket.create_connection((self.host, port), timeout=2) as c:
-                c.settimeout(5)
+                # A port forward holds the connection while the guest gives no
+                # answer: a banner comes at once, or the next try sees it.
+                c.settimeout(2)
                 return c.recv(8).startswith(b"SSH-")
         except OSError:
             return False
@@ -565,8 +567,24 @@ class Machine:
         while time.time() < deadline:
             if self.port_open(port) == up:
                 return True
-            time.sleep(2)
+            time.sleep(0.5)
         return False
+
+    def wait_login(self, what, timeout=120):
+        """A login works: the system is up as far as what the checks read
+        (sshd comes after sysinit, and lets a user in once the boot allows it)."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            rc, _ = self.run("true")
+            if rc == 0:
+                return
+            time.sleep(1)
+        raise Fail(f"{what}: ssh does not let in")
+
+    def when_returned(self, command):
+        """Runs a root command that takes the machine away, once this ssh command
+        has returned: its shell gone, the background job goes on."""
+        self.run(f"nohup sh -c 'while kill -0 $1 2>/dev/null; do sleep 0.1; done; {command}' _ $$ >/dev/null 2>&1 &")
 
     # -- the steps ------------------------------------------------------------
 
@@ -827,7 +845,7 @@ class Machine:
         if not self.check(f"boot {n}: the system comes up (ssh)", self.wait_port(22, True, 300)):
             raise Fail("the system does not come up")
         self.lap("the initrd's end to ssh")
-        time.sleep(5)
+        self.wait_login(f"boot {n}")
         rc, out = self.run("tpm2-kira status --json", save=f"status-boot{n}.json")
         try:
             slots = json.loads(out).get("slots", [])
@@ -985,7 +1003,7 @@ class Machine:
         self.lap("nobody at the machine, to ssh")
         if not self.check("the vault's boot: the system comes up with nobody at the console or in SSH", up):
             raise Fail("the vault's boot did not come up")
-        time.sleep(5)
+        self.wait_login("the vault's boot")
         log = ("cat /run/initramfs/tpm2-kira.log" if self.distro == "debian" else
                "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service")
         rc, out = self.run(log + " 2>&1", save="boot-vault-tpm2-kira.log")
@@ -1018,7 +1036,7 @@ class Machine:
             s.close()
         up = self.wait_port(22, True, 300)
         self.check("revoked: the disk unlocks with the password and the salt", up)
-        time.sleep(5)
+        self.wait_login("revoked")
         rc, out = self.run(log + " 2>&1", save="boot-revoked-tpm2-kira.log")
         self.check("revoked: the vault refused, the key was answered from the typed keyslot", "the device is revoked" in out and "unlock: answered for" in out, out[-600:])
         vault.admin("device", "unrevoke", self.name)
@@ -1095,7 +1113,7 @@ class Machine:
         up = self.wait_port(22, True, 420)
         if not self.check("the pepper's boot: the system comes up with nobody at the console", up):
             raise Fail("the pepper's boot did not come up")
-        time.sleep(5)
+        self.wait_login("the pepper's boot")
         log = ("cat /run/initramfs/tpm2-kira.log" if self.distro == "debian" else
                "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service")
         rc, out = self.run(log + " 2>&1", save="boot-vault-pepper-tpm2-kira.log")
@@ -1187,7 +1205,7 @@ class Machine:
         up = self.wait_port(22, True, 300)
         if not self.check("TPM salt: the disk unlocks with the password alone", up):
             raise Fail("the TPM salt's boot did not come up")
-        time.sleep(5)
+        self.wait_login("TPM salt")
         out = self.boot_log("boot-tpm-salt-tpm2-kira.log")
         self.check("TPM salt: opened while the code screen held, the key answered", "tpm salt: slot 0: opened" in out and "unlock: answered for" in out, out[-600:])
         out = self.luks_remove(keyslot, "luks-remove-tpm-salt")
@@ -1249,7 +1267,7 @@ class Machine:
             self.check("the vault's CLI answers the queue (requests answer, the pepper asked)", rc == 0 and name in out and "approved" in out, out[-400:])
             deadline = time.time() + 120
             while time.time() < deadline and releases() <= released_before:
-                time.sleep(2)
+                time.sleep(1)
             self.check("typed vault: the vault released the salt while the code screen held", releases() > released_before)
 
         s, _ = self.typed_boot("typed vault", "the vault released", before_enter=approve)
@@ -1261,7 +1279,7 @@ class Machine:
         up = self.wait_port(22, True, 300)
         if not self.check("typed vault: the disk unlocks with the password and the vault's salt", up):
             raise Fail("the typed vault's boot did not come up")
-        time.sleep(5)
+        self.wait_login("typed vault")
         out = self.boot_log("boot-vault-typed-tpm2-kira.log")
         self.check("typed vault: the salt opened during the hold, the key answered", "released; the salt is opened" in out and "unlock: answered for" in out, out[-600:])
         out = vault.admin("audit")

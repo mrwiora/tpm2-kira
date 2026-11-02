@@ -186,7 +186,11 @@ class Hib:
     def agent_probe(self, tag):
         """aSSH's agent asks the CA for a certificate: the attempt a root
         process would make."""
-        rc, out = self.run(f"timeout 20 {PROBE} agent --config {CONF} --dir /run/assh-probe --uid 0 2>&1; true",
+        # It serves until it is stopped: asked, it has said how the CA answered
+        # once it names its socket.
+        rc, out = self.run(f"f=$(mktemp); timeout 60 {PROBE} agent --config {CONF} --dir /run/assh-probe --uid 0 >$f 2>&1 & p=$!; "
+                           "while kill -0 $p 2>/dev/null && ! grep -q 'assh: agent at' $f; do sleep 0.2; done; "
+                           "kill $p 2>/dev/null; wait $p 2>/dev/null; cat $f; rm -f $f; true",
                            save=f"agent-{tag}.log")
         return out
 
@@ -251,10 +255,10 @@ class Hib:
             self.run("swapon /swapfile 2>/dev/null; true")  # not in fstab: on again after a reboot
         before = self.state(f"{tag}-before")
         _, self.memmap = self.run(MEMMAP, save=f"{tag}-memmap-before.log")
-        self.run("nohup sh -c 'sleep 2; systemctl hibernate' >/dev/null 2>&1 &")
+        self.m.when_returned("systemctl hibernate")
         deadline = time.time() + 600
         while self.lv.pid() and time.time() < deadline:
-            time.sleep(2)
+            time.sleep(0.5)
         if self.lv.pid():
             raise vmtest.Fail(f"{tag}: the guest did not hibernate (qemu still runs)")
         self.m.lap(f"{tag}: writing the image, the power-off")
@@ -275,25 +279,20 @@ class Hib:
             s.send("\r")
             s.expect(r"Password for disk \S+: ?$", 120); s.send(vmtest.TEST_PASSWORD + "\r")
             s.expect(r"Salt for disk \S+: ?$", 60); s.send(vmtest.TEST_SALT + "\r")
-            # A resume never leaves the initrd: the server goes with it,
-            # the connection without a last word.
-            time.sleep(5)
+            # A resume never leaves the initrd: the server goes with it, the
+            # connection without a last word. The session is held until the
+            # system is back, so that what was typed arrives whatever the boot does.
+            back = m.wait_port(22, True, 300)
         finally:
             s.close()
-        if not self.check(f"{tag}: the system is back (ssh)", m.wait_port(22, True, 300)):
+        if not self.check(f"{tag}: the system is back (ssh)", back):
             raise vmtest.Fail("the system does not come back")
         m.lap(f"{tag}: the prompts to ssh (Argon2id, the keyslot, the resume)")
 
     def wait_login(self, tag):
         """ssh itself works: a banner is not enough (setup turned sshd's
         per-source penalties off, which these probes would earn)."""
-        deadline = time.time() + 120
-        while time.time() < deadline:
-            rc, _ = self.run("true")
-            if rc == 0:
-                return
-            time.sleep(5)
-        raise vmtest.Fail(f"{tag}: ssh does not let in")
+        self.m.wait_login(tag)
 
     def after_resume(self, tag, before):
         self.wait_login(tag)
@@ -334,8 +333,7 @@ class Hib:
             time.sleep(0.1)
         if "Reboot Into Firmware" not in lv.serial_text(since):
             raise vmtest.Fail(f"{tag}: systemd-boot's menu did not show")
-        lv.send("e")
-        time.sleep(1)
+        self.editor_open()
         lv.send("rd.systemd.mask=tpm2-kira.service rd.systemd.mask=tpm2-kira-unlock.socket ")
         lv.send("\r")
         lv.unlock(600)
@@ -375,6 +373,14 @@ class Hib:
             time.sleep(0.5)
         return lv.serial_text(since), False
 
+    def editor_open(self):
+        """Opens systemd-boot's editor at its menu: it draws itself on the console."""
+        lv, mark = self.lv, self.console_mark()
+        lv.send("e")
+        deadline = time.time() + 10
+        while self.console_mark() == mark and time.time() < deadline:
+            time.sleep(0.05)
+
     def menu_edit(self, words, tpm=True):
         """Arch: a start, and at systemd-boot's menu the command line edited: this
         machine has Secure Boot off. The menu comes for a key that is there the
@@ -389,8 +395,7 @@ class Hib:
                 lv.send(" ")
                 time.sleep(0.1)
             if "Reboot Into Firmware" in lv.serial_text(since):
-                lv.send("e")
-                time.sleep(1)
+                self.editor_open()
                 lv.send(words + " ")
                 lv.send("\r")
                 return since
@@ -514,7 +519,7 @@ class Hib:
         rc, out = self.run("cp /boot/grub/grub.cfg /boot/grub/grub.cfg.kira; sed -i 's#^\\(\\s*linux\\s.*\\)$#\\1 " + words + "#' /boot/grub/grub.cfg; grep -c " + words + " /boot/grub/grub.cfg", save="silent-grub.log")
         self.check("V9 step 6: the driver kept from starting on GRUB's command line", rc == 0 and out.strip() != "0", out)
         rc, boot = self.run("cat /proc/sys/kernel/random/boot_id")
-        self.run("nohup sh -c 'sleep 2; systemctl poweroff' >/dev/null 2>&1 &")
+        m.when_returned("systemctl poweroff")
         if not lv.wait_stopped(300):
             raise vmtest.Fail("V9: the guest did not power off")
         lv.start(unlock=False)
@@ -545,7 +550,7 @@ class Hib:
         if self.distro == "debian":
             rc, out = self.run("sed -i 's#^\\(\\s*linux\\s.*\\)$#\\1 break=bottom#' /boot/grub/grub.cfg; grep -c 'break=bottom' /boot/grub/grub.cfg", save="wayout-grub.log")
             self.check("V8: Debian - break=bottom on GRUB's command line", rc == 0 and out.strip() != "0", out)
-        self.run("nohup sh -c 'sleep 2; systemctl poweroff' >/dev/null 2>&1 &")
+        m.when_returned("systemctl poweroff")
         if not lv.wait_stopped(300):
             raise vmtest.Fail("V8: the guest did not power off")
         if self.distro == "debian":
@@ -553,8 +558,9 @@ class Hib:
             since = lv.mark
             self.console_prompts(since)
             self.console_expect(re.compile(r"\(initramfs\) ?$", re.M), 120, since, ruled_out=None)
+            mark = self.console_mark()
             lv.send("rm -r /etc/tpm2-kira/plan/tpm\r")
-            time.sleep(1)
+            self.console_expect(re.compile(r"\(initramfs\) ?$", re.M), 30, mark, ruled_out=None)
             lv.send("exit\r")
         else:
             since = self.menu_edit("tpm2-kira.noclose", tpm=False)
@@ -577,10 +583,15 @@ class Hib:
             self.m.rep.issues.append(f"V5: not tested - the guest offers no suspend to RAM (S3): mem_sleep is '{out.strip()}'")
             return
         before = self.state("V5-before")
-        self.run("nohup sh -c 'sleep 2; systemctl suspend' >/dev/null 2>&1 &")
-        time.sleep(15)
+        self.m.when_returned("systemctl suspend")
+        deadline = time.time() + 120
+        while time.time() < deadline and self.lv.qmp({"execute": "query-status"}).get("return", {}).get("status") != "suspended":
+            time.sleep(0.25)
+        if not self.check("V5: the guest is suspended (qemu says so)", self.lv.qmp({"execute": "query-status"}).get("return", {}).get("status") == "suspended"):
+            raise vmtest.Fail("V5: the guest did not suspend")
         self.lv.qmp({"execute": "system_wakeup"})
         self.m.wait_port(22, True, 120)
+        self.wait_login("V5")
         st = self.state("V5-after")
         self.check("V5: after suspend to RAM the CA is still closed", st["locked"] and st["boot"] == before["boot"], st["out"][-400:])
         self.m.rep.issues.append(f"V5: restartCount {before['restart']} -> {st['restart']}")

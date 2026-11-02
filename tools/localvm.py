@@ -184,7 +184,7 @@ class Machine:
                 return m
             if not self.pid():
                 raise Fail(f"{self.name}: qemu ended")
-            time.sleep(1)
+            time.sleep(0.25)
         raise Fail(f"{self.name}: waited {timeout} s for /{rx.pattern}/ at the serial console; it showed:\n" + self.serial_text(since)[-1500:])
 
     def unlock(self, timeout):
@@ -201,16 +201,17 @@ class Machine:
         while time.time() < deadline:
             try:
                 with socket.create_connection(("127.0.0.1", self.ssh_port), timeout=3) as s:
-                    s.settimeout(5)
+                    s.settimeout(2)
                     if s.recv(64).startswith(b"SSH-"):
                         print(f"{self.name}: ssh answers")
                         return
             except OSError:
                 pass
-            time.sleep(2)
+            time.sleep(0.5)
         raise Fail(f"{self.name}: ssh does not answer within {timeout} s")
 
     def qmp(self, *commands):
+        """The commands in order; the last one's reply."""
         with socket.socket(socket.AF_UNIX) as s:
             s.connect(self.path("qmp.sock"))
             f = s.makefile("rw")
@@ -222,6 +223,7 @@ class Machine:
                     reply = json.loads(f.readline())
                     if "event" not in reply:
                         break
+            return reply
 
     def wait_stopped(self, timeout):
         """Whether the machine's qemu ended by itself (a power-off) within
@@ -243,13 +245,13 @@ class Machine:
             pass
         deadline = time.time() + timeout
         while self.pid() and time.time() < deadline:
-            time.sleep(1)
+            time.sleep(0.25)
         if self.pid():
             try:
                 self.qmp({"execute": "quit"})
             except OSError:
                 os.kill(self.pid(), 9)
-            time.sleep(2)
+            self.wait_stopped(20)
         print(f"{self.name}: stopped")
 
     def kill(self):
