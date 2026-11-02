@@ -170,7 +170,7 @@ state waits; `--fast-kdf` is the test build's cost on top of that.
 | a typed boot (reboot 1) | 68 | 48 | 38 | 81 | 59 | 49 |
 | a boot, wrong pepper then right | 96 | 82 | 60 | 127 | 110 | 66 |
 | hibernate test, all | 1240 | 1064 | 1002 | 1171 | 1074 | 919 |
-| V2 | 272 | 231 | 212 | 76 | 68 | 52 |
+| V2 (Arch: the guest's clock, below) | 272 | 231 | 212 | 76 | 68 | 52 |
 | V4 | 502 | 421 | 388 | 199 | 191 | 158 |
 | V5 | 23 | 3.5 | 3.6 | 23 | 3.9 | 3.9 |
 | V8 | 55 | 52 | 82 | 101 | 94 | 81 |
@@ -183,9 +183,16 @@ gained nothing and fails (`tools/LOCALVM.md`, "Memory").
 What is left is mostly the machines and the product:
 - the V4 and V9 boots without a TPM's answer (Arch's silent TPM alone 240 s) wait for
   the close's own timeouts;
-- Arch's V2 spends about 205 s between the prompts and ssh, on the first resume after
-  the setup, about 30 s from `hib-setup`: not explained, and not Argon2id (212 s with
-  `--fast-kdf`);
+- Arch's V2 spends about 182 s of a run from `fresh`, about 10 s from `hib-setup`, with the
+  resumed kernel idle: its clock stands still. A guest's `kvm-clock` counts from qemu's
+  start, guest reboots included; a resume is under a new qemu, whose clock is behind what
+  the kernel last read, and the kernel holds to its last value until the new one passes
+  it. So the wait is qemu's time before the hibernation less its time at the resume: 223
+  less 40 s from `fresh`, none from a snapshot started just before. Holding a guest up
+  300 s longer from `hib-setup` makes the 10 s more than the test's 300 s
+  (`.local/runs/k/k2`). It is the test machine's, not tpm2-kira's, and left as it is; a
+  run that spends longer before V2 than that margin fails V2 with "the system does not
+  come back";
 - firmware to the boot SSH server is 18-20 s on Arch and 28 s on Debian (GRUB's timeout
   is `fresh`'s), the initrd's end to ssh 6 and 10-16 s;
 - Argon2id itself is 11-17 s per derivation on the 2 vCPUs.

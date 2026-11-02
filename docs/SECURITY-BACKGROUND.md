@@ -1117,8 +1117,9 @@ protective but are not, and `slot add`/`slot approve` warn about each:
 | No PCR for kernel, initrd or command line (e.g. `0,7`, `0e,2e,7e`) | Nothing before the passphrase prompt is attested after the bootloader. A replaced initrd, or a shell from an edited command line (`rd.break`, `break=`), runs with these PCRs intact: it can log the passphrase while the genuine code is shown, or have the TPM compute codes for future times. PCR 11 (UKI), PCRs 8+9 (GRUB) or 9+12 (systemd-boot) close this. On a GRUB boot `slot add` refuses a selection without 8 and 9 (§15). |
 | PCR 7 with Secure Boot disabled, or the platform in Setup Mode | PCR 7 records the Secure Boot state and policy. With Secure Boot off it faithfully records "disabled", and nothing verifies which bootloader or kernel runs — a matching PCR 7 does not mean the boot chain was checked. In Setup Mode the keys can be replaced without physical presence, so the attested policy is one any root user can rewrite. `control` judges both red. |
 
-The Secure Boot state is read from `/sys/firmware/efi/efivars`. When it cannot
-be read at all, tpm2-kira says so rather than staying silent.
+On the machine, the Secure Boot state is read from `/sys/firmware/efi/efivars`. When it
+cannot be read at all, tpm2-kira says so rather than staying silent. A phone and the vault
+do not take that word: they establish it from the quote (§13.5).
 
 ### Trust boundaries
 

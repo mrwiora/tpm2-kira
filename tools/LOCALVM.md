@@ -76,6 +76,12 @@ These are the points that matter, and why. The full command line is in
   login: nothing in the resumed system keeps the armed watchdog alive. A test
   machine with that reset is no test of a resume; what a real machine does is
   not shown by it (SECURITY-BACKGROUND.md §18).
+- **`kvm-clock` counts from qemu's start, and a resume is under a new qemu.** The
+  resumed kernel keeps its clock at the last value it read until the new one passes it:
+  the guest sits idle, nothing fires, for as long as qemu had been up before the
+  hibernation, less its time at the resume. About 182 s on Arch's V2 from `fresh`, about 10
+  s from a snapshot (docs/TESTING.md). A machine without `kvm-clock` has no such wait: what
+  real hardware does at a resume is not shown here.
 - **TPM:** `tpm-crb` on swtpm through a unix socket. `swtpm_setup
   --create-ek-cert --create-platform-cert` provisions it the way libvirt
   does: the phone and vault steps of `vmtest.py` read the EK certificate.
@@ -112,9 +118,9 @@ sealed at it (below 2816 MiB its PCRs move: a machine's snapshot does not carry 
 | 4096 | | - | every step holds, nothing killed, no swap touched |
 | 3072 | | unchanged (down to 2816) | every step holds; the boot after a wrong pepper too |
 | 2048 | 1872 | PCR 0 and 10 differ | every step holds |
-| 1792 | 1620-1635 | they differ | every step holds, no swap touched: **the floor** (`diskkey.MinMemoryMiB`, red in `control` below) |
+| 1792 | 1620-1635 | not compared | every step holds, no swap touched: **the floor** (`diskkey.MinMemoryMiB`, red in `control` below) |
 | 1536 | 1368-1383 | PCR 0, 1 and 10 differ | every boot opens, nothing killed; Debian's enrolment swaps 3 pages, which an Argon2id must not |
-| 1280 | 1131 | they differ | Arch's enrolment does not end within 900 s; Debian's swaps 1.6 million pages and its boot does not come up |
+| 1280 | 1131 | not compared | Arch's enrolment does not end within 900 s; Debian's swaps 1.6 million pages and its boot does not come up |
 
 Each run: `.local/runs/k/mem/`. A keyslot is enrolled at the size the machine has, and
 `cryptsetup` scales its own Argon2id to that (340-500 MiB of memory here): a disk with a
