@@ -1,8 +1,18 @@
+            "initramfs plan": ("tpm2-kira initramfs plan 2>&1", r"in\s+TOTP codes"),
+            "help slot": ("tpm2-kira help slot 2>&1", r"tpm2-kira slot add"),
+            "help run (the boot binary's page)": ("tpm2-kira help run 2>&1", r"tpm2-kira-boot run"),
+            "status": ("tpm2-kira status 2>&1", r"slot 0 .*signed by this machine's key"),
+            "slot info": (f"tpm2-kira slot info --nvram {self.slots[-1]} 2>&1", r"Signature: valid"),
+            "slot list": ("tpm2-kira slot list 2>&1", r"slot #0"),
+        rc, out = self.run("tpm2-kira status 2>&1; echo rc=$?", root=False)
+        self.check("root gate: 'status' as a user refuses", "root is needed" in out and "rc=1" in out, out.strip())
+        rc, out = self.run("tpm2-kira help >/dev/null 2>&1; echo rc=$?", root=False)
+        self.check("'help' answers as a user", "rc=0" in out)
 #!/usr/bin/env python3
 """The VM test: tpm2-kira's whole life on a fresh, encrypted test VM.
 
     tools/vmtest.py --target both              # or arch, or debian
-    tools/vmtest.py --target both --cycles 3 --no-vault
+    tools/vmtest.py --target both --no-vault
 
 It runs with nobody at the keyboard and ends with ALL PASS (exit 0) or
 FAILED. Before the machines are touched it builds the packages of the
@@ -40,7 +50,8 @@ What it does, each step a check in the report:
      server at boot with its SSH CA, debug at boot, the image rebuilt; the
      key that may log in at boot is a test key made here
   6. the image: tpm2-kira-boot and its plan, no tpm2-kira, no control.conf
-  7. --cycles reboots: the boot SSH server, its host key checked against
+  7. boot 1 (boot 2 is the revoked device's in 8, or a typed one without the vault):
+     the boot SSH server, its host key checked against
      the SSH CA (StrictHostKeyChecking), the codes of both slots against the
      computed ones, Enter, the password and the salt typed in the session;
      after each boot: the key was answered, no tpm2-kira error; the boot is
@@ -80,12 +91,17 @@ What it does, each step a check in the report:
      no index of its range left in the TPM, no KIRAasshCA variable, no
      ssh_ca.pub
 
+On the machines of tools/localvm.py the steps of tools/hibernatetest.py run here too, in this
+machine and this process, on one setup: its report has them all, and a step that fails sends the
+machine back to the setup and the next goes on. The order spares waits: boot 1 under a new qemu,
+the hibernation and the resume right after it, then the rest, the failure paths (V4, V9, V8) last.
+
 Iterating (a run from the reset is what a final proof is): on the machines of
 tools/localvm.py, --save-setup makes steps 1-6 once, keeps the state after them
 in the snapshot "setup" and ends; --from-setup starts from it, at the first
-reboot, and its report says it is no final proof. hibernatetest.py's setup
-takes the same snapshot. A change to the product wants a new --save-setup;
---drop-setup removes it. "fresh" and "export" are never written.
+reboot, and its report says it is no final proof, as --only SECTION does, and leaving things out
+with --no-hibernate or --no-failure-paths. hibernatetest.py takes the same snapshot. A change to the
+product wants a new --save-setup; --drop-setup removes it. "fresh" and "export" are never written.
 
 --fast-kdf runs on a TEST package: Argon2id at a test's cost, by a Go build tag
 (packaging/build-packages.sh --fast-kdf, build/packages-fastkdf). The whole
@@ -140,6 +156,9 @@ SETUP_SNAPSHOT = "setup"
 BATCH_MARK = "@@tpm2-kira-vmtest@@"
 FROM_SETUP_NOTE = "NOT A FINAL PROOF: started from a saved setup, not from the snapshot fresh."
 FAST_KDF_NOTE = "NOT A FINAL PROOF: a --fast-kdf TEST build, Argon2id at a test's cost, not the production's."
+PARTIAL_NOTE = "NOT A FINAL PROOF: a part of the run: "
+# What a run is made of, in its order. --only takes these names.
+SECTIONS = ("setup", "boots", "hibernate", "vault", "slot-life", "failure-paths")
 
 
 def clean(data):
@@ -227,11 +246,18 @@ def print_slowest(timings, n=10):
         print(f"  {t.total():7.1f}  [{t.label}] in all")
 
 
+def load_localvm_fail():
+    """localvm's own failure, which steps on its machines meet: one module per process."""
+    return (load_localvm().Fail,)
+
+
 def load_localvm():
-    spec = importlib.util.spec_from_file_location("localvm", os.path.join(REPO, "tools", "localvm.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    if "localvm" not in sys.modules:
+        spec = importlib.util.spec_from_file_location("localvm", os.path.join(REPO, "tools", "localvm.py"))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["localvm"] = mod
+        spec.loader.exec_module(mod)
+    return sys.modules["localvm"]
 
 
 def local_machines(config, names):
@@ -293,13 +319,14 @@ class SavedSetup:
 
     def save(self):
         """Powers the guest off and keeps it; it stays off."""
+        self.m.secure_boot_warning()
         self.m.power_off()
         self.lv.snapshot(self.tag)
         commit = subprocess.run(["git", "-C", REPO, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
         fd = os.open(self.path(), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             json.dump({"commit": commit, "fast_kdf": self.fast_kdf, "secrets": self.m.secrets, "luks_dev": getattr(self.m, "luks_dev", None),
-                       "version": getattr(self.m, "version", None),
+                       "version": getattr(self.m, "version", None), "secure_boot": self.m.secure_boot_warning(),
                        "files": {n: open(os.path.join(self.m.dir, n)).read() for n in self.FILES}}, f)
 
     def problem(self):
@@ -323,6 +350,8 @@ class SavedSetup:
         self.lv.revert(self.tag)
         st = json.load(open(self.path()))
         self.m.secrets, self.m.luks_dev, self.m.version = st["secrets"], st["luks_dev"], st["version"]
+        # Read from the machine at the setup: a boot's code screen comes before its ssh.
+        self.m._secure_boot = st["secure_boot"]
         for n, body in st["files"].items():
             fd = os.open(os.path.join(self.m.dir, n), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as f:
@@ -533,12 +562,12 @@ class Vault:
 
 
 class Machine:
-    def __init__(self, name, distro, host, user, password, luks_pass, run_dir, cycles, ssh_port=22, boot_port=SSH_PORT):
+    def __init__(self, name, distro, host, user, password, luks_pass, run_dir, ssh_port=22, boot_port=SSH_PORT):
         self.name, self.distro, self.host, self.user = name, distro, host, user
         # The ports this side connects to: the machine's own 22 and SSH_PORT,
         # or what a port forward makes of them (tools/localvm.py).
         self.ssh_port, self.boot_port = ssh_port, boot_port
-        self.password, self.luks_pass, self.cycles = password, luks_pass, cycles
+        self.password, self.luks_pass = password, luks_pass
         self.dir = os.path.join(run_dir, name)
         os.makedirs(self.dir, exist_ok=True)
         self.log = acceptance.Log(self.dir)
@@ -550,6 +579,8 @@ class Machine:
         self.timing = Timing(name, self.log.say)
         self.notes = []  # the report's first lines: what kind of run this was
         self.fast_kdf = False
+        self.hib = None  # the hibernation steps (tools/hibernatetest.py), on tools/localvm.py's machines
+        self.resumed = False  # V2's resume ran, and no boot since
 
     # -- helpers ------------------------------------------------------------
 
@@ -846,10 +877,6 @@ class Machine:
             self.check("both binaries say they are a test build, as --fast-kdf asks", says == 2 and ".fastkdf" in self.version, out.strip())
         else:
             self.check("neither binary is a test build: the production cost", says == 0 and "fastkdf" not in self.version, out.strip())
-        rc, out = self.run("tpm2-kira status 2>&1; echo rc=$?", root=False)
-        self.check("root gate: 'status' as a user refuses", "root is needed" in out and "rc=1" in out, out.strip())
-        rc, out = self.run("tpm2-kira help >/dev/null 2>&1; echo rc=$?", root=False)
-        self.check("'help' answers as a user", "rc=0" in out)
 
     def seal(self):
         self.head("setup and slot add")
@@ -886,15 +913,9 @@ class Machine:
     def inspect(self):
         self.head("the commands that read")
         cmds = {
-            "status": ("tpm2-kira status 2>&1", r"slot 0 .*signed by this machine's key"),
-            "slot info": (f"tpm2-kira slot info --nvram {self.slots[-1]} 2>&1", r"Signature: valid"),
-            "slot list": ("tpm2-kira slot list 2>&1", r"slot #0"),
             "slot status": ("tpm2-kira slot status --nvram 0 2>&1", r"Slot 0 \(0x01803010\)\n  Record: EFI variable KIRAslot0-"),
             "phone ekcert": ("tpm2-kira phone ekcert 2>&1", r"EK certificate:"),
             "luks status": ("tpm2-kira luks status 2>&1", re.escape(self.luks_dev)),
-            "initramfs plan": ("tpm2-kira initramfs plan 2>&1", r"in\s+TOTP codes"),
-            "help slot": ("tpm2-kira help slot 2>&1", r"tpm2-kira slot add"),
-            "help run (the boot binary's page)": ("tpm2-kira help run 2>&1", r"tpm2-kira-boot run"),
         }
         for name, (cmd, want) in cmds.items():
             rc, out = self.run(cmd, save="cmd-" + name.split(" (")[0].replace(" ", "-") + ".log")
@@ -1194,6 +1215,12 @@ class Machine:
                    expected is not None and live is not None and expected == live.group(1).lower(), out[-500:])
         return got
 
+    def after_resume_boot(self, text):
+        """The first boot after V2's resume, whatever it is for: V7 of the hibernate test."""
+        if self.resumed:
+            self.resumed = False
+            self.check("V7: a normal reboot after the resume: the host key is certified again (strict known_hosts)", "Does the code match" in text, text[-300:])
+
     def unapproved_kernel(self):
         """Arch: an image the hooks did not approve, signed by the PCR key
         all the same: PCR 11 needs no approval, so slot 1 shows its code and
@@ -1207,14 +1234,14 @@ class Machine:
                            f"mkinitcpio -P 2>&1 | tail -3; mv /root/sd-tpm2-kira.off {hook}", save="unapproved-rebuild.log")
         self.check("unapproved: the hook did not approve it", "approv" not in out, out[-400:])
         self.check("unapproved: an image built without the hook's approval", rc == 0, out[-400:])
-        self.run("systemctl reboot")
-        self.wait_port(22, False, 120)
+        self.warm_reboot()
         if not self.check("unapproved: the boot SSH server answers", self.wait_port(SSH_PORT, True, 300)):
             raise Fail("no boot SSH server on the unapproved image")
         s = self.boot_session("unapproved")
         try:
             text, _ = s.expect(r"Does the code match your authenticator\?.*$", 60)
             at = time.time()
+            self.after_resume_boot(text)
             codes = dict(re.findall(r"^#(\d+): (\d{6})$", text, re.M))
             self.check("unapproved: the host key is certified (slot 1, PCR 11 by its signature; strict known_hosts)", True)
             self.check("unapproved: slot 0 shows no code (PCR 4 moved)", "0" not in codes, text[-500:])
@@ -1288,23 +1315,30 @@ class Machine:
         self.check("the key was answered", "unlock: answered for" in out, out[-600:])
         self.check_vault_secure_boot(vault)
 
-        # Revoked: no release; the typed keyslot is the fallback, over SSH.
-        self.head("a boot with the device revoked on the vault")
+        # Revoked: no release; the typed keyslot is the fallback, over SSH. The boot after the
+        # vault's with no image built and nothing approved in between: the second real boot of
+        # one approval, so boot 2's checks run on it.
+        self.head("a boot with the device revoked on the vault (boot 2)")
         vault.admin("device", "revoke", self.name)
-        self.run("systemctl reboot")
-        self.wait_port(22, False, 120)
+        console_from = self.console_mark()
+        self.warm_reboot()
         if not self.check("revoked: the boot SSH server answers", self.wait_port(SSH_PORT, True, 300)):
             raise Fail("no boot SSH server")
+        self.lap("firmware to the boot SSH server")
         s = self.boot_session("revoked")
         try:
-            text, _ = s.expect(r"Does the code match your authenticator\?.*$", 120)
+            text = self.code_screen(2, s, console_from, 120)
             self.check("revoked: the screen names the fallback", "the password and salt prompt if the vault gives no key" in text, text[-400:])
             s.send("\r")
             text, _ = s.expect(r"Password for disk \S+: ?$", 300)
             self.check("revoked: tpm2-kira says the vault gave no key and asks the typed keyslot", "no key from the vault" in text and "revoked" in text, text[-500:])
             s.send(TEST_PASSWORD + "\r")
             s.expect(r"Salt for disk \S+: ?$", 60); s.send(TEST_SALT + "\r")
-            s.wait_end(600)
+            self.lap("the prompts")
+            rest = s.wait_end(600)
+            self.lap("salt typed to the initrd's end (Argon2id, the keyslot)")
+            self.check("boot 2: the session ends with the server's last line ('The machine boots; ...')",
+                       "The machine boots; the SSH server stops." in rest, rest[-300:])
         except Fail as e:
             self.check("revoked: the fallback over SSH", False, str(e))
             raise
@@ -1312,9 +1346,12 @@ class Machine:
             s.close()
         up = self.wait_port(22, True, 300)
         self.check("revoked: the disk unlocks with the password and the salt", up)
-        self.booted("revoked")
-        rc, out = self.run(log + " 2>&1", save="boot-revoked-tpm2-kira.log")
+        self.check("boot 2: the system comes up (ssh)", up)
+        self.lap("the initrd's end to ssh")
+        got = self.after_boot(2)
+        out = got["log"]
         self.check("revoked: the vault refused, the key was answered from the typed keyslot", "the device is revoked" in out and "unlock: answered for" in out, out[-600:])
+        self.check("revoked: nothing was killed for memory", "Out of memory" not in got["oom"] and "oom-kill" not in got["oom"], got["oom"][-400:])
         vault.admin("device", "unrevoke", self.name)
 
     PEPPER = "vmtest pepper 7f3a"
@@ -1423,6 +1460,7 @@ class Machine:
         s = self.boot_session(name.replace(" ", "-"))
         try:
             text, _ = s.expect(r"Does the code match your authenticator\?.*$", 120)
+            self.after_resume_boot(text)
             self.check(f"{name}: the screen names the password prompt", "continue to the password prompt" in text, text[-300:])
             if before_enter:
                 before_enter()
@@ -1760,6 +1798,8 @@ class Machine:
         self.check_memory_lock()
         self.control()
         self.image()
+        if self.hib:
+            self.hib.prepare()
 
     def save_setup(self, package, setup, reset=None):
         """--save-setup: the steps up to the first reboot, kept; the run ends."""
@@ -1773,31 +1813,143 @@ class Machine:
             self.rep.issues.append(f"the test failed: {type(e).__name__}: {e}")
         return self.report()
 
-    def all(self, package, vault=None, reset=None, from_setup=None):
+    def first_boot(self):
+        """Boot 1, after the setup or from its snapshot: on tools/localvm.py's machines
+        under a new qemu, which keeps the guest's clock short for V2 (tools/LOCALVM.md)."""
+        lv = getattr(self, "lv", None)
+        if lv:
+            lv.start(unlock=False)
+        self.cycle(1, started=bool(lv))
+
+    def boot_two(self):
+        """Without the vault no revoked boot does it: a typed boot of its own."""
+        self.cycle(2)
+
+    def vault_chain(self):
+        self.vault(self.vault_of_run)
+        self.vault_pepper(self.vault_of_run)
+        self.vault_typed(self.vault_of_run)
+
+    def steps(self, sections):
+        """What the sections of a run are made of, in the order that spares waits: each
+        (name, function), to run one after the other. Boot 1 is what every section after the
+        setup starts from."""
+        hib, vault = self.hib, self.vault_of_run
+        hibernate = hib is not None and "hibernate" in sections
+        out = [("boot 1", self.first_boot)]
+        if hibernate:
+            out += [("V1", hib.image_has_close), ("V6", hib.swap_risk), ("hibernate", hib.hibernate_once), ("V3", hib.step_v3), ("V2", hib.step_v2)]
+        if "boots" in sections:
+            if self.distro == "arch":
+                out.append(("unapproved", self.unapproved_kernel))
+            out.append(("TPM salt", self.tpm_salt))
+        if hibernate:
+            out.append(("V5", hib.mem_sleep))
+        if "vault" in sections and vault:
+            out.append(("vault", self.vault_chain))
+        elif "boots" in sections:
+            out.append(("boot 2", self.boot_two))
+        if "slot-life" in sections:
+            out += [("slot life", self.slot_life), ("removal", self.removal)]
+        if hib is not None and "failure-paths" in sections:
+            out += [("V4", hib.failed_close), ("V9", hib.step_v9), ("V8", hib.way_out)]
+        return out
+
+    def recover(self):
+        """Back to the saved setup, booted: a state no failed step left anything in. False
+        when that does not work either: the machine is gone."""
+        setup = self.setup_snapshot
+        if setup is None or setup.problem():
+            return False
+        try:
+            self.head("back to the setup, after a failed step")
+            setup.restore()
+            self.lv.start(unlock=False)
+            self.resumed = False
+            self.typed_boot_unchecked()
+            return True
+        except (Fail, *load_localvm_fail()) as e:
+            self.rep.issues.append("stopped: the machine does not come back after a failed step: " + str(e).split("\n")[0])
+            return False
+
+    def typed_boot_unchecked(self):
+        """A boot of the recovery recipe over SSH, for a step that wants a running system: nothing
+        is said of it, the steps that test a boot do that."""
+        if not self.wait_port(SSH_PORT, True, 300):
+            raise Fail("no boot SSH server")
+        s = self.boot_session("unchecked")
+        try:
+            s.expect(r"Does the code match your authenticator\?.*$", 120)
+            s.send("\r")
+            s.expect(r"Password for disk \S+: ?$", 300); s.send(TEST_PASSWORD + "\r")
+            s.expect(r"Salt for disk \S+: ?$", 60); s.send(TEST_SALT + "\r")
+            s.wait_end(600)
+        finally:
+            s.close()
+        if not self.wait_port(22, True, 300):
+            raise Fail("the system does not come up")
+        self.wait_login("the unchecked boot")
+
+    def run_steps(self, steps):
+        """Each step in its order. A failed one is said, the machine goes back to the setup and
+        the next goes on, unless the machine is gone or there is no saved setup to go back to."""
+        for name, step in steps:
+            if not self.run_step(name, step):
+                if not self.recover():
+                    self.rep.issues.append(f"stopped after {name}; not run: " + (", ".join(n for n, _ in steps[[n for n, _ in steps].index(name) + 1:]) or "nothing"))
+                    return
+
+    def run_step(self, name, step):
+        try:
+            step()
+            return True
+        except (Fail, *load_localvm_fail()) as e:
+            self.rep.issues.append(f"stopped in {name}: " + str(e).split("\n")[0])
+        except SystemExit as e:  # acceptance's Target, which a thread would drop without a word
+            self.rep.issues.append(f"stopped in {name}: {e}")
+        except Exception as e:  # a defect of the test, reported as such
+            self.rep.issues.append(f"the test failed in {name}: {type(e).__name__}: {e}")
+        return False
+
+    def all(self, package, vault=None, reset=None, from_setup=None, setup=None, sections=SECTIONS, wanted=None, keep_setup=False):
+        """A whole run, or the sections named. from_setup: the saved setup instead of the
+        steps up to the first reboot; setup: where those are kept, for what fails later and
+        the hibernate steps. wanted: only the steps of these names."""
+        self.vault_of_run = vault
+        self.setup_snapshot = setup or from_setup
         try:
             if from_setup:
                 self.notes.append(FROM_SETUP_NOTE)
                 self.head(f"back to the setup: the snapshot {from_setup.tag}")
                 from_setup.restore()
-                self.lv.start(unlock=False)
             else:
                 self.make_setup(package, reset)
-            for n in range(1, self.cycles + 1):
-                self.cycle(n, started=bool(from_setup) and n == 1)
-            if self.distro == "arch":
-                self.unapproved_kernel()
-            self.tpm_salt()
-            if vault:
-                self.vault(vault)
-                self.vault_pepper(vault)
-                self.vault_typed(vault)
-            self.slot_life()
-            self.removal()
+                if setup:
+                    self.head(f"keeping the setup: the snapshot {setup.tag}")
+                    setup.save()
+            if sections != ("setup",):
+                steps = [(n, f) for n, f in self.steps(sections) if wanted is None or n in wanted]
+                self.run_steps(steps)
         except Fail as e:
             self.rep.issues.append("stopped: " + str(e).split("\n")[0])
+        except SystemExit as e:
+            self.rep.issues.append(f"stopped: {e}")
         except Exception as e:  # a defect of the test, reported as such
             self.rep.issues.append(f"the test failed: {type(e).__name__}: {e}")
+        finally:
+            self.clean_up(setup, keep_setup or bool(from_setup))
         return self.report()
+
+    def clean_up(self, setup, keep_setup):
+        """The run's own snapshots go, the machine stops."""
+        lv = getattr(self, "lv", None)
+        if not lv:
+            return
+        lv.kill()
+        if self.hib:
+            lv.drop_snapshot(self.hib.HIBERNATED)
+        if setup and not keep_setup:
+            setup.drop()
 
     def report(self):
         self.timing.finish()
@@ -1843,11 +1995,14 @@ def main():
     p.add_argument("--packages", help="where the built .deb and .pkg.tar.zst are (default build/packages, with --fast-kdf build/packages-fastkdf)")
     p.add_argument("--fast-kdf", action="store_true", help="WARNING: NO FINAL PROOF. A test package, built here with Argon2id at a test's cost (a Go build tag), never a release; the whole typed-recipe path runs, the real cost does not. Disks enrolled with one cost do not open with the other")
     p.add_argument("--password-file", help="the VMs' user password (default: the config's password_file, or $VMTEST_PASSWORD)")
-    p.add_argument("--cycles", type=int, default=2, help="reboots, each unlocked over the boot SSH server (default 2)")
     p.add_argument("--run-dir", help="default: ./vmtest-<time>")
     p.add_argument("--no-vault", action="store_true", help="leave out remote attestation over TLS (the vault)")
     p.add_argument("--no-build", action="store_true", help="take HEAD's packages already in --packages instead of building them")
     p.add_argument("--no-reset", action="store_true", help="do not run the machines' reset commands: they must be fresh already")
+    p.add_argument("--no-hibernate", action="store_true", help="leave out the hibernate steps (V1-V9): no final proof")
+    p.add_argument("--no-failure-paths", action="store_true", help="leave out V4, V8, V9: no final proof")
+    p.add_argument("--only", help="these sections alone, " + ",".join(SECTIONS) + ": no final proof; from the snapshot " + SETUP_SNAPSHOT + ", without building, unless setup is named")
+    p.add_argument("--keep-setup", action="store_true", help=f"leave the snapshot {SETUP_SNAPSHOT} a run makes on the way")
     p.add_argument("--localvm-config", help="the machines' config for the saved setup (default: tools/localvm.py's)")
     p.add_argument("--save-setup", action="store_true", help=f"the steps up to the first reboot, kept in the snapshot {SETUP_SNAPSHOT}; the run ends")
     p.add_argument("--from-setup", action="store_true", help=f"start from the snapshot {SETUP_SNAPSHOT}, without building: no final proof")
@@ -1855,6 +2010,18 @@ def main():
     args = p.parse_args()
     if sum((args.save_setup, args.from_setup, args.drop_setup)) > 1:
         p.error("--save-setup, --from-setup and --drop-setup exclude each other")
+    sections = tuple(s for s in SECTIONS if s in args.only.split(",")) if args.only else SECTIONS
+    unknown = set(args.only.split(",")) - set(SECTIONS) if args.only else None
+    if unknown:
+        p.error("no such section: " + ", ".join(sorted(unknown)) + "; there are " + ", ".join(SECTIONS))
+    if args.no_hibernate:
+        sections = tuple(s for s in sections if s not in ("hibernate", "failure-paths"))
+    if args.no_failure_paths:
+        sections = tuple(s for s in sections if s != "failure-paths")
+    if args.no_vault:
+        sections = tuple(s for s in sections if s != "vault")
+    if args.only and "setup" not in sections:
+        args.from_setup = True
     args.no_build = args.no_build or args.from_setup or args.drop_setup
     args.packages = args.packages or os.path.join(REPO, "build", "packages-fastkdf" if args.fast_kdf else "packages")
     if args.fast_kdf:
@@ -1869,12 +2036,13 @@ def main():
     if not password:
         print("the VMs' password: --password-file, password_file in the config, or VMTEST_PASSWORD", file=sys.stderr)
         return 2
-    run_dir = args.run_dir or os.path.join(os.getcwd(), "vmtest-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    run_dir = os.path.abspath(args.run_dir or os.path.join(os.getcwd(), "vmtest-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")))
     names = ["arch", "debian"] if args.target == "both" else [args.target]
     if subprocess.run(["git", "-C", REPO, "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True).stdout.strip():
         print("note: uncommitted changes are not tested: the packages are HEAD's", file=sys.stderr)
     local = {}
-    if args.save_setup or args.from_setup or args.drop_setup:
+    uses_localvm = any("localvm.py" in cfg.get(n, "reset", fallback="") for n in names)
+    if args.save_setup or args.from_setup or args.drop_setup or uses_localvm:
         localvm, local = local_machines(args.localvm_config or load_localvm().DEFAULT_CONFIG, names)
     if args.drop_setup:
         for lv in local.values():
@@ -1899,18 +2067,17 @@ def main():
             return 2
         sec = cfg[name]
         luks = sec.get("luks_passphrase") or os.environ.get("VMTEST_LUKS_PASSPHRASE") or password
-        machines.append(Machine(name, name, sec["host"], sec.get("user", "pix"), password, luks, run_dir, args.cycles,
+        machines.append(Machine(name, name, sec["host"], sec.get("user", "pix"), password, luks, run_dir,
                                 int(sec.get("ssh_port", "22")), int(sec.get("boot_port", str(SSH_PORT)))))
         if not args.no_reset and sec.get("reset"):
             resets[name] = sec["reset"]
         if name in local:
             machines[-1].lv = local[name]
-        elif "localvm.py" in resets.get(name, ""):
-            # The serial console's log: what the boot shows at the console.
-            machines[-1].lv = local_machines(args.localvm_config or load_localvm().DEFAULT_CONFIG, [name])[1][name]
         machines[-1].fast_kdf = args.fast_kdf
         if args.fast_kdf:
             machines[-1].notes.append(FAST_KDF_NOTE)
+        if sections != SECTIONS:
+            machines[-1].notes.append(PARTIAL_NOTE + ", ".join(sections))
         if packages[name]:
             why = package_is(packages[name], args.fast_kdf)
             machines[-1].check(f"the package is {'a test build, as --fast-kdf asks' if args.fast_kdf else 'a release build: no Go build tag, no trace of a test build'}", why is None, why or "")
@@ -1925,7 +2092,7 @@ def main():
             return 2
         print(FROM_SETUP_NOTE, flush=True)
     vault = None
-    if not args.no_vault and not args.save_setup:
+    if "vault" in sections and not args.save_setup:
         vc = cfg["vault"] if cfg.has_section("vault") else {}
         vault = Vault(os.path.abspath(os.path.join(REPO, vc.get("src", "../tpm2-kira-vault"))),
                       vc.get("url", "https://172.17.2.174"), int(vc.get("port", "443")), int(vc.get("operator_port", "8444")), run_dir)
@@ -1935,18 +2102,30 @@ def main():
         except Fail as e:
             print("the vault does not start:", e, file=sys.stderr)
             return 1
-    if not args.save_setup:
+    if "slot-life" in sections and not args.save_setup:
         timing.step("the channel fixture")
         fixture = build_channel_fixture(run_dir)
         for m in machines:
             m.channel_fixture = fixture
+    if local and not args.no_hibernate and (args.save_setup or {"setup", "hibernate", "failure-paths"} & set(sections)):
+        # The steps of the hibernate test, in this machine and this process.
+        timing.step("aSSH's command, the hibernate steps' probe")
+        sys.modules.setdefault("vmtest", sys.modules[__name__])
+        spec = importlib.util.spec_from_file_location("hibernatetest", os.path.join(REPO, "tools", "hibernatetest.py"))
+        hibernate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hibernate)
+        probe = hibernate.build_probe(run_dir)
+        for m in machines:
+            if m.name in local:
+                m.hib = hibernate.Hib(local[m.name], m, probe)
     timing.finish()
     results = {}
     print(f"tpm2-kira {short}: " + ", ".join(f"{m.name} {os.path.basename(packages[m.name] or 'the saved setup')}" + (" (reset)" if m.name in resets else "") for m in machines), flush=True)
     if args.save_setup:
         work = lambda m: m.save_setup(packages[m.name], setups[m.name], resets.get(m.name))
     else:
-        work = lambda m: m.all(packages[m.name], vault, resets.get(m.name), setups.get(m.name) if args.from_setup else None)
+        work = lambda m: m.all(packages[m.name], vault, resets.get(m.name), setups.get(m.name) if args.from_setup else None,
+                               setups.get(m.name), sections, keep_setup=args.keep_setup)
     threads = [threading.Thread(target=lambda m=m: results.__setitem__(m.name, work(m))) for m in machines]
     for th in threads:
         th.start()

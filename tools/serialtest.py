@@ -70,7 +70,7 @@ SYSTEM_PROMPT = r"(Please enter passphrase for disk \S+|Please unlock disk \S+):
 class Case:
     def __init__(self, lv, name, user, password, run_dir, package):
         self.lv, self.name, self.package = lv, name, package
-        self.m = vmtest.Machine(lv.name, lv.name, "127.0.0.1", user, password, lv.passphrase, run_dir, 0,
+        self.m = vmtest.Machine(lv.name, lv.name, "127.0.0.1", user, password, lv.passphrase, run_dir,
                                 lv.ssh_port, lv.boot_port)
         self.dir = run_dir
 
