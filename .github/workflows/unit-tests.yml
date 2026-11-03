@@ -40,6 +40,10 @@ jobs:
           cd core && go vet ./...
 
       - name: Run unit tests
+        env:
+          # As it ships. With cgo, syscall.AllThreadsSyscall refuses, and with it
+          # aSSH's sandbox: every confinement step of the boot's processes.
+          CGO_ENABLED: 0
         run: |
           go test -v -tags=unit -coverprofile=coverage.out ./internal/...
           cd core && go test -v ./...

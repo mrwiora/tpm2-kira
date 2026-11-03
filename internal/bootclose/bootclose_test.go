@@ -370,8 +370,7 @@ func bootBy(t *testing.T, path string) error {
 func TestCloseWaitsOnlyWhatIsLeft(t *testing.T) {
 	path := setup(t)
 	firmwareHasTPM(t)
-	Wait = time.Hour
-	waitBegan(t, time.Hour)
+	Wait = waitBeganAtBoot(t)
 	if err := bootBy(t, path); !errors.Is(err, ErrReboot) {
 		t.Fatalf("no wait left, the first time: the one reboot, got %v", err)
 	}
@@ -432,7 +431,7 @@ func TestNothingWrittenSkipsTheClose(t *testing.T) {
 	setup(t)
 	firmwareHasTPM(t)
 	efivars.Write(CounterVar, []byte{1})
-	waitBegan(t, time.Hour)
+	waitBeganAtBoot(t)
 	if err := touchPending(); err != nil {
 		t.Fatal(err)
 	}
@@ -549,4 +548,16 @@ func TestAwaitRunTakesAZombieForGone(t *testing.T) {
 	if !awaitRunReturns(t, dir+"/ready", dir+"/pid", 5*time.Second) {
 		t.Fatal("it waits for a zombie")
 	}
+}
+
+// waitBeganAtBoot has the first wait begin at the boot's start and gives how long ago that
+// was: a machine up for less than an hour (a CI runner) has no time of an hour ago.
+func waitBeganAtBoot(t *testing.T) time.Duration {
+	t.Helper()
+	var ts unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_BOOTTIME, &ts); err != nil {
+		t.Fatal(err)
+	}
+	waitBegan(t, time.Duration(ts.Nano()))
+	return time.Duration(ts.Nano())
 }

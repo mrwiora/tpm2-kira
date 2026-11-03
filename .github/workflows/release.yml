@@ -32,6 +32,9 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: Run unit tests
+        env:
+          # As it ships: with cgo, aSSH's sandbox cannot confine (AllThreadsSyscall).
+          CGO_ENABLED: 0
         run: |
           go test -tags=unit ./internal/...
           cd core && go test ./...

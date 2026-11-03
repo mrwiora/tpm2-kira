@@ -18,6 +18,9 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "gate-child" {
 		os.Exit(RadioWorkerMain(true))
 	}
+	// The tests read the narrative from journal.NarrateOut, the worker's too: under
+	// systemd (a CI runner's service, say) it would go to journald instead.
+	os.Unsetenv("JOURNAL_STREAM")
 	os.Exit(m.Run())
 }
 
@@ -55,7 +58,13 @@ func TestRadioWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	deadline := time.Now().Add(time.Minute)
 	for !strings.Contains(out.String(), "radio worker, uid") {
+		if time.Now().After(deadline) {
+			workerStopWait = 3 * time.Second
+			stop()
+			t.Fatalf("the worker never said it runs: %s", out)
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	stop()

@@ -276,12 +276,25 @@ force_load() { echo "FORCELOAD $1"; }
 auto_add_modules() { echo "AUTOMODULES $1"; }
 add_firmware() { echo "FIRMWARE $1"; }
 busybox() { :; }
-`+planStub), 0o644)
+`), 0o644)
+	// As commands, not planStub's functions: the hook runs under sh, and dash, Debian's,
+	// takes no '-' in a function's name.
+	bin := filepath.Join(dir, "bin")
+	os.MkdirAll(bin, 0o755)
+	os.WriteFile(filepath.Join(bin, "tpm2-kira-boot"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	os.WriteFile(filepath.Join(bin, "tpm2-kira"), []byte(`#!/bin/sh
+[ "$1 $2" = "initramfs plan" ] || exit 0
+root=${BUILDROOT:-$DESTDIR}
+for p in $PLAN_PARTS; do mkdir -p "$root/etc/tpm2-kira/plan/$p"; done
+case " $* " in *" --no-busybox "*) echo "say NOBUSYBOX" ;; esac
+printf '%s' "$PLAN_OUT"
+exit "${PLAN_RC:-0}"
+`), 0o755)
 	copyHook := filepath.Join(dir, "hook")
 	os.WriteFile(copyHook, []byte(strings.Replace(string(hook), "/usr/share/initramfs-tools/hook-functions", funcs, 1)), 0o755)
 	run := func(parts, out, busybox string) string {
 		cmd := exec.Command("sh", copyHook)
-		cmd.Env = append(os.Environ(), "DESTDIR="+t.TempDir(), "PLAN_PARTS="+parts, "PLAN_OUT="+out, "BUSYBOX="+busybox)
+		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "DESTDIR="+t.TempDir(), "PLAN_PARTS="+parts, "PLAN_OUT="+out, "BUSYBOX="+busybox)
 		b, _ := cmd.CombinedOutput()
 		return string(b)
 	}
