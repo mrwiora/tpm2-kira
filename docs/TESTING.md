@@ -11,21 +11,23 @@ Four depths. Each says what it can show; only the third and the fourth end a bat
 | **The proof** | `tools/proof.py` | from `fresh`, both machines in parallel: `setup`, `typed-boot`, `hibernate`, `unapproved` (Arch), `silent-tpm`, and then, back at `fresh` with Secure Boot really on, `secure-boot`, `tpm-salt`, `vault-pepper`, `revoked`, `firmware-refuses`; beside them `make test-all`, aSSH's tests, the vault's, safearch's `tests/run.sh` | target 15 min, limit 16; see below | yes, once per batch |
 | **`--all`** | `tools/proof.py --all`, before a release, the owner's call | the proof's scenarios and `second-typed-boot`, `debian-resume`, `V6`, `V3`, `vault-alone`, `typed-vault`, `slot-life`, `removal`, `no-tpm`, `V4-reverted`, `V9-long`, `V8`; safearch's `tests/vm.sh`, Marify's emulator test, go-uefi-slim's and tpm2-verifier's tests | about 26 min for the machines, summed from single runs: never run as one | yes, and more |
 
-Measured seconds, in the full run (`.local/runs/q/proof`, 702 s of the target of 900; `make test-all` 187 s
-and safearch's `tests/run.sh` 153 s started at 186 s, when the setups were done) and each scenario alone from
-a saved setup (`.local/runs/q/`), Arch / Debian:
+Measured seconds, in the full run (`.local/runs/m/proof`, 934 s of the target of 900, within the limit of 960; `make test-all` 197 s and
+safearch's `tests/run.sh` 127 s started at 201 s, when the setups were done) and each scenario alone from
+a saved setup (`.local/runs/m/`), Arch / Debian. The second setup, with Secure Boot on, is why a proof is over the target:
 
 | Scenario | In the full run | Alone | Budget |
 |---|---|---|---|
-| `setup` | 162 / 186 | 158 / 187 | 165 / 195 |
-| `typed-boot` | 50 / 69 | 46 / 54-58 | 52 / 70 |
-| `hibernate` | 67 / 7 | 63 / 6 | 68 / 10 |
-| `unapproved` | 76 / - | 71 / - | 77 / - |
-| `tpm-salt` | 26 / 30 | 26 / 33 | 30 / 35 |
-| `vault-pepper` | 136 / 167 | 136 / 149 | 140 / 168 |
-| `revoked` | 60 / 69 | 59 / 61 | 62 / 70 |
-| `silent-tpm` | 122 / 116 | 126 / 116 | 130 / 120 |
-| the machine | 699 / 644 | | 724 / 668 |
+| `setup` | 174 / 201 | 132 / 144 (`--fast-kdf`) | 175 / 202 |
+| `typed-boot` | 48 / 66 | 35 / 41 (`--fast-kdf`) | 49 / 67 |
+| `hibernate` | 67 / 6 | 53 / - (`--fast-kdf`) | 68 / 7 |
+| `unapproved` | 74 / - | 71 / - | 75 / - |
+| `silent-tpm` | 122 / 123 | 111 / - (`--fast-kdf`) | 124 / 124 |
+| `secure-boot` | 214 / 255 | 236 / 264 (`--fast-kdf`, a package build in it); from its saved setup 52 / 60 | 218 / 258 |
+| `tpm-salt` | 31 / 29 | 16 / 15 (`--fast-kdf`) | 32 / 30 |
+| `vault-pepper` | 131 / 157 | 102 / 108 (`--fast-kdf`) | 133 / 158 |
+| `revoked` | 59 / 65 | 51 / 54 (`--fast-kdf`) | 60 / 66 |
+| `firmware-refuses` | 11 / 9 | 12 / 9 (`--fast-kdf`) | 12 / 10 |
+| the machine | 931 / 912 | | 946 / 922 |
 
 After which change: `tools/test-affected.py` prints it, from the table in the workspace's AGENTS.md,
 "What to test after a change". In short: installed-system code, the fast depth; the boot, the close or
@@ -89,22 +91,23 @@ are done, beside them what needs no VM: `make test-all`, aSSH's tests, the vault
 it was in and those over their budgets. A scenario over its budget within the target is printed, and
 no failure.
 It reports in `report.txt` and `report.json` of its run's directory (`.local/runs/proof-<time>/`, or
-`--run-dir`), every scenario against its budget, and leaves the machines at `fresh`, stopped. A part
+`--run-dir`), every scenario against its budget, and leaves the machines at `fresh`, stopped (the snapshot
+`secureboot` stays). The budgets sum to no more than the limit, `tools/proof_test.py`; since the second setup they are over the target. A part
 that fails does not stop the others. `--only` is no final proof, and its report says so. A final proof
 is this, from `fresh`, without `--fast-kdf`: there is no flag for that.
 
 | Scenario (`vmtest.py --only NAME`) | What it shows | Budget Arch / Debian, s |
 |---|---|---|
-| `setup` | install, setup, enrolment, `control`, the memory lock of a command | 165 / 195 |
-| `typed-boot` | the typed boot over SSH, every running-system check in one go: certified key, TOTP, PCR 15 closed, slots refuse, PCR 4, Secure Boot's warning, memory locked, signed slots on Arch, 8 and 9 on Debian | 48 / 58 |
-| `hibernate` | Arch: hibernate and resume; both: the image's close before a resume, suspend; a kernel that refuses the image is "not tested", at once | 65 / 10 |
-| `unapproved` | an image not approved, signed by the PCR key (Arch) | 71 / - |
-| `silent-tpm` | the failure path: a silent TPM, one hard reboot, then the passphrase; one wait per boot (Arch reads the console's stamps); the close before a volume's unit | 130 / 120 |
-| `secure-boot` | back to `fresh`, real keys in the firmware (`tools/secureboot-vm.py`'s steps, its snapshot `secureboot`), a setup of its own and its typed boot with Secure Boot really on: nothing said of it anywhere, the slots' PCR 7 as approved | @SB@ |
-| `tpm-salt` | the salt in this TPM: its enrolment; its image is `vault-pepper`'s, its boot `revoked`'s | 30 / 35 |
-| `vault-pepper` | the vault, `on`: a wrong, then the right pepper; one image with the salt in this TPM; what the vault shows of a real `on` | 140 / 155 |
-| `revoked` | one boot, boot 2's checks: a device revoked on the vault, falling back to the password with the salt this TPM opened; the salt's keyslot removed | 62 / 65 |
-| `firmware-refuses` | one byte changed in what the firmware verifies (Arch the UKI, Debian shim): `Access Denied`, nothing of it runs | 15 / 15 |
+| `setup` | install, setup, enrolment, `control`, the memory lock of a command, a hook under a refused lock, the note on a vault's keyslot | 175 / 202 |
+| `typed-boot` | the typed boot over SSH, every running-system check in one go: certified key, TOTP, PCR 15 closed, slots refuse, PCR 4, Secure Boot's warning, memory locked, signed slots on Arch, 8 and 9 on Debian, the close before a volume's unit on Arch | 49 / 67 |
+| `hibernate` | Arch: hibernate and resume; both: the image's close before a resume, suspend; a kernel that refuses the image is "not tested", at once | 68 / 7 |
+| `unapproved` | an image not approved, signed by the PCR key (Arch) | 75 / - |
+| `silent-tpm` | the failure path: a silent TPM, one hard reboot, then the passphrase; one wait per boot (Arch reads the console's stamps); the close before a volume's unit | 124 / 124 |
+| `secure-boot` | back to `fresh`, real keys in the firmware (`tools/secureboot-vm.py`'s steps, its snapshot `secureboot`), a setup of its own and its typed boot with Secure Boot really on: nothing said of it anywhere, the slots' PCR 7 as approved | 218 / 258 |
+| `tpm-salt` | the salt in this TPM: its enrolment; its image is `vault-pepper`'s, its boot `revoked`'s | 32 / 30 |
+| `vault-pepper` | the vault, `on`: a wrong, then the right pepper; one image with the salt in this TPM; what the vault shows of a real `on` | 133 / 158 |
+| `revoked` | one boot, boot 2's checks: a device revoked on the vault, falling back to the password with the salt this TPM opened; the salt's keyslot removed | 60 / 66 |
+| `firmware-refuses` | one byte changed in what the firmware verifies (Arch the UKI, Debian shim): `Access Denied`, nothing of it runs | 12 / 10 |
 
 **Before a release, `--all`:** the proof's scenarios and the rest, named, with no limit, which also
 runs when named in `--only`:

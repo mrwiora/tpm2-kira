@@ -136,7 +136,7 @@ class Scenarios(unittest.TestCase):
     def test_the_budgets_fit_the_limit(self):
         for distro in ("arch", "debian"):
             total = sum((s.budget or {}).get(distro) or 0 for s in vmtest.SCENARIOS if s.distro in (None, distro))
-            self.assertLessEqual(total, proof.TARGET, distro)
+            self.assertLessEqual(total, proof.LIMIT, distro)
 
     def test_a_scenario_on_one_distribution_has_a_budget_for_it_alone(self):
         for s in vmtest.SCENARIOS:

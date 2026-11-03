@@ -1786,6 +1786,9 @@ arguments (docs/BOOT-INTEGRATION.md, "Arch and Debian"). What differs:
 | | Arch | Debian |
 |---|---|---|
 | Boot chain | systemd-boot, a UKI, mkinitcpio's systemd initrd | shim, GRUB, a separate initrd of initramfs-tools; a UKI waits for systemd 258 (HISTORY.md) |
+| Secure Boot on (VM) | the owner's keys, by sbctl: loader and UKI signed; its post hook signs a rebuild. The kernel does not lock itself down | Microsoft's certificates in db: shim, then Debian's GRUB and kernel. The kernel locks itself down (`integrity`) and refuses hibernation |
+| The initrd on the phone (§13.5a) | PCR 11: the hash of `.initrd\0` among its events | PCR 8: the hash of GRUB's `initrd` command, with 9 quoted |
+| A volume's unit | after the close: `cryptsetup-pre.target` is in the image, which the hook adds | init-bottom closes after cryptroot: the volume is open before that close; `run`'s came before READY |
 | Secure Boot checks | loader and the UKI: kernel, initrd, command line. The UKI's db signature comes from outside tpm2-kira (§18). systemd-boot refuses its editor and the stub a passed command line with Secure Boot on | GRUB and the kernel; not GRUB's command line, not the initrd |
 | The image in a slot | PCR 11, signed (`11s`) | PCR 8, 9, approved (`8e,9e`), and no slot without them |
 | A kernel update | the hook approves PCR 4 and the plain PCRs; 11 needs no approval; skipped, slot 1 still holds | the hook approves 8 and 9 in both slots, 4 in slot 0; skipped, the next boot has no slot and a temporary host key |
@@ -1805,7 +1808,7 @@ Which key does what:
 
 | Key | Type, where it lives | Made by | What it does | Taken or lost |
 |---|---|---|---|---|
-| Secure Boot db key | the owner's (sbctl's layout, e.g.), outside tpm2-kira on this branch (§18); on Debian the distribution's chain of shim, GRUB and the kernel | the owner | has the firmware start the loader and the UKI; PCR 7 records it | any image it signs starts; a slot still needs PCR 11 signed by the PCR key |
+| Secure Boot db key | the owner's (sbctl's layout, e.g.), outside tpm2-kira on this branch (§18); on Debian the distribution's chain of shim, GRUB and the kernel | the owner | has the firmware start the loader and the UKI (a changed one: `Access Denied`, §17.2); PCR 7 records it | any image it signs starts; a slot still needs PCR 11 signed by the PCR key |
 | PCR key | RSA-2048, `/etc/tpm2-kira/pcr.key` (0400), `pcr.pem`; a copy of the public part in the record | `setup`, not on GRUB | signs PCR 11 at `enter-initrd` through ukify | with the db key: an image slot 1 trusts (§19). Revocation: a new key and the slots approved again |
 | Signing key | ECDSA P-256 by default, `/etc/tpm2-kira/keys/seal.key` (0400), or a YubiKey PIV key; or any RSA-2048, P-256, P-384 | `setup` | approves PCR states for the slots and the CA, writes the generation and boot settings indices, signs the record | its holder approves any state, for the next boot on (§19). Lost: no approvals; slots go when the boot state moves, set up again |
 | SSH CA | ECDSA P-256 or RSA-2048, in the TPM, wrapped in the EFI variable `KIRAasshCA`, noDA | `control` | certifies this boot's host key, while PCR 15 is zero and a slot's PCRs are approved | never leaves. A TPM clear or variable wipe loses it: a new CA, the clients' line again |
@@ -1821,20 +1824,21 @@ Which key does what:
 
 ## 17. What Has Been Tested
 
-**The code:** tpm2-kira `f0965aa` (blob 20, schema 3; what came after it: test tools and documentation), vault `dcf9bda`, Marify `f8d4e61`, aSSH `8c18175`, safearch `f9c8745`, go-uefi-slim `8f7d9c7`. Rows at another commit say so: aSSH did not change after them.
-**Date:** 2026-11-02.
+**The code:** tpm2-kira `b4fd6ba` (blob 20, schema 4; what came after it: test tools and documentation), vault `c33cfce`, Marify `0615597`, aSSH `8c18175`, safearch `f9c8745`, go-uefi-slim `8f7d9c7`. Rows at another commit say so.
+**Date:** 2026-11-03.
 
-**The machines:** the VMs are QEMU with OVMF and swtpm as their TPM, in Secure Boot
-**Setup Mode** (`control` says so in red there). So no check below ran on a real TPM or
-real firmware, and on a VM's PCR 7 no Secure Boot signature was verified. "swtpm" means
-a test against a software TPM on the build machine, "unit" a test with no TPM.
+**The machines:** the VMs are QEMU with OVMF and swtpm as their TPM. The proof's first part runs in
+Secure Boot **Setup Mode** (`control` says so in red there); from the scenario `secure-boot` on, the
+machine has real keys in OVMF and Secure Boot really on (docs/TESTING.md). So no check below ran on a
+real TPM or real firmware. "swtpm" means a test against a software TPM on the build machine, "unit" a
+test with no TPM.
 Logs: `.local/runs/` of the workspace.
 
 ### 17.1 Results
 
 | Run | Code | On | Result |
 |---|---|---|---|
-| `tools/vmtest.py --target both`, from `fresh`, the machines in parallel, no `--fast-kdf` | f0965aa | VM | Arch 211, Debian 206, 0 failed (`l/final/vmtest`) |
+| `tools/proof.py`: both machines from `fresh`, no `--fast-kdf`, the second part with Secure Boot on | b4fd6ba | VM | Arch 258, Debian 223 checks, 0 failed, 933 s; the whole 934 s of the target of 900. The proof itself reported FAILED on a test of its own budgets (`m/proof`); that fixed, `make test-all` alone passes (below). Not repeated as one run |
 | The same at a guest of 1792 MiB, the memory floor (MemTotal 1620-1635 MiB), the memory lock on | ad20b07, the same code | VM | Arch 211, Debian 206, 0 failed (`l/mem/vm-1792`). Other sizes, before the lock: tools/LOCALVM.md |
 | The memory lock under a memory hog, the real `luks derive` at the real cost, at the floor | ad20b07 | Debian VM, 1 GiB of swap | `VmLck` 1242 at the prompt, 2267 MiB during Argon2id, resident 1038 MiB; `VmSwap` 0 at every sample, 126555 other pages to swap (`l/mem/vm-1792.out`). The same calls without the lock, a probe at 4096 MiB: 35712 kB of the process in swap (`l/probe/debian-pressure.log`) |
 | The boot's lock | f0965aa | VM | every boot of the VM test: "memory locked, not dumpable", resident 14-20 MiB after a derivation, peak 1042-1048 MiB, locked 2264-2329 MiB |
@@ -1842,11 +1846,11 @@ Logs: `.local/runs/` of the workspace.
 | A refused lock: `luks derive`, `run` | 082f908 | a VM (`luks derive` as root without `CAP_IPC_LOCK`: each VM test); a container (both) | `luks derive` stops before it asks; `run` goes on, one line (`l/docker/nocap.log`) |
 | `tools/hibernatetest.py --target both --no-build`, in parallel | f0965aa | VM | Arch 163, Debian 152, 0 failed, with the "not tested" items in §18 (`l/final/hib`) |
 | A resumed guest, `--only V2` with a wait added | 75121e2 | VM | Arch: slot 0's TOTP key refuses after the resume, same boot_id 75 s after the first login, with `ICH9-LPC.noreboot` (`g5/resume-uptime.out`) |
-| `make test-all` | f0965aa | unit, swtpm | 1061 passed, 8 skipped, 0 failed, no `(cached)` (`l/final/test-all.log`) |
+| `make test-all` | b4fd6ba, the budgets' test fixed | unit, swtpm | 785 `--- PASS` lines, 5 skipped, 0 failed, no `(cached)`, alone, after the proof (`m/test-all-after-proof.log`) |
 | A failing `tpm2.Policy` callback at go-tpm `c395998`, repeated on one open file (the probe `h2/leakprobe`) | - | Arch VM, kernel 7.2.9, swtpm behind it | `/dev/tpmrm0` and `/dev/tpm0`: the 4th is `TPM_RC_SESSION_MEMORY`. Closing the file clears `tpmrm0`; on `tpm0` the three sessions stay (`h2/probe.log`). tpm2-kira's sessions are explicit now (`TestFailuresLeaveNoSession`) |
 | aSSH `go test ./...` | 8c18175 | unit, swtpm | 89 passed, 1 skipped (the lock as root: on the VMs, above), 0 failed (`l/final/assh.log`) |
 | go-uefi-slim `go test ./...` | 8f7d9c7 | unit | 46 passed, 1 skipped, 0 failed (`g5/go-uefi-slim.log`); `uki`'s three fuzz targets 40 s each (`g3/fuzz.log`) |
-| tpm2-kira-vault's tests | dcf9bda, at the pin c81ea61 | its suite, with and without go.work | all pass |
+| tpm2-kira-vault's tests | c33cfce, at the pin b4fd6ba | its suite, with and without go.work | all pass (`m/proof/vault.log`) |
 | safearch `tests/run.sh` | f9c8745 | stubs | 335 passed, 0 failed, 1 skipped (`l/final/safearch-run.log`) |
 | Marify `android/scripts/test-emulator.sh` | f8d4e61, core c81ea61 | JVM, emulator, swtpm | 59, 46, 8 passed, 0 failed, ALL PASS (`k/marify-emulator.out`; an 8 GiB data partition, `/` had 11 GB free) |
 | safearch `tests/vm.sh` | f9c8745, aSSH 8c18175 | VM (a fresh build, swtpm) | 48 checks passed, 0 failed (96 PASS lines in the log, each written twice; `l/final/safearch-vm.log`, `mkosi.test/vm/run-20261102-171448`) |
@@ -1872,7 +1876,11 @@ Both machines unless it says otherwise; step names (V2, V4, ...) are hibernatete
 | Vault, typed recipe with pepper | recipe 0x1401, salt released during the hold, the password asked with it | Arch, Debian |
 | Removal | `slot delete` names the CA and takes every index, the CA's variable, the machine-id's, `ssh_ca.pub`. `control` asks before removing the CA with SSH off; No keeps it | Arch, Debian |
 | Argon2id's memory | each boot's log at the key's answer: heap at most 2 MiB, resident at most 22 MiB, peak at most 1047 MiB; after a wrong pepper and the right one too (before: 2052, 2071, 2071 MiB, `k/k1-before`) | Arch, Debian |
-| Secure Boot at the vault | the machine's real PCR 7 quoted, the real event log's digests: `SETUP MODE` in the devices table, the device's view and the audit, as the machine's variables say; established in Debian's initrd once it mounts securityfs | Arch, Debian |
+| Secure Boot really on | Arch by sbctl with Microsoft's certificates, the loader and the UKI signed; Debian by go-uefi-slim's `vmcheck`, shim from Microsoft's db, nothing signed by us. The typed boot: codes right, certified host key, the slots' PCR 7 as approved from the log, nothing said of Secure Boot anywhere | Arch, Debian |
+| The vault with Secure Boot on | the machine's real PCR 7 quoted, the real event log's digests: `on` in the devices table, the device's view and the audit; established in Debian's initrd; releases with a pepper, a revoked device's refusal and the fallback | Arch, Debian |
+| The firmware refuses a changed image | one byte changed. Arch's UKI: `Error loading EFI binary \EFI\Linux\arch-linux.efi: Access denied`; Debian's shim: `failed to load Boot0008 ... Access Denied -- rejected probably by Secure Boot` | Arch, Debian |
+| A volume's unit after the close | the journal of each typed boot and of the silent TPM's second boot: the close finished before `Cryptography Setup` starts, no ordering cycle in PID 1's lines; `systemd-analyze verify` on the image's units; the silent TPM's first boot shows no volume's unit and no prompt before its reboot | Arch |
+| A refused lock | `setup`, `slot add`, `slot approve --unattended`, `slot info`, `status` and the image's post hook as root without `CAP_IPC_LOCK` under a limit: stopped before a key is read, the hook says the approval did not succeed and ends 0 | Arch, Debian |
 | Hibernation risk (V6) | no risk with encrypted swap; red with a swap file on Debian's unencrypted /boot | both; the swap file Debian |
 | Suspend (V5) | after S3 the CA is still closed (restartCount 0 → 1) | Arch, Debian |
 | The close before a resume | in the image (`image-close.log`). After the boot PCR 15 holds exactly three `assh-close` extends (`312573a5…`, by hash chain): `run`, the unit, the drop-in on Arch's resume; `run`, local-top, init-bottom on Debian's boot | Arch, Debian |
@@ -1904,7 +1912,7 @@ transport that refuses named commands.
 | The channel's secrets: not in the record's bytes; open before the close with PCR 7 as sealed, in a boot not approved too; after it refused (`ErrClosed`), by another key too; the signing key opens them, for a further phone and a whole gate | `TestChannelSecretsSealed` |
 | PCR 7 in the channel's policy: PCR 7 moved refuses (`ErrChannelMoved`), the gate does not start, the signing key still opens, the status note, a person's `slot approve` seals the same secrets again and only when moved, the close refuses with 7 as sealed and moved; sealed from the log on a system past the separator, open at the next boot | `TestChannelFollowsPCR7`, `TestChannelSealedForTheNextBoot` |
 | The channel follows a moved PCR 7 on a person's word alone: the real hooks (mkinitcpio's, initramfs-tools') and no terminal leave it, approve the slot, pass the warning on, with old, new and what moved it; no at the terminal leaves it; yes and `--seal-channel` seal it; `--unattended --seal-channel` refused; PCR 7 extended by hand on swtpm; on the VMs a channel sealed to another value, the real hook scripts and the real event log | `TestApprovalLeavesAMovedChannel`, `TestHooksLeaveAMovedChannel`, `TestChannelApprovalFor`, `TestStatusSaysTheChannel`, `TestControlShowsTheMovedChannel`, `FuzzDescribeEvent`; VM test, "a slot's life" |
-| Secure Boot off, in Setup Mode or unreadable is said: `status`, `control` (red, on both steps), `slot add`, `slot approve` (once, whatever the selection, however many slots), the image's hooks, the code screen and every SSH session at boot, the boot's log; no TPM needed, nothing stops | `TestStates`, `TestWarnSecureBootOnce`, `TestSecureBootWarningPlaces`, `TestStatusSaysSecureBoot`, `TestPrereqsShowSecureBootRed`, `TestSayFirmwareState`, `TestSessionGetsTheNoticeFirst`, `TestRemoteSSHConfirmsAndUnlocks`, `TestHookAddsThePlan`; VM test (the VMs are in Setup Mode) |
+| Secure Boot in the first part's Setup Mode, off or unreadable is said: `status`, `control` (red, on both steps), `slot add`, `slot approve` (once, whatever the selection, however many slots), the image's hooks, the code screen and every SSH session at boot, the boot's log; no TPM needed, nothing stops | `TestStates`, `TestWarnSecureBootOnce`, `TestSecureBootWarningPlaces`, `TestStatusSaysSecureBoot`, `TestPrereqsShowSecureBootRed`, `TestSayFirmwareState`, `TestSessionGetsTheNoticeFirst`, `TestRemoteSSHConfirmsAndUnlocks`, `TestHookAddsThePlan`; VM test (the VMs are in Setup Mode) |
 | Sessions: eight failures of each kind on one connection (a policy refused, a signer that fails, an EK policy refused) leave no session and no object | `TestFailuresLeaveNoSession` |
 
 Secure Boot's state on a real TPM's quote, swtpm's PCR 7 extended as firmware does: on, off, Setup Mode, no log, another boot's events; at enrolment and the next boot, the real core on an emulated phone: Marify `secureBootStatesFromTheQuote`.
@@ -1957,7 +1965,6 @@ VM's initrd.
 | safearch's failed `sealed` extend | `tests/vm.sh` passes but forces no failed extend, so safearch's ladder and reboot are `tests/run.sh` stubs only |
 | Debian's resume itself | "Hibernate inconsistent memory map detected": the firmware's e820 differs between boots (OVMF, an ACPI data region moving; `*-memmap.diff`), so the kernel refuses the image. Reported as the test machine's defect. The close before it ran (§17.2); a resume after it has not been seen |
 | Arch V3, a resume with tpm2-kira masked, the close alone | the same refusal, in the five Arch runs of 2026-11-01 that got that far. V2 and V4-reverted resumed |
-| The firmware refusing a changed or unsigned UKI on Arch | not tested on this branch, the machines being in Setup Mode. Shown only on `exp/debian-uki` ("Access denied" for a UKI changed by one byte) |
 | GRUB `break=` gives a shell in which no slot opens | not shown end to end. There is the reasoning (PCR 8), `slot add`'s refusal (VM, unit) and PolicyPCR's refusal of moved PCRs in general (swtpm). V8's `break=bottom` shell ran with no TPM at all |
 | The kill switch on a booting system | steps 2 and 3 run on swtpm only; a full system on a VM has not gone through it. systemd's own TPM units may fail then |
 | Real firmware (platform authorization locked or empty) | none; `TestCloseKillSwitchPlatformLocked` is what stands in |
@@ -1967,7 +1974,10 @@ VM's initrd.
 | A db or dbx update changing PCR 7 on real firmware, and `slot approve` afterwards | the mechanics on swtpm (`TestChannelFollowsPCR7`, PCR 7 extended by hand). The VMs' firmware has not been updated in a run |
 | Debian's init-bottom ending `run` at SIGTERM with a prompt open | not forced. What was measured is the restart with the prompt open: Arch's V4 step 6 at 50.7 s of the kernel's clock (140.9 s before `03510b3`), no "Waiting for process"; Debian's V9 at 97.2 s, its own path with no systemd-shutdown in it, as before |
 | sshd's `PerSourcePenalties` as the cause of earlier Arch hibernate stops | switched off in the test, never measured |
-| Secure Boot's state on real firmware | OVMF's logs alone: on from a stored log, Setup Mode live; off only by the test's digests. A firmware that hashes the variables otherwise than TCG's profile is not established, red: which real ones do has not been looked at |
+| Secure Boot's state on real firmware | OVMF's logs alone, on and Setup Mode live; off only by the test's digests. A firmware that hashes the variables otherwise than TCG's profile is not established, red, and now refused by the vault: which real ones do has not been looked at |
+| The vault refusing a real machine not `on` | its tests per state (unit, the CLI), the real logs' digests. No VM boot has been refused for it: the VM scenarios with a vault run `on` |
+| Debian's hibernation with Secure Boot on | the kernel refuses it (`hibernation is restricted`, seen). The hibernate scenarios run in Setup Mode; nothing shows a resume with Secure Boot on, on either distribution |
+| The initrd's words on a real phone, and on iOS | Android's emulator and swtpm; iOS written, not compiled. The stub's and GRUB's digests from two real OVMF logs; another GRUB or a stub that measures otherwise is not established, red |
 | The phone's red card on a real phone, and on iOS | Android's on an emulator; iOS is written, and neither compiled nor run: no Mac on this host |
 | The memory floor on other machines, or with a 1 GiB keyslot | two VMs at 2 vCPUs; `cryptsetup` scaled the keyslots to 340-585 MiB. Two volumes at once: not measured |
 | A resume on real hardware, in time | On these VMs a resume's wait is the guest's `kvm-clock` (tools/LOCALVM.md), which real hardware does not have |
@@ -1985,6 +1995,8 @@ Each is taken knowingly: why the design still works, and how far.
 | Root with the db key and `pcr.key` builds an image slot 1 trusts | Both are root's only, and PCR 7 and the signature hold for the rest | From the next boot, slot 1 only: slot 0 reads PCR 4, whose approval names the loader and image |
 | A downgrade to an older signed UKI | Any image ever signed keeps PCR 11 valid: what lets kernel updates pass without an approval | Slot 1 opens in it, and whatever that image's close does. Revocation is a new PCR key and new approvals, or dbx |
 | Root writes back an older CA approval | The generation revokes a slot's approvals; the CA's approvals by the signing key are never revoked, and approve keeps only the next boot's in the variable | The CA signs in that old state, should the machine boot it. aSSH's own authority has a counter; the signing key has none |
+| A vault's keyslot on a machine not `on` opens nothing there | The vault refuses it, by the owner's decision, with no per-device exception. `control` and `luks enrol` say so before such a keyslot, and name the recovery keyslot | A machine whose firmware cannot be `on`, or whose firmware's measurement this verifier cannot read, gets nothing from a vault. The passphrase by hand stays |
+| A hook's approval needs the memory lock | An approval that cannot lock stops before it reads the key, and the build goes on and says so | An image built in a container or a unit without `CAP_IPC_LOCK` under a limit is not approved: the next boot's slots are down until a `slot approve` where the lock holds |
 | An approved image with a root shell before the close | PCR 15 is zero there, and every other PCR as approved. Keep such images unapproved and unsigned | Codes and a certificate in that boot, not the keys. On a UKI with Secure Boot on the shell cannot come from an edited command line; a signed addon could add to it, so keep those unsigned |
 | An image without tpm2-kira under the same keys | The close is software in the approved image; the TPM cannot tell. It needs the PCR key's signature (or an approval) too | That one boot, with PCR 15 at zero |
 | An early extend of PCR 15 (`tpm2-measure-pcr=` before the code screen) | It closes early | A denial of service only: a temporary key and no codes, never an open CA |

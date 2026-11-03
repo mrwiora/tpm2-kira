@@ -103,6 +103,9 @@ It may not carry what came before.
   `slot add`, `slot approve`, the image's hooks, and at boot the console, every SSH
   session and the log, from the firmware's variables, with no TPM. efivarfs is in
   every image for it.
+  The machine never stops on it; the vault does: it releases nothing unless the quote
+  establishes `on`, with no per-device exception, and `control` and `luks enrol` say so before
+  a vault's keyslot on a machine not `on` (docs/SECURITY-BACKGROUND.md §13.5).
 - **Two configuration files, tpm2-kira's and aSSH's, and only `control`
   writes them.** `/etc/tpm2-kira/control.conf` is tpm2-kira's; beside it
   `/etc/tpm2-kira/assh.conf` is aSSH's own format (`ASSH_*`, parsed by

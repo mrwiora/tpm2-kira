@@ -116,28 +116,28 @@ SECURE_BOOT = "secure-boot"
 # fresh, to its setup with Secure Boot on; every scenario that talks to a vault runs there. What
 # there breaks the firmware's trust comes last.
 SCENARIOS = (
-    Scenario(SETUP, budget(165, 195)),
-    Scenario("typed-boot", budget(52, 70)),
+    Scenario(SETUP, budget(175, 202)),
+    Scenario("typed-boot", budget(49, 67)),
     Scenario("V6", hib=True),
-    Scenario("hibernate", budget(68, 10), hib=True),
+    Scenario("hibernate", budget(68, 7), hib=True),
     Scenario("debian-resume", distro="debian", hib=True),
     Scenario("V3", distro="arch", hib=True),
-    Scenario("unapproved", budget(77, None), distro="arch"),
+    Scenario("unapproved", budget(75, None), distro="arch"),
     Scenario("second-typed-boot"),
     Scenario("slot-life"),
     Scenario("removal"),
     Scenario("no-tpm", hib=True),
     Scenario("V4-reverted", distro="debian", needs=("no-tpm",), hib=True),
-    Scenario("silent-tpm", budget(130, 120), hib=True),
+    Scenario("silent-tpm", budget(124, 124), hib=True),
     Scenario("V9-long", distro="debian", needs=("silent-tpm",), hib=True),
     Scenario("V8", hib=True),
-    Scenario(SECURE_BOOT, budget(235, 265), secure=True),
-    Scenario("tpm-salt", budget(30, 35), needs=(SECURE_BOOT,), secure=True),
-    Scenario("vault-pepper", budget(140, 168), needs=(SECURE_BOOT,), vault=True, secure=True),
-    Scenario("revoked", budget(62, 70), needs=("tpm-salt", "vault-pepper"), vault=True, secure=True),
+    Scenario(SECURE_BOOT, budget(218, 258), secure=True),
+    Scenario("tpm-salt", budget(32, 30), needs=(SECURE_BOOT,), secure=True),
+    Scenario("vault-pepper", budget(133, 158), needs=(SECURE_BOOT,), vault=True, secure=True),
+    Scenario("revoked", budget(60, 66), needs=("tpm-salt", "vault-pepper"), vault=True, secure=True),
     Scenario("vault-alone", needs=("vault-pepper",), vault=True, secure=True),
     Scenario("typed-vault", needs=("vault-pepper",), vault=True, secure=True),
-    Scenario("firmware-refuses", budget(15, 15), needs=(SECURE_BOOT,), secure=True),
+    Scenario("firmware-refuses", budget(12, 10), needs=(SECURE_BOOT,), secure=True),
 )
 ALWAYS = "typed-boot"  # what every scenario of the setup in Setup Mode starts from
 
