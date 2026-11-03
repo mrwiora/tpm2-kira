@@ -184,6 +184,10 @@ _add_unlock() {
     (( ${#cmdlines[@]} )) || cmdlines=(/proc/cmdline /etc/kernel/cmdline /etc/cmdline.d/*.conf)
     local f word uuid name key opts routed=0
 
+    # systemd-cryptsetup's units are ordered after cryptsetup-pre.target, the socket and
+    # the close before it; without the file in the image none of that orders anything,
+    # and sd-encrypt brings only cryptsetup.target.
+    add_systemd_unit cryptsetup-pre.target
     _add_kira_unit tpm2-kira-unlock.socket
     add_symlink /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-unlock.socket \
         /usr/lib/systemd/system/tpm2-kira-unlock.socket

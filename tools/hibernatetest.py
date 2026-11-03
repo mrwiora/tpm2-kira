@@ -503,6 +503,7 @@ class Hib:
         m.log.save("V4-silent-first-console.log", text)
         self.check("V4 step 6: one hard reboot, for a TPM the firmware measured into", "rebooting once" in text and again, text[-800:])
         self.check("V4 step 6: no shell on the way", "maintenance" not in text and "emergency mode" not in text.lower(), text[-800:])
+        self.check("V4 step 6: the close comes first: no volume's unit and no prompt before its reboot", "Cryptography Setup" not in text[:text.find("rebooting once")] and "Password for disk" not in text, text[-800:])
         self.one_wait(text, "V4 step 6: one wait: run does not wait after machine-id", "the machine-id is not released", "did not appear; no code", 2)
         self.one_wait(text, "V4 step 6: one wait: the close ends the boot's 30 s, from machine-id's first wait", "the machine-id is not released", "rebooting once", 27)
         # The firmware of the second boot: it would not be edited, and have its
@@ -517,6 +518,8 @@ class Hib:
         self.check("V4 step 6: the second time: no reboot, the passphrase", "the TPM does not answer" in text and not RESTART.search(text, text.find("Password for disk")), text[-800:])
         self.one_wait(text, "V4 step 6: the second time the close does not wait", "did not appear; no code", "the TPM does not answer", 3)
         self.after_silent("V4 step 6", before["boot"])
+        rc, out = self.run(vmtest.Machine.VOLUME_ORDER, save="V4-silent-volume-order.log")
+        m.check_volume_order("V4 step 6, the second time", out)
 
     def silent_tpm_debian(self):
         m, lv = self.m, self.lv

@@ -53,6 +53,7 @@ later UUID=cccc /run/tpm2-kira/unlock.sock discard
 	cmdline := write("cmdline", "root=/dev/mapper/cryptroot rd.luks.name=1111-2222=cryptroot rd.luks.key=1111-2222=/run/tpm2-kira/unlock.sock rw\n")
 	got := run(crypttab, cmdline)
 	for _, want := range []string{
+		"UNIT cryptsetup-pre.target",
 		"UNIT tpm2-kira-unlock.socket",
 		"LINK /usr/lib/systemd/system/sysinit.target.wants/tpm2-kira-unlock.socket",
 	} {

@@ -10,6 +10,8 @@ DefaultDependencies=no
 # here when it activates such a volume and reads the key from the
 # connection. The socket exists before any cryptsetup unit can start, so a
 # connection never finds it missing; tpm2-kira.service answers.
+# cryptsetup-pre.target is passive: pulled in here.
+Wants=cryptsetup-pre.target
 Before=cryptsetup-pre.target
 Conflicts=initrd-switch-root.target
 Before=initrd-switch-root.target

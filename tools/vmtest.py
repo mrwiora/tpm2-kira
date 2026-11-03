@@ -1026,10 +1026,13 @@ class Machine:
         else:
             listing = ("uki=$(sed -n 's/^default_uki=\"\\(.*\\)\"/\\1/p' /etc/mkinitcpio.d/*.preset | head -1); "
                        "objcopy -O binary --only-section=.initrd \"$uki\" initrd && lsinitcpio -x initrd >/dev/null")
+        order = "" if self.distro == "debian" else (
+            "ls usr/lib/systemd/system/cryptsetup-pre.target; "
+            "systemd-analyze verify --root=$PWD initrd.target tpm2-kira-close.service tpm2-kira.service tpm2-kira-unlock.socket 2>&1 | grep -i 'cycle' | sed 's/^/CYCLE /' || true; ")
         rc, out = self.run(f"set -e; d=$(mktemp -d); cd $d; {listing}; ls usr/bin | grep kira; "
                            "find etc/tpm2-kira -maxdepth 2 | sort; ls etc/tpm2-kira/control.conf 2>&1 || true; "
                            "grep -rlE 'tpm2-kira-boot gate|tpm2-kira-attest' etc usr/lib/systemd scripts 2>/dev/null | sed 's/^/STARTS-GATE /'; "
-                           "cd /; rm -rf $d", save="image.log")
+                           f"{order}cd /; rm -rf $d", save="image.log")
         bins = [l for l in out.split("\n") if l.strip().startswith("tpm2-kira")]
         self.check("the image carries tpm2-kira-boot", "tpm2-kira-boot" in bins, out[-500:])
         self.check("the image carries no tpm2-kira (the administration)", "tpm2-kira" not in bins, str(bins))
@@ -1037,6 +1040,9 @@ class Machine:
         self.check("no unit or script of the image starts a gate: run starts its children itself", "STARTS-GATE" not in out, out[-300:])
         for part in ("unlock", "codes", "net", "ssh", "tpm"):
             self.check(f"the image's plan names '{part}'", f"etc/tpm2-kira/plan/{part}" in out, out[-500:])
+        if self.distro != "debian":
+            self.check("the image carries cryptsetup-pre.target", "usr/lib/systemd/system/cryptsetup-pre.target" in out, out[-500:])
+            self.check("systemd-analyze verify of the image's units finds no ordering cycle", "CYCLE" not in out, out[-500:])
 
     def code_screen(self, n, s, console_from, timeout=60):
         """The code screen of a boot's SSH session: certified, each slot's code the
@@ -1101,6 +1107,18 @@ class Machine:
         self.lap("the initrd's end to ssh")
         self.after_boot(n)
 
+    VOLUME_ORDER = ("journalctl -b -o cat --no-pager -u tpm2-kira-close.service -u 'systemd-cryptsetup@*' | grep -E '^(Starting|Finished|Started) '; "
+                    "echo CYCLES=$(journalctl -b -o cat --no-pager | grep -ciE 'ordering cycle|Found dependency on')")
+
+    def check_volume_order(self, where, out):
+        """Arch: the close's unit is done before a volume's unit starts, and this boot's systemd
+        found no cycle: the journal, in its order, with what the generator wrote too."""
+        lines = out.splitlines()
+        done = next((i for i, l in enumerate(lines) if l.startswith("Finished tpm2-kira-close.service")), None)
+        volume = next((i for i, l in enumerate(lines) if l.startswith("Starting systemd-cryptsetup@")), None)
+        self.check(f"{where}: the close is done before a volume's unit starts", done is not None and volume is not None and done < volume, out[-600:])
+        self.check(f"{where}: no ordering cycle in this boot's journal", "CYCLES=0" in out, out[-300:])
+
     def boot_log_command(self):
         return ("cat /run/initramfs/tpm2-kira.log" if self.distro == "debian" else
                 "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service -u tpm2-kira-machine-id.service")
@@ -1144,6 +1162,7 @@ class Machine:
             "pcr4": ("tpm2-kira slot info --nvram 0 2>&1; echo LIVE=$(cat /sys/class/tpm/tpm0/pcr-sha256/4)", f"boot{n}-pcr4.log"),
         }
         if self.distro != "debian":
+            commands["volume-order"] = (self.VOLUME_ORDER, f"boot{n}-volume-order.log")
             commands["pcr11"] = ("tpm2-kira slot info --nvram 0 2>&1 | grep -E 'PCR 11 ' | head -2; stat -c '%a %U' /etc/tpm2-kira/pcr.key; grep -c '^Phases=enter-initrd$' /etc/kernel/uki.conf", f"boot{n}-pcr11.log")
         got = self.batch(commands)
         self.lap("what the boot's system is checked for, read")
@@ -1179,6 +1198,7 @@ class Machine:
                    re.fullmatch(r"[0-9A-Fa-f]{64}", pcr15) is not None and set(pcr15) != {"0"}, out[-300:])
         if self.distro != "debian":
             self.check(f"boot {n}: tpm2-kira-close.service ran in the initrd", "Finished" in out and "Failed" not in out, out[-300:])
+            self.check_volume_order(f"boot {n}", got["volume-order"])
         # No cap: PCR 15 closes the slots.
         state, out = got["state"], got["cap"]
         self.check(f"boot {n}: the close is PCR 15's, no late closer, no reboot counted", state.startswith("closed") and "No such file" in state and "inactive" in state and re.search(r"^0$", state, re.M) is not None, state)

@@ -156,6 +156,7 @@ func TestUnlockSocketIsWiredToTheDisplay(t *testing.T) {
 	for _, want := range []string{
 		"ListenStream=/run/tpm2-kira/unlock.sock",
 		"SocketMode=0600",
+		"Wants=cryptsetup-pre.target",
 		"Before=cryptsetup-pre.target",
 		"Service=tpm2-kira.service",
 		"RemoveOnStop=yes",

@@ -460,7 +460,10 @@ of hooks does not matter, and reading the configuration tells the truth.
 creates `/run/tpm2-kira/unlock.sock` (root, 0600) `Before=cryptsetup-pre.target`
 and hands it to `tpm2-kira.service` (`Sockets=`, `LISTEN_FDS`). The socket
 exists before any `systemd-cryptsetup@` unit can run, whether or not the
-service is up yet; a connection simply waits.
+service is up yet; a connection simply waits. The socket and the close pull
+`cryptsetup-pre.target` in, and the mkinitcpio hook puts its file into the image:
+sd-encrypt brings only `cryptsetup.target`, and without the file those orders are
+void. So on Arch a volume's unit starts when the close is done, in every boot.
 
 **Answer only systemd-cryptsetup, only after the hold.** The provider
 refuses a peer of another uid (`SO_PEERCRED`, what the password agent
