@@ -66,7 +66,7 @@ func TestEstablishSecureBootNotEstablished(t *testing.T) {
 	size := sha256.Size
 	sep := chain[len(chain)-size:]
 	offDigest := sha256.Sum256(attest.UEFIVariableData("SecureBoot", []byte{0}))
-	noState := append(append([]byte(nil), chain[size:]...))
+	noState := append([]byte(nil), chain[size:]...)
 	both := append(append(append([]byte(nil), chain[:size]...), offDigest[:]...), sep...)
 	noSep := chain[:len(chain)-size]
 	bad := make([]byte, 2*size)

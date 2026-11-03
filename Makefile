@@ -214,6 +214,7 @@ test-integration:
 
 ## test-all: Run all tests (unit + integration)
 test-all:
+	$(MAKE) vet
 	@echo "Running all tests..."
 	@echo "Note: Requires swtpm (software TPM) to be installed"
 	@# One run of both tags: the unit tags' files are built with them, nothing runs twice.
@@ -231,6 +232,7 @@ fmt:
 vet:
 	@echo "Running go vet..."
 	$(GOVET) ./...
+	cd core && $(GOCMD) vet ./...
 
 ## deps: Download dependencies
 deps:
