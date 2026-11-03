@@ -95,7 +95,8 @@ func forgetDescriptorPIN() {
 
 // readPINDescriptor takes a pipe, a socket or a file. The standard streams are the
 // command's, and a descriptor closed in the parent can by now be the Go runtime's own
-// (its poller's, not a file of any of these types): neither is read or closed here.
+// (its poller's, not a file of any of these types): neither is read or closed here. A
+// file others may read is refused as the PIN file is, unread.
 func readPINDescriptor(fd int) ([]byte, error) {
 	if fd < 3 {
 		return nil, errors.New("3 or above: 0, 1 and 2 are the command's own streams")
@@ -111,6 +112,11 @@ func readPINDescriptor(fd int) ([]byte, error) {
 	}
 	f := os.NewFile(uintptr(fd), "the descriptor")
 	defer f.Close()
+	if st.Mode&unix.S_IFMT == unix.S_IFREG && looseFile(st.Mode&0o777, st.Uid) {
+		return nil, fmt.Errorf("the file on it can be read by other users, or root does not own it (mode %03o, owner %d),\n"+
+			"  so it is not read. Make it readable by root only, chown root: and chmod 600, and consider\n"+
+			"  changing the PIN, since it may already have been read", st.Mode&0o777, st.Uid)
+	}
 	pin, err := readPINLine(f)
 	if err != nil {
 		return nil, err
@@ -307,7 +313,7 @@ func StoredPIN(path string) (pin []byte, loose bool, err error) {
 		return nil, false, nil
 	}
 	uid, owned := ownerOf(st)
-	loose = st.Mode().Perm()&0o077 != 0 || !owned || !trustedOwner(uid)
+	loose = !owned || looseFile(uint32(st.Mode().Perm()), uid)
 	pin, err = readPINLine(f)
 	if err != nil {
 		return nil, loose, fmt.Errorf("%s: %w", path, err)
@@ -317,6 +323,12 @@ func StoredPIN(path string) (pin []byte, loose bool, err error) {
 		return nil, false, nil
 	}
 	return pin, loose, nil
+}
+
+// looseFile says a file's permissions or owner disclose what it holds: group or others
+// may read it, or it is neither root's nor this user's.
+func looseFile(perm, uid uint32) bool {
+	return perm&0o077 != 0 || !trustedOwner(uid)
 }
 
 // PINStored says whether the file at path stores a PIN, and whether it is

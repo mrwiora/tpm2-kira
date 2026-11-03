@@ -352,7 +352,8 @@ asserts the QR output for a fixed URI is non-empty.
   token and writes the file 0600.
   `readPIN` (`internal/signing/pin.go`) takes `--pin-fd`, then the file, then
   the terminal; a file that is not root's or is group/world-readable is
-  refused on the opened descriptor, not warned about (`StoredPIN`). Nothing puts the file into the image. The
+  refused on the opened descriptor, not warned about (`StoredPIN`), and so is such a file
+  on `--pin-fd` (`readPINDescriptor`). Nothing puts the file into the image. The
   earlier places - a line in `/etc/mkinitcpio.conf`, then a
   `TPM2_KIRA_PIN` line in control.conf - are gone (HISTORY.md).
 

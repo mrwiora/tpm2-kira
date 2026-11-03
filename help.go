@@ -333,7 +333,9 @@ root-only; else asked).
                      gives none is the command's failure: neither the file nor
                      the terminal is tried, and the exit status is 2 on every
                      command, the exception to exit 0 on failure ('a script
-                     asked for this source'). For a systemd unit, LoadCredential=
+                     asked for this source'). A regular file on it that others
+                     can read, or that root does not own, is refused as the PIN
+                     file is; a pipe or a socket is fine. For a systemd unit, LoadCredential=
                      and: slot approve --unattended --pin-fd 3
                      3<"$CREDENTIALS_DIRECTORY/pin", through a shell. The same on
                      every command that may sign: control, slot add, luks enrol,

@@ -138,7 +138,8 @@ error, `2` usage, `3` no phone or no adapter, `4` the phone rejected this boot
 signed by the enrolled phone.
 
 **Exception: a bad `--pin-fd`.** On every command that takes it, a descriptor that
-gives no PIN (not open, empty, a line too long, of the wrong type) exits `2`: the script asked for that source, so nothing else is
+gives no PIN (not open, empty, a line too long, of the wrong type, a regular file
+others can read) exits `2`: the script asked for that source, so nothing else is
 tried and a chain must not go on as if it had worked. A wrong PIN on a good
 descriptor is the token's refusal, as from any source: exit `0` and `FAILED` or
 `SKIPPED`, unless the command gates something.

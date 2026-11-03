@@ -435,6 +435,66 @@ func TestNoSuspendAtThePINPrompt(t *testing.T) {
 	}
 }
 
+// A regular file on the descriptor is held to what the PIN file is, and is refused
+// unread; a file of root's or this user's alone is fine.
+func TestLooseFileOnTheDescriptor(t *testing.T) {
+	t.Cleanup(forgetDescriptorPIN)
+	open := func(mode os.FileMode) int {
+		path := filepath.Join(t.TempDir(), "pin")
+		if err := os.WriteFile(path, []byte("123456\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		fd, err := unix.Open(path, unix.O_RDONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fd
+	}
+	for _, mode := range []os.FileMode{0o600, 0o400} {
+		if err := UsePINDescriptor(open(mode)); err != nil || string(descriptorPIN.pin) != "123456" {
+			t.Errorf("mode %o: %v, %q", mode, err, descriptorPIN.pin)
+		}
+		forgetDescriptorPIN()
+	}
+	for _, mode := range []os.FileMode{0o640, 0o604, 0o644, 0o620, 0o602, 0o610, 0o601} {
+		fd := open(mode)
+		bufs := captureBuffers(t)
+		err := UsePINDescriptor(fd)
+		if err == nil || !strings.Contains(err.Error(), "can be read by other users") || descriptorPIN.given {
+			t.Errorf("mode %o: %v", mode, err)
+		}
+		if len(*bufs) != 0 {
+			t.Errorf("mode %o: read before it was refused", mode)
+		}
+		var st unix.Stat_t
+		if err := unix.Fstat(fd, &st); !errors.Is(err, unix.EBADF) {
+			t.Errorf("mode %o: the descriptor stays: %v", mode, err)
+		}
+	}
+	// Not this user's, not root's: the rule, as this test cannot make such a file.
+	if !looseFile(0o600, uint32(os.Geteuid())+1) && os.Geteuid() != 0 {
+		t.Error("a file of another user")
+	}
+	// Loose as a mode is, a pipe is nobody's to open.
+	if err := UsePINDescriptor(pipeWith(t, "123456\n")); err != nil {
+		t.Errorf("a pipe: %v", err)
+	}
+	forgetDescriptorPIN()
+	socks, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(socks[1])
+	unix.Write(socks[1], []byte("123456\n"))
+	unix.Shutdown(socks[1], unix.SHUT_WR)
+	if err := UsePINDescriptor(socks[0]); err != nil || string(descriptorPIN.pin) != "123456" {
+		t.Errorf("a socket: %v", err)
+	}
+}
+
 // The variable set: the reason there is no PIN says so, once it is what a hook shows;
 // without it, nothing of it. The value is in neither.
 func TestIgnoredVariableIsInTheReason(t *testing.T) {

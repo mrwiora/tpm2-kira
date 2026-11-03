@@ -385,7 +385,7 @@ that may log in at boot in `/etc/tpm2-kira/authorized_keys` (root's
 keys copied there when asked; edit it for others). A command that signs
 takes the PIN from `--pin-fd N` if a script gives it (a systemd unit: its
 credential, `--pin-fd 3 3<"$CREDENTIALS_DIRECTORY/pin"`, through a shell; a bad
-descriptor exits 2 on every command), else from
+descriptor exits 2 on every command, and a regular file others can read is one), else from
 that file, else from the terminal; never from argv or the environment. The two wiring steps of step 1
 are checks, green and no longer pickable once in place. Every other file
 is advised, never edited, with two exceptions, each asked for every

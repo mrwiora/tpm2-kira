@@ -330,6 +330,18 @@ func TestPINFDOfTheRealBinary(t *testing.T) {
 		w.Close()
 		return r
 	}
+	loosePath := filepath.Join(t.TempDir(), "pin")
+	if err := os.WriteFile(loosePath, []byte("123456\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(loosePath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loose, err := os.Open(loosePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loose.Close()
 	for _, c := range []struct {
 		name, want string
 		extra      *os.File
@@ -341,6 +353,7 @@ func TestPINFDOfTheRealBinary(t *testing.T) {
 		{"too long", "FAILED: --pin-fd 3: more than 8 bytes", pipe("123456789\n"), "3"},
 		{"standard input", "FAILED: --pin-fd 0: 3 or above", nil, "0"},
 		{"standard error", "FAILED: --pin-fd 2: 3 or above", nil, "2"},
+		{"a loose file", "FAILED: --pin-fd 3: the file on it can be read by other users", loose, "3"},
 	} {
 		out, err := runBinary(bin, nil, c.extra, append(slices.Clone(approve), "--pin-fd", c.fd)...)
 		var exit *exec.ExitError
