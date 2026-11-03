@@ -124,7 +124,9 @@ It may not carry what came before.
   logs every step when "Debug at boot" is on - a switch in the TPM, NV
   index 0x01803000, written by `control` with the signing key).
   Beside it, also written by `control` alone: the YubiKey's PIN
-  (`/etc/tpm2-kira/pin`, root's alone, never in the image) and the keys
+  (`/etc/tpm2-kira/pin`, root's alone, never in the image; the signer takes it
+  from `--pin-fd N` first, then this file, then the terminal: bytes in a locked
+  buffer, never argv or the environment, `internal/signing/pin.go`) and the keys
   that may log in at boot (`/etc/tpm2-kira/authorized_keys`, part of the
   SSH server's settings in the boot plan). assh.conf goes into the image
   as a copy (the SSH part's digest names it); the slots in it are made

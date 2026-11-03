@@ -136,7 +136,7 @@ func printHelp(topic string) {
 // helpPages are the pages of 'tpm2-kira help <command>'. A command with
 // subcommands has one page; the subcommands are on it.
 var helpPages = map[string]string{
-	"control": `tpm2-kira control [--tpm PATH]
+	"control": `tpm2-kira control [--tpm PATH] [--pin-fd N]
 
 The guided way through the protections, in two steps.
 
@@ -239,10 +239,10 @@ with the key that signs the boot components.
 `,
 
 	"slot": `tpm2-kira slot add     [--totp] [--nvram N] [--pcrs LIST] [--measure-point M]
-                       [--pubkey PATH] [--privkey PATH] [--sha1]
+                       [--pubkey PATH] [--privkey PATH] [--pin-fd N] [--sha1]
                        [--verify-uki=false]
 tpm2-kira slot approve [--nvram N] [--pcrs LIST] [--measure-point M]
-                       [--privkey PATH] [--pubkey PATH] [--require-key] [--if-moved]
+                       [--privkey PATH] [--pubkey PATH] [--pin-fd N] [--require-key] [--if-moved]
                        [--unattended] [--seal-channel]
 tpm2-kira slot info    [--nvram N] [--json] [--pubkey PATH]
 tpm2-kira slot list | status | delete [--yes]   [--nvram N]
@@ -299,6 +299,7 @@ one named (else 0), the PCRs named (else the selection).
   --pubkey PATH      The signing key's public half, PEM, X.509 or raw, RSA or
                      ECDSA (default: ` + signing.DefaultPublicKeyPath + `)
   --privkey PATH     The private half (default: the key from setup)
+  --pin-fd N         A YubiKey's PIN: as for approve
   --sha1             The SHA-1 PCR bank: only for a TPM whose event log has
                      no SHA-256 digests
   --verify-uki       Check the PCR 11 computation against this boot's event
@@ -317,8 +318,8 @@ the PCRs to match and never reads the TOTP key. Without --nvram it also
 approves the SSH CA (` + admin.DefaultSSHCA + `) for the next boot, in each of
 its slots (assh.conf's) that has no approval. The initramfs hooks run it
 after every image rebuild; a slot sealed with the key on a YubiKey needs
-the token and its PIN (` + signing.PINEnvVar + `, or /etc/tpm2-kira/pin, which
-control stores, root-only; else asked).
+the token and its PIN (--pin-fd N, or /etc/tpm2-kira/pin, which control stores,
+root-only; else asked).
 
   --pcrs LIST        A new selection (default: the slot's, with its sources)
   --measure-point M  As for add: auto (default), on, off
@@ -326,6 +327,16 @@ control stores, root-only; else asked).
                      verifies the blob's signature, authorises the write and
                      approves the PCR values
   --pubkey PATH      Must belong to --privkey (default: derived from it)
+  --pin-fd N         A YubiKey's PIN from this open descriptor, 3 or above: one
+                     line, read at once, and the descriptor closed, so that
+                     nothing the command starts inherits it. A descriptor that
+                     gives none is the command's failure: neither the file nor
+                     the terminal is tried. For a systemd unit, LoadCredential=
+                     and: slot approve --unattended --pin-fd 3
+                     3<"$CREDENTIALS_DIRECTORY/pin", through a shell. The same on
+                     every command that may sign: control, slot add, luks enrol,
+                     luks remove, vault enrol and unenrol, phone enrol, unenrol
+                     and gate, phone salt enrol, rotate and unenrol
   --require-key      With a YubiKey: fail when the token or its PIN is not
                      at hand. By default approve then prints SKIPPED, leaves
                      every slot as it is, and exits 0
@@ -660,10 +671,12 @@ cryptsetup's prompt is always the last way in (docs/PLAN-LUKS.md).
                                       machine's name there
               --existing-key-file F   a passphrase file to authorise (scripts)
               --privkey --pubkey --adapter --timeout --adapter-wait  as phone salt enrol
+              --pin-fd N              a YubiKey's PIN ('help slot', approve)
   remove    'cryptsetup luksKillSlot' for a keyslot tpm2-kira marked, and
             its token. A remaining passphrase, asked, authorises it
             (--existing-key-file F for scripts). Never the last keyslot,
-            never one that is not tpm2-kira's
+            never one that is not tpm2-kira's. The TPM salt's last keyslot
+            takes the signing key: --privkey PATH, --pin-fd N
   mark      The token for a keyslot made by hand (derive or phone salt enrol
             --out, then luksAddKey): --keyslot N, the recipe's flags
             [--nvram N --label STR]

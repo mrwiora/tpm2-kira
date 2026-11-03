@@ -350,10 +350,9 @@ asserts the QR output for a fixed URI is non-empty.
 - [x] done — the PIN lives in `/etc/tpm2-kira/pin`, the PIN alone,
   written by `control` only: the Signing key step checks the PIN on the
   token and writes the file 0600.
-  `readPIN` (`internal/signing/yubikey.go`) reads the environment, then the file, then
+  `readPIN` (`internal/signing/pin.go`) takes `--pin-fd`, then the file, then
   the terminal; a file that is not root's or is group/world-readable is
-  refused on the opened descriptor, not warned about (`storedPIN`,
-  `internal/admin/control_config.go`). Nothing puts the file into the image. The
+  refused on the opened descriptor, not warned about (`StoredPIN`). Nothing puts the file into the image. The
   earlier places - a line in `/etc/mkinitcpio.conf`, then a
   `TPM2_KIRA_PIN` line in control.conf - are gone (HISTORY.md).
 

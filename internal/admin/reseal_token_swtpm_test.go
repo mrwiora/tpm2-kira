@@ -27,7 +27,6 @@ func TestResealThroughTokenWithStoredPIN(t *testing.T) {
 	key := card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	fake := &fakeTokens{cards: []*pivtest.Card{card}} // typed "": no terminal
 	fake.install(t)
-	os.Unsetenv(signing.PINEnvVar)
 	conf := filepath.Join(t.TempDir(), "control.conf")
 	t.Setenv("TPM2_KIRA_CONTROL_CONF", conf)
 	pinFile := signing.PINPath()

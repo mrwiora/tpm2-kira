@@ -19,9 +19,6 @@ import (
 // Sources in order: the descriptor a script named, the PIN file, the terminal. A source
 // that was asked for and fails is the error: nothing falls through to the next.
 
-// PINEnvVar supplies the PIV PIN for unattended use.
-const PINEnvVar = "TPM2_KIRA_PIN"
-
 // pinBuffer is what a PIN is read into; a var for the tests.
 var pinBuffer = diskkey.PassphraseBuffer
 
@@ -41,7 +38,7 @@ func readPINLine(r io.Reader) ([]byte, error) {
 			// One byte past the limit, for the \r of a line that ends in \r\n.
 			if len(line) == piv.MaxPINLength+1 {
 				wipe.Bytes(line)
-				return nil, errPINTooLong
+				return nil, errPINTooLong()
 			}
 			line = append(line, one[0])
 			continue
@@ -58,12 +55,16 @@ func readPINLine(r io.Reader) ([]byte, error) {
 	}
 	if len(line) > piv.MaxPINLength {
 		wipe.Bytes(line)
-		return nil, errPINTooLong
+		return nil, errPINTooLong()
 	}
 	return line, nil
 }
 
-var errPINTooLong = fmt.Errorf("more than %d bytes on the line: a PIV PIN is %d to %d", piv.MaxPINLength, piv.MinPINLength, piv.MaxPINLength)
+// errPINTooLong is a function: the boot binary links this package, and a variable's
+// initializer would bring a piece of this file into it (boot_binary_test.go).
+func errPINTooLong() error {
+	return fmt.Errorf("more than %d bytes on the line: a PIV PIN is %d to %d", piv.MaxPINLength, piv.MinPINLength, piv.MaxPINLength)
+}
 
 // descriptorPIN is what --pin-fd read. given stays once it is: the signer asks no other
 // source then, also when the PIN has been used.
@@ -124,9 +125,8 @@ func readPINDescriptor(fd int) ([]byte, error) {
 // caller wipes.
 var PromptPIN = promptPINOnTTY
 
-// readPIN finds the PIN without asking when it can: what --pin-fd read,
-// TPM2_KIRA_PIN, then the PIN file control stores, where the unattended reseal finds
-// it, and only then the terminal. source names where the PIN came from, for messages;
+// readPIN finds the PIN without asking when it can: what --pin-fd read, then the PIN
+// file control stores, where the unattended reseal finds it, and only then the terminal. source names where the PIN came from, for messages;
 // the session owns the PIN from here.
 func readPIN(s *YubiKeySigner) (pin []byte, source string, err error) {
 	if descriptorPIN.given {
@@ -135,9 +135,6 @@ func readPIN(s *YubiKeySigner) (pin []byte, source string, err error) {
 			return nil, "", errors.New("--pin-fd's PIN is used")
 		}
 		return pin, descriptorPIN.source, nil
-	}
-	if v, ok := os.LookupEnv(PINEnvVar); ok && v != "" {
-		return []byte(v), "the " + PINEnvVar + " environment variable", nil
 	}
 	pin, ok, err := pinFromFile()
 	if err != nil {
@@ -187,7 +184,7 @@ func warnIfNoUnattendedPIN(w io.Writer) {
 func promptPINOnTTY(s *YubiKeySigner) ([]byte, error) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return nil, fmt.Errorf("no PIN: set %s or store it with tpm2-kira control (there is no terminal to ask on)", PINEnvVar)
+		return nil, errors.New("no PIN: store it with tpm2-kira control, or give it with --pin-fd N (there is no terminal to ask on)")
 	}
 	defer tty.Close()
 	fmt.Fprintf(tty, "PIN for %s: ", s.Describe())

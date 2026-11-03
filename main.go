@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -36,6 +37,19 @@ func fail(err error) {
 	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: %v\n", err)
 	fmt.Fprintln(os.Stderr, "tpm2-kira: (exit status is 0 by design; this command did NOT succeed)")
 	os.Exit(0)
+}
+
+// ignoredPINEnv held the YubiKey's PIN once: a string, not wipeable, inherited by every
+// child, readable in /proc/PID/environ. A script that still sets it finds out here, once,
+// also in what this command starts: it goes from the environment they get.
+const ignoredPINEnv = "TPM2_KIRA_PIN"
+
+func ignorePINEnv(w io.Writer) {
+	if _, set := os.LookupEnv(ignoredPINEnv); !set {
+		return
+	}
+	os.Unsetenv(ignoredPINEnv)
+	fmt.Fprintf(w, "tpm2-kira: WARNING: %s is set and ignored: the YubiKey's PIN comes from --pin-fd N, from %s or from the terminal\n", ignoredPINEnv, signing.PINPath())
 }
 
 // parseSigning parses the flags of a command that may sign, and --pin-fd with them:
@@ -166,6 +180,7 @@ func main() {
 	}
 
 	requireRoot(command, commandArgs)
+	ignorePINEnv(os.Stderr)
 	if holdsSecrets(command, commandArgs) {
 		if err := memlock.Command(); err != nil {
 			fail(err)
@@ -784,11 +799,11 @@ passphrase in its own keyslot opens the disk at cryptsetup's prompt.
                    --pepper     the key needs an operator's pepper too: asked
                                 here twice, never sent; every boot then waits
                                 until an operator approves on the vault with it
-                   --nvram N --privkey PATH --yes
+                   --nvram N --privkey PATH --pin-fd N --yes
   vault status   The slot's vault, and whether it answers for this machine
                  (--nvram N)
   vault unenrol  Take the vault method and the local part out of the slot's
-                 blob (--nvram N, --privkey PATH); revoke the device on the
+                 blob (--nvram N, --privkey PATH, --pin-fd N); revoke the device on the
                  vault and remove the keyslot by hand
 
 The image needs its network at boot: TPM2_KIRA_NET in control.conf
@@ -885,7 +900,7 @@ own keyslot opens the disk at cryptsetup's prompt.
                        --salt phone' does all of it in one step):
                          --out PATH   the key file, on tmpfs (required)
                          --label STR  default luks
-                         --nvram N --privkey PATH --pubkey PATH --adapter N
+                         --nvram N --privkey PATH --pubkey PATH --pin-fd N --adapter N
                          --timeout DUR --adapter-wait DUR --yes
                        Have a recovery passphrase in a second keyslot first:
                          cryptsetup luksAddKey <device>
@@ -893,7 +908,7 @@ own keyslot opens the disk at cryptsetup's prompt.
                        old keyslot is then to be removed by hand
   phone salt status   Which slots have a phone salt enrolled (--nvram N, --json)
   phone salt unenrol  Take the release key out of the slot's blob (--nvram N,
-                       --privkey PATH): what the phone keeps can then not be
+                       --privkey PATH, --pin-fd N): what the phone keeps can then not be
                        opened; remove the salt's keyslot by hand
 `
 
@@ -1025,7 +1040,7 @@ machine's screen (docs/PLAN-PHONE.md).
                   signing key and a sealed slot: the phones are stored in the
                   slot's blob, next to its TOTP key, and survive approve).
                   Prints a 6-digit code to compare with the app.
-                  --name STR --pcrs LIST --adapter N --privkey PATH --timeout DUR
+                  --name STR --pcrs LIST --adapter N --privkey PATH --pin-fd N --timeout DUR
                   --sha1  quote the SHA-1 PCR bank instead of SHA-256. Required,
                           as for 'slot add', where nothing else works: a TPM
                           without a SHA-256 bank, or a slot sealed with --sha1
@@ -1035,7 +1050,7 @@ machine's screen (docs/PLAN-PHONE.md).
   phone gate      Serve attestation requests by hand until a phone returns a
                   receipt; this process uses the TPM itself. In the boot image
                   the radio worker is 'tpm2-kira-boot gate', beside run.
-                  --adapter N --timeout DUR --adapter-wait DUR
+                  --adapter N --timeout DUR --adapter-wait DUR --privkey PATH --pin-fd N
   phone status    Show enrolled phones per slot and whether the blob is signed
                   by this machine's signing key (--json); exits 1 if not
   phone ekcert    Show whether the phone will verify this TPM as genuine
@@ -1043,7 +1058,7 @@ machine's screen (docs/PLAN-PHONE.md).
   phone quote     Produce evidence without a phone (--nonce HEX --out FILE)
   phone verify    Judge evidence offline (--evidence FILE --record FILE --nonce HEX)
   phone unenrol   Remove a slot's phones from its blob; the TOTP key stays.
-                  Needs the signing key (--privkey PATH). To remove the whole
+                  Needs the signing key (--privkey PATH, --pin-fd N). To remove the whole
                   slot without it: slot delete --nvram N
 
   EXIT STATUS: unlike every other command, 'phone gate', 'phone verify',

@@ -118,6 +118,9 @@ call.
   included) has the next boot's slots down (Arch slot 0; Debian every slot, a temporary host key)
   until a `slot approve` runs where the lock holds. Give such a container `CAP_IPC_LOCK` or build
   the image outside it.
+- **A YubiKey's PIN** is bytes in one locked buffer, from `--pin-fd`, the PIN file or the
+  terminal to VERIFY's command, both wiped (`internal/signing/pin.go`, `internal/piv`). Beyond
+  this process it goes through a socket to `pcscd` and to the card: no memory of ours.
 - **At boot** it is best effort, one line in the log, and never withholds a prompt.
   The initrd has no swap, so the lock there guards against one being set up.
 - **Locks do not cross an exec**, and each process needs what it holds:

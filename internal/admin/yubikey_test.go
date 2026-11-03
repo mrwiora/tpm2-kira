@@ -80,6 +80,14 @@ func (f *fakeTokens) install(t *testing.T) {
 	}
 }
 
+// storeTestPIN puts pin in the PIN file, beside the tests' control.conf.
+func storeTestPIN(t *testing.T, pin string) {
+	t.Helper()
+	if err := os.WriteFile(signing.PINPath(), []byte(pin+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // writeStub writes the key file setup --yubikey would write for slot.
 func writeStub(t *testing.T, serial uint32, slot signing.TokenSlot) string {
 	t.Helper()
@@ -180,7 +188,7 @@ func TestSignForTPMThroughToken(t *testing.T) {
 	key := card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	rkey := card.AddRSAKey(piv.SlotSignature, 2048, piv.PINPolicyAlways, piv.TouchPolicyNever, true)
 	(&fakeTokens{cards: []*pivtest.Card{card}}).install(t)
-	t.Setenv(signing.PINEnvVar, "123456")
+	storeTestPIN(t, "123456")
 
 	ecSigner, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {
@@ -234,7 +242,7 @@ func TestBlobSignatureThroughToken(t *testing.T) {
 	card := pivtest.New(1)
 	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	(&fakeTokens{cards: []*pivtest.Card{card}}).install(t)
-	t.Setenv(signing.PINEnvVar, "123456")
+	storeTestPIN(t, "123456")
 
 	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {
@@ -266,7 +274,7 @@ func TestWrongPINStopsEverything(t *testing.T) {
 	card := pivtest.New(1)
 	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	(&fakeTokens{cards: []*pivtest.Card{card}}).install(t)
-	t.Setenv(signing.PINEnvVar, "000000")
+	storeTestPIN(t, "000000")
 
 	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {
@@ -288,7 +296,7 @@ func TestLastPINAttemptIsNotSpent(t *testing.T) {
 	card := pivtest.New(1)
 	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	(&fakeTokens{cards: []*pivtest.Card{card}}).install(t)
-	t.Setenv(signing.PINEnvVar, "123456")
+	storeTestPIN(t, "123456")
 	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +318,6 @@ func TestNoPINIsUnavailable(t *testing.T) {
 	card := pivtest.New(1)
 	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	(&fakeTokens{cards: []*pivtest.Card{card}}).install(t)
-	os.Unsetenv(signing.PINEnvVar)
 	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {
 		t.Fatal(err)
@@ -329,7 +336,7 @@ func TestWrongTokenAndReplacedKey(t *testing.T) {
 	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	fake := &fakeTokens{cards: []*pivtest.Card{card}}
 	fake.install(t)
-	t.Setenv(signing.PINEnvVar, "123456")
+	storeTestPIN(t, "123456")
 	path := writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication))
 	signer, _ := signing.LoadSigningPrivateKey(path)
 	digest := sha256.Sum256(nil)
@@ -365,7 +372,7 @@ func TestSessionIsSharedAndReset(t *testing.T) {
 	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	fake := &fakeTokens{cards: []*pivtest.Card{card}}
 	fake.install(t)
-	t.Setenv(signing.PINEnvVar, "123456")
+	storeTestPIN(t, "123456")
 	path := writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication))
 	dialsBefore := fake.dials
 
@@ -524,11 +531,11 @@ func TestPINGuidance(t *testing.T) {
 	t.Setenv("TPM2_KIRA_CONTROL_CONF", filepath.Join(t.TempDir(), "control.conf"))
 	pinFile := signing.PINPath()
 
-	// No PIN stored: control stores it; the terminal or the environment meanwhile.
+	// No PIN stored: control stores it; the terminal or a descriptor meanwhile.
 	var buf bytes.Buffer
 	printPINInstructions(&buf, tokens[0], s9a)
 	t.Logf("instructions:\n%s", buf.String())
-	for _, want := range []string{"tpm2-kira control", "in " + pinFile + ", the PIN alone", "read -rs TPM2_KIRA_PIN && export TPM2_KIRA_PIN", "SKIPPED"} {
+	for _, want := range []string{"tpm2-kira control", "in " + pinFile + ", the PIN alone", "--pin-fd N", "SKIPPED"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("instructions lack %q", want)
 		}
@@ -608,7 +615,6 @@ func TestPINFromTheFile(t *testing.T) {
 	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	fake := &fakeTokens{cards: []*pivtest.Card{card}}
 	fake.install(t)
-	os.Unsetenv(signing.PINEnvVar)
 	conf := filepath.Join(t.TempDir(), "control.conf")
 	t.Setenv("TPM2_KIRA_CONTROL_CONF", conf)
 	pinFile := signing.PINPath()
@@ -638,16 +644,8 @@ func TestPINFromTheFile(t *testing.T) {
 	}
 	signing.CloseTokenSessions()
 
-	// The environment wins over the file.
-	os.WriteFile(pinFile, []byte("999999\n"), 0600)
-	t.Setenv(signing.PINEnvVar, "123456")
-	if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
-		t.Fatalf("environment PIN not preferred: %v", err)
-	}
-	signing.CloseTokenSessions()
-	os.Unsetenv(signing.PINEnvVar)
-
 	// A wrong PIN in the file names the file, and costs one attempt.
+	os.WriteFile(pinFile, []byte("999999\n"), 0600)
 	_, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256)
 	if err == nil || !strings.Contains(err.Error(), "PIN from "+pinFile) || card.Retries != 2 {
 		t.Fatalf("wrong PIN from the file: %v, retries %d", err, card.Retries)
@@ -711,7 +709,7 @@ func TestPINPolicyAlwaysLikeRealYubiKey(t *testing.T) {
 			card.AddECKey(piv.SlotAuthentication, piv.PINPolicyAlways, piv.TouchPolicyNever, false)
 			fake := &fakeTokens{cards: []*pivtest.Card{card}}
 			fake.install(t)
-			t.Setenv(signing.PINEnvVar, "123456")
+			storeTestPIN(t, "123456")
 
 			slot := probeSlot(t, 33261813, piv.SlotAuthentication)
 			path := writeStub(t, 33261813, slot)
@@ -745,7 +743,7 @@ func TestPINAlwaysWithPINLeftVerified(t *testing.T) {
 	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyAlways, piv.TouchPolicyNever, false)
 	fake := &fakeTokens{cards: []*pivtest.Card{card}}
 	fake.install(t)
-	t.Setenv(signing.PINEnvVar, "123456")
+	storeTestPIN(t, "123456")
 	signer, _ := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 
 	other, err := piv.Open(card)
@@ -774,7 +772,6 @@ func TestControlStoresThePIN(t *testing.T) {
 	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyAlways, piv.TouchPolicyNever, false)
 	fake := &fakeTokens{cards: []*pivtest.Card{card}}
 	fake.install(t)
-	os.Unsetenv(signing.PINEnvVar)
 	t.Setenv("TPM2_KIRA_CONTROL_CONF", filepath.Join(t.TempDir(), "control.conf"))
 	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {

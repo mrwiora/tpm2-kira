@@ -9,6 +9,15 @@ formats and CLI flags may change without migration paths.
 ---
 
 
+## The YubiKey's PIN out of the environment, and no string (2026-11-03, security)
+
+`TPM2_KIRA_PIN` went first in the signer's order. An environment variable is a string that
+cannot be wiped, is inherited by every child (`mkinitcpio -P`, its hooks) and reads in
+`/proc/PID/environ`, against aSSH's own rule. It is gone: the variable is ignored and said so
+once. A script uses `--pin-fd N`. The file's and the terminal's PIN were strings too, read
+through `io.ReadAll`, and VERIFY's APDU a copy no one wiped: all bytes in one locked buffer
+now, wiped.
+
 ## PCR 7 in the channel's first branch; explicit sessions (2026-11-02, security)
 
 Until blob 19 the channel's first branch read PCR 15 alone, so anything booted on the

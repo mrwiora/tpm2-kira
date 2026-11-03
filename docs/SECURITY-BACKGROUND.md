@@ -1412,6 +1412,8 @@ only way back in, because:
    YubiKey with no stored PIN, or at least restrict it (`chmod 400`, owned by root,
    in a directory only root can write to; `slot add` and `slot approve` refuse
    anything else, §3.6). Consider keeping a backup in a secure offline location.
+   A script gives a YubiKey's PIN with `--pin-fd N`, read once into locked memory and
+   closed; argv and the environment never carry it.
 2. **Keep `pcr.key` root's alone, and images with a shell before the close unsigned**
    by it and by the db key: any image it ever signed keeps PCR 11 valid (§19).
 3. **Secure Boot on, out of Setup Mode, your keys in it.** PCR 7 means little

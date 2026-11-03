@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 
@@ -61,7 +60,7 @@ func TestPrintResealSkipped(t *testing.T) {
 		t.Errorf("block does not start with the hook marker:\n%s", out)
 	}
 	for _, want := range []string{"(YubiKey 12345678, slot 9a)", "no YubiKey with serial 12345678 is present",
-		"#0, #1", "nothing was written", "PCR MISMATCH", "sudo tpm2-kira slot approve", signing.PINEnvVar} {
+		"#0, #1", "nothing was written", "PCR MISMATCH", "sudo tpm2-kira slot approve", "--pin-fd N"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("block lacks %q", want)
 		}
@@ -86,7 +85,6 @@ func TestPrepareSigningKey(t *testing.T) {
 	}
 
 	// No PIN: unavailable, and no attempt spent.
-	os.Unsetenv(signing.PINEnvVar)
 	if err := signing.PrepareSigningKey(signer); !errors.Is(err, signing.ErrTokenUnavailable) || card.Retries != 3 {
 		t.Fatalf("no PIN: %v, retries %d", err, card.Retries)
 	}
@@ -103,7 +101,7 @@ func TestPrepareSigningKey(t *testing.T) {
 
 	// Present with the PIN: verified up front, then signing needs no new PIN.
 	fake.cards = []*pivtest.Card{card}
-	t.Setenv(signing.PINEnvVar, "123456")
+	storeTestPIN(t, "123456")
 	if err := signing.PrepareSigningKey(signer); err != nil {
 		t.Fatal(err)
 	}

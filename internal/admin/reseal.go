@@ -276,7 +276,7 @@ func PrintResealSkipped(w io.Writer, skipped []*ResealSkippedError) {
 	fmt.Fprintln(w, "                 update — the next boot reports a PCR MISMATCH and shows no")
 	fmt.Fprintln(w, "                 TOTP code. That is expected here; it is not evidence of tampering.")
 	fmt.Fprintln(w, "  To fix:        plug in the YubiKey and run, with the PIN typed when asked")
-	fmt.Fprintf(w, "                 or set in %s:\n", signing.PINEnvVar)
+	fmt.Fprintln(w, "                 or given with --pin-fd N:")
 	fmt.Fprintln(w, "                     sudo tpm2-kira slot approve")
 }
 

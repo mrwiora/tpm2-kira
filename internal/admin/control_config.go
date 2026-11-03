@@ -223,5 +223,5 @@ func setAttestBluetooth(path, value string) error {
 }
 
 // The PIN's value goes to the signer, to sign with the key, and nowhere
-// else; everything else asks pinStored, which says only whether it is
+// else; everything else asks PINStored, which says only whether it is
 // there.
