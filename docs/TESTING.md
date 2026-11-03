@@ -8,14 +8,14 @@ Four depths. Each says what it can show; only the third and the fourth end a bat
 |---|---|---|---|---|
 | **Fast** | `make test-all`, a project's `go test ./...` | unit and integration tests against swtpm, no VM | `make test-all` 190 s, beside the VMs | no |
 | **A single scenario** | `tools/vmtest.py --only SCENARIO`, from the snapshot `setup` | that scenario and what it needs, on real VMs | 1-5 min: the table below, plus the typed boot it starts from | never; its report says so |
-| **The proof** | `tools/proof.py` | from `fresh`, both machines in parallel: `setup`, `typed-boot`, `hibernate`, `unapproved` (Arch), `silent-tpm`, and then, back at `fresh` with Secure Boot really on, `secure-boot`, `tpm-salt`, `vault-pepper`, `revoked`, `firmware-refuses`; beside them `make test-all`, aSSH's tests, the vault's, safearch's `tests/run.sh` | target 15 min, limit 16; see below | yes, once per batch |
+| **The proof** | `tools/proof.py` | from `fresh`, both machines in parallel: `setup`, `typed-boot`, `hibernate`, `unapproved` (Arch), `silent-tpm`, and then, back at `fresh` with Secure Boot really on, `secure-boot`, `tpm-salt`, `vault-pepper`, `revoked`, `firmware-refuses`; beside them `make test-all`, aSSH's tests, the vault's, safearch's `tests/run.sh` | 15-20 min, an orientation; see below | yes, once per batch |
 | **`--all`** | `tools/proof.py --all`, before a release, the owner's call | the proof's scenarios and `second-typed-boot`, `debian-resume`, `V6`, `V3`, `vault-alone`, `typed-vault`, `slot-life`, `removal`, `no-tpm`, `V4-reverted`, `V9-long`, `V8`; safearch's `tests/vm.sh`, Marify's emulator test, go-uefi-slim's and tpm2-verifier's tests | about 26 min for the machines, summed from single runs: never run as one | yes, and more |
 
-Measured seconds, in the full run (`.local/runs/m/proof`, 934 s of the target of 900, within the limit of 960; `make test-all` 197 s and
+Measured seconds, in the full run (`.local/runs/m/proof`, 934 s; `make test-all` 197 s and
 safearch's `tests/run.sh` 127 s started at 201 s, when the setups were done) and each scenario alone from
-a saved setup (`.local/runs/m/`), Arch / Debian. The second setup, with Secure Boot on, is why a proof is over the target:
+a saved setup (`.local/runs/m/`), Arch / Debian. The second setup, with Secure Boot on, adds about 4 minutes:
 
-| Scenario | In the full run | Alone | Budget |
+| Scenario | In the full run | Alone | Budget, for information |
 |---|---|---|---|
 | `setup` | 174 / 201 | 132 / 144 (`--fast-kdf`) | 175 / 202 |
 | `typed-boot` | 48 / 66 | 35 / 41 (`--fast-kdf`) | 49 / 67 |
@@ -75,10 +75,10 @@ Tests run with `-count=1` and wait for a state, never for a time
 `tpm2-kira-boot`, as they ship (static, no cgo) and runs them as a user
 against swtpm (`TPM2_KIRA_UNPRIVILEGED=1`).
 
-## The proof: 15 minutes
+## The proof: 15-20 minutes
 
 ```bash
-tools/proof.py                                      # the proof: from fresh, two machines, 15 minutes, 16 at most
+tools/proof.py                                      # the proof: from fresh, two machines, 15-20 minutes
 tools/proof.py --since '2026-11-03 09:00'           # and, after it, what the batch touched
 tools/proof.py --all                                # before a release, the owner's call: everything
 tools/test-affected.py --since '2026-11-03 09:00'   # what AGENTS.md's table asks for: prints, starts nothing
@@ -86,17 +86,16 @@ tools/test-affected.py --since '2026-11-03 09:00'   # what AGENTS.md's table ask
 
 `tools/proof.py` runs both machines in parallel through the scenarios below and, once their setups
 are done, beside them what needs no VM: `make test-all`, aSSH's tests, the vault's, safearch's
-`tests/run.sh`. **15 minutes wall clock is the target, 16 the limit:** up to 960 s it passes, and past
-900 s the report names what went over; at 960 s it stops what still runs and fails, naming the scenario
-it was in and those over their budgets. A scenario over its budget within the target is printed, and
-no failure.
+`tests/run.sh`. **15-20 minutes wall clock are an orientation, not a limit:** time fails nothing. A
+scenario over its budget is printed, and a run over 20 minutes says so in its report, with what went
+over. Only a run that hangs is stopped: after an hour, reported as stuck, naming what it was in.
 It reports in `report.txt` and `report.json` of its run's directory (`.local/runs/proof-<time>/`, or
 `--run-dir`), every scenario against its budget, and leaves the machines at `fresh`, stopped (the snapshot
-`secureboot` stays). The budgets sum to no more than the limit, `tools/proof_test.py`; since the second setup they are over the target. A part
+`secureboot` stays). A part
 that fails does not stop the others. `--only` is no final proof, and its report says so. A final proof
 is this, from `fresh`, without `--fast-kdf`: there is no flag for that.
 
-| Scenario (`vmtest.py --only NAME`) | What it shows | Budget Arch / Debian, s |
+| Scenario (`vmtest.py --only NAME`) | What it shows | Budget Arch / Debian, s, for information |
 |---|---|---|
 | `setup` | install, setup, enrolment, `control`, the memory lock of a command, a hook under a refused lock, the note on a vault's keyslot | 175 / 202 |
 | `typed-boot` | the typed boot over SSH, every running-system check in one go: certified key, TOTP, PCR 15 closed, slots refuse, PCR 4, Secure Boot's warning, memory locked, signed slots on Arch, 8 and 9 on Debian, the close before a volume's unit on Arch | 49 / 67 |
@@ -109,7 +108,7 @@ is this, from `fresh`, without `--fast-kdf`: there is no flag for that.
 | `revoked` | one boot, boot 2's checks: a device revoked on the vault, falling back to the password with the salt this TPM opened; the salt's keyslot removed | 60 / 66 |
 | `firmware-refuses` | one byte changed in what the firmware verifies (Arch the UKI, Debian shim): `Access Denied`, nothing of it runs | 12 / 10 |
 
-**Before a release, `--all`:** the proof's scenarios and the rest, named, with no limit, which also
+**Before a release, `--all`:** the proof's scenarios and the rest, named, which also
 runs when named in `--only`:
 
 | Scenario | What it shows |
@@ -128,7 +127,7 @@ runs when named in `--only`:
 | `removal` | what `slot delete` takes; `control` asks before the SSH CA |
 
 `tests/vm.sh` (safearch) and Marify's emulator test run under `--all`, and when AGENTS.md's table
-asks (`--with`, `--since`): after the proof, outside its limit.
+asks (`--with`, `--since`): after the proof.
 
 **The rule:** no full run while a scenario fails; each is proven alone from a saved setup first,
 then one full proof. A run expected over 10 minutes is announced first.

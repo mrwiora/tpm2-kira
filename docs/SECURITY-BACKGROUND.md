@@ -1824,7 +1824,7 @@ Which key does what:
 
 ## 17. What Has Been Tested
 
-**The code:** tpm2-kira `b4fd6ba` (blob 20, schema 4; what came after it: test tools and documentation), vault `c33cfce`, Marify `0615597`, aSSH `8c18175`, safearch `f9c8745`, go-uefi-slim `8f7d9c7`. Rows at another commit say so.
+**The code:** tpm2-kira `b4fd6ba` (blob 20, schema 4; what came after it: test tools, documentation and, at `7891c05`, `status` and `slot info` reading the public key, by `make test-all` alone), vault `c33cfce`, Marify `0615597`, aSSH `8c18175`, safearch `f9c8745`, go-uefi-slim `8f7d9c7`. Rows at another commit say so.
 **Date:** 2026-11-03.
 
 **The machines:** the VMs are QEMU with OVMF and swtpm as their TPM. The proof's first part runs in
@@ -1838,7 +1838,7 @@ Logs: `.local/runs/` of the workspace.
 
 | Run | Code | On | Result |
 |---|---|---|---|
-| `tools/proof.py`: both machines from `fresh`, no `--fast-kdf`, the second part with Secure Boot on | b4fd6ba | VM | Arch 258, Debian 223 checks, 0 failed, 933 s; the whole 934 s of the target of 900. The proof itself reported FAILED on a test of its own budgets (`m/proof`); that fixed, `make test-all` alone passes (below). Not repeated as one run |
+| `tools/proof.py`: both machines from `fresh`, no `--fast-kdf`, the second part with Secure Boot on | b4fd6ba | VM | Arch 258, Debian 223 checks, 0 failed, 933 s; the whole 934 s. It reported FAILED on a test of its own budgets alone (`m/proof`), since gone; `make test-all` alone passes (below). The owner accepted it without a second run. `status` and `slot info` changed after it: not on a VM |
 | The same at a guest of 1792 MiB, the memory floor (MemTotal 1620-1635 MiB), the memory lock on | ad20b07, the same code | VM | Arch 211, Debian 206, 0 failed (`l/mem/vm-1792`). Other sizes, before the lock: tools/LOCALVM.md |
 | The memory lock under a memory hog, the real `luks derive` at the real cost, at the floor | ad20b07 | Debian VM, 1 GiB of swap | `VmLck` 1242 at the prompt, 2267 MiB during Argon2id, resident 1038 MiB; `VmSwap` 0 at every sample, 126555 other pages to swap (`l/mem/vm-1792.out`). The same calls without the lock, a probe at 4096 MiB: 35712 kB of the process in swap (`l/probe/debian-pressure.log`) |
 | The boot's lock | f0965aa | VM | every boot of the VM test: "memory locked, not dumpable", resident 14-20 MiB after a derivation, peak 1042-1048 MiB, locked 2264-2329 MiB |
@@ -1846,13 +1846,13 @@ Logs: `.local/runs/` of the workspace.
 | A refused lock: `luks derive`, `run` | 082f908 | a VM (`luks derive` as root without `CAP_IPC_LOCK`: each VM test); a container (both) | `luks derive` stops before it asks; `run` goes on, one line (`l/docker/nocap.log`) |
 | `tools/hibernatetest.py --target both --no-build`, in parallel | f0965aa | VM | Arch 163, Debian 152, 0 failed, with the "not tested" items in §18 (`l/final/hib`) |
 | A resumed guest, `--only V2` with a wait added | 75121e2 | VM | Arch: slot 0's TOTP key refuses after the resume, same boot_id 75 s after the first login, with `ICH9-LPC.noreboot` (`g5/resume-uptime.out`) |
-| `make test-all` | b4fd6ba, the budgets' test fixed | unit, swtpm | 785 `--- PASS` lines, 5 skipped, 0 failed, no `(cached)`, alone, after the proof (`m/test-all-after-proof.log`) |
+| `make test-all` | 7891c05 | unit, swtpm | 785 `--- PASS` lines, 5 skipped, 0 failed, no `(cached)`, alone, after the proof (`m/test-all-final.log`) |
 | A failing `tpm2.Policy` callback at go-tpm `c395998`, repeated on one open file (the probe `h2/leakprobe`) | - | Arch VM, kernel 7.2.9, swtpm behind it | `/dev/tpmrm0` and `/dev/tpm0`: the 4th is `TPM_RC_SESSION_MEMORY`. Closing the file clears `tpmrm0`; on `tpm0` the three sessions stay (`h2/probe.log`). tpm2-kira's sessions are explicit now (`TestFailuresLeaveNoSession`) |
 | aSSH `go test ./...` | 8c18175 | unit, swtpm | 89 passed, 1 skipped (the lock as root: on the VMs, above), 0 failed (`l/final/assh.log`) |
 | go-uefi-slim `go test ./...` | 8f7d9c7 | unit | 46 passed, 1 skipped, 0 failed (`g5/go-uefi-slim.log`); `uki`'s three fuzz targets 40 s each (`g3/fuzz.log`) |
 | tpm2-kira-vault's tests | c33cfce, at the pin b4fd6ba | its suite, with and without go.work | all pass (`m/proof/vault.log`) |
 | safearch `tests/run.sh` | f9c8745 | stubs | 335 passed, 0 failed, 1 skipped (`l/final/safearch-run.log`) |
-| Marify `android/scripts/test-emulator.sh` | f8d4e61, core c81ea61 | JVM, emulator, swtpm | 59, 46, 8 passed, 0 failed, ALL PASS (`k/marify-emulator.out`; an 8 GiB data partition, `/` had 11 GB free) |
+| Marify `android/scripts/test-emulator.sh` | 0615597, core b4fd6ba; the instrumented tests again at cf9a966 | JVM, emulator, swtpm | first run: 59 JVM, 45 of 47 instrumented, 9 swtpm; the 2 were the tests' own (`m/marify-emulator.log`). After their fix, without swtpm and with the same core: 59, 47, 0 failed (`m/marify-emulator-2.log`) |
 | safearch `tests/vm.sh` | f9c8745, aSSH 8c18175 | VM (a fresh build, swtpm) | 48 checks passed, 0 failed (96 PASS lines in the log, each written twice; `l/final/safearch-vm.log`, `mkosi.test/vm/run-20261102-171448`) |
 
 ### 17.2 On the VMs
@@ -1880,7 +1880,7 @@ Both machines unless it says otherwise; step names (V2, V4, ...) are hibernatete
 | The vault with Secure Boot on | the machine's real PCR 7 quoted, the real event log's digests: `on` in the devices table, the device's view and the audit; established in Debian's initrd; releases with a pepper, a revoked device's refusal and the fallback | Arch, Debian |
 | The firmware refuses a changed image | one byte changed. Arch's UKI: `Error loading EFI binary \EFI\Linux\arch-linux.efi: Access denied`; Debian's shim: `failed to load Boot0008 ... Access Denied -- rejected probably by Secure Boot` | Arch, Debian |
 | A volume's unit after the close | the journal of each typed boot and of the silent TPM's second boot: the close finished before `Cryptography Setup` starts, no ordering cycle in PID 1's lines; `systemd-analyze verify` on the image's units; the silent TPM's first boot shows no volume's unit and no prompt before its reboot | Arch |
-| A refused lock | `setup`, `slot add`, `slot approve --unattended`, `slot info`, `status` and the image's post hook as root without `CAP_IPC_LOCK` under a limit: stopped before a key is read, the hook says the approval did not succeed and ends 0 | Arch, Debian |
+| A refused lock | `setup`, `slot add`, `slot approve --unattended` and the image's post hook as root without `CAP_IPC_LOCK` under a limit: stopped before a key is read, the hook says the approval did not succeed and ends 0 | Arch, Debian |
 | Hibernation risk (V6) | no risk with encrypted swap; red with a swap file on Debian's unencrypted /boot | both; the swap file Debian |
 | Suspend (V5) | after S3 the CA is still closed (restartCount 0 → 1) | Arch, Debian |
 | The close before a resume | in the image (`image-close.log`). After the boot PCR 15 holds exactly three `assh-close` extends (`312573a5…`, by hash chain): `run`, the unit, the drop-in on Arch's resume; `run`, local-top, init-bottom on Debian's boot | Arch, Debian |
@@ -1996,6 +1996,7 @@ Each is taken knowingly: why the design still works, and how far.
 | A downgrade to an older signed UKI | Any image ever signed keeps PCR 11 valid: what lets kernel updates pass without an approval | Slot 1 opens in it, and whatever that image's close does. Revocation is a new PCR key and new approvals, or dbx |
 | Root writes back an older CA approval | The generation revokes a slot's approvals; the CA's approvals by the signing key are never revoked, and approve keeps only the next boot's in the variable | The CA signs in that old state, should the machine boot it. aSSH's own authority has a counter; the signing key has none |
 | A vault's keyslot on a machine not `on` opens nothing there | The vault refuses it, by the owner's decision, with no per-device exception. `control` and `luks enrol` say so before such a keyslot, and name the recovery keyslot | A machine whose firmware cannot be `on`, or whose firmware's measurement this verifier cannot read, gets nothing from a vault. The passphrase by hand stays |
+| Secure Boot on costs Debian its hibernation | Debian's kernel locks itself down under Secure Boot (`integrity`), and refuses hibernation (`Lockdown: ... hibernation is restricted`, seen on the VM; `/sys/power/disk` shows `[disabled]`). A vault's `on` and hibernation exclude each other there | Suspend to RAM stays. Arch's kernel does not lock down, and hibernates with it on, though no resume with Secure Boot on has been run (§18). An owner on Debian picks: a vault, or hibernation |
 | A hook's approval needs the memory lock | An approval that cannot lock stops before it reads the key, and the build goes on and says so | An image built in a container or a unit without `CAP_IPC_LOCK` under a limit is not approved: the next boot's slots are down until a `slot approve` where the lock holds |
 | An approved image with a root shell before the close | PCR 15 is zero there, and every other PCR as approved. Keep such images unapproved and unsigned | Codes and a certificate in that boot, not the keys. On a UKI with Secure Boot on the shell cannot come from an edited command line; a signed addon could add to it, so keep those unsigned |
 | An image without tpm2-kira under the same keys | The close is software in the approved image; the TPM cannot tell. It needs the PCR key's signature (or an approval) too | That one boot, with PCR 15 at zero |

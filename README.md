@@ -609,6 +609,13 @@ GRUB superuser password (`set superusers=` and `password_pbkdf2` in
 `/etc/grub.d/40_custom`, the menu entries `--unrestricted`, then
 `update-grub`) and judges its absence red.
 
+### Secure Boot on Debian: no hibernation
+
+With Secure Boot on, Debian's kernel locks itself down (`integrity`) and refuses hibernation:
+`/sys/power/disk` shows `[disabled]`, and the kernel logs `hibernation is restricted`. Suspend
+to RAM stays. A vault releases nothing unless Secure Boot is on, so on Debian a machine has a vault's
+keyslot or hibernation, not both. (Arch's kernel does not lock itself down.)
+
 ### PCR 8 and 9 are predicted for the next boot
 
 `slot approve` predicts PCR 8 and 9 from this boot's event log and the files on disk, so an update needs no boot without a code; the hooks run it. What it cannot foresee, and the state of the art: [docs/BOOT-INTEGRATION.md](docs/BOOT-INTEGRATION.md#pcr-8-and-9-are-predicted-for-the-next-boot).

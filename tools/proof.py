@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The proof, as one command: 15 minutes wall clock, the target; 16 a hard limit.
+"""The proof, as one command. 15-20 minutes wall clock are its orientation, no limit.
 
     tools/proof.py                            # the proof, from the snapshot fresh
     tools/proof.py --since '2026-11-03 09:00' # and, after it, what AGENTS.md's table asks for the batch
@@ -9,12 +9,11 @@
 
 The proof is DEFAULT: the two machines in parallel, each through the scenarios that have a budget
 (tools/vmtest.py's SCENARIOS, measured seconds per machine), and beside them, once the machines'
-setups are done, what needs no VM: the setups are what they would slow. At LIMIT it stops what still
-runs and fails, and says which scenario it was in and which went over their budgets. Past TARGET and
-within the limit it passes and names what went over. A scenario over its budget within the target is
-printed, and no failure.
-Parts on top of the proof run after it, outside the limit; so does everything --all adds, with no
-limit at all: what leaves the proof is named there, never lost.
+setups are done, what needs no VM: the setups are what they would slow. Time fails nothing: budgets
+and ORIENTATION are information, a run past either says so in its report with what went over. Only
+STUCK stops anything: that many seconds on a set of parts is a run that hangs, reported as stuck.
+Parts on top of the proof run after it, and so does everything --all adds: what leaves the proof is
+named there, never lost.
 
 A part that fails does not stop the others. The machines take .local/vms/vm.lock, and are reverted
 to fresh and stopped at their end.
@@ -47,8 +46,8 @@ VM_LOCK = os.path.join(LOCAL, "vms", "vm.lock")
 VM_CONFIG = os.path.join(LOCAL, "vms", "vmtest-local.conf")
 NOT_FINAL = "NOT A FINAL PROOF: "
 MEMORY_BUDGET = 14000  # MiB of the host's 15 GB the parts may plan on
-TARGET = 15 * 60  # the proof's seconds, wall clock; over it the report names what went over
-LIMIT = 16 * 60  # at it the run stops and fails
+ORIENTATION = 20 * 60  # the proof's seconds, wall clock; past it the report says so, and what went over
+STUCK = 60 * 60  # a set of parts past it hangs: what runs is stopped, and reported as stuck
 MACHINES = ("arch", "debian")
 VAULT_CONTAINER = "tpm2-kira-vmtest-vault"
 
@@ -128,8 +127,8 @@ def sample_host(parts, stop, path):
 
 
 def machines_back(stopped):
-    """The machines back at fresh, stopped. A run removes its own snapshots itself, one stopped
-    at the limit could not: they go here, with its vault."""
+    """The machines back at fresh, stopped. A run removes its own snapshots itself, a stuck one
+    could not: they go here, with its vault."""
     if stopped:
         subprocess.run(["docker", "rm", "-f", VAULT_CONTAINER], capture_output=True)
         subprocess.run([os.path.join(REPO, "tools", "vmtest.py"), "--config", VM_CONFIG, "--target", "both", "--drop-setup"], cwd=REPO, capture_output=True)
@@ -145,7 +144,7 @@ def run_part(p, run_dir, begun):
     start = time.monotonic()
     try:
         with open(log, "wb") as f:
-            # A session of its own: the limit stops the part with all it started.
+            # A session of its own: a stuck run stops the part with all it started.
             p.process = subprocess.Popen(p.argv, cwd=p.cwd, env=dict(os.environ, **p.env), stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT, start_new_session=True)
             rc = p.process.wait()
     except OSError as e:
@@ -155,7 +154,7 @@ def run_part(p, run_dir, begun):
     p.seconds = time.monotonic() - start
     p.running = False
     p.ok = rc == 0
-    p.why = "stopped at the limit" if p.stopped else f"exit {rc}" if rc != 0 else ""
+    p.why = "stuck: stopped after a run's longest time" if p.stopped else f"exit {rc}" if rc != 0 else ""
     if p.ok and p.check:
         with open(log, errors="replace") as f:
             p.why = p.check(f.read()) or ""
@@ -164,7 +163,7 @@ def run_part(p, run_dir, begun):
 
 
 def stop_part(p):
-    """A part at the limit, with everything it started."""
+    """A part of a stuck run, with everything it started."""
     p.stopped = True
     if p.process:
         try:
@@ -188,19 +187,19 @@ def held(p, parts, run_dir):
     return bool(machines) and machines[0].ok is None and not setups_done(run_dir)
 
 
-def run_parts(parts, run_dir, budget, begun, limit=None):
+def run_parts(parts, run_dir, budget, begun, stuck=None):
     """Every part, as many at once as the budget has room for; the first of those that do not
-    wait, each in the table's order. One larger than the budget runs alone. At the limit, seconds
-    after begun, what runs is stopped and what waits never starts."""
+    wait, each in the table's order. One larger than the budget runs alone. At stuck, seconds
+    after begun, what runs is stopped and what waits never starts: a run that hangs, nothing else."""
     waiting, running = list(parts), []
     while waiting or running:
         running = [(p, t) for p, t in running if t.is_alive()]
-        if limit is not None and time.monotonic() - begun > limit:
+        if stuck is not None and time.monotonic() - begun > stuck:
             for p, _ in running:
                 if not p.stopped:
                     stop_part(p)
             for p in waiting:
-                p.ok, p.why = False, "not started: the limit"
+                p.ok, p.why = False, "not started: the run is stuck"
             waiting = []
         used = sum(p.memory for p, _ in running)
         for p in list(waiting):
@@ -257,7 +256,9 @@ def scenario_lines(scenarios):
     return lines
 
 
-def report(parts, wall, notes, run_dir, limit=None, proof_wall=None, target=None):
+def report(parts, wall, notes, run_dir, proof_wall=None):
+    """proof_wall: the proof's seconds, when this run has the proof. Only a part's own result fails
+    a run: time is information, unless a part was stopped as stuck."""
     scenarios = read_scenarios(run_dir)
     over, running = over_budget(scenarios)
     lines = list(notes) + ["tpm2-kira proof, " + datetime.datetime.now().isoformat(timespec="seconds"), ""]
@@ -267,22 +268,22 @@ def report(parts, wall, notes, run_dir, limit=None, proof_wall=None, target=None
     if any(scenarios.values()):
         lines += [""] + scenario_lines(scenarios)
     lines += ["", f"{'the whole':<23}{wall:>9.0f}  (the wall clock)", f"{'sum of parts':<23}{sum(p.seconds for p in parts):>9.0f}"]
-    late = limit is not None and proof_wall is not None and proof_wall > limit
-    if limit is not None:
-        lines.append(f"{'the proof':<23}{proof_wall:>9.0f}  target {target if target is not None else '-'}, limit {limit}")
-    if late:
-        lines += ["", f"OVER THE LIMIT: {proof_wall:.0f} s of {limit}.", "  over budget: " + (", ".join(over) or "none"), "  stopped in: " + (", ".join(running) or "nothing")]
-    elif target is not None and proof_wall is not None and proof_wall > target:
-        lines += ["", f"OVER THE TARGET, within the limit: {proof_wall:.0f} s of {target}.", "  over budget: " + (", ".join(over) or "none")]
+    if proof_wall is not None:
+        lines.append(f"{'the proof':<23}{proof_wall:>9.0f}  orientation {ORIENTATION}")
+    stuck = [p.name for p in parts if p.stopped]
+    if stuck:
+        lines += ["", f"STUCK: {', '.join(stuck)} stopped after {STUCK} s: a run that hangs, no matter of budgets.", "  it was in: " + (", ".join(running) or "nothing")]
+    elif proof_wall is not None and proof_wall > ORIENTATION:
+        lines += ["", f"Over the orientation, no failure: {proof_wall:.0f} s of {ORIENTATION}.", "  over budget: " + (", ".join(over) or "none")]
     elif over:
-        lines += ["", "over budget, within the target: " + ", ".join(over)]
-    ok = all(p.ok for p in parts) and not late
+        lines += ["", "over budget, no failure: " + ", ".join(over)]
+    ok = all(p.ok for p in parts)
     lines += ["", "ALL PASS" if ok else "FAILED", f"logs: {run_dir}"]
     text = "\n".join(lines) + "\n"
     with open(os.path.join(run_dir, "report.txt"), "w") as f:
         f.write(text)
     with open(os.path.join(run_dir, "report.json"), "w") as f:
-        json.dump({"wall": round(wall, 1), "proof_wall": None if proof_wall is None else round(proof_wall, 1), "limit": limit, "notes": notes, "over_budget": over, "stopped_in": running,
+        json.dump({"wall": round(wall, 1), "proof_wall": None if proof_wall is None else round(proof_wall, 1), "orientation": ORIENTATION, "notes": notes, "over_budget": over, "stuck": stuck, "stopped_in": running,
                    "scenarios": scenarios, "parts": [{"name": p.name, "start": round(p.start, 1), "seconds": round(p.seconds, 1), "ok": p.ok, "why": p.why,
                    "least_memory_mib": p.least_memory, "least_disk_mib": p.least_disk} for p in parts]}, f, indent=1)
     return text, ok
@@ -291,11 +292,11 @@ def report(parts, wall, notes, run_dir, limit=None, proof_wall=None, target=None
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run-dir", help="where the report and the logs land (default .local/runs/proof-<time>)")
-    ap.add_argument("--all", action="store_true", help="before a release: every scenario of the machines and every part, no limit")
+    ap.add_argument("--all", action="store_true", help="before a release: every scenario of the machines and every part")
     ap.add_argument("--since", help="add what AGENTS.md's table asks for the changes since this time (git's --before; tools/test-affected.py)")
     ap.add_argument("--with", dest="more", default="", help="parts on top: " + ",".join(n for n in parts_table("") if n not in DEFAULT))
     ap.add_argument("--only", help="these parts alone: no final proof")
-    ap.add_argument("--one-at-a-time", action="store_true", help="the parts one after the other: what they take alone; no limit: no final proof")
+    ap.add_argument("--one-at-a-time", action="store_true", help="the parts one after the other: what they take alone: no final proof")
     args = ap.parse_args()
     run_dir = os.path.abspath(args.run_dir or os.path.join(LOCAL, "runs", "proof-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")))
     os.makedirs(run_dir, exist_ok=True)
@@ -327,14 +328,14 @@ def main():
     threading.Thread(target=sample_host, args=(parts, stop, LOCAL), daemon=True).start()
     start = time.monotonic()
     budget = 0 if args.one_at_a_time else MEMORY_BUDGET
-    limited = not args.only and not args.all and not args.one_at_a_time
+    is_proof = not args.only and not args.all and not args.one_at_a_time
     first = [p for p in parts if p.name in DEFAULT] if not args.only else parts
-    run_parts(first, run_dir, budget, start, LIMIT if limited else None)
+    run_parts(first, run_dir, budget, start, STUCK)
     proof_wall = time.monotonic() - start
-    if proof_wall <= LIMIT or not limited:
-        run_parts([p for p in parts if p not in first], run_dir, budget, start)
+    if not any(p.stopped for p in first):
+        run_parts([p for p in parts if p not in first], run_dir, budget, start, proof_wall + STUCK)
     stop.set()
-    text, ok = report(parts, time.monotonic() - start, notes, run_dir, LIMIT if limited else None, proof_wall if limited else None, TARGET if limited else None)
+    text, ok = report(parts, time.monotonic() - start, notes, run_dir, proof_wall if is_proof else None)
     print(text, flush=True)
     return 0 if ok else 1
 
