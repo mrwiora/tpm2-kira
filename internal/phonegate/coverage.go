@@ -103,10 +103,8 @@ func readInitrdCoverage(path string) (initrdCoverage, error) {
 	return initrdCoverageFromEvents(events), nil
 }
 
-// PCR7Chain is the digests of PCR 7's events in the firmware's log, in a bank:
-// what a verifier replays against the quoted PCR 7 (attest.EstablishSecureBoot), the
-// state of Secure Boot established with no word of this machine's. Nil without a log.
-func PCR7Chain(path string, alg uint16) []byte {
+// logEvents is the firmware log's events in a bank. Nil without a log.
+func logEvents(path string, alg uint16) []evlog.Event {
 	raw, err := measure.ReadRawEventLogFromPath(path)
 	if err != nil {
 		return nil
@@ -119,16 +117,45 @@ func PCR7Chain(path string, alg uint16) []byte {
 	if alg == attest.AlgSHA1 {
 		hash = evlog.HashSHA1
 	}
+	return log.Events(hash)
+}
+
+func chainOf(events []evlog.Event, pcr, most int) []byte {
 	var chain []byte
-	for _, e := range log.Events(hash) {
-		if e.Index == 7 {
+	for _, e := range events {
+		if e.Index == pcr {
 			chain = append(chain, e.Digest...)
 		}
 	}
-	if len(chain) > attest.MaxPCR7Chain {
+	if len(chain) > most {
 		return nil
 	}
 	return chain
+}
+
+// PCR7Chain is the digests of PCR 7's events in the firmware's log, in a bank:
+// what a verifier replays against the quoted PCR 7 (attest.EstablishSecureBoot), the
+// state of Secure Boot established with no word of this machine's. Nil without a log.
+func PCR7Chain(path string, alg uint16) []byte {
+	return chainOf(logEvents(path, alg), 7, attest.MaxPCR7Chain)
+}
+
+// grubCommand is how GRUB describes a command it measures into PCR 8; the digest is of
+// what follows.
+const grubCommand = "grub_cmd: "
+
+// InitrdEventsOf is what a phone establishes the initrd's coverage from
+// (attest.EstablishInitrd): PCR 8's and PCR 11's digests in a bank, and GRUB's last
+// initrd command. A phone believes none of it beyond what replays to the quote.
+func InitrdEventsOf(path string, alg uint16) attest.InitrdEvents {
+	events := logEvents(path, alg)
+	out := attest.InitrdEvents{PCR8Chain: chainOf(events, 8, attest.MaxInitrdChain), PCR11Chain: chainOf(events, 11, attest.MaxInitrdChain)}
+	for _, e := range events {
+		if e.Index == 8 && uint32(e.Type) == evIPL && bytes.HasPrefix(e.Data, []byte(grubCommand+"initrd ")) {
+			out.Command = string(bytes.TrimRight(e.Data[len(grubCommand):], "\x00"))
+		}
+	}
+	return out
 }
 
 // coveredBy reports whether one of the PCRs that measured the initrd is in sel.

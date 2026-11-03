@@ -15,8 +15,9 @@ func TestEnrolReportsUnverifiedEK(t *testing.T) {
 	if e == nil || e.EKVerifiedBy != "" || e.EKNote != "the TPM has no vendor certificate for its endorsement key" {
 		t.Fatalf("need_anchor_key: %+v", e)
 	}
-	if e.InitrdCoverage != InitrdUnknownMsg {
-		t.Fatalf("initrd coverage: %q", e.InitrdCoverage)
+	// The demo machine's 0, 2, 4, 7 and no event log: not established, and it says why.
+	if e.InitrdCoverage != InitrdNotEstablished || e.InitrdDetail == "" {
+		t.Fatalf("initrd coverage: %q, %q", e.InitrdCoverage, e.InitrdDetail)
 	}
 	if rec.EKVerifiedBy != "" {
 		t.Fatalf("record claims verification by %q", rec.EKVerifiedBy)

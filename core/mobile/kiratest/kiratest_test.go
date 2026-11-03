@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,9 @@ import (
 // APIs, exactly as a Kotlin or Swift test would.
 // lastSecureBoot is what the last verdict drive saw said of Secure Boot.
 var lastSecureBoot string
+
+// lastInitrd is the need_anchor_key event drive saw last.
+var lastInitrd map[string]any
 
 func drive(t *testing.T, d *DemoMachine, s *kiracore.Session, key **ecdsa.PrivateKey, decision int) (record string, state string) {
 	s.SetMaxFragment(182)
@@ -46,6 +50,7 @@ func drive(t *testing.T, d *DemoMachine, s *kiracore.Session, key **ecdsa.Privat
 					}
 					queue = append(queue, s.ConfirmSAS(true))
 				case "need_anchor_key":
+					lastInitrd = e
 					*key, _ = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 					der, _ := x509.MarshalPKIXPublicKey(&(*key).PublicKey)
 					queue = append(queue, s.ProvideAnchorKey(der))
@@ -169,5 +174,35 @@ func TestDemoMachineSecureBootStates(t *testing.T) {
 			t.Fatalf("%s: secure_boot %q, want %q", state, lastSecureBoot, want)
 		}
 		d.Outcome(5000)
+	}
+}
+
+// The enrol screen's word on the initrd: from the demo machine's boot, through the real
+// core, never the machine's say.
+func TestDemoMachineInitrdStates(t *testing.T) {
+	for _, c := range []struct {
+		boot, want, pcrs string
+	}{{"uki", "covered", "[11 4]"}, {"grub", "covered", "[9]"}, {"no_log", "not_established", "<nil>"}} {
+		d, err := NewDemoMachine()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := d.SetInitrd(c.boot); err != nil {
+			t.Fatal(err)
+		}
+		var key *ecdsa.PrivateKey
+		d.StartEnrolment(185)
+		s, _ := kiracore.NewEnrolSession(`{}`)
+		lastInitrd = nil
+		drive(t, d, s, &key, 0)
+		if r := d.Outcome(5000); r != "enrolled" {
+			t.Fatalf("%s: enrolment: %s", c.boot, r)
+		}
+		if lastInitrd["initrd_coverage"] != c.want || fmt.Sprint(lastInitrd["initrd_pcrs"]) != c.pcrs {
+			t.Errorf("%s: %v", c.boot, lastInitrd)
+		}
+		if (c.want == "not_established") != (lastInitrd["initrd_detail"] != nil) {
+			t.Errorf("%s: the reason: %v", c.boot, lastInitrd)
+		}
 	}
 }

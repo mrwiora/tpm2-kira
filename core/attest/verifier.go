@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"time"
 )
 
@@ -145,19 +144,12 @@ type Event struct {
 	// EKVendorUnknown: the EK root store has no root of the TPM's vendor
 	// yet - not untrusted, a risk to weigh (EKNote says which vendor).
 	EKVendorUnknown bool   `json:"ek_vendor_unknown,omitempty"`
-	InitrdCoverage  string `json:"initrd_coverage,omitempty"` // covered | not_covered | no_initrd | unknown
+	InitrdCoverage  string `json:"initrd_coverage,omitempty"` // covered | not_established (initrd.go)
 	InitrdPCRs      []int  `json:"initrd_pcrs,omitempty"`
+	InitrdDetail    string `json:"initrd_detail,omitempty"`
 	// SecureBoot is what the baseline quote and the event log establish.
 	SecureBoot *SecureBootFinding `json:"secure_boot,omitempty"`
 }
-
-// InitrdCoverage values in need_anchor_key events.
-const (
-	InitrdCovered    = "covered"
-	InitrdNotCovered = "not_covered"
-	InitrdNoInitrd   = "no_initrd"
-	InitrdUnknownMsg = "unknown"
-)
 
 // Event types.
 const (
@@ -551,10 +543,10 @@ func (v *Verifier) handleEnrol(out *Output, d *Decoder) (*Output, error) {
 			return v.fail(out, ErrCodeActivationFailed, "credential activation failed: the attestation key is not in the TPM that owns this EK")
 		}
 		v.state = vsWaitAnchorKey
-		cov, pcrs := initrdCoverage(v.offer)
+		initrd := EstablishInitrd(v.offer.Selection, v.offer.PCRValues, v.offer.Initrd)
 		out.Events = append(out.Events, Event{
 			Type: EvNeedAnchorKey, DeviceID: v.offer.DeviceID, FriendlyName: v.offer.FriendlyName,
-			EKVerifiedBy: v.ekBy, EKNote: v.ekNote, EKVendorUnknown: v.ekVendorUnknown, InitrdCoverage: cov, InitrdPCRs: pcrs,
+			EKVerifiedBy: v.ekBy, EKNote: v.ekNote, EKVendorUnknown: v.ekVendorUnknown, InitrdCoverage: initrd.State, InitrdPCRs: initrd.PCRs, InitrdDetail: initrd.Detail,
 			SecureBoot:           &v.baseVer.SecureBoot,
 			AttestationChallenge: AnchorAttestationChallenge(v.sess.ChannelBinding()),
 		})
@@ -680,34 +672,6 @@ func (v *Verifier) checkOffer(o *EnrolOffer) error {
 		v.ekNote, v.ekVendorUnknown = EKCertNote(err), IsVendorUnknown(err)
 	}
 	return nil
-}
-
-// initrdCoverage compares where the machine says its initrd was measured with
-// the PCRs the phone will check. The machine's statement is not TPM-signed;
-// it can only add a warning, never remove one.
-func initrdCoverage(o *EnrolOffer) (string, []int) {
-	bc := o.BootContext
-	switch bc.InitrdState {
-	case InitrdNone:
-		return InitrdNoInitrd, nil
-	case InitrdMeasured:
-		var pcrs []int
-		covered := false
-		for _, p := range bc.InitrdPCRs {
-			pcrs = append(pcrs, int(p))
-			if slices.Contains(o.Selection.Indices, p) {
-				covered = true
-			}
-		}
-		if len(pcrs) == 0 {
-			return InitrdUnknownMsg, nil
-		}
-		if covered {
-			return InitrdCovered, pcrs
-		}
-		return InitrdNotCovered, pcrs
-	}
-	return InitrdUnknownMsg, nil
 }
 
 // ConfirmSAS reports the user's comparison of the code on both screens.

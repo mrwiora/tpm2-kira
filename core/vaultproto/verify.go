@@ -88,8 +88,8 @@ type Checked struct {
 	ResetCount   uint32 // TPM resets (boots) since the TPM was cleared
 	RestartCount uint32
 	Firmware     uint64
-	// SecureBoot is what the quoted PCR 7 and the event log establish. It decides
-	// nothing: what releases is the rest of the check.
+	// SecureBoot is what the quoted PCR 7 and the event log establish. The vault releases
+	// only when it is on: the rest of the check does not say so, its server refuses.
 	SecureBoot attest.SecureBootFinding
 }
 

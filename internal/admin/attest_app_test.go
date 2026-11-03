@@ -14,7 +14,7 @@ package admin
 //	                             big-endian u16 length
 //
 // Commands: enrol <mtu> | attest <mtu> (serve the next data connection) |
-// reset (no phone enrolled: each test starts from it) | reboot | secureboot <state> | extend <pcr> |
+// reset (no phone enrolled: each test starts from it) | reboot | secureboot <state> | initrd <boot> | extend <pcr> |
 // snapshot | rollback | sas | phone | outcome <ms> | quit.
 // Replies: "ok", a value, or "error: …".
 //
@@ -109,11 +109,14 @@ type appMachine struct {
 	// nil: no event log.
 	pcr7Chain []byte
 	pcr7State string
-	mode      string // session to serve on the next data connection
-	mtu       int
-	sas       string
-	phone     *attest.PhoneAttestation // what the machine concluded about the phone's key
-	result    chan string
+	// initrdBoot and initrdEvents: what this machine's log shows of the initrd (initrd).
+	initrdBoot   string
+	initrdEvents attest.InitrdEvents
+	mode         string // session to serve on the next data connection
+	mtu          int
+	sas          string
+	phone        *attest.PhoneAttestation // what the machine concluded about the phone's key
+	result       chan string
 }
 
 func newAppMachine(t *testing.T) *appMachine {
@@ -152,6 +155,9 @@ func (m *appMachine) newBackend() {
 
 		PCR7ChainRead: true,
 		PCR7ChainData: m.pcr7Chain,
+
+		InitrdEventsSet:  true,
+		InitrdEventsData: m.initrdEvents,
 	}
 	// The console's "y": the machine user always confirms; the app test
 	// compares the code it showed with this one.
@@ -220,6 +226,31 @@ func (m *appMachine) powerCycle(save, restore string) error {
 // Secure Boot off and shows the events of a boot with it on.
 func (m *appMachine) firmwareMeasures() error {
 	m.pcr7Chain = nil
+	m.initrdEvents = attest.InitrdEvents{}
+	extend := func(pcr int, chain []byte) error {
+		for off := 0; off < len(chain); off += sha256.Size {
+			_, err := tpm2.PCRExtend{
+				PCRHandle: tpm2.AuthHandle{Handle: tpm2.TPMHandle(pcr), Auth: tpm2.PasswordAuth(nil)},
+				Digests:   tpm2.TPMLDigestValues{Digests: []tpm2.TPMTHA{{HashAlg: tpm2.TPMAlgSHA256, Digest: chain[off : off+sha256.Size]}}},
+			}.Execute(m.s.tpm)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	switch m.initrdBoot {
+	case attesttest.InitrdUKI:
+		m.initrdEvents.PCR11Chain = attesttest.InitrdUKIChain(attest.AlgSHA256)
+		if err := extend(11, m.initrdEvents.PCR11Chain); err != nil {
+			return err
+		}
+	case attesttest.InitrdGRUB:
+		m.initrdEvents.PCR8Chain, m.initrdEvents.Command = attesttest.InitrdGRUBChain(attest.AlgSHA256), attesttest.GRUBInitrdCommand
+		if err := extend(8, m.initrdEvents.PCR8Chain); err != nil {
+			return err
+		}
+	}
 	state := m.pcr7State
 	if state == "" || state == "no_log" {
 		return nil
@@ -229,14 +260,8 @@ func (m *appMachine) firmwareMeasures() error {
 		real = attest.SecureBootOff
 	}
 	chain := attesttest.SecureBootChain(attest.AlgSHA256, real)
-	for off := 0; off < len(chain); off += sha256.Size {
-		_, err := tpm2.PCRExtend{
-			PCRHandle: tpm2.AuthHandle{Handle: tpm2.TPMHandle(7), Auth: tpm2.PasswordAuth(nil)},
-			Digests:   tpm2.TPMLDigestValues{Digests: []tpm2.TPMTHA{{HashAlg: tpm2.TPMAlgSHA256, Digest: chain[off : off+sha256.Size]}}},
-		}.Execute(m.s.tpm)
-		if err != nil {
-			return err
-		}
+	if err := extend(7, chain); err != nil {
+		return err
 	}
 	if state == "lying" {
 		chain = attesttest.SecureBootChain(attest.AlgSHA256, attest.SecureBootOn)
@@ -316,6 +341,7 @@ func (m *appMachine) command(f []string) (reply string, quit bool) {
 		defer m.mu.Unlock()
 		m.s.blob.Phone.Verifiers = nil
 		m.pcr7State, m.pcr7Chain = "", nil
+		m.initrdBoot, m.initrdEvents = "", attest.InitrdEvents{}
 		if err := writeAttestBlob(m.s.tpm, m.idx, m.s.blob, m.signer); err != nil {
 			return fail(err)
 		}
@@ -345,6 +371,17 @@ func (m *appMachine) command(f []string) (reply string, quit bool) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		m.pcr7State = f[1]
+		if err := m.powerCycle("", ""); err != nil {
+			return fail(err)
+		}
+		return "ok", false
+	case "initrd": // initrd uki|grub|no_log: a reboot into a boot whose log shows it
+		if len(f) != 2 {
+			return fail(fmt.Errorf("initrd needs a boot"))
+		}
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.initrdBoot = f[1]
 		if err := m.powerCycle("", ""); err != nil {
 			return fail(err)
 		}

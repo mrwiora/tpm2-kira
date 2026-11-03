@@ -39,6 +39,8 @@ type SoftTPM struct {
 	Evlog      []byte
 	// PCR7Chain is what the machine says of PCR 7's events (SetSecureBoot).
 	PCR7Chain []byte
+	// Initrd is what it says of the initrd's events, at enrolment (SetInitrd).
+	Initrd attest.InitrdEvents
 
 	// TamperQuote, if set, edits each quote before it is signed.
 	TamperQuote func(att *tpm2.TPMSAttest)
@@ -293,6 +295,54 @@ func SecureBootChain(alg uint16, state string) []byte {
 	chain = append(chain, sum([]byte{0, 0, 0, 0})...)
 	return chain
 }
+
+// The boots SetInitrd knows: a unified kernel image, GRUB, and no such events.
+const (
+	InitrdUKI  = "uki"
+	InitrdGRUB = "grub"
+	InitrdNone = "no_log"
+)
+
+// InitrdUKIChain is PCR 11 of a UKI, as systemd-stub measures it: each section's name
+// with a NUL, then its contents (stand-ins). InitrdGRUBChain is PCR 8 of a GRUB boot, with
+// its initrd command.
+func InitrdUKIChain(alg uint16) []byte {
+	return chainOfStrings(alg, ".linux\x00", "a kernel", ".cmdline\x00", "a command line", ".initrd\x00", "an initrd")
+}
+
+// GRUBInitrdCommand is the initrd command of InitrdGRUBChain.
+const GRUBInitrdCommand = "initrd /initrd.img-6.12"
+
+// InitrdGRUBChain: see InitrdUKIChain.
+func InitrdGRUBChain(alg uint16) []byte {
+	return chainOfStrings(alg, "set root=x", "linux /vmlinuz-6.12 root=/dev/mapper/root", GRUBInitrdCommand, "boot")
+}
+
+func chainOfStrings(alg uint16, parts ...string) []byte {
+	sum := chainHash(alg)
+	var chain []byte
+	for _, p := range parts {
+		chain = append(chain, sum([]byte(p))...)
+	}
+	return chain
+}
+
+// SetInitrd boots the machine's firmware so that its log shows the initrd: the registers
+// as they would be measured, and its events.
+func (s *SoftTPM) SetInitrd(boot string) {
+	s.Initrd = attest.InitrdEvents{}
+	switch boot {
+	case InitrdUKI:
+		s.Initrd.PCR11Chain = InitrdUKIChain(attest.AlgSHA256)
+		s.PCRs[11] = ReplayChain(attest.AlgSHA256, s.Initrd.PCR11Chain)
+	case InitrdGRUB:
+		s.Initrd.PCR8Chain, s.Initrd.Command = InitrdGRUBChain(attest.AlgSHA256), GRUBInitrdCommand
+		s.PCRs[8] = ReplayChain(attest.AlgSHA256, s.Initrd.PCR8Chain)
+	}
+}
+
+// InitrdEvents implements attest.InitrdEventsProvider.
+func (s *SoftTPM) InitrdEvents(uint16) attest.InitrdEvents { return s.Initrd }
 
 // ReplayChain is the register a chain replays to.
 func ReplayChain(alg uint16, chain []byte) []byte {

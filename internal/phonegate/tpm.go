@@ -315,10 +315,12 @@ type TPMBackend struct {
 	EKAlgorithm  uint16
 	EventlogData []byte
 	EventlogRead bool
+	// InitrdEventsData stands for the log's initrd events, when InitrdEventsSet: a test's.
+	InitrdEventsData attest.InitrdEvents
+	InitrdEventsSet  bool
 	// PCR7ChainData is the digests of PCR 7's events (PCR7Chain), once PCR7ChainRead.
 	PCR7ChainData []byte
 	PCR7ChainRead bool
-	initrd        *initrdCoverage // read once from the event log
 }
 
 // Quote implements attest.AttesterBackend.
@@ -380,18 +382,6 @@ func (b *TPMBackend) BootContext() attest.BootContext {
 			}
 		}
 	}
-	if b.initrd == nil {
-		cov, _ := readInitrdCoverage(measure.DefaultEventlogPath)
-		b.initrd = &cov
-	}
-	// Only a recognised measurement is reported; "none found" may just be a
-	// boot path this version does not know, so it stays unknown.
-	if len(b.initrd.PCRs) > 0 {
-		bc.InitrdState = attest.InitrdMeasured
-		for _, p := range b.initrd.PCRs {
-			bc.InitrdPCRs = append(bc.InitrdPCRs, uint8(p))
-		}
-	}
 	if !b.PCR7ChainRead {
 		b.PCR7ChainRead = true
 		alg := attest.AlgSHA256
@@ -402,6 +392,14 @@ func (b *TPMBackend) BootContext() attest.BootContext {
 	}
 	bc.PCR7Chain = b.PCR7ChainData
 	return bc
+}
+
+// InitrdEvents implements attest.InitrdEventsProvider.
+func (b *TPMBackend) InitrdEvents(alg uint16) attest.InitrdEvents {
+	if b.InitrdEventsSet {
+		return b.InitrdEventsData
+	}
+	return InitrdEventsOf(measure.DefaultEventlogPath, alg)
 }
 
 func uptimeMS() uint64 {

@@ -2,6 +2,8 @@ package phonegate
 
 import (
 	"crypto/sha256"
+	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/core/attest"
@@ -38,5 +40,43 @@ func TestPCR7ChainOfRealLogs(t *testing.T) {
 	}
 	if chain := PCR7Chain("no such file", attest.AlgSHA256); chain != nil {
 		t.Errorf("no log: %x", chain)
+	}
+}
+
+// The real logs' initrd events: a UKI's section in PCR 11, GRUB's command in PCR 8, each
+// established from digests the phone makes itself, against the registers they replay to.
+func TestInitrdEventsOfRealLogs(t *testing.T) {
+	for _, c := range []struct {
+		file string
+		pcrs []int
+		want []int
+	}{
+		{"arch-uki-eventlog.bin", []int{0, 2, 4, 7, 11}, []int{11, 4}},
+		{"debian13-grub-eventlog.bin", []int{0, 2, 4, 7, 8, 9}, []int{9}},
+	} {
+		path := filepath.Join("..", "admin", "testdata", c.file)
+		ev := InitrdEventsOf(path, attest.AlgSHA256)
+		sel, err := attest.NewPCRSelection(attest.AlgSHA256, c.pcrs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var vals []attest.PCRValue
+		for _, p := range c.pcrs {
+			v := make([]byte, 32)
+			switch p {
+			case 8:
+				v = replay(ev.PCR8Chain)
+			case 11:
+				v = replay(ev.PCR11Chain)
+			}
+			vals = append(vals, attest.PCRValue{Index: uint8(p), Digest: v})
+		}
+		got := attest.EstablishInitrd(sel, vals, ev)
+		if got.State != attest.InitrdCovered || fmt.Sprint(got.PCRs) != fmt.Sprint(c.want) {
+			t.Errorf("%s: %+v, command %q", c.file, got, ev.Command)
+		}
+	}
+	if ev := InitrdEventsOf("no such file", attest.AlgSHA256); ev.PCR8Chain != nil || ev.PCR11Chain != nil || ev.Command != "" {
+		t.Errorf("no log: %+v", ev)
 	}
 }

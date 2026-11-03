@@ -205,6 +205,27 @@ func (d *DemoMachine) ChangePCR(index int) {
 	}
 }
 
+// SetInitrd boots the demo machine so that its event log shows the initrd: "uki", "grub"
+// or "no_log"; and quotes the registers that hold them, as a machine of that boot does.
+func (d *DemoMachine) SetInitrd(boot string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.m.TPM.SetInitrd(boot)
+	pcrs := []int{0, 2, 4, 7}
+	switch boot {
+	case attesttest.InitrdUKI:
+		pcrs = []int{0, 2, 4, 7, 11}
+	case attesttest.InitrdGRUB:
+		pcrs = []int{0, 2, 4, 7, 8, 9}
+	}
+	sel, err := attest.NewPCRSelection(attest.AlgSHA256, pcrs)
+	if err != nil {
+		return err
+	}
+	d.m.Sel = sel
+	return nil
+}
+
 // SetSecureBoot boots the demo machine's firmware in a state: "on", "off" or
 // "setup_mode" (attest.SecureBootOn and the others); "no_log" keeps PCR 7 and takes the
 // events away, and "lying" keeps PCR 7 of its state and shows the events of "on"

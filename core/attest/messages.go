@@ -8,7 +8,7 @@ import (
 // (docs/PROTOCOL-BLE.md) and must never be renumbered.
 
 // SchemaVersion is the protocol schema carried in Hello, Evidence and EnrolOffer.
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 // Size limits for variable-length fields.
 const (
@@ -19,10 +19,12 @@ const (
 	maxDERSig      = 128  // ECDSA P-256 DER signature
 	maxEKCert      = 4096 // DER certificate
 	maxShortString = 64
-	maxMessageText = 256
-	maxAnchorPub   = 256 // PKIX DER of an ECDSA P-256 key is 91 bytes
-	maxCredential  = 1024
-	maxPCRValues   = MaxPCRIndex
+	// maxInitrdCommand bounds GRUB's initrd command in an EnrolOffer.
+	maxInitrdCommand = 512
+	maxMessageText   = 256
+	maxAnchorPub     = 256 // PKIX DER of an ECDSA P-256 key is 91 bytes
+	maxCredential    = 1024
+	maxPCRValues     = MaxPCRIndex
 	// MaxEventlogChunk is the payload of one EventlogChunk.
 	MaxEventlogChunk = 32768
 	// MaxEventlogSize bounds a transferred event log.
@@ -106,22 +108,10 @@ type BootContext struct {
 	PCR7Chain        []byte
 	SealPCRSelection []uint8
 	UptimeMS         uint64
-	// Where this boot measured the initrd, read from the attester's event
-	// log: InitrdUnknown (field absent), InitrdMeasured with the PCRs, or
-	// InitrdNone for a boot without an initrd.
-	InitrdState uint8
-	InitrdPCRs  []uint8
 }
 
 // maxBootContext bounds a BootContext on the wire.
 const maxBootContext = 2048 + MaxPCR7Chain
-
-// InitrdState values in BootContext.
-const (
-	InitrdUnknown  = 0
-	InitrdMeasured = 1
-	InitrdNone     = 2
-)
 
 func (b *BootContext) encode() *Encoder {
 	e := SubEncoder()
@@ -131,10 +121,6 @@ func (b *BootContext) encode() *Encoder {
 	e.OptBytes(4, b.PCR7Chain)
 	e.Bytes(5, b.SealPCRSelection)
 	e.U64(6, b.UptimeMS)
-	if b.InitrdState != InitrdUnknown {
-		e.U8(7, b.InitrdState)
-		e.OptBytes(8, b.InitrdPCRs)
-	}
 	return e
 }
 
@@ -149,8 +135,6 @@ func decodeBootContext(d *Decoder) BootContext {
 		PCR7Chain:        d.Bytes(4, MaxPCR7Chain, false),
 		SealPCRSelection: d.Bytes(5, MaxPCRIndex, false),
 		UptimeMS:         d.U64(6, false),
-		InitrdState:      d.U8(7, false),
-		InitrdPCRs:       d.Bytes(8, MaxPCRIndex, false),
 	}
 }
 
@@ -626,6 +610,8 @@ type EnrolOffer struct {
 	// slot's policy reference.
 	SigningPub []byte
 	PolicyRef  []byte
+	// What the phone establishes the initrd's coverage from (initrd.go).
+	Initrd InitrdEvents
 }
 
 // BaselineValues are the PCR values the verifier pins at enrolment: the
@@ -679,6 +665,9 @@ func (m *EnrolOffer) Encode() ([]byte, error) {
 	e.Bytes(21, m.BootKeyCertifySig)
 	e.Bytes(22, m.SigningPub)
 	e.Bytes(23, m.PolicyRef)
+	e.OptBytes(24, m.Initrd.PCR8Chain)
+	e.OptBytes(25, m.Initrd.PCR11Chain)
+	e.String(26, m.Initrd.Command)
 	return e.Finish()
 }
 
@@ -709,6 +698,8 @@ func DecodeEnrolOffer(d *Decoder) (*EnrolOffer, error) {
 		BootKeyCertifySig: d.Bytes(21, maxTPMSig, true),
 		SigningPub:        d.Bytes(22, maxTPMPublic, true),
 		PolicyRef:         d.Bytes(23, 64, true),
+		Initrd: InitrdEvents{PCR8Chain: d.Bytes(24, MaxInitrdChain, false), PCR11Chain: d.Bytes(25, MaxInitrdChain, false),
+			Command: d.String(26, maxInitrdCommand, false)},
 	}
 	vals := d.Bytes(10, 2+maxPCRValues*(5+65), true)
 	mpv := d.Bytes(18, 2+maxPCRValues*(5+65), false)

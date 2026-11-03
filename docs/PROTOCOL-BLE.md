@@ -400,10 +400,7 @@ Signatures never cover this encoding; they cover the canonical strings of §9.
 
 BootContext (nested): 1 `blob_version` u32 · 2 `nvram_index` u32 ·
 3 `measure_point` string ≤512 · 4 `pcr7_chain` bytes ≤16384 O ·
-5 `seal_pcr_selection` bytes ≤24 · 6 `uptime_ms` u64 ·
-7 `initrd_state` u8 (absent/0 unknown, 1 measured, 2 no initrd) · 8 `initrd_pcrs`
-bytes ≤24 — the PCRs this boot's event log shows measuring the initrd. Like the
-rest of BootContext it is not TPM-signed and can only add a warning.
+5 `seal_pcr_selection` bytes ≤24 · 6 `uptime_ms` u64. Not TPM-signed.
 
 `pcr7_chain` is the digests of PCR 7's events in the machine's event log, in the
 quote's bank, concatenated in the log's order. The phone believes them only as far as
@@ -901,7 +898,7 @@ Every event is a JSON object with `type`. `tbs` is base64 (prefer `PendingTBS()`
 | `type` | Fields | App action |
 |---|---|---|
 | `sas` | `sas` (6 digits) | show large; buttons *Matches* / *Does not match* → `ConfirmSAS` |
-| `need_anchor_key` | `device_id`, `friendly_name`, `ek_verified_by` (vendor, or absent), `ek_note` (why not verified), `ek_vendor_unknown` (true: the EK root store has no root of the TPM's vendor yet - not untrusted, a risk to weigh), `initrd_coverage` (`covered` · `not_covered` · `no_initrd` · `unknown`), `initrd_pcrs`, `attestation_challenge` (hex) | show what is known about the machine and let the user decide to bind; then create the non-exportable P-256 key (§11.2) with `attestation_challenge` as its attestation challenge → `ProvideAnchorKeyAttested(spki, chain)` (or `ProvideAnchorKey` where the platform cannot attest) |
+| `need_anchor_key` | `device_id`, `friendly_name`, `ek_verified_by` (vendor, or absent), `ek_note` (why not verified), `ek_vendor_unknown` (true: the EK root store has no root of the TPM's vendor yet - not untrusted, a risk to weigh), `initrd_coverage` (`covered` · `not_established`: red, established by the core from the offer's events, `attest.EstablishInitrd`), `initrd_pcrs`, `initrd_detail` (why not established), `attestation_challenge` (hex) | show what is known about the machine and let the user decide to bind; then create the non-exportable P-256 key (§11.2) with `attestation_challenge` as its attestation challenge → `ProvideAnchorKeyAttested(spki, chain)` (or `ProvideAnchorKey` where the platform cannot attest) |
 | `need_signature` | `purpose` (`enrol_accept`, `receipt`), `tbs`, `verdict_code` | unlock prompt (§11.2), sign `PendingTBS()` → `ProvideSignature` |
 | `enrolled` | `record` | persist the record (encrypted) |
 | `hello` | `device_id`, `friendly_name` | show "connected to …" |

@@ -469,6 +469,9 @@ func ServeEnrolment(conn Conn, id *EnrolIdentity, be EnrolBackend, progress Prog
 	if evlog, _ := be.Eventlog(); len(evlog) > 0 {
 		offer.EventlogSHA256 = sha256Sum(evlog)
 	}
+	if ip, ok := be.(InitrdEventsProvider); ok {
+		offer.Initrd = ip.InitrdEvents(id.Selection.Alg)
+	}
 	if cp, ok := be.(EKChainProvider); ok && len(ekCert) > 0 {
 		if chain := cp.EKCertChain(); len(chain) <= MaxEKCertChain {
 			offer.EKCertChain = chain
