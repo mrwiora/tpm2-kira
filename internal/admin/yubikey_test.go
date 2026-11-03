@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
 	"github.com/mrwiora/tpm2-kira/internal/prompt"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"golang.org/x/sys/unix"
 )
 
 // fakeTokens makes dialTokens return the given emulated cards and records
@@ -805,5 +807,119 @@ func TestControlStoresThePIN(t *testing.T) {
 	}
 	if fake.prompts != 0 {
 		t.Fatalf("%d prompts after the PIN was given", fake.prompts)
+	}
+}
+
+// pinDescriptor is a pipe holding line, for UsePINDescriptor: its reader's number.
+func pinDescriptor(t *testing.T, line string) int {
+	t.Helper()
+	var p [2]int
+	if err := unix.Pipe(p[:]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unix.Write(p[1], []byte(line)); err != nil {
+		t.Fatal(err)
+	}
+	unix.Close(p[1])
+	return p[0]
+}
+
+// The emulator's token through a descriptor: it goes before the file and the terminal,
+// and a key that wants a PIN for every signature takes the same one again.
+func TestPINThroughADescriptor(t *testing.T) {
+	card := pivtest.New(1)
+	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyAlways, piv.TouchPolicyNever, false)
+	fake := &fakeTokens{cards: []*pivtest.Card{card}, typed: "888888"}
+	fake.install(t)
+	storeTestPIN(t, "999999")
+	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := signing.UsePINDescriptor(pinDescriptor(t, "123456\n")); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(nil)
+	for i := 0; i < 3; i++ {
+		if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
+			t.Fatalf("signature %d: %v", i, err)
+		}
+	}
+	if fake.prompts != 0 || card.Retries != 3 {
+		t.Errorf("prompts %d, attempts left %d", fake.prompts, card.Retries)
+	}
+}
+
+// A wrong PIN on the descriptor names it, costs one attempt, and nothing else is tried:
+// neither the file with the right one nor the terminal.
+func TestWrongPINThroughADescriptor(t *testing.T) {
+	card := pivtest.New(1)
+	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
+	fake := &fakeTokens{cards: []*pivtest.Card{card}, typed: "123456"}
+	fake.install(t)
+	storeTestPIN(t, "123456")
+	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd := pinDescriptor(t, "000000\n")
+	if err := signing.UsePINDescriptor(fd); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(nil)
+	_, err = signer.Sign(rand.Reader, digest[:], crypto.SHA256)
+	if !errors.Is(err, signing.ErrTokenUnavailable) || !strings.Contains(err.Error(), fmt.Sprintf("PIN from descriptor %d", fd)) {
+		t.Fatalf("a wrong PIN: %v", err)
+	}
+	if card.Retries != 2 || fake.prompts != 0 {
+		t.Errorf("attempts left %d, prompts %d", card.Retries, fake.prompts)
+	}
+	if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err == nil || card.Retries != 2 {
+		t.Errorf("a second try: %v, attempts left %d", err, card.Retries)
+	}
+}
+
+// A PIN of a length no card takes is refused before the card, which would count it.
+func TestShortPINThroughADescriptorSpendsNoAttempt(t *testing.T) {
+	card := pivtest.New(1)
+	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
+	(&fakeTokens{cards: []*pivtest.Card{card}}).install(t)
+	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := signing.UsePINDescriptor(pinDescriptor(t, "123\n")); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(nil)
+	if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err == nil || card.Retries != 3 {
+		t.Errorf("%v, attempts left %d", err, card.Retries)
+	}
+}
+
+// The variable set: the signer does not see it. With a file the file's PIN, without one
+// the terminal; never an attempt on the card with its value.
+func TestThePINVariableIsIgnored(t *testing.T) {
+	card := pivtest.New(1)
+	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
+	fake := &fakeTokens{cards: []*pivtest.Card{card}}
+	fake.install(t)
+	t.Setenv("TPM2_KIRA_PIN", "000000")
+	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(nil)
+
+	storeTestPIN(t, "123456")
+	if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil || card.Retries != 3 {
+		t.Errorf("with the file: %v, attempts left %d", err, card.Retries)
+	}
+	signing.CloseTokenSessions()
+
+	os.Remove(signing.PINPath())
+	_, err = signer.Sign(rand.Reader, digest[:], crypto.SHA256)
+	if !errors.Is(err, signing.ErrTokenUnavailable) || fake.prompts != 1 || card.Retries != 3 {
+		t.Errorf("no file, no terminal: %v, prompts %d, attempts left %d", err, fake.prompts, card.Retries)
 	}
 }

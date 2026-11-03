@@ -1,0 +1,339 @@
+package signing
+
+import (
+	"crypto"
+	"crypto/rand"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/mrwiora/tpm2-kira/internal/piv"
+	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
+	"golang.org/x/sys/unix"
+)
+
+// pipeWith is a pipe holding data, its writer closed; neither end close-on-exec, as a
+// descriptor a script passes down is not.
+func pipeWith(t *testing.T, data string) int {
+	t.Helper()
+	var p [2]int
+	if err := unix.Pipe(p[:]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unix.Write(p[1], []byte(data)); err != nil {
+		t.Fatal(err)
+	}
+	unix.Close(p[1])
+	return p[0]
+}
+
+// captureBuffers keeps every buffer a PIN is read into, to look at it afterwards.
+func captureBuffers(t *testing.T) *[][]byte {
+	t.Helper()
+	var bufs [][]byte
+	old := pinBuffer
+	pinBuffer = func() []byte {
+		b := make([]byte, 0, 512)
+		bufs = append(bufs, b)
+		return b
+	}
+	t.Cleanup(func() { pinBuffer = old })
+	return &bufs
+}
+
+func wiped(b []byte) bool {
+	for _, c := range b[:cap(b)] {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func allWiped(bufs [][]byte) bool {
+	for _, b := range bufs {
+		if !wiped(b) {
+			return false
+		}
+	}
+	return true
+}
+
+// One line, into the buffer, and the descriptor gone: for this process, and for a child
+// it starts, which would otherwise inherit it.
+func TestDescriptorIsReadAndClosed(t *testing.T) {
+	t.Cleanup(forgetDescriptorPIN)
+	bufs := captureBuffers(t)
+	fd := pipeWith(t, "123456\nrest of the pipe\n")
+	if err := UsePINDescriptor(fd); err != nil {
+		t.Fatal(err)
+	}
+	if string(descriptorPIN.pin) != "123456" || !descriptorPIN.given || descriptorPIN.source != fmt.Sprintf("descriptor %d", fd) {
+		t.Errorf("read %q, %+v", descriptorPIN.pin, descriptorPIN.source)
+	}
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); !errors.Is(err, unix.EBADF) {
+		t.Errorf("the descriptor after the read: %v", err)
+	}
+	child := exec.Command("/bin/sh", "-c", fmt.Sprintf("test ! -e /proc/self/fd/%d", fd))
+	if out, err := child.CombinedOutput(); err != nil {
+		t.Errorf("a child has the descriptor: %v %s", err, out)
+	}
+	// In the buffer it was given, and that is what is wiped at the end.
+	if len(*bufs) != 1 || &(*bufs)[0][:1][0] != &descriptorPIN.pin[0] {
+		t.Errorf("the PIN is not in the locked buffer")
+	}
+	CloseTokenSessions()
+	if !allWiped(*bufs) {
+		t.Errorf("not wiped when the command ends: %q", (*bufs)[0][:8])
+	}
+	if descriptorPIN.given || descriptorPIN.pin != nil {
+		t.Errorf("still held: %+v", descriptorPIN)
+	}
+}
+
+// Every descriptor that gives no PIN is an error of its own, what was read wiped.
+func TestBadDescriptors(t *testing.T) {
+	t.Cleanup(forgetDescriptorPIN)
+	// Closed: first, as the next descriptor opened takes its number.
+	closed := pipeWith(t, "123456\n")
+	unix.Close(closed)
+	if err := UsePINDescriptor(closed); err == nil || !strings.Contains(err.Error(), "not open") || descriptorPIN.given {
+		t.Errorf("a closed descriptor: %v", err)
+	}
+	var ends [2]int
+	if err := unix.Pipe(ends[:]); err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(ends[0])
+	dir, err := unix.Open(t.TempDir(), unix.O_RDONLY|unix.O_DIRECTORY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(dir)
+	null, err := unix.Open("/dev/null", unix.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(null)
+	for _, c := range []struct {
+		name, want string
+		fd         int
+	}{
+		{"never opened", "not open", 987},
+		{"negative", "3 or above", -1},
+		{"stdin", "3 or above", 0},
+		{"stdout", "3 or above", 1},
+		{"stderr", "3 or above", 2},
+		{"write end", "bad file descriptor", ends[1]},
+		{"directory", "pipe, a socket or a file", dir},
+		{"device", "pipe, a socket or a file", null},
+		{"empty", "no PIN", pipeWith(t, "")},
+		{"empty line", "no PIN", pipeWith(t, "\n123456\n")},
+		{"too long", "more than 8 bytes", pipeWith(t, "123456789\n")},
+		{"too long, no end", "more than 8 bytes", pipeWith(t, strings.Repeat("1", 5000))},
+		{"too long by the \\r", "more than 8 bytes", pipeWith(t, "123456789\r\n")},
+	} {
+		bufs := captureBuffers(t)
+		err := UsePINDescriptor(c.fd)
+		if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), fmt.Sprintf("--pin-fd %d", c.fd)) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+		if descriptorPIN.given {
+			t.Errorf("%s: taken", c.name)
+		}
+		if !allWiped(*bufs) {
+			t.Errorf("%s: left in the buffer: %q", c.name, (*bufs)[0][:9])
+		}
+	}
+}
+
+func TestLineEnds(t *testing.T) {
+	t.Cleanup(forgetDescriptorPIN)
+	for in, want := range map[string]string{"123456": "123456", "12345678\n": "12345678", "12345678\r\n": "12345678", "1234567\r": "1234567"} {
+		if err := UsePINDescriptor(pipeWith(t, in)); err != nil || string(descriptorPIN.pin) != want {
+			t.Errorf("%q: %q, %v", in, descriptorPIN.pin, err)
+		}
+	}
+}
+
+func TestDescriptorPINIsHandedOverOnce(t *testing.T) {
+	t.Cleanup(forgetDescriptorPIN)
+	if err := UsePINDescriptor(pipeWith(t, "123456\n")); err != nil {
+		t.Fatal(err)
+	}
+	// The file and the terminal are not asked, the first time or the second.
+	t.Setenv("TPM2_KIRA_CONTROL_CONF", filepath.Join(t.TempDir(), "control.conf"))
+	os.WriteFile(PINPath(), []byte("999999\n"), 0o600)
+	old := PromptPIN
+	PromptPIN = func(*YubiKeySigner) ([]byte, error) { t.Error("asked"); return []byte("888888"), nil }
+	defer func() { PromptPIN = old }()
+	pin, source, err := readPIN(nil)
+	if err != nil || string(pin) != "123456" || !strings.HasPrefix(source, "descriptor ") {
+		t.Errorf("%q from %q: %v", pin, source, err)
+	}
+	if pin, _, err := readPIN(nil); err == nil || pin != nil {
+		t.Errorf("a second time: %q %v", pin, err)
+	}
+}
+
+func TestPINFileIsWipedAfterTheLook(t *testing.T) {
+	t.Setenv("TPM2_KIRA_CONTROL_CONF", filepath.Join(t.TempDir(), "control.conf"))
+	path := PINPath()
+	os.WriteFile(path, []byte("123456\n"), 0o600)
+	bufs := captureBuffers(t)
+	if stored, loose := PINStored(path); !stored || loose {
+		t.Errorf("stored %v, loose %v", stored, loose)
+	}
+	if len(*bufs) != 1 || !allWiped(*bufs) {
+		t.Errorf("PINStored left the PIN: %q", (*bufs)[0][:6])
+	}
+
+	// Loose: refused, and what was read to find out is wiped.
+	os.Chmod(path, 0o644)
+	bufs = captureBuffers(t)
+	if pin, ok, err := pinFromFile(); err == nil || ok || pin != nil {
+		t.Errorf("loose: %q %v %v", pin, ok, err)
+	}
+	if !allWiped(*bufs) {
+		t.Errorf("a loose file's PIN stays: %q", (*bufs)[0][:6])
+	}
+	os.Chmod(path, 0o600)
+
+	// More than a PIN: an error, not the terminal, and it counts as stored.
+	os.WriteFile(path, []byte("123456789\n"), 0o600)
+	bufs = captureBuffers(t)
+	if pin, ok, err := pinFromFile(); err == nil || !strings.Contains(err.Error(), "more than 8 bytes") || ok || pin != nil {
+		t.Errorf("too long: %q %v %v", pin, ok, err)
+	}
+	if !allWiped(*bufs) {
+		t.Errorf("too long: stays %q", (*bufs)[0][:9])
+	}
+	if stored, _ := PINStored(path); !stored {
+		t.Error("a file that holds something reads as empty")
+	}
+
+	// Empty: there is none, and it asks on.
+	os.WriteFile(path, []byte("\n"), 0o600)
+	if pin, ok, err := pinFromFile(); err != nil || ok || pin != nil {
+		t.Errorf("empty: %q %v %v", pin, ok, err)
+	}
+}
+
+// The terminal's PIN: echo off, into the buffer, the terminal back, and a line too long
+// leaves nothing for the next reader.
+func TestPromptOnATerminal(t *testing.T) {
+	ptm, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	if err != nil {
+		t.Skip("no pty: ", err)
+	}
+	defer ptm.Close()
+	if err := unix.IoctlSetPointerInt(int(ptm.Fd()), unix.TIOCSPTLCK, 0); err != nil {
+		t.Skip("no pty: ", err)
+	}
+	n, err := unix.IoctlGetInt(int(ptm.Fd()), unix.TIOCGPTN)
+	if err != nil {
+		t.Skip("no pty: ", err)
+	}
+	pts, err := os.OpenFile(fmt.Sprintf("/dev/pts/%d", n), os.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		t.Skip("no pty: ", err)
+	}
+	defer pts.Close()
+	go func() { // drains what the terminal writes, an echo included
+		b := make([]byte, 256)
+		for {
+			if _, err := ptm.Read(b); err != nil {
+				return
+			}
+		}
+	}()
+	before, _ := unix.IoctlGetTermios(int(pts.Fd()), unix.TCGETS)
+	echoOff := func() {
+		for i := 0; i < 500; i++ {
+			if tio, err := unix.IoctlGetTermios(int(pts.Fd()), unix.TCGETS); err == nil && tio.Lflag&unix.ECHO == 0 {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Error("the echo stayed on")
+	}
+	go func() { echoOff(); ptm.WriteString("123456\n") }()
+	bufs := captureBuffers(t)
+	pin, err := readNoEcho(pts)
+	if err != nil || string(pin) != "123456" || &pin[0] != &(*bufs)[0][:1][0] {
+		t.Fatalf("%q, %v", pin, err)
+	}
+	if after, _ := unix.IoctlGetTermios(int(pts.Fd()), unix.TCGETS); after.Lflag != before.Lflag {
+		t.Errorf("the terminal after the prompt: %x, was %x", after.Lflag, before.Lflag)
+	}
+
+	go func() { echoOff(); ptm.WriteString("123456789012\n") }()
+	bufs = captureBuffers(t)
+	if pin, err := readNoEcho(pts); err == nil || pin != nil {
+		t.Fatalf("too long: %q, %v", pin, err)
+	}
+	if !allWiped(*bufs) {
+		t.Errorf("too long: left %q", (*bufs)[0][:9])
+	}
+	if left, _ := unix.IoctlGetInt(int(pts.Fd()), unix.TIOCINQ); left != 0 {
+		t.Errorf("%d bytes of a PIN wait for the next reader of the terminal", left)
+	}
+}
+
+// A wrong PIN is wiped when the card refuses it, not when the command ends; a right one
+// stays for a key that asks again, and goes with the session.
+func TestSessionWipesThePIN(t *testing.T) {
+	card := pivtest.New(1)
+	key := card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
+	oldDial := DialTokens
+	DialTokens = func(time.Duration) ([]*TokenConn, func(), error) {
+		return []*TokenConn{{Reader: "emulated", Transport: card, Close: func(bool) error { return nil }}}, func() {}, nil
+	}
+	t.Cleanup(func() { CloseTokenSessions(); DialTokens = oldDial })
+	t.Setenv("TPM2_KIRA_CONTROL_CONF", filepath.Join(t.TempDir(), "control.conf"))
+	slot := TokenSlot{Slot: piv.SlotAuthentication, Algorithm: piv.AlgECCP256, PINPolicy: piv.PINPolicyOnce, TouchPolicy: piv.TouchPolicyNever, PoliciesKnown: true, PublicKey: key.Public()}
+	stub, err := MarshalYubiKeyStub(1, slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "seal.key")
+	if err := WriteSigningKeyFile(path, stub); err != nil {
+		t.Fatal(err)
+	}
+	signer, err := LoadSigningPrivateKey(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(nil)
+
+	bufs := captureBuffers(t)
+	if err := UsePINDescriptor(pipeWith(t, "000000\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err == nil {
+		t.Fatal("a wrong PIN signed")
+	}
+	if !allWiped(*bufs) {
+		t.Errorf("a refused PIN stays: %q", (*bufs)[0][:6])
+	}
+	CloseTokenSessions()
+
+	bufs = captureBuffers(t)
+	if err := UsePINDescriptor(pipeWith(t, "123456\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
+		t.Fatal(err)
+	}
+	CloseTokenSessions()
+	if !allWiped(*bufs) {
+		t.Errorf("the session's PIN stays: %q", (*bufs)[0][:6])
+	}
+}

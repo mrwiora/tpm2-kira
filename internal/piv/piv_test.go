@@ -1,6 +1,7 @@
 package piv_test
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
@@ -154,4 +155,41 @@ func TestParseSlot(t *testing.T) {
 			t.Errorf("ParseSlot(%q) accepted", in)
 		}
 	}
+}
+
+// keepingTransport answers through the emulator and keeps the slices it was handed.
+type keepingTransport struct {
+	card *pivtest.Card
+	kept [][]byte
+}
+
+func (k *keepingTransport) Transmit(apdu []byte) ([]byte, error) {
+	k.kept = append(k.kept, apdu)
+	return k.card.Transmit(apdu)
+}
+
+// The APDU of VERIFY is a copy of the PIN: wiped on the way out, a wrong PIN or a dead
+// card alike.
+func TestVerifyLeavesNoCopyOfThePIN(t *testing.T) {
+	card := pivtest.New(1)
+	k := &keepingTransport{card: card}
+	c, err := piv.Open(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verify := func(pin string) {
+		t.Helper()
+		k.kept = nil
+		c.VerifyPIN([]byte(pin))
+		if len(k.kept) != 1 {
+			t.Fatalf("%d commands for one VERIFY", len(k.kept))
+		}
+		if bytes.Contains(k.kept[0][:cap(k.kept[0])], []byte(pin)) {
+			t.Errorf("VERIFY's command keeps the PIN %q: % x", pin, k.kept[0])
+		}
+	}
+	verify("123456")
+	verify("654321")
+	card.Unplugged = true
+	verify("123456")
 }
