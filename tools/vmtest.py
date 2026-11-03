@@ -787,8 +787,10 @@ class Machine:
             locked = max((x.get("VmLck", 0) for x in samples), default=0)
             swapped = max((x.get("VmSwap", 0) for x in samples), default=-1)
             self.log.say(f"during Argon2id: {len(samples)} samples, resident {peak >> 10} MiB, locked {locked >> 10} MiB, in swap {swapped} kB")
-            self.check("during Argon2id nothing of the process is in swap (VmSwap, every sample)", bool(samples) and swapped == 0, str(samples[-3:]))
-            self.check("during Argon2id the whole process stays locked", locked * 10 >= samples[-1].get("VmSize", 1) * 9, str(samples[-3:]))
+            # A --fast-kdf derivation can end between two samples.
+            if samples or not self.fast_kdf:
+                self.check("during Argon2id nothing of the process is in swap (VmSwap, every sample)", bool(samples) and swapped == 0, str(samples[-3:]))
+                self.check("during Argon2id the whole process stays locked", bool(samples) and locked * 10 >= samples[-1].get("VmSize", 1) * 9, str(samples[-3:]))
             if not self.fast_kdf:
                 self.check("during Argon2id its 1 GiB is resident", peak >= 1000 << 10, f"{peak} kB")
             if pressure:
