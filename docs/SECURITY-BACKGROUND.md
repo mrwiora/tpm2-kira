@@ -1544,10 +1544,13 @@ the digests of PCR 7's events the machine sends (the event log's, `pcr7_chain`),
    go-attestation refuses both.
 
 **What one log of digests cannot show.** That a key verified anything: an
-`EV_EFI_VARIABLE_AUTHORITY` digest is of a certificate no verifier here holds, and a firmware
-measures a certificate once, so that none follows the separator proves nothing.
-go-attestation, which has the log's data, refuses `on` without one; core reads `on`
-(`TestFirmwareOddityIsNotOn` holds it). A firmware's oddity stays refused and is not read
+`EV_EFI_VARIABLE_AUTHORITY` digest is of a certificate no verifier here holds. On the one real
+machine's log seen, a certificate that verified two binaries was measured once, after the
+separator; whether every firmware does so is not known, so requiring one could refuse a good
+machine. go-attestation, which has the log's data, refuses `on` without one; core reads `on`
+(`TestFirmwareOddityIsNotOn` holds it), decided by the owner. What decides a release is not this
+label alone: the event is part of PCR 7, so a different or missing certificate does not match an
+approved value; only a state the signing key approved that way gets past it. A firmware's oddity stays refused and is not read
 around: a digest over the variable's data alone, not `UEFI_VARIABLE_DATA`, is
 `not_established`, as for go-attestation, and that machine gets no release from a vault. No log
 we have shows such a firmware.

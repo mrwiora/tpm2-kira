@@ -35,8 +35,10 @@ import (
 //
 // What a chain of digests cannot show, and on does not check: that a key was used
 // (EV_EFI_VARIABLE_AUTHORITY has a digest of what the firmware's db holds, which no
-// verifier knows here, and a firmware measures one certificate once, so none after the
-// separator proves nothing), and that KEK and db hold anything. A firmware's digest over
+// verifier knows here; on the one real machine's log seen, a certificate that verified two
+// binaries was measured once, after the separator, and whether every firmware does so is
+// not known), and that KEK and db hold anything. PCR 7 itself covers that event: a
+// different or missing certificate does not match an approved value. A firmware's digest over
 // the variable's data alone, not UEFI_VARIABLE_DATA, is no event of any state: it stays
 // not established, as for go-attestation (docs/SECURITY-BACKGROUND.md, §13.5).
 
