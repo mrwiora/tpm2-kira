@@ -8,7 +8,7 @@ Four depths. Each says what it can show; only the third and the fourth end a bat
 |---|---|---|---|---|
 | **Fast** | `make test-all`, a project's `go test ./...` | unit and integration tests against swtpm, no VM | `make test-all` 190 s, beside the VMs | no |
 | **A single scenario** | `tools/vmtest.py --only SCENARIO`, from the snapshot `setup` | that scenario and what it needs, on real VMs | 1-5 min: the table below, plus the typed boot it starts from | never; its report says so |
-| **The proof** | `tools/proof.py` | from `fresh`, both machines in parallel: `setup`, `typed-boot`, `hibernate`, `unapproved` (Arch), `tpm-salt`, `vault-pepper`, `revoked`, `silent-tpm`; beside them `make test-all`, aSSH's tests, the vault's, safearch's `tests/run.sh` | target 15 min, limit 16; see below | yes, once per batch |
+| **The proof** | `tools/proof.py` | from `fresh`, both machines in parallel: `setup`, `typed-boot`, `hibernate`, `unapproved` (Arch), `silent-tpm`, and then, back at `fresh` with Secure Boot really on, `secure-boot`, `tpm-salt`, `vault-pepper`, `revoked`, `firmware-refuses`; beside them `make test-all`, aSSH's tests, the vault's, safearch's `tests/run.sh` | target 15 min, limit 16; see below | yes, once per batch |
 | **`--all`** | `tools/proof.py --all`, before a release, the owner's call | the proof's scenarios and `second-typed-boot`, `debian-resume`, `V6`, `V3`, `vault-alone`, `typed-vault`, `slot-life`, `removal`, `no-tpm`, `V4-reverted`, `V9-long`, `V8`; safearch's `tests/vm.sh`, Marify's emulator test, go-uefi-slim's and tpm2-verifier's tests | about 26 min for the machines, summed from single runs: never run as one | yes, and more |
 
 Measured seconds, in the full run (`.local/runs/q/proof`, 702 s of the target of 900; `make test-all` 187 s
@@ -42,7 +42,10 @@ the unlock, the fast depth and the affected scenarios; a batch ends with the pro
   `hibernate` took it.
 - A late TPM's device that comes after the counted boot's close: `TestLate` (swtpm); no VM brings the device
   back within a boot.
-- Secure Boot really on: the machines are in Setup Mode, until M2's snapshot.
+- Hibernation with Secure Boot on on Debian: its kernel locks itself down and refuses it. All of
+  hibernation and the silent TPM's edited command line run in Setup Mode.
+- The vault refusing a real machine not `on`, end to end: the states are its tests' and the swtpm's;
+  on the VMs the vault's scenarios run `on` alone.
 
 ## What the tools are
 
@@ -96,10 +99,12 @@ is this, from `fresh`, without `--fast-kdf`: there is no flag for that.
 | `typed-boot` | the typed boot over SSH, every running-system check in one go: certified key, TOTP, PCR 15 closed, slots refuse, PCR 4, Secure Boot's warning, memory locked, signed slots on Arch, 8 and 9 on Debian | 48 / 58 |
 | `hibernate` | Arch: hibernate and resume; both: the image's close before a resume, suspend; a kernel that refuses the image is "not tested", at once | 65 / 10 |
 | `unapproved` | an image not approved, signed by the PCR key (Arch) | 71 / - |
+| `silent-tpm` | the failure path: a silent TPM, one hard reboot, then the passphrase; one wait per boot (Arch reads the console's stamps); the close before a volume's unit | 130 / 120 |
+| `secure-boot` | back to `fresh`, real keys in the firmware (`tools/secureboot-vm.py`'s steps, its snapshot `secureboot`), a setup of its own and its typed boot with Secure Boot really on: nothing said of it anywhere, the slots' PCR 7 as approved | @SB@ |
 | `tpm-salt` | the salt in this TPM: its enrolment; its image is `vault-pepper`'s, its boot `revoked`'s | 30 / 35 |
-| `vault-pepper` | the vault: a wrong, then the right pepper; one image with the salt in this TPM | 140 / 155 |
+| `vault-pepper` | the vault, `on`: a wrong, then the right pepper; one image with the salt in this TPM; what the vault shows of a real `on` | 140 / 155 |
 | `revoked` | one boot, boot 2's checks: a device revoked on the vault, falling back to the password with the salt this TPM opened; the salt's keyslot removed | 62 / 65 |
-| `silent-tpm` | the failure path: a silent TPM, one hard reboot, then the passphrase; one wait per boot (Arch reads the console's stamps) | 130 / 120 |
+| `firmware-refuses` | one byte changed in what the firmware verifies (Arch the UKI, Debian shim): `Access Denied`, nothing of it runs | 15 / 15 |
 
 **Before a release, `--all`:** the proof's scenarios and the rest, named, with no limit, which also
 runs when named in `--only`:
@@ -108,8 +113,8 @@ runs when named in `--only`:
 |---|---|
 | `second-typed-boot` | a second typed boot of one image |
 | `debian-resume` | Debian: the hibernation and the resume; its kernel refuses the image in most runs |
-| `vault-alone` | the unattended recipe: a boot nobody touches, the vault alone |
-| `typed-vault` | the operator-approved typed vault (0x1401) |
+| `vault-alone` | the unattended recipe, Secure Boot on: a boot nobody touches, the vault alone |
+| `typed-vault` | the operator-approved typed vault (0x1401), Secure Boot on |
 | `V3` | Arch: the resume with tpm2-kira masked, the close alone |
 | `V6` | `control` on unencrypted swap |
 | `no-tpm` | V4 step 5: a boot with no TPM at all |
@@ -228,6 +233,22 @@ tools/vmtest.py --config ../.local/vms/vmtest-local.conf --target both --drop-se
 Each scenario starts with the typed boot, from the setup. `--only setup` runs the setup from `fresh`.
 None of these is a final proof, and their reports' first lines say so.
 
+**With Secure Boot on** there is a setup of its own: the scenarios `tpm-salt`, `vault-pepper`, `revoked`,
+`vault-alone`, `typed-vault` and `firmware-refuses` start from the snapshot `setup-secure`.
+
+```bash
+tools/secureboot-vm.py both       # only the snapshot secureboot: real keys in the firmware, no tpm2-kira
+tools/vmtest.py --config ../.local/vms/vmtest-local.conf --target both --only secure-boot --keep-setup   # from fresh: secureboot, setup-secure
+tools/vmtest.py --config ../.local/vms/vmtest-local.conf --target both --only revoked,firmware-refuses   # from setup-secure
+```
+
+How keys get in (a test machine only: enrolling PK ends Setup Mode for good): Arch by `sbctl` in the
+guest, `create-keys`, `enroll-keys --microsoft`, the loader and the UKI signed, its post hook signing each
+rebuild; Debian by `go-uefi-slim/internal/vmcheck`, built from the workspace's checkout, PK, KEK and db with
+Microsoft's, nothing signed: shim is Microsoft's, GRUB and the kernel Debian's. `--drop-setup` takes
+`setup` and `setup-secure`; `secureboot` stays, and the next run makes it again. Each proof makes both from
+`fresh`, in the scenario's time.
+
 A run from a saved setup says on its report's first line that it is no final
 proof. A snapshot holds the commit that made it and is refused once anything
 but `tools/` and documentation has changed since. `fresh` and `export` are
@@ -298,7 +319,7 @@ TOTP key refuses), the key was answered, memory locked and given back, `ssh-chil
 (nobody, no new privileges, no executable memory, Landlock, seccomp), PCR 4 as predicted, the SSH
 CA's slots (signed on Arch, 8 and 9 on Debian), and the boot's log has no error.
 
-**Remote attestation over TLS, the vault:** `vault-pepper` refuses an enrolment without a root, makes
+**Remote attestation over TLS, the vault,** with Secure Boot on: `vault-pepper` refuses an enrolment without a root, makes
 a token, enrols with a pepper, rebuilds the image; a boot nobody touches waits for an operator, is
 approved first with a wrong pepper, then with the right one; what the vault shows of Secure Boot, from
 the quote. `revoked`: the screen and the prompt say the vault gave no key and the recovery recipe's
@@ -316,7 +337,9 @@ terminal leave it and say so with old, new and the event log's names; no at a te
 `control`'s line seals it, a person's yes is `TestApprovalLeavesAMovedChannel`'s. A gate refusing it
 is `TestChannelFollowsPCR7`'s, with PCR 7 extended by hand on swtpm.
 
-Throughout, Secure Boot's warning, from the machine's own variables (the fresh VMs are in Setup Mode):
+Throughout the first part, Secure Boot's warning, from the machine's own variables (in Setup Mode; with
+Secure Boot on the same places must say nothing, and the vault's keyslot no recovery note, which `inspect`
+shows said in Setup Mode):
 once in `slot add`, `status`, per image in the hook's output, red in `control`'s step, and at each
 boot on the console (the serial log), in the SSH session and in the boot's log; `slot approve` and
 `control`'s step 2 under `--all`.

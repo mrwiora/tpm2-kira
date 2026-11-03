@@ -22,6 +22,10 @@ The scenarios are SCENARIOS, in a run's order; docs/TESTING.md says what each on
 report.txt and scenarios.json of a machine give each one's seconds against its budget. Those with a
 budget are the proof (tools/proof.py: 15 minutes); those without run under --all, or when named.
 
+Secure Boot: the first part runs in Setup Mode. The scenario secure-boot goes back to fresh, enrols real
+keys (tools/secureboot-vm.py), makes a setup of its own; every scenario that talks to a vault runs
+there, and firmware-refuses last.
+
 A scenario that fails sends the machine back to the setup, booted, and the next goes on; one that
 needs it is not run. A kernel that refuses a hibernated image is "not tested", at once.
 
@@ -127,13 +131,13 @@ SCENARIOS = (
     Scenario("silent-tpm", budget(130, 120), hib=True),
     Scenario("V9-long", distro="debian", needs=("silent-tpm",), hib=True),
     Scenario("V8", hib=True),
-    Scenario(SECURE_BOOT, budget(150, 150), secure=True),
+    Scenario(SECURE_BOOT, budget(235, 265), secure=True),
     Scenario("tpm-salt", budget(30, 35), needs=(SECURE_BOOT,), secure=True),
     Scenario("vault-pepper", budget(140, 168), needs=(SECURE_BOOT,), vault=True, secure=True),
     Scenario("revoked", budget(62, 70), needs=("tpm-salt", "vault-pepper"), vault=True, secure=True),
     Scenario("vault-alone", needs=("vault-pepper",), vault=True, secure=True),
     Scenario("typed-vault", needs=("vault-pepper",), vault=True, secure=True),
-    Scenario("firmware-refuses", budget(30, 30), needs=(SECURE_BOOT,), secure=True),
+    Scenario("firmware-refuses", budget(15, 15), needs=(SECURE_BOOT,), secure=True),
 )
 ALWAYS = "typed-boot"  # what every scenario of the setup in Setup Mode starts from
 
