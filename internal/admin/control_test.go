@@ -228,6 +228,17 @@ func TestControlVault(t *testing.T) {
 		t.Fatalf("no wired interface: %+v", v)
 	}
 	c.facts.Wired = 1
+	// Not on: the vault refuses this machine, and the step says what that means.
+	for _, st := range []sbstate.State{{Known: true}, {Known: true, Enabled: false, SetupMode: true}, {}} {
+		c.facts.SecureBoot = st
+		if v := c.menuSteps("disk")[2]; !strings.Contains(v.Explain, "releases nothing to this machine until Secure Boot is on") || !strings.Contains(v.Explain, "recovery keyslot") {
+			t.Fatalf("%+v: %s", st, v.Explain)
+		}
+	}
+	c.facts.SecureBoot = sbstate.State{Known: true, Enabled: true}
+	if v := c.menuSteps("disk")[2]; strings.Contains(v.Explain, "releases nothing") {
+		t.Fatalf("on: %s", v.Explain)
+	}
 
 	zero := 0
 	c.facts.Status.Slots[0].Vault = "https://vault:8443"

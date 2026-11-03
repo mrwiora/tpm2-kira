@@ -78,6 +78,8 @@ SSH_HOLD = 600
 # The state after the steps up to the first reboot: the same in this test and
 # the hibernate test, which keeps its own after that (hib-setup).
 SETUP_SNAPSHOT = "setup"
+# The same with Secure Boot on: the steps up to the first reboot, from tools/secureboot-vm.py's snapshot.
+SECURE_SETUP_SNAPSHOT = "setup-secure"
 # A boot's commands read at once: where one's output starts (Machine.batch).
 BATCH_MARK = "@@tpm2-kira-vmtest@@"
 FROM_SETUP_NOTE = "NOT A FINAL PROOF: started from a saved setup, not from the snapshot fresh."
@@ -85,15 +87,18 @@ FAST_KDF_NOTE = "NOT A FINAL PROOF: a --fast-kdf TEST build, Argon2id at a test'
 PARTIAL_NOTE = "NOT A FINAL PROOF: a part of the run: "
 # The snapshot of one hibernation, while a run lasts: every resume starts from it.
 HIBERNATED = "hibernated"
+# What firmware and systemd-boot say of an image whose signature does not verify (EFI_ACCESS_DENIED).
+REFUSED_BY_FIRMWARE = re.compile(r"Access Denied|Security Violation", re.I)
 
 
 class Scenario:
     """A part of a run. budget: seconds per distribution, measured, when it is in the proof; None
     runs it under --all, or when named. distro: on that one alone. needs: what has to have run on
-    the machine before it; hib: on the machines of tools/localvm.py alone; vault: with the run's vault."""
+    the machine before it; hib: on the machines of tools/localvm.py alone; vault: with the run's vault;
+    secure: on the machine with Secure Boot really on, from the scenario secure-boot."""
 
-    def __init__(self, name, budget=None, distro=None, needs=(), hib=False, vault=False):
-        self.name, self.budget, self.distro, self.needs, self.hib, self.vault = name, budget, distro, needs, hib, vault
+    def __init__(self, name, budget=None, distro=None, needs=(), hib=False, vault=False, secure=False):
+        self.name, self.budget, self.distro, self.needs, self.hib, self.vault, self.secure = name, budget, distro, needs, hib, vault, secure
 
 
 def budget(arch, debian):
@@ -101,8 +106,11 @@ def budget(arch, debian):
 
 
 SETUP = "setup"
+SECURE_BOOT = "secure-boot"
 # A run's order, which spares waits: the hibernation right after a short boot; each state a
-# scenario needs from the one before; what breaks the machine last.
+# scenario needs from the one before; what breaks the machine last. The machine then goes back to
+# fresh, to its setup with Secure Boot on; every scenario that talks to a vault runs there. What
+# there breaks the firmware's trust comes last.
 SCENARIOS = (
     Scenario(SETUP, budget(165, 195)),
     Scenario("typed-boot", budget(52, 70)),
@@ -112,11 +120,6 @@ SCENARIOS = (
     Scenario("V3", distro="arch", hib=True),
     Scenario("unapproved", budget(77, None), distro="arch"),
     Scenario("second-typed-boot"),
-    Scenario("tpm-salt", budget(30, 35)),
-    Scenario("vault-pepper", budget(140, 168), vault=True),
-    Scenario("revoked", budget(62, 70), needs=("tpm-salt", "vault-pepper"), vault=True),
-    Scenario("vault-alone", needs=("vault-pepper",), vault=True),
-    Scenario("typed-vault", needs=("vault-pepper",), vault=True),
     Scenario("slot-life"),
     Scenario("removal"),
     Scenario("no-tpm", hib=True),
@@ -124,8 +127,15 @@ SCENARIOS = (
     Scenario("silent-tpm", budget(130, 120), hib=True),
     Scenario("V9-long", distro="debian", needs=("silent-tpm",), hib=True),
     Scenario("V8", hib=True),
+    Scenario(SECURE_BOOT, budget(150, 150), secure=True),
+    Scenario("tpm-salt", budget(30, 35), needs=(SECURE_BOOT,), secure=True),
+    Scenario("vault-pepper", budget(140, 168), needs=(SECURE_BOOT,), vault=True, secure=True),
+    Scenario("revoked", budget(62, 70), needs=("tpm-salt", "vault-pepper"), vault=True, secure=True),
+    Scenario("vault-alone", needs=("vault-pepper",), vault=True, secure=True),
+    Scenario("typed-vault", needs=("vault-pepper",), vault=True, secure=True),
+    Scenario("firmware-refuses", budget(30, 30), needs=(SECURE_BOOT,), secure=True),
 )
-ALWAYS = "typed-boot"  # what every scenario after the setup starts from
+ALWAYS = "typed-boot"  # what every scenario of the setup in Setup Mode starts from
 
 
 def scenario(name):
@@ -133,8 +143,8 @@ def scenario(name):
 
 
 def scenarios_of(only=None, everything=False):
-    """The names a run takes: --only with what they need (every scenario after the setup starts
-    from the typed boot), --all, or the proof's."""
+    """The names a run takes: --only with what they need (every scenario after a setup starts from
+    its typed boot), --all, or the proof's."""
     if only is None:
         return [s.name for s in SCENARIOS if everything or s.budget]
     wanted, todo = set(), list(only)
@@ -142,7 +152,9 @@ def scenarios_of(only=None, everything=False):
         name = todo.pop()
         if name not in wanted:
             wanted.add(name)
-            todo += list(scenario(name).needs) + ([ALWAYS] if name != SETUP else [])
+            todo += list(scenario(name).needs)
+            if name != SETUP and not scenario(name).secure:
+                todo.append(ALWAYS)
     return [s.name for s in SCENARIOS if s.name in wanted]
 
 
@@ -317,14 +329,15 @@ class SavedSetup:
     def problem(self):
         """Why this setup cannot be started from; None if it can."""
         if not os.path.exists(self.path()) or not os.path.isdir(self.lv.path("snap-" + self.tag)):
-            return f"{self.lv.name}: no snapshot {self.tag}: --save-setup"
+            how = "--save-setup" if self.tag == SETUP_SNAPSHOT else f"--only {SECURE_BOOT} --keep-setup"
+            return f"{self.lv.name}: no snapshot {self.tag}: {how}"
         st = json.load(open(self.path()))
         if st.get("fast_kdf") != self.fast_kdf:
             return f"{self.lv.name}: the snapshot {self.tag} was made with fast_kdf={st.get('fast_kdf')}: its keyslots open with no other build"
         diff = subprocess.run(["git", "-C", REPO, "diff", "--name-only", st["commit"], "HEAD", "--", ".", ":!tools", ":!docs", ":!*.md", ":!*_test.go"],
                               capture_output=True, text=True)
         if diff.returncode != 0 or diff.stdout.strip():
-            return f"{self.lv.name}: the snapshot {self.tag} is of {st['commit'][:7]}, and the product changed since: --save-setup again"
+            return f"{self.lv.name}: the snapshot {self.tag} is of {st['commit'][:7]}, and the product changed since: make it again"
         return None
 
     def restore(self):
@@ -628,14 +641,14 @@ class Machine:
         out = vault.admin("devices")
         self.log.save("vault-devices.log", out)
         row = next((l for l in out.splitlines() if re.search(r"\s" + re.escape(name) + r"\s", l)), "")
-        self.check(f"the vault's devices: Secure Boot established from the quote and the event log: {word.strip()}", word.strip() in row, out[-400:])
+        self.check(f"the vault's devices: Secure Boot established from the quote and the event log: {word.strip()}", re.search(r"\s" + word.strip() + r"\s*$", row) is not None, out[-400:])
         out = vault.admin("device", "show", name)
         self.log.save("vault-device.log", out)
         self.check(f"the vault's device view: {line.split('     ')[1]}", line in out, out[-400:])
         out = vault.admin("audit")
         self.log.save("vault-audit-secure-boot.log", out)
         rel = [l for l in out.splitlines() if "release" in l and "released" in l and name in l]
-        self.check("the vault's audit: the release carries the state", bool(rel) and word.strip().replace("-", " ") in rel[-1].upper(), (rel or [out])[-1][-400:])
+        self.check("the vault's audit: the release carries the state", bool(rel) and ("SECURE BOOT " + word.strip().replace("-", " ")) in rel[-1].upper(), (rel or [out])[-1][-400:])
 
     def check_memory(self, where, out):
         """The process keeps nothing of Argon2id once a key is answered: the keyslot's
@@ -923,6 +936,8 @@ class Machine:
             self.check(f"'{name}' answers", re.search(want, out) is not None, out[-400:])
         rc, out = self.run("tpm2-kira status 2>&1")
         self.check_secure_boot("status", out)
+        rc, out = self.run(f"tpm2-kira luks enrol {self.luks_dev} --password tpm --salt vault --url https://vault.invalid --pin sha256:{'0' * 64} --token none 2>&1", save="luks-enrol-vault-not-on.log")
+        self.check("a vault's keyslot on a machine not on Secure Boot: says the vault releases nothing, and to keep a recovery keyslot", "releases nothing to this machine until Secure Boot is on" in out and "recovery keyslot" in out, out[-500:])
         rc, out = self.run("tpm2-kira status --json 2>&1")
         self.check("status --json carries Secure Boot's warning", (self.secure_boot_warning() or "secure_boot_warning") in out if self.secure_boot_warning() else "secure_boot_warning" not in out, out[-300:])
 
@@ -1293,6 +1308,7 @@ class Machine:
         rc, out = self.run("tpm2-kira luks enrol " + self.luks_dev + " --password tpm --salt vault --url " + vault.url +
                            " --pin sha256:" + "0" * 64 + " --token none 2>&1", save="luks-enrol-vault-no-root.log")
         self.check("luks enrol without a root of the vault is refused, naming --ca", "no root certificate of a vault" in out and "--ca FILE" in out, out[-400:])
+        self.check("with Secure Boot on it says nothing of a recovery keyslot", "releases nothing" not in out, out[-400:])
         self.run(f"echo {base64.b64encode(vault.root.encode()).decode()} | base64 -d > {self.CA_FILE}")
 
     def vault_token(self, vault, name):
@@ -1791,22 +1807,76 @@ class Machine:
         rc, out = self.run("tpm2-kira slot delete --yes 2>&1")
         self.check("slot delete again: nothing of tpm2-kira is found", "nothing of tpm2-kira found" in out, out[-300:])
 
-    def make_setup(self, reset=None):
+    def make_setup(self, reset=None, secure=False):
         """The steps up to the first reboot. The packages arrive while the machine goes back to
-        its state. What the hibernate steps add comes before control, whose image takes it."""
+        its state. What the hibernate steps add comes before control, whose image takes it. secure:
+        the setup with Secure Boot on, for what no other scenario shows there."""
         if reset:
             self.reset(reset)
         self.preflight()
         package = self.packages()
         self.install(package)
         self.seal()
-        self.inspect()
+        if not secure:
+            self.inspect()
         self.enrol()
-        self.check_memory_lock()
-        if self.hib:
-            self.hib.prepare()
+        if not secure:
+            self.check_memory_lock()
+            if self.hib:
+                self.hib.prepare()
         self.control()
         self.image()
+
+    def secure_boot_setup(self):
+        """Secure Boot really on: tools/secureboot-vm.py's steps from fresh, then the setup, kept,
+        and its typed boot; from the saved one, its typed boot alone."""
+        lv, setup = self.lv, self.secure_setup
+        self.secrets = []
+        self.__dict__.pop("_secure_boot", None)
+        self.tpm_salt_keyslot = self.vault_keyslot = self.vault_device = None
+        if self.secure_saved:
+            self.notes.append(FROM_SETUP_NOTE)
+            self.head(f"back to the setup with Secure Boot on: the snapshot {setup.tag}")
+            setup.restore()
+            self.packages()
+        else:
+            self.head("Secure Boot on: real keys in the firmware, from fresh (tools/secureboot-vm.py's steps)")
+            secureboot_vm().make(lv, self.t, self.distro, self.vmcheck())
+            self.lap("back to fresh, enrolled, the snapshot " + secureboot_vm().SNAPSHOT)
+            lv.start()
+            self.lap("the first boot with Secure Boot on")
+            self.make_setup(secure=True)
+            rc, out = self.run("command -v sbctl >/dev/null && sbctl verify 2>&1; dmesg | grep -iE 'secure ?boot' | head -3", save="secure-boot-state.log")
+            self.check("Secure Boot is on in the firmware: its own variables", self.secure_boot_warning() is None, str(self.secure_boot_warning()))
+            self.head(f"keeping the setup: the snapshot {setup.tag}")
+            setup.save()
+        self.setup_snapshot = setup
+        self.first_boot_as("secure")
+
+    def firmware_refuses(self):
+        """The firmware itself: one byte changed in what it verifies does not start. Arch: the UKI,
+        which systemd-boot hands to the firmware; Debian: shim, which the firmware starts. The
+        machine is thrown away after it: this comes last."""
+        lv = self.lv
+        self.head("the firmware refuses a changed image")
+        target = "/boot/EFI/Linux/arch-linux.efi" if self.distro == "arch" else "/boot/efi/EFI/debian/shimx64.efi"
+        script = (f"f={target}; off=$(( $(stat -c %s $f) / 2 )); b=$(dd if=$f bs=1 skip=$off count=1 2>/dev/null | od -An -tu1 | tr -d ' '); "
+                  "printf \"\\\\x$(printf %02x $(( b ^ 255 )))\" | dd of=$f bs=1 seek=$off conv=notrunc 2>/dev/null; sync; echo changed")
+        rc, out = self.run(script, save="firmware-refuses-change.log")
+        if not self.check(f"one byte of {target} changed", "changed" in out, out[-300:]):
+            raise Fail("the file was not changed")
+        since = self.console_mark()
+        self.warm_reboot()
+        deadline, text = time.time() + 60, ""
+        while time.time() < deadline:
+            text = lv.serial_text(since)
+            if REFUSED_BY_FIRMWARE.search(text):
+                break
+            time.sleep(0.25)
+        self.log.save("firmware-refuses-console.log", text)
+        self.check("the firmware refuses it: Access Denied", REFUSED_BY_FIRMWARE.search(text) is not None, text[-800:])
+        self.check("nothing of the changed image ran", "Linux version" not in text and "Password for disk" not in text if self.distro == "arch" else True, text[-800:])
+        lv.kill()
 
     def save_setup(self, setup, reset=None):
         """--save-setup: the steps up to the first reboot, kept; the run ends."""
@@ -1823,17 +1893,20 @@ class Machine:
     def first_boot(self):
         """Boot 1, after the setup or from its snapshot: on tools/localvm.py's machines
         under a new qemu, which keeps the guest's clock short for V2 (tools/LOCALVM.md)."""
+        self.first_boot_as(1)
+
+    def first_boot_as(self, n):
         lv = getattr(self, "lv", None)
         if lv:
             lv.start(unlock=False)
-        self.cycle(1, started=bool(lv))
+        self.cycle(n, started=bool(lv))
 
     def scenario_steps(self):
         """What each scenario does here."""
         hib = self.hib
         out = {"typed-boot": self.first_boot, "second-typed-boot": lambda: self.cycle(3), "unapproved": self.unapproved_kernel, "tpm-salt": self.tpm_salt,
                "vault-pepper": self.vault_pepper, "revoked": self.revoked, "vault-alone": self.vault_alone, "typed-vault": self.vault_typed,
-               "slot-life": self.slot_life, "removal": self.removal}
+               "slot-life": self.slot_life, "removal": self.removal, SECURE_BOOT: self.secure_boot_setup, "firmware-refuses": self.firmware_refuses}
         if hib:
             out.update({"V6": hib.swap_risk, "hibernate": hib.scenario_hibernate, "debian-resume": hib.scenario_resume, "V3": hib.step_v3, "no-tpm": hib.step_no_tpm, "V4-reverted": hib.step_v4_reverted,
                         "silent-tpm": hib.silent_tpm, "V9-long": hib.silent_tpm_long, "V8": hib.way_out})
@@ -1843,7 +1916,8 @@ class Machine:
         """Those of the names this machine has, each as (Scenario, function)."""
         steps = self.scenario_steps()
         wanted = [scenario(n) for n in names if n != SETUP]
-        return [(s, steps[s.name]) for s in wanted if s.name in steps and s.distro in (None, self.distro) and (s.hib is False or self.hib) and (s.vault is False or self.vault_of_run)]
+        return [(s, steps[s.name]) for s in wanted if s.name in steps and s.distro in (None, self.distro) and (s.hib is False or self.hib) and (s.vault is False or self.vault_of_run)
+                and (not s.secure or getattr(self, "lv", None))]
 
     def recover(self):
         """Back to the saved setup, booted: a state no failed step left anything in. False
@@ -1938,13 +2012,18 @@ class Machine:
             self.rep.issues.append(f"the test failed in {name}: {type(e).__name__}: {e}")
         return False
 
-    def all(self, names, vault=None, reset=None, from_setup=None, setup=None, keep_setup=False):
+    def all(self, names, vault=None, reset=None, from_setup=None, setup=None, keep_setup=False, secure_setup=None, secure_saved=False):
         """A run of the scenarios named. from_setup: the saved setup instead of the steps up to the
-        first reboot; setup: where those are kept, for what fails later."""
+        first reboot; setup: where those are kept, for what fails later. secure_setup: the same
+        with Secure Boot on, secure_saved: taken from there."""
         self.vault_of_run = vault
         self.setup_snapshot = setup or from_setup
+        self.secure_setup, self.secure_saved = secure_setup, secure_saved
+        plain = [n for n in names if not scenario(n).secure]
         try:
-            if from_setup:
+            if not plain:
+                go_on = True
+            elif from_setup:
                 self.notes.append(FROM_SETUP_NOTE)
                 self.head(f"back to the setup: the snapshot {from_setup.tag}")
                 from_setup.restore()
@@ -1979,6 +2058,8 @@ class Machine:
             lv.drop_snapshot(HIBERNATED)
         if setup and not keep_setup:
             setup.drop()
+        if getattr(self, "secure_setup", None) and not keep_setup and not self.secure_saved:
+            self.secure_setup.drop()
 
     def report(self):
         self.timing.finish()
@@ -1995,6 +2076,16 @@ class Machine:
         text = "\n".join(lines) + "\n"
         self.log.save("report.txt", text)
         return not failed, text
+
+
+def secureboot_vm():
+    """tools/secureboot-vm.py, one module per process."""
+    if "secureboot_vm" not in sys.modules:
+        spec = importlib.util.spec_from_file_location("secureboot_vm", os.path.join(REPO, "tools", "secureboot-vm.py"))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["secureboot_vm"] = mod
+        spec.loader.exec_module(mod)
+    return sys.modules["secureboot_vm"]
 
 
 def build_channel_fixture(run_dir):
@@ -2063,7 +2154,7 @@ def main():
     p.add_argument("--localvm-config", help="the machines' config for the saved setup (default: tools/localvm.py's)")
     p.add_argument("--save-setup", action="store_true", help=f"the steps up to the first reboot, kept in the snapshot {SETUP_SNAPSHOT}; the run ends")
     p.add_argument("--from-setup", action="store_true", help=f"start from the snapshot {SETUP_SNAPSHOT}, without building: no final proof")
-    p.add_argument("--drop-setup", action="store_true", help=f"remove the snapshot {SETUP_SNAPSHOT} and end")
+    p.add_argument("--drop-setup", action="store_true", help=f"remove the snapshots {SETUP_SNAPSHOT} and {SECURE_SETUP_SNAPSHOT} and end")
     args = p.parse_args()
     if sum((args.save_setup, args.from_setup, args.drop_setup)) > 1:
         p.error("--save-setup, --from-setup and --drop-setup exclude each other")
@@ -2072,7 +2163,7 @@ def main():
     if unknown:
         p.error("no such scenario: " + ", ".join(sorted(unknown)) + "; there are " + ", ".join(s.name for s in SCENARIOS))
     names = scenarios_of(only, args.all)
-    if only and SETUP not in only:
+    if only and SETUP not in only and SECURE_BOOT not in only:
         args.from_setup = True
     args.no_build = args.no_build or args.from_setup or args.drop_setup
     args.packages = args.packages or os.path.join(REPO, "build", "packages-fastkdf" if args.fast_kdf else "packages")
@@ -2099,7 +2190,8 @@ def main():
     if args.drop_setup:
         for lv in local.values():
             SavedSetup(lv, None, SETUP_SNAPSHOT).drop()
-        print(f"dropped {SETUP_SNAPSHOT}")
+            SavedSetup(lv, None, SECURE_SETUP_SNAPSHOT).drop()
+        print(f"dropped {SETUP_SNAPSHOT} and {SECURE_SETUP_SNAPSHOT}")
         return 0
     timing = Timing("the run", print)
     os.makedirs(run_dir, exist_ok=True)
@@ -2119,8 +2211,15 @@ def main():
         if only:
             m.notes.append(PARTIAL_NOTE + ", ".join(names))
     setups = {m.name: SavedSetup(local[m.name], m, SETUP_SNAPSHOT, args.fast_kdf) for m in machines if m.name in local}
+    secure_setups = {m.name: SavedSetup(local[m.name], m, SECURE_SETUP_SNAPSHOT, args.fast_kdf) for m in machines if m.name in local}
+    plain_names = [n for n in names if not scenario(n).secure]
+    secure_names = [n for n in names if scenario(n).secure]
     if args.from_setup:
-        problems = [why for why in (s.problem() for s in setups.values()) if why]
+        problems = []
+        if plain_names:
+            problems += [why for why in (s.problem() for s in setups.values()) if why]
+        if secure_names:
+            problems += [why for why in (s.problem() for s in secure_setups.values()) if why]
         if problems:
             print("\n".join(problems), file=sys.stderr)
             return 2
@@ -2168,6 +2267,11 @@ def main():
             for m in machines:
                 if m.name in local:
                     m.hib = hibernate.Hib(local[m.name], m, probe)
+        if secure_names and not args.from_setup:
+            timing.step("go-uefi-slim's vmcheck, for Debian's keys")
+            path = secureboot_vm().build_vmcheck(run_dir)
+            for m in machines:
+                m.vmcheck = lambda path=path: path
         timing.finish()
         print(f"tpm2-kira {short}: " + ", ".join(f"{m.name} {os.path.basename(built[m.name] or 'the saved setup')}" + (" (reset)" if m.name in resets else "") for m in machines), flush=True)
         return built
@@ -2175,10 +2279,12 @@ def main():
     results = {}
     for m in machines:
         m.packages = lambda m=m: ready.wait()[m.name]
+        m.vmcheck = lambda m=m: (ready.wait(), m.vmcheck())[1]
     if args.save_setup:
         work = lambda m: m.save_setup(setups[m.name], resets.get(m.name))
     else:
-        work = lambda m: m.all(names, vault, resets.get(m.name), setups.get(m.name) if args.from_setup else None, setups.get(m.name), keep_setup=args.keep_setup)
+        work = lambda m: m.all(names, vault, resets.get(m.name), setups.get(m.name) if args.from_setup else None, setups.get(m.name), keep_setup=args.keep_setup,
+                               secure_setup=secure_setups.get(m.name), secure_saved=args.from_setup)
     threads = [threading.Thread(target=lambda m=m: results.__setitem__(m.name, work(m))) for m in machines]
     for th in threads:
         th.start()

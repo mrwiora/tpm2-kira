@@ -16,6 +16,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/mrwiora/tpm2-kira/internal/sbstate"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/untrusted"
@@ -44,7 +45,9 @@ type VaultEnrolOptions struct {
 	Pepper bool   // the key needs an operator's pepper too, asked here once
 	Out    string // 'vault enrol' only: where the key is written
 	Yes    bool   // the recovery passphrase is in place; do not ask
-	Debug  bool
+	// SecureBootSaid: the caller has said what a machine not on Secure Boot has to know.
+	SecureBootSaid bool
+	Debug          bool
 }
 
 // VaultEnrol enrols the slot with the vault and writes the key to o.Out
@@ -82,6 +85,16 @@ func VaultEnrol(o VaultEnrolOptions) error {
 	fmt.Printf("    rm %s\n", o.Out)
 	fmt.Printf("('tpm2-kira luks enrol <device> %s ...' does all of it at once.)\n", recipe.Words())
 	return nil
+}
+
+// vaultSecureBootNote says what a machine not on Secure Boot has to know before a keyslot
+// that needs the vault: the vault releases nothing to it, so the disk then opens by
+// another way in or not at all. Empty when Secure Boot is on.
+func vaultSecureBootNote(s sbstate.State) string {
+	if s.Risk() == "" {
+		return ""
+	}
+	return "WARNING: the vault releases nothing to this machine until Secure Boot is on (" + s.Risk() + "). Keep a recovery keyslot (tpm2-kira luks enrol DEVICE --salt typed) or the recovery passphrase: a keyslot of the vault alone opens nothing at boot before then."
 }
 
 // ensureAttestation gives the slot what a part held for its TPM needs
@@ -145,6 +158,9 @@ func vaultName(given, attName string) string {
 // once the vault has confirmed, the vault method with the wrapped local
 // part; the blob is written and signed once, at the end.
 func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
+	if note := vaultSecureBootNote(sbstate.Read()); note != "" && !o.SecureBootSaid {
+		fmt.Println(note)
+	}
 	label := o.Label
 	if label == "" {
 		label = "luks"

@@ -33,6 +33,9 @@ func (c *controller) vaultStep(gate string, strong *StatusSlot) controlStep {
 	if f.Remote.SSH.On {
 		st.Explain += " SSH at boot stays for the recovery passphrase when the vault does not answer."
 	}
+	if note := vaultSecureBootNote(f.SecureBoot); note != "" {
+		st.Explain += " " + note
+	}
 	var enrolled *StatusSlot
 	for i := range f.Status.Slots {
 		if f.Status.Slots[i].Vault != "" {
@@ -88,6 +91,9 @@ func (c *controller) runVault() error {
 	_, strong, _ := c.slots()
 	if strong == nil {
 		return errors.New("needs slot 0")
+	}
+	if note := vaultSecureBootNote(f.SecureBoot); note != "" {
+		fmt.Fprintln(c.out, bad(note))
 	}
 	if f.Remote.Net.Mode == "off" {
 		ok, err := c.confirmYes("The boot image needs a network to reach the vault. Set it up now?",
@@ -193,7 +199,7 @@ func (c *controller) runVault() error {
 	}
 	if err := LuksEnrol(LuksEnrolOptions{Device: dev, Recipe: recipe,
 		Vault: VaultEnrolOptions{TPMPath: c.o.TPMPath, SealIndex: uint32(strong.Slot), URL: url, Pin: pin, Token: token,
-			Name: name, Pepper: pepper, Yes: true, Debug: c.o.Debug}}); err != nil {
+			Name: name, Pepper: pepper, Yes: true, SecureBootSaid: true, Debug: c.o.Debug}}); err != nil {
 		return err
 	}
 	fmt.Fprintln(c.out, "The vault's line on step 2 says, at every look, whether it still answers and knows this device.")

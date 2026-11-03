@@ -130,7 +130,7 @@ class Scenarios(unittest.TestCase):
         self.assertNotIn("V3", proof_names)
 
     def test_only_takes_what_a_scenario_needs(self):
-        self.assertEqual(vmtest.scenarios_of(["revoked"]), ["typed-boot", "tpm-salt", "vault-pepper", "revoked"])
+        self.assertEqual(vmtest.scenarios_of(["revoked"]), ["secure-boot", "tpm-salt", "vault-pepper", "revoked"])
         self.assertEqual(vmtest.scenarios_of(["setup"]), ["setup"])
 
     def test_the_budgets_fit_the_limit(self):
