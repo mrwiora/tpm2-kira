@@ -161,9 +161,10 @@ esac
 # under systemd.
 mkdir -p /run/initramfs
 # TPM2_KIRA_REMOTE (--ssh ...) makes it the SSH server too, as the image's
-# /etc/tpm2-kira/assh.conf says.
+# /etc/tpm2-kira/assh.conf says. --ready-file is READY without systemd: what
+# local-top's close waits for.
 # shellcheck disable=SC2086
-TPM2_KIRA_LOG=/run/initramfs/tpm2-kira.log /usr/bin/tpm2-kira-boot run --plan "$PLAN" --unlock "$UNLOCK" $TPM2_KIRA_REMOTE </dev/console >/dev/console 2>>/run/initramfs/tpm2-kira.log &
+TPM2_KIRA_LOG=/run/initramfs/tpm2-kira.log /usr/bin/tpm2-kira-boot run --plan "$PLAN" --unlock "$UNLOCK" --ready-file /run/tpm2-kira/screen-over $TPM2_KIRA_REMOTE </dev/console >/dev/console 2>>/run/initramfs/tpm2-kira.log &
 echo $! > /run/tpm2-kira.pid
 
 case "$TPM2_KIRA_NET" in

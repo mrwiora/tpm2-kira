@@ -93,7 +93,12 @@ func main() {
 		tpm := fs.String("tpm", tpmdev.DefaultPath, "Path to TPM device")
 		resume := fs.Bool("resume", false, "The close right before a resume from hibernation: anything but PCR 15 itself is a failure")
 		late := fs.Bool("late", false, "Wait for a TPM that did not answer at boot, and close the moment it does")
+		readyFile := fs.String("ready-file", "", "Wait until the code screen is over: until run has made this file (its --ready-file), or the run of --run-pid is gone")
+		runPid := fs.String("run-pid", "", "With --ready-file: the file holding run's process id")
 		fs.Parse(args)
+		if *readyFile != "" {
+			bootclose.AwaitRun(*readyFile, *runPid)
+		}
 		// The one command whose failure is the boot's: the boot reboots, the
 		// resume does not happen.
 		close := bootclose.Boot
@@ -164,6 +169,7 @@ func runRun(args []string) {
 	sshConf := fs.String("ssh-conf", sshscreen.DefaultConf, "With --ssh: aSSH's settings - the SSH CA, the address, the keys that may log in")
 	sshHold := fs.Uint("ssh-hold", 0, "With --ssh: seconds to wait for a confirmation, in place of --hold (0: until one comes)")
 	plan := fs.String("plan", "", "Start only the parts the boot image names in this directory; without it, all it finds (set by the initrd unit: "+imageplan.Dir+")")
+	readyFile := fs.String("ready-file", "", "Make this file when the code screen is over, closed, where READY goes under systemd: Debian's boot script passes it, for 'close --ready-file'")
 	fs.Parse(args)
 
 	planned := imageplan.All
@@ -177,7 +183,7 @@ func runRun(args []string) {
 			fmt.Fprintf(os.Stderr, "tpm2-kira-boot: the SSH server is not started: %v - the code screen is at the console\n", err)
 		}
 	}
-	bootrun.Run(*tpm, slotIndex(fs, *nvram), time.Duration(*hold)*time.Second, *unlock, remote, planned, *debug)
+	bootrun.Run(*tpm, slotIndex(fs, *nvram), time.Duration(*hold)*time.Second, *unlock, *readyFile, remote, planned, *debug)
 }
 
 // slotIndex is the blob index of the slot --nvram names (0-15 or a full NV

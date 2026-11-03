@@ -15,7 +15,8 @@ package bootrun
 // until the next boot; the key never left the TPM, and the display has
 // nothing left to show, so it exits. Right before READY, run closes the
 // boot (PCR 15, which every slot object's own policy reads), and the image
-// closes it again after (tpm2-kira-close.service, Debian's init-bottom).
+// closes it again after (tpm2-kira-close.service; Debian's local-top, before
+// cryptroot, which waits for this READY's file, and its init-bottom).
 //
 // A slot that is enrolled with a phone is verified by that phone instead: a
 // verdict from the phone releases the boot the way Enter does. The code
@@ -505,11 +506,11 @@ func StartCoordinator(tpmPath, signerPath string, debug bool) (*phonegate.GateSe
 // this process before a hard reboot, and systemd stops the service at
 // switch-root. The work runs beside the wait for the signal; the parts get
 // endWait to say goodbye, and what is left goes with the process.
-func Run(tpmPath string, nvramIndex uint32, hold time.Duration, unlockSocket string, remote sshscreen.Options, planned imageplan.Planned, debug bool) {
+func Run(tpmPath string, nvramIndex uint32, hold time.Duration, unlockSocket, readyFile string, remote sshscreen.Options, planned imageplan.Planned, debug bool) {
 	asked := make(chan os.Signal, 1)
 	signal.Notify(asked, syscall.SIGTERM, syscall.SIGINT)
 	remote.Notice = sayFirmwareState(sbstate.Read())
-	bd := &board{tpmPath: tpmPath, debug: debug, hold: hold, confirm: make(chan string), ask: diskkey.Prompter(diskkey.ConsoleAsk),
+	bd := &board{tpmPath: tpmPath, readyFile: readyFile, debug: debug, hold: hold, confirm: make(chan string), ask: diskkey.Prompter(diskkey.ConsoleAsk),
 		prompting: func() bool { return false }, promptMode: func() []diskkey.Recipe { return nil }}
 	ps := plannedParts(planned, remote, unlockSocket)
 	started := &startedParts{}
@@ -636,9 +637,9 @@ func showCodes(bd *board, ps parts, tpmPath string, nvramIndex uint32, planned i
 // release ends the hold: the parts are told, in the order that lets every
 // one finish what it opens in the TPM (the vault's opening, the phone's
 // salt); then the boot is closed (PCR 15) when closes - every slot and the
-// SSH CA with it, so nothing opens after this point; then READY, and the
-// key provider answers from what the parts opened before. The image closes
-// once more after this (fail-stop); here a failure is said.
+// SSH CA with it, so nothing opens after this point; then READY (on Debian its
+// file), and the key provider answers from what the parts opened before. The
+// image closes once more after this (fail-stop); here a failure is said.
 func (ps parts) release(bd *board, by string, closes bool) {
 	for _, p := range []part{ps.vault, ps.console, ps.ssh, ps.phone} {
 		if p != nil {
@@ -652,6 +653,12 @@ func (ps parts) release(bd *board, by string, closes bool) {
 	// terminal but must not own it.
 	releaseTerminal(0)
 	notifyReady()
+	if bd.readyFile != "" {
+		// No systemd to tell: the image's close waits for this file (or for run gone).
+		if err := os.WriteFile(bd.readyFile, nil, 0o600); err != nil {
+			fmt.Fprintf(os.Stderr, "tpm2-kira: the image's close is not told that the code screen is over: %v\n", err)
+		}
+	}
 	ps.unlock.released(bd, by)
 }
 

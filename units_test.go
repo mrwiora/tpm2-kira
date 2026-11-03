@@ -107,7 +107,7 @@ func TestTheBootIsRunOnBothDistributions(t *testing.T) {
 			started = append(started, l)
 		}
 	}
-	const debian = `/usr/bin/tpm2-kira-boot run --plan "$PLAN" --unlock "$UNLOCK" $TPM2_KIRA_REMOTE `
+	const debian = `/usr/bin/tpm2-kira-boot run --plan "$PLAN" --unlock "$UNLOCK" --ready-file /run/tpm2-kira/screen-over $TPM2_KIRA_REMOTE `
 	const machineID = `/usr/bin/tpm2-kira-boot machine-id `
 	if len(started) != 2 || !strings.Contains(started[0], machineID) || !strings.Contains(started[1], debian) {
 		t.Errorf("Debian starts %q, want the machine-id's release, then run as %q", started, debian)

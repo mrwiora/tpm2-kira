@@ -1,6 +1,8 @@
 package bootrun
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -164,5 +166,39 @@ func TestReleaseClosesAfterThePartsAndBeforeReady(t *testing.T) {
 	ps.release(&board{tpmPath: "/dev/tpmrm0"}, "", false)
 	if strings.Contains(strings.Join(log, "|"), "close") {
 		t.Fatalf("closed without a TPM in the plan: %v", log)
+	}
+}
+
+// readySeen is an unlock part that notes whether run's file was there when it was told.
+type readySeen struct {
+	recPart
+	file string
+	seen *bool
+}
+
+func (p readySeen) released(*board, string) {
+	_, err := os.Stat(p.file)
+	*p.seen = err == nil
+}
+
+// Debian's READY: the file is made past the close and before a key request is answered,
+// so the close that waits for it can come neither before run's nor after the answer.
+func TestReleaseMakesTheReadyFile(t *testing.T) {
+	defer func(c func(string), n func()) { closeBoot, notifyReady = c, n }(closeBoot, notifyReady)
+	file := filepath.Join(t.TempDir(), "screen-over")
+	closedBefore, seen := false, false
+	closeBoot = func(string) {
+		_, err := os.Stat(file)
+		closedBefore = err != nil
+	}
+	notifyReady = func() {}
+	var log []string
+	ps := parts{unlock: readySeen{recPart{name: "unlock", log: &log}, file, &seen}}
+	ps.release(&board{readyFile: file}, confirmedByConsole, true)
+	if !closedBefore {
+		t.Error("the file was there before the close")
+	}
+	if !seen {
+		t.Error("the key provider was told before the file was made")
 	}
 }

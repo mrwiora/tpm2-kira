@@ -1,19 +1,25 @@
 #!/bin/sh
-# The boot closed (PCR 15 extended: every slot and the SSH CA) right before
-# a resume from hibernation: a resume starts the TPM afresh, which sets
-# PCR 15 back to zero, and the resumed system runs no code screen. After every volume is
-# unlocked (cryptroot), before local-premount, where initramfs-tools
-# resumes. In a boot where run closed it already, an extend more changes
-# nothing. Anything but PCR 15 itself (no TPM aside) stops the resume; the boot's
-# own close, in init-bottom, decides what follows: local-premount/resume reads $resume alone (init made it
-# from resume= and noresume once, before any script), and the ORDER file
-# sources /conf/param.conf after every script, so an empty resume= there
-# reaches it.
+# The boot closed (PCR 15 extended: every slot and the SSH CA) before any volume is
+# opened, when the code screen is over: the place of Arch's tpm2-kira-close.service
+# (After=tpm2-kira.service, Before=cryptsetup-pre.target). Whatever a slot object opens,
+# run has opened it by then, and the keyscript's answer takes it from run's memory.
+#
+# No PREREQ: cryptsetup's cryptroot names every other script of local-top among its
+# prerequisites, so that it runs last, and so after this one. Naming cryptroot here
+# would be a loop, which tsort breaks by itself, with a word in every image build.
+#
+# The second call is for a resume from hibernation, which starts the TPM afresh (PCR 15
+# back to zero) and runs no code screen. Nothing opens between here and
+# local-premount, where initramfs-tools resumes. An extend more changes nothing.
+# Anything but PCR 15 itself (no TPM aside) stops the resume: local-premount/resume
+# reads $resume alone (init made it from resume= and noresume once, before any script),
+# and the ORDER file sources /conf/param.conf after every script, so an empty resume=
+# there reaches it.
 #
 # The package installs it into every image; it acts only while the image's
 # plan has the TPM (a sealed slot, an SSH CA), as init-bottom's close.
 
-PREREQ="cryptroot"
+PREREQ=""
 
 prereqs() {
     echo "$PREREQ"
@@ -27,6 +33,19 @@ prereqs)
 esac
 
 [ -d /etc/tpm2-kira/plan/tpm ] || exit 0
+
+# A failure (the TPM refuses every way of the close, or does not answer for the first
+# time) is a hard reboot, before any prompt: no shell with PCR 15 at zero, and the
+# reboot starts the PCRs afresh. docs/SSH.md, "The close". Should the reboot itself
+# fail, this script does not end.
+if ! /usr/bin/tpm2-kira-boot close --ready-file /run/tpm2-kira/screen-over --run-pid /run/tpm2-kira.pid >/dev/console 2>&1; then
+    echo "tpm2-kira: the boot is not closed (PCR 15): rebooting" >/dev/console
+    reboot -f || true
+    echo b >/proc/sysrq-trigger || true
+    while :; do sleep 60; done
+fi
+echo "$(date -u +%T 2>/dev/null) the image's close: before any volume" >>/run/initramfs/tpm2-kira.log
+
 if ! /usr/bin/tpm2-kira-boot close --resume 2>>/run/initramfs/tpm2-kira.log; then
     echo "tpm2-kira: the boot is not closed (PCR 15): no resume from hibernation this boot" >/dev/console
     echo "resume=" >>/conf/param.conf

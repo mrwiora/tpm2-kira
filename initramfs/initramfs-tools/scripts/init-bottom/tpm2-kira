@@ -60,8 +60,10 @@ if [ -r /run/tpm2-kira/net-device ]; then
     rm -f "/run/net-$dev.conf"
 fi
 
-# Close the boot (PCR 15 extended) whatever run did - run closed it when
-# the code screen was over, unless it failed: every slot object's policy
+# Close the boot (PCR 15 extended) once more, the last point before the real root:
+# run closed it when the code screen was over and local-top's script before cryptroot.
+# This one is for what those did not meet: a boot whose root is not local (no
+# local-top), a TPM that came after them. Every slot object's policy
 # and the SSH CA's read PCR 15, so nothing in the running system can
 # compute a code, open a slot's part or have a key certified. With the TPM
 # in the plan (a sealed slot, an SSH CA). Its failure (the TPM refuses every way

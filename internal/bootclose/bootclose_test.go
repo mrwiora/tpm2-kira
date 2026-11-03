@@ -481,3 +481,72 @@ func waitBegan(t *testing.T, ago time.Duration) {
 		t.Fatal(err)
 	}
 }
+
+// AwaitRun in a goroutine, and whether it returned within the wait.
+func awaitRunReturns(t *testing.T, ready, pid string, within time.Duration) bool {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		AwaitRun(ready, pid)
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(within):
+		return false
+	}
+}
+
+// The close before a volume waits as long as the code screen holds, and goes on with
+// the file made or with run gone: After=tpm2-kira.service, ready or gone.
+func TestAwaitRun(t *testing.T) {
+	dir := t.TempDir()
+	ready, pidFile := dir+"/ready", dir+"/pid"
+	if !awaitRunReturns(t, ready, pidFile, 5*time.Second) {
+		t.Fatal("no pid file, no run: it should not wait")
+	}
+
+	run := exec.Command("sleep", "60")
+	if err := run.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { run.Process.Kill(); run.Wait() })
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(run.Process.Pid)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		AwaitRun(ready, pidFile)
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("it went on while run holds")
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := os.WriteFile(ready, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the file is there and it still waits")
+	}
+}
+
+// The image's init does not reap run: one that ended is a zombie, and gone to AwaitRun.
+func TestAwaitRunTakesAZombieForGone(t *testing.T) {
+	dir := t.TempDir()
+	run := exec.Command("true")
+	if err := run.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { run.Wait() })
+	if err := os.WriteFile(dir+"/pid", []byte(strconv.Itoa(run.Process.Pid)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !awaitRunReturns(t, dir+"/ready", dir+"/pid", 5*time.Second) {
+		t.Fatal("it waits for a zombie")
+	}
+}

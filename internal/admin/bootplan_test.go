@@ -355,12 +355,16 @@ func TestWriteImageInitramfsTools(t *testing.T) {
 			t.Errorf("%s in an initramfs-tools image", p)
 		}
 	}
-	// The close before a resume is the package's local-top script, read
-	// for its prerequisites where initramfs-tools reads them (the installed
-	// file, not the image): after cryptroot, only with the plan's TPM part.
+	// The close before any volume and before a resume is the package's local-top
+	// script, read for its prerequisites where initramfs-tools reads them (the installed
+	// file, not the image): names no prerequisite (cryptroot names it,
+	// TestDebianScriptOrder), only with the plan's TPM part; when the code screen is over; its
+	// failure reboots, the resume's clears resume=.
 	if b, err := os.ReadFile("../../initramfs/initramfs-tools/scripts/local-top/tpm2-kira-close"); err != nil {
 		t.Error(err)
-	} else if got := string(b); !strings.Contains(got, `PREREQ="cryptroot"`) || !strings.Contains(got, "[ -d /etc/tpm2-kira/plan/tpm ] || exit 0") ||
+	} else if got := string(b); !strings.Contains(got, `PREREQ=""`) || !strings.Contains(got, "[ -d /etc/tpm2-kira/plan/tpm ] || exit 0") ||
+		!strings.Contains(got, "if ! /usr/bin/tpm2-kira-boot close --ready-file /run/tpm2-kira/screen-over --run-pid /run/tpm2-kira.pid") ||
+		!strings.Contains(got, "reboot -f") || !strings.Contains(got, "echo b >/proc/sysrq-trigger") || !strings.Contains(got, "while :; do sleep 60; done") ||
 		!strings.Contains(got, "if ! /usr/bin/tpm2-kira-boot close --resume") || !strings.Contains(got, `echo "resume=" >>/conf/param.conf`) {
 		t.Errorf("the local-top script:\n%s", got)
 	}

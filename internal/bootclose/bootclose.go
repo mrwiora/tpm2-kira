@@ -13,11 +13,13 @@
 package bootclose
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -146,6 +148,49 @@ func FirmwareSign() string {
 		return "the stub measured into a TPM"
 	}
 	return ""
+}
+
+// AwaitRun waits until the code screen is over, what After=tpm2-kira.service is on
+// a systemd image: run has made readyFile, past its own close and before it answers
+// a key request, or run is gone (pidFile names it; a boot without the file has no
+// run). It has no time of its own: the hold is the code screen's, and with SSH it may
+// last as long as the owner set. On a TPM that hangs the keyscript would wait for run
+// just the same.
+func AwaitRun(readyFile, pidFile string) {
+	pid := 0
+	if b, err := os.ReadFile(pidFile); err == nil {
+		pid, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+	}
+	for {
+		if _, err := os.Stat(readyFile); err == nil {
+			return
+		}
+		if !processLives(pid) {
+			return
+		}
+		time.Sleep(awaitRunEvery)
+	}
+}
+
+// awaitRunEvery is how often AwaitRun looks.
+const awaitRunEvery = 50 * time.Millisecond
+
+// processLives says whether pid runs. A signal 0 would not do: the image's init never
+// reaps run, so a run that ended stays a zombie to the end of the initrd.
+func processLives(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	// pid (comm) state ...: comm may hold anything, the last parenthesis ends it.
+	i := bytes.LastIndex(b, []byte(") "))
+	if i < 0 || i+2 >= len(b) {
+		return false
+	}
+	return b[i+2] != 'Z' && b[i+2] != 'X'
 }
 
 // Boot is the close of a boot on its way to the real root: nil goes on, ErrReboot

@@ -126,6 +126,8 @@ type board struct {
 	tpmPath string
 	debug   bool
 	hold    time.Duration // how long the code screen holds the boot
+	// readyFile is made where READY is sent: Debian's READY, without systemd.
+	readyFile string
 
 	// confirm carries a part's confirmation of the boot: who confirmed.
 	confirm chan string
