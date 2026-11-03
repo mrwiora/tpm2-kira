@@ -60,12 +60,12 @@ var Recipes = []Recipe{
 }
 
 // Password is the password's source (P).
-func (r Recipe) Password() uint8 { return uint8(r >> 12) }
+func (r Recipe) Password() uint8 { return uint8((r >> 12) & 0xF) }
 
 // Salt is the salt's source (S).
-func (r Recipe) Salt() uint8 { return uint8(r>>8) & 0xF }
+func (r Recipe) Salt() uint8 { return uint8((r >> 8) & 0xF) }
 
-func (r Recipe) flags() uint8 { return uint8(r) }
+func (r Recipe) flags() uint8 { return uint8(r & 0xFF) }
 
 // Pepper says the vault releases the salt with an operator's pepper.
 func (r Recipe) Pepper() bool { return r.flags()&FlagPepper != 0 }
