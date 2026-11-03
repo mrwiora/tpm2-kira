@@ -55,6 +55,8 @@ Snapshots in use:
 | `fresh` | the serial console enabled (below), no tpm2-kira installed: what every test starts from |
 | `setup` | a run's own, and yours while iterating: the steps up to the first reboot (`--save-setup`, docs/TESTING.md) |
 | `hibernated` | a run's own: boot 1 hibernated, what V2 and V4 resume from; gone at the run's end |
+| `secureboot` | Secure Boot really on, no tpm2-kira: made from `fresh` by `tools/secureboot-vm.py`, and again by every run of the scenario `secure-boot`; a run leaves it |
+| `setup-secure` | a run's own, and yours while iterating: the steps up to the first reboot on `secureboot` (`--only secure-boot --keep-setup`) |
 
 `export` and `fresh` are not replaced without `snapshot --overwrite`, and no
 test removes them.
@@ -69,8 +71,14 @@ These are the points that matter, and why. The full command line is in
   Secure Boot off. `secure_boot = yes` in a machine's section boots the
   build with Secure Boot (`OVMF_CODE.secboot.4m.fd`, with SMM) on the same
   variables: they hold no PK, so the machine starts in Setup Mode and boots
-  anything until keys are enrolled (`go-uefi-slim/internal/vmcheck`); `reset`
-  brings it back to Setup Mode.
+  anything until keys are enrolled; `reset` brings it back to Setup Mode.
+  `tools/secureboot-vm.py` enrols real keys as an owner would, from the guest, into a
+  snapshot of their own: Arch `sbctl` (`create-keys`, `enroll-keys --microsoft`, the loader
+  and the UKI signed; its post hook signs a rebuilt UKI), Debian
+  `go-uefi-slim/internal/vmcheck` (PK, KEK, db with Microsoft's; nothing to sign: shim is
+  Microsoft's, GRUB and the kernel Debian's). Debian's kernel then locks itself down
+  (`integrity`) and refuses hibernation, so hibernation is tested in Setup Mode alone;
+  Arch's kernel does not lock down.
 - **GRUB's 5 s menu passed from the console.** `localvm.py` sends an Enter when the firmware starts
   a shim or GRUB, for as long as qemu runs; the `grub.cfg` and `fresh` stay as they are, PCRs 0-15
   of `fresh` are unchanged. systemd-boot has no timeout here. Measured against what was left out

@@ -648,7 +648,7 @@ class Machine:
         out = vault.admin("audit")
         self.log.save("vault-audit-secure-boot.log", out)
         rel = [l for l in out.splitlines() if "release" in l and "released" in l and name in l]
-        self.check("the vault's audit: the release carries the state", bool(rel) and ("SECURE BOOT " + word.strip().replace("-", " ")) in rel[-1].upper(), (rel or [out])[-1][-400:])
+        self.check("the vault's audit: the release carries the state", bool(rel) and ("SECURE BOOT " + word.strip().replace("-", " ").upper()) in rel[-1].upper(), (rel or [out])[-1][-400:])
 
     def check_memory(self, where, out):
         """The process keeps nothing of Argon2id once a key is answered: the keyslot's

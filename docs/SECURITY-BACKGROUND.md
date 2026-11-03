@@ -1542,13 +1542,13 @@ firmware's separator it cannot place an event before it. A machine that shows an
 boot's events does not replay; one that shows no events is not established. **What
 this rests on is the firmware that measured it**: firmware that lies measures what it
 likes, and shows in PCR 0, not here. Real logs behind the digests: `TestPCR7ChainOfRealLogs`
-(on, Setup Mode), the VM test (Setup Mode).
+(on, Setup Mode), the VM test (Setup Mode in its first part, `on` in the part with a vault).
 
 **On the phone:** a red card in every state but `on`, at a match too, at the bind screen
 too; it decides nothing, and a match can be continued. **At the vault:** red in the
-device's view, on the request, in the audit and in the CLI, with the word WARNING where
-there is no colour, for a request refused too; before a device's first quote not
-established. It releases as before.
+device's view, in the audit and in the CLI, with the word WARNING where there is no colour,
+for a request refused too; before a device's first quote not established. It refuses every
+state but `on` (below).
 
 **Where the phone sees it, and where it finds no machine.** The channel's secrets open
 only with PCR 7 as sealed (§13.4, §3.1 note ⁵). So a machine that goes from on to off
@@ -1556,13 +1556,46 @@ has no gate: the phone says not reachable, it never gets a quote to read. The re
 is for a boot under the state the channel was sealed under: a machine enrolled off or in
 Setup Mode, or one a person sealed the channel for afterwards.
 
-**What the vault's approvals do of a changed PCR 7.** A release needs the signing key's
-signature over a policy of the quoted values, so a PCR 7 no approval covers is refused,
-and the machine's TPM refuses too (`TestChangedPCR7IsRefusedAndShown`, for the vault's
-side; `TestSlotWithSignedPCR11` and the slot policy for the TPM's). Two limits, neither
-changed here (the owner's decision): this is "as approved", not "on": a state the signing
-key approved with Secure Boot off releases, red; and a slot chosen by hand without PCR 7
-is not held to it at all, and is shown not established.
+**The vault refuses unless it is `on`.** A release needs the signing key's signature over a
+policy of the quoted values, so a PCR 7 no approval covers is refused, and the machine's
+TPM refuses too (`TestChangedPCR7IsRefusedAndShown`, for the vault's side;
+`TestSlotWithSignedPCR11` and the slot policy for the TPM's). On top of that the vault
+releases nothing unless the quote establishes `on`, the owner's decision: off, Setup Mode and
+`not_established` are refused, whatever the signing key approved, and a slot chosen by
+hand without PCR 7 says nothing of Secure Boot, so it is `not_established` and refused too. There
+is no per-device exception. A refused request is shown in the device's view and the audit, is
+no failure of the device (its quote verified), and asks no operator: only `on` reaches the
+queue (`TestReleaseOnlyWithSecureBootOn`, `TestSelectionWithoutPCR7IsRefused`). So a machine
+not `on` needs another way in: `control` and `luks enrol` say so before a vault's keyslot, and
+the machine's prompt comes when the vault refuses, as for any other refusal.
+
+**What it rests on, in the vault's case too:** the firmware's measurement. On the VMs a real
+`on` has now gone through it, keys in the firmware (§17.2).
+
+### 13.5a Whether the quote covers the initrd
+
+The bind screen says whether the checked PCRs measure the initrd, the place a passphrase
+logger would sit. **From what the phone can make itself, never from what the machine says**
+(`attest.EstablishInitrd`). An event's digest is of what was measured; its description is
+covered by nothing, so an event counts only where the phone computes the digest:
+
+- **A UKI:** systemd-stub measures each section into PCR 11, its name with a NUL, then its
+  contents. The hash of `.initrd\0` followed by another digest, among digests that replay to
+  the quoted PCR 11 (systemd's phase words may follow): covered, PCR 11 and 4 if quoted.
+- **GRUB:** every command goes into PCR 8 as the hash of its text, the files it reads into
+  PCR 9. The machine sends its `initrd` command; its hash among digests that replay to the
+  quoted PCR 8, with 9 quoted too: covered, PCR 9.
+
+Everything else is **not established, red**, with the reason on the card: no log, a selection
+without those registers, a command GRUB did not run, another boot's events. That includes a
+boot the phone cannot check, though it may well be measured: the Linux EFI stub's "Linux
+initrd" event (PCR 9, a Type 1 entry without GRUB), whose digest is the file's. It decides
+nothing, and the person enrolling can go on. Its limit is enrolment's (§13.1): root on the machine at
+enrolment can extend such a digest afterwards; the check is against mistakes of selection and
+a machine's word, not a machine already taken. Real logs: `TestInitrdEventsOfRealLogs` (Arch's
+UKI, Debian's GRUB). States: `TestEstablishInitrdStates`, `TestDemoMachineInitrdStates`, Marify's
+`initrdFromTheQuote` on a real TPM's quote, swtpm's registers extended as the stub and GRUB do.
+`phone enrol` itself still reads the machine's own log for its question on its own console.
 
 ### 13.6 What is *not* trusted
 

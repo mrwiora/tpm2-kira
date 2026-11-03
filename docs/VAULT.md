@@ -99,11 +99,10 @@ Three layers, each depending on PCR state:
    Boot's state from the quoted PCR 7 and PCR 7's events from the event log,
    replayed against it (`attest.EstablishSecureBoot`): `on`, `off`, `setup_mode` or
    `not_established`, never what the machine says. Every state but `on` is red in the
-   device's view, on the request an operator approves and in the audit, for a request
-   refused too. **It decides nothing:** what releases is the check above. That check
-   refuses a PCR 7 no approval covers, for a slot whose selection has PCR 7; a state
-   the signing key did approve releases, Secure Boot off or not (docs/SECURITY-BACKGROUND.md
-   §13.5).
+   device's view and in the audit, for a request refused too. **It refuses every state but `on`**, on top of the check above, also what
+   the signing key approved and a slot whose selection has no PCR 7, which is
+   `not_established`; no per-device exception (docs/SECURITY-BACKGROUND.md §13.5). A refused
+   state is no failure of the device, and asks no operator.
 3. **The vault's TPM.** Each device record is encrypted with a key sealed
    in the vault's TPM to the vault's own PCRs (default PCR 7). A copy of
    the vault's disk or a backup opens nothing; a vault booted in another
