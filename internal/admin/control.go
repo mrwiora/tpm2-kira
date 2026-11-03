@@ -5,6 +5,7 @@
 package admin
 
 import (
+	"crypto"
 	"errors"
 	"fmt"
 	"io"
@@ -1078,6 +1079,10 @@ func (c *controller) storePIN() error {
 	if err != nil {
 		return err
 	}
+	return c.storePINOf(key)
+}
+
+func (c *controller) storePINOf(key crypto.Signer) error {
 	desc, _ := signing.YubiKeyDescription(key)
 	pin, err := c.ask().Password("PIN of "+desc,
 		"Checked on the token, then stored in "+signing.PINPath()+" for the approval the hooks run; readable by root alone, never in the initramfs.",

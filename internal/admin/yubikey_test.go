@@ -24,6 +24,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/piv"
 	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
+	"github.com/mrwiora/tpm2-kira/internal/prompt"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 )
 
@@ -762,5 +763,50 @@ func TestPINAlwaysWithPINLeftVerified(t *testing.T) {
 	}
 	if card.Retries != 3 {
 		t.Errorf("retries %d", card.Retries)
+	}
+}
+
+// control's way to the PIN file: asked once with no echo, checked on the token, then
+// stored; the next signature finds it there, as the session keeps no copy. A wrong one
+// is refused by the token and stored nowhere.
+func TestControlStoresThePIN(t *testing.T) {
+	card := pivtest.New(1)
+	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyAlways, piv.TouchPolicyNever, false)
+	fake := &fakeTokens{cards: []*pivtest.Card{card}}
+	fake.install(t)
+	os.Unsetenv(signing.PINEnvVar)
+	t.Setenv("TPM2_KIRA_CONTROL_CONF", filepath.Join(t.TempDir(), "control.conf"))
+	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer signing.CloseTokenSessions()
+
+	var out bytes.Buffer
+	c := &controller{out: &out, p: prompt.New(strings.NewReader("\n654321\n"), &out)}
+	if err := c.storePINOf(signer); err == nil {
+		t.Fatal("a wrong PIN is taken")
+	}
+	if _, err := os.Stat(signing.PINPath()); !os.IsNotExist(err) {
+		t.Fatalf("a wrong PIN is stored: %v", err)
+	}
+	if !strings.Contains(out.String(), "the PIN is empty") || strings.Contains(out.String(), "654321") {
+		t.Fatalf("output:\n%s", out.String())
+	}
+	signing.CloseTokenSessions()
+
+	c = &controller{out: &out, p: prompt.New(strings.NewReader("123456\n"), &out)}
+	if err := c.storePINOf(signer); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(signing.PINPath()); string(got) != "123456\n" {
+		t.Fatalf("stored %q", got)
+	}
+	digest := sha256.Sum256(nil)
+	if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
+		t.Fatalf("signing after the PIN was stored: %v", err)
+	}
+	if fake.prompts != 0 {
+		t.Fatalf("%d prompts after the PIN was given", fake.prompts)
 	}
 }
