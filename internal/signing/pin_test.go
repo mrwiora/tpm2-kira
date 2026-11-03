@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -18,6 +19,15 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
 	"golang.org/x/sys/unix"
 )
+
+// The helper of the signal tests: the PIN's prompt in a process that a signal ends.
+func TestMain(m *testing.M) {
+	if os.Getenv("PIN_TEST_HELPER") == "" {
+		os.Exit(m.Run())
+	}
+	readNoEcho(os.Stdin)
+	os.Exit(0)
+}
 
 // pipeWith is a pipe holding data, its writer closed; neither end close-on-exec, as a
 // descriptor a script passes down is not.
@@ -285,6 +295,143 @@ func TestPromptOnATerminal(t *testing.T) {
 	}
 	if left, _ := unix.IoctlGetInt(int(pts.Fd()), unix.TIOCINQ); left != 0 {
 		t.Errorf("%d bytes of a PIN wait for the next reader of the terminal", left)
+	}
+}
+
+// openPINPty is a pty the test reads and types on.
+func openPINPty(t *testing.T) (ptm, pts *os.File) {
+	t.Helper()
+	ptm, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	if err != nil {
+		t.Skip("no pty: ", err)
+	}
+	t.Cleanup(func() { ptm.Close() })
+	if err := unix.IoctlSetPointerInt(int(ptm.Fd()), unix.TIOCSPTLCK, 0); err != nil {
+		t.Skip("no pty: ", err)
+	}
+	n, err := unix.IoctlGetInt(int(ptm.Fd()), unix.TIOCGPTN)
+	if err != nil {
+		t.Skip("no pty: ", err)
+	}
+	pts, err = os.OpenFile(fmt.Sprintf("/dev/pts/%d", n), os.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		t.Skip("no pty: ", err)
+	}
+	t.Cleanup(func() { pts.Close() })
+	go func() { // drains what the terminal writes, an echo included
+		b := make([]byte, 256)
+		for {
+			if _, err := ptm.Read(b); err != nil {
+				return
+			}
+		}
+	}()
+	return ptm, pts
+}
+
+// startPINPrompt runs the helper on the terminal, its controlling terminal, and waits
+// for it to take the echo away.
+func startPINPrompt(t *testing.T, pts *os.File) *exec.Cmd {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(self)
+	cmd.Env = append(os.Environ(), "PIN_TEST_HELPER=1", "GOTRACEBACK=none")
+	cmd.Stdin = pts
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill() })
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		tio, err := unix.IoctlGetTermios(int(pts.Fd()), unix.TCGETS)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tio.Lflag&unix.ECHO == 0 {
+			return cmd
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the prompt never took the echo")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// Every signal that ends the process, sent or typed, gives the terminal back as it was
+// and ends the process. That the input goes too: internal/termguard's tests.
+func TestSignalAtThePINPromptGivesTheTerminalBack(t *testing.T) {
+	check := func(t *testing.T, sig unix.Signal, pts *os.File, before *unix.Termios, err error) {
+		t.Helper()
+		after, gerr := unix.IoctlGetTermios(int(pts.Fd()), unix.TCGETS)
+		if gerr != nil {
+			t.Fatal(gerr)
+		}
+		if after.Lflag != before.Lflag || after.Cc != before.Cc {
+			t.Errorf("%v left the terminal: lflag %x, was %x", sig, after.Lflag, before.Lflag)
+		}
+		if err == nil {
+			t.Errorf("%v: the process went on to its end", sig)
+		}
+	}
+	for _, sig := range []unix.Signal{unix.SIGTERM, unix.SIGHUP, unix.SIGINT, unix.SIGQUIT, unix.SIGABRT} {
+		t.Run(sig.String(), func(t *testing.T) {
+			ptm, pts := openPINPty(t)
+			before, err := unix.IoctlGetTermios(int(pts.Fd()), unix.TCGETS)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := startPINPrompt(t, pts)
+			ptm.WriteString("123")
+			cmd.Process.Signal(sig)
+			check(t, sig, pts, before, cmd.Wait())
+		})
+	}
+	t.Run("Ctrl-C", func(t *testing.T) {
+		ptm, pts := openPINPty(t)
+		before, err := unix.IoctlGetTermios(int(pts.Fd()), unix.TCGETS)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := startPINPrompt(t, pts)
+		ptm.WriteString("123\x03")
+		check(t, unix.SIGINT, pts, before, cmd.Wait())
+	})
+}
+
+// Ctrl-Z cannot stop the prompt, which a shell would take the terminal from and which
+// would then go on with the echo on: the terminal has no suspend key during it, and has
+// it back after.
+func TestNoSuspendAtThePINPrompt(t *testing.T) {
+	ptm, pts := openPINPty(t)
+	before, err := unix.IoctlGetTermios(int(pts.Fd()), unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Cc[unix.VSUSP] == 0 {
+		t.Skip("this pty has no suspend key to begin with")
+	}
+	cmd := startPINPrompt(t, pts)
+	held, err := unix.IoctlGetTermios(int(pts.Fd()), unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held.Cc[unix.VSUSP] != 0 {
+		t.Errorf("the suspend key at the prompt: %d", held.Cc[unix.VSUSP])
+	}
+	ptm.WriteString("\x1a123456\n")
+	if err := cmd.Wait(); err != nil {
+		t.Errorf("the prompt: %v", err)
+	}
+	after, err := unix.IoctlGetTermios(int(pts.Fd()), unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Cc != before.Cc || after.Lflag != before.Lflag {
+		t.Errorf("the terminal is not as it was: %x, %x", after.Lflag, before.Lflag)
 	}
 }
 

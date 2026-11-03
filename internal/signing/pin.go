@@ -9,6 +9,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/piv"
+	"github.com/mrwiora/tpm2-kira/internal/termguard"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 	"golang.org/x/sys/unix"
 )
@@ -228,21 +229,25 @@ func promptPINOnTTY(s *YubiKeySigner) ([]byte, error) {
 	return pin, nil
 }
 
-// readNoEcho reads the PIN's line from a terminal. The terminal is given back with its
-// input flushed: the rest of a line too long must not answer whoever reads next, a shell.
+// readNoEcho reads the PIN's line from a terminal, in lines as the terminal has them and
+// with Ctrl-C and Ctrl-\ still signals. The terminal is given back with its input
+// flushed on every way out, a signal's too: the rest of a line too long or half typed
+// must not answer whoever reads next, a shell. Ctrl-Z does nothing here: a shell takes a
+// stopped job's terminal back, and the prompt would go on with the echo on.
 func readNoEcho(tty *os.File) ([]byte, error) {
-	fd := int(tty.Fd())
-	old, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	restore, err := termguard.Hold{
+		Change: func(t *unix.Termios) {
+			t.Lflag &^= unix.ECHO
+			t.Lflag |= unix.ICANON | unix.ISIG
+			t.Cc[unix.VSUSP] = 0
+		},
+		OnSignal: func() { fmt.Fprintln(tty) },
+		Flush:    true,
+	}.Take(int(tty.Fd()))
 	if err != nil {
 		return nil, err
 	}
-	raw := *old
-	raw.Lflag &^= unix.ECHO
-	raw.Lflag |= unix.ICANON | unix.ISIG
-	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &raw); err != nil {
-		return nil, err
-	}
-	defer unix.IoctlSetTermios(fd, unix.TCSETSF, old)
+	defer restore()
 	return readPINLine(tty)
 }
 

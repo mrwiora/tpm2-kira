@@ -20,16 +20,15 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
 
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/mrwiora/tpm2-kira/internal/termguard"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
 	"golang.org/x/sys/unix"
 )
@@ -485,52 +484,17 @@ func (p *Prompter) escape() (final byte, alone bool) {
 	return 0, false
 }
 
-// raw takes the terminal's line discipline away and gives what gives it back. A
-// signal that would end the process gives it back first (and runs onSignal, when
-// there is one, for what is on the screen), and then ends it as it would have: the
-// signals are taken before the terminal is, and the lock keeps a signal's end from
-// running beside taking it.
+// raw takes the terminal's line discipline away and gives what gives it back, also when
+// a signal ends the process (and runs onSignal then, when there is one, for what is on
+// the screen).
 func raw(fd int, onSignal func()) (func(), error) {
-	old, err := unix.IoctlGetTermios(fd, unix.TCGETS)
-	if err != nil {
-		return nil, err
-	}
-	t := *old
-	t.Lflag &^= unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN
-	t.Cc[unix.VMIN], t.Cc[unix.VTIME] = 1, 0
-
-	var mu sync.Mutex
-	sigs := make(chan os.Signal, 1)
-	done := make(chan struct{})
-	signal.Notify(sigs, unix.SIGTERM, unix.SIGHUP, unix.SIGINT, unix.SIGQUIT, unix.SIGABRT)
-	go func() {
-		select {
-		case s := <-sigs:
-			mu.Lock() // never given up: the process ends
-			if onSignal != nil {
-				onSignal()
-			}
-			unix.IoctlSetTermios(fd, unix.TCSETS, old)
-			signal.Reset(s)
-			unix.Kill(unix.Getpid(), s.(syscall.Signal))
-		case <-done:
-		}
-	}()
-	restore := func() {
-		signal.Stop(sigs)
-		close(done)
-		mu.Lock()
-		defer mu.Unlock()
-		unix.IoctlSetTermios(fd, unix.TCSETS, old)
-	}
-	mu.Lock()
-	err = unix.IoctlSetTermios(fd, unix.TCSETS, &t)
-	mu.Unlock()
-	if err != nil {
-		restore()
-		return nil, err
-	}
-	return restore, nil
+	return termguard.Hold{
+		Change: func(t *unix.Termios) {
+			t.Lflag &^= unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN
+			t.Cc[unix.VMIN], t.Cc[unix.VTIME] = 1, 0
+		},
+		OnSignal: onSignal,
+	}.Take(fd)
 }
 
 // sgrAt is an SGR sequence at the start of a string.
