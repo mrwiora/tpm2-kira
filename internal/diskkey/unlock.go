@@ -570,6 +570,11 @@ var passphraseBuffer = func() []byte {
 
 var bufferLockSaid atomic.Bool
 
+// PassphraseBuffer is an empty buffer of MaxPassphrase's capacity, locked in memory:
+// for a prompt that asks for a secret in its own way (internal/prompt). Its caller
+// keeps within the capacity, and wipes it.
+func PassphraseBuffer() []byte { return passphraseBuffer() }
+
 // UnlockLogger writes to stderr, with the time: the journal or the
 // initramfs log (Debian) is read after the boot.
 func UnlockLogger(debug bool) func(string) {
