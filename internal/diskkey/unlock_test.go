@@ -888,3 +888,47 @@ func TestDiskKeyAfterARefusingVault(t *testing.T) {
 		t.Fatalf("what was asked: %q", notes)
 	}
 }
+
+// A restore that sees the terminal raw finds how it was: raw mode and its
+// registration are one step, however closely the restore follows.
+func TestRestoreRightAfterRawMode(t *testing.T) {
+	ptm, pts, err := openPty()
+	if err != nil {
+		t.Skipf("no pty: %v", err)
+	}
+	defer ptm.Close()
+	defer pts.Close()
+	fd := int(pts.Fd())
+	for i := 0; i < 500; i++ {
+		before, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			if pw, err := ReadPassphrase(pts, fd); err == nil {
+				wipe.Bytes(pw)
+			}
+		}()
+		for {
+			tio, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tio.Lflag&unix.ICANON == 0 {
+				break
+			}
+		}
+		restoreTerminal()
+		after, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.Lflag != before.Lflag {
+			t.Fatalf("round %d: the terminal stayed raw after the restore", i)
+		}
+		ptm.Write([]byte("x\n"))
+		<-done
+	}
+}

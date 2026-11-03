@@ -495,10 +495,13 @@ func ReadPassphrase(f io.ReadWriter, fd int) ([]byte, error) {
 	// controlling terminal and a SIGINT from the tty would reach nobody.
 	raw.Lflag &^= unix.ECHO | unix.ICANON | unix.ISIG
 	raw.Cc[unix.VMIN], raw.Cc[unix.VTIME] = 1, 0
+	// Raw and registered as one step: a restore that sees the terminal raw
+	// also finds how it was.
+	rawTerminal.Lock()
 	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &raw); err != nil {
+		rawTerminal.Unlock()
 		return nil, err
 	}
-	rawTerminal.Lock()
 	rawTerminal.fd, rawTerminal.old = fd, old
 	rawTerminal.Unlock()
 	defer restoreTerminal()
