@@ -38,7 +38,7 @@ distributions:
   V9-long    --all, Debian: after silent-tpm, a close that holds clears the count
   V8         --all: the way out of a close that keeps rebooting (step 7, which no VM can make: a
              TPM that answers and refuses): its mechanics, without a TPM: Arch, the word
-             tpm2-kira.noclose with Secure Boot off, from the setup; Debian, GRUB's break=bottom
+             tpm2-kira.noclose with Secure Boot off, from the setup; Debian, GRUB's break=premount
              and the plan's TPM part removed
 
 Each step that wants a running system gets one when the step before it left none.
@@ -184,8 +184,8 @@ class Hib:
         if self.distro == "debian":
             order = out.split("ORDER:", 1)[-1]
             crypt, close = order.find("cryptroot"), order.find("tpm2-kira-close")
-            self.check("V1: the image's local-top script closes before the resume (after cryptroot)",
-                       "tpm2-kira-boot close" in out and 0 <= crypt < close, out[-600:])
+            self.check("V1: the image's local-top script closes before any volume and before the resume (before cryptroot)",
+                       "tpm2-kira-boot close --ready-file" in out and "tpm2-kira-boot close --resume" in out and 0 <= close < crypt, out[-600:])
             self.check("V1: the image resumes in local-premount", "resume" in out.split("ORDER:", 1)[-1], out[-300:])
         else:
             self.check("V1: the image's drop-in closes before the resume (ExecStartPre), after the code screen",
@@ -532,15 +532,23 @@ class Hib:
             raise vmtest.Fail("V9: the guest did not power off")
         lv.start(unlock=False)
         since = lv.mark
-        self.console_prompts(since)
-        text, again = self.restarted(since, "rebooting once", 150)
+        text, again = self.restarted(since, "rebooting once", 90)
         m.log.save("V9-first-console.log", text)
         self.check("V9 step 6: one hard reboot, for a TPM the firmware measured into", again, text[-800:])
         self.check("V9 step 6: no shell on the way", "(initramfs)" not in text and "Rebooting automatically" not in text, text[-800:])
-        self.console_prompts(self.console_mark())
+        self.check("V9 step 6: the close comes first: no prompt before its reboot", "Password for disk" not in text and "Please unlock" not in text, text[-800:])
+        second = self.console_mark()
+        self.console_prompts(second)
         lv.wait_ssh(240)
         self.wait_login("V9")
+        text = lv.serial_text(second)
+        m.log.save("V9-second-console.log", text)
+        said, asked = text.find("the TPM does not answer"), text.find("Password for disk")
+        self.check("V9 step 6: the second time: the close says so before the prompt, no reboot, the passphrase",
+                   0 <= said < asked and not RESTART.search(text, asked), text[-800:])
         self.after_silent("V9 step 6", boot.strip())
+        rc, out = self.run(m.boot_log_command(), save="V9-second-log.log")
+        m.check_debian_order("V9 step 6, the second time", out, run_closed=False)
 
     def silent_tpm_long(self):
         """Back to normal: the count goes with the first close that holds."""
@@ -554,26 +562,27 @@ class Hib:
     def way_out(self):
         """A TPM that answers and refuses everything: docs/SSH.md's way out, taken
         as it says, here without a TPM. Arch: the word tpm2-kira.noclose, which the
-        stub takes with Secure Boot off; Debian: GRUB's break=bottom - written into
+        stub takes with Secure Boot off; Debian: GRUB's break=premount - written into
         grub.cfg, as the menu's editor is on the graphical console here - and the
-        plan's TPM part removed in the shell it gives."""
+        plan's TPM part removed in the shell it gives, before run and the close."""
         m, lv = self.m, self.lv
         m.head("V8: the way out of a TPM that stays broken")
         if self.distro == "debian":
             self.running()
-            rc, out = self.run("sed -i 's#^\\(\\s*linux\\s.*\\)$#\\1 break=bottom#' /boot/grub/grub.cfg; grep -c 'break=bottom' /boot/grub/grub.cfg", save="wayout-grub.log")
-            self.check("V8: Debian - break=bottom on GRUB's command line", rc == 0 and out.strip() != "0", out)
+            rc, out = self.run("sed -i 's#^\\(\\s*linux\\s.*\\)$#\\1 break=premount#' /boot/grub/grub.cfg; grep -c 'break=premount' /boot/grub/grub.cfg", save="wayout-grub.log")
+            self.check("V8: Debian - break=premount on GRUB's command line", rc == 0 and out.strip() != "0", out)
             m.when_returned("systemctl poweroff")
             if not lv.wait_stopped(300):
                 raise vmtest.Fail("V8: the guest did not power off")
             lv.start(unlock=False, tpm=False)
             since = lv.mark
-            self.console_prompts(since)
             self.console_expect(re.compile(r"\(initramfs\) ?$", re.M), 120, since, ruled_out=None)
             mark = self.console_mark()
             lv.send("rm -r /etc/tpm2-kira/plan/tpm\r")
             self.console_expect(re.compile(r"\(initramfs\) ?$", re.M), 30, mark, ruled_out=None)
+            mark = self.console_mark()
             lv.send("exit\r")
+            self.console_prompts(mark)
         else:
             # From the setup: no image in the swap, nothing of the steps before.
             lv.kill()

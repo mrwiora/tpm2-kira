@@ -183,7 +183,7 @@ It may not carry what came before.
   code, no slot's part, no certificate until the next boot) when the
   code screen is over - `run` itself before READY, then Arch's
   `tpm2-kira-close.service`, required by `initrd.target`, Debian's
-  init-bottom - and right before a resume from hibernation (a resume
+  local-top script before cryptroot, and its init-bottom - and right before a resume from hibernation (a resume
   starts the TPM afresh and runs no code screen); a failed close stops
   the boot only when the TPM answers and refuses every way of it, or does not answer
   for the first time (`internal/bootclose`; docs/SSH.md, "The close: what it can come

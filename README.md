@@ -543,8 +543,8 @@ enrolled with one ([docs/VAULT.md](docs/VAULT.md)), and the key socket
 ([docs/DISK-KEY.md](docs/DISK-KEY.md)) - each only when the boot plan put
 it in the image. Enter at the code screen, the phone's verdict, the
 vault's key, or 90 seconds ends the hold;
-`run` then closes the boot (PCR 15), `tpm2-kira-close.service` closes it
-again before any volume is opened, whatever `run` did, and no code can be
+`run` then closes the boot (PCR 15), `tpm2-kira-close.service` (Debian: `local-top`'s
+script) closes it again before any volume is opened, whatever `run` did, and no code can be
 computed until the next boot.
 
 See [initramfs/mkinitcpio/mkinitcpio.conf.example](initramfs/mkinitcpio/mkinitcpio.conf.example) for more HOOKS configurations (LVM, multiple encrypted devices, etc.).
@@ -562,7 +562,8 @@ does not apply. The `.deb` installs two scripts instead:
 |---|---|
 | `/usr/share/initramfs-tools/hooks/tpm2-kira` | copies the binary into the image |
 | `/usr/share/initramfs-tools/scripts/init-premount/tpm2-kira` | starts the display at boot |
-| `/usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira` | stops it and runs `tpm2-kira-boot close` before the real root takes over (a failure powers the machine off) |
+| `/usr/share/initramfs-tools/scripts/local-top/tpm2-kira-close` | runs `tpm2-kira-boot close` when the code screen is over, before `cryptroot` opens a volume (a failure reboots) |
+| `/usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira` | stops it and runs `tpm2-kira-boot close` once more before the real root takes over (a failure reboots) |
 | `/lib/cryptsetup/scripts/tpm2-kira` | cryptsetup keyscript: the volume's key from tpm2-kira's prompt |
 
 `/init` runs `init-premount` before `local-top/cryptroot` asks for the

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -345,5 +347,62 @@ func writeSecureBootVars(t *testing.T, testDir string, secureBoot, setupMode byt
 		if err := os.WriteFile(path, []byte{6, 0, 0, 0, v}, 0o600); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// Debian's order, as initramfs-tools makes it (hook-functions' get_prereq_pairs and
+// cache_run_scripts): the package's script, and cryptsetup's cryptroot, which names every
+// other script of local-top, as in cryptsetup-initramfs 2:2.7.5. No loop, whose breaking is
+// tsort's to choose; the close before cryptroot. The real image's ORDER: tools/vmtest.py.
+func TestDebianScriptOrder(t *testing.T) {
+	dir := t.TempDir()
+	const cryptroot = `#!/bin/sh
+PREREQ="cryptroot-prepare"
+prereqs() {
+    # Make sure that cryptroot is run last in local-top
+    local req script="${0##*/}" dir
+    dir="$DESTDIR/scripts/${CRYPTROOT_STAGE-local-top}"
+    for req in "$dir"/*; do
+        test -x "$req" || continue
+        req="${req##*/}"
+        if [ "$req" != "$script" ]; then
+            printf '%s\n' "$req"
+        fi
+    done
+}
+case $1 in prereqs) prereqs; exit 0;; esac
+`
+	local := filepath.Join(dir, "scripts", "local-top")
+	if err := os.MkdirAll(local, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	close, err := os.ReadFile("initramfs/initramfs-tools/scripts/local-top/tpm2-kira-close")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string][]byte{"tpm2-kira-close": close, "cryptroot": []byte(cryptroot)} {
+		if err := os.WriteFile(filepath.Join(local, name), body, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pairs := `cd "$DESTDIR/scripts/local-top"
+for s in *; do
+    echo "$s $s"
+    for p in $(./"$s" prereqs); do echo "$p $s"; done
+done | tsort`
+	cmd := exec.Command("sh", "-c", pairs)
+	cmd.Env = append(os.Environ(), "DESTDIR="+dir)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%v: %s", err, stderr.String())
+	}
+	if stderr.Len() > 0 {
+		t.Errorf("tsort says: %s", stderr.String())
+	}
+	got := strings.Fields(stdout.String())
+	c, k := slices.Index(got, "tpm2-kira-close"), slices.Index(got, "cryptroot")
+	if c < 0 || k < 0 || c > k {
+		t.Errorf("the order: %v", got)
 	}
 }

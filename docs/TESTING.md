@@ -98,10 +98,10 @@ is this, from `fresh`, without `--fast-kdf`: there is no flag for that.
 | Scenario (`vmtest.py --only NAME`) | What it shows | Budget Arch / Debian, s, for information |
 |---|---|---|
 | `setup` | install, setup, enrolment, `control`, the memory lock of a command, a hook under a refused lock, the note on a vault's keyslot | 175 / 202 |
-| `typed-boot` | the typed boot over SSH, every running-system check in one go: certified key, TOTP, PCR 15 closed, slots refuse, PCR 4, Secure Boot's warning, memory locked, signed slots on Arch, 8 and 9 on Debian, the close before a volume's unit on Arch | 49 / 67 |
+| `typed-boot` | the typed boot over SSH, every running-system check in one go: certified key, TOTP, PCR 15 closed, slots refuse, PCR 4, Secure Boot's warning, memory locked, signed slots on Arch, 8 and 9 on Debian, the close before a volume (Arch a volume's unit in the journal, Debian the first key request in the boot's log) | 49 / 67 |
 | `hibernate` | Arch: hibernate and resume; both: the image's close before a resume, suspend; a kernel that refuses the image is "not tested", at once | 68 / 7 |
 | `unapproved` | an image not approved, signed by the PCR key (Arch) | 75 / - |
-| `silent-tpm` | the failure path: a silent TPM, one hard reboot, then the passphrase; one wait per boot (Arch reads the console's stamps); the close before a volume's unit | 124 / 124 |
+| `silent-tpm` | the failure path: a silent TPM, one hard reboot with no prompt before it, then the passphrase; one wait per boot (Arch reads the console's stamps); the close before a volume | 124 / 124 |
 | `secure-boot` | back to `fresh`, real keys in the firmware (`tools/secureboot-vm.py`'s steps, its snapshot `secureboot`), a setup of its own and its typed boot with Secure Boot really on: nothing said of it anywhere, the slots' PCR 7 as approved | 218 / 258 |
 | `tpm-salt` | the salt in this TPM: its enrolment; its image is `vault-pepper`'s, its boot `revoked`'s | 32 / 30 |
 | `vault-pepper` | the vault, `on`: a wrong, then the right pepper; one image with the salt in this TPM; what the vault shows of a real `on` | 133 / 158 |

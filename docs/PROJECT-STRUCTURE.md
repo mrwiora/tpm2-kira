@@ -84,8 +84,8 @@ Where things are in the repository, and how the tests are run.
 │   └── initramfs-tools/            # Debian
 │       ├── hooks/tpm2-kira         # Build hook: copies the static binary
 │       ├── scripts/init-premount/tpm2-kira  # Shows the code before unlock
-│       ├── scripts/local-top/tpm2-kira-close  # Closes the boot (PCR 15) before a resume from hibernation
-│       ├── scripts/init-bottom/tpm2-kira    # Stops it and closes the boot before switching root
+│       ├── scripts/local-top/tpm2-kira-close  # Closes the boot (PCR 15) before cryptroot and before a resume from hibernation
+│       ├── scripts/init-bottom/tpm2-kira    # Stops it and closes the boot once more before switching root
 │       └── post-update.d/tpm2-kira          # slot approve for the new image
 ├── debian/                  # Debian package definition (must sit at the root)
 ├── packaging/

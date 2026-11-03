@@ -130,7 +130,7 @@ flowchart LR
     CHILD["tpm2-kira-boot ssh-child<br/>nobody; net, IPC, PID, mount, UTS ns;<br/>sandbox: no file, seccomp"]
     GATE["tpm2-kira-boot gate-child<br/>the radio worker: nobody + NET_ADMIN, NET_RAW;<br/>IPC, PID, mount, UTS ns;<br/>sandbox: reads /sys, seccomp; no TPM"]
     CRYPT["systemd-cryptsetup<br/>(Debian: the keyscript, unlock-key)"]
-    CLOSE["tpm2-kira-boot close (PCR 15)<br/>run at the code screen's end; again:<br/>tpm2-kira-close.service / init-bottom;<br/>before a resume from hibernation"]
+    CLOSE["tpm2-kira-boot close (PCR 15)<br/>run at the code screen's end; again:<br/>tpm2-kira-close.service / local-top before cryptroot;<br/>before a resume from hibernation"]
   end
   TPM[("TPM")]
   RUN <-->|socket pair: signatures, sessions| CHILD

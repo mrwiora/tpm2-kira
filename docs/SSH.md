@@ -325,7 +325,10 @@ and no secret either: the keys are in the TPM.
      the image, `run` failed or timed out): Arch,
      `tpm2-kira-close.service` (after `tpm2-kira.service`, before
      `cryptsetup-pre.target`, required by `initrd.target`); Debian,
-     `scripts/init-bottom/tpm2-kira`. Both with the TPM in the plan. A
+     `scripts/local-top/tpm2-kira-close`, before cryptroot, once `run` has made
+     its READY file or is gone, and `scripts/init-bottom/tpm2-kira` once more (a
+     root that is not local has no `local-top`; a TPM may have come by then). All with
+     the TPM in the plan. Before any volume is opened, on both. A
      close tries a refused extend once more; what follows from each outcome is below ("The
      close: what it can come to");
   3. right before a resume from hibernation (below).
@@ -346,8 +349,8 @@ and no secret either: the keys are in the TPM.
   whatever `run` did: Arch, a drop-in on
   `systemd-hibernate-resume.service` (`ExecStartPre=/usr/bin/tpm2-kira-boot
   close --resume`; `tpm2-kira-close.service` has run before already); Debian, the
-  `local-top` script `tpm2-kira-close` (`close --resume` too), after `cryptroot`, before
-  `local-premount`'s resume. Where it is closed already, an extend more
+  `local-top` script `tpm2-kira-close` (`close --resume` too, after its own close),
+  before `cryptroot` and `local-premount`'s resume. Where it is closed already, an extend more
   changes nothing. Anything but PCR 15 itself (no TPM at all aside) and the machine
   does not resume: the hibernated session is lost, never the close. Hibernation to unencrypted
   swap is not covered - the kernel may resume it before the image runs -
@@ -444,9 +447,12 @@ init-premount/tpm2-kira
       name, or the first wired one), then udhcpc with the client identifier
       or ipconfig without one (DHCP), or ip (static);
       log /run/initramfs/tpm2-kira.log, device in /run/tpm2-kira/net-device
-local-top/cryptroot
-  └── keyscript=/lib/cryptsetup/scripts/tpm2-kira: 'tpm2-kira-boot unlock-key' waits on
-      run's socket - the hold is there, until the code is confirmed
+local-top/tpm2-kira-close
+  └── 'tpm2-kira-boot close' waits for the code screen's end (run's file, or run gone)
+      - the hold is there, until the code is confirmed - and closes; a failure reboots
+local-top/cryptroot (last: its prerequisites name the others)
+  └── keyscript=/lib/cryptsetup/scripts/tpm2-kira: 'tpm2-kira-boot unlock-key' asks
+      run's socket
 init-bottom/tpm2-kira
   └── SIGTERM to run (sessions told, 'ssh-child' ends; KILL after 5 s),
       'killall ipconfig', the interface's addresses and routes flushed, the link
@@ -619,9 +625,9 @@ the resume's close leaves it alone.
     does not do: `initrd.target` requires it, and systemd freezes. Secure Boot on
     again afterwards.
   - **Debian (GRUB):** at GRUB's menu `e` (the superuser password `control`
-    advises), `break=bottom` on the `linux` line, which moves PCR 8. The disk's
-    prompts come, then a shell before init-bottom; there
-    `rm -r /etc/tpm2-kira/plan/tpm` and `exit`.
+    advises), `break=premount` on the `linux` line, which moves PCR 8. A shell comes
+    before anything of tpm2-kira's runs; there `rm -r /etc/tpm2-kira/plan/tpm` and
+    `exit`, and the disk's prompts follow.
   - **Either:** rescue media with the LUKS passphrase.
 
   In both boots no slot answers, the command line being outside every approval. On

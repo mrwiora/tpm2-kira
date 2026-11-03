@@ -52,13 +52,15 @@ whatever the signing key approves.
 - `run` closes at the end of the code screen, after the parts have opened
   what they hold (the vault's part, the phone's salt, the TPM salt).
 - The image closes again, whatever `run` did, before any volume is opened:
-  on Arch `tpm2-kira-close.service`, on Debian the init-bottom script. A close
-  tries a refused extend once more; a failure powers the machine off: no
-  shell with PCR 15 at zero, no reboot loop.
+  on Arch `tpm2-kira-close.service`, on Debian local-top's script before
+  cryptroot, and its init-bottom once more. A close tries a refused extend
+  once more; a TPM that answers and refuses every way of it, or does not
+  answer for the first time, is a hard reboot: no shell with PCR 15 at zero
+  ([SSH.md](SSH.md), "The close: what it can come to").
 - Right before a resume from hibernation, which starts the TPM afresh and
   runs no code screen: on Arch a drop-in on
   `systemd-hibernate-resume.service`, on Debian
-  `scripts/local-top/tpm2-kira-close` (a failure there clears `resume=`).
+  `scripts/local-top/tpm2-kira-close` (`--resume`: a failure clears `resume=`).
 
 `tpm2-kira reveal` in the running system reports "Closed until the next
 boot". `slot approve` still works; the next boot opens the slots again.

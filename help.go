@@ -573,7 +573,8 @@ release key) and the SSH CA require PCR 15 at zero in their own policies,
 so from then on none can be used until the next boot - not by root, not
 by anything the signing key approves. run closes when the code screen is
 over; the image closes once more whatever run did (Arch:
-tpm2-kira-close.service, required by initrd.target; Debian: init-bottom),
+tpm2-kira-close.service, required by initrd.target; Debian: local-top, before
+cryptroot, with --ready-file and --run-pid to wait for the code screen's end),
 and right before a resume from hibernation. Waits for the TPM (30 s at
 most) and goes down aSSH's ladder: PCR 15, the kill switch, PCR 7. A degraded
 close, or no TPM at all, goes on. A TPM the firmware has and that does not answer

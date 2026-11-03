@@ -13,7 +13,7 @@ package admin
 // boot - PCR 15 extended, which the CA's own policy reads, and every slot
 // object's, until the next boot - so nothing later in this boot gets a
 // certificate. The image closes it again (tpm2-kira-close.service,
-// initramfs-tools' init-bottom), and before a resume from hibernation,
+// initramfs-tools' local-top and init-bottom), and before a resume from hibernation,
 // which starts the TPM afresh (tpm2-kira-boot close --resume). What a close
 // that fails means is internal/bootclose's. The clients trust the CA (a known_hosts line
 // '@cert-authority'), not a key, so a new key at every boot asks them

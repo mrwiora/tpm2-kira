@@ -80,7 +80,7 @@ type BootPlan struct {
 // needsTPM: a part uses the TPM at boot, a slot is sealed, or an SSH CA
 // exists (kept while SSH is off) - whose objects PCR 15 must close when
 // the code screen is over, whatever the slot's methods: the hooks add the
-// close (tpm2-kira-close.service, Debian's init-bottom and local-top) with
+// close (tpm2-kira-close.service, Debian's local-top and init-bottom) with
 // the TPM part.
 func (p *BootPlan) needsTPM() bool {
 	return p.Has(imageplan.PartCodes) || p.Has(imageplan.PartPhone) || p.Has(imageplan.PartVault) || p.Has(imageplan.PartTPMSalt) ||

@@ -1631,7 +1631,10 @@ tpm2-kira's are open at zero and closed in the boot that makes them.
 2. The image, whatever `run` did, with the TPM in the plan (a sealed slot, or an SSH
    CA, also one kept while SSH is off): Arch `tpm2-kira-close.service` (after
    `tpm2-kira.service`, before `cryptsetup-pre.target`, required by `initrd.target`),
-   Debian `scripts/init-bottom/tpm2-kira`.
+   Debian `scripts/local-top/tpm2-kira-close`, before cryptroot, once `run` has made its
+   READY file or is gone. Both before any volume is opened. Debian's
+   `scripts/init-bottom/tpm2-kira` closes once more: a root that is not local has no
+   `local-top`, and a TPM may have come by then.
 3. Right before a resume from hibernation, which starts the TPM afresh (PCR 15 back
    to zero) and runs no code screen: Arch a drop-in on
    `systemd-hibernate-resume.service`, Debian `scripts/local-top/tpm2-kira-close`, both
@@ -1691,7 +1694,8 @@ root from then setting `shEnable` back with an empty one.
 system expects its own state, also after a degraded close. Anything else is no resume
 (Arch: the drop-in's `ExecStartPre` fails; Debian: an empty `resume=` in
 `/conf/param.conf`), so the hibernated session is lost, never the close. The boot's own
-close then decides what follows; the resume's close leaves the count alone.
+close decides what follows (on Arch after it, on Debian it came first, in the same
+script); the resume's close leaves the count alone.
 Hibernation to unencrypted swap is not covered, since the kernel may resume it before
 the image runs: `control` shows it red.
 
@@ -1706,8 +1710,9 @@ A TPM in that state keeps the machine rebooting until the person takes one of th
   not do, because `initrd.target` requires it and systemd freezes. Secure Boot on again
   afterwards.
 - **Debian (GRUB):** at GRUB's menu `e` (the superuser password `control` advises),
-  `break=bottom` on the `linux` line, which moves PCR 8. The disk's prompts come, then a
-  shell before init-bottom; there `rm -r /etc/tpm2-kira/plan/tpm` and `exit`.
+  `break=premount` on the `linux` line, which moves PCR 8. A shell comes before anything
+  of tpm2-kira's runs; there `rm -r /etc/tpm2-kira/plan/tpm` and `exit`, and the disk's
+  prompts follow.
 - **Either:** rescue media with the LUKS passphrase.
 
 In both boots no slot answers, the command line being outside every approval. Should
@@ -1788,7 +1793,7 @@ arguments (docs/BOOT-INTEGRATION.md, "Arch and Debian"). What differs:
 | Boot chain | systemd-boot, a UKI, mkinitcpio's systemd initrd | shim, GRUB, a separate initrd of initramfs-tools; a UKI waits for systemd 258 (HISTORY.md) |
 | Secure Boot on (VM) | the owner's keys, by sbctl: loader and UKI signed; its post hook signs a rebuild. The kernel does not lock itself down | Microsoft's certificates in db: shim, then Debian's GRUB and kernel. The kernel locks itself down (`integrity`) and refuses hibernation |
 | The initrd on the phone (§13.5a) | PCR 11: the hash of `.initrd\0` among its events | PCR 8: the hash of GRUB's `initrd` command, with 9 quoted |
-| A volume's unit | after the close: `cryptsetup-pre.target` is in the image, which the hook adds | init-bottom closes after cryptroot: the volume is open before that close; `run`'s came before READY |
+| A volume | after the close: `cryptsetup-pre.target` is in the image, which the hook adds | after the close: cryptroot runs last in `local-top` (its prerequisites name the others), the close before it waits for `run`'s READY file or `run` gone |
 | Secure Boot checks | loader and the UKI: kernel, initrd, command line. The UKI's db signature comes from outside tpm2-kira (§18). systemd-boot refuses its editor and the stub a passed command line with Secure Boot on | GRUB and the kernel; not GRUB's command line, not the initrd |
 | The image in a slot | PCR 11, signed (`11s`) | PCR 8, 9, approved (`8e,9e`), and no slot without them |
 | A kernel update | the hook approves PCR 4 and the plain PCRs; 11 needs no approval; skipped, slot 1 still holds | the hook approves 8 and 9 in both slots, 4 in slot 0; skipped, the next boot has no slot and a temporary host key |
@@ -1797,10 +1802,10 @@ arguments (docs/BOOT-INTEGRATION.md, "Arch and Debian"). What differs:
 | Measure point | after `enter-initrd`, before `systemd-pcrosseparator` | before cryptroot; no systemd in the image, so no separator and no phase word |
 | Who starts `run` | `tpm2-kira.service` | `scripts/init-premount/tpm2-kira` |
 | The disk's key | `systemd-cryptsetup` reads the socket (`rd.luks.key=`) | cryptroot's keyscript `unlock-key` asks the socket |
-| The image's close | `tpm2-kira-close.service`, a failure `FailureAction=reboot-force` | `scripts/init-bottom/tpm2-kira`, a failure `reboot -f`, SysRq `b`, a loop |
+| The image's close | `tpm2-kira-close.service`, a failure `FailureAction=reboot-force` | `scripts/local-top/tpm2-kira-close`, then `scripts/init-bottom/tpm2-kira`; a failure `reboot -f`, SysRq `b`, a loop |
 | The late closer | in the image and the root | in the root; the image has no systemd to start it |
 | Before a resume | drop-in on `systemd-hibernate-resume.service` | `scripts/local-top/tpm2-kira-close` |
-| The way out of step 7 | `tpm2-kira.noclose`, Secure Boot off | `break=bottom`, the plan's TPM part removed |
+| The way out of step 7 | `tpm2-kira.noclose`, Secure Boot off | `break=premount`, the plan's TPM part removed |
 | A console edit | refused with Secure Boot on | possible without a GRUB password, red in `control`; moves PCR 8 |
 | The log | `journalctl -b -u tpm2-kira.service` | `/run/initramfs/tpm2-kira.log` |
 
@@ -1879,11 +1884,11 @@ Both machines unless it says otherwise; step names (V2, V4, ...) are hibernatete
 | Secure Boot really on | Arch by sbctl with Microsoft's certificates, the loader and the UKI signed; Debian by go-uefi-slim's `vmcheck`, shim from Microsoft's db, nothing signed by us. The typed boot: codes right, certified host key, the slots' PCR 7 as approved from the log, nothing said of Secure Boot anywhere | Arch, Debian |
 | The vault with Secure Boot on | the machine's real PCR 7 quoted, the real event log's digests: `on` in the devices table, the device's view and the audit; established in Debian's initrd; releases with a pepper, a revoked device's refusal and the fallback | Arch, Debian |
 | The firmware refuses a changed image | one byte changed. Arch's UKI: `Error loading EFI binary \EFI\Linux\arch-linux.efi: Access denied`; Debian's shim: `failed to load Boot0008 ... Access Denied -- rejected probably by Secure Boot` | Arch, Debian |
-| A volume's unit after the close | the journal of each typed boot and of the silent TPM's second boot: the close finished before `Cryptography Setup` starts, no ordering cycle in PID 1's lines; `systemd-analyze verify` on the image's units; the silent TPM's first boot shows no volume's unit and no prompt before its reboot | Arch |
+| A volume after the close | Arch: the journal of each typed boot and of the silent TPM's second boot: the close finished before `Cryptography Setup` starts, no ordering cycle in PID 1's lines; `systemd-analyze verify` on the image's units; the silent TPM's first boot shows no volume's unit and no prompt before its reboot. Debian: the image's `ORDER` has `tpm2-kira-close` before `cryptroot`, cryptroot last, no `tsort` loop in the build; the boot's log of each typed boot has `run`'s close, then the image's, then the first key request; the silent TPM's first boot has no prompt before its reboot, the second says it before the prompt | Arch, Debian |
 | A refused lock | `setup`, `slot add`, `slot approve --unattended` and the image's post hook as root without `CAP_IPC_LOCK` under a limit: stopped before a key is read, the hook says the approval did not succeed and ends 0 | Arch, Debian |
 | Hibernation risk (V6) | no risk with encrypted swap; red with a swap file on Debian's unencrypted /boot | both; the swap file Debian |
 | Suspend (V5) | after S3 the CA is still closed (restartCount 0 → 1) | Arch, Debian |
-| The close before a resume | in the image (`image-close.log`). After the boot PCR 15 holds exactly three `assh-close` extends (`312573a5…`, by hash chain): `run`, the unit, the drop-in on Arch's resume; `run`, local-top, init-bottom on Debian's boot | Arch, Debian |
+| The close before a resume | in the image (`image-close.log`). After the boot PCR 15 holds exactly three `assh-close` extends (`312573a5…`, by hash chain): `run`, the unit, the drop-in on Arch's resume. Debian's boot runs the close four times: `run`, local-top's close and its `--resume`, init-bottom (read from the scripts, not counted by a hash chain) | Arch, Debian |
 | A resume (V2, V4-reverted) | hibernated, resumed through the code screen over SSH with the certified host key: boot_id kept, CA closed, aSSH says it signs nothing, a certificate asked of it refused, slot 0's TOTP key refuses (restartCount 0 → 1, 1 → 2, resetCount kept) | Arch |
 | Step 5 (V4) | no device, no TPM2 table, nothing measured: no reboot, no failed close, the machine up from the passphrase's recipe | Arch, Debian |
 | Step 6 (V4 on Arch, from the hibernated state; V9 on Debian, a boot of its own) | `initcall_blacklist=crb_acpi_driver_init`: one hard reboot, no shell on the way, the passphrase, a fresh boot with no resume, no TPM device, state `pending`, the late closer active, the reboot counted, `status` red | Arch, Debian |

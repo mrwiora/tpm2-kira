@@ -1046,6 +1046,8 @@ class Machine:
             s.expect(r"Run (mkinitcpio -P|update-initramfs -u) now\? \[Y/n\] ?$", 120); s.send("y\n")
             out = s.wait_end(900)
             self.log.save("control-rebuild.log", out)
+            if self.distro == "debian":
+                self.check("the image's scripts have no ordering loop (tsort, in the image's build)", "input contains a loop" not in out, out[-800:])
             self.check("control rebuilds the image, and the hook approves the new boot state",
                        "approved the boot state" in out or "approval completed successfully" in out, out[-800:])
         except Fail as e:
@@ -1061,7 +1063,7 @@ class Machine:
         else:
             listing = ("uki=$(sed -n 's/^default_uki=\"\\(.*\\)\"/\\1/p' /etc/mkinitcpio.d/*.preset | head -1); "
                        "objcopy -O binary --only-section=.initrd \"$uki\" initrd && lsinitcpio -x initrd >/dev/null")
-        order = "" if self.distro == "debian" else (
+        order = "sed -n 's#^/scripts/local-top/\\([^ ]*\\) .*#ORDER \\1#p' scripts/local-top/ORDER; " if self.distro == "debian" else (
             "ls usr/lib/systemd/system/cryptsetup-pre.target; "
             "systemd-analyze verify --root=$PWD initrd.target tpm2-kira-close.service tpm2-kira.service tpm2-kira-unlock.socket 2>&1 | grep -i 'cycle' | sed 's/^/CYCLE /' || true; ")
         rc, out = self.run(f"set -e; d=$(mktemp -d); cd $d; {listing}; ls usr/bin | grep kira; "
@@ -1075,7 +1077,11 @@ class Machine:
         self.check("no unit or script of the image starts a gate: run starts its children itself", "STARTS-GATE" not in out, out[-300:])
         for part in ("unlock", "codes", "net", "ssh", "tpm"):
             self.check(f"the image's plan names '{part}'", f"etc/tpm2-kira/plan/{part}" in out, out[-500:])
-        if self.distro != "debian":
+        if self.distro == "debian":
+            scripts = re.findall(r"^ORDER (\S+)$", out, re.M)
+            self.check("the image's local-top closes before cryptroot, and cryptroot is last",
+                       "tpm2-kira-close" in scripts and scripts[-1:] == ["cryptroot"], str(scripts))
+        else:
             self.check("the image carries cryptsetup-pre.target", "usr/lib/systemd/system/cryptsetup-pre.target" in out, out[-500:])
             self.check("systemd-analyze verify of the image's units finds no ordering cycle", "CYCLE" not in out, out[-500:])
 
@@ -1155,6 +1161,17 @@ class Machine:
         self.check(f"{where}: the close is done before a volume's unit starts", done is not None and volume is not None and done < volume, out[-600:])
         self.check(f"{where}: no ordering cycle in this boot's journal", "CYCLE " not in out, out[-300:])
 
+    def check_debian_order(self, where, log, run_closed=True):
+        """Debian: in the boot's log, run's close, the image's in local-top, the first key
+        request: nothing asks before the close, and the close does not come before the code
+        screen is over. run_closed: run's close held (a TPM that answers)."""
+        close = log.find("the image's close: before any volume")
+        key = log.find("keyscript for")
+        self.check(f"{where}: the image's close comes before the first key request", 0 <= close < key, log[-600:])
+        if run_closed:
+            self.check(f"{where}: the image's close comes when the code screen is over, after run's",
+                       0 <= log.find("the boot is closed (PCR 15)") < close, log[-600:])
+
     def boot_log_command(self):
         return ("cat /run/initramfs/tpm2-kira.log" if self.distro == "debian" else
                 "journalctl -b -o cat --no-pager -t tpm2-kira -u tpm2-kira.service -u tpm2-kira-machine-id.service")
@@ -1217,6 +1234,8 @@ class Machine:
         self.check(f"boot {n}: run closed the boot when the code screen was over", "the boot is closed (PCR 15)" in out, out[-500:])
         self.check_secure_boot(f"boot {n}: the boot's log", out)
         self.check(f"boot {n}: the key was answered", re.search(r"unlock: answered for", out) is not None, out[-500:])
+        if self.distro == "debian":
+            self.check_debian_order(f"boot {n}", out)
         self.check_memory(f"boot {n}", out)
         self.check(f"boot {n}: the machine-id was released before the network (slot 0's policy held)",
                    "the machine-id is released" in out, out[-500:])
