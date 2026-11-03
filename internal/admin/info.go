@@ -62,9 +62,9 @@ type slotInfo struct {
 // local signing key. Until it succeeds, every blob field is untrusted.
 type blobVerification struct {
 	Verified bool
-	Key      crypto.Signer // the key that verified the blob, if Verified
-	KeyPath  string        // where that key was loaded from, or tried
-	Reason   string        // why the blob is not verified
+	Key      crypto.PublicKey // the key that verified the blob, if Verified
+	KeyPath  string           // where that key was loaded from, or tried
+	Reason   string           // why the blob is not verified
 }
 
 // SlotInfoJSON is used for JSON multi-slot output.
@@ -82,10 +82,10 @@ type SlotInfoJSON struct {
 // When nvramIndex is 0 it scans every default slot; otherwise it shows
 // only the requested index.
 //
-// Each blob's signature is checked with privKeyPath, or the default key when
+// Each blob's signature is checked with pubKeyPath, or the default key when
 // it is empty. A blob that cannot be verified is still shown, marked as
 // untrusted, and no file it names is opened.
-func InfoCommand(tpmPath string, nvramIndex uint32, privKeyPath string, debug bool, jsonOutput bool) error {
+func InfoCommand(tpmPath string, nvramIndex uint32, pubKeyPath string, debug bool, jsonOutput bool) error {
 	tpmDev, err := tpmdev.Open(tpmPath)
 	if err != nil {
 		return fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err)
@@ -121,7 +121,7 @@ func InfoCommand(tpmPath string, nvramIndex uint32, privKeyPath string, debug bo
 		}
 	}
 
-	verifier := newBlobVerifier(privKeyPath)
+	verifier := newBlobVerifier(pubKeyPath)
 	for i := range slots {
 		slots[i].Verify = verifier.verify(slots[i].raw, slots[i].Blob)
 	}
@@ -188,19 +188,20 @@ func generationState(tpmDev transport.TPM, nvramIndex uint32, sb *nvslot.SealedB
 	return fmt.Sprintf("%d (matches)", gen)
 }
 
-// blobVerifier loads the local signing key once and checks blobs with it.
+// blobVerifier loads the signing key's public half once and checks blobs with it. What
+// only reads holds no secret, so it needs no memory lock and no refused lock stops it.
 type blobVerifier struct {
 	keyPath string
-	key     crypto.Signer
+	key     crypto.PublicKey
 	loadErr error
 }
 
-func newBlobVerifier(privKeyPath string) *blobVerifier {
-	v := &blobVerifier{keyPath: privKeyPath}
+func newBlobVerifier(pubKeyPath string) *blobVerifier {
+	v := &blobVerifier{keyPath: pubKeyPath}
 	if v.keyPath == "" {
-		v.keyPath = signing.DefaultPrivateKeyPath
+		v.keyPath = signing.DefaultPublicKeyPath
 	}
-	v.key, v.loadErr = signing.LoadCheckedSigningPrivateKey(v.keyPath)
+	v.key, v.loadErr = signing.LoadCheckedSigningPublicKey(v.keyPath)
 	return v
 }
 
@@ -208,7 +209,7 @@ func (v *blobVerifier) verify(raw []byte, blob *nvslot.SealedBlob) blobVerificat
 	if v.loadErr != nil {
 		return blobVerification{KeyPath: v.keyPath, Reason: fmt.Sprintf("no signing key to check it with (%v)", v.loadErr)}
 	}
-	if err := nvslot.VerifyBlobSignature(raw, blob, v.key.Public()); err != nil {
+	if err := nvslot.VerifyBlobSignature(raw, blob, v.key); err != nil {
 		return blobVerification{KeyPath: v.keyPath, Reason: fmt.Sprintf("signature does not verify with %s (%v)", v.keyPath, err)}
 	}
 	return blobVerification{Verified: true, Key: v.key, KeyPath: v.keyPath}
@@ -357,9 +358,8 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 // Closes the branch.
 func printSigningKeyInfo(sub string, blob *nvslot.SealedBlob, v blobVerification) {
 	if v.Verified {
-		pubKey := v.Key.Public()
-		fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), signing.PublicKeyDescription(pubKey), signing.PublicKeyFingerprint(pubKey))
-		if desc, ok := signing.YubiKeyDescription(v.Key); ok {
+		fmt.Printf("%s%sSigning Key: %s (fingerprint: %s)\n", sub, branch(false), signing.PublicKeyDescription(v.Key), signing.PublicKeyFingerprint(v.Key))
+		if desc, ok := signing.TokenFileDescription(signing.DefaultPrivateKeyPath); ok && v.KeyPath == signing.DefaultPublicKeyPath {
 			fmt.Printf("%s%sSigning Key Location: %s\n", sub, branch(false), desc)
 		}
 	} else {

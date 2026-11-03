@@ -36,7 +36,7 @@ func TestQuoteUntrusted(t *testing.T) {
 }
 
 func TestInfoDoesNotTrustPlantedBlob(t *testing.T) {
-	_, ownPriv, _ := writeTestKeyPairIn(t, newTestKeyDir(t, "owner"))
+	_, _, ownPub := writeTestKeyPairIn(t, newTestKeyDir(t, "owner"))
 
 	// A planted blob, signed by its author, with escape sequences in its
 	// one string, the image path.
@@ -65,7 +65,7 @@ func TestInfoDoesNotTrustPlantedBlob(t *testing.T) {
 	}
 
 	si := slotInfo{Index: nvslot.NVRAMSlotStart, Blob: blob, raw: data}
-	si.Verify = newBlobVerifier(ownPriv).verify(si.raw, si.Blob)
+	si.Verify = newBlobVerifier(ownPub).verify(si.raw, si.Blob)
 	if si.Verify.Verified {
 		t.Fatal("a blob signed by another key was reported as verified")
 	}
@@ -97,15 +97,15 @@ func TestInfoDoesNotTrustPlantedBlob(t *testing.T) {
 }
 
 func TestInfoVerifiedBlob(t *testing.T) {
-	key, priv, _ := writeTestKeyPairIn(t, newTestKeyDir(t, "owner"))
+	key, _, pub := writeTestKeyPairIn(t, newTestKeyDir(t, "owner"))
 	data, blob := signedTestBlob(t, key)
 	si := slotInfo{Index: nvslot.NVRAMSlotStart, Blob: blob, raw: data}
-	si.Verify = newBlobVerifier(priv).verify(si.raw, si.Blob)
+	si.Verify = newBlobVerifier(pub).verify(si.raw, si.Blob)
 	if !si.Verify.Verified {
 		t.Fatalf("own blob not verified: %s", si.Verify.Reason)
 	}
 	out := captureStdout(t, func() { printSlotTree("", &si, false) })
-	for _, want := range []string{"Signature: valid", "Signing Key: ECDSA-P-256", "Key File Check: " + priv + ": ok"} {
+	for _, want := range []string{"Signature: valid", "Signing Key: ECDSA-P-256", "Key File Check: " + pub + ": ok"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}

@@ -766,9 +766,12 @@ class Machine:
         self.check("a limit on locked memory without CAP_IPC_LOCK stops the command before it asks",
                    "FAILED: nothing was asked" in out and "RLIMIT_MEMLOCK" in out and "Password" not in out, out[-400:])
         refuse = "prlimit --memlock=65536:65536 setpriv --bounding-set=-ipc_lock --inh-caps=-ipc_lock "
-        for command in ("setup --local", "slot add --totp", "slot approve --unattended", "slot info", "status"):
+        for command in ("setup --local", "slot add --totp", "slot approve --unattended"):
             rc, out = self.run(f"{refuse}tpm2-kira {command} </dev/null 2>&1", save="lock-refused-" + command.split(" -")[0].replace(" ", "-") + ".log")
             self.check(f"{command}: a refused lock stops it before it reads a key", "FAILED: nothing was asked or read" in out and "RLIMIT_MEMLOCK" in out, out[-400:])
+        for command in ("slot info", "status"):
+            rc, out = self.run(f"{refuse}tpm2-kira {command} </dev/null 2>&1", save="lock-readers-" + command.replace(" ", "-") + ".log")
+            self.check(f"{command} holds no secret: under such a limit it goes on", "nothing was asked" not in out and "RLIMIT_MEMLOCK" not in out, out[-400:])
         hook = "/etc/initramfs/post-update.d/tpm2-kira" if self.distro == "debian" else "/usr/lib/initcpio/post/sd-tpm2-kira"
         rc, out = self.run(f"{refuse}{hook} x x </dev/null 2>&1", save="lock-refused-hook.log")
         self.check("the image's hook under such a limit says the approval did not succeed, and the build would go on", rc == 0 and "RLIMIT_MEMLOCK" in out and "approval did not succeed" in out.lower(), out[-500:])

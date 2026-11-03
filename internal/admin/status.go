@@ -27,7 +27,7 @@ import (
 // StatusOptions is what status takes.
 type StatusOptions struct {
 	TPMPath     string
-	PrivKeyPath string // the signing key the blobs are checked with
+	PubKeyPath string // the signing key's public half, which the blobs are checked with
 	ConfigPath  string
 	JSON        bool
 	Debug       bool
@@ -119,7 +119,7 @@ func collectStatus(o StatusOptions) StatusReport {
 	if err != nil {
 		r.TPMError = fmt.Sprintf("the TPM at %s cannot be opened: %v", o.TPMPath, err)
 	} else {
-		verifier := newBlobVerifier(o.PrivKeyPath)
+		verifier := newBlobVerifier(o.PubKeyPath)
 		for _, idx := range nvslot.FindPopulatedSlots(tpmDev, o.Debug) {
 			raw, sb, err := phonegate.ReadSlot(tpmDev, idx)
 			if errors.Is(err, nvslot.ErrNoRecord) {

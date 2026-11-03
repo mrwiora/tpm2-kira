@@ -258,7 +258,7 @@ exec %q "$@"
 		t.Errorf("the channel followed: %v %v", m, err)
 	}
 	// The status of the binary: the warning and the command.
-	cmd := exec.Command(bin, "status", "--tpm", s.sock, "--privkey", privPath)
+	cmd := exec.Command(bin, "status", "--tpm", s.sock, "--pubkey", pubPath)
 	cmd.Env = append(os.Environ(), "TPM2_KIRA_UNPRIVILEGED=1", "TPM2_KIRA_TEST_DIR="+testDir)
 	out, _ := cmd.CombinedOutput()
 	if !strings.Contains(string(out), "WARNING: slot 4's phone channel is sealed to another PCR 7") || !strings.Contains(string(out), "WARNING: Secure Boot") {

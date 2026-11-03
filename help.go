@@ -244,7 +244,7 @@ with the key that signs the boot components.
 tpm2-kira slot approve [--nvram N] [--pcrs LIST] [--measure-point M]
                        [--privkey PATH] [--pubkey PATH] [--require-key] [--if-moved]
                        [--unattended] [--seal-channel]
-tpm2-kira slot info    [--nvram N] [--json] [--privkey PATH]
+tpm2-kira slot info    [--nvram N] [--json] [--pubkey PATH]
 tpm2-kira slot list | status | delete [--yes]   [--nvram N]
 
 A slot is a boot state your signing key approved: PCR values and a
@@ -359,7 +359,7 @@ attestation set up for it - the phone at the machine, the vault over TLS
 signed by this machine's key.
 
   --json          Machine-readable
-  --privkey PATH  The signing key the blobs are verified with (default: the
+  --pubkey PATH   The signing public key the blobs are verified with (default: the
                   key from setup). A blob that does not verify is shown as
                   untrusted, and no file it names is opened
 
@@ -391,7 +391,7 @@ index and record counter (0x01803010-0x0180301F are the slots' numbers).
   tpm2-kira slot delete --nvram 0
 `,
 
-	"status": `tpm2-kira status [--json] [--privkey PATH] [--conf PATH]
+	"status": `tpm2-kira status [--json] [--pubkey PATH] [--conf PATH]
 
 The overview, read-only: every slot with what it is sealed to, its
 generation (does the TPM's index match, or is an approval due), whether this

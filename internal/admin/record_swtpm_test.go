@@ -77,14 +77,14 @@ func TestStatusNamesIncompleteSlots(t *testing.T) {
 	if err := nvslot.WriteRecord(foreign, []byte("a record of a TPM cleared since")); err != nil {
 		t.Fatal(err)
 	}
-	r := collectStatus(StatusOptions{TPMPath: sock, PrivKeyPath: privPath, ConfigPath: filepath.Join(t.TempDir(), "control.conf")})
+	r := collectStatus(StatusOptions{TPMPath: sock, PubKeyPath: pubPath, ConfigPath: filepath.Join(t.TempDir(), "control.conf")})
 	if len(r.Dirt) != 1 || r.Dirt[0].Slot != 5 || !strings.Contains(r.Dirt[0].Cause, "TPM was cleared") || len(r.Slots) != 1 {
 		t.Fatalf("a record without its slot: slots %+v, dirt %+v", r.Slots, r.Dirt)
 	}
 	if _, err := nvslot.RemoveRecord(sealed); err != nil {
 		t.Fatal(err)
 	}
-	r = collectStatus(StatusOptions{TPMPath: sock, PrivKeyPath: privPath, ConfigPath: filepath.Join(t.TempDir(), "control.conf")})
+	r = collectStatus(StatusOptions{TPMPath: sock, PubKeyPath: pubPath, ConfigPath: filepath.Join(t.TempDir(), "control.conf")})
 	notes := strings.Join(r.Notes, "\n")
 	if len(r.Dirt) != 2 || len(r.Slots) != 0 || !strings.Contains(notes, "slot 0 is incomplete") || !strings.Contains(notes, "KIRAslot0) is gone") ||
 		strings.Contains(notes, "does not read") {

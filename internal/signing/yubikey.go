@@ -434,6 +434,34 @@ func YubiKeyDescription(key crypto.Signer) (string, bool) {
 	return "", false
 }
 
+// TokenFileDescription says which token a key file refers to, when it is a YubiKey's
+// stub, which holds no secret. A key file with a key in it is not read past its first
+// characters: what only reads does not hold a key.
+func TokenFileDescription(path string) (string, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	var b [1]byte
+	for {
+		if _, err := f.Read(b[:]); err != nil {
+			return "", false
+		}
+		if !bytes.ContainsAny(b[:], " \t\r\n") {
+			break
+		}
+	}
+	if b[0] != '{' {
+		return "", false
+	}
+	key, err := LoadCheckedSigningPrivateKey(path)
+	if err != nil {
+		return "", false
+	}
+	return YubiKeyDescription(key)
+}
+
 // Sign signs a SHA-256 digest on the token. The result has the same format as
 // the software keys produce: ASN.1 DER for ECDSA, PKCS #1 v1.5 for RSA.
 func (s *YubiKeySigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {

@@ -48,9 +48,9 @@ func writeConf(t *testing.T, content string) string {
 }
 
 // statusJSON runs 'status --json' and decodes the report.
-func statusJSON(t *testing.T, tpmPath, privKey, conf string) admin.StatusReport {
+func statusJSON(t *testing.T, tpmPath, pubKey, conf string) admin.StatusReport {
 	t.Helper()
-	stdout, stderr, code := kira(t, nil, "status", "--json", "--tpm", tpmPath, "--privkey", privKey, "--conf", conf)
+	stdout, stderr, code := kira(t, nil, "status", "--json", "--tpm", tpmPath, "--pubkey", pubKey, "--conf", conf)
 	if code != 0 {
 		t.Fatalf("status --json exit %d: %s%s", code, stdout, stderr)
 	}
@@ -126,7 +126,7 @@ func TestSealDefaultsAndStatus(t *testing.T) {
 	}
 
 	conf := writeConf(t, "TPM2_KIRA_ATTEST_ADAPTER=0\n")
-	r := statusJSON(t, tpmPath, testPrivKeyPath, conf)
+	r := statusJSON(t, tpmPath, testPubKeyPath, conf)
 	if r.TPMError != "" || len(r.Slots) != 2 {
 		t.Fatalf("status: tpm_error %q, %d slots: %+v", r.TPMError, len(r.Slots), r)
 	}
@@ -144,7 +144,7 @@ func TestSealDefaultsAndStatus(t *testing.T) {
 	}
 
 	// The plain report says the same.
-	stdout, _, code = kira(t, nil, "status", "--tpm", tpmPath, "--privkey", testPrivKeyPath, "--conf", conf)
+	stdout, _, code = kira(t, nil, "status", "--tpm", tpmPath, "--pubkey", testPubKeyPath, "--conf", conf)
 	for _, want := range []string{"slot 0   sealed to 0,2,7;", "slot 1   sealed to 0,7 (the fallback);", "signed by this machine's key", "Disk unlock (how a key is made is in each device's LUKS header)"} {
 		if code != 0 || !strings.Contains(stdout, want) {
 			t.Errorf("status: %q missing in\n%s", want, stdout)
@@ -160,7 +160,7 @@ func TestStatusNotes(t *testing.T) {
 	defer cleanup()
 
 	empty := writeConf(t, "")
-	r := statusJSON(t, tpmPath, testPrivKeyPath, empty)
+	r := statusJSON(t, tpmPath, testPubKeyPath, empty)
 	if len(r.Slots) != 0 || !hasNote(r.Notes, "no slot is sealed: tpm2-kira slot add") {
 		t.Errorf("nothing sealed, an empty file: %d slots, notes %q", len(r.Slots), r.Notes)
 	}
@@ -169,7 +169,7 @@ func TestStatusNotes(t *testing.T) {
 	if _, stderr, code := kira(t, nil, "slot", "add", "--totp", "--tpm", tpmPath, "--nvram", "0", "--pcrs", "0,23", "--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); code != 0 {
 		t.Fatalf("seal: exit %d: %s", code, stderr)
 	}
-	r = statusJSON(t, tpmPath, testPrivKeyPath, empty)
+	r = statusJSON(t, tpmPath, testPubKeyPath, empty)
 	if len(r.Slots) != 1 || !r.Slots[0].Signed || r.Slots[0].Fallback {
 		t.Fatalf("slots: %+v", r.Slots)
 	}
@@ -192,17 +192,17 @@ func TestStatusNotes(t *testing.T) {
 
 	// A line it does not know: the error names it.
 	bad := writeConf(t, "TPM2_KIRA_NOSUCH=password+salt\n")
-	r = statusJSON(t, tpmPath, testPrivKeyPath, bad)
+	r = statusJSON(t, tpmPath, testPubKeyPath, bad)
 	if !strings.Contains(r.ConfigError, "unknown key") {
 		t.Errorf("bad file: error %q", r.ConfigError)
 	}
-	stdout, _, _ := kira(t, nil, "status", "--tpm", tpmPath, "--privkey", testPrivKeyPath, "--conf", bad)
+	stdout, _, _ := kira(t, nil, "status", "--tpm", tpmPath, "--pubkey", testPubKeyPath, "--conf", bad)
 	if !strings.Contains(stdout, "unknown key") {
 		t.Errorf("bad file, plain: %s", stdout)
 	}
 
 	// Without the TPM the slots are an error and the rest still shows.
-	r = statusJSON(t, filepath.Join(t.TempDir(), "no-tpm"), testPrivKeyPath, empty)
+	r = statusJSON(t, filepath.Join(t.TempDir(), "no-tpm"), testPubKeyPath, empty)
 	if r.TPMError == "" || hasNote(r.Notes, "no slot") {
 		t.Errorf("no TPM: error %q, notes %q", r.TPMError, r.Notes)
 	}

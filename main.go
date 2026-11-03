@@ -71,11 +71,11 @@ func holdsSecrets(command string, args []string) bool {
 		sub = args[0]
 	}
 	switch command {
-	case "control", "setup", "status":
+	case "control", "setup":
 		return true
 	case "slot":
 		switch sub {
-		case "add", "approve", "info":
+		case "add", "approve":
 			return true
 		}
 	case "luks":
@@ -160,12 +160,12 @@ func main() {
 	case "status":
 		fs := flag.NewFlagSet("status", flag.ExitOnError)
 		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
-		privKey := fs.String("privkey", "", "Signing key the blobs are checked with (default: "+signing.DefaultPrivateKeyPath+")")
+		pubKey := fs.String("pubkey", "", "Signing public key the blobs are checked with (default: "+signing.DefaultPublicKeyPath+")")
 		conf := fs.String("conf", admin.DefaultControlConfigPath, "The configuration file")
 		jsonOut := fs.Bool("json", false, "Machine-readable output")
 		dbg := fs.Bool("debug", *debug, "Enable debug output")
 		fs.Parse(commandArgs)
-		if err := admin.Status(admin.StatusOptions{TPMPath: *tpm, PrivKeyPath: *privKey, ConfigPath: *conf, JSON: *jsonOut, Debug: *dbg}); err != nil {
+		if err := admin.Status(admin.StatusOptions{TPMPath: *tpm, PubKeyPath: *pubKey, ConfigPath: *conf, JSON: *jsonOut, Debug: *dbg}); err != nil {
 			fail(err)
 		}
 	case "reveal":
@@ -482,13 +482,13 @@ func runSlotInfo(args []string, tpmPath string, debugFlag bool) {
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
-	privKeyPath := fs.String("privkey", "", "Signing private key to verify the blob with (default: "+signing.DefaultPrivateKeyPath+")")
+	pubKeyPath := fs.String("pubkey", "", "Signing public key to verify the blob with (default: "+signing.DefaultPublicKeyPath+")")
 
 	fs.Parse(args)
 
 	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
 
-	if err := admin.InfoCommand(*tpm, scanIndex, *privKeyPath, *debug, *jsonOutput); err != nil {
+	if err := admin.InfoCommand(*tpm, scanIndex, *pubKeyPath, *debug, *jsonOutput); err != nil {
 		fail(err)
 	}
 }

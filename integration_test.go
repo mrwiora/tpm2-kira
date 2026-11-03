@@ -720,7 +720,7 @@ func TestInfo(t *testing.T) {
 	stdout, stderr, err := runTPMKira(t, tpmPath,
 		"slot", "info",
 		"--nvram", testNVRAMIndex,
-		"--privkey", testPrivKeyPath,
+		"--pubkey", testPubKeyPath,
 	)
 
 	if err != nil {

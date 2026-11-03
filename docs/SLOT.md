@@ -222,10 +222,10 @@ tpm2-kira slot approve --pcrs "0e,2,4,7e"
 tpm2-kira slot info
 tpm2-kira slot info --nvram 0
 tpm2-kira slot info --json          # machine-readable
-tpm2-kira slot info --privkey /path/to/key.pem   # verify with a custom key
+tpm2-kira slot info --pubkey /path/to/key.pub   # verify with a custom key
 ```
 
-`slot info` first checks each blob's signature with the signing key (`--privkey`,
+`slot info` first checks each blob's signature with the signing public key (`--pubkey`,
 or the default key). The result is the first line of the output, and
 `signature_verified` in JSON. A blob that does not verify is still shown, but
 marked untrusted: its strings are printed escaped, and the files it names are

@@ -54,7 +54,7 @@ func TestSecureBootWarningPlaces(t *testing.T) {
 	once("slot approve", out, errOut, setup, 1)
 	out, errOut, _ = kira(t, nil, append([]string{"slot", "approve", "--if-moved"}, keys...)...)
 	once("slot approve --if-moved", out, errOut, setup, 1)
-	out, errOut, _ = kira(t, nil, "status", "--tpm", tpmPath, "--privkey", testPrivKeyPath)
+	out, errOut, _ = kira(t, nil, "status", "--tpm", tpmPath, "--pubkey", testPubKeyPath)
 	once("status", out, errOut, setup, 1)
 
 	buildroot := t.TempDir()
@@ -70,7 +70,7 @@ func TestSecureBootWarningPlaces(t *testing.T) {
 	writeSecureBootVars(t, testDir, 1, 0)
 	out, errOut, _ = kira(t, nil, append([]string{"slot", "approve"}, keys...)...)
 	once("slot approve, on", out, errOut, "", 0)
-	out, errOut, _ = kira(t, nil, "status", "--tpm", tpmPath, "--privkey", testPrivKeyPath)
+	out, errOut, _ = kira(t, nil, "status", "--tpm", tpmPath, "--pubkey", testPubKeyPath)
 	once("status, on", out, errOut, "", 0)
 	if out, _, _ = kira(t, nil, "initramfs", "plan", "--tpm", tpmPath, "--buildroot", t.TempDir(), "--format", "mkinitcpio"); strings.Contains(out, "Secure Boot") {
 		t.Errorf("the image's plan, on:\n%s", out)

@@ -27,14 +27,12 @@ var secretCommands = []struct {
 }{
 	{[]string{"control"}, "Control"},
 	{[]string{"setup"}, "Setup"},
-	{[]string{"status"}, "Status"},
 	{[]string{"slot", "add"}, "SealDefaults"},
 	{[]string{"slot", "add", "--pcrs", "7"}, "Seal"},
 	{[]string{"slot", "add", "--totp"}, "SealFallback"},
 	{[]string{"slot", "approve"}, "ResealCommand"},
 	{[]string{"slot", "approve", "--unattended"}, "ResealCommand"},
 	{[]string{"slot", "approve", "--if-moved"}, "ResealIfMoved"},
-	{[]string{"slot", "info"}, "InfoCommand"},
 	{[]string{"luks", "derive", "--out", "/dev/shm/tpm2-kira-test-key"}, "DeriveCommand"},
 	{[]string{"luks", "enrol", "/dev/null", "--salt", "typed"}, "LuksEnrol"},
 	{[]string{"luks", "enroll", "/dev/null", "--salt", "typed"}, "LuksEnrol"},
@@ -63,7 +61,7 @@ func TestHoldsSecrets(t *testing.T) {
 			t.Errorf("%v does not lock its memory", c.args)
 		}
 	}
-	for _, args := range [][]string{{"reveal"}, {"reveal-plain"}, {"version"}, {"help"}, {"pcrtips"}, {"yubikey", "list"}, {"slot", "list"}, {"slot", "status"}, {"slot", "delete"},
+	for _, args := range [][]string{{"status"}, {"slot", "info"}, {"reveal"}, {"reveal-plain"}, {"version"}, {"help"}, {"pcrtips"}, {"yubikey", "list"}, {"slot", "list"}, {"slot", "status"}, {"slot", "delete"},
 		{"luks", "status"}, {"luks", "mark"}, {"luks", "route"}, {"vault", "status"}, {"phone", "status"}, {"phone", "quote"}, {"phone", "verify"}, {"phone", "ekcert"},
 		{"phone", "salt", "status"}, {"phone"}, {"phone", "salt"}, {"slot"}, {"luks"}, {"vault"}, {"initramfs", "plan"}} {
 		if holdsSecrets(args[0], args[1:]) {
@@ -218,7 +216,7 @@ func TestRefusedLockStopsBeforeThePrompt(t *testing.T) {
 		}
 	}
 	// Who holds nothing secret is not stopped.
-	for _, args := range [][]string{{"luks", "status", "/nonexistent"}, {"slot", "list"}, {"reveal"}} {
+	for _, args := range [][]string{{"luks", "status", "/nonexistent"}, {"slot", "list"}, {"slot", "info"}, {"status"}, {"reveal"}} {
 		if out, _ := run(args...); strings.Contains(out, "nothing was asked") {
 			t.Errorf("%v: %s", args, out)
 		}

@@ -101,13 +101,13 @@ MCL_ONFAULT)` and `PR_SET_DUMPABLE=0`, both the whole address space's, every thr
 call.
 
 - **On the installed system** a refused lock stops the command before it asks or reads:
-  `control`, `setup`, `status`, `slot add`, `approve`, `info`, `luks derive`, `enrol`,
+  `control`, `setup`, `slot add`, `approve`, `luks derive`, `enrol`,
   `remove`, `vault enrol`, `unenrol`, `phone enrol`, `unenrol`, `gate`, `phone salt enrol`,
   `rotate`, `unenrol` (`holdsSecrets`; `secrets_test.go` lists them, and fails on a new
-  function in `internal/admin` that comes to something secret). `status` and `slot info` are
-  among them because they check the slots' records with the signing key they load. What
-  holds none of it is not stopped: `reveal`, `slot list`, `slot status`, `slot delete`,
-  `luks status`, `mark`, `route`, `vault status`, `initramfs plan`. A refused lock is any limit on locked memory
+  function in `internal/admin` that comes to something secret). What holds none of it is not
+  stopped: `status` and `slot info`, which check the slots' records with the public key alone,
+  `reveal`, `slot list`, `slot status`, `slot delete`, `luks status`, `mark`, `route`,
+  `vault status`, `initramfs plan`. A refused lock is any limit on locked memory
   without `CAP_IPC_LOCK`, however large: a mapping past the limit is fatal for the Go
   runtime, at no place the program could answer. Root has the capability; a
   container's root, or a unit that drops it, does not. `LimitMEMLOCK=` alone does not stop root.
@@ -117,8 +117,7 @@ call.
   approved: an image built in a container or a unit like that (Debian's and an unattended-upgrade's
   included) has the next boot's slots down (Arch slot 0; Debian every slot, a temporary host key)
   until a `slot approve` runs where the lock holds. Give such a container `CAP_IPC_LOCK` or build
-  the image outside it. The hooks ask `slot list`, which holds nothing, whether there is something
-  to approve, so that a refused lock is said rather than taken for "nothing sealed".
+  the image outside it.
 - **At boot** it is best effort, one line in the log, and never withholds a prompt.
   The initrd has no swap, so the lock there guards against one being set up.
 - **Locks do not cross an exec**, and each process needs what it holds:
