@@ -95,17 +95,30 @@ Argon2id under a memory hog on Debian (nothing of it in swap, 126555 other pages
 
 ### Out of swap and core files
 
-Whatever holds a passphrase, a salt or a derived key takes `sandbox.LockMemory` (aSSH)
-first: `mlockall(MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT)` and `PR_SET_DUMPABLE=0`, both
-the whole address space's, every thread in one call.
+Whatever holds a passphrase, a salt, a derived key, a TOTP key, a signing key's file or a
+YubiKey's PIN takes `sandbox.LockMemory` (aSSH) first: `mlockall(MCL_CURRENT | MCL_FUTURE |
+MCL_ONFAULT)` and `PR_SET_DUMPABLE=0`, both the whole address space's, every thread in one
+call.
 
-- **On the installed system** a refused lock stops the command before it asks:
-  `control`, `luks derive`, `enrol`, `remove`, `vault enrol`, `phone salt enrol` and
-  `rotate` (`holdsSecrets`; `secrets_test.go` lists them, and fails on a new function
-  in `internal/admin` that comes to something secret). A refused lock is any limit on locked memory
+- **On the installed system** a refused lock stops the command before it asks or reads:
+  `control`, `setup`, `status`, `slot add`, `approve`, `info`, `luks derive`, `enrol`,
+  `remove`, `vault enrol`, `unenrol`, `phone enrol`, `unenrol`, `gate`, `phone salt enrol`,
+  `rotate`, `unenrol` (`holdsSecrets`; `secrets_test.go` lists them, and fails on a new
+  function in `internal/admin` that comes to something secret). `status` and `slot info` are
+  among them because they check the slots' records with the signing key they load. What
+  holds none of it is not stopped: `reveal`, `slot list`, `slot status`, `slot delete`,
+  `luks status`, `mark`, `route`, `vault status`, `initramfs plan`. A refused lock is any limit on locked memory
   without `CAP_IPC_LOCK`, however large: a mapping past the limit is fatal for the Go
   runtime, at no place the program could answer. Root has the capability; a
   container's root, or a unit that drops it, does not. `LimitMEMLOCK=` alone does not stop root.
+  **A hook's approval is no exception:** `slot approve --unattended` from mkinitcpio's and
+  initramfs-tools' hooks, or `--if-moved` from the boot loader's update, stops the same way. The
+  build goes on and says "the approval did not succeed", nothing is written, and the image is not
+  approved: an image built in a container or a unit like that (Debian's and an unattended-upgrade's
+  included) has the next boot's slots down (Arch slot 0; Debian every slot, a temporary host key)
+  until a `slot approve` runs where the lock holds. Give such a container `CAP_IPC_LOCK` or build
+  the image outside it. The hooks ask `slot list`, which holds nothing, whether there is something
+  to approve, so that a refused lock is said rather than taken for "nothing sealed".
 - **At boot** it is best effort, one line in the log, and never withholds a prompt.
   The initrd has no swap, so the lock there guards against one being set up.
 - **Locks do not cross an exec**, and each process needs what it holds:

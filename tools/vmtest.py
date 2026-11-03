@@ -748,6 +748,13 @@ class Machine:
         rc, out = self.run(f"prlimit --memlock=65536:65536 setpriv --bounding-set=-ipc_lock --inh-caps=-ipc_lock tpm2-kira luks derive --out {key} </dev/null 2>&1", save="lock-refused.log")
         self.check("a limit on locked memory without CAP_IPC_LOCK stops the command before it asks",
                    "FAILED: nothing was asked" in out and "RLIMIT_MEMLOCK" in out and "Password" not in out, out[-400:])
+        refuse = "prlimit --memlock=65536:65536 setpriv --bounding-set=-ipc_lock --inh-caps=-ipc_lock "
+        for command in ("setup --local", "slot add --totp", "slot approve --unattended", "slot info", "status"):
+            rc, out = self.run(f"{refuse}tpm2-kira {command} </dev/null 2>&1", save="lock-refused-" + command.split(" -")[0].replace(" ", "-") + ".log")
+            self.check(f"{command}: a refused lock stops it before it reads a key", "FAILED: nothing was asked or read" in out and "RLIMIT_MEMLOCK" in out, out[-400:])
+        hook = "/etc/initramfs/post-update.d/tpm2-kira" if self.distro == "debian" else "/usr/lib/initcpio/post/sd-tpm2-kira"
+        rc, out = self.run(f"{refuse}{hook} x x </dev/null 2>&1", save="lock-refused-hook.log")
+        self.check("the image's hook under such a limit says the approval did not succeed, and the build would go on", rc == 0 and "RLIMIT_MEMLOCK" in out and "approval did not succeed" in out.lower(), out[-500:])
         swap = self.swap_counts()
         pressure = int(swap.get("SwapTotal:", "0")) > 0 and not self.fast_kdf
         hog = None
@@ -1109,17 +1116,18 @@ class Machine:
         self.lap("the initrd's end to ssh")
         self.after_boot(n)
 
-    VOLUME_ORDER = ("journalctl -b -o cat --no-pager -u tpm2-kira-close.service -u 'systemd-cryptsetup@*' | grep -E '^(Starting|Finished|Started) '; "
-                    "echo CYCLES=$(journalctl -b -o cat --no-pager | grep -ciE 'ordering cycle|Found dependency on')")
+    # PID 1's lines alone: sudo's log of this very command names the words too.
+    VOLUME_ORDER = ("journalctl -b -o cat --no-pager -u tpm2-kira-close.service -u 'systemd-cryptsetup@*' | grep -E '^(Starting|Finished) '; "
+                    "journalctl -b -o cat --no-pager _PID=1 | grep -iE 'ordering cycle|Found dependency on' | sed 's/^/CYCLE /'; true")
 
     def check_volume_order(self, where, out):
         """Arch: the close's unit is done before a volume's unit starts, and this boot's systemd
         found no cycle: the journal, in its order, with what the generator wrote too."""
         lines = out.splitlines()
-        done = next((i for i, l in enumerate(lines) if l.startswith("Finished tpm2-kira-close.service")), None)
-        volume = next((i for i, l in enumerate(lines) if l.startswith("Starting systemd-cryptsetup@")), None)
+        done = next((i for i, l in enumerate(lines) if l.startswith("Finished tpm2-kira: the boot closed")), None)
+        volume = next((i for i, l in enumerate(lines) if l.startswith("Starting Cryptography Setup")), None)
         self.check(f"{where}: the close is done before a volume's unit starts", done is not None and volume is not None and done < volume, out[-600:])
-        self.check(f"{where}: no ordering cycle in this boot's journal", "CYCLES=0" in out, out[-300:])
+        self.check(f"{where}: no ordering cycle in this boot's journal", "CYCLE " not in out, out[-300:])
 
     def boot_log_command(self):
         return ("cat /run/initramfs/tpm2-kira.log" if self.distro == "debian" else

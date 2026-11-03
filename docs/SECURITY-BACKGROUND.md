@@ -1895,11 +1895,10 @@ db signature comes from outside, from sbctl or whatever the owner runs; tpm2-kir
 makes nor checks it.
 
 **WARNING, what still can reach swap.** `sandbox.LockMemory` covers what holds a
-passphrase, a salt or a derived key (DISK-KEY.md, "Memory"), and aSSH's PIN and lockout
-authorization. Not covered, open for the owner: `assh agent` and `serve` hold host keys'
-authorization values, not dumpable but not locked, on an installed system with swap, against
-"no secret of a host key is stored"; `slot add`, `slot approve` and `setup` handle a TOTP
-key, a signing key file or a YubiKey's PIN unlocked.
+passphrase, a salt, a derived key, a TOTP key, a signing key's file or a YubiKey's PIN
+(DISK-KEY.md, "Memory"), and aSSH's PIN and lockout authorization. Not covered, open for the
+owner: `assh agent` and `serve` hold host keys' authorization values, not dumpable but not
+locked, on an installed system with swap, against "no secret of a host key is stored".
 
 **What the memory lock does not show.** A boot with its lock refused: only `run` in a
 container, not a real boot. `MCL_ONFAULT` is what lets Go give locked memory back, through a

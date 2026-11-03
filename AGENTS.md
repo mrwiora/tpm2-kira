@@ -268,9 +268,10 @@ It may not carry what came before.
   Release recipes never name the tag and refuse a binary built with one
   (`packaging/release-binary-check.sh`, `internal/diskkey/release_test.go`). A
   `--fast-kdf` run is no final proof.
-- **What holds a passphrase, a salt or a derived key is locked and not dumpable.**
-  aSSH's `sandbox.LockMemory`, first thing: a command on the installed system stops
-  if it cannot, before it asks (`holdsSecrets` in main.go; `secrets_test.go` finds
+- **What holds a passphrase, a salt, a derived key, a TOTP key, a signing key's file or a
+  YubiKey's PIN is locked and not dumpable.**
+  aSSH's `sandbox.LockMemory`, first thing: a command on the installed system, a hook's
+  `slot approve` too, stops if it cannot, before it asks or reads (`holdsSecrets` in main.go; `secrets_test.go` finds
   what in `internal/admin` comes to one, and a new one fails there); at boot `run` and
   `unlock-key` go on and say so (no enforced mode). It locks on fault, or
   `Combine` could give nothing back. Locks do not cross an exec: `ssh-child` and

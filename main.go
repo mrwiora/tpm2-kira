@@ -61,29 +61,43 @@ func requireRoot(command string, args []string) {
 	os.Exit(1)
 }
 
-// holdsSecrets says whether a command handles a passphrase, a salt or a derived key
-// (secrets_test.go lists them, and what in internal/admin reaches one): it locks its
-// memory first, and stops if it cannot.
+// holdsSecrets says whether a command handles a passphrase, a salt, a derived key, a
+// TOTP key, a signing key's file or a YubiKey's PIN (secrets_test.go lists them, and
+// what in internal/admin reaches one): it locks its memory first, and stops if it
+// cannot.
 func holdsSecrets(command string, args []string) bool {
 	sub := ""
 	if len(args) > 0 {
 		sub = args[0]
 	}
 	switch command {
-	case "control":
+	case "control", "setup", "status":
 		return true
+	case "slot":
+		switch sub {
+		case "add", "approve", "info":
+			return true
+		}
 	case "luks":
 		switch sub {
 		case "derive", "enrol", "enroll", "remove":
 			return true
 		}
 	case "vault":
-		return sub == "enrol" || sub == "enroll"
+		switch sub {
+		case "enrol", "enroll", "unenrol", "unenroll":
+			return true
+		}
 	case "phone":
-		if sub == "salt" && len(args) > 1 {
-			switch args[1] {
-			case "enrol", "enroll", "rotate":
-				return true
+		switch sub {
+		case "enrol", "enroll", "unenrol", "unenroll", "gate":
+			return true
+		case "salt":
+			if len(args) > 1 {
+				switch args[1] {
+				case "enrol", "enroll", "rotate", "unenrol", "unenroll":
+					return true
+				}
 			}
 		}
 	}

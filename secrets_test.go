@@ -18,22 +18,43 @@ import (
 )
 
 // secretCommands are the installed system's commands that handle a passphrase, a
-// salt or a derived key, each with the function of internal/admin it comes to. They
-// lock their memory first, and stop if they cannot.
+// salt, a derived key, a TOTP key, a signing key's file or a YubiKey's PIN, each with
+// the function of internal/admin it comes to. They lock their memory first, and stop
+// if they cannot.
 var secretCommands = []struct {
 	args  []string
 	admin string
 }{
 	{[]string{"control"}, "Control"},
+	{[]string{"setup"}, "Setup"},
+	{[]string{"status"}, "Status"},
+	{[]string{"slot", "add"}, "SealDefaults"},
+	{[]string{"slot", "add", "--pcrs", "7"}, "Seal"},
+	{[]string{"slot", "add", "--totp"}, "SealFallback"},
+	{[]string{"slot", "approve"}, "ResealCommand"},
+	{[]string{"slot", "approve", "--unattended"}, "ResealCommand"},
+	{[]string{"slot", "approve", "--if-moved"}, "ResealIfMoved"},
+	{[]string{"slot", "info"}, "InfoCommand"},
 	{[]string{"luks", "derive", "--out", "/dev/shm/tpm2-kira-test-key"}, "DeriveCommand"},
 	{[]string{"luks", "enrol", "/dev/null", "--salt", "typed"}, "LuksEnrol"},
 	{[]string{"luks", "enroll", "/dev/null", "--salt", "typed"}, "LuksEnrol"},
 	{[]string{"luks", "remove", "/dev/null", "--keyslot", "1"}, "LuksRemove"},
 	{[]string{"vault", "enrol"}, "VaultEnrol"},
 	{[]string{"vault", "enroll"}, "VaultEnrol"},
+	{[]string{"vault", "unenrol"}, "VaultUnenrol"},
+	{[]string{"vault", "unenroll"}, "VaultUnenrol"},
+	{[]string{"phone", "enrol"}, "AttestEnrol"},
+	{[]string{"phone", "enroll"}, "AttestEnrol"},
+	{[]string{"phone", "unenrol"}, "AttestUnenrol"},
+	{[]string{"phone", "unenroll"}, "AttestUnenrol"},
+	// A gate started by hand on the running system opens the channel with the signing
+	// key (internal/phonegate/gate_radio.go): not internal/admin's.
+	{[]string{"phone", "gate"}, ""},
 	{[]string{"phone", "salt", "enrol"}, "FactorEnrol"},
 	{[]string{"phone", "salt", "enroll"}, "FactorEnrol"},
 	{[]string{"phone", "salt", "rotate"}, "FactorEnrol"},
+	{[]string{"phone", "salt", "unenrol"}, "FactorUnenrol"},
+	{[]string{"phone", "salt", "unenroll"}, "FactorUnenrol"},
 }
 
 func TestHoldsSecrets(t *testing.T) {
@@ -42,9 +63,9 @@ func TestHoldsSecrets(t *testing.T) {
 			t.Errorf("%v does not lock its memory", c.args)
 		}
 	}
-	for _, args := range [][]string{{"reveal"}, {"status"}, {"version"}, {"help"}, {"pcrtips"}, {"setup"}, {"slot", "add"}, {"slot", "approve"}, {"slot", "list"}, {"slot", "delete"},
-		{"luks", "status"}, {"luks", "mark"}, {"luks", "route"}, {"vault", "status"}, {"vault", "unenrol"}, {"phone", "enrol"}, {"phone", "gate"},
-		{"phone", "salt", "status"}, {"phone", "salt", "unenrol"}, {"phone"}, {"phone", "salt"}, {"luks"}, {"initramfs", "plan"}} {
+	for _, args := range [][]string{{"reveal"}, {"reveal-plain"}, {"version"}, {"help"}, {"pcrtips"}, {"yubikey", "list"}, {"slot", "list"}, {"slot", "status"}, {"slot", "delete"},
+		{"luks", "status"}, {"luks", "mark"}, {"luks", "route"}, {"vault", "status"}, {"phone", "status"}, {"phone", "quote"}, {"phone", "verify"}, {"phone", "ekcert"},
+		{"phone", "salt", "status"}, {"phone"}, {"phone", "salt"}, {"slot"}, {"luks"}, {"vault"}, {"initramfs", "plan"}} {
 		if holdsSecrets(args[0], args[1:]) {
 			t.Errorf("%v locks its memory, and is not in the list", args)
 		}
@@ -52,8 +73,12 @@ func TestHoldsSecrets(t *testing.T) {
 }
 
 // What is secret in internal/admin: the prompts of a passphrase, a salt or a pepper,
-// the derivation, and the salts it takes.
-var secretFunctions = []string{"terminalPassword", "terminalAsk", "terminalAskExisting", "existingPassphrase", "Combine", "FactorSalt"}
+// the derivation and the salts it takes; a TOTP key; a signing key's file, read or
+// written; a YubiKey's PIN.
+var secretFunctions = []string{"terminalPassword", "terminalAsk", "terminalAskExisting", "existingPassphrase", "Combine", "FactorSalt",
+	"newTOTPSecret", "showTOTPSecret", "addTOTPKey",
+	"LoadCheckedSigningPrivateKey", "LoadSigningPrivateKey", "ReadSigningKeyFile", "WriteSigningKeyFile",
+	"StorePIN", "StoredPIN", "VerifyYubiKeyPIN"}
 
 // TestSecretCommandsAreAll finds, by name, every exported function of internal/admin
 // that comes to something secret. A new one is a new command to lock.
@@ -113,10 +138,14 @@ func TestSecretCommandsAreAll(t *testing.T) {
 	}
 	listed := map[string]bool{}
 	for _, c := range secretCommands {
-		listed[c.admin] = true
+		if c.admin != "" {
+			listed[c.admin] = true
+		}
 	}
-	// Not a command of its own: control's way to delete a slot, with its keyslots.
-	parts := []string{"DeleteSlot"}
+	// Not a command of their own: control's way to delete a slot, with its keyslots;
+	// what the commands above call. Or reached by a name alone: the search has no types,
+	// and these only say Status or Seal of something else.
+	parts := []string{"DeleteSlot", "PrintResealSkipped", "Reseal", "LuksMark", "LuksRoute", "LuksStatus", "RouteAdvice", "RouteFindings", "NVRAMDeleteCommand"}
 	var missing []string
 	for fn := range reach {
 		if ast.IsExported(fn) && uses[fn] != nil && !listed[fn] && !slices.Contains(parts, fn) {
@@ -189,7 +218,9 @@ func TestRefusedLockStopsBeforeThePrompt(t *testing.T) {
 		}
 	}
 	// Who holds nothing secret is not stopped.
-	if out, _ := run("luks", "status", "/nonexistent"); strings.Contains(out, "nothing was asked") {
-		t.Errorf("luks status: %s", out)
+	for _, args := range [][]string{{"luks", "status", "/nonexistent"}, {"slot", "list"}, {"reveal"}} {
+		if out, _ := run(args...); strings.Contains(out, "nothing was asked") {
+			t.Errorf("%v: %s", args, out)
+		}
 	}
 }

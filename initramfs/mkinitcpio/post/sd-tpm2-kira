@@ -29,7 +29,7 @@ fi
 
 # Nothing sealed (a machine that unlocks by password and salt alone) and no
 # SSH CA (its EFI variable): no code to keep, nothing to approve.
-if ! tpm2-kira slot info --json 2>/dev/null | grep -q '"index"' && [[ ! -e /sys/firmware/efi/efivars/KIRAasshCA-24415b90-39be-45c0-a9a3-d547ebe28ea0 ]]; then
+if ! tpm2-kira slot list 2>/dev/null | grep -q '^Slots:' && [[ ! -e /sys/firmware/efi/efivars/KIRAasshCA-24415b90-39be-45c0-a9a3-d547ebe28ea0 ]]; then
     exit 0
 fi
 

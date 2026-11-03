@@ -5,16 +5,19 @@ package admin
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"golang.org/x/sys/unix"
 )
 
 // A hook's approval goes on with the slot and leaves a moved channel, and says so;
@@ -163,10 +166,10 @@ func TestHooksLeaveAMovedChannel(t *testing.T) {
 	wrapper := fmt.Sprintf(`#!/bin/bash
 case "$1 $2" in
 "slot approve") a=("$1" "$2"); shift 2; exec %q "${a[@]}" --tpm %q --privkey %q --pubkey %q "$@" ;;
-"slot info") a=("$1" "$2"); shift 2; exec %q "${a[@]}" --tpm %q --privkey %q "$@" ;;
+"slot list") a=("$1" "$2"); shift 2; exec %q "${a[@]}" --tpm %q "$@" ;;
 esac
 exec %q "$@"
-`, bin, s.sock, privPath, pubPath, bin, s.sock, privPath, bin)
+`, bin, s.sock, privPath, pubPath, bin, s.sock, bin)
 	binDir := filepath.Join(dir, "bin")
 	os.MkdirAll(binDir, 0o755)
 	if err := os.WriteFile(filepath.Join(binDir, "tpm2-kira"), []byte(wrapper), 0o755); err != nil {
@@ -209,6 +212,27 @@ exec %q "$@"
 			// What the image's hook said in this same build is not said again.
 			if n := strings.Count(got, "WARNING: Secure Boot"); (filepath.Base(hook) == "zzz-tpm2-kira" && n != 1) || (filepath.Base(hook) != "zzz-tpm2-kira" && n != 0) {
 				t.Errorf("Secure Boot said %d times:\n%s", n, got)
+			}
+			// As a container's root, under a limit on locked memory: the approval stops
+			// before it reads the key, the hook says so and the build goes on.
+			generation = phonegate.ReadSealedSlot(s.tpm, idx).Payload.Generation
+			locked := exec.Command("/bin/sh", "-c", `ulimit -l 64 && exec "$@"`, "sh", copyPath, "6.1", "/boot/image")
+			locked.Env = cmd.Env
+			locked.SysProcAttr = &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWUSER,
+				UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid(), Size: 1}}}
+			out, err = locked.CombinedOutput()
+			if errors.Is(err, unix.EPERM) || errors.Is(err, unix.ENOSPC) {
+				t.Skipf("no user namespace here: %v", err)
+			}
+			if err != nil {
+				t.Fatalf("the build stops: %v:\n%s", err, out)
+			}
+			got = string(out)
+			if !strings.Contains(got, "FAILED: nothing was asked or read") || !strings.Contains(got, "RLIMIT_MEMLOCK") || !strings.Contains(strings.ToLower(got), "approval did not succeed") {
+				t.Errorf("a refused lock is not said:\n%s", got)
+			}
+			if g := phonegate.ReadSealedSlot(s.tpm, idx).Payload.Generation; g != generation {
+				t.Errorf("a refused lock approved: generation %d, was %d\n%s", g, generation, got)
 			}
 		})
 	}
