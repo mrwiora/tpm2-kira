@@ -2,6 +2,10 @@
 // yes or no, and a secret line, as plain text, on a terminal or from a pipe. The
 // standard library and x/sys alone: a tool that runs as root and takes PINs.
 //
+// A menu on a terminal that says its width takes the arrow keys too (menu.go): plain
+// ANSI, inline, no alternate screen and no terminfo. Anywhere else, TERM=dumb and a
+// terminal of no known width included, it is the numbered prompt.
+//
 // On a terminal a prompt reads key by key with the line discipline off, for one
 // prompt at a time: Ctrl-C, Ctrl-D on an empty line and Esc cancel it (ErrCancelled),
 // Backspace and Ctrl-U edit, and a line too long is refused instead of being cut
@@ -50,10 +54,12 @@ var sgr = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
 // Prompter asks on one input and one output.
 type Prompter struct {
-	in    io.Reader
-	tty   *os.File // the input, when it is a terminal
-	out   io.Writer
-	width func() int
+	in      io.Reader
+	tty     *os.File // the input, when it is a terminal
+	out     io.Writer
+	term    *os.File // the output, when it is a terminal and its TERM moves a cursor
+	noColor bool
+	width   func() int
 }
 
 // New is a Prompter reading in and writing out. Colour goes to out only when it is
@@ -70,6 +76,10 @@ func New(in io.Reader, out io.Writer) *Prompter {
 	}
 	if os.Getenv("NO_COLOR") != "" {
 		p.out = plainWriter{out}
+		p.noColor = true
+	}
+	if t := os.Getenv("TERM"); t != "" && t != "dumb" {
+		p.term = f
 	}
 	p.width = func() int {
 		ws, err := unix.IoctlGetWinsize(int(f.Fd()), unix.TIOCGWINSZ)
@@ -141,8 +151,9 @@ type Option[T comparable] struct {
 	Blocked string
 }
 
-// Select asks for a number. Enter alone takes the option holding def, unless it is
-// blocked or there is none: then it asks again.
+// Select asks for a number, and on a terminal that can take them for the arrow keys.
+// Enter alone takes the option holding def, unless it is blocked or there is none: then
+// it asks again.
 func Select[T comparable](p *Prompter, heading, description string, opts []Option[T], def T) (T, error) {
 	var zero T
 	if len(opts) == 0 {
@@ -158,6 +169,17 @@ func Select[T comparable](p *Prompter, heading, description string, opts []Optio
 			preset = i
 			break
 		}
+	}
+	if p.arrows() {
+		entries := make([]entry, len(opts))
+		for i, o := range opts {
+			entries[i] = entry{label: o.Label, blocked: o.Blocked}
+		}
+		i, err := p.menu(entries, preset)
+		if err != nil {
+			return zero, err
+		}
+		return opts[i].Value, nil
 	}
 	if preset >= 0 {
 		fmt.Fprintf(p.out, "\033[2mEnter alone: %s\033[0m\n", strings.TrimSpace(sgr.ReplaceAllString(opts[preset].Label, "")))
@@ -309,7 +331,7 @@ func (p *Prompter) read(buf []byte, secret bool) ([]byte, error) {
 	if p.tty == nil {
 		return p.readPlain(buf, secret)
 	}
-	restore, err := raw(int(p.tty.Fd()))
+	restore, err := raw(int(p.tty.Fd()), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -404,7 +426,7 @@ func (p *Prompter) readKeys(line []byte, secret bool) ([]byte, error) {
 				return nil, ErrCancelled
 			}
 		case c == 27:
-			if !p.skipEscape() {
+			if _, alone := p.escape(); alone {
 				return nil, ErrCancelled
 			}
 		case c == 127 || c == 8:
@@ -433,8 +455,9 @@ func (p *Prompter) readKeys(line []byte, secret bool) ([]byte, error) {
 	}
 }
 
-// skipEscape reads the rest of a key's escape sequence. False: no rest, Esc alone.
-func (p *Prompter) skipEscape() bool {
+// escape reads the rest of a key's escape sequence and gives its last byte, the one
+// that names the key (0: none does, Alt and a key). alone: no rest, Esc itself.
+func (p *Prompter) escape() (final byte, alone bool) {
 	fd := int(p.tty.Fd())
 	more := func() bool {
 		fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
@@ -442,28 +465,32 @@ func (p *Prompter) skipEscape() bool {
 		return err == nil && n > 0
 	}
 	if !more() {
-		return false
+		return 0, true
 	}
 	b := make([]byte, 1)
 	if _, err := p.tty.Read(b); err != nil {
-		return true
+		return 0, false
 	}
 	if b[0] != '[' && b[0] != 'O' {
-		return true // Alt and a key
+		return 0, false
 	}
 	for more() {
-		if _, err := p.tty.Read(b); err != nil || (b[0] >= 0x40 && b[0] <= 0x7e) {
-			return true
+		if _, err := p.tty.Read(b); err != nil {
+			return 0, false
+		}
+		if b[0] >= 0x40 && b[0] <= 0x7e {
+			return b[0], false
 		}
 	}
-	return true
+	return 0, false
 }
 
 // raw takes the terminal's line discipline away and gives what gives it back. A
-// signal that would end the process gives it back first, and then ends it as it
-// would have: the signals are taken before the terminal is, and the lock keeps a
-// signal's end from running beside taking it.
-func raw(fd int) (func(), error) {
+// signal that would end the process gives it back first (and runs onSignal, when
+// there is one, for what is on the screen), and then ends it as it would have: the
+// signals are taken before the terminal is, and the lock keeps a signal's end from
+// running beside taking it.
+func raw(fd int, onSignal func()) (func(), error) {
 	old, err := unix.IoctlGetTermios(fd, unix.TCGETS)
 	if err != nil {
 		return nil, err
@@ -475,11 +502,14 @@ func raw(fd int) (func(), error) {
 	var mu sync.Mutex
 	sigs := make(chan os.Signal, 1)
 	done := make(chan struct{})
-	signal.Notify(sigs, unix.SIGTERM, unix.SIGHUP, unix.SIGINT, unix.SIGQUIT)
+	signal.Notify(sigs, unix.SIGTERM, unix.SIGHUP, unix.SIGINT, unix.SIGQUIT, unix.SIGABRT)
 	go func() {
 		select {
 		case s := <-sigs:
 			mu.Lock() // never given up: the process ends
+			if onSignal != nil {
+				onSignal()
+			}
 			unix.IoctlSetTermios(fd, unix.TCSETS, old)
 			signal.Reset(s)
 			unix.Kill(unix.Getpid(), s.(syscall.Signal))
@@ -502,6 +532,9 @@ func raw(fd int) (func(), error) {
 	}
 	return restore, nil
 }
+
+// sgrAt is an SGR sequence at the start of a string.
+var sgrAt = regexp.MustCompile("^\x1b\\[[0-9;]*m")
 
 // wrap breaks lines at spaces to width (0: as they are), the colours not counted. A
 // broken line goes on at its own indentation, or at indent when that is more.

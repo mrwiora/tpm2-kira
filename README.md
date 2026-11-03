@@ -396,9 +396,13 @@ the commands in a line.
 Each screen is a page of its own, cleared each time it is shown; what a
 step prints stays until "Back to ..." is answered. Sealing both slots,
 each QR code gets a cleared screen of its own, held until you confirm it
-is in your authenticator. The screens are numbered text menus: a number and
-Enter (Enter alone takes what is named above the menu, never a step);
-Ctrl-C, Ctrl-D or Esc leaves, in a submenu back to step 2. Colours are ANSI,
+is in your authenticator. The screens are numbered text menus: the arrow keys
+and Enter, or a number and Enter (Enter alone takes what is named above the menu,
+never a step; a greyed entry says why when the cursor is on it);
+Ctrl-C, Ctrl-D or Esc leaves, in a submenu back to step 2. The arrows work inline,
+in plain ANSI: what stays in the scrollback is the question and `> 2. ...`, the answer.
+With `TERM=dumb`, or a terminal that does not say its width, the same menu is
+a number and Enter alone. Colours are ANSI,
 none with `NO_COLOR` or on a non-terminal. Without a terminal, `control`
 prints both steps and exits.
 
@@ -419,7 +423,7 @@ prints both steps and exits.
   The boot chain
   Recommended next: Kernel command line adoption (the key's route)
   systemd-cryptsetup takes a volume's key from tpm2-kira when its rd.luks.key= names the socket. ...
-  Enter alone: Quit
+  Up, down and Enter, or a number and Enter; Esc cancels.
   1. ✓ mkinitcpio adoption  - sd-tpm2-kira in HOOKS of /etc/mkinitcpio.conf
   2. • Kernel command line adoption (the key's route)
   3. - Continue to step 2  - first: Kernel command line adoption (the key's route)
