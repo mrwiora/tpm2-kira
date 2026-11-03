@@ -204,7 +204,7 @@ class Hib:
         self.m.typed_boot_unchecked()
 
     def control_status(self, tag):
-        s = self.m.session("sudo ACCESSIBLE=1 tpm2-kira control", f"control-{tag}")
+        s = self.m.session("sudo tpm2-kira control", f"control-{tag}")
         try:
             text, _ = s.expect(r"Enter a number between 1 and \d+: ?$", 300)
             return text

@@ -96,7 +96,7 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 
 	// The PIN stored next to it, as the Signing key step does it; the
 	// facts know, and the file is root's alone.
-	if err := signing.StorePIN(signing.PINPath(), "123456"); err != nil {
+	if err := signing.StorePIN(signing.PINPath(), []byte("123456")); err != nil {
 		t.Fatal(err)
 	}
 	f = collectFacts(sock, false)

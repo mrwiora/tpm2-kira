@@ -52,11 +52,11 @@ func TestPINFile(t *testing.T) {
 	if pin, _ := signing.StoredPIN(path); pin != "" {
 		t.Fatalf("no file: %q", pin)
 	}
-	if err := signing.StorePIN(path, "12\n34"); err == nil {
+	if err := signing.StorePIN(path, []byte("12\n34")); err == nil {
 		t.Fatal("a newline in the PIN was stored")
 	}
 	os.WriteFile(path, []byte("old"), 0o644)
-	if err := signing.StorePIN(path, "123456"); err != nil {
+	if err := signing.StorePIN(path, []byte("123456")); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {

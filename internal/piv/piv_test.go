@@ -80,13 +80,13 @@ func TestPIN(t *testing.T) {
 		t.Fatalf("PINRetries: %d %v %v", n, verified, err)
 	}
 	var wrong *piv.WrongPINError
-	if err := c.VerifyPIN("654321"); !errors.As(err, &wrong) || wrong.Remaining != 2 {
+	if err := c.VerifyPIN([]byte("654321")); !errors.As(err, &wrong) || wrong.Remaining != 2 {
 		t.Fatalf("wrong PIN: %v", err)
 	}
-	if err := c.VerifyPIN("12345"); err == nil || card.Retries != 2 {
+	if err := c.VerifyPIN([]byte("12345")); err == nil || card.Retries != 2 {
 		t.Fatalf("short PIN must be refused without reaching the card: %v, retries %d", err, card.Retries)
 	}
-	if err := c.VerifyPIN("123456"); err != nil {
+	if err := c.VerifyPIN([]byte("123456")); err != nil {
 		t.Fatal(err)
 	}
 	if _, verified, _ := c.PINRetries(); !verified || card.Retries != 3 {
@@ -95,7 +95,7 @@ func TestPIN(t *testing.T) {
 
 	card.Retries = 1
 	card.PIN = "999999"
-	if err := c.VerifyPIN("123456"); !errors.Is(err, piv.ErrPINBlocked) {
+	if err := c.VerifyPIN([]byte("123456")); !errors.Is(err, piv.ErrPINBlocked) {
 		t.Fatalf("last attempt: %v", err)
 	}
 }
@@ -110,7 +110,7 @@ func TestSign(t *testing.T) {
 	if _, err := c.Sign(piv.SlotAuthentication, &ec.PublicKey, digest[:]); !errors.Is(err, piv.ErrPINRequired) {
 		t.Fatalf("sign without PIN: %v", err)
 	}
-	if err := c.VerifyPIN("123456"); err != nil {
+	if err := c.VerifyPIN([]byte("123456")); err != nil {
 		t.Fatal(err)
 	}
 	sig, err := c.Sign(piv.SlotAuthentication, &ec.PublicKey, digest[:])
@@ -127,7 +127,7 @@ func TestSign(t *testing.T) {
 	if _, err := c.Sign(piv.SlotSignature, &rk.PublicKey, digest[:]); !errors.Is(err, piv.ErrPINRequired) {
 		t.Fatalf("PIN policy always without a fresh VERIFY: %v", err)
 	}
-	if err := c.VerifyPIN("123456"); err != nil {
+	if err := c.VerifyPIN([]byte("123456")); err != nil {
 		t.Fatal(err)
 	}
 	sig, err = c.Sign(piv.SlotSignature, &rk.PublicKey, digest[:])

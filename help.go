@@ -203,10 +203,10 @@ Every other file stays yours to edit, with two exceptions, each asked
 for every time: the HOOKS of mkinitcpio.conf and the key's route.
 Sealing both slots, each QR code gets a cleared screen of its own, held
 until the scan is confirmed: it is shown this once.
-On leaving it names the initramfs rebuild. Forms: arrow keys and Enter,
-Esc leaves (in a submenu: back to step 2), ACCESSIBLE=1 for plain
-prompts. Without a terminal it prints both steps and leaves (a script's
-look).
+On leaving it names the initramfs rebuild. Menus: a number and Enter;
+Ctrl-C, Ctrl-D or Esc leaves (in a submenu: back to step 2). No colours
+with NO_COLOR. Without a terminal it prints both steps and leaves (a
+script's look).
 
   tpm2-kira control
 `,

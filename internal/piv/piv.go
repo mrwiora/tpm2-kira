@@ -148,7 +148,7 @@ func (c *Card) PINRetries() (remaining int, verified bool, err error) {
 
 // VerifyPIN verifies the PIV PIN. A rejected PIN returns *WrongPINError and
 // costs one attempt; callers must not retry it.
-func (c *Card) VerifyPIN(pin string) error {
+func (c *Card) VerifyPIN(pin []byte) error {
 	if len(pin) < 6 || len(pin) > 8 {
 		// Refused here, without a round trip: the card counts a
 		// malformed PIN as a wrong one.

@@ -10,10 +10,10 @@ import (
 	"strings"
 
 	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/prompt"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
 
-	"charm.land/huh/v2"
 	"github.com/tpm2-trust/assh/config"
 	"github.com/tpm2-trust/assh/hostkey"
 )
@@ -96,12 +96,11 @@ func (c *controller) runNetwork() error {
 		fmt.Fprintf(c.out, "Proposed from the running system (%s): %s\n", from, sug.Describe())
 		r.Net = sug
 	}
-	mode := r.Net.Mode
-	if err := c.form(huh.NewSelect[string]().Title("Network in the boot image").
-		Description("Set for the image alone; the running system's network configuration stays as it is.").
-		Options(huh.NewOption("DHCP", "dhcp"), huh.NewOption("Static address", "static"),
-			huh.NewOption("Off: no network, no SSH", "off")).
-		Value(&mode)).Run(); err != nil {
+	mode, err := prompt.Select(c.ask(), "Network in the boot image",
+		"Set for the image alone; the running system's network configuration stays as it is.",
+		[]prompt.Option[string]{{Label: "DHCP", Value: "dhcp"}, {Label: "Static address", Value: "static"},
+			{Label: "Off: no network, no SSH", Value: "off"}}, r.Net.Mode)
+	if err != nil {
 		return err
 	}
 	if mode == "off" {
@@ -134,19 +133,19 @@ func (c *controller) runNetwork() error {
 		}
 		ifaces = append(ifaces, fmt.Sprintf("%s %s (%s)", it.Name, it.MAC, kind))
 	}
-	match := r.Net.Match
-	if err := c.form(huh.NewInput().Title("Interface: its MAC address, or its name").
-		Description("The MAC is safer: the image may name the interface differently. Empty: every wired interface (DHCP only).\nThis machine: " + strings.Join(ifaces, "; ")).
-		Value(&match).Validate(func(s string) error {
-		s = strings.TrimSpace(s)
-		switch {
-		case s == "" && mode == "static":
-			return errors.New("a static address needs one interface")
-		case s != "" && !isMAC(s) && !ifaceRe.MatchString(s):
-			return errors.New("a MAC address (aa:bb:cc:dd:ee:ff) or an interface name")
-		}
-		return nil
-	})).Run(); err != nil {
+	match, err := c.ask().Input("Interface: its MAC address, or its name",
+		"The MAC is safer: the image may name the interface differently. Empty: every wired interface (DHCP only).\nThis machine: "+strings.Join(ifaces, "; "),
+		r.Net.Match, func(s string) error {
+			s = strings.TrimSpace(s)
+			switch {
+			case s == "" && mode == "static":
+				return errors.New("a static address needs one interface")
+			case s != "" && !isMAC(s) && !ifaceRe.MatchString(s):
+				return errors.New("a MAC address (aa:bb:cc:dd:ee:ff) or an interface name")
+			}
+			return nil
+		})
+	if err != nil {
 		return err
 	}
 	r.Net.Match = strings.TrimSpace(match)
@@ -155,12 +154,16 @@ func (c *controller) runNetwork() error {
 	}
 
 	if mode == "static" {
-		addr, gw, dns := strings.Join(r.Net.Addresses, " "), strings.Join(r.Net.Gateways, " "), strings.Join(r.Net.DNS, " ")
-		if err := c.form(
-			huh.NewInput().Title("Address with prefix (several: separated by spaces)").Value(&addr).Validate(validList(true, true)),
-			huh.NewInput().Title("Gateway (empty: none)").Value(&gw).Validate(validList(false, false)),
-			huh.NewInput().Title("DNS servers (empty: none)").Value(&dns).Validate(validList(false, false)),
-		).Run(); err != nil {
+		addr, err := c.ask().Input("Address with prefix (several: separated by spaces)", "", strings.Join(r.Net.Addresses, " "), validList(true, true))
+		if err != nil {
+			return err
+		}
+		gw, err := c.ask().Input("Gateway (empty: none)", "", strings.Join(r.Net.Gateways, " "), validList(false, false))
+		if err != nil {
+			return err
+		}
+		dns, err := c.ask().Input("DNS servers (empty: none)", "", strings.Join(r.Net.DNS, " "), validList(false, false))
+		if err != nil {
 			return err
 		}
 		r.Net.Addresses, r.Net.Gateways, r.Net.DNS = strings.Fields(addr), strings.Fields(gw), strings.Fields(dns)
@@ -189,10 +192,11 @@ func (c *controller) runSSH() error {
 		}
 	}
 	r := c.facts.Remote
-	on := r.SSH.On // off until somebody says yes
-	if err := c.form(huh.NewConfirm().Title("Start the SSH server with the code screen?").
-		Description("tpm2-kira's own, unprivileged SSH server at boot: log in as root with a key of " + r.SSH.Assh.AuthorizedKeys + ", confirm the code, type the password there.").
-		Affirmative("Yes").Negative("No: the network alone").Value(&on)).Run(); err != nil {
+	// Off until somebody says yes.
+	on, err := c.ask().Confirm("Start the SSH server with the code screen?",
+		"tpm2-kira's own, unprivileged SSH server at boot: log in as root with a key of "+r.SSH.Assh.AuthorizedKeys+", confirm the code, type the password there. No: the network alone.",
+		r.SSH.On)
+	if err != nil {
 		return err
 	}
 	wasOn := r.SSH.On
@@ -204,23 +208,23 @@ func (c *controller) runSSH() error {
 		return c.offerRemoveSSHCA(r.SSH.Assh.CA)
 	}
 	if on {
-		port, hold := strconv.Itoa(r.SSH.Port()), strconv.Itoa(r.SSH.Hold)
-		if err := c.form(
-			huh.NewInput().Title("SSH port").Value(&port).Validate(func(s string) error {
-				if p, err := strconv.Atoi(s); err != nil || p < 1 || p > 65535 {
-					return errors.New("a port number")
-				}
-				return nil
-			}),
-			huh.NewInput().Title("Seconds the boot waits for the confirmation (0: until it comes)").
-				Description("Enter at the console always continues there at once.").
-				Value(&hold).Validate(func(s string) error {
+		port, err := c.ask().Input("SSH port", "", strconv.Itoa(r.SSH.Port()), func(s string) error {
+			if p, err := strconv.Atoi(s); err != nil || p < 1 || p > 65535 {
+				return errors.New("a port number")
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		hold, err := c.ask().Input("Seconds the boot waits for the confirmation (0: until it comes)",
+			"Enter at the console always continues there at once.", strconv.Itoa(r.SSH.Hold), func(s string) error {
 				if h, err := strconv.Atoi(s); err != nil || h < 0 {
 					return errors.New("seconds, or 0")
 				}
 				return nil
-			}),
-		).Run(); err != nil {
+			})
+		if err != nil {
 			return err
 		}
 		r.SSH.Assh.Listen = ":" + port
@@ -319,11 +323,11 @@ func (c *controller) ensureSSHCA(conf *config.Config) error {
 		fmt.Fprintln(c.out, warn("No signing key (step 1, Set up): it approves the PCR states the SSH CA signs in."))
 		return nil
 	}
-	typ := conf.CAType
-	if err := c.form(huh.NewSelect[hostkey.Type]().Title("Create the SSH CA in the TPM").
-		Description("The boot image's host key is made in the TPM at every boot and certified by this CA, which never leaves the TPM and signs only while the PCRs hold values the signing key approved: PCR 0 (firmware), 2 (option ROMs), 7 (Secure Boot) and the image's, or PCR 7 alone (with GRUB's 8 and 9 on GRUB, where Secure Boot does not cover the command line and the initrd). It is kept in the EFI variable KIRAasshCA; slot approve approves each rebuilt image. Clients trust the CA, once.").
-		Options(huh.NewOption("ECDSA P-256 (recommended)", hostkey.P256), huh.NewOption("RSA-2048", hostkey.RSA2048)).
-		Value(&typ)).Run(); err != nil {
+	typ, err := prompt.Select(c.ask(), "Create the SSH CA in the TPM",
+		"The boot image's host key is made in the TPM at every boot and certified by this CA, which never leaves the TPM and signs only while the PCRs hold values the signing key approved: PCR 0 (firmware), 2 (option ROMs), 7 (Secure Boot) and the image's, or PCR 7 alone (with GRUB's 8 and 9 on GRUB, where Secure Boot does not cover the command line and the initrd). It is kept in the EFI variable KIRAasshCA; slot approve approves each rebuilt image. Clients trust the CA, once.",
+		[]prompt.Option[hostkey.Type]{{Label: "ECDSA P-256 (recommended)", Value: hostkey.P256}, {Label: "RSA-2048", Value: hostkey.RSA2048}},
+		conf.CAType)
+	if err != nil {
 		return err
 	}
 	signer, err := c.signingKey()

@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -9,9 +10,9 @@ import (
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/mrwiora/tpm2-kira/internal/prompt"
 	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
-
-	"charm.land/huh/v2"
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
 )
 
 // control's option for the disk key with the vault's salt (docs/VAULT.md):
@@ -112,43 +113,58 @@ func (c *controller) runVault() error {
 		}
 	}
 
-	var url, pin, token, ca string
-	pepper := false
+	var url, pin, ca string
+	var token []byte // the one-time token, shown to nobody, until it is sent
+	defer func() { wipe.Bytes(token) }()
 	for edit := true; ; {
 		if edit {
-			if err := c.form(
-				huh.NewInput().Title("The vault's address").Description("https://host[:port], as 'tpm2-kira-vault token create' prints it.").
-					Value(&url).Validate(func(s string) error {
+			var err error
+			if url, err = c.ask().Input("The vault's address", "https://host[:port], as 'tpm2-kira-vault token create' prints it.",
+				url, func(s string) error {
 					_, err := vaultkey.CheckURL(strings.TrimSpace(s))
 					return err
-				}),
-				huh.NewInput().Title("The vault's key pin").Description("sha256: and 64 hexadecimal characters: the vault is taken for real only with this key.").
-					Value(&pin).Validate(func(s string) error {
+				}); err != nil {
+				return err
+			}
+			if pin, err = c.ask().Input("The vault's key pin", "sha256: and 64 hexadecimal characters: the vault is taken for real only with this key.",
+				pin, func(s string) error {
 					if !vaultPinRe.MatchString(strings.TrimSpace(s)) {
 						return errors.New("sha256: and 64 hexadecimal characters")
 					}
 					return nil
-				}),
-				huh.NewInput().Title("The vault's root certificate").
-					Description("A file with it, as 'tpm2-kira-vault tls root' prints it; empty when "+vaultkey.RootsPath+" holds it already. Taken only when its key is the pin.").
-					Value(&ca).Validate(func(s string) error {
+				}); err != nil {
+				return err
+			}
+			if ca, err = c.ask().Input("The vault's root certificate",
+				"A file with it, as 'tpm2-kira-vault tls root' prints it; empty when "+vaultkey.RootsPath+" holds it already. Taken only when its key is the pin.",
+				ca, func(s string) error {
 					if s = strings.TrimSpace(s); s == "" {
 						return nil
 					}
 					_, err := os.Stat(s)
 					return err
-				}),
-				huh.NewInput().Title("The one-time token").EchoMode(huh.EchoModePassword).
-					Value(&token).Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return errors.New("the token 'tpm2-kira-vault token create' printed")
-					}
-					return nil
-				}),
-			).Run(); err != nil {
+				}); err != nil {
 				return err
 			}
-			url, pin, token, ca = strings.TrimSpace(url), strings.ToLower(strings.TrimSpace(pin)), strings.TrimSpace(token), strings.TrimSpace(ca)
+			held := len(token) > 0
+			description := ""
+			if held {
+				description = "Enter alone keeps the one given."
+			}
+			typed, err := c.ask().Password("The one-time token", description, func(b []byte) error {
+				if len(bytes.TrimSpace(b)) == 0 && !held {
+					return errors.New("the token 'tpm2-kira-vault token create' printed")
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			if t := bytes.TrimSpace(typed); len(t) > 0 {
+				wipe.Bytes(token)
+				token = t
+			}
+			url, pin, ca = strings.TrimSpace(url), strings.ToLower(strings.TrimSpace(pin)), strings.TrimSpace(ca)
 			if ca != "" {
 				if err := vaultkey.AddRoot(ca, pin); err != nil {
 					fmt.Fprintln(c.out, bad("The root certificate: "+err.Error()))
@@ -164,24 +180,22 @@ func (c *controller) runVault() error {
 		}
 		fmt.Fprintln(c.out, bad("The vault "+v.Problem+"."))
 		fmt.Fprintln(c.out, "Asked from the running system: a vault that does not answer here cannot take the enrolment.")
-		choice := "again"
-		if err := c.form(huh.NewSelect[string]().Title("The vault did not answer").
-			Options(huh.NewOption("Ask again", "again"), huh.NewOption("Change the settings", "edit"), huh.NewOption("Cancel", "cancel")).
-			Value(&choice)).Run(); err != nil || choice == "cancel" {
+		choice, err := prompt.Select(c.ask(), "The vault did not answer", "",
+			[]prompt.Option[string]{{Label: "Ask again", Value: "again"}, {Label: "Change the settings", Value: "edit"}, {Label: "Cancel", Value: "cancel"}}, "again")
+		if err != nil || choice == "cancel" {
 			return errors.New("not enrolled: the vault did not answer")
 		}
 		edit = choice == "edit"
 	}
-	typedPassword := false
-	if err := c.form(huh.NewSelect[bool]().Title("The password").
-		Description("Held by this TPM, the boot opens unattended once the vault releases the salt. Typed at the machine after the code screen, the disk needs a person as well.").
-		Options(huh.NewOption("Held by this TPM: unattended (0x2400)", false), huh.NewOption("Typed at the machine (0x1400)", true)).
-		Value(&typedPassword)).Run(); err != nil {
+	typedPassword, err := prompt.Select(c.ask(), "The password",
+		"Held by this TPM, the boot opens unattended once the vault releases the salt. Typed at the machine after the code screen, the disk needs a person as well.",
+		[]prompt.Option[bool]{{Label: "Held by this TPM: unattended (0x2400)", Value: false}, {Label: "Typed at the machine (0x1400)", Value: true}}, false)
+	if err != nil {
 		return err
 	}
-	if err := c.form(huh.NewConfirm().Title("With an operator's pepper?").
-		Description("The key then needs a secret an operator gives with each approval on the vault: every boot waits for that approval. Typed here once, never sent at enrolment, never stored by the vault.").
-		Affirmative("Yes, with a pepper").Negative("No").Value(&pepper)).Run(); err != nil {
+	pepper, err := c.confirm("With an operator's pepper?",
+		"The key then needs a secret an operator gives with each approval on the vault: every boot waits for that approval. Typed here once, never sent at enrolment, never stored by the vault.")
+	if err != nil {
 		return err
 	}
 
@@ -198,7 +212,7 @@ func (c *controller) runVault() error {
 		recipe |= diskkey.Recipe(diskkey.FlagPepper)
 	}
 	if err := LuksEnrol(LuksEnrolOptions{Device: dev, Recipe: recipe,
-		Vault: VaultEnrolOptions{TPMPath: c.o.TPMPath, SealIndex: uint32(strong.Slot), URL: url, Pin: pin, Token: token,
+		Vault: VaultEnrolOptions{TPMPath: c.o.TPMPath, SealIndex: uint32(strong.Slot), URL: url, Pin: pin, Token: string(token),
 			Name: name, Pepper: pepper, Yes: true, SecureBootSaid: true, Debug: c.o.Debug}}); err != nil {
 		return err
 	}
@@ -216,11 +230,10 @@ func (c *controller) vaultEnrolled(s StatusSlot) error {
 	default:
 		fmt.Fprintf(c.out, "%s: %s\n", s.Vault, bad(v.Problem))
 	}
-	choice := "check"
-	if err := c.form(huh.NewSelect[string]().Title("The vault of slot "+fmt.Sprint(s.Slot)).
-		Options(huh.NewOption("Ask the vault again", "check"),
-			huh.NewOption("Remove: the vault's keyslots, and the vault's part of the slot", "remove")).
-		Value(&choice)).Run(); err != nil {
+	choice, err := prompt.Select(c.ask(), "The vault of slot "+fmt.Sprint(s.Slot), "",
+		[]prompt.Option[string]{{Label: "Ask the vault again", Value: "check"},
+			{Label: "Remove: the vault's keyslots, and the vault's part of the slot", Value: "remove"}}, "check")
+	if err != nil {
 		return err
 	}
 	if choice == "check" {
@@ -253,7 +266,7 @@ func (c *controller) pickDevice() (string, error) {
 		}
 	}
 	if len(devices) == 1 {
-		if ok, err := c.confirm("The keyslot goes to "+devices[0]+".", "Go on?"); err != nil || !ok {
+		if ok, err := c.confirm("The keyslot goes to "+devices[0]+". Go on?", ""); err != nil || !ok {
 			return "", errors.New("not confirmed")
 		}
 		return devices[0], nil

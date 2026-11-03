@@ -19,6 +19,7 @@ import (
 
 	"github.com/mrwiora/tpm2-kira/internal/pcsc"
 	"github.com/mrwiora/tpm2-kira/internal/piv"
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
 	"golang.org/x/sys/unix"
 )
 
@@ -487,7 +488,7 @@ type tokenSession struct {
 	conn      *TokenConn
 	card      *piv.Card
 	closeAll  func()
-	pin       string
+	pin       []byte
 	pinSource string
 	unlocked  bool  // this process has verified the PIN at least once
 	fatal     error // sticky: set on anything that must not be retried
@@ -701,16 +702,17 @@ func (sess *tokenSession) ensurePIN(s *YubiKeySigner, force bool) error {
 	if remaining < 3 && !sess.unlocked {
 		fmt.Fprintf(os.Stderr, "YubiKey %d: PIN retries remaining: %d\n", s.stub.Serial, remaining)
 	}
-	if sess.pin == "" {
+	if len(sess.pin) == 0 {
 		pin, source, err := readPIN(s)
 		if err != nil {
 			sess.fatal = unavailable(s, "%v", err)
 			return sess.fatal
 		}
-		sess.pin, sess.pinSource = pin, source
+		sess.pin, sess.pinSource = []byte(pin), source
 	}
 	if err := sess.card.VerifyPIN(sess.pin); err != nil {
-		sess.pin = ""
+		wipe.Bytes(sess.pin)
+		sess.pin = nil
 		sess.fatal = unavailable(s, "%v (PIN from %s) — stopping here so no further attempt is spent", err, sess.pinSource)
 		return sess.fatal
 	}
@@ -778,8 +780,9 @@ func warnIfNoUnattendedPIN(w io.Writer) {
 // VerifyYubiKeyPIN checks pin against the token key signs with, so a PIN
 // about to be stored is known to be right; a wrong one costs one of the
 // token's attempts, which is why fewer than two left is refused. On
-// success the session is unlocked for the signatures that follow.
-func VerifyYubiKeyPIN(key crypto.Signer, pin string) error {
+// success the session is unlocked for the signatures that follow. pin stays the
+// caller's, who wipes it: the session keeps no copy.
+func VerifyYubiKeyPIN(key crypto.Signer, pin []byte) error {
 	s, ok := key.(*YubiKeySigner)
 	if !ok {
 		return errors.New("the signing key is not on a YubiKey")
@@ -798,7 +801,7 @@ func VerifyYubiKeyPIN(key crypto.Signer, pin string) error {
 	if err := sess.card.VerifyPIN(pin); err != nil {
 		return fmt.Errorf("YubiKey %d: %v", s.stub.Serial, err)
 	}
-	sess.pin, sess.pinSource, sess.unlocked = pin, "control", true
+	sess.unlocked = true
 	return nil
 }
 
@@ -858,7 +861,7 @@ func CloseTokenSessions() {
 			sess.conn.Close(true)
 		}
 		sess.closeAll()
-		sess.pin = ""
+		wipe.Bytes(sess.pin)
 		delete(tokenSessions, serial)
 	}
 }
@@ -889,8 +892,8 @@ func PINPath() string {
 }
 
 // StorePIN writes the PIN, readable by root alone.
-func StorePIN(path, pin string) error {
-	if strings.ContainsAny(pin, "\n") {
+func StorePIN(path string, pin []byte) error {
+	if bytes.IndexByte(pin, '\n') >= 0 {
 		return fmt.Errorf("the PIN cannot hold a newline")
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
@@ -901,7 +904,11 @@ func StorePIN(path, pin string) error {
 		f.Close()
 		return err
 	}
-	if _, err := f.WriteString(pin + "\n"); err != nil {
+	if _, err := f.Write(pin); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.WriteString("\n"); err != nil {
 		f.Close()
 		return err
 	}

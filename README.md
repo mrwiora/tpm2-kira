@@ -396,11 +396,11 @@ the commands in a line.
 Each screen is a page of its own, cleared each time it is shown; what a
 step prints stays until "Back to ..." is answered. Sealing both slots,
 each QR code gets a cleared screen of its own, held until you confirm it
-is in your authenticator. The screens are forms (arrow keys, Enter; Esc
-leaves, in a submenu back to step 2; `ACCESSIBLE=1` for plain prompts),
-built with [huh v2](https://github.com/charmbracelet/huh) (module
-charm.land/huh/v2); without a terminal, `control` prints both steps and
-exits.
+is in your authenticator. The screens are numbered text menus: a number and
+Enter (Enter alone takes what is named above the menu, never a step);
+Ctrl-C, Ctrl-D or Esc leaves, in a submenu back to step 2. Colours are ANSI,
+none with `NO_COLOR` or on a non-terminal. Without a terminal, `control`
+prints both steps and exits.
 
 ```
   [ KIRA ] control 0.5.0-rc1 - the protections of this machine, step by step
@@ -419,11 +419,12 @@ exits.
   The boot chain
   Recommended next: Kernel command line adoption (the key's route)
   systemd-cryptsetup takes a volume's key from tpm2-kira when its rd.luks.key= names the socket. ...
-┃   ✓ mkinitcpio adoption  - sd-tpm2-kira in HOOKS of /etc/mkinitcpio.conf
-┃ > • Kernel command line adoption (the key's route)
-┃   - Continue to step 2  - first: Kernel command line adoption (the key's route)
-┃     Quit
-↑ up • ↓ down • enter submit
+  Enter alone: Quit
+  1. ✓ mkinitcpio adoption  - sd-tpm2-kira in HOOKS of /etc/mkinitcpio.conf
+  2. • Kernel command line adoption (the key's route)
+  3. - Continue to step 2  - first: Kernel command line adoption (the key's route)
+  4.   Quit
+  Enter a number between 1 and 4:
 ```
 
 ## Commands

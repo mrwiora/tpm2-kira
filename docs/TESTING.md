@@ -303,7 +303,8 @@ The setup:
 5. **`luks enrol --salt typed`** (the recovery recipe) with a test password and salt, and the memory
    of a command that holds it: a refused lock stops it before it asks, `VmLck`, `VmSwap` under
    a hog.
-6. **`control`, answered line by line** (`ACCESSIBLE=1`): step 1's
+6. **`control`, answered line by line** (its menus, a pty; the session answers its
+   "[Enter: ...]" holds): step 1's
    adoptions (the mkinitcpio hook, the key's route), the image's network
    (DHCP, as proposed), the SSH server at boot (port 2222, a 600 s hold)
    with its SSH CA, debug at boot, the image rebuilt when control is left.

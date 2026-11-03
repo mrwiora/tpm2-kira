@@ -369,8 +369,9 @@ class SavedSetup:
 
 class Session:
     """An interactive ssh session in a pty: expect text, send keys. The
-    password prompts of ssh and sudo are answered by themselves; every
-    other prompt is the test's to answer."""
+    password prompts of ssh and sudo, and control's holds after a step
+    ("[Enter: OK]": for a person to read what the step printed), are answered
+    by themselves; every other prompt is the test's to answer."""
 
     def __init__(self, argv, log_path, password=None):
         self.password = password
@@ -399,6 +400,9 @@ class Session:
         tail = self.buf[self.answered:][-300:]
         if self.password and (re.search(rb"'s password: ?$", tail) or re.search(rb"\[sudo\] password for [^:]*: ?$", tail)):
             os.write(self.fd, (self.password + "\n").encode())
+            self.answered = len(self.buf)
+        elif re.search(rb"\[Enter: [^\]\n]*\] ?$", tail):
+            os.write(self.fd, b"\n")
             self.answered = len(self.buf)
 
     def text(self):
@@ -974,7 +978,7 @@ class Machine:
 
     def control(self):
         self.head("control, answered line by line")
-        s = self.session("sudo ACCESSIBLE=1 tpm2-kira control", "control")
+        s = self.session("sudo tpm2-kira control", "control")
         menu = r"Enter a number between 1 and \d+: ?$"
         try:
             # Step 1: every open adoption, written when asked; then on.
@@ -1706,7 +1710,7 @@ class Machine:
             s.close()
         self.check("at a terminal, n: left, and said", moved() and left in out, out[-500:])
 
-        s = self.session("sudo ACCESSIBLE=1 tpm2-kira control", "control-channel")
+        s = self.session("sudo tpm2-kira control", "control-channel")
         menu = r"Enter a number between 1 and \d+: ?$"
 
         def pick(rx, timeout=120):
@@ -1753,7 +1757,7 @@ class Machine:
         self.head("removing what tpm2-kira keeps in the TPM and the EFI variables")
         ca_var = "/sys/firmware/efi/efivars/KIRAasshCA-24415b90-39be-45c0-a9a3-d547ebe28ea0"
         there = lambda path: "yes" in self.run(f"test -e {path} && echo yes")[1]
-        s = self.session("sudo ACCESSIBLE=1 tpm2-kira control", "control-ssh-off")
+        s = self.session("sudo tpm2-kira control", "control-ssh-off")
         menu = r"Enter a number between 1 and \d+: ?$"
 
         def pick(rx, timeout=120):

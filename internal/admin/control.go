@@ -15,20 +15,19 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/key"
-	"charm.land/huh/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/mrwiora/tpm2-kira/core/attest"
 	"github.com/mrwiora/tpm2-kira/internal/diskkey"
 	"github.com/mrwiora/tpm2-kira/internal/imageplan"
 	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/mrwiora/tpm2-kira/internal/prompt"
 	"github.com/mrwiora/tpm2-kira/internal/sbstate"
 	"github.com/mrwiora/tpm2-kira/internal/screen"
 	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
 	"golang.org/x/sys/unix"
 )
 
@@ -435,6 +434,7 @@ func (s controlStep) marker() string {
 type controller struct {
 	o     ControlOptions
 	out   io.Writer
+	p     *prompt.Prompter
 	tty   bool
 	facts machineFacts
 	// screen is what the overview shows: "chain" (step 1), "hub" (step 2)
@@ -452,12 +452,11 @@ func ControlNeedsRoot() {
 	}
 	c := &controller{out: os.Stdout}
 	fmt.Fprint(c.out, clearScreen)
-	c.form(huh.NewNote().Title("[ KIRA ] control needs root").Description(noteText(text)).Next(true).NextLabel("Quit")).Run()
+	c.ask().Note("[ KIRA ] control needs root", text)
 }
 
 // header is the one line on top of every overview: the tag, the version,
-// what this is. Printed once per screen, outside the form, so a redraw of
-// the form cannot double it.
+// what this is.
 func (c *controller) header() string {
 	v := nvslot.AppVersion
 	if v == "" {
@@ -473,6 +472,8 @@ func Control(o ControlOptions) error {
 	if c.out == nil {
 		c.out = os.Stdout
 	}
+	c.p = prompt.New(os.Stdin, c.out)
+	c.out = c.p.Writer()
 	c.tty = isTerminal(os.Stdin)
 	// The configuration file first: control writes it, and a step taken
 	// on a file that does not load would be taken on defaults it never
@@ -526,7 +527,7 @@ func Control(o ControlOptions) error {
 			continue
 		}
 		if s.Done != "" && !s.SelfConfirm {
-			again, err := c.confirm(s.Title+" is done", s.Done+". Run it again?")
+			again, err := c.confirm(s.Title+" is done: "+s.Done+". Run it again?", "")
 			if err != nil || !again {
 				continue
 			}
@@ -535,8 +536,8 @@ func Control(o ControlOptions) error {
 		if err := s.Run(c); err != nil {
 			fmt.Fprintf(c.out, "\n\033[0;31mNot done:\033[0m %v\n", err)
 		}
-		// One button: whatever happened, the screen follows (Esc leaves).
-		if err := c.form(huh.NewNote().Title("Back to " + c.screenTitle()).Next(true).NextLabel("OK")).Run(); err != nil {
+		// Whatever happened, the screen follows once it was read (Esc leaves).
+		if err := c.ask().Wait("Back to "+c.screenTitle(), "", "OK"); err != nil {
 			c.leave()
 			return nil
 		}
@@ -569,88 +570,48 @@ func (c *controller) screenTitle() string {
 // clearScreen is the terminal cleared, the cursor at the top.
 const clearScreen = "\033[H\033[2J"
 
-// The forms (charm.land/huh v2): the overview with the step to pick, a
-// yes/no, a device. They render inline, so what a step prints stays on
-// the screen above the next form. Esc or Ctrl-C leaves.
-
-// theme is the base theme in this machine's colours, the same on a light
-// and a dark background. (huh v2, charm.land: its bubbletea asks the
-// terminal for the background colour inside the program, where the reply
-// is read as a reply; v1 asked at process start and a reply that came a
-// moment late was read by the form as keystrokes.)
-func (c *controller) theme() huh.Theme {
-	return huh.ThemeFunc(func(bool) *huh.Styles {
-		t := huh.ThemeBase(true)
-		yellow, grey := lipgloss.Color("3"), lipgloss.Color("8")
-		t.Focused.Title = t.Focused.Title.Foreground(yellow).Bold(true)
-		t.Focused.SelectSelector = t.Focused.SelectSelector.Foreground(yellow)
-		t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(yellow).Bold(true)
-		t.Focused.Description = t.Focused.Description.Foreground(lipgloss.Color("7"))
-		t.Focused.ErrorMessage = t.Focused.ErrorMessage.Foreground(lipgloss.Color("1"))
-		for _, s := range []*lipgloss.Style{&t.Help.Ellipsis, &t.Help.ShortKey, &t.Help.ShortDesc, &t.Help.ShortSeparator,
-			&t.Help.FullKey, &t.Help.FullDesc, &t.Help.FullSeparator} {
-			*s = lipgloss.NewStyle().Foreground(grey)
-		}
-		t.Blurred.Title, t.Blurred.Description = t.Focused.Title, t.Focused.Description
-		return t
-	})
+// ask is what control asks with (internal/prompt): the overview with the step to
+// pick, a yes/no, a device. What a step prints stays on the screen above the next
+// question. Ctrl-C, Ctrl-D or Esc leaves.
+func (c *controller) ask() *prompt.Prompter {
+	if c.p == nil {
+		c.p = prompt.New(os.Stdin, c.out)
+	}
+	return c.p
 }
 
-func (c *controller) form(fields ...huh.Field) *huh.Form {
-	km := huh.NewDefaultKeyMap()
-	km.Select.Filter.SetEnabled(false) // a handful of entries: no filter
-	// Esc leaves a form as Ctrl-C does: in a submenu back to step 2, in a
-	// step the step ends undone.
-	km.Quit = key.NewBinding(key.WithKeys("ctrl+c", "esc"), key.WithHelp("esc", "leave"))
-	return huh.NewForm(huh.NewGroup(fields...)).WithTheme(c.theme()).WithKeyMap(km).WithShowHelp(true).WithAccessible(os.Getenv("ACCESSIBLE") != "")
-}
-
-// pick is the overview: the facts as a note, the steps as a select with
-// their state, the recommendation in the description. A blocked step
-// cannot be picked; the reason is shown instead. "" is leave.
+// pick is the overview: the facts as a note, the steps as a menu with their
+// state, the recommendation in the text. A blocked step cannot be picked; the
+// reason is shown instead. "" is leave.
 func (c *controller) pick(steps []controlStep) (string, error) {
-	blocked := map[string]string{}
-	var opts []huh.Option[string]
+	var opts []prompt.Option[string]
 	for _, s := range steps {
-		opts = append(opts, huh.NewOption(stepLabel(s), s.Key))
+		o := prompt.Option[string]{Label: stepLabel(s), Value: s.Key}
 		switch {
 		case s.Dirty != "":
 		case s.Done != "" && s.Check:
-			blocked[s.Key] = "in place: " + s.Done
+			o.Blocked = "in place: " + s.Done
 		case s.Done == "" && s.Blocked != "":
-			blocked[s.Key] = s.Blocked
+			o.Blocked = s.Blocked
 		}
+		opts = append(opts, o)
 	}
 	if c.screen == "chain" || c.screen == "hub" {
-		opts = append(opts, huh.NewOption("  Quit", ""))
+		opts = append(opts, prompt.Option[string]{Label: "  Quit", Value: ""})
 	}
-	// Quit (in a submenu: Back) is preselected, on entering and on every
-	// return: Enter alone never runs a step, the recommendation is named
-	// in the text and picked by hand.
-	choice := ""
+	// Quit (in a submenu: Back) is what Enter alone takes, on entering and on every
+	// return: Enter alone never runs a step, the recommendation is named in the
+	// text and picked by hand.
+	def := ""
 	if c.screen != "chain" && c.screen != "hub" {
-		choice = "back"
+		def = "back"
 	}
-	err := c.form(
-		huh.NewNote().Description(c.screenNote(steps)),
-		huh.NewSelect[string]().Options(opts...).Value(&choice).
-			Validate(func(k string) error {
-				if why, ok := blocked[k]; ok {
-					return errors.New(why)
-				}
-				return nil
-			}),
-	).Run()
-	if err != nil {
-		return "", err
-	}
-	return choice, nil
+	return prompt.Select(c.ask(), "", c.screenNote(steps), opts, def)
 }
 
-// stepLabel is a step's line in the select. The same colours as the
-// status: red the dirty, green the done, orange the open, the blocked
-// grey. Only the mark is coloured, so the selection's own styling stays
-// readable.
+// stepLabel is a step's line in the menu. The same colours as the status:
+// red the dirty, green the done, orange the open; the menu greys the blocked.
+// Only the mark is coloured.
 func stepLabel(s controlStep) string {
 	indent := ""
 	switch {
@@ -659,7 +620,7 @@ func stepLabel(s controlStep) string {
 	case s.Done != "":
 		return indent + good("✓") + " " + s.Title + "  - " + s.Done
 	case s.Blocked != "":
-		return indent + "\033[0;90m-\033[0m " + s.Title + "  - " + s.Blocked
+		return indent + "- " + s.Title + "  - " + s.Blocked
 	case s.Key == "back":
 		return "  " + s.Title
 	case s.Menu != "":
@@ -668,14 +629,14 @@ func stepLabel(s controlStep) string {
 	return indent + amber("•") + " " + s.Title
 }
 
-// screenNote is the text above the select: on step 1 the prerequisites,
+// screenNote is the text above the menu: on step 1 the prerequisites,
 // on step 2 the machine's status, in a submenu what it is about; then the
 // recommendation, and on step 2 the status' notes.
 func (c *controller) screenNote(steps []controlStep) string {
 	head := c.headline(steps)
 	switch c.screen {
 	case "chain":
-		return "*Prerequisites*\n" + noteText(c.prereqText()) + "\n*The boot chain*\n" + noteText(head)
+		return heading("Prerequisites") + "\n" + c.prereqText() + "\n" + heading("The boot chain") + "\n" + head
 	case "hub":
 		if notes := c.facts.Status.Notes; len(notes) > 0 {
 			head += "\n\nNotes:"
@@ -683,9 +644,9 @@ func (c *controller) screenNote(steps []controlStep) string {
 				head += "\n- " + n
 			}
 		}
-		return c.noteDescription() + "\n*Step 2*\n" + noteText(head)
+		return c.noteDescription() + "\n" + heading("Step 2") + "\n" + head
 	}
-	return noteText(menuByKey(c.screen).intro + "\n\n" + head)
+	return menuByKey(c.screen).intro + "\n\n" + head
 }
 
 // headline is the recommendation of a screen, or what the screen offers
@@ -707,37 +668,24 @@ func (c *controller) headline(steps []controlStep) string {
 }
 
 func (c *controller) confirm(title, description string) (bool, error) {
-	yes := false
-	err := c.form(huh.NewConfirm().Title(title).Description(description).Affirmative("Yes").Negative("No").Value(&yes)).Run()
-	return yes, err
+	return c.ask().Confirm(title, description, false)
 }
 
 func (c *controller) choose(title string, items []string) (int, error) {
-	if len(items) == 0 {
-		return 0, errors.New("nothing to choose from")
-	}
-	var opts []huh.Option[int]
+	var opts []prompt.Option[int]
 	for i, it := range items {
-		opts = append(opts, huh.NewOption(it, i))
+		opts = append(opts, prompt.Option[int]{Label: it, Value: i})
 	}
-	n := 0
-	if err := c.form(huh.NewSelect[int]().Title(title).Options(opts...).Value(&n)).Run(); err != nil {
-		return 0, err
-	}
-	return n, nil
+	return prompt.Select(c.ask(), title, "", opts, 0)
 }
 
 // noteDescription is the overview note: the status, judged line by line.
 func (c *controller) noteDescription() string {
-	return "*What this machine has*\n" + noteText(c.factsText())
+	return heading("What this machine has") + "\n" + c.factsText()
 }
 
-// noteText is text for a note's description: huh's note reads \, _ and
-// * as markup, and its wrapping drops the spaces a line begins with.
-func noteText(s string) string {
-	s = strings.NewReplacer(`\`, `\\`, "_", `\_`, "*", `\*`).Replace(s)
-	return strings.ReplaceAll("\n"+s, "\n  ", "\n")[1:]
-}
+// heading is a heading in a screen's text.
+func heading(s string) string { return "\033[1m" + s + "\033[0m" }
 
 // The status is judged line by line: green is good, red is not good and
 // says why - the risk in brackets. What is neither (plain information)
@@ -1131,19 +1079,18 @@ func (c *controller) storePIN() error {
 		return err
 	}
 	desc, _ := signing.YubiKeyDescription(key)
-	pin := ""
-	err = c.form(huh.NewInput().Title("PIN of " + desc).
-		Description("Checked on the token, then stored in " + signing.PINPath() + " for the approval the hooks run; readable by root alone, never in the initramfs.").
-		EchoMode(huh.EchoModePassword).Value(&pin).
-		Validate(func(s string) error {
-			if s == "" {
+	pin, err := c.ask().Password("PIN of "+desc,
+		"Checked on the token, then stored in "+signing.PINPath()+" for the approval the hooks run; readable by root alone, never in the initramfs.",
+		func(b []byte) error {
+			if len(b) == 0 {
 				return errors.New("the PIN is empty")
 			}
 			return nil
-		})).Run()
+		})
 	if err != nil {
 		return err
 	}
+	defer wipe.Bytes(pin)
 	if err := signing.VerifyYubiKeyPIN(key, pin); err != nil {
 		return err
 	}
@@ -1204,9 +1151,7 @@ func (c *controller) runSeal() error {
 // scanned holds a slot's QR code on the screen until the person says the
 // authenticator has it.
 func (c *controller) scanned(what string) error {
-	return c.form(huh.NewNote().Title(what + " is sealed").
-		Description("Scan the QR code above with your authenticator now: it is shown this once.").
-		Next(true).NextLabel("It is in my authenticator")).Run()
+	return c.ask().Wait(what+" is sealed", "Scan the QR code above with your authenticator now: it is shown this once.", "It is in my authenticator")
 }
 
 // confirmPCRs puts the evaluated selection up as the recommendation for
@@ -1216,29 +1161,23 @@ func (c *controller) scanned(what string) error {
 func (c *controller) confirmPCRs() (string, error) {
 	f := &c.facts
 	const custom = "custom"
-	choice := f.PCRs
-	if err := c.form(huh.NewSelect[string]().Title("Slot 0 is sealed to these PCRs").
-		Description("Evaluated for this machine: "+f.PCRsWhy+".").
-		Options(
-			huh.NewOption("The recommended "+f.PCRs, f.PCRs),
-			huh.NewOption("Custom PCRs", custom),
-		).Value(&choice)).Run(); err != nil {
+	choice, err := prompt.Select(c.ask(), "Slot 0 is sealed to these PCRs", "Evaluated for this machine: "+f.PCRsWhy+".",
+		[]prompt.Option[string]{
+			{Label: "The recommended " + f.PCRs, Value: f.PCRs},
+			{Label: "Custom PCRs", Value: custom},
+		}, f.PCRs)
+	if err != nil {
 		return "", err
 	}
 	if choice != custom {
 		return choice, nil
 	}
-	pcrs := f.PCRs
-	if err := c.form(huh.NewInput().Title("PCRs for slot 0").
-		Description("Indices with a source each: none or r the register, e the event log, u the unified kernel image - such as 0e,2e,4u,7e,11u (tpm2-kira help slot).").
-		Value(&pcrs).
-		Validate(func(s string) error {
+	return c.ask().Input("PCRs for slot 0",
+		"Indices with a source each: none or r the register, e the event log, u the unified kernel image - such as 0e,2e,4u,7e,11u (tpm2-kira help slot).",
+		f.PCRs, func(s string) error {
 			_, err := measure.ParsePCRSpecs(s)
 			return err
-		})).Run(); err != nil {
-		return "", err
-	}
-	return pcrs, nil
+		})
 }
 
 func (c *controller) runAttest() error {
@@ -1402,11 +1341,9 @@ func (f *machineFacts) imageLine() string {
 	return good(line)
 }
 
-// confirmYes is confirm with Yes preselected: a proposal to deselect.
+// confirmYes is confirm with Yes what Enter alone gives: a proposal to turn down.
 func (c *controller) confirmYes(title, description string) (bool, error) {
-	yes := true
-	err := c.form(huh.NewConfirm().Title(title).Description(description).Affirmative("Yes").Negative("No").Value(&yes)).Run()
-	return yes, err
+	return c.ask().Confirm(title, description, true)
 }
 
 // runRemoveSlot is control's one way to delete a slot, whole: the slot's

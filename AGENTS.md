@@ -31,7 +31,7 @@ It may not carry what came before.
   `tpm2-kira` (the module root's `main`) is everything on the installed
   system; `tpm2-kira-boot` (`cmd/tpm2-kira-boot`) is what the boot image
   carries, and the hooks put nothing else in. It must not import
-  `internal/admin` or the TUI (`boot_binary_test.go`). Processes that must
+  `internal/admin` or its prompts, `internal/prompt` (`boot_binary_test.go`). Processes that must
   be separated at boot (the confined radio worker, the SSH server's
   unprivileged half) are `tpm2-kira-boot` run with other arguments, never a
   third executable. Code lives in `internal/`, by layer; a package knows

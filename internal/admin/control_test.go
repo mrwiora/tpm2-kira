@@ -342,16 +342,6 @@ func TestControlShow(t *testing.T) {
 	}
 }
 
-func TestNoteTextEscapesMarkupAndDropsIndent(t *testing.T) {
-	got := noteText("  TPM         /dev/tpm_rm0 *x*\n  Boot        a\\b\n")
-	want := "TPM         /dev/tpm\\_rm0 \\*x\\*\nBoot        a\\\\b\n"
-	if got != want {
-		t.Fatalf("noteText:\n%q\nwant\n%q", got, want)
-	}
-}
-
-// The status on top judges line by line: green what is good, red what is
-// not with the risk in brackets; there is no separate risks list.
 func TestControlStatusJudgement(t *testing.T) {
 	f := machineFacts{TPM: "/dev/tpmrm0", LogSHA256: true, Keys: "local key files",
 		SecureBoot: sbstate.State{Known: true, Enabled: true}, MemoryMiB: 8192, EKBy: "Infineon", Initramfs: "mkinitcpio"}

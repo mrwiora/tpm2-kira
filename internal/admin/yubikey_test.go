@@ -751,7 +751,7 @@ func TestPINAlwaysWithPINLeftVerified(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := other.VerifyPIN("123456"); err != nil {
+	if err := other.VerifyPIN([]byte("123456")); err != nil {
 		t.Fatal(err)
 	}
 	other.Sign(piv.SlotAuthentication, signer.Public(), make([]byte, 32)) // consumes the fresh VERIFY
