@@ -181,10 +181,38 @@ func warnIfNoUnattendedPIN(w io.Writer) {
 	fmt.Fprintln(w, "         (the signing key step), readable by root alone.")
 }
 
+// ignoredPINEnv held the PIN once: a string, not wipeable, inherited by every child,
+// readable in /proc/PID/environ.
+const ignoredPINEnv = "TPM2_KIRA_PIN"
+
+// pinEnvIgnored: this command found the variable set. Without a PIN, that is part of the
+// reason, as a hook captures the output and shows the reason alone.
+var pinEnvIgnored bool
+
+// IgnorePINEnv is for a script that still sets the variable: it finds out here, once,
+// also in what the command starts, as the variable goes from the environment they get.
+func IgnorePINEnv(w io.Writer) {
+	if _, set := os.LookupEnv(ignoredPINEnv); !set {
+		return
+	}
+	os.Unsetenv(ignoredPINEnv)
+	pinEnvIgnored = true
+	fmt.Fprintf(w, "tpm2-kira: WARNING: %s is set and ignored: the YubiKey's PIN comes from --pin-fd N, from %s or from the terminal\n", ignoredPINEnv, PINPath())
+}
+
+// noTerminalPIN is the reason when no source has a PIN and there is no terminal to ask on.
+func noTerminalPIN() error {
+	const reason = "no PIN: store it with tpm2-kira control, or give it with --pin-fd N (there is no terminal to ask on)"
+	if pinEnvIgnored {
+		return errors.New(reason + "\n" + ignoredPINEnv + " is set and ignored: it gives no PIN")
+	}
+	return errors.New(reason)
+}
+
 func promptPINOnTTY(s *YubiKeySigner) ([]byte, error) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return nil, errors.New("no PIN: store it with tpm2-kira control, or give it with --pin-fd N (there is no terminal to ask on)")
+		return nil, noTerminalPIN()
 	}
 	defer tty.Close()
 	fmt.Fprintf(tty, "PIN for %s: ", s.Describe())

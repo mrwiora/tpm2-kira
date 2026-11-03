@@ -331,7 +331,9 @@ root-only; else asked).
                      line, read at once, and the descriptor closed, so that
                      nothing the command starts inherits it. A descriptor that
                      gives none is the command's failure: neither the file nor
-                     the terminal is tried. For a systemd unit, LoadCredential=
+                     the terminal is tried, and the exit status is 2 on every
+                     command, the exception to exit 0 on failure ('a script
+                     asked for this source'). For a systemd unit, LoadCredential=
                      and: slot approve --unattended --pin-fd 3
                      3<"$CREDENTIALS_DIRECTORY/pin", through a shell. The same on
                      every command that may sign: control, slot add, luks enrol,

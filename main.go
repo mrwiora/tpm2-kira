@@ -4,7 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -31,7 +30,8 @@ var Version = "dev"
 // fail reports a command failure and exits 0 on purpose: tpm2-kira is meant to
 // be chainable (`tpm2-kira && cryptsetup ...`), so a TPM or read failure must
 // not stop the commands after it. Scripts must therefore detect failure from
-// the output, not the exit status — grep for the FAILED marker below.
+// the output, not the exit status — grep for the FAILED marker below. A bad --pin-fd is
+// the exception (parseSigning), as are the attest commands (failAttest).
 func fail(err error) {
 	signing.CloseTokenSessions()
 	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: %v\n", err)
@@ -39,24 +39,13 @@ func fail(err error) {
 	os.Exit(0)
 }
 
-// ignoredPINEnv held the YubiKey's PIN once: a string, not wipeable, inherited by every
-// child, readable in /proc/PID/environ. A script that still sets it finds out here, once,
-// also in what this command starts: it goes from the environment they get.
-const ignoredPINEnv = "TPM2_KIRA_PIN"
-
-func ignorePINEnv(w io.Writer) {
-	if _, set := os.LookupEnv(ignoredPINEnv); !set {
-		return
-	}
-	os.Unsetenv(ignoredPINEnv)
-	fmt.Fprintf(w, "tpm2-kira: WARNING: %s is set and ignored: the YubiKey's PIN comes from --pin-fd N, from %s or from the terminal\n", ignoredPINEnv, signing.PINPath())
-}
-
 // parseSigning parses the flags of a command that may sign, and --pin-fd with them:
 // the PIN is read and its descriptor closed here, before the command starts anything.
-// A descriptor that does not give a PIN ends the command through failed, with nothing
-// asked and no other source tried. secrets_test.go holds the list of these commands.
-func parseSigning(fs *flag.FlagSet, args []string, failed func(error)) {
+// A descriptor that does not give a PIN ends the command, with nothing asked and no other
+// source tried, and on every command with a status that says so: a script asked for this
+// source, and a chain must not go on as if it had worked. secrets_test.go holds the list
+// of these commands.
+func parseSigning(fs *flag.FlagSet, args []string) {
 	fd := -1
 	fs.Func("pin-fd", "Read the YubiKey's PIN from this open descriptor, one line, and close it; nothing else is asked then", func(v string) error {
 		if fd != -1 {
@@ -72,7 +61,7 @@ func parseSigning(fs *flag.FlagSet, args []string, failed func(error)) {
 	fs.Parse(args)
 	if fd != -1 {
 		if err := signing.UsePINDescriptor(fd); err != nil {
-			failed(err)
+			failUsage(err)
 		}
 	}
 }
@@ -180,7 +169,7 @@ func main() {
 	}
 
 	requireRoot(command, commandArgs)
-	ignorePINEnv(os.Stderr)
+	signing.IgnorePINEnv(os.Stderr)
 	if holdsSecrets(command, commandArgs) {
 		if err := memlock.Command(); err != nil {
 			fail(err)
@@ -196,7 +185,7 @@ func main() {
 		fs := flag.NewFlagSet("control", flag.ExitOnError)
 		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
 		dbg := fs.Bool("debug", *debug, "Enable debug output")
-		parseSigning(fs, commandArgs, fail)
+		parseSigning(fs, commandArgs)
 		if err := admin.Control(admin.ControlOptions{TPMPath: *tpm, Debug: *dbg}); err != nil {
 			fail(err)
 		}
@@ -414,7 +403,7 @@ func runSlotAdd(args []string, tpmPath string, debugFlag bool) {
 	verifyUKI := fs.Bool("verify-uki", true, "Check the built-in PCR 11 computation against this boot's event log before sealing")
 	withTOTP := fs.Bool("totp", false, "Seal a TOTP key too: a code at boot to compare with your authenticator app")
 
-	parseSigning(fs, args, fail)
+	parseSigning(fs, args)
 
 	mode, err := measure.ParseMeasurePointMode(*measurePoint)
 	if err != nil {
@@ -477,7 +466,7 @@ func runSlotApprove(args []string, tpmPath string, debugFlag bool) {
 	unattended := fs.Bool("unattended", false, "No person is here (the hooks): never asks, and a moved phone channel stays as it is")
 	sealChannel := fs.Bool("seal-channel", false, "Seal a moved phone channel to the next boot's PCR 7 without asking, after showing what moved it")
 
-	parseSigning(fs, args, fail)
+	parseSigning(fs, args)
 
 	channel, err := admin.ChannelApprovalFor(*unattended || *ifMoved, *sealChannel, admin.StdinIsTerminal())
 	if err != nil {
@@ -685,7 +674,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		adapterWait := fs.Duration("adapter-wait", 30*time.Second, "Wait this long for the adapter to appear")
 		existing := fs.String("existing-key-file", "", "A file with an existing passphrase to authorise luksAddKey (scripts; by default asked)")
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
-		parseSigning(fs, deviceLast(args[1:]), fail)
+		parseSigning(fs, deviceLast(args[1:]))
 		if fs.NArg() != 1 {
 			fail(fmt.Errorf("usage: tpm2-kira luks enrol <device> --password typed|tpm --salt typed|tpm|phone|vault [--pepper]"))
 		}
@@ -723,7 +712,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		existing := fs.String("existing-key-file", "", "A file with a remaining passphrase to authorise luksKillSlot (scripts; by default asked)")
 		tpm := fs.String("tpm", tpmPath, "Path to TPM device (the TPM salt goes with its last keyslot)")
 		privKey := fs.String("privkey", "", "Signing key, for the slot's blob (default: "+signing.DefaultPrivateKeyPath+")")
-		parseSigning(fs, deviceLast(args[1:]), fail)
+		parseSigning(fs, deviceLast(args[1:]))
 		if fs.NArg() != 1 || *keyslot < 0 {
 			fail(fmt.Errorf("usage: tpm2-kira luks remove <device> --keyslot N"))
 		}
@@ -756,7 +745,7 @@ func runVault(args []string, tpmPath string, debugFlag bool) {
 		out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
 		yes := fs.Bool("yes", false, "The recovery passphrase is in a second keyslot already; do not ask")
 		pepper := fs.Bool("pepper", false, "The key needs an operator's pepper too, asked here; every boot waits for an approval with it")
-		parseSigning(fs, args[1:], fail)
+		parseSigning(fs, args[1:])
 		if err := admin.VaultEnrol(admin.VaultEnrolOptions{TPMPath: *tpm, SealIndex: nvslot.ResolveNVRAMIndex(uint32(*nvram)),
 			URL: *vaultURL, Pin: *pin, Token: *token, Label: *label, Name: *name, Pepper: *pepper, PrivKeyPath: *privKey,
 			CA: *ca, Out: *out, Yes: *yes, Debug: *debug}); err != nil {
@@ -768,7 +757,7 @@ func runVault(args []string, tpmPath string, debugFlag bool) {
 			fail(err)
 		}
 	case "unenrol", "unenroll":
-		parseSigning(fs, args[1:], fail)
+		parseSigning(fs, args[1:])
 		if err := admin.VaultUnenrol(*tpm, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *privKey, *debug); err != nil {
 			fail(err)
 		}
@@ -846,7 +835,7 @@ func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 		nvram := fs.Uint("nvram", nvramDefault(0), "Slot (0-15) or sealed-blob NVRAM index")
 		privKey := fs.String("privkey", "", "Signing key (default: "+signing.DefaultPrivateKeyPath+")")
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
-		parseSigning(fs, args[1:], fail)
+		parseSigning(fs, args[1:])
 		if err := admin.FactorUnenrol(*tpm, nvslot.ResolveNVRAMIndex(uint32(*nvram)), *privKey, *debug); err != nil {
 			fail(err)
 		}
@@ -870,7 +859,7 @@ func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 	adapterWait := fs.Duration("adapter-wait", 30*time.Second, "Wait this long for the adapter to appear")
 	yes := fs.Bool("yes", false, "The recovery passphrase is in a second keyslot already; do not ask")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
-	parseSigning(fs, args[1:], fail)
+	parseSigning(fs, args[1:])
 	var slot uint32
 	if nvramExplicit(args[1:]) {
 		slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
@@ -943,7 +932,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		timeout := fs.Duration("timeout", 10*time.Minute, "Give up after this long (0 = wait forever)")
 		verifyTPM := fs.String("verify-tpm", "warn", "If this machine's TPM is not verified as genuine: warn (ask), require (refuse) or off")
 		verifyPhone := fs.String("verify-phone", "warn", "If the phone's key is not attested by genuine secure hardware: warn (ask), require (refuse) or off")
-		parseSigning(fs, args, failUsage)
+		parseSigning(fs, args)
 		vt, err := phonegate.ParseHWCheckPolicy(*verifyTPM)
 		if err != nil {
 			failAttest(phonegate.ExitUsage, err)
@@ -969,7 +958,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		timeout := fs.Duration("timeout", 0, "Give up after this long (0 = as long as the code screen holds, or forever without one)")
 		adapterWait := fs.Duration("adapter-wait", phonegate.GateAdapterWait, "Wait this long for the adapter to appear")
 		gatePrivKey := fs.String("privkey", "", "After the close: the signing key that opens the channel's secrets (default: the installed one)")
-		parseSigning(fs, args, failUsage)
+		parseSigning(fs, args)
 		var slot uint32
 		if nvramExplicit(args) {
 			slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
@@ -1018,7 +1007,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		}
 	case "unenrol", "unenroll":
 		privKey := fs.String("privkey", "", "Signing key: removing a phone rewrites and signs the slot's blob (default: "+signing.DefaultPrivateKeyPath+")")
-		parseSigning(fs, args, fail)
+		parseSigning(fs, args)
 		if err := admin.AttestUnenrol(*tpm, uint32(*nvram), *privKey, *debug); err != nil {
 			fail(err)
 		}

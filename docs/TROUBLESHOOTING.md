@@ -137,6 +137,12 @@ error, `2` usage, `3` no phone or no adapter, `4` the phone rejected this boot
 (do not type a passphrase before checking further), `5` the receipt was not
 signed by the enrolled phone.
 
+**Exception: a bad `--pin-fd`.** On every command that takes it, a descriptor that
+gives no PIN (not open, empty, a line too long, of the wrong type) exits `2`: the script asked for that source, so nothing else is
+tried and a chain must not go on as if it had worked. A wrong PIN on a good
+descriptor is the token's refusal, as from any source: exit `0` and `FAILED` or
+`SKIPPED`, unless the command gates something.
+
 **The other non-zero exits:** `1` when a command runs as a user (root is
 needed), `2` for a missing or unknown subcommand, and `1` from the three
 commands a script reads the status of - `unlock-key` (cryptroot's

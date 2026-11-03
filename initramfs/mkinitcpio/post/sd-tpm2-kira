@@ -66,6 +66,8 @@ sed -n "/^WARNING: slot .* phone channel/,/^\$/p" <<< "$output" >&2
 # intact; the next boot just shows a PCR mismatch until someone approves. For
 # unattended signing, /etc/tpm2-kira/pin holds the PIN, root's alone
 # ('tpm2-kira control' stores it); tpm2-kira reads it from the file itself.
+# This block is all that is shown of the output: whatever explains a skip, an
+# ignored TPM2_KIRA_PIN too, is in its Reason.
 if grep -q "SKIPPED:" <<< "$output"; then
     {
         echo "tpm2-kira: ================================================================"

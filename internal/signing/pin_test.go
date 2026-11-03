@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -284,6 +285,33 @@ func TestPromptOnATerminal(t *testing.T) {
 	}
 	if left, _ := unix.IoctlGetInt(int(pts.Fd()), unix.TIOCINQ); left != 0 {
 		t.Errorf("%d bytes of a PIN wait for the next reader of the terminal", left)
+	}
+}
+
+// The variable set: the reason there is no PIN says so, once it is what a hook shows;
+// without it, nothing of it. The value is in neither.
+func TestIgnoredVariableIsInTheReason(t *testing.T) {
+	t.Cleanup(func() { pinEnvIgnored = false })
+	pinEnvIgnored = false
+	if strings.Contains(noTerminalPIN().Error(), ignoredPINEnv) {
+		t.Errorf("not set, and said: %v", noTerminalPIN())
+	}
+	IgnorePINEnv(io.Discard)
+	if pinEnvIgnored {
+		t.Error("not set, and taken as set")
+	}
+	t.Setenv(ignoredPINEnv, "secret-1234")
+	var said strings.Builder
+	IgnorePINEnv(&said)
+	IgnorePINEnv(&said)
+	if strings.Count(said.String(), "WARNING") != 1 || strings.Contains(said.String(), "secret-1234") {
+		t.Errorf("said: %s", said.String())
+	}
+	if _, set := os.LookupEnv(ignoredPINEnv); set {
+		t.Error("it stays in the environment of what the command starts")
+	}
+	if got := noTerminalPIN().Error(); !strings.Contains(got, ignoredPINEnv+" is set and ignored") || strings.Contains(got, "secret-1234") {
+		t.Errorf("the reason: %s", got)
 	}
 }
 

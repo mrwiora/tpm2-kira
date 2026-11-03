@@ -21,6 +21,10 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "gate-child" {
 		os.Exit(phonegate.RadioWorkerMain(false))
 	}
+	// The approval a hook runs, in TestHooksShowTheIgnoredPINVariable.
+	if os.Getenv(skippedApprovalHelper) != "" {
+		os.Exit(runSkippedApproval())
+	}
 	syscall.Umask(0o22)
 	// The EFI variables and the machine-id the tests seal are theirs: never
 	// the host's efivarfs or /etc/machine-id.

@@ -23,7 +23,8 @@ tpm2-kira slot list 2>/dev/null | grep -q '^Slots:' || [ -e /sys/firmware/efi/ef
 
 echo "tpm2-kira: initramfs rebuilt ($1); approving for the next boot" >&2
 # No terminal (setsid): a PIN it cannot read from /etc/tpm2-kira/pin ends the
-# approve with the reason instead of a prompt that would hold the update.
+# approve with the reason (an ignored TPM2_KIRA_PIN is in it) instead of a prompt
+# that would hold the update.
 # --unattended: a moved phone channel stays as it is, and it says so. The image's
 # hook has said what is wrong with Secure Boot in this same build.
 # tpm2-kira exits 0 even on failure, by design: its words say. A refused memory lock

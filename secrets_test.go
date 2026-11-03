@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/mrwiora/tpm2-kira/internal/signing"
 	"golang.org/x/sys/unix"
 )
 
@@ -297,18 +298,13 @@ func TestPINFDOnEveryCommand(t *testing.T) {
 		if !strings.Contains(out, "FAILED: --pin-fd 99: the descriptor is not open") {
 			t.Errorf("%v: %v\n%s", c.args, err, out)
 		}
-		// phone enrol and phone gate alone say a failure by their status too.
+		// On every command: a script asked for this source.
 		var exit *exec.ExitError
-		code := 0
-		if errors.As(err, &exit) {
-			code = exit.ExitCode()
+		if !errors.As(err, &exit) || exit.ExitCode() != 2 {
+			t.Errorf("%v: %v, want exit status 2", c.args, err)
 		}
-		want := 0
-		if name == "phone enrol" || name == "phone enroll" || name == "phone gate" {
-			want = 2
-		}
-		if code != want {
-			t.Errorf("%v: exit status %d, want %d", c.args, code, want)
+		if strings.Contains(out, "exit status is 0") {
+			t.Errorf("%v says it exits 0:\n%s", c.args, out)
 		}
 	}
 	for _, args := range [][]string{{"status"}, {"reveal"}, {"slot", "list"}, {"slot", "delete"}, {"luks", "status"}, {"luks", "mark"}, {"vault", "status"}, {"phone", "status"}} {
@@ -347,7 +343,8 @@ func TestPINFDOfTheRealBinary(t *testing.T) {
 		{"standard error", "FAILED: --pin-fd 2: 3 or above", nil, "2"},
 	} {
 		out, err := runBinary(bin, nil, c.extra, append(slices.Clone(approve), "--pin-fd", c.fd)...)
-		if err != nil || !strings.Contains(out, c.want) {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 2 || !strings.Contains(out, c.want) {
 			t.Errorf("%s: %v\n%s", c.name, err, out)
 		}
 	}
@@ -383,8 +380,8 @@ func TestThePINVariableIsSaidOnce(t *testing.T) {
 
 	t.Setenv("TPM2_KIRA_PIN", "secret-1234")
 	var said strings.Builder
-	ignorePINEnv(&said)
-	ignorePINEnv(&said)
+	signing.IgnorePINEnv(&said)
+	signing.IgnorePINEnv(&said)
 	if strings.Count(said.String(), "WARNING") != 1 {
 		t.Errorf("twice in a process:\n%s", said.String())
 	}

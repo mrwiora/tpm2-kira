@@ -38,7 +38,7 @@ func TestBootBinaryHoldsNoPINPath(t *testing.T) {
 	}
 	for _, sym := range strings.Split(string(out), "\n") {
 		for _, bad := range []string{"internal/signing.readPIN", "internal/signing.UsePINDescriptor", "internal/signing.PromptPIN", "internal/signing.promptPINOnTTY",
-			"internal/signing.readNoEcho", "internal/signing.StoredPIN", "internal/signing.pinBuffer", "internal/signing.descriptorPIN", "internal/piv."} {
+			"internal/signing.readNoEcho", "internal/signing.StoredPIN", "internal/signing.pinBuffer", "internal/signing.descriptorPIN", "internal/signing.noTerminalPIN", "internal/signing.IgnorePINEnv", "internal/piv."} {
 			if strings.Contains(sym, bad) {
 				t.Errorf("tpm2-kira-boot holds %s", strings.TrimSpace(sym))
 			}
