@@ -26,11 +26,11 @@ import (
 
 // StatusOptions is what status takes.
 type StatusOptions struct {
-	TPMPath     string
+	TPMPath    string
 	PubKeyPath string // the signing key's public half, which the blobs are checked with
-	ConfigPath  string
-	JSON        bool
-	Debug       bool
+	ConfigPath string
+	JSON       bool
+	Debug      bool
 }
 
 // StatusSlot is one slot of the report.
